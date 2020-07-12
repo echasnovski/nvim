@@ -8,14 +8,18 @@ Important system dependencies:
 
 - Neovim python support (preferably to be installed in a separate virtual evnironment dedicated specifically to NeoVim):
 
+```bash
     pip install pynvim
+```
 
 - Neovim node support (generally taken from https://phoenixnap.com/kb/update-node-js-version), optional but needed for coc.nvim:
 
     - Install `nvm`:
 
+    ```bash
         sudo apt install build-essential checkinstall libssl-dev
         curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.35.1/install.sh | bash
+    ```
 
     - Close and reopen the terminal. Verify installation with `nvm --version`.
 
@@ -23,13 +27,17 @@ Important system dependencies:
 
     - Install specific version:
 
+    ```bash
         nvm install [version.number]
+    ```
 
     - Switch to installed version with `nvm use [version.number]`.
 
     - Install `neovim` package:
 
+    ```bash
         npm i neovim
+    ```
 
 ## Notes
 
