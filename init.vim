@@ -9,7 +9,9 @@ if exists('g:vscode')
 else
     source $HOME/.config/nvim/themes/gruvbox.vim
     source $HOME/.config/nvim/filetype/filetype.vim
-    source $HOME/.config/nvim/plug-config/nerdtree.vim
+
     source $HOME/.config/nvim/plug-config/coc.vim
+    source $HOME/.config/nvim/plug-config/nerdtree.vim
+    source $HOME/.config/nvim/plug-config/semshi.vim
 endif
 

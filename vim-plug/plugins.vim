@@ -27,11 +27,17 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " Better Syntax Support
         Plug 'sheerun/vim-polyglot'
 
+        " Semantic code highlighting for Python files
+        Plug 'numirias/semshi', {'do': ':UpdateRemotePlugins'}
+
         " File Explorer
         Plug 'scrooloose/NERDTree'
 
         " Auto pairs for '(' '[' '{'
         Plug 'jiangmiao/auto-pairs'
+
+        " Parenthesis coloring
+        Plug 'luochen1990/rainbow'
 
         " Commenting
         Plug 'tpope/vim-commentary'

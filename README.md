@@ -4,13 +4,25 @@ This is a modified version of https://github.com/ChristianChiarulli/nvim. It was
 
 Basically, this should (after installing system dependencies) work just by cloning this repository into '~/.config/nvim' path and running `:PlugInstall`.
 
+# System dependencies
+
 Important system dependencies:
 
-- Neovim python support (preferably to be installed in a separate virtual evnironment dedicated specifically to NeoVim):
+- (Optional but highly advisable) Separate python3 evnironment (called 'neovim') with necessary packages:
+    - Install `pyenv`. Source for installation:  https://linux-notes.org/ustanovka-pyenv-v-unix-linux/. **Note**: it probably can be `conda` or any other environment management tool (with some tweaks to configuration files afterwards).
+    - Install recent version of Python.
+    - Create 'neovim' environment with `pyenv virtualenv [options] neovim`.
+    - Activate 'neovim' environment with `pyenv activate neovim`.
+    - Install NeoVim python support:
 
-```bash
-    pip install pynvim
-```
+    ```bash
+        python -m pip install pynvim
+    ```
+    - Install 'Black' formatting engine. **Note** if done differently, don't forget to change path to it in "python.formatting.blackPath" variable in 'coc-settings.json':
+
+    ```bash
+        python -m pip install pynvim
+    ```
 
 - Neovim node support (generally taken from https://phoenixnap.com/kb/update-node-js-version), optional but needed for coc.nvim:
 
@@ -38,6 +50,8 @@ Important system dependencies:
     ```bash
         npm i neovim
     ```
+
+    - Possibly change `node_host_prog` variable in 'general/settings.vim' with correct path.
 
 ## Notes
 

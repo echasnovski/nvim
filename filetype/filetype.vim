@@ -1,2 +1,2 @@
-au BufRead,BufNewFile *.md setlocal textwidth=80 wrap linebreak
+au BufRead,BufNewFile *.md setlocal wrap linebreak
 
