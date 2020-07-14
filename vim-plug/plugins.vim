@@ -16,13 +16,17 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     " Python movements and text objects
     Plug 'jeetsukumaran/vim-pythonsense'
-    
+
     if !exists('g:vscode')
         " Grubvox theme
         Plug 'morhetz/gruvbox'
 
         " Intellisense
         Plug 'neoclide/coc.nvim', {'branch': 'release'}
+
+        " fzf support
+        Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
+        Plug 'junegunn/fzf.vim'
 
         " Better Syntax Support
         Plug 'sheerun/vim-polyglot'
@@ -39,11 +43,17 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " Auto pairs for '(' '[' '{'
         Plug 'jiangmiao/auto-pairs'
 
-        " Parenthesis coloring
-        Plug 'luochen1990/rainbow'
-
         " Commenting
         Plug 'tpope/vim-commentary'
+
+        " Tabularize text
+        Plug 'godlygeek/tabular'
+
+        " Work with markdown
+        Plug 'plasticboy/vim-markdown'
+        
+        " Markdown preview
+        Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
     endif
 
 call plug#end()
