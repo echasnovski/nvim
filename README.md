@@ -53,18 +53,18 @@ Important system dependencies:
 
     - Possibly change `node_host_prog` (in 'general/settings.vim') and `coc_node_path` (in 'plugins/coc.nvim') variables with correct path.
 
-- **Install Nerd fonts** ([information source](https://gist.github.com/matthewjberger/7dd7e079f282f8138a9dc3b045ebefa0)):
-    - Download a [Nerd Font](https://www.nerdfonts.com/) (good choice is UbuntuMono Nerd Font).
-    - Unzip and copy to ~/.fonts.
-    - Run the command fc-cache -fv to manually rebuild the font cache.
+- **Nerd fonts** ([information source](https://gist.github.com/matthewjberger/7dd7e079f282f8138a9dc3b045ebefa0)):
+    - Download a [Nerd Font](https://www.nerdfonts.com/) (good choice is "UbuntuMono Nerd Font").
+    - Unzip and copy to '~/.fonts'.
+    - Run the command `fc-cache -fv` to manually rebuild the font cache.
 
-- Tools for finding stuff:
+- **Tools for finding stuff**:
     - [fzf](https://github.com/junegunn/fzf#installation)
     - [ripgrep](https://github.com/BurntSushi/ripgrep#installation)
 
-- Spelling dictionaries:
+- **Spelling dictionaries**:
     - Create '~/.nvim/spell' directory.
-    - Put there English and Russian dictionaries (download from [here](ftp://ftp.vim.org/pub/vim/runtime/spell/)).
+    - Put there English and Russian dictionaries (download from ftp://ftp.vim.org/pub/vim/runtime/spell/).
 
 ## Notes
 
