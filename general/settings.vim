@@ -38,7 +38,6 @@ if !exists('g:vscode')
   set timeoutlen=250                      " By default timeoutlen is 1000 ms. Not 100, because vim-commentary breaks
   set clipboard=unnamedplus               " Copy paste between vim and everything else
   set incsearch
-  set guifont=Hack\ Nerd\ Font
 
   autocmd FileType * setlocal formatoptions-=c formatoptions-=r formatoptions-=o
 

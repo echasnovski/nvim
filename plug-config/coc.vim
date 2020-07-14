@@ -1,10 +1,11 @@
 let g:coc_global_extensions = [
     \ 'coc-json',
     \ 'coc-python',
-    \ 'coc-snippets',
+    \ 'coc-r-lsp',
+    \ 'coc-snippets'
     \ ]
 
-let g:coc_node_path = '~/.nvm/versions/node/v12.18.2/bin/node'
+let g:coc_node_path = expand('~/.nvm/versions/node/v12.18.2/bin/node')
 
 " Use <c-space> to trigger completion.
 inoremap <silent><expr> <c-space> coc#refresh()
@@ -33,4 +34,9 @@ endfunction
 
 " Highlight the symbol and its references when holding the cursor.
 autocmd CursorHold * silent call CocActionAsync('highlight')
+
+" Show all diagnostics
+nnoremap <silent> <Leader>cd  :<C-u>CocList --auto-preview --normal diagnostics<cr>
+" Search workspace symbols
+nnoremap <silent> <Leader>cs  :<C-u>CocList --interactive symbols<cr>
 

@@ -9,8 +9,8 @@ function! s:hi_base_syntax()
   " Highlight parenthesis
   syntax match parens /[(){}\[\]]/
   hi parens ctermfg=208
-  " Highlight dots and commas
-  syntax match punc /[\.,]/
+  " Highlight dots, commas, colons and semicolons
+  syntax match punc /[\.,:;]/
   hi punc ctermfg=White cterm=bold
 endfunction
 
