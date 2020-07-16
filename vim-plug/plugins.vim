@@ -28,7 +28,10 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
         Plug 'junegunn/fzf.vim'
 
-        " Better Syntax Support
+        " IPython integration
+        Plug 'bfredl/nvim-ipy'
+
+        " Better Syntax Support (has rather big disk size usage, around 10M)
         Plug 'sheerun/vim-polyglot'
 
         " Semantic code highlighting for Python files
@@ -52,7 +55,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " Work with markdown
         Plug 'plasticboy/vim-markdown'
         
-        " Markdown preview
+        " Markdown preview (has rather big disk size usage, around 50M)
         Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
     endif
 

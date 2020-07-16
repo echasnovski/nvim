@@ -21,7 +21,11 @@ Important system dependencies:
     - Install 'Black' formatting engine. **Note** if done differently, don't forget to change path to it in "python.formatting.blackPath" variable in 'coc-settings.json':
 
     ```bash
-        python -m pip install pynvim
+        python -m pip install black
+    ```
+    - To work with 'nvim-ipy' plugin and qtconsole, install 'jupyter' and 'qtconsole' in this neovim environment. You will be able to load different kernels (python versions) despite jupyter and qtconsole being installed in a separate environment:
+    ```bash
+        python -m pip install jupyter qtconsole
     ```
 
 - **Neovim node support** (generally taken from https://phoenixnap.com/kb/update-node-js-version), optional but needed for coc.nvim:
@@ -71,4 +75,5 @@ Important system dependencies:
 - Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'general/settings.vim' as 'g:python3_host_prog' variable.
 - Important dependency is `node.js`. Path to it should be changed in 'general/settings.vim' as 'g:node_host_prog' variable. Help for updating its version using `npm`: https://phoenixnap.com/kb/update-node-js-version.
 - Output of `:checkhealth` can show that there is a problem with node installation. For some reason, it tries to run `node '[path/to/node] --version'` instead of correct `'[path/to/node]' --version`.
+- If encounter 'E117: Unknown function: IPyConnect' error while using 'nvim-ipy' plugin, run `:UpdateRemotePlugins` and restart NeoVim.
 
