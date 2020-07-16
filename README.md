@@ -8,7 +8,7 @@ Basically, this should (after installing system dependencies) work just by cloni
 
 Important system dependencies:
 
-- (Optional but highly advisable) **Separate python3 evnironment** (called 'neovim') **with necessary packages**:
+- (Optional but highly advisable) **Separate python3 evnironment** (called 'neovim') **with necessary packages** (variable `g:python3_host_prog` should point to Python interpreter of this environment):
     - Install `pyenv`. Source for installation:  https://linux-notes.org/ustanovka-pyenv-v-unix-linux/. **Note**: it probably can be `conda` or any other environment management tool (with some tweaks to configuration files afterwards).
     - Install recent version of Python.
     - Create 'neovim' environment with `pyenv virtualenv [options] neovim`.
@@ -23,10 +23,7 @@ Important system dependencies:
     ```bash
         python -m pip install black
     ```
-    - To work with 'nvim-ipy' plugin and qtconsole, install 'jupyter' and 'qtconsole' in this neovim environment. You will be able to load different kernels (python versions) despite jupyter and qtconsole being installed in a separate environment:
-    ```bash
-        python -m pip install jupyter qtconsole
-    ```
+    - When working with 'nvim-ipy' plugin, you might need to install 'jupyter' into this environment. See 'Notes' section.
 
 - **Neovim node support** (generally taken from https://phoenixnap.com/kb/update-node-js-version), optional but needed for coc.nvim:
 
@@ -75,5 +72,18 @@ Important system dependencies:
 - Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'general/settings.vim' as 'g:python3_host_prog' variable.
 - Important dependency is `node.js`. Path to it should be changed in 'general/settings.vim' as 'g:node_host_prog' variable. Help for updating its version using `npm`: https://phoenixnap.com/kb/update-node-js-version.
 - Output of `:checkhealth` can show that there is a problem with node installation. For some reason, it tries to run `node '[path/to/node] --version'` instead of correct `'[path/to/node]' --version`.
-- If encounter 'E117: Unknown function: IPyConnect' error while using 'nvim-ipy' plugin, run `:UpdateRemotePlugins` and restart NeoVim.
+- If encounter 'E117: Unknown function: IPyConnect' error while using 'nvim-ipy' plugin (which shows when 'nvim-ipy' has just been installed), run `:UpdateRemotePlugins` and restart NeoVim. **Note** that in order to run `:UpdateRemotePlugins`, NeoVim uses Python interpreter set in `g:python3_host_prog`. That Python interpreter needs to have **both** 'pynvim' and 'jupyter' installed. There are two possible solutions:
+    - Install 'jupyter' to 'neovim' virtual environment set up in 'System dependencies' section (possibly, the easiest one).
+    - Temporarily have `g:python3_host_prog` point to interpreter in separate environment with installed 'pynvim' and 'jupyter'.
+- If when using 'nvim-ipy', you see 'AttributeError: 'IPythonPlugin' object has no attribute 'km''" error, it might mean that no connection with `:IPython` was done.  In " present setup, it means you forgot to type `<Leader>jk` after `<Leader>jq`.
+- If you want 'coc-python' to always use python from $PATH (the one returned by `which python` when NeoVim is opened), you can use this hack ([original source](https://www.reddit.com/r/neovim/comments/dyl6xw/need_help_setting_up_cocnvim_for_python_with/f81to9e/)):
+    - Create _executable_ file (for example, 'pythonshim' inside this top 'nvim' directory) with the following code:
 
+    ```bash
+    #!/bin/bash
+
+    python "$@"
+    ```
+    - Put full path to this file as "python.pythonPath" settings in 'coc-settings.json'.
+
+    **Note** that otherwise you should either choose manually Python interpreter (via `CocCommand python.setInterpreter`) or have '.nvim/coc-settings.json' file in project root with relevant option "python.pythonPath".

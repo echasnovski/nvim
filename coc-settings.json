@@ -4,7 +4,7 @@
     "json",
     "python"
   ],
-  // python config
+  // Python config
   "python.linting.enabled": true,
   "python.linting.pylintEnabled": true,
   "python.jediEnabled": true,
