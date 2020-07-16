@@ -21,12 +21,18 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " Grubvox theme
         Plug 'morhetz/gruvbox'
 
+        " Status bar
+        Plug 'vim-airline/vim-airline'
+
         " Intellisense
         Plug 'neoclide/coc.nvim', {'branch': 'release'}
 
         " fzf support
         Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
         Plug 'junegunn/fzf.vim'
+
+        " Update file system working directory
+        Plug 'airblade/vim-rooter'
 
         " IPython integration
         Plug 'bfredl/nvim-ipy'

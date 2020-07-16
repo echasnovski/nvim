@@ -45,6 +45,10 @@ inoremap <C-s> <C-o>:w<CR>
 " Open file under cursor in separate tab
 nnoremap gF <C-w>gf
 
+" Move between buffers (as with tabs)
+nnoremap gB :bprevious<CR>
+nnoremap gb :bnext<CR>
+
 " Go into completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
 

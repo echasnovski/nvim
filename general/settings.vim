@@ -27,6 +27,7 @@ if !exists('g:vscode')
   set autoindent         " Good auto indent
   set laststatus=2       " Always display the status line
   set number             " Line numbers
+  set cursorline         " Enable highlighting of the current line
   set background=dark    " Tell vim what the background color looks like
   set showtabline=2      " Always show tabs
   set noshowmode         " We don't need to see things like -- INSERT -- anymore
@@ -37,6 +38,9 @@ if !exists('g:vscode')
   set updatetime=300     " Faster completion
   set timeoutlen=250     " By default timeoutlen is 1000 ms. Not 100, because vim-commentary breaks
   set incsearch          " Show search results while typing
+  set noshowmode         " Don't show things like -- INSERT -- (it is handled by vim-airline)
+  set termguicolors      " Enable gui colors
+  set switchbuf=usetab   " Use already opened buffers when switching
 
   autocmd FileType * setlocal formatoptions-=c formatoptions-=r formatoptions-=o
 

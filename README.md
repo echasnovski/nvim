@@ -75,7 +75,7 @@ Important system dependencies:
 - If encounter 'E117: Unknown function: IPyConnect' error while using 'nvim-ipy' plugin (which shows when 'nvim-ipy' has just been installed), run `:UpdateRemotePlugins` and restart NeoVim. **Note** that in order to run `:UpdateRemotePlugins`, NeoVim uses Python interpreter set in `g:python3_host_prog`. That Python interpreter needs to have **both** 'pynvim' and 'jupyter' installed. There are two possible solutions:
     - Install 'jupyter' to 'neovim' virtual environment set up in 'System dependencies' section (possibly, the easiest one).
     - Temporarily have `g:python3_host_prog` point to interpreter in separate environment with installed 'pynvim' and 'jupyter'.
-- If when using 'nvim-ipy', you see 'AttributeError: 'IPythonPlugin' object has no attribute 'km''" error, it might mean that no connection with `:IPython` was done.  In " present setup, it means you forgot to type `<Leader>jk` after `<Leader>jq`.
+- If when using 'nvim-ipy', you see "AttributeError: 'IPythonPlugin' object has no attribute 'km'" error, it might mean that no connection with `:IPython` was done.  In present setup, it means you forgot to type `<Leader>jk` after `<Leader>jq`.
 - If you want 'coc-python' to always use python from $PATH (the one returned by `which python` when NeoVim is opened), you can use this hack ([original source](https://www.reddit.com/r/neovim/comments/dyl6xw/need_help_setting_up_cocnvim_for_python_with/f81to9e/)):
     - Create _executable_ file (for example, 'pythonshim' inside this top 'nvim' directory) with the following code:
 
@@ -87,3 +87,15 @@ Important system dependencies:
     - Put full path to this file as "python.pythonPath" settings in 'coc-settings.json'.
 
     **Note** that otherwise you should either choose manually Python interpreter (via `CocCommand python.setInterpreter`) or have '.nvim/coc-settings.json' file in project root with relevant option "python.pythonPath".
+
+## Errors
+
+- `E117: Unknown function: IPyConnect`: run `:UpdateRemotePlugins` to properly use 'nvim-ipy' plugin (see 'Notes').
+- `AttributeError: 'IPythonPlugin' object has no attribute 'km'`: connect to IPython console (see 'Notes').
+- `[coc.nvim] Jedi error: Cannot call write after a stream was destroyed`: current Python interpreter used by 'coc.nvim' doesn't have 'jedi' installed. Make sure you use proper Python interpreter (set with `:CocCommand` and proper 'python.setInterpreter' value) where it is installed.
+
+## Tips and tricks
+
+- Use `:sb` to switch between buffers by autocompleted name (for example, if there are many tabs open and you don't want to cycle through them with `:gt`). With current setup, it will look at all opened tabs and go to buffer if it finds one (or show error message if nothing is found).
+- Source for some inspiration: https://stackoverflow.com/questions/726894/what-are-the-dark-corners-of-vim-your-mom-never-told-you-about . Notable examples:
+    - Use `:.![command]` to execute command in terminal and put its output into current buffer. For example: `:.!ls -lhR`.

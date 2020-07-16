@@ -1,4 +1,5 @@
 let g:coc_global_extensions = [
+    \ 'coc-highlight',
     \ 'coc-json',
     \ 'coc-python',
     \ 'coc-r-lsp',

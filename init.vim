@@ -9,8 +9,11 @@ if exists('g:vscode')
     source $HOME/.config/nvim/vscode/vscode.vim
 else
     source $HOME/.config/nvim/themes/gruvbox.vim
+    source $HOME/.config/nvim/themes/airline.vim
     source $HOME/.config/nvim/filetype/filetype.vim
 
+    source $HOME/.config/nvim/plug-config/fzf.vim
+    source $HOME/.config/nvim/plug-config/vim-rooter.vim
     source $HOME/.config/nvim/plug-config/coc.vim
     source $HOME/.config/nvim/plug-config/nerdtree.vim
     source $HOME/.config/nvim/plug-config/semshi.vim
