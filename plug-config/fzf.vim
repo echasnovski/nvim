@@ -5,7 +5,7 @@ let g:fzf_action = {
   \ 'ctrl-v': 'vsplit' }
 
 nmap <Leader>f :Files<CR>
-nmap <Leader>g :Rg<CR>
+nmap <Leader>r :Rg<CR>
 nmap <Leader>h :History<CR>
 nmap <Leader>b :Buffers<CR>
 nmap <Leader>/ :BLines<CR>

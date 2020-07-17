@@ -26,6 +26,24 @@ vmap <C-c> "+y
 " inoremap <C-k> <C-o>gk
 inoremap <C-l> <Right>
 
+" Move between buffers
+if exists('g:vscode')
+  " Simulate same TAB behavior in VSCode
+  nmap <Tab> :Tabnext<CR>
+  nmap <S-Tab> :Tabprev<CR>
+else
+  " TAB in general mode will move to text buffer
+  nnoremap <silent> <TAB> :bnext<CR>
+  " SHIFT-TAB will go back
+  nnoremap <silent> <S-TAB> :bprevious<CR>
+endif
+
+" Move selected line / block of text in visual mode
+" shift + k to move up
+" shift + j to move down
+xnoremap K :move '<-2<CR>gv-gv
+xnoremap J :move '>+1<CR>gv-gv
+
 " Better window navigation
 nnoremap <C-h> <C-w>h
 nnoremap <C-j> <C-w>j
@@ -44,10 +62,6 @@ inoremap <C-s> <C-o>:w<CR>
 
 " Open file under cursor in separate tab
 nnoremap gF <C-w>gf
-
-" Move between buffers (as with tabs)
-nnoremap gB :bprevious<CR>
-nnoremap gb :bnext<CR>
 
 " Go into completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
