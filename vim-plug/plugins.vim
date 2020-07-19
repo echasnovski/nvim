@@ -61,11 +61,17 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " Tabularize text
         Plug 'godlygeek/tabular'
 
+        " Work with csv
+        Plug 'mechatroner/rainbow_csv'
+
         " Work with markdown
         Plug 'plasticboy/vim-markdown'
         
         " Markdown preview (has rather big disk size usage, around 50M)
         Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
+
+        " LaTeX
+        Plug 'lervag/vimtex'
     endif
 
 call plug#end()

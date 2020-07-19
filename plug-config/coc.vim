@@ -41,3 +41,8 @@ nnoremap <silent> <Leader>cd  :<C-u>CocList --auto-preview --normal diagnostics<
 " Search workspace symbols
 nnoremap <silent> <Leader>cs  :<C-u>CocList --interactive symbols<cr>
 
+" Use custom highlighting of Coc labels
+hi CocErrorHighlight   guisp=#ff0000 gui=undercurl
+hi CocWarningHighlight guisp=#ffa500 gui=undercurl
+hi CocInfoHighlight    guisp=#ffff00 gui=undercurl
+hi CocHintHighlight    guisp=#00ff00 gui=undercurl

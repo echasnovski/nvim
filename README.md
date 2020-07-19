@@ -4,7 +4,7 @@ This is a modified version of https://github.com/ChristianChiarulli/nvim. It was
 
 Basically, this should (after installing system dependencies) work just by cloning this repository into '~/.config/nvim' path and running `:PlugInstall`.
 
-# System dependencies
+## System dependencies
 
 Important system dependencies:
 
@@ -87,6 +87,7 @@ Important system dependencies:
     - Put full path to this file as "python.pythonPath" settings in 'coc-settings.json'.
 
     **Note** that otherwise you should either choose manually Python interpreter (via `CocCommand python.setInterpreter`) or have '.nvim/coc-settings.json' file in project root with relevant option "python.pythonPath".
+- Two directories ('session' and 'undodir') are placeholders for local use (vim sessions and vim's persistent undo). They both have '.gitignore' files (which instruct to ignore everything in that directory, except '.gitignore' itself to have git recognize them) so that they will be automatically created when pulling this repository.
 
 ## Errors
 
