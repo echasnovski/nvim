@@ -42,6 +42,9 @@ if !exists('g:vscode')
   set termguicolors      " Enable gui colors
   set switchbuf=usetab   " Use already opened buffers when switching
 
+  set undofile                           " Enable persistent undo
+  set undodir=$HOME/.config/nvim/undodir " Set directory for persistent undo
+
   autocmd FileType * setlocal formatoptions-=c formatoptions-=r formatoptions-=o
 
   " You can't stop me

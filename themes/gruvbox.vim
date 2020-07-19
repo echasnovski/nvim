@@ -15,3 +15,13 @@ function! s:hi_base_syntax()
 endfunction
 
 autocmd VimEnter,BufRead,BufNewFile * call <SID>hi_base_syntax() 
+
+" Use terminal's background (needed to use transparent background)
+hi! Normal ctermbg=NONE guibg=NONE
+hi! NonText ctermbg=NONE guibg=NONE guifg=NONE ctermfg=NONE
+
+" Use custom colors for highlighting spelling information
+hi SpellBad     guisp=#CC0000   gui=undercurl
+hi SpellCap     guisp=#7070F0   gui=undercurl
+hi SpellLocal   guisp=#70F0F0   gui=undercurl
+hi SpellRare    guisp=#FFFFFF   gui=undercurl

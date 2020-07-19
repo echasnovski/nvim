@@ -31,6 +31,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
         Plug 'junegunn/fzf.vim'
 
+        " Manage sessions
+        Plug 'mhinz/vim-startify'
+
         " Update file system working directory
         Plug 'airblade/vim-rooter'
 

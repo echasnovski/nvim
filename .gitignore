@@ -7,3 +7,4 @@ autoload/plugged/*
 paths.vim
 session
 wiki/
+undodir/
