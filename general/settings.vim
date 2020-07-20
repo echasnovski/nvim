@@ -41,6 +41,7 @@ if !exists('g:vscode')
   set noshowmode         " Don't show things like -- INSERT -- (it is handled by vim-airline)
   set termguicolors      " Enable gui colors
   set switchbuf=usetab   " Use already opened buffers when switching
+  set colorcolumn=+1     " Draw colored column one step to the right of desired maximum width
 
   set undofile                           " Enable persistent undo
   set undodir=$HOME/.config/nvim/undodir " Set directory for persistent undo

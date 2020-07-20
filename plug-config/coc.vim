@@ -33,8 +33,11 @@ function! s:show_documentation()
   endif
 endfunction
 
-" Highlight the symbol and its references when holding the cursor.
-autocmd CursorHold * silent call CocActionAsync('highlight')
+" Highlight the symbol and its references when holding the cursor (except in
+" '.csv' files, because they tend to be large which negatively affects
+" performance)
+let cursorHoldIgnore = ['csv']
+autocmd CursorHold * if index(cursorHoldIgnore, &ft) < 0 | silent call CocActionAsync('highlight')
 
 " Show all diagnostics
 nnoremap <silent> <Leader>cd  :<C-u>CocList --auto-preview --normal diagnostics<cr>

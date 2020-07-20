@@ -14,7 +14,7 @@ function! s:hi_base_syntax()
   hi punc ctermfg=White cterm=bold
 endfunction
 
-autocmd VimEnter,BufRead,BufNewFile * call <SID>hi_base_syntax() 
+autocmd VimEnter,BufRead,BufNewFile * call <SID>hi_base_syntax()
 
 " Use terminal's background (needed to use transparent background)
 hi! Normal ctermbg=NONE guibg=NONE
@@ -25,3 +25,6 @@ hi SpellBad     guisp=#CC0000   gui=undercurl
 hi SpellCap     guisp=#7070F0   gui=undercurl
 hi SpellLocal   guisp=#70F0F0   gui=undercurl
 hi SpellRare    guisp=#FFFFFF   gui=undercurl
+
+" Use custom color for highlighting "maximum width" column
+highlight ColorColumn ctermbg=grey guibg=#555555

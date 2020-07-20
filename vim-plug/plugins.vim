@@ -37,17 +37,20 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " Update file system working directory
         Plug 'airblade/vim-rooter'
 
-        " IPython integration
-        Plug 'bfredl/nvim-ipy'
+        " File Explorer
+        Plug 'scrooloose/NERDTree'
+
+        " Show keybindings
+        Plug 'liuchengxu/vim-which-key'
 
         " Better Syntax Support (has rather big disk size usage, around 10M)
         Plug 'sheerun/vim-polyglot'
 
+        " IPython integration
+        Plug 'bfredl/nvim-ipy'
+
         " Semantic code highlighting for Python files
         Plug 'numirias/semshi', {'do': ':UpdateRemotePlugins'}
-
-        " File Explorer
-        Plug 'scrooloose/NERDTree'
 
         " Useful icons
         Plug 'ryanoasis/vim-devicons'
@@ -64,13 +67,20 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " Work with csv
         Plug 'mechatroner/rainbow_csv'
 
+        " Pandoc
+        "" This option should be set before loading plugin to take effect
+        "" See https://github.com/vim-pandoc/vim-pandoc/issues/342
+        let g:pandoc#filetypes#pandoc_markdown = 0
+        Plug 'vim-pandoc/vim-pandoc'
+        Plug 'vim-pandoc/vim-pandoc-syntax'
+
         " Work with markdown
         Plug 'plasticboy/vim-markdown'
-        
+
         " Markdown preview (has rather big disk size usage, around 50M)
         Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
 
-        " LaTeX
+        " LaTeX (has rather big disk size usage, around 14M)
         Plug 'lervag/vimtex'
     endif
 

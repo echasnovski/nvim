@@ -10,9 +10,6 @@ nmap щ o
 nmap г u
 nmap З P
 
-" Leader key
-let mapleader = "\<Space>"
-
 " Copy to system clipboard
 vmap <C-c> "+y
 
@@ -59,9 +56,6 @@ nnoremap <silent> <M-l>    :vertical resize +2<CR>
 " Alternate way to save
 nnoremap <C-s> :w<CR>
 inoremap <C-s> <C-o>:w<CR>
-
-" Open file under cursor in separate tab
-nnoremap gF <C-w>gf
 
 " Go into completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"

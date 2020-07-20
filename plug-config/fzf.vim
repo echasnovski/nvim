@@ -4,12 +4,6 @@ let g:fzf_action = {
   \ 'ctrl-x': 'split',
   \ 'ctrl-v': 'vsplit' }
 
-nmap <Leader>f :Files<CR>
-nmap <Leader>r :Rg<CR>
-nmap <Leader>h :History<CR>
-nmap <Leader>b :Buffers<CR>
-nmap <Leader>/ :BLines<CR>
-
 " Enable per-command history.
 " CTRL-N and CTRL-P will be automatically bound to next-history and
 " previous-history instead of down and up. If you don't like the change,
@@ -52,4 +46,3 @@ command! -bang -nargs=* Rg
   \           : fzf#vim#with_preview({'options': '--delimiter : --nth 4.. -e'}, 'right:50%', '?'),
   \   <bang>0)
 
-nmap <leader><tab> <plug>(fzf-maps-n)
