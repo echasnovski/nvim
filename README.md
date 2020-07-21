@@ -75,7 +75,7 @@ Important system dependencies:
 - If encounter 'E117: Unknown function: IPyConnect' error while using 'nvim-ipy' plugin (which shows when 'nvim-ipy' has just been installed), run `:UpdateRemotePlugins` and restart NeoVim. **Note** that in order to run `:UpdateRemotePlugins`, NeoVim uses Python interpreter set in `g:python3_host_prog`. That Python interpreter needs to have **both** 'pynvim' and 'jupyter' installed. There are two possible solutions:
     - Install 'jupyter' to 'neovim' virtual environment set up in 'System dependencies' section (possibly, the easiest one).
     - Temporarily have `g:python3_host_prog` point to interpreter in separate environment with installed 'pynvim' and 'jupyter'.
-- If when using 'nvim-ipy', you see "AttributeError: 'IPythonPlugin' object has no attribute 'km'" error, it might mean that no connection with `:IPython` was done.  In present setup, it means you forgot to type `<Leader>jk` after `<Leader>jq`.
+- If when using 'nvim-ipy', you see "AttributeError: 'IPythonPlugin' object has no attribute 'km'" error, it might mean that no connection with `:IPython` was done.  In present setup, it means you forgot to type `<Leader>ik` after `<Leader>iq`.
 - If you want 'coc-python' to always use python from $PATH (the one returned by `which python` when NeoVim is opened), you can use this hack ([original source](https://www.reddit.com/r/neovim/comments/dyl6xw/need_help_setting_up_cocnvim_for_python_with/f81to9e/)):
     - Create _executable_ file (for example, 'pythonshim' inside this top 'nvim' directory) with the following code:
 

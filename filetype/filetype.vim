@@ -1,5 +1,4 @@
-" Function `ToggleWrap()` is defined in 'general/mappings.vim' which should be
-" sourced before this one
+" Function `ToggleWrap()` is defined in 'general/functions.vim'
 au BufRead,BufNewFile *.md,*.txt,*.Rmd setlocal spell
 au BufRead,BufNewFile *.md,*.txt,*.Rmd execute ToggleWrap()
 
