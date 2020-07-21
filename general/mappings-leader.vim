@@ -49,7 +49,7 @@ let g:which_key_map.c = {
       \ 'R' : ['<Plug>(coc-references)'            , 'references'],
       \ 'r' : ['<Plug>(coc-rename)'                , 'rename'],
       \ 'S' : [':CocList snippets'                 , 'snippets'],
-      \ 's' : [':CocList -I symbols'               , 'references'],
+      \ 's' : [':CocList -A --normal -I symbols'   , 'references'],
       \ 't' : ['<Plug>(coc-type-definition)'       , 'type definition'],
       \ 'U' : [':CocUpdate'                        , 'update CoC'],
       \ 'u' : [':CocListResume'                    , 'resume list'],
@@ -90,6 +90,26 @@ let g:which_key_map.f = {
     \ 'w' : [':Windows'          , 'search windows'],
     \ 'y' : [':Filetypes'        , 'file types'],
     \ 'z' : [':FZF'              , 'FZF'],
+    \ }
+
+" g is for git
+let g:which_key_map.g = {
+    \ 'name' : '+git' ,
+    \ 'A' : [':Git add %'                     , 'add buffer'],
+    \ 'B' : [':GBrowse'                       , 'browse'],
+    \ 'b' : [':Git blame'                     , 'blame'],
+    \ 'D' : [':Gvdiffsplit'                   , 'diff split'],
+    \ 'd' : [':Git diff'                      , 'diff'],
+    \ 'g' : [':Git'                           , 'git window'],
+    \ 'H' : ['<Plug>(GitGutterPreviewHunk)'   , 'preview hunk'],
+    \ 'h' : [':GitGutterLineHighlightsToggle' , 'highlight hunks'],
+    \ 'j' : ['<Plug>(GitGutterNextHunk)'      , 'next hunk'],
+    \ 'k' : ['<Plug>(GitGutterPrevHunk)'      , 'prev hunk'],
+    \ 'r' : [':Git reset %'                   , 'reset buffer'],
+    \ 's' : ['<Plug>(GitGutterStageHunk)'     , 'stage hunk'],
+    \ 'u' : ['<Plug>(GitGutterUndoHunk)'      , 'undo hunk'],
+    \ 'V' : [':GV!'                           , 'view buffer commits'],
+    \ 'v' : [':GV'                            , 'view commits'],
     \ }
 
 " i is for IPython

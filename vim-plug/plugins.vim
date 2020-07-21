@@ -40,6 +40,12 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " File Explorer
         Plug 'scrooloose/NERDTree'
 
+        " Git integration
+        Plug 'tpope/vim-fugitive'
+        Plug 'airblade/vim-gitgutter'
+        Plug 'junegunn/gv.vim'
+        Plug 'xuyuanp/nerdtree-git-plugin'
+
         " Show keybindings
         Plug 'liuchengxu/vim-which-key'
 

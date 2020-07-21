@@ -20,11 +20,11 @@ let g:airline#extensions#tabline#tabs_label = ''
 " Just show the file name in tabline
 let g:airline#extensions#tabline#fnamemod = ':t'
 
-" " Enable powerline fonts
-" let g:airline_powerline_fonts = 1
-" let g:airline_left_sep = ''
-" let g:airline_right_sep = ''
-" let g:airline_right_alt_sep = ''
+" Enable powerline fonts
+let g:airline_powerline_fonts = 1
+let g:airline_left_sep = ''
+let g:airline_right_sep = ''
+let g:airline_right_alt_sep = ''
 
 " Show tabline parent directory of a file only if there are several files with
 " the same name

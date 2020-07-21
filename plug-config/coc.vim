@@ -28,11 +28,6 @@ endfunction
 let cursorHoldIgnore = ['csv']
 autocmd CursorHold * if index(cursorHoldIgnore, &ft) < 0 | silent call CocActionAsync('highlight')
 
-" Show all diagnostics
-nnoremap <silent> <Leader>cd  :<C-u>CocList --auto-preview --normal diagnostics<cr>
-" Search workspace symbols
-nnoremap <silent> <Leader>cs  :<C-u>CocList --interactive symbols<cr>
-
 " Use custom highlighting of Coc labels
 hi CocErrorHighlight   guisp=#ff0000 gui=undercurl
 hi CocWarningHighlight guisp=#ffa500 gui=undercurl
