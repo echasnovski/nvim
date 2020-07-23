@@ -7,14 +7,14 @@ colorscheme gruvbox
 " Sources: https://stackoverflow.com/a/18943408 and https://superuser.com/a/205058
 function! s:hi_base_syntax()
   " Highlight parenthesis
-  syntax match parens /[(){}\[\]]/
-  hi parens ctermfg=208
+  syntax match parens /[(){}[\]]/
+  hi parens ctermfg=208 guifg=#FF8700
   " Highlight dots, commas, colons and semicolons
-  syntax match punc /[\.,:;]/
-  hi punc ctermfg=White cterm=bold
+  syntax match punc /[.,:;=]/
+  hi punc ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
 endfunction
 
-autocmd VimEnter,BufRead,BufNewFile * call <SID>hi_base_syntax()
+autocmd VimEnter,BufWinEnter * call <SID>hi_base_syntax()
 
 " Use terminal's background (needed to use transparent background)
 hi! Normal ctermbg=NONE guibg=NONE

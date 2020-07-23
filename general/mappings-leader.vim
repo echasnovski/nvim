@@ -2,14 +2,14 @@
 let mapleader = "\<Space>"
 
 " Map leader to which_key
-nnoremap <silent> <leader> :silent <c-u> :silent WhichKey '<Space>'<CR>
-vnoremap <silent> <leader> :silent <c-u> :silent WhichKeyVisual '<Space>'<CR>
+nnoremap <silent> <Leader> :silent <c-u> :silent WhichKey '<Space>'<CR>
+vnoremap <silent> <Leader> :silent <c-u> :silent WhichKeyVisual '<Space>'<CR>
 
 " Create map to add keys to
 let g:which_key_map =  {}
 
 " Single mappings
-noremap <silent> <Leader>w :call ToggleWrap()<CR>
+nnoremap <silent> <Leader>w :call ToggleWrap()<CR>
 let g:which_key_map['w'] = 'wrap toggle'
 
 "" Execute in jupyter current line and go down by one line
@@ -19,43 +19,51 @@ nmap <silent> <Leader>j  <Plug>(IPy-Run)j
 vmap <silent> <Leader>j  <Plug>(IPy-Run)'>j
 let g:which_key_map['j'] = 'jupyter run'
 
+" b is for 'buffer'
+nnoremap <silent> <Leader>bd :Bclose<CR>
+nnoremap <silent> <Leader>bd! :Bclose!<CR>
+let g:which_key_map.b = {
+    \ 'name' : '+buffer' ,
+    \ 'd'  : [':Bclose'  , 'delete'],
+    \ "d!" : [":Bclose!" , "delete!"],
+    \ }
+
 " c is for 'coc.nvim'
 let g:which_key_map.c = {
-      \ 'name' : '+Coc' ,
-      \ '.' : [':CocConfig'                        , 'config'],
-      \ ';' : ['<Plug>(coc-refactor)'              , 'refactor'],
-      \ 'A' : ['<Plug>(coc-codeaction-selected)'   , 'selected action'],
-      \ 'a' : ['<Plug>(coc-codeaction)'            , 'line action'],
-      \ 'B' : [':CocPrev'                          , 'prev action'],
-      \ 'b' : [':CocNext'                          , 'next action'],
-      \ 'c' : [':CocList commands'                 , 'commands'],
-      \ 'D' : ['<Plug>(coc-declaration)'           , 'declaration'],
-      \ 'd' : ['<Plug>(coc-definition)'            , 'definition'],
-      \ 'e' : [':CocList extensions'               , 'extensions'],
-      \ 'F' : ['<Plug>(coc-format)'                , 'format'],
-      \ 'f' : ['<Plug>(coc-format-selected)'       , 'format selected'],
-      \ 'h' : ['<Plug>(coc-float-hide)'            , 'hide'],
-      \ 'I' : [':CocList -A --normal diagnostics'  , 'diagnostics'],
-      \ 'i' : ['<Plug>(coc-implementation)'        , 'implementation'],
-      \ 'j' : ['<Plug>(coc-float-jump)'            , 'float jump'],
-      \ 'l' : ['<Plug>(coc-codelens-action)'       , 'code lens'],
-      \ 'N' : ['<Plug>(coc-diagnostic-next-error)' , 'next error'],
-      \ 'n' : ['<Plug>(coc-diagnostic-next)'       , 'next diagnostic'],
-      \ 'O' : [':CocList outline'                  , 'outline'],
-      \ 'o' : ['<Plug>(coc-openlink)'              , 'open link'],
-      \ 'P' : ['<Plug>(coc-diagnostic-prev-error)' , 'prev error'],
-      \ 'p' : ['<Plug>(coc-diagnostic-prev)'       , 'prev diagnostic'],
-      \ 'q' : ['<Plug>(coc-fix-current)'           , 'quickfix'],
-      \ 'R' : ['<Plug>(coc-references)'            , 'references'],
-      \ 'r' : ['<Plug>(coc-rename)'                , 'rename'],
-      \ 'S' : [':CocList snippets'                 , 'snippets'],
-      \ 's' : [':CocList -A --normal -I symbols'   , 'references'],
-      \ 't' : ['<Plug>(coc-type-definition)'       , 'type definition'],
-      \ 'U' : [':CocUpdate'                        , 'update CoC'],
-      \ 'u' : [':CocListResume'                    , 'resume list'],
-      \ 'Z' : [':CocEnable'                        , 'enable CoC'],
-      \ 'z' : [':CocDisable'                       , 'disable CoC'],
-      \ }
+    \ 'name' : '+Coc' ,
+    \ '.' : [':CocConfig'                        , 'config'],
+    \ ';' : ['<Plug>(coc-refactor)'              , 'refactor'],
+    \ 'A' : ['<Plug>(coc-codeaction-selected)'   , 'selected action'],
+    \ 'a' : ['<Plug>(coc-codeaction)'            , 'line action'],
+    \ 'B' : [':CocPrev'                          , 'prev action'],
+    \ 'b' : [':CocNext'                          , 'next action'],
+    \ 'c' : [':CocList commands'                 , 'commands'],
+    \ 'D' : ['<Plug>(coc-declaration)'           , 'declaration'],
+    \ 'd' : ['<Plug>(coc-definition)'            , 'definition'],
+    \ 'e' : [':CocList extensions'               , 'extensions'],
+    \ 'F' : ['<Plug>(coc-format)'                , 'format'],
+    \ 'f' : ['<Plug>(coc-format-selected)'       , 'format selected'],
+    \ 'h' : ['<Plug>(coc-float-hide)'            , 'hide'],
+    \ 'I' : [':CocList -A --normal diagnostics'  , 'diagnostics'],
+    \ 'i' : ['<Plug>(coc-implementation)'        , 'implementation'],
+    \ 'J' : ['<Plug>(coc-diagnostic-next-error)' , 'next error'],
+    \ 'j' : ['<Plug>(coc-diagnostic-next)'       , 'next diagnostic'],
+    \ 'K' : ['<Plug>(coc-diagnostic-prev-error)' , 'prev error'],
+    \ 'k' : ['<Plug>(coc-diagnostic-prev)'       , 'prev diagnostic'],
+    \ 'l' : ['<Plug>(coc-codelens-action)'       , 'code lens'],
+    \ 'O' : [':CocList outline'                  , 'outline'],
+    \ 'o' : ['<Plug>(coc-openlink)'              , 'open link'],
+    \ 'q' : ['<Plug>(coc-fix-current)'           , 'quickfix'],
+    \ 'R' : ['<Plug>(coc-references)'            , 'references'],
+    \ 'r' : ['<Plug>(coc-rename)'                , 'rename'],
+    \ 'S' : [':CocList snippets'                 , 'snippets'],
+    \ 's' : [':CocList -A --normal -I symbols'   , 'references'],
+    \ 't' : ['<Plug>(coc-type-definition)'       , 'type definition'],
+    \ 'U' : [':CocUpdate'                        , 'update CoC'],
+    \ 'u' : [':CocListResume'                    , 'resume list'],
+    \ 'Z' : [':CocEnable'                        , 'enable CoC'],
+    \ 'z' : [':CocDisable'                       , 'disable CoC'],
+    \ }
 
 " e is for 'explorer'
 let g:which_key_map.e = {
@@ -146,13 +154,16 @@ let g:which_key_map.i = {
     \ 'q'    : 'Qt Console',
     \ }
 
-" t is for 'terminal'
+" t is for 'terminal' (uses 'neoterm')
 let g:which_key_map.t = {
     \ 'name' : '+terminal' ,
-    \ 't' : [':terminal'          , 'terminal'],
-    \ 's' : [':split | terminal'  , 'split terminal'],
-    \ 'v' : [':vsplit | terminal' , 'vsplit terminal'],
+    \ 's' : [':belowright Tnew'  , 'split terminal'],
+    \ 'v' : [':vertical Tnew' , 'vsplit terminal'],
     \ }
+
+" s is for 'send'
+nnoremap <Leader>s :TREPLSendLine<cr>j
+vnoremap <Leader>s :TREPLSendSelection<cr>'>j
 
 " Register 'which-key' mappings
 call which_key#register('<Space>', "g:which_key_map")

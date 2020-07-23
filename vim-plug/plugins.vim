@@ -40,6 +40,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " File Explorer
         Plug 'scrooloose/NERDTree'
 
+        " Tweak Neovim's terminal to be more REPL-aware
+        Plug 'kassio/neoterm'
+
         " Git integration
         Plug 'tpope/vim-fugitive'
         Plug 'airblade/vim-gitgutter'
