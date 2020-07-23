@@ -42,11 +42,15 @@ if !exists('g:vscode')
   set termguicolors      " Enable gui colors
   set switchbuf=usetab   " Use already opened buffers when switching
   set colorcolumn=+1     " Draw colored column one step to the right of desired maximum width
+  set virtualedit=block  " Allow going past the end of line in visual block mode
 
   set undofile                           " Enable persistent undo
   set undodir=$HOME/.config/nvim/undodir " Set directory for persistent undo
 
   autocmd FileType * setlocal formatoptions-=c formatoptions-=r formatoptions-=o
+
+  " Start integrated terminal already in insert mode
+  autocmd TermOpen * startinsert
 
   " You can't stop me
   cmap w!! w !sudo tee %

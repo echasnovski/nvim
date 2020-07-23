@@ -10,7 +10,7 @@ let g:which_key_map =  {}
 
 " Single mappings
 noremap <silent> <Leader>w :call ToggleWrap()<CR>
-let g:which_key_map['w'] = 'toggle wrap'
+let g:which_key_map['w'] = 'wrap toggle'
 
 "" Execute in jupyter current line and go down by one line
 nmap <silent> <Leader>j  <Plug>(IPy-Run)j
@@ -93,20 +93,23 @@ let g:which_key_map.f = {
     \ }
 
 " g is for git
+"" Functions `GitGutterNextHunkCycle()` and `GitGutterPrevHunkCycle()` are
+"" defined in 'general/functions.vim'
 let g:which_key_map.g = {
     \ 'name' : '+git' ,
     \ 'A' : [':Git add %'                     , 'add buffer'],
-    \ 'B' : [':GBrowse'                       , 'browse'],
+    \ 'a' : ['<Plug>(GitGutterStageHunk)'     , 'add hunk'],
     \ 'b' : [':Git blame'                     , 'blame'],
     \ 'D' : [':Gvdiffsplit'                   , 'diff split'],
     \ 'd' : [':Git diff'                      , 'diff'],
+    \ 'f' : [':GitGutterFold'                 , 'fold unchanged'],
     \ 'g' : [':Git'                           , 'git window'],
-    \ 'H' : ['<Plug>(GitGutterPreviewHunk)'   , 'preview hunk'],
-    \ 'h' : [':GitGutterLineHighlightsToggle' , 'highlight hunks'],
-    \ 'j' : ['<Plug>(GitGutterNextHunk)'      , 'next hunk'],
-    \ 'k' : ['<Plug>(GitGutterPrevHunk)'      , 'prev hunk'],
-    \ 'r' : [':Git reset %'                   , 'reset buffer'],
-    \ 's' : ['<Plug>(GitGutterStageHunk)'     , 'stage hunk'],
+    \ 'j' : [':call GitGutterNextHunkCycle()' , 'next hunk'],
+    \ 'k' : [':call GitGutterPrevHunkCycle()' , 'prev hunk'],
+    \ 'p' : ['<Plug>(GitGutterPreviewHunk)'   , 'preview hunk'],
+    \ 'q' : [':GitGutterQuickFix | copen'     , 'quickfix hunks'],
+    \ 'R' : [':Git reset %'                   , 'reset buffer'],
+    \ 't' : [':GitGutterLineHighlightsToggle' , 'toggle highlight'],
     \ 'u' : ['<Plug>(GitGutterUndoHunk)'      , 'undo hunk'],
     \ 'V' : [':GV!'                           , 'view buffer commits'],
     \ 'v' : [':GV'                            , 'view commits'],
@@ -141,6 +144,14 @@ let g:which_key_map.i = {
     \ 'c'    : 'run cell',
     \ 'k'    : 'connect',
     \ 'q'    : 'Qt Console',
+    \ }
+
+" t is for 'terminal'
+let g:which_key_map.t = {
+    \ 'name' : '+terminal' ,
+    \ 't' : [':terminal'          , 'terminal'],
+    \ 's' : [':split | terminal'  , 'split terminal'],
+    \ 'v' : [':vsplit | terminal' , 'vsplit terminal'],
     \ }
 
 " Register 'which-key' mappings

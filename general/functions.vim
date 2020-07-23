@@ -3,7 +3,6 @@ function ToggleWrap()
   if &wrap
     echo "Wrap OFF"
     setlocal nowrap
-    set virtualedit=all
     silent! nunmap <buffer> <Up>
     silent! nunmap <buffer> <Down>
     silent! nunmap <buffer> <Home>
@@ -15,7 +14,6 @@ function ToggleWrap()
   else
     echo "Wrap ON"
     setlocal wrap linebreak nolist
-    set virtualedit=
     setlocal display+=lastline
     noremap  <buffer> <silent> <Up>   gk
     noremap  <buffer> <silent> <Down> gj
@@ -28,3 +26,36 @@ function ToggleWrap()
   endif
 endfunction
 
+function StartWrap()
+    setlocal wrap linebreak nolist
+    setlocal display+=lastline
+    noremap  <buffer> <silent> <Up>   gk
+    noremap  <buffer> <silent> <Down> gj
+    noremap  <buffer> <silent> <Home> g<Home>
+    noremap  <buffer> <silent> <End>  g<End>
+    inoremap <buffer> <silent> <Up>   <C-o>gk
+    inoremap <buffer> <silent> <Down> <C-o>gj
+    inoremap <buffer> <silent> <Home> <C-o>g<Home>
+    inoremap <buffer> <silent> <End>  <C-o>g<End>
+endfunction
+
+" Cycle trough git-gutter hunks in a file
+function! GitGutterNextHunkCycle()
+  let line = line('.')
+  silent! GitGutterNextHunk
+  if line('.') == line
+    " Go to first line and then to next hunk
+    1
+    GitGutterNextHunk
+  endif
+endfunction
+
+function! GitGutterPrevHunkCycle()
+  let line = line('.')
+  silent! GitGutterPrevHunk
+  if line('.') == line
+    " Got to last line and then to next hunk
+    $
+    GitGutterPrevHunk
+  endif
+endfunction

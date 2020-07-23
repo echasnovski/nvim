@@ -1,8 +1,17 @@
 " Function `ToggleWrap()` is defined in 'general/functions.vim'
-au BufRead,BufNewFile *.md,*.txt,*.Rmd setlocal spell
-au BufRead,BufNewFile *.md,*.txt,*.Rmd execute ToggleWrap()
+au Filetype markdown,text,rmd setlocal spell
+au Filetype markdown,text,rmd execute StartWrap()
 
 " Set different desired line length
-au BufRead,BufNewFile *.py setlocal colorcolumn=89
-au BufRead,BufNewFile *.R,*.Rmd setlocal colorcolumn=81
+au Filetype python setlocal colorcolumn=89
+au Filetype r,rmd setlocal colorcolumn=81
+
+" Spelling in git commits
+autocmd FileType gitcommit setlocal spell
+
+" Filetype specific keybindings
+au Filetype r,rmd inoremap <buffer> <M-i> <Space><-<Space>
+au Filetype r,rmd inoremap <buffer> <M-k> <Space>%>%
+
+au Filetype python inoremap <buffer> <M-i> <Space>=<Space>
 

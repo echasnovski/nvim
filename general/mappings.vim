@@ -13,15 +13,11 @@ nmap З P
 " Copy to system clipboard
 vmap <C-c> "+y
 
-" Move in Insert mode
-"" Not using left, up, and down motions because <C-h> in NeoVim is treated as
-"" terminal shortcut and deletes one character to the left. Up and down motions
-"" can be used, but really only right motion is needed to escape from paired
-"" objects ("(", "[", etc.)
-" inoremap <C-h> <Left>
-" inoremap <C-j> <C-o>gj
-" inoremap <C-k> <C-o>gk
-inoremap <C-l> <Right>
+" Move horizontally in Insert mode
+inoremap <M-h> <Left>
+inoremap <M-l> <Right>
+tnoremap <M-h> <Left>
+tnoremap <M-l> <Right>
 
 " Move between buffers
 if exists('g:vscode')
@@ -46,6 +42,9 @@ nnoremap <C-h> <C-w>h
 nnoremap <C-j> <C-w>j
 nnoremap <C-k> <C-w>k
 nnoremap <C-l> <C-w>l
+"" When in terminal, use this as escape to normal mode (might be handy when
+"" followed by <C-l> to, almost always, return to terminal)
+tnoremap <C-h> <C-\><C-N><C-w>h
 
 " Use alt + hjkl to resize windows
 nnoremap <silent> <M-j>    :resize -2<CR>
@@ -59,4 +58,8 @@ inoremap <C-s> <C-o>:w<CR>
 
 " Go into completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
+
+" Go to next/previous item in quickfix list
+nnoremap [c :cprev<CR>
+nnoremap ]c :cnext<CR>
 
