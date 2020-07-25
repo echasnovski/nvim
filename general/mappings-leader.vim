@@ -148,17 +148,20 @@ nmap <silent> <Leader>ia  <Plug>(IPy-RunAll)
 
 let g:which_key_map.i = {
     \ 'name' : '+IPython',
-    \ 'a'    : 'run all',
-    \ 'c'    : 'run cell',
-    \ 'k'    : 'connect',
-    \ 'q'    : 'Qt Console',
+    \ 'a' : 'run all',
+    \ 'c' : 'run cell',
+    \ 'k' : 'connect',
+    \ 'q' : 'Qt Console',
     \ }
 
 " t is for 'terminal' (uses 'neoterm')
 let g:which_key_map.t = {
     \ 'name' : '+terminal' ,
+    \ 'a' : [':TREPLSetTerm 1'   , 'focus term #1'],
+    \ 'b' : [':TREPLSetTerm 2'   , 'focus term #2'],
+    \ 'c' : [':TREPLSetTerm 3'   , 'focus term #3'],
     \ 's' : [':belowright Tnew'  , 'split terminal'],
-    \ 'v' : [':vertical Tnew' , 'vsplit terminal'],
+    \ 'v' : [':vertical Tnew'    , 'vsplit terminal'],
     \ }
 
 " s is for 'send'

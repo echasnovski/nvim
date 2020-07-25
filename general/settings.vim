@@ -47,7 +47,13 @@ if !exists('g:vscode')
   set undofile                           " Enable persistent undo
   set undodir=$HOME/.config/nvim/undodir " Set directory for persistent undo
 
-  autocmd FileType * setlocal formatoptions-=c formatoptions-=r formatoptions-=o
+  " Enable filetype plugins and indentation
+  filetype plugin indent on
+
+  " Don't auto-wrap comments and don't insert comment leader after hitting 'o'
+  autocmd FileType * setlocal formatoptions-=c formatoptions-=o
+  " But insert comment leader after hitting <CR>
+  autocmd FileType * setlocal formatoptions+=r
 
   " Start integrated terminal already in insert mode
   autocmd TermOpen * startinsert
