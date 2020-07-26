@@ -31,12 +31,6 @@ else
   nnoremap <silent> <S-TAB> :bprevious<CR>
 endif
 
-" Move selected line / block of text in visual mode
-" shift + k to move up
-" shift + j to move down
-xnoremap K :move '<-2<CR>gv-gv
-xnoremap J :move '>+1<CR>gv-gv
-
 " Better window navigation
 nnoremap <C-h> <C-w>h
 nnoremap <C-j> <C-w>j

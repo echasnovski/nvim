@@ -10,6 +10,7 @@ let g:which_key_map =  {}
 
 " Single mappings
 nnoremap <silent> <Leader>w :call ToggleWrap()<CR>
+let g:which_key_map['W'] = ["StripWhitespace", 'whitespace strip']
 let g:which_key_map['w'] = 'wrap toggle'
 
 "" Execute in jupyter current line and go down by one line
@@ -81,6 +82,7 @@ let g:which_key_map.f = {
     \ 'C' : [':BCommits'         , 'buffer commits'],
     \ 'c' : [':Commits'          , 'commits'],
     \ 'f' : [':Files'            , 'files'],
+    \ 'F' : [':GFiles --others'  , 'files untracked'],
     \ 'g' : [':GFiles'           , 'git files'],
     \ 'G' : [':GFiles?'          , 'modified git files'],
     \ 'H' : [':History:'         , 'command history'],

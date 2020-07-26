@@ -41,7 +41,8 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         Plug 'scrooloose/NERDTree'
 
         " Tweak Neovim's terminal to be more REPL-aware
-        Plug 'kassio/neoterm'
+        " Plug 'kassio/neoterm'
+        Plug 'echasnovski/neoterm', { 'branch': 'bracketed-paste' }
 
         " Git integration
         Plug 'tpope/vim-fugitive'
@@ -66,6 +67,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
         " Auto pairs for '(' '[' '{'
         Plug 'jiangmiao/auto-pairs'
+
+        " Show and remove whitespace
+        Plug 'ntpeters/vim-better-whitespace'
 
         " Commenting
         Plug 'tpope/vim-commentary'
