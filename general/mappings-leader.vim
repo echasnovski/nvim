@@ -9,6 +9,10 @@ vnoremap <silent> <Leader> :silent <c-u> :silent WhichKeyVisual '<Space>'<CR>
 let g:which_key_map =  {}
 
 " Single letter mappings
+"" Generate documentation using 'vim-doge'
+nnoremap <silent> <Leader>d :DogeGenerate<CR>
+let g:which_key_map['d'] = 'document'
+
 "" Execute in jupyter current line and go down by one line
 nmap <silent> <Leader>j  <Plug>(IPy-Run)j
 "" Execute in jupyter selection and go down by one line after the end of
@@ -29,12 +33,10 @@ let g:which_key_map['w'] = 'wrap toggle'
 let g:which_key_map['W'] = ["StripWhitespace", 'whitespace strip']
 
 " b is for 'buffer'
-nnoremap <silent> <Leader>bd :Bclose<CR>
-nnoremap <silent> <Leader>bd! :Bclose!<CR>
 let g:which_key_map.b = {
     \ 'name' : '+buffer' ,
     \ 'd'  : [':Bclose'  , 'delete'],
-    \ "D"  : [":Bclose!" , "delete!"],
+    \ 'D'  : [':Bclose!' , 'delete!'],
     \ }
 
 " c is for 'coc.nvim'
@@ -118,12 +120,14 @@ let g:which_key_map.g = {
     \ 'A' : [':Git add %'                     , 'add buffer'],
     \ 'a' : ['<Plug>(GitGutterStageHunk)'     , 'add hunk'],
     \ 'b' : [':Git blame'                     , 'blame'],
-    \ 'D' : [':Gvdiffsplit'                   , 'diff split'],
+    \ 'D' : [':Gvdiffsplit!'                  , 'diff split'],
     \ 'd' : [':Git diff'                      , 'diff'],
     \ 'f' : [':GitGutterFold'                 , 'fold unchanged'],
     \ 'g' : [':Git'                           , 'git window'],
+    \ 'h' : [':diffget //2'                   , 'merge from left (our)'],
     \ 'j' : [':call GitGutterNextHunkCycle()' , 'next hunk'],
     \ 'k' : [':call GitGutterPrevHunkCycle()' , 'prev hunk'],
+    \ 'l' : [':diffget //3'                   , 'merge from right (their)'],
     \ 'p' : ['<Plug>(GitGutterPreviewHunk)'   , 'preview hunk'],
     \ 'q' : [':GitGutterQuickFix | copen'     , 'quickfix hunks'],
     \ 'R' : [':Git reset %'                   , 'reset buffer'],
@@ -164,7 +168,16 @@ let g:which_key_map.i = {
     \ 'q' : 'Qt Console',
     \ }
 
-" r is for R
+" q is for 'quickfix'
+let g:which_key_map.q = {
+    \ 'name' : '+quickfix' ,
+    \ 'c' : [':cclose'    , 'close'],
+    \ 'j' : [':cnext'     , 'next'],
+    \ 'k' : [':cprevious' , 'previous'],
+    \ 'o' : [':copen'     , 'open'],
+    \ }
+
+" r is for 'R'
 "" These mappings send commands to current neoterm buffer, so some sort of R
 "" interpreter should already run there
 nnoremap <silent> <Leader>rc :T devtools::check()<CR>
@@ -172,6 +185,8 @@ nnoremap <silent> <Leader>rC :T devtools::test_coverage()<CR>
 nnoremap <silent> <Leader>rd :T devtools::document()<CR>
 nnoremap <silent> <Leader>ri :T devtools::install(keep_source=TRUE)<CR>
 nnoremap <silent> <Leader>rl :T devtools::load_all()<CR>
+" Copy to clipboard and make reprex (which itself is loaded to clipboard)
+vnoremap <silent> <Leader>rr "+y :T reprex::reprex()<CR>
 nnoremap <silent> <Leader>rT :T devtools::test_file("%")<CR>
 nnoremap <silent> <Leader>rt :T devtools::test()<CR>
 
@@ -182,18 +197,25 @@ let g:which_key_map.r = {
     \ 'd' : 'document',
     \ 'i' : 'install',
     \ 'l' : 'load all',
+    \ 'r' : 'reprex selection',
     \ 'T' : 'test file',
     \ 't' : 'test',
     \ }
 
 " t is for 'terminal' (uses 'neoterm')
+"" `ShowActiveNeotermREPL()` is defined in 'general/functions.vim'
+nnoremap <silent> <Leader>ta :call ShowActiveNeotermREPL()<CR>
 nnoremap <silent> <Leader>tc :<c-u>exec v:count."Tclose\!"<CR>
 nnoremap <silent> <Leader>tf :<c-u>exec "TREPLSetTerm ".v:count<CR>
+nnoremap <silent> <Leader>tl :call neoterm#list_ids()<CR>
+
 let g:which_key_map.t = {
     \ 'name' : '+terminal' ,
+    \ 'a' :                        'echo active REPL id',
     \ 'C' : [':TcloseAll!'       , 'close all terminals'],
     \ 'c' :                        'close term (prepend by id)',
     \ 'f' :                        'focus term (prepend by id)',
+    \ 'l' :                        'list terminals',
     \ 's' : [':belowright Tnew'  , 'split terminal'],
     \ 'v' : [':vertical Tnew'    , 'vsplit terminal'],
     \ }

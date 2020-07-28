@@ -59,3 +59,17 @@ function! GitGutterPrevHunkCycle()
     GitGutterPrevHunk
   endif
 endfunction
+
+" Show Neoterm's active REPL, i.e. in which command will be executed when one
+" of `TREPLSend*` will be used
+function ShowActiveNeotermREPL()
+  if exists("g:neoterm.repl") && exists("g:neoterm.repl.instance_id")
+    let l:msg = "Active REPL neoterm id: " . g:neoterm.repl.instance_id
+  elseif g:neoterm.last_id != 0
+    let l:msg = "Active REPL neoterm id: " . g:neoterm.last_id
+  else
+    let l:msg = "No active REPL"
+  endif
+
+  echo l:msg
+endfunction

@@ -53,7 +53,3 @@ inoremap <C-s> <C-o>:w<CR>
 " Go into completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
 
-" Go to next/previous item in quickfix list
-nnoremap [c :cprev<CR>
-nnoremap ]c :cnext<CR>
-

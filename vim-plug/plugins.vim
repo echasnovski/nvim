@@ -55,6 +55,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         " Better Syntax Support (has rather big disk size usage, around 10M)
         Plug 'sheerun/vim-polyglot'
 
+        " Documentation generator
+        Plug 'kkoomen/vim-doge'
+
         " IPython integration
         Plug 'bfredl/nvim-ipy'
 
