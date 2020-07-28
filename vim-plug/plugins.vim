@@ -41,8 +41,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
         Plug 'scrooloose/NERDTree'
 
         " Tweak Neovim's terminal to be more REPL-aware
-        " Plug 'kassio/neoterm'
-        Plug 'echasnovski/neoterm', { 'branch': 'bracketed-paste' }
+        Plug 'kassio/neoterm'
 
         " Git integration
         Plug 'tpope/vim-fugitive'

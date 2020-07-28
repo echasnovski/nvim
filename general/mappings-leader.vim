@@ -8,11 +8,7 @@ vnoremap <silent> <Leader> :silent <c-u> :silent WhichKeyVisual '<Space>'<CR>
 " Create map to add keys to
 let g:which_key_map =  {}
 
-" Single mappings
-nnoremap <silent> <Leader>w :call ToggleWrap()<CR>
-let g:which_key_map['W'] = ["StripWhitespace", 'whitespace strip']
-let g:which_key_map['w'] = 'wrap toggle'
-
+" Single letter mappings
 "" Execute in jupyter current line and go down by one line
 nmap <silent> <Leader>j  <Plug>(IPy-Run)j
 "" Execute in jupyter selection and go down by one line after the end of
@@ -20,13 +16,25 @@ nmap <silent> <Leader>j  <Plug>(IPy-Run)j
 vmap <silent> <Leader>j  <Plug>(IPy-Run)'>j
 let g:which_key_map['j'] = 'jupyter run'
 
+" Send text to neoterm buffer
+nnoremap <Leader>s :TREPLSendLine<cr>j
+vnoremap <Leader>s :TREPLSendSelection<cr>'>j
+let g:which_key_map['s'] = 'send to terminal'
+
+"" Toggle custom wrap settings
+nnoremap <silent> <Leader>w :call ToggleWrap()<CR>
+let g:which_key_map['w'] = 'wrap toggle'
+
+"" Strip whitespace
+let g:which_key_map['W'] = ["StripWhitespace", 'whitespace strip']
+
 " b is for 'buffer'
 nnoremap <silent> <Leader>bd :Bclose<CR>
 nnoremap <silent> <Leader>bd! :Bclose!<CR>
 let g:which_key_map.b = {
     \ 'name' : '+buffer' ,
     \ 'd'  : [':Bclose'  , 'delete'],
-    \ "d!" : [":Bclose!" , "delete!"],
+    \ "D"  : [":Bclose!" , "delete!"],
     \ }
 
 " c is for 'coc.nvim'
@@ -156,19 +164,39 @@ let g:which_key_map.i = {
     \ 'q' : 'Qt Console',
     \ }
 
+" r is for R
+"" These mappings send commands to current neoterm buffer, so some sort of R
+"" interpreter should already run there
+nnoremap <silent> <Leader>rc :T devtools::check()<CR>
+nnoremap <silent> <Leader>rC :T devtools::test_coverage()<CR>
+nnoremap <silent> <Leader>rd :T devtools::document()<CR>
+nnoremap <silent> <Leader>ri :T devtools::install(keep_source=TRUE)<CR>
+nnoremap <silent> <Leader>rl :T devtools::load_all()<CR>
+nnoremap <silent> <Leader>rT :T devtools::test_file("%")<CR>
+nnoremap <silent> <Leader>rt :T devtools::test()<CR>
+
+let g:which_key_map.r = {
+    \ 'name' : '+R',
+    \ 'c' : 'check',
+    \ 'C' : 'coverage',
+    \ 'd' : 'document',
+    \ 'i' : 'install',
+    \ 'l' : 'load all',
+    \ 'T' : 'test file',
+    \ 't' : 'test',
+    \ }
+
 " t is for 'terminal' (uses 'neoterm')
+nnoremap <silent> <Leader>tc :<c-u>exec v:count."Tclose\!"<CR>
+nnoremap <silent> <Leader>tf :<c-u>exec "TREPLSetTerm ".v:count<CR>
 let g:which_key_map.t = {
     \ 'name' : '+terminal' ,
-    \ 'a' : [':TREPLSetTerm 1'   , 'focus term #1'],
-    \ 'b' : [':TREPLSetTerm 2'   , 'focus term #2'],
-    \ 'c' : [':TREPLSetTerm 3'   , 'focus term #3'],
+    \ 'C' : [':TcloseAll!'       , 'close all terminals'],
+    \ 'c' :                        'close term (prepend by id)',
+    \ 'f' :                        'focus term (prepend by id)',
     \ 's' : [':belowright Tnew'  , 'split terminal'],
     \ 'v' : [':vertical Tnew'    , 'vsplit terminal'],
     \ }
-
-" s is for 'send'
-nnoremap <Leader>s :TREPLSendLine<cr>j
-vnoremap <Leader>s :TREPLSendSelection<cr>'>j
 
 " Register 'which-key' mappings
 call which_key#register('<Space>', "g:which_key_map")

@@ -33,3 +33,11 @@ hi CocErrorHighlight   guisp=#ff0000 gui=undercurl
 hi CocWarningHighlight guisp=#ffa500 gui=undercurl
 hi CocInfoHighlight    guisp=#ffff00 gui=undercurl
 hi CocHintHighlight    guisp=#00ff00 gui=undercurl
+
+" Snippets
+"" Use <C-j> for both expand and jump (make expand higher priority.)
+imap <C-j> <Plug>(coc-snippets-expand-jump)
+
+"" Use <C-k> for jump to previous placeholder, it's default of coc.nvim
+let g:coc_snippet_prev = '<c-k>'
+
