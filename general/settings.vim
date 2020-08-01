@@ -1,8 +1,4 @@
-" Use more convenient (for me) exclusive visual selection
-set selection=exclusive
-
 set iskeyword+=-         " Treat dash separated words as a word text object "
-set formatoptions-=cro   " Stop newline continution of comments
 
 if !exists('g:vscode')
 
@@ -43,6 +39,11 @@ if !exists('g:vscode')
   set switchbuf=usetab   " Use already opened buffers when switching
   set colorcolumn=+1     " Draw colored column one step to the right of desired maximum width
   set virtualedit=block  " Allow going past the end of line in visual block mode
+
+  set foldenable         " Enable folding by default
+  set foldmethod=indent  " Set "indent" folding method
+  set foldlevel=0        " Display all folds
+  set foldnestmax=3      " Create folds only for some number of nested levels
 
   set undofile                           " Enable persistent undo
   set undodir=$HOME/.config/nvim/undodir " Set directory for persistent undo

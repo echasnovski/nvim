@@ -53,3 +53,8 @@ inoremap <C-s> <C-o>:w<CR>
 " Go into completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
 
+" Extra jumps between folds
+"" Jump to the beginning of previous fold
+nnoremap zK zk[z
+"" Jump to the end of next fold
+nnoremap zJ zj]z
