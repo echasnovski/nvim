@@ -1,11 +1,11 @@
 let g:coc_global_extensions = [
-    \ 'coc-highlight',
-    \ 'coc-json',
-    \ 'coc-python',
-    \ 'coc-r-lsp',
-    \ 'coc-snippets',
-    \ 'coc-vimlsp'
-    \ ]
+  \ 'coc-highlight',
+  \ 'coc-json',
+  \ 'coc-python',
+  \ 'coc-r-lsp',
+  \ 'coc-snippets',
+  \ 'coc-vimlsp'
+  \ ]
 
 let g:coc_node_path = expand('~/.nvm/versions/node/v12.18.2/bin/node')
 

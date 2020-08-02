@@ -2,13 +2,13 @@
 let g:startify_session_dir = '~/.config/nvim/session'
 
 let g:startify_lists = [
-    \ { 'type': 'sessions',  'header': ['   Sessions']       },
-    \ { 'type': 'bookmarks', 'header': ['   Bookmarks']      },
-    \ ]
+  \ { 'type': 'sessions',  'header': ['   Sessions']       },
+  \ { 'type': 'bookmarks', 'header': ['   Bookmarks']      },
+  \ ]
 
 let g:startify_bookmarks = [
-    \ { 'n': '~/.config/nvim/' },
-    \ ]
+  \ { 'n': '~/.config/nvim/' },
+  \ ]
 
 let g:startify_custom_header = 'startify#pad(startify#fortune#boxed())'
 let g:startify_fortune_use_unicode = 1
