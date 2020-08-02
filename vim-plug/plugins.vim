@@ -58,6 +58,11 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Documentation generator
     Plug 'kkoomen/vim-doge'
 
+    " Test runner
+    Plug 'vim-test/vim-test'
+    "" Currently used only for populating quickfix list with test results
+    Plug 'tpope/vim-dispatch'
+
     " IPython integration
     Plug 'bfredl/nvim-ipy'
 

@@ -64,7 +64,7 @@ let g:which_key_map.c = {
   \ 'l' : ['<Plug>(coc-codelens-action)'       , 'code lens'],
   \ 'O' : [':CocList outline'                  , 'outline'],
   \ 'o' : ['<Plug>(coc-openlink)'              , 'open link'],
-  \ 'q' : ['<Plug>(coc-fix-current)'           , 'quickfix'],
+  \ 'q' : ['<Plug>(coc-fix-current)'           , 'quickfix action'],
   \ 'R' : ['<Plug>(coc-references)'            , 'references'],
   \ 'r' : ['<Plug>(coc-rename)'                , 'rename'],
   \ 'S' : [':CocList snippets'                 , 'snippets'],
@@ -172,8 +172,10 @@ let g:which_key_map.i = {
 let g:which_key_map.q = {
   \ 'name' : '+quickfix' ,
   \ 'c' : [':cclose'    , 'close'],
+  \ 'f' : [':cfirst'    , 'first'],
   \ 'j' : [':cnext'     , 'next'],
   \ 'k' : [':cprevious' , 'previous'],
+  \ 'l' : [':clast'     , 'last'],
   \ 'o' : [':copen'     , 'open'],
   \ }
 
@@ -218,6 +220,19 @@ let g:which_key_map.t = {
   \ 'l' :                        'list terminals',
   \ 's' : [':belowright Tnew'  , 'split terminal'],
   \ 'v' : [':vertical Tnew'    , 'vsplit terminal'],
+  \ }
+
+" T is for 'test'
+let g:which_key_map.T = {
+  \ 'name' : '+test' ,
+  \ 'F' : [':TestFile -strategy=make | copen'    , 'file (quickfix)'],
+  \ 'f' : [':TestFile'                           , 'file'],
+  \ 'L' : [':TestLast -strategy=make | copen'    , 'last (quickfix)'],
+  \ 'l' : [':TestLast'                           , 'last'],
+  \ 'N' : [':TestNearest -strategy=make | copen' , 'nearest (quickfix)'],
+  \ 'n' : [':TestNearest'                        , 'nearest'],
+  \ 'S' : [':TestSuite -strategy=make | copen'   , 'suite (quickfix)'],
+  \ 's' : [':TestSuite'                          , 'suite'],
   \ }
 
 " Register 'which-key' mappings

@@ -105,3 +105,4 @@ Important system dependencies:
 - Source for some inspiration: https://stackoverflow.com/questions/726894/what-are-the-dark-corners-of-vim-your-mom-never-told-you-about . Notable examples:
     - Use `:.![command]` to execute command in terminal and put its output into current buffer. For example: `:.!ls -lhR`.
 - In NERDTree use 'm' keybinding to open a menu with actions you can do with current file tree.
+- When testing with 'vim-test', use `-strategy=make` argument to `:Test*` commands in order to populate quickfix list. **Note** that this will not display testing process as it is running and won't open quickfix list by default.
