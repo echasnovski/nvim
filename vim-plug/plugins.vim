@@ -101,7 +101,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
 
     " LaTeX (has rather big disk size usage, around 14M)
-    Plug 'lervag/vimtex'
+    " Plug 'lervag/vimtex'
   endif
 
 call plug#end()

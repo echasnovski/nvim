@@ -187,6 +187,7 @@ nnoremap <silent> <Leader>rC :T devtools::test_coverage()<CR>
 nnoremap <silent> <Leader>rd :T devtools::document()<CR>
 nnoremap <silent> <Leader>ri :T devtools::install(keep_source=TRUE)<CR>
 nnoremap <silent> <Leader>rl :T devtools::load_all()<CR>
+nnoremap <silent> <Leader>rk :T rmarkdown::render("%")<CR>
 " Copy to clipboard and make reprex (which itself is loaded to clipboard)
 vnoremap <silent> <Leader>rr "+y :T reprex::reprex()<CR>
 nnoremap <silent> <Leader>rT :T devtools::test_file("%")<CR>
@@ -199,6 +200,7 @@ let g:which_key_map.r = {
   \ 'd' : 'document',
   \ 'i' : 'install',
   \ 'l' : 'load all',
+  \ 'k' : 'knit file',
   \ 'r' : 'reprex selection',
   \ 'T' : 'test file',
   \ 't' : 'test',
