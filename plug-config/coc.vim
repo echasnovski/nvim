@@ -53,3 +53,8 @@ imap <C-j> <Plug>(coc-snippets-expand-jump)
 "" Use <C-k> for jump to previous placeholder, it's default of coc.nvim
 let g:coc_snippet_prev = '<c-k>'
 
+" Enable coc.nvim in accompanying files
+let g:coc_filetype_map = {
+  \ 'rmarkdown': 'r',
+  \ 'rmd': 'r',
+  \ }

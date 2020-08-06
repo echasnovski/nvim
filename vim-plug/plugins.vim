@@ -87,12 +87,13 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Work with csv
     Plug 'mechatroner/rainbow_csv'
 
-    " Pandoc
+    " Pandoc and Rmarkdown support
     "" This option should be set before loading plugin to take effect
     "" See https://github.com/vim-pandoc/vim-pandoc/issues/342
     let g:pandoc#filetypes#pandoc_markdown = 0
     Plug 'vim-pandoc/vim-pandoc'
     Plug 'vim-pandoc/vim-pandoc-syntax'
+    Plug 'vim-pandoc/vim-rmarkdown'
 
     " Work with markdown
     Plug 'plasticboy/vim-markdown'
