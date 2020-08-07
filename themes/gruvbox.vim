@@ -16,9 +16,9 @@ endfunction
 
 autocmd VimEnter,BufWinEnter * call <SID>hi_base_syntax()
 
-" Use terminal's background (needed to use transparent background)
-hi! Normal ctermbg=NONE guibg=NONE
-hi! NonText ctermbg=NONE guibg=NONE guifg=NONE ctermfg=NONE
+" " Use terminal's background (needed if transparent background is used)
+" hi! Normal ctermbg=NONE guibg=NONE
+" hi! NonText ctermbg=NONE guibg=NONE guifg=NONE ctermfg=NONE
 
 " Use custom colors for highlighting spelling information
 hi SpellBad     guisp=#CC0000   gui=undercurl

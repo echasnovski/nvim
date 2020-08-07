@@ -35,6 +35,7 @@ let g:which_key_map['W'] = ["StripWhitespace", 'whitespace strip']
 " b is for 'buffer'
 let g:which_key_map.b = {
   \ 'name' : '+buffer' ,
+  \ 'a'  : [':b#'      , 'alternate'],
   \ 'd'  : [':Bclose'  , 'delete'],
   \ 'D'  : [':Bclose!' , 'delete!'],
   \ }

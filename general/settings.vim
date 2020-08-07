@@ -44,6 +44,7 @@ if !exists('g:vscode')
   set foldmethod=indent  " Set "indent" folding method
   set foldlevel=0        " Display all folds
   set foldnestmax=3      " Create folds only for some number of nested levels
+  set foldcolumn=0       " Disable fold column
 
   set undofile                           " Enable persistent undo
   set undodir=$HOME/.config/nvim/undodir " Set directory for persistent undo

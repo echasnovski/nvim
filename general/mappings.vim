@@ -36,6 +36,8 @@ nnoremap <C-h> <C-w>h
 nnoremap <C-j> <C-w>j
 nnoremap <C-k> <C-w>k
 nnoremap <C-l> <C-w>l
+"" Go to previous window (very useful with "pop-up" 'coc.nvim' documentation)
+nnoremap <C-p> <C-w>p
 "" When in terminal, use this as escape to normal mode (might be handy when
 "" followed by <C-l> to, almost always, return to terminal)
 tnoremap <C-h> <C-\><C-N><C-w>h
