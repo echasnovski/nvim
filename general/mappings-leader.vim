@@ -9,10 +9,6 @@ vnoremap <silent> <Leader> :silent <c-u> :silent WhichKeyVisual '<Space>'<CR>
 let g:which_key_map =  {}
 
 " Single letter mappings
-"" Generate documentation using 'vim-doge'
-nnoremap <silent> <Leader>d :DogeGenerate<CR>
-let g:which_key_map['d'] = 'document'
-
 "" Execute in jupyter current line and go down by one line
 nmap <silent> <Leader>j  <Plug>(IPy-Run)j
 "" Execute in jupyter selection and go down by one line after the end of
@@ -24,13 +20,6 @@ let g:which_key_map['j'] = 'jupyter run'
 nnoremap <Leader>s :TREPLSendLine<cr>j
 vnoremap <Leader>s :TREPLSendSelection<cr>'>j
 let g:which_key_map['s'] = 'send to terminal'
-
-"" Toggle custom wrap settings
-nnoremap <silent> <Leader>w :call ToggleWrap()<CR>
-let g:which_key_map['w'] = 'wrap toggle'
-
-"" Strip whitespace
-let g:which_key_map['W'] = ["StripWhitespace", 'whitespace strip']
 
 " b is for 'buffer'
 let g:which_key_map.b = {
@@ -167,6 +156,16 @@ let g:which_key_map.i = {
   \ 'c' : 'run cell',
   \ 'k' : 'connect',
   \ 'q' : 'Qt Console',
+  \ }
+
+" o is for 'other'
+vnoremap <Leader>oa :Tabularize /
+let g:which_key_map.o = {
+  \ 'name' : '+other' ,
+  \ 'a' :                         'align',
+  \ 'd' : [':DogeGenerate'      , 'document'],
+  \ 'w' : [':call ToggleWrap()' , 'wrap toggle'],
+  \ 'W' : [':StripWhitespace'   , 'whitespace strip'],
   \ }
 
 " q is for 'quickfix'
