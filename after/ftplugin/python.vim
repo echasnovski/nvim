@@ -19,3 +19,6 @@ endfunction
 
 nnoremap <buffer> <M-s> :call SectionPy()<CR>
 inoremap <buffer> <M-s> <C-o>:call SectionPy()<CR>
+
+" Comment identifiers
+set comments=:###,:##,:#

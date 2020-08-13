@@ -29,43 +29,6 @@ let g:which_key_map.b = {
   \ 'D'  : [':Bclose!' , 'delete!'],
   \ }
 
-" c is for 'coc.nvim'
-let g:which_key_map.c = {
-  \ 'name' : '+Coc' ,
-  \ '.' : [':CocConfig'                        , 'config'],
-  \ ';' : ['<Plug>(coc-refactor)'              , 'refactor'],
-  \ 'A' : ['<Plug>(coc-codeaction-selected)'   , 'selected action'],
-  \ 'a' : ['<Plug>(coc-codeaction)'            , 'line action'],
-  \ 'B' : [':CocPrev'                          , 'prev action'],
-  \ 'b' : [':CocNext'                          , 'next action'],
-  \ 'c' : [':CocList commands'                 , 'commands'],
-  \ 'D' : ['<Plug>(coc-declaration)'           , 'declaration'],
-  \ 'd' : ['<Plug>(coc-definition)'            , 'definition'],
-  \ 'e' : [':CocList extensions'               , 'extensions'],
-  \ 'F' : ['<Plug>(coc-format)'                , 'format'],
-  \ 'f' : ['<Plug>(coc-format-selected)'       , 'format selected'],
-  \ 'h' : ['<Plug>(coc-float-hide)'            , 'hide'],
-  \ 'I' : [':CocList -A --normal diagnostics'  , 'diagnostics'],
-  \ 'i' : ['<Plug>(coc-implementation)'        , 'implementation'],
-  \ 'J' : ['<Plug>(coc-diagnostic-next-error)' , 'next error'],
-  \ 'j' : ['<Plug>(coc-diagnostic-next)'       , 'next diagnostic'],
-  \ 'K' : ['<Plug>(coc-diagnostic-prev-error)' , 'prev error'],
-  \ 'k' : ['<Plug>(coc-diagnostic-prev)'       , 'prev diagnostic'],
-  \ 'l' : ['<Plug>(coc-codelens-action)'       , 'code lens'],
-  \ 'O' : [':CocList outline'                  , 'outline'],
-  \ 'o' : ['<Plug>(coc-openlink)'              , 'open link'],
-  \ 'q' : ['<Plug>(coc-fix-current)'           , 'quickfix action'],
-  \ 'R' : ['<Plug>(coc-references)'            , 'references'],
-  \ 'r' : ['<Plug>(coc-rename)'                , 'rename'],
-  \ 'S' : [':CocList snippets'                 , 'snippets'],
-  \ 's' : [':CocList -A --normal -I symbols'   , 'references'],
-  \ 't' : ['<Plug>(coc-type-definition)'       , 'type definition'],
-  \ 'U' : [':CocUpdate'                        , 'update CoC'],
-  \ 'u' : [':CocListResume'                    , 'resume list'],
-  \ 'Z' : [':CocEnable'                        , 'enable CoC'],
-  \ 'z' : [':CocDisable'                       , 'disable CoC'],
-  \ }
-
 " e is for 'explorer'
 let g:which_key_map.e = {
   \ 'name' : '+explorer' ,
@@ -158,14 +121,56 @@ let g:which_key_map.i = {
   \ 'q' : 'Qt Console',
   \ }
 
+" l is for 'LSP' (Language Server Protocol)
+let g:which_key_map.l = {
+  \ 'name' : '+LSP' ,
+  \ '.' : [':CocConfig'                        , 'config'],
+  \ ';' : ['<Plug>(coc-refactor)'              , 'refactor'],
+  \ 'A' : ['<Plug>(coc-codeaction-selected)'   , 'selected action'],
+  \ 'a' : ['<Plug>(coc-codeaction)'            , 'line action'],
+  \ 'B' : [':CocPrev'                          , 'prev action'],
+  \ 'b' : [':CocNext'                          , 'next action'],
+  \ 'c' : [':CocList commands'                 , 'commands'],
+  \ 'D' : ['<Plug>(coc-declaration)'           , 'declaration'],
+  \ 'd' : ['<Plug>(coc-definition)'            , 'definition'],
+  \ 'e' : [':CocList extensions'               , 'extensions'],
+  \ 'F' : ['<Plug>(coc-format)'                , 'format'],
+  \ 'f' : ['<Plug>(coc-format-selected)'       , 'format selected'],
+  \ 'h' : ['<Plug>(coc-float-hide)'            , 'hide'],
+  \ 'I' : [':CocList -A --normal diagnostics'  , 'diagnostics'],
+  \ 'i' : ['<Plug>(coc-implementation)'        , 'implementation'],
+  \ 'J' : ['<Plug>(coc-diagnostic-next-error)' , 'next error'],
+  \ 'j' : ['<Plug>(coc-diagnostic-next)'       , 'next diagnostic'],
+  \ 'K' : ['<Plug>(coc-diagnostic-prev-error)' , 'prev error'],
+  \ 'k' : ['<Plug>(coc-diagnostic-prev)'       , 'prev diagnostic'],
+  \ 'l' : ['<Plug>(coc-codelens-action)'       , 'code lens'],
+  \ 'O' : [':CocList outline'                  , 'outline'],
+  \ 'o' : ['<Plug>(coc-openlink)'              , 'open link'],
+  \ 'q' : ['<Plug>(coc-fix-current)'           , 'quickfix action'],
+  \ 'R' : ['<Plug>(coc-references)'            , 'references'],
+  \ 'r' : ['<Plug>(coc-rename)'                , 'rename'],
+  \ 'S' : [':CocList snippets'                 , 'snippets'],
+  \ 's' : [':CocList -A --normal -I symbols'   , 'references'],
+  \ 't' : ['<Plug>(coc-type-definition)'       , 'type definition'],
+  \ 'U' : [':CocUpdate'                        , 'update CoC'],
+  \ 'u' : [':CocListResume'                    , 'resume list'],
+  \ 'Z' : [':CocEnable'                        , 'enable CoC'],
+  \ 'z' : [':CocDisable'                       , 'disable CoC'],
+  \ }
+
 " o is for 'other'
-vnoremap <Leader>oa :Tabularize /
+let g:lion_map_right="<Leader>oa"
+let g:lion_map_left="<Leader>oA"
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
-  \ 'a' :                         'align',
-  \ 'd' : [':DogeGenerate'      , 'document'],
-  \ 'w' : [':call ToggleWrap()' , 'wrap toggle'],
-  \ 'W' : [':StripWhitespace'   , 'whitespace strip'],
+  \ 'A' :                            'align left',
+  \ 'a' :                            'align',
+  \ 'd' : [':DogeGenerate'         , 'document'],
+  \ 's' : [':ArgWrap'              , 'split arguments'],
+  \ 'w' : [':call ToggleWrap()'    , 'wrap toggle'],
+  \ 'W' : [':StripWhitespace'      , 'whitespace strip'],
+  \ 'x' : ['<Plug>(Exchange)'      , 'eXchange'],
+  \ 'X' : ['<Plug>(ExchangeClear)' , 'eXhange clear'],
   \ }
 
 " q is for 'quickfix'
