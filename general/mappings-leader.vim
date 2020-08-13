@@ -159,18 +159,12 @@ let g:which_key_map.l = {
   \ }
 
 " o is for 'other'
-let g:lion_map_right="<Leader>oa"
-let g:lion_map_left="<Leader>oA"
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
-  \ 'A' :                            'align left',
-  \ 'a' :                            'align',
-  \ 'd' : [':DogeGenerate'         , 'document'],
-  \ 's' : [':ArgWrap'              , 'split arguments'],
-  \ 'w' : [':call ToggleWrap()'    , 'wrap toggle'],
-  \ 'W' : [':StripWhitespace'      , 'whitespace strip'],
-  \ 'x' : ['<Plug>(Exchange)'      , 'eXchange'],
-  \ 'X' : ['<Plug>(ExchangeClear)' , 'eXhange clear'],
+  \ 'a' : [':ArgWrap'           , 'arguments split'],
+  \ 'd' : [':DogeGenerate'      , 'document'],
+  \ 'w' : [':call ToggleWrap()' , 'wrap toggle'],
+  \ 'W' : [':StripWhitespace'   , 'whitespace strip'],
   \ }
 
 " q is for 'quickfix'
