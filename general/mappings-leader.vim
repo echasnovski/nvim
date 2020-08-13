@@ -186,12 +186,12 @@ nnoremap <silent> <Leader>rc :T devtools::check()<CR>
 nnoremap <silent> <Leader>rC :T devtools::test_coverage()<CR>
 nnoremap <silent> <Leader>rd :T devtools::document()<CR>
 nnoremap <silent> <Leader>ri :T devtools::install(keep_source=TRUE)<CR>
-nnoremap <silent> <Leader>rl :T devtools::load_all()<CR>
 nnoremap <silent> <Leader>rk :T rmarkdown::render("%")<CR>
-" Copy to clipboard and make reprex (which itself is loaded to clipboard)
-vnoremap <silent> <Leader>rr "+y :T reprex::reprex()<CR>
+nnoremap <silent> <Leader>rl :T devtools::load_all()<CR>
 nnoremap <silent> <Leader>rT :T devtools::test_file("%")<CR>
 nnoremap <silent> <Leader>rt :T devtools::test()<CR>
+" Copy to clipboard and make reprex (which itself is loaded to clipboard)
+vnoremap <silent> <Leader>rx "+y :T reprex::reprex()<CR>
 
 let g:which_key_map.r = {
   \ 'name' : '+R',
@@ -199,11 +199,11 @@ let g:which_key_map.r = {
   \ 'C' : 'coverage',
   \ 'd' : 'document',
   \ 'i' : 'install',
-  \ 'l' : 'load all',
   \ 'k' : 'knit file',
-  \ 'r' : 'reprex selection',
+  \ 'l' : 'load all',
   \ 'T' : 'test file',
   \ 't' : 'test',
+  \ 'x' : 'reprex selection',
   \ }
 
 " t is for 'terminal' (uses 'neoterm')

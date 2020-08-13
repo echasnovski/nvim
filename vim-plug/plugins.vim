@@ -73,7 +73,10 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'ryanoasis/vim-devicons'
 
     " Auto pairs for '(' '[' '{'
-    Plug 'jiangmiao/auto-pairs'
+    " Plug 'jiangmiao/auto-pairs'
+    "" 'pear-tree' plugin provides for me more intuitive experience:
+    "" 'smart opener/closer', not inserting closer when before word, etc.
+    Plug 'tmsvg/pear-tree'
 
     " Show and remove whitespace
     Plug 'ntpeters/vim-better-whitespace'
