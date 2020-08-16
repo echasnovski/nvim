@@ -9,6 +9,7 @@ source $HOME/.config/nvim/general/spelling.vim
 if exists('g:vscode')
   source $HOME/.config/nvim/vscode/vscode.vim
   source $HOME/.config/nvim/plug-config/targets.vim
+  source $HOME/.config/nvim/plug-config/sideways.vim
 else
   source $HOME/.config/nvim/themes/gruvbox.vim
   source $HOME/.config/nvim/themes/airline.vim

@@ -3,13 +3,12 @@ set iskeyword+=-         " Treat dash separated words as a word text object "
 if !exists('g:vscode')
 
   syntax enable          " Enables syntax highlighing
-  set hidden             " Required to keep multiple buffers open multiple buffers
+  set hidden             " Required to keep multiple buffers open
   set nowrap             " Display long lines as just one line
   set encoding=utf-8     " The encoding displayed
-  set pumheight=10       " Makes popup menu smaller
   set fileencoding=utf-8 " The encoding written to file
+  set pumheight=10       " Makes popup menu smaller
   set ruler              " Show the cursor position all the time
-  set cmdheight=2        " More space for displaying messages
   set mouse=a            " Enable your mouse
   set splitbelow         " Horizontal splits will automatically be below
   set splitright         " Vertical splits will automatically be to the right
@@ -39,6 +38,8 @@ if !exists('g:vscode')
   set switchbuf=usetab   " Use already opened buffers when switching
   set colorcolumn=+1     " Draw colored column one step to the right of desired maximum width
   set virtualedit=block  " Allow going past the end of line in visual block mode
+  set nostartofline      " Don't position cursor on line start after certain operations
+  set breakindent        " Indent wrapped lines to match line start
 
   set foldenable         " Enable folding by default
   set foldmethod=indent  " Set "indent" folding method

@@ -14,6 +14,18 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   " More text objects
   Plug 'wellle/targets.vim'
 
+  " Align text
+  Plug 'tommcdo/vim-lion'
+
+  " Wrap function arguments
+  Plug 'FooSoft/vim-argwrap'
+
+  " Swap function arguments (and define better 'argument' text object)
+  Plug 'AndrewRadev/sideways.vim'
+
+  " Exchange regions
+  Plug 'tommcdo/vim-exchange'
+
   " Python movements and text objects
   Plug 'jeetsukumaran/vim-pythonsense'
 
@@ -86,15 +98,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     "" Commenting
     Plug 'tpope/vim-commentary'
-
-    "" Align text
-    Plug 'tommcdo/vim-lion'
-
-    "" Wrap function arguments
-    Plug 'FooSoft/vim-argwrap'
-
-    "" Exchange motions
-    Plug 'tommcdo/vim-exchange'
 
     " Filetypes
     "" Work with csv

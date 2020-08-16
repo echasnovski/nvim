@@ -163,6 +163,8 @@ let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'           , 'arguments split'],
   \ 'd' : [':DogeGenerate'      , 'document'],
+  \ 'S' : [':SidewaysLeft'      , 'sideways left'],
+  \ 's' : [':SidewaysRight'     , 'sideways right'],
   \ 'w' : [':call ToggleWrap()' , 'wrap toggle'],
   \ 'W' : [':StripWhitespace'   , 'whitespace strip'],
   \ }

@@ -13,11 +13,13 @@ nmap З P
 " Copy to system clipboard
 vmap <C-c> "+y
 
-" Move horizontally in Insert mode
+" Move horizontally
 inoremap <M-h> <Left>
 inoremap <M-l> <Right>
 tnoremap <M-h> <Left>
 tnoremap <M-l> <Right>
+cnoremap <M-h> <Left>
+cnoremap <M-l> <Right>
 
 " Move between buffers
 if exists('g:vscode')
@@ -60,3 +62,10 @@ inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
 nnoremap zK zk[z
 "" Jump to the end of next fold
 nnoremap zJ zj]z
+
+" " These mappings are useful to quickly go in insert mode at certain place or
+" " in terminal window after scrolling
+" nnoremap <RightMouse>   <LeftMouse>:startinsert<CR>
+" nnoremap <RightRelease> <LeftMouse>:startinsert<CR>
+" inoremap <RightMouse>   <LeftMouse>
+" inoremap <RightRelease> <LeftMouse>

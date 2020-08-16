@@ -67,6 +67,8 @@ Important system dependencies:
     - Create '~/.nvim/spell' directory.
     - Put there English and Russian dictionaries (download from ftp://ftp.vim.org/pub/vim/runtime/spell/).
 
+- **Clipboard support**. One of 'xsel' (preferred) or 'xclip' (had some minor issues after installing 'vim-exchange').
+
 ## Notes
 
 - Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'general/settings.vim' as 'g:python3_host_prog' variable.

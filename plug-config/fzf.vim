@@ -46,5 +46,8 @@ command! -bang -nargs=* Rg
   \           : fzf#vim#with_preview({'options': '--delimiter : --nth 4.. -e'}, 'right:50%', '?'),
   \   <bang>0)
 
-" Replace the default dictionary completion with fzf-based fuzzy completion
+" Replace default dictionary completion with fzf-based
 inoremap <expr> <c-x><c-k> fzf#vim#complete('cat ~/.config/nvim/dict/english.txt')
+
+" Replace default path completion with fzf-based
+imap <c-x><c-f> <Plug>(fzf-complete-path)
