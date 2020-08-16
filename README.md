@@ -69,6 +69,21 @@ Important system dependencies:
 
 - **Clipboard support**. One of 'xsel' (preferred) or 'xclip' (had some minor issues after installing 'vim-exchange').
 
+- **ranger**. Recommended way to install it (that worked for me) is from source ([original instructions](https://vitux.com/how-to-install-ranger-terminal-file-manager-on-linux/)):
+    - Clone 'ranger' to appropriate place (something like dedicated 'Install' directory:
+
+    ```bash
+        git clone https://github.com/hut/ranger.git
+    ```
+
+    - Install it with `make install` (executed from 'ranger' directory).
+    - It is also handy to use Ranger devicons by installing [this plugin](https://github.com/alexanderjeurissen/ranger_devicons) and setting `default_linemode devicons` in `rc.conf`:
+
+    ```bash
+        git clone https://github.com/alexanderjeurissen/ranger_devicons ~/.config/ranger/plugins/ranger_devicons
+    ```
+
+
 ## Notes
 
 - Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'general/settings.vim' as 'g:python3_host_prog' variable.

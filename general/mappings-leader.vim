@@ -32,8 +32,7 @@ let g:which_key_map.b = {
 " e is for 'explorer'
 let g:which_key_map.e = {
   \ 'name' : '+explorer' ,
-  \ 't' : [':NERDTreeToggle' , 'toggle'],
-  \ 'f' : [':NERDTreeFind'   , 'find file'],
+  \ 't' : [':RnvimrToggle' , 'toggle'],
   \ }
 
 " f is for both 'fzf' and 'find'
