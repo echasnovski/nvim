@@ -2,7 +2,7 @@ setlocal colorcolumn=81 " Show line after desired maximum text width
 
 " Keybindings
 inoremap <buffer> <M-i> <Space><-<Space>
-inoremap <buffer> <M-k> <Space>%>%
+inoremap <buffer> <M-p> <Space>%>%
 
 " Indentation
 "" Don't align indentation of function args on new line with opening `(`

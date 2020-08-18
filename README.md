@@ -69,20 +69,22 @@ Important system dependencies:
 
 - **Clipboard support**. One of 'xsel' (preferred) or 'xclip' (had some minor issues after installing 'vim-exchange').
 
-- **ranger**. Recommended way to install it (that worked for me) is from source ([original instructions](https://vitux.com/how-to-install-ranger-terminal-file-manager-on-linux/)):
-    - Clone 'ranger' to appropriate place (something like dedicated 'Install' directory:
+- **ranger**.
+    - There are two ways of installing it that worked for me in different situations:
+        - _First_ is to run `python -m pip install ranger-fm pynvim`, as instructed in ['rnvimr' plugin README](https://github.com/kevinhwang91/rnvimr#dependence). Make sure to use appropriate Pythonv version.
+        - _Second_ is to install from source ([original instructions](https://vitux.com/how-to-install-ranger-terminal-file-manager-on-linux/)):
+            - Clone 'ranger' to appropriate place (something like dedicated 'Install' directory:
 
-    ```bash
-        git clone https://github.com/hut/ranger.git
-    ```
+            ```bash
+                git clone https://github.com/hut/ranger.git
+            ```
 
-    - Install it with `make install` (executed from 'ranger' directory).
+            - Install it with `make install` (executed from 'ranger' directory).
     - It is also handy to use Ranger devicons by installing [this plugin](https://github.com/alexanderjeurissen/ranger_devicons) and setting `default_linemode devicons` in `rc.conf`:
 
     ```bash
         git clone https://github.com/alexanderjeurissen/ranger_devicons ~/.config/ranger/plugins/ranger_devicons
     ```
-
 
 ## Notes
 

@@ -13,11 +13,16 @@ nmap З P
 " Copy to system clipboard
 vmap <C-c> "+y
 
-" Move horizontally
+" Move with <Alt-hjkl> in non-normal mode
 inoremap <M-h> <Left>
+inoremap <M-j> <Down>
+inoremap <M-k> <Up>
 inoremap <M-l> <Right>
 tnoremap <M-h> <Left>
+tnoremap <M-j> <Down>
+tnoremap <M-k> <Up>
 tnoremap <M-l> <Right>
+"" Move only sideways in command mode
 cnoremap <M-h> <Left>
 cnoremap <M-l> <Right>
 
@@ -52,7 +57,7 @@ nnoremap <silent> <M-l>    :vertical resize +2<CR>
 
 " Alternate way to save
 nnoremap <C-s> :w<CR>
-inoremap <C-s> <C-o>:w<CR>
+inoremap <C-s> <Esc>:w<CR>
 
 " Go into completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
