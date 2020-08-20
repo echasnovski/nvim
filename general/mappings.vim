@@ -13,6 +13,9 @@ nmap З P
 " Copy to system clipboard
 vmap <C-c> "+y
 
+" Write current buffer with sudo privileges
+cmap w!! w !sudo tee %
+
 " Move with <Alt-hjkl> in non-normal mode
 inoremap <M-h> <Left>
 inoremap <M-j> <Down>

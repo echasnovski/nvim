@@ -61,9 +61,6 @@ if !exists('g:vscode')
   " Start integrated terminal already in insert mode
   autocmd TermOpen * startinsert
 
-  " You can't stop me
-  cmap w!! w !sudo tee %
-
   let g:python3_host_prog = expand("~/.pyenv/versions/neovim/bin/python3.8")
   let g:node_host_prog = expand("~/.nvm/versions/node/v12.18.2/bin/node")
 
