@@ -70,9 +70,13 @@ Important system dependencies:
 - **Clipboard support**. One of 'xsel' (preferred) or 'xclip' (had some minor issues after installing 'vim-exchange').
 
 - **ranger**.
-    - There are two ways of installing it that worked for me in different situations:
-        - _First_ is to run `python -m pip install ranger-fm pynvim`, as instructed in ['rnvimr' plugin README](https://github.com/kevinhwang91/rnvimr#dependence). Make sure to use appropriate Pythonv version.
-        - _Second_ is to install from source ([original instructions](https://vitux.com/how-to-install-ranger-terminal-file-manager-on-linux/)):
+    - There are three ways of installing it that worked for me in different situations:
+        - _First_ seems to be the most robust (`. ranger` works in command line and 'rnvimr' picks files inside Neovim):
+            - Install (if not already installed) [pipx](https://github.com/pipxproject/pipx).
+            - Install 'ranger-fm' package with 'pipx' by runngin `pipx install ranger-fm`. This already should be enough to be used in command line.
+            - To work in Neovim with 'rnvimr', package 'pynvim' should be installed in the same environment in which 'ranger' (or rather 'ranger-fm') is installed. It should be located at '~/.local/pipx/venvs/ranger-fm/'. Go into that directory. It should have python executables (probably both `python` and `python3`). Use them to install 'pynvim' package by running: `./python3 -m pip install pynvim`. This should enable 'rnvimr' to pick files inside Neovim.
+        - _Second_ is to run `python -m pip install ranger-fm pynvim`, as instructed in ['rnvimr' plugin README](https://github.com/kevinhwang91/rnvimr#dependence). Make sure to use appropriate Pythonv version.
+        - _Third_ is to install from source ([original instructions](https://vitux.com/how-to-install-ranger-terminal-file-manager-on-linux/)):
             - Clone 'ranger' to appropriate place (something like dedicated 'Install' directory:
 
             ```bash
