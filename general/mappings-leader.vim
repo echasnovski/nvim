@@ -193,6 +193,10 @@ nnoremap <silent> <Leader>rt :T devtools::test()<CR>
 " Copy to clipboard and make reprex (which itself is loaded to clipboard)
 vnoremap <silent> <Leader>rx "+y :T reprex::reprex()<CR>
 
+"" These mapping execute something from Vim
+"" `SplitFunSeq()` is defined in 'general/functions.vim'
+nnoremap <silent> <Leader>rp :call SplitFunSeq("%>%", v:true)<CR>
+
 let g:which_key_map.r = {
   \ 'name' : '+R',
   \ 'c' : 'check',
@@ -201,6 +205,7 @@ let g:which_key_map.r = {
   \ 'i' : 'install',
   \ 'k' : 'knit file',
   \ 'l' : 'load all',
+  \ 'p' : 'pipe split',
   \ 'T' : 'test file',
   \ 't' : 'test',
   \ 'x' : 'reprex selection',

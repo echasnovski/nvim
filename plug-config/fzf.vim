@@ -47,7 +47,11 @@ command! -bang -nargs=* Rg
   \   <bang>0)
 
 " Replace default dictionary completion with fzf-based
-inoremap <expr> <c-x><c-k> fzf#vim#complete('cat ~/.config/nvim/dict/english.txt')
+" NOTE that this is case-insensitive to work with capitalized words at expense
+" of substituting them with all-lowercase findings
+inoremap <expr> <c-x><c-k> fzf#vim#complete(fzf#wrap({
+  \ 'source': 'cat ~/.config/nvim/dict/english.txt',
+  \ 'options': '-i' }))
 
 " Replace default path completion with fzf-based
 imap <c-x><c-f> <Plug>(fzf-complete-path)

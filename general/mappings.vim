@@ -77,3 +77,8 @@ nnoremap zJ zj]z
 " nnoremap <RightRelease> <LeftMouse>:startinsert<CR>
 " inoremap <RightMouse>   <LeftMouse>
 " inoremap <RightRelease> <LeftMouse>
+
+" Make `q:` do nothing instead of opening Vim command history, because it is
+" often hit by accident
+" Use c_CTRL-F or fzf's analogue
+nnoremap q: <nop>
