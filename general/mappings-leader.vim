@@ -67,6 +67,8 @@ let g:which_key_map.f = {
 " g is for git
 "" Functions `GitGutterNextHunkCycle()` and `GitGutterPrevHunkCycle()` are
 "" defined in 'general/functions.vim'
+nnoremap <silent> <Leader>gj :call GitGutterNextHunkCycle()<CR>zz
+nnoremap <silent> <Leader>gk :call GitGutterPrevHunkCycle()<CR>zz
 let g:which_key_map.g = {
   \ 'name' : '+git' ,
   \ 'A' : [':Git add %'                     , 'add buffer'],
@@ -77,8 +79,8 @@ let g:which_key_map.g = {
   \ 'f' : [':GitGutterFold'                 , 'fold unchanged'],
   \ 'g' : [':Git'                           , 'git window'],
   \ 'h' : [':diffget //2'                   , 'merge from left (our)'],
-  \ 'j' : [':call GitGutterNextHunkCycle()' , 'next hunk'],
-  \ 'k' : [':call GitGutterPrevHunkCycle()' , 'prev hunk'],
+  \ 'j' :                                     'next hunk',
+  \ 'k' :                                     'prev hunk',
   \ 'l' : [':diffget //3'                   , 'merge from right (their)'],
   \ 'p' : ['<Plug>(GitGutterPreviewHunk)'   , 'preview hunk'],
   \ 'q' : [':GitGutterQuickFix | copen'     , 'quickfix hunks'],
