@@ -10,6 +10,11 @@ nmap щ o
 nmap г u
 nmap З P
 
+" Disable `s` shortcut (as it can be replaced with `cl`) for safer usage of
+" 'sandwich.vim'
+nmap s <Nop>
+xmap s <Nop>
+
 " Copy to system clipboard
 vmap <C-c> "+y
 

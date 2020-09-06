@@ -9,7 +9,7 @@ endif
 call plug#begin('~/.config/nvim/autoload/plugged')
 
   " Surround with (), [], "", etc.
-  Plug 'tpope/vim-surround'
+  Plug 'machakann/vim-sandwich'
 
   " More text objects
   Plug 'wellle/targets.vim'
