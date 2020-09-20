@@ -164,8 +164,9 @@ let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'           , 'arguments split'],
   \ 'd' : [':DogeGenerate'      , 'document'],
-  \ 'S' : [':SidewaysLeft'      , 'sideways left'],
-  \ 's' : [':SidewaysRight'     , 'sideways right'],
+  \ 'h' : [':SidewaysLeft'      , 'move arg left'],
+  \ 'l' : [':SidewaysRight'     , 'move arg right'],
+  \ 's' : [':set spell!'        , 'spell toggle'],
   \ 'w' : [':call ToggleWrap()' , 'wrap toggle'],
   \ 'W' : [':StripWhitespace'   , 'whitespace strip'],
   \ }
