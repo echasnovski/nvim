@@ -1,6 +1,9 @@
 let python_highlight_all = 1
 
 syntax on
+
+" General theme
+let g:gruvbox_contrast_dark='medium'
 colorscheme gruvbox
 
 " Highlight punctuation
@@ -9,9 +12,13 @@ function! s:hi_base_syntax()
   " Highlight parenthesis
   syntax match parens /[(){}[\]]/
   hi parens ctermfg=208 guifg=#FF8700
-  " Highlight dots, commas, colons and semicolons
+  " Highlight dots, commas, colons and semicolons with contrast color
   syntax match punc /[.,:;=]/
-  hi punc ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
+  if &background == "light"
+    hi punc ctermfg=White guifg=#000000 cterm=bold gui=bold
+  else
+    hi punc ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
+  endif
 endfunction
 
 autocmd VimEnter,BufWinEnter * call <SID>hi_base_syntax()
@@ -28,3 +35,4 @@ hi SpellRare    guisp=#FFFFFF   gui=undercurl
 
 " Use custom color for highlighting "maximum width" column
 highlight ColorColumn ctermbg=grey guibg=#555555
+

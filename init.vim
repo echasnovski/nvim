@@ -10,7 +10,7 @@ if exists('g:vscode')
   source $HOME/.config/nvim/plug-config/targets.vim
   source $HOME/.config/nvim/plug-config/sideways.vim
 else
-  source $HOME/.config/nvim/themes/gruvbox.vim
+  source $HOME/.config/nvim/themes/colors.vim
   source $HOME/.config/nvim/themes/airline.vim
   source $HOME/.config/nvim/general/bclose.vim
   source $HOME/.config/nvim/general/spelling.vim
