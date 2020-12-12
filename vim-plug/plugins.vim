@@ -92,6 +92,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Semantic code highlighting for Python files
     Plug 'numirias/semshi', {'do': ':UpdateRemotePlugins'}
 
+    "" Work with Jupyter
+    Plug 'goerz/jupytext.vim'
+
     " Text formatting and typing
     "" Auto pairs for '(' '[' '{'
     "" 'pear-tree' provides more intuitive experience than 'auto-pairs':
