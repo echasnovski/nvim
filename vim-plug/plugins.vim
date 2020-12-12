@@ -45,7 +45,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'airblade/vim-rooter'
 
     "" File Explorer
-    Plug 'scrooloose/NERDTree'
     Plug 'kevinhwang91/rnvimr'
 
     "" Tweak Neovim's terminal to be more REPL-aware
@@ -55,7 +54,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'tpope/vim-fugitive'
     Plug 'airblade/vim-gitgutter'
     Plug 'junegunn/gv.vim'
-    Plug 'xuyuanp/nerdtree-git-plugin'
 
     "" Show keybindings
     Plug 'liuchengxu/vim-which-key'
@@ -79,7 +77,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'sheerun/vim-polyglot'
 
     "" Documentation generator
-    Plug 'kkoomen/vim-doge'
+    Plug 'kkoomen/vim-doge', { 'do': { -> doge#install() } }
 
     "" Test runner
     Plug 'vim-test/vim-test'

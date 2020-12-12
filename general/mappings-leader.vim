@@ -18,7 +18,11 @@ let g:which_key_map['j'] = 'jupyter run'
 
 " Send text to neoterm buffer
 nnoremap <Leader>s :TREPLSendLine<cr>j
-vnoremap <Leader>s :TREPLSendSelection<cr>'>j
+"" In simple visual mode send text and move to the last character in selection
+"" and move to the right.
+"" Otherwise (like in line or block visual mode) send text and move one
+"" line down from bottom of selection.
+xnoremap <expr> <Leader>s  mode() ==# "v" ? ":TREPLSendSelection<cr>`>l" : ":TREPLSendSelection<cr>'>j"
 let g:which_key_map['s'] = 'send to terminal'
 
 " b is for 'buffer'
