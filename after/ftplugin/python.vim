@@ -22,3 +22,11 @@ inoremap <buffer> <M-s> <C-o>:call SectionPy()<CR>
 
 " Comment identifiers
 set comments=:###,:##,:#
+
+" " Possible ALE configuration.
+" let b:ale_fix_on_save = 1
+" let b:ale_fixers = ['black', 'isort']
+" let b:ale_python_black_executable = expand('~/.pyenv/versions/neovim/bin/black')
+
+" let b:ale_lint_on_save = 1
+" let b:ale_linters = ['pylint']

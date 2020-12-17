@@ -7,7 +7,7 @@ let g:coc_global_extensions = [
   \ 'coc-vimlsp'
   \ ]
 
-let g:coc_node_path = expand('~/.nvm/versions/node/v12.18.2/bin/node')
+let g:coc_node_path = expand('~/.nvm/versions/node/v14.15.2/bin/node')
 
 " Map function and class text objects
 " NOTE: Requires 'textDocument.documentSymbol' support from the language server.

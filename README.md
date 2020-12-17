@@ -53,6 +53,7 @@ Important system dependencies:
     ```
 
     - Possibly change `node_host_prog` (in 'general/settings.vim') and `coc_node_path` (in 'plugins/coc.nvim') variables with correct path.
+    - Possibly change default version of node which is added to `$PATH` via `nvm alias default <version>`.
 
 - **Nerd fonts** ([information source](https://gist.github.com/matthewjberger/7dd7e079f282f8138a9dc3b045ebefa0)):
     - Download a [Nerd Font](https://www.nerdfonts.com/) (good choice is "UbuntuMono Nerd Font").
@@ -117,6 +118,7 @@ Important system dependencies:
 - `E117: Unknown function: IPyConnect`: run `:UpdateRemotePlugins` to properly use 'nvim-ipy' plugin (see 'Notes').
 - `AttributeError: 'IPythonPlugin' object has no attribute 'km'`: connect to IPython console (see 'Notes').
 - `[coc.nvim] Jedi error: Cannot call write after a stream was destroyed`: current Python interpreter used by 'coc.nvim' doesn't have 'jedi' installed. Make sure you use proper Python interpreter (set with `:CocCommand` and proper 'python.setInterpreter' value) where it is installed.
+- `[coc.nvim] Can't find npm or yarn in your $PATH.` Update default node version in `nvm` with `nvm alias default <version>` (use installed version instead of <version>).
 
 ## Tips and tricks
 
