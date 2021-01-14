@@ -33,10 +33,11 @@ let g:which_key_map.b = {
   \ 'D'  : [':Bclose!' , 'delete!'],
   \ }
 
-" e is for 'explorer'
+" e is for 'explore'
 let g:which_key_map.e = {
-  \ 'name' : '+explorer' ,
-  \ 't' : [':RnvimrToggle' , 'toggle'],
+  \ 'name' : '+explore' ,
+  \ 'f' : [':RnvimrToggle'   , 'files'],
+  \ 'u' : [':UndotreeToggle' , 'undo-tree'],
   \ }
 
 " f is for both 'fzf' and 'find'
@@ -173,6 +174,7 @@ let g:which_key_map.o = {
   \ 's' : [':set spell!'        , 'spell toggle'],
   \ 'w' : [':call ToggleWrap()' , 'wrap toggle'],
   \ 'W' : [':StripWhitespace'   , 'whitespace strip'],
+  \ 'z' : [':call Zoom()'       , 'wrap toggle'],
   \ }
 
 " q is for 'quickfix'

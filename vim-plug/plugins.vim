@@ -32,11 +32,11 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   if !exists('g:vscode')
     " General
     "" Intellisense
-    " Plug 'neoclide/coc.nvim', {'branch': 'release'}
+    Plug 'neoclide/coc.nvim', {'branch': 'release'}
     """ This commit doesn't have 'Format on save' bug (when no formatting is
     """ done on save while manual `:call CocAction('format')` works). Its
     """ parent '94bdd76dec4516dbb35f57aa2d99023de1403739' does have it.
-    Plug 'neoclide/coc.nvim', {'commit': 'df7b5d4f4e64d5dc2fa24dbf8143109afa93539c'}
+    " Plug 'neoclide/coc.nvim', {'commit': 'df7b5d4f4e64d5dc2fa24dbf8143109afa93539c'}
 
     "" Linting and fixing (autoformatting, etc.)
     " Plug 'dense-analysis/ale'
@@ -65,6 +65,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Show keybindings
     Plug 'liuchengxu/vim-which-key'
 
+    "" Visualize undo-tree
+    Plug 'mbbill/undotree'
+
     " Appearence
     "" Grubvox theme
     Plug 'morhetz/gruvbox'
@@ -74,6 +77,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     "" Useful icons
     Plug 'ryanoasis/vim-devicons'
+
+    "" Show colors
+    Plug 'norcalli/nvim-colorizer.lua'
 
     " Languages workflow
     "" Better Syntax Support (has rather big disk size usage, around 10M)

@@ -76,6 +76,9 @@ nnoremap zK zk[z
 "" Jump to the end of next fold
 nnoremap zJ zj]z
 
+" Reselect previously changed, put or yanked text
+nnoremap gV `[v`]
+
 " " These mappings are useful to quickly go in insert mode at certain place or
 " " in terminal window after scrolling
 " nnoremap <RightMouse>   <LeftMouse>:startinsert<CR>
