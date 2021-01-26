@@ -165,16 +165,18 @@ let g:which_key_map.l = {
   \ }
 
 " o is for 'other'
+nnoremap <silent> <Leader>or :call ResizeToColorColumn()<CR>
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'           , 'arguments split'],
   \ 'd' : [':DogeGenerate'      , 'document'],
   \ 'h' : [':SidewaysLeft'      , 'move arg left'],
   \ 'l' : [':SidewaysRight'     , 'move arg right'],
+  \ 'r' :                         'move arg right',
   \ 's' : [':set spell!'        , 'spell toggle'],
   \ 'w' : [':call ToggleWrap()' , 'wrap toggle'],
   \ 'W' : [':StripWhitespace'   , 'whitespace strip'],
-  \ 'z' : [':call Zoom()'       , 'wrap toggle'],
+  \ 'z' : [':call Zoom()'       , 'zoom'],
   \ }
 
 " q is for 'quickfix'
