@@ -7,7 +7,8 @@ let g:gruvbox_contrast_dark='medium'
 colorscheme gruvbox
 
 " Highlight punctuation
-" Sources: https://stackoverflow.com/a/18943408 and https://superuser.com/a/205058
+"" General Vim buffers
+"" Sources: https://stackoverflow.com/a/18943408 and https://superuser.com/a/205058
 function! s:hi_base_syntax()
   " Highlight parenthesis
   syntax match parens /[(){}[\]]/
@@ -22,6 +23,18 @@ function! s:hi_base_syntax()
 endfunction
 
 autocmd VimEnter,BufWinEnter * call <SID>hi_base_syntax()
+
+"" Buffers with treesitter highlighting
+if has("nvim-0.5.0")
+  hi TSPunctBracket ctermfg=208 guifg=#FF8700
+  if &background == "light"
+    hi TSPunctDelimiter ctermfg=White guifg=#000000 cterm=bold gui=bold
+    hi TSPunctSpecial ctermfg=White guifg=#000000 cterm=bold gui=bold
+  else
+    hi TSPunctDelimiter ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
+    hi TSPunctSpecial ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
+  endif
+endif
 
 " " Use terminal's background (needed if transparent background is used)
 " hi! Normal ctermbg=NONE guibg=NONE

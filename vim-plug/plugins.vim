@@ -26,21 +26,31 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   " Exchange regions
   Plug 'tommcdo/vim-exchange'
 
-  " Python movements and text objects
-  Plug 'jeetsukumaran/vim-pythonsense'
+  if has("nvim-0.5.0") == 0
+    " Python movements and text objects
+    Plug 'jeetsukumaran/vim-pythonsense'
+  endif
 
   if !exists('g:vscode')
+    " Neovim version-specific sets of plugins
+    if has("nvim-0.5.0")
+      "" Treesitter: incremental parsing of file
+      "" Deals with highlighting and specific textobjects
+      Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
+      Plug 'nvim-treesitter/nvim-treesitter-textobjects'
+      " Plug 'nvim-treesitter/playground'
+    else
+      "" Intellisense
+      Plug 'neoclide/coc.nvim', {'branch': 'release'}
+
+      "" Linting and fixing (autoformatting, etc.)
+      " Plug 'dense-analysis/ale'
+
+      "" Semantic code highlighting for Python files
+      Plug 'numirias/semshi', {'do': ':UpdateRemotePlugins'}
+    endif
+
     " General
-    "" Intellisense
-    Plug 'neoclide/coc.nvim', {'branch': 'release'}
-    """ This commit doesn't have 'Format on save' bug (when no formatting is
-    """ done on save while manual `:call CocAction('format')` works). Its
-    """ parent '94bdd76dec4516dbb35f57aa2d99023de1403739' does have it.
-    " Plug 'neoclide/coc.nvim', {'commit': 'df7b5d4f4e64d5dc2fa24dbf8143109afa93539c'}
-
-    "" Linting and fixing (autoformatting, etc.)
-    " Plug 'dense-analysis/ale'
-
     "" fzf support
     Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
     Plug 'junegunn/fzf.vim'
@@ -99,9 +109,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     "" IPython integration
     Plug 'bfredl/nvim-ipy'
-
-    "" Semantic code highlighting for Python files
-    Plug 'numirias/semshi', {'do': ':UpdateRemotePlugins'}
 
     "" Work with Jupyter
     Plug 'goerz/jupytext.vim'
