@@ -30,6 +30,7 @@ require'nvim-treesitter.configs'.setup {
       },
     }
   },
+  indent = { enable = false },
   playground = {
     enable = true,
     disable = {},
@@ -45,5 +46,27 @@ require'nvim-treesitter.configs'.setup {
   --     node_decremental = "grm",
   --   },
   -- },
-  -- indent = { enable = true },
 }
+
+-- Setup R parser
+-- To install it:
+-- - Install tree-sitter-cli:
+--   https://tree-sitter.github.io/tree-sitter/creating-parsers#installation
+-- - Run `:TSInstallFromGrammar r`
+local parser_config = require "nvim-treesitter.parsers".get_parser_configs()
+parser_config.r = {
+  install_info = {
+    url = "https://github.com/r-lib/tree-sitter-r", -- local path or git repo
+    files = { "src/parser.c" }
+  },
+  filetype = "r", -- if filetype does not agrees with parser name
+  used_by = { "rmd" } -- additional filetypes that use this parser
+}
+
+-- Currently tree-sitter text-objects are not automatically supported in R.
+-- To use them, add
+-- 'autoload/plugged/nvim-treesitter-textobjects/queries/r/textobjects.scm'
+-- file with custom textobjects:
+-- ```
+-- (left_assignment (identifier) (function_definition (formal_parameters) (brace_list (_)* @function.inner))) @function.outer
+-- ```

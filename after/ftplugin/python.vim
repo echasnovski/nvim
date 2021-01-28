@@ -23,6 +23,17 @@ inoremap <buffer> <M-s> <C-o>:call SectionPy()<CR>
 " Comment identifiers
 set comments=:###,:##,:#
 
+" Neoformat configuration
+let black_root = $HOME . "/.pyenv/versions/neovim/bin/black"
+
+" neoformat config needs to be set up for each tool
+let g:neoformat_python_black = {
+    \ 'exe': black_root,
+    \ 'args': ['-'],
+    \ 'stdin': 1
+\}
+let g:neoformat_enabled_python = ['black']
+
 " " Possible ALE configuration.
 " let b:ale_fix_on_save = 1
 " let b:ale_fixers = ['black', 'isort']

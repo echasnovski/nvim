@@ -136,7 +136,7 @@ if has("nvim-0.5.0")
     \ 'F' : 'format selected',
     \ 'R' : 'references',
     \ 'd' : 'definition',
-    \ 'f' : 'format',
+    \ 'f' : [':Neoformat' , 'format'],
     \ 'i' : 'information',
     \ 'j' : 'next diagnostic',
     \ 'k' : 'prev diagnostic',

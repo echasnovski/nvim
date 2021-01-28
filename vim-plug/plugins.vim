@@ -40,6 +40,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" Language server
       Plug 'neovim/nvim-lspconfig'
 
+      "" Code formatter
+      Plug 'sbdchd/neoformat'
+
       "" Treesitter: incremental parsing of file
       "" Deals with highlighting and specific textobjects
       Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
@@ -85,7 +88,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'mbbill/undotree'
 
     "" Work with tags
-    Plug 'ludovicchabant/vim-gutentags'
+    " Plug 'ludovicchabant/vim-gutentags'
 
     " Appearence
     "" Grubvox theme

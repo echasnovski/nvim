@@ -2,7 +2,7 @@ if has("nvim-0.5.0") == 0
   let g:coc_global_extensions = [
     \ 'coc-highlight',
     \ 'coc-json',
-    \ 'coc-python',
+    \ 'coc-pyright',
     \ 'coc-r-lsp',
     \ 'coc-snippets',
     \ 'coc-vimlsp'
