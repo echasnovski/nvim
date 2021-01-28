@@ -67,8 +67,9 @@ nnoremap <silent> <M-l>    :vertical resize +2<CR>
 nnoremap <C-s> :w<CR>
 inoremap <C-s> <Esc>:w<CR>
 
-" Go into completion list with <TAB>
+" Move inside completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
+inoremap <silent> <expr><S-Tab> pumvisible() ? "\<C-p>" : "\<S-Tab>"
 
 " Extra jumps between folds
 "" Jump to the beginning of previous fold

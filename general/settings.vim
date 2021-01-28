@@ -41,6 +41,8 @@ if !exists('g:vscode')
   set nostartofline      " Don't position cursor on line start after certain operations
   set breakindent        " Indent wrapped lines to match line start
 
+  set completeopt=menuone,noinsert,noselect " Customize completions
+
   set foldenable         " Enable folding by default
   set foldmethod=indent  " Set "indent" folding method
   set foldlevel=0        " Display all folds

@@ -34,6 +34,12 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   if !exists('g:vscode')
     " Neovim version-specific sets of plugins
     if has("nvim-0.5.0")
+      "" Completion
+      Plug 'nvim-lua/completion-nvim'
+
+      "" Language server
+      Plug 'neovim/nvim-lspconfig'
+
       "" Treesitter: incremental parsing of file
       "" Deals with highlighting and specific textobjects
       Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
@@ -77,6 +83,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     "" Visualize undo-tree
     Plug 'mbbill/undotree'
+
+    "" Work with tags
+    Plug 'ludovicchabant/vim-gutentags'
 
     " Appearence
     "" Grubvox theme

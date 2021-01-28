@@ -91,6 +91,8 @@ Important system dependencies:
         git clone https://github.com/alexanderjeurissen/ranger_devicons ~/.config/ranger/plugins/ranger_devicons
     ```
 
+- **Language Server Protocols**. These should be handled manually for Neovim>=0.5.0. For a list of needed LSPs look at settings for 'nvim-lspconfig'.
+
 ## Notes
 
 - Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'general/settings.vim' as 'g:python3_host_prog' variable.
@@ -112,6 +114,15 @@ Important system dependencies:
 
     **Note** that otherwise you should either choose manually Python interpreter (via `CocCommand python.setInterpreter`) or have '.nvim/coc-settings.json' file in project root with relevant option "python.pythonPath".
 - Two directories ('session' and 'undodir') are placeholders for local use (vim sessions and vim's persistent undo). They both have '.gitignore' files (which instruct to ignore everything in that directory, except '.gitignore' itself to have git recognize them) so that they will be automatically created when pulling this repository.
+- For tags to work correctly in R projects, add appropriate '.ctags' file. Currently the source can be found at https://tinyheero.github.io/2017/05/13/r-vim-ctags.html.
+- 'Pyright' language server currently by default uses python interpreter that is active when Neovim is opened. However, if using virtual environment, it is a good idea to create 'pyrightconfig.json' file with at least the following content:
+    ```
+    {
+        "include": ["<package_name>"], // Directory of package source
+        "venvPath": ".", // Path to folder where virtual environment can be found
+        "venv": ".venv" // Folder name of virtual environment
+    }
+    ```
 
 ## Errors
 
