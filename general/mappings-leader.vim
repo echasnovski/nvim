@@ -179,18 +179,18 @@ else
 endif
 
 " o is for 'other'
-nnoremap <silent> <Leader>or :call ResizeToColorColumn()<CR>
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
-  \ 'a' : [':ArgWrap'           , 'arguments split'],
-  \ 'd' : [':DogeGenerate'      , 'document'],
-  \ 'h' : [':SidewaysLeft'      , 'move arg left'],
-  \ 'l' : [':SidewaysRight'     , 'move arg right'],
-  \ 'r' :                         'move arg right',
-  \ 's' : [':set spell!'        , 'spell toggle'],
-  \ 'w' : [':call ToggleWrap()' , 'wrap toggle'],
-  \ 'W' : [':StripWhitespace'   , 'whitespace strip'],
-  \ 'z' : [':call Zoom()'       , 'zoom'],
+  \ 'a' : [':ArgWrap'                    , 'arguments split'],
+  \ 'd' : [':DogeGenerate'               , 'document'],
+  \ 'h' : [':SidewaysLeft'               , 'move arg left'],
+  \ 'H' : [':TSBufDisable highlight'     , 'highlight disable'],
+  \ 'l' : [':SidewaysRight'              , 'move arg right'],
+  \ 'r' : [':call ResizeToColorColumn()' , 'resize to colorcolumn'],
+  \ 's' : [':set spell!'                 , 'spell toggle'],
+  \ 'w' : [':call ToggleWrap()'          , 'wrap toggle'],
+  \ 'W' : [':StripWhitespace'            , 'whitespace strip'],
+  \ 'z' : [':call Zoom()'                , 'zoom'],
   \ }
 
 " q is for 'quickfix'

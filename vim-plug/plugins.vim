@@ -36,6 +36,14 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     if has("nvim-0.5.0")
       "" Completion
       Plug 'nvim-lua/completion-nvim'
+      "" Other option of completion. Some say that it is far faster on big
+      "" projects than 'completion-nvim'. For suggested configuration see
+      "" README on Github. There were some problems which I didn't find a way
+      "" to solve:
+      "" - Hard to setup other sources of completion. For example, completion
+      ""   from open buffers.
+      "" - No popup with function arguments when typing inside `()`.
+      " Plug 'hrsh7th/nvim-compe'
 
       "" Language server
       Plug 'neovim/nvim-lspconfig'
