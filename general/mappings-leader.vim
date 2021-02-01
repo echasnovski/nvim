@@ -184,7 +184,7 @@ let g:which_key_map.o = {
   \ 'a' : [':ArgWrap'                    , 'arguments split'],
   \ 'd' : [':DogeGenerate'               , 'document'],
   \ 'h' : [':SidewaysLeft'               , 'move arg left'],
-  \ 'H' : [':TSBufDisable highlight'     , 'highlight disable'],
+  \ 'H' : [':TSBufToggle highlight'      , 'highlight toggle'],
   \ 'l' : [':SidewaysRight'              , 'move arg right'],
   \ 'r' : [':call ResizeToColorColumn()' , 'resize to colorcolumn'],
   \ 's' : [':set spell!'                 , 'spell toggle'],
