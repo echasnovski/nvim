@@ -181,16 +181,17 @@ endif
 " o is for 'other'
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
-  \ 'a' : [':ArgWrap'                    , 'arguments split'],
-  \ 'd' : [':DogeGenerate'               , 'document'],
-  \ 'h' : [':SidewaysLeft'               , 'move arg left'],
-  \ 'H' : [':TSBufToggle highlight'      , 'highlight toggle'],
-  \ 'l' : [':SidewaysRight'              , 'move arg right'],
-  \ 'r' : [':call ResizeToColorColumn()' , 'resize to colorcolumn'],
-  \ 's' : [':set spell!'                 , 'spell toggle'],
-  \ 'w' : [':call ToggleWrap()'          , 'wrap toggle'],
-  \ 'W' : [':StripWhitespace'            , 'whitespace strip'],
-  \ 'z' : [':call Zoom()'                , 'zoom'],
+  \ 'a' : [':ArgWrap'                      , 'arguments split'],
+  \ 'd' : [':DogeGenerate'                 , 'document'],
+  \ 'h' : [':SidewaysLeft'                 , 'move arg left'],
+  \ 'H' : [':TSBufToggle highlight'        , 'highlight toggle'],
+  \ 'l' : [':SidewaysRight'                , 'move arg right'],
+  \ 'r' : [':call ResizeToColorColumn()'   , 'resize to colorcolumn'],
+  \ 'S' : [':call SpellCompletionToggle()' , 'spell completion toggle'],
+  \ 's' : [':set spell!'                   , 'spell toggle'],
+  \ 'w' : [':call ToggleWrap()'            , 'wrap toggle'],
+  \ 'W' : [':StripWhitespace'              , 'whitespace strip'],
+  \ 'z' : [':call Zoom()'                  , 'zoom'],
   \ }
 
 " q is for 'quickfix'
