@@ -132,15 +132,16 @@ if has("nvim-0.5.0")
   " Actual commands are defined in settings for 'nvim-lspconfig'
   let g:which_key_map.l = {
     \ 'name' : '+LSP' ,
-    \ 'D' : 'diagnostics',
+    \ 'D' : 'diagnostics loclist',
     \ 'F' : 'format selected',
     \ 'R' : 'references',
-    \ 'd' : 'definition',
+    \ 'd' : 'diagnostics popup',
     \ 'f' : [':Neoformat' , 'format'],
     \ 'i' : 'information',
     \ 'j' : 'next diagnostic',
     \ 'k' : 'prev diagnostic',
     \ 'r' : 'rename',
+    \ 's' : 'source definition',
     \ }
 else
   let g:which_key_map.l = {
@@ -192,17 +193,6 @@ let g:which_key_map.o = {
   \ 'w' : [':call ToggleWrap()'            , 'wrap toggle'],
   \ 'W' : [':StripWhitespace'              , 'whitespace strip'],
   \ 'z' : [':call Zoom()'                  , 'zoom'],
-  \ }
-
-" q is for 'quickfix'
-let g:which_key_map.q = {
-  \ 'name' : '+quickfix' ,
-  \ 'c' : [':cclose'    , 'close'],
-  \ 'f' : [':cfirst'    , 'first'],
-  \ 'j' : [':cnext'     , 'next'],
-  \ 'k' : [':cprevious' , 'previous'],
-  \ 'l' : [':clast'     , 'last'],
-  \ 'o' : [':copen'     , 'open'],
   \ }
 
 " r is for 'R'

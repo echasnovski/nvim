@@ -54,3 +54,6 @@ let g:airline_mode_map = {
   \ 'V'      : 'V',
   \ ''     : 'V',
   \ }
+
+" Display information from Neovim's built-in LSP
+let g:airline#extensions#nvimlsp#enabled = 1

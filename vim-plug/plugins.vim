@@ -26,6 +26,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   " Exchange regions
   Plug 'tommcdo/vim-exchange'
 
+  " Pairs of handy bracket mappings
+  Plug 'tpope/vim-unimpaired'
+
   if has("nvim-0.5.0") == 0
     " Python movements and text objects
     Plug 'jeetsukumaran/vim-pythonsense'

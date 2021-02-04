@@ -13,14 +13,14 @@ local on_attach = function(client, bufnr)
   local opts = { noremap=true, silent=true }
   buf_set_keymap('n', '<leader>lD', '<cmd>lua vim.lsp.diagnostic.set_loclist()<CR>', opts)
   buf_set_keymap('n', '<leader>lR', '<cmd>lua vim.lsp.buf.references()<CR>', opts)
-  buf_set_keymap('n', '<leader>ld', '<Cmd>lua vim.lsp.buf.definition()<CR>', opts)
+  buf_set_keymap('n', '<leader>ld', '<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>', opts)
   buf_set_keymap('n', '<leader>li', '<Cmd>lua vim.lsp.buf.hover()<CR>', opts)
   buf_set_keymap('n', '<leader>lj', '<cmd>lua vim.lsp.diagnostic.goto_next()<CR>', opts)
   buf_set_keymap('n', '<leader>lk', '<cmd>lua vim.lsp.diagnostic.goto_prev()<CR>', opts)
   buf_set_keymap('n', '<leader>lr', '<cmd>lua vim.lsp.buf.rename()<CR>', opts)
+  buf_set_keymap('n', '<leader>ls', '<Cmd>lua vim.lsp.buf.definition()<CR>', opts)
   -- buf_set_keymap('n', '<C-k>', '<cmd>lua vim.lsp.buf.signature_help()<CR>', opts)
   -- buf_set_keymap('n', '<space>D', '<cmd>lua vim.lsp.buf.type_definition()<CR>', opts)
-  -- buf_set_keymap('n', '<space>e', '<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>', opts)
   -- buf_set_keymap('n', '<space>wa', '<cmd>lua vim.lsp.buf.add_workspace_folder()<CR>', opts)
   -- buf_set_keymap('n', '<space>wl', '<cmd>lua print(vim.inspect(vim.lsp.buf.list_workspace_folders()))<CR>', opts)
   -- buf_set_keymap('n', '<space>wr', '<cmd>lua vim.lsp.buf.remove_workspace_folder()<CR>', opts)
@@ -48,16 +48,25 @@ local on_attach = function(client, bufnr)
   end
 end
 
--- -- Do not update diagnostics in insert mode
--- vim.lsp.handlers["textDocument/publishDiagnostics"] = vim.lsp.with(
---     vim.lsp.diagnostic.on_publish_diagnostics, {
---       -- delay update diagnostics
---       update_in_insert = false,
---     }
---   )
+-- Do not update diagnostics in insert mode
+vim.lsp.handlers["textDocument/publishDiagnostics"] = vim.lsp.with(
+    vim.lsp.diagnostic.on_publish_diagnostics, {
+      -- Show sings
+      signs = {
+        -- With highest priority
+        priority = 9999,
+        -- Only for warnings and errors
+        severity_limit = "Warning"
+      },
+      -- Show virtual text only for errors
+      virtual_text = { severity_limit = "Error"},
+      -- Don't update diagnostics when typing
+      update_in_insert = false,
+    }
+  )
 
--- Disable diagnostics
-vim.lsp.callbacks["textDocument/publishDiagnostics"] = function() end
+-- -- Disable diagnostics
+-- vim.lsp.callbacks["textDocument/publishDiagnostics"] = function() end
 
 -- Use a loop to conveniently both setup defined servers
 -- and map buffer local keybindings when the language server attaches
