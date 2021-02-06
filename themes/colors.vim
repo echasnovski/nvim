@@ -5,6 +5,8 @@ syntax on
 " General theme
 let g:gruvbox_contrast_dark='medium'
 colorscheme gruvbox
+" let ayucolor = 'mirage'
+" colorscheme ayu
 
 " Highlight punctuation
 "" General Vim buffers
@@ -46,6 +48,6 @@ hi SpellCap     guisp=#7070F0   gui=undercurl
 hi SpellLocal   guisp=#70F0F0   gui=undercurl
 hi SpellRare    guisp=#FFFFFF   gui=undercurl
 
-" Use custom color for highlighting "maximum width" column
+" Use custom color for highlighting 'maximum width' column
 highlight ColorColumn ctermbg=grey guibg=#555555
 

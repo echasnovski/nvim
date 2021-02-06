@@ -64,9 +64,8 @@ parser_config.r = {
 }
 
 -- Currently tree-sitter text-objects are not automatically supported in R.
--- To use them, add
--- 'autoload/plugged/nvim-treesitter-textobjects/queries/r/textobjects.scm'
--- file with custom textobjects:
+-- To use them, add 'after/queries/r/textobjects.scm' file with custom
+-- textobjects:
 -- ```
 -- (left_assignment (identifier) (function_definition (formal_parameters) (brace_list (_)* @function.inner))) @function.outer
 -- ```
