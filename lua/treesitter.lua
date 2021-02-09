@@ -16,6 +16,8 @@ require'nvim-treesitter.configs'.setup {
         ["if"] = "@function.inner",
         ["aF"] = "@call.outer",
         ["iF"] = "@call.inner",
+        -- Used in R
+        ["io"] = "@pipe",
       },
     },
     move = {
@@ -62,10 +64,3 @@ parser_config.r = {
   filetype = "r", -- if filetype does not agrees with parser name
   used_by = { "rmd" } -- additional filetypes that use this parser
 }
-
--- Currently tree-sitter text-objects are not automatically supported in R.
--- To use them, add 'after/queries/r/textobjects.scm' file with custom
--- textobjects:
--- ```
--- (left_assignment (identifier) (function_definition (formal_parameters) (brace_list (_)* @function.inner))) @function.outer
--- ```
