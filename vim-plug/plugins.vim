@@ -44,8 +44,14 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" README on Github. There were some problems which I didn't find a way
       "" to solve:
       "" - Hard to setup other sources of completion. For example, completion
-      ""   from open buffers.
-      "" - No popup with function arguments when typing inside `()`.
+      ""   from open buffers. Currently under discussion:
+      ""   https://github.com/hrsh7th/nvim-compe/issues/147
+      "" - No popup with function signature when typing inside `()`. This is
+      ""   currently out of scope:
+      ""   https://github.com/hrsh7th/nvim-compe/issues/120#issuecomment-777333663
+      "" - Currently doesn't work with 'multibyte characters', i.e. no
+      ""   completion for Russian language (even for current buffer). Issue:
+      ""   https://github.com/hrsh7th/nvim-compe/issues/167
       " Plug 'hrsh7th/nvim-compe'
 
       "" Language server
