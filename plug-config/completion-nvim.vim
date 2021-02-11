@@ -2,6 +2,9 @@ if has("nvim-0.5.0")
   " Use completion-nvim in every buffer
   autocmd BufEnter * lua require'completion'.on_attach()
 
+  " Enable manual trigger
+  imap <silent> <C-Space> <Plug>(completion_trigger)
+
   " Use all available sources automatically
   let g:completion_auto_change_source = 1
 

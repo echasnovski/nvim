@@ -135,6 +135,7 @@ if has("nvim-0.5.0")
     \ 'D' : 'diagnostics loclist',
     \ 'F' : 'format selected',
     \ 'R' : 'references',
+    \ 'a' : 'arguments popup',
     \ 'd' : 'diagnostics popup',
     \ 'f' : [':Neoformat' , 'format'],
     \ 'i' : 'information',
