@@ -5,6 +5,10 @@ if has("nvim-0.5.0")
   " Enable manual trigger
   imap <silent> <C-Space> <Plug>(completion_trigger)
 
+  " Setup snippets engine
+  let g:completion_enable_snippet = 'UltiSnips'
+  " let g:completion_enable_snippet = 'vim-vsnip'
+
   " Use all available sources automatically
   let g:completion_auto_change_source = 1
 
@@ -19,16 +23,18 @@ if has("nvim-0.5.0")
 
   " Set up 'precedence' between completion sources
   let g:completion_chain_complete_list = [
-    \{'complete_items': ['lsp', 'keyn', 'snippet']},
+    \{'complete_items': ['snippet', 'lsp', 'keyn']},
     \{'mode': '<c-n>'}
   \]
 
-  " Make completion work nicely with auto-pairs plugin ('pear-tree' in my
-  " setup)
-  let g:completion_confirm_key = ""
-  imap <expr> <cr>  pumvisible() ? complete_info()["selected"] != "-1" ?
-      \ "\<Plug>(completion_confirm_completion)"  :
-      \ "\<c-e>\<CR>" : "\<CR>"
+  " This setting is moved to 'settings-after.vim' to ensure that it is sourced
+  " last. Otherwise it doesn't work for snippet expansion.
+  " " Make completion work nicely with auto-pairs plugin ('pear-tree' in my
+  " " setup)
+  " let g:completion_confirm_key = ''
+  " imap <expr> <cr>  pumvisible() ? complete_info()["selected"] != "-1" ?
+  "     \ "\<Plug>(completion_confirm_completion)"  :
+  "     \ "\<c-e>\<CR>" : "\<CR>"
 
   " Don't use any sorting, as it not always intuitive (for example, puts
   " suggestions starting with '_' on top in case of 'alphabetical')

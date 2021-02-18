@@ -41,3 +41,7 @@ let g:neoformat_enabled_python = ['black']
 
 " let b:ale_lint_on_save = 1
 " let b:ale_linters = ['pylint']
+
+" Ultisnips configuration
+let g:ultisnips_python_quoting_style = "double"
+let g:ultisnips_python_style = "numpy"

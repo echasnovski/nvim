@@ -27,3 +27,4 @@ else
   endfor
 endif
 
+source $HOME/.config/nvim/general/settings-after.vim

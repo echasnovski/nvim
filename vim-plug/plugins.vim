@@ -107,6 +107,15 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Work with tags
     " Plug 'ludovicchabant/vim-gutentags'
 
+    "" Snippets
+    Plug 'SirVer/ultisnips'
+    Plug 'honza/vim-snippets'
+
+    " "" Possible alternative
+    " Plug 'hrsh7th/vim-vsnip'
+    " Although recommended, currently doesn't seem to be needed
+    " Plug 'hrsh7th/vim-vsnip-integ'
+
     " Appearence
     "" Grubvox theme
     Plug 'morhetz/gruvbox'
