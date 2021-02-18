@@ -192,6 +192,13 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     "" LaTeX (has rather big disk size usage, around 14M)
     " Plug 'lervag/vimtex'
+
+    " Future possibilities
+    " "" Find and replace
+    " Plug 'brooth/far.vim'
+
+    " " Git message under cursor
+    " Plug 'rhysd/git-messenger.vim'
   endif
 
 call plug#end()
