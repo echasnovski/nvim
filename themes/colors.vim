@@ -5,8 +5,19 @@ syntax on
 " General theme
 let g:gruvbox_contrast_dark='medium'
 colorscheme gruvbox
+" colorscheme one
 " let ayucolor = 'mirage'
 " colorscheme ayu
+
+" " Remove modifications (bold, etc.) from highliting group while keeping color
+" function! s:copy_only_color(from, to)
+"   " Source: https://vi.stackexchange.com/a/20757
+"   let col = synIDattr(synIDtrans(hlID(a:from)), 'fg#')
+
+"   execute 'silent hi ' . a:to . ' guifg=' . col
+" endfunction
+
+" call s:copy_only_color('Function', 'Function')
 
 " Highlight punctuation
 "" General Vim buffers
@@ -18,7 +29,7 @@ function! s:hi_base_syntax()
   " Highlight dots, commas, colons and semicolons with contrast color
   syntax match punc /[.,:;=]/
   if &background == "light"
-    hi punc ctermfg=White guifg=#000000 cterm=bold gui=bold
+    hi punc ctermfg=Black guifg=#000000 cterm=bold gui=bold
   else
     hi punc ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
   endif
@@ -30,9 +41,11 @@ autocmd VimEnter,BufWinEnter * call <SID>hi_base_syntax()
 if has("nvim-0.5.0")
   hi TSPunctBracket ctermfg=208 guifg=#FF8700
   if &background == "light"
-    hi TSPunctDelimiter ctermfg=White guifg=#000000 cterm=bold gui=bold
-    hi TSPunctSpecial ctermfg=White guifg=#000000 cterm=bold gui=bold
+    hi TSOperator ctermfg=Black guifg=#000000 cterm=bold gui=bold
+    hi TSPunctDelimiter ctermfg=Black guifg=#000000 cterm=bold gui=bold
+    hi TSPunctSpecial ctermfg=Black guifg=#000000 cterm=bold gui=bold
   else
+    hi TSOperator ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
     hi TSPunctDelimiter ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
     hi TSPunctSpecial ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
   endif

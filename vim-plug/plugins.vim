@@ -120,12 +120,12 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Grubvox theme
     Plug 'morhetz/gruvbox'
 
-    "" Other possible themes (from most to least) if got board with gruvbox
+    "" Other possible themes (from most to least) if got bored with gruvbox
+    " "" Onedark
+    " Plug 'rakr/vim-one'
     " "" Ayu
     " "" NOTE: use `let ayucolor = 'mirage'`
     " Plug 'ayu-theme/ayu-vim'
-    " "" Onedark
-    " Plug 'rakr/vim-one'
     " "" Nord
     " Plug 'arcticicestudio/nord-vim'
 
