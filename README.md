@@ -134,10 +134,10 @@ Important system dependencies:
 ## Tips and tricks
 
 - This setup is configured to use buffers instead of tabs. Remember: buffer ~ file (saved or not), window ~ view of a buffer, tab ~ collection of windows. Normally you would have multiple buffers open in a single window which completely emulates "tab behavior" of "normal editor" (only with current settings of 'vim-airline' which shows buffers in "tabline" in case of a single tab). Splits create separate windows inside single tab. Usually use tabs to work on "different" projects. Useful keybindings:
-    - `:bd` - close buffer.
+    - `<Leader>b` has set of commands related to buffers. For example, `<Leader>bd` - close buffer.
     - `:q` - close window.
     - `<TAB>` and `<SHIFT-TAB>` - go to next previous buffer (current keybinding).
-    - `<Leader>b` - list all present buffers with fzf (current keybinding).
+    - `<Leader>fb` - list all present buffers with fzf (current keybinding).
 - Source for some inspiration: https://stackoverflow.com/questions/726894/what-are-the-dark-corners-of-vim-your-mom-never-told-you-about . Notable examples:
     - Use `:.![command]` to execute command in terminal and put its output into current buffer. For example: `:.!ls -lhR`.
 - In NERDTree use 'm' keybinding to open a menu with actions you can do with current file tree.

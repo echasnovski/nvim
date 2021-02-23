@@ -26,5 +26,3 @@ else
       exe 'source' s:fpath
   endfor
 endif
-
-source $HOME/.config/nvim/general/settings-after.vim

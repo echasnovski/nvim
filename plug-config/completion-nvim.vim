@@ -27,14 +27,15 @@ if has("nvim-0.5.0")
     \{'mode': '<c-n>'}
   \]
 
-  " This setting is moved to 'settings-after.vim' to ensure that it is sourced
-  " last. Otherwise it doesn't work for snippet expansion.
-  " " Make completion work nicely with auto-pairs plugin ('pear-tree' in my
-  " " setup)
-  " let g:completion_confirm_key = ''
-  " imap <expr> <cr>  pumvisible() ? complete_info()["selected"] != "-1" ?
-  "     \ "\<Plug>(completion_confirm_completion)"  :
-  "     \ "\<c-e>\<CR>" : "\<CR>"
+  " Make completion work nicely with auto-pairs plugin ('pear-tree' in my
+  " setup). This should also enable snippet expansion.
+  " NOTE: previously had some trouble with this. Solutions that worked:
+  " - Moving this somewhere to be executed after all other settings.
+  " - Having directly `<Plug>(PearTreeExpand)` instead of `<CR>`.
+  let g:completion_confirm_key = ''
+  imap <expr> <cr>  pumvisible() ? complete_info()["selected"] != "-1" ?
+      \ "\<Plug>(completion_confirm_completion)"  :
+      \ "\<c-e>\<CR>" : "\<CR>"
 
   " Don't use any sorting, as it not always intuitive (for example, puts
   " suggestions starting with '_' on top in case of 'alphabetical')

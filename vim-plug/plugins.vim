@@ -65,6 +65,15 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
       Plug 'nvim-treesitter/nvim-treesitter-textobjects'
       " Plug 'nvim-treesitter/playground'
+
+      "" Colorful icons
+      Plug 'kyazdani42/nvim-web-devicons'
+
+      "" Statusline
+      Plug 'hoob3rt/lualine.nvim'
+
+      "" Bufferline
+      Plug 'akinsho/nvim-bufferline.lua'
     else
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}
@@ -74,6 +83,12 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" Semantic code highlighting for Python files
       Plug 'numirias/semshi', {'do': ':UpdateRemotePlugins'}
+
+      "" Useful icons
+      Plug 'ryanoasis/vim-devicons'
+
+      "" Statusline and bufferline
+      Plug 'vim-airline/vim-airline'
     endif
 
     " General
@@ -128,12 +143,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Plug 'ayu-theme/ayu-vim'
     " "" Nord
     " Plug 'arcticicestudio/nord-vim'
-
-    "" Status bar
-    Plug 'vim-airline/vim-airline'
-
-    "" Useful icons
-    Plug 'ryanoasis/vim-devicons'
 
     "" Show colors
     Plug 'norcalli/nvim-colorizer.lua'
