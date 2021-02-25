@@ -69,16 +69,12 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" Colorful icons
       Plug 'kyazdani42/nvim-web-devicons'
 
-      "" Statusline
-      Plug 'hoob3rt/lualine.nvim'
+      "" Git signs gutter
+      Plug 'lewis6991/gitsigns.nvim'
+      Plug 'nvim-lua/plenary.nvim' " Dependency of 'gitsigns'
 
       "" Bufferline
       Plug 'ap/vim-buftabline'
-      "" Lua colorful bufferline. Currently has some problems:
-      "" - Can't get minimum width tabs (there is always padding). Custom
-      ""   settings still lead to imperfect setup (too small number of tabs
-      ""   showing with a lot of empty space to the right).
-      " Plug 'akinsho/nvim-bufferline.lua'
     else
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}
@@ -94,6 +90,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" Statusline and bufferline
       Plug 'vim-airline/vim-airline'
+
+      "" Git signs gutter
+      " Plug 'airblade/vim-gitgutter'
     endif
 
     " General
@@ -115,7 +114,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     "" Git integration
     Plug 'tpope/vim-fugitive'
-    Plug 'airblade/vim-gitgutter'
     Plug 'junegunn/gv.vim'
 
     "" Show keybindings

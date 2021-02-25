@@ -70,31 +70,54 @@ let g:which_key_map.f = {
   \ }
 
 " g is for git
-"" Functions `GitGutterNextHunkCycle()` and `GitGutterPrevHunkCycle()` are
-"" defined in 'general/functions.vim'
-nnoremap <silent> <Leader>gj :call GitGutterNextHunkCycle()<CR>zz
-nnoremap <silent> <Leader>gk :call GitGutterPrevHunkCycle()<CR>zz
-let g:which_key_map.g = {
-  \ 'name' : '+git' ,
-  \ 'A' : [':Git add %'                     , 'add buffer'],
-  \ 'a' : ['<Plug>(GitGutterStageHunk)'     , 'add hunk'],
-  \ 'b' : [':Git blame'                     , 'blame'],
-  \ 'D' : [':Gvdiffsplit!'                  , 'diff split'],
-  \ 'd' : [':Git diff'                      , 'diff'],
-  \ 'f' : [':GitGutterFold'                 , 'fold unchanged'],
-  \ 'g' : [':Git'                           , 'git window'],
-  \ 'h' : [':diffget //2'                   , 'merge from left (our)'],
-  \ 'j' :                                     'next hunk',
-  \ 'k' :                                     'prev hunk',
-  \ 'l' : [':diffget //3'                   , 'merge from right (their)'],
-  \ 'p' : ['<Plug>(GitGutterPreviewHunk)'   , 'preview hunk'],
-  \ 'q' : [':GitGutterQuickFix | copen'     , 'quickfix hunks'],
-  \ 'R' : [':Git reset %'                   , 'reset buffer'],
-  \ 't' : [':GitGutterLineHighlightsToggle' , 'toggle highlight'],
-  \ 'u' : ['<Plug>(GitGutterUndoHunk)'      , 'undo hunk'],
-  \ 'V' : [':GV!'                           , 'view buffer commits'],
-  \ 'v' : [':GV'                            , 'view commits'],
-  \ }
+if has('nvim-0.5.0')
+  let g:which_key_map.g = {
+    \ 'name' : '+git' ,
+    \ 'A' : [':Git add %'    , 'add buffer'],
+    \ 'B' :                    'blame line',
+    \ 'D' : [':Gvdiffsplit!' , 'diff split'],
+    \ 'R' : [':Git reset %'  , 'reset buffer'],
+    \ 'V' : [':GV!'          , 'view buffer commits'],
+    \ 'a' :                    'add hunk',
+    \ 'b' : [':Git blame'    , 'blame'],
+    \ 'd' : [':Git diff'     , 'diff'],
+    \ 'g' : [':Git'          , 'git window'],
+    \ 'h' : [':diffget //2'  , 'merge from left (our)'],
+    \ 'j' :                    'next hunk',
+    \ 'k' :                    'prev hunk',
+    \ 'l' : [':diffget //3'  , 'merge from right (their)'],
+    \ 'p' :                    'preview hunk',
+    \ 'r' :                    'reset hunk',
+    \ 'u' :                    'undo stage hunk',
+    \ 'v' : [':GV'           , 'view commits'],
+    \ }
+else
+  "" Functions `GitGutterNextHunkCycle()` and `GitGutterPrevHunkCycle()` are
+  "" defined in 'general/functions.vim'
+  nnoremap <silent> <Leader>gj :call GitGutterNextHunkCycle()<CR>zz
+  nnoremap <silent> <Leader>gk :call GitGutterPrevHunkCycle()<CR>zz
+  let g:which_key_map.g = {
+    \ 'name' : '+git' ,
+    \ 'A' : [':Git add %'                     , 'add buffer'],
+    \ 'a' : ['<Plug>(GitGutterStageHunk)'     , 'add hunk'],
+    \ 'b' : [':Git blame'                     , 'blame'],
+    \ 'D' : [':Gvdiffsplit!'                  , 'diff split'],
+    \ 'd' : [':Git diff'                      , 'diff'],
+    \ 'f' : [':GitGutterFold'                 , 'fold unchanged'],
+    \ 'g' : [':Git'                           , 'git window'],
+    \ 'h' : [':diffget //2'                   , 'merge from left (our)'],
+    \ 'j' :                                     'next hunk',
+    \ 'k' :                                     'prev hunk',
+    \ 'l' : [':diffget //3'                   , 'merge from right (their)'],
+    \ 'p' : ['<Plug>(GitGutterPreviewHunk)'   , 'preview hunk'],
+    \ 'q' : [':GitGutterQuickFix | copen'     , 'quickfix hunks'],
+    \ 'R' : [':Git reset %'                   , 'reset buffer'],
+    \ 't' : [':GitGutterLineHighlightsToggle' , 'toggle highlight'],
+    \ 'u' : ['<Plug>(GitGutterUndoHunk)'      , 'undo hunk'],
+    \ 'V' : [':GV!'                           , 'view buffer commits'],
+    \ 'v' : [':GV'                            , 'view commits'],
+    \ }
+endif
 
 " i is for IPython
 "" Qt Console connection.
