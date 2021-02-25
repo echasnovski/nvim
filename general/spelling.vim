@@ -8,6 +8,9 @@ if !exists('g:vscode')
   set complete+=kspell
   " Use specific dictionaries
   set dictionary=~/.config/nvim/dict/english.txt
-  " Treat parts of camelCase words as seprate words
-  set spelloptions=camel
+
+  if has("nvim-0.5.0")
+    " Treat parts of camelCase words as seprate words
+    set spelloptions=camel
+  endif
 endif

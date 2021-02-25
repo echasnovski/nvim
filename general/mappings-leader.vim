@@ -190,7 +190,7 @@ let g:which_key_map.o = {
   \ 'l' : [':SidewaysRight'                , 'move arg right'],
   \ 'r' : [':call ResizeToColorColumn()'   , 'resize to colorcolumn'],
   \ 'S' : [':call SpellCompletionToggle()' , 'spell completion toggle'],
-  \ 's' : [':set spell!'                   , 'spell toggle'],
+  \ 's' : [':setlocal spell!'              , 'spell toggle'],
   \ 'w' : [':call ToggleWrap()'            , 'wrap toggle'],
   \ 'W' : [':StripWhitespace'              , 'whitespace strip'],
   \ 'z' : [':call Zoom()'                  , 'zoom'],

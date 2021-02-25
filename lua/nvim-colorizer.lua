@@ -1,9 +1,6 @@
-lua << EOF
 local ok, colorizer = pcall(require, 'colorizer')
 
-if not ok then
-  return
-end
+if not ok then return end
 
 colorizer.setup({
   '*';
@@ -12,4 +9,3 @@ colorizer.setup({
     names = false; -- Don't color plain names
     RRGGBBAA = true; -- Color 'RRGGBBAA' codes
   })
-EOF

@@ -73,7 +73,12 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       Plug 'hoob3rt/lualine.nvim'
 
       "" Bufferline
-      Plug 'akinsho/nvim-bufferline.lua'
+      Plug 'ap/vim-buftabline'
+      "" Lua colorful bufferline. Currently has some problems:
+      "" - Can't get minimum width tabs (there is always padding). Custom
+      ""   settings still lead to imperfect setup (too small number of tabs
+      ""   showing with a lot of empty space to the right).
+      " Plug 'akinsho/nvim-bufferline.lua'
     else
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}
