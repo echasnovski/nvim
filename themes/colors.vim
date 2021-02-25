@@ -64,3 +64,23 @@ hi SpellRare    guisp=#FFFFFF   gui=undercurl
 " Use custom color for highlighting 'maximum width' column
 highlight ColorColumn ctermbg=grey guibg=#555555
 
+" Statusline colors
+hi StatusLineModeNormal   guibg=#928374 guifg=#1D2021 gui=bold
+hi StatusLineModeInsert   guibg=#458588 guifg=#1D2021 gui=bold
+hi StatusLineModeVisual   guibg=#b8bb26 guifg=#1D2021 gui=bold
+hi StatusLineModeReplace  guibg=#fb4934 guifg=#1D2021 gui=bold
+hi StatusLineModeCommand  guibg=#d79921 guifg=#1D2021 gui=bold
+hi StatusLineModeOther    guibg=#689D6A guifg=#1D2021 gui=bold
+
+hi StatusLineActive       guibg=#3C3836 guifg=#EBDBB2
+hi StatusLineInactive     guibg=#3C3836 guifg=#928374
+hi StatusLineLineCol      guibg=#928374 guifg=#1D2021 gui=bold
+hi StatusLineGit          guibg=#504945 guifg=#EBDBB2
+hi StatusLineFileinfo     guibg=#504945 guifg=#EBDBB2
+hi StatusLineFilename     guibg=#504945 guifg=#EBDBB2
+
+hi StatusLineDiagn        guibg=#3C3836
+hi StatusLineDiagnError   guibg=#3C3836 guifg=#CC3333
+hi StatusLineDiagnWarning guibg=#3C3836 guifg=#FFCC33
+hi StatusLineDiagnInfo    guibg=#3C3836 guifg=#33CC33
+hi StatusLineDiagnHint    guibg=#3C3836 guifg=#99CCCC
