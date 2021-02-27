@@ -9,6 +9,12 @@
 --   will be displayed instead of a branch.
 -- - Plugin 'kyazdani42/nvim-web-devicons' or 'ryanoasis/vim-devicons' for
 --   filetype icons. If missing, no icons will be used.
+--
+-- Notes about structure:
+-- - Main statusline object is `Statusline`. It has three different "states":
+--   active, inactive, explorer.
+-- - In active mode `M.set_active()` is called. Its code defines high-level
+--   structure of statusline. From there go to respective functions.
 has_devicons, devicons = pcall(require, 'nvim-web-devicons')
 
 local fn = vim.fn
@@ -17,49 +23,53 @@ local api = vim.api
 local M = {}
 
 M.colors = {
-  active      = '%#StatusLineActive#',
-  inactive    = '%#StatuslineInactive#',
-  mode        = '%#StatusLineModeNormal#',
-  git         = '%#StatusLineGit#',
-  fileinfo    = '%#StatusLineFileinfo#',
-  line_col    = '%#StatusLineLineCol#',
-  diagnostics = '%#StatusLineDiagn#',
+  active   = '%#StatusLineActive#',
+  inactive = '%#StatuslineInactive#',
+  mode     = '%#StatusLineModeNormal#',
+  devinfo  = '%#StatusLineDevinfo#', -- gitinfo and lspinfo
+  filename = '%#StatusLineFilename#',
+  fileinfo = '%#StatusLineFileinfo#',
 }
 
 M.modes = setmetatable({
-  ['n']  = {'Normal'   , 'N'  , '%#StatusLineModeNormal#'};
-  ['v']  = {'Visual'   , 'V'  , '%#StatusLineModeVisual#'};
-  ['V']  = {'V-Line'   , 'V-L', '%#StatusLineModeVisual#'};
-  [''] = {'V-Block'  , 'V·B', '%#StatusLineModeVisual#'};
-  ['s']  = {'Select'   , 'S'  , '%#StatusLineModeVisual#'};
-  ['S']  = {'S-Line'   , 'S-L', '%#StatusLineModeVisual#'};
-  [''] = {'S-Block'  , 'S-B', '%#StatusLineModeVisual#'};
-  ['i']  = {'Insert'   , 'I'  , '%#StatusLineModeInsert#'};
-  ['R']  = {'Replace'  , 'R'  , '%#StatusLineModeReplace#'};
-  ['c']  = {'Command'  , 'C'  , '%#StatusLineModeCommand#'};
-  ['r']  = {'Prompt'   , 'P'  , '%#StatusLineModeOther#'};
-  ['!']  = {'Shell'    , 'Sh' , '%#StatusLineModeOther#'};
-  ['t']  = {'Terminal' , 'T'  , '%#StatusLineModeOther#'};
+  ['n']  = {long = 'Normal'  , short = 'N'  , hl = '%#StatusLineModeNormal#'};
+  ['v']  = {long = 'Visual'  , short = 'V'  , hl = '%#StatusLineModeVisual#'};
+  ['V']  = {long = 'V-Line'  , short = 'V-L', hl = '%#StatusLineModeVisual#'};
+  [''] = {long = 'V-Block' , short = 'V-B', hl = '%#StatusLineModeVisual#'};
+  ['s']  = {long = 'Select'  , short = 'S'  , hl = '%#StatusLineModeVisual#'};
+  ['S']  = {long = 'S-Line'  , short = 'S-L', hl = '%#StatusLineModeVisual#'};
+  [''] = {long = 'S-Block' , short = 'S-B', hl = '%#StatusLineModeVisual#'};
+  ['i']  = {long = 'Insert'  , short = 'I'  , hl = '%#StatusLineModeInsert#'};
+  ['R']  = {long = 'Replace' , short = 'R'  , hl = '%#StatusLineModeReplace#'};
+  ['c']  = {long = 'Command' , short = 'C'  , hl = '%#StatusLineModeCommand#'};
+  ['r']  = {long = 'Prompt'  , short = 'P'  , hl = '%#StatusLineModeOther#'};
+  ['!']  = {long = 'Shell'   , short = 'Sh' , hl = '%#StatusLineModeOther#'};
+  ['t']  = {long = 'Terminal', short = 'T'  , hl = '%#StatusLineModeOther#'};
 }, {
   -- By default return 'Unknown' but this shouldn't be needed
-  __index = function() return {'Unknown', 'U', '%#StatusLineModeOther#'} end
+  __index = function()
+    return {long = 'Unknown', short = 'U', hl = '%#StatusLineModeOther#'}
+  end
 })
+
+-- Keep track of current mode. This is so that all section would rely on the
+-- same mode value. !!!Important to keep it updated!!!
+M.current_mode_info = M.modes['n']
 
 -- Information about diagnostics
 M.diagnostic_levels = {
-  errors   = {'Error'      , 'E', '%#StatusLineDiagnError#'},
-  warnings = {'Warning'    , 'W', '%#StatusLineDiagnWarning#'},
-  info     = {'Information', 'I', '%#StatusLineDiagnInfo#'},
-  hints    = {'Hint'       , 'H', '%#StatusLineDiagnHint#'}
+  {name = 'Error'      , sign = 'E'},
+  {name = 'Warning'    , sign = 'W'},
+  {name = 'Information', sign = 'I'},
+  {name = 'Hint'       , sign = 'H'},
 }
 
 -- Window width at which section becomes truncated (default to 80)
 M.trunc_width = setmetatable({
-  mode        = 120,
-  filename    = 140,
-  fileinfo    = 120,
-  git         = 80,
-  diagnostics = 75,
+  mode     = 120,
+  devinfo  = 75, -- gitinfo and lspinfo
+  filename = 140,
+  fileinfo = 120,
 }, {
   __index = function() return 80 end
 })
@@ -73,22 +83,34 @@ local isnt_normal_buffer = function()
   return vim.bo.buftype ~= ''
 end
 
-M.get_current_mode = function(self)
+M.update_current_mode_info = function(self)
   -- Usage of `fn.mode()` allows getting single letter description of mode
   -- which greatly reduces number of needed entries in `modes` table.
   -- For bigger flexibility, use `api.nvim_get_mode().mode`.
-  local mode_info = self.modes[fn.mode()]
-  local mode_color = mode_info[3]
-  local mode_string = self:is_truncated('mode') and mode_info[2] or mode_info[1]
+  self.current_mode_info = self.modes[fn.mode()]
+end
 
-  return string.format('%s %s ', mode_color, mode_string):upper()
+M.get_current_mode = function(self)
+  local mode_info = self.current_mode_info
+  local mode_string = self:is_truncated('mode') and mode_info.short or mode_info.long
+
+  return string.format(' %s ', mode_string)
 end
 
 M.get_spelling = function(self)
   if not vim.wo.spell then return '' end
 
   -- NOTE: this section will inherit highliting of the previous section
-  return string.format(' SPELL(%s) ', vim.bo.spelllang)
+  return string.format('SPELL(%s) ', vim.bo.spelllang)
+end
+
+local get_git_branch = function()
+  if fn.exists('*FugitiveHead') == 0 then return '<no fugitive>' end
+
+  -- Use commit hash truncated to 7 characters in case of detached HEAD
+  local branch = fn.FugitiveHead(7)
+  if branch == '' then return '<no branch>' end
+  return string.format(' %s', branch)
 end
 
 local get_git_signs = function()
@@ -103,16 +125,7 @@ local get_git_signs = function()
   return table.concat(res, ' ')
 end
 
-local get_git_branch = function()
-  if fn.exists('*FugitiveHead') == 0 then return '<no fugitive>' end
-
-  -- Use commit hash truncated to 7 characters in case of detached HEAD
-  local branch = fn.FugitiveHead(7)
-  if branch == '' then return '<no branch>' end
-  return string.format(' %s', branch)
-end
-
-M.get_git_status = function(self)
+M.get_gitinfo = function(self)
   if isnt_normal_buffer() then return '' end
 
   -- NOTE: this information doesn't change on every entry but these functions
@@ -133,17 +146,56 @@ M.get_git_status = function(self)
   -- ```
   local branch = get_git_branch()
 
-  if self:is_truncated('git') then
-    return string.format(' %s ', branch)
+  if self:is_truncated('devinfo') then
+    return string.format('%s', branch)
   else
     local signs = get_git_signs()
 
     if signs == '' then
-      return string.format(' %s ', branch)
+      return string.format('%s', branch)
     else
-      return string.format(' %s %s ', branch, signs)
+      return string.format('%s %s', branch, signs)
     end
   end
+end
+
+M.get_lspinfo = function(self)
+  -- Assumption: there are no attached clients if table
+  -- `vim.lsp.buf_get_clients()` is empty
+  local hasnt_attached_client = next(vim.lsp.buf_get_clients()) == nil
+  local dont_show_lsp = self:is_truncated('devinfo') or
+    isnt_normal_buffer() or
+    hasnt_attached_client
+  if dont_show_lsp then return '' end
+
+  -- Gradual growing of string ensures preferred order
+  local result = ''
+
+  for _, level in ipairs(self.diagnostic_levels) do
+    n = vim.lsp.diagnostic.get_count(0, level.name)
+    -- Add string only if diagnostic is present
+    if n > 0 then
+      result = result .. string.format(' %s%s', level.sign, n)
+    end
+  end
+
+  if result == '' then result = ' -' end
+
+  return 'LSP:' .. result
+end
+
+M.get_devinfo = function(self)
+  local result = ''
+  -- Not using `table.concat()` because it seems to be a good idea for
+  -- `get_gitinfo()` and `get_lspinfo()` to return empty string ('') in case
+  -- there is nothing to show (instead of `nil`). But in the case when both of
+  -- them are '' (like in terminal buffer) the output of `table.concat()` will
+  -- be '  '.
+  for _, s in ipairs({self:get_gitinfo(), self:get_lspinfo()}) do
+    if s ~= '' then result = result .. ' ' .. s end
+  end
+  if result ~= '' then result = result .. ' ' end
+  return result
 end
 
 M.get_filename = function(self)
@@ -211,39 +263,23 @@ M.get_line_col = function(self)
   return ' (%3l|%L):(%2v|%-2{col("$") - 1}) '
 end
 
-M.get_lsp_diagnostic = function(self)
-  if (self:is_truncated('diagnostics') or isnt_normal_buffer()) then return '' end
-
-  local result = {}
-
-  for k, level in pairs(self.diagnostic_levels) do
-    n = vim.lsp.diagnostic.get_count(0, level[1])
-    -- Add string only if diagnostic is present
-    if n > 0 then
-      table.insert(result, string.format('%s%s:%s', level[3], level[2], n))
-    end
-  end
-
-  if #result == 0 then return '' end
-
-  return ' ' .. table.concat(result, ' ')
-end
-
 M.set_active = function(self)
+  self:update_current_mode_info()
+  local mode_info = self.current_mode_info
+
   local colors = self.colors
 
-  local mode = self:get_current_mode()
-  local spelling = self:get_spelling()
-  local git = colors.git .. self:get_git_status()
-  local filename = colors.inactive .. self:get_filename()
+  local mode     = mode_info.hl    .. self:get_current_mode()
+  local spelling = mode_info.hl    .. self:get_spelling()
+  local devinfo  = colors.devinfo  .. self:get_devinfo()
+  local filename = colors.filename .. self:get_filename()
   local fileinfo = colors.fileinfo .. self:get_fileinfo()
-  local line_col = colors.line_col .. self:get_line_col()
-  local diagnostics = colors.diagnostics .. self:get_lsp_diagnostic()
+  local line_col = mode_info.hl    .. self:get_line_col()
 
   return table.concat({
-    colors.active, mode, spelling, git, filename,
+    mode, spelling, devinfo, filename,
     "%=",
-    fileinfo, line_col, diagnostics
+    fileinfo, line_col
   })
 end
 
