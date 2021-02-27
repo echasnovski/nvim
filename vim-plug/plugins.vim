@@ -69,10 +69,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" Colorful icons
       Plug 'kyazdani42/nvim-web-devicons'
 
-      "" Git signs gutter
-      Plug 'lewis6991/gitsigns.nvim'
-      Plug 'nvim-lua/plenary.nvim' " Dependency of 'gitsigns'
-
       "" Bufferline
       Plug 'ap/vim-buftabline'
     else
@@ -90,9 +86,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" Statusline and bufferline
       Plug 'vim-airline/vim-airline'
-
-      "" Git signs gutter
-      " Plug 'airblade/vim-gitgutter'
     endif
 
     " General
@@ -115,6 +108,10 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Git integration
     Plug 'tpope/vim-fugitive'
     Plug 'junegunn/gv.vim'
+    Plug 'airblade/vim-gitgutter'
+    """ Lua alternative of 'vim-gitgutter'. Currently is very slow on big
+    """ files:
+    " Plug 'lewis6991/gitsigns.nvim'
 
     "" Show keybindings
     Plug 'liuchengxu/vim-which-key'

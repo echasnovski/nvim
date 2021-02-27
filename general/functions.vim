@@ -188,3 +188,11 @@ function SpellCompletionToggle()
     let g:_custom_spell_completion_enabled = 1
   end
 endfunction
+
+" Create scratch buffer
+function Scratch()
+  enew
+  setlocal buftype=nofile
+  setlocal bufhidden=hide
+  setlocal noswapfile
+endfunction

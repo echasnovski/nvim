@@ -3,11 +3,12 @@
 -- https://github.com/elianiva/dotfiles/blob/master/nvim/.config/nvim/lua/modules/_statusline.lua (Github)
 -- Suggested dependencies (provide extra functionality, statusline will work without them):
 -- - Nerd font (to support git icon).
--- - Plugin 'lewis6991/gitsigns.nvim' for Git info. If missing,
---   'tpope/vim-fugitive'.  If both missing, '<no git plugin>' will be displayed.
--- - Plugin 'kyazdani42/nvim-web-devicons' for filetype icons. If missing, no
---   icons will be used.
-has_gitsigns, gitsigns = pcall(require, 'gitsigns')
+-- - Plugin 'airblade/vim-gitgutter' for Git signs. If missing, no git signs
+--   will be shown.
+-- - Plugin 'tpope/vim-fugitive' for Git branch. If missing, '<no fugitive>'
+--   will be displayed instead of a branch.
+-- - Plugin 'kyazdani42/nvim-web-devicons' or 'ryanoasis/vim-devicons' for
+--   filetype icons. If missing, no icons will be used.
 has_devicons, devicons = pcall(require, 'nvim-web-devicons')
 
 local fn = vim.fn
@@ -25,9 +26,8 @@ M.colors = {
   diagnostics = '%#StatusLineDiagn#',
 }
 
-M.modes = {
+M.modes = setmetatable({
   ['n']  = {'Normal'   , 'N'  , '%#StatusLineModeNormal#'};
-  ['no'] = {'N-Pending', 'N-P', '%#StatusLineModeNormal#'};
   ['v']  = {'Visual'   , 'V'  , '%#StatusLineModeVisual#'};
   ['V']  = {'V-Line'   , 'V-L', '%#StatusLineModeVisual#'};
   [''] = {'V-Block'  , 'V·B', '%#StatusLineModeVisual#'};
@@ -35,41 +35,37 @@ M.modes = {
   ['S']  = {'S-Line'   , 'S-L', '%#StatusLineModeVisual#'};
   [''] = {'S-Block'  , 'S-B', '%#StatusLineModeVisual#'};
   ['i']  = {'Insert'   , 'I'  , '%#StatusLineModeInsert#'};
-  ['ic'] = {'Insert'   , 'I'  , '%#StatusLineModeInsert#'};
   ['R']  = {'Replace'  , 'R'  , '%#StatusLineModeReplace#'};
-  ['Rv'] = {'V-Replace', 'V-R', '%#StatusLineModeReplace#'};
   ['c']  = {'Command'  , 'C'  , '%#StatusLineModeCommand#'};
-  ['cv'] = {'Vim-Ex'   , 'V-E', '%#StatusLineModeCommand#'};
-  ['ce'] = {'Ex'       , 'E'  , '%#StatusLineModeCommand#'};
   ['r']  = {'Prompt'   , 'P'  , '%#StatusLineModeOther#'};
-  ['rm'] = {'More'     , 'M'  , '%#StatusLineModeOther#'};
-  ['r?'] = {'Confirm'  , 'C'  , '%#StatusLineModeOther#'};
-  ['!']  = {'Shell'    , 'S'  , '%#StatusLineModeOther#'};
+  ['!']  = {'Shell'    , 'Sh' , '%#StatusLineModeOther#'};
   ['t']  = {'Terminal' , 'T'  , '%#StatusLineModeOther#'};
-}
+}, {
+  -- By default return 'Unknown' but this shouldn't be needed
+  __index = function() return {'Unknown', 'U', '%#StatusLineModeOther#'} end
+})
 
 -- Information about diagnostics
 M.diagnostic_levels = {
-  errors = {'Error', 'E', '%#StatusLineDiagnError#'},
-  warnings = {'Warning', 'W', '%#StatusLineDiagnWarning#'},
-  info = {'Information', 'I', '%#StatusLineDiagnInfo#'},
-  hints = {'Hint', 'H', '%#StatusLineDiagnHint#'}
+  errors   = {'Error'      , 'E', '%#StatusLineDiagnError#'},
+  warnings = {'Warning'    , 'W', '%#StatusLineDiagnWarning#'},
+  info     = {'Information', 'I', '%#StatusLineDiagnInfo#'},
+  hints    = {'Hint'       , 'H', '%#StatusLineDiagnHint#'}
 }
 
--- Window width at which section becomes truncated
-M.trunc_width = {
-  mode = 120,
-  filename = 140,
-  fileinfo = 120,
-  git = 90,
+-- Window width at which section becomes truncated (default to 80)
+M.trunc_width = setmetatable({
+  mode        = 120,
+  filename    = 140,
+  fileinfo    = 120,
+  git         = 80,
   diagnostics = 75,
-}
+}, {
+  __index = function() return 80 end
+})
 
 M.is_truncated = function(self, section)
-  -- Get section width (default to 80 if there is no section)
-  local ok, width = pcall(function() return self.trunc_width[section] end)
-  width = ok and width or 80
-  return api.nvim_win_get_width(0) < width
+  return api.nvim_win_get_width(0) < self.trunc_width[section]
 end
 
 local isnt_normal_buffer = function()
@@ -78,8 +74,10 @@ local isnt_normal_buffer = function()
 end
 
 M.get_current_mode = function(self)
-  local current_mode = api.nvim_get_mode().mode
-  local mode_info = self.modes[current_mode]
+  -- Usage of `fn.mode()` allows getting single letter description of mode
+  -- which greatly reduces number of needed entries in `modes` table.
+  -- For bigger flexibility, use `api.nvim_get_mode().mode`.
+  local mode_info = self.modes[fn.mode()]
   local mode_color = mode_info[3]
   local mode_string = self:is_truncated('mode') and mode_info[2] or mode_info[1]
 
@@ -93,53 +91,64 @@ M.get_spelling = function(self)
   return string.format(' SPELL(%s) ', vim.bo.spelllang)
 end
 
+local get_git_signs = function()
+  if fn.exists('*GitGutterGetHunkSummary') == 0 then return '' end
+
+  local signs = fn.GitGutterGetHunkSummary()
+  local res = {}
+  if signs[1] > 0 then table.insert(res, '+' .. signs[1]) end
+  if signs[2] > 0 then table.insert(res, '~' .. signs[2]) end
+  if signs[3] > 0 then table.insert(res, '-' .. signs[3]) end
+
+  return table.concat(res, ' ')
+end
+
+local get_git_branch = function()
+  if fn.exists('*FugitiveHead') == 0 then return '<no fugitive>' end
+
+  -- Use commit hash truncated to 7 characters in case of detached HEAD
+  local branch = fn.FugitiveHead(7)
+  if branch == '' then return '<no branch>' end
+  return string.format(' %s', branch)
+end
+
 M.get_git_status = function(self)
   if isnt_normal_buffer() then return '' end
 
-  if not has_gitsigns then
-    if fn.exists('*FugitiveHead') == 0 then return ' <no git plugin> ' end
+  -- NOTE: this information doesn't change on every entry but these functions
+  -- are called on every statusline update (which is **very** often). Currently
+  -- this doesn't introduce noticeable overhead because of a smart way used
+  -- functions of 'vim-gitgutter' and 'vim-fugitive' are written (seems like
+  -- they just take value of certain buffer variable, which is quick).
+  -- If ever encounter overhead, write 'update_val()' wrapper which updates
+  -- module's certain variable and call it only on certain event. Example:
+  -- ```lua
+  -- M.git_signs_str = ''
+  -- M.update_git_signs = function(self)
+  --   self.git_signs_str = get_git_signs()
+  -- end
+  -- vim.api.nvim_exec([[
+  --   au BufEnter,User GitGutter lua Statusline.update_git_signs(Statusline)
+  -- ]], false)
+  -- ```
+  local branch = get_git_branch()
 
-    local branch = fn.FugitiveHead()
-    if branch == '' then return ' <no git> ' end
-    return string.format('  %s ', branch)
-  end
-
-  local branch = vim.b.gitsigns_head
-  if not branch then
-    return ' <no git> '
-  end
-
-  if self.is_truncated('git') then
-    return string.format('  %s ', branch)
+  if self:is_truncated('git') then
+    return string.format(' %s ', branch)
   else
-    local status = vim.b.gitsigns_status
-    if status == "" then
-      return string.format('  %s ', branch)
+    local signs = get_git_signs()
+
+    if signs == '' then
+      return string.format(' %s ', branch)
     else
-      return string.format(' %s |  %s ', status, branch)
+      return string.format(' %s %s ', branch, signs)
     end
   end
-
-  -- -- use fallback because it doesn't set this variable on the initial `BufEnter`
-  -- local signs = vim.b.gitsigns_status_dict or {head = '', added = 0, changed = 0, removed = 0}
-
-  -- if signs.head == '' then
-  --   return ' <no git> '
-  -- end
-
-  -- if self:is_truncated('git') then
-  --   return string.format('  %s ', signs.head or '') or ''
-  -- end
-
-  -- return string.format(
-  --   ' +%s ~%s -%s |  %s ',
-  --   signs.added, signs.changed, signs.removed, signs.head
-  -- ) or ''
 end
 
 M.get_filename = function(self)
   -- File name with 'modified' and 'readonly' flags
-  -- Use relative path if truncted
+  -- Use relative path if truncated
   if self:is_truncated('filename') then return " %<%f%m%r " end
   -- Use fullpath if not truncated
   return " %<%F%m%r "
@@ -159,6 +168,20 @@ local get_filesize = function()
   return data
 end
 
+local get_filetype_icon = function()
+  -- By default use 'nvim-web-devicons', fallback to 'vim-devicons'
+  if has_devicons then
+    local file_name, file_ext = fn.expand('%:t'), fn.expand('%:e')
+    return devicons.get_icon(file_name, file_ext) or
+      -- Fallback for some extensions (like '.R' and '.r')
+      devicons.get_icon(string.lower(file_name), string.lower(file_ext), { default = true })
+  elseif fn.exists("*WebDevIconsGetFileTypeSymbol") ~= 0 then
+    return fn.WebDevIconsGetFileTypeSymbol()
+  end
+
+  return ''
+end
+
 M.get_fileinfo = function(self)
   local filetype = vim.bo.filetype
 
@@ -167,14 +190,8 @@ M.get_fileinfo = function(self)
   if ((filetype == '') or isnt_normal_buffer()) then return '' end
 
   -- Add filetype icon
-  if has_devicons then
-    local file_name, file_ext = fn.expand('%:t'), fn.expand('%:e')
-    local icon = devicons.get_icon(file_name, file_ext) or
-      -- Fallback for some extensions (like '.R' and '.r')
-      devicons.get_icon(string.lower(file_name), string.lower(file_ext), { default = true })
-
-    filetype = string.format('%s %s', icon, filetype)
-  end
+  local icon = get_filetype_icon()
+  if icon ~= "" then filetype = icon .. ' ' .. filetype end
 
   -- Construct output string if truncated
   if self:is_truncated('fileinfo') then
