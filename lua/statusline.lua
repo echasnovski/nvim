@@ -11,27 +11,91 @@
 --   filetype icons. If missing, no icons will be used.
 --
 -- Notes about structure:
--- - Main statusline object is `Statusline`. It has three different "states":
---   active, inactive, explorer.
--- - In active mode `M.set_active()` is called. Its code defines high-level
---   structure of statusline. From there go to respective functions.
+-- - Main statusline object is `Statusline`. It has two different "states":
+--   active and inactive.
+-- - In active mode `Statusline.set_active()` is called. Its code defines high-level
+--   structure of statusline. From there go to respective section functions.
 has_devicons, devicons = pcall(require, 'nvim-web-devicons')
 
 local fn = vim.fn
 local api = vim.api
 
-local M = {}
+-- Local helpers
+local is_truncated = function(width)
+  return api.nvim_win_get_width(0) < width
+end
 
-M.colors = {
-  active   = '%#StatusLineActive#',
-  inactive = '%#StatuslineInactive#',
-  mode     = '%#StatusLineModeNormal#',
-  devinfo  = '%#StatusLineDevinfo#', -- gitinfo and lspinfo
-  filename = '%#StatusLineFilename#',
-  fileinfo = '%#StatusLineFileinfo#',
-}
+local isnt_normal_buffer = function()
+  -- For more information see ":h buftype"
+  return vim.bo.buftype ~= ''
+end
 
-M.modes = setmetatable({
+local combine_sections = function(sections)
+  local t = {}
+  for _, s in ipairs(sections) do
+    if type(s) == 'string' then
+      t[#t + 1] = s
+    elseif s.string ~= '' then
+      if s.hl then
+        t[#t + 1] = string.format('%s %s ', s.hl, s.string)
+      else
+        t[#t + 1] = string.format('%s ', s.string)
+      end
+    end
+  end
+  return table.concat(t, '')
+end
+
+-- Statusline object
+Statusline = setmetatable({}, {
+  __call = function(statusline, mode)
+    if mode == 'active' then return statusline:set_active() end
+    if mode == 'inactive' then return statusline:set_inactive() end
+  end
+})
+
+-- Statusline behavior
+vim.api.nvim_exec([[
+  augroup Statusline
+  au!
+  au WinEnter,BufEnter * setlocal statusline=%!v:lua.Statusline('active')
+  au WinLeave,BufLeave * setlocal statusline=%!v:lua.Statusline('inactive')
+  augroup END
+]], false)
+
+-- High-level definition of statusline content
+function Statusline:set_active()
+  local mode_info = self.modes[fn.mode()]
+
+  local mode        = self:section_mode{mode_info = mode_info, trunc_width = 120}
+  local spell       = self:section_spell{}
+  local git         = self:section_git{trunc_width = 75}
+  local diagnostics = self:section_diagnostics{trunc_width = 75}
+  local filename    = self:section_filename{trunc_width = 140}
+  local fileinfo    = self:section_fileinfo{trunc_width = 120}
+  local location    = self:section_location{}
+
+  -- Usage of `combine_sections()` ensures correct padding with spaces between
+  -- sections (accounts for 'missing' sections, etc.)
+  return combine_sections({
+    {string = mode,        hl = mode_info.hl},
+    {string = spell,       hl = nil}, -- Copy highliting from previous section
+    {string = git,         hl = '%#StatusLineDevinfo#'},
+    {string = diagnostics, hl = nil}, -- Copy highliting from previous section
+    '%<', -- Mark general truncate point
+    {string = filename,    hl = '%#StatusLineFilename#'},
+    '%=', -- End left alignment
+    {string = fileinfo,    hl = '%#StatusLineFileinfo#'},
+    {string = location,    hl = mode_info.hl},
+  })
+end
+
+function Statusline:set_inactive()
+  return '%#StatuslineInactive#%F%='
+end
+
+-- Mode
+Statusline.modes = setmetatable({
   ['n']  = {long = 'Normal'  , short = 'N'  , hl = '%#StatusLineModeNormal#'};
   ['v']  = {long = 'Visual'  , short = 'V'  , hl = '%#StatusLineModeVisual#'};
   ['V']  = {long = 'V-Line'  , short = 'V-L', hl = '%#StatusLineModeVisual#'};
@@ -52,69 +116,33 @@ M.modes = setmetatable({
   end
 })
 
--- Keep track of current mode. This is so that all section would rely on the
--- same mode value. !!!Important to keep it updated!!!
-M.current_mode_info = M.modes['n']
+function Statusline:section_mode(arg)
+  local mode = is_truncated(arg.trunc_width) and
+    arg.mode_info.short or
+    arg.mode_info.long
 
--- Information about diagnostics
-M.diagnostic_levels = {
-  {name = 'Error'      , sign = 'E'},
-  {name = 'Warning'    , sign = 'W'},
-  {name = 'Information', sign = 'I'},
-  {name = 'Hint'       , sign = 'H'},
-}
-
--- Window width at which section becomes truncated (default to 80)
-M.trunc_width = setmetatable({
-  mode     = 120,
-  devinfo  = 75, -- gitinfo and lspinfo
-  filename = 140,
-  fileinfo = 120,
-}, {
-  __index = function() return 80 end
-})
-
-M.is_truncated = function(self, section)
-  return api.nvim_win_get_width(0) < self.trunc_width[section]
+  return mode
 end
 
-local isnt_normal_buffer = function()
-  -- For more information see ":h buftype"
-  return vim.bo.buftype ~= ''
-end
-
-M.update_current_mode_info = function(self)
-  -- Usage of `fn.mode()` allows getting single letter description of mode
-  -- which greatly reduces number of needed entries in `modes` table.
-  -- For bigger flexibility, use `api.nvim_get_mode().mode`.
-  self.current_mode_info = self.modes[fn.mode()]
-end
-
-M.get_current_mode = function(self)
-  local mode_info = self.current_mode_info
-  local mode_string = self:is_truncated('mode') and mode_info.short or mode_info.long
-
-  return string.format(' %s ', mode_string)
-end
-
-M.get_spelling = function(self)
+-- Spell
+function Statusline:section_spell()
   if not vim.wo.spell then return '' end
 
-  -- NOTE: this section will inherit highliting of the previous section
-  return string.format('SPELL(%s) ', vim.bo.spelllang)
+  return string.format('SPELL(%s)', vim.bo.spelllang)
 end
 
-local get_git_branch = function()
+-- Git
+local function get_git_branch()
   if fn.exists('*FugitiveHead') == 0 then return '<no fugitive>' end
 
   -- Use commit hash truncated to 7 characters in case of detached HEAD
   local branch = fn.FugitiveHead(7)
   if branch == '' then return '<no branch>' end
-  return string.format(' %s', branch)
+  return branch
 end
 
-local get_git_signs = function()
-  if fn.exists('*GitGutterGetHunkSummary') == 0 then return '' end
+local function get_git_signs()
+  if fn.exists('*GitGutterGetHunkSummary') == 0 then return nil end
 
   local signs = fn.GitGutterGetHunkSummary()
   local res = {}
@@ -122,10 +150,13 @@ local get_git_signs = function()
   if signs[2] > 0 then table.insert(res, '~' .. signs[2]) end
   if signs[3] > 0 then table.insert(res, '-' .. signs[3]) end
 
+  if next(res) == nil then
+    return nil
+  end
   return table.concat(res, ' ')
 end
 
-M.get_gitinfo = function(self)
+function Statusline:section_git(arg)
   if isnt_normal_buffer() then return '' end
 
   -- NOTE: this information doesn't change on every entry but these functions
@@ -136,34 +167,43 @@ M.get_gitinfo = function(self)
   -- If ever encounter overhead, write 'update_val()' wrapper which updates
   -- module's certain variable and call it only on certain event. Example:
   -- ```lua
-  -- M.git_signs_str = ''
-  -- M.update_git_signs = function(self)
+  -- Statusline.git_signs_str = ''
+  -- Statusline.update_git_signs = function(self)
   --   self.git_signs_str = get_git_signs()
   -- end
   -- vim.api.nvim_exec([[
-  --   au BufEnter,User GitGutter lua Statusline.update_git_signs(Statusline)
+  --   au BufEnter,User GitGutter lua Statusline:update_git_signs()
   -- ]], false)
   -- ```
+  local res
   local branch = get_git_branch()
 
-  if self:is_truncated('devinfo') then
-    return string.format('%s', branch)
+  if is_truncated(arg.trunc_width) then
+    res = branch
   else
     local signs = get_git_signs()
 
-    if signs == '' then
-      return string.format('%s', branch)
-    else
-      return string.format('%s %s', branch, signs)
-    end
+    res = table.concat({branch, signs}, ' ')
   end
+
+  if (res == nil) or res == '' then res = '-' end
+
+  return string.format(' %s', res)
 end
 
-M.get_lspinfo = function(self)
+-- Diagnostics
+local diagnostic_levels = {
+  {name = 'Error'      , sign = 'E'},
+  {name = 'Warning'    , sign = 'W'},
+  {name = 'Information', sign = 'I'},
+  {name = 'Hint'       , sign = 'H'},
+}
+
+function Statusline:section_diagnostics(arg)
   -- Assumption: there are no attached clients if table
   -- `vim.lsp.buf_get_clients()` is empty
   local hasnt_attached_client = next(vim.lsp.buf_get_clients()) == nil
-  local dont_show_lsp = self:is_truncated('devinfo') or
+  local dont_show_lsp = is_truncated(arg.trunc_width) or
     isnt_normal_buffer() or
     hasnt_attached_client
   if dont_show_lsp then return '' end
@@ -171,7 +211,7 @@ M.get_lspinfo = function(self)
   -- Gradual growing of string ensures preferred order
   local result = ''
 
-  for _, level in ipairs(self.diagnostic_levels) do
+  for _, level in ipairs(diagnostic_levels) do
     n = vim.lsp.diagnostic.get_count(0, level.name)
     -- Add string only if diagnostic is present
     if n > 0 then
@@ -181,36 +221,31 @@ M.get_lspinfo = function(self)
 
   if result == '' then result = ' -' end
 
-  return 'LSP:' .. result
+  return 'ﯭ ' .. result
 end
 
-M.get_devinfo = function(self)
-  local result = ''
-  -- Not using `table.concat()` because it seems to be a good idea for
-  -- `get_gitinfo()` and `get_lspinfo()` to return empty string ('') in case
-  -- there is nothing to show (instead of `nil`). But in the case when both of
-  -- them are '' (like in terminal buffer) the output of `table.concat()` will
-  -- be '  '.
-  for _, s in ipairs({self:get_gitinfo(), self:get_lspinfo()}) do
-    if s ~= '' then result = result .. ' ' .. s end
+-- File name
+function Statusline:section_filename(arg)
+  local name
+  -- In terminal always use plain name
+  if vim.bo.buftype == 'terminal' then
+    return '%t'
+  -- File name with 'truncate', 'modified', 'readonly' flags
+  elseif is_truncated(arg.trunc_width) then
+    -- Use relative path if truncated
+    return '%f%m%r'
+  else
+    -- Use fullpath if not truncated
+    return '%F%m%r'
   end
-  if result ~= '' then result = result .. ' ' end
-  return result
 end
 
-M.get_filename = function(self)
-  -- File name with 'modified' and 'readonly' flags
-  -- Use relative path if truncated
-  if self:is_truncated('filename') then return " %<%f%m%r " end
-  -- Use fullpath if not truncated
-  return " %<%F%m%r "
-end
-
+-- File information
 local get_filesize = function()
   local size = vim.fn.getfsize(vim.fn.getreg('%'))
   local data
   if size < 1024 then
-    data = size .. "B"
+    data = size .. 'B'
   elseif size < 1048576 then
     data = string.format('%.2f', size / 1024) .. 'KiB'
   else
@@ -227,14 +262,14 @@ local get_filetype_icon = function()
     return devicons.get_icon(file_name, file_ext) or
       -- Fallback for some extensions (like '.R' and '.r')
       devicons.get_icon(string.lower(file_name), string.lower(file_ext), { default = true })
-  elseif fn.exists("*WebDevIconsGetFileTypeSymbol") ~= 0 then
+  elseif fn.exists('*WebDevIconsGetFileTypeSymbol') ~= 0 then
     return fn.WebDevIconsGetFileTypeSymbol()
   end
 
   return ''
 end
 
-M.get_fileinfo = function(self)
+function Statusline:section_fileinfo(arg)
   local filetype = vim.bo.filetype
 
   -- Don't show anything if can't detect file type or not inside a "normal
@@ -243,11 +278,11 @@ M.get_fileinfo = function(self)
 
   -- Add filetype icon
   local icon = get_filetype_icon()
-  if icon ~= "" then filetype = icon .. ' ' .. filetype end
+  if icon ~= '' then filetype = icon .. ' ' .. filetype end
 
   -- Construct output string if truncated
-  if self:is_truncated('fileinfo') then
-    return string.format(' %s ', filetype)
+  if is_truncated(arg.trunc_width) then
+    return string.format('%s', filetype)
   end
 
   -- Construct output string with extra file info
@@ -255,59 +290,11 @@ M.get_fileinfo = function(self)
   local format = vim.bo.fileformat
   local size = get_filesize()
 
-  return string.format(' %s %s[%s] %s ', filetype, encoding, format, size)
+  return string.format('%s %s[%s] %s', filetype, encoding, format, size)
 end
 
-M.get_line_col = function(self)
+-- Location inside buffer
+function Statusline:section_location(arg)
   -- Use virtual column number to allow update when paste last column
-  return ' (%3l|%L):(%2v|%-2{col("$") - 1}) '
+  return '(%3l|%L):(%2v|%-2{col("$") - 1})'
 end
-
-M.set_active = function(self)
-  self:update_current_mode_info()
-  local mode_info = self.current_mode_info
-
-  local colors = self.colors
-
-  local mode     = mode_info.hl    .. self:get_current_mode()
-  local spelling = mode_info.hl    .. self:get_spelling()
-  local devinfo  = colors.devinfo  .. self:get_devinfo()
-  local filename = colors.filename .. self:get_filename()
-  local fileinfo = colors.fileinfo .. self:get_fileinfo()
-  local line_col = mode_info.hl    .. self:get_line_col()
-
-  return table.concat({
-    mode, spelling, devinfo, filename,
-    "%=",
-    fileinfo, line_col
-  })
-end
-
-M.set_inactive = function(self)
-  return self.colors.inactive .. '%F %='
-end
-
-M.set_explorer = function(self)
-  local title = self.colors.mode .. '   '
-
-  return table.concat({ self.colors.active, title })
-end
-
-Statusline = setmetatable(M, {
-  __call = function(statusline, mode)
-    if mode == "active" then return statusline:set_active() end
-    if mode == "inactive" then return statusline:set_inactive() end
-    if mode == "explorer" then return statusline:set_explorer() end
-  end
-})
-
--- set statusline
--- TODO: replace this once we can define autocmd using lua
-vim.api.nvim_exec([[
-  augroup Statusline
-  au!
-  au WinEnter,BufEnter * setlocal statusline=%!v:lua.Statusline('active')
-  au WinLeave,BufLeave * setlocal statusline=%!v:lua.Statusline('inactive')
-  au WinEnter,BufEnter,FileType NvimTree setlocal statusline=%!v:lua.Statusline('explorer')
-  augroup END
-]], false)
