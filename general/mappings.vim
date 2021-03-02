@@ -37,13 +37,13 @@ cnoremap <M-l> <Right>
 " Move between buffers
 if exists('g:vscode')
   " Simulate same TAB behavior in VSCode
-  nmap <Tab> :Tabnext<CR>
-  nmap <S-Tab> :Tabprev<CR>
+  nmap <Tab> <cmd>Tabnext<CR>
+  nmap <S-Tab> <cmd>Tabprev<CR>
 else
   " TAB in general mode will move to text buffer
-  nnoremap <silent> <TAB> :bnext<CR>
+  nnoremap <silent> <TAB> <cmd>bnext<CR>
   " SHIFT-TAB will go back
-  nnoremap <silent> <S-TAB> :bprevious<CR>
+  nnoremap <silent> <S-TAB> <cmd>bprevious<CR>
 endif
 
 " Better window navigation
@@ -58,14 +58,14 @@ nnoremap <C-p> <C-w>p
 tnoremap <C-h> <C-\><C-N><C-w>h
 
 " Use alt + hjkl to resize windows
-nnoremap <silent> <M-j>    :resize -2<CR>
-nnoremap <silent> <M-k>    :resize +2<CR>
-nnoremap <silent> <M-h>    :vertical resize -2<CR>
-nnoremap <silent> <M-l>    :vertical resize +2<CR>
+nnoremap <silent> <M-j>    <cmd>resize -2<CR>
+nnoremap <silent> <M-k>    <cmd>resize +2<CR>
+nnoremap <silent> <M-h>    <cmd>vertical resize -2<CR>
+nnoremap <silent> <M-l>    <cmd>vertical resize +2<CR>
 
 " Alternate way to save
-nnoremap <C-s> :w<CR>
-inoremap <C-s> <Esc>:w<CR>
+nnoremap <C-s> <cmd>w<CR>
+inoremap <C-s> <Esc><cmd>w<CR>
 
 " Move inside completion list with <TAB>
 inoremap <silent> <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"

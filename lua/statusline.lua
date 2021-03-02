@@ -2,7 +2,7 @@
 -- https://elianiva.me/post/neovim-lua-statusline (blogpost)
 -- https://github.com/elianiva/dotfiles/blob/master/nvim/.config/nvim/lua/modules/_statusline.lua (Github)
 -- Suggested dependencies (provide extra functionality, statusline will work without them):
--- - Nerd font (to support git icon).
+-- - Nerd font (to support git and diagnostics icon).
 -- - Plugin 'airblade/vim-gitgutter' for Git signs. If missing, no git signs
 --   will be shown.
 -- - Plugin 'tpope/vim-fugitive' for Git branch. If missing, '<no fugitive>'
