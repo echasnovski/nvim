@@ -25,7 +25,6 @@ if !exists('g:vscode')
   set cursorline         " Enable highlighting of the current line
   set background=dark    " Tell vim what the background color looks like
   set showtabline=2      " Always show tabs
-  set noshowmode         " We don't need to see things like -- INSERT -- anymore
   set nobackup           " This is recommended by coc
   set nowritebackup      " This is recommended by coc
   set shortmess+=c       " Don't pass messages to |ins-completion-menu|
@@ -33,7 +32,7 @@ if !exists('g:vscode')
   set updatetime=300     " Faster completion
   set timeoutlen=250     " By default timeoutlen is 1000 ms. Not 100, because vim-commentary breaks
   set incsearch          " Show search results while typing
-  set noshowmode         " Don't show things like -- INSERT -- (it is handled by vim-airline)
+  set noshowmode         " Don't show things like -- INSERT -- (it is handled in statusline)
   set termguicolors      " Enable gui colors
   set switchbuf=usetab   " Use already opened buffers when switching
   set colorcolumn=+1     " Draw colored column one step to the right of desired maximum width

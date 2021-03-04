@@ -64,16 +64,26 @@ hi SpellRare    guisp=#FFFFFF   gui=undercurl
 " Use custom color for highlighting 'maximum width' column
 highlight ColorColumn ctermbg=grey guibg=#555555
 
-" Statusline colors
-hi StatusLineModeNormal   guibg=#928374 guifg=#1D2021 gui=bold
-hi StatusLineModeInsert   guibg=#458588 guifg=#1D2021 gui=bold
-hi StatusLineModeVisual   guibg=#b8bb26 guifg=#1D2021 gui=bold
-hi StatusLineModeReplace  guibg=#fb4934 guifg=#1D2021 gui=bold
-hi StatusLineModeCommand  guibg=#d79921 guifg=#1D2021 gui=bold
-hi StatusLineModeOther    guibg=#689D6A guifg=#1D2021 gui=bold
+" Statusline colors (from Gruvbox bright palette)
+hi StatusLineModeNormal  guibg=#BDAE93 guifg=#1D2021 gui=bold
+hi StatusLineModeInsert  guibg=#83A598 guifg=#1D2021 gui=bold
+hi StatusLineModeVisual  guibg=#B8BB26 guifg=#1D2021 gui=bold
+hi StatusLineModeReplace guibg=#FB4934 guifg=#1D2021 gui=bold
+hi StatusLineModeCommand guibg=#FABD2F guifg=#1D2021 gui=bold
+hi StatusLineModeOther   guibg=#8EC07C guifg=#1D2021 gui=bold
 
-hi StatusLineActive       guibg=#3C3836 guifg=#EBDBB2
-hi StatusLineInactive     guibg=#3C3836 guifg=#928374
-hi StatusLineDevinfo      guibg=#504945 guifg=#EBDBB2
-hi link StatusLineFilename StatusLineInactive
-hi StatusLineFileinfo     guibg=#504945 guifg=#EBDBB2
+hi link StatusLineInactive StatusLineNC
+hi link StatusLineDevinfo  StatusLine
+hi link StatusLineFilename StatusLineNC
+hi link StatusLineFileinfo StatusLine
+
+" Tabline colors (from Gruvbox palette)
+hi TabLineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold
+hi TabLineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold
+hi link TabLineHidden StatusLineNC
+
+hi TabLineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold
+hi TabLineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold
+hi TabLineModifiedHidden  guibg=#076678 guifg=#BDAE93
+
+hi TabLineFill NONE

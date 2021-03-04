@@ -58,10 +58,10 @@ nnoremap <C-p> <C-w>p
 tnoremap <C-h> <C-\><C-N><C-w>h
 
 " Use alt + hjkl to resize windows
-nnoremap <silent> <M-j>    <cmd>resize -2<CR>
-nnoremap <silent> <M-k>    <cmd>resize +2<CR>
-nnoremap <silent> <M-h>    <cmd>vertical resize -2<CR>
-nnoremap <silent> <M-l>    <cmd>vertical resize +2<CR>
+nnoremap <silent> <M-j> <cmd>resize -2<CR>
+nnoremap <silent> <M-k> <cmd>resize +2<CR>
+nnoremap <silent> <M-h> <cmd>vertical resize -2<CR>
+nnoremap <silent> <M-l> <cmd>vertical resize +2<CR>
 
 " Alternate way to save
 nnoremap <C-s> <cmd>w<CR>
@@ -87,7 +87,7 @@ nnoremap gV `[v`]
 " inoremap <RightMouse>   <LeftMouse>
 " inoremap <RightRelease> <LeftMouse>
 
-" Make `q:` do nothing instead of opening Vim command history, because it is
+" Make `q:` do nothing instead of opening command-line-window, because it is
 " often hit by accident
 " Use c_CTRL-F or fzf's analogue
 nnoremap q: <nop>

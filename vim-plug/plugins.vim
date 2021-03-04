@@ -68,9 +68,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" Colorful icons
       Plug 'kyazdani42/nvim-web-devicons'
-
-      "" Bufferline
-      Plug 'ap/vim-buftabline'
     else
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}
