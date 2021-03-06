@@ -1,3 +1,6 @@
+" Code for custom tabline. General idea: show all listed buffers in case of
+" one tab, fall back for deafult otherwise.
+"
 " This code is a truncated version of 'ap/vim-buftabline' with the following
 " options:
 " - let g:buftabline_numbers    = 0
@@ -5,6 +8,12 @@
 " - let g:buftabline_separators = 0
 " - let g:buftabline_show       = 2
 " - let g:buftabline_plug_max   = <removed manually>
+"
+" NOTE that I also removed handling of certain isoteric edge cases which I
+" don't fully understand but in truncated code they seem to be redundant:
+" - Having extra 'centerbuf' variable which is said to 'prevent tabline
+"   jumping around when non-user buffer current (e.g. help)'.
+" - Having `set guioptions+=e` and `set guioptions-=e` in update function.
 
 function! UserBuffers() " help buffers are always unlisted, but quickfix buffers are not
   return filter(range(1,bufnr('$')),'buflisted(v:val) && "quickfix" !=? getbufvar(v:val, "&buftype")')
@@ -23,43 +32,61 @@ let s:centerbuf = winbufnr(0)
 let s:tablineat = has('tablineat')
 let s:sid = s:SID() | delfunction s:SID
 
+" NOTE: Timing execution of `TablineRender()` on 16 buffers gives around 3 ms
+" execution time (with occasional 7 ms) with rise to around 10 ms in case of
+" duplicating file names. If this is too much, consider rewriting in Lua (for
+" Neovim).
 function! TablineRender()
-  let lpad = ' '
-
-  let bufnums = UserBuffers()
-  let centerbuf = s:centerbuf " prevent tabline jumping around when non-user buffer current (e.g. help)
-
-  " pick up data on all the buffers
+  " Pick up data on all the buffers
   let tabs = []
   let path_tabs = []
   let tabs_per_tail = {}
   let currentbuf = winbufnr(0)
-  for bufnum in bufnums
-    let tab = { 'num': bufnum, 'pre': '' }
-    let tab.hilite = currentbuf == bufnum ? 'Current' : bufwinnr(bufnum) > 0 ? 'Active' : 'Hidden'
-    if currentbuf == bufnum | let [centerbuf, s:centerbuf] = [bufnum, bufnum] | endif
+  for bufnum in UserBuffers()
+    let tab = { 'num': bufnum }
+
+    " Functional label for possible clicks (see ':h statusline')
+    let tab.func_label = '%' . bufnum . '@' . s:sid . 'SwitchBuffer@'
+
+    " Determine highlight group
+    let hl_type =
+    \ currentbuf == bufnum
+    \ ? 'Current'
+    \ : bufwinnr(bufnum) > 0 ? 'Active' : 'Hidden'
+    if getbufvar(bufnum, '&modified')
+      let hl_type = 'Modified' . hl_type
+    endif
+    let tab.hl = '%#TabLine' . hl_type . '#'
+
+    if currentbuf == bufnum | let s:centerbuf = bufnum | endif
+
     let bufpath = bufname(bufnum)
     if strlen(bufpath)
+      " Process buffers which have path
       let tab.path = fnamemodify(bufpath, ':p:~:.')
-      let tab.sep = strridx(tab.path, s:dirsep, strlen(tab.path) - 2) " keep trailing dirsep
+      let tab.sep = strridx(tab.path, s:dirsep, strlen(tab.path) - 2) " Keep trailing dirsep
       let tab.label = tab.path[tab.sep + 1:]
-      if getbufvar(bufnum, '&modified')
-        let tab.hilite = 'Modified' . tab.hilite
-      endif
       let tabs_per_tail[tab.label] = get(tabs_per_tail, tab.label, 0) + 1
       let path_tabs += [tab]
-    elseif -1 < index(['nofile','acwrite'], getbufvar(bufnum, '&buftype')) " scratch buffer
+    elseif -1 < index(['nofile','acwrite'], getbufvar(bufnum, '&buftype'))
+      " Process scratch buffer
       let tab.label = '!'
-    else " unnamed file
-      let tab.label = ( getbufvar(bufnum, '&mod') ? '+' : '' ) . '*'
+    else
+      " Process unnamed buffers
+      let tab.label = '*'
     endif
+
     let tabs += [tab]
   endfor
 
-  " disambiguate same-basename files by adding trailing path segments
+  " Disambiguate same-basename files by adding trailing path segments
+  " Algorithm: iteratively add parent directories to duplicated buffer labels
+  " until there are no duplicates
   while len(filter(tabs_per_tail, 'v:val > 1'))
     let [ambiguous, tabs_per_tail] = [tabs_per_tail, {}]
     for tab in path_tabs
+      " Add one parent directory if there is any and if tab's label is
+      " duplicated
       if -1 < tab.sep && has_key(ambiguous, tab.label)
         let tab.sep = strridx(tab.path, s:dirsep, tab.sep - 1)
         let tab.label = tab.path[tab.sep + 1:]
@@ -68,19 +95,18 @@ function! TablineRender()
     endfor
   endwhile
 
-  " now keep the current buffer center-screen as much as possible:
+  " Now keep the current buffer center-screen as much as possible:
 
-  " 1. setup
+  " 1. Setup
   let lft = { 'lasttab':  0, 'cut':  '.', 'indicator': '<', 'width': 0, 'half': &columns / 2 }
   let rgt = { 'lasttab': -1, 'cut': '.$', 'indicator': '>', 'width': 0, 'half': &columns - lft.half }
 
-  " 2. sum the string lengths for the left and right halves
+  " 2. Sum the string lengths for the left and right halves
   let currentside = lft
-  let lpad_width = strwidth(lpad)
   for tab in tabs
-    let tab.width = lpad_width + strwidth(tab.pre) + strwidth(tab.label) + 1
-    let tab.label = lpad . tab.pre . substitute(strtrans(tab.label), '%', '%%', 'g') . ' '
-    if centerbuf == tab.num
+    let tab.width = 1 + strwidth(tab.label) + 1
+    let tab.label = ' ' . substitute(strtrans(tab.label), '%', '%%', 'g') . ' '
+    if s:centerbuf == tab.num
       let halfwidth = tab.width / 2
       let lft.width += halfwidth
       let rgt.width += tab.width - halfwidth
@@ -89,12 +115,12 @@ function! TablineRender()
     endif
     let currentside.width += tab.width
   endfor
-  if currentside is lft " centered buffer not seen?
-    " then blame any overflow on the right side, to protect the left
+  if currentside is lft " Centered buffer not seen?
+    " Then blame any overflow on the right side, to protect the left
     let [lft.width, rgt.width] = [0, lft.width]
   endif
 
-  " 3. toss away tabs and pieces until all fits:
+  " 3. Toss away tabs and pieces until all fits:
   if ( lft.width + rgt.width ) > &columns
     let oversized
     \ = lft.width < lft.half ? [ [ rgt, &columns - lft.width ] ]
@@ -102,11 +128,11 @@ function! TablineRender()
     \ :                        [ [ lft, lft.half ], [ rgt, rgt.half ] ]
     for [side, budget] in oversized
       let delta = side.width - budget
-      " toss entire tabs to close the distance
+      " Toss entire tabs to close the distance
       while delta >= tabs[side.lasttab].width
         let delta -= remove(tabs, side.lasttab).width
       endwhile
-      " then snip at the last one to make it fit
+      " Then snip at the last one to make it fit
       let endtab = tabs[side.lasttab]
       while delta > ( endtab.width - strwidth(strtrans(endtab.label)) )
         let endtab.label = substitute(endtab.label, side.cut, '', '')
@@ -115,12 +141,14 @@ function! TablineRender()
     endfor
   endif
 
-  if len(tabs) | let tabs[0].label = substitute(tabs[0].label, lpad, ' ', '') | endif
+  " If available add possibility of clicking on buffer tabs
+  if s:tablineat
+    let tab_strings = map(tabs, 'v:val.hl . v:val.func_label . v:val.label')
+  else
+    let tab_strings = map(tabs, 'v:val.hl . v:val.label')
+  endif
 
-  let swallowclicks = '%'.(1 + tabpagenr('$')).'X'
-  return s:tablineat
-    \ ? join(map(tabs,'"%#TabLine".v:val.hilite."#" . "%".v:val.num."@'.s:sid.'SwitchBuffer@" . strtrans(v:val.label)'),'') . '%#TabLineFill#' . swallowclicks
-    \ : swallowclicks . join(map(tabs,'"%#TabLine".v:val.hilite."#" . strtrans(v:val.label)'),'') . '%#TabLineFill#'
+  return join(tab_strings, '') . '%#TabLineFill#'
 endfunction
 
 function! TablineUpdate()
