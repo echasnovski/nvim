@@ -32,6 +32,15 @@ let s:centerbuf = winbufnr(0)
 let s:tablineat = has('tablineat')
 let s:sid = s:SID() | delfunction s:SID
 
+" Track all scratch and unnamed buffers for disambiguation. These dictionaries
+" are designed to store 'sequential' buffer identifier. This approach allows
+" to have the following behavior:
+" - Create three scratch (or unnamed) buffers.
+" - Delete second one.
+" - Tab label for third one remains the same.
+let s:scratch_tabs = {}
+let s:unnamed_tabs = {}
+
 " NOTE: Timing execution of `TablineRender()` on 16 buffers gives around 3 ms
 " execution time (with occasional 7 ms) with rise to around 10 ms in case of
 " duplicating file names. If this is too much, consider rewriting in Lua (for
@@ -70,10 +79,28 @@ function! TablineRender()
       let path_tabs += [tab]
     elseif -1 < index(['nofile','acwrite'], getbufvar(bufnum, '&buftype'))
       " Process scratch buffer
-      let tab.label = '!'
+      if has_key(s:scratch_tabs, bufnum) == 0
+        let s:scratch_tabs[bufnum] = len(s:scratch_tabs) + 1
+      endif
+      let tab_id = s:scratch_tabs[bufnum]
+      "" Only show 'sequential' id starting from second tab
+      if tab_id == 1
+        let tab.label = '!'
+      else
+        let tab.label = '!(' . tab_id . ')'
+      endif
     else
-      " Process unnamed buffers
-      let tab.label = '*'
+      " Process unnamed buffer
+      if has_key(s:unnamed_tabs, bufnum) == 0
+        let s:unnamed_tabs[bufnum] = len(s:unnamed_tabs) + 1
+      endif
+      let tab_id = s:unnamed_tabs[bufnum]
+      "" Only show 'sequential' id starting from second tab
+      if tab_id == 1
+        let tab.label = '*'
+      else
+        let tab.label = '*(' . tab_id . ')'
+      endif
     endif
 
     let tabs += [tab]
