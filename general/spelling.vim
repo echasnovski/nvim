@@ -9,7 +9,7 @@ if !exists('g:vscode')
   " Use specific dictionaries
   set dictionary=~/.config/nvim/dict/english.txt
 
-  if has("nvim-0.5.0")
+  if has("nvim-0.5")
     " Treat parts of camelCase words as seprate words
     set spelloptions=camel
   endif

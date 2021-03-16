@@ -38,7 +38,7 @@ endfunction
 autocmd VimEnter,BufWinEnter * call <SID>hi_base_syntax()
 
 "" Buffers with treesitter highlighting
-if has("nvim-0.5.0")
+if has("nvim-0.5")
   hi TSPunctBracket ctermfg=208 guifg=#FF8700
   if &background == "light"
     hi TSOperator ctermfg=Black guifg=#000000 cterm=bold gui=bold

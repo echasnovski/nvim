@@ -1,8 +1,10 @@
-local nvim_lsp = require('lspconfig')
-local completion = require('completion')
+local has_lspconfig, nvim_lsp = pcall(require, 'lspconfig')
+if not has_lspconfig then return end
+
+local has_completion, completion = pcall(require, 'completion')
 
 local on_attach = function(client, bufnr)
-  completion.on_attach()
+  if has_completion then completion.on_attach() end
 
   local function buf_set_keymap(...) vim.api.nvim_buf_set_keymap(bufnr, ...) end
   local function buf_set_option(...) vim.api.nvim_buf_set_option(bufnr, ...) end
@@ -48,10 +50,9 @@ local on_attach = function(client, bufnr)
   end
 end
 
--- Do not update diagnostics in insert mode
 vim.lsp.handlers["textDocument/publishDiagnostics"] = vim.lsp.with(
     vim.lsp.diagnostic.on_publish_diagnostics, {
-      -- Show sings
+      -- Show gutter sings
       signs = {
         -- With highest priority
         priority = 9999,

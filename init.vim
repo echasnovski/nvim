@@ -15,7 +15,7 @@ else
   source $HOME/.config/nvim/general/spelling.vim
   source $HOME/.config/nvim/general/tabline.vim
 
-  if has("nvim-0.5.0")
+  if has("nvim-0.5")
     for s:fpath in split(globpath('$HOME/.config/nvim/lua', '*.lua'), '\n')
         exe 'luafile' s:fpath
     endfor

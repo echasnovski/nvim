@@ -29,14 +29,19 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   " Pairs of handy bracket mappings
   Plug 'tpope/vim-unimpaired'
 
-  if has("nvim-0.5.0") == 0
+  if has("nvim-0.5") == 0
     " Python movements and text objects
     Plug 'jeetsukumaran/vim-pythonsense'
   endif
 
   if !exists('g:vscode')
     " Neovim version-specific sets of plugins
-    if has("nvim-0.5.0")
+    if has("nvim-0.5")
+      "" Fuzzy finder for future
+      " Plug 'nvim-lua/popup.nvim'
+      " Plug 'nvim-lua/plenary.nvim'
+      " Plug 'nvim-telescope/telescope.nvim'
+
       "" Completion
       Plug 'nvim-lua/completion-nvim'
       "" Other option of completion. Some say that it is far faster on big
@@ -49,9 +54,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" - No popup with function signature when typing inside `()`. This is
       ""   currently out of scope:
       ""   https://github.com/hrsh7th/nvim-compe/issues/120#issuecomment-777333663
-      "" - Currently doesn't work with 'multibyte characters', i.e. no
-      ""   completion for Russian language (even for current buffer). Issue:
-      ""   https://github.com/hrsh7th/nvim-compe/issues/167
       " Plug 'hrsh7th/nvim-compe'
 
       "" Language server

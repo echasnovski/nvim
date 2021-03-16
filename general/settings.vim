@@ -65,4 +65,8 @@ if !exists('g:vscode')
   let g:python3_host_prog = expand("~/.pyenv/versions/neovim/bin/python3.8")
   let g:node_host_prog = expand("~/.nvm/versions/node/v14.15.2/bin/node")
 
+  if has("nvim-0.5")
+    " Highlight yanked text
+    autocmd TextYankPost * silent! lua vim.highlight.on_yank()
+  endif
 endif

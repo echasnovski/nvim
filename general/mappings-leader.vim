@@ -131,7 +131,7 @@ let g:which_key_map.i = {
   \ }
 
 " l is for 'LSP' (Language Server Protocol)
-if has("nvim-0.5.0")
+if has("nvim-0.5")
   " Actual commands are defined in settings for 'nvim-lspconfig'
   let g:which_key_map.l = {
     \ 'name' : '+LSP' ,
