@@ -35,9 +35,11 @@ let g:which_key_map.b = {
   \ }
 
 " e is for 'explore'
+"" NOTE: `:NvimTreeToggle` requires 'kyazdani42/nvim-tree.lua'
 let g:which_key_map.e = {
   \ 'name' : '+explore' ,
   \ 'f' : [':RnvimrToggle'   , 'files'],
+  \ 't' : [':NvimTreeToggle' , 'tree'],
   \ 'u' : [':UndotreeToggle' , 'undo-tree'],
   \ }
 

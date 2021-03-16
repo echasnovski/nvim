@@ -68,7 +68,8 @@ function Statusline:set_active()
   local mode_info = self.modes[fn.mode()]
 
   local mode        = self:section_mode{mode_info = mode_info, trunc_width = 120}
-  local spell       = self:section_spell{}
+  local spell       = self:section_spell{trunc_width = 120}
+  local wrap        = self:section_wrap{}
   local git         = self:section_git{trunc_width = 75}
   local diagnostics = self:section_diagnostics{trunc_width = 75}
   local filename    = self:section_filename{trunc_width = 140}
@@ -80,6 +81,7 @@ function Statusline:set_active()
   return combine_sections({
     {string = mode,        hl = mode_info.hl},
     {string = spell,       hl = nil}, -- Copy highliting from previous section
+    {string = wrap,        hl = nil}, -- Copy highliting from previous section
     {string = git,         hl = '%#StatusLineDevinfo#'},
     {string = diagnostics, hl = nil}, -- Copy highliting from previous section
     '%<', -- Mark general truncate point
@@ -125,10 +127,19 @@ function Statusline:section_mode(arg)
 end
 
 -- Spell
-function Statusline:section_spell()
+function Statusline:section_spell(arg)
   if not vim.wo.spell then return '' end
 
+  if is_truncated(arg.trunc_width) then return 'SPELL' end
+
   return string.format('SPELL(%s)', vim.bo.spelllang)
+end
+
+-- Wrap
+function Statusline:section_wrap()
+  if not vim.wo.wrap then return '' end
+
+  return 'WRAP'
 end
 
 -- Git
@@ -296,5 +307,5 @@ end
 -- Location inside buffer
 function Statusline:section_location(arg)
   -- Use virtual column number to allow update when paste last column
-  return '(%3l|%L):(%2v|%-2{col("$") - 1})'
+  return '%l|%L│%2v|%-2{col("$") - 1}'
 end

@@ -1,4 +1,19 @@
 " Wrap-unwrap text
+function StartWrap()
+  setlocal wrap linebreak nolist
+  setlocal display+=lastline
+  noremap  <buffer> <silent> <Up>   gk
+  noremap  <buffer> <silent> <Down> gj
+  noremap  <buffer> <silent> <Home> g0
+  noremap  <buffer> <silent> <End>  g$
+  " Using `<cmd>normal!` doesn't trigger switch to normal mode (which might
+  " make statusline's mode section 'blink')
+  inoremap <buffer> <silent> <Up>   <cmd>normal! gk<CR>
+  inoremap <buffer> <silent> <Down> <cmd>normal! gj<CR>
+  inoremap <buffer> <silent> <Home> <cmd>normal! g0<CR>
+  inoremap <buffer> <silent> <End>  <cmd>normal! g$<CR>
+endfunction
+
 function ToggleWrap()
   if &wrap
     echo "Wrap OFF"
@@ -13,30 +28,8 @@ function ToggleWrap()
     silent! iunmap <buffer> <End>
   else
     echo "Wrap ON"
-    setlocal wrap linebreak nolist
-    setlocal display+=lastline
-    noremap  <buffer> <silent> <Up>   gk
-    noremap  <buffer> <silent> <Down> gj
-    noremap  <buffer> <silent> <Home> g<Home>
-    noremap  <buffer> <silent> <End>  g<End>
-    inoremap <buffer> <silent> <Up>   <C-o>gk
-    inoremap <buffer> <silent> <Down> <C-o>gj
-    inoremap <buffer> <silent> <Home> <C-o>g<Home>
-    inoremap <buffer> <silent> <End>  <C-o>g<End>
+    call StartWrap()
   endif
-endfunction
-
-function StartWrap()
-  setlocal wrap linebreak nolist
-  setlocal display+=lastline
-  noremap  <buffer> <silent> <Up>   gk
-  noremap  <buffer> <silent> <Down> gj
-  noremap  <buffer> <silent> <Home> g<Home>
-  noremap  <buffer> <silent> <End>  g<End>
-  inoremap <buffer> <silent> <Up>   <C-o>gk
-  inoremap <buffer> <silent> <Down> <C-o>gj
-  inoremap <buffer> <silent> <Home> <C-o>g<Home>
-  inoremap <buffer> <silent> <End>  <C-o>g<End>
 endfunction
 
 " Cycle trough git-gutter hunks in a file

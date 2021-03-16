@@ -68,6 +68,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" Colorful icons
       Plug 'kyazdani42/nvim-web-devicons'
+
+      "" File tree explorer
+      " Plug 'kyazdani42/nvim-tree.lua'
     else
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}
