@@ -1,5 +1,18 @@
 require'nvim-treesitter.configs'.setup {
-  ensure_installed = { "json", "python", "lua", "bash", "html", "julia", "css", "regex", "rst", "yaml", "toml"},
+  ensure_installed = {
+    "bash",
+    "css",
+    "html",
+    "json",
+    "julia",
+    "lua",
+    "python",
+    "r",
+    "regex",
+    "rst",
+    "toml",
+    "yaml",
+  },
   highlight = { enable = true },
   textobjects = {
     -- Not having textobjects for arguments (`parameter.inner` and
@@ -48,19 +61,4 @@ require'nvim-treesitter.configs'.setup {
   --     node_decremental = "grm",
   --   },
   -- },
-}
-
--- Setup R parser
--- To install it:
--- - Install tree-sitter-cli:
---   https://tree-sitter.github.io/tree-sitter/creating-parsers#installation
--- - Run `:TSInstallFromGrammar r`
-local parser_config = require "nvim-treesitter.parsers".get_parser_configs()
-parser_config.r = {
-  install_info = {
-    url = "https://github.com/r-lib/tree-sitter-r", -- local path or git repo
-    files = { "src/parser.c" }
-  },
-  filetype = "r", -- if filetype does not agrees with parser name
-  used_by = { "rmd" } -- additional filetypes that use this parser
 }
