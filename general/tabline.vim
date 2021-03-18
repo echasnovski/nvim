@@ -46,6 +46,8 @@ let s:unnamed_tabs = {}
 " duplicating file names. If this is too much, consider rewriting in Lua (for
 " Neovim).
 function! TablineRender()
+  " let start_time = reltime()
+
   " Pick up data on all the buffers
   let tabs = []
   let path_tabs = []
@@ -174,6 +176,10 @@ function! TablineRender()
   else
     let tab_strings = map(tabs, 'v:val.hl . v:val.label')
   endif
+
+  " let res = join(tab_strings, '') . '%#TabLineFill#'
+  " echo reltimefloat(reltime(start_time))
+  " return res
 
   return join(tab_strings, '') . '%#TabLineFill#'
 endfunction
