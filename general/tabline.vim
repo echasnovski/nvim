@@ -192,11 +192,11 @@ function! TablineUpdate()
   endif
 endfunction
 
-augroup TabLine
-  autocmd!
-  autocmd VimEnter   * call TablineUpdate()
-  autocmd TabEnter   * call TablineUpdate()
-  autocmd BufAdd     * call TablineUpdate()
-  autocmd FileType  qf call TablineUpdate()
-  autocmd BufDelete  * call TablineUpdate()
-augroup END
+" augroup TabLine
+"   autocmd!
+"   autocmd VimEnter   * call TablineUpdate()
+"   autocmd TabEnter   * call TablineUpdate()
+"   autocmd BufAdd     * call TablineUpdate()
+"   autocmd FileType  qf call TablineUpdate()
+"   autocmd BufDelete  * call TablineUpdate()
+" augroup END
