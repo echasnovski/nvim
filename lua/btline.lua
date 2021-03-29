@@ -1,7 +1,10 @@
+-- Code for custom tabline (called 'btline', short of 'buftabline'). General
+-- idea: show all listed buffers in case of one tab, fall back for deafult
+-- otherwise.
 local fn = vim.fn
 
 vim.api.nvim_exec([[
-  augroup TabLine
+  augroup Btline
     autocmd!
     autocmd VimEnter   * lua require'btline':update_tabline()
     autocmd TabEnter   * lua require'btline':update_tabline()
@@ -78,7 +81,7 @@ function Btline:construct_highlight(bufnum)
     hl_type = 'Modified' .. hl_type
   end
 
-  return string.format('%%#TabLine%s#', hl_type)
+  return string.format('%%#Btline%s#', hl_type)
 end
 
 -- Tab's clickable action (if supported)
@@ -186,6 +189,13 @@ function Btline:finalize_labels()
 
   -- Postprocess: add padding
   for _, tab in pairs(self.tabs) do
+    -- -- Currently using icons doesn't quite work because later in
+    -- -- `Btline:fit_width()` width of label is computed using `string.len()`
+    -- -- which computes number of bytes in string. Correct approach would be to
+    -- -- use `utf8.len()`, but it is in Lua 5.3+.
+    -- local extension = fn.fnamemodify(tab.label, ':e')
+    -- local icon = require'nvim-web-devicons'.get_icon(tab.label, extension, { default = true })
+    -- tab.label = string.format('%s %s ', icon, tab.label)
     tab.label = string.format(' %s ', tab.label)
   end
 end
@@ -223,6 +233,7 @@ function Btline:fit_width()
   local center = 1
   local tot_width = 0
   for bufnum, tab in pairs(self.tabs) do
+    -- Better to use `utf8.len()` but it is only available in Lua 5.3+
     tab.label_width = tab.label:len()
     tab.chars_on_left = tot_width
 
@@ -297,7 +308,7 @@ function Btline:concat_tabs()
     t[#t + 1] = tab.hl .. tab.tabfunc .. tab.label:gsub('%%', '%%%%')
   end
 
-  return table.concat(t, '') .. '%#TabLineFill#'
+  return table.concat(t, '') .. '%#BtlineFill#'
 end
 
 return Btline

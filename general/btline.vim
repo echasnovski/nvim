@@ -1,5 +1,7 @@
-" Code for custom tabline. General idea: show all listed buffers in case of
-" one tab, fall back for deafult otherwise.
+" Vimscript code for custom tabline (called 'btline', short of 'buftabline').
+" General idea: show all listed buffers in case of one tab, fall back for
+" deafult otherwise. NOTE: this is superseded by a more faster Lua
+" implementation ('lua/btline.lua'). Kept here for historical reasons.
 "
 " This code is a truncated version of 'ap/vim-buftabline' with the following
 " options:
@@ -38,14 +40,13 @@ let s:sid = s:SID() | delfunction s:SID
 " - Create three scratch (or unnamed) buffers.
 " - Delete second one.
 " - Tab label for third one remains the same.
-let s:scratch_tabs = {}
 let s:unnamed_tabs = {}
 
-" NOTE: Timing execution of `TablineRender()` on 16 buffers gives around 3 ms
+" NOTE: Timing execution of `BtlineRender()` on 16 buffers gives around 3 ms
 " execution time (with occasional 7 ms) with rise to around 10 ms in case of
 " duplicating file names. If this is too much, consider rewriting in Lua (for
 " Neovim).
-function! TablineRender()
+function! BtlineRender()
   " let start_time = reltime()
 
   " Pick up data on all the buffers
@@ -67,7 +68,7 @@ function! TablineRender()
     if getbufvar(bufnum, '&modified')
       let hl_type = 'Modified' . hl_type
     endif
-    let tab.hl = '%#TabLine' . hl_type . '#'
+    let tab.hl = '%#Btline' . hl_type . '#'
 
     if currentbuf == bufnum | let s:centerbuf = bufnum | endif
 
@@ -81,10 +82,10 @@ function! TablineRender()
       let path_tabs += [tab]
     elseif -1 < index(['nofile','acwrite'], getbufvar(bufnum, '&buftype'))
       " Process scratch buffer
-      if has_key(s:scratch_tabs, bufnum) == 0
-        let s:scratch_tabs[bufnum] = len(s:scratch_tabs) + 1
+      if has_key(s:unnamed_tabs, bufnum) == 0
+        let s:unnamed_tabs[bufnum] = len(s:unnamed_tabs) + 1
       endif
-      let tab_id = s:scratch_tabs[bufnum]
+      let tab_id = s:unnamed_tabs[bufnum]
       "" Only show 'sequential' id starting from second tab
       if tab_id == 1
         let tab.label = '!'
@@ -177,26 +178,26 @@ function! TablineRender()
     let tab_strings = map(tabs, 'v:val.hl . v:val.label')
   endif
 
-  " let res = join(tab_strings, '') . '%#TabLineFill#'
+  " let res = join(tab_strings, '') . '%#BtlineFill#'
   " echo reltimefloat(reltime(start_time))
   " return res
 
-  return join(tab_strings, '') . '%#TabLineFill#'
+  return join(tab_strings, '') . '%#BtlineFill#'
 endfunction
 
-function! TablineUpdate()
+function! BtlineUpdate()
   if tabpagenr('$') > 1
     set tabline=
   else
-    set tabline=%!TablineRender()
+    set tabline=%!BtlineRender()
   endif
 endfunction
 
-" augroup TabLine
-"   autocmd!
-"   autocmd VimEnter   * call TablineUpdate()
-"   autocmd TabEnter   * call TablineUpdate()
-"   autocmd BufAdd     * call TablineUpdate()
-"   autocmd FileType  qf call TablineUpdate()
-"   autocmd BufDelete  * call TablineUpdate()
-" augroup END
+augroup Btline
+  autocmd!
+  autocmd VimEnter   * call BtlineUpdate()
+  autocmd TabEnter   * call BtlineUpdate()
+  autocmd BufAdd     * call BtlineUpdate()
+  autocmd FileType  qf call BtlineUpdate()
+  autocmd BufDelete  * call BtlineUpdate()
+augroup END

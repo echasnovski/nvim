@@ -1,6 +1,7 @@
--- Heavily inspired by:
+-- Custom statusline. Heavily inspired by:
 -- https://elianiva.me/post/neovim-lua-statusline (blogpost)
 -- https://github.com/elianiva/dotfiles/blob/master/nvim/.config/nvim/lua/modules/_statusline.lua (Github)
+--
 -- Suggested dependencies (provide extra functionality, statusline will work without them):
 -- - Nerd font (to support git and diagnostics icon).
 -- - Plugin 'airblade/vim-gitgutter' for Git signs. If missing, no git signs
@@ -270,9 +271,7 @@ local get_filetype_icon = function()
   -- By default use 'nvim-web-devicons', fallback to 'vim-devicons'
   if has_devicons then
     local file_name, file_ext = fn.expand('%:t'), fn.expand('%:e')
-    return devicons.get_icon(file_name, file_ext) or
-      -- Fallback for some extensions (like '.R' and '.r')
-      devicons.get_icon(string.lower(file_name), string.lower(file_ext), { default = true })
+    return devicons.get_icon(file_name, file_ext, { default = true })
   elseif fn.exists('*WebDevIconsGetFileTypeSymbol') ~= 0 then
     return fn.WebDevIconsGetFileTypeSymbol()
   end

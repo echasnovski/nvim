@@ -77,13 +77,13 @@ hi link StatusLineDevinfo  StatusLine
 hi link StatusLineFilename StatusLineNC
 hi link StatusLineFileinfo StatusLine
 
-" Tabline colors (from Gruvbox palette)
-hi TabLineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold
-hi TabLineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold
-hi link TabLineHidden StatusLineNC
+" Btline (custom tabline) colors (from Gruvbox palette)
+hi BtlineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold
+hi BtlineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold
+hi link BtlineHidden StatusLineNC
 
-hi TabLineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold
-hi TabLineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold
-hi TabLineModifiedHidden  guibg=#076678 guifg=#BDAE93
+hi BtlineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold
+hi BtlineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold
+hi BtlineModifiedHidden  guibg=#076678 guifg=#BDAE93
 
-hi TabLineFill NONE
+hi BtlineFill NONE

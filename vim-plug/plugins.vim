@@ -48,6 +48,8 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" projects than 'completion-nvim'. For suggested configuration see
       "" README on Github. There were some problems which I didn't find a way
       "" to solve:
+      "" - No easy incorporation of Vim's completion (opened buffers,
+      ""   dictionary, etc.).
       "" - Hard to setup other sources of completion. For example, completion
       ""   from open buffers. Currently under discussion:
       ""   https://github.com/hrsh7th/nvim-compe/issues/147
