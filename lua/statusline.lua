@@ -238,7 +238,6 @@ end
 
 -- File name
 function Statusline:section_filename(arg)
-  local name
   -- In terminal always use plain name
   if vim.bo.buftype == 'terminal' then
     return '%t'
@@ -259,9 +258,9 @@ local get_filesize = function()
   if size < 1024 then
     data = size .. 'B'
   elseif size < 1048576 then
-    data = string.format('%.2f', size / 1024) .. 'KiB'
+    data = string.format('%.2fKiB', size / 1024)
   else
-    data = string.format('%.2f', size / 1048576) .. 'MiB'
+    data = string.format('%.2fMiB', size / 1048576)
   end
 
   return data
@@ -291,9 +290,7 @@ function Statusline:section_fileinfo(arg)
   if icon ~= '' then filetype = icon .. ' ' .. filetype end
 
   -- Construct output string if truncated
-  if is_truncated(arg.trunc_width) then
-    return string.format('%s', filetype)
-  end
+  if is_truncated(arg.trunc_width) then return filetype end
 
   -- Construct output string with extra file info
   local encoding = vim.bo.fileencoding or vim.bo.encoding

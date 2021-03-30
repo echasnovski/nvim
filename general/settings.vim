@@ -39,6 +39,7 @@ if !exists('g:vscode')
   set virtualedit=block  " Allow going past the end of line in visual block mode
   set nostartofline      " Don't position cursor on line start after certain operations
   set breakindent        " Indent wrapped lines to match line start
+  set modeline           " Allow modeline
 
   set completeopt=menuone,noinsert,noselect " Customize completions
 
