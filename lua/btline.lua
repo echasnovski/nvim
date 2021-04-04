@@ -232,7 +232,9 @@ function Btline:fit_width()
   -- Compute label width data
   local center = 1
   local tot_width = 0
-  for bufnum, tab in pairs(self.tabs) do
+  -- Tabs should be processed here in order of their appearance
+  for _, bufnum in pairs(self.tabs_order) do
+    local tab = self.tabs[bufnum]
     -- Better to use `utf8.len()` but it is only available in Lua 5.3+
     tab.label_width = tab.label:len()
     tab.chars_on_left = tot_width
@@ -244,7 +246,6 @@ function Btline:fit_width()
       -- truncation
       center = tot_width
     end
-
   end
 
   local display_interval = self:compute_display_interval(center, tot_width)
@@ -264,10 +265,16 @@ end
 function Btline:compute_display_interval(center, tabline_width)
   -- left - first character to be displayed (starts with 1)
   -- right - last character to be displayed
+  -- Conditions to be satisfied:
+  -- 1) right - left + 1 = math.min(tot_width, tabline_width)
+  -- 2) 1 <= left <= tabline_width; 1 <= right <= tabline_width
+
   local tot_width = vim.o.columns
 
-  local right = math.min(tabline_width, center + 0.5 * tot_width)
-  local left = math.max(1, right - tot_width)
+  -- Usage of `math.ceil` is crucial to avoid non-integer values which might
+  -- affect total width of output tabline string
+  local right = math.min(tabline_width, math.ceil(center + 0.5 * tot_width))
+  local left = math.max(1, right - tot_width + 1)
   right = left + math.min(tot_width, tabline_width) - 1
 
   return {left, right}
