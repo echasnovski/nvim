@@ -144,58 +144,78 @@ function Statusline:section_wrap()
 end
 
 -- Git
-local function get_git_branch()
-  if fn.exists('*FugitiveHead') == 0 then return '<no fugitive>' end
+-- NOTE: Everything is implemented through updating some custom variable to
+-- increase performance because certain actions are only done when needed and
+-- not on every statusline update. For comparison: if called on every
+-- statusline update, total statusline execution time is ~1.1ms; with current
+-- approach it drops to ~0.2ms.
+---- Git branch
+---- Update git branch on every buffer enter and after Neovim gained focus
+---- (detect outside change); also after leaving command line (detect
+---- 'fugitive' change)
+vim.cmd [[autocmd BufEnter,FocusGained,CmdlineLeave * lua Statusline:update_git_branch()]]
 
-  -- Use commit hash truncated to 7 characters in case of detached HEAD
-  local branch = fn.FugitiveHead(7)
-  if branch == '' then return '<no branch>' end
-  return branch
+Statusline.git_branch = ''
+
+function Statusline:update_git_branch()
+  if fn.exists('*FugitiveHead') == 0 then
+    self.git_branch = '<no fugitive>'
+    return
+  end
+
+  -- Defer updating of `Statusline.git_branch` because otherwise it will
+  -- execute `fn.FugitiveHead()` too soon which will still return
+  -- previous branch. This is mostly the case when switching branch from
+  -- Neovim's command line. NOTE that this behavior seems to depend on
+  -- capabilities of a current machine: there were cases of this both working
+  -- (on slower machine) and not working (on faster machine) when without
+  -- defer.
+  local timer = vim.loop.new_timer()
+  timer:start(vim.o.updatetime, 0, function()
+    vim.schedule(function()
+      -- Use commit hash truncated to 7 characters in case of detached HEAD
+      local branch = fn.FugitiveHead(7)
+      if branch == '' then branch = '<no branch>' end
+      self.git_branch = branch
+    end)
+  end)
 end
 
-local function get_git_signs()
-  if fn.exists('*GitGutterGetHunkSummary') == 0 then return nil end
+---- Git diff signs
+---- Update git signs on every buffer enter (detect signs for buffer) and every
+---- time 'gitgutter' says that change occured
+vim.cmd [[autocmd BufEnter * lua Statusline:update_git_signs()]]
+vim.cmd [[autocmd User GitGutter lua Statusline:update_git_signs()]]
+
+Statusline.git_signs = nil
+
+function Statusline:update_git_signs()
+  if fn.exists('*GitGutterGetHunkSummary') == 0 then
+    self.git_signs = nil
+    return
+  end
 
   local signs = fn.GitGutterGetHunkSummary()
   local res = {}
-  if signs[1] > 0 then table.insert(res, '+' .. signs[1]) end
-  if signs[2] > 0 then table.insert(res, '~' .. signs[2]) end
-  if signs[3] > 0 then table.insert(res, '-' .. signs[3]) end
+  if signs[1] > 0 then res[#res + 1] = '+' .. signs[1] end
+  if signs[2] > 0 then res[#res + 1] = '~' .. signs[2] end
+  if signs[3] > 0 then res[#res + 1] = '-' .. signs[3] end
 
   if next(res) == nil then
-    return nil
+    self.git_signs = nil
+  else
+    self.git_signs = table.concat(res, ' ')
   end
-  return table.concat(res, ' ')
 end
 
 function Statusline:section_git(arg)
   if isnt_normal_buffer() then return '' end
 
-  -- NOTE: this information doesn't change on every entry but these functions
-  -- are called on every statusline update (which is **very** often). Currently
-  -- this doesn't introduce noticeable overhead because of a smart way used
-  -- functions of 'vim-gitgutter' and 'vim-fugitive' are written (seems like
-  -- they just take value of certain buffer variable, which is quick).
-  -- If ever encounter overhead, write 'update_val()' wrapper which updates
-  -- module's certain variable and call it only on certain event. Example:
-  -- ```lua
-  -- Statusline.git_signs_str = ''
-  -- Statusline.update_git_signs = function(self)
-  --   self.git_signs_str = get_git_signs()
-  -- end
-  -- vim.api.nvim_exec([[
-  --   au BufEnter,User GitGutter lua Statusline:update_git_signs()
-  -- ]], false)
-  -- ```
   local res
-  local branch = get_git_branch()
-
   if is_truncated(arg.trunc_width) then
-    res = branch
+    res = self.git_branch
   else
-    local signs = get_git_signs()
-
-    res = table.concat({branch, signs}, ' ')
+    res = table.concat({self.git_branch, self.git_signs}, ' ')
   end
 
   if (res == nil) or res == '' then res = '-' end
