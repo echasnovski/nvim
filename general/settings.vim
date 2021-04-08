@@ -63,11 +63,18 @@ if !exists('g:vscode')
   " Start integrated terminal already in insert mode
   autocmd TermOpen * startinsert
 
-  let g:python3_host_prog = expand("~/.pyenv/versions/neovim/bin/python3.8")
-  let g:node_host_prog = expand("~/.nvm/versions/node/v14.15.2/bin/node")
+  " Highlight current word
+  "" NOTE: if this updates too frequently, use `CursorHold`
+  autocmd CursorMoved * call HighlightCurrentWord()
+  "" Force remove highlighing when entering Insert or Terminal mode
+  autocmd InsertEnter,TermEnter * call UnHighlightCurrentWord()
 
+  " Highlight yanked text
   if has("nvim-0.5")
-    " Highlight yanked text
     autocmd TextYankPost * silent! lua vim.highlight.on_yank()
   endif
+
+  " Define important executables
+  let g:python3_host_prog = expand("~/.pyenv/versions/neovim/bin/python3.8")
+  let g:node_host_prog = expand("~/.nvm/versions/node/v14.15.2/bin/node")
 endif

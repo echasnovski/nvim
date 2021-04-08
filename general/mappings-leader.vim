@@ -187,6 +187,7 @@ endif
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'                      , 'arguments split'],
+  \ 'c' : [':call CurrentWordToggle()'     , 'current word hl toggle'],
   \ 'd' : [':DogeGenerate'                 , 'document'],
   \ 'h' : [':SidewaysLeft'                 , 'move arg left'],
   \ 'H' : [':TSBufToggle highlight'        , 'highlight toggle'],

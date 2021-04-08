@@ -62,7 +62,10 @@ hi SpellLocal   guisp=#70F0F0   gui=undercurl
 hi SpellRare    guisp=#FFFFFF   gui=undercurl
 
 " Use custom color for highlighting 'maximum width' column
-highlight ColorColumn ctermbg=grey guibg=#555555
+hi ColorColumn ctermbg=grey guibg=#555555
+
+" Current word
+hi CurrentWord term=underline cterm=underline gui=underline
 
 " Statusline colors (from Gruvbox bright palette)
 hi StatusLineModeNormal  guibg=#BDAE93 guifg=#1D2021 gui=bold
