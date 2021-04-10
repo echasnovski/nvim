@@ -6,6 +6,12 @@ vim.api.nvim_exec([[
   autocmd BufEnter * lua require'completion'.on_attach()
 ]], false)
 
+-- Use custom "rate of completion" (default 80). Currently this means that
+-- every `x` milliseconds in insert mode some function is executed via Lua's
+-- `timer:start`. This in turn triggers statusline redraw (see
+-- https://github.com/neovim/neovim/issues/14303).
+vim.g.completion_timer_cycle = 200
+
 -- Enable manual trigger
 vim.api.nvim_exec([[imap <silent> <C-Space> <Plug>(completion_trigger)]], false)
 

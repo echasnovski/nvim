@@ -16,10 +16,30 @@
 --   active and inactive.
 -- - In active mode `Statusline.set_active()` is called. Its code defines high-level
 --   structure of statusline. From there go to respective section functions.
+--
+-- Note about performance:
+-- - Currently statusline gets evaluated on every call inside a timer (see
+--   https://github.com/neovim/neovim/issues/14303). In current setup this
+--   means that update is made periodically in insert mode due to
+--   'completion-nvim' plugin and its `g:completion_timer_cycle` setting.
+-- - Statusline might get evaluated on every 'CursorHold' event (indicator is
+--   an updated happening in `&updatetime` time after cursor stopped; set
+--   different `&updatetime` to verify that is a reason). In current setup this
+--   is happening due to following reasons:
+--     - Plugin 'vim-polyglot' has 'polyglot-sensible' autogroup which checks
+--     on 'CursorHold' events if file was updated (see `:h checktime`).
+--     - Plugin 'vim-gitgutter' processes buffer on 'CursorHold' events.
+--   As these actions are useful, one can only live with the fact that
+--   'statusline' option gets reevaluated on 'CursorHold'.
 has_devicons, devicons = pcall(require, 'nvim-web-devicons')
 
 local fn = vim.fn
 local api = vim.api
+
+-- Create custom `^V` and `^S` symbols to make this file appropriate for
+-- copy-paste (otherwise those symbols are not displayed).
+local CTRL_S = vim.api.nvim_replace_termcodes('<C-S>', true, true, true)
+local CTRL_V = vim.api.nvim_replace_termcodes('<C-v>', true, true, true)
 
 -- Local helpers
 local is_truncated = function(width)
@@ -99,19 +119,19 @@ end
 
 -- Mode
 Statusline.modes = setmetatable({
-  ['n']  = {long = 'Normal'  , short = 'N'  , hl = '%#StatusLineModeNormal#'};
-  ['v']  = {long = 'Visual'  , short = 'V'  , hl = '%#StatusLineModeVisual#'};
-  ['V']  = {long = 'V-Line'  , short = 'V-L', hl = '%#StatusLineModeVisual#'};
-  [''] = {long = 'V-Block' , short = 'V-B', hl = '%#StatusLineModeVisual#'};
-  ['s']  = {long = 'Select'  , short = 'S'  , hl = '%#StatusLineModeVisual#'};
-  ['S']  = {long = 'S-Line'  , short = 'S-L', hl = '%#StatusLineModeVisual#'};
-  [''] = {long = 'S-Block' , short = 'S-B', hl = '%#StatusLineModeVisual#'};
-  ['i']  = {long = 'Insert'  , short = 'I'  , hl = '%#StatusLineModeInsert#'};
-  ['R']  = {long = 'Replace' , short = 'R'  , hl = '%#StatusLineModeReplace#'};
-  ['c']  = {long = 'Command' , short = 'C'  , hl = '%#StatusLineModeCommand#'};
-  ['r']  = {long = 'Prompt'  , short = 'P'  , hl = '%#StatusLineModeOther#'};
-  ['!']  = {long = 'Shell'   , short = 'Sh' , hl = '%#StatusLineModeOther#'};
-  ['t']  = {long = 'Terminal', short = 'T'  , hl = '%#StatusLineModeOther#'};
+  ['n']    = {long = 'Normal',   short = 'N' ,  hl = '%#StatusLineModeNormal#'};
+  ['v']    = {long = 'Visual',   short = 'V' ,  hl = '%#StatusLineModeVisual#'};
+  ['V']    = {long = 'V-Line',   short = 'V-L', hl = '%#StatusLineModeVisual#'};
+  [CTRL_V] = {long = 'V-Block',  short = 'V-B', hl = '%#StatusLineModeVisual#'};
+  ['s']    = {long = 'Select',   short = 'S' ,  hl = '%#StatusLineModeVisual#'};
+  ['S']    = {long = 'S-Line',   short = 'S-L', hl = '%#StatusLineModeVisual#'};
+  [CTRL_S] = {long = 'S-Block',  short = 'S-B', hl = '%#StatusLineModeVisual#'};
+  ['i']    = {long = 'Insert',   short = 'I' ,  hl = '%#StatusLineModeInsert#'};
+  ['R']    = {long = 'Replace',  short = 'R' ,  hl = '%#StatusLineModeReplace#'};
+  ['c']    = {long = 'Command',  short = 'C' ,  hl = '%#StatusLineModeCommand#'};
+  ['r']    = {long = 'Prompt',   short = 'P' ,  hl = '%#StatusLineModeOther#'};
+  ['!']    = {long = 'Shell',    short = 'Sh' , hl = '%#StatusLineModeOther#'};
+  ['t']    = {long = 'Terminal', short = 'T' ,  hl = '%#StatusLineModeOther#'};
 }, {
   -- By default return 'Unknown' but this shouldn't be needed
   __index = function()
@@ -151,34 +171,40 @@ end
 -- approach it drops to ~0.2ms.
 ---- Git branch
 ---- Update git branch on every buffer enter and after Neovim gained focus
----- (detect outside change); also after leaving command line (detect
----- 'fugitive' change)
-vim.cmd [[autocmd BufEnter,FocusGained,CmdlineLeave * lua Statusline:update_git_branch()]]
+---- (detect outside change).
+vim.cmd [[autocmd BufEnter,FocusGained * lua Statusline:update_git_branch({defer = false})]]
+---- Also update git branch before leaving command line (detect fugitive
+---- change). Defer update to actually make it **after** leaving command line.
+---- Otherwise this will be evaluated too soon and give "previous" branch.
+vim.cmd [[autocmd CmdlineLeave * lua Statusline:update_git_branch({defer = true})]]
 
-Statusline.git_branch = ''
+Statusline.git_branch = nil
 
-function Statusline:update_git_branch()
+function Statusline:update_git_branch(arg)
   if fn.exists('*FugitiveHead') == 0 then
     self.git_branch = '<no fugitive>'
     return
   end
 
-  -- Defer updating of `Statusline.git_branch` because otherwise it will
-  -- execute `fn.FugitiveHead()` too soon which will still return
-  -- previous branch. This is mostly the case when switching branch from
-  -- Neovim's command line. NOTE that this behavior seems to depend on
-  -- capabilities of a current machine: there were cases of this both working
-  -- (on slower machine) and not working (on faster machine) when without
-  -- defer.
-  local timer = vim.loop.new_timer()
-  timer:start(vim.o.updatetime, 0, function()
-    vim.schedule(function()
-      -- Use commit hash truncated to 7 characters in case of detached HEAD
-      local branch = fn.FugitiveHead(7)
-      if branch == '' then branch = '<no branch>' end
-      self.git_branch = branch
-    end)
-  end)
+  update_fun = function()
+    -- Use commit hash truncated to 7 characters in case of detached HEAD
+    local branch = fn.FugitiveHead(7)
+    if branch == '' then branch = '<no branch>' end
+
+    local old_val = self.git_branch
+    self.git_branch = branch
+    -- Force statusline redraw if it is not first update (otherwise there is a
+    -- flicker at Neovim start) and if new value differs from the current one
+    if (old_val ~= nil) and (old_val ~= branch) then
+      vim.cmd [[noautocmd redrawstatus]]
+    end
+  end
+
+  if arg.defer then
+    vim.defer_fn(update_fun, 50)
+  else
+    update_fun()
+  end
 end
 
 ---- Git diff signs
@@ -201,10 +227,17 @@ function Statusline:update_git_signs()
   if signs[2] > 0 then res[#res + 1] = '~' .. signs[2] end
   if signs[3] > 0 then res[#res + 1] = '-' .. signs[3] end
 
+  local old_val = self.git_signs
   if next(res) == nil then
     self.git_signs = nil
   else
     self.git_signs = table.concat(res, ' ')
+  end
+
+  -- Force statusline redraw if it is not first update (otherwise there is a
+  -- flicker at Neovim start) and if new value differs from the current one
+  if (old_val ~= nil) and (old_val ~= self.git_signs) then
+    vim.cmd [[noautocmd redrawstatus]]
   end
 end
 
