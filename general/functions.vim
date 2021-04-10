@@ -230,5 +230,7 @@ function CurrentWordToggle()
     call UnHighlightCurrentWord()
   else
     let s:highlight_curword = 1
+    " Add current highlights
+    call HighlightCurrentWord()
   endif
 endfunction
