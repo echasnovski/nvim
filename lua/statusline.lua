@@ -39,7 +39,7 @@ local api = vim.api
 -- Create custom `^V` and `^S` symbols to make this file appropriate for
 -- copy-paste (otherwise those symbols are not displayed).
 local CTRL_S = vim.api.nvim_replace_termcodes('<C-S>', true, true, true)
-local CTRL_V = vim.api.nvim_replace_termcodes('<C-v>', true, true, true)
+local CTRL_V = vim.api.nvim_replace_termcodes('<C-V>', true, true, true)
 
 -- Local helpers
 local is_truncated = function(width)

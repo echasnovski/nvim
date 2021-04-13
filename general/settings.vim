@@ -1,7 +1,6 @@
-set iskeyword+=-         " Treat dash separated words as a word text object "
+set iskeyword+=-         " Treat dash separated words as a word text object
 
 if !exists('g:vscode')
-
   syntax enable          " Enables syntax highlighing
   set hidden             " Required to keep multiple buffers open
   set nowrap             " Display long lines as just one line
@@ -27,7 +26,8 @@ if !exists('g:vscode')
   set showtabline=2      " Always show tabs
   set nobackup           " This is recommended by coc
   set nowritebackup      " This is recommended by coc
-  set shortmess+=c       " Don't pass messages to |ins-completion-menu|
+  set shortmess+=c       " Don't pass messages to 'ins-completion-menu'
+  set shortmess+=F       " Don't give the file info when editing a file
   set signcolumn=yes     " Always show the signcolumn, otherwise it would shift the text each time
   set updatetime=300     " Faster completion
   set timeoutlen=250     " By default timeoutlen is 1000 ms. Not 100, because vim-commentary breaks
@@ -44,9 +44,9 @@ if !exists('g:vscode')
   set completeopt=menuone,noinsert,noselect " Customize completions
 
   set foldenable         " Enable folding by default
-  set foldmethod=indent  " Set "indent" folding method
+  set foldmethod=indent  " Set 'indent' folding method
   set foldlevel=0        " Display all folds
-  set foldnestmax=3      " Create folds only for some number of nested levels
+  set foldnestmax=10     " Create folds only for some number of nested levels
   set foldcolumn=0       " Disable fold column
 
   set undofile                           " Enable persistent undo
