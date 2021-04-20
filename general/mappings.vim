@@ -51,7 +51,7 @@ nnoremap <C-h> <C-w>h
 nnoremap <C-j> <C-w>j
 nnoremap <C-k> <C-w>k
 nnoremap <C-l> <C-w>l
-"" Go to previous window (very useful with "pop-up" 'coc.nvim' documentation)
+"" Go to previous window (very useful with 'pop-up' function documentation)
 nnoremap <C-p> <C-w>p
 "" When in terminal, use this as escape to normal mode (might be handy when
 "" followed by <C-l> to, almost always, return to terminal)
@@ -91,3 +91,6 @@ nnoremap gV `[v`]
 " often hit by accident
 " Use c_CTRL-F or fzf's analogue
 nnoremap q: <nop>
+
+" Search visually highlighted text
+vnoremap <silent> g/ y/\V<C-R>=escape(@",'/\')<CR><CR>
