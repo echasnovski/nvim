@@ -61,6 +61,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" Language server
       Plug 'neovim/nvim-lspconfig'
 
+      "" Enhanced diagnostics lists
+      Plug 'folke/lsp-trouble.nvim'
+
       "" Code formatter
       Plug 'sbdchd/neoformat'
 
