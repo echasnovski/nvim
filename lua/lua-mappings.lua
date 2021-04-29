@@ -14,6 +14,15 @@ end
 --       is also done with one '<Tab>' keystroke).
 local has_compe, compe           = pcall(require, 'compe')
 local has_completion, completion = pcall(require, 'completion')
+
+---- `g:_using_delimitMate = 1` should be set whenever 'delimitMate' plugin is
+---- actually used (currently it is defined right after call to `Plug`). The
+---- reason for this workaround is that 'delimitMate' is loaded in 'afterload'
+---- fashion. This means that there is no way (at least I couldn't find one) to
+---- detect if 'delimitMate' was actually loaded or not when this file gets
+---- evaluated. Also having to check if 'delimitMate' is installed on every
+---- press of '<CR>' is not a good solution from performance point of view.
+local has_delimitMate = vim.g._using_delimitMate == 1
 local has_npairs, npairs         = pcall(require, 'nvim-autopairs')
 
 ---- Define what is "confirm popup selection"
@@ -30,8 +39,14 @@ elseif has_completion then
 end
 
 ---- Define what is "no popup action"
-local nopopup_action = function() end
-if has_npairs then
+local nopopup_action = function() return escape('<CR>') end
+if has_delimitMate then
+  -- `<Plug>` symbol should be escaped in special way.
+  -- Source: https://www.reddit.com/r/neovim/comments/kup1g0/feedkey_plug_in_lua_how/
+  local plug = string.format('%c%c%c', 0x80, 253, 83)
+  local delimitMateCR_command = plug .. 'delimitMateCR'
+  nopopup_action = function() return delimitMateCR_command end
+elseif has_npairs then
   nopopup_action = npairs.autopairs_cr
 end
 
@@ -52,5 +67,7 @@ end
 
 vim.api.nvim_set_keymap(
   'i', '<CR>', 'v:lua._cr_action()',
-  {expr = true , noremap = true}
+  -- This shouldn't have `noremap = true` option in order to be usable with
+  -- possible '<Plug>delimitMateCR' return
+  {expr = true}
 )
