@@ -78,6 +78,10 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" File tree explorer
       Plug 'kyazdani42/nvim-tree.lua'
+
+      "" Auto pairs for '(' '[' '{'
+      "" This is more flexible, yet simple Lua alternative to 'pear-tree'
+      Plug 'windwp/nvim-autopairs'
     else
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}
@@ -93,6 +97,11 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" Statusline and bufferline
       Plug 'vim-airline/vim-airline'
+
+      "" Auto pairs for '(' '[' '{'
+      "" 'pear-tree' provides more intuitive experience than 'auto-pairs':
+      "" 'smart opener/closer', not inserting closer when before word, etc.
+      Plug 'tmsvg/pear-tree'
     endif
 
     " General
@@ -177,11 +186,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'goerz/jupytext.vim'
 
     " Text formatting and typing
-    "" Auto pairs for '(' '[' '{'
-    "" 'pear-tree' provides more intuitive experience than 'auto-pairs':
-    "" 'smart opener/closer', not inserting closer when before word, etc.
-    Plug 'tmsvg/pear-tree'
-
     "" Show and remove whitespace
     Plug 'ntpeters/vim-better-whitespace'
 

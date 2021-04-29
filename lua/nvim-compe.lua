@@ -38,10 +38,11 @@ vim.api.nvim_set_keymap(
   'i', '<C-Space>', [[compe#complete()]],
   {silent = true, expr = true, noremap = true}
 )
-vim.api.nvim_set_keymap(
-  'i', '<CR>', [[compe#confirm('<CR>')]],
-  {silent = true, expr = true, noremap = true}
-)
+---- '<CR>' mapping is done in 'lua-mappings.lua'
+-- vim.api.nvim_set_keymap(
+--   'i', '<CR>', [[compe#confirm('<CR>')]],
+--   {silent = true, expr = true, noremap = true}
+-- )
 vim.api.nvim_set_keymap(
   'i', '<C-e>', [[compe#close('<C-e>')]],
   {silent = true, expr = true, noremap = true}

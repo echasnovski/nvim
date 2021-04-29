@@ -37,22 +37,6 @@ vim.g.completion_chain_complete_list = {
   {mode = '<c-n>'}
 }
 
--- Make completion work nicely with auto-pairs plugin ('pear-tree' in my
--- setup). This should also enable snippet expansion.
--- NOTE: previously had some trouble with this. Solutions that worked:
--- - Moving this somewhere to be executed after all other settings.
--- - Having directly `<Plug>(PearTreeExpand)` instead of `<CR>`.
-vim.g.completion_confirm_key = ''
-vim.api.nvim_set_keymap(
-  'i', '<CR>',
-  [[pumvisible() ]] ..
-    [[? complete_info()["selected"] != "-1" ]] ..
-      [[? "\<Plug>(completion_confirm_completion)" ]] ..
-      [[: "\<c-e>\<CR>" ]] ..
-    [[: "\<CR>"]],
-  {expr = true}
-)
-
 -- Don't use any sorting, as it not always intuitive (for example, puts
 -- suggestions starting with '_' on top in case of 'alphabetical')
 vim.g.completion_sorting = 'none'
