@@ -37,13 +37,12 @@ cnoremap <M-l> <Right>
 " Move between buffers
 if exists('g:vscode')
   " Simulate same TAB behavior in VSCode
-  nmap <Tab> <cmd>Tabnext<CR>
-  nmap <S-Tab> <cmd>Tabprev<CR>
+  nmap ]b <cmd>Tabnext<CR>
+  nmap [b <cmd>Tabprev<CR>
 else
-  " TAB in general mode will move to text buffer
-  nnoremap <silent> <TAB> <cmd>bnext<CR>
-  " SHIFT-TAB will go back
-  nnoremap <silent> <S-TAB> <cmd>bprevious<CR>
+  " This duplicates code from 'vim-unimpaired' (just in case)
+  nnoremap <silent> ]b <cmd>bnext<CR>
+  nnoremap <silent> [b <cmd>bprevious<CR>
 endif
 
 " Better window navigation
