@@ -82,7 +82,7 @@ let g:which_key_map.g = {
   \ 'A' : [':Git add %'                    , 'add buffer'],
   \ 'a' : ['<Plug>(GitGutterStageHunk)'    , 'add hunk'],
   \ 'b' : [':Git blame'                    , 'blame'],
-  \ 'D' : [':Gvdiffsplit!'                 , 'diff split'],
+  \ 'D' : [':tab Gvdiffsplit'              , 'diff split'],
   \ 'd' : [':Git diff'                     , 'diff'],
   \ 'f' : [':GitGutterFold'                , 'fold unchanged'],
   \ 'g' : [':Git'                          , 'git window'],
