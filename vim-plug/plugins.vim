@@ -81,8 +81,8 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" Auto pairs for '(' '[' '{'
       " Plug 'windwp/nvim-autopairs'
-      Plug 'Raimondi/delimitMate'
-      let g:_using_delimitMate = 1
+      " Plug 'Raimondi/delimitMate'
+      " let g:_using_delimitMate = 1
     else
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}
