@@ -1,9 +1,14 @@
+-- This is a file for all commands that should be sourced after all other 'lua'
+-- files are sourced
+
 -- Helpers
 local escape = function(s)
   return vim.api.nvim_replace_termcodes(s, true, true, true)
 end
 
--- Setup `<CR>` key. Its current logic:
+-- Setup `<CR>` key. This should be executed after everything else because
+-- `<CR>` can be overridden by something else (notably 'mini-pairs.lua').
+-- Its current logic:
 -- - If no popup menu is visible, execute "no popup action".
 -- - If popup menu is visible:
 --     - If item is selected, execute "confirm popup selection" and close
@@ -22,8 +27,9 @@ local has_completion, completion = pcall(require, 'completion')
 ---- detect if 'delimitMate' was actually loaded or not when this file gets
 ---- evaluated. Also having to check if 'delimitMate' is installed on every
 ---- press of '<CR>' is not a good solution from performance point of view.
-local has_delimitMate = vim.g._using_delimitMate == 1
-local has_npairs, npairs         = pcall(require, 'nvim-autopairs')
+local has_delimitMate          = vim.g._using_delimitMate == 1
+local has_minipairs, minipairs = pcall(require, 'mini-pairs')
+local has_npairs, npairs       = pcall(require, 'nvim-autopairs')
 
 ---- Define what is "confirm popup selection"
 local confirm_popup_selection = function() end
@@ -40,7 +46,11 @@ end
 
 ---- Define what is "no popup action"
 local nopopup_action = function() return escape('<CR>') end
-if has_delimitMate then
+if has_minipairs then
+  nopopup_action = function()
+    return minipairs.action_cr(minipairs.pairs_cr.i)
+  end
+elseif has_delimitMate then
   -- `<Plug>` symbol should be escaped in special way.
   -- Source: https://www.reddit.com/r/neovim/comments/kup1g0/feedkey_plug_in_lua_how/
   local plug = string.format('%c%c%c', 0x80, 253, 83)

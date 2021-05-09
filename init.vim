@@ -14,14 +14,15 @@ else
   source $HOME/.config/nvim/general/bclose.vim
   source $HOME/.config/nvim/general/spelling.vim
 
+  " Source all plugin configuration files
+  for s:fpath in split(globpath('$HOME/.config/nvim/plug-config', '*.vim'), '\n')
+      exe 'source' s:fpath
+  endfor
+
+  " Source all 'lua' configuration files
   if has("nvim-0.5")
     for s:fpath in split(globpath('$HOME/.config/nvim/lua', '*.lua'), '\n')
         exe 'luafile' s:fpath
     endfor
   endif
-
-  " Source all plugin configuration files
-  for s:fpath in split(globpath('$HOME/.config/nvim/plug-config', '*.vim'), '\n')
-      exe 'source' s:fpath
-  endfor
 endif
