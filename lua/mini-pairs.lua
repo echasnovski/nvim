@@ -68,15 +68,25 @@ local quotes   = {'""', '``'}
 local default_pairs = {'()', '[]', '{}', '""', '``'}
 
 local keys = {
-  above = escape('<C-o>O'),
-  bs    = escape('<bs>'),
-  cr    = escape('<cr>'),
-  del   = escape('<del>'),
-  -- Here keys might be prepended with '<C-g>U' to "don't break undo" but then
-  -- they can't be used in command mode
-  left  = escape('<left>'),
-  right = escape('<right>')
+  above     = escape('<C-o>O'),
+  bs        = escape('<bs>'),
+  cr        = escape('<cr>'),
+  del       = escape('<del>'),
+  keep_undo = escape('<C-g>U'),
+  -- NOTE: use `get_arrow_key()` instead of `keys.left` or `keys.right`
+  left      = escape('<left>'),
+  right     = escape('<right>')
 }
+
+-- Using left/right keys in insert mode breaks undo sequence and, more
+-- importantly, dot-repeat. To avoid this, use 'i_CTRL-G_U' mapping.
+local get_arrow_key = function(key)
+  if vim.fn.mode() == 'i' then
+    return keys.keep_undo .. keys[key]
+  else
+    return keys[key]
+  end
+end
 
 -- Module
 MiniPairs = {}
@@ -95,14 +105,14 @@ MiniPairs.pairs_cr = {i = brackets}
 -- as they return sequence of keys (instead of other possible approach of
 -- simulating them with `nvim_feedkeys()`).
 function MiniPairs.action_open(pair)
-  return pair .. keys.left
+  return pair .. get_arrow_key('left')
 end
 
 ---- NOTE: `pair` as argument is used for consistency (when `right` is enough)
 function MiniPairs.action_close(pair)
   local close = pair:sub(2, 2)
   if get_cursor_chars(1, 1) == close then
-    return keys.right
+    return get_arrow_key('right')
   else
     return close
   end
@@ -110,9 +120,9 @@ end
 
 function MiniPairs.action_closeopen(pair)
   if get_cursor_chars(1, 1) == pair:sub(2, 2) then
-    return keys.right
+    return get_arrow_key('right')
   else
-    return pair .. keys.left
+    return pair .. get_arrow_key('left')
   end
 end
 
