@@ -1,4 +1,6 @@
--- Custom statusline. Heavily inspired by:
+-- Custom minimal **fast** statusline. This is meant to be a standalone file
+-- which when sourced in 'init.*' file provides a working minimal statusline.
+-- Inspired by:
 -- https://elianiva.me/post/neovim-lua-statusline (blogpost)
 -- https://github.com/elianiva/dotfiles/blob/master/nvim/.config/nvim/lua/modules/_statusline.lua (Github)
 --
@@ -12,18 +14,19 @@
 --   filetype icons. If missing, no icons will be used.
 --
 -- Notes about structure:
--- - Main statusline object is `Statusline`. It has two different "states":
+-- - Main statusline object is `MiniStatusline`. It has two different "states":
 --   active and inactive.
--- - In active mode `Statusline.set_active()` is called. Its code defines high-level
---   structure of statusline. From there go to respective section functions.
+-- - In active mode `MiniStatusline.set_active()` is called. Its code defines
+--   high-level structure of statusline. From there go to respective section
+--   functions.
 --
 -- Note about performance:
 -- - Currently statusline gets evaluated on every call inside a timer (see
 --   https://github.com/neovim/neovim/issues/14303). In current setup this
 --   means that update is made periodically in insert mode due to
 --   'completion-nvim' plugin and its `g:completion_timer_cycle` setting.
--- - Statusline might get evaluated on every 'CursorHold' event (indicator is
---   an updated happening in `&updatetime` time after cursor stopped; set
+-- - MiniStatusline might get evaluated on every 'CursorHold' event (indicator
+--   is an updated happening in `&updatetime` time after cursor stopped; set
 --   different `&updatetime` to verify that is a reason). In current setup this
 --   is happening due to following reasons:
 --     - Plugin 'vim-polyglot' has 'polyglot-sensible' autogroup which checks
@@ -67,25 +70,40 @@ local combine_sections = function(sections)
   return table.concat(t, '')
 end
 
--- Statusline object
-Statusline = setmetatable({}, {
+-- MiniStatusline object
+MiniStatusline = setmetatable({}, {
   __call = function(statusline, mode)
     if mode == 'active' then return statusline:set_active() end
     if mode == 'inactive' then return statusline:set_inactive() end
   end
 })
 
--- Statusline behavior
+-- MiniStatusline behavior
 vim.api.nvim_exec([[
-  augroup Statusline
+  augroup MiniStatusline
   au!
-  au WinEnter,BufEnter * setlocal statusline=%!v:lua.Statusline('active')
-  au WinLeave,BufLeave * setlocal statusline=%!v:lua.Statusline('inactive')
+  au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline('active')
+  au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline('inactive')
   augroup END
 ]], false)
 
+-- MiniStatusline colors (from Gruvbox bright palette)
+vim.api.nvim_exec([[
+  hi MiniStatuslineModeNormal  guibg=#BDAE93 guifg=#1D2021 gui=bold ctermbg=7 ctermfg=0
+  hi MiniStatuslineModeInsert  guibg=#83A598 guifg=#1D2021 gui=bold ctermbg=4 ctermfg=0
+  hi MiniStatuslineModeVisual  guibg=#B8BB26 guifg=#1D2021 gui=bold ctermbg=2 ctermfg=0
+  hi MiniStatuslineModeReplace guibg=#FB4934 guifg=#1D2021 gui=bold ctermbg=1 ctermfg=0
+  hi MiniStatuslineModeCommand guibg=#FABD2F guifg=#1D2021 gui=bold ctermbg=3 ctermfg=0
+  hi MiniStatuslineModeOther   guibg=#8EC07C guifg=#1D2021 gui=bold ctermbg=6 ctermfg=0
+
+  hi link MiniStatuslineInactive StatusLineNC
+  hi link MiniStatuslineDevinfo  StatusLine
+  hi link MiniStatuslineFilename StatusLineNC
+  hi link MiniStatuslineFileinfo StatusLine
+]], valse)
+
 -- High-level definition of statusline content
-function Statusline:set_active()
+function MiniStatusline:set_active()
   local mode_info = self.modes[fn.mode()]
 
   local mode        = self:section_mode{mode_info = mode_info, trunc_width = 120}
@@ -103,43 +121,43 @@ function Statusline:set_active()
     {string = mode,        hl = mode_info.hl},
     {string = spell,       hl = nil}, -- Copy highliting from previous section
     {string = wrap,        hl = nil}, -- Copy highliting from previous section
-    {string = git,         hl = '%#StatusLineDevinfo#'},
+    {string = git,         hl = '%#MiniStatuslineDevinfo#'},
     {string = diagnostics, hl = nil}, -- Copy highliting from previous section
     '%<', -- Mark general truncate point
-    {string = filename,    hl = '%#StatusLineFilename#'},
+    {string = filename,    hl = '%#MiniStatuslineFilename#'},
     '%=', -- End left alignment
-    {string = fileinfo,    hl = '%#StatusLineFileinfo#'},
+    {string = fileinfo,    hl = '%#MiniStatuslineFileinfo#'},
     {string = location,    hl = mode_info.hl},
   })
 end
 
-function Statusline:set_inactive()
-  return '%#StatuslineInactive#%F%='
+function MiniStatusline:set_inactive()
+  return '%#MiniStatuslineInactive#%F%='
 end
 
 -- Mode
-Statusline.modes = setmetatable({
-  ['n']    = {long = 'Normal',   short = 'N' ,  hl = '%#StatusLineModeNormal#'};
-  ['v']    = {long = 'Visual',   short = 'V' ,  hl = '%#StatusLineModeVisual#'};
-  ['V']    = {long = 'V-Line',   short = 'V-L', hl = '%#StatusLineModeVisual#'};
-  [CTRL_V] = {long = 'V-Block',  short = 'V-B', hl = '%#StatusLineModeVisual#'};
-  ['s']    = {long = 'Select',   short = 'S' ,  hl = '%#StatusLineModeVisual#'};
-  ['S']    = {long = 'S-Line',   short = 'S-L', hl = '%#StatusLineModeVisual#'};
-  [CTRL_S] = {long = 'S-Block',  short = 'S-B', hl = '%#StatusLineModeVisual#'};
-  ['i']    = {long = 'Insert',   short = 'I' ,  hl = '%#StatusLineModeInsert#'};
-  ['R']    = {long = 'Replace',  short = 'R' ,  hl = '%#StatusLineModeReplace#'};
-  ['c']    = {long = 'Command',  short = 'C' ,  hl = '%#StatusLineModeCommand#'};
-  ['r']    = {long = 'Prompt',   short = 'P' ,  hl = '%#StatusLineModeOther#'};
-  ['!']    = {long = 'Shell',    short = 'Sh' , hl = '%#StatusLineModeOther#'};
-  ['t']    = {long = 'Terminal', short = 'T' ,  hl = '%#StatusLineModeOther#'};
+MiniStatusline.modes = setmetatable({
+  ['n']    = {long = 'Normal',   short = 'N' ,  hl = '%#MiniStatuslineModeNormal#'};
+  ['v']    = {long = 'Visual',   short = 'V' ,  hl = '%#MiniStatuslineModeVisual#'};
+  ['V']    = {long = 'V-Line',   short = 'V-L', hl = '%#MiniStatuslineModeVisual#'};
+  [CTRL_V] = {long = 'V-Block',  short = 'V-B', hl = '%#MiniStatuslineModeVisual#'};
+  ['s']    = {long = 'Select',   short = 'S' ,  hl = '%#MiniStatuslineModeVisual#'};
+  ['S']    = {long = 'S-Line',   short = 'S-L', hl = '%#MiniStatuslineModeVisual#'};
+  [CTRL_S] = {long = 'S-Block',  short = 'S-B', hl = '%#MiniStatuslineModeVisual#'};
+  ['i']    = {long = 'Insert',   short = 'I' ,  hl = '%#MiniStatuslineModeInsert#'};
+  ['R']    = {long = 'Replace',  short = 'R' ,  hl = '%#MiniStatuslineModeReplace#'};
+  ['c']    = {long = 'Command',  short = 'C' ,  hl = '%#MiniStatuslineModeCommand#'};
+  ['r']    = {long = 'Prompt',   short = 'P' ,  hl = '%#MiniStatuslineModeOther#'};
+  ['!']    = {long = 'Shell',    short = 'Sh' , hl = '%#MiniStatuslineModeOther#'};
+  ['t']    = {long = 'Terminal', short = 'T' ,  hl = '%#MiniStatuslineModeOther#'};
 }, {
   -- By default return 'Unknown' but this shouldn't be needed
   __index = function()
-    return {long = 'Unknown', short = 'U', hl = '%#StatusLineModeOther#'}
+    return {long = 'Unknown', short = 'U', hl = '%#MiniStatuslineModeOther#'}
   end
 })
 
-function Statusline:section_mode(arg)
+function MiniStatusline:section_mode(arg)
   local mode = is_truncated(arg.trunc_width) and
     arg.mode_info.short or
     arg.mode_info.long
@@ -148,7 +166,7 @@ function Statusline:section_mode(arg)
 end
 
 -- Spell
-function Statusline:section_spell(arg)
+function MiniStatusline:section_spell(arg)
   if not vim.wo.spell then return '' end
 
   if is_truncated(arg.trunc_width) then return 'SPELL' end
@@ -157,7 +175,7 @@ function Statusline:section_spell(arg)
 end
 
 -- Wrap
-function Statusline:section_wrap()
+function MiniStatusline:section_wrap()
   if not vim.wo.wrap then return '' end
 
   return 'WRAP'
@@ -172,15 +190,15 @@ end
 ---- Git branch
 ---- Update git branch on every buffer enter and after Neovim gained focus
 ---- (detect outside change).
-vim.cmd [[autocmd BufEnter,FocusGained * lua Statusline:update_git_branch({defer = false})]]
+vim.cmd [[autocmd BufEnter,FocusGained * lua MiniStatusline:update_git_branch({defer = false})]]
 ---- Also update git branch before leaving command line (detect fugitive
 ---- change). Defer update to actually make it **after** leaving command line.
 ---- Otherwise this will be evaluated too soon and give "previous" branch.
-vim.cmd [[autocmd CmdlineLeave * lua Statusline:update_git_branch({defer = true})]]
+vim.cmd [[autocmd CmdlineLeave * lua MiniStatusline:update_git_branch({defer = true})]]
 
-Statusline.git_branch = nil
+MiniStatusline.git_branch = nil
 
-function Statusline:update_git_branch(arg)
+function MiniStatusline:update_git_branch(arg)
   if fn.exists('*FugitiveHead') == 0 then
     self.git_branch = '<no fugitive>'
     return
@@ -210,12 +228,12 @@ end
 ---- Git diff signs
 ---- Update git signs on every buffer enter (detect signs for buffer) and every
 ---- time 'gitgutter' says that change occured
-vim.cmd [[autocmd BufEnter * lua Statusline:update_git_signs()]]
-vim.cmd [[autocmd User GitGutter lua Statusline:update_git_signs()]]
+vim.cmd [[autocmd BufEnter *         lua MiniStatusline:update_git_signs()]]
+vim.cmd [[autocmd User     GitGutter lua MiniStatusline:update_git_signs()]]
 
-Statusline.git_signs = nil
+MiniStatusline.git_signs = nil
 
-function Statusline:update_git_signs()
+function MiniStatusline:update_git_signs()
   if fn.exists('*GitGutterGetHunkSummary') == 0 then
     self.git_signs = nil
     return
@@ -241,7 +259,7 @@ function Statusline:update_git_signs()
   end
 end
 
-function Statusline:section_git(arg)
+function MiniStatusline:section_git(arg)
   if isnt_normal_buffer() then return '' end
 
   local res
@@ -264,7 +282,7 @@ local diagnostic_levels = {
   {name = 'Hint'       , sign = 'H'},
 }
 
-function Statusline:section_diagnostics(arg)
+function MiniStatusline:section_diagnostics(arg)
   -- Assumption: there are no attached clients if table
   -- `vim.lsp.buf_get_clients()` is empty
   local hasnt_attached_client = next(vim.lsp.buf_get_clients()) == nil
@@ -290,7 +308,7 @@ function Statusline:section_diagnostics(arg)
 end
 
 -- File name
-function Statusline:section_filename(arg)
+function MiniStatusline:section_filename(arg)
   -- In terminal always use plain name
   if vim.bo.buftype == 'terminal' then
     return '%t'
@@ -331,7 +349,7 @@ local get_filetype_icon = function()
   return ''
 end
 
-function Statusline:section_fileinfo(arg)
+function MiniStatusline:section_fileinfo(arg)
   local filetype = vim.bo.filetype
 
   -- Don't show anything if can't detect file type or not inside a "normal
@@ -354,7 +372,9 @@ function Statusline:section_fileinfo(arg)
 end
 
 -- Location inside buffer
-function Statusline:section_location(arg)
+function MiniStatusline:section_location(arg)
   -- Use virtual column number to allow update when paste last column
   return '%l|%L│%2v|%-2{col("$") - 1}'
 end
+
+return MiniStatusline

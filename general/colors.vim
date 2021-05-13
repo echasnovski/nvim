@@ -67,19 +67,6 @@ hi ColorColumn ctermbg=grey guibg=#555555
 " Current word
 hi CurrentWord term=underline cterm=underline gui=underline
 
-" Statusline colors (from Gruvbox bright palette)
-hi StatusLineModeNormal  guibg=#BDAE93 guifg=#1D2021 gui=bold
-hi StatusLineModeInsert  guibg=#83A598 guifg=#1D2021 gui=bold
-hi StatusLineModeVisual  guibg=#B8BB26 guifg=#1D2021 gui=bold
-hi StatusLineModeReplace guibg=#FB4934 guifg=#1D2021 gui=bold
-hi StatusLineModeCommand guibg=#FABD2F guifg=#1D2021 gui=bold
-hi StatusLineModeOther   guibg=#8EC07C guifg=#1D2021 gui=bold
-
-hi link StatusLineInactive StatusLineNC
-hi link StatusLineDevinfo  StatusLine
-hi link StatusLineFilename StatusLineNC
-hi link StatusLineFileinfo StatusLine
-
 " Btline (custom tabline) colors (from Gruvbox palette)
 hi BtlineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold
 hi BtlineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold
