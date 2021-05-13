@@ -66,14 +66,3 @@ hi ColorColumn ctermbg=grey guibg=#555555
 
 " Current word
 hi CurrentWord term=underline cterm=underline gui=underline
-
-" Btline (custom tabline) colors (from Gruvbox palette)
-hi BtlineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold
-hi BtlineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold
-hi link BtlineHidden StatusLineNC
-
-hi BtlineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold
-hi BtlineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold
-hi BtlineModifiedHidden  guibg=#076678 guifg=#BDAE93
-
-hi BtlineFill NONE

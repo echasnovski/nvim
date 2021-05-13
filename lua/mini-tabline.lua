@@ -1,51 +1,80 @@
--- Code for custom tabline (called 'btline', short of 'buftabline'). General
--- idea: show all listed buffers in case of one tab, fall back for deafult
--- otherwise.
+-- Custom minimal **fast** tabline. This is meant to be a standalone file which
+-- when sourced in 'init.*' file provides a working minimal tabline. General
+-- idea: show all listed buffers in readable way with minimal total width in
+-- case of one vim tab, fall back for deafult otherwise. Inspired by
+-- https://github.com/ap/vim-buftabline.
+--
+-- Main capabilities when displaying buffers:
+-- - Different highlight groups for "states" of buffer.
+-- - Buffer names are made unique by extending paths to files or appending
+--   unique identifier to buffers without name.
+-- - Current buffer is displayed "optimally centered" (in center of screen
+--   while maximizing the total number of buffers shown) when there are many
+--   buffers open.
+-- - 'Buffer tabs' are clickable if Neovim allows it.
+--
+-- Notes about structure:
+-- - Main function is `MiniTabline:make_tabline_string()` which describes
+--   high-level functional structure when displaying buffers. From there go to
+--   respective functions.
 local fn = vim.fn
 
+-- Ensure tabline is displayed properly
 vim.api.nvim_exec([[
-  augroup Btline
+  augroup MiniTabline
     autocmd!
-    autocmd VimEnter   * lua require'btline':update_tabline()
-    autocmd TabEnter   * lua require'btline':update_tabline()
-    autocmd BufAdd     * lua require'btline':update_tabline()
-    autocmd FileType  qf lua require'btline':update_tabline()
-    autocmd BufDelete  * lua require'btline':update_tabline()
+    autocmd VimEnter   * lua require'mini-tabline':update_tabline()
+    autocmd TabEnter   * lua require'mini-tabline':update_tabline()
+    autocmd BufAdd     * lua require'mini-tabline':update_tabline()
+    autocmd FileType  qf lua require'mini-tabline':update_tabline()
+    autocmd BufDelete  * lua require'mini-tabline':update_tabline()
   augroup END
 ]], false)
 
-Btline = {}
-Btline = setmetatable({}, {
-  __call = function(btline) return btline:make_tabline_string() end
+vim.o.showtabline = 2 -- Always show tabline
+vim.o.hidden = true   -- Allow switching buffers without saving them
+
+-- MiniTabline object
+MiniTabline = {}
+MiniTabline = setmetatable({}, {
+  __call = function(minitabline) return minitabline:make_tabline_string() end
 })
 
-function Btline:update_tabline()
+-- MiniTabline colors (from Gruvbox palette)
+vim.api.nvim_exec([[
+  hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15  ctermfg=0
+  hi MiniTablineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7   ctermfg=0
+  hi MiniTablineHidden          guifg=#A89984 guibg=#3C3836          ctermbg=8   ctermfg=7
+
+  hi MiniTablineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold ctermbg=14 ctermfg=0
+  hi MiniTablineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold ctermbg=6  ctermfg=0
+  hi MiniTablineModifiedHidden  guibg=#076678 guifg=#BDAE93          ctermbg=6  ctermfg=0
+
+  hi MiniTablineFill NONE
+]], false)
+
+-- MiniTabline functionality
+function MiniTabline:update_tabline()
   if fn.tabpagenr('$') > 1 then
     vim.o.tabline = [[]]
   else
-    vim.o.tabline = [[%!v:lua.Btline()]]
+    vim.o.tabline = [[%!v:lua.MiniTabline()]]
   end
 end
 
-function Btline:make_tabline_string()
-  -- local start = os.clock()
-
+function MiniTabline:make_tabline_string()
   self:list_tabs()
   self:finalize_labels()
   self:fit_width()
 
-  -- res = self:concat_tabs()
-  -- print(os.clock() - start)
-  -- return res
-
   return self:concat_tabs()
 end
 
-function Btline:list_tabs()
+function MiniTabline:list_tabs()
   tabs = {}
   tabs_order = {}
   for i=1,fn.bufnr('$') do
-    if self:is_buffer_in_btline(i) then
+    if self:is_buffer_in_minitabline(i) then
       -- Display tabs in order of increasing buffer number
       tabs_order[#tabs_order + 1] = i
 
@@ -62,13 +91,13 @@ function Btline:list_tabs()
   self.tabs_order = tabs_order
 end
 
-function Btline:is_buffer_in_btline(bufnum)
+function MiniTabline:is_buffer_in_minitabline(bufnum)
   return (fn.buflisted(bufnum) > 0) and
     (fn.getbufvar(bufnum, '&buftype') ~= 'quickfix')
 end
 
 -- Tab's highlight group
-function Btline:construct_highlight(bufnum)
+function MiniTabline:construct_highlight(bufnum)
   local hl_type
   if bufnum == fn.winbufnr(0) then
     hl_type = 'Current'
@@ -81,29 +110,29 @@ function Btline:construct_highlight(bufnum)
     hl_type = 'Modified' .. hl_type
   end
 
-  return string.format('%%#Btline%s#', hl_type)
+  return string.format('%%#MiniTabline%s#', hl_type)
 end
 
 -- Tab's clickable action (if supported)
 ---- Is there clickable support?
-Btline.tablineat = fn.has('tablineat')
+MiniTabline.tablineat = fn.has('tablineat')
 
 vim.api.nvim_exec([[
-  function! BtlineSwitchBuffer(bufnum, clicks, button, mod)
+  function! MiniTablineSwitchBuffer(bufnum, clicks, button, mod)
     execute 'buffer' a:bufnum
   endfunction
 ]], false)
 
-function Btline:construct_tabfunc(bufnum)
+function MiniTabline:construct_tabfunc(bufnum)
   if self.tablineat > 0 then
-    return string.format([[%%%d@BtlineSwitchBuffer@]], bufnum)
+    return string.format([[%%%d@MiniTablineSwitchBuffer@]], bufnum)
   else
     return ''
   end
 end
 
 -- Tab's label and label extender
-function Btline:construct_label_data(bufnum)
+function MiniTabline:construct_label_data(bufnum)
   local label, label_extender
 
   local bufpath = fn.bufname(bufnum)
@@ -120,9 +149,9 @@ function Btline:construct_label_data(bufnum)
   return label, label_extender
 end
 
-Btline.path_sep = package.config:sub(1, 1)
+MiniTabline.path_sep = package.config:sub(1, 1)
 
-function Btline:make_path_extender(bufnum)
+function MiniTabline:make_path_extender(bufnum)
   return function(label)
     -- Add parent to current label
     local full_path = fn.fnamemodify(fn.bufname(bufnum), ':p')
@@ -136,7 +165,7 @@ local is_buffer_scratch = function(bufnum)
   return (buftype == 'acwrite') or (buftype == 'nofile')
 end
 
-function Btline:make_unnamed_label(bufnum)
+function MiniTabline:make_unnamed_label(bufnum)
   local label = '*'
   if is_buffer_scratch(bufnum) then label = '!' end
 
@@ -157,10 +186,10 @@ end
 -- - Create three unnamed buffers.
 -- - Delete second one.
 -- - Tab label for third one remains the same.
-Btline.n_unnamed = 0
-Btline.unnamed_buffers = {}
+MiniTabline.n_unnamed = 0
+MiniTabline.unnamed_buffers = {}
 
-function Btline:ensure_unnamed_tracked(bufnum)
+function MiniTabline:ensure_unnamed_tracked(bufnum)
   if self.unnamed_buffers[bufnum] ~= nil then return end
 
   self.n_unnamed = self.n_unnamed + 1
@@ -168,7 +197,7 @@ function Btline:ensure_unnamed_tracked(bufnum)
 end
 
 -- Finalize labels
-function Btline:finalize_labels()
+function MiniTabline:finalize_labels()
   -- Deduplicate
   local nonunique_bufs = self:get_nonunique_buffers()
   while #nonunique_bufs > 0 do
@@ -190,7 +219,7 @@ function Btline:finalize_labels()
   -- Postprocess: add padding
   for _, tab in pairs(self.tabs) do
     -- -- Currently using icons doesn't quite work because later in
-    -- -- `Btline:fit_width()` width of label is computed using `string.len()`
+    -- -- `MiniTabline:fit_width()` width of label is computed using `string.len()`
     -- -- which computes number of bytes in string. Correct approach would be to
     -- -- use `utf8.len()`, but it is in Lua 5.3+.
     -- local extension = fn.fnamemodify(tab.label, ':e')
@@ -200,7 +229,7 @@ function Btline:finalize_labels()
   end
 end
 
-function Btline:get_nonunique_buffers()
+function MiniTabline:get_nonunique_buffers()
   -- Collect buffers per label
   local label_buffers = {}
   for bufnum, tab in pairs(self.tabs) do
@@ -226,7 +255,7 @@ function Btline:get_nonunique_buffers()
 end
 
 -- Fit tabline to maximum displayed width
-function Btline:fit_width()
+function MiniTabline:fit_width()
   self:update_centerbuf()
 
   -- Compute label width data
@@ -253,16 +282,16 @@ function Btline:fit_width()
   self:truncate_tabs_display(display_interval)
 end
 
-Btline.centerbuf = fn.winbufnr(0)
+MiniTabline.centerbuf = fn.winbufnr(0)
 
-function Btline:update_centerbuf()
+function MiniTabline:update_centerbuf()
   buf_displayed = fn.winbufnr(0)
-  if self:is_buffer_in_btline(buf_displayed) then
+  if self:is_buffer_in_minitabline(buf_displayed) then
     self.centerbuf = buf_displayed
   end
 end
 
-function Btline:compute_display_interval(center, tabline_width)
+function MiniTabline:compute_display_interval(center, tabline_width)
   -- left - first character to be displayed (starts with 1)
   -- right - last character to be displayed
   -- Conditions to be satisfied:
@@ -280,7 +309,7 @@ function Btline:compute_display_interval(center, tabline_width)
   return {left, right}
 end
 
-function Btline:truncate_tabs_display(display_interval)
+function MiniTabline:truncate_tabs_display(display_interval)
   local display_left, display_right = display_interval[1], display_interval[2]
 
   local tabs = {}
@@ -306,7 +335,7 @@ function Btline:truncate_tabs_display(display_interval)
 end
 
 -- Concatenate tabs into single tabline string
-function Btline:concat_tabs()
+function MiniTabline:concat_tabs()
   -- NOTE: it is assumed that all padding is incorporated into labels
   local t = {}
   for _, bufnum in ipairs(self.tabs_order) do
@@ -315,7 +344,7 @@ function Btline:concat_tabs()
     t[#t + 1] = tab.hl .. tab.tabfunc .. tab.label:gsub('%%', '%%%%')
   end
 
-  return table.concat(t, '') .. '%#BtlineFill#'
+  return table.concat(t, '') .. '%#MiniTablineFill#'
 end
 
-return Btline
+return MiniTabline
