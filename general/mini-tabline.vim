@@ -1,7 +1,10 @@
-" Vimscript code for custom tabline (called 'btline', short of 'buftabline').
+" Vimscript code for custom minimal tabline (called 'mini-tabline'). This is
+" meant to be a standalone file which when sourced in 'init.*' file provides a
+" working minimal tabline.
+"
 " General idea: show all listed buffers in case of one tab, fall back for
 " deafult otherwise. NOTE: this is superseded by a more faster Lua
-" implementation ('lua/btline.lua'). Kept here for historical reasons.
+" implementation ('lua/mini-tabline.lua'). Kept here for historical reasons.
 "
 " This code is a truncated version of 'ap/vim-buftabline' with the following
 " options:
@@ -42,13 +45,7 @@ let s:sid = s:SID() | delfunction s:SID
 " - Tab label for third one remains the same.
 let s:unnamed_tabs = {}
 
-" NOTE: Timing execution of `BtlineRender()` on 16 buffers gives around 3 ms
-" execution time (with occasional 7 ms) with rise to around 10 ms in case of
-" duplicating file names. If this is too much, consider rewriting in Lua (for
-" Neovim).
-function! BtlineRender()
-  " let start_time = reltime()
-
+function! MiniTablineRender()
   " Pick up data on all the buffers
   let tabs = []
   let path_tabs = []
@@ -68,7 +65,7 @@ function! BtlineRender()
     if getbufvar(bufnum, '&modified')
       let hl_type = 'Modified' . hl_type
     endif
-    let tab.hl = '%#Btline' . hl_type . '#'
+    let tab.hl = '%#MiniTabline' . hl_type . '#'
 
     if currentbuf == bufnum | let s:centerbuf = bufnum | endif
 
@@ -178,26 +175,37 @@ function! BtlineRender()
     let tab_strings = map(tabs, 'v:val.hl . v:val.label')
   endif
 
-  " let res = join(tab_strings, '') . '%#BtlineFill#'
-  " echo reltimefloat(reltime(start_time))
-  " return res
-
-  return join(tab_strings, '') . '%#BtlineFill#'
+  return join(tab_strings, '') . '%#MiniTablineFill#'
 endfunction
 
-function! BtlineUpdate()
+function! MiniTablineUpdate()
   if tabpagenr('$') > 1
     set tabline=
   else
-    set tabline=%!BtlineRender()
+    set tabline=%!MiniTablineRender()
   endif
 endfunction
 
-augroup Btline
+" Ensure tabline is displayed properly
+augroup MiniTabline
   autocmd!
-  autocmd VimEnter   * call BtlineUpdate()
-  autocmd TabEnter   * call BtlineUpdate()
-  autocmd BufAdd     * call BtlineUpdate()
-  autocmd FileType  qf call BtlineUpdate()
-  autocmd BufDelete  * call BtlineUpdate()
+  autocmd VimEnter   * call MiniTablineUpdate()
+  autocmd TabEnter   * call MiniTablineUpdate()
+  autocmd BufAdd     * call MiniTablineUpdate()
+  autocmd FileType  qf call MiniTablineUpdate()
+  autocmd BufDelete  * call MiniTablineUpdate()
 augroup END
+
+set showtabline=2 " Always show tabline
+set hidden        " Allow switching buffers without saving them
+
+" Colors
+hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15 ctermfg=0
+hi MiniTablineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7  ctermfg=0
+hi MiniTablineHidden          guifg=#A89984 guibg=#3C3836          ctermbg=8  ctermfg=7
+
+hi MiniTablineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold ctermbg=14 ctermfg=0
+hi MiniTablineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold ctermbg=6  ctermfg=0
+hi MiniTablineModifiedHidden  guibg=#076678 guifg=#BDAE93          ctermbg=6  ctermfg=0
+
+hi MiniTablineFill NONE
