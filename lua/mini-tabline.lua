@@ -42,9 +42,9 @@ MiniTabline = setmetatable({}, {
 
 -- MiniTabline colors (from Gruvbox palette)
 vim.api.nvim_exec([[
-  hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15  ctermfg=0
-  hi MiniTablineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7   ctermfg=0
-  hi MiniTablineHidden          guifg=#A89984 guibg=#3C3836          ctermbg=8   ctermfg=7
+  hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15 ctermfg=0
+  hi MiniTablineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7  ctermfg=0
+  hi MiniTablineHidden          guifg=#A89984 guibg=#3C3836          ctermbg=8  ctermfg=7
 
   hi MiniTablineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold ctermbg=14 ctermfg=0
   hi MiniTablineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold ctermbg=6  ctermfg=0

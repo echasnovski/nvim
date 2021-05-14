@@ -1,5 +1,5 @@
 " Custom minimal statusline rewritten in Vimscript (to be used in Vim, not in
-" Neovim). For more information see 'lua/statusline.lua'.
+" Neovim). For more information see 'lua/mini-statusline.lua'.
 
 " Helper functions
 function s:IsTruncated(width)

@@ -24,5 +24,8 @@ else
     for s:fpath in split(globpath('$HOME/.config/nvim/lua', '*.lua'), '\n')
         exe 'luafile' s:fpath
     endfor
+    for s:fpath in split(globpath('$HOME/.config/nvim/lua/plugin-setup', '*.lua'), '\n')
+        exe 'luafile' s:fpath
+    endfor
   endif
 endif

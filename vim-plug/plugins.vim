@@ -62,7 +62,10 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       Plug 'neovim/nvim-lspconfig'
 
       "" Enhanced diagnostics lists
-      Plug 'folke/lsp-trouble.nvim'
+      Plug 'folke/trouble.nvim'
+
+      "" Todo (and other notes) highlighting
+      Plug 'folke/todo-comments.nvim'
 
       "" Code formatter
       Plug 'sbdchd/neoformat'
@@ -78,11 +81,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
       "" File tree explorer
       Plug 'kyazdani42/nvim-tree.lua'
-
-      "" Auto pairs for '(' '[' '{'
-      " Plug 'windwp/nvim-autopairs'
-      " Plug 'Raimondi/delimitMate'
-      " let g:_using_delimitMate = 1
     else
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}

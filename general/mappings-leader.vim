@@ -35,10 +35,15 @@ let g:which_key_map.b = {
   \ }
 
 " e is for 'explore'
-"" NOTE: `:NvimTreeToggle` requires 'kyazdani42/nvim-tree.lua'
+nnoremap <silent> <Leader>en <cmd>TroubleToggle todo<CR>
+nnoremap <silent> <Leader>eP <cmd>TroubleToggle lsp_document_diagnostics<CR>
+nnoremap <silent> <Leader>ep <cmd>TroubleToggle lsp_workspace_diagnostics<CR>
 let g:which_key_map.e = {
   \ 'name' : '+explore' ,
+  \ 'P' : 'problems (troubles) document',
   \ 'f' : [':RnvimrToggle'  , 'files'],
+  \ 'n' : 'notes (todo, etc.)',
+  \ 'p' : 'problems (troubles) workspace',
   \ 't' : [':NvimTreeToggle', 'tree'],
   \ 'u' : [':UndotreeToggle', 'undo-tree'],
   \ }
@@ -132,14 +137,11 @@ let g:which_key_map.i = {
 
 " l is for 'LSP' (Language Server Protocol)
 if has("nvim-0.5")
-  nnoremap <silent> <Leader>lT <cmd>LspTroubleDocumentToggle<CR>
   nnoremap <silent> <Leader>lf <cmd>Neoformat<CR>
-  nnoremap <silent> <Leader>lt <cmd>LspTroubleWorkspaceToggle<CR>
   " Actual commands are defined in settings for 'nvim-lspconfig'
   let g:which_key_map.l = {
     \ 'name' : '+LSP' ,
     \ 'F' : 'format selected',
-    \ 'T' : 'troubles document',
     \ 'R' : 'references',
     \ 'a' : 'arguments popup',
     \ 'd' : 'diagnostics popup',
@@ -149,7 +151,6 @@ if has("nvim-0.5")
     \ 'k' : 'prev diagnostic',
     \ 'r' : 'rename',
     \ 's' : 'source definition',
-    \ 't' : 'troubles workspace',
     \ }
 else
   let g:which_key_map.l = {

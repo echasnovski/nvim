@@ -35,6 +35,9 @@
 --   snippet extension.
 -- - Having mapping in terminal mode can conflict with autopairing capabilities
 --   of opened interpretators (notably `radian`).
+-- - Sometimes has troubles with multibyte characters (such as icons). This
+--   seems to be because detecting characters around cursor uses "byte
+--   substring" instead of "symbol substring" operation.
 
 -- Helpers
 local escape = function(s)
