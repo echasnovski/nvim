@@ -3,6 +3,3 @@
 set comments=:\"\"\",:\"\",:\"
 
 set shiftwidth=2
-
-" Don't add autopair to '"' but do add to '\''
-call luaeval("MiniPairs.remap_quotes()")

@@ -48,7 +48,7 @@ end
 local nopopup_action = function() return escape('<CR>') end
 if has_minipairs then
   nopopup_action = function()
-    return minipairs.action_cr(minipairs.pairs_cr.i)
+    return minipairs.action_cr({'()', '[]', '{}'})
   end
 elseif has_delimitMate then
   -- `<Plug>` symbol should be escaped in special way.

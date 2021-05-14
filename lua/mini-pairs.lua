@@ -1,4 +1,5 @@
--- Attempt to write *minimal* autopairs Lua plugin.
+-- Custom *minimal* autopairs Lua plugin. This is meant to be a standalone file
+-- which when sourced in 'init.*' file provides a working minimal auto pairs.
 --
 -- Initial goal is to setup keybindings for custom pairs in custom modes ('i',
 -- 'c', 't'):
@@ -53,8 +54,18 @@ local is_in_table = function(val, tbl)
 end
 
 local get_cursor_chars = function(start, finish)
-  local line = vim.api.nvim_get_current_line()
-  local col = vim.api.nvim_win_get_cursor(0)[2]
+  local line, col
+  if vim.fn.mode() == 'c' then
+    line = vim.fn.getcmdline()
+    col = vim.fn.getcmdpos()
+    -- Adjust start and finish because output of `getcmdpos()` starts counting
+    -- columns from 1
+    start = start - 1
+    finish = finish - 1
+  else
+    line = vim.api.nvim_get_current_line()
+    col = vim.api.nvim_win_get_cursor(0)[2]
+  end
 
   return string.sub(line, col + start, col + finish)
 end
@@ -62,10 +73,6 @@ end
 local table_to_seqstring = function(t)
   return vim.inspect(t):sub(2, -2)
 end
-
-local brackets = {'()', '[]', '{}'}
-local quotes   = {'""', '``'}
-local default_pairs = {'()', '[]', '{}', '""', '``'}
 
 local keys = {
   above     = escape('<C-o>O'),
@@ -90,15 +97,6 @@ end
 
 -- Module
 MiniPairs = {}
-
--- Pairs, elements of which will be mapped (in respective mode) to "open",
--- "close", or "closeopen" action
-MiniPairs.pairs = {c = default_pairs, i = default_pairs, t = default_pairs}
--- Pairs which will trigger extra action for '<BS>' and '<CR>'
-MiniPairs.pairs_bs = {i = default_pairs, t = default_pairs}
----- NOTE: current implementation of `MiniPairs.action_cr()` assumes only
----- insert mode mapping as it uses '<C-o>' key
-MiniPairs.pairs_cr = {i = brackets}
 
 -- Pair actions.
 -- They are intended to be used inside `_noremap <expr> ...` type of mappings,
@@ -147,91 +145,64 @@ function MiniPairs.action_cr(pair_set)
   return res
 end
 
--- Mappings setup
-function MiniPairs:setup_mappings()
-  for mode, pair_set in pairs(self.pairs) do
-    for _, pair in pairs(pair_set) do
-      self.map_single_pair(mode, pair)
-    end
-  end
-  for mode, pair_set in pairs(self.pairs_bs) do
-    self.map_bs_cr(mode, pair_set, '<BS>')
-  end
-  for mode, pair_set in pairs(self.pairs_cr) do
-    self.map_bs_cr(mode, pair_set, '<CR>')
-  end
-end
-
-function MiniPairs.map_single_pair(mode, pair)
-  local left = pair:sub(1, 1)
-  local right = pair:sub(2, 2)
-  local is_symmetrical = left == right
-  local pair_quoted = vim.inspect(pair)
-
-  -- Map left
-  local action_name_left
-  if mode == 'c' then
-    -- "Close" action can't be done in command mode as it uses
-    -- `vim.api.nvim_get_current_line()`
-    action_name_left = 'action_open'
-  else
-    action_name_left = is_symmetrical and 'action_closeopen' or 'action_open'
-  end
-
-  local command_left = string.format(
-    'v:lua.MiniPairs.%s(%s)',
-    action_name_left, pair_quoted
-  )
-  map(mode, left, command_left)
-
-  -- Map right (for asymmetrical case not in command mode)
-  if not ((mode == 'c') or is_symmetrical) then
-    local command_right = string.format(
-      'v:lua.MiniPairs.action_close(%s)',
-      pair_quoted
-    )
-    map(mode, right, command_right)
-  end
-end
-
-function MiniPairs.map_bs_cr(mode, pair_set, key)
-  -- Return single string representing a sequence of pair strings
-  local pair_set_string = table_to_seqstring(pair_set)
-  local action_suffix = (key == '<BS>') and 'bs' or 'cr'
-  local command = string.format(
-    'v:lua.MiniPairs.action_%s([%s])',
-    action_suffix, pair_set_string
-  )
-  map(mode, key, command)
-end
-
 function MiniPairs.remap_quotes()
   -- Map '"' to its original action ("remove" its mapping in buffer)
-  vim.cmd('inoremap <buffer> " "')
+  vim.cmd[[inoremap <buffer> " "]]
 
   -- Map '\''
-  vim.cmd(
-    'inoremap <buffer> <expr> \' v:lua.MiniPairs.action_closeopen("\'\'")'
-  )
-
-  -- Alter '<BS>'
-  local pair_set = MiniPairs.pairs_bs.i
-  ---- Replace '""' with "''"
-  for n, pair in pairs(pair_set) do
-    if pair == '""' then
-      pair_set[n] = "''"
-    end
-  end
-
-  local pair_set_string = table_to_seqstring(pair_set)
-  local bs_command = string.format(
-    'inoremap <buffer> <expr> <BS> v:lua.MiniPairs.action_bs([%s])',
-    pair_set_string
-  )
-  vim.cmd(bs_command)
+  vim.cmd[[inoremap <buffer> <expr> ' v:lua.MiniPairs.action_closeopen("''")]]
 end
 
 -- Setup mappings
-MiniPairs:setup_mappings()
+--- Insert mode
+map('i', '(', [[v:lua.MiniPairs.action_open('()')]])
+map('i', '[', [[v:lua.MiniPairs.action_open('[]')]])
+map('i', '{', [[v:lua.MiniPairs.action_open('{}')]])
+
+map('i', ')', [[v:lua.MiniPairs.action_close('()')]])
+map('i', ']', [[v:lua.MiniPairs.action_close('[]')]])
+map('i', '}', [[v:lua.MiniPairs.action_close('{}')]])
+
+map('i', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
+---- No auto-pair for '\'' because it messes up with plain English used in
+---- comments (like can't, etc.)
+map('i', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
+
+map('i', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
+map('i', '<CR>', [[v:lua.MiniPairs.action_cr(['()', '[]', '{}'])]])
+
+--- Command mode
+map('c', '(', [[v:lua.MiniPairs.action_open('()')]])
+map('c', '[', [[v:lua.MiniPairs.action_open('[]')]])
+map('c', '{', [[v:lua.MiniPairs.action_open('{}')]])
+
+map('c', ')', [[v:lua.MiniPairs.action_close('()')]])
+map('c', ']', [[v:lua.MiniPairs.action_close('[]')]])
+map('c', '}', [[v:lua.MiniPairs.action_close('{}')]])
+
+map('c', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
+map('c', "'", [[v:lua.MiniPairs.action_closeopen("''")]])
+map('c', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
+
+map('c', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
+
+--- Terminal mode
+map('t', '(', [[v:lua.MiniPairs.action_open('()')]])
+map('t', '[', [[v:lua.MiniPairs.action_open('[]')]])
+map('t', '{', [[v:lua.MiniPairs.action_open('{}')]])
+
+map('t', ')', [[v:lua.MiniPairs.action_close('()')]])
+map('t', ']', [[v:lua.MiniPairs.action_close('[]')]])
+map('t', '}', [[v:lua.MiniPairs.action_close('{}')]])
+
+map('t', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
+map('t', "'", [[v:lua.MiniPairs.action_closeopen("''")]])
+map('t', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
+
+map('t', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
+
+--- Remap quotes in certain filetypes
+vim.cmd[[au FileType lua lua MiniPairs.remap_quotes()]]
+vim.cmd[[au FileType vim lua MiniPairs.remap_quotes()]]
 
 return MiniPairs
