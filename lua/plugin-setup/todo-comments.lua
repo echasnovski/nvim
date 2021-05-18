@@ -5,7 +5,12 @@ todo.setup{
   highlight = {
     before = "",
     keyword = "bg",
-    after = ""
+    after = "",
+    -- Match without the extra colon
+    pattern = [[.*<(KEYWORDS)\s*]]
   },
-  pattern = "(KEYWORDS)"
+  search = {
+    -- Match without the extra colon
+    pattern = [[\b(KEYWORDS)\b]]
+  }
 }

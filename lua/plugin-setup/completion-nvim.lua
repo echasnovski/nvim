@@ -3,7 +3,10 @@ if not has_completion then return end
 
 -- Use completion-nvim in every buffer
 vim.api.nvim_exec([[
-  autocmd BufEnter * lua require'completion'.on_attach()
+  augroup CompletionNvim
+    au!
+    au BufEnter * lua require'completion'.on_attach()
+  augroup END
 ]], false)
 
 -- Use custom "rate of completion" (default 80). Currently this means that

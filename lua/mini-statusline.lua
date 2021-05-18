@@ -81,9 +81,9 @@ MiniStatusline = setmetatable({}, {
 -- MiniStatusline behavior
 vim.api.nvim_exec([[
   augroup MiniStatusline
-  au!
-  au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline('active')
-  au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline('inactive')
+    au!
+    au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline('active')
+    au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline('inactive')
   augroup END
 ]], false)
 
@@ -190,11 +190,16 @@ end
 ---- Git branch
 ---- Update git branch on every buffer enter and after Neovim gained focus
 ---- (detect outside change).
-vim.cmd [[autocmd BufEnter,FocusGained * lua MiniStatusline:update_git_branch({defer = false})]]
 ---- Also update git branch before leaving command line (detect fugitive
 ---- change). Defer update to actually make it **after** leaving command line.
 ---- Otherwise this will be evaluated too soon and give "previous" branch.
-vim.cmd [[autocmd CmdlineLeave * lua MiniStatusline:update_git_branch({defer = true})]]
+---- NOTE: this adds autocommands to 'MiniStatusline' autogroup
+vim.api.nvim_exec([[
+  augroup MiniStatusline
+    au BufEnter,FocusGained * lua MiniStatusline:update_git_branch({defer = false})
+    au CmdlineLeave         * lua MiniStatusline:update_git_branch({defer = true})
+  augroup END
+]], false)
 
 MiniStatusline.git_branch = nil
 
@@ -228,8 +233,13 @@ end
 ---- Git diff signs
 ---- Update git signs on every buffer enter (detect signs for buffer) and every
 ---- time 'gitgutter' says that change occured
-vim.cmd [[autocmd BufEnter *         lua MiniStatusline:update_git_signs()]]
-vim.cmd [[autocmd User     GitGutter lua MiniStatusline:update_git_signs()]]
+---- NOTE: this adds autocommands to 'MiniStatusline' autogroup
+vim.api.nvim_exec([[
+  augroup MiniStatusline
+    au BufEnter *         lua MiniStatusline:update_git_signs()
+    au User     GitGutter lua MiniStatusline:update_git_signs()
+  augroup END
+]], false)
 
 MiniStatusline.git_signs = nil
 

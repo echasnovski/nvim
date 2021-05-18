@@ -55,23 +55,29 @@ if !exists('g:vscode')
   " Enable filetype plugins and indentation
   filetype plugin indent on
 
-  " Don't auto-wrap comments and don't insert comment leader after hitting 'o'
-  autocmd FileType * setlocal formatoptions-=c formatoptions-=o
-  " But insert comment leader after hitting <CR>
-  autocmd FileType * setlocal formatoptions+=r
+  augroup CustomSettings
+    autocmd!
 
-  " Start integrated terminal already in insert mode
-  autocmd TermOpen * startinsert
+    " Don't auto-wrap comments and don't insert comment leader after hitting 'o'
+    autocmd FileType * setlocal formatoptions-=c formatoptions-=o
+    " But insert comment leader after hitting <CR>
+    autocmd FileType * setlocal formatoptions+=r
 
-  " Highlight current word
-  "" NOTE: if this updates too frequently, use `CursorHold`
-  autocmd CursorMoved * call HighlightCurrentWord()
-  "" Force remove highlighing when entering Insert or Terminal mode
-  autocmd InsertEnter,TermEnter * call UnHighlightCurrentWord()
+    " Start integrated terminal already in insert mode
+    autocmd TermOpen * startinsert
+
+    " Highlight current word
+    "" NOTE: if this updates too frequently, use `CursorHold`
+    autocmd CursorMoved * call HighlightCurrentWord()
+    "" Force remove highlighing when entering Insert or Terminal mode
+    autocmd InsertEnter,TermEnter * call UnHighlightCurrentWord()
+  augroup END
 
   " Highlight yanked text
   if has("nvim-0.5")
-    autocmd TextYankPost * silent! lua vim.highlight.on_yank()
+    augroup CustomSettings
+      autocmd TextYankPost * silent! lua vim.highlight.on_yank()
+    augroup END
   endif
 
   " Define important executables
