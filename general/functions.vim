@@ -234,3 +234,31 @@ function CurrentWordToggle()
     call HighlightCurrentWord()
   endif
 endfunction
+
+function AddMultipleCommentLeader()
+  " Make raw comment leader from 'commentstring' option
+  let l:comment = split(&commentstring, '%s')
+
+  " Don't do anything if 'commentstring' is like '/*%s*/' (as in 'json')
+  if len(l:comment) > 1
+    return
+  endif
+
+  " Get comment leader
+  let l:comment = l:comment[0]
+  " Strip all possible whitespace
+  let l:comment = substitute(l:comment, '\s', '', 'g')
+  " Escape possible 'dangerous' characters
+  let l:comment = escape(l:comment, '"')
+
+  " Remove possible 'single' comment leader and some of its forced multiples
+  " (as in 'r' filetype)
+  let l:removed_comment = l:comment
+  for i in [1, 2, 3, 4, 5]
+    exe 'setlocal comments-=:'  . l:removed_comment
+    let l:removed_comment = l:removed_comment . l:comment
+  endfor
+
+  " Add possibility of 'multiple' comment leader
+  exe 'setlocal comments+=n:' . l:comment
+endfunction

@@ -52,6 +52,13 @@ if !exists('g:vscode')
   set undofile                           " Enable persistent undo
   set undodir=$HOME/.config/nvim/undodir " Set directory for persistent undo
 
+  " Define pattern for a start of 'numbered' list. This is responsible for
+  " correct formatting of lists when using `gq`. This basically reads as 'one
+  " of: 1) space + character + `.` or `)` + space; 2) space + `-` or `+` or
+  " `*` + space.
+  " Source: https://stackoverflow.com/a/37172060
+  set formatlistpat=^\\s*\\w\\+[.\)]\\s\\+\\\\|^\\s*[\\-\\+\\*]\\+\\s\\+
+
   " Enable filetype plugins and indentation
   filetype plugin indent on
 
@@ -60,8 +67,12 @@ if !exists('g:vscode')
 
     " Don't auto-wrap comments and don't insert comment leader after hitting 'o'
     autocmd FileType * setlocal formatoptions-=c formatoptions-=o
-    " But insert comment leader after hitting <CR>
-    autocmd FileType * setlocal formatoptions+=r
+    " But insert comment leader after hitting <CR> and respect 'numbered' lists
+    autocmd FileType * setlocal formatoptions+=r formatoptions+=n
+
+    " Allow multiple consecutive 'default' comment leaders to be treated as
+    " comment leader
+    autocmd FileType * call AddMultipleCommentLeader()
 
     " Start integrated terminal already in insert mode
     autocmd TermOpen * startinsert

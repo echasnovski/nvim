@@ -20,9 +20,6 @@ endfunction
 nnoremap <buffer> <M-s> :call SectionPy()<CR>
 inoremap <buffer> <M-s> <C-o>:call SectionPy()<CR>
 
-" Comment identifiers
-set comments=:###,:##,:#
-
 " Neoformat configuration
 let black_root = $HOME . "/.pyenv/versions/neovim/bin/black"
 
