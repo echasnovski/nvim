@@ -191,7 +191,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'ntpeters/vim-better-whitespace'
 
     "" Commenting
-    Plug 'tpope/vim-commentary'
+    " Plug 'tpope/vim-commentary'
 
     " Filetypes
     "" Work with csv
