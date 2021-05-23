@@ -1,87 +1,123 @@
 MiniComment = {}
 
-local is_line_empty = function(line)
-  -- Line is empty if it doesn't have anything except whitespace
-  return line:find('^%s*$') ~= nil
+local map = function(mode, key, command)
+  vim.api.nvim_set_keymap(mode, key, command, {silent = true, noremap = true})
 end
 
-local compute_comment_part_padding = function(part)
-  -- Returns two elements: literal padding and padding to be used inside regex
-  if part == '' then
-    return '', ''
-  else
-    return ' ', '[ ]?'
-  end
-end
-
-get_comment_patterns = function()
+function MiniComment.make_comment_parts()
   local cs = vim.api.nvim_buf_get_option(0, 'commentstring')
 
   if cs == '' then
     vim.api.nvim_command([[echom "Option 'commentstring' is empty."]])
-    return nil
+    return {left = '', right = ''}
   end
 
-  local left, right = cs:match('^(.*)%%s(.*)$')
-  left, right = left:gsub('%s', ''), right:gsub('%s', '')
-  local lpad, lpad_regex = compute_comment_part_padding(left)
-  local rpad, rpad_regex = compute_comment_part_padding(right)
-
-  return {
-    comment = left .. lpad .. '%s' .. rpad .. right,
-    comment_empty = left .. '%s' .. right,
-    uncomment = string.format(
-      [[^(%%s-)%s%s(.-)%s%s$]],
-      vim.pesc(left), lpad_regex, rpad_regex, vim.pesc(right)
-    )
-  }
+  -- Assumed structure of 'commentstring':
+  -- <space> <left> <space> <'%s'> <space> <right> <space>
+  -- So this extracts parts without surrounding whitespace
+  local left, right = cs:match('^%s*(.-)%s*%%s%s*(.-)%s*$')
+  return {left = left, right = right}
 end
 
-function MiniComment.comment_lines(line_start, line_end, indent_width)
-  local start = os.clock()
-  local patterns = get_comment_patterns()
-  indent_width = indent_width or 0
+function MiniComment.make_comment_function(comment_parts, indent)
+  local indent_str = string.rep(' ', indent)
+  local nonindent_start = indent + 1
 
-  local indent_str = string.rep(' ', indent_width)
-  local start_id = indent_width + 1
+  local l, r = comment_parts.left, comment_parts.right
+  local lpad = (l == '') and '' or ' '
+  local rpad = (r == '') and '' or ' '
 
-  local lines = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
-  local pattern
-  for n, l in pairs(lines) do
-    if is_line_empty(l) then
-      pattern = patterns.comment_empty
+  local empty_comment = indent_str .. l .. r
+  local nonempty_format = indent_str .. l .. lpad .. '%s' .. rpad .. r
+
+  return function(line)
+  -- Line is empty if it doesn't have anything except whitespace
+    if (line:find('^%s*$') ~= nil) then
+      -- If doesn't want to comment empty lines, return `line` here
+      return empty_comment
     else
-      pattern = patterns.comment
+      return string.format(nonempty_format, line:sub(nonindent_start))
+    end
+  end
+end
+
+function MiniComment.make_uncomment_function(comment_parts)
+  local l, r = comment_parts.left, comment_parts.right
+  local lpad = (l == '') and '' or '[ ]?'
+  local rpad = (r == '') and '' or '[ ]?'
+
+  local uncomment_regex = string.format(
+    -- Usage of `lpad` and `rpad` as possbile single space enables uncommenting
+    -- of commented empty lines without trailing whitespace (like '  #').
+    [[^(%%s-)%s%s(.-)%s%s%%s-$]],
+    vim.pesc(l), lpad, rpad, vim.pesc(r)
+  )
+
+  return function(line)
+    indent_str, new_line = string.match(line, uncomment_regex)
+    -- Return original if line is not commented
+    if new_line == nil then return line end
+    -- Remove indent if line is a commented empty line
+    if new_line == '' then indent_str = '' end
+    return indent_str .. new_line
+  end
+end
+
+function MiniComment.make_comment_check(comment_parts)
+  local l, r = comment_parts.left, comment_parts.right
+  -- String is commented if it has structure:
+  -- <space> <left> <anything> <right> <space>
+  local regex = string.format([[^%%s-%s.*%s%%s-$]], vim.pesc(l), vim.pesc(r))
+
+  return function(line) return line:find(regex) ~= nil end
+end
+
+function MiniComment.get_lines_info(lines, comment_parts)
+  local indent = math.huge
+  local indent_cur = indent
+
+  local is_comment = true
+  local comment_check = MiniComment.make_comment_check(comment_parts)
+
+  for _, l in pairs(lines) do
+    -- Update lines indent: minimum of all indents except empty lines
+    if indent > 0 then
+      _, indent_cur = l:find('^%s*')
+      -- Condition "current indent equals line length" detects empty line
+      if (indent_cur < indent) and (indent_cur < l:len()) then
+        indent = indent_cur
+      end
     end
 
-    lines[n] = indent_str .. string.format(pattern, l:sub(start_id))
+    -- Update comment info: lines are comment if every single line is comment
+    if is_comment then is_comment = comment_check(l) end
   end
 
-  vim.api.nvim_buf_set_lines(0, line_start - 1, line_end, false, lines)
-  print(os.clock() - start)
+  return indent, is_comment
 end
 
-function MiniComment.uncomment_lines(line_start, line_end)
+function MiniComment.toggle_comments(line_start, line_end)
   local start = os.clock()
 
-  local patterns = get_comment_patterns()
-
+  local comment_parts = MiniComment.make_comment_parts()
   local lines = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
+  local indent, is_comment = MiniComment.get_lines_info(lines, comment_parts)
 
-  local indent, new_line
-  for n, l in pairs(lines) do
-    indent, new_line = string.match(l, patterns.uncomment)
-    if new_line == '' then indent = '' end
-    if new_line ~= nil then lines[n] = indent .. new_line end
+  if is_comment then
+    f = MiniComment.make_uncomment_function(comment_parts)
+  else
+    f = MiniComment.make_comment_function(comment_parts, indent)
   end
 
+  for n, l in pairs(lines) do lines[n] = f(l) end
+
+  -- NOTE: To write lines in a way that saves marks, use
+  -- `vim.fn.setline(line_start, lines)`. But this is **considerably** slower:
+  -- on 10000 lines 280ms compared to 40ms currently.
+  -- More efficient way is to use `lockmarks` command when doing mapping.
   vim.api.nvim_buf_set_lines(0, line_start - 1, line_end, false, lines)
 
   print(os.clock() - start)
-end
-
-function MiniComment.get_region_data(line_start, line_end)
-  local lines = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
 end
 
 -- TODO add docs
