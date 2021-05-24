@@ -117,40 +117,58 @@ function MiniComment.toggle_comments(line_start, line_end)
   print(os.clock() - start)
 end
 
+-- Main function to be used inside mappings. It has a rather unintuitive logic:
+-- it should be called without arguments inside expression mapping (returns
+-- `g@` to enable action on motion or textobject) and with argument when
+-- action should be performed.
 function MiniComment.operator(mode)
+  -- If used without arguments inside expression mapping:
+  -- - Set itself as `operatorfunc` to be called later to perform action.
+  -- - Return 'g@' which will then be executed resulting into waiting for a
+  --   motion or text object. This textobject will then be recorded using `'[`
+  --   and `'[` marks. After that, `operatorfunc` is called with `mode` equal
+  --   to one of "line", "char", or "block".
+  -- NOTE: setting `operatorfunc` inside this function enables usage of 'count'
+  -- like `10gc_` toggles comments of 10 lines below (starting with current).
   if mode == nil then
-    vim.cmd([[set operatorfunc=v:lua.MiniComment.operator]])
-    -- BIG NOTE: this approach doesn't keep marks!!!
+    vim.cmd('set operatorfunc=v:lua.MiniComment.operator')
     return 'g@'
   end
 
-  local line1, line2
+  -- If called with non-nil `mode`, get target region and perform comment
+  -- toggling over it.
+  local mark1, mark2
   if mode == 'visual' then
-    line1 = vim.api.nvim_buf_get_mark(0, '<')[1]
-    line2 = vim.api.nvim_buf_get_mark(0, '>')[1]
+    mark1, mark2 = '<', '>'
   else
-    -- When used as 'operatorfunc', `mode` is one of "line", "char", or "block"
-    -- (see `:help g@`).
-    line1 = vim.api.nvim_buf_get_mark(0, '[')[1]
-    line2 = vim.api.nvim_buf_get_mark(0, ']')[1]
+    mark1, mark2 = '[', ']'
   end
 
-  MiniComment.toggle_comments(line1, line2)
+  local l1 = vim.api.nvim_buf_get_mark(0, mark1)[1]
+  local l2 = vim.api.nvim_buf_get_mark(0, mark2)[1]
+
+  -- Using `vim.cmd()` wrapper to allow usage of `lockmarks` command, because
+  -- raw execution will delete marks inside region (due to
+  -- `vim.api.nvim_buf_set_lines()`).
+  vim.cmd(
+    string.format('lockmarks lua MiniComment.toggle_comments(%d, %d)', l1, l2)
+  )
   return ''
 end
 
 vim.api.nvim_set_keymap(
-  -- This mapping is equivalent of `g@_` (after setting 'operatorfunc') which
-  -- translates to 'apply on current line'. Using this approach results into
-  -- dot-repeatability of this mapping.
-  'n', 'gcc', [[v:lua.MiniComment.operator() . '_']],
+  'n', 'gc', 'v:lua.MiniComment.operator()',
   {expr = true, noremap = true, silent = true}
 )
 vim.api.nvim_set_keymap(
-  'n', 'gc', [[v:lua.MiniComment.operator()]],
-  {expr = true, noremap = true, silent = true}
+  'n', 'gcc', 'gc_',
+  -- This mapping doesn't use `noremap = true` because it requires usage of
+  -- already mapped `gc`.
+  {silent = true}
 )
 vim.api.nvim_set_keymap(
-  'x', 'gc', [[:<c-u>lockmarks lua MiniComment.operator('visual')<cr>]],
+  -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
+  -- proper update of `'<` and `'>` marks which is needed to work correctly.
+  'x', 'gc', [[:<c-u>lua MiniComment.operator('visual')<cr>]],
   {noremap = true, silent = true}
 )

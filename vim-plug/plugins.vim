@@ -84,6 +84,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" File tree explorer
       Plug 'kyazdani42/nvim-tree.lua'
     else
+      "" Commenting
+      Plug 'tpope/vim-commentary'
+
       "" Intellisense
       Plug 'neoclide/coc.nvim', {'branch': 'release'}
 
@@ -189,9 +192,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Text formatting and typing
     "" Show and remove whitespace
     Plug 'ntpeters/vim-better-whitespace'
-
-    "" Commenting
-    " Plug 'tpope/vim-commentary'
 
     " Filetypes
     "" Work with csv
