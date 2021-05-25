@@ -1,10 +1,29 @@
+-- Custom *minimal* and *fast* commenting Lua plugin. This is meant to be a
+-- standalone file which, when sourced in 'init.*' file, provides a working
+-- minimal commenting. This is basically a reimplementation of
+-- 'tpope/vim-commentary' with help of 'terrortylor/nvim-comment'.
+--
+-- Functionality details:
+-- - Commenting depends on '&commentstring' option.
+-- - Its basic action is 'toggle comment' (implemented in
+--   `MiniComment.toggle_comments()`): uncomment if lines are comment (every
+--   line is a comment) and comment otherwise. It respects indentation and
+--   doesn't insert trailing whitespace. Toggle commenting not in visual mode
+--   is also dot-repeatable and respects 'count'.
+-- - There is also a textobject `gc`: all commented lines adjacent to current
+--   one.
+--
+-- This plugin doesn't support block comments: all lines a commented per line.
+
 MiniComment = {}
 
 function MiniComment.make_comment_parts()
   local cs = vim.api.nvim_buf_get_option(0, 'commentstring')
 
   if cs == '' then
-    vim.api.nvim_command([[echom "Option 'commentstring' is empty."]])
+    vim.api.nvim_command(
+      [[echom "(mini-comment.lua) Option 'commentstring' is empty."]]
+    )
     return {left = '', right = ''}
   end
 
@@ -93,8 +112,6 @@ function MiniComment.get_lines_info(lines, comment_parts)
 end
 
 function MiniComment.toggle_comments(line_start, line_end)
-  local start = os.clock()
-
   local comment_parts = MiniComment.make_comment_parts()
   local lines = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
   local indent, is_comment = MiniComment.get_lines_info(lines, comment_parts)
@@ -113,14 +130,12 @@ function MiniComment.toggle_comments(line_start, line_end)
   -- - `vim.fn.setline(line_start, lines)`, but this is **considerably**
   --   slower: on 10000 lines 280ms compared to 40ms currently.
   vim.api.nvim_buf_set_lines(0, line_start - 1, line_end, false, lines)
-
-  print(os.clock() - start)
 end
 
--- Main function to be used inside mappings. It has a rather unintuitive logic:
--- it should be called without arguments inside expression mapping (returns
--- `g@` to enable action on motion or textobject) and with argument when
--- action should be performed.
+-- Main function to be mapped. It has a rather unintuitive logic: it should be
+-- called without arguments inside expression mapping (returns `g@` to enable
+-- action on motion or textobject) and with argument when action should be
+-- performed.
 function MiniComment.operator(mode)
   -- If used without arguments inside expression mapping:
   -- - Set itself as `operatorfunc` to be called later to perform action.
@@ -156,6 +171,31 @@ function MiniComment.operator(mode)
   return ''
 end
 
+-- Textobject function which selects all commented lines adjacent to cursor
+-- line (if it itself is commented).
+function MiniComment.textobject()
+  local comment_parts = MiniComment.make_comment_parts()
+  local comment_check = MiniComment.make_comment_check(comment_parts)
+  local line_cur = vim.api.nvim_win_get_cursor(0)[1]
+
+  if not comment_check(vim.fn.getline(line_cur)) then return end
+
+  local line_start = line_cur
+  while (line_start >= 2) and comment_check(vim.fn.getline(line_start - 1)) do
+    line_start = line_start - 1
+  end
+
+  local line_end = line_cur
+  local n_lines = vim.api.nvim_buf_line_count(0)
+  while (line_end <= n_lines - 1) and comment_check(vim.fn.getline(line_end + 1)) do
+    line_end = line_end + 1
+  end
+
+  -- This visual selection doesn't seem to change `'<` and `'>` marks when
+  -- executed as `onoremap` mapping
+  vim.cmd(string.format('normal! %dGV%dG', line_start, line_end))
+end
+
 vim.api.nvim_set_keymap(
   'n', 'gc', 'v:lua.MiniComment.operator()',
   {expr = true, noremap = true, silent = true}
@@ -172,3 +212,9 @@ vim.api.nvim_set_keymap(
   'x', 'gc', [[:<c-u>lua MiniComment.operator('visual')<cr>]],
   {noremap = true, silent = true}
 )
+vim.api.nvim_set_keymap(
+  'o', 'gc', [[<cmd>lua MiniComment.textobject()<cr>]],
+  {noremap = true, silent = true}
+)
+
+return MiniComment
