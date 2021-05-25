@@ -82,6 +82,10 @@ if !exists('g:vscode')
     autocmd CursorMoved * call HighlightCurrentWord()
     "" Force remove highlighing when entering Insert or Terminal mode
     autocmd InsertEnter,TermEnter * call UnHighlightCurrentWord()
+
+    " Highlight trailing whitespace
+    autocmd VimEnter,WinEnter,InsertLeave * call HighlightTrailWhitespace()
+    autocmd WinLeave,InsertEnter * call UnHighlightTrailWhitespace()
   augroup END
 
   " Highlight yanked text

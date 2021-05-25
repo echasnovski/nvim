@@ -189,10 +189,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Work with Jupyter
     Plug 'goerz/jupytext.vim'
 
-    " Text formatting and typing
-    "" Show and remove whitespace
-    Plug 'ntpeters/vim-better-whitespace'
-
     " Filetypes
     "" Work with csv
     Plug 'mechatroner/rainbow_csv'

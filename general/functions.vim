@@ -235,6 +235,7 @@ function CurrentWordToggle()
   endif
 endfunction
 
+" Add multiple consecutive comment leader
 function AddMultipleCommentLeader()
   " Make raw comment leader from 'commentstring' option
   let l:comment = split(&commentstring, '%s')
@@ -261,4 +262,29 @@ function AddMultipleCommentLeader()
 
   " Add possibility of 'multiple' comment leader
   exe 'setlocal comments+=n:' . l:comment
+endfunction
+
+" Handle trailing whitespace
+let s:whitespace_highlight_blocklist =
+  \ ['diff', 'gitcommit', 'unite', 'qf', 'help', 'markdown', 'Trouble']
+
+function HighlightTrailWhitespace()
+  if index(s:whitespace_highlight_blocklist, &ft) == -1
+    let w:_whitespace_match = matchadd('TrailWhitespace', '\s\+$')
+  endif
+endfunction
+
+function UnHighlightTrailWhitespace()
+  if exists('w:_whitespace_match')
+    call matchdelete(w:_whitespace_match)
+    unlet w:_whitespace_match
+  endif
+endfunction
+
+function TrimTrailWhitespace()
+  let oldhlsearch=&hlsearch
+  %s/\s\+$//
+  let &hlsearch=oldhlsearch
+  " This trick makes cursor to not move
+  ''
 endfunction

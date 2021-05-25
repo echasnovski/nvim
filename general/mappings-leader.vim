@@ -201,7 +201,7 @@ let g:which_key_map.o = {
   \ 'S' : [':call SpellCompletionToggle()', 'spell completion toggle'],
   \ 's' : [':setlocal spell!'             , 'spell toggle'],
   \ 'w' : [':call ToggleWrap()'           , 'wrap toggle'],
-  \ 'W' : [':StripWhitespace'             , 'whitespace strip'],
+  \ 'W' : [':call TrimTrailWhitespace()'  , 'whitespace trim'],
   \ 'z' : [':call Zoom()'                 , 'zoom'],
   \ }
 
