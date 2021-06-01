@@ -4,6 +4,9 @@
 -- Tests
 --
 -- func.call(a = (1 + 1), b = c(2, 3))
+-- (((a)))
+-- [(aaa(b = c(), d))]
+-- (aa_a.a(b = c(), d))
 
 MiniSurround = {}
 
@@ -83,7 +86,46 @@ function find_smallest_covering_match(line, pattern, offset)
   end
 
   if left == nil then return nil end
+
+  -- Try make match even smaller. Can happen if there is `+` flag at the end.
+  -- For example `line = '((()))', pattern = '%(.-%)+', offset = 3`.
+  local line_pattern = '^' .. pattern .. '$'
+  while left < right and line:sub(left, right - 1):find(line_pattern) do
+    right = right - 1
+  end
+
   return {left = left, right = right}
+end
+
+-- Extend match to capture possible whole groups with count modifiers.
+-- Primar usage is to match whole function call with pattern `[%w_%.]+%b()`.
+-- Example:
+-- `line = '(aaa(b()b))', match = {left = 4, right = 10}, pattern = '%g+%b()',
+-- direction = 'left'` should return `{left = 2, right = 10}`.
+-- NOTE: when used for pattern without count modifiers, can remove "smallest
+-- width" property. For example:
+-- `line = '((()))', match = {left = 2, right = 5},
+-- pattern = '%(%(.-%)%)', direction = 'left'`
+function extend_match(line, match, pattern, direction)
+  local res = match
+  local line_pattern = '^' .. pattern .. '$'
+  local n = line:len()
+  local res_matched = function()
+    return line:sub(res.left, res.right):find(line_pattern) ~= nil
+  end
+
+  if direction ~= 'right' then
+    res.left = res.left - 1
+    while res.left >= 2 and res_matched() do res.left = res.left - 1 end
+    res.left = res.left + 1
+  end
+  if direction ~= 'left' then
+    res.right = res.right + 1
+    while res.right <= n-1 and res_matched() do res.right = res.right + 1 end
+    res.right = res.right - 1
+  end
+
+  return res
 end
 
 function get_cursor_neighborhood(n_neighbors)
@@ -193,8 +235,10 @@ function default_surrounding(char)
 end
 
 function funcall_input()
-  -- Non-space followed by a balanced parenthesis
-  return {pattern = '%g%b()'}
+  -- Allowed symbols followed by a balanced parenthesis.
+  -- Can't use `%g` instead of allowed characters because of possible
+  -- '[(fun(10))]' case
+  return {pattern = '[%w_%.]+%b()'}
 end
 
 function funcall_output()
