@@ -26,76 +26,134 @@ MiniSurround.pairs = {
 MiniSurround.cache_surrounding_input  = nil
 MiniSurround.cache_surrounding_output = nil
 
-function read_line(line_num)
-  return vim.api.nvim_buf_get_lines(0, line_num - 1, line_num, false)[1]
-end
-
-function write_line(line_num, line)
-  return vim.api.nvim_buf_set_lines(0, line_num - 1, line_num, false, {line})
+function get_cursor_pos()
+  local pos = vim.api.nvim_win_get_cursor(0)
+  -- Convert from 0-based column to 1-based
+  return {line = pos[1], col = pos[2] + 1}
 end
 
 function delete_line_part(line_part)
-  local line = read_line(line_part.line)
+  local line = vim.fn.getline(line_part.line)
   local new_line = line:sub(1, line_part.from - 1) .. line:sub(line_part.to + 1)
-  return write_line(line_part.line, new_line)
+  vim.fn.setline(line_part.line, new_line)
 end
 
 -- After this, `text` in line will start at `col` character
 -- `col` should be not less than 1 (otherwise negative indexing will occur)
 function insert_into_line(line_num, col, text)
-  local line = read_line(line_num)
+  local line = vim.fn.getline(line_num)
   local new_line = line:sub(1, col - 1) .. text .. line:sub(col)
-  return write_line(line_num, new_line)
+  vim.fn.setline(line_num, new_line)
 end
 
 -- Find the smallest (with the smallest width) `pattern` match in `line` which
--- covers character at `position`.
+-- covers character at `offset`.
 -- Output is two numbers (or two `nil`s in case of no covering match): indexes
 -- of left and right parts of match. They have two properties:
--- - `left <= position <= right`.
+-- - `left <= offset <= right`.
 -- - `line:sub(left, right)` matches `'^' .. pattern .. '$'`.
-function find_smallest_covering_match(line, pattern, position)
+function find_smallest_covering_match(line, pattern, offset)
   local left, right, match_left, match_right
   local stop = false
   local init = 1
   while not stop do
     match_left, match_right = line:find(pattern, init)
-    if (match_left == nil) or (match_left > position) then
-      -- Stop if first match is gone over `position` to the right
+    if (match_left == nil) or (match_left > offset) then
+      -- Stop if first match is gone over `offset` to the right
       stop = true
-    elseif match_right < position then
-      -- Proceed if whole match is on the left
-      init = match_right + 1
+    elseif match_right < offset then
+      -- Proceed if whole match is on the left and move init to the right.
+      -- Using `match_right` instead of `match_right + 1` to account for this
+      -- situation: `line = '"a"aa"', pattern = '".-"', offset = 4`. Using
+      -- plain `match_right` allows to find `"aa"`, but `match_right + 1` will
+      -- not find anything.
+      -- Need `max` here to ensure that `init` is actually moved to right.
+      init = math.max(init + 1, match_right)
     else
-      -- Successful match: match_left <= position <= match_right
-      left, right = match_left, match_right
+      -- Successful match: match_left <= offset <= match_right
+      -- Update result only if current has smaller width. This ensures
+      -- "smallest width" condition. Useful when pattern is something like
+      -- `".-"` and `line = '"a"aa"', offset = 3`.
+      if (left == nil) or (match_right - match_left < right - left) then
+        left, right = match_left, match_right
+      end
       -- Try find smaller match
       init = match_left + 1
     end
   end
 
-  return left, right
+  if left == nil then return nil end
+  return {left = left, right = right}
 end
 
-function detect_funcall()
-  local cur_pos = vim.api.nvim_win_get_cursor(0)
-  local n_lines = MiniSurround.search_num_lines
-  local lines = vim.api.nvim_buf_get_lines(
-    0, cur_pos[1] - n_lines - 1, cur_pos[1] + n_lines, false
-  )
-  local big_line = table.concat(lines, '\n')
+function get_cursor_neighborhood(n_neighbors)
+  local cur_pos = get_cursor_pos()
 
-  -- Function call is a name ('%w_\.') followed by balanced '(' and ')'
-  local funcall = string.match(big_line, [[[%w_\.]+%b()]])
-  print(funcall)
+  -- '2d neighborhood': position is determined by line and column
+  line_start = math.max(1, cur_pos.line - n_neighbors)
+  line_end = math.min(vim.api.nvim_buf_line_count(0), cur_pos.line + n_neighbors)
+  neigh2d = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
 
-  -- Now need to ensure that this function call contains current cursor
-  -- position and is minimal (there is no function call with smaller length
-  -- containing cursor)
+  -- '1d neighborhood': position is determined by offset from start
+  local neigh1d = table.concat(neigh2d, '')
+
+  -- Convert from buffer position to 1d offset
+  local pos_to_offset = function(pos)
+    local line_num = line_start
+    local offset = 0
+    while line_num < pos.line do
+      offset = offset + neigh2d[line_num - line_start + 1]:len()
+      line_num = line_num + 1
+    end
+
+    return offset + pos.col
+  end
+
+  -- Convert from 1d offset to buffer position
+  local offset_to_pos = function(offset)
+    local line_num = 1
+    local line_offset = 0
+    while line_num <= #neigh2d and line_offset + neigh2d[line_num]:len() < offset do
+      line_offset = line_offset + neigh2d[line_num]:len()
+      line_num = line_num + 1
+    end
+
+    return {line = line_start + line_num - 1, col = offset - line_offset}
+  end
+
+  return {
+    ['1d'] = neigh1d,
+    ['2d'] = neigh2d,
+    pos_to_offset = pos_to_offset,
+    offset_to_pos = offset_to_pos
+  }
+end
+
+function find_match_in_neighborhood(pattern, n_neighbors)
+  local cur_pos = get_cursor_pos()
+  local neigh = get_cursor_neighborhood(n_neighbors)
+  local cur_offset = neigh.pos_to_offset(cur_pos)
+
+  local surr = find_smallest_covering_match(neigh['1d'], pattern, cur_offset)
+  if surr == nil then return nil end
+
+  return {
+    left = neigh.offset_to_pos(surr.left),
+    right = neigh.offset_to_pos(surr.right)
+  }
 end
 
 function give_msg(msg)
   vim.cmd(string.format([[echom "(mini-surround.lua) %s"]], msg))
+end
+
+function user_input(msg)
+  local res = vim.fn.input('(mini-surround.lua) ' .. msg .. ': ')
+  if res == '' then
+    give_msg('Surrounding should not be empty.')
+    return nil
+  end
+  return res
 end
 
 function get_char()
@@ -115,16 +173,45 @@ function get_char()
   return char
 end
 
-function user_surround_output(msg)
+function get_surround_info(type)
   local char = get_char()
+
+  -- Handle special cases
   if char == nil then return nil end
-  return MiniSurround.pairs[char] or {left = char, right = char}
+  if char == 'i' then return get_interactive_surrounding() end
+  if char == 'f' then
+    -- Differentiate input and output because input doesn't need user input
+    return (type == 'input') and funcall_input() or funcall_output()
+  end
+
+  return MiniSurround.pairs[char] or default_surrounding(char)
 end
 
-function user_surround_input(msg)
-  local char = get_char()
-  if char == nil then return nil end
-  return MiniSurround.pairs[char] or {left = char, right = char}
+function default_surrounding(char)
+  local char_esc = vim.pesc(char)
+  return {pattern = char_esc .. '.-' .. char_esc, left = char, right = char}
+end
+
+function funcall_input()
+  -- Non-space followed by a balanced parenthesis
+  return {pattern = '%g%b()'}
+end
+
+function funcall_output()
+  local fun_name = user_input('Function name')
+  if fun_name == nil then return nil end
+  return {left = fun_name .. '(', right = ')'}
+end
+
+function get_interactive_surrounding()
+  local left = user_input('Left surrounding')
+  if left == nil then return nil end
+
+  local right = user_input('Right surrounding')
+  if right == nil then return nil end
+
+  local pattern = vim.pesc(left) .. '.-' .. vim.pesc(right)
+  return {pattern = pattern, left = left, right = right}
 end
 
 function get_region_edges(mode)
@@ -146,7 +233,7 @@ function get_region_edges(mode)
   return pos_start, pos_end
 end
 
--- Currently it has problems
+-- Currently it has big problems: can't make balancing
 function find_pattern(pattern, dir)
   dir = dir or 'right'
   local flags = 'cnW'
@@ -186,9 +273,9 @@ function MiniSurround.add(mode)
   -- no intended dot-repeatability).
   local surrounding
   if mode == 'visual' then
-    surrounding = user_surround_output()
+    surrounding = get_surround_info('output')
   else
-    surrounding = MiniSurround.cache_surrounding_output or user_surround_output()
+    surrounding = MiniSurround.cache_surrounding_output or get_surround_info('output')
   end
   ---- Don't do anything in case of a bad surrounding
   if surrounding == nil then return '' end
@@ -207,7 +294,7 @@ function MiniSurround.delete(mode)
   local start = os.clock()
 
   -- Get surrounding
-  local surrounding = MiniSurround.cache_surrounding_input or user_surround_input()
+  local surrounding = MiniSurround.cache_surrounding_input or get_surround_info('input')
   ---- Don't do anything in case of a bad surrounding
   if surrounding == nil then return '' end
   ---- Cache surrounding for dot-repeatability
