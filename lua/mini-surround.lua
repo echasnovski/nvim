@@ -8,6 +8,21 @@
 -- [(aaa(b = c(), d))]
 -- (aa_a.a(b = c(), d))
 -- 'aa'aaa'
+-- aaa(bbb(ccc(ddd(fff(eee)))))
+--
+-- aaa(bbb(ccc(
+--   ddd
+-- )))
+--
+-- <a>Hello<b class>World</a></b>
+-- <div class='Hello'>
+--   <p>aaa</p><br>
+-- </div>
+--
+-- <a>Hello
+-- <b>World
+-- </a>
+-- </b>
 
 MiniSurround = {}
 
@@ -107,12 +122,7 @@ function user_char()
 end
 
 function user_input(msg)
-  local res = vim.fn.input('(mini-surround.lua) ' .. msg .. ': ')
-  if res == '' then
-    give_msg('Surrounding should not be empty.')
-    return nil
-  end
-  return res
+  return vim.fn.input('(mini-surround.lua) ' .. msg .. ': ')
 end
 
 ---- Work with line parts and text
@@ -148,14 +158,14 @@ function insert_into_line(line_num, col, text)
 end
 
 ---- Work with regular expressions
------- Find the smallest (with the smallest width) borders (left and right
------- offsets in `line`) which covers `offset` and within which `pattern` is
------- matched.  Output is a table with two numbers (or `nil` in case of no
------- covering match): indexes of left and right parts of match. They have
------- two properties:
+------ Find the smallest (with the smallest width) covering (left and right
+------ offsets in `line`) which inclused `offset` and within which `pattern` is
+------ matched. Output is a table with two numbers (or `nil` in case of no
+------ covering match): indexes of left and right parts of match. They have two
+------ properties:
 ------ - `left <= offset <= right`.
 ------ - `line:sub(left, right)` matches `'^' .. pattern .. '$'`.
-function find_covering_borders(line, pattern, offset)
+function find_smallest_covering(line, pattern, offset)
   local left, right, match_left, match_right
   local stop = false
   local init = 1
@@ -165,13 +175,16 @@ function find_covering_borders(line, pattern, offset)
       -- Stop if first match is gone over `offset` to the right
       stop = true
     elseif match_right < offset then
-      -- Proceed if whole match is on the left and move init to the right.
-      -- Using `match_right` instead of `match_right + 1` to account for this
-      -- situation: `line = '"a"aa"', pattern = '".-"', offset = 4`. Using
-      -- plain `match_right` allows to find `"aa"`, but `match_right + 1` will
-      -- not find anything.
-      -- Need `max` here to ensure that `init` is actually moved to right.
-      init = math.max(init + 1, match_right)
+      -- Try find covering match. Originally this was `init = math.max(init +
+      -- 1, match_right)`.  Generally, this works fine, but there is an edge
+      -- case with tags.  Consider example: '<a>hello<b>world</a></b>' and
+      -- cursor inside '</b>'.  First match is '<a>...</a>'. It doesn't cover
+      -- cursor, this branch is
+      -- executed. If move to `match_right`, next iteration will match inside
+      -- '></b>' and will find no match.
+      -- This increases execution time, but tolerably so. On the plus side,
+      -- this edge case currently gives wrong result even in 'vim-sandwich' :)
+      init = match_left + 1
     else
       -- Successful match: match_left <= offset <= match_right
       -- Update result only if current has smaller width. This ensures
@@ -197,18 +210,18 @@ function find_covering_borders(line, pattern, offset)
   return {left = left, right = right}
 end
 
------- Extend borders to capture possible whole groups with count modifiers.
+------ Extend covering to capture possible whole groups with count modifiers.
 ------ Primar usage is to match whole function call with pattern
 ------ `[%w_%.]+%b()`. Example:
------- `borders = {left = 4, right = 10}, line = '(aaa(b()b))',
+------ `covering = {left = 4, right = 10}, line = '(aaa(b()b))',
 ------ pattern = '%g+%b()', direction = 'left'` should return
 ------ `{left = 2, right = 10}`.
 ------ NOTE: when used for pattern without count modifiers, can remove
 ------ "smallest width" property. For example:
------- `borders = {left = 2, right = 5}, line = '((()))',
+------ `covering = {left = 2, right = 5}, line = '((()))',
 ------ pattern = '%(%(.-%)%)', direction = 'left'`
-function extend_borders(borders, line, pattern, direction)
-  local left, right = borders.left, borders.right
+function extend_covering(covering, line, pattern, direction)
+  local left, right = covering.left, covering.right
   local line_pattern = '^' .. pattern .. '$'
   local n = line:len()
   local is_matched = function(l, r)
@@ -287,17 +300,15 @@ function get_surround_info(type, use_cache)
   -- Prompt user to enter identifier of surrounding
   local char = user_char()
 
-  -- Handle special cases
+  -- Compute surround info
   ---- Return `nil` in case of a bad identifier
   if char == nil then return nil end
-  if char == 'i' then res = get_interactive_surrounding() end
-  if char == 'f' then
-    -- Differentiate input and output because input doesn't need user input
-    res = (type == 'input') and funcall_input() or funcall_output()
-  end
 
-  -- Get from other sources if it is not special case
-  res = res or MiniSurround.brackets[char] or default_surrounding(char)
+  ---- Handle special cases first
+  if     char == 'f' then res = special_funcall(type)
+  elseif char == 'i' then res = special_interactive(type)
+  elseif char == 't' then res = special_tag(type)
+  else res = MiniSurround.brackets[char] or default_surrounding(char) end
 
   -- Cache result
   if use_cache then MiniSurround.cache[type] = res end
@@ -310,24 +321,25 @@ function default_surrounding(char)
   return {find = char_esc .. '.-' .. char_esc, left = char, right = char}
 end
 
-function funcall_input()
-  -- Allowed symbols followed by a balanced parenthesis.
-  -- Can't use `%g` instead of allowed characters because of possible
-  -- '[(fun(10))]' case
-  return {id = 'f', find = '[%w_%.]+%b()', extract = '^([%w_%.]+%().*(%))$'}
+function special_funcall(type)
+  -- Differentiate input and output because input doesn't need user action
+  if type == 'input' then
+    -- Allowed symbols followed by a balanced parenthesis.
+    -- Can't use `%g` instead of allowed characters because of possible
+    -- '[(fun(10))]' case
+    return {id = 'f', find = '[%w_%.]+%b()', extract = '^([%w_%.]+%().*(%))$'}
+  else
+    local fun_name = user_input('Function name')
+    return {left = fun_name .. '(', right = ')'}
+  end
 end
 
-function funcall_output()
-  local fun_name = user_input('Function name')
-  if fun_name == nil then return nil end
-  return {left = fun_name .. '(', right = ')'}
-end
-
-function get_interactive_surrounding()
+function special_interactive(type)
+  -- Prompt for surroundings. Empty surrounding is not allowed for input.
   local left = user_input('Left surrounding')
-  if left == nil then return nil end
+  if type == 'input' and left == '' then return nil end
   local right = user_input('Right surrounding')
-  if right == nil then return nil end
+  if type == 'input' and right == '' then return nil end
 
   local left_esc, right_esc = vim.pesc(left), vim.pesc(right)
   local find = string.format('%s.-%s', left_esc, right_esc)
@@ -335,26 +347,39 @@ function get_interactive_surrounding()
   return {find = find, extract = extract, left = left, right = right}
 end
 
+function special_tag(type)
+  -- Differentiate input and output because input doesn't need user action
+  if type == 'input' then
+    -- NOTE: having group capture and backreference in 'find' pattern increases
+    -- execution time. This is mostly visible when searching in a very big '1d
+    -- neighborhood'.
+    return {find = '<([^ >]-).->.-</%1>', extract = '^(<.->).*(</[^/]->)$'}
+  else
+    local tag_name = user_input('Tag name')
+    return {left = '<' .. tag_name .. '>', right = '</' .. tag_name .. '>'}
+  end
+end
+
 -- Find surrounding
 function find_surrounding_in_neighborhood(surround_info, n_neighbors)
   local neigh = get_cursor_neighborhood(n_neighbors)
   local cur_offset = neigh.pos_to_offset(neigh.cursor_pos)
 
-  -- Find borders of surrounding
-  local borders = find_covering_borders(
+  -- Find covering of surrounding
+  local covering = find_smallest_covering(
     neigh['1d'], surround_info.find, cur_offset
   )
-  if borders == nil then return nil end
-  ---- Tweak borders for function call surrounding
+  if covering == nil then return nil end
+  ---- Tweak covering for function call surrounding
   if surround_info.id == 'f' then
-    borders = extend_borders(borders, neigh['1d'], surround_info.find, 'left')
+    covering = extend_covering(covering, neigh['1d'], surround_info.find, 'left')
   end
-  local substring = neigh['1d']:sub(borders.left, borders.right)
+  local substring = neigh['1d']:sub(covering.left, covering.right)
 
   -- Compute lineparts for left and right surroundings
   local extract = surround_info.extract or '^(.).*(.)$'
   local left, right = substring:match(extract)
-  local l, r = borders.left, borders.right
+  local l, r = covering.left, covering.right
 
   local left_from, left_to =
     neigh.offset_to_pos(l), neigh.offset_to_pos(l + left:len() - 1)
@@ -369,19 +394,38 @@ function find_surrounding_in_neighborhood(surround_info, n_neighbors)
   return {left = left_linepart, right = right_linepart}
 end
 
+---- NOTE: more simple approach would have been to use combination of
+---- `searchpairpos()` (to search for balanced pair) and `searchpos()` (to
+---- search end of balanced search and for unbalanced pairs). However, there
+---- are several problems with it:
+---- - It is slower (around 2-5 times) than current Lua pattern approach.
+---- - It has limitations when dealing with crucial 'function call' search.
+----   Function call is defined as 'non-empty function name followed by
+----   balanced pair of "(" and ")"'. Naive use of `searchpairpos()` is to use
+----   `searchpairpos('\w\+(', '', ')')` which works most of the time.
+----   However, in example `foo(a = (1 + 1), b = c(1, 2))` this will match
+----   `o(a = (1 + 1)` when cursor is on 'a'. This is because '(' inside it is
+----   not recognized for balancing because it doesn't match '\w\+('.
+----
+---- Vim's approach also has some upsides:
+---- - `searchpairpos()` allows skipping of certain matches, like if it is
+----   inside string or comment. It works decently well with example from help
+----   (with `synIDattr`, etc.) but this only works when Vim's builtin
+----   highlighting is used. When treesitter's highlighting is active, this
+----   doesn't work.
+----
+---- All in all, using Vim's builtin functions is doable, but leads to roughly
+---- same efforts as Lua pattern approach.
 function find_surrounding(surround_info)
   if surround_info == nil then return nil end
+  local n_lines = MiniSurround.search_num_lines
 
   -- First try only current line as it is the most common use case
   local surr = find_surrounding_in_neighborhood(surround_info, 0) or
-    find_surrounding_in_neighborhood(surround_info, MiniSurround.search_num_lines)
+    find_surrounding_in_neighborhood(surround_info, n_lines)
 
   if surr == nil then
-    give_msg(string.format(
-      'No surrounding found within %d lines.',
-      MiniSurround.search_num_lines
-    ))
-    return nil
+    give_msg(string.format('No surrounding found within %d lines.', n_lines))
   end
 
   return surr
@@ -450,9 +494,14 @@ function MiniSurround.replace()
   delete_linepart(surr.right)
   delete_linepart(surr.left)
 
+  -- Compute adjustment for adding right surrounding
+  local n_del_left = 0
+  if surr.left.line == surr.right.line then
+    n_del_left = surr.left.to - surr.left.from + 1
+  end
+
   -- Add output surrounding. Begin insert with 'end' to not break column numbers
-  ---- Insert after the right mark (`+ 1` is for that)
-  insert_into_line(surr.right.line, surr.right.from - 1, new_surr_info.right)
+  insert_into_line(surr.right.line, surr.right.from - n_del_left, new_surr_info.right)
   insert_into_line(surr.left.line, surr.left.from, new_surr_info.left)
 
   -- Tweak cursor position
@@ -462,6 +511,8 @@ function MiniSurround.replace()
 end
 
 function MiniSurround.find()
+  local start = os.clock()
+
   -- Find surrounding
   local surr = find_surrounding(get_surround_info('input', true))
   if surr == nil then return '' end
@@ -473,11 +524,15 @@ function MiniSurround.find()
 
   -- Cycle cursor through positions
   cursor_cycle(pos_list)
+
+  print(os.clock() - start)
 end
 
 function MiniSurround.highlight()
+  local start = os.clock()
+
   -- Find surrounding
-  local surr = find_surrounding(get_surround_info('input', false))
+  local surr = find_surrounding(get_surround_info('input', true))
   if surr == nil then return '' end
 
   -- Highlight surrounding
@@ -498,6 +553,8 @@ function MiniSurround.highlight()
     end,
     MiniSurround.highlight_duration
   )
+
+  print(os.clock() - start)
 end
 
 -- Make mappings
@@ -524,8 +581,8 @@ vim.api.nvim_set_keymap(
   {expr = true, noremap = true, silent = true}
 )
 vim.api.nvim_set_keymap(
-  'n', 'th', [[:<c-u>lua MiniSurround.highlight()<cr>]],
-  {noremap = true, silent = true}
+  'n', 'th', [[v:lua.MiniSurround.operator('highlight') . ' ']],
+  {expr = true, noremap = true, silent = true}
 )
 
 return MiniSurround
