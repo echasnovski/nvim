@@ -100,7 +100,7 @@ vim.api.nvim_exec([[
   hi link MiniStatuslineDevinfo  StatusLine
   hi link MiniStatuslineFilename StatusLineNC
   hi link MiniStatuslineFileinfo StatusLine
-]], valse)
+]], false)
 
 -- High-level definition of statusline content
 function MiniStatusline:set_active()

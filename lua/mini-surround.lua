@@ -186,7 +186,7 @@ local function user_char()
   if type(char) == 'number' then char = vim.fn.nr2char(char) end
   if char:find('^[%w%p%s]$') == nil then
     give_msg(
-      [[Input must be single character: alphanumeric, punctuation, or space."]]
+      [[Input must be single character: alphanumeric, punctuation, or space.]]
     )
     return nil
   end
