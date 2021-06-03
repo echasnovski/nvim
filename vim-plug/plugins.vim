@@ -8,9 +8,6 @@ endif
 
 call plug#begin('~/.config/nvim/autoload/plugged')
 
-  " Surround with (), [], "", etc.
-  Plug 'machakann/vim-sandwich'
-
   " More text objects
   Plug 'wellle/targets.vim'
 
@@ -32,6 +29,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   if has("nvim-0.5") == 0
     " Python movements and text objects
     Plug 'jeetsukumaran/vim-pythonsense'
+
+    " Surround with (), [], "", etc.
+    Plug 'machakann/vim-sandwich'
   endif
 
   if !exists('g:vscode')
@@ -106,6 +106,9 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       "" 'pear-tree' provides more intuitive experience than 'auto-pairs':
       "" 'smart opener/closer', not inserting closer when before word, etc.
       Plug 'tmsvg/pear-tree'
+
+      " Surround with (), [], "", etc.
+      Plug 'machakann/vim-sandwich'
     endif
 
     " General

@@ -1,35 +1,95 @@
--- Line part - table with fields `line`, `from`, `to`. Represent part of line
--- from `from` character (inclusive) to `to` character (inclusive).
-
--- Tests
+-- Custom *somewhat minimal* and *fast* surrounding Lua plugin. This is meant
+-- to be a standalone file which, when sourced in 'init.*' file, provides a
+-- working minimal commenting. This is mostly a reimplementation of the most
+-- essential features of 'machakann/vim-sandwich' with a couple more on top.
 --
--- func.call(a = (1 + 1), b = c(2, 3))
--- (((a)))
--- [(aaa(b = c(), d))]
--- (aa_a.a(b = c(), d))
--- 'aa'aaa'
--- aaa(bbb(ccc(ddd(fff(eee)))))
+-- Features:
+-- - Actions:
+--     - Add surrounding with `sa` (in visual mode or on motion).
+--     - Delete surrounding with `sd`.
+--     - Replace surrounding with `sr`.
+--     - Find surrounding with `sf` or `sF` (move cursor right or left).
+--     - Highlight surrounding with `sh`.
+--     - Change number of neighbor lines with `sn` (see algorithm details).
+--   Note that all actions are dot-repeatable out of the box.
+-- - Surrounding is supplied with single character as both 'input' (in 'delete'
+--   and 'replace' start) and 'output' (in 'add' and 'replace' end):
+--     - 'f' - function call (string of certain characters followed by balanced
+--       '()'). In 'input' finds function call, in 'output' prompts user to
+--       enter function name.
+--     - 'i' - interactive. Prompts user to enter left and right parts.
+--     - 't' - tag. In 'input' finds tab with same identifier, in 'output'
+--       prompts user to enter tag name.
+--     - All symbols in brackets '()', '[]', '{}', '<>'. In 'input' represents
+--       balanced brackets, in 'output' - left and right parts of brackets.
+--     - All other alphanumeric, punctuation, or space characters represent
+--       surrounding with identical left and right parts.
 --
--- aaa(bbb(ccc(
---   ddd
--- )))
+-- Examples:
+-- - `saiw)` - add (`sa`) for inner word (`iw`) parenthesis (`)`).
+-- - `sdf` - delete (`sd`) surrounding function call (`f`).
+-- - `sr)tdiv<CR>` - replace (`sr`) surrounding parenthesis (`)`) with tag
+--   (`t`) with identifier 'div' (`div<CR>` in command line prompt).
+-- - `sff` - find right (`sf`) part of surrounding function call (`f`).
+-- - `sh}` - highlight (`sh`) for a brief period of time surrounding curly
+--   brackets (`}`)
 --
--- <a>Hello<b class>World</a></b>
--- <div class='Hello'>
---   <p>aaa</p><br>
--- </div>
+-- Details of algorithms:
+-- - Adding 'output' surrounding has a fairly straightforward algorithm:
+--     - Determine places for left and right parts (via `<>` or `[]` marks).
+--     - Determine left and right parts of surrounding.
+--     - Properly add.
+-- - Finding 'input' surrounding is a lot more complicated and is a reason why
+--   this implementation is only *somewhat minimal*. The first idea is to use
+--   Vim's `searchpairpos()`, but it searches only balanced pair. This means
+--   `searchpos()` should also be used. But the most serious drawback is a lack
+--   of a fairly straightforward way of searching for function call, which is a
+--   crucial requirement. With these difficulties, there is already no
+--   considerable gain in basing algorithm on `searchpairpos()`.
+--   In a nutshell, current algorithm *searches in the neighbor lines based on
+--   a certain pattern a _smallest_ match that covers cursor*. More detailed:
+--     - Extract neighborhood of cursor line: no more than
+--       `MiniSurround.n_lines` before, cursor line itself, no more than
+--       `MiniSurround.n_lines` after.
+--     - Convert it to '1d neighborhood' by concatenating with '\n' delimiter.
+--       Compute location of current cursor position in this line.
+--     - Given Lua pattern for a 'input' surrounding, search for a smallest
+--       (with minimal width) match that covers cursor position. This is an
+--       iterative procedure, duration of which heavily depends on the length
+--       of '1d neighborhood' and frequency of pattern matching. If no match is
+--       found, there is no surrounding.
+--     - Compute parts of '1d neighborhood' that represent left and right part
+--       of found surrounding. This is done by using 'extract' pattern computed
+--       for every type of surrounding.
+--     - Convert '1d offsets' of found parts to their positions in buffer.
+--   Actual search is done firstly on cursor line (as it is the most frequent
+--   usage) and only then searches in neighborhood.
 --
--- <a>Hello
--- <b>World
--- </a>
--- </b>
+-- Known issues which won't be resolved:
+-- - When searching for 'input' surrounding, there is no distinction if it is
+--   inside string or comment. So in this case there will be not proper match
+--   for a function call: 'f(a = ")", b = 1)'.
+-- - Tags are searched using regex-like methods, so issues are inevitable.
+--   Overall it is pretty good, but certain cases won't work. Like self-nested
+--   tags won't match correctly on both ends: '<a><a></a></a>'.
 
 MiniSurround = {}
 
-MiniSurround.search_num_lines = 20
+-- Settings
+---- Number of lines within which surrounding is searched
+MiniSurround.n_lines = 20
 
--- Balanced pairs of surroundings
-MiniSurround.brackets = {
+---- Duration of highlight when calling `MiniSurround.highlight()`
+MiniSurround.highlight_duration = 500
+
+-- Helper data
+-- Data for highlighting
+vim.api.nvim_exec([[hi link MiniSurroundHighlight IncSearch]], false)
+MiniSurround.ns_id = vim.api.nvim_create_namespace('MiniSurround')
+
+---- Table of non-special surroundings
+MiniSurround.surroundings = setmetatable({
+  -- Brackets that need balancing
   ['('] = {find = '%b()', left = '(', right = ')'},
   [')'] = {find = '%b()', left = '(', right = ')'},
   ['['] = {find = '%b[]', left = '[', right = ']'},
@@ -38,21 +98,23 @@ MiniSurround.brackets = {
   ['}'] = {find = '%b{}', left = '{', right = '}'},
   ['<'] = {find = '%b<>', left = '<', right = '>'},
   ['>'] = {find = '%b<>', left = '<', right = '>'}
-}
+}, {
+  __index = function(table, key)
+    local key_esc = vim.pesc(key)
+    return {find = key_esc .. '.-' .. key_esc, left = key, right = key}
+  end
+})
 
--- Cache to enable dot-repeatability. Here:
--- - 'input' is used for searching (in 'delete' and first stage of 'replace').
--- - 'output' is used for adding (in 'add' and second stage of 'replace').
-MiniSurround.cache = {input = nil, output = nil}
+---- Cache for dot-repeatability. This table is currently used with these keys:
+---- - 'input' - surround info for searching (in 'delete' and 'replace' start).
+---- - 'output' - surround info for adding (in 'add' and 'replace' end).
+---- - 'direction' - direction in which `MiniSurround.find()` should go. Used
+----   to enable same `operatorfunc` pattern for dot-repeatability.
+MiniSurround.cache = {}
 
--- Prepare data for highlighting
-vim.api.nvim_exec([[hi link MiniSurroundHighlight IncSearch]], false)
-MiniSurround.ns_id = vim.api.nvim_create_namespace('MiniSurround')
-MiniSurround.highlight_duration = 500
-
--- Helpers
+-- Helper functions
 ---- Work with operator marks
-function get_marks_pos(mode)
+local function get_marks_pos(mode)
   -- Region is inclusive on both ends
   local mark1, mark2
   if mode == 'visual' then
@@ -72,7 +134,7 @@ function get_marks_pos(mode)
 end
 
 ---- Work with cursor
-function cursor_adjust(line, col)
+local function cursor_adjust(line, col)
   local cur_pos = vim.api.nvim_win_get_cursor(0)
 
   -- Only adjust cursor if it is on the same line
@@ -81,30 +143,41 @@ function cursor_adjust(line, col)
   vim.api.nvim_win_set_cursor(0, {line, col - 1})
 end
 
-function cursor_cycle(pos_list)
-  local cur_pos = vim.api.nvim_win_get_cursor(0)
-  local cur_line = cur_pos[1]
-  local cur_col = cur_pos[2] + 1
+local function compare_pos(pos1, pos2)
+  if pos1.line < pos2.line then return '<' end
+  if pos1.line > pos2.line then return '>' end
+  if pos1.col  < pos2.col  then return '<' end
+  if pos1.col  > pos2.col  then return '>' end
+  return '='
+end
 
-  local cur_is_on_left
+local function cursor_cycle(pos_list, dir)
+  local cur_pos = vim.api.nvim_win_get_cursor(0)
+  local cur_pos = {line = cur_pos[1], col = cur_pos[2] + 1}
+
+  local compare, to_left, to_right, res_pos
+  -- NOTE: `pos_list` should be an increasingly ordered list of positions
   for _, pos in pairs(pos_list) do
-    cur_is_on_left = (cur_line < pos.line) or
-      (cur_line == pos.line and cur_col < pos.col)
-    if cur_is_on_left then
-      vim.api.nvim_win_set_cursor(0, {pos.line, pos.col - 1})
-      return
-    end
+    compare = compare_pos(cur_pos, pos)
+    -- Take position when moving to left if cursor is strictly on right.
+    -- This will lead to updating `res_pos` until the rightmost such position.
+    to_left = compare == '>' and dir == 'left'
+    -- Take position when moving to right if cursor is strictly on left.
+    -- This will update result only once leading to the leftmost such position.
+    to_right = res_pos == nil and compare == '<' and dir == 'right'
+    if to_left or to_right then res_pos = pos end
   end
 
-  vim.api.nvim_win_set_cursor(0, {pos_list[1].line, pos_list[1].col - 1})
+  res_pos = res_pos or (dir == 'right' and pos_list[1] or pos_list[#pos_list])
+  vim.api.nvim_win_set_cursor(0, {res_pos.line, res_pos.col - 1})
 end
 
 ---- Work with user input
-function give_msg(msg)
+local function give_msg(msg)
   vim.cmd(string.format([[echom "(mini-surround.lua) %s"]], msg))
 end
 
-function user_char()
+local function user_char()
   local char = vim.fn.getchar()
 
   -- Terminate if input is `<Esc>`
@@ -121,12 +194,14 @@ function user_char()
   return char
 end
 
-function user_input(msg)
-  return vim.fn.input('(mini-surround.lua) ' .. msg .. ': ')
+local function user_input(msg, text)
+  return vim.fn.input('(mini-surround.lua) ' .. msg .. ': ', text or '')
 end
 
----- Work with line parts and text
-function new_linepart(pos_left, pos_right)
+---- Work with line parts and text.
+---- Line part - table with fields `line`, `from`, `to`. Represent part of line
+---- from `from` character (inclusive) to `to` character (inclusive).
+local function new_linepart(pos_left, pos_right)
   if pos_left.line ~= pos_right.line then
     give_msg('Positions span over multiple lines.')
     return nil
@@ -135,7 +210,7 @@ function new_linepart(pos_left, pos_right)
   return {line = pos_left.line, from = pos_left.col, to = pos_right.col}
 end
 
-function linepart_to_pos_table(linepart)
+local function linepart_to_pos_table(linepart)
   local res = {{line = linepart.line, col = linepart.from}}
   if linepart.from ~= linepart.to then
     table.insert(res, {line = linepart.line, col = linepart.to})
@@ -143,13 +218,13 @@ function linepart_to_pos_table(linepart)
   return res
 end
 
-function delete_linepart(linepart)
+local function delete_linepart(linepart)
   local line = vim.fn.getline(linepart.line)
   local new_line = line:sub(1, linepart.from - 1) .. line:sub(linepart.to + 1)
   vim.fn.setline(linepart.line, new_line)
 end
 
-function insert_into_line(line_num, col, text)
+local function insert_into_line(line_num, col, text)
   -- After this, `text` in line will start at `col` character `col` should be
   -- not less than 1 (otherwise negative indexing will occur)
   local line = vim.fn.getline(line_num)
@@ -165,7 +240,7 @@ end
 ------ properties:
 ------ - `left <= offset <= right`.
 ------ - `line:sub(left, right)` matches `'^' .. pattern .. '$'`.
-function find_smallest_covering(line, pattern, offset)
+local function find_smallest_covering(line, pattern, offset)
   local left, right, match_left, match_right
   local stop = false
   local init = 1
@@ -220,7 +295,7 @@ end
 ------ "smallest width" property. For example:
 ------ `covering = {left = 2, right = 5}, line = '((()))',
 ------ pattern = '%(%(.-%)%)', direction = 'left'`
-function extend_covering(covering, line, pattern, direction)
+local function extend_covering(covering, line, pattern, direction)
   local left, right = covering.left, covering.right
   local line_pattern = '^' .. pattern .. '$'
   local n = line:len()
@@ -239,16 +314,21 @@ function extend_covering(covering, line, pattern, direction)
 end
 
 ---- Work with cursor neighborhood
-function get_cursor_neighborhood(n_neighbors)
+local function get_cursor_neighborhood(n_neighbors)
   -- Cursor position
   local cur_pos = vim.api.nvim_win_get_cursor(0)
   ---- Convert from 0-based column to 1-based
   cur_pos = {line = cur_pos[1], col = cur_pos[2] + 1}
 
   -- '2d neighborhood': position is determined by line and column
-  line_start = math.max(1, cur_pos.line - n_neighbors)
-  line_end = math.min(vim.api.nvim_buf_line_count(0), cur_pos.line + n_neighbors)
-  neigh2d = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
+  local line_start = math.max(1, cur_pos.line - n_neighbors)
+  local line_end = math.min(
+    vim.api.nvim_buf_line_count(0), cur_pos.line + n_neighbors
+  )
+  local neigh2d = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
+  ---- Append 'newline' character to distinguish between lines in 1d case. This
+  ---- is crucial to not allow detecting surrounding spanning several lines
+  for k, v in pairs(neigh2d) do neigh2d[k] = v .. '\n' end
 
   -- '1d neighborhood': position is determined by offset from start
   local neigh1d = table.concat(neigh2d, '')
@@ -288,7 +368,51 @@ end
 
 -- Get surround information
 ---- `type` is one of 'input' or 'output'
-function get_surround_info(type, use_cache)
+local function special_funcall(type)
+  -- Differentiate input and output because input doesn't need user action
+  if type == 'input' then
+    -- Allowed symbols followed by a balanced parenthesis.
+    -- Can't use `%g` instead of allowed characters because of possible
+    -- '[(fun(10))]' case
+    return {find = '[%w_%.]+%b()', extract = '^([%w_%.]+%().*(%))$'}
+  else
+    local fun_name = user_input('Function name')
+    return {left = fun_name .. '(', right = ')'}
+  end
+end
+
+local function special_interactive(type)
+  -- Prompt for surroundings. Empty surrounding is not allowed for input.
+  local left = user_input('Left surrounding')
+  if type == 'input' and left == '' then return nil end
+  local right = user_input('Right surrounding')
+  if type == 'input' and right == '' then return nil end
+
+  local left_esc, right_esc = vim.pesc(left), vim.pesc(right)
+  local find = string.format('%s.-%s', left_esc, right_esc)
+  local extract = string.format('^(%s).-(%s)$', left_esc, right_esc)
+  return {find = find, extract = extract, left = left, right = right}
+end
+
+local function special_tag(type)
+  -- Differentiate input and output because input doesn't need user action
+  if type == 'input' then
+    -- NOTEs:
+    -- - Here `%f[^%w]` denotes 'end of word' and is needed to capture whole
+    --   tag id. This is needed to not match in case '<ab></a>'.
+    -- - This approach won't match in the end of 'self nested' tags like
+    -- '<a>_<a>_</a>_</a>'.
+    -- - Having group capture and backreference in 'find' pattern increases
+    --   execution time. This is mostly visible when searching in a very big
+    --   '1d neighborhood'.
+    return {find = '<(%a%w*)%f[^%w][^>]->.-</%1>', extract = '^(<.->).*(</[^/]->)$'}
+  else
+    local tag_name = user_input('Tag name')
+    return {left = '<' .. tag_name .. '>', right = '</' .. tag_name .. '>'}
+  end
+end
+
+local function get_surround_info(type, use_cache)
   local res
 
   -- Try using cache
@@ -308,7 +432,8 @@ function get_surround_info(type, use_cache)
   if     char == 'f' then res = special_funcall(type)
   elseif char == 'i' then res = special_interactive(type)
   elseif char == 't' then res = special_tag(type)
-  else res = MiniSurround.brackets[char] or default_surrounding(char) end
+  else res = MiniSurround.surroundings[char] end
+  res.id = char
 
   -- Cache result
   if use_cache then MiniSurround.cache[type] = res end
@@ -316,52 +441,8 @@ function get_surround_info(type, use_cache)
   return res
 end
 
-function default_surrounding(char)
-  local char_esc = vim.pesc(char)
-  return {find = char_esc .. '.-' .. char_esc, left = char, right = char}
-end
-
-function special_funcall(type)
-  -- Differentiate input and output because input doesn't need user action
-  if type == 'input' then
-    -- Allowed symbols followed by a balanced parenthesis.
-    -- Can't use `%g` instead of allowed characters because of possible
-    -- '[(fun(10))]' case
-    return {id = 'f', find = '[%w_%.]+%b()', extract = '^([%w_%.]+%().*(%))$'}
-  else
-    local fun_name = user_input('Function name')
-    return {left = fun_name .. '(', right = ')'}
-  end
-end
-
-function special_interactive(type)
-  -- Prompt for surroundings. Empty surrounding is not allowed for input.
-  local left = user_input('Left surrounding')
-  if type == 'input' and left == '' then return nil end
-  local right = user_input('Right surrounding')
-  if type == 'input' and right == '' then return nil end
-
-  local left_esc, right_esc = vim.pesc(left), vim.pesc(right)
-  local find = string.format('%s.-%s', left_esc, right_esc)
-  local extract = string.format('^(%s).-(%s)$', left_esc, right_esc)
-  return {find = find, extract = extract, left = left, right = right}
-end
-
-function special_tag(type)
-  -- Differentiate input and output because input doesn't need user action
-  if type == 'input' then
-    -- NOTE: having group capture and backreference in 'find' pattern increases
-    -- execution time. This is mostly visible when searching in a very big '1d
-    -- neighborhood'.
-    return {find = '<([^ >]-).->.-</%1>', extract = '^(<.->).*(</[^/]->)$'}
-  else
-    local tag_name = user_input('Tag name')
-    return {left = '<' .. tag_name .. '>', right = '</' .. tag_name .. '>'}
-  end
-end
-
 -- Find surrounding
-function find_surrounding_in_neighborhood(surround_info, n_neighbors)
+local function find_surrounding_in_neighborhood(surround_info, n_neighbors)
   local neigh = get_cursor_neighborhood(n_neighbors)
   local cur_offset = neigh.pos_to_offset(neigh.cursor_pos)
 
@@ -377,6 +458,7 @@ function find_surrounding_in_neighborhood(surround_info, n_neighbors)
   local substring = neigh['1d']:sub(covering.left, covering.right)
 
   -- Compute lineparts for left and right surroundings
+  ---- If there is no `extract` pattern, extract one character from start and end
   local extract = surround_info.extract or '^(.).*(.)$'
   local left, right = substring:match(extract)
   local l, r = covering.left, covering.right
@@ -416,24 +498,27 @@ end
 ----
 ---- All in all, using Vim's builtin functions is doable, but leads to roughly
 ---- same efforts as Lua pattern approach.
-function find_surrounding(surround_info)
+local function find_surrounding(surround_info)
   if surround_info == nil then return nil end
-  local n_lines = MiniSurround.search_num_lines
+  local n_lines = MiniSurround.n_lines
 
   -- First try only current line as it is the most common use case
   local surr = find_surrounding_in_neighborhood(surround_info, 0) or
     find_surrounding_in_neighborhood(surround_info, n_lines)
 
   if surr == nil then
-    give_msg(string.format('No surrounding found within %d lines.', n_lines))
+    give_msg(string.format(
+      [[No surrounding '%s' found within %d lines.]],
+      surround_info.id, n_lines
+    ))
   end
 
   return surr
 end
 
 -- Functions to be mapped
-function MiniSurround.operator(task)
-  MiniSurround.cache = {input = nil, output = nil}
+function MiniSurround.operator(task, cache)
+  MiniSurround.cache = cache or {}
 
   vim.cmd('set operatorfunc=v:lua.' .. 'MiniSurround.' .. task)
   return 'g@'
@@ -463,8 +548,6 @@ function MiniSurround.add(mode)
 end
 
 function MiniSurround.delete()
-  local start = os.clock()
-
   -- Find input surrounding
   local surr = find_surrounding(get_surround_info('input', true))
   if surr == nil then return '' end
@@ -475,13 +558,9 @@ function MiniSurround.delete()
 
   -- Tweak cursor position
   cursor_adjust(surr.left.line, surr.left.from)
-
-  print(os.clock() - start)
 end
 
 function MiniSurround.replace()
-  local start = os.clock()
-
   -- Find input surrounding
   local surr = find_surrounding(get_surround_info('input', true))
   if surr == nil then return '' end
@@ -506,13 +585,9 @@ function MiniSurround.replace()
 
   -- Tweak cursor position
   cursor_adjust(surr.left.line, surr.left.from + new_surr_info.left:len())
-
-  print(os.clock() - start)
 end
 
 function MiniSurround.find()
-  local start = os.clock()
-
   -- Find surrounding
   local surr = find_surrounding(get_surround_info('input', true))
   if surr == nil then return '' end
@@ -523,14 +598,14 @@ function MiniSurround.find()
   for _, v in pairs(pos_table_right) do table.insert(pos_list, v) end
 
   -- Cycle cursor through positions
-  cursor_cycle(pos_list)
+  local dir = MiniSurround.cache.direction or 'right'
+  cursor_cycle(pos_list, dir)
 
-  print(os.clock() - start)
+  -- Open 'enough folds' to show cursor
+  vim.cmd([[normal! zv]])
 end
 
 function MiniSurround.highlight()
-  local start = os.clock()
-
   -- Find surrounding
   local surr = find_surrounding(get_surround_info('input', true))
   if surr == nil then return '' end
@@ -553,36 +628,93 @@ function MiniSurround.highlight()
     end,
     MiniSurround.highlight_duration
   )
+end
 
-  print(os.clock() - start)
+function MiniSurround.update_n_lines()
+  local n_lines = user_input('New number of neighbor lines', MiniSurround.n_lines)
+  n_lines = math.floor(tonumber(n_lines) or MiniSurround.n_lines)
+  MiniSurround.n_lines = n_lines
 end
 
 -- Make mappings
 ---- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
----- It is used to enable dot-repeatability in the first place.
+---- It is used to enable dot-repeatability.
 vim.api.nvim_set_keymap(
-  'n', 'ta', [[v:lua.MiniSurround.operator('add')]],
+  'n', 'sa', [[v:lua.MiniSurround.operator('add')]],
   {expr = true, noremap = true, silent = true}
 )
 vim.api.nvim_set_keymap(
-  'x', 'ta', [[:<c-u>lua MiniSurround.add('visual')<cr>]],
+  'x', 'sa', [[:<c-u>lua MiniSurround.add('visual')<cr>]],
   {noremap = true, silent = true}
 )
 vim.api.nvim_set_keymap(
-  'n', 'td', [[v:lua.MiniSurround.operator('delete') . ' ']],
+  'n', 'sd', [[v:lua.MiniSurround.operator('delete') . ' ']],
   {expr = true, noremap = true, silent = true}
 )
 vim.api.nvim_set_keymap(
-  'n', 'tr', [[v:lua.MiniSurround.operator('replace') . ' ']],
+  'n', 'sr', [[v:lua.MiniSurround.operator('replace') . ' ']],
   {expr = true, noremap = true, silent = true}
 )
 vim.api.nvim_set_keymap(
-  'n', 'tf', [[v:lua.MiniSurround.operator('find') . ' ']],
+  'n', 'sf', [[v:lua.MiniSurround.operator('find', {'direction': 'right'}) . ' ']],
   {expr = true, noremap = true, silent = true}
 )
 vim.api.nvim_set_keymap(
-  'n', 'th', [[v:lua.MiniSurround.operator('highlight') . ' ']],
+  'n', 'sF', [[v:lua.MiniSurround.operator('find', {'direction': 'left'}) . ' ']],
   {expr = true, noremap = true, silent = true}
+)
+vim.api.nvim_set_keymap(
+  'n', 'sh', [[v:lua.MiniSurround.operator('highlight') . ' ']],
+  {expr = true, noremap = true, silent = true}
+)
+vim.api.nvim_set_keymap(
+  'n', 'sn', [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
+  {noremap = true, silent = true}
 )
 
 return MiniSurround
+
+-- Tests
+-- General:
+-- (((a)))
+-- aaa(bbb(ccc(
+--   ddd
+-- )))
+-- [[
+-- [
+-- ]
+-- ]]
+--
+-- Symmetrical case should match surrounding with smallest width
+-- 'aa'aaa'
+--
+-- Function call:
+-- func.call(a = (1 + 1), b = c(2, 3))
+-- [(aaa(b = c(), d))]
+-- (aa_a.a(b = c(), d))
+-- aaa(bbb(ccc(ddd(fff(eee)))))
+--
+--   Should respect line ending (uncomment to test):
+-- c
+-- a(
+-- b
+-- )
+--
+-- Tags:
+--   Having other words inside first tag
+-- <div class='Hello'>
+--   <p>aaa</p><br>
+-- </div>
+--
+--   Don't match in case of partial match
+-- <ab></a>
+--
+--   Self-nested tags won't be matched in the end part
+-- <a>aaa<a>bbb</a>ccc</a>
+--
+--   Overlapping tag pairs match appropriately everywhere (even in last tag)
+-- <a>Hello<b class>World</a></b>
+-- <a>Hello
+-- <b>World
+-- </a>
+-- </b>
