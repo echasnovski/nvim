@@ -99,7 +99,7 @@ local get_arrow_key = function(key)
 end
 
 -- Module
-MiniPairs = {}
+local MiniPairs = {}
 
 -- Pair actions.
 -- They are intended to be used inside `_noremap <expr> ...` type of mappings,
@@ -208,4 +208,5 @@ map('t', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'
 vim.cmd[[au FileType lua lua MiniPairs.remap_quotes()]]
 vim.cmd[[au FileType vim lua MiniPairs.remap_quotes()]]
 
+_G.MiniPairs = MiniPairs
 return MiniPairs

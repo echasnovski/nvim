@@ -73,7 +73,7 @@
 --   Overall it is pretty good, but certain cases won't work. Like self-nested
 --   tags won't match correctly on both ends: '<a><a></a></a>'.
 
-MiniSurround = {}
+local MiniSurround = {}
 
 -- Settings
 ---- Number of lines within which surrounding is searched
@@ -672,6 +672,7 @@ vim.api.nvim_set_keymap(
   {noremap = true, silent = true}
 )
 
+_G.MiniSurround = MiniSurround
 return MiniSurround
 
 -- Tests

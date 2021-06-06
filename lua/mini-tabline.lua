@@ -35,8 +35,7 @@ vim.o.showtabline = 2 -- Always show tabline
 vim.o.hidden = true   -- Allow switching buffers without saving them
 
 -- MiniTabline object
-MiniTabline = {}
-MiniTabline = setmetatable({}, {
+local MiniTabline = setmetatable({}, {
   __call = function(minitabline) return minitabline:make_tabline_string() end
 })
 
@@ -347,4 +346,5 @@ function MiniTabline:concat_tabs()
   return table.concat(t, '') .. '%#MiniTablineFill#'
 end
 
+_G.MiniTabline = MiniTabline
 return MiniTabline

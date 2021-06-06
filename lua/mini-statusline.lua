@@ -70,8 +70,8 @@ local combine_sections = function(sections)
   return table.concat(t, '')
 end
 
--- MiniStatusline object
-MiniStatusline = setmetatable({}, {
+-- Module
+local MiniStatusline = setmetatable({}, {
   __call = function(statusline, mode)
     if mode == 'active' then return statusline:set_active() end
     if mode == 'inactive' then return statusline:set_inactive() end
@@ -387,4 +387,5 @@ function MiniStatusline:section_location(arg)
   return '%l|%L│%2v|%-2{col("$") - 1}'
 end
 
+_G.MiniStatusline = MiniStatusline
 return MiniStatusline
