@@ -112,7 +112,7 @@ end
 
 -- Tab's clickable action (if supported)
 ---- Is there clickable support?
-MiniTabline.tablineat = vim.fn.has('tablineat')
+local tablineat = vim.fn.has('tablineat')
 
 vim.api.nvim_exec([[
   function! MiniTablineSwitchBuffer(bufnum, clicks, button, mod)
@@ -121,7 +121,7 @@ vim.api.nvim_exec([[
 ]], false)
 
 function MiniTabline.construct_tabfunc(bufnum)
-  if MiniTabline.tablineat > 0 then
+  if tablineat > 0 then
     return string.format([[%%%d@MiniTablineSwitchBuffer@]], bufnum)
   else
     return ''
@@ -146,17 +146,32 @@ function MiniTabline.construct_label_data(bufnum)
   return label, label_extender
 end
 
-MiniTabline.path_sep = package.config:sub(1, 1)
+local path_sep = package.config:sub(1, 1)
 
 function MiniTabline.make_path_extender(bufnum)
   return function(label)
     -- Add parent to current label
     local full_path = vim.fn.fnamemodify(vim.fn.bufname(bufnum), ':p')
-    local pattern = string.format(
-      '[^%s]+%s%s$', MiniTabline.path_sep, MiniTabline.path_sep, label
-    )
+    local pattern = string.format('[^%s]+%s%s$', path_sep, path_sep, label)
     return string.match(full_path, pattern) or label
   end
+end
+
+-- Work with unnamed buffers
+---- Track all initially unnamed buffers for disambiguation. The
+---- `unnamed_buffers` table is designed to store 'sequential' buffer
+---- identifier. This approach allows to have the following behavior:
+---- - Create three unnamed buffers.
+---- - Delete second one.
+---- - Tab label for third one remains the same.
+local n_unnamed = 0
+local unnamed_buffers = {}
+
+function MiniTabline.ensure_unnamed_tracked(bufnum)
+  if unnamed_buffers[bufnum] ~= nil then return end
+
+  n_unnamed = n_unnamed + 1
+  unnamed_buffers[bufnum] = {id = n_unnamed}
 end
 
 local is_buffer_scratch = function(bufnum)
@@ -171,28 +186,12 @@ function MiniTabline.make_unnamed_label(bufnum)
   -- Possibly add tracking id (which is tracked separately for different label
   -- types)
   MiniTabline.ensure_unnamed_tracked(bufnum)
-  local tab_id = MiniTabline.unnamed_buffers[bufnum].id
+  local tab_id = unnamed_buffers[bufnum].id
   if tab_id > 1 then
     label = string.format('%s(%d)', label, tab_id)
   end
 
   return label
-end
-
--- Track all initially unnamed buffers for disambiguation. The
--- `unnamed_buffers` table is designed to store 'sequential' buffer identifier.
--- This approach allows to have the following behavior:
--- - Create three unnamed buffers.
--- - Delete second one.
--- - Tab label for third one remains the same.
-MiniTabline.n_unnamed = 0
-MiniTabline.unnamed_buffers = {}
-
-function MiniTabline.ensure_unnamed_tracked(bufnum)
-  if MiniTabline.unnamed_buffers[bufnum] ~= nil then return end
-
-  MiniTabline.n_unnamed = MiniTabline.n_unnamed + 1
-  MiniTabline.unnamed_buffers[bufnum] = {id = MiniTabline.n_unnamed}
 end
 
 -- Finalize labels
@@ -254,6 +253,8 @@ function MiniTabline.get_nonunique_buffers()
 end
 
 -- Fit tabline to maximum displayed width
+local centerbuf = vim.fn.winbufnr(0)
+
 function MiniTabline.fit_width()
   MiniTabline.update_centerbuf()
 
@@ -269,7 +270,7 @@ function MiniTabline.fit_width()
 
     tot_width = tot_width + tab.label_width
 
-    if bufnum == MiniTabline.centerbuf then
+    if bufnum == centerbuf then
       -- Make end of 'center tab' to be always displayed in center in case of
       -- truncation
       center = tot_width
@@ -281,12 +282,10 @@ function MiniTabline.fit_width()
   MiniTabline.truncate_tabs_display(display_interval)
 end
 
-MiniTabline.centerbuf = vim.fn.winbufnr(0)
-
 function MiniTabline.update_centerbuf()
   buf_displayed = vim.fn.winbufnr(0)
   if MiniTabline.is_buffer_in_minitabline(buf_displayed) then
-    MiniTabline.centerbuf = buf_displayed
+    centerbuf = buf_displayed
   end
 end
 
