@@ -17,7 +17,6 @@
 -- - Main function is `MiniTabline.make_tabline_string()` which describes
 --   high-level functional structure when displaying buffers. From there go to
 --   respective functions.
-local fn = vim.fn
 
 -- Ensure tabline is displayed properly
 vim.api.nvim_exec([[
@@ -52,7 +51,7 @@ vim.api.nvim_exec([[
 
 -- MiniTabline functionality
 function MiniTabline.update_tabline()
-  if fn.tabpagenr('$') > 1 then
+  if vim.fn.tabpagenr('$') > 1 then
     vim.o.tabline = [[]]
   else
     vim.o.tabline = [[%!v:lua.MiniTabline.make_tabline_string()]]
@@ -70,7 +69,7 @@ end
 function MiniTabline.list_tabs()
   tabs = {}
   tabs_order = {}
-  for i=1,fn.bufnr('$') do
+  for i=1,vim.fn.bufnr('$') do
     if MiniTabline.is_buffer_in_minitabline(i) then
       -- Display tabs in order of increasing buffer number
       tabs_order[#tabs_order + 1] = i
@@ -89,21 +88,21 @@ function MiniTabline.list_tabs()
 end
 
 function MiniTabline.is_buffer_in_minitabline(bufnum)
-  return (fn.buflisted(bufnum) > 0) and
-    (fn.getbufvar(bufnum, '&buftype') ~= 'quickfix')
+  return (vim.fn.buflisted(bufnum) > 0) and
+    (vim.fn.getbufvar(bufnum, '&buftype') ~= 'quickfix')
 end
 
 -- Tab's highlight group
 function MiniTabline.construct_highlight(bufnum)
   local hl_type
-  if bufnum == fn.winbufnr(0) then
+  if bufnum == vim.fn.winbufnr(0) then
     hl_type = 'Current'
-  elseif fn.bufwinnr(bufnum) > 0 then
+  elseif vim.fn.bufwinnr(bufnum) > 0 then
     hl_type = 'Active'
   else
     hl_type = 'Hidden'
   end
-  if fn.getbufvar(bufnum, '&modified') > 0 then
+  if vim.fn.getbufvar(bufnum, '&modified') > 0 then
     hl_type = 'Modified' .. hl_type
   end
 
@@ -112,7 +111,7 @@ end
 
 -- Tab's clickable action (if supported)
 ---- Is there clickable support?
-MiniTabline.tablineat = fn.has('tablineat')
+MiniTabline.tablineat = vim.fn.has('tablineat')
 
 vim.api.nvim_exec([[
   function! MiniTablineSwitchBuffer(bufnum, clicks, button, mod)
@@ -132,10 +131,10 @@ end
 function MiniTabline.construct_label_data(bufnum)
   local label, label_extender
 
-  local bufpath = fn.bufname(bufnum)
+  local bufpath = vim.fn.bufname(bufnum)
   if bufpath ~= '' then
     -- Process path buffer
-    label = fn.fnamemodify(bufpath, ':t')
+    label = vim.fn.fnamemodify(bufpath, ':t')
     label_extender = MiniTabline.make_path_extender(bufnum)
   else
     -- Process unnamed buffer
@@ -151,7 +150,7 @@ MiniTabline.path_sep = package.config:sub(1, 1)
 function MiniTabline.make_path_extender(bufnum)
   return function(label)
     -- Add parent to current label
-    local full_path = fn.fnamemodify(fn.bufname(bufnum), ':p')
+    local full_path = vim.fn.fnamemodify(vim.fn.bufname(bufnum), ':p')
     local pattern = string.format(
       '[^%s]+%s%s$', MiniTabline.path_sep, MiniTabline.path_sep, label
     )
@@ -160,7 +159,7 @@ function MiniTabline.make_path_extender(bufnum)
 end
 
 local is_buffer_scratch = function(bufnum)
-  local buftype = fn.getbufvar(bufnum, '&buftype')
+  local buftype = vim.fn.getbufvar(bufnum, '&buftype')
   return (buftype == 'acwrite') or (buftype == 'nofile')
 end
 
@@ -221,7 +220,7 @@ function MiniTabline.finalize_labels()
     -- -- `MiniTabline.fit_width()` width of label is computed using `string.len()`
     -- -- which computes number of bytes in string. Correct approach would be to
     -- -- use `utf8.len()`, but it is in Lua 5.3+.
-    -- local extension = fn.fnamemodify(tab.label, ':e')
+    -- local extension = vim.fn.fnamemodify(tab.label, ':e')
     -- local icon = require'nvim-web-devicons'.get_icon(tab.label, extension, { default = true })
     -- tab.label = string.format('%s %s ', icon, tab.label)
     tab.label = string.format(' %s ', tab.label)
@@ -281,10 +280,10 @@ function MiniTabline.fit_width()
   MiniTabline.truncate_tabs_display(display_interval)
 end
 
-MiniTabline.centerbuf = fn.winbufnr(0)
+MiniTabline.centerbuf = vim.fn.winbufnr(0)
 
 function MiniTabline.update_centerbuf()
-  buf_displayed = fn.winbufnr(0)
+  buf_displayed = vim.fn.winbufnr(0)
   if MiniTabline.is_buffer_in_minitabline(buf_displayed) then
     MiniTabline.centerbuf = buf_displayed
   end

@@ -36,9 +36,6 @@
 --   'statusline' option gets reevaluated on 'CursorHold'.
 has_devicons, devicons = pcall(require, 'nvim-web-devicons')
 
-local fn = vim.fn
-local api = vim.api
-
 -- Create custom `^V` and `^S` symbols to make this file appropriate for
 -- copy-paste (otherwise those symbols are not displayed).
 local CTRL_S = vim.api.nvim_replace_termcodes('<C-S>', true, true, true)
@@ -46,7 +43,7 @@ local CTRL_V = vim.api.nvim_replace_termcodes('<C-V>', true, true, true)
 
 -- Local helpers
 local is_truncated = function(width)
-  return api.nvim_win_get_width(0) < width
+  return vim.api.nvim_win_get_width(0) < width
 end
 
 local isnt_normal_buffer = function()
@@ -99,7 +96,7 @@ vim.api.nvim_exec([[
 
 -- High-level definition of statusline content
 function MiniStatusline.set_active()
-  local mode_info = MiniStatusline.modes[fn.mode()]
+  local mode_info = MiniStatusline.modes[vim.fn.mode()]
 
   local mode        = MiniStatusline.section_mode{mode_info = mode_info, trunc_width = 120}
   local spell       = MiniStatusline.section_spell{trunc_width = 120}
@@ -199,14 +196,14 @@ vim.api.nvim_exec([[
 MiniStatusline.git_branch = nil
 
 function MiniStatusline.update_git_branch(arg)
-  if fn.exists('*FugitiveHead') == 0 then
+  if vim.fn.exists('*FugitiveHead') == 0 then
     MiniStatusline.git_branch = '<no fugitive>'
     return
   end
 
   update_fun = function()
     -- Use commit hash truncated to 7 characters in case of detached HEAD
-    local branch = fn.FugitiveHead(7)
+    local branch = vim.fn.FugitiveHead(7)
     if branch == '' then branch = '<no branch>' end
 
     local old_val = MiniStatusline.git_branch
@@ -239,12 +236,12 @@ vim.api.nvim_exec([[
 MiniStatusline.git_signs = nil
 
 function MiniStatusline.update_git_signs()
-  if fn.exists('*GitGutterGetHunkSummary') == 0 then
+  if vim.fn.exists('*GitGutterGetHunkSummary') == 0 then
     MiniStatusline.git_signs = nil
     return
   end
 
-  local signs = fn.GitGutterGetHunkSummary()
+  local signs = vim.fn.GitGutterGetHunkSummary()
   local res = {}
   if signs[1] > 0 then res[#res + 1] = '+' .. signs[1] end
   if signs[2] > 0 then res[#res + 1] = '~' .. signs[2] end
@@ -345,10 +342,10 @@ end
 local get_filetype_icon = function()
   -- By default use 'nvim-web-devicons', fallback to 'vim-devicons'
   if has_devicons then
-    local file_name, file_ext = fn.expand('%:t'), fn.expand('%:e')
+    local file_name, file_ext = vim.fn.expand('%:t'), vim.fn.expand('%:e')
     return devicons.get_icon(file_name, file_ext, { default = true })
-  elseif fn.exists('*WebDevIconsGetFileTypeSymbol') ~= 0 then
-    return fn.WebDevIconsGetFileTypeSymbol()
+  elseif vim.fn.exists('*WebDevIconsGetFileTypeSymbol') ~= 0 then
+    return vim.fn.WebDevIconsGetFileTypeSymbol()
   end
 
   return ''
