@@ -1,0 +1,5 @@
+require('mini.mini-comment')
+require('mini.mini-pairs')
+require('mini.mini-statusline')
+require('mini.mini-surround')
+require('mini.mini-tabline')

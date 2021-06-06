@@ -19,13 +19,8 @@ else
       exe 'source' s:fpath
   endfor
 
-  " Source all 'lua' configuration files
+  " Source Lua files
   if has("nvim-0.5")
-    for s:fpath in split(globpath('$HOME/.config/nvim/lua', '*.lua'), '\n')
-        exe 'luafile' s:fpath
-    endfor
-    for s:fpath in split(globpath('$HOME/.config/nvim/lua/plugin-setup', '*.lua'), '\n')
-        exe 'luafile' s:fpath
-    endfor
+    luafile $HOME/.config/nvim/lua/source.lua
   endif
 endif
