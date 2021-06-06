@@ -1,3 +1,6 @@
+local has_treesitter, treesitter = pcall(require, 'nvim-treesitter')
+if not has_treesitter then return end
+
 require'nvim-treesitter.configs'.setup {
   ensure_installed = {
     "bash",

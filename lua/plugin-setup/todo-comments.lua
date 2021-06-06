@@ -1,5 +1,5 @@
-local ok, todo = pcall(require, 'todo-comments')
-if not ok then return end
+local has_todo, todo = pcall(require, 'todo-comments')
+if not has_todo then return end
 
 todo.setup{
   highlight = {

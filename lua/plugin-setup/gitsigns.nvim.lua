@@ -1,7 +1,6 @@
 -- Currently is not used in favor of 'vim-gitgutter'
-local ok, gitsigns = pcall(require, 'gitsigns')
-
-if not ok then return end
+local has_gitsigns, gitsigns = pcall(require, 'gitsigns')
+if not has_gitsigns then return end
 
 -- Define custom colors
 vim.api.nvim_exec([[
