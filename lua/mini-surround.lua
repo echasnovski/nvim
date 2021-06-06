@@ -73,9 +73,10 @@
 --   Overall it is pretty good, but certain cases won't work. Like self-nested
 --   tags won't match correctly on both ends: '<a><a></a></a>'.
 
+-- Module
 local MiniSurround = {}
 
--- Settings
+-- Module Settings
 ---- Number of lines within which surrounding is searched
 MiniSurround.n_lines = 20
 
@@ -516,7 +517,7 @@ local function find_surrounding(surround_info)
   return surr
 end
 
--- Functions to be mapped
+-- Module functionality
 function MiniSurround.operator(task, cache)
   MiniSurround.cache = cache or {}
 

@@ -34,38 +34,6 @@
 --     - Plugin 'vim-gitgutter' processes buffer on 'CursorHold' events.
 --   As these actions are useful, one can only live with the fact that
 --   'statusline' option gets reevaluated on 'CursorHold'.
-has_devicons, devicons = pcall(require, 'nvim-web-devicons')
-
--- Create custom `^V` and `^S` symbols to make this file appropriate for
--- copy-paste (otherwise those symbols are not displayed).
-local CTRL_S = vim.api.nvim_replace_termcodes('<C-S>', true, true, true)
-local CTRL_V = vim.api.nvim_replace_termcodes('<C-V>', true, true, true)
-
--- Local helpers
-local is_truncated = function(width)
-  return vim.api.nvim_win_get_width(0) < width
-end
-
-local isnt_normal_buffer = function()
-  -- For more information see ":h buftype"
-  return vim.bo.buftype ~= ''
-end
-
-local combine_sections = function(sections)
-  local t = {}
-  for _, s in ipairs(sections) do
-    if type(s) == 'string' then
-      t[#t + 1] = s
-    elseif s.string ~= '' then
-      if s.hl then
-        t[#t + 1] = string.format('%s %s ', s.hl, s.string)
-      else
-        t[#t + 1] = string.format('%s ', s.string)
-      end
-    end
-  end
-  return table.concat(t, '')
-end
 
 -- Module
 local MiniStatusline = {}
@@ -94,7 +62,41 @@ vim.api.nvim_exec([[
   hi link MiniStatuslineFileinfo StatusLine
 ]], false)
 
--- High-level definition of statusline content
+-- Dependencies
+has_devicons, devicons = pcall(require, 'nvim-web-devicons')
+
+-- Helpers
+local is_truncated = function(width)
+  return vim.api.nvim_win_get_width(0) < width
+end
+
+local isnt_normal_buffer = function()
+  -- For more information see ":h buftype"
+  return vim.bo.buftype ~= ''
+end
+
+local combine_sections = function(sections)
+  local t = {}
+  for _, s in ipairs(sections) do
+    if type(s) == 'string' then
+      t[#t + 1] = s
+    elseif s.string ~= '' then
+      if s.hl then
+        t[#t + 1] = string.format('%s %s ', s.hl, s.string)
+      else
+        t[#t + 1] = string.format('%s ', s.string)
+      end
+    end
+  end
+  return table.concat(t, '')
+end
+
+-- Custom `^V` and `^S` symbols to make this file appropriate for
+-- copy-paste (otherwise those symbols are not displayed).
+local CTRL_S = vim.api.nvim_replace_termcodes('<C-S>', true, true, true)
+local CTRL_V = vim.api.nvim_replace_termcodes('<C-V>', true, true, true)
+
+-- Module functionality
 function MiniStatusline.set_active()
   local mode_info = MiniStatusline.modes[vim.fn.mode()]
 

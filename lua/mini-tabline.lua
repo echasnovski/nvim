@@ -18,7 +18,10 @@
 --   high-level functional structure when displaying buffers. From there go to
 --   respective functions.
 
--- Ensure tabline is displayed properly
+-- Module
+local MiniTabline = {}
+
+-- MiniTabline behavior
 vim.api.nvim_exec([[
   augroup MiniTabline
     autocmd!
@@ -29,12 +32,6 @@ vim.api.nvim_exec([[
     autocmd BufDelete  * lua MiniTabline.update_tabline()
   augroup END
 ]], false)
-
-vim.o.showtabline = 2 -- Always show tabline
-vim.o.hidden = true   -- Allow switching buffers without saving them
-
--- Module
-local MiniTabline = {}
 
 -- MiniTabline colors (from Gruvbox palette)
 vim.api.nvim_exec([[
@@ -49,7 +46,11 @@ vim.api.nvim_exec([[
   hi MiniTablineFill NONE
 ]], false)
 
--- MiniTabline functionality
+-- Settings to ensure tabline is displayed properly
+vim.o.showtabline = 2 -- Always show tabline
+vim.o.hidden = true   -- Allow switching buffers without saving them
+
+-- Module functionality
 function MiniTabline.update_tabline()
   if vim.fn.tabpagenr('$') > 1 then
     vim.o.tabline = [[]]

@@ -39,6 +39,9 @@
 --   seems to be because detecting characters around cursor uses "byte
 --   substring" instead of "symbol substring" operation.
 
+-- Module
+local MiniPairs = {}
+
 -- Helpers
 local escape = function(s)
   return vim.api.nvim_replace_termcodes(s, true, true, true)
@@ -98,10 +101,7 @@ local get_arrow_key = function(key)
   end
 end
 
--- Module
-local MiniPairs = {}
-
--- Pair actions.
+-- Module functionality
 -- They are intended to be used inside `_noremap <expr> ...` type of mappings,
 -- as they return sequence of keys (instead of other possible approach of
 -- simulating them with `nvim_feedkeys()`).

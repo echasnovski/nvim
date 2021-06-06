@@ -15,8 +15,10 @@
 --
 -- This plugin doesn't support block comments: all lines a commented per line.
 
+-- Module
 local MiniComment = {}
 
+-- Module functionality
 function MiniComment.make_comment_parts()
   local cs = vim.api.nvim_buf_get_option(0, 'commentstring')
 
