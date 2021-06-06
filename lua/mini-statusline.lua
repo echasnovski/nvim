@@ -71,19 +71,14 @@ local combine_sections = function(sections)
 end
 
 -- Module
-local MiniStatusline = setmetatable({}, {
-  __call = function(statusline, mode)
-    if mode == 'active' then return statusline:set_active() end
-    if mode == 'inactive' then return statusline:set_inactive() end
-  end
-})
+local MiniStatusline = {}
 
 -- MiniStatusline behavior
 vim.api.nvim_exec([[
   augroup MiniStatusline
     au!
-    au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline('active')
-    au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline('inactive')
+    au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline.set_active()
+    au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline.set_inactive()
   augroup END
 ]], false)
 
@@ -103,17 +98,17 @@ vim.api.nvim_exec([[
 ]], false)
 
 -- High-level definition of statusline content
-function MiniStatusline:set_active()
-  local mode_info = self.modes[fn.mode()]
+function MiniStatusline.set_active()
+  local mode_info = MiniStatusline.modes[fn.mode()]
 
-  local mode        = self:section_mode{mode_info = mode_info, trunc_width = 120}
-  local spell       = self:section_spell{trunc_width = 120}
-  local wrap        = self:section_wrap{}
-  local git         = self:section_git{trunc_width = 75}
-  local diagnostics = self:section_diagnostics{trunc_width = 75}
-  local filename    = self:section_filename{trunc_width = 140}
-  local fileinfo    = self:section_fileinfo{trunc_width = 120}
-  local location    = self:section_location{}
+  local mode        = MiniStatusline.section_mode{mode_info = mode_info, trunc_width = 120}
+  local spell       = MiniStatusline.section_spell{trunc_width = 120}
+  local wrap        = MiniStatusline.section_wrap{}
+  local git         = MiniStatusline.section_git{trunc_width = 75}
+  local diagnostics = MiniStatusline.section_diagnostics{trunc_width = 75}
+  local filename    = MiniStatusline.section_filename{trunc_width = 140}
+  local fileinfo    = MiniStatusline.section_fileinfo{trunc_width = 120}
+  local location    = MiniStatusline.section_location{}
 
   -- Usage of `combine_sections()` ensures correct padding with spaces between
   -- sections (accounts for 'missing' sections, etc.)
@@ -131,7 +126,7 @@ function MiniStatusline:set_active()
   })
 end
 
-function MiniStatusline:set_inactive()
+function MiniStatusline.set_inactive()
   return '%#MiniStatuslineInactive#%F%='
 end
 
@@ -157,7 +152,7 @@ MiniStatusline.modes = setmetatable({
   end
 })
 
-function MiniStatusline:section_mode(arg)
+function MiniStatusline.section_mode(arg)
   local mode = is_truncated(arg.trunc_width) and
     arg.mode_info.short or
     arg.mode_info.long
@@ -166,7 +161,7 @@ function MiniStatusline:section_mode(arg)
 end
 
 -- Spell
-function MiniStatusline:section_spell(arg)
+function MiniStatusline.section_spell(arg)
   if not vim.wo.spell then return '' end
 
   if is_truncated(arg.trunc_width) then return 'SPELL' end
@@ -175,7 +170,7 @@ function MiniStatusline:section_spell(arg)
 end
 
 -- Wrap
-function MiniStatusline:section_wrap()
+function MiniStatusline.section_wrap()
   if not vim.wo.wrap then return '' end
 
   return 'WRAP'
@@ -196,16 +191,16 @@ end
 ---- NOTE: this adds autocommands to 'MiniStatusline' autogroup
 vim.api.nvim_exec([[
   augroup MiniStatusline
-    au BufEnter,FocusGained * lua MiniStatusline:update_git_branch({defer = false})
-    au CmdlineLeave         * lua MiniStatusline:update_git_branch({defer = true})
+    au BufEnter,FocusGained * lua MiniStatusline.update_git_branch({defer = false})
+    au CmdlineLeave         * lua MiniStatusline.update_git_branch({defer = true})
   augroup END
 ]], false)
 
 MiniStatusline.git_branch = nil
 
-function MiniStatusline:update_git_branch(arg)
+function MiniStatusline.update_git_branch(arg)
   if fn.exists('*FugitiveHead') == 0 then
-    self.git_branch = '<no fugitive>'
+    MiniStatusline.git_branch = '<no fugitive>'
     return
   end
 
@@ -214,8 +209,8 @@ function MiniStatusline:update_git_branch(arg)
     local branch = fn.FugitiveHead(7)
     if branch == '' then branch = '<no branch>' end
 
-    local old_val = self.git_branch
-    self.git_branch = branch
+    local old_val = MiniStatusline.git_branch
+    MiniStatusline.git_branch = branch
     -- Force statusline redraw if it is not first update (otherwise there is a
     -- flicker at Neovim start) and if new value differs from the current one
     if (old_val ~= nil) and (old_val ~= branch) then
@@ -236,16 +231,16 @@ end
 ---- NOTE: this adds autocommands to 'MiniStatusline' autogroup
 vim.api.nvim_exec([[
   augroup MiniStatusline
-    au BufEnter *         lua MiniStatusline:update_git_signs()
-    au User     GitGutter lua MiniStatusline:update_git_signs()
+    au BufEnter *         lua MiniStatusline.update_git_signs()
+    au User     GitGutter lua MiniStatusline.update_git_signs()
   augroup END
 ]], false)
 
 MiniStatusline.git_signs = nil
 
-function MiniStatusline:update_git_signs()
+function MiniStatusline.update_git_signs()
   if fn.exists('*GitGutterGetHunkSummary') == 0 then
-    self.git_signs = nil
+    MiniStatusline.git_signs = nil
     return
   end
 
@@ -255,28 +250,28 @@ function MiniStatusline:update_git_signs()
   if signs[2] > 0 then res[#res + 1] = '~' .. signs[2] end
   if signs[3] > 0 then res[#res + 1] = '-' .. signs[3] end
 
-  local old_val = self.git_signs
+  local old_val = MiniStatusline.git_signs
   if next(res) == nil then
-    self.git_signs = nil
+    MiniStatusline.git_signs = nil
   else
-    self.git_signs = table.concat(res, ' ')
+    MiniStatusline.git_signs = table.concat(res, ' ')
   end
 
   -- Force statusline redraw if it is not first update (otherwise there is a
   -- flicker at Neovim start) and if new value differs from the current one
-  if (old_val ~= nil) and (old_val ~= self.git_signs) then
+  if (old_val ~= nil) and (old_val ~= MiniStatusline.git_signs) then
     vim.cmd [[noautocmd redrawstatus]]
   end
 end
 
-function MiniStatusline:section_git(arg)
+function MiniStatusline.section_git(arg)
   if isnt_normal_buffer() then return '' end
 
   local res
   if is_truncated(arg.trunc_width) then
-    res = self.git_branch
+    res = MiniStatusline.git_branch
   else
-    res = table.concat({self.git_branch, self.git_signs}, ' ')
+    res = table.concat({MiniStatusline.git_branch, MiniStatusline.git_signs}, ' ')
   end
 
   if (res == nil) or res == '' then res = '-' end
@@ -292,7 +287,7 @@ local diagnostic_levels = {
   {name = 'Hint'       , sign = 'H'},
 }
 
-function MiniStatusline:section_diagnostics(arg)
+function MiniStatusline.section_diagnostics(arg)
   -- Assumption: there are no attached clients if table
   -- `vim.lsp.buf_get_clients()` is empty
   local hasnt_attached_client = next(vim.lsp.buf_get_clients()) == nil
@@ -318,7 +313,7 @@ function MiniStatusline:section_diagnostics(arg)
 end
 
 -- File name
-function MiniStatusline:section_filename(arg)
+function MiniStatusline.section_filename(arg)
   -- In terminal always use plain name
   if vim.bo.buftype == 'terminal' then
     return '%t'
@@ -359,7 +354,7 @@ local get_filetype_icon = function()
   return ''
 end
 
-function MiniStatusline:section_fileinfo(arg)
+function MiniStatusline.section_fileinfo(arg)
   local filetype = vim.bo.filetype
 
   -- Don't show anything if can't detect file type or not inside a "normal
@@ -382,7 +377,7 @@ function MiniStatusline:section_fileinfo(arg)
 end
 
 -- Location inside buffer
-function MiniStatusline:section_location(arg)
+function MiniStatusline.section_location(arg)
   -- Use virtual column number to allow update when paste last column
   return '%l|%L│%2v|%-2{col("$") - 1}'
 end
