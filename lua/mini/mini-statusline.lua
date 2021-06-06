@@ -38,15 +38,6 @@
 -- Module
 local MiniStatusline = {}
 
--- MiniStatusline behavior
-vim.api.nvim_exec([[
-  augroup MiniStatusline
-    au!
-    au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline.set_active()
-    au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline.set_inactive()
-  augroup END
-]], false)
-
 -- MiniStatusline colors (from Gruvbox bright palette)
 vim.api.nvim_exec([[
   hi MiniStatuslineModeNormal  guibg=#BDAE93 guifg=#1D2021 gui=bold ctermbg=7 ctermfg=0
@@ -182,19 +173,6 @@ end
 -- statusline update, total statusline execution time is ~1.1ms; with current
 -- approach it drops to ~0.2ms.
 ---- Git branch
----- Update git branch on every buffer enter and after Neovim gained focus
----- (detect outside change).
----- Also update git branch before leaving command line (detect fugitive
----- change). Defer update to actually make it **after** leaving command line.
----- Otherwise this will be evaluated too soon and give "previous" branch.
----- NOTE: this adds autocommands to 'MiniStatusline' autogroup
-vim.api.nvim_exec([[
-  augroup MiniStatusline
-    au BufEnter,FocusGained * lua MiniStatusline.update_git_branch({defer = false})
-    au CmdlineLeave         * lua MiniStatusline.update_git_branch({defer = true})
-  augroup END
-]], false)
-
 MiniStatusline.git_branch = nil
 
 function MiniStatusline.update_git_branch(arg)
@@ -225,16 +203,6 @@ function MiniStatusline.update_git_branch(arg)
 end
 
 ---- Git diff signs
----- Update git signs on every buffer enter (detect signs for buffer) and every
----- time 'gitgutter' says that change occured
----- NOTE: this adds autocommands to 'MiniStatusline' autogroup
-vim.api.nvim_exec([[
-  augroup MiniStatusline
-    au BufEnter *         lua MiniStatusline.update_git_signs()
-    au User     GitGutter lua MiniStatusline.update_git_signs()
-  augroup END
-]], false)
-
 MiniStatusline.git_signs = nil
 
 function MiniStatusline.update_git_signs()
@@ -379,6 +347,38 @@ end
 function MiniStatusline.section_location(arg)
   -- Use virtual column number to allow update when paste last column
   return '%l|%L│%2v|%-2{col("$") - 1}'
+end
+
+function MiniStatusline.setup()
+  -- MiniStatusline behavior
+  vim.api.nvim_exec([[
+    augroup MiniStatusline
+      au!
+      au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline.set_active()
+      au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline.set_inactive()
+    augroup END
+  ]], false)
+
+  -- Update git branch on every buffer enter and after Neovim gained focus
+  -- (detect outside change).  Also update git branch before leaving command
+  -- line (detect fugitive change). Defer update to actually make it **after**
+  -- leaving command line.  Otherwise this will be evaluated too soon and give
+  -- "previous" branch.
+  vim.api.nvim_exec([[
+    augroup MiniStatusline
+      au BufEnter,FocusGained * lua MiniStatusline.update_git_branch({defer = false})
+      au CmdlineLeave         * lua MiniStatusline.update_git_branch({defer = true})
+    augroup END
+  ]], false)
+
+  -- Update git signs on every buffer enter (detect signs for buffer) and every
+  -- time 'gitgutter' says that change occured
+  vim.api.nvim_exec([[
+    augroup MiniStatusline
+      au BufEnter *         lua MiniStatusline.update_git_signs()
+      au User     GitGutter lua MiniStatusline.update_git_signs()
+    augroup END
+  ]], false)
 end
 
 _G.MiniStatusline = MiniStatusline

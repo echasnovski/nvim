@@ -21,18 +21,6 @@
 -- Module
 local MiniTabline = {}
 
--- MiniTabline behavior
-vim.api.nvim_exec([[
-  augroup MiniTabline
-    autocmd!
-    autocmd VimEnter   * lua MiniTabline.update_tabline()
-    autocmd TabEnter   * lua MiniTabline.update_tabline()
-    autocmd BufAdd     * lua MiniTabline.update_tabline()
-    autocmd FileType  qf lua MiniTabline.update_tabline()
-    autocmd BufDelete  * lua MiniTabline.update_tabline()
-  augroup END
-]], false)
-
 -- MiniTabline colors (from Gruvbox palette)
 vim.api.nvim_exec([[
   hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15 ctermfg=0
@@ -343,6 +331,20 @@ function MiniTabline.concat_tabs()
   end
 
   return table.concat(t, '') .. '%#MiniTablineFill#'
+end
+
+function MiniTabline.setup()
+  -- MiniTabline behavior
+  vim.api.nvim_exec([[
+    augroup MiniTabline
+      autocmd!
+      autocmd VimEnter   * lua MiniTabline.update_tabline()
+      autocmd TabEnter   * lua MiniTabline.update_tabline()
+      autocmd BufAdd     * lua MiniTabline.update_tabline()
+      autocmd FileType  qf lua MiniTabline.update_tabline()
+      autocmd BufDelete  * lua MiniTabline.update_tabline()
+    augroup END
+  ]], false)
 end
 
 _G.MiniTabline = MiniTabline

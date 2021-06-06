@@ -637,41 +637,42 @@ function MiniSurround.update_n_lines()
   MiniSurround.n_lines = n_lines
 end
 
--- Make mappings
----- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
----- It is used to enable dot-repeatability.
-vim.api.nvim_set_keymap(
-  'n', 'sa', [[v:lua.MiniSurround.operator('add')]],
-  {expr = true, noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'x', 'sa', [[:<c-u>lua MiniSurround.add('visual')<cr>]],
-  {noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'n', 'sd', [[v:lua.MiniSurround.operator('delete') . ' ']],
-  {expr = true, noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'n', 'sr', [[v:lua.MiniSurround.operator('replace') . ' ']],
-  {expr = true, noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'n', 'sf', [[v:lua.MiniSurround.operator('find', {'direction': 'right'}) . ' ']],
-  {expr = true, noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'n', 'sF', [[v:lua.MiniSurround.operator('find', {'direction': 'left'}) . ' ']],
-  {expr = true, noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'n', 'sh', [[v:lua.MiniSurround.operator('highlight') . ' ']],
-  {expr = true, noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'n', 'sn', [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
-  {noremap = true, silent = true}
-)
+function MiniSurround.setup()
+  -- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
+  -- It is used to enable dot-repeatability.
+  vim.api.nvim_set_keymap(
+    'n', 'sa', [[v:lua.MiniSurround.operator('add')]],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'x', 'sa', [[:<c-u>lua MiniSurround.add('visual')<cr>]],
+    {noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', 'sd', [[v:lua.MiniSurround.operator('delete') . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', 'sr', [[v:lua.MiniSurround.operator('replace') . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', 'sf', [[v:lua.MiniSurround.operator('find', {'direction': 'right'}) . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', 'sF', [[v:lua.MiniSurround.operator('find', {'direction': 'left'}) . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', 'sh', [[v:lua.MiniSurround.operator('highlight') . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', 'sn', [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
+    {noremap = true, silent = true}
+  )
+end
 
 _G.MiniSurround = MiniSurround
 return MiniSurround

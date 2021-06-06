@@ -198,26 +198,28 @@ function MiniComment.textobject()
   vim.cmd(string.format('normal! %dGV%dG', line_start, line_end))
 end
 
-vim.api.nvim_set_keymap(
-  'n', 'gc', 'v:lua.MiniComment.operator()',
-  {expr = true, noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'n', 'gcc', 'gc_',
-  -- This mapping doesn't use `noremap = true` because it requires usage of
-  -- already mapped `gc`.
-  {silent = true}
-)
-vim.api.nvim_set_keymap(
-  -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
-  -- proper update of `'<` and `'>` marks which is needed to work correctly.
-  'x', 'gc', [[:<c-u>lua MiniComment.operator('visual')<cr>]],
-  {noremap = true, silent = true}
-)
-vim.api.nvim_set_keymap(
-  'o', 'gc', [[<cmd>lua MiniComment.textobject()<cr>]],
-  {noremap = true, silent = true}
-)
+function MiniComment.setup()
+  vim.api.nvim_set_keymap(
+    'n', 'gc', 'v:lua.MiniComment.operator()',
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', 'gcc', 'gc_',
+    -- This mapping doesn't use `noremap = true` because it requires usage of
+    -- already mapped `gc`.
+    {silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
+    -- proper update of `'<` and `'>` marks which is needed to work correctly.
+    'x', 'gc', [[:<c-u>lua MiniComment.operator('visual')<cr>]],
+    {noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'o', 'gc', [[<cmd>lua MiniComment.textobject()<cr>]],
+    {noremap = true, silent = true}
+  )
+end
 
 _G.MiniComment = MiniComment
 return MiniComment

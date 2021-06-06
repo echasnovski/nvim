@@ -156,57 +156,59 @@ function MiniPairs.remap_quotes()
   vim.cmd[[inoremap <buffer> <expr> ' v:lua.MiniPairs.action_closeopen("''")]]
 end
 
--- Setup mappings
---- Insert mode
-map('i', '(', [[v:lua.MiniPairs.action_open('()')]])
-map('i', '[', [[v:lua.MiniPairs.action_open('[]')]])
-map('i', '{', [[v:lua.MiniPairs.action_open('{}')]])
+function MiniPairs.setup()
+  -- Setup mappings
+  ---- Insert mode
+  map('i', '(', [[v:lua.MiniPairs.action_open('()')]])
+  map('i', '[', [[v:lua.MiniPairs.action_open('[]')]])
+  map('i', '{', [[v:lua.MiniPairs.action_open('{}')]])
 
-map('i', ')', [[v:lua.MiniPairs.action_close('()')]])
-map('i', ']', [[v:lua.MiniPairs.action_close('[]')]])
-map('i', '}', [[v:lua.MiniPairs.action_close('{}')]])
+  map('i', ')', [[v:lua.MiniPairs.action_close('()')]])
+  map('i', ']', [[v:lua.MiniPairs.action_close('[]')]])
+  map('i', '}', [[v:lua.MiniPairs.action_close('{}')]])
 
-map('i', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
----- No auto-pair for '\'' because it messes up with plain English used in
----- comments (like can't, etc.)
-map('i', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
+  map('i', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
+  ------ No auto-pair for '\'' because it messes up with plain English used in
+  ------ comments (like can't, etc.)
+  map('i', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
 
-map('i', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
-map('i', '<CR>', [[v:lua.MiniPairs.action_cr(['()', '[]', '{}'])]])
+  map('i', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
+  map('i', '<CR>', [[v:lua.MiniPairs.action_cr(['()', '[]', '{}'])]])
 
---- Command mode
-map('c', '(', [[v:lua.MiniPairs.action_open('()')]])
-map('c', '[', [[v:lua.MiniPairs.action_open('[]')]])
-map('c', '{', [[v:lua.MiniPairs.action_open('{}')]])
+  ---- Command mode
+  map('c', '(', [[v:lua.MiniPairs.action_open('()')]])
+  map('c', '[', [[v:lua.MiniPairs.action_open('[]')]])
+  map('c', '{', [[v:lua.MiniPairs.action_open('{}')]])
 
-map('c', ')', [[v:lua.MiniPairs.action_close('()')]])
-map('c', ']', [[v:lua.MiniPairs.action_close('[]')]])
-map('c', '}', [[v:lua.MiniPairs.action_close('{}')]])
+  map('c', ')', [[v:lua.MiniPairs.action_close('()')]])
+  map('c', ']', [[v:lua.MiniPairs.action_close('[]')]])
+  map('c', '}', [[v:lua.MiniPairs.action_close('{}')]])
 
-map('c', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
-map('c', "'", [[v:lua.MiniPairs.action_closeopen("''")]])
-map('c', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
+  map('c', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
+  map('c', "'", [[v:lua.MiniPairs.action_closeopen("''")]])
+  map('c', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
 
-map('c', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
+  map('c', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
 
---- Terminal mode
-map('t', '(', [[v:lua.MiniPairs.action_open('()')]])
-map('t', '[', [[v:lua.MiniPairs.action_open('[]')]])
-map('t', '{', [[v:lua.MiniPairs.action_open('{}')]])
+  ---- Terminal mode
+  map('t', '(', [[v:lua.MiniPairs.action_open('()')]])
+  map('t', '[', [[v:lua.MiniPairs.action_open('[]')]])
+  map('t', '{', [[v:lua.MiniPairs.action_open('{}')]])
 
-map('t', ')', [[v:lua.MiniPairs.action_close('()')]])
-map('t', ']', [[v:lua.MiniPairs.action_close('[]')]])
-map('t', '}', [[v:lua.MiniPairs.action_close('{}')]])
+  map('t', ')', [[v:lua.MiniPairs.action_close('()')]])
+  map('t', ']', [[v:lua.MiniPairs.action_close('[]')]])
+  map('t', '}', [[v:lua.MiniPairs.action_close('{}')]])
 
-map('t', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
-map('t', "'", [[v:lua.MiniPairs.action_closeopen("''")]])
-map('t', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
+  map('t', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
+  map('t', "'", [[v:lua.MiniPairs.action_closeopen("''")]])
+  map('t', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
 
-map('t', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
+  map('t', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
 
---- Remap quotes in certain filetypes
-vim.cmd[[au FileType lua lua MiniPairs.remap_quotes()]]
-vim.cmd[[au FileType vim lua MiniPairs.remap_quotes()]]
+  -- Remap quotes in certain filetypes
+  vim.cmd[[au FileType lua lua MiniPairs.remap_quotes()]]
+  vim.cmd[[au FileType vim lua MiniPairs.remap_quotes()]]
+end
 
 _G.MiniPairs = MiniPairs
 return MiniPairs
