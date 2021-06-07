@@ -42,27 +42,91 @@
 --   seems to be because detecting characters around cursor uses "byte
 --   substring" instead of "symbol substring" operation.
 
--- Module
+-- Module and its helper
 local MiniPairs = {}
+local H = {}
 
--- Helpers
-local escape = function(s)
-  return vim.api.nvim_replace_termcodes(s, true, true, true)
+-- Module setup
+function MiniPairs.setup()
+  -- Setup mappings in command and insert modes
+  for _, mode in pairs({'c', 'i'}) do
+    H.map(mode, '(', [[v:lua.MiniPairs.open('()')]])
+    H.map(mode, '[', [[v:lua.MiniPairs.open('[]')]])
+    H.map(mode, '{', [[v:lua.MiniPairs.open('{}')]])
+
+    H.map(mode, ')', [[v:lua.MiniPairs.close('()')]])
+    H.map(mode, ']', [[v:lua.MiniPairs.close('[]')]])
+    H.map(mode, '}', [[v:lua.MiniPairs.close('{}')]])
+
+    -- Quotes insert single character if after a letter or `\`
+    H.map(mode, '"', [[v:lua.MiniPairs.closeopen('""', '[^%a\\].')]])
+    H.map(mode, "'", [[v:lua.MiniPairs.closeopen("''", '[^%a\\].')]])
+    H.map(mode, '`', [[v:lua.MiniPairs.closeopen('``', '[^%a\\].')]])
+
+    H.map(mode, '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
+  end
+
+  -- Map `<CR>` only in insert mode. Remap this to respect completion plugin.
+  H.map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
+
+  -- In terminal mode map only `<BS>`. Mainly because adding autopairs seems to
+  -- bring more trouble in day-to-day usage.
+  H.map('t', '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
 end
 
-local map = function(mode, key, command)
+-- Module functionality
+function MiniPairs.open(pair, twochars_pattern)
+  if not H.neigh_match(twochars_pattern) then return pair:sub(1, 1) end
+
+  return pair .. H.get_arrow_key('left')
+end
+
+function MiniPairs.close(pair, twochars_pattern)
+  if not H.neigh_match(twochars_pattern) then return pair:sub(2, 2) end
+
+  local close = pair:sub(2, 2)
+  if H.get_cursor_neigh(1, 1) == close then
+    return H.get_arrow_key('right')
+  else
+    return close
+  end
+end
+
+function MiniPairs.closeopen(pair, twochars_pattern)
+  if H.get_cursor_neigh(1, 1) == pair:sub(2, 2) then
+    return H.get_arrow_key('right')
+  else
+    return MiniPairs.open(pair, twochars_pattern)
+  end
+end
+
+---- Each argument should be a pair which triggers extra action
+function MiniPairs.bs(pair_set)
+  local res = H.keys.bs
+
+  if H.is_in_table(H.get_cursor_neigh(0, 1), pair_set) then
+    res = res .. H.keys.del
+  end
+
+  return res
+end
+
+function MiniPairs.cr(pair_set)
+  local res = H.keys.cr
+
+  if H.is_in_table(H.get_cursor_neigh(0, 1), pair_set) then
+    res = res .. H.keys.above
+  end
+
+  return res
+end
+
+-- Helpers
+function H.map(mode, key, command)
   vim.api.nvim_set_keymap(mode, key, command, {expr = true, noremap = true})
 end
 
-local is_in_table = function(val, tbl)
-  if tbl == nil then return false end
-  for _, value in pairs(tbl) do
-    if val == value then return true end
-  end
-  return false
-end
-
-local get_cursor_chars = function(start, finish)
+function H.get_cursor_neigh(start, finish)
   local line, col
   if vim.fn.mode() == 'c' then
     line = vim.fn.getcmdline()
@@ -80,106 +144,41 @@ local get_cursor_chars = function(start, finish)
   return string.sub('\r' .. line .. '\n', col + 1 + start, col + 1 + finish)
 end
 
-local neigh_match = function(pattern)
-  return (pattern == nil) or (get_cursor_chars(0, 1):find(pattern) ~= nil)
+function H.neigh_match(pattern)
+  return (pattern == nil) or (H.get_cursor_neigh(0, 1):find(pattern) ~= nil)
 end
 
-local keys = {
-  above     = escape('<C-o>O'),
-  bs        = escape('<bs>'),
-  cr        = escape('<cr>'),
-  del       = escape('<del>'),
-  keep_undo = escape('<C-g>U'),
-  -- NOTE: use `get_arrow_key()` instead of `keys.left` or `keys.right`
-  left      = escape('<left>'),
-  right     = escape('<right>')
+function H.escape(s)
+  return vim.api.nvim_replace_termcodes(s, true, true, true)
+end
+
+H.keys = {
+  above     = H.escape('<C-o>O'),
+  bs        = H.escape('<bs>'),
+  cr        = H.escape('<cr>'),
+  del       = H.escape('<del>'),
+  keep_undo = H.escape('<C-g>U'),
+  -- NOTE: use `get_arrow_key()` instead of `H.keys.left` or `H.keys.right`
+  left      = H.escape('<left>'),
+  right     = H.escape('<right>')
 }
 
--- Using left/right keys in insert mode breaks undo sequence and, more
--- importantly, dot-repeat. To avoid this, use 'i_CTRL-G_U' mapping.
-local get_arrow_key = function(key)
+function H.get_arrow_key(key)
   if vim.fn.mode() == 'i' then
-    return keys.keep_undo .. keys[key]
+    -- Using left/right keys in insert mode breaks undo sequence and, more
+    -- importantly, dot-repeat. To avoid this, use 'i_CTRL-G_U' mapping.
+    return H.keys.keep_undo .. H.keys[key]
   else
-    return keys[key]
+    return H.keys[key]
   end
 end
 
--- Module functionality
--- They are intended to be used inside `_noremap <expr> ...` type of mappings,
--- as they return sequence of keys (instead of other possible approach of
--- simulating them with `nvim_feedkeys()`).
-function MiniPairs.open(pair, twochars_pattern)
-  if not neigh_match(twochars_pattern) then return pair:sub(1, 1) end
-
-  return pair .. get_arrow_key('left')
-end
-
-function MiniPairs.close(pair, twochars_pattern)
-  if not neigh_match(twochars_pattern) then return pair:sub(2, 2) end
-
-  local close = pair:sub(2, 2)
-  if get_cursor_chars(1, 1) == close then
-    return get_arrow_key('right')
-  else
-    return close
+function H.is_in_table(val, tbl)
+  if tbl == nil then return false end
+  for _, value in pairs(tbl) do
+    if val == value then return true end
   end
-end
-
-function MiniPairs.closeopen(pair, twochars_pattern)
-  if get_cursor_chars(1, 1) == pair:sub(2, 2) then
-    return get_arrow_key('right')
-  else
-    return MiniPairs.open(pair, twochars_pattern)
-  end
-end
-
----- Each argument should be a pair which triggers extra action
-function MiniPairs.bs(pair_set)
-  local res = keys.bs
-
-  if is_in_table(get_cursor_chars(0, 1), pair_set) then
-    res = res .. keys.del
-  end
-
-  return res
-end
-
-function MiniPairs.cr(pair_set)
-  local res = keys.cr
-
-  if is_in_table(get_cursor_chars(0, 1), pair_set) then
-    res = res .. keys.above
-  end
-
-  return res
-end
-
-function MiniPairs.setup()
-  -- Setup mappings in command and insert modes
-  for _, mode in pairs({'c', 'i'}) do
-    map(mode, '(', [[v:lua.MiniPairs.open('()')]])
-    map(mode, '[', [[v:lua.MiniPairs.open('[]')]])
-    map(mode, '{', [[v:lua.MiniPairs.open('{}')]])
-
-    map(mode, ')', [[v:lua.MiniPairs.close('()')]])
-    map(mode, ']', [[v:lua.MiniPairs.close('[]')]])
-    map(mode, '}', [[v:lua.MiniPairs.close('{}')]])
-
-    -- Quotes insert single character if after a letter or `\`
-    map(mode, '"', [[v:lua.MiniPairs.closeopen('""', '[^%a\\].')]])
-    map(mode, "'", [[v:lua.MiniPairs.closeopen("''", '[^%a\\].')]])
-    map(mode, '`', [[v:lua.MiniPairs.closeopen('``', '[^%a\\].')]])
-
-    map(mode, '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
-  end
-
-  -- Map `<CR>` only in insert mode. Remap this to respect completion plugin.
-  map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
-
-  -- In terminal mode map only `<BS>`. Mainly because adding autopairs seems to
-  -- bring more trouble in day-to-day usage.
-  map('t', '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
+  return false
 end
 
 _G.MiniPairs = MiniPairs
