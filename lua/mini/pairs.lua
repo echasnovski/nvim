@@ -1,40 +1,43 @@
--- Custom *minimal* autopairs Lua plugin. This is meant to be a standalone file
+-- Custom *minimal* autopairs Lua module. This is meant to be a standalone file
 -- which when sourced in 'init.*' file provides a working minimal auto pairs.
+-- It provides functionality to work with 'paired' characters conditional on
+-- cursor's neighborhood (two characters to its left and right; beginning of
+-- line is '\r', end of line is `\n`). Its usage should be through making
+-- appropriate `<expr>` mappings.
 --
--- Initial goal is to setup keybindings for custom pairs in custom modes ('i',
--- 'c', 't'):
--- - "Open" symbols ('(', '[', etc.) should result into pasting whole pair and
---   moving inside pair: `<open>|<close>`, like `(|)`.
--- - "Close" symbols (')', ']', etc.) should jump over symbol to the right of
---   cursor if it is equal to "close" one and insert it otherwise.
--- - "Symmetrical" symbols (from pairs '""', '\'\'', '``') should try perform
---   "closeopen action": jump over right character if it is equal to second
---   character from pair and paste pair otherwise.
--- - `<BS>` and `<CR>`. Both should do extra thing when left character is
---   "open" symbol and right - "close" symbol:
---     - '<BS>' should remove whole pair.
---     - '<CR>' should put "close" symbol on next line leveraging default
---       indentation.
+-- Details of functionality:
+-- - `MiniPairs.open()` is for "open" symbols ('(', '[', etc.). If neighborhood
+--   doesn't match supplied pattern, function results into "open" symbol.
+--   Otherwise, it pastes whole pair and moving inside pair: `<open>|<close>`,
+--   like `(|)`.
+-- - `MiniPairs.close()` is for "close" symbols (')', ']', etc.). If
+--   neighborhood doesn't match supplied pattern, function results into "close"
+--   symbol. Otherwise it jumps over symbol to the right of cursor if it is
+--   equal to "close" one and inserts it otherwise.
+-- - `MiniPairs.closeopen()` is intended to be mapped to "symmetrical" symbols
+--   (from pairs '""', '\'\'', '``'). It tries to perform "closeopen action":
+--   move over right character if it is equal to second character from pair or
+--   conditionally paste pair otherwise (as in `MiniPairs.open()`).
+-- - `MiniPairs.bs()` is intended to be mapped to `<BS>`. It removes whole pair
+--   (via `<BS><Del>`) if neighborhood is equal to whole pair.
+-- - `MiniPairs.cr()` is intended to be mapped to `<CR>`. It puts "close"
+--   symbol on next line (via `<CR><C-o>O`) if neighborhood is equal to whole
+--   pair. Should be used only in insert mode.
 --
 -- What it doesn't do:
--- - It doesn't support conditional autopair. Depending on task, Use `<C-v>`
---   plus symbol or some kind of "surround" functionality.
 -- - It doesn't support multiple characters as "open" and "close" symbols. Use
 --   snippets for that.
--- - It doesn't support excluding filetypes. Use `autocmd` command or
+-- - It doesn't support dependency on filetype. Use `autocmd` command or
 --   'after/ftplugin' approach to:
 --     - `inoremap <buffer> <*> <*>` : return mapping of '<*>' to its original
 --       action, virtually unmapping.
---     - `inoremap <buffer> <expr> <*> v:lua.MiniPairs.action_...` : make new
+--     - `inoremap <buffer> <expr> <*> v:lua.MiniPairs.?` : make new
 --       buffer mapping for '<*>'.
 -- NOTES:
--- - To remove autopairing of '""' and add autopairing to "''", use `call
---   luaeval("MiniPairs.remap_quotes()")`.
--- - Currently buffer mapping of `<CR>` is not well supported as there is a
---   global mapping in 'zzz.lua' file. It takes into account completion and
---   snippet extension.
+-- - Make sure to make proper mapping of `<CR>` in order to support completion
+--   plugin of your choice.
 -- - Having mapping in terminal mode can conflict with autopairing capabilities
---   of opened interpretators (notably `radian`).
+--   of opened interpretators (for example, `radian`).
 -- - Sometimes has troubles with multibyte characters (such as icons). This
 --   seems to be because detecting characters around cursor uses "byte
 --   substring" instead of "symbol substring" operation.
@@ -73,11 +76,12 @@ local get_cursor_chars = function(start, finish)
     col = vim.api.nvim_win_get_cursor(0)[2]
   end
 
-  return string.sub(line, col + start, col + finish)
+  -- Add '\r' and '\n' to always return 2 characters
+  return string.sub('\r' .. line .. '\n', col + 1 + start, col + 1 + finish)
 end
 
-local table_to_seqstring = function(t)
-  return vim.inspect(t):sub(2, -2)
+local neigh_match = function(pattern)
+  return (pattern == nil) or (get_cursor_chars(0, 1):find(pattern) ~= nil)
 end
 
 local keys = {
@@ -105,12 +109,15 @@ end
 -- They are intended to be used inside `_noremap <expr> ...` type of mappings,
 -- as they return sequence of keys (instead of other possible approach of
 -- simulating them with `nvim_feedkeys()`).
-function MiniPairs.action_open(pair)
+function MiniPairs.open(pair, twochars_pattern)
+  if not neigh_match(twochars_pattern) then return pair:sub(1, 1) end
+
   return pair .. get_arrow_key('left')
 end
 
----- NOTE: `pair` as argument is used for consistency (when `right` is enough)
-function MiniPairs.action_close(pair)
+function MiniPairs.close(pair, twochars_pattern)
+  if not neigh_match(twochars_pattern) then return pair:sub(2, 2) end
+
   local close = pair:sub(2, 2)
   if get_cursor_chars(1, 1) == close then
     return get_arrow_key('right')
@@ -119,16 +126,16 @@ function MiniPairs.action_close(pair)
   end
 end
 
-function MiniPairs.action_closeopen(pair)
+function MiniPairs.closeopen(pair, twochars_pattern)
   if get_cursor_chars(1, 1) == pair:sub(2, 2) then
     return get_arrow_key('right')
   else
-    return pair .. get_arrow_key('left')
+    return MiniPairs.open(pair, twochars_pattern)
   end
 end
 
 ---- Each argument should be a pair which triggers extra action
-function MiniPairs.action_bs(pair_set)
+function MiniPairs.bs(pair_set)
   local res = keys.bs
 
   if is_in_table(get_cursor_chars(0, 1), pair_set) then
@@ -138,7 +145,7 @@ function MiniPairs.action_bs(pair_set)
   return res
 end
 
-function MiniPairs.action_cr(pair_set)
+function MiniPairs.cr(pair_set)
   local res = keys.cr
 
   if is_in_table(get_cursor_chars(0, 1), pair_set) then
@@ -148,66 +155,31 @@ function MiniPairs.action_cr(pair_set)
   return res
 end
 
-function MiniPairs.remap_quotes()
-  -- Map '"' to its original action ("remove" its mapping in buffer)
-  vim.cmd[[inoremap <buffer> " "]]
-
-  -- Map '\''
-  vim.cmd[[inoremap <buffer> <expr> ' v:lua.MiniPairs.action_closeopen("''")]]
-end
-
 function MiniPairs.setup()
-  -- Setup mappings
-  ---- Insert mode
-  map('i', '(', [[v:lua.MiniPairs.action_open('()')]])
-  map('i', '[', [[v:lua.MiniPairs.action_open('[]')]])
-  map('i', '{', [[v:lua.MiniPairs.action_open('{}')]])
+  -- Setup mappings in command and insert modes
+  for _, mode in pairs({'c', 'i'}) do
+    map(mode, '(', [[v:lua.MiniPairs.open('()')]])
+    map(mode, '[', [[v:lua.MiniPairs.open('[]')]])
+    map(mode, '{', [[v:lua.MiniPairs.open('{}')]])
 
-  map('i', ')', [[v:lua.MiniPairs.action_close('()')]])
-  map('i', ']', [[v:lua.MiniPairs.action_close('[]')]])
-  map('i', '}', [[v:lua.MiniPairs.action_close('{}')]])
+    map(mode, ')', [[v:lua.MiniPairs.close('()')]])
+    map(mode, ']', [[v:lua.MiniPairs.close('[]')]])
+    map(mode, '}', [[v:lua.MiniPairs.close('{}')]])
 
-  map('i', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
-  ------ No auto-pair for '\'' because it messes up with plain English used in
-  ------ comments (like can't, etc.)
-  map('i', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
+    -- Quotes insert single character if after a letter or `\`
+    map(mode, '"', [[v:lua.MiniPairs.closeopen('""', '[^%a\\].')]])
+    map(mode, "'", [[v:lua.MiniPairs.closeopen("''", '[^%a\\].')]])
+    map(mode, '`', [[v:lua.MiniPairs.closeopen('``', '[^%a\\].')]])
 
-  map('i', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
-  map('i', '<CR>', [[v:lua.MiniPairs.action_cr(['()', '[]', '{}'])]])
+    map(mode, '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
+  end
 
-  ---- Command mode
-  map('c', '(', [[v:lua.MiniPairs.action_open('()')]])
-  map('c', '[', [[v:lua.MiniPairs.action_open('[]')]])
-  map('c', '{', [[v:lua.MiniPairs.action_open('{}')]])
+  -- Map `<CR>` only in insert mode. Remap this to respect completion plugin.
+  map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
 
-  map('c', ')', [[v:lua.MiniPairs.action_close('()')]])
-  map('c', ']', [[v:lua.MiniPairs.action_close('[]')]])
-  map('c', '}', [[v:lua.MiniPairs.action_close('{}')]])
-
-  map('c', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
-  map('c', "'", [[v:lua.MiniPairs.action_closeopen("''")]])
-  map('c', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
-
-  map('c', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
-
-  ---- Terminal mode
-  map('t', '(', [[v:lua.MiniPairs.action_open('()')]])
-  map('t', '[', [[v:lua.MiniPairs.action_open('[]')]])
-  map('t', '{', [[v:lua.MiniPairs.action_open('{}')]])
-
-  map('t', ')', [[v:lua.MiniPairs.action_close('()')]])
-  map('t', ']', [[v:lua.MiniPairs.action_close('[]')]])
-  map('t', '}', [[v:lua.MiniPairs.action_close('{}')]])
-
-  map('t', '"', [[v:lua.MiniPairs.action_closeopen('""')]])
-  map('t', "'", [[v:lua.MiniPairs.action_closeopen("''")]])
-  map('t', '`', [[v:lua.MiniPairs.action_closeopen('``')]])
-
-  map('t', '<BS>', [[v:lua.MiniPairs.action_bs(['()', '[]', '{}', '""', "''", '``'])]])
-
-  -- Remap quotes in certain filetypes
-  vim.cmd[[au FileType lua lua MiniPairs.remap_quotes()]]
-  vim.cmd[[au FileType vim lua MiniPairs.remap_quotes()]]
+  -- In terminal mode map only `<BS>`. Mainly because adding autopairs seems to
+  -- bring more trouble in day-to-day usage.
+  map('t', '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
 end
 
 _G.MiniPairs = MiniPairs
