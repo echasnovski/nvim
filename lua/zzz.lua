@@ -28,7 +28,7 @@ local has_completion, completion = pcall(require, 'completion')
 ---- evaluated. Also having to check if 'delimitMate' is installed on every
 ---- press of '<CR>' is not a good solution from performance point of view.
 local has_delimitMate          = vim.g._using_delimitMate == 1
-local has_minipairs, minipairs = pcall(require, 'mini-pairs')
+local has_minipairs, minipairs = pcall(require, 'mini.pairs')
 local has_npairs, npairs       = pcall(require, 'nvim-autopairs')
 
 ---- Define what is "confirm popup selection"
