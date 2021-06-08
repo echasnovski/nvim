@@ -1,10 +1,13 @@
--- Custom minimal **fast** statusline. This is meant to be a standalone file
--- which when sourced in 'init.*' file provides a working minimal statusline.
+-- Custom minimal **fast** statusline module. This is meant to be a standalone
+-- file which when sourced in 'init.*' file provides a working minimal
+-- statusline. Special features: it changes color depending on current mode and
+-- has compact version of sections activated when window width is small enough.
 -- Inspired by:
 -- https://elianiva.me/post/neovim-lua-statusline (blogpost)
 -- https://github.com/elianiva/dotfiles/blob/master/nvim/.config/nvim/lua/modules/_statusline.lua (Github)
 --
--- Suggested dependencies (provide extra functionality, statusline will work without them):
+-- Suggested dependencies (provide extra functionality, statusline will work
+-- without them):
 -- - Nerd font (to support git and diagnostics icon).
 -- - Plugin 'airblade/vim-gitgutter' for Git signs. If missing, no git signs
 --   will be shown.
@@ -16,7 +19,7 @@
 -- Notes about structure:
 -- - Main statusline object is `MiniStatusline`. It has two different "states":
 --   active and inactive.
--- - In active mode `MiniStatusline.set_active()` is called. Its code defines
+-- - In active mode `MiniStatusline.active()` is called. Its code defines
 --   high-level structure of statusline. From there go to respective section
 --   functions.
 --
@@ -26,7 +29,7 @@
 --   means that update is made periodically in insert mode due to
 --   'completion-nvim' plugin and its `g:completion_timer_cycle` setting.
 -- - MiniStatusline might get evaluated on every 'CursorHold' event (indicator
---   is an updated happening in `&updatetime` time after cursor stopped; set
+--   is an update happening in `&updatetime` time after cursor stopped; set
 --   different `&updatetime` to verify that is a reason). In current setup this
 --   is happening due to following reasons:
 --     - Plugin 'vim-polyglot' has 'polyglot-sensible' autogroup which checks
@@ -35,8 +38,78 @@
 --   As these actions are useful, one can only live with the fact that
 --   'statusline' option gets reevaluated on 'CursorHold'.
 
--- Module
+-- Possible Lua dependencies
+local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
+
+-- Module and its helper
 local MiniStatusline = {}
+local H = {}
+
+-- Module setup
+function MiniStatusline.setup()
+  -- MiniStatusline behavior
+  vim.api.nvim_exec([[
+    augroup MiniStatusline
+      au!
+      au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline.active()
+      au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline.inactive()
+    augroup END
+  ]], false)
+
+  -- Update git branch on every buffer enter and after Neovim gained focus
+  -- (detect outside change).  Also update git branch before leaving command
+  -- line (detect fugitive change). Defer update to actually make it **after**
+  -- leaving command line.  Otherwise this will be evaluated too soon and give
+  -- "previous" branch.
+  vim.api.nvim_exec([[
+    augroup MiniStatusline
+      au BufEnter,FocusGained * lua MiniStatusline.update_git_branch({defer = false})
+      au CmdlineLeave         * lua MiniStatusline.update_git_branch({defer = true})
+    augroup END
+  ]], false)
+
+  -- Update git signs on every buffer enter (detect signs for buffer) and every
+  -- time 'gitgutter' says that change occured
+  vim.api.nvim_exec([[
+    augroup MiniStatusline
+      au BufEnter *         lua MiniStatusline.update_git_signs()
+      au User     GitGutter lua MiniStatusline.update_git_signs()
+    augroup END
+  ]], false)
+end
+
+-- Module functionality
+function MiniStatusline.active()
+  local mode_info = MiniStatusline.modes[vim.fn.mode()]
+
+  local mode        = MiniStatusline.section_mode{mode_info = mode_info, trunc_width = 120}
+  local spell       = MiniStatusline.section_spell{trunc_width = 120}
+  local wrap        = MiniStatusline.section_wrap{}
+  local git         = MiniStatusline.section_git{trunc_width = 75}
+  local diagnostics = MiniStatusline.section_diagnostics{trunc_width = 75}
+  local filename    = MiniStatusline.section_filename{trunc_width = 140}
+  local fileinfo    = MiniStatusline.section_fileinfo{trunc_width = 120}
+  local location    = MiniStatusline.section_location{}
+
+  -- Usage of `H.combine_sections()` ensures correct padding with spaces between
+  -- sections (accounts for 'missing' sections, etc.)
+  return H.combine_sections({
+    {string = mode,        hl = mode_info.hl},
+    {string = spell,       hl = nil}, -- Copy highliting from previous section
+    {string = wrap,        hl = nil}, -- Copy highliting from previous section
+    {string = git,         hl = '%#MiniStatuslineDevinfo#'},
+    {string = diagnostics, hl = nil}, -- Copy highliting from previous section
+    '%<', -- Mark general truncate point
+    {string = filename,    hl = '%#MiniStatuslineFilename#'},
+    '%=', -- End left alignment
+    {string = fileinfo,    hl = '%#MiniStatuslineFileinfo#'},
+    {string = location,    hl = mode_info.hl},
+  })
+end
+
+function MiniStatusline.inactive()
+  return '%#MiniStatuslineInactive#%F%='
+end
 
 -- MiniStatusline colors (from Gruvbox bright palette)
 vim.api.nvim_exec([[
@@ -53,74 +126,14 @@ vim.api.nvim_exec([[
   hi link MiniStatuslineFileinfo StatusLine
 ]], false)
 
--- Dependencies
-has_devicons, devicons = pcall(require, 'nvim-web-devicons')
-
--- Helpers
-local is_truncated = function(width)
-  return vim.api.nvim_win_get_width(0) < width
-end
-
-local isnt_normal_buffer = function()
-  -- For more information see ":h buftype"
-  return vim.bo.buftype ~= ''
-end
-
-local combine_sections = function(sections)
-  local t = {}
-  for _, s in ipairs(sections) do
-    if type(s) == 'string' then
-      t[#t + 1] = s
-    elseif s.string ~= '' then
-      if s.hl then
-        t[#t + 1] = string.format('%s %s ', s.hl, s.string)
-      else
-        t[#t + 1] = string.format('%s ', s.string)
-      end
-    end
-  end
-  return table.concat(t, '')
-end
-
--- Custom `^V` and `^S` symbols to make this file appropriate for
--- copy-paste (otherwise those symbols are not displayed).
+-- Statusline sections. Should return output text without whitespace on sides
+-- or empty string to omit section.
+---- Mode
+---- Custom `^V` and `^S` symbols to make this file appropriate for copy-paste
+---- (otherwise those symbols are not displayed).
 local CTRL_S = vim.api.nvim_replace_termcodes('<C-S>', true, true, true)
 local CTRL_V = vim.api.nvim_replace_termcodes('<C-V>', true, true, true)
 
--- Module functionality
-function MiniStatusline.set_active()
-  local mode_info = MiniStatusline.modes[vim.fn.mode()]
-
-  local mode        = MiniStatusline.section_mode{mode_info = mode_info, trunc_width = 120}
-  local spell       = MiniStatusline.section_spell{trunc_width = 120}
-  local wrap        = MiniStatusline.section_wrap{}
-  local git         = MiniStatusline.section_git{trunc_width = 75}
-  local diagnostics = MiniStatusline.section_diagnostics{trunc_width = 75}
-  local filename    = MiniStatusline.section_filename{trunc_width = 140}
-  local fileinfo    = MiniStatusline.section_fileinfo{trunc_width = 120}
-  local location    = MiniStatusline.section_location{}
-
-  -- Usage of `combine_sections()` ensures correct padding with spaces between
-  -- sections (accounts for 'missing' sections, etc.)
-  return combine_sections({
-    {string = mode,        hl = mode_info.hl},
-    {string = spell,       hl = nil}, -- Copy highliting from previous section
-    {string = wrap,        hl = nil}, -- Copy highliting from previous section
-    {string = git,         hl = '%#MiniStatuslineDevinfo#'},
-    {string = diagnostics, hl = nil}, -- Copy highliting from previous section
-    '%<', -- Mark general truncate point
-    {string = filename,    hl = '%#MiniStatuslineFilename#'},
-    '%=', -- End left alignment
-    {string = fileinfo,    hl = '%#MiniStatuslineFileinfo#'},
-    {string = location,    hl = mode_info.hl},
-  })
-end
-
-function MiniStatusline.set_inactive()
-  return '%#MiniStatuslineInactive#%F%='
-end
-
--- Mode
 MiniStatusline.modes = setmetatable({
   ['n']    = {long = 'Normal',   short = 'N' ,  hl = '%#MiniStatuslineModeNormal#'};
   ['v']    = {long = 'Visual',   short = 'V' ,  hl = '%#MiniStatuslineModeVisual#'};
@@ -143,36 +156,36 @@ MiniStatusline.modes = setmetatable({
 })
 
 function MiniStatusline.section_mode(arg)
-  local mode = is_truncated(arg.trunc_width) and
+  local mode = H.is_truncated(arg.trunc_width) and
     arg.mode_info.short or
     arg.mode_info.long
 
   return mode
 end
 
--- Spell
+---- Spell
 function MiniStatusline.section_spell(arg)
   if not vim.wo.spell then return '' end
 
-  if is_truncated(arg.trunc_width) then return 'SPELL' end
+  if H.is_truncated(arg.trunc_width) then return 'SPELL' end
 
   return string.format('SPELL(%s)', vim.bo.spelllang)
 end
 
--- Wrap
+---- Wrap
 function MiniStatusline.section_wrap()
   if not vim.wo.wrap then return '' end
 
   return 'WRAP'
 end
 
--- Git
--- NOTE: Everything is implemented through updating some custom variable to
--- increase performance because certain actions are only done when needed and
--- not on every statusline update. For comparison: if called on every
--- statusline update, total statusline execution time is ~1.1ms; with current
--- approach it drops to ~0.2ms.
----- Git branch
+---- Git
+---- NOTE: Everything is implemented through updating some custom variable to
+---- increase performance because certain actions are only done when needed and
+---- not on every statusline update. For comparison: if called on every
+---- statusline update, total statusline execution time is ~1.1ms; with current
+---- approach it drops to ~0.2ms.
+------ Git branch
 MiniStatusline.git_branch = nil
 
 function MiniStatusline.update_git_branch(arg)
@@ -202,7 +215,7 @@ function MiniStatusline.update_git_branch(arg)
   end
 end
 
----- Git diff signs
+------ Git diff signs
 MiniStatusline.git_signs = nil
 
 function MiniStatusline.update_git_signs()
@@ -232,10 +245,10 @@ function MiniStatusline.update_git_signs()
 end
 
 function MiniStatusline.section_git(arg)
-  if isnt_normal_buffer() then return '' end
+  if H.isnt_normal_buffer() then return '' end
 
   local res
-  if is_truncated(arg.trunc_width) then
+  if H.is_truncated(arg.trunc_width) then
     res = MiniStatusline.git_branch
   else
     res = table.concat({MiniStatusline.git_branch, MiniStatusline.git_signs}, ' ')
@@ -246,20 +259,13 @@ function MiniStatusline.section_git(arg)
   return string.format(' %s', res)
 end
 
--- Diagnostics
-local diagnostic_levels = {
-  {name = 'Error'      , sign = 'E'},
-  {name = 'Warning'    , sign = 'W'},
-  {name = 'Information', sign = 'I'},
-  {name = 'Hint'       , sign = 'H'},
-}
-
+---- Diagnostics
 function MiniStatusline.section_diagnostics(arg)
   -- Assumption: there are no attached clients if table
   -- `vim.lsp.buf_get_clients()` is empty
   local hasnt_attached_client = next(vim.lsp.buf_get_clients()) == nil
-  local dont_show_lsp = is_truncated(arg.trunc_width) or
-    isnt_normal_buffer() or
+  local dont_show_lsp = H.is_truncated(arg.trunc_width) or
+    H.isnt_normal_buffer() or
     hasnt_attached_client
   if dont_show_lsp then return '' end
 
@@ -279,13 +285,13 @@ function MiniStatusline.section_diagnostics(arg)
   return 'ﯭ ' .. result
 end
 
--- File name
+---- File name
 function MiniStatusline.section_filename(arg)
   -- In terminal always use plain name
   if vim.bo.buftype == 'terminal' then
     return '%t'
   -- File name with 'truncate', 'modified', 'readonly' flags
-  elseif is_truncated(arg.trunc_width) then
+  elseif H.is_truncated(arg.trunc_width) then
     -- Use relative path if truncated
     return '%f%m%r'
   else
@@ -294,8 +300,69 @@ function MiniStatusline.section_filename(arg)
   end
 end
 
--- File information
-local get_filesize = function()
+---- File information
+function MiniStatusline.section_fileinfo(arg)
+  local filetype = vim.bo.filetype
+
+  -- Don't show anything if can't detect file type or not inside a "normal
+  -- buffer"
+  if ((filetype == '') or H.isnt_normal_buffer()) then return '' end
+
+  -- Add filetype icon
+  local icon = H.get_filetype_icon()
+  if icon ~= '' then filetype = icon .. ' ' .. filetype end
+
+  -- Construct output string if truncated
+  if H.is_truncated(arg.trunc_width) then return filetype end
+
+  -- Construct output string with extra file info
+  local encoding = vim.bo.fileencoding or vim.bo.encoding
+  local format = vim.bo.fileformat
+  local size = H.get_filesize()
+
+  return string.format('%s %s[%s] %s', filetype, encoding, format, size)
+end
+
+---- Location inside buffer
+function MiniStatusline.section_location(arg)
+  -- Use virtual column number to allow update when paste last column
+  return '%l|%L│%2v|%-2{col("$") - 1}'
+end
+
+-- Helpers
+function H.is_truncated(width)
+  return vim.api.nvim_win_get_width(0) < width
+end
+
+function H.isnt_normal_buffer()
+  -- For more information see ":h buftype"
+  return vim.bo.buftype ~= ''
+end
+
+function H.combine_sections(sections)
+  local t = {}
+  for _, s in ipairs(sections) do
+    if type(s) == 'string' then
+      t[#t + 1] = s
+    elseif s.string ~= '' then
+      if s.hl then
+        t[#t + 1] = string.format('%s %s ', s.hl, s.string)
+      else
+        t[#t + 1] = string.format('%s ', s.string)
+      end
+    end
+  end
+  return table.concat(t, '')
+end
+
+H.diagnostic_levels = {
+  {name = 'Error'      , sign = 'E'},
+  {name = 'Warning'    , sign = 'W'},
+  {name = 'Information', sign = 'I'},
+  {name = 'Hint'       , sign = 'H'},
+}
+
+function H.get_filesize()
   local size = vim.fn.getfsize(vim.fn.getreg('%'))
   local data
   if size < 1024 then
@@ -309,7 +376,7 @@ local get_filesize = function()
   return data
 end
 
-local get_filetype_icon = function()
+function H.get_filetype_icon()
   -- By default use 'nvim-web-devicons', fallback to 'vim-devicons'
   if has_devicons then
     local file_name, file_ext = vim.fn.expand('%:t'), vim.fn.expand('%:e')
@@ -319,66 +386,6 @@ local get_filetype_icon = function()
   end
 
   return ''
-end
-
-function MiniStatusline.section_fileinfo(arg)
-  local filetype = vim.bo.filetype
-
-  -- Don't show anything if can't detect file type or not inside a "normal
-  -- buffer"
-  if ((filetype == '') or isnt_normal_buffer()) then return '' end
-
-  -- Add filetype icon
-  local icon = get_filetype_icon()
-  if icon ~= '' then filetype = icon .. ' ' .. filetype end
-
-  -- Construct output string if truncated
-  if is_truncated(arg.trunc_width) then return filetype end
-
-  -- Construct output string with extra file info
-  local encoding = vim.bo.fileencoding or vim.bo.encoding
-  local format = vim.bo.fileformat
-  local size = get_filesize()
-
-  return string.format('%s %s[%s] %s', filetype, encoding, format, size)
-end
-
--- Location inside buffer
-function MiniStatusline.section_location(arg)
-  -- Use virtual column number to allow update when paste last column
-  return '%l|%L│%2v|%-2{col("$") - 1}'
-end
-
-function MiniStatusline.setup()
-  -- MiniStatusline behavior
-  vim.api.nvim_exec([[
-    augroup MiniStatusline
-      au!
-      au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline.set_active()
-      au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline.set_inactive()
-    augroup END
-  ]], false)
-
-  -- Update git branch on every buffer enter and after Neovim gained focus
-  -- (detect outside change).  Also update git branch before leaving command
-  -- line (detect fugitive change). Defer update to actually make it **after**
-  -- leaving command line.  Otherwise this will be evaluated too soon and give
-  -- "previous" branch.
-  vim.api.nvim_exec([[
-    augroup MiniStatusline
-      au BufEnter,FocusGained * lua MiniStatusline.update_git_branch({defer = false})
-      au CmdlineLeave         * lua MiniStatusline.update_git_branch({defer = true})
-    augroup END
-  ]], false)
-
-  -- Update git signs on every buffer enter (detect signs for buffer) and every
-  -- time 'gitgutter' says that change occured
-  vim.api.nvim_exec([[
-    augroup MiniStatusline
-      au BufEnter *         lua MiniStatusline.update_git_signs()
-      au User     GitGutter lua MiniStatusline.update_git_signs()
-    augroup END
-  ]], false)
 end
 
 _G.MiniStatusline = MiniStatusline
