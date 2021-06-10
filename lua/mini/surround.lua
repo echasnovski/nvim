@@ -79,6 +79,9 @@ local H = {}
 
 -- Module setup
 function MiniSurround.setup()
+  -- Export module
+  _G.MiniSurround = MiniSurround
+
   -- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
   -- It is used to enable dot-repeatability.
   vim.api.nvim_set_keymap(
@@ -113,6 +116,9 @@ function MiniSurround.setup()
     'n', 'sn', [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
     {noremap = true, silent = true}
   )
+
+  -- Highlight group for surrounding highlighting
+  vim.api.nvim_exec([[hi link MiniSurroundHighlight IncSearch]], false)
 end
 
 -- Module Settings
@@ -286,9 +292,8 @@ function MiniSurround.find_surrounding(surround_info)
 end
 
 -- Helpers
----- Data for highlighting
+---- Namespace for highlighting
 H.ns_id = vim.api.nvim_create_namespace('MiniSurround')
-vim.api.nvim_exec([[hi link MiniSurroundHighlight IncSearch]], false)
 
 ---- Table of non-special surroundings
 H.surroundings = setmetatable({
@@ -687,5 +692,4 @@ function H.find_surrounding_in_neighborhood(surround_info, n_neighbors)
   return {left = left_linepart, right = right_linepart}
 end
 
-_G.MiniSurround = MiniSurround
 return MiniSurround

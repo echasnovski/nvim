@@ -24,6 +24,9 @@ local H = {}
 
 -- Module setup
 function MiniComment.setup()
+  -- Export module
+  _G.MiniComment = MiniComment
+
   vim.api.nvim_set_keymap(
     'n', 'gc', 'v:lua.MiniComment.operator()',
     {expr = true, noremap = true, silent = true}
@@ -227,5 +230,4 @@ function H.make_uncomment_function(comment_parts)
   end
 end
 
-_G.MiniComment = MiniComment
 return MiniComment

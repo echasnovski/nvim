@@ -24,6 +24,9 @@ local H = {}
 
 -- Module setup
 function MiniTabline.setup()
+  -- Export module
+  _G.MiniTabline = MiniTabline
+
   -- MiniTabline behavior
   vim.api.nvim_exec([[
     augroup MiniTabline
@@ -46,20 +49,20 @@ function MiniTabline.setup()
       execute 'buffer' a:bufnum
     endfunction
   ]], false)
+
+  -- MiniTabline colors (from Gruvbox palette)
+  vim.api.nvim_exec([[
+    hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15 ctermfg=0
+    hi MiniTablineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7  ctermfg=0
+    hi MiniTablineHidden          guifg=#A89984 guibg=#3C3836          ctermbg=8  ctermfg=7
+
+    hi MiniTablineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold ctermbg=14 ctermfg=0
+    hi MiniTablineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold ctermbg=6  ctermfg=0
+    hi MiniTablineModifiedHidden  guibg=#076678 guifg=#BDAE93          ctermbg=6  ctermfg=0
+
+    hi MiniTablineFill NONE
+  ]], false)
 end
-
--- MiniTabline colors (from Gruvbox palette)
-vim.api.nvim_exec([[
-  hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15 ctermfg=0
-  hi MiniTablineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7  ctermfg=0
-  hi MiniTablineHidden          guifg=#A89984 guibg=#3C3836          ctermbg=8  ctermfg=7
-
-  hi MiniTablineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold ctermbg=14 ctermfg=0
-  hi MiniTablineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold ctermbg=6  ctermfg=0
-  hi MiniTablineModifiedHidden  guibg=#076678 guifg=#BDAE93          ctermbg=6  ctermfg=0
-
-  hi MiniTablineFill NONE
-]], false)
 
 -- Module functionality
 function MiniTabline.update_tabline()
@@ -356,5 +359,4 @@ function H.concat_tabs()
   return table.concat(t, '') .. '%#MiniTablineFill#'
 end
 
-_G.MiniTabline = MiniTabline
 return MiniTabline

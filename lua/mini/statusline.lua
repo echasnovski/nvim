@@ -47,6 +47,9 @@ local H = {}
 
 -- Module setup
 function MiniStatusline.setup()
+  -- Export module
+  _G.MiniStatusline = MiniStatusline
+
   -- MiniStatusline behavior
   vim.api.nvim_exec([[
     augroup MiniStatusline
@@ -75,6 +78,21 @@ function MiniStatusline.setup()
       au BufEnter *         lua MiniStatusline.update_git_signs()
       au User     GitGutter lua MiniStatusline.update_git_signs()
     augroup END
+  ]], false)
+
+  -- MiniStatusline colors (from Gruvbox bright palette)
+  vim.api.nvim_exec([[
+    hi MiniStatuslineModeNormal  guibg=#BDAE93 guifg=#1D2021 gui=bold ctermbg=7 ctermfg=0
+    hi MiniStatuslineModeInsert  guibg=#83A598 guifg=#1D2021 gui=bold ctermbg=4 ctermfg=0
+    hi MiniStatuslineModeVisual  guibg=#B8BB26 guifg=#1D2021 gui=bold ctermbg=2 ctermfg=0
+    hi MiniStatuslineModeReplace guibg=#FB4934 guifg=#1D2021 gui=bold ctermbg=1 ctermfg=0
+    hi MiniStatuslineModeCommand guibg=#FABD2F guifg=#1D2021 gui=bold ctermbg=3 ctermfg=0
+    hi MiniStatuslineModeOther   guibg=#8EC07C guifg=#1D2021 gui=bold ctermbg=6 ctermfg=0
+
+    hi link MiniStatuslineInactive StatusLineNC
+    hi link MiniStatuslineDevinfo  StatusLine
+    hi link MiniStatuslineFilename StatusLineNC
+    hi link MiniStatuslineFileinfo StatusLine
   ]], false)
 end
 
@@ -110,21 +128,6 @@ end
 function MiniStatusline.inactive()
   return '%#MiniStatuslineInactive#%F%='
 end
-
--- MiniStatusline colors (from Gruvbox bright palette)
-vim.api.nvim_exec([[
-  hi MiniStatuslineModeNormal  guibg=#BDAE93 guifg=#1D2021 gui=bold ctermbg=7 ctermfg=0
-  hi MiniStatuslineModeInsert  guibg=#83A598 guifg=#1D2021 gui=bold ctermbg=4 ctermfg=0
-  hi MiniStatuslineModeVisual  guibg=#B8BB26 guifg=#1D2021 gui=bold ctermbg=2 ctermfg=0
-  hi MiniStatuslineModeReplace guibg=#FB4934 guifg=#1D2021 gui=bold ctermbg=1 ctermfg=0
-  hi MiniStatuslineModeCommand guibg=#FABD2F guifg=#1D2021 gui=bold ctermbg=3 ctermfg=0
-  hi MiniStatuslineModeOther   guibg=#8EC07C guifg=#1D2021 gui=bold ctermbg=6 ctermfg=0
-
-  hi link MiniStatuslineInactive StatusLineNC
-  hi link MiniStatuslineDevinfo  StatusLine
-  hi link MiniStatuslineFilename StatusLineNC
-  hi link MiniStatuslineFileinfo StatusLine
-]], false)
 
 -- Statusline sections. Should return output text without whitespace on sides
 -- or empty string to omit section.
@@ -388,5 +391,4 @@ function H.get_filetype_icon()
   return ''
 end
 
-_G.MiniStatusline = MiniStatusline
 return MiniStatusline

@@ -48,6 +48,9 @@ local H = {}
 
 -- Module setup
 function MiniPairs.setup()
+  -- Export module
+  _G.MiniPairs = MiniPairs
+
   -- Setup mappings in command and insert modes
   for _, mode in pairs({'c', 'i'}) do
     H.map(mode, '(', [[v:lua.MiniPairs.open('()')]])
@@ -181,5 +184,4 @@ function H.is_in_table(val, tbl)
   return false
 end
 
-_G.MiniPairs = MiniPairs
 return MiniPairs
