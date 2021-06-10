@@ -189,10 +189,15 @@ else
 endif
 
 " o is for 'other'
+if has('nvim-0.5')
+  nnoremap <silent> <Leader>oc <cmd>lua MiniCursorword.toggle()<CR>
+else
+  nnoremap <silent> <Leader>oc <cmd>call MiniCursorwordToggle()<CR>
+endif
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'                     , 'arguments split'],
-  \ 'c' : [':call CurrentWordToggle()'    , 'current word hl toggle'],
+  \ 'c' :                                   'current word hl toggle',
   \ 'd' : [':DogeGenerate'                , 'document'],
   \ 'h' : [':SidewaysLeft'                , 'move arg left'],
   \ 'H' : [':TSBufToggle highlight'       , 'highlight toggle'],
