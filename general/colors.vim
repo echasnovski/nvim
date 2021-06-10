@@ -64,8 +64,5 @@ hi SpellRare    guisp=#FFFFFF   gui=undercurl
 " Use custom color for highlighting 'maximum width' column
 hi ColorColumn ctermbg=grey guibg=#555555
 
-" Current word
-hi CurrentWord term=underline cterm=underline gui=underline
-
 " Trailing whitespace
 highlight TrailWhitespace ctermbg=red ctermfg=white guibg=#FB4934

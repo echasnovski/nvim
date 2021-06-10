@@ -22,5 +22,7 @@ else
   " Source Lua files
   if has("nvim-0.5")
     luafile $HOME/.config/nvim/lua/source.lua
+  else
+    source $HOME/.config/nvim/general/mini-cursorword.vim
   endif
 endif

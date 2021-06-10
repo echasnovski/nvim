@@ -190,51 +190,6 @@ function Scratch()
   setlocal noswapfile
 endfunction
 
-" Current word highlighting
-let s:highlight_curword = 1
-
-"" A modified version of https://stackoverflow.com/a/25233145
-"" Using `matchadd()` instead of a simpler `:match` to tweak priority of
-"" 'current word' highlighting: with `:match` it is higher than for
-"" `incsearch` which is not convenient.
-function! HighlightCurrentWord()
-  if s:highlight_curword
-    " Remove current match so that only current word will be highlighted
-    " (otherwise they will add up as a result of `matchadd` calls)
-    call UnHighlightCurrentWord()
-
-    " Force remove highlighting when not on keyword character
-    if getline(".")[col(".")-1] !~# '[[:keyword:]]'
-      call UnHighlightCurrentWord()
-    else
-      let l:curword = escape(expand('<cword>'), '\/')
-      " Highlight with 'very nomagic' pattern match ('\V') and for pattern to
-      " match whole word ('\<' and '\>')
-      let l:current_pattern = '\V\<' . l:curword .'\>'
-      let w:_curword_lastmatch = matchadd('CurrentWord', l:current_pattern, -1)
-    endif
-  endif
-endfunction
-
-function UnHighlightCurrentWord()
-  if exists('w:_curword_lastmatch')
-    call matchdelete(w:_curword_lastmatch)
-    unlet w:_curword_lastmatch
-  endif
-endfunction
-
-function CurrentWordToggle()
-  if s:highlight_curword
-    let s:highlight_curword = 0
-    " Remove all current highlights
-    call UnHighlightCurrentWord()
-  else
-    let s:highlight_curword = 1
-    " Add current highlights
-    call HighlightCurrentWord()
-  endif
-endfunction
-
 " Add multiple consecutive comment leader
 function AddMultipleCommentLeader()
   " Make raw comment leader from 'commentstring' option
