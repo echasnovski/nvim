@@ -1,5 +1,5 @@
 " Custom minimal autopairs plugin rewritten in Vimscript (to be used in Vim,
-" not in Neovim). For more information see 'lua/mini-pairs.lua'.
+" not in Neovim). For more information see 'lua/mini/pairs.lua'.
 
 " Helpers
 function s:IsInList(val, l)

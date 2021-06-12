@@ -4,7 +4,7 @@
 "
 " General idea: show all listed buffers in case of one tab, fall back for
 " deafult otherwise. NOTE: this is superseded by a more faster Lua
-" implementation ('lua/mini-tabline.lua'). Kept here for historical reasons.
+" implementation ('lua/mini/tabline.lua'). Kept here for historical reasons.
 "
 " This code is a truncated version of 'ap/vim-buftabline' with the following
 " options:
