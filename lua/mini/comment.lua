@@ -1,7 +1,10 @@
--- Custom *minimal* and *fast* commenting Lua module. This is meant to be a
--- standalone file which, when sourced in 'init.*' file, provides a working
--- minimal commenting. This is basically a reimplementation of
--- 'tpope/vim-commentary' with help of 'terrortylor/nvim-comment'.
+-- Custom *minimal* and *fast* commenting Lua module. This is basically a
+-- reimplementation of 'tpope/vim-commentary' with help of
+-- 'terrortylor/nvim-comment'.
+--
+-- To activate, put this file somewhere into 'lua' folder and call module's
+-- `setup()`. For example, put as 'lua/mini/comment.lua' and execute
+-- `require('mini.comment').setup()` Lua code.
 --
 -- Functionality:
 -- - `MiniComment.operator()` function is meant to be used in '<expr>' mapping

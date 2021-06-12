@@ -1,9 +1,11 @@
--- Custom *minimal* autopairs Lua module. This is meant to be a standalone file
--- which when sourced in 'init.*' file provides a working minimal auto pairs.
--- It provides functionality to work with 'paired' characters conditional on
--- cursor's neighborhood (two characters to its left and right; beginning of
--- line is '\r', end of line is `\n`). Its usage should be through making
--- appropriate `<expr>` mappings.
+-- Custom *minimal* and *fast* autopairs Lua module. It provides functionality
+-- to work with 'paired' characters conditional on cursor's neighborhood (two
+-- characters to its left and right; beginning of line is '\r', end of line is
+-- `\n`). Its usage should be through making appropriate `<expr>` mappings.
+--
+-- To activate, put this file somewhere into 'lua' folder and call module's
+-- `setup()`. For example, put as 'lua/mini/pairs.lua' and execute
+-- `require('mini.pairs').setup()` Lua code.
 --
 -- Details of functionality:
 -- - `MiniPairs.open()` is for "open" symbols ('(', '[', etc.). If neighborhood

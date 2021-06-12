@@ -1,10 +1,12 @@
--- Custom minimal **fast** statusline module. This is meant to be a standalone
--- file which when sourced in 'init.*' file provides a working minimal
--- statusline. Special features: it changes color depending on current mode and
--- has compact version of sections activated when window width is small enough.
--- Inspired by:
+-- Custom *minimal* and *fast* statusline module. Special features: it changes
+-- color depending on current mode and has compact version of sections
+-- activated when window width is small enough. Inspired by:
 -- https://elianiva.me/post/neovim-lua-statusline (blogpost)
 -- https://github.com/elianiva/dotfiles/blob/master/nvim/.config/nvim/lua/modules/_statusline.lua (Github)
+--
+-- To activate, put this file somewhere into 'lua' folder and call module's
+-- `setup()`. For example, put as 'lua/mini/statusline.lua' and execute
+-- `require('mini.statusline').setup()` Lua code.
 --
 -- Suggested dependencies (provide extra functionality, statusline will work
 -- without them):

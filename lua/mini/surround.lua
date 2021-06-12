@@ -1,7 +1,10 @@
--- Custom *somewhat minimal* and *fast* surrounding Lua plugin. This is meant
--- to be a standalone file which, when sourced in 'init.*' file, provides a
--- working minimal commenting. This is mostly a reimplementation of the most
--- essential features of 'machakann/vim-sandwich' with a couple more on top.
+-- Custom *somewhat minimal* and *fast* surrounding Lua plugin. This is mostly
+-- a reimplementation of the most essential features of
+-- 'machakann/vim-sandwich' with a couple more on top.
+--
+-- To activate, put this file somewhere into 'lua' folder and call module's
+-- `setup()`. For example, put as 'lua/mini/surround.lua' and execute
+-- `require('mini.surround').setup()` Lua code.
 --
 -- Features:
 -- - Actions:

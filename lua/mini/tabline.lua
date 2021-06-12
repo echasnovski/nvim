@@ -1,8 +1,11 @@
--- Custom minimal **fast** tabline module. This is meant to be a standalone
--- file which when sourced in 'init.*' file provides a working minimal tabline.
--- General idea: show all listed buffers in readable way with minimal total
--- width in case of one vim tab, fall back for deafult otherwise. Inspired by
+-- Custom *minimal* and *fast* tabline module. General idea: show all listed
+-- buffers in readable way with minimal total width in case of one vim tab,
+-- fall back for deafult otherwise. Inspired by
 -- https://github.com/ap/vim-buftabline.
+--
+-- To activate, put this file somewhere into 'lua' folder and call module's
+-- `setup()`. For example, put as 'lua/mini/tabline.lua' and execute
+-- `require('mini.tabline').setup()` Lua code.
 --
 -- Main capabilities when displaying buffers:
 -- - Different highlight groups for "states" of buffer.

@@ -1,6 +1,8 @@
--- Custom minimal **fast** module for highlighting of word under cursor. This
--- file provides needed functionality, which will be activated when `setup()`
--- function is called.
+-- Custom *minimal* and *fast* module for highlighting word under cursor.
+--
+-- To activate, put this file somewhere into 'lua' folder and call module's
+-- `setup()`. For example, put as 'lua/mini/cursorword.lua' and execute
+-- `require('mini.cursorword').setup()` Lua code.
 --
 -- Highlighting is done via Vim's `matchadd()` and `matchdelete()` with low
 -- highlighting priority. It is triggered only if current cursor character is
