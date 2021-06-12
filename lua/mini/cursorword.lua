@@ -39,30 +39,41 @@ end
 -- 'current word' highlighting: with `:match` it is higher than for
 -- `incsearch` which is not convenient.
 function MiniCursorword.highlight()
-  if H.do_highlight then
-    -- Remove current match so that only current word will be highlighted
-    -- (otherwise they will add up as a result of `matchadd` calls)
-    MiniCursorword.unhighlight()
+  if not H.do_highlight then return end
 
-    -- Highlight word only if cursor is on 'keyword' character
-    if H.is_cursor_on_keyword() then
-      local curword = vim.fn.escape(vim.fn.expand('<cword>'), [[\/]])
-      -- Highlight with 'very nomagic' pattern match ('\V') and for pattern to
-      -- match whole word ('\<' and '\>')
-      local curpattern = string.format([[\V\<%s\>]], curword)
-      -- Add match highlight with very low priority and store match identifier
-      -- *per window*
-      local win_id = vim.api.nvim_win_get_number(0)
-      H.curword_lastmatch[win_id] = vim.fn.matchadd('MiniCursorword', curpattern, -1)
-    end
+  -- Highlight word only if cursor is on 'keyword' character
+  if not H.is_cursor_on_keyword() then
+    -- Stop highlighting immediately when cursor is not on 'keyword'
+    MiniCursorword.unhighlight()
+    return
   end
+
+  -- Get current information
+  local win_id = vim.fn.win_getid()
+  local win_match = H.window_matches[win_id] or {}
+  local curword = vim.fn.escape(vim.fn.expand('<cword>'), [[\/]])
+
+  -- Don't do anything if currently highlighted word equals one on cursor
+  if win_match.word == curword then return end
+
+  -- Stop highlighting previous match (if it exists)
+  if win_match.id then vim.fn.matchdelete(win_match.id) end
+
+  -- Make highlighting pattern 'very nomagic' ('\V') and to match whole word
+  -- ('\<' and '\>')
+  local curpattern = string.format([[\V\<%s\>]], curword)
+
+  -- Add match highlight with very low priority and store match information
+  local match_id = vim.fn.matchadd('MiniCursorword', curpattern, -1)
+  H.window_matches[win_id] = {word = curword, id = match_id}
 end
 
 function MiniCursorword.unhighlight()
-  local win_id = vim.api.nvim_win_get_number(0)
-  if H.curword_lastmatch[win_id] ~= nil then
-    vim.fn.matchdelete(H.curword_lastmatch[win_id])
-    H.curword_lastmatch[win_id] = nil
+  local win_id = vim.fn.win_getid()
+  local win_match = H.window_matches[win_id]
+  if win_match ~= nil then
+    vim.fn.matchdelete(win_match.id)
+    H.window_matches[win_id] = nil
   end
 end
 
@@ -79,9 +90,9 @@ end
 -- Indicator of whether to actually do highlighing
 H.do_highlight = true
 
--- Identification number of last match (returned from `vim.fn.matchadd()`)
--- stored *per window*
-H.curword_lastmatch = {}
+-- Information about last match highlighting: word and match id (returned from
+-- `vim.fn.matchadd()`). Stored *per window* by its unique identifier.
+H.window_matches = {}
 
 function H.is_cursor_on_keyword()
   local col = vim.fn.col('.')
