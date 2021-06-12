@@ -337,7 +337,9 @@ function H.get_marks_pos(mode)
   local pos2 = vim.api.nvim_buf_get_mark(0, mark2)
 
   -- Tweak position in linewise mode as marks are placed on the first column
-  if mode == 'line' then
+  local is_linewise = (mode == 'line') or
+    (mode == 'visual' and vim.fn.visualmode() == 'V')
+  if is_linewise then
     -- Move start mark past the indent
     pos1[2] = vim.fn.indent(pos1[1])
     -- Move end mark to the last character (` - 2` here because `col()` returns

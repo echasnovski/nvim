@@ -277,7 +277,7 @@ function MiniStatusline.section_diagnostics(arg)
   -- Gradual growing of string ensures preferred order
   local result = ''
 
-  for _, level in ipairs(diagnostic_levels) do
+  for _, level in ipairs(H.diagnostic_levels) do
     n = vim.lsp.diagnostic.get_count(0, level.name)
     -- Add string only if diagnostic is present
     if n > 0 then
