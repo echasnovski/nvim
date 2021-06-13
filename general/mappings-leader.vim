@@ -194,6 +194,7 @@ if has('nvim-0.5')
 else
   nnoremap <silent> <Leader>oc <cmd>call MiniCursorwordToggle()<CR>
 endif
+nnoremap <Leader>oT <cmd>call MiniTrailspaceToggle()<CR>
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'                     , 'arguments split'],
@@ -205,8 +206,9 @@ let g:which_key_map.o = {
   \ 'r' : [':call ResizeToColorColumn()'  , 'resize to colorcolumn'],
   \ 'S' : [':call SpellCompletionToggle()', 'spell completion toggle'],
   \ 's' : [':setlocal spell!'             , 'spell toggle'],
+  \ 't' : [':call MiniTrailspaceTrim()'   , 'trim trailspace'],
+  \ 'T' :                                   'trailspace hl toggle',
   \ 'w' : [':call ToggleWrap()'           , 'wrap toggle'],
-  \ 'W' : [':call TrimTrailWhitespace()'  , 'whitespace trim'],
   \ 'z' : [':call Zoom()'                 , 'zoom'],
   \ }
 

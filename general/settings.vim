@@ -76,10 +76,6 @@ if !exists('g:vscode')
 
     " Start integrated terminal already in insert mode
     autocmd TermOpen * startinsert
-
-    " Highlight trailing whitespace
-    autocmd VimEnter,WinEnter,InsertLeave * call HighlightTrailWhitespace()
-    autocmd WinLeave,InsertEnter * call UnHighlightTrailWhitespace()
   augroup END
 
   " Highlight yanked text
