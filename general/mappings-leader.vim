@@ -190,11 +190,14 @@ endif
 
 " o is for 'other'
 if has('nvim-0.5')
-  nnoremap <silent> <Leader>oc <cmd>lua MiniCursorword.toggle()<CR>
+  nnoremap <Leader>oc <cmd>lua MiniCursorword.toggle()<CR>
+  nnoremap <Leader>oT <cmd>lua MiniTrailspace.toggle()<CR>
+  nnoremap <Leader>ot <cmd>lua MiniTrailspace.trim()<CR>
 else
-  nnoremap <silent> <Leader>oc <cmd>call MiniCursorwordToggle()<CR>
+  nnoremap <Leader>oc <cmd>call MiniCursorwordToggle()<CR>
+  nnoremap <Leader>oT <cmd>call MiniTrailspaceToggle()<CR>
+  nnoremap <Leader>ot <cmd>call MiniTrailspaceTrim()<CR>
 endif
-nnoremap <Leader>oT <cmd>call MiniTrailspaceToggle()<CR>
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'                     , 'arguments split'],
@@ -206,7 +209,7 @@ let g:which_key_map.o = {
   \ 'r' : [':call ResizeToColorColumn()'  , 'resize to colorcolumn'],
   \ 'S' : [':call SpellCompletionToggle()', 'spell completion toggle'],
   \ 's' : [':setlocal spell!'             , 'spell toggle'],
-  \ 't' : [':call MiniTrailspaceTrim()'   , 'trim trailspace'],
+  \ 't' :                                   'trim trailspace',
   \ 'T' :                                   'trailspace hl toggle',
   \ 'w' : [':call ToggleWrap()'           , 'wrap toggle'],
   \ 'z' : [':call Zoom()'                 , 'zoom'],

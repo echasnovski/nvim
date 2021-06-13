@@ -13,7 +13,6 @@ else
   source $HOME/.config/nvim/general/colors.vim
   source $HOME/.config/nvim/general/bclose.vim
   source $HOME/.config/nvim/general/spelling.vim
-  source $HOME/.config/nvim/general/mini-trailspace.vim
 
   " Source all plugin configuration files
   for s:fpath in split(globpath('$HOME/.config/nvim/plug-config', '*.vim'), '\n')
@@ -25,5 +24,6 @@ else
     luafile $HOME/.config/nvim/lua/source.lua
   else
     source $HOME/.config/nvim/general/mini-cursorword.vim
+    source $HOME/.config/nvim/general/mini-trailspace.vim
   endif
 endif
