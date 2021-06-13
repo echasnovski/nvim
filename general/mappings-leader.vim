@@ -190,18 +190,18 @@ endif
 
 " o is for 'other'
 if has('nvim-0.5')
-  nnoremap <Leader>oc <cmd>lua MiniCursorword.toggle()<CR>
+  nnoremap <Leader>oC <cmd>lua MiniCursorword.toggle()<CR>
   nnoremap <Leader>oT <cmd>lua MiniTrailspace.toggle()<CR>
   nnoremap <Leader>ot <cmd>lua MiniTrailspace.trim()<CR>
 else
-  nnoremap <Leader>oc <cmd>call MiniCursorwordToggle()<CR>
+  nnoremap <Leader>oC <cmd>call MiniCursorwordToggle()<CR>
   nnoremap <Leader>oT <cmd>call MiniTrailspaceToggle()<CR>
   nnoremap <Leader>ot <cmd>call MiniTrailspaceTrim()<CR>
 endif
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'                     , 'arguments split'],
-  \ 'c' :                                   'current word hl toggle',
+  \ 'C' :                                   'cursor word hl toggle',
   \ 'd' : [':DogeGenerate'                , 'document'],
   \ 'h' : [':SidewaysLeft'                , 'move arg left'],
   \ 'H' : [':TSBufToggle highlight'       , 'highlight toggle'],

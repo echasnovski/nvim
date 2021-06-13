@@ -4,19 +4,23 @@
 -- `setup()`. For example, put as 'lua/mini/cursorword.lua' and execute
 -- `require('mini.cursorword').setup()` Lua code.
 --
--- Highlighting is done via Vim's `matchadd()` and `matchdelete()` with low
--- highlighting priority. It is triggered only if current cursor character is
--- 'keyword' (see `help [:keyword:]`). "Word under cursor" is meant as in Vim's
--- `<cword>`: something user would get as 'iw' text object. Highlighting stops
--- in insert and terminal modes. User can also toggle (enable when disabled,
--- disable when enabled) highlighting itself via `MiniCursorword.toggle()`.
+-- Features:
+-- - Enable, disable, and toggle module with `enable()`, `disable()`, and
+--   `toggle()` functions.
+-- - Highlight word under cursor. It is done via Vim's `matchadd()` and
+--   `matchdelete()` with low highlighting priority. It is triggered only if
+--   current cursor character is 'keyword' (see `help [:keyword:]`). "Word
+--   under cursor" is meant as in Vim's `<cword>`: something user would get
+--   as 'iw' text object. Highlighting stops in insert and terminal modes.
 --
 -- NOTE: currently highlighting is updated on every `CursorMoved` event. If it
 -- is too frequent, use `CursorHold` event.
 
+-- Module and its helper
 local MiniCursorword = {}
 local H = {}
 
+-- Module setup
 function MiniCursorword.setup()
   _G.MiniCursorword = MiniCursorword
 
@@ -36,12 +40,29 @@ function MiniCursorword.setup()
   ]], false)
 end
 
+-- Functions to enable/disable whole module
+function MiniCursorword.enable()
+  H.enabled = true
+  MiniCursorword.highlight()
+  print('(mini.cursorword) Enabled')
+end
+
+function MiniCursorword.disable()
+  H.enabled = false
+  MiniCursorword.unhighlight()
+  print('(mini.cursorword) Disabled')
+end
+
+function MiniCursorword.toggle()
+  if H.enabled then MiniCursorword.disable() else MiniCursorword.enable() end
+end
+
 -- A modified version of https://stackoverflow.com/a/25233145
 -- Using `matchadd()` instead of a simpler `:match` to tweak priority of
 -- 'current word' highlighting: with `:match` it is higher than for
 -- `incsearch` which is not convenient.
 function MiniCursorword.highlight()
-  if not H.do_highlight then return end
+  if not H.enabled then return end
 
   -- Highlight word only if cursor is on 'keyword' character
   if not H.is_cursor_on_keyword() then
@@ -79,18 +100,8 @@ function MiniCursorword.unhighlight()
   end
 end
 
-function MiniCursorword.toggle()
-  if H.do_highlight then
-    H.do_highlight = false
-    MiniCursorword.unhighlight()
-  else
-    H.do_highlight = true
-    MiniCursorword.highlight()
-  end
-end
-
 -- Indicator of whether to actually do highlighing
-H.do_highlight = true
+H.enabled = true
 
 -- Information about last match highlighting: word and match id (returned from
 -- `vim.fn.matchadd()`). Stored *per window* by its unique identifier.
