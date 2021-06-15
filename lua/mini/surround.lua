@@ -15,8 +15,8 @@
 --     - Highlight surrounding with `sh`.
 --     - Change number of neighbor lines with `sn` (see algorithm details).
 --   Note that all actions are dot-repeatable out of the box.
--- - Surrounding is supplied with single character as both 'input' (in 'delete'
---   and 'replace' start) and 'output' (in 'add' and 'replace' end):
+-- - Surrounding is identified by a single character as both 'input' (in
+--   'delete' and 'replace' start) and 'output' (in 'add' and 'replace' end):
 --     - 'f' - function call (string of certain characters followed by balanced
 --       '()'). In 'input' finds function call, in 'output' prompts user to
 --       enter function name.
@@ -398,8 +398,28 @@ function H.give_msg(msg)
   vim.cmd(string.format([[echom "(mini-surround.lua) %s"]], msg))
 end
 
-function H.user_char()
+H.needs_help_msg = {}
+
+function H.user_surround_id(sur_type)
+  -- Get from user single character surrounding identifier
+  ---- Helper message needs to depend on surrounding type to work better in
+  ---- 'replace' case: when input surrounding was entered before needing a
+  ---- message but output wasn't. If this is a simple boolean, there will be
+  ---- two consecutive messages (even if first one already is not needed).
+  H.needs_help_msg[sur_type] = true
+  vim.defer_fn(
+    function()
+      if not H.needs_help_msg[sur_type] then return end
+      local msg = string.format(
+        'Enter %s surrounding identifier (single character) ',
+        sur_type
+      )
+      H.give_msg(msg)
+    end,
+    1000
+  )
   local char = vim.fn.getchar()
+  H.needs_help_msg = {}
 
   -- Terminate if input is `<Esc>`
   if char == 27 then return nil end
@@ -588,39 +608,39 @@ function H.get_cursor_neighborhood(n_neighbors)
 end
 
 -- Get surround information
----- `type` is one of 'input' or 'output'
-function H.get_surround_info(type, use_cache)
+---- `sur_type` is one of 'input' or 'output'
+function H.get_surround_info(sur_type, use_cache)
   local res
 
   -- Try using cache
   if use_cache then
-    res = H.cache[type]
+    res = H.cache[sur_type]
     if res ~= nil then return res end
   end
 
   -- Prompt user to enter identifier of surrounding
-  local char = H.user_char()
+  local char = H.user_surround_id(sur_type)
 
   -- Compute surround info
   ---- Return `nil` in case of a bad identifier
   if char == nil then return nil end
 
   ---- Handle special cases first
-  if     char == 'f' then res = H.special_funcall(type)
-  elseif char == 'i' then res = H.special_interactive(type)
-  elseif char == 't' then res = H.special_tag(type)
+  if     char == 'f' then res = H.special_funcall(sur_type)
+  elseif char == 'i' then res = H.special_interactive(sur_type)
+  elseif char == 't' then res = H.special_tag(sur_type)
   else res = H.surroundings[char] end
   res.id = char
 
   -- Cache result
-  if use_cache then H.cache[type] = res end
+  if use_cache then H.cache[sur_type] = res end
 
   return res
 end
 
-function H.special_funcall(type)
+function H.special_funcall(sur_type)
   -- Differentiate input and output because input doesn't need user action
-  if type == 'input' then
+  if sur_type == 'input' then
     -- Allowed symbols followed by a balanced parenthesis.
     -- Can't use `%g` instead of allowed characters because of possible
     -- '[(fun(10))]' case
@@ -631,12 +651,12 @@ function H.special_funcall(type)
   end
 end
 
-function H.special_interactive(type)
+function H.special_interactive(sur_type)
   -- Prompt for surroundings. Empty surrounding is not allowed for input.
   local left = user_input('Left surrounding')
-  if type == 'input' and left == '' then return nil end
+  if sur_type == 'input' and left == '' then return nil end
   local right = user_input('Right surrounding')
-  if type == 'input' and right == '' then return nil end
+  if sur_type == 'input' and right == '' then return nil end
 
   local left_esc, right_esc = vim.pesc(left), vim.pesc(right)
   local find = string.format('%s.-%s', left_esc, right_esc)
@@ -644,9 +664,9 @@ function H.special_interactive(type)
   return {find = find, extract = extract, left = left, right = right}
 end
 
-function H.special_tag(type)
+function H.special_tag(sur_type)
   -- Differentiate input and output because input doesn't need user action
-  if type == 'input' then
+  if sur_type == 'input' then
     -- NOTEs:
     -- - Here `%f[^%w]` denotes 'end of word' and is needed to capture whole
     --   tag id. This is needed to not match in case '<ab></a>'.
