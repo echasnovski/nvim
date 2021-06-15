@@ -38,8 +38,11 @@
 -- NOTES:
 -- - Make sure to make proper mapping of `<CR>` in order to support completion
 --   plugin of your choice.
--- - Having mapping in terminal mode can conflict with autopairing capabilities
---   of opened interpretators (for example, `radian`).
+-- - Having mapping in terminal mode:
+--     - Can conflict with autopairing capabilities of opened interpretators
+--       (for example, `radian`).
+--     - Adds autopairing in fzf search window. To disable it, setup
+--       autocommands like: `au Filetype fzf tnoremap <buffer> ( (`, etc.
 -- - Sometimes has troubles with multibyte characters (such as icons). This
 --   seems to be because detecting characters around cursor uses "byte
 --   substring" instead of "symbol substring" operation.
@@ -49,12 +52,14 @@ local MiniPairs = {}
 local H = {}
 
 -- Module setup
-function MiniPairs.setup()
+function MiniPairs.setup(modes)
+  modes = modes or {'c', 'i', 't'}
+
   -- Export module
   _G.MiniPairs = MiniPairs
 
   -- Setup mappings in command and insert modes
-  for _, mode in pairs({'c', 'i'}) do
+  for _, mode in pairs(modes) do
     -- Adding pair is disabled if symbol is after `\`
     H.map(mode, '(', [[v:lua.MiniPairs.open('()', "[^\\].")]])
     H.map(mode, '[', [[v:lua.MiniPairs.open('[]', "[^\\].")]])
@@ -74,10 +79,6 @@ function MiniPairs.setup()
 
   -- Map `<CR>` only in insert mode. Remap this to respect completion plugin.
   H.map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
-
-  -- In terminal mode map only `<BS>`. Mainly because adding autopairs seems to
-  -- bring more trouble in day-to-day usage.
-  H.map('t', '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
 end
 
 -- Module functionality

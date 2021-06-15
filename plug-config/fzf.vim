@@ -55,3 +55,19 @@ inoremap <expr> <c-x><c-k> fzf#vim#complete(fzf#wrap({
 
 " Replace default path completion with fzf-based
 imap <c-x><c-f> <Plug>(fzf-complete-path)
+
+" Disable possible auto-pairs plugins
+augroup FZFPairs
+  au!
+  au Filetype fzf tnoremap <buffer> ( (
+  au Filetype fzf tnoremap <buffer> [ [
+  au Filetype fzf tnoremap <buffer> { {
+
+  au Filetype fzf tnoremap <buffer> ) )
+  au Filetype fzf tnoremap <buffer> ] ]
+  au Filetype fzf tnoremap <buffer> } }
+
+  au Filetype fzf tnoremap <buffer> ' '
+  au Filetype fzf tnoremap <buffer> " "
+  au Filetype fzf tnoremap <buffer> ` `
+augroup END
