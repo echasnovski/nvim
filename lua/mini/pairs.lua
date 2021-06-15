@@ -1,7 +1,7 @@
 -- Custom *minimal* and *fast* autopairs Lua module. It provides functionality
 -- to work with 'paired' characters conditional on cursor's neighborhood (two
--- characters to its left and right; beginning of line is '\r', end of line is
--- `\n`). Its usage should be through making appropriate `<expr>` mappings.
+-- characters to its left and right; beginning of line is "\r", end of line is
+-- "\n"). Its usage should be through making appropriate `<expr>` mappings.
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
 -- `setup()`. For example, put as 'lua/mini/pairs.lua' and execute
@@ -55,18 +55,19 @@ function MiniPairs.setup()
 
   -- Setup mappings in command and insert modes
   for _, mode in pairs({'c', 'i'}) do
-    H.map(mode, '(', [[v:lua.MiniPairs.open('()')]])
-    H.map(mode, '[', [[v:lua.MiniPairs.open('[]')]])
-    H.map(mode, '{', [[v:lua.MiniPairs.open('{}')]])
+    -- Adding pair is disabled if symbol is after `\`
+    H.map(mode, '(', [[v:lua.MiniPairs.open('()', "[^\\].")]])
+    H.map(mode, '[', [[v:lua.MiniPairs.open('[]', "[^\\].")]])
+    H.map(mode, '{', [[v:lua.MiniPairs.open('{}', "[^\\].")]])
 
-    H.map(mode, ')', [[v:lua.MiniPairs.close('()')]])
-    H.map(mode, ']', [[v:lua.MiniPairs.close('[]')]])
-    H.map(mode, '}', [[v:lua.MiniPairs.close('{}')]])
+    H.map(mode, ')', [[v:lua.MiniPairs.close("()")]])
+    H.map(mode, ']', [[v:lua.MiniPairs.close("[]")]])
+    H.map(mode, '}', [[v:lua.MiniPairs.close("{}")]])
 
-    -- Quotes insert single character if after a letter or `\`
-    H.map(mode, '"', [[v:lua.MiniPairs.closeopen('""', '[^%a\\].')]])
-    H.map(mode, "'", [[v:lua.MiniPairs.closeopen("''", '[^%a\\].')]])
-    H.map(mode, '`', [[v:lua.MiniPairs.closeopen('``', '[^%a\\].')]])
+    H.map(mode, '"', [[v:lua.MiniPairs.closeopen('""', "[^\\].")]])
+    ---- Single quote is used in plain English, so disable pair after letter
+    H.map(mode, "'", [[v:lua.MiniPairs.closeopen("''", "[^%a\\].")]])
+    H.map(mode, '`', [[v:lua.MiniPairs.closeopen('``', "[^\\].")]])
 
     H.map(mode, '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
   end
