@@ -1,3 +1,5 @@
+-- MIT License Copyright (c) 2021 Evgeni Chasnovski
+--
 -- Custom *minimal* and *fast* statusline module. Special features: it changes
 -- color depending on current mode and has compact version of sections
 -- activated when window width is small enough. Inspired by:

@@ -1,3 +1,5 @@
+-- MIT License Copyright (c) 2021 Evgeni Chasnovski
+--
 -- Custom *minimal* and *fast* commenting Lua module. This is basically a
 -- reimplementation of 'tpope/vim-commentary' with help of
 -- 'terrortylor/nvim-comment'.

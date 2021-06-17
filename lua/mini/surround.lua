@@ -1,3 +1,5 @@
+-- MIT License Copyright (c) 2021 Evgeni Chasnovski
+--
 -- Custom *somewhat minimal* and *fast* surrounding Lua plugin. This is mostly
 -- a reimplementation of the most essential features of
 -- 'machakann/vim-sandwich' with a couple more on top.

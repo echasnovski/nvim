@@ -1,3 +1,5 @@
+-- MIT License Copyright (c) 2021 Evgeni Chasnovski
+--
 -- Custom *minimal* and *fast* module for highlighting word under cursor.
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's

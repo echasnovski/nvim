@@ -1,3 +1,5 @@
+-- MIT License Copyright (c) 2021 Evgeni Chasnovski
+--
 -- Custom *minimal* and *fast* autopairs Lua module. It provides functionality
 -- to work with 'paired' characters conditional on cursor's neighborhood (two
 -- characters to its left and right; beginning of line is "\r", end of line is

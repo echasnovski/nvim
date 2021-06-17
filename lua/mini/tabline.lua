@@ -1,3 +1,5 @@
+-- MIT License Copyright (c) 2021 Evgeni Chasnovski
+--
 -- Custom *minimal* and *fast* tabline module. General idea: show all listed
 -- buffers in readable way with minimal total width in case of one vim tab,
 -- fall back for deafult otherwise. Inspired by

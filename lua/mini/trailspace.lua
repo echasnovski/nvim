@@ -1,3 +1,5 @@
+-- MIT License Copyright (c) 2021 Evgeni Chasnovski
+--
 -- Custom *minimal* and *fast* module for working with trailing whitespace.
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
