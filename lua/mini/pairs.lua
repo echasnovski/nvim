@@ -27,6 +27,13 @@
 -- - `MiniPairs.cr()` is intended to be mapped to `<CR>`. It puts "close"
 --   symbol on next line (via `<CR><C-o>O`) if neighborhood is equal to whole
 --   pair. Should be used only in insert mode.
+-- - `MiniPairs.setup()` creates the following mappings (all mappings are
+--   conditioned on previous character not being '\'):
+--     - Open and close symbols: '()', '[]', '{}'.
+--     - Closeopen symbol: '"', "'", '`'. Note: "'" doesn't insert pair if
+--       previous character is a letter (to be usable in English comments).
+--     - `<BS>` for all previous pairs.
+--     - `<CR>` in insert mode for '()', '[]', '{}'.
 --
 -- What it doesn't do:
 -- - It doesn't support multiple characters as "open" and "close" symbols. Use
@@ -67,9 +74,9 @@ function MiniPairs.setup(modes)
     H.map(mode, '[', [[v:lua.MiniPairs.open('[]', "[^\\].")]])
     H.map(mode, '{', [[v:lua.MiniPairs.open('{}', "[^\\].")]])
 
-    H.map(mode, ')', [[v:lua.MiniPairs.close("()")]])
-    H.map(mode, ']', [[v:lua.MiniPairs.close("[]")]])
-    H.map(mode, '}', [[v:lua.MiniPairs.close("{}")]])
+    H.map(mode, ')', [[v:lua.MiniPairs.close("()", "[^\\].")]])
+    H.map(mode, ']', [[v:lua.MiniPairs.close("[]", "[^\\].")]])
+    H.map(mode, '}', [[v:lua.MiniPairs.close("{}", "[^\\].")]])
 
     H.map(mode, '"', [[v:lua.MiniPairs.closeopen('""', "[^\\].")]])
     ---- Single quote is used in plain English, so disable pair after letter
