@@ -192,6 +192,7 @@ endfunction
 
 " Add multiple consecutive comment leader
 function AddMultipleCommentLeader()
+  if &commentstring == '' | return | endif
   " Make raw comment leader from 'commentstring' option
   let l:comment = split(&commentstring, '%s')
 
