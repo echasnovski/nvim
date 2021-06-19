@@ -7,7 +7,18 @@
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
 -- `setup()`. For example, put as 'lua/mini/pairs.lua' and execute
--- `require('mini.pairs').setup()` Lua code.
+-- `require('mini.pairs').setup()` Lua code. It may have `config` argument
+-- which should be a table overwriting default values using same structure.
+--
+-- Default `config`:
+-- {
+--   settings = {
+--     -- In which modes mappings will be made (as in `vim.api.nvim_set_keymap()`)
+--     modes = {"i"},
+--     -- Map `<CR>` in insert mode?
+--     map_cr = true
+--   }
+-- }
 --
 -- Details of functionality:
 -- - `MiniPairs.open()` is for "open" symbols ('(', '[', etc.). If neighborhood
@@ -33,7 +44,8 @@
 --     - Closeopen symbol: '"', "'", '`'. Note: "'" doesn't insert pair if
 --       previous character is a letter (to be usable in English comments).
 --     - `<BS>` for all previous pairs.
---     - `<CR>` in insert mode for '()', '[]', '{}'.
+--     - `<CR>` in insert mode for '()', '[]', '{}' (if
+--       `config.settings.map_cr` is `true`).
 --
 -- What it doesn't do:
 -- - It doesn't support multiple characters as "open" and "close" symbols. Use
@@ -61,14 +73,15 @@ local MiniPairs = {}
 local H = {}
 
 -- Module setup
-function MiniPairs.setup(modes)
-  modes = modes or {'c', 'i', 't'}
+function MiniPairs.setup(config)
+  config = config or {}
+  settings = vim.tbl_extend("keep", config.settings or {}, H.config.settings)
 
   -- Export module
   _G.MiniPairs = MiniPairs
 
   -- Setup mappings in command and insert modes
-  for _, mode in pairs(modes) do
+  for _, mode in pairs(settings.modes) do
     -- Adding pair is disabled if symbol is after `\`
     H.map(mode, '(', [[v:lua.MiniPairs.open('()', "[^\\].")]])
     H.map(mode, '[', [[v:lua.MiniPairs.open('[]', "[^\\].")]])
@@ -86,8 +99,10 @@ function MiniPairs.setup(modes)
     H.map(mode, '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
   end
 
-  -- Map `<CR>` only in insert mode. Remap this to respect completion plugin.
-  H.map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
+  if settings.map_cr then
+    -- Map `<CR>` only in insert mode. Remap this to respect completion plugin.
+    H.map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
+  end
 end
 
 -- Module functionality
@@ -138,6 +153,9 @@ function MiniPairs.cr(pair_set)
 end
 
 -- Helpers
+---- Module default config
+H.config = {settings = {modes = {"i"}, map_cr = true}}
+
 function H.map(mode, key, command)
   vim.api.nvim_set_keymap(mode, key, command, {expr = true, noremap = true})
 end
