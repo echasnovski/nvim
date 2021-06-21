@@ -2,11 +2,29 @@
 --
 -- Custom *minimal* and *fast* commenting Lua module. This is basically a
 -- reimplementation of 'tpope/vim-commentary' with help of
--- 'terrortylor/nvim-comment'.
+-- 'terrortylor/nvim-comment'. Commenting in Normal mode respects `count` and
+-- is dot-repeatable.
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
 -- `setup()`. For example, put as 'lua/mini/comment.lua' and execute
--- `require('mini.comment').setup()` Lua code.
+-- `require('mini.comment').setup()` Lua code. It may have `config` argument
+-- which should be a table overwriting default values using same structure.
+--
+-- Default `config`:
+-- {
+--   -- Module mappings. User can redefine only some of them, other will be
+--   -- taken from default
+--   mappings = {
+--     -- General comment toggle action (like `gcip` - comment inner paragraph)
+--     comment        = 'gc',
+--     -- Comment current line
+--     comment_line   = 'gcc',
+--     -- Comment lines defined by visual selection
+--     comment_visual = 'gc',
+--     -- Define 'comment' textobject (like `dgc` - delete whole comment block)
+--     textobject     = 'gc'
+--   }
+-- }
 --
 -- Functionality:
 -- - `MiniComment.operator()` function is meant to be used in '<expr>' mapping
@@ -28,16 +46,20 @@ local MiniComment = {}
 local H = {}
 
 -- Module setup
-function MiniComment.setup()
+function MiniComment.setup(config)
   -- Export module
   _G.MiniComment = MiniComment
 
+  -- Setup config
+  config = config or {}
+  mappings = vim.tbl_extend('keep', config.mappings or {}, H.config.mappings)
+
   vim.api.nvim_set_keymap(
-    'n', 'gc', 'v:lua.MiniComment.operator()',
+    'n', mappings.comment, 'v:lua.MiniComment.operator()',
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', 'gcc', 'gc_',
+    'n', mappings.comment_line, 'gc_',
     -- This mapping doesn't use `noremap = true` because it requires usage of
     -- already mapped `gc`.
     {silent = true}
@@ -45,11 +67,11 @@ function MiniComment.setup()
   vim.api.nvim_set_keymap(
     -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
     -- proper update of `'<` and `'>` marks which is needed to work correctly.
-    'x', 'gc', [[:<c-u>lua MiniComment.operator('visual')<cr>]],
+    'x', mappings.comment_visual, [[:<c-u>lua MiniComment.operator('visual')<cr>]],
     {noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'o', 'gc', [[<cmd>lua MiniComment.textobject()<cr>]],
+    'o', mappings.textobject, [[<cmd>lua MiniComment.textobject()<cr>]],
     {noremap = true, silent = true}
   )
 end
@@ -141,6 +163,16 @@ function MiniComment.textobject()
 end
 
 -- Helpers
+---- Module default config
+H.config = {
+  mappings = {
+    comment = 'gc',
+    comment_line = 'gcc',
+    comment_visual = 'gc',
+    textobject = 'gc'
+  }
+}
+
 function H.make_comment_parts()
   local cs = vim.api.nvim_buf_get_option(0, 'commentstring')
 
