@@ -12,8 +12,8 @@
 --
 -- Default `config`:
 -- {
---     -- In which modes (as in `vim.api.nvim_set_keymap()`) to create mappings
---     modes = {"i"}
+--   -- In which modes (as in `vim.api.nvim_set_keymap()`) to create mappings
+--   modes = {"i"}
 -- }
 --
 -- Details of functionality:

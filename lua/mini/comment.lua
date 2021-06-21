@@ -59,10 +59,8 @@ function MiniComment.setup(config)
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', mappings.comment_line, 'gc_',
-    -- This mapping doesn't use `noremap = true` because it requires usage of
-    -- already mapped `gc`.
-    {silent = true}
+    'n', mappings.comment_line, 'v:lua.MiniComment.operator() . "_"',
+    {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
     -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before

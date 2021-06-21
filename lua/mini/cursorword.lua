@@ -9,9 +9,9 @@
 --
 -- Default `config`:
 -- {
---     -- On which event highlighting is updated. If default "CursorMoved" is
---     -- too frequent, use "CursorHold"
---     highlight_event = "CursorMoved"
+--   -- On which event highlighting is updated. If default "CursorMoved" is
+--   -- too frequent, use "CursorHold"
+--   highlight_event = "CursorMoved"
 -- }
 --
 -- Features:
