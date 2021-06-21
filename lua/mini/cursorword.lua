@@ -4,7 +4,15 @@
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
 -- `setup()`. For example, put as 'lua/mini/cursorword.lua' and execute
--- `require('mini.cursorword').setup()` Lua code.
+-- `require('mini.cursorword').setup()` Lua code. It may have `config` argument
+-- which should be a table overwriting default values using same structure.
+--
+-- Default `config`:
+-- {
+--     -- On which event highlighting is updated. If default "CursorMoved" is
+--     -- too frequent, use "CursorHold"
+--     highlight_event = "CursorMoved"
+-- }
 --
 -- Features:
 -- - Enable, disable, and toggle module with `enable()`, `disable()`, and
@@ -14,27 +22,29 @@
 --   current cursor character is 'keyword' (see `help [:keyword:]`). "Word
 --   under cursor" is meant as in Vim's `<cword>`: something user would get
 --   as 'iw' text object. Highlighting stops in insert and terminal modes.
---
--- NOTE: currently highlighting is updated on every `CursorMoved` event. If it
--- is too frequent, use `CursorHold` event.
+-- - Highlighting is done according to `MiniCursorword` highlight group. By
+--   default, it is a plain underline. To change it, modify it directly with
+--   `highlight MiniCursorword` command.
 
 -- Module and its helper
 local MiniCursorword = {}
 local H = {}
 
 -- Module setup
-function MiniCursorword.setup()
+function MiniCursorword.setup(config)
+  -- Export module
   _G.MiniCursorword = MiniCursorword
 
   -- Module behavior
-  -- NOTE: if this updates too frequently, use `CursorHold`
-  vim.api.nvim_exec([[
+  highlight_event = (config or {}).highlight_event or H.config.highlight_event
+  command = string.format([[
     augroup MiniCursorword
       au!
-      au CursorMoved                   * lua MiniCursorword.highlight()
+      au %s                            * lua MiniCursorword.highlight()
       au InsertEnter,TermEnter,QuitPre * lua MiniCursorword.unhighlight()
     augroup END
-  ]], false)
+  ]], highlight_event)
+  vim.api.nvim_exec(command, false)
 
   -- Create highlighting
   vim.api.nvim_exec([[
@@ -102,11 +112,15 @@ function MiniCursorword.unhighlight()
   end
 end
 
--- Indicator of whether to actually do highlighing
+-- Helpers
+---- Module default config
+H.config = {highlight_event = "CursorMoved"}
+
+---- Indicator of whether to actually do highlighing
 H.enabled = true
 
--- Information about last match highlighting: word and match id (returned from
--- `vim.fn.matchadd()`). Stored *per window* by its unique identifier.
+---- Information about last match highlighting: word and match id (returned
+---- from `vim.fn.matchadd()`). Stored *per window* by its unique identifier.
 H.window_matches = {}
 
 function H.is_cursor_on_keyword()
