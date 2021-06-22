@@ -4,7 +4,10 @@
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
 -- `setup()`. For example, put as 'lua/mini/trailspace.lua' and execute
--- `require('mini.trailspace').setup()` Lua code.
+-- `require('mini.trailspace').setup()` Lua code. It may have `config` argument
+-- which should be a table overwriting default values using same structure.
+--
+-- Default `config`: {} (currently nothing to configure)
 --
 -- Features:
 -- - Enable, disable, and toggle module with `enable()`, `disable()`, and
@@ -13,13 +16,16 @@
 --   Custom setup is needed to enable it based on some rules.
 -- - Highlighting stops in insert mode and when leaving window.
 -- - Trim all trailing whitespace with `trim()` function.
+-- - Highlighting is done according to `MiniTrailspace` highlight group. By
+--   default, it is a shade of red. To change this, modify it directly with
+--   `highlight MiniTrailspace` command.
 
 -- Module and its helper
 local MiniTrailspace = {}
 local H = {}
 
 -- Module setup
-function MiniTrailspace.setup()
+function MiniTrailspace.setup(config)
   _G.MiniTrailspace = MiniTrailspace
 
   -- Module behavior
@@ -88,6 +94,9 @@ function MiniTrailspace.trim()
 end
 
 -- Helpers
+---- Module default config
+H.config = {}
+
 H.enabled = true
 
 -- Information about last match highlighting: word and match id (returned from
