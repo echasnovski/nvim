@@ -6,7 +6,25 @@
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
 -- `setup()`. For example, put as 'lua/mini/surround.lua' and execute
--- `require('mini.surround').setup()` Lua code.
+-- `require('mini.surround').setup()` Lua code. It may have `config` argument
+-- which should be a table overwriting default values using same structure.
+--
+-- Default `config`:
+-- {
+--   -- Number of lines within which surrounding is searched
+--   n_lines = 20,
+--   -- Duration (in ms) of highlight when calling `MiniSurround.highlight()`
+--   highlight_duration = 500,
+--   mappings = {
+--     add = 'sa',           -- Add surrounding
+--     delete = 'sd',        -- Delete surrounding
+--     replace = 'sr',       -- Replace surrounding
+--     find = 'sf',          -- Find surrounding (to the right)
+--     find_left = 'sF',     -- Find surrounding (to the left)
+--     highlight = 'sh',     -- Highlight surrounding
+--     update_n_lines = 'sn' -- Update `n_lines`
+--   }
+-- }
 --
 -- Features:
 -- - Actions:
@@ -19,9 +37,9 @@
 --   Note that all actions are dot-repeatable out of the box.
 -- - Surrounding is identified by a single character as both 'input' (in
 --   'delete' and 'replace' start) and 'output' (in 'add' and 'replace' end):
---     - 'f' - function call (string of certain characters followed by balanced
---       '()'). In 'input' finds function call, in 'output' prompts user to
---       enter function name.
+--     - 'f' - function call (string of letters or '_' or '.' followed by
+--       balanced '()'). In 'input' finds function call, in 'output'
+--       prompts user to enter function name.
 --     - 'i' - interactive. Prompts user to enter left and right parts.
 --     - 't' - tag. In 'input' finds tab with same identifier, in 'output'
 --       prompts user to enter tag name.
@@ -29,6 +47,9 @@
 --       balanced brackets, in 'output' - left and right parts of brackets.
 --     - All other alphanumeric, punctuation, or space characters represent
 --       surrounding with identical left and right parts.
+-- - Highlighting is done according to `MiniSurround` highlight group. By
+--   default, it is linked to `IncSearch`. To change this, modify it directly
+--   with `highlight MiniSurround` command.
 --
 -- Examples:
 -- - `saiw)` - add (`sa`) for inner word (`iw`) parenthesis (`)`).
@@ -83,42 +104,53 @@ local MiniSurround = {}
 local H = {}
 
 -- Module setup
-function MiniSurround.setup()
+function MiniSurround.setup(config)
   -- Export module
   _G.MiniSurround = MiniSurround
+
+  -- Setup config
+  config = config or {}
+
+  -- Apply settings
+  MiniSurround.n_lines = config.n_lines or MiniSurround.n_lines
+  MiniSurround.highlight_duration = config.highlight_duration or
+    MiniSurround.highlight_duration
+
+  -- Make mappings
+  mappings = vim.tbl_extend('keep', config.mappings or {}, H.config.mappings)
 
   -- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
   -- It is used to enable dot-repeatability.
   vim.api.nvim_set_keymap(
-    'n', 'sa', [[v:lua.MiniSurround.operator('add')]],
+    'n', mappings.add, [[v:lua.MiniSurround.operator('add')]],
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'x', 'sa', [[:<c-u>lua MiniSurround.add('visual')<cr>]],
+    'x', mappings.add, [[:<c-u>lua MiniSurround.add('visual')<cr>]],
     {noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', 'sd', [[v:lua.MiniSurround.operator('delete') . ' ']],
+    'n', mappings.delete, [[v:lua.MiniSurround.operator('delete') . ' ']],
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', 'sr', [[v:lua.MiniSurround.operator('replace') . ' ']],
+    'n', mappings.replace, [[v:lua.MiniSurround.operator('replace') . ' ']],
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', 'sf', [[v:lua.MiniSurround.operator('find', {'direction': 'right'}) . ' ']],
+    'n', mappings.find, [[v:lua.MiniSurround.operator('find', {'direction': 'right'}) . ' ']],
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', 'sF', [[v:lua.MiniSurround.operator('find', {'direction': 'left'}) . ' ']],
+    'n', mappings.find_left, [[v:lua.MiniSurround.operator('find', {'direction': 'left'}) . ' ']],
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', 'sh', [[v:lua.MiniSurround.operator('highlight') . ' ']],
+    'n', mappings.highlight, [[v:lua.MiniSurround.operator('highlight') . ' ']],
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', 'sn', [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
+    'n', mappings.update_n_lines, [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
     {noremap = true, silent = true}
   )
 
@@ -297,6 +329,23 @@ function MiniSurround.find_surrounding(surround_info)
 end
 
 -- Helpers
+---- Module default config
+H.config = {
+  -- Number of lines within which surrounding is searched
+  n_lines = MiniSurround.n_lines,
+  -- Duration of highlight when calling `MiniSurround.highlight()`
+  highlight_duration = MiniSurround.highlight_duration,
+  mappings = {
+    add = 'sa',           -- Add surrounding
+    delete = 'sd',        -- Delete surrounding
+    replace = 'sr',       -- Replace surrounding
+    find = 'sf',          -- Find surrounding (to the right)
+    find_left = 'sF',     -- Find surrounding (to the left)
+    highlight = 'sh',     -- Highlight surrounding
+    update_n_lines = 'sn' -- Update `n_lines`
+  }
+}
+
 ---- Namespace for highlighting
 H.ns_id = vim.api.nvim_create_namespace('MiniSurround')
 
