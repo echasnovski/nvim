@@ -15,14 +15,13 @@
 --   -- Module mappings. User can redefine only some of them, other will be
 --   -- taken from default
 --   mappings = {
---     -- General comment toggle action (like `gcip` - comment inner paragraph)
---     comment        = 'gc',
---     -- Comment current line
---     comment_line   = 'gcc',
---     -- Comment lines defined by visual selection
---     comment_visual = 'gc',
+--     -- Toggle comment (like `gcip` - comment inner paragraph) for both
+--     -- Normal and Visual modes
+--     comment      = 'gc',
+--     -- Toggle comment on current line
+--     comment_line = 'gcc',
 --     -- Define 'comment' textobject (like `dgc` - delete whole comment block)
---     textobject     = 'gc'
+--     textobject   = 'gc'
 --   }
 -- }
 --
@@ -54,19 +53,20 @@ function MiniComment.setup(config)
   config = config or {}
   mappings = vim.tbl_extend('keep', config.mappings or {}, H.config.mappings)
 
+  -- Make mappings
   vim.api.nvim_set_keymap(
     'n', mappings.comment, 'v:lua.MiniComment.operator()',
     {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
-    'n', mappings.comment_line, 'v:lua.MiniComment.operator() . "_"',
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
     -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
     -- proper update of `'<` and `'>` marks which is needed to work correctly.
-    'x', mappings.comment_visual, [[:<c-u>lua MiniComment.operator('visual')<cr>]],
+    'x', mappings.comment, [[:<c-u>lua MiniComment.operator('visual')<cr>]],
     {noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', mappings.comment_line, 'v:lua.MiniComment.operator() . "_"',
+    {expr = true, noremap = true, silent = true}
   )
   vim.api.nvim_set_keymap(
     'o', mappings.textobject, [[<cmd>lua MiniComment.textobject()<cr>]],
