@@ -15,6 +15,9 @@
 --   n_lines = 20,
 --   -- Duration (in ms) of highlight when calling `MiniSurround.highlight()`
 --   highlight_duration = 500,
+--   -- Pattern to match function name in 'function call' surrounding
+--   -- By default it is a string of letters, '_' or '.'
+--   funname_pattern = '[%w_%.]+',
 --   mappings = {
 --     add = 'sa',           -- Add surrounding
 --     delete = 'sd',        -- Delete surrounding
@@ -115,6 +118,8 @@ function MiniSurround.setup(config)
   MiniSurround.n_lines = config.n_lines or MiniSurround.n_lines
   MiniSurround.highlight_duration = config.highlight_duration or
     MiniSurround.highlight_duration
+  MiniSurround.funname_pattern = config.funname_pattern or
+    MiniSurround.funname_pattern
 
   -- Make mappings
   mappings = vim.tbl_extend('keep', config.mappings or {}, H.config.mappings)
@@ -164,6 +169,9 @@ MiniSurround.n_lines = 20
 
 ---- Duration of highlight when calling `MiniSurround.highlight()`
 MiniSurround.highlight_duration = 500
+
+---- Pattern to match function name in 'function call' surrounding
+MiniSurround.funname_pattern = '[%w_%.]+'
 
 -- Module functionality
 function MiniSurround.operator(task, cache)
@@ -335,6 +343,8 @@ H.config = {
   n_lines = MiniSurround.n_lines,
   -- Duration of highlight when calling `MiniSurround.highlight()`
   highlight_duration = MiniSurround.highlight_duration,
+  -- Pattern to match function name in 'function call' surrounding
+  funname_pattern = MiniSurround.funname_pattern,
   mappings = {
     add = 'sa',           -- Add surrounding
     delete = 'sd',        -- Delete surrounding
@@ -698,7 +708,10 @@ function H.special_funcall(sur_type)
     -- Allowed symbols followed by a balanced parenthesis.
     -- Can't use `%g` instead of allowed characters because of possible
     -- '[(fun(10))]' case
-    return {find = '[%w_%.]+%b()', extract = '^([%w_%.]+%().*(%))$'}
+    return {
+      find = string.format('%s%%b()', MiniSurround.funname_pattern),
+      extract = string.format('^(%s%%().*(%%))$', MiniSurround.funname_pattern)
+    }
   else
     local fun_name = H.user_input('Function name')
     return {left = fun_name .. '(', right = ')'}
