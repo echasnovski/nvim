@@ -123,7 +123,7 @@ function MiniSurround.setup()
   )
 
   -- Highlight group for surrounding highlighting
-  vim.api.nvim_exec([[hi link MiniSurroundHighlight IncSearch]], false)
+  vim.api.nvim_exec([[hi link MiniSurround IncSearch]], false)
 end
 
 -- Module Settings
@@ -229,11 +229,11 @@ function MiniSurround.highlight()
 
   -- Highlight surrounding
   vim.api.nvim_buf_add_highlight(
-    0, H.ns_id, 'MiniSurroundHighlight',
+    0, H.ns_id, 'MiniSurround',
     surr.left.line - 1, surr.left.from - 1, surr.left.to
   )
   vim.api.nvim_buf_add_highlight(
-    0, H.ns_id, 'MiniSurroundHighlight',
+    0, H.ns_id, 'MiniSurround',
     surr.right.line - 1, surr.right.from - 1, surr.right.to
   )
 
@@ -248,7 +248,7 @@ function MiniSurround.highlight()
 end
 
 function MiniSurround.update_n_lines()
-  local n_lines = user_input('New number of neighbor lines', MiniSurround.n_lines)
+  local n_lines = H.user_input('New number of neighbor lines', MiniSurround.n_lines)
   n_lines = math.floor(tonumber(n_lines) or MiniSurround.n_lines)
   MiniSurround.n_lines = n_lines
 end
@@ -397,7 +397,10 @@ end
 
 ---- Work with user input
 function H.give_msg(msg)
-  vim.cmd(string.format([[echom "(mini-surround.lua) %s"]], msg))
+  vim.cmd(string.format(
+    [[echom "(mini-surround.lua) %s"]],
+    vim.fn.escape(msg, '"')
+  ))
 end
 
 H.needs_help_msg = {}
@@ -437,7 +440,7 @@ function H.user_surround_id(sur_type)
   return char
 end
 
-local function user_input(msg, text)
+function H.user_input(msg, text)
   return vim.fn.input('(mini-surround.lua) ' .. msg .. ': ', text or '')
 end
 
@@ -648,16 +651,16 @@ function H.special_funcall(sur_type)
     -- '[(fun(10))]' case
     return {find = '[%w_%.]+%b()', extract = '^([%w_%.]+%().*(%))$'}
   else
-    local fun_name = user_input('Function name')
+    local fun_name = H.user_input('Function name')
     return {left = fun_name .. '(', right = ')'}
   end
 end
 
 function H.special_interactive(sur_type)
   -- Prompt for surroundings. Empty surrounding is not allowed for input.
-  local left = user_input('Left surrounding')
+  local left = H.user_input('Left surrounding')
   if sur_type == 'input' and left == '' then return nil end
-  local right = user_input('Right surrounding')
+  local right = H.user_input('Right surrounding')
   if sur_type == 'input' and right == '' then return nil end
 
   local left_esc, right_esc = vim.pesc(left), vim.pesc(right)
@@ -679,7 +682,7 @@ function H.special_tag(sur_type)
     --   '1d neighborhood'.
     return {find = '<(%a%w*)%f[^%w][^>]->.-</%1>', extract = '^(<.->).*(</[^/]->)$'}
   else
-    local tag_name = user_input('Tag name')
+    local tag_name = H.user_input('Tag name')
     return {left = '<' .. tag_name .. '>', right = '</' .. tag_name .. '>'}
   end
 end
