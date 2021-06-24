@@ -694,6 +694,11 @@ function H.get_surround_info(sur_type, use_cache)
   elseif char == 'i' then res = H.special_interactive(sur_type)
   elseif char == 't' then res = H.special_tag(sur_type)
   else res = H.surroundings[char] end
+
+  ---- Do nothing if supplied nothing
+  if res == nil then return nil end
+
+  ----- Add identifier
   res.id = char
 
   -- Cache result
@@ -714,6 +719,8 @@ function H.special_funcall(sur_type)
     }
   else
     local fun_name = H.user_input('Function name')
+    -- Don't add anything if user supplied empty string (or hit `<Esc>`)
+    if fun_name == '' then return nil end
     return {left = fun_name .. '(', right = ')'}
   end
 end
@@ -745,6 +752,8 @@ function H.special_tag(sur_type)
     return {find = '<(%a%w*)%f[^%w][^>]->.-</%1>', extract = '^(<.->).*(</[^/]->)$'}
   else
     local tag_name = H.user_input('Tag name')
+    -- Don't add anything if user supplied empty string (or hit `<Esc>`)
+    if tag_name == '' then return nil end
     return {left = '<' .. tag_name .. '>', right = '</' .. tag_name .. '>'}
   end
 end
