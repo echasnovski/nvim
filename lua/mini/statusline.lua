@@ -1,18 +1,41 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
 --
--- Custom *minimal* and *fast* statusline module. Special features: it changes
--- color depending on current mode and has compact version of sections
--- activated when window width is small enough. Inspired by:
+-- Custom *minimal* and *fast* statusline module with opinionated look. Special
+-- features: change color depending on current mode and compact version of
+-- sections activated when window width is small enough. Inspired by:
 -- https://elianiva.me/post/neovim-lua-statusline (blogpost)
 -- https://github.com/elianiva/dotfiles/blob/master/nvim/.config/nvim/lua/modules/_statusline.lua (Github)
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
 -- `setup()`. For example, put as 'lua/mini/statusline.lua' and execute
--- `require('mini.statusline').setup()` Lua code.
+-- `require('mini.statusline').setup()` Lua code. It may have `config` argument
+-- which should be a table overwriting default values using same structure.
+--
+-- Default `config`:
+-- {
+--   -- Whether to set Vim's settings for statusline (make it always shown)
+--   set_vim_settings = true
+-- }
+--
+-- Defined highlight groups:
+-- - Highlighting depending on mode:
+--     - MiniStatuslineModeNormal - normal mode
+--     - MiniStatuslineModeInsert - insert mode
+--     - MiniStatuslineModeVisual - visual mode
+--     - MiniStatuslineModeReplace - replace mode
+--     - MiniStatuslineModeCommand - command mode
+--     - MiniStatuslineModeOther - other mode (like terminal, etc.)
+-- - MiniStatuslineDevinfo - highlighting of "dev info" section
+-- - MiniStatuslineFilename - highliting of "file name" section
+-- - MiniStatuslineFileinfo - highliting of "file info" section
+-- - MiniStatuslineInactive - highliting in not focused window
+--
+-- Features:
+-- - Built-in `active`
 --
 -- Suggested dependencies (provide extra functionality, statusline will work
 -- without them):
--- - Nerd font (to support git and diagnostics icon).
+-- - Nerd font (to support extra icons).
 -- - Plugin 'airblade/vim-gitgutter' for Git signs. If missing, no git signs
 --   will be shown.
 -- - Plugin 'tpope/vim-fugitive' for Git branch. If missing, '<no fugitive>'
@@ -25,7 +48,7 @@
 --   active and inactive.
 -- - In active mode `MiniStatusline.active()` is called. Its code defines
 --   high-level structure of statusline. From there go to respective section
---   functions.
+--   functions. Override it to create custom statusline layout.
 --
 -- Note about performance:
 -- - Currently statusline gets evaluated on every call inside a timer (see
@@ -50,9 +73,17 @@ local MiniStatusline = {}
 local H = {}
 
 -- Module setup
-function MiniStatusline.setup()
+function MiniStatusline.setup(config)
   -- Export module
   _G.MiniStatusline = MiniStatusline
+
+  -- Setup config
+  config = setmetatable(config or {}, {__index = H.config})
+
+  -- Settings to ensure tabline is displayed properly
+  if config.set_vim_settings then
+    vim.o.laststatus = 2 -- Always show statusline
+  end
 
   -- MiniStatusline behavior
   vim.api.nvim_exec([[
@@ -93,10 +124,10 @@ function MiniStatusline.setup()
     hi MiniStatuslineModeCommand guibg=#FABD2F guifg=#1D2021 gui=bold ctermbg=3 ctermfg=0
     hi MiniStatuslineModeOther   guibg=#8EC07C guifg=#1D2021 gui=bold ctermbg=6 ctermfg=0
 
-    hi link MiniStatuslineInactive StatusLineNC
     hi link MiniStatuslineDevinfo  StatusLine
     hi link MiniStatuslineFilename StatusLineNC
     hi link MiniStatuslineFileinfo StatusLine
+    hi link MiniStatuslineInactive StatusLineNC
   ]], false)
 end
 
@@ -337,6 +368,12 @@ function MiniStatusline.section_location(arg)
 end
 
 -- Helpers
+---- Module default config
+H.config = {
+  -- Whether to set Vim's settings for statusline
+  set_vim_settings = true
+}
+
 function H.is_truncated(width)
   return vim.api.nvim_win_get_width(0) < width
 end
