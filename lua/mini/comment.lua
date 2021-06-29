@@ -50,8 +50,8 @@ function MiniComment.setup(config)
   _G.MiniComment = MiniComment
 
   -- Setup config
-  config = config or {}
-  mappings = vim.tbl_extend('keep', config.mappings or {}, H.config.mappings)
+  config = setmetatable(config or {}, {__index = H.config})
+  mappings = setmetatable(config.mappings, {__index = H.config.mappings})
 
   -- Make mappings
   vim.api.nvim_set_keymap(

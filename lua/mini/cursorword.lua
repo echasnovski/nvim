@@ -23,7 +23,7 @@
 --   under cursor" is meant as in Vim's `<cword>`: something user would get
 --   as 'iw' text object. Highlighting stops in insert and terminal modes.
 -- - Highlighting is done according to `MiniCursorword` highlight group. By
---   default, it is a plain underline. To change it, modify it directly with
+--   default, it is a plain underline. To change this, modify it directly with
 --   `highlight MiniCursorword` command.
 
 -- Module and its helper
@@ -35,15 +35,17 @@ function MiniCursorword.setup(config)
   -- Export module
   _G.MiniCursorword = MiniCursorword
 
+  -- Setup config
+  config = setmetatable(config or {}, {__index = H.config})
+
   -- Module behavior
-  highlight_event = (config or {}).highlight_event or H.config.highlight_event
   command = string.format([[
     augroup MiniCursorword
       au!
       au %s                            * lua MiniCursorword.highlight()
       au InsertEnter,TermEnter,QuitPre * lua MiniCursorword.unhighlight()
     augroup END
-  ]], highlight_event)
+  ]], config.highlight_event)
   vim.api.nvim_exec(command, false)
 
   -- Create highlighting

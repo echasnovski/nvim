@@ -26,7 +26,11 @@ local H = {}
 
 -- Module setup
 function MiniTrailspace.setup(config)
+  -- Export module
   _G.MiniTrailspace = MiniTrailspace
+
+  -- Setup config
+  config = setmetatable(config or {}, {__index = H.config})
 
   -- Module behavior
   -- NOTE: if this updates too frequently, use `CursorHold`

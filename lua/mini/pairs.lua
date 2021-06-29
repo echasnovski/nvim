@@ -72,9 +72,11 @@ function MiniPairs.setup(config)
   -- Export module
   _G.MiniPairs = MiniPairs
 
+  -- Setup config
+  config = setmetatable(config or {}, {__index = H.config})
+
   -- Setup mappings in command and insert modes
-  modes = (config or {}).modes or H.config.modes
-  for _, mode in pairs(modes) do
+  for _, mode in pairs(config.modes) do
     -- Adding pair is disabled if symbol is after `\`
     H.map(mode, '(', [[v:lua.MiniPairs.open('()', "[^\\].")]])
     H.map(mode, '[', [[v:lua.MiniPairs.open('[]', "[^\\].")]])

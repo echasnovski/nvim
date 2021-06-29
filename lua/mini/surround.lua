@@ -112,18 +112,15 @@ function MiniSurround.setup(config)
   _G.MiniSurround = MiniSurround
 
   -- Setup config
-  config = config or {}
+  config = setmetatable(config or {}, {__index = H.config})
+  mappings = setmetatable(config.mappings, {__index = H.config.mappings})
 
   -- Apply settings
-  MiniSurround.n_lines = config.n_lines or MiniSurround.n_lines
-  MiniSurround.highlight_duration = config.highlight_duration or
-    MiniSurround.highlight_duration
-  MiniSurround.funname_pattern = config.funname_pattern or
-    MiniSurround.funname_pattern
+  MiniSurround.n_lines = config.n_lines
+  MiniSurround.highlight_duration = config.highlight_duration
+  MiniSurround.funname_pattern = config.funname_pattern
 
   -- Make mappings
-  mappings = vim.tbl_extend('keep', config.mappings or {}, H.config.mappings)
-
   -- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
   -- It is used to enable dot-repeatability.
   vim.api.nvim_set_keymap(

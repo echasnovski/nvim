@@ -49,12 +49,10 @@ function MiniTabline.setup(config)
   _G.MiniTabline = MiniTabline
 
   -- Setup config
-  config = config or {}
+  config = setmetatable(config or {}, {__index = H.config})
 
-  -- Settings to ensure tabline is displayed properly
-  set_vim_settings = config.set_vim_settings
-  if set_vim_settings == nil then set_vim_settings = H.config.set_vim_settings end
-  if set_vim_settings then
+  -- Set settings to ensure tabline is displayed properly
+  if config.set_vim_settings then
     vim.o.showtabline = 2 -- Always show tabline
     vim.o.hidden = true   -- Allow switching buffers without saving them
   end

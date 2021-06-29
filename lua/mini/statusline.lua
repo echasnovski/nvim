@@ -80,7 +80,7 @@ function MiniStatusline.setup(config)
   -- Setup config
   config = setmetatable(config or {}, {__index = H.config})
 
-  -- Settings to ensure tabline is displayed properly
+  -- Set settings to ensure statusline is displayed properly
   if config.set_vim_settings then
     vim.o.laststatus = 2 -- Always show statusline
   end
