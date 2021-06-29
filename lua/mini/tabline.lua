@@ -7,10 +7,26 @@
 --
 -- To activate, put this file somewhere into 'lua' folder and call module's
 -- `setup()`. For example, put as 'lua/mini/tabline.lua' and execute
--- `require('mini.tabline').setup()` Lua code.
+-- `require('mini.tabline').setup()` Lua code. It may have `config` argument
+-- which should be a table overwriting default values using same structure.
+--
+-- Default `config`:
+-- {
+--   -- Whether to set Vim's settings for tabline (make it always shown and
+--   -- allow hidden buffers)
+--   set_vim_settings = true
+-- }
 --
 -- Main capabilities when displaying buffers:
--- - Different highlight groups for "states" of buffer.
+-- - Different highlight groups for "states" of buffer affecting 'buffer tabs':
+--     - MiniTablineCurrent - buffer is current (has cursor in it)
+--     - MiniTablineActive - buffer is active (displayed in some window)
+--     - MiniTablineHidden - buffer is hidden (not displayed)
+--     - MiniTablineModifiedCurrent - buffer is modified and current
+--     - MiniTablineModifiedActive - buffer is modified and active
+--     - MiniTablineModifiedHidden - buffer is modified and hidden
+--     - MiniTablineFill - unused right space of tabline
+--   To change any of them, modify it directly with Vim's `highlight` command.
 -- - Buffer names are made unique by extending paths to files or appending
 --   unique identifier to buffers without name.
 -- - Current buffer is displayed "optimally centered" (in center of screen
@@ -28,9 +44,20 @@ local MiniTabline = {}
 local H = {}
 
 -- Module setup
-function MiniTabline.setup()
+function MiniTabline.setup(config)
   -- Export module
   _G.MiniTabline = MiniTabline
+
+  -- Setup config
+  config = config or {}
+
+  -- Settings to ensure tabline is displayed properly
+  set_vim_settings = config.set_vim_settings
+  if set_vim_settings == nil then set_vim_settings = H.config.set_vim_settings end
+  if set_vim_settings then
+    vim.o.showtabline = 2 -- Always show tabline
+    vim.o.hidden = true   -- Allow switching buffers without saving them
+  end
 
   -- MiniTabline behavior
   vim.api.nvim_exec([[
@@ -43,10 +70,6 @@ function MiniTabline.setup()
       autocmd BufDelete  * lua MiniTabline.update_tabline()
     augroup END
   ]], false)
-
-  -- Settings to ensure tabline is displayed properly
-  vim.o.showtabline = 2 -- Always show tabline
-  vim.o.hidden = true   -- Allow switching buffers without saving them
 
   -- Function to make tabs clickable
   vim.api.nvim_exec([[
@@ -91,6 +114,12 @@ MiniTabline.tabs = {}
 MiniTabline.tabs_order = {}
 
 -- Helpers
+---- Module default config
+H.config = {
+  -- Whether to set Vim's settings for tabline
+  set_vim_settings = true
+}
+
 ---- List tabs
 function H.list_tabs()
   tabs = {}
