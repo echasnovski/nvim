@@ -91,7 +91,7 @@ Important system dependencies:
         git clone https://github.com/alexanderjeurissen/ranger_devicons ~/.config/ranger/plugins/ranger_devicons
     ```
 
-- **Language Server Protocols**. These should be handled manually for Neovim>=0.5.0. For a list of needed LSPs look at settings for 'nvim-lspconfig'.
+- **Language Server Protocols**. These should be handled manually for Neovim>=0.5.0. For a list of needed LSP providers look at settings for 'nvim-lspconfig'.
 
 ## Notes
 

@@ -6,3 +6,4 @@ nodepath.vim
 autoload/plugged/*
 paths.vim
 wiki/
+lua-language-server
