@@ -78,16 +78,18 @@ function MiniCompletion.completefunc(findstart, base)
     -- This request is executed on first call because it returns `-3` on first
     -- call (which means cancel and leave completion mode).
     vim.lsp.buf_request(bufnr, 'textDocument/completion', params, function(err, _, result)
-      -- Empty cache table means that completion is already not needed
-      if vim.tbl_isempty(H.cache_lsp) then return end
+      -- Empty cache table or not Insert mode means that completion is already
+      -- not needed
+      if vim.tbl_isempty(H.cache_lsp) or vim.fn.mode() ~= 'i' then return end
+
       H.cache_lsp.n_answers = H.cache_lsp.n_answers + 1
 
-      if err or not result or vim.fn.mode() ~= "i" then return end
+      if not err and result then
+        local matches = vim.lsp.util.text_document_completion_list_to_complete_items(result, prefix)
+        vim.list_extend(H.cache_lsp.words, matches)
+      end
 
-      local matches = vim.lsp.util.text_document_completion_list_to_complete_items(result, prefix)
-      vim.list_extend(H.cache_lsp.words, matches)
-
-      -- Trigger this function when each request is done
+      -- Trigger LSP completion when each request is done
       H.trigger_lsp()
     end)
 
@@ -99,20 +101,20 @@ function MiniCompletion.completefunc(findstart, base)
     if findstart == 1 then
       completion_start, _ = H.completion_info()
       return completion_start
-    else
-      local res = H.cache_lsp.words
-
-      -- If all clients answered, clear cache and mayby trigger fallback action
-      if H.cache_lsp.n_answers == H.cache_lsp.n_clients then
-        H.cache_lsp = {}
-        if vim.tbl_isempty(res) then
-          H.trigger_fallback()
-          return
-        end
-      end
-
-      return res
     end
+
+    local res = H.cache_lsp.words
+
+    -- If all clients answered, clear cache and maybe trigger fallback action
+    if H.cache_lsp.n_answers == H.cache_lsp.n_clients then
+      H.cache_lsp = {}
+      if vim.tbl_isempty(res) then
+        H.trigger_fallback()
+        return
+      end
+    end
+
+    return res
   end
 end
 
