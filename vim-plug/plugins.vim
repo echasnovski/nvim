@@ -45,7 +45,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
       " Plug 'nvim-telescope/telescope.nvim'
 
       "" Completion
-      Plug 'nvim-lua/completion-nvim'
+      " Plug 'nvim-lua/completion-nvim'
       "" Other option of completion. Some say that it is far faster on big
       "" projects than 'completion-nvim'. For suggested configuration see
       "" README on Github. There were some problems which I didn't find a way
