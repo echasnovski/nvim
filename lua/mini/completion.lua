@@ -27,7 +27,7 @@ function MiniCompletion.setup(config)
 
   -- Setup mappings
   vim.api.nvim_set_keymap(
-    'i', mappings.force, '<cmd>lua MiniCompletion.force_complete()<cr>',
+    'i', mappings.force, '<cmd>lua MiniCompletion.complete()<cr>',
     {noremap = true, silent = true}
   )
 end
@@ -47,15 +47,16 @@ function MiniCompletion.auto_complete()
   H.timers.auto_complete:stop()
 
   local char_is_lsp_trigger = H.is_lsp_trigger(vim.v.char)
-  if vim.fn.pumvisible() > 0 or
+  if H.pumvisible() or
     not (H.is_char_keyword(vim.v.char) or char_is_lsp_trigger) then
     MiniCompletion.stop_trigger()
     return
   end
 
   -- If character is purely lsp trigger, make new LSP request without fallback
+  -- and forcing new completion
   if char_is_lsp_trigger then H.cancel_lsp_request() end
-  H.do_fallback = not char_is_lsp_trigger
+  H.cache = {fallback = not char_is_lsp_trigger, force = char_is_lsp_trigger}
 
   -- Using delay (of debounce type) seems to actually improve user experience
   -- as it allows fast typing without many popups. Also useful when synchronous
@@ -65,16 +66,16 @@ function MiniCompletion.auto_complete()
   )
 end
 
-function MiniCompletion.force_complete(fallback)
+function MiniCompletion.complete(fallback, force)
   MiniCompletion.stop_trigger()
-  H.do_fallback = fallback or true
+  H.cache = {fallback = fallback or true, force = force or true}
   H.trigger()
 end
 
 function MiniCompletion.stop_trigger()
   H.timers.auto_complete:stop()
   H.cancel_lsp_request()
-  H.do_fallback = true
+  H.cache = {fallback = true, force = false}
 end
 
 function MiniCompletion.complete_lsp(findstart, base)
@@ -129,7 +130,7 @@ function MiniCompletion.complete_lsp(findstart, base)
     H.lsp_request.status = 'completed'
 
     -- Maybe trigger fallback action
-    if vim.tbl_isempty(words) and H.do_fallback then
+    if vim.tbl_isempty(words) and H.cache.fallback then
       H.trigger_fallback()
       return
     end
@@ -162,24 +163,44 @@ H.timers = {auto_complete = vim.loop.new_timer()}
 -- - cancel_fun: function which cancels current request.
 H.lsp_request = {id = 0, status = nil, result = nil, cancel_fun = nil}
 
-H.do_fallback = true
+H.cache = {fallback = true, force = false}
 
 function H.trigger()
   if vim.fn.mode() ~= 'i' then return end
   if H.has_lsp_clients() then
     H.trigger_lsp()
-  elseif H.do_fallback then
+  elseif H.cache.fallback then
     H.trigger_fallback()
   end
 end
 
 function H.trigger_lsp()
-  if vim.api.nvim_buf_get_option(0, 'completefunc') ~= '' then
+  local has_complete = vim.api.nvim_buf_get_option(0, 'completefunc') ~= ''
+  -- Check for popup visibility is needed to reduce flickering.
+  -- Possible issue timeline (with 100ms delay with set up LSP):
+  -- 0ms: Key is pressed.
+  -- 100ms: LSP is triggered from first key press.
+  -- 110ms: Another key is pressed.
+  -- 200ms: LSP callback is processed, triggers complete-function which
+  --   processes "received" LSP request.
+  -- 201ms: LSP request is processed, completion is (should be almost
+  --   immediately) provided, request is marked as "completed".
+  -- 210ms: LSP is triggered from second key press. As previous request is
+  --   "completed", it will once make whole LSP request. Having check for
+  --   visible popup should prevent here the call to complete-function.
+  -- When `force` is `true` then presence of popup shouldn't matter.
+  local no_popup = H.cache.force or (not H.pumvisible())
+  if no_popup and has_complete then
     H.feedkeys_in_insert(H.trigger_keys.usercompl)
   end
 end
 
-function H.trigger_fallback() H.feedkeys_in_insert(H.trigger_keys.ctrl_n) end
+function H.trigger_fallback()
+  local no_popup = H.cache.force or (not H.pumvisible())
+  if no_popup then
+    H.feedkeys_in_insert(H.trigger_keys.ctrl_n)
+  end
+end
 
 function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
 
@@ -208,6 +229,8 @@ end
 function H.feedkeys_in_insert(key)
   if vim.fn.mode() == 'i' then vim.fn.feedkeys(key) end
 end
+
+function H.pumvisible() return vim.fn.pumvisible() > 0 end
 
 function H.get_completion_start()
   -- Compute start position of latest keyword (as in `vim.lsp.omnifunc`)
