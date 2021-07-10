@@ -69,7 +69,7 @@ let g:which_key_map.f = {
   \ 'p' : [':Helptags'        , 'help tags'],
   \ 'r' : [':Rg'              , 'text Rg'],
   \ 'S' : [':Colors'          , 'color schemes'],
-  \ 's' : [':CocList snippets', 'snippets'],
+  \ 's' : [':Snippets'        , 'snippets'],
   \ 'T' : [':BTags'           , 'buffer tags'],
   \ 't' : [':Tags'            , 'project tags'],
   \ 'w' : [':Windows'         , 'search windows'],
