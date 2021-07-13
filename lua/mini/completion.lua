@@ -22,8 +22,15 @@ function MiniCompletion.setup(config)
       au InsertCharPre  * lua MiniCompletion.auto_complete()
       au InsertLeavePre * lua MiniCompletion.stop_trigger()
       au BufEnter       * set completefunc=v:lua.MiniCompletion.complete_lsp
+      au CompleteChanged * lua MiniCompletion.auto_float()
+      au CompleteDonePre * lua MiniCompletion.track_complete_done()
+      au TextChangedI * lua MiniCompletion.track_text_changed_i()
     augroup END
   ]], false)
+
+  -- Create a permanent buffer where documentation info will be displayed
+  H.info.bufnr = vim.api.nvim_create_buf(false, true)
+  vim.fn.setbufvar(H.info.bufnr, '&buftype', 'nofile')
 
   -- Setup mappings
   vim.api.nvim_set_keymap(
@@ -253,5 +260,75 @@ function H.match_request_result(request_result, base)
 
   return words
 end
+
+H.info = {bufnr = nil, winnr = nil}
+
+function MiniCompletion.auto_float()
+  local event = vim.v.event
+  local info_height = vim.o.pumheight
+  local has_item_selected = event and not vim.tbl_isempty(event.completed_item)
+  local enough_window_height = vim.fn.winheight(0) > info_height
+  if not has_item_selected or not enough_window_height or event.height == 0 then
+    -- Defer execution because of textlock during `CompleteChanged` event
+    vim.defer_fn(H.close_float, 0)
+    return
+  end
+
+  local opts = H.float_options(event)
+  local text = event.completed_item.word
+
+  -- Defer execution because of textlock during `CompleteChanged` event
+  vim.defer_fn(
+    function()
+      H.close_float()
+      vim.api.nvim_buf_set_lines(H.info.bufnr, 0, -1, false, {text})
+      H.info.winnr = vim.api.nvim_open_win(H.info.bufnr, false, opts)
+      vim.api.nvim_win_set_option(H.info.winnr, "wrap", true)
+    end,
+    0
+  )
+end
+
+function H.float_options(event)
+  local info_height = vim.o.pumheight
+  local info_width = 4 * vim.o.pumwidth
+
+  local pum_left = event.col
+  local pum_right = event.col + event.width + (event.scrollbar and 1 or 0)
+
+  local space_left, space_right = pum_left, vim.o.columns - pum_right
+
+  local anchor, col, space
+  -- Decide side at which floating info will be displayed
+  if info_width <= space_right or space_left <= space_right then
+    anchor, col, space = 'NW', pum_right, space_right
+  else
+    anchor, col, space = 'NE', pum_left, space_left
+  end
+  -- Possibly adjust floating window width to fit screen
+  info_width = math.min(info_width, space)
+
+  return {
+    relative = 'editor',
+    anchor = anchor,
+    row = event.row,
+    col = col,
+    width = info_width,
+    height = info_height,
+    focusable = false,
+    style = 'minimal'
+  }
+end
+
+function H.close_float()
+  if H.info.winnr then vim.api.nvim_win_close(H.info.winnr, true) end
+  -- For some reason 'buftype' might be resetted. Ensure that buffer is scratch.
+  vim.fn.setbufvar(H.info.bufnr, '&buftype', 'nofile')
+  H.info.winnr = nil
+end
+
+function MiniCompletion.track_complete_done() H.close_float() end
+
+function MiniCompletion.track_text_changed_i() H.close_float() end
 
 return MiniCompletion
