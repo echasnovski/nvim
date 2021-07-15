@@ -1,3 +1,17 @@
+-- Comparisons:
+-- - 'completion-nvim':
+--     - Has timer activated on InsertEnter which does something every period
+--       of time (makes LSP request, shows floating help). MiniCompletion
+--       relies on Neovim's (Vim's) events.
+-- - 'nvim-compe':
+--     - Sends 'completionItem/resolve' for extra completion information. This
+--       doesn't seem to be enough.
+-- - Both:
+--     - Can manage multiple configurable sources. MiniCompletion has only two:
+--       LSP and fallback.
+--     - Provide custom ways to filter completion suggestions. MiniCompletion
+--       relies on Neovim's (which currently is equal to Vim's) filtering.
+
 -- Module and its helper
 local MiniCompletion = {}
 local H = {}
@@ -20,12 +34,12 @@ function MiniCompletion.setup(config)
   vim.api.nvim_exec([[
     augroup MiniCompletion
       au!
-      au InsertCharPre  * lua MiniCompletion.auto_complete()
-      au InsertLeavePre * lua MiniCompletion.stop_all()
-      au BufEnter       * set completefunc=v:lua.MiniCompletion.complete_lsp
+      au InsertCharPre   * lua MiniCompletion.auto_complete()
       au CompleteChanged * lua MiniCompletion.auto_info()
-      au CompleteDonePre * lua MiniCompletion.track_complete_done()
-      au TextChangedI * lua MiniCompletion.track_text_changed_i()
+      au InsertLeavePre  * lua MiniCompletion.stop_all()
+      au CompleteDonePre * lua MiniCompletion.stop_all()
+      au TextChangedI    * lua MiniCompletion.on_text_changed_i()
+      au BufEnter        * set completefunc=v:lua.MiniCompletion.complete_lsp
     augroup END
   ]], false)
 
@@ -47,7 +61,7 @@ MiniCompletion.delay_completion = 100
 
 ---- Delay (debounce type, in ms) between focusing on completion item and
 ---- triggering floating info.
-MiniCompletion.delay_info = 50
+MiniCompletion.delay_info = 100
 
 ---- Characters per filetype which will retrigger LSP without fallback. Should
 ---- be a named table with name indicating filetype. Special name 'default'
@@ -61,7 +75,7 @@ function MiniCompletion.auto_complete()
   local char_is_lsp_trigger = H.is_lsp_trigger(vim.v.char)
   if H.pumvisible() or
     not (H.is_char_keyword(vim.v.char) or char_is_lsp_trigger) then
-    MiniCompletion.stop_all()
+    H.stop_complete()
     return
   end
 
@@ -79,17 +93,43 @@ function MiniCompletion.auto_complete()
 end
 
 function MiniCompletion.complete(fallback, force)
-  MiniCompletion.stop_all()
+  H.stop_complete()
   H.cache.fallback, H.cache.force = fallback or true, force or true
   H.trigger()
 end
 
-function MiniCompletion.stop_all()
-  H.timers.auto_complete:stop()
+function MiniCompletion.auto_info()
   H.timers.auto_info:stop()
-  H.cancel_lsp()
-  vim.defer_fn(H.close_floating_info, 0)
-  H.cache.fallback, H.cache.force, H.cache.popup_source = true, false, nil
+
+  -- Defer execution because of textlock during `CompleteChanged` event
+  -- Don't stop timer when closing floating info because it is needed
+  vim.defer_fn(function() H.close_floating_info(true) end, 0)
+
+  -- Stop current LSP request that tries to get not current data
+  H.cancel_lsp({'hover'})
+
+  -- Update metadata before leaving to register a `CompleteChanged` event
+  H.info.event = vim.v.event
+  H.info.id = H.info.id + 1
+
+  -- Don't event try to show info if nothing is selected in popup
+  if vim.tbl_isempty(H.info.event.completed_item) then return end
+
+  H.timers.auto_info:start(
+    MiniCompletion.delay_info, 0, vim.schedule_wrap(H.show_floating_info)
+  )
+end
+
+function MiniCompletion.stop_all()
+  H.cache.popup_source = nil
+  H.stop_complete()
+  H.stop_info()
+end
+
+function MiniCompletion.on_text_changed_i()
+  -- Stop 'info' processes in case no complete event is triggered but popup is
+  -- not visible. See https://github.com/neovim/neovim/issues/15077
+  H.stop_info()
 end
 
 function MiniCompletion.complete_lsp(findstart, base)
@@ -139,7 +179,13 @@ function MiniCompletion.complete_lsp(findstart, base)
   else
     if findstart == 1 then return H.get_completion_start() end
 
-    local words = H.get_words_from_completion_result(H.lsp.completion.result, base)
+    local words = H.process_lsp_request_result(
+      H.lsp.completion.result,
+      function(single_result)
+        return vim.lsp.util.text_document_completion_list_to_complete_items(single_result, base)
+      end
+    )
+
     H.lsp.completion.status = 'done'
 
     -- Maybe trigger fallback action
@@ -240,6 +286,20 @@ function H.is_lsp_trigger(char)
   return vim.tbl_contains(triggers, char)
 end
 
+function H.stop_complete()
+  H.timers.auto_complete:stop()
+  H.cancel_lsp({'completion'})
+  H.cache.fallback, H.cache.force = true, false
+end
+
+function H.stop_info()
+  -- Id update is needed to notify that all previous work is not current
+  H.info.id = H.info.id + 1
+  H.timers.auto_info:stop()
+  H.cancel_lsp({'hover'})
+  H.close_floating_info()
+end
+
 function H.cancel_lsp(names)
   names = names or {'completion', 'hover'}
   for _, n in pairs(names) do
@@ -264,64 +324,48 @@ function H.get_completion_start()
   return vim.fn.match(line_to_cursor, '\\k*$')
 end
 
-function H.get_words_from_completion_result(request_result, base)
+function H.process_lsp_request_result(request_result, processor)
   if not request_result then return {} end
 
-  local words = {}
+  local res = {}
   for _, item in pairs(request_result) do
     if not item.err and item.result then
-      local matches = vim.lsp.util.text_document_completion_list_to_complete_items(item.result, base)
-      vim.list_extend(words, matches)
+      vim.list_extend(res, processor(item.result))
     end
   end
 
-  return words
+  return res
 end
 
 H.info = {bufnr = nil, event = nil, id = 0, lines = nil, winnr = nil}
-
-function MiniCompletion.auto_info()
-  H.timers.auto_info:stop()
-
-  -- Defer execution because of textlock during `CompleteChanged` event
-  -- Don't stop timer when closing floating info because it is needed
-  vim.defer_fn(function() H.close_floating_info(true) end, 0)
-
-  H.info.event = vim.v.event
-
-  H.timers.auto_info:start(
-    MiniCompletion.delay_info, 0, vim.schedule_wrap(H.show_floating_info)
-  )
-end
 
 function H.show_floating_info()
   local event = H.info.event
   if not event then return end
 
-  -- Try take lines from LSP request result. If successful, then this call is
-  -- from LSP request callback and thus don't count it as new floating info.
+  -- Try first to take lines from LSP request result.
   local lines
-  if H.lsp.hover.result then
+  if H.lsp.hover.status == 'received' then
     -- Output floating info comes from first valid request result
-    for _, item in pairs(H.lsp.hover.result) do
-      local is_valid = not item.err and item.result and item.result.contents
-      if not lines and is_valid then
-        lines = vim.lsp.util.convert_input_to_markdown_lines(item.result.contents)
+    lines = H.process_lsp_request_result(
+      H.lsp.hover.result,
+      function(single_result)
+        if not single_result.contents then return {} end
+        local res = vim.lsp.util.convert_input_to_markdown_lines(single_result.contents)
+        return vim.lsp.util.trim_empty_lines(res)
       end
-    end
+    )
 
-    H.lsp.hover.result = nil
+    H.lsp.hover.status = 'done'
   else
-    local id = H.info.id + 1
-    H.info.id = id
-
-    lines = H.floating_info_lines(id)
-    if not lines then return end
+    lines = H.floating_info_lines(H.info.id)
   end
+
+  -- Don't show anything if there is nothing to show
+  if not lines or H.is_whitespace(lines) then return end
 
   -- Add `lines` to info buffer
   vim.lsp.util.stylize_markdown(H.info.bufnr, lines, {})
-  if vim.api.nvim_buf_line_count(H.info.bufnr) == 0 then return end
 
   -- Compute floating window options
   local opts = H.floating_info_options()
@@ -329,7 +373,8 @@ function H.show_floating_info()
   -- Defer execution because of textlock during `CompleteChanged` event
   vim.defer_fn(
     function()
-      if not H.pumvisible() then return end
+      -- Ensure that window doesn't open when it shouldn't be
+      if not (H.pumvisible() and vim.fn.mode() == 'i') then return end
 
       H.info.winnr = vim.api.nvim_open_win(H.info.bufnr, false, opts)
       vim.api.nvim_win_set_option(H.info.winnr, "wrap", true)
@@ -339,13 +384,11 @@ function H.show_floating_info()
 end
 
 function H.floating_info_lines(info_id)
-  -- Don't show lines when no item is chosen in completion popup
-  local completed_item = H.info.event ~= nil and H.info.event.completed_item or {}
-  if vim.tbl_isempty(completed_item) then return nil end
-
   -- Try to use 'info' field of completion item
+  local completed_item = H.info.event ~= nil and H.info.event.completed_item or {}
   local text = completed_item.info or ''
-  if not H.is_whitespace_string(text) then
+
+  if not H.is_whitespace(text) then
     -- Use `<text></text>` to be properly processed by `stylize_markdown()`
     local lines = {'<text>'}
     for _, l in pairs(H.split_lines(text)) do table.insert(lines, l) end
@@ -356,20 +399,43 @@ function H.floating_info_lines(info_id)
   -- Finally, try LSP request to retrieve info lines (if popup is from LSP)
   if H.cache.popup_source ~= 'lsp' then return nil end
 
+  local bufnr = vim.api.nvim_get_current_buf()
+  local params = vim.lsp.util.make_position_params()
+
   local current_id = H.lsp.hover.id + 1
   H.lsp.hover.id = current_id
   H.lsp.hover.status = 'sent'
 
-  local bufnr = vim.api.nvim_get_current_buf()
-  local params = vim.lsp.util.make_position_params()
-
+  -- WARN Currently there is an issue with using 'textDocument/hover'.
+  -- It makes request for the text that is shown in buffer and not for the item
+  -- in popup. Those are the same if completion popup is navigated with
+  -- `<C-n>/<C-p>`. But using arrows (`<Down>/<Up>`) don't change text in
+  -- buffer while still triggering `CompleteChanged`. This means that request
+  -- is done for the wrong item.
+  -- Using distinction between arros and <C-n> might be even a good thing **if
+  -- there is no LSP request when using arrows**.
+  -- Possible half-solutions that I currently managed to find:
+  -- - Use counter for `TextChangedP` events and track similar counter for
+  --   showing floating info. If they differ, it means that text was currently
+  --   updated in `CompleteChanged` (needs `defer_fn(..., 0)` in `auto_info`
+  --   because `CompleteChanged` seems to trigger before `TextChangedP`).
+  --   Currently seems a little bit complicated but the most appropriate.
+  -- - Don't close window on `CompleteChanged` ('solution' which seems to be
+  --   used in `completion-nvim`). But it still makes LSP requests (albeit a
+  --   probably "cached and fast" ones)
+  -- - Use `completionItem/resolve` instead of `textDocument/hover` (like in
+  --   `nvim-compe`). Small changes are needed (`params` should be
+  --   `H.info.event.completed_item.user_data.nvim.lsp.completion_item` and
+  --   use different result postprocessing). However, this gives way less
+  --   information and doesn't seem to be that widespread as
+  --   'textDocument/hover'.
   cancel_fun = vim.lsp.buf_request_all(bufnr, 'textDocument/hover', params, function(result)
     -- Don't do anything if there is other LSP request in action
     if not H.is_lsp_current('hover', current_id) then return end
 
-    H.lsp.hover.status = 'done'
+    H.lsp.hover.status = 'received'
 
-    -- Don't do anything if other floating info was requested
+    -- Don't do anything if completion item was changed
     if H.info.id ~= info_id then return end
 
     -- Here `result` should not be `nil` or recursion will happen
@@ -433,13 +499,15 @@ function H.close_floating_info(keep_timer)
   vim.fn.setbufvar(H.info.bufnr, '&buftype', 'nofile')
 end
 
-function MiniCompletion.track_complete_done() H.close_floating_info() end
-
-function MiniCompletion.track_text_changed_i() H.close_floating_info() end
-
-function H.is_whitespace_string(s)
-  -- `nil` or empty is whitespace string. Not string is not whitespace string.
-  return (not s) or (type(s) == 'string' and s:find('^%s*$'))
+function H.is_whitespace(s)
+  if type(s) == 'string' then return s:find('^%s*$') end
+  if type(s) == 'table' then
+    for _, val in pairs(s) do
+      if not H.is_whitespace(val) then return false end
+    end
+    return true
+  end
+  return false
 end
 
 function H.is_lsp_current(name, id)
