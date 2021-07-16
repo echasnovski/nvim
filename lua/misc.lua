@@ -1,5 +1,4 @@
 -- Helper to print Lua objects
-function _G.dump(...)
-  local objects = vim.tbl_map(vim.inspect, { ... })
-  print(unpack(objects))
+function _G.dump(x)
+  print(vim.inspect(x))
 end
