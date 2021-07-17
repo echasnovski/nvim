@@ -378,6 +378,8 @@ function H.show_floating_docs()
 
       H.docs.winnr = vim.api.nvim_open_win(H.docs.bufnr, false, opts)
       vim.api.nvim_win_set_option(H.docs.winnr, "wrap", true)
+      vim.api.nvim_win_set_option(H.docs.winnr, "linebreak", true)
+      vim.api.nvim_win_set_option(H.docs.winnr, "breakindent", false)
     end,
     0
   )
@@ -441,30 +443,27 @@ end
 function H.floating_docs_options()
   -- Compute dimensions based on lines to be displayed
   local lines = vim.api.nvim_buf_get_lines(H.docs.bufnr, 0, -1, {})
-  ---- Height
-  local docs_height = math.min(#lines, 25)
-  ---- Width. This may be not entirely correct as `lines` can be in markdown
-  local max_width = 0
-  for _, l in pairs(lines) do if #l > max_width then max_width = #l end end
-  local docs_width = math.min(max_width, 80)
+  local docs_height, docs_width = H.floating_dimensions(lines, 25, 80)
 
   -- Compute position
   local event = H.docs.event
-  local pum_left = event.col
-  local pum_right = event.col + event.width + (event.scrollbar and 1 or 0)
+  local left_to_pum = event.col - 1
+  local right_to_pum = event.col + event.width + (event.scrollbar and 1 or 0)
 
-  local space_left, space_right = pum_left, vim.o.columns - pum_right
+  local space_left, space_right = left_to_pum, vim.o.columns - right_to_pum
 
   local anchor, col, space
   -- Decide side at which floating docs will be displayed
   if docs_width <= space_right or space_left <= space_right then
-    anchor, col, space = 'NW', pum_right, space_right
+    anchor, col, space = 'NW', right_to_pum, space_right
   else
-    anchor, col, space = 'NE', pum_left, space_left
+    anchor, col, space = 'NE', left_to_pum, space_left
   end
 
-  -- Possibly adjust floating window width to fit screen
-  docs_width = math.min(docs_width, space)
+  -- Possibly adjust floating window dimensions to fit screen
+  if space < docs_width then
+    docs_height, docs_width = H.floating_dimensions(lines, 25, space)
+  end
 
   return {
     relative = 'editor',
@@ -476,6 +475,22 @@ function H.floating_docs_options()
     focusable = true,
     style = 'minimal'
   }
+end
+
+-- @return height, width
+function H.floating_dimensions(lines, max_height, max_width)
+  -- Simulate how lines will look in window with `wrap` and `linebreak`.
+  -- This is not 100% accurate (mostly when multibyte characters are present
+  -- manifesting into empty space at bottom), but does the job
+  local lines_wrap = {}
+  for _, l in pairs(lines) do
+    vim.list_extend(lines_wrap, wrap_line(l, max_width))
+  end
+
+  local width = 0
+  for _, l in pairs(lines_wrap) do if #l > width then width = #l end end
+
+  return math.min(#lines_wrap, max_height), math.min(width, max_width)
 end
 
 function H.close_floating_docs(keep_timer)
@@ -503,11 +518,25 @@ function H.is_lsp_current(name, id)
   return H.lsp[name].id == id and H.lsp[name].status == 'sent'
 end
 
-function H.split_lines(s)
-  if type(s) ~= 'string' then return nil end
-  local lines = {}
-  for l in s:gmatch("[^\r\n]+") do table.insert(lines, l) end
-  return lines
+-- Simulate spliting single line `l` like how it would look inside window with
+-- `wrap` and `linebreak` set to `true`
+function wrap_line(l, width)
+  local breakat_pattern = '[' .. vim.o.breakat .. ']'
+  local res = {}
+
+  local break_id, break_match
+  while #l > width do
+    -- Simulate wrap by looking at breaking character from end of current break
+    ---- WARN Using `sub()` means current lack of multibyte characters support
+    break_match = vim.fn.match(l:sub(1, width):reverse(), breakat_pattern)
+    -- If no breaking character found, wrap at whole width
+    break_id = width - (break_match < 0 and 0 or break_match)
+    table.insert(res, l:sub(1, break_id))
+    l = l:sub(break_id + 1)
+  end
+  table.insert(res, l)
+
+  return res
 end
 
 function H.table_get(t, id)
