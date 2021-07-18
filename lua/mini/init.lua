@@ -1,5 +1,5 @@
 require('mini.comment').setup()
-require('mini.completion').setup({lsp_triggers = {default = {'.'}, r = {':'}}})
+require('mini.completion').setup()
 require('mini.cursorword').setup()
 require('mini.pairs').setup({modes = {'c', 'i', 't'}})
 require('mini.statusline').setup()

@@ -1,3 +1,9 @@
+-- Configuration of lsp completion triggers:
+-- - In `on_attach(client, bufnr)` function when configuring LSP client modify
+--   completion triggers in the following way:
+--   -- This will set triggers to '.' and ':'
+--   `client.server_capabilities.completionProvider.triggerCharacters = {'.', ':'}`
+--
 -- Comparisons:
 -- - 'completion-nvim':
 --     - Has timer activated on InsertEnter which does something every period
@@ -27,7 +33,6 @@ function MiniCompletion.setup(config)
   mappings = setmetatable(config.mappings, {__index = H.config.mappings})
 
   -- Apply settings
-  MiniCompletion.lsp_triggers = config.lsp_triggers
   MiniCompletion.delay_completion = config.delay_completion
   MiniCompletion.delay_docs = config.delay_docs
 
@@ -64,26 +69,21 @@ MiniCompletion.delay_completion = 100
 ---- triggering floating docs.
 MiniCompletion.delay_docs = 100
 
----- Characters per filetype which will retrigger LSP without fallback. Should
----- be a named table with name indicating filetype. Special name 'default'
----- means default lsp triggers for all LSP clients.
-MiniCompletion.lsp_triggers = {default = {'.'}}
-
 -- Module functionality
 function MiniCompletion.auto_complete()
   H.timers.auto_complete:stop()
 
-  local char_is_lsp_trigger = H.is_lsp_trigger(vim.v.char)
+  local char_is_trigger = H.is_lsp_completion_trigger(vim.v.char)
   if H.pumvisible() or
-    not (H.is_char_keyword(vim.v.char) or char_is_lsp_trigger) then
+    not (H.is_char_keyword(vim.v.char) or char_is_trigger) then
     H.stop_complete()
     return
   end
 
   -- If character is purely lsp trigger, make new LSP request without fallback
   -- and forcing new completion
-  if char_is_lsp_trigger then H.cancel_lsp() end
-  H.cache.fallback, H.cache.force = not char_is_lsp_trigger, char_is_lsp_trigger
+  if char_is_trigger then H.cancel_lsp() end
+  H.cache.fallback, H.cache.force = not char_is_trigger, char_is_trigger
 
   -- Using delay (of debounce type) seems to actually improve user experience
   -- as it allows fast typing without many popups. Also useful when synchronous
@@ -206,7 +206,6 @@ end
 H.config = {
   delay_completion = MiniCompletion.delay_completion,
   delay_docs = MiniCompletion.delay_docs,
-  lsp_triggers = MiniCompletion.lsp_triggers,
   mappings = {
     force = '<C-Space>' -- Force completion
   }
@@ -272,19 +271,21 @@ end
 
 function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
 
+function H.is_lsp_completion_trigger(char)
+  local triggers
+  for _, client in pairs(vim.lsp.buf_get_clients()) do
+    triggers = H.table_get(
+      client,
+      {'server_capabilities', 'completionProvider', 'triggerCharacters'}
+    )
+    if vim.tbl_contains(triggers or {}, char) then return true end
+  end
+  return false
+end
+
 function H.is_char_keyword(char)
   -- Using Vim's `match()` and `keyword` enables respecting Cyrillic letters
   return vim.fn.match(char, '[[:keyword:]]') >= 0
-end
-
-function H.is_lsp_trigger(char)
-  local ft = vim.bo.filetype
-  local lsp_triggers = MiniCompletion.lsp_triggers
-  local triggers = lsp_triggers[ft] or
-    lsp_triggers.default or
-    H.config.lsp_triggers.default
-
-  return vim.tbl_contains(triggers, char)
 end
 
 function H.stop_complete()

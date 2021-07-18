@@ -87,7 +87,10 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
 
   nvim_lsp.sumneko_lua.setup {
     cmd = {sumneko_binary, '-E', sumneko_root .. '/main.lua'},
-    on_attach = on_attach,
+    on_attach = function(client, bufnr)
+      on_attach(client, bufnr)
+      client.server_capabilities.completionProvider.triggerCharacters = {'.', ':'}
+    end,
     settings = {
       Lua = {
         runtime = {
