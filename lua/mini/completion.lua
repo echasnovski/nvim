@@ -33,8 +33,7 @@ function MiniCompletion.setup(config)
   mappings = setmetatable(config.mappings, {__index = H.config.mappings})
 
   -- Apply settings
-  MiniCompletion.delay_completion = config.delay_completion
-  MiniCompletion.delay_docs = config.delay_docs
+  H.apply_settings(config)
 
   -- Setup module behavior
   vim.api.nvim_exec([[
@@ -68,6 +67,10 @@ MiniCompletion.delay_completion = 100
 ---- Delay (debounce type, in ms) between focusing on completion item and
 ---- triggering floating docs.
 MiniCompletion.delay_docs = 100
+
+---- Maximum dimensions of floating documentation for completion item. Should
+---- have 'height' and 'width' fields.
+MiniCompletion.docs_max_dim = {height = 25, width = 80}
 
 -- Module functionality
 function MiniCompletion.auto_complete()
@@ -206,10 +209,31 @@ end
 H.config = {
   delay_completion = MiniCompletion.delay_completion,
   delay_docs = MiniCompletion.delay_docs,
+  docs_max_dim = MiniCompletion.docs_max_dim,
   mappings = {
     force = '<C-Space>' -- Force completion
   }
 }
+
+function H.apply_settings(config)
+  vim.validate({
+    delay_completion = {config.delay_completion, 'number'},
+    delay_docs = {config.delay_docs, 'number'},
+    docs_max_dim = {
+      config.docs_max_dim,
+      function(x)
+        if type(x) ~= 'table' then return false end
+        local keys = vim.tbl_keys(x)
+        return vim.tbl_contains(keys, 'height') and vim.tbl_contains(keys, 'width')
+      end,
+      'table with \'height\' and \'width\' fields'
+    }
+  })
+
+  MiniCompletion.delay_completion = config.delay_completion
+  MiniCompletion.delay_docs = config.delay_docs
+  MiniCompletion.docs_max_dim = config.docs_max_dim
+end
 
 H.trigger_keys = {
   usercompl = vim.api.nvim_replace_termcodes('<C-x><C-u>', true, false, true),
@@ -365,9 +389,11 @@ function H.show_floating_docs()
   -- Don't show anything if there is nothing to show
   if not lines or H.is_whitespace(lines) then return end
 
-  -- Add `lines` to docs buffer. Use `wrap_at = 80` to have proper width of
+  -- Add `lines` to docs buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
-  vim.lsp.util.stylize_markdown(H.docs.bufnr, lines, {wrap_at = 80})
+  vim.lsp.util.stylize_markdown(
+    H.docs.bufnr, lines, {wrap_at = MiniCompletion.docs_max_dim.width}
+  )
 
   -- Compute floating window options
   local opts = H.floating_docs_options()
@@ -445,7 +471,11 @@ end
 function H.floating_docs_options()
   -- Compute dimensions based on lines to be displayed
   local lines = vim.api.nvim_buf_get_lines(H.docs.bufnr, 0, -1, {})
-  local docs_height, docs_width = H.floating_dimensions(lines, 25, 80)
+  local docs_height, docs_width = H.floating_dimensions(
+    lines,
+    MiniCompletion.docs_max_dim.height,
+    MiniCompletion.docs_max_dim.width
+  )
 
   -- Compute position
   local event = H.docs.event
@@ -464,7 +494,9 @@ function H.floating_docs_options()
 
   -- Possibly adjust floating window dimensions to fit screen
   if space < docs_width then
-    docs_height, docs_width = H.floating_dimensions(lines, 25, space)
+    docs_height, docs_width = H.floating_dimensions(
+      lines, MiniCompletion.docs_max_dim.height, space
+    )
   end
 
   return {
