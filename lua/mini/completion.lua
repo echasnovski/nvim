@@ -72,6 +72,13 @@ MiniCompletion.delay_docs = 100
 ---- have 'height' and 'width' fields.
 MiniCompletion.docs_max_dim = {height = 25, width = 80}
 
+---- Fallback action. It will always be run in Insert mode. To use Neovim's
+---- built-in completion (see `:h ins-completion`), supply its mapping as
+---- string. For example, to use 'whole lines' completion, supply '<c-x><c-l>'.
+MiniCompletion.fallback_action = function()
+  vim.api.nvim_feedkeys(H.trigger_keys.ctrl_n, 'n', false)
+end
+
 -- Module functionality
 function MiniCompletion.auto_complete()
   H.timers.auto_complete:stop()
@@ -210,6 +217,7 @@ H.config = {
   delay_completion = MiniCompletion.delay_completion,
   delay_docs = MiniCompletion.delay_docs,
   docs_max_dim = MiniCompletion.docs_max_dim,
+  fallback_action = MiniCompletion.fallback_action,
   mappings = {
     force = '<C-Space>' -- Force completion
   }
@@ -227,12 +235,23 @@ function H.apply_settings(config)
         return vim.tbl_contains(keys, 'height') and vim.tbl_contains(keys, 'width')
       end,
       'table with \'height\' and \'width\' fields'
+    },
+    fallback_action = {
+      config.fallback_action,
+      function(x) return type(x) == 'function' or type(x) == 'string' end,
+      'function or string'
     }
   })
 
   MiniCompletion.delay_completion = config.delay_completion
   MiniCompletion.delay_docs = config.delay_docs
   MiniCompletion.docs_max_dim = config.docs_max_dim
+
+  if type(config.fallback_action) == 'string' then
+    MiniCompletion.fallback_action = H.make_ins_fallback(config.fallback_action)
+  else
+    MiniCompletion.fallback_action = config.fallback_action
+  end
 end
 
 H.trigger_keys = {
@@ -279,18 +298,28 @@ function H.trigger_lsp()
   --   popup should prevent here the call to complete-function.
   -- When `force` is `true` then presence of popup shouldn't matter.
   local no_popup = H.cache.force or (not H.pumvisible())
-  if no_popup and has_complete then
-    H.feedkeys_in_insert(H.trigger_keys.usercompl)
+  if no_popup and has_complete and vim.fn.mode() == 'i' then
+    vim.api.nvim_feedkeys(H.trigger_keys.usercompl, 'n', false)
   end
 end
 
 function H.trigger_fallback()
   local no_popup = H.cache.force or (not H.pumvisible())
-  if no_popup then
+  if no_popup and vim.fn.mode() == 'i' then
     -- Track from which source is current popup
     H.cache.popup_source = 'fallback'
-    H.feedkeys_in_insert(H.trigger_keys.ctrl_n)
+    MiniCompletion.fallback_action()
   end
+end
+
+function H.make_ins_fallback(keys)
+  local trigger_keys = vim.api.nvim_replace_termcodes(
+    -- Having `<C-g><C-g>` also (for some mysterious reason) helps to avoid
+    -- some weird behavior. For example, if `keys = '<C-x><C-l>'` then Neovim
+    -- starts new line when there is no suggestions.
+    '<C-g><C-g>' .. keys, true, false, true
+  )
+  return function() vim.api.nvim_feedkeys(trigger_keys, 'n', false) end
 end
 
 function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
@@ -334,10 +363,6 @@ function H.cancel_lsp(names)
       H.lsp[n].status = 'canceled'
     end
   end
-end
-
-function H.feedkeys_in_insert(key)
-  if vim.fn.mode() == 'i' then vim.fn.feedkeys(key) end
 end
 
 function H.pumvisible() return vim.fn.pumvisible() > 0 end
