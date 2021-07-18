@@ -365,8 +365,9 @@ function H.show_floating_docs()
   -- Don't show anything if there is nothing to show
   if not lines or H.is_whitespace(lines) then return end
 
-  -- Add `lines` to docs buffer
-  vim.lsp.util.stylize_markdown(H.docs.bufnr, lines, {})
+  -- Add `lines` to docs buffer. Use `wrap_at = 80` to have proper width of
+  -- 'non-UTF8' section separators.
+  vim.lsp.util.stylize_markdown(H.docs.bufnr, lines, {wrap_at = 80})
 
   -- Compute floating window options
   local opts = H.floating_docs_options()
@@ -394,7 +395,7 @@ function H.floating_docs_lines(docs_id)
   if not H.is_whitespace(text) then
     -- Use `<text></text>` to be properly processed by `stylize_markdown()`
     local lines = {'<text>'}
-    for _, l in pairs(H.split_lines(text)) do table.insert(lines, l) end
+    vim.list_extend(lines, vim.split(text, '\n', false))
     table.insert(lines, '</text>')
     return lines
   end
@@ -485,13 +486,25 @@ function H.floating_dimensions(lines, max_height, max_width)
   -- manifesting into empty space at bottom), but does the job
   local lines_wrap = {}
   for _, l in pairs(lines) do
-    vim.list_extend(lines_wrap, wrap_line(l, max_width))
+    vim.list_extend(lines_wrap, H.wrap_line(l, max_width))
   end
+  -- Height is a number of wrapped lines truncated to maximum height
+  local height = math.min(#lines_wrap, max_height)
 
+  -- Width is a maximum width of the first `height` wrapped lines truncated to
+  -- maximum width
   local width = 0
-  for _, l in pairs(lines_wrap) do if #l > width then width = #l end end
+  local l_width
+  for i, l in ipairs(lines_wrap) do
+    -- Use `strdisplaywidth()` to account for 'non-UTF8' characters
+    l_width = vim.fn.strdisplaywidth(l)
+    if i <= height and width < l_width then width = l_width end
+  end
+  ---- It should already be less that that because of wrapping, so this is
+  ---- "just in case"
+  width = math.min(width, max_width)
 
-  return math.min(#lines_wrap, max_height), math.min(width, max_width)
+  return height, width
 end
 
 function H.close_floating_docs(keep_timer)
@@ -521,17 +534,18 @@ end
 
 -- Simulate spliting single line `l` like how it would look inside window with
 -- `wrap` and `linebreak` set to `true`
-function wrap_line(l, width)
+function H.wrap_line(l, width)
   local breakat_pattern = '[' .. vim.o.breakat .. ']'
   local res = {}
 
-  local break_id, break_match
-  while #l > width do
+  local break_id, break_match, width_id
+  -- Use `strdisplaywidth()` to account for 'non-UTF8' characters
+  while vim.fn.strdisplaywidth(l) > width do
     -- Simulate wrap by looking at breaking character from end of current break
-    ---- WARN Using `sub()` means current lack of multibyte characters support
-    break_match = vim.fn.match(l:sub(1, width):reverse(), breakat_pattern)
+    width_id = vim.str_byteindex(l, width)
+    break_match = vim.fn.match(l:sub(1, width_id):reverse(), breakat_pattern)
     -- If no breaking character found, wrap at whole width
-    break_id = width - (break_match < 0 and 0 or break_match)
+    break_id = width_id - (break_match < 0 and 0 or break_match)
     table.insert(res, l:sub(1, break_id))
     l = l:sub(break_id + 1)
   end
