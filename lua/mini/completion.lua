@@ -1,14 +1,57 @@
--- Configuration of lsp completion triggers:
--- - In `on_attach(client, bufnr)` function when configuring LSP client modify
---   completion triggers in the following way:
---   -- This will set triggers to '.' and ':'
---   `client.server_capabilities.completionProvider.triggerCharacters = {'.', ':'}`
+-- MIT License Copyright (c) 2021 Evgeni Chasnovski
+--
+-- Custom *somewhat minimal* autocompletion Lua plugin. Key design ideas:
+-- - Have a 'two-stage chain completion': first try to get completion items
+--   from LSP client (if set up) and if no result, fallback on custom action.
+-- - Managing completion is done as much with Neovim's built-in tools as
+--   possible.
+--
+-- To activate, put this file somewhere into 'lua' folder and call module's
+-- `setup()`. For example, put as 'lua/mini/completion.lua' and execute
+-- `require('mini.completion').setup()` Lua code. It may have `config` argument
+-- which should be a table overwriting default values using same structure.
+--
+-- Default `config`:
+-- {
+--   -- Delay (debounce type, in ms) between character insert and triggering
+--   -- completion
+--   delay_completion = 100,
+--   -- Delay (debounce type, in ms) between focusing on completion item and
+--   -- triggering floating documentation.
+--   delay_docs = 100,
+--   -- Maximum dimensions of floating documentation for completion item. Should
+--   -- have 'height' and 'width' fields.
+--   docs_max_dim = {height = 25, width = 80},
+--   -- Fallback action. It will always be run in Insert mode. To use Neovim's
+--   -- built-in completion (see `:h ins-completion`), supply its mapping as
+--   -- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
+--   fallback_action = <function equivalent to '<C-n>'>,
+--   mappings = {
+--     force = '<C-Space>' -- Force completion
+--   }
+-- }
+--
+-- Features:
+-- - Two-stage chain completion:
+--     - First stage is implemented via `completefunc` (see `:h
+--       'completefunc'`). It tries to get completion items from LSP client
+--       (via 'textDocument/completion' request).
+--     - If first stage resulted into no candidates, fallback action is
+--       executed. The most tested actions are Neovim's built-in insert
+--       completion (see `:h ins-completion`).
+-- - Completion suggestions and documentation for completion items appear after
+--   some configurable amount of delay, which allows smooth fast typing and
+--   item selection respectively.
+-- - Autocompletion is triggered on Neovim's built-in events.
+-- - User can force trigger via `MiniCompletion.complete()` which by default is
+--   mapped to `<C-space>`.
 --
 -- Comparisons:
 -- - 'completion-nvim':
 --     - Has timer activated on InsertEnter which does something every period
 --       of time (makes LSP request, shows floating help). MiniCompletion
 --       relies on Neovim's (Vim's) events.
+--     - Uses 'textDocument/hover' request to show documentation.
 -- - 'nvim-compe':
 --     - More elaborate design which allows multiple sources. However, it
 --       currently does not have 'opened buffers' source, which is very handy.
@@ -18,6 +61,8 @@
 --       LSP and fallback.
 --     - Provide custom ways to filter completion suggestions. MiniCompletion
 --       relies on Neovim's (which currently is equal to Vim's) filtering.
+--     - Currently use simple text wrapping in documentation window. This
+--       module wraps by words (see `:h linebreak` and `:h breakat`).
 
 -- Module and its helper
 local MiniCompletion = {}
@@ -65,7 +110,7 @@ end
 MiniCompletion.delay_completion = 100
 
 ---- Delay (debounce type, in ms) between focusing on completion item and
----- triggering floating docs.
+---- triggering floating documentation.
 MiniCompletion.delay_docs = 100
 
 ---- Maximum dimensions of floating documentation for completion item. Should
@@ -74,7 +119,7 @@ MiniCompletion.docs_max_dim = {height = 25, width = 80}
 
 ---- Fallback action. It will always be run in Insert mode. To use Neovim's
 ---- built-in completion (see `:h ins-completion`), supply its mapping as
----- string. For example, to use 'whole lines' completion, supply '<c-x><c-l>'.
+---- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
 MiniCompletion.fallback_action = function()
   vim.api.nvim_feedkeys(H.trigger_keys.ctrl_n, 'n', false)
 end
