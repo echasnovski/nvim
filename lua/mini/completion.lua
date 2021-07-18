@@ -63,6 +63,31 @@
 --       relies on Neovim's (which currently is equal to Vim's) filtering.
 --     - Currently use simple text wrapping in documentation window. This
 --       module wraps by words (see `:h linebreak` and `:h breakat`).
+--
+-- Overall implementation design:
+-- - Completion:
+--     - On `InsertCharPre` event try to start auto completion. If needed,
+--       start timer which after delay will start completion process. Stop this
+--       timer if it is not needed.
+--     - When timer is activated, first execute `completefunc` which tries LSP
+--       completion by asynchronously sending LSP 'textDocument/completion'
+--       request to all LSP clients. When all are done, execute callback which
+--       processes results, stores them in LSP cache and rerun `completefunc`
+--       which produces completion popup.
+--     - If previous step didn't result into any completion, execute (in Insert
+--       mode and if no popup) fallback action.
+-- - Documentation:
+--     - On `CompleteChanged` start auto documentation with similar to
+--       completion timer pattern.
+--     - If timer is activated, try these sources of documentation:
+--         - 'info' field of completion item (see `:h complete-items`).
+--         - 'documentation' field of LSP's previously returned result.
+--         - 'documentation' field in result of asynchronous
+--           'completeItem/resolve' LSP request.
+--     - If documentation doesn't consist only from whitespace, show floating
+--       window with its content. Its dimensions and position are computed
+--       based on current state of Neovim's data and content itself (which will
+--       be displayed wrapped with `linebreak` option).
 
 -- Module and its helper
 local MiniCompletion = {}
@@ -121,7 +146,7 @@ MiniCompletion.docs_max_dim = {height = 25, width = 80}
 ---- built-in completion (see `:h ins-completion`), supply its mapping as
 ---- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
 MiniCompletion.fallback_action = function()
-  vim.api.nvim_feedkeys(H.trigger_keys.ctrl_n, 'n', false)
+  vim.api.nvim_feedkeys(H.keys.ctrl_n, 'n', false)
 end
 
 -- Module functionality
@@ -256,7 +281,7 @@ function MiniCompletion.complete_lsp(findstart, base)
   end
 end
 
--- Helpers
+-- Helper data
 ---- Module default config
 H.config = {
   delay_completion = MiniCompletion.delay_completion,
@@ -268,6 +293,33 @@ H.config = {
   }
 }
 
+---- Commonly used key sequences
+H.keys = {
+  usercompl = vim.api.nvim_replace_termcodes('<C-x><C-u>', true, false, true),
+  ctrl_n = vim.api.nvim_replace_termcodes('<C-g><C-g><C-n>', true, false, true),
+}
+
+---- Timers for auto actions
+H.timers = {auto_complete = vim.loop.new_timer(), auto_docs = vim.loop.new_timer()}
+
+---- Table describing state of all used LSP requests. Structure:
+---- - id: identifier (consecutive numbers).
+---- - status: status. One of 'sent', 'received', 'done', 'canceled'.
+---- - result: result of request.
+---- - cancel_fun: function which cancels current request.
+H.lsp = {
+  completion = {id = 0, status = nil, result = nil, cancel_fun = nil},
+  resolve    = {id = 0, status = nil, result = nil, cancel_fun = nil}
+}
+
+---- Cache for floating documentation
+H.docs = {bufnr = nil, event = nil, id = 0, lines = nil, winnr = nil}
+
+---- Cache for various things
+H.cache = {fallback = true, force = false, popup_source = nil}
+
+-- Helper functions
+---- Settings
 function H.apply_settings(config)
   vim.validate({
     delay_completion = {config.delay_completion, 'number'},
@@ -299,25 +351,17 @@ function H.apply_settings(config)
   end
 end
 
-H.trigger_keys = {
-  usercompl = vim.api.nvim_replace_termcodes('<C-x><C-u>', true, false, true),
-  ctrl_n = vim.api.nvim_replace_termcodes('<C-g><C-g><C-n>', true, false, true),
-}
+function H.make_ins_fallback(keys)
+  local trigger_keys = vim.api.nvim_replace_termcodes(
+    -- Having `<C-g><C-g>` also (for some mysterious reason) helps to avoid
+    -- some weird behavior. For example, if `keys = '<C-x><C-l>'` then Neovim
+    -- starts new line when there is no suggestions.
+    '<C-g><C-g>' .. keys, true, false, true
+  )
+  return function() vim.api.nvim_feedkeys(trigger_keys, 'n', false) end
+end
 
-H.timers = {auto_complete = vim.loop.new_timer(), auto_docs = vim.loop.new_timer()}
-
--- Table describing state of all used LSP requests. Structure:
--- - id: identifier (consecutive numbers).
--- - status: status. One of 'sent', 'received', 'done', 'canceled'.
--- - result: result of request.
--- - cancel_fun: function which cancels current request.
-H.lsp = {
-  completion = {id = 0, status = nil, result = nil, cancel_fun = nil},
-  resolve    = {id = 0, status = nil, result = nil, cancel_fun = nil}
-}
-
-H.cache = {fallback = true, force = false, popup_source = nil}
-
+---- Triggers
 function H.trigger()
   if vim.fn.mode() ~= 'i' then return end
   if H.has_lsp_clients() then
@@ -344,7 +388,7 @@ function H.trigger_lsp()
   -- When `force` is `true` then presence of popup shouldn't matter.
   local no_popup = H.cache.force or (not H.pumvisible())
   if no_popup and has_complete and vim.fn.mode() == 'i' then
-    vim.api.nvim_feedkeys(H.trigger_keys.usercompl, 'n', false)
+    vim.api.nvim_feedkeys(H.keys.usercompl, 'n', false)
   end
 end
 
@@ -357,35 +401,7 @@ function H.trigger_fallback()
   end
 end
 
-function H.make_ins_fallback(keys)
-  local trigger_keys = vim.api.nvim_replace_termcodes(
-    -- Having `<C-g><C-g>` also (for some mysterious reason) helps to avoid
-    -- some weird behavior. For example, if `keys = '<C-x><C-l>'` then Neovim
-    -- starts new line when there is no suggestions.
-    '<C-g><C-g>' .. keys, true, false, true
-  )
-  return function() vim.api.nvim_feedkeys(trigger_keys, 'n', false) end
-end
-
-function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
-
-function H.is_lsp_completion_trigger(char)
-  local triggers
-  for _, client in pairs(vim.lsp.buf_get_clients()) do
-    triggers = H.table_get(
-      client,
-      {'server_capabilities', 'completionProvider', 'triggerCharacters'}
-    )
-    if vim.tbl_contains(triggers or {}, char) then return true end
-  end
-  return false
-end
-
-function H.is_char_keyword(char)
-  -- Using Vim's `match()` and `keyword` enables respecting Cyrillic letters
-  return vim.fn.match(char, '[[:keyword:]]') >= 0
-end
-
+---- Stop actions
 function H.stop_complete()
   H.timers.auto_complete:stop()
   H.cancel_lsp({'completion'})
@@ -400,6 +416,21 @@ function H.stop_docs()
   H.close_floating_docs()
 end
 
+---- LSP
+function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
+
+function H.is_lsp_completion_trigger(char)
+  local triggers
+  for _, client in pairs(vim.lsp.buf_get_clients()) do
+    triggers = H.table_get(
+      client,
+      {'server_capabilities', 'completionProvider', 'triggerCharacters'}
+    )
+    if vim.tbl_contains(triggers or {}, char) then return true end
+  end
+  return false
+end
+
 function H.cancel_lsp(names)
   names = names or {'completion', 'resolve'}
   for _, n in pairs(names) do
@@ -408,16 +439,6 @@ function H.cancel_lsp(names)
       H.lsp[n].status = 'canceled'
     end
   end
-end
-
-function H.pumvisible() return vim.fn.pumvisible() > 0 end
-
-function H.get_completion_start()
-  -- Compute start position of latest keyword (as in `vim.lsp.omnifunc`)
-  local pos = vim.api.nvim_win_get_cursor(0)
-  local line = vim.api.nvim_get_current_line()
-  local line_to_cursor = line:sub(1, pos[2])
-  return vim.fn.match(line_to_cursor, '\\k*$')
 end
 
 function H.process_lsp_request_result(request_result, processor)
@@ -433,8 +454,11 @@ function H.process_lsp_request_result(request_result, processor)
   return res
 end
 
-H.docs = {bufnr = nil, event = nil, id = 0, lines = nil, winnr = nil}
+function H.is_lsp_current(name, id)
+  return H.lsp[name].id == id and H.lsp[name].status == 'sent'
+end
 
+---- Floating documentation
 function H.show_floating_docs()
   local event = H.docs.event
   if not event then return end
@@ -581,7 +605,7 @@ function H.floating_docs_options()
   }
 end
 
--- @return height, width
+------ @return height, width
 function H.floating_dimensions(lines, max_height, max_width)
   -- Simulate how lines will look in window with `wrap` and `linebreak`.
   -- This is not 100% accurate (mostly when multibyte characters are present
@@ -619,6 +643,22 @@ function H.close_floating_docs(keep_timer)
   vim.fn.setbufvar(H.docs.bufnr, '&buftype', 'nofile')
 end
 
+---- Various helpers
+function H.is_char_keyword(char)
+  -- Using Vim's `match()` and `keyword` enables respecting Cyrillic letters
+  return vim.fn.match(char, '[[:keyword:]]') >= 0
+end
+
+function H.pumvisible() return vim.fn.pumvisible() > 0 end
+
+function H.get_completion_start()
+  -- Compute start position of latest keyword (as in `vim.lsp.omnifunc`)
+  local pos = vim.api.nvim_win_get_cursor(0)
+  local line = vim.api.nvim_get_current_line()
+  local line_to_cursor = line:sub(1, pos[2])
+  return vim.fn.match(line_to_cursor, '\\k*$')
+end
+
 function H.is_whitespace(s)
   if type(s) == 'string' then return s:find('^%s*$') end
   if type(s) == 'table' then
@@ -630,12 +670,8 @@ function H.is_whitespace(s)
   return false
 end
 
-function H.is_lsp_current(name, id)
-  return H.lsp[name].id == id and H.lsp[name].status == 'sent'
-end
-
--- Simulate spliting single line `l` like how it would look inside window with
--- `wrap` and `linebreak` set to `true`
+------ Simulate spliting single line `l` like how it would look inside window
+------ with `wrap` and `linebreak` set to `true`
 function H.wrap_line(l, width)
   local breakat_pattern = '[' .. vim.o.breakat .. ']'
   local res = {}
