@@ -405,10 +405,33 @@ function H.get_marks_pos(mode)
     pos2[2] = vim.fn.col({pos2[1], '$'}) - 2
   end
 
+  -- Make columns 1-based instead of 0-based. This is needed because
+  -- `nvim_buf_get_mark()` returns the first 0-based byte of mark symbol and
+  -- all the following operations are done with Lua's 1-based indexing.
+  pos1[2], pos2[2] = pos1[2] + 1, pos2[2] + 1
+
+  -- Tweak second position to respect multibyte characters. Reasoning:
+  -- - These positions will be used with 'insert_into_line(line, col, text)' to
+  --   add some text. Its logic is `line[1:(col - 1)] + text + line[col:]`,
+  --   where slicing is meant on byte level.
+  -- - For the first mark we want the first byte of symbol, then text will be
+  --   insert to the left of the mark.
+  -- - For the second mark we want last byte of symbol. To add surrounding to
+  --   the right, use `pos2[2] + 1`.
+  local line2 = vim.fn.getline(pos2[1])
+  ---- This returns the last byte inside character because
+  ---- `vim.str_byteindex()` 'rounds upwards to the end of that sequence'.
+  pos2[2] = vim.str_byteindex(
+    line2,
+    -- Use `math.min()` because it might lead to 'index out of range' error
+    -- when mark is positioned at the end of line (that extra space which is
+    -- selected when selecting with `v$`)
+    vim.str_utfindex(line2, math.min(#line2, pos2[2]))
+  )
+
   return {
-    -- Make columns 1-based instead of 0-based
-    first  = {line = pos1[1], col = pos1[2] + 1},
-    second = {line = pos2[1], col = pos2[2] + 1}
+    first  = {line = pos1[1], col = pos1[2]},
+    second = {line = pos2[1], col = pos2[2]}
   }
 end
 
@@ -527,8 +550,8 @@ function H.delete_linepart(linepart)
 end
 
 function H.insert_into_line(line_num, col, text)
-  -- After this, `text` in line will start at `col` character `col` should be
-  -- not less than 1 (otherwise negative indexing will occur)
+  -- Important to remember when working with multibyte characters: `col` here
+  -- represents byte index, not character
   local line = vim.fn.getline(line_num)
   local new_line = line:sub(1, col - 1) .. text .. line:sub(col)
   vim.fn.setline(line_num, new_line)
