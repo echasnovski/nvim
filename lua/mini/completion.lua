@@ -118,10 +118,6 @@ function MiniCompletion.setup(config)
     augroup END
   ]], false)
 
-  -- Create a permanent buffer where documentation will be displayed
-  H.docs.bufnr = vim.api.nvim_create_buf(false, true)
-  vim.fn.setbufvar(H.docs.bufnr, '&buftype', 'nofile')
-
   -- Setup mappings
   vim.api.nvim_set_keymap(
     'i', mappings.force, '<cmd>lua MiniCompletion.complete()<cr>',
@@ -483,6 +479,18 @@ function H.show_floating_docs()
   -- Don't show anything if there is nothing to show
   if not lines or H.is_whitespace(lines) then return end
 
+  -- If not already, create a permanent buffer where documentation will be
+  -- displayed. For some reason, it is important to have it created not in
+  -- `setup()` because in that case there is a small flash (which is really a
+  -- brief open of window at screen top, focus on it, and its close) on the
+  -- first show of floating docs.
+  if not H.docs.bufnr then
+    H.docs.bufnr = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(H.docs.bufnr, 'MiniCompletion:floating-docs')
+    -- Make this buffer a scratch (can close without saving)
+    vim.fn.setbufvar(H.docs.bufnr, '&buftype', 'nofile')
+  end
+
   -- Add `lines` to docs buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
   vim.lsp.util.stylize_markdown(
@@ -640,7 +648,7 @@ function H.close_floating_docs(keep_timer)
   H.docs.winnr = nil
 
   -- For some reason 'buftype' might be reset. Ensure that buffer is scratch.
-  vim.fn.setbufvar(H.docs.bufnr, '&buftype', 'nofile')
+  if H.docs.bufnr then vim.fn.setbufvar(H.docs.bufnr, '&buftype', 'nofile') end
 end
 
 ---- Various helpers
