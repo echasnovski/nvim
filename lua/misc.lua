@@ -185,3 +185,31 @@ function head(t, n)
   end
   return res
 end
+
+-- Return "last" elements of table as decided by `pairs`
+--
+-- This function makes two passes through elements of `t`:
+-- - First to count number of elements.
+-- - Second to construct result.
+--
+-- NOTE: order of elements might be different.
+--
+-- @param t Table
+-- @param n (default: 5) Maximum number of last elements
+-- @return Table with at most `n` last elements of `t` (with same keys)
+function tail(t, n)
+  n = n or 5
+
+  -- Count number of elements on first pass
+  local n_all = 0
+  for _, _ in pairs(t) do n_all = n_all + 1 end
+
+  -- Construct result on second pass
+  local res = {}
+  local i, start_i = 0, n_all - n + 1
+  for k, val in pairs(t) do
+    i = i + 1
+    if i >= start_i then res[k] = val end
+  end
+  return res
+end
