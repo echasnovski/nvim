@@ -167,3 +167,21 @@ end
 -- for k, val in pairs(vim.lsp) do table.insert(big_lines, 'lsp.' .. k) end
 -- for k, val in pairs(vim.loop) do table.insert(big_lines, 'loop.' .. k) end
 -- table.sort(big_lines)
+
+-- Return "first" elements of table as decided by `pairs`
+--
+-- NOTE: order of elements might be different.
+--
+-- @param t Table
+-- @param n (default: 5) Maximum number of first elements
+-- @return Table with at most `n` first elements of `t` (with same keys)
+function head(t, n)
+  n = n or 5
+  local res, n_res = {}, 0
+  for k, val in pairs(t) do
+    if n_res >= n then return res end
+    res[k] = val
+    n_res = n_res + 1
+  end
+  return res
+end
