@@ -149,17 +149,24 @@ end
 function MiniCompletion.auto_complete()
   H.timers.auto_complete:stop()
 
-  local char_is_trigger = H.is_lsp_completion_trigger(vim.v.char)
-  if H.pumvisible() or
-    not (H.is_char_keyword(vim.v.char) or char_is_trigger) then
-    H.stop_complete()
+  -- Don't do anything if popup is visible
+  if H.pumvisible() then
+    -- Keep completion source as it is needed all time when popup is visible
+    H.stop_complete(true)
+    return
+  end
+
+  -- Stop everything if inserted character is not appropriate
+  local char_is_trigger = H.is_lsp_trigger(vim.v.char, 'completion')
+  if not (H.is_char_keyword(vim.v.char) or char_is_trigger) then
+    H.stop_complete(false)
     return
   end
 
   -- If character is purely lsp trigger, make new LSP request without fallback
-  -- and forcing new completion
+  -- and force new completion
   if char_is_trigger then H.cancel_lsp() end
-  H.cache.fallback, H.cache.force = not char_is_trigger, char_is_trigger
+  H.complete.fallback, H.complete.force = not char_is_trigger, char_is_trigger
 
   -- Using delay (of debounce type) seems to actually improve user experience
   -- as it allows fast typing without many popups. Also useful when synchronous
@@ -171,7 +178,7 @@ end
 
 function MiniCompletion.complete(fallback, force)
   H.stop_complete()
-  H.cache.fallback, H.cache.force = fallback or true, force or true
+  H.complete.fallback, H.complete.force = fallback or true, force or true
   H.trigger()
 end
 
@@ -198,7 +205,6 @@ function MiniCompletion.auto_docs()
 end
 
 function MiniCompletion.stop_all()
-  H.cache.popup_source = nil
   H.stop_complete()
   H.stop_docs()
 end
@@ -266,13 +272,13 @@ function MiniCompletion.complete_lsp(findstart, base)
     H.lsp.completion.status = 'done'
 
     -- Maybe trigger fallback action
-    if vim.tbl_isempty(words) and H.cache.fallback then
+    if vim.tbl_isempty(words) and H.complete.fallback then
       H.trigger_fallback()
       return
     end
 
     -- Track from which source is current popup
-    H.cache.popup_source = 'lsp'
+    H.complete.source = 'lsp'
     return words
   end
 end
@@ -308,11 +314,11 @@ H.lsp = {
   resolve    = {id = 0, status = nil, result = nil, cancel_fun = nil}
 }
 
+---- Cache for completion
+H.complete = {fallback = true, force = false, source = nil}
+
 ---- Cache for floating documentation
 H.docs = {bufnr = nil, event = nil, id = 0, lines = nil, winnr = nil}
-
----- Cache for various things
-H.cache = {fallback = true, force = false, popup_source = nil}
 
 -- Helper functions
 ---- Settings
@@ -362,7 +368,7 @@ function H.trigger()
   if vim.fn.mode() ~= 'i' then return end
   if H.has_lsp_clients() then
     H.trigger_lsp()
-  elseif H.cache.fallback then
+  elseif H.complete.fallback then
     H.trigger_fallback()
   end
 end
@@ -382,26 +388,27 @@ function H.trigger_lsp()
   --   "done", it will once make whole LSP request. Having check for visible
   --   popup should prevent here the call to complete-function.
   -- When `force` is `true` then presence of popup shouldn't matter.
-  local no_popup = H.cache.force or (not H.pumvisible())
+  local no_popup = H.complete.force or (not H.pumvisible())
   if no_popup and has_complete and vim.fn.mode() == 'i' then
     vim.api.nvim_feedkeys(H.keys.usercompl, 'n', false)
   end
 end
 
 function H.trigger_fallback()
-  local no_popup = H.cache.force or (not H.pumvisible())
+  local no_popup = H.complete.force or (not H.pumvisible())
   if no_popup and vim.fn.mode() == 'i' then
     -- Track from which source is current popup
-    H.cache.popup_source = 'fallback'
+    H.complete.source = 'fallback'
     MiniCompletion.fallback_action()
   end
 end
 
 ---- Stop actions
-function H.stop_complete()
+function H.stop_complete(keep_source)
   H.timers.auto_complete:stop()
   H.cancel_lsp({'completion'})
-  H.cache.fallback, H.cache.force = true, false
+  H.complete.fallback, H.complete.force = true, false
+  if not keep_source then H.complete.source = nil end
 end
 
 function H.stop_docs()
@@ -415,12 +422,13 @@ end
 ---- LSP
 function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
 
-function H.is_lsp_completion_trigger(char)
+function H.is_lsp_trigger(char, type)
   local triggers
+  local providers = {completion = 'completionProvider'}
   for _, client in pairs(vim.lsp.buf_get_clients()) do
     triggers = H.table_get(
       client,
-      {'server_capabilities', 'completionProvider', 'triggerCharacters'}
+      {'server_capabilities', providers[type], 'triggerCharacters'}
     )
     if vim.tbl_contains(triggers or {}, char) then return true end
   end
@@ -529,7 +537,7 @@ function H.floating_docs_lines(docs_id)
   end
 
   -- If popup is not from LSP then there is nothing more to do
-  if H.cache.popup_source ~= 'lsp' then return nil end
+  if H.complete.source ~= 'lsp' then return nil end
 
   -- Try to get documentation from LSP's initial completion result
   local lsp_completion_item = H.table_get(
