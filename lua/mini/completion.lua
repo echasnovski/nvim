@@ -19,9 +19,15 @@
 --   -- Delay (debounce type, in ms) between focusing on completion item and
 --   -- triggering floating documentation.
 --   delay_docs = 100,
+--   -- Delay (debounce type, in ms) between end of cursor movement and triggering
+--   -- signature help.
+--   delay_signature = 100,
 --   -- Maximum dimensions of floating documentation for completion item. Should
 --   -- have 'height' and 'width' fields.
 --   docs_max_dim = {height = 25, width = 80},
+--   -- Maximum dimensions of signature help. Should have 'height' and 'width'
+--   -- fields.
+--   signature_max_dim = {height = 25, width = 80},
 --   -- Fallback action. It will always be run in Insert mode. To use Neovim's
 --   -- built-in completion (see `:h ins-completion`), supply its mapping as
 --   -- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
@@ -39,10 +45,12 @@
 --     - If first stage resulted into no candidates, fallback action is
 --       executed. The most tested actions are Neovim's built-in insert
 --       completion (see `:h ins-completion`).
--- - Completion suggestions and documentation for completion items appear after
---   some configurable amount of delay, which allows smooth fast typing and
---   item selection respectively.
--- - Autocompletion is triggered on Neovim's built-in events.
+-- - Automatic display in floating window of completion item documentation and
+--   signature help.
+-- - Automatic actions are done after some configurable amount of delay. This
+--   reduces computational load and allows fast typing (completion and
+--   signature help) and item selection (documentation)
+-- - Autoactions are triggered on Neovim's built-in events.
 -- - User can force trigger via `MiniCompletion.complete()` which by default is
 --   mapped to `<C-space>`.
 --
@@ -56,6 +64,7 @@
 --     - More elaborate design which allows multiple sources. However, it
 --       currently does not have 'opened buffers' source, which is very handy.
 --     - Doesn't allow fallback action.
+--     - Doesn't provide signature help.
 -- - Both:
 --     - Can manage multiple configurable sources. MiniCompletion has only two:
 --       LSP and fallback.
@@ -88,6 +97,17 @@
 --       window with its content. Its dimensions and position are computed
 --       based on current state of Neovim's data and content itself (which will
 --       be displayed wrapped with `linebreak` option).
+-- - Signature help (similar to documentation):
+--     - On `CursorMovedI` start auto documentation (if there is any active LSP
+--       client) with similar to completion timer pattern. Better event might
+--       be `InsertCharPre` but there are issues with 'autopair-type' plugins.
+--     - Check if character left to cursor is appropriate (')' or LSP's
+--       signature help trigger characters). If not, do nothing.
+--     - If timer is activated, send 'textDocument/signatureHelp' request to
+--       all LSP clients. On callback, process their results and open floating
+--       window (its characteristics are computed similar to documentation).
+--       For every LSP client it shows only active signature (in case there are
+--       many).
 
 -- Module and its helper
 local MiniCompletion = {}
@@ -111,8 +131,9 @@ function MiniCompletion.setup(config)
       au!
       au InsertCharPre   * lua MiniCompletion.auto_complete()
       au CompleteChanged * lua MiniCompletion.auto_docs()
-      au InsertLeavePre  * lua MiniCompletion.stop_all()
-      au CompleteDonePre * lua MiniCompletion.stop_all()
+      au CursorMovedI    * lua MiniCompletion.auto_signature()
+      au InsertLeavePre  * lua MiniCompletion.stop()
+      au CompleteDonePre * lua MiniCompletion.stop({'complete', 'docs'})
       au TextChangedI    * lua MiniCompletion.on_text_changed_i()
       au BufEnter        * set completefunc=v:lua.MiniCompletion.complete_lsp
     augroup END
@@ -134,9 +155,17 @@ MiniCompletion.delay_completion = 100
 ---- triggering floating documentation.
 MiniCompletion.delay_docs = 100
 
+---- Delay (debounce type, in ms) between end of cursor movement and triggering
+---- signature help.
+MiniCompletion.delay_signature = 100
+
 ---- Maximum dimensions of floating documentation for completion item. Should
 ---- have 'height' and 'width' fields.
 MiniCompletion.docs_max_dim = {height = 25, width = 80}
+
+---- Maximum dimensions of signature help. Should have 'height' and 'width'
+---- fields.
+MiniCompletion.signature_max_dim = {height = 25, width = 80}
 
 ---- Fallback action. It will always be run in Insert mode. To use Neovim's
 ---- built-in completion (see `:h ins-completion`), supply its mapping as
@@ -147,7 +176,7 @@ end
 
 -- Module functionality
 function MiniCompletion.auto_complete()
-  H.timers.auto_complete:stop()
+  H.complete.timer:stop()
 
   -- Don't do anything if popup is visible
   if H.pumvisible() then
@@ -171,7 +200,7 @@ function MiniCompletion.auto_complete()
   -- Using delay (of debounce type) seems to actually improve user experience
   -- as it allows fast typing without many popups. Also useful when synchronous
   -- `<C-n>` completion blocks typing.
-  H.timers.auto_complete:start(
+  H.complete.timer:start(
     MiniCompletion.delay_completion, 0, vim.schedule_wrap(H.trigger)
   )
 end
@@ -183,11 +212,11 @@ function MiniCompletion.complete(fallback, force)
 end
 
 function MiniCompletion.auto_docs()
-  H.timers.auto_docs:stop()
+  H.docs.timer:stop()
 
   -- Defer execution because of textlock during `CompleteChanged` event
   -- Don't stop timer when closing floating docs because it is needed
-  vim.defer_fn(function() H.close_floating_docs(true) end, 0)
+  vim.defer_fn(function() H.close_action_window(H.docs, true) end, 0)
 
   -- Stop current LSP request that tries to get not current data
   H.cancel_lsp({'resolve'})
@@ -199,14 +228,32 @@ function MiniCompletion.auto_docs()
   -- Don't event try to show docs if nothing is selected in popup
   if vim.tbl_isempty(H.docs.event.completed_item) then return end
 
-  H.timers.auto_docs:start(
+  H.docs.timer:start(
     MiniCompletion.delay_docs, 0, vim.schedule_wrap(H.show_floating_docs)
   )
 end
 
-function MiniCompletion.stop_all()
-  H.stop_complete()
-  H.stop_docs()
+function MiniCompletion.auto_signature()
+  H.signature.timer:stop()
+  if not H.has_lsp_clients() then return end
+
+  local left_char = H.get_left_char()
+  local char_is_trigger = left_char == ')' or H.is_lsp_trigger(left_char, 'signature')
+  if not char_is_trigger then return end
+
+  H.signature.timer:start(
+    MiniCompletion.delay_signature, 0, vim.schedule_wrap(function()
+      -- Having closing inside timer callback enables "fixed" window effect if
+      -- trigger character and its followup are typed fast enough
+      H.close_action_window(H.signature)
+      H.show_signature()
+    end)
+  )
+end
+
+function MiniCompletion.stop(actions)
+  actions = actions or {'complete', 'docs', 'signature'}
+  for _, n in pairs(actions) do H.stop_actions[n]() end
 end
 
 function MiniCompletion.on_text_changed_i()
@@ -288,7 +335,9 @@ end
 H.config = {
   delay_completion = MiniCompletion.delay_completion,
   delay_docs = MiniCompletion.delay_docs,
+  delay_signature = MiniCompletion.delay_signature,
   docs_max_dim = MiniCompletion.docs_max_dim,
+  signature_max_dim = MiniCompletion.signature_max_dim,
   fallback_action = MiniCompletion.fallback_action,
   mappings = {
     force = '<C-Space>' -- Force completion
@@ -301,9 +350,6 @@ H.keys = {
   ctrl_n = vim.api.nvim_replace_termcodes('<C-g><C-g><C-n>', true, false, true),
 }
 
----- Timers for auto actions
-H.timers = {auto_complete = vim.loop.new_timer(), auto_docs = vim.loop.new_timer()}
-
 ---- Table describing state of all used LSP requests. Structure:
 ---- - id: identifier (consecutive numbers).
 ---- - status: status. One of 'sent', 'received', 'done', 'canceled'.
@@ -311,30 +357,35 @@ H.timers = {auto_complete = vim.loop.new_timer(), auto_docs = vim.loop.new_timer
 ---- - cancel_fun: function which cancels current request.
 H.lsp = {
   completion = {id = 0, status = nil, result = nil, cancel_fun = nil},
-  resolve    = {id = 0, status = nil, result = nil, cancel_fun = nil}
+  resolve    = {id = 0, status = nil, result = nil, cancel_fun = nil},
+  signature  = {id = 0, status = nil, result = nil, cancel_fun = nil}
 }
 
 ---- Cache for completion
-H.complete = {fallback = true, force = false, source = nil}
+H.complete = {fallback = true, force = false, source = nil, timer = vim.loop.new_timer()}
 
 ---- Cache for floating documentation
-H.docs = {bufnr = nil, event = nil, id = 0, lines = nil, winnr = nil}
+H.docs = {bufnr = nil, event = nil, id = 0, timer = vim.loop.new_timer(), winnr = nil}
+
+---- Cache for signature help
+H.signature = {bufnr = nil, timer = vim.loop.new_timer(), winnr = nil}
 
 -- Helper functions
 ---- Settings
 function H.apply_settings(config)
+  local is_max_dim = function(x)
+    if type(x) ~= 'table' then return false end
+    local keys = vim.tbl_keys(x)
+    return vim.tbl_contains(keys, 'height') and vim.tbl_contains(keys, 'width')
+  end
+  local max_dim_msg = 'table with \'height\' and \'width\' fields'
+
   vim.validate({
     delay_completion = {config.delay_completion, 'number'},
     delay_docs = {config.delay_docs, 'number'},
-    docs_max_dim = {
-      config.docs_max_dim,
-      function(x)
-        if type(x) ~= 'table' then return false end
-        local keys = vim.tbl_keys(x)
-        return vim.tbl_contains(keys, 'height') and vim.tbl_contains(keys, 'width')
-      end,
-      'table with \'height\' and \'width\' fields'
-    },
+    delay_signature = {config.delay_signature, 'number'},
+    docs_max_dim = {config.docs_max_dim, is_max_dim, max_dim_msg},
+    signature_max_dim = {config.signature_max_dim, is_max_dim, max_dim_msg},
     fallback_action = {
       config.fallback_action,
       function(x) return type(x) == 'function' or type(x) == 'string' end,
@@ -344,7 +395,9 @@ function H.apply_settings(config)
 
   MiniCompletion.delay_completion = config.delay_completion
   MiniCompletion.delay_docs = config.delay_docs
+  MiniCompletion.delay_signature = config.delay_signature
   MiniCompletion.docs_max_dim = config.docs_max_dim
+  MiniCompletion.signature_max_dim = config.signature_max_dim
 
   if type(config.fallback_action) == 'string' then
     MiniCompletion.fallback_action = H.make_ins_fallback(config.fallback_action)
@@ -405,7 +458,7 @@ end
 
 ---- Stop actions
 function H.stop_complete(keep_source)
-  H.timers.auto_complete:stop()
+  H.complete.timer:stop()
   H.cancel_lsp({'completion'})
   H.complete.fallback, H.complete.force = true, false
   if not keep_source then H.complete.source = nil end
@@ -414,17 +467,31 @@ end
 function H.stop_docs()
   -- Id update is needed to notify that all previous work is not current
   H.docs.id = H.docs.id + 1
-  H.timers.auto_docs:stop()
+  H.docs.timer:stop()
   H.cancel_lsp({'resolve'})
-  H.close_floating_docs()
+  H.close_action_window(H.docs)
 end
+
+function H.stop_signature()
+  H.signature.timer:stop()
+  H.cancel_lsp({'signature'})
+  H.close_action_window(H.signature)
+end
+
+H.stop_actions = {
+  complete = H.stop_complete, docs = H.stop_docs, signature = H.stop_signature
+}
 
 ---- LSP
 function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
 
 function H.is_lsp_trigger(char, type)
   local triggers
-  local providers = {completion = 'completionProvider'}
+  local providers = {
+    completion = 'completionProvider',
+    signature = 'signatureHelpProvider'
+  }
+
   for _, client in pairs(vim.lsp.buf_get_clients()) do
     triggers = H.table_get(
       client,
@@ -436,7 +503,7 @@ function H.is_lsp_trigger(char, type)
 end
 
 function H.cancel_lsp(names)
-  names = names or {'completion', 'resolve'}
+  names = names or {'completion', 'resolve', 'signature'}
   for _, n in pairs(names) do
     if vim.tbl_contains({'sent', 'received'}, H.lsp[n].status) then
       if H.lsp[n].cancel_fun then H.lsp[n].cancel_fun() end
@@ -451,7 +518,7 @@ function H.process_lsp_request_result(request_result, processor)
   local res = {}
   for _, item in pairs(request_result) do
     if not item.err and item.result then
-      vim.list_extend(res, processor(item.result))
+      vim.list_extend(res, processor(item.result) or {})
     end
   end
 
@@ -492,12 +559,7 @@ function H.show_floating_docs()
   -- `setup()` because in that case there is a small flash (which is really a
   -- brief open of window at screen top, focus on it, and its close) on the
   -- first show of floating docs.
-  if not H.docs.bufnr then
-    H.docs.bufnr = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_name(H.docs.bufnr, 'MiniCompletion:floating-docs')
-    -- Make this buffer a scratch (can close without saving)
-    vim.fn.setbufvar(H.docs.bufnr, '&buftype', 'nofile')
-  end
+  H.ensure_buffer(H.docs, 'MiniCompletion:floating-docs')
 
   -- Add `lines` to docs buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
@@ -513,11 +575,7 @@ function H.show_floating_docs()
     function()
       -- Ensure that window doesn't open when it shouldn't be
       if not (H.pumvisible() and vim.fn.mode() == 'i') then return end
-
-      H.docs.winnr = vim.api.nvim_open_win(H.docs.bufnr, false, opts)
-      vim.api.nvim_win_set_option(H.docs.winnr, "wrap", true)
-      vim.api.nvim_win_set_option(H.docs.winnr, "linebreak", true)
-      vim.api.nvim_win_set_option(H.docs.winnr, "breakindent", false)
+      H.open_action_window(H.docs, opts)
     end,
     0
   )
@@ -621,6 +679,96 @@ function H.floating_docs_options()
   }
 end
 
+---- Signature help
+function H.show_signature()
+  -- If there is no received LSP result, make request and exit
+  if H.lsp.signature.status ~= 'received' then
+    current_id = H.lsp.signature.id + 1
+    H.lsp.signature.id = current_id
+    H.lsp.signature.status = 'sent'
+
+    local bufnr = vim.api.nvim_get_current_buf()
+    local params = vim.lsp.util.make_position_params()
+
+    cancel_fun = vim.lsp.buf_request_all(bufnr, 'textDocument/signatureHelp', params, function(result)
+      if not H.is_lsp_current('signature', current_id) then return end
+
+      H.lsp.signature.status = 'received'
+      H.lsp.signature.result = result
+
+      -- Trigger `show_signature` again to take 'received' route
+      H.show_signature()
+    end)
+
+    -- Cache cancel function to disable requests when they are not needed
+    H.lsp.signature.cancel_fun = cancel_fun
+
+    return
+  end
+
+  -- Make lines to show in floating window
+  local lines = H.signature_lines()
+  H.lsp.signature.status = 'done'
+
+  -- Don't show anything if there is nothing to show
+  if not lines or H.is_whitespace(lines) then return end
+
+  -- If not already, create a permanent buffer for signature
+  H.ensure_buffer(H.signature, 'MiniCompletion:signature-help')
+
+  -- Add `lines` to signature buffer. Use `wrap_at` to have proper width of
+  -- 'non-UTF8' section separators.
+  vim.lsp.util.stylize_markdown(
+    H.signature.bufnr, lines, {wrap_at = MiniCompletion.signature_max_dim.width}
+  )
+
+  -- Compute floating window options
+  local opts = H.signature_opts()
+
+  -- Ensure that window doesn't open when it shouldn't be
+  if vim.fn.mode() == 'i' then H.open_action_window(H.signature, opts) end
+end
+
+function H.signature_lines()
+  return H.process_lsp_request_result(
+    H.lsp.signature.result,
+    function(single_result)
+      if not single_result.signatures then return {} end
+
+      -- Don't show documentation
+      for k, _ in pairs(single_result.signatures) do
+        single_result.signatures[k].documentation = nil
+      end
+
+      -- NOTE: currently this returns "active signature" in case there are more
+      -- than one (several prototypes, etc.)
+      return vim.lsp.util.convert_signature_help_to_markdown_lines(
+        single_result, vim.bo.filetype
+      )
+    end
+  )
+end
+
+function H.signature_opts()
+  local lines = vim.api.nvim_buf_get_lines(H.signature.bufnr, 0, -1, {})
+  local height, width = H.floating_dimensions(
+    lines,
+    MiniCompletion.signature_max_dim.height,
+    MiniCompletion.signature_max_dim.width
+  )
+  return vim.lsp.util.make_floating_popup_options(width, height, {})
+end
+
+---- Helpers for floating windows
+function H.ensure_buffer(cache, name)
+  if cache.bufnr then return end
+
+  cache.bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(cache.bufnr, name)
+  -- Make this buffer a scratch (can close without saving)
+  vim.fn.setbufvar(cache.bufnr, '&buftype', 'nofile')
+end
+
 ------ @return height, width
 function H.floating_dimensions(lines, max_height, max_width)
   -- Simulate how lines will look in window with `wrap` and `linebreak`.
@@ -649,14 +797,21 @@ function H.floating_dimensions(lines, max_height, max_width)
   return height, width
 end
 
-function H.close_floating_docs(keep_timer)
-  if not keep_timer then H.timers.auto_docs:stop() end
+function H.open_action_window(cache, opts)
+  cache.winnr = vim.api.nvim_open_win(cache.bufnr, false, opts)
+  vim.api.nvim_win_set_option(cache.winnr, "wrap", true)
+  vim.api.nvim_win_set_option(cache.winnr, "linebreak", true)
+  vim.api.nvim_win_set_option(cache.winnr, "breakindent", false)
+end
 
-  if H.docs.winnr then vim.api.nvim_win_close(H.docs.winnr, true) end
-  H.docs.winnr = nil
+function H.close_action_window(cache, keep_timer)
+  if not keep_timer then cache.timer:stop() end
+
+  if cache.winnr then vim.api.nvim_win_close(cache.winnr, true) end
+  cache.winnr = nil
 
   -- For some reason 'buftype' might be reset. Ensure that buffer is scratch.
-  if H.docs.bufnr then vim.fn.setbufvar(H.docs.bufnr, '&buftype', 'nofile') end
+  if cache.bufnr then vim.fn.setbufvar(cache.bufnr, '&buftype', 'nofile') end
 end
 
 ---- Various helpers
@@ -716,6 +871,13 @@ function H.table_get(t, id)
     if not (success and res) then return nil end
   end
   return res
+end
+
+function H.get_left_char()
+  local line = vim.api.nvim_get_current_line()
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+
+  return string.sub(line, col, col)
 end
 
 return MiniCompletion
