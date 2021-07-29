@@ -13,25 +13,26 @@
 --
 -- Default `config`:
 -- {
---   -- Delay (debounce type, in ms) between character insert and triggering
---   -- completion
---   delay_completion = 100,
---   -- Delay (debounce type, in ms) between focusing on completion item and
---   -- triggering its info.
---   delay_info = 100,
---   -- Delay (debounce type, in ms) between end of cursor movement and triggering
---   -- signature help.
---   delay_signature = 100,
---   -- Maximum dimensions of window for completion item info. Should have
---   -- 'height' and 'width' fields.
---   info_max_dim = {height = 25, width = 80},
---   -- Maximum dimensions of signature help. Should have 'height' and 'width'
---   -- fields.
---   signature_max_dim = {height = 25, width = 80},
+--   -- Whether to perform certain auto action. To disable action, add it with
+--   -- `false` or don't add at all.
+--   auto = {completion = true, info = true, signature = true},
+--
+--   -- Delay (debounce type, in ms) between certain Neovim event and action.
+--   delay = {completion = 100, info = 100, signature = 100},
+--
+--   -- Maximum dimensions of floating windows for certain actions. Action entry
+--   -- should be a table with 'height' and 'width' fields.
+--   window_dimensions = {
+--     info = {height = 25, width = 80},
+--     signature = {height = 25, width = 80}
+--   },
+--
 --   -- Fallback action. It will always be run in Insert mode. To use Neovim's
 --   -- built-in completion (see `:h ins-completion`), supply its mapping as
 --   -- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
 --   fallback_action = <function equivalent to '<C-n>'>,
+--
+--   -- Mappings
 --   mappings = {
 --     force = '<C-Space>' -- Force completion
 --   }
@@ -125,11 +126,17 @@ function MiniCompletion.setup(config)
   _G.MiniCompletion = MiniCompletion
 
   -- Setup config
+  vim.validate({config = {config, 'table', true}})
   config = setmetatable(config or {}, {__index = H.config})
+
+  vim.validate({['config.mappings'] = {config.mappings, 'table', true}})
   mappings = setmetatable(config.mappings, {__index = H.config.mappings})
 
   -- Apply settings
   H.apply_settings(config)
+
+  -- Apply mappings
+  H.apply_mappings(mappings)
 
   -- Setup module behavior
   vim.api.nvim_exec([[
@@ -145,12 +152,6 @@ function MiniCompletion.setup(config)
     augroup END
   ]], false)
 
-  -- Setup mappings
-  vim.api.nvim_set_keymap(
-    'i', mappings.force, '<cmd>lua MiniCompletion.complete()<cr>',
-    {noremap = true, silent = true}
-  )
-
   -- Create highlighting
   vim.api.nvim_exec([[
     hi MiniCompletionActiveParameter term=underline cterm=underline gui=underline
@@ -158,25 +159,19 @@ function MiniCompletion.setup(config)
 end
 
 -- Module settings
----- Delay (debounce type, in ms) between character insert and triggering
----- completion
-MiniCompletion.delay_completion = 100
+---- Whether to perform certain auto action. To disable action, add it with
+---- `false` or don't add at all.
+MiniCompletion.auto = {completion = true, info = true, signature = true}
 
----- Delay (debounce type, in ms) between focusing on completion item and
----- triggering its info.
-MiniCompletion.delay_info = 100
+---- Delay (debounce type, in ms) between certain Neovim event and action.
+MiniCompletion.delay = {completion = 100, info = 100, signature = 100}
 
----- Delay (debounce type, in ms) between end of cursor movement and triggering
----- signature help.
-MiniCompletion.delay_signature = 100
-
----- Maximum dimensions of window for completion item info. Should have
----- 'height' and 'width' fields.
-MiniCompletion.info_max_dim = {height = 25, width = 80}
-
----- Maximum dimensions of signature help. Should have 'height' and 'width'
----- fields.
-MiniCompletion.signature_max_dim = {height = 25, width = 80}
+---- Maximum dimensions of floating windows for certain actions. Action entry
+---- should be a table with 'height' and 'width' fields.
+MiniCompletion.window_dimensions = {
+  info = {height = 25, width = 80},
+  signature = {height = 25, width = 80}
+}
 
 ---- Fallback action. It will always be run in Insert mode. To use Neovim's
 ---- built-in completion (see `:h ins-completion`), supply its mapping as
@@ -187,6 +182,8 @@ end
 
 -- Module functionality
 function MiniCompletion.auto_complete()
+  if not MiniCompletion.auto.completion then return end
+
   H.complete.timer:stop()
 
   -- Don't do anything if popup is visible
@@ -212,7 +209,7 @@ function MiniCompletion.auto_complete()
   -- as it allows fast typing without many popups. Also useful when synchronous
   -- `<C-n>` completion blocks typing.
   H.complete.timer:start(
-    MiniCompletion.delay_completion, 0, vim.schedule_wrap(H.trigger)
+    MiniCompletion.delay.completion, 0, vim.schedule_wrap(H.trigger)
   )
 end
 
@@ -223,6 +220,8 @@ function MiniCompletion.complete(fallback, force)
 end
 
 function MiniCompletion.auto_info()
+  if not MiniCompletion.auto.info then return end
+
   H.info.timer:stop()
 
   -- Defer execution because of textlock during `CompleteChanged` event
@@ -240,11 +239,13 @@ function MiniCompletion.auto_info()
   if vim.tbl_isempty(H.info.event.completed_item) then return end
 
   H.info.timer:start(
-    MiniCompletion.delay_info, 0, vim.schedule_wrap(H.show_info_window)
+    MiniCompletion.delay.info, 0, vim.schedule_wrap(H.show_info_window)
   )
 end
 
 function MiniCompletion.auto_signature()
+  if not MiniCompletion.auto.signature then return end
+
   H.signature.timer:stop()
   if not H.has_lsp_clients() then return end
 
@@ -253,7 +254,7 @@ function MiniCompletion.auto_signature()
   if not char_is_trigger then return end
 
   H.signature.timer:start(
-    MiniCompletion.delay_signature, 0, vim.schedule_wrap(function()
+    MiniCompletion.delay.signature, 0, vim.schedule_wrap(function()
       -- Having closing inside timer callback enables "fixed" window effect if
       -- trigger character and its followup are typed fast enough
       H.close_action_window(H.signature)
@@ -344,11 +345,9 @@ end
 -- Helper data
 ---- Module default config
 H.config = {
-  delay_completion = MiniCompletion.delay_completion,
-  delay_info = MiniCompletion.delay_info,
-  delay_signature = MiniCompletion.delay_signature,
-  info_max_dim = MiniCompletion.info_max_dim,
-  signature_max_dim = MiniCompletion.signature_max_dim,
+  auto = MiniCompletion.auto,
+  delay = MiniCompletion.delay,
+  window_dimensions = MiniCompletion.window_dimensions,
   fallback_action = MiniCompletion.fallback_action,
   mappings = {
     force = '<C-Space>' -- Force completion
@@ -384,19 +383,25 @@ H.signature = {bufnr = nil, timer = vim.loop.new_timer(), winnr = nil}
 -- Helper functions
 ---- Settings
 function H.apply_settings(config)
-  local is_max_dim = function(x)
-    if type(x) ~= 'table' then return false end
-    local keys = vim.tbl_keys(x)
-    return vim.tbl_contains(keys, 'height') and vim.tbl_contains(keys, 'width')
-  end
-  local max_dim_msg = 'table with \'height\' and \'width\' fields'
-
   vim.validate({
-    delay_completion = {config.delay_completion, 'number'},
-    delay_info = {config.delay_info, 'number'},
-    delay_signature = {config.delay_signature, 'number'},
-    info_max_dim = {config.info_max_dim, is_max_dim, max_dim_msg},
-    signature_max_dim = {config.signature_max_dim, is_max_dim, max_dim_msg},
+    auto = {config.auto, 'table'},
+    ['auto.completion'] = {config.auto.completion, 'boolean', true},
+    ['auto.info'] = {config.auto.info, 'boolean', true},
+    ['auto.signature'] = {config.auto.signature, 'boolean', true},
+
+    delay = {config.delay, 'table'},
+    ['delay.completion'] = {config.delay.completion, 'number'},
+    ['delay.info'] = {config.delay.info, 'number'},
+    ['delay.signature'] = {config.delay.signature, 'number'},
+
+    window_dimensions = {config.window_dimensions, 'table'},
+    ['window_dimensions.info'] = {config.window_dimensions.info, 'table'},
+    ['window_dimensions.info.height'] = {config.window_dimensions.info.height, 'number'},
+    ['window_dimensions.info.width'] = {config.window_dimensions.info.width, 'number'},
+    ['window_dimensions.signature'] = {config.window_dimensions.signature, 'table'},
+    ['window_dimensions.signature.height'] = {config.window_dimensions.signature.height, 'number'},
+    ['window_dimensions.signature.width'] = {config.window_dimensions.signature.width, 'number'},
+
     fallback_action = {
       config.fallback_action,
       function(x) return type(x) == 'function' or type(x) == 'string' end,
@@ -404,17 +409,24 @@ function H.apply_settings(config)
     }
   })
 
-  MiniCompletion.delay_completion = config.delay_completion
-  MiniCompletion.delay_info = config.delay_info
-  MiniCompletion.delay_signature = config.delay_signature
-  MiniCompletion.info_max_dim = config.info_max_dim
-  MiniCompletion.signature_max_dim = config.signature_max_dim
+  MiniCompletion.auto = config.auto
+  MiniCompletion.delay = config.delay
+  MiniCompletion.window_dimensions = config.window_dimensions
 
   if type(config.fallback_action) == 'string' then
     MiniCompletion.fallback_action = H.make_ins_fallback(config.fallback_action)
   else
     MiniCompletion.fallback_action = config.fallback_action
   end
+end
+
+function H.apply_mappings(mappings)
+  vim.validate({['mappings.force'] = {mappings.force, 'string'}})
+
+  vim.api.nvim_set_keymap(
+    'i', mappings.force, '<cmd>lua MiniCompletion.complete()<cr>',
+    {noremap = true, silent = true}
+  )
 end
 
 function H.make_ins_fallback(keys)
@@ -575,7 +587,7 @@ function H.show_info_window()
   -- Add `lines` to info buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
   vim.lsp.util.stylize_markdown(
-    H.info.bufnr, lines, {wrap_at = MiniCompletion.info_max_dim.width}
+    H.info.bufnr, lines, {wrap_at = MiniCompletion.window_dimensions.info.width}
   )
 
   -- Compute floating window options
@@ -652,8 +664,8 @@ function H.info_window_options()
   local lines = vim.api.nvim_buf_get_lines(H.info.bufnr, 0, -1, {})
   local info_height, info_width = H.floating_dimensions(
     lines,
-    MiniCompletion.info_max_dim.height,
-    MiniCompletion.info_max_dim.width
+    MiniCompletion.window_dimensions.info.height,
+    MiniCompletion.window_dimensions.info.width
   )
 
   -- Compute position
@@ -674,7 +686,7 @@ function H.info_window_options()
   -- Possibly adjust floating window dimensions to fit screen
   if space < info_width then
     info_height, info_width = H.floating_dimensions(
-      lines, MiniCompletion.info_max_dim.height, space
+      lines, MiniCompletion.window_dimensions.info.height, space
     )
   end
 
@@ -734,7 +746,7 @@ function H.show_signature()
   -- Add `lines` to signature buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
   vim.lsp.util.stylize_markdown(
-    H.signature.bufnr, lines, {wrap_at = MiniCompletion.signature_max_dim.width}
+    H.signature.bufnr, lines, {wrap_at = MiniCompletion.window_dimensions.signature.width}
   )
 
   -- Add highlighting of active parameter
@@ -833,8 +845,8 @@ function H.signature_opts()
   local lines = vim.api.nvim_buf_get_lines(H.signature.bufnr, 0, -1, {})
   local height, width = H.floating_dimensions(
     lines,
-    MiniCompletion.signature_max_dim.height,
-    MiniCompletion.signature_max_dim.width
+    MiniCompletion.window_dimensions.signature.height,
+    MiniCompletion.window_dimensions.signature.width
   )
   return vim.lsp.util.make_floating_popup_options(width, height, {})
 end
