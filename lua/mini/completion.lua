@@ -17,14 +17,14 @@
 --   -- completion
 --   delay_completion = 100,
 --   -- Delay (debounce type, in ms) between focusing on completion item and
---   -- triggering floating documentation.
---   delay_docs = 100,
+--   -- triggering its info.
+--   delay_info = 100,
 --   -- Delay (debounce type, in ms) between end of cursor movement and triggering
 --   -- signature help.
 --   delay_signature = 100,
---   -- Maximum dimensions of floating documentation for completion item. Should
---   -- have 'height' and 'width' fields.
---   docs_max_dim = {height = 25, width = 80},
+--   -- Maximum dimensions of window for completion item info. Should have
+--   -- 'height' and 'width' fields.
+--   info_max_dim = {height = 25, width = 80},
 --   -- Maximum dimensions of signature help. Should have 'height' and 'width'
 --   -- fields.
 --   signature_max_dim = {height = 25, width = 80},
@@ -45,12 +45,12 @@
 --     - If first stage resulted into no candidates, fallback action is
 --       executed. The most tested actions are Neovim's built-in insert
 --       completion (see `:h ins-completion`).
--- - Automatic display in floating window of completion item documentation and
---   signature help (with highlighting of active parameter if LSP server
---   provides such information).
+-- - Automatic display in floating window of completion item info and signature
+--   help (with highlighting of active parameter if LSP server provides such
+--   information).
 -- - Automatic actions are done after some configurable amount of delay. This
 --   reduces computational load and allows fast typing (completion and
---   signature help) and item selection (documentation)
+--   signature help) and item selection (item info)
 -- - Autoactions are triggered on Neovim's built-in events.
 -- - User can force trigger via `MiniCompletion.complete()` which by default is
 --   mapped to `<C-space>`.
@@ -64,7 +64,7 @@
 --     - Has timer activated on InsertEnter which does something every period
 --       of time (makes LSP request, shows floating help). MiniCompletion
 --       relies on Neovim's (Vim's) events.
---     - Uses 'textDocument/hover' request to show documentation.
+--     - Uses 'textDocument/hover' request to show completion item info.
 --     - Doesn't have highlighting of active parameter in signature help.
 -- - 'nvim-compe':
 --     - More elaborate design which allows multiple sources. However, it
@@ -76,7 +76,7 @@
 --       LSP and fallback.
 --     - Provide custom ways to filter completion suggestions. MiniCompletion
 --       relies on Neovim's (which currently is equal to Vim's) filtering.
---     - Currently use simple text wrapping in documentation window. This
+--     - Currently use simple text wrapping in completion item window. This
 --       module wraps by words (see `:h linebreak` and `:h breakat`).
 --
 -- Overall implementation design:
@@ -92,27 +92,27 @@
 --     - If previous step didn't result into any completion, execute (in Insert
 --       mode and if no popup) fallback action.
 -- - Documentation:
---     - On `CompleteChanged` start auto documentation with similar to
---       completion timer pattern.
---     - If timer is activated, try these sources of documentation:
+--     - On `CompleteChanged` start auto info with similar to completion timer
+--       pattern.
+--     - If timer is activated, try these sources of item info:
 --         - 'info' field of completion item (see `:h complete-items`).
 --         - 'documentation' field of LSP's previously returned result.
 --         - 'documentation' field in result of asynchronous
 --           'completeItem/resolve' LSP request.
---     - If documentation doesn't consist only from whitespace, show floating
---       window with its content. Its dimensions and position are computed
---       based on current state of Neovim's data and content itself (which will
---       be displayed wrapped with `linebreak` option).
--- - Signature help (similar to documentation):
---     - On `CursorMovedI` start auto documentation (if there is any active LSP
+--     - If info doesn't consist only from whitespace, show floating window
+--       with its content. Its dimensions and position are computed based on
+--       current state of Neovim's data and content itself (which will be
+--       displayed wrapped with `linebreak` option).
+-- - Signature help (similar to item info):
+--     - On `CursorMovedI` start auto signature (if there is any active LSP
 --       client) with similar to completion timer pattern. Better event might
 --       be `InsertCharPre` but there are issues with 'autopair-type' plugins.
 --     - Check if character left to cursor is appropriate (')' or LSP's
 --       signature help trigger characters). If not, do nothing.
 --     - If timer is activated, send 'textDocument/signatureHelp' request to
 --       all LSP clients. On callback, process their results and open floating
---       window (its characteristics are computed similar to documentation).
---       For every LSP client it shows only active signature (in case there are
+--       window (its characteristics are computed similar to item info). For
+--       every LSP client it shows only active signature (in case there are
 --       many).
 
 -- Module and its helper
@@ -136,10 +136,10 @@ function MiniCompletion.setup(config)
     augroup MiniCompletion
       au!
       au InsertCharPre   * lua MiniCompletion.auto_complete()
-      au CompleteChanged * lua MiniCompletion.auto_docs()
+      au CompleteChanged * lua MiniCompletion.auto_info()
       au CursorMovedI    * lua MiniCompletion.auto_signature()
       au InsertLeavePre  * lua MiniCompletion.stop()
-      au CompleteDonePre * lua MiniCompletion.stop({'complete', 'docs'})
+      au CompleteDonePre * lua MiniCompletion.stop({'complete', 'info'})
       au TextChangedI    * lua MiniCompletion.on_text_changed_i()
       au BufEnter        * set completefunc=v:lua.MiniCompletion.complete_lsp
     augroup END
@@ -163,16 +163,16 @@ end
 MiniCompletion.delay_completion = 100
 
 ---- Delay (debounce type, in ms) between focusing on completion item and
----- triggering floating documentation.
-MiniCompletion.delay_docs = 100
+---- triggering its info.
+MiniCompletion.delay_info = 100
 
 ---- Delay (debounce type, in ms) between end of cursor movement and triggering
 ---- signature help.
 MiniCompletion.delay_signature = 100
 
----- Maximum dimensions of floating documentation for completion item. Should
----- have 'height' and 'width' fields.
-MiniCompletion.docs_max_dim = {height = 25, width = 80}
+---- Maximum dimensions of window for completion item info. Should have
+---- 'height' and 'width' fields.
+MiniCompletion.info_max_dim = {height = 25, width = 80}
 
 ---- Maximum dimensions of signature help. Should have 'height' and 'width'
 ---- fields.
@@ -222,25 +222,25 @@ function MiniCompletion.complete(fallback, force)
   H.trigger()
 end
 
-function MiniCompletion.auto_docs()
-  H.docs.timer:stop()
+function MiniCompletion.auto_info()
+  H.info.timer:stop()
 
   -- Defer execution because of textlock during `CompleteChanged` event
-  -- Don't stop timer when closing floating docs because it is needed
-  vim.defer_fn(function() H.close_action_window(H.docs, true) end, 0)
+  -- Don't stop timer when closing info window because it is needed
+  vim.defer_fn(function() H.close_action_window(H.info, true) end, 0)
 
   -- Stop current LSP request that tries to get not current data
   H.cancel_lsp({'resolve'})
 
   -- Update metadata before leaving to register a `CompleteChanged` event
-  H.docs.event = vim.v.event
-  H.docs.id = H.docs.id + 1
+  H.info.event = vim.v.event
+  H.info.id = H.info.id + 1
 
-  -- Don't event try to show docs if nothing is selected in popup
-  if vim.tbl_isempty(H.docs.event.completed_item) then return end
+  -- Don't event try to show info if nothing is selected in popup
+  if vim.tbl_isempty(H.info.event.completed_item) then return end
 
-  H.docs.timer:start(
-    MiniCompletion.delay_docs, 0, vim.schedule_wrap(H.show_floating_docs)
+  H.info.timer:start(
+    MiniCompletion.delay_info, 0, vim.schedule_wrap(H.show_info_window)
   )
 end
 
@@ -263,14 +263,14 @@ function MiniCompletion.auto_signature()
 end
 
 function MiniCompletion.stop(actions)
-  actions = actions or {'complete', 'docs', 'signature'}
+  actions = actions or {'complete', 'info', 'signature'}
   for _, n in pairs(actions) do H.stop_actions[n]() end
 end
 
 function MiniCompletion.on_text_changed_i()
-  -- Stop 'docs' processes in case no complete event is triggered but popup is
+  -- Stop 'info' processes in case no complete event is triggered but popup is
   -- not visible. See https://github.com/neovim/neovim/issues/15077
-  H.stop_docs()
+  H.stop_info()
 end
 
 function MiniCompletion.complete_lsp(findstart, base)
@@ -345,9 +345,9 @@ end
 ---- Module default config
 H.config = {
   delay_completion = MiniCompletion.delay_completion,
-  delay_docs = MiniCompletion.delay_docs,
+  delay_info = MiniCompletion.delay_info,
   delay_signature = MiniCompletion.delay_signature,
-  docs_max_dim = MiniCompletion.docs_max_dim,
+  info_max_dim = MiniCompletion.info_max_dim,
   signature_max_dim = MiniCompletion.signature_max_dim,
   fallback_action = MiniCompletion.fallback_action,
   mappings = {
@@ -375,8 +375,8 @@ H.lsp = {
 ---- Cache for completion
 H.complete = {fallback = true, force = false, source = nil, timer = vim.loop.new_timer()}
 
----- Cache for floating documentation
-H.docs = {bufnr = nil, event = nil, id = 0, timer = vim.loop.new_timer(), winnr = nil}
+---- Cache for completion item info
+H.info = {bufnr = nil, event = nil, id = 0, timer = vim.loop.new_timer(), winnr = nil}
 
 ---- Cache for signature help
 H.signature = {bufnr = nil, timer = vim.loop.new_timer(), winnr = nil}
@@ -393,9 +393,9 @@ function H.apply_settings(config)
 
   vim.validate({
     delay_completion = {config.delay_completion, 'number'},
-    delay_docs = {config.delay_docs, 'number'},
+    delay_info = {config.delay_info, 'number'},
     delay_signature = {config.delay_signature, 'number'},
-    docs_max_dim = {config.docs_max_dim, is_max_dim, max_dim_msg},
+    info_max_dim = {config.info_max_dim, is_max_dim, max_dim_msg},
     signature_max_dim = {config.signature_max_dim, is_max_dim, max_dim_msg},
     fallback_action = {
       config.fallback_action,
@@ -405,9 +405,9 @@ function H.apply_settings(config)
   })
 
   MiniCompletion.delay_completion = config.delay_completion
-  MiniCompletion.delay_docs = config.delay_docs
+  MiniCompletion.delay_info = config.delay_info
   MiniCompletion.delay_signature = config.delay_signature
-  MiniCompletion.docs_max_dim = config.docs_max_dim
+  MiniCompletion.info_max_dim = config.info_max_dim
   MiniCompletion.signature_max_dim = config.signature_max_dim
 
   if type(config.fallback_action) == 'string' then
@@ -475,12 +475,12 @@ function H.stop_complete(keep_source)
   if not keep_source then H.complete.source = nil end
 end
 
-function H.stop_docs()
+function H.stop_info()
   -- Id update is needed to notify that all previous work is not current
-  H.docs.id = H.docs.id + 1
-  H.docs.timer:stop()
+  H.info.id = H.info.id + 1
+  H.info.timer:stop()
   H.cancel_lsp({'resolve'})
-  H.close_action_window(H.docs)
+  H.close_action_window(H.info)
 end
 
 function H.stop_signature()
@@ -490,7 +490,7 @@ function H.stop_signature()
 end
 
 H.stop_actions = {
-  complete = H.stop_complete, docs = H.stop_docs, signature = H.stop_signature
+  complete = H.stop_complete, info = H.stop_info, signature = H.stop_signature
 }
 
 ---- LSP
@@ -540,9 +540,9 @@ function H.is_lsp_current(name, id)
   return H.lsp[name].id == id and H.lsp[name].status == 'sent'
 end
 
----- Floating documentation
-function H.show_floating_docs()
-  local event = H.docs.event
+---- Completion item info
+function H.show_info_window()
+  local event = H.info.event
   if not event then return end
 
   -- Try first to take lines from LSP request result.
@@ -559,42 +559,42 @@ function H.show_floating_docs()
 
     H.lsp.resolve.status = 'done'
   else
-    lines = H.floating_docs_lines(H.docs.id)
+    lines = H.info_window_lines(H.info.id)
   end
 
   -- Don't show anything if there is nothing to show
   if not lines or H.is_whitespace(lines) then return end
 
-  -- If not already, create a permanent buffer where documentation will be
+  -- If not already, create a permanent buffer where info will be
   -- displayed. For some reason, it is important to have it created not in
   -- `setup()` because in that case there is a small flash (which is really a
   -- brief open of window at screen top, focus on it, and its close) on the
-  -- first show of floating docs.
-  H.ensure_buffer(H.docs, 'MiniCompletion:floating-docs')
+  -- first show of info window.
+  H.ensure_buffer(H.info, 'MiniCompletion:floating-info')
 
-  -- Add `lines` to docs buffer. Use `wrap_at` to have proper width of
+  -- Add `lines` to info buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
   vim.lsp.util.stylize_markdown(
-    H.docs.bufnr, lines, {wrap_at = MiniCompletion.docs_max_dim.width}
+    H.info.bufnr, lines, {wrap_at = MiniCompletion.info_max_dim.width}
   )
 
   -- Compute floating window options
-  local opts = H.floating_docs_options()
+  local opts = H.info_window_options()
 
   -- Defer execution because of textlock during `CompleteChanged` event
   vim.defer_fn(
     function()
       -- Ensure that window doesn't open when it shouldn't be
       if not (H.pumvisible() and vim.fn.mode() == 'i') then return end
-      H.open_action_window(H.docs, opts)
+      H.open_action_window(H.info, opts)
     end,
     0
   )
 end
 
-function H.floating_docs_lines(docs_id)
+function H.info_window_lines(info_id)
   -- Try to use 'info' field of Neovim's completion item
-  local completed_item = H.table_get(H.docs, {"event", "completed_item"}) or {}
+  local completed_item = H.table_get(H.info, {"event", "completed_item"}) or {}
   local text = completed_item.info or ''
 
   if not H.is_whitespace(text) then
@@ -636,10 +636,10 @@ function H.floating_docs_lines(docs_id)
     H.lsp.resolve.status = 'received'
 
     -- Don't do anything if completion item was changed
-    if H.docs.id ~= docs_id then return end
+    if H.info.id ~= info_id then return end
 
     H.lsp.resolve.result = result
-    H.show_floating_docs()
+    H.show_info_window()
   end)
 
   H.lsp.resolve.cancel_fun = cancel_fun
@@ -647,34 +647,34 @@ function H.floating_docs_lines(docs_id)
   return nil
 end
 
-function H.floating_docs_options()
+function H.info_window_options()
   -- Compute dimensions based on lines to be displayed
-  local lines = vim.api.nvim_buf_get_lines(H.docs.bufnr, 0, -1, {})
-  local docs_height, docs_width = H.floating_dimensions(
+  local lines = vim.api.nvim_buf_get_lines(H.info.bufnr, 0, -1, {})
+  local info_height, info_width = H.floating_dimensions(
     lines,
-    MiniCompletion.docs_max_dim.height,
-    MiniCompletion.docs_max_dim.width
+    MiniCompletion.info_max_dim.height,
+    MiniCompletion.info_max_dim.width
   )
 
   -- Compute position
-  local event = H.docs.event
+  local event = H.info.event
   local left_to_pum = event.col - 1
   local right_to_pum = event.col + event.width + (event.scrollbar and 1 or 0)
 
   local space_left, space_right = left_to_pum, vim.o.columns - right_to_pum
 
   local anchor, col, space
-  -- Decide side at which floating docs will be displayed
-  if docs_width <= space_right or space_left <= space_right then
+  -- Decide side at which info window will be displayed
+  if info_width <= space_right or space_left <= space_right then
     anchor, col, space = 'NW', right_to_pum, space_right
   else
     anchor, col, space = 'NE', left_to_pum, space_left
   end
 
   -- Possibly adjust floating window dimensions to fit screen
-  if space < docs_width then
-    docs_height, docs_width = H.floating_dimensions(
-      lines, MiniCompletion.docs_max_dim.height, space
+  if space < info_width then
+    info_height, info_width = H.floating_dimensions(
+      lines, MiniCompletion.info_max_dim.height, space
     )
   end
 
@@ -683,8 +683,8 @@ function H.floating_docs_options()
     anchor = anchor,
     row = event.row,
     col = col,
-    width = docs_width,
-    height = docs_height,
+    width = info_width,
+    height = info_height,
     focusable = true,
     style = 'minimal'
   }
