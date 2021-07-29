@@ -1,6 +1,6 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
 --
--- Custom *somewhat minimal* autocompletion Lua plugin. Key design ideas:
+-- Custom *originally minimal* autocompletion Lua plugin. Key design ideas:
 -- - Have a 'two-stage chain completion': first try to get completion items
 --   from LSP client (if set up) and if no result, fallback on custom action.
 -- - Managing completion is done as much with Neovim's built-in tools as
@@ -46,13 +46,18 @@
 --       executed. The most tested actions are Neovim's built-in insert
 --       completion (see `:h ins-completion`).
 -- - Automatic display in floating window of completion item documentation and
---   signature help.
+--   signature help (with highlighting of active parameter if LSP server
+--   provides such information).
 -- - Automatic actions are done after some configurable amount of delay. This
 --   reduces computational load and allows fast typing (completion and
 --   signature help) and item selection (documentation)
 -- - Autoactions are triggered on Neovim's built-in events.
 -- - User can force trigger via `MiniCompletion.complete()` which by default is
 --   mapped to `<C-space>`.
+-- - Highlighting of signature active parameter is done according to
+--   `MiniCompletionActiveParameter` highlight group. By default, it is a plain
+--   underline. To change this, modify it directly with `highlight
+--   MiniCompletionActiveParameter` command.
 --
 -- Comparisons:
 -- - 'completion-nvim':
@@ -60,6 +65,7 @@
 --       of time (makes LSP request, shows floating help). MiniCompletion
 --       relies on Neovim's (Vim's) events.
 --     - Uses 'textDocument/hover' request to show documentation.
+--     - Doesn't have highlighting of active parameter in signature help.
 -- - 'nvim-compe':
 --     - More elaborate design which allows multiple sources. However, it
 --       currently does not have 'opened buffers' source, which is very handy.
@@ -144,6 +150,11 @@ function MiniCompletion.setup(config)
     'i', mappings.force, '<cmd>lua MiniCompletion.complete()<cr>',
     {noremap = true, silent = true}
   )
+
+  -- Create highlighting
+  vim.api.nvim_exec([[
+    hi MiniCompletionActiveParameter term=underline cterm=underline gui=underline
+  ]], false)
 end
 
 -- Module settings
@@ -309,10 +320,10 @@ function MiniCompletion.complete_lsp(findstart, base)
   else
     if findstart == 1 then return H.get_completion_start() end
 
-    local words = H.process_lsp_request_result(
+    local words = H.process_lsp_response(
       H.lsp.completion.result,
-      function(single_result)
-        return vim.lsp.util.text_document_completion_list_to_complete_items(single_result, base)
+      function(response)
+        return vim.lsp.util.text_document_completion_list_to_complete_items(response, base)
       end
     )
 
@@ -512,7 +523,7 @@ function H.cancel_lsp(names)
   end
 end
 
-function H.process_lsp_request_result(request_result, processor)
+function H.process_lsp_response(request_result, processor)
   if not request_result then return {} end
 
   local res = {}
@@ -537,11 +548,11 @@ function H.show_floating_docs()
   -- Try first to take lines from LSP request result.
   local lines
   if H.lsp.resolve.status == 'received' then
-    lines = H.process_lsp_request_result(
+    lines = H.process_lsp_response(
       H.lsp.resolve.result,
-      function(single_result)
-        if not single_result.documentation then return {} end
-        local res = vim.lsp.util.convert_input_to_markdown_lines(single_result.documentation)
+      function(response)
+        if not response.documentation then return {} end
+        local res = vim.lsp.util.convert_input_to_markdown_lines(response.documentation)
         return vim.lsp.util.trim_empty_lines(res)
       end
     )
@@ -707,7 +718,7 @@ function H.show_signature()
   end
 
   -- Make lines to show in floating window
-  local lines = H.signature_lines()
+  local lines, hl_ranges = H.signature_lines()
   H.lsp.signature.status = 'done'
 
   -- Don't show anything if there is nothing to show
@@ -716,11 +727,29 @@ function H.show_signature()
   -- If not already, create a permanent buffer for signature
   H.ensure_buffer(H.signature, 'MiniCompletion:signature-help')
 
+  -- Make markdown code block
+  table.insert(lines, 1, '```' .. vim.bo.filetype)
+  table.insert(lines, '```')
+
   -- Add `lines` to signature buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
   vim.lsp.util.stylize_markdown(
     H.signature.bufnr, lines, {wrap_at = MiniCompletion.signature_max_dim.width}
   )
+
+  -- Add highlighting of active parameter
+  for i, hl_range in ipairs(hl_ranges) do
+    if not vim.tbl_isempty(hl_range) and hl_range.first and hl_range.last then
+      vim.api.nvim_buf_add_highlight(
+        H.signature.bufnr,
+        -1,
+        'MiniCompletionActiveParameter',
+        i - 1,
+        hl_range.first,
+        hl_range.last
+      )
+    end
+  end
 
   -- Compute floating window options
   local opts = H.signature_opts()
@@ -730,23 +759,74 @@ function H.show_signature()
 end
 
 function H.signature_lines()
-  return H.process_lsp_request_result(
-    H.lsp.signature.result,
-    function(single_result)
-      if not single_result.signatures then return {} end
-
-      -- Don't show documentation
-      for k, _ in pairs(single_result.signatures) do
-        single_result.signatures[k].documentation = nil
-      end
-
-      -- NOTE: currently this returns "active signature" in case there are more
-      -- than one (several prototypes, etc.)
-      return vim.lsp.util.convert_signature_help_to_markdown_lines(
-        single_result, vim.bo.filetype
-      )
-    end
+  local signature_data = H.process_lsp_response(
+    H.lsp.signature.result, H.process_signature_response
   )
+  -- Each line is a single-line active signature string from one attached LSP
+  -- client. Each highlight range is a table which indicates (if not empty)
+  -- what parameter to highlight for every LSP client's signature string.
+  local lines, hl_ranges = {}, {}
+  for _, t in pairs(signature_data) do
+    -- `t` is allowed to be an empty table (in which case nothing is added) or
+    -- a table with two entries. This ensures that `hl_range`'s integer index
+    -- points to an actual line in future buffer.
+    table.insert(lines, t.label)
+    table.insert(hl_ranges, t.hl_range)
+  end
+
+  return lines, hl_ranges
+end
+
+function H.process_signature_response(response)
+  if not response.signatures or vim.tbl_isempty(response.signatures) then return {} end
+
+  -- Get active signature (based on textDocument/signatureHelp specification)
+  local signature_id = response.activeSignature or 0
+  ---- This is according to specification: "If ... value lies outside ...
+  ---- defaults to zero"
+  local n_signatures = vim.tbl_count(response.signatures or {})
+  if signature_id < 0 or signature_id >= n_signatures then signature_id = 0 end
+  local signature = response.signatures[signature_id + 1]
+
+  -- Get displayed signature label
+  local signature_label = signature.label
+
+  -- Get start and end of active parameter (for highlighting)
+  local hl_range = {}
+  local n_params = vim.tbl_count(signature.parameters or {})
+  local has_params = signature.parameters and n_params > 0
+
+  ---- Take values in this order because data inside signature takes priority
+  local parameter_id = signature.activeParameter or response.activeParameter or 0
+  local param_id_inrange = 0 <= parameter_id and parameter_id < n_params
+
+  ---- Computing active parameter only when parameter id is inside bounds is not
+  ---- strictly based on specification, as currently (v3.16) it says to treat
+  ---- out-of-bounds value as first parameter. However, some clients seems to
+  ---- use those values to indicate that nothing needs to be highlighted.
+  ---- Sources:
+  ---- https://github.com/microsoft/pyright/pull/1876
+  ---- https://github.com/microsoft/language-server-protocol/issues/1271
+  if has_params and param_id_inrange then
+    local param_label = signature.parameters[parameter_id + 1].label
+
+    -- Compute highlight range based on type of supplied parameter label: can
+    -- be string label which should be a part of signature label or direct start
+    -- (inclusive) and end (exclusive) range values
+    local first, last = nil, nil
+    if type(param_label) == 'string' then
+      first, last = signature_label:find(vim.pesc(param_label))
+      -- Make zero-indexed and end-exclusive
+      if first then first, last = first - 1, last end
+    elseif type(param_label) == 'table' then
+      first, last = unpack(param_label)
+    end
+    if first then hl_range = {first = first, last = last} end
+  end
+
+  -- Return nested table because this will be a second argument of
+  -- `vim.list_extend()` and the whole inner table is a target value here.
+  return {{label = signature_label, hl_range = hl_range}}
 end
 
 function H.signature_opts()
