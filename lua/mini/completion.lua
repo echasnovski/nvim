@@ -48,12 +48,14 @@
 --       completion (see `:h ins-completion`).
 -- - Automatic display in floating window of completion item info and signature
 --   help (with highlighting of active parameter if LSP server provides such
---   information).
+--   information). After opening, window for signature help is fixed and is
+--   closed when there is nothing to show, text is different or when leaving
+--   Insert mode.
 -- - Automatic actions are done after some configurable amount of delay. This
 --   reduces computational load and allows fast typing (completion and
 --   signature help) and item selection (item info)
 -- - Autoactions are triggered on Neovim's built-in events.
--- - User can force trigger via `MiniCompletion.complete_twostep()` which by
+-- - User can force completion via `MiniCompletion.complete_twostep()` which by
 --   default is mapped to `<C-space>`.
 -- - Highlighting of signature active parameter is done according to
 --   `MiniCompletionActiveParameter` highlight group. By default, it is a plain
@@ -111,10 +113,12 @@
 --     - Check if character left to cursor is appropriate (')' or LSP's
 --       signature help trigger characters). If not, do nothing.
 --     - If timer is activated, send 'textDocument/signatureHelp' request to
---       all LSP clients. On callback, process their results and open floating
---       window (its characteristics are computed similar to item info). For
---       every LSP client it shows only active signature (in case there are
---       many).
+--       all LSP clients. On callback, process their results. Window is opened
+--       if not already with the same text (its characteristics are computed
+--       similar to item info). For every LSP client it shows only active
+--       signature (in case there are many). If LSP response has data about
+--       active parameter, it is highlighted with
+--       `MiniCompletionActiveParameter` highlight group.
 
 -- Module and its helper
 local MiniCompletion = {}
@@ -254,12 +258,7 @@ function MiniCompletion.auto_signature()
   if not char_is_trigger then return end
 
   H.signature.timer:start(
-    MiniCompletion.delay.signature, 0, vim.schedule_wrap(function()
-      -- Having closing inside timer callback enables "fixed" window effect if
-      -- trigger character and its followup are typed fast enough
-      H.close_action_window(H.signature)
-      H.show_signature()
-    end)
+    MiniCompletion.delay.signature, 0, vim.schedule_wrap(H.show_signature)
   )
 end
 
@@ -380,7 +379,7 @@ H.info = {
 
 ------ Cache for signature help
 H.signature = {
-  bufnr = nil, timer = vim.loop.new_timer(), winnr = nil,
+  bufnr = nil, text = nil, timer = vim.loop.new_timer(), winnr = nil,
   lsp = {id = 0, status = nil, result = nil, cancel_fun = nil}
 }
 
@@ -500,6 +499,7 @@ function H.stop_info()
 end
 
 function H.stop_signature()
+  H.signature.text = nil
   H.signature.timer:stop()
   H.cancel_lsp({H.signature})
   H.close_action_window(H.signature)
@@ -737,15 +737,18 @@ function H.show_signature()
   local lines, hl_ranges = H.signature_lines()
   H.signature.lsp.status = 'done'
 
-  -- Don't show anything if there is nothing to show
-  if not lines or H.is_whitespace(lines) then return end
-
-  -- If not already, create a permanent buffer for signature
-  H.ensure_buffer(H.signature, 'MiniCompletion:signature-help')
+  -- Close window and exit if there is nothing to show
+  if not lines or H.is_whitespace(lines) then
+    H.close_action_window(H.signature)
+    return
+   end
 
   -- Make markdown code block
   table.insert(lines, 1, '```' .. vim.bo.filetype)
   table.insert(lines, '```')
+
+  -- If not already, create a permanent buffer for signature
+  H.ensure_buffer(H.signature, 'MiniCompletion:signature-help')
 
   -- Add `lines` to signature buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
@@ -767,10 +770,20 @@ function H.show_signature()
     end
   end
 
+  -- If window is already opened and displays the same text, don't reopen it
+  local cur_text = table.concat(lines, '\n')
+  if H.signature.winnr and cur_text == H.signature.text then return end
+
+  -- Cache lines for later checks if window should be reopened
+  H.signature.text = cur_text
+
+  -- Ensure window is closed
+  H.close_action_window(H.signature)
+
   -- Compute floating window options
   local opts = H.signature_opts()
 
-  -- Ensure that window doesn't open when it shouldn't be
+  -- Ensure that window doesn't open when it shouldn't
   if vim.fn.mode() == 'i' then H.open_action_window(H.signature, opts) end
 end
 
@@ -847,12 +860,14 @@ end
 
 function H.signature_opts()
   local lines = vim.api.nvim_buf_get_lines(H.signature.bufnr, 0, -1, {})
-  local height, width = H.floating_dimensions(
-    lines,
-    MiniCompletion.window_dimensions.signature.height,
-    MiniCompletion.window_dimensions.signature.width
+  -- Account for a very big maximum width from config
+  local win_width = math.min(
+    MiniCompletion.window_dimensions.signature.width, vim.o.columns
   )
-  return vim.lsp.util.make_floating_popup_options(width, height, {})
+  local height, width = H.floating_dimensions(
+    lines, MiniCompletion.window_dimensions.signature.height, win_width
+  )
+  return vim.lsp.util.make_floating_popup_options(width, height, {focusable = false})
 end
 
 ---- Helpers for floating windows
@@ -937,7 +952,7 @@ function H.is_whitespace(s)
   return false
 end
 
------- Simulate spliting single line `l` like how it would look inside window
+------ Simulate splitting single line `l` like how it would look inside window
 ------ with `wrap` and `linebreak` set to `true`
 function H.wrap_line(l, width)
   local breakat_pattern = '[' .. vim.o.breakat .. ']'
