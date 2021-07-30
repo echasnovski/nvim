@@ -117,12 +117,12 @@ function MiniStatusline.setup(config)
 
   -- MiniStatusline colors (from Gruvbox bright palette)
   vim.api.nvim_exec([[
-    hi MiniStatuslineModeNormal  guibg=#BDAE93 guifg=#1D2021 gui=bold ctermbg=7 ctermfg=0
-    hi MiniStatuslineModeInsert  guibg=#83A598 guifg=#1D2021 gui=bold ctermbg=4 ctermfg=0
-    hi MiniStatuslineModeVisual  guibg=#B8BB26 guifg=#1D2021 gui=bold ctermbg=2 ctermfg=0
-    hi MiniStatuslineModeReplace guibg=#FB4934 guifg=#1D2021 gui=bold ctermbg=1 ctermfg=0
-    hi MiniStatuslineModeCommand guibg=#FABD2F guifg=#1D2021 gui=bold ctermbg=3 ctermfg=0
-    hi MiniStatuslineModeOther   guibg=#8EC07C guifg=#1D2021 gui=bold ctermbg=6 ctermfg=0
+    hi link MiniStatuslineModeNormal  Cursor
+    hi link MiniStatuslineModeInsert  DiffChange
+    hi link MiniStatuslineModeVisual  DiffAdd
+    hi link MiniStatuslineModeReplace DiffDelete
+    hi link MiniStatuslineModeCommand DiffText
+    hi link MiniStatuslineModeOther   IncSearch
 
     hi link MiniStatuslineDevinfo  StatusLine
     hi link MiniStatuslineFilename StatusLineNC

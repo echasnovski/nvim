@@ -16,9 +16,8 @@
 --   Custom setup is needed to enable it based on some rules.
 -- - Highlighting stops in insert mode and when leaving window.
 -- - Trim all trailing whitespace with `trim()` function.
--- - Highlighting is done according to `MiniTrailspace` highlight group. By
---   default, it is a shade of red. To change this, modify it directly with
---   `highlight MiniTrailspace` command.
+-- - Highlighting is done according to `MiniTrailspace` highlight group. To
+--   change this, modify it directly with `highlight MiniTrailspace` command.
 
 -- Module and its helper
 local MiniTrailspace = {}
@@ -44,7 +43,7 @@ function MiniTrailspace.setup(config)
 
   -- Create highlighting
   vim.api.nvim_exec([[
-    hi MiniTrailspace ctermbg=red ctermfg=white guibg=#FB4934
+    hi link MiniTrailspace ErrorMsg
   ]], false)
 end
 

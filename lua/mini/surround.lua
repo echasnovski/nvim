@@ -50,9 +50,8 @@
 --       balanced brackets, in 'output' - left and right parts of brackets.
 --     - All other alphanumeric, punctuation, or space characters represent
 --       surrounding with identical left and right parts.
--- - Highlighting is done according to `MiniSurround` highlight group. By
---   default, it is linked to `IncSearch`. To change this, modify it directly
---   with `highlight MiniSurround` command.
+-- - Highlighting is done according to `MiniSurround` highlight group. To
+--   change this, modify it directly with `highlight MiniSurround` command.
 --
 -- Examples:
 -- - `saiw)` - add (`sa`) for inner word (`iw`) parenthesis (`)`).

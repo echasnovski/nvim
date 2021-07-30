@@ -76,15 +76,15 @@ function MiniTabline.setup(config)
     endfunction
   ]], false)
 
-  -- MiniTabline colors (from Gruvbox palette)
+  -- MiniTabline colors
   vim.api.nvim_exec([[
-    hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15 ctermfg=0
-    hi MiniTablineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7  ctermfg=0
-    hi MiniTablineHidden          guifg=#A89984 guibg=#3C3836          ctermbg=8  ctermfg=7
+    hi link MiniTablineCurrent TabLineSel
+    hi link MiniTablineActive  TabLineSel
+    hi link MiniTablineHidden  TabLine
 
-    hi MiniTablineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold ctermbg=14 ctermfg=0
-    hi MiniTablineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold ctermbg=6  ctermfg=0
-    hi MiniTablineModifiedHidden  guibg=#076678 guifg=#BDAE93          ctermbg=6  ctermfg=0
+    hi link MiniTablineModifiedCurrent StatusLine
+    hi link MiniTablineModifiedActive  StatusLine
+    hi link MiniTablineModifiedHidden  StatusLineNC
 
     hi MiniTablineFill NONE
   ]], false)
