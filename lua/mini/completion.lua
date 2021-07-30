@@ -586,7 +586,7 @@ function H.show_info_window()
   -- `setup()` because in that case there is a small flash (which is really a
   -- brief open of window at screen top, focus on it, and its close) on the
   -- first show of info window.
-  H.ensure_buffer(H.info, 'MiniCompletion:floating-info')
+  H.ensure_buffer(H.info, 'MiniCompletion:completion-item-info')
 
   -- Add `lines` to info buffer. Use `wrap_at` to have proper width of
   -- 'non-UTF8' section separators.
