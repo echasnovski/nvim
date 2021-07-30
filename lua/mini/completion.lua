@@ -53,8 +53,8 @@
 --   reduces computational load and allows fast typing (completion and
 --   signature help) and item selection (item info)
 -- - Autoactions are triggered on Neovim's built-in events.
--- - User can force trigger via `MiniCompletion.complete()` which by default is
---   mapped to `<C-space>`.
+-- - User can force trigger via `MiniCompletion.complete_twostep()` which by
+--   default is mapped to `<C-space>`.
 -- - Highlighting of signature active parameter is done according to
 --   `MiniCompletionActiveParameter` highlight group. By default, it is a plain
 --   underline. To change this, modify it directly with `highlight
@@ -142,11 +142,11 @@ function MiniCompletion.setup(config)
   vim.api.nvim_exec([[
     augroup MiniCompletion
       au!
-      au InsertCharPre   * lua MiniCompletion.auto_complete()
+      au InsertCharPre   * lua MiniCompletion.auto_completion()
       au CompleteChanged * lua MiniCompletion.auto_info()
       au CursorMovedI    * lua MiniCompletion.auto_signature()
       au InsertLeavePre  * lua MiniCompletion.stop()
-      au CompleteDonePre * lua MiniCompletion.stop({'complete', 'info'})
+      au CompleteDonePre * lua MiniCompletion.stop({'completion', 'info'})
       au TextChangedI    * lua MiniCompletion.on_text_changed_i()
       au BufEnter        * set completefunc=v:lua.MiniCompletion.complete_lsp
     augroup END
@@ -181,42 +181,42 @@ MiniCompletion.fallback_action = function()
 end
 
 -- Module functionality
-function MiniCompletion.auto_complete()
+function MiniCompletion.auto_completion()
   if not MiniCompletion.auto.completion then return end
 
-  H.complete.timer:stop()
+  H.completion.timer:stop()
 
   -- Don't do anything if popup is visible
   if H.pumvisible() then
     -- Keep completion source as it is needed all time when popup is visible
-    H.stop_complete(true)
+    H.stop_completion(true)
     return
   end
 
   -- Stop everything if inserted character is not appropriate
   local char_is_trigger = H.is_lsp_trigger(vim.v.char, 'completion')
   if not (H.is_char_keyword(vim.v.char) or char_is_trigger) then
-    H.stop_complete(false)
+    H.stop_completion(false)
     return
   end
 
   -- If character is purely lsp trigger, make new LSP request without fallback
   -- and force new completion
   if char_is_trigger then H.cancel_lsp() end
-  H.complete.fallback, H.complete.force = not char_is_trigger, char_is_trigger
+  H.completion.fallback, H.completion.force = not char_is_trigger, char_is_trigger
 
   -- Using delay (of debounce type) seems to actually improve user experience
   -- as it allows fast typing without many popups. Also useful when synchronous
   -- `<C-n>` completion blocks typing.
-  H.complete.timer:start(
-    MiniCompletion.delay.completion, 0, vim.schedule_wrap(H.trigger)
+  H.completion.timer:start(
+    MiniCompletion.delay.completion, 0, vim.schedule_wrap(H.trigger_twostep)
   )
 end
 
-function MiniCompletion.complete(fallback, force)
-  H.stop_complete()
-  H.complete.fallback, H.complete.force = fallback or true, force or true
-  H.trigger()
+function MiniCompletion.complete_twostep(fallback, force)
+  H.stop_completion()
+  H.completion.fallback, H.completion.force = fallback or true, force or true
+  H.trigger_twostep()
 end
 
 function MiniCompletion.auto_info()
@@ -229,7 +229,7 @@ function MiniCompletion.auto_info()
   vim.defer_fn(function() H.close_action_window(H.info, true) end, 0)
 
   -- Stop current LSP request that tries to get not current data
-  H.cancel_lsp({'resolve'})
+  H.cancel_lsp({H.info})
 
   -- Update metadata before leaving to register a `CompleteChanged` event
   H.info.event = vim.v.event
@@ -264,28 +264,28 @@ function MiniCompletion.auto_signature()
 end
 
 function MiniCompletion.stop(actions)
-  actions = actions or {'complete', 'info', 'signature'}
+  actions = actions or {'completion', 'info', 'signature'}
   for _, n in pairs(actions) do H.stop_actions[n]() end
 end
 
 function MiniCompletion.on_text_changed_i()
-  -- Stop 'info' processes in case no complete event is triggered but popup is
-  -- not visible. See https://github.com/neovim/neovim/issues/15077
+  -- Stop 'info' processes in case no completion event is triggered but popup
+  -- is not visible. See https://github.com/neovim/neovim/issues/15077
   H.stop_info()
 end
 
 function MiniCompletion.complete_lsp(findstart, base)
   -- Early return
-  if (not H.has_lsp_clients()) or H.lsp.completion.status == 'sent' then
+  if (not H.has_lsp_clients()) or H.completion.lsp.status == 'sent' then
     if findstart == 1 then return -3 else return {} end
   end
 
   -- NOTE: having code for request inside this function enables its use
   -- directly with `<C-x><...>`.
-  if H.lsp.completion.status ~= 'received' then
-    current_id = H.lsp.completion.id + 1
-    H.lsp.completion.id = current_id
-    H.lsp.completion.status = 'sent'
+  if H.completion.lsp.status ~= 'received' then
+    current_id = H.completion.lsp.id + 1
+    H.completion.lsp.id = current_id
+    H.completion.lsp.status = 'sent'
 
     local bufnr = vim.api.nvim_get_current_buf()
     local params = vim.lsp.util.make_position_params()
@@ -304,17 +304,17 @@ function MiniCompletion.complete_lsp(findstart, base)
     -- filtered with one `base` in the other route of this function. Anyway,
     -- the most common situation is with one attached LSP client.
     cancel_fun = vim.lsp.buf_request_all(bufnr, 'textDocument/completion', params, function(result)
-      if not H.is_lsp_current('completion', current_id) then return end
+      if not H.is_lsp_current(H.completion, current_id) then return end
 
-      H.lsp.completion.status = 'received'
-      H.lsp.completion.result = result
+      H.completion.lsp.status = 'received'
+      H.completion.lsp.result = result
 
       -- Trigger LSP completion to take 'received' route
       H.trigger_lsp()
     end)
 
     -- Cache cancel function to disable requests when they are not needed
-    H.lsp.completion.cancel_fun = cancel_fun
+    H.completion.lsp.cancel_fun = cancel_fun
 
     -- End completion and wait for LSP callback
     if findstart == 1 then return -3 else return {} end
@@ -322,22 +322,22 @@ function MiniCompletion.complete_lsp(findstart, base)
     if findstart == 1 then return H.get_completion_start() end
 
     local words = H.process_lsp_response(
-      H.lsp.completion.result,
+      H.completion.lsp.result,
       function(response)
         return vim.lsp.util.text_document_completion_list_to_complete_items(response, base)
       end
     )
 
-    H.lsp.completion.status = 'done'
+    H.completion.lsp.status = 'done'
 
     -- Maybe trigger fallback action
-    if vim.tbl_isempty(words) and H.complete.fallback then
+    if vim.tbl_isempty(words) and H.completion.fallback then
       H.trigger_fallback()
       return
     end
 
     -- Track from which source is current popup
-    H.complete.source = 'lsp'
+    H.completion.source = 'lsp'
     return words
   end
 end
@@ -360,25 +360,29 @@ H.keys = {
   ctrl_n = vim.api.nvim_replace_termcodes('<C-g><C-g><C-n>', true, false, true),
 }
 
----- Table describing state of all used LSP requests. Structure:
+---- Caches for different actions. Field `lsp` is a table describing state of
+---- all used LSP requests. It has the following structure:
 ---- - id: identifier (consecutive numbers).
 ---- - status: status. One of 'sent', 'received', 'done', 'canceled'.
 ---- - result: result of request.
 ---- - cancel_fun: function which cancels current request.
-H.lsp = {
-  completion = {id = 0, status = nil, result = nil, cancel_fun = nil},
-  resolve    = {id = 0, status = nil, result = nil, cancel_fun = nil},
-  signature  = {id = 0, status = nil, result = nil, cancel_fun = nil}
+------ Cache for completion
+H.completion = {
+  fallback = true, force = false, source = nil, timer = vim.loop.new_timer(),
+  lsp = {id = 0, status = nil, result = nil, cancel_fun = nil}
 }
 
----- Cache for completion
-H.complete = {fallback = true, force = false, source = nil, timer = vim.loop.new_timer()}
+------ Cache for completion item info
+H.info = {
+  bufnr = nil, event = nil, id = 0, timer = vim.loop.new_timer(), winnr = nil,
+  lsp = {id = 0, status = nil, result = nil, cancel_fun = nil}
+}
 
----- Cache for completion item info
-H.info = {bufnr = nil, event = nil, id = 0, timer = vim.loop.new_timer(), winnr = nil}
-
----- Cache for signature help
-H.signature = {bufnr = nil, timer = vim.loop.new_timer(), winnr = nil}
+------ Cache for signature help
+H.signature = {
+  bufnr = nil, timer = vim.loop.new_timer(), winnr = nil,
+  lsp = {id = 0, status = nil, result = nil, cancel_fun = nil}
+}
 
 -- Helper functions
 ---- Settings
@@ -424,7 +428,7 @@ function H.apply_mappings(mappings)
   vim.validate({['mappings.force'] = {mappings.force, 'string'}})
 
   vim.api.nvim_set_keymap(
-    'i', mappings.force, '<cmd>lua MiniCompletion.complete()<cr>',
+    'i', mappings.force, '<cmd>lua MiniCompletion.complete_twostep()<cr>',
     {noremap = true, silent = true}
   )
 end
@@ -440,17 +444,17 @@ function H.make_ins_fallback(keys)
 end
 
 ---- Triggers
-function H.trigger()
+function H.trigger_twostep()
   if vim.fn.mode() ~= 'i' then return end
   if H.has_lsp_clients() then
     H.trigger_lsp()
-  elseif H.complete.fallback then
+  elseif H.completion.fallback then
     H.trigger_fallback()
   end
 end
 
 function H.trigger_lsp()
-  local has_complete = vim.api.nvim_buf_get_option(0, 'completefunc') ~= ''
+  local has_completion = vim.api.nvim_buf_get_option(0, 'completefunc') ~= ''
   -- Check for popup visibility is needed to reduce flickering.
   -- Possible issue timeline (with 100ms delay with set up LSP):
   -- 0ms: Key is pressed.
@@ -464,45 +468,45 @@ function H.trigger_lsp()
   --   "done", it will once make whole LSP request. Having check for visible
   --   popup should prevent here the call to complete-function.
   -- When `force` is `true` then presence of popup shouldn't matter.
-  local no_popup = H.complete.force or (not H.pumvisible())
-  if no_popup and has_complete and vim.fn.mode() == 'i' then
+  local no_popup = H.completion.force or (not H.pumvisible())
+  if no_popup and has_completion and vim.fn.mode() == 'i' then
     vim.api.nvim_feedkeys(H.keys.usercompl, 'n', false)
   end
 end
 
 function H.trigger_fallback()
-  local no_popup = H.complete.force or (not H.pumvisible())
+  local no_popup = H.completion.force or (not H.pumvisible())
   if no_popup and vim.fn.mode() == 'i' then
     -- Track from which source is current popup
-    H.complete.source = 'fallback'
+    H.completion.source = 'fallback'
     MiniCompletion.fallback_action()
   end
 end
 
 ---- Stop actions
-function H.stop_complete(keep_source)
-  H.complete.timer:stop()
-  H.cancel_lsp({'completion'})
-  H.complete.fallback, H.complete.force = true, false
-  if not keep_source then H.complete.source = nil end
+function H.stop_completion(keep_source)
+  H.completion.timer:stop()
+  H.cancel_lsp({H.completion})
+  H.completion.fallback, H.completion.force = true, false
+  if not keep_source then H.completion.source = nil end
 end
 
 function H.stop_info()
   -- Id update is needed to notify that all previous work is not current
   H.info.id = H.info.id + 1
   H.info.timer:stop()
-  H.cancel_lsp({'resolve'})
+  H.cancel_lsp({H.info})
   H.close_action_window(H.info)
 end
 
 function H.stop_signature()
   H.signature.timer:stop()
-  H.cancel_lsp({'signature'})
+  H.cancel_lsp({H.signature})
   H.close_action_window(H.signature)
 end
 
 H.stop_actions = {
-  complete = H.stop_complete, info = H.stop_info, signature = H.stop_signature
+  completion = H.stop_completion, info = H.stop_info, signature = H.stop_signature
 }
 
 ---- LSP
@@ -525,12 +529,12 @@ function H.is_lsp_trigger(char, type)
   return false
 end
 
-function H.cancel_lsp(names)
-  names = names or {'completion', 'resolve', 'signature'}
-  for _, n in pairs(names) do
-    if vim.tbl_contains({'sent', 'received'}, H.lsp[n].status) then
-      if H.lsp[n].cancel_fun then H.lsp[n].cancel_fun() end
-      H.lsp[n].status = 'canceled'
+function H.cancel_lsp(caches)
+  caches = caches or {H.completion, H.info, H.signature}
+  for _, c in pairs(caches) do
+    if vim.tbl_contains({'sent', 'received'}, c.lsp.status) then
+      if c.lsp.cancel_fun then c.lsp.cancel_fun() end
+      c.lsp.status = 'canceled'
     end
   end
 end
@@ -548,8 +552,8 @@ function H.process_lsp_response(request_result, processor)
   return res
 end
 
-function H.is_lsp_current(name, id)
-  return H.lsp[name].id == id and H.lsp[name].status == 'sent'
+function H.is_lsp_current(cache, id)
+  return cache.lsp.id == id and cache.lsp.status == 'sent'
 end
 
 ---- Completion item info
@@ -559,9 +563,9 @@ function H.show_info_window()
 
   -- Try first to take lines from LSP request result.
   local lines
-  if H.lsp.resolve.status == 'received' then
+  if H.info.lsp.status == 'received' then
     lines = H.process_lsp_response(
-      H.lsp.resolve.result,
+      H.info.lsp.result,
       function(response)
         if not response.documentation then return {} end
         local res = vim.lsp.util.convert_input_to_markdown_lines(response.documentation)
@@ -569,7 +573,7 @@ function H.show_info_window()
       end
     )
 
-    H.lsp.resolve.status = 'done'
+    H.info.lsp.status = 'done'
   else
     lines = H.info_window_lines(H.info.id)
   end
@@ -618,7 +622,7 @@ function H.info_window_lines(info_id)
   end
 
   -- If popup is not from LSP then there is nothing more to do
-  if H.complete.source ~= 'lsp' then return nil end
+  if H.completion.source ~= 'lsp' then return nil end
 
   -- Try to get documentation from LSP's initial completion result
   local lsp_completion_item = H.table_get(
@@ -637,24 +641,24 @@ function H.info_window_lines(info_id)
   local bufnr = vim.api.nvim_get_current_buf()
   local params = lsp_completion_item
 
-  local current_id = H.lsp.resolve.id + 1
-  H.lsp.resolve.id = current_id
-  H.lsp.resolve.status = 'sent'
+  local current_id = H.info.lsp.id + 1
+  H.info.lsp.id = current_id
+  H.info.lsp.status = 'sent'
 
   cancel_fun = vim.lsp.buf_request_all(bufnr, 'completionItem/resolve', params, function(result)
     -- Don't do anything if there is other LSP request in action
-    if not H.is_lsp_current('resolve', current_id) then return end
+    if not H.is_lsp_current(H.info, current_id) then return end
 
-    H.lsp.resolve.status = 'received'
+    H.info.lsp.status = 'received'
 
     -- Don't do anything if completion item was changed
     if H.info.id ~= info_id then return end
 
-    H.lsp.resolve.result = result
+    H.info.lsp.result = result
     H.show_info_window()
   end)
 
-  H.lsp.resolve.cancel_fun = cancel_fun
+  H.info.lsp.cancel_fun = cancel_fun
 
   return nil
 end
@@ -705,33 +709,33 @@ end
 ---- Signature help
 function H.show_signature()
   -- If there is no received LSP result, make request and exit
-  if H.lsp.signature.status ~= 'received' then
-    current_id = H.lsp.signature.id + 1
-    H.lsp.signature.id = current_id
-    H.lsp.signature.status = 'sent'
+  if H.signature.lsp.status ~= 'received' then
+    current_id = H.signature.lsp.id + 1
+    H.signature.lsp.id = current_id
+    H.signature.lsp.status = 'sent'
 
     local bufnr = vim.api.nvim_get_current_buf()
     local params = vim.lsp.util.make_position_params()
 
     cancel_fun = vim.lsp.buf_request_all(bufnr, 'textDocument/signatureHelp', params, function(result)
-      if not H.is_lsp_current('signature', current_id) then return end
+      if not H.is_lsp_current(H.signature, current_id) then return end
 
-      H.lsp.signature.status = 'received'
-      H.lsp.signature.result = result
+      H.signature.lsp.status = 'received'
+      H.signature.lsp.result = result
 
       -- Trigger `show_signature` again to take 'received' route
       H.show_signature()
     end)
 
     -- Cache cancel function to disable requests when they are not needed
-    H.lsp.signature.cancel_fun = cancel_fun
+    H.signature.lsp.cancel_fun = cancel_fun
 
     return
   end
 
   -- Make lines to show in floating window
   local lines, hl_ranges = H.signature_lines()
-  H.lsp.signature.status = 'done'
+  H.signature.lsp.status = 'done'
 
   -- Don't show anything if there is nothing to show
   if not lines or H.is_whitespace(lines) then return end
@@ -772,7 +776,7 @@ end
 
 function H.signature_lines()
   local signature_data = H.process_lsp_response(
-    H.lsp.signature.result, H.process_signature_response
+    H.signature.lsp.result, H.process_signature_response
   )
   -- Each line is a single-line active signature string from one attached LSP
   -- client. Each highlight range is a table which indicates (if not empty)
