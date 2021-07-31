@@ -27,6 +27,12 @@
 --     signature = {height = 25, width = 80}
 --   },
 --
+--   -- Way of how module does LSP completion:
+--   -- - `source` should be one of 'completefunc' or 'omnifunc'.
+--   -- - `auto_setup` should be boolean indicating if LSP completion is set up on
+--   --   every `BufEnter` event.
+--   lsp_completion = {source = 'completefunc', auto_setup = true},
+--
 --   -- Fallback action. It will always be run in Insert mode. To use Neovim's
 --   -- built-in completion (see `:h ins-completion`), supply its mapping as
 --   -- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
@@ -40,12 +46,14 @@
 --
 -- Features:
 -- - Two-stage chain completion:
---     - First stage is implemented via `completefunc` (see `:h
---       'completefunc'`). It tries to get completion items from LSP client
+--     - First stage is an LSP completion implemented via
+--       `MiniCompletion.completefunc_lsp()`. It should be set up as either
+--       `completefunc` (see `:h 'completefunc'`) or `omnifunc` (see `:h
+--       'omnifunc'`) option. It tries to get completion items from LSP client
 --       (via 'textDocument/completion' request).
---     - If first stage resulted into no candidates, fallback action is
---       executed. The most tested actions are Neovim's built-in insert
---       completion (see `:h ins-completion`).
+--     - If first stage is not set up or resulted into no candidates, fallback
+--       action is executed. The most tested actions are Neovim's built-in
+--       insert completion (see `:h ins-completion`).
 -- - Automatic display in floating window of completion item info and signature
 --   help (with highlighting of active parameter if LSP server provides such
 --   information). After opening, window for signature help is fixed and is
@@ -61,6 +69,14 @@
 --   `MiniCompletionActiveParameter` highlight group. By default, it is a plain
 --   underline. To change this, modify it directly with `highlight
 --   MiniCompletionActiveParameter` command.
+--
+-- Note:
+-- - More appropriate, albeit slightly advanced, LSP completion setup is to set
+--   it not on every `BufEnter` event (default), but on every attach of LSP
+--   client. To do that:
+--     - Config: `lsp_completion = {source = 'omnifunc', auto_setup = false}`.
+--     - In `on_attach()` of every LSP client set 'omnifunc' option to
+--       `v:lua.MiniCompletion.completefunc_lsp`.
 --
 -- Comparisons:
 -- - 'completion-nvim':
@@ -87,11 +103,13 @@
 --     - On `InsertCharPre` event try to start auto completion. If needed,
 --       start timer which after delay will start completion process. Stop this
 --       timer if it is not needed.
---     - When timer is activated, first execute `completefunc` which tries LSP
---       completion by asynchronously sending LSP 'textDocument/completion'
---       request to all LSP clients. When all are done, execute callback which
---       processes results, stores them in LSP cache and rerun `completefunc`
---       which produces completion popup.
+--     - When timer is activated, first execute LSP source (if set up and there
+--       is an active LSP client) by calling built-in complete function
+--       (`completefunc` or `omnifunc`) which tries LSP completion by
+--       asynchronously sending LSP 'textDocument/completion' request to all
+--       LSP clients. When all are done, execute callback which processes
+--       results, stores them in LSP cache and reruns built-in complete
+--       function which produces completion popup.
 --     - If previous step didn't result into any completion, execute (in Insert
 --       mode and if no popup) fallback action.
 -- - Documentation:
@@ -152,9 +170,18 @@ function MiniCompletion.setup(config)
       au InsertLeavePre  * lua MiniCompletion.stop()
       au CompleteDonePre * lua MiniCompletion.stop({'completion', 'info'})
       au TextChangedI    * lua MiniCompletion.on_text_changed_i()
-      au BufEnter        * set completefunc=v:lua.MiniCompletion.complete_lsp
     augroup END
   ]], false)
+
+  if config.lsp_completion.auto_setup then
+    local command = string.format(
+      [[augroup MiniCompletion
+          au BufEnter * setlocal %s=v:lua.MiniCompletion.completefunc_lsp
+        augroup END]],
+      config.lsp_completion.source
+    )
+    vim.api.nvim_exec(command, false)
+  end
 
   -- Create highlighting
   vim.api.nvim_exec([[
@@ -176,6 +203,12 @@ MiniCompletion.window_dimensions = {
   info = {height = 25, width = 80},
   signature = {height = 25, width = 80}
 }
+
+---- Way of how module does LSP completion:
+---- - `source` should be one of 'completefunc' or 'omnifunc'.
+---- - `auto_setup` should be boolean indicating if LSP completion is set up on
+----   every `BufEnter` event.
+MiniCompletion.lsp_completion = {source = 'completefunc', auto_setup = true}
 
 ---- Fallback action. It will always be run in Insert mode. To use Neovim's
 ---- built-in completion (see `:h ins-completion`), supply its mapping as
@@ -273,7 +306,7 @@ function MiniCompletion.on_text_changed_i()
   H.stop_info()
 end
 
-function MiniCompletion.complete_lsp(findstart, base)
+function MiniCompletion.completefunc_lsp(findstart, base)
   -- Early return
   if (not H.has_lsp_clients()) or H.completion.lsp.status == 'sent' then
     if findstart == 1 then return -3 else return {} end
@@ -348,6 +381,7 @@ H.config = {
   delay = MiniCompletion.delay,
   window_dimensions = MiniCompletion.window_dimensions,
   fallback_action = MiniCompletion.fallback_action,
+  lsp_completion = MiniCompletion.lsp_completion,
   mappings = {
     force = '<C-Space>' -- Force completion
   }
@@ -355,7 +389,8 @@ H.config = {
 
 ---- Commonly used key sequences
 H.keys = {
-  usercompl = vim.api.nvim_replace_termcodes('<C-x><C-u>', true, false, true),
+  completefunc = vim.api.nvim_replace_termcodes('<C-x><C-u>', true, false, true),
+  omnifunc = vim.api.nvim_replace_termcodes('<C-x><C-o>', true, false, true),
   ctrl_n = vim.api.nvim_replace_termcodes('<C-g><C-g><C-n>', true, false, true),
 }
 
@@ -405,6 +440,14 @@ function H.apply_settings(config)
     ['window_dimensions.signature.height'] = {config.window_dimensions.signature.height, 'number'},
     ['window_dimensions.signature.width'] = {config.window_dimensions.signature.width, 'number'},
 
+    lsp_completion = {config.lsp_completion, 'table'},
+    ['lsp_completion.source'] = {
+      config.lsp_completion.source,
+      function(x) return x == 'completefunc' or x == 'omnifunc' end,
+      "one of strings: 'completefunc' or 'omnifunc'"
+    },
+    ['lsp_completion.auto_setup'] = {config.lsp_completion.auto_setup, 'boolean'},
+
     fallback_action = {
       config.fallback_action,
       function(x) return type(x) == 'function' or type(x) == 'string' end,
@@ -415,6 +458,7 @@ function H.apply_settings(config)
   MiniCompletion.auto = config.auto
   MiniCompletion.delay = config.delay
   MiniCompletion.window_dimensions = config.window_dimensions
+  MiniCompletion.lsp_completion = config.lsp_completion
 
   if type(config.fallback_action) == 'string' then
     MiniCompletion.fallback_action = H.make_ins_fallback(config.fallback_action)
@@ -453,7 +497,8 @@ function H.trigger_twostep()
 end
 
 function H.trigger_lsp()
-  local has_completion = vim.api.nvim_buf_get_option(0, 'completefunc') ~= ''
+  local source = MiniCompletion.lsp_completion.source
+  local has_completion = vim.api.nvim_buf_get_option(0, source) ~= ''
   -- Check for popup visibility is needed to reduce flickering.
   -- Possible issue timeline (with 100ms delay with set up LSP):
   -- 0ms: Key is pressed.
@@ -469,7 +514,7 @@ function H.trigger_lsp()
   -- When `force` is `true` then presence of popup shouldn't matter.
   local no_popup = H.completion.force or (not H.pumvisible())
   if no_popup and has_completion and vim.fn.mode() == 'i' then
-    vim.api.nvim_feedkeys(H.keys.usercompl, 'n', false)
+    vim.api.nvim_feedkeys(H.keys[source], 'n', false)
   end
 end
 
