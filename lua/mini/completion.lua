@@ -170,6 +170,7 @@ function MiniCompletion.setup(config)
       au InsertLeavePre  * lua MiniCompletion.stop()
       au CompleteDonePre * lua MiniCompletion.stop({'completion', 'info'})
       au TextChangedI    * lua MiniCompletion.on_text_changed_i()
+      au TextChangedP    * lua MiniCompletion.on_text_changed_p()
     augroup END
   ]], false)
 
@@ -242,9 +243,17 @@ function MiniCompletion.auto_completion()
   if char_is_trigger then H.cancel_lsp() end
   H.completion.fallback, H.completion.force = not char_is_trigger, char_is_trigger
 
-  -- Using delay (of debounce type) seems to actually improve user experience
-  -- as it allows fast typing without many popups. Also useful when synchronous
-  -- `<C-n>` completion blocks typing.
+  -- Cache id of Insert mode "text changed" event for a later tracking (reduces
+  -- false positive delayed triggers). The intention is to trigger completion
+  -- after the delay only if text wasn't changed during waiting. Using only
+  -- `InsertCharPre` is not enough though, as not every Insert mode change
+  -- triggers `InsertCharPre` event (notable example - hitting `<CR>`).
+  -- Also, using `+ 1` here because it is a `Pre` event and needs to cache
+  -- after inserting character.
+  H.completion.text_changed_id = H.text_changed_id + 1
+
+  -- Using delay (of debounce type) actually improves user experience
+  -- as it allows fast typing without many popups.
   H.completion.timer:start(
     MiniCompletion.delay.completion, 0, vim.schedule_wrap(H.trigger_twostep)
   )
@@ -301,9 +310,17 @@ function MiniCompletion.stop(actions)
 end
 
 function MiniCompletion.on_text_changed_i()
+  -- Track Insert mode changes
+  H.text_changed_id = H.text_changed_id + 1
+
   -- Stop 'info' processes in case no completion event is triggered but popup
   -- is not visible. See https://github.com/neovim/neovim/issues/15077
   H.stop_info()
+end
+
+function MiniCompletion.on_text_changed_p()
+  -- Track Insert mode changes
+  H.text_changed_id = H.text_changed_id + 1
 end
 
 function MiniCompletion.completefunc_lsp(findstart, base)
@@ -387,6 +404,9 @@ H.config = {
   }
 }
 
+---- Track Insert mode changes
+H.text_changed_id = 0
+
 ---- Commonly used key sequences
 H.keys = {
   completefunc = vim.api.nvim_replace_termcodes('<C-x><C-u>', true, false, true),
@@ -402,7 +422,7 @@ H.keys = {
 ---- - cancel_fun: function which cancels current request.
 ------ Cache for completion
 H.completion = {
-  fallback = true, force = false, source = nil, timer = vim.loop.new_timer(),
+  fallback = true, force = false, source = nil, text_changed_id = 0, timer = vim.loop.new_timer(),
   lsp = {id = 0, status = nil, result = nil, cancel_fun = nil}
 }
 
@@ -488,7 +508,14 @@ end
 
 ---- Completion triggers
 function H.trigger_twostep()
+  -- Trigger only in Insert mode and if text didn't change since initial
+  -- auto trigger
   if vim.fn.mode() ~= 'i' then return end
+  -- NOTE: this check is still not 100% solution as there are cases when, for
+  -- example, `<CR>` is hit just before this check. Because of asynchronous
+  -- id update and this function call (called after delay), these still match.
+  if H.completion.text_changed_id ~= H.text_changed_id then return end
+
   if H.has_lsp_clients() then
     H.trigger_lsp()
   elseif H.completion.fallback then
