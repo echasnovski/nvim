@@ -291,7 +291,7 @@ function MiniCompletion.auto_signature()
   if not char_is_trigger then return end
 
   H.signature.timer:start(
-    MiniCompletion.delay.signature, 0, vim.schedule_wrap(H.show_signature)
+    MiniCompletion.delay.signature, 0, vim.schedule_wrap(H.show_signature_window)
   )
 end
 
@@ -486,7 +486,7 @@ function H.make_ins_fallback(keys)
   return function() vim.api.nvim_feedkeys(trigger_keys, 'n', false) end
 end
 
----- Triggers
+---- Completion triggers
 function H.trigger_twostep()
   if vim.fn.mode() ~= 'i' then return end
   if H.has_lsp_clients() then
@@ -746,13 +746,13 @@ function H.info_window_options()
     col = col,
     width = info_width,
     height = info_height,
-    focusable = true,
+    focusable = false,
     style = 'minimal'
   }
 end
 
 ---- Signature help
-function H.show_signature()
+function H.show_signature_window()
   -- If there is no received LSP result, make request and exit
   if H.signature.lsp.status ~= 'received' then
     current_id = H.signature.lsp.id + 1
@@ -769,7 +769,7 @@ function H.show_signature()
       H.signature.lsp.result = result
 
       -- Trigger `show_signature` again to take 'received' route
-      H.show_signature()
+      H.show_signature_window()
     end)
 
     -- Cache cancel function to disable requests when they are not needed
@@ -779,7 +779,7 @@ function H.show_signature()
   end
 
   -- Make lines to show in floating window
-  local lines, hl_ranges = H.signature_lines()
+  local lines, hl_ranges = H.signature_window_lines()
   H.signature.lsp.status = 'done'
 
   -- Close window and exit if there is nothing to show
@@ -826,13 +826,13 @@ function H.show_signature()
   H.close_action_window(H.signature)
 
   -- Compute floating window options
-  local opts = H.signature_opts()
+  local opts = H.signature_window_opts()
 
   -- Ensure that window doesn't open when it shouldn't
   if vim.fn.mode() == 'i' then H.open_action_window(H.signature, opts) end
 end
 
-function H.signature_lines()
+function H.signature_window_lines()
   local signature_data = H.process_lsp_response(
     H.signature.lsp.result, H.process_signature_response
   )
@@ -903,16 +903,47 @@ function H.process_signature_response(response)
   return {{label = signature_label, hl_range = hl_range}}
 end
 
-function H.signature_opts()
+function H.signature_window_opts()
   local lines = vim.api.nvim_buf_get_lines(H.signature.bufnr, 0, -1, {})
-  -- Account for a very big maximum width from config
-  local win_width = math.min(
-    MiniCompletion.window_dimensions.signature.width, vim.o.columns
-  )
   local height, width = H.floating_dimensions(
-    lines, MiniCompletion.window_dimensions.signature.height, win_width
+    lines,
+    MiniCompletion.window_dimensions.signature.height,
+    MiniCompletion.window_dimensions.signature.width
   )
-  return vim.lsp.util.make_floating_popup_options(width, height, {focusable = false})
+
+  -- Compute position
+  local win_line = vim.fn.winline()
+  local space_above, space_below = win_line - 1, vim.fn.winheight(0) - win_line
+
+  local anchor, row, space
+  if height <= space_above or space_below <= space_above then
+    anchor, row, space = 'SW', 0, space_above
+  else
+    anchor, row, space = 'NW', 1, space_below
+  end
+
+  -- Possibly adjust floating window dimensions to fit screen
+  if space < height then
+    height, width = H.floating_dimensions(
+      lines, space, MiniCompletion.window_dimensions.signature.width
+    )
+  end
+
+  -- Get zero-indexed current cursor position
+  local bufpos = vim.api.nvim_win_get_cursor(0)
+  bufpos[1] = bufpos[1] - 1
+
+  return {
+    relative = 'win',
+    bufpos = bufpos,
+    anchor = anchor,
+    row = row,
+    col = 0,
+    width = width,
+    height = height,
+    focusable = false,
+    style = 'minimal'
+  }
 end
 
 ---- Helpers for floating windows
