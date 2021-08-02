@@ -18,13 +18,14 @@
 --   -- Pattern to match function name in 'function call' surrounding
 --   -- By default it is a string of letters, '_' or '.'
 --   funname_pattern = '[%w_%.]+',
+--   -- Mappings
 --   mappings = {
 --     add = 'sa',           -- Add surrounding
 --     delete = 'sd',        -- Delete surrounding
---     replace = 'sr',       -- Replace surrounding
 --     find = 'sf',          -- Find surrounding (to the right)
 --     find_left = 'sF',     -- Find surrounding (to the left)
 --     highlight = 'sh',     -- Highlight surrounding
+--     replace = 'sr',       -- Replace surrounding
 --     update_n_lines = 'sn' -- Update `n_lines`
 --   }
 -- }
@@ -111,51 +112,12 @@ function MiniSurround.setup(config)
   _G.MiniSurround = MiniSurround
 
   -- Setup config
-  config = setmetatable(config or {}, {__index = H.config})
-  mappings = setmetatable(config.mappings, {__index = H.config.mappings})
+  config = H.setup_config(config)
 
-  -- Apply settings
-  MiniSurround.n_lines = config.n_lines
-  MiniSurround.highlight_duration = config.highlight_duration
-  MiniSurround.funname_pattern = config.funname_pattern
+  -- Apply config
+  H.apply_config(config)
 
-  -- Make mappings
-  -- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
-  -- It is used to enable dot-repeatability.
-  vim.api.nvim_set_keymap(
-    'n', mappings.add, [[v:lua.MiniSurround.operator('add')]],
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'x', mappings.add, [[:<c-u>lua MiniSurround.add('visual')<cr>]],
-    {noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'n', mappings.delete, [[v:lua.MiniSurround.operator('delete') . ' ']],
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'n', mappings.replace, [[v:lua.MiniSurround.operator('replace') . ' ']],
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'n', mappings.find, [[v:lua.MiniSurround.operator('find', {'direction': 'right'}) . ' ']],
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'n', mappings.find_left, [[v:lua.MiniSurround.operator('find', {'direction': 'left'}) . ' ']],
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'n', mappings.highlight, [[v:lua.MiniSurround.operator('highlight') . ' ']],
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'n', mappings.update_n_lines, [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
-    {noremap = true, silent = true}
-  )
-
-  -- Highlight group for surrounding highlighting
+  -- Create highlighting
   vim.api.nvim_exec([[hi link MiniSurround IncSearch]], false)
 end
 
@@ -168,6 +130,17 @@ MiniSurround.highlight_duration = 500
 
 ---- Pattern to match function name in 'function call' surrounding
 MiniSurround.funname_pattern = '[%w_%.]+'
+
+---- Mappings
+MiniSurround.mappings = {
+  add = 'sa',           -- Add surrounding
+  delete = 'sd',        -- Delete surrounding
+  find = 'sf',          -- Find surrounding (to the right)
+  find_left = 'sF',     -- Find surrounding (to the left)
+  highlight = 'sh',     -- Highlight surrounding
+  replace = 'sr',       -- Replace surrounding
+  update_n_lines = 'sn' -- Update `n_lines`
+}
 
 -- Module functionality
 function MiniSurround.operator(task, cache)
@@ -341,16 +314,75 @@ H.config = {
   highlight_duration = MiniSurround.highlight_duration,
   -- Pattern to match function name in 'function call' surrounding
   funname_pattern = MiniSurround.funname_pattern,
-  mappings = {
-    add = 'sa',           -- Add surrounding
-    delete = 'sd',        -- Delete surrounding
-    replace = 'sr',       -- Replace surrounding
-    find = 'sf',          -- Find surrounding (to the right)
-    find_left = 'sF',     -- Find surrounding (to the left)
-    highlight = 'sh',     -- Highlight surrounding
-    update_n_lines = 'sn' -- Update `n_lines`
-  }
+  -- Mappings
+  mappings = MiniSurround.mappings
 }
+
+-- Settings
+function H.setup_config(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({config = {config, 'table', true}})
+  config = vim.tbl_deep_extend('force', H.config, config or {})
+
+  vim.validate({
+    n_lines = {config.n_lines, 'number'},
+    highlight_duration = {config.highlight_duration, 'number'},
+    funname_pattern = {config.funname_pattern, 'string'},
+    mappings = {config.mappings, 'table'},
+    ['mappings.add'] = {config.mappings.add, 'string'},
+    ['mappings.delete'] = {config.mappings.delete, 'string'},
+    ['mappings.find'] = {config.mappings.find, 'string'},
+    ['mappings.find_left'] = {config.mappings.find_left, 'string'},
+    ['mappings.highlight'] = {config.mappings.highlight, 'string'},
+    ['mappings.replace'] = {config.mappings.replace, 'string'},
+    ['mappings.update_n_lines'] = {config.mappings.update_n_lines, 'string'},
+  })
+
+  return config
+end
+function H.apply_config(config)
+  MiniSurround.n_lines = config.n_lines
+  MiniSurround.highlight_duration = config.highlight_duration
+  MiniSurround.funname_pattern = config.funname_pattern
+  MiniSurround.mappings = config.mappings
+
+  -- Make mappings
+  -- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
+  -- It is used to enable dot-repeatability.
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.add, [[v:lua.MiniSurround.operator('add')]],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'x', config.mappings.add, [[:<c-u>lua MiniSurround.add('visual')<cr>]],
+    {noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.delete, [[v:lua.MiniSurround.operator('delete') . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.replace, [[v:lua.MiniSurround.operator('replace') . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.find, [[v:lua.MiniSurround.operator('find', {'direction': 'right'}) . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.find_left, [[v:lua.MiniSurround.operator('find', {'direction': 'left'}) . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.highlight, [[v:lua.MiniSurround.operator('highlight') . ' ']],
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.update_n_lines, [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
+    {noremap = true, silent = true}
+  )
+end
 
 ---- Namespace for highlighting
 H.ns_id = vim.api.nvim_create_namespace('MiniSurround')
