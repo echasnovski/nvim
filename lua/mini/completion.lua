@@ -513,13 +513,15 @@ end
 
 ---- Completion triggers
 function H.trigger_twostep()
-  -- Trigger only in Insert mode and if text didn't change since initial
-  -- auto trigger
-  if vim.fn.mode() ~= 'i' then return end
-  -- NOTE: this check is still not 100% solution as there are cases when, for
-  -- example, `<CR>` is hit just before this check. Because of asynchronous
-  -- id update and this function call (called after delay), these still match.
-  if H.completion.text_changed_id ~= H.text_changed_id then return end
+  -- Trigger only in Insert mode and if text didn't change after trigger
+  -- request, unless completion is forced
+  -- NOTE: check for `text_changed_id` equality is still not 100% solution as
+  -- there are cases when, for example, `<CR>` is hit just before this check.
+  -- Because of asynchronous id update and this function call (called after
+  -- delay), these still match.
+  local allow_trigger = (vim.fn.mode() == 'i') and
+    (H.completion.force or (H.completion.text_changed_id == H.text_changed_id))
+  if not allow_trigger then return end
 
   if H.has_lsp_clients() then
     H.trigger_lsp()
