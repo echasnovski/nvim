@@ -78,14 +78,12 @@ function MiniStatusline.setup(config)
   _G.MiniStatusline = MiniStatusline
 
   -- Setup config
-  config = setmetatable(config or {}, {__index = H.config})
+  config = H.setup_config(config)
 
-  -- Set settings to ensure statusline is displayed properly
-  if config.set_vim_settings then
-    vim.o.laststatus = 2 -- Always show statusline
-  end
+  -- Apply config
+  H.apply_config(config)
 
-  -- MiniStatusline behavior
+  -- Module behavior
   vim.api.nvim_exec([[
     augroup MiniStatusline
       au!
@@ -115,7 +113,7 @@ function MiniStatusline.setup(config)
     augroup END
   ]], false)
 
-  -- MiniStatusline colors (from Gruvbox bright palette)
+  -- Create highlighting
   vim.api.nvim_exec([[
     hi link MiniStatuslineModeNormal  Cursor
     hi link MiniStatuslineModeInsert  DiffChange
@@ -130,6 +128,10 @@ function MiniStatusline.setup(config)
     hi link MiniStatuslineInactive StatusLineNC
   ]], false)
 end
+
+-- Module settings
+-- Whether to set Vim's settings for statusline
+MiniStatusline.set_vim_settings = true
 
 -- Module functionality
 function MiniStatusline.active()
@@ -369,11 +371,30 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {
-  -- Whether to set Vim's settings for statusline
-  set_vim_settings = true
-}
+H.config = {set_vim_settings = MiniStatusline.set_vim_settings}
 
+---- Settings
+function H.setup_config(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({config = {config, 'table', true}})
+  config = vim.tbl_deep_extend('force', H.config, config or {})
+
+  vim.validate({set_vim_settings = {config.set_vim_settings, 'boolean'}})
+
+  return config
+end
+
+function H.apply_config(config)
+  MiniStatusline.set_vim_settings = config.set_vim_settings
+
+  -- Set settings to ensure statusline is displayed properly
+  if config.set_vim_settings then
+    vim.o.laststatus = 2 -- Always show statusline
+  end
+end
+
+---- Various helpers
 function H.is_truncated(width)
   return vim.api.nvim_win_get_width(0) < width
 end
