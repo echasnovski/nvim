@@ -50,29 +50,20 @@ function MiniComment.setup(config)
   _G.MiniComment = MiniComment
 
   -- Setup config
-  config = setmetatable(config or {}, {__index = H.config})
-  mappings = setmetatable(config.mappings, {__index = H.config.mappings})
+  config = H.setup_config(config)
 
-  -- Make mappings
-  vim.api.nvim_set_keymap(
-    'n', mappings.comment, 'v:lua.MiniComment.operator()',
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
-    -- proper update of `'<` and `'>` marks which is needed to work correctly.
-    'x', mappings.comment, [[:<c-u>lua MiniComment.operator('visual')<cr>]],
-    {noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'n', mappings.comment_line, 'v:lua.MiniComment.operator() . "_"',
-    {expr = true, noremap = true, silent = true}
-  )
-  vim.api.nvim_set_keymap(
-    'o', mappings.textobject, [[<cmd>lua MiniComment.textobject()<cr>]],
-    {noremap = true, silent = true}
-  )
+  -- Apply config
+  H.apply_config(config)
 end
+
+-- Module settings
+---- Mappings
+MiniComment.mappings = {
+  comment = 'gc',
+  comment_line = 'gcc',
+  comment_visual = 'gc',
+  textobject = 'gc'
+}
 
 -- Module functionality
 ---- Main function to be mapped. It has a rather unintuitive logic: it should
@@ -162,15 +153,51 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {
-  mappings = {
-    comment = 'gc',
-    comment_line = 'gcc',
-    comment_visual = 'gc',
-    textobject = 'gc'
-  }
-}
+H.config = {mappings = MiniComment.mappings}
 
+---- Settings
+function H.setup_config(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({config = {config, 'table', true}})
+  config = vim.tbl_deep_extend('force', H.config, config or {})
+
+  vim.validate({
+    mappings = {config.mappings, 'table'},
+    ['mappings.comment'] = {config.mappings.comment, 'string'},
+    ['mappings.comment_line'] = {config.mappings.comment_line, 'string'},
+    ['mappings.comment_visual'] = {config.mappings.comment_visual, 'string'},
+    ['mappings.textobject'] = {config.mappings.textobject, 'string'}
+  })
+
+  return config
+end
+
+function H.apply_config(config)
+  MiniComment.mappings = config.mappings
+
+  -- Make mappings
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.comment, 'v:lua.MiniComment.operator()',
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
+    -- proper update of `'<` and `'>` marks which is needed to work correctly.
+    'x', config.mappings.comment, [[:<c-u>lua MiniComment.operator('visual')<cr>]],
+    {noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'n', config.mappings.comment_line, 'v:lua.MiniComment.operator() . "_"',
+    {expr = true, noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'o', config.mappings.textobject, [[<cmd>lua MiniComment.textobject()<cr>]],
+    {noremap = true, silent = true}
+  )
+end
+
+---- Core implementations
 function H.make_comment_parts()
   local cs = vim.api.nvim_buf_get_option(0, 'commentstring')
 
