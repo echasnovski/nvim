@@ -49,15 +49,12 @@ function MiniTabline.setup(config)
   _G.MiniTabline = MiniTabline
 
   -- Setup config
-  config = setmetatable(config or {}, {__index = H.config})
+  config = H.setup_config(config)
 
-  -- Set settings to ensure tabline is displayed properly
-  if config.set_vim_settings then
-    vim.o.showtabline = 2 -- Always show tabline
-    vim.o.hidden = true   -- Allow switching buffers without saving them
-  end
+  -- Apply config
+  H.apply_config(config)
 
-  -- MiniTabline behavior
+  -- Module behavior
   vim.api.nvim_exec([[
     augroup MiniTabline
       autocmd!
@@ -76,7 +73,7 @@ function MiniTabline.setup(config)
     endfunction
   ]], false)
 
-  -- MiniTabline colors
+  -- Create highlighting
   vim.api.nvim_exec([[
     hi link MiniTablineCurrent TabLineSel
     hi link MiniTablineActive  TabLineSel
@@ -89,6 +86,10 @@ function MiniTabline.setup(config)
     hi MiniTablineFill NONE
   ]], false)
 end
+
+-- Module settings
+-- Whether to set Vim's settings for tabline
+MiniTabline.set_vim_settings = true
 
 -- Module functionality
 function MiniTabline.update_tabline()
@@ -113,10 +114,29 @@ MiniTabline.tabs_order = {}
 
 -- Helpers
 ---- Module default config
-H.config = {
-  -- Whether to set Vim's settings for tabline
-  set_vim_settings = true
-}
+H.config = {set_vim_settings = MiniTabline.set_vim_settings}
+
+---- Settings
+function H.setup_config(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({config = {config, 'table', true}})
+  config = vim.tbl_deep_extend('force', H.config, config or {})
+
+  vim.validate({set_vim_settings = {config.set_vim_settings, 'boolean'}})
+
+  return config
+end
+
+function H.apply_config(config)
+  MiniTabline.set_vim_settings = config.set_vim_settings
+
+  -- Set settings to ensure tabline is displayed properly
+  if config.set_vim_settings then
+    vim.o.showtabline = 2 -- Always show tabline
+    vim.o.hidden = true   -- Allow switching buffers without saving them
+  end
+end
 
 ---- List tabs
 function H.list_tabs()
