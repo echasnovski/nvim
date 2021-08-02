@@ -148,17 +148,10 @@ function MiniCompletion.setup(config)
   _G.MiniCompletion = MiniCompletion
 
   -- Setup config
-  vim.validate({config = {config, 'table', true}})
-  config = setmetatable(config or {}, {__index = H.config})
+  config = H.setup_config(config)
 
-  vim.validate({['config.mappings'] = {config.mappings, 'table', true}})
-  mappings = setmetatable(config.mappings, {__index = H.config.mappings})
-
-  -- Apply settings
-  H.apply_settings(config)
-
-  -- Apply mappings
-  H.apply_mappings(mappings)
+  -- Apply config
+  H.apply_config(config)
 
   -- Setup module behavior
   vim.api.nvim_exec([[
@@ -217,6 +210,11 @@ MiniCompletion.lsp_completion = {source = 'completefunc', auto_setup = true}
 MiniCompletion.fallback_action = function()
   vim.api.nvim_feedkeys(H.keys.ctrl_n, 'n', false)
 end
+
+---- Mappings
+MiniCompletion.mappings = {
+  force = '<C-Space>' -- Force completion
+}
 
 -- Module functionality
 function MiniCompletion.auto_completion()
@@ -399,9 +397,7 @@ H.config = {
   window_dimensions = MiniCompletion.window_dimensions,
   fallback_action = MiniCompletion.fallback_action,
   lsp_completion = MiniCompletion.lsp_completion,
-  mappings = {
-    force = '<C-Space>' -- Force completion
-  }
+  mappings = MiniCompletion.mappings
 }
 
 ---- Track Insert mode changes
@@ -440,12 +436,17 @@ H.signature = {
 
 -- Helper functions
 ---- Settings
-function H.apply_settings(config)
+function H.setup_config(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({config = {config, 'table', true}})
+  config = vim.tbl_deep_extend('force', H.config, config or {})
+
   vim.validate({
     auto = {config.auto, 'table'},
-    ['auto.completion'] = {config.auto.completion, 'boolean', true},
-    ['auto.info'] = {config.auto.info, 'boolean', true},
-    ['auto.signature'] = {config.auto.signature, 'boolean', true},
+    ['auto.completion'] = {config.auto.completion, 'boolean'},
+    ['auto.info'] = {config.auto.info, 'boolean'},
+    ['auto.signature'] = {config.auto.signature, 'boolean'},
 
     delay = {config.delay, 'table'},
     ['delay.completion'] = {config.delay.completion, 'number'},
@@ -472,9 +473,16 @@ function H.apply_settings(config)
       config.fallback_action,
       function(x) return type(x) == 'function' or type(x) == 'string' end,
       'function or string'
-    }
+    },
+
+    mappings = {config.mappings, 'table'},
+    ['mappings.force'] = {config.mappings.force, 'string'}
   })
 
+  return config
+end
+
+function H.apply_config(config)
   MiniCompletion.auto = config.auto
   MiniCompletion.delay = config.delay
   MiniCompletion.window_dimensions = config.window_dimensions
@@ -485,13 +493,10 @@ function H.apply_settings(config)
   else
     MiniCompletion.fallback_action = config.fallback_action
   end
-end
 
-function H.apply_mappings(mappings)
-  vim.validate({['mappings.force'] = {mappings.force, 'string'}})
-
+  MiniCompletion.mappings = config.mappings
   vim.api.nvim_set_keymap(
-    'i', mappings.force, '<cmd>lua MiniCompletion.complete_twostep()<cr>',
+    'i', config.mappings.force, '<cmd>lua MiniCompletion.complete_twostep()<cr>',
     {noremap = true, silent = true}
   )
 end

@@ -1,5 +1,5 @@
 require('mini.comment').setup()
-require('mini.completion').setup()
+require('mini.completion').setup({delay = {signature = 50}})
 require('mini.cursorword').setup()
 require('mini.pairs').setup({modes = {'c', 'i', 't'}})
 require('mini.statusline').setup()
