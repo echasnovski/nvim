@@ -12,8 +12,8 @@
 --
 -- Default `config`:
 -- {
---   -- In which modes (as in `vim.api.nvim_set_keymap()`) to create mappings
---   modes = {"i"}
+--   -- In which modes mappings should be created
+--   modes = {insert = true, command = false, terminal = false}
 -- }
 --
 -- Details of functionality:
@@ -73,31 +73,15 @@ function MiniPairs.setup(config)
   _G.MiniPairs = MiniPairs
 
   -- Setup config
-  config = setmetatable(config or {}, {__index = H.config})
+  config = H.setup_config(config)
 
-  -- Setup mappings in command and insert modes
-  for _, mode in pairs(config.modes) do
-    -- Adding pair is disabled if symbol is after `\`
-    H.map(mode, '(', [[v:lua.MiniPairs.open('()', "[^\\].")]])
-    H.map(mode, '[', [[v:lua.MiniPairs.open('[]', "[^\\].")]])
-    H.map(mode, '{', [[v:lua.MiniPairs.open('{}', "[^\\].")]])
-
-    H.map(mode, ')', [[v:lua.MiniPairs.close("()", "[^\\].")]])
-    H.map(mode, ']', [[v:lua.MiniPairs.close("[]", "[^\\].")]])
-    H.map(mode, '}', [[v:lua.MiniPairs.close("{}", "[^\\].")]])
-
-    H.map(mode, '"', [[v:lua.MiniPairs.closeopen('""', "[^\\].")]])
-    ---- Single quote is used in plain English, so disable pair after a letter
-    H.map(mode, "'", [[v:lua.MiniPairs.closeopen("''", "[^%a\\].")]])
-    H.map(mode, '`', [[v:lua.MiniPairs.closeopen('``', "[^\\].")]])
-
-    H.map(mode, '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
-
-    if mode == 'i' then
-      H.map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
-    end
-  end
+  -- Apply config
+  H.apply_config(config)
 end
+
+-- Module Settings
+---- In which modes mappings should be created
+MiniPairs.modes = {insert = true, command = false, terminal = false}
 
 -- Module functionality
 function MiniPairs.open(pair, twochars_pattern)
@@ -148,8 +132,60 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {modes = {"i"}}
+H.config = {modes = MiniPairs.modes}
 
+---- Settings
+function H.setup_config(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({config = {config, 'table', true}})
+  config = vim.tbl_deep_extend('force', H.config, config or {})
+
+  vim.validate({
+    modes = {config.modes, 'table'},
+    ['modes.insert'] = {config.modes.insert, 'boolean'},
+    ['modes.command'] = {config.modes.command, 'boolean'},
+    ['modes.terminal'] = {config.modes.terminal, 'boolean'}
+  })
+
+  return config
+end
+
+function H.apply_config(config)
+  MiniPairs.modes = config.modes
+
+  -- Setup mappings in supplied modes
+  local mode_ids = {insert = 'i', command = 'c', terminal = 't'}
+  ---- Compute in which modes mapping should be set up
+  local mode_list = {}
+  for name, to_set in pairs(config.modes) do
+    if to_set then table.insert(mode_list, mode_ids[name]) end
+  end
+
+  for _, mode in pairs(mode_list) do
+    -- Adding pair is disabled if symbol is after `\`
+    H.map(mode, '(', [[v:lua.MiniPairs.open('()', "[^\\].")]])
+    H.map(mode, '[', [[v:lua.MiniPairs.open('[]', "[^\\].")]])
+    H.map(mode, '{', [[v:lua.MiniPairs.open('{}', "[^\\].")]])
+
+    H.map(mode, ')', [[v:lua.MiniPairs.close("()", "[^\\].")]])
+    H.map(mode, ']', [[v:lua.MiniPairs.close("[]", "[^\\].")]])
+    H.map(mode, '}', [[v:lua.MiniPairs.close("{}", "[^\\].")]])
+
+    H.map(mode, '"', [[v:lua.MiniPairs.closeopen('""', "[^\\].")]])
+    ---- Single quote is used in plain English, so disable pair after a letter
+    H.map(mode, "'", [[v:lua.MiniPairs.closeopen("''", "[^%a\\].")]])
+    H.map(mode, '`', [[v:lua.MiniPairs.closeopen('``', "[^\\].")]])
+
+    H.map(mode, '<BS>', [[v:lua.MiniPairs.bs(['()', '[]', '{}', '""', "''", '``'])]])
+
+    if mode == 'i' then
+      H.map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
+    end
+  end
+end
+
+---- Various helpers
 function H.map(mode, key, command)
   vim.api.nvim_set_keymap(mode, key, command, {expr = true, noremap = true})
 end
