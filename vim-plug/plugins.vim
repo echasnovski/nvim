@@ -26,90 +26,53 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   " Pairs of handy bracket mappings
   Plug 'tpope/vim-unimpaired'
 
-  if has("nvim-0.5") == 0
-    " Python movements and text objects
-    Plug 'jeetsukumaran/vim-pythonsense'
-
-    " Surround with (), [], "", etc.
-    Plug 'machakann/vim-sandwich'
-  endif
-
   if !exists('g:vscode')
-    " Neovim version-specific sets of plugins
-    if has("nvim-0.5")
-      "" Common dependency for Lua plugins
-      Plug 'nvim-lua/plenary.nvim'
+    "" Common dependency for Lua plugins
+    Plug 'nvim-lua/plenary.nvim'
 
-      "" Fuzzy finder for future
-      " Plug 'nvim-lua/popup.nvim'
-      " Plug 'nvim-telescope/telescope.nvim'
+    "" Fuzzy finder for future
+    " Plug 'nvim-lua/popup.nvim'
+    " Plug 'nvim-telescope/telescope.nvim'
 
-      "" Completion
-      " Plug 'nvim-lua/completion-nvim'
-      "" Other option of completion. Some say that it is far faster on big
-      "" projects than 'completion-nvim'. For suggested configuration see
-      "" README on Github. There were some problems which I didn't find a way
-      "" to solve:
-      "" - No easy incorporation of Vim's completion (opened buffers,
-      ""   dictionary, etc.).
-      "" - Hard to setup other sources of completion. For example, completion
-      ""   from open buffers. Currently under discussion:
-      ""   https://github.com/hrsh7th/nvim-compe/issues/147
-      "" - No popup with function signature when typing inside `()`. This is
-      ""   currently out of scope:
-      ""   https://github.com/hrsh7th/nvim-compe/issues/120#issuecomment-777333663
-      " Plug 'hrsh7th/nvim-compe'
+    "" Completion
+    " Plug 'nvim-lua/completion-nvim'
+    "" Other option of completion. Some say that it is far faster on big
+    "" projects than 'completion-nvim'. For suggested configuration see
+    "" README on Github. There were some problems which I didn't find a way
+    "" to solve:
+    "" - No easy incorporation of Vim's completion (opened buffers,
+    ""   dictionary, etc.).
+    "" - Hard to setup other sources of completion. For example, completion
+    ""   from open buffers. Currently under discussion:
+    ""   https://github.com/hrsh7th/nvim-compe/issues/147
+    "" - No popup with function signature when typing inside `()`. This is
+    ""   currently out of scope:
+    ""   https://github.com/hrsh7th/nvim-compe/issues/120#issuecomment-777333663
+    " Plug 'hrsh7th/nvim-compe'
 
-      "" Language server
-      Plug 'neovim/nvim-lspconfig'
+    "" Language server
+    Plug 'neovim/nvim-lspconfig'
 
-      "" Enhanced diagnostics lists
-      Plug 'folke/trouble.nvim'
+    "" Enhanced diagnostics lists
+    Plug 'folke/trouble.nvim'
 
-      "" Todo (and other notes) highlighting
-      Plug 'folke/todo-comments.nvim'
+    "" Todo (and other notes) highlighting
+    Plug 'folke/todo-comments.nvim'
 
-      "" Code formatter
-      Plug 'sbdchd/neoformat'
+    "" Code formatter
+    Plug 'sbdchd/neoformat'
 
-      "" Treesitter: incremental parsing of file
-      "" Deals with highlighting and specific textobjects
-      Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
-      Plug 'nvim-treesitter/nvim-treesitter-textobjects'
-      " Plug 'nvim-treesitter/playground'
+    "" Treesitter: incremental parsing of file
+    "" Deals with highlighting and specific textobjects
+    Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
+    Plug 'nvim-treesitter/nvim-treesitter-textobjects'
+    " Plug 'nvim-treesitter/playground'
 
-      "" Colorful icons
-      Plug 'kyazdani42/nvim-web-devicons'
+    "" Colorful icons
+    Plug 'kyazdani42/nvim-web-devicons'
 
-      "" File tree explorer
-      Plug 'kyazdani42/nvim-tree.lua'
-    else
-      "" Commenting
-      Plug 'tpope/vim-commentary'
-
-      "" Intellisense
-      Plug 'neoclide/coc.nvim', {'branch': 'release'}
-
-      "" Linting and fixing (autoformatting, etc.)
-      " Plug 'dense-analysis/ale'
-
-      "" Semantic code highlighting for Python files
-      Plug 'numirias/semshi', {'do': ':UpdateRemotePlugins'}
-
-      "" Useful icons
-      Plug 'ryanoasis/vim-devicons'
-
-      "" Statusline and bufferline
-      Plug 'vim-airline/vim-airline'
-
-      "" Auto pairs for '(' '[' '{'
-      "" 'pear-tree' provides more intuitive experience than 'auto-pairs':
-      "" 'smart opener/closer', not inserting closer when before word, etc.
-      Plug 'tmsvg/pear-tree'
-
-      " Surround with (), [], "", etc.
-      Plug 'machakann/vim-sandwich'
-    endif
+    "" File tree explorer
+    Plug 'kyazdani42/nvim-tree.lua'
 
     " General
     "" fzf support
@@ -209,16 +172,6 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     "" Markdown preview (has rather big disk size usage, around 50M)
     Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
-
-    "" LaTeX (has rather big disk size usage, around 14M)
-    " Plug 'lervag/vimtex'
-
-    " Future possibilities
-    " "" Find and replace
-    " Plug 'brooth/far.vim'
-
-    " " Git message under cursor
-    " Plug 'rhysd/git-messenger.vim'
   endif
 
 call plug#end()

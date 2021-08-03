@@ -38,17 +38,15 @@ endfunction
 autocmd VimEnter,BufWinEnter * call <SID>hi_base_syntax()
 
 "" Buffers with treesitter highlighting
-if has("nvim-0.5")
-  hi TSPunctBracket ctermfg=208 guifg=#FF8700
-  if &background == "light"
-    hi TSOperator ctermfg=Black guifg=#000000 cterm=bold gui=bold
-    hi TSPunctDelimiter ctermfg=Black guifg=#000000 cterm=bold gui=bold
-    hi TSPunctSpecial ctermfg=Black guifg=#000000 cterm=bold gui=bold
-  else
-    hi TSOperator ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
-    hi TSPunctDelimiter ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
-    hi TSPunctSpecial ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
-  endif
+hi TSPunctBracket ctermfg=208 guifg=#FF8700
+if &background == "light"
+  hi TSOperator ctermfg=Black guifg=#000000 cterm=bold gui=bold
+  hi TSPunctDelimiter ctermfg=Black guifg=#000000 cterm=bold gui=bold
+  hi TSPunctSpecial ctermfg=Black guifg=#000000 cterm=bold gui=bold
+else
+  hi TSOperator ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
+  hi TSPunctDelimiter ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
+  hi TSPunctSpecial ctermfg=White guifg=#FFFFFF cterm=bold gui=bold
 endif
 
 " " Use terminal's background (needed if transparent background is used)

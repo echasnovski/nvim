@@ -76,14 +76,10 @@ if !exists('g:vscode')
 
     " Start integrated terminal already in insert mode
     autocmd TermOpen * startinsert
-  augroup END
 
-  " Highlight yanked text
-  if has("nvim-0.5")
-    augroup CustomSettings
-      autocmd TextYankPost * silent! lua vim.highlight.on_yank()
-    augroup END
-  endif
+    " Highlight yanked text
+    autocmd TextYankPost * silent! lua vim.highlight.on_yank()
+  augroup END
 
   " Define important executables
   let g:python3_host_prog = expand("~/.pyenv/versions/neovim/bin/python3.8")

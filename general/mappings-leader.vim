@@ -136,68 +136,26 @@ let g:which_key_map.i = {
   \ }
 
 " l is for 'LSP' (Language Server Protocol)
-if has("nvim-0.5")
-  nnoremap <silent> <Leader>lf <cmd>Neoformat<CR>
-  " Actual commands are defined in settings for 'nvim-lspconfig'
-  let g:which_key_map.l = {
-    \ 'name' : '+LSP' ,
-    \ 'F' : 'format selected',
-    \ 'R' : 'references',
-    \ 'a' : 'arguments popup',
-    \ 'd' : 'diagnostics popup',
-    \ 'f' : 'format',
-    \ 'i' : 'information',
-    \ 'j' : 'next diagnostic',
-    \ 'k' : 'prev diagnostic',
-    \ 'r' : 'rename',
-    \ 's' : 'source definition',
-    \ }
-else
-  let g:which_key_map.l = {
-    \ 'name' : '+LSP' ,
-    \ '.' : [':CocConfig'                       , 'config'],
-    \ ';' : ['<Plug>(coc-refactor)'             , 'refactor'],
-    \ 'A' : ['<Plug>(coc-codeaction-selected)'  , 'selected action'],
-    \ 'a' : ['<Plug>(coc-codeaction)'           , 'line action'],
-    \ 'B' : [':CocPrev'                         , 'prev action'],
-    \ 'b' : [':CocNext'                         , 'next action'],
-    \ 'c' : [':CocList commands'                , 'commands'],
-    \ 'D' : [':CocList -A --normal diagnostics' , 'diagnostics'],
-    \ 'd' : ['<Plug>(coc-definition)'           , 'definition'],
-    \ 'e' : [':CocList extensions'              , 'extensions'],
-    \ 'F' : ['<Plug>(coc-format-selected)'      , 'format selected'],
-    \ 'f' : ['<Plug>(coc-format)'               , 'format'],
-    \ 'h' : ['<Plug>(coc-float-hide)'           , 'hide'],
-    \ 'J' : ['<Plug>(coc-diagnostic-next-error)', 'next error'],
-    \ 'j' : ['<Plug>(coc-diagnostic-next)'      , 'next diagnostic'],
-    \ 'K' : ['<Plug>(coc-diagnostic-prev-error)', 'prev error'],
-    \ 'k' : ['<Plug>(coc-diagnostic-prev)'      , 'prev diagnostic'],
-    \ 'l' : ['<Plug>(coc-codelens-action)'      , 'code lens'],
-    \ 'O' : [':CocList outline'                 , 'outline'],
-    \ 'o' : ['<Plug>(coc-openlink)'             , 'open link'],
-    \ 'q' : ['<Plug>(coc-fix-current)'          , 'quickfix action'],
-    \ 'R' : ['<Plug>(coc-references)'           , 'references'],
-    \ 'r' : ['<Plug>(coc-rename)'               , 'rename'],
-    \ 'S' : [':CocList snippets'                , 'snippets'],
-    \ 's' : [':CocList -A --normal -I symbols'  , 'references'],
-    \ 't' : ['<Plug>(coc-type-definition)'      , 'type definition'],
-    \ 'U' : [':CocUpdate'                       , 'update CoC'],
-    \ 'u' : [':CocListResume'                   , 'resume list'],
-    \ 'Z' : [':CocEnable'                       , 'enable CoC'],
-    \ 'z' : [':CocDisable'                      , 'disable CoC'],
-    \ }
-endif
+nnoremap <silent> <Leader>lf <cmd>Neoformat<CR>
+"" Actual commands are defined in settings for 'nvim-lspconfig'
+let g:which_key_map.l = {
+  \ 'name' : '+LSP' ,
+  \ 'F' : 'format selected',
+  \ 'R' : 'references',
+  \ 'a' : 'arguments popup',
+  \ 'd' : 'diagnostics popup',
+  \ 'f' : 'format',
+  \ 'i' : 'information',
+  \ 'j' : 'next diagnostic',
+  \ 'k' : 'prev diagnostic',
+  \ 'r' : 'rename',
+  \ 's' : 'source definition',
+  \ }
 
 " o is for 'other'
-if has('nvim-0.5')
-  nnoremap <Leader>oC <cmd>lua MiniCursorword.toggle()<CR>
-  nnoremap <Leader>oT <cmd>lua MiniTrailspace.toggle()<CR>
-  nnoremap <Leader>ot <cmd>lua MiniTrailspace.trim()<CR>
-else
-  nnoremap <Leader>oC <cmd>call MiniCursorwordToggle()<CR>
-  nnoremap <Leader>oT <cmd>call MiniTrailspaceToggle()<CR>
-  nnoremap <Leader>ot <cmd>call MiniTrailspaceTrim()<CR>
-endif
+nnoremap <Leader>oC <cmd>lua MiniCursorword.toggle()<CR>
+nnoremap <Leader>oT <cmd>lua MiniTrailspace.toggle()<CR>
+nnoremap <Leader>ot <cmd>lua MiniTrailspace.trim()<CR>
 let g:which_key_map.o = {
   \ 'name' : '+other' ,
   \ 'a' : [':ArgWrap'                     , 'arguments split'],

@@ -1,6 +1,6 @@
 # NeoVim setup
 
-This is a modified version of https://github.com/ChristianChiarulli/nvim. It was set up incrementally by following 'neovim' tag on [his blog](https://www.chrisatmachine.com/neovim).
+This is a setup for Neovim>=0.5.
 
 Basically, this should (after installing system dependencies) work just by cloning this repository into '~/.config/nvim' path and running `:PlugInstall`.
 
@@ -17,11 +17,6 @@ Important system dependencies:
 
     ```bash
         python -m pip install pynvim
-    ```
-    - Install 'Black' formatting engine. **Note** if done differently, don't forget to change path to it in "python.formatting.blackPath" variable in 'coc-settings.json':
-
-    ```bash
-        python -m pip install black
     ```
     - When working with 'nvim-ipy' plugin, you might need to install 'jupyter' into this environment. See 'Notes' section.
 
@@ -74,7 +69,7 @@ Important system dependencies:
     - There are three ways of installing it that worked for me in different situations:
         - _First_ seems to be the most robust (`. ranger` works in command line and 'rnvimr' picks files inside Neovim):
             - Install (if not already installed) [pipx](https://github.com/pipxproject/pipx).
-            - Install 'ranger-fm' package with 'pipx' by runngin `pipx install ranger-fm`. This already should be enough to be used in command line.
+            - Install 'ranger-fm' package with 'pipx' by running `pipx install ranger-fm`. This already should be enough to be used in command line.
             - To work in Neovim with 'rnvimr', package 'pynvim' should be installed in the same environment in which 'ranger' (or rather 'ranger-fm') is installed. It should be located at '~/.local/pipx/venvs/ranger-fm/'. Go into that directory. It should have python executables (probably both `python` and `python3`). Use them to install 'pynvim' package by running: `./python3 -m pip install pynvim`. This should enable 'rnvimr' to pick files inside Neovim.
         - _Second_ is to run `python -m pip install ranger-fm pynvim`, as instructed in ['rnvimr' plugin README](https://github.com/kevinhwang91/rnvimr#dependence). Make sure to use appropriate Pythonv version.
         - _Third_ is to install from source ([original instructions](https://vitux.com/how-to-install-ranger-terminal-file-manager-on-linux/)):
@@ -102,17 +97,6 @@ Important system dependencies:
     - Install 'jupyter' to 'neovim' virtual environment set up in 'System dependencies' section (possibly, the easiest one).
     - Temporarily have `g:python3_host_prog` point to interpreter in separate environment with installed 'pynvim' and 'jupyter'.
 - If when using 'nvim-ipy', you see "AttributeError: 'IPythonPlugin' object has no attribute 'km'" error, it might mean that no connection with `:IPython` was done.  In present setup, it means you forgot to type `<Leader>ik` after `<Leader>iq`.
-- If you want 'coc-python' to always use python from $PATH (the one returned by `which python` when NeoVim is opened), you can use this hack ([original source](https://www.reddit.com/r/neovim/comments/dyl6xw/need_help_setting_up_cocnvim_for_python_with/f81to9e/)):
-    - Create _executable_ file (for example, 'pythonshim' inside this top 'nvim' directory) with the following code:
-
-    ```bash
-    #!/bin/bash
-
-    python "$@"
-    ```
-    - Put full path to this file as "python.pythonPath" settings in 'coc-settings.json'.
-
-    **Note** that otherwise you should either choose manually Python interpreter (via `CocCommand python.setInterpreter`) or have '.nvim/coc-settings.json' file in project root with relevant option "python.pythonPath".
 - Two directories ('session' and 'undodir') are placeholders for local use (vim sessions and vim's persistent undo). They both have '.gitignore' files (which instruct to ignore everything in that directory, except '.gitignore' itself to have git recognize them) so that they will be automatically created when pulling this repository.
 - For tags to work correctly in R projects, add appropriate '.ctags' file. Currently the source can be found at https://tinyheero.github.io/2017/05/13/r-vim-ctags.html.
 - 'Pyright' language server currently by default uses python interpreter that is active when Neovim is opened. However, if using virtual environment, it is a good idea to create 'pyrightconfig.json' file with at least the following content:
@@ -128,17 +112,14 @@ Important system dependencies:
 
 - `E117: Unknown function: IPyConnect`: run `:UpdateRemotePlugins` to properly use 'nvim-ipy' plugin (see 'Notes').
 - `AttributeError: 'IPythonPlugin' object has no attribute 'km'`: connect to IPython console (see 'Notes').
-- `[coc.nvim] Jedi error: Cannot call write after a stream was destroyed`: current Python interpreter used by 'coc.nvim' doesn't have 'jedi' installed. Make sure you use proper Python interpreter (set with `:CocCommand` and proper 'python.setInterpreter' value) where it is installed.
-- `[coc.nvim] Can't find npm or yarn in your $PATH.` Update default node version in `nvm` with `nvm alias default <version>` (use installed version instead of <version>).
 
 ## Tips and tricks
 
 - This setup is configured to use buffers instead of tabs. Remember: buffer ~ file (saved or not), window ~ view of a buffer, tab ~ collection of windows. Normally you would have multiple buffers open in a single window which completely emulates "tab behavior" of "normal editor" (only with current settings of 'vim-airline' which shows buffers in "tabline" in case of a single tab). Splits create separate windows inside single tab. Usually use tabs to work on "different" projects. Useful keybindings:
     - `<Leader>b` has set of commands related to buffers. For example, `<Leader>bd` - close buffer.
     - `:q` - close window.
-    - `<TAB>` and `<SHIFT-TAB>` - go to next previous buffer (current keybinding).
+    - `]b` and `[b` - go to next and previous buffer (current keybinding).
     - `<Leader>fb` - list all present buffers with fzf (current keybinding).
 - Source for some inspiration: https://stackoverflow.com/questions/726894/what-are-the-dark-corners-of-vim-your-mom-never-told-you-about . Notable examples:
     - Use `:.![command]` to execute command in terminal and put its output into current buffer. For example: `:.!ls -lhR`.
-- In NERDTree use 'm' keybinding to open a menu with actions you can do with current file tree.
 - When testing with 'vim-test', use `-strategy=make` argument to `:Test*` commands in order to populate quickfix list. **Note** that this will not display testing process as it is running and won't open quickfix list by default.
