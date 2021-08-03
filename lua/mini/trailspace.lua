@@ -29,10 +29,12 @@ function MiniTrailspace.setup(config)
   _G.MiniTrailspace = MiniTrailspace
 
   -- Setup config
-  config = setmetatable(config or {}, {__index = H.config})
+  config = H.setup_config(config)
+
+  -- Apply config
+  H.apply_config(config)
 
   -- Module behavior
-  -- NOTE: if this updates too frequently, use `CursorHold`
   vim.api.nvim_exec([[
     augroup MiniTrailspace
       au!
@@ -100,6 +102,21 @@ end
 ---- Module default config
 H.config = {}
 
+---- Settings
+function H.setup_config(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({config = {config, 'table', true}})
+  config = vim.tbl_deep_extend('force', H.config, config or {})
+
+  return config
+end
+
+function H.apply_config(config)
+  -- There is nothing to do yet
+end
+
+---- Indicator of whether to actually do highlighing
 H.enabled = true
 
 -- Information about last match highlighting: word and match id (returned from
