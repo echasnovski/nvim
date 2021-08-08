@@ -31,15 +31,15 @@
 -- - MiniStatuslineInactive - highliting in not focused window
 --
 -- Features:
--- - Built-in `active`
+-- - Built-in active mode indicator with colors.
+-- - Sections hide information when window is too narrow (specific width is
+--   configurable per section).
 --
 -- Suggested dependencies (provide extra functionality, statusline will work
 -- without them):
 -- - Nerd font (to support extra icons).
--- - Plugin 'airblade/vim-gitgutter' for Git signs. If missing, no git signs
---   will be shown.
--- - Plugin 'tpope/vim-fugitive' for Git branch. If missing, '<no fugitive>'
---   will be displayed instead of a branch.
+-- - Plugin 'lewis6991/gitsigns.nvim' for Git information. If missing, '-' will
+--   be shown.
 -- - Plugin 'kyazdani42/nvim-web-devicons' or 'ryanoasis/vim-devicons' for
 --   filetype icons. If missing, no icons will be used.
 --
@@ -61,7 +61,6 @@
 --   is happening due to following reasons:
 --     - Plugin 'vim-polyglot' has 'polyglot-sensible' autogroup which checks
 --     on 'CursorHold' events if file was updated (see `:h checktime`).
---     - Plugin 'vim-gitgutter' processes buffer on 'CursorHold' events.
 --   As these actions are useful, one can only live with the fact that
 --   'statusline' option gets reevaluated on 'CursorHold'.
 
@@ -89,27 +88,6 @@ function MiniStatusline.setup(config)
       au!
       au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline.active()
       au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline.inactive()
-    augroup END
-  ]], false)
-
-  -- Update git branch on every buffer enter and after Neovim gained focus
-  -- (detect outside change).  Also update git branch before leaving command
-  -- line (detect fugitive change). Defer update to actually make it **after**
-  -- leaving command line.  Otherwise this will be evaluated too soon and give
-  -- "previous" branch.
-  vim.api.nvim_exec([[
-    augroup MiniStatusline
-      au BufEnter,FocusGained * lua MiniStatusline.update_git_branch({defer = false})
-      au CmdlineLeave         * lua MiniStatusline.update_git_branch({defer = true})
-    augroup END
-  ]], false)
-
-  -- Update git signs on every buffer enter (detect signs for buffer) and every
-  -- time 'gitgutter' says that change occured
-  vim.api.nvim_exec([[
-    augroup MiniStatusline
-      au BufEnter *         lua MiniStatusline.update_git_signs()
-      au User     GitGutter lua MiniStatusline.update_git_signs()
     augroup END
   ]], false)
 
@@ -220,78 +198,13 @@ function MiniStatusline.section_wrap()
 end
 
 ---- Git
----- NOTE: Everything is implemented through updating some custom variable to
----- increase performance because certain actions are only done when needed and
----- not on every statusline update. For comparison: if called on every
----- statusline update, total statusline execution time is ~1.1ms; with current
----- approach it drops to ~0.2ms.
------- Git branch
-MiniStatusline.git_branch = nil
-
-function MiniStatusline.update_git_branch(arg)
-  if vim.fn.exists('*FugitiveHead') == 0 then
-    MiniStatusline.git_branch = '<no fugitive>'
-    return
-  end
-
-  update_fun = function()
-    -- Use commit hash truncated to 7 characters in case of detached HEAD
-    local branch = vim.fn.FugitiveHead(7)
-    if branch == '' then branch = '<no branch>' end
-
-    local old_val = MiniStatusline.git_branch
-    MiniStatusline.git_branch = branch
-    -- Force statusline redraw if it is not first update (otherwise there is a
-    -- flicker at Neovim start) and if new value differs from the current one
-    if (old_val ~= nil) and (old_val ~= branch) then
-      vim.cmd [[noautocmd redrawstatus]]
-    end
-  end
-
-  if arg.defer then
-    vim.defer_fn(update_fun, 50)
-  else
-    update_fun()
-  end
-end
-
------- Git diff signs
-MiniStatusline.git_signs = nil
-
-function MiniStatusline.update_git_signs()
-  if vim.fn.exists('*GitGutterGetHunkSummary') == 0 then
-    MiniStatusline.git_signs = nil
-    return
-  end
-
-  local signs = vim.fn.GitGutterGetHunkSummary()
-  local res = {}
-  if signs[1] > 0 then res[#res + 1] = '+' .. signs[1] end
-  if signs[2] > 0 then res[#res + 1] = '~' .. signs[2] end
-  if signs[3] > 0 then res[#res + 1] = '-' .. signs[3] end
-
-  local old_val = MiniStatusline.git_signs
-  if next(res) == nil then
-    MiniStatusline.git_signs = nil
-  else
-    MiniStatusline.git_signs = table.concat(res, ' ')
-  end
-
-  -- Force statusline redraw if it is not first update (otherwise there is a
-  -- flicker at Neovim start) and if new value differs from the current one
-  if (old_val ~= nil) and (old_val ~= MiniStatusline.git_signs) then
-    vim.cmd [[noautocmd redrawstatus]]
-  end
-end
-
 function MiniStatusline.section_git(arg)
   if H.isnt_normal_buffer() then return '' end
 
-  local res
-  if H.is_truncated(arg.trunc_width) then
-    res = MiniStatusline.git_branch
-  else
-    res = table.concat({MiniStatusline.git_branch, MiniStatusline.git_signs}, ' ')
+  local res = vim.b.gitsigns_head or ''
+  if not H.is_truncated(arg.trunc_width) then
+    local signs = vim.b.gitsigns_status or ''
+    if signs ~= '' then res = res .. ' ' .. signs end
   end
 
   if (res == nil) or res == '' then res = '-' end
