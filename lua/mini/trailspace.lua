@@ -45,7 +45,7 @@ function MiniTrailspace.setup(config)
 
   -- Create highlighting
   vim.api.nvim_exec([[
-    hi link MiniTrailspace ErrorMsg
+    hi link MiniTrailspace Error
   ]], false)
 end
 

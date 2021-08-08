@@ -119,7 +119,8 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     " Appearence
     "" Grubvox theme
-    Plug 'morhetz/gruvbox'
+    " Plug 'morhetz/gruvbox'
+    " Plug 'chriskempson/base16-vim'
 
     "" Other possible themes (from most to least) if got bored with gruvbox
     " "" Onedark
