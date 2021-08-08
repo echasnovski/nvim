@@ -32,27 +32,6 @@ function ToggleWrap()
   endif
 endfunction
 
-" Cycle trough git-gutter hunks in a file
-function! GitGutterNextHunkCycle()
-  let line = line('.')
-  silent! GitGutterNextHunk
-  if line('.') == line
-    " Go to first line and then to next hunk
-    1
-    GitGutterNextHunk
-  endif
-endfunction
-
-function! GitGutterPrevHunkCycle()
-  let line = line('.')
-  silent! GitGutterPrevHunk
-  if line('.') == line
-    " Got to last line and then to next hunk
-    $
-    GitGutterPrevHunk
-  endif
-endfunction
-
 " Show Neoterm's active REPL, i.e. in which command will be executed when one
 " of `TREPLSend*` will be used
 function ShowActiveNeotermREPL()

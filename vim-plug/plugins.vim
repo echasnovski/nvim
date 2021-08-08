@@ -94,10 +94,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Git integration
     Plug 'tpope/vim-fugitive'
     Plug 'junegunn/gv.vim'
-    Plug 'airblade/vim-gitgutter'
-    """ Lua alternative of 'vim-gitgutter'. Currently is very slow on big
-    """ files:
-    " Plug 'lewis6991/gitsigns.nvim'
+    Plug 'lewis6991/gitsigns.nvim'
 
     "" Show keybindings
     Plug 'liuchengxu/vim-which-key'

@@ -78,30 +78,28 @@ let g:which_key_map.f = {
   \ }
 
 " g is for git
-"" Functions `GitGutterNextHunkCycle()` and `GitGutterPrevHunkCycle()` are
-"" defined in 'general/functions.vim'
-nnoremap <silent> <Leader>gj <cmd>call GitGutterNextHunkCycle()<CR>zz
-nnoremap <silent> <Leader>gk <cmd>call GitGutterPrevHunkCycle()<CR>zz
 let g:which_key_map.g = {
   \ 'name' : '+git' ,
-  \ 'A' : [':Git add %'                    , 'add buffer'],
-  \ 'a' : ['<Plug>(GitGutterStageHunk)'    , 'add hunk'],
-  \ 'b' : [':Git blame'                    , 'blame'],
+  \ 'A' :                                    'add buffer',
+  \ 'a' :                                    'add (stage) hunk',
+  \ 'B' : [':Git blame'                    , 'blame buffer'],
+  \ 'b' :                                    'blame line',
   \ 'D' : [':tab Gvdiffsplit'              , 'diff split'],
   \ 'd' : [':Git diff'                     , 'diff'],
-  \ 'f' : [':GitGutterFold'                , 'fold unchanged'],
   \ 'g' : [':Git'                          , 'git window'],
   \ 'h' : [':diffget //2'                  , 'merge from left (our)'],
   \ 'j' :                                    'next hunk',
   \ 'k' :                                    'prev hunk',
   \ 'l' : [':diffget //3'                  , 'merge from right (their)'],
-  \ 'p' : ['<Plug>(GitGutterPreviewHunk)'  , 'preview hunk'],
-  \ 'q' : [':GitGutterQuickFix | copen'    , 'quickfix hunks'],
-  \ 'R' : [':Git reset %'                  , 'reset buffer'],
+  \ 'p' :                                    'preview hunk',
+  \ 'q' :                                    'quickfix hunks',
   \ 't' : [':GitGutterLineHighlightsToggle', 'toggle highlight'],
-  \ 'u' : ['<Plug>(GitGutterUndoHunk)'     , 'undo hunk'],
+  \ 'u' :                                    'undo stage hunk',
+  \ 'U' : [':Git reset %'                  , 'undo stage buffer'],
   \ 'V' : [':GV!'                          , 'view buffer commits'],
   \ 'v' : [':GV'                           , 'view commits'],
+  \ 'x' :                                    'discard (reset) hunk',
+  \ 'X' :                                    'discard (reset) buffer'
   \ }
 
 " i is for IPython
