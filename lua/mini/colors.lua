@@ -176,25 +176,31 @@ function MiniColors.mini16_palette(background, foreground)
 
   local palette = {}
 
+  -- Compute focus lightness (one with which scales and alternative accent
+  -- colors will be made). No particular reason for this formula, just simple
+  -- trial and error. Some justifications for skewness towards foreground:
+  -- - This puts more contrast on comments (`base03`) and alternative accents.
+  -- - This seems to perform nice with both light and dark themes
+  local focus_lightness = 0.35 * back.lightness + 0.65 * fore.lightness
+
   -- First four colors are 'background': have same hue and saturation as
-  -- `background`, but lightness progresses towards middle
-  vim.list_extend(palette, H.make_lightness_scale(back, fore.lightness))
+  -- `background`, but lightness progresses towards focus
+  vim.list_extend(palette, H.make_lightness_scale(back, focus_lightness))
   -- Second four colors are 'foreground': have same hue and saturation as
-  -- `foreground`, but lightness progresses towards middle
-  vim.list_extend(palette, H.make_lightness_scale(fore, back.lightness))
+  -- `foreground`, but lightness progresses towards focus
+  vim.list_extend(palette, H.make_lightness_scale(fore, focus_lightness))
 
   -- Eight accent colors are generated as pairs:
   -- - Each pair has same hue from set of hues 'most different' to background
   --   and foreground hues.
   -- - Within pair there is base lightness (equal to foreground lightness) and
-  --   alternative (as middle lightness between foreground and background).
+  --   alternative (equal to focus lightness).
   -- - All colors have the same saturation as foreground (as they will appear
   --   next to each other).
-  local middle_lightness = 0.5 * (fore.lightness + back.lightness)
   local accent_hues = H.make_different_hues({back.hue, fore.hue}, 4)
   for _, hue in pairs(accent_hues) do
     local base = {hue = hue, saturation = fore.saturation, lightness = fore.lightness}
-    local alt  = {hue = hue, saturation = fore.saturation, lightness = middle_lightness}
+    local alt  = {hue = hue, saturation = fore.saturation, lightness = focus_lightness}
     vim.list_extend(palette, {H.hsl_to_hex(base), H.hsl_to_hex(alt)})
   end
 
@@ -251,9 +257,8 @@ function H.make_hue_scale(n, offset)
   return res
 end
 
-function H.make_lightness_scale(base, opposite_lightness)
-  local middle = 0.5 * (base.lightness + opposite_lightness)
-  local h = (middle - base.lightness) / 3
+function H.make_lightness_scale(base, target_lightness)
+  local h = (target_lightness - base.lightness) / 3
 
   local res = {}
   for i=0,3,1 do
