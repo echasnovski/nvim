@@ -4,12 +4,7 @@ syntax on
 " (https://github.com/chriskempson/base16)
 
 " GUI color definitions, done using HSL color space
-"" First four: dark scale with 'cool' in mind
-"" Second four: light scale with 'mint' in mind
-"" Colors are 4 pairs:
-"" - Saturation is always 80.
-"" - Hues for pairs are 30, 120, 200, and 300.
-"" - Within pair colors are light (lightness 75) and dark (lightness 50).
+"" Manual tweaked modification of 'mini.colors' output
 let s:gui00        = "#1f252d"
 let g:base16_gui00 = "#1f252d"
 let s:gui01        = "#343e4b"
@@ -18,26 +13,26 @@ let s:gui02        = "#495769"
 let g:base16_gui02 = "#495769"
 let s:gui03        = "#8797ab"
 let g:base16_gui03 = "#8797ab"
-let s:gui04        = "#c4cd98"
-let g:base16_gui04 = "#c4cd98"
-let s:gui05        = "#d2d9b0"
-let g:base16_gui05 = "#d2d9b0"
-let s:gui06        = "#e0e4c8"
-let g:base16_gui06 = "#e0e4c8"
-let s:gui07        = "#edf0e0"
-let g:base16_gui07 = "#edf0e0"
+let s:gui04        = "#d9f28c"
+let g:base16_gui04 = "#d9f28c"
+let s:gui05        = "#c9ed5e"
+let g:base16_gui05 = "#c9ed5e"
+let s:gui06        = "#bae830"
+let g:base16_gui06 = "#bae830"
+let s:gui07        = "#a1cf17"
+let g:base16_gui07 = "#a1cf17"
 let s:gui08        = "#f2bf8c"
 let g:base16_gui08 = "#f2bf8c"
 let s:gui09        = "#e68019"
 let g:base16_gui09 = "#e68019"
-let s:gui0A        = "#19e619"
-let g:base16_gui0A = "#19e619"
-let s:gui0B        = "#8cf28c"
-let g:base16_gui0B = "#8cf28c"
-let s:gui0C        = "#19a1e6"
-let g:base16_gui0C = "#19a1e6"
-let s:gui0D        = "#8cd0f2"
-let g:base16_gui0D = "#8cd0f2"
+let s:gui0A        = "#8cf28c"
+let g:base16_gui0A = "#8cf28c"
+let s:gui0B        = "#19e619"
+let g:base16_gui0B = "#19e619"
+let s:gui0C        = "#8cd0f2"
+let g:base16_gui0C = "#8cd0f2"
+let s:gui0D        = "#19a1e6"
+let g:base16_gui0D = "#19a1e6"
 let s:gui0E        = "#f28cf2"
 let g:base16_gui0E = "#f28cf2"
 let s:gui0F        = "#e619e5"
@@ -73,7 +68,8 @@ fun <sid>hi(group, guifg, guibg, attr, guisp)
 endfun
 
 "" Vim editor colors
-call <sid>hi("Normal",        s:gui05, s:gui00, "", "")
+""" Major difference from base16: using '04' as main foreground
+call <sid>hi("Normal",        s:gui04, s:gui00, "", "")
 call <sid>hi("Bold",          "", "", "bold", "")
 call <sid>hi("Debug",         s:gui08, "", "", "")
 call <sid>hi("Directory",     s:gui0D, "", "", "")
