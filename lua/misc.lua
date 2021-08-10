@@ -5,6 +5,12 @@ function _G.dump(x)
   print(vim.inspect(x))
 end
 
+function _G.dump_text(x)
+  local lines = vim.split(vim.inspect(x), '\n')
+  local lnum = vim.api.nvim_win_get_cursor(0)[1]
+  vim.fn.append(lnum, lines)
+end
+
 -- Execute `f` once and time how long it took
 -- @param f Function which execution to benchmark
 -- @param ... Arguments when calling `f`
