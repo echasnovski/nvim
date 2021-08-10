@@ -1,3 +1,4 @@
+require('mini.colors').setup()
 require('mini.comment').setup()
 require('mini.completion').setup({delay = {signature = 50}})
 require('mini.cursorword').setup()
