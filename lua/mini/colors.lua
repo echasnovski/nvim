@@ -58,8 +58,7 @@ function MiniColors.base16(palette, name)
   H.hi('ModeMsg',      {guifg=p.base0B, guibg='',       gui='',          guisp=''})
   H.hi('MoreMsg',      {guifg=p.base0B, guibg='',       gui='',          guisp=''})
   H.hi('NonText',      {guifg=p.base03, guibg='',       gui='',          guisp=''})
-  ---- Major difference from base16: using '04' as main foreground
-  H.hi('Normal',       {guifg=p.base04, guibg=p.base00, gui='',          guisp=''})
+  H.hi('Normal',       {guifg=p.base05, guibg=p.base00, gui='',          guisp=''})
   H.hi('PMenu',        {guifg=p.base05, guibg=p.base01, gui='none',      guisp=''})
   H.hi('PMenuSel',     {guifg=p.base01, guibg=p.base05, gui='',          guisp=''})
   H.hi('Question',     {guifg=p.base0D, guibg='',       gui='',          guisp=''})
@@ -161,8 +160,8 @@ function MiniColors.base16(palette, name)
   vim.cmd([[hi MiniTablineFill NONE]])
 
   H.hi('MiniStatuslineModeNormal',  {guifg=p.base00, guibg=p.base05, gui='bold'})
-  H.hi('MiniStatuslineModeInsert',  {guifg=p.base00, guibg=p.base0C, gui='bold'})
-  H.hi('MiniStatuslineModeVisual',  {guifg=p.base00, guibg=p.base0A, gui='bold'})
+  H.hi('MiniStatuslineModeInsert',  {guifg=p.base00, guibg=p.base0D, gui='bold'})
+  H.hi('MiniStatuslineModeVisual',  {guifg=p.base00, guibg=p.base0B, gui='bold'})
   H.hi('MiniStatuslineModeReplace', {guifg=p.base00, guibg=p.base0E, gui='bold'})
   H.hi('MiniStatuslineModeCommand', {guifg=p.base00, guibg=p.base08, gui='bold'})
   H.hi('MiniStatuslineModeOther',   {guifg=p.base00, guibg=p.base03, gui='bold'})
@@ -172,46 +171,64 @@ end
 
 function MiniColors.mini16_palette(background, foreground)
   if not (H.is_hex(background) and H.is_hex(foreground)) then return nil end
-  local back, fore = H.hex_to_hsl(background), H.hex_to_hsl(foreground)
+  local bg, fg = H.hex_to_hsl(background), H.hex_to_hsl(foreground)
 
   local palette = {}
 
-  -- Compute focus lightness (one with which scales and alternative accent
-  -- colors will be made). No particular reason for this formula, just simple
-  -- trial and error. Some justifications for skewness towards foreground:
+  -- Compute target lightness values: focus (one with which background scale
+  -- and alternative accent colors will be made) and edge (the most extreme
+  -- lightness for foreground scale). No particular reason for these formulas,
+  -- just simple trial and error.
+  -- Some justifications for skewness towards foreground in focus:
   -- - This puts more contrast on comments (`base03`) and alternative accents.
   -- - This seems to perform nice with both light and dark themes
-  local focus_lightness = 0.35 * back.lightness + 0.65 * fore.lightness
+  local focus_lightness = 0.35 * bg.lightness + 0.65 * fg.lightness
+  local edge_lightness = fg.lightness > 0.5 and 0.98 or 0.02
 
   -- First four colors are 'background': have same hue and saturation as
   -- `background`, but lightness progresses towards focus
-  vim.list_extend(palette, H.make_lightness_scale(back, focus_lightness))
+  local bg_step = (focus_lightness - bg.lightness) / 3
+  palette[1]  = {hue = bg.hue, saturation = bg.saturation, lightness = bg.lightness + 0 * bg_step}
+  palette[2]  = {hue = bg.hue, saturation = bg.saturation, lightness = bg.lightness + 1 * bg_step}
+  palette[3]  = {hue = bg.hue, saturation = bg.saturation, lightness = bg.lightness + 2 * bg_step}
+  palette[4]  = {hue = bg.hue, saturation = bg.saturation, lightness = bg.lightness + 3 * bg_step}
+
   -- Second four colors are 'foreground': have same hue and saturation as
-  -- `foreground`, but lightness progresses towards focus
-  vim.list_extend(palette, H.make_lightness_scale(fore, focus_lightness))
+  -- `foreground`, but lightness progresses towards nearest edge. Scale is
+  -- created so that 'base05' will be identical to 'foreground'.
+  local fg_step = (edge_lightness - fg.lightness) / 2
+  palette[5]  = {hue = fg.hue, saturation = fg.saturation, lightness = fg.lightness - 1 * fg_step}
+  palette[6]  = {hue = fg.hue, saturation = fg.saturation, lightness = fg.lightness + 0 * fg_step}
+  palette[7]  = {hue = fg.hue, saturation = fg.saturation, lightness = fg.lightness + 1 * fg_step}
+  palette[8]  = {hue = fg.hue, saturation = fg.saturation, lightness = fg.lightness + 2 * fg_step}
 
   -- Eight accent colors are generated as pairs:
   -- - Each pair has same hue from set of hues 'most different' to background
   --   and foreground hues.
-  -- - Within pair there is base lightness (equal to foreground lightness) and
-  --   alternative (equal to focus lightness).
   -- - All colors have the same saturation as foreground (as they will appear
   --   next to each other).
-  local accent_hues = H.make_different_hues({back.hue, fore.hue}, 4)
-  for _, hue in pairs(accent_hues) do
-    local base = {hue = hue, saturation = fore.saturation, lightness = fore.lightness}
-    local alt  = {hue = hue, saturation = fore.saturation, lightness = focus_lightness}
-    vim.list_extend(palette, {H.hsl_to_hex(base), H.hsl_to_hex(alt)})
-  end
+  -- - Within pair there is base lightness (equal to foreground lightness) and
+  --   alternative (equal to focus lightness). Base lightness goes to colors
+  --   which will be used more frequently in code: base08 (variables), base0B
+  --   (strings), base0D (functions), base0E (keywords).
+  local accent_hues = H.make_different_hues({bg.hue, fg.hue}, 4)
+  palette[9]  = {hue = accent_hues[1], saturation = fg.saturation, lightness = fg.lightness}
+  palette[10] = {hue = accent_hues[1], saturation = fg.saturation, lightness = focus_lightness}
+  palette[11] = {hue = accent_hues[2], saturation = fg.saturation, lightness = focus_lightness}
+  palette[12] = {hue = accent_hues[2], saturation = fg.saturation, lightness = fg.lightness}
+  palette[13] = {hue = accent_hues[3], saturation = fg.saturation, lightness = focus_lightness}
+  palette[14] = {hue = accent_hues[3], saturation = fg.saturation, lightness = fg.lightness}
+  palette[15] = {hue = accent_hues[4], saturation = fg.saturation, lightness = fg.lightness}
+  palette[16] = {hue = accent_hues[4], saturation = fg.saturation, lightness = focus_lightness}
 
-  -- Name colors according to base16
-  local base16 = {}
-  for i, hex in ipairs(palette) do
+  -- Convert to base16 palette
+  local base16_palette = {}
+  for i, hsl in ipairs(palette) do
     local name = 'base' .. string.format('%02X', i - 1)
-    base16[name] = hex
+    base16_palette[name] = H.hsl_to_hex(hsl)
   end
 
-  return base16
+  return base16_palette
 end
 
 -- Helpers
@@ -254,19 +271,6 @@ end
 function H.make_hue_scale(n, offset)
   local res, step = {}, math.floor(360 / n + 0.5)
   for i=0,n-1,1 do table.insert(res, (offset + i * step) % 360) end
-  return res
-end
-
-function H.make_lightness_scale(base, target_lightness)
-  local h = (target_lightness - base.lightness) / 3
-
-  local res = {}
-  for i=0,3,1 do
-    local l = base.lightness + i * h
-    local hsl = {hue = base.hue, saturation = base.saturation, lightness = l}
-    table.insert(res, H.hsl_to_hex(hsl))
-  end
-
   return res
 end
 
