@@ -19,10 +19,10 @@ if vim.o.background == 'dark' then
     base09 = '#e74b2c',
     base0A = '#6ae72c',
     base0B = '#aef28c',
-    base0C = '#2cc8e7',
+    base0C = '#a92ce7',
     base0D = '#8ce1f2',
     base0E = '#d08cf2',
-    base0F = '#a92ce7'
+    base0F = '#2cc8e7'
   }
 end
 
@@ -30,22 +30,22 @@ end
 -- foreground '#7f9900' (HSL = 70-100-30)
 if vim.o.background == 'light' then
   palette = {
-    base00 = "#e5eeff",
-    base01 = "#9dbfff",
-    base02 = "#5690ff",
-    base03 = "#0e61ff",
-    base04 = "#bae000",
-    base05 = "#7f9900",
-    base06 = "#445200",
-    base07 = "#080a00",
-    base08 = "#991a00",
-    base09 = "#ff360e",
-    base0A = "#5eff0e",
-    base0B = "#339900",
-    base0C = "#0ed7ff",
-    base0D = "#008099",
-    base0E = "#660099",
-    base0F = "#af0eff"
+    base00 = '#e5eeff',
+    base01 = '#9dbfff',
+    base02 = '#5690ff',
+    base03 = '#0e61ff',
+    base04 = '#bae000',
+    base05 = '#7f9900',
+    base06 = '#445200',
+    base07 = '#080a00',
+    base08 = '#991a00',
+    base09 = '#ff360e',
+    base0A = '#5eff0e',
+    base0B = '#339900',
+    base0C = '#af0eff',
+    base0D = '#008099',
+    base0E = '#660099',
+    base0F = '#0ed7ff'
   }
 end
 

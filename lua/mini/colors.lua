@@ -211,15 +211,22 @@ function MiniColors.mini16_palette(background, foreground)
   --   alternative (equal to focus lightness). Base lightness goes to colors
   --   which will be used more frequently in code: base08 (variables), base0B
   --   (strings), base0D (functions), base0E (keywords).
+  --
+  -- How exactly colors are mapped to 'base16' colors is a result of trial and
+  -- error. One rule of thumb was: colors within one hue pair should be more
+  -- often seen next to each other. This is because it is easier to distinguish
+  -- them and seems to be more visually appealing. That is why `base0D` (14)
+  -- and `base0F` (16) have same hues because they usually represent functions
+  -- and delimiter (brackets included).
   local accent_hues = H.make_different_hues({bg.hue, fg.hue}, 4)
   palette[9]  = {hue = accent_hues[1], saturation = fg.saturation, lightness = fg.lightness}
   palette[10] = {hue = accent_hues[1], saturation = fg.saturation, lightness = focus_lightness}
   palette[11] = {hue = accent_hues[2], saturation = fg.saturation, lightness = focus_lightness}
   palette[12] = {hue = accent_hues[2], saturation = fg.saturation, lightness = fg.lightness}
-  palette[13] = {hue = accent_hues[3], saturation = fg.saturation, lightness = focus_lightness}
+  palette[13] = {hue = accent_hues[4], saturation = fg.saturation, lightness = focus_lightness}
   palette[14] = {hue = accent_hues[3], saturation = fg.saturation, lightness = fg.lightness}
   palette[15] = {hue = accent_hues[4], saturation = fg.saturation, lightness = fg.lightness}
-  palette[16] = {hue = accent_hues[4], saturation = fg.saturation, lightness = focus_lightness}
+  palette[16] = {hue = accent_hues[3], saturation = fg.saturation, lightness = focus_lightness}
 
   -- Convert to base16 palette
   local base16_palette = {}
