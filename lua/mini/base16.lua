@@ -151,12 +151,12 @@ function MiniBase16.apply(palette, name)
 
   -- Plugins
   ---- 'mini'
-  H.hi('MiniTablineCurrent',         {guifg=p.base04, guibg=p.base03, gui='bold'})
-  H.hi('MiniTablineActive',          {guifg=p.base04, guibg=p.base01, gui='bold'})
-  H.hi('MiniTablineHidden',          {guifg=p.base05, guibg=p.base01, gui=''})
-  H.hi('MiniTablineModifiedCurrent', {guifg=p.base03, guibg=p.base04, gui='bold'})
-  H.hi('MiniTablineModifiedActive',  {guifg=p.base01, guibg=p.base04, gui='bold'})
-  H.hi('MiniTablineModifiedHidden',  {guifg=p.base01, guibg=p.base05, gui=''})
+  H.hi('MiniTablineCurrent',         {guifg=p.base05, guibg=p.base02, gui='bold'})
+  H.hi('MiniTablineActive',          {guifg=p.base05, guibg=p.base01, gui='bold'})
+  H.hi('MiniTablineHidden',          {guifg=p.base04, guibg=p.base01, gui=''})
+  H.hi('MiniTablineModifiedCurrent', {guifg=p.base02, guibg=p.base05, gui='bold'})
+  H.hi('MiniTablineModifiedActive',  {guifg=p.base02, guibg=p.base04, gui='bold'})
+  H.hi('MiniTablineModifiedHidden',  {guifg=p.base01, guibg=p.base04, gui=''})
   vim.cmd([[hi MiniTablineFill NONE]])
 
   H.hi('MiniStatuslineModeNormal',  {guifg=p.base00, guibg=p.base05, gui='bold'})
