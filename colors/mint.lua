@@ -50,5 +50,5 @@ if vim.o.background == 'light' then
 end
 
 if palette then
-  require('mini.colors').base16(palette, 'Mint')
+  require('mini.base16').apply(palette, 'Mint')
 end
