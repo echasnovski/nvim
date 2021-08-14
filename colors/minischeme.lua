@@ -1,10 +1,10 @@
--- 'Mint' theme
+-- 'Minischeme' color scheme
 -- Derived from base16 (https://github.com/chriskempson/base16) and mini16
 -- palette generator
 local palette
 
--- Dark palette is a 'mini16' with background '#1f242e' (HSL = 220-20-15) and
--- foreground '#e1f28c' (HSL = 70-80-75)
+-- Dark palette is an output of 'MiniBase16.mini_palette' with background
+-- '#1f242e' (HSL = 220-20-15) and foreground '#e1f28c' (HSL = 70-80-75)
 if vim.o.background == 'dark' then
   palette = {
     base00 = '#1f242e',
@@ -26,8 +26,8 @@ if vim.o.background == 'dark' then
   }
 end
 
--- Light palette is a 'mini16' with background '#e5eeff' (HSL = 220-100-95) and
--- foreground '#7f9900' (HSL = 70-100-30)
+-- Dark palette is an output of 'MiniBase16.mini_palette' with background
+-- '#e5eeff' (HSL = 220-100-95) and foreground '#7f9900' (HSL = 70-100-30)
 if vim.o.background == 'light' then
   palette = {
     base00 = '#e5eeff',
@@ -50,5 +50,5 @@ if vim.o.background == 'light' then
 end
 
 if palette then
-  require('mini.base16').apply(palette, 'Mint')
+  require('mini.base16').apply(palette, 'minischeme')
 end

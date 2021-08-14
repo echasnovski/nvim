@@ -1,3 +1,3 @@
 set background=dark
 syntax enable
-colorscheme mint
+colorscheme minischeme
