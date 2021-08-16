@@ -238,6 +238,82 @@ function MiniBase16.mini_palette(background, foreground)
   return base16_palette
 end
 
+function MiniBase16.mini_palette2(background, foreground)
+  if not (H.is_hex(background) and H.is_hex(foreground)) then return nil end
+  local bg = H.luv_from_rgb(H.rgb_from_hex(background))
+  local fg = H.luv_from_rgb(H.rgb_from_hex(foreground))
+
+  local palette = {}
+
+  -- Compute target L values: focus (one with which background scale and
+  -- alternative accent colors will be made) and edge (the most extreme L for
+  -- foreground scale). No particular reason for these formulas, just simple
+  -- trial and error.
+  -- Some justifications for skewness towards foreground in focus:
+  -- - This puts more contrast on comments (`base03`) and alternative accents.
+  -- - This seems to perform nice with both light and dark themes
+  local focus_l = 0.4 * bg.l + 0.6 * fg.l
+  local edge_l = fg.l > 50 and 99 or 1
+
+  -- First four colors are 'background': differ from `background` only in
+  -- lightness (L) which progresses towards focus
+  local bg_step = (focus_l - bg.l) / 3
+  palette[1] = {l = bg.l + 0 * bg_step, u = bg.u, v = bg.v}
+  palette[2] = {l = bg.l + 1 * bg_step, u = bg.u, v = bg.v}
+  palette[3] = {l = bg.l + 2 * bg_step, u = bg.u, v = bg.v}
+  palette[4] = {l = bg.l + 3 * bg_step, u = bg.u, v = bg.v}
+
+  -- Second four colors are 'foreground': differ from `foreground` only in
+  -- lightness (L) which progresses towards edge. Scale is created so that
+  -- 'base05' will be identical to 'foreground'. Possible negative value of
+  -- palette[5].l should is handled in future conversion to hex.
+  local fg_step = (edge_l - fg.l) / 2
+  palette[5] = {l = fg.l - 1 * fg_step, u = fg.u, v = fg.v}
+  palette[6] = {l = fg.l + 0 * fg_step, u = fg.u, v = fg.v}
+  palette[7] = {l = fg.l + 1 * fg_step, u = fg.u, v = fg.v}
+  palette[8] = {l = fg.l + 2 * fg_step, u = fg.u, v = fg.v}
+
+  -- Eight accent colors are generated as pairs:
+  -- - Each pair has same hue from set of hues 'most different' to background
+  --   and foreground hues. Here 'hue' is used in CIELCh
+  --   (https://en.wikipedia.org/wiki/CIELUV#Cylindrical_representation_(CIELCh)),
+  --   i.e. `atan2(v, u)`.
+  -- - All colors have the same chroma as foreground (as they will appear next
+  --   to each other).
+  -- - Within pair there is base lightness (equal to foreground lightness) and
+  --   alternative (equal to focus lightness). Base lightness goes to colors
+  --   which will be used more frequently in code: base08 (variables), base0B
+  --   (strings), base0D (functions), base0E (keywords).
+  --
+  -- How exactly colors are mapped to 'base16' colors is a result of trial and
+  -- error. One rule of thumb was: colors within one hue pair should be more
+  -- often seen next to each other. This is because it is easier to distinguish
+  -- them and seems to be more visually appealing. That is why `base0D` (14)
+  -- and `base0F` (16) have same hues because they usually represent functions
+  -- and delimiter (brackets included).
+  local bg_hue, fg_hue = math.atan2(bg.v, bg.u), math.atan2(fg.v, fg.u)
+  local chroma = math.sqrt(fg.u^2 + fg.v^2)
+  local hues = H.make_different_hues({bg_hue, fg_hue}, 4)
+  palette[9]  = {l = fg.l,    u = chroma * math.cos(hues[1]), v = chroma * math.sin(hues[1])}
+  palette[10] = {l = focus_l, u = chroma * math.cos(hues[1]), v = chroma * math.sin(hues[1])}
+  palette[11] = {l = focus_l, u = chroma * math.cos(hues[2]), v = chroma * math.sin(hues[2])}
+  palette[12] = {l = fg.l,    u = chroma * math.cos(hues[2]), v = chroma * math.sin(hues[2])}
+  palette[13] = {l = focus_l, u = chroma * math.cos(hues[4]), v = chroma * math.sin(hues[4])}
+  palette[14] = {l = fg.l,    u = chroma * math.cos(hues[3]), v = chroma * math.sin(hues[3])}
+  palette[15] = {l = fg.l,    u = chroma * math.cos(hues[4]), v = chroma * math.sin(hues[4])}
+  palette[16] = {l = focus_l, u = chroma * math.cos(hues[3]), v = chroma * math.sin(hues[3])}
+
+  -- Convert to base16 palette
+  local base16_palette = {}
+  for i, luv in ipairs(palette) do
+    local name = 'base' .. string.format('%02X', i - 1)
+    -- It is ensured in `hex_from_rgb` that only valid HEX values are produced
+    base16_palette[name] = H.hex_from_rgb(H.rgb_from_luv(luv))
+  end
+
+  return base16_palette
+end
+
 -- Helpers
 ---- Highlighting
 function H.hi(group, args)
@@ -255,12 +331,14 @@ end
 ---- Make a set of equally spaced hues which are as different to present hues
 ---- as possible
 function H.make_different_hues(present_hues, n)
-  local max_offset = math.floor(360 / n + 0.5) - 1
-  local best_dist = -math.huge
-  local cur_dist, dist, p_dist
+  local step_offset = (2 * math.pi / n) / 100
+
+  local offset
+  local dist, best_dist = nil, -math.huge
   local best_hues, new_hues
 
-  for offset=0,max_offset,1 do
+  for i=0,99,1 do
+    offset = i * step_offset
     new_hues = H.make_hue_scale(n, offset)
 
     -- Compute distance as usual 'minimum distance' between two sets
@@ -276,13 +354,13 @@ function H.make_different_hues(present_hues, n)
 end
 
 function H.make_hue_scale(n, offset)
-  local res, step = {}, math.floor(360 / n + 0.5)
-  for i=0,n-1,1 do table.insert(res, (offset + i * step) % 360) end
+  local res, step = {}, 2 * math.pi / n
+  for i=0,n-1,1 do table.insert(res, (offset + i * step) % (2*math.pi)) end
   return res
 end
 
 ---- Color conversion
-function H.hex_to_rgb(hex)
+function H.rgb_from_hex(hex)
   if not H.is_hex(hex) then return nil end
 
   local dec = tonumber(hex:sub(2), 16)
@@ -294,7 +372,7 @@ function H.hex_to_rgb(hex)
   return {red = red, green = green, blue = blue}
 end
 
-function H.rgb_to_hex(rgb)
+function H.hex_from_rgb(rgb)
   -- Round and trim values
   local t = vim.tbl_map(
     function(x)
@@ -357,17 +435,17 @@ end
 
 function H.hex_to_hsl(hex)
   if not H.is_hex(hex) then return nil end
-  return H.rgb_to_hsl(H.hex_to_rgb(hex))
+  return H.rgb_to_hsl(H.rgb_from_hex(hex))
 end
 
 function H.hsl_to_hex(hsl)
   if not H.is_hsl(hsl) then return nil end
-  return H.rgb_to_hex(H.hsl_to_rgb(hsl))
+  return H.hex_from_rgb(H.hsl_to_rgb(hsl))
 end
 
 ------ Source: https://www.easyrgb.com/en/math.php
 ------ Accuracy is around 2-3 decimal digits, which is fine
-function luv_from_rgb(rgb)
+function H.luv_from_rgb(rgb)
   -- Convert sRGB (0-255) to XYZ
   local t = vim.tbl_map(
     function(c)
@@ -410,7 +488,7 @@ function luv_from_rgb(rgb)
   return {l = l, u = u, v = v}
 end
 
-function rgb_from_luv(luv)
+function H.rgb_from_luv(luv)
   if luv.l == 0 then return {red = 0, green = 0, blue = 0} end
 
   -- Convert CIE-Luv to XYZ
@@ -473,8 +551,8 @@ end
 
 ---- Distances
 function H.dist_circle(x, y)
-  local d = math.abs(x - y) % 360
-  return d > 180 and 360 - d or d
+  local d = math.abs(x - y) % (2*math.pi)
+  return d > math.pi and (2*math.pi - d) or d
 end
 
 function H.dist_set(set1, set2)

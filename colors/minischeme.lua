@@ -3,49 +3,51 @@
 -- palette generator
 local palette
 
--- Dark palette is an output of 'MiniBase16.mini_palette' with background
--- '#1f242e' (HSL = 220-20-15) and foreground '#e1f28c' (HSL = 70-80-75)
+-- Dark palette is an output of 'MiniBase16.mini_palette':
+-- - Background '#1e2634' (LCh(uv) = 15-10-250);
+-- - Foreground '#e2ea7c' (Lch(uv) = 90-70-90)
 if vim.o.background == 'dark' then
   palette = {
-    base00 = '#1f242e',
-    base01 = '#3a4355',
-    base02 = '#54627d',
-    base03 = '#7382a0',
-    base04 = '#d3ec57',
-    base05 = '#e1f28c',
-    base06 = '#eff8c1',
-    base07 = '#fdfef6',
-    base08 = '#f29d8c',
-    base09 = '#e74b2c',
-    base0A = '#6ae72c',
-    base0B = '#aef28c',
-    base0C = '#a92ce7',
-    base0D = '#8ce1f2',
-    base0E = '#d08cf2',
-    base0F = '#2cc8e7'
+    base00 = '#1e2634',
+    base01 = '#414753',
+    base02 = '#656b76',
+    base03 = '#8c919c',
+    base04 = '#d5dd6e',
+    base05 = '#e2ea7c',
+    base06 = '#eff78a',
+    base07 = '#fcff98',
+    base08 = '#ffd1a5',
+    base09 = '#c97f4d',
+    base0A = '#4da340',
+    base0B = '#a4f69b',
+    base0C = '#c671cb',
+    base0D = '#5bf5ff',
+    base0E = '#ffc6ff',
+    base0F = '#00a3c2'
   }
 end
 
--- Dark palette is an output of 'MiniBase16.mini_palette' with background
--- '#e5eeff' (HSL = 220-100-95) and foreground '#7f9900' (HSL = 70-100-30)
+-- Dark palette is an output of 'MiniBase16.mini_palette':
+-- - Background '#ecf1fc' (LCh(uv) = 95-10-250);
+-- - Foreground '#525900' (Lch(uv) = 25-70-90)
 if vim.o.background == 'light' then
   palette = {
-    base00 = '#e5eeff',
-    base01 = '#9dbfff',
-    base02 = '#5690ff',
-    base03 = '#0e61ff',
-    base04 = '#bae000',
-    base05 = '#7f9900',
-    base06 = '#445200',
-    base07 = '#080a00',
-    base08 = '#991a00',
-    base09 = '#ff360e',
-    base0A = '#5eff0e',
-    base0B = '#339900',
-    base0C = '#af0eff',
-    base0D = '#008099',
-    base0E = '#660099',
-    base0F = '#0ed7ff'
+    base00 = '#ecf1fc',
+    base01 = '#cbd0da',
+    base02 = '#aaafba',
+    base03 = '#8b909a',
+    base04 = '#7d8446',
+    base05 = '#525900',
+    base06 = '#2b3200',
+    base07 = '#030600',
+    base08 = '#764a2c',
+    base09 = '#b3856d',
+    base0A = '#6c9b69',
+    base0B = '#2b5f27',
+    base0C = '#af80b1',
+    base0D = '#005f72',
+    base0E = '#754276',
+    base0F = '#4d9aad'
   }
 end
 
