@@ -295,10 +295,18 @@ function H.hex_to_rgb(hex)
 end
 
 function H.rgb_to_hex(rgb)
-  if not H.is_rgb(rgb) then return nil end
+  -- Round and trim values
+  local t = vim.tbl_map(
+    function(x)
+      x = math.min(math.max(x, 0), 255)
+      return math.floor(x + 0.5)
+    end,
+    rgb
+  )
 
-  local dec = 65536 * rgb.red + 256 * rgb.green + rgb.blue
-  return string.format('#%06x', dec)
+  return '#' .. string.format('%02x', t.red) ..
+    string.format('%02x', t.green) ..
+    string.format('%02x', t.blue)
 end
 
 ------ Source: https://en.wikipedia.org/wiki/HSL_and_HSV#From_RGB
@@ -355,6 +363,93 @@ end
 function H.hsl_to_hex(hsl)
   if not H.is_hsl(hsl) then return nil end
   return H.rgb_to_hex(H.hsl_to_rgb(hsl))
+end
+
+------ Source: https://www.easyrgb.com/en/math.php
+------ Accuracy is around 2-3 decimal digits, which is fine
+function luv_from_rgb(rgb)
+  -- Convert sRGB (0-255) to XYZ
+  local t = vim.tbl_map(
+    function(c)
+      c = c / 255
+      if c > 0.04045 then
+        c = ((c + 0.055) / 1.055)^2.4
+      else
+        c = c / 12.92
+      end
+      return 100 * c
+    end,
+    rgb
+  )
+
+  -- Source of better matrix: http://brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
+  local x = 0.41246 * t.red + 0.35757 * t.green + 0.18043 * t.blue
+  local y = 0.21267 * t.red + 0.71515 * t.green + 0.07217 * t.blue
+  local z = 0.01933 * t.red + 0.11919 * t.green + 0.95030 * t.blue
+
+  -- Convert XYZ to CIE-Luv
+  if x + y + z == 0 then return {L = 0, u = 0, v = 0} end
+
+  local var_u = 4 * x / (x + 15 * y + 3 * z)
+  local var_v = 9 * y / (x + 15 * y + 3 * z)
+  local var_y = y / 100
+  if var_y > 0.008856 then
+    var_y = var_y^(1 / 3)
+  else
+    var_y = (7.787 * var_y) + (16 / 116)
+  end
+
+  ---- Using reference for D65 and 2 degress
+  local ref_u = (4 * 95.047) / (95.047 + (15 * 100) + (3 * 108.883))
+  local ref_v = (9 * 100) / (95.047 + (15 * 100) + (3 * 108.883))
+
+  local l = (116 * var_y) - 16
+  local u = 13 * l * (var_u - ref_u)
+  local v = 13 * l * (var_v - ref_v)
+
+  return {l = l, u = u, v = v}
+end
+
+function rgb_from_luv(luv)
+  if luv.l == 0 then return {red = 0, green = 0, blue = 0} end
+
+  -- Convert CIE-Luv to XYZ
+  local var_y = (luv.l + 16) / 116
+  if (var_y^3  > 0.008856) then
+    var_y = var_y^3
+  else
+    var_y = (var_y - 16 / 116) / 7.787
+  end
+
+  ---- Using reference for D65 and 2 degress
+  local ref_u = (4 * 95.047) / (95.047 + 15 * 100 + 3 * 108.883)
+  local ref_v = (9 * 100.00) / (95.047 + 15 * 100 + 3 * 108.883)
+
+  local var_u = luv.u / (13 * luv.l) + ref_u
+  local var_v = luv.v / (13 * luv.l) + ref_v
+
+  local y = var_y * 100
+  local x = -(9 * y * var_u) / ((var_u - 4) * var_v - var_u * var_v)
+  local z = (9 * y - 15 * var_v * y - var_v * x) / (3 * var_v)
+
+  -- Convert XYZ to RGB (0-255).
+  -- Source of better matrix: http://brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
+  r =  3.24045 * x - 1.53713 * y - 0.49853 * z
+  g = -0.96927 * x + 1.87601 * y + 0.04155 * z
+  b =  0.05564 * x - 0.20403 * y + 1.05722 * z
+
+  return vim.tbl_map(
+    function(c)
+      c = c / 100
+      if c > 0.0031308 then
+        c = 1.055 * (c^(1 / 2.4)) - 0.055
+      else
+        c = 12.92 * c
+      end
+      return 255 * c
+    end,
+    {red = r, green = g, blue = b}
+  )
 end
 
 function H.is_hex(x)
