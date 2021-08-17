@@ -21,8 +21,14 @@ end
 MiniBase16.palette = nil
 
 function MiniBase16.apply(palette, name)
+  -- Validate arguments
+  H.validate_base16_palette(palette)
+  if type(name) ~= 'string' then error('(mini.base16): `name` should be string') end
+
+  -- Store palette
   MiniBase16.palette = palette
 
+  -- Prepare highlighting application
   vim.cmd([[highlight clear]])
   vim.cmd([[syntax reset]])
   vim.g.colors_name = name or 'base16-custom'
@@ -170,6 +176,8 @@ function MiniBase16.apply(palette, name)
 end
 
 function MiniBase16.mini_palette(background, foreground)
+  H.validate_hex(background, 'background')
+  H.validate_hex(foreground, 'foreground')
   local bg, fg = H.hex2lch(background), H.hex2lch(foreground)
 
   local palette = {}
@@ -291,6 +299,40 @@ function H.make_hue_scale(n, offset)
   local res = {}
   for i=0,n-1,1 do table.insert(res, (offset + i * step) % 360) end
   return res
+end
+
+---- Validators
+H.base16_names = {
+  'base00', 'base01', 'base02', 'base03', 'base04', 'base05', 'base06', 'base07',
+  'base08', 'base09', 'base0A', 'base0B', 'base0C', 'base0D', 'base0E', 'base0F'
+}
+
+function H.validate_hex(x, name)
+  local is_hex = type(x) == 'string' and x:len() == 7 and
+    x:sub(1, 1) == '#' and (tonumber(x:sub(2), 16) ~= nil)
+
+  if not is_hex then
+    local msg = string.format(
+      '(mini.base16): `%s` is not a HEX color (string "#RRGGBB")', name
+    )
+    error(msg)
+  end
+  return true
+end
+
+function H.validate_base16_palette(x)
+  if type(x) ~= 'table' then error("(mini.base16): `palette` is not a table.") end
+  for _, name in pairs(H.base16_names) do
+    local c = x[name]
+    if c == nil then
+      local msg = string.format(
+        '(mini.base16): `palette` does not have value %s', name
+      )
+      error(msg)
+    end
+    H.validate_hex(c, string.format('palette[%s]', name))
+  end
+  return true
 end
 
 ---- Color conversion
