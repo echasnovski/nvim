@@ -170,78 +170,7 @@ function MiniBase16.apply(palette, name)
 end
 
 function MiniBase16.mini_palette(background, foreground)
-  if not (H.is_hex(background) and H.is_hex(foreground)) then return nil end
-  local bg, fg = H.hex_to_hsl(background), H.hex_to_hsl(foreground)
-
-  local palette = {}
-
-  -- Compute target lightness values: focus (one with which background scale
-  -- and alternative accent colors will be made) and edge (the most extreme
-  -- lightness for foreground scale). No particular reason for these formulas,
-  -- just simple trial and error.
-  -- Some justifications for skewness towards foreground in focus:
-  -- - This puts more contrast on comments (`base03`) and alternative accents.
-  -- - This seems to perform nice with both light and dark themes
-  local focus_lightness = 0.35 * bg.lightness + 0.65 * fg.lightness
-  local edge_lightness = fg.lightness > 0.5 and 0.98 or 0.02
-
-  -- First four colors are 'background': have same hue and saturation as
-  -- `background`, but lightness progresses towards focus
-  local bg_step = (focus_lightness - bg.lightness) / 3
-  palette[1]  = {hue = bg.hue, saturation = bg.saturation, lightness = bg.lightness + 0 * bg_step}
-  palette[2]  = {hue = bg.hue, saturation = bg.saturation, lightness = bg.lightness + 1 * bg_step}
-  palette[3]  = {hue = bg.hue, saturation = bg.saturation, lightness = bg.lightness + 2 * bg_step}
-  palette[4]  = {hue = bg.hue, saturation = bg.saturation, lightness = bg.lightness + 3 * bg_step}
-
-  -- Second four colors are 'foreground': have same hue and saturation as
-  -- `foreground`, but lightness progresses towards nearest edge. Scale is
-  -- created so that 'base05' will be identical to 'foreground'.
-  local fg_step = (edge_lightness - fg.lightness) / 2
-  palette[5]  = {hue = fg.hue, saturation = fg.saturation, lightness = fg.lightness - 1 * fg_step}
-  palette[6]  = {hue = fg.hue, saturation = fg.saturation, lightness = fg.lightness + 0 * fg_step}
-  palette[7]  = {hue = fg.hue, saturation = fg.saturation, lightness = fg.lightness + 1 * fg_step}
-  palette[8]  = {hue = fg.hue, saturation = fg.saturation, lightness = fg.lightness + 2 * fg_step}
-
-  -- Eight accent colors are generated as pairs:
-  -- - Each pair has same hue from set of hues 'most different' to background
-  --   and foreground hues.
-  -- - All colors have the same saturation as foreground (as they will appear
-  --   next to each other).
-  -- - Within pair there is base lightness (equal to foreground lightness) and
-  --   alternative (equal to focus lightness). Base lightness goes to colors
-  --   which will be used more frequently in code: base08 (variables), base0B
-  --   (strings), base0D (functions), base0E (keywords).
-  --
-  -- How exactly colors are mapped to 'base16' colors is a result of trial and
-  -- error. One rule of thumb was: colors within one hue pair should be more
-  -- often seen next to each other. This is because it is easier to distinguish
-  -- them and seems to be more visually appealing. That is why `base0D` (14)
-  -- and `base0F` (16) have same hues because they usually represent functions
-  -- and delimiter (brackets included).
-  local accent_hues = H.make_different_hues({bg.hue, fg.hue}, 4)
-  palette[9]  = {hue = accent_hues[1], saturation = fg.saturation, lightness = fg.lightness}
-  palette[10] = {hue = accent_hues[1], saturation = fg.saturation, lightness = focus_lightness}
-  palette[11] = {hue = accent_hues[2], saturation = fg.saturation, lightness = focus_lightness}
-  palette[12] = {hue = accent_hues[2], saturation = fg.saturation, lightness = fg.lightness}
-  palette[13] = {hue = accent_hues[4], saturation = fg.saturation, lightness = focus_lightness}
-  palette[14] = {hue = accent_hues[3], saturation = fg.saturation, lightness = fg.lightness}
-  palette[15] = {hue = accent_hues[4], saturation = fg.saturation, lightness = fg.lightness}
-  palette[16] = {hue = accent_hues[3], saturation = fg.saturation, lightness = focus_lightness}
-
-  -- Convert to base16 palette
-  local base16_palette = {}
-  for i, hsl in ipairs(palette) do
-    local name = 'base' .. string.format('%02X', i - 1)
-    base16_palette[name] = H.hsl_to_hex(hsl)
-  end
-
-  return base16_palette
-end
-
-function MiniBase16.mini_palette2(background, foreground)
-  if not (H.is_hex(background) and H.is_hex(foreground)) then return nil end
-  local bg = H.luv_from_rgb(H.rgb_from_hex(background))
-  local fg = H.luv_from_rgb(H.rgb_from_hex(foreground))
+  local bg, fg = H.hex2lch(background), H.hex2lch(foreground)
 
   local palette = {}
 
@@ -258,57 +187,63 @@ function MiniBase16.mini_palette2(background, foreground)
   -- First four colors are 'background': differ from `background` only in
   -- lightness (L) which progresses towards focus
   local bg_step = (focus_l - bg.l) / 3
-  palette[1] = {l = bg.l + 0 * bg_step, u = bg.u, v = bg.v}
-  palette[2] = {l = bg.l + 1 * bg_step, u = bg.u, v = bg.v}
-  palette[3] = {l = bg.l + 2 * bg_step, u = bg.u, v = bg.v}
-  palette[4] = {l = bg.l + 3 * bg_step, u = bg.u, v = bg.v}
+  palette[1] = {l = bg.l + 0 * bg_step, c = bg.c, h = bg.h}
+  palette[2] = {l = bg.l + 1 * bg_step, c = bg.c, h = bg.h}
+  palette[3] = {l = bg.l + 2 * bg_step, c = bg.c, h = bg.h}
+  palette[4] = {l = bg.l + 3 * bg_step, c = bg.c, h = bg.h}
 
   -- Second four colors are 'foreground': differ from `foreground` only in
   -- lightness (L) which progresses towards edge. Scale is created so that
   -- 'base05' will be identical to 'foreground'. Possible negative value of
-  -- palette[5].l should is handled in future conversion to hex.
+  -- `palette[5].l` will be handled in future conversion to hex.
   local fg_step = (edge_l - fg.l) / 2
-  palette[5] = {l = fg.l - 1 * fg_step, u = fg.u, v = fg.v}
-  palette[6] = {l = fg.l + 0 * fg_step, u = fg.u, v = fg.v}
-  palette[7] = {l = fg.l + 1 * fg_step, u = fg.u, v = fg.v}
-  palette[8] = {l = fg.l + 2 * fg_step, u = fg.u, v = fg.v}
+  palette[5] = {l = fg.l - 1 * fg_step, c = fg.c, h = fg.h}
+  palette[6] = {l = fg.l + 0 * fg_step, c = fg.c, h = fg.h}
+  palette[7] = {l = fg.l + 1 * fg_step, c = fg.c, h = fg.h}
+  palette[8] = {l = fg.l + 2 * fg_step, c = fg.c, h = fg.h}
 
   -- Eight accent colors are generated as pairs:
   -- - Each pair has same hue from set of hues 'most different' to background
-  --   and foreground hues. Here 'hue' is used in CIELCh
+  --   and foreground hues (in case of positive respective chorma). 'Hue' is a
+  --   [0-360] degree in CIELCh(uv) sense.
   --   (https://en.wikipedia.org/wiki/CIELUV#Cylindrical_representation_(CIELCh)),
-  --   i.e. `atan2(v, u)`.
   -- - All colors have the same chroma as foreground (as they will appear next
-  --   to each other).
+  --   to each other). NOTE: this means that method works poorly when
+  --   foreground has low chroma.
   -- - Within pair there is base lightness (equal to foreground lightness) and
   --   alternative (equal to focus lightness). Base lightness goes to colors
   --   which will be used more frequently in code: base08 (variables), base0B
   --   (strings), base0D (functions), base0E (keywords).
   --
-  -- How exactly colors are mapped to 'base16' colors is a result of trial and
-  -- error. One rule of thumb was: colors within one hue pair should be more
-  -- often seen next to each other. This is because it is easier to distinguish
-  -- them and seems to be more visually appealing. That is why `base0D` (14)
-  -- and `base0F` (16) have same hues because they usually represent functions
-  -- and delimiter (brackets included).
-  local bg_hue, fg_hue = math.atan2(bg.v, bg.u), math.atan2(fg.v, fg.u)
-  local chroma = math.sqrt(fg.u^2 + fg.v^2)
-  local hues = H.make_different_hues({bg_hue, fg_hue}, 4)
-  palette[9]  = {l = fg.l,    u = chroma * math.cos(hues[1]), v = chroma * math.sin(hues[1])}
-  palette[10] = {l = focus_l, u = chroma * math.cos(hues[1]), v = chroma * math.sin(hues[1])}
-  palette[11] = {l = focus_l, u = chroma * math.cos(hues[2]), v = chroma * math.sin(hues[2])}
-  palette[12] = {l = fg.l,    u = chroma * math.cos(hues[2]), v = chroma * math.sin(hues[2])}
-  palette[13] = {l = focus_l, u = chroma * math.cos(hues[4]), v = chroma * math.sin(hues[4])}
-  palette[14] = {l = fg.l,    u = chroma * math.cos(hues[3]), v = chroma * math.sin(hues[3])}
-  palette[15] = {l = fg.l,    u = chroma * math.cos(hues[4]), v = chroma * math.sin(hues[4])}
-  palette[16] = {l = focus_l, u = chroma * math.cos(hues[3]), v = chroma * math.sin(hues[3])}
+  -- How exactly accent colors are mapped to 'base16' colors is a result of
+  -- trial and error. One rule of thumb was: colors within one hue pair should
+  -- be more often seen next to each other. This is because it is easier to
+  -- distinguish them and seems to be more visually appealing. That is why
+  -- `base0D` (14) and `base0F` (16) have same hues because they usually
+  -- represent functions and delimiter (brackets included).
+
+  ---- Only try to avoid color if it has positive chroma, because with zero
+  ---- chroma hue is meaningless (as in polar coordinates)
+  local present_hues = {}
+  if bg.c > 0 then table.insert(present_hues, bg.h) end
+  if fg.c > 0 then table.insert(present_hues, fg.h) end
+  local hues = H.make_different_hues(present_hues, 4)
+
+  palette[9]  = {l = fg.l,    c = fg.c, h = hues[1]}
+  palette[10] = {l = focus_l, c = fg.c, h = hues[1]}
+  palette[11] = {l = focus_l, c = fg.c, h = hues[2]}
+  palette[12] = {l = fg.l,    c = fg.c, h = hues[2]}
+  palette[13] = {l = focus_l, c = fg.c, h = hues[4]}
+  palette[14] = {l = fg.l,    c = fg.c, h = hues[3]}
+  palette[15] = {l = fg.l,    c = fg.c, h = hues[4]}
+  palette[16] = {l = focus_l, c = fg.c, h = hues[3]}
 
   -- Convert to base16 palette
   local base16_palette = {}
-  for i, luv in ipairs(palette) do
-    local name = 'base' .. string.format('%02X', i - 1)
-    -- It is ensured in `hex_from_rgb` that only valid HEX values are produced
-    base16_palette[name] = H.hex_from_rgb(H.rgb_from_luv(luv))
+  for i, lch in ipairs(palette) do
+    local name = H.base16_names[i]
+    -- It is ensured in `lch2hex` that only valid HEX values are produced
+    base16_palette[name] = H.lch2hex(lch)
   end
 
   return base16_palette
@@ -331,14 +266,12 @@ end
 ---- Make a set of equally spaced hues which are as different to present hues
 ---- as possible
 function H.make_different_hues(present_hues, n)
-  local step_offset = (2 * math.pi / n) / 100
+  local max_offset = math.floor(360 / n + 0.5)
 
-  local offset
   local dist, best_dist = nil, -math.huge
   local best_hues, new_hues
 
-  for i=0,99,1 do
-    offset = i * step_offset
+  for offset=0,max_offset-1,1 do
     new_hues = H.make_hue_scale(n, offset)
 
     -- Compute distance as usual 'minimum distance' between two sets
@@ -354,25 +287,44 @@ function H.make_different_hues(present_hues, n)
 end
 
 function H.make_hue_scale(n, offset)
-  local res, step = {}, 2 * math.pi / n
-  for i=0,n-1,1 do table.insert(res, (offset + i * step) % (2*math.pi)) end
+  local step = math.floor(360 / n + 0.5)
+  local res = {}
+  for i=0,n-1,1 do table.insert(res, (offset + i * step) % 360) end
   return res
 end
 
 ---- Color conversion
-function H.rgb_from_hex(hex)
-  if not H.is_hex(hex) then return nil end
-
-  local dec = tonumber(hex:sub(2), 16)
-
-  local blue = math.fmod(dec, 256)
-  local green = math.fmod((dec - blue) / 256, 256)
-  local red = math.floor(dec / 65536)
-
-  return {red = red, green = green, blue = blue}
+---- Source: https://www.easyrgb.com/en/math.php
+---- Accuracy is usually around 2-3 decimal digits, which should be fine
+------ HEX <-> CIELCh(uv)
+function H.hex2lch(hex)
+  local res = hex
+  for _, f in pairs({H.hex2rgb, H.rgb2xyz, H.xyz2luv, H.luv2lch}) do
+    res = f(res)
+  end
+  return res
 end
 
-function H.hex_from_rgb(rgb)
+function H.lch2hex(lch)
+  local res = lch
+  for _, f in pairs({H.lch2luv, H.luv2xyz, H.xyz2rgb, H.rgb2hex}) do
+    res = f(res)
+  end
+  return res
+end
+
+------ HEX <-> RGB
+function H.hex2rgb(hex)
+  local dec = tonumber(hex:sub(2), 16)
+
+  local b = math.fmod(dec, 256)
+  local g = math.fmod((dec - b) / 256, 256)
+  local r = math.floor(dec / 65536)
+
+  return {r = r, g = g, b = b}
+end
+
+function H.rgb2hex(rgb)
   -- Round and trim values
   local t = vim.tbl_map(
     function(x)
@@ -382,71 +334,13 @@ function H.hex_from_rgb(rgb)
     rgb
   )
 
-  return '#' .. string.format('%02x', t.red) ..
-    string.format('%02x', t.green) ..
-    string.format('%02x', t.blue)
+  return '#' .. string.format('%02x', t.r) ..
+    string.format('%02x', t.g) ..
+    string.format('%02x', t.b)
 end
 
------- Source: https://en.wikipedia.org/wiki/HSL_and_HSV#From_RGB
-function H.rgb_to_hsl(rgb)
-  if not H.is_rgb(rgb) then return nil end
-
-  local r, g, b = rgb.red / 255, rgb.green / 255, rgb.blue / 255
-  local m, M = math.min(r, g, b), math.max(r, g, b)
-  local chroma = M - m
-
-  local l = 0.5 * (m + M)
-
-  local s = 0
-  if l ~= 0 and l ~= 1 then s = (M - l) / math.min(l, 1 - l) end
-
-  local h
-  if chroma == 0 then
-    h = 0
-  elseif M == r then
-    h = 60 * (0 + (g - b) / chroma)
-  elseif M == g then
-    h = 60 * (2 + (b - r) / chroma)
-  elseif M == b then
-    h = 60 * (4 + (r - g) / chroma)
-  end
-  if h < 0 then h = h + 360 end
-
-  return {hue = h, saturation = s, lightness = l}
-end
-
-function H.hsl_to_rgb(hsl)
-  if not H.is_hsl(hsl) then return nil end
-
-  local f = function(n)
-    local k = math.fmod(n + hsl.hue / 30, 12)
-    local a = hsl.saturation * math.min(hsl.lightness, 1 - hsl.lightness)
-    local m = math.min(k - 3, 9 - k, 1)
-    return hsl.lightness - a * math.max(-1, m)
-  end
-
-  return {
-    -- Add 0.5 to make crude rounding and not floor
-    red = math.floor(255 * f(0) + 0.5),
-    green = math.floor(255 * f(8) + 0.5),
-    blue = math.floor(255 * f(4) + 0.5)
-  }
-end
-
-function H.hex_to_hsl(hex)
-  if not H.is_hex(hex) then return nil end
-  return H.rgb_to_hsl(H.rgb_from_hex(hex))
-end
-
-function H.hsl_to_hex(hsl)
-  if not H.is_hsl(hsl) then return nil end
-  return H.hex_from_rgb(H.hsl_to_rgb(hsl))
-end
-
------- Source: https://www.easyrgb.com/en/math.php
------- Accuracy is around 2-3 decimal digits, which is fine
-function H.luv_from_rgb(rgb)
-  -- Convert sRGB (0-255) to XYZ
+------ RGB <-> XYZ
+function H.rgb2xyz(rgb)
   local t = vim.tbl_map(
     function(c)
       c = c / 255
@@ -461,60 +355,17 @@ function H.luv_from_rgb(rgb)
   )
 
   -- Source of better matrix: http://brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
-  local x = 0.41246 * t.red + 0.35757 * t.green + 0.18043 * t.blue
-  local y = 0.21267 * t.red + 0.71515 * t.green + 0.07217 * t.blue
-  local z = 0.01933 * t.red + 0.11919 * t.green + 0.95030 * t.blue
-
-  -- Convert XYZ to CIE-Luv
-  if x + y + z == 0 then return {L = 0, u = 0, v = 0} end
-
-  local var_u = 4 * x / (x + 15 * y + 3 * z)
-  local var_v = 9 * y / (x + 15 * y + 3 * z)
-  local var_y = y / 100
-  if var_y > 0.008856 then
-    var_y = var_y^(1 / 3)
-  else
-    var_y = (7.787 * var_y) + (16 / 116)
-  end
-
-  ---- Using reference for D65 and 2 degress
-  local ref_u = (4 * 95.047) / (95.047 + (15 * 100) + (3 * 108.883))
-  local ref_v = (9 * 100) / (95.047 + (15 * 100) + (3 * 108.883))
-
-  local l = (116 * var_y) - 16
-  local u = 13 * l * (var_u - ref_u)
-  local v = 13 * l * (var_v - ref_v)
-
-  return {l = l, u = u, v = v}
+  local x = 0.41246 * t.r + 0.35757 * t.g + 0.18043 * t.b
+  local y = 0.21267 * t.r + 0.71515 * t.g + 0.07217 * t.b
+  local z = 0.01933 * t.r + 0.11919 * t.g + 0.95030 * t.b
+  return {x = x, y = y, z = z}
 end
 
-function H.rgb_from_luv(luv)
-  if luv.l == 0 then return {red = 0, green = 0, blue = 0} end
-
-  -- Convert CIE-Luv to XYZ
-  local var_y = (luv.l + 16) / 116
-  if (var_y^3  > 0.008856) then
-    var_y = var_y^3
-  else
-    var_y = (var_y - 16 / 116) / 7.787
-  end
-
-  ---- Using reference for D65 and 2 degress
-  local ref_u = (4 * 95.047) / (95.047 + 15 * 100 + 3 * 108.883)
-  local ref_v = (9 * 100.00) / (95.047 + 15 * 100 + 3 * 108.883)
-
-  local var_u = luv.u / (13 * luv.l) + ref_u
-  local var_v = luv.v / (13 * luv.l) + ref_v
-
-  local y = var_y * 100
-  local x = -(9 * y * var_u) / ((var_u - 4) * var_v - var_u * var_v)
-  local z = (9 * y - 15 * var_v * y - var_v * x) / (3 * var_v)
-
-  -- Convert XYZ to RGB (0-255).
+function H.xyz2rgb(xyz)
   -- Source of better matrix: http://brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
-  r =  3.24045 * x - 1.53713 * y - 0.49853 * z
-  g = -0.96927 * x + 1.87601 * y + 0.04155 * z
-  b =  0.05564 * x - 0.20403 * y + 1.05722 * z
+  r =  3.24045 * xyz.x - 1.53713 * xyz.y - 0.49853 * xyz.z
+  g = -0.96927 * xyz.x + 1.87601 * xyz.y + 0.04155 * xyz.z
+  b =  0.05564 * xyz.x - 0.20403 * xyz.y + 1.05722 * xyz.z
 
   return vim.tbl_map(
     function(c)
@@ -526,36 +377,83 @@ function H.rgb_from_luv(luv)
       end
       return 255 * c
     end,
-    {red = r, green = g, blue = b}
+    {r = r, g = g, b = b}
   )
 end
 
-function H.is_hex(x)
-  return type(x) == 'string' and x:len() == 7 and
-    x:sub(1, 1) == '#' and (tonumber(x:sub(2), 16) ~= nil)
+------ XYZ <-> CIELuv
+-------- Using white reference for D65 and 2 degress
+H.ref_u = (4 * 95.047) / (95.047 + (15 * 100) + (3 * 108.883))
+H.ref_v = (9 * 100) / (95.047 + (15 * 100) + (3 * 108.883))
+
+function H.xyz2luv(xyz)
+  local x, y, z = xyz.x, xyz.y, xyz.z
+  if x + y + z == 0 then return {l = 0, u = 0, v = 0} end
+
+  local var_u = 4 * x / (x + 15 * y + 3 * z)
+  local var_v = 9 * y / (x + 15 * y + 3 * z)
+  local var_y = y / 100
+  if var_y > 0.008856 then
+    var_y = var_y^(1 / 3)
+  else
+    var_y = (7.787 * var_y) + (16 / 116)
+  end
+
+  local l = (116 * var_y) - 16
+  local u = 13 * l * (var_u - H.ref_u)
+  local v = 13 * l * (var_v - H.ref_v)
+  return {l = l, u = u, v = v}
 end
 
-function H.is_rgb(x)
-  return type(x) == 'table' and
-    type(x.red) == 'number' and 0 <= x.red and x.red <= 255 and
-    type(x.green) == 'number' and 0 <= x.green and x.green <= 255 and
-    type(x.blue) == 'number' and 0 <= x.blue and x.blue <= 255
+function H.luv2xyz(luv)
+  if luv.l == 0 then return {x = 0, y = 0, z = 0} end
+
+  local var_y = (luv.l + 16) / 116
+  if (var_y^3  > 0.008856) then
+    var_y = var_y^3
+  else
+    var_y = (var_y - 16 / 116) / 7.787
+  end
+
+  local var_u = luv.u / (13 * luv.l) + H.ref_u
+  local var_v = luv.v / (13 * luv.l) + H.ref_v
+
+  local y = var_y * 100
+  local x = -(9 * y * var_u) / ((var_u - 4) * var_v - var_u * var_v)
+  local z = (9 * y - 15 * var_v * y - var_v * x) / (3 * var_v)
+  return {x = x, y = y, z = z}
 end
 
-function H.is_hsl(x)
-  return type(x) == 'table' and
-    type(x.hue) == 'number' and 0 <= x.hue and x.hue <= 360 and
-    type(x.saturation) == 'number' and 0 <= x.saturation and x.saturation <= 1 and
-    type(x.lightness) == 'number' and 0 <= x.lightness and x.lightness <= 1
+------ CIELuv <-> CIELCh(uv)
+H.tau = 2 * math.pi
+
+function H.luv2lch(luv)
+  local c = math.sqrt(luv.u^2 + luv.v^2)
+  local h
+  if c == 0 then
+    h = 0
+  else
+    -- Convert [-pi, pi] radians to [0, 360] degrees
+    h = (math.atan2(luv.v, luv.u) % H.tau) * 360 / H.tau
+  end
+  return {l = luv.l, c = c, h = h}
+end
+
+function H.lch2luv(lch)
+  local angle = lch.h * H.tau / 360
+  local u = lch.c * math.cos(angle)
+  local v = lch.c * math.sin(angle)
+  return {l = lch.l, u = u, v = v}
 end
 
 ---- Distances
 function H.dist_circle(x, y)
-  local d = math.abs(x - y) % (2*math.pi)
-  return d > math.pi and (2*math.pi - d) or d
+  local d = math.abs(x - y) % 360
+  return d > math.pi and (360 - d) or d
 end
 
 function H.dist_set(set1, set2)
+  -- Minimum distance between all pairs
   local dist = math.huge
   local d
   for _, x in pairs(set1) do
