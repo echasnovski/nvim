@@ -31,7 +31,14 @@
 --   -- - `source` should be one of 'completefunc' or 'omnifunc'.
 --   -- - `auto_setup` should be boolean indicating if LSP completion is set up on
 --   --   every `BufEnter` event.
---   lsp_completion = {source = 'completefunc', auto_setup = true},
+--   -- - `preprocess_items` should be a function which takes LSP
+--   --   'textDocument/completion' response and completed word. It should
+--   --   return filtered and sorted completion items (without chaning them).
+--  lsp_completion = {
+--    source = 'completefunc',
+--    auto_setup = true,
+--    preprocess_items = <function that filters by prefix and sorts by LSP specification>
+--  },
 --
 --   -- Fallback action. It will always be run in Insert mode. To use Neovim's
 --   -- built-in completion (see `:h ins-completion`), supply its mapping as
@@ -50,7 +57,10 @@
 --       `MiniCompletion.completefunc_lsp()`. It should be set up as either
 --       `completefunc` (see `:h 'completefunc'`) or `omnifunc` (see `:h
 --       'omnifunc'`) option. It tries to get completion items from LSP client
---       (via 'textDocument/completion' request).
+--       (via 'textDocument/completion' request). Custom preprocessing of
+--       response items is possible, for example with fuzzy matching. By
+--       default items which directly start with completed word are kept and
+--       sorted according to LSP specification.
 --     - If first stage is not set up or resulted into no candidates, fallback
 --       action is executed. The most tested actions are Neovim's built-in
 --       insert completion (see `:h ins-completion`).
@@ -93,8 +103,10 @@
 -- - Both:
 --     - Can manage multiple configurable sources. MiniCompletion has only two:
 --       LSP and fallback.
---     - Provide custom ways to filter completion suggestions. MiniCompletion
---       relies on Neovim's (which currently is equal to Vim's) filtering.
+--     - Provide advanced custom ways of filtering and sorting of completion
+--       list as user types. MiniCompletion in this case relies on Neovim's
+--       (which currently is equal to Vim's) filtering, which keeps only items
+--       which directly start with completed word.
 --     - Currently use simple text wrapping in completion item window. This
 --       module wraps by words (see `:h linebreak` and `:h breakat`).
 --
@@ -203,6 +215,19 @@ MiniCompletion.window_dimensions = {
 ---- - `auto_setup` should be boolean indicating if LSP completion is set up on
 ----   every `BufEnter` event.
 MiniCompletion.lsp_completion = {source = 'completefunc', auto_setup = true}
+
+MiniCompletion.lsp_completion.preprocess_items = function(items, base)
+  local res = vim.tbl_filter(
+    function(item) return vim.startswith(H.get_completion_word(item), base) end,
+    items
+  )
+
+  table.sort(res, function(a, b)
+    return (a.sortText or a.label) < (b.sortText or b.label)
+  end)
+
+  return res
+end
 
 ---- Fallback action. It will always be run in Insert mode. To use Neovim's
 ---- built-in completion (see `:h ins-completion`), supply its mapping as
@@ -371,7 +396,11 @@ function MiniCompletion.completefunc_lsp(findstart, base)
     local words = H.process_lsp_response(
       H.completion.lsp.result,
       function(response)
-        return vim.lsp.util.text_document_completion_list_to_complete_items(response, base)
+        -- Response can be `CompletionList` with 'items' field or `CompletionItem[]`
+        local items = H.table_get(response, {'items'}) or response
+        if type(items) ~= 'table' then return {} end
+        items = MiniCompletion.lsp_completion.preprocess_items(items, base)
+        return H.lsp_completion_response_items_to_complete_items(items)
       end
     )
 
@@ -468,6 +497,7 @@ function H.setup_config(config)
       "one of strings: 'completefunc' or 'omnifunc'"
     },
     ['lsp_completion.auto_setup'] = {config.lsp_completion.auto_setup, 'boolean'},
+    ['lsp_completion.preprocess_items'] = {config.lsp_completion.preprocess_items, 'function'},
 
     fallback_action = {
       config.fallback_action,
@@ -633,6 +663,46 @@ end
 
 function H.is_lsp_current(cache, id)
   return cache.lsp.id == id and cache.lsp.status == 'sent'
+end
+
+---- Completion
+------ This is a truncated version of
+------ `vim.lsp.util.text_document_completion_list_to_complete_items` which
+------ does not filter and sort items.
+------ For extra information see 'Response' section:
+------ https://microsoft.github.io/language-server-protocol/specifications/specification-3-14/#textDocument_completion
+function H.lsp_completion_response_items_to_complete_items(items)
+  if vim.tbl_count(items) == 0 then return {} end
+
+  local res = {}
+  local docs, info
+  for _, item in pairs(items) do
+    -- Documentation info
+    docs = item.documentation
+    info = H.table_get(docs, {'value'})
+    if not info and type(docs) == 'string' then info = docs end
+    info = info or ''
+
+    table.insert(res, {
+      word = H.get_completion_word(item),
+      abbr = item.label,
+      kind = vim.lsp.protocol.CompletionItemKind[item.kind],
+      menu = item.detail or '',
+      info = info,
+      icase = 1,
+      dup = 1,
+      empty = 1,
+      user_data = {nvim = {lsp = {completion_item = item}}},
+    })
+  end
+  return res
+end
+
+function H.get_completion_word(item)
+  -- Completion word (textEdit.newText > insertText > label). This doesn't
+  -- support snippet expansion.
+  return H.table_get(item, {'textEdit', 'newText'}) or
+    item.insertText or item.label or ''
 end
 
 ---- Completion item info
