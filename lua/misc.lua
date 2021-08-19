@@ -65,14 +65,14 @@ end
 --
 -- NOTE: currently doesn't work with multibyte symbols.
 --
--- @param word String which will be searched
 -- @param candidates Lua array of strings inside of which word will be searched
+-- @param word String which will be searched
 -- @param sort (default: `true`) Whether to sort output candidates from best to
 -- worst match
 -- @param case_sensitive (default: `false`) Whether search is case sensitive.
 -- @return matched_candidates, matched_indexes Arrays of matched candidates and
 --   their indexes in original input.
-function M.fuzzy_match(word, candidates, sort, case_sensitive)
+function M.fuzzy_match(candidates, word, sort, case_sensitive)
   if sort == nil then sort = true end
   if case_sensitive == nil then case_sensitive = false end
 
@@ -80,6 +80,24 @@ function M.fuzzy_match(word, candidates, sort, case_sensitive)
   if sort then table.sort(matches, H.fuzzy_compare) end
 
   return H.matches_to_tuple(matches)
+end
+
+-- Fuzzy matching for `MiniCompletion.lsp_completion.process_items`
+function M.fuzzy_process_lsp_items(items, base, sort, case_sensitive)
+  -- Extract completion words from items
+  local words = vim.tbl_map(
+    function(x)
+      if type(x.textEdit) == 'table' and x.textEdit.newText then
+        return x.textEdit.newText
+      end
+      return x.insertText or x.label or ''
+    end,
+    items
+  )
+
+  -- Fuzzy match
+  local _, match_inds = M.fuzzy_match(words, base, sort, case_sensitive)
+  return vim.tbl_map(function(i) return items[i] end, match_inds)
 end
 
 function H.fuzzy_filter_impl(word, candidates, case_sensitive)
