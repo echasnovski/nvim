@@ -31,13 +31,14 @@
 --   -- - `source` should be one of 'completefunc' or 'omnifunc'.
 --   -- - `auto_setup` should be boolean indicating if LSP completion is set up on
 --   --   every `BufEnter` event.
---   -- - `preprocess_items` should be a function which takes LSP
---   --   'textDocument/completion' response and completed word. It should
---   --   return filtered and sorted completion items (without chaning them).
+--   -- - `process_items` should be a function which takes LSP
+--   --   'textDocument/completion' response items and word to complete. Its
+--   --   output should be a table of the same nature as input items. The most
+--   --   common use-cases are custom filtering and sorting.
 --  lsp_completion = {
 --    source = 'completefunc',
 --    auto_setup = true,
---    preprocess_items = <function that filters by prefix and sorts by LSP specification>
+--    process_items = <function that filters by prefix and sorts by LSP specification>
 --  },
 --
 --   -- Fallback action. It will always be run in Insert mode. To use Neovim's
@@ -216,7 +217,7 @@ MiniCompletion.window_dimensions = {
 ----   every `BufEnter` event.
 MiniCompletion.lsp_completion = {source = 'completefunc', auto_setup = true}
 
-MiniCompletion.lsp_completion.preprocess_items = function(items, base)
+MiniCompletion.lsp_completion.process_items = function(items, base)
   local res = vim.tbl_filter(
     function(item) return vim.startswith(H.get_completion_word(item), base) end,
     items
@@ -399,7 +400,7 @@ function MiniCompletion.completefunc_lsp(findstart, base)
         -- Response can be `CompletionList` with 'items' field or `CompletionItem[]`
         local items = H.table_get(response, {'items'}) or response
         if type(items) ~= 'table' then return {} end
-        items = MiniCompletion.lsp_completion.preprocess_items(items, base)
+        items = MiniCompletion.lsp_completion.process_items(items, base)
         return H.lsp_completion_response_items_to_complete_items(items)
       end
     )
@@ -497,7 +498,7 @@ function H.setup_config(config)
       "one of strings: 'completefunc' or 'omnifunc'"
     },
     ['lsp_completion.auto_setup'] = {config.lsp_completion.auto_setup, 'boolean'},
-    ['lsp_completion.preprocess_items'] = {config.lsp_completion.preprocess_items, 'function'},
+    ['lsp_completion.process_items'] = {config.lsp_completion.process_items, 'function'},
 
     fallback_action = {
       config.fallback_action,
@@ -686,7 +687,7 @@ function H.lsp_completion_response_items_to_complete_items(items)
     table.insert(res, {
       word = H.get_completion_word(item),
       abbr = item.label,
-      kind = vim.lsp.protocol.CompletionItemKind[item.kind],
+      kind = vim.lsp.protocol.CompletionItemKind[item.kind] or 'Unknown',
       menu = item.detail or '',
       info = info,
       icase = 1,
