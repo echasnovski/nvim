@@ -38,7 +38,7 @@
 --  lsp_completion = {
 --    source = 'completefunc',
 --    auto_setup = true,
---    process_items = <function that filters by prefix and sorts by LSP specification>
+--    process_items = <function: filters 'not snippets' by prefix and sorts by LSP specification>
 --  },
 --
 --   -- Fallback action. It will always be run in Insert mode. To use Neovim's
@@ -61,8 +61,8 @@
 --       'omnifunc'`) option. It tries to get completion items from LSP client
 --       (via 'textDocument/completion' request). Custom preprocessing of
 --       response items is possible, for example with fuzzy matching. By
---       default items which directly start with completed word are kept and
---       sorted according to LSP specification.
+--       default items which are not snippets and directly start with completed
+--       word are kept and sorted according to LSP specification.
 --     - If first stage is not set up or resulted into no candidates, fallback
 --       action is executed. The most tested actions are Neovim's built-in
 --       insert completion (see `:h ins-completion`).
@@ -111,6 +111,7 @@
 --       which directly start with completed word.
 --     - Currently use simple text wrapping in completion item window. This
 --       module wraps by words (see `:h linebreak` and `:h breakat`).
+--     - Support snippet expansions.
 --
 -- Overall implementation design:
 -- - Completion:
@@ -220,7 +221,10 @@ MiniCompletion.lsp_completion = {source = 'completefunc', auto_setup = true}
 
 MiniCompletion.lsp_completion.process_items = function(items, base)
   local res = vim.tbl_filter(
-    function(item) return vim.startswith(H.get_completion_word(item), base) end,
+    function(item)
+      -- Keep items which match the base and are not snippets
+      return vim.startswith(H.get_completion_word(item), base) and item.kind ~= 15
+    end,
     items
   )
 
