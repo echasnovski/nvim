@@ -1,11 +1,12 @@
+local M = {}
 local H = {}
 
 -- Helper to print Lua objects
-function _G.dump(x)
+function M.dump(x)
   print(vim.inspect(x))
 end
 
-function _G.dump_text(x)
+function M.dump_text(x)
   local lines = vim.split(vim.inspect(x), '\n')
   local lnum = vim.api.nvim_win_get_cursor(0)[1]
   vim.fn.append(lnum, lines)
@@ -16,7 +17,7 @@ end
 -- @param ... Arguments when calling `f`
 -- @return duration, output Duration (in seconds; up to microseconds) and
 --   output of function execution
-function bench_time(f, ...)
+function M.bench_time(f, ...)
   local start_sec, start_usec = vim.loop.gettimeofday()
   local output = f(...)
   local end_sec, end_usec = vim.loop.gettimeofday()
@@ -71,7 +72,7 @@ end
 -- @param case_sensitive (default: `false`) Whether search is case sensitive.
 -- @return matched_candidates, matched_indexes Arrays of matched candidates and
 --   their indexes in original input.
-function fuzzy_match(word, candidates, sort, case_sensitive)
+function M.fuzzy_match(word, candidates, sort, case_sensitive)
   if sort == nil then sort = true end
   if case_sensitive == nil then case_sensitive = false end
 
@@ -181,7 +182,7 @@ end
 -- @param t Table
 -- @param n (default: 5) Maximum number of first elements
 -- @return Table with at most `n` first elements of `t` (with same keys)
-function head(t, n)
+function M.head(t, n)
   n = n or 5
   local res, n_res = {}, 0
   for k, val in pairs(t) do
@@ -203,7 +204,7 @@ end
 -- @param t Table
 -- @param n (default: 5) Maximum number of last elements
 -- @return Table with at most `n` last elements of `t` (with same keys)
-function tail(t, n)
+function M.tail(t, n)
   n = n or 5
 
   -- Count number of elements on first pass
@@ -219,3 +220,9 @@ function tail(t, n)
   end
   return res
 end
+
+-- Export some functions
+_G.dump = M.dump
+_G.dump_text = M.dump_text
+
+return M
