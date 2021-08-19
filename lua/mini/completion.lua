@@ -44,11 +44,12 @@
 --   -- Fallback action. It will always be run in Insert mode. To use Neovim's
 --   -- built-in completion (see `:h ins-completion`), supply its mapping as
 --   -- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
---   fallback_action = <function equivalent to '<C-n>'>,
+--   fallback_action = <function equivalent to '<C-n>' completion>,
 --
---   -- Mappings
+--   -- Mappings. Some of them might conflict with system mappings
 --   mappings = {
---     force = '<C-Space>' -- Force completion
+--     force_twostep  = '<C-Space>', -- Force two-step completion
+--     force_fallback = '<A-Space>'  -- Force fallback completion
 --   }
 -- }
 --
@@ -239,7 +240,8 @@ end
 
 ---- Mappings
 MiniCompletion.mappings = {
-  force = '<C-Space>' -- Force completion
+  force_twostep  = '<C-Space>', -- Force two-step completion
+  force_fallback = '<A-Space>'  -- Force fallback completion
 }
 
 -- Module functionality
@@ -287,6 +289,12 @@ function MiniCompletion.complete_twostep(fallback, force)
   H.stop_completion()
   H.completion.fallback, H.completion.force = fallback or true, force or true
   H.trigger_twostep()
+end
+
+function MiniCompletion.complete_fallback()
+  H.stop_completion()
+  H.completion.fallback, H.completion.force = true, true
+  H.trigger_fallback()
 end
 
 function MiniCompletion.auto_info()
@@ -507,7 +515,8 @@ function H.setup_config(config)
     },
 
     mappings = {config.mappings, 'table'},
-    ['mappings.force'] = {config.mappings.force, 'string'}
+    ['mappings.force_twostep']  = {config.mappings.force_twostep, 'string'},
+    ['mappings.force_fallback'] = {config.mappings.force_fallback, 'string'}
   })
 
   return config
@@ -527,7 +536,11 @@ function H.apply_config(config)
 
   MiniCompletion.mappings = config.mappings
   vim.api.nvim_set_keymap(
-    'i', config.mappings.force, '<cmd>lua MiniCompletion.complete_twostep()<cr>',
+    'i', config.mappings.force_twostep, '<cmd>lua MiniCompletion.complete_twostep()<cr>',
+    {noremap = true, silent = true}
+  )
+  vim.api.nvim_set_keymap(
+    'i', config.mappings.force_fallback, '<cmd>lua MiniCompletion.complete_fallback()<cr>',
     {noremap = true, silent = true}
   )
 end
