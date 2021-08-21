@@ -34,7 +34,8 @@
 --   -- - `process_items` should be a function which takes LSP
 --   --   'textDocument/completion' response items and word to complete. Its
 --   --   output should be a table of the same nature as input items. The most
---   --   common use-cases are custom filtering and sorting.
+--   --   common use-cases are custom filtering and sorting. You can use
+--   --   default `process_items` as `MiniCompletion.default_process_items()`.
 --  lsp_completion = {
 --    source = 'completefunc',
 --    auto_setup = true,
@@ -429,6 +430,10 @@ function MiniCompletion.completefunc_lsp(findstart, base)
     H.completion.source = 'lsp'
     return words
   end
+end
+
+function MiniCompletion.default_process_items(items, base)
+  return H.config.lsp_completion.process_items(items, base)
 end
 
 -- Helper data
