@@ -17,8 +17,9 @@
 --   good idea to have `palette` respect the original [styling
 --   principles](https://github.com/chriskempson/base16/blob/master/styling.md).
 --   Currently it only supports 'gui colors' (see `:h 'termguicolors'`).
--- - `mini_palette(background, foreground)` creates base16 palette based on the
---   HEX (string '#RRGGBB') colors of main background and foreground. Exact
+-- - `mini_palette(background, foreground, accent_chroma)` creates base16
+--   palette based on the HEX (string '#RRGGBB') colors of main background and
+--   foreground with optional setting of accent chroma (see details). Exact
 --   algorithm is based on certain heuristics:
 --     - Main operating color space is
 --       [CIELCh(uv)](https://en.wikipedia.org/wiki/CIELUV#Cylindrical_representation_(CIELCh))
@@ -38,9 +39,11 @@
 --     - The rest eight colors are accent colors which are created in pairs
 --         - Each pair has same hue from set of hues 'most different' to
 --           background and foreground hues (if respective chorma is positive).
---         - All colors have the same chroma as foreground (as they will appear
---           next to each other). NOTE: this means that method works poorly
---           when foreground has low chroma.
+--         - All colors have the same chroma equal to `accent_chroma` (if not
+--           provided, chroma of foreground is used, as they will appear next
+--           to each other). NOTE: this means that in case of low foreground
+--           chroma, it is a good idea to set `accent_chroma` manually.
+--           Values from 30 (low chorma) to 80 (high chroma) are common.
 --         - Within pair there is base lightness (equal to foreground
 --           lightness) and alternative (equal to focus lightness). Base
 --           lightness goes to colors which will be used more frequently in
@@ -240,10 +243,14 @@ function MiniBase16.apply(palette, name)
   H.hi('MiniTrailspace', {guifg=p.base00, guibg=p.base08})
 end
 
-function MiniBase16.mini_palette(background, foreground)
+function MiniBase16.mini_palette(background, foreground, accent_chroma)
   H.validate_hex(background, 'background')
   H.validate_hex(foreground, 'foreground')
+  if accent_chroma and not (type(accent_chroma) == 'number' and accent_chroma >= 0) then
+    error('(mini.base16) `accent_chroma` should be a positive number or `nil`')
+  end
   local bg, fg = H.hex2lch(background), H.hex2lch(foreground)
+  accent_chroma = accent_chroma or fg.c
 
   local palette = {}
 
@@ -276,14 +283,14 @@ function MiniBase16.mini_palette(background, foreground)
   if fg.c > 0 then table.insert(present_hues, fg.h) end
   local hues = H.make_different_hues(present_hues, 4)
 
-  palette[9]  = {l = fg.l,    c = fg.c, h = hues[1]}
-  palette[10] = {l = focus_l, c = fg.c, h = hues[1]}
-  palette[11] = {l = focus_l, c = fg.c, h = hues[2]}
-  palette[12] = {l = fg.l,    c = fg.c, h = hues[2]}
-  palette[13] = {l = focus_l, c = fg.c, h = hues[4]}
-  palette[14] = {l = fg.l,    c = fg.c, h = hues[3]}
-  palette[15] = {l = fg.l,    c = fg.c, h = hues[4]}
-  palette[16] = {l = focus_l, c = fg.c, h = hues[3]}
+  palette[9]  = {l = fg.l,    c = accent_chroma, h = hues[1]}
+  palette[10] = {l = focus_l, c = accent_chroma, h = hues[1]}
+  palette[11] = {l = focus_l, c = accent_chroma, h = hues[2]}
+  palette[12] = {l = fg.l,    c = accent_chroma, h = hues[2]}
+  palette[13] = {l = focus_l, c = accent_chroma, h = hues[4]}
+  palette[14] = {l = fg.l,    c = accent_chroma, h = hues[3]}
+  palette[15] = {l = fg.l,    c = accent_chroma, h = hues[4]}
+  palette[16] = {l = focus_l, c = accent_chroma, h = hues[3]}
 
   -- Convert to base16 palette
   local base16_palette = {}
