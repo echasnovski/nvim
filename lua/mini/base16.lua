@@ -312,7 +312,7 @@ end
 function H.hi(group, args)
   -- NOTE: using `string.format` instead of gradually growing string with `..`
   -- is faster. Crude estimate for this particular case: whole colorscheme
-  -- loading decreased from ~36ms to ~30ms, i.e. by about 20%.
+  -- loading decreased from ~3.6ms to ~3.0ms, i.e. by about 20%.
   local command = string.format(
     [[highlight %s guifg=%s guibg=%s gui=%s guisp=%s]],
     group,
@@ -337,7 +337,7 @@ function H.make_different_hues(present_hues, n)
     new_hues = H.make_hue_scale(n, offset)
 
     -- Compute distance as usual 'minimum distance' between two sets
-    dist = H.dist_set(new_hues, present_hues)
+    dist = H.dist_circle_set(new_hues, present_hues)
 
     -- Decide if it is the best
     if dist > best_dist then
@@ -548,7 +548,7 @@ function H.dist_circle(x, y)
   return d > math.pi and (360 - d) or d
 end
 
-function H.dist_set(set1, set2)
+function H.dist_circle_set(set1, set2)
   -- Minimum distance between all pairs
   local dist = math.huge
   local d
