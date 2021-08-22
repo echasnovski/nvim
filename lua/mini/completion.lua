@@ -52,6 +52,10 @@
 --     force_twostep  = '<C-Space>', -- Force two-step completion
 --     force_fallback = '<A-Space>'  -- Force fallback completion
 --   }
+--
+--   -- Whether to set Vim's settings for better experience (modifies
+--   -- `shortmess` and `completeopt`)
+--   set_vim_settings = true
 -- }
 --
 -- Features:
@@ -249,6 +253,9 @@ MiniCompletion.mappings = {
   force_fallback = '<A-Space>'  -- Force fallback completion
 }
 
+-- Whether to set Vim's settings for better experience
+MiniCompletion.set_vim_settings = true
+
 -- Module functionality
 function MiniCompletion.auto_completion()
   if not MiniCompletion.auto.completion then return end
@@ -444,7 +451,8 @@ H.config = {
   window_dimensions = MiniCompletion.window_dimensions,
   fallback_action = MiniCompletion.fallback_action,
   lsp_completion = MiniCompletion.lsp_completion,
-  mappings = MiniCompletion.mappings
+  mappings = MiniCompletion.mappings,
+  set_vim_settings = MiniCompletion.set_vim_settings
 }
 
 ---- Track Insert mode changes
@@ -525,7 +533,9 @@ function H.setup_config(config)
 
     mappings = {config.mappings, 'table'},
     ['mappings.force_twostep']  = {config.mappings.force_twostep, 'string'},
-    ['mappings.force_fallback'] = {config.mappings.force_fallback, 'string'}
+    ['mappings.force_fallback'] = {config.mappings.force_fallback, 'string'},
+
+    set_vim_settings = {config.set_vim_settings, 'boolean'}
   })
 
   return config
@@ -552,6 +562,14 @@ function H.apply_config(config)
     'i', config.mappings.force_fallback, '<cmd>lua MiniCompletion.complete_fallback()<cr>',
     {noremap = true, silent = true}
   )
+
+  MiniCompletion.set_vim_settings = config.set_vim_settings
+  if MiniCompletion.set_vim_settings then
+    -- Don't give ins-completion-menu messages
+    vim.cmd([[set shortmess+=c]])
+    -- More common completion behavior
+    vim.cmd([[set completeopt=menuone,noinsert,noselect]])
+  end
 end
 
 function H.make_ins_fallback(keys)
