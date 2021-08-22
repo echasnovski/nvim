@@ -20,10 +20,10 @@
 -- Main capabilities when displaying buffers:
 -- - Different highlight groups for "states" of buffer affecting 'buffer tabs':
 --     - MiniTablineCurrent - buffer is current (has cursor in it)
---     - MiniTablineActive - buffer is active (displayed in some window)
+--     - MiniTablineVisible - buffer is visible (displayed in some window)
 --     - MiniTablineHidden - buffer is hidden (not displayed)
 --     - MiniTablineModifiedCurrent - buffer is modified and current
---     - MiniTablineModifiedActive - buffer is modified and active
+--     - MiniTablineModifiedVisible - buffer is modified and visible
 --     - MiniTablineModifiedHidden - buffer is modified and hidden
 --     - MiniTablineFill - unused right space of tabline
 --   To change any of them, modify it directly with Vim's `highlight` command.
@@ -76,11 +76,11 @@ function MiniTabline.setup(config)
   -- Create highlighting
   vim.api.nvim_exec([[
     hi link MiniTablineCurrent TabLineSel
-    hi link MiniTablineActive  TabLineSel
+    hi link MiniTablineVisible TabLineSel
     hi link MiniTablineHidden  TabLine
 
     hi link MiniTablineModifiedCurrent StatusLine
-    hi link MiniTablineModifiedActive  StatusLine
+    hi link MiniTablineModifiedVisible StatusLine
     hi link MiniTablineModifiedHidden  StatusLineNC
 
     hi MiniTablineFill NONE
@@ -171,7 +171,7 @@ function H.construct_highlight(bufnum)
   if bufnum == vim.fn.winbufnr(0) then
     hl_type = 'Current'
   elseif vim.fn.bufwinnr(bufnum) > 0 then
-    hl_type = 'Active'
+    hl_type = 'Visible'
   else
     hl_type = 'Hidden'
   end

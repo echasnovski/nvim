@@ -61,7 +61,7 @@ function! MiniTablineRender()
     let hl_type =
     \ currentbuf == bufnum
     \ ? 'Current'
-    \ : bufwinnr(bufnum) > 0 ? 'Active' : 'Hidden'
+    \ : bufwinnr(bufnum) > 0 ? 'Visible' : 'Hidden'
     if getbufvar(bufnum, '&modified')
       let hl_type = 'Modified' . hl_type
     endif
@@ -201,11 +201,11 @@ set hidden        " Allow switching buffers without saving them
 
 " Colors
 hi MiniTablineCurrent         guibg=#7C6F64 guifg=#EBDBB2 gui=bold ctermbg=15 ctermfg=0
-hi MiniTablineActive          guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7  ctermfg=0
+hi MiniTablineVisible         guibg=#3C3836 guifg=#EBDBB2 gui=bold ctermbg=7  ctermfg=0
 hi MiniTablineHidden          guifg=#A89984 guibg=#3C3836          ctermbg=8  ctermfg=7
 
 hi MiniTablineModifiedCurrent guibg=#458588 guifg=#EBDBB2 gui=bold ctermbg=14 ctermfg=0
-hi MiniTablineModifiedActive  guibg=#076678 guifg=#EBDBB2 gui=bold ctermbg=6  ctermfg=0
+hi MiniTablineModifiedVisible guibg=#076678 guifg=#EBDBB2 gui=bold ctermbg=6  ctermfg=0
 hi MiniTablineModifiedHidden  guibg=#076678 guifg=#BDAE93          ctermbg=6  ctermfg=0
 
 hi MiniTablineFill NONE
