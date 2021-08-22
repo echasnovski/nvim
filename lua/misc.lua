@@ -1,15 +1,34 @@
 local M = {}
 local H = {}
 
--- Helper to print Lua objects
-function M.dump(x)
-  print(vim.inspect(x))
+-- Helper to print Lua objects in command line
+function M.dump(...)
+  local objects, v = {}, nil
+  -- Not using `{...}` because it removes `nil` input
+  for i = 1, select('#', ...) do
+    v = select(i, ...)
+    table.insert(objects, vim.inspect(v))
+  end
+
+  print(table.concat(objects, '\n'))
+
+  return ...
 end
 
-function M.dump_text(x)
-  local lines = vim.split(vim.inspect(x), '\n')
+-- Helper to print Lua objects in current buffer
+function M.dump_text(...)
+  local objects, v = {}, nil
+  -- Not using `{...}` because it removes `nil` input
+  for i = 1, select('#', ...) do
+    v = select(i, ...)
+    table.insert(objects, vim.inspect(v))
+  end
+
+  local lines = vim.split(table.concat(objects, '\n'), '\n')
   local lnum = vim.api.nvim_win_get_cursor(0)[1]
   vim.fn.append(lnum, lines)
+
+  return ...
 end
 
 -- Execute `f` once and time how long it took
