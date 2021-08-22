@@ -2,11 +2,11 @@ local M = {}
 local H = {}
 
 -- Helper to print Lua objects in command line
-function M.dump(...)
-  local objects, v = {}, nil
+function M.put(...)
+  local objects = {}
   -- Not using `{...}` because it removes `nil` input
   for i = 1, select('#', ...) do
-    v = select(i, ...)
+    local v = select(i, ...)
     table.insert(objects, vim.inspect(v))
   end
 
@@ -16,11 +16,11 @@ function M.dump(...)
 end
 
 -- Helper to print Lua objects in current buffer
-function M.dump_text(...)
-  local objects, v = {}, nil
+function M.put_text(...)
+  local objects = {}
   -- Not using `{...}` because it removes `nil` input
   for i = 1, select('#', ...) do
-    v = select(i, ...)
+    local v = select(i, ...)
     table.insert(objects, vim.inspect(v))
   end
 
@@ -259,7 +259,7 @@ function M.tail(t, n)
 end
 
 -- Export some functions
-_G.dump = M.dump
-_G.dump_text = M.dump_text
+_G.put = M.put
+_G.put_text = M.put_text
 
 return M
