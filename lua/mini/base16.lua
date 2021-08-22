@@ -389,6 +389,52 @@ function H.validate_base16_palette(x)
   return true
 end
 
+---- Terminal colors
+---- Sources:
+---- - https://github.com/shawncplus/Vim-toCterm/blob/master/lib/Xterm.php
+---- - https://gist.github.com/MicahElliott/719710
+H.cterm_first16 = {
+  {r = 0, g = 0, b = 0},
+  {r = 205, g = 0, b = 0},
+  {r = 0, g = 205, b = 0},
+  {r = 205, g = 205, b = 0},
+  {r = 0, g = 0, b = 238},
+  {r = 205, g = 0, b = 205},
+  {r = 0, g = 205, b = 205},
+  {r = 229, g = 229, b = 229},
+  {r = 127, g = 127, b = 127},
+  {r = 255, g = 0, b = 0},
+  {r = 0, g = 255, b = 0},
+  {r = 255, g = 255, b = 0},
+  {r = 92, g = 92, b = 255},
+  {r = 255, g = 0, b = 255},
+  {r = 0, g = 255, b = 255},
+  {r = 255, g = 255, b = 255}
+}
+
+H.cterm_basis = {0, 95, 135, 175, 215, 255}
+
+function H.cterm2rgb(i)
+  if i < 16 then return H.cterm_first16[i + 1] end
+  if 16 <= i and i <= 231 then
+    i = i - 16
+    local r = H.cterm_basis[math.floor(i / 36) % 6 + 1]
+    local g = H.cterm_basis[math.floor(i / 6) % 6 + 1]
+    local b = H.cterm_basis[i % 6 + 1]
+    return {r = r, g = g, b = b}
+  end
+  if 232 <= i and i <= 255 then
+    local c = 8 + (i - 232) * 10
+    return {r = c, g = c, b = c}
+  end
+end
+
+function H.ensure_cterm_palette()
+  if H.cterm_palette then return end
+  H.cterm_palette = {}
+  for i=0,255 do H.cterm_palette[i] = H.cterm2rgb(i) end
+end
+
 ---- Color conversion
 ---- Source: https://www.easyrgb.com/en/math.php
 ---- Accuracy is usually around 2-3 decimal digits, which should be fine
@@ -559,6 +605,19 @@ function H.dist_circle_set(set1, set2)
     end
   end
   return dist
+end
+
+function H.nearest_rgb_id(rgb_target, rgb_palette)
+  local best_dist = math.huge
+  local best_id, dist
+  for id, rgb in pairs(rgb_palette) do
+    dist = math.abs(rgb_target.r - rgb.r) +
+      math.abs(rgb_target.g - rgb.g) +
+      math.abs(rgb_target.b - rgb.b)
+    if dist < best_dist then best_id, best_dist = id, dist end
+  end
+
+  return best_id
 end
 
 return MiniBase16
