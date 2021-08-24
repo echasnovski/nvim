@@ -10,13 +10,19 @@
 -- Default `config`: {} (currently nothing to configure)
 --
 -- Features:
--- - `apply(palette, name)` applies base16 `palette` by creating Neovim's
---   highlight groups and sets `g:colors_name` to `name` ('base16-custom' by
---   default). Highlight groups make an extended set from original
+-- - `apply(palette, name, use_cterm)` applies base16 `palette` (table with
+--   base16-named hex '#RRGGBB' color strings) by creating Neovim's highlight
+--   groups and sets `g:colors_name` to `name` ('base16-custom' by default).
+--   Highlight groups make an extended set from original
 --   [base16-vim](https://github.com/chriskempson/base16-vim/) plugin. It is a
 --   good idea to have `palette` respect the original [styling
 --   principles](https://github.com/chriskempson/base16/blob/master/styling.md).
---   Currently it only supports 'gui colors' (see `:h 'termguicolors'`).
+--   By default only 'gui highlighting' (see `:h highlight-gui` and `:h
+--   termguicolors`) is supported. To support 'cterm highlighting' (see `:h
+--   highlight-cterm`) supply `use_cterm` argument in one of the formats:
+--     - `true` to auto-generate from `palette` (as closest colors).
+--     - Table with similar structure to `palette` but having terminal colors
+--       (integers from 0 to 255) instead of hex strings.
 -- - `mini_palette(background, foreground, accent_chroma)` creates base16
 --   palette based on the HEX (string '#RRGGBB') colors of main background and
 --   foreground with optional setting of accent chroma (see details). Exact
@@ -68,10 +74,13 @@ end
 
 MiniBase16.palette = nil
 
-function MiniBase16.apply(palette, name)
+function MiniBase16.apply(palette, name, use_cterm)
   -- Validate arguments
   H.validate_base16_palette(palette)
-  if type(name) ~= 'string' then error('(mini.base16): `name` should be string') end
+  if name and type(name) ~= 'string' then
+    error('(mini.base16): `name` should be string')
+  end
+  H.validate_use_cterm(use_cterm)
 
   -- Store palette
   MiniBase16.palette = palette
@@ -82,169 +91,174 @@ function MiniBase16.apply(palette, name)
   if vim.g.colors_name then vim.cmd([[highlight clear]]) end
   vim.g.colors_name = name or 'base16-custom'
 
-  local p = palette
+  local p, hi
+  if use_cterm then
+    p, hi = H.make_compound_palette(palette, use_cterm), H.highlight_both
+  else
+    p, hi = palette, H.highlight_gui
+  end
 
-  -- Builtin highlighting groups. Some groups which are missing in 'base16=vim'
+  -- Builtin highlighting groups. Some groups which are missing in 'base16-vim'
   -- are added based on groups to which they are linked.
-  H.hi('ColorColumn',  {guifg=nil,      guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('Conceal',      {guifg=p.base0D, guibg=p.base00, gui=nil,         guisp=nil})
-  H.hi('Cursor',       {guifg=p.base00, guibg=p.base05, gui=nil,         guisp=nil})
-  H.hi('CursorColumn', {guifg=nil,      guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('CursorIM',     {guifg=p.base00, guibg=p.base05, gui=nil,         guisp=nil})
-  H.hi('CursorLine',   {guifg=nil,      guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('CursorLineNr', {guifg=p.base04, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('DiffAdd',      {guifg=p.base0B, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('DiffChange',   {guifg=p.base03, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('DiffDelete',   {guifg=p.base08, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('DiffText',     {guifg=p.base0D, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('Directory',    {guifg=p.base0D, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('EndOfBuffer',  {guifg=p.base03, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('ErrorMsg',     {guifg=p.base08, guibg=p.base00, gui=nil,         guisp=nil})
-  H.hi('FoldColumn',   {guifg=p.base0C, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('Folded',       {guifg=p.base03, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('IncSearch',    {guifg=p.base01, guibg=p.base09, gui=nil,         guisp=nil})
-  H.hi('LineNr',       {guifg=p.base03, guibg=p.base01, gui=nil,         guisp=nil})
-  ---- Slight difference from base16, where `guibg=base03` is used. This makes
+  hi('ColorColumn',  {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
+  hi('Conceal',      {fg=p.base0D, bg=p.base00, attr=nil,         sp=nil})
+  hi('Cursor',       {fg=p.base00, bg=p.base05, attr=nil,         sp=nil})
+  hi('CursorColumn', {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
+  hi('CursorIM',     {fg=p.base00, bg=p.base05, attr=nil,         sp=nil})
+  hi('CursorLine',   {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
+  hi('CursorLineNr', {fg=p.base04, bg=p.base01, attr=nil,         sp=nil})
+  hi('DiffAdd',      {fg=p.base0B, bg=p.base01, attr=nil,         sp=nil})
+  hi('DiffChange',   {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
+  hi('DiffDelete',   {fg=p.base08, bg=p.base01, attr=nil,         sp=nil})
+  hi('DiffText',     {fg=p.base0D, bg=p.base01, attr=nil,         sp=nil})
+  hi('Directory',    {fg=p.base0D, bg=nil,      attr=nil,         sp=nil})
+  hi('EndOfBuffer',  {fg=p.base03, bg=nil,      attr=nil,         sp=nil})
+  hi('ErrorMsg',     {fg=p.base08, bg=p.base00, attr=nil,         sp=nil})
+  hi('FoldColumn',   {fg=p.base0C, bg=p.base01, attr=nil,         sp=nil})
+  hi('Folded',       {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
+  hi('IncSearch',    {fg=p.base01, bg=p.base09, attr=nil,         sp=nil})
+  hi('LineNr',       {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
+  ---- Slight difference from base16, where `bg=base03` is used. This makes
   ---- it possible to comfortably see this highlighting in comments.
-  H.hi('MatchParen',   {guifg=nil,      guibg=p.base02, gui=nil,         guisp=nil})
-  H.hi('ModeMsg',      {guifg=p.base0B, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('MoreMsg',      {guifg=p.base0B, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('MsgArea',      {guifg=p.base05, guibg=p.base00, gui=nil,         guisp=nil})
-  H.hi('MsgSeparator', {guifg=p.base04, guibg=p.base02, gui=nil,         guisp=nil})
-  H.hi('NonText',      {guifg=p.base03, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('Normal',       {guifg=p.base05, guibg=p.base00, gui=nil,         guisp=nil})
-  H.hi('NormalFloat',  {guifg=p.base05, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('NormalNC',     {guifg=p.base05, guibg=p.base00, gui=nil,         guisp=nil})
-  H.hi('PMenu',        {guifg=p.base05, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('PMenuSbar',    {guifg=nil,      guibg=p.base02, gui=nil,         guisp=nil})
-  H.hi('PMenuSel',     {guifg=p.base01, guibg=p.base05, gui=nil,         guisp=nil})
-  H.hi('PMenuThumb',   {guifg=nil,      guibg=p.base07, gui=nil,         guisp=nil})
-  H.hi('Question',     {guifg=p.base0D, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('QuickFixLine', {guifg=nil,      guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('Search',       {guifg=p.base01, guibg=p.base0A, gui=nil,         guisp=nil})
-  H.hi('SignColumn',   {guifg=p.base03, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('SpecialKey',   {guifg=p.base03, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('SpellBad',     {guifg=nil,      guibg=nil,      gui='undercurl', guisp=p.base08})
-  H.hi('SpellCap',     {guifg=nil,      guibg=nil,      gui='undercurl', guisp=p.base0D})
-  H.hi('SpellLocal',   {guifg=nil,      guibg=nil,      gui='undercurl', guisp=p.base0C})
-  H.hi('SpellRare',    {guifg=nil,      guibg=nil,      gui='undercurl', guisp=p.base0E})
-  H.hi('StatusLine',   {guifg=p.base04, guibg=p.base02, gui=nil,         guisp=nil})
-  H.hi('StatusLineNC', {guifg=p.base03, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('Substitute',   {guifg=p.base01, guibg=p.base0A, gui=nil,         guisp=nil})
-  H.hi('TabLine',      {guifg=p.base03, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('TabLineFill',  {guifg=p.base03, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('TabLineSel',   {guifg=p.base0B, guibg=p.base01, gui=nil,         guisp=nil})
-  H.hi('TermCursor',   {guifg=nil,      guibg=nil,      gui='reverse',   guisp=nil})
-  H.hi('TermCursorNC', {guifg=nil,      guibg=nil,      gui='reverse',   guisp=nil})
-  H.hi('Title',        {guifg=p.base0D, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('VertSplit',    {guifg=p.base02, guibg=p.base02, gui=nil,         guisp=nil})
-  H.hi('Visual',       {guifg=nil,      guibg=p.base02, gui=nil,         guisp=nil})
-  H.hi('VisualNOS',    {guifg=p.base08, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('WarningMsg',   {guifg=p.base08, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('Whitespace',   {guifg=p.base03, guibg=nil,      gui=nil,         guisp=nil})
-  H.hi('WildMenu',     {guifg=p.base08, guibg=p.base0A, gui=nil,         guisp=nil})
-  H.hi('lCursor',      {guifg=p.base00, guibg=p.base05, gui=nil,         guisp=nil})
+  hi('MatchParen',   {fg=nil,      bg=p.base02, attr=nil,         sp=nil})
+  hi('ModeMsg',      {fg=p.base0B, bg=nil,      attr=nil,         sp=nil})
+  hi('MoreMsg',      {fg=p.base0B, bg=nil,      attr=nil,         sp=nil})
+  hi('MsgArea',      {fg=p.base05, bg=p.base00, attr=nil,         sp=nil})
+  hi('MsgSeparator', {fg=p.base04, bg=p.base02, attr=nil,         sp=nil})
+  hi('NonText',      {fg=p.base03, bg=nil,      attr=nil,         sp=nil})
+  hi('Normal',       {fg=p.base05, bg=p.base00, attr=nil,         sp=nil})
+  hi('NormalFloat',  {fg=p.base05, bg=p.base01, attr=nil,         sp=nil})
+  hi('NormalNC',     {fg=p.base05, bg=p.base00, attr=nil,         sp=nil})
+  hi('PMenu',        {fg=p.base05, bg=p.base01, attr=nil,         sp=nil})
+  hi('PMenuSbar',    {fg=nil,      bg=p.base02, attr=nil,         sp=nil})
+  hi('PMenuSel',     {fg=p.base01, bg=p.base05, attr=nil,         sp=nil})
+  hi('PMenuThumb',   {fg=nil,      bg=p.base07, attr=nil,         sp=nil})
+  hi('Question',     {fg=p.base0D, bg=nil,      attr=nil,         sp=nil})
+  hi('QuickFixLine', {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
+  hi('Search',       {fg=p.base01, bg=p.base0A, attr=nil,         sp=nil})
+  hi('SignColumn',   {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
+  hi('SpecialKey',   {fg=p.base03, bg=nil,      attr=nil,         sp=nil})
+  hi('SpellBad',     {fg=nil,      bg=nil,      attr='undercurl', sp=p.base08})
+  hi('SpellCap',     {fg=nil,      bg=nil,      attr='undercurl', sp=p.base0D})
+  hi('SpellLocal',   {fg=nil,      bg=nil,      attr='undercurl', sp=p.base0C})
+  hi('SpellRare',    {fg=nil,      bg=nil,      attr='undercurl', sp=p.base0E})
+  hi('StatusLine',   {fg=p.base04, bg=p.base02, attr=nil,         sp=nil})
+  hi('StatusLineNC', {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
+  hi('Substitute',   {fg=p.base01, bg=p.base0A, attr=nil,         sp=nil})
+  hi('TabLine',      {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
+  hi('TabLineFill',  {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
+  hi('TabLineSel',   {fg=p.base0B, bg=p.base01, attr=nil,         sp=nil})
+  hi('TermCursor',   {fg=nil,      bg=nil,      attr='reverse',   sp=nil})
+  hi('TermCursorNC', {fg=nil,      bg=nil,      attr='reverse',   sp=nil})
+  hi('Title',        {fg=p.base0D, bg=nil,      attr=nil,         sp=nil})
+  hi('VertSplit',    {fg=p.base02, bg=p.base02, attr=nil,         sp=nil})
+  hi('Visual',       {fg=nil,      bg=p.base02, attr=nil,         sp=nil})
+  hi('VisualNOS',    {fg=p.base08, bg=nil,      attr=nil,         sp=nil})
+  hi('WarningMsg',   {fg=p.base08, bg=nil,      attr=nil,         sp=nil})
+  hi('Whitespace',   {fg=p.base03, bg=nil,      attr=nil,         sp=nil})
+  hi('WildMenu',     {fg=p.base08, bg=p.base0A, attr=nil,         sp=nil})
+  hi('lCursor',      {fg=p.base00, bg=p.base05, attr=nil,         sp=nil})
 
   -- Standard syntax (affects treesitter)
-  H.hi('Boolean',        {guifg=p.base09, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Character',      {guifg=p.base08, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Comment',        {guifg=p.base03, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Conditional',    {guifg=p.base0E, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Constant',       {guifg=p.base09, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Debug',          {guifg=p.base08, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Define',         {guifg=p.base0E, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Delimiter',      {guifg=p.base0F, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Error',          {guifg=p.base00, guibg=p.base08, gui=nil, guisp=nil})
-  H.hi('Exception',      {guifg=p.base08, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Float',          {guifg=p.base09, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Function',       {guifg=p.base0D, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Identifier',     {guifg=p.base08, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Ignore',         {guifg=p.base0C, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Include',        {guifg=p.base0D, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Keyword',        {guifg=p.base0E, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Label',          {guifg=p.base0A, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Macro',          {guifg=p.base08, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Number',         {guifg=p.base09, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Operator',       {guifg=p.base05, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('PreCondit',      {guifg=p.base0A, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('PreProc',        {guifg=p.base0A, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Repeat',         {guifg=p.base0A, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Special',        {guifg=p.base0C, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('SpecialChar',    {guifg=p.base0F, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('SpecialComment', {guifg=p.base0C, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Statement',      {guifg=p.base08, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('StorageClass',   {guifg=p.base0A, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('String',         {guifg=p.base0B, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Structure',      {guifg=p.base0E, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Tag',            {guifg=p.base0A, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Todo',           {guifg=p.base0A, guibg=p.base01, gui=nil, guisp=nil})
-  H.hi('Type',           {guifg=p.base0A, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Typedef',        {guifg=p.base0A, guibg=nil,      gui=nil, guisp=nil})
-  H.hi('Underlined',     {guifg=p.base08, guibg=nil,      gui=nil, guisp=nil})
+  hi('Boolean',        {fg=p.base09, bg=nil,      attr=nil, sp=nil})
+  hi('Character',      {fg=p.base08, bg=nil,      attr=nil, sp=nil})
+  hi('Comment',        {fg=p.base03, bg=nil,      attr=nil, sp=nil})
+  hi('Conditional',    {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
+  hi('Constant',       {fg=p.base09, bg=nil,      attr=nil, sp=nil})
+  hi('Debug',          {fg=p.base08, bg=nil,      attr=nil, sp=nil})
+  hi('Define',         {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
+  hi('Delimiter',      {fg=p.base0F, bg=nil,      attr=nil, sp=nil})
+  hi('Error',          {fg=p.base00, bg=p.base08, attr=nil, sp=nil})
+  hi('Exception',      {fg=p.base08, bg=nil,      attr=nil, sp=nil})
+  hi('Float',          {fg=p.base09, bg=nil,      attr=nil, sp=nil})
+  hi('Function',       {fg=p.base0D, bg=nil,      attr=nil, sp=nil})
+  hi('Identifier',     {fg=p.base08, bg=nil,      attr=nil, sp=nil})
+  hi('Ignore',         {fg=p.base0C, bg=nil,      attr=nil, sp=nil})
+  hi('Include',        {fg=p.base0D, bg=nil,      attr=nil, sp=nil})
+  hi('Keyword',        {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
+  hi('Label',          {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('Macro',          {fg=p.base08, bg=nil,      attr=nil, sp=nil})
+  hi('Number',         {fg=p.base09, bg=nil,      attr=nil, sp=nil})
+  hi('Operator',       {fg=p.base05, bg=nil,      attr=nil, sp=nil})
+  hi('PreCondit',      {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('PreProc',        {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('Repeat',         {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('Special',        {fg=p.base0C, bg=nil,      attr=nil, sp=nil})
+  hi('SpecialChar',    {fg=p.base0F, bg=nil,      attr=nil, sp=nil})
+  hi('SpecialComment', {fg=p.base0C, bg=nil,      attr=nil, sp=nil})
+  hi('Statement',      {fg=p.base08, bg=nil,      attr=nil, sp=nil})
+  hi('StorageClass',   {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('String',         {fg=p.base0B, bg=nil,      attr=nil, sp=nil})
+  hi('Structure',      {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
+  hi('Tag',            {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('Todo',           {fg=p.base0A, bg=p.base01, attr=nil, sp=nil})
+  hi('Type',           {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('Typedef',        {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('Underlined',     {fg=p.base08, bg=nil,      attr=nil, sp=nil})
 
   -- Other from 'base16-vim'
-  H.hi('Bold',       {guifg=nil,      guibg=nil, gui='bold', guisp=nil})
-  H.hi('Italic',     {guifg=nil,      guibg=nil, gui=nil,    guisp=nil})
-  H.hi('TooLong',    {guifg=p.base08, guibg=nil, gui=nil,    guisp=nil})
-  H.hi('Underlined', {guifg=p.base08, guibg=nil, gui=nil,    guisp=nil})
+  hi('Bold',       {fg=nil,      bg=nil, attr='bold', sp=nil})
+  hi('Italic',     {fg=nil,      bg=nil, attr=nil,    sp=nil})
+  hi('TooLong',    {fg=p.base08, bg=nil, attr=nil,    sp=nil})
+  hi('Underlined', {fg=p.base08, bg=nil, attr=nil,    sp=nil})
 
   -- Git diff
-  H.hi("DiffAdded",   {guifg=p.base0B, guibg=p.base00, gui=nil, guisp=nil})
-  H.hi("DiffFile",    {guifg=p.base08, guibg=p.base00, gui=nil, guisp=nil})
-  H.hi("DiffLine",    {guifg=p.base0D, guibg=p.base00, gui=nil, guisp=nil})
-  H.hi("DiffNewFile", {guifg=p.base0B, guibg=p.base00, gui=nil, guisp=nil})
-  H.hi("DiffRemoved", {guifg=p.base08, guibg=p.base00, gui=nil, guisp=nil})
+  hi("DiffAdded",   {fg=p.base0B, bg=p.base00, attr=nil, sp=nil})
+  hi("DiffFile",    {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
+  hi("DiffLine",    {fg=p.base0D, bg=p.base00, attr=nil, sp=nil})
+  hi("DiffNewFile", {fg=p.base0B, bg=p.base00, attr=nil, sp=nil})
+  hi("DiffRemoved", {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
 
   -- Git commit
-  H.hi("gitcommitBranch",        {guifg=p.base09, guibg=nil, gui="bold", guisp=nil})
-  H.hi("gitcommitComment",       {guifg=p.base03, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitDiscarded",     {guifg=p.base03, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitDiscardedFile", {guifg=p.base08, guibg=nil, gui="bold", guisp=nil})
-  H.hi("gitcommitDiscardedType", {guifg=p.base0D, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitHeader",        {guifg=p.base0E, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitOverflow",      {guifg=p.base08, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitSelected",      {guifg=p.base03, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitSelectedFile",  {guifg=p.base0B, guibg=nil, gui="bold", guisp=nil})
-  H.hi("gitcommitSelectedType",  {guifg=p.base0D, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitSummary",       {guifg=p.base0B, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitUnmergedFile",  {guifg=p.base08, guibg=nil, gui="bold", guisp=nil})
-  H.hi("gitcommitUnmergedType",  {guifg=p.base0D, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitUntracked",     {guifg=p.base03, guibg=nil, gui=nil,    guisp=nil})
-  H.hi("gitcommitUntrackedFile", {guifg=p.base0A, guibg=nil, gui=nil,    guisp=nil})
+  hi("gitcommitBranch",        {fg=p.base09, bg=nil, attr="bold", sp=nil})
+  hi("gitcommitComment",       {fg=p.base03, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitDiscarded",     {fg=p.base03, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitDiscardedFile", {fg=p.base08, bg=nil, attr="bold", sp=nil})
+  hi("gitcommitDiscardedType", {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitHeader",        {fg=p.base0E, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitOverflow",      {fg=p.base08, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitSelected",      {fg=p.base03, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitSelectedFile",  {fg=p.base0B, bg=nil, attr="bold", sp=nil})
+  hi("gitcommitSelectedType",  {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitSummary",       {fg=p.base0B, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitUnmergedFile",  {fg=p.base08, bg=nil, attr="bold", sp=nil})
+  hi("gitcommitUnmergedType",  {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitUntracked",     {fg=p.base03, bg=nil, attr=nil,    sp=nil})
+  hi("gitcommitUntrackedFile", {fg=p.base0A, bg=nil, attr=nil,    sp=nil})
 
   -- Built-in LSP (similar to spelling)
-  H.hi('LspDiagnosticsDefaultError',       {guifg=p.base08, guibg=p.base00, gui=nil, guisp=nil})
-  H.hi('LspDiagnosticsDefaultHint',        {guifg=p.base0D, guibg=p.base00, gui=nil, guisp=nil})
-  H.hi('LspDiagnosticsDefaultInformation', {guifg=p.base0C, guibg=p.base00, gui=nil, guisp=nil})
-  H.hi('LspDiagnosticsDefaultWarning',     {guifg=p.base0E, guibg=p.base00, gui=nil, guisp=nil})
+  hi('LspDiagnosticsDefaultError',       {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
+  hi('LspDiagnosticsDefaultHint',        {fg=p.base0D, bg=p.base00, attr=nil, sp=nil})
+  hi('LspDiagnosticsDefaultInformation', {fg=p.base0C, bg=p.base00, attr=nil, sp=nil})
+  hi('LspDiagnosticsDefaultWarning',     {fg=p.base0E, bg=p.base00, attr=nil, sp=nil})
 
-  H.hi('LspDiagnosticsUnderlineError',       {guifg=nil, guibg=nil, gui='underline', guisp=p.base08})
-  H.hi('LspDiagnosticsUnderlineHint',        {guifg=nil, guibg=nil, gui='underline', guisp=p.base0D})
-  H.hi('LspDiagnosticsUnderlineInformation', {guifg=nil, guibg=nil, gui='underline', guisp=p.base0C})
-  H.hi('LspDiagnosticsUnderlineWarning',     {guifg=nil, guibg=nil, gui='underline', guisp=p.base0E})
+  hi('LspDiagnosticsUnderlineError',       {fg=nil, bg=nil, attr='underline', sp=p.base08})
+  hi('LspDiagnosticsUnderlineHint',        {fg=nil, bg=nil, attr='underline', sp=p.base0D})
+  hi('LspDiagnosticsUnderlineInformation', {fg=nil, bg=nil, attr='underline', sp=p.base0C})
+  hi('LspDiagnosticsUnderlineWarning',     {fg=nil, bg=nil, attr='underline', sp=p.base0E})
 
   -- Plugins
   ---- 'mini'
-  H.hi('MiniTablineCurrent',         {guifg=p.base05, guibg=p.base02, gui='bold', guisp=nil})
-  H.hi('MiniTablineFill',            {guifg=nil,      guibg=nil,      gui=nil,    guisp=nil})
-  H.hi('MiniTablineHidden',          {guifg=p.base04, guibg=p.base01, gui=nil,    guisp=nil})
-  H.hi('MiniTablineModifiedCurrent', {guifg=p.base02, guibg=p.base05, gui='bold', guisp=nil})
-  H.hi('MiniTablineModifiedHidden',  {guifg=p.base01, guibg=p.base04, gui=nil,    guisp=nil})
-  H.hi('MiniTablineModifiedVisible', {guifg=p.base02, guibg=p.base04, gui='bold', guisp=nil})
-  H.hi('MiniTablineVisible',         {guifg=p.base05, guibg=p.base01, gui='bold', guisp=nil})
+  hi('MiniTablineCurrent',         {fg=p.base05, bg=p.base02, attr='bold', sp=nil})
+  hi('MiniTablineFill',            {fg=nil,      bg=nil,      attr=nil,    sp=nil})
+  hi('MiniTablineHidden',          {fg=p.base04, bg=p.base01, attr=nil,    sp=nil})
+  hi('MiniTablineModifiedCurrent', {fg=p.base02, bg=p.base05, attr='bold', sp=nil})
+  hi('MiniTablineModifiedHidden',  {fg=p.base01, bg=p.base04, attr=nil,    sp=nil})
+  hi('MiniTablineModifiedVisible', {fg=p.base02, bg=p.base04, attr='bold', sp=nil})
+  hi('MiniTablineVisible',         {fg=p.base05, bg=p.base01, attr='bold', sp=nil})
 
-  H.hi('MiniStatuslineDevinfo',     {guifg=p.base04, guibg=p.base02, gui=nil,    guisp=nil})
-  H.hi('MiniStatuslineFileinfo',    {guifg=p.base04, guibg=p.base02, gui=nil,    guisp=nil})
-  H.hi('MiniStatuslineFilename',    {guifg=p.base03, guibg=p.base01, gui=nil,    guisp=nil})
-  H.hi('MiniStatuslineInactive',    {guifg=p.base03, guibg=p.base01, gui=nil,    guisp=nil})
-  H.hi('MiniStatuslineModeCommand', {guifg=p.base00, guibg=p.base08, gui='bold', guisp=nil})
-  H.hi('MiniStatuslineModeInsert',  {guifg=p.base00, guibg=p.base0D, gui='bold', guisp=nil})
-  H.hi('MiniStatuslineModeNormal',  {guifg=p.base00, guibg=p.base05, gui='bold', guisp=nil})
-  H.hi('MiniStatuslineModeOther',   {guifg=p.base00, guibg=p.base03, gui='bold', guisp=nil})
-  H.hi('MiniStatuslineModeReplace', {guifg=p.base00, guibg=p.base0E, gui='bold', guisp=nil})
-  H.hi('MiniStatuslineModeVisual',  {guifg=p.base00, guibg=p.base0B, gui='bold', guisp=nil})
+  hi('MiniStatuslineDevinfo',     {fg=p.base04, bg=p.base02, attr=nil,    sp=nil})
+  hi('MiniStatuslineFileinfo',    {fg=p.base04, bg=p.base02, attr=nil,    sp=nil})
+  hi('MiniStatuslineFilename',    {fg=p.base03, bg=p.base01, attr=nil,    sp=nil})
+  hi('MiniStatuslineInactive',    {fg=p.base03, bg=p.base01, attr=nil,    sp=nil})
+  hi('MiniStatuslineModeCommand', {fg=p.base00, bg=p.base08, attr='bold', sp=nil})
+  hi('MiniStatuslineModeInsert',  {fg=p.base00, bg=p.base0D, attr='bold', sp=nil})
+  hi('MiniStatuslineModeNormal',  {fg=p.base00, bg=p.base05, attr='bold', sp=nil})
+  hi('MiniStatuslineModeOther',   {fg=p.base00, bg=p.base03, attr='bold', sp=nil})
+  hi('MiniStatuslineModeReplace', {fg=p.base00, bg=p.base0E, attr='bold', sp=nil})
+  hi('MiniStatuslineModeVisual',  {fg=p.base00, bg=p.base0B, attr='bold', sp=nil})
 
-  H.hi('MiniTrailspace', {guifg=p.base00, guibg=p.base08})
+  hi('MiniTrailspace', {fg=p.base00, bg=p.base08, attr=nil, sp=nil})
 end
 
 function MiniBase16.mini_palette(background, foreground, accent_chroma)
@@ -309,19 +323,47 @@ end
 
 -- Helpers
 ---- Highlighting
-function H.hi(group, args)
+function H.highlight_gui(group, args)
   -- NOTE: using `string.format` instead of gradually growing string with `..`
   -- is faster. Crude estimate for this particular case: whole colorscheme
   -- loading decreased from ~3.6ms to ~3.0ms, i.e. by about 20%.
   local command = string.format(
     [[highlight %s guifg=%s guibg=%s gui=%s guisp=%s]],
     group,
-    args.guifg or 'NONE',
-    args.guibg or 'NONE',
-    args.gui   or 'NONE',
-    args.guisp or 'NONE'
+    args.fg or 'NONE', args.bg or 'NONE', args.attr or 'NONE', args.sp or 'NONE'
   )
   vim.cmd(command)
+end
+
+function H.highlight_both(group, args)
+  local command = string.format(
+    [[highlight %s guifg=%s ctermfg=%s guibg=%s ctermbg=%s gui=%s cterm=%s guisp=%s]],
+    group,
+    args.fg and args.fg.gui or 'NONE', args.fg and args.fg.cterm or 'NONE',
+    args.bg and args.bg.gui or 'NONE', args.bg and args.bg.cterm or 'NONE',
+    args.attr or 'NONE', args.attr or 'NONE',
+    args.sp and args.sp.gui or 'NONE'
+  )
+  vim.cmd(command)
+end
+
+---- Compound (gui and cterm) palette
+function H.make_compound_palette(palette, use_cterm)
+  local cterm_table = use_cterm
+  if type(use_cterm) == 'boolean' then
+    -- Create cterm palette only when it is needed to decrease load time
+    H.ensure_cterm_palette()
+    cterm_table = vim.tbl_map(
+      function(hex) return H.nearest_rgb_id(H.hex2rgb(hex), H.cterm_palette) end,
+      palette
+    )
+  end
+
+  local res = {}
+  for name, _ in pairs(palette) do
+    res[name] = {gui = palette[name], cterm = cterm_table[name]}
+  end
+  return res
 end
 
 ---- Optimal scales
@@ -385,6 +427,25 @@ function H.validate_base16_palette(x)
       error(msg)
     end
     H.validate_hex(c, string.format('palette[%s]', name))
+  end
+  return true
+end
+
+function H.validate_use_cterm(x)
+  if not x or type(x) == 'boolean' then return true end
+  if type(x) ~= 'table' then
+    error('(mini.base16) `use_cterm` should be boolean or table with cterm colors')
+  end
+  for _, name in pairs(H.base16_names) do
+    local c = x[name]
+    if c == nil then
+      local msg = string.format('(mini.base16): `use_cterm` does not have value %s', name)
+      error(msg)
+    end
+    if not (type(c) == 'number' and 0 <= c and c <= 255) then
+      local msg = string.format('(mini.base16): `use_cterm.%s` is not a cterm color', name)
+      error(msg)
+    end
   end
   return true
 end
