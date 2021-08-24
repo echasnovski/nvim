@@ -1,7 +1,7 @@
 -- 'Minischeme' color scheme
 -- Derived from base16 (https://github.com/chriskempson/base16) and mini16
 -- palette generator
-local palette
+local use_cterm, palette
 
 -- Dark palette is an output of 'MiniBase16.mini_palette':
 -- - Background '#1e2634' (LCh(uv) = 15-10-250);
@@ -24,6 +24,24 @@ if vim.o.background == 'dark' then
     base0D = '#5bf5ff',
     base0E = '#ffc6ff',
     base0F = '#00a3c2'
+  }
+  use_cterm = {
+    base00 = 235,
+    base01 = 238,
+    base02 = 242,
+    base03 = 246,
+    base04 = 185,
+    base05 = 186,
+    base06 = 228,
+    base07 = 228,
+    base08 = 223,
+    base09 = 173,
+    base0A = 71,
+    base0B = 156,
+    base0C = 170,
+    base0D = 87,
+    base0E = 225,
+    base0F = 37
   }
 end
 
@@ -49,8 +67,26 @@ if vim.o.background == 'light' then
     base0E = '#754276',
     base0F = '#4d9aad'
   }
+  use_cterm = {
+    base00 = 255,
+    base01 = 252,
+    base02 = 145,
+    base03 = 246,
+    base04 = 101,
+    base05 = 58,
+    base06 = 235,
+    base07 = 0,
+    base08 = 239,
+    base09 = 137,
+    base0A = 65,
+    base0B = 236,
+    base0C = 139,
+    base0D = 23,
+    base0E = 243,
+    base0F = 67
+  }
 end
 
 if palette then
-  require('mini.base16').apply(palette, 'minischeme')
+  require('mini.base16').apply(palette, 'minischeme', use_cterm)
 end
