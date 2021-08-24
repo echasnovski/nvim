@@ -4,8 +4,9 @@
 local use_cterm, palette
 
 -- Dark palette is an output of 'MiniBase16.mini_palette':
--- - Background '#1e2634' (LCh(uv) = 15-10-250);
+-- - Background '#1e2634' (LCh(uv) = 15-10-250)
 -- - Foreground '#e2ea7c' (Lch(uv) = 90-70-90)
+-- - Accent chroma 70
 if vim.o.background == 'dark' then
   palette = {
     base00 = '#1e2634',
@@ -45,45 +46,46 @@ if vim.o.background == 'dark' then
   }
 end
 
--- Dark palette is an output of 'MiniBase16.mini_palette':
--- - Background '#ecf1fc' (LCh(uv) = 95-10-250);
--- - Foreground '#525900' (Lch(uv) = 25-70-90)
+-- Dark palette is an 'inverted dark', output of 'MiniBase16.mini_palette':
+-- - Background '#E2E4D6' (LCh(uv) = 90-10-90)
+-- - Foreground '#002DA0' (Lch(uv) = 15-70-250)
+-- - Accent chroma 70
 if vim.o.background == 'light' then
   palette = {
-    base00 = '#ecf1fc',
-    base01 = '#cbd0da',
-    base02 = '#aaafba',
-    base03 = '#8b909a',
-    base04 = '#7d8446',
-    base05 = '#525900',
-    base06 = '#2b3200',
-    base07 = '#030600',
-    base08 = '#764a2c',
-    base09 = '#b3856d',
-    base0A = '#6c9b69',
-    base0B = '#2b5f27',
-    base0C = '#af80b1',
-    base0D = '#005f72',
-    base0E = '#754276',
-    base0F = '#4d9aad'
+    base00 = '#e2e4d6',
+    base01 = '#bec0b2',
+    base02 = '#9b9d8f',
+    base03 = '#797b6d',
+    base04 = '#3d4eaf',
+    base05 = '#002da0',
+    base06 = '#0000ff',
+    base07 = '#070500',
+    base08 = '#662c00',
+    base09 = '#ab6b1a',
+    base0A = '#028d30',
+    base0B = '#004d00',
+    base0C = '#b555ae',
+    base0D = '#005077',
+    base0E = '#7d0075',
+    base0F = '#008ab1'
   }
   use_cterm = {
-    base00 = 255,
-    base01 = 252,
-    base02 = 145,
-    base03 = 246,
-    base04 = 101,
-    base05 = 58,
-    base06 = 235,
+    base00 = 254,
+    base01 = 250,
+    base02 = 247,
+    base03 = 243,
+    base04 = 61,
+    base05 = 19,
+    base06 = 21,
     base07 = 0,
-    base08 = 239,
-    base09 = 137,
-    base0A = 65,
-    base0B = 236,
-    base0C = 139,
-    base0D = 23,
-    base0E = 243,
-    base0F = 67
+    base08 = 52,
+    base09 = 130,
+    base0A = 29,
+    base0B = 22,
+    base0C = 133,
+    base0D = 24,
+    base0E = 90,
+    base0F = 31
   }
 end
 
