@@ -34,6 +34,13 @@
 -- - Built-in active mode indicator with colors.
 -- - Sections hide information when window is too narrow (specific width is
 --   configurable per section).
+-- - Define own custom statusline structure by overwriting (even after calling
+--   `setup()`) `MiniStatusline.active()` or `MiniStatusline.inactive()`. Code
+--   should be similar to default method with rough structure:
+--     - Compute string data for every section you want to display.
+--     - Combine them in groups with `MiniStatusline.combine_groups()`. Each
+--       group has own highlighting. Strings within group are separated by one
+--       space. Groups are separated by two spaces (one for each highlighting).
 --
 -- Suggested dependencies (provide extra functionality, statusline will work
 -- without them):
@@ -124,19 +131,17 @@ function MiniStatusline.active()
   local fileinfo    = MiniStatusline.section_fileinfo({trunc_width = 120})
   local location    = MiniStatusline.section_location({})
 
-  -- Usage of `MiniStatusline.combine_sections()` ensures correct padding with
-  -- spaces between sections (accounts for 'missing' sections, etc.)
-  return MiniStatusline.combine_sections({
-    {string = mode,        hl = mode_info.hl},
-    {string = spell,       hl = mode_info.hl},
-    {string = wrap,        hl = mode_info.hl},
-    {string = git,         hl = '%#MiniStatuslineDevinfo#'},
-    {string = diagnostics, hl = '%#MiniStatuslineDevinfo#'},
+  -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
+  -- correct padding with spaces between groups (accounts for 'missing'
+  -- sections, etc.)
+  return MiniStatusline.combine_groups({
+    {hl = mode_info.hl,                strings = {mode, spell, wrap}},
+    {hl = '%#MiniStatuslineDevinfo#',  strings = {git, diagnostics}},
     '%<', -- Mark general truncate point
-    {string = filename,    hl = '%#MiniStatuslineFilename#'},
+    {hl = '%#MiniStatuslineFilename#', strings = {filename}},
     '%=', -- End left alignment
-    {string = fileinfo,    hl = '%#MiniStatuslineFileinfo#'},
-    {string = location,    hl = mode_info.hl},
+    {hl = '%#MiniStatuslineFileinfo#', strings = {fileinfo}},
+    {hl = mode_info.hl,                strings = {location}},
   })
 end
 
@@ -144,20 +149,20 @@ function MiniStatusline.inactive()
   return '%#MiniStatuslineInactive#%F%='
 end
 
-function MiniStatusline.combine_sections(sections)
+function MiniStatusline.combine_groups(groups)
   local t = vim.tbl_map(
     function(s)
+      if not s then return '' end
       if type(s) == 'string' then return s end
-      if s.string == '' then return '' end
-      if s.hl then
-        -- Apply highlighting to padded string
-        return string.format('%s %s ', s.hl, s.string)
-      else
-        -- Take highlighting from previous section (which should have padding)
-        return string.format('%s ', s.string)
-      end
+      local t = vim.tbl_filter(
+        function(x) return not (x == nil or x == '') end,
+        s.strings
+      )
+      -- Return highlighting group to allow inheritance from later sections
+      if vim.tbl_count(t) == 0 then return s.hl or '' end
+      return string.format('%s %s ', s.hl or '', table.concat(t, ' '))
     end,
-    sections
+    groups
   )
   return table.concat(t, '')
 end
