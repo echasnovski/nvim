@@ -18,7 +18,7 @@
 --   auto = {completion = true, info = true, signature = true},
 --
 --   -- Delay (debounce type, in ms) between certain Neovim event and action.
---   delay = {completion = 100, info = 100, signature = 100},
+--   delay = {completion = 100, info = 100, signature = 50},
 --
 --   -- Maximum dimensions of floating windows for certain actions. Action entry
 --   -- should be a table with 'height' and 'width' fields.
@@ -209,7 +209,7 @@ end
 MiniCompletion.auto = {completion = true, info = true, signature = true}
 
 ---- Delay (debounce type, in ms) between certain Neovim event and action.
-MiniCompletion.delay = {completion = 100, info = 100, signature = 100}
+MiniCompletion.delay = {completion = 100, info = 100, signature = 50}
 
 ---- Maximum dimensions of floating windows for certain actions. Action entry
 ---- should be a table with 'height' and 'width' fields.
