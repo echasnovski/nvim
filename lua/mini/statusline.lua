@@ -115,23 +115,23 @@ MiniStatusline.set_vim_settings = true
 function MiniStatusline.active()
   local mode_info = MiniStatusline.modes[vim.fn.mode()]
 
-  local mode        = MiniStatusline.section_mode{mode_info = mode_info, trunc_width = 120}
-  local spell       = MiniStatusline.section_spell{trunc_width = 120}
-  local wrap        = MiniStatusline.section_wrap{}
-  local git         = MiniStatusline.section_git{trunc_width = 75}
-  local diagnostics = MiniStatusline.section_diagnostics{trunc_width = 75}
-  local filename    = MiniStatusline.section_filename{trunc_width = 140}
-  local fileinfo    = MiniStatusline.section_fileinfo{trunc_width = 120}
-  local location    = MiniStatusline.section_location{}
+  local mode        = MiniStatusline.section_mode({mode_info = mode_info, trunc_width = 120})
+  local spell       = MiniStatusline.section_spell({trunc_width = 120})
+  local wrap        = MiniStatusline.section_wrap({})
+  local git         = MiniStatusline.section_git({trunc_width = 75})
+  local diagnostics = MiniStatusline.section_diagnostics({trunc_width = 75})
+  local filename    = MiniStatusline.section_filename({trunc_width = 140})
+  local fileinfo    = MiniStatusline.section_fileinfo({trunc_width = 120})
+  local location    = MiniStatusline.section_location({})
 
   -- Usage of `MiniStatusline.combine_sections()` ensures correct padding with
   -- spaces between sections (accounts for 'missing' sections, etc.)
   return MiniStatusline.combine_sections({
     {string = mode,        hl = mode_info.hl},
-    {string = spell,       hl = nil}, -- Copy highliting from previous section
-    {string = wrap,        hl = nil}, -- Copy highliting from previous section
+    {string = spell,       hl = mode_info.hl},
+    {string = wrap,        hl = mode_info.hl},
     {string = git,         hl = '%#MiniStatuslineDevinfo#'},
-    {string = diagnostics, hl = nil}, -- Copy highliting from previous section
+    {string = diagnostics, hl = '%#MiniStatuslineDevinfo#'},
     '%<', -- Mark general truncate point
     {string = filename,    hl = '%#MiniStatuslineFilename#'},
     '%=', -- End left alignment
@@ -219,15 +219,14 @@ end
 function MiniStatusline.section_git(arg)
   if H.isnt_normal_buffer() then return '' end
 
-  local res = vim.b.gitsigns_head or ''
-  if not H.is_truncated(arg.trunc_width) then
-    local signs = vim.b.gitsigns_status or ''
-    if signs ~= '' then res = res .. ' ' .. signs end
+  local head = vim.b.gitsigns_head or '-'
+  local signs = H.is_truncated(arg.trunc_width) and '' or (vim.b.gitsigns_status or '')
+
+  if signs == '' then
+    if head == '-' then return '' end
+    return string.format(' %s', head)
   end
-
-  if (res == nil) or res == '' then res = '-' end
-
-  return string.format(' %s', res)
+  return string.format(' %s %s', head, signs)
 end
 
 ---- Diagnostics
@@ -240,20 +239,18 @@ function MiniStatusline.section_diagnostics(arg)
     hasnt_attached_client
   if dont_show_lsp then return '' end
 
-  -- Gradual growing of string ensures preferred order
-  local result = ''
-
+  -- Construct diagnostic info using predefined order
+  local t = {}
   for _, level in ipairs(H.diagnostic_levels) do
     n = vim.lsp.diagnostic.get_count(0, level.name)
-    -- Add string only if diagnostic is present
+    -- Add level info only if diagnostic is present
     if n > 0 then
-      result = result .. string.format(' %s%s', level.sign, n)
+      table.insert(t, string.format(' %s%s', level.sign, n))
     end
   end
 
-  if result == '' then result = ' -' end
-
-  return 'ﯭ ' .. result
+  if vim.tbl_count(t) == 0 then return 'ﯭ  -' end
+  return string.format('ﯭ %s', table.concat(t, ''))
 end
 
 ---- File name
@@ -281,7 +278,7 @@ function MiniStatusline.section_fileinfo(arg)
 
   -- Add filetype icon
   local icon = H.get_filetype_icon()
-  if icon ~= '' then filetype = icon .. ' ' .. filetype end
+  if icon ~= '' then filetype = string.format('%s %s', icon, filetype) end
 
   -- Construct output string if truncated
   if H.is_truncated(arg.trunc_width) then return filetype end
@@ -344,16 +341,13 @@ H.diagnostic_levels = {
 
 function H.get_filesize()
   local size = vim.fn.getfsize(vim.fn.getreg('%'))
-  local data
   if size < 1024 then
-    data = size .. 'B'
+    return string.format('%dB', size)
   elseif size < 1048576 then
-    data = string.format('%.2fKiB', size / 1024)
+    return string.format('%.2fKiB', size / 1024)
   else
-    data = string.format('%.2fMiB', size / 1048576)
+    return string.format('%.2fMiB', size / 1048576)
   end
-
-  return data
 end
 
 function H.get_filetype_icon()
