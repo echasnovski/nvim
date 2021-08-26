@@ -28,7 +28,7 @@
 --   },
 --
 --   -- Way of how module does LSP completion:
---   -- - `source` should be one of 'completefunc' or 'omnifunc'.
+--   -- - `source_func` should be one of 'completefunc' or 'omnifunc'.
 --   -- - `auto_setup` should be boolean indicating if LSP completion is set up on
 --   --   every `BufEnter` event.
 --   -- - `process_items` should be a function which takes LSP
@@ -37,7 +37,7 @@
 --   --   common use-cases are custom filtering and sorting. You can use
 --   --   default `process_items` as `MiniCompletion.default_process_items()`.
 --  lsp_completion = {
---    source = 'completefunc',
+--    source_func = 'completefunc',
 --    auto_setup = true,
 --    process_items = <function: filters 'not snippets' by prefix and sorts by LSP specification>
 --  },
@@ -91,7 +91,8 @@
 -- - More appropriate, albeit slightly advanced, LSP completion setup is to set
 --   it not on every `BufEnter` event (default), but on every attach of LSP
 --   client. To do that:
---     - Config: `lsp_completion = {source = 'omnifunc', auto_setup = false}`.
+--     - Use in initial config: `lsp_completion = {source_func = 'omnifunc',
+--       auto_setup = false}`.
 --     - In `on_attach()` of every LSP client set 'omnifunc' option to exactly
 --       `v:lua.MiniCompletion.completefunc_lsp`.
 --
@@ -192,7 +193,7 @@ function MiniCompletion.setup(config)
       [[augroup MiniCompletion
           au BufEnter * setlocal %s=v:lua.MiniCompletion.completefunc_lsp
         augroup END]],
-      config.lsp_completion.source
+      config.lsp_completion.source_func
     )
     vim.api.nvim_exec(command, false)
   end
@@ -219,10 +220,10 @@ MiniCompletion.window_dimensions = {
 }
 
 ---- Way of how module does LSP completion:
----- - `source` should be one of 'completefunc' or 'omnifunc'.
+---- - `source_func` should be one of 'completefunc' or 'omnifunc'.
 ---- - `auto_setup` should be boolean indicating if LSP completion is set up on
 ----   every `BufEnter` event.
-MiniCompletion.lsp_completion = {source = 'completefunc', auto_setup = true}
+MiniCompletion.lsp_completion = {source_func = 'completefunc', auto_setup = true}
 
 MiniCompletion.lsp_completion.process_items = function(items, base)
   local res = vim.tbl_filter(
@@ -517,8 +518,8 @@ function H.setup_config(config)
     ['window_dimensions.signature.width'] = {config.window_dimensions.signature.width, 'number'},
 
     lsp_completion = {config.lsp_completion, 'table'},
-    ['lsp_completion.source'] = {
-      config.lsp_completion.source,
+    ['lsp_completion.source_func'] = {
+      config.lsp_completion.source_func,
       function(x) return x == 'completefunc' or x == 'omnifunc' end,
       "one of strings: 'completefunc' or 'omnifunc'"
     },
@@ -618,7 +619,7 @@ function H.trigger_lsp()
   -- When `force` is `true` then presence of popup shouldn't matter.
   local no_popup = H.completion.force or (not H.pumvisible())
   if no_popup and vim.fn.mode() == 'i' then
-    local key = H.keys[MiniCompletion.lsp_completion.source]
+    local key = H.keys[MiniCompletion.lsp_completion.source_func]
     vim.api.nvim_feedkeys(key, 'n', false)
   end
 end
@@ -663,7 +664,9 @@ H.stop_actions = {
 function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
 
 function H.has_lsp_completion()
-  local func = vim.api.nvim_buf_get_option(0, MiniCompletion.lsp_completion.source)
+  local func = vim.api.nvim_buf_get_option(
+    0, MiniCompletion.lsp_completion.source_func
+  )
   return func == 'v:lua.MiniCompletion.completefunc_lsp'
 end
 
