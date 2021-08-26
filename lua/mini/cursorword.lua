@@ -42,7 +42,7 @@ function MiniCursorword.setup(config)
   H.apply_config(config)
 
   -- Module behavior
-  command = string.format([[
+  local command = string.format([[
     augroup MiniCursorword
       au!
       au %s                            * lua MiniCursorword.highlight()

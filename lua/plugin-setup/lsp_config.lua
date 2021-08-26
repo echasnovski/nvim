@@ -104,6 +104,10 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
           globals = {'vim'}
         },
         workspace = {
+          -- Don't analyze code from submodules
+          ignoreSubmodules = true,
+          -- Don't analyze 'undo cache'
+          ignoreDir = {'undodir'},
           -- Make the server aware of Neovim runtime files
           library = {[vim.fn.expand('$VIMRUNTIME/lua')] = true, [vim.fn.expand('$VIMRUNTIME/lua/vim/lsp')] = true}
         }

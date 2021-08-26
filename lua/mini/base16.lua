@@ -67,7 +67,7 @@ local MiniBase16 = {}
 local H = {}
 
 -- Module setup
-function MiniBase16.setup(config)
+function MiniBase16.setup()
   -- Export module
   _G.MiniBase16 = MiniBase16
 end
@@ -566,9 +566,9 @@ end
 
 function H.xyz2rgb(xyz)
   -- Source of better matrix: http://brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
-  r =  3.24045 * xyz.x - 1.53713 * xyz.y - 0.49853 * xyz.z
-  g = -0.96927 * xyz.x + 1.87601 * xyz.y + 0.04155 * xyz.z
-  b =  0.05564 * xyz.x - 0.20403 * xyz.y + 1.05722 * xyz.z
+  local r =  3.24045 * xyz.x - 1.53713 * xyz.y - 0.49853 * xyz.z
+  local g = -0.96927 * xyz.x + 1.87601 * xyz.y + 0.04155 * xyz.z
+  local b =  0.05564 * xyz.x - 0.20403 * xyz.y + 1.05722 * xyz.z
 
   return vim.tbl_map(
     function(c)

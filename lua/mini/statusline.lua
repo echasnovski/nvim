@@ -124,12 +124,12 @@ function MiniStatusline.active()
 
   local mode        = MiniStatusline.section_mode({mode_info = mode_info, trunc_width = 120})
   local spell       = MiniStatusline.section_spell({trunc_width = 120})
-  local wrap        = MiniStatusline.section_wrap({})
+  local wrap        = MiniStatusline.section_wrap()
   local git         = MiniStatusline.section_git({trunc_width = 75})
   local diagnostics = MiniStatusline.section_diagnostics({trunc_width = 75})
   local filename    = MiniStatusline.section_filename({trunc_width = 140})
   local fileinfo    = MiniStatusline.section_fileinfo({trunc_width = 120})
-  local location    = MiniStatusline.section_location({})
+  local location    = MiniStatusline.section_location()
 
   -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
   -- correct padding with spaces between groups (accounts for 'missing'
@@ -247,7 +247,7 @@ function MiniStatusline.section_diagnostics(arg)
   -- Construct diagnostic info using predefined order
   local t = {}
   for _, level in ipairs(H.diagnostic_levels) do
-    n = vim.lsp.diagnostic.get_count(0, level.name)
+    local n = vim.lsp.diagnostic.get_count(0, level.name)
     -- Add level info only if diagnostic is present
     if n > 0 then
       table.insert(t, string.format(' %s%s', level.sign, n))
@@ -297,7 +297,7 @@ function MiniStatusline.section_fileinfo(arg)
 end
 
 ---- Location inside buffer
-function MiniStatusline.section_location(arg)
+function MiniStatusline.section_location()
   -- Use virtual column number to allow update when paste last column
   return '%l|%L│%2v|%-2{col("$") - 1}'
 end

@@ -110,6 +110,7 @@ function MiniComment.toggle_comments(line_start, line_end)
   local lines = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
   local indent, is_comment = H.get_lines_info(lines, comment_parts)
 
+  local f
   if is_comment then
     f = H.make_uncomment_function(comment_parts)
   else
@@ -283,7 +284,7 @@ function H.make_uncomment_function(comment_parts)
   )
 
   return function(line)
-    indent_str, new_line = string.match(line, uncomment_regex)
+    local indent_str, new_line = string.match(line, uncomment_regex)
     -- Return original if line is not commented
     if new_line == nil then return line end
     -- Remove indent if line is a commented empty line

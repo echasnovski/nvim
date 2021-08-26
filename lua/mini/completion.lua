@@ -377,7 +377,7 @@ function MiniCompletion.completefunc_lsp(findstart, base)
   -- NOTE: having code for request inside this function enables its use
   -- directly with `<C-x><...>`.
   if H.completion.lsp.status ~= 'received' then
-    current_id = H.completion.lsp.id + 1
+    local current_id = H.completion.lsp.id + 1
     H.completion.lsp.id = current_id
     H.completion.lsp.status = 'sent'
 
@@ -397,15 +397,17 @@ function MiniCompletion.completefunc_lsp(findstart, base)
     -- handle possible fallback and to have all completion suggestions be
     -- filtered with one `base` in the other route of this function. Anyway,
     -- the most common situation is with one attached LSP client.
-    cancel_fun = vim.lsp.buf_request_all(bufnr, 'textDocument/completion', params, function(result)
-      if not H.is_lsp_current(H.completion, current_id) then return end
+    local cancel_fun = vim.lsp.buf_request_all(
+      bufnr, 'textDocument/completion', params, function(result)
+        if not H.is_lsp_current(H.completion, current_id) then return end
 
-      H.completion.lsp.status = 'received'
-      H.completion.lsp.result = result
+        H.completion.lsp.status = 'received'
+        H.completion.lsp.result = result
 
-      -- Trigger LSP completion to take 'received' route
-      H.trigger_lsp()
-    end)
+        -- Trigger LSP completion to take 'received' route
+        H.trigger_lsp()
+      end
+    )
 
     -- Cache cancel function to disable requests when they are not needed
     H.completion.lsp.cancel_fun = cancel_fun
@@ -843,18 +845,20 @@ function H.info_window_lines(info_id)
   H.info.lsp.id = current_id
   H.info.lsp.status = 'sent'
 
-  cancel_fun = vim.lsp.buf_request_all(bufnr, 'completionItem/resolve', params, function(result)
-    -- Don't do anything if there is other LSP request in action
-    if not H.is_lsp_current(H.info, current_id) then return end
+  local cancel_fun = vim.lsp.buf_request_all(
+    bufnr, 'completionItem/resolve', params, function(result)
+      -- Don't do anything if there is other LSP request in action
+      if not H.is_lsp_current(H.info, current_id) then return end
 
-    H.info.lsp.status = 'received'
+      H.info.lsp.status = 'received'
 
-    -- Don't do anything if completion item was changed
-    if H.info.id ~= info_id then return end
+      -- Don't do anything if completion item was changed
+      if H.info.id ~= info_id then return end
 
-    H.info.lsp.result = result
-    H.show_info_window()
-  end)
+      H.info.lsp.result = result
+      H.show_info_window()
+    end
+  )
 
   H.info.lsp.cancel_fun = cancel_fun
 
@@ -908,22 +912,24 @@ end
 function H.show_signature_window()
   -- If there is no received LSP result, make request and exit
   if H.signature.lsp.status ~= 'received' then
-    current_id = H.signature.lsp.id + 1
+    local current_id = H.signature.lsp.id + 1
     H.signature.lsp.id = current_id
     H.signature.lsp.status = 'sent'
 
     local bufnr = vim.api.nvim_get_current_buf()
     local params = vim.lsp.util.make_position_params()
 
-    cancel_fun = vim.lsp.buf_request_all(bufnr, 'textDocument/signatureHelp', params, function(result)
-      if not H.is_lsp_current(H.signature, current_id) then return end
+    local cancel_fun = vim.lsp.buf_request_all(
+      bufnr, 'textDocument/signatureHelp', params, function(result)
+        if not H.is_lsp_current(H.signature, current_id) then return end
 
-      H.signature.lsp.status = 'received'
-      H.signature.lsp.result = result
+        H.signature.lsp.status = 'received'
+        H.signature.lsp.result = result
 
-      -- Trigger `show_signature` again to take 'received' route
-      H.show_signature_window()
-    end)
+        -- Trigger `show_signature` again to take 'received' route
+        H.show_signature_window()
+      end
+    )
 
     -- Cache cancel function to disable requests when they are not needed
     H.signature.lsp.cancel_fun = cancel_fun
@@ -1205,7 +1211,7 @@ end
 
 function H.table_get(t, id)
   if type(id) ~= 'table' then return H.table_get(t, {id}) end
-  local res = t
+  local success, res = true, t
   for _, i in pairs(id) do
     success, res = pcall(function() return res[i] end)
     if not (success and res) then return nil end

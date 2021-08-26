@@ -17,7 +17,7 @@ end
 --     - If item is not selected, close popup and execute '<CR>'. Reasoning
 --       behind this is to explicitly select desired completion (currently this
 --       is also done with one '<Tab>' keystroke).
-local has_compe, compe           = pcall(require, 'compe')
+local has_compe, _               = pcall(require, 'compe')
 local has_completion, completion = pcall(require, 'completion')
 
 ---- `g:_using_delimitMate = 1` should be set whenever 'delimitMate' plugin is
@@ -39,7 +39,7 @@ if has_compe then
   end
 elseif has_completion then
   vim.g.completion_confirm_key = ''
-  confirm_popup_selection = function(...)
+  confirm_popup_selection = function()
     completion.confirmCompletion()
   end
 end
@@ -61,7 +61,7 @@ elseif has_npairs then
 end
 
 ---- Define main function to be mapped to '<CR>'
-_cr_action = function()
+_G._cr_action = function()
   if vim.fn.pumvisible() ~= 0 then
     local item_selected = vim.fn.complete_info()['selected'] ~= -1
     if item_selected then

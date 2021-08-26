@@ -140,8 +140,8 @@ end
 
 ---- List tabs
 function H.list_tabs()
-  tabs = {}
-  tabs_order = {}
+  local tabs = {}
+  local tabs_order = {}
   for i=1,vim.fn.bufnr('$') do
     if H.is_buffer_in_minitabline(i) then
       -- Display tabs in order of increasing buffer number
@@ -206,7 +206,7 @@ function H.construct_label_data(bufnum)
   else
     -- Process unnamed buffer
     label = H.make_unnamed_label(bufnum)
-    label_extender = function(label) return label end
+    label_extender = function(x) return x end
   end
 
   return label, label_extender
@@ -265,12 +265,12 @@ function H.finalize_labels()
   -- Deduplicate
   local nonunique_bufs = H.get_nonunique_buffers()
   while #nonunique_bufs > 0 do
-    nothing_changed = true
+    local nothing_changed = true
 
     -- Extend labels
     for _, bufnum in ipairs(nonunique_bufs) do
-      tab = MiniTabline.tabs[bufnum]
-      old_label = tab.label
+      local tab = MiniTabline.tabs[bufnum]
+      local old_label = tab.label
       tab.label = tab.label_extender(tab.label)
       if old_label ~= tab.label then nothing_changed = false end
     end
@@ -307,7 +307,7 @@ function H.get_nonunique_buffers()
 
   -- Collect buffers with non-unique labels
   local res = {}
-  for label, bufnums in pairs(label_buffers) do
+  for _, bufnums in pairs(label_buffers) do
     if #bufnums > 1 then
       for _, b in pairs(bufnums) do
         table.insert(res, b)
@@ -349,7 +349,7 @@ function H.fit_width()
 end
 
 function H.update_centerbuf()
-  buf_displayed = vim.fn.winbufnr(0)
+  local buf_displayed = vim.fn.winbufnr(0)
   if H.is_buffer_in_minitabline(buf_displayed) then
     H.centerbuf = buf_displayed
   end
