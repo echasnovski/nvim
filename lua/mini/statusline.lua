@@ -124,9 +124,9 @@ function MiniStatusline.active()
   local fileinfo    = MiniStatusline.section_fileinfo{trunc_width = 120}
   local location    = MiniStatusline.section_location{}
 
-  -- Usage of `H.combine_sections()` ensures correct padding with spaces between
-  -- sections (accounts for 'missing' sections, etc.)
-  return H.combine_sections({
+  -- Usage of `MiniStatusline.combine_sections()` ensures correct padding with
+  -- spaces between sections (accounts for 'missing' sections, etc.)
+  return MiniStatusline.combine_sections({
     {string = mode,        hl = mode_info.hl},
     {string = spell,       hl = nil}, -- Copy highliting from previous section
     {string = wrap,        hl = nil}, -- Copy highliting from previous section
@@ -142,6 +142,24 @@ end
 
 function MiniStatusline.inactive()
   return '%#MiniStatuslineInactive#%F%='
+end
+
+function MiniStatusline.combine_sections(sections)
+  local t = vim.tbl_map(
+    function(s)
+      if type(s) == 'string' then return s end
+      if s.string == '' then return '' end
+      if s.hl then
+        -- Apply highlighting to padded string
+        return string.format('%s %s ', s.hl, s.string)
+      else
+        -- Take highlighting from previous section (which should have padding)
+        return string.format('%s ', s.string)
+      end
+    end,
+    sections
+  )
+  return table.concat(t, '')
 end
 
 -- Statusline sections. Should return output text without whitespace on sides
@@ -315,22 +333,6 @@ end
 function H.isnt_normal_buffer()
   -- For more information see ":h buftype"
   return vim.bo.buftype ~= ''
-end
-
-function H.combine_sections(sections)
-  local t = {}
-  for _, s in ipairs(sections) do
-    if type(s) == 'string' then
-      t[#t + 1] = s
-    elseif s.string ~= '' then
-      if s.hl then
-        t[#t + 1] = string.format('%s %s ', s.hl, s.string)
-      else
-        t[#t + 1] = string.format('%s ', s.string)
-      end
-    end
-  end
-  return table.concat(t, '')
 end
 
 H.diagnostic_levels = {
