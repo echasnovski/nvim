@@ -1,5 +1,5 @@
 require('mini.comment').setup()
-require('mini.completion').setup()
+require('mini.completion').setup({lsp_completion = {source = 'omnifunc', auto_setup = false}})
 MiniCompletion.lsp_completion.process_items = function(items, base)
   -- Don't show 'Text' and 'Snippet' suggestions
   items = vim.tbl_filter(function(x) return x.kind ~= 1 and x.kind ~= 15 end, items)

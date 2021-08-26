@@ -92,7 +92,7 @@
 --   it not on every `BufEnter` event (default), but on every attach of LSP
 --   client. To do that:
 --     - Config: `lsp_completion = {source = 'omnifunc', auto_setup = false}`.
---     - In `on_attach()` of every LSP client set 'omnifunc' option to
+--     - In `on_attach()` of every LSP client set 'omnifunc' option to exactly
 --       `v:lua.MiniCompletion.completefunc_lsp`.
 --
 -- Comparisons:
@@ -594,7 +594,7 @@ function H.trigger_twostep()
     (H.completion.force or (H.completion.text_changed_id == H.text_changed_id))
   if not allow_trigger then return end
 
-  if H.has_lsp_clients() then
+  if H.has_lsp_clients() and H.has_lsp_completion() then
     H.trigger_lsp()
   elseif H.completion.fallback then
     H.trigger_fallback()
@@ -602,8 +602,6 @@ function H.trigger_twostep()
 end
 
 function H.trigger_lsp()
-  local source = MiniCompletion.lsp_completion.source
-  local has_completion = vim.api.nvim_buf_get_option(0, source) ~= ''
   -- Check for popup visibility is needed to reduce flickering.
   -- Possible issue timeline (with 100ms delay with set up LSP):
   -- 0ms: Key is pressed.
@@ -616,10 +614,12 @@ function H.trigger_lsp()
   -- 210ms: LSP is triggered from second key press. As previous request is
   --   "done", it will once make whole LSP request. Having check for visible
   --   popup should prevent here the call to complete-function.
+
   -- When `force` is `true` then presence of popup shouldn't matter.
   local no_popup = H.completion.force or (not H.pumvisible())
-  if no_popup and has_completion and vim.fn.mode() == 'i' then
-    vim.api.nvim_feedkeys(H.keys[source], 'n', false)
+  if no_popup and vim.fn.mode() == 'i' then
+    local key = H.keys[MiniCompletion.lsp_completion.source]
+    vim.api.nvim_feedkeys(key, 'n', false)
   end
 end
 
@@ -661,6 +661,11 @@ H.stop_actions = {
 
 ---- LSP
 function H.has_lsp_clients() return not vim.tbl_isempty(vim.lsp.buf_get_clients()) end
+
+function H.has_lsp_completion()
+  local func = vim.api.nvim_buf_get_option(0, MiniCompletion.lsp_completion.source)
+  return func == 'v:lua.MiniCompletion.completefunc_lsp'
+end
 
 function H.is_lsp_trigger(char, type)
   local triggers
