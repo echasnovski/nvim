@@ -70,7 +70,7 @@ for _, lsp in ipairs(servers) do
 end
 
 -- Lua language server
--- Should be buildtand run manually:
+-- Should be built and run manually:
 -- https://github.com/sumneko/lua-language-server/wiki/Build-and-Run-(Standalone)
 -- Should be cloned into '.config/nvim' as 'lua-language-server' directory.
 -- Code structure is taken from https://www.chrisatmachine.com/Neovim/28-neovim-lua-development/
@@ -90,6 +90,9 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
     on_attach = function(client, bufnr)
       on_attach(client, bufnr)
       client.server_capabilities.completionProvider.triggerCharacters = {'.', ':'}
+    end,
+    root_dir = function(fname)
+      return nvim_lsp.util.root_pattern('.git')(fname) or nvim_lsp.util.path.dirname(fname)
     end,
     settings = {
       Lua = {
