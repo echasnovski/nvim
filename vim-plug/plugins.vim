@@ -136,8 +136,8 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" This should be included before loading 'polyglot'
     "" See https://github.com/sheerun/vim-polyglot#troubleshooting and
     "" https://github.com/sheerun/vim-polyglot/issues/546
-    let g:polyglot_disabled = ["csv", "python", "python-indent", "python-compiler", "r-lang"]
-    Plug 'sheerun/vim-polyglot'
+    " let g:polyglot_disabled = ["csv", "python", "python-indent", "python-compiler", "r-lang"]
+    " Plug 'sheerun/vim-polyglot'
 
     "" Documentation generator
     Plug 'kkoomen/vim-doge', { 'do': { -> doge#install() } }
