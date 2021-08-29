@@ -8,6 +8,7 @@ MiniCompletion.lsp_completion.process_items = function(items, base)
   return MiniCompletion.default_process_items(items, base)
 end
 require('mini.cursorword').setup()
+require('mini.misc').setup()
 require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
 require('mini.statusline').setup()
 require('mini.surround').setup()
