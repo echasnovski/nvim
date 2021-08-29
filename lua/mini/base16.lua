@@ -61,6 +61,9 @@
 --       easier to distinguish them and seems to be more visually appealing.
 --       That is why `base0D` (14) and `base0F` (16) have same hues because
 --       they usually represent functions and delimiter (brackets included).
+-- - `rgb_palette_to_cterm_palette(palette)` - converts base16 palette with RGB
+--   colors to base16 palette with terminal colors. Useful for caching
+--   `use_cterm` variable to increase speed.
 
 -- Module and its helper
 local MiniBase16 = {}
@@ -331,6 +334,17 @@ function MiniBase16.mini_palette(background, foreground, accent_chroma)
   return base16_palette
 end
 
+function MiniBase16.rgb_palette_to_cterm_palette(palette)
+  H.validate_base16_palette(palette)
+
+  -- Create cterm palette only when it is needed to decrease load time
+  H.ensure_cterm_palette()
+
+  return vim.tbl_map(function(hex)
+    return H.nearest_rgb_id(H.hex2rgb(hex), H.cterm_palette)
+  end, palette)
+end
+
 -- Helpers
 ---- Highlighting
 function H.highlight_gui(group, args)
@@ -367,11 +381,7 @@ end
 function H.make_compound_palette(palette, use_cterm)
   local cterm_table = use_cterm
   if type(use_cterm) == 'boolean' then
-    -- Create cterm palette only when it is needed to decrease load time
-    H.ensure_cterm_palette()
-    cterm_table = vim.tbl_map(function(hex)
-      return H.nearest_rgb_id(H.hex2rgb(hex), H.cterm_palette)
-    end, palette)
+    cterm_table = MiniBase16.rgb_palette_to_cterm_palette(palette)
   end
 
   local res = {}
