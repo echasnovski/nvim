@@ -81,17 +81,21 @@ end
 
 -- Module Settings
 ---- In which modes mappings should be created
-MiniPairs.modes = {insert = true, command = false, terminal = false}
+MiniPairs.modes = { insert = true, command = false, terminal = false }
 
 -- Module functionality
 function MiniPairs.open(pair, twochars_pattern)
-  if not H.neigh_match(twochars_pattern) then return pair:sub(1, 1) end
+  if not H.neigh_match(twochars_pattern) then
+    return pair:sub(1, 1)
+  end
 
   return pair .. H.get_arrow_key('left')
 end
 
 function MiniPairs.close(pair, twochars_pattern)
-  if not H.neigh_match(twochars_pattern) then return pair:sub(2, 2) end
+  if not H.neigh_match(twochars_pattern) then
+    return pair:sub(2, 2)
+  end
 
   local close = pair:sub(2, 2)
   if H.get_cursor_neigh(1, 1) == close then
@@ -132,20 +136,20 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {modes = MiniPairs.modes}
+H.config = { modes = MiniPairs.modes }
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
-  vim.validate({config = {config, 'table', true}})
+  vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.config, config or {})
 
   vim.validate({
-    modes = {config.modes, 'table'},
-    ['modes.insert'] = {config.modes.insert, 'boolean'},
-    ['modes.command'] = {config.modes.command, 'boolean'},
-    ['modes.terminal'] = {config.modes.terminal, 'boolean'}
+    modes = { config.modes, 'table' },
+    ['modes.insert'] = { config.modes.insert, 'boolean' },
+    ['modes.command'] = { config.modes.command, 'boolean' },
+    ['modes.terminal'] = { config.modes.terminal, 'boolean' },
   })
 
   return config
@@ -155,11 +159,13 @@ function H.apply_config(config)
   MiniPairs.modes = config.modes
 
   -- Setup mappings in supplied modes
-  local mode_ids = {insert = 'i', command = 'c', terminal = 't'}
+  local mode_ids = { insert = 'i', command = 'c', terminal = 't' }
   ---- Compute in which modes mapping should be set up
   local mode_list = {}
   for name, to_set in pairs(config.modes) do
-    if to_set then table.insert(mode_list, mode_ids[name]) end
+    if to_set then
+      table.insert(mode_list, mode_ids[name])
+    end
   end
 
   for _, mode in pairs(mode_list) do
@@ -187,7 +193,7 @@ end
 
 ---- Various helpers
 function H.map(mode, key, command)
-  vim.api.nvim_set_keymap(mode, key, command, {expr = true, noremap = true})
+  vim.api.nvim_set_keymap(mode, key, command, { expr = true, noremap = true })
 end
 
 function H.get_cursor_neigh(start, finish)
@@ -216,6 +222,7 @@ function H.escape(s)
   return vim.api.nvim_replace_termcodes(s, true, true, true)
 end
 
+-- stylua: ignore start
 H.keys = {
   above     = H.escape('<C-o>O'),
   bs        = H.escape('<bs>'),
@@ -226,6 +233,7 @@ H.keys = {
   left      = H.escape('<left>'),
   right     = H.escape('<right>')
 }
+-- stylua: ignore end
 
 function H.get_arrow_key(key)
   if vim.fn.mode() == 'i' then
@@ -238,9 +246,13 @@ function H.get_arrow_key(key)
 end
 
 function H.is_in_table(val, tbl)
-  if tbl == nil then return false end
+  if tbl == nil then
+    return false
+  end
   for _, value in pairs(tbl) do
-    if val == value then return true end
+    if val == value then
+      return true
+    end
   end
   return false
 end

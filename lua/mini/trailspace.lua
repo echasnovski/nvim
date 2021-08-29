@@ -35,18 +35,17 @@ function MiniTrailspace.setup(config)
   H.apply_config(config)
 
   -- Module behavior
-  vim.api.nvim_exec([[
-    augroup MiniTrailspace
-      au!
-      au WinEnter,BufWinEnter,InsertLeave * lua MiniTrailspace.highlight()
-      au WinLeave,BufWinLeave,InsertEnter * lua MiniTrailspace.unhighlight()
-    augroup END
-  ]], false)
+  vim.api.nvim_exec(
+    [[augroup MiniTrailspace
+        au!
+        au WinEnter,BufWinEnter,InsertLeave * lua MiniTrailspace.highlight()
+        au WinLeave,BufWinLeave,InsertEnter * lua MiniTrailspace.unhighlight()
+      augroup END]],
+    false
+  )
 
   -- Create highlighting
-  vim.api.nvim_exec([[
-    hi link MiniTrailspace Error
-  ]], false)
+  vim.api.nvim_exec([[hi link MiniTrailspace Error]], false)
 end
 
 -- Functions to enable/disable whole module
@@ -63,13 +62,19 @@ function MiniTrailspace.disable()
 end
 
 function MiniTrailspace.toggle()
-  if H.enabled then MiniTrailspace.disable() else MiniTrailspace.enable() end
+  if H.enabled then
+    MiniTrailspace.disable()
+  else
+    MiniTrailspace.enable()
+  end
 end
 
 -- Functions to perform actions
 function MiniTrailspace.highlight()
   -- Do nothing if disabled
-  if not H.enabled then return end
+  if not H.enabled then
+    return
+  end
 
   local win_id = vim.fn.win_getid()
   local win_match = H.window_matches[win_id]
@@ -106,7 +111,7 @@ H.config = {}
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
-  vim.validate({config = {config, 'table', true}})
+  vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.config, config or {})
 
   return config

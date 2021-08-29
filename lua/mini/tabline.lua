@@ -55,36 +55,39 @@ function MiniTabline.setup(config)
   H.apply_config(config)
 
   -- Module behavior
-  vim.api.nvim_exec([[
-    augroup MiniTabline
-      autocmd!
-      autocmd VimEnter   * lua MiniTabline.update_tabline()
-      autocmd TabEnter   * lua MiniTabline.update_tabline()
-      autocmd BufAdd     * lua MiniTabline.update_tabline()
-      autocmd FileType  qf lua MiniTabline.update_tabline()
-      autocmd BufDelete  * lua MiniTabline.update_tabline()
-    augroup END
-  ]], false)
+  vim.api.nvim_exec(
+    [[augroup MiniTabline
+        autocmd!
+        autocmd VimEnter   * lua MiniTabline.update_tabline()
+        autocmd TabEnter   * lua MiniTabline.update_tabline()
+        autocmd BufAdd     * lua MiniTabline.update_tabline()
+        autocmd FileType  qf lua MiniTabline.update_tabline()
+        autocmd BufDelete  * lua MiniTabline.update_tabline()
+      augroup END]],
+    false
+  )
 
   -- Function to make tabs clickable
-  vim.api.nvim_exec([[
-    function! MiniTablineSwitchBuffer(bufnum, clicks, button, mod)
-      execute 'buffer' a:bufnum
-    endfunction
-  ]], false)
+  vim.api.nvim_exec(
+    [[function! MiniTablineSwitchBuffer(bufnum, clicks, button, mod)
+        execute 'buffer' a:bufnum
+      endfunction]],
+    false
+  )
 
   -- Create highlighting
-  vim.api.nvim_exec([[
-    hi link MiniTablineCurrent TabLineSel
-    hi link MiniTablineVisible TabLineSel
-    hi link MiniTablineHidden  TabLine
+  vim.api.nvim_exec(
+    [[hi link MiniTablineCurrent TabLineSel
+      hi link MiniTablineVisible TabLineSel
+      hi link MiniTablineHidden  TabLine
 
-    hi link MiniTablineModifiedCurrent StatusLine
-    hi link MiniTablineModifiedVisible StatusLine
-    hi link MiniTablineModifiedHidden  StatusLineNC
+      hi link MiniTablineModifiedCurrent StatusLine
+      hi link MiniTablineModifiedVisible StatusLine
+      hi link MiniTablineModifiedHidden  StatusLineNC
 
-    hi MiniTablineFill NONE
-  ]], false)
+      hi MiniTablineFill NONE]],
+    false
+  )
 end
 
 -- Module settings
@@ -114,16 +117,16 @@ MiniTabline.tabs_order = {}
 
 -- Helpers
 ---- Module default config
-H.config = {set_vim_settings = MiniTabline.set_vim_settings}
+H.config = { set_vim_settings = MiniTabline.set_vim_settings }
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
-  vim.validate({config = {config, 'table', true}})
+  vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.config, config or {})
 
-  vim.validate({set_vim_settings = {config.set_vim_settings, 'boolean'}})
+  vim.validate({ set_vim_settings = { config.set_vim_settings, 'boolean' } })
 
   return config
 end
@@ -134,7 +137,7 @@ function H.apply_config(config)
   -- Set settings to ensure tabline is displayed properly
   if config.set_vim_settings then
     vim.o.showtabline = 2 -- Always show tabline
-    vim.o.hidden = true   -- Allow switching buffers without saving them
+    vim.o.hidden = true -- Allow switching buffers without saving them
   end
 end
 
@@ -142,7 +145,7 @@ end
 function H.list_tabs()
   local tabs = {}
   local tabs_order = {}
-  for i=1,vim.fn.bufnr('$') do
+  for i = 1, vim.fn.bufnr('$') do
     if H.is_buffer_in_minitabline(i) then
       -- Display tabs in order of increasing buffer number
       tabs_order[#tabs_order + 1] = i
@@ -161,8 +164,7 @@ function H.list_tabs()
 end
 
 function H.is_buffer_in_minitabline(bufnum)
-  return (vim.fn.buflisted(bufnum) > 0) and
-    (vim.fn.getbufvar(bufnum, '&buftype') ~= 'quickfix')
+  return (vim.fn.buflisted(bufnum) > 0) and (vim.fn.getbufvar(bufnum, '&buftype') ~= 'quickfix')
 end
 
 ---- Tab's highlight group
@@ -206,7 +208,9 @@ function H.construct_label_data(bufnum)
   else
     -- Process unnamed buffer
     label = H.make_unnamed_label(bufnum)
-    label_extender = function(x) return x end
+    label_extender = function(x)
+      return x
+    end
   end
 
   return label, label_extender
@@ -234,10 +238,12 @@ H.n_unnamed = 0
 H.unnamed_buffers = {}
 
 function H.ensure_unnamed_tracked(bufnum)
-  if H.unnamed_buffers[bufnum] ~= nil then return end
+  if H.unnamed_buffers[bufnum] ~= nil then
+    return
+  end
 
   H.n_unnamed = H.n_unnamed + 1
-  H.unnamed_buffers[bufnum] = {id = H.n_unnamed}
+  H.unnamed_buffers[bufnum] = { id = H.n_unnamed }
 end
 
 function H.is_buffer_scratch(bufnum)
@@ -247,7 +253,9 @@ end
 
 function H.make_unnamed_label(bufnum)
   local label = '*'
-  if H.is_buffer_scratch(bufnum) then label = '!' end
+  if H.is_buffer_scratch(bufnum) then
+    label = '!'
+  end
 
   -- Possibly add tracking id (which is tracked separately for different label
   -- types)
@@ -272,10 +280,14 @@ function H.finalize_labels()
       local tab = MiniTabline.tabs[bufnum]
       local old_label = tab.label
       tab.label = tab.label_extender(tab.label)
-      if old_label ~= tab.label then nothing_changed = false end
+      if old_label ~= tab.label then
+        nothing_changed = false
+      end
     end
 
-    if nothing_changed then break end
+    if nothing_changed then
+      break
+    end
 
     nonunique_bufs = H.get_nonunique_buffers()
   end
@@ -299,7 +311,7 @@ function H.get_nonunique_buffers()
   for bufnum, tab in pairs(MiniTabline.tabs) do
     local label = tab.label
     if label_buffers[label] == nil then
-      label_buffers[label] = {bufnum}
+      label_buffers[label] = { bufnum }
     else
       table.insert(label_buffers[label], bufnum)
     end
@@ -370,7 +382,7 @@ function H.compute_display_interval(center, tabline_width)
   local left = math.max(1, right - tot_width + 1)
   right = left + math.min(tot_width, tabline_width) - 1
 
-  return {left, right}
+  return { left, right }
 end
 
 function H.truncate_tabs_display(display_interval)

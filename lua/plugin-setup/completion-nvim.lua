@@ -1,13 +1,16 @@
 local has_completion, completion = pcall(require, 'completion')
-if not has_completion then return end
+if not has_completion then
+  return
+end
 
 -- Use completion-nvim in every buffer
-vim.api.nvim_exec([[
-  augroup CompletionNvim
-    au!
-    au BufEnter * lua require'completion'.on_attach()
-  augroup END
-]], false)
+vim.api.nvim_exec(
+  [[augroup CompletionNvim
+      au!
+      au BufEnter * lua require'completion'.on_attach()
+    augroup END]],
+  false
+)
 
 -- Use custom "rate of completion" (default 80). Currently this means that
 -- every `x` milliseconds in insert mode some function is executed via Lua's
@@ -32,12 +35,12 @@ vim.g.completion_matching_smart_case = 1
 vim.g.completion_trigger_on_delete = 1
 
 -- Setup matching strategy
-vim.g.completion_matching_strategy_list = {'exact', 'substring'}
+vim.g.completion_matching_strategy_list = { 'exact', 'substring' }
 
 -- Set up 'precedence' between completion sources
 vim.g.completion_chain_complete_list = {
-  {complete_items = {'snippet', 'lsp', 'keyn'}},
-  {mode = '<c-n>'}
+  { complete_items = { 'snippet', 'lsp', 'keyn' } },
+  { mode = '<c-n>' },
 }
 
 -- Don't use any sorting, as it not always intuitive (for example, puts

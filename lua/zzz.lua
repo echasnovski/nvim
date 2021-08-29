@@ -17,7 +17,7 @@ end
 --     - If item is not selected, close popup and execute '<CR>'. Reasoning
 --       behind this is to explicitly select desired completion (currently this
 --       is also done with one '<Tab>' keystroke).
-local has_compe, _               = pcall(require, 'compe')
+local has_compe, _ = pcall(require, 'compe')
 local has_completion, completion = pcall(require, 'completion')
 
 ---- `g:_using_delimitMate = 1` should be set whenever 'delimitMate' plugin is
@@ -27,9 +27,9 @@ local has_completion, completion = pcall(require, 'completion')
 ---- detect if 'delimitMate' was actually loaded or not when this file gets
 ---- evaluated. Also having to check if 'delimitMate' is installed on every
 ---- press of '<CR>' is not a good solution from performance point of view.
-local has_delimitMate          = vim.g._using_delimitMate == 1
+local has_delimitMate = vim.g._using_delimitMate == 1
 local has_minipairs, minipairs = pcall(require, 'mini.pairs')
-local has_npairs, npairs       = pcall(require, 'nvim-autopairs')
+local has_npairs, npairs = pcall(require, 'nvim-autopairs')
 
 ---- Define what is "confirm popup selection"
 local confirm_popup_selection = function() end
@@ -45,17 +45,21 @@ elseif has_completion then
 end
 
 ---- Define what is "no popup action"
-local nopopup_action = function() return escape('<CR>') end
+local nopopup_action = function()
+  return escape('<CR>')
+end
 if has_minipairs then
   nopopup_action = function()
-    return minipairs.cr({'()', '[]', '{}'})
+    return minipairs.cr({ '()', '[]', '{}' })
   end
 elseif has_delimitMate then
   -- `<Plug>` symbol should be escaped in special way.
   -- Source: https://www.reddit.com/r/neovim/comments/kup1g0/feedkey_plug_in_lua_how/
   local plug = string.format('%c%c%c', 0x80, 253, 83)
   local delimitMateCR_command = plug .. 'delimitMateCR'
-  nopopup_action = function() return delimitMateCR_command end
+  nopopup_action = function()
+    return delimitMateCR_command
+  end
 elseif has_npairs then
   nopopup_action = npairs.autopairs_cr
 end
@@ -75,9 +79,6 @@ _G._cr_action = function()
   end
 end
 
-vim.api.nvim_set_keymap(
-  'i', '<CR>', 'v:lua._cr_action()',
-  -- This shouldn't have `noremap = true` option in order to be usable with
-  -- possible '<Plug>delimitMateCR' return
-  {expr = true}
-)
+-- This shouldn't have `noremap = true` option in order to be usable with
+-- possible '<Plug>delimitMateCR' return
+vim.api.nvim_set_keymap('i', '<CR>', 'v:lua._cr_action()', { expr = true })

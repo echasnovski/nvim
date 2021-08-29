@@ -62,7 +62,7 @@ MiniComment.mappings = {
   comment = 'gc',
   comment_line = 'gcc',
   comment_visual = 'gc',
-  textobject = 'gc'
+  textobject = 'gc',
 }
 
 -- Module functionality
@@ -99,9 +99,7 @@ function MiniComment.operator(mode)
   -- Using `vim.cmd()` wrapper to allow usage of `lockmarks` command, because
   -- raw execution will delete marks inside region (due to
   -- `vim.api.nvim_buf_set_lines()`).
-  vim.cmd(
-    string.format('lockmarks lua MiniComment.toggle_comments(%d, %d)', l1, l2)
-  )
+  vim.cmd(string.format('lockmarks lua MiniComment.toggle_comments(%d, %d)', l1, l2))
   return ''
 end
 
@@ -117,7 +115,9 @@ function MiniComment.toggle_comments(line_start, line_end)
     f = H.make_comment_function(comment_parts, indent)
   end
 
-  for n, l in pairs(lines) do lines[n] = f(l) end
+  for n, l in pairs(lines) do
+    lines[n] = f(l)
+  end
 
   -- NOTE: This function call removes marks inside written range. To write
   -- lines in a way that saves marks, use one of:
@@ -134,7 +134,9 @@ function MiniComment.textobject()
   local comment_check = H.make_comment_check(comment_parts)
   local line_cur = vim.api.nvim_win_get_cursor(0)[1]
 
-  if not comment_check(vim.fn.getline(line_cur)) then return end
+  if not comment_check(vim.fn.getline(line_cur)) then
+    return
+  end
 
   local line_start = line_cur
   while (line_start >= 2) and comment_check(vim.fn.getline(line_start - 1)) do
@@ -154,21 +156,21 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {mappings = MiniComment.mappings}
+H.config = { mappings = MiniComment.mappings }
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
-  vim.validate({config = {config, 'table', true}})
+  vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.config, config or {})
 
   vim.validate({
-    mappings = {config.mappings, 'table'},
-    ['mappings.comment'] = {config.mappings.comment, 'string'},
-    ['mappings.comment_line'] = {config.mappings.comment_line, 'string'},
-    ['mappings.comment_visual'] = {config.mappings.comment_visual, 'string'},
-    ['mappings.textobject'] = {config.mappings.textobject, 'string'}
+    mappings = { config.mappings, 'table' },
+    ['mappings.comment'] = { config.mappings.comment, 'string' },
+    ['mappings.comment_line'] = { config.mappings.comment_line, 'string' },
+    ['mappings.comment_visual'] = { config.mappings.comment_visual, 'string' },
+    ['mappings.textobject'] = { config.mappings.textobject, 'string' },
   })
 
   return config
@@ -179,22 +181,30 @@ function H.apply_config(config)
 
   -- Make mappings
   vim.api.nvim_set_keymap(
-    'n', config.mappings.comment, 'v:lua.MiniComment.operator()',
-    {expr = true, noremap = true, silent = true}
+    'n',
+    config.mappings.comment,
+    'v:lua.MiniComment.operator()',
+    { expr = true, noremap = true, silent = true }
   )
   vim.api.nvim_set_keymap(
+    'x',
+    config.mappings.comment,
     -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
     -- proper update of `'<` and `'>` marks which is needed to work correctly.
-    'x', config.mappings.comment, [[:<c-u>lua MiniComment.operator('visual')<cr>]],
-    {noremap = true, silent = true}
+    [[:<c-u>lua MiniComment.operator('visual')<cr>]],
+    { noremap = true, silent = true }
   )
   vim.api.nvim_set_keymap(
-    'n', config.mappings.comment_line, 'v:lua.MiniComment.operator() . "_"',
-    {expr = true, noremap = true, silent = true}
+    'n',
+    config.mappings.comment_line,
+    'v:lua.MiniComment.operator() . "_"',
+    { expr = true, noremap = true, silent = true }
   )
   vim.api.nvim_set_keymap(
-    'o', config.mappings.textobject, [[<cmd>lua MiniComment.textobject()<cr>]],
-    {noremap = true, silent = true}
+    'o',
+    config.mappings.textobject,
+    [[<cmd>lua MiniComment.textobject()<cr>]],
+    { noremap = true, silent = true }
   )
 end
 
@@ -203,17 +213,15 @@ function H.make_comment_parts()
   local cs = vim.api.nvim_buf_get_option(0, 'commentstring')
 
   if cs == '' then
-    vim.api.nvim_command(
-      [[echom "(mini-comment.lua) Option 'commentstring' is empty."]]
-    )
-    return {left = '', right = ''}
+    vim.api.nvim_command([[echom "(mini-comment.lua) Option 'commentstring' is empty."]])
+    return { left = '', right = '' }
   end
 
   -- Assumed structure of 'commentstring':
   -- <space> <left> <space> <'%s'> <space> <right> <space>
   -- So this extracts parts without surrounding whitespace
   local left, right = cs:match('^%s*(.-)%s*%%s%s*(.-)%s*$')
-  return {left = left, right = right}
+  return { left = left, right = right }
 end
 
 function H.make_comment_check(comment_parts)
@@ -222,7 +230,9 @@ function H.make_comment_check(comment_parts)
   -- <space> <left> <anything> <right> <space>
   local regex = string.format([[^%%s-%s.*%s%%s-$]], vim.pesc(l), vim.pesc(r))
 
-  return function(line) return line:find(regex) ~= nil end
+  return function(line)
+    return line:find(regex) ~= nil
+  end
 end
 
 function H.get_lines_info(lines, comment_parts)
@@ -243,7 +253,9 @@ function H.get_lines_info(lines, comment_parts)
     end
 
     -- Update comment info: lines are comment if every single line is comment
-    if is_comment then is_comment = comment_check(l) end
+    if is_comment then
+      is_comment = comment_check(l)
+    end
   end
 
   return indent, is_comment
@@ -261,8 +273,8 @@ function H.make_comment_function(comment_parts, indent)
   local nonempty_format = indent_str .. l .. lpad .. '%s' .. rpad .. r
 
   return function(line)
-  -- Line is empty if it doesn't have anything except whitespace
-    if (line:find('^%s*$') ~= nil) then
+    -- Line is empty if it doesn't have anything except whitespace
+    if line:find('^%s*$') ~= nil then
       -- If doesn't want to comment empty lines, return `line` here
       return empty_comment
     else
@@ -276,19 +288,20 @@ function H.make_uncomment_function(comment_parts)
   local lpad = (l == '') and '' or '[ ]?'
   local rpad = (r == '') and '' or '[ ]?'
 
-  local uncomment_regex = string.format(
-    -- Usage of `lpad` and `rpad` as possbile single space enables uncommenting
-    -- of commented empty lines without trailing whitespace (like '  #').
-    [[^(%%s-)%s%s(.-)%s%s%%s-$]],
-    vim.pesc(l), lpad, rpad, vim.pesc(r)
-  )
+  -- Usage of `lpad` and `rpad` as possbile single space enables uncommenting
+  -- of commented empty lines without trailing whitespace (like '  #').
+  local uncomment_regex = string.format([[^(%%s-)%s%s(.-)%s%s%%s-$]], vim.pesc(l), lpad, rpad, vim.pesc(r))
 
   return function(line)
     local indent_str, new_line = string.match(line, uncomment_regex)
     -- Return original if line is not commented
-    if new_line == nil then return line end
+    if new_line == nil then
+      return line
+    end
     -- Remove indent if line is a commented empty line
-    if new_line == '' then indent_str = '' end
+    if new_line == '' then
+      indent_str = ''
+    end
     return indent_str .. new_line
   end
 end

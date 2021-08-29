@@ -88,7 +88,9 @@ function MiniBase16.apply(palette, name, use_cterm)
   -- Prepare highlighting application. Notes:
   -- - Clear current highlight only if other theme was loaded previously.
   -- - No need to `syntax reset` because *all* syntax groups are defined later.
-  if vim.g.colors_name then vim.cmd([[highlight clear]]) end
+  if vim.g.colors_name then
+    vim.cmd([[highlight clear]])
+  end
   vim.g.colors_name = name or 'base16-custom'
 
   local p, hi
@@ -98,6 +100,7 @@ function MiniBase16.apply(palette, name, use_cterm)
     p, hi = palette, H.highlight_gui
   end
 
+  -- stylua: ignore start
   -- Builtin highlighting groups. Some groups which are missing in 'base16-vim'
   -- are added based on groups to which they are linked.
   hi('ColorColumn',  {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
@@ -203,28 +206,28 @@ function MiniBase16.apply(palette, name, use_cterm)
   hi('Underlined', {fg=p.base08, bg=nil, attr=nil,    sp=nil})
 
   -- Git diff
-  hi("DiffAdded",   {fg=p.base0B, bg=p.base00, attr=nil, sp=nil})
-  hi("DiffFile",    {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
-  hi("DiffLine",    {fg=p.base0D, bg=p.base00, attr=nil, sp=nil})
-  hi("DiffNewFile", {fg=p.base0B, bg=p.base00, attr=nil, sp=nil})
-  hi("DiffRemoved", {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
+  hi('DiffAdded',   {fg=p.base0B, bg=p.base00, attr=nil, sp=nil})
+  hi('DiffFile',    {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
+  hi('DiffLine',    {fg=p.base0D, bg=p.base00, attr=nil, sp=nil})
+  hi('DiffNewFile', {fg=p.base0B, bg=p.base00, attr=nil, sp=nil})
+  hi('DiffRemoved', {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
 
   -- Git commit
-  hi("gitcommitBranch",        {fg=p.base09, bg=nil, attr="bold", sp=nil})
-  hi("gitcommitComment",       {fg=p.base03, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitDiscarded",     {fg=p.base03, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitDiscardedFile", {fg=p.base08, bg=nil, attr="bold", sp=nil})
-  hi("gitcommitDiscardedType", {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitHeader",        {fg=p.base0E, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitOverflow",      {fg=p.base08, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitSelected",      {fg=p.base03, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitSelectedFile",  {fg=p.base0B, bg=nil, attr="bold", sp=nil})
-  hi("gitcommitSelectedType",  {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitSummary",       {fg=p.base0B, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitUnmergedFile",  {fg=p.base08, bg=nil, attr="bold", sp=nil})
-  hi("gitcommitUnmergedType",  {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitUntracked",     {fg=p.base03, bg=nil, attr=nil,    sp=nil})
-  hi("gitcommitUntrackedFile", {fg=p.base0A, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitBranch',        {fg=p.base09, bg=nil, attr='bold', sp=nil})
+  hi('gitcommitComment',       {fg=p.base03, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitDiscarded',     {fg=p.base03, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitDiscardedFile', {fg=p.base08, bg=nil, attr='bold', sp=nil})
+  hi('gitcommitDiscardedType', {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitHeader',        {fg=p.base0E, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitOverflow',      {fg=p.base08, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitSelected',      {fg=p.base03, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitSelectedFile',  {fg=p.base0B, bg=nil, attr='bold', sp=nil})
+  hi('gitcommitSelectedType',  {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitSummary',       {fg=p.base0B, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitUnmergedFile',  {fg=p.base08, bg=nil, attr='bold', sp=nil})
+  hi('gitcommitUnmergedType',  {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitUntracked',     {fg=p.base03, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitUntrackedFile', {fg=p.base0A, bg=nil, attr=nil,    sp=nil})
 
   -- Built-in LSP (similar to spelling)
   hi('LspDiagnosticsDefaultError',       {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
@@ -259,6 +262,7 @@ function MiniBase16.apply(palette, name, use_cterm)
   hi('MiniStatuslineModeVisual',  {fg=p.base00, bg=p.base0B, attr='bold', sp=nil})
 
   hi('MiniTrailspace', {fg=p.base00, bg=p.base08, attr=nil, sp=nil})
+  -- stylua: ignore end
 end
 
 function MiniBase16.mini_palette(background, foreground, accent_chroma)
@@ -280,35 +284,41 @@ function MiniBase16.mini_palette(background, foreground, accent_chroma)
 
   -- Background colors
   local bg_step = (focus_l - bg.l) / 3
-  palette[1] = {l = bg.l + 0 * bg_step, c = bg.c, h = bg.h}
-  palette[2] = {l = bg.l + 1 * bg_step, c = bg.c, h = bg.h}
-  palette[3] = {l = bg.l + 2 * bg_step, c = bg.c, h = bg.h}
-  palette[4] = {l = bg.l + 3 * bg_step, c = bg.c, h = bg.h}
+  palette[1] = { l = bg.l + 0 * bg_step, c = bg.c, h = bg.h }
+  palette[2] = { l = bg.l + 1 * bg_step, c = bg.c, h = bg.h }
+  palette[3] = { l = bg.l + 2 * bg_step, c = bg.c, h = bg.h }
+  palette[4] = { l = bg.l + 3 * bg_step, c = bg.c, h = bg.h }
 
   -- Foreground colors Possible negative value of `palette[5].l` will be
   -- handled in future conversion to hex.
   local fg_step = (edge_l - fg.l) / 2
-  palette[5] = {l = fg.l - 1 * fg_step, c = fg.c, h = fg.h}
-  palette[6] = {l = fg.l + 0 * fg_step, c = fg.c, h = fg.h}
-  palette[7] = {l = fg.l + 1 * fg_step, c = fg.c, h = fg.h}
-  palette[8] = {l = fg.l + 2 * fg_step, c = fg.c, h = fg.h}
+  palette[5] = { l = fg.l - 1 * fg_step, c = fg.c, h = fg.h }
+  palette[6] = { l = fg.l + 0 * fg_step, c = fg.c, h = fg.h }
+  palette[7] = { l = fg.l + 1 * fg_step, c = fg.c, h = fg.h }
+  palette[8] = { l = fg.l + 2 * fg_step, c = fg.c, h = fg.h }
 
   -- Accent colors
   ---- Only try to avoid color if it has positive chroma, because with zero
   ---- chroma hue is meaningless (as in polar coordinates)
   local present_hues = {}
-  if bg.c > 0 then table.insert(present_hues, bg.h) end
-  if fg.c > 0 then table.insert(present_hues, fg.h) end
+  if bg.c > 0 then
+    table.insert(present_hues, bg.h)
+  end
+  if fg.c > 0 then
+    table.insert(present_hues, fg.h)
+  end
   local hues = H.make_different_hues(present_hues, 4)
 
-  palette[9]  = {l = fg.l,    c = accent_chroma, h = hues[1]}
-  palette[10] = {l = focus_l, c = accent_chroma, h = hues[1]}
-  palette[11] = {l = focus_l, c = accent_chroma, h = hues[2]}
-  palette[12] = {l = fg.l,    c = accent_chroma, h = hues[2]}
-  palette[13] = {l = focus_l, c = accent_chroma, h = hues[4]}
-  palette[14] = {l = fg.l,    c = accent_chroma, h = hues[3]}
-  palette[15] = {l = fg.l,    c = accent_chroma, h = hues[4]}
-  palette[16] = {l = focus_l, c = accent_chroma, h = hues[3]}
+  -- stylua: ignore start
+  palette[9]  = { l = fg.l,    c = accent_chroma, h = hues[1] }
+  palette[10] = { l = focus_l, c = accent_chroma, h = hues[1] }
+  palette[11] = { l = focus_l, c = accent_chroma, h = hues[2] }
+  palette[12] = { l = fg.l,    c = accent_chroma, h = hues[2] }
+  palette[13] = { l = focus_l, c = accent_chroma, h = hues[4] }
+  palette[14] = { l = fg.l,    c = accent_chroma, h = hues[3] }
+  palette[15] = { l = fg.l,    c = accent_chroma, h = hues[4] }
+  palette[16] = { l = focus_l, c = accent_chroma, h = hues[3] }
+  -- stylua: ignore end
 
   -- Convert to base16 palette
   local base16_palette = {}
@@ -330,7 +340,10 @@ function H.highlight_gui(group, args)
   local command = string.format(
     [[highlight %s guifg=%s guibg=%s gui=%s guisp=%s]],
     group,
-    args.fg or 'NONE', args.bg or 'NONE', args.attr or 'NONE', args.sp or 'NONE'
+    args.fg or 'NONE',
+    args.bg or 'NONE',
+    args.attr or 'NONE',
+    args.sp or 'NONE'
   )
   vim.cmd(command)
 end
@@ -339,9 +352,12 @@ function H.highlight_both(group, args)
   local command = string.format(
     [[highlight %s guifg=%s ctermfg=%s guibg=%s ctermbg=%s gui=%s cterm=%s guisp=%s]],
     group,
-    args.fg and args.fg.gui or 'NONE', args.fg and args.fg.cterm or 'NONE',
-    args.bg and args.bg.gui or 'NONE', args.bg and args.bg.cterm or 'NONE',
-    args.attr or 'NONE', args.attr or 'NONE',
+    args.fg and args.fg.gui or 'NONE',
+    args.fg and args.fg.cterm or 'NONE',
+    args.bg and args.bg.gui or 'NONE',
+    args.bg and args.bg.cterm or 'NONE',
+    args.attr or 'NONE',
+    args.attr or 'NONE',
     args.sp and args.sp.gui or 'NONE'
   )
   vim.cmd(command)
@@ -353,15 +369,14 @@ function H.make_compound_palette(palette, use_cterm)
   if type(use_cterm) == 'boolean' then
     -- Create cterm palette only when it is needed to decrease load time
     H.ensure_cterm_palette()
-    cterm_table = vim.tbl_map(
-      function(hex) return H.nearest_rgb_id(H.hex2rgb(hex), H.cterm_palette) end,
-      palette
-    )
+    cterm_table = vim.tbl_map(function(hex)
+      return H.nearest_rgb_id(H.hex2rgb(hex), H.cterm_palette)
+    end, palette)
   end
 
   local res = {}
   for name, _ in pairs(palette) do
-    res[name] = {gui = palette[name], cterm = cterm_table[name]}
+    res[name] = { gui = palette[name], cterm = cterm_table[name] }
   end
   return res
 end
@@ -375,7 +390,7 @@ function H.make_different_hues(present_hues, n)
   local dist, best_dist = nil, -math.huge
   local best_hues, new_hues
 
-  for offset=0,max_offset-1,1 do
+  for offset = 0, max_offset - 1, 1 do
     new_hues = H.make_hue_scale(n, offset)
 
     -- Compute distance as usual 'minimum distance' between two sets
@@ -393,37 +408,50 @@ end
 function H.make_hue_scale(n, offset)
   local step = math.floor(360 / n + 0.5)
   local res = {}
-  for i=0,n-1,1 do table.insert(res, (offset + i * step) % 360) end
+  for i = 0, n - 1, 1 do
+    table.insert(res, (offset + i * step) % 360)
+  end
   return res
 end
 
 ---- Validators
 H.base16_names = {
-  'base00', 'base01', 'base02', 'base03', 'base04', 'base05', 'base06', 'base07',
-  'base08', 'base09', 'base0A', 'base0B', 'base0C', 'base0D', 'base0E', 'base0F'
+  'base00',
+  'base01',
+  'base02',
+  'base03',
+  'base04',
+  'base05',
+  'base06',
+  'base07',
+  'base08',
+  'base09',
+  'base0A',
+  'base0B',
+  'base0C',
+  'base0D',
+  'base0E',
+  'base0F',
 }
 
 function H.validate_hex(x, name)
-  local is_hex = type(x) == 'string' and x:len() == 7 and
-    x:sub(1, 1) == '#' and (tonumber(x:sub(2), 16) ~= nil)
+  local is_hex = type(x) == 'string' and x:len() == 7 and x:sub(1, 1) == '#' and (tonumber(x:sub(2), 16) ~= nil)
 
   if not is_hex then
-    local msg = string.format(
-      '(mini.base16): `%s` is not a HEX color (string "#RRGGBB")', name
-    )
+    local msg = string.format('(mini.base16): `%s` is not a HEX color (string "#RRGGBB")', name)
     error(msg)
   end
   return true
 end
 
 function H.validate_base16_palette(x)
-  if type(x) ~= 'table' then error("(mini.base16): `palette` is not a table.") end
+  if type(x) ~= 'table' then
+    error('(mini.base16): `palette` is not a table.')
+  end
   for _, name in pairs(H.base16_names) do
     local c = x[name]
     if c == nil then
-      local msg = string.format(
-        '(mini.base16): `palette` does not have value %s', name
-      )
+      local msg = string.format('(mini.base16): `palette` does not have value %s', name)
       error(msg)
     end
     H.validate_hex(c, string.format('palette[%s]', name))
@@ -432,7 +460,9 @@ function H.validate_base16_palette(x)
 end
 
 function H.validate_use_cterm(x)
-  if not x or type(x) == 'boolean' then return true end
+  if not x or type(x) == 'boolean' then
+    return true
+  end
   if type(x) ~= 'table' then
     error('(mini.base16) `use_cterm` should be boolean or table with cterm colors')
   end
@@ -454,46 +484,54 @@ end
 ---- Sources:
 ---- - https://github.com/shawncplus/Vim-toCterm/blob/master/lib/Xterm.php
 ---- - https://gist.github.com/MicahElliott/719710
+-- stylua: ignore start
 H.cterm_first16 = {
-  {r = 0, g = 0, b = 0},
-  {r = 205, g = 0, b = 0},
-  {r = 0, g = 205, b = 0},
-  {r = 205, g = 205, b = 0},
-  {r = 0, g = 0, b = 238},
-  {r = 205, g = 0, b = 205},
-  {r = 0, g = 205, b = 205},
-  {r = 229, g = 229, b = 229},
-  {r = 127, g = 127, b = 127},
-  {r = 255, g = 0, b = 0},
-  {r = 0, g = 255, b = 0},
-  {r = 255, g = 255, b = 0},
-  {r = 92, g = 92, b = 255},
-  {r = 255, g = 0, b = 255},
-  {r = 0, g = 255, b = 255},
-  {r = 255, g = 255, b = 255}
+  { r = 0,   g = 0,   b = 0 },
+  { r = 205, g = 0,   b = 0 },
+  { r = 0,   g = 205, b = 0 },
+  { r = 205, g = 205, b = 0 },
+  { r = 0,   g = 0,   b = 238 },
+  { r = 205, g = 0,   b = 205 },
+  { r = 0,   g = 205, b = 205 },
+  { r = 229, g = 229, b = 229 },
+  { r = 127, g = 127, b = 127 },
+  { r = 255, g = 0,   b = 0 },
+  { r = 0,   g = 255, b = 0 },
+  { r = 255, g = 255, b = 0 },
+  { r = 92,  g = 92,  b = 255 },
+  { r = 255, g = 0,   b = 255 },
+  { r = 0,   g = 255, b = 255 },
+  { r = 255, g = 255, b = 255 },
 }
+-- stylua: ignore end
 
-H.cterm_basis = {0, 95, 135, 175, 215, 255}
+H.cterm_basis = { 0, 95, 135, 175, 215, 255 }
 
 function H.cterm2rgb(i)
-  if i < 16 then return H.cterm_first16[i + 1] end
+  if i < 16 then
+    return H.cterm_first16[i + 1]
+  end
   if 16 <= i and i <= 231 then
     i = i - 16
     local r = H.cterm_basis[math.floor(i / 36) % 6 + 1]
     local g = H.cterm_basis[math.floor(i / 6) % 6 + 1]
     local b = H.cterm_basis[i % 6 + 1]
-    return {r = r, g = g, b = b}
+    return { r = r, g = g, b = b }
   end
   if 232 <= i and i <= 255 then
     local c = 8 + (i - 232) * 10
-    return {r = c, g = c, b = c}
+    return { r = c, g = c, b = c }
   end
 end
 
 function H.ensure_cterm_palette()
-  if H.cterm_palette then return end
+  if H.cterm_palette then
+    return
+  end
   H.cterm_palette = {}
-  for i=0,255 do H.cterm_palette[i] = H.cterm2rgb(i) end
+  for i = 0, 255 do
+    H.cterm_palette[i] = H.cterm2rgb(i)
+  end
 end
 
 ---- Color conversion
@@ -502,7 +540,7 @@ end
 ------ HEX <-> CIELCh(uv)
 function H.hex2lch(hex)
   local res = hex
-  for _, f in pairs({H.hex2rgb, H.rgb2xyz, H.xyz2luv, H.luv2lch}) do
+  for _, f in pairs({ H.hex2rgb, H.rgb2xyz, H.xyz2luv, H.luv2lch }) do
     res = f(res)
   end
   return res
@@ -510,7 +548,7 @@ end
 
 function H.lch2hex(lch)
   local res = lch
-  for _, f in pairs({H.lch2luv, H.luv2xyz, H.xyz2rgb, H.rgb2hex}) do
+  for _, f in pairs({ H.lch2luv, H.luv2xyz, H.xyz2rgb, H.rgb2hex }) do
     res = f(res)
   end
   return res
@@ -524,64 +562,59 @@ function H.hex2rgb(hex)
   local g = math.fmod((dec - b) / 256, 256)
   local r = math.floor(dec / 65536)
 
-  return {r = r, g = g, b = b}
+  return { r = r, g = g, b = b }
 end
 
 function H.rgb2hex(rgb)
   -- Round and trim values
-  local t = vim.tbl_map(
-    function(x)
-      x = math.min(math.max(x, 0), 255)
-      return math.floor(x + 0.5)
-    end,
-    rgb
-  )
+  local t = vim.tbl_map(function(x)
+    x = math.min(math.max(x, 0), 255)
+    return math.floor(x + 0.5)
+  end, rgb)
 
-  return '#' .. string.format('%02x', t.r) ..
-    string.format('%02x', t.g) ..
-    string.format('%02x', t.b)
+  return '#' .. string.format('%02x', t.r) .. string.format('%02x', t.g) .. string.format('%02x', t.b)
 end
 
 ------ RGB <-> XYZ
 function H.rgb2xyz(rgb)
-  local t = vim.tbl_map(
-    function(c)
-      c = c / 255
-      if c > 0.04045 then
-        c = ((c + 0.055) / 1.055)^2.4
-      else
-        c = c / 12.92
-      end
-      return 100 * c
-    end,
-    rgb
-  )
+  local t = vim.tbl_map(function(c)
+    c = c / 255
+    if c > 0.04045 then
+      c = ((c + 0.055) / 1.055) ^ 2.4
+    else
+      c = c / 12.92
+    end
+    return 100 * c
+  end, rgb)
 
   -- Source of better matrix: http://brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
   local x = 0.41246 * t.r + 0.35757 * t.g + 0.18043 * t.b
   local y = 0.21267 * t.r + 0.71515 * t.g + 0.07217 * t.b
   local z = 0.01933 * t.r + 0.11919 * t.g + 0.95030 * t.b
-  return {x = x, y = y, z = z}
+  return { x = x, y = y, z = z }
 end
 
 function H.xyz2rgb(xyz)
   -- Source of better matrix: http://brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
+  -- stylua: ignore start
   local r =  3.24045 * xyz.x - 1.53713 * xyz.y - 0.49853 * xyz.z
   local g = -0.96927 * xyz.x + 1.87601 * xyz.y + 0.04155 * xyz.z
   local b =  0.05564 * xyz.x - 0.20403 * xyz.y + 1.05722 * xyz.z
+  -- stylua: ignore end
 
-  return vim.tbl_map(
-    function(c)
-      c = c / 100
-      if c > 0.0031308 then
-        c = 1.055 * (c^(1 / 2.4)) - 0.055
-      else
-        c = 12.92 * c
-      end
-      return 255 * c
-    end,
-    {r = r, g = g, b = b}
-  )
+  return vim.tbl_map(function(c)
+    c = c / 100
+    if c > 0.0031308 then
+      c = 1.055 * (c ^ (1 / 2.4)) - 0.055
+    else
+      c = 12.92 * c
+    end
+    return 255 * c
+  end, {
+    r = r,
+    g = g,
+    b = b,
+  })
 end
 
 ------ XYZ <-> CIELuv
@@ -591,13 +624,15 @@ H.ref_v = (9 * 100) / (95.047 + (15 * 100) + (3 * 108.883))
 
 function H.xyz2luv(xyz)
   local x, y, z = xyz.x, xyz.y, xyz.z
-  if x + y + z == 0 then return {l = 0, u = 0, v = 0} end
+  if x + y + z == 0 then
+    return { l = 0, u = 0, v = 0 }
+  end
 
   local var_u = 4 * x / (x + 15 * y + 3 * z)
   local var_v = 9 * y / (x + 15 * y + 3 * z)
   local var_y = y / 100
   if var_y > 0.008856 then
-    var_y = var_y^(1 / 3)
+    var_y = var_y ^ (1 / 3)
   else
     var_y = (7.787 * var_y) + (16 / 116)
   end
@@ -605,15 +640,17 @@ function H.xyz2luv(xyz)
   local l = (116 * var_y) - 16
   local u = 13 * l * (var_u - H.ref_u)
   local v = 13 * l * (var_v - H.ref_v)
-  return {l = l, u = u, v = v}
+  return { l = l, u = u, v = v }
 end
 
 function H.luv2xyz(luv)
-  if luv.l == 0 then return {x = 0, y = 0, z = 0} end
+  if luv.l == 0 then
+    return { x = 0, y = 0, z = 0 }
+  end
 
   local var_y = (luv.l + 16) / 116
-  if (var_y^3  > 0.008856) then
-    var_y = var_y^3
+  if var_y ^ 3 > 0.008856 then
+    var_y = var_y ^ 3
   else
     var_y = (var_y - 16 / 116) / 7.787
   end
@@ -624,14 +661,14 @@ function H.luv2xyz(luv)
   local y = var_y * 100
   local x = -(9 * y * var_u) / ((var_u - 4) * var_v - var_u * var_v)
   local z = (9 * y - 15 * var_v * y - var_v * x) / (3 * var_v)
-  return {x = x, y = y, z = z}
+  return { x = x, y = y, z = z }
 end
 
 ------ CIELuv <-> CIELCh(uv)
 H.tau = 2 * math.pi
 
 function H.luv2lch(luv)
-  local c = math.sqrt(luv.u^2 + luv.v^2)
+  local c = math.sqrt(luv.u ^ 2 + luv.v ^ 2)
   local h
   if c == 0 then
     h = 0
@@ -639,14 +676,14 @@ function H.luv2lch(luv)
     -- Convert [-pi, pi] radians to [0, 360] degrees
     h = (math.atan2(luv.v, luv.u) % H.tau) * 360 / H.tau
   end
-  return {l = luv.l, c = c, h = h}
+  return { l = luv.l, c = c, h = h }
 end
 
 function H.lch2luv(lch)
   local angle = lch.h * H.tau / 360
   local u = lch.c * math.cos(angle)
   local v = lch.c * math.sin(angle)
-  return {l = lch.l, u = u, v = v}
+  return { l = lch.l, u = u, v = v }
 end
 
 ---- Distances
@@ -662,7 +699,9 @@ function H.dist_circle_set(set1, set2)
   for _, x in pairs(set1) do
     for _, y in pairs(set2) do
       d = H.dist_circle(x, y)
-      if dist > d then dist = d end
+      if dist > d then
+        dist = d
+      end
     end
   end
   return dist
@@ -672,10 +711,10 @@ function H.nearest_rgb_id(rgb_target, rgb_palette)
   local best_dist = math.huge
   local best_id, dist
   for id, rgb in pairs(rgb_palette) do
-    dist = math.abs(rgb_target.r - rgb.r) +
-      math.abs(rgb_target.g - rgb.g) +
-      math.abs(rgb_target.b - rgb.b)
-    if dist < best_dist then best_id, best_dist = id, dist end
+    dist = math.abs(rgb_target.r - rgb.r) + math.abs(rgb_target.g - rgb.g) + math.abs(rgb_target.b - rgb.b)
+    if dist < best_dist then
+      best_id, best_dist = id, dist
+    end
   end
 
   return best_id

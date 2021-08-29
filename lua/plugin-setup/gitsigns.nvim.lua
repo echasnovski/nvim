@@ -1,14 +1,17 @@
 local has_gitsigns, gitsigns = pcall(require, 'gitsigns')
-if not has_gitsigns then return end
+if not has_gitsigns then
+  return
+end
 
 -- Setup
+-- stylua: ignore start
 gitsigns.setup({
   signs = {
-    add          = {hl = 'DiffAdd'   , text = '│'},
-    change       = {hl = 'DiffChange', text = '│'},
-    delete       = {hl = 'DiffDelete', text = '_'},
-    topdelete    = {hl = 'DiffDelete', text = '‾'},
-    changedelete = {hl = 'DiffChange', text = '~'},
+    add =          { hl = 'DiffAdd',    text = '│' },
+    change =       { hl = 'DiffChange', text = '│' },
+    delete =       { hl = 'DiffDelete', text = '_' },
+    topdelete =    { hl = 'DiffDelete', text = '‾' },
+    changedelete = { hl = 'DiffChange', text = '~' },
   },
   keymaps = {
     -- Default keymap options
@@ -28,7 +31,8 @@ gitsigns.setup({
 
     -- Text objects
     ['o ih'] = ':<C-U>lua require"gitsigns".select_hunk()<CR>',
-    ['x ih'] = ':<C-U>lua require"gitsigns".select_hunk()<CR>'
+    ['x ih'] = ':<C-U>lua require"gitsigns".select_hunk()<CR>',
   },
-  watch_index = {interval = 1000}
+  watch_index = { interval = 1000 },
 })
+-- stylua: ignore end

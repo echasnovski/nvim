@@ -1,16 +1,18 @@
 local has_todo, todo = pcall(require, 'todo-comments')
-if not has_todo then return end
+if not has_todo then
+  return
+end
 
-todo.setup{
+todo.setup({
   highlight = {
-    before = "",
-    keyword = "bg",
-    after = "",
+    before = '',
+    keyword = 'bg',
+    after = '',
     -- Match without the extra colon
-    pattern = [[.*<(KEYWORDS)\s*]]
+    pattern = [[.*<(KEYWORDS)\s*]],
   },
   search = {
     -- Match without the extra colon
-    pattern = [[\b(KEYWORDS)\b]]
-  }
-}
+    pattern = [[\b(KEYWORDS)\b]],
+  },
+})

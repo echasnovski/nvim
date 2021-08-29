@@ -4,20 +4,26 @@
 -- - sumneko_lua for Lua
 
 local has_lspconfig, nvim_lsp = pcall(require, 'lspconfig')
-if not has_lspconfig then return end
+if not has_lspconfig then
+  return
+end
 
 -- local has_completion, completion = pcall(require, 'completion')
 
 local on_attach = function(client, bufnr)
   -- if has_completion then completion.on_attach() end
 
-  local function buf_set_keymap(...) vim.api.nvim_buf_set_keymap(bufnr, ...) end
-  local function buf_set_option(...) vim.api.nvim_buf_set_option(bufnr, ...) end
+  local function buf_set_keymap(...)
+    vim.api.nvim_buf_set_keymap(bufnr, ...)
+  end
+  local function buf_set_option(...)
+    vim.api.nvim_buf_set_option(bufnr, ...)
+  end
 
   buf_set_option('omnifunc', 'v:lua.MiniCompletion.completefunc_lsp')
 
   -- Mappings.
-  local opts = { noremap=true, silent=true }
+  local opts = { noremap = true, silent = true }
   buf_set_keymap('n', '<leader>lR', '<cmd>lua vim.lsp.buf.references()<CR>', opts)
   buf_set_keymap('n', '<leader>la', '<cmd>lua vim.lsp.buf.signature_help()<CR>', opts)
   buf_set_keymap('n', '<leader>ld', '<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>', opts)
@@ -43,30 +49,28 @@ local on_attach = function(client, bufnr)
   -- end
 end
 
-vim.lsp.handlers['textDocument/publishDiagnostics'] = vim.lsp.with(
-    vim.lsp.diagnostic.on_publish_diagnostics, {
-      -- Show gutter sings
-      signs = {
-        -- With highest priority
-        priority = 9999,
-        -- Only for warnings and errors
-        severity_limit = 'Warning'
-      },
-      -- Show virtual text only for errors
-      virtual_text = { severity_limit = 'Error'},
-      -- Don't update diagnostics when typing
-      update_in_insert = false,
-    }
-  )
+vim.lsp.handlers['textDocument/publishDiagnostics'] = vim.lsp.with(vim.lsp.diagnostic.on_publish_diagnostics, {
+  -- Show gutter sings
+  signs = {
+    -- With highest priority
+    priority = 9999,
+    -- Only for warnings and errors
+    severity_limit = 'Warning',
+  },
+  -- Show virtual text only for errors
+  virtual_text = { severity_limit = 'Error' },
+  -- Don't update diagnostics when typing
+  update_in_insert = false,
+})
 
 -- -- Disable diagnostics
 -- vim.lsp.callbacks['textDocument/publishDiagnostics'] = function() end
 
 -- Setup well-defined servers
-local servers = {'pyright', 'r_language_server'}
+local servers = { 'pyright', 'r_language_server' }
 for _, lsp in ipairs(servers) do
   -- Map buffer local keybindings when the language server attaches
-  nvim_lsp[lsp].setup { on_attach = on_attach }
+  nvim_lsp[lsp].setup({ on_attach = on_attach })
 end
 
 -- Lua language server
@@ -85,11 +89,11 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
     print('Unsupported system for sumneko')
   end
 
-  nvim_lsp.sumneko_lua.setup {
-    cmd = {sumneko_binary, '-E', sumneko_root .. '/main.lua'},
+  nvim_lsp.sumneko_lua.setup({
+    cmd = { sumneko_binary, '-E', sumneko_root .. '/main.lua' },
     on_attach = function(client, bufnr)
       on_attach(client, bufnr)
-      client.server_capabilities.completionProvider.triggerCharacters = {'.', ':'}
+      client.server_capabilities.completionProvider.triggerCharacters = { '.', ':' }
     end,
     root_dir = function(fname)
       return nvim_lsp.util.root_pattern('.git')(fname) or nvim_lsp.util.path.dirname(fname)
@@ -100,21 +104,21 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
           -- Tell the language server which version of Lua you're using (most likely LuaJIT in the case of Neovim)
           version = 'LuaJIT',
           -- Setup your lua path
-          path = vim.split(package.path, ';')
+          path = vim.split(package.path, ';'),
         },
         diagnostics = {
           -- Get the language server to recognize the `vim` global
-          globals = {'vim'}
+          globals = { 'vim' },
         },
         workspace = {
           -- Don't analyze code from submodules
           ignoreSubmodules = true,
           -- Don't analyze 'undo cache'
-          ignoreDir = {'undodir'},
+          ignoreDir = { 'undodir' },
           -- Make the server aware of Neovim runtime files
-          library = {[vim.fn.expand('$VIMRUNTIME/lua')] = true, [vim.fn.expand('$VIMRUNTIME/lua/vim/lsp')] = true}
-        }
-      }
-    }
-  }
+          library = { [vim.fn.expand('$VIMRUNTIME/lua')] = true, [vim.fn.expand('$VIMRUNTIME/lua/vim/lsp')] = true },
+        },
+      },
+    },
+  })
 end

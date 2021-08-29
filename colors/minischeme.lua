@@ -24,7 +24,7 @@ if vim.o.background == 'dark' then
     base0C = '#c671cb',
     base0D = '#5bf5ff',
     base0E = '#ffc6ff',
-    base0F = '#00a3c2'
+    base0F = '#00a3c2',
   }
   use_cterm = {
     base00 = 235,
@@ -42,7 +42,7 @@ if vim.o.background == 'dark' then
     base0C = 170,
     base0D = 87,
     base0E = 225,
-    base0F = 37
+    base0F = 37,
   }
 end
 
@@ -67,7 +67,7 @@ if vim.o.background == 'light' then
     base0C = '#b555ae',
     base0D = '#005077',
     base0E = '#7d0075',
-    base0F = '#008ab1'
+    base0F = '#008ab1',
   }
   use_cterm = {
     base00 = 254,
@@ -85,7 +85,7 @@ if vim.o.background == 'light' then
     base0C = 133,
     base0D = 24,
     base0E = 90,
-    base0F = 31
+    base0F = 31,
   }
 end
 

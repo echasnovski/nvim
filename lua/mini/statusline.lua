@@ -90,28 +90,30 @@ function MiniStatusline.setup(config)
   H.apply_config(config)
 
   -- Module behavior
-  vim.api.nvim_exec([[
-    augroup MiniStatusline
-      au!
-      au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline.active()
-      au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline.inactive()
-    augroup END
-  ]], false)
+  vim.api.nvim_exec(
+    [[augroup MiniStatusline
+        au!
+        au WinEnter,BufEnter * setlocal statusline=%!v:lua.MiniStatusline.active()
+        au WinLeave,BufLeave * setlocal statusline=%!v:lua.MiniStatusline.inactive()
+      augroup END]],
+    false
+  )
 
   -- Create highlighting
-  vim.api.nvim_exec([[
-    hi link MiniStatuslineModeNormal  Cursor
-    hi link MiniStatuslineModeInsert  DiffChange
-    hi link MiniStatuslineModeVisual  DiffAdd
-    hi link MiniStatuslineModeReplace DiffDelete
-    hi link MiniStatuslineModeCommand DiffText
-    hi link MiniStatuslineModeOther   IncSearch
+  vim.api.nvim_exec(
+    [[hi link MiniStatuslineModeNormal  Cursor
+      hi link MiniStatuslineModeInsert  DiffChange
+      hi link MiniStatuslineModeVisual  DiffAdd
+      hi link MiniStatuslineModeReplace DiffDelete
+      hi link MiniStatuslineModeCommand DiffText
+      hi link MiniStatuslineModeOther   IncSearch
 
-    hi link MiniStatuslineDevinfo  StatusLine
-    hi link MiniStatuslineFilename StatusLineNC
-    hi link MiniStatuslineFileinfo StatusLine
-    hi link MiniStatuslineInactive StatusLineNC
-  ]], false)
+      hi link MiniStatuslineDevinfo  StatusLine
+      hi link MiniStatuslineFilename StatusLineNC
+      hi link MiniStatuslineFileinfo StatusLine
+      hi link MiniStatuslineInactive StatusLineNC]],
+    false
+  )
 end
 
 -- Module settings
@@ -122,27 +124,29 @@ MiniStatusline.set_vim_settings = true
 function MiniStatusline.active()
   local mode_info = MiniStatusline.modes[vim.fn.mode()]
 
-  local mode        = MiniStatusline.section_mode({mode_info = mode_info, trunc_width = 120})
-  local spell       = MiniStatusline.section_spell({trunc_width = 120})
+  -- stylua: ignore start
+  local mode        = MiniStatusline.section_mode({ mode_info = mode_info, trunc_width = 120 })
+  local spell       = MiniStatusline.section_spell({ trunc_width = 120 })
   local wrap        = MiniStatusline.section_wrap()
-  local git         = MiniStatusline.section_git({trunc_width = 75})
-  local diagnostics = MiniStatusline.section_diagnostics({trunc_width = 75})
-  local filename    = MiniStatusline.section_filename({trunc_width = 140})
-  local fileinfo    = MiniStatusline.section_fileinfo({trunc_width = 120})
+  local git         = MiniStatusline.section_git({ trunc_width = 75 })
+  local diagnostics = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+  local filename    = MiniStatusline.section_filename({ trunc_width = 140 })
+  local fileinfo    = MiniStatusline.section_fileinfo({ trunc_width = 120 })
   local location    = MiniStatusline.section_location()
 
   -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
   -- correct padding with spaces between groups (accounts for 'missing'
   -- sections, etc.)
   return MiniStatusline.combine_groups({
-    {hl = mode_info.hl,                strings = {mode, spell, wrap}},
-    {hl = '%#MiniStatuslineDevinfo#',  strings = {git, diagnostics}},
+    { hl = mode_info.hl,                strings = { mode, spell, wrap } },
+    { hl = '%#MiniStatuslineDevinfo#',  strings = { git, diagnostics } },
     '%<', -- Mark general truncate point
-    {hl = '%#MiniStatuslineFilename#', strings = {filename}},
+    { hl = '%#MiniStatuslineFilename#', strings = { filename } },
     '%=', -- End left alignment
-    {hl = '%#MiniStatuslineFileinfo#', strings = {fileinfo}},
-    {hl = mode_info.hl,                strings = {location}},
+    { hl = '%#MiniStatuslineFileinfo#', strings = { fileinfo } },
+    { hl = mode_info.hl,                strings = { location } },
   })
+  -- stylua: ignore end
 end
 
 function MiniStatusline.inactive()
@@ -150,20 +154,22 @@ function MiniStatusline.inactive()
 end
 
 function MiniStatusline.combine_groups(groups)
-  local t = vim.tbl_map(
-    function(s)
-      if not s then return '' end
-      if type(s) == 'string' then return s end
-      local t = vim.tbl_filter(
-        function(x) return not (x == nil or x == '') end,
-        s.strings
-      )
-      -- Return highlighting group to allow inheritance from later sections
-      if vim.tbl_count(t) == 0 then return s.hl or '' end
-      return string.format('%s %s ', s.hl or '', table.concat(t, ' '))
-    end,
-    groups
-  )
+  local t = vim.tbl_map(function(s)
+    if not s then
+      return ''
+    end
+    if type(s) == 'string' then
+      return s
+    end
+    local t = vim.tbl_filter(function(x)
+      return not (x == nil or x == '')
+    end, s.strings)
+    -- Return highlighting group to allow inheritance from later sections
+    if vim.tbl_count(t) == 0 then
+      return s.hl or ''
+    end
+    return string.format('%s %s ', s.hl or '', table.concat(t, ' '))
+  end, groups)
   return table.concat(t, '')
 end
 
@@ -175,60 +181,70 @@ end
 local CTRL_S = vim.api.nvim_replace_termcodes('<C-S>', true, true, true)
 local CTRL_V = vim.api.nvim_replace_termcodes('<C-V>', true, true, true)
 
+-- stylua: ignore start
 MiniStatusline.modes = setmetatable({
-  ['n']    = {long = 'Normal',   short = 'N' ,  hl = '%#MiniStatuslineModeNormal#'};
-  ['v']    = {long = 'Visual',   short = 'V' ,  hl = '%#MiniStatuslineModeVisual#'};
-  ['V']    = {long = 'V-Line',   short = 'V-L', hl = '%#MiniStatuslineModeVisual#'};
-  [CTRL_V] = {long = 'V-Block',  short = 'V-B', hl = '%#MiniStatuslineModeVisual#'};
-  ['s']    = {long = 'Select',   short = 'S' ,  hl = '%#MiniStatuslineModeVisual#'};
-  ['S']    = {long = 'S-Line',   short = 'S-L', hl = '%#MiniStatuslineModeVisual#'};
-  [CTRL_S] = {long = 'S-Block',  short = 'S-B', hl = '%#MiniStatuslineModeVisual#'};
-  ['i']    = {long = 'Insert',   short = 'I' ,  hl = '%#MiniStatuslineModeInsert#'};
-  ['R']    = {long = 'Replace',  short = 'R' ,  hl = '%#MiniStatuslineModeReplace#'};
-  ['c']    = {long = 'Command',  short = 'C' ,  hl = '%#MiniStatuslineModeCommand#'};
-  ['r']    = {long = 'Prompt',   short = 'P' ,  hl = '%#MiniStatuslineModeOther#'};
-  ['!']    = {long = 'Shell',    short = 'Sh' , hl = '%#MiniStatuslineModeOther#'};
-  ['t']    = {long = 'Terminal', short = 'T' ,  hl = '%#MiniStatuslineModeOther#'};
+  ['n']    = { long = 'Normal',   short = 'N',   hl = '%#MiniStatuslineModeNormal#' },
+  ['v']    = { long = 'Visual',   short = 'V',   hl = '%#MiniStatuslineModeVisual#' },
+  ['V']    = { long = 'V-Line',   short = 'V-L', hl = '%#MiniStatuslineModeVisual#' },
+  [CTRL_V] = { long = 'V-Block',  short = 'V-B', hl = '%#MiniStatuslineModeVisual#' },
+  ['s']    = { long = 'Select',   short = 'S',   hl = '%#MiniStatuslineModeVisual#' },
+  ['S']    = { long = 'S-Line',   short = 'S-L', hl = '%#MiniStatuslineModeVisual#' },
+  [CTRL_S] = { long = 'S-Block',  short = 'S-B', hl = '%#MiniStatuslineModeVisual#' },
+  ['i']    = { long = 'Insert',   short = 'I',   hl = '%#MiniStatuslineModeInsert#' },
+  ['R']    = { long = 'Replace',  short = 'R',   hl = '%#MiniStatuslineModeReplace#' },
+  ['c']    = { long = 'Command',  short = 'C',   hl = '%#MiniStatuslineModeCommand#' },
+  ['r']    = { long = 'Prompt',   short = 'P',   hl = '%#MiniStatuslineModeOther#' },
+  ['!']    = { long = 'Shell',    short = 'Sh',  hl = '%#MiniStatuslineModeOther#' },
+  ['t']    = { long = 'Terminal', short = 'T',   hl = '%#MiniStatuslineModeOther#' },
 }, {
   -- By default return 'Unknown' but this shouldn't be needed
   __index = function()
-    return {long = 'Unknown', short = 'U', hl = '%#MiniStatuslineModeOther#'}
-  end
+    return   { long = 'Unknown',  short = 'U',   hl = '%#MiniStatuslineModeOther#' }
+  end,
 })
+-- stylua: ignore end
 
 function MiniStatusline.section_mode(arg)
-  local mode = H.is_truncated(arg.trunc_width) and
-    arg.mode_info.short or
-    arg.mode_info.long
+  local mode = H.is_truncated(arg.trunc_width) and arg.mode_info.short or arg.mode_info.long
 
   return mode
 end
 
 ---- Spell
 function MiniStatusline.section_spell(arg)
-  if not vim.wo.spell then return '' end
+  if not vim.wo.spell then
+    return ''
+  end
 
-  if H.is_truncated(arg.trunc_width) then return 'SPELL' end
+  if H.is_truncated(arg.trunc_width) then
+    return 'SPELL'
+  end
 
   return string.format('SPELL(%s)', vim.bo.spelllang)
 end
 
 ---- Wrap
 function MiniStatusline.section_wrap()
-  if not vim.wo.wrap then return '' end
+  if not vim.wo.wrap then
+    return ''
+  end
 
   return 'WRAP'
 end
 
 ---- Git
 function MiniStatusline.section_git(arg)
-  if H.isnt_normal_buffer() then return '' end
+  if H.isnt_normal_buffer() then
+    return ''
+  end
 
   local head = vim.b.gitsigns_head or '-'
   local signs = H.is_truncated(arg.trunc_width) and '' or (vim.b.gitsigns_status or '')
 
   if signs == '' then
-    if head == '-' then return '' end
+    if head == '-' then
+      return ''
+    end
     return string.format(' %s', head)
   end
   return string.format(' %s %s', head, signs)
@@ -239,10 +255,10 @@ function MiniStatusline.section_diagnostics(arg)
   -- Assumption: there are no attached clients if table
   -- `vim.lsp.buf_get_clients()` is empty
   local hasnt_attached_client = next(vim.lsp.buf_get_clients()) == nil
-  local dont_show_lsp = H.is_truncated(arg.trunc_width) or
-    H.isnt_normal_buffer() or
-    hasnt_attached_client
-  if dont_show_lsp then return '' end
+  local dont_show_lsp = H.is_truncated(arg.trunc_width) or H.isnt_normal_buffer() or hasnt_attached_client
+  if dont_show_lsp then
+    return ''
+  end
 
   -- Construct diagnostic info using predefined order
   local t = {}
@@ -254,7 +270,9 @@ function MiniStatusline.section_diagnostics(arg)
     end
   end
 
-  if vim.tbl_count(t) == 0 then return 'ﯭ  -' end
+  if vim.tbl_count(t) == 0 then
+    return 'ﯭ  -'
+  end
   return string.format('ﯭ %s', table.concat(t, ''))
 end
 
@@ -263,8 +281,8 @@ function MiniStatusline.section_filename(arg)
   -- In terminal always use plain name
   if vim.bo.buftype == 'terminal' then
     return '%t'
-  -- File name with 'truncate', 'modified', 'readonly' flags
   elseif H.is_truncated(arg.trunc_width) then
+    -- File name with 'truncate', 'modified', 'readonly' flags
     -- Use relative path if truncated
     return '%f%m%r'
   else
@@ -279,14 +297,20 @@ function MiniStatusline.section_fileinfo(arg)
 
   -- Don't show anything if can't detect file type or not inside a "normal
   -- buffer"
-  if ((filetype == '') or H.isnt_normal_buffer()) then return '' end
+  if (filetype == '') or H.isnt_normal_buffer() then
+    return ''
+  end
 
   -- Add filetype icon
   local icon = H.get_filetype_icon()
-  if icon ~= '' then filetype = string.format('%s %s', icon, filetype) end
+  if icon ~= '' then
+    filetype = string.format('%s %s', icon, filetype)
+  end
 
   -- Construct output string if truncated
-  if H.is_truncated(arg.trunc_width) then return filetype end
+  if H.is_truncated(arg.trunc_width) then
+    return filetype
+  end
 
   -- Construct output string with extra file info
   local encoding = vim.bo.fileencoding or vim.bo.encoding
@@ -304,16 +328,16 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {set_vim_settings = MiniStatusline.set_vim_settings}
+H.config = { set_vim_settings = MiniStatusline.set_vim_settings }
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
-  vim.validate({config = {config, 'table', true}})
+  vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.config, config or {})
 
-  vim.validate({set_vim_settings = {config.set_vim_settings, 'boolean'}})
+  vim.validate({ set_vim_settings = { config.set_vim_settings, 'boolean' } })
 
   return config
 end
@@ -338,10 +362,10 @@ function H.isnt_normal_buffer()
 end
 
 H.diagnostic_levels = {
-  {name = 'Error'      , sign = 'E'},
-  {name = 'Warning'    , sign = 'W'},
-  {name = 'Information', sign = 'I'},
-  {name = 'Hint'       , sign = 'H'},
+  { name = 'Error', sign = 'E' },
+  { name = 'Warning', sign = 'W' },
+  { name = 'Information', sign = 'I' },
+  { name = 'Hint', sign = 'H' },
 }
 
 function H.get_filesize()

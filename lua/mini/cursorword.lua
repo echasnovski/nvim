@@ -42,25 +42,24 @@ function MiniCursorword.setup(config)
   H.apply_config(config)
 
   -- Module behavior
-  local command = string.format([[
-    augroup MiniCursorword
-      au!
-      au %s                            * lua MiniCursorword.highlight()
-      au InsertEnter,TermEnter,QuitPre * lua MiniCursorword.unhighlight()
-    augroup END
-  ]], config.highlight_event)
+  local command = string.format(
+    [[augroup MiniCursorword
+        au!
+        au %s                            * lua MiniCursorword.highlight()
+        au InsertEnter,TermEnter,QuitPre * lua MiniCursorword.unhighlight()
+      augroup END]],
+    config.highlight_event
+  )
   vim.api.nvim_exec(command, false)
 
   -- Create highlighting
-  vim.api.nvim_exec([[
-    hi MiniCursorword term=underline cterm=underline gui=underline
-  ]], false)
+  vim.api.nvim_exec([[hi MiniCursorword term=underline cterm=underline gui=underline]], false)
 end
 
 -- Module settings
 ---- On which event highlighting is updated. If default "CursorMoved" is too
 ---- frequent, use "CursorHold"
-MiniCursorword.highlight_event = "CursorMoved"
+MiniCursorword.highlight_event = 'CursorMoved'
 
 -- Functions to enable/disable whole module
 function MiniCursorword.enable()
@@ -76,7 +75,11 @@ function MiniCursorword.disable()
 end
 
 function MiniCursorword.toggle()
-  if H.enabled then MiniCursorword.disable() else MiniCursorword.enable() end
+  if H.enabled then
+    MiniCursorword.disable()
+  else
+    MiniCursorword.enable()
+  end
 end
 
 -- A modified version of https://stackoverflow.com/a/25233145
@@ -84,7 +87,9 @@ end
 -- 'current word' highlighting: with `:match` it is higher than for
 -- `incsearch` which is not convenient.
 function MiniCursorword.highlight()
-  if not H.enabled then return end
+  if not H.enabled then
+    return
+  end
 
   -- Highlight word only if cursor is on 'keyword' character
   if not H.is_cursor_on_keyword() then
@@ -99,10 +104,14 @@ function MiniCursorword.highlight()
   local curword = vim.fn.escape(vim.fn.expand('<cword>'), [[\/]])
 
   -- Don't do anything if currently highlighted word equals one on cursor
-  if win_match.word == curword then return end
+  if win_match.word == curword then
+    return
+  end
 
   -- Stop highlighting previous match (if it exists)
-  if win_match.id then vim.fn.matchdelete(win_match.id) end
+  if win_match.id then
+    vim.fn.matchdelete(win_match.id)
+  end
 
   -- Make highlighting pattern 'very nomagic' ('\V') and to match whole word
   -- ('\<' and '\>')
@@ -110,7 +119,7 @@ function MiniCursorword.highlight()
 
   -- Add match highlight with very low priority and store match information
   local match_id = vim.fn.matchadd('MiniCursorword', curpattern, -1)
-  H.window_matches[win_id] = {word = curword, id = match_id}
+  H.window_matches[win_id] = { word = curword, id = match_id }
 end
 
 function MiniCursorword.unhighlight()
@@ -124,21 +133,23 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {highlight_event = MiniCursorword.highlight_event}
+H.config = { highlight_event = MiniCursorword.highlight_event }
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
-  vim.validate({config = {config, 'table', true}})
+  vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.config, config or {})
 
   vim.validate({
     highlight_event = {
       config.highlight_event,
-      function(x) return x == 'CursorMoved' or x == 'CursorHold' end,
-      "one of strings: 'CursorMoved' or 'CursorHold'"
-    }
+      function(x)
+        return x == 'CursorMoved' or x == 'CursorHold'
+      end,
+      'one of strings: "CursorMoved" or "CursorHold"',
+    },
   })
 
   return config

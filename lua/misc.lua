@@ -92,11 +92,17 @@ end
 -- @return matched_candidates, matched_indexes Arrays of matched candidates and
 --   their indexes in original input.
 function M.fuzzy_match(candidates, word, sort, case_sensitive)
-  if sort == nil then sort = true end
-  if case_sensitive == nil then case_sensitive = false end
+  if sort == nil then
+    sort = true
+  end
+  if case_sensitive == nil then
+    case_sensitive = false
+  end
 
   local matches = H.fuzzy_filter_impl(word, candidates, case_sensitive)
-  if sort then table.sort(matches, H.fuzzy_compare) end
+  if sort then
+    table.sort(matches, H.fuzzy_compare)
+  end
 
   return H.matches_to_tuple(matches)
 end
@@ -104,19 +110,18 @@ end
 -- Fuzzy matching for `MiniCompletion.lsp_completion.process_items`
 function M.fuzzy_process_lsp_items(items, base, sort, case_sensitive)
   -- Extract completion words from items
-  local words = vim.tbl_map(
-    function(x)
-      if type(x.textEdit) == 'table' and x.textEdit.newText then
-        return x.textEdit.newText
-      end
-      return x.insertText or x.label or ''
-    end,
-    items
-  )
+  local words = vim.tbl_map(function(x)
+    if type(x.textEdit) == 'table' and x.textEdit.newText then
+      return x.textEdit.newText
+    end
+    return x.insertText or x.label or ''
+  end, items)
 
   -- Fuzzy match
   local _, match_inds = M.fuzzy_match(words, base, sort, case_sensitive)
-  return vim.tbl_map(function(i) return items[i] end, match_inds)
+  return vim.tbl_map(function(i)
+    return items[i]
+  end, match_inds)
 end
 
 function H.fuzzy_filter_impl(word, candidates, case_sensitive)
@@ -125,7 +130,9 @@ function H.fuzzy_filter_impl(word, candidates, case_sensitive)
   -- Precompute a table of word's letters
   local n_word = #word
   local letters = {}
-  for i = 1, n_word do letters[i] = word:sub(i, i) end
+  for i = 1, n_word do
+    letters[i] = word:sub(i, i)
+  end
 
   local res = {}
   local cand_to_match, let_i, match, pos_last
@@ -153,7 +160,7 @@ end
 
 function H.improve_match(pos_last, candidate, letters)
   if #letters == 1 then
-    return {pos_width = 0, pos_first = pos_last, pos_sum = pos_last}
+    return { pos_width = 0, pos_first = pos_last, pos_sum = pos_last }
   end
 
   local rev_line = candidate:reverse()
@@ -162,7 +169,7 @@ function H.improve_match(pos_last, candidate, letters)
 
   -- Do backward search
   local pos, pos_sum = rev_last, pos_last
-  for i=#letters-1,1,-1 do
+  for i = #letters - 1, 1, -1 do
     pos = rev_line:find(letters[i], pos + 1)
     pos_sum = pos_sum + (n - pos + 1)
   end
@@ -171,19 +178,25 @@ function H.improve_match(pos_last, candidate, letters)
   return {
     pos_width = pos_last - pos_first,
     pos_first = pos_first,
-    pos_sum = pos_sum
+    pos_sum = pos_sum,
   }
 end
 
 function H.fuzzy_compare(a, b)
   -- '_time' is better than 't_ime'
-  if a.pos_width < b.pos_width then return true end
+  if a.pos_width < b.pos_width then
+    return true
+  end
   if a.pos_width == b.pos_width then
     -- 'time_aa' is better than 'aa_time'
-    if a.pos_first < b.pos_first then return true end
+    if a.pos_first < b.pos_first then
+      return true
+    end
     if a.pos_first == b.pos_first then
       -- 'tim_e' is better than 't_ime'
-      if a.pos_sum < b.pos_sum then return true end
+      if a.pos_sum < b.pos_sum then
+        return true
+      end
       if a.pos_sum == b.pos_sum then
         -- Make sorting stable by preserving index order
         return a.index < b.index
@@ -223,7 +236,9 @@ function M.head(t, n)
   n = n or 5
   local res, n_res = {}, 0
   for k, val in pairs(t) do
-    if n_res >= n then return res end
+    if n_res >= n then
+      return res
+    end
     res[k] = val
     n_res = n_res + 1
   end
@@ -246,14 +261,18 @@ function M.tail(t, n)
 
   -- Count number of elements on first pass
   local n_all = 0
-  for _, _ in pairs(t) do n_all = n_all + 1 end
+  for _, _ in pairs(t) do
+    n_all = n_all + 1
+  end
 
   -- Construct result on second pass
   local res = {}
   local i, start_i = 0, n_all - n + 1
   for k, val in pairs(t) do
     i = i + 1
-    if i >= start_i then res[k] = val end
+    if i >= start_i then
+      res[k] = val
+    end
   end
   return res
 end
