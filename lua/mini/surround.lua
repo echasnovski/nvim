@@ -513,7 +513,7 @@ end
 
 function H.cursor_cycle(pos_list, dir)
   local cur_pos = vim.api.nvim_win_get_cursor(0)
-  local cur_pos = { line = cur_pos[1], col = cur_pos[2] + 1 }
+  cur_pos = { line = cur_pos[1], col = cur_pos[2] + 1 }
 
   local compare, to_left, to_right, res_pos
   -- NOTE: `pos_list` should be an increasingly ordered list of positions

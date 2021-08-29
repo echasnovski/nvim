@@ -92,12 +92,8 @@ end
 -- @return matched_candidates, matched_indexes Arrays of matched candidates and
 --   their indexes in original input.
 function M.fuzzy_match(candidates, word, sort, case_sensitive)
-  if sort == nil then
-    sort = true
-  end
-  if case_sensitive == nil then
-    case_sensitive = false
-  end
+  sort = sort or true
+  case_sensitive = case_sensitive or false
 
   local matches = H.fuzzy_filter_impl(word, candidates, case_sensitive)
   if sort then
