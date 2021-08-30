@@ -135,7 +135,8 @@ let g:which_key_map.i = {
 
 " l is for 'LSP' (Language Server Protocol)
 nnoremap <leader>lf <cmd>lua vim.lsp.buf.formatting()<CR>
-nnoremap <leader>lF <cmd>lua vim.lsp.buf.range_formatting()<CR>
+"" Using `:` instead of `<cmd>` to go back to Normal mode after `<CR>`
+vnoremap <silent> <leader>lf :lua vim.lsp.buf.range_formatting()<CR>
 "" Actual commands are defined in settings for 'nvim-lspconfig'
 let g:which_key_map.l = {
   \ 'name' : '+LSP' ,

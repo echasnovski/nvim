@@ -1,5 +1,9 @@
-local lspconfig = require('lspconfig')
-local null_ls = require('null-ls')
+local has_null_ls, null_ls = pcall(require, 'null-ls')
+local has_lspconfig, lspconfig = pcall(require, 'lspconfig')
+if not (has_null_ls and has_lspconfig) then
+  return
+end
+
 local helpers = require('null-ls.helpers')
 
 -- Define 'styler' formatting for R. Package should be installed in library
@@ -15,15 +19,10 @@ local r_styler = {
       '--no-restore',
       '--no-save',
       '-e',
-      'con <- file("stdin")',
-      '-e',
-      'res <- styler::style_text(readLines(con))',
-      '-e',
-      'close(con)',
-      '-e',
-      'print(res, colored = FALSE)',
+      'con=file("stdin");output=styler::style_text(readLines(con));close(con);print(output, colored=FALSE)',
     },
     to_stdin = true,
+    suppress_errors = false,
   }),
 }
 
