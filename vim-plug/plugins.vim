@@ -53,14 +53,14 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Language server
     Plug 'neovim/nvim-lspconfig'
 
+    "" Use external actions (formatting, diagnostics, etc.)
+    Plug 'jose-elias-alvarez/null-ls.nvim'
+
     "" Enhanced diagnostics lists
     Plug 'folke/trouble.nvim'
 
     "" Todo (and other notes) highlighting
     Plug 'folke/todo-comments.nvim'
-
-    "" Code formatter
-    Plug 'sbdchd/neoformat'
 
     "" Treesitter: incremental parsing of file
     "" Deals with highlighting and specific textobjects

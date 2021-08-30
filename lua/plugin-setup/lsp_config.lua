@@ -9,7 +9,7 @@ if not has_lspconfig then
 end
 
 -- Preconfiguration
-local on_attach_custom = function(_, bufnr)
+local on_attach_custom = function(client, bufnr)
   local function buf_set_keymap(keys, action)
     vim.api.nvim_buf_set_keymap(bufnr, 'n', keys, action, { noremap = true })
   end
@@ -36,14 +36,8 @@ local on_attach_custom = function(_, bufnr)
   -- buf_set_keymap('gD', '<cmd>lua vim.lsp.buf.declaration()<CR>')
   -- buf_set_keymap('gi', '<cmd>lua vim.lsp.buf.implementation()<CR>')
 
-  -- Currently formatting is handled with 'Neoformat' plugin
-  -- -- Set some keybinds conditional on server capabilities
-  -- if client.resolved_capabilities.document_formatting then
-  --   buf_set_keymap('<leader>lf', '<cmd>lua vim.lsp.buf.formatting()<CR>')
-  -- end
-  -- if client.resolved_capabilities.document_range_formatting then
-  --   buf_set_keymap('<leader>lF', '<cmd>lua vim.lsp.buf.range_formatting()<CR>')
-  -- end
+  -- Currently all formatting is handled with 'null-ls' plugin
+  client.resolved_capabilities.document_formatting = false
 end
 
 vim.lsp.handlers['textDocument/publishDiagnostics'] = vim.lsp.with(vim.lsp.diagnostic.on_publish_diagnostics, {
