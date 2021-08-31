@@ -8,8 +8,8 @@ endif
 
 call plug#begin('~/.config/nvim/autoload/plugged')
 
-  " More text objects
-  Plug 'wellle/targets.vim'
+  " " More text objects
+  " Plug 'wellle/targets.vim'
 
   " Align text
   Plug 'tommcdo/vim-lion'
