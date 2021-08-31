@@ -245,13 +245,9 @@ function MiniBase16.apply(palette, name, use_cterm)
 
   -- Plugins
   ---- 'mini'
-  hi('MiniTablineCurrent',         {fg=p.base05, bg=p.base02, attr='bold', sp=nil})
-  hi('MiniTablineFill',            {fg=nil,      bg=nil,      attr=nil,    sp=nil})
-  hi('MiniTablineHidden',          {fg=p.base04, bg=p.base01, attr=nil,    sp=nil})
-  hi('MiniTablineModifiedCurrent', {fg=p.base02, bg=p.base05, attr='bold', sp=nil})
-  hi('MiniTablineModifiedHidden',  {fg=p.base01, bg=p.base04, attr=nil,    sp=nil})
-  hi('MiniTablineModifiedVisible', {fg=p.base02, bg=p.base04, attr='bold', sp=nil})
-  hi('MiniTablineVisible',         {fg=p.base05, bg=p.base01, attr='bold', sp=nil})
+  hi('MiniCompletionActiveParameter', {fg=nil, bg=nil, attr='underline', sp=nil})
+
+  hi('MiniCursorword', {fg=nil, bg=nil, attr='underline', sp=nil})
 
   hi('MiniStatuslineDevinfo',     {fg=p.base04, bg=p.base02, attr=nil,    sp=nil})
   hi('MiniStatuslineFileinfo',    {fg=p.base04, bg=p.base02, attr=nil,    sp=nil})
@@ -264,8 +260,64 @@ function MiniBase16.apply(palette, name, use_cterm)
   hi('MiniStatuslineModeReplace', {fg=p.base00, bg=p.base0E, attr='bold', sp=nil})
   hi('MiniStatuslineModeVisual',  {fg=p.base00, bg=p.base0B, attr='bold', sp=nil})
 
+  hi('MiniSurround', {fg=p.base01, bg=p.base09, attr=nil, sp=nil})
+
+  hi('MiniTablineCurrent',         {fg=p.base05, bg=p.base02, attr='bold', sp=nil})
+  hi('MiniTablineFill',            {fg=nil,      bg=nil,      attr=nil,    sp=nil})
+  hi('MiniTablineHidden',          {fg=p.base04, bg=p.base01, attr=nil,    sp=nil})
+  hi('MiniTablineModifiedCurrent', {fg=p.base02, bg=p.base05, attr='bold', sp=nil})
+  hi('MiniTablineModifiedHidden',  {fg=p.base01, bg=p.base04, attr=nil,    sp=nil})
+  hi('MiniTablineModifiedVisible', {fg=p.base02, bg=p.base04, attr='bold', sp=nil})
+  hi('MiniTablineVisible',         {fg=p.base05, bg=p.base01, attr='bold', sp=nil})
+
   hi('MiniTrailspace', {fg=p.base00, bg=p.base08, attr=nil, sp=nil})
+
+  ---- kyazdani42/nvim-tree.lua (only unlinked highlight groups)
+  hi('NvimTreeExecFile',     { fg=p.base0B, bg=nil,      attr='bold',           sp=nil })
+  hi('NvimTreeFolderIcon',   { fg=p.base03, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeGitDeleted',   { fg=p.base08, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeGitDirty',     { fg=p.base08, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeGitMerge',     { fg=p.base0C, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeGitNew',       { fg=p.base0D, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeGitRenamed',   { fg=p.base0E, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeGitStaged',    { fg=p.base0B, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeImageFile',    { fg=p.base0E, bg=nil,      attr='bold',           sp=nil })
+  hi('NvimTreeIndentMarker', { fg=p.base03, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeOpenedFile',   { fg=p.base0B, bg=nil,      attr='bold',           sp=nil })
+  hi('NvimTreeRootFolder',   { fg=p.base0E, bg=nil,      attr=nil,              sp=nil })
+  hi('NvimTreeSpecialFile',  { fg=p.base0D, bg=nil,      attr='bold,underline', sp=nil })
+  hi('NvimTreeSymlink',      { fg=p.base0F, bg=nil,      attr='bold',           sp=nil })
+  hi('NvimTreeWindowPicker', { fg=p.base05, bg=p.base01, attr="bold",           sp=nil })
+
+  ---- lewis6991/gitsigns.nvim
+  hi('GitSignsAdd',    {fg=p.base0B, bg=p.base01, attr=nil, sp=nil})
+  hi('GitSignsChange', {fg=p.base03, bg=p.base01, attr=nil, sp=nil})
+  hi('GitSignsDelete', {fg=p.base08, bg=p.base01, attr=nil, sp=nil})
   -- stylua: ignore end
+
+  -- Terminal colors
+  vim.g.terminal_color_0 = palette.base00
+  vim.g.terminal_color_1 = palette.base08
+  vim.g.terminal_color_2 = palette.base0B
+  vim.g.terminal_color_3 = palette.base0A
+  vim.g.terminal_color_4 = palette.base0D
+  vim.g.terminal_color_5 = palette.base0E
+  vim.g.terminal_color_6 = palette.base0C
+  vim.g.terminal_color_7 = palette.base05
+  vim.g.terminal_color_8 = palette.base03
+  vim.g.terminal_color_9 = palette.base08
+  vim.g.terminal_color_10 = palette.base0B
+  vim.g.terminal_color_11 = palette.base0A
+  vim.g.terminal_color_12 = palette.base0D
+  vim.g.terminal_color_13 = palette.base0E
+  vim.g.terminal_color_14 = palette.base0C
+  vim.g.terminal_color_15 = palette.base07
+  vim.g.terminal_color_background = vim.g.terminal_color_0
+  vim.g.terminal_color_foreground = vim.g.terminal_color_5
+  if vim.o.background == 'light' then
+    vim.g.terminal_color_background = vim.g.terminal_color_7
+    vim.g.terminal_color_foreground = vim.g.terminal_color_2
+  end
 end
 
 function MiniBase16.mini_palette(background, foreground, accent_chroma)
