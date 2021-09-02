@@ -13,8 +13,10 @@
 --
 -- Default `config`:
 -- {
---   -- Whether to perform certain auto action. To disable action, add it with
---   -- `false` or don't add at all.
+--   -- Whether to perform certain auto action. To disable action globally, add
+--   -- it with `false`. NOTE: To disable action only in certain buffer, create
+--   -- respective `b:minicompletion_auto_*` and set it to 0. For example, `let
+--   -- b:minicompletion_auto_completion=0` disables completion in buffer.
 --   auto = {completion = true, info = true, signature = true},
 --
 --   -- Delay (debounce type, in ms) between certain Neovim event and action.
@@ -185,6 +187,10 @@ function MiniCompletion.setup(config)
         au CompleteDonePre * lua MiniCompletion.stop({'completion', 'info'})
         au TextChangedI    * lua MiniCompletion.on_text_changed_i()
         au TextChangedP    * lua MiniCompletion.on_text_changed_p()
+
+        au FileType TelescopePrompt let b:minicompletion_auto_completion=0
+        au FileType TelescopePrompt let b:minicompletion_auto_info=0
+        au FileType TelescopePrompt let b:minicompletion_auto_signature=0
       augroup END]],
     false
   )
@@ -255,7 +261,7 @@ MiniCompletion.set_vim_settings = true
 
 -- Module functionality
 function MiniCompletion.auto_completion()
-  if not MiniCompletion.auto.completion then
+  if not MiniCompletion.auto.completion or vim.b.minicompletion_auto_completion == 0 then
     return
   end
 
@@ -309,7 +315,7 @@ function MiniCompletion.complete_fallback()
 end
 
 function MiniCompletion.auto_info()
-  if not MiniCompletion.auto.info then
+  if not MiniCompletion.auto.info or vim.b.minicompletion_auto_info == 0 then
     return
   end
 
@@ -337,7 +343,7 @@ function MiniCompletion.auto_info()
 end
 
 function MiniCompletion.auto_signature()
-  if not MiniCompletion.auto.signature then
+  if not MiniCompletion.auto.signature or vim.b.minicompletion_auto_signature == 0 then
     return
   end
 
