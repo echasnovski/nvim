@@ -98,6 +98,46 @@ function MiniFuzzy.fuzzy_process_lsp_items(items, base, sort, case_sensitive)
   end, match_inds)
 end
 
+function MiniFuzzy.get_telescope_sorter(opts)
+  opts = vim.tbl_deep_extend('force', { case_sensitive = false }, opts or {})
+
+  return require('telescope.sorters').Sorter:new({
+    start = function(self, prompt)
+      -- Cache prompt's letters
+      local letters = {}
+      if not opts.case_sensitive then
+        prompt = prompt:lower()
+      end
+      for i = 1, #prompt do
+        -- Use `vim.pesc()` to treat special characters ('.', etc.) literally
+        letters[i] = vim.pesc(prompt:sub(i, i))
+      end
+      self.letters = letters
+    end,
+
+    -- @param self
+    -- @param prompt (which is the text on the line)
+    -- @param line (entry.ordinal)
+    -- @param entry (the whole entry)
+    scoring_function = function(self, _, line, _)
+      local match = H.match(self.letters, line, opts.case_sensitive)
+      return H.match_to_score(match)
+    end,
+
+    -- Currently there doesn't seem to be a proper way to cache matched
+    -- positions from inside of `scoring_function` (see `highlighter` code of
+    -- `get_fzy_sorter`'s output). Besides, it seems that `display` and `line`
+    -- arguments might be different. So, extra calls to `match` are made.
+    highlighter = function(self, _, display)
+      if #self.letters == 0 or #display == 0 then
+        return {}
+      end
+      local match = H.match(self.letters, display, opts.case_sensitive)
+      return match.positions
+    end,
+  })
+end
+
 -- Helper functions
 ---- Settings
 function H.setup_config(config)
@@ -113,84 +153,110 @@ function H.apply_config(config) end
 
 ---- Fuzzy matching
 function H.fuzzy_filter_impl(word, candidates, case_sensitive)
-  local insensitive = not case_sensitive
-
   -- Precompute a table of word's letters
   local n_word = #word
+  if not case_sensitive then
+    word = word:lower()
+  end
   local letters = {}
   for i = 1, n_word do
-    letters[i] = word:sub(i, i)
+    -- Use `vim.pesc()` to treat special characters ('.', etc.) literally
+    letters[i] = vim.pesc(word:sub(i, i))
   end
 
   local res = {}
-  local cand_to_match, let_i, match, pos_last
   for i, cand in ipairs(candidates) do
-    -- Make early decision of "not matched" if number of word's letters is
-    -- bigger than number of candidate's letters
-    if n_word <= #cand then
-      cand_to_match = insensitive and cand:lower() or cand
-      pos_last, let_i = 0, 1
-      while pos_last and let_i <= n_word do
-        pos_last = string.find(cand_to_match, letters[let_i], pos_last + 1)
-        let_i = let_i + 1
-      end
-      -- Candidate is a match only if word's last letter is found
-      if pos_last then
-        match = H.improve_match(pos_last, cand_to_match, letters)
-        match.candidate, match.index = cand, i
-        table.insert(res, match)
-      end
+    local match = H.match(letters, cand, case_sensitive)
+    if match then
+      match.candidate, match.index = cand, i
+      match.score = H.match_to_score(match)
+      table.insert(res, match)
     end
   end
 
   return res
 end
 
-function H.improve_match(pos_last, candidate, letters)
-  if #letters == 1 then
-    return { pos_width = 0, pos_first = pos_last, pos_sum = pos_last }
+-- @param letters List of letters from "typed" word
+-- @param candidate String of interest
+-- @param case_sensitive Whether match is case sensitive
+--
+-- @return Table with match information if there is a match, `nil` otherwise.
+function H.match(letters, candidate, case_sensitive)
+  local n_candidate, n_letters = #candidate, #letters
+  if n_candidate <= n_letters then
+    return nil
   end
 
-  local rev_line = candidate:reverse()
-  local n = #candidate
-  local rev_last = n - pos_last + 1
+  local cand = case_sensitive and candidate or candidate:lower()
 
-  -- Do backward search
-  local pos, pos_sum = rev_last, pos_last
+  -- Make forward search for match presence
+  local pos_last, let_i = 0, 1
+  while pos_last and let_i <= n_letters do
+    pos_last = string.find(cand, letters[let_i], pos_last + 1)
+    let_i = let_i + 1
+  end
+
+  -- Candidate is matched only if word's last letter is found
+  if not pos_last then
+    return nil
+  end
+
+  -- Compute matching positions by going backwards from last letter match
+  if n_letters == 1 then
+    return { positions = { pos_last }, pos_width = 1, pos_first = pos_last, pos_mean = pos_last }
+  end
+
+  local rev_cand, rev_last = cand:reverse(), n_candidate - pos_last + 1
+
+  local positions, pos_sum = { pos_last }, pos_last
+  local rev_pos = rev_last
   for i = #letters - 1, 1, -1 do
-    pos = rev_line:find(letters[i], pos + 1)
-    pos_sum = pos_sum + (n - pos + 1)
+    rev_pos = rev_cand:find(letters[i], rev_pos + 1)
+    local pos = n_candidate - rev_pos + 1
+    table.insert(positions, pos)
+    pos_sum = pos_sum + pos
   end
-  local pos_first = n - pos + 1
+  local pos_first = n_candidate - rev_pos + 1
 
   return {
-    pos_width = pos_last - pos_first,
+    positions = H.tbl_reverse(positions),
+    pos_width = pos_last - pos_first + 1,
     pos_first = pos_first,
-    pos_sum = pos_sum,
+    pos_mean = pos_sum / n_letters,
   }
 end
 
+-- Convert match information into score. Smaller values indicate better match
+-- (i.e. like distance). Reasoning behind the score is for it to produce the
+-- same ordering as with sequential comparison of match's width, first position
+-- and mean position. So it shouldn't be perceived as linear distance
+-- (difference between scores don't really matter, only their comparison with
+-- each other).
+--
+-- Reasoning behind comparison logic (based on 'time' input):
+-- - '_time' is better than 't_ime' (width is smaller).
+-- - 'time_aa' is better than 'aa_time' (width is same, first position is
+--   smaller).
+-- - 'tim_e' is better than 't_ime' (width and first position are same, mean
+--   position is smaller).
+function H.match_to_score(match)
+  if not match then return -1 end
+  return 1000 * math.min(match.pos_width, 1000)
+    + 1 * math.min(match.pos_first, 1000)
+    + 0.001 * math.min(match.pos_mean, 1000)
+end
+
 function H.fuzzy_compare(a, b)
-  -- '_time' is better than 't_ime'
-  if a.pos_width < b.pos_width then
+  if a.score < b.score then
     return true
   end
-  if a.pos_width == b.pos_width then
-    -- 'time_aa' is better than 'aa_time'
-    if a.pos_first < b.pos_first then
-      return true
-    end
-    if a.pos_first == b.pos_first then
-      -- 'tim_e' is better than 't_ime'
-      if a.pos_sum < b.pos_sum then
-        return true
-      end
-      if a.pos_sum == b.pos_sum then
-        -- Make sorting stable by preserving index order
-        return a.index < b.index
-      end
-    end
+
+  if a.score == b.score then
+    -- Make sorting stable by preserving index order
+    return a.index < b.index
   end
+
   return false
 end
 
@@ -202,6 +268,17 @@ function H.matches_to_tuple(matches)
   end
 
   return candidates, indexes
+end
+
+function H.tbl_reverse(t)
+  if #t == 0 then
+    return {}
+  end
+  local res = {}
+  for i = #t, 1, -1 do
+    table.insert(res, t[i])
+  end
+  return res
 end
 
 return MiniFuzzy

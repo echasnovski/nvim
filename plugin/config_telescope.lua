@@ -12,6 +12,9 @@ telescope.setup({
       vertical = { mirror = true },
       flex = { flip_columns = 140 },
     },
+    -- Use custom sorter based on more intuitive (at least for me) fuzzy logic
+    file_sorter = require('mini.fuzzy').get_telescope_sorter,
+    generic_sorter = require('mini.fuzzy').get_telescope_sorter,
   },
   pickers = {
     buffers = { ignore_current_buffer = true },
@@ -30,7 +33,9 @@ telescope.setup({
   },
 })
 
--- Disable folds in normal mode inside window of picker results
+-- Disable folds in normal mode inside window of picker results (not sure why
+-- this happens: only telescope with `foldenabe` and `foldmethod=indent`
+-- doesn't show this behavior)
 vim.cmd([[au FileType TelescopeResults setlocal nofoldenable]])
 
 -- Custom 'find files': using `git_files` in the first place in order to ignore
