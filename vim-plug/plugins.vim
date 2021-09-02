@@ -76,8 +76,8 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     " General
     "" fzf support
-    Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
-    Plug 'junegunn/fzf.vim'
+    " Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
+    " Plug 'junegunn/fzf.vim'
 
     "" Session manager
     Plug 'mhinz/vim-startify'

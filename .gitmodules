@@ -1,3 +1,6 @@
 [submodule "pack/plugins/opt/targets"]
 	path = pack/plugins/opt/targets
 	url = https://github.com/wellle/targets.vim.git
+[submodule "pack/plugins/opt/telescope"]
+	path = pack/plugins/opt/telescope
+	url = https://github.com/nvim-telescope/telescope.nvim.git
