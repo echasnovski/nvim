@@ -30,6 +30,9 @@ telescope.setup({
   },
 })
 
+-- Disable folds in normal mode inside window of picker results
+vim.cmd([[au FileType TelescopeResults setlocal nofoldenable]])
+
 -- Custom 'find files': using `git_files` in the first place in order to ignore
 -- results from submodules. Original source:
 -- https://github.com/nvim-telescope/telescope.nvim/issues/410#issuecomment-765656002
