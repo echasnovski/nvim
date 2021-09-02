@@ -4,14 +4,11 @@ This is a setup for Neovim>=0.5.
 
 ## Installation
 
-TODO: verify this!
-
 Basically, this should (after installing system dependencies) work just by cloning this repository and fetching its plugin submodules:
 
 ```bash
 git clone --depth 1 https://github.com/echasnovski/nvim.git
-git submodule init
-git submodule update --depth 1
+git submodule update --init --depth 1
 ```
 
 ## Maintenance

@@ -22,10 +22,10 @@ vmap <C-c> "+y
 cmap w!! w !sudo tee %
 
 " Move with <Alt-hjkl> in non-normal mode
-inoremap <M-h> <Left>
-inoremap <M-j> <Down>
-inoremap <M-k> <Up>
-inoremap <M-l> <Right>
+imap <M-h> <Left>
+imap <M-j> <Down>
+imap <M-k> <Up>
+imap <M-l> <Right>
 tnoremap <M-h> <Left>
 tnoremap <M-j> <Down>
 tnoremap <M-k> <Up>
