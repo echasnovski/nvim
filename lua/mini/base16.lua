@@ -293,6 +293,12 @@ function MiniBase16.apply(palette, name, use_cterm)
   hi('GitSignsAdd',    {fg=p.base0B, bg=p.base01, attr=nil, sp=nil})
   hi('GitSignsChange', {fg=p.base03, bg=p.base01, attr=nil, sp=nil})
   hi('GitSignsDelete', {fg=p.base08, bg=p.base01, attr=nil, sp=nil})
+
+  ---- nvim-telescope/telescope.nvim
+  hi('TelescopeBorder',         {fg=p.base0F, bg=nil,      attr=nil,    sp=nil}) -- as in 'Delimiter'
+  hi('TelescopeMatching',       {fg=p.base0A, bg=nil,      attr=nil,    sp=nil}) -- as in 'Search'
+  hi('TelescopeMultiSelection', {fg=nil,      bg=p.base01, attr='bold', sp=nil})
+  hi('TelescopeSelection',      {fg=nil,      bg=p.base01, attr='bold', sp=nil})
   -- stylua: ignore end
 
   -- Terminal colors
