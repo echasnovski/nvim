@@ -62,7 +62,7 @@ nnoremap <silent> <M-k> <cmd>resize +2<CR>
 nnoremap <silent> <M-h> <cmd>vertical resize -2<CR>
 nnoremap <silent> <M-l> <cmd>vertical resize +2<CR>
 
-" Alternate way to save
+" Alternative way to save
 nnoremap <C-s> <cmd>w<CR>
 inoremap <C-s> <Esc><cmd>w<CR>
 
@@ -93,3 +93,6 @@ nnoremap q: <nop>
 
 " Search visually highlighted text
 vnoremap <silent> g/ y/\V<C-R>=escape(@",'/\')<CR><CR>
+
+" Stop highlighting of search results
+nnoremap <silent> // :nohlsearch<C-R>=has('diff')?'<BAR>diffupdate':''<CR><CR>
