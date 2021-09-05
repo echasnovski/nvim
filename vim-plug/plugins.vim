@@ -28,7 +28,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
   if !exists('g:vscode')
     "" Common dependency for Lua plugins
-    Plug 'nvim-lua/plenary.nvim'
+    " Plug 'nvim-lua/plenary.nvim'
 
     "" Fuzzy finder for future
     " Plug 'nvim-lua/popup.nvim'
@@ -51,28 +51,28 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Plug 'hrsh7th/nvim-compe'
 
     "" Language server
-    Plug 'neovim/nvim-lspconfig'
+    " Plug 'neovim/nvim-lspconfig'
 
     "" Use external actions (formatting, diagnostics, etc.)
-    Plug 'jose-elias-alvarez/null-ls.nvim'
+    " Plug 'jose-elias-alvarez/null-ls.nvim'
 
     "" Enhanced diagnostics lists
-    Plug 'folke/trouble.nvim'
+    " Plug 'folke/trouble.nvim'
 
     "" Todo (and other notes) highlighting
-    Plug 'folke/todo-comments.nvim'
+    " Plug 'folke/todo-comments.nvim'
 
     "" Treesitter: incremental parsing of file
     "" Deals with highlighting and specific textobjects
-    Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
-    Plug 'nvim-treesitter/nvim-treesitter-textobjects'
+    " Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
+    " Plug 'nvim-treesitter/nvim-treesitter-textobjects'
     " Plug 'nvim-treesitter/playground'
 
     "" Colorful icons
-    Plug 'kyazdani42/nvim-web-devicons'
+    " Plug 'kyazdani42/nvim-web-devicons'
 
     "" File tree explorer
-    Plug 'kyazdani42/nvim-tree.lua'
+    " Plug 'kyazdani42/nvim-tree.lua'
 
     " General
     "" fzf support
@@ -94,7 +94,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     "" Git integration
     Plug 'tpope/vim-fugitive'
     Plug 'junegunn/gv.vim'
-    Plug 'lewis6991/gitsigns.nvim'
+    " Plug 'lewis6991/gitsigns.nvim'
 
     "" Show keybindings
     Plug 'liuchengxu/vim-which-key'
@@ -129,7 +129,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Plug 'arcticicestudio/nord-vim'
 
     "" Show colors
-    Plug 'norcalli/nvim-colorizer.lua'
+    " Plug 'norcalli/nvim-colorizer.lua'
 
     " Languages workflow
     "" Better Syntax Support (has rather big disk size usage, around 10M)

@@ -4,3 +4,36 @@
 [submodule "pack/plugins/opt/telescope"]
 	path = pack/plugins/opt/telescope
 	url = https://github.com/nvim-telescope/telescope.nvim.git
+[submodule "pack/plugins/opt/gitsigns"]
+	path = pack/plugins/opt/gitsigns
+	url = https://github.com/lewis6991/gitsigns.nvim
+[submodule "pack/plugins/opt/null-ls"]
+	path = pack/plugins/opt/null-ls
+	url = https://github.com/jose-elias-alvarez/null-ls.nvim
+[submodule "pack/plugins/opt/nvim-lspconfig"]
+	path = pack/plugins/opt/nvim-lspconfig
+	url = https://github.com/neovim/nvim-lspconfig
+[submodule "pack/plugins/opt/nvim-colorizer"]
+	path = pack/plugins/opt/nvim-colorizer
+	url = https://github.com/norcalli/nvim-colorizer.lua
+[submodule "pack/plugins/opt/todo-comments"]
+	path = pack/plugins/opt/todo-comments
+	url = https://github.com/folke/todo-comments.nvim
+[submodule "pack/plugins/opt/trouble"]
+	path = pack/plugins/opt/trouble
+	url = https://github.com/folke/trouble.nvim
+[submodule "pack/plugins/opt/nvim-treesitter"]
+	path = pack/plugins/opt/nvim-treesitter
+	url = https://github.com/nvim-treesitter/nvim-treesitter
+[submodule "pack/plugins/opt/nvim-treesitter-textobjects"]
+	path = pack/plugins/opt/nvim-treesitter-textobjects
+	url = https://github.com/nvim-treesitter/nvim-treesitter-textobjects
+[submodule "pack/plugins/opt/nvim-web-devicons"]
+	path = pack/plugins/opt/nvim-web-devicons
+	url = https://github.com/kyazdani42/nvim-web-devicons
+[submodule "pack/plugins/opt/nvim-tree"]
+	path = pack/plugins/opt/nvim-tree
+	url = https://github.com/kyazdani42/nvim-tree.lua
+[submodule "pack/plugins/opt/plenary"]
+	path = pack/plugins/opt/plenary
+	url = https://github.com/nvim-lua/plenary.nvim
