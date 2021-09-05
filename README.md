@@ -8,12 +8,64 @@ Basically, this should (after installing system dependencies) work just by cloni
 
 ```bash
 git clone --depth 1 https://github.com/echasnovski/nvim.git
-git submodule update --init --depth 1
+
+# Download all plugin submodules with latest commit
+# `--recursive` ensures that submodules of plugins are also downloaded
+git submodule update --init --depth 1 --recursive
 ```
 
 ## Maintenance
 
-TODO: write about updating plugins, adding new ones, delete current ones.
+### Update all plugins:
+
+```bash
+git submodule update --init --depth 1 --recursive
+```
+
+### Add new plugin
+
+Add new plugin as a normal submodule. NOTEs:
+
+- Current naming convention is to strip any "extension-like" substring from end of plugin name (usually it is '.nvim', '.lua', '.vim').
+- Plugins should be added to package directory 'pack/plugins' in one of 'start' or 'opt'.
+
+For example, 'nvim-telescope/telescope-fzy-native.nvim' (as it has its submodule) to 'opt' directory:
+
+```bash
+# Add submodule. This will load plugin (but not its submodules)
+git submodule add --depth 1 https://github.com/nvim-telescope/telescope-fzy-native.nvim pack/plugins/opt/telescope-fzy-native
+
+# Ensure that all submodules of plugin are also downloaded
+git submodule update --init --depth 1 --recursive
+```
+
+### Delete plugin
+
+Delete plugin as a normal submodule. For example, 'telescope-fzy-native.nvim' from 'pack/plugins/opt' directory:
+
+```bash
+submodule_name="pack/plugins/opt/telescope-fzy-native"
+
+# Unregister submodule (this also empties plugin's directory)
+git submodule deinit -f $submodule_name
+
+# Remove the working tree of the submodule
+git rm --cached $submodule_name
+
+# Remove relevant section from '.gitmodules'
+git config -f .gitmodules --remove-section "submodule.$submodule_name"
+
+# Remove submodule's (which should be empty) directory from file system
+rm -r $submodule_name
+
+# Remove associated submodule directory in '.git/modules'.
+git_dir=`git rev-parse --git-dir`
+rm -rf $git_dir/modules/$submodule_name
+
+# Optionally: add and commit changes
+git add .
+git commit -m "Remove $submodule_name plugin."
+```
 
 ## System dependencies
 
