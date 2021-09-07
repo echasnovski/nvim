@@ -41,7 +41,6 @@ nnoremap <silent> <Leader>ep <cmd>TroubleToggle lsp_workspace_diagnostics<CR>
 let g:which_key_map.e = {
   \ 'name' : '+explore' ,
   \ 'P' : 'problems (troubles) document',
-  \ 'f' : [':RnvimrToggle'  , 'files'],
   \ 'n' : 'notes (todo, etc.)',
   \ 'p' : 'problems (troubles) workspace',
   \ 't' : [':NvimTreeToggle', 'tree'],

@@ -86,7 +86,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     Plug 'airblade/vim-rooter'
 
     "" File Explorer
-    Plug 'kevinhwang91/rnvimr'
+    " Plug 'kevinhwang91/rnvimr'
 
     "" Tweak Neovim's terminal to be more REPL-aware
     Plug 'kassio/neoterm'
