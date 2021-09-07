@@ -12,19 +12,19 @@ call plug#begin('~/.config/nvim/autoload/plugged')
   " Plug 'wellle/targets.vim'
 
   " Align text
-  Plug 'tommcdo/vim-lion'
+  " Plug 'tommcdo/vim-lion'
 
   " Wrap function arguments
-  Plug 'FooSoft/vim-argwrap'
+  " Plug 'FooSoft/vim-argwrap'
 
   " Swap function arguments (and define better 'argument' text object)
-  Plug 'AndrewRadev/sideways.vim'
+  " Plug 'AndrewRadev/sideways.vim'
 
   " Exchange regions
-  Plug 'tommcdo/vim-exchange'
+  " Plug 'tommcdo/vim-exchange'
 
   " Pairs of handy bracket mappings
-  Plug 'tpope/vim-unimpaired'
+  " Plug 'tpope/vim-unimpaired'
 
   if !exists('g:vscode')
     "" Common dependency for Lua plugins
@@ -80,27 +80,27 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Plug 'junegunn/fzf.vim'
 
     "" Session manager
-    Plug 'mhinz/vim-startify'
+    " Plug 'mhinz/vim-startify'
 
     "" Update file system working directory
-    Plug 'airblade/vim-rooter'
+    " Plug 'airblade/vim-rooter'
 
     "" File Explorer
     " Plug 'kevinhwang91/rnvimr'
 
     "" Tweak Neovim's terminal to be more REPL-aware
-    Plug 'kassio/neoterm'
+    " Plug 'kassio/neoterm'
 
     "" Git integration
-    Plug 'tpope/vim-fugitive'
-    Plug 'junegunn/gv.vim'
+    " Plug 'tpope/vim-fugitive'
+    " Plug 'junegunn/gv.vim'
     " Plug 'lewis6991/gitsigns.nvim'
 
     "" Show keybindings
     Plug 'liuchengxu/vim-which-key'
 
     "" Visualize undo-tree
-    Plug 'mbbill/undotree'
+    " Plug 'mbbill/undotree'
 
     "" Work with tags
     " Plug 'ludovicchabant/vim-gutentags'

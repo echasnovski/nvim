@@ -5,6 +5,21 @@ end
 -- More text objects
 packadd('targets')
 
+-- Align text
+packadd('vim-lion')
+
+-- Wrap function arguments
+packadd('vim-argwrap')
+
+-- Swap function arguments (and define better 'argument' text object)
+packadd('sideways')
+
+-- Exchange regions
+packadd('vim-exchange')
+
+-- Pairs of handy bracket mappings
+packadd('vim-unimpaired')
+
 if vim.fn.exists('vscode') ~= 1 then
   -- Common dependency for Lua plugins
   packadd('plenary')
@@ -20,6 +35,13 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd('nvim-treesitter-textobjects')
 
   -- Git integration
+  ---- Interact with git
+  packadd('vim-fugitive')
+
+  ---- Interact with commits
+  packadd('gv')
+
+  ---- Interact with hunks
   packadd('gitsigns')
 
   -- Language server configurations
@@ -27,6 +49,15 @@ if vim.fn.exists('vscode') ~= 1 then
 
   -- File tree explorer
   packadd('nvim-tree')
+
+  -- Start screen and session manager
+  packadd('vim-startify')
+
+    -- Updater of current working directory
+  packadd('vim-rooter')
+
+  -- Tweak Neovim's terminal to be more REPL-aware
+  packadd('neoterm')
 
   -- Usage of external actions (formatting, diagnostics, etc.)
   packadd('null-ls')
@@ -39,6 +70,9 @@ if vim.fn.exists('vscode') ~= 1 then
 
   -- Display of text colors
   packadd('nvim-colorizer')
+
+  -- Visualize undo tree
+  packadd('undotree')
 end
 
 -- Do plugin hooks (find a better way to do this; maybe after custom update)

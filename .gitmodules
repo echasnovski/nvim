@@ -37,3 +37,36 @@
 [submodule "pack/plugins/opt/plenary"]
 	path = pack/plugins/opt/plenary
 	url = https://github.com/nvim-lua/plenary.nvim
+[submodule "pack/plugins/opt/vim-lion"]
+	path = pack/plugins/opt/vim-lion
+	url = https://github.com/tommcdo/vim-lion
+[submodule "pack/plugins/opt/vim-argwrap"]
+	path = pack/plugins/opt/vim-argwrap
+	url = https://github.com/FooSoft/vim-argwrap
+[submodule "pack/plugins/opt/sideways"]
+	path = pack/plugins/opt/sideways
+	url = https://github.com/AndrewRadev/sideways.vim
+[submodule "pack/plugins/opt/vim-exchange"]
+	path = pack/plugins/opt/vim-exchange
+	url = https://github.com/tommcdo/vim-exchange
+[submodule "pack/plugins/opt/vim-unimpaired"]
+	path = pack/plugins/opt/vim-unimpaired
+	url = https://github.com/tpope/vim-unimpaired
+[submodule "pack/plugins/opt/vim-startify"]
+	path = pack/plugins/opt/vim-startify
+	url = https://github.com/mhinz/vim-startify
+[submodule "pack/plugins/opt/vim-rooter"]
+	path = pack/plugins/opt/vim-rooter
+	url = https://github.com/airblade/vim-rooter
+[submodule "pack/plugins/opt/neoterm"]
+	path = pack/plugins/opt/neoterm
+	url = https://github.com/kassio/neoterm
+[submodule "pack/plugins/opt/vim-fugitive"]
+	path = pack/plugins/opt/vim-fugitive
+	url = https://github.com/tpope/vim-fugitive
+[submodule "pack/plugins/opt/gv"]
+	path = pack/plugins/opt/gv
+	url = https://github.com/junegunn/gv.vim
+[submodule "pack/plugins/opt/undotree"]
+	path = pack/plugins/opt/undotree
+	url = https://github.com/mbbill/undotree
