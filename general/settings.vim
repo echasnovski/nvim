@@ -1,3 +1,4 @@
+let mapleader = ' '
 set iskeyword+=-         " Treat dash separated words as a word text object
 
 if !exists('g:vscode')

@@ -97,7 +97,7 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Plug 'lewis6991/gitsigns.nvim'
 
     "" Show keybindings
-    Plug 'liuchengxu/vim-which-key'
+    " Plug 'liuchengxu/vim-which-key'
 
     "" Visualize undo-tree
     " Plug 'mbbill/undotree'

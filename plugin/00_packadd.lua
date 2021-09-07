@@ -30,6 +30,9 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Fuzzy finder
   packadd('telescope')
 
+  -- Show keybindings
+  packadd('which-key')
+
   -- Treesitter: advanced syntax parsing. Add highlighting and text objects.
   packadd('nvim-treesitter')
   packadd('nvim-treesitter-textobjects')

@@ -19,22 +19,7 @@ local on_attach_custom = function(client, bufnr)
 
   buf_set_option('omnifunc', 'v:lua.MiniCompletion.completefunc_lsp')
 
-  -- Mappings.
-  buf_set_keymap('<leader>lR', '<cmd>lua vim.lsp.buf.references()<CR>')
-  buf_set_keymap('<leader>la', '<cmd>lua vim.lsp.buf.signature_help()<CR>')
-  buf_set_keymap('<leader>ld', '<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>')
-  buf_set_keymap('<leader>li', '<cmd>lua vim.lsp.buf.hover()<CR>')
-  buf_set_keymap('<leader>lj', '<cmd>lua vim.lsp.diagnostic.goto_next()<CR>')
-  buf_set_keymap('<leader>lk', '<cmd>lua vim.lsp.diagnostic.goto_prev()<CR>')
-  buf_set_keymap('<leader>lr', '<cmd>lua vim.lsp.buf.rename()<CR>')
-  buf_set_keymap('<leader>ls', '<cmd>lua vim.lsp.buf.definition()<CR>')
-  -- buf_set_keymap('<leader>lD', '<cmd>lua vim.lsp.diagnostic.set_loclist()<CR>')
-  -- buf_set_keymap('<space>D', '<cmd>lua vim.lsp.buf.type_definition()<CR>')
-  -- buf_set_keymap('<space>wa', '<cmd>lua vim.lsp.buf.add_workspace_folder()<CR>')
-  -- buf_set_keymap('<space>wl', '<cmd>lua print(vim.inspect(vim.lsp.buf.list_workspace_folders()))<CR>')
-  -- buf_set_keymap('<space>wr', '<cmd>lua vim.lsp.buf.remove_workspace_folder()<CR>')
-  -- buf_set_keymap('gD', '<cmd>lua vim.lsp.buf.declaration()<CR>')
-  -- buf_set_keymap('gi', '<cmd>lua vim.lsp.buf.implementation()<CR>')
+  -- Mappings are created globally for simplicity
 
   -- Currently all formatting is handled with 'null-ls' plugin
   client.resolved_capabilities.document_formatting = false
