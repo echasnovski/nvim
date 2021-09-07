@@ -299,6 +299,14 @@ function MiniBase16.apply(palette, name, use_cterm)
   hi('TelescopeMatching',       {fg=p.base0A, bg=nil,      attr=nil,    sp=nil}) -- as in 'Search'
   hi('TelescopeMultiSelection', {fg=nil,      bg=p.base01, attr='bold', sp=nil})
   hi('TelescopeSelection',      {fg=nil,      bg=p.base01, attr='bold', sp=nil})
+
+  ---- folke/which-key.nvim
+  hi('WhichKey',          {fg=p.base0D, bg=nil,      attr=nil, sp=nil})
+  hi('WhichKeyDesc',      {fg=p.base05, bg=nil,      attr=nil, sp=nil})
+  hi('WhichKeyFloat',     {fg=p.base05, bg=p.base01, attr=nil, sp=nil})
+  hi('WhichKeyGroup',     {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
+  hi('WhichKeySeparator', {fg=p.base0B, bg=p.base01, attr=nil, sp=nil})
+  hi('WhichKeyValue',     {fg=p.base03, bg=nil,      attr=nil, sp=nil})
   -- stylua: ignore end
 
   -- Terminal colors

@@ -40,6 +40,7 @@ function MiniTrailspace.setup(config)
         au!
         au WinEnter,BufWinEnter,InsertLeave * lua MiniTrailspace.highlight()
         au WinLeave,BufWinLeave,InsertEnter * lua MiniTrailspace.unhighlight()
+        au FileType WhichKey lua MiniTrailspace.unhighlight()
       augroup END]],
     false
   )
