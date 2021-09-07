@@ -222,7 +222,8 @@ function H.make_path_extender(bufnum)
   return function(label)
     -- Add parent to current label
     local full_path = vim.fn.fnamemodify(vim.fn.bufname(bufnum), ':p')
-    local pattern = string.format('[^%s]+%s%s$', H.path_sep, H.path_sep, label)
+    -- Using `vim.pesc` prevents effect of problematic characters (like '.')
+    local pattern = string.format('[^%s]+%s%s$', H.path_sep, H.path_sep, vim.pesc(label))
     return string.match(full_path, pattern) or label
   end
 end
