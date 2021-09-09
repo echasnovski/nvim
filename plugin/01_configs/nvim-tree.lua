@@ -16,11 +16,24 @@ vim.g.nvim_tree_icons = { default = '' }
 
 -- Custom functions to simulate ranger's "going in" and "going out" (might
 -- break if 'nvim-tree' is major refactored)
+local get_node = require('nvim-tree.lib').get_node_at_cursor
+local has_children = function(node)
+  return type(node.entries) == 'table' and vim.tbl_count(node.entries) > 0
+end
+
 local key_down = vim.api.nvim_replace_termcodes('<Down>', true, true, true)
+
 function _G.nvim_tree_go_in()
+  local node = get_node()
+
   -- Don't go up if cursor is placed on '..'
-  local node = require('nvim-tree.lib').get_node_at_cursor()
   if node.name == '..' then
+    vim.fn.feedkeys(key_down)
+    return
+  end
+
+  -- Go inside if it is already an opened directory with children
+  if has_children(node) and node.open == true then
     vim.fn.feedkeys(key_down)
     return
   end
@@ -35,14 +48,15 @@ function _G.nvim_tree_go_in()
 
   -- Go to first child node if it is a directory with children
   -- Get new node because before entries appear after first 'edit'
-  local entries = require('nvim-tree.lib').get_node_at_cursor().entries
-  if type(entries) == 'table' and vim.tbl_count(entries) > 0 then
+  local node = get_node()
+  if has_children(node) then
     vim.fn.feedkeys(key_down)
   end
 end
 
 function _G.nvim_tree_go_out()
-  local node = require('nvim-tree.lib').get_node_at_cursor()
+  local node = get_node()
+
   if node.name == '..' then
     require('nvim-tree.lib').dir_up()
     return
