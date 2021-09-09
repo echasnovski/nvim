@@ -1,0 +1,48 @@
+{
+  "name": "echasnovski-snippets",
+  "engines": {
+    "vscode": "^1.11.0"
+  },
+  "languages": [
+    {
+      "id": "all",
+      "extensions": "*"
+    }
+  ],
+  "contributes": {
+    "snippets": [
+      {
+        "language": [
+          "all"
+        ],
+        "path": "./all.json"
+      },
+      {
+        "language": [
+          "lua"
+        ],
+        "path": "./lua.json"
+      },
+      {
+        "language": [
+          "markdown",
+          "rmd"
+        ],
+        "path": "./markdown.json"
+      },
+      {
+        "language": [
+          "python"
+        ],
+        "path": "./python.json"
+      },
+      {
+        "language": [
+          "r",
+          "rmd"
+        ],
+        "path": "./r.json"
+      }
+    ]
+  }
+}

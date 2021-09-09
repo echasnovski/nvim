@@ -77,12 +77,8 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Visualize undo tree
   packadd('undotree')
 
-  -- Snippets
-  ---- Engine
+  -- Snippets engine
   packadd('luasnip')
-
-  ---- Collection
-  packadd('friendly-snippets')
 
   -- Documentation generator
   ---- Disable mappings, should be run before adding package

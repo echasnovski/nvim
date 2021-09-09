@@ -76,9 +76,6 @@
 [submodule "pack/plugins/opt/luasnip"]
 	path = pack/plugins/opt/luasnip
 	url = https://github.com/L3MON4D3/LuaSnip
-[submodule "pack/plugins/opt/friendly-snippets"]
-	path = pack/plugins/opt/friendly-snippets
-	url = https://github.com/rafamadriz/friendly-snippets
 [submodule "pack/plugins/opt/vim-doge"]
 	path = pack/plugins/opt/vim-doge
 	url = https://github.com/kkoomen/vim-doge

@@ -1,0 +1,72 @@
+{
+  "if": {
+    "prefix": "if",
+    "body": "if $1 then\n\t$1\nend$0",
+    "description": "if"
+  },
+  "ife": {
+    "prefix": "ife",
+    "body": "if $1 then\n\t$2\nelse\n\t$3\nend$0",
+    "description": "if-else"
+  },
+  "eif": {
+    "prefix": "eif",
+    "body": "elseif $1 then\n\t$2\nend$0",
+    "description": "elseif"
+  },
+  "el": {
+    "prefix": "  el",
+    "body": "else\n$0",
+    "description": "else"
+  },
+  "function": {
+    "prefix": "fun",
+    "body": "function${1: new_function}(${2:args})\n\t$3\nend$0",
+    "description": "Function"
+  },
+  "for": {
+    "prefix": "for",
+    "body": "for ${1:i}=${2:first},${3:last}${4:,step} do\n\t$5\nend$0",
+    "description": "for x=1,n .. "
+  },
+  "forp": {
+    "prefix": "forp",
+    "body": "for ${1:name},${2:val} in pairs(${3:table_name}) do\n\t$4\nend$0",
+    "description": "for .. pairs()"
+  },
+  "fori": {
+    "prefix": "fori",
+    "body": "for ${1:idx},${2:val} in ipairs(${3:table_name}) do\n\t$4\nend$0",
+    "description": "for .. ipairs()"
+  },
+  "do": {
+    "prefix": "do",
+    "body": "do\n\t$1\nend$0",
+    "description": "do block"
+  },
+  "repeat": {
+    "prefix": "repeat",
+    "body": "repeat\n\t$1\nuntil $0",
+    "description": "repeat loop"
+  },
+  "while": {
+    "prefix": "wh",
+    "body": "while $1 do\n\t$2\nend$0",
+    "description": "while loop"
+  },
+  "then": {
+    "prefix": "then",
+    "body": "then\n\t$1\nend$0",
+    "description": "then .. end"
+  },
+  "pcall": {
+    "prefix": "pcall",
+    "body": "local ok, ${1:output} = pcall(${2:your_function})$0",
+    "description": "pcall statement"
+  },
+  "local": {
+    "prefix": "l",
+    "body": "local $1 = $0",
+    "description": "local x = 1"
+  }
+}

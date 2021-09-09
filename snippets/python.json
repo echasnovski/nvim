@@ -1,0 +1,122 @@
+{
+  "if": {
+    "prefix": "if",
+    "body": "if $1:\n\t${2:pass}",
+    "description": "if"
+  },
+  "ife": {
+    "prefix": "ife",
+    "body": "if $1:\n\t${0:pass}\nelse:\n\t${0:pass}",
+    "description": "if-else"
+  },
+  "eif": {
+    "prefix": "eif",
+    "body": "elif $1:\n\t${0:pass}",
+    "description": "elseif"
+  },
+  "el": {
+    "prefix": "    el",
+    "body": "else:\n${0:pass}",
+    "description": "else"
+  },
+  "while": {
+    "prefix": "wh",
+    "body": "while ${1:expression}:\n\t${2:pass}",
+    "description": "While loop"
+  },
+  "for": {
+    "prefix": "for",
+    "body": "for ${1:target_list} in ${2:expression_list}:\n\t${3:pass}",
+    "description": "For loop"
+  },
+  "try/except": {
+    "prefix": "tryex",
+    "body": [
+      "try:",
+      "\t${1:pass}",
+      "except ${2:expression} as ${3:identifier}:",
+      "\t${4:pass}"
+    ],
+    "description": "Try/except statement"
+  },
+  "try/finally": {
+    "prefix": "tryfin",
+    "body": "try:\n\t${1:pass}\nfinally:\n\t${2:pass}",
+    "description": "Try/finally statement"
+  },
+  "with": {
+    "prefix": "with",
+    "body": "with ${1:expression} as ${2:target}:\n\t${3:pass}",
+    "description": "With statement"
+  },
+  "def": {
+    "prefix": "def",
+    "body": "def ${1:funcname}($2):\n\t${3:pass}",
+    "description": "Function definition"
+  },
+  "def(class method)": {
+    "prefix": "defc",
+    "body": "def ${1:funcname}(self${2:, }):\n\t${3:pass}",
+    "description": "Class method"
+  },
+  "def(static class method)": {
+    "prefix": "defs",
+    "body": ["@staticmethod", "def ${1:funcname}($2):", "\t${3:pass}"],
+    "description": "Static class method"
+  },
+  "def(abstract class method)": {
+    "prefix": "defa",
+    "body": "def ${1:funcname}(self${2:, }):\n\traise NotImplementedError$0",
+    "description": "Abstract class method"
+  },
+  "class": {
+    "prefix": "class",
+    "body": "class ${1:classname}(${2:object}):\n\t${3:pass}",
+    "description": "Class definition"
+  },
+  "lambda": {
+    "prefix": "lambda",
+    "body": "lambda $1: ${2:expression}",
+    "description": "Lambda statement"
+  },
+  "if(main)": {
+    "prefix": "ifmain",
+    "body": "if __name__ == \"__main__\":\n\t${1:pass}",
+    "description": "if __name__ == \"__main__\": ..."
+  },
+  "List comprehension": {
+    "prefix": "lc",
+    "body": "[${1:new_value} for ${2:value} in ${3:iterable}]$0",
+    "description": "List comprehension"
+  },
+  "Dictionary comprehension": {
+    "prefix": "dc",
+    "body": "{${1:new_key}: ${2:new_value} for ${3:key}, ${4:value} in ${5:iterable}}$0",
+    "description": "Dictionary comprehension"
+  },
+  "Set comprehension": {
+    "prefix": "sc",
+    "body": "{${1:new_value} for ${2:value} in ${3:iterable}}$0",
+    "description": "Set comprehension"
+  },
+  "Generator comprehension": {
+    "prefix": "gc",
+    "body": "(${1:new_value} for ${2:value} in ${3:iterable})$0",
+    "description": "Generator comprehension"
+  },
+  "import": {
+    "prefix": "im",
+    "body": "import $1",
+    "description": "Import a package or module"
+  },
+  "from ... import ...": {
+    "prefix": "fim",
+    "body": "from $1 import $2",
+    "description": "from .. import"
+  },
+  "import as": {
+    "prefix": "ima",
+    "body": "import $1 as $2",
+    "description": "Import a package or module as something"
+  }
+}

@@ -6,9 +6,7 @@ end
 luasnip.config.set_config({ history = true })
 
 -- Load available snippets
-require('luasnip/loaders/from_vscode').lazy_load({
-  paths = { './pack/plugins/opt/friendly-snippets', './plugin/02_snippets' },
-})
+require('luasnip/loaders/from_vscode').lazy_load({ paths = { './snippets' } })
 
 -- Make snippet keymaps
 function _G.luasnip_go_right()

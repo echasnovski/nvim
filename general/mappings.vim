@@ -96,3 +96,6 @@ vnoremap <silent> g/ y/\V<C-R>=escape(@",'/\')<CR><CR>
 
 " Stop highlighting of search results
 nnoremap <silent> // :nohlsearch<C-R>=has('diff')?'<BAR>diffupdate':''<CR><CR>
+
+" Delete selection in Select mode (helpful when editing snippet placeholders)
+snoremap <silent> <BS> <BS>i
