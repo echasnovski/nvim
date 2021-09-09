@@ -16,10 +16,12 @@ git submodule update --init --depth 1 --recursive
 
 ## Maintenance
 
-### Update all plugins:
+### Update all plugins
+
+Get the latest updates from submodules' remotes:
 
 ```bash
-git submodule update --init --depth 1 --recursive
+git submodule update --remote --init --depth 1 --recursive
 ```
 
 ### Add new plugin
@@ -118,7 +120,6 @@ Important system dependencies:
     - Run the command `fc-cache -fv` to manually rebuild the font cache.
 
 - **Tools for finding stuff**:
-    - [fzf](https://github.com/junegunn/fzf#installation)
     - [ripgrep](https://github.com/BurntSushi/ripgrep#installation)
 
 - **Spelling dictionaries**:
@@ -153,7 +154,7 @@ Important system dependencies:
     - `<Leader>b` has set of commands related to buffers. For example, `<Leader>bd` - close buffer.
     - `:q` - close window.
     - `]b` and `[b` - go to next and previous buffer (current keybinding).
-    - `<Leader>fb` - list all present buffers with fzf (current keybinding).
+    - `<Leader>fb` - list all present buffers with fuzzy searcher (current keybinding).
 - Source for some inspiration: https://stackoverflow.com/questions/726894/what-are-the-dark-corners-of-vim-your-mom-never-told-you-about . Notable examples:
     - Use `:.![command]` to execute command in terminal and put its output into current buffer. For example: `:.!ls -lhR`.
 - When testing with 'vim-test', use `-strategy=make` argument to `:Test*` commands in order to populate quickfix list. **Note** that this will not display testing process as it is running and won't open quickfix list by default.
