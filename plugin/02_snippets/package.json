@@ -1,0 +1,23 @@
+{
+  "name": "echasnovski-snippets",
+  "engines": {
+    "vscode": "^1.11.0"
+  },
+  "contributes": {
+    "snippets": [
+      {
+        "language": [
+          "r",
+          "rmd"
+        ],
+        "path": "./r.json"
+      },
+      {
+        "language": [
+          "lua"
+        ],
+        "path": "./lua.json"
+      }
+    ]
+  }
+}

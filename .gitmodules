@@ -73,3 +73,9 @@
 [submodule "pack/plugins/opt/which-key"]
 	path = pack/plugins/opt/which-key
 	url = https://github.com/folke/which-key.nvim
+[submodule "pack/plugins/opt/luasnip"]
+	path = pack/plugins/opt/luasnip
+	url = https://github.com/L3MON4D3/LuaSnip
+[submodule "pack/plugins/opt/friendly-snippets"]
+	path = pack/plugins/opt/friendly-snippets
+	url = https://github.com/rafamadriz/friendly-snippets

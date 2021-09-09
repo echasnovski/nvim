@@ -1,18 +1,13 @@
 {
-  "if": {
-    "prefix": "if",
-    "body": ["if (${1:}) {", "  ${2:}", "}"],
-    "description": "Code snippet for 'if' conditional"
+  "function": {
+    "prefix": "fun",
+    "body": ["${1:} <- function(${2:}) {", "  ${3:}", "}"],
+    "description": "Named function"
   },
   "if-else": {
     "prefix": "ife",
     "body": ["if (${1:}) {", "  ${2:}", "} else {", "  ${3:}", "}"],
     "description": "Code snippet for 'if-else' conditional block"
-  },
-  "function": {
-    "prefix": "function",
-    "body": ["${1:} <- function(${2:}) {", "  ${3:}", "}"],
-    "description": "Named function"
   },
   "testthat": {
     "prefix": "test_",

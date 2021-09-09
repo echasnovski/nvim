@@ -106,8 +106,8 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Plug 'ludovicchabant/vim-gutentags'
 
     "" Snippets
-    Plug 'SirVer/ultisnips'
-    Plug 'honza/vim-snippets'
+    " Plug 'SirVer/ultisnips'
+    " Plug 'honza/vim-snippets'
 
     " "" Possible alternative
     " Plug 'hrsh7th/vim-vsnip'

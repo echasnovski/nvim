@@ -56,7 +56,7 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Start screen and session manager
   packadd('vim-startify')
 
-    -- Updater of current working directory
+  -- Updater of current working directory
   packadd('vim-rooter')
 
   -- Tweak Neovim's terminal to be more REPL-aware
@@ -76,6 +76,13 @@ if vim.fn.exists('vscode') ~= 1 then
 
   -- Visualize undo tree
   packadd('undotree')
+
+  -- Snippets
+  ---- Engine
+  packadd('luasnip')
+
+  ---- Collection
+  packadd('friendly-snippets')
 end
 
 -- Do plugin hooks (find a better way to do this; maybe after custom update)
