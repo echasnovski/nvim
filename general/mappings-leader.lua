@@ -74,28 +74,6 @@ leader_nmap.g = {
   ['X'] = { [[<Cmd>lua require("gitsigns").reset_buffer()<CR>]],        'discard (reset) buffer' },
 }
 
--- i is for IPython
-leader_nmap.i = {
-  ['name'] = 'iPython',
-  -- Qt Console execution
-  ['a'] = { [[<Plug>(IPy-RunAll)]],                                  'run all' },
-  ['c'] = { [[<Plug>(IPy-RunCell)]],                                 'run cell' },
-  -- Qt Console connection.
-  -- **To create working connection, execute both keybindings** (second after
-  -- console is created).
-  -- **Note**: Qt Console is opened with Python interpreter that is used in
-  -- terminal when opened NeoVim (i.e. output of `which python`). As a
-  -- consequence, if that Python interpreter doesn't have 'jupyter' or
-  -- 'qtconsole' installed, Qt Console will not be created.
-  -- `CreateQtConsole()` is defined in 'plug-config/nvim-ipy.vim'.
-  ['k'] = { [[<Cmd>IPython<Space>--existing<Space>--no-window<CR>]], 'connect' },
-  ['q'] = { [[<Cmd>call CreateQtConsole()<CR>]],                     'Qt Console' },
-}
-
--- j is for Jupyter
-leader_nmap.j = { [[<Plug>(IPy-Run)j]], 'jupyter run', noremap = false }
-leader_xmap.j = { [[<Plug>(IPy-Run)'>j]], 'jupyter run', noremap = false }
-
 -- l is for 'LSP' (Language Server Protocol)
 leader_nmap.l = {
   ['name'] = '+LSP',

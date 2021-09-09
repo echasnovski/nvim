@@ -148,10 +148,10 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Plug 'tpope/vim-dispatch'
 
     "" IPython integration
-    Plug 'bfredl/nvim-ipy'
+    " Plug 'bfredl/nvim-ipy'
 
     "" Work with Jupyter
-    Plug 'goerz/jupytext.vim'
+    " Plug 'goerz/jupytext.vim'
 
     " Filetypes
     "" Work with csv
