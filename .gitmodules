@@ -79,3 +79,30 @@
 [submodule "pack/plugins/opt/friendly-snippets"]
 	path = pack/plugins/opt/friendly-snippets
 	url = https://github.com/rafamadriz/friendly-snippets
+[submodule "pack/plugins/opt/vim-doge"]
+	path = pack/plugins/opt/vim-doge
+	url = https://github.com/kkoomen/vim-doge
+[submodule "pack/plugins/opt/vim-test"]
+	path = pack/plugins/opt/vim-test
+	url = https://github.com/vim-test/vim-test
+[submodule "pack/plugins/opt/vim-dispatch"]
+	path = pack/plugins/opt/vim-dispatch
+	url = https://github.com/tpope/vim-dispatch
+[submodule "pack/plugins/opt/rainbow_csv"]
+	path = pack/plugins/opt/rainbow_csv
+	url = https://github.com/mechatroner/rainbow_csv
+[submodule "pack/plugins/opt/vim-pandoc"]
+	path = pack/plugins/opt/vim-pandoc
+	url = https://github.com/vim-pandoc/vim-pandoc
+[submodule "pack/plugins/opt/vim-pandoc-syntax"]
+	path = pack/plugins/opt/vim-pandoc-syntax
+	url = https://github.com/vim-pandoc/vim-pandoc-syntax
+[submodule "pack/plugins/opt/vim-rmarkdown"]
+	path = pack/plugins/opt/vim-rmarkdown
+	url = https://github.com/vim-pandoc/vim-rmarkdown
+[submodule "pack/plugins/opt/vim-markdown"]
+	path = pack/plugins/opt/vim-markdown
+	url = https://github.com/plasticboy/vim-markdown
+[submodule "pack/plugins/opt/markdown-preview"]
+	path = pack/plugins/opt/markdown-preview
+	url = https://github.com/iamcco/markdown-preview.nvim

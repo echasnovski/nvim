@@ -140,12 +140,12 @@ call plug#begin('~/.config/nvim/autoload/plugged')
     " Plug 'sheerun/vim-polyglot'
 
     "" Documentation generator
-    Plug 'kkoomen/vim-doge', { 'do': { -> doge#install() } }
+    " Plug 'kkoomen/vim-doge', { 'do': { -> doge#install() } }
 
     "" Test runner
-    Plug 'vim-test/vim-test'
+    " Plug 'vim-test/vim-test'
     """ Currently used only for populating quickfix list with test results
-    Plug 'tpope/vim-dispatch'
+    " Plug 'tpope/vim-dispatch'
 
     "" IPython integration
     Plug 'bfredl/nvim-ipy'
@@ -155,21 +155,21 @@ call plug#begin('~/.config/nvim/autoload/plugged')
 
     " Filetypes
     "" Work with csv
-    Plug 'mechatroner/rainbow_csv'
+    " Plug 'mechatroner/rainbow_csv'
 
     "" Pandoc and Rmarkdown support
     """ This option should be set before loading plugin to take effect
     """ See https://github.com/vim-pandoc/vim-pandoc/issues/342
-    let g:pandoc#filetypes#pandoc_markdown = 0
-    Plug 'vim-pandoc/vim-pandoc'
-    Plug 'vim-pandoc/vim-pandoc-syntax'
-    Plug 'vim-pandoc/vim-rmarkdown'
+    " let g:pandoc#filetypes#pandoc_markdown = 0
+    " Plug 'vim-pandoc/vim-pandoc'
+    " Plug 'vim-pandoc/vim-pandoc-syntax'
+    " Plug 'vim-pandoc/vim-rmarkdown'
 
     "" Work with markdown
-    Plug 'plasticboy/vim-markdown'
+    " Plug 'plasticboy/vim-markdown'
 
     "" Markdown preview (has rather big disk size usage, around 50M)
-    Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
+    " Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
   endif
 
 call plug#end()

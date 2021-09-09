@@ -83,6 +83,35 @@ if vim.fn.exists('vscode') ~= 1 then
 
   ---- Collection
   packadd('friendly-snippets')
+
+  -- Documentation generator
+  ---- Disable mappings, should be run before adding package
+  vim.g.doge_enable_mappings = 0
+  packadd('vim-doge')
+
+  -- Test runner
+  packadd('vim-test')
+
+  ---- Helper to populate quickfix list with test results
+  packadd('vim-dispatch')
+
+  -- Filetype: csv
+  packadd('rainbow_csv')
+
+  -- Filetype: pandoc and rmarkdown
+  ---- This option should be set before loading plugin to take effect. See
+  ---- https://github.com/vim-pandoc/vim-pandoc/issues/342
+  vim.g['pandoc#filetypes#pandoc_markdown'] = 0
+  -- vim.cmd([[let g:pandoc#filetypes#pandoc_markdown = 0]])
+  packadd('vim-pandoc')
+  packadd('vim-pandoc-syntax')
+  packadd('vim-rmarkdown')
+
+  -- Filetype: markdown
+  packadd('vim-markdown')
+
+  -- Markdown preview (has rather big disk size usage, around 50M)
+  packadd('markdown-preview')
 end
 
 -- Do plugin hooks (find a better way to do this; maybe after custom update)
@@ -92,6 +121,15 @@ function _G.plugin_hooks()
 
   -- Ensure most recent treesitter parsers
   vim.cmd('silent TSUpdate')
+
+  -- -- Ensure most recent 'vim-doge'
+  -- vim.cmd('silent call doge#install()')
+
+  -- -- Ensure most recent markdown-preview
+  -- -- NOTE: this worked before moving to 'pack/plugins/opt' structure.  After
+  -- -- that, doing manual installation worked instead (`cd app | yarn
+  -- -- install`, which needs `yarn` installed).
+  -- vim.cmd('call mkdp#util#install()')
 
   -- Destroy this function
   _G.plugin_hooks = nil
