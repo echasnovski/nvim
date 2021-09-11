@@ -115,17 +115,19 @@ function _G.plugin_hooks()
   -- Ensure most recent help tags
   vim.cmd('helptags ALL')
 
-  -- Ensure most recent treesitter parsers
-  vim.cmd('silent TSUpdate')
+  if vim.fn.exists('vscode') ~= 1 then
+    -- Ensure most recent treesitter parsers
+    vim.cmd('silent TSUpdate')
 
-  -- -- Ensure most recent 'vim-doge'
-  -- vim.cmd('silent call doge#install()')
+    -- -- Ensure most recent 'vim-doge'
+    -- vim.cmd('silent call doge#install()')
 
-  -- -- Ensure most recent markdown-preview
-  -- -- NOTE: this worked before moving to 'pack/plugins/opt' structure.  After
-  -- -- that, doing manual installation worked instead (`cd app | yarn
-  -- -- install`, which needs `yarn` installed).
-  -- vim.cmd('call mkdp#util#install()')
+    -- -- Ensure most recent markdown-preview
+    -- -- NOTE: this worked before moving to 'pack/plugins/opt' structure.  After
+    -- -- that, doing manual installation worked instead (`cd app | yarn
+    -- -- install`, which needs `yarn` installed).
+    -- vim.cmd('call mkdp#util#install()')
+  end
 
   -- Destroy this function
   _G.plugin_hooks = nil
