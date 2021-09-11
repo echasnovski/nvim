@@ -1,3 +1,6 @@
+local has_nvim_tree, nvim_tree = pcall(require, 'nvim-tree')
+if not has_nvim_tree then return end
+
 vim.g.nvim_tree_add_trailing = 1
 vim.g.nvim_tree_auto_resize = 0
 vim.g.nvim_tree_follow = 0
@@ -39,7 +42,7 @@ function _G.nvim_tree_go_in()
   end
 
   -- Peform 'edit' action
-  require('nvim-tree').on_keypress('edit')
+  nvim_tree.on_keypress('edit')
 
   -- Don't do anything if tree is not in focus
   if vim.api.nvim_buf_get_option(0, 'filetype') ~= 'NvimTree' then
@@ -62,7 +65,7 @@ function _G.nvim_tree_go_out()
     return
   end
 
-  require('nvim-tree').on_keypress('close_node')
+  nvim_tree.on_keypress('close_node')
 end
 
 vim.g.nvim_tree_bindings = {
