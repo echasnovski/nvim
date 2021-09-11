@@ -7,7 +7,7 @@ if !exists('g:vscode')
   " Add spellcheck options for autocomplete
   set complete+=kspell
   " Use specific dictionaries
-  set dictionary=~/.config/nvim/dict/english.txt
+  set dictionary=$HOME/.config/nvim/misc/dict/english.txt
 
   " Treat parts of camelCase words as seprate words
   set spelloptions=camel

@@ -49,8 +49,8 @@ if !exists('g:vscode')
   set foldnestmax=10     " Create folds only for some number of nested levels
   set foldcolumn=0       " Disable fold column
 
-  set undofile                           " Enable persistent undo
-  set undodir=$HOME/.config/nvim/undodir " Set directory for persistent undo
+  set undofile                                " Enable persistent undo
+  set undodir=$HOME/.config/nvim/misc/undodir " Set directory for persistent undo
 
   " Define pattern for a start of 'numbered' list. This is responsible for
   " correct formatting of lists when using `gq`. This basically reads as 'one

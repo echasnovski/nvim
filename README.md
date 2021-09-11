@@ -1,6 +1,8 @@
 # NeoVim setup
 
-This is a setup for Neovim>=0.5.
+This is a setup for Neovim>=0.5. Structure:
+
+TODO: describe structure after refactoring.
 
 ## Installation
 
@@ -135,7 +137,7 @@ Important system dependencies:
 - Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'general/settings.vim' as 'g:python3_host_prog' variable.
 - Important dependency is `node.js`. Path to it should be changed in 'general/settings.vim' as 'g:node_host_prog' variable. Help for updating its version using `npm`: https://phoenixnap.com/kb/update-node-js-version.
 - Output of `:checkhealth` can show that there is a problem with node installation. For some reason, it tries to run `node '[path/to/node] --version'` instead of correct `'[path/to/node]' --version`.
-- Two directories ('session' and 'undodir') are placeholders for local use (vim sessions and vim's persistent undo). They both have '.gitignore' files (which instruct to ignore everything in that directory, except '.gitignore' itself to have git recognize them) so that they will be automatically created when pulling this repository.
+- Two directories ('misc/session' and 'misc/undodir') are placeholders for local use (vim sessions and vim's persistent undo). They both have '.gitignore' files (which instruct to ignore everything in that directory, except '.gitignore' itself to have git recognize them) so that they will be automatically created when pulling this repository.
 - For tags to work correctly in R projects, add appropriate '.ctags' file. Currently the source can be found at https://tinyheero.github.io/2017/05/13/r-vim-ctags.html.
 - 'Pyright' language server currently by default uses python interpreter that is active when Neovim is opened. However, if using virtual environment, it is a good idea to create 'pyrightconfig.json' file with at least the following content:
     ```

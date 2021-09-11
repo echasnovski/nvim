@@ -1,4 +1,4 @@
-vim.g.startify_session_dir = '~/.config/nvim/session'
+vim.g.startify_session_dir = '~/.config/nvim/misc/sessions'
 
 vim.g.startify_lists = {
   { type = 'sessions', header = { '   Sessions' } },
