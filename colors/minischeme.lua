@@ -1,18 +1,18 @@
 -- 'Minischeme' color scheme
--- Derived from base16 (https://github.com/chriskempson/base16) and mini16
--- palette generator
+-- Derived from base16 (https://github.com/chriskempson/base16) and
+-- mini_palette palette generator
 local use_cterm, palette
 
 -- Dark palette is an output of 'MiniBase16.mini_palette':
--- - Background '#1e2634' (LCh(uv) = 15-10-250)
+-- - Background '#112641' (LCh(uv) = 15-20-250)
 -- - Foreground '#e2ea7c' (Lch(uv) = 90-70-90)
 -- - Accent chroma 70
 if vim.o.background == 'dark' then
   palette = {
-    base00 = '#1e2634',
-    base01 = '#414753',
-    base02 = '#656b76',
-    base03 = '#8c919c',
+    base00 = '#112641',
+    base01 = '#3a475e',
+    base02 = '#606b81',
+    base03 = '#8791a7',
     base04 = '#d5dd6e',
     base05 = '#e2ea7c',
     base06 = '#eff78a',
@@ -22,15 +22,15 @@ if vim.o.background == 'dark' then
     base0A = '#4da340',
     base0B = '#a4f69b',
     base0C = '#c671cb',
-    base0D = '#5bf5ff',
+    base0D = '#5cf5ff',
     base0E = '#ffc6ff',
     base0F = '#00a3c2',
   }
   use_cterm = {
     base00 = 235,
     base01 = 238,
-    base02 = 242,
-    base03 = 246,
+    base02 = 60,
+    base03 = 103,
     base04 = 185,
     base05 = 186,
     base06 = 228,
@@ -47,15 +47,15 @@ if vim.o.background == 'dark' then
 end
 
 -- Dark palette is an 'inverted dark', output of 'MiniBase16.mini_palette':
--- - Background '#E2E4D6' (LCh(uv) = 90-10-90)
+-- - Background '#E2E5CA' (LCh(uv) = 90-20-90)
 -- - Foreground '#002DA0' (Lch(uv) = 15-70-250)
 -- - Accent chroma 70
 if vim.o.background == 'light' then
   palette = {
-    base00 = '#e2e4d6',
-    base01 = '#bec0b2',
-    base02 = '#9b9d8f',
-    base03 = '#797b6d',
+    base00 = '#e2e5ca',
+    base01 = '#bec1a6',
+    base02 = '#9b9e82',
+    base03 = '#797c60',
     base04 = '#3d4eaf',
     base05 = '#002da0',
     base06 = '#0000ff',
@@ -64,7 +64,7 @@ if vim.o.background == 'light' then
     base09 = '#ab6b1a',
     base0A = '#028d30',
     base0B = '#004d00',
-    base0C = '#b555ae',
+    base0C = '#b554ae',
     base0D = '#005077',
     base0E = '#7d0075',
     base0F = '#008ab1',
@@ -73,7 +73,7 @@ if vim.o.background == 'light' then
     base00 = 254,
     base01 = 250,
     base02 = 247,
-    base03 = 243,
+    base03 = 101,
     base04 = 61,
     base05 = 19,
     base06 = 21,
