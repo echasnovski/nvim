@@ -765,7 +765,7 @@ end
 ---- Distances
 function H.dist_circle(x, y)
   local d = math.abs(x - y) % 360
-  return d > math.pi and (360 - d) or d
+  return d > 180 and (360 - d) or d
 end
 
 function H.dist_circle_set(set1, set2)
