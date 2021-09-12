@@ -176,6 +176,15 @@ leader_nmap.T = {
 
 -- Make mappings manually to not depend on which-key (because it might not be
 -- available for some reason, like when run inside VS Code)
+local default_opts = {
+  noremap = true,
+  silent = true,
+  expr = false,
+  nowait = false,
+  script = false,
+  unique = false,
+}
+
 local function map_leader_tree(tree, mode, prefix)
   if type(tree) ~= 'table' then
     return
@@ -184,14 +193,15 @@ local function map_leader_tree(tree, mode, prefix)
   prefix = prefix or ''
 
   if type(tree[1]) == 'string' then
-    local opts = {
-      noremap = tree.noremap or true,
-      silent = tree.silent or true,
-      expr = tree.expr or false,
-      nowait = tree.nowait or false,
-      script = tree.script or false,
-      unique = tree.unique or false,
+    local tree_opts = {
+      noremap = tree.noremap,
+      silent = tree.silent,
+      expr = tree.expr,
+      nowait = tree.nowait,
+      script = tree.script,
+      unique = tree.unique,
     }
+    local opts = vim.tbl_deep_extend('force', default_opts, tree_opts)
     vim.api.nvim_set_keymap(mode, string.format('<Leader>%s', prefix), tree[1], opts)
     return
   end
