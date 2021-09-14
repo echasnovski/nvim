@@ -104,7 +104,6 @@ leader_nmap.o = {
   ['H'] = { [[<Cmd>TSBufToggle highlight<CR>]],        'highlight toggle' },
   ['l'] = { [[<Cmd>SidewaysRight<CR>]],                'move arg right' },
   ['r'] = { [[<Cmd>call ResizeToColorColumn()<CR>]],   'resize to colorcolumn' },
-  ['S'] = { [[<Cmd>call SpellCompletionToggle()<CR>]], 'spell completion toggle' },
   ['s'] = { [[<Cmd>setlocal spell! spell?<CR>]],       'spell toggle' },
   ['t'] = { [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'trim trailspace' },
   ['T'] = { [[<Cmd>lua MiniTrailspace.toggle()<CR>]],  'trailspace hl toggle' },

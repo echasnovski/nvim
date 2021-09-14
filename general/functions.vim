@@ -111,22 +111,6 @@ function GetGutterWidth()
   return winwidth(0) - l:last_col
 endfunction
 
-" Toggle spelling
-let g:_custom_spell_completion_enabled = 1
-function SpellCompletionToggle()
-  if g:_custom_spell_completion_enabled == 1
-    echo "Disable spell completion"
-    set complete-=k
-    set complete-=kspell
-    set complete-=kdict
-    let g:_custom_spell_completion_enabled = 0
-  else
-    echo "Enable spell completion"
-    set complete+=kspell,kdict,k
-    let g:_custom_spell_completion_enabled = 1
-  end
-endfunction
-
 " Create scratch buffer
 function Scratch()
   enew
