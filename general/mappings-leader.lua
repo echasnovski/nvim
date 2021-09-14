@@ -108,7 +108,7 @@ leader_nmap.o = {
   ['t'] = { [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'trim trailspace' },
   ['T'] = { [[<Cmd>lua MiniTrailspace.toggle()<CR>]],  'trailspace hl toggle' },
   ['w'] = { [[<Cmd>setlocal wrap! wrap?<CR>]],         'wrap toggle' },
-  ['z'] = { [[<Cmd>call Zoom()<CR>]],                  'zoom' },
+  ['z'] = { [[<Cmd>lua _G.zoom_toggle()<CR>]],         'zoom toggle' },
 }
 
 -- r is for 'R'
@@ -149,7 +149,7 @@ leader_xmap.s = {
 leader_nmap.t = {
   ['name'] = '+terminal',
   -- `ShowActiveNeotermREPL()` is defined in 'general/functions.vim'
-  ['a'] = { [[<Cmd>call ShowActiveNeotermREPL()<CR>]],  'echo active REPL id' },
+  ['a'] = { [[<Cmd>lua _G.print_active_neoterm()<CR>]], 'print active REPL id' },
   ['C'] = { [[<Cmd>TcloseAll!<CR>]],                    'close all terminals' },
   ['c'] = { [[:<C-u>exec v:count."Tclose\!"<CR>]],      'close term (prepend by id)' },
   ['f'] = { [[:<C-u>exec "TREPLSetTerm ".v:count<CR>]], 'focus term (prepend by id)' },

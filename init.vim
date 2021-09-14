@@ -1,6 +1,7 @@
 " Always source these
 luafile $HOME/.config/nvim/general/settings.lua
 source $HOME/.config/nvim/general/functions.vim
+luafile $HOME/.config/nvim/general/functions.lua
 luafile $HOME/.config/nvim/general/mappings.lua
 luafile $HOME/.config/nvim/general/mappings-leader.lua
 

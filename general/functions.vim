@@ -1,17 +1,3 @@
-" Show Neoterm's active REPL, i.e. in which command will be executed when one
-" of `TREPLSend*` will be used
-function ShowActiveNeotermREPL()
-  if exists("g:neoterm.repl") && exists("g:neoterm.repl.instance_id")
-    let l:msg = "Active REPL neoterm id: " . g:neoterm.repl.instance_id
-  elseif g:neoterm.last_id != 0
-    let l:msg = "Active REPL neoterm id: " . g:neoterm.last_id
-  else
-    let l:msg = "No active REPL"
-  endif
-
-  echo l:msg
-endfunction
-
 " Split functional sequence into lines ending with pattern.
 " This is designed to be mostly used to format R's pipe (`%>%`) sequences.
 " Prerequisite for proper usage:
@@ -44,21 +30,6 @@ function SplitPattern(pattern)
     execute "normal! a\<CR>"
     return v:true
   endif
-endfunction
-
-" Zoom into a pane, making it full screen (in a tab)
-" This function is useful when working with multiple panes but temporarily
-" needing to zoom into one to see more of the code from that buffer.
-" Triggering the function again from the zoomed in tab brings it back to its
-" original pane location
-" Source: https://github.com/nicknisi/dotfiles/blob/master/config/nvim/plugin/zoom.vim
-function Zoom()
-    if winnr('$') > 1
-        tab split
-    elseif len(filter(map(range(tabpagenr('$')), 'tabpagebuflist(v:val + 1)'),
-        \ 'index(v:val, ' . bufnr('') . ') >= 0')) > 1
-        tabclose
-    endif
 endfunction
 
 " Resize so that first defined colorcolumn is displayed at the last column of
