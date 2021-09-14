@@ -35,6 +35,7 @@ vim.opt.shortmess:append('F') -- Don't give the file info when editing a file
 vim.opt.incsearch     = true  -- Show search results while typing
 vim.opt.showmode      = false -- Don't show things like --INSERT -- (it is handled in statusline)
 vim.opt.colorcolumn   = '+1'  -- Draw colored column one step to the right of desired maximum width
+vim.opt.linebreak     = true  -- Wrap long lines at 'breakat' (if 'wrap' is set)
 
 -- Editing
 vim.opt.expandtab   = true    -- Convert tabs to spaces

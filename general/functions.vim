@@ -1,37 +1,3 @@
-" Wrap-unwrap text
-function StartWrap()
-  setlocal wrap linebreak nolist
-  setlocal display+=lastline
-  noremap  <buffer> <silent> <Up>   gk
-  noremap  <buffer> <silent> <Down> gj
-  noremap  <buffer> <silent> <Home> g0
-  noremap  <buffer> <silent> <End>  g$
-  " Using `<cmd>normal!` doesn't trigger switch to normal mode (which might
-  " make statusline's mode section 'blink')
-  inoremap <buffer> <silent> <Up>   <cmd>normal! gk<CR>
-  inoremap <buffer> <silent> <Down> <cmd>normal! gj<CR>
-  inoremap <buffer> <silent> <Home> <cmd>normal! g0<CR>
-  inoremap <buffer> <silent> <End>  <cmd>normal! g$<CR>
-endfunction
-
-function ToggleWrap()
-  if &wrap
-    echo "Wrap OFF"
-    setlocal nowrap
-    silent! nunmap <buffer> <Up>
-    silent! nunmap <buffer> <Down>
-    silent! nunmap <buffer> <Home>
-    silent! nunmap <buffer> <End>
-    silent! iunmap <buffer> <Up>
-    silent! iunmap <buffer> <Down>
-    silent! iunmap <buffer> <Home>
-    silent! iunmap <buffer> <End>
-  else
-    echo "Wrap ON"
-    call StartWrap()
-  endif
-endfunction
-
 " Show Neoterm's active REPL, i.e. in which command will be executed when one
 " of `TREPLSend*` will be used
 function ShowActiveNeotermREPL()

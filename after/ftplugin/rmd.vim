@@ -4,7 +4,7 @@ runtime! ftplugin/r.vim
 " Manually copy some settings from 'markdown.vim' to avoid conflicts with
 " 'vim-markdown' extension
 setlocal spell " Enable spelling
-execute StartWrap()
+setlocal wrap  " Enable line wrap
 
 function RmdBlock()
   call append(line("."), "```")
