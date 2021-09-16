@@ -26,7 +26,8 @@
       {
         "language": [
           "markdown",
-          "rmd"
+          "rmd",
+          "rmarkdown"
         ],
         "path": "./markdown.json"
       },
@@ -39,7 +40,8 @@
       {
         "language": [
           "r",
-          "rmd"
+          "rmd",
+          "rmarkdown"
         ],
         "path": "./r.json"
       }

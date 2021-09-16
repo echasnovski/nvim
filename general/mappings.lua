@@ -31,9 +31,6 @@ keymap('x', [[s]], [[<Nop>]])
 -- Copy to system clipboard
 keymap('v', [[<C-c>]], [["+y]])
 
--- Write current buffer with sudo privileges
-keymap('c', [[w!!]], [[w !sudo tee %]])
-
 -- Move with <Alt-hjkl> in non-normal mode. Don't `noremap` in insert mode to
 -- have these keybindings behave exactly like arrows (crucial inside
 -- TelescopePrompt)
@@ -45,9 +42,10 @@ keymap('t', [[<M-h>]], [[<Left>]])
 keymap('t', [[<M-j>]], [[<Down>]])
 keymap('t', [[<M-k>]], [[<Up>]])
 keymap('t', [[<M-l>]], [[<Right>]])
----- Move only sideways in command mode
-keymap('c', [[<M-h>]], [[<Left>]])
-keymap('c', [[<M-l>]], [[<Right>]])
+---- Move only sideways in command mode. Using `silent = false` makes movements
+---- to be immediately shown.
+keymap('c', [[<M-h>]], [[<Left>]], { silent = false })
+keymap('c', [[<M-l>]], [[<Right>]], { silent = false })
 
 -- Move between buffers
 if vim.fn.exists('g:vscode') == 1 then
