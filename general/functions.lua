@@ -28,3 +28,9 @@ _G.zoom_toggle = function()
     vim.cmd([[normal! zz]])
   end
 end
+
+-- Create scratch buffer and focus on it
+_G.new_scratch_buffer = function()
+  local buf = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_win_set_buf(0, buf)
+end

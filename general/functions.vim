@@ -82,14 +82,6 @@ function GetGutterWidth()
   return winwidth(0) - l:last_col
 endfunction
 
-" Create scratch buffer
-function Scratch()
-  enew
-  setlocal buftype=nofile
-  setlocal bufhidden=hide
-  setlocal noswapfile
-endfunction
-
 " Add multiple consecutive comment leader
 function AddMultipleCommentLeader()
   if &commentstring == '' | return | endif
