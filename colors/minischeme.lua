@@ -5,26 +5,26 @@ local use_cterm, palette
 
 -- Dark palette is an output of 'MiniBase16.mini_palette':
 -- - Background '#112641' (LCh(uv) = 15-20-250)
--- - Foreground '#e2ea7c' (Lch(uv) = 90-70-90)
--- - Accent chroma 70
+-- - Foreground '#e2eb66' (Lch(uv) = 90-80-90)
+-- - Accent chroma 80
 if vim.o.background == 'dark' then
   palette = {
     base00 = '#112641',
     base01 = '#3a475e',
     base02 = '#606b81',
     base03 = '#8791a7',
-    base04 = '#d5dd6e',
-    base05 = '#e2ea7c',
-    base06 = '#eff78a',
-    base07 = '#fcff98',
-    base08 = '#ffd1a5',
-    base09 = '#c97f4d',
-    base0A = '#4da340',
-    base0B = '#a4f69b',
-    base0C = '#c671cb',
-    base0D = '#5cf5ff',
-    base0E = '#ffc6ff',
-    base0F = '#00a3c2',
+    base04 = '#d5de55',
+    base05 = '#e2eb66',
+    base06 = '#eff876',
+    base07 = '#fbff85',
+    base08 = '#ffce9b',
+    base09 = '#cf7c3e',
+    base0A = '#3fa52b',
+    base0B = '#9af98f',
+    base0C = '#ce6ad3',
+    base0D = '#0cf8ff',
+    base0E = '#ffc1ff',
+    base0F = '#00a6c9',
   }
   use_cterm = {
     base00 = 235,
@@ -32,57 +32,57 @@ if vim.o.background == 'dark' then
     base02 = 60,
     base03 = 103,
     base04 = 185,
-    base05 = 186,
+    base05 = 185,
     base06 = 228,
     base07 = 228,
-    base08 = 223,
+    base08 = 222,
     base09 = 173,
-    base0A = 71,
-    base0B = 156,
+    base0A = 70,
+    base0B = 120,
     base0C = 170,
-    base0D = 87,
-    base0E = 225,
-    base0F = 37,
+    base0D = 14,
+    base0E = 219,
+    base0F = 38,
   }
 end
 
 -- Dark palette is an 'inverted dark', output of 'MiniBase16.mini_palette':
--- - Background '#E2E5CA' (LCh(uv) = 90-20-90)
--- - Foreground '#002DA0' (Lch(uv) = 15-70-250)
--- - Accent chroma 70
+-- - Background '#e2e5ca' (LCh(uv) = 90-20-90)
+-- - Foreground '#0031ce' (Lch(uv) = 15-80-250)
+-- - Accent chroma 80
 if vim.o.background == 'light' then
   palette = {
     base00 = '#e2e5ca',
-    base01 = '#bec1a6',
-    base02 = '#9b9e82',
-    base03 = '#797c60',
-    base04 = '#3d4eaf',
-    base05 = '#002da0',
-    base06 = '#0000ff',
+    base01 = '#c1c4a9',
+    base02 = '#a1a489',
+    base03 = '#82856a',
+    base04 = '#505fe1',
+    base05 = '#0031ce',
+    base06 = '#876900',
     base07 = '#070500',
-    base08 = '#662c00',
-    base09 = '#ab6b1a',
-    base0A = '#028d30',
-    base0B = '#004d00',
-    base0C = '#b554ae',
-    base0D = '#005077',
-    base0E = '#7d0075',
-    base0F = '#008ab1',
+    base08 = '#793800',
+    base09 = '#ba7200',
+    base0A = '#00992b',
+    base0B = '#005d00',
+    base0C = '#c657be',
+    base0D = '#005f8b',
+    base0E = '#900088',
+    base0F = '#0096c2',
   }
   use_cterm = {
     base00 = 254,
     base01 = 250,
-    base02 = 247,
+    base02 = 144,
     base03 = 101,
-    base04 = 61,
-    base05 = 19,
-    base06 = 21,
+    base04 = 62,
+    base05 = 26,
+    base06 = 94,
     base07 = 0,
-    base08 = 52,
+    base08 = 94,
     base09 = 130,
-    base0A = 29,
+    base0A = 28,
     base0B = 22,
-    base0C = 133,
+    base0C = 169,
     base0D = 24,
     base0E = 90,
     base0F = 31,
