@@ -32,56 +32,6 @@ function SplitPattern(pattern)
   endif
 endfunction
 
-" Resize so that first defined colorcolumn is displayed at the last column of
-" the window. If no `colorcolumn` option is set, resize to maximum from
-" `textwidth` option and 60 (just some appropriate number).
-function ResizeToColorColumn()
-  " Compute number of columns in the resulting width
-  if &colorcolumn == ""
-    let l:width = max([&textwidth, 60])
-    echo "No colorcolumn. Resizing to `max([&textwidth, 60])`"
-  else
-    let l:cc = split(&colorcolumn, ",")[0]
-
-    if l:cc[0] =~# '[\-\+]'
-      " If textwidth is zero, do nothing (as there is no color column)
-      if &textwidth == 0
-        echo "No resizing because `textwidth` is 0 and `colorcolumn` is relative"
-        return
-      endif
-      let l:width = &textwidth + str2nr(l:cc)
-    else
-      let l:width = l:cc
-    endif
-  endif
-
-  " Get width of the 'non-editable' side area (gutter)
-  let l:gutterwidth = GetGutterWidth()
-
-  " Resize
-  let l:win_width = l:width + l:gutterwidth
-  execute "vertical resize " . l:win_width
-endfunction
-
-function GetGutterWidth()
-  " Compute number of 'editable' columns in current window
-  "" Store current options
-  let l:virtedit = &virtualedit
-  let l:curpos = getpos('.')
-
-  "" Move cursor to the last visible column
-  set virtualedit=all
-  norm! g$
-  let l:last_col = virtcol('.')
-
-  "" Restore options
-  let &virtualedit=l:virtedit
-  call setpos(".", l:curpos)
-
-  " Compute result
-  return winwidth(0) - l:last_col
-endfunction
-
 " Add multiple consecutive comment leader
 function AddMultipleCommentLeader()
   if &commentstring == '' | return | endif
