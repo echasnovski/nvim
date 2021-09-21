@@ -122,29 +122,27 @@ MiniStatusline.set_vim_settings = true
 
 -- Module functionality
 function MiniStatusline.active()
-  local mode_info = MiniStatusline.modes[vim.fn.mode()]
-
   -- stylua: ignore start
-  local mode        = MiniStatusline.section_mode({ mode_info = mode_info, trunc_width = 120 })
-  local spell       = MiniStatusline.section_spell({ trunc_width = 120 })
-  local wrap        = MiniStatusline.section_wrap()
-  local git         = MiniStatusline.section_git({ trunc_width = 75 })
-  local diagnostics = MiniStatusline.section_diagnostics({ trunc_width = 75 })
-  local filename    = MiniStatusline.section_filename({ trunc_width = 140 })
-  local fileinfo    = MiniStatusline.section_fileinfo({ trunc_width = 120 })
-  local location    = MiniStatusline.section_location()
+  local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
+  local spell         = MiniStatusline.section_spell({ trunc_width = 120 })
+  local wrap          = MiniStatusline.section_wrap({ trunc_width = 120 })
+  local git           = MiniStatusline.section_git({ trunc_width = 75 })
+  local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+  local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
+  local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
+  local location      = MiniStatusline.section_location({ trunc_width = 75 })
 
   -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
   -- correct padding with spaces between groups (accounts for 'missing'
   -- sections, etc.)
   return MiniStatusline.combine_groups({
-    { hl = mode_info.hl,                strings = { mode, spell, wrap } },
+    { hl = mode_hl,                     strings = { mode, spell, wrap } },
     { hl = '%#MiniStatuslineDevinfo#',  strings = { git, diagnostics } },
     '%<', -- Mark general truncate point
     { hl = '%#MiniStatuslineFilename#', strings = { filename } },
     '%=', -- End left alignment
     { hl = '%#MiniStatuslineFileinfo#', strings = { fileinfo } },
-    { hl = mode_info.hl,                strings = { location } },
+    { hl = mode_hl,                     strings = { location } },
   })
   -- stylua: ignore end
 end
@@ -204,42 +202,48 @@ MiniStatusline.modes = setmetatable({
 })
 -- stylua: ignore end
 
-function MiniStatusline.section_mode(arg)
-  local mode = H.is_truncated(arg.trunc_width) and arg.mode_info.short or arg.mode_info.long
+function MiniStatusline.section_mode(args)
+  local mode_info = MiniStatusline.modes[vim.fn.mode()]
 
-  return mode
+  local mode = H.is_truncated(args.trunc_width) and mode_info.short or mode_info.long
+
+  return mode, mode_info.hl
 end
 
 ---- Spell
-function MiniStatusline.section_spell(arg)
+function MiniStatusline.section_spell(args)
   if not vim.wo.spell then
     return ''
   end
 
-  if H.is_truncated(arg.trunc_width) then
-    return 'SPELL'
+  if H.is_truncated(args.trunc_width) then
+    return 'SP'
   end
 
   return string.format('SPELL(%s)', vim.bo.spelllang)
 end
 
 ---- Wrap
-function MiniStatusline.section_wrap()
+function MiniStatusline.section_wrap(args)
   if not vim.wo.wrap then
     return ''
+  end
+
+  if H.is_truncated(args.trunc_width) then
+    return 'WR'
   end
 
   return 'WRAP'
 end
 
 ---- Git
-function MiniStatusline.section_git(arg)
+function MiniStatusline.section_git(args)
   if H.isnt_normal_buffer() then
     return ''
   end
 
   local head = vim.b.gitsigns_head or '-'
-  local signs = H.is_truncated(arg.trunc_width) and '' or (vim.b.gitsigns_status or '')
+  local signs = H.is_truncated(args.trunc_width) and '' or (vim.b.gitsigns_status or '')
 
   if signs == '' then
     if head == '-' then
@@ -251,11 +255,11 @@ function MiniStatusline.section_git(arg)
 end
 
 ---- Diagnostics
-function MiniStatusline.section_diagnostics(arg)
+function MiniStatusline.section_diagnostics(args)
   -- Assumption: there are no attached clients if table
   -- `vim.lsp.buf_get_clients()` is empty
   local hasnt_attached_client = next(vim.lsp.buf_get_clients()) == nil
-  local dont_show_lsp = H.is_truncated(arg.trunc_width) or H.isnt_normal_buffer() or hasnt_attached_client
+  local dont_show_lsp = H.is_truncated(args.trunc_width) or H.isnt_normal_buffer() or hasnt_attached_client
   if dont_show_lsp then
     return ''
   end
@@ -277,11 +281,11 @@ function MiniStatusline.section_diagnostics(arg)
 end
 
 ---- File name
-function MiniStatusline.section_filename(arg)
+function MiniStatusline.section_filename(args)
   -- In terminal always use plain name
   if vim.bo.buftype == 'terminal' then
     return '%t'
-  elseif H.is_truncated(arg.trunc_width) then
+  elseif H.is_truncated(args.trunc_width) then
     -- File name with 'truncate', 'modified', 'readonly' flags
     -- Use relative path if truncated
     return '%f%m%r'
@@ -292,7 +296,7 @@ function MiniStatusline.section_filename(arg)
 end
 
 ---- File information
-function MiniStatusline.section_fileinfo(arg)
+function MiniStatusline.section_fileinfo(args)
   local filetype = vim.bo.filetype
 
   -- Don't show anything if can't detect file type or not inside a "normal
@@ -308,7 +312,7 @@ function MiniStatusline.section_fileinfo(arg)
   end
 
   -- Construct output string if truncated
-  if H.is_truncated(arg.trunc_width) then
+  if H.is_truncated(args.trunc_width) then
     return filetype
   end
 
@@ -321,8 +325,12 @@ function MiniStatusline.section_fileinfo(arg)
 end
 
 ---- Location inside buffer
-function MiniStatusline.section_location()
+function MiniStatusline.section_location(args)
   -- Use virtual column number to allow update when paste last column
+  if H.is_truncated(args.trunc_width) then
+    return '%l│%2v'
+  end
+
   return '%l|%L│%2v|%-2{col("$") - 1}'
 end
 
