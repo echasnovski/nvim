@@ -87,9 +87,8 @@ vim.cmd([[augroup CustomSettings]])
   -- But insert comment leader after hitting <CR> and respect 'numbered' lists
   vim.cmd([[autocmd FileType * setlocal formatoptions+=r formatoptions+=n]])
 
-  -- Allow multiple consecutive 'default' comment leaders to be treated as
-  -- comment leader
-  vim.cmd([[autocmd FileType * call AddMultipleCommentLeader()]])
+  -- Allow nested 'default' comment leaders to be treated as comment leader
+  vim.cmd([[autocmd FileType * lua _G.add_nested_comment_leader()]])
 
   -- Start integrated terminal already in insert mode
   vim.cmd([[autocmd TermOpen * startinsert]])

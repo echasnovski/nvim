@@ -95,3 +95,47 @@ H.default_text_width = function(win_id)
     return textwidth
   end
 end
+
+-- Add possibility of nested comment leader. This works by parsing
+-- 'commentstring' buffer option, extracting non-whitespace comment leader
+-- (symbols on the left of commented line), and modifying 'comments' option (by
+-- prepending `n:<leader>`). Does nothing if 'commentstring' is empty or has
+-- comment symbols both in front and back (like '/*%s*/').
+--
+-- Nested comment leader added with this function is useful for formatting
+-- nested comments. For example, have in Lua have 'first-level' comments with
+-- '--' and 'second-level' comments with '----'. With nested comment leader
+-- second type can be formatted with `gq` in the same way as first one.
+--
+-- Recommended usage is with `autocmd`:
+-- `autocmd FileType * lua _G.add_nested_comment_leader()`
+--
+-- @param buf_id Identifier of buffer in which function will operate. Default:
+--   current buffer (identifier 0). NOTE: for most filetypes 'commentstring'
+--   option is added only when buffer with this filetype is entered, so using
+--   non-current `buf_id` can not lead to desired effect.
+_G.add_nested_comment_leader = function(buf_id)
+  buf_id = buf_id or 0
+
+  local commentstring = vim.api.nvim_buf_get_option(buf_id, 'commentstring')
+  if commentstring == '' then
+    return
+  end
+
+  -- Extract raw comment leader from 'commentstring' option
+  local comment_parts = vim.tbl_filter(function(x)
+    return x ~= ''
+  end, vim.split(commentstring, '%s', true))
+
+  -- Don't do anything if 'commentstring' is like '/*%s*/' (as in 'json')
+  if #comment_parts > 1 then
+    return
+  end
+
+  -- Get comment leader. Remove whitespace and escape 'dangerous' characters
+  local leader = vim.trim(comment_parts[1])
+
+  local comments = vim.api.nvim_buf_get_option(buf_id, 'comments')
+  local new_comments = string.format('n:%s,%s', leader, comments)
+  vim.api.nvim_buf_set_option(buf_id, 'comments', new_comments)
+end
