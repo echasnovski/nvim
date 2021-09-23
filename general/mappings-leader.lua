@@ -122,8 +122,6 @@ leader_nmap.r = {
   ['i'] = { [[<Cmd>T devtools::install(keep_source=TRUE)<CR>]], 'install' },
   ['k'] = { [[<Cmd>T rmarkdown::render("%")<CR>]],              'knit file' },
   ['l'] = { [[<Cmd>T devtools::load_all()<CR>]],                'load all' },
-  -- `SplitFunSeq()` is defined in 'general/functions.vim'
-  ['p'] = { [[<Cmd>call SplitFunSeq("%>%",                      v:true)<CR>]], 'pipe split' },
   ['T'] = { [[<Cmd>T devtools::test_file("%")<CR>]],            'test file' },
   ['t'] = { [[<Cmd>T devtools::test()<CR>]],                    'test' },
 }
