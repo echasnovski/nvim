@@ -108,7 +108,7 @@ end
 -- second type can be formatted with `gq` in the same way as first one.
 --
 -- Recommended usage is with `autocmd`:
--- `autocmd FileType * lua _G.add_nested_comment_leader()`
+-- `autocmd BufEnter * lua pcall(_G.add_nested_comment_leader)`
 --
 -- @param buf_id Identifier of buffer in which function will operate. Default:
 --   current buffer (identifier 0). NOTE: for most filetypes 'commentstring'

@@ -47,5 +47,5 @@ _G.luasnip_notify = function()
   vim.api.nvim_buf_set_virtual_text(0, luasnip_ns, line, { { '!', 'Special' } }, {})
 end
 
-vim.cmd([[au InsertEnter,CursorMovedI,TextChangedI,TextChangedP * lua _G.luasnip_notify()]])
-vim.cmd([[au InsertLeave * lua _G.luasnip_notify_clear()]])
+vim.cmd([[au InsertEnter,CursorMovedI,TextChangedI,TextChangedP * lua pcall(_G.luasnip_notify)]])
+vim.cmd([[au InsertLeave * lua pcall(_G.luasnip_notify_clear)]])
