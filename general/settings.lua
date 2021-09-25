@@ -38,6 +38,17 @@ vim.opt.colorcolumn   = '+1'  -- Draw colored column one step to the right of de
 vim.opt.winwidth      = 80    -- Use this as reference window width
 vim.opt.linebreak     = true  -- Wrap long lines at 'breakat' (if 'wrap' is set)
 
+-- Colors
+vim.opt.background = 'dark'         -- Use dark background
+vim.cmd([[syntax enable]])          -- Enable syntax highlighing
+
+vim.cmd([[colorscheme minischeme]]) -- Use custom 'minischeme' color scheme
+---- Other interesting color schemes:
+---- - 'morhetz/gruvbox'
+---- - 'rakr/vim-one'
+---- - 'ayu-theme/ayu-vim' (use `let ayucolor = 'mirage'`)
+---- - 'arcticicestudio/nord-vim'
+
 -- Editing
 vim.opt.expandtab   = true    -- Convert tabs to spaces
 vim.opt.tabstop     = 2       -- Insert 2 spaces for a tab
