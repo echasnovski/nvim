@@ -63,7 +63,8 @@ end
 -- @param win_id Identifier of window to be resized (`:h win_getid()`). Default:
 --   current window.
 -- @param text_width Number of editable columns resized window will display.
---   Default: computed based on 'colorcolumn', 'textwidth', and 'winwidth'.
+--   Default: first element of 'colorcolumn' or otherwise 'textwidth' (using
+--   screen width as its default but not more than 79).
 _G.resize_window = function(win_id, text_width)
   win_id = win_id or 0
   text_width = text_width or H.default_text_width(win_id)
@@ -71,15 +72,10 @@ _G.resize_window = function(win_id, text_width)
   vim.api.nvim_win_set_width(win_id, text_width + _G.gutter_width(win_id))
 end
 
----- Default editable width is computed based on:
----- - If 'colorcolumn' is set, then width is equal to its first element
-----   converted to absolute number of columns.
----- - If 'colorcolumn' is not set, then return textwidth.
----- - NOTE: if 'textwidth' is zero, 'winwidth' option is used instead.
 H.default_text_width = function(win_id)
   local buf = vim.api.nvim_win_get_buf(win_id)
   local textwidth = vim.api.nvim_buf_get_option(buf, 'textwidth')
-  textwidth = (textwidth == 0) and vim.api.nvim_get_option('winwidth') or textwidth
+  textwidth = (textwidth == 0) and math.min(vim.o.columns, 79) or textwidth
 
   local colorcolumn = vim.api.nvim_win_get_option(win_id, 'colorcolumn')
   if colorcolumn ~= '' then
