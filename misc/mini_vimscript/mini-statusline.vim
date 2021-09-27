@@ -6,10 +6,6 @@ function s:IsTruncated(width)
   return winwidth(0) < a:width
 endfunction
 
-function IsTruncated(width)
-  return winwidth(0) < a:width
-endfunction
-
 function s:IsntNormalBuffer()
   " For more information see ':h buftype'
   return &buftype != ''
