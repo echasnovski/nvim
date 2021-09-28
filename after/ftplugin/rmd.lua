@@ -1,5 +1,5 @@
 -- Copy settings from 'r.vim'
-vim.cmd([[runtime! ftplugin/r.vim]])
+vim.cmd([[runtime! ftplugin/r.lua]])
 
 -- Manually copy some settings from 'markdown.vim' to avoid conflicts with
 -- 'vim-markdown' extension

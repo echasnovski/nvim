@@ -14,6 +14,7 @@ vim.opt.timeoutlen   = 250      -- Faster response at cost of fast typing
 vim.opt.updatetime   = 300      -- Faster CursorHold
 vim.opt.switchbuf    = 'usetab' -- Use already opened buffers when switching
 vim.opt.modeline     = true     -- Allow modeline
+vim.opt.lazyredraw   = true     -- Use lazy redraw
 
 vim.opt.undofile = true                              -- Enable persistent undo
 vim.opt.undodir  = vim.fn.expand('$HOME/.config/nvim/misc/undodir') -- Set directory for persistent undo

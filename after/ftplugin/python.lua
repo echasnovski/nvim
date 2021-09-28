@@ -1,5 +1,5 @@
 -- Show line after desired maximum text width
-vim.wo.colorcolumn = '89'
+vim.opt_local.colorcolumn = '89'
 
 -- Keybindings
 vim.api.nvim_buf_set_keymap(0, 'i', '<M-i>', ' = ', { noremap = true })
