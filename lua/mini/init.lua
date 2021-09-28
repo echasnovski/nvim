@@ -1,3 +1,4 @@
+require('mini.bufremove').setup()
 require('mini.comment').setup()
 require('mini.completion').setup({ lsp_completion = { source_func = 'omnifunc', auto_setup = false } })
 MiniCompletion.lsp_completion.process_items = function(items, base)
