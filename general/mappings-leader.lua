@@ -8,10 +8,12 @@ _G.leader_xmap = {}
 -- b is for 'buffer'
 leader_nmap.b = {
   ['name'] = '+buffer',
-  ['a'] = { [[<Cmd>b#<CR>]],                          'alternate' },
-  ['d'] = { [[<Cmd>Bclose<CR>]],                      'delete' },
-  ['D'] = { [[<Cmd>Bclose!<CR>]],                     'delete!' },
-  ['s'] = { [[<Cmd>lua _G.new_scratch_buffer()<CR>]], 'scratch' },
+  ['a'] = { [[<Cmd>b#<CR>]],                                 'alternate' },
+  ['d'] = { [[<Cmd>lua MiniBufremove.delete()<CR>]],         'delete' },
+  ['D'] = { [[<Cmd>lua MiniBufremove.delete(0, true)<CR>]],  'delete!' },
+  ['s'] = { [[<Cmd>lua _G.new_scratch_buffer()<CR>]],        'scratch' },
+  ['w'] = { [[<Cmd>lua MiniBufremove.wipeout()<CR>]],        'wipeout' },
+  ['W'] = { [[<Cmd>lua MiniBufremove.wipeout(0, true)<CR>]], 'wipeout!' },
 }
 
 -- e is for 'explore'

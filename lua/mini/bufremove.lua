@@ -1,8 +1,8 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
 --
--- Lua module for *minimal* buffer removing (unshow, delete, wipeout). Removing
--- buffer saves window layout (opposite to builtin Neovim's commands). This is
--- mostly a Lua implementation of
+-- Lua module for *minimal* buffer removing (unshow, delete, wipeout), which
+-- saves window layout (opposite to builtin Neovim's commands). This is mostly
+-- a Lua implementation of
 -- [bclose.vim](https://vim.fandom.com/wiki/Deleting_a_buffer_without_closing_the_window).
 -- Other alternatives:
 -- - [vim-bbye](https://github.com/moll/vim-bbye)
@@ -21,7 +21,7 @@
 -- }
 --
 -- Features:
--- -  Which buffer to show in window(s) after desired buffer is removed is
+-- -  Which buffer to show in window(s) after its current buffer is removed is
 --   decided by the algorithm:
 --     - If alternate buffer (see `:h CTRL-^`) is listed (see `:h
 --       buflisted()`), use it.
@@ -53,7 +53,7 @@ MiniBufremove.config = {
 }
 
 -- Module functionality
----- Delete buffer `buf_id` with `:bdelete`
+---- Delete buffer `buf_id` with `:bdelete` after unshowing it.
 ---- @param buf_id Identifier of a buffer to use (0 for current). Default: 0.
 ---- @param force Whether to ignore unsaved changes (using `!` version of
 ----   command). Default: false.
@@ -62,7 +62,7 @@ function MiniBufremove.delete(buf_id, force)
   return H.unshow_and_cmd(buf_id, force, 'bdelete')
 end
 
----- Wipeout buffer `buf_id` with `:bwipeout`
+---- Wipeout buffer `buf_id` with `:bwipeout` after unshowing it.
 ---- @param buf_id Identifier of a buffer to use (0 for current). Default: 0.
 ---- @param force Whether to ignore unsaved changes (using `!` version of
 ----   command). Default: false.
@@ -75,14 +75,13 @@ end
 ---- @param buf_id Identifier of a buffer to use (0 for current). Default: 0.
 ---- @return Boolean showing if operation was successful.
 function MiniBufremove.unshow(buf_id)
-  buf_id = (buf_id == nil) and 0 or buf_id
+  buf_id = H.normalize_buf_id(buf_id)
 
   if not H.is_valid_id(buf_id, 'buffer') then
     return false
   end
 
-  local buf_nr = H.bufnr(buf_id)
-  vim.tbl_map(MiniBufremove.unshow_in_window, vim.fn.win_findbuf(buf_nr))
+  vim.tbl_map(MiniBufremove.unshow_in_window, vim.fn.win_findbuf(buf_id))
 
   return true
 end
@@ -99,7 +98,7 @@ function MiniBufremove.unshow_in_window(win_id)
 
   local cur_buf = vim.api.nvim_win_get_buf(win_id)
 
-  -- Temporary use window `win_id` as current
+  -- Temporary use window `win_id` as current to have Vim's functions working
   vim.api.nvim_win_call(win_id, function()
     -- Try using alternate buffer
     local alt_buf = vim.fn.bufnr('#')
@@ -149,7 +148,7 @@ end
 
 -- Removing implementation
 function H.unshow_and_cmd(buf_id, force, cmd)
-  buf_id = (buf_id == nil) and 0 or buf_id
+  buf_id = H.normalize_buf_id(buf_id)
   force = (force == nil) and false or force
 
   if not H.is_valid_id(buf_id, 'buffer') then
@@ -160,15 +159,11 @@ function H.unshow_and_cmd(buf_id, force, cmd)
     return false
   end
 
-  -- Precompute buffer number before unshowing because otherwise current buffer
-  -- will be invalid
-  local buf_nr = H.bufnr(buf_id)
-
   -- Unshow buffer from all windows
   MiniBufremove.unshow(buf_id)
 
   -- Execute command
-  local command = string.format('%s%s %d', cmd, force and '!' or '', buf_nr)
+  local command = string.format('%s%s %d', cmd, force and '!' or '', buf_id)
   vim.cmd(command)
 
   return true
@@ -209,12 +204,13 @@ function H.can_remove(buf_id, force, fun_name)
   return true
 end
 
----- Compute buffer number: id that is compatible with Vim's commands and
----- functions (`:bdelete`, `win_findbuf()`, etc.). This is neede because
----- buffer id 0 is treated in those commands as alternate buffer instead of
----- current one.
-function H.bufnr(buf_id)
-  return vim.fn.bufnr(buf_id == 0 and '%' or buf_id)
+---- Compute 'true' buffer id (strictly positive integer). Treat `nil` and 0 as
+---- current buffer.
+function H.normalize_buf_id(buf_id)
+  if buf_id == nil or buf_id == 0 then
+    return vim.api.nvim_get_current_buf()
+  end
+  return buf_id
 end
 
 function H.notify(msg)
