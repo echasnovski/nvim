@@ -11,5 +11,7 @@ else
   require('mini')
 end
 
+require('ec.packadd')
+
 -- Everything that should be configured at the end
 require('ec.zzz')

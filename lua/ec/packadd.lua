@@ -1,5 +1,10 @@
 local function packadd(plugin)
+  -- Add plugin
   vim.cmd(string.format([[packadd %s]], plugin))
+
+  -- Try execute its configuration
+  -- NOTE: configuration file should have the same name as plugin directory
+  pcall(require, 'ec.configs.' .. plugin)
 end
 
 -- More text objects
