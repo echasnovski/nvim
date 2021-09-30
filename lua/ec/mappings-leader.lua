@@ -105,12 +105,12 @@ leader_nmap.o = {
   ['h'] = { [[<Cmd>SidewaysLeft<CR>]],                 'move arg left' },
   ['H'] = { [[<Cmd>TSBufToggle highlight<CR>]],        'highlight toggle' },
   ['l'] = { [[<Cmd>SidewaysRight<CR>]],                'move arg right' },
-  ['r'] = { [[<Cmd>lua _G.resize_window()<CR>]],       'resize to default width' },
+  ['r'] = { [[<Cmd>lua MiniMisc.resize_window()<CR>]], 'resize to default width' },
   ['s'] = { [[<Cmd>setlocal spell! spell?<CR>]],       'spell toggle' },
   ['t'] = { [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'trim trailspace' },
   ['T'] = { [[<Cmd>lua MiniTrailspace.toggle()<CR>]],  'trailspace hl toggle' },
   ['w'] = { [[<Cmd>setlocal wrap! wrap?<CR>]],         'wrap toggle' },
-  ['z'] = { [[<Cmd>lua _G.zoom_toggle()<CR>]],         'zoom toggle' },
+  ['z'] = { [[<Cmd>lua MiniMisc.zoom_toggle()<CR>]],   'zoom toggle' },
 }
 
 -- r is for 'R'

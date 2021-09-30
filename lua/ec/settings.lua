@@ -101,7 +101,7 @@ vim.cmd([[augroup CustomSettings]])
   vim.cmd([[autocmd FileType * setlocal formatoptions+=r formatoptions+=n]])
 
   -- Allow nested 'default' comment leaders to be treated as comment leader
-  vim.cmd([[autocmd FileType * lua pcall(_G.add_nested_comment_leader)]])
+  vim.cmd([[autocmd FileType * lua pcall(require('mini.misc').add_nested_comment_leader)]])
 
   -- Start integrated terminal already in insert mode
   vim.cmd([[autocmd TermOpen * startinsert]])
