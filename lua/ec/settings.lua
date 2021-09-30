@@ -40,7 +40,11 @@ vim.opt.linebreak     = true  -- Wrap long lines at 'breakat' (if 'wrap' is set)
 
 -- Colors
 vim.opt.background = 'dark'         -- Use dark background
-vim.cmd([[syntax enable]])          -- Enable syntax highlighing
+
+---- Enable syntax highlighing if it wasn't already (as it is time consuming)
+if vim.fn.exists("syntax_on") ~= 1 then
+  vim.cmd([[syntax enable]])
+end
 
 ---- Use colorscheme later when its plugin is enabled
 vim.cmd([[au VimEnter * ++once colorscheme minischeme]])
@@ -86,9 +90,6 @@ vim.opt.foldcolumn  = '0'      -- Disable fold column
 
 -- Filetype plugins and indentation
 vim.cmd([[filetype plugin indent on]])
-
--- Syntax highlighing
-vim.cmd([[syntax enable]])
 
 -- Custom autocommands
 vim.cmd([[augroup CustomSettings]])

@@ -3,6 +3,16 @@ if not has_treesitter then
   return
 end
 
+-- Enable syntax highlighing if it wasn't already (as it is time consuming)
+-- It should be before treesitter is initialized because otherwise there can be
+-- weird issues:
+-- - When using highlight group like `cterm=underline gui=underline`, it
+--   sometimes changes foreground color defined in default syntax and not in
+--   treesitter.
+if vim.fn.exists("syntax_on") ~= 1 then
+  vim.cmd([[syntax enable]])
+end
+
 require('nvim-treesitter.configs').setup({
   ensure_installed = {
     'bash',
