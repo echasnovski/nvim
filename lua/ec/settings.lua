@@ -42,7 +42,8 @@ vim.opt.linebreak     = true  -- Wrap long lines at 'breakat' (if 'wrap' is set)
 vim.opt.background = 'dark'         -- Use dark background
 vim.cmd([[syntax enable]])          -- Enable syntax highlighing
 
-vim.cmd([[colorscheme minischeme]]) -- Use custom 'minischeme' color scheme
+---- Use colorscheme later when its plugin is enabled
+vim.cmd([[au VimEnter * ++once colorscheme minischeme]])
 ---- Other interesting color schemes:
 ---- - 'morhetz/gruvbox'
 ---- - 'rakr/vim-one'

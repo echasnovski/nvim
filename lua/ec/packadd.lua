@@ -7,6 +7,9 @@ local function packadd(plugin)
   pcall(require, 'ec.configs.' .. plugin)
 end
 
+-- Collection of minimal and fast Lua modules
+packadd('mini')
+
 -- More text objects
 packadd('targets')
 
