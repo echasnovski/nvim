@@ -2,22 +2,22 @@
 
 -- Create global tables with information about leader mappings in certain modes
 -- Structure of tables is taken to be compatible with 'folke/which-key.nvim'.
-_G.leader_nmap = {}
-_G.leader_xmap = {}
+EC.leader_nmap = {}
+EC.leader_xmap = {}
 
 -- b is for 'buffer'
-leader_nmap.b = {
+EC.leader_nmap.b = {
   ['name'] = '+buffer',
   ['a'] = { [[<Cmd>b#<CR>]],                                 'alternate' },
   ['d'] = { [[<Cmd>lua MiniBufremove.delete()<CR>]],         'delete' },
   ['D'] = { [[<Cmd>lua MiniBufremove.delete(0, true)<CR>]],  'delete!' },
-  ['s'] = { [[<Cmd>lua _G.new_scratch_buffer()<CR>]],        'scratch' },
+  ['s'] = { [[<Cmd>lua EC.new_scratch_buffer()<CR>]],        'scratch' },
   ['w'] = { [[<Cmd>lua MiniBufremove.wipeout()<CR>]],        'wipeout' },
   ['W'] = { [[<Cmd>lua MiniBufremove.wipeout(0, true)<CR>]], 'wipeout!' },
 }
 
 -- e is for 'explore'
-leader_nmap.e = {
+EC.leader_nmap.e = {
   ['name'] = '+explore',
   ['P'] = { [[<Cmd>TroubleToggle lsp_document_diagnostics<CR>]],              'problems document' },
   ['n'] = { [[<Cmd>TroubleToggle todo<CR>]],                                  'notes (todo, etc.)' },
@@ -27,7 +27,7 @@ leader_nmap.e = {
 }
 
 -- f is for 'fuzzy find'
-leader_nmap.f = {
+EC.leader_nmap.f = {
   ['name'] = '+find',
   ['/'] = { [[<Cmd>Telescope search_history<CR>]],            '"/" history' },
   [':'] = { [[<Cmd>Telescope command_history<CR>]],           'commands' },
@@ -37,7 +37,7 @@ leader_nmap.f = {
   ['d'] = { [[<Cmd>Telescope lsp_workspace_diagnostics<CR>]], 'diagnostic workspace' },
   ['D'] = { [[<Cmd>Telescope lsp_document_diagnostics<CR>]],  'diagnostic buffer' },
   -- Custom function defined in 'nvim-telescope' config
-  ['f'] = { [[<Cmd>lua telescope_project_files()<cr>]],       'files' },
+  ['f'] = { [[<Cmd>lua EC.telescope_project_files()<cr>]],    'files' },
   ['g'] = { [[<Cmd>Telescope live_grep<CR>]],                 'grep search' },
   ['h'] = { [[<Cmd>Telescope help_tags<CR>]],                 'help tags' },
   ['H'] = { [[<Cmd>Telescope highlights<CR>]],                'highlight groups' },
@@ -53,7 +53,7 @@ leader_nmap.f = {
 }
 
 -- g is for git
-leader_nmap.g = {
+EC.leader_nmap.g = {
   ['name'] = '+git',
   ['A'] = { [[<Cmd>lua require("gitsigns").stage_buffer()<CR>]],        'add buffer' },
   ['a'] = { [[<Cmd>lua require("gitsigns").stage_hunk()<CR>]],          'add (stage) hunk' },
@@ -78,7 +78,7 @@ leader_nmap.g = {
 }
 
 -- l is for 'LSP' (Language Server Protocol)
-leader_nmap.l = {
+EC.leader_nmap.l = {
   ['name'] = '+LSP',
   ['f'] = { [[<Cmd>lua vim.lsp.buf.formatting()<CR>]],                   'format' },
   ['R'] = { [[<Cmd>lua vim.lsp.buf.references()<CR>]],                   'references' },
@@ -91,13 +91,13 @@ leader_nmap.l = {
   ['s'] = { [[<Cmd>lua vim.lsp.buf.definition()<CR>]],                   'source definition' },
 }
 
-leader_xmap.l = {
+EC.leader_xmap.l = {
   -- Using `:` instead of `<Cmd>` to go back to Normal mode after `<CR>`
   f = { [[:lua vim.lsp.buf.range_formatting()<CR>]], 'format selection' },
 }
 
 -- o is for 'other'
-leader_nmap.o = {
+EC.leader_nmap.o = {
   ['name'] = '+other',
   ['a'] = { [[<Cmd>ArgWrap<CR>]],                      'arguments split' },
   ['C'] = { [[<Cmd>lua MiniCursorword.toggle()<CR>]],  'cursor word hl toggle' },
@@ -114,7 +114,7 @@ leader_nmap.o = {
 }
 
 -- r is for 'R'
-leader_nmap.r = {
+EC.leader_nmap.r = {
   ['name'] = '+R',
   -- Mappings starting with `T` send commands to current neoterm buffer, so
   -- some sort of R interpreter should already run there
@@ -128,28 +128,28 @@ leader_nmap.r = {
   ['t'] = { [[<Cmd>T devtools::test()<CR>]],                    'test' },
 }
 
-leader_xmap.r = {
+EC.leader_xmap.r = {
   ['name'] = '+R',
   -- Copy to clipboard and make reprex (which itself is loaded to clipboard)
   ['x'] = { [["+y :T reprex::reprex()<CR>]],                    'reprex selection' },
 }
 
 -- s is for 'send' (Send text to neoterm buffer)
-leader_nmap.s = { [[<Cmd>TREPLSendLine<CR>j]], 'send to terminal' }
+EC.leader_nmap.s = { [[<Cmd>TREPLSendLine<CR>j]], 'send to terminal' }
 ---- In simple visual mode send text and move to the last character in
 ---- selection and move to the right. Otherwise (like in line or block visual
 ---- mode) send text and move one line down from bottom of selection.
-leader_xmap.s = {
+EC.leader_xmap.s = {
   [[mode() ==# "v" ? ":TREPLSendSelection<CR>`>l" : ":TREPLSendSelection<CR>'>j"]],
   'send to terminal',
   expr = true,
 }
 
 -- t is for 'terminal' (uses 'neoterm')
-leader_nmap.t = {
+EC.leader_nmap.t = {
   ['name'] = '+terminal',
   -- `ShowActiveNeotermREPL()` is defined in 'general/functions.vim'
-  ['a'] = { [[<Cmd>lua _G.print_active_neoterm()<CR>]], 'print active REPL id' },
+  ['a'] = { [[<Cmd>lua EC.print_active_neoterm()<CR>]], 'print active REPL id' },
   ['C'] = { [[<Cmd>TcloseAll!<CR>]],                    'close all terminals' },
   ['c'] = { [[:<C-u>exec v:count."Tclose\!"<CR>]],      'close term (prepend by id)' },
   ['f'] = { [[:<C-u>exec "TREPLSetTerm ".v:count<CR>]], 'focus term (prepend by id)' },
@@ -159,7 +159,7 @@ leader_nmap.t = {
 }
 
 -- T is for 'test'
-leader_nmap.T = {
+EC.leader_nmap.T = {
   ['name'] = '+test',
   ['F'] = { [[<Cmd>TestFile -strategy=make | copen<CR>]],    'file (quickfix)' },
   ['f'] = { [[<Cmd>TestFile<CR>]],                           'file' },
@@ -212,5 +212,5 @@ local function map_leader_tree(tree, mode, prefix)
   end
 end
 
-map_leader_tree(leader_nmap, 'n')
-map_leader_tree(leader_xmap, 'x')
+map_leader_tree(EC.leader_nmap, 'n')
+map_leader_tree(EC.leader_xmap, 'x')

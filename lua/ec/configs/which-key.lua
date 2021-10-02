@@ -39,5 +39,5 @@ local function tree_remove_cmd(tree)
 end
 
 -- Use
-wk.register(tree_remove_cmd(_G.leader_nmap), { mode = 'n', prefix = '<leader>' })
-wk.register(tree_remove_cmd(_G.leader_xmap), { mode = 'x', prefix = '<leader>' })
+wk.register(tree_remove_cmd(EC.leader_nmap), { mode = 'n', prefix = '<leader>' })
+wk.register(tree_remove_cmd(EC.leader_xmap), { mode = 'x', prefix = '<leader>' })

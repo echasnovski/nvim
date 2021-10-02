@@ -14,7 +14,7 @@ vim.g.r_indent_ess_comments = 0
 vim.g.r_indent_ess_compatible = 0
 
 -- Section insert
-_G.section_r = function()
+EC.section_r = function()
   -- Insert section template
   local section_template = string.format('# %s', string.rep('-', 73))
   vim.fn.append(vim.fn.line('.'), section_template)
@@ -24,6 +24,6 @@ _G.section_r = function()
   vim.cmd([[startreplace]])
 end
 
-vim.api.nvim_buf_set_keymap(0, 'n', '<M-s>', '<Cmd>lua _G.section_r()<CR>', { noremap = true })
+vim.api.nvim_buf_set_keymap(0, 'n', '<M-s>', '<Cmd>lua EC.section_r()<CR>', { noremap = true })
 ---- Using `<Esc>:` and not `<Cmd>` because latter doesn't start replace mode
-vim.api.nvim_buf_set_keymap(0, 'i', '<M-s>', '<Esc>:lua _G.section_r()<CR>', { noremap = true })
+vim.api.nvim_buf_set_keymap(0, 'i', '<M-s>', '<Esc>:lua EC.section_r()<CR>', { noremap = true })

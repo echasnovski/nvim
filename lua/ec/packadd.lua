@@ -119,7 +119,7 @@ if vim.fn.exists('vscode') ~= 1 then
 end
 
 -- Do plugin hooks (find a better way to do this; maybe after custom update)
-function _G.plugin_hooks()
+function EC.plugin_hooks()
   -- Ensure most recent help tags
   vim.cmd('helptags ALL')
 
@@ -138,7 +138,7 @@ function _G.plugin_hooks()
   end
 
   -- Destroy this function
-  _G.plugin_hooks = nil
+  EC.plugin_hooks = nil
 end
 
-vim.cmd([[autocmd VimEnter * ++once lua vim.defer_fn(_G.plugin_hooks, 15)]])
+vim.cmd([[autocmd VimEnter * ++once lua vim.defer_fn(EC.plugin_hooks, 15)]])

@@ -41,7 +41,7 @@ vim.cmd([[au FileType TelescopeResults setlocal nofoldenable]])
 -- Custom 'find files': using `git_files` in the first place in order to ignore
 -- results from submodules. Original source:
 -- https://github.com/nvim-telescope/telescope.nvim/issues/410#issuecomment-765656002
-_G.telescope_project_files = function()
+EC.telescope_project_files = function()
   local ok = pcall(require('telescope.builtin').git_files)
   if not ok then
     require('telescope.builtin').find_files({ follow = true, hidden = true })

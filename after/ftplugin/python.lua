@@ -9,7 +9,7 @@ vim.g.pyindent_open_paren = 'shiftwidth()'
 vim.g.pyindent_continue = 'shiftwidth()'
 
 -- Section insert
-_G.section_python = function()
+EC.section_python = function()
   -- Insert section template
   vim.fn.append(vim.fn.line('.'), '# %% ')
 
@@ -18,5 +18,5 @@ _G.section_python = function()
   vim.cmd([[startinsert!]])
 end
 
-vim.api.nvim_buf_set_keymap(0, 'n', '<M-s>', '<Cmd>lua _G.section_python()<CR>', { noremap = true })
-vim.api.nvim_buf_set_keymap(0, 'i', '<M-s>', '<Cmd>lua _G.section_python()<CR>', { noremap = true })
+vim.api.nvim_buf_set_keymap(0, 'n', '<M-s>', '<Cmd>lua EC.section_python()<CR>', { noremap = true })
+vim.api.nvim_buf_set_keymap(0, 'i', '<M-s>', '<Cmd>lua EC.section_python()<CR>', { noremap = true })

@@ -3,7 +3,7 @@ local H = {}
 
 -- Show Neoterm's active REPL, i.e. in which command will be executed when one
 -- of `TREPLSend*` will be used
-_G.print_active_neoterm = function()
+EC.print_active_neoterm = function()
   local msg
   if vim.fn.exists('g:neoterm.repl') == 1 and vim.fn.exists('g:neoterm.repl.instance_id') == 1 then
     msg = 'Active REPL neoterm id: ' .. vim.g.neoterm.repl.instance_id
@@ -17,7 +17,7 @@ _G.print_active_neoterm = function()
 end
 
 -- Create scratch buffer and focus on it
-_G.new_scratch_buffer = function()
+EC.new_scratch_buffer = function()
   local buf = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_win_set_buf(0, buf)
 end
@@ -40,7 +40,7 @@ end
 --     - If item is not selected, close popup and execute '<CR>'. Reasoning
 --       behind this is to explicitly select desired completion (currently this
 --       is also done with one '<Tab>' keystroke).
-_G._cr_action = function()
+EC.cr_action = function()
   if vim.fn.pumvisible() ~= 0 then
     local item_selected = vim.fn.complete_info()['selected'] ~= -1
     if item_selected then

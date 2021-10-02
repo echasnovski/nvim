@@ -9,23 +9,23 @@ luasnip.config.set_config({ history = true })
 require('luasnip/loaders/from_vscode').lazy_load({ paths = { './misc/snippets' } })
 
 -- Make snippet keymaps
-function _G.luasnip_go_right()
+function EC.luasnip_go_right()
   if luasnip.expand_or_jumpable() then
     luasnip.expand_or_jump()
   end
 end
 
-function _G.luasnip_go_left()
+function EC.luasnip_go_left()
   if luasnip.jumpable() then
     luasnip.jump(-1)
   end
 end
 
-vim.api.nvim_set_keymap('i', '<C-l>', [[<Cmd>lua _G.luasnip_go_right()<CR>]], {})
-vim.api.nvim_set_keymap('s', '<C-l>', [[<Cmd>lua _G.luasnip_go_right()<CR>]], {})
+vim.api.nvim_set_keymap('i', '<C-l>', [[<Cmd>lua EC.luasnip_go_right()<CR>]], {})
+vim.api.nvim_set_keymap('s', '<C-l>', [[<Cmd>lua EC.luasnip_go_right()<CR>]], {})
 
-vim.api.nvim_set_keymap('i', '<C-h>', [[<Cmd>lua _G.luasnip_go_left()<CR>]], {})
-vim.api.nvim_set_keymap('s', '<C-h>', [[<Cmd>lua _G.luasnip_go_left()<CR>]], {})
+vim.api.nvim_set_keymap('i', '<C-h>', [[<Cmd>lua EC.luasnip_go_left()<CR>]], {})
+vim.api.nvim_set_keymap('s', '<C-h>', [[<Cmd>lua EC.luasnip_go_left()<CR>]], {})
 
 -- Notify about presence of snippet. This is my attempt to try to live without
 -- snippet autocompletion. At least for the time being to get used to new
@@ -33,13 +33,13 @@ vim.api.nvim_set_keymap('s', '<C-h>', [[<Cmd>lua _G.luasnip_go_left()<CR>]], {})
 -- enough (~0.1ms during normal typing).
 local luasnip_ns = vim.api.nvim_create_namespace('luasnip')
 
-_G.luasnip_notify_clear = function()
+EC.luasnip_notify_clear = function()
   vim.api.nvim_buf_clear_namespace(0, luasnip_ns, 0, -1)
 end
 
-_G.luasnip_notify = function()
+EC.luasnip_notify = function()
   if not luasnip.expandable() then
-    _G.luasnip_notify_clear()
+    EC.luasnip_notify_clear()
     return
   end
 
@@ -47,5 +47,5 @@ _G.luasnip_notify = function()
   vim.api.nvim_buf_set_virtual_text(0, luasnip_ns, line, { { '!', 'Special' } }, {})
 end
 
-vim.cmd([[au InsertEnter,CursorMovedI,TextChangedI,TextChangedP * lua pcall(_G.luasnip_notify)]])
-vim.cmd([[au InsertLeave * lua pcall(_G.luasnip_notify_clear)]])
+vim.cmd([[au InsertEnter,CursorMovedI,TextChangedI,TextChangedP * lua pcall(EC.luasnip_notify)]])
+vim.cmd([[au InsertLeave * lua pcall(EC.luasnip_notify_clear)]])

@@ -26,7 +26,7 @@ end
 
 local key_down = vim.api.nvim_replace_termcodes('<Down>', true, true, true)
 
-function _G.nvim_tree_go_in()
+function EC.nvim_tree_go_in()
   local node = get_node()
 
   -- Don't go up if cursor is placed on '..'
@@ -57,7 +57,7 @@ function _G.nvim_tree_go_in()
   end
 end
 
-function _G.nvim_tree_go_out()
+function EC.nvim_tree_go_out()
   local node = get_node()
 
   if node.name == '..' then
@@ -78,8 +78,8 @@ require('nvim-tree').setup({
     mappings = {
       custom_only = false,
       list = {
-        { key = 'l', cb = '<cmd>lua _G.nvim_tree_go_in()<CR>' },
-        { key = 'h', cb = '<cmd>lua _G.nvim_tree_go_out()<CR>' },
+        { key = 'l', cb = '<cmd>lua EC.nvim_tree_go_in()<CR>' },
+        { key = 'h', cb = '<cmd>lua EC.nvim_tree_go_out()<CR>' },
       },
     },
   },

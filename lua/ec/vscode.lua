@@ -8,7 +8,7 @@ vim.api.nvim_set_keymap('n', 'gcc', '<Plug>VSCodeCommentaryLine', {})
 -- interactive window)
 local esc = vim.api.nvim_replace_termcodes([[<Esc>]], true, true, true)
 
-_G.vscode_execute_line_or_selection = function(cur_mode, vscode_command)
+EC.vscode_execute_line_or_selection = function(cur_mode, vscode_command)
   local visual_mode
   if cur_mode == 'normal' then
     -- Visually select current line
@@ -47,13 +47,13 @@ end
 vim.api.nvim_set_keymap(
   'x',
   '<Leader>j',
-  [[:<C-u>lua _G.vscode_execute_line_or_selection('visual', 'jupyter.execSelectionInteractive')<CR>]],
+  [[:<C-u>lua EC.vscode_execute_line_or_selection('visual', 'jupyter.execSelectionInteractive')<CR>]],
   { noremap = true, silent = true }
 )
 vim.api.nvim_set_keymap(
   'n',
   '<Leader>j',
-  [[:<C-u>lua _G.vscode_execute_line_or_selection('normal', 'jupyter.execSelectionInteractive')<CR>]],
+  [[:<C-u>lua EC.vscode_execute_line_or_selection('normal', 'jupyter.execSelectionInteractive')<CR>]],
   { noremap = true, silent = true }
 )
 
@@ -61,7 +61,7 @@ vim.api.nvim_set_keymap(
 vim.api.nvim_set_keymap(
   'x',
   '<Leader>r',
-  [[:<C-u>lua _G.vscode_execute_line_or_selection('visual', 'r.runSelection')<CR>]],
+  [[:<C-u>lua EC.vscode_execute_line_or_selection('visual', 'r.runSelection')<CR>]],
   { noremap = true, silent = true }
 )
 vim.api.nvim_set_keymap('n', '<Leader>r', [[:<C-u>call VSCodeCall('r.runSelection')<CR>]], { noremap = true })

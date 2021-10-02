@@ -106,4 +106,4 @@ keymap('n', [[//]], [[:nohlsearch<C-R>=has('diff')?'<BAR>diffupdate':''<CR><CR>]
 keymap('s', [[<BS>]], [[<BS>i]])
 
 -- Make `<CR>` mapping in the end of startup for it to not be overridden
-vim.cmd([[au VimEnter * ++once imap <expr> <CR> v:lua._cr_action()]])
+vim.cmd([[au VimEnter * ++once imap <expr> <CR> v:lua.EC.cr_action()]])
