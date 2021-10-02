@@ -1,8 +1,33 @@
 # NeoVim setup
 
-This is a setup for Neovim>=0.5. Structure:
+This is a setup for Neovim>=0.5. Current structure (might be a bit outdated):
 
-TODO: describe structure after refactoring.
+```
+after/                  -- Everything that will be sourced last (`:h after-directory`)
+│ ftplugin/             -- Configurations for filetypes
+└ queries/              -- Queries for treesitter
+lua/                    -- Lua code used in configuration
+└ ec/                   -- Custom 'plugin namespace'
+  │ configs/            -- Configurations for plugins
+  │ functions.lua       -- Custom functions
+  │ mappings-leader.lua -- Mappings for `<Leader>` key
+  │ mappings.lua        -- Mappings
+  │ packadd.lua         -- Code for initializing plugins
+  │ settings.lua        -- General settings
+  └ vscode.lua          -- VS Code related configuration
+misc/                   -- Everything not directly related to Neovim startup
+│ dict/                 -- Dictionary files
+│ mini_vimscript/       -- Vimscript (re)implementation of some 'mini' modules
+│ sessions/             -- Placeholder for local use of Neovim sessions (content ignored)
+│ snippets/             -- Snippets for snippets engine
+└ undodir/              -- Placeholder for local use of persistent undo (content ignored)
+pack/                   -- Directory for plugins/submodules managed with native package manager
+└ plugins/              -- Name of the plugin bundle
+  └ opt/                -- Use all plugin as optional (requires manual `packadd`)
+spell/                  -- Files for spelling
+```
+
+NOTE: Currently this configuration defers sourcing of most time consuming commands (mostly plugins). This is done by using `vim.defer_fn(f, 0)` which defers execution of `f` until Vim is loaded. This doesn't affect general usability: it decreases time before showing fully functional start screen (or asked file) from ~240ms to ~105ms (on a not so quick i3-6100).
 
 ## Installation
 
@@ -28,20 +53,23 @@ git submodule update --remote --init --depth 1 --recursive
 
 ### Add new plugin
 
-Add new plugin as a normal submodule. NOTEs:
+1. Download new plugin as a normal submodule. NOTEs:
 
-- Current naming convention is to strip any "extension-like" substring from end of plugin name (usually it is '.nvim', '.lua', '.vim').
-- Plugins should be added to package directory 'pack/plugins' in one of 'start' or 'opt'.
+    - Current naming convention is to strip any "extension-like" substring from end of plugin name (usually it is '.nvim', '.lua', '.vim').
+    - Plugins should be added to package directory 'pack/plugins' in one of 'start' or 'opt'. Prefer 'opt' in order to be able to lazy load.
 
-For example, 'nvim-telescope/telescope-fzy-native.nvim' (as it has its submodule) to 'opt' directory:
+    For example, 'nvim-telescope/telescope-fzy-native.nvim' (as it has its submodule) to 'opt' directory:
 
-```bash
-# Add submodule. This will load plugin (but not its submodules)
-git submodule add --depth 1 https://github.com/nvim-telescope/telescope-fzy-native.nvim pack/plugins/opt/telescope-fzy-native
+    ```bash
+    # Add submodule. This will load plugin (but not its submodules)
+    git submodule add --depth 1 https://github.com/nvim-telescope/telescope-fzy-native.nvim pack/plugins/opt/telescope-fzy-native
 
-# Ensure that all submodules of plugin are also downloaded
-git submodule update --init --depth 1 --recursive
-```
+    # Ensure that all submodules of plugin are also downloaded
+    git submodule update --init --depth 1 --recursive
+    ```
+1. Ensure that plugin is loaded (added to `runtimepath` and all needed files are executed) alongside its custom configuration (goes into 'lua/ec/configs'):
+    - If plugin is added to 'start', nothing is needed to be done.
+    - If plugin is added to 'opt', add `packadd()` or `packadd_defer()` call in 'packadd.lua'.
 
 ### Delete plugin
 
@@ -130,14 +158,13 @@ Important system dependencies:
 
 - **Clipboard support**. One of 'xsel' (preferred) or 'xclip' (had some minor issues after installing 'vim-exchange').
 
-- **Language Server Protocols**. These should be handled manually for Neovim>=0.5.0. For a list of needed LSP providers look at settings for 'nvim-lspconfig'.
+- **Language Server Protocols**. These should be handled manually. For a list of needed LSP providers look at settings for 'nvim-lspconfig'.
 
 ## Notes
 
-- Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'general/settings.vim' as 'g:python3_host_prog' variable.
-- Important dependency is `node.js`. Path to it should be changed in 'general/settings.vim' as 'g:node_host_prog' variable. Help for updating its version using `npm`: https://phoenixnap.com/kb/update-node-js-version.
+- Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'settings.lua' as 'g:python3_host_prog' variable.
+- Important dependency is `node.js`. Path to it should be changed in 'settings.lua' as 'g:node_host_prog' variable. Help for updating its version using `npm`: https://phoenixnap.com/kb/update-node-js-version.
 - Output of `:checkhealth` can show that there is a problem with node installation. For some reason, it tries to run `node '[path/to/node] --version'` instead of correct `'[path/to/node]' --version`.
-- Two directories ('misc/session' and 'misc/undodir') are placeholders for local use (vim sessions and vim's persistent undo). They both have '.gitignore' files (which instruct to ignore everything in that directory, except '.gitignore' itself to have git recognize them) so that they will be automatically created when pulling this repository.
 - For tags to work correctly in R projects, add appropriate '.ctags' file. Currently the source can be found at https://tinyheero.github.io/2017/05/13/r-vim-ctags.html.
 - 'Pyright' language server currently by default uses python interpreter that is active when Neovim is opened. However, if using virtual environment, it is a good idea to create 'pyrightconfig.json' file with at least the following content:
     ```
@@ -152,7 +179,7 @@ Important system dependencies:
 
 ## Tips and tricks
 
-- This setup is configured to use buffers instead of tabs. Remember: buffer ~ file (saved or not), window ~ view of a buffer, tab ~ collection of windows. Normally you would have multiple buffers open in a single window which completely emulates "tab behavior" of "normal editor" (only with current settings of 'vim-airline' which shows buffers in "tabline" in case of a single tab). Splits create separate windows inside single tab. Usually use tabs to work on "different" projects. Useful keybindings:
+- This setup is configured to use buffers instead of tabs. Remember: buffer ~ file (saved or not), window ~ view of a buffer, tab ~ collection of windows. Normally you would have multiple buffers open in a single window which completely emulates "tab behavior" of "normal editor" (currently with 'mini.tabline' only in case of a single tab). Splits create separate windows inside single tab. Usually use tabs to work on "different" projects. Useful keybindings:
     - `<Leader>b` has set of commands related to buffers. For example, `<Leader>bd` - close buffer.
     - `:q` - close window.
     - `]b` and `[b` - go to next and previous buffer (current keybinding).
