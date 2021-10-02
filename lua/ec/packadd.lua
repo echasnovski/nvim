@@ -1,4 +1,6 @@
-local function packadd(plugin)
+-- Source plugin and its configuration immediately
+-- @param plugin String with name of plugin as subdirectory in 'pack'
+local packadd = function(plugin)
   -- Add plugin
   vim.cmd(string.format([[packadd %s]], plugin))
 
@@ -7,59 +9,40 @@ local function packadd(plugin)
   pcall(require, 'ec.configs.' .. plugin)
 end
 
+-- Defer plugin source right after Vim is loaded
+--
+-- This reduces time before a fully functional start screen is shown. Use this
+-- for plugins that are not directly related to startup process.
+--
+-- @param plugin String with name of plugin as subdirectory in 'pack'
+local packadd_defer = function(plugin)
+  vim.defer_fn(function() packadd(plugin) end, 0)
+end
+
 -- Collection of minimal and fast Lua modules
 packadd('mini')
 
 -- More text objects
-packadd('targets')
+packadd_defer('targets')
 
 -- Align text
-packadd('vim-lion')
+packadd_defer('vim-lion')
 
 -- Wrap function arguments
-packadd('vim-argwrap')
+packadd_defer('vim-argwrap')
 
 -- Swap function arguments (and define better 'argument' text object)
-packadd('sideways')
+packadd_defer('sideways')
 
 -- Exchange regions
-packadd('vim-exchange')
+packadd_defer('vim-exchange')
 
 -- Pairs of handy bracket mappings
-packadd('vim-unimpaired')
+packadd_defer('vim-unimpaired')
 
 if vim.fn.exists('vscode') ~= 1 then
   -- Common dependency for Lua plugins
   packadd('plenary')
-
-  -- Colorful icons
-  packadd('nvim-web-devicons')
-
-  -- Fuzzy finder
-  packadd('telescope')
-
-  -- Show keybindings
-  packadd('which-key')
-
-  -- Treesitter: advanced syntax parsing. Add highlighting and text objects.
-  packadd('nvim-treesitter')
-  packadd('nvim-treesitter-textobjects')
-
-  -- Git integration
-  ---- Interact with git
-  packadd('vim-fugitive')
-
-  ---- Interact with commits
-  packadd('gv')
-
-  ---- Interact with hunks
-  packadd('gitsigns')
-
-  -- Language server configurations
-  packadd('nvim-lspconfig')
-
-  -- File tree explorer
-  packadd('nvim-tree')
 
   -- Start screen and session manager
   packadd('vim-startify')
@@ -67,59 +50,91 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Updater of current working directory
   packadd('vim-rooter')
 
+  -- Colorful icons
+  packadd('nvim-web-devicons')
+
+  -- Treesitter: advanced syntax parsing. Add highlighting and text objects.
+  -- NOTE: when opening file directly (`nvim <file>`) defered initialization
+  -- results into highlighting change right after opening. If it bothers,
+  -- change to `packadd()`.
+  packadd_defer('nvim-treesitter')
+  packadd_defer('nvim-treesitter-textobjects')
+
+  -- Fuzzy finder
+  packadd_defer('telescope')
+
+  -- Show keybindings
+  packadd_defer('which-key')
+
+  -- Git integration
+  ---- Interact with git
+  packadd_defer('vim-fugitive')
+
+  ---- Interact with commits
+  packadd_defer('gv')
+
+  ---- Interact with hunks
+  packadd_defer('gitsigns')
+
+  -- Language server configurations
+  packadd_defer('nvim-lspconfig')
+
+  -- File tree explorer
+  packadd_defer('nvim-tree')
+
   -- Tweak Neovim's terminal to be more REPL-aware
-  packadd('neoterm')
+  packadd_defer('neoterm')
 
   -- Usage of external actions (formatting, diagnostics, etc.)
-  packadd('null-ls')
+  packadd_defer('null-ls')
 
   -- Enhanced diagnostics lists
-  packadd('trouble')
+  packadd_defer('trouble')
 
   -- Todo (and other notes) highlighting
-  packadd('todo-comments')
+  packadd_defer('todo-comments')
 
   -- Display of text colors
-  packadd('nvim-colorizer')
+  packadd_defer('nvim-colorizer')
 
   -- Visualize undo tree
-  packadd('undotree')
+  packadd_defer('undotree')
 
   -- Snippets engine
-  packadd('luasnip')
+  packadd_defer('luasnip')
 
   -- Documentation generator
   ---- Disable mappings, should be run before adding package
   vim.g.doge_enable_mappings = 0
-  packadd('vim-doge')
+  packadd_defer('vim-doge')
 
   -- Test runner
-  packadd('vim-test')
+  packadd_defer('vim-test')
 
   ---- Helper to populate quickfix list with test results
-  packadd('vim-dispatch')
+  packadd_defer('vim-dispatch')
 
   -- Filetype: csv
-  packadd('rainbow_csv')
+  packadd_defer('rainbow_csv')
 
   -- Filetype: pandoc and rmarkdown
   ---- This option should be set before loading plugin to take effect. See
   ---- https://github.com/vim-pandoc/vim-pandoc/issues/342
   vim.g['pandoc#filetypes#pandoc_markdown'] = 0
   -- vim.cmd([[let g:pandoc#filetypes#pandoc_markdown = 0]])
-  packadd('vim-pandoc')
-  packadd('vim-pandoc-syntax')
-  packadd('vim-rmarkdown')
+  packadd_defer('vim-pandoc')
+  packadd_defer('vim-pandoc-syntax')
+  packadd_defer('vim-rmarkdown')
 
   -- Filetype: markdown
-  packadd('vim-markdown')
+  packadd_defer('vim-markdown')
 
   -- Markdown preview (has rather big disk size usage, around 50M)
-  packadd('markdown-preview')
+  packadd_defer('markdown-preview')
 end
 
 -- Do plugin hooks (find a better way to do this; maybe after custom update)
-function EC.plugin_hooks()
+local plugin_hooks = function()
   -- Ensure most recent help tags
   vim.cmd('helptags ALL')
 
@@ -136,9 +151,6 @@ function EC.plugin_hooks()
     -- -- install`, which needs `yarn` installed).
     -- vim.cmd('call mkdp#util#install()')
   end
-
-  -- Destroy this function
-  EC.plugin_hooks = nil
 end
 
-vim.cmd([[autocmd VimEnter * ++once lua vim.defer_fn(EC.plugin_hooks, 15)]])
+vim.defer_fn(plugin_hooks, 0)

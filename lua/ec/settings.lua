@@ -42,6 +42,7 @@ vim.opt.linebreak     = true  -- Wrap long lines at 'breakat' (if 'wrap' is set)
 vim.opt.background = 'dark'         -- Use dark background
 
 ---- Enable syntax highlighing if it wasn't already (as it is time consuming)
+---- Don't use defer it because it affects start screen appearance
 if vim.fn.exists("syntax_on") ~= 1 then
   vim.cmd([[syntax enable]])
 end
@@ -89,6 +90,7 @@ vim.opt.foldnestmax = 10       -- Create folds only for some number of nested le
 vim.opt.foldcolumn  = '0'      -- Disable fold column
 
 -- Filetype plugins and indentation
+-- Don't defer it because it might break `FileType` related autocommands
 vim.cmd([[filetype plugin indent on]])
 
 -- Custom autocommands
