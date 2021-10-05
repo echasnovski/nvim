@@ -104,6 +104,7 @@ EC.leader_nmap.o = {
   ['d'] = { [[<Cmd>DogeGenerate<CR>]],                 'document' },
   ['h'] = { [[<Cmd>SidewaysLeft<CR>]],                 'move arg left' },
   ['H'] = { [[<Cmd>TSBufToggle highlight<CR>]],        'highlight toggle' },
+  ['g'] = { [[<Cmd>lua EC.generate_plugin_doc()<CR>]], 'generate plugin doc' },
   ['l'] = { [[<Cmd>SidewaysRight<CR>]],                'move arg right' },
   ['r'] = { [[<Cmd>lua MiniMisc.resize_window()<CR>]], 'resize to default width' },
   ['s'] = { [[<Cmd>setlocal spell! spell?<CR>]],       'spell toggle' },

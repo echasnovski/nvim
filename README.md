@@ -18,6 +18,7 @@ lua/                    -- Lua code used in configuration
 misc/                   -- Everything not directly related to Neovim startup
 │ dict/                 -- Dictionary files
 │ mini_vimscript/       -- Vimscript (re)implementation of some 'mini' modules
+│ scripts/              -- Scripts for miscellaneous usage
 │ sessions/             -- Placeholder for local use of Neovim sessions (content ignored)
 │ snippets/             -- Snippets for snippets engine
 └ undodir/              -- Placeholder for local use of persistent undo (content ignored)
