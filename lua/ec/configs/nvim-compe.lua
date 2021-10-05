@@ -1,11 +1,6 @@
-local has_compe, compe = pcall(require, 'compe')
-if not has_compe then
-  return
-end
-
 vim.o.completeopt = 'menuone,noselect'
 
-compe.setup({
+require('compe').setup({
   enabled = true,
   autocomplete = true,
   debug = false,

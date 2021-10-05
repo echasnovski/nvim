@@ -1,8 +1,3 @@
-local has_completion, completion = pcall(require, 'completion')
-if not has_completion then
-  return
-end
-
 -- Use completion-nvim in every buffer
 vim.api.nvim_exec(
   [[augroup CompletionNvim

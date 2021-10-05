@@ -1,8 +1,4 @@
-local has_luasnip, luasnip = pcall(require, 'luasnip')
-if not has_luasnip then
-  return
-end
-
+local luasnip = require('luasnip')
 luasnip.config.set_config({ history = true })
 
 -- Load available snippets

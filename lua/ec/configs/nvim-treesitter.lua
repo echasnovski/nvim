@@ -1,8 +1,3 @@
-local has_treesitter, treesitter = pcall(require, 'nvim-treesitter')
-if not has_treesitter then
-  return
-end
-
 -- Enable syntax highlighing if it wasn't already (as it is time consuming)
 -- It should be before treesitter is initialized because otherwise there can be
 -- weird issues:

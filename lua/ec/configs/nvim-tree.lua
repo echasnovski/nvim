@@ -1,7 +1,4 @@
-local has_nvim_tree, nvim_tree = pcall(require, 'nvim-tree')
-if not has_nvim_tree then
-  return
-end
+local nvim_tree = require('nvim-tree')
 
 -- Define 'old-style' settings first
 vim.g.nvim_tree_add_trailing = 1
@@ -69,7 +66,7 @@ function EC.nvim_tree_go_out()
 end
 
 -- Setup plugin
-require('nvim-tree').setup({
+nvim_tree.setup({
   hijack_cursor = true,
   update_focused_file = { enable = false },
   view = {

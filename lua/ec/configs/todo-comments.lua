@@ -1,9 +1,4 @@
-local has_todo, todo = pcall(require, 'todo-comments')
-if not has_todo then
-  return
-end
-
-todo.setup({
+require('todo-comments').setup({
   highlight = {
     before = '',
     keyword = 'bg',

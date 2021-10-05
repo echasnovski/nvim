@@ -1,11 +1,6 @@
-local has_gitsigns, gitsigns = pcall(require, 'gitsigns')
-if not has_gitsigns then
-  return
-end
-
 -- Setup
 -- stylua: ignore start
-gitsigns.setup({
+require('gitsigns').setup({
   keymaps = {
     -- Default keymap options
     noremap = true,

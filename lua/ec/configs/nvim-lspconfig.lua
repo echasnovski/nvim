@@ -3,10 +3,7 @@
 -- - pyright for Python
 -- - sumneko_lua for Lua
 
-local has_lspconfig, lspconfig = pcall(require, 'lspconfig')
-if not has_lspconfig then
-  return
-end
+lspconfig = require('lspconfig')
 
 -- Preconfiguration
 local on_attach_custom = function(client, bufnr)
