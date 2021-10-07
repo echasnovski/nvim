@@ -79,9 +79,11 @@ function MiniPairs.setup(config)
   H.apply_config(config)
 end
 
--- Module Settings
----- In which modes mappings should be created
-MiniPairs.modes = { insert = true, command = false, terminal = false }
+-- Module config
+MiniPairs.config = {
+  -- In which modes mappings should be created
+  modes = { insert = true, command = false, terminal = false },
+}
 
 -- Module functionality
 function MiniPairs.open(pair, twochars_pattern)
@@ -136,14 +138,14 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = { modes = MiniPairs.modes }
+H.default_config = MiniPairs.config
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
     modes = { config.modes, 'table' },
@@ -156,7 +158,7 @@ function H.setup_config(config)
 end
 
 function H.apply_config(config)
-  MiniPairs.modes = config.modes
+  MiniPairs.config = config
 
   -- Setup mappings in supplied modes
   local mode_ids = { insert = 'i', command = 'c', terminal = 't' }

@@ -78,8 +78,8 @@
 --   In a nutshell, current algorithm *searches in the neighbor lines based on
 --   a certain pattern a _smallest_ match that covers cursor*. More detailed:
 --     - Extract neighborhood of cursor line: no more than
---       `MiniSurround.n_lines` before, cursor line itself, no more than
---       `MiniSurround.n_lines` after.
+--       `MiniSurround.config.n_lines` before, cursor line itself, no more than
+--       `MiniSurround.config.n_lines` after.
 --     - Convert it to '1d neighborhood' by concatenating with '\n' delimiter.
 --       Compute location of current cursor position in this line.
 --     - Given Lua pattern for a 'input' surrounding, search for a smallest
@@ -121,25 +121,27 @@ function MiniSurround.setup(config)
   vim.api.nvim_exec([[hi link MiniSurround IncSearch]], false)
 end
 
--- Module Settings
----- Number of lines within which surrounding is searched
-MiniSurround.n_lines = 20
+-- Module config
+MiniSurround.config = {
+  -- Number of lines within which surrounding is searched
+  n_lines = 20,
 
----- Duration of highlight when calling `MiniSurround.highlight()`
-MiniSurround.highlight_duration = 500
+  -- Duration of highlight when calling `MiniSurround.highlight()`
+  highlight_duration = 500,
 
----- Pattern to match function name in 'function call' surrounding
-MiniSurround.funname_pattern = '[%w_%.]+'
+  -- Pattern to match function name in 'function call' surrounding
+  funname_pattern = '[%w_%.]+',
 
----- Mappings
-MiniSurround.mappings = {
-  add = 'sa', -- Add surrounding
-  delete = 'sd', -- Delete surrounding
-  find = 'sf', -- Find surrounding (to the right)
-  find_left = 'sF', -- Find surrounding (to the left)
-  highlight = 'sh', -- Highlight surrounding
-  replace = 'sr', -- Replace surrounding
-  update_n_lines = 'sn', -- Update `n_lines`
+  -- Mappings
+  mappings = {
+    add = 'sa', -- Add surrounding
+    delete = 'sd', -- Delete surrounding
+    find = 'sf', -- Find surrounding (to the right)
+    find_left = 'sF', -- Find surrounding (to the left)
+    highlight = 'sh', -- Highlight surrounding
+    replace = 'sr', -- Replace surrounding
+    update_n_lines = 'sn', -- Update `n_lines`
+  },
 }
 
 -- Module functionality
@@ -256,13 +258,13 @@ function MiniSurround.highlight()
 
   vim.defer_fn(function()
     vim.api.nvim_buf_clear_namespace(0, H.ns_id, surr.left.line - 1, surr.right.line)
-  end, MiniSurround.highlight_duration)
+  end, MiniSurround.config.highlight_duration)
 end
 
 function MiniSurround.update_n_lines()
-  local n_lines = H.user_input('New number of neighbor lines', MiniSurround.n_lines)
-  n_lines = math.floor(tonumber(n_lines) or MiniSurround.n_lines)
-  MiniSurround.n_lines = n_lines
+  local n_lines = H.user_input('New number of neighbor lines', MiniSurround.config.n_lines)
+  n_lines = math.floor(tonumber(n_lines) or MiniSurround.config.n_lines)
+  MiniSurround.config.n_lines = n_lines
 end
 
 ---- NOTE: more simple approach would have been to use combination of
@@ -294,7 +296,7 @@ function MiniSurround.find_surrounding(surround_info)
   if surround_info == nil then
     return nil
   end
-  local n_lines = MiniSurround.n_lines
+  local n_lines = MiniSurround.config.n_lines
 
   -- First try only current line as it is the most common use case
   local surr = H.find_surrounding_in_neighborhood(surround_info, 0)
@@ -309,23 +311,14 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {
-  -- Number of lines within which surrounding is searched
-  n_lines = MiniSurround.n_lines,
-  -- Duration of highlight when calling `MiniSurround.highlight()`
-  highlight_duration = MiniSurround.highlight_duration,
-  -- Pattern to match function name in 'function call' surrounding
-  funname_pattern = MiniSurround.funname_pattern,
-  -- Mappings
-  mappings = MiniSurround.mappings,
-}
+H.default_config = MiniSurround.config
 
 -- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
     n_lines = { config.n_lines, 'number' },
@@ -343,11 +336,9 @@ function H.setup_config(config)
 
   return config
 end
+
 function H.apply_config(config)
-  MiniSurround.n_lines = config.n_lines
-  MiniSurround.highlight_duration = config.highlight_duration
-  MiniSurround.funname_pattern = config.funname_pattern
-  MiniSurround.mappings = config.mappings
+  MiniSurround.config = config
 
   -- Make mappings
   -- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
@@ -808,8 +799,8 @@ function H.special_funcall(sur_type)
     -- Can't use `%g` instead of allowed characters because of possible
     -- '[(fun(10))]' case
     return {
-      find = string.format('%s%%b()', MiniSurround.funname_pattern),
-      extract = string.format('^(%s%%().*(%%))$', MiniSurround.funname_pattern),
+      find = string.format('%s%%b()', MiniSurround.config.funname_pattern),
+      extract = string.format('^(%s%%().*(%%))$', MiniSurround.config.funname_pattern),
     }
   else
     local fun_name = H.user_input('Function name')

@@ -33,9 +33,11 @@ function MiniMisc.setup(config)
   H.apply_config(config)
 end
 
--- Module settings
----- List of fields to make global (to be used as independent variables)
-MiniMisc.make_global = { 'put', 'put_text' }
+-- Module config
+MiniMisc.config = {
+  -- List of fields to make global (to be used as independent variables)
+  make_global = { 'put', 'put_text' },
+}
 
 -- Print Lua objects in command line
 --
@@ -266,9 +268,7 @@ end
 
 -- Helper data
 ---- Module default config
-H.config = {
-  make_global = MiniMisc.make_global,
-}
+H.default_config = MiniMisc.config
 
 -- Helper functions
 ---- Settings
@@ -276,7 +276,7 @@ function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
     make_global = {

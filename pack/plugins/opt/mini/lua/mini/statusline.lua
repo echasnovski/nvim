@@ -116,9 +116,11 @@ function MiniStatusline.setup(config)
   )
 end
 
--- Module settings
--- Whether to set Vim's settings for statusline
-MiniStatusline.set_vim_settings = true
+-- Module config
+MiniStatusline.config = {
+  -- Whether to set Vim's settings for statusline
+  set_vim_settings = true,
+}
 
 -- Module functionality
 function MiniStatusline.active()
@@ -336,14 +338,14 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = { set_vim_settings = MiniStatusline.set_vim_settings }
+H.default_config = MiniStatusline.config
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({ set_vim_settings = { config.set_vim_settings, 'boolean' } })
 
@@ -351,7 +353,7 @@ function H.setup_config(config)
 end
 
 function H.apply_config(config)
-  MiniStatusline.set_vim_settings = config.set_vim_settings
+  MiniStatusline.config = config
 
   -- Set settings to ensure statusline is displayed properly
   if config.set_vim_settings then

@@ -80,10 +80,12 @@ function MiniFuzzy.setup(config)
   H.apply_config(config)
 end
 
--- Module settings
----- Maximum allowed value of match features (width and first match). All
----- feature values greater than cutoff can be considered "equally bad".
-MiniFuzzy.cutoff = 100
+-- Module config
+MiniFuzzy.config = {
+  -- Maximum allowed value of match features (width and first match). All
+  -- feature values greater than cutoff can be considered "equally bad".
+  cutoff = 100,
+}
 
 -- Module functionality
 ---- Compute match data of input `word` and `candidate` strings
@@ -173,9 +175,7 @@ end
 
 -- Helper data
 ---- Module default config
-H.config = {
-  cutoff = MiniFuzzy.cutoff,
-}
+H.default_config = MiniFuzzy.config
 
 -- Helper functions
 ---- Settings
@@ -183,7 +183,7 @@ function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
     cutoff = {
@@ -199,7 +199,7 @@ function H.setup_config(config)
 end
 
 function H.apply_config(config)
-  MiniFuzzy.cutoff = config.cutoff
+  MiniFuzzy.config = config
 end
 
 ---- Fuzzy matching
@@ -253,7 +253,7 @@ function H.find_best_positions(letters, candidate)
       rev_first = rev_candidate:find(letters[i], rev_first + 1)
     end
     local first = n_candidate - rev_first + 1
-    local width = math.min(pos_last - first + 1, MiniFuzzy.cutoff)
+    local width = math.min(pos_last - first + 1, MiniFuzzy.config.cutoff)
 
     -- Using strict sign is crucial because when two last letter matches result
     -- into positions with similar width, the one which was created earlier
@@ -297,7 +297,7 @@ function H.score_positions(positions)
     return -1
   end
   local first, last = positions[1], positions[#positions]
-  local cutoff = MiniFuzzy.cutoff
+  local cutoff = MiniFuzzy.config.cutoff
   return cutoff * math.min(last - first + 1, cutoff) + math.min(first, cutoff)
 end
 
@@ -309,7 +309,7 @@ function H.make_filter_indexes(word, candidate_list)
   for i, cand in ipairs(candidate_list) do
     local positions = H.find_best_positions(letters, cand)
     if positions then
-      table.insert(res, {index = i, score = H.score_positions(positions)})
+      table.insert(res, { index = i, score = H.score_positions(positions) })
     end
   end
 

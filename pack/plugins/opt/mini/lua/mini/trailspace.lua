@@ -49,6 +49,9 @@ function MiniTrailspace.setup(config)
   vim.api.nvim_exec([[hi link MiniTrailspace Error]], false)
 end
 
+-- Module config
+MiniTrailspace.config = {}
+
 -- Functions to enable/disable whole module
 function MiniTrailspace.enable()
   H.enabled = true
@@ -106,14 +109,14 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = {}
+H.default_config = MiniTrailspace.config
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   return config
 end

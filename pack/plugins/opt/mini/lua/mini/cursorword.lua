@@ -56,10 +56,12 @@ function MiniCursorword.setup(config)
   vim.api.nvim_exec([[hi MiniCursorword term=underline cterm=underline gui=underline]], false)
 end
 
--- Module settings
----- On which event highlighting is updated. If default "CursorMoved" is too
----- frequent, use "CursorHold"
-MiniCursorword.highlight_event = 'CursorMoved'
+-- Module config
+MiniCursorword.config = {
+  -- On which event highlighting is updated. If default "CursorMoved" is too
+  -- frequent, use "CursorHold"
+  highlight_event = 'CursorMoved',
+}
 
 -- Functions to enable/disable whole module
 function MiniCursorword.enable()
@@ -133,14 +135,14 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = { highlight_event = MiniCursorword.highlight_event }
+H.default_config = MiniCursorword.config
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
     highlight_event = {
@@ -156,7 +158,7 @@ function H.setup_config(config)
 end
 
 function H.apply_config(config)
-  MiniCursorword.highlight_event = config.highlight_event
+  MiniCursorword.config = config
 end
 
 ---- Indicator of whether to actually do highlighing

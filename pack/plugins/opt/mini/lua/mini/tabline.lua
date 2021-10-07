@@ -90,9 +90,11 @@ function MiniTabline.setup(config)
   )
 end
 
--- Module settings
--- Whether to set Vim's settings for tabline
-MiniTabline.set_vim_settings = true
+-- Module config
+MiniTabline.config = {
+  -- Whether to set Vim's settings for tabline
+  set_vim_settings = true
+}
 
 -- Module functionality
 function MiniTabline.update_tabline()
@@ -117,14 +119,14 @@ MiniTabline.tabs_order = {}
 
 -- Helpers
 ---- Module default config
-H.config = { set_vim_settings = MiniTabline.set_vim_settings }
+H.default_config = MiniTabline.config
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({ set_vim_settings = { config.set_vim_settings, 'boolean' } })
 
@@ -132,7 +134,7 @@ function H.setup_config(config)
 end
 
 function H.apply_config(config)
-  MiniTabline.set_vim_settings = config.set_vim_settings
+  MiniTabline.config = config
 
   -- Set settings to ensure tabline is displayed properly
   if config.set_vim_settings then

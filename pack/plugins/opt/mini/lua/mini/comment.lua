@@ -56,13 +56,14 @@ function MiniComment.setup(config)
   H.apply_config(config)
 end
 
--- Module settings
----- Mappings
-MiniComment.mappings = {
-  comment = 'gc',
-  comment_line = 'gcc',
-  comment_visual = 'gc',
-  textobject = 'gc',
+-- Module config
+MiniComment.config = {
+  mappings = {
+    comment = 'gc',
+    comment_line = 'gcc',
+    comment_visual = 'gc',
+    textobject = 'gc',
+  }
 }
 
 -- Module functionality
@@ -156,14 +157,14 @@ end
 
 -- Helpers
 ---- Module default config
-H.config = { mappings = MiniComment.mappings }
+H.default_config = MiniComment.config
 
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.config, config or {})
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
     mappings = { config.mappings, 'table' },
@@ -177,7 +178,7 @@ function H.setup_config(config)
 end
 
 function H.apply_config(config)
-  MiniComment.mappings = config.mappings
+  MiniComment.config = config
 
   -- Make mappings
   vim.api.nvim_set_keymap(
