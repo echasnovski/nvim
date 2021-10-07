@@ -155,7 +155,8 @@ function H.unshow_and_cmd(buf_id, force, cmd)
     return false
   end
 
-  if not H.can_remove(buf_id, force, 'delete') then
+  local fun_name = ({['bdelete'] = 'delete', ['bwipeout'] = 'wipeout'})[cmd]
+  if not H.can_remove(buf_id, force, fun_name) then
     return false
   end
 
