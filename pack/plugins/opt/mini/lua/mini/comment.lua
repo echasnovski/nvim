@@ -12,8 +12,7 @@
 --
 -- Default `config`:
 -- {
---   -- Module mappings. User can redefine only some of them, other will be
---   -- taken from default
+--   -- Module mappings. Use `''` (empty string) to disable one.
 --   mappings = {
 --     -- Toggle comment (like `gcip` - comment inner paragraph) for both
 --     -- Normal and Visual modes
@@ -58,12 +57,18 @@ end
 
 -- Module config
 MiniComment.config = {
+  -- Module mappings. Use `''` (empty string) to disable one.
   mappings = {
+    -- Toggle comment (like `gcip` - comment inner paragraph) for both Normal
+    -- and Visual modes
     comment = 'gc',
+
+    -- Toggle comment on current line
     comment_line = 'gcc',
-    comment_visual = 'gc',
+
+    -- Define 'comment' textobject (like `dgc` - delete whole comment block)
     textobject = 'gc',
-  }
+  },
 }
 
 -- Module functionality
@@ -170,7 +175,6 @@ function H.setup_config(config)
     mappings = { config.mappings, 'table' },
     ['mappings.comment'] = { config.mappings.comment, 'string' },
     ['mappings.comment_line'] = { config.mappings.comment_line, 'string' },
-    ['mappings.comment_visual'] = { config.mappings.comment_visual, 'string' },
     ['mappings.textobject'] = { config.mappings.textobject, 'string' },
   })
 
@@ -181,13 +185,13 @@ function H.apply_config(config)
   MiniComment.config = config
 
   -- Make mappings
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.comment,
     'v:lua.MiniComment.operator()',
     { expr = true, noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'x',
     config.mappings.comment,
     -- Using `:<c-u>` instead of `<cmd>` as latter results into executing before
@@ -195,13 +199,13 @@ function H.apply_config(config)
     [[:<c-u>lua MiniComment.operator('visual')<cr>]],
     { noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.comment_line,
     'v:lua.MiniComment.operator() . "_"',
     { expr = true, noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'o',
     config.mappings.textobject,
     [[<cmd>lua MiniComment.textobject()<cr>]],
@@ -305,6 +309,14 @@ function H.make_uncomment_function(comment_parts)
     end
     return indent_str .. new_line
   end
+end
+
+---- Utilities
+function H.keymap(mode, keys, cmd, opts)
+  if keys == '' then
+    return
+  end
+  vim.api.nvim_set_keymap(mode, keys, cmd, opts)
 end
 
 return MiniComment

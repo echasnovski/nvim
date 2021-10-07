@@ -18,7 +18,7 @@
 --   -- Pattern to match function name in 'function call' surrounding
 --   -- By default it is a string of letters, '_' or '.'
 --   funname_pattern = '[%w_%.]+',
---   -- Mappings
+--   -- Mappings. Use `''` (empty string) to disable one.
 --   mappings = {
 --     add = 'sa',           -- Add surrounding
 --     delete = 'sd',        -- Delete surrounding
@@ -343,49 +343,49 @@ function H.apply_config(config)
   -- Make mappings
   -- NOTE: In mappings construct ` . ' '` "disables" motion required by `g@`.
   -- It is used to enable dot-repeatability.
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.add,
     [[v:lua.MiniSurround.operator('add')]],
     { expr = true, noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'x',
     config.mappings.add,
     [[:<c-u>lua MiniSurround.add('visual')<cr>]],
     { noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.delete,
     [[v:lua.MiniSurround.operator('delete') . ' ']],
     { expr = true, noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.replace,
     [[v:lua.MiniSurround.operator('replace') . ' ']],
     { expr = true, noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.find,
     [[v:lua.MiniSurround.operator('find', {'direction': 'right'}) . ' ']],
     { expr = true, noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.find_left,
     [[v:lua.MiniSurround.operator('find', {'direction': 'left'}) . ' ']],
     { expr = true, noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.highlight,
     [[v:lua.MiniSurround.operator('highlight') . ' ']],
     { expr = true, noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'n',
     config.mappings.update_n_lines,
     [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
@@ -886,6 +886,14 @@ function H.find_surrounding_in_neighborhood(surround_info, n_neighbors)
   end
 
   return { left = left_linepart, right = right_linepart }
+end
+
+-- Utilities
+function H.keymap(mode, keys, cmd, opts)
+  if keys == '' then
+    return
+  end
+  vim.api.nvim_set_keymap(mode, keys, cmd, opts)
 end
 
 return MiniSurround

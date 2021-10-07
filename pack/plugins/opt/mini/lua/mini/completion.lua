@@ -49,7 +49,8 @@
 --   -- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
 --   fallback_action = <function equivalent to '<C-n>' completion>,
 --
---   -- Mappings. Some of them might conflict with system mappings
+--   -- Module mappings. Use `''` (empty string) to disable one. Some of them
+--   -- might conflict with system mappings.
 --   mappings = {
 --     force_twostep  = '<C-Space>', -- Force two-step completion
 --     force_fallback = '<A-Space>'  -- Force fallback completion
@@ -260,7 +261,8 @@ MiniCompletion.config = {
     vim.api.nvim_feedkeys(H.keys.ctrl_n, 'n', false)
   end,
 
-  -- Mappings
+  -- Module mappings. Use `''` (empty string) to disable one. Some of them
+  -- might conflict with system mappings.
   mappings = {
     force_twostep = '<C-Space>', -- Force two-step completion
     force_fallback = '<A-Space>', -- Force fallback completion
@@ -588,13 +590,13 @@ end
 function H.apply_config(config)
   MiniCompletion.config = config
 
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'i',
     config.mappings.force_twostep,
     '<cmd>lua MiniCompletion.complete_twostep()<cr>',
     { noremap = true, silent = true }
   )
-  vim.api.nvim_set_keymap(
+  H.keymap(
     'i',
     config.mappings.force_fallback,
     '<cmd>lua MiniCompletion.complete_fallback()<cr>',
@@ -1227,7 +1229,7 @@ function H.close_action_window(cache, keep_timer)
   end
 end
 
----- Various helpers
+---- Utilities
 function H.is_char_keyword(char)
   -- Using Vim's `match()` and `keyword` enables respecting Cyrillic letters
   return vim.fn.match(char, '[[:keyword:]]') >= 0
@@ -1303,6 +1305,13 @@ function H.get_left_char()
   local col = vim.api.nvim_win_get_cursor(0)[2]
 
   return string.sub(line, col, col)
+end
+
+function H.keymap(mode, keys, cmd, opts)
+  if keys == '' then
+    return
+  end
+  vim.api.nvim_set_keymap(mode, keys, cmd, opts)
 end
 
 return MiniCompletion
