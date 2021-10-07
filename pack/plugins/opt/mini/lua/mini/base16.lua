@@ -81,7 +81,7 @@ function MiniBase16.apply(palette, name, use_cterm)
   -- Validate arguments
   H.validate_base16_palette(palette)
   if name and type(name) ~= 'string' then
-    error('(mini.base16): `name` should be string')
+    error('(mini.base16) `name` should be string')
   end
   H.validate_use_cterm(use_cterm)
 
@@ -514,7 +514,7 @@ function H.validate_hex(x, name)
   local is_hex = type(x) == 'string' and x:len() == 7 and x:sub(1, 1) == '#' and (tonumber(x:sub(2), 16) ~= nil)
 
   if not is_hex then
-    local msg = string.format('(mini.base16): `%s` is not a HEX color (string "#RRGGBB")', name)
+    local msg = string.format('(mini.base16) `%s` is not a HEX color (string "#RRGGBB")', name)
     error(msg)
   end
   return true
@@ -522,12 +522,12 @@ end
 
 function H.validate_base16_palette(x)
   if type(x) ~= 'table' then
-    error('(mini.base16): `palette` is not a table.')
+    error('(mini.base16) `palette` is not a table.')
   end
   for _, name in pairs(H.base16_names) do
     local c = x[name]
     if c == nil then
-      local msg = string.format('(mini.base16): `palette` does not have value %s', name)
+      local msg = string.format('(mini.base16) `palette` does not have value %s', name)
       error(msg)
     end
     H.validate_hex(c, string.format('palette[%s]', name))
@@ -545,11 +545,11 @@ function H.validate_use_cterm(x)
   for _, name in pairs(H.base16_names) do
     local c = x[name]
     if c == nil then
-      local msg = string.format('(mini.base16): `use_cterm` does not have value %s', name)
+      local msg = string.format('(mini.base16) `use_cterm` does not have value %s', name)
       error(msg)
     end
     if not (type(c) == 'number' and 0 <= c and c <= 255) then
-      local msg = string.format('(mini.base16): `use_cterm.%s` is not a cterm color', name)
+      local msg = string.format('(mini.base16) `use_cterm.%s` is not a cterm color', name)
       error(msg)
     end
   end

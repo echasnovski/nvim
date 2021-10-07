@@ -214,7 +214,7 @@ function H.normalize_buf_id(buf_id)
 end
 
 function H.notify(msg)
-  vim.notify('(mini.bufremove) ' .. msg)
+  vim.notify(string.format('(mini.bufremove) %s', msg))
 end
 
 return MiniBufremove

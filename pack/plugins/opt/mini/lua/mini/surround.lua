@@ -303,7 +303,7 @@ function MiniSurround.find_surrounding(surround_info)
     or H.find_surrounding_in_neighborhood(surround_info, n_lines)
 
   if surr == nil then
-    H.give_msg(string.format([[No surrounding '%s' found within %d lines.]], surround_info.id, n_lines))
+    H.notify(string.format([[No surrounding '%s' found within %d lines.]], surround_info.id, n_lines))
   end
 
   return surr
@@ -526,8 +526,8 @@ function H.cursor_cycle(pos_list, dir)
 end
 
 ---- Work with user input
-function H.give_msg(msg)
-  vim.cmd(string.format([[echom "(mini-surround.lua) %s"]], vim.fn.escape(msg, '"')))
+function H.notify(msg)
+  vim.notify(string.format('(mini.surround) %s', msg))
 end
 
 H.needs_help_msg = {}
@@ -544,7 +544,7 @@ function H.user_surround_id(sur_type)
       return
     end
     local msg = string.format('Enter %s surrounding identifier (single character) ', sur_type)
-    H.give_msg(msg)
+    H.notify(msg)
   end, 1000)
   local char = vim.fn.getchar()
   H.needs_help_msg = {}
@@ -558,7 +558,7 @@ function H.user_surround_id(sur_type)
     char = vim.fn.nr2char(char)
   end
   if char:find('^[%w%p%s]$') == nil then
-    H.give_msg([[Input must be single character: alphanumeric, punctuation, or space.]])
+    H.notify([[Input must be single character: alphanumeric, punctuation, or space.]])
     return nil
   end
 
@@ -566,7 +566,7 @@ function H.user_surround_id(sur_type)
 end
 
 function H.user_input(msg, text)
-  return vim.fn.input('(mini-surround.lua) ' .. msg .. ': ', text or '')
+  return vim.fn.input('(mini.surround) ' .. msg .. ': ', text or '')
 end
 
 ---- Work with line parts and text.
@@ -574,7 +574,7 @@ end
 ---- from `from` character (inclusive) to `to` character (inclusive).
 function H.new_linepart(pos_left, pos_right)
   if pos_left.line ~= pos_right.line then
-    H.give_msg('Positions span over multiple lines.')
+    H.notify('Positions span over multiple lines.')
     return nil
   end
 

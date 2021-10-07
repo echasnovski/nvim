@@ -214,7 +214,7 @@ function H.make_comment_parts()
   local cs = vim.api.nvim_buf_get_option(0, 'commentstring')
 
   if cs == '' then
-    vim.api.nvim_command([[echom "(mini-comment.lua) Option 'commentstring' is empty."]])
+    vim.notify([[(mini.comment) Option 'commentstring' is empty.]])
     return { left = '', right = '' }
   end
 

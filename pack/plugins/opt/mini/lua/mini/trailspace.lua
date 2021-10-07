@@ -56,13 +56,13 @@ MiniTrailspace.config = {}
 function MiniTrailspace.enable()
   H.enabled = true
   MiniTrailspace.highlight()
-  print('(mini.trailspace) Enabled')
+  vim.notify('(mini.trailspace) Enabled')
 end
 
 function MiniTrailspace.disable()
   H.enabled = false
   MiniTrailspace.unhighlight()
-  print('(mini.trailspace) Disabled')
+  vim.notify('(mini.trailspace) Disabled')
 end
 
 function MiniTrailspace.toggle()

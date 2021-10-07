@@ -67,13 +67,13 @@ MiniCursorword.config = {
 function MiniCursorword.enable()
   H.enabled = true
   MiniCursorword.highlight()
-  print('(mini.cursorword) Enabled')
+  vim.notify('(mini.cursorword) Enabled')
 end
 
 function MiniCursorword.disable()
   H.enabled = false
   MiniCursorword.unhighlight()
-  print('(mini.cursorword) Disabled')
+  vim.notify('(mini.cursorword) Disabled')
 end
 
 function MiniCursorword.toggle()
