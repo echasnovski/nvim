@@ -13,8 +13,17 @@
 --
 -- Default `config`:
 -- {
+--   -- Content of statusline as functions which return statusline string. See `:h
+--   -- statusline` and code of default contents (used when `nil` is supplied).
+--   content = {
+--     -- Content for active window
+--     active = nil,
+--     -- Content for inactive window(s)
+--     inactive = nil,
+--   },
+--
 --   -- Whether to set Vim's settings for statusline (make it always shown)
---   set_vim_settings = true
+--   set_vim_settings = true,
 -- }
 --
 -- Defined highlight groups:
@@ -118,39 +127,26 @@ end
 
 -- Module config
 MiniStatusline.config = {
+  -- Content of statusline as functions which return statusline string. See `:h
+  -- statusline` and code of default contents (used when `nil` is supplied).
+  content = {
+    -- Content for active window
+    active = nil,
+    -- Content for inactive window(s)
+    inactive = nil,
+  },
+
   -- Whether to set Vim's settings for statusline
   set_vim_settings = true,
 }
 
 -- Module functionality
 function MiniStatusline.active()
-  -- stylua: ignore start
-  local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
-  local spell         = MiniStatusline.section_spell({ trunc_width = 120 })
-  local wrap          = MiniStatusline.section_wrap({ trunc_width = 120 })
-  local git           = MiniStatusline.section_git({ trunc_width = 75 })
-  local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
-  local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
-  local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
-  local location      = MiniStatusline.section_location({ trunc_width = 75 })
-
-  -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
-  -- correct padding with spaces between groups (accounts for 'missing'
-  -- sections, etc.)
-  return MiniStatusline.combine_groups({
-    { hl = mode_hl,                     strings = { mode, spell, wrap } },
-    { hl = '%#MiniStatuslineDevinfo#',  strings = { git, diagnostics } },
-    '%<', -- Mark general truncate point
-    { hl = '%#MiniStatuslineFilename#', strings = { filename } },
-    '%=', -- End left alignment
-    { hl = '%#MiniStatuslineFileinfo#', strings = { fileinfo } },
-    { hl = mode_hl,                     strings = { location } },
-  })
-  -- stylua: ignore end
+  return (MiniStatusline.config.content.active or H.default_content_active)()
 end
 
 function MiniStatusline.inactive()
-  return '%#MiniStatuslineInactive#%F%='
+  return (MiniStatusline.config.content.inactive or H.default_content_inactive)()
 end
 
 function MiniStatusline.combine_groups(groups)
@@ -340,6 +336,36 @@ end
 ---- Module default config
 H.default_config = MiniStatusline.config
 
+function H.default_content_active()
+  -- stylua: ignore start
+  local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
+  local spell         = MiniStatusline.section_spell({ trunc_width = 120 })
+  local wrap          = MiniStatusline.section_wrap({ trunc_width = 120 })
+  local git           = MiniStatusline.section_git({ trunc_width = 75 })
+  local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+  local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
+  local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
+  local location      = MiniStatusline.section_location({ trunc_width = 75 })
+
+  -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
+  -- correct padding with spaces between groups (accounts for 'missing'
+  -- sections, etc.)
+  return MiniStatusline.combine_groups({
+    { hl = mode_hl,                     strings = { mode, spell, wrap } },
+    { hl = '%#MiniStatuslineDevinfo#',  strings = { git, diagnostics } },
+    '%<', -- Mark general truncate point
+    { hl = '%#MiniStatuslineFilename#', strings = { filename } },
+    '%=', -- End left alignment
+    { hl = '%#MiniStatuslineFileinfo#', strings = { fileinfo } },
+    { hl = mode_hl,                     strings = { location } },
+  })
+  -- stylua: ignore end
+end
+
+function H.default_content_inactive()
+  return '%#MiniStatuslineInactive#%F%='
+end
+
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
@@ -347,7 +373,13 @@ function H.setup_config(config)
   vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
-  vim.validate({ set_vim_settings = { config.set_vim_settings, 'boolean' } })
+  vim.validate({
+    content = { config.content, 'table' },
+    ['content.active'] = { config.content.active, 'function', true },
+    ['content.inactive'] = { config.content.inactive, 'function', true },
+
+    set_vim_settings = { config.set_vim_settings, 'boolean' },
+  })
 
   return config
 end
