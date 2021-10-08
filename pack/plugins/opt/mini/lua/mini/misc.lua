@@ -16,6 +16,8 @@
 -- }
 --
 -- Features are described for every function separately.
+--
+-- Currently this module has nothing to disable.
 
 -- Module and its helper
 local MiniMisc = {}

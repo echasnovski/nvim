@@ -63,6 +63,8 @@
 --       (width 4, first 3).
 -- - Final matched positions are those which minimize score among all possible
 --   matched positions of `word` and `candidate`.
+--
+-- Currently this module has nothing to disable.
 
 -- Module and its helper
 local MiniFuzzy = {}

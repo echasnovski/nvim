@@ -18,6 +18,10 @@
 -- - Trim all trailing whitespace with `trim()` function.
 -- - Highlighting is done according to `MiniTrailspace` highlight group. To
 --   change this, modify it directly with `highlight MiniTrailspace` command.
+--
+-- To disable, set `g:minitrailspace_disable` (globally) or
+-- `b:minitrailspace_disable` (for a buffer) to `v:true`. NOTE: after disabling
+-- there might be highlighting left; call `lua MiniTrailspace.unhighlight()`.
 
 -- Module and its helper
 local MiniTrailspace = {}
@@ -52,31 +56,9 @@ end
 -- Module config
 MiniTrailspace.config = {}
 
--- Functions to enable/disable whole module
-function MiniTrailspace.enable()
-  H.enabled = true
-  MiniTrailspace.highlight()
-  vim.notify('(mini.trailspace) Enabled')
-end
-
-function MiniTrailspace.disable()
-  H.enabled = false
-  MiniTrailspace.unhighlight()
-  vim.notify('(mini.trailspace) Disabled')
-end
-
-function MiniTrailspace.toggle()
-  if H.enabled then
-    MiniTrailspace.disable()
-  else
-    MiniTrailspace.enable()
-  end
-end
-
 -- Functions to perform actions
 function MiniTrailspace.highlight()
-  -- Do nothing if disabled
-  if not H.enabled then
+  if H.is_disabled() then
     return
   end
 
@@ -123,6 +105,10 @@ end
 
 function H.apply_config(config)
   -- There is nothing to do yet
+end
+
+function H.is_disabled()
+  return vim.g.minitrailspace_disable == true or vim.b.minitrailspace_disable == true
 end
 
 ---- Indicator of whether to actually do highlighing

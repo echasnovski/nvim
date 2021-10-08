@@ -25,6 +25,10 @@
 -- - Highlighting is done according to `MiniCursorword` highlight group. By
 --   default, it is a plain underline. To change this, modify it directly with
 --   `highlight MiniCursorword` command.
+--
+-- To disable, set `g:minicursorword_disable` (globally) or
+-- `b:minicursorword_disable` (for a buffer) to `v:true`. NOTE: after disabling
+-- there might be highlighting left; call `lua MiniCursorword.unhighlight()`.
 
 -- Module and its helper
 local MiniCursorword = {}
@@ -63,33 +67,12 @@ MiniCursorword.config = {
   highlight_event = 'CursorMoved',
 }
 
--- Functions to enable/disable whole module
-function MiniCursorword.enable()
-  H.enabled = true
-  MiniCursorword.highlight()
-  vim.notify('(mini.cursorword) Enabled')
-end
-
-function MiniCursorword.disable()
-  H.enabled = false
-  MiniCursorword.unhighlight()
-  vim.notify('(mini.cursorword) Disabled')
-end
-
-function MiniCursorword.toggle()
-  if H.enabled then
-    MiniCursorword.disable()
-  else
-    MiniCursorword.enable()
-  end
-end
-
 -- A modified version of https://stackoverflow.com/a/25233145
 -- Using `matchadd()` instead of a simpler `:match` to tweak priority of
 -- 'current word' highlighting: with `:match` it is higher than for
 -- `incsearch` which is not convenient.
 function MiniCursorword.highlight()
-  if not H.enabled then
+  if H.is_disabled() then
     return
   end
 
@@ -161,8 +144,9 @@ function H.apply_config(config)
   MiniCursorword.config = config
 end
 
----- Indicator of whether to actually do highlighing
-H.enabled = true
+function H.is_disabled()
+  return vim.g.minicursorword_disable == true or vim.b.minicursorword_disable == true
+end
 
 ---- Information about last match highlighting: word and match id (returned
 ---- from `vim.fn.matchadd()`). Stored *per window* by its unique identifier.

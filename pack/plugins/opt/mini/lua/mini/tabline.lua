@@ -38,6 +38,9 @@
 -- - Main function is `MiniTabline.make_tabline_string()` which computes actual
 --   value of '&tabline' option. It also describes high-level functional
 --   structure when displaying buffers. From there go to respective functions.
+--
+-- To disable (show empty tabline), set `g:minitabline_disable` (globally) or
+-- `b:minitabline_disable` (for a buffer) to `v:true`.
 
 -- Module and its helper
 local MiniTabline = {}
@@ -106,6 +109,10 @@ function MiniTabline.update_tabline()
 end
 
 function MiniTabline.make_tabline_string()
+  if H.is_disabled() then
+    return ''
+  end
+
   H.list_tabs()
   H.finalize_labels()
   H.fit_width()
@@ -141,6 +148,10 @@ function H.apply_config(config)
     vim.o.showtabline = 2 -- Always show tabline
     vim.o.hidden = true -- Allow switching buffers without saving them
   end
+end
+
+function H.is_disabled()
+  return vim.g.minitabline_disable == true or vim.b.minitabline_disable == true
 end
 
 ---- List tabs

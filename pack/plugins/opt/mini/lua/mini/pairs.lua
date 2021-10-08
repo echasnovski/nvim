@@ -62,6 +62,9 @@
 -- - Sometimes has troubles with multibyte characters (such as icons). This
 --   seems to be because detecting characters around cursor uses "byte
 --   substring" instead of "symbol substring" operation.
+--
+-- To disable, set `g:minipairs_disable` (globally) or `b:minipairs_disable`
+-- (for a buffer) to `v:true`.
 
 -- Module and its helper
 local MiniPairs = {}
@@ -87,7 +90,7 @@ MiniPairs.config = {
 
 -- Module functionality
 function MiniPairs.open(pair, twochars_pattern)
-  if not H.neigh_match(twochars_pattern) then
+  if H.is_disabled() or not H.neigh_match(twochars_pattern) then
     return pair:sub(1, 1)
   end
 
@@ -95,7 +98,7 @@ function MiniPairs.open(pair, twochars_pattern)
 end
 
 function MiniPairs.close(pair, twochars_pattern)
-  if not H.neigh_match(twochars_pattern) then
+  if H.is_disabled() or not H.neigh_match(twochars_pattern) then
     return pair:sub(2, 2)
   end
 
@@ -108,10 +111,10 @@ function MiniPairs.close(pair, twochars_pattern)
 end
 
 function MiniPairs.closeopen(pair, twochars_pattern)
-  if H.get_cursor_neigh(1, 1) == pair:sub(2, 2) then
-    return H.get_arrow_key('right')
-  else
+  if H.is_disabled() or not (H.get_cursor_neigh(1, 1) == pair:sub(2, 2)) then
     return MiniPairs.open(pair, twochars_pattern)
+  else
+    return H.get_arrow_key('right')
   end
 end
 
@@ -119,7 +122,7 @@ end
 function MiniPairs.bs(pair_set)
   local res = H.keys.bs
 
-  if H.is_in_table(H.get_cursor_neigh(0, 1), pair_set) then
+  if not H.is_disabled() and H.is_in_table(H.get_cursor_neigh(0, 1), pair_set) then
     res = res .. H.keys.del
   end
 
@@ -129,7 +132,7 @@ end
 function MiniPairs.cr(pair_set)
   local res = H.keys.cr
 
-  if H.is_in_table(H.get_cursor_neigh(0, 1), pair_set) then
+  if not H.is_disabled() and H.is_in_table(H.get_cursor_neigh(0, 1), pair_set) then
     res = res .. H.keys.above
   end
 
@@ -191,6 +194,10 @@ function H.apply_config(config)
       H.map('i', '<CR>', [[v:lua.MiniPairs.cr(['()', '[]', '{}'])]])
     end
   end
+end
+
+function H.is_disabled()
+  return vim.g.minipairs_disable == true or vim.b.minipairs_disable == true
 end
 
 ---- Various helpers

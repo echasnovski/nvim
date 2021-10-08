@@ -38,6 +38,9 @@
 -- Details:
 -- - Commenting depends on '&commentstring' option.
 -- - There is no support for block comments: all comments are made per line.
+--
+-- To disable, set `g:minicomment_disable` (globally) or
+-- `b:minicomment_disable` (for a buffer) to `v:true`.
 
 -- Module and its helper
 local MiniComment = {}
@@ -77,6 +80,10 @@ MiniComment.config = {
 ---- enable action on motion or textobject) and with argument when action
 ---- should be performed.
 function MiniComment.operator(mode)
+  if H.is_disabled() then
+    return ''
+  end
+
   -- If used without arguments inside expression mapping:
   -- - Set itself as `operatorfunc` to be called later to perform action.
   -- - Return 'g@' which will then be executed resulting into waiting for a
@@ -110,6 +117,10 @@ function MiniComment.operator(mode)
 end
 
 function MiniComment.toggle_comments(line_start, line_end)
+  if H.is_disabled() then
+    return
+  end
+
   local comment_parts = H.make_comment_parts()
   local lines = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
   local indent, is_comment = H.get_lines_info(lines, comment_parts)
@@ -136,6 +147,10 @@ end
 ---- Textobject function which selects all commented lines adjacent to cursor
 ---- line (if it itself is commented).
 function MiniComment.textobject()
+  if H.is_disabled() then
+    return
+  end
+
   local comment_parts = H.make_comment_parts()
   local comment_check = H.make_comment_check(comment_parts)
   local line_cur = vim.api.nvim_win_get_cursor(0)[1]
@@ -211,6 +226,10 @@ function H.apply_config(config)
     [[<cmd>lua MiniComment.textobject()<cr>]],
     { noremap = true, silent = true }
   )
+end
+
+function H.is_disabled()
+  return vim.g.minicomment_disable == true or vim.b.minicomment_disable == true
 end
 
 ---- Core implementations

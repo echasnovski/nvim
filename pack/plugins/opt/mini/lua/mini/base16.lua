@@ -64,6 +64,8 @@
 -- - `rgb_palette_to_cterm_palette(palette)` - converts base16 palette with RGB
 --   colors to base16 palette with terminal colors. Useful for caching
 --   `use_cterm` variable to increase speed.
+--
+-- Currently this module has nothing to disable.
 
 -- Module and its helper
 local MiniBase16 = {}

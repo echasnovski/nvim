@@ -29,6 +29,9 @@
 --     - Otherwise create a scratch one with `vim.api.nvim_create_buf(true,
 --       true)` and use it.
 -- - Functions are described in their comments.
+--
+-- To disable, set `g:minibufremove_disable` (globally) or
+-- `b:minibufremove_disable` (for a buffer) to `v:true`.
 
 -- Module and its helper
 local MiniBufremove = {}
@@ -59,6 +62,10 @@ MiniBufremove.config = {
 ----   command). Default: false.
 ---- @return Boolean showing if operation was successful.
 function MiniBufremove.delete(buf_id, force)
+  if H.is_disabled() then
+    return
+  end
+
   return H.unshow_and_cmd(buf_id, force, 'bdelete')
 end
 
@@ -68,6 +75,10 @@ end
 ----   command). Default: false.
 ---- @return Boolean showing if operation was successful.
 function MiniBufremove.wipeout(buf_id, force)
+  if H.is_disabled() then
+    return
+  end
+
   return H.unshow_and_cmd(buf_id, force, 'bwipeout')
 end
 
@@ -75,6 +86,10 @@ end
 ---- @param buf_id Identifier of a buffer to use (0 for current). Default: 0.
 ---- @return Boolean showing if operation was successful.
 function MiniBufremove.unshow(buf_id)
+  if H.is_disabled() then
+    return
+  end
+
   buf_id = H.normalize_buf_id(buf_id)
 
   if not H.is_valid_id(buf_id, 'buffer') then
@@ -90,6 +105,10 @@ end
 ---- @param win_id Identifier of a window to use (0 for current). Default: 0.
 ---- @return Boolean showing if operation was successful.
 function MiniBufremove.unshow_in_window(win_id)
+  if H.is_disabled() then
+    return nil
+  end
+
   win_id = (win_id == nil) and 0 or win_id
 
   if not H.is_valid_id(win_id, 'window') then
@@ -144,6 +163,10 @@ function H.apply_config(config)
   if config.set_vim_settings then
     vim.o.hidden = true -- Allow hidden buffers
   end
+end
+
+function H.is_disabled()
+  return vim.g.minibufremove_disable == true or vim.b.minibufremove_disable == true
 end
 
 -- Removing implementation

@@ -79,6 +79,9 @@
 --     on 'CursorHold' events if file was updated (see `:h checktime`).
 --   As these actions are useful, one can only live with the fact that
 --   'statusline' option gets reevaluated on 'CursorHold'.
+--
+-- To disable (show empty statusline), set `g:ministatusline_disable`
+-- (globally) or `b:ministatusline_disable` (for a buffer) to `v:true`.
 
 -- Possible Lua dependencies
 local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
@@ -142,10 +145,18 @@ MiniStatusline.config = {
 
 -- Module functionality
 function MiniStatusline.active()
+  if H.is_disabled() then
+    return ''
+  end
+
   return (MiniStatusline.config.content.active or H.default_content_active)()
 end
 
 function MiniStatusline.inactive()
+  if H.is_disabled() then
+    return ''
+  end
+
   return (MiniStatusline.config.content.inactive or H.default_content_inactive)()
 end
 
@@ -391,6 +402,10 @@ function H.apply_config(config)
   if config.set_vim_settings then
     vim.o.laststatus = 2 -- Always show statusline
   end
+end
+
+function H.is_disabled()
+  return vim.g.ministatusline_disable == true or vim.b.ministatusline_disable == true
 end
 
 ---- Various helpers

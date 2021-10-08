@@ -14,9 +14,7 @@
 -- Default `config`:
 -- {
 --   -- Whether to perform certain auto action. To disable action globally, add
---   -- it with `false`. NOTE: To disable action only in certain buffer, create
---   -- respective `b:minicompletion_auto_*` and set it to 0. For example, `let
---   -- b:minicompletion_auto_completion=0` disables completion in buffer.
+--   -- it with `false`.
 --   auto = {completion = true, info = true, signature = true},
 --
 --   -- Delay (debounce type, in ms) between certain Neovim event and action.
@@ -161,6 +159,9 @@
 --       signature (in case there are many). If LSP response has data about
 --       active parameter, it is highlighted with
 --       `MiniCompletionActiveParameter` highlight group.
+--
+-- To disable, set `g:minicompletion_disable` (globally) or
+-- `b:minicompletion_disable` (for a buffer) to `v:true`.
 
 -- Module and its helper
 local MiniCompletion = {}
@@ -189,9 +190,7 @@ function MiniCompletion.setup(config)
         au TextChangedI    * lua MiniCompletion.on_text_changed_i()
         au TextChangedP    * lua MiniCompletion.on_text_changed_p()
 
-        au FileType TelescopePrompt let b:minicompletion_auto_completion=0
-        au FileType TelescopePrompt let b:minicompletion_auto_info=0
-        au FileType TelescopePrompt let b:minicompletion_auto_signature=0
+        au FileType TelescopePrompt let b:minicompletion_disable=v:true
       augroup END]],
     false
   )
@@ -274,7 +273,11 @@ MiniCompletion.config = {
 
 -- Module functionality
 function MiniCompletion.auto_completion()
-  if not MiniCompletion.config.auto.completion or vim.b.minicompletion_auto_completion == 0 then
+  if H.is_disabled() then
+    return
+  end
+
+  if not MiniCompletion.config.auto.completion then
     return
   end
 
@@ -316,19 +319,31 @@ function MiniCompletion.auto_completion()
 end
 
 function MiniCompletion.complete_twostep(fallback, force)
+  if H.is_disabled() then
+    return
+  end
+
   H.stop_completion()
   H.completion.fallback, H.completion.force = fallback or true, force or true
   H.trigger_twostep()
 end
 
 function MiniCompletion.complete_fallback()
+  if H.is_disabled() then
+    return
+  end
+
   H.stop_completion()
   H.completion.fallback, H.completion.force = true, true
   H.trigger_fallback()
 end
 
 function MiniCompletion.auto_info()
-  if not MiniCompletion.config.auto.info or vim.b.minicompletion_auto_info == 0 then
+  if H.is_disabled() then
+    return
+  end
+
+  if not MiniCompletion.config.auto.info then
     return
   end
 
@@ -356,7 +371,11 @@ function MiniCompletion.auto_info()
 end
 
 function MiniCompletion.auto_signature()
-  if not MiniCompletion.config.auto.signature or vim.b.minicompletion_auto_signature == 0 then
+  if H.is_disabled() then
+    return
+  end
+
+  if not MiniCompletion.config.auto.signature then
     return
   end
 
@@ -609,6 +628,10 @@ function H.apply_config(config)
     -- More common completion behavior
     vim.cmd([[set completeopt=menuone,noinsert,noselect]])
   end
+end
+
+function H.is_disabled()
+  return vim.g.minicompletion_disable == true or vim.b.minicompletion_disable == true
 end
 
 ---- Completion triggers

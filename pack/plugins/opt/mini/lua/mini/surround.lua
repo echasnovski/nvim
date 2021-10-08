@@ -101,6 +101,9 @@
 -- - Tags are searched using regex-like methods, so issues are inevitable.
 --   Overall it is pretty good, but certain cases won't work. Like self-nested
 --   tags won't match correctly on both ends: '<a><a></a></a>'.
+--
+-- To disable, set `g:minisurround_disable` (globally) or
+-- `b:minisurround_disable` (for a buffer) to `v:true`.
 
 -- Module and its helper
 local MiniSurround = {}
@@ -146,6 +149,10 @@ MiniSurround.config = {
 
 -- Module functionality
 function MiniSurround.operator(task, cache)
+  if H.is_disabled() then
+    return ''
+  end
+
   H.cache = cache or {}
 
   vim.cmd('set operatorfunc=v:lua.' .. 'MiniSurround.' .. task)
@@ -153,6 +160,11 @@ function MiniSurround.operator(task, cache)
 end
 
 function MiniSurround.add(mode)
+  -- Needed to disable in visual mode
+  if H.is_disabled() then
+    return ''
+  end
+
   -- Get marks' positions based on current mode
   local marks = H.get_marks_pos(mode)
 
@@ -262,6 +274,10 @@ function MiniSurround.highlight()
 end
 
 function MiniSurround.update_n_lines()
+  if H.is_disabled() then
+    return ''
+  end
+
   local n_lines = H.user_input('New number of neighbor lines', MiniSurround.config.n_lines)
   n_lines = math.floor(tonumber(n_lines) or MiniSurround.config.n_lines)
   MiniSurround.config.n_lines = n_lines
@@ -391,6 +407,10 @@ function H.apply_config(config)
     [[<cmd>lua MiniSurround.update_n_lines()<cr>]],
     { noremap = true, silent = true }
   )
+end
+
+function H.is_disabled()
+  return vim.g.minisurround_disable == true or vim.b.minisurround_disable == true
 end
 
 ---- Namespace for highlighting
