@@ -88,7 +88,7 @@ function MiniComment.operator(mode)
   -- - Set itself as `operatorfunc` to be called later to perform action.
   -- - Return 'g@' which will then be executed resulting into waiting for a
   --   motion or text object. This textobject will then be recorded using `'[`
-  --   and `'[` marks. After that, `operatorfunc` is called with `mode` equal
+  --   and `']` marks. After that, `operatorfunc` is called with `mode` equal
   --   to one of "line", "char", or "block".
   -- NOTE: setting `operatorfunc` inside this function enables usage of 'count'
   -- like `10gc_` toggles comments of 10 lines below (starting with current).
@@ -200,12 +200,7 @@ function H.apply_config(config)
   MiniComment.config = config
 
   -- Make mappings
-  H.keymap(
-    'n',
-    config.mappings.comment,
-    'v:lua.MiniComment.operator()',
-    { expr = true, noremap = true, silent = true }
-  )
+  H.keymap('n', config.mappings.comment, 'v:lua.MiniComment.operator()', { expr = true, noremap = true, silent = true })
   H.keymap(
     'x',
     config.mappings.comment,

@@ -155,7 +155,7 @@ function MiniSurround.operator(task, cache)
 
   H.cache = cache or {}
 
-  vim.cmd('set operatorfunc=v:lua.' .. 'MiniSurround.' .. task)
+  vim.cmd(string.format('set operatorfunc=v:lua.MiniSurround.%s', task))
   return 'g@'
 end
 
