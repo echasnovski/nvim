@@ -13,11 +13,9 @@
 --
 -- Default `config`:
 -- {
---   -- Whether to perform certain auto action. To disable action globally, add
---   -- it with `false`.
---   auto = {completion = true, info = true, signature = true},
---
 --   -- Delay (debounce type, in ms) between certain Neovim event and action.
+--   -- This can be used to (virtually) disable certain automatic actions by
+--   -- setting very high delay time (like 10^7).
 --   delay = {completion = 100, info = 100, signature = 50},
 --
 --   -- Maximum dimensions of floating windows for certain actions. Action entry
@@ -211,12 +209,10 @@ end
 
 -- Module config
 MiniCompletion.config = {
-  -- Whether to perform certain auto action. To disable action, add it with
-  -- `false`.
-  auto = { completion = true, info = true, signature = true },
-
-  -- Delay (debounce type, in ms) between certain Neovim event and action
-  delay = { completion = 100, info = 100, signature = 50 },
+  -- Delay (debounce type, in ms) between certain Neovim event and action.
+  -- This can be used to (virtually) disable certain automatic actions by
+  -- setting very high delay time (like 10^7).
+  delay = {completion = 100, info = 100, signature = 50},
 
   -- Maximum dimensions of floating windows for certain actions. Action entry
   -- should be a table with 'height' and 'width' fields.
@@ -274,10 +270,6 @@ MiniCompletion.config = {
 -- Module functionality
 function MiniCompletion.auto_completion()
   if H.is_disabled() then
-    return
-  end
-
-  if not MiniCompletion.config.auto.completion then
     return
   end
 
@@ -343,10 +335,6 @@ function MiniCompletion.auto_info()
     return
   end
 
-  if not MiniCompletion.config.auto.info then
-    return
-  end
-
   H.info.timer:stop()
 
   -- Defer execution because of textlock during `CompleteChanged` event
@@ -372,10 +360,6 @@ end
 
 function MiniCompletion.auto_signature()
   if H.is_disabled() then
-    return
-  end
-
-  if not MiniCompletion.config.auto.signature then
     return
   end
 
@@ -559,11 +543,6 @@ function H.setup_config(config)
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
-    auto = { config.auto, 'table' },
-    ['auto.completion'] = { config.auto.completion, 'boolean' },
-    ['auto.info'] = { config.auto.info, 'boolean' },
-    ['auto.signature'] = { config.auto.signature, 'boolean' },
-
     delay = { config.delay, 'table' },
     ['delay.completion'] = { config.delay.completion, 'number' },
     ['delay.info'] = { config.delay.info, 'number' },
