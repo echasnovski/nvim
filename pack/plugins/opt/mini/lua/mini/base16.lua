@@ -1,71 +1,22 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
---
--- Custom *minimal* and *fast* Lua module which implements
--- [base16](http://chriskempson.com/projects/base16/) color scheme (with
--- Copyright (C) 2012 Chris Kempson)
---
--- This module doesn't need to get activated. Call to `setup()` will create
--- global `MiniBase16` object. Use its functions as with normal Lua modules.
---
--- Default `config`: {} (currently nothing to configure)
---
--- Features:
--- - `apply(palette, name, use_cterm)` applies base16 `palette` (table with
---   base16-named hex '#RRGGBB' color strings) by creating Neovim's highlight
---   groups and sets `g:colors_name` to `name` ('base16-custom' by default).
---   Highlight groups make an extended set from original
---   [base16-vim](https://github.com/chriskempson/base16-vim/) plugin. It is a
---   good idea to have `palette` respect the original [styling
---   principles](https://github.com/chriskempson/base16/blob/master/styling.md).
---   By default only 'gui highlighting' (see `:h highlight-gui` and `:h
---   termguicolors`) is supported. To support 'cterm highlighting' (see `:h
---   highlight-cterm`) supply `use_cterm` argument in one of the formats:
---     - `true` to auto-generate from `palette` (as closest colors).
---     - Table with similar structure to `palette` but having terminal colors
---       (integers from 0 to 255) instead of hex strings.
--- - `mini_palette(background, foreground, accent_chroma)` creates base16
---   palette based on the HEX (string '#RRGGBB') colors of main background and
---   foreground with optional setting of accent chroma (see details). Exact
---   algorithm is based on certain heuristics:
---     - Main operating color space is
---       [CIELCh(uv)](https://en.wikipedia.org/wiki/CIELUV#Cylindrical_representation_(CIELCh))
---       which is a cylindrical representation of a perceptually uniform CIELUV
---       color space. It defines color by three values: lightness L (values
---       from 0 to 100), chroma (positive values), and hue (circular values
---       from 0 to 360 degress). Useful converting tool:
---       https://www.easyrgb.com/en/convert.php
---     - There are four important lightness values: background, foreground,
---       focus (around the middle of background and foreground, leaning towards
---       foreground), and edge (extreme lightness closest to foreground).
---     - First four colors have the same chroma and hue as `background` but
---       lightness progresses from background towards focus.
---     - Second four colors have the same chroma and hue as `foreground` but
---       lightness progresses from foreground towards edge in such a way that
---       'base05' color is main text color.
---     - The rest eight colors are accent colors which are created in pairs
---         - Each pair has same hue from set of hues 'most different' to
---           background and foreground hues (if respective chorma is positive).
---         - All colors have the same chroma equal to `accent_chroma` (if not
---           provided, chroma of foreground is used, as they will appear next
---           to each other). NOTE: this means that in case of low foreground
---           chroma, it is a good idea to set `accent_chroma` manually.
---           Values from 30 (low chorma) to 80 (high chroma) are common.
---         - Within pair there is base lightness (equal to foreground
---           lightness) and alternative (equal to focus lightness). Base
---           lightness goes to colors which will be used more frequently in
---           code: base08 (variables), base0B (strings), base0D (functions),
---           base0E (keywords).
---       How exactly accent colors are mapped to 'base16' colors is a result of
---       trial and error. One rule of thumb was: colors within one hue pair
---       should be more often seen next to each other. This is because it is
---       easier to distinguish them and seems to be more visually appealing.
---       That is why `base0D` (14) and `base0F` (16) have same hues because
---       they usually represent functions and delimiter (brackets included).
--- - `rgb_palette_to_cterm_palette(palette)` - converts base16 palette with RGB
---   colors to base16 palette with terminal colors. Useful for caching
---   `use_cterm` variable to increase speed.
---
--- Currently this module has nothing to disable.
+
+---@brief [[
+--- Custom minimal and fast Lua module which implements
+--- [base16](http://chriskempson.com/projects/base16/) color scheme (with
+--- Copyright (C) 2012 Chris Kempson) adapated for modern Neovim 0.5 Lua
+--- plugins. It also provides an opinionated palette generator based only on
+--- background and foreground colors.
+---
+--- This module doesn't need setup, but it can be done to improve usability.
+--- Setup with `require('mini.base16').setup({})` (replace `{}` with your
+--- `config` table).
+---
+--- Default `config`: {} (currently nothing to configure)
+---
+--- # Notes
+--- 1. Created theme can be made to support |highlight-cterm| alongside with |highlight-gui|.
+---@brief ]]
+---@tag MiniBase16
 
 -- Module and its helper
 local MiniBase16 = {}
@@ -79,6 +30,24 @@ end
 
 MiniBase16.palette = nil
 
+--- Apply base16 palette
+---
+--- This is a main function which applies base16 theme based on supplied
+--- palette of 16 colors. Highlight groups make an extended set from original
+--- [base16-vim](https://github.com/chriskempson/base16-vim/) plugin. It is a
+--- good idea to have `palette` respect the original [styling
+--- principles](https://github.com/chriskempson/base16/blob/master/styling.md).
+---
+--- By default only 'gui highlighting' (see |highlight-gui| and
+--- |termguicolors|) is supported. To support 'cterm highlighting' (see
+--- |highlight-cterm|) supply `use_cterm` argument in one of the formats:
+--- - `true` to auto-generate from `palette` (as closest colors).
+--- - Table with similar structure to `palette` but having terminal colors
+---   (integers from 0 to 255) instead of hex strings.
+---
+---@param palette table: Table with names from `base00` to `base0F` and values being strings of HEX colors with format "#RRGGBB".
+---@param name string: Name of applied theme (stored in |g:colors_name|). Default: "base16-custom".
+---@param use_cterm boolean|table: Whether to support cterm colors. See function's description.
 function MiniBase16.apply(palette, name, use_cterm)
   -- Validate arguments
   H.validate_base16_palette(palette)
@@ -336,6 +305,50 @@ function MiniBase16.apply(palette, name, use_cterm)
   end
 end
 
+--- Create 'mini' palette
+---
+--- Create base16 palette based on the HEX (string '#RRGGBB') colors of main background and
+--- foreground with optional setting of accent chroma (see details).
+---
+--- # Algorithm design
+--- - Main operating color space is
+---   [CIELCh(uv)](https://en.wikipedia.org/wiki/CIELUV#Cylindrical_representation_(CIELCh))
+---   which is a cylindrical representation of a perceptually uniform CIELUV
+---   color space. It defines color by three values: lightness L (values from 0
+---   to 100), chroma (positive values), and hue (circular values from 0 to 360
+---   degress). Useful converting tool: https://www.easyrgb.com/en/convert.php
+--- - There are four important lightness values: background, foreground, focus
+---   (around the middle of background and foreground, leaning towards
+---   foreground), and edge (extreme lightness closest to foreground).
+--- - First four colors have the same chroma and hue as `background` but
+---   lightness progresses from background towards focus.
+--- - Second four colors have the same chroma and hue as `foreground` but
+---   lightness progresses from foreground towards edge in such a way that
+---   'base05' color is main foreground color.
+--- - The rest eight colors are accent colors which are created in pairs
+---     - Each pair has same hue from set of hues 'most different' to
+---       background and foreground hues (if respective chorma is positive).
+---     - All colors have the same chroma equal to `accent_chroma` (if not
+---       provided, chroma of foreground is used, as they will appear next
+---       to each other). Note: this means that in case of low foreground
+---       chroma, it is a good idea to set `accent_chroma` manually.
+---       Values from 30 (low chorma) to 80 (high chroma) are common.
+---     - Within pair there is base lightness (equal to foreground
+---       lightness) and alternative (equal to focus lightness). Base
+---       lightness goes to colors which will be used more frequently in
+---       code: base08 (variables), base0B (strings), base0D (functions),
+---       base0E (keywords).
+---   How exactly accent colors are mapped to base16 palette is a result of
+---   trial and error. One rule of thumb was: colors within one hue pair should
+---   be more often seen next to each other. This is because it is easier to
+---   distinguish them and seems to be more visually appealing. That is why
+---   `base0D` and `base0F` have same hues because they usually represent
+---   functions and delimiter (brackets included).
+---
+---@param background string: Background HEX color (formatted as `#RRGGBB`).
+---@param foreground string: Foreground HEX color (formatted as `#RRGGBB`).
+---@param accent_chroma number: Positive number (usually between 0 and 100).
+---@return table: Table with base16 palette.
 function MiniBase16.mini_palette(background, foreground, accent_chroma)
   H.validate_hex(background, 'background')
   H.validate_hex(foreground, 'foreground')
@@ -402,6 +415,12 @@ function MiniBase16.mini_palette(background, foreground, accent_chroma)
   return base16_palette
 end
 
+--- Converts palette with RGB colors to terminal colors
+---
+--- Useful for caching `use_cterm` variable to increase speed.
+---
+---@param palette table: Table with base16 palette (same as in |MiniBase16.apply|).
+---@return table: Table with base16 palette using |highlight-cterm|.
 function MiniBase16.rgb_palette_to_cterm_palette(palette)
   H.validate_base16_palette(palette)
 

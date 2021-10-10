@@ -1,43 +1,49 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
---
--- Lua module for *minimal* buffer removing (unshow, delete, wipeout), which
--- saves window layout (opposite to builtin Neovim's commands). This is mostly
--- a Lua implementation of
--- [bclose.vim](https://vim.fandom.com/wiki/Deleting_a_buffer_without_closing_the_window).
--- Other alternatives:
--- - [vim-bbye](https://github.com/moll/vim-bbye)
--- - [vim-sayonara](https://github.com/mhinz/vim-sayonara)
---
--- This module doesn't need to get activated, but it can be done to improve
--- usability. To activate, put this file somewhere into 'lua' folder and call
--- module's `setup()`. For example, put as 'lua/mini/bufremove.lua' and execute
--- `require('mini.bufremove').setup()` Lua code. It may have `config` argument
--- which should be a table overwriting default values using same structure.
---
--- Default `config`:
--- {
---   -- Whether to set Vim's settings for buffers (allow hidden buffers)
---   set_vim_settings = true
--- }
---
--- Features:
--- -  Which buffer to show in window(s) after its current buffer is removed is
---   decided by the algorithm:
---     - If alternate buffer (see `:h CTRL-^`) is listed (see `:h
---       buflisted()`), use it.
---     - If previous listed buffer (see `:h bprevious`) is different, use it.
---     - Otherwise create a scratch one with `vim.api.nvim_create_buf(true,
---       true)` and use it.
--- - Functions are described in their comments.
---
--- To disable, set `g:minibufremove_disable` (globally) or
--- `b:minibufremove_disable` (for a buffer) to `v:true`.
+
+---@brief [[
+--- Lua module for minimal buffer removing (unshow, delete, wipeout), which
+--- saves window layout (opposite to builtin Neovim's commands). This is mostly
+--- a Lua implementation of
+--- [bclose.vim](https://vim.fandom.com/wiki/Deleting_a_buffer_without_closing_the_window).
+--- Other alternatives:
+--- - [vim-bbye](https://github.com/moll/vim-bbye)
+--- - [vim-sayonara](https://github.com/mhinz/vim-sayonara)
+---
+--- This module doesn't need setup, but it can be done to improve usability.
+--- Setup with `require('mini.bufremove').setup({})` (replace `{}` with your
+--- `config` table).
+---
+--- Default `config`:
+--- <pre>
+--- {
+---   -- Whether to set Vim's settings for buffers (allow hidden buffers)
+---   set_vim_settings = true
+--- }
+--- </pre>
+---
+--- # Notes
+--- 1. Which buffer to show in window(s) after its current buffer is removed is
+---    decided by the algorithm:
+---    - If alternate buffer (see |CTRL-^|) is listed (see |buflisted()|), use it.
+---    - If previous listed buffer (see |bprevious|) is different, use it.
+---    - Otherwise create a scratch one with `nvim_create_buf(true, true)` and use
+---      it.
+---
+--- # Disabling
+---
+--- To disable core functionality, set `g:minibufremove_disable` (globally) or
+--- `b:minibufremove_disable` (for a buffer) to `v:true`.
+---@brief ]]
+---@tag MiniBufremove
 
 -- Module and its helper
 local MiniBufremove = {}
 local H = {}
 
--- Module setup
+--- Module setup
+---
+---@param config table: Module config table.
+---@usage `require('mini.bufremove').setup({})` (replace `{}` with your `config` table)
 function MiniBufremove.setup(config)
   -- Export module
   _G.MiniBufremove = MiniBufremove
@@ -56,11 +62,11 @@ MiniBufremove.config = {
 }
 
 -- Module functionality
----- Delete buffer `buf_id` with `:bdelete` after unshowing it.
----- @param buf_id Identifier of a buffer to use (0 for current). Default: 0.
----- @param force Whether to ignore unsaved changes (using `!` version of
-----   command). Default: false.
----- @return Boolean showing if operation was successful.
+--- Delete buffer `buf_id` with |:bdelete| after unshowing it.
+---
+---@param buf_id number: Buffer identifier (see |bufnr()|) to use. Default: 0 for current.
+---@param force boolean: Whether to ignore unsaved changes (using `!` version of command). Default: `false`.
+---@return boolean: Whether operation was successful.
 function MiniBufremove.delete(buf_id, force)
   if H.is_disabled() then
     return
@@ -69,11 +75,11 @@ function MiniBufremove.delete(buf_id, force)
   return H.unshow_and_cmd(buf_id, force, 'bdelete')
 end
 
----- Wipeout buffer `buf_id` with `:bwipeout` after unshowing it.
----- @param buf_id Identifier of a buffer to use (0 for current). Default: 0.
----- @param force Whether to ignore unsaved changes (using `!` version of
-----   command). Default: false.
----- @return Boolean showing if operation was successful.
+--- Wipeout buffer `buf_id` with |:bwipeout| after unshowing it.
+---
+---@param buf_id number: Buffer identifier (see |bufnr()|) to use. Default: 0 for current.
+---@param force boolean: Whether to ignore unsaved changes (using `!` version of command). Default: `false`.
+---@return boolean: Whether operation was successful.
 function MiniBufremove.wipeout(buf_id, force)
   if H.is_disabled() then
     return
@@ -82,9 +88,10 @@ function MiniBufremove.wipeout(buf_id, force)
   return H.unshow_and_cmd(buf_id, force, 'bwipeout')
 end
 
----- Stop showing buffer `buf_id` in all windows
----- @param buf_id Identifier of a buffer to use (0 for current). Default: 0.
----- @return Boolean showing if operation was successful.
+--- Stop showing buffer `buf_id` in all windows
+---
+---@param buf_id number: Buffer identifier (see |bufnr()|) to use. Default: 0 for current.
+---@return boolean: Whether operation was successful.
 function MiniBufremove.unshow(buf_id)
   if H.is_disabled() then
     return
@@ -101,9 +108,9 @@ function MiniBufremove.unshow(buf_id)
   return true
 end
 
----- Stop showing current buffer of window `win_id`
----- @param win_id Identifier of a window to use (0 for current). Default: 0.
----- @return Boolean showing if operation was successful.
+--- Stop showing current buffer of window `win_id`
+---@param win_id number: Window identifier (see |win_getid()|) to use. Default: 0 for current.
+---@return boolean: Whether operation was successful.
 function MiniBufremove.unshow_in_window(win_id)
   if H.is_disabled() then
     return nil

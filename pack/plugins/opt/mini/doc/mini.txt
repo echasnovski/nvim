@@ -1,0 +1,758 @@
+================================================================================
+                                                                     *mini.nvim*
+
+|mini.nvim| is a collection of minimal, independent, and fast Lua modules
+dedicated to improve Neovim experience.
+
+
+================================================================================
+                                                                    *MiniBase16*
+
+Custom minimal and fast Lua module which implements
+[base16](http://chriskempson.com/projects/base16/) color scheme (with Copyright
+(C) 2012 Chris Kempson) adapated for modern Neovim 0.5 Lua plugins. It also
+provides an opinionated palette generator based only on background and
+foreground colors.
+
+This module doesn't need setup, but it can be done to improve usability. Setup
+with `require('mini.base16').setup({})` (replace `{}` with your `config`
+table).
+
+Default `config`: {} (currently nothing to configure)
+
+# Notes
+1. Created theme can be made to support |highlight-cterm| alongside with
+   |highlight-gui|.
+
+MiniBase16.apply({palette}, {name}, {use_cterm})          *MiniBase16.apply()*
+    Apply base16 palette
+
+    This is a main function which applies base16 theme based on supplied
+    palette of 16 colors. Highlight groups make an extended set from original
+    [base16-vim](https://github.com/chriskempson/base16-vim/) plugin. It is a
+    good idea to have `palette` respect the original [styling
+    principles](https://github.com/chriskempson/base16/blob/master/styling.md).
+
+    By default only 'gui highlighting' (see |highlight-gui| and
+    |termguicolors|) is supported. To support 'cterm highlighting' (see
+    |highlight-cterm|) supply `use_cterm` argument in one of the formats:
+    - `true` to auto-generate from `palette` (as closest colors).
+    - Table with similar structure to `palette` but having terminal colors 
+      (integers from 0 to 255) instead of hex strings.
+
+
+
+    Parameters: ~
+        {palette}   (table)          Table with names from `base00` to
+                                     `base0F` and values being strings of HEX
+                                     colors with format "#RRGGBB".
+        {name}      (string)         Name of applied theme (stored in
+                                     |g:colors_name|). Default:
+                                     "base16-custom".
+        {use_cterm} (boolean|table)  Whether to support cterm colors. See
+                                     function's description.
+
+
+MiniBase16.mini_palette({background}, {foreground}, {accent_chroma}) *MiniBase16.mini_palette()*
+    Create 'mini' palette
+
+    Create base16 palette based on the HEX (string '#RRGGBB') colors of main
+    background and foreground with optional setting of accent chroma (see
+    details).
+
+    # Algorithm design
+    - Main operating color space is 
+      [CIELCh(uv)](https://en.wikipedia.org/wiki/CIELUV#Cylindrical_representation_(CIELCh))
+      which is a cylindrical representation of a perceptually uniform CIELUV 
+      color space. It defines color by three values: lightness L (values from 0
+      to 100), chroma (positive values), and hue (circular values from 0 to 360
+      degress). Useful converting tool: https://www.easyrgb.com/en/convert.php
+    - There are four important lightness values: background, foreground, focus 
+      (around the middle of background and foreground, leaning towards 
+      foreground), and edge (extreme lightness closest to foreground).
+    - First four colors have the same chroma and hue as `background` but 
+      lightness progresses from background towards focus.
+    - Second four colors have the same chroma and hue as `foreground` but 
+      lightness progresses from foreground towards edge in such a way that 
+      'base05' color is main foreground color.
+    - The rest eight colors are accent colors which are created in pairs
+        - Each pair has same hue from set of hues 'most different' to 
+          background and foreground hues (if respective chorma is positive).
+        - All colors have the same chroma equal to `accent_chroma` (if not 
+          provided, chroma of foreground is used, as they will appear next to
+          each other). Note: this means that in case of low foreground chroma,
+          it is a good idea to set `accent_chroma` manually. Values from 30
+          (low chorma) to 80 (high chroma) are common.
+        - Within pair there is base lightness (equal to foreground lightness)
+          and alternative (equal to focus lightness). Base lightness goes to
+          colors which will be used more frequently in code: base08
+          (variables), base0B (strings), base0D (functions), base0E (keywords).
+          How exactly accent colors are mapped to base16 palette is a result of
+          trial and error. One rule of thumb was: colors within one hue pair
+          should be more often seen next to each other. This is because it is
+          easier to distinguish them and seems to be more visually appealing.
+          That is why `base0D` and `base0F` have same hues because they usually
+          represent functions and delimiter (brackets included).
+
+
+
+    Parameters: ~
+        {background}    (string)  Background HEX color (formatted as
+                                  `#RRGGBB`).
+        {foreground}    (string)  Foreground HEX color (formatted as
+                                  `#RRGGBB`).
+        {accent_chroma} (number)  Positive number (usually between 0 and 100).
+
+    Return: ~
+        table: Table with base16 palette.
+
+
+MiniBase16.rgb_palette_to_cterm_palette({palette}) *MiniBase16.rgb_palette_to_cterm_palette()*
+    Converts palette with RGB colors to terminal colors
+
+    Useful for caching `use_cterm` variable to increase speed.
+
+
+
+    Parameters: ~
+        {palette} (table)  Table with base16 palette (same as in
+                           |MiniBase16.apply|).
+
+    Return: ~
+        table: Table with base16 palette using |highlight-cterm|.
+
+
+
+================================================================================
+                                                                 *MiniBufremove*
+
+Lua module for minimal buffer removing (unshow, delete, wipeout), which saves
+window layout (opposite to builtin Neovim's commands). This is mostly a Lua
+implementation of
+[bclose.vim](https://vim.fandom.com/wiki/Deleting_a_buffer_without_closing_the_window).
+Other alternatives:
+- [vim-bbye](https://github.com/moll/vim-bbye)
+- [vim-sayonara](https://github.com/mhinz/vim-sayonara)
+
+This module doesn't need setup, but it can be done to improve usability. Setup
+with `require('mini.bufremove').setup({})` (replace `{}` with your `config`
+table).
+
+Default `config`:
+{
+  -- Whether to set Vim's settings for buffers (allow hidden buffers)
+  set_vim_settings = true
+}
+
+# Notes
+1. Which buffer to show in window(s) after its current buffer is removed is 
+   decided by the algorithm:
+   - If alternate buffer (see |CTRL-^|) is listed (see |buflisted()|), use it.
+   - If previous listed buffer (see |bprevious|) is different, use it.
+   - Otherwise create a scratch one with `nvim_create_buf(true, true)` and use 
+     it.
+
+# Disabling
+
+To disable core functionality, set `g:minibufremove_disable` (globally) or
+`b:minibufremove_disable` (for a buffer) to `v:true`.
+
+MiniBufremove.setup({config})                          *MiniBufremove.setup()*
+    Module setup
+
+
+
+    Parameters: ~
+        {config} (table)  Module config table.
+
+    Usage: ~
+        `require('mini.bufremove').setup({})` (replace `{}` with your `config`
+        table)
+
+
+MiniBufremove.delete({buf_id}, {force})               *MiniBufremove.delete()*
+    Delete buffer `buf_id` with |:bdelete| after unshowing it.
+
+
+
+    Parameters: ~
+        {buf_id} (number)   Buffer identifier (see |bufnr()|) to use. Default:
+                            0 for current.
+        {force}  (boolean)  Whether to ignore unsaved changes (using `!`
+                            version of command). Default: `false`.
+
+    Return: ~
+        boolean: Whether operation was successful.
+
+
+MiniBufremove.wipeout({buf_id}, {force})             *MiniBufremove.wipeout()*
+    Wipeout buffer `buf_id` with |:bwipeout| after unshowing it.
+
+
+
+    Parameters: ~
+        {buf_id} (number)   Buffer identifier (see |bufnr()|) to use. Default:
+                            0 for current.
+        {force}  (boolean)  Whether to ignore unsaved changes (using `!`
+                            version of command). Default: `false`.
+
+    Return: ~
+        boolean: Whether operation was successful.
+
+
+MiniBufremove.unshow({buf_id})                        *MiniBufremove.unshow()*
+    Stop showing buffer `buf_id` in all windows
+
+
+
+    Parameters: ~
+        {buf_id} (number)  Buffer identifier (see |bufnr()|) to use. Default:
+                           0 for current.
+
+    Return: ~
+        boolean: Whether operation was successful.
+
+
+MiniBufremove.unshow_in_window({win_id})    *MiniBufremove.unshow_in_window()*
+    Stop showing current buffer of window `win_id`
+
+
+    Parameters: ~
+        {win_id} (number)  Window identifier (see |win_getid()|) to use.
+                           Default: 0 for current.
+
+    Return: ~
+        boolean: Whether operation was successful.
+
+
+
+================================================================================
+                                                                   *MiniComment*
+
+Custom minimal and fast Lua module for code commenting. This is basically a
+reimplementation of "tpope/vim-commentary". Commenting in Normal mode respects
+|count| and is dot-repeatable.
+
+This module needs a setup with `require('mini.comment').setup({})` (replace
+`{}` with your `config` table).
+
+Default `config`:
+{
+  -- Module mappings. Use `''` (empty string) to disable one.
+  mappings = {
+    -- Toggle comment (like `gcip` - comment inner paragraph) for both
+    -- Normal and Visual modes
+    comment      = 'gc',
+    -- Toggle comment on current line
+    comment_line = 'gcc',
+    -- Define 'comment' textobject (like `dgc` - delete whole comment block)
+    textobject   = 'gc'
+  }
+}
+
+# Notes
+1. Commenting depends on '&commentstring' option.
+2. There is no support for block comments: all comments are made per line.
+
+# Disabling To disable core functionality, set `g:minicomment_disable`
+(globally) or - `b:minicomment_disable` (for a buffer) to `v:true`.
+
+MiniComment.setup({config})                              *MiniComment.setup()*
+    Module setup
+
+
+
+    Parameters: ~
+        {config} (table)  Module config table.
+
+    Usage: ~
+        `require('mini.comment').setup({})` (replace `{}` with your `config`
+        table)
+
+
+MiniComment.operator({mode})                          *MiniComment.operator()*
+    Main function to be mapped
+
+    It is meant to be used in expression mappings (see |map-<expr>|) to enable
+    dot-repeatability and commenting on range. There is no need to do this
+    manually, everything is done inside `MiniComment.setup()`.
+
+    It has a somewhat unintuitive logic (because of how expression mapping with
+    dot-repeatability works): it should be called without arguments inside
+    expression mapping and with argument when action should be performed.
+
+
+
+    Parameters: ~
+        {mode} (string)  Optional string with 'operatorfunc' mode (see |g@|).
+
+    Return: ~
+        string: 'g@' if called without argument, '' otherwise (but after
+        performing action).
+
+
+MiniComment.toggle_lines({line_start}, {line_end}) *MiniComment.toggle_lines()*
+    Toggle comments between two line numbers
+
+    It uncomments if lines are comment (every line is a comment) and comments
+    otherwise. It respects indentation and doesn't insert trailing whitespace.
+    Toggle commenting not in visual mode is also dot-repeatable and respects
+    |count|.
+
+    # Notes
+    1. Currently call to this function will remove marks inside written range. 
+       Use |lockmarks| to preserve marks.
+
+
+
+    Parameters: ~
+        {line_start} (number)  Start line number.
+        {line_end}   (number)  End line number.
+
+
+MiniComment.textobject()                            *MiniComment.textobject()*
+    Comment textobject This selects all commented lines adjacent to cursor line
+    (if it itself is commented). Designed to be used with operator mode
+    mappings (see |mapmode-o|).
+
+
+
+
+================================================================================
+
+================================================================================
+                                                                *MiniCursorword*
+
+Custom minimal and fast module for highlighting word under cursor. It is done
+via Vim's |matchadd()| and |matchdelete()| with low highlighting priority. It
+is triggered only if current cursor character is a |[:keyword:]. "Word under
+cursor" is meant as in Vim's |<cword>|: something user would get as 'iw' text
+object. Highlighting stops in insert and terminal modes.
+
+This module needs a setup with `require('mini.cursorword').setup({})` (replace
+`{}` with your `config` table).
+
+Default `config`:
+{
+  -- On which event highlighting is updated. If default "CursorMoved" is
+  -- too frequent, use "CursorHold"
+  highlight_event = "CursorMoved"
+}
+
+# Highlight groups
+1. `MiniCursorword` - highlight group of cursor word. By default, it is a plain
+   underline.
+
+To change any highlight group, modify it directly with `highlight
+MiniCursorword` command (see |:highlight|).
+
+# Disabling
+
+To disable core functionality, set `g:minicursorword_disable` (globally) or
+`b:minicursorword_disable` (for a buffer) to `v:true`. Note: after disabling
+there might be highlighting left; call `lua MiniCursorword.unhighlight()`.
+
+MiniCursorword.setup({config})                        *MiniCursorword.setup()*
+    Module setup
+
+
+
+    Parameters: ~
+        {config} (table)  Module config table.
+
+    Usage: ~
+        `require('mini.cursorword').setup({})` (replace `{}` with your
+        `config` table)
+
+
+MiniCursorword.highlight()                        *MiniCursorword.highlight()*
+    Highlight word under cursor
+
+    Designed to be used inside |autocmd|.
+
+
+
+MiniCursorword.unhighlight()                    *MiniCursorword.unhighlight()*
+    Unhighlight word under cursor
+
+    Designed to be used inside |autocmd|.
+
+
+
+
+================================================================================
+                                                                     *MiniFuzzy*
+
+Lua module which implements minimal and fast fuzzy matching.
+
+This module doesn't need setup, but it can be done to improve usability. Setup
+with `require('mini.fuzzy').setup({})` (replace `{}` with your `config` table).
+
+Default `config`:
+{
+  -- Maximum allowed value of match features (width and first match). All
+  -- feature values greater than cutoff can be considered "equally bad".
+  cutoff = 100
+}
+
+# Notes
+1. Currently there is no explicit design to work with multibyte symbols, but
+   simple examples should work.
+2. Smart case is used: case insensitive if input word (which is usually a user
+   input) is all lower ase. Case sensitive otherwise.
+
+# Algorithm design
+
+General design uses only width of found match and index of first letter match.
+No special characters or positions (like in fzy and fzf) are used.
+
+Given input `word` and target `candidate`:
+- The goal is to find matching between `word`'s letters and letters in 
+  `candidate`, which minimizes certain score. It is assumed that order of 
+  letters in `word` and those matched in `candidate` should be the same.
+- Matching is represented by matched positions: a list `positions` of integers
+  with length equal to number of letter in `word`. The following should be
+  always true in case of a match: `candidate`'s letter at index `positions[i]`
+  is letters[i]` for all valid `i`.
+- Matched positions are evaluated based only on two features: their width 
+  (number of indexes between first and last positions) and first match (index
+  of first letter match). There is a global setting `cutoff` for which all
+  feature values greater than it can be considered "equally bad".
+- Score of matched positions is computed with following explicit formula: 
+  `cutoff * min(width, cutoff) + min(first, cutoff)`. It is designed to be 
+  equivalent to first comparing widths (lower is better) and then comparing 
+  first match (lower is better). For example, if `word = 'time'`:
+    - '_time' (width 4) will have a better match than 't_ime' (width 5).
+    - 'time_a' (width 4, first 1) will have a better match than 'a_time' (width
+      4, first 3).
+- Final matched positions are those which minimize score among all possible 
+  matched positions of `word` and `candidate`.
+
+MiniFuzzy.setup({config})                                  *MiniFuzzy.setup()*
+    Module setup
+
+
+
+    Parameters: ~
+        {config} (table)  Module config table.
+
+    Usage: ~
+        `require('mini.fuzzy').setup({})` (replace `{}` with your `config`
+        table)
+
+
+MiniFuzzy.match({word}, {candidate})                       *MiniFuzzy.match()*
+    Compute match data of input `word` and `candidate` strings
+
+    It tries to find best match for input string `word` (usually user input)
+    and string `candidate`. Returns table with elements:
+    - `positions` - list with letter indexes inside `candidate` which matched
+      to corresponding letters in `word`. Or `nil` if no match.
+    - `score` - positive number representing how good the match is (lower is 
+      better). Or `-1` if no match.
+
+
+
+    Parameters: ~
+        {word}      (string)  Input word (usually user input).
+        {candidate} (string)  Target word (usually with which matching is
+                              done).
+
+    Return: ~
+        table: Table with matching information (see function's description).
+
+
+MiniFuzzy.filtersort({word}, {candidate_list})        *MiniFuzzy.filtersort()*
+    Filter string list
+
+    This leaves only those elements of input list which matched with `word` and
+    sorts from best to worst matches (based on score and index in original
+    list, both lower is better).
+
+
+
+    Parameters: ~
+        {word}           (string)  String which will be searched
+        {candidate_list} (list)    Lua list of strings inside which word will
+                                   be searched
+
+    Return: ~
+        matched_candidates, matched_indexes tuple: Arrays of matched
+        candidates and their indexes in original input.
+
+
+MiniFuzzy.process_lsp_items({items}, {base})   *MiniFuzzy.process_lsp_items()*
+    Fuzzy matching for |MiniCompletion.lsp_completion.process_items|
+
+
+
+    Parameters: ~
+        {items} (list)    Lua list with LSP 'textDocument/completion' response
+                          items.
+        {base}  (string)  Word to complete.
+
+
+MiniFuzzy.get_telescope_sorter({opts})      *MiniFuzzy.get_telescope_sorter()*
+    Custom getter for `telescope.nvim` sorter
+
+    Designed to be used as value for |telescope.defaults.file_sorter| and
+    |telescope.defaults.generic_sorter| inside `setup()` call.
+
+
+
+    Parameters: ~
+        {opts} (table)  Options (currently not used).
+
+    Usage: ~
+        `require('telescope').setup({default = {generic_sorter =
+        require('mini.fuzzy').get_telescope_sorter}})`
+
+
+
+================================================================================
+                                                                      *MiniMisc*
+
+Lua module with miscellaneous useful functions (can be used independently).
+
+This module doesn't need setup, but it can be done to improve usability. Setup
+with `require('mini.misc').setup({})` (replace `{}` with your `config` table).
+
+Default `config`:
+{
+  -- List of fields to make global (to be used as independent variables)
+  make_global = { 'put', 'put_text' }
+}
+
+MiniMisc.setup({config})                                    *MiniMisc.setup()*
+    Module setup
+
+
+
+    Parameters: ~
+        {config} (table)  Module config table.
+
+    Usage: ~
+        `require('mini.misc').setup({})` (replace `{}` with your `config`
+        table)
+
+
+MiniMisc.bench_time({f}, {...})                        *MiniMisc.bench_time()*
+    Execute `f` once and time how long it took
+
+
+
+    Parameters: ~
+        {f}   (function)  Function which execution to benchmark.
+        {...} (vararg)    Arguments when calling `f`.
+
+    Return: ~
+        duration, output tuple: Duration (in seconds; up to microseconds) and
+        output of function execution.
+
+
+MiniMisc.get_gutter_width({win_id})              *MiniMisc.get_gutter_width()*
+    Compute width of gutter (info column on the left of the window)
+
+
+
+    Parameters: ~
+        {win_id} (number)  Window identifier (see |win_getid()|) for which
+                           gutter width is computed. Default: 0 for current.
+
+
+MiniMisc.put({...})                                           *MiniMisc.put()*
+    Print Lua objects in command line
+
+
+
+    Parameters: ~
+        {...} (vararg)  Any number of objects to be printed each on separate
+                        line.
+
+
+MiniMisc.put_text({...})                                 *MiniMisc.put_text()*
+    Print Lua objects in current buffer
+
+
+
+    Parameters: ~
+        {...} (vararg)  Any number of objects to be printed each on separate
+                        line.
+
+
+MiniMisc.resize_window({win_id}, {text_width})      *MiniMisc.resize_window()*
+    Resize window to have exact number of editable columns
+
+
+
+    Parameters: ~
+        {win_id}     (number)  Window identifier (see |win_getid()|) to be
+                               resized. Default: 0 for current.
+        {text_width} (number)  Number of editable columns resized window will
+                               display. Default: first element of
+                               'colorcolumn' or otherwise 'textwidth' (using
+                               screen width as its default but not more than
+                               79).
+
+
+MiniMisc.tbl_head({t}, {n})                              *MiniMisc.tbl_head()*
+    Return "first" elements of table as decided by `pairs`
+
+    Note: order of elements might vary.
+
+
+
+    Parameters: ~
+        {t} (table)
+        {n} (number)  Maximum number of first elements. Default: 5.
+
+    Return: ~
+        table: Table with at most `n` first elements of `t` (with same keys).
+
+
+MiniMisc.tbl_tail({t}, {n})                              *MiniMisc.tbl_tail()*
+    Return "last" elements of table as decided by `pairs`
+
+    This function makes two passes through elements of `t`:
+    - First to count number of elements.
+    - Second to construct result.
+
+    Note: order of elements might vary.
+
+
+
+    Parameters: ~
+        {t} (table)
+        {n} (number)  Maximum number of last elements. Default: 5.
+
+    Return: ~
+        table: Table with at most `n` last elements of `t` (with same keys).
+
+
+MiniMisc.use_nested_comments({buf_id})        *MiniMisc.use_nested_comments()*
+    Add possibility of nested comment leader.
+
+    This works by parsing 'commentstring' buffer option, extracting
+    non-whitespace comment leader (symbols on the left of commented line), and
+    locally modifying 'comments' option (by prepending `n:<leader>`). Does
+    nothing if 'commentstring' is empty or has comment symbols both in front
+    and back (like "/*%s*/").
+
+    Nested comment leader added with this function is useful for formatting
+    nested comments. For example, have in Lua "first-level" comments with '--'
+    and "second-level" comments with '----'. With nested comment leader second
+    type can be formatted with `gq` in the same way as first one.
+
+    Recommended usage is with |autocmd|:
+    `autocmd BufEnter * lua pcall(require('mini.misc').use_nested_comments)`
+
+    Note: for most filetypes 'commentstring' option is added only when buffer
+    with this filetype is entered, so using non-current `buf_id` can not lead
+    to desired effect.
+
+
+
+    Parameters: ~
+        {buf_id} (number)  Buffer identifier (see |bufnr()|) in which function
+                           will operate. Default: 0 for current.
+
+
+MiniMisc.zoom({buf_id}, {config})                            *MiniMisc.zoom()*
+    Zoom in and out of a buffer, making it full screen in a floating window
+
+    This function is useful when working with multiple windows but temporarily
+    needing to zoom into one to see more of the code from that buffer. Call it
+    again (without arguments) to zoom out.
+
+
+
+    Parameters: ~
+        {buf_id} (number)  Buffer identifier (see |bufnr()|) to be zoomed.
+                           Default: 0 for current.
+        {config} (table)   Optional config for window (as for
+                           |nvim_open_win()|).
+
+
+
+================================================================================
+MiniPairs.bs()                                                *MiniPairs.bs()*
+    - Each argument should be a pair which triggers extra action
+
+
+
+
+================================================================================
+MiniStatusline.section_spell()                *MiniStatusline.section_spell()*
+    - Spell
+
+
+
+MiniStatusline.section_wrap()                  *MiniStatusline.section_wrap()*
+    - Wrap
+
+
+
+MiniStatusline.section_git()                    *MiniStatusline.section_git()*
+    - Git
+
+
+
+MiniStatusline.section_diagnostics()    *MiniStatusline.section_diagnostics()*
+    - Diagnostics
+
+
+
+MiniStatusline.section_filename()          *MiniStatusline.section_filename()*
+    - File name
+
+
+
+MiniStatusline.section_fileinfo()          *MiniStatusline.section_fileinfo()*
+    - File information
+
+
+
+MiniStatusline.section_location()          *MiniStatusline.section_location()*
+    - Location inside buffer
+
+
+
+
+================================================================================
+MiniSurround.delete()                                  *MiniSurround.delete()*
+    - Insert after the right mark (`+ 1` is for that)
+
+
+
+MiniSurround.find_surrounding()              *MiniSurround.find_surrounding()*
+    - NOTE: more simple approach would have been to use combination of
+    - `searchpairpos()` (to search for balanced pair) and `searchpos()` (to
+    - search end of balanced search and for unbalanced pairs). However, there
+    - are several problems with it:
+    - - It is slower (around 2-5 times) than current Lua pattern approach.
+    - - It has limitations when dealing with crucial 'function call' search.
+    - Function call is defined as 'non-empty function name followed by
+    - balanced pair of "(" and ")"'. Naive use of `searchpairpos()` is to use
+    - `searchpairpos('\w\+(', '', ')')` which works most of the time.
+    - However, in example `foo(a = (1 + 1), b = c(1, 2))` this will match
+    - `o(a = (1 + 1)` when cursor is on 'a'. This is because '(' inside it is
+    - not recognized for balancing because it doesn't match '\w\+('.
+    -
+    - Vim's approach also has some upsides:
+    - - `searchpairpos()` allows skipping of certain matches, like if it is
+    - inside string or comment. It works decently well with example from help
+    - (with `synIDattr`, etc.) but this only works when Vim's builtin
+    - highlighting is used. When treesitter's highlighting is active, this
+    - doesn't work.
+    -
+    - All in all, using Vim's builtin functions is doable, but leads to roughly
+    - same efforts as Lua pattern approach.
+
+
+
+
+================================================================================
+
+================================================================================
+
+ vim:tw=78:ts=8:ft=help:norl:

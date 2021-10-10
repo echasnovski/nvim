@@ -1,76 +1,64 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
---
--- Lua module which implements *minimal* and *fast* fuzzy matching.
---
--- This module doesn't need to get activated, but it can be done to
--- improve usability. To activate, put this file somewhere into 'lua' folder
--- and call module's `setup()`. For example, put as 'lua/mini/fuzzy.lua' and
--- execute `require('mini.fuzzy').setup()` Lua code. It may have `config`
--- argument which should be a table overwriting default values using same
--- structure.
---
--- Default `config`:
--- {
---   -- Maximum allowed value of match features (width and first match). All
---   -- feature values greater than cutoff can be considered "equally bad".
---   cutoff = 100
--- }
---
--- Features:
--- - `match(word, candidate)` tries to find best match for input string `word`
---   (usually user input) and string `candidate`. Returns table with elements:
---     - `positions` - list with letter indexes inside `candidate` which
---       matched to corresponding letters in `word`. Or `nil` if no match.
---     - `score` - positive number representing how good the match is (lower is
---       better). Or `-1` if no match.
--- - `filtersort(word, candidate_list)` filters `candidate_list` by leaving
---   only those which matched with `word` and sorts from best to worst matches
---   (based on score and index in original list, both lower is better).
--- - `process_lsp_items(items, base)` implements fuzzy matching for
---   `MiniCompletion.lsp_completion.process_items`.
--- - `get_telescope_sorter(opts)` implements a getter for 'telescope.nvim'
---   sorter. Designed to be used exactly as built-in sorters (like
---   `get_generic_fuzzy_sorter`).
---
--- NOTEs:
--- - Currently there is no explicit design to work with multibyte symbols, but
---   simple examples should work.
--- - Smart case is used: case insensitive if input word (which is usually a
---   user input) is all lower ase. Case sensitive otherwise.
---
--- *Algorithm design*
--- General design uses only width of found match and index of first letter
--- match. No special characters or positions (like in fzy and fzf) are used.
---
--- Given input `word` and target `candidate`:
--- - The goal is to find matching between `word`'s letters and letters in
---   `candidate`, which minimizes certain score. It is assumed that order of
---   letters in `word` and those matched in `candidate` should be the same.
--- - Matching is represented by matched positions: a list `positions` of
---   integers with length equal to number of letter in `word`. The following
---   should be always true in case of a match: `candidate`'s letter at index
---   `positions[i]` is letters[i]` for all valid `i`.
--- - Matched positions are evaluated based only on two features: their width
---   (number of indexes between first and last positions) and first match
---   (index of first letter match). There is a global setting `cutoff` for
---   which all feature values greater than it can be considered "equally bad".
--- - Score of matched positions is computed with following explicit formula:
---   `cutoff * min(width, cutoff) + min(first, cutoff)`. It is designed to be
---   equivalent to first comparing widths (lower is better) and then comparing
---   first match (lower is better). For example, if `word = 'time'`:
---     - '_time' (width 4) will have a better match than 't_ime' (width 5).
---     - 'time_a' (width 4, first 1) will have a better match than 'a_time'
---       (width 4, first 3).
--- - Final matched positions are those which minimize score among all possible
---   matched positions of `word` and `candidate`.
---
--- Currently this module has nothing to disable.
+
+---@brief [[
+--- Lua module which implements minimal and fast fuzzy matching.
+---
+--- This module doesn't need setup, but it can be done to improve usability.
+--- Setup with `require('mini.fuzzy').setup({})` (replace `{}` with your
+--- `config` table).
+---
+--- Default `config`:
+--- <pre>
+--- {
+---   -- Maximum allowed value of match features (width and first match). All
+---   -- feature values greater than cutoff can be considered "equally bad".
+---   cutoff = 100
+--- }
+--- </pre>
+---
+--- # Notes
+--- 1. Currently there is no explicit design to work with multibyte symbols,
+---    but simple examples should work.
+--- 2. Smart case is used: case insensitive if input word (which is usually a
+---     user input) is all lower ase. Case sensitive otherwise.
+---
+--- # Algorithm design
+---
+--- General design uses only width of found match and index of first letter
+--- match. No special characters or positions (like in fzy and fzf) are used.
+---
+--- Given input `word` and target `candidate`:
+--- - The goal is to find matching between `word`'s letters and letters in
+---   `candidate`, which minimizes certain score. It is assumed that order of
+---   letters in `word` and those matched in `candidate` should be the same.
+--- - Matching is represented by matched positions: a list `positions` of
+---   integers with length equal to number of letter in `word`. The following
+---   should be always true in case of a match: `candidate`'s letter at index
+---   `positions[i]` is letters[i]` for all valid `i`.
+--- - Matched positions are evaluated based only on two features: their width
+---   (number of indexes between first and last positions) and first match
+---   (index of first letter match). There is a global setting `cutoff` for
+---   which all feature values greater than it can be considered "equally bad".
+--- - Score of matched positions is computed with following explicit formula:
+---   `cutoff * min(width, cutoff) + min(first, cutoff)`. It is designed to be
+---   equivalent to first comparing widths (lower is better) and then comparing
+---   first match (lower is better). For example, if `word = 'time'`:
+---     - '_time' (width 4) will have a better match than 't_ime' (width 5).
+---     - 'time_a' (width 4, first 1) will have a better match than 'a_time'
+---       (width 4, first 3).
+--- - Final matched positions are those which minimize score among all possible
+---   matched positions of `word` and `candidate`.
+---@brief ]]
+---@tag MiniFuzzy
 
 -- Module and its helper
 local MiniFuzzy = {}
 local H = {}
 
--- Module setup
+--- Module setup
+---
+---@param config table: Module config table.
+---@usage `require('mini.fuzzy').setup({})` (replace `{}` with your `config` table)
 function MiniFuzzy.setup(config)
   -- Export module
   _G.MiniFuzzy = MiniFuzzy
@@ -90,7 +78,19 @@ MiniFuzzy.config = {
 }
 
 -- Module functionality
----- Compute match data of input `word` and `candidate` strings
+
+--- Compute match data of input `word` and `candidate` strings
+---
+--- It tries to find best match for input string `word` (usually user input)
+--- and string `candidate`. Returns table with elements:
+--- - `positions` - list with letter indexes inside `candidate` which
+---   matched to corresponding letters in `word`. Or `nil` if no match.
+--- - `score` - positive number representing how good the match is (lower is
+---   better). Or `-1` if no match.
+---
+---@param word string: Input word (usually user input).
+---@param candidate string: Target word (usually with which matching is done).
+---@return table: Table with matching information (see function's description).
 function MiniFuzzy.match(word, candidate)
   -- Use 'smart case'
   candidate = (word == word:lower()) and candidate:lower() or candidate
@@ -99,10 +99,15 @@ function MiniFuzzy.match(word, candidate)
   return { positions = positions, score = H.score_positions(positions) }
 end
 
--- @param word String which will be searched
--- @param candidate_list Lua list of strings inside which word will be searched
--- @return matched_candidates, matched_indexes Arrays of matched candidates and
---   their indexes in original input.
+--- Filter string list
+---
+--- This leaves only those elements of input list which matched with `word` and
+--- sorts from best to worst matches (based on score and index in original
+--- list, both lower is better).
+---
+---@param word string: String which will be searched
+---@param candidate_list list: Lua list of strings inside which word will be searched
+---@return matched_candidates, matched_indexes tuple: Arrays of matched candidates and their indexes in original input.
 function MiniFuzzy.filtersort(word, candidate_list)
   -- Use 'smart case'. New list is needed to preserve input for later filtering
   local cand_list
@@ -118,7 +123,10 @@ function MiniFuzzy.filtersort(word, candidate_list)
   return H.filter_by_indexes(candidate_list, filter_ids)
 end
 
----- Fuzzy matching for `MiniCompletion.lsp_completion.process_items`
+--- Fuzzy matching for |MiniCompletion.lsp_completion.process_items|
+---
+---@param items list: Lua list with LSP 'textDocument/completion' response items.
+---@param base string: Word to complete.
 function MiniFuzzy.process_lsp_items(items, base)
   -- Extract completion words from items
   local words = vim.tbl_map(function(x)
@@ -135,7 +143,13 @@ function MiniFuzzy.process_lsp_items(items, base)
   end, match_inds)
 end
 
----- Custom getter for sorter for 'telescope.nvim'
+--- Custom getter for `telescope.nvim` sorter
+---
+--- Designed to be used as value for |telescope.defaults.file_sorter| and
+--- |telescope.defaults.generic_sorter| inside `setup()` call.
+---
+---@param opts table: Options (currently not used).
+---@usage `require('telescope').setup({default = {generic_sorter = require('mini.fuzzy').get_telescope_sorter}})`
 function MiniFuzzy.get_telescope_sorter(opts)
   opts = opts or {}
 

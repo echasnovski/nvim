@@ -41,8 +41,8 @@ EC.generate_plugin_doc = function(script_path)
     [[-c 'luafile %s' -c 'qa']]
   }
   local cmd = string.format(table.concat(cmd_table, ' '), script_path)
-  vim.cmd('!pwd')
   vim.cmd('!' .. cmd)
+  vim.cmd('helptags ALL')
 end
 
 -- Make action for `<CR>` which respects completion and autopairs

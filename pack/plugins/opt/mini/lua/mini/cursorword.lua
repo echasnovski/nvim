@@ -1,40 +1,49 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
---
--- Custom *minimal* and *fast* module for highlighting word under cursor.
---
--- To activate, put this file somewhere into 'lua' folder and call module's
--- `setup()`. For example, put as 'lua/mini/cursorword.lua' and execute
--- `require('mini.cursorword').setup()` Lua code. It may have `config` argument
--- which should be a table overwriting default values using same structure.
---
--- Default `config`:
--- {
---   -- On which event highlighting is updated. If default "CursorMoved" is
---   -- too frequent, use "CursorHold"
---   highlight_event = "CursorMoved"
--- }
---
--- Features:
--- - Enable, disable, and toggle module with `enable()`, `disable()`, and
---   `toggle()` functions.
--- - Highlight word under cursor. It is done via Vim's `matchadd()` and
---   `matchdelete()` with low highlighting priority. It is triggered only if
---   current cursor character is 'keyword' (see `help [:keyword:]`). "Word
---   under cursor" is meant as in Vim's `<cword>`: something user would get
---   as 'iw' text object. Highlighting stops in insert and terminal modes.
--- - Highlighting is done according to `MiniCursorword` highlight group. By
---   default, it is a plain underline. To change this, modify it directly with
---   `highlight MiniCursorword` command.
---
--- To disable, set `g:minicursorword_disable` (globally) or
--- `b:minicursorword_disable` (for a buffer) to `v:true`. NOTE: after disabling
--- there might be highlighting left; call `lua MiniCursorword.unhighlight()`.
+
+---@brief [[
+--- Custom minimal and fast module for highlighting word under cursor. It is
+--- done via Vim's |matchadd()| and |matchdelete()| with low highlighting
+--- priority. It is triggered only if current cursor character is a
+--- |[:keyword:]. "Word under cursor" is meant as in Vim's |<cword>|: something
+--- user would get as 'iw' text object.  Highlighting stops in insert and
+--- terminal modes.
+---
+--- This module needs a setup with `require('mini.cursorword').setup({})`
+--- (replace `{}` with your `config` table).
+---
+--- Default `config`:
+--- <pre>
+--- {
+---   -- On which event highlighting is updated. If default "CursorMoved" is
+---   -- too frequent, use "CursorHold"
+---   highlight_event = "CursorMoved"
+--- }
+--- </pre>
+---
+--- # Highlight groups
+--- 1. `MiniCursorword` - highlight group of cursor word. By default, it is a
+---    plain underline.
+---
+--- To change any highlight group, modify it directly with `highlight
+--- MiniCursorword` command (see |:highlight|).
+---
+--- # Disabling
+---
+--- To disable core functionality, set `g:minicursorword_disable` (globally) or
+--- `b:minicursorword_disable` (for a buffer) to `v:true`. Note: after
+--- disabling there might be highlighting left; call `lua
+--- MiniCursorword.unhighlight()`.
+---@brief ]]
+---@tag MiniCursorword
 
 -- Module and its helper
 local MiniCursorword = {}
 local H = {}
 
--- Module setup
+--- Module setup
+---
+---@param config table: Module config table.
+---@usage `require('mini.cursorword').setup({})` (replace `{}` with your `config` table)
 function MiniCursorword.setup(config)
   -- Export module
   _G.MiniCursorword = MiniCursorword
@@ -67,11 +76,15 @@ MiniCursorword.config = {
   highlight_event = 'CursorMoved',
 }
 
--- A modified version of https://stackoverflow.com/a/25233145
--- Using `matchadd()` instead of a simpler `:match` to tweak priority of
--- 'current word' highlighting: with `:match` it is higher than for
--- `incsearch` which is not convenient.
+--- Highlight word under cursor
+---
+--- Designed to be used inside |autocmd|.
 function MiniCursorword.highlight()
+  -- A modified version of https://stackoverflow.com/a/25233145
+  -- Using `matchadd()` instead of a simpler `:match` to tweak priority of
+  -- 'current word' highlighting: with `:match` it is higher than for
+  -- `incsearch` which is not convenient.
+
   if H.is_disabled() then
     return
   end
@@ -107,6 +120,9 @@ function MiniCursorword.highlight()
   H.window_matches[win_id] = { word = curword, id = match_id }
 end
 
+--- Unhighlight word under cursor
+---
+--- Designed to be used inside |autocmd|.
 function MiniCursorword.unhighlight()
   local win_id = vim.fn.win_getid()
   local win_match = H.window_matches[win_id]
