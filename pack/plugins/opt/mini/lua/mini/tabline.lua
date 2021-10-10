@@ -12,6 +12,9 @@
 --
 -- Default `config`:
 -- {
+--   -- Whether to show file icons (requires 'kyazdani42/nvim-web-devicons')
+--   show_icons = true,
+--
 --   -- Whether to set Vim's settings for tabline (make it always shown and
 --   -- allow hidden buffers)
 --   set_vim_settings = true
@@ -72,8 +75,8 @@ function MiniTabline.setup(config)
 
   -- Function to make tabs clickable
   vim.api.nvim_exec(
-    [[function! MiniTablineSwitchBuffer(bufnum, clicks, button, mod)
-        execute 'buffer' a:bufnum
+    [[function! MiniTablineSwitchBuffer(buf_id, clicks, button, mod)
+        execute 'buffer' a:buf_id
       endfunction]],
     false
   )
@@ -95,8 +98,12 @@ end
 
 -- Module config
 MiniTabline.config = {
-  -- Whether to set Vim's settings for tabline
-  set_vim_settings = true
+  -- Whether to show file icons (requires 'kyazdani42/nvim-web-devicons')
+  show_icons = true,
+
+  -- Whether to set Vim's settings for tabline (make it always shown and
+  -- allow hidden buffers)
+  set_vim_settings = true,
 }
 
 -- Module functionality
@@ -120,14 +127,26 @@ function MiniTabline.make_tabline_string()
   return H.concat_tabs()
 end
 
----- Tables to keep track of tabs
-MiniTabline.tabs = {}
-MiniTabline.tabs_order = {}
-
--- Helpers
+-- Helper data
 ---- Module default config
 H.default_config = MiniTabline.config
 
+---- Table to keep track of tabs
+H.tabs = {}
+
+---- Indicator of whether there is clickable support
+H.tablineat = vim.fn.has('tablineat')
+
+---- Keep track of initially unnamed buffers
+H.unnamed_buffers_seq_ids = {}
+
+---- Separator of file path
+H.path_sep = package.config:sub(1, 1)
+
+---- Buffer number of center buffer
+H.center_buf_id = vim.fn.winbufnr(0)
+
+-- Helper functions
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
@@ -135,7 +154,10 @@ function H.setup_config(config)
   vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
-  vim.validate({ set_vim_settings = { config.set_vim_settings, 'boolean' } })
+  vim.validate({
+    show_icons = { config.show_icons, 'boolean' },
+    set_vim_settings = { config.set_vim_settings, 'boolean' },
+  })
 
   return config
 end
@@ -157,40 +179,35 @@ end
 ---- List tabs
 function H.list_tabs()
   local tabs = {}
-  local tabs_order = {}
   for i = 1, vim.fn.bufnr('$') do
     if H.is_buffer_in_minitabline(i) then
-      -- Display tabs in order of increasing buffer number
-      tabs_order[#tabs_order + 1] = i
-
-      local tab = {}
+      local tab = { buf_id = i }
       tab['hl'] = H.construct_highlight(i)
       tab['tabfunc'] = H.construct_tabfunc(i)
       tab['label'], tab['label_extender'] = H.construct_label_data(i)
 
-      tabs[i] = tab
+      table.insert(tabs, tab)
     end
   end
 
-  MiniTabline.tabs = tabs
-  MiniTabline.tabs_order = tabs_order
+  H.tabs = tabs
 end
 
-function H.is_buffer_in_minitabline(bufnum)
-  return (vim.fn.buflisted(bufnum) > 0) and (vim.fn.getbufvar(bufnum, '&buftype') ~= 'quickfix')
+function H.is_buffer_in_minitabline(buf_id)
+  return (vim.fn.buflisted(buf_id) > 0) and (vim.fn.getbufvar(buf_id, '&buftype') ~= 'quickfix')
 end
 
 ---- Tab's highlight group
-function H.construct_highlight(bufnum)
+function H.construct_highlight(buf_id)
   local hl_type
-  if bufnum == vim.fn.winbufnr(0) then
+  if buf_id == vim.fn.winbufnr(0) then
     hl_type = 'Current'
-  elseif vim.fn.bufwinnr(bufnum) > 0 then
+  elseif vim.fn.bufwinnr(buf_id) > 0 then
     hl_type = 'Visible'
   else
     hl_type = 'Hidden'
   end
-  if vim.fn.getbufvar(bufnum, '&modified') > 0 then
+  if vim.fn.getbufvar(buf_id, '&modified') > 0 then
     hl_type = 'Modified' .. hl_type
   end
 
@@ -198,29 +215,26 @@ function H.construct_highlight(bufnum)
 end
 
 ---- Tab's clickable action (if supported)
----- Is there clickable support?
-H.tablineat = vim.fn.has('tablineat')
-
-function H.construct_tabfunc(bufnum)
+function H.construct_tabfunc(buf_id)
   if H.tablineat > 0 then
-    return string.format([[%%%d@MiniTablineSwitchBuffer@]], bufnum)
+    return string.format([[%%%d@MiniTablineSwitchBuffer@]], buf_id)
   else
     return ''
   end
 end
 
--- Tab's label and label extender
-function H.construct_label_data(bufnum)
+---- Tab's label and label extender
+function H.construct_label_data(buf_id)
   local label, label_extender
 
-  local bufpath = vim.fn.bufname(bufnum)
+  local bufpath = vim.fn.bufname(buf_id)
   if bufpath ~= '' then
     -- Process path buffer
     label = vim.fn.fnamemodify(bufpath, ':t')
-    label_extender = H.make_path_extender(bufnum)
+    label_extender = H.make_path_extender(buf_id)
   else
     -- Process unnamed buffer
-    label = H.make_unnamed_label(bufnum)
+    label = H.make_unnamed_label(buf_id)
     label_extender = function(x)
       return x
     end
@@ -229,69 +243,61 @@ function H.construct_label_data(bufnum)
   return label, label_extender
 end
 
-H.path_sep = package.config:sub(1, 1)
-
-function H.make_path_extender(bufnum)
+function H.make_path_extender(buf_id)
   return function(label)
     -- Add parent to current label
-    local full_path = vim.fn.fnamemodify(vim.fn.bufname(bufnum), ':p')
+    local full_path = vim.fn.fnamemodify(vim.fn.bufname(buf_id), ':p')
     -- Using `vim.pesc` prevents effect of problematic characters (like '.')
     local pattern = string.format('[^%s]+%s%s$', H.path_sep, H.path_sep, vim.pesc(label))
     return string.match(full_path, pattern) or label
   end
 end
 
----- Work with unnamed buffers
------- Track all initially unnamed buffers for disambiguation. The
------- `unnamed_buffers` table is designed to store 'sequential' buffer
------- identifier. This approach allows to have the following behavior:
------- - Create three unnamed buffers.
------- - Delete second one.
------- - Tab label for third one remains the same.
-H.n_unnamed = 0
-H.unnamed_buffers = {}
+---- Work with unnamed buffers. They are tracked in `H.unnamed_buffers_seq_ids`
+---- for disambiguation. This table is designed to store 'sequential' buffer
+---- identifier. This approach allows to have the following behavior:
+---- - Create three unnamed buffers.
+---- - Delete second one.
+---- - Tab label for third one remains the same.
+function H.make_unnamed_label(buf_id)
+  local label = H.is_buffer_scratch(buf_id) and '!' or '*'
 
-function H.ensure_unnamed_tracked(bufnum)
-  if H.unnamed_buffers[bufnum] ~= nil then
-    return
-  end
-
-  H.n_unnamed = H.n_unnamed + 1
-  H.unnamed_buffers[bufnum] = { id = H.n_unnamed }
-end
-
-function H.is_buffer_scratch(bufnum)
-  local buftype = vim.fn.getbufvar(bufnum, '&buftype')
-  return (buftype == 'acwrite') or (buftype == 'nofile')
-end
-
-function H.make_unnamed_label(bufnum)
-  local label = '*'
-  if H.is_buffer_scratch(bufnum) then
-    label = '!'
-  end
-
-  -- Possibly add tracking id (which is tracked separately for different label
-  -- types)
-  H.ensure_unnamed_tracked(bufnum)
-  local tab_id = H.unnamed_buffers[bufnum].id
-  if tab_id > 1 then
-    label = string.format('%s(%d)', label, tab_id)
+  -- Possibly add tracking id
+  local unnamed_id = H.get_unnamed_id(buf_id)
+  if unnamed_id > 1 then
+    label = string.format('%s(%d)', label, unnamed_id)
   end
 
   return label
 end
 
+function H.is_buffer_scratch(buf_id)
+  local buftype = vim.fn.getbufvar(buf_id, '&buftype')
+  return (buftype == 'acwrite') or (buftype == 'nofile')
+end
+
+function H.get_unnamed_id(buf_id)
+  -- Use existing sequential id if possible
+  local seq_id = H.unnamed_buffers_seq_ids[buf_id]
+  if seq_id ~= nil then
+    return seq_id
+  end
+
+  -- Cache sequential id for currently unnamed buffer `buf_id`
+  H.unnamed_buffers_seq_ids[buf_id] = vim.tbl_count(H.unnamed_buffers_seq_ids) + 1
+  return H.unnamed_buffers_seq_ids[buf_id]
+end
+
 -- Finalize labels
 function H.finalize_labels()
   -- Deduplicate
-  local nonunique_bufs = H.get_nonunique_buffers()
-  while #nonunique_bufs > 0 do
+  local nonunique_tab_ids = H.get_nonunique_tab_ids()
+  while #nonunique_tab_ids > 0 do
     local nothing_changed = true
 
     -- Extend labels
-    for _, bufnum in ipairs(nonunique_bufs) do
-      local tab = MiniTabline.tabs[bufnum]
+    for _, buf_id in ipairs(nonunique_tab_ids) do
+      local tab = H.tabs[buf_id]
       local old_label = tab.label
       tab.label = tab.label_extender(tab.label)
       if old_label ~= tab.label then
@@ -303,66 +309,58 @@ function H.finalize_labels()
       break
     end
 
-    nonunique_bufs = H.get_nonunique_buffers()
+    nonunique_tab_ids = H.get_nonunique_tab_ids()
   end
 
-  -- Postprocess: add padding
-  for _, tab in pairs(MiniTabline.tabs) do
-    -- -- Currently using icons doesn't quite work because later in
-    -- -- `H.fit_width()` width of label is computed using `string.len()` which
-    -- -- computes number of bytes in string. Correct approach would be to use
-    -- -- `utf8.len()`, but it is in Lua 5.3+.
-    -- local extension = vim.fn.fnamemodify(tab.label, ':e')
-    -- local icon = require'nvim-web-devicons'.get_icon(tab.label, extension, { default = true })
-    -- tab.label = string.format('%s %s ', icon, tab.label)
-    tab.label = string.format(' %s ', tab.label)
+  -- Postprocess: add file icons and padding
+  -- Have this `require()` here to not depend on plugin initialization order
+  local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
+
+  for _, tab in pairs(H.tabs) do
+    if MiniTabline.config.show_icons and has_devicons then
+      local extension = vim.fn.fnamemodify(tab.label, ':e')
+      local icon = devicons.get_icon(tab.label, extension, { default = true })
+      tab.label = string.format(' %s %s ', icon, tab.label)
+    else
+      tab.label = string.format(' %s ', tab.label)
+    end
   end
 end
 
-function H.get_nonunique_buffers()
-  -- Collect buffers per label
-  local label_buffers = {}
-  for bufnum, tab in pairs(MiniTabline.tabs) do
+--@return List of `H.tabs` ids which have non-unique labels
+function H.get_nonunique_tab_ids()
+  -- Collect tab-list-id per label
+  local label_tab_ids = {}
+  for i, tab in ipairs(H.tabs) do
     local label = tab.label
-    if label_buffers[label] == nil then
-      label_buffers[label] = { bufnum }
+    if label_tab_ids[label] == nil then
+      label_tab_ids[label] = { i }
     else
-      table.insert(label_buffers[label], bufnum)
+      table.insert(label_tab_ids[label], i)
     end
   end
 
-  -- Collect buffers with non-unique labels
-  local res = {}
-  for _, bufnums in pairs(label_buffers) do
-    if #bufnums > 1 then
-      for _, b in pairs(bufnums) do
-        table.insert(res, b)
-      end
-    end
-  end
-
-  return res
+  -- Collect tab-list-ids with non-unique labels
+  return vim.tbl_flatten(vim.tbl_filter(function(x)
+    return #x > 1
+  end, label_tab_ids))
 end
 
 ---- Fit tabline to maximum displayed width
-H.centerbuf = vim.fn.winbufnr(0)
-
 function H.fit_width()
-  H.update_centerbuf()
+  H.update_center_buf_id()
 
   -- Compute label width data
   local center = 1
   local tot_width = 0
-  -- Tabs should be processed here in order of their appearance
-  for _, bufnum in pairs(MiniTabline.tabs_order) do
-    local tab = MiniTabline.tabs[bufnum]
-    -- Better to use `utf8.len()` but it is only available in Lua 5.3+
-    tab.label_width = tab.label:len()
+  for _, tab in pairs(H.tabs) do
+    -- Use `nvim_strwidth()` and not `:len()` to respect multibyte characters
+    tab.label_width = vim.api.nvim_strwidth(tab.label)
     tab.chars_on_left = tot_width
 
     tot_width = tot_width + tab.label_width
 
-    if bufnum == H.centerbuf then
+    if tab.buf_id == H.center_buf_id then
       -- Make end of 'center tab' to be always displayed in center in case of
       -- truncation
       center = tot_width
@@ -374,10 +372,10 @@ function H.fit_width()
   H.truncate_tabs_display(display_interval)
 end
 
-function H.update_centerbuf()
+function H.update_center_buf_id()
   local buf_displayed = vim.fn.winbufnr(0)
   if H.is_buffer_in_minitabline(buf_displayed) then
-    H.centerbuf = buf_displayed
+    H.center_buf_id = buf_displayed
   end
 end
 
@@ -403,35 +401,31 @@ function H.truncate_tabs_display(display_interval)
   local display_left, display_right = display_interval[1], display_interval[2]
 
   local tabs = {}
-  local tabs_order = {}
-  for _, bufnum in ipairs(MiniTabline.tabs_order) do
-    local tab = MiniTabline.tabs[bufnum]
+  for _, tab in ipairs(H.tabs) do
     local tab_left = tab.chars_on_left + 1
     local tab_right = tab.chars_on_left + tab.label_width
     if (display_left <= tab_right) and (tab_left <= display_right) then
       -- Process tab that should be displayed (even partially)
-      tabs_order[#tabs_order + 1] = bufnum
+      local n_trunc_left = math.max(0, display_left - tab_left)
+      local n_trunc_right = math.max(0, tab_right - display_right)
 
-      local n_trunc_left = math.max(1, display_left - tab_left + 1)
-      local n_trunc_right = math.max(1, tab_right - display_right + 1)
-      tab.label = tab.label:sub(n_trunc_left, -n_trunc_right)
+      -- Take desired amount of characters starting from `n_trunc_left`
+      tab.label = vim.fn.strcharpart(tab.label, n_trunc_left, tab.label_width - n_trunc_right)
 
-      tabs[bufnum] = tab
+      table.insert(tabs, tab)
     end
   end
 
-  MiniTabline.tabs = tabs
-  MiniTabline.tabs_order = tabs_order
+  H.tabs = tabs
 end
 
 ---- Concatenate tabs into single tabline string
 function H.concat_tabs()
   -- NOTE: it is assumed that all padding is incorporated into labels
   local t = {}
-  for _, bufnum in ipairs(MiniTabline.tabs_order) do
-    local tab = MiniTabline.tabs[bufnum]
+  for _, tab in ipairs(H.tabs) do
     -- Escape '%' in labels
-    t[#t + 1] = tab.hl .. tab.tabfunc .. tab.label:gsub('%%', '%%%%')
+    table.insert(t, tab.hl .. tab.tabfunc .. tab.label:gsub('%%', '%%%%'))
   end
 
   return table.concat(t, '') .. '%#MiniTablineFill#'
