@@ -103,3 +103,6 @@
 [submodule "pack/plugins/opt/markdown-preview"]
 	path = pack/plugins/opt/markdown-preview
 	url = https://github.com/iamcco/markdown-preview.nvim
+[submodule "pack/plugins/opt/tree-sitter-lua"]
+	path = pack/plugins/opt/tree-sitter-lua
+	url = https://github.com/tjdevries/tree-sitter-lua
