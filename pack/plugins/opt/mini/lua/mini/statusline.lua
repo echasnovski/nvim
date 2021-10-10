@@ -54,10 +54,10 @@
 -- Suggested dependencies (provide extra functionality, statusline will work
 -- without them):
 -- - Nerd font (to support extra icons).
--- - Plugin 'lewis6991/gitsigns.nvim' for Git information. If missing, '-' will
---   be shown.
--- - Plugin 'kyazdani42/nvim-web-devicons' or 'ryanoasis/vim-devicons' for
---   filetype icons. If missing, no icons will be used.
+-- - Plugin 'lewis6991/gitsigns.nvim' for Git information in `section_git`. If
+--   missing, no section will be shown.
+-- - Plugin 'kyazdani42/nvim-web-devicons' for filetype icons in
+--   `section_fileinfo`. If missing, no icons will be used.
 --
 -- Notes about structure:
 -- - Main statusline object is `MiniStatusline`. It has two different "states":
@@ -82,9 +82,6 @@
 --
 -- To disable (show empty statusline), set `g:ministatusline_disable`
 -- (globally) or `b:ministatusline_disable` (for a buffer) to `v:true`.
-
--- Possible Lua dependencies
-local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
 
 -- Module and its helper
 local MiniStatusline = {}
@@ -255,7 +252,7 @@ function MiniStatusline.section_git(args)
   local signs = H.is_truncated(args.trunc_width) and '' or (vim.b.gitsigns_status or '')
 
   if signs == '' then
-    if head == '-' then
+    if head == '-' or head == '' then
       return ''
     end
     return string.format(' %s', head)
@@ -410,7 +407,8 @@ end
 
 ---- Various helpers
 function H.is_truncated(width)
-  return vim.api.nvim_win_get_width(0) < width
+  -- Use -1 to default to 'not truncated'
+  return vim.api.nvim_win_get_width(0) < (width or -1)
 end
 
 function H.isnt_normal_buffer()
@@ -437,15 +435,14 @@ function H.get_filesize()
 end
 
 function H.get_filetype_icon()
-  -- By default use 'nvim-web-devicons', fallback to 'vim-devicons'
-  if has_devicons then
-    local file_name, file_ext = vim.fn.expand('%:t'), vim.fn.expand('%:e')
-    return devicons.get_icon(file_name, file_ext, { default = true })
-  elseif vim.fn.exists('*WebDevIconsGetFileTypeSymbol') ~= 0 then
-    return vim.fn.WebDevIconsGetFileTypeSymbol()
+  -- Have this `require()` here to not depend on plugin initialization order
+  local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
+  if not has_devicons then
+    return ''
   end
 
-  return ''
+  local file_name, file_ext = vim.fn.expand('%:t'), vim.fn.expand('%:e')
+  return devicons.get_icon(file_name, file_ext, { default = true })
 end
 
 return MiniStatusline
