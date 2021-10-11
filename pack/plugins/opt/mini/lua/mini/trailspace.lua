@@ -1,33 +1,43 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
---
--- Custom *minimal* and *fast* module for working with trailing whitespace.
---
--- To activate, put this file somewhere into 'lua' folder and call module's
--- `setup()`. For example, put as 'lua/mini/trailspace.lua' and execute
--- `require('mini.trailspace').setup()` Lua code. It may have `config` argument
--- which should be a table overwriting default values using same structure.
---
--- Default `config`: {} (currently nothing to configure)
---
--- Features:
--- - Enable, disable, and toggle module with `enable()`, `disable()`, and
---   `toggle()` functions.
--- - Highlighting of trailing space is enabled in every buffer by default.
---   Custom setup is needed to enable it based on some rules.
--- - Highlighting stops in insert mode and when leaving window.
--- - Trim all trailing whitespace with `trim()` function.
--- - Highlighting is done according to `MiniTrailspace` highlight group. To
---   change this, modify it directly with `highlight MiniTrailspace` command.
---
--- To disable, set `g:minitrailspace_disable` (globally) or
--- `b:minitrailspace_disable` (for a buffer) to `v:true`. NOTE: after disabling
--- there might be highlighting left; call `lua MiniTrailspace.unhighlight()`.
+
+---@brief [[
+--- Custom minimal and fast module for working with trailing whitespace.
+---
+--- Features:
+--- - Highlighting of trailing space is enabled in every modifiable buffer by default.
+--- - Highlighting stops in insert mode and when leaving window.
+--- - Trim all trailing whitespace with |MiniTrailspace.trim()| function.
+---
+--- # Setup
+---
+--- This module needs a setup with `require('mini.trailspace').setup({})`
+--- (replace `{}` with your `config` table).
+---
+--- Default `config`: {} (currently nothing to configure)
+---
+--- # Highlight groups
+---
+--- 1. `MiniTrailspace` - highlight group for trailing space.
+---
+--- To change any highlight group, modify it directly with |:highlight|.
+---
+--- # Disabling
+---
+--- To disable, set `g:minitrailspace_disable` (globally) or
+--- `b:minitrailspace_disable` (for a buffer) to `v:true`.  Note: after
+--- disabling there might be highlighting left; it will be removed after next
+--- highlighting update (see |events| and `MiniTrailspace` |augroup|).
+---@brief ]]
+---@tag MiniTrailspace
 
 -- Module and its helper
 local MiniTrailspace = {}
 local H = {}
 
--- Module setup
+--- Module setup
+---
+---@param config table: Module config table.
+---@usage `require('mini.trailspace').setup({})` (replace `{}` with your `config` table)
 function MiniTrailspace.setup(config)
   -- Export module
   _G.MiniTrailspace = MiniTrailspace
@@ -39,12 +49,13 @@ function MiniTrailspace.setup(config)
   H.apply_config(config)
 
   -- Module behavior
+  -- Use `defer_fn` for `MiniTrailspace.highlight` to ensure that
+  -- 'modifiable' option is set to its final value.
   vim.api.nvim_exec(
     [[augroup MiniTrailspace
         au!
-        au WinEnter,BufWinEnter,InsertLeave * lua MiniTrailspace.highlight()
+        au WinEnter,BufWinEnter,InsertLeave * lua vim.defer_fn(MiniTrailspace.highlight, 0)
         au WinLeave,BufWinLeave,InsertEnter * lua MiniTrailspace.unhighlight()
-        au FileType WhichKey lua MiniTrailspace.unhighlight()
       augroup END]],
     false
   )
@@ -57,21 +68,31 @@ end
 MiniTrailspace.config = {}
 
 -- Functions to perform actions
-function MiniTrailspace.highlight()
+--- Highlight trailing whitespace
+---
+---@param check_modifiable boolean: Whether to check |modifiable| (if it is off, don't highlight). Default: `true`.
+function MiniTrailspace.highlight(check_modifiable)
+  check_modifiable = check_modifiable or true
+
   if H.is_disabled() then
+    MiniTrailspace.unhighlight()
+    return
+  end
+
+  if check_modifiable and not vim.bo.modifiable then
     return
   end
 
   local win_id = vim.fn.win_getid()
   local win_match = H.window_matches[win_id]
 
-  -- Don't add match id on top of existing one (prevents multiple calls of
-  -- `MiniTrailspace.enable()`)
+  -- Don't add match id on top of existing one
   if win_match == nil then
     H.window_matches[win_id] = vim.fn.matchadd('MiniTrailspace', [[\s\+$]])
   end
 end
 
+--- Unhighlight trailing whitespace
 function MiniTrailspace.unhighlight()
   local win_id = vim.fn.win_getid()
   local win_match = H.window_matches[win_id]
@@ -81,6 +102,7 @@ function MiniTrailspace.unhighlight()
   end
 end
 
+--- Trim trailing whitespace
 function MiniTrailspace.trim()
   -- Save cursor position to later restore
   local curpos = vim.api.nvim_win_get_cursor(0)
@@ -89,9 +111,13 @@ function MiniTrailspace.trim()
   vim.api.nvim_win_set_cursor(0, curpos)
 end
 
--- Helpers
+-- Helper data
 ---- Module default config
 H.default_config = MiniTrailspace.config
+
+-- Information about last match highlighting: word and match id (returned from
+-- `vim.fn.matchadd()`). Stored *per window* by its unique identifier.
+H.window_matches = {}
 
 ---- Settings
 function H.setup_config(config)
@@ -110,12 +136,5 @@ end
 function H.is_disabled()
   return vim.g.minitrailspace_disable == true or vim.b.minitrailspace_disable == true
 end
-
----- Indicator of whether to actually do highlighing
-H.enabled = true
-
--- Information about last match highlighting: word and match id (returned from
--- `vim.fn.matchadd()`). Stored *per window* by its unique identifier.
-H.window_matches = {}
 
 return MiniTrailspace
