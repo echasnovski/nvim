@@ -1,115 +1,130 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
---
--- Custom *somewhat minimal* and *fast* surrounding Lua plugin. This is mostly
--- a reimplementation of the most essential features of
--- 'machakann/vim-sandwich' with a couple more on top.
---
--- To activate, put this file somewhere into 'lua' folder and call module's
--- `setup()`. For example, put as 'lua/mini/surround.lua' and execute
--- `require('mini.surround').setup()` Lua code. It may have `config` argument
--- which should be a table overwriting default values using same structure.
---
--- Default `config`:
--- {
---   -- Number of lines within which surrounding is searched
---   n_lines = 20,
---   -- Duration (in ms) of highlight when calling `MiniSurround.highlight()`
---   highlight_duration = 500,
---   -- Pattern to match function name in 'function call' surrounding
---   -- By default it is a string of letters, '_' or '.'
---   funname_pattern = '[%w_%.]+',
---   -- Mappings. Use `''` (empty string) to disable one.
---   mappings = {
---     add = 'sa',           -- Add surrounding
---     delete = 'sd',        -- Delete surrounding
---     find = 'sf',          -- Find surrounding (to the right)
---     find_left = 'sF',     -- Find surrounding (to the left)
---     highlight = 'sh',     -- Highlight surrounding
---     replace = 'sr',       -- Replace surrounding
---     update_n_lines = 'sn' -- Update `n_lines`
---   }
--- }
---
--- Features:
--- - Actions:
---     - Add surrounding with `sa` (in visual mode or on motion).
---     - Delete surrounding with `sd`.
---     - Replace surrounding with `sr`.
---     - Find surrounding with `sf` or `sF` (move cursor right or left).
---     - Highlight surrounding with `sh`.
---     - Change number of neighbor lines with `sn` (see algorithm details).
---   Note that all actions are dot-repeatable out of the box.
--- - Surrounding is identified by a single character as both 'input' (in
---   'delete' and 'replace' start) and 'output' (in 'add' and 'replace' end):
---     - 'f' - function call (string of letters or '_' or '.' followed by
---       balanced '()'). In 'input' finds function call, in 'output'
---       prompts user to enter function name.
---     - 'i' - interactive. Prompts user to enter left and right parts.
---     - 't' - tag. In 'input' finds tab with same identifier, in 'output'
---       prompts user to enter tag name.
---     - All symbols in brackets '()', '[]', '{}', '<>'. In 'input' represents
---       balanced brackets, in 'output' - left and right parts of brackets.
---     - All other alphanumeric, punctuation, or space characters represent
---       surrounding with identical left and right parts.
--- - Highlighting is done according to `MiniSurround` highlight group. To
---   change this, modify it directly with `highlight MiniSurround` command.
---
--- Examples:
--- - `saiw)` - add (`sa`) for inner word (`iw`) parenthesis (`)`).
--- - `sdf` - delete (`sd`) surrounding function call (`f`).
--- - `sr)tdiv<CR>` - replace (`sr`) surrounding parenthesis (`)`) with tag
---   (`t`) with identifier 'div' (`div<CR>` in command line prompt).
--- - `sff` - find right (`sf`) part of surrounding function call (`f`).
--- - `sh}` - highlight (`sh`) for a brief period of time surrounding curly
---   brackets (`}`)
---
--- Details of algorithms:
--- - Adding 'output' surrounding has a fairly straightforward algorithm:
---     - Determine places for left and right parts (via `<>` or `[]` marks).
---     - Determine left and right parts of surrounding.
---     - Properly add.
--- - Finding 'input' surrounding is a lot more complicated and is a reason why
---   this implementation is only *somewhat minimal*. The first idea is to use
---   Vim's `searchpairpos()`, but it searches only balanced pair. This means
---   `searchpos()` should also be used. But the most serious drawback is a lack
---   of a fairly straightforward way of searching for function call, which is a
---   crucial requirement. With these difficulties, there is already no
---   considerable gain in basing algorithm on `searchpairpos()`.
---   In a nutshell, current algorithm *searches in the neighbor lines based on
---   a certain pattern a _smallest_ match that covers cursor*. More detailed:
---     - Extract neighborhood of cursor line: no more than
---       `MiniSurround.config.n_lines` before, cursor line itself, no more than
---       `MiniSurround.config.n_lines` after.
---     - Convert it to '1d neighborhood' by concatenating with '\n' delimiter.
---       Compute location of current cursor position in this line.
---     - Given Lua pattern for a 'input' surrounding, search for a smallest
---       (with minimal width) match that covers cursor position. This is an
---       iterative procedure, duration of which heavily depends on the length
---       of '1d neighborhood' and frequency of pattern matching. If no match is
---       found, there is no surrounding.
---     - Compute parts of '1d neighborhood' that represent left and right part
---       of found surrounding. This is done by using 'extract' pattern computed
---       for every type of surrounding.
---     - Convert '1d offsets' of found parts to their positions in buffer.
---   Actual search is done firstly on cursor line (as it is the most frequent
---   usage) and only then searches in neighborhood.
---
--- Known issues which won't be resolved:
--- - When searching for 'input' surrounding, there is no distinction if it is
---   inside string or comment. So in this case there will be not proper match
---   for a function call: 'f(a = ")", b = 1)'.
--- - Tags are searched using regex-like methods, so issues are inevitable.
---   Overall it is pretty good, but certain cases won't work. Like self-nested
---   tags won't match correctly on both ends: '<a><a></a></a>'.
---
--- To disable, set `g:minisurround_disable` (globally) or
--- `b:minisurround_disable` (for a buffer) to `v:true`.
+
+---@brief [[
+--- Custom somewhat minimal and fast surrounding Lua plugin. This is mostly
+--- a reimplementation of the core features of 'machakann/vim-sandwich' with a
+--- couple more on top (find surrounding, highlight surrounding).
+---
+--- Features:
+--- - Actions (all of them are dot-repeatable out of the box):
+---     - Add surrounding with `sa` (in visual mode or on motion).
+---     - Delete surrounding with `sd`.
+---     - Replace surrounding with `sr`.
+---     - Find surrounding with `sf` or `sF` (move cursor right or left).
+---     - Highlight surrounding with `sh`.
+---     - Change number of neighbor lines with `sn` (see algorithm details).
+--- - Surrounding is identified by a single character as both 'input' (in
+---   `delete` and `replace` start) and 'output' (in `add` and `replace` end):
+---     - 'f' - function call (string of letters or '_' or '.' followed by
+---       balanced '()'). In 'input' finds function call, in 'output'
+---       prompts user to enter function name.
+---     - 'i' - interactive. Prompts user to enter left and right parts.
+---     - 't' - tag. In 'input' finds tab with same identifier, in 'output'
+---       prompts user to enter tag name.
+---     - All symbols in brackets '()', '[]', '{}', '<>'. In 'input' represents
+---       balanced brackets, in 'output' - left and right parts of brackets.
+---     - All other alphanumeric, punctuation, or space characters represent
+---       surrounding with identical left and right parts.
+---
+--- Known issues which won't be resolved:
+--- - When searching for 'input' surrounding, there is no distinction if it is
+---   inside string or comment. So in this case there will be not proper match
+---   for a function call: 'f(a = ")", b = 1)'.
+--- - Tags are searched using regex-like methods, so issues are inevitable.
+---   Overall it is pretty good, but certain cases won't work. Like self-nested
+---   tags won't match correctly on both ends: '<a><a></a></a>'.
+---
+--- # Setup
+---
+--- This module needs a setup with `require('mini.surround').setup({})`
+--- (replace `{}` with your `config` table).
+---
+--- Default `config`:
+--- <pre>
+--- {
+---   -- Number of lines within which surrounding is searched
+---   n_lines = 20,
+---
+---   -- Duration (in ms) of highlight when calling `MiniSurround.highlight()`
+---   highlight_duration = 500,
+---
+---   -- Pattern to match function name in 'function call' surrounding
+---   -- By default it is a string of letters, '_' or '.'
+---   funname_pattern = '[%w_%.]+',
+---
+---   -- Mappings. Use `''` (empty string) to disable one.
+---   mappings = {
+---     add = 'sa',           -- Add surrounding
+---     delete = 'sd',        -- Delete surrounding
+---     find = 'sf',          -- Find surrounding (to the right)
+---     find_left = 'sF',     -- Find surrounding (to the left)
+---     highlight = 'sh',     -- Highlight surrounding
+---     replace = 'sr',       -- Replace surrounding
+---     update_n_lines = 'sn' -- Update `n_lines`
+---   }
+--- }
+--- </pre>
+---
+--- # Example usage
+---
+--- - `saiw)` - add (`sa`) for inner word (`iw`) parenthesis (`)`).
+--- - `saiwi[[<CR>]]<CR>` - add (`sa`) for inner word (`iw`) interactive
+---   surrounding (`i`): `[[` for left and `]]` for right.
+--- - `sdf` - delete (`sd`) surrounding function call (`f`).
+--- - `sr)tdiv<CR>` - replace (`sr`) surrounding parenthesis (`)`) with tag
+---   (`t`) with identifier 'div' (`div<CR>` in command line prompt).
+--- - `sff` - find right (`sf`) part of surrounding function call (`f`).
+--- - `sh}` - highlight (`sh`) for a brief period of time surrounding curly
+---   brackets (`}`)
+---
+--- # Algorithm design
+---
+--- - Adding 'output' surrounding has a fairly straightforward algorithm:
+---     - Determine places for left and right parts (via `<>` or `[]` marks).
+---     - Determine left and right parts of surrounding.
+---     - Properly add.
+--- - Finding 'input' surrounding is a lot more complicated and is a reason why
+---   this implementation is only somewhat minimal. In a nutshell, current
+---   algorithm `searches in the neighborhood lines based on a certain pattern
+---   a _smallest_ match that covers cursor`. More detailed:
+---     - Extract neighborhood of cursor line: no more than
+---       `MiniSurround.config.n_lines` before, cursor line itself, no more than
+---       `MiniSurround.config.n_lines` after.
+---     - Convert it to '1d neighborhood' by concatenating with '\n' delimiter.
+---       Compute location of current cursor position in this line.
+---     - Given Lua pattern for a 'input' surrounding, search for a smallest
+---       (with minimal width) match that covers cursor position. This is an
+---       iterative procedure, duration of which heavily depends on the length
+---       of '1d neighborhood' and frequency of pattern matching. If no match is
+---       found, there is no surrounding.
+---     - Compute parts of '1d neighborhood' that represent left and right part
+---       of found surrounding. This is done by using 'extract' pattern computed
+---       for every type of surrounding.
+---     - Convert '1d offsets' of found parts to their positions in buffer.
+---   Actual search is done firstly on cursor line (as it is the most frequent
+---   usage) and only then searches in neighborhood.
+---
+--- # Highlight groups
+---
+--- 1. `MiniSurround` - highlighting of requested surrounding.
+---
+--- To change any highlight group, modify it directly with |:highlight|.
+---
+--- # Disabling
+---
+--- To disable, set `g:minisurround_disable` (globally) or
+--- `b:minisurround_disable` (for a buffer) to `v:true`.
+---@brief ]]
+---@tag MiniSurround
 
 -- Module and its helper
 local MiniSurround = {}
 local H = {}
 
--- Module setup
+--- Module setup
+---
+---@param config table: Module config table.
+---@usage `require('mini.surround').setup({})` (replace `{}` with your `config` table)
 function MiniSurround.setup(config)
   -- Export module
   _G.MiniSurround = MiniSurround
@@ -148,6 +163,13 @@ MiniSurround.config = {
 }
 
 -- Module functionality
+--- Surround operator
+---
+--- Main function to be used in expression mappings. No need to use it
+--- directly, everything is setup in |MiniSurround.setup|.
+---
+---@param task string: Name of surround task.
+---@param cache table: Task cache.
 function MiniSurround.operator(task, cache)
   if H.is_disabled() then
     return ''
@@ -159,6 +181,11 @@ function MiniSurround.operator(task, cache)
   return 'g@'
 end
 
+--- Add surrounding
+---
+--- No need to use it directly, everything is setup in |MiniSurround.setup|.
+---
+---@param mode string: Mapping mode (normal by default).
 function MiniSurround.add(mode)
   -- Needed to disable in visual mode
   if H.is_disabled() then
@@ -189,9 +216,12 @@ function MiniSurround.add(mode)
   H.cursor_adjust(marks.first.line, marks.first.col + surr_info.left:len())
 end
 
+--- Delete surrounding
+---
+--- No need to use it directly, everything is setup in |MiniSurround.setup|.
 function MiniSurround.delete()
   -- Find input surrounding
-  local surr = MiniSurround.find_surrounding(H.get_surround_info('input', true))
+  local surr = H.find_surrounding(H.get_surround_info('input', true))
   if surr == nil then
     return ''
   end
@@ -204,9 +234,12 @@ function MiniSurround.delete()
   H.cursor_adjust(surr.left.line, surr.left.from)
 end
 
+--- Replace surrounding
+---
+--- No need to use it directly, everything is setup in |MiniSurround.setup|.
 function MiniSurround.replace()
   -- Find input surrounding
-  local surr = MiniSurround.find_surrounding(H.get_surround_info('input', true))
+  local surr = H.find_surrounding(H.get_surround_info('input', true))
   if surr == nil then
     return ''
   end
@@ -235,9 +268,12 @@ function MiniSurround.replace()
   H.cursor_adjust(surr.left.line, surr.left.from + new_surr_info.left:len())
 end
 
+--- Find surrounding
+---
+--- No need to use it directly, everything is setup in |MiniSurround.setup|.
 function MiniSurround.find()
   -- Find surrounding
-  local surr = MiniSurround.find_surrounding(H.get_surround_info('input', true))
+  local surr = H.find_surrounding(H.get_surround_info('input', true))
   if surr == nil then
     return ''
   end
@@ -257,9 +293,12 @@ function MiniSurround.find()
   vim.cmd([[normal! zv]])
 end
 
+--- Highlight surrounding
+---
+--- No need to use it directly, everything is setup in |MiniSurround.setup|.
 function MiniSurround.highlight()
   -- Find surrounding
-  local surr = MiniSurround.find_surrounding(H.get_surround_info('input', true))
+  local surr = H.find_surrounding(H.get_surround_info('input', true))
   if surr == nil then
     return ''
   end
@@ -273,6 +312,10 @@ function MiniSurround.highlight()
   end, MiniSurround.config.highlight_duration)
 end
 
+--- Update `MiniSurround.config.n_lines`
+---
+--- Convenient wrapper for updating `MiniSurround.config.n_lines` in case the
+--- default one is not appropriate.
 function MiniSurround.update_n_lines()
   if H.is_disabled() then
     return ''
@@ -283,53 +326,43 @@ function MiniSurround.update_n_lines()
   MiniSurround.config.n_lines = n_lines
 end
 
----- NOTE: more simple approach would have been to use combination of
----- `searchpairpos()` (to search for balanced pair) and `searchpos()` (to
----- search end of balanced search and for unbalanced pairs). However, there
----- are several problems with it:
----- - It is slower (around 2-5 times) than current Lua pattern approach.
----- - It has limitations when dealing with crucial 'function call' search.
-----   Function call is defined as 'non-empty function name followed by
-----   balanced pair of "(" and ")"'. Naive use of `searchpairpos()` is to use
-----   `searchpairpos('\w\+(', '', ')')` which works most of the time.
-----   However, in example `foo(a = (1 + 1), b = c(1, 2))` this will match
-----   `o(a = (1 + 1)` when cursor is on 'a'. This is because '(' inside it is
-----   not recognized for balancing because it doesn't match '\w\+('.
-----
----- Vim's approach also has some upsides:
----- - `searchpairpos()` allows skipping of certain matches, like if it is
-----   inside string or comment. It works decently well with example from help
-----   (with `synIDattr`, etc.) but this only works when Vim's builtin
-----   highlighting is used. When treesitter's highlighting is active, this
-----   doesn't work.
-----
----- All in all, using Vim's builtin functions is doable, but leads to roughly
----- same efforts as Lua pattern approach.
-function MiniSurround.find_surrounding(surround_info)
-  -- `surround_info` should have `find` field with surrounding pattern. If
-  -- needed, it should also have a `extract` field with extract pattern for two
-  -- parts of surrounding assuming they are at the start and end of string.
-  if surround_info == nil then
-    return nil
-  end
-  local n_lines = MiniSurround.config.n_lines
-
-  -- First try only current line as it is the most common use case
-  local surr = H.find_surrounding_in_neighborhood(surround_info, 0)
-    or H.find_surrounding_in_neighborhood(surround_info, n_lines)
-
-  if surr == nil then
-    H.notify(string.format([[No surrounding '%s' found within %d lines.]], surround_info.id, n_lines))
-  end
-
-  return surr
-end
-
--- Helpers
+-- Helper data
 ---- Module default config
 H.default_config = MiniSurround.config
 
--- Settings
+---- Namespace for highlighting
+H.ns_id = vim.api.nvim_create_namespace('MiniSurround')
+
+---- Table of non-special surroundings
+H.surroundings = setmetatable({
+  -- Brackets that need balancing
+  ['('] = { find = '%b()', left = '(', right = ')' },
+  [')'] = { find = '%b()', left = '(', right = ')' },
+  ['['] = { find = '%b[]', left = '[', right = ']' },
+  [']'] = { find = '%b[]', left = '[', right = ']' },
+  ['{'] = { find = '%b{}', left = '{', right = '}' },
+  ['}'] = { find = '%b{}', left = '{', right = '}' },
+  ['<'] = { find = '%b<>', left = '<', right = '>' },
+  ['>'] = { find = '%b<>', left = '<', right = '>' },
+}, {
+  __index = function(table, key)
+    local key_esc = vim.pesc(key)
+    return { find = key_esc .. '.-' .. key_esc, left = key, right = key }
+  end,
+})
+
+---- Cache for dot-repeatability. This table is currently used with these keys:
+---- - 'input' - surround info for searching (in 'delete' and 'replace' start).
+---- - 'output' - surround info for adding (in 'add' and 'replace' end).
+---- - 'direction' - direction in which `MiniSurround.find()` should go. Used
+----   to enable same `operatorfunc` pattern for dot-repeatability.
+H.cache = {}
+
+---- Helper table for `H.user_surround_id()` to keep track of help messages
+H.needs_help_msg = {}
+
+-- Helper functions
+---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
@@ -413,33 +446,48 @@ function H.is_disabled()
   return vim.g.minisurround_disable == true or vim.b.minisurround_disable == true
 end
 
----- Namespace for highlighting
-H.ns_id = vim.api.nvim_create_namespace('MiniSurround')
+---- Find surrounding
+---- NOTE: more simple approach for `find_surrounding()` would have been to use
+---- combination of `searchpairpos()` (to search for balanced pair) and
+---- `searchpos()` (to search end of balanced search and for unbalanced pairs).
+---- However, there are several problems with it:
+---- - It is slower (around 2-5 times) than current Lua pattern approach.
+---- - It has limitations when dealing with crucial 'function call' search.
+----   Function call is defined as 'non-empty function name followed by
+----   balanced pair of "(" and ")"'. Naive use of `searchpairpos()` is to use
+----   `searchpairpos('\w\+(', '', ')')` which works most of the time.
+----   However, in example `foo(a = (1 + 1), b = c(1, 2))` this will match
+----   `o(a = (1 + 1)` when cursor is on 'a'. This is because '(' inside it is
+----   not recognized for balancing because it doesn't match '\w\+('.
+----
+---- Vim's approach also has some upsides:
+---- - `searchpairpos()` allows skipping of certain matches, like if it is
+----   inside string or comment. It works decently well with example from help
+----   (with `synIDattr`, etc.) but this only works when Vim's builtin
+----   highlighting is used. When treesitter's highlighting is active, this
+----   doesn't work.
+----
+---- All in all, using Vim's builtin functions is doable, but leads to roughly
+---- same efforts as Lua pattern approach.
+function H.find_surrounding(surround_info)
+  -- `surround_info` should have `find` field with surrounding pattern. If
+  -- needed, it should also have a `extract` field with extract pattern for two
+  -- parts of surrounding assuming they are at the start and end of string.
+  if surround_info == nil then
+    return nil
+  end
+  local n_lines = MiniSurround.config.n_lines
 
----- Table of non-special surroundings
-H.surroundings = setmetatable({
-  -- Brackets that need balancing
-  ['('] = { find = '%b()', left = '(', right = ')' },
-  [')'] = { find = '%b()', left = '(', right = ')' },
-  ['['] = { find = '%b[]', left = '[', right = ']' },
-  [']'] = { find = '%b[]', left = '[', right = ']' },
-  ['{'] = { find = '%b{}', left = '{', right = '}' },
-  ['}'] = { find = '%b{}', left = '{', right = '}' },
-  ['<'] = { find = '%b<>', left = '<', right = '>' },
-  ['>'] = { find = '%b<>', left = '<', right = '>' },
-}, {
-  __index = function(table, key)
-    local key_esc = vim.pesc(key)
-    return { find = key_esc .. '.-' .. key_esc, left = key, right = key }
-  end,
-})
+  -- First try only current line as it is the most common use case
+  local surr = H.find_surrounding_in_neighborhood(surround_info, 0)
+    or H.find_surrounding_in_neighborhood(surround_info, n_lines)
 
----- Cache for dot-repeatability. This table is currently used with these keys:
----- - 'input' - surround info for searching (in 'delete' and 'replace' start).
----- - 'output' - surround info for adding (in 'add' and 'replace' end).
----- - 'direction' - direction in which `MiniSurround.find()` should go. Used
-----   to enable same `operatorfunc` pattern for dot-repeatability.
-H.cache = {}
+  if surr == nil then
+    H.notify(string.format([[No surrounding '%s' found within %d lines.]], surround_info.id, n_lines))
+  end
+
+  return surr
+end
 
 ---- Work with operator marks
 function H.get_marks_pos(mode)
@@ -549,8 +597,6 @@ end
 function H.notify(msg)
   vim.notify(string.format('(mini.surround) %s', msg))
 end
-
-H.needs_help_msg = {}
 
 function H.user_surround_id(sur_type)
   -- Get from user single character surrounding identifier

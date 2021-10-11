@@ -9,9 +9,10 @@
 --- - Opinionated palette generator based only on background and foreground
 ---   colors.
 ---
---- This module doesn't need setup, but it can be done to improve usability.
---- Setup with `require('mini.base16').setup({})` (replace `{}` with your
---- `config` table).
+--- # Setup
+---
+--- This module needs a setup with `require('mini.base16').setup({})` (replace
+---`{}` with your - `config` table).
 ---
 --- Default `config`:
 --- <pre>

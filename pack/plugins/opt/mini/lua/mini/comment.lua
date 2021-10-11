@@ -5,6 +5,8 @@
 --- reimplementation of "tpope/vim-commentary". Commenting in Normal mode
 --- respects |count| and is dot-repeatable.
 ---
+--- # Setup
+---
 --- This module needs a setup with `require('mini.comment').setup({})` (replace
 --- `{}` with your `config` table).
 ---
@@ -16,10 +18,12 @@
 ---     -- Toggle comment (like `gcip` - comment inner paragraph) for both
 ---     -- Normal and Visual modes
 ---     comment      = 'gc',
+---
 ---     -- Toggle comment on current line
 ---     comment_line = 'gcc',
+---
 ---     -- Define 'comment' textobject (like `dgc` - delete whole comment block)
----     textobject   = 'gc'
+---     textobject   = 'gc',
 ---   }
 --- }
 --- </pre>

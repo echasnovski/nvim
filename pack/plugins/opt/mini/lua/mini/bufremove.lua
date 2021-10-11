@@ -9,6 +9,8 @@
 --- - [vim-bbye](https://github.com/moll/vim-bbye)
 --- - [vim-sayonara](https://github.com/mhinz/vim-sayonara)
 ---
+--- # Setup
+---
 --- This module doesn't need setup, but it can be done to improve usability.
 --- Setup with `require('mini.bufremove').setup({})` (replace `{}` with your
 --- `config` table).
@@ -17,7 +19,7 @@
 --- <pre>
 --- {
 ---   -- Whether to set Vim's settings for buffers (allow hidden buffers)
----   set_vim_settings = true
+---   set_vim_settings = true,
 --- }
 --- </pre>
 ---

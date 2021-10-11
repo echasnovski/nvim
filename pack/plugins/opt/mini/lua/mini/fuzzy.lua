@@ -3,6 +3,8 @@
 ---@brief [[
 --- Lua module which implements minimal and fast fuzzy matching.
 ---
+--- # Setup
+---
 --- This module doesn't need setup, but it can be done to improve usability.
 --- Setup with `require('mini.fuzzy').setup({})` (replace `{}` with your
 --- `config` table).
@@ -12,7 +14,7 @@
 --- {
 ---   -- Maximum allowed value of match features (width and first match). All
 ---   -- feature values greater than cutoff can be considered "equally bad".
----   cutoff = 100
+---   cutoff = 100,
 --- }
 --- </pre>
 ---

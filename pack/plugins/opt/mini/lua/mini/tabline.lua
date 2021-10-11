@@ -1,55 +1,73 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
---
--- Custom *minimal* and *fast* tabline module. General idea: show all listed
--- buffers in readable way with minimal total width in case of one vim tab,
--- fall back for deafult otherwise. Inspired by
--- https://github.com/ap/vim-buftabline.
---
--- To activate, put this file somewhere into 'lua' folder and call module's
--- `setup()`. For example, put as 'lua/mini/tabline.lua' and execute
--- `require('mini.tabline').setup()` Lua code. It may have `config` argument
--- which should be a table overwriting default values using same structure.
---
--- Default `config`:
--- {
---   -- Whether to show file icons (requires 'kyazdani42/nvim-web-devicons')
---   show_icons = true,
---
---   -- Whether to set Vim's settings for tabline (make it always shown and
---   -- allow hidden buffers)
---   set_vim_settings = true
--- }
---
--- Main capabilities when displaying buffers:
--- - Different highlight groups for "states" of buffer affecting 'buffer tabs':
---     - MiniTablineCurrent - buffer is current (has cursor in it)
---     - MiniTablineVisible - buffer is visible (displayed in some window)
---     - MiniTablineHidden - buffer is hidden (not displayed)
---     - MiniTablineModifiedCurrent - buffer is modified and current
---     - MiniTablineModifiedVisible - buffer is modified and visible
---     - MiniTablineModifiedHidden - buffer is modified and hidden
---     - MiniTablineFill - unused right space of tabline
---   To change any of them, modify it directly with Vim's `highlight` command.
--- - Buffer names are made unique by extending paths to files or appending
---   unique identifier to buffers without name.
--- - Current buffer is displayed "optimally centered" (in center of screen
---   while maximizing the total number of buffers shown) when there are many
---   buffers open.
--- - 'Buffer tabs' are clickable if Neovim allows it.
---
--- Notes about structure:
--- - Main function is `MiniTabline.make_tabline_string()` which computes actual
---   value of '&tabline' option. It also describes high-level functional
---   structure when displaying buffers. From there go to respective functions.
---
--- To disable (show empty tabline), set `g:minitabline_disable` (globally) or
--- `b:minitabline_disable` (for a buffer) to `v:true`.
+
+---@brief [[
+--- Custom minimal and fast tabline module. General idea: show all listed
+--- buffers in readable way with minimal total width in case of one vim tab,
+--- fall back for deafult otherwise. Inspired by
+--- [ap/vim-buftabline](https://github.com/ap/vim-buftabline).
+---
+--- Features:
+--- - Different highlight groups for "states" of buffer affecting 'buffer tabs':
+--- - Buffer names are made unique by extending paths to files or appending
+---   unique identifier to buffers without name.
+--- - Current buffer is displayed "optimally centered" (in center of screen
+---   while maximizing the total number of buffers shown) when there are many
+---   buffers open.
+--- - 'Buffer tabs' are clickable if Neovim allows it.
+---
+--- # Dependencies
+---
+--- Suggested dependencies (provide extra functionality, tabline will work
+--- without them):
+--- - Plugin 'kyazdani42/nvim-web-devicons' for filetype icons near the buffer
+---   name. If missing, no icons will be shown.
+---
+--- # Setup
+---
+--- This module needs a setup with `require('mini.tabline').setup({})`
+--- (replace `{}` with your `config` table).
+---
+--- Default `config`:
+--- <pre>
+--- {
+---   -- Whether to show file icons (requires 'kyazdani42/nvim-web-devicons')
+---   show_icons = true,
+---
+---   -- Whether to set Vim's settings for tabline (make it always shown and
+---   -- allow hidden buffers)
+---   set_vim_settings = true
+--- }
+--- </pre>
+---
+--- # Highlight groups
+---
+--- 1. `MiniTablineCurrent` - buffer is current (has cursor in it).
+--- 2. `MiniTablineVisible` - buffer is visible (displayed in some window).
+--- 3. `MiniTablineHidden` - buffer is hidden (not displayed).
+--- 4. `MiniTablineModifiedCurrent` - buffer is modified and current.
+--- 5. `MiniTablineModifiedVisible` - buffer is modified and visible.
+--- 6. `MiniTablineModifiedHidden` - buffer is modified and hidden.
+--- 7. `MiniTablineFill` - unused right space of tabline.
+---
+--- To change any highlight group, modify it directly with |:highlight|.
+---
+--- # Disabling
+---
+--- To disable (show empty tabline), set `g:minitabline_disable` (globally) or
+--- `b:minitabline_disable` (for a buffer) to `v:true`. Note: after
+--- disabling tabline is not updated right away, but rather after dedicated
+--- event (see |events| and `MiniTabline` |augroup|).
+---@brief ]]
+---@tag MiniTabline
 
 -- Module and its helper
 local MiniTabline = {}
 local H = {}
 
--- Module setup
+--- Module setup
+---
+---@param config table: Module config table.
+---@usage `require('mini.tabline').setup({})` (replace `{}` with your `config` table)
 function MiniTabline.setup(config)
   -- Export module
   _G.MiniTabline = MiniTabline
@@ -107,6 +125,9 @@ MiniTabline.config = {
 }
 
 -- Module functionality
+--- Update |tabline|
+---
+--- Designed to be used with |autocmd|. No need to use it directly,
 function MiniTabline.update_tabline()
   if vim.fn.tabpagenr('$') > 1 then
     vim.o.tabline = [[]]
@@ -115,6 +136,7 @@ function MiniTabline.update_tabline()
   end
 end
 
+--- Make string for |tabline| in case of single tab
 function MiniTabline.make_tabline_string()
   if H.is_disabled() then
     return ''
@@ -313,8 +335,12 @@ function H.finalize_labels()
   end
 
   -- Postprocess: add file icons and padding
-  -- Have this `require()` here to not depend on plugin initialization order
-  local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
+  local has_devicons, devicons
+
+  ---- Have this `require()` here to not depend on plugin initialization order
+  if MiniTabline.config.show_icons then
+    has_devicons, devicons = pcall(require, 'nvim-web-devicons')
+  end
 
   for _, tab in pairs(H.tabs) do
     if MiniTabline.config.show_icons and has_devicons then

@@ -3,6 +3,8 @@
 ---@brief [[
 --- Lua module with miscellaneous useful functions (can be used independently).
 ---
+--- # Setup
+---
 --- This module doesn't need setup, but it can be done to improve usability.
 --- Setup with `require('mini.misc').setup({})` (replace `{}` with your
 --- `config` table).
@@ -11,7 +13,7 @@
 --- <pre>
 --- {
 ---   -- List of fields to make global (to be used as independent variables)
----   make_global = { 'put', 'put_text' }
+---   make_global = { 'put', 'put_text' },
 --- }
 --- </pre>
 ---@brief ]]
