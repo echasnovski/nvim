@@ -4,17 +4,36 @@
 --- Custom minimal and fast Lua module which implements
 --- [base16](http://chriskempson.com/projects/base16/) color scheme (with
 --- Copyright (C) 2012 Chris Kempson) adapated for modern Neovim 0.5 Lua
---- plugins. It also provides an opinionated palette generator based only on
---- background and foreground colors.
+--- plugins. Extra features:
+--- - Configurable automatic support of cterm colors (see |highlight-cterm|).
+--- - Opinionated palette generator based only on background and foreground
+---   colors.
 ---
 --- This module doesn't need setup, but it can be done to improve usability.
 --- Setup with `require('mini.base16').setup({})` (replace `{}` with your
 --- `config` table).
 ---
---- Default `config`: {} (currently nothing to configure)
+--- Default `config`:
+--- <pre>
+--- {
+---   -- Table with names from `base00` to `base0F` and values being strings of HEX
+---   -- colors with format "#RRGGBB". NOTE: this should be explicitly supplied in
+---   -- `setup()`.
+---   palette = nil,
+---
+---   -- Name of applied theme (stored in `g:colors_name`)
+---   name = 'base16-custom',
+---
+---  -- Whether to support cterm colors. Can be boolean, `nil` (same as `false`),
+---  -- or table with cterm colors. See `setup()` documentation for more
+---  -- information.
+---   use_cterm = nil,
+--- }
+--- </pre>
 ---
 --- # Notes
---- 1. Created theme can be made to support |highlight-cterm| alongside with |highlight-gui|.
+--- 1. This module is used for creating plugin's official colorscheme named
+---    `minischeme` (see |mini.nvim|).
 ---@brief ]]
 ---@tag MiniBase16
 
@@ -22,43 +41,280 @@
 local MiniBase16 = {}
 local H = {}
 
--- Module setup
-function MiniBase16.setup()
-  -- Export module
-  _G.MiniBase16 = MiniBase16
-end
-
-MiniBase16.palette = nil
-
---- Apply base16 palette
+--- Module setup
 ---
---- This is a main function which applies base16 theme based on supplied
---- palette of 16 colors. Highlight groups make an extended set from original
+--- Setup is done by applying base16 palette to enable colorscheme. Highlight
+--- groups make an extended set from original
 --- [base16-vim](https://github.com/chriskempson/base16-vim/) plugin. It is a
---- good idea to have `palette` respect the original [styling
+--- good idea to have `config.palette` respect the original [styling
 --- principles](https://github.com/chriskempson/base16/blob/master/styling.md).
 ---
 --- By default only 'gui highlighting' (see |highlight-gui| and
 --- |termguicolors|) is supported. To support 'cterm highlighting' (see
---- |highlight-cterm|) supply `use_cterm` argument in one of the formats:
+--- |highlight-cterm|) supply `config.use_cterm` argument in one of the formats:
 --- - `true` to auto-generate from `palette` (as closest colors).
 --- - Table with similar structure to `palette` but having terminal colors
 ---   (integers from 0 to 255) instead of hex strings.
 ---
----@param palette table: Table with names from `base00` to `base0F` and values being strings of HEX colors with format "#RRGGBB".
----@param name string: Name of applied theme (stored in |g:colors_name|). Default: "base16-custom".
----@param use_cterm boolean|table: Whether to support cterm colors. See function's description.
-function MiniBase16.apply(palette, name, use_cterm)
-  -- Validate arguments
-  H.validate_base16_palette(palette)
-  if name and type(name) ~= 'string' then
-    error('(mini.base16) `name` should be string')
+---@param config table: Module config table.
+---@usage `require('mini.base16').setup({})` (replace `{}` with your `config` table; `config.palette` should be a table with colors)
+function MiniBase16.setup(config)
+  -- Export module
+  _G.MiniBase16 = MiniBase16
+
+  -- Setup config
+  config = H.setup_config(config)
+
+  -- Apply config
+  H.apply_config(config)
+end
+
+MiniBase16.config = {
+  -- Table with names from `base00` to `base0F` and values being strings of HEX
+  -- colors with format "#RRGGBB". NOTE: this should be explicitly supplied in
+  -- `setup()`.
+  palette = nil,
+
+  -- Name of applied theme (stored in `g:colors_name`)
+  name = 'base16-custom',
+
+  -- Whether to support cterm colors. Can be boolean, `nil` (same as `false`),
+  -- or table with cterm colors. See `setup()` documentation for more
+  -- information.
+  use_cterm = nil,
+}
+
+--- Create 'mini' palette
+---
+--- Create base16 palette based on the HEX (string '#RRGGBB') colors of main background and
+--- foreground with optional setting of accent chroma (see details).
+---
+--- # Algorithm design
+--- - Main operating color space is
+---   [CIELCh(uv)](https://en.wikipedia.org/wiki/CIELUV#Cylindrical_representation_(CIELCh))
+---   which is a cylindrical representation of a perceptually uniform CIELUV
+---   color space. It defines color by three values: lightness L (values from 0
+---   to 100), chroma (positive values), and hue (circular values from 0 to 360
+---   degress). Useful converting tool: https://www.easyrgb.com/en/convert.php
+--- - There are four important lightness values: background, foreground, focus
+---   (around the middle of background and foreground, leaning towards
+---   foreground), and edge (extreme lightness closest to foreground).
+--- - First four colors have the same chroma and hue as `background` but
+---   lightness progresses from background towards focus.
+--- - Second four colors have the same chroma and hue as `foreground` but
+---   lightness progresses from foreground towards edge in such a way that
+---   'base05' color is main foreground color.
+--- - The rest eight colors are accent colors which are created in pairs
+---     - Each pair has same hue from set of hues 'most different' to
+---       background and foreground hues (if respective chorma is positive).
+---     - All colors have the same chroma equal to `accent_chroma` (if not
+---       provided, chroma of foreground is used, as they will appear next
+---       to each other). Note: this means that in case of low foreground
+---       chroma, it is a good idea to set `accent_chroma` manually.
+---       Values from 30 (low chorma) to 80 (high chroma) are common.
+---     - Within pair there is base lightness (equal to foreground
+---       lightness) and alternative (equal to focus lightness). Base
+---       lightness goes to colors which will be used more frequently in
+---       code: base08 (variables), base0B (strings), base0D (functions),
+---       base0E (keywords).
+---   How exactly accent colors are mapped to base16 palette is a result of
+---   trial and error. One rule of thumb was: colors within one hue pair should
+---   be more often seen next to each other. This is because it is easier to
+---   distinguish them and seems to be more visually appealing. That is why
+---   `base0D` and `base0F` have same hues because they usually represent
+---   functions and delimiter (brackets included).
+---
+---@param background string: Background HEX color (formatted as `#RRGGBB`).
+---@param foreground string: Foreground HEX color (formatted as `#RRGGBB`).
+---@param accent_chroma number: Optional positive number (usually between 0 and 100). Default: chroma of foreground color.
+---@return table: Table with base16 palette.
+---@usage `local palette = require('mini.base16').mini_palette('#112641', '#e2e98f', 75)`
+---@usage `require('mini.base16').setup({palette = palette, name = 'my-base16'})`
+function MiniBase16.mini_palette(background, foreground, accent_chroma)
+  H.validate_hex(background, 'background')
+  H.validate_hex(foreground, 'foreground')
+  if accent_chroma and not (type(accent_chroma) == 'number' and accent_chroma >= 0) then
+    error('(mini.base16) `accent_chroma` should be a positive number or `nil`.')
   end
-  H.validate_use_cterm(use_cterm)
+  local bg, fg = H.hex2lch(background), H.hex2lch(foreground)
+  accent_chroma = accent_chroma or fg.c
 
-  -- Store palette
-  MiniBase16.palette = palette
+  local palette = {}
 
+  -- Target lightness values
+  -- Justification for skewness towards foreground in focus is mainly because
+  -- it will be paired with foreground lightness and used for text.
+  local focus_l = 0.4 * bg.l + 0.6 * fg.l
+  local edge_l = fg.l > 50 and 99 or 1
+
+  -- Background colors
+  local bg_step = (focus_l - bg.l) / 3
+  palette[1] = { l = bg.l + 0 * bg_step, c = bg.c, h = bg.h }
+  palette[2] = { l = bg.l + 1 * bg_step, c = bg.c, h = bg.h }
+  palette[3] = { l = bg.l + 2 * bg_step, c = bg.c, h = bg.h }
+  palette[4] = { l = bg.l + 3 * bg_step, c = bg.c, h = bg.h }
+
+  -- Foreground colors Possible negative value of `palette[5].l` will be
+  -- handled in future conversion to hex.
+  local fg_step = (edge_l - fg.l) / 2
+  palette[5] = { l = fg.l - 1 * fg_step, c = fg.c, h = fg.h }
+  palette[6] = { l = fg.l + 0 * fg_step, c = fg.c, h = fg.h }
+  palette[7] = { l = fg.l + 1 * fg_step, c = fg.c, h = fg.h }
+  palette[8] = { l = fg.l + 2 * fg_step, c = fg.c, h = fg.h }
+
+  -- Accent colors
+  ---- Only try to avoid color if it has positive chroma, because with zero
+  ---- chroma hue is meaningless (as in polar coordinates)
+  local present_hues = {}
+  if bg.c > 0 then
+    table.insert(present_hues, bg.h)
+  end
+  if fg.c > 0 then
+    table.insert(present_hues, fg.h)
+  end
+  local hues = H.make_different_hues(present_hues, 4)
+
+  -- stylua: ignore start
+  palette[9]  = { l = fg.l,    c = accent_chroma, h = hues[1] }
+  palette[10] = { l = focus_l, c = accent_chroma, h = hues[1] }
+  palette[11] = { l = focus_l, c = accent_chroma, h = hues[2] }
+  palette[12] = { l = fg.l,    c = accent_chroma, h = hues[2] }
+  palette[13] = { l = focus_l, c = accent_chroma, h = hues[4] }
+  palette[14] = { l = fg.l,    c = accent_chroma, h = hues[3] }
+  palette[15] = { l = fg.l,    c = accent_chroma, h = hues[4] }
+  palette[16] = { l = focus_l, c = accent_chroma, h = hues[3] }
+  -- stylua: ignore end
+
+  -- Convert to base16 palette
+  local base16_palette = {}
+  for i, lch in ipairs(palette) do
+    local name = H.base16_names[i]
+    -- It is ensured in `lch2hex` that only valid HEX values are produced
+    base16_palette[name] = H.lch2hex(lch)
+  end
+
+  return base16_palette
+end
+
+--- Converts palette with RGB colors to terminal colors
+---
+--- Useful for caching `use_cterm` variable to increase speed.
+---
+---@param palette table: Table with base16 palette (same as in `MiniBase16.config.palette`).
+---@return table: Table with base16 palette using |highlight-cterm|.
+function MiniBase16.rgb_palette_to_cterm_palette(palette)
+  H.validate_base16_palette(palette, 'palette')
+
+  -- Create cterm palette only when it is needed to decrease load time
+  H.ensure_cterm_palette()
+
+  return vim.tbl_map(function(hex)
+    return H.nearest_rgb_id(H.hex2rgb(hex), H.cterm_palette)
+  end, palette)
+end
+
+-- Helpers
+---- Module default config
+H.default_config = MiniBase16.config
+
+---- Settings
+function H.setup_config(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({ config = { config, 'table', true } })
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
+
+  -- Validate settings
+  H.validate_base16_palette(config.palette, 'config.palette')
+  if type(config.name) ~= 'string' then
+    error('(mini.base16) `config.name` is not a string.')
+  end
+  H.validate_use_cterm(config.use_cterm, 'config.use_cterm')
+
+  return config
+end
+
+function H.apply_config(config)
+  MiniBase16.config = config
+
+  H.apply_palette(config.palette, config.name, config.use_cterm)
+end
+
+---- Validators
+H.base16_names = {
+  'base00',
+  'base01',
+  'base02',
+  'base03',
+  'base04',
+  'base05',
+  'base06',
+  'base07',
+  'base08',
+  'base09',
+  'base0A',
+  'base0B',
+  'base0C',
+  'base0D',
+  'base0E',
+  'base0F',
+}
+
+function H.validate_base16_palette(x, x_name)
+  if type(x) ~= 'table' then
+    error(string.format('(mini.base16) `%s` is not a table.', x_name))
+  end
+
+  for _, color_name in pairs(H.base16_names) do
+    local c = x[color_name]
+    if c == nil then
+      local msg = string.format('(mini.base16) `%s` does not have value %s.', x_name, color_name)
+      error(msg)
+    end
+    H.validate_hex(c, string.format('config.palette[%s]', color_name))
+  end
+
+  return true
+end
+
+function H.validate_use_cterm(x, x_name)
+  if not x or type(x) == 'boolean' then
+    return true
+  end
+
+  if type(x) ~= 'table' then
+    local msg = string.format('(mini.base16) `%s` should be boolean or table with cterm colors.', x_name)
+    error(msg)
+  end
+
+  for _, color_name in pairs(H.base16_names) do
+    local c = x[color_name]
+    if c == nil then
+      local msg = string.format('(mini.base16) `%s` does not have value %s.', x_name, color_name)
+      error(msg)
+    end
+    if not (type(c) == 'number' and 0 <= c and c <= 255) then
+      local msg = string.format('(mini.base16) `%s.%s` is not a cterm color.', x_name, color_name)
+      error(msg)
+    end
+  end
+
+  return true
+end
+
+function H.validate_hex(x, x_name)
+  local is_hex = type(x) == 'string' and x:len() == 7 and x:sub(1, 1) == '#' and (tonumber(x:sub(2), 16) ~= nil)
+
+  if not is_hex then
+    local msg = string.format('(mini.base16) `%s` is not a HEX color (string "#RRGGBB").', x_name)
+    error(msg)
+  end
+
+  return true
+end
+
+---- Highlighting
+function H.apply_palette(palette, name, use_cterm)
   -- Prepare highlighting application. Notes:
   -- - Clear current highlight only if other theme was loaded previously.
   -- - No need to `syntax reset` because *all* syntax groups are defined later.
@@ -305,135 +561,6 @@ function MiniBase16.apply(palette, name, use_cterm)
   end
 end
 
---- Create 'mini' palette
----
---- Create base16 palette based on the HEX (string '#RRGGBB') colors of main background and
---- foreground with optional setting of accent chroma (see details).
----
---- # Algorithm design
---- - Main operating color space is
----   [CIELCh(uv)](https://en.wikipedia.org/wiki/CIELUV#Cylindrical_representation_(CIELCh))
----   which is a cylindrical representation of a perceptually uniform CIELUV
----   color space. It defines color by three values: lightness L (values from 0
----   to 100), chroma (positive values), and hue (circular values from 0 to 360
----   degress). Useful converting tool: https://www.easyrgb.com/en/convert.php
---- - There are four important lightness values: background, foreground, focus
----   (around the middle of background and foreground, leaning towards
----   foreground), and edge (extreme lightness closest to foreground).
---- - First four colors have the same chroma and hue as `background` but
----   lightness progresses from background towards focus.
---- - Second four colors have the same chroma and hue as `foreground` but
----   lightness progresses from foreground towards edge in such a way that
----   'base05' color is main foreground color.
---- - The rest eight colors are accent colors which are created in pairs
----     - Each pair has same hue from set of hues 'most different' to
----       background and foreground hues (if respective chorma is positive).
----     - All colors have the same chroma equal to `accent_chroma` (if not
----       provided, chroma of foreground is used, as they will appear next
----       to each other). Note: this means that in case of low foreground
----       chroma, it is a good idea to set `accent_chroma` manually.
----       Values from 30 (low chorma) to 80 (high chroma) are common.
----     - Within pair there is base lightness (equal to foreground
----       lightness) and alternative (equal to focus lightness). Base
----       lightness goes to colors which will be used more frequently in
----       code: base08 (variables), base0B (strings), base0D (functions),
----       base0E (keywords).
----   How exactly accent colors are mapped to base16 palette is a result of
----   trial and error. One rule of thumb was: colors within one hue pair should
----   be more often seen next to each other. This is because it is easier to
----   distinguish them and seems to be more visually appealing. That is why
----   `base0D` and `base0F` have same hues because they usually represent
----   functions and delimiter (brackets included).
----
----@param background string: Background HEX color (formatted as `#RRGGBB`).
----@param foreground string: Foreground HEX color (formatted as `#RRGGBB`).
----@param accent_chroma number: Positive number (usually between 0 and 100).
----@return table: Table with base16 palette.
-function MiniBase16.mini_palette(background, foreground, accent_chroma)
-  H.validate_hex(background, 'background')
-  H.validate_hex(foreground, 'foreground')
-  if accent_chroma and not (type(accent_chroma) == 'number' and accent_chroma >= 0) then
-    error('(mini.base16) `accent_chroma` should be a positive number or `nil`')
-  end
-  local bg, fg = H.hex2lch(background), H.hex2lch(foreground)
-  accent_chroma = accent_chroma or fg.c
-
-  local palette = {}
-
-  -- Target lightness values
-  -- Justification for skewness towards foreground in focus is mainly because
-  -- it will be paired with foreground lightness and used for text.
-  local focus_l = 0.4 * bg.l + 0.6 * fg.l
-  local edge_l = fg.l > 50 and 99 or 1
-
-  -- Background colors
-  local bg_step = (focus_l - bg.l) / 3
-  palette[1] = { l = bg.l + 0 * bg_step, c = bg.c, h = bg.h }
-  palette[2] = { l = bg.l + 1 * bg_step, c = bg.c, h = bg.h }
-  palette[3] = { l = bg.l + 2 * bg_step, c = bg.c, h = bg.h }
-  palette[4] = { l = bg.l + 3 * bg_step, c = bg.c, h = bg.h }
-
-  -- Foreground colors Possible negative value of `palette[5].l` will be
-  -- handled in future conversion to hex.
-  local fg_step = (edge_l - fg.l) / 2
-  palette[5] = { l = fg.l - 1 * fg_step, c = fg.c, h = fg.h }
-  palette[6] = { l = fg.l + 0 * fg_step, c = fg.c, h = fg.h }
-  palette[7] = { l = fg.l + 1 * fg_step, c = fg.c, h = fg.h }
-  palette[8] = { l = fg.l + 2 * fg_step, c = fg.c, h = fg.h }
-
-  -- Accent colors
-  ---- Only try to avoid color if it has positive chroma, because with zero
-  ---- chroma hue is meaningless (as in polar coordinates)
-  local present_hues = {}
-  if bg.c > 0 then
-    table.insert(present_hues, bg.h)
-  end
-  if fg.c > 0 then
-    table.insert(present_hues, fg.h)
-  end
-  local hues = H.make_different_hues(present_hues, 4)
-
-  -- stylua: ignore start
-  palette[9]  = { l = fg.l,    c = accent_chroma, h = hues[1] }
-  palette[10] = { l = focus_l, c = accent_chroma, h = hues[1] }
-  palette[11] = { l = focus_l, c = accent_chroma, h = hues[2] }
-  palette[12] = { l = fg.l,    c = accent_chroma, h = hues[2] }
-  palette[13] = { l = focus_l, c = accent_chroma, h = hues[4] }
-  palette[14] = { l = fg.l,    c = accent_chroma, h = hues[3] }
-  palette[15] = { l = fg.l,    c = accent_chroma, h = hues[4] }
-  palette[16] = { l = focus_l, c = accent_chroma, h = hues[3] }
-  -- stylua: ignore end
-
-  -- Convert to base16 palette
-  local base16_palette = {}
-  for i, lch in ipairs(palette) do
-    local name = H.base16_names[i]
-    -- It is ensured in `lch2hex` that only valid HEX values are produced
-    base16_palette[name] = H.lch2hex(lch)
-  end
-
-  return base16_palette
-end
-
---- Converts palette with RGB colors to terminal colors
----
---- Useful for caching `use_cterm` variable to increase speed.
----
----@param palette table: Table with base16 palette (same as in |MiniBase16.apply|).
----@return table: Table with base16 palette using |highlight-cterm|.
-function MiniBase16.rgb_palette_to_cterm_palette(palette)
-  H.validate_base16_palette(palette)
-
-  -- Create cterm palette only when it is needed to decrease load time
-  H.ensure_cterm_palette()
-
-  return vim.tbl_map(function(hex)
-    return H.nearest_rgb_id(H.hex2rgb(hex), H.cterm_palette)
-  end, palette)
-end
-
--- Helpers
----- Highlighting
 function H.highlight_gui(group, args)
   -- NOTE: using `string.format` instead of gradually growing string with `..`
   -- is faster. Crude estimate for this particular case: whole colorscheme
@@ -509,72 +636,6 @@ function H.make_hue_scale(n, offset)
     table.insert(res, (offset + i * step) % 360)
   end
   return res
-end
-
----- Validators
-H.base16_names = {
-  'base00',
-  'base01',
-  'base02',
-  'base03',
-  'base04',
-  'base05',
-  'base06',
-  'base07',
-  'base08',
-  'base09',
-  'base0A',
-  'base0B',
-  'base0C',
-  'base0D',
-  'base0E',
-  'base0F',
-}
-
-function H.validate_hex(x, name)
-  local is_hex = type(x) == 'string' and x:len() == 7 and x:sub(1, 1) == '#' and (tonumber(x:sub(2), 16) ~= nil)
-
-  if not is_hex then
-    local msg = string.format('(mini.base16) `%s` is not a HEX color (string "#RRGGBB")', name)
-    error(msg)
-  end
-  return true
-end
-
-function H.validate_base16_palette(x)
-  if type(x) ~= 'table' then
-    error('(mini.base16) `palette` is not a table.')
-  end
-  for _, name in pairs(H.base16_names) do
-    local c = x[name]
-    if c == nil then
-      local msg = string.format('(mini.base16) `palette` does not have value %s', name)
-      error(msg)
-    end
-    H.validate_hex(c, string.format('palette[%s]', name))
-  end
-  return true
-end
-
-function H.validate_use_cterm(x)
-  if not x or type(x) == 'boolean' then
-    return true
-  end
-  if type(x) ~= 'table' then
-    error('(mini.base16) `use_cterm` should be boolean or table with cterm colors')
-  end
-  for _, name in pairs(H.base16_names) do
-    local c = x[name]
-    if c == nil then
-      local msg = string.format('(mini.base16) `use_cterm` does not have value %s', name)
-      error(msg)
-    end
-    if not (type(c) == 'number' and 0 <= c and c <= 255) then
-      local msg = string.format('(mini.base16) `use_cterm.%s` is not a cterm color', name)
-      error(msg)
-    end
-  end
-  return true
 end
 
 ---- Terminal colors
