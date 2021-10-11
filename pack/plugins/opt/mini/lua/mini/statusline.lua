@@ -1,93 +1,116 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
---
--- Custom *minimal* and *fast* statusline module with opinionated look. Special
--- features: change color depending on current mode and compact version of
--- sections activated when window width is small enough. Inspired by:
--- https://elianiva.me/post/neovim-lua-statusline (blogpost)
--- https://github.com/elianiva/dotfiles/blob/master/nvim/.config/nvim/lua/modules/_statusline.lua (Github)
---
--- To activate, put this file somewhere into 'lua' folder and call module's
--- `setup()`. For example, put as 'lua/mini/statusline.lua' and execute
--- `require('mini.statusline').setup()` Lua code. It may have `config` argument
--- which should be a table overwriting default values using same structure.
---
--- Default `config`:
--- {
---   -- Content of statusline as functions which return statusline string. See `:h
---   -- statusline` and code of default contents (used when `nil` is supplied).
---   content = {
---     -- Content for active window
---     active = nil,
---     -- Content for inactive window(s)
---     inactive = nil,
---   },
---
---   -- Whether to set Vim's settings for statusline (make it always shown)
---   set_vim_settings = true,
--- }
---
--- Defined highlight groups:
--- - Highlighting depending on mode:
---     - MiniStatuslineModeNormal - normal mode
---     - MiniStatuslineModeInsert - insert mode
---     - MiniStatuslineModeVisual - visual mode
---     - MiniStatuslineModeReplace - replace mode
---     - MiniStatuslineModeCommand - command mode
---     - MiniStatuslineModeOther - other mode (like terminal, etc.)
--- - MiniStatuslineDevinfo - highlighting of "dev info" section
--- - MiniStatuslineFilename - highliting of "file name" section
--- - MiniStatuslineFileinfo - highliting of "file info" section
--- - MiniStatuslineInactive - highliting in not focused window
---
--- Features:
--- - Built-in active mode indicator with colors.
--- - Sections hide information when window is too narrow (specific width is
---   configurable per section).
--- - Define own custom statusline structure by overwriting (even after calling
---   `setup()`) `MiniStatusline.active()` or `MiniStatusline.inactive()`. Code
---   should be similar to default method with rough structure:
---     - Compute string data for every section you want to display.
---     - Combine them in groups with `MiniStatusline.combine_groups()`. Each
---       group has own highlighting. Strings within group are separated by one
---       space. Groups are separated by two spaces (one for each highlighting).
---
--- Suggested dependencies (provide extra functionality, statusline will work
--- without them):
--- - Nerd font (to support extra icons).
--- - Plugin 'lewis6991/gitsigns.nvim' for Git information in `section_git`. If
---   missing, no section will be shown.
--- - Plugin 'kyazdani42/nvim-web-devicons' for filetype icons in
---   `section_fileinfo`. If missing, no icons will be used.
---
--- Notes about structure:
--- - Main statusline object is `MiniStatusline`. It has two different "states":
---   active and inactive.
--- - In active mode `MiniStatusline.active()` is called. Its code defines
---   high-level structure of statusline. From there go to respective section
---   functions. Override it to create custom statusline layout.
---
--- Note about performance:
--- - Currently statusline gets evaluated on every call inside a timer (see
---   https://github.com/neovim/neovim/issues/14303). In current setup this
---   means that update is made periodically in insert mode due to
---   'completion-nvim' plugin and its `g:completion_timer_cycle` setting.
--- - MiniStatusline might get evaluated on every 'CursorHold' event (indicator
---   is an update happening in `&updatetime` time after cursor stopped; set
---   different `&updatetime` to verify that is a reason). In current setup this
---   is happening due to following reasons:
---     - Plugin 'vim-polyglot' has 'polyglot-sensible' autogroup which checks
---     on 'CursorHold' events if file was updated (see `:h checktime`).
---   As these actions are useful, one can only live with the fact that
---   'statusline' option gets reevaluated on 'CursorHold'.
---
--- To disable (show empty statusline), set `g:ministatusline_disable`
--- (globally) or `b:ministatusline_disable` (for a buffer) to `v:true`.
+
+---@brief [[
+--- Custom minimal and fast statusline module with opinionated default look.
+--- Special features: change color depending on current mode and compact
+--- version of sections activated when window width is small enough.
+---
+--- Features:
+--- - Built-in active mode indicator with colors.
+--- - Sections can hide information when window is too narrow (specific window
+---   width is configurable per section).
+--- - Define own custom statusline structure for active and inactive windows.
+---   This is done with a function which should return string appropriate for
+---   |statusline|. Its code should be similar to default one with structure:
+---     - Compute string data for every section you want to be displayed.
+---     - Combine them in groups with |MiniStatusline.combine_groups()|.
+---
+--- # Dependencies
+---
+--- Suggested dependencies (provide extra functionality, statusline will work
+--- without them):
+--- - Nerd font (to support extra icons).
+--- - Plugin 'lewis6991/gitsigns.nvim' for Git information in
+---   |MiniStatusline.section_git|. If missing, no section will be shown.
+--- - Plugin 'kyazdani42/nvim-web-devicons' for filetype icons in
+---   `MiniStatusline.section_fileinfo`. If missing, no icons will be shown.
+---
+--- # Setup
+---
+--- This module needs a setup with `require('mini.statusline').setup({})`
+--- (replace `{}` with your `config` table).
+---
+--- Default `config`:
+--- <pre>
+--- {
+---   -- Content of statusline as functions which return statusline string. See `:h
+---   -- statusline` and code of default contents (used when `nil` is supplied).
+---   content = {
+---     -- Content for active window
+---     active = nil,
+---
+---     -- Content for inactive window(s)
+---     inactive = nil,
+---   },
+---
+---   -- Whether to set Vim's settings for statusline (make it always shown)
+---   set_vim_settings = true,
+--- }
+--- </pre>
+---
+--- # Example content
+---
+--- This function is used as default value for active content:
+--- <pre>
+--- `function()`
+---   `local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })`
+---   `local spell         = MiniStatusline.section_spell({ trunc_width = 120 })`
+---   `local wrap          = MiniStatusline.section_wrap({ trunc_width = 120 })`
+---   `local git           = MiniStatusline.section_git({ trunc_width = 75 })`
+---   `local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })`
+---   `local filename      = MiniStatusline.section_filename({ trunc_width = 140 })`
+---   `local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })`
+---   `local location      = MiniStatusline.section_location({ trunc_width = 75 })`
+---
+---   `return MiniStatusline.combine_groups({`
+---     `{ hl = mode_hl,                  strings = { mode, spell, wrap } },`
+---     `{ hl = 'MiniStatuslineDevinfo',  strings = { git, diagnostics } },`
+---     `'%<', -- Mark general truncate point`
+---     `{ hl = 'MiniStatuslineFilename', strings = { filename } },`
+---     `'%=', -- End left alignment`
+---     `{ hl = 'MiniStatuslineFileinfo', strings = { fileinfo } },`
+---     `{ hl = mode_hl,                  strings = { location } },`
+---   `})`
+--- `end`
+--- </pre>
+---
+--- # Highlight groups
+---
+--- 1. Highlighting depending on mode (returned as second value from
+---    |MiniStatusline.section_mode|):
+---     - `MiniStatuslineModeNormal` - normal mode.
+---     - `MiniStatuslineModeInsert` - insert mode.
+---     - `MiniStatuslineModeVisual` - visual mode.
+---     - `MiniStatuslineModeReplace` - replace mode.
+---     - `MiniStatuslineModeCommand` - command mode.
+---     - `MiniStatuslineModeOther` - other mode (like terminal, etc.).
+--- 2. Highlight groups used in default statusline:
+---     - `MiniStatuslineDevinfo` - highlighting of "dev info" group
+---       (|MiniStatusline.section_git| and
+---       |MiniStatusline.section_diagnostics|).
+---     - `MiniStatuslineFilename` - highliting of
+---       |MiniStatusline.section_filename| section.
+---     - `MiniStatuslineFileinfo` - highliting of
+---       |MiniStatusline.section_fileinfo| section.
+--- 3. `MiniStatuslineInactive` - highliting in not focused window.
+---
+--- To change any highlight group, modify it directly with |:highlight|.
+---
+--- # Disabling
+---
+--- To disable (show empty statusline), set `g:ministatusline_disable`
+--- (globally) or `b:ministatusline_disable` (for a buffer) to `v:true`.
+---@brief ]]
+---@tag MiniStatusline
 
 -- Module and its helper
 local MiniStatusline = {}
 local H = {}
 
--- Module setup
+--- Module setup
+---
+---@param config table: Module config table.
+---@usage `require('mini.statusline').setup({})` (replace `{}` with your `config` table)
 function MiniStatusline.setup(config)
   -- Export module
   _G.MiniStatusline = MiniStatusline
@@ -141,6 +164,7 @@ MiniStatusline.config = {
 }
 
 -- Module functionality
+--- Compute content for active window
 function MiniStatusline.active()
   if H.is_disabled() then
     return ''
@@ -149,6 +173,7 @@ function MiniStatusline.active()
   return (MiniStatusline.config.content.active or H.default_content_active)()
 end
 
+--- Compute content for inactive window
 function MiniStatusline.inactive()
   if H.is_disabled() then
     return ''
@@ -157,6 +182,19 @@ function MiniStatusline.inactive()
   return (MiniStatusline.config.content.inactive or H.default_content_inactive)()
 end
 
+--- Combine groups of sections
+---
+--- Each group can be either a string or a table with fields `hl` (group's
+--- highlight group) and `strings` (strings representing sections).
+---
+--- General idea of this function is as follows. String group is used as is
+--- (useful for special strings like `%<` or `%=`). Each group defined by table
+--- has own highlighting (if not supplied explicitly, the previous one is
+--- used). Non-empty strings inside group are separated by one space. Non-empty
+--- groups are separated by two spaces (one for each highlighting).
+---
+---@param groups table: List of groups
+---@return string: String suitable for 'statusline'.
 function MiniStatusline.combine_groups(groups)
   local t = vim.tbl_map(function(s)
     if not s then
@@ -168,38 +206,39 @@ function MiniStatusline.combine_groups(groups)
     local t = vim.tbl_filter(function(x)
       return not (x == nil or x == '')
     end, s.strings)
-    -- Return highlighting group to allow inheritance from later sections
+    -- Return highlight group to allow inheritance from later sections
     if vim.tbl_count(t) == 0 then
-      return s.hl or ''
+      return string.format('%%#%s#', s.hl or '')
     end
-    return string.format('%s %s ', s.hl or '', table.concat(t, ' '))
+    return string.format('%%#%s# %s ', s.hl or '', table.concat(t, ' '))
   end, groups)
   return table.concat(t, '')
 end
 
 -- Statusline sections. Should return output text without whitespace on sides
 -- or empty string to omit section.
----- Mode
----- Custom `^V` and `^S` symbols to make this file appropriate for copy-paste
----- (otherwise those symbols are not displayed).
+
+-- Mode
+-- Custom `^V` and `^S` symbols to make this file appropriate for copy-paste
+-- (otherwise those symbols are not displayed).
 local CTRL_S = vim.api.nvim_replace_termcodes('<C-S>', true, true, true)
 local CTRL_V = vim.api.nvim_replace_termcodes('<C-V>', true, true, true)
 
 -- stylua: ignore start
 MiniStatusline.modes = setmetatable({
-  ['n']    = { long = 'Normal',   short = 'N',   hl = '%#MiniStatuslineModeNormal#' },
-  ['v']    = { long = 'Visual',   short = 'V',   hl = '%#MiniStatuslineModeVisual#' },
-  ['V']    = { long = 'V-Line',   short = 'V-L', hl = '%#MiniStatuslineModeVisual#' },
-  [CTRL_V] = { long = 'V-Block',  short = 'V-B', hl = '%#MiniStatuslineModeVisual#' },
-  ['s']    = { long = 'Select',   short = 'S',   hl = '%#MiniStatuslineModeVisual#' },
-  ['S']    = { long = 'S-Line',   short = 'S-L', hl = '%#MiniStatuslineModeVisual#' },
-  [CTRL_S] = { long = 'S-Block',  short = 'S-B', hl = '%#MiniStatuslineModeVisual#' },
-  ['i']    = { long = 'Insert',   short = 'I',   hl = '%#MiniStatuslineModeInsert#' },
-  ['R']    = { long = 'Replace',  short = 'R',   hl = '%#MiniStatuslineModeReplace#' },
-  ['c']    = { long = 'Command',  short = 'C',   hl = '%#MiniStatuslineModeCommand#' },
-  ['r']    = { long = 'Prompt',   short = 'P',   hl = '%#MiniStatuslineModeOther#' },
-  ['!']    = { long = 'Shell',    short = 'Sh',  hl = '%#MiniStatuslineModeOther#' },
-  ['t']    = { long = 'Terminal', short = 'T',   hl = '%#MiniStatuslineModeOther#' },
+  ['n']    = { long = 'Normal',   short = 'N',   hl = 'MiniStatuslineModeNormal' },
+  ['v']    = { long = 'Visual',   short = 'V',   hl = 'MiniStatuslineModeVisual' },
+  ['V']    = { long = 'V-Line',   short = 'V-L', hl = 'MiniStatuslineModeVisual' },
+  [CTRL_V] = { long = 'V-Block',  short = 'V-B', hl = 'MiniStatuslineModeVisual' },
+  ['s']    = { long = 'Select',   short = 'S',   hl = 'MiniStatuslineModeVisual' },
+  ['S']    = { long = 'S-Line',   short = 'S-L', hl = 'MiniStatuslineModeVisual' },
+  [CTRL_S] = { long = 'S-Block',  short = 'S-B', hl = 'MiniStatuslineModeVisual' },
+  ['i']    = { long = 'Insert',   short = 'I',   hl = 'MiniStatuslineModeInsert' },
+  ['R']    = { long = 'Replace',  short = 'R',   hl = 'MiniStatuslineModeReplace' },
+  ['c']    = { long = 'Command',  short = 'C',   hl = 'MiniStatuslineModeCommand' },
+  ['r']    = { long = 'Prompt',   short = 'P',   hl = 'MiniStatuslineModeOther' },
+  ['!']    = { long = 'Shell',    short = 'Sh',  hl = 'MiniStatuslineModeOther' },
+  ['t']    = { long = 'Terminal', short = 'T',   hl = 'MiniStatuslineModeOther' },
 }, {
   -- By default return 'Unknown' but this shouldn't be needed
   __index = function()
@@ -208,6 +247,12 @@ MiniStatusline.modes = setmetatable({
 })
 -- stylua: ignore end
 
+--- Section for Vim |mode()|
+---
+--- Short output is returned if window width is lower than `args.trunc_width`.
+---
+---@param args table: Section arguments.
+---@return section_string, mode_hl tuple: Section string and mode's highlight group.
 function MiniStatusline.section_mode(args)
   local mode_info = MiniStatusline.modes[vim.fn.mode()]
 
@@ -216,7 +261,12 @@ function MiniStatusline.section_mode(args)
   return mode, mode_info.hl
 end
 
----- Spell
+--- Section for 'spell'
+---
+--- Short output is returned if window width is lower than `args.trunc_width`.
+---
+---@param args table: Section arguments.
+---@return string: Section string.
 function MiniStatusline.section_spell(args)
   if not vim.wo.spell then
     return ''
@@ -229,7 +279,12 @@ function MiniStatusline.section_spell(args)
   return string.format('SPELL(%s)', vim.bo.spelllang)
 end
 
----- Wrap
+--- Section for 'wrap'
+---
+--- Short output is returned if window width is lower than `args.trunc_width`.
+---
+---@param args table: Section arguments.
+---@return string: Section string.
 function MiniStatusline.section_wrap(args)
   if not vim.wo.wrap then
     return ''
@@ -242,7 +297,16 @@ function MiniStatusline.section_wrap(args)
   return 'WRAP'
 end
 
----- Git
+--- Section for Git information
+---
+--- Normal output contains name of `HEAD` (via |b:gitsigns_head|) and chunk
+--- information (via |b:gitsigns_status|). Short output - only name of `HEAD`.
+--- Note: requires 'lewis6991/gitsigns' plugin.
+---
+--- Short output is returned if window width is lower than `args.trunc_width`.
+---
+---@param args table: Section arguments.
+---@return string: Section string.
 function MiniStatusline.section_git(args)
   if H.isnt_normal_buffer() then
     return ''
@@ -260,7 +324,16 @@ function MiniStatusline.section_git(args)
   return string.format(' %s %s', head, signs)
 end
 
----- Diagnostics
+--- Section for Neovim's builtin diagnostics
+---
+--- Shows nothing if there is no attached LSP clients or for short output.
+--- Otherwise uses |vim.lsp.diagnostic.get_count()| to show number of errors
+--- ('E'), warnings ('W'), information ('I'), and hints ('H').
+---
+--- Short output is returned if window width is lower than `args.trunc_width`.
+---
+---@param args table: Section arguments.
+---@return string: Section string.
 function MiniStatusline.section_diagnostics(args)
   -- Assumption: there are no attached clients if table
   -- `vim.lsp.buf_get_clients()` is empty
@@ -286,7 +359,14 @@ function MiniStatusline.section_diagnostics(args)
   return string.format('ﯭ %s', table.concat(t, ''))
 end
 
----- File name
+--- Section for file name
+---
+--- Show full file name or relative in short output.
+---
+--- Short output is returned if window width is lower than `args.trunc_width`.
+---
+---@param args table: Section arguments.
+---@return string: Section string.
 function MiniStatusline.section_filename(args)
   -- In terminal always use plain name
   if vim.bo.buftype == 'terminal' then
@@ -301,7 +381,13 @@ function MiniStatusline.section_filename(args)
   end
 end
 
----- File information
+--- Section for file information
+---
+--- Short output contains only extension and is returned if window width is
+--- lower than `args.trunc_width`.
+---
+---@param args table: Section arguments.
+---@return string: Section string.
 function MiniStatusline.section_fileinfo(args)
   local filetype = vim.bo.filetype
 
@@ -330,7 +416,16 @@ function MiniStatusline.section_fileinfo(args)
   return string.format('%s %s[%s] %s', filetype, encoding, format, size)
 end
 
----- Location inside buffer
+--- Section for location inside buffer
+---
+--- Show location inside buffer in the form:
+--- - Normal: '<cursor line>|<total lines>│<cursor column>|<total columns>'.
+--- - Short: '<cursor line>│<cursor column>'.
+---
+--- Short output is returned if window width is lower than `args.trunc_width`.
+---
+---@param args table: Section arguments.
+---@return string: Section string.
 function MiniStatusline.section_location(args)
   -- Use virtual column number to allow update when paste last column
   if H.is_truncated(args.trunc_width) then
@@ -340,40 +435,18 @@ function MiniStatusline.section_location(args)
   return '%l|%L│%2v|%-2{col("$") - 1}'
 end
 
--- Helpers
+-- Helper data
 ---- Module default config
 H.default_config = MiniStatusline.config
 
-function H.default_content_active()
-  -- stylua: ignore start
-  local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
-  local spell         = MiniStatusline.section_spell({ trunc_width = 120 })
-  local wrap          = MiniStatusline.section_wrap({ trunc_width = 120 })
-  local git           = MiniStatusline.section_git({ trunc_width = 75 })
-  local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
-  local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
-  local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
-  local location      = MiniStatusline.section_location({ trunc_width = 75 })
+H.diagnostic_levels = {
+  { name = 'Error', sign = 'E' },
+  { name = 'Warning', sign = 'W' },
+  { name = 'Information', sign = 'I' },
+  { name = 'Hint', sign = 'H' },
+}
 
-  -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
-  -- correct padding with spaces between groups (accounts for 'missing'
-  -- sections, etc.)
-  return MiniStatusline.combine_groups({
-    { hl = mode_hl,                     strings = { mode, spell, wrap } },
-    { hl = '%#MiniStatuslineDevinfo#',  strings = { git, diagnostics } },
-    '%<', -- Mark general truncate point
-    { hl = '%#MiniStatuslineFilename#', strings = { filename } },
-    '%=', -- End left alignment
-    { hl = '%#MiniStatuslineFileinfo#', strings = { fileinfo } },
-    { hl = mode_hl,                     strings = { location } },
-  })
-  -- stylua: ignore end
-end
-
-function H.default_content_inactive()
-  return '%#MiniStatuslineInactive#%F%='
-end
-
+-- Helper functions
 ---- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
@@ -405,6 +478,37 @@ function H.is_disabled()
   return vim.g.ministatusline_disable == true or vim.b.ministatusline_disable == true
 end
 
+---- Default content
+function H.default_content_active()
+  -- stylua: ignore start
+  local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
+  local spell         = MiniStatusline.section_spell({ trunc_width = 120 })
+  local wrap          = MiniStatusline.section_wrap({ trunc_width = 120 })
+  local git           = MiniStatusline.section_git({ trunc_width = 75 })
+  local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+  local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
+  local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
+  local location      = MiniStatusline.section_location({ trunc_width = 75 })
+
+  -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
+  -- correct padding with spaces between groups (accounts for 'missing'
+  -- sections, etc.)
+  return MiniStatusline.combine_groups({
+    { hl = mode_hl,                  strings = { mode, spell, wrap } },
+    { hl = 'MiniStatuslineDevinfo',  strings = { git, diagnostics } },
+    '%<', -- Mark general truncate point
+    { hl = 'MiniStatuslineFilename', strings = { filename } },
+    '%=', -- End left alignment
+    { hl = 'MiniStatuslineFileinfo', strings = { fileinfo } },
+    { hl = mode_hl,                  strings = { location } },
+  })
+  -- stylua: ignore end
+end
+
+function H.default_content_inactive()
+  return '%#MiniStatuslineInactive#%F%='
+end
+
 ---- Various helpers
 function H.is_truncated(width)
   -- Use -1 to default to 'not truncated'
@@ -415,13 +519,6 @@ function H.isnt_normal_buffer()
   -- For more information see ":h buftype"
   return vim.bo.buftype ~= ''
 end
-
-H.diagnostic_levels = {
-  { name = 'Error', sign = 'E' },
-  { name = 'Warning', sign = 'W' },
-  { name = 'Information', sign = 'I' },
-  { name = 'Hint', sign = 'H' },
-}
 
 function H.get_filesize()
   local size = vim.fn.getfsize(vim.fn.getreg('%'))
