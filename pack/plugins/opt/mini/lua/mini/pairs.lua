@@ -47,6 +47,7 @@
 --   snippets for that.
 -- - It doesn't support dependency on filetype. Use `autocmd` command or
 --   'after/ftplugin' approach to:
+--     - Disable module for buffer (see 'Disabling' section).
 --     - `inoremap <buffer> <*> <*>` : return mapping of '<*>' to its original
 --       action, virtually unmapping.
 --     - `inoremap <buffer> <expr> <*> v:lua.MiniPairs.?` : make new
@@ -54,14 +55,9 @@
 -- NOTES:
 -- - Make sure to make proper mapping of `<CR>` in order to support completion
 --   plugin of your choice.
--- - Having mapping in terminal mode:
---     - Can conflict with autopairing capabilities of opened interpretators
---       (for example, `radian`).
---     - Adds autopairing in fzf search window. To disable it, setup
---       autocommands like: `au Filetype fzf tnoremap <buffer> ( (`, etc.
--- - Sometimes has troubles with multibyte characters (such as icons). This
---   seems to be because detecting characters around cursor uses "byte
---   substring" instead of "symbol substring" operation.
+-- - Having mapping in terminal mode can conflict with:
+--     - Autopairing capabilities of interpretators (`ipython`, `radian`).
+--     - Vim mode of terminal itself.
 --
 -- To disable, set `g:minipairs_disable` (globally) or `b:minipairs_disable`
 -- (for a buffer) to `v:true`.
@@ -80,6 +76,16 @@ function MiniPairs.setup(config)
 
   -- Apply config
   H.apply_config(config)
+
+  -- Module behavior
+  vim.api.nvim_exec(
+    [[augroup MiniPairs
+        au!
+        au FileType TelescopePrompt let b:minipairs_disable=v:true
+        au FileType fzf let b:minipairs_disable=v:true
+      augroup END]],
+    false
+  )
 end
 
 -- Module config
