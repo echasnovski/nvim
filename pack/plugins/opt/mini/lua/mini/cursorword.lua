@@ -105,7 +105,15 @@ function MiniCursorword.auto_highlight()
   H.unhighlight()
 
   -- Delay highlighting
-  H.timer:start(MiniCursorword.config.delay, 0, vim.schedule_wrap(H.highlight))
+  H.timer:start(
+    MiniCursorword.config.delay,
+    0,
+    vim.schedule_wrap(function()
+      -- Ensure that always only one word is highlighted
+      H.unhighlight()
+      H.highlight()
+    end)
+  )
 end
 
 --- Auto unhighlight word under cursor
@@ -137,7 +145,7 @@ function H.setup_config(config)
   vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
-  vim.validate({delay = {config.delay, 'number'}})
+  vim.validate({ delay = { config.delay, 'number' } })
 
   return config
 end
