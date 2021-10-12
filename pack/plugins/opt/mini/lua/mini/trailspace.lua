@@ -4,8 +4,8 @@
 --- Custom minimal and fast module for working with trailing whitespace.
 ---
 --- Features:
---- - Highlighting of trailing space is enabled in every modifiable buffer by default.
---- - Highlighting stops in insert mode and when leaving window.
+--- - Highlighting is done only in modifiable buffer by default; only in Normal
+---   mode; stops in Insert mode and when leaving window.
 --- - Trim all trailing whitespace with |MiniTrailspace.trim()| function.
 ---
 --- # Setup
@@ -56,6 +56,8 @@ function MiniTrailspace.setup(config)
         au!
         au WinEnter,BufWinEnter,InsertLeave * lua vim.defer_fn(MiniTrailspace.highlight, 0)
         au WinLeave,BufWinLeave,InsertEnter * lua MiniTrailspace.unhighlight()
+
+        au FileType TelescopePrompt let b:minitrailspace_disable=v:true
       augroup END]],
     false
   )
@@ -74,7 +76,8 @@ MiniTrailspace.config = {}
 function MiniTrailspace.highlight(check_modifiable)
   check_modifiable = check_modifiable or true
 
-  if H.is_disabled() then
+  -- Highlight only in normal mode
+  if H.is_disabled() or vim.fn.mode() ~= 'n' then
     MiniTrailspace.unhighlight()
     return
   end
