@@ -2,9 +2,9 @@
 
 ---@brief [[
 --- Custom somewhat minimal autocompletion Lua plugin. Key design ideas:
---- - Have an async with 'debounce' delay 'two-stage chain completion': first
----   try to get completion items from LSP client (if set up) and if no result,
----   fallback to custom action.
+--- - Have an async (with customizable 'debounce' delay) 'two-stage chain
+---   completion': first try to get completion items from LSP client (if set
+---   up) and if no result, fallback to custom action.
 --- - Managing completion is done as much with Neovim's built-in tools as
 ---   possible.
 ---
@@ -72,13 +72,13 @@
 ---   lsp_completion = {
 ---     source_func = 'completefunc',
 ---     auto_setup = true,
----     process_items = <function: filters 'not snippets' by prefix and sorts by LSP specification>
+---     process_items = --<function: filters 'not snippets' by prefix and sorts by LSP specification>,
 ---   },
 ---
 ---   -- Fallback action. It will always be run in Insert mode. To use Neovim's
 ---   -- built-in completion (see `:h ins-completion`), supply its mapping as
 ---   -- string. For example, to use 'whole lines' completion, supply '<C-x><C-l>'.
----   fallback_action = <function equivalent to '<C-n>' completion>,
+---   fallback_action = --<function equivalent to '<C-n>' completion>,
 ---
 ---   -- Module mappings. Use `''` (empty string) to disable one. Some of them
 ---   -- might conflict with system mappings.
@@ -139,7 +139,7 @@
 --- To disable, set `g:minicompletion_disable` (globally) or
 --- `b:minicompletion_disable` (for a buffer) to `v:true`.
 ---@brief ]]
----@tag MiniCompletion
+---@tag MiniCompletion mini.completion
 
 -- Overall implementation design:
 -- - Completion:

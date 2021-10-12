@@ -36,7 +36,7 @@
 --- 1. This module is used for creating plugin's official colorscheme named
 ---    `minischeme` (see |mini.nvim|).
 ---@brief ]]
----@tag MiniBase16
+---@tag MiniBase16 mini.base16
 
 -- Module and its helper
 local MiniBase16 = {}

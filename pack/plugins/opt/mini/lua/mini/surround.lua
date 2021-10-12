@@ -27,6 +27,8 @@
 ---       surrounding with identical left and right parts.
 ---
 --- Known issues which won't be resolved:
+--- - Search for surrounding is done using Lua patterns (regex-like approach).
+---   So certain amount of false positives should be expected.
 --- - When searching for 'input' surrounding, there is no distinction if it is
 ---   inside string or comment. So in this case there will be not proper match
 ---   for a function call: 'f(a = ")", b = 1)'.
@@ -115,7 +117,7 @@
 --- To disable, set `g:minisurround_disable` (globally) or
 --- `b:minisurround_disable` (for a buffer) to `v:true`.
 ---@brief ]]
----@tag MiniSurround
+---@tag MiniSurround mini.surround
 
 -- Module and its helper
 local MiniSurround = {}

@@ -101,7 +101,7 @@
 --- To disable (show empty statusline), set `g:ministatusline_disable`
 --- (globally) or `b:ministatusline_disable` (for a buffer) to `v:true`.
 ---@brief ]]
----@tag MiniStatusline
+---@tag MiniStatusline mini.statusline
 
 -- Module and its helper
 local MiniStatusline = {}

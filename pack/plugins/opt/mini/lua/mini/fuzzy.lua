@@ -51,7 +51,7 @@
 --- - Final matched positions are those which minimize score among all possible
 ---   matched positions of `word` and `candidate`.
 ---@brief ]]
----@tag MiniFuzzy
+---@tag MiniFuzzy mini.fuzzy
 
 -- Module and its helper
 local MiniFuzzy = {}

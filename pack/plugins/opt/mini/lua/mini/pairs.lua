@@ -66,7 +66,7 @@
 --- To disable, set `g:minipairs_disable` (globally) or `b:minipairs_disable`
 --- (for a buffer) to `v:true`.
 ---@brief ]]
----@tag MiniPairs
+---@tag MiniPairs mini.pairs
 
 -- Module and its helper
 local MiniPairs = {}

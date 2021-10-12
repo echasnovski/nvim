@@ -17,7 +17,7 @@
 --- }
 --- </pre>
 ---@brief ]]
----@tag MiniMisc
+---@tag MiniMisc mini.misc
 
 -- Module and its helper
 local MiniMisc = {}

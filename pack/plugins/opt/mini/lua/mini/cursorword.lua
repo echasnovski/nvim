@@ -34,7 +34,7 @@
 --- disabling there might be highlighting left; it will be removed after next
 --- highlighting update.
 ---@brief ]]
----@tag MiniCursorword
+---@tag MiniCursorword mini.cursorword
 
 -- Module and its helper
 local MiniCursorword = {}

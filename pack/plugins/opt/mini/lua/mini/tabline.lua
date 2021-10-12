@@ -7,6 +7,7 @@
 --- [ap/vim-buftabline](https://github.com/ap/vim-buftabline).
 ---
 --- Features:
+--- - Buffers are listed by their identifier (see |bufnr()|).
 --- - Different highlight groups for "states" of buffer affecting 'buffer tabs':
 --- - Buffer names are made unique by extending paths to files or appending
 ---   unique identifier to buffers without name.
@@ -14,6 +15,9 @@
 ---   while maximizing the total number of buffers shown) when there are many
 ---   buffers open.
 --- - 'Buffer tabs' are clickable if Neovim allows it.
+---
+--- What it doesn't do:
+--- - Custom buffer order is not supported.
 ---
 --- # Dependencies
 ---
@@ -58,7 +62,7 @@
 --- disabling tabline is not updated right away, but rather after dedicated
 --- event (see |events| and `MiniTabline` |augroup|).
 ---@brief ]]
----@tag MiniTabline
+---@tag MiniTabline mini.tabline
 
 -- Module and its helper
 local MiniTabline = {}

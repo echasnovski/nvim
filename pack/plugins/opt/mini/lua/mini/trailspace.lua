@@ -28,7 +28,7 @@
 --- disabling there might be highlighting left; it will be removed after next
 --- highlighting update (see |events| and `MiniTrailspace` |augroup|).
 ---@brief ]]
----@tag MiniTrailspace
+---@tag MiniTrailspace mini.trailspace
 
 -- Module and its helper
 local MiniTrailspace = {}
