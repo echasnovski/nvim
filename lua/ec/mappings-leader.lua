@@ -111,7 +111,7 @@ EC.leader_nmap.o = {
   ['t'] = { [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'trim trailspace' },
   ['T'] = { [[<Cmd>lua MiniTrailspace.toggle()<CR>]],  'trailspace hl toggle' },
   ['w'] = { [[<Cmd>setlocal wrap! wrap?<CR>]],         'wrap toggle' },
-  ['z'] = { [[<Cmd>lua MiniMisc.zoom_toggle()<CR>]],   'zoom toggle' },
+  ['z'] = { [[<Cmd>lua MiniMisc.zoom()<CR>]],          'zoom toggle' },
 }
 
 -- r is for 'R'
