@@ -8,18 +8,18 @@ Collection of minimal, independent, and fast Lua modules dedicated to improve [N
 - [General principles](#general-principles)
 - [Plugin colorscheme](#plugin-colorscheme)
 - [Modules](#modules)
-    - [mini.base16](#mini.base16)
-    - [mini.bufremove](#mini.bufremove)
-    - [mini.comment](#mini.comment)
-    - [mini.completion](#mini.completion)
-    - [mini.cursorword](#mini.cursorword)
-    - [mini.fuzzy](#mini.fuzzy)
-    - [mini.misc](#mini.misc)
-    - [mini.pairs](#mini.pairs)
-    - [mini.statusline](#mini.statusline)
-    - [mini.surround](#mini.surround)
-    - [mini.tabline](#mini.tabline)
-    - [mini.trailspace](#mini.trailspace)
+    - [mini.base16](#minibase16)
+    - [mini.bufremove](#minibufremove)
+    - [mini.comment](#minicomment)
+    - [mini.completion](#minicompletion)
+    - [mini.cursorword](#minicursorword)
+    - [mini.fuzzy](#minifuzzy)
+    - [mini.misc](#minimisc)
+    - [mini.pairs](#minipairs)
+    - [mini.statusline](#ministatusline)
+    - [mini.surround](#minisurround)
+    - [mini.tabline](#minitabline)
+    - [mini.trailspace](#minitrailspace)
 - [Planned modules](#planned-modules)
 
 ## Installation
@@ -73,7 +73,8 @@ All examples use this colorscheme.
 
 Fast implementation of [chriskempson/base16](https://github.com/chriskempson/base16) theme for manually supplied palette. Has unique palette generator which needs only background and foreground colors.
 
-![](media/demo-base16.png)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-base16_dark.png" width="450em"/>
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-base16_light.png" width="450em"/>
 
 Default `config`:
 
@@ -104,7 +105,7 @@ Plugins with similar functionality:
 
 Buffer removing (unshow, delete, wipeout) while saving window layout.
 
-![](media/demo-bufremove.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-bufremove.gif"/>
 
 Default `config`:
 
@@ -126,7 +127,7 @@ Plugins with similar functionality:
 
 Fast and familiar per-line code commenting.
 
-![](media/demo-comment.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-comment.gif"/>
 
 Default `config`:
 
@@ -160,7 +161,7 @@ Plugins with similar functionality:
 
 Async (with customizable 'debounce' delay) 'two-stage chain completion': first builtin LSP, then configurable fallback. Also has functionality for completion item info and function signature (both in floating window appearing after customizable delay).
 
-![](media/demo-completion.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-completion.gif"/>
 
 Default `config`:
 
@@ -222,7 +223,7 @@ Plugins with similar functionality:
 
 Automatic highlighting of word under cursor (displayed after customizable delay).
 
-![](media/demo-cursorword.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-cursorword.gif"/>
 
 Default `config`:
 
@@ -261,7 +262,7 @@ For more information, read 'mini.fuzzy' section of [help file](doc/mini.txt).
 
 Collection of miscellaneous useful functions. Like `put()` and `put_text()` which print Lua objects to command line and current buffer respectively.
 
-![](media/demo-misc.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-misc.gif"/>
 
 Default `config`:
 
@@ -278,7 +279,7 @@ For more information, read 'mini.misc' section of [help file](doc/mini.txt).
 
 Autopairs plugin which has minimal defaults and functionality to do per-key expression mappings.
 
-![](media/demo-pairs.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-pairs.gif"/>
 
 Default `config`:
 
@@ -300,7 +301,7 @@ Plugins with similar functionality:
 
 Minimal and fast statusline. Has ability to use custom content supplied with concise function (using module's provided section functions) along with builtin default. For full experience needs [Nerd font](https://www.nerdfonts.com/), [lewis6991/gitsigns.nvim](https://github.com/lewis6991/gitsigns.nvim) plugin, and [kyazdani42/nvim-web-devicons](https://github.com/kyazdani42/nvim-web-devicons) plugin (but works without any them).
 
-![](media/demo-statusline.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-statusline.gif"/>
 
 Default `config`:
 
@@ -333,7 +334,7 @@ Plugins with similar functionality:
 
 Fast surround plugin. Add, delete, replace, find, highlight surrounding (like pair of parenthesis, quotes, etc.). Has special "function call", "tag", and "interactive" surroundings. Supports dot-repeatability, textobject, motions.
 
-![](media/demo-surround.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-surround.gif"/>
 
 Default `config`:
 
@@ -373,7 +374,7 @@ Plugins with similar functionality:
 
 Minimal tabline which shows listed (see `:h buflisted`) buffers in case of one tab and falls back to default otherwise. For full experience needs [kyazdani42/nvim-web-devicons](https://github.com/kyazdani42/nvim-web-devicons).
 
-![](media/demo-tabline.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-tabline.gif"/>
 
 Default `config`:
 
@@ -399,7 +400,7 @@ Plugins with similar functionality:
 
 Automatic highlighting of trailing whitespace with functionality to remove it.
 
-![](media/demo-trailspace.gif)
+<img src="https://raw.githubusercontent.com/echasnovski/nvim/misc/mini-readme-demo/master/demo-trailspace.gif"/>
 
 Default `config`:
 

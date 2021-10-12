@@ -1517,7 +1517,7 @@ Features:
 
 Known issues which won't be resolved:
 - Search for surrounding is done using Lua patterns (regex-like approach). So
-  certain amount of false positives will happen.
+  certain amount of false positives should be expected.
 - When searching for 'input' surrounding, there is no distinction if it is 
   inside string or comment. So in this case there will be not proper match for
   a function call: 'f(a = ")", b = 1)'.
@@ -1772,9 +1772,8 @@ MiniTabline.make_tabline_string()          *MiniTabline.make_tabline_string()*
 Custom minimal and fast module for working with trailing whitespace.
 
 Features:
-- Highlighting of trailing space is enabled in every modifiable buffer by
-  default.
-- Highlighting stops in insert mode and when leaving window.
+- Highlighting is done only in modifiable buffer by default; only in Normal 
+  mode; stops in Insert mode and when leaving window.
 - Trim all trailing whitespace with |MiniTrailspace.trim()| function.
 
 # Setup
