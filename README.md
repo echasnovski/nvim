@@ -17,6 +17,7 @@ lua/                    -- Lua code used in configuration
   └ vscode.lua          -- VS Code related configuration
 misc/                   -- Everything not directly related to Neovim startup
 │ dict/                 -- Dictionary files
+│ mini-readme-demo/     -- Demonstration media for 'echasnovski/mini.nvim'
 │ mini_vimscript/       -- Vimscript (re)implementation of some 'mini' modules
 │ scripts/              -- Scripts for miscellaneous usage
 │ sessions/             -- Placeholder for local use of Neovim sessions (content ignored)
