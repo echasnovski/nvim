@@ -404,7 +404,7 @@ function MiniCompletion.auto_signature()
   end
 
   H.signature.timer:stop()
-  if not H.has_lsp_clients() then
+  if not H.has_lsp_clients('signature_help') then
     return
   end
 
@@ -457,7 +457,7 @@ end
 --- No need to use it directly, everything is setup in |MiniCompletion.setup|.
 function MiniCompletion.completefunc_lsp(findstart, base)
   -- Early return
-  if (not H.has_lsp_clients()) or H.completion.lsp.status == 'sent' then
+  if (not H.has_lsp_clients('completion')) or H.completion.lsp.status == 'sent' then
     if findstart == 1 then
       return -3
     else
@@ -685,7 +685,7 @@ function H.trigger_twostep()
     return
   end
 
-  if H.has_lsp_clients() and H.has_lsp_completion() then
+  if H.has_lsp_clients('completion') and H.has_lsp_completion() then
     H.trigger_lsp()
   elseif H.completion.fallback then
     H.trigger_fallback()
@@ -764,8 +764,19 @@ H.stop_actions = {
 }
 
 ---- LSP
-function H.has_lsp_clients()
-  return not vim.tbl_isempty(vim.lsp.buf_get_clients())
+--@param capability string|nil: Capability to check (as in `resolved_capabilities` of `vim.lsp.buf_get_clients` output).
+--@return boolean: Whether there is at least one LSP client that has resolved `capability`.
+function H.has_lsp_clients(capability)
+  local clients = vim.lsp.buf_get_clients()
+  if vim.tbl_isempty(clients) then return false end
+  if not capability then return true end
+
+  for _, c in pairs(clients) do
+    if c.resolved_capabilities[capability] then
+      return true
+    end
+  end
+  return false
 end
 
 function H.has_lsp_completion()
