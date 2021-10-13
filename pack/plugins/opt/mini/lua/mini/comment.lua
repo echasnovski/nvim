@@ -3,11 +3,13 @@
 ---@brief [[
 --- Custom minimal and fast Lua module for code commenting. This is basically a
 --- reimplementation of "tpope/vim-commentary". Commenting in Normal mode
---- respects |count| and is dot-repeatable.
+--- respects |count| and is dot-repeatable. Comment structure is inferred
+--- from 'commentstring'.
 ---
---- # What it doesn't do
----
+--- What it doesn't do:
 --- - Block and sub-line comments. This will only support per-line commenting.
+--- - Configurable (from module) comment structure. Modify |commentstring|
+---   instead.
 ---
 --- # Setup
 ---
@@ -31,10 +33,6 @@
 ---   }
 --- }
 --- </pre>
----
---- # Notes
---- 1. Commenting depends on '&commentstring' option.
---- 2. There is no support for block comments: all comments are made per line.
 ---
 --- # Disabling
 --- To disable core functionality, set `g:minicomment_disable` (globally) or -
@@ -83,7 +81,7 @@ MiniComment.config = {
 ---
 --- It is meant to be used in expression mappings (see |map-<expr>|) to enable
 --- dot-repeatability and commenting on range. There is no need to do this
---- manually, everything is done inside `MiniComment.setup()`.
+--- manually, everything is done inside |MiniComment.setup()|.
 ---
 --- It has a somewhat unintuitive logic (because of how expression mapping with
 --- dot-repeatability works): it should be called without arguments inside

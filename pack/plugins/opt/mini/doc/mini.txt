@@ -137,6 +137,31 @@ Default `config`:
   use_cterm = nil,
 }
 
+Example:
+
+`require('mini.base16').setup({`
+  `palette = {`
+    `base00 = '#112641',`
+    `base01 = '#3a475e',`
+    `base02 = '#606b81',`
+    `base03 = '#8691a7',`
+    `base04 = '#d5dc81',`
+    `base05 = '#e2e98f',`
+    `base06 = '#eff69c',`
+    `base07 = '#fcffaa',`
+    `base08 = '#ffcfa0',`
+    `base09 = '#cc7e46',`
+    `base0A = '#46a436',`
+    `base0B = '#9ff895',`
+    `base0C = '#ca6ecf',`
+    `base0D = '#42f7ff',`
+    `base0E = '#ffc4ff',`
+    `base0F = '#00a5c5',`
+  `},`
+  `name = 'minischeme',`
+  `use_cterm = true,`
+`})`
+
 # Notes
 1. This module is used for creating plugin's official colorscheme named 
    `minischeme` (see |mini.nvim|).
@@ -168,7 +193,7 @@ MiniBase16.setup({config})                                *MiniBase16.setup()*
         table; `config.palette` should be a table with colors)
 
 
-MiniBase16.mini_palette({background}, {foreground}, {accent_chroma}) *MiniBase16.mini_palette()*
+MiniBase16.mini_palette({background}, {foreground}, {accent_chroma})*MiniBase16.mini_palette()*
     Create 'mini' palette
 
     Create base16 palette based on the HEX (string '#RRGGBB') colors of main
@@ -230,7 +255,7 @@ MiniBase16.mini_palette({background}, {foreground}, {accent_chroma}) *MiniBase16
         'my-base16'})`
 
 
-MiniBase16.rgb_palette_to_cterm_palette({palette}) *MiniBase16.rgb_palette_to_cterm_palette()*
+MiniBase16.rgb_palette_to_cterm_palette({palette})*MiniBase16.rgb_palette_to_cterm_palette()*
     Converts palette with RGB colors to terminal colors
 
     Useful for caching `use_cterm` variable to increase speed.
@@ -356,11 +381,12 @@ MiniBufremove.unshow_in_window({win_id})    *MiniBufremove.unshow_in_window()*
 
 Custom minimal and fast Lua module for code commenting. This is basically a
 reimplementation of "tpope/vim-commentary". Commenting in Normal mode respects
-|count| and is dot-repeatable.
+|count| and is dot-repeatable. Comment structure is inferred from
+'commentstring'.
 
-# What it doesn't do
-
+What it doesn't do:
 - Block and sub-line comments. This will only support per-line commenting.
+- Configurable (from module) comment structure. Modify |commentstring| instead.
 
 # Setup
 
@@ -383,10 +409,6 @@ Default `config`:
   }
 }
 
-# Notes
-1. Commenting depends on '&commentstring' option.
-2. There is no support for block comments: all comments are made per line.
-
 # Disabling To disable core functionality, set `g:minicomment_disable`
 (globally) or - `b:minicomment_disable` (for a buffer) to `v:true`.
 
@@ -408,7 +430,7 @@ MiniComment.operator({mode})                          *MiniComment.operator()*
 
     It is meant to be used in expression mappings (see |map-<expr>|) to enable
     dot-repeatability and commenting on range. There is no need to do this
-    manually, everything is done inside `MiniComment.setup()`.
+    manually, everything is done inside |MiniComment.setup()|.
 
     It has a somewhat unintuitive logic (because of how expression mapping with
     dot-repeatability works): it should be called without arguments inside
@@ -424,7 +446,7 @@ MiniComment.operator({mode})                          *MiniComment.operator()*
         performing action).
 
 
-MiniComment.toggle_lines({line_start}, {line_end}) *MiniComment.toggle_lines()*
+MiniComment.toggle_lines({line_start}, {line_end})*MiniComment.toggle_lines()*
     Toggle comments between two line numbers
 
     It uncomments if lines are comment (every line is a comment) and comments
@@ -608,7 +630,7 @@ MiniCompletion.auto_completion()            *MiniCompletion.auto_completion()*
 
 
 
-MiniCompletion.complete_twostage({fallback}, {force}) *MiniCompletion.complete_twostage()*
+MiniCompletion.complete_twostage({fallback}, {force})*MiniCompletion.complete_twostage()*
     Run two-stage completion
 
 
@@ -675,7 +697,7 @@ MiniCompletion.completefunc_lsp()          *MiniCompletion.completefunc_lsp()*
 
 
 
-MiniCompletion.default_process_items() *MiniCompletion.default_process_items()*
+MiniCompletion.default_process_items()*MiniCompletion.default_process_items()*
     Default `MiniCompletion.config.lsp_completion.process_items`.
 
 
@@ -1419,7 +1441,7 @@ MiniStatusline.section_git({args})              *MiniStatusline.section_git()*
         string: Section string.
 
 
-MiniStatusline.section_diagnostics({args}) *MiniStatusline.section_diagnostics()*
+MiniStatusline.section_diagnostics({args})*MiniStatusline.section_diagnostics()*
     Section for Neovim's builtin diagnostics
 
     Shows nothing if there is no attached LSP clients or for short output.
