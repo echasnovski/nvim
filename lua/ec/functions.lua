@@ -45,6 +45,15 @@ EC.generate_plugin_doc = function(script_path)
   vim.cmd('helptags ALL')
 end
 
+--- Hide message from 'showmode' by masking it with background
+---
+--- This is mostly a hacky solution to 'disable' many messages from
+--- |ins-completion|. Most notably: 'Scanning ...', 'match in file ...'.
+EC.mask_showmode = function()
+  local bg_color = vim.fn.synIDattr(vim.fn.hlID('Normal'), 'bg')
+  vim.cmd(string.format([[hi ModeMsg guifg=%s guibg=NONE gui=NONE]], bg_color))
+end
+
 -- Make action for `<CR>` which respects completion and autopairs
 --
 -- Mapping should be done after everything else because `<CR>` can be

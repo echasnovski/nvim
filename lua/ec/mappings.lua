@@ -75,8 +75,8 @@ keymap('n', [[<M-k>]], [[<Cmd>resize +2<CR>]])
 keymap('n', [[<M-l>]], [[<Cmd>vertical resize +2<CR>]])
 
 -- Alternative way to save
-keymap('n', [[<C-s>]], [[<Cmd>w<CR>]])
-keymap('i', [[<C-s>]], [[<Esc><Cmd>w<CR>]])
+keymap('n', [[<C-s>]], [[<Cmd>silent w<CR>]])
+keymap('i', [[<C-s>]], [[<Esc><Cmd>silent w<CR>]])
 
 -- Move inside completion list with <TAB>
 keymap('i', [[<Tab>]], [[pumvisible() ? "\<C-n>" : "\<Tab>"]], { expr = true })

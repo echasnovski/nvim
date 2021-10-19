@@ -31,12 +31,16 @@ vim.opt.ruler         = true  -- Always show cursor position
 vim.opt.splitbelow    = true  -- Horizontal splits will be below
 vim.opt.splitright    = true  -- Vertical splits will be to the right
 vim.opt.conceallevel  = 0     -- Don't hide (conceal) special symbols (like `` in markdown)
-vim.opt.shortmess:append('c') -- Don't pass messages to 'ins-completion-menu'
 vim.opt.shortmess:append('F') -- Don't give the file info when editing a file
 vim.opt.incsearch     = true  -- Show search results while typing
-vim.opt.showmode      = false -- Don't show things like --INSERT -- (it is handled in statusline)
 vim.opt.colorcolumn   = '+1'  -- Draw colored column one step to the right of desired maximum width
 vim.opt.linebreak     = true  -- Wrap long lines at 'breakat' (if 'wrap' is set)
+
+---- Disable certain messages from |ins-completion-menu|
+---- See https://github.com/vim/vim/issues/3412#issuecomment-641041755
+vim.opt.shortmess:append('c') -- Don't pass messages to 'ins-completion-menu'
+vim.opt.showmode = true  -- Show mode in command line to prevent messages like 'Scanning ...'
+vim.cmd([[au ColorScheme * lua EC.mask_showmode()]]) -- Hide 'showmode' messages by masking
 
 -- Colors
 vim.opt.background = 'dark'         -- Use dark background
@@ -48,7 +52,8 @@ if vim.fn.exists("syntax_on") ~= 1 then
 end
 
 ---- Use colorscheme later when its plugin is enabled
-vim.cmd([[au VimEnter * ++once colorscheme minischeme]])
+---- Use `nested` to allow `ColorScheme` event
+vim.cmd([[au VimEnter * nested ++once colorscheme minischeme]])
 ---- Other interesting color schemes:
 ---- - 'morhetz/gruvbox'
 ---- - 'rakr/vim-one'
