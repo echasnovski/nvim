@@ -1,11 +1,11 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
 
 ---@brief [[
---- Lua module for minimal session management (read, write, delete), which
---- works through |mksession| (meaning 'sessionoptions' is fully respected).
+--- Lua module for minimal session management (load, save, delete), which
+--- works using |mksession| (meaning 'sessionoptions' is fully respected).
 --- This is intended as a drop-in Lua replacement for session management part
---- of [mhinz/vim-startify](https://github.com/mhinz/vim-startify) (works with
---- sessions created by it).
+--- of [mhinz/vim-startify](https://github.com/mhinz/vim-startify) (works out
+--- of the box with sessions created by it).
 ---
 --- Key design ideas:
 --- - There is a (configurable) directory. Its readable files (searched with
@@ -13,7 +13,7 @@
 ---   these session files are detected during `MiniSessions.setup()` with
 ---   session names being file names (including their possible extension).
 --- - Store information about detected sessions in separate table
----   (|MiniSessions.sessions|) and operate only on it. Meaning if this
+---   (|MiniSessions.detected|) and operate only on it. Meaning if this
 ---   information changes, there will be no effect until next detection.
 ---
 --- Features:
@@ -39,7 +39,7 @@
 ---   directory = --<"sessions" subdirectory of user data directory from |stdpath()|>,
 ---
 ---   -- Whether to force possibly harmful actions (meaning depends on function)
----   force = { read = false, write = true, delete = false },
+---   force = { load = false, save = true, delete = false },
 --- }
 --- </pre>
 ---
@@ -70,11 +70,11 @@ function MiniSessions.setup(config)
 
   -- Module behavior
   if config.autoload then
-    vim.cmd([[au VimEnter * ++nested ++once lua if vim.fn.argc() == 0 then MiniSessions.read() end]])
+    vim.cmd([[au VimEnter * ++nested ++once lua if vim.fn.argc() == 0 then MiniSessions.load() end]])
   end
 
   if config.autosave then
-    vim.cmd([[au VimLeavePre * lua if vim.v.this_session ~= '' then MiniSessions.write(nil, true) end]])
+    vim.cmd([[au VimLeavePre * lua if vim.v.this_session ~= '' then MiniSessions.save(nil, true) end]])
   end
 end
 
@@ -90,16 +90,19 @@ MiniSessions.config = {
   directory = vim.fn.stdpath('data') .. H.path_sep .. 'sessions',
 
   -- Whether to force possibly harmful actions (meaning depends on function)
-  force = { read = false, write = true, delete = false },
+  force = { load = false, save = true, delete = false },
 }
 
 ---- Table of detected sessions
 ----
 ---- Keys represent session name. Values are tables with session information.
-MiniSessions.sessions = {}
+---- Currently this information consists from (but subject to change):
+---- - `modify_time` - modification time (see |getftime|) of session file.
+---- - `path` - full path to session file.
+MiniSessions.detected = {}
 
 -- Module functionality
---- Read detected session
+--- Load detected session
 ---
 --- What is does:
 --- - Delete all current buffers with |bwipeout|. This is needed to correctly
@@ -107,19 +110,19 @@ MiniSessions.sessions = {}
 ---   beforehand for unsaved buffers and stops if there is any.
 --- - Source session with supplied name.
 ---
----@param session_name string: Name of detected section to read. Default: `nil` for latest session (see |MiniSessions.get_latest|).
----@param force boolean: Whether to delete unsaved buffers. Default: `MiniSessions.config.force.read`.
-function MiniSessions.read(session_name, force)
+---@param session_name string: Name of detected section to load. Default: `nil` for latest session (see |MiniSessions.get_latest|).
+---@param force boolean: Whether to delete unsaved buffers. Default: `MiniSessions.config.force.load`.
+function MiniSessions.load(session_name, force)
   if H.is_disabled() then
     return
   end
-  if vim.tbl_count(MiniSessions.sessions) == 0 then
+  if vim.tbl_count(MiniSessions.detected) == 0 then
     H.notify([[There is no detected sessions. Change `MiniSessions.config.directory` and run `MiniSessions.setup()`.]])
     return
   end
 
   session_name = session_name or MiniSessions.get_latest()
-  force = (force == nil) and MiniSessions.config.force.read or force
+  force = (force == nil) and MiniSessions.config.force.load or force
 
   if not H.validate_detected(session_name) then
     return
@@ -128,37 +131,37 @@ function MiniSessions.read(session_name, force)
     return
   end
 
-  local path = vim.fn.fnameescape(MiniSessions.sessions[session_name].path)
+  local path = vim.fn.fnameescape(MiniSessions.detected[session_name].path)
   vim.cmd(string.format([[source %s]], path))
 end
 
---- Write session
+--- Save session
 ---
 --- What it does:
 --- - Check if file for supplied session name already exists. If it does and
 ---   `force` is not `true`, then stop.
---- - Write session with |mksession| to a file named `session_name` inside
+--- - Save session with |mksession| to a file named `session_name` inside
 ---   `MiniSessions.config.directory`.
 ---
----@param session_name string: Name of section to write. Default: `nil` for current session.
----@param force boolean: Whether to ignore existence of session file. Default: `MiniSessions.config.force.write`.
-function MiniSessions.write(session_name, force)
+---@param session_name string: Name of section to save. Default: `nil` for current session.
+---@param force boolean: Whether to ignore existence of session file. Default: `MiniSessions.config.force.save`.
+function MiniSessions.save(session_name, force)
   if H.is_disabled() then
     return
   end
 
   session_name = tostring(session_name or H.get_current_session_name())
-  force = (force == nil) and MiniSessions.config.force.write or force
+  force = (force == nil) and MiniSessions.config.force.save or force
 
   if #session_name == 0 then
-    H.notify([[Supply non-empty session name to write.]])
+    H.notify([[Supply non-empty session name to save.]])
     return
   end
 
   local session_file = MiniSessions.config.directory .. H.path_sep .. session_name
   session_file = vim.fn.fnamemodify(session_file, ':p')
   if not force and vim.fn.filereadable(session_file) == 1 then
-    H.notify([[Can't write to existing session when `force` is not `true`.]])
+    H.notify([[Can't save to existing session when `force` is not `true`.]])
     return
   end
 
@@ -179,7 +182,7 @@ function MiniSessions.delete(session_name, force)
   if H.is_disabled() then
     return
   end
-  if vim.tbl_count(MiniSessions.sessions) == 0 then
+  if vim.tbl_count(MiniSessions.detected) == 0 then
     H.notify([[There is no detected sessions. Change `MiniSessions.config.directory` and run `MiniSessions.setup()`.]])
     return
   end
@@ -197,8 +200,8 @@ function MiniSessions.delete(session_name, force)
     return
   end
 
-  vim.fn.delete(MiniSessions.sessions[session_name].path)
-  MiniSessions.sessions[session_name] = nil
+  vim.fn.delete(MiniSessions.detected[session_name].path)
+  MiniSessions.detected[session_name] = nil
   if is_current_session then
     vim.v.this_session = ''
   end
@@ -211,12 +214,12 @@ end
 ---
 ---@return string|nil: Name of latest session or `nil` if there is no sessions.
 function MiniSessions.get_latest()
-  if vim.tbl_count(MiniSessions.sessions) == 0 then
+  if vim.tbl_count(MiniSessions.detected) == 0 then
     return
   end
 
   local latest_time, latest_name = -1, nil
-  for name, data in pairs(MiniSessions.sessions) do
+  for name, data in pairs(MiniSessions.detected) do
     if data.modify_time > latest_time then
       latest_time, latest_name = data.modify_time, name
     end
@@ -241,8 +244,8 @@ function H.setup_config(config)
     autoload = { config.autoload, 'boolean' },
     directory = { config.directory, 'string' },
     force = { config.force, 'table' },
-    ['force.read'] = { config.force.read, 'boolean' },
-    ['force.write'] = { config.force.write, 'boolean' },
+    ['force.load'] = { config.force.load, 'boolean' },
+    ['force.save'] = { config.force.save, 'boolean' },
     ['force.delete'] = { config.force.delete, 'boolean' },
     autosave = { config.autosave, 'boolean' },
   })
@@ -253,7 +256,7 @@ end
 function H.apply_config(config)
   MiniSessions.config = config
 
-  MiniSessions.sessions = H.detect_sessions(config.directory)
+  MiniSessions.detected = H.detect_sessions(config.directory)
 end
 
 function H.is_disabled()
@@ -288,7 +291,7 @@ function H.detect_sessions(dir_path)
 end
 
 function H.validate_detected(session_name)
-  local is_detected = vim.tbl_contains(vim.tbl_keys(MiniSessions.sessions), session_name)
+  local is_detected = vim.tbl_contains(vim.tbl_keys(MiniSessions.detected), session_name)
   if is_detected then
     return true
   end
