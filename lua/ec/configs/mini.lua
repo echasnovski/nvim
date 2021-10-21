@@ -1,3 +1,5 @@
+require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
+
 require('mini.statusline').setup({
   content = {
     active = function()
