@@ -2,8 +2,6 @@ require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' 
 
 require('mini-dev.starter').setup({
   items = _G.test_items,
-  numerate = true,
-  footer = 'Fancy\nmultiline\nfooter',
 })
 
 require('mini.statusline').setup({

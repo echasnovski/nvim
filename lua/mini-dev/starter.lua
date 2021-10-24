@@ -37,8 +37,8 @@
 --- - `MiniStarterHeader` - header lines.
 --- - `MiniStarterInactive` - inactive item.
 --- - `MiniStarterItem` - item name.
---- - `MiniStarterItemQuery` - query needed to select item.
---- - `MiniStarterPrefix` - item prefix.
+--- - `MiniStarterItemQuery` - unique query for item.
+--- - `MiniStarterPrefix` - string displayed before item name.
 --- - `MiniStarterQuery` - query for active items.
 ---
 --- # Disabling
@@ -66,6 +66,17 @@ function MiniStarter.setup(config)
   -- Apply config
   H.apply_config(config)
 
+  -- Module behavior
+  if config.autoopen then
+    vim.api.nvim_exec(
+      [[augroup MiniStarter
+          au!
+          au VimEnter * ++nested ++once lua if vim.fn.argc() == 0 then MiniStarter.open() end
+        augroup END]],
+      false
+    )
+  end
+
   -- Create highlighting
   vim.api.nvim_exec(
     [[hi default link MiniStarterCurrent   Visual
@@ -83,9 +94,15 @@ end
 
 -- Module config
 MiniStarter.config = {
+  -- Whether to open starter buffer if Neovim was called without file arguments
+  autoopen = true,
+
   -- Items to be displayed. Should be a (possibly nested) list with
   -- eventual elements being items. See examples.
   items = {},
+
+  -- Item prefix to be displayed in front of every item
+  item_prefix = '│ ',
 
   -- Whether to prepend item name with unique sequential number
   numerate = false,
@@ -104,21 +121,53 @@ MiniStarter.config = {
 
   -- Footer to be displayed after items. Should be a string or function
   -- evaluating to string.
-  footer = '',
+  footer = table.concat({
+    'Use <Up>/<Down> or type query to select item',
+    '<BS> deletes latest character from query',
+    '<C-c> closes this buffer',
+  }, '\n'),
 
   -- Padding from left and top
   padding = { left = 3, top = 2 },
 
-  -- Item prefix to be displayed in front of every item
-  item_prefix = '│ ',
+  -- Characters to update query. Each character will have special buffer
+  -- mapping overriding your global ones. Be careful to not add `:` as it
+  -- allows you to go into command mode.
+  query_updaters = [[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-.]],
 }
 
 -- Module functionality
-function MiniStarter.eval_current()
+function MiniStarter.open()
+  -- Create and open buffer
+  H.buf_id = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(H.buf_id)
+
+  -- Add content
+  vim.api.nvim_buf_set_lines(H.buf_id, 0, -1, false, H.buffer_content.lines)
+
+  -- Always position cursor on current item
+  H.position_cursor_on_current_item()
+  vim.cmd([[au CursorMoved <buffer> lua MiniStarter.on_cursormoved()]])
+
+  -- Setup buffer behavior
+  H.apply_buffer_options()
+  H.apply_buffer_mappings()
+  H.apply_buffer_highlighting()
+
+  -- Apply current query (if reopened, it uses latest query)
+  H.make_query()
+end
+
+function MiniStarter.close()
+  vim.api.nvim_buf_delete(H.buf_id, {})
+  H.buf_id = nil
+end
+
+function MiniStarter.eval_current_item()
   H.eval_fun_or_string(H.items[H.current_item_id].action, true)
 end
 
-function MiniStarter.update_current(direction)
+function MiniStarter.update_current_item(direction)
   -- Advance current item
   local prev_current = H.current_item_id
   H.current_item_id = H.next_active_item_id(H.current_item_id, direction)
@@ -141,6 +190,10 @@ function MiniStarter.update_query(char)
     H.query = string.format('%s%s', H.query, char)
   end
   H.make_query()
+end
+
+function MiniStarter.on_cursormoved()
+  H.position_cursor_on_current_item()
 end
 
 -- Helper data
@@ -181,9 +234,6 @@ H.hl_group_per_linetype = {
 ---- Current search query
 H.query = ''
 
----- Query updaters. All these keys will have custom mapping in starter buffer.
-H.query_updaters = vim.split([[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.]], '')
-
 -- Helper functions
 ---- Settings
 function H.setup_config(config)
@@ -193,7 +243,10 @@ function H.setup_config(config)
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
+    autoopen = { config.autoopen, 'boolean' },
+
     items = { config.items, 'table' },
+    item_prefix = { config.item_prefix, 'string' },
     numerate = { config.numerate, 'boolean' },
 
     header = { config.header, H.is_fun_or_string, 'function or string' },
@@ -203,7 +256,7 @@ function H.setup_config(config)
     ['padding.left'] = { config.padding.left, 'number' },
     ['padding.top'] = { config.padding.top, 'number' },
 
-    item_prefix = { config.item_prefix, 'string' },
+    query_updaters = { config.query_updaters, 'string' },
   })
 
   return config
@@ -419,7 +472,7 @@ function H.make_query(query)
   local no_active = false
   if not H.items[H.current_item_id].active then
     local prev_current = H.current_item_id
-    MiniStarter.update_current('next')
+    MiniStarter.update_current_item('next')
     if prev_current == H.current_item_id then
       no_active = true
     end
@@ -434,32 +487,10 @@ function H.make_query(query)
 end
 
 ---- Work with starter buffer
-function H.open_starter_buffer()
-  H.buf_id = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_set_current_buf(H.buf_id)
-
-  vim.api.nvim_buf_set_lines(H.buf_id, 0, -1, false, H.buffer_content.lines)
-
-  H.position_cursor_on_current_item()
-
-  H.apply_buffer_options()
-  H.apply_buffer_mappings()
-  H.apply_buffer_highlighting()
-
-  H.make_query()
-
-  -- Open all folds in they are present
-  vim.cmd([[silent normal! zR]])
-end
-
-function H.close_starter_buffer()
-  vim.api.nvim_buf_delete(H.buf_id, {})
-  H.buf_id = nil
-end
-
 function H.apply_buffer_options()
   vim.api.nvim_buf_set_name(H.buf_id, 'Starter')
-  vim.api.nvim_buf_set_option(H.buf_id, 'filetype', 'starter')
+  -- Having `noautocmd` is crucial for performance: ~9ms without it, ~1.6ms with it
+  vim.cmd([[noautocmd silent! set filetype=starter]])
 
   local options = {
     -- Taken from 'vim-startify'
@@ -480,22 +511,24 @@ function H.apply_buffer_options()
     [[synmaxcol&]],
     -- Differ from 'vim-startify'
     [[nomodifiable]],
+    [[foldlevel=999]],
   }
   -- Using Vim's `setlocal` is currently more robust comparing to `opt_local`
-  vim.cmd(string.format([[silent! setlocal %s]], table.concat(options, ' ')))
+  vim.cmd(string.format([[silent! noautocmd setlocal %s]], table.concat(options, ' ')))
 end
 
 function H.apply_buffer_mappings()
-  H.buf_keymap('<CR>', [[MiniStarter.eval_current()]])
-  H.buf_keymap('<Up>', [[MiniStarter.update_current('prev')]])
-  H.buf_keymap('<Down>', [[MiniStarter.update_current('next')]])
+  H.buf_keymap('<CR>', [[MiniStarter.eval_current_item()]])
+  H.buf_keymap('<Up>', [[MiniStarter.update_current_item('prev')]])
+  H.buf_keymap('<Down>', [[MiniStarter.update_current_item('next')]])
 
   -- Make all special symbols to update query
-  for _, key in ipairs(H.query_updaters) do
+  for _, key in ipairs(vim.split(MiniStarter.config.query_updaters, '')) do
     H.buf_keymap(key, string.format([[MiniStarter.update_query('%s')]], key))
   end
 
   H.buf_keymap('<BS>', [[MiniStarter.update_query()]])
+  H.buf_keymap('<C-c>', [[MiniStarter.close()]])
 end
 
 function H.apply_buffer_highlighting()
@@ -581,6 +614,8 @@ function H.notify(msg)
 end
 
 _G.test_items = {
+  { name = [[Load 'nvim-config']], action = [[lua MiniSessions.load('nvim-config')]], group = 'Sessions' },
+
   -- Group 1 (nested)
   {
     { name = 'G1A1', action = [[echo 'G1A1']], group = 'Group 1' },
