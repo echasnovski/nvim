@@ -7,13 +7,14 @@
 --- Key design ideas:
 --- - All available actions are defined by items. Each item should have the
 ---   following info:
----     - `name` - string which will be displayed and used for choosing.
 ---     - `action` - function or string for |vim.cmd| which will be executed
 ---       when item is chosen.
----     - `group` - string representing to which group item belongs.
+---     - `name` - string which will be displayed and used for choosing.
+---     - `section` - string representing to which section item belongs.
 --- - Choosing of item can be done in two ways:
----     - Choose with Up/Down arrows and hit Enter.
----     - Type start of item's name which uniquely identifies it.
+---     - Type prefix query to filter item by matching its name ignoring case.
+---       For every item its unique prefix is highlighted.
+---     - Use Up/Down arrows and hit Enter.
 ---
 --- Features:
 --- - Customizable header and footer.
@@ -33,13 +34,13 @@
 ---
 --- - `MiniStarterCurrent` - current item.
 --- - `MiniStarterFooter` - footer lines.
---- - `MiniStarterGroup` - group lines.
 --- - `MiniStarterHeader` - header lines.
 --- - `MiniStarterInactive` - inactive item.
+--- - `MiniStarterIndenter` - string displayed before item name.
 --- - `MiniStarterItem` - item name.
---- - `MiniStarterItemQuery` - unique query for item.
---- - `MiniStarterPrefix` - string displayed before item name.
---- - `MiniStarterQuery` - query for active items.
+--- - `MiniStarterItemPrefix` - unique query for item.
+--- - `MiniStarterSection` - section lines.
+--- - `MiniStarterQuery` - current query in active items.
 ---
 --- # Disabling
 ---
@@ -67,27 +68,25 @@ function MiniStarter.setup(config)
   H.apply_config(config)
 
   -- Module behavior
-  if config.autoopen then
-    vim.api.nvim_exec(
-      [[augroup MiniStarter
-          au!
-          au VimEnter * ++nested ++once lua if vim.fn.argc() == 0 then MiniStarter.open() end
-        augroup END]],
-      false
-    )
-  end
+  vim.api.nvim_exec(
+    [[augroup MiniStarter
+        au!
+        au VimEnter * ++nested ++once lua MiniStarter.on_vimenter()
+      augroup END]],
+    false
+  )
 
   -- Create highlighting
   vim.api.nvim_exec(
-    [[hi default link MiniStarterCurrent   Visual
-      hi default link MiniStarterFooter    Title
-      hi default link MiniStarterGroup     Delimiter
-      hi default link MiniStarterHeader    Title
-      hi default link MiniStarterInactive  Comment
-      hi default link MiniStarterItem      Normal
-      hi default link MiniStarterItemQuery WarningMsg
-      hi default link MiniStarterPrefix    Delimiter
-      hi default link MiniStarterQuery     MoreMsg]],
+    [[hi default link MiniStarterCurrent    Visual
+      hi default link MiniStarterFooter     Title
+      hi default link MiniStarterHeader     Title
+      hi default link MiniStarterInactive   Comment
+      hi default link MiniStarterIndenter   Delimiter
+      hi default link MiniStarterItem       Normal
+      hi default link MiniStarterItemPrefix WarningMsg
+      hi default link MiniStarterSection    Delimiter
+      hi default link MiniStarterQuery      MoreMsg]],
     false
   )
 end
@@ -97,12 +96,15 @@ MiniStarter.config = {
   -- Whether to open starter buffer if Neovim was called without file arguments
   autoopen = true,
 
-  -- Items to be displayed. Should be a (possibly nested) list with
-  -- eventual elements being items. See examples.
+  -- Items to be displayed. Should be a list with the following elements:
+  -- - Item: table with `action`, `name`, and `section` keys.
+  -- - Function: should return one of these three categories.
+  -- - List: elements from these three categories (i.e. item, list, function).
   items = {},
 
-  -- Item prefix to be displayed in front of every item
-  item_prefix = '│ ',
+  -- String to be displayed in front of every item to visually separate them
+  -- from section name
+  indenter = '│ ',
 
   -- Whether to prepend item name with unique sequential number
   numerate = false,
@@ -122,8 +124,10 @@ MiniStarter.config = {
   -- Footer to be displayed after items. Should be a string or function
   -- evaluating to string.
   footer = table.concat({
-    'Use <Up>/<Down> or type query to select item',
+    'Type query to filter items',
     '<BS> deletes latest character from query',
+    '<Down>/<Up> and <M-j>/<M-k> move current item',
+    '<CR> executes action of current item',
     '<C-c> closes this buffer',
   }, '\n'),
 
@@ -133,11 +137,45 @@ MiniStarter.config = {
   -- Characters to update query. Each character will have special buffer
   -- mapping overriding your global ones. Be careful to not add `:` as it
   -- allows you to go into command mode.
-  query_updaters = [[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-.]],
+  query_updaters = [[abcdefghijklmnopqrstuvwxyz0123456789 _-.]],
 }
 
 -- Module functionality
+--- Act on |VimEnter|
+---
+--- - Normalize `items`, `header`, and `footer`.
+--- - Compute content of 'Starter' buffer.
+--- - Possibly autoopen buffer.
+function MiniStarter.on_vimenter()
+  local config = MiniStarter.config
+
+  -- Normalize certain config values
+  H.items = H.normalize_items(config.items)
+  H.header = H.normalize_header_footer(config.header, 'header')
+  H.footer = H.normalize_header_footer(config.footer, 'footer')
+
+  -- Precompute helper information
+  H.make_buffer_content()
+
+  -- Possibly autoopen
+  if MiniStarter.config.autoopen and vim.fn.argc() == 0 then
+    MiniStarter.open()
+  end
+end
+
+--- Open starter buffer
+---
+--- End of opening results into issuing custom `MiniStarterOpened` event. Use
+--- it with `autocmd User MiniStarterOpened <your command>`.
 function MiniStarter.open()
+  if H.is_disabled() then
+    return
+  end
+
+  -- Reset helper data
+  H.current_item_id = 1
+  H.query = ''
+
   -- Create and open buffer
   H.buf_id = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(H.buf_id)
@@ -154,13 +192,87 @@ function MiniStarter.open()
   H.apply_buffer_mappings()
   H.apply_buffer_highlighting()
 
-  -- Apply current query (if reopened, it uses latest query)
+  -- Apply current query (clear command line afterwards)
   H.make_query()
+  vim.cmd([[au BufLeave <buffer> echo '']])
+
+  -- Issue custom event
+  vim.cmd([[doautocmd User MiniStarterOpened]])
 end
 
 function MiniStarter.close()
   vim.api.nvim_buf_delete(H.buf_id, {})
   H.buf_id = nil
+end
+
+function MiniStarter.section_sessions(n, mru)
+  n = n or 5
+  mru = mru == nil and true or mru
+
+  return function()
+    if _G.MiniSessions == nil then
+      H.notify([[To use `section_sessions`, setup 'mini.sessions' (see `:h mini.sessions`).]])
+      return {}
+    end
+
+    local items = {}
+    for session_name, session in pairs(_G.MiniSessions.detected) do
+      table.insert(items, {
+        modify_time = session.modify_time,
+        name = session_name,
+        action = string.format([[lua _G.MiniSessions.load('%s')]], session_name),
+        section = 'Sessions',
+      })
+    end
+
+    if mru then
+      table.sort(items, function(a, b)
+        return a.modify_time > b.modify_time
+      end)
+    end
+
+    -- Take only first `n` elements and remove helper `modify_time`
+    return vim.tbl_map(function(x)
+      x.modify_time = nil
+      return x
+    end, vim.list_slice(items, 1, n))
+  end
+end
+
+function MiniStarter.section_mru_files(n, current_dir)
+  n = n or 5
+  current_dir = current_dir == nil and false or current_dir
+
+  return function()
+    -- Use only actual readable files
+    local files = vim.tbl_filter(function(f)
+      return vim.fn.filereadable(f) == 1
+    end, vim.v.oldfiles or {})
+
+    if #files == 0 then
+      return {}
+    end
+
+    -- Posibly filter files from current directory
+    if current_dir then
+      local cwd = vim.loop.cwd()
+      local n_cwd = cwd:len()
+      files = vim.tbl_filter(function(f)
+        return f:sub(1, n_cwd) == cwd
+      end, files)
+    end
+
+    -- Create items
+    local items = {}
+    local fmodify = vim.fn.fnamemodify
+    for _, f in ipairs(vim.list_slice(files, 1, n)) do
+      local name = string.format([[%s (%s)]], fmodify(f, ':t'), fmodify(f, ':~:.'))
+      local section = string.format([[MRU files%s]], current_dir and ' (current directory)' or '')
+      table.insert(items, { action = string.format([[edit %s]], fmodify(f, ':p')), name = name, section = section })
+    end
+
+    return items
+  end
 end
 
 function MiniStarter.eval_current_item()
@@ -183,7 +295,7 @@ function MiniStarter.update_current_item(direction)
   H.add_hl_current_item()
 end
 
-function MiniStarter.update_query(char)
+function MiniStarter.add_to_query(char)
   if char == nil then
     H.query = H.query:sub(0, H.query:len() - 1)
   else
@@ -227,7 +339,7 @@ H.ns = {
 H.hl_group_per_linetype = {
   header = 'MiniStarterHeader',
   footer = 'MiniStarterFooter',
-  group = 'MiniStarterGroup',
+  section = 'MiniStarterSection',
   item = 'MiniStarterItem',
 }
 
@@ -246,7 +358,7 @@ function H.setup_config(config)
     autoopen = { config.autoopen, 'boolean' },
 
     items = { config.items, 'table' },
-    item_prefix = { config.item_prefix, 'string' },
+    indenter = { config.indenter, 'string' },
     numerate = { config.numerate, 'boolean' },
 
     header = { config.header, H.is_fun_or_string, 'function or string' },
@@ -264,19 +376,15 @@ end
 
 function H.apply_config(config)
   MiniStarter.config = config
-
-  -- Normalize certain config values
-  H.items = H.items_enhance(H.items_sort(H.items_flatten(config.items)))
-  H.header = H.normalize_header_footer(config.header, 'header')
-  H.footer = H.normalize_header_footer(config.footer, 'footer')
-
-  -- Precompute helper information
-  H.current_item_id = 1
-  H.make_buffer_content()
 end
 
 function H.is_disabled()
   return vim.g.ministarter_disable == true or vim.b.ministarter_disable == true
+end
+
+---- Normalize config elements
+function H.normalize_items(items)
+  return H.items_enhance(H.items_sort(H.items_flatten(items)))
 end
 
 function H.normalize_header_footer(x, x_name)
@@ -332,20 +440,20 @@ function H.content_add_empty(n)
 end
 
 function H.content_add_items(items, left_pad)
-  local cur_group
+  local cur_section
   for _, item in ipairs(items) do
-    -- Possibly start new group
-    if cur_group ~= item.group then
-      -- Don't add empty line for the first group header
-      if cur_group ~= nil then
+    -- Possibly start new section
+    if cur_section ~= item.section then
+      -- Don't add empty line for the first section line
+      if cur_section ~= nil then
         H.content_add_empty(1)
       end
-      H.content_add({ item.group }, { type = 'group', start_col = left_pad + 1 }, left_pad)
-      cur_group = item.group
+      H.content_add({ item.section }, { type = 'section', start_col = left_pad + 1 }, left_pad)
+      cur_section = item.section
     end
     H.content_add(
-      { string.format('%s%s', MiniStarter.config.item_prefix, item.name) },
-      { type = 'item', start_col = left_pad + MiniStarter.config.item_prefix:len() + 1, item_id = item.id },
+      { string.format('%s%s', MiniStarter.config.indenter, item.name) },
+      { type = 'item', start_col = left_pad + MiniStarter.config.indenter:len() + 1, item_id = item.id },
       left_pad
     )
 
@@ -368,6 +476,10 @@ function H.items_flatten(items)
       return
     end
 
+    -- Expand functions immediately
+    if type(x) == 'function' then
+      x = x()
+    end
     if type(x) ~= 'table' then
       return
     end
@@ -379,22 +491,22 @@ function H.items_flatten(items)
 end
 
 function H.items_sort(items)
-  -- Order first by group and then by item id (both in order of appearence)
-  -- Gather grouped items in order of their appearence
-  local grouped, group_order = {}, {}
+  -- Order first by section and then by item id (both in order of appearence)
+  -- Gather items grouped per section in order of their appearence
+  local sections, section_order = {}, {}
   for _, item in ipairs(items) do
-    local gr = item.group
-    if group_order[gr] == nil then
-      table.insert(grouped, {})
-      group_order[gr] = #grouped
+    local sec = item.section
+    if section_order[sec] == nil then
+      table.insert(sections, {})
+      section_order[sec] = #sections
     end
-    table.insert(grouped[group_order[gr]], item)
+    table.insert(sections[section_order[sec]], item)
   end
 
   -- Unroll items in depth-first fashion
   local res = {}
-  for _, group_items in ipairs(grouped) do
-    for _, item in ipairs(group_items) do
+  for _, section_items in ipairs(sections) do
+    for _, item in ipairs(section_items) do
       table.insert(res, item)
     end
   end
@@ -413,25 +525,32 @@ function H.items_enhance(items)
     end
   end
 
-  -- Compute item queries *after* all names are enhanced
+  -- Compute item's prefix number *after* all names are enhanced
   for _, item in ipairs(items) do
-    item.query = H.compute_item_query(item, items)
+    item.nprefix = H.compute_item_nprefix(item, items)
   end
 
   return items
 end
 
-function H.compute_item_query(item, all_items)
-  for len = 1, item.name:len() do
-    local cur_res = item.name:sub(0, len)
+-- Prefix number is a length of `item.name` unique prefix among all items
+-- Uniqueness is checked ignoring case
+-- Algorithm can be optimized to not be O(n^2) but currently not worth it
+function H.compute_item_nprefix(item, all_items)
+  -- Ignore case when computing prefix number
+  local name = item.name:lower()
+
+  for n = 1, name:len() do
+    local cur_prefix = name:sub(0, n)
     local similar_items = vim.tbl_filter(function(it)
-      return it.name:sub(0, len) == cur_res
+      -- Again use `lower()` to ignore case
+      return vim.startswith(it.name:lower(), cur_prefix)
     end, all_items)
     if #similar_items == 1 then
-      return cur_res
+      return n
     end
   end
-  return item.name
+  return name:len()
 end
 
 function H.next_active_item_id(item_id, direction)
@@ -451,17 +570,17 @@ end
 function H.position_cursor_on_current_item()
   local current_line = H.items[H.current_item_id].line_num
   local start_col = H.buffer_content.lines_info[current_line].start_col
-  vim.api.nvim_win_set_cursor(0, { current_line, start_col - 1 - MiniStarter.config.item_prefix:len() })
+  vim.api.nvim_win_set_cursor(0, { current_line, start_col - 1 - MiniStarter.config.indenter:len() })
 end
 
 --- Work with queries
 function H.make_query(query)
-  query = query or H.query
+  -- Ignore case
+  query = (query or H.query):lower()
 
-  -- Active is active = item's name starts with query
-  local query_n_string = query:len()
+  -- Item is active = item's name starts with query (ignoring case)
   for _, item in ipairs(H.items) do
-    item.active = item.name:sub(0, query_n_string) == query
+    item.active = vim.startswith(item.name:lower(), query)
   end
 
   -- Update activity highlighting
@@ -483,7 +602,8 @@ function H.make_query(query)
   if no_active then
     msg = string.format('%s . There is no active items. Use <BS> to delete symbols from query.', msg)
   end
-  H.notify(msg)
+  ---- Use `echo` because it doesn't write to `:messages`
+  vim.cmd(string.format([[echo '(mini.starter) %s']], vim.fn.escape(msg, [[']])))
 end
 
 ---- Work with starter buffer
@@ -513,21 +633,28 @@ function H.apply_buffer_options()
     [[nomodifiable]],
     [[foldlevel=999]],
   }
-  -- Using Vim's `setlocal` is currently more robust comparing to `opt_local`
+  ---- Vim's `setlocal` is currently more robust comparing to `opt_local`
   vim.cmd(string.format([[silent! noautocmd setlocal %s]], table.concat(options, ' ')))
+
+  -- Hide tabline (but not statusline as it weirdly feels 'naked' without it)
+  vim.cmd(string.format([[au BufLeave <buffer> set showtabline=%s]], vim.o.showtabline))
+  vim.o.showtabline = 0
 end
 
 function H.apply_buffer_mappings()
   H.buf_keymap('<CR>', [[MiniStarter.eval_current_item()]])
+
   H.buf_keymap('<Up>', [[MiniStarter.update_current_item('prev')]])
+  H.buf_keymap('<M-k>', [[MiniStarter.update_current_item('prev')]])
   H.buf_keymap('<Down>', [[MiniStarter.update_current_item('next')]])
+  H.buf_keymap('<M-j>', [[MiniStarter.update_current_item('next')]])
 
   -- Make all special symbols to update query
   for _, key in ipairs(vim.split(MiniStarter.config.query_updaters, '')) do
-    H.buf_keymap(key, string.format([[MiniStarter.update_query('%s')]], key))
+    H.buf_keymap(key, string.format([[MiniStarter.add_to_query('%s')]], key))
   end
 
-  H.buf_keymap('<BS>', [[MiniStarter.update_query()]])
+  H.buf_keymap('<BS>', [[MiniStarter.add_to_query()]])
   H.buf_keymap('<C-c>', [[MiniStarter.close()]])
 end
 
@@ -537,18 +664,18 @@ function H.apply_buffer_highlighting()
 end
 
 function H.add_hl_general()
-  local n_prefix = MiniStarter.config.item_prefix:len()
+  local n_indent = MiniStarter.config.indenter:len()
   for i, info in ipairs(H.buffer_content.lines_info) do
     local s = info.start_col
-    if info.type == 'item' and n_prefix > 0 then
-      H.buf_hl(H.ns.general, 'MiniStarterPrefix', i - 1, s - n_prefix - 1, s - 2)
+    if info.type == 'item' and n_indent > 0 then
+      H.buf_hl(H.ns.general, 'MiniStarterIndenter', i - 1, s - n_indent - 1, s - 2)
     end
     if info.type ~= 'empty' then
       H.buf_hl(H.ns.general, H.hl_group_per_linetype[info.type], i - 1, s - 1, -1)
     end
     if info.type == 'item' then
-      local n_item_query = H.items[info.item_id].query:len()
-      H.buf_hl(H.ns.general, 'MiniStarterItemQuery', i - 1, s - 1, s + n_item_query - 1)
+      local nprefix = H.items[info.item_id].nprefix
+      H.buf_hl(H.ns.general, 'MiniStarterItemPrefix', i - 1, s - 1, s + nprefix - 1)
     end
   end
 end
@@ -578,9 +705,9 @@ end
 
 function H.is_item(x)
   return type(x) == 'table'
-    and type(x['name']) == 'string'
     and H.is_fun_or_string(x['action'])
-    and type(x['group']) == 'string'
+    and type(x['name']) == 'string'
+    and type(x['section']) == 'string'
 end
 
 ---- Utilities
@@ -614,47 +741,61 @@ function H.notify(msg)
 end
 
 _G.test_items = {
-  { name = [[Load 'nvim-config']], action = [[lua MiniSessions.load('nvim-config')]], group = 'Sessions' },
-
-  -- Group 1 (nested)
+  -- Section 1 (nested)
   {
-    { name = 'G1A1', action = [[echo 'G1A1']], group = 'Group 1' },
+    { name = 'G1A1', action = [[echo 'G1A1']], section = 'Section 1' },
   },
-  -- Groups 2 and 3 (double nested)
+  -- Sections 2 and 3 (double nested)
   {
     {
-      { name = 'G2A1', action = [[echo 'G2A1']], group = 'Group 2' },
-      { name = 'G2B2', action = [[echo 'G2B2']], group = 'Group 2' },
+      {
+        name = 'G2A1',
+        action = function()
+          print('Function action is success')
+        end,
+        section = 'Section 2',
+      },
+      { name = 'G2B2', action = [[echo 'G2B2']], section = 'Section 2' },
     },
     {
-      { name = 'G3A1', action = [[echo 'G3A1']], group = 'Group 3' },
-      { name = 'G3B2', action = [[echo 'G3B2']], group = 'Group 3' },
-      { name = 'G3C3', action = [[echo 'G3C3']], group = 'Group 3' },
+      { name = 'G3A1', action = [[echo 'G3A1']], section = 'Section 3' },
+      function()
+        return {
+          { name = 'G3B2', action = [[echo 'G3B2']], section = 'Section 3' },
+          { name = 'G3C3', action = [[echo 'G3C3']], section = 'Section 3' },
+        }
+      end,
     },
   },
-  -- Group 4 (direct)
-  { name = 'G4A1', action = [[echo 'G4A1']], group = 'Group 4' },
-  { name = 'G4B2', action = [[echo 'G4B2']], group = 'Group 4' },
-  { name = 'G4C3', action = [[echo 'G4C3']], group = 'Group 4' },
-  { name = 'G4D4', action = [[echo 'G4D4']], group = 'Group 4' },
+  -- Section 4 (direct)
+  { name = 'G4A1', action = [[echo 'G4A1']], section = 'Section 4' },
+  { name = 'G4B2', action = [[echo 'G4B2']], section = 'Section 4' },
+  { name = 'G4C3', action = [[echo 'G4C3']], section = 'Section 4' },
+  { name = 'G4D4', action = [[echo 'G4D4']], section = 'Section 4' },
 
-  -- Ungrouped (should be ignored)
+  -- Without section (should be ignored)
   { name = 'G_A1', action = [[echo 'G_A1']] },
   { name = 'G_B2', action = [[echo 'G_B2']] },
 
-  -- Already present groups to test grouping
-  { name = 'G2C3', action = [[echo 'G2C3']], group = 'Group 2' },
-  { name = 'G1B2', action = [[echo 'G1B2']], group = 'Group 1' },
-  { name = 'G3D4', action = [[echo 'G3D4']], group = 'Group 3' },
-  { name = 'G4E5', action = [[echo 'G4E5']], group = 'Group 4' },
+  -- Already present sections to test grouping
+  {
+    { name = 'G2C3', action = [[echo 'G2C3']], section = 'Section 2' },
+    { name = 'G1B2', action = [[echo 'G1B2']], section = 'Section 1' },
+    { name = 'G3D4', action = [[echo 'G3D4']], section = 'Section 3' },
+    {
+      function()
+        return { name = 'G4E5', action = [[echo 'G4E5']], section = 'Section 4' }
+      end,
+    },
+  },
 
   -- Multiline names
-  { name = 'G5A1\n\n', action = [[echo 'G5A1']], group = 'Group 5' },
+  { name = 'G5A1\n\n', action = [[echo 'G5A1']], section = 'Section 5' },
   {
     name = [[G5
     B2]],
     action = [[echo 'G5B2']],
-    group = 'Group 5',
+    section = 'Section 5',
   },
 }
 

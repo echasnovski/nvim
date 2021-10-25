@@ -1,7 +1,24 @@
 require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
+-- -- 'vim-startify'
+-- require('mini-dev.starter').setup({
+--   items = {
+--     {
+--       { action = [[enew]], name = 'Edit file', section = 'Actions' },
+--       { action = [[quit]], name = 'Quit', section = 'Actions' },
+--     },
+--     require('mini-dev.starter').section_mru_files(10, false),
+--     require('mini-dev.starter').section_mru_files(10, true),
+--   },
+--   numerate = true,
+-- })
+
 require('mini-dev.starter').setup({
-  items = _G.test_items,
+  items = {
+    require('mini-dev.starter').section_sessions(5, true),
+    require('mini-dev.starter').section_mru_files(5, false),
+    _G.test_items,
+  },
 })
 
 require('mini.statusline').setup({
