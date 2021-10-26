@@ -1,25 +1,37 @@
 require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
+local starter = require('mini-dev.starter')
+starter.setup({
+  autoopen = true,
+  items = {
+    starter.section_sessions(5, true),
+    starter.section_mru_files(5, false, false),
+    _G.test_items,
+  },
+  content_hooks = {
+    starter.get_hook_item_bullets('│ ', true),
+    starter.get_hook_indexing('section', { 'Sessions', 'Section 2' }),
+    starter.get_hook_centering(),
+  },
+})
+
 -- -- 'vim-startify'
--- require('mini-dev.starter').setup({
+-- local starter = require('mini-dev.starter')
+-- starter.setup({
 --   items = {
 --     {
 --       { action = [[enew]], name = 'Edit file', section = 'Actions' },
 --       { action = [[quit]], name = 'Quit', section = 'Actions' },
 --     },
---     require('mini-dev.starter').section_mru_files(10, false),
---     require('mini-dev.starter').section_mru_files(10, true),
+--     starter.section_mru_files(10, false),
+--     starter.section_mru_files(10, true),
 --   },
---   numerate = true,
+--   content_hooks = {
+--     starter.get_hook_item_bullets(),
+--     starter.get_hook_index('all', { 'Actions' }),
+--     starter.get_hook_padding(3, 2),
+--   },
 -- })
-
-require('mini-dev.starter').setup({
-  items = {
-    require('mini-dev.starter').section_sessions(5, true),
-    require('mini-dev.starter').section_mru_files(5, false),
-    _G.test_items,
-  },
-})
 
 require('mini.statusline').setup({
   content = {

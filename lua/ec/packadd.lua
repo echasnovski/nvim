@@ -46,6 +46,7 @@ if vim.fn.exists('vscode') ~= 1 then
 
   -- Start screen and session manager
   -- packadd('vim-startify')
+  -- packadd('alpha-nvim')
 
   -- Updater of current working directory
   packadd('vim-rooter')

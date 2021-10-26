@@ -36,8 +36,8 @@
 --- - `MiniStarterFooter` - footer lines.
 --- - `MiniStarterHeader` - header lines.
 --- - `MiniStarterInactive` - inactive item.
---- - `MiniStarterIndenter` - string displayed before item name.
 --- - `MiniStarterItem` - item name.
+--- - `MiniStarterItemBullet` - string displayed before item name.
 --- - `MiniStarterItemPrefix` - unique query for item.
 --- - `MiniStarterSection` - section lines.
 --- - `MiniStarterQuery` - current query in active items.
@@ -82,8 +82,8 @@ function MiniStarter.setup(config)
       hi default link MiniStarterFooter     Title
       hi default link MiniStarterHeader     Title
       hi default link MiniStarterInactive   Comment
-      hi default link MiniStarterIndenter   Delimiter
       hi default link MiniStarterItem       Normal
+      hi default link MiniStarterItemBullet Delimiter
       hi default link MiniStarterItemPrefix WarningMsg
       hi default link MiniStarterSection    Delimiter
       hi default link MiniStarterQuery      MoreMsg]],
@@ -101,13 +101,6 @@ MiniStarter.config = {
   -- - Function: should return one of these three categories.
   -- - List: elements from these three categories (i.e. item, list, function).
   items = {},
-
-  -- String to be displayed in front of every item to visually separate them
-  -- from section name
-  indenter = '│ ',
-
-  -- Whether to prepend item name with unique sequential number
-  numerate = false,
 
   -- Header to be displayed before items. Should be a string or function
   -- evaluating to string.
@@ -131,8 +124,10 @@ MiniStarter.config = {
     '<C-c> closes this buffer',
   }, '\n'),
 
-  -- Padding from left and top
-  padding = { left = 3, top = 2 },
+  -- List (table suitable for `ipairs()`) of functions to be applied
+  -- consecutively to initial content. Each function should take and return
+  -- content for 'Starter' buffer (see |mini.starter| for more details).
+  content_hooks = nil,
 
   -- Characters to update query. Each character will have special buffer
   -- mapping overriding your global ones. Be careful to not add `:` as it
@@ -147,16 +142,6 @@ MiniStarter.config = {
 --- - Compute content of 'Starter' buffer.
 --- - Possibly autoopen buffer.
 function MiniStarter.on_vimenter()
-  local config = MiniStarter.config
-
-  -- Normalize certain config values
-  H.items = H.normalize_items(config.items)
-  H.header = H.normalize_header_footer(config.header, 'header')
-  H.footer = H.normalize_header_footer(config.footer, 'footer')
-
-  -- Precompute helper information
-  H.make_buffer_content()
-
   -- Possibly autoopen
   if MiniStarter.config.autoopen and vim.fn.argc() == 0 then
     MiniStarter.open()
@@ -180,24 +165,57 @@ function MiniStarter.open()
   H.buf_id = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(H.buf_id)
 
-  -- Add content
-  vim.api.nvim_buf_set_lines(H.buf_id, 0, -1, false, H.buffer_content.lines)
-
-  -- Always position cursor on current item
-  H.position_cursor_on_current_item()
-  vim.cmd([[au CursorMoved <buffer> lua MiniStarter.on_cursormoved()]])
-
   -- Setup buffer behavior
   H.apply_buffer_options()
   H.apply_buffer_mappings()
-  H.apply_buffer_highlighting()
-
-  -- Apply current query (clear command line afterwards)
-  H.make_query()
+  vim.cmd([[au VimResized <buffer> lua MiniStarter.refresh()]])
+  vim.cmd([[au CursorMoved <buffer> lua MiniStarter.on_cursormoved()]])
   vim.cmd([[au BufLeave <buffer> echo '']])
+
+  -- Populate buffer
+  MiniStarter.refresh()
 
   -- Issue custom event
   vim.cmd([[doautocmd User MiniStarterOpened]])
+end
+
+function MiniStarter.refresh()
+  if H.is_disabled() then
+    return
+  end
+
+  -- Normalize certain config values.
+  -- NOTE: having this inside `refresh()` and not in `on_vimenter()` allows to:
+  -- - React on change in items during runtime (adding, deleting).
+  -- - Evaluate items, header and footer on every `refresh()`. TODO: This might
+  --   be both good and bad thing. Might want to reconsider.
+  H.items = H.normalize_items(MiniStarter.config.items)
+  H.header = H.normalize_header_footer(MiniStarter.config.header, 'header')
+  H.footer = H.normalize_header_footer(MiniStarter.config.footer, 'footer')
+
+  -- Evaluate content
+  H.make_initial_content()
+  local hooks = MiniStarter.config.content_hooks or H.default_content_hooks
+  for _, f in ipairs(hooks) do
+    H.content = f(H.content)
+  end
+  H.items_enhance()
+
+  -- Add content
+  vim.api.nvim_buf_set_option(H.buf_id, 'modifiable', true)
+  vim.api.nvim_buf_set_lines(H.buf_id, 0, -1, false, H.content_to_lines())
+  vim.api.nvim_buf_set_option(H.buf_id, 'modifiable', false)
+
+  -- Add highlighting
+  H.content_highlight()
+  H.items_highlight()
+
+  -- -- Always position cursor on current item
+  H.position_cursor_on_current_item()
+  H.add_hl_current_item()
+
+  -- Apply current query (clear command line afterwards)
+  H.make_query()
 end
 
 function MiniStarter.close()
@@ -239,9 +257,10 @@ function MiniStarter.section_sessions(n, mru)
   end
 end
 
-function MiniStarter.section_mru_files(n, current_dir)
+function MiniStarter.section_mru_files(n, current_dir, show_path)
   n = n or 5
   current_dir = current_dir == nil and false or current_dir
+  show_path = show_path == nil and true or show_path
 
   return function()
     -- Use only actual readable files
@@ -253,7 +272,7 @@ function MiniStarter.section_mru_files(n, current_dir)
       return {}
     end
 
-    -- Posibly filter files from current directory
+    -- Possibly filter files from current directory
     if current_dir then
       local cwd = vim.loop.cwd()
       local n_cwd = cwd:len()
@@ -266,12 +285,130 @@ function MiniStarter.section_mru_files(n, current_dir)
     local items = {}
     local fmodify = vim.fn.fnamemodify
     for _, f in ipairs(vim.list_slice(files, 1, n)) do
-      local name = string.format([[%s (%s)]], fmodify(f, ':t'), fmodify(f, ':~:.'))
+      local path = show_path and string.format([[ (%s)]], fmodify(f, ':~:.')) or ''
+      local name = string.format([[%s%s]], fmodify(f, ':t'), path)
       local section = string.format([[MRU files%s]], current_dir and ' (current directory)' or '')
       table.insert(items, { action = string.format([[edit %s]], fmodify(f, ':p')), name = name, section = section })
     end
 
     return items
+  end
+end
+
+function MiniStarter.get_hook_padding(left, top)
+  left = math.max(left or 0, 0)
+  top = math.max(top or 0, 0)
+  return function(content)
+    -- Add left padding
+    local left_pad = string.rep(' ', left)
+    content = vim.tbl_map(function(l)
+      table.insert(l, 1, H.content_block(left_pad, 'empty', nil))
+      return l
+    end, content)
+
+    -- Add top padding
+    local top_lines = {}
+    for _ = 1, top do
+      table.insert(top_lines, { H.content_block('', 'empty', nil) })
+    end
+    content = vim.list_extend(top_lines, content)
+
+    return content
+  end
+end
+
+function MiniStarter.get_hook_item_bullets(bullet, place_cursor)
+  bullet = bullet or '│ '
+  place_cursor = place_cursor == nil and true or place_cursor
+  return function(content)
+    -- Track visited items to avoid infinite loop as bullets are inserted
+    -- in-place before item at the moment of item detection
+    local items_visited = {}
+    for _, content_line in ipairs(content) do
+      for bl_num, block in ipairs(content_line) do
+        if block.type == 'item' and not items_visited[block._item_id] then
+          local bullet_block = {
+            string = bullet,
+            type = 'item_bullet',
+            hl = 'MiniStarterItemBullet',
+            _item_id = block._item_id,
+            _place_cursor = place_cursor,
+          }
+          table.insert(content_line, bl_num, bullet_block)
+          items_visited[block._item_id] = true
+        end
+      end
+    end
+
+    return content
+  end
+end
+
+function MiniStarter.get_hook_indexing(grouping, exclude_sections)
+  grouping = grouping or 'all'
+  exclude_sections = exclude_sections or {}
+  local per_section = grouping == 'section'
+
+  local update_block = function(block, cur_section, n_section, n_item)
+    if block.type ~= 'item' then
+      return cur_section, n_section, n_item
+    end
+
+    local item = H.items[block._item_id]
+    if vim.tbl_contains(exclude_sections, item.section) then
+      return cur_section, n_section, n_item
+    end
+
+    n_item = n_item + 1
+    if cur_section ~= item.section then
+      cur_section = item.section
+      -- Cycle through lower case letters
+      n_section = math.fmod(n_section, 26) + 1
+      n_item = per_section and 1 or n_item
+    end
+
+    local section_index = per_section and string.char(96 + n_section) or ''
+    block.string = string.format([[%s%s. %s]], section_index, n_item, block.string)
+
+    return cur_section, n_section, n_item
+  end
+
+  return function(content)
+    local cur_section, n_section, n_item = nil, 0, 0
+    for _, content_line in ipairs(content) do
+      for _, block in ipairs(content_line) do
+        -- Update block in-place
+        cur_section, n_section, n_item = update_block(block, cur_section, n_section, n_item)
+      end
+    end
+
+    return content
+  end
+end
+
+function MiniStarter.get_hook_centering(horizontal, vertical)
+  horizontal = horizontal == nil and true or horizontal
+  vertical = vertical == nil and true or vertical
+  return function(content)
+    local win_width, win_height = vim.fn.winwidth(0), vim.fn.winheight(0)
+    local lines = H.content_to_lines(content)
+
+    -- Possibly center horizontally
+    local left_pad = 0
+    if horizontal then
+      -- Don't use `string.len()` to account for multibyte characters
+      local lines_width = vim.tbl_map(function(l) return vim.fn.strdisplaywidth(l) end, lines)
+      local max_line_width = math.max(unpack(lines_width))
+      left_pad = math.max(math.floor(0.5 * (win_width - max_line_width)), 0)
+    end
+
+    -- Possibly center vertically
+    local top_pad = 0
+    if vertical then
+      top_pad = math.max(math.floor(0.5 * (win_height - #lines)), 0)
+    end
+
+    return MiniStarter.get_hook_padding(left_pad, top_pad)(content)
   end
 end
 
@@ -311,6 +448,7 @@ end
 -- Helper data
 ---- Module default config
 H.default_config = MiniStarter.config
+H.default_content_hooks = { MiniStarter.get_hook_item_bullets(), MiniStarter.get_hook_padding(3, 2) }
 
 ---- Normalized values from config
 H.items = {} -- flattened and sorted items
@@ -335,14 +473,6 @@ H.ns = {
   general = vim.api.nvim_create_namespace(''),
 }
 
----- Names of highlight groups for content line types (`lines_info[i].type`)
-H.hl_group_per_linetype = {
-  header = 'MiniStarterHeader',
-  footer = 'MiniStarterFooter',
-  section = 'MiniStarterSection',
-  item = 'MiniStarterItem',
-}
-
 ---- Current search query
 H.query = ''
 
@@ -358,15 +488,10 @@ function H.setup_config(config)
     autoopen = { config.autoopen, 'boolean' },
 
     items = { config.items, 'table' },
-    indenter = { config.indenter, 'string' },
-    numerate = { config.numerate, 'boolean' },
-
     header = { config.header, H.is_fun_or_string, 'function or string' },
     footer = { config.footer, H.is_fun_or_string, 'function or string' },
 
-    padding = { config.padding, 'table' },
-    ['padding.left'] = { config.padding.left, 'number' },
-    ['padding.top'] = { config.padding.top, 'number' },
+    content_hooks = { config.content_hooks, 'table', true },
 
     query_updaters = { config.query_updaters, 'string' },
   })
@@ -384,7 +509,7 @@ end
 
 ---- Normalize config elements
 function H.normalize_items(items)
-  return H.items_enhance(H.items_sort(H.items_flatten(items)))
+  return H.items_sort(H.items_flatten(items))
 end
 
 function H.normalize_header_footer(x, x_name)
@@ -400,65 +525,77 @@ function H.normalize_header_footer(x, x_name)
 end
 
 ---- Work with buffer content
-function H.make_buffer_content(left_pad, top_pad)
-  left_pad = left_pad or math.max(MiniStarter.config.padding.left, 0)
-  top_pad = top_pad or math.max(MiniStarter.config.padding.top, 0)
+function H.make_initial_content()
+  H.content = {}
 
-  H.buffer_content = { lines = {}, lines_info = {} }
-
-  H.content_add_empty(top_pad)
-
-  H.content_add(H.header, { type = 'header', start_col = left_pad + 1 }, left_pad)
-  if vim.tbl_count(H.header) > 0 then
-    H.content_add_empty(1)
+  -- Add header lines
+  for _, l in ipairs(H.header) do
+    H.content_add_line({ H.content_block(l, 'header', 'MiniStarterHeader') })
   end
+  H.content_add_empty_lines(#H.header > 0 and 1 or 0)
 
-  H.content_add_items(H.items, left_pad)
+  -- Add item lines
+  H.content_add_items()
 
-  if vim.tbl_count(H.footer) > 0 then
-    H.content_add_empty(1)
-  end
-  H.content_add(H.footer, { type = 'footer', start_col = left_pad + 1 }, left_pad)
-end
-
-function H.content_add(lines, info, left_pad)
-  local pad_string = string.rep(' ', left_pad or 0)
-
-  for _, l in ipairs(lines) do
-    table.insert(H.buffer_content.lines, string.format('%s%s', pad_string, l))
-    table.insert(H.buffer_content.lines_info, info)
+  -- Add footer lines
+  H.content_add_empty_lines(#H.footer > 0 and 1 or 0)
+  for _, l in ipairs(H.footer) do
+    H.content_add_line({ H.content_block(l, 'footer', 'MiniStarterFooter') })
   end
 end
 
-function H.content_add_empty(n)
-  local t = {}
+function H.content_block(string, type, hl, extra)
+  return vim.tbl_extend('force', { string = string, type = type, hl = hl }, extra or {})
+end
+
+function H.content_add_line(content_line)
+  table.insert(H.content, content_line)
+end
+
+function H.content_add_empty_lines(n)
   for _ = 1, n do
-    table.insert(t, '')
+    H.content_add_line({ H.content_block('', 'empty', nil) })
   end
-
-  H.content_add(t, { type = 'empty', start_col = 0 })
 end
 
-function H.content_add_items(items, left_pad)
+function H.content_add_items()
   local cur_section
-  for _, item in ipairs(items) do
-    -- Possibly start new section
+  for i, item in ipairs(H.items) do
+    -- Possibly add section line
     if cur_section ~= item.section then
-      -- Don't add empty line for the first section line
-      if cur_section ~= nil then
-        H.content_add_empty(1)
-      end
-      H.content_add({ item.section }, { type = 'section', start_col = left_pad + 1 }, left_pad)
+      -- Don't add empty line before first section line
+      H.content_add_empty_lines(cur_section == nil and 0 or 1)
+      H.content_add_line({ H.content_block(item.section, 'section', 'MiniStarterSection') })
       cur_section = item.section
     end
-    H.content_add(
-      { string.format('%s%s', MiniStarter.config.indenter, item.name) },
-      { type = 'item', start_col = left_pad + MiniStarter.config.indenter:len() + 1, item_id = item.id },
-      left_pad
-    )
 
-    -- Add (by reference) tracking information to items
-    item.line_num = #H.buffer_content.lines
+    H.content_add_line({ H.content_block(item.name, 'item', 'MiniStarterItem', { _item_id = i }) })
+  end
+end
+
+-- stylua: ignore start
+function H.content_to_lines(content)
+  return vim.tbl_map(
+    function(content_line)
+      return table.concat(
+        vim.tbl_map(function(x) return x.string:gsub('\n', ' ') end, content_line), ''
+      )
+    end,
+    content or H.content
+  )
+end
+-- stylua: ignore end
+
+function H.content_highlight()
+  for l_num, content_line in ipairs(H.content) do
+    -- Track 0-based starting column of current block (using byte length)
+    local start_col = 0
+    for _, block in ipairs(content_line) do
+      if block.hl ~= nil then
+        H.buf_hl(H.ns.general, block.hl, l_num - 1, start_col, start_col + block.string:len())
+      end
+      start_col = start_col + block.string:len()
+    end
   end
 end
 
@@ -467,12 +604,8 @@ function H.items_flatten(items)
   local res, f = {}, nil
   f = function(x)
     if H.is_item(x) then
-      -- Add some helper fields to items
-      -- Use deepcopy to allow adding fields to items without them changing
-      local t = vim.deepcopy(x)
-      t.active = true
-
-      table.insert(res, t)
+      -- Use deepcopy to allow adding fields to items without changing original
+      table.insert(res, vim.deepcopy(x))
       return
     end
 
@@ -514,23 +647,46 @@ function H.items_sort(items)
   return res
 end
 
-function H.items_enhance(items)
-  -- Add data by reference
-  for i, item in ipairs(items) do
-    item.id = i
-    -- Ensure single line name
-    item.name = item.name:gsub('\n', ' ')
-    if MiniStarter.config.numerate then
-      item.name = string.format('%s. %s', i, item.name)
+function H.items_enhance()
+  -- Get data from content
+  local item_cursorpos = {}
+  for l_num, content_line in ipairs(H.content) do
+    -- Track 0-based starting column of current block (using byte length)
+    local start_col = 0
+    for _, block in ipairs(content_line) do
+      -- Cursor position is (1, 0)-based
+      local cursorpos = { l_num, start_col }
+
+      if block.type == 'item' then
+        local id = block._item_id
+        H.items[id].name = block.string:gsub('\n', ' ')
+        H.items[id]._line = l_num - 1
+        H.items[id]._start_col = start_col
+        H.items[id]._end_col = start_col + block.string:len()
+
+        -- Don't overwrite possible cursor position from item's bullet
+        item_cursorpos[block._item_id] = item_cursorpos[block._item_id] or cursorpos
+      end
+
+      -- Prefer placing cursor at start of item's bullet
+      if block.type == 'item_bullet' and block._place_cursor then
+        item_cursorpos[block._item_id] = cursorpos
+      end
+
+      start_col = start_col + block.string:len()
     end
   end
 
-  -- Compute item's prefix number *after* all names are enhanced
-  for _, item in ipairs(items) do
-    item.nprefix = H.compute_item_nprefix(item, items)
+  for id, item in ipairs(H.items) do
+    H.items[id]._cursorpos = item_cursorpos[id]
+    H.items[id]._nprefix = H.compute_item_nprefix(item, H.items)
   end
+end
 
-  return items
+function H.items_highlight()
+  for _, item in ipairs(H.items) do
+    H.buf_hl(H.ns.general, 'MiniStarterItemPrefix', item._line, item._start_col, item._start_col + item._nprefix)
+  end
 end
 
 -- Prefix number is a length of `item.name` unique prefix among all items
@@ -559,8 +715,9 @@ function H.next_active_item_id(item_id, direction)
   local n_items = vim.tbl_count(H.items)
   local increment = direction == 'next' and 1 or (n_items - 1)
 
+  -- Increment modulo `n` but for 1-based indexing
   id = math.fmod(id + increment - 1, n_items) + 1
-  while not (H.items[id].active or id == item_id) do
+  while not (H.items[id]._active or id == item_id) do
     id = math.fmod(id + increment - 1, n_items) + 1
   end
 
@@ -568,9 +725,7 @@ function H.next_active_item_id(item_id, direction)
 end
 
 function H.position_cursor_on_current_item()
-  local current_line = H.items[H.current_item_id].line_num
-  local start_col = H.buffer_content.lines_info[current_line].start_col
-  vim.api.nvim_win_set_cursor(0, { current_line, start_col - 1 - MiniStarter.config.indenter:len() })
+  vim.api.nvim_win_set_cursor(0, H.items[H.current_item_id]._cursorpos)
 end
 
 --- Work with queries
@@ -580,7 +735,7 @@ function H.make_query(query)
 
   -- Item is active = item's name starts with query (ignoring case)
   for _, item in ipairs(H.items) do
-    item.active = vim.startswith(item.name:lower(), query)
+    item._active = vim.startswith(item.name:lower(), query)
   end
 
   -- Update activity highlighting
@@ -589,12 +744,10 @@ function H.make_query(query)
 
   -- Move to next active item if current is not active
   local no_active = false
-  if not H.items[H.current_item_id].active then
+  if not H.items[H.current_item_id]._active then
     local prev_current = H.current_item_id
     MiniStarter.update_current_item('next')
-    if prev_current == H.current_item_id then
-      no_active = true
-    end
+    no_active = prev_current == H.current_item_id
   end
 
   -- Notify about new query
@@ -658,44 +811,22 @@ function H.apply_buffer_mappings()
   H.buf_keymap('<C-c>', [[MiniStarter.close()]])
 end
 
-function H.apply_buffer_highlighting()
-  H.add_hl_general()
-  H.add_hl_current_item()
-end
-
-function H.add_hl_general()
-  local n_indent = MiniStarter.config.indenter:len()
-  for i, info in ipairs(H.buffer_content.lines_info) do
-    local s = info.start_col
-    if info.type == 'item' and n_indent > 0 then
-      H.buf_hl(H.ns.general, 'MiniStarterIndenter', i - 1, s - n_indent - 1, s - 2)
-    end
-    if info.type ~= 'empty' then
-      H.buf_hl(H.ns.general, H.hl_group_per_linetype[info.type], i - 1, s - 1, -1)
-    end
-    if info.type == 'item' then
-      local nprefix = H.items[info.item_id].nprefix
-      H.buf_hl(H.ns.general, 'MiniStarterItemPrefix', i - 1, s - 1, s + nprefix - 1)
-    end
-  end
-end
-
 function H.add_hl_activity(query)
   for _, item in ipairs(H.items) do
-    local line_num = item.line_num
-    local s = H.buffer_content.lines_info[line_num].start_col
-    if item.active then
-      H.buf_hl(H.ns.activity, 'MiniStarterQuery', line_num - 1, s - 1, s + query:len() - 1)
+    local l = item._line
+    local s = item._start_col
+    local e = item._end_col
+    if item._active then
+      H.buf_hl(H.ns.activity, 'MiniStarterQuery', l, s, s + query:len())
     else
-      H.buf_hl(H.ns.activity, 'MiniStarterInactive', line_num - 1, s - 1, -1)
+      H.buf_hl(H.ns.activity, 'MiniStarterInactive', l, s, e)
     end
   end
 end
 
 function H.add_hl_current_item()
-  local line = H.items[H.current_item_id].line_num
-  local start_col = H.buffer_content.lines_info[line].start_col
-  H.buf_hl(H.ns.current_item, 'MiniStarterCurrent', line - 1, start_col - 1, -1)
+  local cur_item = H.items[H.current_item_id]
+  H.buf_hl(H.ns.current_item, 'MiniStarterCurrent', cur_item._line, cur_item._start_col, cur_item._end_col)
 end
 
 ---- Predicates
