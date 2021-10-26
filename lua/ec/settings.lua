@@ -40,7 +40,6 @@ vim.opt.linebreak     = true  -- Wrap long lines at 'breakat' (if 'wrap' is set)
 ---- See https://github.com/vim/vim/issues/3412#issuecomment-641041755
 vim.opt.shortmess:append('c') -- Don't pass messages to 'ins-completion-menu'
 vim.opt.showmode = true  -- Show mode in command line to prevent messages like 'Scanning ...'
-vim.cmd([[au ColorScheme * lua EC.mask_showmode()]]) -- Hide 'showmode' messages by masking
 
 -- Colors
 vim.opt.background = 'dark'         -- Use dark background
