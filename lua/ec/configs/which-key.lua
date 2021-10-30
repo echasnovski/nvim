@@ -28,7 +28,9 @@ local function tree_remove_cmd(tree)
     end
 
     -- If command's name is present, return it
-    if type(t[2]) == 'string' then return t[2] end
+    if type(t[2]) == 'string' then
+      return t[2]
+    end
 
     -- Otherwise further traverse tree
     return tree_remove_cmd(t)

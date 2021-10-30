@@ -162,6 +162,10 @@ Important system dependencies:
 
 - **Language Server Protocols**. These should be handled manually. For a list of needed LSP providers look at settings for 'nvim-lspconfig'.
 
+- **Pre-commit hooks** (not strictly necessary but "good to have"). This repository uses pre-commit hooks to verify integrity of code. Preferred way of setting this up:
+    - Install `pre-commit`. Preferred way is to use [pipx](https://github.com/pypa/pipx) with `pipx install pre-commit`. There also [other options](https://pre-commit.com/#install).
+    - From the root of this repository run `pre-commit install`. This enables pre-commit checks. Now they will be run before any commit. In case they did something, you need to `git add` those changes before commiting will become allowed.
+
 ## Notes
 
 - Important dependency is `pynvim` Python package. Path to Python executable for which it is installed should be changed in 'settings.lua' as 'g:python3_host_prog' variable.

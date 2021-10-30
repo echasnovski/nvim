@@ -4,7 +4,7 @@
 -- - When using highlight group like `cterm=underline gui=underline`, it
 --   sometimes changes foreground color defined in default syntax and not in
 --   treesitter.
-if vim.fn.exists("syntax_on") ~= 1 then
+if vim.fn.exists('syntax_on') ~= 1 then
   vim.cmd([[syntax enable]])
 end
 

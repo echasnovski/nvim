@@ -397,7 +397,9 @@ function MiniStarter.get_hook_centering(horizontal, vertical)
     local left_pad = 0
     if horizontal then
       -- Don't use `string.len()` to account for multibyte characters
-      local lines_width = vim.tbl_map(function(l) return vim.fn.strdisplaywidth(l) end, lines)
+      local lines_width = vim.tbl_map(function(l)
+        return vim.fn.strdisplaywidth(l)
+      end, lines)
       local max_line_width = math.max(unpack(lines_width))
       left_pad = math.max(math.floor(0.5 * (win_width - max_line_width)), 0)
     end

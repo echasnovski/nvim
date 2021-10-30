@@ -38,7 +38,7 @@ EC.generate_plugin_doc = function(script_path)
   local cmd_table = {
     'nvim --headless --noplugin',
     '-u ~/.config/nvim/misc/scripts/docgen_init.vim',
-    [[-c 'luafile %s' -c 'qa']]
+    [[-c 'luafile %s' -c 'qa']],
   }
   local cmd = string.format(table.concat(cmd_table, ' '), script_path)
   vim.cmd('!' .. cmd)
