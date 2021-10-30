@@ -5,4 +5,4 @@ repos:
         name: StyLua
         language: rust
         entry: stylua
-        files: 'lua/*'
+        types: [lua]
