@@ -1,7 +1,7 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
 
 ---@brief [[
---- Lua module for minimal session management (load, save, delete), which
+--- Lua module for minimal session management (read, write, delete), which
 --- works using |mksession| (meaning 'sessionoptions' is fully respected).
 --- This is intended as a drop-in Lua replacement for session management part
 --- of [mhinz/vim-startify](https://github.com/mhinz/vim-startify) (works out
@@ -17,8 +17,8 @@
 ---   information changes, there will be no effect until next detection.
 ---
 --- Features:
---- - Autoload latest session if Neovim was called without file arguments.
---- - Autosave current session before quitting Neovim.
+--- - Autoread latest session if Neovim was called without file arguments.
+--- - Autowrite current session before quitting Neovim.
 --- - Configurable severity of all actions.
 ---
 --- # Setup
@@ -29,17 +29,17 @@
 --- Default `config`:
 --- <pre>
 --- {
----   -- Whether to autoload latest session if Neovim was called without file arguments
----   autoload = false,
+---   -- Whether to autoread latest session if Neovim was called without file arguments
+---   autoread = false,
 ---
----   -- Whether to save current session before quitting Neovim
----   autosave = true,
+---   -- Whether to write current session before quitting Neovim
+---   autowrite = true,
 ---
 ---   -- Directory where sessions are stored
 ---   directory = --<"sessions" subdirectory of user data directory from |stdpath()|>,
 ---
 ---   -- Whether to force possibly harmful actions (meaning depends on function)
----   force = { load = false, save = true, delete = false },
+---   force = { read = false, write = true, delete = false },
 --- }
 --- </pre>
 ---
@@ -69,28 +69,28 @@ function MiniSessions.setup(config)
   H.apply_config(config)
 
   -- Module behavior
-  if config.autoload then
-    vim.cmd([[au VimEnter * ++nested ++once lua if vim.fn.argc() == 0 then MiniSessions.load() end]])
+  if config.autoread then
+    vim.cmd([[au VimEnter * ++nested ++once lua if vim.fn.argc() == 0 then MiniSessions.read() end]])
   end
 
-  if config.autosave then
-    vim.cmd([[au VimLeavePre * lua if vim.v.this_session ~= '' then MiniSessions.save(nil, true) end]])
+  if config.autowrite then
+    vim.cmd([[au VimLeavePre * lua if vim.v.this_session ~= '' then MiniSessions.write(nil, true) end]])
   end
 end
 
 -- Module config
 MiniSessions.config = {
-  -- Whether to load latest session if Neovim was called without file arguments
-  autoload = false,
+  -- Whether to read latest session if Neovim was called without file arguments
+  autoread = false,
 
-  -- Whether to save current session before quitting Neovim
-  autosave = true,
+  -- Whether to write current session before quitting Neovim
+  autowrite = true,
 
   -- Directory where sessions are stored
   directory = vim.fn.stdpath('data') .. H.path_sep .. 'sessions',
 
   -- Whether to force possibly harmful actions (meaning depends on function)
-  force = { load = false, save = true, delete = false },
+  force = { read = false, write = true, delete = false },
 }
 
 ---- Table of detected sessions
@@ -102,17 +102,17 @@ MiniSessions.config = {
 MiniSessions.detected = {}
 
 -- Module functionality
---- Load detected session
+--- Read detected session
 ---
---- What is does:
+--- What it does:
 --- - Delete all current buffers with |bwipeout|. This is needed to correctly
 ---   restore buffers from target session. If `force` is not `true`, checks
 ---   beforehand for unsaved buffers and stops if there is any.
 --- - Source session with supplied name.
 ---
----@param session_name string: Name of detected section to load. Default: `nil` for latest session (see |MiniSessions.get_latest|).
----@param force boolean: Whether to delete unsaved buffers. Default: `MiniSessions.config.force.load`.
-function MiniSessions.load(session_name, force)
+---@param session_name string: Name of detected section to read. Default: `nil` for latest session (see |MiniSessions.get_latest|).
+---@param force boolean: Whether to delete unsaved buffers. Default: `MiniSessions.config.force.read`.
+function MiniSessions.read(session_name, force)
   if H.is_disabled() then
     return
   end
@@ -122,7 +122,7 @@ function MiniSessions.load(session_name, force)
   end
 
   session_name = session_name or MiniSessions.get_latest()
-  force = (force == nil) and MiniSessions.config.force.load or force
+  force = (force == nil) and MiniSessions.config.force.read or force
 
   if not H.validate_detected(session_name) then
     return
@@ -135,33 +135,33 @@ function MiniSessions.load(session_name, force)
   vim.cmd(string.format([[source %s]], path))
 end
 
---- Save session
+--- Write session
 ---
 --- What it does:
 --- - Check if file for supplied session name already exists. If it does and
 ---   `force` is not `true`, then stop.
---- - Save session with |mksession| to a file named `session_name` inside
+--- - Write session with |mksession| to a file named `session_name` inside
 ---   `MiniSessions.config.directory`.
 ---
----@param session_name string: Name of section to save. Default: `nil` for current session.
----@param force boolean: Whether to ignore existence of session file. Default: `MiniSessions.config.force.save`.
-function MiniSessions.save(session_name, force)
+---@param session_name string: Name of section to write. Default: `nil` for current session.
+---@param force boolean: Whether to ignore existence of session file. Default: `MiniSessions.config.force.write`.
+function MiniSessions.write(session_name, force)
   if H.is_disabled() then
     return
   end
 
   session_name = tostring(session_name or H.get_current_session_name())
-  force = (force == nil) and MiniSessions.config.force.save or force
+  force = (force == nil) and MiniSessions.config.force.write or force
 
   if #session_name == 0 then
-    H.notify([[Supply non-empty session name to save.]])
+    H.notify([[Supply non-empty session name to write.]])
     return
   end
 
   local session_file = MiniSessions.config.directory .. H.path_sep .. session_name
   session_file = vim.fn.fnamemodify(session_file, ':p')
   if not force and vim.fn.filereadable(session_file) == 1 then
-    H.notify([[Can't save to existing session when `force` is not `true`.]])
+    H.notify([[Can't write to existing session when `force` is not `true`.]])
     return
   end
 
@@ -241,13 +241,13 @@ function H.setup_config(config)
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
-    autoload = { config.autoload, 'boolean' },
+    autoread = { config.autoread, 'boolean' },
     directory = { config.directory, 'string' },
     force = { config.force, 'table' },
-    ['force.load'] = { config.force.load, 'boolean' },
-    ['force.save'] = { config.force.save, 'boolean' },
+    ['force.read'] = { config.force.read, 'boolean' },
+    ['force.write'] = { config.force.write, 'boolean' },
     ['force.delete'] = { config.force.delete, 'boolean' },
-    autosave = { config.autosave, 'boolean' },
+    autowrite = { config.autowrite, 'boolean' },
   })
 
   return config

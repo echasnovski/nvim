@@ -238,7 +238,7 @@ function MiniStarter.section_sessions(n, mru)
       table.insert(items, {
         modify_time = session.modify_time,
         name = session_name,
-        action = string.format([[lua _G.MiniSessions.load('%s')]], session_name),
+        action = string.format([[lua _G.MiniSessions.read('%s')]], session_name),
         section = 'Sessions',
       })
     end
