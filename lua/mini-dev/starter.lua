@@ -78,7 +78,7 @@ function MiniStarter.setup(config)
 
   -- Create highlighting
   vim.api.nvim_exec(
-    [[hi default link MiniStarterCurrent    Visual
+    [[hi default link MiniStarterCurrent    NONE
       hi default link MiniStarterFooter     Title
       hi default link MiniStarterHeader     Title
       hi default link MiniStarterInactive   Comment
@@ -95,6 +95,9 @@ end
 MiniStarter.config = {
   -- Whether to open starter buffer if Neovim was called without file arguments
   autoopen = true,
+
+  -- Whether to evaluate action of single active item
+  evaluate_single = false,
 
   -- Items to be displayed. Should be a list with the following elements:
   -- - Item: table with `action`, `name`, and `section` keys.
@@ -229,8 +232,7 @@ function MiniStarter.section_sessions(n, mru)
 
   return function()
     if _G.MiniSessions == nil then
-      H.notify([[To use `section_sessions`, setup 'mini.sessions' (see `:h mini.sessions`).]])
-      return {}
+      return { { name = [['mini.sessions' is not set up]], action = '', section = 'Sessions' } }
     end
 
     local items = {}
@@ -241,6 +243,10 @@ function MiniStarter.section_sessions(n, mru)
         action = string.format([[lua _G.MiniSessions.read('%s')]], session_name),
         section = 'Sessions',
       })
+    end
+
+    if vim.tbl_count(items) == 0 then
+      return { { name = [[There are no detected sessions in 'mini.sessions']], action = '', section = 'Sessions' } }
     end
 
     if mru then
@@ -263,13 +269,15 @@ function MiniStarter.section_mru_files(n, current_dir, show_path)
   show_path = show_path == nil and true or show_path
 
   return function()
+    local section = string.format([[MRU files%s]], current_dir and ' (current directory)' or '')
+
     -- Use only actual readable files
     local files = vim.tbl_filter(function(f)
       return vim.fn.filereadable(f) == 1
     end, vim.v.oldfiles or {})
 
     if #files == 0 then
-      return {}
+      return { { name = [[There are no MRU files (`v:oldfiles` is empty)]], action = '', section = section } }
     end
 
     -- Possibly filter files from current directory
@@ -281,13 +289,16 @@ function MiniStarter.section_mru_files(n, current_dir, show_path)
       end, files)
     end
 
+    if #files == 0 then
+      return { { name = [[There are no MRU files in current directory]], action = '', section = section } }
+    end
+
     -- Create items
     local items = {}
     local fmodify = vim.fn.fnamemodify
     for _, f in ipairs(vim.list_slice(files, 1, n)) do
       local path = show_path and string.format([[ (%s)]], fmodify(f, ':~:.')) or ''
       local name = string.format([[%s%s]], fmodify(f, ':t'), path)
-      local section = string.format([[MRU files%s]], current_dir and ' (current directory)' or '')
       table.insert(items, { action = string.format([[edit %s]], fmodify(f, ':p')), name = name, section = section })
     end
 
@@ -318,7 +329,7 @@ function MiniStarter.get_hook_padding(left, top)
 end
 
 function MiniStarter.get_hook_item_bullets(bullet, place_cursor)
-  bullet = bullet or '│ '
+  bullet = bullet or '▊ '
   place_cursor = place_cursor == nil and true or place_cursor
   return function(content)
     -- Track visited items to avoid infinite loop as bullets are inserted
@@ -488,6 +499,7 @@ function H.setup_config(config)
 
   vim.validate({
     autoopen = { config.autoopen, 'boolean' },
+    evaluate_single = { config.evaluate_single, 'boolean' },
 
     items = { config.items, 'table' },
     header = { config.header, H.is_fun_or_string, 'function or string' },
@@ -511,7 +523,11 @@ end
 
 ---- Normalize config elements
 function H.normalize_items(items)
-  return H.items_sort(H.items_flatten(items))
+  local res = H.items_flatten(items)
+  if #res == 0 then
+    return { { name = '`MiniStarter.config.items` is empty', action = '', section = '' } }
+  end
+  return H.items_sort(res)
 end
 
 function H.normalize_header_footer(x, x_name)
@@ -735,26 +751,33 @@ function H.make_query(query)
   -- Ignore case
   query = (query or H.query):lower()
 
-  -- Item is active = item's name starts with query (ignoring case)
+  -- Item is active = item's name starts with query (ignoring case) and item's
+  -- action is non-empty
+  local n_active = 0
   for _, item in ipairs(H.items) do
-    item._active = vim.startswith(item.name:lower(), query)
+    item._active = vim.startswith(item.name:lower(), query) and item.action ~= ''
+    n_active = n_active + (item._active and 1 or 0)
   end
 
-  -- Update activity highlighting
+  -- Move to next active item if current is not active
+  if not H.items[H.current_item_id]._active then
+    MiniStarter.update_current_item('next')
+  end
+
+  -- Update activity highlighting. This should go before `evaluate_single`
+  -- check because evaluation might not result into closing Starter buffer
   vim.api.nvim_buf_clear_namespace(H.buf_id, H.ns.activity, 0, -1)
   H.add_hl_activity(query)
 
-  -- Move to next active item if current is not active
-  local no_active = false
-  if not H.items[H.current_item_id]._active then
-    local prev_current = H.current_item_id
-    MiniStarter.update_current_item('next')
-    no_active = prev_current == H.current_item_id
+  -- Possibly evaluate single active item
+  if MiniStarter.config.evaluate_single and n_active == 1 then
+    MiniStarter.eval_current_item()
+    return
   end
 
   -- Notify about new query
   local msg = string.format('Query: %s', H.query)
-  if no_active then
+  if n_active == 0 then
     msg = string.format('%s . There is no active items. Use <BS> to delete symbols from query.', msg)
   end
   ---- Use `echo` because it doesn't write to `:messages`
@@ -874,6 +897,8 @@ function H.notify(msg)
 end
 
 _G.test_items = {
+  -- Placeholder section
+  { name = 'Should always be inactive', action = '', section = 'Placeholder' },
   -- Section 1 (nested)
   {
     { name = 'G1A1', action = [[echo 'G1A1']], section = 'Section 1' },
