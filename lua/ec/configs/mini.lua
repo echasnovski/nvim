@@ -3,23 +3,23 @@ require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' 
 local starter = require('mini-dev.starter')
 starter.setup({
   autoopen = true,
-  evaluate_single = true,
   items = {
     starter.section_sessions(5, true),
     starter.section_mru_files(5, false, false),
     starter.section_mru_files(5, true, false),
-    _G.test_items,
+    -- _G.test_items,
   },
   content_hooks = {
     starter.get_hook_item_bullets('▊ ', true),
-    starter.get_hook_indexing('section', { 'Sessions', 'Section 2' }),
-    starter.get_hook_centering(),
+    starter.get_hook_indexing('section', { 'Sessions' }),
+    starter.get_hook_aligning('center', 'center'),
   },
 })
 
 -- -- 'vim-startify'
 -- local starter = require('mini-dev.starter')
 -- starter.setup({
+--   evaluate_single = true,
 --   items = {
 --     {
 --       { action = [[enew]], name = 'Edit file', section = 'Actions' },
@@ -30,7 +30,7 @@ starter.setup({
 --   },
 --   content_hooks = {
 --     starter.get_hook_item_bullets(),
---     starter.get_hook_index('all', { 'Actions' }),
+--     starter.get_hook_indexing('all', { 'Actions' }),
 --     starter.get_hook_padding(3, 2),
 --   },
 -- })
