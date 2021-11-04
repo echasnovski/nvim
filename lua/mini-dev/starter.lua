@@ -102,7 +102,8 @@ MiniStarter.config = {
   -- - Item: table with `action`, `name`, and `section` keys.
   -- - Function: should return one of these three categories.
   -- - List: elements from these three categories (i.e. item, list, function).
-  items = {},
+  -- If `nil` (default), default items will be used (see |mini.starter|).
+  items = nil,
 
   -- Header to be displayed before items. Should be a string or function
   -- evaluating to string.
@@ -145,6 +146,10 @@ MiniStarter.config = {
 --     - 'string' - which string should be displayed. May be empty string.
 --     - 'hl' - which highlighting should be applied to content string. May be
 --       `nil` for no highlighting.
+-- Notes:
+-- - Content units with type 'item' also have `item` element with all
+--   information about an item it represents. Those elements are used directly
+--   to create list of items used for query.
 MiniStarter.content = {}
 
 -- Module functionality
@@ -201,17 +206,17 @@ function MiniStarter.refresh()
   -- - React on change in items during runtime (adding, deleting).
   -- - Evaluate items, header and footer on every `refresh()`. TODO: This might
   --   be both good and bad thing. Might want to reconsider.
-  H.items = H.normalize_items(MiniStarter.config.items)
+  local items = H.normalize_items(MiniStarter.config.items or H.default_items)
   H.header = H.normalize_header_footer(MiniStarter.config.header, 'header')
   H.footer = H.normalize_header_footer(MiniStarter.config.footer, 'footer')
 
   -- Evaluate content
-  H.make_initial_content()
+  H.make_initial_content(items)
   local hooks = MiniStarter.config.content_hooks or H.default_content_hooks
   for _, f in ipairs(hooks) do
     MiniStarter.content = f(MiniStarter.content)
   end
-  H.items_enhance()
+  H.items = MiniStarter.content_to_items()
 
   -- Add content
   vim.api.nvim_buf_set_option(H.buf_id, 'modifiable', true)
@@ -348,7 +353,8 @@ function MiniStarter.get_hook_item_bullets(bullet, place_cursor)
         string = bullet,
         type = 'item_bullet',
         hl = 'MiniStarterItemBullet',
-        _item_id = content[l_num][u_num]._item_id,
+        -- Use `_item` instead of `item` because it is better to be 'private'
+        _item = content[l_num][u_num].item,
         _place_cursor = place_cursor,
       }
       table.insert(content[l_num], u_num, bullet_unit)
@@ -369,7 +375,7 @@ function MiniStarter.get_hook_indexing(grouping, exclude_sections)
 
     for _, c in ipairs(coords) do
       local unit = content[c.line][c.unit]
-      local item = H.items[unit._item_id]
+      local item = unit.item
 
       if not vim.tbl_contains(exclude_sections, item.section) then
         n_item = n_item + 1
@@ -448,6 +454,48 @@ function MiniStarter.content_to_lines(content)
 end
 -- stylua: ignore end
 
+function MiniStarter.content_to_items(content)
+  content = content or MiniStarter.content
+
+  -- NOTE: this havily utilizes 'modify by reference' nature of Lua tables
+  local items = {}
+  for l_num, line in ipairs(content) do
+    -- Track 0-based starting column of current unit (using byte length)
+    local start_col = 0
+    for _, unit in ipairs(line) do
+      -- Cursor position is (1, 0)-based
+      local cursorpos = { l_num, start_col }
+
+      if unit.type == 'item' then
+        local item = unit.item
+        -- Take item's name from content string
+        item.name = unit.string:gsub('\n', ' ')
+        item._line = l_num - 1
+        item._start_col = start_col
+        item._end_col = start_col + unit.string:len()
+        -- Don't overwrite possible cursor position from item's bullet
+        item._cursorpos = item._cursorpos or cursorpos
+
+        table.insert(items, item)
+      end
+
+      -- Prefer placing cursor at start of item's bullet
+      if unit.type == 'item_bullet' and unit._place_cursor then
+        -- Item bullet uses 'private' `_item` element instead of `item`
+        unit._item._cursorpos = cursorpos
+      end
+
+      start_col = start_col + unit.string:len()
+    end
+  end
+
+  for id, item in ipairs(items) do
+    items[id]._nprefix = H.compute_item_nprefix(item, items)
+  end
+
+  return items
+end
+
 function MiniStarter.eval_current_item()
   H.eval_fun_or_string(H.items[H.current_item_id].action, true)
 end
@@ -484,10 +532,15 @@ end
 -- Helper data
 ---- Module default config
 H.default_config = MiniStarter.config
-H.default_content_hooks = { MiniStarter.get_hook_item_bullets(), MiniStarter.get_hook_padding(3, 2) }
+H.default_items = {
+  { action = 'enew', name = 'Edit', section = 'Builtin actions' },
+  { action = 'qall!', name = 'Quit', section = 'Builtin actions' },
+  MiniStarter.section_mru_files(5, false, false),
+}
+H.default_content_hooks = { MiniStarter.get_hook_item_bullets(), MiniStarter.get_hook_aligning('center', 'center') }
 
 ---- Normalized values from config
-H.items = {} -- flattened and sorted items
+H.items = {} -- items gathered with `MiniStarter.content_to_items` from final content
 H.header = {} -- table of strings
 H.footer = {} -- table of strings
 
@@ -519,7 +572,7 @@ function H.setup_config(config)
     autoopen = { config.autoopen, 'boolean' },
     evaluate_single = { config.evaluate_single, 'boolean' },
 
-    items = { config.items, 'table' },
+    items = { config.items, 'table', true },
     header = { config.header, H.is_fun_or_string, 'function or string' },
     footer = { config.footer, H.is_fun_or_string, 'function or string' },
 
@@ -561,7 +614,7 @@ function H.normalize_header_footer(x, x_name)
 end
 
 ---- Work with buffer content
-function H.make_initial_content()
+function H.make_initial_content(items)
   MiniStarter.content = {}
 
   -- Add header lines
@@ -571,7 +624,7 @@ function H.make_initial_content()
   H.content_add_empty_lines(#H.header > 0 and 1 or 0)
 
   -- Add item lines
-  H.content_add_items()
+  H.content_add_items(items)
 
   -- Add footer lines
   H.content_add_empty_lines(#H.footer > 0 and 1 or 0)
@@ -594,9 +647,9 @@ function H.content_add_empty_lines(n)
   end
 end
 
-function H.content_add_items()
+function H.content_add_items(items)
   local cur_section
-  for i, item in ipairs(H.items) do
+  for _, item in ipairs(items) do
     -- Possibly add section line
     if cur_section ~= item.section then
       -- Don't add empty line before first section line
@@ -605,7 +658,7 @@ function H.content_add_items()
       cur_section = item.section
     end
 
-    H.content_add_line({ H.content_unit(item.name, 'item', 'MiniStarterItem', { _item_id = i }) })
+    H.content_add_line({ H.content_unit(item.name, 'item', 'MiniStarterItem', { item = item }) })
   end
 end
 
@@ -668,42 +721,6 @@ function H.items_sort(items)
   end
 
   return res
-end
-
-function H.items_enhance()
-  -- Get data from content
-  local item_cursorpos = {}
-  for l_num, content_line in ipairs(MiniStarter.content) do
-    -- Track 0-based starting column of current unit (using byte length)
-    local start_col = 0
-    for _, unit in ipairs(content_line) do
-      -- Cursor position is (1, 0)-based
-      local cursorpos = { l_num, start_col }
-
-      if unit.type == 'item' then
-        local id = unit._item_id
-        H.items[id].name = unit.string:gsub('\n', ' ')
-        H.items[id]._line = l_num - 1
-        H.items[id]._start_col = start_col
-        H.items[id]._end_col = start_col + unit.string:len()
-
-        -- Don't overwrite possible cursor position from item's bullet
-        item_cursorpos[unit._item_id] = item_cursorpos[unit._item_id] or cursorpos
-      end
-
-      -- Prefer placing cursor at start of item's bullet
-      if unit.type == 'item_bullet' and unit._place_cursor then
-        item_cursorpos[unit._item_id] = cursorpos
-      end
-
-      start_col = start_col + unit.string:len()
-    end
-  end
-
-  for id, item in ipairs(H.items) do
-    H.items[id]._cursorpos = item_cursorpos[id]
-    H.items[id]._nprefix = H.compute_item_nprefix(item, H.items)
-  end
 end
 
 function H.items_highlight()

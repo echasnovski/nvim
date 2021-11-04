@@ -1,5 +1,9 @@
 require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
+-- -- Default starter
+-- require('mini-dev.starter').setup()
+
+-- Test starter
 local starter = require('mini-dev.starter')
 starter.setup({
   autoopen = true,
@@ -7,11 +11,11 @@ starter.setup({
     starter.section_sessions(5, true),
     starter.section_mru_files(5, false, false),
     starter.section_mru_files(5, true, false),
-    -- _G.test_items,
+    _G.test_items,
   },
   content_hooks = {
     starter.get_hook_item_bullets('▊ ', true),
-    starter.get_hook_indexing('section', { 'Sessions' }),
+    starter.get_hook_indexing('section', { 'Sessions', 'Section 2' }),
     starter.get_hook_aligning('center', 'center'),
   },
 })
