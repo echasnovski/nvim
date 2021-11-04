@@ -14,7 +14,7 @@ starter.setup({
     _G.test_items,
   },
   content_hooks = {
-    starter.get_hook_item_bullets('▊ ', true),
+    starter.get_hook_item_bullets(),
     starter.get_hook_indexing('section', { 'Sessions', 'Section 2' }),
     starter.get_hook_aligning('center', 'center'),
   },

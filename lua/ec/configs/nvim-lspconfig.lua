@@ -3,13 +3,10 @@
 -- - pyright for Python
 -- - sumneko_lua for Lua
 
-lspconfig = require('lspconfig')
+local lspconfig = require('lspconfig')
 
 -- Preconfiguration
 local on_attach_custom = function(client, bufnr)
-  local function buf_set_keymap(keys, action)
-    vim.api.nvim_buf_set_keymap(bufnr, 'n', keys, action, { noremap = true })
-  end
   local function buf_set_option(name, value)
     vim.api.nvim_buf_set_option(bufnr, name, value)
   end

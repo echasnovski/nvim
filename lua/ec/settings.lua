@@ -117,6 +117,6 @@ vim.cmd([[augroup CustomSettings]])
 vim.cmd([[augroup END]])
 
 -- Paths to important executables
-vim.g.python3_host_prog = vim.fn.expand('$HOME/.pyenv/versions/neovim/bin/python3.8')
+vim.g.python3_host_prog = vim.fn.expand('$HOME/.pyenv/versions/neovim/bin/python3')
 vim.g.node_host_prog    = vim.fn.expand('$HOME/.nvm/versions/node/v14.15.2/bin/node')
 --stylua: ignore end
