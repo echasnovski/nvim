@@ -197,7 +197,7 @@ function MiniStarter.open()
 end
 
 function MiniStarter.refresh()
-  if H.is_disabled() then
+  if H.is_disabled() or H.buf_id == nil or not vim.api.nvim_buf_is_valid(H.buf_id) then
     return
   end
 
@@ -282,6 +282,10 @@ function MiniStarter.section_mru_files(n, current_dir, show_path)
   current_dir = current_dir == nil and false or current_dir
   show_path = show_path == nil and true or show_path
 
+  if current_dir then
+    vim.cmd([[au DirChanged * lua MiniStarter.refresh()]])
+  end
+
   return function()
     local section = string.format([[MRU files%s]], current_dir and ' (current directory)' or '')
 
@@ -320,6 +324,20 @@ function MiniStarter.section_mru_files(n, current_dir, show_path)
   end
 end
 
+-- stylua: ignore start
+function MiniStarter.section_telescope()
+  return function()
+    return {
+      {action = 'Telescope file_browser',    name = 'Browser',         section = 'Telescope'},
+      {action = 'Telescope command_history', name = 'Command history', section = 'Telescope'},
+      {action = 'Telescope find_files',      name = 'Files',           section = 'Telescope'},
+      {action = 'Telescope help_tags',       name = 'Help tags',       section = 'Telescope'},
+      {action = 'Telescope oldfiles',        name = 'Old files',       section = 'Telescope'},
+    }
+  end
+end
+-- stylua: ignore start
+
 function MiniStarter.get_hook_padding(left, top)
   left = math.max(left or 0, 0)
   top = math.max(top or 0, 0)
@@ -342,7 +360,7 @@ function MiniStarter.get_hook_padding(left, top)
 end
 
 function MiniStarter.get_hook_item_bullets(bullet, place_cursor)
-  bullet = bullet or '▊ '
+  bullet = bullet or '▌ '
   place_cursor = place_cursor == nil and true or place_cursor
   return function(content)
     local coords = MiniStarter.content_coords(content, 'item')
@@ -533,8 +551,9 @@ end
 ---- Module default config
 H.default_config = MiniStarter.config
 H.default_items = {
-  { action = 'enew', name = 'Edit', section = 'Builtin actions' },
-  { action = 'qall!', name = 'Quit', section = 'Builtin actions' },
+  { action = 'edit $MYVIMRC', name = 'My Init.(lua|vim)', section = 'Builtin actions' },
+  { action = 'enew', name = 'Edit new buffer', section = 'Builtin actions' },
+  { action = 'qall', name = 'Quit Neovim', section = 'Builtin actions' },
   MiniStarter.section_mru_files(5, false, false),
 }
 H.default_content_hooks = { MiniStarter.get_hook_item_bullets(), MiniStarter.get_hook_aligning('center', 'center') }

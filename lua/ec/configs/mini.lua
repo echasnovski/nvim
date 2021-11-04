@@ -11,11 +11,12 @@ starter.setup({
     starter.section_sessions(5, true),
     starter.section_mru_files(5, false, false),
     starter.section_mru_files(5, true, false),
-    _G.test_items,
+    starter.section_telescope(),
+    -- _G.test_items,
   },
   content_hooks = {
     starter.get_hook_item_bullets(),
-    starter.get_hook_indexing('section', { 'Sessions', 'Section 2' }),
+    starter.get_hook_indexing('section', { 'Sessions', 'Section 2', 'Telescope' }),
     starter.get_hook_aligning('center', 'center'),
   },
 })
