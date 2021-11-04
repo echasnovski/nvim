@@ -35,6 +35,33 @@ starter.setup({
 --   },
 -- })
 
+local has_minijump = pcall(function()
+  require('mini.jump').setup()
+end)
+if not has_minijump then
+  pcall(function()
+    require('mini-dev.jump').setup()
+  end)
+end
+
+local function section_searchcount(args)
+  if vim.v.hlsearch == 0 or MiniStatusline.is_truncated(args.trunc_width) then
+    return ''
+  end
+  local s_count = vim.fn.searchcount({ recompute = args.recompute or 1 })
+  if s_count.current == nil or s_count.total == 0 then
+    return ''
+  end
+
+  if s_count.incomplete == 1 then
+    return '?/?'
+  end
+
+  local total_sign = s_count.total > s_count.maxcount and '>' or ''
+  local current_sign = s_count.current > s_count.maxcount and '>' or ''
+  return ('%s%d/%s%d'):format(current_sign, s_count.current, total_sign, s_count.total)
+end
+
 require('mini.statusline').setup({
   content = {
     active = function()
@@ -46,6 +73,7 @@ require('mini.statusline').setup({
       local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
       local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
       local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
+      local searchcount   = section_searchcount({ trunc_width = 75})
       local location      = MiniStatusline.section_location({ trunc_width = 75 })
 
       -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
@@ -58,7 +86,7 @@ require('mini.statusline').setup({
         { hl = 'MiniStatuslineFilename', strings = { filename } },
         '%=', -- End left alignment
         { hl = 'MiniStatuslineFileinfo', strings = { fileinfo } },
-        { hl = mode_hl,                  strings = { location } },
+        { hl = mode_hl,                  strings = { searchcount, location } },
       })
       -- stylua: ignore end
     end,

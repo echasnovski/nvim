@@ -27,22 +27,21 @@
 --- (replace `{}` with your `config` table).
 ---
 --- Default `config`:
---- <pre>
---- {
----   -- Whether to autoread latest session if Neovim was called without file arguments
----   autoread = false,
+--- <code>
+---   {
+---     -- Whether to autoread latest session if Neovim was called without file arguments
+---     autoread = false,
 ---
----   -- Whether to write current session before quitting Neovim
----   autowrite = true,
+---     -- Whether to write current session before quitting Neovim
+---     autowrite = true,
 ---
----   -- Directory where sessions are stored
----   directory = --<"sessions" subdirectory of user data directory from |stdpath()|>,
+---     -- Directory where sessions are stored
+---     directory = --<"sessions" subdirectory of user data directory from |stdpath()|>,
 ---
----   -- Whether to force possibly harmful actions (meaning depends on function)
----   force = { read = false, write = true, delete = false },
---- }
---- </pre>
----
+---     -- Whether to force possibly harmful actions (meaning depends on function)
+---     force = { read = false, write = true, delete = false },
+---   }
+--- </code>
 --- # Disabling
 ---
 --- To disable core functionality, set `g:minisessions_disable` (globally) or
