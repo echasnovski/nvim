@@ -9,13 +9,13 @@
 --       { action = [[enew]], name = 'Edit file', section = 'Actions' },
 --       { action = [[quit]], name = 'Quit', section = 'Actions' },
 --     },
---     starter.section_mru_files(10, false, true),
---     starter.section_mru_files(10, true, true),
+--     starter.sections.mru_files(10, false, true),
+--     starter.sections.mru_files(10, true, true),
 --   },
 --   content_hooks = {
---     starter.get_hook_item_bullets(),
---     starter.get_hook_indexing('all', { 'Actions' }),
---     starter.get_hook_padding(3, 2),
+--     starter.gen_hook.adding_bullet(),
+--     starter.gen_hook.indexing('all', { 'Actions' }),
+--     starter.gen_hook.padding(3, 2),
 --   },
 -- })
 

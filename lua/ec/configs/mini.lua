@@ -1,25 +1,25 @@
 require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
--- -- Default starter
--- require('mini-dev.starter').setup()
-
 -- Test starter
 local starter = require('mini-dev.starter')
 starter.setup({
   autoopen = true,
   items = {
-    starter.section_sessions(5, true),
-    starter.section_mru_files(5, false, false),
-    starter.section_mru_files(5, true, false),
-    starter.section_telescope(),
+    starter.sections.sessions(5, true),
+    starter.sections.mru_files(5, false, false),
+    starter.sections.mru_files(5, true, false),
+    starter.sections.telescope(),
     -- _G.test_items,
   },
   content_hooks = {
-    starter.get_hook_item_bullets(),
-    starter.get_hook_indexing('section', { 'Sessions', 'Section 2', 'Telescope' }),
-    starter.get_hook_aligning('center', 'center'),
+    starter.gen_hook.adding_bullet(),
+    starter.gen_hook.indexing('section', { 'Sessions', 'Section 2', 'Telescope' }),
+    starter.gen_hook.aligning('center', 'center'),
   },
 })
+
+-- -- Default starter
+-- require('mini-dev.starter').setup()
 
 -- -- 'vim-startify'
 -- local starter = require('mini-dev.starter')
@@ -27,16 +27,28 @@ starter.setup({
 --   evaluate_single = true,
 --   items = {
 --     {
---       { action = [[enew]], name = 'Edit file', section = 'Actions' },
---       { action = [[quit]], name = 'Quit', section = 'Actions' },
+--       { name = 'Edit file', action = [[enew]], section = 'Actions' },
+--       { name = 'Quit', action = [[quit]], section = 'Actions' },
 --     },
---     starter.section_mru_files(10, false),
---     starter.section_mru_files(10, true),
+--     starter.sections.mru_files(10, false),
+--     starter.sections.mru_files(10, true),
 --   },
 --   content_hooks = {
---     starter.get_hook_item_bullets(),
---     starter.get_hook_indexing('all', { 'Actions' }),
---     starter.get_hook_padding(3, 2),
+--     starter.gen_hook.adding_bullet(),
+--     starter.gen_hook.indexing('all', { 'Actions' }),
+--     starter.gen_hook.padding(3, 2),
+--   },
+-- })
+
+-- -- 'dashboard-nvim'
+-- local starter = require('mini-dev.starter')
+-- starter.setup({
+--   items = {
+--     starter.sections.telescope(),
+--   },
+--   content_hooks = {
+--     starter.gen_hook.adding_bullet(),
+--     starter.gen_hook.aligning('center', 'center'),
 --   },
 -- })
 
@@ -48,6 +60,7 @@ if not has_minijump then
     require('mini-dev.jump').setup()
   end)
 end
+vim.cmd([[hi link MiniJumpHighlight SpellRare]])
 
 local function section_searchcount(args)
   if vim.v.hlsearch == 0 or MiniStatusline.is_truncated(args.trunc_width) then
