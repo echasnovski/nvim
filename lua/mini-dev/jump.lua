@@ -1,10 +1,16 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski, Adam Blažek
 
 ---@brief [[
---- A module for smarter jumping, inspired by clever-f.
---- By default it extends f, F, t, T to work on multiple lines,
---- be repeatable by pressing f, F, t, T again,
---- and highlight characters they're going to jump to.
+--- Minimal and fast module for smarter jumping to a single character. Inspired
+--- by 'rhysd/clever-f.vim'.
+---
+--- Features:
+--- - Extend f, F, t, T to work on multiple lines.
+--- - Repeat jump by pressing f, F, t, T again. It is reset when cursor moved
+---   as a result of not jumping.
+--- - Highlight (after customizable delay) of all possible target characters.
+--- - Normal, visual, and operator-pending (with a reasonable dot-repeat) modes
+---   are supported.
 ---
 --- # Setup
 ---
@@ -16,16 +22,21 @@
 ---   {
 ---     -- Mappings. Use `''` (empty string) to disable one.
 ---     mappings = {
----       forward_1 = 'f',
----       backward_1 = 'F',
----       forward_1_till = 't',
----       backward_1_till = 'T',
+---       forward = 'f',
+---       backward = 'F',
+---       forward_till = 't',
+---       backward_till = 'T',
 ---     },
 ---
----     -- Highlight matches when jumping
----     highlight = true,
+---     -- Delay (in ms) between jump and highlighting all possible jumps. Set to a
+---     -- very big number (like 10^7) to virtually disable highlighting.
+---     highlight_delay = 250,
 ---   }
 --- </code>
+--- #Highlight groups
+---
+--- - `MiniJump` - all possible cursor positions.
+---
 --- # Disabling
 ---
 --- To disable core functionality, set `g:minijump_disable` (globally) or
@@ -33,7 +44,7 @@
 ---@brief ]]
 ---@tag MiniJump mini.jump
 
--- Module and its helper
+-- Module and its helper --
 local MiniJump = {}
 local H = {}
 
@@ -56,31 +67,31 @@ function MiniJump.setup(config)
   vim.cmd([[autocmd BufLeave,InsertEnter * lua MiniJump.stop_jumping()]])
 
   -- Highlight groups
-  vim.cmd([[hi default link MiniJumpHighlight IncSearch]])
+  vim.cmd([[hi default link MiniJump SpellRare]])
 end
 
--- Module config
+-- Module config --
 MiniJump.config = {
   mappings = {
-    forward_1 = 'f',
-    backward_1 = 'F',
-    forward_1_till = 't',
-    backward_1_till = 'T',
+    forward = 'f',
+    backward = 'F',
+    forward_till = 't',
+    backward_till = 'T',
   },
 
-  -- Highlight matches when jumping.
-  highlight = true,
+  -- Delay (in ms) between jump and highlighting all possible jumps. Set to a
+  -- very big number (like 10^7) to virtually disable highlighting.
+  highlight_delay = 250,
 }
 
--- Module functionality
+-- Module functionality --
 --- Jump to target
 ---
---- Takes a string and jumps to the first occurence of it after the cursor.
+--- Takes a string and jumps to the first occurrence of it after the cursor.
 ---
 --- @param target string: The string to jump to.
---- @param backward boolean: If `true`, jump backward.
---- @param till boolean: If `true`, jump just before/after the match instead of to the first character.
----   Also ignore matches that don't have space before/after them. (This will probably be changed in the future.)
+--- @param backward boolean: Whether to jump backward.
+--- @param till boolean: Whether to jump just before/after the match instead of exactly on target. Also ignore matches that don't have anything before/after them.
 function MiniJump.jump(target, backward, till)
   if H.is_disabled() then
     return
@@ -103,8 +114,19 @@ function MiniJump.jump(target, backward, till)
   target = vim.fn.escape(target, [[\]])
   pattern, hl_pattern = pattern:format(target), hl_pattern:format(target)
 
-  H.highlight(hl_pattern)
+  -- Delay highlighting after stopping previous one
+  H.timer:stop()
+  H.timer:start(
+    MiniJump.config.highlight_delay,
+    0,
+    vim.schedule_wrap(function()
+      H.highlight(hl_pattern)
+    end)
+  )
+
+  -- Make jump
   vim.fn.search(pattern, flags)
+
   -- Open enough folds to show jump
   vim.cmd([[normal! zv]])
 end
@@ -112,22 +134,36 @@ end
 --- Smart jump
 ---
 --- If the last movement was a jump, perform another jump with the same target.
---- Otherwise, prompt for a target. Respects v:count.
+--- Otherwise, wait for a target input (via |getchar()|). Respects |v:count|.
 ---
---- @param num_chars number: The length of the target to prompt for.
 --- @param backward boolean: If true, jump backward.
 --- @param till boolean: If true, jump just before/after the match instead of to the first character.
 ---   Also ignore matches that don't have space before/after them. (This will probably be changed in the future.)
-function MiniJump.smart_jump(num_chars, backward, till)
+function MiniJump.smart_jump(backward, till)
   if H.is_disabled() then
     return
   end
 
-  num_chars = num_chars or 1
   backward = backward == nil and false or backward
   till = till == nil and false or till
 
-  H.target = H.target or H.get_chars(num_chars)
+  -- Keep track of *full* mode (tracks operator-pending case)
+  local cur_mode = vim.fn.mode(1)
+  if H.mode ~= cur_mode then
+    MiniJump.stop_jumping()
+  end
+
+  if H.target == nil then
+    local char = vim.fn.getchar()
+    -- Allow `<Esc>` to early exit
+    if char == 27 then
+      return
+    end
+
+    H.target = vim.fn.nr2char(char)
+    H.mode = cur_mode
+  end
+
   for _ = 1, vim.v.count1 do
     MiniJump.jump(H.target, backward, till)
   end
@@ -138,9 +174,11 @@ end
 --- Stop jumping
 ---
 --- Removes highlights (if any) and forces the next smart jump to prompt for
---- the target.
+--- the target. Automatically called on appropriate Neovim |events|.
 function MiniJump.stop_jumping()
+  H.timer:stop()
   H.target = nil
+  H.mode = nil
   H.unhighlight()
 end
 
@@ -153,24 +191,30 @@ function MiniJump.on_cursormoved()
   H.jumping = false
 end
 
--- Helpers
----- Module default config
+-- Helper data --
+-- Module default config
 H.default_config = MiniJump.config
 
----- Current target
+-- Current target
 H.target = nil
 
----- Indicator of whether inside smart jumping
+-- Mode of the latest jump (to reset when in different mode)
+H.mode = nil
+
+-- Indicator of whether inside smart jumping
 H.jumping = false
 
----- Information about last match highlighting (stored *per window*):
----- - Key: windows' unique buffer identifiers.
----- - Value: table with:
-----     - `id` field for match id (from `vim.fn.matchadd()`).
-----     - `pattern` field for highlighted pattern.
+-- Highlight delay timer
+H.timer = vim.loop.new_timer()
+
+-- Information about last match highlighting (stored *per window*):
+-- - Key: windows' unique buffer identifiers.
+-- - Value: table with:
+--     - `id` field for match id (from `vim.fn.matchadd()`).
+--     - `pattern` field for highlighted pattern.
 H.window_matches = {}
 
----- Settings
+-- Settings --
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
@@ -179,11 +223,12 @@ function H.setup_config(config)
 
   vim.validate({
     mappings = { config.mappings, 'table' },
-    ['mappings.forward_1'] = { config.mappings.forward_1, 'string' },
-    ['mappings.backward_1'] = { config.mappings.forward_1, 'string' },
-    ['mappings.forward_1_till'] = { config.mappings.forward_1, 'string' },
-    ['mappings.backward_1_till'] = { config.mappings.forward_1, 'string' },
-    highlight = { config.highlight, 'boolean' },
+    ['mappings.forward'] = { config.mappings.forward, 'string' },
+    ['mappings.backward'] = { config.mappings.backward, 'string' },
+    ['mappings.forward_till'] = { config.mappings.forward_till, 'string' },
+    ['mappings.backward_till'] = { config.mappings.backward_till, 'string' },
+
+    highlight_delay = { config.highlight_delay, 'number' },
   })
 
   return config
@@ -193,44 +238,18 @@ function H.apply_config(config)
   MiniJump.config = config
 
   local modes = { 'n', 'o', 'x' }
-  H.map_cmd(modes, config.mappings.forward_1, [[lua MiniJump.smart_jump(1, false, false)]])
-  H.map_cmd(modes, config.mappings.backward_1, [[lua MiniJump.smart_jump(1, true, false)]])
-  H.map_cmd(modes, config.mappings.forward_1_till, [[lua MiniJump.smart_jump(1, false, true)]])
-  H.map_cmd(modes, config.mappings.backward_1_till, [[lua MiniJump.smart_jump(1, true, true)]])
+  H.map_cmd(modes, config.mappings.forward, [[lua MiniJump.smart_jump(false, false)]])
+  H.map_cmd(modes, config.mappings.backward, [[lua MiniJump.smart_jump(true, false)]])
+  H.map_cmd(modes, config.mappings.forward_till, [[lua MiniJump.smart_jump(false, true)]])
+  H.map_cmd(modes, config.mappings.backward_till, [[lua MiniJump.smart_jump(true, true)]])
 end
 
 function H.is_disabled()
   return vim.g.minijump_disable == true or vim.b.minijump_disable == true
 end
 
----- Various helpers
-function H.map_cmd(modes, key, command)
-  if key == '' then
-    return
-  end
-  for _, mode in ipairs(modes) do
-    local rhs = ('<cmd>%s<cr>'):format(command)
-    if mode == 'o' then
-      rhs = 'v' .. rhs
-    end
-    vim.api.nvim_set_keymap(mode, key, rhs, { noremap = true })
-  end
-end
-
-function H.get_chars(num_chars)
-  local chars = ''
-  for _ = 1, num_chars do
-    chars = chars .. vim.fn.nr2char(vim.fn.getchar())
-  end
-  return chars
-end
-
+-- Highlighting --
 function H.highlight(pattern)
-  if not MiniJump.config.highlight then
-    H.unhighlight()
-    return
-  end
-
   local win_id = vim.api.nvim_get_current_win()
   local match_info = H.window_matches[win_id]
 
@@ -245,7 +264,7 @@ function H.highlight(pattern)
   -- `till = true`. If this character is first on line, highlighting should change
   H.unhighlight()
 
-  local match_id = vim.fn.matchadd('MiniJumpHighlight', pattern)
+  local match_id = vim.fn.matchadd('MiniJump', pattern)
   H.window_matches[win_id] = { id = match_id, pattern = pattern }
 end
 
@@ -259,6 +278,18 @@ function H.unhighlight()
       pcall(vim.fn.matchdelete, match_info.id, win_id)
       H.window_matches[win_id] = nil
     end
+  end
+end
+
+-- Various helpers --
+function H.map_cmd(modes, key, command)
+  if key == '' then
+    return
+  end
+  for _, mode in ipairs(modes) do
+    local prefix = mode == 'o' and 'v' or ''
+    local rhs = ('%s<cmd>%s<cr>'):format(prefix, command)
+    vim.api.nvim_set_keymap(mode, key, rhs, { noremap = true })
   end
 end
 
