@@ -6,14 +6,14 @@ starter.setup({
   autoopen = true,
   items = {
     starter.sections.sessions(5, true),
-    starter.sections.mru_files(5, false, false),
-    starter.sections.mru_files(5, true, false),
+    starter.sections.mru_files(5, false, true),
+    starter.sections.mru_files(5, true, true),
     starter.sections.telescope(),
-    -- _G.test_items,
+    _G.test_items,
   },
   content_hooks = {
     starter.gen_hook.adding_bullet(),
-    starter.gen_hook.indexing('section', { 'Sessions', 'Section 2', 'Telescope' }),
+    -- starter.gen_hook.indexing('section', { 'Sessions', 'Section 2', 'Telescope' }),
     starter.gen_hook.aligning('center', 'center'),
   },
 })
@@ -60,25 +60,6 @@ if not has_minijump then
     require('mini-dev.jump').setup()
   end)
 end
-vim.cmd([[hi link MiniJumpHighlight SpellRare]])
-
-local function section_searchcount(args)
-  if vim.v.hlsearch == 0 or MiniStatusline.is_truncated(args.trunc_width) then
-    return ''
-  end
-  local s_count = vim.fn.searchcount({ recompute = args.recompute or 1 })
-  if s_count.current == nil or s_count.total == 0 then
-    return ''
-  end
-
-  if s_count.incomplete == 1 then
-    return '?/?'
-  end
-
-  local total_sign = s_count.total > s_count.maxcount and '>' or ''
-  local current_sign = s_count.current > s_count.maxcount and '>' or ''
-  return ('%s%d/%s%d'):format(current_sign, s_count.current, total_sign, s_count.total)
-end
 
 require('mini.statusline').setup({
   content = {
@@ -91,7 +72,7 @@ require('mini.statusline').setup({
       local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
       local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
       local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
-      local searchcount   = section_searchcount({ trunc_width = 75})
+      local searchcount   = MiniStatusline.section_searchcount({ trunc_width = 75})
       local location      = MiniStatusline.section_location({ trunc_width = 75 })
 
       -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and

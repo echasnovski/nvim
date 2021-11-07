@@ -117,7 +117,40 @@
 ---     },
 ---   })
 --- </code>
---- Configuration with custom content hook:
+--- Configuration showing possible custom items and content hooks:
+--- <code>
+---   local starter = require('mini-dev.starter')
+---   starter.setup({
+---     items = {
+---       { name = 'Echo random number', action = [[lua print(math.random())]], section = 'Section 1' },
+---       function()
+---         return {
+---           { name = 'Item #1 from function', action = [[echo 'Item #1']], section = 'From function' },
+---           { name = 'Placeholder (always incative) item', action = '', section = 'From function' },
+---           function()
+---             return {
+---               name = 'Item #1 from double function',
+---               action = [[echo 'Double function']],
+---               section = 'From double function',
+---             }
+---           end,
+---         }
+---       end,
+---       { name = [[Another item in 'Section 1']], action = [[lua print(math.random() + 10)]], section = 'Section 1' },
+---     },
+---     content_hooks = {
+---       function(content)
+---         -- Pad from top
+---         for _ = 1, 10 do
+---           -- Insert at start a line with single content unit
+---           table.insert(content, 1, { { type = 'empty', string = '' } })
+---         end
+---         return content
+---       end,
+---     },
+---   })
+--- </code>
+--- Example of custom items and content hooks:
 --- <code>
 --- </code>
 --- # Highlight groups
@@ -484,9 +517,7 @@ MiniStarter.gen_hook = {}
 --- Hook generator for padding
 ---
 --- Output is a content hook which adds constant padding from left and top.
---- This allows to tweak the screen position of buffer content. This is done by
---- adding content units with type 'empty' and appropriate string into certain
---- places inside content.
+--- This allows tweaking the screen position of buffer content.
 ---
 ---@param left number: Number of empty spaces to add to start of each content lines. Default: 0.
 ---@param top number: Number of empty lines to add to start of content. Default: 0.
@@ -515,14 +546,13 @@ end
 --- Hook generator for adding bullet to items
 ---
 --- Output is a content hook which adds supplied string to be displayed to the
---- left of item. This is done by adding content units with type 'unit_bullet'
---- just before corresponding item's content unit.
+--- left of item.
 ---
 ---@param bullet string: String to be placed to the left of item name. Default: '▌ '.
 ---@param place_cursor boolean: Whether to place cursor on the first character of bullet when corresponding item becomes current.
 ---@return function: Content hook.
 function MiniStarter.gen_hook.adding_bullet(bullet, place_cursor)
-  bullet = bullet or '▌ '
+  bullet = bullet or '░ '
   place_cursor = place_cursor == nil and true or place_cursor
   return function(content)
     local coords = MiniStarter.content_coords(content, 'item')
@@ -547,9 +577,8 @@ end
 --- Hook generator for indexing items
 ---
 --- Output is a content hook which adds unique index to the start of item's
---- name. It results into shortening queries required to choose an item. This
---- is done by modifying `string` value of content units with type 'item'
---- (excluding those with section name from `exclude_sections`).
+--- name. It results into shortening queries required to choose an item (at
+--- expence of clarity).
 ---
 ---@param grouping string: One of 'all' (number indexing across all sections) or 'section' (letter-number indexing within each section).
 ---@param exclude_sections table: Array of section names (values of `section` element of item) for which index won't be added.
@@ -719,8 +748,13 @@ function MiniStarter.content_to_items(content)
     end
   end
 
-  for id, item in ipairs(items) do
-    items[id]._nprefix = H.compute_item_nprefix(item, items)
+  -- Compute length of unique prefix for every item's name (ignoring case)
+  local strings = vim.tbl_map(function(x)
+    return x.name:lower()
+  end, items)
+  local nprefix = H.unique_nprefix(strings)
+  for i, n in ipairs(nprefix) do
+    items[i]._nprefix = n
   end
 
   return items
@@ -999,26 +1033,6 @@ function H.items_highlight()
   end
 end
 
--- Prefix number is a length of `item.name` unique prefix among all items
--- Uniqueness is checked ignoring case
--- Algorithm can be optimized to not be O(n^2) but currently not worth it
-function H.compute_item_nprefix(item, all_items)
-  -- Ignore case when computing prefix number
-  local name = item.name:lower()
-
-  for n = 1, name:len() do
-    local cur_prefix = name:sub(0, n)
-    local similar_items = vim.tbl_filter(function(it)
-      -- Again use `lower()` to ignore case
-      return vim.startswith(it.name:lower(), cur_prefix)
-    end, all_items)
-    if #similar_items == 1 then
-      return n
-    end
-  end
-  return name:len()
-end
-
 function H.next_active_item_id(item_id, direction)
   -- Advance in cyclic fashion
   local id = item_id
@@ -1195,6 +1209,51 @@ end
 
 function H.notify(msg)
   vim.notify(string.format([[(mini.starter) %s]], msg))
+end
+
+function H.unique_nprefix(strings)
+  -- For every string compute minimum width of unique prefix. NOTE: this can be
+  -- done simpler but it would be O(n^2) which *will* have noticable effect
+  -- when there are a) many items and b) some of them are identical and have
+  -- big length (like MRU files with full paths).
+
+  -- Make copy because it will be modified
+  local str_set = vim.deepcopy(strings)
+  local res, cur_n = {}, 0
+  while vim.tbl_count(str_set) > 0 do
+    cur_n = cur_n + 1
+
+    -- `prefix_tbl`: string id's with current prefix
+    -- `nowhere_to_go` is `true` if all strings have lengths less than `cur_n`
+    local prefix_tbl, nowhere_to_go = {}, true
+    for id, s in pairs(str_set) do
+      nowhere_to_go = nowhere_to_go and (#s < cur_n)
+      local prefix = s:sub(1, cur_n)
+      prefix_tbl[prefix] = prefix_tbl[prefix] == nil and {} or prefix_tbl[prefix]
+      table.insert(prefix_tbl[prefix], id)
+    end
+
+    -- Output for non-unique string is its length
+    if nowhere_to_go then
+      for k, s in pairs(str_set) do
+        res[k] = #s
+      end
+      break
+    end
+
+    for _, keys_with_prefix in pairs(prefix_tbl) do
+      -- If prefix is seen only once, it is unique
+      if #keys_with_prefix == 1 then
+        local k = keys_with_prefix[1]
+        -- Use `math.min` to account for empty strings and non-unique ones
+        res[k] = math.min(#str_set[k], cur_n)
+        -- Remove this string as it already has final nprefix
+        str_set[k] = nil
+      end
+    end
+  end
+
+  return res
 end
 
 _G.test_items = {
