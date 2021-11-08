@@ -94,8 +94,8 @@
 ---         { name = 'Edit file', action = [[enew]], section = 'Actions' },
 ---         { name = 'Quit',      action = [[quit]], section = 'Actions' },
 ---       },
----       starter.sections.mru_files(10, false),
----       starter.sections.mru_files(10, true),
+---       starter.sections.recent_files(10, false),
+---       starter.sections.recent_files(10, true),
 ---     },
 ---     content_hooks = {
 ---       starter.gen_hook.adding_bullet(),
@@ -396,11 +396,11 @@ MiniStarter.sections = {}
 --- Sessions are taken from |MiniSessions.detected|.
 ---
 ---@param n number: Number of returned items. Default: 5.
----@param mru boolean: Whether to use Most Recently Used sessions. Default: true.
+---@param recent boolean: Whether to use recent sessions (instead of default order of `MiniSessions.detected`). Default: true.
 ---@return function: Function which returns array of items.
-function MiniStarter.sections.sessions(n, mru)
+function MiniStarter.sections.sessions(n, recent)
   n = n or 5
-  mru = mru == nil and true or mru
+  recent = recent == nil and true or recent
 
   return function()
     if _G.MiniSessions == nil then
@@ -421,7 +421,7 @@ function MiniStarter.sections.sessions(n, mru)
       return { { name = [[There are no detected sessions in 'mini.sessions']], action = '', section = 'Sessions' } }
     end
 
-    if mru then
+    if recent then
       table.sort(items, function(a, b)
         return a.modify_time > b.modify_time
       end)
@@ -443,7 +443,7 @@ end
 ---@param current_dir boolean: Whether to return files only from current working directory. Default: false.
 ---@param show_path boolean: Whether to append file name with its full path. Default: true.
 ---@return function: Function which returns array of items.
-function MiniStarter.sections.mru_files(n, current_dir, show_path)
+function MiniStarter.sections.recent_files(n, current_dir, show_path)
   n = n or 5
   current_dir = current_dir == nil and false or current_dir
   show_path = show_path == nil and true or show_path
@@ -453,7 +453,7 @@ function MiniStarter.sections.mru_files(n, current_dir, show_path)
   end
 
   return function()
-    local section = string.format([[MRU files%s]], current_dir and ' (current directory)' or '')
+    local section = string.format([[Recent files%s]], current_dir and ' (current directory)' or '')
 
     -- Use only actual readable files
     local files = vim.tbl_filter(function(f)
@@ -461,7 +461,7 @@ function MiniStarter.sections.mru_files(n, current_dir, show_path)
     end, vim.v.oldfiles or {})
 
     if #files == 0 then
-      return { { name = [[There are no MRU files (`v:oldfiles` is empty)]], action = '', section = section } }
+      return { { name = [[There are no recent files (`v:oldfiles` is empty)]], action = '', section = section } }
     end
 
     -- Possibly filter files from current directory
@@ -474,7 +474,7 @@ function MiniStarter.sections.mru_files(n, current_dir, show_path)
     end
 
     if #files == 0 then
-      return { { name = [[There are no MRU files in current directory]], action = '', section = section } }
+      return { { name = [[There are no recent files in current directory]], action = '', section = section } }
     end
 
     -- Create items
@@ -816,13 +816,21 @@ H.default_config = MiniStarter.config
 
 -- Default config values
 H.default_items = {
-  (function()
+  function()
     local vimrc = vim.fn.fnamemodify(vim.fn.expand('$MYVIMRC'), ':t')
-    return { name = ([[Configure %s]]):format(vimrc), action = 'edit $MYVIMRC', section = 'Builtin actions' }
-  end)(),
-  { name = 'Edit new buffer', action = 'enew', section = 'Builtin actions' },
-  { name = 'Quit Neovim', action = 'qall', section = 'Builtin actions' },
-  MiniStarter.sections.mru_files(5, false, false),
+    return {
+      { name = ([[Configure %s]]):format(vimrc), action = 'edit $MYVIMRC', section = 'Builtin actions' },
+      { name = 'Edit new buffer', action = 'enew', section = 'Builtin actions' },
+      { name = 'Quit Neovim', action = 'qall', section = 'Builtin actions' },
+    }
+  end,
+  function()
+    if _G.MiniSessions == nil then
+      return {}
+    end
+    return MiniStarter.sections.sessions(5, true)()
+  end,
+  MiniStarter.sections.recent_files(5, false, false),
 }
 
 H.default_header = function()
@@ -989,10 +997,16 @@ function H.items_flatten(items)
       return
     end
 
-    -- Expand functions immediately
-    if type(x) == 'function' then
+    -- Expand (possibly recursively) functions immediately
+    local n_nested = 0
+    while type(x) == 'function' do
+      n_nested = n_nested + 1
+      if n_nested > 100 then
+        H.notify('Too many nested functions in `config.items`.')
+      end
       x = x()
     end
+
     if type(x) ~= 'table' then
       return
     end
@@ -1215,7 +1229,7 @@ function H.unique_nprefix(strings)
   -- For every string compute minimum width of unique prefix. NOTE: this can be
   -- done simpler but it would be O(n^2) which *will* have noticable effect
   -- when there are a) many items and b) some of them are identical and have
-  -- big length (like MRU files with full paths).
+  -- big length (like recent files with full paths).
 
   -- Make copy because it will be modified
   local str_set = vim.deepcopy(strings)

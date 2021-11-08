@@ -1,25 +1,25 @@
 require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
--- Test starter
-local starter = require('mini-dev.starter')
-starter.setup({
-  autoopen = true,
-  items = {
-    starter.sections.sessions(5, true),
-    starter.sections.mru_files(5, false, true),
-    starter.sections.mru_files(5, true, true),
-    starter.sections.telescope(),
-    _G.test_items,
-  },
-  content_hooks = {
-    starter.gen_hook.adding_bullet(),
-    -- starter.gen_hook.indexing('section', { 'Sessions', 'Section 2', 'Telescope' }),
-    starter.gen_hook.aligning('center', 'center'),
-  },
-})
+-- -- Test starter
+-- local starter = require('mini-dev.starter')
+-- starter.setup({
+--   autoopen = true,
+--   items = {
+--     starter.sections.sessions(5, true),
+--     starter.sections.mru_files(5, false, true),
+--     starter.sections.mru_files(5, true, true),
+--     starter.sections.telescope(),
+--     _G.test_items,
+--   },
+--   content_hooks = {
+--     starter.gen_hook.adding_bullet(),
+--     -- starter.gen_hook.indexing('section', { 'Sessions', 'Section 2', 'Telescope' }),
+--     starter.gen_hook.aligning('center', 'center'),
+--   },
+-- })
 
--- -- Default starter
--- require('mini-dev.starter').setup()
+-- Default starter
+require('mini-dev.starter').setup()
 
 -- -- 'vim-startify'
 -- local starter = require('mini-dev.starter')
