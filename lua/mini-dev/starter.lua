@@ -25,6 +25,9 @@
 ---       For every item its unique prefix is highlighted.
 ---     - Use Up/Down arrows and hit Enter.
 ---
+--- What is doesn't do:
+--- - It doesn't support fuzzy query for items. And probably will never do.
+---
 --- # Setup
 ---
 --- This module needs a setup with `require('mini.starter').setup({})`
@@ -33,7 +36,8 @@
 --- Default `config`:
 --- <code>
 ---   {
----     -- Whether to open starter buffer if Neovim was called without file arguments
+---     -- Whether to open starter buffer on VimEnter. Not opened if Neovim was
+---     -- started with intent to show something else.
 ---     autoopen = true,
 ---
 ---     -- Whether to evaluate action of single active item
@@ -86,7 +90,7 @@
 ---
 --- Configuration similar to 'mhinz/vim-startify':
 --- <code>
----   local starter = require('mini-dev.starter')
+---   local starter = require('mini.starter')
 ---   starter.setup({
 ---     evaluate_single = true,
 ---     items = {
@@ -106,7 +110,7 @@
 --- </code>
 --- Configuration similar to 'glepnir/dashboard-nvim':
 --- <code>
----   local starter = require('mini-dev.starter')
+---   local starter = require('mini.starter')
 ---   starter.setup({
 ---     items = {
 ---       starter.sections.telescope(),
@@ -117,37 +121,58 @@
 ---     },
 ---   })
 --- </code>
---- Configuration showing possible custom items and content hooks:
+--- Elaborated configuration showing capabilities of custom items,
+--- header/footer, and content hooks:
 --- <code>
+---   local my_items = {
+---     { name = 'Echo random number', action = [[lua print(math.random())]], section = 'Section 1' },
+---     function()
+---       return {
+---         { name = 'Item #1 from function', action = [[echo 'Item #1']], section = 'From function' },
+---         { name = 'Placeholder (always incative) item', action = '', section = 'From function' },
+---         function()
+---           return {
+---             name = 'Item #1 from double function',
+---             action = [[echo 'Double function']],
+---             section = 'From double function',
+---           }
+---         end,
+---       }
+---     end,
+---     { name = [[Another item in 'Section 1']], action = [[lua print(math.random() + 10)]], section = 'Section 1' },
+---   }
+---
+---   local footer_n_seconds = (function()
+---     local timer = vim.loop.new_timer()
+---     local n_seconds = 0
+---     timer:start(0, 1000, vim.schedule_wrap(function()
+---       if vim.api.nvim_buf_get_option(0, 'filetype') ~= 'starter' then
+---         timer:stop()
+---         return
+---       end
+---       n_seconds = n_seconds + 1
+---       MiniStarter.refresh()
+---     end))
+---
+---     return function()
+---       return 'Number of seconds since opening: ' .. n_seconds
+---     end
+---   end)()
+---
+---   local hook_top_pad_10 = function(content)
+---     -- Pad from top
+---     for _ = 1, 10 do
+---       -- Insert at start a line with single content unit
+---       table.insert(content, 1, { { type = 'empty', string = '' } })
+---     end
+---     return content
+---   end
+---
 ---   local starter = require('mini-dev.starter')
 ---   starter.setup({
----     items = {
----       { name = 'Echo random number', action = [[lua print(math.random())]], section = 'Section 1' },
----       function()
----         return {
----           { name = 'Item #1 from function', action = [[echo 'Item #1']], section = 'From function' },
----           { name = 'Placeholder (always incative) item', action = '', section = 'From function' },
----           function()
----             return {
----               name = 'Item #1 from double function',
----               action = [[echo 'Double function']],
----               section = 'From double function',
----             }
----           end,
----         }
----       end,
----       { name = [[Another item in 'Section 1']], action = [[lua print(math.random() + 10)]], section = 'Section 1' },
----     },
----     content_hooks = {
----       function(content)
----         -- Pad from top
----         for _ = 1, 10 do
----           -- Insert at start a line with single content unit
----           table.insert(content, 1, { { type = 'empty', string = '' } })
----         end
----         return content
----       end,
----     },
+---     items = my_items,
+---     footer = footer_n_seconds,
+---     content_hooks = { hook_top_pad_10 },
 ---   })
 --- </code>
 --- Example of custom items and content hooks:
@@ -170,11 +195,11 @@
 --- To disable core functionality, set `g:ministarter_disable` (globally) or
 --- `b:ministarter_disable` (for a buffer) to `v:true`.
 ---@brief ]]
----@tag MiniStarter mini-dev.starter
+---@tag MiniStarter mini.starter
 
 -- Module and its helper --
 local MiniStarter = {}
-H = {}
+local H = {}
 
 --- Module setup
 ---
@@ -216,7 +241,8 @@ end
 
 -- Module config --
 MiniStarter.config = {
-  -- Whether to open starter buffer if Neovim was called without file arguments
+  -- Whether to open starter buffer on VimEnter. Not opened if Neovim was
+  -- started with intent to show something else.
   autoopen = true,
 
   -- Whether to evaluate action of single active item
@@ -271,7 +297,10 @@ MiniStarter.content = {}
 -- Module functionality --
 --- Act on |VimEnter|
 function MiniStarter.on_vimenter()
-  if MiniStarter.config.autoopen and vim.fn.argc() == 0 then
+  -- It is assumed that something is shown if there is something in 'current'
+  -- buffer or if at least one file was supplied on startup
+  local is_something_shown = vim.fn.line2byte('$') > 0 or vim.fn.argc() > 0
+  if MiniStarter.config.autoopen and not is_something_shown then
     MiniStarter.open()
   end
 end
@@ -282,7 +311,7 @@ end
 --- - Set buffer options. Note that setting is done with |noautocmd| to achieve
 ---   a massive speedup.
 --- - Set buffer mappings. Besides basic mappings (described inside 'Lifecycle
----   of Starter buffer' of |mini-dev.starter|), map every character from
+---   of Starter buffer' of |mini.starter|), map every character from
 ---   `MiniStarter.config.query_updaters` to add itself to query with
 ---   |MiniStarter.add_to_query|.
 --- - Populate buffer with |MiniStarter.refresh|.
@@ -412,7 +441,7 @@ function MiniStarter.sections.sessions(n, recent)
       table.insert(items, {
         modify_time = session.modify_time,
         name = session_name,
-        action = string.format([[lua _G.MiniSessions.read('%s')]], session_name),
+        action = ([[lua _G.MiniSessions.read('%s')]]):format(session_name),
         section = 'Sessions',
       })
     end
@@ -453,7 +482,7 @@ function MiniStarter.sections.recent_files(n, current_dir, show_path)
   end
 
   return function()
-    local section = string.format([[Recent files%s]], current_dir and ' (current directory)' or '')
+    local section = ('Recent files%s'):format(current_dir and ' (current directory)' or '')
 
     -- Use only actual readable files
     local files = vim.tbl_filter(function(f)
@@ -481,9 +510,9 @@ function MiniStarter.sections.recent_files(n, current_dir, show_path)
     local items = {}
     local fmodify = vim.fn.fnamemodify
     for _, f in ipairs(vim.list_slice(files, 1, n)) do
-      local path = show_path and string.format([[ (%s)]], fmodify(f, ':~:.')) or ''
-      local name = string.format([[%s%s]], fmodify(f, ':t'), path)
-      table.insert(items, { action = string.format([[edit %s]], fmodify(f, ':p')), name = name, section = section })
+      local path = show_path and (' (%s)'):format(fmodify(f, ':~:.')) or ''
+      local name = ('%s%s'):format(fmodify(f, ':t'), path)
+      table.insert(items, { action = ('edit %s'):format(fmodify(f, ':p')), name = name, section = section })
     end
 
     return items
@@ -501,6 +530,7 @@ function MiniStarter.sections.telescope()
       {action = 'Telescope command_history', name = 'Command history', section = 'Telescope'},
       {action = 'Telescope find_files',      name = 'Files',           section = 'Telescope'},
       {action = 'Telescope help_tags',       name = 'Help tags',       section = 'Telescope'},
+      {action = 'Telescope live_grep',       name = 'Live grep',       section = 'Telescope'},
       {action = 'Telescope oldfiles',        name = 'Old files',       section = 'Telescope'},
     }
   end
@@ -606,7 +636,7 @@ function MiniStarter.gen_hook.indexing(grouping, exclude_sections)
         end
 
         local section_index = per_section and string.char(96 + n_section) or ''
-        unit.string = string.format([[%s%s. %s]], section_index, n_item, unit.string)
+        unit.string = ('%s%s. %s'):format(section_index, n_item, unit.string)
       end
     end
 
@@ -800,7 +830,7 @@ function MiniStarter.add_to_query(char)
   if char == nil then
     H.query = H.query:sub(0, H.query:len() - 1)
   else
-    H.query = string.format('%s%s', H.query, char)
+    H.query = ('%s%s'):format(H.query, char)
   end
   H.make_query()
 end
@@ -840,7 +870,7 @@ H.default_header = function()
   local day_part = ({ 'evening', 'morning', 'afternoon', 'evening' })[part_id]
   local username = vim.fn.getenv('USERNAME') or 'USERNAME'
 
-  return string.format([[Good %s, %s]], day_part, username)
+  return ('Good %s, %s'):format(day_part, username)
 end
 
 H.default_footer = [[
@@ -916,7 +946,7 @@ end
 function H.normalize_header_footer(x, x_name)
   local res = H.eval_fun_or_string(x)
   if type(res) ~= 'string' then
-    H.notify(string.format([[`config.%s` should be evaluated into string.]], x_name))
+    H.notify(('`config.%s` should be evaluated into string.'):format(x_name))
     return {}
   end
   if res == '' then
@@ -1096,12 +1126,12 @@ function H.make_query(query)
   end
 
   -- Notify about new query
-  local msg = string.format('Query: %s', H.query)
+  local msg = ('Query: %s'):format(H.query)
   if n_active == 0 then
-    msg = string.format('%s . There is no active items. Use <BS> to delete symbols from query.', msg)
+    msg = ('%s . There is no active items. Use <BS> to delete symbols from query.'):format(msg)
   end
   ---- Use `echo` because it doesn't write to `:messages`
-  vim.cmd(string.format([[echo '(mini.starter) %s']], vim.fn.escape(msg, [[']])))
+  vim.cmd(([[echo '(mini.starter) %s']]):format(vim.fn.escape(msg, [[']])))
 end
 
 -- Work with starter buffer --
@@ -1135,10 +1165,10 @@ function H.apply_buffer_options()
     [[foldlevel=999]],
   }
   ---- Vim's `setlocal` is currently more robust comparing to `opt_local`
-  vim.cmd(string.format([[silent! noautocmd setlocal %s]], table.concat(options, ' ')))
+  vim.cmd(('silent! noautocmd setlocal %s'):format(table.concat(options, ' ')))
 
   -- Hide tabline (but not statusline as it weirdly feels 'naked' without it)
-  vim.cmd(string.format([[au BufLeave <buffer> set showtabline=%s]], vim.o.showtabline))
+  vim.cmd(('au BufLeave <buffer> set showtabline=%s'):format(vim.o.showtabline))
   vim.o.showtabline = 0
 
   -- Disable 'mini.cursorword'
@@ -1155,7 +1185,7 @@ function H.apply_buffer_mappings()
 
   -- Make all special symbols to update query
   for _, key in ipairs(vim.split(MiniStarter.config.query_updaters, '')) do
-    H.buf_keymap(key, string.format([[MiniStarter.add_to_query('%s')]], key))
+    H.buf_keymap(key, ([[MiniStarter.add_to_query('%s')]]):format(key))
   end
 
   H.buf_keymap('<BS>', [[MiniStarter.add_to_query()]])
@@ -1208,13 +1238,7 @@ function H.eval_fun_or_string(x, string_as_cmd)
 end
 
 function H.buf_keymap(key, cmd)
-  vim.api.nvim_buf_set_keymap(
-    H.buf_id,
-    'n',
-    key,
-    string.format([[<Cmd>lua %s<CR>]], cmd),
-    { nowait = true, silent = true }
-  )
+  vim.api.nvim_buf_set_keymap(H.buf_id, 'n', key, ('<Cmd>lua %s<CR>'):format(cmd), { nowait = true, silent = true })
 end
 
 function H.buf_hl(ns_id, hl_group, line, col_start, col_end)
@@ -1222,7 +1246,7 @@ function H.buf_hl(ns_id, hl_group, line, col_start, col_end)
 end
 
 function H.notify(msg)
-  vim.notify(string.format([[(mini.starter) %s]], msg))
+  vim.notify(('(mini.starter) %s'):format(msg))
 end
 
 function H.unique_nprefix(strings)
@@ -1269,66 +1293,5 @@ function H.unique_nprefix(strings)
 
   return res
 end
-
-_G.test_items = {
-  -- Placeholder section
-  { name = 'Should always be inactive', action = '', section = 'Placeholder' },
-  -- Section 1 (nested)
-  {
-    { name = 'G1A1', action = [[echo 'G1A1']], section = 'Section 1' },
-  },
-  -- Sections 2 and 3 (double nested)
-  {
-    {
-      {
-        name = 'G2A1',
-        action = function()
-          print('Function action is success')
-        end,
-        section = 'Section 2',
-      },
-      { name = 'G2B2', action = [[echo 'G2B2']], section = 'Section 2' },
-    },
-    {
-      { name = 'G3A1', action = [[echo 'G3A1']], section = 'Section 3' },
-      function()
-        return {
-          { name = 'G3B2', action = [[echo 'G3B2']], section = 'Section 3' },
-          { name = 'G3C3', action = [[echo 'G3C3']], section = 'Section 3' },
-        }
-      end,
-    },
-  },
-  -- Section 4 (direct)
-  { name = 'G4A1', action = [[echo 'G4A1']], section = 'Section 4' },
-  { name = 'G4B2', action = [[echo 'G4B2']], section = 'Section 4' },
-  { name = 'G4C3', action = [[echo 'G4C3']], section = 'Section 4' },
-  { name = 'G4D4', action = [[echo 'G4D4']], section = 'Section 4' },
-
-  -- Without section (should be ignored)
-  { name = 'G_A1', action = [[echo 'G_A1']] },
-  { name = 'G_B2', action = [[echo 'G_B2']] },
-
-  -- Already present sections to test grouping
-  {
-    { name = 'G2C3', action = [[echo 'G2C3']], section = 'Section 2' },
-    { name = 'G1B2', action = [[echo 'G1B2']], section = 'Section 1' },
-    { name = 'G3D4', action = [[echo 'G3D4']], section = 'Section 3' },
-    {
-      function()
-        return { name = 'G4E5', action = [[echo 'G4E5']], section = 'Section 4' }
-      end,
-    },
-  },
-
-  -- Multiline names
-  { name = 'G5A1\n\n', action = [[echo 'G5A1']], section = 'Section 5' },
-  {
-    name = [[G5
-    B2]],
-    action = [[echo 'G5B2']],
-    section = 'Section 5',
-  },
-}
 
 return MiniStarter

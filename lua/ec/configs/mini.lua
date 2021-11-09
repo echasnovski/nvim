@@ -1,56 +1,14 @@
 require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
--- -- Test starter
--- local starter = require('mini-dev.starter')
--- starter.setup({
---   autoopen = true,
---   items = {
---     starter.sections.sessions(5, true),
---     starter.sections.mru_files(5, false, true),
---     starter.sections.mru_files(5, true, true),
---     starter.sections.telescope(),
---     _G.test_items,
---   },
---   content_hooks = {
---     starter.gen_hook.adding_bullet(),
---     -- starter.gen_hook.indexing('section', { 'Sessions', 'Section 2', 'Telescope' }),
---     starter.gen_hook.aligning('center', 'center'),
---   },
--- })
-
--- Default starter
-require('mini-dev.starter').setup()
-
--- -- 'vim-startify'
--- local starter = require('mini-dev.starter')
--- starter.setup({
---   evaluate_single = true,
---   items = {
---     {
---       { name = 'Edit file', action = [[enew]], section = 'Actions' },
---       { name = 'Quit', action = [[quit]], section = 'Actions' },
---     },
---     starter.sections.mru_files(10, false),
---     starter.sections.mru_files(10, true),
---   },
---   content_hooks = {
---     starter.gen_hook.adding_bullet(),
---     starter.gen_hook.indexing('all', { 'Actions' }),
---     starter.gen_hook.padding(3, 2),
---   },
--- })
-
--- -- 'dashboard-nvim'
--- local starter = require('mini-dev.starter')
--- starter.setup({
---   items = {
---     starter.sections.telescope(),
---   },
---   content_hooks = {
---     starter.gen_hook.adding_bullet(),
---     starter.gen_hook.aligning('center', 'center'),
---   },
--- })
+local starter = require('mini-dev.starter')
+starter.setup({
+  items = {
+    starter.sections.sessions(5, true),
+    starter.sections.recent_files(5, false, false),
+    { name = 'Edit file', action = [[enew]], section = 'Actions' },
+    { name = 'Quit', action = [[quit]], section = 'Actions' },
+  },
+})
 
 local has_minijump = pcall(function()
   require('mini.jump').setup()

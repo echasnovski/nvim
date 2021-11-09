@@ -109,7 +109,7 @@ MiniSessions.detected = {}
 ---   beforehand for unsaved buffers and stops if there is any.
 --- - Source session with supplied name.
 ---
----@param session_name string: Name of detected section to read. Default: `nil` for latest session (see |MiniSessions.get_latest|).
+---@param session_name string: Name of detected session file to read. Default: `nil` for latest session (see |MiniSessions.get_latest|).
 ---@param force boolean: Whether to delete unsaved buffers. Default: `MiniSessions.config.force.read`.
 function MiniSessions.read(session_name, force)
   if H.is_disabled() then
@@ -131,7 +131,7 @@ function MiniSessions.read(session_name, force)
   end
 
   local path = vim.fn.fnameescape(MiniSessions.detected[session_name].path)
-  vim.cmd(string.format([[source %s]], path))
+  vim.cmd(('source %s'):format(path))
 end
 
 --- Write session
@@ -142,7 +142,7 @@ end
 --- - Write session with |mksession| to a file named `session_name` inside
 ---   `MiniSessions.config.directory`.
 ---
----@param session_name string: Name of section to write. Default: `nil` for current session.
+---@param session_name string: Name of session file to write. Default: `nil` for current session.
 ---@param force boolean: Whether to ignore existence of session file. Default: `MiniSessions.config.force.write`.
 function MiniSessions.write(session_name, force)
   if H.is_disabled() then
@@ -164,8 +164,8 @@ function MiniSessions.write(session_name, force)
     return
   end
 
-  local cmd = string.format([[mksession%s]], force and '!' or '')
-  vim.cmd(string.format([[%s %s]], cmd, vim.fn.fnameescape(session_file)))
+  local cmd = ('mksession%s'):format(force and '!' or '')
+  vim.cmd(('%s %s'):format(cmd, vim.fn.fnameescape(session_file)))
 end
 
 --- Delete detected session
@@ -175,7 +175,7 @@ end
 ---   then stop.
 --- - Delete session.
 ---
----@param session_name string: Name of section to delete. Default: `nil` for current session.
+---@param session_name string: Name of session file to delete. Default: `nil` for current session.
 ---@param force boolean: Whether to ignore deletion of current session. Default: `MiniSessions.config.force.delete`.
 function MiniSessions.delete(session_name, force)
   if H.is_disabled() then
@@ -266,7 +266,7 @@ end
 function H.detect_sessions(dir_path)
   dir_path = vim.fn.fnamemodify(dir_path, ':p')
   if vim.fn.isdirectory(dir_path) ~= 1 then
-    H.notify(string.format([[%s is not a directory path.]], vim.inspect(dir_path)))
+    H.notify(('%s is not a directory path.'):format(vim.inspect(dir_path)))
     return {}
   end
 
@@ -295,7 +295,7 @@ function H.validate_detected(session_name)
     return true
   end
 
-  H.notify(string.format([[%s is not a name for detected session.]], vim.inspect(session_name)))
+  H.notify(('%s is not a name for detected session.'):format(vim.inspect(session_name)))
   return false
 end
 
@@ -311,7 +311,8 @@ function H.wipeout_all_buffers(force)
   end, vim.api.nvim_list_bufs())
 
   if #unsaved_buffers > 0 then
-    H.notify(string.format([[There are unsaved buffers: %s]], table.concat(unsaved_buffers, ', ')))
+    local buf_list = table.concat(unsaved_buffers, ', ')
+    H.notify(('There are unsaved buffers: %s.'):format(buf_list))
     return false
   end
 
@@ -325,7 +326,7 @@ end
 
 ---- Utilities
 function H.notify(msg)
-  vim.notify(string.format([[(mini.sessions) %s]], msg))
+  vim.notify(('(mini.sessions) %s'):format(msg))
 end
 
 return MiniSessions
