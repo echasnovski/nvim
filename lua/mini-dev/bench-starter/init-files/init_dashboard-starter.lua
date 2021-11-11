@@ -9,12 +9,12 @@ starter.setup({
     starter.sections.telescope(),
   },
   content_hooks = {
-    starter.gen_hook.adding_bullet('  '),
+    starter.gen_hook.adding_bullet(),
     starter.gen_hook.aligning('center', 'center'),
   },
 })
 
--- Close Neovim just after fully opening it
+-- Close Neovim just after fully opening it. Randomize to make "more real".
 vim.defer_fn(function()
   vim.cmd([[quit]])
-end, 250)
+end, 100 + 200 * math.random())

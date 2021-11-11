@@ -1,49 +1,56 @@
 #! /bin/bash
 
-# WARNING: EXECUTION OF THIS SCRIPT LEADS TO FLICKERING OF SCREEN WHICH WHICH MAY
-# CAUSE HARM TO YOUR HEALTH. This is because every 'init' file leads to an
+# Perform benchmarking of startup times with different Neovim 'init' files.
+# Execute `nvim -u <*> --startuptime <*>` several times (as closely to actual
+# usage as possible) in rounds alternating between input 'init' files (to "mix"
+# possible random noise). Store output in .csv file with rows containing
+# startup times for a single round, columns - for a single 'init' file.
+
+# WARNING: EXECUTION OF THIS SCRIPT LEADS TO FLICKERING OF SCREEN WHICH WHICH
+# MAY CAUSE HARM TO YOUR HEALTH. This is because every 'init' file leads to an
 # actual opening of Neovim with later automatic closing.
 
-# touch startup-times.csv
-#
-# function join_by_comma { local IFS=","; shift; echo "$*"; }
+# Number of rounds to perform benchmark
+n_rounds=1000
+
+# Path to output .csv file with startup times per round
+csv_file=startup-times.csv
+
+# Path to output .md file with summary table
+summary_file=startup-summary.md
+
+# 'Init' files ids with actual paths computed as 'init-files/init_*.lua'
+init_files=(starter-default empty startify-starter startify-original startify-alpha dashboard-starter dashboard-original dashboard-alpha)
+
+function comma_join { local IFS=","; shift; echo "$*"; }
 
 function benchmark {
-  echo -n "$1: "
+  rm -f "$csv_file"
+  touch "$csv_file"
 
-  nvim -u init-files/$1 --startuptime tmp-bench.txt
+  local tmp_bench_file="tmp-bench.txt"
+  touch "$tmp_bench_file"
 
-  # Take the total startup time and add it to output csv file
-  t=$(tail -n 1 tmp-bench.txt | cut -d " " -f1)
-  # sed -i -e '$a'"$t" startup-times.csv
-  # sed '$s/$/'"$t"'/' startup-times.csv
+  comma_join -- "$@" >> startup-times.csv
 
-  # Remove Neovim's startuptime file
-  rm tmp-bench.txt
+  for i in $(seq 1 $n_rounds); do
+    echo "Round $i"
 
-  echo $t
+    local bench_times=()
+
+    for init_file in "$@"; do
+      nvim -u "init-files/init_$init_file.lua" --startuptime "$tmp_bench_file"
+      local b_time=$(tail -n 1 "$tmp_bench_file" | cut -d " " -f1)
+      bench_times=("${bench_times[@]}" "$b_time")
+    done
+
+    comma_join -- "${bench_times[@]}" >> "$csv_file"
+
+    rm "$tmp_bench_file"
+  done
 }
 
-benchmark init_starter-default.lua
-benchmark init_empty.lua
+benchmark "${init_files[@]}"
 
-benchmark init_starter-startify.lua
-benchmark init_startify.lua
-benchmark init_alpha-startify.lua
-
-benchmark init_starter-dashboard.lua
-benchmark init_dashboard.lua
-benchmark init_alpha-dashboard.lua
-
-# time_arr=()
-#
-# time_arr[0]=$(benchmark init_starter-default.lua)
-# time_arr[1]=$(benchmark init_empty.lua)
-# time_arr[2]=$(benchmark init_starter-startify.lua)
-# time_arr[3]=$(benchmark init_startify.lua)
-# time_arr[4]=$(benchmark init_alpha-startify.lua)
-# time_arr[5]=$(benchmark init_starter-dashboard.lua)
-# time_arr[6]=$(benchmark init_dashboard.lua)
-# time_arr[7]=$(benchmark init_alpha-dashboard.lua)
-#
-# echo $time_arr
+# Produce output summary
+./make_summary.py "${csv_file}" "${summary_file}"
