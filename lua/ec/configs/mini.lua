@@ -1,14 +1,6 @@
 require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
-local starter = require('mini-dev.starter')
-starter.setup({
-  items = {
-    starter.sections.sessions(5, true),
-    starter.sections.recent_files(5, false, false),
-    { name = 'Edit file', action = [[enew]], section = 'Actions' },
-    { name = 'Quit', action = [[quit]], section = 'Actions' },
-  },
-})
+require('mini-dev.starter').setup()
 
 local has_minijump = pcall(function()
   require('mini.jump').setup()

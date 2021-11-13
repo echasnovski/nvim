@@ -67,7 +67,7 @@
 ---     -- Characters to update query. Each character will have special buffer
 ---     -- mapping overriding your global ones. Be careful to not add `:` as it
 ---     -- allows you to go into command mode.
----     query_updaters = [[abcdefghijklmnopqrstuvwxyz0123456789 _-.]],
+---     query_updaters = [[abcdefghijklmnopqrstuvwxyz0123456789_-.]],
 ---   }
 --- </code>
 --- # Lifecycle of Starter buffer
@@ -94,16 +94,15 @@
 ---   starter.setup({
 ---     evaluate_single = true,
 ---     items = {
----       {
----         { name = 'Edit file', action = [[enew]], section = 'Actions' },
----         { name = 'Quit',      action = [[quit]], section = 'Actions' },
----       },
+---       starter.sections.builtin_actions(),
 ---       starter.sections.recent_files(10, false),
 ---       starter.sections.recent_files(10, true),
+---       -- Use this if you set up 'mini.sessions'
+---       starter.sections.sessions(5, true)
 ---     },
 ---     content_hooks = {
 ---       starter.gen_hook.adding_bullet(),
----       starter.gen_hook.indexing('all', { 'Actions' }),
+---       starter.gen_hook.indexing('all', { 'Builtin actions' }),
 ---       starter.gen_hook.padding(3, 2),
 ---     },
 ---   })
@@ -271,7 +270,7 @@ MiniStarter.config = {
   -- Characters to update query. Each character will have special buffer
   -- mapping overriding your global ones. Be careful to not add `:` as it
   -- allows you to go into command mode.
-  query_updaters = [[abcdefghijklmnopqrstuvwxyz0123456789 _-.]],
+  query_updaters = [[abcdefghijklmnopqrstuvwxyz0123456789_-.]],
 }
 
 --- Final content of Starter buffer
@@ -420,12 +419,28 @@ end
 --- Table of pre-configured sections
 MiniStarter.sections = {}
 
+--- Section with builtin actions
+---
+---@return table: Array of items.
+function MiniStarter.sections.builtin_actions()
+  return {
+    { name = 'Edit new buffer', action = 'enew', section = 'Builtin actions' },
+    { name = 'Quit Neovim', action = 'qall', section = 'Builtin actions' },
+  }
+end
+
 --- Section with |MiniSessions| sessions
 ---
---- Sessions are taken from |MiniSessions.detected|.
+--- Sessions are taken from |MiniSessions.detected|. Notes:
+--- - If it shows "'mini.sessions' is not set up", it means that you didn't
+---   call `require('mini.sessions').setup()`.
+--- - If it shows "There are no detected sessions in 'mini.sessions'", it means
+---   that there are no sessions at the current sessions directory. Either
+---   create session or supply different directory where session files are
+---   stored (see |MiniSessions.setup|).
 ---
 ---@param n number: Number of returned items. Default: 5.
----@param recent boolean: Whether to use recent sessions (instead of default order of `MiniSessions.detected`). Default: true.
+---@param recent boolean: Whether to use recent sessions (instead of alphabetically by name). Default: true.
 ---@return function: Function which returns array of items.
 function MiniStarter.sections.sessions(n, recent)
   n = n or 5
@@ -450,11 +465,17 @@ function MiniStarter.sections.sessions(n, recent)
       return { { name = [[There are no detected sessions in 'mini.sessions']], action = '', section = 'Sessions' } }
     end
 
+    local sort_fun
     if recent then
-      table.sort(items, function(a, b)
+      sort_fun = function(a, b)
         return a.modify_time > b.modify_time
-      end)
+      end
+    else
+      sort_fun = function(a, b)
+        return a.name < b.name
+      end
     end
+    table.sort(items, sort_fun)
 
     -- Take only first `n` elements and remove helper `modify_time`
     return vim.tbl_map(function(x)
@@ -847,20 +868,13 @@ H.default_config = MiniStarter.config
 -- Default config values
 H.default_items = {
   function()
-    local vimrc = vim.fn.fnamemodify(vim.fn.expand('$MYVIMRC'), ':t')
-    return {
-      { name = ([[Configure %s]]):format(vimrc), action = 'edit $MYVIMRC', section = 'Builtin actions' },
-      { name = 'Edit new buffer', action = 'enew', section = 'Builtin actions' },
-      { name = 'Quit Neovim', action = 'qall', section = 'Builtin actions' },
-    }
-  end,
-  function()
     if _G.MiniSessions == nil then
       return {}
     end
     return MiniStarter.sections.sessions(5, true)()
   end,
   MiniStarter.sections.recent_files(5, false, false),
+  MiniStarter.sections.builtin_actions(),
 }
 
 H.default_header = function()
