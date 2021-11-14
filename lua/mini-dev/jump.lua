@@ -90,20 +90,27 @@ MiniJump.config = {
 --- Takes a string and jumps to the first occurrence of it after the cursor.
 ---
 --- @param target string: The string to jump to.
---- @param backward boolean: Whether to jump backward.
---- @param till boolean: Whether to jump just before/after the match instead of exactly on target. Also ignore matches that don't have anything before/after them.
+--- @param backward boolean: Whether to jump backward. Default: latest used value.
+--- @param till boolean: Whether to jump just before/after the match instead of exactly on target. Also ignore matches that don't have anything before/after them. Default: latest used value.
 function MiniJump.jump(target, backward, till)
   if H.is_disabled() then
     return
   end
 
-  backward = backward == nil and false or backward
-  till = till == nil and false or till
+  H.cache.mode = vim.fn.mode(1)
+  H.cache.target = target == nil and H.cache.target or target
+  -- Don't use `? and <1> or <2>` because it doesn't work when `<1>` is `false`
+  if backward ~= nil then
+    H.cache.backward = backward
+  end
+  if till ~= nil then
+    H.cache.till = till
+  end
 
-  local flags = backward and 'Wb' or 'W'
+  local flags = H.cache.backward and 'Wb' or 'W'
   local pattern, hl_pattern = [[\V%s]], [[\V%s]]
-  if till then
-    if backward then
+  if H.cache.till then
+    if H.cache.backward then
       pattern, hl_pattern = [[\V\(%s\)\@<=\.]], [[\V%s\.\@=]]
       flags = ('%se'):format(flags)
     else
@@ -111,7 +118,7 @@ function MiniJump.jump(target, backward, till)
     end
   end
 
-  target = vim.fn.escape(target, [[\]])
+  target = vim.fn.escape(H.cache.target, [[\]])
   pattern, hl_pattern = pattern:format(target), hl_pattern:format(target)
 
   -- Delay highlighting after stopping previous one
@@ -125,6 +132,8 @@ function MiniJump.jump(target, backward, till)
   )
 
   -- Make jump
+  H.n_cursor_moved = 0
+  H.jumping = true
   vim.fn.search(pattern, flags)
 
   -- Open enough folds to show jump
@@ -136,39 +145,32 @@ end
 --- If the last movement was a jump, perform another jump with the same target.
 --- Otherwise, wait for a target input (via |getchar()|). Respects |v:count|.
 ---
---- @param backward boolean: If true, jump backward.
---- @param till boolean: If true, jump just before/after the match instead of to the first character.
----   Also ignore matches that don't have space before/after them. (This will probably be changed in the future.)
+--- @param backward boolean: Whether to jump backward. Default: latest used value.
+--- @param till boolean: Whether to jump just before/after the match instead of exactly on target. Also ignore matches that don't have anything before/after them. Default: latest used value.
 function MiniJump.smart_jump(backward, till)
   if H.is_disabled() then
     return
   end
 
-  backward = backward == nil and false or backward
-  till = till == nil and false or till
-
   -- Keep track of *full* mode (tracks operator-pending case)
   local cur_mode = vim.fn.mode(1)
-  if H.mode ~= cur_mode then
+  if H.cache.mode ~= cur_mode then
     MiniJump.stop_jumping()
   end
 
-  if H.target == nil then
+  if not H.jumping or H.cache.target == nil then
     local char = vim.fn.getchar()
     -- Allow `<Esc>` to early exit
     if char == 27 then
       return
     end
 
-    H.target = vim.fn.nr2char(char)
-    H.mode = cur_mode
+    H.cache.target = vim.fn.nr2char(char)
   end
 
   for _ = 1, vim.v.count1 do
-    MiniJump.jump(H.target, backward, till)
+    MiniJump.jump(H.cache.target, backward, till)
   end
-
-  H.jumping = true
 end
 
 --- Stop jumping
@@ -177,32 +179,34 @@ end
 --- the target. Automatically called on appropriate Neovim |events|.
 function MiniJump.stop_jumping()
   H.timer:stop()
-  H.target = nil
-  H.mode = nil
+  H.jumping = false
   H.unhighlight()
 end
 
 --- Act on every |CursorMoved|
 function MiniJump.on_cursormoved()
-  -- Stop jumping only if `CursorMoved` was not a result of smart jump
-  if not H.jumping then
-    MiniJump.stop_jumping()
+  -- Check `H.jumping` to avoid unneccessary actions on every CursorMoved
+  if H.jumping then
+    H.n_cursor_moved = H.n_cursor_moved + 1
+    -- Stop jumping only if `CursorMoved` was not a result of smart jump
+    if H.n_cursor_moved > 1 then
+      MiniJump.stop_jumping()
+    end
   end
-  H.jumping = false
 end
 
 -- Helper data --
 -- Module default config
 H.default_config = MiniJump.config
 
--- Current target
-H.target = nil
-
--- Mode of the latest jump (to reset when in different mode)
-H.mode = nil
+-- Cache for the latest jump
+H.cache = { mode = nil, target = nil, backward = false, till = false }
 
 -- Indicator of whether inside smart jumping
 H.jumping = false
+
+-- Counter of number of CursorMoved events
+H.n_cursor_moved = 0
 
 -- Highlight delay timer
 H.timer = vim.loop.new_timer()
