@@ -1,15 +1,5 @@
-require('mini-dev.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
-
-require('mini-dev.starter').setup()
-
-local has_minijump = pcall(function()
-  require('mini.jump').setup()
-end)
-if not has_minijump then
-  pcall(function()
-    require('mini-dev.jump').setup()
-  end)
-end
+require('mini.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
+require('mini.starter').setup()
 
 require('mini.statusline').setup({
   content = {
@@ -60,6 +50,7 @@ vim.defer_fn(function()
     },
   })
   require('mini.cursorword').setup()
+  require('mini.jump').setup()
   require('mini.misc').setup()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   require('mini.surround').setup()
