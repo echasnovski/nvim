@@ -17,9 +17,10 @@
 ---   information changes, there will be no effect until next detection.
 ---
 --- Features:
---- - Autoread latest session if Neovim was called without file arguments.
+--- - Autoread latest session if Neovim was called without intention anything
+---   to show something else.
 --- - Autowrite current session before quitting Neovim.
---- - Configurable severity of all actions.
+--- - Configurable severity level of all actions.
 ---
 --- # Setup
 ---
@@ -36,7 +37,7 @@
 ---     autowrite = true,
 ---
 ---     -- Directory where sessions are stored
----     directory = --<"sessions" subdirectory of user data directory from |stdpath()|>,
+---     directory = --<"session" subdirectory of user data directory from |stdpath()|>,
 ---
 ---     -- Whether to force possibly harmful actions (meaning depends on function)
 ---     force = { read = false, write = true, delete = false },
@@ -49,7 +50,7 @@
 ---@brief ]]
 ---@tag MiniSessions mini.sessions
 
--- Module and its helper
+-- Module and its helper --
 local MiniSessions = {}
 local H = { path_sep = package.config:sub(1, 1) }
 
@@ -68,16 +69,14 @@ function MiniSessions.setup(config)
   H.apply_config(config)
 
   -- Module behavior
-  if config.autoread then
-    vim.cmd([[au VimEnter * ++nested ++once lua if vim.fn.argc() == 0 then MiniSessions.read() end]])
-  end
+  vim.cmd([[au VimEnter * ++nested ++once lua MiniSessions.on_vimenter()]])
 
   if config.autowrite then
     vim.cmd([[au VimLeavePre * lua if vim.v.this_session ~= '' then MiniSessions.write(nil, true) end]])
   end
 end
 
--- Module config
+-- Module config --
 MiniSessions.config = {
   -- Whether to read latest session if Neovim was called without file arguments
   autoread = false,
@@ -86,21 +85,22 @@ MiniSessions.config = {
   autowrite = true,
 
   -- Directory where sessions are stored
-  directory = vim.fn.stdpath('data') .. H.path_sep .. 'sessions',
+  directory = ('%s%ssession'):format(vim.fn.stdpath('data'), H.path_sep),
 
   -- Whether to force possibly harmful actions (meaning depends on function)
   force = { read = false, write = true, delete = false },
 }
 
----- Table of detected sessions
-----
----- Keys represent session name. Values are tables with session information.
----- Currently this information consists from (but subject to change):
----- - `modify_time` - modification time (see |getftime|) of session file.
----- - `path` - full path to session file.
+-- Module data --
+-- Table of detected sessions
+--
+-- Keys represent session name. Values are tables with session information.
+-- Currently this information consists from (but subject to change):
+-- - `modify_time` - modification time (see |getftime|) of session file.
+-- - `path` - full path to session file.
 MiniSessions.detected = {}
 
--- Module functionality
+-- Module functionality --
 --- Read detected session
 ---
 --- What it does:
@@ -157,7 +157,7 @@ function MiniSessions.write(session_name, force)
     return
   end
 
-  local session_file = MiniSessions.config.directory .. H.path_sep .. session_name
+  local session_file = ('%s%s%s'):format(MiniSessions.config.directory, H.path_sep, session_name)
   session_file = vim.fn.fnamemodify(session_file, ':p')
   if not force and vim.fn.filereadable(session_file) == 1 then
     H.notify([[Can't write to existing session when `force` is not `true`.]])
@@ -227,12 +227,22 @@ function MiniSessions.get_latest()
   return latest_name
 end
 
--- Helper data
----- Module default config
+--- Act on |VimEnter|
+function MiniSessions.on_vimenter()
+  -- It is assumed that something is shown if there is something in 'current'
+  -- buffer or if at least one file was supplied on startup
+  local is_something_shown = vim.fn.line2byte('$') > 0 or vim.fn.argc() > 0
+  if MiniSessions.config.autoread and not is_something_shown then
+    MiniSessions.read()
+  end
+end
+
+-- Helper data --
+-- Module default config
 H.default_config = MiniSessions.config
 
--- Helper functions
----- Settings
+-- Helper functions --
+-- Settings
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
@@ -262,7 +272,7 @@ function H.is_disabled()
   return vim.g.minisessions_disable == true or vim.b.minisessions_disable == true
 end
 
----- Work with sessions
+-- Work with sessions
 function H.detect_sessions(dir_path)
   dir_path = vim.fn.fnamemodify(dir_path, ':p')
   if vim.fn.isdirectory(dir_path) ~= 1 then
@@ -324,7 +334,7 @@ function H.get_current_session_name()
   return vim.fn.fnamemodify(vim.v.this_session, ':t')
 end
 
----- Utilities
+-- Utilities
 function H.notify(msg)
   vim.notify(('(mini.sessions) %s'):format(msg))
 end

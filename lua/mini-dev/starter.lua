@@ -167,7 +167,7 @@
 ---     return content
 ---   end
 ---
----   local starter = require('mini-dev.starter')
+---   local starter = require('mini.starter')
 ---   starter.setup({
 ---     items = my_items,
 ---     footer = footer_n_seconds,
@@ -273,11 +273,13 @@ MiniStarter.config = {
   query_updaters = [[abcdefghijklmnopqrstuvwxyz0123456789_-.]],
 }
 
+-- Module data --
 --- Final content of Starter buffer
 ---
 --- Generally, buffer content is a table in the form of '2d array' (or rather
 --- '2d list' because number of elements can differ):
---- - Each element represents content line: an array with content units.
+--- - Each element represents content line: an array with content units to be
+---   displayed in one buffer line.
 --- - Each content unit is a table with at least the following elements:
 ---     - 'type' - string with type of content. Something like 'item',
 ---       'section', 'header', 'footer', 'empty', etc.
@@ -285,7 +287,8 @@ MiniStarter.config = {
 ---     - 'hl' - which highlighting should be applied to content string. May be
 ---       `nil` for no highlighting.
 ---
---- See |MiniStarter.content_to_lines| for converting content to buffer lines.
+--- See |MiniStarter.content_to_lines| for converting content to buffer lines
+--- and |MiniStarter.content_to_items| - to list of parsed items.
 ---
 --- Notes:
 --- - Content units with type 'item' also have `item` element with all
@@ -307,8 +310,8 @@ end
 --- Open Starter buffer
 ---
 --- - Create and move into buffer.
---- - Set buffer options. Note that setting is done with |noautocmd| to achieve
----   a massive speedup.
+--- - Set buffer options. Note that settings are done with |noautocmd| to
+---   achieve a massive speedup.
 --- - Set buffer mappings. Besides basic mappings (described inside 'Lifecycle
 ---   of Starter buffer' of |mini.starter|), map every character from
 ---   `MiniStarter.config.query_updaters` to add itself to query with
@@ -353,21 +356,22 @@ end
 ---       needed).  If proper item is found (table with fields `action`,
 ---       `name`, `section`), add it to output.
 ---     - Sort: order first by section and then by item id (both in order of
----       appearence).
+---       appearance).
 --- - Normalize `MiniStarter.config.header` and `MiniStarter.config.footer` to
----   be a table of string (per line). If function - evaluate it first.
+---   be a table of strings (per line). If function - evaluate it first.
 --- - Make initial buffer content (see |MiniStarter.content| for a description
 ---   of what a buffer content is). It consist from content lines with single
 ---   content unit:
 ---     - First lines contain strings of normalized header.
----     - Body is for normalized items. Section names have own lines.
+---     - Body is for normalized items. Section names have own lines preceded
+---       by empty line.
 ---     - Last lines contain separate strings of normalized footer.
 --- - Sequentially apply hooks from `MiniStarter.config.content_hooks` to
 ---   content. Output of one hook serves as input to the next.
 --- - Gather final items from content with |MiniStarter.content_to_items|.
 --- - Convert content to buffer lines with |MiniStarter.content_to_lines| and
 ---   add them to buffer.
---- - Add highlighting for content units.
+--- - Add highlighting of content units.
 --- - Position cursor.
 --- - Make current query. This results into some items being marked as
 ---   'inactive' and updating highlighting of current query on 'active' items.
@@ -485,7 +489,7 @@ function MiniStarter.sections.sessions(n, recent)
   end
 end
 
---- Section with Most Recently Used files
+--- Section with most recently used files
 ---
 --- Files are taken from |vim.v.oldfiles|.
 ---
@@ -556,7 +560,7 @@ function MiniStarter.sections.telescope()
     }
   end
 end
--- stylua: ignore start
+-- stylua: ignore end
 
 -- Content hooks --
 --- Table with pre-configured content hook generators
@@ -570,7 +574,7 @@ MiniStarter.gen_hook = {}
 --- Output is a content hook which adds constant padding from left and top.
 --- This allows tweaking the screen position of buffer content.
 ---
----@param left number: Number of empty spaces to add to start of each content lines. Default: 0.
+---@param left number: Number of empty spaces to add to start of each content line. Default: 0.
 ---@param top number: Number of empty lines to add to start of content. Default: 0.
 ---@return function: Content hook.
 function MiniStarter.gen_hook.padding(left, top)
@@ -600,7 +604,7 @@ end
 --- left of item.
 ---
 ---@param bullet string: String to be placed to the left of item name. Default: '▌ '.
----@param place_cursor boolean: Whether to place cursor on the first character of bullet when corresponding item becomes current.
+---@param place_cursor boolean: Whether to place cursor on the first character of bullet when corresponding item becomes current. Default: true.
 ---@return function: Content hook.
 function MiniStarter.gen_hook.adding_bullet(bullet, place_cursor)
   bullet = bullet or '░ '
@@ -629,10 +633,10 @@ end
 ---
 --- Output is a content hook which adds unique index to the start of item's
 --- name. It results into shortening queries required to choose an item (at
---- expence of clarity).
+--- expense of clarity).
 ---
----@param grouping string: One of 'all' (number indexing across all sections) or 'section' (letter-number indexing within each section).
----@param exclude_sections table: Array of section names (values of `section` element of item) for which index won't be added.
+---@param grouping string: One of 'all' (number indexing across all sections) or 'section' (letter-number indexing within each section). Default: 'all'.
+---@param exclude_sections table: Array of section names (values of `section` element of item) for which index won't be added. Default: `{}`.
 ---@return function: Content hook.
 function MiniStarter.gen_hook.indexing(grouping, exclude_sections)
   grouping = grouping or 'all'
@@ -672,8 +676,8 @@ end
 --- |MiniStarter.gen_hook.padding| such that output lines would appear aligned
 --- in certain way.
 ---
----@param horizontal string: One of 'left', 'center', 'right'.
----@param vertical string: One of 'top', 'center', 'bottom'.
+---@param horizontal string: One of 'left', 'center', 'right'. Default: 'left'.
+---@param vertical string: One of 'top', 'center', 'bottom'. Default: 'top'.
 ---@return function: Content hook.
 function MiniStarter.gen_hook.aligning(horizontal, vertical)
   horizontal = horizontal == nil and 'left' or horizontal
@@ -743,6 +747,7 @@ function MiniStarter.content_to_lines(content)
   return vim.tbl_map(
     function(content_line)
       return table.concat(
+      -- Ensure that each content line is indeed a single buffer line
         vim.tbl_map(function(x) return x.string:gsub('\n', ' ') end, content_line), ''
       )
     end,
@@ -840,7 +845,8 @@ end
 
 --- Add character to current query
 ---
---- - Update current query by appending `char` to its end.
+--- - Update current query by appending `char` to its end or delete latest
+---   character if `char` is `nil`.
 --- - Recompute status of items: 'active' if its name starts with new query,
 ---   'inactive' otherwise.
 --- - Update highlighting: whole strings for 'inactive' items, current query
@@ -856,7 +862,7 @@ function MiniStarter.add_to_query(char)
   H.make_query()
 end
 
---- Act on |CursorMoved|
+--- Act on |CursorMoved| by repositioning cursor in fixed place
 function MiniStarter.on_cursormoved()
   H.position_cursor_on_current_item()
 end

@@ -105,7 +105,7 @@ function MiniJump.jump(target, backward, till)
   if till then
     if backward then
       pattern, hl_pattern = [[\V\(%s\)\@<=\.]], [[\V%s\.\@=]]
-      flags = flags .. 'e'
+      flags = ('%se'):format(flags)
     else
       pattern, hl_pattern = [[\V\.\(%s\)\@=]], [[\V\.\@<=%s]]
     end
