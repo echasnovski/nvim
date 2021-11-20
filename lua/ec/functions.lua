@@ -99,5 +99,5 @@ H.confirm_popup = function() end
 ---- - No autopairs plugin: `function() return H.keys.cr end`.
 ---- - nvim-autopairs: `require('nvim-autopairs').autopairs_cr`
 H.get_nopopup_keys = function()
-  return require('mini.pairs').cr({ '()', '[]', '{}' })
+  return require('mini.pairs').cr()
 end
