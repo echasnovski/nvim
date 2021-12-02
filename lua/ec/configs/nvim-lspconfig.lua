@@ -19,7 +19,7 @@ local on_attach_custom = function(client, bufnr)
   client.resolved_capabilities.document_formatting = false
 end
 
-vim.lsp.handlers['textDocument/publishDiagnostics'] = vim.lsp.with(vim.lsp.diagnostic.on_publish_diagnostics, {
+local diagnostic_opts = {
   -- Show gutter sings
   signs = {
     -- With highest priority
@@ -31,7 +31,16 @@ vim.lsp.handlers['textDocument/publishDiagnostics'] = vim.lsp.with(vim.lsp.diagn
   virtual_text = { severity_limit = 'Error' },
   -- Don't update diagnostics when typing
   update_in_insert = false,
-})
+}
+
+if vim.fn.has('nvim-0.6') == 1 then
+  vim.diagnostic.config(diagnostic_opts)
+else
+  vim.lsp.handlers['textDocument/publishDiagnostics'] = vim.lsp.with(
+    vim.lsp.diagnostic.on_publish_diagnostics,
+    diagnostic_opts
+  )
+end
 
 -- R (r_language_server)
 lspconfig.r_language_server.setup({
