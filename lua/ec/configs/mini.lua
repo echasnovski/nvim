@@ -33,6 +33,8 @@ require('mini.statusline').setup({
 })
 require('mini.tabline').setup()
 
+require('mini-dev.doc').setup()
+
 vim.defer_fn(function()
   require('mini.bufremove').setup()
   require('mini.comment').setup()
