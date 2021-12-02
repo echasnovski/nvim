@@ -18,22 +18,6 @@
 --- Default `config`:
 --- <code>
 ---   {
----     hooks = {
----       block_pre = -- function
----       tags = {
----         ['@class'] = -- function
----         ['@param'] = -- function
----         ['@property'] = -- function
----         ['@return'] = -- function
----         ['@tag'] = -- function
----         ['@text'] = -- function
----         ['@type'] = -- function
----         ['@usage'] = -- function
----       },
----       block_post = -- function
----       file = -- function
----       doc = -- function
----     }
 ---   }
 --- </code>
 ---
@@ -72,24 +56,32 @@ function MiniDoc.setup(config)
 end
 
 -- Module config --
+-- stylua: ignore start
 MiniDoc.config = {
+  -- Pattern to determine if line has documentation annotation
+  annotation_pattern = '^%-%-%-(.-) ',
+
+  -- Hooks to be applied at certain stage of document life cycle
   hooks = {
     block_pre = function() end,
-    tags = {
-      ['@class'] = function() end,
-      ['@param'] = function() end,
-      ['@property'] = function() end,
-      ['@return'] = function() end,
-      ['@tag'] = function() end,
-      ['@text'] = function() end,
-      ['@type'] = function() end,
-      ['@usage'] = function() end,
+    sections = {
+      ['@class'] = function(lines) return lines end,
+      ['@param'] = function(lines) return lines end,
+      ['@private'] = function(lines) return lines end,
+      ['@property'] = function(lines) return lines end,
+      ['@return'] = function(lines) return lines end,
+      ['@tag'] = function(lines) return lines end,
+      ['@title'] = function(lines) return lines end,
+      ['@text'] = function(lines) return lines end,
+      ['@type'] = function(lines) return lines end,
+      ['@usage'] = function(lines) return lines end,
     },
     block_post = function() end,
     file = function() end,
     doc = function() end,
   },
 }
+-- stylua: ignore end
 
 -- Helper data --
 -- Module default config
@@ -107,15 +99,16 @@ function H.setup_config(config)
     hooks = { config.hooks, 'table' },
     ['hooks.block_pre'] = { config.hooks.block_pre, 'function' },
 
-    ['hooks.tags'] = { config.hooks.tags, 'table' },
-    ['hooks.tags.@class'] = { config.hooks.tags['@class'], 'function' },
-    ['hooks.tags.@param'] = { config.hooks.tags['@param'], 'function' },
-    ['hooks.tags.@property'] = { config.hooks.tags['@property'], 'function' },
-    ['hooks.tags.@return'] = { config.hooks.tags['@return'], 'function' },
-    ['hooks.tags.@tag'] = { config.hooks.tags['@tag'], 'function' },
-    ['hooks.tags.@text'] = { config.hooks.tags['@text'], 'function' },
-    ['hooks.tags.@type'] = { config.hooks.tags['@type'], 'function' },
-    ['hooks.tags.@usage'] = { config.hooks.tags['@usage'], 'function' },
+    ['hooks.sections'] = { config.hooks.sections, 'table', true },
+    ['hooks.sections.@class'] = { config.hooks.sections['@class'], 'function' },
+    ['hooks.sections.@param'] = { config.hooks.sections['@param'], 'function' },
+    ['hooks.sections.@private'] = { config.hooks.sections['@private'], 'function' },
+    ['hooks.sections.@property'] = { config.hooks.sections['@property'], 'function' },
+    ['hooks.sections.@return'] = { config.hooks.sections['@return'], 'function' },
+    ['hooks.sections.@tag'] = { config.hooks.sections['@tag'], 'function' },
+    ['hooks.sections.@text'] = { config.hooks.sections['@text'], 'function' },
+    ['hooks.sections.@type'] = { config.hooks.sections['@type'], 'function' },
+    ['hooks.sections.@usage'] = { config.hooks.sections['@usage'], 'function' },
 
     ['hooks.block_post'] = { config.hooks.block_post, 'function' },
     ['hooks.file'] = { config.hooks.file, 'function' },
