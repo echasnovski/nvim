@@ -34,6 +34,8 @@ local diagnostic_opts = {
 }
 
 if vim.fn.has('nvim-0.6') == 1 then
+  diagnostic_opts.signs.severity = { min = 'WARN', max = 'ERROR' }
+  diagnostic_opts.virtual_text.severity = { min = 'ERROR', max = 'ERROR' }
   vim.diagnostic.config(diagnostic_opts)
 else
   vim.lsp.handlers['textDocument/publishDiagnostics'] = vim.lsp.with(
