@@ -9,7 +9,8 @@ require('mini.statusline').setup({
       local spell         = vim.wo.spell and (MiniStatusline.is_truncated(120) and 'S' or 'SPELL') or ''
       local wrap          = vim.wo.wrap  and (MiniStatusline.is_truncated(120) and 'W' or 'WRAP')  or ''
       local git           = MiniStatusline.section_git({ trunc_width = 75 })
-      local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+      -- Default diagnstics icon has some problems displaying in Kitty terminal
+      local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75, icon = '' })
       local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
       local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
       local searchcount   = MiniStatusline.section_searchcount({ trunc_width = 75})
