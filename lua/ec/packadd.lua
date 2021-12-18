@@ -129,9 +129,6 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd_defer('vim-pandoc-syntax')
   packadd_defer('vim-rmarkdown')
 
-  -- Filetype: markdown
-  packadd_defer('vim-markdown')
-
   -- Markdown preview (has rather big disk size usage, around 50M)
   packadd_defer('markdown-preview')
 end

@@ -97,9 +97,6 @@
 [submodule "pack/plugins/opt/vim-rmarkdown"]
 	path = pack/plugins/opt/vim-rmarkdown
 	url = https://github.com/vim-pandoc/vim-rmarkdown
-[submodule "pack/plugins/opt/vim-markdown"]
-	path = pack/plugins/opt/vim-markdown
-	url = https://github.com/plasticboy/vim-markdown
 [submodule "pack/plugins/opt/markdown-preview"]
 	path = pack/plugins/opt/markdown-preview
 	url = https://github.com/iamcco/markdown-preview.nvim
