@@ -86,7 +86,7 @@ vim.opt.formatlistpat = [[^\s*[0-9\-\+\*]\+[\.\)]*\s\+]]
 -- Folds --
 vim.opt.foldenable  = true     -- Enable folding by default
 vim.opt.foldmethod  = 'indent' -- Set 'indent' folding method
-vim.opt.foldlevel   = 0        -- Display all folds
+vim.opt.foldlevel   = 1        -- Display all folds except top ones
 vim.opt.foldnestmax = 10       -- Create folds only for some number of nested levels
 vim.opt.foldcolumn  = '0'      -- Disable fold column
 
