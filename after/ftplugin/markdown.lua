@@ -7,3 +7,8 @@ vim.cmd([[setlocal wrap]])
 vim.cmd([[setlocal foldmethod=expr]])
 vim.cmd([[setlocal foldexpr=v:lua.EC.markdown_foldexpr()]])
 vim.cmd([[normal! zx]]) -- Update folds
+
+-- NOTE: Alternative solution for markdown folding is to use builtin syntax
+-- folding for only headings. Use this and disable custom expression folding.
+-- This might be a bit slow on large files.
+-- vim.g.markdown_folding = 1
