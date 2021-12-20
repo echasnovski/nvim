@@ -3,30 +3,30 @@
 This is a setup for Neovim>=0.5. Current structure (might be a bit outdated):
 
 ```
-after/                  -- Everything that will be sourced last (`:h after-directory`)
-│ ftplugin/             -- Configurations for filetypes
-└ queries/              -- Queries for treesitter
-lua/                    -- Lua code used in configuration
-└ ec/                   -- Custom 'plugin namespace'
-  │ configs/            -- Configurations for plugins
-  │ functions.lua       -- Custom functions
-  │ mappings-leader.lua -- Mappings for `<Leader>` key
-  │ mappings.lua        -- Mappings
-  │ packadd.lua         -- Code for initializing plugins
-  │ settings.lua        -- General settings
-  └ vscode.lua          -- VS Code related configuration
-misc/                   -- Everything not directly related to Neovim startup
-│ dict/                 -- Dictionary files
-│ mini-readme-demo/     -- Demonstration media for 'echasnovski/mini.nvim'
-│ mini_vimscript/       -- Vimscript (re)implementation of some 'mini' modules
-│ scripts/              -- Scripts for miscellaneous usage
-│ sessions/             -- Placeholder for local use of Neovim sessions (content ignored)
-│ snippets/             -- Snippets for snippets engine
-└ undodir/              -- Placeholder for local use of persistent undo (content ignored)
-pack/                   -- Directory for plugins/submodules managed with native package manager
-└ plugins/              -- Name of the plugin bundle
-  └ opt/                -- Use all plugin as optional (requires manual `packadd`)
-spell/                  -- Files for spelling
+after/                  # Everything that will be sourced last (`:h after-directory`)
+│ ftplugin/             # Configurations for filetypes
+└ queries/              # Queries for treesitter
+lua/                    # Lua code used in configuration
+├ ec/                   # Custom 'plugin namespace'
+│ │ configs/            # Configurations for plugins
+│ │ functions.lua       # Custom functions
+│ │ mappings-leader.lua # Mappings for `<Leader>` key
+│ │ mappings.lua        # Mappings
+│ │ packadd.lua         # Code for initializing plugins
+│ │ settings.lua        # General settings
+│ └ vscode.lua          # VS Code related configuration
+└ mini-dev/             # Development code for 'mini.nvim'
+misc/                   # Everything not directly related to Neovim startup
+│ dict/                 # Dictionary files
+│ mini_vimscript/       # Vimscript (re)implementation of some 'mini' modules
+│ scripts/              # Scripts for miscellaneous usage
+│ sessions/             # Placeholder for local use of Neovim sessions (content ignored)
+│ snippets/             # Snippets for snippets engine
+└ undodir/              # Placeholder for local use of persistent undo (content ignored)
+pack/                   # Directory for plugins/submodules managed with native package manager
+└ plugins/              # Name of the plugin bundle
+  └ opt/                # Use all plugin as optional (requires manual `packadd`)
+spell/                  # Files for spelling
 ```
 
 NOTE: Currently this configuration defers sourcing of most time consuming commands (mostly plugins). This is done by using `vim.defer_fn(f, 0)` which defers execution of `f` until Vim is loaded. This doesn't affect general usability: it decreases time before showing fully functional start screen (or asked file) from ~240ms to ~105ms (on a not so quick i3-6100).
