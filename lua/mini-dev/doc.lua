@@ -1,5 +1,6 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
 
+-- Documentation ==============================================================
 ---@brief [[
 --- Minimal generation of help files from EmmyLua-like annotations. Key design
 --- ideas:
@@ -38,11 +39,11 @@
 
 -- General ideas
 --
--- Data structures are basically arrays of certain objects accompanied with
--- `info` field for information to carry with it:
+-- Data structures are basically arrays of other structures accompanied with
+-- some fields (keys with data values) and methods (keys with function values):
 -- - Section structure is an array of string lines describing one aspect
 --   (determined by section id like '@param', '@return', '@text') of an
---   annotatation subject. All lines will be used directly in help file.
+--   annotation subject. All lines will be used directly in help file.
 -- - Block structure is an array of sections describing one annotation subject
 --   like function, table, concept.
 -- - File structure is an array of blocks describing certain file on disk.
@@ -51,6 +52,21 @@
 -- - Doc structure is an array of files describing a final help file. Each
 --   string line from section (when traversed in depth-first fashion) goes
 --   directly into output file.
+--
+-- All structures have these keys:
+-- - Fields:
+--     - `info` - contains additional information about current structure.
+--     - `parent` - table of parent structure (if exists).
+--     - `parent_index` - index of this structure in its parent's array. Useful
+--       for adding to parent another structure near current one.
+--     - `type` - string with structure type (doc, file, block, section).
+-- - Methods (use them as `x:method(args)`):
+--     - `insert(self, [index,] child)` - insert `child` to `self` at position
+--       `index` (optional; if not supplied, child will be appended to end).
+--       Basically, a `table.insert()`, but adds `parent` and `parent_index`
+--       fields to `child` while properly updating `self`.
+--     - `remove(self [,index])` - remove from `self` element at position
+--       `index`. Basically, a `table.remove()`, but properly updates `self`.
 --
 -- Generating:
 -- - Main parameters for help generation are an array of input file paths and
@@ -89,7 +105,7 @@
 --   nested "for all files -> for all blocks -> for all sections -> for all
 --   strings") and write them to output file.
 
--- Module and its helper --
+-- Module definition ==========================================================
 local MiniDoc = {}
 H = {}
 
@@ -108,8 +124,6 @@ function MiniDoc.setup(config)
   H.apply_config(config)
 end
 
--- Module config --
--- stylua: ignore start
 MiniDoc.config = {
   -- Lua string pattern to determine if line has documentation annotation.
   -- First capture group should describe possible section id.
@@ -117,37 +131,105 @@ MiniDoc.config = {
 
   -- Hooks to be applied at certain stage of document life cycle
   hooks = {
-    block_pre = function(b) return b end,
+    block_pre = function(b)
+      return b
+    end,
     sections = {
-      ['@class']    = function(s) return s end,
-      ['@param']    = function(s) return s end,
-      ['@private']  = function(s) return s end,
-      ['@property'] = function(s) return s end,
-      ['@return']   = function(s) return s end,
-      ['@tag']      = function(s) return s end,
-      ['@title']    = function(s) return s end,
-      ['@text']     = function(s) return s end,
-      ['@type']     = function(s) return s end,
-      ['@usage']    = function(s) return s end,
+      ['@class'] = function(s)
+        return s
+      end,
+      ['@param'] = function(s)
+        if #s > 0 then
+          -- Enclose parameter name in `{}`
+          s[1] = s[1]:gsub('(%S*)', '{%1}', 1)
+        end
+        return s
+      end,
+      ['@private'] = function(s)
+        return s
+      end,
+      ['@property'] = function(s)
+        return s
+      end,
+      ['@return'] = function(s)
+        if #s > 0 then
+          -- Enclose return value in `{}`
+          s[1] = s[1]:gsub('(%S*)', '{%1}', 1)
+        end
+        -- Add 'Return:~' heading
+        s:insert(1, 'Return:~')
+        return s
+      end,
+      ['@tag'] = function(s)
+        return s
+      end,
+      ['@title'] = function(s)
+        -- Append `~` for special highlighting
+        for i, x in ipairs(s) do
+          s[i] = ('%s~'):format(x)
+        end
+        return s
+      end,
+      ['@text'] = function(s)
+        return s
+      end,
+      ['@type'] = function(s)
+        return s
+      end,
+      ['@usage'] = function(s)
+        -- Add 'Usage:~' heading
+        s:insert(1, 'Usage:~')
+        return s
+      end,
     },
-    block_post = function(b) return b end,
-    file = function(f) return f end,
-    doc = function(d) return d end,
+    block_post = function(b)
+      -- Add headings before first occurence of some sections
+      local found_param = false
+      H.apply_recursively(function(x)
+        if not (type(x) == 'table' and x.type == 'section') then
+          return
+        end
+        if not found_param and x.info.id == '@param' then
+          x.parent:insert(x.parent_index, H.struct_section({ 'Parameters:~' }))
+          found_param = true
+        end
+      end, b)
+
+      if #b > 0 then
+        b:insert(1, H.struct_section({ H.separator_block }))
+        b:insert(H.struct_section({ '' }))
+      end
+      return b
+    end,
+    file = function(f)
+      if #f > 0 then
+        f:insert(1, H.struct_block({ H.struct_section({ H.separator_file }) }))
+        f:insert(H.struct_block({ H.struct_section({ '' }) }))
+      end
+      return f
+    end,
+    doc = function(d)
+      d:insert(H.struct_file({ H.struct_block({ H.struct_section({ ' vim:tw=78:ts=8:noet:ft=help:norl:' }) }) }))
+      return d
+    end,
   },
 }
--- stylua: ignore end
 
+-- Module functionality =======================================================
 function MiniDoc.generate(input, output, opts)
   input = input or H.default_input()
   output = output or H.default_output()
   opts = vim.tbl_deep_extend('force', {}, opts or {})
 
   -- Parse input files
-  local doc_info = { doc_input = input, doc_output = output, doc_opts = opts }
-  local doc = vim.tbl_map(function(x)
-    return H.parse_file(x, doc_info)
-  end, input)
-  doc.info = doc_info
+  local doc = H.struct_doc({}, { input = input, output = output, opts = opts })
+  for _, path in ipairs(input) do
+    local lines = H.read_file(path)
+    local block_arr = H.lines_to_block_arr(lines)
+    local file = H.struct_file(block_arr, { path = path })
+
+    doc:insert(file)
+  end
 
   -- Apply hooks
   doc = H.apply_hooks(doc)
@@ -156,19 +238,23 @@ function MiniDoc.generate(input, output, opts)
   local help_lines = H.collect_strings(doc)
 
   -- Write helpfile
-  -- vim.fn.writefile(help_lines, output, 'b')
-  return help_lines
+  vim.fn.writefile(help_lines, output, 'b')
+  return doc
 end
 
--- Helper data --
+-- Helper data ================================================================
 -- Module default config
 H.default_config = MiniDoc.config
 
 -- Default section id (assigned to annotation at block start)
 H.default_section_id = '@text'
 
--- Helper functions --
--- Settings
+-- Structure separators
+H.separator_block = string.rep('-', 78)
+H.separator_file = string.rep('=', 78)
+
+-- Helper functionality =======================================================
+-- Settings -------------------------------------------------------------------
 function H.setup_config(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
@@ -206,7 +292,7 @@ function H.is_disabled()
   return vim.g.minidoc_disable == true or vim.b.minidoc_disable == true
 end
 
--- Default documentation targets --
+-- Default documentation targets ----------------------------------------------
 function H.default_input()
   -- Search in current and recursively in other directories for files with
   -- 'lua' extension
@@ -243,18 +329,8 @@ function H.default_output()
   return ('doc/%s'):format(cur_dir)
 end
 
--- Parsing --
-function H.parse_file(file_path, doc_info)
-  local lines = H.read_file(file_path)
-  local file_info = H.new_info({ file_path = file_path }, doc_info)
-
-  -- File structure is an array of block structures with `info` field
-  local file = H.lines_to_blocks(lines, file_info)
-  file.info = file_info
-  return file
-end
-
-function H.lines_to_blocks(lines, file_info)
+-- Parsing --------------------------------------------------------------------
+function H.lines_to_block_arr(lines)
   local matched_prev, matched_cur
 
   local res = {}
@@ -268,7 +344,7 @@ function H.lines_to_blocks(lines, file_info)
       if not matched_prev then
         -- Finish current block
         block_raw.line_end = i - 1
-        table.insert(res, H.raw_block_to_block(block_raw, file_info))
+        table.insert(res, H.raw_block_to_block(block_raw))
 
         -- Start new block
         block_raw = { annotation = {}, section_id = {}, afterlines = {}, line_begin = i }
@@ -285,7 +361,7 @@ function H.lines_to_blocks(lines, file_info)
     end
   end
   block_raw.line_end = #lines
-  table.insert(res, H.raw_block_to_block(block_raw, file_info))
+  table.insert(res, H.raw_block_to_block(block_raw))
 
   return res
 end
@@ -297,79 +373,70 @@ end
 -- - `section_id` - array with length equal to `annotation` length with strings
 --   captured as section id. Empty string of no section id was captured.
 -- - Everything else is used as block info (like `afterlines`, etc.).
-function H.raw_block_to_block(block_raw, file_info)
+function H.raw_block_to_block(block_raw)
   if #block_raw.annotation == 0 and #block_raw.afterlines == 0 then
     return nil
   end
 
-  local block = {}
-  block.info = H.new_info({
-    type = 'block',
-    block_afterlines = block_raw.afterlines,
-    block_line_begin = block_raw.line_begin,
-    block_line_end = block_raw.line_end,
-  }, file_info)
-  local block_begin = block.info.block_line_begin
+  local block = H.struct_block({}, {
+    afterlines = block_raw.afterlines,
+    line_begin = block_raw.line_begin,
+    line_end = block_raw.line_end,
+  })
+  local block_begin = block.info.line_begin
 
   -- Parse raw block annotation lines from top to bottom. New section starts
   -- when section id is detected in that line.
-  local section_cur = {
-    info = H.new_info(
-      { type = 'section', section_id = H.default_section_id, section_line_begin = block_begin },
-      block.info
-    ),
-  }
+  local section_cur = H.struct_section({}, { id = H.default_section_id, line_begin = block_begin })
 
-  for i, ann_l in ipairs(block_raw.annotation) do
+  for i, annotation_line in ipairs(block_raw.annotation) do
     local id = block_raw.section_id[i]
     if id ~= '' then
       -- Finish current section
       if #section_cur > 0 then
-        section_cur.info.section_line_end = block_begin + i - 2
-        table.insert(block, section_cur)
+        section_cur.info.line_end = block_begin + i - 2
+        block:insert(section_cur)
       end
 
       -- Start new section
-      section_cur = {
-        info = H.new_info({ type = 'section', section_id = id, section_line_begin = block_begin + i - 1 }, block.info),
-      }
+      section_cur = H.struct_section({}, { id = id, line_begin = block_begin + i - 1 })
     end
 
-    table.insert(section_cur, ann_l)
+    section_cur:insert(annotation_line)
   end
 
   if #section_cur > 0 then
-    section_cur.info.section_line_end = block_begin + #block_raw.annotation - 1
-    table.insert(block, section_cur)
+    section_cur.info.line_end = block_begin + #block_raw.annotation - 1
+    block:insert(section_cur)
   end
 
   return block
 end
 
--- Hooks --
+-- Hooks ----------------------------------------------------------------------
 function H.apply_hooks(doc)
-  local new_doc = { info = doc.info }
+  local new_doc = H.struct_doc({}, doc.info)
 
   for _, file in ipairs(doc) do
-    local new_file = { info = file.info }
+    local new_file = H.struct_file({}, file.info)
 
     for _, block in ipairs(file) do
       block = MiniDoc.config.hooks.block_pre(block)
 
-      local new_block = { info = block.info }
+      local new_block = H.struct_block({}, block.info)
 
       for _, section in ipairs(block) do
-        local hook = MiniDoc.config.hooks.sections[section.info.section_id]
+        local hook = MiniDoc.config.hooks.sections[section.info.id]
         local new_section = hook ~= nil and hook(section) or section
-        table.insert(new_block, new_section)
+        new_block:insert(new_section)
       end
 
       new_block = MiniDoc.config.hooks.block_post(new_block)
-      table.insert(new_file, new_block)
+      new_file:insert(new_block)
     end
 
     new_file = MiniDoc.config.hooks.file(new_file)
-    table.insert(new_doc, new_file)
+    new_doc:insert(new_file)
   end
 
   new_doc = MiniDoc.config.hooks.doc(new_doc)
@@ -377,26 +444,81 @@ function H.apply_hooks(doc)
   return new_doc
 end
 
--- Utilities --
-function H.apply_recursively(f, x, into)
-  f(x, into)
+-- Work with structures -------------------------------------------------------
+-- Constructors. NOTE; currently they modify input arrays in plays
+function H.struct(struct_type, array, info)
+  array.info = info
+  array.type = struct_type
+
+  array.insert = function(self, index, child)
+    if child == nil then
+      child, index = index, #self + 1
+    end
+
+    if type(child) == 'table' then
+      child.parent = self
+      child.parent_index = index
+    end
+
+    table.insert(self, index, child)
+
+    H.sync_parent_index(self)
+  end
+
+  array.remove = function(self, index)
+    index = index or #self
+    table.remove(self, index)
+
+    H.sync_parent_index(self)
+  end
+
+  return array
+end
+
+function H.struct_doc(file_arr, info)
+  return H.struct('doc', file_arr, info)
+end
+
+function H.struct_file(block_arr, info)
+  return H.struct('file', block_arr, info)
+end
+
+function H.struct_block(section_arr, info)
+  return H.struct('block', section_arr, info)
+end
+
+function H.struct_section(string_arr, info)
+  return H.struct('section', string_arr, info)
+end
+
+function H.sync_parent_index(x)
+  for i, _ in ipairs(x) do
+    if type(x[i]) == 'table' then
+      x[i].parent_index = i
+    end
+  end
+  return x
+end
+
+-- Utilities ------------------------------------------------------------------
+function H.apply_recursively(f, x)
+  f(x)
 
   if type(x) == 'table' then
     for _, t in ipairs(x) do
-      into = H.apply_recursively(f, t, into)
+      H.apply_recursively(f, t)
     end
   end
-
-  return into
 end
 
 function H.collect_strings(x)
-  return H.apply_recursively(function(y, into)
+  local res = {}
+  H.apply_recursively(function(y)
     if type(y) == 'string' then
-      table.insert(into, y)
+      table.insert(res, y)
     end
-    return into
-  end, x, {})
+  end, x)
+  return res
 end
 
 function H.read_file(path)
@@ -405,11 +527,6 @@ function H.read_file(path)
   fp:close()
 
   return vim.split(contents, '\n')
-end
-
-function H.new_info(values, larger_info)
-  -- return setmetatable(values, { __index = larger_info })
-  return vim.tbl_extend('force', larger_info or {}, values or {})
 end
 
 _G.lines = H.read_file(vim.fn.fnamemodify('~/.config/nvim/lua/mini-dev/test-doc.lua', ':p'))
