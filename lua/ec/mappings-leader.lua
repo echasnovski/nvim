@@ -108,6 +108,7 @@ EC.leader_nmap.o = {
   ['l'] = { [[<Cmd>SidewaysRight<CR>]],                'move arg right' },
   ['r'] = { [[<Cmd>lua MiniMisc.resize_window()<CR>]], 'resize to default width' },
   ['s'] = { [[<Cmd>setlocal spell! spell?<CR>]],       'spell toggle' },
+  ['S'] = { [[<Cmd>lua EC.insert_section()<CR>]],      'section insert' },
   ['t'] = { [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'trim trailspace' },
   ['T'] = { [[<Cmd>lua MiniTrailspace.toggle()<CR>]],  'trailspace hl toggle' },
   ['w'] = { [[<Cmd>setlocal wrap! wrap?<CR>]],         'wrap toggle' },
@@ -135,7 +136,7 @@ EC.leader_xmap.r = {
   ['x'] = { [["+y :T reprex::reprex()<CR>]],                    'reprex selection' },
 }
 
--- s is for 'send' (Send text to neoterm buffer) --
+-- s is for 'send' (Send text to neoterm buffer)
 EC.leader_nmap.s = { [[<Cmd>TREPLSendLine<CR>j]], 'send to terminal' }
 -- In simple visual mode send text and move to the last character in
 -- selection and move to the right. Otherwise (like in line or block visual

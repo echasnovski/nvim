@@ -69,7 +69,6 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Show keybindings
   packadd_defer('which-key')
 
-  -- Git integration --
   -- Interact with git
   packadd_defer('vim-fugitive')
 
@@ -106,7 +105,7 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Snippets engine
   packadd_defer('luasnip')
 
-  -- Documentation generator --
+  -- Documentation generator
   -- Disable mappings, should be run before adding package
   vim.g.doge_enable_mappings = 0
   packadd_defer('vim-doge')
@@ -120,7 +119,7 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Filetype: csv
   packadd_defer('rainbow_csv')
 
-  -- Filetype: pandoc and rmarkdown --
+  -- Filetype: pandoc and rmarkdown
   -- This option should be set before loading plugin to take effect. See
   -- https://github.com/vim-pandoc/vim-pandoc/issues/342
   vim.g['pandoc#filetypes#pandoc_markdown'] = 0

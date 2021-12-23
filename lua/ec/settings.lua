@@ -1,8 +1,8 @@
 --stylua: ignore start
--- Leader key --
+-- Leader key =================================================================
 vim.g.mapleader = ' '
 
--- General --
+-- General ====================================================================
 vim.opt.hidden       = true     -- Allow switching from unsaved buffer
 vim.opt.wrap         = false    -- Display long lines as just one line
 vim.opt.encoding     = 'utf-8'  -- Display this encoding
@@ -19,7 +19,7 @@ vim.opt.lazyredraw   = true     -- Use lazy redraw
 vim.opt.undofile = true                              -- Enable persistent undo
 vim.opt.undodir  = vim.fn.expand('$HOME/.config/nvim/misc/undodir') -- Set directory for persistent undo
 
--- UI --
+-- UI =========================================================================
 vim.opt.termguicolors = true    -- Enable gui colors
 vim.opt.laststatus    = 2       -- Always show statusline
 vim.opt.showtabline   = 2       -- Always show tabline
@@ -37,7 +37,7 @@ vim.opt.linebreak     = true    -- Wrap long lines at 'breakat' (if 'wrap' is se
 vim.opt.shortmess     = 'aoOFc' -- Disable certain messages from |ins-completion-menu|
 vim.opt.showmode      = false   -- Don't show mode in command line
 
--- Colors --
+-- Colors =====================================================================
 vim.opt.background = 'dark' -- Use dark background
 
 -- Enable syntax highlighing if it wasn't already (as it is time consuming)
@@ -55,7 +55,7 @@ vim.cmd([[au VimEnter * nested ++once colorscheme minischeme]])
 -- - 'ayu-theme/ayu-vim' (use `let ayucolor = 'mirage'`)
 -- - 'arcticicestudio/nord-vim'
 
--- Editing --
+-- Editigin ===================================================================
 vim.opt.expandtab   = true    -- Convert tabs to spaces
 vim.opt.tabstop     = 2       -- Insert 2 spaces for a tab
 vim.opt.smarttab    = true    -- Make tabbing smarter (will realize you have 2 vs 4)
@@ -69,7 +69,7 @@ vim.opt.breakindent = true    -- Indent wrapped lines to match line start
 
 vim.opt.completeopt = { 'menu', 'noinsert', 'noselect' } -- Customize completions
 
--- Spelling --
+-- Spelling ===================================================================
 vim.opt.spelllang    = 'en,ru'    -- Define spelling dictionaries
 vim.opt.complete:append('kspell') -- Add spellcheck options for autocomplete
 vim.opt.spelloptions = 'camel'    -- Treat parts of camelCase words as seprate words
@@ -83,18 +83,18 @@ vim.opt.dictionary = vim.fn.expand('$HOME/.config/nvim/misc/dict/english.txt') -
 -- item'
 vim.opt.formatlistpat = [[^\s*[0-9\-\+\*]\+[\.\)]*\s\+]]
 
--- Folds --
+-- Folds ======================================================================
 vim.opt.foldenable  = true     -- Enable folding by default
 vim.opt.foldmethod  = 'indent' -- Set 'indent' folding method
 vim.opt.foldlevel   = 1        -- Display all folds except top ones
 vim.opt.foldnestmax = 10       -- Create folds only for some number of nested levels
 vim.opt.foldcolumn  = '0'      -- Disable fold column
 
--- Filetype plugins and indentation --
+-- Filetype plugins and indentation ===========================================
 -- Don't defer it because it might break `FileType` related autocommands
 vim.cmd([[filetype plugin indent on]])
 
--- Custom autocommands --
+-- Custom autocommands ========================================================
 vim.cmd([[augroup CustomSettings]])
   vim.cmd([[autocmd!]])
 
@@ -113,7 +113,7 @@ vim.cmd([[augroup CustomSettings]])
   vim.cmd([[autocmd TextYankPost * silent! lua vim.highlight.on_yank()]])
 vim.cmd([[augroup END]])
 
--- Paths to important executables --
+-- Paths to important executables =============================================
 vim.g.python3_host_prog = vim.fn.expand('$HOME/.pyenv/versions/neovim/bin/python3')
 vim.g.node_host_prog    = vim.fn.expand('$HOME/.nvm/versions/node/v14.15.2/bin/node')
 --stylua: ignore end

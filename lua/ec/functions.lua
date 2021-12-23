@@ -77,7 +77,22 @@ EC.cr_action = function()
   end
 end
 
--- Helper data --
+-- Insert section
+EC.insert_section = function(symbol, total_width)
+  symbol = symbol or '='
+  total_width = total_width or 79
+
+  -- Insert section template
+  local comment_string = vim.bo.commentstring
+  local section_template = comment_string:format(string.rep(symbol, total_width - 2))
+  vim.fn.append(vim.fn.line('.'), section_template)
+
+  -- Enable Replace mode in appropriate place
+  vim.fn.cursor(vim.fn.line('.') + 1, 3)
+  vim.cmd([[startreplace]])
+end
+
+-- Helper data ================================================================
 -- Commonly used keys
 H.keys = {
   ['cr'] = vim.api.nvim_replace_termcodes('<CR>', true, true, true),
@@ -85,7 +100,7 @@ H.keys = {
   ['ctrl-y_cr'] = vim.api.nvim_replace_termcodes('<C-y><CR>', true, true, true),
 }
 
--- Helper functions --
+-- Helper functions ===========================================================
 --- Confirm popup selection with current completion plugin. Examples:
 --- - nvim-cmp: `require('cmp').confirm`.
 --- - nvim-compe: `function() vim.fn['compe#confirm'](H.keys.cr) end`

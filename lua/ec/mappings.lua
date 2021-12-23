@@ -82,7 +82,7 @@ keymap('i', [[<C-s>]], [[<Esc><Cmd>silent w<CR>]])
 keymap('i', [[<Tab>]], [[pumvisible() ? "\<C-n>" : "\<Tab>"]], { expr = true })
 keymap('i', [[<S-Tab>]], [[pumvisible() ? "\<C-p>" : "\<S-Tab>"]], { expr = true })
 
--- Extra jumps between folds --
+-- Extra jumps between folds
 -- Jump to the beginning of previous fold
 keymap('n', [[zK]], [[zk[z]])
 -- Jump to the end of next fold

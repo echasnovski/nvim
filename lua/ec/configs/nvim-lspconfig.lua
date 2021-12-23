@@ -5,7 +5,7 @@
 
 local lspconfig = require('lspconfig')
 
--- Preconfiguration
+-- Preconfiguration ===========================================================
 local on_attach_custom = function(client, bufnr)
   local function buf_set_option(name, value)
     vim.api.nvim_buf_set_option(bufnr, name, value)
@@ -44,7 +44,7 @@ else
   )
 end
 
--- R (r_language_server)
+-- R (r_language_server) ======================================================
 lspconfig.r_language_server.setup({
   on_attach = on_attach_custom,
   -- Debounce "textDocument/didChange" notifications because they are slowly
@@ -52,10 +52,10 @@ lspconfig.r_language_server.setup({
   flags = { debounce_text_changes = 150 },
 })
 
--- Python (pyright)
+-- Python (pyright) ===========================================================
 lspconfig.pyright.setup({ on_attach = on_attach_custom })
 
--- Lua (sumneko_lua) --
+-- Lua (sumneko_lua) ==========================================================
 -- Should be built and run manually:
 -- https://github.com/sumneko/lua-language-server/wiki/Build-and-Run-(Standalone)
 -- Should be cloned into '.config/nvim/misc' as 'lua-language-server' directory.
