@@ -135,11 +135,11 @@ EC.leader_xmap.r = {
   ['x'] = { [["+y :T reprex::reprex()<CR>]],                    'reprex selection' },
 }
 
--- s is for 'send' (Send text to neoterm buffer)
+-- s is for 'send' (Send text to neoterm buffer) --
 EC.leader_nmap.s = { [[<Cmd>TREPLSendLine<CR>j]], 'send to terminal' }
----- In simple visual mode send text and move to the last character in
----- selection and move to the right. Otherwise (like in line or block visual
----- mode) send text and move one line down from bottom of selection.
+-- In simple visual mode send text and move to the last character in
+-- selection and move to the right. Otherwise (like in line or block visual
+-- mode) send text and move one line down from bottom of selection.
 EC.leader_xmap.s = {
   [[mode() ==# "v" ? ":TREPLSendSelection<CR>`>l" : ":TREPLSendSelection<CR>'>j"]],
   'send to terminal',

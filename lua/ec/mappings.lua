@@ -42,8 +42,8 @@ keymap('t', [[<M-h>]], [[<Left>]])
 keymap('t', [[<M-j>]], [[<Down>]])
 keymap('t', [[<M-k>]], [[<Up>]])
 keymap('t', [[<M-l>]], [[<Right>]])
----- Move only sideways in command mode. Using `silent = false` makes movements
----- to be immediately shown.
+-- Move only sideways in command mode. Using `silent = false` makes movements
+-- to be immediately shown.
 keymap('c', [[<M-h>]], [[<Left>]], { silent = false })
 keymap('c', [[<M-l>]], [[<Right>]], { silent = false })
 
@@ -63,9 +63,9 @@ keymap('n', [[<C-h>]], [[<C-w>h]])
 keymap('n', [[<C-j>]], [[<C-w>j]])
 keymap('n', [[<C-k>]], [[<C-w>k]])
 keymap('n', [[<C-l>]], [[<C-w>l]])
----- Go to previous window (very useful with floating function documentation)
+-- Go to previous window (very useful with floating function documentation)
 keymap('n', [[<C-p>]], [[<C-w>p]])
----- When in terminal, use this to go to Normal mode
+-- When in terminal, use this to go to Normal mode
 keymap('t', [[<C-h>]], [[<C-\><C-N><C-w>h]])
 
 -- Use alt + hjkl to resize windows
@@ -82,10 +82,10 @@ keymap('i', [[<C-s>]], [[<Esc><Cmd>silent w<CR>]])
 keymap('i', [[<Tab>]], [[pumvisible() ? "\<C-n>" : "\<Tab>"]], { expr = true })
 keymap('i', [[<S-Tab>]], [[pumvisible() ? "\<C-p>" : "\<S-Tab>"]], { expr = true })
 
--- Extra jumps between folds
----- Jump to the beginning of previous fold
+-- Extra jumps between folds --
+-- Jump to the beginning of previous fold
 keymap('n', [[zK]], [[zk[z]])
----- Jump to the end of next fold
+-- Jump to the end of next fold
 keymap('n', [[zJ]], [[zj]z]])
 
 -- Reselect latest changed, put or yanked text

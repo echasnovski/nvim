@@ -69,14 +69,14 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Show keybindings
   packadd_defer('which-key')
 
-  -- Git integration
-  ---- Interact with git
+  -- Git integration --
+  -- Interact with git
   packadd_defer('vim-fugitive')
 
-  ---- Interact with commits
+  -- Interact with commits
   packadd_defer('gv')
 
-  ---- Interact with hunks
+  -- Interact with hunks
   packadd_defer('gitsigns')
 
   -- Language server configurations
@@ -106,23 +106,23 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Snippets engine
   packadd_defer('luasnip')
 
-  -- Documentation generator
-  ---- Disable mappings, should be run before adding package
+  -- Documentation generator --
+  -- Disable mappings, should be run before adding package
   vim.g.doge_enable_mappings = 0
   packadd_defer('vim-doge')
 
   -- Test runner
   packadd_defer('vim-test')
 
-  ---- Helper to populate quickfix list with test results
+  -- Helper to populate quickfix list with test results
   packadd_defer('vim-dispatch')
 
   -- Filetype: csv
   packadd_defer('rainbow_csv')
 
-  -- Filetype: pandoc and rmarkdown
-  ---- This option should be set before loading plugin to take effect. See
-  ---- https://github.com/vim-pandoc/vim-pandoc/issues/342
+  -- Filetype: pandoc and rmarkdown --
+  -- This option should be set before loading plugin to take effect. See
+  -- https://github.com/vim-pandoc/vim-pandoc/issues/342
   vim.g['pandoc#filetypes#pandoc_markdown'] = 0
   -- vim.cmd([[let g:pandoc#filetypes#pandoc_markdown = 0]])
   packadd_defer('vim-pandoc')

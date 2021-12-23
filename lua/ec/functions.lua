@@ -77,27 +77,29 @@ EC.cr_action = function()
   end
 end
 
--- Helper data
----- Commonly used keys
+-- Helper data --
+-- Commonly used keys
 H.keys = {
   ['cr'] = vim.api.nvim_replace_termcodes('<CR>', true, true, true),
   ['ctrl-y'] = vim.api.nvim_replace_termcodes('<C-y>', true, true, true),
   ['ctrl-y_cr'] = vim.api.nvim_replace_termcodes('<C-y><CR>', true, true, true),
 }
 
--- Helper functions
----- Confirm popup selection with current completion plugin. Examples:
----- - nvim-cmp: `require('cmp').confirm`.
----- - nvim-compe: `function() vim.fn['compe#confirm'](H.keys.cr) end`
----- - completion-nvim: `require('completion').confirmCompletion` (don't forget
-----   `vim.g.completion_confirm_key = ''`)
-----
----- Current usage: 'mini.completion' doesn't require any confirmation.
+-- Helper functions --
+--- Confirm popup selection with current completion plugin. Examples:
+--- - nvim-cmp: `require('cmp').confirm`.
+--- - nvim-compe: `function() vim.fn['compe#confirm'](H.keys.cr) end`
+--- - completion-nvim: `require('completion').confirmCompletion` (don't forget
+---   `vim.g.completion_confirm_key = ''`)
+---
+--- Current usage: 'mini.completion' doesn't require any confirmation.
+---@private
 H.confirm_popup = function() end
 
----- Get keys for expression mapping when no popup is visible. Examples:
----- - No autopairs plugin: `function() return H.keys.cr end`.
----- - nvim-autopairs: `require('nvim-autopairs').autopairs_cr`
+--- Get keys for expression mapping when no popup is visible. Examples:
+--- - No autopairs plugin: `function() return H.keys.cr end`.
+--- - nvim-autopairs: `require('nvim-autopairs').autopairs_cr`
+---@private
 H.get_nopopup_keys = function()
   return require('mini.pairs').cr()
 end

@@ -55,11 +55,11 @@ lspconfig.r_language_server.setup({
 -- Python (pyright)
 lspconfig.pyright.setup({ on_attach = on_attach_custom })
 
--- Lua (sumneko_lua)
----- Should be built and run manually:
----- https://github.com/sumneko/lua-language-server/wiki/Build-and-Run-(Standalone)
----- Should be cloned into '.config/nvim/misc' as 'lua-language-server' directory.
----- Code structure is taken from https://www.chrisatmachine.com/Neovim/28-neovim-lua-development/
+-- Lua (sumneko_lua) --
+-- Should be built and run manually:
+-- https://github.com/sumneko/lua-language-server/wiki/Build-and-Run-(Standalone)
+-- Should be cloned into '.config/nvim/misc' as 'lua-language-server' directory.
+-- Code structure is taken from https://www.chrisatmachine.com/Neovim/28-neovim-lua-development/
 local sumneko_root = vim.fn.expand('$HOME/.config/nvim/misc/lua-language-server')
 if vim.fn.isdirectory(sumneko_root) == 1 then
   local sumneko_binary = ''

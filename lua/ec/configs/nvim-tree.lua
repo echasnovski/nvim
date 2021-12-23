@@ -10,8 +10,6 @@ vim.g.nvim_tree_show_icons = {
   files = 1,
 }
 vim.g.nvim_tree_quit_on_open = 1
-
----- Make everything nicely aligned
 vim.g.nvim_tree_icons = { default = '' }
 
 -- Define Custom functions to simulate ranger's "going in" and "going out"
