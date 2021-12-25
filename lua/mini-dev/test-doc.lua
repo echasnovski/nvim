@@ -3,14 +3,11 @@
 local M = {}
 
 ---@title Second block
----
 ---@param a `string` Some string. List of items:
 ---   - Item 1.
 ---   - Item 2.
 ---@param b `number` Number.
----
 ---@return boolean
----
 ---@usage `M.fun(1, 2)`
 function M.fun(a, b)
   return true
@@ -29,5 +26,13 @@ end
 M.fun2 = function(x, y)
   return x + y
 end
+
+--- ANNOTATION FOR SOME CLASS TABLE
+---
+---@class User
+---@field login `string` User login.
+---@field password `string` User password.
+---@tag User user
+M.User = {}
 
 return M

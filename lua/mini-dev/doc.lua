@@ -1,15 +1,15 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
 
 -- Documentation ==============================================================
----@brief [[
---- Minimal generation of help files from EmmyLua-like annotations. Key design
---- ideas:
+--- GENERATION OF HELP FILES FROM EMMYLUA-LIKE ANNOTATIONS
+---
+--- Key design ideas:
 --- - Any consecutive lines with predefined prefix will be considered as
 ---   documentation block.
 --- - Allow custom hooks at multiple conversion stages for more granular
 ---   management of output help file.
 ---
---- # Setup
+--- # Setup~
 ---
 --- This module needs a setup with `require('mini.doc').setup({})`
 --- (replace `{}` with your `config` table). It will create global Lua table
@@ -17,24 +17,22 @@
 --- `:lua MiniDoc.*`).
 ---
 --- Default `config`:
---- <code>
+--- >
 ---   {
 ---   }
---- </code>
----
---- # Tips
+--- <
+--- # Tips~
 ---
 --- - Set up 'formatoptions' and 'formatlistpat'.
 ---
---- # Comparisons
+--- # Comparisons~
 ---
 --- - 'tjdevries/tree-sitter-lua':
 ---
---- # Disabling
+--- # Disabling~
 ---
 --- To disable, set `g:minidoc_disable` (globally) or
 --- `b:minidoc_disable` (for a buffer) to `v:true`.
----@brief ]]
 ---@tag MiniDoc mini.doc
 
 -- General ideas
@@ -67,6 +65,12 @@
 --       fields to `child` while properly updating `self`.
 --     - `remove(self [,index])` - remove from `self` element at position
 --       `index`. Basically, a `table.remove()`, but properly updates `self`.
+--     - `has_descendant(self, predicate)` - whether there is a descendant
+--       (structure or string) for which `predicate` returns `true`. In case of
+--       success also returns the first such descendant as second value.
+--     - `has_lines(self)` - whether structure has any lines (even empty ones)
+--       to be put in output file. For section structures this is equivalent to
+--       `#self`, but more useful for higher order structures.
 --
 -- Generating:
 -- - Main parameters for help generation are an array of input file paths and
@@ -83,7 +87,8 @@
 --     block lines are allowed to not specify section id; by default it is
 --     `@text`). All subsequent lines without captured section id go into
 --     "current section".
--- - Apply hooks:
+-- - Apply hooks (they should modify its input in place, which is possible due
+--   to 'table nature' of all possible inputs):
 --     - Each block structure is processed by `MiniDoc.config.hooks.block_pre`.
 --       This is a designated step for auto-generation of sections from
 --       descibed annotation subject (like sections with id `@tag`, `@type`).
@@ -129,88 +134,97 @@ MiniDoc.config = {
   -- First capture group should describe possible section id.
   annotation_pattern = '^%-%-%-(%S*) ?',
 
-  -- Hooks to be applied at certain stage of document life cycle
+  -- Hooks to be applied at certain stage of document life cycle. Should modify
+  -- its input in place (and not return new one).
   hooks = {
-    block_pre = function(b)
-      return b
-    end,
+    block_pre = function(b) end,
     sections = {
       ['@class'] = function(s)
-        return s
+        H.enclose_first_word(s, '{%1}')
+        H.add_section_heading(s, 'Class')
+      end,
+      ['@field'] = function(s)
+        H.enclose_first_word(s, '{%1}')
       end,
       ['@param'] = function(s)
-        if #s > 0 then
-          -- Enclose parameter name in `{}`
-          s[1] = s[1]:gsub('(%S*)', '{%1}', 1)
-        end
-        return s
+        H.enclose_first_word(s, '{%1}')
       end,
       ['@private'] = function(s)
-        return s
-      end,
-      ['@property'] = function(s)
-        return s
+        s.parent.info._is_private = true
       end,
       ['@return'] = function(s)
-        if #s > 0 then
-          -- Enclose return value in `{}`
-          s[1] = s[1]:gsub('(%S*)', '{%1}', 1)
-        end
-        -- Add 'Return:~' heading
-        s:insert(1, 'Return:~')
-        return s
+        H.enclose_first_word(s, '{%1}')
+        H.add_section_heading(s, 'Return')
       end,
       ['@tag'] = function(s)
-        return s
-      end,
-      ['@title'] = function(s)
-        -- Append `~` for special highlighting
-        for i, x in ipairs(s) do
-          s[i] = ('%s~'):format(x)
+        for i, _ in ipairs(s) do
+          -- Enclose every word in `*`
+          local n_tags = 0
+          s[i], n_tags = s[i]:gsub('(%S+)', '%*%1%*')
+
+          -- Right justify to width 78 in `help` filetype ('*' has width 0)
+          local n_left = math.max(0, 78 - s[i]:len() + 2 * n_tags)
+          local left = string.rep(' ', n_left)
+          s[i] = ('%s%s'):format(left, s[i])
         end
-        return s
       end,
-      ['@text'] = function(s)
-        return s
-      end,
-      ['@type'] = function(s)
-        return s
-      end,
+      ['@text'] = function() end,
+      ['@type'] = function() end,
       ['@usage'] = function(s)
-        -- Add 'Usage:~' heading
-        s:insert(1, 'Usage:~')
-        return s
+        H.add_section_heading(s, 'Usage')
       end,
     },
     block_post = function(b)
-      -- Add headings before first occurence of some sections
-      local found_param = false
+      -- Remove block if it is private
+      if b.info._is_private then
+        b.parent:remove(b.parent_index)
+        return
+      end
+
+      local found_param, found_field = false, false
       H.apply_recursively(function(x)
         if not (type(x) == 'table' and x.type == 'section') then
           return
         end
+
+        -- Add headings before first occurence of a section which type usually
+        -- appear several times
         if not found_param and x.info.id == '@param' then
-          x.parent:insert(x.parent_index, H.struct_section({ 'Parameters:~' }))
+          H.add_section_heading(x, 'Parameters')
           found_param = true
+        end
+        if not found_field and x.info.id == '@field' then
+          H.add_section_heading(x, 'Fields')
+          found_field = true
+        end
+
+        -- Move all tag sections in the beginning. NOTE: due to depth-first
+        -- nature, this approach will reverse order of tag sections if there
+        -- are more than one; doesn't seem to be a big deal.
+        if x.info.id == '@tag' then
+          x.parent:remove(x.parent_index)
+          x.parent:insert(1, x)
         end
       end, b)
 
-      if #b > 0 then
-        b:insert(1, H.struct_section({ H.separator_block }))
-        b:insert(H.struct_section({ '' }))
+      if b:has_lines() then
+        b:insert(1, H.as_struct({ H.separator_block }, 'section'))
+        b:insert(H.as_struct({ '' }, 'section'))
       end
-      return b
     end,
     file = function(f)
-      if #f > 0 then
-        f:insert(1, H.struct_block({ H.struct_section({ H.separator_file }) }))
-        f:insert(H.struct_block({ H.struct_section({ '' }) }))
+      if f:has_lines() then
+        f:insert(1, H.as_struct({ H.as_struct({ H.separator_file }, 'section') }, 'block'))
+        f:insert(H.as_struct({ H.as_struct({ '' }, 'section') }, 'block'))
       end
-      return f
     end,
     doc = function(d)
-      d:insert(H.struct_file({ H.struct_block({ H.struct_section({ ' vim:tw=78:ts=8:noet:ft=help:norl:' }) }) }))
-      return d
+      d:insert(
+        H.as_struct(
+          { H.as_struct({ H.as_struct({ ' vim:tw=78:ts=8:noet:ft=help:norl:' }, 'section') }, 'block') },
+          'file'
+        )
+      )
     end,
   },
 }
@@ -222,23 +236,26 @@ function MiniDoc.generate(input, output, opts)
   opts = vim.tbl_deep_extend('force', {}, opts or {})
 
   -- Parse input files
-  local doc = H.struct_doc({}, { input = input, output = output, opts = opts })
+  local doc = H.new_struct('doc', { input = input, output = output, opts = opts })
   for _, path in ipairs(input) do
-    local lines = H.read_file(path)
+    local lines = H.file_read(path)
     local block_arr = H.lines_to_block_arr(lines)
-    local file = H.struct_file(block_arr, { path = path })
+    local file = H.new_struct('file', { path = path })
+    for _, b in ipairs(block_arr) do
+      file:insert(b)
+    end
 
     doc:insert(file)
   end
 
   -- Apply hooks
-  doc = H.apply_hooks(doc)
+  H.apply_hooks(doc)
 
   -- Gather string lines in depth-first fashion
   local help_lines = H.collect_strings(doc)
 
   -- Write helpfile
-  vim.fn.writefile(help_lines, output, 'b')
+  H.file_write(output, help_lines)
   return doc
 end
 
@@ -267,9 +284,9 @@ function H.setup_config(config)
 
     ['hooks.sections'] = { config.hooks.sections, 'table', true },
     ['hooks.sections.@class'] = { config.hooks.sections['@class'], 'function' },
+    ['hooks.sections.@field'] = { config.hooks.sections['@field'], 'function' },
     ['hooks.sections.@param'] = { config.hooks.sections['@param'], 'function' },
     ['hooks.sections.@private'] = { config.hooks.sections['@private'], 'function' },
-    ['hooks.sections.@property'] = { config.hooks.sections['@property'], 'function' },
     ['hooks.sections.@return'] = { config.hooks.sections['@return'], 'function' },
     ['hooks.sections.@tag'] = { config.hooks.sections['@tag'], 'function' },
     ['hooks.sections.@text'] = { config.hooks.sections['@text'], 'function' },
@@ -326,7 +343,7 @@ end
 
 function H.default_output()
   local cur_dir = vim.fn.fnamemodify(vim.loop.cwd(), ':t:r')
-  return ('doc/%s'):format(cur_dir)
+  return ('doc/%s.txt'):format(cur_dir)
 end
 
 -- Parsing --------------------------------------------------------------------
@@ -378,7 +395,7 @@ function H.raw_block_to_block(block_raw)
     return nil
   end
 
-  local block = H.struct_block({}, {
+  local block = H.new_struct('block', {
     afterlines = block_raw.afterlines,
     line_begin = block_raw.line_begin,
     line_end = block_raw.line_end,
@@ -387,7 +404,7 @@ function H.raw_block_to_block(block_raw)
 
   -- Parse raw block annotation lines from top to bottom. New section starts
   -- when section id is detected in that line.
-  local section_cur = H.struct_section({}, { id = H.default_section_id, line_begin = block_begin })
+  local section_cur = H.new_struct('section', { id = H.default_section_id, line_begin = block_begin })
 
   for i, annotation_line in ipairs(block_raw.annotation) do
     local id = block_raw.section_id[i]
@@ -399,7 +416,7 @@ function H.raw_block_to_block(block_raw)
       end
 
       -- Start new section
-      section_cur = H.struct_section({}, { id = id, line_begin = block_begin + i - 1 })
+      section_cur = H.new_struct('section', { id = id, line_begin = block_begin + i - 1 })
     end
 
     section_cur:insert(annotation_line)
@@ -415,42 +432,59 @@ end
 
 -- Hooks ----------------------------------------------------------------------
 function H.apply_hooks(doc)
-  local new_doc = H.struct_doc({}, doc.info)
-
   for _, file in ipairs(doc) do
-    local new_file = H.struct_file({}, file.info)
-
     for _, block in ipairs(file) do
-      block = MiniDoc.config.hooks.block_pre(block)
-
-      local new_block = H.struct_block({}, block.info)
+      MiniDoc.config.hooks.block_pre(block)
 
       for _, section in ipairs(block) do
         local hook = MiniDoc.config.hooks.sections[section.info.id]
-        local new_section = hook ~= nil and hook(section) or section
-        new_block:insert(new_section)
+        if hook ~= nil then
+          hook(section)
+        end
       end
 
-      new_block = MiniDoc.config.hooks.block_post(new_block)
-      new_file:insert(new_block)
+      MiniDoc.config.hooks.block_post(block)
     end
 
-    new_file = MiniDoc.config.hooks.file(new_file)
-    new_doc:insert(new_file)
+    MiniDoc.config.hooks.file(file)
   end
 
-  new_doc = MiniDoc.config.hooks.doc(new_doc)
+  MiniDoc.config.hooks.doc(doc)
+end
 
-  return new_doc
+function H.add_section_heading(s, heading)
+  if #s == 0 or s.type ~= 'section' then
+    return
+  end
+
+  -- Add heading
+  s:insert(1, ('%s~'):format(heading))
+
+  -- Ensure empty line before heading
+  local prev_section = s.parent[s.parent_index - 1]
+  if prev_section == nil or H.is_whitespace(prev_section[#prev_section]) then
+    return
+  end
+  s:insert(1, '')
+end
+
+function H.enclose_first_word(s, pattern)
+  if #s == 0 or s.type ~= 'section' then
+    return
+  end
+
+  s[1] = s[1]:gsub('(%S*)', pattern, 1)
 end
 
 -- Work with structures -------------------------------------------------------
--- Constructors. NOTE; currently they modify input arrays in plays
-function H.struct(struct_type, array, info)
-  array.info = info
-  array.type = struct_type
+-- Constructor
+function H.new_struct(struct_type, info)
+  local output = {
+    info = info or {},
+    type = struct_type,
+  }
 
-  array.insert = function(self, index, child)
+  output.insert = function(self, index, child)
     if child == nil then
       child, index = index, #self + 1
     end
@@ -465,30 +499,31 @@ function H.struct(struct_type, array, info)
     H.sync_parent_index(self)
   end
 
-  array.remove = function(self, index)
+  output.remove = function(self, index)
     index = index or #self
     table.remove(self, index)
 
     H.sync_parent_index(self)
   end
 
-  return array
-end
+  output.has_descendant = function(self, predicate)
+    local bool_res, descendant = false, nil
+    H.apply_recursively(function(x)
+      if not bool_res and predicate(x) then
+        bool_res = true
+        descendant = x
+      end
+    end, self)
+    return bool_res, descendant
+  end
 
-function H.struct_doc(file_arr, info)
-  return H.struct('doc', file_arr, info)
-end
+  output.has_lines = function(self)
+    return self:has_descendant(function(x)
+      return type(x) == 'string'
+    end)
+  end
 
-function H.struct_file(block_arr, info)
-  return H.struct('file', block_arr, info)
-end
-
-function H.struct_block(section_arr, info)
-  return H.struct('block', section_arr, info)
-end
-
-function H.struct_section(string_arr, info)
-  return H.struct('section', string_arr, info)
+  return output
 end
 
 function H.sync_parent_index(x)
@@ -498,6 +533,15 @@ function H.sync_parent_index(x)
     end
   end
   return x
+end
+
+-- Converter (this ensures that children have proper parent-related data)
+function H.as_struct(array, struct_type, info)
+  local res = H.new_struct(struct_type, info)
+  for _, x in ipairs(array) do
+    res:insert(x)
+  end
+  return res
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -521,14 +565,28 @@ function H.collect_strings(x)
   return res
 end
 
-function H.read_file(path)
-  local fp = assert(io.open(path))
-  local contents = fp:read('*all')
-  fp:close()
+function H.file_read(path)
+  local file = assert(io.open(path))
+  local contents = file:read('*all')
+  file:close()
 
   return vim.split(contents, '\n')
 end
 
-_G.lines = H.read_file(vim.fn.fnamemodify('~/.config/nvim/lua/mini-dev/test-doc.lua', ':p'))
+function H.file_write(path, lines)
+  -- Ensure target directory exists
+  local dir = vim.fn.fnamemodify(path, ':h')
+  vim.fn.mkdir(dir, 'p')
+
+  -- Write to file
+  vim.fn.writefile(lines, path, 'b')
+end
+
+function H.is_whitespace(x)
+  -- String is whitespace in 'help' filetype if it is seen as only whitespace
+  return string.find(x, '^%s*$') ~= nil or x == '>' or x == '<'
+end
+
+_G.lines = H.file_read(vim.fn.fnamemodify('~/.config/nvim/lua/mini-dev/test-doc.lua', ':p'))
 
 return MiniDoc
