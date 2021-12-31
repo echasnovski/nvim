@@ -54,4 +54,25 @@ M.User = {}
 ---@private
 M._private_user = {}
 
+--- Test of `@eval` section as automatization of `config` documentation
+---@eval local s = table.concat(_G._minidoc_current_section.parent.info.afterlines, '\n')
+--- _, _, s = s:find('(%b{})')
+--- s = s:gsub('%-%-minidoc_replace_start%s*(.-)\n.-%-%-minidoc_replace_end', '%1')
+--- s = s:gsub('\n', '\n  ')
+--- print('>\n  ' .. s .. '\n<')
+M.tab = {
+  -- Some functional setting
+  --minidoc_replace_start a = <function>,
+  a = function()
+    return 1 + 1
+  end,
+  --minidoc_replace_end
+  -- A very important setting
+  b = 2,
+  c = {
+    d = 3,
+    e = 4,
+  },
+}
+
 return M

@@ -153,6 +153,20 @@ MiniDoc.config = {
         H.enclose_first_word(s, '{%1}')
         H.add_section_heading(s, 'Class')
       end,
+      ['@eval'] = function(s)
+        -- -- This seems like better alternative but there is actually no function
+        -- -- `vim.api.nvim_exec_lua()` (despite having it inside `:help`)
+        -- local output = vim.api.nvim_exec_lua(table.concat(s, '\n'), {['_section_'] = s})
+
+        local src = 'lua << EOF\n' .. table.concat(s, '\n') .. '\nEOF'
+        _G._minidoc_current_section = s
+        -- `output` catches output of the code. Use `print()` to return lines.
+        local output = vim.api.nvim_exec(src, true)
+        _G._minidoc_current_section = nil
+
+        s:clear_lines()
+        s[1] = output
+      end,
       ['@field'] = function(s)
         H.enclose_first_word(s, '{%1}')
         H.replace_aliases(s)
@@ -304,6 +318,7 @@ function H.setup_config(config)
     ['hooks.sections'] = { config.hooks.sections, 'table' },
     ['hooks.sections.@alias'] = { config.hooks.sections['@alias'], 'function' },
     ['hooks.sections.@class'] = { config.hooks.sections['@class'], 'function' },
+    ['hooks.sections.@eval'] = { config.hooks.sections['@eval'], 'function' },
     ['hooks.sections.@field'] = { config.hooks.sections['@field'], 'function' },
     ['hooks.sections.@param'] = { config.hooks.sections['@param'], 'function' },
     ['hooks.sections.@private'] = { config.hooks.sections['@private'], 'function' },
@@ -565,9 +580,9 @@ function H.new_struct(struct_type, info)
     for i, x in ipairs(self) do
       if type(x) == 'string' then
         self[i] = nil
-        return
+      else
+        x:clear_lines()
       end
-      x:clear_lines()
     end
   end
 
