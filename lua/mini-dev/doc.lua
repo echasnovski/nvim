@@ -71,6 +71,8 @@
 --     - `has_lines(self)` - whether structure has any lines (even empty ones)
 --       to be put in output file. For section structures this is equivalent to
 --       `#self`, but more useful for higher order structures.
+--     - `clear_lines(self)` - remove all lines from structure. As a result,
+--       this structure won't contribute to output help file.
 --
 -- Generating:
 -- - Main parameters for help generation are an array of input file paths and
@@ -108,7 +110,8 @@
 --       contents).
 -- - Collect all strings from sections in depth-first fashion (equivalent to
 --   nested "for all files -> for all blocks -> for all sections -> for all
---   strings") and write them to output file.
+--   strings") and write them to output file. Strings can have `\n` character
+--   indicating start of new line.
 
 -- Module definition ==========================================================
 local MiniDoc = {}
@@ -139,21 +142,31 @@ MiniDoc.config = {
   hooks = {
     block_pre = function(b) end,
     sections = {
+      ['@alias'] = function(s)
+        H.register_alias(s)
+        -- NOTE: don't use `s.parent:remove(s.parent_index)` here because it
+        -- disrupts iteration over block's section during hook application
+        -- (skips next section).
+        s:clear_lines()
+      end,
       ['@class'] = function(s)
         H.enclose_first_word(s, '{%1}')
         H.add_section_heading(s, 'Class')
       end,
       ['@field'] = function(s)
         H.enclose_first_word(s, '{%1}')
+        H.replace_aliases(s)
       end,
       ['@param'] = function(s)
         H.enclose_first_word(s, '{%1}')
+        H.replace_aliases(s)
       end,
       ['@private'] = function(s)
         s.parent.info._is_private = true
       end,
       ['@return'] = function(s)
         H.enclose_first_word(s, '{%1}')
+        H.replace_aliases(s)
         H.add_section_heading(s, 'Return')
       end,
       ['@tag'] = function(s)
@@ -177,7 +190,7 @@ MiniDoc.config = {
     block_post = function(b)
       -- Remove block if it is private
       if b.info._is_private then
-        b.parent:remove(b.parent_index)
+        b:clear_lines()
         return
       end
 
@@ -235,6 +248,8 @@ function MiniDoc.generate(input, output, opts)
   output = output or H.default_output()
   opts = vim.tbl_deep_extend('force', {}, opts or {})
 
+  H.alias_registry = {}
+
   -- Parse input files
   local doc = H.new_struct('doc', { input = input, output = output, opts = opts })
   for _, path in ipairs(input) do
@@ -266,6 +281,10 @@ H.default_config = MiniDoc.config
 -- Default section id (assigned to annotation at block start)
 H.default_section_id = '@text'
 
+-- Alias registry. Keys are alias name, values - single string of alias
+-- description with '\n' separating output lines.
+H.alias_registry = {}
+
 -- Structure separators
 H.separator_block = string.rep('-', 78)
 H.separator_file = string.rep('=', 78)
@@ -282,7 +301,8 @@ function H.setup_config(config)
     hooks = { config.hooks, 'table' },
     ['hooks.block_pre'] = { config.hooks.block_pre, 'function' },
 
-    ['hooks.sections'] = { config.hooks.sections, 'table', true },
+    ['hooks.sections'] = { config.hooks.sections, 'table' },
+    ['hooks.sections.@alias'] = { config.hooks.sections['@alias'], 'function' },
     ['hooks.sections.@class'] = { config.hooks.sections['@class'], 'function' },
     ['hooks.sections.@field'] = { config.hooks.sections['@field'], 'function' },
     ['hooks.sections.@param'] = { config.hooks.sections['@param'], 'function' },
@@ -452,6 +472,31 @@ function H.apply_hooks(doc)
   MiniDoc.config.hooks.doc(doc)
 end
 
+function H.register_alias(s)
+  if #s == 0 then
+    return
+  end
+
+  -- Remove first word (and its surrounding whitespace) while capturing it
+  local alias_name
+  s[1] = s[1]:gsub('%s*(%S+)%s*', function(x)
+    alias_name = x
+    return ''
+  end, 1)
+  if alias_name == nil then
+    return
+  end
+  H.alias_registry[alias_name] = table.concat(s, '\n')
+end
+
+function H.replace_aliases(s)
+  for i, _ in ipairs(s) do
+    for alias_name, alias_desc in pairs(H.alias_registry) do
+      s[i] = s[i]:gsub(vim.pesc(alias_name), alias_desc)
+    end
+  end
+end
+
 function H.add_section_heading(s, heading)
   if #s == 0 or s.type ~= 'section' then
     return
@@ -459,13 +504,6 @@ function H.add_section_heading(s, heading)
 
   -- Add heading
   s:insert(1, ('%s~'):format(heading))
-
-  -- Ensure empty line before heading
-  local prev_section = s.parent[s.parent_index - 1]
-  if prev_section == nil or H.is_whitespace(prev_section[#prev_section]) then
-    return
-  end
-  s:insert(1, '')
 end
 
 function H.enclose_first_word(s, pattern)
@@ -523,6 +561,16 @@ function H.new_struct(struct_type, info)
     end)
   end
 
+  output.clear_lines = function(self)
+    for i, x in ipairs(self) do
+      if type(x) == 'string' then
+        self[i] = nil
+        return
+      end
+      x:clear_lines()
+    end
+  end
+
   return output
 end
 
@@ -559,10 +607,12 @@ function H.collect_strings(x)
   local res = {}
   H.apply_recursively(function(y)
     if type(y) == 'string' then
-      table.insert(res, y)
+      -- Allow `\n` in strings
+      table.insert(res, vim.split(y, '\n'))
     end
   end, x)
-  return res
+  -- Flatten to only have strings and not table of strings (from `vim.split`)
+  return vim.tbl_flatten(res)
 end
 
 function H.file_read(path)
