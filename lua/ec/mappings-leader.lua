@@ -32,6 +32,7 @@ EC.leader_nmap.f = {
   ['/'] = { [[<Cmd>Telescope search_history<CR>]],            '"/" history' },
   [':'] = { [[<Cmd>Telescope command_history<CR>]],           'commands' },
   ['b'] = { [[<Cmd>Telescope buffers<CR>]],                   'open buffers' },
+  ['B'] = { [[<Cmd>Telescope current_buffer_fuzzy_find<CR>]], 'open buffers' },
   ['c'] = { [[<Cmd>Telescope git_commits<CR>]],               'commits' },
   ['C'] = { [[<Cmd>Telescope git_bcommits<CR>]],              'buffer commits' },
   ['d'] = { [[<Cmd>Telescope lsp_workspace_diagnostics<CR>]], 'diagnostic workspace' },
