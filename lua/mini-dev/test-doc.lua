@@ -55,12 +55,19 @@ M.User = {}
 M._private_user = {}
 
 --- Test of `@eval` section as automatization of `config` documentation
----@eval local s = table.concat(_G._minidoc_current_section.parent.info.afterlines, '\n')
---- _, _, s = s:find('(%b{})')
+---
+---@eval a -= 1
+---
+---@eval _G.been_here = true
+---
+---@eval local s = table.concat(MiniDoc.current_struct.parent.info.afterlines, '\n')
+--- _, _, s = s:find('%-%-minidoc_afterlines_start\n(.-)\n%-%-minidoc_afterlines_end')
 --- s = s:gsub('%-%-minidoc_replace_start%s*(.-)\n.-%-%-minidoc_replace_end', '%1')
---- s = s:gsub('\n', '\n  ')
---- print('>\n  ' .. s .. '\n<')
+--- return '>\n  ' .. s:gsub('\n', '\n  ') .. '\n<'
+--minidoc_afterlines_start
+--minidoc_replace_start {
 M.tab = {
+  --minidoc_replace_end
   -- Some functional setting
   --minidoc_replace_start a = <function>,
   a = function()
@@ -74,5 +81,6 @@ M.tab = {
     e = 4,
   },
 }
+--minidoc_afterlines_end
 
 return M

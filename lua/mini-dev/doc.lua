@@ -154,18 +154,34 @@ MiniDoc.config = {
         H.add_section_heading(s, 'Class')
       end,
       ['@eval'] = function(s)
-        -- -- This seems like better alternative but there is actually no function
-        -- -- `vim.api.nvim_exec_lua()` (despite having it inside `:help`)
-        -- local output = vim.api.nvim_exec_lua(table.concat(s, '\n'), {['_section_'] = s})
-
-        local src = 'lua << EOF\n' .. table.concat(s, '\n') .. '\nEOF'
-        _G._minidoc_current_section = s
-        -- `output` catches output of the code. Use `print()` to return lines.
-        local output = vim.api.nvim_exec(src, true)
-        _G._minidoc_current_section = nil
+        local src = table.concat(s, '\n')
+        local is_loaded, code = pcall(function()
+          return assert(loadstring(src))
+        end)
+        local output
+        if is_loaded then
+          MiniDoc.current_struct = s
+          output = code()
+          MiniDoc.current_struct = nil
+        else
+          output = 'MINIDOC ERROR. Parsing Lua code gave the following error:\n' .. code
+        end
 
         s:clear_lines()
-        s[1] = output
+
+        if output == nil then
+          return
+        end
+        if type(output) == 'string' then
+          output = vim.split(output, '\n')
+        end
+        if type(output) ~= 'table' then
+          s[1] = 'MINIDOC ERROR. Returned value should be `nil`, `string`, or `table`.'
+          return
+        end
+        for _, x in ipairs(output) do
+          s:insert(x)
+        end
       end,
       ['@field'] = function(s)
         H.enclose_first_word(s, '{%1}')
@@ -179,7 +195,7 @@ MiniDoc.config = {
         s.parent.info._is_private = true
       end,
       ['@return'] = function(s)
-        H.enclose_first_word(s, '{%1}')
+        H.enclose_first_word(s, '`%1`')
         H.replace_aliases(s)
         H.add_section_heading(s, 'Return')
       end,
@@ -255,6 +271,10 @@ MiniDoc.config = {
     end,
   },
 }
+
+-- Module data ================================================================
+--- Store current structure to be available only inside `@eval` section
+MiniDoc.current_struct = nil
 
 -- Module functionality =======================================================
 function MiniDoc.generate(input, output, opts)
@@ -507,7 +527,7 @@ end
 function H.replace_aliases(s)
   for i, _ in ipairs(s) do
     for alias_name, alias_desc in pairs(H.alias_registry) do
-      s[i] = s[i]:gsub(vim.pesc(alias_name), alias_desc)
+      s[i] = s[i]:gsub(vim.pesc(alias_name), vim.pesc(alias_desc))
     end
   end
 end
