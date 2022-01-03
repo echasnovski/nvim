@@ -23,8 +23,7 @@ function M.fun(a, b)
   return true
 end
 
----@title Title for `fun2`
---- Can be multiline!
+--- TITLE FOR `fun2`
 ---@text
 --- This illustrates some code:
 --- >
@@ -60,10 +59,7 @@ M._private_user = {}
 ---
 ---@eval _G.been_here = true
 ---
----@eval local s = table.concat(MiniDoc.current_struct.parent.info.afterlines, '\n')
---- _, _, s = s:find('%-%-minidoc_afterlines_start\n(.-)\n%-%-minidoc_afterlines_end')
---- s = s:gsub('%-%-minidoc_replace_start%s*(.-)\n.-%-%-minidoc_replace_end', '%1')
---- return '>\n  ' .. s:gsub('\n', '\n  ') .. '\n<'
+---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 --minidoc_afterlines_start
 --minidoc_replace_start {
 M.tab = {

@@ -4,9 +4,15 @@
 --- GENERATION OF HELP FILES FROM EMMYLUA-LIKE ANNOTATIONS
 ---
 --- Key design ideas:
---- - Any consecutive lines with predefined prefix will be considered as
----   documentation block.
---- - Allow custom hooks at multiple conversion stages for more granular
+--- - Generation is done by processing a set of ordered files line by line.
+---   Each line can either be considered as a part of documentation block (if
+---   it matches certain configurable pattern) or not (considered to be an
+---   "afterline" of documentation block). See |MiniDoc.generate()| or more
+---   details.
+--- - Processing is done by using nested data structures (section, block, file,
+---   doc) describing certain parts of help file. See 'Data structures' section
+---   for more information.
+--- - Allow custom hooks at multiple generation stages for more granular
 ---   management of output help file.
 ---
 --- # Setup~
@@ -14,16 +20,58 @@
 --- This module needs a setup with `require('mini.doc').setup({})`
 --- (replace `{}` with your `config` table). It will create global Lua table
 --- `MiniDoc` which you can use for scripting or manually (with
---- `:lua MiniDoc.*`).
+--- `:lua MiniDoc.*`). See |MiniDoc.config| for available config settings.
 ---
---- Default `config`:
---- >
----   {
----   }
---- <
+--- # Generation~
+---
+--- Generation of help file is done with |MiniDoc.generate|.
+---
+--- # Data structures~
+---
+--- Data structures are basically arrays of other structures accompanied with
+--- some fields (keys with data values) and methods (keys with function
+--- values):
+--- - `Section structure` is an array of string lines describing one aspect
+---   (determined by section id like '@param', '@return', '@text') of an
+---   annotation subject. All lines will be used directly in help file.
+--- - `Block structure` is an array of sections describing one annotation
+---   subject like function, table, concept.
+--- - `File structure` is an array of blocks describing certain file on disk.
+---   Basically, file is split into consecutive blocks: annotation lines go
+---   inside block, non-annotation - inside `block_afterlines` element of info.
+--- - `Doc structure` is an array of files describing a final help file. Each
+---   string line from section (when traversed in depth-first fashion) goes
+---   directly into output file.
+---
+--- All structures have these keys:
+--- - Fields:
+---     - `info` - contains additional information about current structure.
+---     - `parent` - table of parent structure (if exists).
+---     - `parent_index` - index of this structure in its parent's array. Useful
+---       for adding to parent another structure near current one.
+---     - `type` - string with structure type (section, block, file, doc).
+--- - Methods (use them as `x:method(args)`):
+---     - `insert(self, [index,] child)` - insert `child` to `self` at position
+---       `index` (optional; if not supplied, child will be appended to end).
+---       Basically, a `table.insert()`, but adds `parent` and `parent_index`
+---       fields to `child` while properly updating `self`.
+---     - `remove(self [,index])` - remove from `self` element at position
+---       `index`. Basically, a `table.remove()`, but properly updates `self`.
+---     - `has_descendant(self, predicate)` - whether there is a descendant
+---       (structure or string) for which `predicate` returns `true`. In case of
+---       success also returns the first such descendant as second value.
+---     - `has_lines(self)` - whether structure has any lines (even empty ones)
+---       to be put in output file. For section structures this is equivalent to
+---       `#self`, but more useful for higher order structures.
+---     - `clear_lines(self)` - remove all lines from structure. As a result,
+---       this structure won't contribute to output help file.
+---
 --- # Tips~
 ---
 --- - Set up 'formatoptions' and 'formatlistpat'.
+--- - Probably one of the most reliable resources for what is considered to be
+---   best practice when using this module is this whole plugin. Look at source
+---   code for the reference.
 ---
 --- # Comparisons~
 ---
@@ -31,95 +79,18 @@
 ---
 --- # Disabling~
 ---
---- To disable, set `g:minidoc_disable` (globally) or
---- `b:minidoc_disable` (for a buffer) to `v:true`.
+--- To disable, set `g:minidoc_disable` (globally) or `b:minidoc_disable` (for
+--- a buffer) to `v:true`.
 ---@tag MiniDoc mini.doc
-
--- General ideas
---
--- Data structures are basically arrays of other structures accompanied with
--- some fields (keys with data values) and methods (keys with function values):
--- - Section structure is an array of string lines describing one aspect
---   (determined by section id like '@param', '@return', '@text') of an
---   annotation subject. All lines will be used directly in help file.
--- - Block structure is an array of sections describing one annotation subject
---   like function, table, concept.
--- - File structure is an array of blocks describing certain file on disk.
---   Basically, file is split into consecutive blocks: annotation lines go
---   inside block, non-annotation - inside `block_afterlines` element of info.
--- - Doc structure is an array of files describing a final help file. Each
---   string line from section (when traversed in depth-first fashion) goes
---   directly into output file.
---
--- All structures have these keys:
--- - Fields:
---     - `info` - contains additional information about current structure.
---     - `parent` - table of parent structure (if exists).
---     - `parent_index` - index of this structure in its parent's array. Useful
---       for adding to parent another structure near current one.
---     - `type` - string with structure type (doc, file, block, section).
--- - Methods (use them as `x:method(args)`):
---     - `insert(self, [index,] child)` - insert `child` to `self` at position
---       `index` (optional; if not supplied, child will be appended to end).
---       Basically, a `table.insert()`, but adds `parent` and `parent_index`
---       fields to `child` while properly updating `self`.
---     - `remove(self [,index])` - remove from `self` element at position
---       `index`. Basically, a `table.remove()`, but properly updates `self`.
---     - `has_descendant(self, predicate)` - whether there is a descendant
---       (structure or string) for which `predicate` returns `true`. In case of
---       success also returns the first such descendant as second value.
---     - `has_lines(self)` - whether structure has any lines (even empty ones)
---       to be put in output file. For section structures this is equivalent to
---       `#self`, but more useful for higher order structures.
---     - `clear_lines(self)` - remove all lines from structure. As a result,
---       this structure won't contribute to output help file.
---
--- Generating:
--- - Main parameters for help generation are an array of input file paths and
---   path to output help file.
--- - Parse all inputs:
---   - For each file, lines are processed top to bottom in order to create an
---     array of documentation blocks. Each line is tested on match to certain
---     pattern (`MiniDoc.config.annotation_pattern`) to determine if line is a
---     part of annotation (goes to "current block" after removing matched
---     characters) or not (goes to afterlines of "current block"). Also each
---     matching pattern should provide one capture group extracting section id.
---   - Each block's annotation lines are processed top to bottom. If line had
---     captured section id, it is a first line of "current section" (first
---     block lines are allowed to not specify section id; by default it is
---     `@text`). All subsequent lines without captured section id go into
---     "current section".
--- - Apply hooks (they should modify its input in place, which is possible due
---   to 'table nature' of all possible inputs):
---     - Each block structure is processed by `MiniDoc.config.hooks.block_pre`.
---       This is a designated step for auto-generation of sections from
---       descibed annotation subject (like sections with id `@tag`, `@type`).
---     - Each section structure is processed by corresponding
---       `MiniDoc.config.hooks.sections` function (table key equals to section
---       id). This is a step where most of formatting should happen (like wrap
---       first word of `@param` section with `{` and `}`, append empty line to
---       section, etc.).
---     - Each block structure is processed by
---       `MiniDoc.config.hooks.block_post`. This is a step for processing block
---       after formatting is done (like add first line with `----` delimiter).
---     - Each file structure is processed by `MiniDoc.config.hooks.file`. This
---       is a step for adding any file-related data (like add first line with
---       `====` delimiter).
---     - Doc structure is processed by `MiniDoc.config.hooks.doc`. This is a
---       step for adding any helpfile-related data (maybe like table of
---       contents).
--- - Collect all strings from sections in depth-first fashion (equivalent to
---   nested "for all files -> for all blocks -> for all sections -> for all
---   strings") and write them to output file. Strings can have `\n` character
---   indicating start of new line.
 
 -- Module definition ==========================================================
 local MiniDoc = {}
 H = {}
 
---- Module setup
+--- MODULE SETUP
 ---
 ---@param config table: Module config table.
+---
 ---@usage `require('mini.doc').setup({})` (replace `{}` with your `config` table)
 function MiniDoc.setup(config)
   -- Export module
@@ -132,6 +103,15 @@ function MiniDoc.setup(config)
   H.apply_config(config)
 end
 
+--- MODULE CONFIG
+---
+--- Default values:
+---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # Notes ~
+--- Hooks are expected to be functions. Their default values might do many
+--- things which might change over time, so for more information please look at
+--- source code.
+--minidoc_afterlines_start
 MiniDoc.config = {
   -- Lua string pattern to determine if line has documentation annotation.
   -- First capture group should describe possible section id.
@@ -140,8 +120,21 @@ MiniDoc.config = {
   -- Hooks to be applied at certain stage of document life cycle. Should modify
   -- its input in place (and not return new one).
   hooks = {
+    -- Applied to block before anything else
+    --minidoc_replace_start block_pre = <function>,
     block_pre = function(b) end,
+    --minidoc_replace_end
+
+    -- Applied to section before anything else
+    --minidoc_replace_start section_pre = <function that replaces current aliases>,
+    section_pre = function(s)
+      H.replace_aliases(s)
+    end,
+
+    --minidoc_replace_end
+    -- Applied if section has specified captured id
     sections = {
+      --minidoc_replace_start ['@alias'] = <function that registers alias in MiniDoc.current.aliases>,
       ['@alias'] = function(s)
         H.register_alias(s)
         -- NOTE: don't use `s.parent:remove(s.parent_index)` here because it
@@ -149,10 +142,15 @@ MiniDoc.config = {
         -- (skips next section).
         s:clear_lines()
       end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@class'] = <function>,
       ['@class'] = function(s)
         H.enclose_first_word(s, '{%1}')
         H.add_section_heading(s, 'Class')
       end,
+      --minidoc_replace_end
+      -- For most typical usage see |MiniDoc.afterlines_to_code|
+      --minidoc_replace_start ['@eval'] = <function which evaluates its lines and replaces them with returned value>,
       ['@eval'] = function(s)
         local src = table.concat(s, '\n')
         local is_loaded, code = pcall(function()
@@ -160,9 +158,9 @@ MiniDoc.config = {
         end)
         local output
         if is_loaded then
-          MiniDoc.current_struct = s
+          MiniDoc.current.eval_section = s
           output = code()
-          MiniDoc.current_struct = nil
+          MiniDoc.current.eval_section = nil
         else
           output = 'MINIDOC ERROR. Parsing Lua code gave the following error:\n' .. code
         end
@@ -183,22 +181,33 @@ MiniDoc.config = {
           s:insert(x)
         end
       end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@field'] = <function>,
       ['@field'] = function(s)
         H.enclose_first_word(s, '{%1}')
-        H.replace_aliases(s)
       end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@param'] = <function>,
       ['@param'] = function(s)
         H.enclose_first_word(s, '{%1}')
-        H.replace_aliases(s)
       end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@private'] = <function which registers block for removal>,
       ['@private'] = function(s)
         s.parent.info._is_private = true
       end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@return'] = <function>,
       ['@return'] = function(s)
-        H.enclose_first_word(s, '`%1`')
-        H.replace_aliases(s)
         H.add_section_heading(s, 'Return')
       end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@seealso'] = <function>,
+      ['@seealso'] = function(s)
+        H.add_section_heading(s, 'See also')
+      end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@tag'] = <function which turns its line in proper tag lines>,
       ['@tag'] = function(s)
         for i, _ in ipairs(s) do
           -- Enclose every word in `*`
@@ -211,12 +220,27 @@ MiniDoc.config = {
           s[i] = ('%s%s'):format(left, s[i])
         end
       end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@text'] = <function which currently doesn't modify text>,
       ['@text'] = function() end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@type'] = <function>,
       ['@type'] = function() end,
+      --minidoc_replace_end
+      --minidoc_replace_start ['@usage'] = <function>,
       ['@usage'] = function(s)
         H.add_section_heading(s, 'Usage')
       end,
+      --minidoc_replace_end
     },
+
+    -- Applied to section after all previous steps
+    --minidoc_replace_start section_post = <function>,
+    section_post = function(s) end,
+    --minidoc_replace_end
+
+    -- Applied to block after all previous steps
+    --minidoc_replace_start block_post = <function which does many things>,
     block_post = function(b)
       -- Remove block if it is private
       if b.info._is_private then
@@ -255,12 +279,20 @@ MiniDoc.config = {
         b:insert(H.as_struct({ '' }, 'section'))
       end
     end,
+    --minidoc_replace_end
+
+    -- Applied to file after all previous steps
+    --minidoc_replace_start file = <function>,
     file = function(f)
       if f:has_lines() then
         f:insert(1, H.as_struct({ H.as_struct({ H.separator_file }, 'section') }, 'block'))
         f:insert(H.as_struct({ H.as_struct({ '' }, 'section') }, 'block'))
       end
     end,
+    --minidoc_replace_end
+
+    -- Applied to doc after all previous steps
+    --minidoc_replace_start doc = <function>,
     doc = function(d)
       d:insert(
         H.as_struct(
@@ -269,20 +301,83 @@ MiniDoc.config = {
         )
       )
     end,
+    --minidoc_replace_end
   },
 }
+--minidoc_afterlines_end
 
 -- Module data ================================================================
---- Store current structure to be available only inside `@eval` section
-MiniDoc.current_struct = nil
+--- TABLE WITH INFORMATION ABOUT CURRENT STATE OF AUTO-GENERATION
+---
+--- It is reset at the beginning and end of `MiniDoc.generate()`.
+---
+--- At least these keys are supported:
+--- - {aliases} - table with keys being alias name and values - alias
+---   description and single string (using `\n` to separate lines).
+--- - {eval_section} - input section of `@eval` section hook. Can be used for
+---   information about current block, etc.
+MiniDoc.current = {}
 
 -- Module functionality =======================================================
+--- GENERATE HELP FILE
+---
+--- - Main parameters for help generation are an array of input file paths and
+---   path to output help file.
+--- - Parse all inputs:
+---   - For each file, lines are processed top to bottom in order to create an
+---     array of documentation blocks. Each line is tested on match to certain
+---     pattern (`MiniDoc.config.annotation_pattern`) to determine if line is a
+---     part of annotation (goes to "current block" after removing matched
+---     characters) or not (goes to afterlines of "current block"). Also each
+---     matching pattern should provide one capture group extracting section id.
+---   - Each block's annotation lines are processed top to bottom. If line had
+---     captured section id, it is a first line of "current section" (first
+---     block lines are allowed to not specify section id; by default it is
+---     `@text`). All subsequent lines without captured section id go into
+---     "current section".
+--- - Apply hooks (they should modify its input in place, which is possible due
+---   to 'table nature' of all possible inputs):
+---     - Each block is processed by `MiniDoc.config.hooks.block_pre`. This is a
+---       designated step for auto-generation of sections from descibed
+---       annotation subject (like sections with id `@tag`, `@type`).
+---     - Each section is processed by `MiniDoc.config.hooks.section_pre`.
+---     - Each section is processed by corresponding
+---       `MiniDoc.config.hooks.sections` function (table key equals to section
+---       id). This is a step where most of formatting should happen (like
+---       wrap first word of `@param` section with `{` and `}`, append empty
+---       line to section, etc.).
+---     - Each section is processed by `MiniDoc.config.hooks.section_post`.
+---     - Each block is processed by `MiniDoc.config.hooks.block_post`. This is
+---       a step for processing block after formatting is done (like add first
+---       line with `----` delimiter).
+---     - Each file is processed by `MiniDoc.config.hooks.file`. This is a step
+---       for adding any file-related data (like add first line with `====`
+---       delimiter).
+---     - Doc is processed by `MiniDoc.config.hooks.doc`. This is a step for
+---       adding any helpfile-related data (maybe like table of contents).
+--- - Collect all strings from sections in depth-first fashion (equivalent to
+---   nested "for all files -> for all blocks -> for all sections -> for all
+---   strings -> add string to output") and write them to output file. Strings
+---   can have `\n` character indicating start of new line.
+---
+---@param input `table` Array of file paths which will be processed in supplied
+---   order. Default: all '.lua' files from current directory following by all
+---   such files in these subdirectories: 'lua/', 'after/', 'colors/'. Note:
+---   any 'init.lua' file is placed before other files from the same directory.
+---@param output `string` Path for output help file. Default:
+---   `doc/<current_directory>.txt` (designed to be used for generating help
+---   file for plugin).
+---@param opts `table` Possible options. Currently not used.
+---
+---@return `table` Document structure which was generated and used for output
+---   help file.
 function MiniDoc.generate(input, output, opts)
   input = input or H.default_input()
   output = output or H.default_output()
   opts = vim.tbl_deep_extend('force', {}, opts or {})
 
-  H.alias_registry = {}
+  -- Prepare table for current information
+  MiniDoc.current = {}
 
   -- Parse input files
   local doc = H.new_struct('doc', { input = input, output = output, opts = opts })
@@ -305,7 +400,87 @@ function MiniDoc.generate(input, output, opts)
 
   -- Write helpfile
   H.file_write(output, help_lines)
+
+  -- Clear current information
+  MiniDoc.current = {}
+
   return doc
+end
+
+--- CONVERT AFTERLINES TO CODE
+---
+--- This function is designed to be used together with `@eval` section to
+--- automate documentation of certain values (notable default values of a
+--- table). It processes afterlines based on certain directives and makes
+--- output looking like a code block.
+---
+--- Most common usage is by adding the following section in your annotation:
+--- `@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)`
+---
+--- # Directives ~
+--- Directives are special comments that are processed using Lua string pattern
+--- capabilities (so beware of false positives). Each directive should be put
+--- on its separate line. Supported directives:
+--- - `--minidoc_afterlines_start` and `--minidoc_afterlines_end` denote lines
+---   between them which should be processed by this function. Useful if there
+---   is extra code in afterlines which shouldn't be used.
+--- - `--minidoc_replace_start <replacement>` and `--minidoc_replace_end`
+---   denote lines between them which should be replaced with `<replacement>`.
+---   Useful for manually changing what should be placed in output like in case
+---   of replacing function body with something else.
+---
+--- Here is an example. Suppose having these afterlines:
+--- >
+---   --minidoc_afterlines_start
+---   --minidoc_replace_start {
+---   M.config = {
+---     --minidoc_replace_end
+---     param_one = 1,
+---     --minidoc_replace_start param_fun = <function>
+---     param_fun = function(x)
+---       return x + 1
+---     end
+---     --minidoc_replace_end
+---   }
+---   --minidoc_afterlines_end
+---
+---   return M
+--- <
+---
+--- After adding `@eval` section this will be formatted as:
+--- >
+---   {
+---     param_one = 1,
+---     param_fun = <function>
+---   }
+--- <
+---@param struct `table` Block or section structure which after lines will be
+---   converted to code.
+---
+---@return `string` Single string (using `\n` to separate lines) describing
+---   afterlines as code block in help file.
+function MiniDoc.afterlines_to_code(struct)
+  if not (type(struct) == 'table' and (struct.type == 'section' or struct.type == 'block')) then
+    H.notify('Input to `MiniDoc.afterlines_to_code()` should be either section or block.')
+    return
+  end
+
+  if struct.type == 'section' then
+    struct = struct.parent
+  end
+  local src = table.concat(struct.info.afterlines, '\n')
+
+  -- Process directives
+  -- Try to extract afterlines
+  src = src:match('%-%-minidoc_afterlines_start\n(.-)\n%s*%-%-minidoc_afterlines_end') or src
+
+  -- Make replacements
+  src = src:gsub('%-%-minidoc_replace_start%s*(.-)\n.-%-%-minidoc_replace_end', '%1')
+
+  -- Convert to a standalone code. NOTE: indent is needed because of how `>`
+  -- and `<` work (any line starting in column 1 stops code block).
+  src = H.ensure_indent(src, 2)
+  return '>\n' .. src .. '\n<'
 end
 
 -- Helper data ================================================================
@@ -343,6 +518,7 @@ function H.setup_config(config)
     ['hooks.sections.@param'] = { config.hooks.sections['@param'], 'function' },
     ['hooks.sections.@private'] = { config.hooks.sections['@private'], 'function' },
     ['hooks.sections.@return'] = { config.hooks.sections['@return'], 'function' },
+    ['hooks.sections.@seealso'] = { config.hooks.sections['@seealso'], 'function' },
     ['hooks.sections.@tag'] = { config.hooks.sections['@tag'], 'function' },
     ['hooks.sections.@text'] = { config.hooks.sections['@text'], 'function' },
     ['hooks.sections.@type'] = { config.hooks.sections['@type'], 'function' },
@@ -492,10 +668,14 @@ function H.apply_hooks(doc)
       MiniDoc.config.hooks.block_pre(block)
 
       for _, section in ipairs(block) do
+        MiniDoc.config.hooks.section_pre(section)
+
         local hook = MiniDoc.config.hooks.sections[section.info.id]
         if hook ~= nil then
           hook(section)
         end
+
+        MiniDoc.config.hooks.section_post(section)
       end
 
       MiniDoc.config.hooks.block_post(block)
@@ -521,12 +701,18 @@ function H.register_alias(s)
   if alias_name == nil then
     return
   end
-  H.alias_registry[alias_name] = table.concat(s, '\n')
+
+  MiniDoc.current.aliases = MiniDoc.current.aliases or {}
+  MiniDoc.current.aliases[alias_name] = table.concat(s, '\n')
 end
 
 function H.replace_aliases(s)
+  if MiniDoc.current.aliases == nil then
+    return
+  end
+
   for i, _ in ipairs(s) do
-    for alias_name, alias_desc in pairs(H.alias_registry) do
+    for alias_name, alias_desc in pairs(MiniDoc.current.aliases) do
       s[i] = s[i]:gsub(vim.pesc(alias_name), vim.pesc(alias_desc))
     end
   end
@@ -672,6 +858,35 @@ function H.is_whitespace(x)
   return string.find(x, '^%s*$') ~= nil or x == '>' or x == '<'
 end
 
-_G.lines = H.file_read(vim.fn.fnamemodify('~/.config/nvim/lua/mini-dev/test-doc.lua', ':p'))
+function H.ensure_indent(s, n_indent_target)
+  local lines = vim.split(s, '\n')
+  local n_indent, n_indent_cur = math.huge, math.huge
+
+  -- Find number of characters in indent
+  for _, l in ipairs(lines) do
+    -- Update lines indent: minimum of all indents except empty lines
+    if n_indent > 0 then
+      _, n_indent_cur = l:find('^%s*')
+      -- Condition "current n-indent equals line length" detects empty line
+      if (n_indent_cur < n_indent) and (n_indent_cur < l:len()) then
+        n_indent = n_indent_cur
+      end
+    end
+  end
+
+  -- Ensure indent
+  local indent = string.rep(' ', n_indent_target)
+  for i, l in ipairs(lines) do
+    if l ~= '' then
+      lines[i] = indent .. l:sub(n_indent + 1)
+    end
+  end
+
+  return table.concat(lines, '\n')
+end
+
+function H.notify(msg)
+  vim.notify(('(mini.doc) %s'):format(msg))
+end
 
 return MiniDoc
