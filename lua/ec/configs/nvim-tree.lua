@@ -67,6 +67,7 @@ end
 nvim_tree.setup({
   hijack_cursor = true,
   update_focused_file = { enable = false },
+  git = { enable = false },
   view = {
     width = 40,
     auto_resize = false,
