@@ -4,16 +4,18 @@
 --- GENERATION OF HELP FILES FROM EMMYLUA-LIKE ANNOTATIONS
 ---
 --- Key design ideas:
+--- - Keep documentation next to code by writing EmmyLua-like annotation
+---   comments. They mostly will be parsed as is, so formatting should follow
+---   built-in guide in |help-writing|. However, custom hooks are allowed at
+---   many generation stages for more granular management of output help file.
 --- - Generation is done by processing a set of ordered files line by line.
 ---   Each line can either be considered as a part of documentation block (if
 ---   it matches certain configurable pattern) or not (considered to be an
----   "afterline" of documentation block). See |MiniDoc.generate()| or more
+---   "afterline" of documentation block). See |MiniDoc.generate()| for more
 ---   details.
 --- - Processing is done by using nested data structures (section, block, file,
----   doc) describing certain parts of help file. See 'Data structures' section
----   for more information.
---- - Allow custom hooks at multiple generation stages for more granular
----   management of output help file.
+---   doc) describing certain parts of help file. See |MiniDoc-data-structures|
+---   for more details.
 ---
 --- # Setup~
 ---
@@ -22,11 +24,40 @@
 --- `MiniDoc` which you can use for scripting or manually (with
 --- `:lua MiniDoc.*`). See |MiniDoc.config| for available config settings.
 ---
---- # Generation~
+--- # Tips~
 ---
---- Generation of help file is done with |MiniDoc.generate|.
+--- - Some settings tips that might make writing annotation comments easier:
+---     - Set up appropriate 'comments' for `lua` file type to respect
+---       EmmyLua-like's `---` comment leader. Value `:---,:--` seems to work.
+---     - Set up appropriate 'formatoptions' (see also |fo-table|). Consider
+---       adding `j`, `n`, `q`, and `r` flags.
+---     - Set up appropriate 'formatlistpat' to help auto-formatting lists (if
+---       `n` flag is added to 'formatoptions'). One suggestion (not entirely
+---       ideal) is a value `^\s*[0-9\-\+\*]\+[\.\)]*\s\+`. This reads as 'at
+---       least one special character (digit, `-`, `+`, `*`) possibly followed
+---       by some punctuation (`.` or `)`) followed by at least one space is a
+---       start of list item'.
+--- - Probably one of the most reliable resources for what is considered to be
+---   best practice when using this module is this whole plugin. Look at source
+---   code for the reference.
 ---
---- # Data structures~
+--- # Comparisons~
+---
+--- - 'tjdevries/tree-sitter-lua':
+---     - Its key design is to use treesitter grammar to parse both Lua code
+---       and annotation comments. This makes it not easy to install,
+---       customize, and support.
+---     - It takes more care about automating output formatting (like auto
+---       indentation and line width fit). This plugin leans more to manual
+---       formatting with option to supply customized post-processing hooks.
+---
+--- # Disabling~
+---
+--- To disable, set `g:minidoc_disable` (globally) or `b:minidoc_disable` (for
+--- a buffer) to `v:true`.
+---@tag MiniDoc mini.doc
+
+--- DATA STRUCTURES
 ---
 --- Data structures are basically arrays of other structures accompanied with
 --- some fields (keys with data values) and methods (keys with function
@@ -46,6 +77,7 @@
 --- All structures have these keys:
 --- - Fields:
 ---     - `info` - contains additional information about current structure.
+---       For more details see next section.
 ---     - `parent` - table of parent structure (if exists).
 ---     - `parent_index` - index of this structure in its parent's array. Useful
 ---       for adding to parent another structure near current one.
@@ -66,22 +98,25 @@
 ---     - `clear_lines(self)` - remove all lines from structure. As a result,
 ---       this structure won't contribute to output help file.
 ---
---- # Tips~
----
---- - Set up 'formatoptions' and 'formatlistpat'.
---- - Probably one of the most reliable resources for what is considered to be
----   best practice when using this module is this whole plugin. Look at source
----   code for the reference.
----
---- # Comparisons~
----
---- - 'tjdevries/tree-sitter-lua':
----
---- # Disabling~
----
---- To disable, set `g:minidoc_disable` (globally) or `b:minidoc_disable` (for
---- a buffer) to `v:true`.
----@tag MiniDoc mini.doc
+--- Description of `info` fields per structure type:
+--- - `Section`:
+---     - `id` - captured section identifier. Can be empty string meaning no
+---       identifier is captured.
+---     - `line_begin` - line number inside file at which section begins.
+---     - `line_end` - line number inside file at which section ends.
+--- - `Block`:
+---     - `afterlines` - array of strings which were parsed from file after
+---       this annotation block (up until the next block or end of file).
+---       Useful for making automated decisions about what is being documented.
+---     - `line_begin` - line number inside file at which block begins.
+---     - `line_end` - line number inside file at which block ends.
+--- - `File`:
+---     - `path` - absolute path to a file.
+--- - `Doc`:
+---     - `input` - array of input file paths (as in |MiniDoc.generate|).
+---     - `output` - output path (as in |MiniDoc.generate|).
+---     - `config` - configuration used (as in |MiniDoc.generate|).
+---@tag MiniDoc-data-structures
 
 -- Module definition ==========================================================
 local MiniDoc = {}
@@ -116,6 +151,9 @@ MiniDoc.config = {
   -- Lua string pattern to determine if line has documentation annotation.
   -- First capture group should describe possible section id.
   annotation_pattern = '^%-%-%-(%S*) ?',
+
+  -- Identifier of block annotation lines until first captured identifier
+  default_section_id = '@text',
 
   -- Hooks to be applied at certain stage of document life cycle. Should modify
   -- its input in place (and not return new one).
@@ -367,23 +405,23 @@ MiniDoc.current = {}
 ---@param output `string` Path for output help file. Default:
 ---   `doc/<current_directory>.txt` (designed to be used for generating help
 ---   file for plugin).
----@param opts `table` Possible options. Currently not used.
+---@param config `table` Configuration overriding parts of `MiniDoc.config`.
 ---
 ---@return `table` Document structure which was generated and used for output
 ---   help file.
-function MiniDoc.generate(input, output, opts)
+function MiniDoc.generate(input, output, config)
   input = input or H.default_input()
   output = output or H.default_output()
-  opts = vim.tbl_deep_extend('force', {}, opts or {})
+  config = vim.tbl_deep_extend('force', MiniDoc.config, config or {})
 
   -- Prepare table for current information
   MiniDoc.current = {}
 
   -- Parse input files
-  local doc = H.new_struct('doc', { input = input, output = output, opts = opts })
+  local doc = H.new_struct('doc', { input = input, output = output, config = config })
   for _, path in ipairs(input) do
     local lines = H.file_read(path)
-    local block_arr = H.lines_to_block_arr(lines)
+    local block_arr = H.lines_to_block_arr(lines, config)
     local file = H.new_struct('file', { path = path })
     for _, b in ipairs(block_arr) do
       file:insert(b)
@@ -393,7 +431,7 @@ function MiniDoc.generate(input, output, opts)
   end
 
   -- Apply hooks
-  H.apply_hooks(doc)
+  H.apply_hooks(doc, config.hooks)
 
   -- Gather string lines in depth-first fashion
   local help_lines = H.collect_strings(doc)
@@ -447,7 +485,7 @@ end
 ---   return M
 --- <
 ---
---- After adding `@eval` section this will be formatted as:
+--- After adding `@eval` section those will be formatted as:
 --- >
 ---   {
 ---     param_one = 1,
@@ -487,9 +525,6 @@ end
 -- Module default config
 H.default_config = MiniDoc.config
 
--- Default section id (assigned to annotation at block start)
-H.default_section_id = '@text'
-
 -- Alias registry. Keys are alias name, values - single string of alias
 -- description with '\n' separating output lines.
 H.alias_registry = {}
@@ -507,6 +542,9 @@ function H.setup_config(config)
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
+    ['annotation_pattern'] = { config.default_section_id, 'string' },
+    ['default_section_id'] = { config.default_section_id, 'string' },
+
     hooks = { config.hooks, 'table' },
     ['hooks.block_pre'] = { config.hooks.block_pre, 'function' },
 
@@ -578,21 +616,21 @@ function H.default_output()
 end
 
 -- Parsing --------------------------------------------------------------------
-function H.lines_to_block_arr(lines)
+function H.lines_to_block_arr(lines, config)
   local matched_prev, matched_cur
 
   local res = {}
   local block_raw = { annotation = {}, section_id = {}, afterlines = {}, line_begin = 1 }
 
   for i, l in ipairs(lines) do
-    local from, to, section_id = string.find(l, MiniDoc.config.annotation_pattern)
+    local from, to, section_id = string.find(l, config.annotation_pattern)
     matched_prev, matched_cur = matched_cur, from ~= nil
 
     if matched_cur then
       if not matched_prev then
         -- Finish current block
         block_raw.line_end = i - 1
-        table.insert(res, H.raw_block_to_block(block_raw))
+        table.insert(res, H.raw_block_to_block(block_raw, config))
 
         -- Start new block
         block_raw = { annotation = {}, section_id = {}, afterlines = {}, line_begin = i }
@@ -609,7 +647,7 @@ function H.lines_to_block_arr(lines)
     end
   end
   block_raw.line_end = #lines
-  table.insert(res, H.raw_block_to_block(block_raw))
+  table.insert(res, H.raw_block_to_block(block_raw, config))
 
   return res
 end
@@ -621,7 +659,7 @@ end
 -- - `section_id` - array with length equal to `annotation` length with strings
 --   captured as section id. Empty string of no section id was captured.
 -- - Everything else is used as block info (like `afterlines`, etc.).
-function H.raw_block_to_block(block_raw)
+function H.raw_block_to_block(block_raw, config)
   if #block_raw.annotation == 0 and #block_raw.afterlines == 0 then
     return nil
   end
@@ -635,7 +673,7 @@ function H.raw_block_to_block(block_raw)
 
   -- Parse raw block annotation lines from top to bottom. New section starts
   -- when section id is detected in that line.
-  local section_cur = H.new_struct('section', { id = H.default_section_id, line_begin = block_begin })
+  local section_cur = H.new_struct('section', { id = config.default_section_id, line_begin = block_begin })
 
   for i, annotation_line in ipairs(block_raw.annotation) do
     local id = block_raw.section_id[i]
@@ -662,29 +700,29 @@ function H.raw_block_to_block(block_raw)
 end
 
 -- Hooks ----------------------------------------------------------------------
-function H.apply_hooks(doc)
+function H.apply_hooks(doc, hooks)
   for _, file in ipairs(doc) do
     for _, block in ipairs(file) do
-      MiniDoc.config.hooks.block_pre(block)
+      hooks.block_pre(block)
 
       for _, section in ipairs(block) do
-        MiniDoc.config.hooks.section_pre(section)
+        hooks.section_pre(section)
 
-        local hook = MiniDoc.config.hooks.sections[section.info.id]
+        local hook = hooks.sections[section.info.id]
         if hook ~= nil then
           hook(section)
         end
 
-        MiniDoc.config.hooks.section_post(section)
+        hooks.section_post(section)
       end
 
-      MiniDoc.config.hooks.block_post(block)
+      hooks.block_post(block)
     end
 
-    MiniDoc.config.hooks.file(file)
+    hooks.file(file)
   end
 
-  MiniDoc.config.hooks.doc(doc)
+  hooks.doc(doc)
 end
 
 function H.register_alias(s)
