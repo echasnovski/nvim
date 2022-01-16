@@ -143,10 +143,15 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Notes ~
---- Hooks are expected to be functions. Their default values might do many
---- things which might change over time, so for more information please look at
---- source code.
---minidoc_afterlines_start
+--- - Hooks are expected to be functions. Their default values might do many
+---   things which might change over time, so for more information please look
+---   at source code.
+--- - Default inference of documented object metadata (tag and function
+---   signature at the moment) is done in `block_pre`. Inference is based on
+---   string pattern matching, so can lead to false results, although works in
+---   most cases. It intentionally works only if first line after block has no
+---   indentation and contains all necessary information to determine if
+---   inference should happen.
 MiniDoc.config = {
   -- Lua string pattern to determine if line has documentation annotation.
   -- First capture group should describe possible section id.
@@ -159,8 +164,26 @@ MiniDoc.config = {
   -- its input in place (and not return new one).
   hooks = {
     -- Applied to block before anything else
-    --minidoc_replace_start block_pre = <function>,
-    block_pre = function(b) end,
+    --minidoc_replace_start block_pre = <function that infers metadata of documented object>,
+    block_pre = function(b)
+      if not b:has_lines() then
+        return
+      end
+
+      -- Infer metadata based on afterlines
+      if #b.info.afterlines > 0 then
+        -- Infer tag
+        local has_tag = b:has_descendant(function(x)
+          return type(x) == 'table' and x.type == 'section' and x.info.id == '@tag'
+        end)
+        if not has_tag then
+          H.infer_tag(b)
+        end
+
+        -- Infer signature
+        H.infer_signature(b)
+      end
+    end,
     --minidoc_replace_end
 
     -- Applied to section before anything else
@@ -168,8 +191,8 @@ MiniDoc.config = {
     section_pre = function(s)
       H.replace_aliases(s)
     end,
-
     --minidoc_replace_end
+
     -- Applied if section has specified captured id
     sections = {
       --minidoc_replace_start ['@alias'] = <function that registers alias in MiniDoc.current.aliases>,
@@ -356,6 +379,12 @@ MiniDoc.config = {
 ---   information about current block, etc.
 MiniDoc.current = {}
 
+--- DEFAULT HOOKS
+---
+--- This is default value of `MiniDoc.config.hooks`. Use it if only a little
+--- tweak is needed.
+MiniDoc.default_hooks = MiniDoc.config.hooks
+
 -- Module functionality =======================================================
 --- GENERATE HELP FILE
 ---
@@ -459,9 +488,9 @@ end
 --- Directives are special comments that are processed using Lua string pattern
 --- capabilities (so beware of false positives). Each directive should be put
 --- on its separate line. Supported directives:
---- - `--minidoc_afterlines_start` and `--minidoc_afterlines_end` denote lines
----   between them which should be processed by this function. Useful if there
----   is extra code in afterlines which shouldn't be used.
+--- - `--minidoc_afterlines_end` denotes a line at afterlines end. Only all
+---   lines before it will be considered as afterlines. Useful if there is
+---   extra code in afterlines which shouldn't be used.
 --- - `--minidoc_replace_start <replacement>` and `--minidoc_replace_end`
 ---   denote lines between them which should be replaced with `<replacement>`.
 ---   Useful for manually changing what should be placed in output like in case
@@ -469,7 +498,6 @@ end
 ---
 --- Here is an example. Suppose having these afterlines:
 --- >
----   --minidoc_afterlines_start
 ---   --minidoc_replace_start {
 ---   M.config = {
 ---     --minidoc_replace_end
@@ -510,7 +538,7 @@ function MiniDoc.afterlines_to_code(struct)
 
   -- Process directives
   -- Try to extract afterlines
-  src = src:match('%-%-minidoc_afterlines_start\n(.-)\n%s*%-%-minidoc_afterlines_end') or src
+  src = src:match('^(.-)\n%s*%-%-minidoc_afterlines_end') or src
 
   -- Make replacements
   src = src:gsub('%-%-minidoc_replace_start%s*(.-)\n.-%-%-minidoc_replace_end', '%1')
@@ -532,6 +560,27 @@ H.alias_registry = {}
 -- Structure separators
 H.separator_block = string.rep('-', 78)
 H.separator_file = string.rep('=', 78)
+
+-- Patterns for working with afterlines. At the moment deliberately crafted to
+-- work only on first line without indent.
+--stylua: ignore start
+H.afterlines_patterns = {
+  -- Determine if line is a function definition. Captures function name and
+  -- arguments. For reference see '2.5.9 – Function Definitions' in Lua manual.
+  function_definition = {
+    '^function%s+(%S-)(%b())',             -- Regular definition
+    '^local%s+function%s+(%S-)(%b())',     -- Local definition
+    '^(%S*)%s*=%s*function(%b())',         -- Regular assignment
+    '^local%s+(%S*)%s*=%s*function(%b())', -- Local assignment
+  },
+
+  -- Determine if line is a general assignment
+  general_assignment = {
+    '^(%S-)%s*=',         -- General assignment
+    '^local%s+(%S-)%s*=', -- Local assignment
+  }
+}
+--stylua: ignore end
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -773,6 +822,63 @@ function H.enclose_first_word(s, pattern)
   s[1] = s[1]:gsub('(%S*)', pattern, 1)
 end
 
+-- Infer data from afterlines -------------------------------------------------
+function H.infer_tag(b)
+  local l_all = table.concat(b.info.afterlines, ' ')
+  local tag_line
+
+  -- Try function definition
+  local fun_capture = H.capture_afterlines_patterns(l_all, 'function_definition')
+  if #fun_capture > 0 then
+    tag_line = tag_line or (fun_capture[1] .. '()')
+  end
+
+  -- Try general assignment
+  local assign_capture = H.capture_afterlines_patterns(l_all, 'general_assignment')
+  if #assign_capture > 0 then
+    tag_line = tag_line or assign_capture[1]
+  end
+
+  if tag_line ~= nil then
+    local s = H.new_struct('section', { id = '@tag' })
+    s:insert(tag_line)
+    b:insert(s)
+  end
+end
+
+function H.infer_signature(b)
+  local l_all = table.concat(b.info.afterlines, ' ')
+
+  local fun_capture = H.capture_afterlines_patterns(l_all, 'function_definition')
+  if #fun_capture > 0 then
+    local fun_name, fun_args = fun_capture[1], fun_capture[2]
+
+    -- Tidy function arguments
+    local arg_list = {}
+    for _, a in ipairs(vim.split(fun_args:sub(2, -2), '[,;]')) do
+      a = vim.trim(a)
+      if a ~= '' then
+        table.insert(arg_list, ('{%s}'):format(a))
+      end
+    end
+
+    -- Add section
+    local s = H.new_struct('section', { id = '_signature' })
+    s:insert(('`%s`(%s)\n'):format(fun_name, table.concat(arg_list, ', ')))
+    b:insert(1, s)
+  end
+end
+
+function H.capture_afterlines_patterns(l, patterns_id)
+  local matches = {}
+  for _, pattern in ipairs(H.afterlines_patterns[patterns_id]) do
+    if #matches == 0 then
+      matches = { l:match(pattern) }
+    end
+  end
+  return matches
+end
+
 -- Work with structures -------------------------------------------------------
 -- Constructor
 function H.new_struct(struct_type, info)
@@ -889,11 +995,6 @@ function H.file_write(path, lines)
 
   -- Write to file
   vim.fn.writefile(lines, path, 'b')
-end
-
-function H.is_whitespace(x)
-  -- String is whitespace in 'help' filetype if it is seen as only whitespace
-  return string.find(x, '^%s*$') ~= nil or x == '>' or x == '<'
 end
 
 function H.ensure_indent(s, n_indent_target)

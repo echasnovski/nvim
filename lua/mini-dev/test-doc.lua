@@ -60,10 +60,7 @@ M._private_user = {}
 ---@eval _G.been_here = true
 ---
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
---minidoc_afterlines_start
---minidoc_replace_start {
 M.tab = {
-  --minidoc_replace_end
   -- Some functional setting
   --minidoc_replace_start a = <function>,
   a = function()
