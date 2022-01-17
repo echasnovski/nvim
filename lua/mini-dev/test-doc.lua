@@ -53,7 +53,9 @@ M.User = {}
 ---@private
 M._private_user = {}
 
---- Test of `@eval` section as automatization of `config` documentation
+---@signature HELLO.WORLD(x, y)
+---
+---@text Test of `@eval` section as automatization of `config` documentation
 ---
 ---@eval a -= 1
 ---

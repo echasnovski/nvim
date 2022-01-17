@@ -16,6 +16,8 @@
 --- - Processing is done by using nested data structures (section, block, file,
 ---   doc) describing certain parts of help file. See |MiniDoc-data-structures|
 ---   for more details.
+--- - Project specific script can be written as plain Lua file with
+---   configuratble path. See |MiniDoc.generate()| for more details.
 ---
 --- # Setup~
 ---
@@ -146,15 +148,19 @@ end
 --- - Hooks are expected to be functions. Their default values might do many
 ---   things which might change over time, so for more information please look
 ---   at source code.
---- - Default inference of documented object metadata (tag and function
----   signature at the moment) is done in `block_pre`. Inference is based on
----   string pattern matching, so can lead to false results, although works in
----   most cases. It intentionally works only if first line after block has no
+--- - Default inference of documented object metadata (tag and object signature
+---   at the moment) is done in `block_pre`. Inference is based on string
+---   pattern matching, so can lead to false results, although works in most
+---   cases. It intentionally works only if first line after block has no
 ---   indentation and contains all necessary information to determine if
 ---   inference should happen.
 MiniDoc.config = {
   -- Lua string pattern to determine if line has documentation annotation.
-  -- First capture group should describe possible section id.
+  -- First capture group should describe possible section id. Default value
+  -- means that annotation line should:
+  -- - Start with `---` at first column.
+  -- - Anything non-whitespace after `---` will be treated as new section id.
+  -- - Single whitespace at the start of main text will be ignored.
   annotation_pattern = '^%-%-%-(%S*) ?',
 
   -- Identifier of block annotation lines until first captured identifier
@@ -164,24 +170,11 @@ MiniDoc.config = {
   -- its input in place (and not return new one).
   hooks = {
     -- Applied to block before anything else
-    --minidoc_replace_start block_pre = <function that infers metadata of documented object>,
+    --minidoc_replace_start block_pre = <function that infers header sections (tag and/or signature)>,
     block_pre = function(b)
-      if not b:has_lines() then
-        return
-      end
-
       -- Infer metadata based on afterlines
-      if #b.info.afterlines > 0 then
-        -- Infer tag
-        local has_tag = b:has_descendant(function(x)
-          return type(x) == 'table' and x.type == 'section' and x.info.id == '@tag'
-        end)
-        if not has_tag then
-          H.infer_tag(b)
-        end
-
-        -- Infer signature
-        H.infer_signature(b)
+      if b:has_lines() and #b.info.afterlines > 0 then
+        H.infer_header(b)
       end
     end,
     --minidoc_replace_end
@@ -268,25 +261,30 @@ MiniDoc.config = {
         H.add_section_heading(s, 'See also')
       end,
       --minidoc_replace_end
+      --minidoc_replace_start ['@signature'] = <function which formats signature of documented object>,
+      ['@signature'] = function(s)
+        for i, _ in ipairs(s) do
+          -- Add extra formatting to make it stand out
+          s[i] = H.format_signature(s[i])
+
+          -- Align accounting for concealed characters
+          s[i] = H.align_text(s[i], 78, 'center')
+        end
+      end,
+      --minidoc_replace_end
       --minidoc_replace_start ['@tag'] = <function which turns its line in proper tag lines>,
       ['@tag'] = function(s)
         for i, _ in ipairs(s) do
           -- Enclose every word in `*`
-          local n_tags = 0
-          s[i], n_tags = s[i]:gsub('(%S+)', '%*%1%*')
+          s[i] = s[i]:gsub('(%S+)', '%*%1%*')
 
-          -- Right justify to width 78 in `help` filetype ('*' has width 0)
-          local n_left = math.max(0, 78 - s[i]:len() + 2 * n_tags)
-          local left = string.rep(' ', n_left)
-          s[i] = ('%s%s'):format(left, s[i])
+          -- Align to right edge accounting for concealed characters
+          s[i] = H.align_text(s[i], 78, 'right')
         end
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@text'] = <function which currently doesn't modify text>,
+      --minidoc_replace_start ['@text'] = <function which purposefully does nothing>,
       ['@text'] = function() end,
-      --minidoc_replace_end
-      --minidoc_replace_start ['@type'] = <function>,
-      ['@type'] = function() end,
       --minidoc_replace_end
       --minidoc_replace_start ['@usage'] = <function>,
       ['@usage'] = function(s)
@@ -364,6 +362,10 @@ MiniDoc.config = {
     end,
     --minidoc_replace_end
   },
+
+  -- Path (relative to current directory) to script which handles project
+  -- specific help file generation (like custom input files, hooks, etc.).
+  script_path = 'minidoc.lua',
 }
 --minidoc_afterlines_end
 
@@ -388,6 +390,7 @@ MiniDoc.default_hooks = MiniDoc.config.hooks
 -- Module functionality =======================================================
 --- GENERATE HELP FILE
 ---
+--- # Process~
 --- - Main parameters for help generation are an array of input file paths and
 ---   path to output help file.
 --- - Parse all inputs:
@@ -427,6 +430,17 @@ MiniDoc.default_hooks = MiniDoc.config.hooks
 ---   strings -> add string to output") and write them to output file. Strings
 ---   can have `\n` character indicating start of new line.
 ---
+--- # Project specific script~
+--- If no arguments are supplied, first there is an attempt to source project
+--- specific script. This is basically a `luafile <MiniDoc.config.script_path>`
+--- with current Lua runtime while caching and restoring current
+--- `MiniDoc.config`. Its successful execution stops any further generation
+--- actions while error means proceeding generation as if no script was found.
+---
+--- Typical script content might include definition of custom hooks, input and
+--- output files with eventual call to `require('mini.doc').generate()` (with
+--- or without arguments).
+---
 ---@param input `table` Array of file paths which will be processed in supplied
 ---   order. Default: all '.lua' files from current directory following by all
 ---   such files in these subdirectories: 'lua/', 'after/', 'colors/'. Note:
@@ -437,8 +451,24 @@ MiniDoc.default_hooks = MiniDoc.config.hooks
 ---@param config `table` Configuration overriding parts of `MiniDoc.config`.
 ---
 ---@return `table` Document structure which was generated and used for output
----   help file.
+---   help file or `nil` in case `minidoc.lua` was successfully used.
 function MiniDoc.generate(input, output, config)
+  -- Try sourcing local 'minidoc.lua' first (if not already doing it)
+  if not H.generate_is_active and input == nil and output == nil and config == nil then
+    local config_cache = MiniDoc.config
+    -- Prevent recursion
+    H.generate_is_active = true
+
+    local success = pcall(vim.cmd, 'luafile ' .. MiniDoc.config.script_path)
+
+    MiniDoc.config = config_cache
+    H.generate_is_active = nil
+
+    if success then
+      return
+    end
+  end
+
   input = input or H.default_input()
   output = output or H.default_output()
   config = vim.tbl_deep_extend('force', MiniDoc.config, config or {})
@@ -606,14 +636,16 @@ function H.setup_config(config)
     ['hooks.sections.@private'] = { config.hooks.sections['@private'], 'function' },
     ['hooks.sections.@return'] = { config.hooks.sections['@return'], 'function' },
     ['hooks.sections.@seealso'] = { config.hooks.sections['@seealso'], 'function' },
+    ['hooks.sections.@signature'] = { config.hooks.sections['@signature'], 'function' },
     ['hooks.sections.@tag'] = { config.hooks.sections['@tag'], 'function' },
     ['hooks.sections.@text'] = { config.hooks.sections['@text'], 'function' },
-    ['hooks.sections.@type'] = { config.hooks.sections['@type'], 'function' },
     ['hooks.sections.@usage'] = { config.hooks.sections['@usage'], 'function' },
 
     ['hooks.block_post'] = { config.hooks.block_post, 'function' },
     ['hooks.file'] = { config.hooks.file, 'function' },
     ['hooks.doc'] = { config.hooks.doc, 'function' },
+
+    ['script_path'] = { config.script_path, 'string' },
   })
 
   return config
@@ -823,49 +855,45 @@ function H.enclose_first_word(s, pattern)
 end
 
 -- Infer data from afterlines -------------------------------------------------
-function H.infer_tag(b)
+function H.infer_header(b)
+  local has_signature = b:has_descendant(function(x)
+    return type(x) == 'table' and x.type == 'section' and x.info.id == '@signature'
+  end)
+  local has_tag = b:has_descendant(function(x)
+    return type(x) == 'table' and x.type == 'section' and x.info.id == '@tag'
+  end)
+
+  if has_signature and has_tag then
+    return
+  end
+
   local l_all = table.concat(b.info.afterlines, ' ')
-  local tag_line
+  local tag, signature
 
   -- Try function definition
   local fun_capture = H.capture_afterlines_patterns(l_all, 'function_definition')
   if #fun_capture > 0 then
-    tag_line = tag_line or (fun_capture[1] .. '()')
+    tag = tag or ('%s()'):format(fun_capture[1])
+    signature = signature or ('%s%s'):format(fun_capture[1], fun_capture[2])
   end
 
   -- Try general assignment
   local assign_capture = H.capture_afterlines_patterns(l_all, 'general_assignment')
   if #assign_capture > 0 then
-    tag_line = tag_line or assign_capture[1]
+    tag = tag or assign_capture[1]
+    signature = signature or assign_capture[1]
   end
 
-  if tag_line ~= nil then
-    local s = H.new_struct('section', { id = '@tag' })
-    s:insert(tag_line)
-    b:insert(s)
-  end
-end
-
-function H.infer_signature(b)
-  local l_all = table.concat(b.info.afterlines, ' ')
-
-  local fun_capture = H.capture_afterlines_patterns(l_all, 'function_definition')
-  if #fun_capture > 0 then
-    local fun_name, fun_args = fun_capture[1], fun_capture[2]
-
-    -- Tidy function arguments
-    local arg_list = {}
-    for _, a in ipairs(vim.split(fun_args:sub(2, -2), '[,;]')) do
-      a = vim.trim(a)
-      if a ~= '' then
-        table.insert(arg_list, ('{%s}'):format(a))
-      end
+  if tag ~= nil then
+    -- First insert signature (so that it will appear after tag section)
+    if not has_signature then
+      b:insert(1, H.as_struct({ signature }, 'section', { id = '@signature' }))
     end
 
-    -- Add section
-    local s = H.new_struct('section', { id = '_signature' })
-    s:insert(('`%s`(%s)\n'):format(fun_name, table.concat(arg_list, ', ')))
-    b:insert(1, s)
+    -- Insert tag
+    if not has_tag then
+      b:insert(1, H.as_struct({ tag }, 'section', { id = '@tag' }))
+    end
   end
 end
 
@@ -877,6 +905,30 @@ function H.capture_afterlines_patterns(l, patterns_id)
     end
   end
   return matches
+end
+
+function H.format_signature(line)
+  -- Try capture function signature
+  local name, args = line:match('(%S-)(%b())')
+  -- Otherwise pick first word
+  name = name or line:match('(%S*)')
+
+  if not name then
+    return ''
+  end
+
+  -- Tidy arguments
+  if args and args ~= '()' then
+    local arg_parts = vim.split(args:sub(2, -2), ',')
+    local arg_list = {}
+    for _, a in ipairs(arg_parts) do
+      -- Enclose argument in `{}` while controlling whitespace
+      table.insert(arg_list, ('{%s}'):format(vim.trim(a)))
+    end
+    args = ('(%s)'):format(table.concat(arg_list, ', '))
+  end
+
+  return ('`%s`%s'):format(name, args or '')
 end
 
 -- Work with structures -------------------------------------------------------
@@ -1022,6 +1074,29 @@ function H.ensure_indent(s, n_indent_target)
   end
 
   return table.concat(lines, '\n')
+end
+
+function H.align_text(s, width, direction)
+  if type(s) ~= 'string' then
+    return
+  end
+  s = vim.trim(s)
+  width = width or 78
+  direction = direction or 'left'
+
+  -- Don't do anything if aligning left or line is a whitespace
+  if direction == 'left' or s:find('^%s*$') then
+    return s
+  end
+
+  -- Ignore concealed characters (usually "invisible" in 'help' filetype)
+  local _, n_concealed_chars = s:gsub('([*|`])', '%1')
+  local n_left = math.max(0, 78 - vim.fn.strdisplaywidth(s) + n_concealed_chars)
+  if direction == 'center' then
+    n_left = math.floor(0.5 * n_left)
+  end
+
+  return (' '):rep(n_left) .. s
 end
 
 function H.notify(msg)
