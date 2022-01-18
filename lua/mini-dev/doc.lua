@@ -1,7 +1,7 @@
 -- MIT License Copyright (c) 2021 Evgeni Chasnovski
 
 -- Documentation ==============================================================
---- GENERATION OF HELP FILES FROM EMMYLUA-LIKE ANNOTATIONS
+--- Generation of help files from EmmyLua-like annotations
 ---
 --- Key design ideas:
 --- - Keep documentation next to code by writing EmmyLua-like annotation
@@ -21,10 +21,10 @@
 ---
 --- # Setup~
 ---
---- This module needs a setup with `require('mini.doc').setup({})`
---- (replace `{}` with your `config` table). It will create global Lua table
---- `MiniDoc` which you can use for scripting or manually (with
---- `:lua MiniDoc.*`). See |MiniDoc.config| for available config settings.
+--- This module needs a setup with `require('mini.doc').setup({})` (replace
+--- `{}` with your `config` table). It will create global Lua table `MiniDoc`
+--- which you can use for scripting or manually (with `:lua MiniDoc.*`). See
+--- |MiniDoc.config| for available config settings.
 ---
 --- # Tips~
 ---
@@ -59,7 +59,7 @@
 --- a buffer) to `v:true`.
 ---@tag MiniDoc mini.doc
 
---- DATA STRUCTURES
+--- Data structures
 ---
 --- Data structures are basically arrays of other structures accompanied with
 --- some fields (keys with data values) and methods (keys with function
@@ -124,9 +124,9 @@
 local MiniDoc = {}
 H = {}
 
---- MODULE SETUP
+--- Module setup
 ---
----@param config table: Module config table.
+---@param config `table` - Module config table. See |MiniDoc.config|.
 ---
 ---@usage `require('mini.doc').setup({})` (replace `{}` with your `config` table)
 function MiniDoc.setup(config)
@@ -140,7 +140,7 @@ function MiniDoc.setup(config)
   H.apply_config(config)
 end
 
---- MODULE CONFIG
+--- Module config
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
@@ -159,18 +159,18 @@ MiniDoc.config = {
   -- First capture group should describe possible section id. Default value
   -- means that annotation line should:
   -- - Start with `---` at first column.
-  -- - Anything non-whitespace after `---` will be treated as new section id.
+  -- - Any non-whitespace after `---` will be treated as new section id.
   -- - Single whitespace at the start of main text will be ignored.
   annotation_pattern = '^%-%-%-(%S*) ?',
 
   -- Identifier of block annotation lines until first captured identifier
   default_section_id = '@text',
 
-  -- Hooks to be applied at certain stage of document life cycle. Should modify
-  -- its input in place (and not return new one).
+  -- Hooks to be applied at certain stage of document life cycle. Should
+  -- modify its input in place (and not return new one).
   hooks = {
     -- Applied to block before anything else
-    --minidoc_replace_start block_pre = <function that infers header sections (tag and/or signature)>,
+    --minidoc_replace_start block_pre = --<function: infers header sections (tag and/or signature)>,
     block_pre = function(b)
       -- Infer metadata based on afterlines
       if b:has_lines() and #b.info.afterlines > 0 then
@@ -180,7 +180,7 @@ MiniDoc.config = {
     --minidoc_replace_end
 
     -- Applied to section before anything else
-    --minidoc_replace_start section_pre = <function that replaces current aliases>,
+    --minidoc_replace_start section_pre = --<function: replaces current aliases>,
     section_pre = function(s)
       H.replace_aliases(s)
     end,
@@ -188,7 +188,7 @@ MiniDoc.config = {
 
     -- Applied if section has specified captured id
     sections = {
-      --minidoc_replace_start ['@alias'] = <function that registers alias in MiniDoc.current.aliases>,
+      --minidoc_replace_start ['@alias'] = --<function: registers alias in MiniDoc.current.aliases>,
       ['@alias'] = function(s)
         H.register_alias(s)
         -- NOTE: don't use `s.parent:remove(s.parent_index)` here because it
@@ -197,14 +197,14 @@ MiniDoc.config = {
         s:clear_lines()
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@class'] = <function>,
+      --minidoc_replace_start ['@class'] = --<function>,
       ['@class'] = function(s)
         H.enclose_first_word(s, '{%1}')
         H.add_section_heading(s, 'Class')
       end,
       --minidoc_replace_end
       -- For most typical usage see |MiniDoc.afterlines_to_code|
-      --minidoc_replace_start ['@eval'] = <function which evaluates its lines and replaces them with returned value>,
+      --minidoc_replace_start ['@eval'] = --<function: evaluates lines; replaces with their return>,
       ['@eval'] = function(s)
         local src = table.concat(s, '\n')
         local is_loaded, code = pcall(function()
@@ -236,32 +236,32 @@ MiniDoc.config = {
         end
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@field'] = <function>,
+      --minidoc_replace_start ['@field'] = --<function>,
       ['@field'] = function(s)
         H.enclose_first_word(s, '{%1}')
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@param'] = <function>,
+      --minidoc_replace_start ['@param'] = --<function>,
       ['@param'] = function(s)
         H.enclose_first_word(s, '{%1}')
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@private'] = <function which registers block for removal>,
+      --minidoc_replace_start ['@private'] = --<function: registers block for removal>,
       ['@private'] = function(s)
         s.parent.info._is_private = true
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@return'] = <function>,
+      --minidoc_replace_start ['@return'] = --<function>,
       ['@return'] = function(s)
         H.add_section_heading(s, 'Return')
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@seealso'] = <function>,
+      --minidoc_replace_start ['@seealso'] = --<function>,
       ['@seealso'] = function(s)
         H.add_section_heading(s, 'See also')
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@signature'] = <function which formats signature of documented object>,
+      --minidoc_replace_start ['@signature'] = --<function: formats signature of documented object>,
       ['@signature'] = function(s)
         for i, _ in ipairs(s) do
           -- Add extra formatting to make it stand out
@@ -272,7 +272,7 @@ MiniDoc.config = {
         end
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@tag'] = <function which turns its line in proper tag lines>,
+      --minidoc_replace_start ['@tag'] = --<function: turns its line in proper tag lines>,
       ['@tag'] = function(s)
         for i, _ in ipairs(s) do
           -- Enclose every word in `*`
@@ -283,10 +283,10 @@ MiniDoc.config = {
         end
       end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@text'] = <function which purposefully does nothing>,
+      --minidoc_replace_start ['@text'] = --<function: purposefully does nothing>,
       ['@text'] = function() end,
       --minidoc_replace_end
-      --minidoc_replace_start ['@usage'] = <function>,
+      --minidoc_replace_start ['@usage'] = --<function>,
       ['@usage'] = function(s)
         H.add_section_heading(s, 'Usage')
       end,
@@ -294,12 +294,12 @@ MiniDoc.config = {
     },
 
     -- Applied to section after all previous steps
-    --minidoc_replace_start section_post = <function>,
+    --minidoc_replace_start section_post = --<function>,
     section_post = function(s) end,
     --minidoc_replace_end
 
     -- Applied to block after all previous steps
-    --minidoc_replace_start block_post = <function which does many things>,
+    --minidoc_replace_start block_post = --<function: does many things>,
     block_post = function(b)
       -- Remove block if it is private
       if b.info._is_private then
@@ -341,7 +341,7 @@ MiniDoc.config = {
     --minidoc_replace_end
 
     -- Applied to file after all previous steps
-    --minidoc_replace_start file = <function>,
+    --minidoc_replace_start file = --<function>,
     file = function(f)
       if f:has_lines() then
         f:insert(1, H.as_struct({ H.as_struct({ H.separator_file }, 'section') }, 'block'))
@@ -351,7 +351,7 @@ MiniDoc.config = {
     --minidoc_replace_end
 
     -- Applied to doc after all previous steps
-    --minidoc_replace_start doc = <function>,
+    --minidoc_replace_start doc = --<function>,
     doc = function(d)
       d:insert(
         H.as_struct(
@@ -365,12 +365,12 @@ MiniDoc.config = {
 
   -- Path (relative to current directory) to script which handles project
   -- specific help file generation (like custom input files, hooks, etc.).
-  script_path = 'minidoc.lua',
+  script_path = 'scripts/minidoc.lua',
 }
 --minidoc_afterlines_end
 
 -- Module data ================================================================
---- TABLE WITH INFORMATION ABOUT CURRENT STATE OF AUTO-GENERATION
+--- Table with information about current state of auto-generation
 ---
 --- It is reset at the beginning and end of `MiniDoc.generate()`.
 ---
@@ -381,16 +381,17 @@ MiniDoc.config = {
 ---   information about current block, etc.
 MiniDoc.current = {}
 
---- DEFAULT HOOKS
+--- Default hooks
 ---
 --- This is default value of `MiniDoc.config.hooks`. Use it if only a little
 --- tweak is needed.
 MiniDoc.default_hooks = MiniDoc.config.hooks
 
 -- Module functionality =======================================================
---- GENERATE HELP FILE
+--- Generate help file
 ---
---- # Process~
+--- # Algoritm~
+---
 --- - Main parameters for help generation are an array of input file paths and
 ---   path to output help file.
 --- - Parse all inputs:
@@ -431,6 +432,7 @@ MiniDoc.default_hooks = MiniDoc.config.hooks
 ---   can have `\n` character indicating start of new line.
 ---
 --- # Project specific script~
+---
 --- If no arguments are supplied, first there is an attempt to source project
 --- specific script. This is basically a `luafile <MiniDoc.config.script_path>`
 --- with current Lua runtime while caching and restoring current
@@ -441,19 +443,20 @@ MiniDoc.default_hooks = MiniDoc.config.hooks
 --- output files with eventual call to `require('mini.doc').generate()` (with
 --- or without arguments).
 ---
----@param input `table` Array of file paths which will be processed in supplied
+---@param input `table` - Array of file paths which will be processed in supplied
 ---   order. Default: all '.lua' files from current directory following by all
 ---   such files in these subdirectories: 'lua/', 'after/', 'colors/'. Note:
 ---   any 'init.lua' file is placed before other files from the same directory.
----@param output `string` Path for output help file. Default:
+---@param output `string` - Path for output help file. Default:
 ---   `doc/<current_directory>.txt` (designed to be used for generating help
 ---   file for plugin).
----@param config `table` Configuration overriding parts of `MiniDoc.config`.
+---@param config `table` - Configuration overriding parts of `MiniDoc.config`.
 ---
----@return `table` Document structure which was generated and used for output
----   help file or `nil` in case `minidoc.lua` was successfully used.
+---@return `table` - Document structure which was generated and used for output
+---   help file or `nil` in case `MiniDoc.config.script_path` was successfully
+---   used.
 function MiniDoc.generate(input, output, config)
-  -- Try sourcing local 'minidoc.lua' first (if not already doing it)
+  -- Try sourcing 'MiniDoc.config.script_path' first (if not already doing it)
   if not H.generate_is_active and input == nil and output == nil and config == nil then
     local config_cache = MiniDoc.config
     -- Prevent recursion
@@ -504,7 +507,7 @@ function MiniDoc.generate(input, output, config)
   return doc
 end
 
---- CONVERT AFTERLINES TO CODE
+--- Convert afterlines to code
 ---
 --- This function is designed to be used together with `@eval` section to
 --- automate documentation of certain values (notable default values of a
@@ -532,7 +535,7 @@ end
 ---   M.config = {
 ---     --minidoc_replace_end
 ---     param_one = 1,
----     --minidoc_replace_start param_fun = <function>
+---     --minidoc_replace_start param_fun = --<function>
 ---     param_fun = function(x)
 ---       return x + 1
 ---     end
@@ -547,13 +550,13 @@ end
 --- >
 ---   {
 ---     param_one = 1,
----     param_fun = <function>
+---     param_fun = --<function>
 ---   }
 --- <
----@param struct `table` Block or section structure which after lines will be
+---@param struct `table` - Block or section structure which after lines will be
 ---   converted to code.
 ---
----@return `string` Single string (using `\n` to separate lines) describing
+---@return `string` - Single string (using `\n` to separate lines) describing
 ---   afterlines as code block in help file.
 function MiniDoc.afterlines_to_code(struct)
   if not (type(struct) == 'table' and (struct.type == 'section' or struct.type == 'block')) then
