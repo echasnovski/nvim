@@ -1,4 +1,4 @@
----@alias   var_one   `fun(type: string, data: any)`
+---@alias   var_one   fun(type: string, data: any)
 ---@alias var_two Another data structure.
 ---   Its description spans over multiple lines.
 ---@alias %bad_name* This alias has bad name and should still work.
@@ -11,10 +11,10 @@ local M = {}
 
 ---@title Second block
 ---
----@param a `string` Some string. List of items:
+---@param a string Some string. List of items:
 ---   - Item 1.
 ---   - Item 2.
----@param b `number` Number.
+---@param b number Number.
 ---
 ---@return boolean
 ---
@@ -22,6 +22,16 @@ local M = {}
 function M.fun(a, b)
   return true
 end
+
+--- Test for enclosing type
+---
+---@param a number Should work.
+---@param b number[] Should work.
+---@param c number|nil Should work.
+---@param d table<string, number> Should work.
+---@param e fun(a: string, b:number) Should work.
+---@param f fun(a: string, b:number): table Should work.
+---@param g NUMBER Shouldn't work.
 
 --- TITLE FOR `fun2`
 ---@text

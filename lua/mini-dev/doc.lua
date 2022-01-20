@@ -126,7 +126,7 @@ H = {}
 
 --- Module setup
 ---
----@param config `table` - Module config table. See |MiniDoc.config|.
+---@param config table Module config table. See |MiniDoc.config|.
 ---
 ---@usage `require('mini.doc').setup({})` (replace `{}` with your `config` table)
 function MiniDoc.setup(config)
@@ -145,15 +145,11 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Notes ~
+---
 --- - Hooks are expected to be functions. Their default values might do many
 ---   things which might change over time, so for more information please look
----   at source code.
---- - Default inference of documented object metadata (tag and object signature
----   at the moment) is done in `block_pre`. Inference is based on string
----   pattern matching, so can lead to false results, although works in most
----   cases. It intentionally works only if first line after block has no
----   indentation and contains all necessary information to determine if
----   inference should happen.
+---   at source code. Some more information can be found in
+---   |MiniDoc.default_hooks|.
 MiniDoc.config = {
   -- Lua string pattern to determine if line has documentation annotation.
   -- First capture group should describe possible section id. Default value
@@ -199,7 +195,7 @@ MiniDoc.config = {
       --minidoc_replace_end
       --minidoc_replace_start ['@class'] = --<function>,
       ['@class'] = function(s)
-        H.enclose_first_word(s, '{%1}')
+        H.enclose_var_name(s)
         H.add_section_heading(s, 'Class')
       end,
       --minidoc_replace_end
@@ -238,12 +234,14 @@ MiniDoc.config = {
       --minidoc_replace_end
       --minidoc_replace_start ['@field'] = --<function>,
       ['@field'] = function(s)
-        H.enclose_first_word(s, '{%1}')
+        H.enclose_var_name(s)
+        H.enclose_type(s)
       end,
       --minidoc_replace_end
       --minidoc_replace_start ['@param'] = --<function>,
       ['@param'] = function(s)
-        H.enclose_first_word(s, '{%1}')
+        H.enclose_var_name(s)
+        H.enclose_type(s)
       end,
       --minidoc_replace_end
       --minidoc_replace_start ['@private'] = --<function: registers block for removal>,
@@ -253,6 +251,7 @@ MiniDoc.config = {
       --minidoc_replace_end
       --minidoc_replace_start ['@return'] = --<function>,
       ['@return'] = function(s)
+        H.enclose_type(s)
         H.add_section_heading(s, 'Return')
       end,
       --minidoc_replace_end
@@ -286,6 +285,12 @@ MiniDoc.config = {
       --minidoc_replace_start ['@text'] = --<function: purposefully does nothing>,
       ['@text'] = function() end,
       --minidoc_replace_end
+      --minidoc_replace_start ['@type'] = --<function>,
+      ['@type'] = function(s)
+        H.enclose_type(s)
+        H.add_section_heading(s, 'Type')
+      end,
+      --minidoc_replace_end
       --minidoc_replace_start ['@usage'] = --<function>,
       ['@usage'] = function(s)
         H.add_section_heading(s, 'Usage')
@@ -294,7 +299,7 @@ MiniDoc.config = {
     },
 
     -- Applied to section after all previous steps
-    --minidoc_replace_start section_post = --<function>,
+    --minidoc_replace_start section_post = --<function: currently does nothing>,
     section_post = function(s) end,
     --minidoc_replace_end
 
@@ -341,7 +346,7 @@ MiniDoc.config = {
     --minidoc_replace_end
 
     -- Applied to file after all previous steps
-    --minidoc_replace_start file = --<function>,
+    --minidoc_replace_start file = --<function: adds separator>,
     file = function(f)
       if f:has_lines() then
         f:insert(1, H.as_struct({ H.as_struct({ H.separator_file }, 'section') }, 'block'))
@@ -351,7 +356,7 @@ MiniDoc.config = {
     --minidoc_replace_end
 
     -- Applied to doc after all previous steps
-    --minidoc_replace_start doc = --<function>,
+    --minidoc_replace_start doc = --<function: adds modeline>,
     doc = function(d)
       d:insert(
         H.as_struct(
@@ -385,6 +390,23 @@ MiniDoc.current = {}
 ---
 --- This is default value of `MiniDoc.config.hooks`. Use it if only a little
 --- tweak is needed.
+---
+--- Some more insight about their behavior:
+--- - Default inference of documented object metadata (tag and object signature
+---   at the moment) is done in `block_pre`. Inference is based on string
+---   pattern matching, so can lead to false results, although works in most
+---   cases. It intentionally works only if first line after block has no
+---   indentation and contains all necessary information to determine if
+---   inference should happen.
+--- - Hooks for sections describing some "variable-like" object ('@class',
+---   '@field', '@param') automatically enclose first word in '{}'.
+--- - Hooks for sections which supposed to have "type-like" data ('@field',
+---   '@param', '@return', '@type') automatically enclose *first found*
+---   "type-like" word and its neighbor characters in '`(<type>)` -' (expect
+---   false positives). Algoritm is far from being 100% correct, but seems to
+---   work with present allowed type annotation. For allowed types see
+---   https://github.com/sumneko/lua-language-server/wiki/EmmyLua-Annotations#types-and-type
+---   or, better yet, look in source code of this module.
 MiniDoc.default_hooks = MiniDoc.config.hooks
 
 -- Module functionality =======================================================
@@ -443,16 +465,16 @@ MiniDoc.default_hooks = MiniDoc.config.hooks
 --- output files with eventual call to `require('mini.doc').generate()` (with
 --- or without arguments).
 ---
----@param input `table` - Array of file paths which will be processed in supplied
+---@param input table Array of file paths which will be processed in supplied
 ---   order. Default: all '.lua' files from current directory following by all
 ---   such files in these subdirectories: 'lua/', 'after/', 'colors/'. Note:
 ---   any 'init.lua' file is placed before other files from the same directory.
----@param output `string` - Path for output help file. Default:
+---@param output string Path for output help file. Default:
 ---   `doc/<current_directory>.txt` (designed to be used for generating help
 ---   file for plugin).
----@param config `table` - Configuration overriding parts of `MiniDoc.config`.
+---@param config table Configuration overriding parts of |MiniDoc.config|.
 ---
----@return `table` - Document structure which was generated and used for output
+---@return table Document structure which was generated and used for output
 ---   help file or `nil` in case `MiniDoc.config.script_path` was successfully
 ---   used.
 function MiniDoc.generate(input, output, config)
@@ -553,10 +575,10 @@ end
 ---     param_fun = --<function>
 ---   }
 --- <
----@param struct `table` - Block or section structure which after lines will be
+---@param struct table Block or section structure which after lines will be
 ---   converted to code.
 ---
----@return `string` - Single string (using `\n` to separate lines) describing
+---@return string Single string (using `\n` to separate lines) describing
 ---   afterlines as code block in help file.
 function MiniDoc.afterlines_to_code(struct)
   if not (type(struct) == 'table' and (struct.type == 'section' or struct.type == 'block')) then
@@ -594,24 +616,36 @@ H.alias_registry = {}
 H.separator_block = string.rep('-', 78)
 H.separator_file = string.rep('=', 78)
 
--- Patterns for working with afterlines. At the moment deliberately crafted to
--- work only on first line without indent.
 --stylua: ignore start
-H.afterlines_patterns = {
+H.pattern_sets = {
+  -- Patterns for working with afterlines. At the moment deliberately crafted
+  -- to work only on first line without indent.
+
   -- Determine if line is a function definition. Captures function name and
   -- arguments. For reference see '2.5.9 – Function Definitions' in Lua manual.
-  function_definition = {
+  afterline_fundef = {
     '^function%s+(%S-)(%b())',             -- Regular definition
     '^local%s+function%s+(%S-)(%b())',     -- Local definition
-    '^(%S*)%s*=%s*function(%b())',         -- Regular assignment
-    '^local%s+(%S*)%s*=%s*function(%b())', -- Local assignment
+    '^(%S+)%s*=%s*function(%b())',         -- Regular assignment
+    '^local%s+(%S+)%s*=%s*function(%b())', -- Local assignment
   },
 
   -- Determine if line is a general assignment
-  general_assignment = {
+  afterline_assign = {
     '^(%S-)%s*=',         -- General assignment
     '^local%s+(%S-)%s*=', -- Local assignment
-  }
+  },
+
+  -- Patterns to work with type descriptions
+  -- (see https://github.com/sumneko/lua-language-server/wiki/EmmyLua-Annotations#types-and-type)
+  types = {
+    'table%b<>',
+    'fun%b(): %S+', 'fun%b()',
+    'nil', 'any', 'boolean', 'string', 'number', 'integer', 'function', 'table', 'thread', 'userdata', 'lightuserdata',
+    -- Match `...` only when it is followed by whitespace so as to separate
+    -- `@return ...` and `@param ...` (which will be converted into `{...}`).
+    '%.%.%.%f[%s]'
+  },
 }
 --stylua: ignore end
 
@@ -642,6 +676,7 @@ function H.setup_config(config)
     ['hooks.sections.@signature'] = { config.hooks.sections['@signature'], 'function' },
     ['hooks.sections.@tag'] = { config.hooks.sections['@tag'], 'function' },
     ['hooks.sections.@text'] = { config.hooks.sections['@text'], 'function' },
+    ['hooks.sections.@type'] = { config.hooks.sections['@type'], 'function' },
     ['hooks.sections.@usage'] = { config.hooks.sections['@usage'], 'function' },
 
     ['hooks.block_post'] = { config.hooks.block_post, 'function' },
@@ -849,12 +884,28 @@ function H.add_section_heading(s, heading)
   s:insert(1, ('%s~'):format(heading))
 end
 
-function H.enclose_first_word(s, pattern)
+function H.enclose_var_name(s)
   if #s == 0 or s.type ~= 'section' then
     return
   end
 
-  s[1] = s[1]:gsub('(%S*)', pattern, 1)
+  s[1] = s[1]:gsub('(%S+)', '{%1}', 1)
+end
+
+function H.enclose_type(s)
+  if #s == 0 or s.type ~= 'section' then
+    return
+  end
+
+  local cur_type = H.match_first_pattern(s[1], H.pattern_sets['types'])
+  if #cur_type == 0 then
+    return
+  end
+
+  -- Add `%S*` to front and back of found pattern to support their combination
+  -- with `|`, using `[]` and `?` prefixes
+  local type_pattern = ('(%%S*%s%%S*)'):format(vim.pesc(cur_type[1]))
+  s[1] = s[1]:gsub(type_pattern, '`%(%1%)` -', 1)
 end
 
 -- Infer data from afterlines -------------------------------------------------
@@ -874,14 +925,14 @@ function H.infer_header(b)
   local tag, signature
 
   -- Try function definition
-  local fun_capture = H.capture_afterlines_patterns(l_all, 'function_definition')
+  local fun_capture = H.match_first_pattern(l_all, H.pattern_sets['afterline_fundef'])
   if #fun_capture > 0 then
     tag = tag or ('%s()'):format(fun_capture[1])
     signature = signature or ('%s%s'):format(fun_capture[1], fun_capture[2])
   end
 
   -- Try general assignment
-  local assign_capture = H.capture_afterlines_patterns(l_all, 'general_assignment')
+  local assign_capture = H.match_first_pattern(l_all, H.pattern_sets['afterline_assign'])
   if #assign_capture > 0 then
     tag = tag or assign_capture[1]
     signature = signature or assign_capture[1]
@@ -900,21 +951,11 @@ function H.infer_header(b)
   end
 end
 
-function H.capture_afterlines_patterns(l, patterns_id)
-  local matches = {}
-  for _, pattern in ipairs(H.afterlines_patterns[patterns_id]) do
-    if #matches == 0 then
-      matches = { l:match(pattern) }
-    end
-  end
-  return matches
-end
-
 function H.format_signature(line)
   -- Try capture function signature
   local name, args = line:match('(%S-)(%b())')
   -- Otherwise pick first word
-  name = name or line:match('(%S*)')
+  name = name or line:match('(%S+)')
 
   if not name then
     return ''
@@ -1012,6 +1053,81 @@ function H.as_struct(array, struct_type, info)
   return res
 end
 
+-- Work with text -------------------------------------------------------------
+function H.ensure_indent(text, n_indent_target)
+  local lines = vim.split(text, '\n')
+  local n_indent, n_indent_cur = math.huge, math.huge
+
+  -- Find number of characters in indent
+  for _, l in ipairs(lines) do
+    -- Update lines indent: minimum of all indents except empty lines
+    if n_indent > 0 then
+      _, n_indent_cur = l:find('^%s*')
+      -- Condition "current n-indent equals line length" detects empty line
+      if (n_indent_cur < n_indent) and (n_indent_cur < l:len()) then
+        n_indent = n_indent_cur
+      end
+    end
+  end
+
+  -- Ensure indent
+  local indent = string.rep(' ', n_indent_target)
+  for i, l in ipairs(lines) do
+    if l ~= '' then
+      lines[i] = indent .. l:sub(n_indent + 1)
+    end
+  end
+
+  return table.concat(lines, '\n')
+end
+
+function H.align_text(text, width, direction)
+  if type(text) ~= 'string' then
+    return
+  end
+  text = vim.trim(text)
+  width = width or 78
+  direction = direction or 'left'
+
+  -- Don't do anything if aligning left or line is a whitespace
+  if direction == 'left' or text:find('^%s*$') then
+    return text
+  end
+
+  -- Ignore concealed characters (usually "invisible" in 'help' filetype)
+  local _, n_concealed_chars = text:gsub('([*|`])', '%1')
+  local n_left = math.max(0, 78 - vim.fn.strdisplaywidth(text) + n_concealed_chars)
+  if direction == 'center' then
+    n_left = math.floor(0.5 * n_left)
+  end
+
+  return (' '):rep(n_left) .. text
+end
+
+--- Return earliest match among many patterns
+---
+--- Logic here is to test among several patterns. If several got a match,
+--- return one with earliest match.
+---
+---@private
+function H.match_first_pattern(text, pattern_set)
+  local start_tbl = vim.tbl_map(function(pattern)
+    return text:find(pattern) or math.huge
+  end, pattern_set)
+
+  local min_start, min_id = math.huge, nil
+  for id, st in ipairs(start_tbl) do
+    if st < min_start then
+      min_start, min_id = st, id
+    end
+  end
+
+  if min_id == nil then
+    return {}
+  end
+  return { text:match(pattern_set[min_id]) }
+end
+
 -- Utilities ------------------------------------------------------------------
 function H.apply_recursively(f, x)
   f(x)
@@ -1050,56 +1166,6 @@ function H.file_write(path, lines)
 
   -- Write to file
   vim.fn.writefile(lines, path, 'b')
-end
-
-function H.ensure_indent(s, n_indent_target)
-  local lines = vim.split(s, '\n')
-  local n_indent, n_indent_cur = math.huge, math.huge
-
-  -- Find number of characters in indent
-  for _, l in ipairs(lines) do
-    -- Update lines indent: minimum of all indents except empty lines
-    if n_indent > 0 then
-      _, n_indent_cur = l:find('^%s*')
-      -- Condition "current n-indent equals line length" detects empty line
-      if (n_indent_cur < n_indent) and (n_indent_cur < l:len()) then
-        n_indent = n_indent_cur
-      end
-    end
-  end
-
-  -- Ensure indent
-  local indent = string.rep(' ', n_indent_target)
-  for i, l in ipairs(lines) do
-    if l ~= '' then
-      lines[i] = indent .. l:sub(n_indent + 1)
-    end
-  end
-
-  return table.concat(lines, '\n')
-end
-
-function H.align_text(s, width, direction)
-  if type(s) ~= 'string' then
-    return
-  end
-  s = vim.trim(s)
-  width = width or 78
-  direction = direction or 'left'
-
-  -- Don't do anything if aligning left or line is a whitespace
-  if direction == 'left' or s:find('^%s*$') then
-    return s
-  end
-
-  -- Ignore concealed characters (usually "invisible" in 'help' filetype)
-  local _, n_concealed_chars = s:gsub('([*|`])', '%1')
-  local n_left = math.max(0, 78 - vim.fn.strdisplaywidth(s) + n_concealed_chars)
-  if direction == 'center' then
-    n_left = math.floor(0.5 * n_left)
-  end
-
-  return (' '):rep(n_left) .. s
 end
 
 function H.notify(msg)
