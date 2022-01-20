@@ -1,13 +1,13 @@
--- MIT License Copyright (c) 2021 Evgeni Chasnovski
+-- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- Documentation ==============================================================
 --- Generation of help files from EmmyLua-like annotations
 ---
 --- Key design ideas:
 --- - Keep documentation next to code by writing EmmyLua-like annotation
----   comments. They mostly will be parsed as is, so formatting should follow
----   built-in guide in |help-writing|. However, custom hooks are allowed at
----   many generation stages for more granular management of output help file.
+---   comments. They will be parsed as is, so formatting should follow built-in
+---   guide in |help-writing|. However, custom hooks are allowed at many
+---   generation stages for more granular management of output help file.
 --- - Generation is done by processing a set of ordered files line by line.
 ---   Each line can either be considered as a part of documentation block (if
 ---   it matches certain configurable pattern) or not (considered to be an
@@ -18,6 +18,12 @@
 ---   for more details.
 --- - Project specific script can be written as plain Lua file with
 ---   configuratble path. See |MiniDoc.generate()| for more details.
+---
+--- What it doesn't do:
+--- - It doesn't support markdown or other markup language inside annotations.
+--- - It doesn't use treesitter in favor of Lua string manipulation for basic
+---   tasks (parsing annotations, formatting, auto-generating tags, etc.). This
+---   is done to manage complexity and be dependency free.
 ---
 --- # Setup~
 ---
@@ -235,13 +241,13 @@ MiniDoc.config = {
       --minidoc_replace_start ['@field'] = --<function>,
       ['@field'] = function(s)
         H.enclose_var_name(s)
-        H.enclose_type(s)
+        H.enclose_type(s, s[1]:find('%s'))
       end,
       --minidoc_replace_end
       --minidoc_replace_start ['@param'] = --<function>,
       ['@param'] = function(s)
         H.enclose_var_name(s)
-        H.enclose_type(s)
+        H.enclose_type(s, s[1]:find('%s'))
       end,
       --minidoc_replace_end
       --minidoc_replace_start ['@private'] = --<function: registers block for removal>,
@@ -251,7 +257,7 @@ MiniDoc.config = {
       --minidoc_replace_end
       --minidoc_replace_start ['@return'] = --<function>,
       ['@return'] = function(s)
-        H.enclose_type(s)
+        H.enclose_type(s, 1)
         H.add_section_heading(s, 'Return')
       end,
       --minidoc_replace_end
@@ -287,7 +293,7 @@ MiniDoc.config = {
       --minidoc_replace_end
       --minidoc_replace_start ['@type'] = --<function>,
       ['@type'] = function(s)
-        H.enclose_type(s)
+        H.enclose_type(s, 1)
         H.add_section_heading(s, 'Type')
       end,
       --minidoc_replace_end
@@ -642,9 +648,7 @@ H.pattern_sets = {
     'table%b<>',
     'fun%b(): %S+', 'fun%b()',
     'nil', 'any', 'boolean', 'string', 'number', 'integer', 'function', 'table', 'thread', 'userdata', 'lightuserdata',
-    -- Match `...` only when it is followed by whitespace so as to separate
-    -- `@return ...` and `@param ...` (which will be converted into `{...}`).
-    '%.%.%.%f[%s]'
+    '%.%.%.'
   },
 }
 --stylua: ignore end
@@ -892,20 +896,28 @@ function H.enclose_var_name(s)
   s[1] = s[1]:gsub('(%S+)', '{%1}', 1)
 end
 
-function H.enclose_type(s)
+---@param init number Start of searching for first "type-like" string. It is
+---   needed to not detect type early. Like in `@param a_function function`.
+---@private
+function H.enclose_type(s, init)
   if #s == 0 or s.type ~= 'section' then
     return
   end
+  init = init or 1
 
-  local cur_type = H.match_first_pattern(s[1], H.pattern_sets['types'])
+  local cur_type = H.match_first_pattern(s[1], H.pattern_sets['types'], init)
   if #cur_type == 0 then
     return
   end
 
   -- Add `%S*` to front and back of found pattern to support their combination
-  -- with `|`, using `[]` and `?` prefixes
+  -- with `|`. Also allows using `[]` and `?` prefixes.
   local type_pattern = ('(%%S*%s%%S*)'):format(vim.pesc(cur_type[1]))
-  s[1] = s[1]:gsub(type_pattern, '`%(%1%)` -', 1)
+
+  -- Avoid replacing possible match before `init`
+  local l_start = s[1]:sub(1, init - 1)
+  local l_end = s[1]:sub(init):gsub(type_pattern, '`%(%1%)`', 1)
+  s[1] = ('%s%s'):format(l_start, l_end)
 end
 
 -- Infer data from afterlines -------------------------------------------------
@@ -1110,9 +1122,9 @@ end
 --- return one with earliest match.
 ---
 ---@private
-function H.match_first_pattern(text, pattern_set)
+function H.match_first_pattern(text, pattern_set, init)
   local start_tbl = vim.tbl_map(function(pattern)
-    return text:find(pattern) or math.huge
+    return text:find(pattern, init) or math.huge
   end, pattern_set)
 
   local min_start, min_id = math.huge, nil
@@ -1125,7 +1137,7 @@ function H.match_first_pattern(text, pattern_set)
   if min_id == nil then
     return {}
   end
-  return { text:match(pattern_set[min_id]) }
+  return { text:match(pattern_set[min_id], init) }
 end
 
 -- Utilities ------------------------------------------------------------------

@@ -23,16 +23,6 @@ function M.fun(a, b)
   return true
 end
 
---- Test for enclosing type
----
----@param a number Should work.
----@param b number[] Should work.
----@param c number|nil Should work.
----@param d table<string, number> Should work.
----@param e fun(a: string, b:number) Should work.
----@param f fun(a: string, b:number): table Should work.
----@param g NUMBER Shouldn't work.
-
 --- TITLE FOR `fun2`
 ---@text
 --- This illustrates some code:
@@ -54,14 +44,31 @@ end
 ---
 ---@class User
 ---
----@field login `string` User login.
----@field password `string` User password.
+---@field login string User login.
+---@field password string User password.
 ---@tag User user
 M.User = {}
 
 --- Private method that shouldn't be present in output
 ---@private
 M._private_user = {}
+
+--- Test for enclosing type
+---
+---@param a number Should work.
+---@param b number[] Should work.
+---@param c number|nil Should work.
+---@param d table<string, number> Should work.
+---@param e fun(a: string, b:number) Should work.
+---@param f fun(a: string, b:number): table Should work.
+---@param g NUMBER Shouldn't work.
+---@param a_function function Should enclose second `function`.
+---@param function_a function Should enclose second `function`.
+---@param a_function_a function Should enclose second `function`.
+---@param afunction function Should enclose second `function`.
+---
+---@return number Should work.
+---@return ... Should work.
 
 ---@signature HELLO.WORLD(x, y)
 ---
