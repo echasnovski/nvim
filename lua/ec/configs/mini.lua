@@ -34,8 +34,6 @@ require('mini.statusline').setup({
 })
 require('mini.tabline').setup()
 
-require('mini-dev.doc').setup()
-
 vim.defer_fn(function()
   require('mini.bufremove').setup()
   require('mini.comment').setup()
@@ -53,6 +51,7 @@ vim.defer_fn(function()
     },
   })
   require('mini.cursorword').setup()
+  require('mini.doc').setup()
   require('mini.jump').setup()
   require('mini.misc').setup()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
