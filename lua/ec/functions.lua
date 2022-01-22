@@ -22,26 +22,12 @@ EC.new_scratch_buffer = function()
   vim.api.nvim_win_set_buf(0, buf)
 end
 
---- Generate plugin documentation using annotations in Lua files
----
---- This runs shell command with headless Neovim.
----
---- This requires:
---- - 'tjdevries/tree-sitter-lua' plugin (its `docgen` Lua plugin). It does not
----   need to be active in current session.
---- - Script that actually generates plugin documentation.
----
----@param script_path string: Path (relative to current working directory) to
---- script generating plugin documentation. Default: './scripts/gendocs.lua'.
-EC.generate_plugin_doc = function(script_path)
-  script_path = script_path or './scripts/gendocs.lua'
-  local cmd_table = {
-    'nvim --headless --noplugin',
-    '-u ~/.config/nvim/misc/scripts/docgen_init.vim',
-    [[-c 'luafile %s' -c 'qa']],
-  }
-  local cmd = string.format(table.concat(cmd_table, ' '), script_path)
-  vim.cmd('!' .. cmd)
+-- Generate plugin documentation using annotations in Lua files
+--
+-- Depends on 'mini.doc'.
+EC.generate_plugin_doc = function()
+  MiniDoc.generate()
+  print(vim.fn.strftime('%Y-%m-%d %H:%M:%S') .. ' Documentation successfully generated')
   vim.cmd('helptags ALL')
 end
 
