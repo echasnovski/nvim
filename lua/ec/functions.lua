@@ -22,15 +22,6 @@ EC.new_scratch_buffer = function()
   vim.api.nvim_win_set_buf(0, buf)
 end
 
--- Generate plugin documentation using annotations in Lua files
---
--- Depends on 'mini.doc'.
-EC.generate_plugin_doc = function()
-  MiniDoc.generate()
-  print(vim.fn.strftime('%Y-%m-%d %H:%M:%S') .. ' Documentation successfully generated')
-  vim.cmd('helptags ALL')
-end
-
 -- Make action for `<CR>` which respects completion and autopairs
 --
 -- Mapping should be done after everything else because `<CR>` can be

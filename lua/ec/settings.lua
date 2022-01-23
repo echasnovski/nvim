@@ -106,10 +106,6 @@ vim.cmd([[augroup CustomSettings]])
   -- Allow nested 'default' comment leaders to be treated as comment leader
   vim.cmd([[autocmd FileType * lua pcall(require('mini.misc').use_nested_comments)]])
 
-  -- Wipeout help buffers when they are gone to help auto-reloading them in
-  -- case of auto-generation. See https://github.com/neovim/neovim/issues/17162
-  vim.cmd([[autocmd FileType help set bufhidden=wipe]])
-
   -- Start integrated terminal already in insert mode
   vim.cmd([[autocmd TermOpen * startinsert]])
 
