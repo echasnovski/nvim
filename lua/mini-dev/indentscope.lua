@@ -40,7 +40,7 @@ function MiniIndentscope.setup(config)
   vim.api.nvim_exec(
     [[augroup MiniIndentscope
         au!
-        au CursorMoved,CursorMovedI,TextChanged,TextChangedI * lua MiniIndentscope.auto_draw()
+        au CursorMoved,CursorMovedI,TextChanged,TextChangedI,WinScrolled * lua MiniIndentscope.auto_draw()
 
         au FileType TelescopePrompt let b:miniindentscope_disable=v:true
       augroup END]],
@@ -57,10 +57,21 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniIndentscope.config = {
   -- Which character to use for drawing vertical scope line
-  symbol = '│',
+  symbol = '┊',
 
-  -- To which part include edge blank lines. Can be `'inner'` or `'outer'`.
-  edge_blank = { top = 'inner', bottom = 'inner' },
+  -- Rules by which indent is computed in ambiguous cases: when there are two
+  -- conflicting indent values. Can be one of:
+  -- 'min' (take minimum), 'max' (take maximum), 'next', 'previous'.
+  rules = {
+    -- Indent of blank line (empty or containing only whitespace). Two indent
+    -- values (`:h indent()`) are from previous (`:h prevnonblank()`) and next
+    -- (`:h nextnonblank()`) non-blank lines.
+    blank = 'max',
+
+    -- Indent of the whole scope. Two indent values are from top and bottom
+    -- lines with indent strictly less than current 'indent at cursor'.
+    scope = 'max',
+  },
 }
 --minidoc_afterlines_end
 
@@ -76,56 +87,22 @@ function MiniIndentscope.get_scope(line, col)
   -- and empty lines.
   line, col = line or curpos[2], col or curpos[5]
 
-  local n_lines = vim.fn.line('$')
-  local indent = H.get_indent_at_column(line, col)
+  -- Compute "indent at column"
+  local indent = math.min(col, H.get_line_indent(line))
 
   -- Make early return
-  if indent == 0 then
-    return { indent = -1, line = { top_outer = 0, top_inner = 1, bottom_inner = n_lines, bottom_outer = n_lines + 1 } }
+  if indent <= 0 then
+    return { indent = -1, lines = { input = line, top = 1, bottom = vim.fn.line('$') } }
   end
 
   -- Compute scope
-  local cur_l, edge_blank = nil, MiniIndentscope.config.edge_blank
+  local top, top_indent = H.cast_ray(line, indent, 'up')
+  local bottom, bottom_indent = H.cast_ray(line, indent, 'down')
 
-  -- Cast array upwards
-  local top_outer, top_inner, top_indent
-  cur_l = line
-  while top_inner == nil and cur_l ~= 0 do
-    local new_l = vim.fn.prevnonblank(cur_l - 1)
-    local new_indent = vim.fn.indent(new_l)
-    -- This comparison also works when `new_l` is invalid (`new_indent` is -1)
-    if new_indent < indent then
-      top_outer = new_l
-      top_inner = edge_blank.top == 'inner' and (new_l + 1) or vim.fn.nextnonblank(cur_l)
-      top_indent = new_indent
-    end
-    cur_l = new_l
-  end
-
-  -- Cast array downwards
-  local bottom_outer, bottom_inner, bottom_indent
-  cur_l = line
-  while bottom_inner == nil and cur_l ~= 0 do
-    local new_l = vim.fn.nextnonblank(cur_l + 1)
-    local new_indent = vim.fn.indent(new_l)
-    -- This comparison also works when `new_l` is invalid (`new_indent` is -1)
-    if new_indent < indent then
-      bottom_outer = new_l
-      bottom_inner = edge_blank.bottom == 'inner' and (new_l - 1) or vim.fn.prevnonblank(cur_l)
-      bottom_indent = new_indent
-    end
-    cur_l = new_l
-  end
-
+  local scope_rule = H.indent_rules[MiniIndentscope.config.rules.scope]
   return {
-    indent = math.max(top_indent or -1, bottom_indent or -1),
-    line = {
-      input = line,
-      top_outer = top_outer or 0,
-      top_inner = top_inner or 1,
-      bottom_inner = bottom_inner or n_lines,
-      bottom_outer = bottom_outer or n_lines + 1,
-    },
+    indent = scope_rule(top_indent, bottom_indent),
+    lines = { input = line, top = top, bottom = bottom },
   }
 end
 
@@ -155,23 +132,19 @@ H.ns_id = vim.api.nvim_create_namespace('MiniIndentscope')
 H.drawn_scope = nil
 
 -- Functions to compute indent of blank line based on `edge_blank`
-H.blank_indent_funs = {
-  inner = {
-    inner = function(prev_indent, next_indent)
-      return math.max(prev_indent, next_indent)
-    end,
-    outer = function(prev_indent, next_indent)
-      return next_indent
-    end,
-  },
-  outer = {
-    inner = function(prev_indent, next_indent)
-      return prev_indent
-    end,
-    outer = function(prev_indent, next_indent)
-      return math.min(prev_indent, next_indent)
-    end,
-  },
+H.indent_rules = {
+  ['min'] = function(prev_indent, next_indent)
+    return math.min(prev_indent, next_indent)
+  end,
+  ['max'] = function(prev_indent, next_indent)
+    return math.max(prev_indent, next_indent)
+  end,
+  ['previous'] = function(prev_indent, next_indent)
+    return prev_indent
+  end,
+  ['next'] = function(prev_indent, next_indent)
+    return next_indent
+  end,
 }
 
 -- Helper functionality =======================================================
@@ -182,6 +155,11 @@ function H.setup_config(config)
   vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
+  vim.validate({
+    rules = { config.rules, 'table' },
+    ['rules.blank'] = { config.rules.blank, 'string' },
+    ['rules.scope'] = { config.rules.scope, 'string' },
+  })
   return config
 end
 
@@ -194,21 +172,38 @@ function H.is_disabled()
 end
 
 -- Work with indent -----------------------------------------------------------
--- Compute "indent at column": `min(col, <line indent>)`, where line indent:
+-- Line indent:
 -- - Equals output of `vim.fn.indent()` in case of non-blank line.
--- - Depends on `MiniIndentscope.config.edge_blank` in such way so as to
+-- - Depends on `MiniIndentscope.config.rules.blank` in such way so as to
 --   satisfy its definition.
-function H.get_indent_at_column(line, col)
+function H.get_line_indent(line)
   local prev_nonblank = vim.fn.prevnonblank(line)
-  local indent = vim.fn.indent(prev_nonblank)
-  -- Compute indent of blank line depending on `edge_blank` values
+  local res = vim.fn.indent(prev_nonblank)
+
+  -- Compute indent of blank line depending on `rules.blank` values
   if line ~= prev_nonblank then
-    local edge_blank = MiniIndentscope.config.edge_blank
-    local indent_fun = H.blank_indent_funs[edge_blank.top][edge_blank.bottom]
     local next_indent = vim.fn.indent(vim.fn.nextnonblank(line))
-    indent = indent_fun(indent, next_indent)
+    local blank_rule = H.indent_rules[MiniIndentscope.config.rules.blank]
+    res = blank_rule(res, next_indent)
   end
-  return math.min(col, indent)
+
+  return res
+end
+
+function H.cast_ray(line, indent, direction)
+  local final_line, increment = 1, -1
+  if direction == 'down' then
+    final_line, increment = vim.fn.line('$'), 1
+  end
+
+  for l = line, final_line, increment do
+    local new_indent = H.get_line_indent(l + increment)
+    if new_indent < indent then
+      return l, new_indent
+    end
+  end
+
+  return final_line, -1
 end
 
 function H.draw_line(scope)
@@ -217,17 +212,27 @@ function H.draw_line(scope)
     return
   end
 
-  -- Locate extmark at first column but show indented text. This allows showing
-  -- line even on empty lines.
-  local indented_text = string.rep(' ', scope.indent) .. MiniIndentscope.config.symbol
+  -- Locate extmark at first column but show indented text:
+  -- - This allows showing line even on empty lines.
+  -- - Text indentation should depend on current window view because extmarks
+  --   can't scroll to be past left window side. Sources:
+  --     - Neovim issue: https://github.com/neovim/neovim/issues/14050
+  --     - Used fix: https://github.com/lukas-reineke/indent-blankline.nvim/pull/155
+  local leftcol = vim.fn.winsaveview().leftcol
+  if leftcol > scope.indent then
+    return
+  end
+
+  local indented_text = string.rep(' ', scope.indent - leftcol) .. MiniIndentscope.config.symbol
   local opts = {
     hl_mode = 'combine',
-    priority = 1,
+    priority = 0,
+    right_gravity = false,
     virt_text = { { indented_text, 'MiniIndentscope' } },
     virt_text_pos = 'overlay',
   }
 
-  for l = scope.line.top_inner - 1, scope.line.bottom_inner - 1 do
+  for l = scope.lines.top - 1, scope.lines.bottom - 1 do
     vim.api.nvim_buf_set_extmark(0, H.ns_id, l, 0, opts)
   end
 
@@ -235,12 +240,13 @@ function H.draw_line(scope)
 end
 
 function H.should_redraw(new_scope)
-  if H.drawn_scope == nil then
-    return true
-  end
-  return new_scope.indent ~= H.drawn_scope.indent
-    or new_scope.line.top_inner ~= H.drawn_scope.line.top_inner
-    or new_scope.line.bottom_inner ~= H.drawn_scope.line.bottom_inner
+  return true
+  -- if H.drawn_scope == nil then
+  --   return true
+  -- end
+  -- return new_scope.indent ~= H.drawn_scope.indent
+  --   or new_scope.lines.top ~= H.drawn_scope.lines.top
+  --   or new_scope.lines.bottom ~= H.drawn_scope.lines.bottom
 end
 
 function H.undraw_line()
