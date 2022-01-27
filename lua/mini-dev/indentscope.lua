@@ -57,7 +57,7 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniIndentscope.config = {
   -- Which character to use for drawing vertical scope line
-  symbol = '┊',
+  symbol = '╎',
 
   -- Rules by which indent is computed in ambiguous cases: when there are two
   -- conflicting indent values. Can be one of:
@@ -92,7 +92,7 @@ function MiniIndentscope.get_scope(line, col)
 
   -- Make early return
   if indent <= 0 then
-    return { indent = -1, lines = { input = line, top = 1, bottom = vim.fn.line('$') } }
+    return { indent = -1, input = { line = line, column = col }, range = { top = 1, bottom = vim.fn.line('$') } }
   end
 
   -- Compute scope
@@ -102,7 +102,8 @@ function MiniIndentscope.get_scope(line, col)
   local scope_rule = H.indent_rules[MiniIndentscope.config.rules.scope]
   return {
     indent = scope_rule(top_indent, bottom_indent),
-    lines = { input = line, top = top, bottom = bottom },
+    input = { line = line, column = col },
+    range = { top = top, bottom = bottom },
   }
 end
 
@@ -112,13 +113,22 @@ function MiniIndentscope.auto_draw()
     return
   end
 
+  H.event_id = H.event_id + 1
+
   local scope = MiniIndentscope.get_scope()
-  if not H.should_redraw(scope) then
+  local line_hash = H.line_hash_compute(scope)
+
+  -- Don't draw same line
+  if H.line_hash_is_equal(line_hash, H.drawn_line_hash) then
     return
   end
 
   H.undraw_line()
-  H.draw_line(scope)
+
+  -- Draw line only after all events are processed
+  vim.defer_fn(function()
+    H.draw_line(line_hash)
+  end, 0)
 end
 
 -- Helper data ================================================================
@@ -129,7 +139,10 @@ H.default_config = MiniIndentscope.config
 H.ns_id = vim.api.nvim_create_namespace('MiniIndentscope')
 
 -- Cache for currently drawn scope
-H.drawn_scope = nil
+H.drawn_line_hash = nil
+
+-- Event counter
+H.event_id = 0
 
 -- Functions to compute indent of blank line based on `edge_blank`
 H.indent_rules = {
@@ -206,13 +219,74 @@ function H.cast_ray(line, indent, direction)
   return final_line, -1
 end
 
-function H.draw_line(scope)
-  scope = scope or MiniIndentscope.get_scope()
+function H.draw_line(line_hash)
+  line_hash = line_hash or H.line_hash_compute(MiniIndentscope.get_scope())
+  if line_hash == nil then
+    return
+  end
+
+  local opts = {
+    hl_mode = 'combine',
+    priority = 0,
+    right_gravity = false,
+    virt_text = { { line_hash.text, 'MiniIndentscope' } },
+    virt_text_pos = 'overlay',
+  }
+
+  local current_event_id = H.event_id
+  local draw_at_line = function(l)
+    if H.event_id ~= current_event_id then
+      H.undraw_line()
+      return false
+    end
+    return pcall(vim.api.nvim_buf_set_extmark, line_hash.buf_id, H.ns_id, l - 1, 0, opts)
+  end
+
+  -- Originate rays at cursor line
+  local cur_line = math.min(math.max(vim.fn.line('.'), line_hash.top), line_hash.bottom)
+  H.draw_ray('up', cur_line, line_hash.top, draw_at_line)
+  H.draw_ray('down', cur_line + 1, line_hash.bottom, draw_at_line)
+
+  H.drawn_line_hash = line_hash
+end
+
+function H.draw_ray(direction, from_line, to_line, draw_fun)
+  local increment = direction == 'up' and -1 or 1
+  local cur_l, async = from_line, nil
+
+  local draw = vim.schedule_wrap(function()
+    local line_is_outside = (direction == 'up' and cur_l < to_line) or (direction == 'down' and cur_l > to_line)
+    if line_is_outside then
+      async:close()
+      return
+    end
+    local success = draw_fun(cur_l)
+    if not success then
+      async:close()
+    end
+    cur_l = cur_l + increment
+    -- vim.loop.sleep(2)
+    async:send()
+  end)
+  async = vim.loop.new_async(draw)
+  async:send()
+end
+
+--- Compute hash of line to be displayed
+---
+--- Here `hash` means information that uniquely identifies drawn line. So:
+--- - If all elements of two hashes are equal, then they represent same line to
+---   be drawn by `H.draw_line()`.
+---
+---@return table|nil Table with hash info or `nil` in case line shouldn't be drawn.
+---@private
+function H.line_hash_compute(scope)
+  -- Don't draw line with negative scope
   if scope.indent < 0 then
     return
   end
 
-  -- Locate extmark at first column but show indented text:
+  -- Extmarks will be located at column zero but show indented text:
   -- - This allows showing line even on empty lines.
   -- - Text indentation should depend on current window view because extmarks
   --   can't scroll to be past left window side. Sources:
@@ -223,35 +297,33 @@ function H.draw_line(scope)
     return
   end
 
-  local indented_text = string.rep(' ', scope.indent - leftcol) .. MiniIndentscope.config.symbol
-  local opts = {
-    hl_mode = 'combine',
-    priority = 0,
-    right_gravity = false,
-    virt_text = { { indented_text, 'MiniIndentscope' } },
-    virt_text_pos = 'overlay',
-  }
+  local text = string.rep(' ', scope.indent - leftcol) .. MiniIndentscope.config.symbol
 
-  for l = scope.lines.top - 1, scope.lines.bottom - 1 do
-    vim.api.nvim_buf_set_extmark(0, H.ns_id, l, 0, opts)
-  end
+  -- Draw line only inside current window view
+  local top = math.max(scope.range.top, vim.fn.line('w0'))
+  local bottom = math.min(scope.range.bottom, vim.fn.line('w$'))
 
-  H.drawn_scope = scope
+  return { buf_id = vim.api.nvim_get_current_buf(), text = text, top = top, bottom = bottom }
 end
 
-function H.should_redraw(new_scope)
-  return true
-  -- if H.drawn_scope == nil then
-  --   return true
-  -- end
-  -- return new_scope.indent ~= H.drawn_scope.indent
-  --   or new_scope.lines.top ~= H.drawn_scope.lines.top
-  --   or new_scope.lines.bottom ~= H.drawn_scope.lines.bottom
+function H.line_hash_is_equal(hash_1, hash_2)
+  if type(hash_1) ~= 'table' or type(hash_2) ~= 'table' then
+    return false
+  end
+
+  return hash_1.buf_id == hash_2.buf_id
+    and hash_1.text == hash_2.text
+    and hash_1.top == hash_2.top
+    and hash_1.bottom == hash_2.bottom
+end
+
+function H.is_line_outside(line, border, direction)
+  return (direction == 'up' and line < border) or (direction == 'down' and line > border)
 end
 
 function H.undraw_line()
   vim.api.nvim_buf_clear_namespace(0, H.ns_id, 0, -1)
-  H.drawn_scope = nil
+  H.drawn_line_hash = nil
 end
 
 -- Utilities ------------------------------------------------------------------
