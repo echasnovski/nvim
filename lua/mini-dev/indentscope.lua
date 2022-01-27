@@ -40,9 +40,8 @@ function MiniIndentscope.setup(config)
   vim.api.nvim_exec(
     [[augroup MiniIndentscope
         au!
-        au CursorMoved,CursorMovedI,TextChanged,TextChangedI,WinScrolled * lua MiniIndentscope.auto_draw()
-
-        au FileType TelescopePrompt let b:miniindentscope_disable=v:true
+        au CursorMoved,CursorMovedI             * lua MiniIndentscope.auto_draw()
+        au TextChanged,TextChangedI,WinScrolled * lua MiniIndentscope.auto_draw({ force = true })
       augroup END]],
     false
   )
@@ -56,8 +55,11 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniIndentscope.config = {
-  -- Which character to use for drawing vertical scope line
-  symbol = '╎',
+  -- Delay (in ms) between event and start of drawing scope indicator
+  draw_delay = { default = 100 },
+
+  -- Duration (in ms) of scope's first drawing
+  draw_duration = { default = 100 },
 
   -- Rules by which indent is computed in ambiguous cases: when there are two
   -- conflicting indent values. Can be one of:
@@ -72,6 +74,9 @@ MiniIndentscope.config = {
     -- lines with indent strictly less than current 'indent at cursor'.
     scope = 'max',
   },
+
+  -- Which character to use for drawing scope indicator
+  symbol = '╎',
 }
 --minidoc_afterlines_end
 
@@ -107,28 +112,32 @@ function MiniIndentscope.get_scope(line, col)
   }
 end
 
-function MiniIndentscope.auto_draw()
+function MiniIndentscope.auto_draw(opts)
   if H.is_disabled() then
-    H.undraw_line()
+    H.undraw_indicator()
     return
   end
 
-  H.event_id = H.event_id + 1
+  opts = opts or {}
+  H.current.event_id = H.current.event_id + 1
 
   local scope = MiniIndentscope.get_scope()
-  local line_hash = H.line_hash_compute(scope)
+  local indicator = H.indicator_compute(scope)
+  local draw_opts = H.make_draw_opts(opts, scope, indicator)
 
-  -- Don't draw same line
-  if H.line_hash_is_equal(line_hash, H.drawn_line_hash) then
-    return
+  H.current.scope = scope
+
+  if draw_opts.delay > 0 then
+    H.undraw_indicator()
   end
 
-  H.undraw_line()
-
-  -- Draw line only after all events are processed
+  -- Use `defer_fn()` even if `delay` is 0 to draw line only after all events
+  -- are processed (stops flickering)
   vim.defer_fn(function()
-    H.draw_line(line_hash)
-  end, 0)
+    draw_opts.cursor_gap_line = (scope.indent + 1) == vim.fn.col('.') and vim.fn.line('.') or nil
+
+    H.draw_indicator(indicator, draw_opts)
+  end, draw_opts.delay)
 end
 
 -- Helper data ================================================================
@@ -138,11 +147,14 @@ H.default_config = MiniIndentscope.config
 -- Namespace for drawing vertical line
 H.ns_id = vim.api.nvim_create_namespace('MiniIndentscope')
 
--- Cache for currently drawn scope
-H.drawn_line_hash = nil
-
--- Event counter
-H.event_id = 0
+-- Table with current relevalnt data:
+-- - `event_id` - counter for events.
+-- - `scope`.
+-- - `indicator`.
+-- - `finished_draw` - if drawing was finished.
+-- - `cursor_gap_line` - line number where extmark wasn't put for current
+--   indicator due to cursor being there.
+H.current = { event_id = 0, scope = {}, indicator = {} }
 
 -- Functions to compute indent of blank line based on `edge_blank`
 H.indent_rules = {
@@ -184,7 +196,7 @@ function H.is_disabled()
   return vim.g.miniindentscope_disable == true or vim.b.miniindentscope_disable == true
 end
 
--- Work with indent -----------------------------------------------------------
+-- Scope ======================================================================
 -- Line indent:
 -- - Equals output of `vim.fn.indent()` in case of non-blank line.
 -- - Depends on `MiniIndentscope.config.rules.blank` in such way so as to
@@ -219,68 +231,27 @@ function H.cast_ray(line, indent, direction)
   return final_line, -1
 end
 
-function H.draw_line(line_hash)
-  line_hash = line_hash or H.line_hash_compute(MiniIndentscope.get_scope())
-  if line_hash == nil then
-    return
+function H.scope_is_equal(scope_1, scope_2)
+  if type(scope_1) ~= 'table' or type(scope_2) ~= 'table' then
+    return false
   end
 
-  local opts = {
-    hl_mode = 'combine',
-    priority = 0,
-    right_gravity = false,
-    virt_text = { { line_hash.text, 'MiniIndentscope' } },
-    virt_text_pos = 'overlay',
-  }
-
-  local current_event_id = H.event_id
-  local draw_at_line = function(l)
-    if H.event_id ~= current_event_id then
-      H.undraw_line()
-      return false
-    end
-    return pcall(vim.api.nvim_buf_set_extmark, line_hash.buf_id, H.ns_id, l - 1, 0, opts)
-  end
-
-  -- Originate rays at cursor line
-  local cur_line = math.min(math.max(vim.fn.line('.'), line_hash.top), line_hash.bottom)
-  H.draw_ray('up', cur_line, line_hash.top, draw_at_line)
-  H.draw_ray('down', cur_line + 1, line_hash.bottom, draw_at_line)
-
-  H.drawn_line_hash = line_hash
+  return scope_1.indent == scope_2.indent
+    and scope_1.range.top == scope_2.range.top
+    and scope_1.range.bottom == scope_2.range.bottom
 end
 
-function H.draw_ray(direction, from_line, to_line, draw_fun)
-  local increment = direction == 'up' and -1 or 1
-  local cur_l, async = from_line, nil
-
-  local draw = vim.schedule_wrap(function()
-    local line_is_outside = (direction == 'up' and cur_l < to_line) or (direction == 'down' and cur_l > to_line)
-    if line_is_outside then
-      async:close()
-      return
-    end
-    local success = draw_fun(cur_l)
-    if not success then
-      async:close()
-    end
-    cur_l = cur_l + increment
-    -- vim.loop.sleep(2)
-    async:send()
-  end)
-  async = vim.loop.new_async(draw)
-  async:send()
-end
-
---- Compute hash of line to be displayed
+-- Indicator ==================================================================
+--- Compute indicator of scope to be displayed
 ---
---- Here `hash` means information that uniquely identifies drawn line. So:
---- - If all elements of two hashes are equal, then they represent same line to
----   be drawn by `H.draw_line()`.
+--- Here 'indicator' means all the data necessary to visually represent scope
+--- in current window.
 ---
 ---@return table|nil Table with hash info or `nil` in case line shouldn't be drawn.
 ---@private
-function H.line_hash_compute(scope)
+function H.indicator_compute(scope)
+  scope = scope or H.current.scope
+
   -- Don't draw line with negative scope
   if scope.indent < 0 then
     return
@@ -306,24 +277,167 @@ function H.line_hash_compute(scope)
   return { buf_id = vim.api.nvim_get_current_buf(), text = text, top = top, bottom = bottom }
 end
 
-function H.line_hash_is_equal(hash_1, hash_2)
-  if type(hash_1) ~= 'table' or type(hash_2) ~= 'table' then
+function H.indicator_is_equal(indicator_1, indicator_2)
+  if type(indicator_1) ~= 'table' or type(indicator_2) ~= 'table' then
     return false
   end
 
-  return hash_1.buf_id == hash_2.buf_id
-    and hash_1.text == hash_2.text
-    and hash_1.top == hash_2.top
-    and hash_1.bottom == hash_2.bottom
+  return indicator_1.buf_id == indicator_2.buf_id
+    and indicator_1.text == indicator_2.text
+    and indicator_1.top == indicator_2.top
+    and indicator_1.bottom == indicator_2.bottom
 end
 
-function H.is_line_outside(line, border, direction)
-  return (direction == 'up' and line < border) or (direction == 'down' and line > border)
+-- Drawing --------------------------------------------------------------------
+-- TODO: remove duraction tracking
+_G.draw_durations = {}
+function H.draw_indicator(indicator, opts)
+  local start_time = vim.loop.hrtime()
+
+  indicator = indicator or H.indicator_compute(MiniIndentscope.get_scope())
+  opts = opts or H.make_draw_opts(opts)
+  if indicator == nil or H.current.event_id ~= opts.event_id then
+    return
+  end
+
+  -- Ensure that there is always only one indicator
+  if opts.type ~= 'update' then
+    H.undraw_indicator()
+  end
+
+  -- Make drawing function
+  local draw_fun = H.make_draw_function(indicator, opts)
+
+  -- Perform drawing
+  H.current.indicator = indicator
+
+  if opts.type == 'update' then
+    H.draw_indicator_update(draw_fun, opts.cursor_gap_line)
+  elseif opts.type == 'sync' then
+    H.draw_indicator_sync(draw_fun, indicator.top, indicator.bottom)
+  else
+    -- Originate rays at cursor line
+    H.draw_indicator_async(draw_fun, indicator.top, indicator.bottom, vim.fn.line('.'))
+  end
+
+  local end_time = vim.loop.hrtime()
+  table.insert(_G.draw_durations, 0.000001 * (end_time - start_time))
 end
 
-function H.undraw_line()
-  vim.api.nvim_buf_clear_namespace(0, H.ns_id, 0, -1)
-  H.drawn_line_hash = nil
+function H.draw_indicator_async(draw_fun, top, bottom, origin)
+  local line_up, line_down, async = origin, origin + 1, nil
+
+  local draw = vim.schedule_wrap(function()
+    local can_up, can_down = top <= line_up, line_down <= bottom
+    if not (can_up or can_down) then
+      H.current.finished_draw = true
+      async:close()
+      return
+    end
+
+    local success = true
+    if can_up then
+      success = success and draw_fun(line_up)
+      line_up = line_up - 1
+    end
+    if can_down then
+      success = success and draw_fun(line_down)
+      line_down = line_down + 1
+    end
+
+    if not success then
+      async:close()
+    end
+
+    vim.loop.sleep(2)
+    async:send()
+  end)
+  async = vim.loop.new_async(draw)
+  async:send()
+end
+
+function H.draw_indicator_sync(draw_fun, top, bottom)
+  for l = top, bottom do
+    local success = draw_fun(l)
+    if not success then
+      return
+    end
+  end
+  H.current.finished_draw = true
+end
+
+function H.draw_indicator_update(draw_fun, cursor_gap_line)
+  if H.current.cursor_gap_line ~= nil then
+    draw_fun(H.current.cursor_gap_line)
+    H.current.cursor_gap_line = nil
+  end
+
+  if cursor_gap_line ~= nil then
+    vim.api.nvim_buf_clear_namespace(H.current.indicator.buf_id, H.ns_id, cursor_gap_line - 1, cursor_gap_line)
+    H.current.cursor_gap_line = cursor_gap_line
+  end
+end
+
+function H.undraw_indicator()
+  local buf_id = H.current.indicator.buf_id or 0
+  vim.api.nvim_buf_clear_namespace(buf_id, H.ns_id, 0, -1)
+
+  H.current.cursor_gap_line = nil
+  H.current.finished_draw = nil
+  H.current.indicator = {}
+end
+
+function H.make_draw_opts(opts, scope, indicator)
+  local res = {
+    event_id = H.current.event_id,
+    type = 'async',
+    delay = MiniIndentscope.config.draw_delay.default,
+  }
+
+  if H.scope_is_equal(scope, H.current.scope) then
+    -- Update line immediately for same scope in 'sync' fashion
+    res.type = 'sync'
+    res.delay = 0
+  end
+
+  if H.indicator_is_equal(indicator, H.current.indicator) then
+    res.type = H.current.finished_draw and 'update' or 'sync'
+  end
+
+  if opts.force then
+    res.type = 'sync'
+  end
+
+  return res
+end
+
+function H.make_draw_function(indicator, opts)
+  local extmark_opts = {
+    hl_mode = 'combine',
+    priority = 0,
+    right_gravity = false,
+    virt_text = { { indicator.text, 'MiniIndentscope' } },
+    virt_text_pos = 'overlay',
+  }
+
+  local current_event_id = opts.event_id
+  local cursor_gap_line = opts.cursor_gap_line
+
+  return function(l)
+    -- Don't draw if outdated
+    if H.current.event_id ~= current_event_id then
+      -- H.undraw_indicator()
+      return false
+    end
+
+    -- Don't put extmark if it will conflict with cursor
+    if l == cursor_gap_line then
+      H.current.cursor_gap_line = cursor_gap_line
+      return true
+    end
+
+    return pcall(vim.api.nvim_buf_set_extmark, indicator.buf_id, H.ns_id, l - 1, 0, extmark_opts)
+  end
 end
 
 -- Utilities ------------------------------------------------------------------
