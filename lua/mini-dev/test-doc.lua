@@ -5,6 +5,9 @@
 
 --- This is a file to test 'mini-dev.doc'
 ---
+--- Table of contents:
+---@toc
+---@text
 ---@param x %bad_name*
 
 local M = {}
@@ -19,6 +22,7 @@ local M = {}
 ---@return boolean
 ---
 ---@usage `M.fun(1, 2)`
+---@toc_entry     Entry #1
 function M.fun(a, b)
   return true
 end
@@ -36,6 +40,9 @@ end
 ---   defined after it.
 ---@text
 --- Some text after parameters.
+---@toc_entry Entry #2:
+--- This time it is
+--- multiline
 M.fun2 = function(x, y, z)
   return x + y + z
 end
@@ -50,6 +57,7 @@ end
 M.User = {}
 
 --- Private method that shouldn't be present in output
+---@tag private_user
 ---@private
 M._private_user = {}
 
@@ -69,6 +77,27 @@ M._private_user = {}
 ---
 ---@return number Should work.
 ---@return ... Should work.
+---
+---@toc_entry Entry #3: This time without tag
+
+--- Block for testing TOC
+---@tag toc-entry-without-description
+---@toc_entry
+
+--- Block for testing TOC
+---@tag toc-entry-with
+--- multiline-tag
+---@toc_entry Entry #4
+
+--- Here `@diagnostic` sections should be ignored.
+---
+---@overload fun(x: number)
+---@diagnostic disable
+---@toc_entry Entry #5: A very-very-very-very-very-very-very-very-very-very long description
+local f = function(x, y)
+  return x + y
+end
+---@diagnostic enable
 
 ---@signature HELLO.WORLD(x, y)
 ---
@@ -92,6 +121,9 @@ M.tab = {
     d = 3,
     e = 4,
   },
+  --minidoc_replace_start
+  f = 'This line should be completely removed',
+  --minidoc_replace_end
 }
 --minidoc_afterlines_end
 
