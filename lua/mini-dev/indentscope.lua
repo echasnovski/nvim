@@ -53,7 +53,8 @@ function MiniIndentscope.setup(config)
   vim.api.nvim_exec(
     [[augroup MiniIndentscope
         au!
-        au CursorMoved,CursorMovedI,TextChanged,TextChangedI,WinScrolled * lua MiniIndentscope.auto_draw()
+        au CursorMoved,CursorMovedI             * lua MiniIndentscope.auto_draw({ lazy = true })
+        au TextChanged,TextChangedI,WinScrolled * lua MiniIndentscope.auto_draw()
       augroup END]],
     false
   )
@@ -74,7 +75,7 @@ MiniIndentscope.config = {
   -- Delay (in ms) between event and start of drawing scope indicator
   draw_delay = 100,
 
-  -- Animation rule for scope's first drawing. Follows the reverse idea of
+  -- Animation rule for scope's first drawing. Follows the inverted idea of
   -- common easing function: given current and total number of steps, compute
   -- duration at which current step should end. For builtin options and more
   -- information see |MiniIndentscope.animations|. To not use animation, supply
@@ -94,7 +95,7 @@ MiniIndentscope.config = {
     -- (`:h nextnonblank()`) non-blank lines.
     blank = 'max',
 
-    -- Indent of the whole scope. Two indent values are from top and bottom
+    -- Outer indent of outer scope. Two indent values are from top and bottom
     -- lines with indent strictly less than current 'indent at cursor'.
     scope = 'max',
   },
@@ -105,12 +106,48 @@ MiniIndentscope.config = {
 --minidoc_afterlines_end
 
 -- Module data ================================================================
+MiniIndentscope.animations = {
+  none = function()
+    return function()
+      return 0
+    end
+  end,
+  constant_step = function(step_duration)
+    return function(s, n)
+      return step_duration * s
+    end
+  end,
+  constant_duration = function(duration)
+    return function(s, n)
+      return (duration / n) * s
+    end
+  end,
+  quadratic = function(duration, type)
+    return H.make_inverted_easing(function(d)
+      return math.sqrt(d)
+    end, duration, type)
+  end,
+  cubic = function(duration, type)
+    return H.make_inverted_easing(function(d)
+      return math.pow(d, 0.33)
+    end, duration, type)
+  end,
+  exponential = function(duration, type)
+    return H.make_inverted_easing(function(d)
+      if d < math.pow(2, -10) then
+        return 0
+      end
+      return 0.1 * math.log(d, 2) + 1
+    end, duration, type)
+  end,
+}
 
 -- Module functionality =======================================================
 ---@param line number Line number (starts from 1).
 ---@param col number Column number (starts from 1).
 ---@private
 function MiniIndentscope.get_scope(line, col)
+  local buf_id = vim.api.nvim_get_current_buf()
   local curpos = (not line or not col) and vim.fn.getcurpos() or {}
   -- Use `curpos[5]` (`curswant`, see `:h getcurpos()`) to account for blank
   -- and empty lines.
@@ -121,7 +158,12 @@ function MiniIndentscope.get_scope(line, col)
 
   -- Make early return
   if indent <= 0 then
-    return { indent = -1, input = { line = line, column = col }, range = { top = 1, bottom = vim.fn.line('$') } }
+    return {
+      buf_id = buf_id,
+      indent = { outer = indent - 1, inner = indent },
+      input = { line = line, column = col },
+      range = { top = 1, bottom = vim.fn.line('$') },
+    }
   end
 
   -- Compute scope
@@ -130,14 +172,14 @@ function MiniIndentscope.get_scope(line, col)
 
   local scope_rule = H.indent_rules[MiniIndentscope.config.rules.scope]
   return {
-    buf_id = vim.api.nvim_get_current_buf(),
-    indent = scope_rule(top_indent, bottom_indent),
+    buf_id = buf_id,
+    indent = { outer = scope_rule(top_indent, bottom_indent), inner = indent },
     input = { line = line, column = col },
     range = { top = top, bottom = bottom },
   }
 end
 
-function MiniIndentscope.auto_draw()
+function MiniIndentscope.auto_draw(opts)
   if H.is_disabled() then
     H.undraw_indicator()
     return
@@ -146,10 +188,11 @@ function MiniIndentscope.auto_draw()
   local local_event_id = H.current.event_id + 1
   H.current.event_id = local_event_id
 
+  opts = opts or {}
   local scope = MiniIndentscope.get_scope()
-  local draw_opts = H.make_draw_opts(scope)
+  local draw_opts = H.make_draw_opts(opts, scope)
 
-  if draw_opts.delay < 0 then
+  if draw_opts.type == 'none' then
     return
   end
 
@@ -184,9 +227,9 @@ H.timer = vim.loop.new_timer()
 
 -- Table with current relevalnt data:
 -- - `event_id` - counter for events.
--- - `scope`.
+-- - `scope` - latest drawn scope.
 -- - `draw_status` - status of current drawing.
-H.current = { event_id = 0, scope = {} }
+H.current = { event_id = 0, scope = {}, draw_status = 'none' }
 
 -- Functions to compute indent of blank line based on `edge_blank`
 H.indent_rules = {
@@ -268,15 +311,28 @@ function H.cast_ray(line, indent, direction)
   return final_line, -1
 end
 
+function H.scope_is_equal(scope_1, scope_2)
+  if type(scope_1) ~= 'table' or type(scope_2) ~= 'table' then
+    return false
+  end
+
+  return scope_1.buf_id == scope_2.buf_id
+    and scope_1.indent.outer == scope_2.indent.outer
+    and scope_1.range.top == scope_2.range.top
+    and scope_1.range.bottom == scope_2.range.bottom
+end
+
 function H.scope_has_intersect(scope_1, scope_2)
   if type(scope_1) ~= 'table' or type(scope_2) ~= 'table' then
     return false
   end
-  if (scope_1.buf_id ~= scope_2.buf_id) or (scope_1.indent ~= scope_2.indent) then
+  if (scope_1.buf_id ~= scope_2.buf_id) or (scope_1.indent.outer ~= scope_2.indent.outer) then
     return false
   end
 
-  return (scope_1.range.top <= scope_2.range.bottom) or (scope_2.range.top <= scope_1.range.bottom)
+  local range_1, range_2 = scope_1.range, scope_2.range
+  return (range_2.top <= range_1.top and range_1.top <= range_2.bottom)
+    or (range_1.top <= range_2.top and range_2.top <= range_1.bottom)
 end
 
 -- Indicator ==================================================================
@@ -289,9 +345,11 @@ end
 ---@private
 function H.indicator_compute(scope)
   scope = scope or H.current.scope
+  local outer_indent = scope.indent.outer
 
-  -- Don't draw line with negative scope
-  if scope.indent < 0 then
+  -- Don't draw indicator that should be outside of screen. This condition is
+  -- (perpusfully) "responsible" for not drawing indicator spanning whole file.
+  if outer_indent < 0 then
     return {}
   end
 
@@ -302,22 +360,33 @@ function H.indicator_compute(scope)
   --     - Neovim issue: https://github.com/neovim/neovim/issues/14050
   --     - Used fix: https://github.com/lukas-reineke/indent-blankline.nvim/pull/155
   local leftcol = vim.fn.winsaveview().leftcol
-  if leftcol > scope.indent then
+  if outer_indent < leftcol then
     return {}
   end
 
   -- Usage separate highlight groups for prefix and symbol allows cursor to be
   -- "natural" when on the left of indicator line (like on empty lines)
   local virt_text = { { MiniIndentscope.config.symbol, 'MiniIndentscopeSymbol' } }
-  local prefix = string.rep(' ', scope.indent - leftcol)
+  local prefix = string.rep(' ', outer_indent - leftcol)
   -- Currently Neovim doesn't work when text for extmark is empty string
   if prefix:len() > 0 then
     table.insert(virt_text, 1, { prefix, 'MiniIndentscopePrefix' })
   end
 
-  -- Draw line only inside current window view
-  local top = math.max(scope.range.top, vim.fn.line('w0'))
-  local bottom = math.min(scope.range.bottom, vim.fn.line('w$'))
+  -- These lines can be updated to result into drawing line only inside current
+  -- window view. Like this:
+  --   local top = math.max(scope.range.top, vim.fn.line('w0'))
+  --   local bottom = math.min(scope.range.bottom, vim.fn.line('w$'))
+  -- However, this is a compromize optimization (because currently there is a
+  -- screen redraw after window scroll but before showing indicator):
+  -- - On plus side, it reduces workload.
+  -- - On minus side, it introduces visible flickering when scrolling window
+  --   within same scope. If cursor is on the indicator, it also flickers
+  --   (because there is no gap at cursor).
+  -- - On the neutral side, it applies animation function not to the whole
+  --   scope, but only to its currently visible part.
+  local top = scope.range.top
+  local bottom = scope.range.bottom
 
   return { buf_id = vim.api.nvim_get_current_buf(), virt_text = virt_text, top = top, bottom = bottom }
 end
@@ -349,13 +418,14 @@ function H.draw_indicator(indicator, opts)
 end
 
 function H.draw_indicator_animation(indicator, opts, draw_fun)
+  -- Draw from origin (cursor line but wihtin indicator range)
   local top, bottom = indicator.top, indicator.bottom
   local origin = math.min(math.max(vim.fn.line('.'), top), bottom)
-  local animation_fun = opts.animation_fun
 
   local step = 1
   local n_steps = math.max(origin - top, bottom - origin) + 1
 
+  local animation_fun = opts.animation_fun
   local progress = animation_fun(step, n_steps)
   local wait_time = progress - animation_fun(0, n_steps)
 
@@ -412,24 +482,34 @@ function H.undraw_indicator(opts)
 
   pcall(vim.api.nvim_buf_clear_namespace, H.current.scope.buf_id or 0, H.ns_id, 0, -1)
 
-  H.current.draw_status = nil
+  H.current.draw_status = 'none'
 end
 
-function H.make_draw_opts(scope)
+function H.make_draw_opts(opts, scope)
+  if opts.lazy and H.current.draw_status == 'finished' and H.scope_is_equal(scope, H.current.scope) then
+    return { type = 'none' }
+  end
+
   local res = {
     event_id = H.current.event_id,
     type = 'animation',
     delay = MiniIndentscope.config.draw_delay,
     animation_fun = MiniIndentscope.config.draw_animation,
-    cursor_gap_line = (scope.indent + 1) == vim.fn.col('.') and vim.fn.line('.') or nil,
+    -- This is currently not used to reduce flickering, but can be brought back
+    cursor_gap_line = (scope.indent.outer + 1) == vim.fn.virtcol('.') and vim.fn.line('.') or nil,
   }
 
-  -- Treat scope which intersects current (same indent, overlapping ranges) as
-  -- "the same" and drawing immediately. This is more natural when typing text.
-  local scope_is_current = H.scope_has_intersect(scope, H.current.scope)
-  if scope_is_current and H.current.draw_status ~= nil then
+  if H.current.draw_status == 'none' then
+    return res
+  end
+
+  -- Draw immediately scope which intersects (same indent, overlapping ranges)
+  -- currently drawn or finished. This is more natural when typing text.
+  if H.scope_has_intersect(scope, H.current.scope) then
+    res.type = 'immediate'
     res.delay = 0
     res.animation_fun = MiniIndentscope.animations.none()
+    return res
   end
 
   return res
@@ -445,7 +525,7 @@ function H.make_draw_function(indicator, opts)
   }
 
   local current_event_id = opts.event_id
-  local cursor_gap_line = opts.cursor_gap_line
+  -- local cursor_gap_line = opts.cursor_gap_line
 
   return function(l)
     -- Don't draw if outdated
@@ -453,10 +533,11 @@ function H.make_draw_function(indicator, opts)
       return false
     end
 
-    -- Don't put extmark if it will conflict with cursor
-    if l == cursor_gap_line then
-      return true
-    end
+    -- This is not used to reduce flickering, but can be brought back
+    -- -- Don't put extmark if it will conflict with cursor
+    -- if l == cursor_gap_line then
+    --   return true
+    -- end
 
     -- Don't put extmark outside of indicator range
     if not (indicator.top <= l and l <= indicator.bottom) then
@@ -467,91 +548,35 @@ function H.make_draw_function(indicator, opts)
   end
 end
 
--- Animation functions --------------------------------------------------------
-MiniIndentscope.animations = {
-  none = function()
-    return function()
-      return 0
-    end
-  end,
-  constant_step = function(step_duration)
-    return function(s, n)
-      return step_duration * s
-    end
-  end,
-  constant_duration = function(duration)
-    return function(s, n)
-      return (duration / n) * s
-    end
-  end,
-  -- TODO: Make more obvious reverse of common easing functions.
-  -- Reference: https://www.gizma.com/easing/
-  quadratic = function(duration, type)
-    local c = duration or 100
-    type = type or 'in-out'
-    return ({
-      ['in'] = function(s, n)
-        s = s / n
-        return c * s * s
-      end,
-      ['out'] = function(s, n)
-        s = s / n
-        return -c * s * (s - 2)
-      end,
-      ['in-out'] = function(s, n)
-        s = 2 * s / n
-        if s < 1 then
-          return 0.5 * c * s * s
-        end
-        s = s - 1
-        return -0.5 * c * (s * (s - 2) - 1)
-      end,
-    })[type]
-  end,
-  cubic = function(duration, type)
-    local c = duration or 100
-    type = type or 'in-out'
-    return ({
-      ['in'] = function(s, n)
-        s = s / n
-        return c * s * s * s
-      end,
-      ['out'] = function(s, n)
-        s = s / n
-        s = s - 1
-        return c * (s * s * s + 1)
-      end,
-      ['in-out'] = function(s, n)
-        s = 2 * s / n
-        if s < 1 then
-          return 0.5 * c * s * s * s
-        end
-        s = s - 2
-        return 0.5 * c * (s * s * s + 2)
-      end,
-    })[type]
-  end,
-  exponential = function(duration, type)
-    local c = duration or 100
-    type = type or 'in-out'
-    return ({
-      ['in'] = function(s, n)
-        return c * math.pow(2, 10 * (s / n - 1))
-      end,
-      ['out'] = function(s, n)
-        return c * (1 - math.pow(2, -10 * s / n))
-      end,
-      ['in-out'] = function(s, n)
-        s = 2 * s / n
-        if s < 1 then
-          return 0.5 * c * math.pow(2, 10 * (s - 1))
-        end
-        s = s - 1
-        return 0.5 * c * (2 - math.pow(2, -10 * s))
-      end,
-    })[type]
-  end,
-}
+-- Animations =================================================================
+-- Reference: https://github.com/rxi/flux/blob/master/flux.lua
+-- Example (`duration` - total desired duration):
+-- - `basis = function(x) return x*x end`
+--   Its inverse is `inverted_basis = function(y) return math.sqrt(y) end`
+-- - Easing 'in' (input - 'current' duration `d`, output - 'current' step `s`):
+--   `s = n_steps * basis(d / duration)`
+--   Inverted easing is obtained by solving this equation assuming
+--   `inverted_basis = basis^{-1}(d)` is given
+-- - Same goes for easing 'out' and 'in-out'.
+function H.make_inverted_easing(inverted_basis, duration, type)
+  duration = duration or 100
+  type = type or 'in-out'
+  return ({
+    ['in'] = function(s, n)
+      return duration * inverted_basis(s / n)
+    end,
+    ['out'] = function(s, n)
+      return duration * (1 - inverted_basis(1 - s / n))
+    end,
+    ['in-out'] = function(s, n)
+      s = 2 * s / n
+      if s < 1 then
+        return duration * (0.5 * inverted_basis(s))
+      end
+      return duration * (1 - 0.5 * inverted_basis(2 - s))
+    end,
+  })[type]
+end
 
 -- Utilities ------------------------------------------------------------------
 function H.notify(msg)
