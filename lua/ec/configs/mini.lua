@@ -34,9 +34,7 @@ require('mini.statusline').setup({
 })
 require('mini.tabline').setup()
 
-local indentscope = require('mini-dev.indentscope')
--- indentscope.setup({ draw_animation = indentscope.animations.constant_step(5) })
-indentscope.setup({ draw_animation = indentscope.animations.quadratic(1000, 'in-out') })
+require('mini-dev.indentscope').setup()
 
 vim.defer_fn(function()
   require('mini.bufremove').setup()

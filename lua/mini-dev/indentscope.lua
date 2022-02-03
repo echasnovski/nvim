@@ -106,6 +106,9 @@ function MiniIndentscope.setup(config)
         au!
         au CursorMoved,CursorMovedI             * lua MiniIndentscope.auto_draw({ lazy = true })
         au TextChanged,TextChangedI,WinScrolled * lua MiniIndentscope.auto_draw()
+
+        au TermEnter * let b:miniindentscope_disable=v:true
+        au TermLeave * let b:miniindentscope_disable=v:false
       augroup END]],
     false
   )
@@ -127,48 +130,64 @@ end
 --- - Indent rules are designed to compute indent based on two equally possible
 ---   indent values. They matter only if values are different, all of them
 ---   return same result otherwise. Here is an illustration of how they work
----   when empty lines are present:
+---   when empty lines are present and boundary lines have different indents:
 --- >
----                              |max|min|previous|next|
----   1|function foo()           | 0 | 0 |   0    | 0  |
----   2|                         | 4 | 0 |   0    | 4  |
----   3|    print('Hello world') | 4 | 4 |   4    | 4  |
----   4|                         | 4 | 2 |   4    | 2  |
----   5|  end                    | 2 | 2 |   2    | 2  |
+---                              |max|min|top|bottom|
+---   1|function foo()           | 0 | 0 | 0 |  0   |
+---   2|                         | 4 | 0 | 0 |  4   |
+---   3|    print('Hello world') | 4 | 4 | 4 |  4   |
+---   4|                         | 4 | 2 | 4 |  2   |
+---   5|  end                    | 2 | 2 | 2 |  2   |
 --- <
 ---   So, for example, a scope at line 3 and right-most column has range
----   depending on `MiniIndentscope.config.rules.blank`: 2-4 for "max", 3-3 for
----   "min", 3-4 for "previous", and 2-3 for "next".
----   Also, when using "max" as indent rule for blank lines, outer indent of
----   scope is: 2 for "max", 0 for "min", 0 for "previous", and 2 for "next".
+---   depending on `MiniIndentscope.config.rules.blank_indent`:
+---     - Rule "max":    2-4.
+---     - Rule "min":    3-3.
+---     - Rule "top":    3-4.
+---     - Rule "bottom": 2-3.
+---
+---   Outer indent of scope depends on `MiniIndentscope.config.rules.scope_boundary`.
+---   So when scope is 2-4 ("max" rule for blank lines), its outer lines are 1
+---   and 5. Scope's outer indent then:
+---     - Rule "max":    2.
+---     - Rule "min":    0.
+---     - Rule "top":    0.
+---     - Rule "bottom": 2.
 MiniIndentscope.config = {
   draw = {
     -- Delay (in ms) between event and start of drawing scope indicator
     delay = 100,
 
-    -- Animation rule for scope's first drawing. A function which, given next and
-    -- total step numbers, returns wait time (in ms). For builtin options
-    -- |MiniIndentscope.animations|. To not use animation, supply
-    -- `require('mini.indentscope').animations.none()`.
-    --minidoc_replace_start animation = --<function: implements constant 5ms between steps>,
+    -- Animation rule for scope's first drawing. A function which, given next
+    -- and total step numbers, returns wait time (in ms). See
+    -- |MiniIndentscope.animations| for builtin options. To not use animation,
+    -- supply `require('mini.indentscope').animations.none()`.
+    --minidoc_replace_start animation = --<function: implements constant 20ms between steps>,
     animation = function(s, n)
-      return 5
+      return 20
     end,
     --minidoc_replace_end
   },
 
-  -- Rules by which indent is computed in ambiguous cases: when there are two
-  -- conflicting indent values. Can be one of:
-  -- 'min' (take minimum), 'max' (take maximum), 'next', 'previous'.
+  -- Rules which control default computation of scope. For buffer local
+  -- behavior can be supplied in buffer variable `vim.b.miniindentscope_rules`.
   rules = {
-    -- Indent of blank line (empty or containing only whitespace). Two indent
-    -- values (`:h indent()`) are from previous (`:h prevnonblank()`) and next
-    -- (`:h nextnonblank()`) non-blank lines.
-    blank = 'max',
+    -- How to compute indent of blank line (empty or containing only
+    -- whitespace). It uses indent values from previous and next non-blank
+    -- lines. Can be one of and uses one of the following: 'min' (use minimum),
+    -- 'max' (use maximum), 'bottom' (use bottom one), 'top' (use top one).
+    blank_indent = 'max',
 
     -- Outer indent of scope. Two indent values are from top and bottom lines
     -- with indent strictly less than current 'indent at column'.
-    scope = 'max',
+    scope_indent = 'max',
+
+    -- Rule for scope default line is used to determine which extra line(s) to
+    -- consider. Useful to tweak which scope is computed when indent of
+    -- neighbor lines is different (on function header). Can be one of: 'none'
+    -- (use only cursor line), 'previous' (cursor and previous lines), 'next'
+    -- (cursor and next lines), 'both' (previous, cursor, and next lines).
+    scope_extra_lines = 'none',
   },
 
   -- Which character to use for drawing scope indicator
@@ -354,10 +373,12 @@ end
 ---   meeting "a wall" (non-whitespace character or buffer edge). Latest line
 ---   before that meeting is a respective range end of scope. It always exists
 ---   because input line is a such one.
---- - Based on top and bottom lines with strictly lower indent, compute scope's
----   "outer" indent. The way it is computed is decided based on
----   `MiniIndentscope.config.rules.scope` (see |MiniIndentscope.config| for
----   more information).
+--- - Based on top and bottom lines with strictly lower indent, construct
+---   scopes's boundary. The way it is computed is decided based on
+---   `MiniIndentscope.config.rules.scope_boundary` (see |MiniIndentscope.config|
+---   for more information).
+--- - Compute boundary indent as maximum indent of boundary lines. This is used
+---   during drawing visual indicator.
 ---
 --- Indent computation~
 ---
@@ -366,7 +387,7 @@ end
 --- - Indent is `-1` for imaginary lines 0 and past last line.
 --- - For blank and empty lines indent is computed based on previous
 ---   (|prevnonblank()|) and next (|nextnonblank()|) non-blank lines. The way
----   it is computed is decided based on `MiniIndentscope.config.rules.blank`
+---   it is computed is decided based on `MiniIndentscope.config.rules.blank_indent`
 ---   (see |MiniIndentscope.config| for more information).
 ---
 ---@param line number Line number (starts from 1). Default: cursor line.
@@ -382,10 +403,18 @@ end
 ---     (bottom line of scope, inclusive) keys. Line numbers start at 1.
 function MiniIndentscope.get_scope(line, col)
   local buf_id = vim.api.nvim_get_current_buf()
-  local curpos = (not line or not col) and vim.fn.getcurpos() or {}
-  -- Use `curpos[5]` (`curswant`, see `:h getcurpos()`) to account for blank
-  -- and empty lines.
-  line, col = line or curpos[2], col or curpos[5]
+
+  -- Compute default `line` and\or `col`
+  if not (line and col) then
+    local curpos = vim.fn.getcurpos()
+
+    local line_rule = H.line_rule_funs[MiniIndentscope.config.rules.scope_extra_lines]
+    line = line or line_rule(curpos[2])
+
+    -- Use `curpos[5]` (`curswant`, see `:h getcurpos()`) to account for blank
+    -- and empty lines.
+    col = col or curpos[5]
+  end
 
   -- Compute "indent at column"
   local indent = math.min(col, H.get_line_indent(line))
@@ -403,7 +432,7 @@ function MiniIndentscope.get_scope(line, col)
   local top, top_indent = H.cast_ray(line, indent, 'up')
   local bottom, bottom_indent = H.cast_ray(line, indent, 'down')
 
-  local scope_rule = H.indent_rules[MiniIndentscope.config.rules.scope]
+  local scope_rule = H.indent_rule_funs[MiniIndentscope.config.rules.scope_indent]
   return {
     buf_id = buf_id,
     indent = { inner = indent, outer = scope_rule(top_indent, bottom_indent) },
@@ -496,19 +525,49 @@ H.timer = vim.loop.new_timer()
 -- - `draw_status` - status of current drawing.
 H.current = { event_id = 0, scope = {}, draw_status = 'none' }
 
--- Functions to compute indent of blank line based on `edge_blank`
-H.indent_rules = {
-  ['min'] = function(prev_indent, next_indent)
-    return math.min(prev_indent, next_indent)
+-- Functions to compute indent in ambiguous cases
+H.indent_rule_funs = {
+  ['min'] = function(top_indent, bottom_indent)
+    return math.min(top_indent, bottom_indent)
   end,
-  ['max'] = function(prev_indent, next_indent)
-    return math.max(prev_indent, next_indent)
+  ['max'] = function(top_indent, bottom_indent)
+    return math.max(top_indent, bottom_indent)
   end,
-  ['previous'] = function(prev_indent, next_indent)
-    return prev_indent
+  ['top'] = function(top_indent, bottom_indent)
+    return top_indent
   end,
-  ['next'] = function(prev_indent, next_indent)
-    return next_indent
+  ['bottom'] = function(top_indent, bottom_indent)
+    return bottom_indent
+  end,
+}
+
+-- Functions to compute default line for scope
+H.line_rule_funs = {
+  ['none'] = function(line)
+    return line
+  end,
+  ['previous'] = function(line)
+    local prev_indent, cur_indent = H.get_line_indent(line - 1), H.get_line_indent(line)
+    return (prev_indent <= cur_indent) and line or (line - 1)
+  end,
+  ['next'] = function(line)
+    local cur_indent, next_indent = H.get_line_indent(line), H.get_line_indent(line + 1)
+    return (next_indent <= cur_indent) and line or (line + 1)
+  end,
+  ['both'] = function(line)
+    local prev_indent, cur_indent, next_indent =
+      H.get_line_indent(line - 1), H.get_line_indent(line), H.get_line_indent(line + 1)
+
+    if prev_indent <= cur_indent and next_indent <= cur_indent then
+      return line
+    end
+
+    -- If prev and next indents are equal and bigger than current, prefer next
+    if prev_indent <= next_indent then
+      return line + 1
+    end
+
+    return line - 1
   end,
 }
 
@@ -526,8 +585,9 @@ function H.setup_config(config)
     ['draw.animation'] = { config.draw.animation, 'function' },
 
     rules = { config.rules, 'table' },
-    ['rules.blank'] = { config.rules.blank, 'string' },
-    ['rules.scope'] = { config.rules.scope, 'string' },
+    ['rules.blank_indent'] = { config.rules.blank_indent, 'string' },
+    ['rules.scope_indent'] = { config.rules.scope_indent, 'string' },
+    ['rules.scope_extra_lines'] = { config.rules.scope_extra_lines, 'string' },
 
     symbol = { config.symbol, 'string' },
   })
@@ -542,19 +602,19 @@ function H.is_disabled()
   return vim.g.miniindentscope_disable == true or vim.b.miniindentscope_disable == true
 end
 
--- Scope ======================================================================
+-- Scope ----------------------------------------------------------------------
 -- Line indent:
 -- - Equals output of `vim.fn.indent()` in case of non-blank line.
--- - Depends on `MiniIndentscope.config.rules.blank` in such way so as to
+-- - Depends on `MiniIndentscope.config.rules.blank_indent` in such way so as to
 --   satisfy its definition.
 function H.get_line_indent(line)
   local prev_nonblank = vim.fn.prevnonblank(line)
   local res = vim.fn.indent(prev_nonblank)
 
-  -- Compute indent of blank line depending on `rules.blank` values
+  -- Compute indent of blank line depending on `rules.blank_indent` values
   if line ~= prev_nonblank then
     local next_indent = vim.fn.indent(vim.fn.nextnonblank(line))
-    local blank_rule = H.indent_rules[MiniIndentscope.config.rules.blank]
+    local blank_rule = H.indent_rule_funs[MiniIndentscope.config.rules.blank_indent]
     res = blank_rule(res, next_indent)
   end
 
@@ -601,7 +661,7 @@ function H.scope_has_intersect(scope_1, scope_2)
     or (range_1.top <= range_2.top and range_2.top <= range_1.bottom)
 end
 
--- Indicator ==================================================================
+-- Indicator ------------------------------------------------------------------
 --- Compute indicator of scope to be displayed
 ---
 --- Indicator is visual representation of scope in current window view using
@@ -789,7 +849,7 @@ function H.make_draw_function(indicator, opts)
   end
 end
 
--- Animations =================================================================
+-- Animations -----------------------------------------------------------------
 --- Imitate common power easing function
 ---
 --- Every step is preceeded by waiting time decreasing/increasing in power
@@ -831,6 +891,11 @@ end
 -- Utilities ------------------------------------------------------------------
 function H.notify(msg)
   vim.notify(('(mini.indentscope) %s'):format(msg))
+end
+
+function H.get_rule_value(name)
+  -- First try buffer local value
+  -- local success,  =
 end
 
 return MiniIndentscope
