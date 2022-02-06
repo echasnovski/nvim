@@ -4,9 +4,9 @@
 --- Visualize and operate on indent scope
 ---
 --- Indent scope (or just "scope") is a maximum set of consecutive lines which
---- contains certain (reference) line and every member has indent not less than
---- certain "indent at column" (minimum between input column value and indent
---- of reference line).
+--- contains certain reference line (cursor line by default) and every member
+--- has indent not less than certain reference indent ("indent at cursor" by
+--- default: minimum between cursor column and indent of cursor line).
 ---
 --- Features:
 --- - Visualize scope with vertical line. It is very fast and done
@@ -181,11 +181,21 @@ end
 ---     - `border` is "bottom": range is 3-4, border is 5 with indent 0.
 ---     - `border` is "none":   range is 3-3, border is empty with indent `nil`.
 ---
+--- - Option `indent_at_cursor` controls if cursor position should affect
+---   computation of scope. If `true`, reference indent is a minimum of
+---   reference line's indent and cursor column. In main example, here how
+---   scope's body range differs depending on cursor column and `indent_at_cursor`
+---   value (assuming cursor is on line 3 and it is whole buffer):
+--- >
+---     Column\Option true|false
+---        1 and 2    2-5 | 2-4
+---      3 and more   2-4 | 2-4
+--- <
 --- - Option `try_as_border` controls how to act when input line can be
----   recognized as a border of some neighbor indent scope. In previous
----   example, when input line is 1 and can be recognized as border for inner
----   scope, value `try_as_border = true` means that inner scope will be
----   returned. Similar, for input line 5 inner scope will be returned if it is
+---   recognized as a border of some neighbor indent scope. In main example,
+---   when input line is 1 and can be recognized as border for inner scope,
+---   value `try_as_border = true` means that inner scope will be returned.
+---   Similar, for input line 5 inner scope will be returned if it is
 ---   recognized as border.
 MiniIndentscope.config = {
   draw = {
@@ -220,6 +230,10 @@ MiniIndentscope.config = {
     -- Type of scope's border: which line(s) with smaller indent to
     -- categorize as border. Can be one of: 'both', 'top', 'bottom', 'none'.
     border = 'both',
+
+    -- Whether to use cursor column when computing reference indent. Useful to
+    -- see incremental scopes with horizontal cursor movements.
+    indent_at_cursor = true,
 
     -- Whether to first check input line to be a border of adjacent scope.
     -- Use it if you want to place cursor on function header to get scope of
@@ -395,11 +409,12 @@ end
 --- Compute indent scope
 ---
 --- Indent scope (or just "scope") is a maximum set of consecutive lines which
---- contains certain (reference) line and every member has indent not less than
---- certain "indent at column". Here "indent at column" means minimum between
---- input column value and indent of reference line. When using cursor column,
---- this allows for a useful interactive view of nested indent scopes by making
---- horizontal movements within line.
+--- contains certain reference line (cursor line by default) and every member
+--- has indent not less than certain reference indent ("indent at column" by
+--- default). Here "indent at column" means minimum between input column value
+--- and indent of reference line. When using cursor column, this allows for a
+--- useful interactive view of nested indent scopes by making horizontal
+--- movements within line.
 ---
 --- Options controlling actual computation is taken from these places in order:
 --- - Argument `opts`. Use it to ensure independence from other sources.
@@ -438,9 +453,10 @@ end
 ---
 ---@param line number Input line number (starts from 1). Can be modified to a
 ---   neighbor if `try_as_border` is `true`. Default: cursor line.
----@param col number Column number (starts from 1). Default: cursor column from
----   `curswant` of |getcurpos()|. This allows for more natural behavior on
----   empty lines.
+---@param col number Column number (starts from 1). Default: if
+---   `indent_at_cursor` option is `true` - cursor column from `curswant` of
+---   |getcurpos()| (allows for more natural behavior on empty lines);
+---   `math.huge` otherwise in order to not incorporate cursor in computation.
 ---@param opts table Options to override global or buffer local ones (see
 ---   |MiniIndentscope.config|).
 ---
@@ -466,7 +482,7 @@ function MiniIndentscope.get_scope(line, col, opts)
 
     -- Use `curpos[5]` (`curswant`, see `:h getcurpos()`) to account for blank
     -- and empty lines.
-    col = col or curpos[5]
+    col = col or (opts.indent_at_cursor and curpos[5] or math.huge)
   end
 
   -- Compute "indent at column"
