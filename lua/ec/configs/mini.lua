@@ -34,7 +34,7 @@ require('mini.statusline').setup({
 })
 require('mini.tabline').setup()
 
-require('mini-dev.indentscope').setup({ options = { try_as_border = true } })
+require('mini-dev.indentscope').setup()
 
 vim.defer_fn(function()
   require('mini.bufremove').setup()

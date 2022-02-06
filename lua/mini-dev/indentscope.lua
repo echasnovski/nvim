@@ -1,7 +1,28 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- Documentation ==============================================================
---- Work with indent scope.
+--- Visualize and operate on indent scope
+---
+--- Indent scope (or just "scope") is a maximum set of consecutive lines which
+--- contains certain (reference) line and every member has indent not less than
+--- certain "indent at column" (minimum between input column value and indent
+--- of reference line).
+---
+--- Features:
+--- - Visualize scope with vertical line. It is very fast and done
+---   automatically in a non-blocking way (other operations can be performed,
+---   like moving cursor). You can customize debounce delay and animation rule.
+--- - Customization of scope computation options can be done on global level
+---   (in |MiniIndentscope.config|), for a certain buffer (using
+---   `vim.b.miniindentscope_options` buffer variable), or within a call (using
+---   `opts` variable in |MiniIndentscope.get_scope|).
+--- - Customizable notion of a border: which adjacent lines with strictly lower
+---   indent are recognized as such. This is useful for a certain filetypes
+---   (for example, Python or plain text).
+--- - Customizable way lines be considered border first. This is useful if you
+---   want to place cursor on function header and get scope of its body.
+--- - There are textobjects and motions to operate on scope. Supports
+---   dot-repeat and |count| in operator pending mode.
 ---
 --- # Setup~
 ---
@@ -13,8 +34,14 @@
 ---
 --- # Disabling~
 ---
---- To disable, set `g:miniindentscope_disable` (globally) or
+--- To disable autodrawing, set `g:miniindentscope_disable` (globally) or
 --- `b:miniindentscope_disable` (for a buffer) to `v:true`.
+---
+--- To disable autodrawing in Insert mode, use these autocommands:
+--- >
+---   au InsertEnter * lua vim.b.miniindentscope_disable = true; MiniIndentscope.undraw()
+---   au InsertLeave * lua vim.b.miniindentscope_disable = false; MiniIndentscope.draw()
+--- <
 ---@tag MiniIndentscope mini.indentscope
 
 --- Drawing of scope indicator
@@ -47,9 +74,9 @@
 
 ---@alias __animation_duration number Total duration (in ms) of any animation. Default: 100.
 ---@alias __animation_type string Type of progression. One of:
----   - 'in': accelerating from zero speed.
----   - 'out': decelerating to zero speed.
----   - 'in-out': accelerating until halfway, then decelerating.
+---   - "in": accelerating from zero speed.
+---   - "out": decelerating to zero speed.
+---   - "in-out": accelerating until halfway, then decelerating.
 ---@alias __animation_function function Animation function (see |MiniIndentscope-drawing|).
 
 -- Notes about implementation:
@@ -66,7 +93,7 @@
 --       is early screen redraw after `WinScrolled` which introduced flickering
 --       when scrolling (so it was `WinScrolled` -> redraw with current
 --       extmarks -> redraw with new extmarks).
--- - Manual tests to check proper behavior (not sure how to autotest this):
+-- - Manual tests to check proper drawing (not sure how to autotest this):
 --     - Moving cursor faster than debounce delay should not initiate drawing.
 --     - Extmark on cursor line should show right after debounce delay. Other
 --       steps (if present) should use animation function.
@@ -76,6 +103,11 @@
 --       stop drawing.
 --     - Fast consecutive scrolling within big scope (try `<C-d>` and `<Down>`)
 --       shouldn't cause flicker.
+-- - Manual tests for textobjects and motions:
+--     - Dot-repeat in operator-pending mode should work (like `dii` or `d[i`
+--       and then `.` in other place).
+--     - Different options should be properly handled (like using body line
+--       when border line is not present).
 
 -- Module definition ==========================================================
 local MiniIndentscope = {}
@@ -160,10 +192,10 @@ MiniIndentscope.config = {
     -- Delay (in ms) between event and start of drawing scope indicator
     delay = 100,
 
-    -- Animation rule for scope's first drawing. A function which, given next
-    -- and total step numbers, returns wait time (in ms). See
-    -- |MiniIndentscope.animations| for builtin options. To not use animation,
-    -- supply `require('mini.indentscope').animations.none()`.
+    -- Animation rule for scope's first drawing. A function which, given
+    -- next and total step numbers, returns wait time (in ms). See
+    -- |MiniIndentscope.animations| for builtin options. To not use
+    -- animation, supply `require('mini.indentscope').animations.none()`.
     --minidoc_replace_start animation = --<function: implements constant 20ms between steps>,
     animation = function(s, n)
       return 20
@@ -171,11 +203,22 @@ MiniIndentscope.config = {
     --minidoc_replace_end
   },
 
+  -- Module mappings. Use `''` (empty string) to disable one.
+  mappings = {
+    -- Textobjects
+    object_scope = 'ii',
+    object_scope_with_border = 'ai',
+
+    -- Motions (jump to respective border line; if not present - body line)
+    goto_top = '[i',
+    goto_bottom = ']i',
+  },
+
   -- Options which control computation of scope. Buffer local values can be
   -- supplied in buffer variable `vim.b.miniindentscope_options`.
   options = {
-    -- Type of scope's border: which line(s) with smaller indent to categorize
-    -- as border. Can be one of: 'both', 'top', 'bottom', 'none'.
+    -- Type of scope's border: which line(s) with smaller indent to
+    -- categorize as border. Can be one of: 'both', 'top', 'bottom', 'none'.
     border = 'both',
 
     -- Whether to first check input line to be a border of adjacent scope.
@@ -196,8 +239,7 @@ MiniIndentscope.config = {
 --- and total step numbers, returns wait time before next step).
 --- Most of elements are analogues of some commonly used easing functions.
 ---
----@seealso |MiniIndentscope-drawing| for more information about how drawing is
----   done.
+---@seealso |MiniIndentscope-drawing| for more information about how drawing is done.
 MiniIndentscope.animations = {}
 
 --- No animation
@@ -373,9 +415,9 @@ end
 --- - Process upwards and downwards from reference line to search for line with
 ---   indent strictly less than reference one. This is like casting rays up and
 ---   down from reference line and reference indent until meeting "a wall"
----   (non-whitespace character or buffer edge). Latest line before meeting is
----   a respective end of scope body. It always exists because reference line
----   is a such one.
+---   (character to the right of indent or buffer edge). Latest line before
+---   meeting is a respective end of scope body. It always exists because
+---   reference line is a such one.
 --- - Based on top and bottom lines with strictly lower indent, construct
 ---   scopes's border. The way it is computed is decided based on `border`
 ---   option (see |MiniIndentscope.config| for more information).
@@ -523,6 +565,72 @@ function MiniIndentscope.undraw()
   H.undraw_scope()
 end
 
+--- Move cursor within scope
+---
+--- Cursor is placed on a first non-blank character of target line.
+---
+---@param side string One of "top" or "bottom".
+---@param use_border boolean Whether to move to border or withing scope's body.
+---   If particular border is absent, body is used.
+---@param scope table Scope to use. Default: output of |MiniIndentscope.get_scope()|.
+function MiniIndentscope.move_cursor(side, use_border, scope)
+  scope = scope or MiniIndentscope.get_scope()
+
+  -- This defaults to body's side if it is not present in border
+  local target_line = use_border and scope.border[side] or scope.body[side]
+  target_line = math.min(math.max(target_line, 1), vim.fn.line('$'))
+
+  vim.api.nvim_win_set_cursor(0, { target_line, 0 })
+  -- Move to first non-blank character to allow chaining scopes
+  vim.cmd([[normal! ^]])
+end
+
+--- Function for motion mappings
+---
+--- Moves to a certain side of border. Respects dot-repeat and |count| in
+--- operator-pending mode.
+---
+---@param side string One of "top" or "bottom".
+---@param add_to_jumplist boolean Whether to add movement to jump list. It is
+---   `true` only for Normal mode mappings.
+function MiniIndentscope.operator(side, add_to_jumplist)
+  local scope = MiniIndentscope.get_scope()
+
+  -- Add movement to jump list. Needs remembering `count1` before that because
+  -- it seems to reset it to 1.
+  local count1 = vim.v.count1
+  if add_to_jumplist then
+    vim.cmd('normal! m`')
+  end
+
+  -- Make sequence of jumps
+  for _ = 1, count1 do
+    MiniIndentscope.move_cursor(side, true, scope)
+    -- Use `try_as_border = false` to enable chaining
+    scope = MiniIndentscope.get_scope(nil, nil, { try_as_border = false })
+  end
+end
+
+--- Function for textobject mappings
+---
+---@param use_border boolean Whether to include border in textobject. When
+---   `true` and `try_as_border` option is `false`, allows "chaining" calls for
+---   incremental selection.
+function MiniIndentscope.textobject(use_border)
+  local scope = MiniIndentscope.get_scope()
+  H.exit_visual_mode()
+
+  if not use_border or (use_border and scope.border.bottom ~= nil) then
+    MiniIndentscope.move_cursor('top', use_border, scope)
+    vim.cmd('normal! V')
+    MiniIndentscope.move_cursor('bottom', use_border, scope)
+  else
+    MiniIndentscope.move_cursor('bottom', use_border, scope)
+    vim.cmd('normal! V')
+    MiniIndentscope.move_cursor('top', use_border, scope)
+  end
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniIndentscope.config
@@ -626,6 +734,12 @@ function H.setup_config(config)
     ['draw.delay'] = { config.draw.delay, 'number' },
     ['draw.animation'] = { config.draw.animation, 'function' },
 
+    mappings = { config.options, 'table' },
+    ['mappings.object_scope'] = { config.mappings.object_scope, 'string' },
+    ['mappings.object_scope_with_border'] = { config.mappings.object_scope_with_border, 'string' },
+    ['mappings.goto_top'] = { config.mappings.goto_top, 'string' },
+    ['mappings.goto_bottom'] = { config.mappings.goto_bottom, 'string' },
+
     options = { config.options, 'table' },
     ['options.border'] = { config.options.border, 'string' },
     ['options.try_as_border'] = { config.options.try_as_border, 'boolean' },
@@ -637,6 +751,20 @@ end
 
 function H.apply_config(config)
   MiniIndentscope.config = config
+  local maps = config.mappings
+
+  H.map('n', maps.goto_top, [[<Cmd>lua MiniIndentscope.operator('top', true)<CR>]])
+  H.map('n', maps.goto_bottom, [[<Cmd>lua MiniIndentscope.operator('bottom', true)<CR>]])
+
+  H.map('x', maps.goto_top, [[<Cmd>lua MiniIndentscope.operator('top')<CR>]], {})
+  H.map('x', maps.goto_bottom, [[<Cmd>lua MiniIndentscope.operator('bottom')<CR>]], {})
+  H.map('x', maps.object_scope, [[<Cmd>lua MiniIndentscope.textobject(false)<CR>]], {})
+  H.map('x', maps.object_scope_with_border, [[<Cmd>lua MiniIndentscope.textobject(true)<CR>]], {})
+
+  H.map('o', maps.goto_top, [[<Cmd>lua MiniIndentscope.operator('top')<CR>]], {})
+  H.map('o', maps.goto_bottom, [[<Cmd>lua MiniIndentscope.operator('bottom')<CR>]], {})
+  H.map('o', maps.object_scope, [[<Cmd>lua MiniIndentscope.textobject(false)<CR>]], {})
+  H.map('o', maps.object_scope_with_border, [[<Cmd>lua MiniIndentscope.textobject(true)<CR>]], {})
 end
 
 function H.is_disabled()
@@ -908,10 +1036,10 @@ end
 --- Imitate common power easing function
 ---
 --- Every step is preceeded by waiting time decreasing/increasing in power
---- series fashion (`d` is 'delta', ensures total duration time):
---- - 'in':  d*n^p; d*(n-1)^p; ... ; d*2^p;     d*1^p
---- - 'out': d*1^p; d*2^p;     ... ; d*(n-1)^p; d*n^p
---- - 'in-out': 'in' until 0.5*n, 'out' afterwards
+--- series fashion (`d` is "delta", ensures total duration time):
+--- - "in":  d*n^p; d*(n-1)^p; ... ; d*2^p;     d*1^p
+--- - "out": d*1^p; d*2^p;     ... ; d*(n-1)^p; d*n^p
+--- - "in-out": "in" until 0.5*n, "out" afterwards
 ---
 --- This way it imitates `power + 1` common easing function because animation
 --- progression behaves as sum of `power` elements.
@@ -946,6 +1074,23 @@ end
 -- Utilities ------------------------------------------------------------------
 function H.notify(msg)
   vim.notify(('(mini.indentscope) %s'):format(msg))
+end
+
+function H.map(mode, key, rhs, opts)
+  if key == '' then
+    return
+  end
+
+  opts = vim.tbl_deep_extend('force', { noremap = true, silent = true }, opts or {})
+  vim.api.nvim_set_keymap(mode, key, rhs, opts)
+end
+
+function H.exit_visual_mode()
+  local ctrl_v = vim.api.nvim_replace_termcodes('<C-v>', true, true, true)
+  local cur_mode = vim.fn.mode()
+  if cur_mode == 'v' or cur_mode == 'V' or cur_mode == ctrl_v then
+    vim.cmd('normal! ' .. cur_mode)
+  end
 end
 
 return MiniIndentscope
