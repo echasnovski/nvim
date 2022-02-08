@@ -19,8 +19,8 @@
 --- - Customizable notion of a border: which adjacent lines with strictly lower
 ---   indent are recognized as such. This is useful for a certain filetypes
 ---   (for example, Python or plain text).
---- - Customizable way lines be considered border first. This is useful if you
----   want to place cursor on function header and get scope of its body.
+--- - Customizable way of line to be considered "border first". This is useful
+---   if you want to place cursor on function header and get scope of its body.
 --- - There are textobjects and motions to operate on scope. Supports
 ---   dot-repeat and |count| in operator pending mode.
 ---
@@ -43,6 +43,7 @@
 ---   au InsertLeave * lua vim.b.miniindentscope_disable = false; MiniIndentscope.draw()
 --- <
 ---@tag MiniIndentscope mini.indentscope
+---@toc_entry Visualize and operate on indent scope
 
 --- Drawing of scope indicator
 ---
@@ -71,13 +72,6 @@
 ---   it can be thought as drawn at column 0 (because border indent is -1)
 ---   which is not visible.
 ---@tag MiniIndentscope-drawing
-
----@alias __animation_duration number Total duration (in ms) of any animation. Default: 100.
----@alias __animation_type string Type of progression. One of:
----   - "in": accelerating from zero speed.
----   - "out": decelerating to zero speed.
----   - "in-out": accelerating until halfway, then decelerating.
----@alias __animation_function function Animation function (see |MiniIndentscope-drawing|).
 
 -- Notes about implementation:
 -- - Tried and rejected features/optimizations:
@@ -111,7 +105,7 @@
 
 -- Module definition ==========================================================
 local MiniIndentscope = {}
-H = {}
+local H = {}
 
 --- Module setup
 ---
@@ -453,14 +447,14 @@ end
 --- Customization of duration and other general behavior of output animation
 --- function is done through `opts` argument.
 ---
----@param easing string One of supported progression strings.
+---@param easing string One of supported easing types.
 ---@param opts table Options that control progression. Possible keys:
 ---   - <duration> `(number)` - duration (in ms) of a unit. Default: 20.
 ---   - <unit> `(string)` - which unit's duration `opts.duration` controls. One
 ---     of "step" (default; ensures average duration of step to be `opts.duration`)
 ---     or "total" (ensures fixed total duration regardless of scope's range).
 ---
----@return __animation_function
+---@return function Animation function (see |MiniIndentscope-drawing|).
 ---
 --- Examples~
 --- - Don't use animation: `gen_animation('none')`
@@ -480,7 +474,7 @@ function MiniIndentscope.gen_animation(easing, opts)
     opts.unit = 'step'
   end
 
-  local parts = ({
+  local easing_calls = {
     linear           = {impl = H.animation_arithmetic_powers,  args = {0, 'in', opts}},
     quadraticIn      = {impl = H.animation_arithmetic_powers,  args = {1, 'in', opts}},
     quadraticOut     = {impl = H.animation_arithmetic_powers,  args = {1, 'out', opts}},
@@ -494,8 +488,16 @@ function MiniIndentscope.gen_animation(easing, opts)
     exponentialIn    = {impl = H.animation_geometrical_powers, args = {'in', opts}},
     exponentialOut   = {impl = H.animation_geometrical_powers, args = {'out', opts}},
     exponentialInOut = {impl = H.animation_geometrical_powers, args = {'in-out', opts}},
-  })[easing]
+  }
+  local allowed_easing_types = vim.tbl_keys(easing_calls)
+  table.sort(allowed_easing_types)
 
+  if not vim.tbl_contains(allowed_easing_types, easing) then
+    H.notify(('`easing` should be one of: %s.'):format(table.concat(allowed_easing_types, ', ')))
+    return
+  end
+
+  local parts = easing_calls[easing]
   return parts.impl(unpack(parts.args))
   --stylua: ignore end
 end
