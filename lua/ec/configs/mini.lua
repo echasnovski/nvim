@@ -33,8 +33,7 @@ require('mini.statusline').setup({
   },
 })
 require('mini.tabline').setup()
-
-require('mini-dev.indentscope').setup()
+require('mini.indentscope').setup()
 
 vim.defer_fn(function()
   require('mini.bufremove').setup()
