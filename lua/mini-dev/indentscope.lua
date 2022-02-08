@@ -55,7 +55,7 @@
 ---   line in both direction is considered to be one step of animation.
 --- - Before each step wait certain amount of time, which is decided by
 ---   "animation function". It takes next and total step numbers (both are one
----   or bigger) and return number of milliseconds to wait before drawing next
+---   or bigger) and returns number of milliseconds to wait before drawing next
 ---   step. Comparing to a more popular "easing functions" in animation (input:
 ---   duration since animation start; output: percent of animation done), it is
 ---   a discrete inverse version of its derivative. Such interface proved to be
@@ -202,10 +202,10 @@ MiniIndentscope.config = {
     -- Delay (in ms) between event and start of drawing scope indicator
     delay = 100,
 
-    -- Animation rule for scope's first drawing. A function which, given
-    -- next and total step numbers, returns wait time (in ms). See
-    -- |MiniIndentscope.animations| for builtin options. To not use
-    -- animation, supply `require('mini.indentscope').animations.none()`.
+    -- Animation rule for scope's first drawing. A function which, given next
+    -- and total step numbers, returns wait time (in ms). See
+    -- |MiniIndentscope.gen_animation()| for builtin options. To not use
+    -- animation, supply `require('mini.indentscope').gen_animation('none')`.
     --minidoc_replace_start animation = --<function: implements constant 20ms between steps>,
     animation = function(s, n)
       return 20
@@ -245,165 +245,6 @@ MiniIndentscope.config = {
   symbol = '╎',
 }
 --minidoc_afterlines_end
-
--- Module data ================================================================
---- Builtin generators of animation functions
----
---- Each element is a function which returns an animation function (takes next
---- and total step numbers, returns wait time before next step).
---- Most of elements are analogues of some commonly used easing functions.
----
----@seealso |MiniIndentscope-drawing| for more information about how drawing is done.
-MiniIndentscope.animations = {}
-
---- No animation
----
----@return __animation_function
-MiniIndentscope.animations.none = function()
-  return function()
-    return 0
-  end
-end
-
---- Animate with constant wait time between steps
----
----@param step_wait number Wait time (in ms) before every step. Default: 10.
----
----@return __animation_function
-MiniIndentscope.animations.constant_step = function(step_wait)
-  step_wait = step_wait or 10
-
-  return function(s, n)
-    return step_wait
-  end
-end
-
---- Animate with linear progression for fixed duration
----
---- Another description: wait time between steps is constant, such that total
---- duration is always `duration`.
----
----@param duration __animation_duration
----
----@return __animation_function
-MiniIndentscope.animations.linear = function(duration)
-  duration = duration or 100
-
-  -- Every step is preceeded by constant waiting time
-  return function(s, n)
-    return (duration / n)
-  end
-end
-
---- Animate with quadratic progression for fixed duration
----
---- Another description: wait time between steps is decreasing/increasing
---- linearly, such that total duration is always `duration`.
----
----@param duration __animation_duration
----@param type __animation_type
----
----@return __animation_function
-MiniIndentscope.animations.quadratic = function(duration, type)
-  duration = duration or 100
-  type = type or 'in-out'
-
-  local make_delta = function(n_steps)
-    local total = n_steps * (n_steps + 1) / 2
-    return duration / total
-  end
-
-  return H.animation_arithmetic_powers(1, make_delta, type)
-end
-
---- Animate with cubic progression for fixed duration
----
---- Another description: wait time between steps is decreasing/increasing
---- quadratically, such that total duration is always `duration`.
----
----@param duration __animation_duration
----@param type __animation_type
----
----@return __animation_function
-MiniIndentscope.animations.cubic = function(duration, type)
-  duration = duration or 100
-  type = type or 'in-out'
-
-  local make_delta = function(n_steps)
-    local total = n_steps * (n_steps + 1) * (2 * n_steps + 1) / 6
-    return duration / total
-  end
-
-  return H.animation_arithmetic_powers(2, make_delta, type)
-end
-
---- Animate with quartic progression for fixed duration
----
---- Another description: wait time between steps is decreasing/increasing
---- cubically, such that total duration is always `duration`.
----
----@param duration __animation_duration
----@param type __animation_type
----
----@return __animation_function
-MiniIndentscope.animations.quartic = function(duration, type)
-  duration = duration or 100
-  type = type or 'in-out'
-
-  local make_delta = function(n_steps)
-    local total = n_steps ^ 2 * (n_steps + 1) ^ 2 / 4
-    return duration / total
-  end
-
-  return H.animation_arithmetic_powers(3, make_delta, type)
-end
-
---- Animate with exponential progression for fixed duration
----
---- Another description: wait time between steps is decreasing/increasing
---- geometrically, such that total duration is always `duration`.
----
----@param duration __animation_duration
----@param type __animation_type
----
----@return __animation_function
-MiniIndentscope.animations.exponential = function(duration, type)
-  duration = duration or 100
-  type = type or 'in-out'
-
-  local make_delta = function(n_steps)
-    return math.pow(duration + 1, 1 / n_steps)
-  end
-
-  -- Every step is preceeded by waiting time decreasing/increasing in geometric
-  -- progression fashion (`d` is 'delta', ensures total duration time):
-  -- - 'in':  (d-1)*d^(n-1); (d-1)*d^(n-2); ...; (d-1)*d^1;     (d-1)*d^0
-  -- - 'out': (d-1)*d^0;     (d-1)*d^1;     ...; (d-1)*d^(n-2); (d-1)*d^(n-1)
-  -- - 'in-out': 'in' until 0.5*n, 'out' afterwards
-  return ({
-    ['in'] = function(s, n)
-      local delta = make_delta(n)
-      return (delta - 1) * delta ^ (n - s)
-    end,
-    ['out'] = function(s, n)
-      local delta = make_delta(n)
-      return (delta - 1) * delta ^ (s - 1)
-    end,
-    ['in-out'] = function(s, n)
-      local n_half = math.floor(0.5 * n + 0.5)
-      -- Possibly use `0.5` because `make_delta` ensures total duration time
-      -- within its input number steps.
-      local coef = n_half <= 1 and 1 or 0.5
-
-      if s <= n_half then
-        local delta = make_delta(n_half)
-        return coef * (delta - 1) * delta ^ (n_half - s)
-      end
-      local delta = make_delta(n - n_half)
-      return coef * (delta - 1) * delta ^ (s - n_half - 1)
-    end,
-  })[type]
-end
 
 -- Module functionality =======================================================
 --- Compute indent scope
@@ -565,7 +406,7 @@ end
 ---   with default arguments.
 ---@param opts table Options. Currently supported:
 ---    - <animation_fun> - animation function for drawing. See
----      |MiniIndentscope-drawing| and |MiniIndentscope.animations|.
+---      |MiniIndentscope-drawing| and |MiniIndentscope.gen_animation()|.
 function MiniIndentscope.draw(scope, opts)
   scope = scope or MiniIndentscope.get_scope()
   local draw_opts = vim.tbl_deep_extend('force', { animation_fun = MiniIndentscope.config.draw.animation }, opts or {})
@@ -579,6 +420,84 @@ end
 --- Undraw currently visible scope manually
 function MiniIndentscope.undraw()
   H.undraw_scope()
+end
+
+--- Generate builtin animation function
+---
+--- This is a builtin source to generate animation function for usage in
+--- `MiniIndentscope.config.draw.animation`. Most of them are variations of
+--- common easing functions, which provide certain type of progression for
+--- revealing scope visual indicator.
+---
+--- Supported easing types:
+--- - `'none'` - show indicator immediately. Equivalent to animation function
+---   always returning 0.
+--- - `'linear'` - linear progression.
+--- - Quadratic progression:
+---     - `'quadraticIn'` - accelerating from zero speed.
+---     - `'quadraticOut'` - decelerating to zero speed.
+---     - `'quadraticInOut'` - accelerating halfway, decelerating after.
+--- - Cubic progression:
+---     - `'cubicIn'` - accelerating from zero speed.
+---     - `'cubicOut'` - decelerating to zero speed.
+---     - `'cubicInOut'` - accelerating halfway, decelerating after.
+--- - Quartic progression:
+---     - `'quarticIn'` - accelerating from zero speed.
+---     - `'quarticOut'` - decelerating to zero speed.
+---     - `'quarticInOut'` - accelerating halfway, decelerating after.
+--- - Exponential progression:
+---     - `'exponentialIn'` - accelerating from zero speed.
+---     - `'exponentialOut'` - decelerating to zero speed.
+---     - `'exponentialInOut'` - accelerating halfway, decelerating after.
+---
+--- Customization of duration and other general behavior of output animation
+--- function is done through `opts` argument.
+---
+---@param easing string One of supported progression strings.
+---@param opts table Options that control progression. Possible keys:
+---   - <duration> `(number)` - duration (in ms) of a unit. Default: 20.
+---   - <unit> `(string)` - which unit's duration `opts.duration` controls. One
+---     of "step" (default; ensures average duration of step to be `opts.duration`)
+---     or "total" (ensures fixed total duration regardless of scope's range).
+---
+---@return __animation_function
+---
+--- Examples~
+--- - Don't use animation: `gen_animation('none')`
+--- - Use quadratic "out" easing with total duration of 1000 ms:
+---   `gen_animation('quadraticOut', { duration = 1000, unit = 'total' })`
+---
+---@seealso |MiniIndentscope-drawing| for more information about how drawing is done.
+function MiniIndentscope.gen_animation(easing, opts)
+  --stylua: ignore start
+  if easing == 'none' then
+    return function() return 0 end
+  end
+
+  opts = vim.tbl_deep_extend('force', { duration = 20, unit = 'step' }, opts or {})
+  if not vim.tbl_contains({'total', 'step'}, opts.unit) then
+    H.notify([[`opts.unit` should be one of 'step' or 'total'. Using 'step'.]])
+    opts.unit = 'step'
+  end
+
+  local parts = ({
+    linear           = {impl = H.animation_arithmetic_powers,  args = {0, 'in', opts}},
+    quadraticIn      = {impl = H.animation_arithmetic_powers,  args = {1, 'in', opts}},
+    quadraticOut     = {impl = H.animation_arithmetic_powers,  args = {1, 'out', opts}},
+    quadraticInOut   = {impl = H.animation_arithmetic_powers,  args = {1, 'in-out', opts}},
+    cubicIn          = {impl = H.animation_arithmetic_powers,  args = {2, 'in', opts}},
+    cubicOut         = {impl = H.animation_arithmetic_powers,  args = {2, 'out', opts}},
+    cubicInOut       = {impl = H.animation_arithmetic_powers,  args = {2, 'in-out', opts}},
+    quarticIn        = {impl = H.animation_arithmetic_powers,  args = {3, 'in', opts}},
+    quarticOut       = {impl = H.animation_arithmetic_powers,  args = {3, 'out', opts}},
+    quarticInOut     = {impl = H.animation_arithmetic_powers,  args = {3, 'in-out', opts}},
+    exponentialIn    = {impl = H.animation_geometrical_powers, args = {'in', opts}},
+    exponentialOut   = {impl = H.animation_geometrical_powers, args = {'out', opts}},
+    exponentialInOut = {impl = H.animation_geometrical_powers, args = {'in-out', opts}},
+  })[easing]
+
+  return parts.impl(unpack(parts.args))
+  --stylua: ignore end
 end
 
 --- Move cursor within scope
@@ -603,14 +522,20 @@ end
 
 --- Function for motion mappings
 ---
---- Moves to a certain side of border. Respects dot-repeat and |count| in
---- operator-pending mode.
+--- Move to a certain side of border. Respects dot-repeat and |count| in
+--- operator-pending mode. Doesn't move cursor for scope that is not shown (
+--- drawing indent less that zero).
 ---
 ---@param side string One of "top" or "bottom".
 ---@param add_to_jumplist boolean Whether to add movement to jump list. It is
 ---   `true` only for Normal mode mappings.
 function MiniIndentscope.operator(side, add_to_jumplist)
   local scope = MiniIndentscope.get_scope()
+
+  -- Don't support scope that can't be shown
+  if H.scope_get_draw_indent(scope) < 0 then
+    return
+  end
 
   -- Add movement to jump list. Needs remembering `count1` before that because
   -- it seems to reset it to 1.
@@ -624,16 +549,29 @@ function MiniIndentscope.operator(side, add_to_jumplist)
     MiniIndentscope.move_cursor(side, true, scope)
     -- Use `try_as_border = false` to enable chaining
     scope = MiniIndentscope.get_scope(nil, nil, { try_as_border = false })
+
+    -- Don't support scope that can't be shown
+    if H.scope_get_draw_indent(scope) < 0 then
+      return
+    end
   end
 end
 
 --- Function for textobject mappings
+---
+--- Doesn't work for scope that is not shown (drawing indent less that zero).
 ---
 ---@param use_border boolean Whether to include border in textobject. When
 ---   `true` and `try_as_border` option is `false`, allows "chaining" calls for
 ---   incremental selection.
 function MiniIndentscope.textobject(use_border)
   local scope = MiniIndentscope.get_scope()
+
+  -- Don't support scope that can't be shown
+  if H.scope_get_draw_indent(scope) < 0 then
+    return
+  end
+
   H.exit_visual_mode()
 
   if not use_border or (use_border and scope.border.bottom ~= nil) then
@@ -1015,7 +953,7 @@ function H.make_autodraw_opts(scope)
   if H.scope_has_intersect(scope, H.current.scope) then
     res.type = 'immediate'
     res.delay = 0
-    res.animation_fun = MiniIndentscope.animations.none()
+    res.animation_fun = MiniIndentscope.gen_animation('none')
     return res
   end
 
@@ -1061,11 +999,28 @@ end
 --- progression behaves as sum of `power` elements.
 ---
 ---@param power number Power of series.
----@param make_delta function Function which computes common delta so that
----   overall duration will have desired value.
----@param type __animation_type
+---@param type string One of "in", "out", "in-out".
+---@param opts table Options from `MiniIndentscope.gen_animation()`.
 ---@private
-function H.animation_arithmetic_powers(power, make_delta, type)
+function H.animation_arithmetic_powers(power, type, opts)
+  -- Sum of first `n_steps` natural numbers raised to `power`
+  --stylua: ignore start
+  local base_total_duration = ({
+    [0] = function(n_steps) return n_steps end,
+    [1] = function(n_steps) return n_steps * (n_steps + 1) / 2 end,
+    [2] = function(n_steps) return n_steps * (n_steps + 1) * (2 * n_steps + 1) / 6 end,
+    [3] = function(n_steps) return n_steps ^ 2 * (n_steps + 1) ^ 2 / 4 end,
+  })[power]
+  --stylua: ignore end
+
+  -- Function which computes common delta so that overall duration will have
+  -- desired value (based on supplied `opts`)
+  local duration_unit, duration_value = opts.unit, opts.duration
+  local make_delta = function(n_steps)
+    local d = duration_unit == 'total' and duration_value or (duration_value * n_steps)
+    return d / base_total_duration(n_steps)
+  end
+
   return ({
     ['in'] = function(s, n)
       return make_delta(n) * (n - s + 1) ^ power
@@ -1075,14 +1030,59 @@ function H.animation_arithmetic_powers(power, make_delta, type)
     end,
     ['in-out'] = function(s, n)
       local n_half = math.floor(0.5 * n + 0.5)
-      -- Possibly use `0.5` because `make_delta` ensures total duration time
-      -- within its input number steps.
-      local coef = n_half <= 1 and 1 or 0.5
+      -- Possibly use `0.5` if `make_delta` ensures total duration time within
+      -- its input number steps
+      local coef = (duration_unit == 'total' and n_half > 1) and 0.5 or 1
 
       if s <= n_half then
         return coef * make_delta(n_half) * (n_half - s + 1) ^ power
       end
       return coef * make_delta(n - n_half) * (s - n_half) ^ power
+    end,
+  })[type]
+end
+
+--- Imitate common exponential easing function
+---
+--- Every step is preceeded by waiting time decreasing/increasing in geometric
+--- progression fashion (`d` is 'delta', ensures total duration time):
+--- - 'in':  (d-1)*d^(n-1); (d-1)*d^(n-2); ...; (d-1)*d^1;     (d-1)*d^0
+--- - 'out': (d-1)*d^0;     (d-1)*d^1;     ...; (d-1)*d^(n-2); (d-1)*d^(n-1)
+--- - 'in-out': 'in' until 0.5*n, 'out' afterwards
+---
+---@param type string One of "in", "out", "in-out".
+---@param opts table Options from `MiniIndentscope.gen_animation()`.
+---@private
+function H.animation_geometrical_powers(type, opts)
+  -- Function which computes common delta so that overall duration will have
+  -- desired value (based on supplied `opts`)
+  local duration_unit, duration_value = opts.unit, opts.duration
+  local make_delta = function(n_steps)
+    local d = duration_unit == 'step' and (duration_value * n_steps) or duration_value
+    return math.pow(d + 1, 1 / n_steps)
+  end
+
+  return ({
+    ['in'] = function(s, n)
+      local delta = make_delta(n)
+      return (delta - 1) * delta ^ (n - s)
+    end,
+    ['out'] = function(s, n)
+      local delta = make_delta(n)
+      return (delta - 1) * delta ^ (s - 1)
+    end,
+    ['in-out'] = function(s, n)
+      local n_half = math.floor(0.5 * n + 0.5)
+      -- Possibly use `0.5` if `make_delta` ensures total duration time within
+      -- its input number steps
+      local coef = (duration_unit == 'total' and n_half > 1) and 0.5 or 1
+
+      if s <= n_half then
+        local delta = make_delta(n_half)
+        return coef * (delta - 1) * delta ^ (n_half - s)
+      end
+      local delta = make_delta(n - n_half)
+      return coef * (delta - 1) * delta ^ (s - n_half - 1)
     end,
   })[type]
 end
