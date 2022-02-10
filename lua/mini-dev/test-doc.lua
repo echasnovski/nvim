@@ -19,7 +19,7 @@ local M = {}
 ---   - Item 2.
 ---@param b number Number.
 ---
----@return boolean
+---@return boolean? Second ? shouldn't trigger anything.
 ---
 ---@usage `M.fun(1, 2)`
 ---@toc_entry     Entry #1
@@ -33,9 +33,10 @@ end
 --- >
 ---   require('mini.doc').setup()
 --- <
----@param x var_one
----@param y var_two
+---@param x? var_one
+---@param y? var_two
 ---@param z var_three
+---@param abc string Having ? inside comment shouldn't trigger '(optional)'.
 ---@alias var_three This alias shouldn't be applied to previous line as it is
 ---   defined after it.
 ---@text
