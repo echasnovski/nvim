@@ -46,10 +46,6 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Common dependency for Lua plugins
   packadd('plenary')
 
-  -- Start screen and session manager
-  -- packadd('vim-startify')
-  -- packadd('alpha-nvim')
-
   -- Updater of current working directory
   packadd('vim-rooter')
 
@@ -89,9 +85,6 @@ if vim.fn.exists('vscode') ~= 1 then
 
   -- Usage of external actions (formatting, diagnostics, etc.)
   packadd_defer('null-ls')
-
-  -- Enhanced diagnostics lists
-  packadd_defer('trouble')
 
   -- Todo (and other notes) highlighting
   packadd_defer('todo-comments')

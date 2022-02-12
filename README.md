@@ -1,6 +1,6 @@
 # NeoVim setup
 
-This is a setup for Neovim>=0.5. Current structure (might be a bit outdated):
+This is a setup for Neovim>=0.6. Current structure (might be a bit outdated):
 
 ```
 after/                  # Everything that will be sourced last (`:h after-directory`)

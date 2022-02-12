@@ -19,11 +19,8 @@ EC.leader_nmap.b = {
 -- e is for 'explore'
 EC.leader_nmap.e = {
   ['name'] = '+explore',
-  ['P'] = { [[<Cmd>TroubleToggle lsp_document_diagnostics<CR>]],              'problems document' },
-  ['n'] = { [[<Cmd>TroubleToggle todo<CR>]],                                  'notes (todo, etc.)' },
-  ['p'] = { [[<Cmd>TroubleToggle lsp_workspace_diagnostics_diagnostics<CR>]], 'problems workspace' },
-  ['t'] = { [[<Cmd>NvimTreeToggle<CR>]],                                      'tree' },
-  ['u'] = { [[<Cmd>UndotreeToggle<CR>]],                                      'undo-tree' },
+  ['t'] = { [[<Cmd>NvimTreeToggle<CR>]], 'tree' },
+  ['u'] = { [[<Cmd>UndotreeToggle<CR>]], 'undo-tree' },
 }
 
 -- f is for 'fuzzy find'
@@ -35,8 +32,8 @@ EC.leader_nmap.f = {
   ['B'] = { [[<Cmd>Telescope current_buffer_fuzzy_find<CR>]], 'open buffers' },
   ['c'] = { [[<Cmd>Telescope git_commits<CR>]],               'commits' },
   ['C'] = { [[<Cmd>Telescope git_bcommits<CR>]],              'buffer commits' },
-  ['d'] = { [[<Cmd>Telescope lsp_workspace_diagnostics<CR>]], 'diagnostic workspace' },
-  ['D'] = { [[<Cmd>Telescope lsp_document_diagnostics<CR>]],  'diagnostic buffer' },
+  ['d'] = { [[<Cmd>Telescope diagnostics<CR>]],               'diagnostic workspace' },
+  ['D'] = { [[<Cmd>Telescope diagnostics bufnr=0<CR>]],       'diagnostic buffer' },
   -- Custom function defined in 'nvim-telescope' config
   ['f'] = { [[<Cmd>lua EC.telescope_project_files()<cr>]],    'files' },
   ['g'] = { [[<Cmd>Telescope live_grep<CR>]],                 'grep search' },
@@ -81,15 +78,15 @@ EC.leader_nmap.g = {
 -- l is for 'LSP' (Language Server Protocol)
 EC.leader_nmap.l = {
   ['name'] = '+LSP',
-  ['f'] = { [[<Cmd>lua vim.lsp.buf.formatting()<CR>]],                   'format' },
-  ['R'] = { [[<Cmd>lua vim.lsp.buf.references()<CR>]],                   'references' },
-  ['a'] = { [[<Cmd>lua vim.lsp.buf.signature_help()<CR>]],               'arguments popup' },
-  ['d'] = { [[<Cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>]], 'diagnostics popup' },
-  ['i'] = { [[<Cmd>lua vim.lsp.buf.hover()<CR>]],                        'information' },
-  ['j'] = { [[<Cmd>lua vim.lsp.diagnostic.goto_next()<CR>]],             'next diagnostic' },
-  ['k'] = { [[<Cmd>lua vim.lsp.diagnostic.goto_prev()<CR>]],             'prev diagnostic' },
-  ['r'] = { [[<Cmd>lua vim.lsp.buf.rename()<CR>]],                       'rename' },
-  ['s'] = { [[<Cmd>lua vim.lsp.buf.definition()<CR>]],                   'source definition' },
+  ['f'] = { [[<Cmd>lua vim.lsp.buf.formatting()<CR>]],     'format' },
+  ['R'] = { [[<Cmd>lua vim.lsp.buf.references()<CR>]],     'references' },
+  ['a'] = { [[<Cmd>lua vim.lsp.buf.signature_help()<CR>]], 'arguments popup' },
+  ['d'] = { [[<Cmd>lua vim.diagnostic.open_float()<CR>]],  'diagnostics popup' },
+  ['i'] = { [[<Cmd>lua vim.lsp.buf.hover()<CR>]],          'information' },
+  ['j'] = { [[<Cmd>lua vim.diagnostic.goto_next()<CR>]],   'next diagnostic' },
+  ['k'] = { [[<Cmd>lua vim.diagnostic.goto_prev()<CR>]],   'prev diagnostic' },
+  ['r'] = { [[<Cmd>lua vim.lsp.buf.rename()<CR>]],         'rename' },
+  ['s'] = { [[<Cmd>lua vim.lsp.buf.definition()<CR>]],     'source definition' },
 }
 
 EC.leader_xmap.l = {

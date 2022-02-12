@@ -19,9 +19,6 @@
 [submodule "pack/plugins/opt/todo-comments"]
 	path = pack/plugins/opt/todo-comments
 	url = https://github.com/folke/todo-comments.nvim
-[submodule "pack/plugins/opt/trouble"]
-	path = pack/plugins/opt/trouble
-	url = https://github.com/folke/trouble.nvim
 [submodule "pack/plugins/opt/nvim-treesitter"]
 	path = pack/plugins/opt/nvim-treesitter
 	url = https://github.com/nvim-treesitter/nvim-treesitter
