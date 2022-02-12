@@ -56,20 +56,13 @@ lspconfig.r_language_server.setup({
 lspconfig.pyright.setup({ on_attach = on_attach_custom })
 
 -- Lua (sumneko_lua) ==========================================================
--- Should be built and run manually:
--- https://github.com/sumneko/lua-language-server/wiki/Build-and-Run-(Standalone)
--- Should be cloned into '.config/nvim/misc' as 'lua-language-server' directory.
+-- Expected to use precompiled binaries from Github releases:
+-- https://github.com/sumneko/lua-language-server/wiki/PreCompiled-Binaries
+-- Should be extracted into '.config/nvim/misc' as 'lua-language-server' directory.
 -- Code structure is taken from https://www.chrisatmachine.com/Neovim/28-neovim-lua-development/
 local sumneko_root = vim.fn.expand('$HOME/.config/nvim/misc/lua-language-server')
 if vim.fn.isdirectory(sumneko_root) == 1 then
-  local sumneko_binary = ''
-  if vim.fn.has('mac') == 1 then
-    sumneko_binary = sumneko_root .. '/bin/macOS/lua-language-server'
-  elseif vim.fn.has('unix') == 1 then
-    sumneko_binary = sumneko_root .. '/bin/Linux/lua-language-server'
-  else
-    print('Unsupported system for sumneko')
-  end
+  local sumneko_binary = sumneko_root .. '/bin/lua-language-server'
 
   lspconfig.sumneko_lua.setup({
     cmd = { sumneko_binary, '-E', sumneko_root .. '/main.lua' },
