@@ -16,7 +16,7 @@ vim.g.nvim_tree_icons = { default = '' }
 -- (might break if 'nvim-tree' is major refactored)
 local get_node = require('nvim-tree.lib').get_node_at_cursor
 local has_children = function(node)
-  return type(node.entries) == 'table' and vim.tbl_count(node.entries) > 0
+  return type(node.nodes) == 'table' and vim.tbl_count(node.nodes) > 0
 end
 
 local key_down = vim.api.nvim_replace_termcodes('<Down>', true, true, true)
