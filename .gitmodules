@@ -73,9 +73,6 @@
 [submodule "pack/plugins/opt/luasnip"]
 	path = pack/plugins/opt/luasnip
 	url = https://github.com/L3MON4D3/LuaSnip
-[submodule "pack/plugins/opt/vim-doge"]
-	path = pack/plugins/opt/vim-doge
-	url = https://github.com/kkoomen/vim-doge
 [submodule "pack/plugins/opt/vim-test"]
 	path = pack/plugins/opt/vim-test
 	url = https://github.com/vim-test/vim-test
@@ -100,3 +97,6 @@
 [submodule "pack/plugins/opt/mini"]
 	path = pack/plugins/opt/mini
 	url = https://github.com/echasnovski/mini.nvim
+[submodule "pack/plugins/opt/neogen"]
+	path = pack/plugins/opt/neogen
+	url = https://github.com/danymat/neogen.git

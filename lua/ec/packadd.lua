@@ -99,9 +99,7 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd_defer('luasnip')
 
   -- Documentation generator
-  -- Disable mappings, should be run before adding package
-  vim.g.doge_enable_mappings = 0
-  packadd_defer('vim-doge')
+  packadd_defer('neogen')
 
   -- Test runner
   packadd_defer('vim-test')
@@ -133,9 +131,6 @@ local plugin_hooks = function()
   if vim.fn.exists('vscode') ~= 1 then
     -- Ensure most recent treesitter parsers
     vim.cmd('silent TSUpdate')
-
-    -- -- Ensure most recent 'vim-doge'
-    -- vim.cmd('silent call doge#install()')
 
     -- -- Ensure most recent markdown-preview
     -- -- NOTE: this worked before moving to 'pack/plugins/opt' structure.  After
