@@ -25,24 +25,15 @@ local diagnostic_opts = {
     -- With highest priority
     priority = 9999,
     -- Only for warnings and errors
-    severity_limit = 'Warning',
+    severity = { min = 'WARN', max = 'ERROR' },
   },
   -- Show virtual text only for errors
-  virtual_text = { severity_limit = 'Error' },
+  virtual_text = { severity = { min = 'ERROR', max = 'ERROR' } },
   -- Don't update diagnostics when typing
   update_in_insert = false,
 }
 
-if vim.fn.has('nvim-0.6') == 1 then
-  diagnostic_opts.signs.severity = { min = 'WARN', max = 'ERROR' }
-  diagnostic_opts.virtual_text.severity = { min = 'ERROR', max = 'ERROR' }
-  vim.diagnostic.config(diagnostic_opts)
-else
-  vim.lsp.handlers['textDocument/publishDiagnostics'] = vim.lsp.with(
-    vim.lsp.diagnostic.on_publish_diagnostics,
-    diagnostic_opts
-  )
-end
+vim.diagnostic.config(diagnostic_opts)
 
 -- R (r_language_server) ======================================================
 lspconfig.r_language_server.setup({
