@@ -58,4 +58,6 @@ vim.defer_fn(function()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   require('mini.surround').setup()
   require('mini.trailspace').setup()
+
+  require('mini-dev.jump2d').setup()
 end, 0)
