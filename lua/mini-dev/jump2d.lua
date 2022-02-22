@@ -1,9 +1,33 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- Documentation ==============================================================
---- Jump to any visible position
+--- Custom minimal and fast Lua plugin for jumping within visible lines. Main
+--- inspiration for it is a 'phaazon/hop.nvim' plugin, but this module has a
+--- slightly different idea about how eventual jump spot is be chosen.
 ---
---- Somewhat similar to 'hop.nvim', but with different algorithms.
+--- Features:
+--- - Make jump by sequential filtering of allowed jump spots until there is
+---   only one. Filtering is done by typing a label character that is
+---   visualized over jump spot.
+--- - Customizable:
+---     - Way of computing allowed jump spots.
+---     - Characters used to label jump spots during sequential filtering.
+---     - Action hooks to be executed at certain events during jump.
+---     - And more.
+--- - Works in Visual and Operator-pending modes for default mapping.
+---
+--- General overview of how jump is performed:
+--- - Lock eyes on desired location ("spot") recognizable by future jump.
+---   Should be within visible lines at place where cursor can be put.
+--- - Initiate jump. Either by custom keybinding or with a call to
+---   |MiniJump2d.start()| (takes options allowing for customization). This
+---   will highlight all possible jump spots with their labels (letters from
+---   "a" to "z" by default).
+--- - Type character that appeared over desired location. If its label was
+---   unique, jump is performed. If it wasn't unique, allowed jump spots are
+---   filtered to those having the same label character.
+--- - Repeat previous step until there is only single allowed jump spot or type
+---   `<CR>` to jump to first allowed jump spot.
 ---
 --- # Setup~
 ---
@@ -15,6 +39,11 @@
 --- # Comparisons~
 ---
 --- - 'phaazon/hop.nvim':
+---     - Both are fast and customizable.
+---     - Both have several builtin ways to specify type of jump (word start,
+---       line start, one character or query based on user input).
+---     - Algorithm used to define
+---     - TODO: Main differences ...
 ---
 --- # Highlight groups~
 ---
@@ -33,7 +62,7 @@
 --- recipes.
 ---@tag mini.jump2d
 ---@tag MiniJump2d
----@toc_entry Jump to any visible position
+---@toc_entry Jump within visible lines
 
 -- Module definition ==========================================================
 local MiniJump2d = {}
@@ -67,7 +96,8 @@ MiniJump2d.config = {
   -- If `nil` (default) - spot all alphanumeric characters
   spotter = nil,
 
-  encoders = 'abcdefghijklmnopqrstuvwxyz',
+  -- Characters used for jump spots labels (in that order)
+  labels = 'abcdefghijklmnopqrstuvwxyz',
 
   -- Which lines are used for spots
   allowed_lines = {
@@ -78,9 +108,14 @@ MiniJump2d.config = {
     cursor_after = true, -- Lines after cursor line
   },
 
+  -- Whether to use all visible windows
   all_visible_windows = true,
 
-  after_jump_hook = nil,
+  -- Functions to be executed at certain events
+  hooks = {
+    before_start = nil, -- Before jump start
+    after_jump = nil, -- After jump was actually done
+  },
 
   -- Module mappings. Use `''` (empty string) to disable one.
   mappings = {
@@ -91,61 +126,157 @@ MiniJump2d.config = {
 
 -- Module functionality =======================================================
 function MiniJump2d.start(opts)
-  opts = vim.tbl_deep_extend('force', MiniJump2d.config, opts or {})
-  opts.spotter = opts.spotter or MiniJump2d.gen_spotter_pattern()
+  if H.is_disabled() then
+    return
+  end
+
+  opts = opts or {}
+
+  -- Apply `before_start` before `tbl_deep_extend` to allow it modify options
+  -- inside it (notably `spotter`). Example: `builtins.single_character`.
+  local before_start = (opts.hooks or {}).before_start or MiniJump2d.config.hooks.before_start
+  if before_start ~= nil then
+    before_start()
+  end
+
+  opts = vim.tbl_deep_extend('force', MiniJump2d.config, opts)
+  opts.spotter = opts.spotter or MiniJump2d.gen_pattern_spotter()
   opts.hl_group = opts.hl_group or 'MiniJump2dSpot'
 
   local spots = H.spots_compute(opts)
-  spots = H.spots_encode(spots, opts)
+  spots = H.spots_label(spots, opts)
 
   H.spots_show(spots, opts)
 
   H.current.spots = spots
+
   -- Defer advancing jump to allow drawing before invoking `getcharstr()`.
-  -- This is much faster than having to call `vim.cmd('redraw')`
-  vim.defer_fn(function()
+  -- This is much faster than having to call `vim.cmd('redraw')`.
+  -- Don't do that in Operator-pending mode because it doesn't work otherwise.
+  if H.is_operator_pending() then
     H.advance_jump(opts)
-  end, 0)
+  else
+    vim.defer_fn(function()
+      H.advance_jump(opts)
+    end, 0)
+  end
 end
 
-function MiniJump2d.gen_spotter_pattern(pattern)
+--- Generate spotter for Lua pattern
+---
+---@param pattern string Lua pattern. Default: `'[^%s%p]+'` which matches group
+---   of "non-whitespace non-punctuation characters" (basically a way of saying
+---   "group of alphanumeric characters" that works with multibyte characters).
+---@param side string Which side of pattern match should be considered as
+---   jumping spot. Should be one of 'start' (start of match, default), 'end'
+---   (inclusive end of match), or 'none' (match for spot is done manually
+---   inside pattern with plain `()` matching group).
+---
+---@usage - Match any punctuation:
+---   `MiniJump2d.gen_pattern_spotter('%p')`
+--- - Match first non-whitespace character:
+---   `MiniJump2d.gen_pattern_spotter('^%s*%S', 'end')`
+--- - Match start of last word:
+---   `MiniJump2d.gen_pattern_spotter('[^%s%p]+[%s%p]-$', 'start')`
+--- - Match letter followed by another letter (example of manual matching
+---   inside pattern):
+---   `MiniJump2d.gen_pattern_spotter('%a()%a', 'none')`
+function MiniJump2d.gen_pattern_spotter(pattern, side)
   -- Don't use `%w` to account for multibyte characters
   pattern = pattern or '[^%s%p]+'
+  side = side or 'start'
 
-  -- Process patterns which start with `^` separately because they won't be
-  -- processed correctly in the following code due to manual `()` prefix
-  if pattern:sub(1, 1) == '^' then
+  -- Process anchored patterns separately because:
+  -- - `gmatch()` doesn't work if pattern start with `^`.
+  -- - Manual adding of `()` will conflict with anchors.
+  local is_anchored = pattern:sub(1, 1) == '^' or pattern:sub(-1, -1) == '$'
+  if is_anchored then
     return function(line_num, args)
       local line = vim.fn.getline(line_num)
-      return line:find(pattern) ~= nil and { 1 } or {}
+      local s, e, m = line:find(pattern)
+      return { ({ ['start'] = s, ['end'] = e, ['none'] = m })[side] }
     end
   end
 
-  -- `()` means match position inside input string
-  local matching_pattern = '()' .. pattern
+  -- Handle `side = 'end'` later by appending length of match to match start.
+  -- This, unlike appending `()` to end of pattern, makes output spot to be
+  -- inside matched pattern.
+  -- Having `(%s)` for `side = 'none'` is for compatibility with later `gmatch`
+  local pattern_template = side == 'none' and '(%s)' or '(()%s)'
+  pattern = pattern_template:format(pattern)
 
   return function(line_num, args)
     local line = vim.fn.getline(line_num)
     local res = {}
-    for i in string.gmatch(line, matching_pattern) do
+    -- NOTE: maybe a more straightforward approach would be a series of
+    -- `line:find(original_pattern, init)` with moving `init`, but it has some
+    -- weird behavior with quantifiers.
+    -- For example: `string.find('  --', '%s*', 4)` returns `4 3`.
+    for whole, spot in string.gmatch(line, pattern) do
+      -- Correct spot to be index of last matched position
+      local correction = side == 'end' and math.max(whole:len() - 1, 0) or 0
+      spot = spot + correction
+
       -- Ensure that index is strictly within line length (which can be not
       -- true in case of weird pattern, like when using frontier `%f[%W]`)
-      i = math.min(math.max(i, 0), line:len())
+      spot = math.min(math.max(spot, 0), line:len())
+
       -- Add spot only if it referces new actually visible column. Deals with
       -- multibyte characters.
-      if vim.str_utfindex(line, i) ~= vim.str_utfindex(line, res[#res]) then
-        table.insert(res, i)
+      if vim.str_utfindex(line, spot) ~= vim.str_utfindex(line, res[#res]) then
+        table.insert(res, spot)
       end
     end
     return res
   end
 end
 
-function MiniJump2d.gen_spotter_line_start()
-  return function(line_num, args)
+--- Table with builtin `opts` for |MiniJump2d.start()|
+---
+---@usage MiniJump2d.start(MiniJump2d.builtin_opts.line_start)
+MiniJump2d.builtin_opts = {}
+
+--- Jump to line start
+MiniJump2d.builtin_opts.line_start = {
+  spotter = function(line_num, args)
     return { 1 }
-  end
+  end,
+  hooks = {
+    after_jump = function()
+      -- Move to first non-blank character
+      vim.cmd('normal! ^')
+    end,
+  },
+}
+
+-- Produce `opts` which modifies spotter based on user input
+local function user_input_opts(input_fun)
+  local res = {
+    spotter = function()
+      return {}
+    end,
+    allowed_lines = { blank = false, fold = false },
+  }
+
+  res.hooks = {
+    before_start = function()
+      local pattern = vim.pesc(input_fun())
+      res.spotter = MiniJump2d.gen_pattern_spotter(pattern)
+    end,
+  }
+
+  return res
 end
+
+--- Jump to single character taken from user input
+MiniJump2d.builtin_opts.single_character = user_input_opts(function()
+  return H.getcharstr('Enter single character to search')
+end)
+
+--- Jump to query taken from user input
+MiniJump2d.builtin_opts.query = user_input_opts(function()
+  return vim.fn.input('(mini.jump2d) Enter query to search: ', '')
+end)
 
 -- Helper data ================================================================
 -- Module default config
@@ -158,7 +289,10 @@ H.ns_id = vim.api.nvim_create_namespace('MiniJump2d')
 H.current = {}
 
 -- Table with special keys
-H.keys = { cr = vim.api.nvim_replace_termcodes('<CR>', true, true, true) }
+H.keys = {
+  cr = vim.api.nvim_replace_termcodes('<CR>', true, true, true),
+  block_operator_pending = vim.api.nvim_replace_termcodes('no<C-V>', true, true, true),
+}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -170,7 +304,8 @@ function H.setup_config(config)
 
   vim.validate({
     spotter = { config.spotter, 'function', true },
-    encoders = { config.encoders, 'string' },
+
+    labels = { config.labels, 'string' },
 
     allowed_lines = { config.allowed_lines, 'table' },
     ['allowed_lines.blank'] = { config.allowed_lines.blank, 'boolean' },
@@ -181,7 +316,9 @@ function H.setup_config(config)
 
     all_visible_windows = { config.all_visible_windows, 'boolean' },
 
-    after_jump_hook = { config.after_jump_hook, 'function', true },
+    hooks = { config.hooks, 'table' },
+    ['hooks.before_start'] = { config.hooks.before_start, 'function', true },
+    ['hooks.after_jump'] = { config.hooks.after_jump, 'function', true },
 
     mappings = { config.mappings, 'table' },
     ['mappings.start_jumping'] = { config.mappings.start_jumping, 'string' },
@@ -226,18 +363,18 @@ function H.spots_compute(opts)
   return res
 end
 
-function H.spots_encode(spots, opts)
-  local encode_tbl = vim.split(opts.encoders, '')
+function H.spots_label(spots, opts)
+  local label_tbl = vim.split(opts.labels, '')
 
-  -- Example: with 3 encoders codes should progress with progressing of number
-  -- of spots like this: 'a', 'ab', 'abc', 'aabc', 'aabbc', 'aabbcc',
+  -- Example: with 3 label characters labels should progress with progressing
+  -- of number of spots like this: 'a', 'ab', 'abc', 'aabc', 'aabbc', 'aabbcc',
   -- 'aaabbcc', 'aaabbbcc', 'aaabbbccc', etc.
-  local n_spots, n_encoders = #spots, #encode_tbl
-  local base, extra = math.floor(n_spots / n_encoders), n_spots % n_encoders
+  local n_spots, n_label_chars = #spots, #label_tbl
+  local base, extra = math.floor(n_spots / n_label_chars), n_spots % n_label_chars
   local cur_id, cur_id_count = 1, 0
   for _, s in ipairs(spots) do
     cur_id_count = cur_id_count + 1
-    s.code = encode_tbl[cur_id]
+    s.label = label_tbl[cur_id]
     if cur_id_count >= (base + (cur_id <= extra and 1 or 0)) then
       cur_id, cur_id_count = cur_id + 1, 0
     end
@@ -263,6 +400,12 @@ function H.spots_show(spots, opts)
     }
     pcall(vim.api.nvim_buf_set_extmark, extmark.buf_id, H.ns_id, extmark.line, extmark.col, extmark_opts)
   end
+
+  -- Need to redraw in Operator-pending mode, because otherwise extmarks won't
+  -- be shown and deferring disable this mode.
+  if H.is_operator_pending() then
+    vim.cmd('redraw')
+  end
 end
 
 function H.spots_unshow(spots)
@@ -287,21 +430,21 @@ function H.spots_to_extmarks(spots)
   local res = {}
 
   local buf_id, line, col = spots[1].buf_id, spots[1].line - 1, spots[1].column - 1
-  local extmark_codes = {}
+  local extmark_chars = {}
   local cur_col = col
   for _, s in ipairs(spots) do
     local is_new_extmark_start = not (s.buf_id == buf_id and s.line == (line + 1) and s.column == (cur_col + 1))
 
     if is_new_extmark_start then
-      table.insert(res, { buf_id = buf_id, col = col, line = line, text = table.concat(extmark_codes) })
+      table.insert(res, { buf_id = buf_id, col = col, line = line, text = table.concat(extmark_chars) })
       buf_id, line, col = s.buf_id, s.line - 1, s.column - 1
-      extmark_codes = {}
+      extmark_chars = {}
     end
 
-    table.insert(extmark_codes, s.code)
+    table.insert(extmark_chars, s.label)
     cur_col = s.column
   end
-  table.insert(res, { buf_id = buf_id, col = col, line = line, text = table.concat(extmark_codes) })
+  table.insert(res, { buf_id = buf_id, col = col, line = line, text = table.concat(extmark_chars) })
 
   return res
 end
@@ -336,7 +479,7 @@ end
 
 -- Jump state -----------------------------------------------------------------
 function H.advance_jump(opts)
-  local encode_tbl = vim.split(opts.encoders, '')
+  local label_tbl = vim.split(opts.labels, '')
 
   local spots = H.current.spots
 
@@ -346,25 +489,30 @@ function H.advance_jump(opts)
     return
   end
 
-  local key = H.getchar()
+  local key = H.getcharstr('Enter encoding symbol to advance jump')
 
-  if vim.tbl_contains(encode_tbl, key) then
+  if vim.tbl_contains(label_tbl, key) then
     H.spots_unshow(spots)
     spots = vim.tbl_filter(function(x)
-      return x.code == key
+      return x.label == key
     end, spots)
 
     if #spots > 1 then
-      spots = H.spots_encode(spots, opts)
+      spots = H.spots_label(spots, opts)
       H.spots_show(spots, opts)
       H.current.spots = spots
 
       -- Defer advancing jump to allow drawing before invoking `getcharstr()`.
-      -- This is much faster than having to call `vim.cmd('redraw')`
-      vim.defer_fn(function()
+      -- This is much faster than having to call `vim.cmd('redraw')`. Don't do that
+      -- in Operator-pending mode because it doesn't work otherwise.
+      if H.is_operator_pending() then
         H.advance_jump(opts)
-      end, 0)
-      return
+      else
+        vim.defer_fn(function()
+          H.advance_jump(opts)
+        end, 0)
+        return
+      end
     end
   end
 
@@ -375,8 +523,8 @@ function H.advance_jump(opts)
     vim.api.nvim_win_set_cursor(first_spot.win_id, { first_spot.line, first_spot.column - 1 })
     -- Possibly unfold to see cursor
     vim.cmd([[normal! zv]])
-    if opts.after_jump_hook ~= nil then
-      opts.after_jump_hook()
+    if opts.hooks.after_jump ~= nil then
+      opts.hooks.after_jump()
     end
   end
 
@@ -389,14 +537,19 @@ function H.notify(msg)
   vim.notify(('(mini.jump2d) %s'):format(msg))
 end
 
-function H.getchar()
+function H.is_operator_pending()
+  return vim.tbl_contains({ 'no', 'noV', H.keys.block_operator_pending }, vim.fn.mode(1))
+end
+
+function H.getcharstr(msg)
   local needs_help_msg = true
-  vim.defer_fn(function()
-    if not needs_help_msg then
-      return
-    end
-    H.notify('Enter encoding symbol to advance jump')
-  end, 1000)
+  if msg ~= nil then
+    vim.defer_fn(function()
+      if needs_help_msg then
+        H.notify(msg)
+      end
+    end, 1000)
+  end
 
   local key = vim.fn.getcharstr()
   needs_help_msg = false
