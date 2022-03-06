@@ -6,9 +6,9 @@
 --- module has a slightly different idea about how target jump spot is chosen.
 ---
 --- Features:
---- - Make jump by iterative filtering of possible jump spots until there is
----   only one. Filtering is done by typing a label character that is
----   visualized over jump spot.
+--- - Make jump by iterative filtering of possible, equally considered jump
+---   spots until there is only one. Filtering is done by typing a label
+---   character that is visualized over jump spot.
 --- - Customizable:
 ---     - Way of computing possible jump spots.
 ---     - Characters used to label jump spots during iterative filtering.
@@ -44,22 +44,28 @@
 ---       ways to define jump spots).
 ---     - Both have several builtin ways to specify type of jump (word start,
 ---       line start, one character or query based on user input).
----     - 'hop.nvim' computes labels (called "hints") differently. It uses
----       specialized algorithm that produces sequence of keys in a slightly
----       biased manner: some sequences are intentionally shorter than the
----       others. They are put near cursor (by default) and highlighted
----       differently. Also distribution of all sequences is computed based on
----       distance to the cursor.
+---     - 'hop.nvim' computes labels (called "hints") differently. Contrary to
+---       this module explicitly not having preference of one jump spot over
+---       another, 'hop.nvim' uses specialized algorithm that produces sequence
+---       of keys in a slightly biased manner: some sequences are intentionally
+---       shorter than the others (leading to fewer average keystrokes). They
+---       are put near cursor (by default) and highlighted differently. Final
+---       order of sequences is based on distance to the cursor.
 ---     - 'hop.nvim' also visualizes labels differently. It is designed to show
----       whole sequences at once.
+---       whole sequences at once, while this module intentionally show only
+---       current one at a time.
 ---
 --- # Highlight groups~
 ---
---- - `MiniJump2dSpot` - highlighting of default jump spots. By default it
----   inverts highlighting of underlying character. If it adds too much visual
----   noise, try couplel of these alternatives (or choose your own, of course):
----   `hi MiniJump2dSpot gui=undercurl guisp=red` - red undercurl
+--- - `MiniJump2dSpot` - highlighting of default jump spots. By default it creates
+---   label with highest contrast while not being too visually demanding: white
+---   on black for dark 'background', black on white for light. If it doesn't
+---   suit your liking, try couple of these alternatives (or choose your own,
+---   of course):
+---   `hi MiniJump2dSpot gui=reverse` - reverse underlying highlighting (more
+---     colorful while being visible in any colorscheme)
 ---   `hi MiniJump2dSpot gui=bold,italic` - bold italic
+---   `hi MiniJump2dSpot gui=undercurl guisp=red` - red undercurl
 ---
 --- # Disabling~
 ---
@@ -92,7 +98,11 @@ function MiniJump2d.setup(config)
   H.apply_config(config)
 
   -- Create highlighting
-  vim.api.nvim_exec('hi default MiniJump2dSpot gui=reverse', false)
+  local hl_cmd = 'hi default MiniJump2dSpot guifg=white guibg=black gui=nocombine'
+  if vim.o.background == 'light' then
+    hl_cmd = 'hi default MiniJump2dSpot guifg=black guibg=white gui=nocombine'
+  end
+  vim.api.nvim_exec(hl_cmd, false)
 end
 
 --- Module config
@@ -189,9 +199,10 @@ MiniJump2d.config = {
 ---   "position in `spotter` output" tuples.
 --- - For each possible jump compute its label: a single character from
 ---   `labels` option used to filter jump spots. Each possible label character
----   might be used several times for "consecutive" jump spots. It is done in a
----   way that minimizes average number of keystrokes needed to iteratively
----   filter single jump spot. It depends only on number of jump spots.
+---   might be used more than once to label several "consecutive" jump spots.
+---   It is done in an optimal way under assumption of no preference of one
+---   spot over another. Basically, it means "use all labels at each step of
+---   iterative filtering as equally as possible".
 ---
 --- Visualization~
 ---
