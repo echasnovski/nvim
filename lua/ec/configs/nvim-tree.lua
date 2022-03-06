@@ -9,7 +9,6 @@ vim.g.nvim_tree_show_icons = {
   folders = 1,
   files = 1,
 }
-vim.g.nvim_tree_quit_on_open = 1
 vim.g.nvim_tree_icons = { default = '' }
 
 -- Define Custom functions to simulate ranger's "going in" and "going out"
@@ -77,6 +76,11 @@ nvim_tree.setup({
         { key = 'l', cb = '<cmd>lua EC.nvim_tree_go_in()<CR>' },
         { key = 'h', cb = '<cmd>lua EC.nvim_tree_go_out()<CR>' },
       },
+    },
+  },
+  actions = {
+    open_file = {
+      quit_on_open = true,
     },
   },
 })
