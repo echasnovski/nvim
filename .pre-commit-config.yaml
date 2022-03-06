@@ -3,6 +3,6 @@ repos:
     hooks:
       - id: stylua
         name: StyLua
-        language: rust
+        language: system
         entry: stylua
         types: [lua]
