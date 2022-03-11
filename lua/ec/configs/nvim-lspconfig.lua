@@ -75,8 +75,8 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
           path = vim.split(package.path, ';'),
         },
         diagnostics = {
-          -- Get the language server to recognize the `vim` global
-          globals = { 'vim' },
+          -- Get the language server to recognize common globals
+          globals = { 'vim', 'describe', 'it', 'before_each', 'after_each' },
         },
         workspace = {
           -- Don't analyze code from submodules

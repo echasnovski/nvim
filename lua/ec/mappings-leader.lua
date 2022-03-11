@@ -94,6 +94,15 @@ EC.leader_xmap.l = {
   f = { [[:lua vim.lsp.buf.range_formatting()<CR>]], 'format selection' },
 }
 
+-- m is for 'make'
+EC.leader_nmap.m = {
+  ['name'] = '+Make',
+  ['d'] = { [[<Cmd>T make documentation<CR>]],    'make doc' },
+  ['m'] = { [[<Cmd>T make<CR>]],                  'make' },
+  ['t'] = { [[<Cmd>T make test<CR>]],             'make test' },
+  ['T'] = { [[<Cmd>T make FILE=% test_file<CR>]], 'make test file' },
+}
+
 -- o is for 'other'
 EC.leader_nmap.o = {
   ['name'] = '+other',

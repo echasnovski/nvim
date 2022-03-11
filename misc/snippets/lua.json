@@ -68,5 +68,15 @@
     "prefix": "l",
     "body": "local $1 = $0",
     "description": "local x = 1"
+  },
+  "describe": {
+    "prefix": "desc",
+    "body": "describe('$1', function()\n\t$0\nend)",
+    "description": "(busted) describe test"
+  },
+  "it": {
+    "prefix": "it",
+    "body": "it('$1', function()\n\t$0\nend)",
+    "description": "(busted) it test"
   }
 }
