@@ -366,7 +366,9 @@ end
 ---
 --- Spot is possible for jump if it is one of the following:
 --- - Start or end of non-whitespace character group.
---- - Alphanumeric character followed or preceeded by punctuation.
+--- - Alphanumeric character followed or preceeded by punctuation (useful for
+---   snake case names).
+--- - Start of uppercase character group (useful for camel case names).
 ---
 --- These rules are derived in an attempt to balance between two intentions:
 --- - Allow as much useful jumping spots as possible.
@@ -377,11 +379,14 @@ MiniJump2d.default_spotter = (function()
   -- Use `[^%s%p]` as "alphanumeric" to allow working with multibyte characters
   local alphanum_before_punct = MiniJump2d.gen_pattern_spotter('[^%s%p]%p', 'start')
   local alphanum_after_punct = MiniJump2d.gen_pattern_spotter('%p[^%s%p]', 'end')
+  -- NOTE: works only with Latin alphabet
+  local upper_start = MiniJump2d.gen_pattern_spotter('%u+', 'start')
 
   return function(line_num, args)
     local res_1 = H.merge_unique(nonblank_start(line_num, args), nonblank_end(line_num, args))
     local res_2 = H.merge_unique(alphanum_before_punct(line_num, args), alphanum_after_punct(line_num, args))
-    return H.merge_unique(res_1, res_2)
+    local res = H.merge_unique(res_1, res_2)
+    return H.merge_unique(res, upper_start(line_num, args))
   end
 end)()
 
