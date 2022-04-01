@@ -69,6 +69,14 @@ EC.insert_section = function(symbol, total_width)
   vim.cmd([[startreplace]])
 end
 
+-- Execute current line with `lua`
+EC.execute_lua_line = function()
+  local line = 'lua ' .. vim.api.nvim_get_current_line()
+  vim.api.nvim_command(line)
+  print(line)
+  vim.api.nvim_input('<Down>')
+end
+
 -- Helper data ================================================================
 -- Commonly used keys
 H.keys = {
