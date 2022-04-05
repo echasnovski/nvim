@@ -97,6 +97,18 @@ function MiniJump2d.setup(config)
   -- Apply config
   H.apply_config(config)
 
+  -- Corrections for default `<CR>` mapping to not interfer with popular usages
+  if config.mappings.start_jumping == '<CR>' then
+    vim.api.nvim_exec(
+      [[augroup MiniJump2d
+          au!
+          autocmd BufWinEnter quickfix nnoremap <buffer> <CR> <CR>
+          autocmd CmdwinEnter * nnoremap <buffer> <CR> <CR>
+        augroup END]],
+      false
+    )
+  end
+
   -- Create highlighting
   local hl_cmd = 'hi default MiniJump2dSpot guifg=white guibg=black gui=nocombine'
   if vim.o.background == 'light' then
@@ -521,9 +533,10 @@ function H.apply_config(config)
   MiniJump2d.config = config
 
   -- Apply mappings
-  H.map('n', config.mappings.start_jumping, '<Cmd>lua MiniJump2d.start()<CR>', {})
-  H.map('x', config.mappings.start_jumping, '<Cmd>lua MiniJump2d.start()<CR>', {})
-  H.map('o', config.mappings.start_jumping, '<Cmd>lua MiniJump2d.start()<CR>', {})
+  local keymap = config.mappings.start_jumping
+  H.map('n', keymap, '<Cmd>lua MiniJump2d.start()<CR>', {})
+  H.map('x', keymap, '<Cmd>lua MiniJump2d.start()<CR>', {})
+  H.map('o', keymap, '<Cmd>lua MiniJump2d.start()<CR>', {})
 end
 
 function H.is_disabled()
