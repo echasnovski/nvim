@@ -49,9 +49,6 @@
 [submodule "pack/plugins/opt/vim-unimpaired"]
 	path = pack/plugins/opt/vim-unimpaired
 	url = https://github.com/tpope/vim-unimpaired
-[submodule "pack/plugins/opt/vim-startify"]
-	path = pack/plugins/opt/vim-startify
-	url = https://github.com/mhinz/vim-startify
 [submodule "pack/plugins/opt/vim-rooter"]
 	path = pack/plugins/opt/vim-rooter
 	url = https://github.com/airblade/vim-rooter

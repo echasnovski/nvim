@@ -72,6 +72,7 @@ vim.opt.completeopt = { 'menu', 'noinsert', 'noselect' } -- Customize completion
 -- Spelling ===================================================================
 vim.opt.spelllang    = 'en,ru'    -- Define spelling dictionaries
 vim.opt.complete:append('kspell') -- Add spellcheck options for autocomplete
+vim.opt.complete:remove('t')      -- Don't use tags for completion
 vim.opt.spelloptions = 'camel'    -- Treat parts of camelCase words as seprate words
 
 vim.opt.dictionary = vim.fn.expand('$HOME/.config/nvim/misc/dict/english.txt') -- Use specific dictionaries
