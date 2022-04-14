@@ -776,8 +776,8 @@ function H.merge_unique(tbl_1, tbl_2)
 
   local n_1, n_2 = #tbl_1, #tbl_2
   local res, i, j = {}, 1, 1
+  local to_add
   while i <= n_1 and j <= n_2 do
-    local to_add
     if tbl_1[i] < tbl_2[j] then
       to_add = tbl_1[i]
       i = i + 1
@@ -791,11 +791,17 @@ function H.merge_unique(tbl_1, tbl_2)
   end
 
   while i <= n_1 do
-    table.insert(res, tbl_1[i])
+    to_add = tbl_1[i]
+    if res[#res] ~= to_add then
+      table.insert(res, to_add)
+    end
     i = i + 1
   end
   while j <= n_2 do
-    table.insert(res, tbl_2[j])
+    to_add = tbl_2[j]
+    if res[#res] ~= to_add then
+      table.insert(res, to_add)
+    end
     j = j + 1
   end
 
