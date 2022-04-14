@@ -63,8 +63,10 @@ git submodule update --remote --init --depth 1 --recursive
     For example, 'nvim-telescope/telescope-fzy-native.nvim' (as it has its submodule) to 'opt' directory:
 
     ```bash
-    # Add submodule. This will load plugin (but not its submodules)
-    git submodule add --depth 1 https://github.com/nvim-telescope/telescope-fzy-native.nvim pack/plugins/opt/telescope-fzy-native
+    # Add submodule which will track branch <branch-to-track> (replace
+    # manually with what you want; usually 'main' or 'master').
+    # This will download plugin (but not its submodules).
+    git submodule add --name telescope-fzy-native -b <branch-to-track> --depth 1 https://github.com/nvim-telescope/telescope-fzy-native.nvim pack/plugins/opt/telescope-fzy-native
 
     # Ensure that all submodules of plugin are also downloaded
     git submodule update --init --depth 1 --recursive

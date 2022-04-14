@@ -1,99 +1,132 @@
-[submodule "pack/plugins/opt/targets"]
+[submodule "targets"]
 	path = pack/plugins/opt/targets
 	url = https://github.com/wellle/targets.vim.git
-[submodule "pack/plugins/opt/telescope"]
+	branch = master
+[submodule "telescope"]
 	path = pack/plugins/opt/telescope
 	url = https://github.com/nvim-telescope/telescope.nvim.git
-[submodule "pack/plugins/opt/gitsigns"]
+	branch = master
+[submodule "gitsigns"]
 	path = pack/plugins/opt/gitsigns
-	url = https://github.com/lewis6991/gitsigns.nvim
-[submodule "pack/plugins/opt/null-ls"]
+  url = https://github.com/lewis6991/gitsigns.nvim
+	branch = main
+[submodule "null-ls"]
 	path = pack/plugins/opt/null-ls
 	url = https://github.com/jose-elias-alvarez/null-ls.nvim
-[submodule "pack/plugins/opt/nvim-lspconfig"]
+	branch = main
+[submodule "nvim-lspconfig"]
 	path = pack/plugins/opt/nvim-lspconfig
 	url = https://github.com/neovim/nvim-lspconfig
-[submodule "pack/plugins/opt/nvim-colorizer"]
+	branch = master
+[submodule "nvim-colorizer"]
 	path = pack/plugins/opt/nvim-colorizer
 	url = https://github.com/norcalli/nvim-colorizer.lua
-[submodule "pack/plugins/opt/todo-comments"]
+	branch = master
+[submodule "todo-comments"]
 	path = pack/plugins/opt/todo-comments
 	url = https://github.com/folke/todo-comments.nvim
-[submodule "pack/plugins/opt/nvim-treesitter"]
+	branch = main
+[submodule "nvim-treesitter"]
 	path = pack/plugins/opt/nvim-treesitter
 	url = https://github.com/nvim-treesitter/nvim-treesitter
-[submodule "pack/plugins/opt/nvim-treesitter-textobjects"]
+	branch = master
+[submodule "nvim-treesitter-textobjects"]
 	path = pack/plugins/opt/nvim-treesitter-textobjects
 	url = https://github.com/nvim-treesitter/nvim-treesitter-textobjects
-[submodule "pack/plugins/opt/nvim-web-devicons"]
+	branch = master
+[submodule "nvim-web-devicons"]
 	path = pack/plugins/opt/nvim-web-devicons
 	url = https://github.com/kyazdani42/nvim-web-devicons
-[submodule "pack/plugins/opt/nvim-tree"]
+	branch = master
+[submodule "nvim-tree"]
 	path = pack/plugins/opt/nvim-tree
 	url = https://github.com/kyazdani42/nvim-tree.lua
-[submodule "pack/plugins/opt/plenary"]
+	branch = master
+[submodule "plenary"]
 	path = pack/plugins/opt/plenary
 	url = https://github.com/nvim-lua/plenary.nvim
-[submodule "pack/plugins/opt/vim-lion"]
+	branch = master
+[submodule "vim-lion"]
 	path = pack/plugins/opt/vim-lion
 	url = https://github.com/tommcdo/vim-lion
-[submodule "pack/plugins/opt/vim-argwrap"]
+	branch = master
+[submodule "vim-argwrap"]
 	path = pack/plugins/opt/vim-argwrap
 	url = https://github.com/FooSoft/vim-argwrap
-[submodule "pack/plugins/opt/sideways"]
+	branch = master
+[submodule "sideways"]
 	path = pack/plugins/opt/sideways
 	url = https://github.com/AndrewRadev/sideways.vim
-[submodule "pack/plugins/opt/vim-exchange"]
+	branch = main
+[submodule "vim-exchange"]
 	path = pack/plugins/opt/vim-exchange
 	url = https://github.com/tommcdo/vim-exchange
-[submodule "pack/plugins/opt/vim-unimpaired"]
+	branch = master
+[submodule "vim-unimpaired"]
 	path = pack/plugins/opt/vim-unimpaired
 	url = https://github.com/tpope/vim-unimpaired
-[submodule "pack/plugins/opt/vim-rooter"]
+	branch = master
+[submodule "vim-rooter"]
 	path = pack/plugins/opt/vim-rooter
 	url = https://github.com/airblade/vim-rooter
-[submodule "pack/plugins/opt/neoterm"]
+	branch = master
+[submodule "neoterm"]
 	path = pack/plugins/opt/neoterm
 	url = https://github.com/kassio/neoterm
-[submodule "pack/plugins/opt/vim-fugitive"]
+	branch = master
+[submodule "vim-fugitive"]
 	path = pack/plugins/opt/vim-fugitive
 	url = https://github.com/tpope/vim-fugitive
-[submodule "pack/plugins/opt/gv"]
+	branch = master
+[submodule "gv"]
 	path = pack/plugins/opt/gv
 	url = https://github.com/junegunn/gv.vim
-[submodule "pack/plugins/opt/undotree"]
+	branch = master
+[submodule "undotree"]
 	path = pack/plugins/opt/undotree
 	url = https://github.com/mbbill/undotree
-[submodule "pack/plugins/opt/which-key"]
+	branch = master
+[submodule "which-key"]
 	path = pack/plugins/opt/which-key
 	url = https://github.com/folke/which-key.nvim
-[submodule "pack/plugins/opt/luasnip"]
+	branch = main
+[submodule "luasnip"]
 	path = pack/plugins/opt/luasnip
 	url = https://github.com/L3MON4D3/LuaSnip
-[submodule "pack/plugins/opt/vim-test"]
+	branch = master
+[submodule "vim-test"]
 	path = pack/plugins/opt/vim-test
 	url = https://github.com/vim-test/vim-test
-[submodule "pack/plugins/opt/vim-dispatch"]
+	branch = master
+[submodule "vim-dispatch"]
 	path = pack/plugins/opt/vim-dispatch
 	url = https://github.com/tpope/vim-dispatch
-[submodule "pack/plugins/opt/rainbow_csv"]
+	branch = master
+[submodule "rainbow_csv"]
 	path = pack/plugins/opt/rainbow_csv
 	url = https://github.com/mechatroner/rainbow_csv
-[submodule "pack/plugins/opt/vim-pandoc"]
+	branch = master
+[submodule "vim-pandoc"]
 	path = pack/plugins/opt/vim-pandoc
 	url = https://github.com/vim-pandoc/vim-pandoc
-[submodule "pack/plugins/opt/vim-pandoc-syntax"]
+	branch = master
+[submodule "vim-pandoc-syntax"]
 	path = pack/plugins/opt/vim-pandoc-syntax
 	url = https://github.com/vim-pandoc/vim-pandoc-syntax
-[submodule "pack/plugins/opt/vim-rmarkdown"]
+	branch = master
+[submodule "vim-rmarkdown"]
 	path = pack/plugins/opt/vim-rmarkdown
 	url = https://github.com/vim-pandoc/vim-rmarkdown
-[submodule "pack/plugins/opt/markdown-preview"]
+	branch = master
+[submodule "markdown-preview"]
 	path = pack/plugins/opt/markdown-preview
 	url = https://github.com/iamcco/markdown-preview.nvim
-[submodule "pack/plugins/opt/mini"]
+	branch = master
+[submodule "mini"]
 	path = pack/plugins/opt/mini
 	url = https://github.com/echasnovski/mini.nvim
-[submodule "pack/plugins/opt/neogen"]
+	branch = main
+[submodule "neogen"]
 	path = pack/plugins/opt/neogen
 	url = https://github.com/danymat/neogen.git
+	branch = main
