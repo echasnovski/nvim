@@ -2,7 +2,6 @@ local nvim_tree = require('nvim-tree')
 
 -- Define 'old-style' settings first
 vim.g.nvim_tree_add_trailing = 1
-vim.g.nvim_tree_indent_markers = 1
 vim.g.nvim_tree_respect_buf_cwd = 1
 vim.g.nvim_tree_show_icons = {
   git = 0, -- Currently causes slowdown
@@ -78,6 +77,7 @@ nvim_tree.setup({
       },
     },
   },
+  renderer = { indent_markers = { enable = true } },
   actions = {
     open_file = {
       quit_on_open = true,

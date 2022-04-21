@@ -10,7 +10,7 @@ require('mini.statusline').setup({
       local wrap          = vim.wo.wrap  and (MiniStatusline.is_truncated(120) and 'W' or 'WRAP')  or ''
       local git           = MiniStatusline.section_git({ trunc_width = 75 })
       -- Default diagnstics icon has some problems displaying in Kitty terminal
-      local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75, icon = '' })
+      local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
       local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
       local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
       local searchcount   = MiniStatusline.section_searchcount({ trunc_width = 75})
@@ -56,7 +56,14 @@ vim.defer_fn(function()
   require('mini.jump').setup()
   require('mini.misc').setup()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
-  require('mini.surround').setup()
+  require('mini.surround').setup({
+    custom_surroundings = {
+      s = {
+        input = { find = '%[%[.-%]%]', extract = '^(..).*(..)$' },
+        output = { left = '[[', right = ']]' },
+      },
+    },
+  })
   require('mini.trailspace').setup()
 
   require('mini-dev.jump2d').setup()
