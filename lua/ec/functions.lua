@@ -44,7 +44,6 @@ EC.cr_action = function()
   if vim.fn.pumvisible() ~= 0 then
     local item_selected = vim.fn.complete_info()['selected'] ~= -1
     if item_selected then
-      H.confirm_popup()
       return H.keys['ctrl-y']
     else
       return H.keys['ctrl-y_cr']

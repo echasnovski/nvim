@@ -63,6 +63,7 @@ vim.defer_fn(function()
         output = { left = '[[', right = ']]' },
       },
     },
+    search_method = 'cover_or_next',
   })
   require('mini.trailspace').setup()
 

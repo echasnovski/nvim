@@ -2,6 +2,7 @@
 -- - r_language_server for R
 -- - pyright for Python
 -- - sumneko_lua for Lua
+-- - typescript-language-server for Typescript and Javascript
 
 local lspconfig = require('lspconfig')
 
@@ -17,6 +18,7 @@ local on_attach_custom = function(client, bufnr)
 
   -- Currently all formatting is handled with 'null-ls' plugin
   client.resolved_capabilities.document_formatting = false
+  client.resolved_capabilities.document_range_formatting = false
 end
 
 local diagnostic_opts = {
@@ -94,3 +96,6 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
     },
   })
 end
+
+-- Typescript (tsserver) ======================================================
+lspconfig.tsserver.setup({ on_attach = on_attach_custom })
