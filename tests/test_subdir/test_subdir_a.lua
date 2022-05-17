@@ -1,4 +1,4 @@
-local new_set = MiniTest.new_test_set
+local new_set = MiniTest.new_testset
 
 local T = new_set({ parametrize = { { 'a' }, { 'b' } } })
 

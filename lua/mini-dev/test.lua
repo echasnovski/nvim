@@ -5,9 +5,9 @@
 ---
 --- Planned features:
 --- - "Collect and execute" design.
---- - The `test_set` (table with executable elements at matching fields) and
+--- - The `testset` (table with callable elements at matching fields) and
 ---   `test_step` (those fields after flattening along with hooks and spreading
----   params).
+---   arguments).
 --- - Ability to filter (during collection): in directory, in file, **at cursor
 ---   position**, at tags.
 --- - Sequential execution with structured reports ('note' and 'fail' strings)
@@ -63,27 +63,43 @@ MiniTest.config = {
   -- Options controlling collection of test cases
   collect = {
     find_files = function() return vim.fn.globpath('tests', '**/test_*.lua', true, true) end,
-    filter_steps = function(step) return true end,
+    filter_cases = function(case) return true end,
   },
 
   -- Options controlling execution of test cases
-  execute = {},
+  execute = {
+    reporter = nil,
+    timer_repeat = 50,
+  },
 }
 --minidoc_afterlines_end
 --stylua: ignore end
 
+-- Module data ================================================================
+--- Table with information about current state of test execution
+---
+--- It is reset at the beginning and end of |MiniTest.execute()|.
+---
+--- At least these keys are supported:
+--- - <all_testcases> - all cases being currently executed.
+--- - <testcase> - currently executed test case.
+--- - <state_message> - message of what is currently being executed.
+MiniTest.current = { testcase = nil, state_message = nil }
+
 -- Module functionality =======================================================
 function MiniTest.collect(opts)
   opts = vim.tbl_deep_extend('force', MiniTest.config.collect, opts or {})
-  local set = MiniTest.new_test_set()
+
+  -- Make single test set
+  local set = MiniTest.new_testset()
   for _, file in ipairs(opts.find_files()) do
     local ok, t = pcall(dofile, file)
     if not ok then
       H.error([[Can't source file ]] .. vim.inspect(file))
     end
-    if not H.is_test_set(t) then
+    if not H.is_testset(t) then
       local msg = string.format(
-        [[Output of %s is not a test set. Did you use `MiniTest.new_test_set()`?]],
+        [[Output of %s is not a test set. Did you use `MiniTest.new_testset()`?]],
         vim.inspect(file)
       )
       H.error(msg)
@@ -92,15 +108,66 @@ function MiniTest.collect(opts)
     set[file] = t
   end
 
-  local steps = H.set_to_steps(set)
+  -- Convert to test cases. This also creates separate aligned array of hooks
+  -- which should be executed once regarding test case. This is needed to
+  -- correctly inject those hooks after filtering is done.
+  local raw_cases, raw_hooks_once = H.set_to_testcases(set)
 
-  steps = vim.tbl_filter(MiniTest.config.collect.filter_steps, steps)
+  -- Filter cases (at this stage don't have injected `hooks_once`)
+  local cases, hooks_once = {}, {}
+  for i, c in ipairs(raw_cases) do
+    if opts.filter_cases(c) then
+      table.insert(cases, c)
+      table.insert(hooks_once, raw_hooks_once[i])
+    end
+  end
 
-  -- TODO: Remove redundant hooks (for example, if all cases from nested test
-  -- set are filtered out)
+  -- Inject `hooks_once` into appropriate cases
+  H.inject_hooks_once(cases, hooks_once)
 
-  return steps
+  return cases
 end
+
+function MiniTest.execute(cases, opts)
+  opts = vim.tbl_deep_extend('force', MiniTest.config.execute, opts or {})
+
+  -- Call reporter on schedule
+  local reporter = opts.reporter or function() end
+  local timer = vim.loop.new_timer()
+  timer:start(0, opts.timer_repeat, vim.schedule_wrap(reporter))
+
+  MiniTest.current.all_testcases = cases
+  for _, testcase in ipairs(cases) do
+    MiniTest.current.testcase = testcase
+    testcase.info = {}
+    local desc_string = table.concat(testcase, ' | ')
+
+    local on_err = function(e)
+      testcase.info.fail = testcase.info.fail or {}
+      table.insert(testcase.info.fail, tostring(e))
+    end
+
+    for i, hook_pre in ipairs(testcase.hooks.pre) do
+      MiniTest.current.state = string.format([[Executing 'pre' hook #%s of %s]], i, desc_string)
+      xpcall(hook_pre, on_err)
+    end
+
+    MiniTest.current.state = string.format([[Executing %s test]], desc_string)
+    xpcall(function()
+      testcase.test(unpack(testcase.args))
+    end, on_err)
+
+    for i, hook_post in ipairs(testcase.hooks.post) do
+      MiniTest.current.state = string.format([[Executing 'post' hook #%s of %s]], i, desc_string)
+      xpcall(hook_post, on_err)
+    end
+  end
+
+  timer:stop()
+  timer:close()
+  MiniTest.current = {}
+end
+
 --- Create child Neovim process
 ---
 --- TODO: Write more documentation about:
@@ -189,14 +256,18 @@ function MiniTest.new_child_neovim()
     pcall(vim.fn.chanclose, child.channel)
 
     if child.job ~= nil then
-      child.job.stdin:close()
-      child.job.stdout:close()
-      child.job.stderr:close()
+      -- TODO: consider figuring out a way to do it better (should actually
+      -- close/kill all child processes when running interactively)
+      child.job.handle:kill(9)
 
-      -- Use `pcall` to not error with `channel closed by client`
-      pcall(child.cmd, '0cquit!')
-      child.job.handle:kill()
-      child.job.handle:close()
+      -- child.job.stdin:close()
+      -- child.job.stdout:close()
+      -- child.job.stderr:close()
+      --
+      -- -- Use `pcall` to not error with `channel closed by client`
+      -- pcall(child.cmd, '0cquit!')
+      -- child.job.handle:kill()
+      -- child.job.handle:close()
 
       child.job = nil
     end
@@ -385,25 +456,34 @@ end
 ---
 ---@param opts? table Allowed options:
 ---   - <hooks> - table with fields:
----       - <pre_first> - before first filtered node.
----       - <pre_node> - before each node.
+---       - <pre_once> - before first filtered node.
 ---       - <pre_case> - before each case (even nested).
 ---       - <post_case> - after each case (even nested).
----       - <post_node> - after each node.
----       - <post_last> - after last filtered node.
+---       - <post_once> - after last filtered node.
 ---   - <parametrize> - array where each element is a table of parameters to be
----     appended to "current parameters" of executable fields.
+---     appended to "current parameters" of callable fields.
 ---   - <user> - user data to be forwarded to steps.
-function MiniTest.new_test_set(opts)
+function MiniTest.new_testset(opts)
   -- Keep track of new elements order. This allows to iterate through elements
   -- in order they were added.
-  local metatbl = { is_test_set = true, key_order = {}, opts = opts or {} }
+  local metatbl = { is_testset = true, key_order = {}, opts = opts or {} }
   metatbl.__newindex = function(tbl, key, value)
     table.insert(metatbl.key_order, key)
     rawset(tbl, key, value)
   end
 
   return setmetatable({}, metatbl)
+end
+
+function MiniTest.as_testset(x, opts)
+  if type(x) ~= 'table' then
+    x = { x }
+  end
+  local res = MiniTest.new_testset(opts)
+  for k, v in pairs(x) do
+    res[k] = v
+  end
+  return res
 end
 
 -- Helper data ================================================================
@@ -425,7 +505,10 @@ function H.setup_config(config)
 
   vim.validate({
     ['collect.find_files'] = { config.collect.find_files, 'function' },
-    ['collect.filter_steps'] = { config.collect.filter_steps, 'function' },
+    ['collect.filter_cases'] = { config.collect.filter_cases, 'function' },
+
+    ['execute.reporter'] = { config.execute.reporter, 'function' },
+    ['execute.timer_delay'] = { config.execute.timer_delay, 'function' },
   })
 
   return config
@@ -439,107 +522,153 @@ function H.is_disabled()
   return vim.g.minitest_disable == true or vim.b.minitest_disable == true
 end
 
--- Works with steps -----------------------------------------------------------
-function H.set_to_steps(set, data, case_hooks)
-  data = data or { desc = {}, params = {}, user = {} }
-  case_hooks = case_hooks or { pre = {}, post = {} }
+-- Works with test cases ------------------------------------------------------
+---@class testcase
+---
+---@field args table Array of arguments with which `test` will be called.
+---@field desc table Description: array of fields from nested testsets.
+---@field hooks table Hooks to be executed as part of test case. Has fields
+---   <pre> and <post> with arrays to be consecutively executed before and
+---   after execution of `test`.
+---@field info table Information about of test case execution. Value of `nil`
+---   means that this particular case was not executed. Has following fields:
+---     - <note> - string or array of strings with some non-failing information.
+---     - <fail> - string or array of string with some failing information.
+---@field test function|table Main callable object representing test action.
+---@field user table User data: array of `opts.user` from nested testsets.
+---@private
+
+--- Convert test set to array of test cases
+---
+---@return ... Tuple of aligned arrays: with test cases and hooks that should
+---   be executed only once before corresponding item.
+---@private
+function H.set_to_testcases(set, template, hooks_once)
+  template = template or { args = {}, desc = {}, hooks = { pre = {}, post = {} }, user = {} }
+  hooks_once = hooks_once or { pre = {}, post = {} }
 
   local metatbl = getmetatable(set)
   local opts, key_order = metatbl.opts, metatbl.key_order
   local hooks, parametrize, user = opts.hooks or {}, opts.parametrize or { {} }, opts.user or {}
 
-  -- Convert to steps only executable or test set nodes
+  -- Convert to steps only callable or test set nodes
   local node_keys = vim.tbl_filter(function(key)
     local node = set[key]
-    return H.is_executable(node) or H.is_test_set(node)
+    return vim.is_callable(node) or H.is_testset(node)
   end, key_order)
 
   if #node_keys == 0 then
     return {}
   end
 
-  -- Start adding steps
-  case_hooks = H.nest_case_hooks(case_hooks, { pre = hooks.pre_case, post = hooks.post_case }, data)
-  local steps = {}
-  local add_step = function(f, d, exec_type)
-    local step = H.new_step(f, d, exec_type)
-    --stylua: ignore
-    if step == nil then return end
-    table.insert(steps, H.new_step(f, d, exec_type))
-  end
+  -- Ensure that newly added hooks are represented by new functions.
+  -- This is needed to count them later only within current set. Example: use
+  -- the same function in several `_once` hooks. In `H.inject_hooks_once` it
+  -- will be injected only once overall whereas it should be injected only once
+  -- within corresponding test set.
+  hooks_once = H.extend_hooks(
+    hooks_once,
+    { pre = H.wrap_callable(hooks.pre_once), post = H.wrap_callable(hooks.post_once) }
+  )
 
-  add_step(hooks.pre_first, data, 'hook_pre_first')
-
+  local testcase_arr, hooks_once_arr = {}, {}
   -- Process nodes in order they were added as `T[...] = x`
   for _, key in ipairs(node_keys) do
     local node = set[key]
-    for _, params in ipairs(parametrize) do
-      local node_data = H.nest_step_data(data, { desc = key, params = params, user = user })
+    for _, args in ipairs(parametrize) do
+      local cur_template = H.extend_template(template, {
+        args = args,
+        desc = key,
+        hooks = { pre = hooks.pre_case, post = hooks.post_case },
+        user = user,
+      })
 
-      add_step(hooks.pre_node, node_data, 'hook_pre_node')
-
-      if H.is_executable(node) then
-        vim.list_extend(steps, case_hooks.pre)
-        add_step(node, node_data, 'case')
-        vim.list_extend(steps, case_hooks.post)
-      elseif H.is_test_set(node) then
-        vim.list_extend(steps, H.set_to_steps(node, node_data, case_hooks))
+      if vim.is_callable(node) then
+        table.insert(testcase_arr, H.new_testcase(cur_template, node))
+        table.insert(hooks_once_arr, hooks_once)
+      elseif H.is_testset(node) then
+        local nest_testcase_arr, nest_hooks_once_arr = H.set_to_testcases(node, cur_template, hooks_once)
+        vim.list_extend(testcase_arr, nest_testcase_arr)
+        vim.list_extend(hooks_once_arr, nest_hooks_once_arr)
       end
-
-      add_step(hooks.post_node, node_data, 'hook_post_node')
     end
   end
 
-  add_step(hooks.post_last, data, 'hook_post_last')
-
-  return steps
+  return testcase_arr, hooks_once_arr
 end
 
-function H.new_step(executable, data, exec_type)
-  --stylua: ignore
-  if not H.is_executable(executable) then return end
+function H.inject_hooks_once(cases, hooks_once)
+  -- NOTE: this heavily relies on the equivalence of "have same object id" and
+  -- "are same hooks"
+  local already_injected = {}
+  local n = #cases
 
-  local res = vim.deepcopy(data)
-  res.executable = executable
-  res.type = exec_type
-  return res
-end
-
-function H.nest_step_data(data, new_data)
-  local res = vim.deepcopy(data)
-
-  table.insert(res.desc, new_data.desc)
-  vim.list_extend(res.params, new_data.params)
-  table.insert(res.user, new_data.user)
-
-  return res
-end
-
-function H.nest_case_hooks(case_hooks, new_case_hooks, data)
-  local res = vim.deepcopy(case_hooks)
-
-  if H.is_executable(new_case_hooks.pre) then
-    local step = H.new_step(new_case_hooks.pre, data, 'hook_pre_case')
-    table.insert(res.pre, step)
+  -- Inject 'pre' hooks moving forwards
+  for i = 1, n do
+    local case, hooks = cases[i], hooks_once[i].pre
+    local target_tbl_id = 1
+    for j = 1, #hooks do
+      local h = hooks[j]
+      if not already_injected[h] then
+        table.insert(case.hooks.pre, target_tbl_id, h)
+        target_tbl_id, already_injected[h] = target_tbl_id + 1, true
+      end
+    end
   end
 
-  if H.is_executable(new_case_hooks.post) then
-    local step = H.new_step(new_case_hooks.post, data, 'hook_post_case')
-    -- Closer (in terms of nesting) hooks should be closer to test case
-    table.insert(res.post, 1, step)
+  -- Inject 'post' hooks moving backwards
+  for i = n, 1, -1 do
+    local case, hooks = cases[i], hooks_once[i].post
+    local target_table_id = #case.hooks.post + 1
+    for j = #hooks, 1, -1 do
+      local h = hooks[j]
+      if not already_injected[h] then
+        table.insert(case.hooks.post, target_table_id, h)
+        already_injected[h] = true
+      end
+    end
+  end
+
+  return cases
+end
+
+function H.new_testcase(template, test)
+  template.test = test
+  return template
+end
+
+function H.extend_template(template, layer)
+  local res = vim.deepcopy(template)
+
+  vim.list_extend(res.args, layer.args)
+  table.insert(res.desc, layer.desc)
+  res.hooks = H.extend_hooks(res.hooks, layer.hooks, false)
+  res.user = vim.tbl_deep_extend('force', res.user, layer.user)
+
+  return res
+end
+
+function H.extend_hooks(hooks, layer, do_deepcopy)
+  local res = hooks
+  if do_deepcopy == nil or do_deepcopy then
+    res = vim.deepcopy(hooks)
+  end
+
+  -- Closer (in terms of nesting) hooks should be closer to test callable
+  if vim.is_callable(layer.pre) then
+    table.insert(res.pre, layer.pre)
+  end
+  if vim.is_callable(layer.post) then
+    table.insert(res.post, 1, layer.post)
   end
 
   return res
 end
 
 -- Predicates -----------------------------------------------------------------
-function H.is_test_set(x)
+function H.is_testset(x)
   local metatbl = getmetatable(x)
-  return type(metatbl) == 'table' and metatbl.is_test_set == true
-end
-
-function H.is_executable(x)
-  return type(x) == 'function' or (getmetatable(x) or {}).__call ~= nil
+  return type(metatbl) == 'table' and metatbl.is_testset == true
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -550,3 +679,12 @@ end
 function H.error(msg)
   error(string.format('(mini.test) %s', msg))
 end
+
+function H.wrap_callable(f)
+  if vim.is_callable(f) then
+    --stylua: ignore
+     return function(...) return f(...) end
+  end
+end
+
+return MiniTest

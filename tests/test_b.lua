@@ -1,44 +1,47 @@
-local new_set = MiniTest.new_test_set
-local printing = function(x)
+local new_set = MiniTest.new_testset
+
+MiniTest.log = {}
+local logging = function(x)
   return function()
-    print(x)
+    table.insert(MiniTest.log, x)
+    -- print(x)
   end
 end
 
-local T = MiniTest.new_test_set({
+-- -- Ensure that this will be called even if represented by the same function.
+-- -- Use this in several `_once` hooks and see that they all got executed.
+-- local f = logging('f')
+
+local T = MiniTest.new_testset({
   hooks = {
-    -- pre_first = printing('1'),
-    -- pre_node = printing('2'),
-    pre_case = printing('3'),
-    post_case = printing('4'),
-    -- post_node = printing('5'),
-    -- post_last = printing('6'),
+    pre_once = logging('pre_once_1'),
+    pre_case = logging('pre_case_1'),
+    post_case = logging('post_case_1'),
+    post_once = logging('post_once_1'),
   },
 })
 
 T['a'] = function()
-  error('Does not work')
+  table.insert(MiniTest.log, [[Test of 'a']])
 end
 
-T['b'] = MiniTest.new_test_set({
+T['b'] = MiniTest.new_testset({
   hooks = {
-    -- pre_first = printing('b1'),
-    -- pre_node = printing('b2'),
-    pre_case = printing('b3'),
-    post_case = printing('b4'),
-    -- post_node = printing('b5'),
-    -- post_last = printing('b6'),
+    pre_once = logging('pre_once_2'),
+    pre_case = logging('pre_case_2'),
+    post_case = logging('post_case_2'),
+    post_once = logging('post_once_2'),
   },
 })
 
 T['b']['works'] = new_set()
 
 T['b']['works']['first time'] = function()
-  print('Test b|works|first time')
+  table.insert(MiniTest.log, 'Test b|works|first time')
 end
 
 T['b']['works']['second time'] = function()
-  error('Test b|works|second time')
+  table.insert(MiniTest.log, 'Test b|works|second time')
 end
 
 return T
