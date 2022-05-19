@@ -69,8 +69,11 @@ MiniTest.config = {
   -- Options controlling execution of test cases
   execute = {
     reporter = nil,
-    timer_repeat = 50,
   },
+
+  -- Path (relative to current directory) to script which handles project
+  -- specific test configuration
+  script_path = 'scripts/minitest.lua',
 }
 --minidoc_afterlines_end
 --stylua: ignore end
@@ -81,12 +84,28 @@ MiniTest.config = {
 --- It is reset at the beginning and end of |MiniTest.execute()|.
 ---
 --- At least these keys are supported:
---- - <all_testcases> - all cases being currently executed.
---- - <testcase> - currently executed test case.
---- - <state_message> - message of what is currently being executed.
+--- - <all_cases> - all cases being currently executed.
+--- - <case> - currently executed test case.
 MiniTest.current = { testcase = nil, state_message = nil }
 
 -- Module functionality =======================================================
+function MiniTest.run(opts)
+  if H.is_disabled() then
+    return
+  end
+
+  -- Try sourcing project specific script first
+  local success = H.execute_project_script(opts)
+  if success then
+    return
+  end
+
+  -- Collect and execute
+  opts = vim.tbl_deep_extend('force', MiniTest.config, opts or {})
+  local cases = MiniTest.collect(opts.collect)
+  MiniTest.execute(cases, opts.execute)
+end
+
 function MiniTest.collect(opts)
   opts = vim.tbl_deep_extend('force', MiniTest.config.collect, opts or {})
 
@@ -134,40 +153,47 @@ function MiniTest.execute(cases, opts)
 
   -- Call reporter on schedule
   local reporter = opts.reporter or function() end
-  local timer = vim.loop.new_timer()
-  timer:start(0, opts.timer_repeat, vim.schedule_wrap(reporter))
 
-  MiniTest.current.all_testcases = cases
-  for _, testcase in ipairs(cases) do
-    MiniTest.current.testcase = testcase
-    testcase.info = { note = {}, fail = {} }
-    local desc_string = table.concat(testcase, ' | ')
+  MiniTest.current.all_cases = cases
+  for _, case in ipairs(cases) do
+    MiniTest.current.case = case
+    case.info = { state = nil, notes = {}, fails = {} }
 
+    -- Execute
     local on_err = function(e)
-      table.insert(testcase.info.fail, tostring(e))
+      table.insert(case.info.fails, tostring(e))
     end
 
-    for i, hook_pre in ipairs(testcase.hooks.pre) do
-      MiniTest.current.state = string.format([[Executing 'pre' hook #%s of %s]], i, desc_string)
+    for i, hook_pre in ipairs(case.hooks.pre) do
+      case.info.state = string.format([[Executing 'pre' hook #%s]], i)
+      reporter()
       xpcall(hook_pre, on_err)
     end
 
-    MiniTest.current.state = string.format([[Executing %s test]], desc_string)
+    case.info.state = 'Executing test'
+    reporter()
     --stylua: ignore
-    xpcall(function() testcase.test(unpack(testcase.args)) end, on_err)
+    xpcall(function() case.test(unpack(case.args)) end, on_err)
 
-    for i, hook_post in ipairs(testcase.hooks.post) do
-      MiniTest.current.state = string.format([[Executing 'post' hook #%s of %s]], i, desc_string)
+    for i, hook_post in ipairs(case.hooks.post) do
+      case.info.state = string.format([[Executing 'post' hook #%s]], i)
+      reporter()
       xpcall(hook_post, on_err)
     end
+
+    -- Finalize state
+    local pass_fail = #case.info.fails == 0 and 'Pass' or 'Fail'
+    local with_notes = #case.info.notes == 0 and '' or ' with notes'
+    case.info.state = pass_fail .. with_notes
   end
 
-  timer:stop()
-  timer:close()
   MiniTest.current = {}
 end
 
 --- Create test set
+---
+--- TODO: document how to use it (with/without order preservation,
+--- `table.insert()` doesn't work).
 ---
 ---@param opts? table Allowed options:
 ---   - <hooks> - table with fields:
@@ -178,27 +204,21 @@ end
 ---   - <parametrize> - array where each element is a table of parameters to be
 ---     appended to "current parameters" of callable fields.
 ---   - <user> - user data to be forwarded to steps.
-function MiniTest.new_testset(opts)
+---@param tbl? table Initial cases (possibly nested). Will be executed without
+---   any guarantees on order.
+function MiniTest.new_testset(opts, tbl)
+  opts = opts or {}
+  tbl = tbl or {}
+
   -- Keep track of new elements order. This allows to iterate through elements
   -- in order they were added.
-  local metatbl = { is_testset = true, key_order = {}, opts = opts or {} }
+  local metatbl = { is_testset = true, key_order = vim.tbl_keys(tbl), opts = opts }
   metatbl.__newindex = function(tbl, key, value)
     table.insert(metatbl.key_order, key)
     rawset(tbl, key, value)
   end
 
-  return setmetatable({}, metatbl)
-end
-
-function MiniTest.as_testset(x, opts)
-  if type(x) ~= 'table' then
-    x = { x }
-  end
-  local res = MiniTest.new_testset(opts)
-  for k, v in pairs(x) do
-    res[k] = v
-  end
-  return res
+  return setmetatable(tbl, metatbl)
 end
 
 -- Expectations ---------------------------------------------------------------
@@ -539,6 +559,7 @@ function H.setup_config(config)
   vim.validate({
     collect = { config.collect, 'table' },
     execute = { config.execute, 'table' },
+    script_path = { config.script_path, 'string' },
   })
 
   vim.validate({
@@ -546,7 +567,6 @@ function H.setup_config(config)
     ['collect.filter_cases'] = { config.collect.filter_cases, 'function' },
 
     ['execute.reporter'] = { config.execute.reporter, 'function' },
-    ['execute.timer_delay'] = { config.execute.timer_delay, 'function' },
   })
 
   return config
@@ -560,6 +580,34 @@ function H.is_disabled()
   return vim.g.minitest_disable == true or vim.b.minitest_disable == true
 end
 
+-- Work with project specific script ==========================================
+function H.execute_project_script(...)
+  -- Don't process script if there are more than one active `run` calls
+  if H.is_inside_script then
+    return
+  end
+
+  -- Don't process script if at least one argument is not default (`nil`)
+  if #{ ... } > 0 then
+    return
+  end
+
+  -- Store information
+  local config_cache = MiniTest.config
+
+  -- Pass information to a possible `run()` call inside script
+  H.is_inside_script = true
+
+  -- Execute script
+  local success = pcall(vim.cmd, 'luafile ' .. MiniTest.config.script_path)
+
+  -- Restore information
+  MiniTest.config = config_cache
+  H.is_inside_script = nil
+
+  return success
+end
+
 -- Works with test cases ------------------------------------------------------
 ---@class testcase
 ---
@@ -568,10 +616,16 @@ end
 ---@field hooks table Hooks to be executed as part of test case. Has fields
 ---   <pre> and <post> with arrays to be consecutively executed before and
 ---   after execution of `test`.
----@field info table Information about of test case execution. Value of `nil`
+---@field info table? Information about test case execution. Value of `nil`
 ---   means that this particular case was not executed. Has following fields:
----     - <note> - array of strings with non-failing information.
----     - <fail> - array of strings with failing information.
+---     - <fails> - array of strings with failing information.
+---     - <notes> - array of strings with non-failing information.
+---     - <state> - state of test execution. One of:
+---         - 'Executing <name of what is being executed>' (during execution).
+---         - 'Pass' (no fails, no notes).
+---         - 'Pass with notes' (no fails, some notes).
+---         - 'Fail' (some fails, no notes).
+---         - 'Fail with notes' (some fails, some notes).
 ---@field test function|table Main callable object representing test action.
 ---@field user table User data: array of `opts.user` from nested testsets.
 ---@private

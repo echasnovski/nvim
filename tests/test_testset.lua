@@ -1,4 +1,4 @@
-local new_set, as_set = MiniTest.new_testset, MiniTest.as_testset
+local new_set = MiniTest.new_testset
 
 local T = new_set()
 

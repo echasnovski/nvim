@@ -8,7 +8,7 @@ T['`equal()`'] = new_set()
 
 local f = function() end
 local tmp_tbl = {}
-T['`equal()`']['not errors when equal'] = MiniTest.as_testset(eq, {
+T['`equal()`']['not errors when equal'] = new_set({
   parametrize = {
     { 1, 1 },
     { f, f },
@@ -18,13 +18,9 @@ T['`equal()`']['not errors when equal'] = MiniTest.as_testset(eq, {
     { { 1 }, { 1 } },
     { { a = 1 }, { a = 1 } },
   },
-})
+}, { eq })
 
-T['`equal()`']['errors when not equal'] = MiniTest.as_testset({
-  function(x, y)
-    expect.error(eq, 'equal objects.*Left:.*Right:', x, y)
-  end,
-}, {
+T['`equal()`']['errors when not equal'] = new_set({
   parametrize = {
     { 1, 2 },
     { f, function() end },
@@ -32,6 +28,10 @@ T['`equal()`']['errors when not equal'] = MiniTest.as_testset({
     { { a = 1 }, { b = 1 } },
     { { a = 1 }, { a = 2 } },
   },
+}, {
+  function(x, y)
+    expect.error(eq, 'equal objects.*Left:.*Right:', x, y)
+  end,
 })
 
 -- not_equal() ----------------------------------------------------------------
