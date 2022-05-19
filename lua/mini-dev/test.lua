@@ -95,7 +95,8 @@ function MiniTest.collect(opts)
   for _, file in ipairs(opts.find_files()) do
     local ok, t = pcall(dofile, file)
     if not ok then
-      H.error([[Can't source file ]] .. vim.inspect(file))
+      local msg = string.format([[Sourceing %s resulted into following error: %s]], vim.inspect(file), t)
+      H.error(msg)
     end
     if not H.is_testset(t) then
       local msg = string.format(
@@ -139,11 +140,10 @@ function MiniTest.execute(cases, opts)
   MiniTest.current.all_testcases = cases
   for _, testcase in ipairs(cases) do
     MiniTest.current.testcase = testcase
-    testcase.info = {}
+    testcase.info = { note = {}, fail = {} }
     local desc_string = table.concat(testcase, ' | ')
 
     local on_err = function(e)
-      testcase.info.fail = testcase.info.fail or {}
       table.insert(testcase.info.fail, tostring(e))
     end
 
@@ -153,9 +153,8 @@ function MiniTest.execute(cases, opts)
     end
 
     MiniTest.current.state = string.format([[Executing %s test]], desc_string)
-    xpcall(function()
-      testcase.test(unpack(testcase.args))
-    end, on_err)
+    --stylua: ignore
+    xpcall(function() testcase.test(unpack(testcase.args)) end, on_err)
 
     for i, hook_post in ipairs(testcase.hooks.post) do
       MiniTest.current.state = string.format([[Executing 'post' hook #%s of %s]], i, desc_string)
@@ -168,6 +167,89 @@ function MiniTest.execute(cases, opts)
   MiniTest.current = {}
 end
 
+--- Create test set
+---
+---@param opts? table Allowed options:
+---   - <hooks> - table with fields:
+---       - <pre_once> - before first filtered node.
+---       - <pre_case> - before each case (even nested).
+---       - <post_case> - after each case (even nested).
+---       - <post_once> - after last filtered node.
+---   - <parametrize> - array where each element is a table of parameters to be
+---     appended to "current parameters" of callable fields.
+---   - <user> - user data to be forwarded to steps.
+function MiniTest.new_testset(opts)
+  -- Keep track of new elements order. This allows to iterate through elements
+  -- in order they were added.
+  local metatbl = { is_testset = true, key_order = {}, opts = opts or {} }
+  metatbl.__newindex = function(tbl, key, value)
+    table.insert(metatbl.key_order, key)
+    rawset(tbl, key, value)
+  end
+
+  return setmetatable({}, metatbl)
+end
+
+function MiniTest.as_testset(x, opts)
+  if type(x) ~= 'table' then
+    x = { x }
+  end
+  local res = MiniTest.new_testset(opts)
+  for k, v in pairs(x) do
+    res[k] = v
+  end
+  return res
+end
+
+-- Expectations ---------------------------------------------------------------
+MiniTest.expect = {}
+
+function MiniTest.expect.equal(left, right)
+  --stylua: ignore
+  if vim.deep_equal(left, right) then return true end
+
+  H.error_expect('equal objects', 'Left: ' .. vim.inspect(left), 'Right: ' .. vim.inspect(right))
+end
+
+function MiniTest.expect.not_equal(left, right)
+  --stylua: ignore
+  if not vim.deep_equal(left, right) then return true end
+
+  H.error_expect('*not* equal objects', 'Object: ' .. vim.inspect(left))
+end
+
+function MiniTest.expect.error(f, match, ...)
+  vim.validate({ match = { match, 'string', true } })
+
+  local ok, err = pcall(f, ...)
+  err = err or ''
+  local has_matched_error = not ok and string.find(err, match or '') ~= nil
+  --stylua: ignore
+  if has_matched_error then return true end
+
+  local with_match = match == nil and '' or (' with match %s'):format(vim.inspect(match))
+  local cause = 'error' .. with_match
+  local suffix = ok and 'Observed no error' or ('Observed error: ' .. err)
+
+  H.error_expect(cause, suffix)
+end
+
+function MiniTest.expect.no_error(f, ...)
+  local ok, err = pcall(f, ...)
+  --stylua: ignore
+  if ok then return true end
+
+  H.error_expect('no error', 'Observed error: ' .. err)
+end
+
+function MiniTest.expect.match(str, pattern)
+  --stylua: ignore
+  if str:find(pattern) ~= nil then return true end
+
+  H.error_expect('string matching pattern ' .. vim.inspect(pattern), 'Observed string: ' .. str)
+end
+
+-- Helpers --------------------------------------------------------------------
 --- Create child Neovim process
 ---
 --- TODO: Write more documentation about:
@@ -259,16 +341,6 @@ function MiniTest.new_child_neovim()
       -- TODO: consider figuring out a way to do it better (should actually
       -- close/kill all child processes when running interactively)
       child.job.handle:kill(9)
-
-      -- child.job.stdin:close()
-      -- child.job.stdout:close()
-      -- child.job.stderr:close()
-      --
-      -- -- Use `pcall` to not error with `channel closed by client`
-      -- pcall(child.cmd, '0cquit!')
-      -- child.job.handle:kill()
-      -- child.job.handle:close()
-
       child.job = nil
     end
 
@@ -452,40 +524,6 @@ function MiniTest.new_child_neovim()
   return child
 end
 
---- Create test set
----
----@param opts? table Allowed options:
----   - <hooks> - table with fields:
----       - <pre_once> - before first filtered node.
----       - <pre_case> - before each case (even nested).
----       - <post_case> - after each case (even nested).
----       - <post_once> - after last filtered node.
----   - <parametrize> - array where each element is a table of parameters to be
----     appended to "current parameters" of callable fields.
----   - <user> - user data to be forwarded to steps.
-function MiniTest.new_testset(opts)
-  -- Keep track of new elements order. This allows to iterate through elements
-  -- in order they were added.
-  local metatbl = { is_testset = true, key_order = {}, opts = opts or {} }
-  metatbl.__newindex = function(tbl, key, value)
-    table.insert(metatbl.key_order, key)
-    rawset(tbl, key, value)
-  end
-
-  return setmetatable({}, metatbl)
-end
-
-function MiniTest.as_testset(x, opts)
-  if type(x) ~= 'table' then
-    x = { x }
-  end
-  local res = MiniTest.new_testset(opts)
-  for k, v in pairs(x) do
-    res[k] = v
-  end
-  return res
-end
-
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniTest.config
@@ -532,8 +570,8 @@ end
 ---   after execution of `test`.
 ---@field info table Information about of test case execution. Value of `nil`
 ---   means that this particular case was not executed. Has following fields:
----     - <note> - string or array of strings with some non-failing information.
----     - <fail> - string or array of string with some failing information.
+---     - <note> - array of strings with non-failing information.
+---     - <fail> - array of strings with failing information.
 ---@field test function|table Main callable object representing test action.
 ---@field user table User data: array of `opts.user` from nested testsets.
 ---@private
@@ -665,10 +703,21 @@ function H.extend_hooks(hooks, layer, do_deepcopy)
   return res
 end
 
+-- Reporters ------------------------------------------------------------------
+-- function H.cases_to_lines(cases, opts)
+--   opts = vim.tbl_deep_extend('force', { depth = 1 }, opts)
+-- end
+
 -- Predicates -----------------------------------------------------------------
 function H.is_testset(x)
   local metatbl = getmetatable(x)
   return type(metatbl) == 'table' and metatbl.is_testset == true
+end
+
+-- Expectation utilities ------------------------------------------------------
+function H.error_expect(cause, ...)
+  local msg = string.format('Failed expectation for %s.\n%s', cause, table.concat({ ... }, '\n'))
+  error(debug.traceback(msg, 3), 3)
 end
 
 -- Utilities ------------------------------------------------------------------
