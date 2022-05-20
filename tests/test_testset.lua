@@ -1,6 +1,15 @@
 local new_set = MiniTest.new_testset
 
-local T = new_set()
+local T = new_set({
+  hooks = {
+    pre_case = function()
+      vim.loop.sleep(100)
+    end,
+    post_case = function()
+      vim.loop.sleep(100)
+    end,
+  },
+})
 
 -- Hooks ----------------------------------------------------------------------
 local erroring = function(x)
@@ -38,7 +47,7 @@ T['hooks']['order']['nested']['second'] = erroring('Nested #2')
 -- Use this in several `_once` hooks and see that they all got executed.
 local f = erroring('Same function')
 T['hooks']['same `*_once` hooks'] = new_set({ hooks = { pre_once = f, post_once = f } })
-T['hooks']['same `*_once` hooks']['nested'] = as_set({ erroring('Test') }, { hooks = { pre_once = f, post_once = f } })
+T['hooks']['same `*_once` hooks']['nested'] = new_set({ hooks = { pre_once = f, post_once = f } }, { erroring('Test') })
 
 -- Parametrize ----------------------------------------------------------------
 local error2 = function(x, y)
@@ -53,17 +62,17 @@ T['parametrize']['nested'] = new_set({ parametrize = { { 1 }, { 2 } } })
 
 T['parametrize']['nested']['test'] = error2
 
--- User data ------------------------------------------------------------------
-local error_user = function()
-  error(vim.inspect(MiniTest.current.testcase.user), 0)
+-- Data -----------------------------------------------------------------------
+local error_data = function()
+  error(vim.inspect(MiniTest.current.case.data), 0)
 end
 
-T['user'] = new_set({ user = { a = 1, b = 2 } })
+T['data'] = new_set({ data = { a = 1, b = 2 } })
 
-T['user']['first level'] = error_user
+T['data']['first level'] = error_data
 
-T['user']['nested'] = new_set({ user = { a = 10, c = 30 } })
+T['data']['nested'] = new_set({ data = { a = 10, c = 30 } })
 
-T['user']['nested']['should override'] = error_user
+T['data']['nested']['should override'] = error_data
 
 return T

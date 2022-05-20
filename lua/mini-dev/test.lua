@@ -52,6 +52,15 @@ function MiniTest.setup(config)
 
   -- Apply config
   H.apply_config(config)
+
+  -- Create highlighting
+  local command = string.format(
+    [[hi default MiniTestFail guifg=%s gui=bold
+      hi default MiniTestPass guifg=%s gui=bold]],
+    vim.g.terminal_color_1 or '#FF0000',
+    vim.g.terminal_color_2 or '#00FF00'
+  )
+  vim.cmd(command)
 end
 
 --stylua: ignore start
@@ -81,12 +90,12 @@ MiniTest.config = {
 -- Module data ================================================================
 --- Table with information about current state of test execution
 ---
---- It is reset at the beginning and end of |MiniTest.execute()|.
+--- It is reset at the beginning of |MiniTest.execute()|.
 ---
 --- At least these keys are supported:
 --- - <all_cases> - all cases being currently executed.
 --- - <case> - currently executed test case.
-MiniTest.current = { testcase = nil, state_message = nil }
+MiniTest.current = { all_cases = nil, case = nil }
 
 -- Module functionality =======================================================
 function MiniTest.run(opts)
@@ -104,6 +113,49 @@ function MiniTest.run(opts)
   opts = vim.tbl_deep_extend('force', MiniTest.config, opts or {})
   local cases = MiniTest.collect(opts.collect)
   MiniTest.execute(cases, opts.execute)
+end
+
+function MiniTest.run_directory(directory, opts)
+  directory = directory or 'tests'
+
+  local stronger_opts = {
+    find_files = function()
+      return vim.fn.globpath(directory, '**/test_*.lua', true, true)
+    end,
+  }
+  opts = vim.tbl_deep_extend('force', opts or {}, stronger_opts)
+
+  MiniTest.run(opts)
+end
+
+function MiniTest.run_file(file, opts)
+  file = file or vim.api.nvim_buf_get_name(0)
+
+  --stylua: ignore
+  local stronger_opts = { collect = { find_files = function() return { file } end } }
+  opts = vim.tbl_deep_extend('force', opts or {}, stronger_opts)
+
+  MiniTest.run(opts)
+end
+
+function MiniTest.run_at_cursor(coords, opts)
+  if coords == nil then
+    local cur_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':.')
+    local cur_pos = vim.api.nvim_win_get_cursor(0)
+    coords = { file = cur_file, line = cur_pos[1] }
+  end
+
+  local stronger_opts = {
+    collect = {
+      filter_cases = function(case)
+        local info = debug.getinfo(case.test)
+        return info.short_src == coords.file and info.linedefined <= coords.line and coords.line <= info.lastlinedefined
+      end,
+    },
+  }
+  opts = vim.tbl_deep_extend('force', opts or {}, stronger_opts)
+
+  MiniTest.run(opts)
 end
 
 function MiniTest.collect(opts)
@@ -149,45 +201,61 @@ function MiniTest.collect(opts)
 end
 
 function MiniTest.execute(cases, opts)
+  if #cases == 0 then
+    H.message('No cases to execute.')
+    return
+  end
+
   opts = vim.tbl_deep_extend('force', MiniTest.config.execute, opts or {})
 
   -- Call reporter on schedule
-  local reporter = opts.reporter or function() end
+  local reporter = opts.reporter or MiniTest.reporters.echo
 
-  MiniTest.current.all_cases = cases
+  MiniTest.current = { all_cases = cases }
   for _, case in ipairs(cases) do
-    MiniTest.current.case = case
-    case.info = { state = nil, notes = {}, fails = {} }
-
-    -- Execute
     local on_err = function(e)
-      table.insert(case.info.fails, tostring(e))
+      table.insert(case.exec.fails, tostring(e))
     end
+
+    -- Schedule execution in async fashion. This allows doing other things
+    -- while tests are executed.
+    vim.schedule(function()
+      MiniTest.current.case = case
+      case.exec = { state = nil, notes = {}, fails = {} }
+    end)
 
     for i, hook_pre in ipairs(case.hooks.pre) do
-      case.info.state = string.format([[Executing 'pre' hook #%s]], i)
-      reporter()
-      xpcall(hook_pre, on_err)
+      vim.schedule(function()
+        case.exec.state = string.format([[Executing 'pre' hook #%s]], i)
+        reporter()
+        xpcall(hook_pre, on_err)
+      end)
     end
 
-    case.info.state = 'Executing test'
-    reporter()
-    --stylua: ignore
-    xpcall(function() case.test(unpack(case.args)) end, on_err)
+    vim.schedule(function()
+      case.exec.state = 'Executing test'
+      reporter()
+      --stylua: ignore
+      xpcall(function() case.test(unpack(case.args)) end, on_err)
+    end)
 
     for i, hook_post in ipairs(case.hooks.post) do
-      case.info.state = string.format([[Executing 'post' hook #%s]], i)
-      reporter()
-      xpcall(hook_post, on_err)
+      vim.schedule(function()
+        case.exec.state = string.format([[Executing 'post' hook #%s]], i)
+        reporter()
+        xpcall(hook_post, on_err)
+      end)
     end
 
     -- Finalize state
-    local pass_fail = #case.info.fails == 0 and 'Pass' or 'Fail'
-    local with_notes = #case.info.notes == 0 and '' or ' with notes'
-    case.info.state = pass_fail .. with_notes
-  end
+    vim.schedule(function()
+      local pass_fail = #case.exec.fails == 0 and 'Pass' or 'Fail'
+      local with_notes = #case.exec.notes == 0 and '' or ' with notes'
+      case.exec.state = pass_fail .. with_notes
 
-  MiniTest.current = {}
+      reporter()
+    end)
+  end
 end
 
 --- Create test set
@@ -203,7 +271,7 @@ end
 ---       - <post_once> - after last filtered node.
 ---   - <parametrize> - array where each element is a table of parameters to be
 ---     appended to "current parameters" of callable fields.
----   - <user> - user data to be forwarded to steps.
+---   - <data> - user data to be forwarded to steps.
 ---@param tbl? table Initial cases (possibly nested). Will be executed without
 ---   any guarantees on order.
 function MiniTest.new_testset(opts, tbl)
@@ -213,9 +281,9 @@ function MiniTest.new_testset(opts, tbl)
   -- Keep track of new elements order. This allows to iterate through elements
   -- in order they were added.
   local metatbl = { is_testset = true, key_order = vim.tbl_keys(tbl), opts = opts }
-  metatbl.__newindex = function(tbl, key, value)
+  metatbl.__newindex = function(t, key, value)
     table.insert(metatbl.key_order, key)
-    rawset(tbl, key, value)
+    rawset(t, key, value)
   end
 
   return setmetatable(tbl, metatbl)
@@ -267,6 +335,33 @@ function MiniTest.expect.match(str, pattern)
   if str:find(pattern) ~= nil then return true end
 
   H.error_expect('string matching pattern ' .. vim.inspect(pattern), 'Observed string: ' .. str)
+end
+
+-- Reporters ------------------------------------------------------------------
+MiniTest.reporters = {}
+
+function MiniTest.reporters.echo()
+  local case = MiniTest.current.case
+  local state = case.exec.state
+
+  -- Compute text to fit single line (no hit-enter-prompt)
+  local msg = string.format('(mini.test) %s: %s', H.case_to_stringid(case), state)
+  local n = vim.fn.strdisplaywidth(msg)
+  msg = vim.fn.strcharpart(msg, n - vim.v.echospace, vim.v.echospace)
+
+  -- Compute highlight group
+  local hl_group = 'None'
+  if vim.startswith(state, 'Pass') then
+    hl_group = 'MiniTestPass'
+  elseif vim.startswith(state, 'Fail') then
+    hl_group = 'MiniTestFail'
+  end
+
+  local command = string.format('echohl %s | echon %s | echohl None', hl_group, vim.inspect(msg))
+  vim.cmd(command)
+
+  -- Force redraw because otherwise intermediate steps are not shown
+  vim.cmd('redraw')
 end
 
 -- Helpers --------------------------------------------------------------------
@@ -566,7 +661,7 @@ function H.setup_config(config)
     ['collect.find_files'] = { config.collect.find_files, 'function' },
     ['collect.filter_cases'] = { config.collect.filter_cases, 'function' },
 
-    ['execute.reporter'] = { config.execute.reporter, 'function' },
+    ['execute.reporter'] = { config.execute.reporter, 'function', true },
   })
 
   return config
@@ -616,7 +711,7 @@ end
 ---@field hooks table Hooks to be executed as part of test case. Has fields
 ---   <pre> and <post> with arrays to be consecutively executed before and
 ---   after execution of `test`.
----@field info table? Information about test case execution. Value of `nil`
+---@field exec table? Information about test case execution. Value of `nil`
 ---   means that this particular case was not executed. Has following fields:
 ---     - <fails> - array of strings with failing information.
 ---     - <notes> - array of strings with non-failing information.
@@ -627,7 +722,7 @@ end
 ---         - 'Fail' (some fails, no notes).
 ---         - 'Fail with notes' (some fails, some notes).
 ---@field test function|table Main callable object representing test action.
----@field user table User data: array of `opts.user` from nested testsets.
+---@field data table User data: array of `opts.data` from nested testsets.
 ---@private
 
 --- Convert test set to array of test cases
@@ -636,12 +731,12 @@ end
 ---   be executed only once before corresponding item.
 ---@private
 function H.set_to_testcases(set, template, hooks_once)
-  template = template or { args = {}, desc = {}, hooks = { pre = {}, post = {} }, user = {} }
+  template = template or { args = {}, desc = {}, hooks = { pre = {}, post = {} }, data = {} }
   hooks_once = hooks_once or { pre = {}, post = {} }
 
   local metatbl = getmetatable(set)
   local opts, key_order = metatbl.opts, metatbl.key_order
-  local hooks, parametrize, user = opts.hooks or {}, opts.parametrize or { {} }, opts.user or {}
+  local hooks, parametrize, data = opts.hooks or {}, opts.parametrize or { {} }, opts.data or {}
 
   -- Convert to steps only callable or test set nodes
   local node_keys = vim.tbl_filter(function(key)
@@ -672,7 +767,7 @@ function H.set_to_testcases(set, template, hooks_once)
         args = args,
         desc = key,
         hooks = { pre = hooks.pre_case, post = hooks.post_case },
-        user = user,
+        data = data,
       })
 
       if vim.is_callable(node) then
@@ -735,7 +830,7 @@ function H.extend_template(template, layer)
   vim.list_extend(res.args, layer.args)
   table.insert(res.desc, layer.desc)
   res.hooks = H.extend_hooks(res.hooks, layer.hooks, false)
-  res.user = vim.tbl_deep_extend('force', res.user, layer.user)
+  res.data = vim.tbl_deep_extend('force', res.data, layer.data)
 
   return res
 end
@@ -757,7 +852,16 @@ function H.extend_hooks(hooks, layer, do_deepcopy)
   return res
 end
 
--- Reporters ------------------------------------------------------------------
+-- Reporter utilities ---------------------------------------------------------
+function H.case_to_stringid(case)
+  local desc = vim.inspect(table.concat(case.desc, ' | '))
+  if #case.args == 0 then
+    return desc
+  end
+  local args = vim.inspect(case.args, { newline = '', indent = '' })
+  return ('%s with args %s'):format(desc, args)
+end
+
 -- function H.cases_to_lines(cases, opts)
 --   opts = vim.tbl_deep_extend('force', { depth = 1 }, opts)
 -- end

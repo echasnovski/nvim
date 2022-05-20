@@ -1,1 +1,1 @@
-return MiniTest.as_testset({ ['Should recognize subdirectories by default'] = function() end })
+return MiniTest.new_testset({}, { ['Should recognize subdirectories by default'] = function() end })
