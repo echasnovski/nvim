@@ -6,7 +6,7 @@
 --- Planned features:
 --- - "Collect and execute" design.
 --- - The `testset` (table with callable elements at matching fields) and
----   `test_step` (those fields after flattening along with hooks and spreading
+---   `test_case` (those fields after flattening along with hooks and spreading
 ---   arguments).
 --- - Ability to filter (during collection): in directory, in file, **at cursor
 ---   position**, at tags.
@@ -78,6 +78,7 @@ MiniTest.config = {
   -- Options controlling execution of test cases
   execute = {
     reporter = nil,
+    stop_on_error = false,
   },
 
   -- Path (relative to current directory) to script which handles project
@@ -201,6 +202,8 @@ function MiniTest.collect(opts)
 end
 
 function MiniTest.execute(cases, opts)
+  H.should_stop_execution = false
+
   if #cases == 0 then
     H.message('No cases to execute.')
     return
@@ -213,42 +216,30 @@ function MiniTest.execute(cases, opts)
 
   MiniTest.current = { all_cases = cases }
   for _, case in ipairs(cases) do
-    local on_err = function(e)
-      table.insert(case.exec.fails, tostring(e))
-    end
-
     -- Schedule execution in async fashion. This allows doing other things
     -- while tests are executed.
     vim.schedule(function()
+      --stylua: ignore
+      if H.should_stop_execution then return end
       MiniTest.current.case = case
       case.exec = { state = nil, notes = {}, fails = {} }
     end)
 
     for i, hook_pre in ipairs(case.hooks.pre) do
-      vim.schedule(function()
-        case.exec.state = string.format([[Executing 'pre' hook #%s]], i)
-        reporter()
-        xpcall(hook_pre, on_err)
-      end)
+      H.schedule_step([[Executing 'pre' hook #]] .. i, hook_pre, reporter, opts)
     end
 
-    vim.schedule(function()
-      case.exec.state = 'Executing test'
-      reporter()
-      --stylua: ignore
-      xpcall(function() case.test(unpack(case.args)) end, on_err)
-    end)
+    --stylua: ignore
+    H.schedule_step('Executing test', function() case.test(unpack(case.args)) end, reporter, opts)
 
     for i, hook_post in ipairs(case.hooks.post) do
-      vim.schedule(function()
-        case.exec.state = string.format([[Executing 'post' hook #%s]], i)
-        reporter()
-        xpcall(hook_post, on_err)
-      end)
+      H.schedule_step([[Executing 'post' hook #]] .. i, hook_post, reporter, opts)
     end
 
     -- Finalize state
     vim.schedule(function()
+      --stylua: ignore
+      if H.should_stop_execution then return end
       local pass_fail = #case.exec.fails == 0 and 'Pass' or 'Fail'
       local with_notes = #case.exec.notes == 0 and '' or ' with notes'
       case.exec.state = pass_fail .. with_notes
@@ -256,6 +247,10 @@ function MiniTest.execute(cases, opts)
       reporter()
     end)
   end
+end
+
+function MiniTest.stop()
+  H.should_stop_execution = true
 end
 
 --- Create test set
@@ -306,6 +301,39 @@ function MiniTest.expect.not_equal(left, right)
   H.error_expect('*not* equal objects', 'Object: ' .. vim.inspect(left))
 end
 
+function MiniTest.expect.equal_to_dump(x, dump_path)
+  if dump_path == nil then
+    local path_sep = package.config:sub(1, 1)
+    -- Sanitize path
+    local name = H.case_to_stringid(MiniTest.current.case):gsub('[%s/]', '-')
+    dump_path = string.format('tests%sdumps%s%s', path_sep, path_sep, name)
+  end
+
+  -- If there is no readable dump file, create it. Pass with note.
+  if vim.fn.filereadable(dump_path) == 0 then
+    local dir_path = vim.fn.fnamemodify(dump_path, ':p:h')
+    vim.fn.mkdir(dir_path, 'p')
+
+    local lines = vim.split(vim.inspect(x), '\n')
+    vim.fn.writefile(lines, dump_path)
+
+    table.insert(MiniTest.current.case.exec.notes, 'Created dump at path ' .. vim.inspect(dump_path))
+    return true
+  end
+
+  local expected = vim.fn.readfile(dump_path)
+  local observed = vim.split(vim.inspect(x), '\n')
+
+  --stylua: ignore
+  if vim.deep_equal(expected, observed) then return true end
+
+  H.error_expect(
+    'equal to dump at ' .. vim.inspect(dump_path),
+    'Expected: ' .. vim.inspect(expected),
+    'Observed: ' .. vim.inspect(observed)
+  )
+end
+
 function MiniTest.expect.error(f, match, ...)
   vim.validate({ match = { match, 'string', true } })
 
@@ -327,7 +355,7 @@ function MiniTest.expect.no_error(f, ...)
   --stylua: ignore
   if ok then return true end
 
-  H.error_expect('no error', 'Observed error: ' .. err)
+  H.error_expect('*no* error', 'Observed error: ' .. err)
 end
 
 function MiniTest.expect.match(str, pattern)
@@ -335,6 +363,13 @@ function MiniTest.expect.match(str, pattern)
   if str:find(pattern) ~= nil then return true end
 
   H.error_expect('string matching pattern ' .. vim.inspect(pattern), 'Observed string: ' .. str)
+end
+
+function MiniTest.expect.no_match(str, pattern)
+  --stylua: ignore
+  if str:find(pattern) == nil then return true end
+
+  H.error_expect('*no* string matching pattern ' .. vim.inspect(pattern), 'Observed string: ' .. str)
 end
 
 -- Reporters ------------------------------------------------------------------
@@ -636,12 +671,34 @@ function MiniTest.new_child_neovim()
     child.type_keys('<Esc>')
   end
 
+  function child.get_screen(line_range, col_range)
+    line_range = vim.tbl_deep_extend('force', { 1, 'vim.o.lines' }, line_range or {})
+    col_range = vim.tbl_deep_extend('force', { 1, 'vim.o.columns' }, col_range or {})
+
+    local template = [[
+      local res = {}
+      for i = %s, %s do
+        local line = {}
+        for j = %s, %s do
+          table.insert(line, vim.fn.screenstring(i, j))
+        end
+        table.insert(res, table.concat(line))
+      end
+      return res]]
+    local code = string.format(template, line_range[1], line_range[2], col_range[1], col_range[2])
+
+    return child.lua(code)
+  end
+
   return child
 end
 
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniTest.config
+
+-- Whether to stop async execution
+H.should_stop_execution = false
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -662,6 +719,7 @@ function H.setup_config(config)
     ['collect.filter_cases'] = { config.collect.filter_cases, 'function' },
 
     ['execute.reporter'] = { config.execute.reporter, 'function', true },
+    ['execute.stop_on_error'] = { config.execute.stop_on_error, 'boolean' },
   })
 
   return config
@@ -675,7 +733,7 @@ function H.is_disabled()
   return vim.g.minitest_disable == true or vim.b.minitest_disable == true
 end
 
--- Work with project specific script ==========================================
+-- Work with execution --------------------------------------------------------
 function H.execute_project_script(...)
   -- Don't process script if there are more than one active `run` calls
   if H.is_inside_script then
@@ -703,7 +761,29 @@ function H.execute_project_script(...)
   return success
 end
 
--- Works with test cases ------------------------------------------------------
+function H.schedule_step(state, step, reporter, opts)
+  local on_err = function(e)
+    table.insert(MiniTest.current.case.exec.fails, tostring(e))
+
+    if opts.stop_on_error then
+      MiniTest.stop()
+      reporter()
+    end
+  end
+
+  vim.schedule(function()
+    if H.should_stop_execution then
+      return
+    end
+
+    MiniTest.current.case.exec.state = state
+    reporter()
+
+    xpcall(step, on_err)
+  end)
+end
+
+-- Work with test cases -------------------------------------------------------
 ---@class testcase
 ---
 ---@field args table Array of arguments with which `test` will be called.

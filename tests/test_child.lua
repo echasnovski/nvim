@@ -24,4 +24,9 @@ T['child']['and again'] = function()
   eq(child.lua_get('_G.n'), 100)
 end
 
+T['child']['`get_screen()`'] = function()
+  child.api.nvim_buf_set_lines(0, 0, -1, true, { 'aaa', 'bbb' })
+  expect.equal_to_dump(child.get_screen())
+end
+
 return T
