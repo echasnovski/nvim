@@ -671,23 +671,35 @@ function MiniTest.new_child_neovim()
     child.type_keys('<Esc>')
   end
 
-  function child.get_screen(line_range, col_range)
+  function child.get_screenshot(line_range, col_range)
     line_range = vim.tbl_deep_extend('force', { 1, 'vim.o.lines' }, line_range or {})
     col_range = vim.tbl_deep_extend('force', { 1, 'vim.o.columns' }, col_range or {})
 
     local template = [[
-      local res = {}
+      local text, attr = {}, {}
       for i = %s, %s do
-        local line = {}
+        local text_line, attr_line = {}, {}
         for j = %s, %s do
-          table.insert(line, vim.fn.screenstring(i, j))
+          -- Add only valid (not out-of-bounds) string and attribute
+          local str = vim.fn.screenstring(i, j)
+          if str ~= '' then
+            table.insert(text_line, str)
+            table.insert(attr_line, vim.fn.screenattr(i, j))
+          end
         end
-        table.insert(res, table.concat(line))
+
+        -- Add only valid line
+        if #text_line > 0 then
+          table.insert(text, table.concat(text_line))
+          table.insert(attr, attr_line)
+        end
       end
-      return res]]
+      return { text = text, attr = attr }]]
     local code = string.format(template, line_range[1], line_range[2], col_range[1], col_range[2])
 
-    return child.lua(code)
+    local res = child.lua(code)
+    res.attr = H.recode_attr(res.attr)
+    return res
   end
 
   return child
@@ -945,6 +957,40 @@ end
 -- function H.cases_to_lines(cases, opts)
 --   opts = vim.tbl_deep_extend('force', { depth = 1 }, opts)
 -- end
+
+-- Work with screenshots ------------------------------------------------------
+function H.recode_attr(attr)
+  -- Compute unique codes
+  local unique_codes = {}
+  for _, line in ipairs(attr) do
+    for _, code in ipairs(line) do
+      unique_codes[code] = true
+    end
+  end
+
+  -- Compute character codes. Do it after all unique codes are computed to
+  -- reduce variability of character codes. This way it depends only on output
+  -- of `vim.fn.screenattr()` and not on the order they are placed in `attr`.
+  local char_codes = {}
+  -- Starting at 42 results in empty space (attr code 0) being encoded as `*`
+  local offset = 42
+  for _, code in ipairs(vim.tbl_keys(unique_codes)) do
+    char_codes[code] = string.char(offset)
+    offset = offset + 1
+  end
+
+  -- Actually recode
+  local res = {}
+  for _, line in ipairs(attr) do
+    local char_line = {}
+    for _, code in ipairs(line) do
+      table.insert(char_line, char_codes[code])
+    end
+    table.insert(res, table.concat(char_line))
+  end
+
+  return res
+end
 
 -- Predicates -----------------------------------------------------------------
 function H.is_testset(x)
