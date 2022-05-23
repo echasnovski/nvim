@@ -146,6 +146,8 @@ function MiniTest.run_at_cursor(coords, opts)
     coords = { file = cur_file, line = cur_pos[1] }
   end
 
+  local weaker_opts = { execute = { reporter = MiniTest.reporters.echo } }
+
   local stronger_opts = {
     collect = {
       filter_cases = function(case)
@@ -154,7 +156,7 @@ function MiniTest.run_at_cursor(coords, opts)
       end,
     },
   }
-  opts = vim.tbl_deep_extend('force', opts or {}, stronger_opts)
+  opts = vim.tbl_deep_extend('force', weaker_opts, opts or {}, stronger_opts)
 
   MiniTest.run(opts)
 end
@@ -170,7 +172,7 @@ function MiniTest.collect(opts)
       local msg = string.format([[Sourceing %s resulted into following error: %s]], vim.inspect(file), t)
       H.error(msg)
     end
-    if not H.is_testset(t) then
+    if not H.is_instance(t, 'testset') then
       local msg = string.format(
         [[Output of %s is not a test set. Did you use `MiniTest.new_testset()`?]],
         vim.inspect(file)
@@ -210,8 +212,6 @@ function MiniTest.execute(cases, opts)
   end
 
   opts = vim.tbl_deep_extend('force', MiniTest.config.execute, opts or {})
-
-  -- Call reporter on schedule
   local reporter = opts.reporter or MiniTest.reporters.echo
 
   MiniTest.current = { all_cases = cases }
@@ -275,7 +275,7 @@ function MiniTest.new_testset(opts, tbl)
 
   -- Keep track of new elements order. This allows to iterate through elements
   -- in order they were added.
-  local metatbl = { is_testset = true, key_order = vim.tbl_keys(tbl), opts = opts }
+  local metatbl = { class = 'testset', key_order = vim.tbl_keys(tbl), opts = opts }
   metatbl.__newindex = function(t, key, value)
     table.insert(metatbl.key_order, key)
     rawset(t, key, value)
@@ -299,39 +299,6 @@ function MiniTest.expect.not_equal(left, right)
   if not vim.deep_equal(left, right) then return true end
 
   H.error_expect('*not* equal objects', 'Object: ' .. vim.inspect(left))
-end
-
-function MiniTest.expect.equal_to_dump(x, dump_path)
-  if dump_path == nil then
-    local path_sep = package.config:sub(1, 1)
-    -- Sanitize path
-    local name = H.case_to_stringid(MiniTest.current.case):gsub('[%s/]', '-')
-    dump_path = string.format('tests%sdumps%s%s', path_sep, path_sep, name)
-  end
-
-  -- If there is no readable dump file, create it. Pass with note.
-  if vim.fn.filereadable(dump_path) == 0 then
-    local dir_path = vim.fn.fnamemodify(dump_path, ':p:h')
-    vim.fn.mkdir(dir_path, 'p')
-
-    local lines = vim.split(vim.inspect(x), '\n')
-    vim.fn.writefile(lines, dump_path)
-
-    table.insert(MiniTest.current.case.exec.notes, 'Created dump at path ' .. vim.inspect(dump_path))
-    return true
-  end
-
-  local expected = vim.fn.readfile(dump_path)
-  local observed = vim.split(vim.inspect(x), '\n')
-
-  --stylua: ignore
-  if vim.deep_equal(expected, observed) then return true end
-
-  H.error_expect(
-    'equal to dump at ' .. vim.inspect(dump_path),
-    'Expected: ' .. vim.inspect(expected),
-    'Observed: ' .. vim.inspect(observed)
-  )
 end
 
 function MiniTest.expect.error(f, match, ...)
@@ -358,6 +325,20 @@ function MiniTest.expect.no_error(f, ...)
   H.error_expect('*no* error', 'Observed error: ' .. err)
 end
 
+function MiniTest.expect.truthy(x)
+  --stylua: ignore
+  if x then return true end
+
+  H.error_expect('truthy value', 'Observed: ' .. vim.inspect(x))
+end
+
+function MiniTest.expect.falsy(x)
+  --stylua: ignore
+  if not x then return true end
+
+  H.error_expect('falsy value', 'Observed: ' .. vim.inspect(x))
+end
+
 function MiniTest.expect.match(str, pattern)
   --stylua: ignore
   if str:find(pattern) ~= nil then return true end
@@ -365,15 +346,44 @@ function MiniTest.expect.match(str, pattern)
   H.error_expect('string matching pattern ' .. vim.inspect(pattern), 'Observed string: ' .. str)
 end
 
-function MiniTest.expect.no_match(str, pattern)
-  --stylua: ignore
-  if str:find(pattern) == nil then return true end
+function MiniTest.expect.reference_screenshot(screenshot, path)
+  if path == nil then
+    -- Sanitize path
+    local name = H.case_to_stringid(MiniTest.current.case):gsub('[%s/]', '-')
+    path = 'tests/screenshots/' .. name
+  end
 
-  H.error_expect('*no* string matching pattern ' .. vim.inspect(pattern), 'Observed string: ' .. str)
+  -- If there is no readable screenshot file, create it. Pass with note.
+  if vim.fn.filereadable(path) == 0 then
+    local dir_path = vim.fn.fnamemodify(path, ':p:h')
+    vim.fn.mkdir(dir_path, 'p')
+
+    vim.fn.writefile(screenshot, path)
+
+    table.insert(MiniTest.current.case.exec.notes, 'Created reference screenshot at path ' .. vim.inspect(path))
+    return true
+  end
+
+  local reference = vim.fn.readfile(path)
+
+  --stylua: ignore
+  if vim.deep_equal(reference, screenshot) then return true end
+
+  H.error_expect(
+    'screenshot equal to reference at ' .. vim.inspect(path),
+    'Reference: ' .. vim.inspect(reference),
+    'Observed: ' .. vim.inspect(screenshot)
+  )
 end
 
 -- Reporters ------------------------------------------------------------------
 MiniTest.reporters = {}
+
+-- function MiniTest.reporters.buffer(opts)
+--   opts = vim.tbl_deep_extend('force', { depth = 1 }, opts or {})
+--   local cases = MiniTest.current.all_cases
+--
+-- end
 
 function MiniTest.reporters.echo()
   local case = MiniTest.current.case
@@ -671,34 +681,12 @@ function MiniTest.new_child_neovim()
     child.type_keys('<Esc>')
   end
 
-  function child.get_screenshot(line_range, col_range)
-    line_range = vim.tbl_deep_extend('force', { 1, 'vim.o.lines' }, line_range or {})
-    col_range = vim.tbl_deep_extend('force', { 1, 'vim.o.columns' }, col_range or {})
-
-    local template = [[
-      local text, attr = {}, {}
-      for i = %s, %s do
-        local text_line, attr_line = {}, {}
-        for j = %s, %s do
-          -- Add only valid (not out-of-bounds) string and attribute
-          local str = vim.fn.screenstring(i, j)
-          if str ~= '' then
-            table.insert(text_line, str)
-            table.insert(attr_line, vim.fn.screenattr(i, j))
-          end
-        end
-
-        -- Add only valid line
-        if #text_line > 0 then
-          table.insert(text, table.concat(text_line))
-          table.insert(attr, attr_line)
-        end
-      end
-      return { text = text, attr = attr }]]
-    local code = string.format(template, line_range[1], line_range[2], col_range[1], col_range[2])
-
-    local res = child.lua(code)
-    res.attr = H.recode_attr(res.attr)
+  function child.get_screenshot()
+    local temp_file = child.fn.tempname()
+    -- TODO: consider making it officially exported in Neovim core
+    child.api.nvim__screenshot(temp_file)
+    local res = child.fn.readfile(temp_file)
+    child.fn.delete(temp_file)
     return res
   end
 
@@ -833,7 +821,7 @@ function H.set_to_testcases(set, template, hooks_once)
   -- Convert to steps only callable or test set nodes
   local node_keys = vim.tbl_filter(function(key)
     local node = set[key]
-    return vim.is_callable(node) or H.is_testset(node)
+    return vim.is_callable(node) or H.is_instance(node, 'testset')
   end, key_order)
 
   if #node_keys == 0 then
@@ -865,7 +853,7 @@ function H.set_to_testcases(set, template, hooks_once)
       if vim.is_callable(node) then
         table.insert(testcase_arr, H.new_testcase(cur_template, node))
         table.insert(hooks_once_arr, hooks_once)
-      elseif H.is_testset(node) then
+      elseif H.is_instance(node, 'testset') then
         local nest_testcase_arr, nest_hooks_once_arr = H.set_to_testcases(node, cur_template, hooks_once)
         vim.list_extend(testcase_arr, nest_testcase_arr)
         vim.list_extend(hooks_once_arr, nest_hooks_once_arr)
@@ -958,44 +946,10 @@ end
 --   opts = vim.tbl_deep_extend('force', { depth = 1 }, opts)
 -- end
 
--- Work with screenshots ------------------------------------------------------
-function H.recode_attr(attr)
-  -- Compute unique codes
-  local unique_codes = {}
-  for _, line in ipairs(attr) do
-    for _, code in ipairs(line) do
-      unique_codes[code] = true
-    end
-  end
-
-  -- Compute character codes. Do it after all unique codes are computed to
-  -- reduce variability of character codes. This way it depends only on output
-  -- of `vim.fn.screenattr()` and not on the order they are placed in `attr`.
-  local char_codes = {}
-  -- Starting at 42 results in empty space (attr code 0) being encoded as `*`
-  local offset = 42
-  for _, code in ipairs(vim.tbl_keys(unique_codes)) do
-    char_codes[code] = string.char(offset)
-    offset = offset + 1
-  end
-
-  -- Actually recode
-  local res = {}
-  for _, line in ipairs(attr) do
-    local char_line = {}
-    for _, code in ipairs(line) do
-      table.insert(char_line, char_codes[code])
-    end
-    table.insert(res, table.concat(char_line))
-  end
-
-  return res
-end
-
 -- Predicates -----------------------------------------------------------------
-function H.is_testset(x)
+function H.is_instance(x, class)
   local metatbl = getmetatable(x)
-  return type(metatbl) == 'table' and metatbl.is_testset == true
+  return type(metatbl) == 'table' and metatbl.class == class
 end
 
 -- Expectation utilities ------------------------------------------------------

@@ -26,7 +26,7 @@ end
 
 T['child']['`get_screenshot()`'] = function()
   child.api.nvim_buf_set_lines(0, 0, -1, true, { 'aaa', 'bbb' })
-  expect.equal_to_dump(child.get_screenshot())
+  expect.reference_screenshot(child.get_screenshot())
 end
 
 return T
