@@ -150,7 +150,7 @@ Important system dependencies:
 
 - **Nerd fonts** ([information source](https://gist.github.com/matthewjberger/7dd7e079f282f8138a9dc3b045ebefa0)):
     - Download a [Nerd Font](https://www.nerdfonts.com/) (good choice is "UbuntuMono Nerd Font").
-    - Unzip and copy to '~/.fonts'.
+    - Unzip and copy to '~/.local/share/fonts'.
     - Run the command `fc-cache -fv` to manually rebuild the font cache.
 
 - **Tools for finding stuff**:
