@@ -41,12 +41,6 @@ T['`not_equal()`']['works'] = function()
   expect.error(not_eq, '%*not%* equal objects.*Object:', 1, 1)
 end
 
--- equal_to_dump() ------------------------------------------------------------
-T['`equal_to_dump()`'] = new_set()
-T['`equal_to_dump()`']['works'] = function()
-  expect.equal_to_dump({ 1, 2, a = 3, 4 })
-end
-
 -- Errors ---------------------------------------------------------------------
 T['Errors'] = new_set()
 

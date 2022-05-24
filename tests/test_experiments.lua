@@ -1,16 +1,41 @@
 local new_set, expect = MiniTest.new_testset, MiniTest.expect
 
-local sleeping = function(ms)
-  return function()
-    vim.loop.sleep(ms)
-  end
+local sleep_ms = 250
+
+local f = function()
+  vim.loop.sleep(sleep_ms)
+  return true
 end
 
+--stylua: ignore
 local T = new_set({
-  hooks = { pre_once = sleeping(250), pre_case = sleeping(250), post_case = sleeping(250), post_once = sleeping(250) },
+  hooks = {
+    pre_case = function() vim.loop.sleep(sleep_ms) end,
+    post_case = function() vim.loop.sleep(sleep_ms) end,
+  },
 })
 
-T['first'] = sleeping(250)
-T['second'] = sleeping(250)
+T['first'] = new_set()
+T['first']['a'] = new_set()
+T['first']['a']['aa'] = f
+T['first']['a']['ab'] = f
+T['first']['a']['ac'] = f
+T['first']['b'] = new_set()
+T['first']['b']['ba'] = f
+T['first']['b']['bb'] = f
+T['first']['c'] = f
+
+--stylua: ignore start
+T['second'] = new_set()
+T['second']['a'] = new_set()
+T['second']['a']['aa'] = function() table.insert(MiniTest.current.case.exec.notes, 'Hello note!'); error('Hello') end
+T['second']['a']['ab'] = function() error('Hello') end
+T['second']['a']['ac'] = function() table.insert(MiniTest.current.case.exec.notes, 'Hello note!') end
+T['second']['a']['ad'] = f
+T['second']['b'] = new_set()
+T['second']['b']['ba'] = f
+T['second']['b']['bb'] = f
+T['second']['c'] = f
+--stylua: ignore end
 
 return T
