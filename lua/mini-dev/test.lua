@@ -139,7 +139,7 @@ function MiniTest.run_file(file, opts)
   MiniTest.run(opts)
 end
 
-function MiniTest.run_at_cursor(coords, opts)
+function MiniTest.run_at_coords(coords, opts)
   if coords == nil then
     local cur_file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':.')
     local cur_pos = vim.api.nvim_win_get_cursor(0)
@@ -212,10 +212,7 @@ function MiniTest.execute(cases, opts)
   end
 
   opts = vim.tbl_deep_extend('force', MiniTest.config.execute, opts or {})
-  local reporter = opts.reporter
-  if reporter == nil then
-    reporter = H.is_headless and MiniTest.reporters.stdout or MiniTest.reporters.buffer
-  end
+  local reporter = opts.reporter or (H.is_headless and MiniTest.reporters.stdout or MiniTest.reporters.buffer)
 
   MiniTest.current = { all_cases = cases }
   for _, case in ipairs(cases) do
@@ -394,8 +391,7 @@ function MiniTest.reporters.buffer(opts)
   end
 
   local lines = H.cases_to_lines(MiniTest.current.all_cases, MiniTest.current.case, opts)
-  vim.api.nvim_buf_set_lines(H.buffer_reporter.buf_id, 0, -1, true, lines)
-  -- TODO: replace ANSI escape codes with actual highlighting
+  H.buffer_reporter.set_lines(lines)
   vim.api.nvim_win_set_cursor(H.buffer_reporter.win_id, { 1, 0 })
 
   vim.cmd('redraw')
@@ -430,9 +426,11 @@ function MiniTest.reporters.stdout(opts)
 
   local lines = H.cases_to_lines(MiniTest.current.all_cases, MiniTest.current.case, opts)
 
-  -- Hide cursor
-  io.stdout:write('\27[?25l')
-  io.stdout:write('\27 7')
+  -- Move to beginning of output
+  if H.cache.stdout_n_lines ~= nil then
+    local out = string.format('\27[%sA', H.cache.stdout_n_lines)
+    io.stdout:write(out)
+  end
 
   -- Write lines
   for _, l in ipairs(lines) do
@@ -440,11 +438,9 @@ function MiniTest.reporters.stdout(opts)
     io.stdout:write(out)
   end
 
-  -- Go back to top and show cursor
-  io.stdout:write('\27 8')
-  io.stdout:write('\27[?25h')
-
   io.flush()
+
+  H.cache.stdout_n_lines = #lines
 end
 
 -- Exported utility functions -------------------------------------------------
@@ -744,12 +740,19 @@ H.cache = {
   should_stop_execution = false,
 }
 
--- ANSI codes for common operations
+-- ANSI codes for common cases
 H.ansi_codes = {
   fail = '\27[1;31m', -- Bold red
   pass = '\27[1;32m', -- Bold green
   bold = '\27[1m', -- Bold
   reset = '\27[0m',
+}
+
+-- Highlight groups for common ANSI codes
+H.hl_groups = {
+  ['\27[1;31m'] = 'MiniTestFail',
+  ['\27[1;32m'] = 'MiniTestPass',
+  ['\27[1m'] = 'Bold',
 }
 
 -- Symbols used in reporter output
@@ -760,7 +763,7 @@ H.reporter_symbols = setmetatable({
   ['Fail']            = H.ansi_codes.fail .. 'x' .. H.ansi_codes.reset,
   ['Fail with notes'] = H.ansi_codes.fail .. 'X' .. H.ansi_codes.reset,
 }, {
-  __index = function() return H.ansi_codes.bold .. '.' .. H.ansi_codes.reset end,
+  __index = function() return H.ansi_codes.bold .. '?' .. H.ansi_codes.reset end,
 })
 
 -- Helper functionality =======================================================
@@ -996,7 +999,7 @@ function H.extend_hooks(hooks, layer, do_deepcopy)
 end
 
 -- Buffer reporter utilities --------------------------------------------------
-H.buffer_reporter = { buf_id = nil, win_id = nil }
+H.buffer_reporter = { buf_id = nil, win_id = nil, ns_id = vim.api.nvim_create_namespace('MiniTestBuffer') }
 
 function H.buffer_reporter.new_buffer()
   local present_buf_id = H.buffer_reporter.buf_id
@@ -1071,6 +1074,37 @@ function H.buffer_reporter.set_mappings()
   vim.api.nvim_buf_set_keymap(buf_id, 'n', 'q', '<Cmd>close<CR>', { noremap = true })
 end
 
+function H.buffer_reporter.set_lines(lines)
+  local buf_id, ns_id = H.buffer_reporter.buf_id, H.buffer_reporter.ns_id
+
+  -- Remove ANSI codes while tracking appropriate highlight data
+  local new_lines, hl_ranges = {}, {}
+  for i, l in ipairs(lines) do
+    local n_removed = 0
+    local new_l = l:gsub('()(\27%[.-m)(.-)\27%[0m', function(...)
+      local dots = { ... }
+      local left = dots[1] - n_removed
+      table.insert(
+        hl_ranges,
+        { hl = H.hl_groups[dots[2]], line = i - 1, left = left - 1, right = left + dots[3]:len() - 1 }
+      )
+
+      -- Here `4` is `string.len('\27[0m')`
+      n_removed = n_removed + dots[2]:len() + 4
+      return dots[3]
+    end)
+    table.insert(new_lines, new_l)
+  end
+
+  -- Set lines
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, new_lines)
+
+  -- Highlight
+  for _, hl_data in ipairs(hl_ranges) do
+    vim.highlight.range(buf_id, ns_id, hl_data.hl, { hl_data.line, hl_data.left }, { hl_data.line, hl_data.right }, {})
+  end
+end
+
 -- Common reporter utilities --------------------------------------------------
 function H.cases_to_lines(cases, current_case, opts)
   -- Compute output information
@@ -1118,8 +1152,9 @@ function H.case_to_report(case, depth)
   local symbol = H.reporter_symbols[exec.state]
 
   -- Compose "Fails and notes" lines
-  local fail_prefix = H.add_color('FAIL: ', 'fail')
-  local note_prefix = H.add_color('NOTE: ', 'pass')
+  local stringid = H.case_to_stringid(case)
+  local fail_prefix = string.format('%s in %s: ', H.add_color('FAIL', 'fail'), stringid)
+  local note_prefix = string.format('%s in %s: ', H.add_color('NOTE', 'pass'), stringid)
 
   local fails_notes = {}
   vim.list_extend(fails_notes, H.add_prefix(exec.fails, fail_prefix))
