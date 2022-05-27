@@ -146,8 +146,6 @@ function MiniTest.run_at_coords(coords, opts)
     coords = { file = cur_file, line = cur_pos[1] }
   end
 
-  local weaker_opts = { execute = { reporter = MiniTest.reporters.echo } }
-
   local stronger_opts = {
     collect = {
       filter_cases = function(case)
@@ -156,7 +154,7 @@ function MiniTest.run_at_coords(coords, opts)
       end,
     },
   }
-  opts = vim.tbl_deep_extend('force', weaker_opts, opts or {}, stronger_opts)
+  opts = vim.tbl_deep_extend('force', opts or {}, stronger_opts)
 
   MiniTest.run(opts)
 end
@@ -169,12 +167,12 @@ function MiniTest.collect(opts)
   for _, file in ipairs(opts.find_files()) do
     local ok, t = pcall(dofile, file)
     if not ok then
-      local msg = string.format([[Sourceing %s resulted into following error: %s]], vim.inspect(file), t)
+      local msg = string.format('Sourcing %s resulted into following error: %s', vim.inspect(file), t)
       H.error(msg)
     end
     if not H.is_instance(t, 'testset') then
       local msg = string.format(
-        [[Output of %s is not a test set. Did you use `MiniTest.new_testset()`?]],
+        'Output of %s is not a test set. Did you use `MiniTest.new_testset()`?',
         vim.inspect(file)
       )
       H.error(msg)
@@ -204,49 +202,54 @@ function MiniTest.collect(opts)
 end
 
 function MiniTest.execute(cases, opts)
-  H.cache = {}
-
+  -- Verify correct arguments
   if #cases == 0 then
     H.message('No cases to execute.')
     return
   end
 
   opts = vim.tbl_deep_extend('force', MiniTest.config.execute, opts or {})
-  local reporter = opts.reporter or (H.is_headless and MiniTest.reporters.stdout or MiniTest.reporters.buffer)
+  local reporter = opts.reporter or (H.is_headless and MiniTest.gen_reporter.stdout() or MiniTest.gen_reporter.buffer())
+  if type(reporter) ~= 'table' then
+    H.message('`opts.reporter` should be table or `nil`.')
+    return
+  end
+  opts.reporter = reporter
 
-  MiniTest.current = { all_cases = cases }
-  for _, case in ipairs(cases) do
+  -- Start execution
+  H.cache = {}
+
+  MiniTest.current.all_cases = cases
+
+  --stylua: ignore
+  vim.schedule(function() H.exec_callable(reporter.start, cases) end)
+
+  for case_num, cur_case in ipairs(cases) do
     -- Schedule execution in async fashion. This allows doing other things
     -- while tests are executed.
-    vim.schedule(function()
-      --stylua: ignore
-      if H.cache.should_stop_execution then return end
-      MiniTest.current.case = case
-      case.exec = { state = nil, notes = {}, fails = {} }
-    end)
+    local schedule_step = H.make_step_scheduler(cur_case, case_num, opts)
 
-    for i, hook_pre in ipairs(case.hooks.pre) do
-      H.schedule_step([[Executing 'pre' hook #]] .. i, hook_pre, reporter, opts)
+    --stylua: ignore
+    vim.schedule(function() MiniTest.current.case = cur_case end)
+
+    for i, hook_pre in ipairs(cur_case.hooks.pre) do
+      schedule_step(hook_pre, [[Executing 'pre' hook #]] .. i)
     end
 
     --stylua: ignore
-    H.schedule_step('Executing test', function() case.test(unpack(case.args)) end, reporter, opts)
+    schedule_step(function() cur_case.test(unpack(cur_case.args)) end, 'Executing test')
 
-    for i, hook_post in ipairs(case.hooks.post) do
-      H.schedule_step([[Executing 'post' hook #]] .. i, hook_post, reporter, opts)
+    for i, hook_post in ipairs(cur_case.hooks.post) do
+      schedule_step(hook_post, [[Executing 'post' hook #]] .. i)
     end
 
     -- Finalize state
-    vim.schedule(function()
-      --stylua: ignore
-      if H.cache.should_stop_execution then return end
-      local pass_fail = #case.exec.fails == 0 and 'Pass' or 'Fail'
-      local with_notes = #case.exec.notes == 0 and '' or ' with notes'
-      case.exec.state = pass_fail .. with_notes
-
-      reporter()
-    end)
+    --stylua: ignore
+    schedule_step(nil, function() return H.case_final_state(cur_case) end)
   end
+
+  --stylua: ignore
+  vim.schedule(function() H.exec_callable(reporter.finish) end)
 end
 
 function MiniTest.stop()
@@ -377,70 +380,60 @@ function MiniTest.expect.reference_screenshot(screenshot, path)
 end
 
 -- Reporters ------------------------------------------------------------------
-MiniTest.reporters = {}
+MiniTest.gen_reporter = {}
 
-function MiniTest.reporters.buffer(opts)
-  opts = vim.tbl_deep_extend('force', { depth = 1, window = H.buffer_reporter.default_window_opts() }, opts or {})
+function MiniTest.gen_reporter.buffer(opts)
+  opts = vim.tbl_deep_extend(
+    'force',
+    { depth = 1, window = H.buffer_reporter.default_window_opts() },
+    opts or {},
+    { quit_on_finish = false }
+  )
 
-  -- Set up buffer and window
-  if H.buffer_reporter.win_id == nil or not vim.api.nvim_win_is_valid(H.buffer_reporter.win_id) then
-    H.buffer_reporter.new_buffer()
-    H.buffer_reporter.new_window(opts)
-    H.buffer_reporter.set_options()
-    H.buffer_reporter.set_mappings()
+  local buf_id, win_id
+
+  local replace_latest_lines = function(n_latest, lines)
+    if not (vim.api.nvim_buf_is_valid(buf_id) and vim.api.nvim_win_is_valid(win_id)) then
+      return
+    end
+
+    local n_lines = vim.api.nvim_buf_line_count(buf_id)
+    H.buffer_reporter.set_lines(buf_id, lines, n_lines - n_latest - 1, n_lines - 1)
+    vim.api.nvim_win_set_cursor(win_id, { vim.api.nvim_buf_line_count(buf_id), 0 })
+    vim.cmd('redraw')
   end
 
-  local lines = H.cases_to_lines(MiniTest.current.all_cases, MiniTest.current.case, opts)
-  H.buffer_reporter.set_lines(lines)
-  vim.api.nvim_win_set_cursor(H.buffer_reporter.win_id, { 1, 0 })
+  local res = H.overview_reporter.generate(replace_latest_lines, opts)
+  local start = res.start
+  res.start = function(cases)
+    -- Set up buffer and window
+    buf_id, win_id = H.buffer_reporter.setup_buf_and_win(opts)
 
-  vim.cmd('redraw')
+    -- Proceed with `start` reporter
+    start(cases)
+  end
+
+  return res
 end
 
-function MiniTest.reporters.echo()
-  local case = MiniTest.current.case
-  local state = case.exec.state
+function MiniTest.gen_reporter.stdout(opts)
+  opts = vim.tbl_deep_extend('force', { depth = 1, quit_on_finish = true }, opts or {})
 
-  -- Compute text to fit single line (no hit-enter-prompt)
-  local msg = string.format('(mini.test) %s: %s', H.case_to_stringid(case), state)
-  local n = vim.fn.strdisplaywidth(msg)
-  msg = vim.fn.strcharpart(msg, n - vim.v.echospace, vim.v.echospace)
+  local replace_latest_lines = function(n_latest, lines)
+    -- Remove latest lines
+    if n_latest > 0 then
+      io.stdout:write(('\27[%sF\27[0J'):format(n_latest))
+    end
 
-  -- Compute highlight group
-  local hl_group = 'None'
-  if vim.startswith(state, 'Pass') then
-    hl_group = 'MiniTestPass'
-  elseif vim.startswith(state, 'Fail') then
-    hl_group = 'MiniTestFail'
+    -- Write new lines
+    for _, l in ipairs(lines) do
+      io.stdout:write(l)
+      io.stdout:write('\n')
+    end
+    io.flush()
   end
 
-  local command = string.format('echohl %s | echon %s | echohl None', hl_group, vim.inspect(msg))
-  vim.cmd(command)
-
-  -- Force redraw because otherwise intermediate steps are not shown
-  vim.cmd('redraw')
-end
-
-function MiniTest.reporters.stdout(opts)
-  opts = vim.tbl_deep_extend('force', { depth = 1 }, opts or {})
-
-  local lines = H.cases_to_lines(MiniTest.current.all_cases, MiniTest.current.case, opts)
-
-  -- Move to beginning of output
-  if H.cache.stdout_n_lines ~= nil then
-    local out = string.format('\27[%sA', H.cache.stdout_n_lines)
-    io.stdout:write(out)
-  end
-
-  -- Write lines
-  for _, l in ipairs(lines) do
-    local out = string.format('\r\27[2K%s\n', l)
-    io.stdout:write(out)
-  end
-
-  io.flush()
-
-  H.cache.stdout_n_lines = #lines
+  return H.overview_reporter.generate(replace_latest_lines, opts)
 end
 
 -- Exported utility functions -------------------------------------------------
@@ -586,12 +579,12 @@ function MiniTest.new_child_neovim()
         if value_type == 'function' then
           -- This allows syntax like `child.fn.mode(1)`
           return function(...)
-            return child.api.nvim_exec_lua(([[return %s(...)]]):format(obj_name), { ... })
+            return child.api.nvim_exec_lua(('return %s(...)'):format(obj_name), { ... })
           end
         end
 
         -- This allows syntax like `child.bo.buftype`
-        return child.api.nvim_exec_lua(([[return %s]]):format(obj_name), {})
+        return child.api.nvim_exec_lua(('return %s'):format(obj_name), {})
       end,
       __newindex = function(_, key, value)
         local obj_name = ('vim[%s][%s]'):format(vim.inspect(tbl_name), vim.inspect(key))
@@ -784,7 +777,7 @@ function H.setup_config(config)
     ['collect.find_files'] = { config.collect.find_files, 'function' },
     ['collect.filter_cases'] = { config.collect.filter_cases, 'function' },
 
-    ['execute.reporter'] = { config.execute.reporter, 'function', true },
+    ['execute.reporter'] = { config.execute.reporter, 'table', true },
     ['execute.stop_on_error'] = { config.execute.stop_on_error, 'boolean' },
   })
 
@@ -827,26 +820,33 @@ function H.execute_project_script(...)
   return success
 end
 
-function H.schedule_step(state, step, reporter, opts)
+function H.make_step_scheduler(case, case_num, opts)
+  local report_update_case = function()
+    H.exec_callable(opts.reporter.update, case_num)
+  end
+
   local on_err = function(e)
-    table.insert(MiniTest.current.case.exec.fails, tostring(e))
+    table.insert(case.exec.fails, tostring(e))
 
     if opts.stop_on_error then
       MiniTest.stop()
-      reporter()
+      case.exec.state = H.case_final_state(case)
+      report_update_case()
     end
   end
 
-  vim.schedule(function()
-    if H.cache.should_stop_execution then
-      return
-    end
+  return function(f, state)
+    f = f or function() end
 
-    MiniTest.current.case.exec.state = state
-    reporter()
-
-    xpcall(step, on_err)
-  end)
+    vim.schedule(function()
+      --stylua: ignore
+      if H.cache.should_stop_execution then return end
+      case.exec = case.exec or { fails = {}, notes = {} }
+      case.exec.state = vim.is_callable(state) and state() or state
+      report_update_case()
+      xpcall(f, on_err)
+    end)
+  end
 end
 
 -- Work with test cases -------------------------------------------------------
@@ -998,16 +998,168 @@ function H.extend_hooks(hooks, layer, do_deepcopy)
   return res
 end
 
--- Buffer reporter utilities --------------------------------------------------
-H.buffer_reporter = { buf_id = nil, win_id = nil, ns_id = vim.api.nvim_create_namespace('MiniTestBuffer') }
+function H.case_to_stringid(case)
+  local desc = vim.inspect(table.concat(case.desc, ' | '))
+  if #case.args == 0 then
+    return desc
+  end
+  local args = vim.inspect(case.args, { newline = '', indent = '' })
+  return ('%s with args %s'):format(desc, args)
+end
 
-function H.buffer_reporter.new_buffer()
-  local present_buf_id = H.buffer_reporter.buf_id
-  if present_buf_id ~= nil and vim.api.nvim_buf_is_valid(present_buf_id) then
-    return
+function H.case_final_state(case)
+  local pass_fail = #case.exec.fails == 0 and 'Pass' or 'Fail'
+  local with_notes = #case.exec.notes == 0 and '' or ' with notes'
+  return string.format('%s%s', pass_fail, with_notes)
+end
+
+-- Dynamic overview reporter --------------------------------------------------
+H.overview_reporter = {}
+
+function H.overview_reporter.generate(replace_latest_lines, opts)
+  local all_cases, all_groups, latest_group
+  local res = {}
+
+  res.start = function(cases)
+    all_cases = cases
+
+    local symbol = H.reporter_symbols[nil]
+    all_groups = vim.tbl_map(function(c)
+      local desc_trunc = vim.list_slice(c.desc, 1, opts.depth)
+      local group = table.concat(desc_trunc, ' | ')
+      return { group = group, symbol = symbol }
+    end, cases)
+
+    local lines = H.overview_reporter.start_summary(all_cases, all_groups)
+    replace_latest_lines(0, lines)
   end
 
-  H.buffer_reporter.buf_id = vim.api.nvim_create_buf(true, true)
+  res.update = function(case_num)
+    local case = all_cases[case_num]
+    local cur_group = all_groups[case_num].group
+
+    -- Update symbol
+    local state = type(case.exec) == 'table' and case.exec.state or nil
+    all_groups[case_num].symbol = H.reporter_symbols[state]
+
+    local n_goback = H.overview_reporter.update_goback(latest_group, cur_group)
+    local lines = H.overview_reporter.update_lines(case_num, all_cases, all_groups)
+    replace_latest_lines(n_goback, lines)
+
+    latest_group = cur_group
+  end
+
+  res.finish = function()
+    local lines = H.overview_reporter.finish_summary(all_cases)
+    replace_latest_lines(2, lines)
+
+    --stylua: ignore
+    if not opts.quit_on_finish then return end
+
+    local has_fails = false
+    for _, c in ipairs(all_cases) do
+      local n_fails = c.exec == nil and 0 or #c.exec.fails
+      has_fails = has_fails or n_fails > 0
+    end
+
+    vim.cmd(has_fails and '1cquit!' or '0cquit!')
+  end
+
+  return res
+end
+
+function H.overview_reporter.start_summary(cases, groups)
+  local unique_groups = {}
+  for _, g in ipairs(groups) do
+    unique_groups[g.group] = true
+  end
+  local n_groups = #vim.tbl_keys(unique_groups)
+
+  return {
+    string.format('%s %s', H.add_style('Total number of cases:', 'bold'), #cases),
+    string.format('%s %s', H.add_style('Total number of groups:', 'bold'), n_groups),
+    '',
+  }
+end
+
+function H.overview_reporter.update_lines(case_num, cases, groups)
+  local cur_case = cases[case_num]
+  local cur_group = groups[case_num].group
+
+  --stylua: ignore
+  local cur_group_symbols = vim.tbl_map(
+    function(g) return g.symbol end,
+    vim.tbl_filter(function(g) return g.group == cur_group end, groups)
+  )
+
+  return {
+    -- Group overview
+    string.format('%s: %s', cur_group, table.concat(cur_group_symbols)),
+    '',
+    H.add_style('Current case', 'bold'),
+    string.format('%s: %s', H.case_to_stringid(cur_case), cur_case.exec.state),
+  }
+end
+
+function H.overview_reporter.update_goback(latest_group, cur_group)
+  -- By default rewrite latest group symbol overview
+  local res = 4
+
+  if latest_group == nil then
+    -- Nothing to rewrite on first ever call
+    res = 0
+  elseif latest_group ~= cur_group then
+    -- Write just under latest group symbol overview
+    res = 3
+  end
+
+  return res
+end
+
+function H.overview_reporter.finish_summary(cases)
+  local res = { H.add_style('Fails and notes', 'bold') }
+
+  -- Show all fails and notes
+  for _, c in ipairs(cases) do
+    local stringid = H.case_to_stringid(c)
+    local exec = c.exec == nil and { fails = {}, notes = {} } or c.exec
+
+    local fail_prefix = string.format('%s in %s: ', H.add_style('FAIL', 'fail'), stringid)
+    local note_color = #exec.fails > 0 and 'fail' or 'pass'
+    local note_prefix = string.format('%s in %s: ', H.add_style('NOTE', note_color), stringid)
+
+    local cur_fails_notes = {}
+    vim.list_extend(cur_fails_notes, H.add_prefix(exec.fails, fail_prefix))
+    vim.list_extend(cur_fails_notes, H.add_prefix(exec.notes, note_prefix))
+
+    cur_fails_notes = table.concat(cur_fails_notes, '\n')
+    cur_fails_notes = cur_fails_notes == '' and {} or vim.split(cur_fails_notes, '\n')
+
+    vim.list_extend(res, cur_fails_notes)
+  end
+
+  return res
+end
+
+-- Buffer reporter utilities --------------------------------------------------
+H.buffer_reporter = { ns_id = vim.api.nvim_create_namespace('MiniTestBuffer'), n_buffer = 0 }
+
+function H.buffer_reporter.setup_buf_and_win(opts)
+  local buf_id = vim.api.nvim_create_buf(true, true)
+
+  local win_id
+  if vim.is_callable(opts.window) then
+    win_id = opts.window()
+  elseif type(opts.window) == 'table' then
+    win_id = vim.api.nvim_open_win(buf_id, true, opts.window)
+  end
+  win_id = win_id or vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win_id, buf_id)
+
+  H.buffer_reporter.set_options(buf_id, win_id)
+  H.buffer_reporter.set_mappings(buf_id)
+
+  return buf_id, win_id
 end
 
 function H.buffer_reporter.default_window_opts()
@@ -1021,29 +1173,12 @@ function H.buffer_reporter.default_window_opts()
   }
 end
 
-function H.buffer_reporter.new_window(opts)
-  local present_win_id = H.buffer_reporter.win_id
-  if present_win_id ~= nil and vim.api.nvim_win_is_valid(present_win_id) then
-    return
-  end
-
-  if vim.is_callable(opts.window) then
-    H.buffer_reporter.win_id = opts.window() or vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(H.buffer_reporter.win_id, H.buffer_reporter.buf_id)
-    return
-  end
-
-  if type(opts.window) ~= 'table' then
-    H.error('In "buffer" reporter `opts.window` should be either table or callable object.')
-  end
-
-  H.buffer_reporter.win_id = vim.api.nvim_open_win(H.buffer_reporter.buf_id, true, opts.window)
-end
-
-function H.buffer_reporter.set_options()
-  local buf_id, win_id = H.buffer_reporter.buf_id, H.buffer_reporter.win_id
-
-  vim.api.nvim_buf_set_name(buf_id, 'MiniTest')
+function H.buffer_reporter.set_options(buf_id, win_id)
+  -- Set unique name
+  local n_buffer = H.buffer_reporter.n_buffer + 1
+  local prefix = n_buffer == 1 and '' or (' ' .. n_buffer)
+  vim.api.nvim_buf_set_name(buf_id, 'MiniTest' .. prefix)
+  H.buffer_reporter.n_buffer = n_buffer
 
   -- Having `noautocmd` is crucial for performance: ~9ms without it, ~1.6ms with it
   vim.cmd('noautocmd silent! set filetype=minitest')
@@ -1058,7 +1193,7 @@ function H.buffer_reporter.set_options()
   vim.cmd('setlocal bufhidden=wipe')
 
   local win_options = {
-    colorcolumn = '', fillchars = [[eob: ]], foldcolumn = '0', foldlevel = 999,
+    colorcolumn = '', fillchars = 'eob: ',    foldcolumn = '0', foldlevel = 999,
     number = false,   relativenumber = false, spell = false,    signcolumn = 'no',
     wrap = true,
   }
@@ -1068,14 +1203,13 @@ function H.buffer_reporter.set_options()
   --stylua: ignore end
 end
 
-function H.buffer_reporter.set_mappings()
-  local buf_id = H.buffer_reporter.buf_id
+function H.buffer_reporter.set_mappings(buf_id)
   vim.api.nvim_buf_set_keymap(buf_id, 'n', '<Esc>', '<Cmd>lua MiniTest.stop()<CR>', { noremap = true })
-  vim.api.nvim_buf_set_keymap(buf_id, 'n', 'q', '<Cmd>close<CR>', { noremap = true })
+  vim.api.nvim_buf_set_keymap(buf_id, 'n', 'q', [[<Cmd>lua MiniTest.stop(); vim.cmd('close')<CR>]], { noremap = true })
 end
 
-function H.buffer_reporter.set_lines(lines)
-  local buf_id, ns_id = H.buffer_reporter.buf_id, H.buffer_reporter.ns_id
+function H.buffer_reporter.set_lines(buf_id, lines, start, finish)
+  local ns_id = H.buffer_reporter.ns_id
 
   -- Remove ANSI codes while tracking appropriate highlight data
   local new_lines, hl_ranges = {}, {}
@@ -1086,7 +1220,7 @@ function H.buffer_reporter.set_lines(lines)
       local left = dots[1] - n_removed
       table.insert(
         hl_ranges,
-        { hl = H.hl_groups[dots[2]], line = i - 1, left = left - 1, right = left + dots[3]:len() - 1 }
+        { hl = H.hl_groups[dots[2]], line = start + i - 1, left = left - 1, right = left + dots[3]:len() - 1 }
       )
 
       -- Here `4` is `string.len('\27[0m')`
@@ -1097,92 +1231,12 @@ function H.buffer_reporter.set_lines(lines)
   end
 
   -- Set lines
-  vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, new_lines)
+  vim.api.nvim_buf_set_lines(buf_id, start, finish, true, new_lines)
 
   -- Highlight
   for _, hl_data in ipairs(hl_ranges) do
     vim.highlight.range(buf_id, ns_id, hl_data.hl, { hl_data.line, hl_data.left }, { hl_data.line, hl_data.right }, {})
   end
-end
-
--- Common reporter utilities --------------------------------------------------
-function H.cases_to_lines(cases, current_case, opts)
-  -- Compute output information
-  local reports = vim.tbl_map(function(x)
-    return H.case_to_report(x, opts.depth)
-  end, cases)
-
-  -- Symbolic overview
-  local overview = H.reports_to_overview(reports)
-
-  -- Information about current case
-  local current_state = string.format('%s: %s', H.case_to_stringid(current_case), current_case.exec.state)
-
-  -- "Fails and notes"
-  local fails_notes = vim.tbl_map(function(x)
-    return x.fails_notes
-  end, reports)
-
-  -- Construct result
-  local lines = {
-    overview,
-    '',
-    H.add_color('Current case', 'bold'),
-    current_state,
-    '',
-    H.add_color('Fails and notes', 'bold'),
-    fails_notes,
-  }
-  return vim.tbl_flatten(lines)
-end
-
-function H.case_to_stringid(case)
-  local desc = vim.inspect(table.concat(case.desc, ' | '))
-  if #case.args == 0 then
-    return desc
-  end
-  local args = vim.inspect(case.args, { newline = '', indent = '' })
-  return ('%s with args %s'):format(desc, args)
-end
-
-function H.case_to_report(case, depth)
-  local desc_trunc = vim.list_slice(case.desc, 1, depth)
-
-  local exec = case.exec or { fails = {}, notes = {} }
-  local symbol = H.reporter_symbols[exec.state]
-
-  -- Compose "Fails and notes" lines
-  local stringid = H.case_to_stringid(case)
-  local fail_prefix = string.format('%s in %s: ', H.add_color('FAIL', 'fail'), stringid)
-  local note_prefix = string.format('%s in %s: ', H.add_color('NOTE', 'pass'), stringid)
-
-  local fails_notes = {}
-  vim.list_extend(fails_notes, H.add_prefix(exec.fails, fail_prefix))
-  vim.list_extend(fails_notes, H.add_prefix(exec.notes, note_prefix))
-
-  fails_notes = table.concat(fails_notes, '\n')
-  fails_notes = fails_notes == '' and {} or vim.split(fails_notes, '\n')
-
-  return { desc = table.concat(desc_trunc, ' | '), fails_notes = fails_notes, symbol = symbol }
-end
-
-function H.reports_to_overview(reports)
-  local desc_symbols, desc_order = {}, {}
-  for _, t in ipairs(reports) do
-    if desc_symbols[t.desc] == nil then
-      desc_symbols[t.desc] = {}
-      table.insert(desc_order, t.desc)
-    end
-    table.insert(desc_symbols[t.desc], t.symbol)
-  end
-
-  local overview = {}
-  for _, desc in ipairs(desc_order) do
-    local line = string.format('%s  %s', desc, table.concat(desc_symbols[desc], ''))
-    table.insert(overview, line)
-  end
-
-  return overview
 end
 
 -- Predicates -----------------------------------------------------------------
@@ -1206,20 +1260,24 @@ function H.error(msg)
   error(string.format('(mini.test) %s', msg))
 end
 
+--stylua: ignore
 function H.wrap_callable(f)
-  if vim.is_callable(f) then
-    --stylua: ignore
-     return function(...) return f(...) end
-  end
+  if not vim.is_callable(f) then return end
+  return function(...) return f(...) end
+end
+
+--stylua: ignore
+function H.exec_callable(f, ...)
+  if not vim.is_callable(f) then return end
+  return f(...)
 end
 
 function H.add_prefix(tbl, prefix)
-  return vim.tbl_map(function(x)
-    return ('%s%s'):format(prefix, x)
-  end, tbl)
+  --stylua: ignore
+  return vim.tbl_map(function(x) return ('%s%s'):format(prefix, x) end, tbl)
 end
 
-function H.add_color(x, ansi_code)
+function H.add_style(x, ansi_code)
   return string.format('%s%s%s', H.ansi_codes[ansi_code], x, H.ansi_codes.reset)
 end
 
