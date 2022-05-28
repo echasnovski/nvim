@@ -24,4 +24,6 @@ require('mini-dev.test').setup()
 --   },
 -- })
 
+-- MiniTest.run({ execute = { reporter = MiniTest.gen_reporter.stdout({ throttle_delay = 1000 }) } })
+-- MiniTest.run({ execute = { reporter = MiniTest.gen_reporter.stdout({ group_depth = 2 }) } })
 MiniTest.run()

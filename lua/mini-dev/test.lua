@@ -252,8 +252,19 @@ function MiniTest.execute(cases, opts)
   vim.schedule(function() H.exec_callable(reporter.finish) end)
 end
 
-function MiniTest.stop()
+function MiniTest.stop(opts)
+  opts = vim.tbl_deep_extend('force', { close_all_child_neovim = true }, opts or {})
+
+  -- Register intention to stop execution
   H.cache.should_stop_execution = true
+
+  -- Possibly stop all child Neovim processes
+  --stylua: ignore
+  if not opts.close_all_child_neovim then return end
+  for _, child in ipairs(H.child_neovim_registry) do
+    pcall(child.stop)
+  end
+  H.child_neovim_registry = {}
 end
 
 --- Create test set
@@ -382,17 +393,20 @@ end
 -- Reporters ------------------------------------------------------------------
 MiniTest.gen_reporter = {}
 
+-- Open window with special buffer and update with throttled redraws
 function MiniTest.gen_reporter.buffer(opts)
   opts = vim.tbl_deep_extend(
     'force',
-    { depth = 1, window = H.buffer_reporter.default_window_opts() },
+    { group_depth = 1, throttle_delay = 10, window = H.buffer_reporter.default_window_opts() },
     opts or {},
     { quit_on_finish = false }
   )
 
   local buf_id, win_id
 
-  local replace_latest_lines = function(n_latest, lines)
+  -- Define "replace last line" function with throttled redraw
+  local latest_draw_time = 0
+  local replace_last_lines = function(n_latest, lines, force)
     if not (vim.api.nvim_buf_is_valid(buf_id) and vim.api.nvim_win_is_valid(win_id)) then
       return
     end
@@ -400,40 +414,69 @@ function MiniTest.gen_reporter.buffer(opts)
     local n_lines = vim.api.nvim_buf_line_count(buf_id)
     H.buffer_reporter.set_lines(buf_id, lines, n_lines - n_latest - 1, n_lines - 1)
     vim.api.nvim_win_set_cursor(win_id, { vim.api.nvim_buf_line_count(buf_id), 0 })
-    vim.cmd('redraw')
+
+    -- Throttle redraw to reduce flicker
+    local cur_time = vim.loop.hrtime()
+    local is_enough_time_passed = cur_time - latest_draw_time > opts.throttle_delay * 1000000
+    if is_enough_time_passed or force then
+      vim.cmd('redraw')
+      latest_draw_time = cur_time
+    end
   end
 
-  local res = H.overview_reporter.generate(replace_latest_lines, opts)
+  -- Create and tweak generic overview reporter
+  local res = H.overview_reporter.generate(replace_last_lines, opts)
+
   local start = res.start
   res.start = function(cases)
     -- Set up buffer and window
     buf_id, win_id = H.buffer_reporter.setup_buf_and_win(opts)
-
-    -- Proceed with `start` reporter
     start(cases)
+  end
+
+  local finish = res.finish
+  res.finish = function()
+    -- Restore cursor at start of 'Fails and notes' section
+    local cur_pos = vim.api.nvim_win_get_cursor(win_id)
+    finish()
+    vim.api.nvim_win_set_cursor(win_id, { cur_pos[1] - 2, cur_pos[2] })
   end
 
   return res
 end
 
+-- Write to `stdout` with throttled redraws
 function MiniTest.gen_reporter.stdout(opts)
-  opts = vim.tbl_deep_extend('force', { depth = 1, quit_on_finish = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { group_depth = 1, throttle_delay = 10, quit_on_finish = true }, opts or {})
 
-  local replace_latest_lines = function(n_latest, lines)
+  -- Define "replace last lines" function with throttled draw
+  local latest_draw_time, draw_queue = 0, {}
+  local replace_last_lines = function(n_latest, lines, force)
     -- Remove latest lines
     if n_latest > 0 then
-      io.stdout:write(('\27[%sF\27[0J'):format(n_latest))
+      table.insert(draw_queue, ('\27[%sF\27[0J'):format(n_latest))
     end
 
     -- Write new lines
     for _, l in ipairs(lines) do
-      io.stdout:write(l)
-      io.stdout:write('\n')
+      table.insert(draw_queue, l)
+      table.insert(draw_queue, '\n')
     end
-    io.flush()
+
+    -- Throttle redraw to reduce flicker
+    local cur_time = vim.loop.hrtime()
+    local is_enough_time_passed = cur_time - latest_draw_time > opts.throttle_delay * 1000000
+    if is_enough_time_passed or force then
+      for _, l in ipairs(draw_queue) do
+        io.stdout:write(l)
+      end
+      io.flush()
+      draw_queue = {}
+      latest_draw_time = cur_time
+    end
   end
 
-  return H.overview_reporter.generate(replace_latest_lines, opts)
+  return H.overview_reporter.generate(replace_last_lines, opts)
 end
 
 -- Exported utility functions -------------------------------------------------
@@ -717,6 +760,9 @@ function MiniTest.new_child_neovim()
     return res
   end
 
+  -- Register `child` for automatic stop in case of emergency
+  table.insert(H.child_neovim_registry, child)
+
   return child
 end
 
@@ -732,6 +778,9 @@ H.cache = {
   -- Whether to stop async execution
   should_stop_execution = false,
 }
+
+-- Registry of all Neovim child processes
+H.child_neovim_registry = {}
 
 -- ANSI codes for common cases
 H.ansi_codes = {
@@ -1016,7 +1065,15 @@ end
 -- Dynamic overview reporter --------------------------------------------------
 H.overview_reporter = {}
 
-function H.overview_reporter.generate(replace_latest_lines, opts)
+-- General idea:
+-- - Group cases by concatenating first `group_depth` elements of `desc`. With
+--   defaults, `group_depth = 1` means "group by collected files".
+-- - In `start()` show some stats to know how much is scheduled to be executed.
+-- - In `update()` show symbolic overview of current group and state of current
+--   case. Do this by replacing some amount of last lines in output medium.
+-- - In `finish()` show all fails and notes ordered by case. Also replace lines
+--   with state of current case.
+function H.overview_reporter.generate(replace_last_lines, opts)
   local all_cases, all_groups, latest_group
   local res = {}
 
@@ -1025,13 +1082,13 @@ function H.overview_reporter.generate(replace_latest_lines, opts)
 
     local symbol = H.reporter_symbols[nil]
     all_groups = vim.tbl_map(function(c)
-      local desc_trunc = vim.list_slice(c.desc, 1, opts.depth)
+      local desc_trunc = vim.list_slice(c.desc, 1, opts.group_depth)
       local group = table.concat(desc_trunc, ' | ')
       return { group = group, symbol = symbol }
     end, cases)
 
     local lines = H.overview_reporter.start_summary(all_cases, all_groups)
-    replace_latest_lines(0, lines)
+    replace_last_lines(0, lines)
   end
 
   res.update = function(case_num)
@@ -1042,17 +1099,19 @@ function H.overview_reporter.generate(replace_latest_lines, opts)
     local state = type(case.exec) == 'table' and case.exec.state or nil
     all_groups[case_num].symbol = H.reporter_symbols[state]
 
-    local n_goback = H.overview_reporter.update_goback(latest_group, cur_group)
+    local n_replace = H.overview_reporter.update_n_replace(latest_group, cur_group)
     local lines = H.overview_reporter.update_lines(case_num, all_cases, all_groups)
-    replace_latest_lines(n_goback, lines)
+    replace_last_lines(n_replace, lines)
 
     latest_group = cur_group
   end
 
   res.finish = function()
     local lines = H.overview_reporter.finish_summary(all_cases)
-    replace_latest_lines(2, lines)
+    -- Force drawing to show everything queued up
+    replace_last_lines(2, lines, true)
 
+    -- Possibly quit
     --stylua: ignore
     if not opts.quit_on_finish then return end
 
@@ -1096,12 +1155,12 @@ function H.overview_reporter.update_lines(case_num, cases, groups)
     -- Group overview
     string.format('%s: %s', cur_group, table.concat(cur_group_symbols)),
     '',
-    H.add_style('Current case', 'bold'),
+    H.add_style('Current case state', 'bold'),
     string.format('%s: %s', H.case_to_stringid(cur_case), cur_case.exec.state),
   }
 end
 
-function H.overview_reporter.update_goback(latest_group, cur_group)
+function H.overview_reporter.update_n_replace(latest_group, cur_group)
   -- By default rewrite latest group symbol overview
   local res = 4
 
