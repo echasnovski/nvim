@@ -1,15 +1,5 @@
 local nvim_tree = require('nvim-tree')
 
--- Define 'old-style' settings first
-vim.g.nvim_tree_add_trailing = 1
-vim.g.nvim_tree_respect_buf_cwd = 1
-vim.g.nvim_tree_show_icons = {
-  git = 0, -- Currently causes slowdown
-  folders = 1,
-  files = 1,
-}
-vim.g.nvim_tree_icons = { default = '' }
-
 -- Define Custom functions to simulate ranger's "going in" and "going out"
 -- (might break if 'nvim-tree' is major refactored)
 local get_node = require('nvim-tree.lib').get_node_at_cursor
@@ -66,6 +56,7 @@ nvim_tree.setup({
   hijack_cursor = true,
   update_focused_file = { enable = false },
   git = { enable = false },
+  respect_buf_cwd = true,
   view = {
     width = 40,
     mappings = {
@@ -76,7 +67,18 @@ nvim_tree.setup({
       },
     },
   },
-  renderer = { indent_markers = { enable = true } },
+  renderer = {
+    add_trailing = true,
+    indent_markers = { enable = true },
+    icons = {
+      show = {
+        git = false, -- Currently causes slowdown
+        folder = true,
+        file = true,
+      },
+      glyphs = { default = '' },
+    },
+  },
   actions = {
     open_file = {
       quit_on_open = true,
