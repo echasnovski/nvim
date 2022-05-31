@@ -1,5 +1,5 @@
 local new_set, expect = MiniTest.new_testset, MiniTest.expect
-local eq = expect.equal
+local eq = expect.equality
 
 local child = MiniTest.new_child_neovim()
 
@@ -25,7 +25,11 @@ T['child']['and again'] = function()
 end
 
 T['child']['`get_screenshot()`'] = function()
-  child.api.nvim_buf_set_lines(0, 0, -1, true, { 'aaa', 'bbb' })
+  child.o.cmdheight = 3
+  child.o.lines, child.o.columns = 10, 20
+  child.cmd('set rtp+=~/.config/nvim/pack/plugins/opt/mini')
+  child.cmd('colorscheme minischeme')
+  child.api.nvim_buf_set_lines(0, 0, -1, true, { 'aaa' })
   expect.reference_screenshot(child.get_screenshot())
 end
 

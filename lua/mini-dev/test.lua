@@ -301,18 +301,18 @@ end
 -- Expectations ---------------------------------------------------------------
 MiniTest.expect = {}
 
-function MiniTest.expect.equal(left, right)
+function MiniTest.expect.equality(left, right)
   --stylua: ignore
   if vim.deep_equal(left, right) then return true end
 
-  H.error_expect('equal objects', 'Left: ' .. vim.inspect(left), 'Right: ' .. vim.inspect(right))
+  H.error_expect('equality', 'Left: ' .. vim.inspect(left), 'Right: ' .. vim.inspect(right))
 end
 
-function MiniTest.expect.not_equal(left, right)
+function MiniTest.expect.no_equality(left, right)
   --stylua: ignore
   if not vim.deep_equal(left, right) then return true end
 
-  H.error_expect('*not* equal objects', 'Object: ' .. vim.inspect(left))
+  H.error_expect('*no* equality', 'Object: ' .. vim.inspect(left))
 end
 
 function MiniTest.expect.error(f, match, ...)
@@ -360,6 +360,16 @@ function MiniTest.expect.match(str, pattern)
   H.error_expect('string matching pattern ' .. vim.inspect(pattern), 'Observed string: ' .. str)
 end
 
+--- Expect equality to reference screenshot
+---
+--- With headless execution error report directly prints both screenshots into
+--- terminal.
+---
+---@param screenshot table Array with screenshot information. Usually an output
+---   of `child.get_screenshot()` (see |MiniTest.new_child_neovim()|).
+---@param path string? Path to reference screenshot. If `nil`, constructed
+---   automatically in directory 'tests/screenshots' from current case info.
+---   If there is no file at `path`, it is created with content of `screenshot`.
 function MiniTest.expect.reference_screenshot(screenshot, path)
   if path == nil then
     -- Sanitize path
@@ -383,10 +393,12 @@ function MiniTest.expect.reference_screenshot(screenshot, path)
   --stylua: ignore
   if vim.deep_equal(reference, screenshot) then return true end
 
+  local disable_highlighting = H.is_headless and '\27[0m' or ''
   H.error_expect(
-    'screenshot equal to reference at ' .. vim.inspect(path),
-    'Reference: ' .. vim.inspect(reference),
-    'Observed: ' .. vim.inspect(screenshot)
+    'screenshot equality to reference at ' .. vim.inspect(path),
+    'Reference: ' .. H.screenshot_to_string(reference) .. disable_highlighting,
+    '',
+    'Observed: ' .. H.screenshot_to_string(screenshot) .. disable_highlighting
   )
 end
 
@@ -786,7 +798,7 @@ H.child_neovim_registry = {}
 H.ansi_codes = {
   fail = '\27[1;31m', -- Bold red
   pass = '\27[1;32m', -- Bold green
-  bold = '\27[1m', -- Bold
+  emphasis = '\27[1m', -- Bold
   reset = '\27[0m',
 }
 
@@ -805,7 +817,7 @@ H.reporter_symbols = setmetatable({
   ['Fail']            = H.ansi_codes.fail .. 'x' .. H.ansi_codes.reset,
   ['Fail with notes'] = H.ansi_codes.fail .. 'X' .. H.ansi_codes.reset,
 }, {
-  __index = function() return H.ansi_codes.bold .. '?' .. H.ansi_codes.reset end,
+  __index = function() return H.ansi_codes.emphasis .. '?' .. H.ansi_codes.reset end,
 })
 
 -- Helper functionality =======================================================
@@ -1135,8 +1147,8 @@ function H.overview_reporter.start_summary(cases, groups)
   local n_groups = #vim.tbl_keys(unique_groups)
 
   return {
-    string.format('%s %s', H.add_style('Total number of cases:', 'bold'), #cases),
-    string.format('%s %s', H.add_style('Total number of groups:', 'bold'), n_groups),
+    string.format('%s %s', H.add_style('Total number of cases:', 'emphasis'), #cases),
+    string.format('%s %s', H.add_style('Total number of groups:', 'emphasis'), n_groups),
     '',
   }
 end
@@ -1155,7 +1167,7 @@ function H.overview_reporter.update_lines(case_num, cases, groups)
     -- Group overview
     string.format('%s: %s', cur_group, table.concat(cur_group_symbols)),
     '',
-    H.add_style('Current case state', 'bold'),
+    H.add_style('Current case state', 'emphasis'),
     string.format('%s: %s', H.case_to_stringid(cur_case), cur_case.exec.state),
   }
 end
@@ -1176,7 +1188,7 @@ function H.overview_reporter.update_n_replace(latest_group, cur_group)
 end
 
 function H.overview_reporter.finish_summary(cases)
-  local res = { H.add_style('Fails and notes', 'bold') }
+  local res = {}
 
   -- Show all fails and notes
   for _, c in ipairs(cases) do
@@ -1195,6 +1207,10 @@ function H.overview_reporter.finish_summary(cases)
     cur_fails_notes = cur_fails_notes == '' and {} or vim.split(cur_fails_notes, '\n')
 
     vim.list_extend(res, cur_fails_notes)
+  end
+
+  if #res > 0 then
+    table.insert(res, 1, H.add_style('Fails and notes', 'emphasis'))
   end
 
   return res
@@ -1306,8 +1322,49 @@ end
 
 -- Expectation utilities ------------------------------------------------------
 function H.error_expect(cause, ...)
-  local msg = string.format('Failed expectation for %s.\n%s', cause, table.concat({ ... }, '\n'))
-  error(debug.traceback(msg, 3), 3)
+  local lines = { ... }
+  local first_line = '\n' .. H.add_style(string.format('Failed expectation for %s.', cause), 'emphasis')
+  table.insert(lines, 1, first_line)
+
+  -- Add traceback
+  table.insert(lines, 'Traceback:')
+  vim.list_extend(lines, H.traceback())
+
+  -- Indent lines
+  local msg = table.concat(lines, '\n'):gsub('\n', '\n  ')
+  error(msg, 0)
+end
+
+function H.traceback()
+  local level, res = 1, {}
+  local info = debug.getinfo(level, 'Snl')
+  local this_short_src = info.short_src
+  while info ~= nil do
+    local is_from_file = info.source:sub(1, 1) == '@'
+    local is_from_this_file = info.short_src == this_short_src
+    if is_from_file and not is_from_this_file then
+      local line = string.format([[  %s:%s]], info.short_src, info.currentline)
+      table.insert(res, line)
+    end
+    level = level + 1
+    info = debug.getinfo(level, 'Snl')
+  end
+
+  return res
+end
+
+function H.screenshot_to_string(x)
+  local res = vim.deepcopy(x)
+  if H.is_headless then
+    -- Show screenshot inline (without going home and deleting lines)
+    res[2] = res[2]:gsub('\27%[%d?H\27%[%d?J', '', 1)
+
+    -- Neutralize possible indentation
+    for i = 2, #res do
+      res[i] = string.format('\r%s', res[i])
+    end
+  end
+  return table.concat(res, '\n')
 end
 
 -- Utilities ------------------------------------------------------------------

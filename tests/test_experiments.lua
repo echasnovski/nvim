@@ -1,6 +1,6 @@
 local new_set, expect = MiniTest.new_testset, MiniTest.expect
 
-local sleep_ms = 250
+local sleep_ms = 0
 
 local f = function()
   vim.loop.sleep(sleep_ms)
@@ -14,6 +14,13 @@ local T = new_set({
     post_case = function() vim.loop.sleep(sleep_ms) end,
   },
 })
+
+--stylua: ignore
+T['traceback'] = function()
+  local h = dofile('tests/helpers.lua').h
+  local g = function() h(1, 2) end
+  g()
+end
 
 T['first'] = new_set()
 T['first']['a'] = new_set()

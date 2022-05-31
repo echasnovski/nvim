@@ -1,5 +1,5 @@
 local new_set, expect = MiniTest.new_testset, MiniTest.expect
-local eq, not_eq = expect.equal, expect.not_equal
+local eq, not_eq = expect.equality, expect.no_equality
 
 local T = new_set()
 
@@ -30,7 +30,7 @@ T['`equal()`']['errors when not equal'] = new_set({
   },
 }, {
   function(x, y)
-    expect.error(eq, 'equal objects.*Left:.*Right:', x, y)
+    expect.error(eq, 'equality.*Left:.*Right:', x, y)
   end,
 })
 
@@ -38,7 +38,7 @@ T['`equal()`']['errors when not equal'] = new_set({
 T['`not_equal()`'] = new_set()
 T['`not_equal()`']['works'] = function()
   expect.no_error(not_eq, 1, 2)
-  expect.error(not_eq, '%*not%* equal objects.*Object:', 1, 1)
+  expect.error(not_eq, '%*no%* equality.*Object:', 1, 1)
 end
 
 -- Errors ---------------------------------------------------------------------
