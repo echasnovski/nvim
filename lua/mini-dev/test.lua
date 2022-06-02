@@ -1,7 +1,7 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- Documentation ==============================================================
---- Extensive module for writing Neovim plugin tests.
+--- Module for writing extensive Neovim plugin tests.
 ---
 --- Features:
 --- - Define test action as a named callable entry of a table.
@@ -39,6 +39,7 @@
 ---
 --- # Design
 ---
+--- TODO: Elaborate
 --- - Write test actions as callable entries of test set. Use child process
 ---   inside test actions (see |MiniTest.new_child_neovim|).
 --- - Organize tests in separate files. Each test file should return test set.
@@ -53,6 +54,35 @@
 --- `{}` with your `config` table). It will create global Lua table
 --- `MiniTest` which you can use for scripting or manually (with
 --- `:lua MiniTest.*`). See |MiniTest.config| for available config settings.
+---
+--- # Comparisons~
+---
+--- - 'test_harness' from 'nvim-lua/plenary.nvim':
+---     - Executes each file in separate headless Neovim process with specified
+---       'init.vim' file. While 'mini.test' executes everything in current
+---       Neovim process encouraging writing tests with help of manually
+---       managed child Neovim process (see |MiniTest.new_child_neovim|).
+---     - Tests are expected to be written with embedded simplified versions of
+---       'Olivine-Labs/busted' and 'Olivine-Labs/luassert'. While 'mini.test'
+---       uses concepts of test set (see |MiniTest.new_testset()|) and test
+---       case (see |MiniTest-test-case|) *and* can emulate bigger part of
+---       "busted" framework.
+---     - Has single way of reporting progress (shows result after every case
+---       without summary). While 'mini.test' can have customized reporters
+---       with defaults for interactive and headless usage (provide more
+---       compact and user-friendly summaries).
+---     - Allows parallel execution, while 'mini.test' does not.
+---     - Allows making mocks, stubs, and spies, while 'mini.test' does not
+---       suggesting manually overwriting functionality in child Neovim process.
+---
+--- # Highlight groups~
+---
+--- * `MiniTestFail` - highlighting of passed cases. By default it is a bold
+---   text with `vim.g.terminal_color_1` color (red).
+--- * `MiniTestPass` - highlighting of passed cases. By default it is a bold
+---   text with `vim.g.terminal_color_2` color (green).
+---
+--- To change any highlight group, modify it directly with |:highlight|.
 ---
 --- # Disabling~
 ---
@@ -103,8 +133,9 @@ end
 MiniTest.config = {
   -- Options controlling collection of test cases. See `:h MiniTest.collect()`.
   collect = {
-    -- Emulate functions from 'busted' testing framework (`describe`, `it`, etc.)
-    emulate_busted = false,
+    -- Temporarily emulate functions from 'busted' testing framework
+    -- (`describe`, `it`, `before_each`, `after_each`, and more)
+    emulate_busted = true,
 
     -- Function returning array of file paths to be collected. Default: all Lua
     -- files starting with 'test_' located in 'tests' directory.
@@ -146,22 +177,52 @@ MiniTest.current = { all_cases = nil, case = nil }
 -- Module functionality =======================================================
 --- Create test set
 ---
---- Test set is a hierarchical organization of test actions.
+--- TODO: proofread.
 ---
---- TODO: document how to use it (with/without order preservation,
---- `table.insert()` doesn't work).
+--- Test set is one of the two fundamental data structures. It is a table that
+--- defines hierarchical test organization.
+---
+--- All its elements are one of the three categories:
+--- - A callable (object that can be called; function or table with `__call`
+---   metatble entry) is considered to define a test action. It will be called with
+---   "current arguments" (result of all nested `parametrize` values). If it
+---   throws error, test has failed. Passed otherwise.
+--- - A test set defines nested structure. Its options during collection (see
+---   |MiniTest.collection|) will be extended with options of parent test set.
+--- - Any other elements are considered helpers and don't directly participate
+---   in test structure.
+---
+--- Its options allow customization of test collection and execution (more
+--- details in `opts` description):
+--- - `hooks` - table with elements that will be called without arguments at
+---   cetain stage of test execution.
+--- - `parametrize` - array defining different arguments with which main
+---   test actions will be called. Any non-trivial parametrization will lead to
+---   every element (even nested) be "multiplied" and processed with every
+---   element of `parametrize`. This allows handling many different combination
+---   of tests with little effort.
+--- - `data` - table with user data that will be forwarded to cases. Primary
+---   objective is to be used for customized case filtering.
+---
+--- Notes:
+--- - Preferred way of adding elements is by using syntax `T[name] = element`.
+---   This way order of added elements will be preserved. Any other way won't
+---   guarantee a preserved order.
 ---
 ---@param opts table|nil Allowed options:
 ---   - <hooks> - table with fields:
----       - <pre_once> - before first filtered node.
----       - <pre_case> - before each case (even nested).
----       - <post_case> - after each case (even nested).
----       - <post_once> - after last filtered node.
+---       - <pre_once> - executed before first filtered node.
+---       - <pre_case> - executed before each case (even nested).
+---       - <post_case> - executed after each case (even nested).
+---       - <post_once> - executed after last filtered node.
 ---   - <parametrize> - array where each element is a table of parameters to be
 ---     appended to "current parameters" of callable fields.
----   - <data> - user data to be forwarded to steps.
+---   - <data> - user data to be forwarded to cases. Can be used for a more
+---     granular filtering.
 ---@param tbl table|nil Initial test items (possibly nested). Will be executed
 ---   without any guarantees on order.
+---
+---@return table A single test set.
 function MiniTest.new_testset(opts, tbl)
   opts = opts or {}
   tbl = tbl or {}
@@ -179,9 +240,12 @@ end
 
 --- Test case
 ---
---- Items of sequential organization of test actions.
+--- TODO: elaborate.
 ---
----@class testcase
+--- An item of sequential test organization, as opposed to hierarchical with
+--- test set (see |MiniTest.new_testset()|).
+---
+---@class Test case
 ---
 ---@field args table Array of arguments with which `test` will be called.
 ---@field data table User data: all fields of `opts.data` from nested testsets.
@@ -301,18 +365,49 @@ end
 
 --- Collect test cases
 ---
---- TODO: describe collection algorithm.
+--- TODO: proofread.
+---
+--- Overview of collection process:
+--- - If `opts.emulate_busted` is `true`, temporary make special global
+---   functions (removed at the end of collection). They can be used inside
+---   test files to create hierarchical structure of test cases.
+--- - Execute each file from array output of `opts.find_files`. It should
+---   output a test set (see |MiniTest.new_testset()|) or `nil` (if "busted"
+---   style is used; test set is created implicitly).
+--- - Combine all test sets into single set with fields equal to its file path.
+--- - Convert from hierarchical test configuration to sequential: from single
+---   test set to array of test cases (see |MiniTest-test-case|). Conversion is
+---   done in depth-first fashion while expanding parameters ("multiply" all
+---   test set elements to be processed with every element of `parametrize`).
+---   Details:
+---     - If element is a callable, construct test case with it being main
+---       `test` action and current data. Add it to output array.
+---     - If element is a test set, process it in similar, recursive fashion.
+---       Its options are expanded:
+---         - `args` is appended with "current element" from `parametrize`.
+---         - `desc` is appended with element key.
+---         - `hooks` are extended to their appropriate places. `*_case` hooks
+---           will be inserted closer to all child cases than hooks from parent
+---           test sets.
+---         - `data` is extended via |vim.tbl_deep_extend|.
+---     - Any other element is not processed.
+--- - Filter array with `opts.filter_cases`. Note that input cases don't
+---   contain all hooks, as `*_once` type hooks will be added to appropriate
+---   cases after filtration.
+--- - Add `*_once` hooks to appropriate cases.
 ---
 ---@param opts table|nil Options controlling case collection. Possible fields:
 ---   - <emulate_busted> - whether to emulate 'Olivine-Labs/busted' interface.
 ---     It makes custom global functions emulating `describe`, `it`, `setup`,
----     `teardown`, `before_each`, `after_each`.
+---     `teardown`, `before_each`, `after_each`, `pending`, `finally`.
 ---   - <find_files> - function which when called without arguments returns
 ---     array with file paths. Each file should be a Lua file returning single
 ---     test set or `nil`.
 ---   - <filter_cases> - function which when called with single test case
 ---     (see |MiniTest-test-case|) returns `false` if this case should be filtered
 ---     out; `true` otherwise.
+---
+---@return table Array of test cases ready to be used by |MiniTest.execute()|.
 function MiniTest.collect(opts)
   opts = vim.tbl_deep_extend('force', MiniTest.config.collect, opts or {})
 
@@ -361,6 +456,19 @@ function MiniTest.collect(opts)
   return cases
 end
 
+--- Execute array of test cases
+---
+--- TODO: elaborate.
+---   Mention |MiniTest.current|.
+---   Execution is done in async fashion with scheduling.
+---
+---@param cases table Array of test cases (see |MiniTest-test-case|).
+---@param opts table|nil Options controlling case collection. Possible fields:
+---   - <reporter> - table with possible callable fields `start`, `update`,
+---     `finish`. Default: |MiniTest.gen_reporter.buffer()| in interactive
+---     usage and |MiniTest.gen_reporter.stdout()| in headless usage.
+---   - <stop_on_error> - whether to stop execution (see |MiniTest.stop()|)
+---     after first error. Default: `false`.
 function MiniTest.execute(cases, opts)
   -- Verify correct arguments
   if #cases == 0 then
@@ -434,8 +542,24 @@ function MiniTest.stop(opts)
 end
 
 -- Expectations ---------------------------------------------------------------
+--- Table with expectation functions
+---
+--- Each function has the following behavior:
+--- - Silently returns `true` if expectation is fulfilled.
+--- - Throws an informative error with information helpful for debugging.
+---
+---@usage >
+---   local x = 1 + 1
+---   MiniTest.expect.equality(x, 2) -- passes
+---   MiniTest.expect.equality(x, 1) -- fails
 MiniTest.expect = {}
 
+--- Expect equality of two objects
+---
+--- Equality is tested via |vim.deep_equal|.
+---
+---@param left any First object.
+---@param right any Second object.
 function MiniTest.expect.equality(left, right)
   --stylua: ignore
   if vim.deep_equal(left, right) then return true end
@@ -444,6 +568,12 @@ function MiniTest.expect.equality(left, right)
   H.error_expect('equality', context)
 end
 
+--- Expect no equality of two objects
+---
+--- Equality is tested via |vim.deep_equal|.
+---
+---@param left any First object.
+---@param right any Second object.
 function MiniTest.expect.no_equality(left, right)
   --stylua: ignore
   if not vim.deep_equal(left, right) then return true end
@@ -452,22 +582,32 @@ function MiniTest.expect.no_equality(left, right)
   H.error_expect('*no* equality', context)
 end
 
-function MiniTest.expect.error(f, match, ...)
-  vim.validate({ match = { match, 'string', true } })
+--- Expect function call to raise error
+---
+---@param f function Function to be tested for raising error.
+---@param pattern string Pattern which error message should match. Use `nil` or
+---   `''` (empty string) to not test for pattern matching.
+---@param ... any Extra arguments with which `f` will be called.
+function MiniTest.expect.error(f, pattern, ...)
+  vim.validate({ match = { pattern, 'string', true } })
 
   local ok, err = pcall(f, ...)
   err = err or ''
-  local has_matched_error = not ok and string.find(err, match or '') ~= nil
+  local has_matched_error = not ok and string.find(err, pattern or '') ~= nil
   --stylua: ignore
   if has_matched_error then return true end
 
-  local with_match = match == nil and '' or (' with match %s'):format(vim.inspect(match))
-  local cause = 'error' .. with_match
+  local with_match = pattern == nil and '' or (' with match %s'):format(vim.inspect(pattern))
+  local subject = 'error' .. with_match
   local context = ok and 'Observed no error' or ('Observed error: ' .. err)
 
-  H.error_expect(cause, context)
+  H.error_expect(subject, context)
 end
 
+--- Expect function call to not raise error
+---
+---@param f function Function to be tested for raising error.
+---@param ... any Extra arguments with which `f` will be called.
 function MiniTest.expect.no_error(f, ...)
   local ok, err = pcall(f, ...)
   --stylua: ignore
@@ -476,6 +616,10 @@ function MiniTest.expect.no_error(f, ...)
   H.error_expect('*no* error', 'Observed error: ' .. err)
 end
 
+--- Expect string to match pattern
+---
+---@param str string String to test.
+---@param pattern string Pattern which `str` should match.
 function MiniTest.expect.match(str, pattern)
   --stylua: ignore
   if str:find(pattern) ~= nil then return true end
@@ -517,7 +661,7 @@ function MiniTest.expect.reference_screenshot(screenshot, path)
   --stylua: ignore
   if vim.deep_equal(reference, screenshot) then return true end
 
-  local cause = 'screenshot equality to reference at ' .. vim.inspect(path)
+  local subject = 'screenshot equality to reference at ' .. vim.inspect(path)
   local disable_highlighting = H.is_headless and '\27[0m' or ''
   --stylua: ignore
   local context = string.format(
@@ -525,23 +669,83 @@ function MiniTest.expect.reference_screenshot(screenshot, path)
     H.screenshot_to_string(reference), disable_highlighting,
     H.screenshot_to_string(screenshot), disable_highlighting
   )
-  H.error_expect(cause, context)
+  H.error_expect(subject, context)
 end
 
-function MiniTest.new_expectation(predicate, cause, format_context)
+--- Create new expectation function
+---
+--- Helper for writing custom functions with behavior similar to other values
+--- of |MiniTest.expect|.
+---
+---@param subject string|function Subject of expectation. If function, called
+---   with expectation input arguments to produce string value.
+---@param predicate function Predicate function. Called with expectation input
+---   arguments. Output `false` or `nil` means failed expectation.
+---@fail_context subject string|function Information about fail. If function,
+---   called with expectation input arguments to produce string value.
+---
+---@return function Expection function.
+---
+---@usage >
+---   local expect_truthy = MiniTest.new_expectation(
+---     'truthy',
+---     function(x) return x end,
+---     function(x) return 'Object: ' .. vim.inspect(x) end
+---   )
+function MiniTest.new_expectation(subject, predicate, fail_context)
   return function(...)
-    --stylua: ignore
-    if predicate(...) then return true end
+    if predicate(...) then
+      return true
+    end
 
-    cause = vim.is_callable(cause) and cause(...) or cause
-    H.error_expect(cause, format_context(...))
+    local cur_subject = vim.is_callable(subject) and subject(...) or subject
+    local cur_context = vim.is_callable(fail_context) and fail_context(...) or fail_context
+    H.error_expect(cur_subject, cur_context)
   end
 end
 
 -- Reporters ------------------------------------------------------------------
+--- Table with pre-configured report generators
+---
+--- Each element is a function which returns reporter - table with callable
+--- `start`, `update`, and `finish` fields.
 MiniTest.gen_reporter = {}
 
--- Open window with special buffer and update with throttled redraws
+--- Generate buffer reporter
+---
+--- This is a default choice for interactive (not headless) usage. Opens a window
+--- with special buffer and updates it with throttled redraws.
+---
+--- Opened buffer has the following helpful keybindings:
+--- - `<Esc>` - stop test execution. See |MiniTest.stop()|.
+--- - `q` - stop test execution and close window.
+---
+--- General idea:
+--- - Group cases by concatenating first `opts.group_depth` elements of case
+---   description (`desc` field). With defaults groups by collected files.
+--- - In `start()` show some stats to know how much is scheduled to be executed.
+--- - In `update()` show symbolic overview of current group and state of current
+---   case. Each symbol represents one case and its state:
+---     - `?` - case didn't finish executing.
+---     - `o` - pass.
+---     - `O` - pass with notes.
+---     - `x` - fail.
+---     - `X` - fail with notes.
+--- - In `finish()` show all fails and notes ordered by case.
+---
+---@param opts table|nil Table with options. Used fields:
+---   - <group_depth> - number of first elements of case description (can be zero)
+---     to be used for grouping. Higher values mean higher granularity of output.
+---     Default: 1.
+---   - <throttle_delay> - minimum number of milliseconds to wait between
+---     redrawing. Reduces screen flickering but not amount of computations.
+---     Default: 10.
+---   - <window> - definition of window to open. Can take one of the forms:
+---       - Callable. It is called expecting output to be target window id
+---         (current window is used if output is `nil`). Use this to open in
+---         "normal" window (like `function() vim.cmd('vsplit') end`).
+---       - Table. Used as `config` argument in |nvim_open_win()|.
+---     Default: table for centered floating window.
 function MiniTest.gen_reporter.buffer(opts)
   opts = vim.tbl_deep_extend(
     'force',
@@ -600,7 +804,24 @@ function MiniTest.gen_reporter.buffer(opts)
   return res
 end
 
--- Write to `stdout` with throttled redraws
+--- Generate stdout reporter
+---
+--- This is a default choice for headless usage. Writes to `stdout` in
+--- throttled fashion. Uses ANSI escape sequences to make pretty and
+--- informative output (should work in most modern terminals and continuous
+--- integration providers).
+---
+--- It has same general idea as |MiniTest.gen.reporter.buffer()|.
+---
+---@param opts table|nil Table with options. Used fields:
+---   - <group_depth> - number of first elements of case description (can be zero)
+---     to be used for grouping. Higher values mean higher granularity of output.
+---     Default: 1.
+---   - <throttle_delay> - minimum number of milliseconds to wait between writing
+---     to `stdout`. Reduces screen flickering but not amount of computations.
+---     Default: 10.
+---   - <quit_on_finish> - whether to quit after finishing test execution.
+---     Default: `true`.
 function MiniTest.gen_reporter.stdout(opts)
   opts = vim.tbl_deep_extend('force', { group_depth = 1, throttle_delay = 10, quit_on_finish = true }, opts or {})
 
@@ -711,7 +932,7 @@ function MiniTest.new_child_neovim()
     until connected or i >= max_tries
 
     if not connected then
-      vim.notify('Failed to make connection to child Neovim.')
+      H.error('Failed to make connection to child Neovim.')
       child.stop()
     end
 
@@ -925,13 +1146,18 @@ function MiniTest.new_child_neovim()
     child.type_keys('<Esc>')
   end
 
+  -- Uses |nvim__screenshot()|
   function child.get_screenshot()
     local temp_file = child.fn.tempname()
-    -- TODO: consider making it officially exported in Neovim core
+    -- TODO: consider making PR to officially export it in Neovim core
     child.api.nvim__screenshot(temp_file)
     local res = child.fn.readfile(temp_file)
     child.fn.delete(temp_file)
     return res
+  end
+
+  function child.expect_screenshot(reference_path)
+    return MiniTest.expect.reference_screenshot(child.get_screenshot(), reference_path)
   end
 
   -- Register `child` for automatic stop in case of emergency
@@ -1048,10 +1274,13 @@ function H.busted_emulate(set)
   _G.before_each = setting_hook('pre_case')
   _G.after_each = setting_hook('post_case')
   _G.teardown = setting_hook('post_once')
+
+  _G.pending = MiniTest.skip
+  _G.finally = MiniTest.finally
 end
 
 function H.busted_deemulate()
-  local fun_names = { 'describe', 'it', 'setup', 'before_each', 'after_each', 'teardown' }
+  local fun_names = { 'describe', 'it', 'setup', 'before_each', 'after_each', 'teardown', 'pending', 'finally' }
   for _, f_name in ipairs(fun_names) do
     _G[f_name] = nil
   end
@@ -1140,6 +1369,9 @@ function H.set_to_testcases(set, template, hooks_once)
   local hooks, parametrize, data = opts.hooks or {}, opts.parametrize or { {} }, opts.data or {}
 
   -- Convert to steps only callable or test set nodes
+  -- Ensure that all elements of `set` are being considered (might not be the
+  -- case if `table.insert` was used, for example)
+  key_order = H.ensure_all_vals(key_order, vim.tbl_keys(set))
   local node_keys = vim.tbl_filter(function(key)
     local node = set[key]
     return vim.is_callable(node) or H.is_instance(node, 'testset')
@@ -1183,6 +1415,22 @@ function H.set_to_testcases(set, template, hooks_once)
   end
 
   return testcase_arr, hooks_once_arr
+end
+
+function H.ensure_all_vals(arr_subset, arr_all)
+  local vals_registry = {}
+  for _, v in ipairs(arr_subset) do
+    vals_registry[v] = true
+  end
+
+  for _, v in ipairs(arr_all) do
+    if not vals_registry[v] then
+      table.insert(arr_subset, v)
+      vals_registry[v] = true
+    end
+  end
+
+  return arr_subset
 end
 
 function H.inject_hooks_once(cases, hooks_once)
@@ -1271,14 +1519,6 @@ end
 -- Dynamic overview reporter --------------------------------------------------
 H.overview_reporter = {}
 
--- General idea:
--- - Group cases by concatenating first `group_depth` elements of `desc`. With
---   defaults, `group_depth = 1` means "group by collected files".
--- - In `start()` show some stats to know how much is scheduled to be executed.
--- - In `update()` show symbolic overview of current group and state of current
---   case. Do this by replacing some amount of last lines in output medium.
--- - In `finish()` show all fails and notes ordered by case. Also replace lines
---   with state of current case.
 function H.overview_reporter.generate(replace_last_lines, opts)
   local all_cases, all_groups, latest_group
   local res = {}
@@ -1351,6 +1591,8 @@ function H.overview_reporter.update_lines(case_num, cases, groups)
   local cur_case = cases[case_num]
   local cur_group = groups[case_num].group
 
+  -- Don't show anything before empty group name (when `group_depth` is 0)
+  local cur_group_suffix = cur_group == '' and '' or ': '
   --stylua: ignore
   local cur_group_symbols = vim.tbl_map(
     function(g) return g.symbol end,
@@ -1359,7 +1601,7 @@ function H.overview_reporter.update_lines(case_num, cases, groups)
 
   return {
     -- Group overview
-    string.format('%s: %s', cur_group, table.concat(cur_group_symbols)),
+    string.format('%s%s%s', cur_group, cur_group_suffix, table.concat(cur_group_symbols)),
     '',
     H.add_style('Current case state', 'emphasis'),
     string.format('%s: %s', H.case_to_stringid(cur_case), cur_case.exec.state),
@@ -1524,9 +1766,9 @@ function H.is_instance(x, class)
 end
 
 -- Expectation utilities ------------------------------------------------------
-function H.error_expect(cause, ...)
+function H.error_expect(subject, ...)
   local lines = { ... }
-  local first_line = '\n' .. H.add_style(string.format('Failed expectation for %s.', cause), 'emphasis')
+  local first_line = '\n' .. H.add_style(string.format('Failed expectation for %s.', subject), 'emphasis')
   table.insert(lines, 1, first_line)
 
   -- Add traceback

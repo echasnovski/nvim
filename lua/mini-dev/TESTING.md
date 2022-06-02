@@ -2,6 +2,9 @@
 
 ## File organization
 
+- Interactive.
+- Headless.
+
 ## First test
 
 ## Builtin expectations
@@ -12,6 +15,10 @@
 
 ## Test parametrization
 
+Single parametrization.
+Nested parametrization.
+Using array elements in nested parametrization.
+
 ## Collection
 
 ### Custom files and filter
@@ -20,10 +27,12 @@
 
 ## Using child process
 
-### Use hooks
+### Use inside hooks
 
 For `child.reset` and `child.stop`.
 
 ### Use helpers
 
 ### Test screenshot
+
+## Test 'mini.nvim'

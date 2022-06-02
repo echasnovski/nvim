@@ -16,6 +16,10 @@ local T = new_set({
   },
 })
 
+table.insert(T, function()
+  error('This should be collected at the end.')
+end)
+
 --stylua: ignore
 T['traceback'] = function()
   local h = dofile('tests/helpers.lua').h
