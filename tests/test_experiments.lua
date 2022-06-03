@@ -1,4 +1,4 @@
-local new_set, expect = MiniTest.new_testset, MiniTest.expect
+local new_set, expect = MiniTest.new_set, MiniTest.expect
 local eq = expect.equality
 
 local sleep_ms = 0

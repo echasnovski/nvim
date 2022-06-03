@@ -1,4 +1,4 @@
-local new_set, expect = MiniTest.new_testset, MiniTest.expect
+local new_set, expect = MiniTest.new_set, MiniTest.expect
 local eq = expect.equality
 
 local child = MiniTest.new_child_neovim()
@@ -22,6 +22,32 @@ end
 T['child']['and again'] = function()
   child.lua('_G.n = 101')
   eq(child.lua_get('_G.n'), 100)
+end
+
+T['child']['prevent hanging'] = new_set()
+
+T['child']['prevent hanging']['helper wrappers'] = new_set(
+  { parametrize = { { 'lua' }, { 'lua_get' }, { 'cmd' }, { 'cmd_capture' }, { 'get_screenshot' } } },
+  {
+    function(method)
+      child.type_keys('di')
+      child[method]('1 + 1')
+    end,
+  }
+)
+
+T['child']['prevent hanging']['builtin wrappers'] = new_set({
+  parametrize = { { 'loop', 'hrtime' }, { 'fn', 'mode' }, { 'b', 'aaa' }, { 'bo', 'filetype' } },
+})
+
+T['child']['prevent hanging']['builtin wrappers']['metatbl_index'] = function(tbl_name, key)
+  child.type_keys('di')
+  child[tbl_name][key]('1 + 1')
+end
+
+T['child']['prevent hanging']['builtin wrappers']['metatbl_newindex'] = function(tbl_name, key)
+  child.type_keys('di')
+  child[tbl_name][key] = 1
 end
 
 T['child']['`get_screenshot()`'] = function()

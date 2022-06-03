@@ -1,7 +1,7 @@
 local helpers = dofile('tests/helpers.lua')
 
 local child = helpers.new_child_neovim()
-local expect, eq = MiniTest.expect, MiniTest.expect.equality
+local expect, eq = helpers.expect, helpers.expect.equality
 
 -- Helpers with child processes
 --stylua: ignore start

@@ -1,4 +1,4 @@
-local new_set = MiniTest.new_testset
+local new_set = MiniTest.new_set
 
 local T = new_set({
   hooks = {
