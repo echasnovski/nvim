@@ -53,8 +53,7 @@ end
 T['child']['`get_screenshot()`'] = function()
   child.o.cmdheight = 3
   child.o.lines, child.o.columns = 10, 20
-  child.cmd('set rtp+=~/.config/nvim/pack/plugins/opt/mini')
-  child.cmd('colorscheme minischeme')
+  child.cmd('colorscheme blue')
   child.api.nvim_buf_set_lines(0, 0, -1, true, { 'aaa' })
   expect.reference_screenshot(child.get_screenshot())
 end

@@ -548,10 +548,11 @@ function MiniTest.execute(cases, opts)
     schedule_step(nil, function() return H.case_final_state(cur_case) end)
   end
 
-  vim.schedule(function()
-    H.exec_callable(reporter.finish)
-    H.cache.is_executing = false
-  end)
+  --stylua: ignore start
+  vim.schedule(function() H.exec_callable(reporter.finish) end)
+  -- Use separate call to ensure that `reporter.finish` error won't interfere
+  vim.schedule(function() H.cache.is_executing = false end)
+  --stylua: ignore end
 end
 
 --- Stop test execution
@@ -784,8 +785,7 @@ function MiniTest.gen_reporter.buffer(opts)
   opts = vim.tbl_deep_extend(
     'force',
     { group_depth = 1, throttle_delay = 10, window = H.buffer_reporter.default_window_opts() },
-    opts or {},
-    { quit_on_finish = false }
+    opts or {}
   )
 
   local buf_id, win_id
@@ -793,46 +793,72 @@ function MiniTest.gen_reporter.buffer(opts)
     return vim.api.nvim_buf_is_valid(buf_id) and vim.api.nvim_win_is_valid(win_id)
   end
 
-  -- Define "replace last line" function with throttled redraw
-  local latest_draw_time = 0
-  local replace_last_lines = function(n_latest, lines, force)
-    if not is_valid_buf_win() then
-      return
-    end
+  -- Helpers
+  local set_cursor = function(line)
+    vim.api.nvim_win_set_cursor(win_id, { line or vim.api.nvim_buf_line_count(buf_id), 0 })
+  end
 
-    local n_lines = vim.api.nvim_buf_line_count(buf_id)
-    H.buffer_reporter.set_lines(buf_id, lines, n_lines - n_latest - 1, n_lines - 1)
-    vim.api.nvim_win_set_cursor(win_id, { vim.api.nvim_buf_line_count(buf_id), 0 })
+  -- Define "write from crusor line" function with throttled redraw
+  local latest_draw_time = 0
+  local replace_last = function(n_replace, lines, force)
+    H.buffer_reporter.set_lines(buf_id, lines, -n_replace - 1, -1)
 
     -- Throttle redraw to reduce flicker
     local cur_time = vim.loop.hrtime()
-    local is_enough_time_passed = cur_time - latest_draw_time > opts.throttle_delay * 1000000
+    local is_enough_time_passed = (cur_time - latest_draw_time) > opts.throttle_delay * 1000000
     if is_enough_time_passed or force then
       vim.cmd('redraw')
       latest_draw_time = cur_time
     end
   end
 
-  -- Create and tweak generic overview reporter
-  local res = H.overview_reporter.generate(replace_last_lines, opts)
+  -- Create reporter functions
+  local res = {}
+  local all_cases, all_groups, latest_group_name
 
-  local start = res.start
   res.start = function(cases)
     -- Set up buffer and window
-    buf_id, win_id = H.buffer_reporter.setup_buf_and_win(opts)
-    start(cases)
+    buf_id, win_id = H.buffer_reporter.setup_buf_and_win(opts.window)
+
+    -- Set up data
+    all_cases = cases
+    all_groups = H.overview_reporter.compute_groups(cases, opts.group_depth)
+
+    -- Write lines
+    local lines = H.overview_reporter.start_lines(all_cases, all_groups)
+    replace_last(1, lines)
+    set_cursor()
   end
 
-  local finish = res.finish
-  res.finish = function()
-    if not is_valid_buf_win() then
-      return
-    end
+  res.update = function(case_num)
+    --stylua: ignore
+    if not is_valid_buf_win() then return end
 
-    -- Restore cursor at start of 'Fails and notes' section
-    local cur_pos = vim.api.nvim_win_get_cursor(win_id)
-    finish()
-    vim.api.nvim_win_set_cursor(win_id, { cur_pos[1] - 2, cur_pos[2] })
+    local case, cur_group_name = all_cases[case_num], all_groups[case_num].name
+
+    -- Update symbol
+    local state = type(case.exec) == 'table' and case.exec.state or nil
+    all_groups[case_num].symbol = H.reporter_symbols[state]
+
+    local n_replace = H.buffer_reporter.update_step_n_replace(latest_group_name, cur_group_name)
+    local lines = H.buffer_reporter.update_step_lines(case_num, all_cases, all_groups)
+    replace_last(n_replace, lines)
+    set_cursor()
+
+    latest_group_name = cur_group_name
+  end
+
+  res.finish = function()
+    --stylua: ignore
+    if not is_valid_buf_win() then return end
+
+    -- Cache final cursor position to overwrite 'Current case state' header
+    local start_line = vim.api.nvim_buf_line_count(buf_id) - 1
+
+    -- Force writing lines
+    local lines = H.overview_reporter.finish_lines(all_cases)
+    replace_last(2, lines, true)
+    set_cursor(start_line)
   end
 
   return res
@@ -840,52 +866,80 @@ end
 
 --- Generate stdout reporter
 ---
---- This is a default choice for headless usage. Writes to `stdout` in throttled
---- fashion. Uses ANSI escape sequences to make pretty and informative output
+--- This is a default choice for headless usage. Writes to `stdout`. Uses
+--- coloring ANSI escape sequences to make pretty and informative output
 --- (should work in most modern terminals and continuous integration providers).
 ---
---- It has same general idea as |MiniTest.gen_reporter.buffer()|.
+--- It has same general idea as |MiniTest.gen_reporter.buffer()| with slightly
+--- less output (it doesn't overwrite previous text) to overcome typical
+--- terminal limitations.
 ---
 ---@param opts table|nil Table with options. Used fields:
 ---   - <group_depth> - number of first elements of case description (can be zero)
 ---     used for grouping. Higher values mean higher granularity of output.
 ---     Default: 1.
----   - <throttle_delay> - minimum number of milliseconds to wait between writing
----     to `stdout`. Reduces screen flickering but not amount of computations.
----     Default: 10.
 ---   - <quit_on_finish> - whether to quit after finishing test execution.
 ---     Default: `true`.
 function MiniTest.gen_reporter.stdout(opts)
-  opts = vim.tbl_deep_extend('force', { group_depth = 1, throttle_delay = 10, quit_on_finish = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { group_depth = 1, quit_on_finish = true }, opts or {})
 
-  -- Define "replace last lines" function with throttled draw
-  local latest_draw_time, draw_queue = 0, {}
-  local replace_last_lines = function(n_latest, lines, force)
-    -- Remove latest lines
-    if n_latest > 0 then
-      table.insert(draw_queue, ('\27[%sF\27[0J'):format(n_latest))
-    end
-
-    -- Write new lines
-    for _, l in ipairs(lines) do
-      table.insert(draw_queue, l)
-      table.insert(draw_queue, '\n')
-    end
-
-    -- Throttle redraw to reduce flicker
-    local cur_time = vim.loop.hrtime()
-    local is_enough_time_passed = cur_time - latest_draw_time > opts.throttle_delay * 1000000
-    if is_enough_time_passed or force then
-      for _, l in ipairs(draw_queue) do
-        io.stdout:write(l)
-      end
-      io.flush()
-      draw_queue = {}
-      latest_draw_time = cur_time
-    end
+  local write = function(text)
+    text = type(text) == 'table' and table.concat(text, '\n') or text
+    io.stdout:write(text)
+    io.flush()
   end
 
-  return H.overview_reporter.generate(replace_last_lines, opts)
+  local all_cases, all_groups, latest_group_name
+  local default_symbol = H.reporter_symbols[nil]
+
+  local res = {}
+
+  res.start = function(cases)
+    -- Set up data
+    all_cases = cases
+    all_groups = H.overview_reporter.compute_groups(cases, opts.group_depth)
+
+    -- Write lines
+    local lines = H.overview_reporter.start_lines(all_cases, all_groups)
+    write(lines)
+  end
+
+  res.update = function(case_num)
+    local cur_case = all_cases[case_num]
+    local cur_group_name = all_groups[case_num].name
+
+    -- Possibly start overview of new group
+    if cur_group_name ~= latest_group_name then
+      write('\n')
+      write(cur_group_name)
+      if cur_group_name ~= '' then
+        write(': ')
+      end
+    end
+
+    -- Possibly show new symbol
+    local state = type(cur_case.exec) == 'table' and cur_case.exec.state or nil
+    local cur_symbol = H.reporter_symbols[state]
+    if cur_symbol ~= default_symbol then
+      write(cur_symbol)
+    end
+
+    latest_group_name = cur_group_name
+  end
+
+  res.finish = function()
+    write('\n\n')
+    local lines = H.overview_reporter.finish_lines(all_cases)
+    write(lines)
+    write('\n')
+
+    -- Possibly quit
+    --stylua: ignore
+    if not opts.quit_on_finish then return end
+    vim.cmd(H.has_fails(all_cases) and '1cquit!' or '0cquit!')
+  end
+
+  return res
 end
 
 -- Exported utility functions -------------------------------------------------
@@ -1594,66 +1648,21 @@ end
 -- Dynamic overview reporter --------------------------------------------------
 H.overview_reporter = {}
 
-function H.overview_reporter.generate(replace_last_lines, opts)
-  local all_cases, all_groups, latest_group
-  local res = {}
-
-  res.start = function(cases)
-    all_cases = cases
-
-    local symbol = H.reporter_symbols[nil]
-    all_groups = vim.tbl_map(function(c)
-      local desc_trunc = vim.list_slice(c.desc, 1, opts.group_depth)
-      local group = table.concat(desc_trunc, ' | ')
-      return { group = group, symbol = symbol }
-    end, cases)
-
-    local lines = H.overview_reporter.start_summary(all_cases, all_groups)
-    replace_last_lines(0, lines)
-  end
-
-  res.update = function(case_num)
-    local case = all_cases[case_num]
-    local cur_group = all_groups[case_num].group
-
-    -- Update symbol
-    local state = type(case.exec) == 'table' and case.exec.state or nil
-    all_groups[case_num].symbol = H.reporter_symbols[state]
-
-    local n_replace = H.overview_reporter.update_n_replace(latest_group, cur_group)
-    local lines = H.overview_reporter.update_lines(case_num, all_cases, all_groups)
-    replace_last_lines(n_replace, lines)
-
-    latest_group = cur_group
-  end
-
-  res.finish = function()
-    local lines = H.overview_reporter.finish_summary(all_cases)
-    -- Force drawing to show everything queued up
-    replace_last_lines(2, lines, true)
-
-    -- Possibly quit
-    --stylua: ignore
-    if not opts.quit_on_finish then return end
-
-    local has_fails = false
-    for _, c in ipairs(all_cases) do
-      local n_fails = c.exec == nil and 0 or #c.exec.fails
-      has_fails = has_fails or n_fails > 0
-    end
-
-    vim.cmd(has_fails and '1cquit!' or '0cquit!')
-  end
-
-  return res
+function H.overview_reporter.compute_groups(cases, group_depth)
+  local default_symbol = H.reporter_symbols[nil]
+  return vim.tbl_map(function(c)
+    local desc_trunc = vim.list_slice(c.desc, 1, group_depth)
+    local name = table.concat(desc_trunc, ' | ')
+    return { name = name, symbol = default_symbol }
+  end, cases)
 end
 
-function H.overview_reporter.start_summary(cases, groups)
-  local unique_groups = {}
+function H.overview_reporter.start_lines(cases, groups)
+  local unique_names = {}
   for _, g in ipairs(groups) do
-    unique_groups[g.group] = true
+    unique_names[g.name] = true
   end
-  local n_groups = #vim.tbl_keys(unique_groups)
+  local n_groups = #vim.tbl_keys(unique_names)
 
   return {
     string.format('%s %s', H.add_style('Total number of cases:', 'emphasis'), #cases),
@@ -1662,43 +1671,7 @@ function H.overview_reporter.start_summary(cases, groups)
   }
 end
 
-function H.overview_reporter.update_lines(case_num, cases, groups)
-  local cur_case = cases[case_num]
-  local cur_group = groups[case_num].group
-
-  -- Don't show anything before empty group name (when `group_depth` is 0)
-  local cur_group_suffix = cur_group == '' and '' or ': '
-  --stylua: ignore
-  local cur_group_symbols = vim.tbl_map(
-    function(g) return g.symbol end,
-    vim.tbl_filter(function(g) return g.group == cur_group end, groups)
-  )
-
-  return {
-    -- Group overview
-    string.format('%s%s%s', cur_group, cur_group_suffix, table.concat(cur_group_symbols)),
-    '',
-    H.add_style('Current case state', 'emphasis'),
-    string.format('%s: %s', H.case_to_stringid(cur_case), cur_case.exec.state),
-  }
-end
-
-function H.overview_reporter.update_n_replace(latest_group, cur_group)
-  -- By default rewrite latest group symbol overview
-  local res = 4
-
-  if latest_group == nil then
-    -- Nothing to rewrite on first ever call
-    res = 0
-  elseif latest_group ~= cur_group then
-    -- Write just under latest group symbol overview
-    res = 3
-  end
-
-  return res
-end
-
-function H.overview_reporter.finish_summary(cases)
+function H.overview_reporter.finish_lines(cases)
   local res = {}
 
   -- Show all fails and notes
@@ -1718,6 +1691,11 @@ function H.overview_reporter.finish_summary(cases)
     cur_fails_notes = cur_fails_notes == '' and {} or vim.split(cur_fails_notes, '\n')
 
     vim.list_extend(res, cur_fails_notes)
+
+    -- Add empty line to separate fails and notes from same case
+    if #cur_fails_notes > 0 then
+      table.insert(res, '')
+    end
   end
 
   local header = #res > 0 and 'Fails and notes' or 'No fails. No notes.'
@@ -1729,14 +1707,14 @@ end
 -- Buffer reporter utilities --------------------------------------------------
 H.buffer_reporter = { ns_id = vim.api.nvim_create_namespace('MiniTestBuffer'), n_buffer = 0 }
 
-function H.buffer_reporter.setup_buf_and_win(opts)
+function H.buffer_reporter.setup_buf_and_win(window_opts)
   local buf_id = vim.api.nvim_create_buf(true, true)
 
   local win_id
-  if vim.is_callable(opts.window) then
-    win_id = opts.window()
-  elseif type(opts.window) == 'table' then
-    win_id = vim.api.nvim_open_win(buf_id, true, opts.window)
+  if vim.is_callable(window_opts) then
+    win_id = window_opts()
+  elseif type(window_opts) == 'table' then
+    win_id = vim.api.nvim_open_win(buf_id, true, window_opts)
   end
   win_id = win_id or vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(win_id, buf_id)
@@ -1808,6 +1786,10 @@ end
 function H.buffer_reporter.set_lines(buf_id, lines, start, finish)
   local ns_id = H.buffer_reporter.ns_id
 
+  local n_lines = vim.api.nvim_buf_line_count(buf_id)
+  start = (start < 0) and (n_lines + 1 + start) or start
+  finish = (finish < 0) and (n_lines + 1 + finish) or finish
+
   -- Remove ANSI codes while tracking appropriate highlight data
   local new_lines, hl_ranges = {}, {}
   for i, l in ipairs(lines) do
@@ -1830,10 +1812,46 @@ function H.buffer_reporter.set_lines(buf_id, lines, start, finish)
   -- Set lines
   vim.api.nvim_buf_set_lines(buf_id, start, finish, true, new_lines)
 
-  -- Highlight
+  -- Add highlight
   for _, hl_data in ipairs(hl_ranges) do
     vim.highlight.range(buf_id, ns_id, hl_data.hl, { hl_data.line, hl_data.left }, { hl_data.line, hl_data.right }, {})
   end
+end
+
+function H.buffer_reporter.update_step_lines(case_num, cases, groups)
+  local cur_case = cases[case_num]
+  local cur_group = groups[case_num].name
+
+  -- Don't show anything before empty group name (when `group_depth` is 0)
+  local cur_group_suffix = cur_group == '' and '' or ': '
+  --stylua: ignore
+  local cur_group_symbols = vim.tbl_map(
+    function(g) return g.symbol end,
+    vim.tbl_filter(function(g) return g.name == cur_group end, groups)
+  )
+
+  return {
+    -- Group overview
+    string.format('%s%s%s', cur_group, cur_group_suffix, table.concat(cur_group_symbols)),
+    '',
+    H.add_style('Current case state', 'emphasis'),
+    string.format('%s: %s', H.case_to_stringid(cur_case), cur_case.exec.state),
+  }
+end
+
+function H.buffer_reporter.update_step_n_replace(latest_group_name, cur_group_name)
+  -- By default rewrite latest group symbol overview
+  local res = 4
+
+  if latest_group_name == nil then
+    -- Nothing to rewrite on first ever call
+    res = 0
+  elseif latest_group_name ~= cur_group_name then
+    -- Write just under latest group symbol overview
+    res = 3
+  end
+
+  return res
 end
 
 -- Predicates -----------------------------------------------------------------
@@ -1842,16 +1860,23 @@ function H.is_instance(x, class)
   return type(metatbl) == 'table' and metatbl.class == class
 end
 
--- Expectation utilities ------------------------------------------------------
-function H.error_expect(subject, ...)
-  local first_line = '\n' .. H.add_style(string.format('Failed expectation for %s.', subject), 'emphasis')
-  local lines = { first_line, ... }
-  local msg = table.concat(lines, '\n')
-  H.error_with_traceback(msg)
+function H.has_fails(cases)
+  --stylua: ignore
+  for _, c in ipairs(cases) do
+    local n_fails = c.exec == nil and 0 or #c.exec.fails
+    if n_fails > 0 then return true end
+  end
+  return false
 end
 
-function H.error_with_traceback(msg)
-  local lines = { msg }
+-- Expectation utilities ------------------------------------------------------
+function H.error_expect(subject, ...)
+  local msg = string.format('Failed expectation for %s.', subject)
+  H.error_with_traceback(msg, ...)
+end
+
+function H.error_with_traceback(msg, ...)
+  local lines = { '\n' .. H.add_style(msg, 'emphasis'), ... }
 
   -- Add traceback
   table.insert(lines, 'Traceback:')
