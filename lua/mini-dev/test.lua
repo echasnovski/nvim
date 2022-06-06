@@ -670,9 +670,6 @@ end
 ---@param path string|nil Path to reference screenshot. If `nil`, constructed
 ---   automatically in directory 'tests/screenshots' from current case info.
 ---   If there is no file at `path`, it is created with content of `screenshot`.
----
----@seealso A wrapper method `child.expect_screenshot()` in output of
----   |MiniTest.new_child_neovim()|.
 function MiniTest.expect.reference_screenshot(screenshot, path)
   if path == nil then
     -- Sanitize path
@@ -952,31 +949,38 @@ end
 ---
 --- For more information see |MiniTest-child-neovim|.
 ---
----@return child Object of |MiniTest-child-neovim|.
+---@return `child` Object of |MiniTest-child-neovim|.
 ---
----@usage
---- -- Initiate
---- local child = MiniTest.new_child_neovim()
---- child.start()
+---@usage >
+---   -- Initiate
+---   local child = MiniTest.new_child_neovim()
+---   child.start()
 ---
---- -- Use API functions
---- child.api.nvim_buf_set_lines(0, 0, -1, true, { 'Line inside child Neovim' })
+---   -- Use API functions
+---   child.api.nvim_buf_set_lines(0, 0, -1, true, { 'Line inside child Neovim' })
 ---
---- -- Execute Lua code, commands, etc.
---- child.lua('_G.n = 0')
---- child.cmd('au CursorMoved * lua _G.n = _G.n + 1')
---- child.type_keys('l')
---- print(child.lua_get('_G.n')) -- Should be 1
+---   -- Execute Lua code, commands, etc.
+---   child.lua('_G.n = 0')
+---   child.cmd('au CursorMoved * lua _G.n = _G.n + 1')
+---   child.type_keys('l')
+---   print(child.lua_get('_G.n')) -- Should be 1
 ---
---- -- Use other `vim.xxx` Lua wrappers (get executed inside child process)
---- vim.b.aaa = 'current process'
---- child.b.aaa = 'child process'
---- print(child.lua_get('vim.b.aaa')) -- Should be 'child process'
+---   -- Use other `vim.xxx` Lua wrappers (get executed inside child process)
+---   vim.b.aaa = 'current process'
+---   child.b.aaa = 'child process'
+---   print(child.lua_get('vim.b.aaa')) -- Should be 'child process'
 ---
---- -- Always stop process when it is not already needed
---- child.stop()
+---   -- Always stop process after it is not needed
+---   child.stop()
 function MiniTest.new_child_neovim()
-  local child = { address = vim.fn.tempname() }
+  local child = {}
+  local start_args, start_opts
+
+  local ensure_running = function()
+    --stylua: ignore
+    if child.is_running() then return end
+    H.error('Child process is not running. Did you call `child.start()`?')
+  end
 
   local prevent_hanging = function(method)
     -- stylua: ignore
@@ -989,12 +993,13 @@ function MiniTest.new_child_neovim()
   -- Start fully functional Neovim instance (not '--embed' or '--headless',
   -- because they don't provide full functionality)
   function child.start(args, opts)
+    if child.is_running() then
+      H.message('Child process is already running. Use `child.restart()`.')
+      return
+    end
+
     args = args or {}
     opts = vim.tbl_deep_extend('force', { nvim_executable = 'nvim', connection_timeout = 5000 }, opts or {})
-
-    local t = { '--clean', '--listen', child.address }
-    vim.list_extend(t, args)
-    args = t
 
     -- Using 'libuv' for creating a job is crucial for getting this to work in
     -- Github Actions. Other approaches:
@@ -1002,58 +1007,60 @@ function MiniTest.new_child_neovim()
     --   in Github Action.
     -- - Use `plenary.job`. Works fine both locally and in Github Action, but
     --   needs a 'plenary.nvim' dependency (not exactly bad, but undesirable).
-    local job = {}
+    local job = { address = vim.fn.tempname() }
+
+    local full_args = { '--clean', '-n', '--listen', job.address }
+    vim.list_extend(full_args, args)
+
     job.stdin, job.stdout, job.stderr = vim.loop.new_pipe(false), vim.loop.new_pipe(false), vim.loop.new_pipe(false)
     job.handle, job.pid = vim.loop.spawn(opts.nvim_executable, {
       stdio = { job.stdin, job.stdout, job.stderr },
-      args = args,
+      args = full_args,
     }, function() end)
-
-    child.job = job
-    child.start_args, child.start_opts = args, opts
 
     local step = 10
     local connected, i, max_tries = nil, 0, math.floor(opts.connection_timeout / step)
     repeat
       i = i + 1
       vim.loop.sleep(step)
-      connected, child.channel = pcall(vim.fn.sockconnect, 'pipe', child.address, { rpc = true })
+      connected, job.channel = pcall(vim.fn.sockconnect, 'pipe', job.address, { rpc = true })
     until connected or i >= max_tries
 
     if not connected then
       H.error('Failed to make connection to child Neovim.')
       child.stop()
     end
+
+    child.job = job
+    start_args, start_opts = args, opts
   end
 
   function child.stop()
-    pcall(vim.fn.chanclose, child.channel)
+    --stylua: ignore
+    if not child.is_running() then return end
 
-    if child.is_running() then
-      -- TODO: consider figuring out a way to do it better (should actually
-      -- close/kill all child processes when running interactively)
-      child.job.handle:kill(9)
-      child.job = nil
-    end
+    pcall(vim.fn.chanclose, child.job.channel)
+
+    -- TODO: consider figuring out a way to do it better (should actually
+    -- close/kill all child processes when running interactively)
+    child.job.handle:kill(9)
+    child.job = nil
   end
 
   function child.restart(args, opts)
-    args = args or {}
-    opts = vim.tbl_deep_extend('force', child.start_opts or {}, opts or {})
+    args = args or start_args
+    opts = vim.tbl_deep_extend('force', start_opts or {}, opts or {})
 
-    if child.is_running() then
-      child.stop()
-    end
-
-    child.address = vim.fn.tempname()
+    child.stop()
     child.start(args, opts)
   end
 
   -- Wrappers for common `vim.xxx` objects (will get executed inside child)
   child.api = setmetatable({}, {
     __index = function(_, key)
+      ensure_running()
       return function(...)
-        return vim.rpcrequest(child.channel, key, ...)
+        return vim.rpcrequest(child.job.channel, key, ...)
       end
     end,
   })
@@ -1062,19 +1069,22 @@ function MiniTest.new_child_neovim()
   -- blocking requests (like `getchar()`).
   child.api_notify = setmetatable({}, {
     __index = function(_, key)
+      ensure_running()
       return function(...)
-        return vim.rpcnotify(child.channel, key, ...)
+        return vim.rpcnotify(child.job.channel, key, ...)
       end
     end,
   })
 
   ---@return table Emulates `vim.xxx` table (like `vim.fn`)
   ---@private
-  local forward_to_child = function(tbl_name)
+  local redirect_to_child = function(tbl_name)
     -- TODO: try to figure out the best way to operate on tables with function
     -- values (needs "deep encode/decode" of function objects)
     return setmetatable({}, {
       __index = function(_, key)
+        ensure_running()
+
         local short_name = ('%s.%s'):format(tbl_name, key)
         local obj_name = ('vim[%s][%s]'):format(vim.inspect(tbl_name), vim.inspect(key))
 
@@ -1094,6 +1104,8 @@ function MiniTest.new_child_neovim()
         return child.api.nvim_exec_lua(('return %s'):format(obj_name), {})
       end,
       __newindex = function(_, key, value)
+        ensure_running()
+
         local short_name = ('%s.%s'):format(tbl_name, key)
         local obj_name = ('vim[%s][%s]'):format(vim.inspect(tbl_name), vim.inspect(key))
 
@@ -1115,7 +1127,7 @@ function MiniTest.new_child_neovim()
   --stylua: ignore start
   local supported_vim_tables = {
     -- Collections
-    'diagnostic', 'fn', 'highlight', 'json', 'loop', 'lsp', 'mpack', 'treesitter', 'ui',
+    'diagnostic', 'fn', 'highlight', 'json', 'loop', 'lsp', 'mpack', 'spell', 'treesitter', 'ui',
     -- Variables
     'g', 'b', 'w', 't', 'v', 'env',
     -- Options (no 'opt' becuase not really usefult due to use of metatables)
@@ -1123,37 +1135,13 @@ function MiniTest.new_child_neovim()
   }
   --stylua: ignore end
   for _, v in ipairs(supported_vim_tables) do
-    child[v] = forward_to_child(v)
+    child[v] = redirect_to_child(v)
   end
 
   -- Convenience wrappers
-  --- Type keys
-  ---
-  --- Basically a wrapper for |nvim_input()| applied inside child process.
-  --- Differences:
-  --- - Can wait after each group of characters.
-  --- - Raises error if typing keys resulted into error in chidl process (its
-  ---   |v:errmsg| was updated).
-  --- - Key '<' as separate entry may not be escaped as '<LT>'.
-  ---
-  ---@param wait number Number of milliseconds to wait after each entry. May be
-  ---   omitted, in which case no waiting is done.
-  ---@param ... string|table<number, string> Separate entries for |nvim_input|, after
-  ---   which `wait` will be applied. Can be either string or array of strings.
-  ---
-  ---@usage
-  --- -- All of these type keys 'c', 'a', 'w'
-  --- `child.type_keys('caw')`
-  --- `child.type_keys('c', 'a', 'w')`
-  --- `child.type_keys('c', { 'a', 'w' })`
-  ---
-  --- -- Waits 5 ms after `c` and after 'w'
-  --- `child.type_keys(5, 'c', { 'a', 'w' })`
-  ---
-  --- -- Special keys can also be used
-  --- `child.type_keys('i', 'Hello world', '<Esc>')`
-  ---@private
   function child.type_keys(wait, ...)
+    ensure_running()
+
     local has_wait = type(wait) == 'number'
     local keys = has_wait and { ... } or { wait, ... }
     keys = vim.tbl_flatten(keys)
@@ -1193,30 +1181,36 @@ function MiniTest.new_child_neovim()
   end
 
   function child.cmd(str)
+    ensure_running()
     prevent_hanging('cmd')
     return child.api.nvim_exec(str, false)
   end
 
   function child.cmd_capture(str)
+    ensure_running()
     prevent_hanging('cmd_capture')
     return child.api.nvim_exec(str, true)
   end
 
   function child.lua(str, args)
+    ensure_running()
     prevent_hanging('lua')
     return child.api.nvim_exec_lua(str, args or {})
   end
 
   function child.lua_notify(str, args)
+    ensure_running()
     return child.api_notify.nvim_exec_lua(str, args or {})
   end
 
   function child.lua_get(str, args)
+    ensure_running()
     prevent_hanging('lua_get')
     return child.api.nvim_exec_lua('return ' .. str, args or {})
   end
 
   function child.is_blocked()
+    ensure_running()
     return child.api.nvim_get_mode()['blocking']
   end
 
@@ -1226,6 +1220,8 @@ function MiniTest.new_child_neovim()
 
   -- Various wrappers
   function child.ensure_normal_mode()
+    ensure_running()
+
     local cur_mode = child.fn.mode()
 
     -- Exit from Visual mode
@@ -1247,6 +1243,7 @@ function MiniTest.new_child_neovim()
 
   -- Uses |nvim__screenshot()|
   function child.get_screenshot()
+    ensure_running()
     prevent_hanging('get_screenshot')
 
     local temp_file = child.fn.tempname()
@@ -1255,10 +1252,6 @@ function MiniTest.new_child_neovim()
     local res = child.fn.readfile(temp_file)
     child.fn.delete(temp_file)
     return res
-  end
-
-  function child.expect_screenshot(reference_path)
-    return MiniTest.expect.reference_screenshot(child.get_screenshot(), reference_path)
   end
 
   -- Register `child` for automatic stop in case of emergency
@@ -1280,20 +1273,130 @@ end
 --- - When writing tests, it is common to end up with "hanging" process: it
 ---   stops executing without any output. Most of the cases is because Neovim
 ---   process is "blocked", i.e. it waits for user input and won't return from
----   other call (like `child.api.nvim_exec_lua()`). Common causes are creating
+---   other call (like `child.api.nvim_exec_lua()`). Common causes are active
 ---   |hit-enter-prompt| (increase prompt height to a big value) or
----   Operator-pending mode (exit it). To mitigate this experience, most
----   helpers will throw an error if its plain execution will lead to hanging
----   state. Also consider using `child.api_notify` instead of `child.api`.
+---   Operator-pending mode (exit it). To mitigate this experience, most helpers
+---   will throw an error if its immediate execution will lead to hanging state.
+---   Also in case of hanging state try `child.api_notify` instead of `child.api`.
 ---
 --- Notes:
---- - All fields and methods are designed to be called with `.`, not `:`.
+--- - An important type of field is a "redirection table". It acts as a
+---   convenience wrapper for corresponding `vim.*` table. Can be used both to
+---   return and set values. Examples:
+---     - `child.api.nvim_buf_line_count(0)` will execute
+---       `vim.api.nvim_buf_line_count(0)` inside child process and return its
+---       output to current process.
+---     - `child.bo.filetype = 'lua'` will execute `vim.bo.filetype = 'lua'`
+---       inside child process.
+---   They still have same limitations listed above, so are not perfect. In
+---   case of a doubt, use `child.lua()`.
+--- - Almost all methods use |vim.rpcrequest| (i.e. wait for call to finish and
+---   then return value). See for `*_notify` variant to use |vim.rpcnotify|.
+--- - All fields and methods should be called with `.`, not `:`.
 ---
 ---@class child
 ---
----@field start function
+---@field start function Start child process. See |MiniTest-child-neovim.start()|.
+---@field stop function Stop current child process.
+---@field restart function Restart child process: stop if running and start a
+---   new one. Takes same arguments as `child.start()` but as defaults uses
+---   values from most recent `start()` call.
 ---
+---@field type_keys function Emulate typing keys.
+---   See |MiniTest-child-neovim.type_keys()|. Doesn't check for blocked state.
+---
+---@field cmd function Execute Vimscript code from a string.
+---   A wrapper for |nvim_exec()| without capturing output.
+---@field cmd_capture function Execute Vimscript code from a string and
+---   capture output. A wrapper for |nvim_exec()| with capturing output.
+---
+---@field lua function Execute Lua code. A wrapper for |nvim_exec_lua()|.
+---@field lua_get function Execute Lua code and return output. A wrapper
+---   for |nvim_exec_lua()| but prepends string code with `return`.
+---
+---@field is_blocked function Check whether child process is blocked.
+---@field is_running function Check whether child process is actively running.
+---
+---@field ensure_normal_mode function Ensure normal mode.
+---@field get_screenshot function Returns array of strings representing
+---   screenshot of current screen. Uses |nvim_screenshot|.
+---
+---@field job table|nil Information about current job. If `nil`, child is not running.
+---
+---@field api table Redirection table for `vim.api`. Doesn't check for blocked state.
+---@field api_notify table Same as `api`, but uses |vim.rpcnotify|.
+---
+---@field diagnostic table Redirection table for |vim.diagnostic|.
+---@field fn table Redirection table for |vim.fn|.
+---@field highlight table Redirection table for `vim.highlight` (|lua-highlight)|.
+---@field json table Redirection table for `vim.json`.
+---@field loop table Redirection table for |vim.loop|.
+---@field lsp table Redirection table for `vim.lsp` (|lsp-core)|.
+---@field mpack table Redirection table for |vim.mpack|.
+---@field spell table Redirection table for |vim.spell|.
+---@field treesitter table Redirection table for |vim.treesitter|.
+---@field ui table Redirection table for `vim.ui` (|lua-ui|).
+---
+---@field g table Redirection table for |vim.g|.
+---@field b table Redirection table for |vim.b|.
+---@field w table Redirection table for |vim.w|.
+---@field t table Redirection table for |vim.t|.
+---@field v table Redirection table for |vim.v|.
+---@field env table Redirection table for |vim.env|.
+---
+---@field o table Redirection table for |vim.o|.
+---@field go table Redirection table for |vim.go|.
+---@field bo table Redirection table for |vim.bo|.
+---@field wo table Redirection table for |vim.wo|.
 ---@tag MiniTest-child-neovim
+
+--- child.start(args, opts)~
+---
+--- Start child process and connect to it. Won't work if child is already running.
+---
+---@param args table Array with arguments for executable. Will be prepended
+---   with `{'--clean', '-n', '--listen', <some address>}` (see |startup-options|).
+---@param opts table Options:
+---   - <nvim_executable> - name of Neovim executable. Default: `nvim`.
+---   - <connection_timeout> - stop trying to connect after this amount of
+---     milliseconds. Default: 5000.
+---
+---@usage >
+---   child = MiniTest.new_child_neovim()
+---
+---   -- Start default clean Neovim instance
+---   child.start()
+---
+---   -- Start with some 'init.lua' file
+---   child.start({ '-u', 'scripts/minimal_init.lua' })
+---@tag MiniTest-child-neovim.start()
+
+--- child.type_keys(wait, ...)~
+---
+--- Basically a wrapper for |nvim_input()| applied inside child process.
+--- Differences:
+--- - Can wait after each group of characters.
+--- - Raises error if typing keys resulted into error in chidl process (its
+---   |v:errmsg| was updated).
+--- - Key '<' as separate entry may not be escaped as '<LT>'.
+---
+---@param wait number Number of milliseconds to wait after each entry. May be
+---   omitted, in which case no waiting is done.
+---@param ... string|table<number, string> Separate entries for |nvim_input|, after
+---   which `wait` will be applied. Can be either string or array of strings.
+---
+---@usage >
+---   -- All of these type keys 'c', 'a', 'w'
+---   child.type_keys('caw')
+---   child.type_keys('c', 'a', 'w')
+---   child.type_keys('c', { 'a', 'w' })
+---
+---   -- Waits 5 ms after `c` and after 'w'
+---   child.type_keys(5, 'c', { 'a', 'w' })
+---
+---   -- Special keys can also be used
+---   child.type_keys('i', 'Hello world', '<Esc>')
+---@tag MiniTest-child-neovim.type_keys()
 
 -- Helper data ================================================================
 -- Module default config
@@ -1910,6 +2013,10 @@ function H.screenshot_to_string(x)
   if H.is_headless then
     -- Show screenshot inline (without going home and deleting lines)
     res[2] = res[2]:gsub('\27%[%d?H\27%[%d?J', '', 1)
+
+    -- Don't use "show/hide cursor" and "start/stop blinking"
+    res[2] = res[2]:gsub('\27%[%?%d-l', '', 1)
+    res[#res] = res[#res]:gsub('\27%[%?%d-h', '', 2)
 
     -- Neutralize possible indentation
     for i = 2, #res do
