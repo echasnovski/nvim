@@ -287,7 +287,7 @@ end
 ---@param msg string|nil Message to be added to current case notes.
 function MiniTest.skip(msg)
   H.cache.error_is_from_skip = true
-  error(msg)
+  error(msg or 'Skip test')
 end
 
 --- Add note to currently executed test case
@@ -943,9 +943,9 @@ end
 --- Create child Neovim process
 ---
 --- This creates an object designed to be a fundamental piece of 'mini.test'
---- methodology. This object can start/stop/restart a separate (child) Neovim
---- process in full (non-headless) mode together with convenience helpers to
---- interact with it through |RPC| messages.
+--- methodology. It can start/stop/restart a separate (child) Neovim process in
+--- full (non-headless) mode together with convenience helpers to interact with
+--- it through |RPC| messages.
 ---
 --- For more information see |MiniTest-child-neovim|.
 ---
@@ -959,13 +959,13 @@ end
 ---   -- Use API functions
 ---   child.api.nvim_buf_set_lines(0, 0, -1, true, { 'Line inside child Neovim' })
 ---
----   -- Execute Lua code, commands, etc.
+---   -- Execute Lua code, Vimscript commands, etc.
 ---   child.lua('_G.n = 0')
 ---   child.cmd('au CursorMoved * lua _G.n = _G.n + 1')
 ---   child.type_keys('l')
 ---   print(child.lua_get('_G.n')) -- Should be 1
 ---
----   -- Use other `vim.xxx` Lua wrappers (get executed inside child process)
+---   -- Use other `vim.xxx` Lua wrappers (executed inside child process)
 ---   vim.b.aaa = 'current process'
 ---   child.b.aaa = 'child process'
 ---   print(child.lua_get('vim.b.aaa')) -- Should be 'child process'
@@ -1263,18 +1263,18 @@ end
 --- Child class
 ---
 --- It offers a great set of tools to write reliable and reproducible tests by
---- allowing to use fresh process at any test action. Interaction with it is done
+--- allowing to use fresh process in any test action. Interaction with it is done
 --- through |RPC| protocol.
 ---
 --- Although quite flexible, at the moment it has certain limitations:
---- - Doesn't allow using functions and userdata for child's both inputs and
+--- - Doesn't allow using functions or userdata for child's both inputs and
 ---   outputs. Usual solution is to move computations from current Neovim process
 ---   to child process. Use `child.lua()` and `child.lua_get()` for that.
 --- - When writing tests, it is common to end up with "hanging" process: it
----   stops executing without any output. Most of the cases is because Neovim
+---   stops executing without any output. Most of the time it is because Neovim
 ---   process is "blocked", i.e. it waits for user input and won't return from
 ---   other call (like `child.api.nvim_exec_lua()`). Common causes are active
----   |hit-enter-prompt| (increase prompt height to a big value) or
+---   |hit-enter-prompt| (increase prompt height to a bigger value) or
 ---   Operator-pending mode (exit it). To mitigate this experience, most helpers
 ---   will throw an error if its immediate execution will lead to hanging state.
 ---   Also in case of hanging state try `child.api_notify` instead of `child.api`.
@@ -1298,9 +1298,9 @@ end
 ---
 ---@field start function Start child process. See |MiniTest-child-neovim.start()|.
 ---@field stop function Stop current child process.
----@field restart function Restart child process: stop if running and start a
----   new one. Takes same arguments as `child.start()` but as defaults uses
----   values from most recent `start()` call.
+---@field restart function Restart child process: stop if running and then
+---   start a new one. Takes same arguments as `child.start()` but uses values
+---   from most recent `start()` call as defaults.
 ---
 ---@field type_keys function Emulate typing keys.
 ---   See |MiniTest-child-neovim.type_keys()|. Doesn't check for blocked state.
@@ -1315,11 +1315,11 @@ end
 ---   for |nvim_exec_lua()| but prepends string code with `return`.
 ---
 ---@field is_blocked function Check whether child process is blocked.
----@field is_running function Check whether child process is actively running.
+---@field is_running function Check whether child process is currently running.
 ---
 ---@field ensure_normal_mode function Ensure normal mode.
 ---@field get_screenshot function Returns array of strings representing
----   screenshot of current screen. Uses |nvim_screenshot|.
+---   screenshot of current screen. Uses |nvim__screenshot|.
 ---
 ---@field job table|nil Information about current job. If `nil`, child is not running.
 ---
@@ -1376,13 +1376,13 @@ end
 --- Basically a wrapper for |nvim_input()| applied inside child process.
 --- Differences:
 --- - Can wait after each group of characters.
---- - Raises error if typing keys resulted into error in chidl process (its
+--- - Raises error if typing keys resulted into error in child process (i.e. its
 ---   |v:errmsg| was updated).
 --- - Key '<' as separate entry may not be escaped as '<LT>'.
 ---
 ---@param wait number Number of milliseconds to wait after each entry. May be
 ---   omitted, in which case no waiting is done.
----@param ... string|table<number, string> Separate entries for |nvim_input|, after
+---@param ... string|table<number,string> Separate entries for |nvim_input|, after
 ---   which `wait` will be applied. Can be either string or array of strings.
 ---
 ---@usage >
@@ -1610,7 +1610,7 @@ function H.set_to_testcases(set, template, hooks_once)
   end, key_order)
 
   if #node_keys == 0 then
-    return {}
+    return {}, {}
   end
 
   -- Ensure that newly added hooks are represented by new functions.
