@@ -84,6 +84,7 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
         diagnostics = {
           -- Get the language server to recognize common globals
           globals = { 'vim', 'describe', 'it', 'before_each', 'after_each' },
+          disable = { 'need-check-nil' },
         },
         workspace = {
           -- Don't analyze code from submodules

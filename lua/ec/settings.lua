@@ -85,11 +85,12 @@ vim.opt.dictionary = vim.fn.expand('$HOME/.config/nvim/misc/dict/english.txt') -
 vim.opt.formatlistpat = [[^\s*[0-9\-\+\*]\+[\.\)]*\s\+]]
 
 -- Folds ======================================================================
-vim.opt.foldenable  = true     -- Enable folding by default
-vim.opt.foldmethod  = 'indent' -- Set 'indent' folding method
-vim.opt.foldlevel   = 1        -- Display all folds except top ones
-vim.opt.foldnestmax = 10       -- Create folds only for some number of nested levels
-vim.opt.foldcolumn  = '0'      -- Disable fold column
+vim.opt.foldenable   = true     -- Enable folding by default
+vim.opt.foldmethod   = 'indent' -- Set 'indent' folding method
+vim.opt.foldlevel    = 1        -- Display all folds except top ones
+vim.opt.foldnestmax  = 10       -- Create folds only for some number of nested levels
+vim.opt.foldcolumn   = '0'      -- Disable fold column
+vim.opt.foldminlines = 0        -- Fold even single line
 
 -- Filetype plugins and indentation ===========================================
 -- Don't defer it because it might break `FileType` related autocommands
