@@ -213,6 +213,8 @@ MiniTest.current = { all_cases = nil, case = nil }
 --- - Preferred way of adding elements is by using syntax `T[name] = element`.
 ---   This way order of added elements will be preserved. Any other way won't
 ---   guarantee any order.
+--- - Supplied options `opts` are stored in `opts` field of metatable
+---   (`getmetatable(set).opts`).
 ---
 ---@param opts table|nil Allowed options:
 ---   - <hooks> - table with fields:
@@ -220,8 +222,10 @@ MiniTest.current = { all_cases = nil, case = nil }
 ---       - <pre_case> - executed before each case (even nested).
 ---       - <post_case> - executed after each case (even nested).
 ---       - <post_once> - executed after last filtered node.
----   - <parametrize> - array where each element is a table of parameters to be
----     appended to "current parameters" of callable fields.
+---   - <parametrize> - array where each element is itself an array of
+---     parameters to be appended to "current parameters" of callable fields.
+---     Note: supply of `{}` (not `{{}}`) is equivalent to "parametrization
+---     into zero cases", so no cases will be collected from this set.
 ---   - <data> - user data to be forwarded to cases. Can be used for a more
 ---     granular filtering.
 ---@param tbl table|nil Initial test items (possibly nested). Will be executed
@@ -287,7 +291,7 @@ end
 ---@param msg string|nil Message to be added to current case notes.
 function MiniTest.skip(msg)
   H.cache.error_is_from_skip = true
-  error(msg or 'Skip test')
+  error(msg or 'Skip test', 0)
 end
 
 --- Add note to currently executed test case
@@ -295,7 +299,7 @@ end
 --- Appends `msg` to `exec.notes` field of |MiniTest.current.case| (if exists).
 ---
 ---@param msg string Note to add.
-function MiniTest.note(msg)
+function MiniTest.add_note(msg)
   local case = MiniTest.current.case
   if not (type(case) == 'table' and type(case.exec) == 'table' and type(case.exec.notes) == 'table') then
     return
@@ -346,7 +350,7 @@ end
 ---@param file string|nil Path to test file. By default a path of current buffer.
 ---@param opts table|nil Options for |MiniTest.run()|.
 function MiniTest.run_file(file, opts)
-  file = file or vim.api.nvim_buf_get_name(0)
+  file = file or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':.')
 
   --stylua: ignore
   local stronger_opts = { collect = { find_files = function() return { file } end } }
@@ -376,6 +380,9 @@ function MiniTest.run_at_location(location, opts)
 
   local stronger_opts = {
     collect = {
+      find_files = function()
+        return { location.file }
+      end,
       filter_cases = function(case)
         local info = debug.getinfo(case.test)
 
@@ -502,6 +509,10 @@ end
 ---   - <stop_on_error> - whether to stop execution (see |MiniTest.stop()|)
 ---     after first error. Default: `false`.
 function MiniTest.execute(cases, opts)
+  vim.validate({ cases = { cases, 'table' } })
+
+  MiniTest.current.all_cases = cases
+
   -- Verify correct arguments
   if #cases == 0 then
     H.message('No cases to execute.')
@@ -518,8 +529,6 @@ function MiniTest.execute(cases, opts)
 
   -- Start execution
   H.cache = { is_executing = true }
-
-  MiniTest.current.all_cases = cases
 
   --stylua: ignore
   vim.schedule(function() H.exec_callable(reporter.start, cases) end)
@@ -684,7 +693,7 @@ function MiniTest.expect.reference_screenshot(screenshot, path)
 
     vim.fn.writefile(screenshot, path)
 
-    table.insert(MiniTest.current.case.exec.notes, 'Created reference screenshot at path ' .. vim.inspect(path))
+    MiniTest.add_note('Created reference screenshot at path ' .. vim.inspect(path))
     return true
   end
 
