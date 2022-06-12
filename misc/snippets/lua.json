@@ -78,5 +78,15 @@
     "prefix": "it",
     "body": "it('$1', function()\n\t$0\nend)",
     "description": "(busted) it test"
+  },
+  "new test set": {
+    "prefix": "TS",
+    "body": "T['$1'] = new_set()$0",
+    "description": "(minitest) new test set"
+  },
+  "new test case": {
+    "prefix": "T",
+    "body": "T['$1']['$2'] = function()\n\t${0:skip()}\nend",
+    "description": "(minitest) new test case"
   }
 }

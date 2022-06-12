@@ -155,17 +155,14 @@ EC.leader_xmap.s = {
   expr = true,
 }
 
--- t is for 'terminal' (uses 'neoterm')
+-- t is for 'terminal' (uses 'neoterm') and 'minitest'
 EC.leader_nmap.t = {
-  ['name'] = '+terminal',
-  -- `ShowActiveNeotermREPL()` is defined in 'general/functions.vim'
-  ['a'] = { [[<Cmd>lua EC.print_active_neoterm()<CR>]], 'print active REPL id' },
-  ['C'] = { [[<Cmd>TcloseAll!<CR>]],                    'close all terminals' },
-  ['c'] = { [[:<C-u>exec v:count."Tclose\!"<CR>]],      'close term (prepend by id)' },
-  ['f'] = { [[:<C-u>exec "TREPLSetTerm ".v:count<CR>]], 'focus term (prepend by id)' },
-  ['l'] = { [[<Cmd>call neoterm#list_ids()<CR>]],       'list terminals' },
-  ['s'] = { [[<Cmd>belowright Tnew<CR>]],               'split terminal' },
-  ['v'] = { [[<Cmd>vertical Tnew<CR>]],                 'vsplit terminal' },
+  ['name'] = '+terminal/minitest',
+  ['a'] = { [[<Cmd>lua MiniTest.run()<CR>]],             'test run all' },
+  ['f'] = { [[<Cmd>lua MiniTest.run_file()<CR>]],        'test run file' },
+  ['l'] = { [[<Cmd>lua MiniTest.run_at_location()<CR>]], 'test run location' },
+  ['s'] = { [[<Cmd>belowright Tnew<CR>]],                'split terminal' },
+  ['v'] = { [[<Cmd>vertical Tnew<CR>]],                  'vsplit terminal' },
 }
 
 -- T is for 'test'
