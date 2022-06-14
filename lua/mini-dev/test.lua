@@ -431,7 +431,8 @@ end
 ---@param opts table|nil Options controlling case collection. Possible fields:
 ---   - <emulate_busted> - whether to emulate 'Olivine-Labs/busted' interface.
 ---     It emulates these global functions: `describe`, `it`, `setup`, `teardown`,
----     `before_each`, `after_each`, `pending`, `finally`.
+---     `before_each`, `after_each`. Use |MiniTest.skip| instead of `pending()`
+---     and |MiniTest.finally| instead of `finally`.
 ---   - <find_files> - function which when called without arguments returns
 ---     array with file paths. Each file should be a Lua file returning single
 ---     test set or `nil`.
@@ -445,22 +446,36 @@ function MiniTest.collect(opts)
 
   -- Make single test set
   local set = MiniTest.new_set()
-  if opts.emulate_busted then
-    H.busted_emulate(set)
-  end
 
   for _, file in ipairs(opts.find_files()) do
+    -- Possibly emulate 'busted' with current file. This allows to wrap all
+    -- implicit cases from that file into single set with file's name.
+    if opts.emulate_busted then
+      set[file] = MiniTest.new_set()
+      H.busted_emulate(set[file])
+    end
+
+    -- Execute file
     local ok, t = pcall(dofile, file)
+
+    -- Catch errors
     if not ok then
       local msg = string.format('Sourcing %s resulted into following error: %s', vim.inspect(file), t)
       H.error(msg)
     end
-    if t ~= nil and not H.is_instance(t, 'testset') then
-      local msg = string.format('Output of %s is not a test set. Did you use `MiniTest.new_set()`?', vim.inspect(file))
+    local is_output_correct = (opts.emulate_busted and vim.tbl_count(set[file]) > 0) or H.is_instance(t, 'testset')
+    if not is_output_correct then
+      local msg = string.format(
+        [[%s does not define a test set. Did you return `MiniTest.new_set()` or created 'busted' tests?]],
+        vim.inspect(file)
+      )
       H.error(msg)
     end
 
-    set[file] = t
+    -- If output is test set, always use it (even if 'busted' tests were added)
+    if H.is_instance(t, 'testset') then
+      set[file] = t
+    end
   end
 
   H.busted_deemulate()
@@ -500,6 +515,8 @@ end
 --- Notes:
 --- - Execution is done in asynchronous fashion with scheduling. This allows
 ---   making meaningful progress report during execution.
+--- - This function doesn't return anything. Instead, it updates `cases` in
+---   place with proper `exec` field.
 ---
 ---@param cases table Array of test cases (see |MiniTest-test-case|).
 ---@param opts table|nil Options controlling case collection. Possible fields:
@@ -1515,13 +1532,10 @@ function H.busted_emulate(set)
   _G.before_each = setting_hook('pre_case')
   _G.after_each = setting_hook('post_case')
   _G.teardown = setting_hook('post_once')
-
-  _G.pending = MiniTest.skip
-  _G.finally = MiniTest.finally
 end
 
 function H.busted_deemulate()
-  local fun_names = { 'describe', 'it', 'setup', 'before_each', 'after_each', 'teardown', 'pending', 'finally' }
+  local fun_names = { 'describe', 'it', 'setup', 'before_each', 'after_each', 'teardown' }
   for _, f_name in ipairs(fun_names) do
     _G[f_name] = nil
   end
