@@ -21,7 +21,7 @@
   },
   "function": {
     "prefix": "fun",
-    "body": "function${1: new_function}(${2:args})\n\t$3\nend$0",
+    "body": "function($1)\n\t$0\nend",
     "description": "Function"
   },
   "for": {
