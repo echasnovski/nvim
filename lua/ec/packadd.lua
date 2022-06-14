@@ -66,10 +66,10 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd_defer('which-key')
 
   -- Interact with git
-  packadd_defer('vim-fugitive')
+  -- packadd_defer('vim-fugitive')
 
   -- Interact with commits
-  packadd_defer('gv')
+  -- packadd_defer('gv')
 
   -- Interact with hunks
   packadd_defer('gitsigns')

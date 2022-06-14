@@ -76,6 +76,31 @@ EC.execute_lua_line = function()
   vim.api.nvim_input('<Down>')
 end
 
+-- Floating window with lazygit
+EC.floating_lazygit = function()
+  local buf_id = vim.api.nvim_create_buf(true, true)
+  local win_id = vim.api.nvim_open_win(buf_id, true, {
+    relative = 'editor',
+    width = math.floor(0.8 * vim.o.columns),
+    height = math.floor(0.8 * vim.o.lines),
+    row = math.floor(0.1 * vim.o.lines),
+    col = math.floor(0.1 * vim.o.columns),
+    zindex = 99,
+  })
+  vim.api.nvim_win_set_option(win_id, 'number', false)
+
+  vim.cmd('setlocal bufhidden=wipe')
+  vim.b.minipairs_disable = true
+
+  vim.fn.termopen('lazygit', {
+    on_exit = function()
+      vim.cmd('silent! :checktime')
+      vim.cmd('silent! :q')
+    end,
+  })
+  vim.cmd('startinsert')
+end
+
 -- Helper data ================================================================
 -- Commonly used keys
 H.keys = {
