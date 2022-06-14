@@ -772,11 +772,12 @@ MiniTest.gen_reporter = {}
 --- Generate buffer reporter
 ---
 --- This is a default choice for interactive (not headless) usage. Opens a window
---- with special buffer and updates it with throttled redraws.
+--- with dedicated non-terminal buffer and updates it with throttled redraws.
 ---
 --- Opened buffer has the following helpful Normal mode mappings:
 --- - `<Esc>` - stop test execution if executing (see |MiniTest.is_executing()|
 ---   and |MiniTest.stop()|). Close window otherwise.
+--- - `q` - same as `<Esc>` for convenience and compatibility.
 ---
 --- General idea:
 --- - Group cases by concatenating first `opts.group_depth` elements of case
@@ -805,6 +806,19 @@ MiniTest.gen_reporter = {}
 ---       - Table. Used as `config` argument in |nvim_open_win()|.
 ---     Default: table for centered floating window.
 function MiniTest.gen_reporter.buffer(opts)
+  -- NOTE: another choice of implementing this is to use terminal buffer
+  -- `vim.api.nvim_open_term()`.
+  -- Pros:
+  -- - Renders ANSI escape sequences (mostly) correctly, i.e. no need in
+  --   replacing them with Neovim range highlights.
+  -- - This reporter and `stdout` one can share more of a codebase.
+  -- Cons:
+  -- - Couldn't manage to implement "redraw on every update".
+  -- - Extra steps still are needed in order to have richer output information.
+  --   This involves ANSI sequences that move cursor, which have same issues as
+  --   in `stdout`, albeit easier to overcome:
+  --     - Handling of scroll.
+  --     - Hard wrapping of lines leading to need of using window width.
   opts = vim.tbl_deep_extend(
     'force',
     { group_depth = 1, throttle_delay = 10, window = H.buffer_reporter.default_window_opts() },
@@ -1865,12 +1879,11 @@ end
 function H.buffer_reporter.set_options(buf_id, win_id)
   -- Set unique name
   local n_buffer = H.buffer_reporter.n_buffer + 1
-  local prefix = n_buffer == 1 and '' or (' ' .. n_buffer)
-  vim.api.nvim_buf_set_name(buf_id, 'MiniTest' .. prefix)
+  local suffix = n_buffer == 1 and '' or (' ' .. n_buffer)
+  vim.api.nvim_buf_set_name(buf_id, 'MiniTest' .. suffix)
   H.buffer_reporter.n_buffer = n_buffer
 
-  -- Having `noautocmd` is crucial for performance: ~9ms without it, ~1.6ms with it
-  vim.cmd('noautocmd silent! set filetype=minitest')
+  vim.cmd('silent! set filetype=minitest')
 
   -- Set options for "temporary" buffer
   --stylua: ignore start
@@ -1902,11 +1915,9 @@ function H.buffer_reporter.set_mappings(buf_id)
     vim.api.nvim_buf_set_keymap(buf_id, 'n', key, rhs, opts)
   end
 
-  map_buf(
-    '<Esc>',
-    [[<Cmd>lua if MiniTest.is_executing() then MiniTest.stop() else vim.cmd('close') end<CR>]],
-    { noremap = true, desc = 'Stop execution or close window' }
-  )
+  local rhs = [[<Cmd>lua if MiniTest.is_executing() then MiniTest.stop() else vim.cmd('close') end<CR>]]
+  map_buf('<Esc>', rhs, { noremap = true, desc = 'Stop execution or close window' })
+  map_buf('q', rhs, { noremap = true, desc = 'Stop execution or close window' })
 end
 
 function H.buffer_reporter.set_lines(buf_id, lines, start, finish)
