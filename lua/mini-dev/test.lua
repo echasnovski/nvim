@@ -697,7 +697,12 @@ end
 ---@param path string|nil Path to reference screenshot. If `nil`, constructed
 ---   automatically in directory 'tests/screenshots' from current case info.
 ---   If there is no file at `path`, it is created with content of `screenshot`.
-function MiniTest.expect.reference_screenshot(screenshot, path)
+---@param opts table|nil Options:
+---   - <force> - whether to forcefuly create reference screenshot.
+---     Temporary useful during test writing. Default: `false`.
+function MiniTest.expect.reference_screenshot(screenshot, path, opts)
+  opts = vim.tbl_deep_extend('force', { force = false }, opts or {})
+
   if path == nil then
     -- Sanitize path
     local name = H.case_to_stringid(MiniTest.current.case):gsub('[%s/]', '-')
@@ -705,7 +710,7 @@ function MiniTest.expect.reference_screenshot(screenshot, path)
   end
 
   -- If there is no readable screenshot file, create it. Pass with note.
-  if vim.fn.filereadable(path) == 0 then
+  if opts.force or vim.fn.filereadable(path) == 0 then
     local dir_path = vim.fn.fnamemodify(path, ':p:h')
     vim.fn.mkdir(dir_path, 'p')
 
@@ -1273,24 +1278,7 @@ function MiniTest.new_child_neovim()
   -- Various wrappers
   function child.ensure_normal_mode()
     ensure_running()
-
-    local cur_mode = child.api.nvim_get_mode().mode
-
-    -- Exit from Visual mode
-    local ctrl_v = vim.api.nvim_replace_termcodes('<C-v>', true, true, true)
-    if cur_mode == 'v' or cur_mode == 'V' or cur_mode == ctrl_v then
-      child.type_keys(cur_mode)
-      return
-    end
-
-    -- Exit from Terminal mode
-    if cur_mode == 't' then
-      child.type_keys([[<C-\>]], '<C-n>')
-      return
-    end
-
-    -- Exit from other modes
-    child.type_keys('<Esc>')
+    child.type_keys([[<C-\>]], '<C-n>')
   end
 
   function child.get_screenshot(opts)
@@ -1315,7 +1303,7 @@ function MiniTest.new_child_neovim()
       -- TODO: consider making PR to officially export it in Neovim core
       child.api.nvim__screenshot(temp_file)
       res = child.fn.readfile(temp_file)
-    until res ~= nil or i >= max_tries
+    until (type(res) == 'table' and #res > 0) or i >= max_tries
 
     vim.fn.delete(temp_file)
 
@@ -1482,8 +1470,8 @@ end
 ---   - <prepare> - function which will be called with current `child` as
 ---     argument before trying to create screenshot. By default calls |redraw|(!)
 ---     in order to get the most current screen state.
----   - <timeout> - number of milliseconds to try (every 10ms) to get non-`nil`
----     result. Default: 1000.
+---   - <timeout> - number of milliseconds to try (every 10ms) to get non-empty
+---     result. Default: 5000.
 ---
 ---@return table|nil Array of strings representing screenshot.
 ---

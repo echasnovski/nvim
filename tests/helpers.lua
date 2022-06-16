@@ -87,6 +87,10 @@ Helpers.new_child_neovim = function()
     end
   end
 
+  function child.expect_screenshot(opts, path, screenshot_opts)
+    MiniTest.expect.reference_screenshot(child.get_screenshot(screenshot_opts), path, opts)
+  end
+
   return child
 end
 

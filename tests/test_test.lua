@@ -20,10 +20,8 @@ local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
 
-local get_ref_path = function(name, prefix, suffix)
-  prefix = prefix or 'testref_'
-  suffix = suffix or '.lua'
-  return string.format('tests/dir-test/%s%s%s', prefix, name, suffix)
+local get_ref_path = function(name)
+  return string.format('tests/dir-test/%s', name)
 end
 
 local get_current_all_cases = function()
@@ -144,7 +142,7 @@ end
 T['new_set()'] = new_set()
 
 T['new_set()']['tracks field order'] = function()
-  local res = testrun_ref_file('new-set')
+  local res = testrun_ref_file('testref_new-set.lua')
 
   -- Check order
   --stylua: ignore
@@ -164,7 +162,7 @@ end
 T['case helpers'] = new_set()
 
 T['case helpers']['work'] = function()
-  local res = testrun_ref_file('case-helpers')
+  local res = testrun_ref_file('testref_case-helpers.lua')
 
   -- `finally()`
   eq(res['finally() with error; check'].exec.state, 'Pass')
@@ -190,7 +188,7 @@ T['run()']['respects `opts` argument'] = function()
 end
 
 T['run()']['tries to execute script if no arguments are supplied'] = function()
-  local script_path = get_ref_path('custom-script')
+  local script_path = get_ref_path('testref_custom-script.lua')
   child.lua('MiniTest.config.script_path = ' .. vim.inspect(script_path))
 
   eq(child.lua_get('_G.custom_script_result'), vim.NIL)
@@ -199,7 +197,7 @@ T['run()']['tries to execute script if no arguments are supplied'] = function()
 end
 
 T['run()']['handles `parametrize`'] = function()
-  local res = testrun_ref_file('run-parametrize')
+  local res = testrun_ref_file('testref_run-parametrize.lua')
   eq(#res, 10)
 
   local short_res = vim.tbl_map(function(c)
@@ -224,7 +222,7 @@ T['run()']['handles `parametrize`'] = function()
 end
 
 T['run()']['handles `data`'] = function()
-  local res = testrun_ref_file('run-data')
+  local res = testrun_ref_file('testref_run-data.lua')
   local short_res = vim.tbl_map(function(c)
     return { data = c.data, desc = vim.list_slice(c.desc, 2) }
   end, res)
@@ -241,7 +239,7 @@ T['run()']['handles `data`'] = function()
 end
 
 T['run()']['handles `hooks`'] = function()
-  local res = testrun_ref_file('run-hooks')
+  local res = testrun_ref_file('testref_run-hooks.lua')
   local order_cases = vim.tbl_map(function(c)
     return {
       desc = vim.list_slice(c.desc, 2),
@@ -268,7 +266,7 @@ T['run()']['handles `hooks`'] = function()
 end
 
 T['run()']['handles same function in `*_once` hooks'] = function()
-  local res = testrun_ref_file('run-hooks')
+  local res = testrun_ref_file('testref_run-hooks.lua')
   local case = filter_by_desc(res, 2, 'same `*_once` hooks')[1]
 
   -- The fact that it was called 4 times indicates that using same function in
@@ -279,7 +277,7 @@ end
 T['run_file()'] = new_set()
 
 T['run_file()']['works'] = function()
-  child.lua([[MiniTest.run_file(...)]], { get_ref_path('run') })
+  child.lua([[MiniTest.run_file(...)]], { get_ref_path('testref_run.lua') })
   local last_desc = child.lua_get(
     [[vim.tbl_map(function(case) return case.desc[#case.desc] end, MiniTest.current.all_cases)]]
   )
@@ -290,7 +288,7 @@ T['run_at_location()'] = new_set()
 
 T['run_at_location()']['works with non-default input'] = new_set({ parametrize = { { 3 }, { 4 }, { 5 } } }, {
   function(line)
-    local path = get_ref_path('run')
+    local path = get_ref_path('testref_run.lua')
     local command = string.format([[MiniTest.run_at_location({ file = '%s', line = %s })]], path, line)
     child.lua(command)
 
@@ -301,7 +299,7 @@ T['run_at_location()']['works with non-default input'] = new_set({ parametrize =
 })
 
 T['run_at_location()']['uses cursor position by default'] = function()
-  local path = get_ref_path('run')
+  local path = get_ref_path('testref_run.lua')
   child.cmd('edit ' .. path)
   set_cursor(4, 0)
   child.lua('MiniTest.run_at_location()')
@@ -312,7 +310,7 @@ T['run_at_location()']['uses cursor position by default'] = function()
 end
 
 local collect_general = function()
-  local path = get_ref_path('general')
+  local path = get_ref_path('testref_general.lua')
   local command = string.format([[_G.cases = MiniTest.collect({ find_files = function() return { '%s' } end })]], path)
   child.lua(command)
 end
@@ -331,10 +329,10 @@ T['collect()']['works'] = function()
 end
 
 T['collect()']['respects `emulate_busted` option'] = function()
-  local res = testrun_ref_file('collect-busted')
+  local res = testrun_ref_file('testref_collect-busted.lua')
 
   -- All descriptions should be prepended with file name
-  eq(#filter_by_desc(res, 1, get_ref_path('collect-busted')), #res)
+  eq(#filter_by_desc(res, 1, get_ref_path('testref_collect-busted.lua')), #res)
 
   -- `describe()/it()`
   eq(#filter_by_desc(res, 2, 'describe()/it()'), 3)
@@ -358,7 +356,7 @@ end
 T['collect()']['respects `find_files` option'] = function()
   local command = string.format(
     [[_G.cases = MiniTest.collect({ find_files = function() return { '%s' } end })]],
-    get_ref_path('general')
+    get_ref_path('testref_general.lua')
   )
   child.lua(command)
   eq(child.lua_get('#_G.cases'), 2)
@@ -371,7 +369,7 @@ T['collect()']['respects `filter_cases` option'] = function()
       find_files = function() return { '%s' } end,
       filter_cases = function(case) return case.desc[2] == 'case 2' end,
     })]],
-    get_ref_path('general')
+    get_ref_path('testref_general.lua')
   )
   child.lua(command)
 
@@ -637,7 +635,7 @@ end
 T['expect']['reference_screenshot()'] = new_set()
 
 T['expect']['reference_screenshot()']['works'] = function()
-  local path = get_ref_path('reference-screenshot', '', '')
+  local path = get_ref_path('reference-screenshot')
   child.o.lines, child.o.columns = 10, 10
 
   set_lines({ 'aaa' })
@@ -652,12 +650,12 @@ T['expect']['reference_screenshot()']['works'] = function()
 end
 
 T['expect']['reference_screenshot()']['correctly infers reference path'] = function()
-  set_lines({ 'Path inference' })
+  set_lines({ 'This path should be correctly inferred' })
   eq(MiniTest.expect.reference_screenshot(child.get_screenshot()), true)
 end
 
 T['expect']['reference_screenshot()']['creates refernce if it does not exist'] = function()
-  local path = get_ref_path('nonexistent-reference-screenshot', '', '')
+  local path = get_ref_path('nonexistent-reference-screenshot')
   child.fn.delete(path)
   --stylua: ignore
   finally(function()
@@ -674,6 +672,27 @@ T['expect']['reference_screenshot()']['creates refernce if it does not exist'] =
   MiniTest.current.case.exec.notes = {}
   eq(MiniTest.expect.reference_screenshot(screenshot, path), true)
   eq(MiniTest.current.case.exec.notes, {})
+end
+
+T['expect']['reference_screenshot()']['respects `opts` argument'] = function()
+  local path = get_ref_path('force-reference-screenshot')
+  local notes = { 'Created reference screenshot at path ' .. vim.inspect(path) }
+
+  child.fn.delete(path)
+  --stylua: ignore
+  finally(function()
+    child.fn.delete(path)
+    MiniTest.current.case.exec.notes = {}
+  end)
+
+  set_lines({ 'First run' })
+  eq(MiniTest.expect.reference_screenshot(child.get_screenshot(), path), true)
+  eq(MiniTest.current.case.exec.notes, notes)
+
+  MiniTest.current.case.exec.notes = {}
+  set_lines({ 'This should be forced' })
+  eq(MiniTest.expect.reference_screenshot(child.get_screenshot(), path, { force = true }), true)
+  eq(MiniTest.current.case.exec.notes, notes)
 end
 
 T['new_expectation()'] = new_set()
@@ -985,7 +1004,7 @@ T['child']['get_screenshot()']['works'] = function()
   expect.match(table.concat(screenshot, '\n'), 'aaa')
 end
 
-T['expect']['reference_screenshot()']['respects `opts`'] = function()
+T['child']['get_screenshot()']['respects `opts` argument'] = function()
   set_lines({ 'aaa' })
   local opts = {
     prepare = function(c)
@@ -1001,16 +1020,46 @@ end
 -- Integration tests ==========================================================
 T['gen_reporter'] = new_set()
 
-T['gen_reporter']['buffer'] = new_set()
+T['gen_reporter']['buffer'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.cmd('set termguicolors')
+      child.o.lines, child.o.columns = 50, 120
+    end,
+  },
+  parametrize = {
+    { '' },
+    { 'group_depth = 2' },
+    { 'window = { width = 0.9 * vim.o.columns, col = 0.05 * vim.o.columns }' },
+  },
+})
 
-T['gen_reporter']['buffer']['works'] = function()
-  skip()
+T['gen_reporter']['buffer']['test'] = function(opts_element)
+  -- Testing "in dynamic" is left for manual approach
+  local path = get_ref_path('testref_reporters.lua')
+  local command = string.format('_G.reporter = MiniTest.gen_reporter.buffer({ %s })', opts_element)
+  child.lua(command)
+  child.lua(([[MiniTest.run_file('%s', { execute = { reporter = _G.reporter } })]]):format(path))
+  child.expect_screenshot()
 end
 
-T['gen_reporter']['stdout'] = new_set()
+T['gen_reporter']['stdout'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.cmd('set termguicolors')
+      child.o.lines, child.o.columns = 25, 120
+      child.o.laststatus = 0
+    end,
+  },
+  parametrize = { { '' }, { 'GROUP_DEPTH=2' }, { 'QUIT_ON_FINISH=false' } },
+})
 
-T['gen_reporter']['stdout']['works'] = function()
-  skip()
+T['gen_reporter']['stdout']['test'] = function(env_var)
+  -- Testing "in dynamic" is left for manual approach
+  child.fn.termopen(env_var .. [[ nvim --headless --clean -n -u 'tests/dir-test/init_stdout-reporter_works.lua']])
+  -- Wait until check is done
+  child.loop.sleep(500)
+  child.expect_screenshot()
 end
 
 return T
