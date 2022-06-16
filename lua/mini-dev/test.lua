@@ -655,11 +655,11 @@ end
 --- Expect function call to raise error
 ---
 ---@param f function Function to be tested for raising error.
----@param pattern string Pattern which error message should match. Use `nil` or
----   empty string to not test for pattern matching.
+---@param pattern string|nil Pattern which error message should match.
+---   Use `nil` or empty string to not test for pattern matching.
 ---@param ... any Extra arguments with which `f` will be called.
 function MiniTest.expect.error(f, pattern, ...)
-  vim.validate({ match = { pattern, 'string', true } })
+  vim.validate({ pattern = { pattern, 'string', true } })
 
   local ok, err = pcall(f, ...)
   err = err or ''
@@ -667,8 +667,8 @@ function MiniTest.expect.error(f, pattern, ...)
   --stylua: ignore
   if has_matched_error then return true end
 
-  local with_match = pattern == nil and '' or (' with match %s'):format(vim.inspect(pattern))
-  local subject = 'error' .. with_match
+  local matching_pattern = pattern == nil and '' or (' matching pattern %s'):format(vim.inspect(pattern))
+  local subject = 'error' .. matching_pattern
   local context = ok and 'Observed no error' or ('Observed error: ' .. err)
 
   H.error_expect(subject, context)
@@ -680,6 +680,7 @@ end
 ---@param ... any Extra arguments with which `f` will be called.
 function MiniTest.expect.no_error(f, ...)
   local ok, err = pcall(f, ...)
+  err = err or ''
   --stylua: ignore
   if ok then return true end
 
@@ -692,7 +693,7 @@ end
 --- terminal.
 ---
 ---@param screenshot table Array with screenshot information. Usually an output
----   of `child.get_screenshot()` (see |MiniTest.new_child_neovim()|).
+---   of `child.get_screenshot()` (see |MiniTest-child-neovim.get_screenshot()|).
 ---@param path string|nil Path to reference screenshot. If `nil`, constructed
 ---   automatically in directory 'tests/screenshots' from current case info.
 ---   If there is no file at `path`, it is created with content of `screenshot`.
@@ -1047,6 +1048,8 @@ function MiniTest.new_child_neovim()
     --   in Github Action.
     -- - Use `plenary.job`. Works fine both locally and in Github Action, but
     --   needs a 'plenary.nvim' dependency (not exactly bad, but undesirable).
+
+    -- Make unique name for `--listen` pipe
     local job = { address = vim.fn.tempname() }
 
     local full_args = { '--clean', '-n', '--listen', job.address }
@@ -1067,7 +1070,8 @@ function MiniTest.new_child_neovim()
     until connected or i >= max_tries
 
     if not connected then
-      H.error('Failed to make connection to child Neovim.')
+      local err = '  ' .. job.channel:gsub('\n', '\n  ')
+      H.error('Failed to make connection to child Neovim with the following error:\n' .. err)
       child.stop()
     end
 
@@ -1081,9 +1085,17 @@ function MiniTest.new_child_neovim()
 
     pcall(vim.fn.chanclose, child.job.channel)
 
-    -- TODO: consider figuring out a way to do it better (should actually
-    -- close/kill all child processes when running interactively)
+    -- Remove file for address to reduce chance of "can't open file" errors, as
+    -- address uses temporary unique files
+    pcall(vim.fn.delete, child.job.address)
+
     child.job.handle:kill(9)
+    -- It is important to close these because there is an upper limit on how
+    -- many resources `vim.loop` (libuv) can have. If not, this will result
+    -- into "connection refused" errors while trying to connect.
+    child.job.stdin:close()
+    child.job.stdout:close()
+    child.job.stderr:close()
     child.job = nil
   end
 
@@ -1262,7 +1274,7 @@ function MiniTest.new_child_neovim()
   function child.ensure_normal_mode()
     ensure_running()
 
-    local cur_mode = child.fn.mode()
+    local cur_mode = child.api.nvim_get_mode().mode
 
     -- Exit from Visual mode
     local ctrl_v = vim.api.nvim_replace_termcodes('<C-v>', true, true, true)
@@ -1281,16 +1293,37 @@ function MiniTest.new_child_neovim()
     child.type_keys('<Esc>')
   end
 
-  -- Uses |nvim__screenshot()|
-  function child.get_screenshot()
+  function child.get_screenshot(opts)
     ensure_running()
     prevent_hanging('get_screenshot')
 
-    local temp_file = child.fn.tempname()
-    -- TODO: consider making PR to officially export it in Neovim core
-    child.api.nvim__screenshot(temp_file)
-    local res = child.fn.readfile(temp_file)
-    child.fn.delete(temp_file)
+    --stylua: ignore
+    opts = vim.tbl_deep_extend('force', {
+      prepare = function(c) c.cmd('redraw!') end,
+      timeout = 5000,
+    }, opts or {})
+
+    opts.prepare(child)
+
+    local temp_file = vim.fn.tempname()
+    local step = 10
+    local res, i, max_tries = nil, 0, math.floor(opts.timeout / step)
+    repeat
+      i = i + 1
+      vim.loop.sleep(step)
+
+      -- TODO: consider making PR to officially export it in Neovim core
+      child.api.nvim__screenshot(temp_file)
+      res = child.fn.readfile(temp_file)
+    until res ~= nil or i >= max_tries
+
+    vim.fn.delete(temp_file)
+
+    if res == nil then
+      local msg = string.format('Could not get non-nil screenshot within %sms.', opts.timeout)
+      H.error(msg)
+    end
+
     return res
   end
 
@@ -1359,7 +1392,7 @@ end
 ---
 ---@field ensure_normal_mode function Ensure normal mode.
 ---@field get_screenshot function Returns array of strings representing
----   screenshot of current screen. Uses |nvim__screenshot|.
+---   screenshot of current screen. See |MiniTest-child-neovim.get_screenshot()|.
 ---
 ---@field job table|nil Information about current job. If `nil`, child is not running.
 ---
@@ -1375,7 +1408,9 @@ end
 ---@field mpack table Redirection table for |vim.mpack|.
 ---@field spell table Redirection table for |vim.spell|.
 ---@field treesitter table Redirection table for |vim.treesitter|.
----@field ui table Redirection table for `vim.ui` (|lua-ui|).
+---@field ui table Redirection table for `vim.ui` (|lua-ui|). Currently of no
+---   use because it requires sending function through RPC, which is impossible
+---   at the moment.
 ---
 ---@field g table Redirection table for |vim.g|.
 ---@field b table Redirection table for |vim.b|.
@@ -1437,6 +1472,27 @@ end
 ---   -- Special keys can also be used
 ---   child.type_keys('i', 'Hello world', '<Esc>')
 ---@tag MiniTest-child-neovim.type_keys()
+
+--- child.get_screenshot(opts)~
+---
+--- This is a wrapper for |nvim__screenshot| with some heuristics trying to
+--- make testing with it more robust.
+---
+---@param opts table Options:
+---   - <prepare> - function which will be called with current `child` as
+---     argument before trying to create screenshot. By default calls |redraw|(!)
+---     in order to get the most current screen state.
+---   - <timeout> - number of milliseconds to try (every 10ms) to get non-`nil`
+---     result. Default: 1000.
+---
+---@return table|nil Array of strings representing screenshot.
+---
+---@usage >
+---   MiniTest.expect.reference_screenshot(child.get_screenshot())
+---
+---   -- Explicit usage of default `prepare` option
+---   child.get_screenshot({ prepare = function(c) c.cmd('redraw!') end })
+---@tag MiniTest-child-neovim.get_screenshot()
 
 -- Helper data ================================================================
 -- Module default config

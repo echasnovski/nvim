@@ -4,7 +4,7 @@ local helpers = dofile('tests/helpers.lua')
 
 local child = helpers.new_child_neovim()
 local expect, eq = helpers.expect, helpers.expect.equality
-local new_set, skip = MiniTest.new_set, MiniTest.skip
+local new_set, skip, finally = MiniTest.new_set, MiniTest.skip, MiniTest.finally
 
 -- Helpers with child processes
 --stylua: ignore start
@@ -20,8 +20,10 @@ local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
 
-local get_ref_path = function(name)
-  return string.format('tests/dir-test/testref_%s.lua', name)
+local get_ref_path = function(name, prefix, suffix)
+  prefix = prefix or 'testref_'
+  suffix = suffix or '.lua'
+  return string.format('tests/dir-test/%s%s%s', prefix, name, suffix)
 end
 
 local get_current_all_cases = function()
@@ -469,7 +471,7 @@ T['stop()']['respects `close_all_child_neovim` option'] = function()
 
   child.lua('_G.grandchild = MiniTest.new_child_neovim(); _G.grandchild.start()')
   -- Register cleanup
-  MiniTest.finally(function()
+  finally(function()
     child.lua('_G.grandchild.stop()')
   end)
   child.lua([[MiniTest.execute(
@@ -511,46 +513,489 @@ end
 
 T['expect'] = new_set()
 
-T['expect']['equality()'] = new_set()
+T['expect']['equality()/no_equality()'] = new_set()
 
-T['expect']['equality()']['works'] = function()
-  skip()
+T['expect']['equality()/no_equality()']['work when equal'] = function()
+  local f, empty_tbl = function() end, {}
+
+  local validate = function(x, y)
+    expect.no_error(MiniTest.expect.equality, x, y)
+    expect.error(MiniTest.expect.no_equality, '%*no%* equality.*Object:.*Traceback:', x, y)
+  end
+
+  validate(1, 1)
+  validate('a', 'a')
+  validate(f, f)
+  validate(empty_tbl, empty_tbl)
+
+  -- Tables should be compared "deeply per elements"
+  validate(empty_tbl, {})
+  validate({ 1 }, { 1 })
+  validate({ a = 1 }, { a = 1 })
+  validate({ { b = 2 } }, { { b = 2 } })
 end
 
-T['expect']['no_equality()'] = new_set()
+T['expect']['equality()/no_equality()']['work when not equal'] = function()
+  local f = function() end
+  local validate = function(x, y)
+    expect.error(MiniTest.expect.equality, 'equality.*Left:.*Right:.*Traceback:', x, y)
+    expect.no_error(MiniTest.expect.no_equality, x, y)
+  end
 
-T['expect']['no_equality()']['works'] = function()
-  skip()
+  validate(1, 2)
+  validate(1, '1')
+  validate('a', 'b')
+  validate(f, function() end)
+
+  -- Tables should be compared "deeply per elements"
+  validate({ 1 }, { 2 })
+  validate({ a = 1 }, { a = 2 })
+  validate({ a = 1 }, { b = 1 })
+  validate({ a = 1 }, { { a = 1 } })
+  validate({ { b = 2 } }, { { b = 3 } })
+  validate({ { b = 2 } }, { { c = 2 } })
+end
+
+T['expect']['equality()/no_equality()']['return `true` on success'] = function()
+  eq(MiniTest.expect.equality(1, 1), true)
+  eq(MiniTest.expect.no_equality(1, 2), true)
 end
 
 T['expect']['error()'] = new_set()
 
 T['expect']['error()']['works'] = function()
-  skip()
+  expect.error(function()
+    MiniTest.expect.error(function() end)
+  end, 'error%..*Observed no error.*Traceback:')
+
+  expect.error(function()
+    MiniTest.expect.error(function() end, 'aa')
+  end, 'error matching pattern "aa"%..*Observed no error.*Traceback:')
+
+  expect.error(function()
+    MiniTest.expect.error(error, 'bb')
+  end, 'error matching pattern "bb"%..*Observed error:.*Traceback:')
+end
+
+--stylua: ignore
+T['expect']['error()']['respects `pattern` argument'] = function()
+  expect.error(function() MiniTest.expect.error(error, 1) end, 'pattern.*expected string')
+
+  -- `nil` and `''` are placeholders for 'any error'
+  expect.no_error(function() MiniTest.expect.error(error, '') end)
+  expect.no_error(function() MiniTest.expect.error(error, nil) end)
+end
+
+T['expect']['error()']['accepts function arguments'] = function()
+  --stylua: ignore
+  local f = function(x, y)
+    if x ~= y then error('`x` and `y` are not equal') end
+  end
+
+  expect.no_error(function()
+    MiniTest.expect.error(f, 'not equal', 1, 2)
+  end)
+  expect.error(function()
+    MiniTest.expect.error(f, 'not equal', 1, 1)
+  end)
+end
+
+T['expect']['error()']['returns `true` on success'] = function()
+  eq(MiniTest.expect.error(error), true)
 end
 
 T['expect']['no_error()'] = new_set()
 
 T['expect']['no_error()']['works'] = function()
-  skip()
+  expect.error(function()
+    MiniTest.expect.no_error(error)
+  end, '%*no%* error%..*Observed error:.*Traceback:')
+
+  expect.no_error(function()
+    MiniTest.expect.no_error(function() end)
+  end)
+end
+
+T['expect']['no_error()']['accepts function arguments'] = function()
+  --stylua: ignore
+  local f = function(x, y)
+    if x ~= y then error('`x` and `y` are not equal') end
+  end
+
+  expect.error(function()
+    MiniTest.expect.no_error(f, 1, 2)
+  end)
+  expect.no_error(function()
+    MiniTest.expect.no_error(f, 1, 1)
+  end)
+end
+
+T['expect']['no_error()']['returns `true` on success'] = function()
+  eq(MiniTest.expect.no_error(function() end), true)
 end
 
 T['expect']['reference_screenshot()'] = new_set()
 
 T['expect']['reference_screenshot()']['works'] = function()
-  skip()
+  local path = get_ref_path('reference-screenshot', '', '')
+  child.o.lines, child.o.columns = 10, 10
+
+  set_lines({ 'aaa' })
+  expect.no_error(function()
+    MiniTest.expect.reference_screenshot(child.get_screenshot(), path)
+  end)
+
+  set_lines({ 'bbb' })
+  expect.error(function()
+    MiniTest.expect.reference_screenshot(child.get_screenshot(), path)
+  end, 'screenshot equality to reference at ' .. vim.pesc(vim.inspect(path)) .. '.*Reference:.*Observed:.*Traceback:')
+end
+
+T['expect']['reference_screenshot()']['correctly infers reference path'] = function()
+  set_lines({ 'Path inference' })
+  eq(MiniTest.expect.reference_screenshot(child.get_screenshot()), true)
+end
+
+T['expect']['reference_screenshot()']['creates refernce if it does not exist'] = function()
+  local path = get_ref_path('nonexistent-reference-screenshot', '', '')
+  child.fn.delete(path)
+  --stylua: ignore
+  finally(function()
+    child.fn.delete(path)
+    MiniTest.current.case.exec.notes = {}
+  end)
+
+  set_lines({ 'nonexistent' })
+  local screenshot = child.get_screenshot()
+
+  eq(MiniTest.expect.reference_screenshot(screenshot, path), true)
+  eq(MiniTest.current.case.exec.notes, { 'Created reference screenshot at path ' .. vim.inspect(path) })
+
+  MiniTest.current.case.exec.notes = {}
+  eq(MiniTest.expect.reference_screenshot(screenshot, path), true)
+  eq(MiniTest.current.case.exec.notes, {})
 end
 
 T['new_expectation()'] = new_set()
 
 T['new_expectation()']['works'] = function()
-  skip()
+  local expect_truthy = MiniTest.new_expectation('truthy', function(x)
+    return x
+  end, function(x)
+    return 'Object: ' .. vim.inspect(x)
+  end)
+
+  expect.error(expect_truthy, 'truthy%..*Object:.*Traceback:', false)
+  expect.no_error(expect_truthy, 1)
+end
+
+T['new_expectation()']['allows string or function arguments'] = function()
+  local expect_truthy = MiniTest.new_expectation(function(x)
+    return 'func_truthy'
+  end, function(x)
+    return x
+  end, 'Not truthy')
+
+  expect.error(expect_truthy, 'func_truthy%..*Not truthy.*Traceback:', false)
+  expect.no_error(expect_truthy, 1)
 end
 
 T['new_child_neovim()'] = new_set()
 
 T['new_child_neovim()']['works'] = function()
-  skip()
+  finally(function()
+    child.lua('_G.grandchild.stop()')
+  end)
+  child.lua('_G.grandchild = MiniTest.new_child_neovim(); _G.grandchild.start()')
+  eq(child.lua_get('_G.grandchild.is_running()'), true)
+end
+
+T['child'] = new_set()
+
+T['child']['job'] = function()
+  eq(type(child.job), 'table')
+
+  child.stop()
+  eq(child.job, nil)
+end
+
+T['child']['start()'] = new_set()
+
+T['child']['start()']['respects `args` argument'] = function()
+  child.stop()
+
+  child.start({ '-c', 'lua _G.inside_args = true' })
+  eq(child.lua_get('_G.inside_args'), true)
+end
+
+T['child']['start()']['does nothing if already running'] = function()
+  --stylua: ignore
+  finally(function() child.lua('_G.grandchild.stop()') end)
+  child.lua('_G.grandchild = MiniTest.new_child_neovim(); _G.grandchild.start()')
+
+  child.lua('_G.should_be_present = true')
+  child.lua('_G.grandchild.start()')
+  eq(child.lua_get('_G.should_be_present'), true)
+
+  eq(child.cmd_capture('1messages'), '(mini.test) Child process is already running. Use `child.restart()`.')
+end
+
+T['child']['stop()'] = function()
+  eq(child.is_running(), true)
+  child.stop()
+  eq(child.is_running(), false)
+end
+
+T['child']['restart()'] = new_set()
+
+T['child']['restart()']['respects `args` argument'] = function()
+  eq(child.lua_get('_G.inside_args'), vim.NIL)
+  child.restart({ '-c', 'lua _G.inside_args = true' })
+  eq(child.lua_get('_G.inside_args'), true)
+end
+
+T['child']['restart()']['uses `args` from `start()` by default'] = function()
+  child.stop()
+
+  child.start({ '-c', 'lua _G.inside_args = true' })
+  eq(child.lua_get('_G.inside_args'), true)
+
+  child.restart()
+  eq(child.lua_get('_G.inside_args'), true)
+end
+
+local validate_child_method = function(method, opts)
+  opts = vim.tbl_deep_extend('force', { prevent_hanging = true }, opts or {})
+
+  -- Validate presence of method
+  expect.no_error(method)
+
+  -- Validate hanging prevention
+  if opts.prevent_hanging then
+    child.type_keys('di')
+    expect.error(method, opts.name .. '.*child process is blocked')
+  end
+
+  -- Validate ensuring running. NOTE: should be called last in case.
+  child.stop()
+  expect.error(method, 'Child process is not running')
+end
+
+local validate_child_field = function(tbl_name, field_name, value)
+  local var = string.format('vim[%s][%s]', vim.inspect(tbl_name), vim.inspect(field_name))
+
+  -- Setting
+  child[tbl_name][field_name] = value
+  eq(child.lua_get(var), value)
+
+  -- Getting
+  eq(child[tbl_name][field_name], child.lua_get(var))
+end
+
+T['child']['api'] = function()
+  --stylua: ignore
+  local method = function() return child.api.nvim_buf_set_lines(0, 0, -1, true, { 'aaa' }) end
+  validate_child_method(method, { prevent_hanging = false })
+end
+
+T['child']['api_notify'] = function()
+  --stylua: ignore
+  local method = function() return child.api_notify.nvim_buf_set_lines(0, 0, -1, true, { 'aaa' }) end
+  validate_child_method(method, { prevent_hanging = false })
+end
+
+T['child']['redirected method tables'] = new_set({
+  parametrize = {
+    { 'diagnostic', 'get', { 0 } },
+    { 'fn', 'fnamemodify', { '.', ':p' } },
+    { 'highlight', 'range', { 0, 1, 'Comment', { 0, 1 }, { 0, 2 }, {} } },
+    { 'json', 'encode', { { a = 1 } } },
+    { 'loop', 'hrtime', {} },
+    { 'lsp', 'get_active_clients', {} },
+    { 'mpack', 'encode', { { a = 1 } } },
+    { 'spell', 'check', { 'thouht' } },
+    { 'treesitter', 'list_directives', {} },
+  },
+})
+
+T['child']['redirected method tables']['method'] = function(tbl_name, field_name, args)
+  --stylua: ignore
+  local method = function() return child[tbl_name][field_name](unpack(args)) end
+  validate_child_method(method, { name = tbl_name .. '.' .. field_name })
+end
+
+T['child']['redirected method tables']['field'] = function(tbl_name, field_name, _, _)
+  -- Although being tables, they should be overridable to allow test doubles
+  validate_child_field(tbl_name, field_name, true)
+end
+
+T['child']['ui'] = function()
+  -- Nothing to actually test due to mandatory function argument
+  eq(type(child.ui), 'table')
+end
+
+T['child']['scoped variables'] = new_set({ parametrize = { { 'g' }, { 'b' }, { 'w' }, { 't' }, { 'v' }, { 'env' } } })
+
+T['child']['scoped variables']['method'] = function(scope)
+  --stylua: ignore
+  local method = function() return child[scope].char end
+  validate_child_method(method, { name = scope })
+end
+
+T['child']['scoped variables']['field'] = function(scope)
+  validate_child_field(scope, 'char', 'a')
+end
+
+T['child']['scoped options'] = new_set({
+  parametrize = { { 'o', 'lines', 10 }, { 'go', 'lines', 10 }, { 'bo', 'filetype', 'lua' }, { 'wo', 'number', true } },
+})
+
+T['child']['scoped options']['method'] = function(tbl_name, field_name, _)
+  --stylua: ignore
+  local method = function() return child[tbl_name][field_name] end
+  validate_child_method(method, { name = tbl_name })
+end
+
+T['child']['scoped options']['field'] = function(tbl_name, field_name, value)
+  validate_child_field(tbl_name, field_name, value)
+end
+
+T['child']['type_keys()'] = new_set()
+
+T['child']['type_keys()']['works'] = function()
+  --stylua: ignore
+  local method = function() child.type_keys('i', 'abc') end
+  validate_child_method(method, { prevent_hanging = false })
+end
+
+T['child']['type_keys()']['allows strings and arrays of strings'] = function()
+  child.type_keys('i', { 'H', 'e', 'l', 'l', 'o' }, ' ', { 'World' }, '<Esc>')
+  eq(get_lines(), { 'Hello World' })
+end
+
+T['child']['type_keys()']['validates input'] = function()
+  local pattern = 'type_keys.*string'
+
+  expect.error(child.type_keys, pattern, 'a', 1)
+  expect.error(child.type_keys, pattern, 'a', { 'a', 1 })
+end
+
+T['child']['type_keys()']['throws error explicitly'] = function()
+  expect.error(child.type_keys, 'E492: Not an editor command: aaa', ':aaa<CR>')
+end
+
+T['child']['type_keys()']['respects `wait` argument'] = function()
+  local start_time = vim.loop.hrtime()
+  child.type_keys(100, 'i', 'Hello', { 'w', 'o' }, 'rld')
+  local end_time = vim.loop.hrtime()
+  local duration = (end_time - start_time) * 0.000001
+  eq(0.9 * 500 <= duration and duration <= 1.1 * 500, true)
+end
+
+T['child']['cmd()'] = function()
+  --stylua: ignore
+  local method = function() child.cmd([[echomsg 'Hello world']]) end
+
+  method()
+  eq(child.cmd_capture('1messages'), 'Hello world')
+
+  validate_child_method(method, { name = 'cmd' })
+end
+
+T['child']['cmd_capture()'] = function()
+  --stylua: ignore
+  local method = function() return child.cmd_capture([[echomsg 'Hello world']]) end
+
+  eq(method(), 'Hello world')
+
+  validate_child_method(method, { name = 'cmd_capture' })
+end
+
+T['child']['lua()'] = function()
+  --stylua: ignore
+  local method = function() return child.lua('_G.n = 0') end
+
+  eq(child.lua_get('_G.n'), vim.NIL)
+  method()
+  eq(child.lua_get('_G.n'), 0)
+
+  validate_child_method(method, { name = 'lua' })
+end
+
+T['child']['lua_notify()'] = function()
+  --stylua: ignore
+  local method = function() return child.lua_notify('_G.n = 0') end
+
+  eq(child.lua_get('_G.n'), vim.NIL)
+  method()
+  eq(child.lua_get('_G.n'), 0)
+
+  validate_child_method(method, { prevent_hanging = false })
+end
+
+T['child']['lua_get()'] = function()
+  --stylua: ignore
+  local method = function() return child.lua_get('1 + 1') end
+
+  eq(method(), 2)
+
+  validate_child_method(method, { name = 'lua_get' })
+end
+
+T['child']['is_blocked()'] = function()
+  eq(child.is_blocked(), false)
+
+  child.type_keys('di')
+  eq(child.is_blocked(), true)
+
+  child.ensure_normal_mode()
+  validate_child_method(child.is_blocked, { prevent_hanging = false })
+end
+
+T['child']['is_running()'] = function()
+  eq(child.is_running(), true)
+  child.stop()
+  eq(child.is_running(), false)
+end
+
+T['child']['ensure_normal_mode()'] = new_set()
+
+T['child']['ensure_normal_mode()']['works'] = new_set({ parametrize = { { 'i' }, { 'v' }, { ':' }, { 'R' } } }, {
+  function(keys)
+    child.type_keys(keys)
+    expect.no_equality(child.api.nvim_get_mode().mode, 'n')
+    child.ensure_normal_mode()
+    eq(child.api.nvim_get_mode().mode, 'n')
+  end,
+})
+
+T['child']['ensure_normal_mode()']['ensures running'] = function()
+  validate_child_method(child.ensure_normal_mode, { prevent_hanging = false })
+end
+
+T['child']['get_screenshot()'] = new_set()
+
+T['child']['get_screenshot()']['ensures running'] = function()
+  validate_child_method(child.get_screenshot, { name = 'get_screenshot' })
+end
+
+T['child']['get_screenshot()']['works'] = function()
+  set_lines({ 'aaa' })
+  local screenshot = child.get_screenshot()
+  expect.match(table.concat(screenshot, '\n'), 'aaa')
+end
+
+T['expect']['reference_screenshot()']['respects `opts`'] = function()
+  set_lines({ 'aaa' })
+  local opts = {
+    prepare = function(c)
+      c.api.nvim_buf_set_lines(0, 0, -1, true, { 'This line should be actually displayed' })
+    end,
+  }
+  local screenshot = child.get_screenshot(opts)
+  expect.match(table.concat(screenshot, '\n'), 'This line should be actually displayed')
+
+  -- Couldn't find a way to reliably test `opts.timeout`
 end
 
 -- Integration tests ==========================================================
