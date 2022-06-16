@@ -149,11 +149,12 @@ EC.leader_xmap.s = {
 -- t is for 'terminal' (uses 'neoterm') and 'minitest'
 EC.leader_nmap.t = {
   ['name'] = '+terminal/minitest',
-  ['a'] = { [[<Cmd>lua MiniTest.run()<CR>]],             'test run all' },
-  ['f'] = { [[<Cmd>lua MiniTest.run_file()<CR>]],        'test run file' },
-  ['l'] = { [[<Cmd>lua MiniTest.run_at_location()<CR>]], 'test run location' },
-  ['s'] = { [[<Cmd>belowright Tnew<CR>]],                'split terminal' },
-  ['v'] = { [[<Cmd>vertical Tnew<CR>]],                  'vsplit terminal' },
+  ['a'] = { '<Cmd>lua MiniTest.run()<CR>',                'test run all' },
+  ['f'] = { '<Cmd>lua MiniTest.run_file()<CR>',           'test run file' },
+  ['l'] = { '<Cmd>lua MiniTest.run_at_location()<CR>',    'test run location' },
+  ['s'] = { '<Cmd>lua EC.show_minitest_screenshot()<CR>', 'test show screenshot' },
+  ['T'] = { '<Cmd>belowright Tnew<CR>',                   'terminal (horizontal)' },
+  ['t'] = { '<Cmd>vertical Tnew<CR>',                     'terminal (vertical)' },
 }
 
 -- T is for 'test'

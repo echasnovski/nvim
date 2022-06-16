@@ -101,6 +101,45 @@ EC.floating_lazygit = function()
   vim.cmd('startinsert')
 end
 
+EC.show_minitest_screenshot = function(opts)
+  opts = vim.tbl_deep_extend('force', { dir_path = 'tests/screenshots' }, opts or {})
+  vim.ui.select(vim.fn.readdir(opts.dir_path), { prompt = 'Choose screenshot:' }, function(screen_path)
+    -- Setup
+    local buf_id = vim.api.nvim_create_buf(true, true)
+    local win_id = vim.api.nvim_open_win(buf_id, true, {
+      relative = 'editor',
+      width = math.floor(0.8 * vim.o.columns),
+      height = math.floor(0.8 * vim.o.lines),
+      row = math.floor(0.1 * vim.o.lines),
+      col = math.floor(0.1 * vim.o.columns),
+      zindex = 99,
+    })
+    local channel = vim.api.nvim_open_term(buf_id, {})
+
+    --stylua: ignore start
+    vim.cmd('setlocal bufhidden=wipe')
+
+    local win_options = {
+      colorcolumn = '', fillchars = 'eob: ',    foldcolumn = '0', foldlevel = 999,
+      number = false,   relativenumber = false, spell = false,    signcolumn = 'no',
+      wrap = true,
+    }
+    for name, value in pairs(win_options) do
+      vim.api.nvim_win_set_option(win_id, name, value)
+    end
+    --stylua: ignore end
+
+    -- Show
+    local lines = vim.fn.readfile(opts.dir_path .. '/' .. screen_path)
+    vim.api.nvim_chan_send(channel, table.concat(lines, '\r\n'))
+
+    -- Convenience
+    vim.api.nvim_buf_set_keymap(buf_id, 'n', 'q', ':q<CR>', { noremap = true })
+    vim.b.miniindentscope_disable = true
+    vim.api.nvim_input([[<C-\><C-n>]])
+  end)
+end
+
 -- Helper data ================================================================
 -- Commonly used keys
 H.keys = {
