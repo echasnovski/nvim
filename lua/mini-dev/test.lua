@@ -714,13 +714,13 @@ function MiniTest.expect.reference_screenshot(screenshot, path, opts)
     local dir_path = vim.fn.fnamemodify(path, ':p:h')
     vim.fn.mkdir(dir_path, 'p')
 
-    vim.fn.writefile(screenshot, path)
+    vim.fn.writefile(screenshot, path, 'b')
 
     MiniTest.add_note('Created reference screenshot at path ' .. vim.inspect(path))
     return true
   end
 
-  local reference = vim.fn.readfile(path)
+  local reference = vim.fn.readfile(path, 'b')
 
   --stylua: ignore
   if vim.deep_equal(reference, screenshot) then return true end
@@ -1293,22 +1293,26 @@ function MiniTest.new_child_neovim()
 
     opts.prepare(child)
 
+    -- Create screenshot. At the moment this might result in an "empty file",
+    -- thus iterate until result is not empty.
     local temp_file = vim.fn.tempname()
     local step = 10
     local res, i, max_tries = nil, 0, math.floor(opts.timeout / step)
+    local is_valid_screenshot
     repeat
       i = i + 1
       vim.loop.sleep(step)
 
       -- TODO: consider making PR to officially export it in Neovim core
       child.api.nvim__screenshot(temp_file)
-      res = child.fn.readfile(temp_file)
-    until (type(res) == 'table' and #res > 0) or i >= max_tries
+      res = child.fn.readfile(temp_file, 'b')
+      is_valid_screenshot = type(res) == 'table' and #res > 0 and not (#res == 1 and res[1] == '')
+    until is_valid_screenshot or i >= max_tries
 
     vim.fn.delete(temp_file)
 
-    if res == nil then
-      local msg = string.format('Could not get non-nil screenshot within %sms.', opts.timeout)
+    if not is_valid_screenshot then
+      local msg = string.format('Could not get valid screenshot within %sms.', opts.timeout)
       H.error(msg)
     end
 
