@@ -1859,6 +1859,7 @@ function H.overview_reporter.finish_lines(cases)
   local res = {}
 
   -- Show all fails and notes
+  local n_fails, n_notes = 0, 0
   for _, c in ipairs(cases) do
     local stringid = H.case_to_stringid(c)
     local exec = c.exec == nil and { fails = {}, notes = {} } or c.exec
@@ -1866,6 +1867,9 @@ function H.overview_reporter.finish_lines(cases)
     local fail_prefix = string.format('%s in %s: ', H.add_style('FAIL', 'fail'), stringid)
     local note_color = #exec.fails > 0 and 'fail' or 'pass'
     local note_prefix = string.format('%s in %s: ', H.add_style('NOTE', note_color), stringid)
+
+    n_fails = n_fails + #exec.fails
+    n_notes = n_notes + #exec.notes
 
     local cur_fails_notes = {}
     vim.list_extend(cur_fails_notes, H.add_prefix(exec.fails, fail_prefix))
@@ -1882,7 +1886,7 @@ function H.overview_reporter.finish_lines(cases)
     end
   end
 
-  local header = #res > 0 and 'Fails and notes' or 'No fails. No notes.'
+  local header = string.format('Fails (%s) and Notes (%s)', n_fails, n_notes)
   table.insert(res, 1, H.add_style(header, 'emphasis'))
 
   return res
@@ -1995,7 +1999,7 @@ function H.buffer_reporter.set_lines(buf_id, lines, start, finish)
 
   -- Add highlight
   for _, hl_data in ipairs(hl_ranges) do
-    vim.highlight.range(buf_id, ns_id, hl_data.hl, { hl_data.line, hl_data.left }, { hl_data.line, hl_data.right }, {})
+    vim.highlight.range(buf_id, ns_id, hl_data.hl, { hl_data.line, hl_data.left }, { hl_data.line, hl_data.right })
   end
 end
 
