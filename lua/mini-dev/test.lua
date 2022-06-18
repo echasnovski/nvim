@@ -84,6 +84,7 @@
 ---   text with `vim.g.terminal_color_1` color (red).
 --- * `MiniTestPass` - highlighting of passed cases. By default it is a bold
 ---   text with `vim.g.terminal_color_2` color (green).
+--- * `MiniTestEmphasis` - emphasis highlighting. By default it is a bold text.
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 ---
@@ -121,7 +122,8 @@ function MiniTest.setup(config)
   -- Create highlighting
   local command = string.format(
     [[hi default MiniTestFail guifg=%s gui=bold
-      hi default MiniTestPass guifg=%s gui=bold]],
+      hi default MiniTestPass guifg=%s gui=bold
+      hi default MiniTestEmphasis gui=bold]],
     vim.g.terminal_color_1 or '#FF0000',
     vim.g.terminal_color_2 or '#00FF00'
   )
@@ -709,29 +711,28 @@ function MiniTest.expect.reference_screenshot(screenshot, path, opts)
     path = 'tests/screenshots/' .. name
   end
 
+  local lines = vim.split(tostring(screenshot), '\n')
+
   -- If there is no readable screenshot file, create it. Pass with note.
   if opts.force or vim.fn.filereadable(path) == 0 then
     local dir_path = vim.fn.fnamemodify(path, ':p:h')
     vim.fn.mkdir(dir_path, 'p')
 
-    vim.fn.writefile(screenshot, path, 'b')
-
+    vim.fn.writefile(lines, path)
     MiniTest.add_note('Created reference screenshot at path ' .. vim.inspect(path))
     return true
   end
 
-  local reference = vim.fn.readfile(path, 'b')
+  local reference_lines = vim.fn.readfile(path)
 
   --stylua: ignore
-  if vim.deep_equal(reference, screenshot) then return true end
+  if vim.deep_equal(reference_lines, lines) then return true end
 
   local subject = 'screenshot equality to reference at ' .. vim.inspect(path)
-  local disable_highlighting = H.is_headless and '\27[0m' or ''
-  --stylua: ignore
   local context = string.format(
-    'Reference: %s%s\n\nObserved: %s%s',
-    H.screenshot_to_string(reference), disable_highlighting,
-    H.screenshot_to_string(screenshot), disable_highlighting
+    'Reference: %s\n\nObserved: %s',
+    table.concat(reference_lines, '\n'),
+    table.concat(lines, '\n')
   )
   H.error_expect(subject, context)
 end
@@ -1281,42 +1282,37 @@ function MiniTest.new_child_neovim()
     child.type_keys([[<C-\>]], '<C-n>')
   end
 
-  function child.get_screenshot(opts)
+  function child.get_screenshot()
     ensure_running()
     prevent_hanging('get_screenshot')
 
-    --stylua: ignore
-    opts = vim.tbl_deep_extend('force', {
-      prepare = function(c) c.cmd('redraw!') end,
-      timeout = 5000,
-    }, opts or {})
+    -- NOTE: this doesn't show floating windows at the moment.
+    -- See https://github.com/neovim/neovim/issues/19013
+    local res = child.lua([[
+      local text, attr = {}, {}
+      for i = 1, vim.o.lines do
+        local text_line, attr_line = {}, {}
+        for j = 1, vim.o.columns do
+          table.insert(text_line, vim.fn.screenstring(i, j))
+          table.insert(attr_line, vim.fn.screenattr(i, j))
+        end
+        table.insert(text, text_line)
+        table.insert(attr, attr_line)
+      end
+      return { text = text, attr = attr }
+    ]])
+    res.attr = H.screenshot_encode_attr(res.attr)
 
-    opts.prepare(child)
-
-    -- Create screenshot. At the moment this might result in an "empty file",
-    -- thus iterate until result is not empty.
-    local temp_file = vim.fn.tempname()
-    local step = 10
-    local res, i, max_tries = nil, 0, math.floor(opts.timeout / step)
-    local is_valid_screenshot
-    repeat
-      i = i + 1
-      vim.loop.sleep(step)
-
-      -- TODO: consider making PR to officially export it in Neovim core
-      child.api.nvim__screenshot(temp_file)
-      res = child.fn.readfile(temp_file, 'b')
-      is_valid_screenshot = type(res) == 'table' and #res > 0 and not (#res == 1 and res[1] == '')
-    until is_valid_screenshot or i >= max_tries
-
-    vim.fn.delete(temp_file)
-
-    if not is_valid_screenshot then
-      local msg = string.format('Could not get valid screenshot within %sms.', opts.timeout)
-      H.error(msg)
-    end
-
-    return res
+    return setmetatable(res, {
+      __tostring = function(x)
+        --stylua: ignore start
+        local text = table.concat(vim.tbl_map(function(l) return table.concat(l, '') end, x.text), '\n')
+        local attr = table.concat(vim.tbl_map(function(l) return table.concat(l, '') end, x.attr), '\n')
+        --stylua: ignore end
+        local middle = string.rep('-', #res.text[#res.text])
+        return string.format('%s\n%s\n%s', text, middle, attr)
+      end,
+    })
   end
 
   -- Register `child` for automatic stop in case of emergency
@@ -1518,7 +1514,7 @@ H.ansi_codes = {
 H.hl_groups = {
   ['\27[1;31m'] = 'MiniTestFail',
   ['\27[1;32m'] = 'MiniTestPass',
-  ['\27[1m'] = 'Bold',
+  ['\27[1m'] = 'MiniTestEmphasis',
 }
 
 -- Symbols used in reporter output
@@ -2094,22 +2090,31 @@ function H.traceback()
   return res
 end
 
-function H.screenshot_to_string(x)
-  local res = vim.deepcopy(x)
-  if H.is_headless then
-    -- Show screenshot inline (without going home and deleting lines)
-    res[2] = res[2]:gsub('\27%[%d?H\27%[%d?J', '', 1)
-
-    -- Don't use "show/hide cursor" and "start/stop blinking"
-    res[2] = res[2]:gsub('\27%[%?%d-l', '', 1)
-    res[#res] = res[#res]:gsub('\27%[%?%d-h', '', 2)
-
-    -- Neutralize possible indentation
-    for i = 2, #res do
-      res[i] = string.format('\r%s', res[i])
+function H.screenshot_encode_attr(attr)
+  local attr_presence = {}
+  for _, l in ipairs(attr) do
+    for _, s in ipairs(l) do
+      attr_presence[s] = true
     end
   end
-  return table.concat(res, '\n')
+
+  local vals = vim.tbl_keys(attr_presence)
+  table.sort(vals)
+  local codes = {}
+  for i, v in ipairs(vals) do
+    -- Use `47` so that codes start from '0'
+    codes[v] = string.char(47 + i)
+  end
+
+  local res = {}
+  for _, l in ipairs(attr) do
+    local res_line = {}
+    for _, s in ipairs(l) do
+      table.insert(res_line, codes[s])
+    end
+    table.insert(res, res_line)
+  end
+  return res
 end
 
 -- Utilities ------------------------------------------------------------------
