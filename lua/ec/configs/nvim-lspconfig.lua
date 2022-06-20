@@ -1,6 +1,7 @@
 -- Currently used language servers:
--- - r_language_server for R
+-- - clangd for C/C++
 -- - pyright for Python
+-- - r_language_server for R
 -- - sumneko_lua for Lua
 -- - typescript-language-server for Typescript and Javascript
 
@@ -102,6 +103,10 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
     },
   })
 end
+
+-- C/C++ (clangd) =============================================================
+-- Install as system package (`sudo pacman -S llvm clang`)
+lspconfig.clangd.setup({ on_attach = on_attach_custom })
 
 -- Typescript (tsserver) ======================================================
 lspconfig.tsserver.setup({ on_attach = on_attach_custom })
