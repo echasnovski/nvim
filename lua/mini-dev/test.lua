@@ -711,29 +711,26 @@ function MiniTest.expect.reference_screenshot(screenshot, path, opts)
     path = 'tests/screenshots/' .. name
   end
 
-  local lines = vim.split(tostring(screenshot), '\n')
-
   -- If there is no readable screenshot file, create it. Pass with note.
   if opts.force or vim.fn.filereadable(path) == 0 then
     local dir_path = vim.fn.fnamemodify(path, ':p:h')
     vim.fn.mkdir(dir_path, 'p')
+    H.screenshot_write(screenshot, path)
 
-    vim.fn.writefile(lines, path)
     MiniTest.add_note('Created reference screenshot at path ' .. vim.inspect(path))
     return true
   end
 
-  local reference_lines = vim.fn.readfile(path)
+  local reference = H.screenshot_read(path)
+
+  -- Compare
+  local are_same, cause = H.screenshot_compare(reference, screenshot)
 
   --stylua: ignore
-  if vim.deep_equal(reference_lines, lines) then return true end
+  if are_same then return true end
 
   local subject = 'screenshot equality to reference at ' .. vim.inspect(path)
-  local context = string.format(
-    'Reference: %s\n\nObserved: %s',
-    table.concat(reference_lines, '\n'),
-    table.concat(lines, '\n')
-  )
+  local context = string.format('%s\nReference:\n%s\n\nObserved:\n%s', cause, tostring(reference), tostring(screenshot))
   H.error_expect(subject, context)
 end
 
@@ -1286,6 +1283,24 @@ function MiniTest.new_child_neovim()
     ensure_running()
     prevent_hanging('get_screenshot')
 
+    -- Error if there is a visible floating window but `screen*()` functions
+    -- don't support them (Neovim<0.8)
+    if child.fn.has('nvim-0.8') == 0 then
+      local has_visible_floats = child.lua([[
+        local has_floats = false
+        for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+          if vim.api.nvim_win_get_config(win_id).relative ~= '' then
+            has_floats = true
+          end
+        end
+        return has_floats
+      ]])
+
+      if has_visible_floats then
+        error('`child.get_screenshot()` will not show visible floating windows in this version. Use Neovim>=0.8.', 0)
+      end
+    end
+
     -- NOTE: this doesn't show floating windows at the moment.
     -- See https://github.com/neovim/neovim/issues/19013
     local res = child.lua([[
@@ -1303,16 +1318,7 @@ function MiniTest.new_child_neovim()
     ]])
     res.attr = H.screenshot_encode_attr(res.attr)
 
-    return setmetatable(res, {
-      __tostring = function(x)
-        --stylua: ignore start
-        local text = table.concat(vim.tbl_map(function(l) return table.concat(l, '') end, x.text), '\n')
-        local attr = table.concat(vim.tbl_map(function(l) return table.concat(l, '') end, x.attr), '\n')
-        --stylua: ignore end
-        local middle = string.rep('-', #res.text[#res.text])
-        return string.format('%s\n%s\n%s', text, middle, attr)
-      end,
-    })
+    return H.screenshot_new(res)
   end
 
   -- Register `child` for automatic stop in case of emergency
@@ -1379,8 +1385,9 @@ end
 ---@field is_running function Check whether child process is currently running.
 ---
 ---@field ensure_normal_mode function Ensure normal mode.
----@field get_screenshot function Returns array of strings representing
----   screenshot of current screen. See |MiniTest-child-neovim.get_screenshot()|.
+---@field get_screenshot function Returns table with two "2d arrays" of single
+---   characters representing what is displayed on screen and how it looks.
+---   See |MiniTest-child-neovim.get_screenshot()|.
 ---
 ---@field job table|nil Information about current job. If `nil`, child is not running.
 ---
@@ -1463,23 +1470,44 @@ end
 
 --- child.get_screenshot(opts)~
 ---
---- This is a wrapper for |nvim__screenshot| with some heuristics trying to
---- make testing with it more robust.
+--- Compute what is displayed on (default TUI) screen and how it is displayed.
+--- This basically calls |screenstring()| and |screenattr()| for every visible
+--- cell (row from 1 to 'lines', column from 1 to 'columns').
 ---
----@param opts table Options:
----   - <prepare> - function which will be called with current `child` as
----     argument before trying to create screenshot. By default calls |redraw|(!)
----     in order to get the most current screen state.
----   - <timeout> - number of milliseconds to try (every 10ms) to get non-empty
----     result. Default: 5000.
+--- Notes:
+--- - Due to implementation details of `screenstring()` and `screenattr()` in
+---   Neovim<=0.7, this function won't recognize floating windows displayed on
+---   screen. It will throw an error if there is a visible floating window. Use
+---   Neovim>=0.8 (current nightly) to properly handle floating windows. Details:
+---     - https://github.com/neovim/neovim/issues/19013
+---     - https://github.com/neovim/neovim/pull/19020
+--- - To make output more portable and visually useful, outputs of
+---   `screenattr()` are coded with single character symbols. Those are taken from
+---   94 characters (ASCII codes between 33 and 126), so there will be duplicates
+---   in case of more than 94 different ways text is displayed on screen.
 ---
----@return table|nil Array of strings representing screenshot.
+---@return table Screenshot table with the following fields:
+---   - <text> - "2d array" (row-column) of single characters displayed at
+---     particular cells.
+---   - <attr> - "2d array" (row-column) of symbols representing how text is
+---     diplayed (basically, "coded" appearance/highlighting). They should be
+---     used only in relation to each other: same/different symbols for two
+---     cells mean same/different visual appearance. Note: there will be false
+---     positives if there are more than 94 different attribute values.
+---   It also can be used with `tostring()` to convert to single string (used
+---   for writing to reference file). It places `text` first and prepends both
+---   `text` and `attr` with visual separators.
 ---
 ---@usage >
----   MiniTest.expect.reference_screenshot(child.get_screenshot())
+---   local screenshot = child.get_screenshot()
 ---
----   -- Explicit usage of default `prepare` option
----   child.get_screenshot({ prepare = function(c) c.cmd('redraw!') end })
+---   -- Show character displayed row=3 and column=4
+---   print(screenshot.text[3][4])
+---
+---   -- Convert to string
+---   tostring(screenshot)
+---
+---   MiniTest.expect.reference_screenshot(child.get_screenshot())
 ---@tag MiniTest-child-neovim.get_screenshot()
 
 -- Helper data ================================================================
@@ -2090,31 +2118,95 @@ function H.traceback()
   return res
 end
 
+-- Screenshots ----------------------------------------------------------------
+function H.screenshot_new(t)
+  return setmetatable(t, {
+    __tostring = function(x)
+      --stylua: ignore start
+      local text = table.concat(vim.tbl_map(function(l) return table.concat(l, '') end, x.text), '\n')
+      local attr = table.concat(vim.tbl_map(function(l) return table.concat(l, '') end, x.attr), '\n')
+      --stylua: ignore end
+      local sep = string.rep('-', #t.text[#t.text])
+      return string.format('%s\n%s\n%s\n%s', sep, text, sep, attr)
+    end,
+  })
+end
+
 function H.screenshot_encode_attr(attr)
-  local attr_presence = {}
-  for _, l in ipairs(attr) do
-    for _, s in ipairs(l) do
-      attr_presence[s] = true
-    end
-  end
-
-  local vals = vim.tbl_keys(attr_presence)
-  table.sort(vals)
-  local codes = {}
-  for i, v in ipairs(vals) do
-    -- Use `47` so that codes start from '0'
-    codes[v] = string.char(47 + i)
-  end
-
-  local res = {}
+  local attr_codes, res = {}, {}
+  -- Use 48 so that codes start from `'0'`
+  local cur_code_id = 48
   for _, l in ipairs(attr) do
     local res_line = {}
     for _, s in ipairs(l) do
-      table.insert(res_line, codes[s])
+      -- Assign character codes to numerical attributes in order of their
+      -- appearance on the screen. This leads to be a more reliable way of
+      -- comparing two different screenshots (at cost of bigger effect when
+      -- screenshot changes slightly).
+      if not attr_codes[s] then
+        attr_codes[s] = string.char(cur_code_id)
+        -- Cycle through 33...126
+        cur_code_id = math.fmod(cur_code_id + 1 - 33, 94) + 33
+      end
+      table.insert(res_line, attr_codes[s])
     end
     table.insert(res, res_line)
   end
+
   return res
+end
+
+function H.screenshot_compare(screen_ref, screen_obs)
+  local compare = function(x, y, desc)
+    if x ~= y then
+      return false, ('Different %s. Reference: %s. Observed: %s.'):format(desc, vim.inspect(x), vim.inspect(y))
+    end
+    return true, ''
+  end
+
+  --stylua: ignore start
+  local ok, cause
+  ok, cause = compare(#screen_ref.text, #screen_obs.text, 'number of `text` lines')
+  if not ok then return ok, cause end
+  ok, cause = compare(#screen_ref.attr, #screen_obs.attr, 'number of `attr` lines')
+  if not ok then return ok, cause end
+
+  for i = 1, #screen_ref.text do
+    ok, cause = compare(#screen_ref.text[i], #screen_obs.text[i], 'number of columns in `text` line ' .. i)
+    if not ok then return ok, cause end
+    ok, cause = compare(#screen_ref.attr[i], #screen_obs.attr[i], 'number of columns in `attr` line ' .. i)
+    if not ok then return ok, cause end
+
+    for j = 1, #screen_ref.text[i] do
+      ok, cause = compare(screen_ref.text[i][j], screen_obs.text[i][j], string.format('`text` cell at line %s column %s', i, j))
+      if not ok then return ok, cause end
+      ok, cause = compare(screen_ref.attr[i][j], screen_obs.attr[i][j], string.format('`attr` cell at line %s column %s', i, j))
+      if not ok then return ok, cause end
+    end
+  end
+  --stylua: ignore end
+
+  return true, ''
+end
+
+function H.screenshot_write(screenshot, path)
+  vim.fn.writefile(vim.split(tostring(screenshot), '\n'), path)
+end
+
+function H.screenshot_read(path)
+  -- General structure of screenshot with `n` lines:
+  -- 1: separator
+  -- 2, n+1: `text`
+  -- n+2: separator
+  -- n+3, 2n+2: `attr`
+  local lines = vim.fn.readfile(path)
+  local n = 0.5 * #lines - 1
+  local text_lines, attr_lines = vim.list_slice(lines, 2, n + 1), vim.list_slice(lines, n + 3, 2 * n + 2)
+
+  return H.screenshot_new({
+    text = vim.tbl_map(H.string_to_chars, text_lines),
+    attr = vim.tbl_map(H.string_to_chars, attr_lines),
+  })
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -2145,6 +2237,15 @@ end
 
 function H.add_style(x, ansi_code)
   return string.format('%s%s%s', H.ansi_codes[ansi_code], x, H.ansi_codes.reset)
+end
+
+function H.string_to_chars(s)
+  -- Can't use `vim.split(s, '')` because of multibyte characters
+  local res = {}
+  for i = 1, vim.fn.strchars(s) do
+    table.insert(res, vim.fn.strcharpart(s, i - 1, 1))
+  end
+  return res
 end
 
 return MiniTest

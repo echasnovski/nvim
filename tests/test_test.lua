@@ -4,20 +4,15 @@ local helpers = dofile('tests/helpers.lua')
 
 local child = helpers.new_child_neovim()
 local expect, eq = helpers.expect, helpers.expect.equality
-local new_set, skip, finally = MiniTest.new_set, MiniTest.skip, MiniTest.finally
+local new_set, finally = MiniTest.new_set, MiniTest.finally
 
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('test', config) end
 local unload_module = function() child.mini_unload('test') end
-local reload_module = function(config) unload_module(); load_module(config) end
 local set_cursor = function(...) return child.set_cursor(...) end
-local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
 local get_lines = function(...) return child.get_lines(...) end
-local type_keys = function(...) return child.type_keys(...) end
-local poke_eventloop = function() child.api.nvim_eval('1') end
-local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
 
 local get_ref_path = function(name)
@@ -636,7 +631,7 @@ T['expect']['reference_screenshot()'] = new_set()
 
 T['expect']['reference_screenshot()']['works'] = function()
   local path = get_ref_path('reference-screenshot')
-  child.o.lines, child.o.columns = 10, 10
+  child.set_size(5, 12)
 
   set_lines({ 'aaa' })
   expect.no_error(function()
@@ -647,6 +642,46 @@ T['expect']['reference_screenshot()']['works'] = function()
   expect.error(function()
     MiniTest.expect.reference_screenshot(child.get_screenshot(), path)
   end, 'screenshot equality to reference at ' .. vim.pesc(vim.inspect(path)) .. '.*Reference:.*Observed:.*Traceback:')
+end
+
+T['expect']['reference_screenshot()']['locates problem'] = function()
+  local path = get_ref_path('reference-screenshot')
+  local validate = function(screen, pattern)
+    expect.error(function()
+      MiniTest.expect.reference_screenshot(screen, path)
+    end, pattern)
+  end
+
+  child.set_size(5, 12)
+  set_lines({ 'aaa' })
+  local screen = child.get_screenshot()
+
+  -- Number of lines
+  local screen_text_lines = vim.deepcopy(screen)
+  table.remove(screen_text_lines.text, 1)
+  validate(screen_text_lines, 'Different number of `text` lines%. Reference: 5%. Observed: 4%.')
+
+  local screen_attr_lines = vim.deepcopy(screen)
+  table.remove(screen_attr_lines.attr, 1)
+  validate(screen_attr_lines, 'Different number of `attr` lines%. Reference: 5%. Observed: 4%.')
+
+  -- Number of columns
+  local screen_text_columns = vim.deepcopy(screen)
+  table.remove(screen_text_columns.text[1], 1)
+  validate(screen_text_columns, 'Different number of columns in `text` line 1%. Reference: 12%. Observed: 11%.')
+
+  local screen_attr_columns = vim.deepcopy(screen)
+  table.remove(screen_attr_columns.attr[1], 1)
+  validate(screen_attr_columns, 'Different number of columns in `attr` line 1%. Reference: 12%. Observed: 11%.')
+
+  -- Cells
+  local screen_text_cell = vim.deepcopy(screen)
+  screen_text_cell.text[1][2] = 'X'
+  validate(screen_text_cell, 'Different `text` cell at line 1 column 2%. Reference: "a"%. Observed: "X"%.')
+
+  local screen_attr_cell = vim.deepcopy(screen)
+  screen_attr_cell.attr[1][2] = 'X'
+  validate(screen_attr_cell, 'Different `attr` cell at line 1 column 2%. Reference: "0"%. Observed: "X"%.')
 end
 
 T['expect']['reference_screenshot()']['correctly infers reference path'] = function()
@@ -695,6 +730,14 @@ T['expect']['reference_screenshot()']['respects `opts` argument'] = function()
   eq(MiniTest.current.case.exec.notes, notes)
 end
 
+T['expect']['reference_screenshot()']['works with multibyte characters'] = function()
+  child.set_size(5, 12)
+  set_lines({ '  1  2' })
+  expect.no_error(function()
+    MiniTest.expect.reference_screenshot(child.get_screenshot())
+  end)
+end
+
 T['new_expectation()'] = new_set()
 
 T['new_expectation()']['works'] = function()
@@ -709,7 +752,7 @@ T['new_expectation()']['works'] = function()
 end
 
 T['new_expectation()']['allows string or function arguments'] = function()
-  local expect_truthy = MiniTest.new_expectation(function(x)
+  local expect_truthy = MiniTest.new_expectation(function()
     return 'func_truthy'
   end, function(x)
     return x
@@ -1011,20 +1054,83 @@ end
 T['child']['get_screenshot()']['works'] = function()
   set_lines({ 'aaa' })
   local screenshot = child.get_screenshot()
-  expect.match(table.concat(screenshot, '\n'), 'aaa')
+
+  -- Structure
+  eq(type(screenshot), 'table')
+  eq(vim.tbl_islist(screenshot.text), true)
+  eq(vim.tbl_islist(screenshot.attr), true)
+
+  local n_lines, n_cols = child.o.lines, child.o.columns
+
+  eq(#screenshot.text, n_lines)
+  eq(#screenshot.attr, n_lines)
+
+  for i = 1, n_lines do
+    eq(vim.tbl_islist(screenshot.text[i]), true)
+    eq(vim.tbl_islist(screenshot.attr[i]), true)
+
+    eq(#screenshot.text[i], n_cols)
+    eq(#screenshot.attr[i], n_cols)
+
+    for j = 1, n_cols do
+      eq(type(screenshot.text[i][j]), 'string')
+      eq(type(screenshot.attr[i][j]), 'string')
+    end
+  end
+
+  -- Content
+  expect.match(table.concat(screenshot.text[1], ''), '^aaa')
+  expect.no_equality(screenshot.attr[1][1], screenshot.attr[2][1])
 end
 
-T['child']['get_screenshot()']['respects `opts` argument'] = function()
+T['child']['get_screenshot()']['has method for `tostring()`'] = function()
   set_lines({ 'aaa' })
-  local opts = {
-    prepare = function(c)
-      c.api.nvim_buf_set_lines(0, 0, -1, true, { 'This line should be actually displayed' })
-    end,
-  }
-  local screenshot = child.get_screenshot(opts)
-  expect.match(table.concat(screenshot, '\n'), 'This line should be actually displayed')
+  local screenshot = child.get_screenshot()
+  local lines = vim.split(tostring(screenshot), '\n')
+  local n_lines, n_cols = child.o.lines, child.o.columns
 
-  -- Couldn't find a way to reliably test `opts.timeout`
+  -- Twice "n_lines + separator line"
+  eq(#lines, 2 * n_lines + 2)
+
+  -- Separators
+  eq(lines[1], string.rep('-', n_cols))
+  eq(lines[n_lines + 2], string.rep('-', n_cols))
+
+  -- Content
+  expect.match(lines[2], '^aaa')
+  expect.no_equality(lines[n_lines + 3]:sub(1, 1), lines[n_lines + 4]:sub(1, 1))
+end
+
+T['child']['get_screenshot()']['throws error with floating windows in Neovim<=0.7'] = function()
+  if child.fn.has('nvim-0.8') == 1 then
+    return
+  end
+
+  local buf_id = child.api.nvim_create_buf(true, true)
+  child.api.nvim_buf_set_lines(buf_id, 0, -1, true, { ' ' })
+  child.api.nvim_open_win(buf_id, false, { relative = 'editor', width = 3, height = 1, row = 0, col = 0 })
+
+  expect.error(child.get_screenshot, 'will not show visible floating windows.*Neovim>=0%.8')
+end
+
+T['child']['get_screenshot()']['works with floating windows in Neovim>=0.8'] = function()
+  if child.fn.has('nvim-0.8') == 0 then
+    return
+  end
+
+  -- This setup should result into displayed text 'bb a': 'bb ' from floating
+  -- window, 'aa' - from underneath text
+  set_lines({ 'aaaa' })
+
+  local buf_id = child.api.nvim_create_buf(true, true)
+  child.api.nvim_buf_set_lines(buf_id, 0, -1, true, { 'bb ' })
+  child.api.nvim_open_win(buf_id, false, { relative = 'editor', width = 3, height = 1, row = 0, col = 0 })
+
+  local screenshot = child.get_screenshot()
+  eq(screenshot.text[1][1], 'b')
+  eq(screenshot.text[1][2], 'b')
+  eq(screenshot.text[1][3], ' ')
+  eq(screenshot.text[1][4], 'a')
 end
 
 -- Integration tests ==========================================================
@@ -1034,7 +1140,7 @@ T['gen_reporter']['buffer'] = new_set({
   hooks = {
     pre_case = function()
       child.cmd('set termguicolors')
-      child.o.lines, child.o.columns = 50, 120
+      child.set_size(50, 120)
     end,
   },
   parametrize = {
@@ -1045,6 +1151,10 @@ T['gen_reporter']['buffer'] = new_set({
 })
 
 T['gen_reporter']['buffer']['test'] = function(opts_element)
+  if child.fn.has('nvim-0.8') == 0 then
+    return
+  end
+
   -- Testing "in dynamic" is left for manual approach
   local path = get_ref_path('testref_reporters.lua')
   local command = string.format('_G.reporter = MiniTest.gen_reporter.buffer({ %s })', opts_element)
@@ -1057,7 +1167,7 @@ T['gen_reporter']['stdout'] = new_set({
   hooks = {
     pre_case = function()
       child.cmd('set termguicolors')
-      child.o.lines, child.o.columns = 25, 120
+      child.set_size(25, 120)
       child.o.laststatus = 0
     end,
   },

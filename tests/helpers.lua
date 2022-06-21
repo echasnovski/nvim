@@ -41,6 +41,16 @@ Helpers.new_child_neovim = function()
     return child.api.nvim_win_get_cursor(win_id or 0)
   end
 
+  function child.set_size(lines, columns)
+    if type(lines) == 'number' then
+      child.o.lines = lines
+    end
+
+    if type(columns) == 'number' then
+      child.o.columns = columns
+    end
+  end
+
   -- Work with 'mini.nvim':
   -- - `mini_load` - load with "normal" table config
   -- - `mini_load_strconfig` - load with "string" config, which is still a
