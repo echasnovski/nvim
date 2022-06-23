@@ -98,10 +98,23 @@ Helpers.new_child_neovim = function()
   end
 
   function child.expect_screenshot(opts, path, screenshot_opts)
+    if child.fn.has('nvim-0.6') == 0 then
+      MiniTest.skip('Neovim version is not enough for `child.get_screenshot()`')
+    end
+
     MiniTest.expect.reference_screenshot(child.get_screenshot(screenshot_opts), path, opts)
   end
 
   return child
+end
+
+-- Mark test failure as "flaky"
+function Helpers.mark_flaky()
+  MiniTest.finally(function()
+    if #MiniTest.current.case.exec.fails > 0 then
+      MiniTest.add_note('This test is flaky.')
+    end
+  end)
 end
 
 return Helpers

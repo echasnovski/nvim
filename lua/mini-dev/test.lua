@@ -33,8 +33,8 @@
 ---
 --- For more information see:
 --- - 'TESTING.md' file for a hands-on introduction based on examples.
---- - Code for this plugin's tests. Consider it to be an example of how
----   'mini.test' should be used to organize and create tests.
+--- - Code for this plugin's tests. Consider it to be an example of intended
+---   way to use 'mini.test' for test organization and creation.
 ---
 --- # Workflow
 ---
@@ -1283,6 +1283,11 @@ function MiniTest.new_child_neovim()
     ensure_running()
     prevent_hanging('get_screenshot')
 
+    -- Error if Neovim version is "too old"
+    if child.fn.has('nvim-0.6') == 0 then
+      error('`child.get_screenshot()` needs Neovim>=0.6', 0)
+    end
+
     -- Error if there is a visible floating window but `screen*()` functions
     -- don't support them (Neovim<0.8)
     if child.fn.has('nvim-0.8') == 0 then
@@ -1387,7 +1392,7 @@ end
 ---@field ensure_normal_mode function Ensure normal mode.
 ---@field get_screenshot function Returns table with two "2d arrays" of single
 ---   characters representing what is displayed on screen and how it looks.
----   See |MiniTest-child-neovim.get_screenshot()|.
+---   Note: works for Neovim>=0.6. See |MiniTest-child-neovim.get_screenshot()|.
 ---
 ---@field job table|nil Information about current job. If `nil`, child is not running.
 ---
@@ -1475,6 +1480,7 @@ end
 --- cell (row from 1 to 'lines', column from 1 to 'columns').
 ---
 --- Notes:
+--- - This requires Neovim>=0.6 as `screenstring()` was introduced only in 0.6.
 --- - Due to implementation details of `screenstring()` and `screenattr()` in
 ---   Neovim<=0.7, this function won't recognize floating windows displayed on
 ---   screen. It will throw an error if there is a visible floating window. Use
@@ -1495,8 +1501,9 @@ end
 ---     cells mean same/different visual appearance. Note: there will be false
 ---     positives if there are more than 94 different attribute values.
 ---   It also can be used with `tostring()` to convert to single string (used
----   for writing to reference file). It places `text` first and prepends both
----   `text` and `attr` with visual separators.
+---   for writing to reference file). It results into two visual parts
+---   (separated by empty line), for `text` and `attr`. Each part has "ruler"
+---   above content and line numbers for each line.
 ---
 ---@usage >
 ---   local screenshot = child.get_screenshot()
@@ -2120,14 +2127,27 @@ end
 
 -- Screenshots ----------------------------------------------------------------
 function H.screenshot_new(t)
+  local process_screen = function(arr_2d)
+    local n_lines, n_cols = #arr_2d, #arr_2d[1]
+
+    -- Prepend lines with line number of the form `01|`
+    local n_digits = math.floor(math.log10(n_lines)) + 1
+    local format = string.format('%%0%dd|%%s', n_digits)
+    local lines = {}
+    for i = 1, n_lines do
+      table.insert(lines, string.format(format, i, table.concat(arr_2d[i])))
+    end
+
+    -- Make ruler
+    local prefix = string.rep('-', n_digits) .. '|'
+    local ruler = prefix .. ('---------|'):rep(math.ceil(0.1 * n_cols)):sub(1, n_cols)
+
+    return string.format('%s\n%s', ruler, table.concat(lines, '\n'))
+  end
+
   return setmetatable(t, {
     __tostring = function(x)
-      --stylua: ignore start
-      local text = table.concat(vim.tbl_map(function(l) return table.concat(l, '') end, x.text), '\n')
-      local attr = table.concat(vim.tbl_map(function(l) return table.concat(l, '') end, x.attr), '\n')
-      --stylua: ignore end
-      local sep = string.rep('-', #t.text[#t.text])
-      return string.format('%s\n%s\n%s\n%s', sep, text, sep, attr)
+      return string.format('%s\n\n%s', process_screen(x.text), process_screen(x.attr))
     end,
   })
 end
@@ -2195,18 +2215,18 @@ end
 
 function H.screenshot_read(path)
   -- General structure of screenshot with `n` lines:
-  -- 1: separator
-  -- 2, n+1: `text`
-  -- n+2: separator
-  -- n+3, 2n+2: `attr`
+  -- 1: ruler-separator
+  -- 2, n+1: `prefix`|`text`
+  -- n+2: empty line
+  -- n+3: ruler-separator
+  -- n+4, 2n+3: `prefix`|`attr`
   local lines = vim.fn.readfile(path)
-  local n = 0.5 * #lines - 1
-  local text_lines, attr_lines = vim.list_slice(lines, 2, n + 1), vim.list_slice(lines, n + 3, 2 * n + 2)
+  local n = 0.5 * (#lines - 3)
+  local text_lines, attr_lines = vim.list_slice(lines, 2, n + 1), vim.list_slice(lines, n + 4, 2 * n + 3)
 
-  return H.screenshot_new({
-    text = vim.tbl_map(H.string_to_chars, text_lines),
-    attr = vim.tbl_map(H.string_to_chars, attr_lines),
-  })
+  --stylua: ignore
+  local f = function(x) return H.string_to_chars(x:gsub('^%d+|', '')) end
+  return H.screenshot_new({ text = vim.tbl_map(f, text_lines), attr = vim.tbl_map(f, attr_lines) })
 end
 
 -- Utilities ------------------------------------------------------------------

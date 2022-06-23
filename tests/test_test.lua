@@ -5,6 +5,7 @@ local helpers = dofile('tests/helpers.lua')
 local child = helpers.new_child_neovim()
 local expect, eq = helpers.expect, helpers.expect.equality
 local new_set, finally = MiniTest.new_set, MiniTest.finally
+local mark_flaky = helpers.mark_flaky
 
 -- Helpers with child processes
 --stylua: ignore start
@@ -17,6 +18,12 @@ local get_lines = function(...) return child.get_lines(...) end
 
 local get_ref_path = function(name)
   return string.format('tests/dir-test/%s', name)
+end
+
+local skip_screenshot = function()
+  if child.fn.has('nvim-0.6') == 0 then
+    MiniTest.skip('Neovim version is not enough for `child.get_screenshot()`')
+  end
 end
 
 local get_current_all_cases = function()
@@ -630,6 +637,8 @@ end
 T['expect']['reference_screenshot()'] = new_set()
 
 T['expect']['reference_screenshot()']['works'] = function()
+  skip_screenshot()
+
   local path = get_ref_path('reference-screenshot')
   child.set_size(5, 12)
 
@@ -645,6 +654,8 @@ T['expect']['reference_screenshot()']['works'] = function()
 end
 
 T['expect']['reference_screenshot()']['locates problem'] = function()
+  skip_screenshot()
+
   local path = get_ref_path('reference-screenshot')
   local validate = function(screen, pattern)
     expect.error(function()
@@ -685,11 +696,15 @@ T['expect']['reference_screenshot()']['locates problem'] = function()
 end
 
 T['expect']['reference_screenshot()']['correctly infers reference path'] = function()
+  skip_screenshot()
+
   set_lines({ 'This path should be correctly inferred' })
   eq(MiniTest.expect.reference_screenshot(child.get_screenshot()), true)
 end
 
 T['expect']['reference_screenshot()']['creates refernce if it does not exist'] = function()
+  skip_screenshot()
+
   local path = get_ref_path('nonexistent-reference-screenshot')
   child.fn.delete(path)
   --stylua: ignore
@@ -710,6 +725,8 @@ T['expect']['reference_screenshot()']['creates refernce if it does not exist'] =
 end
 
 T['expect']['reference_screenshot()']['respects `opts` argument'] = function()
+  skip_screenshot()
+
   local path = get_ref_path('force-reference-screenshot')
   local notes = { 'Created reference screenshot at path ' .. vim.inspect(path) }
 
@@ -731,6 +748,8 @@ T['expect']['reference_screenshot()']['respects `opts` argument'] = function()
 end
 
 T['expect']['reference_screenshot()']['works with multibyte characters'] = function()
+  skip_screenshot()
+
   child.set_size(5, 12)
   set_lines({ '  1  2' })
   expect.no_error(function()
@@ -1048,10 +1067,14 @@ end
 T['child']['get_screenshot()'] = new_set()
 
 T['child']['get_screenshot()']['ensures running'] = function()
+  skip_screenshot()
+
   validate_child_method(child.get_screenshot, { name = 'get_screenshot' })
 end
 
 T['child']['get_screenshot()']['works'] = function()
+  skip_screenshot()
+
   set_lines({ 'aaa' })
   local screenshot = child.get_screenshot()
 
@@ -1083,25 +1106,75 @@ T['child']['get_screenshot()']['works'] = function()
   expect.no_equality(screenshot.attr[1][1], screenshot.attr[2][1])
 end
 
-T['child']['get_screenshot()']['has method for `tostring()`'] = function()
+T['child']['get_screenshot()']['`tostring()`'] = new_set()
+
+T['child']['get_screenshot()']['`tostring()`']['works'] = function()
+  skip_screenshot()
+
   set_lines({ 'aaa' })
   local screenshot = child.get_screenshot()
   local lines = vim.split(tostring(screenshot), '\n')
   local n_lines, n_cols = child.o.lines, child.o.columns
 
-  -- Twice "n_lines + separator line"
-  eq(#lines, 2 * n_lines + 2)
-
-  -- Separators
-  eq(lines[1], string.rep('-', n_cols))
-  eq(lines[n_lines + 2], string.rep('-', n_cols))
+  -- "Ruler" + "Lines" + "Emptry line" + "Ruler" + "Lines"
+  eq(#lines, 2 * n_lines + 3)
+  eq(lines[n_lines + 2], '')
 
   -- Content
-  expect.match(lines[2], '^aaa')
-  expect.no_equality(lines[n_lines + 3]:sub(1, 1), lines[n_lines + 4]:sub(1, 1))
+  eq(vim.fn.strchars(lines[2]), 3 + n_cols)
+  expect.match(lines[2], '^01|aaa')
+
+  eq(vim.fn.strchars(lines[n_lines + 4]), 3 + n_cols)
+  expect.no_equality(lines[n_lines + 4]:sub(4, 4), lines[n_lines + 5]:sub(4, 4))
+end
+
+T['child']['get_screenshot()']['`tostring()`']['makes proper rulers'] = function()
+  skip_screenshot()
+
+  local validate = function(ref_ruler)
+    local lines = vim.split(tostring(child.get_screenshot()), '\n')
+    eq(lines[1], ref_ruler)
+    local n = 0.5 * (#lines - 3)
+    eq(lines[n + 3], ref_ruler)
+  end
+
+  child.set_size(5, 12)
+  validate('-|---------|--')
+
+  child.set_size(10, 12)
+  validate('--|---------|--')
+
+  child.set_size(100, 20)
+  validate('---|---------|---------|')
+end
+
+T['child']['get_screenshot()']['`tostring()`']['makes proper line numbers'] = function()
+  skip_screenshot()
+
+  local validate = function(...)
+    local lines = vim.split(tostring(child.get_screenshot()), '\n')
+    local n = 0.5 * (#lines - 3)
+
+    for _, ref in ipairs({ ... }) do
+      local pattern = '^' .. ref[2] .. '|'
+      expect.match(lines[1 + ref[1]], pattern)
+      expect.match(lines[n + 3 + ref[1]], pattern)
+    end
+  end
+
+  child.set_size(5, 12)
+  validate({ 1, '1' }, { 5, '5' })
+
+  child.set_size(10, 12)
+  validate({ 1, '01' }, { 10, '10' })
+
+  child.set_size(100, 12)
+  validate({ 1, '001' }, { 10, '010' }, { 100, '100' })
 end
 
 T['child']['get_screenshot()']['throws error with floating windows in Neovim<=0.7'] = function()
+  skip_screenshot()
+
   if child.fn.has('nvim-0.8') == 1 then
     return
   end
@@ -1155,6 +1228,8 @@ T['gen_reporter']['buffer']['test'] = function(opts_element)
     return
   end
 
+  mark_flaky()
+
   -- Testing "in dynamic" is left for manual approach
   local path = get_ref_path('testref_reporters.lua')
   local command = string.format('_G.reporter = MiniTest.gen_reporter.buffer({ %s })', opts_element)
@@ -1175,10 +1250,12 @@ T['gen_reporter']['stdout'] = new_set({
 })
 
 T['gen_reporter']['stdout']['test'] = function(env_var)
+  mark_flaky()
+
   -- Testing "in dynamic" is left for manual approach
   child.fn.termopen(env_var .. [[ nvim --headless --clean -n -u 'tests/dir-test/init_stdout-reporter_works.lua']])
-  -- Wait until check is done
-  child.loop.sleep(500)
+  -- Wait until check is done and possible process is ended
+  vim.loop.sleep(500)
   child.expect_screenshot()
 end
 
