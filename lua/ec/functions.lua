@@ -176,15 +176,13 @@ S.show = function(path)
 end
 
 S.sync_cursor = function()
-  local cur_pos = vim.api.nvim_win_get_cursor(0)
-  if type(S.win_id_text) == 'number' and vim.api.nvim_win_is_valid(S.win_id_text) then
-    vim.api.nvim_win_set_cursor(S.win_id_text, cur_pos)
-  end
-  if type(S.win_id_attr) == 'number' and vim.api.nvim_win_is_valid(S.win_id_attr) then
-    vim.api.nvim_win_set_cursor(S.win_id_attr, cur_pos)
-  end
-  -- Needed due to cursorcolumn not redrawing automatically (unlike cursorline)
-  vim.cmd('redraw!')
+  -- Don't use `vim.api.nvim_win_get_cursor()` because of multibyte characters
+  local line, col = vim.fn.winline(), vim.fn.wincol()
+  local cur_win_id = vim.api.nvim_get_current_win()
+  -- Don't use `vim.api.nvim_win_set_cursor()`: it doesn't redraw cursorcolumn
+  local command = string.format('windo call setcursorcharpos(%d, %d)', line, col)
+  vim.cmd(command)
+  vim.api.nvim_set_current_win(cur_win_id)
 end
 
 S.show_next = function()
