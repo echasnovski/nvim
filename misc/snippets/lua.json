@@ -21,7 +21,7 @@
   },
   "function": {
     "prefix": "fun",
-    "body": "function($1)\n\t$0\nend",
+    "body": "function$1($2)\n\t$0\nend",
     "description": "Function"
   },
   "for": {
@@ -86,7 +86,7 @@
   },
   "new test case": {
     "prefix": "T",
-    "body": "T['$1']['$2'] = function()\n\t${0:skip()}\nend",
+    "body": "T['$1']['$2'] = function()\n\t${0:MiniTest.skip()}\nend",
     "description": "(minitest) new test case"
   }
 }

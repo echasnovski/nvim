@@ -95,6 +95,7 @@ EC.leader_nmap.m = {
 }
 
 -- o is for 'other'
+local trailspace_toggle_command = [[<Cmd>lua vim.b.minitrailspace_disable = not vim.b.minitrailspace_disable<CR>]]
 EC.leader_nmap.o = {
   ['name'] = '+other',
   ['a'] = { [[<Cmd>ArgWrap<CR>]],                      'arguments split' },
@@ -108,7 +109,7 @@ EC.leader_nmap.o = {
   ['s'] = { [[<Cmd>setlocal spell! spell?<CR>]],       'spell toggle' },
   ['S'] = { [[<Cmd>lua EC.insert_section()<CR>]],      'section insert' },
   ['t'] = { [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'trim trailspace' },
-  ['T'] = { [[<Cmd>lua MiniTrailspace.toggle()<CR>]],  'trailspace hl toggle' },
+  ['T'] = { trailspace_toggle_command,                 'trailspace hl toggle' },
   ['w'] = { [[<Cmd>setlocal wrap! wrap?<CR>]],         'wrap toggle' },
   ['x'] = { [[<Cmd>lua EC.execute_lua_line()<CR>]],    'execute `lua` line' },
   ['z'] = { [[<Cmd>lua MiniMisc.zoom()<CR>]],          'zoom toggle' },
@@ -149,12 +150,12 @@ EC.leader_xmap.s = {
 -- t is for 'terminal' (uses 'neoterm') and 'minitest'
 EC.leader_nmap.t = {
   ['name'] = '+terminal/minitest',
-  ['a'] = { '<Cmd>lua MiniTest.run()<CR>',                'test run all' },
-  ['f'] = { '<Cmd>lua MiniTest.run_file()<CR>',           'test run file' },
-  ['l'] = { '<Cmd>lua MiniTest.run_at_location()<CR>',    'test run location' },
-  ['s'] = { '<Cmd>lua EC.show_minitest_screenshot()<CR>', 'test show screenshot' },
-  ['T'] = { '<Cmd>belowright Tnew<CR>',                   'terminal (horizontal)' },
-  ['t'] = { '<Cmd>vertical Tnew<CR>',                     'terminal (vertical)' },
+  ['a'] = { '<Cmd>lua MiniTest.run()<CR>',                   'test run all' },
+  ['f'] = { '<Cmd>lua MiniTest.run_file()<CR>',              'test run file' },
+  ['l'] = { '<Cmd>lua MiniTest.run_at_location()<CR>',       'test run location' },
+  ['s'] = { '<Cmd>lua EC.minitest_screenshots.browse()<CR>', 'test show screenshot' },
+  ['T'] = { '<Cmd>belowright Tnew<CR>',                      'terminal (horizontal)' },
+  ['t'] = { '<Cmd>vertical Tnew<CR>',                        'terminal (vertical)' },
 }
 
 -- T is for 'test'
