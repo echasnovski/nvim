@@ -5,12 +5,14 @@ Writing tests for Neovim Lua plugin is hard. Writing good tests for Neovim Lua p
 This file is intended as a hands-on introduction to 'mini.test' with examples. For more details, see 'mini.test' section of [help file](doc/mini.txt) and tests of this plugin's modules.
 
 General approach of writing test files:
+
 - Organize tests in separate Lua files.
 - Each file should be associated with a test set table (output of `MiniTest.new_set()`). Recommended approach is to create it manually in each test file and then return it.
 - Each test action should be defined in separate function assign to an entry of test set.
 - It is strongly encouraged to use custom Neovim processes to do actual testing inside test action. See [Using child process](#using-child-process).
 
 **NOTES**:
+
 - All commands are assumed to be executed with current working directory being a root of your Neovim plugin project. That is both for shell and Neovim commands.
 - All paths are assumed to be relative to current working directory.
 
@@ -27,17 +29,95 @@ local M = {}
 ---@param lines table Array. Default: { 'world' }.
 ---@return table Array of strings.
 M.compute = function(lines)
-  return vim.tbl_map(function(x) return 'Hello ' .. tostring(x) end, lines or { 'world' })
+  lines = lines or { 'world' }
+  return vim.tbl_map(function(x) return 'Hello ' .. tostring(x) end, lines)
 end
 
---- Set lines with 'Hello ' prefix
+local ns_id = vim.api.nvim_create_namespace('hello_lines')
+
+--- Set lines with highlighted 'Hello ' prefix
 ---@param buf_id number Buffer handle where lines should be set. Default: 0.
 ---@param lines table Array. Default: { 'world' }.
 M.set_lines = function(buf_id, lines)
+  buf_id = buf_id or 0
+  lines = lines or { 'world' }
   vim.api.nvim_buf_set_lines(buf_id or 0, 0, -1, true, M.compute(lines))
+  for i = 1, #lines do
+    vim.highlight.range(buf_id, ns_id, 'Special', { i - 1, 0 }, { i - 1, 5 }, {})
+  end
 end
 
 return M
+```
+
+</details>
+
+## Quick demo
+
+Here is a quick demo of how tests with 'mini.test' look like:
+
+<details><summary>'tests/test_hello_lines.lua'</summary>
+
+```lua
+-- Define helper aliases
+local new_set = MiniTest.new_set
+local expect, eq = MiniTest.expect, MiniTest.expect.equality
+
+-- Create (but not start) child Neovim object
+local child = MiniTest.new_child_neovim()
+
+-- Define main test set of this file
+local T = new_set({
+  -- Register hooks
+  hooks = {
+    -- This will be executed before every (even nested) case
+    pre_case = function()
+      -- Restart child process with custom 'init.lua' script
+      child.restart({ '-u', 'scripts/minimal_init.lua' })
+      -- Load tested plugin
+      child.lua([[M = require('hello_lines')]])
+    end,
+    -- This will be executed one after all tests from this set are finished
+    post_once = child.stop,
+  },
+})
+
+-- Test set fields define nested structure
+T['compute()'] = new_set()
+
+-- Define test action as callable field of test set.
+-- If it produces error - test fails.
+T['compute()']['works'] = function()
+  -- Execute Lua code inside child process, get its result and compare with
+  -- expected result
+  eq(child.lua_get([[M.compute({'a', 'b'})]]), { 'Hello a', 'Hello b' })
+end
+
+T['compute()']['uses correct defaults'] = function()
+  eq(child.lua_get([[M.compute()]]), { 'Hello world' })
+end
+
+-- Make parametrized tests. This will create three copies of each case
+T['set_lines()'] = new_set({ parametrize = { {}, { 0, { 'a' } }, { 0, { 1, 2, 3 } } } })
+
+-- Use arguments from test parametrization
+T['set_lines()']['works'] = function(buf_id, lines)
+  -- Directly modify some options to make better test
+  child.o.lines, child.o.columns = 10, 20
+  child.bo.readonly = false
+
+  -- Execute Lua code without returning value
+  child.lua('M.set_lines(...)', { buf_id, lines })
+
+  -- Test screen state. On first run it will automatically create reference
+  -- screenshots with text and look information in predefined location. On
+  -- later runs it will compare current screenshot with reference. Will throw
+  -- informative error with helpful information if they don't match exactly.
+  expect.reference_screenshot(child.get_screenshot())
+end
+
+-- Return test set which will be collected and execute inside `MiniTest.run()`
+return T
 ```
 
 </details>
@@ -66,6 +146,7 @@ Overview of full file structure used in for testing 'hello_lines' plugin:
 To write tests, you'll need these files:
 
 Mandatory:
+
 - **Your Lua plugin in 'lua' directory**. Here we will be testing 'hello_lines' plugin.
 - **Test files**. By default they should be Lua files located in 'tests/' directory and named with 'test_' prefix. For example, we will write everything in 'test_hello_lines.lua'. It is usually a good idea to follow this template (will be assumed for the rest of this file):
 
@@ -113,6 +194,7 @@ end
 </details><br>
 
 Recommended:
+
 - **Makefile**. In order to simplify running tests from shell and inside Continuous Integration services (like Github Actions), it is recommended to define Makefile. It will define steps for running tests. Proposed template:
 
 <details><summary>Template for Makefile</summary>
@@ -139,6 +221,7 @@ deps/mini.nvim:
 ## Running tests
 
 The 'mini.test' module out of the box supports two major ways of running tests:
+
 - **Interactive**. All test files will be run directly inside current Neovim session. This proved to be very useful for debugging while writing tests. To run tests, simply execute `:lua MiniTest.run()` or `:lua MiniTest.run_file()` (assuming, you already have 'mini.test' set up with `require('mini.test').setup()`). With default configuration this will result into floating window with information about results of test execution. Press `q` to close it. **Note**: Be careful though, as it might affect your current setup. To avoid this, [use child processes](#using-child-process) inside tests.
 - **Headless** (from shell). Start headless Neovim process with proper startup file and execute `lua MiniTest.run()`. Assuming full file organization from previous section, this can be achieved with `make test`. This will show information about results of test execution directly in shell.
 
@@ -149,7 +232,7 @@ These sections will show some basic capabilities of 'mini.test' and how to use t
 
 ### First test
 
-A test is defined as function assigned to a field of test set. If it throws error, test has failed. Here is an example:
+A test is defined as function assigned to a field of test set. If it throws error, test has failed. Test file should return single test set. Here is an example:
 
 ```lua
 local T = MiniTest.new_set()
@@ -221,6 +304,8 @@ it('out of scope', function()
   local x = 3 + 3
   MiniTest.expect.equality(x, 6)
 end)
+
+-- NOTE: when using this style, no test set should be returned
 ```
 
 Although this is possible, the rest of this file will use a recommended test set approach.
@@ -294,7 +379,7 @@ return T
 Executing this content from file 'tests/test_basics.lua' will fail with the following message:
 
 ```
-FAIL in "tests/test_hello_lines.lua | string matching":
+FAIL in "tests/test_basics.lua | string matching":
   Failed expectation for string matching.
   Pattern: "x"
   Observed string: abcd
@@ -305,6 +390,7 @@ FAIL in "tests/test_hello_lines.lua | string matching":
 ### Hooks
 
 Hooks are functions that will be called without arguments at predefined stages of test execution. They are defined for a test set. There are four types of hooks:
+
 - **pre_once** - executed before first (filtered) node.
 - **pre_case** - executed before each case (even nested).
 - **post_case** - executed after each case (even nested).
@@ -322,7 +408,7 @@ local n = 0
 local increase_n = function() n = n + 1 end
 
 T['hooks'] = new_set({
-	hooks = { pre_once = increase_n, pre_case = increase_n, post_case = increase_n, post_once = increase_n },
+  hooks = { pre_once = increase_n, pre_case = increase_n, post_case = increase_n, post_once = increase_n },
 })
 
 T['hooks']['work'] = function()
@@ -522,27 +608,357 @@ NOTE in "tests/test_basics.lua | finally()": This test is flaky.
 
 ## Customizing test run
 
-### Collection
+Test run consists from two stages:
 
-### Custom files and filter
+- **Collection**. It will source each appropriate file (customizable), combine all test sets into single test set, convert it from hierarchical to sequential form (array of test cases), and filter cases based on customizable predicate.
+- **Execution**. It will safely execute array of test cases (with each pre-hooks, test action, post-hooks) one after another in scheduled asynchronous fashion while collecting information about it went and calling customizable reporter methods.
 
-### Execution
+All configuration goes into `opts` argument of `MiniTest.run()`.
+
+### Collection: custom files and filter
+
+You can customize which files will be sourced and which cases will be later executed. Example:
+
+```lua
+local new_set = MiniTest.new_set
+
+T = new_set()
+
+-- Use `data` field to pass custom information for easier test management
+T['fast'] = new_set({ data = { type = 'fast' } })
+T['fast']['first test'] = function() end
+T['fast']['second test'] = function() end
+
+T['slow'] = new_set({ data = { type = 'slow' } })
+T['slow']['first test'] = function() vim.loop.sleep(1000) end
+T['slow']['second test'] = function() vim.loop.sleep(1000) end
+
+return T
+```
+
+You can run only this file ('tests/test_basics.lua') and only "fast" cases with
+```lua
+MiniTest.run({
+  collect = {
+    find_files = function() return { 'tests/test_basics.lua' } end,
+    filter_cases = function(case) return case.data.type == 'fast' end,
+  }
+})
+```
+
+### Execution: custom reporter and stop on first error
+
+You can customize execution of test cases with custom reporter (how test results are displayed in real time) and whether to stop on first error. Execution doesn't result into any output, instead it updates `MiniTest.current.all_cases` in place: each case gets an `exec` field with information about how its execution went.
+
+Example of showing status summary table in the command line after everything is finished:
+
+```lua
+local reporter = {
+  -- Other used methods are `start(cases)` and `update(case_num)`
+  finish = function()
+    local summary = {}
+    for _, c in ipairs(MiniTest.current.all_cases) do
+      local state = c.exec.state
+      summary[state] = summary[state] == nil and 1 or (summary[state] + 1)
+    end
+
+    print(vim.inspect(summary, { newline = ' ', indent = '' }))
+  end,
+}
+
+MiniTest.run({ execute = { reporter = reporter } })
+```
 
 ## Using child process
 
-Limitations:
-- Due to current RPC protocol implementation can not use functions in both input and output.
-- Hanging due to hit-enter-prompt or Operator-pending mode.
+Main feature of 'mini.test' which differs it from other Lua testing frameworks is its design towards **custom usage of child Neovim process inside tests**. Ultimately, each test should be done with fresh Neovim process initialized with bare minimum setup (like allowing to load your plugin). To make this easier, there is a dedicated function `MiniTest.new_child_neovim()`. It returns an object with many useful helper methods, like for start/stop/restart, redirected execution (write code in current process, it gets executed in child one), emulating typing keys, **testing screen state**, etc.
 
-### Start/stop in hooks
+### Start/stop/restart
 
-For `child.reset` and `child.stop`.
+You can start/stop/restart child process associated with this child Neovim object. Current (from which testing is initiated) and child Neovim processes can "talk" to each through RPC messages (see `:h RPC`). It means you can programmatically execute code inside child process, get some output, and test if it meets your expectation. Also by default child process is "full" (i.e. not headless) which allows you to test things such as extmarks, floating windows, etc.
 
-### Use helpers
+Although this approach proved to be useful and efficient, it is not ideal. Here are some limitations:
+  - Due to current RPC protocol implementation functions and userdata can't be used in both input and output with child process. Indicator of this issue is a `Cannot convert given lua type` error. Usual solution is to move some logic on the side of child process, like create and use global functions (those will be "forgotten" after next restart).
+  - Sometimes hanging process will occur: it stops executing without any output. Most of the time it is because Neovim process is "blocked", i.e. it waits for user input and won't return from other call. Common causes are active hit-enter-prompt (increase prompt height to a bigger value) or Operator-pending mode (exit it). To mitigate this experience, most helper methods will throw an error if they can deduct that immediate execution will lead to hanging state.
 
-### Test screenshot
+Here is recommended setup for managing child processes. It will make fresh Neovim process before every test case:
 
-## Test 'mini.nvim'
+```lua
+local child = MiniTest.new_child_neovim()
 
-- `mini_load`, etc.
-- Use `helpers.new_child_neovim` (with `setup()` method instead of `restart`) and `helpers.expect`, which are monkey-patched versions of ones from `MiniTest`.
+local T = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      -- Restart child process with custom 'init.lua' script
+      child.restart({ '-u', 'scripts/minimal_init.lua' })
+      -- Load tested plugin
+      child.lua([[M = require('hello_lines')]])
+    end,
+    -- Stop once all test cases are finished
+    post_once = child.stop,
+  },
+})
+
+-- Define some tests here
+
+return T
+```
+
+### Executing Lua code
+
+Previous section already demonstrated that there is a `child.lua()` method. It will execute arbitrary Lua code in the form of a single string. This is basically a wrapper for `vim.api.nvim_exec_lua()`. There is also a convenience wrapper `child.lua_get()` which is essentially a `child.lua('return ' .. s, ...)`. Examples:
+
+```lua
+local eq = MiniTest.expect.equality
+
+local child = MiniTest.new_child_neovim()
+
+local T = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      child.restart({ '-u', 'scripts/minimal_init.lua' })
+      child.lua([[M = require('hello_lines')]])
+    end,
+    post_once = child.stop,
+  },
+})
+
+T['lua()'] = MiniTest.new_set()
+
+T['lua()']['works'] = function()
+  child.lua('_G.n = 0; _G.n = _G.n + 1')
+  eq(child.lua('return _G.n'), 1)
+end
+
+T['lua()']['can use tested plugin'] = function()
+  eq(child.lua([[return M.compute()]]), { 'Hello world' })
+  eq(child.lua([[return M.compute({'a', 'b'})]]), { 'Hello a', 'Hello b' })
+end
+
+T['lua_get()'] = function()
+  child.lua('_G.n = 0')
+  eq(child.lua_get('_G.n'), child.lua('return _G.n'))
+end
+
+return T
+```
+
+### Managing Neovim options and state
+
+Although ability to execute arbitrary Lua code is technically enough to write any tests, it gets cumbersome very quickly due to ability to only take string. That is why there are many convenience helpers with the same idea: write code inside current Neovim process that will be automatically executed same way in child process. Here is the showcase:
+
+```lua
+local new_set = MiniTest.new_set
+local eq = MiniTest.expect.equality
+
+local child = MiniTest.new_child_neovim()
+
+local T = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      child.restart({ '-u', 'scripts/minimal_init.lua' })
+      child.lua([[M = require('hello_lines')]])
+    end,
+    post_once = child.stop,
+  },
+})
+
+-- These methods will "redirect" execution to child through `vim.rpcrequest()`
+-- and `vim.rpcnotify()` respectively. Any call `child.api.xxx(...)` returns
+-- the output of `vim.api.xxx(...)` executed inside child process.
+T['api()/api_notify()'] = function()
+  -- Set option. For some reason, first buffer is 'readonly' which leads to
+  -- high delay in test execution
+  child.api.nvim_buf_set_option(0, 'readonly', false)
+
+  -- Set lal lines
+  child.api.nvim_buf_set_lines(0, 0, -1, true, { 'aaa' })
+
+  -- Get all lines and test with expected ones
+  eq(child.api.nvim_buf_get_lines(0, 0, -1, true), { 'aaa' })
+end
+
+-- Execute Vimscript with or without capturing its output
+T['cmd()/cmd()'] = function()
+  child.cmd('hi Comment guifg=#AAAAAA')
+  eq(child.cmd_capture('hi Comment'), 'Comment        xxx ctermfg=14 guifg=#aaaaaa')
+end
+
+-- There are redirection tables for most of the main Neovim functionality
+T['various redirection tables with methods'] = function()
+  eq(child.fn.fnamemodify('hello_lines.lua', ':t:r'), 'hello_lines')
+  eq(child.loop.hrtime() > 0, true)
+  eq(child.lsp.get_active_clients(), {})
+
+  -- And more
+end
+
+-- There are redirection tables for scoped (buffer, window, etc.) variables
+-- You can use them to both set and get values
+T['redirection tables for variables'] = function()
+  child.b.aaa = true
+  eq(child.b.aaa, true)
+  eq(child.b.aaa, child.lua_get('vim.b.aaa'))
+end
+
+-- There are redirection tables for scoped (buffer, window, etc.) options
+-- You can use them to both set and get values
+T['redirection tables for options'] = function()
+  child.o.lines, child.o.columns = 5, 12
+  eq(child.o.lines, 5)
+  eq({ child.o.lines, child.o.columns }, child.lua_get('{ vim.o.lines, vim.o.columns }'))
+end
+
+return T
+```
+
+### Emulate typing keys
+
+Very important part of testing is emulating user typing keys. There is a special `child.type_keys()` helper method for that. Examples:
+
+```lua
+local eq = MiniTest.expect.equality
+
+local child = MiniTest.new_child_neovim()
+
+local T = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      child.restart({ '-u', 'scripts/minimal_init.lua' })
+      child.bo.readonly = false
+      child.lua([[M = require('hello_lines')]])
+    end,
+    post_once = child.stop,
+  },
+})
+
+local get_lines = function() return child.api.nvim_buf_get_lines(0, 0, -1, true) end
+
+T['type_keys()'] = MiniTest.new_set()
+
+T['type_keys()']['works'] = function()
+  -- It can take one string
+  child.type_keys('iabcde<Esc>')
+  eq(get_lines(), { 'abcde' })
+  eq(child.fn.mode(), 'n')
+
+  -- Or several strings which improves readability
+  child.type_keys('cc', 'fghij', '<Esc>')
+  eq(get_lines(), { 'fghij' })
+
+  -- Or tables of strings (possibly nested)
+  child.type_keys({ 'cc', { 'j', 'k', 'l', 'm', 'n' } })
+  eq(get_lines(), { 'jklmn' })
+end
+
+T['type_keys()']['allows custom delay'] = function()
+  -- This adds delay of 500 ms after each supplied string (three times here)
+  child.type_keys(500, 'i', 'abcde', '<Esc>')
+  eq(get_lines(), { 'abcde' })
+end
+
+return T
+```
+
+### Test screen state with screenshots
+
+One of the main difficulties in testing Neovim plugins is verifying that something is actually displayed in the way you intend. Like general highlighting, statusline, tabline, sign column, extmarks, etc. Testing screen state with screenshots makes this a lot easier. There is a `child.get_screenshot()` method which basically calls `screenstring()` (`:h screenstring()`) and `screenattr()` (`:h screenattr()`) for every visible cell (row from 1 to 'lines' option, column from 1 to 'columns' option). It then returns two layers of screenshot:
+
+- <text> - "2d array" (row-column) of single characters displayed at particular cells.
+- <attr> - "2d array" (row-column) of symbols representing how text is displayed (basically, "coded" appearance/highlighting). They should be used only in relation to each other: same/different symbols for two cells mean same/different visual appearance. Note: there will be false positives if there are more than 94 different attribute values. To make output more portable and visually useful, outputs of `screenattr()` are coded with single character symbols.
+
+Couple of caveats:
+
+- As is apparent from use of `screenattr()`, these screenshots **can't tell how exactly cell is highlighted**, only **if two cells are highlighted the same**. This is due to the currently lacking functionality in Neovim itself. This might change in the future.
+- It works only for Neovim>=0.6 because `screenstring()` was introduced in 0.6.
+- Due to implementation details of `screenstring()` and `screenattr()` in Neovim<=0.7, this function won't recognize floating windows displayed on screen. It will throw an error if there is a visible floating window. Use Neovim>=0.8 (current nightly) to properly handle floating windows. Details:
+    - https://github.com/neovim/neovim/issues/19013
+    - https://github.com/neovim/neovim/pull/19020
+
+To help manage testing screen state, there is a special `MiniTest.expect.reference_screenshot(screenshot, path, opts)` method. It takes screenshot table along with optional path of where to save this screenshot (if not supplied, inferred from test case description and put in 'tests/screenshots' directory). On first run it will automatically create reference screenshot at `path`. On later runs it will compare current screenshot with reference. Will throw informative error with helpful information if they don't match exactly.
+
+Example:
+
+```lua
+local expect = MiniTest.expect
+
+local child = MiniTest.new_child_neovim()
+
+local T = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      child.restart({ '-u', 'scripts/minimal_init.lua' })
+      child.bo.readonly = false
+      child.lua([[M = require('hello_lines')]])
+    end,
+    post_once = child.stop,
+  },
+})
+
+T['set_lines()'] = MiniTest.new_set({ parametrize = { {}, { 0, { 'a' } }, { 0, { 1, 2, 3 } } } })
+
+T['set_lines()']['works'] = function(buf_id, lines)
+  child.o.lines, child.o.columns = 10, 15
+  child.lua('M.set_lines(...)', { buf_id, lines })
+  expect.reference_screenshot(child.get_screenshot())
+end
+
+return T
+```
+
+This will result into three files in 'tests/screenshots' with names containing test case description along with supplied arguments. Here is example reference screenshot for `{ 0, { 1, 2, 3 } }` arguments (line numbers and ruler for columns is added as file specification to make it easier to find differences between two screenshots):
+
+```
+--|---------|-----
+01|Hello 1        
+02|Hello 2        
+03|Hello 3        
+04|~              
+05|~              
+06|~              
+07|~              
+08|~              
+09|<e] [+] 1,1 All
+10|               
+
+--|---------|-----
+01|000001111111111
+02|000001111111111
+03|000001111111111
+04|222222222222222
+05|222222222222222
+06|222222222222222
+07|222222222222222
+08|222222222222222
+09|333333333333333
+10|444444444444444
+```
+
+## General tips
+
+- Create a 'tests/helpers.lua' file with code that can be useful in multiple files. It can have "monkey-patched" versions of 'mini.test' functions. Example:
+
+```lua
+local Helpers = {}
+
+Helpers.new_child_neovim = function()
+  local child = MiniTest.new_child_neovim()
+
+  child.setup = function()
+    child.restart({'-u', 'scripts/minimal_init.lua'})
+    child.bo.readonly = false
+    child.lua([[M = require('hello_lines')]])
+  end
+
+  return child
+end
+
+return Helpers
+```
+
+- Write aliases for commonly used functions at top of the file. It will make your life a little bit easier and usually will lead to more readable tests. Example:
+
+```lua
+-- Some code setting up `child`
+local set_lines = function(lines) child.api.nvim_buf_set_lines(0, 0, -1, true, lines) end
+```

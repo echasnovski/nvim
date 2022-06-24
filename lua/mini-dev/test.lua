@@ -1511,7 +1511,7 @@ end
 ---   - <text> - "2d array" (row-column) of single characters displayed at
 ---     particular cells.
 ---   - <attr> - "2d array" (row-column) of symbols representing how text is
----     diplayed (basically, "coded" appearance/highlighting). They should be
+---     displayed (basically, "coded" appearance/highlighting). They should be
 ---     used only in relation to each other: same/different symbols for two
 ---     cells mean same/different visual appearance. Note: there will be false
 ---     positives if there are more than 94 different attribute values.
