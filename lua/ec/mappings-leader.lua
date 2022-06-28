@@ -56,7 +56,7 @@ EC.leader_nmap.g = {
   ['A'] = { [[<Cmd>lua require("gitsigns").stage_buffer()<CR>]],        'add buffer' },
   ['a'] = { [[<Cmd>lua require("gitsigns").stage_hunk()<CR>]],          'add (stage) hunk' },
   ['b'] = { [[<Cmd>lua require("gitsigns").blame_line()<CR>]],          'blame line' },
-  ['g'] = { [[<Cmd>lua EC.floating_lazygit()<CR>]],                     'git window' },
+  ['g'] = { [[<Cmd>lua EC.open_lazygit()<CR>]],                         'git tab' },
   ['j'] = { [[<Cmd>lua require("gitsigns").next_hunk()<CR>zvzz]],       'next hunk' },
   ['k'] = { [[<Cmd>lua require("gitsigns").prev_hunk()<CR>zvzz]],       'prev hunk' },
   ['p'] = { [[<Cmd>lua require("gitsigns").preview_hunk()<CR>]],        'preview hunk' },
@@ -67,9 +67,13 @@ EC.leader_nmap.g = {
 }
 
 -- l is for 'LSP' (Language Server Protocol)
+local formatting_command = [[<Cmd>lua vim.lsp.buf.formatting()<CR>]]
+if vim.fn.has('nvim-0.8') == 1 then
+  formatting_command = [[<Cmd>lua vim.lsp.buf.format({ async = true })<CR>]]
+end
 EC.leader_nmap.l = {
   ['name'] = '+LSP',
-  ['f'] = { [[<Cmd>lua vim.lsp.buf.formatting()<CR>]],     'format' },
+  ['f'] = { formatting_command,                            'format' },
   ['R'] = { [[<Cmd>lua vim.lsp.buf.references()<CR>]],     'references' },
   ['a'] = { [[<Cmd>lua vim.lsp.buf.signature_help()<CR>]], 'arguments popup' },
   ['d'] = { [[<Cmd>lua vim.diagnostic.open_float()<CR>]],  'diagnostics popup' },
@@ -86,12 +90,13 @@ EC.leader_xmap.l = {
 }
 
 -- m is for 'make'
+local test_file_command = [[<Cmd>execute 'T FILE='.expand('%:.').' make test_file'<CR>]]
 EC.leader_nmap.m = {
   ['name'] = '+Make',
-  ['d'] = { [[<Cmd>T make documentation<CR>]],    'make doc' },
-  ['m'] = { [[<Cmd>T make<CR>]],                  'make' },
-  ['t'] = { [[<Cmd>T make test<CR>]],             'make test' },
-  ['T'] = { [[<Cmd>T make FILE=% test_file<CR>]], 'make test file' },
+  ['d'] = { [[<Cmd>T make documentation<CR>]], 'make doc' },
+  ['m'] = { [[<Cmd>T make<CR>]],               'make' },
+  ['t'] = { [[<Cmd>T make test<CR>]],          'make test' },
+  ['T'] = { test_file_command,                 'make test file' },
 }
 
 -- o is for 'other'

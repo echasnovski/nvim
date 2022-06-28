@@ -77,28 +77,18 @@ EC.execute_lua_line = function()
 end
 
 -- Floating window with lazygit
-EC.floating_lazygit = function()
-  local buf_id = vim.api.nvim_create_buf(true, true)
-  local win_id = vim.api.nvim_open_win(buf_id, true, {
-    relative = 'editor',
-    width = math.floor(0.8 * vim.o.columns),
-    height = math.floor(0.8 * vim.o.lines),
-    row = math.floor(0.1 * vim.o.lines),
-    col = math.floor(0.1 * vim.o.columns),
-    zindex = 99,
-  })
-  vim.api.nvim_win_set_option(win_id, 'number', false)
+EC.open_lazygit = function()
+  vim.cmd('tabedit')
+  vim.cmd('setlocal nonumber signcolumn=no')
 
-  vim.cmd('setlocal bufhidden=wipe')
-  vim.b.minipairs_disable = true
-
-  vim.fn.termopen('lazygit', {
+  vim.fn.termopen('lazygit --git-dir=$(git rev-parse --git-dir)', {
     on_exit = function()
       vim.cmd('silent! :checktime')
-      vim.cmd('silent! :q')
+      vim.cmd('silent! :bw')
     end,
   })
   vim.cmd('startinsert')
+  vim.b.minipairs_disable = true
 end
 
 -- Manage 'mini.test' screenshots ---------------------------------------------
