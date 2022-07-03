@@ -66,7 +66,6 @@ vim.defer_fn(function()
     },
     search_method = 'cover_or_next',
   })
+  require('mini.test').setup()
   require('mini.trailspace').setup()
-
-  require('mini-dev.test').setup()
 end, 0)
