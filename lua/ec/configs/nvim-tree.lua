@@ -3,9 +3,7 @@ local nvim_tree = require('nvim-tree')
 -- Define Custom functions to simulate ranger's "going in" and "going out"
 -- (might break if 'nvim-tree' is major refactored)
 local get_node = require('nvim-tree.lib').get_node_at_cursor
-local has_children = function(node)
-  return type(node.nodes) == 'table' and vim.tbl_count(node.nodes) > 0
-end
+local has_children = function(node) return type(node.nodes) == 'table' and vim.tbl_count(node.nodes) > 0 end
 
 local key_down = vim.api.nvim_replace_termcodes('<Down>', true, true, true)
 
@@ -28,16 +26,12 @@ function EC.nvim_tree_go_in()
   nvim_tree.on_keypress('edit')
 
   -- Don't do anything if tree is not in focus
-  if vim.api.nvim_buf_get_option(0, 'filetype') ~= 'NvimTree' then
-    return
-  end
+  if vim.api.nvim_buf_get_option(0, 'filetype') ~= 'NvimTree' then return end
 
   -- Go to first child node if it is a directory with children
   -- Get new node because before entries appear after first 'edit'
   node = get_node()
-  if has_children(node) then
-    vim.fn.feedkeys(key_down)
-  end
+  if has_children(node) then vim.fn.feedkeys(key_down) end
 end
 
 function EC.nvim_tree_go_out()

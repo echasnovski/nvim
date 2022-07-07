@@ -9,9 +9,7 @@ local lspconfig = require('lspconfig')
 
 -- Preconfiguration ===========================================================
 local on_attach_custom = function(client, bufnr)
-  local function buf_set_option(name, value)
-    vim.api.nvim_buf_set_option(bufnr, name, value)
-  end
+  local function buf_set_option(name, value) vim.api.nvim_buf_set_option(bufnr, name, value) end
 
   buf_set_option('omnifunc', 'v:lua.MiniCompletion.completefunc_lsp')
 
@@ -71,9 +69,7 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
       -- `MiniCompletion` experience
       client.server_capabilities.completionProvider.triggerCharacters = { '.', ':' }
     end,
-    root_dir = function(fname)
-      return lspconfig.util.root_pattern('.git')(fname) or lspconfig.util.path.dirname(fname)
-    end,
+    root_dir = function(fname) return lspconfig.util.root_pattern('.git')(fname) or lspconfig.util.path.dirname(fname) end,
     settings = {
       Lua = {
         runtime = {

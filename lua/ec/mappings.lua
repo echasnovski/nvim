@@ -106,6 +106,4 @@ keymap('n', [[//]], [[:nohlsearch<C-R>=has('diff')?'<BAR>diffupdate':''<CR><CR>]
 keymap('s', [[<BS>]], [[<BS>i]])
 
 -- Defer `<CR>` mapping for it to not be overridden while deferred plugin load
-vim.defer_fn(function()
-  vim.cmd([[imap <expr> <CR> v:lua.EC.cr_action()]])
-end, 100)
+vim.defer_fn(function() vim.cmd([[imap <expr> <CR> v:lua.EC.cr_action()]]) end, 100)

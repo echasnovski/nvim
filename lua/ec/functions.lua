@@ -101,9 +101,7 @@ S.browse = function(dir_path)
   S.dir_path = dir_path
 
   vim.ui.select(S.files, { prompt = 'Choose screenshot:' }, function(_, idx)
-    if idx == nil then
-      return
-    end
+    if idx == nil then return end
     S.file_id = idx
 
     S.setup_windows()

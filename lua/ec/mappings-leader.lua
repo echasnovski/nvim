@@ -190,9 +190,7 @@ local default_opts = {
 }
 
 local function map_leader_tree(tree, mode, prefix)
-  if type(tree) ~= 'table' then
-    return
-  end
+  if type(tree) ~= 'table' then return end
 
   prefix = prefix or ''
 
@@ -211,9 +209,7 @@ local function map_leader_tree(tree, mode, prefix)
   end
 
   for key, t in pairs(tree) do
-    if key ~= 'name' then
-      map_leader_tree(t, mode, prefix .. key)
-    end
+    if key ~= 'name' then map_leader_tree(t, mode, prefix .. key) end
   end
 end
 

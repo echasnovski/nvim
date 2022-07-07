@@ -6,15 +6,11 @@ require('luasnip/loaders/from_vscode').lazy_load({ paths = { './misc/snippets' }
 
 -- Make snippet keymaps
 function EC.luasnip_go_right()
-  if luasnip.expand_or_jumpable() then
-    luasnip.expand_or_jump()
-  end
+  if luasnip.expand_or_jumpable() then luasnip.expand_or_jump() end
 end
 
 function EC.luasnip_go_left()
-  if luasnip.jumpable() then
-    luasnip.jump(-1)
-  end
+  if luasnip.jumpable() then luasnip.jump(-1) end
 end
 
 vim.api.nvim_set_keymap('i', '<C-l>', [[<Cmd>lua EC.luasnip_go_right()<CR>]], {})
@@ -29,9 +25,7 @@ vim.api.nvim_set_keymap('s', '<C-h>', [[<Cmd>lua EC.luasnip_go_left()<CR>]], {})
 -- enough (~0.1ms during normal typing).
 local luasnip_ns = vim.api.nvim_create_namespace('luasnip')
 
-EC.luasnip_notify_clear = function()
-  vim.api.nvim_buf_clear_namespace(0, luasnip_ns, 0, -1)
-end
+EC.luasnip_notify_clear = function() vim.api.nvim_buf_clear_namespace(0, luasnip_ns, 0, -1) end
 
 EC.luasnip_notify = function()
   if not luasnip.expandable() then

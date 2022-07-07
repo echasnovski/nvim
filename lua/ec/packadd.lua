@@ -16,9 +16,7 @@ end
 --
 -- @param plugin String with name of plugin as subdirectory in 'pack'
 local packadd_defer = function(plugin)
-  vim.defer_fn(function()
-    packadd(plugin)
-  end, 0)
+  vim.defer_fn(function() packadd(plugin) end, 0)
 end
 
 -- Collection of minimal and fast Lua modules

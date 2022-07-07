@@ -20,6 +20,4 @@ vim.g.neoterm_autoinsert = 1
 vim.g.neoterm_autoscroll = 1
 
 -- Change default shell to zsh (if it is installed)
-if vim.fn.executable('zsh') == 1 then
-  vim.g.neoterm_shell = 'zsh'
-end
+if vim.fn.executable('zsh') == 1 then vim.g.neoterm_shell = 'zsh' end

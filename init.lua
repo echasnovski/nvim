@@ -8,6 +8,4 @@ require('ec.mappings')
 require('ec.mappings-leader')
 require('ec.packadd')
 
-if vim.g.vscode ~= nil then
-  require('ec.vscode')
-end
+if vim.g.vscode ~= nil then require('ec.vscode') end

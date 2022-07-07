@@ -4,9 +4,7 @@
 -- - When using highlight group like `cterm=underline gui=underline`, it
 --   sometimes changes foreground color defined in default syntax and not in
 --   treesitter.
-if vim.fn.exists('syntax_on') ~= 1 then
-  vim.cmd([[syntax enable]])
-end
+if vim.fn.exists('syntax_on') ~= 1 then vim.cmd([[syntax enable]]) end
 
 require('nvim-treesitter.configs').setup({
   ensure_installed = {
@@ -94,9 +92,7 @@ local ts_utils = require('nvim-treesitter.ts_utils')
 local folds_levels = ts_utils.memoize_by_buf_tick(function(bufnr)
   local parser = parsers.get_parser(bufnr)
 
-  if not (parser and query.has_folds('markdown')) then
-    return {}
-  end
+  if not (parser and query.has_folds('markdown')) then return {} end
 
   local levels = {}
 

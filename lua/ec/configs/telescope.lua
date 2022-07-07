@@ -38,7 +38,5 @@ vim.cmd([[au FileType TelescopeResults setlocal nofoldenable]])
 -- https://github.com/nvim-telescope/telescope.nvim/issues/410#issuecomment-765656002
 EC.telescope_project_files = function()
   local ok = pcall(require('telescope.builtin').git_files)
-  if not ok then
-    require('telescope.builtin').find_files({ follow = true, hidden = true })
-  end
+  if not ok then require('telescope.builtin').find_files({ follow = true, hidden = true }) end
 end
