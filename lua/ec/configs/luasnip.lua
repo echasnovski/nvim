@@ -5,11 +5,11 @@ luasnip.config.set_config({ history = true })
 require('luasnip/loaders/from_vscode').lazy_load({ paths = { './misc/snippets' } })
 
 -- Make snippet keymaps
-function EC.luasnip_go_right()
+EC.luasnip_go_right = function()
   if luasnip.expand_or_jumpable() then luasnip.expand_or_jump() end
 end
 
-function EC.luasnip_go_left()
+EC.luasnip_go_left = function()
   if luasnip.jumpable() then luasnip.jump(-1) end
 end
 

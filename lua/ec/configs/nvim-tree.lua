@@ -7,7 +7,7 @@ local has_children = function(node) return type(node.nodes) == 'table' and vim.t
 
 local key_down = vim.api.nvim_replace_termcodes('<Down>', true, true, true)
 
-function EC.nvim_tree_go_in()
+EC.nvim_tree_go_in = function()
   local node = get_node()
 
   -- Don't go up if cursor is placed on '..'
@@ -34,7 +34,7 @@ function EC.nvim_tree_go_in()
   if has_children(node) then vim.fn.feedkeys(key_down) end
 end
 
-function EC.nvim_tree_go_out()
+EC.nvim_tree_go_out = function()
   local node = get_node()
 
   if node.name == '..' then
