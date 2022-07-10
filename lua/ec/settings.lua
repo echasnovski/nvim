@@ -48,14 +48,17 @@ end
 
 -- Use colorscheme later when its plugin is enabled
 -- Use `nested` to allow `ColorScheme` event
-vim.cmd([[au VimEnter * nested ++once colorscheme minischeme]])
+-- vim.cmd([[au VimEnter * nested ++once colorscheme minischeme]])
+vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#293030', '#D0D0D0', 45) })]])
+-- vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#D0D0D0', '#293030', 90) })]])
+
 -- Other interesting color schemes:
 -- - 'morhetz/gruvbox'
--- - 'rakr/vim-one'
 -- - 'ayu-theme/ayu-vim' (use `let ayucolor = 'mirage'`)
--- - 'arcticicestudio/nord-vim'
+-- - 'sainnhe/everforest'
+-- - 'EdenEast/nightfox.nvim' ('terafox' in particular)
 
--- Editigin ===================================================================
+-- Editing ====================================================================
 vim.opt.expandtab   = true    -- Convert tabs to spaces
 vim.opt.tabstop     = 2       -- Insert 2 spaces for a tab
 vim.opt.smarttab    = true    -- Make tabbing smarter (will realize you have 2 vs 4)
