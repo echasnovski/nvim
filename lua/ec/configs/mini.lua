@@ -55,15 +55,7 @@ vim.defer_fn(function()
   require('mini.jump2d').setup()
   require('mini.misc').setup()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
-  require('mini.surround').setup({
-    custom_surroundings = {
-      s = {
-        input = { find = '%[%[.-%]%]', extract = '^(..).*(..)$' },
-        output = { left = '[[', right = ']]' },
-      },
-    },
-    search_method = 'cover_or_next',
-  })
+  require('mini.surround').setup({ search_method = 'cover_or_next' })
   require('mini.test').setup()
   require('mini.trailspace').setup()
 end, 0)

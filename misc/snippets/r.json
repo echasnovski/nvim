@@ -21,7 +21,7 @@
   },
   "function": {
     "prefix": "fun",
-    "body": "${1:name} <- function($2) {\n\t$3\n}$0",
+    "body": "function($1) {\n\t$2\n}$0",
     "description": "Function"
   },
   "for": {

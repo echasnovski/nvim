@@ -49,7 +49,7 @@ end
 -- Use colorscheme later when its plugin is enabled
 -- Use `nested` to allow `ColorScheme` event
 -- vim.cmd([[au VimEnter * nested ++once colorscheme minischeme]])
-vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#293030', '#D0D0D0', 45) })]])
+vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#293030', '#D0D0D0', 50) })]])
 -- vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#D0D0D0', '#293030', 90) })]])
 
 -- Other interesting color schemes:
@@ -107,9 +107,6 @@ vim.cmd([[augroup CustomSettings]])
   vim.cmd([[autocmd FileType * setlocal formatoptions-=c formatoptions-=o]])
   -- But insert comment leader after hitting <CR> and respect 'numbered' lists
   vim.cmd([[autocmd FileType * setlocal formatoptions+=r formatoptions+=n]])
-
-  -- Allow nested 'default' comment leaders to be treated as comment leader
-  vim.cmd([[autocmd FileType * lua pcall(require('mini.misc').use_nested_comments)]])
 
   -- Start integrated terminal already in insert mode
   vim.cmd([[autocmd TermOpen * startinsert]])

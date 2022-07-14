@@ -131,7 +131,7 @@ EC.leader_nmap.r = {
   ['i'] = { [[<Cmd>T devtools::install(keep_source=TRUE)<CR>]], 'install' },
   ['k'] = { [[<Cmd>T rmarkdown::render("%")<CR>]],              'knit file' },
   ['l'] = { [[<Cmd>T devtools::load_all()<CR>]],                'load all' },
-  ['T'] = { [[<Cmd>T devtools::test_file("%")<CR>]],            'test file' },
+  ['T'] = { [[<Cmd>T testthat::test_file("%")<CR>]],            'test file' },
   ['t'] = { [[<Cmd>T devtools::test()<CR>]],                    'test' },
 }
 
