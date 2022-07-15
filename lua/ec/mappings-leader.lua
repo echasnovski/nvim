@@ -89,6 +89,13 @@ EC.leader_xmap.l = {
   f = { [[:lua vim.lsp.buf.range_formatting()<CR>]], 'format selection' },
 }
 
+-- L is for 'Lua'
+EC.leader_nmap.L = {
+  ['name'] = '+Lua',
+  ['f'] = { '<Cmd>luafile %<CR>',                   '`luafile` buffer' },
+  ['x'] = { [[<Cmd>lua EC.execute_lua_line()<CR>]], 'execute `lua` line' },
+}
+
 -- m is for 'make'
 local test_file_command = [[<Cmd>execute 'T FILE='.expand('%:.').' make test_file'<CR>]]
 EC.leader_nmap.m = {
@@ -116,7 +123,6 @@ EC.leader_nmap.o = {
   ['t'] = { [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'trim trailspace' },
   ['T'] = { trailspace_toggle_command,                 'trailspace hl toggle' },
   ['w'] = { [[<Cmd>setlocal wrap! wrap?<CR>]],         'wrap toggle' },
-  ['x'] = { [[<Cmd>lua EC.execute_lua_line()<CR>]],    'execute `lua` line' },
   ['z'] = { [[<Cmd>lua MiniMisc.zoom()<CR>]],          'zoom toggle' },
 }
 
