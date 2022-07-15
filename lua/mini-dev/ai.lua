@@ -60,27 +60,39 @@ MiniAi.setup = function(config)
   H.apply_config(config)
 end
 
---stylua: ignore start
 --- Module config
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniAi.config = {
-  textobjects = {},
+  custom_textobjects = nil,
+
+  n_lines = 20,
 
   -- How to search for object (first inside current line, then inside
   -- neighborhood). One of 'cover', 'cover_or_next', 'cover_or_prev',
   -- 'cover_or_nearest'. For more details, see `:h MiniSurround.config`.
-  search_method = 'cover'
+  search_method = 'cover',
 }
 --minidoc_afterlines_end
---stylua: ignore end
 
 -- Module functionality =======================================================
 
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniAi.config
+
+-- TODO: add `f` and `t`
+H.builtin_textobjects = {
+  ['('] = { '%b()', '^.().*().$' },
+  [')'] = { '%b()', '^.().*().$' },
+  ['['] = { '%b[]', '^.().*().$' },
+  [']'] = { '%b[]', '^.().*().$' },
+  ['{'] = { '%b{}', '^.().*().$' },
+  ['}'] = { '%b{}', '^.().*().$' },
+  ['<'] = { '%b<>', '^.().*().$' },
+  ['>'] = { '%b<>', '^.().*().$' },
+}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -91,7 +103,7 @@ H.setup_config = function(config)
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
-    objects = { config.objects, 'table' },
+    custom_textobjects = { config.custom_textobjects, 'table', true },
     search_method = { config.search_method, 'string' },
   })
 
@@ -124,19 +136,30 @@ H.validate_search_method = function(x, x_name)
 end
 
 -- Work with finding textobjects ----------------------------------------------
-H.find_textobject = function(textobject_info)
+-- _G.textobject_info = { id = '(', composed_pattern = { '%b()', '^.().*().$' }, type = 'i' }
+
+---@param textobject_info table Information about textobject:
+---   - <id> - single character id.
+---   - <type> - one of `'a'` or `'i'`.
+---   - <composed_pattern> - composed pattern with last item{s} having
+---     extraction template.
+---@private
+H.find_textobject = function(textobject_info, n_times, opts)
   -- `textobject_info` should be a table describing iterative search inside neighborhood.
   if textobject_info == nil then return nil end
-  local config = H.get_config()
+  local config = H.get_config(opts)
   local n_lines = config.n_lines
+  local find_opts = { search_method = config.search_method, n_times = n_times, tobj_type = textobject_info.type }
 
   -- First try only current line as it is the most common use case
-  local tobj = H.find_textobject_in_neighborhood(textobject_info, 0)
-    or H.find_textobject_in_neighborhood(textobject_info, n_lines)
+  local tobj_region = H.find_textobject_in_neighborhood(textobject_info, 0, find_opts)
+    or H.find_textobject_in_neighborhood(textobject_info, n_lines, find_opts)
 
-  if tobj == nil then
-    local msg = ([[No textobject '%s' found within %d line%s and `config.search_method = '%s'`.]]):format(
+  if tobj_region == nil then
+    local msg = string.format(
+      [[No textobject '%s' found covering cursor%s within %d line%s and `config.search_method = '%s'`.]],
       textobject_info.id,
+      n_times > 1 and ('%s times'):format(n_times) or '',
       n_lines,
       n_lines > 1 and 's' or '',
       config.search_method
@@ -144,150 +167,195 @@ H.find_textobject = function(textobject_info)
     H.message(msg)
   end
 
-  return tobj
+  return tobj_region
 end
 
-H.find_textobject_in_neighborhood = function(textobject_info, n_neighbors)
+H.find_textobject_in_neighborhood = function(textobject_info, n_neighbors, opts)
   local neigh = H.get_cursor_neighborhood(n_neighbors)
+  local line = neigh['1d']
   local cur_offset = neigh.pos_to_offset(neigh.cursor_pos)
 
-  -- Find span of object
-  local spans = H.find_best_match(neigh['1d'], textobject_info.find, cur_offset)
-  if spans == nil then return nil end
+  -- Find `n_times` evolving matching spans starting from cursor offset span
+  local find_res = { span = { left = cur_offset, right = cur_offset } }
+  for _ = 1, opts.n_times do
+    local find_opts = { span_to_cover = find_res.span, search_method = opts.search_method }
+    find_res = H.find_best_match(line, textobject_info.composed_pattern, find_opts)
+    if find_res.span == nil then return nil end
+  end
 
-  spans.a = { from = neigh.offset_to_pos(spans.a.from), to = neigh.offset_to_pos(spans.a.to) }
-  spans.i = { from = neigh.offset_to_pos(spans.i.from), to = neigh.offset_to_pos(spans.i.to) }
-  return spans
+  -- Extract appropriate span
+  local extract_span = find_res.span
+  local extract_pattern = find_res.nested_pattern[#find_res.nested_pattern]
+  local offsets = H.extract_offsets(line, extract_span, extract_pattern, opts.tobj_type)
+
+  return { left = neigh.offset_to_pos(offsets.left), right = neigh.offset_to_pos(offsets.right) }
+end
+
+-- Work with matching spans ---------------------------------------------------
+--- - **Pattern** - string describing Lua pattern.
+--- - **Span** - interval inside a string. Like `[1, 5]`.
+--- - **Span `[a1, a2]` is nested inside `[b1, b2]`** <=> `b1 <= a1 <= a2 <= b2`.
+---   It is also **span `[b1, b2]` covers `[a1, a2]`**.
+--- - **Nested pattern** - array of patterns aimed to describe nested spans.
+--- - **Span matches nested pattern** if there is a sequence of increasingly
+---   nested spans each matching corresponding pattern within substring of
+---   previous span (input string for first span). Example:
+---     Nested patterns: `{ '%b()', '^. .* .$' }` (padded balanced `()`)
+---     Input string: `( ( () ( ) ) )`
+---                   `12345678901234`
+---   Here are all matching spans `[1, 14]` and `[3, 12]`. Both `[5, 6]` and
+---   `[8, 10]` match first pattern but not second. All other combinations of
+---   `(` and `)` don't match first pattern (not balanced)
+--- - **Composed pattern**: array with each element describing possible pattern
+---   at that place. Elements can be arrays or string patterns. Composed pattern
+---   basically defines all possible combinations of nested pattern (their
+---   cartesian product). Example:
+---     Composed pattern: `{{'%b()', '%b[]'}, '^. .* .$'}`
+---     Composed pattern expanded into equivalent array of nested patterns:
+---       `{ '%b()', '^. .* .$' }` and `{ '%b[]', '^. .* .$' }`
+--- - **Span matches composed pattern** if it matches at least one nested
+---   pattern from expanded composed pattern.
+---
+---@param line string
+---@param composed_pattern table
+---@param opts table Fields: `span_to_cover`, `search_method`
+---@private
+H.find_best_match = function(line, composed_pattern, opts)
+  local best_span, best_nested_pattern, current_nested_pattern
+  local f = function(span)
+    if H.is_better_span(span, best_span, opts) then
+      best_span = span
+      best_nested_pattern = current_nested_pattern
+    end
+  end
+
+  for _, nested_pattern in ipairs(H.cartesian_product(composed_pattern)) do
+    current_nested_pattern = nested_pattern
+    H.iterate_matched_spans(line, nested_pattern, f)
+  end
+
+  return { span = best_span, nested_pattern = best_nested_pattern }
+end
+
+H.iterate_matched_spans = function(line, nested_pattern, f)
+  local max_level = #nested_pattern
+  -- Keep track of visited spans to ensure only one call of `f`.
+  -- Example: `((a) (b))`, `{'%b()', '%b()'}`
+  local visited = {}
+
+  local process
+  process = function(level, level_line, level_offset)
+    local pattern = nested_pattern[level]
+    local init = 1
+    while init <= level_line:len() do
+      local left, right = H.string_find(level_line, pattern, init)
+      if left == nil then break end
+
+      if level == max_level then
+        local found_match = { left = left + level_offset, right = right + level_offset }
+        local found_match_id = string.format('%s_%s', found_match.left, found_match.right)
+        if not visited[found_match_id] then
+          f(found_match)
+          visited[found_match_id] = true
+        end
+      else
+        local next_level_line = level_line:sub(left, right)
+        local next_level_offset = level_offset + left - 1
+        process(level + 1, next_level_line, next_level_offset)
+      end
+
+      init = left + 1
+    end
+  end
+
+  process(1, line, 0)
+end
+
+H.is_better_span = function(candidate, current, opts)
+  local span_to_cover = opts.span_to_cover
+  -- Assumptions:
+  -- - `candidate` and `span_to_cover` are never `nil`
+  local is_candidate_covering = H.is_span_covering(candidate, span_to_cover)
+  local is_current_covering = H.is_span_covering(current, span_to_cover)
+
+  -- Covering span is always better than not covering span
+  if is_candidate_covering and not is_current_covering then return true end
+  if not is_candidate_covering and is_current_covering then return false end
+
+  if is_candidate_covering then
+    -- Covering candidate is better than covering current if it is narrower
+    return (candidate.right - candidate.left) < (current.right - current.left)
+  else
+    local search_method = opts.search_method
+    if search_method == 'cover' then return false end
+    -- Candidate never should be nested inside `span_to_cover`
+    if H.is_span_covering(span_to_cover, candidate) then return false end
+
+    local is_good_candidate = (search_method == 'cover_or_next' and H.is_span_on_left(span_to_cover, candidate))
+      or (search_method == 'cover_or_prev' and H.is_span_on_left(candidate, span_to_cover))
+      or (search_method == 'cover_or_nearest')
+
+    if not is_good_candidate then return false end
+    if current == nil then return true end
+
+    -- Non-covering good candidate is better than non-covering current if it is
+    -- closer to `span_to_cover`
+    return H.span_distance(candidate, span_to_cover) < H.span_distance(current, span_to_cover)
+  end
+end
+
+H.is_span_covering = function(span, span_to_cover)
+  if span == nil then return false end
+  return (span.left <= span_to_cover.left) and (span_to_cover.right <= span.right)
+end
+
+H.is_span_on_left = function(span_1, span_2) return (span_1.left <= span_2.left) and (span_1.right <= span_2.right) end
+
+H.span_distance = function(span_1, span_2)
+  -- Choosing a distance between two spans is a tricky topic. This boils down
+  -- to a choice in certain edge situations. Example: span to cover is [1, 10].
+  -- Which should be chosen as closer one: [2, 100], [3, 13]?
+  -- Possible choices of distance between [a1, a2] and [b1, b2]:
+  -- - Hausdorff distance: max(|a1 - b1|, |a2 - b2|). Here [3, 13] is closer.
+  --   Source:
+  --   https://math.stackexchange.com/questions/41269/distance-between-two-ranges
+  -- - Minimum distance: min(|a1 - b1|, |a2 - b2|). Here [2, 100] is closer.
+  --   This better incapsulates the following suggestion: between two spans to
+  -- - Usual distance between sets: zero if intersecting,
+  -- return math.max(math.abs(span_1.left - span_2.left), math.abs(span_1.right - span_2.right))
+  return math.min(math.abs(span_1.left - span_2.left), math.abs(span_1.right - span_2.right))
 end
 
 -- Work with Lua patterns -----------------------------------------------------
--- Challenging examples:
--- '( (a) )', {'%b()', '^. .* .$'}, {left = 4, right = 4}
--- '(( a)  )', -//-, -//-
--- '((a) (b))', {'%b()', '%b()'}, {left = 7, right = 7}
--- Currently doesn't really work
-H.find_iterative_match = function(line, pattern_arr, span)
-  local cur_line, cur_span = line, span
-  local cur_match, cur_offset = { left = 1, right = 0 }, 0
-  for _, pattern in ipairs(pattern_arr) do
-    local match_offset = cur_match.left - 1
-    cur_span = { left = cur_span.left - match_offset, right = cur_span.right - match_offset }
-    cur_offset = cur_offset + match_offset
+H.extract_offsets = function(line, extract_span, extract_pattern, tobj_type)
+  local s = line:sub(extract_span.left, extract_span.right)
+  local positions = { s:match(extract_pattern) }
 
-    cur_match = H.find_best_match(cur_line, pattern, cur_span)
-    if cur_match == nil then return nil end
-
-    cur_line = cur_line:sub(cur_match.left, cur_match.right)
+  local is_all_numbers = true
+  for _, pos in ipairs(positions) do
+    if type(pos) ~= 'number' then is_all_numbers = false end
   end
 
-  return { left = cur_match.left + cur_offset, right = cur_match.right + cur_offset }
-end
-
--- Find the best match (left and right offsets in `line`). Here "best" is:
--- - Covering span (`left <= span.left <= span.right <= right`) with smallest
---   width.
--- - If no covering, one of "previous" or "next", depending on
---   `config.search_method`.
--- Output is a table with two numbers (or `nil` in case of no match):
--- indexes of left and right parts of match. They have the following property:
--- `line:sub(left, right)` matches `'^' .. pattern .. '$'`.
-H.find_best_match = function(line, pattern, span)
-  H.validate_search_method()
-
-  local left_prev, right_prev, left, right, left_next, right_next
-  local stop = false
-  local init = 1
-  while not stop do
-    local match_left, match_right = line:find(pattern, init)
-    if match_left == nil then
-      -- Stop search, as nothing is found
-      stop = true
-    elseif match_right < span.right then
-      -- Register as previous only if match is not nested
-      if match_left < span.left then
-        left_prev, right_prev = match_left, match_right
-      end
-
-      -- Continue search, because there might be better
-      init = match_left + 1
-    elseif match_left > span.left then
-      -- Register as next only if match is not nested
-      if match_right > span.right then
-        left_next, right_next = match_left, match_right
-      end
-
-      -- Stop search, because already overt the edge
-      stop = true
-    else
-      -- Successful match: match_left <= span[1] <= span[2] <= match_right
-      if (left == nil) or (match_right - match_left < right - left) then
-        left, right = match_left, match_right
-      end
-
-      -- Continue search, because there might be smaller match
-      init = match_left + 1
-    end
+  local is_valid_positions = is_all_numbers and (#positions == 2 or #positions == 4)
+  if not is_valid_positions then
+    local msg = 'Could not extract proper positions (two or four empty captures) from '
+      .. string.format([[string '%s' with extraction pattern '%s'.]], s, extract_pattern)
+    H.error(msg)
   end
 
-  -- If didn't find covering match, try to infer from previous and next
-  if left == nil then
-    left, right = H.infer_match(
-      { left = left_prev, right = right_prev },
-      { left = left_next, right = right_next },
-      span
-    )
+  local left_offset = extract_span.left - 1
+  if #positions == 2 then
+    --stylua: ignore
+    return ({
+      a = { left = left_offset + 1,            right = left_offset + s:len() },
+      i = { left = left_offset + positions[1], right = left_offset + positions[2] - 1 },
+    })[tobj_type]
   end
 
-  -- If still didn't find anything, return nothing
-  if left == nil then return nil end
-
-  -- Try make covering match even smaller
-  -- This approach has some non-working edge cases, but is quite better
-  -- performance wise than bruteforce "find from current offset"
-  local line_pattern = '^' .. pattern .. '$'
-  while
-    -- Ensure covering
-    left <= span.left
-    and span.right <= (right - 1)
-    -- Ensure at least 2 symbols
-    and left < right - 1
-    -- Ensure match
-    and line:sub(left, right - 1):find(line_pattern)
-  do
-    right = right - 1
-  end
-
-  return { left = left, right = right }
-end
-
-H.infer_match = function(prev, next, span)
-  local has_prev = prev.left ~= nil and prev.right ~= nil
-  local has_next = next.left ~= nil and next.right ~= nil
-  local search_method = H.get_config().search_method
-
-  if not (has_prev or has_next) or search_method == 'cover' then return end
-  if search_method == 'cover_or_prev' then return prev.left, prev.right end
-  if search_method == 'cover_or_next' then return next.left, next.right end
-
-  if search_method == 'cover_or_nearest' then
-    local dist_prev, dist_next = H.span_distance(prev, span), H.span_distance(next, span)
-
-    if dist_next <= dist_prev then
-      return next.left, next.right
-    else
-      return prev.left, prev.right
-    end
-  end
-end
-
-H.span_distance = function(span_1, span_2)
-  local ok, res = pcall(function()
-    -- Hausdorff distance. Source:
-    -- https://math.stackexchange.com/questions/41269/distance-between-two-ranges
-    return math.max(math.abs(span_1.left - span_2.left), math.abs(span_1.right - span_2.right))
-  end)
-
-  return ok and res or math.huge
+  return ({
+    a = { left = left_offset + positions[1], right = left_offset + positions[4] - 1 },
+    i = { left = left_offset + positions[2], right = left_offset + positions[3] - 1 },
+  })[tobj_type]
 end
 
 -- Work with cursor neighborhood ----------------------------------------------
@@ -342,6 +410,20 @@ H.get_cursor_neighborhood = function(n_neighbors)
   }
 end
 
+-- Work with textobject info --------------------------------------------------
+H.make_textobject_table = function()
+  -- Extend builtins with data from `config`
+  local textobjects = vim.tbl_deep_extend('force', H.builtin_textobjects, H.get_config().custom_textobjects or {})
+
+  -- Use default surrounding info for not supplied single character identifier
+  return setmetatable(textobjects, {
+    __index = function(_, key)
+      local key_esc = vim.pesc(key)
+      return { ('%s.-%s'):format(key_esc, key_esc), '^.().*().$' }
+    end,
+  })
+end
+
 -- Utilities ------------------------------------------------------------------
 H.message = function(msg) vim.cmd('echomsg ' .. vim.inspect('(mini.ai) ' .. msg)) end
 
@@ -356,6 +438,14 @@ H.map = function(mode, key, rhs, opts)
   if vim.fn.has('nvim-0.7') == 0 then opts.desc = nil end
 
   vim.api.nvim_set_keymap(mode, key, rhs, opts)
+end
+
+H.string_find = function(s, pattern, init)
+  -- Match only start of full string if pattern says so.
+  -- This is needed because `string.find()` doesn't do this.
+  -- Example: `string.find('(aaa)', '^.*$', 4)` returns `4, 5`
+  if pattern:sub(1, 1) == '^' and init > 1 then return nil end
+  return string.find(s, pattern, init)
 end
 
 ---@param arr table List of items. If item is list, consider as set for
@@ -382,8 +472,5 @@ H.cartesian_product = function(arr)
   process(1)
   return res
 end
-
--- Some ideas about how compound pattern for "argument textobject" might look like
--- _G.pattern_arr = { { '%b()', '%b[]', '%b{}' }, <some set of complex regexes to define argument> }
 
 return MiniAi
