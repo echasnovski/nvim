@@ -22,8 +22,8 @@ end
 -- Collection of minimal and fast Lua modules
 packadd('mini')
 
--- More text objects
-packadd_defer('targets')
+-- -- More text objects
+-- packadd_defer('targets')
 
 -- Align text
 packadd_defer('vim-lion')

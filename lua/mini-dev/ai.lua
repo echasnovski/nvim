@@ -12,6 +12,14 @@
 --- Utilizes same basic ideas about searching object as |mini.surround|, but
 --- has more advanced features.
 ---
+--- What it doesn't (and probably won't) do:
+--- - Have special operators to specially handle whitespace (like `I` and `A`
+---   in 'targets.vim').
+--- - Have "last" and "next" textobject modifiers (like `il` and `in` in
+---   'targets.vim'). Either set and use appropriate `config.search_method` or
+---   move to the next place and then use textobject. For a quicker movements,
+---   see |mini.jump| and |mini.jump2d|.
+---
 --- # Setup~
 ---
 --- This module needs a setup with `require('mini.ai').setup({})` (replace
@@ -65,7 +73,20 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniAi.config = {
+  -- Table with textobject id as fields, textobject spec (or function returning
+  -- textobject spec) as values
   custom_textobjects = nil,
+
+  -- Module mappings. Use `''` (empty string) to disable one.
+  mappings = {
+    -- Main textobject prefixes
+    around = 'a',
+    inside = 'i',
+
+    -- Move cursor to certain part of textobject
+    goto_left = 'g[',
+    goto_right = 'g]',
+  },
 
   n_lines = 20,
 
@@ -96,8 +117,7 @@ MiniAi.config = {
 ---@return table|nil Table describing region of textobject or `nil` if no
 ---   textobject was consecutively found `opts.n_times` times.
 MiniAi.find_textobject = function(id, ai_type, opts)
-  local textobject_tbl = H.make_textobject_table()
-  local tobj_spec = textobject_tbl[id]
+  local tobj_spec = H.get_textobject_spec(id)
   if tobj_spec == nil then return end
 
   if not (ai_type == 'a' or ai_type == 'i') then H.error([[`ai_type` should be one of 'a' or 'i'.]]) end
@@ -106,8 +126,8 @@ MiniAi.find_textobject = function(id, ai_type, opts)
   local tobj_region = H.find_textobject_region(tobj_spec, ai_type, opts)
   if tobj_region == nil then
     local msg = string.format(
-      [[No textobject '%s' found covering cursor%s within %d line%s and `config.search_method = '%s'`.]],
-      id or '',
+      [[No textobject %s found covering region%s within %d line%s and `config.search_method = '%s'`.]],
+      vim.inspect(id),
       opts.n_times > 1 and (' %s times'):format(opts.n_times) or '',
       opts.n_lines,
       opts.n_lines > 1 and 's' or '',
@@ -127,13 +147,10 @@ end
 ---@param ai_type string One of `'a'` or `'i'`.
 ---@param opts table|nil Same as in |MiniAi.find_textobject()|. Extra fields:
 ---   - <vis_mode> - One of `'v'`, `'V'`, `'<C-v>'`. Default: Latest visual mode.
-MiniAi.visual_textobject = function(id, ai_type, opts)
+MiniAi.select_textobject = function(id, ai_type, opts)
   opts = opts or {}
   local tobj_region = MiniAi.find_textobject(id, ai_type, opts)
   if tobj_region == nil then return end
-
-  -- - Deal with multiline `a`/'i' selection when edges are prepended/appended
-  --   with only whitespace. Probably, make correction.
 
   H.exit_visual_mode()
   local vis_mode = opts.vis_mode and vim.api.nvim_replace_termcodes(opts.vis_mode, true, true, true)
@@ -147,6 +164,7 @@ end
 ---
 --- Designed to be used inside expression mapping. No need to use directly.
 ---
+--- Textobject identifier is taken from user single character input.
 --- Default `n_times` option is taken from |v:count1|.
 ---
 ---@param mode string One of 'x' (Visual) or 'o' (Operator-pending).
@@ -157,7 +175,7 @@ MiniAi.expr_textobject = function(mode, ai_type)
   if tobj_id == nil then return '' end
 
   -- Fall back to builtin `a`/`i` textobjects in case of invalid id
-  if not H.is_tobj_id(tobj_id) then return ai_type .. tobj_id end
+  if H.get_textobject_spec(tobj_id) == nil then return ai_type .. tobj_id end
 
   -- Use Visual selection as reference region for Visual mode mappings
   local reference_region_field = ''
@@ -167,22 +185,48 @@ MiniAi.expr_textobject = function(mode, ai_type)
   end
 
   local res = string.format(
-    [[<Cmd>lua MiniAi.visual_textobject('%s', '%s', {n_times = %d%s})<CR>]],
+    [[<Cmd>lua MiniAi.select_textobject('%s', '%s', {n_times = %d%s})<CR>]],
     vim.fn.escape(tobj_id, [[']]),
     vim.fn.escape(ai_type, [[']]),
     vim.v.count1,
     reference_region_field
   )
-  res = vim.api.nvim_replace_termcodes(res, true, true, true)
-  _G.res = res
-  return res
+  return vim.api.nvim_replace_termcodes(res, true, true, true)
 end
+
+-- --- Move cursor to edge of textobject
+-- ---
+-- ---@param side string One of `'left'` or `'right'`.
+-- ---@param id string Single character string representing textobject id.
+-- ---@param ai_type string One of `'a'` or `'i'`.
+-- ---@param opts table|nil Same as in |MiniAi.find_textobject()|.
+-- MiniAi.move_cursor = function(side, id, ai_type, opts)
+--   if not (side == 'left' or side == 'right') then H.error([[`side` should be one of 'left' or 'right'.]]) end
+--   local tobj_region = MiniAi.find_textobject(id, ai_type, opts)
+--   if tobj_region == nil then return end
+--
+--   local dest = tobj_region[side]
+--   vim.api.nvim_win_set_cursor(0, { dest.line, dest.col - 1 })
+-- end
+--
+-- MiniAi.operator = function(side, add_to_jumplist)
+--   -- Get user input
+--   local tobj_id = H.user_textobject_id('a')
+--   if tobj_id == nil then return end
+--
+--   -- Add movement to jump list
+--   if add_to_jumplist then vim.cmd('normal! m`') end
+--
+--   -- Move cursor
+--   MiniAi.move_cursor(side, tobj_id, 'a', { n_times = vim.v.count1 })
+-- end
 
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniAi.config
 
 H.builtin_textobjects = {
+  -- Use balanced pair for brackets
   ['('] = { '%b()', '^.().*().$' },
   [')'] = { '%b()', '^.().*().$' },
   ['['] = { '%b[]', '^.().*().$' },
@@ -191,10 +235,26 @@ H.builtin_textobjects = {
   ['}'] = { '%b{}', '^.().*().$' },
   ['<'] = { '%b<>', '^.().*().$' },
   ['>'] = { '%b<>', '^.().*().$' },
-  -- TODO: Decide whether to keep it, because it is usually used for function
-  -- definition with 'nvim-treesitter-textobjects'
+  -- Use custom pattern to deal with reference span.
+  -- Also use both quotes in `a` textobject.
+  ["'"] = { "%b''", '^.().*().$' },
+  ['"'] = { '%b""', '^.().*().$' },
+  ['`'] = { '%b``', '^.().*().$' },
+  -- Argument. Probably better to use treesitter-based textobject.
+  ['a'] = {
+    { '%b()', '%b[]', '%b{}' },
+    -- Around argument is between comma(s) and edge(s). One comma is included.
+    -- Inner argument - around argument minus comma and "outer" whitespace
+    { ',()%s*().-()%s*,()', '^.()%s*().-()%s*().$', '^.()%s*().-()%s*,()', '(),%s*().-()%s*().$' },
+  },
+  -- Brackets
+  ['b'] = { { '%b()', '%b[]', '%b{}' }, '^.().*().$' },
+  -- Function call. Probably better to use treesitter-based textobject.
   ['f'] = { '%f[%w_%.][%w_%.]+%b()', '^.-%(().*()%)$' },
+  -- Tag
   ['t'] = { '<(%w-)%f[^<%w][^<>]->.-</%1>', '^<.->().*()</[^/]->$' },
+  -- Quotes
+  ['q'] = { { "%b''", '%b""', '%b``' }, '^.().*().$' },
 }
 
 -- Helper functionality =======================================================
@@ -217,10 +277,15 @@ H.apply_config = function(config)
   MiniAi.config = config
 
   -- Make mappings
-  H.map('x', 'a', [[v:lua.MiniAi.expr_textobject('x', 'a')]], { expr = true, desc = 'Around textobject' })
-  H.map('x', 'i', [[v:lua.MiniAi.expr_textobject('x', 'i')]], { expr = true, desc = 'Inside textobject' })
-  H.map('o', 'a', [[v:lua.MiniAi.expr_textobject('o', 'a')]], { expr = true, desc = 'Around textobject' })
-  H.map('o', 'i', [[v:lua.MiniAi.expr_textobject('o', 'i')]], { expr = true, desc = 'Inside textobject' })
+  local maps = config.mappings
+
+  H.map('n', maps.goto_left, [[<Cmd>lua MiniAi.operator('left')<CR>]], { desc = 'Move to left "around"' })
+  H.map('n', maps.goto_right, [[<Cmd>lua MiniAi.operator('right')<CR>]], { desc = 'Move to right "around"' })
+
+  H.map('x', maps.around, [[v:lua.MiniAi.expr_textobject('x', 'a')]], { expr = true, desc = 'Around textobject' })
+  H.map('x', maps.inside, [[v:lua.MiniAi.expr_textobject('x', 'i')]], { expr = true, desc = 'Inside textobject' })
+  H.map('o', maps.around, [[v:lua.MiniAi.expr_textobject('o', 'a')]], { expr = true, desc = 'Around textobject' })
+  H.map('o', maps.inside, [[v:lua.MiniAi.expr_textobject('o', 'i')]], { expr = true, desc = 'Inside textobject' })
 end
 
 H.is_disabled = function() return vim.g.miniai_disable == true or vim.b.miniai_disable == true end
@@ -235,11 +300,6 @@ H.is_search_method = function(x, x_name)
   if vim.tbl_contains({ 'cover', 'cover_or_prev', 'cover_or_next', 'cover_or_nearest' }, x) then return true end
   local msg = ([[%s should be one of 'cover', 'cover_or_prev', 'cover_or_next', 'cover_or_nearest'.]]):format(x_name)
   return false, msg
-end
-
-H.is_tobj_id = function(x)
-  local textobject_tbl = H.make_textobject_table()
-  return textobject_tbl[x] ~= nil
 end
 
 H.validate_tobj_pattern = function(x)
@@ -257,18 +317,31 @@ end
 
 -- Work with textobject info --------------------------------------------------
 H.make_textobject_table = function()
-  -- Extend builtins with data from `config`
-  local textobjects = vim.tbl_deep_extend('force', H.builtin_textobjects, H.get_config().custom_textobjects or {})
+  -- Extend builtins with data from `config`. Don't use `tbl_deep_extend()`
+  -- because only top level keys should be merged.
+  local textobjects = vim.tbl_extend('force', H.builtin_textobjects, H.get_config().custom_textobjects or {})
 
   -- Use default textobject pattern only for some characters: punctuation,
   -- whitespace, digits.
   return setmetatable(textobjects, {
     __index = function(_, key)
       if not (type(key) == 'string' and string.find(key, '^[%p%s%d]$')) then return end
-      local key_esc = vim.pesc(key)
-      return { ('%s().-()%s'):format(key_esc, key_esc) }
+      -- Use custom `%bxx` pattern to overcome issues with `x.-x` not ignoring
+      -- reference span. Include only one of edges in `a` textobject
+      return { string.format('%%b%s%s', key, key), '^.()().*().()$' }
     end,
   })
+end
+
+H.get_textobject_spec = function(id)
+  local textobject_tbl = H.make_textobject_table()
+  local spec = textobject_tbl[id]
+  -- Allow function returning spec
+  if type(spec) == 'function' then spec = spec() end
+
+  -- This is needed to allow easy disabling of textobject identifiers
+  if not (type(spec) == 'table' and #spec > 0) then return nil end
+  return spec
 end
 
 -- Work with finding textobjects ----------------------------------------------
@@ -366,13 +439,13 @@ H.find_best_match = function(line, composed_pattern, reference_span, opts)
 
   for _, nested_pattern in ipairs(H.cartesian_product(composed_pattern)) do
     current_nested_pattern = nested_pattern
-    H.iterate_matched_spans(line, nested_pattern, f)
+    H.iterate_matched_spans(line, nested_pattern, reference_span, f)
   end
 
   return { span = best_span, nested_pattern = best_nested_pattern }
 end
 
-H.iterate_matched_spans = function(line, nested_pattern, f)
+H.iterate_matched_spans = function(line, nested_pattern, reference_span, f)
   local max_level = #nested_pattern
   -- Keep track of visited spans to ensure only one call of `f`.
   -- Example: `((a) (b))`, `{'%b()', '%b()'}`
@@ -383,7 +456,9 @@ H.iterate_matched_spans = function(line, nested_pattern, f)
     local pattern = nested_pattern[level]
     local init = 1
     while init <= level_line:len() do
-      local left, right = H.string_find(level_line, pattern, init)
+      local local_reference_span =
+        { left = reference_span.left - level_offset, right = reference_span.right - level_offset }
+      local left, right = H.string_find(level_line, pattern, init, local_reference_span)
       if left == nil then break end
 
       if level == max_level then
@@ -440,7 +515,7 @@ H.is_better_span = function(candidate, current, reference, opts)
 
     -- Non-covering good candidate is better than non-covering current if it is
     -- closer to `span_to_cover`
-    return H.span_distance(candidate, reference) < H.span_distance(current, reference)
+    return H.span_distance(candidate, reference, search_method) < H.span_distance(current, reference, search_method)
   end
 end
 
@@ -459,19 +534,21 @@ H.is_span_on_left = function(span_1, span_2)
   return (span_1.left <= span_2.left) and (span_1.right <= span_2.right)
 end
 
-H.span_distance = function(span_1, span_2)
-  -- Choosing a distance between two spans is a tricky topic. This boils down
-  -- to a choice in certain edge situations. Example: span to cover is [1, 10].
-  -- Which should be chosen as closer one: [2, 100], [3, 13]?
-  -- Possible choices of distance between [a1, a2] and [b1, b2]:
-  -- - Hausdorff distance: max(|a1 - b1|, |a2 - b2|). Here [3, 13] is closer.
+H.is_span_contains = function(span, point) return span.left <= point and point <= span.right end
+
+H.span_distance = function(span_1, span_2, search_method)
+  -- Other possible choices of distance between [a1, a2] and [b1, b2]:
+  -- - Hausdorff distance: max(|a1 - b1|, |a2 - b2|).
   --   Source:
   --   https://math.stackexchange.com/questions/41269/distance-between-two-ranges
-  -- - Minimum distance: min(|a1 - b1|, |a2 - b2|). Here [2, 100] is closer.
-  --   This better incapsulates the following suggestion: between two spans to
-  -- - Usual distance between sets: zero if intersecting,
-  -- return math.max(math.abs(span_1.left - span_2.left), math.abs(span_1.right - span_2.right))
-  return math.min(math.abs(span_1.left - span_2.left), math.abs(span_1.right - span_2.right))
+  -- - Minimum distance: min(|a1 - b1|, |a2 - b2|).
+
+  -- Distance is chosen so that "next span" in certain direction is the closest
+  if search_method == 'cover_or_next' then return math.abs(span_1.left - span_2.left) end
+  if search_method == 'cover_or_prev' then return math.abs(span_1.right - span_2.right) end
+  if search_method == 'cover_or_nearest' then
+    return math.min(math.abs(span_1.left - span_2.left), math.abs(span_1.right - span_2.right))
+  end
 end
 
 -- Work with Lua patterns -----------------------------------------------------
@@ -650,12 +727,42 @@ H.map = function(mode, key, rhs, opts)
   vim.api.nvim_set_keymap(mode, key, rhs, opts)
 end
 
-H.string_find = function(s, pattern, init)
+H.string_find = function(s, pattern, init, reference_span)
   -- Match only start of full string if pattern says so.
   -- This is needed because `string.find()` doesn't do this.
   -- Example: `string.find('(aaa)', '^.*$', 4)` returns `4, 5`
   if pattern:sub(1, 1) == '^' and init > 1 then return nil end
-  return string.find(s, pattern, init)
+
+  -- Fallback to usual method if pattern is not special or span is trivial.
+  -- Conditioning on non-trivial span is needed to work for both in initial and
+  -- consecutive textobject search.
+  local special_char = pattern:match('^%%b(.)%1$')
+  if special_char == nil then return string.find(s, pattern, init) end
+
+  -- Use custom logic of '%bxx' patterns (both `x` are equal). This is
+  -- basically a `x.-x` but taking into account occurence inside span.
+  -- This is needed to make possible consecutive evolving of textobjects
+  -- defined by identical left and right single character parts.
+  -- Conditions on first and second of matched positions based on their
+  -- relation to reference span:
+  -- - First outside, second outside - both are good.
+  -- - First outside, second inside - modify second to be on right edge and further.
+  -- - First inside, second outside - both are good.
+  -- - First inside, second inside - modify second to be strictly outside.
+  special_char = vim.pesc(special_char)
+  local first = string.find(s, special_char, init)
+  if first == nil then return nil end
+
+  local allow_right_edge = not H.is_span_contains(reference_span, first)
+  local second = first
+  repeat
+    second = string.find(s, special_char, second + 1)
+    if second == nil then return nil end
+    local is_outside = not H.is_span_contains(reference_span, second)
+      or (allow_right_edge and second == reference_span.right)
+  until is_outside
+
+  return first, second
 end
 
 ---@param arr table List of items. If item is list, consider as set for
@@ -685,11 +792,27 @@ H.cartesian_product = function(arr)
 end
 
 -- TODO:
--- - TRY to come up with something to make "argument textobject" work.
+-- - Deal with multiline `a`/`i` selection when edges are prepended/appended
+--   with only whitespace. Probably, make correction.
+-- - Make `move_cursor()` work consecutively.
+-- - Refactor so that `operator()` affects jumplist only if cursor moved.
 --
 -- (
 -- ___ (aaa) (bbb)
 -- )
 -- (ccc)
+
+-- '   ' ' ' ' '  '
+
+-- [  aa  ]  bbb
+-- aa__bb_cc__dd
+
+-- 1  2  2  1
+
+-- (  aa  , bb,  cc  ,        dd)
+
+-- f(aaa, g(bbb, ccc), ddd)
+--
+-- (aa) = f(aaaa, g(bbbb), ddd)
 
 return MiniAi
