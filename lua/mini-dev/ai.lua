@@ -14,7 +14,8 @@
 ---
 --- What it doesn't (and probably won't) do:
 --- - Have special operators to specially handle whitespace (like `I` and `A`
----   in 'targets.vim').
+---   in 'targets.vim'). Whitespace handling is assumed to be done inside
+---   textobject specification (like `i(` and `i)` handle whitespace differently).
 --- - Have "last" and "next" textobject modifiers (like `il` and `in` in
 ---   'targets.vim'). Either set and use appropriate `config.search_method` or
 ---   move to the next place and then use textobject. For a quicker movements,
@@ -72,6 +73,11 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # Options ~
+---
+--- ## Custom textobjects
+---
+--- Example imitating word: `{ w = { '()()%f[%w]%w+()[ \t]*()' } }`
 MiniAi.config = {
   -- Table with textobject id as fields, textobject spec (or function returning
   -- textobject spec) as values
@@ -124,10 +130,11 @@ MiniAi.find_textobject = function(id, ai_type, opts)
   opts = vim.tbl_deep_extend('force', H.get_default_opts(), opts or {})
 
   local tobj_region = H.find_textobject_region(tobj_spec, ai_type, opts)
+
   if tobj_region == nil then
     local msg = string.format(
       [[No textobject %s found covering region%s within %d line%s and `config.search_method = '%s'`.]],
-      vim.inspect(id),
+      vim.inspect(ai_type .. id),
       opts.n_times > 1 and (' %s times'):format(opts.n_times) or '',
       opts.n_lines,
       opts.n_lines > 1 and 's' or '',
@@ -151,13 +158,47 @@ MiniAi.select_textobject = function(id, ai_type, opts)
   opts = opts or {}
   local tobj_region = MiniAi.find_textobject(id, ai_type, opts)
   if tobj_region == nil then return end
+  local set_cursor = function(position) vim.api.nvim_win_set_cursor(0, { position.line, position.col - 1 }) end
 
   H.exit_visual_mode()
   local vis_mode = opts.vis_mode and vim.api.nvim_replace_termcodes(opts.vis_mode, true, true, true)
     or vim.fn.visualmode()
-  vim.api.nvim_win_set_cursor(0, { tobj_region.right.line, tobj_region.right.col - 1 })
-  vim.cmd('normal! ' .. vis_mode)
-  vim.api.nvim_win_set_cursor(0, { tobj_region.left.line, tobj_region.left.col - 1 })
+
+  -- TODO: Decide if this should be kept or opting for using `Vi(` instead of
+  -- `Vi)` is enough.
+  -- -- Possibly correct region for linewise mode: don't include first and last
+  -- -- line if textobject contains only whitespace on them. This is default
+  -- -- Neovim behavior for `i)`, for example.
+  -- if vis_mode == 'V' and ai_type == 'i' then
+  --   local left_line, right_line = tobj_region.left.line, tobj_region.right.line
+  --   local left_whitespace = vim.fn.getline(left_line):sub(tobj_region.left.col):match('^%s*$') ~= nil
+  --   local right_whitespace = vim.fn.getline(right_line):sub(1, tobj_region.right.col):match('^%s*$') ~= nil
+  --   local has_inner_lines = (right_line - left_line) > 1
+  --   if left_whitespace and right_whitespace and has_inner_lines then
+  --     -- Set ``
+  --     tobj_region.left = { line = left_line + 1, col = 1 }
+  --     tobj_region.right = { line = right_line - 1, col = 1 }
+  --   end
+  -- end
+
+  -- Allow going past end of line in order to collapse multiline regions
+  local cache_virtualedit = vim.o.virtualedit
+  vim.o.virtualedit = 'onemore'
+
+  pcall(function()
+    -- Open enough folds to show left and right edges
+    set_cursor(tobj_region.left)
+    vim.cmd('normal! zv')
+    set_cursor(tobj_region.right)
+    vim.cmd('normal! zv')
+
+    -- Visually select only valid regions
+    vim.cmd('normal! ' .. vis_mode)
+    set_cursor(tobj_region.left)
+  end)
+
+  -- Restore options
+  vim.o.virtualedit = cache_virtualedit
 end
 
 --- Make expression to visually select textobject
@@ -227,19 +268,14 @@ H.default_config = MiniAi.config
 
 H.builtin_textobjects = {
   -- Use balanced pair for brackets
-  ['('] = { '%b()', '^.().*().$' },
-  [')'] = { '%b()', '^.().*().$' },
-  ['['] = { '%b[]', '^.().*().$' },
-  [']'] = { '%b[]', '^.().*().$' },
-  ['{'] = { '%b{}', '^.().*().$' },
-  ['}'] = { '%b{}', '^.().*().$' },
-  ['<'] = { '%b<>', '^.().*().$' },
-  ['>'] = { '%b<>', '^.().*().$' },
-  -- Use custom pattern to deal with reference span.
-  -- Also use both quotes in `a` textobject.
-  ["'"] = { "%b''", '^.().*().$' },
-  ['"'] = { '%b""', '^.().*().$' },
-  ['`'] = { '%b``', '^.().*().$' },
+  ['('] = { '%b()', '^.%s*().-()%s*.$' },
+  [')'] = { '%b()', '^.().-().$' },
+  ['['] = { '%b[]', '^.%s*().-()%s*.$' },
+  [']'] = { '%b[]', '^.().-().$' },
+  ['{'] = { '%b{}', '^.%s*().-()%s*.$' },
+  ['}'] = { '%b{}', '^.().-().$' },
+  ['<'] = { '%b<>', '^.%s*().-()%s*.$' },
+  ['>'] = { '%b<>', '^.().-().$' },
   -- Argument. Probably better to use treesitter-based textobject.
   ['a'] = {
     { '%b()', '%b[]', '%b{}' },
@@ -254,7 +290,7 @@ H.builtin_textobjects = {
   -- Tag
   ['t'] = { '<(%w-)%f[^<%w][^<>]->.-</%1>', '^<.->().*()</[^/]->$' },
   -- Quotes
-  ['q'] = { { "%b''", '%b""', '%b``' }, '^.().*().$' },
+  ['q'] = { { "'.-'", '".-"', '`.-`' }, '^.().*().$' },
 }
 
 -- Helper functionality =======================================================
@@ -326,9 +362,13 @@ H.make_textobject_table = function()
   return setmetatable(textobjects, {
     __index = function(_, key)
       if not (type(key) == 'string' and string.find(key, '^[%p%s%d]$')) then return end
-      -- Use custom `%bxx` pattern to overcome issues with `x.-x` not ignoring
-      -- reference span. Include only one of edges in `a` textobject
-      return { string.format('%%b%s%s', key, key), '^.()().*().()$' }
+      -- Include both sides in `a` textobject because:
+      -- - This feels more coherent and leads to less code.
+      -- - There are issues with evolving in Visual mode because reference
+      --   region will be smaller than pattern match. This lead to acceptance
+      --   of pattern and the same region will be highlighted again.
+      local key_esc = vim.pesc(key)
+      return { string.format('%s.-%s', key_esc, key_esc), '^.().*().$' }
     end,
   })
 end
@@ -639,14 +679,10 @@ H.get_neighborhood = function(reference_region, n_neighbors)
 
   -- Convert 1d span to 2d region
   local span_to_region = function(span)
-    local left = offset_to_pos(span.left)
-    local right = offset_to_pos(span.right)
-
-    -- Correct positions to not occure outside of line. This happens because 1d
-    -- neighborhood is created using extra `'\n'` at end of lines.
-    local left_line_width = vim.api.nvim_buf_get_lines(0, left.line - 1, left.line, true)[1]:len()
-    if left.col > left_line_width then left = { line = left.line + 1, col = 1 } end
-    return { left = left, right = right }
+    -- NOTE: this might lead to outside of line positions due to added `\n` at
+    -- the end of lines in 1d-neighborhood. However, this is crucial for
+    -- allowing `i` textobjects to collapse multiline selections.
+    return { left = offset_to_pos(span.left), right = offset_to_pos(span.right) }
   end
 
   return {
@@ -733,36 +769,41 @@ H.string_find = function(s, pattern, init, reference_span)
   -- Example: `string.find('(aaa)', '^.*$', 4)` returns `4, 5`
   if pattern:sub(1, 1) == '^' and init > 1 then return nil end
 
-  -- Fallback to usual method if pattern is not special or span is trivial.
-  -- Conditioning on non-trivial span is needed to work for both in initial and
-  -- consecutive textobject search.
-  local special_char = pattern:match('^%%b(.)%1$')
-  if special_char == nil then return string.find(s, pattern, init) end
+  -- Determine of pattern should be specially handled. If not, fallback to
+  -- usual method.
+  local pattern_first, pattern_second = pattern:match('^(.-)%.%-(.-)$')
+  local is_special_pattern = type(pattern_first) == 'string'
+    and pattern_first:len() > 0
+    and type(pattern_second) == 'string'
+    and pattern_second:len() > 0
+    -- Don't specially handle patterns having `%.-`
+    and pattern_first:sub(-1) ~= '%'
+  if not is_special_pattern then return string.find(s, pattern, init) end
 
-  -- Use custom logic of '%bxx' patterns (both `x` are equal). This is
-  -- basically a `x.-x` but taking into account occurence inside span.
-  -- This is needed to make possible consecutive evolving of textobjects
-  -- defined by identical left and right single character parts.
-  -- Conditions on first and second of matched positions based on their
-  -- relation to reference span:
-  -- - First outside, second outside - both are good.
-  -- - First outside, second inside - modify second to be on right edge and further.
-  -- - First inside, second outside - both are good.
-  -- - First inside, second inside - modify second to be strictly outside.
-  special_char = vim.pesc(special_char)
-  local first = string.find(s, special_char, init)
-  if first == nil then return nil end
+  -- Use custom logic for 'a.-b' patterns (`a` and `b` may be different
+  -- strings). It takes into account occurence inside span.
+  -- This is needed to make possible the consecutive evolving of textobjects
+  -- defined by left and right parts. Key idea is to match in a way that allows
+  -- consecutive covering matches.
+  -- Conditions on first (possibly more than 1 character) and second (possibly
+  -- more than one character) of matched positions based on their relation to
+  -- reference span:
+  -- - If first not fully inside, second should also not be fully inside but
+  --   its end match is allowed to be on edge.
+  -- - If first is fully inside, second should not be fully inside.
+  local first_left, first_right = string.find(s, pattern_first, init)
+  if first_left == nil then return nil end
 
-  local allow_right_edge = not H.is_span_contains(reference_span, first)
-  local second = first
+  local allow_right_edge = not H.is_span_covering(reference_span, { left = first_left, right = first_right })
+  local second_left, second_right = first_right, nil
   repeat
-    second = string.find(s, special_char, second + 1)
-    if second == nil then return nil end
-    local is_outside = not H.is_span_contains(reference_span, second)
-      or (allow_right_edge and second == reference_span.right)
+    second_left, second_right = string.find(s, pattern_second, second_left + 1)
+    if second_left == nil then return nil end
+    local is_outside = not H.is_span_covering(reference_span, { left = second_left, right = second_right })
+      or (allow_right_edge and second_right == reference_span.right)
   until is_outside
 
-  return first, second
+  return first_left, second_right
 end
 
 ---@param arr table List of items. If item is list, consider as set for
@@ -792,27 +833,61 @@ H.cartesian_product = function(arr)
 end
 
 -- TODO:
--- - Deal with multiline `a`/`i` selection when edges are prepended/appended
---   with only whitespace. Probably, make correction.
 -- - Make `move_cursor()` work consecutively.
 -- - Refactor so that `operator()` affects jumplist only if cursor moved.
---
+-- - Deal with empty `i` selection. This is crucial to work with `ci)` (start
+--   Insert mode inside empty parenthesis), `di)`, etc.
+
+-- Notes:
+-- - To consecutively evolve `i`textobject, use `count` 2. Example: `2i)`.
+
+-- Test cases
+
+-- Brackets:
 -- (
--- ___ (aaa) (bbb)
+-- ___ [ (aaa) (bbb) ]  [{ccc}]
 -- )
--- (ccc)
+-- (ddd)
 
--- '   ' ' ' ' '  '
+-- Brackets with whitespace:
+-- (  aa   ) [  bb   ] {  cc   }
 
--- [  aa  ]  bbb
--- aa__bb_cc__dd
-
--- 1  2  2  1
-
--- (  aa  , bb,  cc  ,        dd)
-
--- f(aaa, g(bbb, ccc), ddd)
+-- Multiline brackets to test difference between `i)` and `i(`; also collapsing
+-- multiline regions (uncomment before testing):
+-- (
 --
+-- a
+--
+-- )
+
+-- Empty selections:
+-- () [] {}
+-- '' "" ``
+-- __ 44
+
+-- Evolving of quotes:
+-- '   ' ' ' ' '  '
+-- ' '  " ' ' "   ' '
+
+-- Evolving of default textobjects:
+-- aa__bb_cc__dd
+-- aa________bb______cc
+-- 1  2  2  1  2  1  2
+
+-- Evolution of custom textobject using 'a.-b' pattern:
+-- vim.b.miniai_config = { custom_textobjects = { ['~'] = {'``.-~~', '^..().*().$'} } }
+-- `` `` ~~ ~~ `` ~~
+
+-- Argument textobject:
+-- (  aa  , bb,  cc  ,        dd)
+-- f(aaa, g(bbb, ccc), ddd)
 -- (aa) = f(aaaa, g(bbbb), ddd)
 
+-- Cases from 'wellle/targets.vim':
+-- vector<int> data = { variable1 * variable2, test(variable3, 10) * 15 };
+-- struct Foo<A, Fn(A) -> bool> { ... }
+-- if (window.matchMedia("(min-width: 180px)").matches) {
+
+MiniAi.setup()
+MiniAi.config.search_method = 'cover_or_next'
 return MiniAi
