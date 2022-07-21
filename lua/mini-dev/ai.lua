@@ -487,8 +487,16 @@ H.setup_config = function(config)
 
   vim.validate({
     custom_textobjects = { config.custom_textobjects, 'table', true },
+    mappings = { config.mappings, 'table' },
     n_lines = { config.n_lines, 'number' },
-    search_method = { config.search_method, 'string' },
+    search_method = { config.search_method, H.is_search_method },
+  })
+
+  vim.validate({
+    ['mappings.around'] = { config.mappings.around, 'string' },
+    ['mappings.inside'] = { config.mappings.inside, 'string' },
+    ['mappings.goto_left'] = { config.mappings.goto_left, 'string' },
+    ['mappings.goto_right'] = { config.mappings.goto_right, 'string' },
   })
 
   return config
@@ -524,8 +532,8 @@ H.is_search_method = function(x, x_name)
   x = x or H.get_config().search_method
   x_name = x_name or '`config.search_method`'
 
-  if vim.tbl_contains({ 'cover', 'cover_or_prev', 'cover_or_next', 'cover_or_nearest' }, x) then return true end
-  local msg = ([[%s should be one of 'cover', 'cover_or_prev', 'cover_or_next', 'cover_or_nearest'.]]):format(x_name)
+  if vim.tbl_contains({ 'cover_or_next', 'cover', 'cover_or_prev', 'cover_or_nearest' }, x) then return true end
+  local msg = ([[%s should be one of 'cover_or_next', 'cover', 'cover_or_prev', 'cover_or_nearest'.]]):format(x_name)
   return false, msg
 end
 
