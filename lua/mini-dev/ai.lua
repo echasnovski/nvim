@@ -1,13 +1,14 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- Documentation ==============================================================
---- Module for creating extended `a`/`i` textobjects. Basically, like
---- 'wellle/targets.vim' but in Lua and slightly different.
+--- Module for creating extended `a`/`i` textobjects. It enhances some builtin
+--- |text-objects| (like |a(|, |a)|, |a'|, and more) while creating new ones
+--- (like `a*`, `a<Space>`, `af`, `a?`, and more) and allowing user to create their own.
 ---
 --- Features:
 --- - Customizable creation of `a`/`i` textobjects using Lua patterns. Supports
 ---   dot-repeat, consecutive application, search method, |v:count|.
---- - Comprehensive defaults:
+--- - Comprehensive defaults (see more in |MiniAi.config|):
 ---     - Balanced brackets (with and without whitespace).
 ---     - Balanced quotes.
 ---     - Single character punctuation, digit, or whitespace.
@@ -17,9 +18,6 @@
 ---     - Derived from user prompt.
 --- - Motions for jumping to left/right edge of textobject.
 ---
---- Utilizes same basic ideas about searching object as |mini.surround|, but
---- has more advanced features.
----
 --- What it doesn't (and probably won't) do:
 --- - Have special operators to specially handle whitespace (like `I` and `A`
 ---   in 'targets.vim'). Whitespace handling is assumed to be done inside
@@ -28,6 +26,13 @@
 ---   'targets.vim'). Either set and use appropriate `config.search_method` or
 ---   move to the next place and then use textobject. For a quicker movements,
 ---   see |mini.jump| and |mini.jump2d|.
+---
+--- Known issues which won't be resolved:
+--- - Search for textobject is done using Lua patterns (regex-like approach).
+---   So certain amount of false positives should be expected.
+--- - During textobject search there is no distinction if it is inside string
+---   or comment. So in this case there will be not proper match for a function
+---   call: 'f(a = ")", b = 1)'.
 ---
 --- General rule of thumb: any instrument using available parser for document
 --- structure (like treesitter) will usually provide more precise results. This
@@ -68,6 +73,9 @@
 
 --- Algorithm design
 ---
+--- Utilizes same basic ideas about searching object as |mini.surround|, but
+--- has more advanced features.
+---
 --- - *Region* - ... .
 --- - *Pattern* - string describing Lua pattern.
 --- - *Span* - interval inside a string. Like `[1, 5]`.
@@ -96,7 +104,8 @@
 ---@tag MiniAi-algorithm
 
 -- Module definition ==========================================================
-MiniAi = {}
+local MiniAi = {}
+-- TODO: make it local
 H = {}
 
 --- Module setup
@@ -146,6 +155,10 @@ end
 ---   covering span, so can't evolve with `config.search_method = 'cover'`. To
 ---   consecutively select use with `v:count` equal to 2 (like `v2a_`).
 ---
+--- Lua patterns which are handled specially:
+--- - `%bxx` (`xx` is two identical characters).
+--- - `x.-y` (`x` and `y` are different strings).
+---
 --- Examples:
 --- - Imitating word: `{ w = { '()()%f[%w]%w+()[ \t]*()' } }`
 --- - Word with camel case support:
@@ -157,8 +170,8 @@ end
 ---
 --- ...
 MiniAi.config = {
-  -- Table with textobject id as fields, textobject spec (or function returning
-  -- textobject spec) as values
+  -- Table with textobject id as fields, textobject specification (or function
+  -- returning it) as values. See |MiniAi.config|.
   custom_textobjects = nil,
 
   -- Module mappings. Use `''` (empty string) to disable one.
@@ -172,7 +185,8 @@ MiniAi.config = {
     goto_right = 'g]',
   },
 
-  n_lines = 20,
+  -- Number of lines within which textobject is searched
+  n_lines = 50,
 
   -- How to search for object (first inside current line, then inside
   -- neighborhood). One of 'cover', 'cover_or_next', 'cover_or_prev',
@@ -227,6 +241,44 @@ MiniAi.find_textobject = function(id, ai_type, opts)
   return res
 end
 
+--- Move cursor to edge of textobject
+---
+---@param side string One of `'left'` or `'right'`.
+---@param id string Single character string representing textobject id.
+---@param ai_type string One of `'a'` or `'i'`.
+---@param opts table|nil Same as in |MiniAi.find_textobject()|.
+MiniAi.move_cursor = function(side, id, ai_type, opts)
+  if not (side == 'left' or side == 'right') then H.error([[`side` should be one of 'left' or 'right'.]]) end
+  opts = opts or {}
+  local init_pos = vim.api.nvim_win_get_cursor(0)
+
+  -- Compute single textobject first to find out if it would move the cursor.
+  -- If not, then eventual `n_times` should be bigger by 1 to imitate `n_times`
+  -- *actual* jumps. This implements consecutive jumps and has logic of "If
+  -- cursor is strictly inside region, move to its side first".
+  local new_opts = vim.tbl_deep_extend('force', opts, { n_times = 1 })
+  local tobj_single = MiniAi.find_textobject(id, ai_type, new_opts)
+  if tobj_single == nil then return end
+
+  new_opts.n_times = opts.n_times or 1
+  if (init_pos[1] == tobj_single[side].line) and (init_pos[2] == tobj_single[side].col - 1) then
+    new_opts.n_times = new_opts.n_times + 1
+  end
+
+  -- Compute actually needed textobject while avoiding unnecessary computation
+  -- in a most common usage (`v:count1 == 1`)
+  local pos = tobj_single[side]
+  if new_opts.n_times > 1 then
+    local tobj = MiniAi.find_textobject(id, ai_type, new_opts)
+    if tobj == nil then return end
+    pos = tobj[side]
+  end
+
+  -- Move cursor and open enough folds
+  vim.api.nvim_win_set_cursor(0, { pos.line, pos.col - 1 })
+  vim.cmd('normal! zv')
+end
+
 --- Visually select textobject region
 ---
 --- Does nothing if no region is found.
@@ -238,6 +290,8 @@ end
 ---   - <operator_pending> - Whether selection is for Operator-pending mode.
 ---     Default: `false`.
 MiniAi.select_textobject = function(id, ai_type, opts)
+  if H.is_disabled() then return end
+
   opts = opts or {}
 
   -- Exit to Normal before getting textobject id. This way invalid id doesn't
@@ -307,6 +361,8 @@ end
 ---@param mode string One of 'x' (Visual) or 'o' (Operator-pending).
 ---@param ai_type string One of `'a'` or `'i'`.
 MiniAi.expr_textobject = function(mode, ai_type)
+  if H.is_disabled() then return '' end
+
   local tobj_id = H.user_textobject_id(ai_type)
 
   if tobj_id == nil then return '' end
@@ -350,44 +406,6 @@ MiniAi.expr_textobject = function(mode, ai_type)
   return vim.api.nvim_replace_termcodes(res, true, true, true)
 end
 
---- Move cursor to edge of textobject
----
----@param side string One of `'left'` or `'right'`.
----@param id string Single character string representing textobject id.
----@param ai_type string One of `'a'` or `'i'`.
----@param opts table|nil Same as in |MiniAi.find_textobject()|.
-MiniAi.move_cursor = function(side, id, ai_type, opts)
-  if not (side == 'left' or side == 'right') then H.error([[`side` should be one of 'left' or 'right'.]]) end
-  opts = opts or {}
-  local init_pos = vim.api.nvim_win_get_cursor(0)
-
-  -- Compute single textobject first to find out if it would move the cursor.
-  -- If not, then eventual `n_times` should be bigger by 1 to imitate `n_times`
-  -- *actual* jumps. This implements consecutive jumps and has logic of "If
-  -- cursor is strictly inside region, move to its side first".
-  local new_opts = vim.tbl_deep_extend('force', opts, { n_times = 1 })
-  local tobj_single = MiniAi.find_textobject(id, ai_type, new_opts)
-  if tobj_single == nil then return end
-
-  new_opts.n_times = opts.n_times or 1
-  if (init_pos[1] == tobj_single[side].line) and (init_pos[2] == tobj_single[side].col - 1) then
-    new_opts.n_times = new_opts.n_times + 1
-  end
-
-  -- Compute actually needed textobject while avoiding unnecessary computation
-  -- in a most common usage (`v:count1 == 1`)
-  local pos = tobj_single[side]
-  if new_opts.n_times > 1 then
-    local tobj = MiniAi.find_textobject(id, ai_type, new_opts)
-    if tobj == nil then return end
-    pos = tobj[side]
-  end
-
-  -- Move cursor and open enough folds
-  vim.api.nvim_win_set_cursor(0, { pos.line, pos.col - 1 })
-  vim.cmd('normal! zv')
-end
-
 --- Make expression for moving cursor to edge of textobject
 ---
 --- Designed to be used inside expression mapping. No need to use directly.
@@ -397,6 +415,8 @@ end
 ---
 ---@param side string One of `'left'` or `'right'`.
 MiniAi.expr_motion = function(side)
+  if H.is_disabled() then return '' end
+
   if not (side == 'left' or side == 'right') then H.error([[`side` should be one of 'left' or 'right'.]]) end
 
   -- Get user input
@@ -427,18 +447,18 @@ H.cache = {}
 H.builtin_textobjects = {
   -- Use balanced pair for brackets. Use opening ones to possibly remove edge
   -- whitespace from `i` textobject.
-  ['('] = { '%b()', '^.%s*().-()%s*.$' },
-  [')'] = { '%b()', '^.().-().$' },
-  ['['] = { '%b[]', '^.%s*().-()%s*.$' },
-  [']'] = { '%b[]', '^.().-().$' },
-  ['{'] = { '%b{}', '^.%s*().-()%s*.$' },
-  ['}'] = { '%b{}', '^.().-().$' },
-  ['<'] = { '%b<>', '^.%s*().-()%s*.$' },
-  ['>'] = { '%b<>', '^.().-().$' },
+  ['('] = { '%b()', '^.%s*().*()%s*.$' },
+  [')'] = { '%b()', '^.().*().$' },
+  ['['] = { '%b[]', '^.%s*().*()%s*.$' },
+  [']'] = { '%b[]', '^.().*().$' },
+  ['{'] = { '%b{}', '^.%s*().*()%s*.$' },
+  ['}'] = { '%b{}', '^.().*().$' },
+  ['<'] = { '%b<>', '^.%s*().*()%s*.$' },
+  ['>'] = { '%b<>', '^.().*().$' },
   -- Use special "same balanced" pattern to select quotes in pairs
-  ["'"] = { "%b''", '^.().-().$' },
-  ['"'] = { '%b""', '^.().-().$' },
-  ['`'] = { '%b``', '^.().-().$' },
+  ["'"] = { "%b''", '^.().*().$' },
+  ['"'] = { '%b""', '^.().*().$' },
+  ['`'] = { '%b``', '^.().*().$' },
   -- Derived from user prompt
   ['?'] = function()
     -- Using cache allows for a dot-repeat without another user input
@@ -461,7 +481,7 @@ H.builtin_textobjects = {
     { '%b()', '%b[]', '%b{}' },
     -- Around argument is between comma(s) and edge(s). One comma is included.
     -- Inner argument - around argument minus comma and "outer" whitespace
-    { ',()%s*().-()%s*,()', '^.()%s*().-()%s*().$', '^.()%s*().-()%s*,()', '(),%s*().-()%s*().$' },
+    { ',()%s*()[^,]-()%s*,()', '^.()%s*()[^,]-()%s*().$', '(),%s*()[^,]-()%s*().$', '^.()%s*()[^,]-()%s*,()' },
   },
   -- Brackets
   ['b'] = { { '%b()', '%b[]', '%b{}' }, '^.().*().$' },
@@ -567,9 +587,10 @@ H.make_textobject_table = function()
       --   region will be smaller than pattern match. This lead to acceptance
       --   of pattern and the same region will be highlighted again.
       local key_esc = vim.pesc(key)
-      -- Use `%f[]` to have maximum stretch to the left. Include only right
-      -- edge in `a` textobject. Example outcome with `_`: '%f[_]_+().-()_+'.
-      return { string.format('%%f[%s]%s+()().-()%s+()', key_esc, key_esc, key_esc) }
+      -- Use `%f[]` to have maximum stretch to the left. Include only left (not
+      -- right, because it helps in edge cases like) edge in `a` textobject.
+      -- Example outcome with `_`: '()%f[_]_+().-()()_+'.
+      return { string.format('()%%f[%s]%s+().-()()%s+', key_esc, key_esc, key_esc) }
     end,
   })
 end
@@ -972,12 +993,43 @@ H.map = function(mode, key, rhs, opts)
 end
 
 H.string_find = function(s, pattern, init)
+  init = init or 1
+
   -- Match only start of full string if pattern says so.
   -- This is needed because `string.find()` doesn't do this.
   -- Example: `string.find('(aaa)', '^.*$', 4)` returns `4, 5`
-  if pattern:sub(1, 1) == '^' and init > 1 then return nil end
+  if pattern:sub(1, 1) == '^' then
+    if init > 1 then return nil end
+    return string.find(s, pattern)
+  end
 
-  return string.find(s, pattern, init)
+  -- Handle patterns `x.-y` differently: don't allow `x` be present inside
+  -- `.-` match, just as with `yyy`. This leads to a behavior similar to
+  -- punctuation id (like with `va_`): no covering is possible, only next,
+  -- previous, or nearest.
+  local pattern_first, pattern_second = string.match(pattern, '^(.-)%.%-(.-)$')
+  local is_pattern_special = pattern_first ~= nil and pattern_first:sub(-1) ~= '%'
+  if not is_pattern_special then return string.find(s, pattern, init) end
+
+  -- Ensure no match of `first_pattern` between first and second matches.
+  -- Crucial to first match whole pattern because it helps in some edge cases
+  -- (like `4+.-4+` pattern for `4444` line)
+  local first_start, second_end = string.find(s, pattern, init)
+  if first_start == nil then return end
+
+  local first_end, second_start
+  second_start, second_end =
+    string.find(s:sub(1, second_end), pattern_second .. (pattern_second:sub(-1) == '$' and '' or '$'))
+  first_start, first_end = string.find(s, pattern_first, first_start)
+
+  local next_first_start, next_first_end = first_start, first_end
+  while next_first_end < second_start do
+    first_start, first_end = next_first_start, next_first_end
+    next_first_start, next_first_end = string.find(s, pattern_first, first_start + 1)
+    if next_first_start == nil then break end
+  end
+
+  return first_start, second_end
 end
 
 ---@param arr table List of items. If item is list, consider as set for
@@ -1011,7 +1063,7 @@ end
 -- - Documentation.
 
 -- Notes:
--- - To consecutively evolve `i`textobject, use `count` 2. Example: `2i)`.
+-- - To consecutively evolve `i` textobject, use `count` 2. Example: `2i)`.
 
 -- Test cases
 
@@ -1051,7 +1103,7 @@ end
 -- e  e  e  o  e  e  o  e  o  o  o
 
 -- Evolution of custom textobject using 'a.-b' pattern:
--- vim.b.miniai_config = { custom_textobjects = { ['~'] = { '``.-~~', '^..().-().$' } } }
+-- vim.b.miniai_config = { custom_textobjects = { ['~'] = { '``.-~~', '^..().*().$' } } }
 -- `` ~~ ``
 -- `` ``   ~~    ~~ `` ~~ (try between two `~~`)
 -- `` ~~  `` ~~
@@ -1076,5 +1128,4 @@ end
 -- struct Foo<A, Fn(A) -> bool> { ... }
 -- if (window.matchMedia("(min-width: 180px)").matches) {
 
-MiniAi.setup()
 return MiniAi
