@@ -14,6 +14,7 @@
 ---     - Function call.
 ---     - Function argument (in simple but common cases).
 ---     - Tag.
+---     - Derived from user prompt.
 --- - Motions for jumping to left/right edge of textobject.
 ---
 --- Utilizes same basic ideas about searching object as |mini.surround|, but
@@ -125,21 +126,36 @@ end
 --- Specification is a "composed pattern" (see |MiniAi-algorithm|). ...
 ---
 --- Builtin ones:
---- - Brackets. Open - `i` without whitespace; close - with whitespace. Alias `b`.
---- - Quotes. Select balanced pair (odd + even from start of whole
----   neighborhood). Alias `q`.
+--- - Balanced brackets:
+---     - `(`, `[`, `{`. `a` - around brackets, `i` - inside brackets excluding
+---       edge whitespace.
+---     - `)`, `]`, `}`. `a` - around brackets, `i` - inside brackets.
+---     - `b` - alias for a best region among `)`, `]`, `}`.
+--- - Balanced quotes;
+---     - `"`, `'`, `. Textobject is between odd and even character starting
+---       from whole neighborhood.
+---     - Alias for a best region among `"`, `'`, `.
 --- - Function call. Works in simple but most popular cases. Probably better
 ---   using treesitter textobjects.
 --- - Argument. Same caveats as function call.
 --- - Tag. Same caveats as function call.
+--- - Prompted from user. Can't result into span with two or more right edges.
 --- - All other single character punctuation, digit, or whitespace. Left and
----   right edges should be multiples of the character without character in
----   between. Can't result into covering span, so can't evolve with
----   `config.search_method = 'cover'`.
+---   right edges will be multiples of the character without this character in
+---   between. Includes only right edge in `a` textobject. Can't result into
+---   covering span, so can't evolve with `config.search_method = 'cover'`. To
+---   consecutively select use with `v:count` equal to 2 (like `v2a_`).
 ---
 --- Examples:
 --- - Imitating word: `{ w = { '()()%f[%w]%w+()[ \t]*()' } }`
+--- - Word with camel case support:
+---   `{ c = { { '[A-Z][%l%d]*', '%f[%S][%l%d]+', '%f[%P][%l%d]+' }, '^().*()$' } }`
 --- - Date in 'YYYY-MM-DD' format: `{ d = { '()%d%d%d%d%-%d%d%-%d%d()' } }`
+--- - Lua block string: `{ s = { '%[%[().-()%]%]' } }`
+---
+--- ## Search method
+---
+--- ...
 MiniAi.config = {
   -- Table with textobject id as fields, textobject spec (or function returning
   -- textobject spec) as values
@@ -223,13 +239,18 @@ end
 ---     Default: `false`.
 MiniAi.select_textobject = function(id, ai_type, opts)
   opts = opts or {}
+
+  -- Exit to Normal before getting textobject id. This way invalid id doesn't
+  -- result into staying in current mode (which seems to be more convenient).
+  H.exit_to_normal_mode()
+
   local tobj = MiniAi.find_textobject(id, ai_type, opts)
   if tobj == nil then return end
+
   local set_cursor = function(position) vim.api.nvim_win_set_cursor(0, { position.line, position.col - 1 }) end
   local tobj_is_empty = tobj.left.line > tobj.right.line
     or (tobj.left.line == tobj.right.line and tobj.left.col > tobj.right.col)
 
-  H.exit_visual_mode()
   local vis_mode = opts.vis_mode and vim.api.nvim_replace_termcodes(opts.vis_mode, true, true, true)
     or vim.fn.visualmode()
 
@@ -244,8 +265,10 @@ MiniAi.select_textobject = function(id, ai_type, opts)
       return
     end
 
-    -- Open enough folds to show left and right edges
+    -- Allow setting cursor past line end (allows collapsing multiline region)
     vim.o.virtualedit = 'onemore'
+
+    -- Open enough folds to show left and right edges
     set_cursor(tobj.left)
     vim.cmd('normal! zv')
     set_cursor(tobj.right)
@@ -289,7 +312,10 @@ MiniAi.expr_textobject = function(mode, ai_type)
   if tobj_id == nil then return '' end
 
   -- Fall back to builtin `a`/`i` textobjects in case of invalid id
-  if H.get_textobject_spec(tobj_id) == nil then return ai_type .. tobj_id end
+  if not H.is_valid_textobject_id(tobj_id) then return ai_type .. tobj_id end
+
+  -- Clear cache
+  H.cache = {}
 
   -- Construct call options based on mode
   local reference_region_field, operator_pending, vis_mode = 'nil', 'nil', 'nil'
@@ -377,6 +403,9 @@ MiniAi.expr_motion = function(side)
   local tobj_id = H.user_textobject_id('a')
   if tobj_id == nil then return end
 
+  -- Clear cache
+  H.cache = {}
+
   -- Make expression for moving cursor
   local res = string.format(
     [[<Cmd>lua MiniAi.move_cursor('%s', '%s', 'a', { n_times = %d })<CR>]],
@@ -391,6 +420,10 @@ end
 -- Module default config
 H.default_config = MiniAi.config
 
+-- Cache for various operations
+H.cache = {}
+
+-- Builtin textobjects
 H.builtin_textobjects = {
   -- Use balanced pair for brackets. Use opening ones to possibly remove edge
   -- whitespace from `i` textobject.
@@ -406,6 +439,23 @@ H.builtin_textobjects = {
   ["'"] = { "%b''", '^.().-().$' },
   ['"'] = { '%b""', '^.().-().$' },
   ['`'] = { '%b``', '^.().-().$' },
+  -- Derived from user prompt
+  ['?'] = function()
+    -- Using cache allows for a dot-repeat without another user input
+    if H.cache.prompted_textobject ~= nil then return H.cache.prompted_textobject end
+
+    local left = H.user_input('Left edge')
+    if left == nil or left == '' then return end
+    local right = H.user_input('Right edge')
+    if right == nil or right == '' then return end
+
+    local left_esc, right_esc = vim.pesc(left), vim.pesc(right)
+    local find = ('%s.-%s'):format(left_esc, right_esc)
+    local extract = ('^%s().-()%s$'):format(left_esc, right_esc)
+    local res = { find, extract }
+    H.cache.prompted_textobject = res
+    return res
+  end,
   -- Argument. Probably better to use treesitter-based textobject.
   ['a'] = {
     { '%b()', '%b[]', '%b{}' },
@@ -421,6 +471,10 @@ H.builtin_textobjects = {
   ['t'] = { '<(%w-)%f[^<%w][^<>]->.-</%1>', '^<.->().*()</[^/]->$' },
   -- Quotes
   ['q'] = { { "%b''", '%b""', '%b``' }, '^.().*().$' },
+}
+
+H.ns_id = {
+  input = vim.api.nvim_create_namespace('MiniAiInput'),
 }
 
 -- Helper functionality =======================================================
@@ -505,16 +559,22 @@ H.make_textobject_table = function()
       --   region will be smaller than pattern match. This lead to acceptance
       --   of pattern and the same region will be highlighted again.
       local key_esc = vim.pesc(key)
-      -- Use `%f[]` to have maximum stretch to the left
-      -- Outcome with `_`: '%f[_]_+().-()_+'
-      return { string.format('%%f[%s]%s+().-()%s+', key_esc, key_esc, key_esc) }
+      -- Use `%f[]` to have maximum stretch to the left. Include only right
+      -- edge in `a` textobject. Example outcome with `_`: '%f[_]_+().-()_+'.
+      return { string.format('%%f[%s]%s+()().-()%s+()', key_esc, key_esc, key_esc) }
     end,
   })
+end
+
+H.is_valid_textobject_id = function(id)
+  local textobject_tbl = H.make_textobject_table()
+  return textobject_tbl[id] ~= nil
 end
 
 H.get_textobject_spec = function(id)
   local textobject_tbl = H.make_textobject_table()
   local spec = textobject_tbl[id]
+
   -- Allow function returning spec
   if type(spec) == 'function' then spec = spec() end
 
@@ -837,6 +897,27 @@ H.user_textobject_id = function(ai_type)
   return char
 end
 
+H.user_input = function(prompt, text)
+  -- Register temporary keystroke listener to distinguish between cancel with
+  -- `<Esc>` and immediate `<CR>`.
+  local on_key = vim.on_key or vim.register_keystroke_callback
+  local was_cancelled = false
+  on_key(function(key)
+    if key == vim.api.nvim_replace_termcodes('<Esc>', true, true, true) then was_cancelled = true end
+  end, H.ns_id.input)
+
+  -- Ask for input
+  local opts = { prompt = '(mini.ai) ' .. prompt .. ': ', default = text or '' }
+  -- Use `pcall` to allow `<C-c>` to cancel user input
+  local ok, res = pcall(vim.fn.input, opts)
+
+  -- Stop key listening
+  on_key(nil, H.ns_id.input)
+
+  if not ok or was_cancelled then return end
+  return res
+end
+
 -- Work with Visual mode ------------------------------------------------------
 H.is_visual_mode = function()
   local cur_mode = vim.fn.mode()
@@ -844,9 +925,9 @@ H.is_visual_mode = function()
   return cur_mode == 'v' or cur_mode == 'V' or cur_mode == '\22', cur_mode
 end
 
-H.exit_visual_mode = function()
-  local is_vis, mode = H.is_visual_mode()
-  if is_vis then vim.cmd('normal! ' .. mode) end
+H.exit_to_normal_mode = function()
+  -- '\28\14' is an escaped version of `<C-\><C-n>`
+  vim.cmd('normal! \28\14')
 end
 
 H.get_visual_region = function()
@@ -863,7 +944,11 @@ H.get_visual_region = function()
 end
 
 -- Utilities ------------------------------------------------------------------
-H.message = function(msg) vim.cmd('echomsg ' .. vim.inspect('(mini.ai) ' .. msg)) end
+H.message = function(msg)
+  vim.cmd([[echon '']])
+  vim.cmd('redraw')
+  vim.cmd('echomsg ' .. vim.inspect('(mini.ai) ' .. msg))
+end
 
 H.error = function(msg) error(string.format('(mini.ai) %s', msg), 0) end
 
@@ -914,7 +999,8 @@ H.cartesian_product = function(arr)
 end
 
 -- TODO:
--- - Implement textobject based on user prompt.
+-- - Tests.
+-- - Documentation.
 
 -- Notes:
 -- - To consecutively evolve `i`textobject, use `count` 2. Example: `2i)`.
@@ -953,6 +1039,9 @@ end
 -- aa________bb______cc
 -- 1  2  2  1  2  1  2
 
+-- User prompted textobject:
+-- e  e  e  o  e  e  o  e  o  o  o
+
 -- Evolution of custom textobject using 'a.-b' pattern:
 -- vim.b.miniai_config = { custom_textobjects = { ['~'] = { '``.-~~', '^..().-().$' } } }
 -- `` ~~ ``
@@ -965,6 +1054,9 @@ end
 --
 -- vim.b.miniai_config = { custom_textobjects = { d = { '()%f[%d]%d+()' } } }
 -- 1     10     1000
+--
+-- vim.b.miniai_config = { custom_textobjects = { c = { { '[A-Z][%l%d]*', '%f[%S][%l%d]+', '%f[%P][%l%d]+' }, '^().*()$' } } }
+-- SomeCamelCase startsWithSmall _startsWithPunct
 
 -- Argument textobject:
 -- (  aa  , bb,  cc  ,        dd)
