@@ -155,6 +155,9 @@ end
 ---   covering span, so can't evolve with `config.search_method = 'cover'`. To
 ---   consecutively select use with `v:count` equal to 2 (like `v2a_`).
 ---
+--- Supply non-table input to disable builting textobject.
+--- Example for argument textobject: `{ a = false }`
+---
 --- Lua patterns which are handled specially:
 --- - `%bxx` (`xx` is two identical characters).
 --- - `x.-y` (`x` and `y` are different strings).
@@ -171,7 +174,8 @@ end
 --- ...
 MiniAi.config = {
   -- Table with textobject id as fields, textobject specification (or function
-  -- returning it) as values. See |MiniAi.config|.
+  -- returning it) as values. Use this to disable builtin textobjects.
+  -- See |MiniAi.config|.
   custom_textobjects = nil,
 
   -- Module mappings. Use `''` (empty string) to disable one.
@@ -198,8 +202,8 @@ MiniAi.config = {
 -- Module functionality =======================================================
 --- Find textobject region
 ---
----@param id string Single character string representing textobject id.
 ---@param ai_type string One of `'a'` or `'i'`.
+---@param id string Single character string representing textobject id.
 ---@param opts table|nil Options. Possible fields:
 ---   - <n_lines> - Number of lines within which textobject is searched.
 ---     Default: `config.n_lines` (see |MiniAi.config|).
@@ -217,7 +221,7 @@ MiniAi.config = {
 ---   <left> and <right> for corresponding inclusive edges. Each edge is itself
 ---   a table with `<line>` and `<col>` fields (both start from 1). Note: empty
 ---   region has `left` edge strictly on the right of `right` edge.
-MiniAi.find_textobject = function(id, ai_type, opts)
+MiniAi.find_textobject = function(ai_type, id, opts)
   local tobj_spec = H.get_textobject_spec(id)
   if tobj_spec == nil then return end
 
@@ -228,11 +232,11 @@ MiniAi.find_textobject = function(id, ai_type, opts)
 
   if res == nil then
     local msg = string.format(
-      [[No textobject %s found covering region%s within %d line%s and `config.search_method = '%s'`.]],
+      [[No textobject %s found covering region%s within %d line%s and `search_method = '%s'`.]],
       vim.inspect(ai_type .. id),
-      opts.n_times > 1 and (' %s times'):format(opts.n_times) or '',
+      opts.n_times == 1 and '' or (' %s times'):format(opts.n_times),
       opts.n_lines,
-      opts.n_lines > 1 and 's' or '',
+      opts.n_lines == 1 and '' or 's',
       opts.search_method
     )
     H.message(msg)
@@ -244,10 +248,12 @@ end
 --- Move cursor to edge of textobject
 ---
 ---@param side string One of `'left'` or `'right'`.
----@param id string Single character string representing textobject id.
 ---@param ai_type string One of `'a'` or `'i'`.
+---@param id string Single character string representing textobject id.
 ---@param opts table|nil Same as in |MiniAi.find_textobject()|.
-MiniAi.move_cursor = function(side, id, ai_type, opts)
+---   `opts.n_times` means number of *actual* jumps (important when cursor
+---   already on the potential jump spot).
+MiniAi.move_cursor = function(side, ai_type, id, opts)
   if not (side == 'left' or side == 'right') then H.error([[`side` should be one of 'left' or 'right'.]]) end
   opts = opts or {}
   local init_pos = vim.api.nvim_win_get_cursor(0)
@@ -257,7 +263,7 @@ MiniAi.move_cursor = function(side, id, ai_type, opts)
   -- *actual* jumps. This implements consecutive jumps and has logic of "If
   -- cursor is strictly inside region, move to its side first".
   local new_opts = vim.tbl_deep_extend('force', opts, { n_times = 1 })
-  local tobj_single = MiniAi.find_textobject(id, ai_type, new_opts)
+  local tobj_single = MiniAi.find_textobject(ai_type, id, new_opts)
   if tobj_single == nil then return end
 
   new_opts.n_times = opts.n_times or 1
@@ -269,7 +275,7 @@ MiniAi.move_cursor = function(side, id, ai_type, opts)
   -- in a most common usage (`v:count1 == 1`)
   local pos = tobj_single[side]
   if new_opts.n_times > 1 then
-    local tobj = MiniAi.find_textobject(id, ai_type, new_opts)
+    local tobj = MiniAi.find_textobject(ai_type, id, new_opts)
     if tobj == nil then return end
     pos = tobj[side]
   end
@@ -298,7 +304,7 @@ MiniAi.select_textobject = function(id, ai_type, opts)
   -- result into staying in current mode (which seems to be more convenient).
   H.exit_to_normal_mode()
 
-  local tobj = MiniAi.find_textobject(id, ai_type, opts)
+  local tobj = MiniAi.find_textobject(ai_type, id, opts)
   if tobj == nil then return end
 
   local set_cursor = function(position) vim.api.nvim_win_set_cursor(0, { position.line, position.col - 1 }) end
@@ -428,7 +434,7 @@ MiniAi.expr_motion = function(side)
 
   -- Make expression for moving cursor
   local res = string.format(
-    [[<Cmd>lua MiniAi.move_cursor('%s', '%s', 'a', { n_times = %d })<CR>]],
+    [[<Cmd>lua MiniAi.move_cursor('%s', 'a', '%s', { n_times = %d })<CR>]],
     side,
     vim.fn.escape(tobj_id, "'"),
     vim.v.count1
@@ -447,11 +453,11 @@ H.cache = {}
 H.builtin_textobjects = {
   -- Use balanced pair for brackets. Use opening ones to possibly remove edge
   -- whitespace from `i` textobject.
-  ['('] = { '%b()', '^.%s*().*()%s*.$' },
+  ['('] = { '%b()', '^.%s*().-()%s*.$' },
   [')'] = { '%b()', '^.().*().$' },
-  ['['] = { '%b[]', '^.%s*().*()%s*.$' },
+  ['['] = { '%b[]', '^.%s*().-()%s*.$' },
   [']'] = { '%b[]', '^.().*().$' },
-  ['{'] = { '%b{}', '^.%s*().*()%s*.$' },
+  ['{'] = { '%b{}', '^.%s*().-()%s*.$' },
   ['}'] = { '%b{}', '^.().*().$' },
   ['<'] = { '%b<>', '^.%s*().*()%s*.$' },
   ['>'] = { '%b<>', '^.().*().$' },
@@ -620,6 +626,8 @@ end
 H.find_textobject_region = function(tobj_spec, ai_type, opts)
   local reference_region, n_times, n_lines = opts.reference_region, opts.n_times, opts.n_lines
 
+  if n_times == 0 then return end
+
   -- Find `n_times` matching spans evolving from reference region span
   -- First try to find inside 0-neighborhood
   local neigh = H.get_neighborhood(reference_region, 0)
@@ -629,10 +637,10 @@ H.find_textobject_region = function(tobj_spec, ai_type, opts)
   while cur_n_times < n_times do
     local new_find_res = H.find_best_match(neigh['1d'], tobj_spec, find_res.span, opts)
 
-    -- If didn't find in 0-neighborhood, try extended one.
-    -- Stop if didn't find in extended neighborhood.
+    -- If didn't find in 0-neighborhood, possible try extended one
     if new_find_res.span == nil then
-      if neigh.n_neighbors > 0 then return end
+      -- Stop if no need to extend neighborhood
+      if n_lines == 0 or neigh.n_neighbors > 0 then return end
 
       local found_region = neigh.span_to_region(find_res.span)
       neigh = H.get_neighborhood(reference_region, n_lines)
@@ -1003,33 +1011,25 @@ H.string_find = function(s, pattern, init)
     return string.find(s, pattern)
   end
 
-  -- Handle patterns `x.-y` differently: don't allow `x` be present inside
-  -- `.-` match, just as with `yyy`. This leads to a behavior similar to
-  -- punctuation id (like with `va_`): no covering is possible, only next,
-  -- previous, or nearest.
-  local pattern_first, pattern_second = string.match(pattern, '^(.-)%.%-(.-)$')
-  local is_pattern_special = pattern_first ~= nil and pattern_first:sub(-1) ~= '%'
+  -- Handle patterns `x.-y` differently: make match as small as possible. This
+  -- doesn't allow `x` be present inside `.-` match, just as with `yyy`. Which
+  -- also leads to a behavior similar to punctuation id (like with `va_`): no
+  -- covering is possible, only next, previous, or nearest.
+  local check_left, _, prev = string.find(pattern, '(.)%.%-')
+  local is_pattern_special = check_left ~= nil and prev ~= '%'
   if not is_pattern_special then return string.find(s, pattern, init) end
 
-  -- Ensure no match of `first_pattern` between first and second matches.
-  -- Crucial to first match whole pattern because it helps in some edge cases
-  -- (like `4+.-4+` pattern for `4444` line)
-  local first_start, second_end = string.find(s, pattern, init)
-  if first_start == nil then return end
+  -- Make match as small as possible
+  local left, right = string.find(s, pattern, init)
+  if left == nil then return end
 
-  local first_end, second_start
-  second_start, second_end =
-    string.find(s:sub(1, second_end), pattern_second .. (pattern_second:sub(-1) == '$' and '' or '$'))
-  first_start, first_end = string.find(s, pattern_first, first_start)
-
-  local next_first_start, next_first_end = first_start, first_end
-  while next_first_end < second_start do
-    first_start, first_end = next_first_start, next_first_end
-    next_first_start, next_first_end = string.find(s, pattern_first, first_start + 1)
-    if next_first_start == nil then break end
+  local cur_left, cur_right = left, right
+  while cur_right == right do
+    left, right = cur_left, cur_right
+    cur_left, cur_right = string.find(s, pattern, cur_left + 1)
   end
 
-  return first_start, second_end
+  return left, right
 end
 
 ---@param arr table List of items. If item is list, consider as set for
@@ -1089,6 +1089,7 @@ end
 -- (    ) ( ) [   ] {  } (for `i(`, `i[`, `i{`)
 -- '' "" ``
 -- __ 4444
+-- <b></b>
 
 -- Evolving of quotes (tests for `%bxx` pattern; use with all `search_method`):
 -- '   ' ' ' ' '  '
@@ -1122,6 +1123,10 @@ end
 -- (  aa  , bb,  cc  ,        dd)
 -- f(aaa, g(bbb, ccc), ddd)
 -- (aa) = f(aaaa, g(bbbb), ddd)
+
+-- Tags:
+-- <b><a>xxx</a></b>
+-- <a id=111>xxx</a>
 
 -- Cases from 'wellle/targets.vim':
 -- vector<int> data = { variable1 * variable2, test(variable3, 10) * 15 };
