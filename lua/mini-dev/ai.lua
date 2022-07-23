@@ -13,19 +13,10 @@
 ---     - Balanced quotes.
 ---     - Single character punctuation, digit, or whitespace.
 ---     - Function call.
----     - Function argument (in simple but common cases).
+---     - Function argument.
 ---     - Tag.
 ---     - Derived from user prompt.
 --- - Motions for jumping to left/right edge of textobject.
----
---- What it doesn't (and probably won't) do:
---- - Have special operators to specially handle whitespace (like `I` and `A`
----   in 'targets.vim'). Whitespace handling is assumed to be done inside
----   textobject specification (like `i(` and `i)` handle whitespace differently).
---- - Have "last" and "next" textobject modifiers (like `il` and `in` in
----   'targets.vim'). Either set and use appropriate `config.search_method` or
----   move to the next place and then use textobject. For a quicker movements,
----   see |mini.jump| and |mini.jump2d|.
 ---
 --- Known issues which won't be resolved:
 --- - Search for textobject is done using Lua patterns (regex-like approach).
@@ -38,6 +29,15 @@
 --- structure (like treesitter) will usually provide more precise results. This
 --- module is mostly about creating plain text textobjects which are useful
 --- most of the times (like "inside brackets", "around quotes/underscore", etc.).
+---
+--- What it doesn't (and probably won't) do:
+--- - Have special operators to specially handle whitespace (like `I` and `A`
+---   in 'targets.vim'). Whitespace handling is assumed to be done inside
+---   textobject specification (like `i(` and `i)` handle whitespace differently).
+--- - Have "last" and "next" textobject modifiers (like `il` and `in` in
+---   'targets.vim'). Either set and use appropriate `config.search_method` or
+---   move to the next place and then use textobject. For a quicker movements,
+---   see |mini.jump| and |mini.jump2d|.
 ---
 --- # Setup~
 ---
@@ -71,11 +71,6 @@
 ---@tag MiniAi
 ---@toc_entry Extended a/i textobjects
 
---- Algorithm design
----
---- Utilizes same basic ideas about searching object as |mini.surround|, but
---- has more advanced features.
----
 --- - *Region* - ... .
 --- - *Pattern* - string describing Lua pattern.
 --- - *Span* - interval inside a string. Like `[1, 5]`.
@@ -100,6 +95,67 @@
 ---       `{ '%b()', '^. .* .$' }` and `{ '%b[]', '^. .* .$' }`
 --- - *Span matches composed pattern* if it matches at least one nested
 ---   pattern from expanded composed pattern.
+---
+---@tag MiniAi-glossary
+
+--- Textobject specification has a structure of composed pattern (see
+--- |MiniAi-glossary|) with two differences:
+--- - Last pattern(s) should have even number of empty capture groups denoting
+---   how the last string should be processed to extract `a` or `i` textobject:
+---     - Zero captures mean that whole string represents both `a` and `i`.
+---       Example: 'aaa' will define textobject matching string `xxx` literally.
+---     - Two captures represent `i` textobject inside of them. `a` - whole string.
+---       Example: `x()x()x` defines `a` textobject to be `xxx`, `i` - middle `x`.
+---     - Four captures define `a` textobject inside captures 1 and 4, `i` -
+---       inside captures 2 and 3. Example: `x()()x()x()` defines `a`
+---       textobject to be last `xx`, `i` - middle `x`.
+--- - Allows functions in certain places (enables more complex textobjects in
+---   exchange of increase in computations):
+---     - If specification itself is a function, it should return composed pattern.
+---       Example of simplified variant of textobject for function call with
+---       name taken from user prompt:
+--- >
+---         function()
+---           local left_edge = vim.pesc(vim.fn.input('Function name: '))
+---           return { string.format('%s+%%b()', left_edge), '^.-%(().*()%)$' }
+---         end
+--- <
+---     - If there is a function instead of assumed string pattern, it is
+---       expected to have signature `(line, init)` and behave like
+---       `pattern:find(line, init)`. It should return two numbers representing
+---       span in `line` next after or at `init` (`nil` if there is no such span).
+---       Not allowed as last item (as it should be pattern with captures).
+---       Example of matching only balanced parenthesis with big enough width:
+--- >
+---         {
+---           '%b()',
+---           function(s, init)
+---             if init > 1 or s:len() < 5 then return end
+---             return 1, s:len()
+---           end,
+---           '^.().*().$'
+---         }
+--- >
+--- Other examples:
+--- - One of balanced brackets (used for builtin `b` identifier):
+---   `{ { '%b()', '%b[]', '%b{}' }, '^.().*().$' }`
+--- - Imitating word: `{ '%f[%w]%w+[ \t]*', '^()().*()[ \t]*()$' }`
+--- - Word with camel case support:
+---   `{ { '[A-Z][%l%d]*', '%f[%S][%l%d]+', '%f[%P][%l%d]+' }, '^().*()$' }`
+--- - Date in 'YYYY-MM-DD' format: `{ '()%d%d%d%d%-%d%d%-%d%d()' }`
+--- - Lua block string: `{ '%[%[().-()%]%]' }`
+--- - LaTeX code block: `{ '%$+().-()%$+' }`
+---
+---@tag MiniAi-textobject-specification
+
+--- Algorithm design
+---
+--- Utilizes same basic ideas about searching object as |mini.surround|, but
+--- has more advanced features.
+---
+--- Lua patterns which are handled specially:
+--- - `%bxx` (`xx` is two identical characters).
+--- - `x.-y` (`x` and `y` are different strings).
 ---
 ---@tag MiniAi-algorithm
 
@@ -132,9 +188,23 @@ end
 ---
 --- ## Custom textobjects
 ---
---- Specification is a "composed pattern" (see |MiniAi-algorithm|). ...
----
+--- Each named entry of `config.custom_textobjects` is a textobject with
+--- that identifier and specification (see |MiniAi-textobject-specification|).
+--- They are used to override builtin ones. Supply non-table input to disable
+--- builting textobject. Example:
+--- Example for argument textobject:
+--- >
+---   {
+---     custom_textobjects = {
+---       -- Disables argument textobject
+---       a = false,
+---       -- Now `vax` should select `xxx` and `vix` - middle `x`
+---       x = { 'x()x()x' },
+---     }
+---   }
+--- <
 --- Builtin ones:
+--- TODO: probably, make table with columns 'Id', 'Line', `a`, `i`
 --- - Balanced brackets:
 ---     - `(`, `[`, `{`. `a` - around brackets, `i` - inside brackets excluding
 ---       edge whitespace.
@@ -144,30 +214,18 @@ end
 ---     - `"`, `'`, `. Textobject is between odd and even character starting
 ---       from whole neighborhood.
 ---     - Alias for a best region among `"`, `'`, `.
---- - Function call. Works in simple but most popular cases. Probably better
----   using treesitter textobjects.
---- - Argument. Same caveats as function call.
---- - Tag. Same caveats as function call.
+--- - Function call. Basically some characters followed by a balanced
+---   parenthesis.
+--- - Argument. Region inside balanced brackets (`()`, `{}`, `[]`) between
+---   commas. Accounts for commas inside nested balanced brackets or quotes
+---   (`''`, `""`), but not comments. For more precise results use treesitter.
+--- - Tag. Region within tag edges: `<xxx>...</xxx>`.
 --- - Prompted from user. Can't result into span with two or more right edges.
 --- - All other single character punctuation, digit, or whitespace. Left and
 ---   right edges will be multiples of the character without this character in
 ---   between. Includes only right edge in `a` textobject. Can't result into
 ---   covering span, so can't evolve with `config.search_method = 'cover'`. To
 ---   consecutively select use with `v:count` equal to 2 (like `v2a_`).
----
---- Supply non-table input to disable builting textobject.
---- Example for argument textobject: `{ a = false }`
----
---- Lua patterns which are handled specially:
---- - `%bxx` (`xx` is two identical characters).
---- - `x.-y` (`x` and `y` are different strings).
----
---- Examples:
---- - Imitating word: `{ w = { '()()%f[%w]%w+()[ \t]*()' } }`
---- - Word with camel case support:
----   `{ c = { { '[A-Z][%l%d]*', '%f[%S][%l%d]+', '%f[%P][%l%d]+' }, '^().*()$' } }`
---- - Date in 'YYYY-MM-DD' format: `{ d = { '()%d%d%d%d%-%d%d%-%d%d()' } }`
---- - Lua block string: `{ s = { '%[%[().-()%]%]' } }`
 ---
 --- ## Search method
 ---
@@ -485,9 +543,15 @@ H.builtin_textobjects = {
   -- Argument. Probably better to use treesitter-based textobject.
   ['a'] = {
     { '%b()', '%b[]', '%b{}' },
-    -- Around argument is between comma(s) and edge(s). One comma is included.
-    -- Inner argument - around argument minus comma and "outer" whitespace
-    { ',()%s*()[^,]-()%s*,()', '^.()%s*()[^,]-()%s*().$', '(),%s*()[^,]-()%s*().$', '^.()%s*()[^,]-()%s*,()' },
+    function(s, init)
+      -- Cache separators for strings as they are used multiple times
+      H.cache.tobj_a_seps = H.cache.tobj_a_seps or {}
+      local seps = H.cache.tobj_a_seps[s] or H.get_arg_separators(s)
+      H.cache.tobj_a_seps[s] = seps
+
+      return H.get_arg_next_span(init, seps)
+    end,
+    '^,?%s*().-()%s*,?$',
   },
   -- Brackets
   ['b'] = { { '%b()', '%b[]', '%b{}' }, '^.().*().$' },
@@ -593,10 +657,21 @@ H.make_textobject_table = function()
       --   region will be smaller than pattern match. This lead to acceptance
       --   of pattern and the same region will be highlighted again.
       local key_esc = vim.pesc(key)
-      -- Use `%f[]` to have maximum stretch to the left. Include only left (not
-      -- right, because it helps in edge cases like) edge in `a` textobject.
-      -- Example outcome with `_`: '()%f[_]_+().-()()_+'.
-      return { string.format('()%%f[%s]%s+().-()()%s+', key_esc, key_esc, key_esc) }
+      local function_pattern = string.format('^%s+', key_esc)
+      -- Use `%f[]` to have maximum stretch to the left. Include only right
+      -- edge in `a` textobject.
+      return {
+        -- Example outcome with `_`: '%f[_]_+.-_+'.
+        string.format('%%f[%s]%s+.-%s+', key_esc, key_esc, key_esc),
+        -- Use function to exclude left edge (no way of doing it with
+        -- patterns). This allows consecutive application (like `va_`, `a_`).
+        function(s, init)
+          if init > 1 then return nil end
+          local _, right = string.find(s, function_pattern)
+          return right + 1, s:len()
+        end,
+        string.format('^().-()%s+$', key_esc),
+      }
     end,
   })
 end
@@ -674,6 +749,65 @@ H.get_default_opts = function()
   }
 end
 
+-- Work with argument textobject ----------------------------------------------
+H.get_arg_separators = function(s)
+  if s:len() <= 2 then return {} end
+
+  -- Get all commas
+  local commas = {}
+  s:gsub('(),', function(x) table.insert(commas, x) end)
+  if #commas == 0 then return { 2, s:len() - 1 } end
+
+  -- Remove commas that are in "forbidden" spans: inside brackets or quotes
+  local inner_s, forbidden = s:sub(2, -2), {}
+  local add_to_forbidden = function(l, r)
+    if H.is_point_inside_spans(l + 1, forbidden) or H.is_point_inside_spans(r, forbidden) then return end
+    table.insert(forbidden, { l + 1, r })
+  end
+
+  -- First check for quotes, then for brackets. This way false positive bracket
+  -- match with edge inside quotes won't be added.
+  inner_s:gsub('()".-"()', add_to_forbidden)
+  inner_s:gsub("()'.-'()", add_to_forbidden)
+  inner_s:gsub('()%b()()', add_to_forbidden)
+  inner_s:gsub('()%b[]()', add_to_forbidden)
+  inner_s:gsub('()%b{}()', add_to_forbidden)
+
+  local res = vim.tbl_filter(function(x) return not H.is_point_inside_spans(x, forbidden) end, commas)
+
+  -- Append edge separators (assumes first and last characters are from
+  -- brackets). This allows single argument and ensures at least 2 elements.
+  table.insert(res, 1, 2)
+  table.insert(res, s:len() - 1)
+  return res
+end
+
+H.get_arg_next_span = function(init, seps)
+  local n = #seps
+  if n < 2 then return nil end
+
+  -- Process no comma separators
+  if n == 2 then
+    if init > 1 then return nil end
+    return seps[1], seps[2]
+  end
+
+  -- Returns span fully on right of `init`, `nil` otherwise
+  -- For first argument return it with right comma (if it is not empty).
+  -- For all other - with left comma. Comma is included not the other way
+  -- around because there are problems with empty arguments and iterating over
+  -- spans (it gets next span by assigning `init` to `prev_left + 1`, which is
+  -- a problem if `prev_left == prev_right`).
+  -- Assumes `seps` is sorted increasingly.
+  if init <= seps[1] and seps[1] < seps[2] then return seps[1], seps[2] end
+  for i = 2, n - 2 do
+    if init <= seps[i] then return seps[i], seps[i + 1] - 1 end
+  end
+  if init <= seps[n - 1] then return seps[n - 1], seps[n] end
+
+  return nil
+end
+
 -- Work with matching spans ---------------------------------------------------
 ---@param line string
 ---@param composed_pattern table
@@ -706,10 +840,13 @@ H.iterate_matched_spans = function(line, nested_pattern, f)
   local process
   process = function(level, level_line, level_offset)
     local pattern = nested_pattern[level]
-    local is_same_balanced = pattern:match('^%%b(.)%1$') ~= nil
+    local next_span = function(s, init) return H.string_find(s, pattern, init) end
+    if type(pattern) == 'function' then next_span = pattern end
+
+    local is_same_balanced = type(pattern) == 'string' and pattern:match('^%%b(.)%1$') ~= nil
     local init = 1
     while init <= level_line:len() do
-      local left, right = H.string_find(level_line, pattern, init)
+      local left, right = next_span(level_line, init)
       if left == nil then break end
 
       if level == max_level then
@@ -803,9 +940,20 @@ H.span_distance = function(span_1, span_2, search_method)
   end
 end
 
+H.is_point_inside_spans = function(point, spans)
+  for _, span in ipairs(spans) do
+    if span[1] <= point and point <= span[2] then return true end
+  end
+  return false
+end
+
 -- Work with Lua patterns -----------------------------------------------------
-H.extract_span = function(s, extract_pattern, tobj_type)
+H.extract_span = function(s, extract_pattern, ai_type)
   local positions = { s:match(extract_pattern) }
+
+  if #positions == 1 and type(positions[1]) == 'string' then
+    return ({ a = { left = 1, right = s:len() }, i = { left = 1, right = s:len() } })[ai_type]
+  end
 
   local is_all_numbers = true
   for _, pos in ipairs(positions) do
@@ -832,7 +980,7 @@ H.extract_span = function(s, extract_pattern, tobj_type)
     }
   end
 
-  return ai_spans[tobj_type]
+  return ai_spans[ai_type]
 end
 
 -- Work with cursor neighborhood ----------------------------------------------
@@ -1059,6 +1207,9 @@ H.cartesian_product = function(arr)
 end
 
 -- TODO:
+-- - Reconsider using exclusive right end of region. This might enable working
+--   Operator-pending mode on single character textobjects (`cia` for `f(x)`
+--   when on cursor is on `x`). Also makes easier indication of empty region.
 -- - Tests.
 -- - Documentation.
 
@@ -1096,7 +1247,7 @@ end
 -- ' '  " ' ' "   ' '
 
 -- Evolving of default textobjects:
--- aa_bb_cc__dd__
+-- aa_bb_cc_____dd__
 -- aa________bb______cc
 -- 1  2  2  1  2  1  2
 
@@ -1119,10 +1270,14 @@ end
 -- vim.b.miniai_config = { custom_textobjects = { c = { { '[A-Z][%l%d]*', '%f[%S][%l%d]+', '%f[%P][%l%d]+' }, '^().*()$' } } }
 -- SomeCamelCase startsWithSmall _startsWithPunct
 
+-- (a) (aa) (aaa)
+
 -- Argument textobject:
 -- (  aa  , bb,  cc  ,        dd)
 -- f(aaa, g(bbb, ccc), ddd)
 -- (aa) = f(aaaa, g(bbbb), ddd)
+-- NOTE: there is ambiguity when cursor is on the last comma. The shortest one
+-- among last two arguments is selected.
 
 -- Tags:
 -- <b><a>xxx</a></b>
