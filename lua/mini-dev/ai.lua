@@ -269,22 +269,24 @@ MiniAi.config = {
 ---     is done with reference region being previous found textobject region.
 ---     Default: 1.
 ---   - <reference_region> - Table describing region to try to cover.
----     Fields: <left> and <right> for start and end positions. Each position
----     is also a table with line <line> and columns <col> (both start at 1).
----     Default: single cell region describing cursor position.
+---     Fields: <left> and <right> for start and end positions (<right> might
+---     be `nil` to describe empty region). Each position is also a table with
+---     line <line> and columns <col> (both start at 1).
+---     Default: empty region at cursor position.
 ---   - <search_method> - Search method. Default: `config.search_method`.
 ---
 ---@return table|nil Table describing region of textobject or `nil` if no
 ---   textobject was consecutively found `opts.n_times` times. Table has fields
----   <left> and <right> for corresponding inclusive edges. Each edge is itself
----   a table with `<line>` and `<col>` fields (both start from 1). Note: empty
----   region has `left` edge strictly on the right of `right` edge.
+---   <left> and <right> for corresponding inclusive edges (<right> might be
+---   `nil` if region is empty). Each edge is itself a table with `<line>` and
+---   `<col>` fields (both start from 1).
 MiniAi.find_textobject = function(ai_type, id, opts)
   local tobj_spec = H.get_textobject_spec(id)
   if tobj_spec == nil then return end
 
   if not (ai_type == 'a' or ai_type == 'i') then H.error([[`ai_type` should be one of 'a' or 'i'.]]) end
   opts = vim.tbl_deep_extend('force', H.get_default_opts(), opts or {})
+  H.validate_search_method(opts.search_method)
 
   local res = H.find_textobject_region(tobj_spec, ai_type, opts)
 
@@ -324,6 +326,9 @@ MiniAi.move_cursor = function(side, ai_type, id, opts)
   local tobj_single = MiniAi.find_textobject(ai_type, id, new_opts)
   if tobj_single == nil then return end
 
+  -- Allow empty region
+  tobj_single.right = tobj_single.right or tobj_single.left
+
   new_opts.n_times = opts.n_times or 1
   if (init_pos[1] == tobj_single[side].line) and (init_pos[2] == tobj_single[side].col - 1) then
     new_opts.n_times = new_opts.n_times + 1
@@ -335,6 +340,7 @@ MiniAi.move_cursor = function(side, ai_type, id, opts)
   if new_opts.n_times > 1 then
     local tobj = MiniAi.find_textobject(ai_type, id, new_opts)
     if tobj == nil then return end
+    tobj.right = tobj.right or tobj.left
     pos = tobj[side]
   end
 
@@ -347,13 +353,13 @@ end
 ---
 --- Does nothing if no region is found.
 ---
----@param id string Single character string representing textobject id.
 ---@param ai_type string One of `'a'` or `'i'`.
+---@param id string Single character string representing textobject id.
 ---@param opts table|nil Same as in |MiniAi.find_textobject()|. Extra fields:
 ---   - <vis_mode> - One of `'v'`, `'V'`, `'<C-v>'`. Default: Latest visual mode.
 ---   - <operator_pending> - Whether selection is for Operator-pending mode.
----     Default: `false`.
-MiniAi.select_textobject = function(id, ai_type, opts)
+---     Used in that mode's mappings, shouldn't be used directly. Default: `false`.
+MiniAi.select_textobject = function(ai_type, id, opts)
   if H.is_disabled() then return end
 
   opts = opts or {}
@@ -366,11 +372,14 @@ MiniAi.select_textobject = function(id, ai_type, opts)
   if tobj == nil then return end
 
   local set_cursor = function(position) vim.api.nvim_win_set_cursor(0, { position.line, position.col - 1 }) end
-  local tobj_is_empty = tobj.left.line > tobj.right.line
-    or (tobj.left.line == tobj.right.line and tobj.left.col > tobj.right.col)
 
-  local vis_mode = opts.vis_mode and vim.api.nvim_replace_termcodes(opts.vis_mode, true, true, true)
-    or vim.fn.visualmode()
+  -- Allow empty regions
+  local tobj_is_empty = tobj.right == nil
+  tobj.right = tobj.right or tobj.left
+
+  local prev_vis_mode = vim.fn.visualmode()
+  prev_vis_mode = prev_vis_mode == '' and 'v' or prev_vis_mode
+  local vis_mode = opts.vis_mode and vim.api.nvim_replace_termcodes(opts.vis_mode, true, true, true) or prev_vis_mode
 
   -- Allow going past end of line in order to collapse multiline regions
   local cache_virtualedit = vim.o.virtualedit
@@ -393,20 +402,16 @@ MiniAi.select_textobject = function(id, ai_type, opts)
     vim.cmd('normal! zv')
 
     vim.cmd('normal! ' .. vis_mode)
+    set_cursor(tobj.left)
 
-    if not tobj_is_empty then
-      set_cursor(tobj.left)
-      return
-    end
-
-    if opts.operator_pending then
+    if tobj_is_empty and opts.operator_pending then
       -- Add single space (without triggering events) and visually select it.
       -- Seems like the only way to make `ci)` and `di)` move inside empty
       -- brackets. Original idea is from 'wellle/targets.vim'.
       vim.o.eventignore = 'all'
 
       -- First escape from previously started Visual mode
-      vim.cmd([[silent! execute "normal! \<Esc>a \<Esc>v"]])
+      vim.cmd([[silent! execute "normal! \<Esc>i \<Esc>v"]])
     end
   end)
 
@@ -458,8 +463,8 @@ MiniAi.expr_textobject = function(mode, ai_type)
   local res = '<Cmd>lua MiniAi.select_textobject('
     .. string.format(
       [['%s', '%s', { n_times = %d, reference_region = %s, operator_pending = %s, vis_mode = %s }]],
-      vim.fn.escape(tobj_id, "'"),
       ai_type,
+      vim.fn.escape(tobj_id, "'"),
       vim.v.count1,
       reference_region_field,
       operator_pending,
@@ -727,7 +732,7 @@ H.find_textobject_region = function(tobj_spec, ai_type, opts)
   end
 
   -- Extract local (with respect to best matched span) span
-  local s = neigh['1d']:sub(find_res.span.left, find_res.span.right)
+  local s = neigh['1d']:sub(find_res.span.left, find_res.span.right - 1)
   local extract_pattern = find_res.nested_pattern[#find_res.nested_pattern]
   local local_span = H.extract_span(s, extract_pattern, ai_type)
 
@@ -740,11 +745,11 @@ end
 H.get_default_opts = function()
   local config = H.get_config()
   local cur_pos = vim.api.nvim_win_get_cursor(0)
-  cur_pos = { line = cur_pos[1], col = cur_pos[2] + 1 }
   return {
     n_lines = config.n_lines,
     n_times = 1,
-    reference_region = { left = cur_pos, right = cur_pos },
+    -- Empty region at cursor position
+    reference_region = { left = { line = cur_pos[1], col = cur_pos[2] + 1 } },
     search_method = config.search_method,
   }
 end
@@ -850,7 +855,7 @@ H.iterate_matched_spans = function(line, nested_pattern, f)
       if left == nil then break end
 
       if level == max_level then
-        local found_match = { left = left + level_offset, right = right + level_offset }
+        local found_match = H.new_span(left + level_offset, right + level_offset)
         local found_match_id = string.format('%s_%s', found_match.left, found_match.right)
         if not visited[found_match_id] then
           f(found_match)
@@ -871,6 +876,9 @@ H.iterate_matched_spans = function(line, nested_pattern, f)
 
   process(1, line, 0)
 end
+
+-- NOTE: spans are end-exclusive to allow empty spans via `left == right`
+H.new_span = function(left, right) return { left = left, right = right == nil and left or (right + 1) } end
 
 ---@param candidate table Candidate span to test agains `current`.
 ---@param current table|nil Current best span.
@@ -910,8 +918,16 @@ H.is_better_span = function(candidate, current, reference, opts)
   end
 end
 
+--stylua: ignore
 H.is_span_covering = function(span, span_to_cover)
   if span == nil or span_to_cover == nil then return false end
+  if span.left == span.right then
+    return (span.left == span_to_cover.left) and (span_to_cover.right == span.right)
+  end
+  if span_to_cover.left == span_to_cover.right then
+    return (span.left <= span_to_cover.left) and (span_to_cover.right < span.right)
+  end
+
   return (span.left <= span_to_cover.left) and (span_to_cover.right <= span.right)
 end
 
@@ -952,7 +968,8 @@ H.extract_span = function(s, extract_pattern, ai_type)
   local positions = { s:match(extract_pattern) }
 
   if #positions == 1 and type(positions[1]) == 'string' then
-    return ({ a = { left = 1, right = s:len() }, i = { left = 1, right = s:len() } })[ai_type]
+    if s:len() == 0 then return H.new_span(0, 0) end
+    return H.new_span(1, s:len())
   end
 
   local is_all_numbers = true
@@ -969,15 +986,9 @@ H.extract_span = function(s, extract_pattern, ai_type)
 
   local ai_spans
   if #positions == 2 then
-    ai_spans = {
-      a = { left = 1, right = s:len() },
-      i = { left = positions[1], right = positions[2] - 1 },
-    }
+    ai_spans = { a = H.new_span(1, s:len()), i = H.new_span(positions[1], positions[2] - 1) }
   else
-    ai_spans = {
-      a = { left = positions[1], right = positions[4] - 1 },
-      i = { left = positions[2], right = positions[3] - 1 },
-    }
+    ai_spans = { a = H.new_span(positions[1], positions[4] - 1), i = H.new_span(positions[2], positions[3] - 1) }
   end
 
   return ai_spans[ai_type]
@@ -997,9 +1008,10 @@ H.get_neighborhood = function(reference_region, n_neighbors)
   end
   n_neighbors = n_neighbors or 0
 
-  -- '2d neighborhood': position is determined by line and column
-  local line_start = math.max(1, reference_region.left.line - n_neighbors)
-  local line_end = math.min(vim.api.nvim_buf_line_count(0), reference_region.right.line + n_neighbors)
+  -- Compute '2d neighborhood' of (possibly empty) region
+  local left_line, right_line = reference_region.left.line, (reference_region.right or reference_region.left).line
+  local line_start = math.max(1, left_line - n_neighbors)
+  local line_end = math.min(vim.api.nvim_buf_line_count(0), right_line + n_neighbors)
   local neigh2d = vim.api.nvim_buf_get_lines(0, line_start - 1, line_end, false)
   -- Append 'newline' character to distinguish between lines in 1d case
   for k, v in pairs(neigh2d) do
@@ -1034,15 +1046,22 @@ H.get_neighborhood = function(reference_region, n_neighbors)
   end
 
   -- Convert 2d region to 1d span
-  local region_to_span =
-    function(region) return { left = pos_to_offset(region.left), right = pos_to_offset(region.right) } end
+  local region_to_span = function(region)
+    local is_empty = region.right == nil
+    local right = region.right or region.left
+    return { left = pos_to_offset(region.left), right = pos_to_offset(right) + (is_empty and 0 or 1) }
+  end
 
   -- Convert 1d span to 2d region
   local span_to_region = function(span)
     -- NOTE: this might lead to outside of line positions due to added `\n` at
     -- the end of lines in 1d-neighborhood. However, this is crucial for
     -- allowing `i` textobjects to collapse multiline selections.
-    return { left = offset_to_pos(span.left), right = offset_to_pos(span.right) }
+    local res = { left = offset_to_pos(span.left) }
+
+    -- Convert empty span to empty region
+    if span.left < span.right then res.right = offset_to_pos(span.right - 1) end
+    return res
   end
 
   return {
@@ -1276,12 +1295,13 @@ end
 -- (  aa  , bb,  cc  ,        dd)
 -- f(aaa, g(bbb, ccc), ddd)
 -- (aa) = f(aaaa, g(bbbb), ddd)
--- NOTE: there is ambiguity when cursor is on the last comma. The shortest one
--- among last two arguments is selected.
+-- NOTE: there is ambiguity when cursor is on the first comma. The shortest one
+-- among first two arguments is selected.
 
 -- Tags:
 -- <b><a>xxx</a></b>
 -- <a id=111>xxx</a>
+-- <a></a> <a></a>
 
 -- Cases from 'wellle/targets.vim':
 -- vector<int> data = { variable1 * variable2, test(variable3, 10) * 15 };
