@@ -1,5 +1,6 @@
 require('mini.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 require('mini.starter').setup()
+vim.cmd([[autocmd User MiniStarterOpened setlocal fillchars=eob:\ ]])
 
 require('mini.statusline').setup({
   content = {
@@ -58,4 +59,6 @@ vim.defer_fn(function()
   require('mini.surround').setup({ search_method = 'cover_or_next' })
   require('mini.test').setup()
   require('mini.trailspace').setup()
+
+  require('mini-dev.ai').setup()
 end, 0)

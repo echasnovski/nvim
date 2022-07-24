@@ -49,8 +49,8 @@ end
 -- Use colorscheme later when its plugin is enabled
 -- Use `nested` to allow `ColorScheme` event
 -- vim.cmd([[au VimEnter * nested ++once colorscheme minischeme]])
-vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#293030', '#D0D0D0', 50) })]])
--- vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#D0D0D0', '#293030', 90) })]])
+vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#0A2A2A', '#D0D0D0', 50) })]])
+-- vim.cmd([[au VimEnter * nested ++once lua require('mini.base16').setup({ palette = require('mini.base16').mini_palette('#C0D2D2', '#262626', 80) })]])
 
 -- Other interesting color schemes:
 -- - 'morhetz/gruvbox'
