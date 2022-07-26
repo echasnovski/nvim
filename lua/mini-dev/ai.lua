@@ -12,9 +12,10 @@
 ---     - Different search methods (see |MiniAi.config|).
 ---     - Consecutive application (update selection without leaving Visual mode).
 ---     - Customization via Lua patterns or functions.
+---     - Aliases for multiple textobjects.
 --- - Comprehensive builtin textobjects (see more in |MiniAi-textobject-builtin|):
----     - Balanced brackets (with and without whitespace).
----     - Balanced quotes.
+---     - Balanced brackets (with and without whitespace) plus alias.
+---     - Balanced quotes plus alias all of them.
 ---     - Single character punctuation, digit, or whitespace.
 ---     - Function call.
 ---     - Function argument.
@@ -104,12 +105,21 @@
 ---   `[8, 10]` match first pattern but not second. All other combinations of
 ---   `(` and `)` don't match first pattern (not balanced)
 --- - *Composed pattern*: array with each element describing possible pattern
----   at that place. Elements can be arrays or string patterns. Composed pattern
----   basically defines all possible combinations of nested pattern (their
----   cartesian product). Example:
----     Composed pattern: `{{'%b()', '%b[]'}, '^. .* .$'}`
----     Composed pattern expanded into equivalent array of nested patterns:
----       `{ '%b()', '^. .* .$' }` and `{ '%b[]', '^. .* .$' }`
+---   (or array of them) at that place. Elements can be arrays or string
+---   patterns. Composed pattern basically defines all possible combinations of
+---   nested pattern (their cartesian product). Example:
+---     1. Composed pattern: `{{'%b()', '%b[]'}, '^. .* .$'}`
+---        Composed pattern expanded into equivalent array of nested patterns:
+---         `{ '%b()', '^. .* .$' }` and `{ '%b[]', '^. .* .$' }`
+---        *Description*: either balanced `()` or balanced `[]` but both with
+---        inner edge space.
+---     2. Composed pattern:
+---        `{ { { '%b()', '^. .* .$' }, { '%b[]', '^.[^ ].*[^ ].$' } }, '.....' }`
+---        Composed pattern expanded into equivalent array of nested patterns:
+---        `{ '%b()', '^. .* .$', '.....' }` and
+---        `{ '%b[]', '^.[^ ].*[^ ].$', '.....' }`
+---        *Description*: either "balanced `()` with inner edge space" or
+---        "balanced `[]` with no inner edge space", both with 5 or more characters.
 --- - *Span matches composed pattern* if it matches at least one nested
 ---   pattern from expanded composed pattern.
 ---
@@ -170,15 +180,26 @@
 --- More examples:
 --- - Pair of balanced brackets from set (used for builtin `b` identifier):
 ---   `{ { '%b()', '%b[]', '%b{}' }, '^.().*().$' }`
---- - Imitating word: `{ '%f[%w]%w+[ \t]*', '^()().*()[ \t]*()$' }`
---- - Word with camel case support:
----   `{ { '[A-Z][%l%d]*', '%f[%S][%l%d]+', '%f[%P][%l%d]+' }, '^().*()$' }`
---- - Date in 'YYYY-MM-DD' format: `{ '()%d%d%d%d%-%d%d%-%d%d()' }`
+--- - Imitate word ignoring digits and punctuation (supports only Latin alphabet):
+---   `{ '()()%f[%w]%w+()[ \t]*()' }`
+--- - Word with camel case support (also supports only Latin alphabet):
+---   `{`
+---     `{`
+---       `'%u[%l%d]+%f[^%l%d]',`
+---       `'%f[%S][%l%d]+%f[^%l%d]',`
+---       `'%f[%P][%l%d]+%f[^%l%d]',`
+---       `'^[%l%d]+%f[^%l%d]',`
+---     `},`
+---     `'^().*()$'`
+---   `}`
+--- - Date in 'YYYY-MM-DD' format:
+---   `{ '()%d%d%d%d%-%d%d%-%d%d()' }`
+--- - Textobject with left and right edges consisting from as many same
+---   characters as there is and both edges should be included in `a` textobject:
+---     - LaTeX code block: `{ '%f[%$]%$+()[^%$]-()%$+%f[^%$]' }`
+---     - Markdown `*` emphasis: `{ '%f[%*]%*+()[^%*]-()%*+%f[^%*]' }`
+---     - Markdown `_` emphasis: `{ '%f[_]_+()[^_]-()_+%f[^_]' }`
 --- - Lua block string: `{ '%[%[().-()%]%]' }`
---- - LaTeX code block: `{ '%f[%$]%$+()[^%$].-()%$+' }`
---- - Markdown emphasis:
----   `{ { '%*().-()%*', '%*%*().-()%*%*' } }` for `*`
----   `{ { '_().-()_', '__().-()__' } }` for `_`
 ---
 ---@tag MiniAi-textobject-specification
 
@@ -273,8 +294,8 @@ end
 ---   -- Example of specification useful for Markdown files:
 ---   vim.b.miniai_config = {
 ---     custom_textobjects = {
----       ['*'] = { { '%*().-()%*', '%*%*().-()%*%*' } },
----       ['_'] = { { '_().-()_', '__().-()__' } },
+---       ['*'] = { '%f[%*]%*+()[^%*]-()%*+%f[^%*]' },
+---       ['_'] = { '%f[_]_+()[^_]-()_+%f[^_]' },
 ---     },
 ---   }
 --- <
@@ -284,9 +305,8 @@ end
 ---
 --- ...
 MiniAi.config = {
-  -- Table with textobject id as fields, textobject specification (or function
-  -- returning it) as values. Use this to disable builtin textobjects.
-  -- See |MiniAi.config|.
+  -- Table with textobject id as fields, textobject specification as values.
+  -- Use this to disable builtin textobjects. See |MiniAi.config|.
   custom_textobjects = nil,
 
   -- Module mappings. Use `''` (empty string) to disable one.
@@ -324,12 +344,13 @@ MiniAi.config = {
 ---   - <n_times> - Number of times to perform a consecutive search. Each one
 ---     is done with reference region being previous found textobject region.
 ---     Default: 1.
----   - <reference_region> - region to try to cover (see |MiniAi-glossary|).
+---   - <reference_region> - region to try to cover (see |MiniAi-glossary|). It
+---     is guaranteed that output region will not be inside or equal to this one.
 ---     Default: empty region at cursor position.
 ---   - <search_method> - Search method. Default: `config.search_method`.
 ---
----@return table|nil Region of textobject or `nil` if no textobject was
----   consecutively found `opts.n_times` times.
+---@return table|nil Region of textobject or `nil` if no textobject different
+---   from `opts.reference_region` was consecutively found `opts.n_times` times.
 MiniAi.find_textobject = function(ai_type, id, opts)
   if not (ai_type == 'a' or ai_type == 'i') then H.error([[`ai_type` should be one of 'a' or 'i'.]]) end
   opts = vim.tbl_deep_extend('force', H.get_default_opts(), opts or {})
@@ -590,9 +611,7 @@ H.builtin_textobjects = {
     if right == nil or right == '' then return end
 
     local left_esc, right_esc = vim.pesc(left), vim.pesc(right)
-    local find = ('%s.-%s'):format(left_esc, right_esc)
-    local extract = '^.().-().$'
-    local res = { find, extract }
+    local res = { string.format('%s().-()%s', left_esc, right_esc) }
     H.cache.prompted_textobject = res
     return res
   end,
@@ -707,27 +726,11 @@ H.make_textobject_table = function()
   return setmetatable(textobjects, {
     __index = function(_, key)
       if not (type(key) == 'string' and string.find(key, '^[%p%s%d]$')) then return end
-      -- Include both sides in `a` textobject because:
-      -- - This feels more coherent and leads to less code.
-      -- - There are issues with evolving in Visual mode because reference
-      --   region will be smaller than pattern match. This lead to acceptance
-      --   of pattern and the same region will be highlighted again.
       local key_esc = vim.pesc(key)
-      local function_pattern = string.format('^%s+', key_esc)
-      -- Use `%f[]` to have maximum stretch to the left. Include only right
-      -- edge in `a` textobject.
-      return {
-        -- Example outcome with `_`: '%f[_]_+.-_+'.
-        string.format('%%f[%s]%s+.-%s+', key_esc, key_esc, key_esc),
-        -- Use function to exclude left edge (no way of doing it with
-        -- patterns). This allows consecutive application (like `va_`, `a_`).
-        function(s, init)
-          if init > 1 then return nil end
-          local _, right = string.find(s, function_pattern)
-          return right + 1, s:len()
-        end,
-        string.format('^().-()%s+$', key_esc),
-      }
+      -- Use `%f[]` to ensure maximum stretch in both directions. Include only
+      -- right edge in `a` textobject.
+      -- Example output: '_()()[^_]-()_+%f[^_]()'
+      return { string.format('%s()()[^%s]-()%s+%%f[^%s]()', key_esc, key_esc, key_esc, key_esc) }
     end,
   })
 end
@@ -781,35 +784,61 @@ H.find_textobject_region = function(tobj_spec, ai_type, opts)
   -- Find `n_times` matching spans evolving from reference region span
   -- First try to find inside 0-neighborhood
   local neigh = H.get_neighborhood(reference_region, 0)
-  local find_res = { span = neigh.region_to_span(reference_region) }
+  local reference_span = neigh.region_to_span(reference_region)
 
-  local cur_n_times = 0
-  while cur_n_times < n_times do
-    local new_find_res = H.find_best_match(neigh['1d'], tobj_spec, find_res.span, opts)
+  local find_next = function(cur_reference_span)
+    local res = H.find_best_match(neigh['1d'], tobj_spec, cur_reference_span, opts)
 
-    -- If didn't find in 0-neighborhood, possible try extended one
-    if new_find_res.span == nil then
+    -- If didn't find in 0-neighborhood, possibly try extend one
+    if res.span == nil then
       -- Stop if no need to extend neighborhood
-      if n_lines == 0 or neigh.n_neighbors > 0 then return end
+      if n_lines == 0 or neigh.n_neighbors > 0 then return {} end
 
-      local found_region = neigh.span_to_region(find_res.span)
+      -- Update data with respect to new neighborhood
+      local cur_reference_region = neigh.span_to_region(cur_reference_span)
       neigh = H.get_neighborhood(reference_region, n_lines)
-      find_res = { span = neigh.region_to_span(found_region) }
-    else
-      find_res = new_find_res
-      cur_n_times = cur_n_times + 1
+      reference_span = neigh.region_to_span(reference_region)
+      cur_reference_span = neigh.region_to_span(cur_reference_region)
+
+      -- Recompute based on new neighborhood
+      res = H.find_best_match(neigh['1d'], tobj_spec, cur_reference_span, opts)
     end
+
+    return res
   end
 
-  -- Extract local (with respect to best matched span) span
-  local s = neigh['1d']:sub(find_res.span.left, find_res.span.right - 1)
-  local extract_pattern = find_res.nested_pattern[#find_res.nested_pattern]
-  local local_span = H.extract_span(s, extract_pattern, ai_type)
+  local find_res = { span = reference_span }
+  for _ = 1, n_times do
+    find_res = find_next(find_res.span)
+    if find_res.span == nil then return end
+  end
 
-  -- Convert local span to region
-  local offset = find_res.span.left - 1
-  local found_span = { left = local_span.left + offset, right = local_span.right + offset }
-  return neigh.span_to_region(found_span)
+  -- Extract final span
+  local extract = function(span, nested_pattern)
+    -- First extract local (with respect to best matched span) span
+    local s = neigh['1d']:sub(span.left, span.right - 1)
+    local extract_pattern = nested_pattern[#nested_pattern]
+    local local_span = H.extract_span(s, extract_pattern, ai_type)
+
+    -- Convert local span to global
+    local offset = span.left - 1
+    return { left = local_span.left + offset, right = local_span.right + offset }
+  end
+
+  local final_span = extract(find_res.span, find_res.nested_pattern)
+
+  -- Ensure that output region is different from reference. This is needed if
+  -- final span was shrinked during extraction and resulted into equal to input
+  -- reference. This powers consecutive application of most `i` textobjects.
+  if H.is_span_covering(reference_span, final_span) then
+    find_res = find_next(find_res.span)
+    if find_res.span == nil then return end
+    final_span = extract(find_res.span, find_res.nested_pattern)
+    if H.is_span_covering(reference_span, final_span) then return end
+  end
+
+  -- Convert to region
+  return neigh.span_to_region(final_span)
 end
 
 H.get_default_opts = function()
@@ -1070,14 +1099,6 @@ end
 ---   start line and after end line.
 ---@private
 H.get_neighborhood = function(reference_region, n_neighbors)
-  if reference_region == nil then
-    -- Use region covering cursor position by default
-    local cur_pos = vim.api.nvim_win_get_cursor(0)
-    cur_pos = { line = cur_pos[1], col = cur_pos[2] + 1 }
-    reference_region = { left = cur_pos, right = cur_pos }
-  end
-  n_neighbors = n_neighbors or 0
-
   -- Compute '2d neighborhood' of (possibly empty) region
   local left_line, right_line = reference_region.left.line, (reference_region.right or reference_region.left).line
   local line_start = math.max(1, left_line - n_neighbors)
@@ -1301,9 +1322,6 @@ end
 --   when on cursor is on `x`). Also makes easier indication of empty region.
 -- - Tests.
 -- - Documentation.
-
--- Notes:
--- - To consecutively evolve `i` textobject, use `count` 2. Example: `2i)`.
 
 -- Test cases
 
