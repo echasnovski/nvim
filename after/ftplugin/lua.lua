@@ -5,6 +5,7 @@ vim.api.nvim_buf_set_keymap(0, 'i', '<M-i>', ' = ', { noremap = true })
 -- Using `defer_fn` to ensure this is executed after all possible autocommands.
 vim.opt.comments = ':---,:--'
 
+-- Customize 'mini.nvim'
 vim.b.minisurround_config = {
   custom_surroundings = {
     s = {

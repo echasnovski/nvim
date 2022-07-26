@@ -44,15 +44,13 @@ require('nvim-treesitter.configs').setup({
         ['io'] = '@pipe',
       },
     },
-    move = {
+    swap = {
       enable = true,
-      goto_next_start = {
-        [']m'] = '@function.outer',
-        [']]'] = '@class.outer',
+      swap_next = {
+        ['<leader>ol'] = '@parameter.inner',
       },
-      goto_previous_start = {
-        ['[m'] = '@function.outer',
-        ['[['] = '@class.outer',
+      swap_previous = {
+        ['<leader>oh'] = '@parameter.inner',
       },
     },
   },

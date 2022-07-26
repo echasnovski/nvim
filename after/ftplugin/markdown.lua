@@ -12,3 +12,11 @@ vim.cmd([[normal! zx]]) -- Update folds
 -- folding for only headings. Use this and disable custom expression folding.
 -- This might be a bit slow on large files.
 -- vim.g.markdown_folding = 1
+
+-- Customize 'mini.nvim'
+vim.b.miniai_config = {
+  custom_textobjects = {
+    ['*'] = { { '%*().-()%*', '%*%*().-()%*%*' } },
+    ['_'] = { { '_().-()_', '__().-()__' } },
+  },
+}

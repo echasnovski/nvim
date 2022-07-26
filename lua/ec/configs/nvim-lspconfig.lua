@@ -62,6 +62,20 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
   local sumneko_binary = sumneko_root .. '/bin/lua-language-server'
 
   lspconfig.sumneko_lua.setup({
+    handlers = {
+      -- Don't open quickfix list in case of multiple definitions. At the
+      -- moment, this conflicts the `a = function()` code style because
+      -- sumneko_lua treats both `a` and `function()` to be definitions of `a`.
+      ['textDocument/definition'] = function(_, result, ctx, _)
+        -- Adapted from source:
+        -- https://github.com/neovim/neovim/blob/master/runtime/lua/vim/lsp/handlers.lua#L341-L366
+        if result == nil or vim.tbl_isempty(result) then return nil end
+        local client = vim.lsp.get_client_by_id(ctx.client_id)
+
+        local res = vim.tbl_islist(result) and result[1] or result
+        vim.lsp.util.jump_to_location(res, client.offset_encoding)
+      end,
+    },
     cmd = { sumneko_binary, '-E', sumneko_root .. '/main.lua' },
     on_attach = function(client, bufnr)
       on_attach_custom(client, bufnr)
@@ -86,8 +100,6 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
         workspace = {
           -- Don't analyze code from submodules
           ignoreSubmodules = true,
-          -- Don't analyze 'undo cache'
-          ignoreDir = { 'undodir' },
           -- Make the server aware of Neovim runtime files
           library = { [vim.fn.expand('$VIMRUNTIME/lua')] = true, [vim.fn.expand('$VIMRUNTIME/lua/vim/lsp')] = true },
         },
