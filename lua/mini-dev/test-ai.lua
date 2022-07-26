@@ -2,8 +2,7 @@ local helpers = dofile('lua/mini-dev/helpers.lua')
 
 local child = helpers.new_child_neovim()
 local expect, eq = helpers.expect, helpers.expect.equality
-local new_set, finally = MiniTest.new_set, MiniTest.finally
-local mark_flaky = helpers.mark_flaky
+local new_set = MiniTest.new_set
 
 -- Helpers with child processes
 --stylua: ignore start
@@ -18,7 +17,11 @@ local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
 
+local avoid_hit_enter_prompt = function() child.o.cmdheight = 10 end
+
 local get_latest_message = function() return child.cmd_capture('1messages') end
+
+local get_mode = function() return child.api.nvim_get_mode()['mode'] end
 
 local validate_edit = function(before_lines, before_cursor, after_lines, after_cursor, keys)
   child.ensure_normal_mode()
@@ -37,6 +40,11 @@ local validate_edit1d = function(before_line, before_column, after_line, after_c
 end
 
 local validate_next_region = function(keys, next_region)
+  type_keys(keys)
+  eq({ { child.fn.line('.'), child.fn.col('.') }, { child.fn.line('v'), child.fn.col('v') } }, next_region)
+end
+
+local validate_next_region1d = function(keys, next_region)
   type_keys(keys)
   eq({ child.fn.col('.'), child.fn.col('v') }, next_region)
 end
@@ -281,13 +289,26 @@ T['find_textobject()']['allows empty output region'] = function()
 end
 
 T['find_textobject()']['handles function as textobject spec'] = function()
+  -- Function which returns composed pattern
   child.lua([[MiniAi.config.custom_textobjects = { c = function() return { '()c()' } end }]])
   validate_find1d('aabbcc', 0, { 'a', 'c' }, { 5, 5 })
+
+  -- Function which returns region. Should take arguments from corresponding
+  -- `find_textobject()` call.
+  child.lua([[MiniAi.config.custom_textobjects = {
+    g = function(ai_type, id, opts)
+      local left = { line = 1, col = 1 }
+      local right = { line = vim.fn.line('$'), col = vim.fn.getline('$'):len() }
+      if ai_type == 'i' then right.col = right.col - 1 end
+      return { left = left, right = right }
+    end
+  }]])
+  validate_find({ 'aaaaa', 'bbbb', 'ccc' }, { 2, 0 }, { 'a', 'g' }, { { 1, 1 }, { 3, 3 } })
+  validate_find({ 'aaaaa', 'bbbb', 'ccc' }, { 2, 0 }, { 'i', 'g' }, { { 1, 1 }, { 3, 2 } })
 end
 
 T['find_textobject()']['shows message if no region is found'] = function()
-  -- Avoid hit-enter-prompt
-  child.o.columns = 150
+  avoid_hit_enter_prompt()
 
   local validate = function(msg, args)
     child.cmd('messages clear')
@@ -409,7 +430,7 @@ local validate_select = function(lines, cursor, args, expected)
   child.lua([[MiniAi.select_textobject(...)]], args)
 
   local expected_mode = (args[3] or {}).vis_mode or 'v'
-  eq(child.api.nvim_get_mode()['mode'], vim.api.nvim_replace_termcodes(expected_mode, true, true, true))
+  eq(get_mode(), vim.api.nvim_replace_termcodes(expected_mode, true, true, true))
 
   -- Allow supplying number items to verify linewise selection
   local expected_left = type(expected[1]) == 'number' and expected[1] or { expected[1][1], expected[1][2] - 1 }
@@ -729,101 +750,534 @@ T['Search method']['works with "cover_or_nearest" in Operator-pending mode'] = f
 end
 
 -- Integration tests ==========================================================
-local validate_textobject = function(lines, cursor, name, expected)
+local validate_tobj = function(lines, cursor, keys, expected, vis_mode)
+  vis_mode = vim.api.nvim_replace_termcodes(vis_mode or 'v', true, true, true)
+
   child.ensure_normal_mode()
   set_lines(lines)
   set_cursor(unpack(cursor))
-  type_keys('v', name)
-  eq(child.api.nvim_get_mode()['mode'], 'v')
-  child.expect_visual_marks({ expected[1][1], expected[1][2] - 1 }, { expected[2][1], expected[2][2] - 1 })
+  type_keys(vis_mode, keys)
+  eq(get_mode(), vis_mode)
+
+  -- Allow supplying number items to verify linewise selection
+  local expected_left = type(expected[1]) == 'number' and expected[1] or { expected[1][1], expected[1][2] - 1 }
+  local expected_right = type(expected[2]) == 'number' and expected[2] or { expected[2][1], expected[2][2] - 1 }
+  child.expect_visual_marks(expected_left, expected_right)
 end
 
-local validate_textobject1d = function(line, column, name, expected)
-  validate_textobject({ line }, { 1, column }, name, { { 1, expected[1] }, { 1, expected[2] } })
+local validate_tobj1d = function(line, column, keys, expected)
+  validate_tobj({ line }, { 1, column }, keys, { { 1, expected[1] }, { 1, expected[2] } })
 end
+
+local validate_no_tobj = function(lines, cursor, keys, vis_mode)
+  vis_mode = vim.api.nvim_replace_termcodes(vis_mode or 'v', true, true, true)
+
+  child.ensure_normal_mode()
+  set_lines(lines)
+  set_cursor(unpack(cursor))
+
+  type_keys(vis_mode, keys)
+  eq(get_mode(), 'n')
+  eq(get_cursor(), cursor)
+  expect.match(get_latest_message(), 'No textobject')
+end
+
+local validate_no_tobj1d = function(line, column, keys) validate_no_tobj({ line }, { 1, column }, keys) end
 
 T['Textobject'] = new_set()
 
-T['Textobject']['works'] = function() MiniTest.skip() end
-
 T['Textobject']['works in Visual mode'] = function()
-  -- Should test all three modes
-  MiniTest.skip()
+  local lines, cursor = { 'aa(bb', 'cccc', 'dd)ee' }, { 2, 0 }
+  validate_tobj(lines, cursor, 'a)', { { 1, 3 }, { 3, 3 } }, 'v')
+  validate_tobj(lines, cursor, 'a)', { 1, 3 }, 'V')
+  validate_tobj(lines, cursor, 'a)', { { 1, 3 }, { 3, 3 } }, '<C-v>')
+
+  -- Exits Visual mode if textobject is not found
+  set_lines({ 'aa' })
+  set_cursor(1, 0)
+  avoid_hit_enter_prompt()
+
+  type_keys('v', 'a)')
+  eq(get_cursor(), { 1, 0 })
+  expect.match(get_latest_message(), 'a%)')
+  eq(get_mode(), 'n')
 end
 
-T['Textobject']['works in Operator-pending mode'] = function() MiniTest.skip() end
+T['Textobject']['works in Operator-pending mode'] = function()
+  local lines, cursor = { 'aa(bb', 'cccc', 'dd)ee' }, { 2, 0 }
+  validate_edit(lines, cursor, { 'aaee' }, { 1, 2 }, 'da)')
+  validate_edit(lines, cursor, { 'aaee' }, { 1, 2 }, 'dva)')
+  validate_edit(lines, cursor, { '' }, { 1, 0 }, 'dVa)')
+  validate_edit(lines, cursor, { 'aabb', 'ccc', 'ddee' }, { 1, 2 }, 'd<C-v>a)')
+end
 
-T['Textobject']['works with dot-repeat'] = function() MiniTest.skip() end
+T['Textobject']['allows dot-repeat'] = function()
+  set_lines({ '((aa)bb)', '(cc)dd' })
+  set_cursor(1, 2)
 
-T['Textobject']['works multibyte characters'] = function() MiniTest.skip() end
+  type_keys('da)')
+  eq(get_lines(), { '(bb)', '(cc)dd' })
+  eq(get_cursor(), { 1, 1 })
 
-T['Textobject']['respects `v:count`'] = function() MiniTest.skip() end
+  type_keys('.')
+  eq(get_lines(), { '', '(cc)dd' })
+  eq(get_cursor(), { 1, 0 })
+
+  -- Allows not immediate dot-repeat
+  type_keys('j', '.')
+  eq(get_lines(), { '', 'dd' })
+  eq(get_cursor(), { 2, 0 })
+end
+
+T['Textobject']['collapses multiline textobject'] = function()
+  local lines = { '(', 'a', ')' }
+  validate_edit(lines, { 2, 0 }, { '' }, { 1, 0 }, 'da)')
+
+  validate_edit(lines, { 1, 0 }, { '()' }, { 1, 1 }, 'di)')
+  validate_edit(lines, { 2, 0 }, { '()' }, { 1, 1 }, 'di)')
+  validate_edit(lines, { 3, 0 }, { '()' }, { 1, 1 }, 'di)')
+end
+
+T['Textobject']['works multibyte characters'] = function()
+  -- Each multibyte character takes two column counts
+  local line = '(ыы)ффф(ыы)'
+  validate_edit1d(line, 1, 'ффф(ыы)', 0, 'da)')
+  validate_edit1d(line, 1, '()ффф(ыы)', 1, 'di)')
+  validate_edit1d(line, 6, '(ыы)ффф', 10, 'da)')
+  validate_edit1d(line, 6, '(ыы)ффф()', 13, 'di)')
+end
+
+T['Textobject']['respects `v:count`'] = function()
+  validate_tobj1d('(aa)bb(cc)dd(ee)', 0, '2a)', { 7, 10 })
+  validate_tobj1d('(aa)bb(cc)dd(ee)', 0, '3a)', { 13, 16 })
+
+  -- Don't anything if not big enough
+  validate_tobj1d('(aa)bb(cc)dd(ee)', 0, '3a)', { 13, 16 })
+end
 
 T['Textobject']['works with empty output region'] = function()
-  -- `ci)` should work on first three columns of `f() `
-  MiniTest.skip()
+  local validate = function(start_column)
+    validate_edit1d('a()b', start_column, 'a()b', 2, 'ci)')
+    eq(get_mode(), 'i')
+
+    validate_edit1d('a()b', start_column, 'a()b', 2, 'di)')
+  end
+
+  validate(0)
+  validate(1)
+  validate(2)
 end
+
+T['Textobject']['prompts helper message after one idle second'] = new_set({ parametrize = { { 'a' }, { 'i' } } }, {
+  test = function(key)
+    set_lines({ 'aaa' })
+    set_cursor(1, 1)
+
+    -- The `a` mapping is applied only after `timeoutlen` milliseconds, because
+    -- there is mapping `a%` by default.
+    -- Wait 1000 seconds after that.
+    child.o.timeoutlen = 50
+    local total_wait_time = 1000
+    if key == 'a' then total_wait_time = 1000 + child.o.timeoutlen end
+
+    type_keys('v', key)
+    sleep(total_wait_time - 10)
+    eq(get_latest_message(), '')
+    sleep(10 + 2)
+    eq(get_latest_message(), string.format('(mini.ai) Enter `%s` textobject identifier (single character) ', key))
+  end,
+})
+
+T['Textobject']['shows message if no textobject is found'] = function()
+  avoid_hit_enter_prompt()
+
+  local validate = function(keys, msg)
+    child.cmd('messages clear')
+    set_lines({ 'aa' })
+    set_cursor(1, 0)
+    type_keys('v', keys)
+    eq(get_cursor(), { 1, 0 })
+    eq(get_latest_message(), msg)
+  end
+
+  validate(
+    'a)',
+    [[(mini.ai) No textobject "a)" found covering region within 50 lines and `search_method = 'cover_or_next'`.]]
+  )
+
+  child.lua([[MiniAi.config.n_lines = 1; MiniAi.config.search_method = 'cover']])
+  validate(
+    '2i]',
+    [[(mini.ai) No textobject "i]" found covering region 2 times within 1 line and `search_method = 'cover'`.]]
+  )
+end
+
+T['Motion'] = new_set()
+
+T['Motion']['works'] = function() MiniTest.skip() end
+
+T['Motion']['allows with dot-repeat'] = function() MiniTest.skip() end
+
+T['Motion']['works with multibyte characters'] = function() MiniTest.skip() end
 
 T['Builtin'] = new_set()
 
-T['Builtin']['Open brackets'] = new_set({ parametrize = { { '(' }, { '[' }, { '{' } } })
+local brackets = {
+  ['('] = { '(', ')', 'open' },
+  [')'] = { '(', ')', 'close' },
+  ['['] = { '[', ']', 'open' },
+  [']'] = { '[', ']', 'close' },
+  ['{'] = { '{', '}', 'open' },
+  ['}'] = { '{', '}', 'close' },
+  ['<'] = { '<', '>', 'open' },
+  ['>'] = { '<', '>', 'close' },
+}
 
-T['Builtin']['Open brackets']['works'] = function(open)
-  local close = ({ ['('] = ')', ['['] = ']', ['{'] = '}' })[open]
-  MiniTest.skip()
+T['Builtin']['Bracket'] = new_set({ parametrize = vim.tbl_map(function(x) return { x } end, vim.tbl_keys(brackets)) })
+
+T['Builtin']['Bracket']['works'] = function(key)
+  local left, right, side = unpack(brackets[key])
+
+  -- Single line
+  validate_tobj1d(left .. 'aa' .. right, 0, { 'a', key }, { 1, 4 })
+  validate_tobj1d(left .. 'aa' .. right, 0, { 'i', key }, { 2, 3 })
+
+  -- Multiline. End of line is considered to be whitespace, so should be
+  -- ignored by open brackets.
+  validate_tobj({ left, 'aa', right }, { 2, 0 }, { 'a', key }, { { 1, 1 }, { 3, 1 } })
+  local multiline_i_expected = side == 'open' and { { 2, 1 }, { 2, 2 } } or { { 1, 2 }, { 2, 3 } }
+  validate_tobj({ left, 'aa', right }, { 2, 0 }, { 'i', key }, multiline_i_expected)
 end
 
-T['Builtin']['Open brackets']['works with empty region'] = function() MiniTest.skip() end
+T['Builtin']['Bracket']['works consecutively'] = function(key)
+  local left, right, side = unpack(brackets[key])
 
-T['Builtin']['Open brackets']['works on multiple lines'] = function() MiniTest.skip() end
+  -- Reference: {'(', 'aa(bb)cc(dd)', ')'}
+  set_lines({ left, string.format('aa%sbb%scc%sdd%s', left, right, left, right), right })
+  set_cursor(2, 0)
 
-T['Builtin']['Open brackets']['works consecutively'] = function() MiniTest.skip() end
+  -- `a`
+  type_keys('v')
+  validate_next_region({ 'a', key }, { { 2, 3 }, { 2, 6 } })
+  validate_next_region({ 'a', key }, { { 2, 9 }, { 2, 12 } })
+  validate_next_region({ 'a', key }, { { 1, 1 }, { 3, 1 } })
 
-T['Builtin']['Close brackets'] = new_set({ parametrize = { { ')' }, { ']' }, { '}' } } })
-
-T['Builtin']['Close brackets']['works'] = function(close)
-  local open = ({ [')'] = '(', [']'] = '[', ['}'] = '{' })[close]
-  MiniTest.skip()
+  -- `i`
+  child.ensure_normal_mode()
+  set_cursor(2, 0)
+  type_keys('v')
+  validate_next_region({ 'i', key }, { { 2, 4 }, { 2, 5 } })
+  validate_next_region({ '2i', key }, { { 2, 10 }, { 2, 11 } })
+  local i_expected = side == 'open' and { { 2, 1 }, { 2, 12 } } or { { 1, 2 }, { 2, 13 } }
+  validate_next_region({ '2i', key }, i_expected)
 end
 
-T['Builtin']['Close brackets']['works with empty region'] = function() MiniTest.skip() end
+T['Builtin']['Bracket']['handles inner whitespace'] = function(key)
+  local left, right, side = unpack(brackets[key])
 
-T['Builtin']['Close brackets']['works on multiple lines'] = function() MiniTest.skip() end
+  -- Open brackets should exclude inner edge whitespace.
+  validate_tobj1d(left .. 'aa ' .. right, 0, { 'i', key }, side == 'open' and { 2, 3 } or { 2, 4 })
+  validate_tobj1d(left .. ' aa' .. right, 0, { 'i', key }, side == 'open' and { 3, 4 } or { 2, 4 })
+  validate_tobj1d(left .. ' aa ' .. right, 0, { 'i', key }, side == 'open' and { 3, 4 } or { 2, 5 })
 
-T['Builtin']['Close brackets']['works consecutively'] = function() MiniTest.skip() end
+  -- Should also handle only inner whitespace
+  local whitespace_line = left .. '  ' .. right
+  local after_line = side == 'open' and whitespace_line or (left .. right)
+  local after_column = side == 'open' and 3 or 1
+  validate_edit1d(whitespace_line, 0, after_line, after_column, { 'ci', key })
+  validate_edit1d(whitespace_line, 0, after_line, after_column, { 'di', key })
+end
 
-T['Builtin']['Quotes'] = new_set()
+T['Builtin']['Bracket']['is balanced'] = function(key)
+  local left, right, _ = unpack(brackets[key])
+  -- Reference: 'a(()'
+  local line = 'a' .. left .. left .. right
+  validate_tobj1d(line, 0, { 'a', key }, { 3, 4 })
+end
 
-T['Builtin']['Quotes']['works with empty region'] = function() MiniTest.skip() end
+T['Builtin']['Bracket']['works with empty region'] = function(key)
+  local left, right, _ = unpack(brackets[key])
 
-T['Builtin']['Quotes']['works consecutively'] = function() MiniTest.skip() end
+  local line = 'a' .. left .. right
+  for i = 0, 2 do
+    validate_tobj1d(line, i, { 'i', key }, { 3, 3 })
+    validate_edit1d(line, i, line, 2, { 'ci', key })
+    validate_edit1d(line, i, line, 2, { 'di', key })
+  end
+end
+
+T['Builtin']['Brackets alias'] = new_set()
+
+T['Builtin']['Brackets alias']['works'] = function()
+  -- Single line
+  validate_tobj1d('(aa)', 0, 'ab', { 1, 4 })
+  validate_tobj1d('[aa]', 0, 'ab', { 1, 4 })
+  validate_tobj1d('{aa}', 0, 'ab', { 1, 4 })
+
+  validate_tobj1d('(aa)', 0, 'ib', { 2, 3 })
+  validate_tobj1d('[aa]', 0, 'ib', { 2, 3 })
+  validate_tobj1d('{aa}', 0, 'ib', { 2, 3 })
+
+  -- Multiline
+  local lines = { '{', 'aa(bb)cc[dd]', '}' }
+  validate_tobj(lines, { 2, 0 }, 'ab', { { 2, 3 }, { 2, 6 } })
+  validate_tobj(lines, { 2, 0 }, '2ab', { { 2, 9 }, { 2, 12 } })
+  validate_tobj(lines, { 2, 0 }, '3ab', { { 1, 1 }, { 3, 1 } })
+
+  -- Balanced
+  validate_tobj1d('a(()', 0, 'ab', { 3, 4 })
+  validate_tobj1d('a[[]', 0, 'ab', { 3, 4 })
+  validate_tobj1d('a{{}', 0, 'ab', { 3, 4 })
+end
+
+T['Builtin']['Brackets alias']['works consecutively'] = function()
+  set_lines({ '{([aa])}' })
+  set_cursor(1, 3)
+
+  -- `a`
+  type_keys('v')
+  validate_next_region1d('ab', { 3, 6 })
+  validate_next_region1d('ab', { 2, 7 })
+  validate_next_region1d('ab', { 1, 8 })
+
+  -- `i`
+  child.ensure_normal_mode()
+  set_cursor(1, 3)
+  type_keys('v')
+  validate_next_region1d('ib', { 4, 5 })
+  validate_next_region1d('2ib', { 3, 6 })
+  validate_next_region1d('2ib', { 2, 7 })
+end
+
+T['Builtin']['Quote'] = new_set({ parametrize = { { '"' }, { "'" }, { '`' } } })
+
+T['Builtin']['Quote']['works'] = function(key)
+  -- Single line
+  validate_tobj1d(key .. ' aa ' .. key, 0, 'a' .. key, { 1, 6 })
+  validate_tobj1d(key .. ' aa ' .. key, 0, 'i' .. key, { 2, 5 })
+
+  -- Multiline
+  validate_tobj({ key, 'aa', key }, { 2, 0 }, 'a' .. key, { { 1, 1 }, { 3, 1 } })
+  validate_tobj({ key, 'aa', key }, { 2, 0 }, 'i' .. key, { { 1, 2 }, { 2, 3 } })
+end
+
+T['Builtin']['Quote']['works consecutively'] = function(key)
+  -- Reference: { 'aa(bb)cc(dd)' }
+  set_lines({ string.format('aa%sbb%scc%sdd%s', key, key, key, key) })
+  set_cursor(1, 0)
+
+  -- `a`
+  type_keys('v')
+  validate_next_region1d('a' .. key, { 3, 6 })
+  validate_next_region1d('a' .. key, { 9, 12 })
+
+  -- `i`
+  child.ensure_normal_mode()
+  set_cursor(1, 0)
+  type_keys('v')
+  validate_next_region1d('i' .. key, { 4, 5 })
+  validate_next_region1d('2i' .. key, { 10, 11 })
+end
+
+T['Builtin']['Quote']['is balanced'] = function(key)
+  -- Here by "balanced" it means that it counts in consecutive pairs from start
+  -- of neighborhood.
+
+  -- Single line. Reference: 'aa"bb"cc"dd"'
+  local line = string.format('aa%sbb%scc%sdd%s', key, key, key, key)
+  validate_tobj1d(line, 0, 'a' .. key, { 3, 6 })
+  validate_tobj1d(line, 0, '2a' .. key, { 9, 12 })
+
+  -- Multiple lines. Here there is an issue with transitioning from current
+  -- line to full neighborhood, but it should be rare and thus acceptable.
+  -- Reference: {'(', 'aa(bb)cc(dd)', ')'}
+  local lines, cursor = { key, string.format('aa%sbb%scc%sdd%s', key, key, key, key), key }, { 2, 0 }
+  validate_tobj(lines, cursor, 'a' .. key, { { 2, 3 }, { 2, 6 } })
+  validate_tobj(lines, cursor, '2a' .. key, { { 2, 9 }, { 2, 12 } })
+  -- Here, ideally, it should be { { 1, 1 }, { 3, 1 } }
+  validate_tobj(lines, cursor, '3a' .. key, { { 2, 12 }, { 3, 1 } })
+end
+
+T['Builtin']['Quote']['works with empty region'] = function(key)
+  local line = 'a' .. key .. key
+  for i = 0, 2 do
+    validate_tobj1d(line, i, 'i' .. key, { 3, 3 })
+    validate_edit1d(line, i, line, 2, 'ci' .. key)
+    validate_edit1d(line, i, line, 2, 'di' .. key)
+  end
+end
+
+T['Builtin']['Quotes alias'] = new_set()
+
+T['Builtin']['Quotes alias']['works'] = function()
+  validate_tobj1d("'aa'", 0, 'aq', { 1, 4 })
+  validate_tobj1d('"aa"', 0, 'aq', { 1, 4 })
+  validate_tobj1d('`aa`', 0, 'aq', { 1, 4 })
+
+  validate_tobj1d("'aa'", 0, 'iq', { 2, 3 })
+  validate_tobj1d('"aa"', 0, 'iq', { 2, 3 })
+  validate_tobj1d('`aa`', 0, 'iq', { 2, 3 })
+
+  local lines = { '`', [[aa'bb'cc"dd"]], '`' }
+  validate_tobj(lines, { 2, 0 }, 'aq', { { 2, 3 }, { 2, 6 } })
+  validate_tobj(lines, { 2, 0 }, '2aq', { { 2, 9 }, { 2, 12 } })
+  validate_tobj(lines, { 2, 0 }, '3aq', { { 1, 1 }, { 3, 1 } })
+
+  -- Balanced
+  validate_tobj1d("a''''", 0, '2aq', { 4, 5 })
+  validate_tobj1d('a""""', 0, '2aq', { 4, 5 })
+  validate_tobj1d('a````', 0, '2aq', { 4, 5 })
+end
+
+T['Builtin']['Quotes alias']['works consecutively'] = function()
+  -- `a`
+  set_lines({ [[`"'aa'"`]] })
+  set_cursor(1, 3)
+
+  type_keys('v')
+  validate_next_region1d('aq', { 3, 6 })
+  validate_next_region1d('aq', { 2, 7 })
+  validate_next_region1d('aq', { 1, 8 })
+
+  -- `i`
+  child.ensure_normal_mode()
+  set_cursor(1, 3)
+  type_keys('v')
+  validate_next_region1d('iq', { 4, 5 })
+  validate_next_region1d('2iq', { 3, 6 })
+  validate_next_region1d('2iq', { 2, 7 })
+
+  -- Nested unbalanced pairs
+  child.ensure_normal_mode()
+  set_lines({ [["aa'bb'cc'"dd`'`]] })
+  set_cursor(1, 4)
+
+  type_keys('v')
+  validate_next_region1d('aq', { 4, 7 })
+  validate_next_region1d('aq', { 1, 11 })
+  validate_next_region1d('aq', { 10, 15 })
+  validate_next_region1d('aq', { 14, 16 })
+end
 
 T['Builtin']['User prompt'] = new_set()
 
-T['Builtin']['User prompt']['works with empty region'] = function() MiniTest.skip() end
+T['Builtin']['User prompt']['works'] = function()
+  local validate = function(ai_type, expected)
+    child.ensure_normal_mode()
+    set_lines({ '__e__o__' })
+    set_cursor(1, 0)
+    type_keys('v', ai_type, '?', 'e<CR>', 'o<CR>')
+    eq(get_mode(), 'v')
+    child.expect_visual_marks(unpack(expected))
+  end
 
-T['Builtin']['User prompt']['works with multibyte characters'] = function()
-  -- Line: ы ы ф ф ы ф
-  MiniTest.skip()
+  validate('a', { { 1, 2 }, { 1, 5 } })
+  validate('i', { { 1, 3 }, { 1, 4 } })
 end
 
-T['Builtin']['User prompt']['works consecutively'] = function() MiniTest.skip() end
+T['Builtin']['User prompt']['works consecutively'] = function()
+  local keys = { 'a?', 'e<CR>', 'o<CR>' }
+  set_lines({ 'e_e_o_e_o_o' })
+  set_cursor(1, 0)
+
+  type_keys('v')
+  validate_next_region1d(keys, { 3, 5 })
+  validate_next_region1d(keys, { 7, 9 })
+
+  -- Prompt can be changed
+  validate_next_region1d({ 'a?', 'o<CR>', 'o<CR>' }, { 5, 9 })
+end
+
+T['Builtin']['User prompt']['works with empty region'] = function()
+  set_lines({ '_eo' })
+  set_cursor(1, 0)
+  type_keys('v', 'i?', 'e<CR>', 'o<CR>')
+  eq(get_mode(), 'v')
+  child.expect_visual_marks({ 1, 2 }, { 1, 2 })
+end
+
+T['Builtin']['User prompt']['can not be covering'] = function()
+  avoid_hit_enter_prompt()
+
+  set_lines({ 'e_e_o_o' })
+  set_cursor(1, 0)
+  local keys = { 'a?', 'e<CR>', 'o<CR>' }
+
+  type_keys('v')
+  validate_next_region1d(keys, { 3, 5 })
+
+  -- Can't result into covering, so no more matches
+  type_keys(keys)
+  eq(get_mode(), 'n')
+  eq(get_cursor(), { 1, 2 })
+  expect.match(get_latest_message(), 'a%?')
+end
+
+T['Builtin']['User prompt']['allows dot-repeat'] = function()
+  local keys = { 'a?', 'e<CR>', 'o<CR>' }
+  set_lines({ 'e1_e2_o3_e4_o5_o6', 'e7_o8' })
+  set_cursor(1, 0)
+
+  type_keys('d', keys)
+  eq(get_lines(), { 'e1_3_e4_o5_o6', 'e7_o8' })
+  type_keys('.')
+  eq(get_lines(), { 'e1_3_5_o6', 'e7_o8' })
+
+  -- Allows not immediate dot-repeat
+  type_keys('j0', '.')
+  eq(get_lines(), { 'e1_3_5_o6', '8' })
+end
+
+T['Builtin']['User prompt']['detects covering with smallest width'] = function()
+  local keys = { 'a?', '**<CR>', '**<CR>' }
+  validate_tobj1d('**a**aa**', 4, keys, { 1, 5 })
+  validate_tobj1d('**aa**a**', 4, keys, { 5, 9 })
+end
+
+T['Builtin']['User prompt']['works with special characters in prompt'] = function()
+  -- "Lua pattern" special
+  validate_tobj1d('aa.bb%', 0, { 'a?', '.<CR>', '%<CR>' }, { 3, 6 })
+
+  -- "Multibyte" special. Each multibyte character takes two column counts.
+  validate_tobj1d('ы ы ф', 0, { 'a?', 'ы<CR>', 'ф<CR>' }, { 4, 7 })
+end
+
+T['Builtin']['User prompt']['handles <C-c>, <Esc>, <CR> in user input'] = function()
+  local validate_nothing = function(ai_type, key)
+    validate_edit1d('(aaa)', 2, '(aaa)', 2, { 'v', ai_type, '?', key })
+    validate_edit1d('(aaa)', 2, '(aaa)', 2, { 'v', ai_type, '?', '(<CR>', key })
+  end
+
+  -- Should do nothing on any `<C-c>` and `<Esc>` (in both input and output)
+  validate_nothing('a', '<Esc>')
+  validate_nothing('i', '<Esc>')
+  validate_nothing('a', '<C-c>')
+  validate_nothing('i', '<C-c>')
+  -- Should stop on `<CR>` because can't use empty string in pattern search
+  validate_nothing('a', '<CR>')
+  validate_nothing('i', '<CR>')
+end
+
+T['Builtin']['User prompt']['works in edge cases'] = function()
+  -- It can't contain edge characters inside
+  validate_tobj1d('aa(bb(cc))', 0, { 'a?', '(<CR>', ')<CR>' }, { 6, 9 })
+end
 
 T['Builtin']['Argument'] = new_set()
 
 T['Builtin']['Argument']['works'] = function()
   -- Don't check on first comma, as it is ambiguous
   for i = 2, 3 do
-    validate_textobject1d('f(xx, yy, tt)', i, 'aa', { 3, 5 })
-    validate_textobject1d('f(xx, yy, tt)', i, 'ia', { 3, 4 })
+    validate_tobj1d('f(xx, yy, tt)', i, 'aa', { 3, 5 })
+    validate_tobj1d('f(xx, yy, tt)', i, 'ia', { 3, 4 })
   end
   for i = 5, 7 do
-    validate_textobject1d('f(xx, yy, tt)', i, 'aa', { 5, 8 })
-    validate_textobject1d('f(xx, yy, tt)', i, 'ia', { 7, 8 })
+    validate_tobj1d('f(xx, yy, tt)', i, 'aa', { 5, 8 })
+    validate_tobj1d('f(xx, yy, tt)', i, 'ia', { 7, 8 })
   end
   for i = 8, 11 do
-    validate_textobject1d('f(xx, yy, tt)', i, 'aa', { 9, 12 })
-    validate_textobject1d('f(xx, yy, tt)', i, 'ia', { 11, 12 })
+    validate_tobj1d('f(xx, yy, tt)', i, 'aa', { 9, 12 })
+    validate_tobj1d('f(xx, yy, tt)', i, 'ia', { 11, 12 })
   end
 end
 
@@ -832,92 +1286,92 @@ T['Builtin']['Argument']['works consecutively'] = function()
   set_lines({ 'f(xx, yy, tt)' })
   set_cursor(1, 0)
   type_keys('v')
-  validate_next_region('aa', { 3, 5 })
-  validate_next_region('aa', { 5, 8 })
-  validate_next_region('aa', { 9, 12 })
+  validate_next_region1d('aa', { 3, 5 })
+  validate_next_region1d('aa', { 5, 8 })
+  validate_next_region1d('aa', { 9, 12 })
 
   -- `i` textobject
   child.ensure_normal_mode()
   set_lines({ 'f(xx, yy, tt)' })
   set_cursor(1, 0)
   type_keys('v')
-  validate_next_region('ia', { 3, 4 })
-  validate_next_region('2ia', { 7, 8 })
-  validate_next_region('2ia', { 11, 12 })
+  validate_next_region1d('ia', { 3, 4 })
+  validate_next_region1d('2ia', { 7, 8 })
+  validate_next_region1d('2ia', { 11, 12 })
 end
 
 T['Builtin']['Argument']['is ambiguous on first comma'] = function()
   -- It chooses argument with smaller width. This is not good, but is a result
   -- of compromise over comma asymmetry.
-  validate_textobject1d('f(x, yyyyyy)', 3, 'aa', { 3, 4 })
-  validate_textobject1d('f(xxxxxx, y)', 8, 'aa', { 9, 11 })
+  validate_tobj1d('f(x, yyyyyy)', 3, 'aa', { 3, 4 })
+  validate_tobj1d('f(xxxxxx, y)', 8, 'aa', { 9, 11 })
 end
 
 T['Builtin']['Argument']['works inside all balanced brackets'] = function()
-  validate_textobject1d('(xx, yy)', 2, 'aa', { 2, 4 })
-  validate_textobject1d('[xx, yy]', 2, 'aa', { 2, 4 })
-  validate_textobject1d('{xx, yy}', 2, 'aa', { 2, 4 })
+  validate_tobj1d('(xx, yy)', 2, 'aa', { 2, 4 })
+  validate_tobj1d('[xx, yy]', 2, 'aa', { 2, 4 })
+  validate_tobj1d('{xx, yy}', 2, 'aa', { 2, 4 })
 end
 
 T['Builtin']['Argument']['ignores commas inside balanced brackets'] = function()
-  validate_textobject1d('f(xx, (yy, tt))', 5, 'aa', { 5, 14 })
-  validate_textobject1d('f(xx, [yy, tt])', 5, 'aa', { 5, 14 })
-  validate_textobject1d('f(xx, {yy, tt})', 5, 'aa', { 5, 14 })
+  validate_tobj1d('f(xx, (yy, tt))', 5, 'aa', { 5, 14 })
+  validate_tobj1d('f(xx, [yy, tt])', 5, 'aa', { 5, 14 })
+  validate_tobj1d('f(xx, {yy, tt})', 5, 'aa', { 5, 14 })
 
-  validate_textobject1d('f((xx, yy) , tt)', 10, 'aa', { 3, 12 })
-  validate_textobject1d('f([xx, yy] , tt)', 10, 'aa', { 3, 12 })
-  validate_textobject1d('f({xx, yy} , tt)', 10, 'aa', { 3, 12 })
+  validate_tobj1d('f((xx, yy) , tt)', 10, 'aa', { 3, 12 })
+  validate_tobj1d('f([xx, yy] , tt)', 10, 'aa', { 3, 12 })
+  validate_tobj1d('f({xx, yy} , tt)', 10, 'aa', { 3, 12 })
 end
 
 T['Builtin']['Argument']['ignores commas inside balanced quotes'] = function()
-  validate_textobject1d([[f(xx, 'yy, tt')]], 5, 'aa', { 5, 14 })
-  validate_textobject1d([[f(xx, "yy, tt")]], 5, 'aa', { 5, 14 })
+  validate_tobj1d([[f(xx, 'yy, tt')]], 5, 'aa', { 5, 14 })
+  validate_tobj1d([[f(xx, "yy, tt")]], 5, 'aa', { 5, 14 })
 
-  validate_textobject1d([[f('xx, yy' , tt)]], 10, 'aa', { 3, 12 })
-  validate_textobject1d([[f("xx, yy" , tt)]], 10, 'aa', { 3, 12 })
+  validate_tobj1d([[f('xx, yy' , tt)]], 10, 'aa', { 3, 12 })
+  validate_tobj1d([[f("xx, yy" , tt)]], 10, 'aa', { 3, 12 })
 end
 
 T['Builtin']['Argument']['ignores empty arguments'] = function()
-  validate_textobject1d('f(,)', 0, 'aa', { 3, 3 })
-  validate_textobject1d('f(,)', 0, 'ia', { 4, 4 })
+  validate_tobj1d('f(,)', 0, 'aa', { 3, 3 })
+  validate_tobj1d('f(,)', 0, 'ia', { 4, 4 })
 
-  validate_textobject1d('f(, xx)', 0, 'aa', { 3, 6 })
-  validate_textobject1d('f(, xx)', 0, 'ia', { 5, 6 })
+  validate_tobj1d('f(, xx)', 0, 'aa', { 3, 6 })
+  validate_tobj1d('f(, xx)', 0, 'ia', { 5, 6 })
 
-  validate_textobject1d('f(,, xx)', 0, 'aa', { 3, 3 })
-  validate_textobject1d('f(,, xx)', 0, 'ia', { 4, 4 })
-  validate_textobject1d('f(,, xx)', 0, '2aa', { 4, 7 })
-  validate_textobject1d('f(,, xx)', 0, '2ia', { 6, 7 })
+  validate_tobj1d('f(,, xx)', 0, 'aa', { 3, 3 })
+  validate_tobj1d('f(,, xx)', 0, 'ia', { 4, 4 })
+  validate_tobj1d('f(,, xx)', 0, '2aa', { 4, 7 })
+  validate_tobj1d('f(,, xx)', 0, '2ia', { 6, 7 })
 
-  validate_textobject1d('f(xx,, yy)', 0, 'aa', { 3, 5 })
-  validate_textobject1d('f(xx,, yy)', 0, 'ia', { 3, 4 })
-  validate_textobject1d('f(xx,, yy)', 0, '2aa', { 6, 9 })
-  validate_textobject1d('f(xx,, yy)', 0, '2ia', { 8, 9 })
+  validate_tobj1d('f(xx,, yy)', 0, 'aa', { 3, 5 })
+  validate_tobj1d('f(xx,, yy)', 0, 'ia', { 3, 4 })
+  validate_tobj1d('f(xx,, yy)', 0, '2aa', { 6, 9 })
+  validate_tobj1d('f(xx,, yy)', 0, '2ia', { 8, 9 })
 
-  validate_textobject1d('f(xx, yy,, tt)', 0, '1aa', { 3, 5 })
-  validate_textobject1d('f(xx, yy,, tt)', 0, '2aa', { 5, 8 })
-  validate_textobject1d('f(xx, yy,, tt)', 0, '3aa', { 9, 9 })
-  validate_textobject1d('f(xx, yy,, tt)', 0, '4aa', { 10, 13 })
+  validate_tobj1d('f(xx, yy,, tt)', 0, '1aa', { 3, 5 })
+  validate_tobj1d('f(xx, yy,, tt)', 0, '2aa', { 5, 8 })
+  validate_tobj1d('f(xx, yy,, tt)', 0, '3aa', { 9, 9 })
+  validate_tobj1d('f(xx, yy,, tt)', 0, '4aa', { 10, 13 })
 
-  validate_textobject1d('f(xx,,)', 0, 'aa', { 3, 5 })
-  validate_textobject1d('f(xx,,)', 0, 'ia', { 3, 4 })
-  validate_textobject1d('f(xx,,)', 0, '2aa', { 6, 6 })
-  validate_textobject1d('f(xx,,)', 0, '2ia', { 7, 7 })
+  validate_tobj1d('f(xx,,)', 0, 'aa', { 3, 5 })
+  validate_tobj1d('f(xx,,)', 0, 'ia', { 3, 4 })
+  validate_tobj1d('f(xx,,)', 0, '2aa', { 6, 6 })
+  validate_tobj1d('f(xx,,)', 0, '2ia', { 7, 7 })
 
-  validate_textobject1d('f(xx,)', 0, 'aa', { 3, 5 })
-  validate_textobject1d('f(xx,)', 0, 'ia', { 3, 4 })
+  validate_tobj1d('f(xx,)', 0, 'aa', { 3, 5 })
+  validate_tobj1d('f(xx,)', 0, 'ia', { 3, 4 })
 end
 
 T['Builtin']['Argument']['works with whitespace argument'] = function()
-  validate_textobject1d('f( )', 0, 'aa', { 3, 3 })
+  validate_tobj1d('f( )', 0, 'aa', { 3, 3 })
 
-  validate_textobject1d('f( , )', 0, 'aa', { 3, 4 })
-  validate_textobject1d('f( , )', 0, 'ia', { 4, 4 })
-  validate_textobject1d('f( , )', 0, '2aa', { 4, 5 })
-  validate_textobject1d('f( , )', 0, '2ia', { 6, 6 })
+  validate_tobj1d('f( , )', 0, 'aa', { 3, 4 })
+  validate_tobj1d('f( , )', 0, 'ia', { 4, 4 })
+  validate_tobj1d('f( , )', 0, '2aa', { 4, 5 })
+  validate_tobj1d('f( , )', 0, '2ia', { 6, 6 })
 
-  validate_textobject1d('f(x, ,y)', 0, '2aa', { 4, 5 })
-  validate_textobject1d('f(x, ,y)', 0, '2ia', { 6, 6 })
+  validate_tobj1d('f(x, ,y)', 0, '2aa', { 4, 5 })
+  validate_tobj1d('f(x, ,y)', 0, '2ia', { 6, 6 })
 end
 
 T['Builtin']['Argument']['ignores empty brackets'] = function()
@@ -928,8 +1382,8 @@ T['Builtin']['Argument']['ignores empty brackets'] = function()
 end
 
 T['Builtin']['Argument']['works with single argument'] = function()
-  validate_textobject1d('f(x)', 0, 'aa', { 3, 3 })
-  validate_textobject1d('f(xx)', 0, 'aa', { 3, 4 })
+  validate_tobj1d('f(x)', 0, 'aa', { 3, 3 })
+  validate_tobj1d('f(xx)', 0, 'aa', { 3, 4 })
 end
 
 T['Builtin']['Argument']['works in Operator-pending mode'] = function()
@@ -973,19 +1427,158 @@ T['Builtin']['Argument']['works in Operator-pending mode'] = function()
   validate('f(x,,)', 4, 'f(x,,)', 5, 'ia')
 end
 
-T['Builtin']['User prompt']['works consecutively'] = function() MiniTest.skip() end
-
 T['Builtin']['Function call'] = new_set()
 
-T['Builtin']['Function call']['works with empty region'] = function() MiniTest.skip() end
+T['Builtin']['Function call']['works'] = function()
+  -- Single line
+  validate_tobj1d('ff(aa, bb)', 0, 'af', { 1, 10 })
+  validate_tobj1d('ff(aa, bb)', 0, 'if', { 4, 9 })
 
-T['Builtin']['Function call']['works consecutively'] = function() MiniTest.skip() end
+  -- Multiple lines
+  validate_tobj({ 'ff(', 'aa, bb', ')' }, { 1, 0 }, 'af', { { 1, 1 }, { 3, 1 } })
+  validate_tobj({ 'ff(', 'aa, bb', ')' }, { 1, 0 }, 'if', { { 1, 4 }, { 2, 7 } })
+
+  -- Empty arguments
+  validate_tobj1d('ff()', 0, 'af', { 1, 4 })
+  validate_tobj1d('ff()', 0, 'if', { 4, 4 })
+  validate_edit1d('ff()', 0, 'ff()', 3, 'di)')
+  validate_edit1d('ff()', 0, 'ff()', 3, 'ci)')
+end
+
+T['Builtin']['Function call']['works consecutively'] = function()
+  set_lines({ 'ff(', 'gg(aa) hh(bb)', ')' })
+  set_cursor(2, 0)
+
+  type_keys('v')
+  validate_next_region('af', { { 2, 1 }, { 2, 6 } })
+  validate_next_region('af', { { 2, 8 }, { 2, 13 } })
+  validate_next_region('af', { { 1, 1 }, { 3, 1 } })
+end
+
+T['Builtin']['Function call']['does not work in some cases'] = function()
+  -- Although, it would be great if it did
+
+  -- It does not take into account that part is inside string
+  validate_tobj1d([[ff(aa, ')', bb)]], 0, 'af', { 1, 9 })
+
+  -- It does not take into account that part is inside comment
+  child.bo.commentstring = '# %s'
+  validate_tobj({ 'ff(', '# )', ')' }, { 1, 0 }, 'af', { { 1, 1 }, { 2, 3 } })
+end
+
+T['Builtin']['Function call']['is detected with "_" and "." in name'] = function()
+  validate_tobj1d('ff_ff(aa)', 0, 'af', { 1, 9 })
+  validate_tobj1d('ff.ff(aa)', 0, 'af', { 1, 9 })
+
+  validate_tobj1d('big-ff_ff.ff(aa)', 0, 'af', { 5, 16 })
+  validate_tobj1d('big ff_ff.ff(aa)', 0, 'af', { 5, 16 })
+  validate_tobj1d('[(ff(aa))]', 0, 'af', { 3, 8 })
+end
+
+T['Builtin']['Function call']['has limited support of multibyte characters'] = function()
+  avoid_hit_enter_prompt()
+
+  -- It doesn't support multibyte characters in name due to Lua patterns nature
+  validate_no_tobj1d('ыы(aa)', 0, 'af')
+
+  -- But it should work with multibyte characters inside parenthesis
+  validate_tobj1d('ff(ыы, фф)', 0, 'af', { 1, 14 })
+end
 
 T['Builtin']['Tag'] = new_set()
 
-T['Builtin']['Tag']['works with empty region'] = function() MiniTest.skip() end
+T['Builtin']['Tag']['works'] = function()
+  -- Sinle line
+  validate_tobj1d('<x>aaa</x>', 0, 'at', { 1, 10 })
+  validate_tobj1d('<x>aaa</x>', 0, 'it', { 4, 6 })
 
-T['Builtin']['Tag']['works consecutively'] = function() MiniTest.skip() end
+  -- Multiple lines line
+  validate_tobj({ '<x>', 'aaa', '</x>' }, { 2, 0 }, 'at', { { 1, 1 }, { 3, 4 } })
+  validate_tobj({ '<x>', 'aaa', '</x>' }, { 2, 0 }, 'it', { { 1, 4 }, { 2, 4 } })
+
+  -- Should work with empty tag name
+  validate_tobj1d('<>aaa</>', 3, 'at', { 1, 8 })
+
+  -- Should work with empty region
+  validate_tobj1d('<x></x>', 0, 'it', { 4, 4 })
+  validate_edit1d('<x></x>', 0, '<x></x>', 3, 'dit')
+  validate_edit1d('<x></x>', 0, '<x></x>', 3, 'cit')
+end
+
+T['Builtin']['Tag']['works consecutively'] = function()
+  -- Even with same tags, but not covering
+  set_lines({ '<x>', 'aa <y>bb</y> <y>cc</y>', '</x>' })
+  set_cursor(2, 0)
+
+  type_keys('v')
+  validate_next_region('at', { { 2, 4 }, { 2, 12 } })
+  validate_next_region('at', { { 2, 14 }, { 2, 22 } })
+  validate_next_region('at', { { 1, 1 }, { 3, 4 } })
+end
+
+T['Builtin']['Tag']['does not work in some cases'] = function()
+  -- Although, it would be great if it did
+
+  avoid_hit_enter_prompt()
+
+  -- It does not take into account that part is inside string
+  validate_tobj1d([[<x> '</x>' </x>]], 0, 'at', { 1, 9 })
+
+  -- It does not take into account that part is inside comment
+  child.bo.commentstring = '# %s'
+  validate_tobj({ '<x>', '# </x>', '</x>' }, { 2, 0 }, 'at', { { 1, 1 }, { 2, 6 } })
+
+  -- It can select tags that don't contain same tags inside
+  validate_no_tobj1d('<x><x>aaa</x></x>', 7, '2at')
+end
+
+T['Builtin']['Tag']['allows extra symbols in opening tag'] = function()
+  avoid_hit_enter_prompt()
+
+  validate_tobj1d('<x bbb cc_dd!>aaa</x>', 0, 'at', { 1, 21 })
+
+  -- Symbol `<` is not allowed
+  validate_no_tobj1d('<x <>aaa</x>', 0, 'at')
+end
+
+T['Builtin']['Tag']['detects covering with smallest width'] = function()
+  -- In all cases width of `<y>...</y>` is smaller than of `<x>...</x>`
+  validate_tobj1d('<x>  <y>a</x></y>', 8, 'at', { 6, 17 })
+  validate_tobj1d('<y><x>a</y>  </x>', 6, 'at', { 1, 11 })
+
+  -- Width should be from the left-most point to right-most
+  validate_tobj1d('<y><x bbb>a</y></x>', 10, 'at', { 1, 15 })
+
+  -- Works with identical nested tags
+  validate_tobj1d('<x><x>aaa</x></x>', 7, 'at', { 4, 13 })
+end
+
+T['Builtin']['Tag']['works in edge cases'] = function()
+  avoid_hit_enter_prompt()
+
+  -- Nesting different tags
+  validate_tobj1d('<x><y></y></x>', 1, 'at', { 1, 14 })
+  validate_tobj1d('<x><y></y></x>', 3, 'at', { 4, 10 })
+
+  -- End of overlapping tags
+  validate_tobj1d('<y><x></y></x>', 12, 'at', { 4, 14 })
+
+  -- `>` between tags
+  validate_tobj1d('<x>>aaa</x>', 0, 'at', { 1, 11 })
+
+  -- Similar but different names shouldn't match
+  validate_no_tobj1d('<xy>aaa</x>', 0, 'at')
+end
+
+T['Builtin']['Tag']['has limited support of multibyte characters'] = function()
+  avoid_hit_enter_prompt()
+
+  -- It doesn't support multibyte characters in name due to Lua patterns nature
+  validate_no_tobj1d('<ы>aaa</ы>', 0, 'at')
+
+  -- But it should work with multibyte characters inside tag
+  validate_tobj1d('<x>ыыы</x>', 0, 'at', { 1, 13 })
+end
 
 T['Builtin']['Default'] = new_set()
 
@@ -1009,6 +1602,11 @@ T['Custom textobject']['works consecutively'] = function() MiniTest.skip() end
 
 T['Custom textobject']['expands specification'] = function() MiniTest.skip() end
 
+T['Custom textobject']['allows function item'] = function()
+  -- Should test both type of functions
+  MiniTest.skip()
+end
+
 T['Custom textobject']['handles different extractions in last item'] = function() MiniTest.skip() end
 
 T['Custom textobject']['works with special patterns'] = new_set()
@@ -1020,7 +1618,7 @@ end
 T['Custom textobject']['works with special patterns']['x.-y'] = function()
   -- `x.-y` should work with `a%.-a` and `a%-a`
 
-  -- `x.-y` should work with patterns like `x+.-x+`
+  -- `x.-y` should work with patterns like `x+.-x+` or '%f[x]x+.-x+' (test on `xxaaxx`)
 end
 
 T['Custom textobject']['selects smallest span'] = function()
@@ -1042,12 +1640,8 @@ T['Custom textobject']['works with extreme specification'] = function()
   MiniTest.skip()
 end
 
-T['Motion'] = new_set()
+T['Custom textobject']['works with quantifiers in patters'] = function() MiniTest.skip() end
 
-T['Motion']['works'] = function() MiniTest.skip() end
-
-T['Motion']['works with dot-repeat'] = function() MiniTest.skip() end
-
-T['Motion']['works multibyte characters'] = function() MiniTest.skip() end
+T['Custom textobject']['works with multibyte characters'] = function() end
 
 return T
