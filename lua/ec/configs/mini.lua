@@ -36,6 +36,7 @@ require('mini.statusline').setup({
 require('mini.tabline').setup()
 
 vim.defer_fn(function()
+  require('mini.ai').setup()
   require('mini.bufremove').setup()
   require('mini.comment').setup()
   require('mini.completion').setup({
@@ -59,6 +60,4 @@ vim.defer_fn(function()
   require('mini.surround').setup({ search_method = 'cover_or_next' })
   require('mini.test').setup()
   require('mini.trailspace').setup()
-
-  require('mini-dev.ai').setup()
 end, 0)

@@ -31,7 +31,7 @@ require('nvim-treesitter.configs').setup({
     -- Not having textobjects for arguments (`parameter.inner` and
     -- `parameter.outer`) because it currently doesn't always work intuitively.
     -- For example, in Python's list `[1, 2, 3]` elements are not recognized as
-    -- arguments. 'Sideways.vim' plugin handles this better.
+    -- arguments.
     enable = true,
     select = {
       enable = true,
