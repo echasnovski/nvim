@@ -118,10 +118,6 @@
 	path = pack/plugins/opt/vim-rmarkdown
 	url = https://github.com/vim-pandoc/vim-rmarkdown
 	branch = master
-[submodule "markdown-preview"]
-	path = pack/plugins/opt/markdown-preview
-	url = https://github.com/iamcco/markdown-preview.nvim
-	branch = master
 [submodule "mini"]
 	path = pack/plugins/opt/mini
 	url = https://github.com/echasnovski/mini.nvim
@@ -130,3 +126,7 @@
 	path = pack/plugins/opt/neogen
 	url = https://github.com/danymat/neogen.git
 	branch = main
+[submodule "markdown-preview.nvim"]
+	path = pack/plugins/opt/markdown-preview.nvim
+	url = https://github.com/iamcco/markdown-preview.nvim
+	branch = master

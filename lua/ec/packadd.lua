@@ -118,7 +118,8 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd_defer('vim-rmarkdown')
 
   -- Markdown preview (has rather big disk size usage, around 50M)
-  packadd_defer('markdown-preview')
+  -- NOTE: this exact name is important to make plugin work
+  packadd_defer('markdown-preview.nvim')
 end
 
 -- Do plugin hooks (find a better way to do this; maybe after custom update)

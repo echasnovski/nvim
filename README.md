@@ -80,27 +80,28 @@ git submodule update --remote --init --depth 1 --recursive
 Delete plugin as a normal submodule. For example, 'telescope-fzy-native.nvim' from 'pack/plugins/opt' directory:
 
 ```bash
-submodule_name="pack/plugins/opt/telescope-fzy-native"
+submodule_name="telescope-fzy-native"
+submodule_path="pack/plugins/opt/$submodule_name"
 
 # Unregister submodule (this also empties plugin's directory)
-git submodule deinit -f $submodule_name
+git submodule deinit -f $submodule_path
 
 # Remove the working tree of the submodule
-git rm --cached $submodule_name
+git rm --cached $submodule_path
 
 # Remove relevant section from '.gitmodules'
 git config -f .gitmodules --remove-section "submodule.$submodule_name"
 
 # Remove submodule's (which should be empty) directory from file system
-rm -r $submodule_name
+rm -r $submodule_path
 
 # Remove associated submodule directory in '.git/modules'.
 git_dir=`git rev-parse --git-dir`
-rm -rf $git_dir/modules/$submodule_name
+rm -rf $git_dir/modules/$submodule_path
 
 # Optionally: add and commit changes
 git add .
-git commit -m "Remove $submodule_name plugin."
+git commit -m "Remove $submodule_path plugin."
 ```
 
 ## System dependencies
