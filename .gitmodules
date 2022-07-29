@@ -1,7 +1,3 @@
-[submodule "targets"]
-	path = pack/plugins/opt/targets
-	url = https://github.com/wellle/targets.vim.git
-	branch = master
 [submodule "telescope"]
 	path = pack/plugins/opt/telescope
 	url = https://github.com/nvim-telescope/telescope.nvim.git
@@ -73,14 +69,6 @@
 [submodule "neoterm"]
 	path = pack/plugins/opt/neoterm
 	url = https://github.com/kassio/neoterm
-	branch = master
-[submodule "vim-fugitive"]
-	path = pack/plugins/opt/vim-fugitive
-	url = https://github.com/tpope/vim-fugitive
-	branch = master
-[submodule "gv"]
-	path = pack/plugins/opt/gv
-	url = https://github.com/junegunn/gv.vim
 	branch = master
 [submodule "undotree"]
 	path = pack/plugins/opt/undotree

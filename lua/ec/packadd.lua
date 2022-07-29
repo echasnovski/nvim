@@ -22,9 +22,6 @@ end
 -- Collection of minimal and fast Lua modules
 packadd('mini')
 
--- -- More text objects
--- packadd_defer('targets')
-
 -- Align text
 packadd_defer('vim-lion')
 
@@ -62,12 +59,6 @@ if vim.fn.exists('vscode') ~= 1 then
 
   -- Show keybindings
   packadd_defer('which-key')
-
-  -- Interact with git
-  -- packadd_defer('vim-fugitive')
-
-  -- Interact with commits
-  -- packadd_defer('gv')
 
   -- Interact with hunks
   packadd_defer('gitsigns')
