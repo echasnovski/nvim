@@ -1,7 +1,7 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- Documentation ==============================================================
---- Module for extending `a`/`i` textobjects. It enhances some builtin
+--- Module for extending and creating `a`/`i` textobjects. It enhances some builtin
 --- |text-objects| (like |a(|, |a)|, |a'|, and more), creates new ones
 --- (like `a*`, `a<Space>`, `af`, `a?`, and more), and allows user to create their own.
 ---
@@ -15,33 +15,32 @@
 ---     - Aliases for multiple textobjects.
 --- - Comprehensive builtin textobjects (see more in |MiniAi-textobject-builtin|):
 ---     - Balanced brackets (with and without whitespace) plus alias.
----     - Balanced quotes plus alias all of them.
----     - Single character punctuation, digit, or whitespace.
+---     - Balanced quotes plus alias.
 ---     - Function call.
----     - Function argument.
+---     - Argument.
 ---     - Tag.
 ---     - Derived from user prompt.
+---     - Default for punctuation, digit, or whitespace single character.
 --- - Motions for jumping to left/right edge of textobject.
 ---
---- This module works by defining mappings for both `a`and `i` in Visual and
---- Operator-pending mode. They work by waiting for single character user input
---- and applying resolved textobject specification with that character as
---- identifier (fall back to other mappings if can't find proper textobject id).
---- More information can be found at |MiniAi-textobject-specification| and
---- |MiniAi-algorithm|.
+--- This module works by defining mappings for both `a` and `i` in Visual and
+--- Operator-pending mode. After typing, they wait for single character user input
+--- treated as textobject identifier and apply resolved textobject specification
+--- (fall back to other mappings if can't find proper textobject id). For more
+--- information see |MiniAi-textobject-specification| and |MiniAi-algorithm|.
 ---
 --- Known issues which won't be resolved:
 --- - Search for builtin textobjects is done mostly using Lua patterns
 ---   (regex-like approach). Certain amount of false positives is to be expected.
---- - During search for builting textobjects there is no distinction if it is
+--- - During search for builtin textobjects there is no distinction if it is
 ---   inside string or comment. For example, in the following case there will
----   be not proper match for a function call: 'f(a = ")", b = 1)'.
+---   be wrong match for a function call: 'f(a = ")", b = 1)'.
 ---
 --- General rule of thumb: any instrument using available parser for document
 --- structure (like treesitter) will usually provide more precise results. This
 --- module has builtins mostly for plain text textobjects which are useful
---- most of the times (like "inside brackets", "around quotes/underscore",
---- etc.). For more advanced use cases use function custom textobjects.
+--- most of the times (like "inside brackets", "around quotes/underscore", etc.).
+--- For advanced use cases define function specification for custom textobjects.
 ---
 --- What it doesn't (and probably won't) do:
 --- - Have special operators to specially handle whitespace (like `I` and `A`
@@ -60,18 +59,32 @@
 ---
 --- See |MiniAi.config| for available config settings.
 ---
---- You can override runtime config settings (like `config.textobjects`) locally to
---- buffer inside `vim.b.miniai_config` which should have same structure as
---- `MiniAi.config`. See |mini.nvim-buffer-local-config| for more details.
+--- You can override runtime config settings (like `config.custom_textobjects`)
+--- locally to buffer inside `vim.b.miniai_config` which should have same structure
+--- as `MiniAi.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons~
 ---
 --- - 'wellle/targets.vim':
----     - ...
---- - 'kana/vim-textobj-user':
----     - ...
---- - 'nvim-treesitter/nvim-treesitter-textobjects':
----     - ...
+---     - Has limited support for creating own textobjects: it is constrained
+---       to pre-defined detection rules. 'mini.ai' allows creating own rules
+---       via Lua patterns and functions (see |MiniAi-textobject-specification|).
+---     - Doesn't provide any programmatical API for getting information about
+---       textobjects. 'mini.nvim' does it via |MiniAi.find_textobject()|.
+---     - Has no implementation of "moving to edge of textobject". 'mini.nvim'
+---       does it via |MiniAi.move_cursor()| and `g[` and `g]` default mappings.
+---     - Has elaborate ways to control searching of the next textobject.
+---       'mini.nvim' relies on handful of 'config.search_method'.
+---     - Implements `A`, `I` operators. 'mini.nvim' does not by design: it is
+---       assumed to be a property of textobject, not operator.
+---     - Implements `il`, `al`, `in`, `an` operators. 'mini.ai' does not by
+---       design: search method is controlled via `config.search_method` and
+---       |v:count| is supported for `a` and `i` textobjects.
+---     - Doesn't implement "function call" and "user prompt" textobjects.
+---       'mini.nvim' does (with `f` and `?` identifiers).
+---     - Has limited support for "argument" textobject. Although it works in
+---       most situations, it often misdetects commas as argument separator
+---       (like if it is inside quotes or `{}`). 'mini.ai' deals with these cases.
 ---
 --- # Disabling~
 ---
@@ -84,45 +97,112 @@
 ---@tag MiniAi
 ---@toc_entry Extended a/i textobjects
 
---- - *Region* - table representing region in a buffer. Fields: <left> and
+--- Builtin textobjects~
+---
+--- This table describes all builtin textobjects along with what they
+--- represent. Explanation:
+--- - `Key` represents the textobject identifier: single character which should
+---   be typed after `a`/`i`.
+--- - `Name` is a description of textobject.
+--- - `Example line` contains a string for which examples are constructed. The
+---   `*` denotes the cursor position.
+--- - `a`/`i` describe inclusive region representing `a` and `i` textobjects.
+---   Use numbers in separators for easier navigation.
+--- - `2a`/`2i` describe either `2a`/`2i` (support for |v:count|) textobjects
+---   or `a`/`i` textobject followed by another `a`/`i` textobject (consecutive
+---   application leads to incremental selection).
+---
+--- Example: typing `va)` with cursor on `*` leads to selection from column 2
+--- to column 12. Another typing `a)` changes selection to [1; 13]. Also, besides
+--- visual selection, any |operator| can be used or `g[`/`g]` motions to move
+--- to left/right edge of `a` textobject.
+--- >
+---  |Key|     Name      |   Example line   |   a    |   i    |   2a   |   2i   |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+---  | ( |  Balanced ()  | (( *a (bb) ))    |        |        |        |        |
+---  | [ |  Balanced []  | [[ *a [bb] ]]    | [2;12] | [4;10] | [1;13] | [2;12] |
+---  | { |  Balanced {}  | {{ *a {bb} }}    |        |        |        |        |
+---  | < |  Balanced <>  | << *a <bb> >>    |        |        |        |        |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+---  | ) |  Balanced ()  | (( *a (bb) ))    |        |        |        |        |
+---  | ] |  Balanced []  | [[ *a [bb] ]]    |        |        |        |        |
+---  | } |  Balanced {}  | {{ *a {bb} }}    | [2;12] | [3;11] | [1;13] | [2;12] |
+---  | > |  Balanced <>  | << *a <bb> >>    |        |        |        |        |
+---  | b |  Alias for    | [( *a {bb} )]    |        |        |        |        |
+---  |   |  ), ], or }   |                  |        |        |        |        |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+---  | " |  Balanced "   | "*a" " bb "      |        |        |        |        |
+---  | ' |  Balanced '   | '*a' ' bb '      |        |        |        |        |
+---  | ` |  Balanced `   | `*a` ` bb `      | [1;4]  | [2;3]  | [6;11] | [7;10] |
+---  | q |  Alias for    | '*a' " bb "      |        |        |        |        |
+---  |   |  ", ', or `   |                  |        |        |        |        |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+---  | ? |  User prompt  | e*e o e o o      | [3;5]  | [4;4]  | [7;9]  | [8;8]  |
+---  |   |(typed e and o)|                  |        |        |        |        |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+---  | t |      Tag      | <x>*</x><y>b</y> | [1;8]  | [4;4]  | [9;16] |[12;12] |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+---  | f | Function call | f(a, g(*b, c) )  | [6;13] | [8;12] | [1;15] | [3;14] |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+---  | a |   Argument    | f(*a, g(b, c) )  | [3;5]  | [3;4]  | [5;14] | [7;13] |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+---  |   |    Default    |                  |        |        |        |        |
+---  |   |   (digits,    | aa_*b__cc___     | [4;7]  | [4;5]  | [8;12] | [8;9]  |
+---  |   | punctuation,  | (example for _)  |        |        |        |        |
+---  |   | or whitespace)|                  |        |        |        |        |
+---  |---|---------------|-1234567890123456-|--------|--------|--------|--------|
+--- <
+--- Notes:
+--- - All examples assume default `config.search_method`.
+--- - Open brackets differ from close brackets by how they treat inner edge
+---   whitespace for `i` textobject: open ignores it, close - includes.
+--- - Default textobject is activated for identifiers from digits (0, ..., 9),
+---   punctuation (like `_`, `*`, `,`, etc.), whitespace (space, tab, etc.).
+---   They are designed to be treated as separators, so include only right edge
+---   in `a` textobject. To include both edges, use custom textobjects
+---   (see |MiniAi-textobject-specification| and |MiniAi.config|).
+---@tag MiniAi-textobject-builtin
+
+--- - REGION - table representing region in a buffer. Fields: <left> and
 ---   <right> for inclusive start and end positions (<right> might be `nil` to
 ---   describe empty region). Each position is also a table with line <line>
 ---   and column <col> (both start at 1). Examples:
----   - `{ left = { line = 1, col = 1 }, right = {line = 2, col = 1} }`
+---   - `{ left = { line = 1, col = 1 }, right = { line = 2, col = 1 } }`
 ---   - `{ left = { line = 10, col = 10 } }` - empty region.
---- - *Pattern* - string describing Lua pattern.
---- - *Span* - interval inside a string. Like `[1, 5]`.
---- - *Span `[a1, a2]` is nested inside `[b1, b2]`* <=> `b1 <= a1 <= a2 <= b2`.
----   It is also *span `[b1, b2]` covers `[a1, a2]`*.
---- - *Nested pattern* - array of patterns aimed to describe nested spans.
---- - *Span matches nested pattern* if there is a sequence of increasingly
+--- - PATTERN - string describing Lua pattern.
+--- - SPAN - interval inside a string (end-exclusive). Like [1, 5). Equal
+---   left and right edges describe empty span at that point.
+--- - SPAN `A = [a1, a2)` COVERS `B = [b1, b2)` if every element of
+---   `B` is within `A` (`a1 <= b < a2`).
+---   It also is described as B IS NESTED INSIDE A.
+--- - NESTED PATTERN - array of patterns aimed to describe nested spans.
+--- - SPAN MATCHES NESTED PATTERN if there is a sequence of consecutively
 ---   nested spans each matching corresponding pattern within substring of
----   previous span (input string for first span). Example:
----     Nested patterns: `{ '%b()', '^. .* .$' }` (padded balanced `()`)
+---   previous span (or input string for first span). Example:
+---     Nested patterns: `{ '%b()', '^. .* .$' }` (balanced `()` with inner space)
 ---     Input string: `( ( () ( ) ) )`
----                   `12345678901234`
----   Here are all matching spans `[1, 14]` and `[3, 12]`. Both `[5, 6]` and
----   `[8, 10]` match first pattern but not second. All other combinations of
----   `(` and `)` don't match first pattern (not balanced)
---- - *Composed pattern*: array with each element describing possible pattern
----   (or array of them) at that place. Elements can be arrays or string
----   patterns. Composed pattern basically defines all possible combinations of
----   nested pattern (their cartesian product). Example:
----     1. Composed pattern: `{{'%b()', '%b[]'}, '^. .* .$'}`
+---                   `123456789012345`
+---   Here are all matching spans [1, 15) and [3, 13). Both [5, 7) and [8, 10)
+---   match first pattern but not second. All other combinations of `(` and `)`
+---   don't match first pattern (not balanced).
+--- - COMPOSED PATTERN: array with each element describing possible pattern
+---   (or array of them) at that place. Composed pattern basically defines all
+---   possible combinations of nested pattern (their cartesian product).
+---   Examples:
+---     1. Composed pattern: `{ { '%b()', '%b[]' }, '^. .* .$' }`
 ---        Composed pattern expanded into equivalent array of nested patterns:
 ---         `{ '%b()', '^. .* .$' }` and `{ '%b[]', '^. .* .$' }`
----        *Description*: either balanced `()` or balanced `[]` but both with
+---        Description: either balanced `()` or balanced `[]` but both with
 ---        inner edge space.
 ---     2. Composed pattern:
 ---        `{ { { '%b()', '^. .* .$' }, { '%b[]', '^.[^ ].*[^ ].$' } }, '.....' }`
 ---        Composed pattern expanded into equivalent array of nested patterns:
 ---        `{ '%b()', '^. .* .$', '.....' }` and
 ---        `{ '%b[]', '^.[^ ].*[^ ].$', '.....' }`
----        *Description*: either "balanced `()` with inner edge space" or
+---        Description: either "balanced `()` with inner edge space" or
 ---        "balanced `[]` with no inner edge space", both with 5 or more characters.
---- - *Span matches composed pattern* if it matches at least one nested
----   pattern from expanded composed pattern.
----
+--- - SPAN MATCHES COMPOSED PATTERN if it matches at least one nested pattern
+---   from expanded composed pattern.
 ---@tag MiniAi-glossary
 
 --- Textobject specification has a structure of composed pattern (see
@@ -130,15 +210,15 @@
 --- - Last pattern(s) should have even number of empty capture groups denoting
 ---   how the last string should be processed to extract `a` or `i` textobject:
 ---     - Zero captures mean that whole string represents both `a` and `i`.
----       Example: 'aaa' will define textobject matching string `xxx` literally.
+---       Example: `xxx` will define textobject matching string `xxx` literally.
 ---     - Two captures represent `i` textobject inside of them. `a` - whole string.
 ---       Example: `x()x()x` defines `a` textobject to be `xxx`, `i` - middle `x`.
 ---     - Four captures define `a` textobject inside captures 1 and 4, `i` -
 ---       inside captures 2 and 3. Example: `x()()x()x()` defines `a`
 ---       textobject to be last `xx`, `i` - middle `x`.
 --- - Allows functions in certain places (enables more complex textobjects in
----   exchange of increase in computations):
----     - If specification itself is a function, it will be called the same
+---   exchange of increase in configuration complexity and computations):
+---     - If specification itself is a function, it will be called with the same
 ---       arguments as |MiniAi.find_textobject()| and should return either a
 ---       composed pattern or output region itself (useful for incorporating
 ---       other instruments, like treesitter).
@@ -156,16 +236,19 @@
 ---           function()
 ---             local left = { line = 1, col = 1 }
 ---             local right = {
----               line = vim.fn.line('$'), col = vim.fn.getline('$'):len()
+---               line = vim.fn.line('$'),
+---               col = math.max(vim.fn.getline('$'):len(), 1)
 ---             }
 ---             return { left = left, right = right }
 ---           end
 --- <
 ---     - If there is a function instead of assumed string pattern, it is
 ---       expected to have signature `(line, init)` and behave like
----       `pattern:find(line, init)`. It should return two numbers representing
+---       `pattern:find()`. It should return two numbers representing
 ---       span in `line` next after or at `init` (`nil` if there is no such span).
----       Not allowed as last item (as it should be pattern with captures).
+---       !IMPORTANT NOTE!: it means that output's left edge shouldn't be
+---       strictly to the left of `init` (it will lead to infinite loop). Not
+---       allowed as last item (as it should be pattern with captures).
 ---       Example of matching only balanced parenthesis with big enough width:
 --- >
 ---         {
@@ -192,6 +275,7 @@
 ---     `},`
 ---     `'^().*()$'`
 ---   `}`
+--- - Number: `{ '%f[%d]%d+' }`
 --- - Date in 'YYYY-MM-DD' format:
 ---   `{ '()%d%d%d%d%-%d%d%-%d%d()' }`
 --- - Textobject with left and right edges consisting from as many same
@@ -200,43 +284,43 @@
 ---     - Markdown `*` emphasis: `{ '%f[%*]%*+()[^%*]-()%*+%f[^%*]' }`
 ---     - Markdown `_` emphasis: `{ '%f[_]_+()[^_]-()_+%f[^_]' }`
 --- - Lua block string: `{ '%[%[().-()%]%]' }`
----
 ---@tag MiniAi-textobject-specification
-
---- Builtin ones:
---- TODO: probably, make table with columns 'Id', 'Line', `a`, `i`
---- - Balanced brackets:
----     - `(`, `[`, `{`. `a` - around brackets, `i` - inside brackets excluding
----       inner edge whitespace.
----     - `)`, `]`, `}`. `a` - around brackets, `i` - inside brackets.
----     - `b` - alias for a best region among `)`, `]`, `}`.
---- - Balanced quotes;
----     - `"`, `'`, `. Textobject is between odd and even character starting
----       from whole neighborhood.
----     - Alias for a best region among `"`, `'`, `.
---- - Function call. Basically some characters followed by a balanced
----   parenthesis.
---- - Argument. Region inside balanced brackets (`()`, `{}`, `[]`) between
----   commas. Accounts for commas inside nested balanced brackets or quotes
----   (`''`, `""`), but not comments. For more precise results use treesitter.
---- - Tag. Region within tag edges: `<xxx>...</xxx>`.
---- - Prompted from user. Can't result into span with two or more right edges.
---- - All other single character punctuation, digit, or whitespace. Left and
----   right edges will be multiples of the character without this character in
----   between. Includes only right edge in `a` textobject. Can't result into
----   covering span, so can't evolve with `config.search_method = 'cover'`. To
----   consecutively select use with `v:count` equal to 2 (like `v2a_`).
----@tag MiniAi-textobject-builtin
 
 --- Algorithm design
 ---
---- Utilizes same basic ideas about searching object as |mini.surround|, but
---- has more advanced features.
+--- Search for the textobjects relies on these principles:
+--- - It uses same input data as described in |MiniAi.find_textobject()|,
+---   i.e. whether it is `a` or `i` textobject, its identifier, reference region, etc.
+--- - Textobject specification is constructed based on textobject identifier
+---   (see |MiniAi-textobject-specification|).
+--- - General search is done by converting some 2d buffer region (neighborhood
+---   of reference region) into 1d string (each line is appended with `\n`).
+---   Then search for a best span matching textobject specification is done
+---   inside string (see |MiniAi-glossary|). After that, span is converted back
+---   into 2d region. Note: first search is done inside reference region lines,
+---   and only after that - inside its neighborhood within `config.n_lines`
+---   (see |MiniAi.config|).
+--- - The best matching span is done by iterating over all spans matching
+---   textobject specification and comparing them with "current best".
+---   Comparison also depends on reference region (tighter covering is better,
+---   otherwise closer is better) and search method (if span is even considered).
+--- - Iteration over all matched spans is done in depth-first fashion with
+---   respect to nested pattern.
 ---
---- Lua patterns which are handled specially:
---- - `%bxx` (`xx` is two identical characters).
---- - `x.-y` (`x` and `y` are different strings).
----
+--- Notes:
+--- - It is guaranteed that span is compared only once.
+--- - For the sake of increasing functionality, during iteration over all
+---   matching spans, some Lua patterns in composed pattern are handled
+---   specially.
+---     - `%bxx` (`xx` is two identical characters). It denotes balanced pair
+---       of identical characters and results into "paired" matches. For
+---       example, `%b""` for `"aa" "bb"` would match `"aa"` and `"bb"`, but
+---       not middle `" "`.
+---     - `x.-y` (`x` and `y` are different strings). It results only in matches with
+---       smallest width. For example, `e.-o` for `e e o o` will result only in
+---       middle `e o`. Note: it has some implications for when parts have
+---       quantifiers (like `+`, etc.), which usually can be resolved with
+---       frontier pattern `%f[]` (see examples in |MiniAi-textobject-specification|).
 ---@tag MiniAi-algorithm
 
 -- Module definition ==========================================================
@@ -266,7 +350,7 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Options ~
 ---
---- ## Custom textobjects
+--- ## Custom textobjects ~
 ---
 --- Each named entry of `config.custom_textobjects` is a textobject with
 --- that identifier and specification (see |MiniAi-textobject-specification|).
@@ -301,12 +385,39 @@ end
 --- <
 --- There are more example specifications in |MiniAi-textobject-specification|.
 ---
---- ## Search method
+--- ## Search method~
 ---
---- ...
+--- Value of `config.search_method` defines how best match search is done when
+--- there is no covering match (with span covering cursor position) found
+--- within searched neighborhood. Based on its value, one of "previous",
+--- "next", or neither match is used as output. Its possible values are:
+--- - `'cover_or_next'` (default) - use next.
+--- - `'cover'` - don't use either "previous" or "next"; report that
+---   there is no surrounding found.
+--- - `'cover_or_prev'` - use previous.
+--- - `'cover_or_nearest'` - use nearest to current cursor position. Distance
+---   is computed based on "1d neighborhood" using minimum distance between
+---   corresponding edges. Previous is used in case of a tie.
+---
+--- Note: search is first performed on the reference region lines and only
+--- after failure - on the whole neighborhood defined by `config.n_lines`. This
+--- means that with `config.search_method` not equal to `'cover'`, "previous"
+--- or "next" surrounding will end up as search result if they are found on
+--- first stage although covering match might be found in bigger, whole
+--- neighborhood. This design is based on observation that most of the time
+--- operation is done withtin reference region lines (usually cursor line).
+---
+--- Here is an example of what `a)` textobject is based on a value of
+--- `'config.search_method'` when cursor is inside `bbb` word:
+--- - `search_method = 'cover_or_next'`: `(a) bbb (c)` -> `(c)`
+--- - `search_method = 'cover'`:         `(a) bbb (c)` -> none
+--- - `search_method = 'cover_or_prev'`: `(a) bbb (c)` -> `(a)`
+--- - `search_method = 'cover_or_nearest'`: depends on cursor position.
+---   For first and second `b` - as in `cover_or_prev` (as previous match is
+---   nearer), for third - as in `cover_or_next` (as next match is nearer).
 MiniAi.config = {
   -- Table with textobject id as fields, textobject specification as values.
-  -- Use this to disable builtin textobjects. See |MiniAi.config|.
+  -- Also use this to disable builtin textobjects. See |MiniAi.config|.
   custom_textobjects = nil,
 
   -- Module mappings. Use `''` (empty string) to disable one.
@@ -315,7 +426,7 @@ MiniAi.config = {
     around = 'a',
     inside = 'i',
 
-    -- Move cursor to certain part of textobject
+    -- Move cursor to certain edge of `a` textobject
     goto_left = 'g[',
     goto_right = 'g]',
   },
@@ -325,7 +436,7 @@ MiniAi.config = {
 
   -- How to search for object (first inside current line, then inside
   -- neighborhood). One of 'cover', 'cover_or_next', 'cover_or_prev',
-  -- 'cover_or_nearest'. For more details, see `:h MiniAi.config`.
+  -- 'cover_or_nearest'.
   search_method = 'cover_or_next',
 }
 --minidoc_afterlines_end
@@ -502,14 +613,12 @@ end
 ---@param mode string One of 'x' (Visual) or 'o' (Operator-pending).
 ---@param ai_type string One of `'a'` or `'i'`.
 MiniAi.expr_textobject = function(mode, ai_type)
-  if H.is_disabled() then return '' end
-
   local tobj_id = H.user_textobject_id(ai_type)
 
   if tobj_id == nil then return '' end
 
-  -- Fall back to builtin `a`/`i` textobjects in case of invalid id
-  if not H.is_valid_textobject_id(tobj_id) then return ai_type .. tobj_id end
+  -- Possibly fall back to builtin `a`/`i` textobjects
+  if H.is_disabled() or not H.is_valid_textobject_id(tobj_id) then return ai_type .. tobj_id end
 
   -- Clear cache
   H.cache = {}
@@ -549,7 +658,8 @@ end
 
 --- Make expression for moving cursor to edge of textobject
 ---
---- Designed to be used inside expression mapping. No need to use directly.
+--- Designed to be used inside expression mapping (powers `config.goto_left`
+--- and `config.goto_right` mappings). No need to use directly.
 ---
 --- Textobject identifier is taken from user single character input.
 --- Default `n_times` option is taken from |v:count1|.
@@ -1315,13 +1425,6 @@ H.cartesian_product = function(arr)
   process(1)
   return res
 end
-
--- TODO:
--- - Reconsider using exclusive right end of region. This might enable working
---   Operator-pending mode on single character textobjects (`cia` for `f(x)`
---   when on cursor is on `x`). Also makes easier indication of empty region.
--- - Tests.
--- - Documentation.
 
 -- Test cases
 

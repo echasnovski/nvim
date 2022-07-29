@@ -983,6 +983,20 @@ T['Textobject']['shows message if no textobject is found'] = function()
   )
 end
 
+T['Textobject']['respects `vim.{g,b}.miniai_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].miniai_disable = true
+
+    -- It should fallback to Neovim builtin behavior
+    validate_tobj1d('(  aa  )', 0, 'i(', { 2, 7 })
+
+    -- It shouldn't recognize new textobjects
+    validate_edit1d('*bb*', 1, '*bb*', 1, 'ci*')
+  end,
+})
+
 local validate_motion = function(lines, cursor, keys, expected)
   set_lines(lines)
   set_cursor(cursor[1], cursor[2])
@@ -1075,6 +1089,24 @@ T['Motion']['works with multibyte characters'] = function()
   validate_motion1d(' (ыыы) ', 0, 'g[)', 1)
   validate_motion1d(' (ыыы) ', 0, 'g])', 8)
 end
+
+T['Motion']['respects `vim.{g,b}.miniai_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].miniai_disable = true
+
+    set_lines({ '  (aaa)  ' })
+    set_cursor(1, 4)
+
+    -- Here `)` should serve as builtin motion after unsuccessful use of motion
+    type_keys('g[)')
+    eq(get_cursor(), { 1, 8 })
+
+    type_keys('g])')
+    eq(get_cursor(), { 1, 8 })
+  end,
+})
 
 T['Builtin'] = new_set()
 
@@ -2020,6 +2052,43 @@ end
 
 T['Custom textobject']['documented examples'] = new_set()
 
+T['Custom textobject']['function call with name from user inpur'] = function()
+  child.lua([[_G.fun_prompt = function()
+    local left_edge = vim.pesc(vim.fn.input('Function name: '))
+    return { string.format('%s+%%b()', left_edge), '^.-%(().*()%)$' }
+  end]])
+  child.lua('MiniAi.config.custom_textobjects = { F = _G.fun_prompt }')
+
+  validate_tobj1d('aa(xx) bb(xx)', 0, 'aFbb<CR>', { 8, 13 })
+  validate_tobj1d('aa(xx) bb(xx)', 0, 'iFbb<CR>', { 11, 12 })
+end
+
+T['Custom textobject']['full buffer'] = function()
+  child.lua([[_G.full_buffer = function()
+    local left = { line = 1, col = 1 }
+    local right = { line = vim.fn.line('$'), col = math.max(vim.fn.getline('$'):len(), 1) }
+    return { left = left, right = right }
+  end]])
+  child.lua('MiniAi.config.custom_textobjects = { g = _G.full_buffer }')
+
+  validate_tobj({ 'aaaa', 'bbb', 'cc' }, { 2, 0 }, 'ag', { { 1, 1 }, { 3, 2 } })
+  validate_tobj({ '' }, { 1, 0 }, 'ag', { { 1, 1 }, { 1, 1 } })
+end
+
+T['Custom textobject']['balanced parenthesis with big enough width'] = function()
+  child.lua([[_G.wide_parens_spec = {
+    '%b()',
+    function(s, init)
+      if init > 1 or s:len() < 5 then return end
+      return 1, s:len()
+    end,
+    '^.().*().$'
+  }]])
+  child.lua('MiniAi.config.custom_textobjects = { p = _G.wide_parens_spec }')
+
+  validate_tobj1d('() (a) (aa) (aaa)', 0, 'ap', { 13, 17 })
+end
+
 T['Custom textobject']['documented examples']['word'] = function()
   set_custom_tobj({ w = { '()()%f[%w]%w+()[ \t]*()' } })
 
@@ -2051,6 +2120,14 @@ T['Custom textobject']['documented examples']['camel case word'] = function()
   validate_tobj1d('aaa', 0, 'ac', { 1, 3 })
 
   validate_no_tobj1d('  A', 0, 'ac')
+end
+
+T['Custom textobject']['documented examples']['number'] = function()
+  set_custom_tobj({ n = { '%f[%d]%d+' } })
+
+  validate_tobj1d(' 1 10_11', 0, 'an', { 2, 2 })
+  validate_tobj1d(' 1 10_11', 0, '2an', { 4, 5 })
+  validate_tobj1d(' 1 10_11', 0, '3an', { 7, 8 })
 end
 
 T['Custom textobject']['documented examples']['date'] = function()
