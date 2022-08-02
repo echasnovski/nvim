@@ -14,9 +14,10 @@ vim.cmd([[normal! zx]]) -- Update folds
 -- vim.g.markdown_folding = 1
 
 -- Customize 'mini.nvim'
+local spec_pair = require('mini.ai').gen_spec.pair
 vim.b.miniai_config = {
   custom_textobjects = {
-    ['*'] = { '%f[%*]%*+()[^%*]-()%*+%f[^%*]' },
-    ['_'] = { '%f[_]_+()[^_]-()_+%f[^_]' },
+    ['*'] = spec_pair('*', '*', { type = 'greedy' }),
+    ['_'] = spec_pair('_', '_', { type = 'greedy' }),
   },
 }
