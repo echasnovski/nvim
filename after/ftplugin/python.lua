@@ -21,4 +21,4 @@ end
 vim.api.nvim_buf_set_keymap(0, 'n', '<M-s>', '<Cmd>lua EC.section_python()<CR>', { noremap = true })
 vim.api.nvim_buf_set_keymap(0, 'i', '<M-s>', '<Cmd>lua EC.section_python()<CR>', { noremap = true })
 
-vim.b.miniindentscope_options = { border = 'top' }
+vim.b.miniindentscope_config = { options = { border = 'top' } }

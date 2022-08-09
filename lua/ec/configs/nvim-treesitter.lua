@@ -27,33 +27,7 @@ require('nvim-treesitter.configs').setup({
     'yaml',
   },
   highlight = { enable = true },
-  textobjects = {
-    -- Not having textobjects for arguments (`parameter.inner` and
-    -- `parameter.outer`) because it currently doesn't always work intuitively.
-    -- For example, in Python's list `[1, 2, 3]` elements are not recognized as
-    -- arguments.
-    enable = true,
-    select = {
-      enable = true,
-      keymaps = {
-        ['ac'] = '@class.outer',
-        ['ic'] = '@class.inner',
-        ['aF'] = '@function.outer',
-        ['iF'] = '@function.inner',
-        -- Used in R
-        ['io'] = '@pipe',
-      },
-    },
-    swap = {
-      enable = true,
-      swap_next = {
-        ['<leader>ol'] = '@parameter.inner',
-      },
-      swap_previous = {
-        ['<leader>oh'] = '@parameter.inner',
-      },
-    },
-  },
+  textobjects = { enable = false },
   indent = { enable = false },
   playground = {
     enable = true,
