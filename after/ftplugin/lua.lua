@@ -8,10 +8,7 @@ vim.opt.comments = ':---,:--'
 -- Customize 'mini.nvim'
 vim.b.minisurround_config = {
   custom_surroundings = {
-    s = {
-      input = { find = '%[%[.-%]%]', extract = '^(..).*(..)$' },
-      output = { left = '[[', right = ']]' },
-    },
+    s = { input = { '%[%[().-()%]%]' }, output = { left = '[[', right = ']]' } },
   },
 }
 
