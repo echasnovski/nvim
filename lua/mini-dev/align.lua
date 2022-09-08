@@ -82,9 +82,9 @@ MiniAlign.config = {
   -- Each is a function that either modifies in place and return `nil` or
   -- returns new options table
   modifiers = {
-    h = function(opts) opts.justify = 'left' end,
-    l = function(opts) opts.justify = 'right' end,
+    c = function(opts) opts.justify = 'center' end,
     f = function(opts)
+      -- TODO: update to use `pre_justify`
       local input = H.user_input('Enter filter expression')
       if input == nil then return end
 
@@ -93,20 +93,56 @@ MiniAlign.config = {
 
       opts.filter = filter
     end,
+    h = function(opts) opts.justify = 'left' end,
+    l = function(opts) opts.justify = 'right' end,
+    m = function(opts)
+      local input = H.user_input('Enter merger')
+      if input == nil then return end
+      opts.merger = input
+    end,
+    t = function(opts)
+      -- TODO: simplify this
+      local cur_pre_justify = opts.pre_justify
+      opts.pre_justify = function(splits, _)
+        cur_pre_justify(splits, _)
+        splits.trim()
+      end
+      opts.merger = ' '
+    end,
+    p = function(opts)
+      local cur_pre_justify = opts.pre_justify
+      opts.pre_justify = function(splits, _)
+        cur_pre_justify(splits, _)
+        splits.pair()
+      end
+    end,
     ['?'] = function(opts)
       local input = H.user_input('Enter splitter Lua pattern')
       if input == nil then return end
-
       opts.splitter = input
+    end,
+    -- TODO: Add more pre-defined modifiers for common use cases (`=`, `,`, `<Space>`, '|')
+    [' '] = function(opts) opts.splitter = '%s+' end,
+    ['='] = function(opts)
+      opts.splitter = '%p*=+[<>~]*'
+      local cur_pre_justify = opts.pre_justify
+      opts.pre_justify = function(splits, _)
+        cur_pre_justify(splits, _)
+        splits.trim()
+      end
+      opts.merger = ' '
     end,
   },
 
+  -- TODO: use different data structure for `pre_justify` and `post_justify`
+  -- (ideally table, but beware of deep extending during options normalization)
+  -- to allow simple building of actions.
+  -- Maybe should include step names for a interactive feedback.
   options = {
-    filter = function(x, data) return true end,
-    pre = function(x, data) return x end,
+    pre_justify = function(_, _) end,
     justify = 'left',
-    post = function(x, data) return x end,
-    concat = '',
+    post_justify = function(_, _) end,
+    merger = '',
   },
 }
 --minidoc_afterlines_end
@@ -120,25 +156,23 @@ MiniAlign.align_strings = function(strings, opts)
   opts = H.normalize_opts(opts)
 
   -- Split string
-  local splits = vim.tbl_map(H.normalize_splitter(opts.splitter), strings)
+  local splits = H.normalize_splitter(opts.splitter)(strings, opts)
 
-  splits = H.apply_justify(splits, opts)
+  opts.pre_justify(splits, opts)
+  H.normalize_justify(opts.justify)(splits, opts)
+  opts.post_justify(splits, opts)
 
-  -- Temporary action for testing
-  return vim.tbl_map(function(x) return table.concat(x, '-') end, splits)
-
-  -- Modify string parts
-
-  -- Concatenate splits
-  -- return vim.tbl_map(function(x) return table.concat(x, opts.concat) end, splits)
+  return H.normalize_merger(opts.merger)(splits, opts)
 end
 
-MiniAlign.align_interactive = function()
+MiniAlign.align_user = function()
   local modifiers = H.get_config().modifiers
 
   -- Use cache for dot-repreat
   local opts = H.cache.opts or H.normalize_opts({})
+  -- TODO: Consider explicit stopping instead of "once splitter is defined"
   while opts.splitter == nil do
+    -- TODO: Make some visual feedback about current options
     local id = H.user_modifier()
     if id == nil then return end
 
@@ -168,19 +202,87 @@ MiniAlign.align_interactive = function()
   H.region_set_text(region, reg_type, strings_aligned)
 end
 
+--- Perfrom action in Normal mode
+---
+--- Used in Normal mode mapping. No need to use it directly.
+MiniAlign.action_normal = function()
+  H.cache = {}
+
+  -- Set 'operatorfunc' which will be later called with appropriate marks set
+  vim.cmd('set operatorfunc=v:lua.MiniAlign.align_user')
+  return 'g@'
+end
+
+--- Perfrom action in Visual mode
+---
+--- Used in Visual mode mapping. No need to use it directly.
 MiniAlign.action_visual = function()
   H.cache = {}
-  vim.cmd('lockmarks lua MiniAlign.align_interactive()')
-  -- MiniAlign.align_interactive()
 
-  -- Exit Visual mode
+  -- Perform action and exit Visual mode
+  MiniAlign.align_user()
   vim.cmd('normal! \27')
 end
 
-MiniAlign.action_normal = function()
-  H.cache = {}
-  vim.cmd('set operatorfunc=v:lua.MiniAlign.align_interactive')
-  return 'g@'
+MiniAlign.as_splits = function(arr2d)
+  if not H.can_be_splits(arr2d) then H.error('Input of `as_splits()` can not be converted to splits.') end
+
+  local splits = vim.deepcopy(arr2d)
+  local methods = {}
+
+  -- Group cells into single string based on boolean mask.
+  -- Can be used for filtering separators and sticking separator to its part.
+  methods.group = function(mask, direction)
+    direction = direction or 'left'
+    for i, row in ipairs(splits) do
+      local group_tables = H.group_by_mask(row, mask[i], direction)
+      splits[i] = vim.tbl_map(table.concat, group_tables)
+    end
+  end
+
+  methods.pair = function()
+    local mask = splits.apply(function(_, data) return data.col % 2 == 0 end)
+    splits.group(mask)
+  end
+
+  methods.trim = function(direction) splits.apply_inplace(H.trim_functions[direction or 'both']) end
+
+  methods.get_dims = function()
+    local n_cols = -math.huge
+    for _, row in ipairs(splits) do
+      n_cols = math.max(n_cols, #row)
+    end
+    return { row = #splits, col = n_cols }
+  end
+
+  methods.slice_row = function(i) return splits[i] end
+
+  -- NOTE: output might not be an array (some rows can not have input column)
+  -- Use `vim.tbl_keys()` and `vim.tbl_values()`
+  methods.slice_col = function(j)
+    return vim.tbl_map(function(row) return row[j] end, splits)
+  end
+
+  methods.apply = function(f)
+    local res = {}
+    for i, row in ipairs(splits) do
+      res[i] = {}
+      for j, s in ipairs(row) do
+        res[i][j] = f(s, { row = i, col = j })
+      end
+    end
+    return res
+  end
+
+  methods.apply_inplace = function(f)
+    for i, row in ipairs(splits) do
+      for j, s in ipairs(row) do
+        splits[i][j] = f(s, { row = i, col = j })
+      end
+    end
+  end
+
+  return setmetatable(splits, { class = 'splits', __index = methods })
 end
 
 -- Helper data ================================================================
@@ -196,14 +298,28 @@ H.ns_id = {
   input = vim.api.nvim_create_namespace('MiniAlignInput'),
 }
 
--- Supported justify directions
-H.justify_functions = {
+-- Pad functions for supported justify directions
+H.pad_functions = {
   left = function(x, n_spaces) return string.format('%s%s', x, string.rep(' ', n_spaces)) end,
   center = function(x, n_spaces)
     local n_left = math.floor(0.5 * n_spaces)
     return string.format('%s%s%s', string.rep(' ', n_left), x, string.rep(' ', n_spaces - n_left))
   end,
   right = function(x, n_spaces) return string.format('%s%s', string.rep(' ', n_spaces), x) end,
+}
+
+-- Pad functions for last row cell (used to save user's trailing whitespace)
+H.pad_last_functions = {
+  left = function(x, _) return x end,
+  center = function(x, n_spaces) return H.pad_functions.right(x, math.floor(0.5 * n_spaces)) end,
+  right = H.pad_functions.right,
+}
+
+-- Trim functions
+H.trim_functions = {
+  left = function(x) return string.gsub(x, '^%s*', '') end,
+  right = function(x) return string.gsub(x, '%s*$', '') end,
+  both = function(x) return H.trim_functions.left(H.trim_functions.right(x)) end,
 }
 
 -- Helper functionality =======================================================
@@ -257,21 +373,24 @@ H.normalize_splitter = function(splitter)
   if vim.is_callable(splitter) then return splitter end
   if type(splitter) ~= 'string' then H.error(H.msg_opts('opts', 'splitter', 'should be string or callable.')) end
 
-  return function(s)
+  return function(string_array, _)
     local res = {}
-    local n_total, n = s:len(), 0
-    while n <= n_total do
-      local sep_left, sep_right = H.string_find(s, splitter, n)
-      if sep_left == nil then
-        table.insert(res, s:sub(n, n_total))
-        break
+    for i, s in ipairs(string_array) do
+      res[i] = {}
+      local n_total, n = s:len(), 0
+      while n <= n_total do
+        local sep_left, sep_right = H.string_find(s, splitter, n)
+        if sep_left == nil then
+          table.insert(res[i], s:sub(n, n_total))
+          break
+        end
+        table.insert(res[i], s:sub(n, sep_left - 1))
+        table.insert(res[i], s:sub(sep_left, sep_right))
+        n = sep_right + 1
       end
-      table.insert(res, s:sub(n, sep_left - 1))
-      table.insert(res, s:sub(sep_left, sep_right))
-      n = sep_right + 1
     end
 
-    return res
+    return MiniAlign.as_splits(res)
   end
 end
 
@@ -282,19 +401,58 @@ H.normalize_justify = function(justify)
     H.error(H.msg_opts('opts', 'justify', 'should be string, array of strings or callable.'))
   end
 
-  -- return function(splits, opts)
-  --   local justify_method = H.slice_mod(justify, data.n_column)
-  --   local justify_fun = H.justify_functions[justify_method]
-  --
-  --   local column_splits = data.splits_column
-  --   local width, width_max = H.string_arr_width(column_splits)
-  --
-  --   local res = {}
-  --   for i, s in ipairs(column_splits) do
-  --     res[i] = justify_fun(s, width_max - width[i])
-  --   end
-  --   return res
-  -- end
+  return function(splits, _)
+    -- Compute both cell width and maximum column widths
+    local width, width_col = {}, {}
+    for i, row in ipairs(splits) do
+      width[i] = {}
+      for j, s in ipairs(row) do
+        local w = vim.fn.strdisplaywidth(s)
+        width[i][j] = w
+        width_col[j] = math.max(w, width_col[j] or -math.huge)
+      end
+    end
+
+    -- Precompute padding functions (recycle `justify` array).
+    -- Use separate padding functions for last and non-last cells to not
+    -- possibly create extra trailing whitespace but preserve input one.
+    local dims = splits.get_dims()
+    local pad_funs, pad_last_funs = {}, {}
+    for j = 1, dims.col do
+      local justify_method = H.slice_mod(justify, j)
+      pad_funs[j] = H.pad_functions[justify_method]
+      pad_last_funs[j] = H.pad_last_functions[justify_method]
+    end
+
+    -- Pad cells to have same width across columns
+    for i, row in ipairs(splits) do
+      for j, s in ipairs(row) do
+        local pad_f = j < #row and pad_funs[j] or pad_last_funs[j]
+        local n_space = width_col[j] - width[i][j]
+        splits[i][j] = pad_f(s, n_space)
+      end
+    end
+  end
+end
+
+H.normalize_merger = function(merger)
+  if vim.is_callable(merger) then return merger end
+  if type(merger) == 'string' then merger = { merger } end
+  if not H.is_string_array(merger) then
+    H.error(H.msg_opts('opts', 'merger', 'should be string, array of strings or callable.'))
+  end
+
+  return function(splits, _)
+    -- Precompute combination strings (recycle `merger` array)
+    local dims = splits.get_dims()
+    local combine_strings = {}
+    for j = 1, dims.col - 1 do
+      combine_strings[j] = H.slice_mod(merger, j)
+    end
+
+    -- Concat cells
+    return vim.tbl_map(function(row) return H.concat_array(row, combine_strings) end, splits)
+  end
 end
 
 H.is_valid_opts = function(x, x_name, check_splitter)
@@ -305,12 +463,10 @@ H.is_valid_opts = function(x, x_name, check_splitter)
     return false, H.msg_opts(x_name, 'splitter', 'should be string or callable.')
   end
 
-  -- TODO: validate filter
-
-  -- TODO: validate pre
+  -- TODO: validate pre_justify
   -- TODO: validate justify
-  -- TODO: validate post
-  -- TODO: validate concat
+  -- TODO: validate post_justify
+  -- TODO: validate merger
 
   return true
 end
@@ -320,26 +476,17 @@ H.validate_opts = function(x, x_name, check_sep)
   if not is_valid then H.error(msg) end
 end
 
-H.msg_opts = function(opts_name, key, msg) H.error(([[`%s.%s` %s]]):format(opts_name, key, msg)) end
+H.msg_opts = function(opts_name, key, msg) H.error(('`%s.%s` %s'):format(opts_name, key, msg)) end
 
 -- Work with splits -----------------------------------------------------------
--- TODO: !!!make `splits` class!!!
-H.splits_get_width = function(splits)
-  local width, width_col = {}, {}
-  for i, arr in ipairs(splits) do
-    width[i] = {}
-    for j, s in ipairs(arr) do
-      local w = vim.fn.strdisplaywidth(s)
-      width[i][j] = w
-      width_col[j] = math.max(width_col[j] or -math.huge, w)
-    end
+H.is_splits = function(x) return (getmetatable(x) or {}).class == 'splits' end
+
+H.can_be_splits = function(x)
+  for i = 1, #x do
+    if not H.is_string_array(x[i]) then return false end
   end
-
-  return { width = width, width_col = width_col }
+  return true
 end
-
--- Work with justify ----------------------------------------------------------
-H.apply_justify = function(splits, opts) end
 
 -- Work with filter -----------------------------------------------------------
 H.make_expression_filter = function(expr)
@@ -547,6 +694,39 @@ H.map = function(mode, key, rhs, opts)
 end
 
 H.slice_mod = function(x, i) return x[((i - 1) % #x) + 1] end
+
+H.group_by_mask = function(arr, mask, direction)
+  local res, cur_group = {}, {}
+
+  -- Construct actors based on direction
+  local from, to, by = 1, #arr, 1
+  local insert = function(t, v) table.insert(t, v) end
+  if direction == 'right' then
+    from, to, by = to, from, -1
+    insert = function(t, v) table.insert(t, 1, v) end
+  end
+
+  -- Group
+  for i = from, to, by do
+    insert(cur_group, arr[i])
+    if mask[i] or i == to then
+      insert(res, cur_group)
+      cur_group = {}
+    end
+  end
+
+  return res
+end
+
+H.concat_array = function(arr, concat)
+  local ext_arr = {}
+  for i = 1, #arr - 1 do
+    table.insert(ext_arr, arr[i])
+    table.insert(ext_arr, concat[i])
+  end
+  table.insert(ext_arr, arr[#arr])
+  return table.concat(ext_arr, '')
+end
 
 H.string_arr_width = function(x)
   local width, width_max = {}, -math.huge

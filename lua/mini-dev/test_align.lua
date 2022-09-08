@@ -1,3 +1,5 @@
+-- - Doesn't add trailing whitespace.
+
 -- - Doesn't remove marks in both Normal and Visual mode.
 
 -- Tests for block mode:
