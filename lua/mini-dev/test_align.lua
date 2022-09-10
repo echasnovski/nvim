@@ -1,4 +1,9 @@
+-- - Visual selection is "registered" after performing alignment (`gv` selects
+--   previous selection).
 -- - Doesn't add trailing whitespace.
+-- - Respects different `direction` and `indent` values in `splits.trim()` and
+--   `gen_step.trim()`.
+-- - Doesn't merge empty strings.
 
 -- - Doesn't remove marks in both Normal and Visual mode.
 

@@ -1,15 +1,18 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- TODO:
--- - Firgure out how to handle indentation when doing trimming. Just not
---   trimming from left might not result into left alignment. Also keep in mind
---   that strings might be from blockwise Visual selection.
--- - Consider dropping `opts` argument from step application.
--- - Consider dealing with merging empty strings (should or should not be
---   excluded). They are adding (possibly) unnecessary merger.
+-- - Figure out a way to ignore areas during splitting. Probably, with
+--   `gen_step.splitter`.
+-- - Consider somehow ignore lines with not enough delimiters (probably won't
+--   happen, but still). This can go well with something like `row ~= 2`
+--   filtering (which squashes whole row 2 into single split).
 -- - Consider explicit stopping instead of "once splitter is defined".
 -- - Consider implementing live preview.
 -- - Clean up code structure.
+--
+-- NOTEs:
+-- - Filtering by last equal sign usually can be done with `n == (N - 1)`
+--   (because there is usually something to the right of it).
 
 -- Documentation ==============================================================
 --- Align text.
@@ -43,6 +46,10 @@
 --- # Comparisons~
 ---
 --- - 'junegunn/vim-easy-align':
+---     - 'mini.align' doesn't distinguish splits from one another.
+---     - 'junegunn/vim-easy-align' implements special filtering by delimiter
+---       number in a row. 'mini.align' has builtin filtering based on Lua code
+---       supplied by user in modifier phase. See `MiniAlign.config.modifiers.f`.
 --- - 'godlygeek/tabular':
 --- - `tommcdo/vim-lion`:
 ---
@@ -93,19 +100,19 @@ MiniAlign.config = {
   -- Each is a function that either modifies in place and return `nil` or
   -- returns new options table
   modifiers = {
-    c = function(opts) opts.justify = 'center' end,
-    f = function(opts)
+    ['c'] = function(opts) opts.justify = 'center' end,
+    ['f'] = function(opts)
       local input = H.user_input('Enter filter expression')
       table.insert(opts.pre_steps, MiniAlign.gen_step.filter(input))
     end,
-    h = function(opts) opts.justify = 'left' end,
-    l = function(opts) opts.justify = 'right' end,
-    m = function(opts)
+    ['l'] = function(opts) opts.justify = 'left' end,
+    ['m'] = function(opts)
       local input = H.user_input('Enter merger')
       opts.merger = input or opts.merger
     end,
-    t = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.trim()) end,
-    p = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.pair()) end,
+    ['t'] = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.trim()) end,
+    ['p'] = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.pair()) end,
+    ['r'] = function(opts) opts.justify = 'right' end,
     ['?'] = function(opts)
       local input = H.user_input('Enter splitter Lua pattern')
       opts.splitter = input or opts.splitter
@@ -147,7 +154,7 @@ MiniAlign.align_strings = function(strings, opts)
   local norm_opts = H.normalize_opts(opts, 'opts', true)
 
   -- Split string
-  local splits = norm_opts.splitter.action(strings, norm_opts)
+  local splits = norm_opts.splitter.action(strings)
   if not H.is_splits(splits) then
     if H.can_be_splits(splits) then
       splits = MiniAlign.as_splits(splits)
@@ -158,19 +165,19 @@ MiniAlign.align_strings = function(strings, opts)
 
   -- Apply 'pre' steps
   for _, step in ipairs(norm_opts.pre_steps) do
-    H.apply_step(step, splits, norm_opts)
+    H.apply_step(step, splits)
   end
 
   -- Justify
-  H.apply_step(norm_opts.justify, splits, norm_opts)
+  H.apply_step(norm_opts.justify, splits)
 
   -- Apply 'post' steps
   for _, step in ipairs(norm_opts.post_steps) do
-    H.apply_step(step, splits, norm_opts)
+    H.apply_step(step, splits)
   end
 
   -- Merge splits
-  local new_strings = norm_opts.merger.action(splits, norm_opts)
+  local new_strings = norm_opts.merger.action(splits)
   if not H.is_array_of(new_strings, H.is_string) then H.error('Output of `merger` step should be array of strings.') end
   return new_strings
 end
@@ -253,7 +260,33 @@ MiniAlign.as_splits = function(arr2d)
     splits.group(mask)
   end
 
-  methods.trim = function(direction) splits.apply_inplace(H.trim_functions[direction or 'both']) end
+  methods.trim = function(direction, indent)
+    direction = direction or 'both'
+    indent = indent or 'keep'
+
+    -- Verify arguments
+    local trim_fun = H.trim_functions[direction]
+    if not vim.is_callable(trim_fun) then
+      H.error('`direction` should be one of ' .. table.concat(vim.tbl_keys(H.trim_functions), ', ') .. '.')
+    end
+
+    local indent_fun = H.indent_functions[indent]
+    if not vim.is_callable(indent_fun) then
+      H.error('`direction` should be one of ' .. table.concat(vim.tbl_keys(H.indent_functions), ', ') .. '.')
+    end
+
+    -- Compute indentation to restore later
+    local row_indent = vim.tbl_map(function(row) return row[1]:match('^(%s*)') end, splits)
+    row_indent = indent_fun(row_indent)
+
+    -- Trim
+    splits.apply_inplace(trim_fun)
+
+    -- Restore indentation
+    for i, row in ipairs(splits) do
+      row[1] = string.format('%s%s', row_indent[i], row[1])
+    end
+  end
 
   methods.get_dims = function()
     local n_cols = -math.huge
@@ -296,12 +329,12 @@ end
 --- Generate common action steps
 MiniAlign.gen_step = {}
 
-MiniAlign.gen_step.trim = function()
-  return MiniAlign.new_step('trim', function(splits, _) splits.trim() end)
+MiniAlign.gen_step.trim = function(direction, indent)
+  return MiniAlign.new_step('trim', function(splits) splits.trim(direction, indent) end)
 end
 
 MiniAlign.gen_step.pair = function()
-  return MiniAlign.new_step('pair', function(splits, _) splits.pair() end)
+  return MiniAlign.new_step('pair', function(splits) splits.pair() end)
 end
 
 MiniAlign.gen_step.filter = function(expr)
@@ -327,20 +360,18 @@ H.ns_id = {
 }
 
 -- Pad functions for supported justify directions
+-- Allow to not add trailing whitespace
 H.pad_functions = {
-  left = function(x, n_spaces) return string.format('%s%s', x, string.rep(' ', n_spaces)) end,
-  center = function(x, n_spaces)
+  left = function(x, n_spaces, no_trailing)
+    if no_trailing then return x end
+    return string.format('%s%s', x, string.rep(' ', n_spaces))
+  end,
+  center = function(x, n_spaces, no_trailing)
     local n_left = math.floor(0.5 * n_spaces)
-    return string.format('%s%s%s', string.rep(' ', n_left), x, string.rep(' ', n_spaces - n_left))
+    local n_right = no_trailing and 0 or (n_spaces - n_left)
+    return string.format('%s%s%s', string.rep(' ', n_left), x, string.rep(' ', n_right))
   end,
   right = function(x, n_spaces) return string.format('%s%s', string.rep(' ', n_spaces), x) end,
-}
-
--- Pad functions for last row cell (used to save user's trailing whitespace)
-H.pad_last_functions = {
-  left = function(x, _) return x end,
-  center = function(x, n_spaces) return H.pad_functions.right(x, math.floor(0.5 * n_spaces)) end,
-  right = H.pad_functions.right,
 }
 
 -- Trim functions
@@ -348,6 +379,28 @@ H.trim_functions = {
   left = function(x) return string.gsub(x, '^%s*', '') end,
   right = function(x) return string.gsub(x, '%s*$', '') end,
   both = function(x) return H.trim_functions.left(H.trim_functions.right(x)) end,
+}
+
+-- Indentation functions
+H.indent_functions = {
+  keep = function(indent_arr) return indent_arr end,
+  max = function(indent_arr)
+    local max_indent = indent_arr[1]
+    for i = 2, #indent_arr do
+      max_indent = (max_indent:len() < indent_arr[i]:len()) and indent_arr[i] or max_indent
+    end
+    return vim.tbl_map(function() return max_indent end, indent_arr)
+  end,
+  min = function(indent_arr)
+    local min_indent = indent_arr[1]
+    for i = 2, #indent_arr do
+      min_indent = (indent_arr[i]:len() < min_indent:len()) and indent_arr[i] or min_indent
+    end
+    return vim.tbl_map(function() return min_indent end, indent_arr)
+  end,
+  none = function(indent_arr)
+    return vim.tbl_map(function() return '' end, indent_arr)
+  end,
 }
 
 -- Helper functionality =======================================================
@@ -384,22 +437,6 @@ H.get_config =
   function(config) return vim.tbl_deep_extend('force', MiniAlign.config, vim.b.minialign_config or {}, config or {}) end
 
 -- Work with options ----------------------------------------------------------
-H.normalize_opts = function(opts, opts_name, check_splitter)
-  -- Infer all defaults from module config
-  local res = vim.tbl_deep_extend('force', H.get_config().options, opts or {})
-  -- Deep copy to ensure that table values will not be affected (because if a
-  -- table value is present only in one input, it is taken as is).
-  res = vim.deepcopy(res)
-
-  H.validate_opts(res, opts_name, check_splitter)
-
-  res.splitter = H.normalize_splitter(res.splitter)
-  res.justify = H.normalize_justify(res.justify)
-  res.merger = H.normalize_merger(res.merger)
-
-  return res
-end
-
 H.is_valid_opts = function(x, x_name, check_splitter)
   x_name = x_name or 'config.opts'
   if check_splitter == nil then check_splitter = false end
@@ -429,6 +466,22 @@ end
 H.validate_opts = function(x, x_name, check_splitter)
   local is_valid, msg = H.is_valid_opts(x, x_name, check_splitter)
   if not is_valid then H.error(msg) end
+end
+
+H.normalize_opts = function(opts, opts_name, check_splitter)
+  -- Infer all defaults from module config
+  local res = vim.tbl_deep_extend('force', H.get_config().options, opts or {})
+  -- Deep copy to ensure that table values will not be affected (because if a
+  -- table value is present only in one input, it is taken as is).
+  res = vim.deepcopy(res)
+
+  H.validate_opts(res, opts_name, check_splitter)
+
+  res.splitter = H.normalize_splitter(res.splitter)
+  res.justify = H.normalize_justify(res.justify)
+  res.merger = H.normalize_merger(res.merger)
+
+  return res
 end
 
 H.normalize_splitter = function(splitter)
@@ -471,6 +524,13 @@ H.normalize_justify = function(justify)
   if type(justify) == 'string' then justify = { justify } end
 
   local action = function(splits, _)
+    -- Precompute padding functions (recycle `justify` array)
+    local dims = splits.get_dims()
+    local pad_funs = {}
+    for j = 1, dims.col do
+      pad_funs[j] = H.pad_functions[H.slice_mod(justify, j)]
+    end
+
     -- Compute both cell width and maximum column widths
     local width, width_col = {}, {}
     for i, row in ipairs(splits) do
@@ -482,23 +542,12 @@ H.normalize_justify = function(justify)
       end
     end
 
-    -- Precompute padding functions (recycle `justify` array).
-    -- Use separate padding functions for last and non-last cells to not
-    -- possibly create extra trailing whitespace but preserve input one.
-    local dims = splits.get_dims()
-    local pad_funs, pad_last_funs = {}, {}
-    for j = 1, dims.col do
-      local justify_method = H.slice_mod(justify, j)
-      pad_funs[j] = H.pad_functions[justify_method]
-      pad_last_funs[j] = H.pad_last_functions[justify_method]
-    end
-
     -- Pad cells to have same width across columns
     for i, row in ipairs(splits) do
       for j, s in ipairs(row) do
-        local pad_f = j < #row and pad_funs[j] or pad_last_funs[j]
         local n_space = width_col[j] - width[i][j]
-        splits[i][j] = pad_f(s, n_space)
+        -- Don't add trailing whitespace for last column
+        splits[i][j] = pad_funs[j](s, n_space, j == #row)
       end
     end
   end
@@ -520,8 +569,11 @@ H.normalize_merger = function(merger)
       combine_strings[j] = H.slice_mod(merger, j)
     end
 
-    -- Concat cells
-    return vim.tbl_map(function(row) return H.concat_array(row, combine_strings) end, splits)
+    -- Concat non-empty cells (empty cells add nothing but extra merger)
+    return vim.tbl_map(function(row)
+      local row_no_empty = vim.tbl_filter(function(s) return s ~= '' end, row)
+      return H.concat_array(row_no_empty, combine_strings)
+    end, splits)
   end
 
   return MiniAlign.new_step(step_name, action)
@@ -553,8 +605,8 @@ end
 H.msg_bad_opts = function(opts_name, key, msg) H.error(('`%s.%s` %s'):format(opts_name, key, msg)) end
 
 -- Work with steps ------------------------------------------------------------
-H.apply_step = function(step, splits, opts)
-  step.action(splits, opts)
+H.apply_step = function(step, splits)
+  step.action(splits)
 
   if not H.is_splits(splits) then
     local msg = string.format(
@@ -592,7 +644,7 @@ H.make_filter_action = function(expr)
     return f()
   end
 
-  return function(splits, _)
+  return function(splits)
     local mask = {}
     local data = { ROW = #splits }
     for i, row in ipairs(splits) do
