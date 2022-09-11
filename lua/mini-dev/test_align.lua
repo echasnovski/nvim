@@ -1,3 +1,5 @@
+-- Last row column doesn't affect column width in case of left justification.
+
 -- - Visual selection is "registered" after performing alignment (`gv` selects
 --   previous selection).
 -- - Doesn't add trailing whitespace.

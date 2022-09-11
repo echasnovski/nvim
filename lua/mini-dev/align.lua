@@ -1,16 +1,16 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- TODO:
--- - Figure out a way to ignore areas during splitting. Probably, with
---   `gen_step.splitter`.
--- - Consider somehow ignore lines with not enough delimiters (probably won't
---   happen, but still). This can go well with something like `row ~= 2`
---   filtering (which squashes whole row 2 into single split).
--- - Consider explicit stopping instead of "once splitter is defined".
--- - Consider implementing live preview.
+-- - Fix delay in `with_preview` when text is not set before message is shown.
+-- - Figure out an interface for deleting previous modifier result. Probably,
+--   focus mostly on `pre_steps`.
+-- - Figure out a way to ignore areas during splitting (strings, comments,
+--   treesitter, etc.). Probably, with `gen_step.splitter`.
 -- - Clean up code structure.
 --
--- NOTEs:
+-- Documentation TODO:
+-- - Setup similar to 'vim-easy-align'.
+-- - Idea about ignoring rows with `row ~= xxx` filtering.
 -- - Filtering by last equal sign usually can be done with `n == (N - 1)`
 --   (because there is usually something to the right of it).
 
@@ -49,7 +49,7 @@
 ---     - 'mini.align' doesn't distinguish splits from one another.
 ---     - 'junegunn/vim-easy-align' implements special filtering by delimiter
 ---       number in a row. 'mini.align' has builtin filtering based on Lua code
----       supplied by user in modifier phase. See `MiniAlign.config.modifiers.f`.
+---       supplied by user in modifier phase. See `MiniAlign.gen_step.filter`.
 --- - 'godlygeek/tabular':
 --- - `tommcdo/vim-lion`:
 ---
@@ -65,6 +65,8 @@
 
 --- Algorithm design
 ---@tag MiniAlign-algorithm
+
+---@alias __with_preview boolean|nil Whether to align with live preview.
 
 -- Module definition ==========================================================
 -- TODO: Make local before release
@@ -95,11 +97,13 @@ end
 MiniAlign.config = {
   mappings = {
     start = 'ga',
+    start_with_preview = 'gA',
   },
 
   -- Each is a function that either modifies in place and return `nil` or
   -- returns new options table
   modifiers = {
+    -- Option modifiers
     ['c'] = function(opts) opts.justify = 'center' end,
     ['f'] = function(opts)
       local input = H.user_input('Enter filter expression')
@@ -117,6 +121,8 @@ MiniAlign.config = {
       local input = H.user_input('Enter splitter Lua pattern')
       opts.splitter = input or opts.splitter
     end,
+
+    -- Special configurations for common splitters
     [' '] = function(opts) opts.splitter = '%s+' end,
     [','] = function(opts)
       opts.splitter = ','
@@ -182,15 +188,37 @@ MiniAlign.align_strings = function(strings, opts)
   return new_strings
 end
 
-MiniAlign.align_user = function()
+---@param with_preview __with_preview Default: last one used.
+MiniAlign.align_user = function(with_preview)
   local modifiers = H.get_config().modifiers
 
-  -- Use cache for dot-repreat
-  local opts = H.cache.opts or H.normalize_opts()
-  while opts.splitter == nil do
-    local id = H.user_modifier(opts)
-    if id == nil then return end
+  -- Probably fall back to cache value. Mostly used for `operatorfunc` case as
+  -- it is called with own inputs (see `:h g@`).
+  if type(with_preview) ~= 'boolean' then with_preview = H.cache.with_preview end
 
+  -- Use cache for dot-repeat
+  local opts = H.cache.opts or H.normalize_opts()
+
+  -- Track if lines were actually set to properly undo
+  local lines_were_set = false
+
+  -- Ask user to input modifier id until no more is needed
+  local n_iter = 0
+  while true do
+    local id = H.user_modifier(opts)
+    n_iter = n_iter + 1
+
+    -- Stop in case user supplied inappropriate modifer id (abort)
+    -- Also stop in case of too many iterations (guard from infinite cycle)
+    if id == nil or n_iter > 1000 then
+      if lines_were_set then H.undo() end
+      return
+    end
+
+    -- Stop preview after `<CR>` (confirmation)
+    if with_preview and id == '\r' then return end
+
+    -- Apply modifier
     local mod = modifiers[id]
     if mod == nil then
       -- Use supplied identifier as splitter pattern
@@ -199,27 +227,29 @@ MiniAlign.align_user = function()
       -- Modifier should change input `opts` table in place
       local ok, _ = pcall(modifiers[id], opts)
       if not ok then H.message(string.format('Modifier %s should be properly callable.', vim.inspect(id))) end
-
-      -- Normalize options while validating its correctness
-      opts = H.normalize_opts(opts)
     end
+
+    -- Normalize options while validating its correct structure
+    opts = H.normalize_opts(opts)
+
+    -- Process region while tracking if lines were set at least once
+    local lines_now_set = H.process_region(lines_were_set, opts)
+    lines_were_set = lines_were_set or lines_now_set
+
+    -- Stop in "no preview" mode right after `splitter` is defined
+    if not with_preview and opts.splitter ~= nil then return end
   end
-  H.cache.opts = opts
-
-  -- Process region
-  local region = H.get_current_region()
-  local reg_type = H.get_current_reg_type()
-
-  local strings = H.region_get_text(region, reg_type)
-  local strings_aligned = MiniAlign.align_strings(strings, opts)
-  H.region_set_text(region, reg_type, strings_aligned)
 end
 
 --- Perfrom action in Normal mode
 ---
 --- Used in Normal mode mapping. No need to use it directly.
-MiniAlign.action_normal = function()
-  H.cache = {}
+---
+---@param with_preview __with_preview
+MiniAlign.action_normal = function(with_preview)
+  if H.is_disabled() then return end
+
+  H.cache = { with_preview = with_preview }
 
   -- Set 'operatorfunc' which will be later called with appropriate marks set
   vim.cmd('set operatorfunc=v:lua.MiniAlign.align_user')
@@ -229,8 +259,12 @@ end
 --- Perfrom action in Visual mode
 ---
 --- Used in Visual mode mapping. No need to use it directly.
-MiniAlign.action_visual = function()
-  H.cache = {}
+---
+---@param with_preview __with_preview
+MiniAlign.action_visual = function(with_preview)
+  if H.is_disabled() then return end
+
+  H.cache = { with_preview = with_preview }
 
   -- Perform action and exit Visual mode
   MiniAlign.align_user()
@@ -363,15 +397,19 @@ H.ns_id = {
 -- Allow to not add trailing whitespace
 H.pad_functions = {
   left = function(x, n_spaces, no_trailing)
-    if no_trailing then return x end
+    if no_trailing or H.is_infinite(x) then return x end
     return string.format('%s%s', x, string.rep(' ', n_spaces))
   end,
   center = function(x, n_spaces, no_trailing)
+    if H.is_infinite(x) then return x end
     local n_left = math.floor(0.5 * n_spaces)
     local n_right = no_trailing and 0 or (n_spaces - n_left)
     return string.format('%s%s%s', string.rep(' ', n_left), x, string.rep(' ', n_right))
   end,
-  right = function(x, n_spaces) return string.format('%s%s', string.rep(' ', n_spaces), x) end,
+  right = function(x, n_spaces)
+    if H.is_infinite(x) then return x end
+    return string.format('%s%s', string.rep(' ', n_spaces), x)
+  end,
 }
 
 -- Trim functions
@@ -419,6 +457,7 @@ H.setup_config = function(config)
 
   vim.validate({
     ['mappings.start'] = { config.mappings.start, 'string' },
+    ['mappings.start_with_preview'] = { config.mappings.start_with_preview, 'string' },
   })
 
   return config
@@ -427,8 +466,13 @@ end
 H.apply_config = function(config)
   MiniAlign.config = config
 
-  H.map('n', config.mappings.start, 'v:lua.MiniAlign.action_normal()', { expr = true, desc = 'Align' })
-  H.map('x', config.mappings.start, '<Cmd>lua MiniAlign.action_visual()<CR>', { desc = 'Align' })
+  --stylua: ignore start
+  H.map('n', config.mappings.start,              'v:lua.MiniAlign.action_normal(v:false)',      { expr = true, desc = 'Align' })
+  H.map('x', config.mappings.start,              '<Cmd>lua MiniAlign.action_visual(false)<CR>', { desc = 'Align' })
+
+  H.map('n', config.mappings.start_with_preview, 'v:lua.MiniAlign.action_normal(v:true)',       { expr = true, desc = 'Align with preview' })
+  H.map('x', config.mappings.start_with_preview, '<Cmd>lua MiniAlign.action_visual(true)<CR>',  { desc = 'Align with preview' })
+  --stylua: ignore end
 end
 
 H.is_disabled = function() return vim.g.minialign_disable == true or vim.b.minialign_disable == true end
@@ -524,21 +568,30 @@ H.normalize_justify = function(justify)
   if type(justify) == 'string' then justify = { justify } end
 
   local action = function(splits, _)
-    -- Precompute padding functions (recycle `justify` array)
+    -- Recycle `justify` array and precompute padding functions
     local dims = splits.get_dims()
-    local pad_funs = {}
+    local pad_funs, justify_arr = {}, {}
     for j = 1, dims.col do
-      pad_funs[j] = H.pad_functions[H.slice_mod(justify, j)]
+      local just = H.slice_mod(justify, j)
+      justify_arr[j] = just
+      pad_funs[j] = H.pad_functions[just]
     end
 
     -- Compute both cell width and maximum column widths
-    local width, width_col = {}, {}
+    local width_col = {}
+    for j = 1, dims.col do
+      width_col[j] = -math.huge
+    end
+
+    local width = {}
     for i, row in ipairs(splits) do
       width[i] = {}
       for j, s in ipairs(row) do
         local w = vim.fn.strdisplaywidth(s)
         width[i][j] = w
-        width_col[j] = math.max(w, width_col[j] or -math.huge)
+        -- Don't use last column in row to compute column width in case of left
+        -- justification (it won't be padded so shouldn't contribute to column)
+        if not (j == #row and justify_arr[j] == 'left') then width_col[j] = math.max(w, width_col[j]) end
       end
     end
 
@@ -667,9 +720,33 @@ H.make_filter_action = function(expr)
 end
 
 -- Work with regions ----------------------------------------------------------
+---@return boolean Whether some lines were actually set.
+---@private
+H.process_region = function(lines_were_set, opts)
+  -- Do nothing in case of no splitter
+  if opts.splitter == nil then return false end
+
+  -- Cache current options for dot-repeat
+  H.cache.opts = opts
+
+  -- Undo previously set lines
+  if lines_were_set then H.undo() end
+
+  -- Actually process current region
+  local region = H.get_current_region()
+  local reg_type = H.get_current_reg_type()
+
+  local strings = H.region_get_text(region, reg_type)
+  local strings_aligned = MiniAlign.align_strings(strings, opts)
+  H.region_set_text(region, reg_type, strings_aligned)
+
+  -- Confirm that lines were actually set
+  return true
+end
+
 H.get_current_region = function()
   local from_expr, to_expr = "'[", "']"
-  if vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode(1)) then
+  if H.is_visual_mode() then
     from_expr, to_expr = '.', 'v'
   end
 
@@ -839,6 +916,8 @@ H.is_nonempty_region = function(x)
   return from_is_valid and to_is_valid
 end
 
+H.is_infinite = function(x) return x == math.huge or x == -math.huge end
+
 -- Utilities ------------------------------------------------------------------
 H.message = function(msg, avoid_hit_enter_prompt)
   local out = '(mini.align) ' .. msg
@@ -910,6 +989,21 @@ H.string_find = function(s, pattern, init)
   if pattern:sub(1, 1) == '^' and init > 1 then return nil end
   return string.find(s, pattern, init)
 end
+
+H.is_visual_mode = function() return vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode(1)) end
+
+H.undo = function()
+  if H.is_visual_mode() then
+    -- Can't use `u` in Visual mode because it makes all selection lowercase
+    vim.cmd('silent! normal! \27')
+    -- Lock marks for this undo, otherwise it will also undo `<` and `>` marks
+    vim.cmd('silent! lockmarks undo')
+    vim.cmd('silent! normal! gv')
+  else
+    vim.cmd('silent! normal! u')
+  end
+end
+
 --- Set text in current buffer without affecting marks
 ---@private
 H.set_text = function(start_row, start_col, end_row, end_col, replacement)
