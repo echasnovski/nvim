@@ -1,9 +1,9 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- TODO:
--- - Fix delay in `with_preview` when text is not set before message is shown.
+-- - Consider renaming 'options' to 'steps'?
 -- - Figure out a way to ignore areas during splitting (strings, comments,
---   treesitter, etc.). Probably, with `gen_step.splitter`.
+--   treesitter, etc.). Probably, with `gen_step.split_pattern`.
 -- - Clean up code structure.
 --
 -- Documentation TODO:
@@ -44,7 +44,7 @@
 --- # Comparisons~
 ---
 --- - 'junegunn/vim-easy-align':
----     - 'mini.align' doesn't distinguish splits from one another.
+---     - 'mini.align' doesn't distinguish splitted parts from one another.
 ---     - 'junegunn/vim-easy-align' implements special filtering by delimiter
 ---       number in a row. 'mini.align' has builtin filtering based on Lua code
 ---       supplied by user in modifier phase. See `MiniAlign.gen_step.filter`.
@@ -98,54 +98,96 @@ MiniAlign.config = {
     start_with_preview = 'gA',
   },
 
-  -- Each is a function that either modifies in place and return `nil` or
-  -- returns new options table
+  -- Each is a function that modifies ins input in place
   modifiers = {
-    -- Option modifiers
-    ['c'] = function(opts) opts.justify = 'center' end,
+    -- Main option modifiers
+    ['s'] = function(opts)
+      local input = H.user_input('Enter split Lua pattern')
+      opts.split = input or opts.split
+    end,
+    ['j'] = function(opts)
+      H.message('Select justify: (l)eft, (c)enter, (r)ight')
+      local ok, char = pcall(vim.fn.getchar)
+      if not ok or char == 27 then return end
+      if type(char) == 'number' then char = vim.fn.nr2char(char) end
+
+      if char == 'l' then opts.justify = 'left' end
+      if char == 'c' then opts.justify = 'center' end
+      if char == 'r' then opts.justify = 'right' end
+    end,
+    ['m'] = function(opts)
+      local input = H.user_input('Enter merge string')
+      opts.merge = input or opts.merge
+    end,
+
+    -- Modifiers adding 'pre justify' steps
     ['f'] = function(opts)
       local input = H.user_input('Enter filter expression')
-      table.insert(opts.pre_steps, MiniAlign.gen_step.filter(input))
+      table.insert(opts.pre_justify, MiniAlign.gen_step.filter(input))
     end,
-    ['l'] = function(opts) opts.justify = 'left' end,
-    ['m'] = function(opts)
-      local input = H.user_input('Enter merger')
-      opts.merger = input or opts.merger
-    end,
-    ['s'] = function(opts)
-      local input = H.user_input('Enter splitter Lua pattern')
-      opts.splitter = input or opts.splitter
-    end,
-    ['t'] = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.trim()) end,
-    ['p'] = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.pair()) end,
-    ['r'] = function(opts) opts.justify = 'right' end,
-    [vim.api.nvim_replace_termcodes('<BS>', true, true, true)] = function(opts) table.remove(opts.pre_steps, #opts.pre_steps) end,
+    ['t'] = function(opts) table.insert(opts.pre_justify, MiniAlign.gen_step.trim()) end,
+    ['p'] = function(opts) table.insert(opts.pre_justify, MiniAlign.gen_step.pair()) end,
 
-    -- Special configurations for common splitters
-    [' '] = function(opts) opts.splitter = '%s+' end,
-    [','] = function(opts)
-      opts.splitter = ','
-      table.insert(opts.pre_steps, MiniAlign.gen_step.trim())
-      table.insert(opts.pre_steps, MiniAlign.gen_step.pair())
-      opts.merger = ' '
+    -- Delete latest step
+    [vim.api.nvim_replace_termcodes('<BS>', true, true, true)] = function(opts)
+      local has_pre = {}
+      for _, pre in ipairs({ 'pre_split', 'pre_justify', 'pre_merge' }) do
+        if #opts[pre] > 0 then table.insert(has_pre, pre) end
+      end
+
+      if #has_pre == 0 then return end
+
+      if #has_pre == 1 then
+        local pre = opts[has_pre[1]]
+        table.remove(pre, #pre)
+        return
+      end
+
+      H.message('Select step to remove: (s)plit, (j)ustify, (m)erge')
+      local ok, char = pcall(vim.fn.getchar)
+      if not ok or char == 27 then return end
+      if type(char) == 'number' then char = vim.fn.nr2char(char) end
+
+      if char == 's' then table.remove(opts.pre_split, #opts.pre_split) end
+      if char == 'j' then table.remove(opts.pre_justify, #opts.pre_justify) end
+      if char == 'm' then table.remove(opts.pre_merge, #opts.pre_merge) end
     end,
-    ['|'] = function(opts)
-      opts.splitter = '|'
-      table.insert(opts.pre_steps, MiniAlign.gen_step.trim())
-      opts.merger = ' '
+
+    -- Special configurations for common splits
+    [' '] = function(opts)
+      table.insert(
+        opts.pre_split,
+        MiniAlign.new_step('squash', function(strings)
+          return vim.tbl_map(function(s) return s:gsub('%s+', ' ') end, strings)
+        end)
+      )
+      opts.split = ' '
     end,
     ['='] = function(opts)
-      opts.splitter = '%p*=+[<>~]*'
-      table.insert(opts.pre_steps, MiniAlign.gen_step.trim())
-      opts.merger = ' '
+      opts.split = '%p*=+[<>~]*'
+      table.insert(opts.pre_justify, MiniAlign.gen_step.trim())
+      opts.merge = ' '
+    end,
+    [','] = function(opts)
+      opts.split = ','
+      table.insert(opts.pre_justify, MiniAlign.gen_step.trim())
+      table.insert(opts.pre_justify, MiniAlign.gen_step.pair())
+      opts.merge = ' '
+    end,
+    ['|'] = function(opts)
+      opts.split = '|'
+      table.insert(opts.pre_justify, MiniAlign.gen_step.trim())
+      opts.merge = ' '
     end,
   },
 
   options = {
-    pre_steps = {},
+    pre_split = {},
+    split = nil,
+    pre_justify = {},
     justify = 'left',
-    post_steps = {},
-    merger = '',
+    pre_merge = {},
+    merge = '',
   },
 }
 --minidoc_afterlines_end
@@ -158,32 +200,37 @@ MiniAlign.align_strings = function(strings, opts)
   end
   local norm_opts = H.normalize_opts(opts, 'opts', true)
 
-  -- Split string
-  local splits = norm_opts.splitter.action(strings)
-  if not H.is_splits(splits) then
-    if H.can_be_splits(splits) then
-      splits = MiniAlign.as_splits(splits)
+  -- Pre split
+  for _, step in ipairs(norm_opts.pre_split) do
+    strings = step.action(strings)
+  end
+
+  -- Split
+  local parts = norm_opts.split.action(strings)
+  if not H.is_parts(parts) then
+    if H.can_be_parts(parts) then
+      parts = MiniAlign.as_parts(parts)
     else
-      H.error('Output of `splitter` step should be convertable to splits. See `:h MiniAlign.as_splits()`.')
+      H.error('Output of `split` step should be convertable to parts. See `:h MiniAlign.as_parts()`.')
     end
   end
 
-  -- Apply 'pre' steps
-  for _, step in ipairs(norm_opts.pre_steps) do
-    H.apply_step(step, splits)
+  -- Pre justify
+  for _, step in ipairs(norm_opts.pre_justify) do
+    H.apply_step(step, parts)
   end
 
   -- Justify
-  H.apply_step(norm_opts.justify, splits)
+  H.apply_step(norm_opts.justify, parts)
 
-  -- Apply 'post' steps
-  for _, step in ipairs(norm_opts.post_steps) do
-    H.apply_step(step, splits)
+  -- Pre merge
+  for _, step in ipairs(norm_opts.pre_merge) do
+    H.apply_step(step, parts)
   end
 
-  -- Merge splits
-  local new_strings = norm_opts.merger.action(splits)
-  if not H.is_array_of(new_strings, H.is_string) then H.error('Output of `merger` step should be array of strings.') end
+  -- Merge
+  local new_strings = norm_opts.merge.action(parts)
+  if not H.is_array_of(new_strings, H.is_string) then H.error('Output of `merge` step should be array of strings.') end
   return new_strings
 end
 
@@ -195,7 +242,7 @@ MiniAlign.align_user = function(with_preview)
   -- it is called with own inputs (see `:h g@`).
   if type(with_preview) ~= 'boolean' then with_preview = H.cache.with_preview end
 
-  -- Use cache for dot-repeat
+  -- Use cache if present (enables dot-repeat)
   local opts = H.cache.opts or H.normalize_opts()
 
   -- Track if lines were actually set to properly undo
@@ -211,17 +258,17 @@ MiniAlign.align_user = function(with_preview)
     -- Also stop in case of too many iterations (guard from infinite cycle)
     if id == nil or n_iter > 1000 then
       if lines_were_set then H.undo() end
-      return
+      break
     end
 
     -- Stop preview after `<CR>` (confirmation)
-    if with_preview and id == '\r' then return end
+    if with_preview and id == '\r' then break end
 
     -- Apply modifier
     local mod = modifiers[id]
     if mod == nil then
-      -- Use supplied identifier as splitter pattern
-      opts.splitter = vim.pesc(id)
+      -- Use supplied identifier as split pattern
+      opts.split = vim.pesc(id)
     else
       -- Modifier should change input `opts` table in place
       local ok, _ = pcall(modifiers[id], opts)
@@ -235,8 +282,8 @@ MiniAlign.align_user = function(with_preview)
     local lines_now_set = H.process_region(lines_were_set, opts)
     lines_were_set = lines_were_set or lines_now_set
 
-    -- Stop in "no preview" mode right after `splitter` is defined
-    if not with_preview and opts.splitter ~= nil then return end
+    -- Stop in "no preview" mode right after `split` is defined
+    if not with_preview and opts.split ~= nil then break end
   end
 end
 
@@ -270,27 +317,27 @@ MiniAlign.action_visual = function(with_preview)
   vim.cmd('normal! \27')
 end
 
---- Convert 2d array to splits
-MiniAlign.as_splits = function(arr2d)
-  local ok, msg = H.can_be_splits(arr2d)
-  if not ok then H.error('Input of `as_splits()`' .. msg) end
+--- Convert 2d array to parts
+MiniAlign.as_parts = function(arr2d)
+  local ok, msg = H.can_be_parts(arr2d)
+  if not ok then H.error('Input of `as_parts()`' .. msg) end
 
-  local splits = vim.deepcopy(arr2d)
+  local parts = vim.deepcopy(arr2d)
   local methods = {}
 
   -- Group cells into single string based on boolean mask.
   -- Can be used for filtering separators and sticking separator to its part.
   methods.group = function(mask, direction)
     direction = direction or 'left'
-    for i, row in ipairs(splits) do
+    for i, row in ipairs(parts) do
       local group_tables = H.group_by_mask(row, mask[i], direction)
-      splits[i] = vim.tbl_map(table.concat, group_tables)
+      parts[i] = vim.tbl_map(table.concat, group_tables)
     end
   end
 
   methods.pair = function()
-    local mask = splits.apply(function(_, data) return data.col % 2 == 0 end)
-    splits.group(mask)
+    local mask = parts.apply(function(_, data) return data.col % 2 == 0 end)
+    parts.group(mask)
   end
 
   methods.trim = function(direction, indent)
@@ -309,37 +356,37 @@ MiniAlign.as_splits = function(arr2d)
     end
 
     -- Compute indentation to restore later
-    local row_indent = vim.tbl_map(function(row) return row[1]:match('^(%s*)') end, splits)
+    local row_indent = vim.tbl_map(function(row) return row[1]:match('^(%s*)') end, parts)
     row_indent = indent_fun(row_indent)
 
     -- Trim
-    splits.apply_inplace(trim_fun)
+    parts.apply_inplace(trim_fun)
 
     -- Restore indentation
-    for i, row in ipairs(splits) do
+    for i, row in ipairs(parts) do
       row[1] = string.format('%s%s', row_indent[i], row[1])
     end
   end
 
   methods.get_dims = function()
     local n_cols = -math.huge
-    for _, row in ipairs(splits) do
+    for _, row in ipairs(parts) do
       n_cols = math.max(n_cols, #row)
     end
-    return { row = #splits, col = n_cols }
+    return { row = #parts, col = n_cols }
   end
 
-  methods.slice_row = function(i) return splits[i] end
+  methods.slice_row = function(i) return parts[i] end
 
   -- NOTE: output might not be an array (some rows can not have input column)
   -- Use `vim.tbl_keys()` and `vim.tbl_values()`
   methods.slice_col = function(j)
-    return vim.tbl_map(function(row) return row[j] end, splits)
+    return vim.tbl_map(function(row) return row[j] end, parts)
   end
 
   methods.apply = function(f)
     local res = {}
-    for i, row in ipairs(splits) do
+    for i, row in ipairs(parts) do
       res[i] = {}
       for j, s in ipairs(row) do
         res[i][j] = f(s, { row = i, col = j })
@@ -349,25 +396,25 @@ MiniAlign.as_splits = function(arr2d)
   end
 
   methods.apply_inplace = function(f)
-    for i, row in ipairs(splits) do
+    for i, row in ipairs(parts) do
       for j, s in ipairs(row) do
-        splits[i][j] = f(s, { row = i, col = j })
+        parts[i][j] = f(s, { row = i, col = j })
       end
     end
   end
 
-  return setmetatable(splits, { class = 'splits', __index = methods })
+  return setmetatable(parts, { class = 'parts', __index = methods })
 end
 
 --- Generate common action steps
 MiniAlign.gen_step = {}
 
 MiniAlign.gen_step.trim = function(direction, indent)
-  return MiniAlign.new_step('trim', function(splits) splits.trim(direction, indent) end)
+  return MiniAlign.new_step('trim', function(parts) parts.trim(direction, indent) end)
 end
 
 MiniAlign.gen_step.pair = function()
-  return MiniAlign.new_step('pair', function(splits) splits.pair() end)
+  return MiniAlign.new_step('pair', function(parts) parts.pair() end)
 end
 
 MiniAlign.gen_step.filter = function(expr)
@@ -480,58 +527,59 @@ H.get_config =
   function(config) return vim.tbl_deep_extend('force', MiniAlign.config, vim.b.minialign_config or {}, config or {}) end
 
 -- Work with options ----------------------------------------------------------
-H.is_valid_opts = function(x, x_name, check_splitter)
+H.is_valid_opts = function(x, x_name, check_split)
   x_name = x_name or 'config.opts'
-  if check_splitter == nil then check_splitter = false end
+  if check_split == nil then check_split = false end
+
+  -- Common validators
+  local is_arr_of_steps = function(y) return H.is_array_of(y, H.is_step) end
+  local array_of_steps_msg = 'should be array of steps (see `:h MiniAlign.new_step()`).'
 
   local is_common_opt = function(y) return H.is_string(y) or H.is_array_of(y, H.is_string) or H.is_step(y) end
   local common_opt_msg = 'should be string, array of strings, or step (see `:h MiniAlign.new_step()`).'
 
-  if check_splitter and not is_common_opt(x.splitter) then
-    return false, H.msg_bad_opts(x_name, 'splitter', common_opt_msg)
-  end
+  -- Actual checks
+  if not is_arr_of_steps(x.pre_split) then return false, H.msg_bad_opts(x_name, 'pre_split', array_of_steps_msg) end
 
-  if not H.is_array_of(x.pre_steps, H.is_step) then
-    return false, H.msg_bad_opts(x_name, 'pre_steps', 'should be array of steps (see `:h MiniAlign.new_step()`).')
-  end
+  if check_split and not is_common_opt(x.split) then return false, H.msg_bad_opts(x_name, 'split', common_opt_msg) end
+
+  if not is_arr_of_steps(x.pre_justify) then return false, H.msg_bad_opts(x_name, 'pre_justify', array_of_steps_msg) end
 
   if not is_common_opt(x.justify) then return false, H.msg_bad_opts(x_name, 'justify', common_opt_msg) end
 
-  if not H.is_array_of(x.post_steps, H.is_step) then
-    return false, H.msg_bad_opts(x_name, 'post_steps', 'should be array of steps (see `:h MiniAlign.new_step()`).')
-  end
+  if not is_arr_of_steps(x.pre_merge) then return false, H.msg_bad_opts(x_name, 'pre_merge', array_of_steps_msg) end
 
-  if not is_common_opt(x.merger) then return false, H.msg_bad_opts(x_name, 'merger', common_opt_msg) end
+  if not is_common_opt(x.merge) then return false, H.msg_bad_opts(x_name, 'merge', common_opt_msg) end
 
   return true
 end
 
-H.validate_opts = function(x, x_name, check_splitter)
-  local is_valid, msg = H.is_valid_opts(x, x_name, check_splitter)
+H.validate_opts = function(x, x_name, check_split)
+  local is_valid, msg = H.is_valid_opts(x, x_name, check_split)
   if not is_valid then H.error(msg) end
 end
 
-H.normalize_opts = function(opts, opts_name, check_splitter)
+H.normalize_opts = function(opts, opts_name, check_split)
   -- Infer all defaults from module config
   local res = vim.tbl_deep_extend('force', H.get_config().options, opts or {})
   -- Deep copy to ensure that table values will not be affected (because if a
   -- table value is present only in one input, it is taken as is).
   res = vim.deepcopy(res)
 
-  H.validate_opts(res, opts_name, check_splitter)
+  H.validate_opts(res, opts_name, check_split)
 
-  res.splitter = H.normalize_splitter(res.splitter)
+  res.split = H.normalize_split(res.split)
   res.justify = H.normalize_justify(res.justify)
-  res.merger = H.normalize_merger(res.merger)
+  res.merge = H.normalize_merge(res.merge)
 
   return res
 end
 
-H.normalize_splitter = function(splitter)
-  if splitter == nil or H.is_step(splitter) then return splitter end
+H.normalize_split = function(split)
+  if split == nil or H.is_step(split) then return split end
 
-  local step_name = vim.inspect(splitter)
-  if type(splitter) == 'string' then splitter = { splitter } end
+  local step_name = vim.inspect(split)
+  if type(split) == 'string' then split = { split } end
 
   local action = function(string_array, _)
     local res = {}
@@ -539,10 +587,10 @@ H.normalize_splitter = function(splitter)
       res[i] = {}
       local n_total, n, j = s:len(), 0, 0
       while n <= n_total do
-        -- Take next splitter (recycle `splitter` array)
+        -- Take next split (recycle `split` array)
         j = j + 1
-        local cur_splitter = H.slice_mod(splitter, j)
-        local sep_left, sep_right = H.string_find(s, cur_splitter, n)
+        local cur_split = H.slice_mod(split, j)
+        local sep_left, sep_right = H.string_find(s, cur_split, n)
 
         if sep_left == nil then
           table.insert(res[i], s:sub(n, n_total))
@@ -554,7 +602,7 @@ H.normalize_splitter = function(splitter)
       end
     end
 
-    return MiniAlign.as_splits(res)
+    return MiniAlign.as_parts(res)
   end
 
   return MiniAlign.new_step(step_name, action)
@@ -566,9 +614,9 @@ H.normalize_justify = function(justify)
   local step_name = vim.inspect(justify)
   if type(justify) == 'string' then justify = { justify } end
 
-  local action = function(splits, _)
+  local action = function(parts, _)
     -- Recycle `justify` array and precompute padding functions
-    local dims = splits.get_dims()
+    local dims = parts.get_dims()
     local pad_funs, justify_arr = {}, {}
     for j = 1, dims.col do
       local just = H.slice_mod(justify, j)
@@ -583,7 +631,7 @@ H.normalize_justify = function(justify)
     end
 
     local width = {}
-    for i, row in ipairs(splits) do
+    for i, row in ipairs(parts) do
       width[i] = {}
       for j, s in ipairs(row) do
         local w = vim.fn.strdisplaywidth(s)
@@ -595,11 +643,11 @@ H.normalize_justify = function(justify)
     end
 
     -- Pad cells to have same width across columns
-    for i, row in ipairs(splits) do
+    for i, row in ipairs(parts) do
       for j, s in ipairs(row) do
         local n_space = width_col[j] - width[i][j]
         -- Don't add trailing whitespace for last column
-        splits[i][j] = pad_funs[j](s, n_space, j == #row)
+        parts[i][j] = pad_funs[j](s, n_space, j == #row)
       end
     end
   end
@@ -607,25 +655,25 @@ H.normalize_justify = function(justify)
   return MiniAlign.new_step(step_name, action)
 end
 
-H.normalize_merger = function(merger)
-  if merger == nil or H.is_step(merger) then return merger end
+H.normalize_merge = function(merge)
+  if merge == nil or H.is_step(merge) then return merge end
 
-  local step_name = vim.inspect(merger)
-  if type(merger) == 'string' then merger = { merger } end
+  local step_name = vim.inspect(merge)
+  if type(merge) == 'string' then merge = { merge } end
 
-  local action = function(splits, _)
-    -- Precompute combination strings (recycle `merger` array)
-    local dims = splits.get_dims()
-    local combine_strings = {}
+  local action = function(parts, _)
+    -- Precompute combination strings (recycle `merge` array)
+    local dims = parts.get_dims()
+    local merge_ext = {}
     for j = 1, dims.col - 1 do
-      combine_strings[j] = H.slice_mod(merger, j)
+      merge_ext[j] = H.slice_mod(merge, j)
     end
 
-    -- Concat non-empty cells (empty cells add nothing but extra merger)
+    -- Concat non-empty cells (empty cells add nothing but extra merge)
     return vim.tbl_map(function(row)
       local row_no_empty = vim.tbl_filter(function(s) return s ~= '' end, row)
-      return H.concat_array(row_no_empty, combine_strings)
-    end, splits)
+      return H.concat_array(row_no_empty, merge_ext)
+    end, parts)
   end
 
   return MiniAlign.new_step(step_name, action)
@@ -633,46 +681,46 @@ end
 
 H.opts_to_string = function(opts)
   -- Assumes `opts` are normalized (all values are converted to steps)
-  local res_tbl = {}
+  local single_to_string = function(prefix, value, pre_steps)
+    local val = ''
+    if value ~= nil then val = value.name end
 
-  if opts.splitter ~= nil then table.insert(res_tbl, 'Split: ' .. opts.splitter.name) end
+    local steps = ''
+    if #pre_steps > 0 then
+      local pre_names = vim.tbl_map(function(x) return x.name end, pre_steps)
+      steps = string.format('(%s) ', table.concat(pre_names, ', '))
+    end
 
-  if #opts.pre_steps > 0 then
-    local pre_names = vim.tbl_map(function(x) return x.name end, opts.pre_steps)
-    table.insert(res_tbl, 'Pre: ' .. table.concat(pre_names, ', '))
+    return string.format('%s: %s%s', prefix, steps, val)
   end
 
-  if opts.justify ~= nil then table.insert(res_tbl, 'Justify: ' .. opts.justify.name) end
-
-  if #opts.post_steps > 0 then
-    local post_names = vim.tbl_map(function(x) return x.name end, opts.post_steps)
-    table.insert(res_tbl, 'Post: ' .. table.concat(post_names, ', '))
-  end
-
-  if opts.merger ~= nil and opts.merger.name ~= '""' then table.insert(res_tbl, 'Merger: ' .. opts.merger.name) end
-
-  return table.concat(res_tbl, '; ')
+  local tbl = {
+    single_to_string('Split', opts.split, opts.pre_split),
+    single_to_string('Justify', opts.justify, opts.pre_justify),
+    single_to_string('Merge', opts.merge, opts.pre_merge),
+  }
+  return table.concat(tbl, '; ')
 end
 
 H.msg_bad_opts = function(opts_name, key, msg) H.error(('`%s.%s` %s'):format(opts_name, key, msg)) end
 
 -- Work with steps ------------------------------------------------------------
-H.apply_step = function(step, splits)
-  step.action(splits)
+H.apply_step = function(step, parts)
+  step.action(parts)
 
-  if not H.is_splits(splits) then
+  if not H.is_parts(parts) then
     local msg = string.format(
-      'Step `%s` should modify splits in place and preserve their structure. See `:h MiniAlign.as_splits`.',
+      'Step `%s` should modify parts in place and preserve their structure. See `:h MiniAlign.as_parts`.',
       step.name
     )
     H.error(msg)
   end
 end
 
--- Work with splits -----------------------------------------------------------
-H.is_splits = function(x) return (getmetatable(x) or {}).class == 'splits' end
+-- Work with parts ------------------------------------------------------------
+H.is_parts = function(x) return (getmetatable(x) or {}).class == 'parts' end
 
-H.can_be_splits = function(x)
+H.can_be_parts = function(x)
   if type(x) ~= 'table' then return false, 'should be table' end
   for i = 1, #x do
     if not H.is_array_of(x[i], H.is_string) then return false, 'values should be an array of strings' end
@@ -696,10 +744,10 @@ H.make_filter_action = function(expr)
     return f()
   end
 
-  return function(splits)
+  return function(parts)
     local mask = {}
-    local data = { ROW = #splits }
-    for i, row in ipairs(splits) do
+    local data = { ROW = #parts }
+    for i, row in ipairs(parts) do
       data.row = i
       mask[i] = {}
       for j, s in ipairs(row) do
@@ -714,7 +762,7 @@ H.make_filter_action = function(expr)
       end
     end
 
-    splits.group(mask)
+    parts.group(mask)
   end
 end
 
@@ -722,8 +770,8 @@ end
 ---@return boolean Whether some lines were actually set.
 ---@private
 H.process_region = function(lines_were_set, opts)
-  -- Do nothing in case of no splitter
-  if opts.splitter == nil then return false end
+  -- Do nothing in case of no split
+  if opts.split == nil then return false end
 
   -- Cache current options for dot-repeat
   H.cache.opts = opts
@@ -738,6 +786,9 @@ H.process_region = function(lines_were_set, opts)
   local strings = H.region_get_text(region, reg_type)
   local strings_aligned = MiniAlign.align_strings(strings, opts)
   H.region_set_text(region, reg_type, strings_aligned)
+
+  -- Make sure that latest changes are shown
+  vim.cmd('redraw')
 
   -- Confirm that lines were actually set
   return true
@@ -861,7 +912,7 @@ H.user_modifier = function(opts)
   vim.defer_fn(function()
     if not needs_help_msg then return end
 
-    H.message(H.opts_to_string(opts) .. '. Enter modifier (single character)', true)
+    H.message(H.opts_to_string(opts) .. '. Enter modifier', true)
     H.cache.msg_shown = true
   end, delay)
   local ok, char = pcall(vim.fn.getchar)
