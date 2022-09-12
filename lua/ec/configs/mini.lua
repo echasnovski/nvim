@@ -64,4 +64,6 @@ vim.defer_fn(function()
   require('mini.surround').setup({ search_method = 'cover_or_next' })
   require('mini.test').setup()
   require('mini.trailspace').setup()
+
+  require('mini-dev.align').setup()
 end, 0)

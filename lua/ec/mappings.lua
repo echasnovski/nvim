@@ -50,12 +50,11 @@ keymap('c', [[<M-l>]], [[<Right>]], { silent = false })
 -- Move between buffers
 if vim.fn.exists('g:vscode') == 1 then
   -- Simulate same TAB behavior in VSCode
-  keymap('n', [[L]], [[<Cmd>Tabnext<CR>]])
-  keymap('n', [[H]], [[<Cmd>Tabprev<CR>]])
+  keymap('n', ']b', [[<Cmd>Tabnext<CR>]])
+  keymap('n', '[b', [[<Cmd>Tabprev<CR>]])
 else
-  -- This duplicates code from 'vim-unimpaired' (just in case)
-  keymap('n', [[L]], [[<Cmd>bnext<CR>]])
-  keymap('n', [[H]], [[<Cmd>bprevious<CR>]])
+  keymap('n', ']b', [[<Cmd>bnext<CR>]])
+  keymap('n', '[b', [[<Cmd>bprevious<CR>]])
 end
 
 -- Simpler window navigation

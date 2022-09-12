@@ -2,8 +2,6 @@
 
 -- TODO:
 -- - Fix delay in `with_preview` when text is not set before message is shown.
--- - Figure out an interface for deleting previous modifier result. Probably,
---   focus mostly on `pre_steps`.
 -- - Figure out a way to ignore areas during splitting (strings, comments,
 --   treesitter, etc.). Probably, with `gen_step.splitter`.
 -- - Clean up code structure.
@@ -114,13 +112,14 @@ MiniAlign.config = {
       local input = H.user_input('Enter merger')
       opts.merger = input or opts.merger
     end,
-    ['t'] = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.trim()) end,
-    ['p'] = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.pair()) end,
-    ['r'] = function(opts) opts.justify = 'right' end,
-    ['?'] = function(opts)
+    ['s'] = function(opts)
       local input = H.user_input('Enter splitter Lua pattern')
       opts.splitter = input or opts.splitter
     end,
+    ['t'] = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.trim()) end,
+    ['p'] = function(opts) table.insert(opts.pre_steps, MiniAlign.gen_step.pair()) end,
+    ['r'] = function(opts) opts.justify = 'right' end,
+    [vim.api.nvim_replace_termcodes('<BS>', true, true, true)] = function(opts) table.remove(opts.pre_steps, #opts.pre_steps) end,
 
     -- Special configurations for common splitters
     [' '] = function(opts) opts.splitter = '%s+' end,
@@ -987,6 +986,11 @@ H.string_find = function(s, pattern, init)
   -- This is needed because `string.find()` doesn't do this.
   -- Example: `string.find('(aaa)', '^.*$', 4)` returns `4, 5`
   if pattern:sub(1, 1) == '^' and init > 1 then return nil end
+
+  -- Treat `''`pattern as `'.'` (i.e. match any character). Otherwise, it can
+  -- result in an infinite loop.
+  if pattern == '' then pattern = '.' end
+
   return string.find(s, pattern, init)
 end
 
