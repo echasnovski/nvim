@@ -6,7 +6,31 @@
 --   treesitter, etc.). Probably, with `gen_step.split_pattern`.
 -- - Clean up code structure.
 --
--- Documentation TODO:
+--
+-- Tests:
+-- - Works when all lines doesn't have split pattern
+--
+-- - Works with `opts.splitter` edge cases: `''`, `'.'`.
+-- - Last row column doesn't affect column width in case of left justification.
+--
+-- - Visual selection is "registered" after performing alignment (`gv` selects
+--   previous selection).
+-- - Doesn't add trailing whitespace.
+-- - Respects different `direction` and `indent` values in `splits.trim()` and
+--   `gen_step.trim()`.
+-- - Doesn't merge empty strings.
+--
+-- - Empty lines don't result into trailing whitespace.
+--
+-- - Doesn't remove marks in both Normal and Visual mode.
+--
+-- - Block mode:
+--     - Selection goes past the line (only right column, both columns).
+--     - Selection goes over empty line (at start/middle/end of selection).
+--     - Works with multibyte characters.
+--
+--
+-- Documentation:
 -- - Setup similar to 'vim-easy-align'.
 -- - Idea about ignoring rows with `row ~= xxx` filtering.
 -- - Filtering by last equal sign usually can be done with `n == (N - 1)`
@@ -16,11 +40,14 @@
 --- Align text.
 ---
 --- Features:
---- - Alignment is done by splitting text into parts (based on Lua pattern
----   separator or with user-supplied function), making each part same width,
----   and then merging them together.
+--- - Alignment is done in three major steps:
+---     - *Split* lines into parts based on Lua pattern or user-supplied rule.
+---     - *Justify* parts to be same width among columns.
+---     - *Merge* parts to be lines (possibly with custom delimiter).
+---   Each major step can be prefaced with other steps to achieve highly
+---   customizable outcome. See `options` value in |MiniAlign.config|.
 --- - User can control alignment interactively by pressing customizable modifiers
----   (single characters representing how alignment options should change).
+---   (single characters representing how alignment steps should change).
 --- - Customizable alignment options (see |MiniAlign.align_strings()|):
 ---     - Justification (left, right, center).
 ---     - Filtering affected parts based on predicate function (like "align
@@ -409,6 +436,122 @@ end
 --- Generate common action steps
 MiniAlign.gen_step = {}
 
+MiniAlign.gen_step.default_split = function(pattern)
+  if pattern == nil then return nil end
+
+  if not (H.is_string(pattern) or H.is_array_of(pattern, H.is_string)) then
+    H.error('Split `pattern` should be string or array of strings.')
+  end
+
+  local step_name = vim.inspect(pattern)
+  if type(pattern) == 'string' then pattern = { pattern } end
+
+  local action = function(string_array, _)
+    local res = {}
+    for i, s in ipairs(string_array) do
+      res[i] = {}
+      local n_total, n, j = s:len(), 0, 0
+      -- Split by recycled `pattern`
+      while n <= n_total do
+        j = j + 1
+        local cur_split = H.slice_mod(pattern, j)
+        local sep_left, sep_right = H.string_find(s, cur_split, n)
+
+        if sep_left == nil then
+          table.insert(res[i], s:sub(n, n_total))
+          break
+        end
+        table.insert(res[i], s:sub(n, sep_left - 1))
+        table.insert(res[i], s:sub(sep_left, sep_right))
+        n = sep_right + 1
+      end
+    end
+
+    return MiniAlign.as_parts(res)
+  end
+
+  return MiniAlign.new_step(step_name, action)
+end
+
+MiniAlign.gen_step.default_justify = function(side)
+  if side == nil then return nil end
+
+  if not (H.is_justify_side(side) or H.is_array_of(side, H.is_justify_side)) then
+    H.error([[Justify `side` should one of 'left', 'center', 'right', or array of those.]])
+  end
+
+  local step_name = vim.inspect(side)
+  if type(side) == 'string' then side = { side } end
+
+  local action = function(parts, _)
+    -- Recycle `justify` array and precompute padding functions
+    local dims = parts.get_dims()
+    local pad_funs, justify_arr = {}, {}
+    for j = 1, dims.col do
+      local just = H.slice_mod(side, j)
+      justify_arr[j] = just
+      pad_funs[j] = H.pad_functions[just]
+    end
+
+    -- Compute both cell width and maximum column widths
+    local width_col = {}
+    for j = 1, dims.col do
+      width_col[j] = -math.huge
+    end
+
+    local width = {}
+    for i, row in ipairs(parts) do
+      width[i] = {}
+      for j, s in ipairs(row) do
+        local w = vim.fn.strdisplaywidth(s)
+        width[i][j] = w
+        -- Don't use last column in row to compute column width in case of left
+        -- justification (it won't be padded so shouldn't contribute to column)
+        if not (j == #row and justify_arr[j] == 'left') then width_col[j] = math.max(w, width_col[j]) end
+      end
+    end
+
+    -- Pad cells to have same width across columns
+    for i, row in ipairs(parts) do
+      for j, s in ipairs(row) do
+        local n_space = width_col[j] - width[i][j]
+        -- Don't add trailing whitespace for last column
+        parts[i][j] = pad_funs[j](s, n_space, j == #row)
+      end
+    end
+  end
+
+  return MiniAlign.new_step(step_name, action)
+end
+
+MiniAlign.gen_step.default_merge = function(delimiter)
+  if delimiter == nil then return nil end
+
+  if not (H.is_string(delimiter) or H.is_array_of(delimiter, H.is_string)) then
+    H.error('Merge `delimiter` should be string or array of strings.')
+  end
+
+  local step_name = vim.inspect(delimiter)
+  if type(delimiter) == 'string' then delimiter = { delimiter } end
+
+  local action = function(parts, _)
+    -- Precompute combination strings (recycle `merge` array)
+    local dims = parts.get_dims()
+    local merge_ext = {}
+    for j = 1, dims.col - 1 do
+      merge_ext[j] = H.slice_mod(delimiter, j)
+    end
+
+    -- Concat non-empty cells (empty cells at this point add only extra merge)
+    return vim.tbl_map(function(row)
+      local row_no_empty = vim.tbl_filter(function(s) return s ~= '' end, row)
+      return H.concat_array(row_no_empty, merge_ext)
+    end, parts)
+  end
+
+  return MiniAlign.new_step(step_name, action)
+end
+
 MiniAlign.gen_step.trim = function(direction, indent)
   return MiniAlign.new_step('trim', function(parts) parts.trim(direction, indent) end)
 end
@@ -443,17 +586,15 @@ H.ns_id = {
 -- Allow to not add trailing whitespace
 H.pad_functions = {
   left = function(x, n_spaces, no_trailing)
-    if no_trailing or H.is_infinite(x) then return x end
+    if no_trailing or H.is_infinite(n_spaces) then return x end
     return string.format('%s%s', x, string.rep(' ', n_spaces))
   end,
   center = function(x, n_spaces, no_trailing)
-    if H.is_infinite(x) then return x end
     local n_left = math.floor(0.5 * n_spaces)
-    local n_right = no_trailing and 0 or (n_spaces - n_left)
-    return string.format('%s%s%s', string.rep(' ', n_left), x, string.rep(' ', n_right))
+    return H.pad_functions.right(H.pad_functions.left(x, n_left, no_trailing), n_spaces - n_left, no_trailing)
   end,
-  right = function(x, n_spaces)
-    if H.is_infinite(x) then return x end
+  right = function(x, n_spaces, no_trailing)
+    if (no_trailing and H.is_whitespace(x)) or H.is_infinite(n_spaces) then return x end
     return string.format('%s%s', string.rep(' ', n_spaces), x)
   end,
 }
@@ -531,12 +672,16 @@ H.is_valid_opts = function(x, x_name, check_split)
   x_name = x_name or 'config.opts'
   if check_split == nil then check_split = false end
 
-  -- Common validators
+  -- Validators
   local is_arr_of_steps = function(y) return H.is_array_of(y, H.is_step) end
   local array_of_steps_msg = 'should be array of steps (see `:h MiniAlign.new_step()`).'
 
   local is_common_opt = function(y) return H.is_string(y) or H.is_array_of(y, H.is_string) or H.is_step(y) end
   local common_opt_msg = 'should be string, array of strings, or step (see `:h MiniAlign.new_step()`).'
+
+  local is_justify = function(y) return H.is_justify_side(y) or H.is_array_of(y, H.is_justify_side) or H.is_step(y) end
+  local justify_msg =
+    [[should be one of 'left', 'center', 'right', array of those, or step (see `:h MiniAlign.new_step()`).]]
 
   -- Actual checks
   if not is_arr_of_steps(x.pre_split) then return false, H.msg_bad_opts(x_name, 'pre_split', array_of_steps_msg) end
@@ -545,7 +690,7 @@ H.is_valid_opts = function(x, x_name, check_split)
 
   if not is_arr_of_steps(x.pre_justify) then return false, H.msg_bad_opts(x_name, 'pre_justify', array_of_steps_msg) end
 
-  if not is_common_opt(x.justify) then return false, H.msg_bad_opts(x_name, 'justify', common_opt_msg) end
+  if not is_justify(x.justify) then return false, H.msg_bad_opts(x_name, 'justify', justify_msg) end
 
   if not is_arr_of_steps(x.pre_merge) then return false, H.msg_bad_opts(x_name, 'pre_merge', array_of_steps_msg) end
 
@@ -568,115 +713,11 @@ H.normalize_opts = function(opts, opts_name, check_split)
 
   H.validate_opts(res, opts_name, check_split)
 
-  res.split = H.normalize_split(res.split)
-  res.justify = H.normalize_justify(res.justify)
-  res.merge = H.normalize_merge(res.merge)
+  if not H.is_step(res.split) then res.split = MiniAlign.gen_step.default_split(res.split) end
+  if not H.is_step(res.justify) then res.justify = MiniAlign.gen_step.default_justify(res.justify) end
+  if not H.is_step(res.merge) then res.merge = MiniAlign.gen_step.default_merge(res.merge) end
 
   return res
-end
-
-H.normalize_split = function(split)
-  if split == nil or H.is_step(split) then return split end
-
-  local step_name = vim.inspect(split)
-  if type(split) == 'string' then split = { split } end
-
-  local action = function(string_array, _)
-    local res = {}
-    for i, s in ipairs(string_array) do
-      res[i] = {}
-      local n_total, n, j = s:len(), 0, 0
-      while n <= n_total do
-        -- Take next split (recycle `split` array)
-        j = j + 1
-        local cur_split = H.slice_mod(split, j)
-        local sep_left, sep_right = H.string_find(s, cur_split, n)
-
-        if sep_left == nil then
-          table.insert(res[i], s:sub(n, n_total))
-          break
-        end
-        table.insert(res[i], s:sub(n, sep_left - 1))
-        table.insert(res[i], s:sub(sep_left, sep_right))
-        n = sep_right + 1
-      end
-    end
-
-    return MiniAlign.as_parts(res)
-  end
-
-  return MiniAlign.new_step(step_name, action)
-end
-
-H.normalize_justify = function(justify)
-  if justify == nil or H.is_step(justify) then return justify end
-
-  local step_name = vim.inspect(justify)
-  if type(justify) == 'string' then justify = { justify } end
-
-  local action = function(parts, _)
-    -- Recycle `justify` array and precompute padding functions
-    local dims = parts.get_dims()
-    local pad_funs, justify_arr = {}, {}
-    for j = 1, dims.col do
-      local just = H.slice_mod(justify, j)
-      justify_arr[j] = just
-      pad_funs[j] = H.pad_functions[just]
-    end
-
-    -- Compute both cell width and maximum column widths
-    local width_col = {}
-    for j = 1, dims.col do
-      width_col[j] = -math.huge
-    end
-
-    local width = {}
-    for i, row in ipairs(parts) do
-      width[i] = {}
-      for j, s in ipairs(row) do
-        local w = vim.fn.strdisplaywidth(s)
-        width[i][j] = w
-        -- Don't use last column in row to compute column width in case of left
-        -- justification (it won't be padded so shouldn't contribute to column)
-        if not (j == #row and justify_arr[j] == 'left') then width_col[j] = math.max(w, width_col[j]) end
-      end
-    end
-
-    -- Pad cells to have same width across columns
-    for i, row in ipairs(parts) do
-      for j, s in ipairs(row) do
-        local n_space = width_col[j] - width[i][j]
-        -- Don't add trailing whitespace for last column
-        parts[i][j] = pad_funs[j](s, n_space, j == #row)
-      end
-    end
-  end
-
-  return MiniAlign.new_step(step_name, action)
-end
-
-H.normalize_merge = function(merge)
-  if merge == nil or H.is_step(merge) then return merge end
-
-  local step_name = vim.inspect(merge)
-  if type(merge) == 'string' then merge = { merge } end
-
-  local action = function(parts, _)
-    -- Precompute combination strings (recycle `merge` array)
-    local dims = parts.get_dims()
-    local merge_ext = {}
-    for j = 1, dims.col - 1 do
-      merge_ext[j] = H.slice_mod(merge, j)
-    end
-
-    -- Concat non-empty cells (empty cells add nothing but extra merge)
-    return vim.tbl_map(function(row)
-      local row_no_empty = vim.tbl_filter(function(s) return s ~= '' end, row)
-      return H.concat_array(row_no_empty, merge_ext)
-    end, parts)
-  end
-
-  return MiniAlign.new_step(step_name, action)
 end
 
 H.opts_to_string = function(opts)
@@ -699,7 +740,7 @@ H.opts_to_string = function(opts)
     single_to_string('Justify', opts.justify, opts.pre_justify),
     single_to_string('Merge', opts.merge, opts.pre_merge),
   }
-  return table.concat(tbl, '; ')
+  return table.concat(tbl, ' | ') .. ' |'
 end
 
 H.msg_bad_opts = function(opts_name, key, msg) H.error(('`%s.%s` %s'):format(opts_name, key, msg)) end
@@ -715,17 +756,6 @@ H.apply_step = function(step, parts)
     )
     H.error(msg)
   end
-end
-
--- Work with parts ------------------------------------------------------------
-H.is_parts = function(x) return (getmetatable(x) or {}).class == 'parts' end
-
-H.can_be_parts = function(x)
-  if type(x) ~= 'table' then return false, 'should be table' end
-  for i = 1, #x do
-    if not H.is_array_of(x[i], H.is_string) then return false, 'values should be an array of strings' end
-  end
-  return true
 end
 
 -- Work with filter -----------------------------------------------------------
@@ -912,7 +942,7 @@ H.user_modifier = function(opts)
   vim.defer_fn(function()
     if not needs_help_msg then return end
 
-    H.message(H.opts_to_string(opts) .. '. Enter modifier', true)
+    H.message(H.opts_to_string(opts) .. ' Enter modifier')
     H.cache.msg_shown = true
   end, delay)
   local ok, char = pcall(vim.fn.getchar)
@@ -936,8 +966,10 @@ H.user_input = function(prompt, text)
 
   -- Ask for input
   local opts = { prompt = '(mini.align) ' .. prompt .. ': ', default = text or '' }
+  vim.cmd('echohl Question')
   -- Use `pcall` to allow `<C-c>` to cancel user input
   local ok, res = pcall(vim.fn.input, opts)
+  vim.cmd('echohl None')
 
   -- Stop key listening
   on_key(nil, H.ns_id.input)
@@ -959,6 +991,8 @@ H.is_step = function(x) return type(x) == 'table' and type(x.name) == 'string' a
 
 H.is_string = function(v) return type(v) == 'string' end
 
+H.is_justify_side = function(x) return x == 'left' or x == 'center' or x == 'right' end
+
 H.is_nonempty_region = function(x)
   if type(x) ~= 'table' then return false end
   local from_is_valid = type(x.from) == 'table' and type(x.from.line) == 'number' and type(x.from.col) == 'number'
@@ -966,20 +1000,30 @@ H.is_nonempty_region = function(x)
   return from_is_valid and to_is_valid
 end
 
+H.is_parts = function(x) return (getmetatable(x) or {}).class == 'parts' end
+
+H.can_be_parts = function(x)
+  if type(x) ~= 'table' then return false, 'should be table' end
+  for i = 1, #x do
+    if not H.is_array_of(x[i], H.is_string) then return false, 'values should be an array of strings' end
+  end
+  return true
+end
+
 H.is_infinite = function(x) return x == math.huge or x == -math.huge end
 
--- Utilities ------------------------------------------------------------------
-H.message = function(msg, avoid_hit_enter_prompt)
-  local out = '(mini.align) ' .. msg
-  local out_width = vim.fn.strdisplaywidth(out)
-  if avoid_hit_enter_prompt and vim.v.echospace <= out_width then
-    local target_width = (vim.v.echospace - 1) - 3
-    out = '...' .. vim.fn.strcharpart(out, out_width - target_width, target_width)
-  end
+H.is_visual_mode = function() return vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode(1)) end
 
-  vim.cmd([[echon '']])
-  vim.cmd('redraw')
-  vim.cmd('echomsg ' .. vim.inspect(out))
+H.is_whitespace = function(x) return type(x) == 'string' and x:find('^%s*$') ~= nil end
+
+-- Utilities ------------------------------------------------------------------
+H.message = function(msg, hl_group)
+  vim.cmd('echohl ' .. (hl_group or 'ModeMsg'))
+  -- Avoid hit-enter-prompt
+  local max_width = vim.o.columns * math.max(vim.o.cmdheight - 1, 0) + vim.v.echospace
+  msg = vim.fn.strcharpart('(mini.align) ' .. msg, 0, max_width)
+  vim.cmd('echomsg ' .. vim.inspect(msg))
+  vim.cmd('echohl None')
 end
 
 H.error = function(msg) error(string.format('(mini.align) %s', msg), 0) end
@@ -1038,14 +1082,12 @@ H.string_find = function(s, pattern, init)
   -- Example: `string.find('(aaa)', '^.*$', 4)` returns `4, 5`
   if pattern:sub(1, 1) == '^' and init > 1 then return nil end
 
-  -- Treat `''`pattern as `'.'` (i.e. match any character). Otherwise, it can
-  -- result in an infinite loop.
-  if pattern == '' then pattern = '.' end
+  -- Treat `''` as if nothing is found (treats it as "reset split"). If not
+  -- altered, results in infinite loop.
+  if pattern == '' then return nil end
 
   return string.find(s, pattern, init)
 end
-
-H.is_visual_mode = function() return vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode(1)) end
 
 H.undo = function()
   if H.is_visual_mode() then
