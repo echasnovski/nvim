@@ -9,8 +9,6 @@
 -- Tests:
 -- - Visual selection is "registered" after performing alignment (`gv` selects
 --   previous selection).
--- - Respects different `direction` and `indent` values in `splits.trim()` and
---   `gen_step.trim()`.
 --
 -- - Doesn't remove marks in both Normal and Visual mode.
 --
@@ -122,6 +120,7 @@ MiniAlign.config = {
   mappings = {
     start = 'ga',
     start_with_preview = 'gA',
+    -- confirm = '<CR>'
   },
 
   -- Each is a function that modifies ins input in place
@@ -152,7 +151,9 @@ MiniAlign.config = {
       table.insert(steps.pre_justify, MiniAlign.gen_step.filter(input))
     end,
     ['t'] = function(steps) table.insert(steps.pre_justify, MiniAlign.gen_step.trim()) end,
+    -- ['T'] = ???
     ['p'] = function(steps) table.insert(steps.pre_justify, MiniAlign.gen_step.pair()) end,
+    -- ['P'] = ???
 
     -- Delete latest step
     [vim.api.nvim_replace_termcodes('<BS>', true, true, true)] = function(steps)
@@ -265,25 +266,27 @@ end
 --- Align current region with user-supplied steps
 ---
 --- Mostly designed to be used inside mappings.
-
----@param with_preview __with_preview Default: last one used.
-MiniAlign.align_user = function(with_preview)
+MiniAlign.align_user = function()
   local modifiers = H.get_config().modifiers
+  local with_preview = H.cache.with_preview
+  local steps = H.normalize_steps()
 
-  -- Probably fall back to cache value. Mostly used for `operatorfunc` case as
-  -- it is called with own inputs (see `:h g@`).
-  if type(with_preview) ~= 'boolean' then with_preview = H.cache.with_preview end
+  -- Make early process:
+  -- - If cache is present (enables dot-repeat).
+  -- - If `split` is defined with no preview (no further information needed).
+  if (H.cache.steps ~= nil) or (not with_preview and steps.split ~= nil) then
+    H.process_current_region(false, H.cache.steps or steps)
+    return
+  end
 
-  -- Use cache if present (enables dot-repeat)
-  local steps = H.cache.steps or H.normalize_steps()
-
-  -- Track if lines were actually set to properly undo
+  -- Track if lines were actually set to properly undo during preview
   local lines_were_set = false
 
   -- Ask user to input modifier id until no more is needed
   local n_iter = 0
   while true do
-    local id = H.user_modifier(steps)
+    -- Get modifier from user
+    local id = H.user_modifier(steps, with_preview)
     n_iter = n_iter + 1
 
     -- Stop in case user supplied inappropriate modifer id (abort)
@@ -304,14 +307,19 @@ MiniAlign.align_user = function(with_preview)
     else
       -- Modifier should change input `steps` table in place
       local ok, _ = pcall(modifiers[id], steps)
-      if not ok then H.message(string.format('Modifier %s should be properly callable.', vim.inspect(id))) end
+      if not ok then
+        -- Force message to appear for 500ms because it might be overridden by
+        -- helper status message
+        H.message(string.format('Modifier %s should be properly callable.', vim.inspect(id)))
+        vim.loop.sleep(500)
+      end
     end
 
     -- Normalize steps while validating its correct structure
     steps = H.normalize_steps(steps)
 
     -- Process region while tracking if lines were set at least once
-    local lines_now_set = H.process_region(lines_were_set, steps)
+    local lines_now_set = H.process_current_region(lines_were_set, steps)
     lines_were_set = lines_were_set or lines_now_set
 
     -- Stop in "no preview" mode right after `split` is defined
@@ -587,8 +595,8 @@ MiniAlign.gen_step.trim = function(direction, indent)
   return MiniAlign.as_step('trim', function(parts) parts.trim(direction, indent) end)
 end
 
-MiniAlign.gen_step.pair = function()
-  return MiniAlign.as_step('pair', function(parts) parts.pair() end)
+MiniAlign.gen_step.pair = function(direction)
+  return MiniAlign.as_step('pair', function(parts) parts.pair(direction) end)
 end
 
 MiniAlign.gen_step.filter = function(expr)
@@ -813,12 +821,10 @@ end
 
 H.make_filter_action = function(expr)
   if expr == nil then return nil end
+  if expr == '' then expr = 'true' end
 
   local is_loaded, f = pcall(function() return assert(loadstring('return ' .. expr)) end)
-  if not (is_loaded and vim.is_callable(f)) then
-    H.message(vim.inspect(expr) .. ' is not a valid filter expression.')
-    return nil
-  end
+  if not (is_loaded and vim.is_callable(f)) then H.error(vim.inspect(expr) .. ' is not a valid filter expression.') end
 
   local predicate = function(data)
     local context = setmetatable(data, { __index = _G })
@@ -851,7 +857,7 @@ end
 -- Work with regions ----------------------------------------------------------
 ---@return boolean Whether some lines were actually set.
 ---@private
-H.process_region = function(lines_were_set, steps)
+H.process_current_region = function(lines_were_set, steps)
   -- Do nothing in case of no split
   if steps.split == nil then return false end
 
@@ -907,8 +913,7 @@ H.region_get_text = function(region, reg_type)
   local from, to = region.from, region.to
 
   if reg_type == 'char' then
-    local to_col_offset = vim.o.selection == 'exclusive' and 1 or 0
-    return vim.api.nvim_buf_get_text(0, from.line - 1, from.col - 1, to.line - 1, to.col - to_col_offset, {})
+    return vim.api.nvim_buf_get_text(0, from.line - 1, from.col - 1, to.line - 1, to.col, {})
   end
 
   if reg_type == 'line' then return vim.api.nvim_buf_get_lines(0, from.line - 1, to.line, true) end
@@ -931,9 +936,10 @@ H.region_set_text = function(region, reg_type, text)
   local from, to = region.from, region.to
 
   if reg_type == 'char' then
-    local to_col_offset = vim.o.selection == 'exclusive' and 1 or 0
-    -- vim.api.nvim_buf_set_text(0, from.line - 1, from.col - 1, to.line - 1, to.col - to_col_offset, text)
-    H.set_text(from.line - 1, from.col - 1, to.line - 1, to.col - to_col_offset, text)
+    -- Ensure not going past last column (can happen with `$` in Visual mode)
+    local to_line_n_cols = vim.fn.col({ to.line, '$' }) - 1
+    local to_col = math.min(to.col, to_line_n_cols)
+    H.set_text(from.line - 1, from.col - 1, to.line - 1, to_col, text)
   end
 
   if reg_type == 'line' then H.set_lines(from.line - 1, to.line, text) end
@@ -987,10 +993,10 @@ H.pos_to_virtcol = function(pos)
 end
 
 -- Work with user input -------------------------------------------------------
-H.user_modifier = function(steps)
+H.user_modifier = function(steps, with_preview)
   -- Get from user single character modifier
   local needs_help_msg = true
-  local delay = H.cache.msg_shown and 0 or 1000
+  local delay = (H.cache.msg_shown or with_preview) and 0 or 1000
   vim.defer_fn(function()
     if not needs_help_msg then return end
 

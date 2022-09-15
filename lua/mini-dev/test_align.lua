@@ -24,7 +24,7 @@ local set_config_steps = function(tbl)
   end
 end
 
-local validate_step = function(var_name)
+local validate_step = function(var_name, step_name)
   eq(child.lua_get(('type(%s)'):format(var_name)), 'table')
 
   local keys = child.lua_get(('vim.tbl_keys(%s)'):format(var_name))
@@ -32,6 +32,8 @@ local validate_step = function(var_name)
   eq(keys, { 'action', 'name' })
 
   eq(child.lua_get(('type(%s.name)'):format(var_name)), 'string')
+  if step_name ~= nil then eq(child.lua_get(('%s.name'):format(var_name)), step_name) end
+
   eq(child.lua_get(('vim.is_callable(%s.action)'):format(var_name)), true)
 end
 
@@ -332,9 +334,7 @@ T['align_strings()']['respects `steps.merge` argument'] = function()
   local step_str, cmd
 
   -- Single string
-  --stylua: ignore start
-  validate_align_strings({ 'a=b' }, { split = '=', merge = '-' },   { 'a-=-b' })
-  --stylua: ignore end
+  validate_align_strings({ 'a=b' }, { split = '=', merge = '-' }, { 'a-=-b' })
 
   -- Array of strings (should be recycled)
   validate_align_strings(
@@ -362,6 +362,14 @@ T['align_strings()']['respects `steps.merge` argument'] = function()
   -- Uses `MiniAlign.config.steps` as default
   set_config_steps({ merge = [['-']] })
   validate_align_strings({ 'a=b' }, { split = '=' }, { 'a-=-b' })
+end
+
+T['align_strings()']['works with multibyte characters'] = function()
+  validate_align_strings(
+    { 'ыффццц', 'ыыыффц' },
+    { split = 'ф', justify = 'center', merge = 'ю' },
+    { ' ы юфюфюццц', 'ыыыюфюфю ц' }
+  )
 end
 
 T['align_strings()']['respects `vim.b.minialign_config`'] = function()
@@ -603,12 +611,12 @@ T['as_step()'] = new_set()
 
 T['as_step()']['works'] = function()
   child.lua([[step = MiniAlign.as_step('aaa', function() end)]])
-  validate_step('step')
+  validate_step('step', 'aaa')
 
   -- Allows callable table as action
   child.lua([[action = setmetatable({}, { __call = function() end })]])
   child.lua([[step = MiniAlign.as_step('aaa', action)]])
-  validate_step('step')
+  validate_step('step', 'aaa')
 end
 
 T['as_step()']['validates arguments'] = function()
@@ -622,9 +630,56 @@ end
 
 T['gen_step'] = new_set()
 
+local set_default_split = function(pattern)
+  set_config_steps({ split = ([[MiniAlign.gen_step.default_split(%s)]]):format(vim.inspect(pattern)) })
+end
+
 T['gen_step']['default_split()'] = new_set()
 
-T['gen_step']['default_split()']['works'] = function() MiniTest.skip() end
+T['gen_step']['default_split()']['works'] = function()
+  -- Returns proper step
+  child.lua([[step = MiniAlign.gen_step.default_split(',')]])
+  validate_step('step', [[","]])
+
+  -- Single string
+  set_default_split(',')
+  validate_align_strings({ 'a,b', 'aa,b' }, {}, { 'a ,b', 'aa,b' })
+
+  -- Array of strings (should be recycled)
+  set_default_split({ ',' })
+  validate_align_strings({ 'a,b', 'aa,b' }, {}, { 'a ,b', 'aa,b' })
+
+  set_default_split({ ',', '=' })
+  validate_align_strings({ 'a,b=c,d=e,', 'aa,bb=cc,dd=ee,' }, {}, { 'a ,b =c ,d =e ,', 'aa,bb=cc,dd=ee,' })
+end
+
+T['gen_step']['default_split()']['validates input'] = function()
+  expect.error(
+    function() child.lua('MiniAlign.gen_step.default_split(1)') end,
+    'Split `pattern` should be string or array of strings'
+  )
+end
+
+T['gen_step']['default_split()']['sets proper step name'] = function()
+  local validate = function(pattern, ref_name)
+    local cmd = ('MiniAlign.gen_step.default_split(%s).name'):format(pattern)
+    eq(child.lua_get(cmd), ref_name)
+  end
+
+  validate([[',']], vim.inspect(','))
+  validate([[{ ',' }]], vim.inspect({ ',' }))
+  validate([[{ ',', '=' }]], vim.inspect({ ',', '=' }))
+end
+
+T['gen_step']['default_split()']['allows Lua pattern'] = function()
+  set_config_steps({ split = [[MiniAlign.gen_step.default_split('%s*=%s*')]], merge = [['-']] })
+  validate_align_strings({ 'a=b  =c=  d  =  e' }, {}, { 'a-=-b-  =-c-=  -d-  =  -e' })
+end
+
+T['gen_step']['default_split()']['works with different number of output parts'] = function()
+  set_config_steps({ split = [[MiniAlign.gen_step.default_split(',')]], merge = [['-']] })
+  validate_align_strings({ 'a', 'b,', 'c,d' }, {}, { 'a', 'b-,', 'c-,-d' })
+end
 
 T['gen_step']['default_split()']['works with no split pattern found'] = function()
   set_config_steps({ split = [[MiniAlign.gen_step.default_split(',')]], merge = [['-']] })
@@ -640,42 +695,148 @@ T['gen_step']['default_split()']['works with special split patterns'] = function
   set_config_steps({ merge = [['-']] })
 
   -- Treat `''` as no split pattern is found
-  set_config_steps({ split = [[MiniAlign.gen_step.default_split('')]] })
+  set_default_split('')
   validate_align_strings({ 'a=b', 'a=bbb' }, {}, { 'a=b', 'a=bbb' })
 
   -- Treat `'.'` as any character is a split
-  set_config_steps({ split = [[MiniAlign.gen_step.default_split('.')]] })
+  set_default_split('.')
   validate_align_strings({ 'a=b', 'a=bbb' }, {}, { 'a-=-b', 'a-=-b-b-b' })
+
+  -- Works with `^`
+  set_default_split('^.')
+  validate_align_strings({ 'a=b', 'a=bbb' }, {}, { 'a-=b', 'a-=bbb' })
+
+  -- Works with `$`
+  set_default_split('.$')
+  validate_align_strings({ 'a=b', 'a=bbb' }, {}, { 'a=  -b', 'a=bb-b' })
+end
+
+local set_default_justify = function(side)
+  set_config_steps({ justify = ([[MiniAlign.gen_step.default_justify(%s)]]):format(vim.inspect(side)) })
 end
 
 T['gen_step']['default_justify()'] = new_set()
 
-T['gen_step']['default_justify()']['works'] = function() MiniTest.skip() end
+T['gen_step']['default_justify()']['works'] = function()
+  -- Single string
+  set_config_steps({ split = [['=']] })
+
+  --stylua: ignore start
+  set_default_justify('left')
+  validate_align_strings({ 'a=b', 'aaa=b' }, {}, { 'a  =b', 'aaa=b' })
+
+  set_default_justify('center')
+  validate_align_strings({ 'a=b', 'aaa=b' }, {}, { ' a =b', 'aaa=b' })
+
+  set_default_justify('right')
+  validate_align_strings({ 'a=b', 'aaa=b' }, {}, { '  a=b', 'aaa=b' })
+  --stylua: ignore end
+
+  -- Array of strings (should be recycled)
+  set_config_steps({ split = [['%s*=']] })
+  set_default_justify({ 'left', 'center', 'right' })
+  validate_align_strings(
+    { 'a=b=c=d=e', 'aaa  =bbb  =ccc  =ddd  =eee' },
+    {},
+    -- Part resulted from separator is treated the same as any other part
+    { 'a   =   b=   c   =d   =   e', 'aaa  =bbb  =ccc  =ddd  =eee' }
+  )
+end
+
+T['gen_step']['default_justify()']['validates input'] = function()
+  expect.error(
+    function() child.lua('MiniAlign.gen_step.default_justify(1)') end,
+    [[Justify `side` should one of 'left', 'center', 'right', or array of those]]
+  )
+end
+
+T['gen_step']['default_justify()']['sets proper step name'] = function()
+  local validate = function(pattern, ref_name)
+    local cmd = ('MiniAlign.gen_step.default_justify(%s).name'):format(pattern)
+    eq(child.lua_get(cmd), ref_name)
+  end
+
+  validate([['left']], vim.inspect('left'))
+  validate([[{ 'center' }]], vim.inspect({ 'center' }))
+  validate([[{ 'right', 'left' }]], vim.inspect({ 'right', 'left' }))
+end
+
+T['gen_step']['default_justify()']['works with multibyte characters'] = function()
+  set_config_steps({ split = [['=']] })
+
+  set_default_justify('left')
+  validate_align_strings({ 'ы=ю', 'ыыы=ююю' }, {}, { 'ы  =ю', 'ыыы=ююю' })
+
+  set_default_justify('center')
+  validate_align_strings({ 'ы=ю', 'ыыы=ююю' }, {}, { ' ы = ю', 'ыыы=ююю' })
+
+  set_default_justify('right')
+  validate_align_strings({ 'ы=ю', 'ыыы=ююю' }, {}, { '  ы=  ю', 'ыыы=ююю' })
+end
 
 T['gen_step']['default_justify()']['does not add trailing whitespace'] = function()
   set_config_steps({ split = [['=']] })
 
-  set_config_steps({ justify = [[MiniAlign.gen_step.default_justify('left')]] })
+  set_default_justify('left')
   validate_align_strings({ 'a=b', '', 'a=bbb' }, {}, { 'a=b', '', 'a=bbb' })
 
-  set_config_steps({ justify = [[MiniAlign.gen_step.default_justify('center')]] })
+  set_default_justify('center')
   validate_align_strings({ 'a=b', '', 'a=bbb' }, {}, { 'a= b', '', 'a=bbb' })
 
-  set_config_steps({ justify = [[MiniAlign.gen_step.default_justify('right')]] })
+  set_default_justify('right')
   validate_align_strings({ 'a=b', '', 'a=bbb' }, {}, { 'a=  b', '', 'a=bbb' })
 end
 
-T['gen_step']['default_justify()']['last row column does not affect column width for left justification'] = function()
-  set_config_steps({ split = [['=']], justify = [['left']] })
+T['gen_step']['default_justify()']['last row element width is ignored for left `justify`'] = function()
+  set_config_steps({ split = [['=']], justify = [[MiniAlign.gen_step.default_justify('left')]] })
 
   -- It won't be padded so shouldn't contribute to column width
   validate_align_strings({ 'a=b', 'aa=b', 'aaaaa' }, {}, { 'a =b', 'aa=b', 'aaaaa' })
   validate_align_strings({ 'a=b=c', 'a=bb=c', 'a=bbbbb' }, {}, { 'a=b =c', 'a=bb=c', 'a=bbbbb' })
 end
 
+T['gen_step']['default_justify()']['prefers padding left for odd space added'] = function()
+  set_config_steps({ split = [['=']], justify = [[MiniAlign.gen_step.default_justify('center')]] })
+
+  validate_align_strings({ 'a=b', 'aaaa=b' }, {}, { '  a =b', 'aaaa=b' })
+end
+
 T['gen_step']['default_merge()'] = new_set()
 
-T['gen_step']['default_merge()']['works'] = function() MiniTest.skip() end
+T['gen_step']['default_merge()']['works'] = function()
+  set_config_steps({ split = [['=']] })
+
+  -- Single string
+  set_config_steps({ merge = [[MiniAlign.gen_step.default_merge('-')]] })
+  validate_align_strings({ 'a=b' }, {}, { 'a-=-b' })
+
+  -- Array of strings (should be recycled)
+  set_config_steps({ merge = [[MiniAlign.gen_step.default_merge({ '-', '!' })]] })
+  validate_align_strings(
+    { 'a=b=c=' },
+    {},
+    -- Part resulted from separator is treated the same as any other part
+    { 'a-=!b-=!c-=' }
+  )
+end
+
+T['gen_step']['default_merge()']['validates input'] = function()
+  expect.error(
+    function() child.lua('MiniAlign.gen_step.default_merge(1)') end,
+    'Merge `delimiter` should be string or array of strings'
+  )
+end
+
+T['gen_step']['default_merge()']['sets proper step name'] = function()
+  local validate = function(pattern, ref_name)
+    local cmd = ('MiniAlign.gen_step.default_merge(%s).name'):format(pattern)
+    eq(child.lua_get(cmd), ref_name)
+  end
+
+  validate([['']], vim.inspect(''))
+  validate([[{ '' }]], vim.inspect({ '' }))
+  validate([[{ '', ' ' }]], vim.inspect({ '', ' ' }))
+end
 
 T['gen_step']['default_merge()']['does not merge empty strings in parts'] = function()
   set_config_steps({ split = [['=']] })
@@ -683,10 +844,221 @@ T['gen_step']['default_merge()']['does not merge empty strings in parts'] = func
   -- Shouldn't result into adding extra merge
   set_config_steps({ merge = [[MiniAlign.gen_step.default_merge('-')]] })
   validate_align_strings({ 'a===b' }, {}, { 'a-=-=-=-b' })
+  validate_align_strings({ '=a' }, {}, { '=-a' })
+end
+
+T['gen_step']['trim()'] = new_set()
+
+T['gen_step']['trim()']['works'] = function()
+  set_config_steps({ split = [[' = ']], pre_justify = [[{ MiniAlign.gen_step.trim() }]] })
+  eq(child.lua_get('MiniAlign.config.steps.pre_justify[1].name'), 'trim')
+
+  validate_align_strings({ ' a  = b  =  c = d', '  e = ' }, {}, { ' a =b=c=d', '  e=' })
+end
+
+T['gen_step']['trim()']['respects `direction` argument'] = function()
+  set_config_steps({ split = [['=']] })
+  local set = function(direction)
+    set_config_steps({ pre_justify = ([[{ MiniAlign.gen_step.trim(%s) }]]):format(vim.inspect(direction)) })
+  end
+
+  set('both')
+  validate_align_strings({ ' a =b = c=d' }, {}, { ' a=b=c=d' })
+
+  set('left')
+  validate_align_strings({ ' a =b = c=d' }, {}, { ' a =b =c=d' })
+
+  set('right')
+  validate_align_strings({ ' a =b = c=d' }, {}, { ' a=b= c=d' })
+end
+
+T['gen_step']['trim()']['respects `indent` argument'] = function()
+  set_config_steps({ split = [['=']] })
+  local set = function(indent)
+    set_config_steps({ pre_justify = ([[{ MiniAlign.gen_step.trim('both', %s) }]]):format(vim.inspect(indent)) })
+  end
+
+  set('keep')
+  validate_align_strings({ ' a ', '  b ' }, {}, { ' a', '  b' })
+
+  set('min')
+  validate_align_strings({ ' a ', '  b ' }, {}, { ' a', ' b' })
+
+  set('max')
+  validate_align_strings({ ' a ', '  b ' }, {}, { '  a', '  b' })
+
+  set('none')
+  validate_align_strings({ ' a ', '  b ' }, {}, { 'a', 'b' })
+end
+
+T['gen_step']['pair()'] = new_set()
+
+T['gen_step']['pair()']['works'] = function()
+  set_config_steps({ split = [[',']], pre_justify = [[{ MiniAlign.gen_step.pair() }]], justify = [['center']] })
+  eq(child.lua_get('MiniAlign.config.steps.pre_justify[1].name'), 'pair')
+
+  validate_align_strings({ 'a,b,c', 'aaa,bbb,c' }, {}, { ' a,  b, c', 'aaa,bbb,c' })
+end
+
+T['gen_step']['pair()']['respects `direction` argument'] = function()
+  set_config_steps({ split = [[',']], justify = [['center']] })
+
+  set_config_steps({ pre_justify = [[{ MiniAlign.gen_step.pair('left') }]] })
+  validate_align_strings({ 'a,b,c', 'aaa,bbb,c' }, {}, { ' a,  b, c', 'aaa,bbb,c' })
+
+  set_config_steps({ pre_justify = [[{ MiniAlign.gen_step.pair('right') }]] })
+  validate_align_strings({ 'a,b,c', 'aaa,bbb,c' }, {}, { ' a  ,b ,c', 'aaa,bbb,c' })
+end
+
+T['gen_step']['filter()'] = new_set()
+
+T['gen_step']['filter()']['works'] = function()
+  set_config_steps({ split = [['=']], justify = [['center']] })
+
+  set_config_steps({ pre_justify = [[{ MiniAlign.gen_step.filter('n == 1') }]] })
+  validate_align_strings({ 'a=b=c', 'aaa=bbb=ccc' }, {}, { ' a =  b=c', 'aaa=bbb=ccc' })
+
+  -- `nil` allowed as input
+  eq(child.lua_get('MiniAlign.gen_step.filter()'), vim.NIL)
+end
+
+T['gen_step']['filter()']['validates input'] = function()
+  expect.error(
+    function() child.lua([[MiniAlign.gen_step.filter('(')]]) end,
+    [[%(mini%.align%) "%(" is not a valid filter expression]]
+  )
+end
+
+T['gen_step']['filter()']['handles special input'] = function()
+  -- `nil`
+  eq(child.lua_get('MiniAlign.gen_step.filter()'), vim.NIL)
+
+  -- `''` (treated as `true`, i.e. nothing is filtered out)
+  set_config_steps({ split = [['=']], pre_justify = [[{ MiniAlign.gen_step.filter('') }]] })
+  validate_align_strings({ 'a=b=c', 'aaa=bbb=ccc' }, {}, { 'a  =b  =c', 'aaa=bbb=ccc' })
+end
+
+T['gen_step']['filter()']['allows special variables'] = function()
+  set_config_steps({ split = [['=']] })
+  local set = function(expr)
+    set_config_steps({ pre_justify = ([[{ MiniAlign.gen_step.filter(%s) }]]):format(vim.inspect(expr)) })
+  end
+
+  --stylua:ignore start
+  set('row == 2 or row == 3')
+  validate_align_strings({ 'a=b=c', 'aa=bb=cc', 'aaa=bbb=ccc' }, {}, { 'a=b=c', 'aa =bb =cc', 'aaa=bbb=ccc' })
+
+  set('row ~= ROW')
+  validate_align_strings({ 'a=b=c', 'aa=bb=cc', 'aaa=bbb=ccc' }, {}, { 'a =b =c', 'aa=bb=cc', 'aaa=bbb=ccc' })
+
+  set('col > 1')
+  validate_align_strings({ 'a=b=c', 'aa=bb=cc', 'aaa=bbb=ccc' }, {}, { 'a=  b  =c', 'aa= bb =cc', 'aaa=bbb=ccc' })
+
+  set('col >= COL - 1')
+  validate_align_strings({ 'a=b=c', 'aa=bb=cc', 'aaa=bbb=ccc' }, {}, { 'a=b=    c', 'aa=bb=  cc', 'aaa=bbb=ccc' })
+  --stylua:ignore end
+end
+
+T['gen_step']['filter()']['allows usage of global objects'] = function()
+  set_config_steps({ split = [['=']], pre_justify = [[{ MiniAlign.gen_step.filter('row ~= first_row') }]] })
+  child.lua('_G.first_row = 1')
+  validate_align_strings({ 'a=b=c', 'aa=bb=cc', 'aaa=bbb=ccc' }, {}, { 'a=b=c', 'aa =bb =cc', 'aaa=bbb=ccc' })
 end
 
 -- Integration tests ==========================================================
+local validate_align = function(input_lines, keys, output_lines)
+  set_lines(input_lines)
+  set_cursor(1, 0)
+  type_keys(keys)
+  eq(get_lines(), output_lines)
+end
+
 T['Align'] = new_set()
+
+T['Align']['works'] = function()
+  -- Use neutral split pattern to avoid testing builtin modifiers
+  validate_align({ 'a_b', 'aaa_b' }, { 'ga', '1j', '_' }, { 'a  _b', 'aaa_b' })
+
+  -- Allows non-split related modifiers
+  validate_align({ 'a_b', 'aaa_b' }, { 'ga', '1j', 'jc', '_' }, { ' a _b', 'aaa_b' })
+end
+
+T['Align']['works in Normal mode'] = function()
+  -- Should accept any textobject or motion
+  validate_align({ 'a_b', 'aaa_b', '', 'aaaaa_b' }, { 'ga', 'ip', '_' }, { 'a  _b', 'aaa_b', '', 'aaaaa_b' })
+  validate_align({ 'a_b', 'aaa_c' }, { 'ga', '/_c<CR>', '_' }, { 'a  _b', 'aaa_c' })
+end
+
+T['Align']['allows dot-repeat'] = function()
+  set_lines({ 'a_b', 'aaa_b', '', 'aaaaa_b', 'a_b' })
+  set_cursor(1, 0)
+  type_keys('ga', 'ip', '_')
+  eq(get_lines(), { 'a  _b', 'aaa_b', '', 'aaaaa_b', 'a_b' })
+
+  set_cursor(4, 0)
+  type_keys('.')
+  eq(get_lines(), { 'a  _b', 'aaa_b', '', 'aaaaa_b', 'a    _b' })
+end
+
+T['Align']['works in Visual charwise mode'] = function()
+  -- Should use visual selection to extract strings and correctly place result
+  -- Should return to Normal mode after finish
+  validate_align({ 'a_b', 'aaa_b' }, { 'v', '1j4l', 'ga', '_' }, { 'a  _b', 'aaa_b' })
+  eq(vim.fn.mode(), 'n')
+
+  -- Allows using non-split related modifiers
+  validate_align({ 'a_b', 'aaa_b' }, { 'v', '1j4l', 'ga', 'jc', '_' }, { ' a _b', 'aaa_b' })
+
+  -- Should align for second `_` because it is not inside selection
+  validate_align({ 'a_b_c', 'aaa_bbb_ccc' }, { 'v', '/bb_<CR>', 'ga', '_' }, { 'a  _b_c', 'aaa_bbb_ccc' })
+
+  -- Can use `$` without `end_col out of bounds`
+  validate_align({ 'a_b', 'aaa_b' }, { 'v', '1j$', 'ga', '_' }, { 'a  _b', 'aaa_b' })
+end
+
+T['Align']['works in Visual linewise mode'] = function()
+  validate_align({ 'a_b_c', 'aaa_bbb_ccc' }, { 'V', 'ip', 'ga', '_' }, { 'a  _b  _c', 'aaa_bbb_ccc' })
+  eq(vim.fn.mode(), 'n')
+
+  --
+end
+
+T['Align']['works in Visual blockwise mode'] = function()
+  -- Correctly computes region in presence of multibyte characters
+  MiniTest.skip()
+end
+
+T['Align']['works with differnt mapping'] = function() MiniTest.skip() end
+
+T['Align']['works with multibyte characters'] = function() MiniTest.skip() end
+
+T['Align']['treats non-config modifier as split pattern'] = function() MiniTest.skip() end
+
+T['Align']['stops on `<Esc>` and `<C-c>`'] = function() MiniTest.skip() end
+
+T['Align']['has guard against infinite loop'] = function() MiniTest.skip() end
+
+T['Align']['does not stop on error during modifier execution'] = function()
+  -- Also waits some time to draw attantion to error
+  MiniTest.skip()
+end
+
+T['Align']['validates steps after each modifier'] = function() MiniTest.skip() end
+
+T['Align']['prompts helper message after one idle second'] = function()
+  -- Prompts message in debounce-style fashion
+
+  -- Modifiers after shown message update message immediately
+end
+
+T['Align']["respects 'selection=exclusive'"] = function() MiniTest.skip() end
+
+T['Align']['does not affect marks'] = function()
+  -- Normal mode
+
+  -- Visual mode
+  MiniTest.skip()
+end
 
 T['Align']['respects `vim.{g,b}.minialign_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
@@ -695,6 +1067,8 @@ T['Align']['respects `vim.{g,b}.minialign_disable`'] = new_set({
 })
 
 T['Align with preview'] = new_set()
+
+T['Align with preview']['works with multibyte characters'] = function() MiniTest.skip() end
 
 T['Align with preview']['respects `vim.{g,b}.minialign_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
