@@ -3,26 +3,20 @@
 -- TODO:
 -- - Figure out a way to ignore areas during splitting (strings, comments,
 --   treesitter, etc.). Probably, with `gen_step.split`.
--- - Clean up code structure.
 --
 --
 -- Tests:
--- - Visual selection is "registered" after performing alignment (`gv` selects
---   previous selection).
---
--- - Doesn't remove marks in both Normal and Visual mode.
---
--- - Block mode:
---     - Selection goes past the line (only right column, both columns).
---     - Selection goes over empty line (at start/middle/end of selection).
---     - Works with multibyte characters.
 --
 --
 -- Documentation:
--- - Setup similar to 'vim-easy-align'.
+-- - Setup similar to 'vim-easy-align'. It will use `j` modifier as `<CR>` in
+--   'vim-easy-align'.
 -- - Idea about ignoring rows with `row ~= xxx` filtering.
 -- - Filtering by last equal sign usually can be done with `n == (N - 1)`
 --   (because there is usually something to the right of it).
+-- - It adds padding with spaces which might conflict with tab indentation.
+-- - Visual blockwise selection works best with 'virtualedit' equal to "block"
+--   or "all".
 
 -- Documentation ==============================================================
 --- Align text.
@@ -120,7 +114,6 @@ MiniAlign.config = {
   mappings = {
     start = 'ga',
     start_with_preview = 'gA',
-    -- confirm = '<CR>'
   },
 
   -- Each is a function that modifies ins input in place
@@ -151,9 +144,7 @@ MiniAlign.config = {
       table.insert(steps.pre_justify, MiniAlign.gen_step.filter(input))
     end,
     ['t'] = function(steps) table.insert(steps.pre_justify, MiniAlign.gen_step.trim()) end,
-    -- ['T'] = ???
     ['p'] = function(steps) table.insert(steps.pre_justify, MiniAlign.gen_step.pair()) end,
-    -- ['P'] = ???
 
     -- Delete latest step
     [vim.api.nvim_replace_termcodes('<BS>', true, true, true)] = function(steps)
@@ -266,16 +257,19 @@ end
 --- Align current region with user-supplied steps
 ---
 --- Mostly designed to be used inside mappings.
-MiniAlign.align_user = function()
+---
+---@param mode string Selection mode. One of 'char', 'line', 'block'.
+MiniAlign.align_user = function(mode)
   local modifiers = H.get_config().modifiers
   local with_preview = H.cache.with_preview
   local steps = H.normalize_steps()
+  H.cache.region = nil
 
   -- Make early process:
   -- - If cache is present (enables dot-repeat).
   -- - If `split` is defined with no preview (no further information needed).
   if (H.cache.steps ~= nil) or (not with_preview and steps.split ~= nil) then
-    H.process_current_region(false, H.cache.steps or steps)
+    H.process_current_region(false, mode, H.cache.steps or steps)
     return
   end
 
@@ -293,6 +287,7 @@ MiniAlign.align_user = function()
     -- Also stop in case of too many iterations (guard from infinite cycle)
     if id == nil or n_iter > 1000 then
       if lines_were_set then H.undo() end
+      if n_iter > 1000 then H.message('Too many modifiers typed.') end
       break
     end
 
@@ -303,14 +298,15 @@ MiniAlign.align_user = function()
     local mod = modifiers[id]
     if mod == nil then
       -- Use supplied identifier as split pattern
-      steps.split = vim.pesc(id)
+      steps.split = MiniAlign.gen_step.default_split(vim.pesc(id))
     else
       -- Modifier should change input `steps` table in place
-      local ok, _ = pcall(modifiers[id], steps)
+      local ok, out = pcall(modifiers[id], steps)
       if not ok then
         -- Force message to appear for 500ms because it might be overridden by
         -- helper status message
-        H.message(string.format('Modifier %s should be properly callable.', vim.inspect(id)))
+        local msg = string.format('Modifier %s should be properly callable. Reason: %s', vim.inspect(id), out)
+        H.message(msg)
         vim.loop.sleep(500)
       end
     end
@@ -319,7 +315,7 @@ MiniAlign.align_user = function()
     steps = H.normalize_steps(steps)
 
     -- Process region while tracking if lines were set at least once
-    local lines_now_set = H.process_current_region(lines_were_set, steps)
+    local lines_now_set = H.process_current_region(lines_were_set, mode, steps)
     lines_were_set = lines_were_set or lines_now_set
 
     -- Stop in "no preview" mode right after `split` is defined
@@ -353,7 +349,8 @@ MiniAlign.action_visual = function(with_preview)
   H.cache = { with_preview = with_preview }
 
   -- Perform action and exit Visual mode
-  MiniAlign.align_user()
+  local mode = ({ ['v'] = 'char', ['V'] = 'line', ['\22'] = 'block' })[vim.fn.mode(1)]
+  MiniAlign.align_user(mode)
   vim.cmd('normal! \27')
 end
 
@@ -739,19 +736,20 @@ H.is_valid_steps = function(x, x_name, allow_nil_split)
   return true
 end
 
-H.validate_steps = function(x, x_name, check_split)
-  local is_valid, msg = H.is_valid_steps(x, x_name, check_split)
+H.validate_steps = function(x, x_name, allow_nil_split)
+  local is_valid, msg = H.is_valid_steps(x, x_name, allow_nil_split)
   if not is_valid then H.error(msg) end
 end
 
-H.normalize_steps = function(steps, steps_name, check_split)
+H.normalize_steps = function(steps, steps_name, allow_nil_split)
   -- Infer all defaults from module config
-  local res = vim.tbl_deep_extend('force', H.get_config().steps, steps or {})
+  -- TODO: go back to using `'force'` after Neovim=0.5 support is dropped
+  local res = vim.tbl_deep_extend('keep', steps or {}, H.get_config().steps)
   -- Deep copy to ensure that table values will not be affected (because if a
   -- table value is present only in one input, it is taken as is).
   res = vim.deepcopy(res)
 
-  H.validate_steps(res, steps_name, check_split)
+  H.validate_steps(res, steps_name, allow_nil_split)
 
   if not H.is_step(res.split) then res.split = MiniAlign.gen_step.default_split(res.split) end
   if not H.is_step(res.justify) then res.justify = MiniAlign.gen_step.default_justify(res.justify) end
@@ -857,7 +855,7 @@ end
 -- Work with regions ----------------------------------------------------------
 ---@return boolean Whether some lines were actually set.
 ---@private
-H.process_current_region = function(lines_were_set, steps)
+H.process_current_region = function(lines_were_set, mode, steps)
   -- Do nothing in case of no split
   if steps.split == nil then return false end
 
@@ -867,13 +865,16 @@ H.process_current_region = function(lines_were_set, steps)
   -- Undo previously set lines
   if lines_were_set then H.undo() end
 
-  -- Actually process current region
-  local region = H.get_current_region()
-  local reg_type = H.get_current_reg_type()
+  -- Actually process current region. NOTE: use cached value to ensure that
+  -- with preview always the same region is processed. Otherwise there might be
+  -- problems with getting "current" regions in Normal mode as necessary marks
+  -- (`[` and `]`) can be not valid.
+  local region = H.cache.region or H.get_current_region()
+  H.cache.region = region
 
-  local strings = H.region_get_text(region, reg_type)
+  local strings = H.region_get_text(region, mode)
   local strings_aligned = MiniAlign.align_strings(strings, steps)
-  H.region_set_text(region, reg_type, strings_aligned)
+  H.region_set_text(region, mode, strings_aligned)
 
   -- Make sure that latest changes are shown
   vim.cmd('redraw')
@@ -902,23 +903,17 @@ H.get_current_region = function()
   return { from = from, to = to }
 end
 
-H.get_current_reg_type = function()
-  local mode = vim.fn.mode(1)
-  if mode == 'v' or mode == 'no' or mode == 'nov' then return 'char' end
-  if mode == '\22' or mode == 'no\22' then return 'block' end
-  return 'line'
-end
-
-H.region_get_text = function(region, reg_type)
+H.region_get_text = function(region, mode)
   local from, to = region.from, region.to
 
-  if reg_type == 'char' then
-    return vim.api.nvim_buf_get_text(0, from.line - 1, from.col - 1, to.line - 1, to.col, {})
+  if mode == 'char' then
+    local to_col_offset = vim.o.selection == 'exclusive' and 1 or 0
+    return H.get_text(from.line - 1, from.col - 1, to.line - 1, to.col - to_col_offset)
   end
 
-  if reg_type == 'line' then return vim.api.nvim_buf_get_lines(0, from.line - 1, to.line, true) end
+  if mode == 'line' then return H.get_lines(from.line - 1, to.line) end
 
-  if reg_type == 'block' then
+  if mode == 'block' then
     -- Use virtual columns to respect multibyte characters
     local left_virtcol, right_virtcol = H.region_virtcols(region)
     local n_cols = right_virtcol - left_virtcol + 1
@@ -927,31 +922,32 @@ H.region_get_text = function(region, reg_type)
       -- `strcharpart()` returns empty string for out of bounds span, so no
       -- need for extra columns check
       function(l) return vim.fn.strcharpart(l, left_virtcol - 1, n_cols) end,
-      vim.api.nvim_buf_get_lines(0, from.line - 1, to.line, true)
+      H.get_lines(from.line - 1, to.line)
     )
   end
 end
 
-H.region_set_text = function(region, reg_type, text)
+H.region_set_text = function(region, mode, text)
   local from, to = region.from, region.to
 
-  if reg_type == 'char' then
+  if mode == 'char' then
     -- Ensure not going past last column (can happen with `$` in Visual mode)
     local to_line_n_cols = vim.fn.col({ to.line, '$' }) - 1
     local to_col = math.min(to.col, to_line_n_cols)
-    H.set_text(from.line - 1, from.col - 1, to.line - 1, to_col, text)
+    local to_col_offset = vim.o.selection == 'exclusive' and 1 or 0
+    H.set_text(from.line - 1, from.col - 1, to.line - 1, to_col - to_col_offset, text)
   end
 
-  if reg_type == 'line' then H.set_lines(from.line - 1, to.line, text) end
+  if mode == 'line' then H.set_lines(from.line - 1, to.line, text) end
 
-  if reg_type == 'block' then
+  if mode == 'block' then
     if #text ~= (to.line - from.line + 1) then
       H.error('Number of replacement lines should fit the region in blockwise mode')
     end
 
     -- Use virtual columns to respect multibyte characters
     local left_virtcol, right_virtcol = H.region_virtcols(region)
-    local lines = vim.api.nvim_buf_get_lines(0, from.line - 1, to.line, true)
+    local lines = H.get_lines(from.line - 1, to.line)
     for i, l in ipairs(lines) do
       -- Use zero-based indexes
       local line_num = from.line + i - 2
@@ -1000,7 +996,8 @@ H.user_modifier = function(steps, with_preview)
   vim.defer_fn(function()
     if not needs_help_msg then return end
 
-    H.message(H.steps_to_string(steps) .. ' Enter modifier')
+    -- Use `echo` command instead of `echomsg` to not pollute `:messages`
+    H.message(H.steps_to_string(steps) .. ' Enter modifier', 'echo')
     H.cache.msg_shown = true
   end, delay)
   local ok, char = pcall(vim.fn.getchar)
@@ -1027,7 +1024,7 @@ H.user_input = function(prompt, text)
   vim.cmd('echohl Question')
   -- Use `pcall` to allow `<C-c>` to cancel user input
   local ok, res = pcall(vim.fn.input, opts)
-  vim.cmd('echohl None')
+  vim.cmd('echohl None | redraw')
 
   -- Stop key listening
   on_key(nil, H.ns_id.input)
@@ -1074,13 +1071,65 @@ H.is_visual_mode = function() return vim.tbl_contains({ 'v', 'V', '\22' }, vim.f
 
 H.is_whitespace = function(x) return type(x) == 'string' and x:find('^%s*$') ~= nil end
 
+-- Work with get/set text -----------------------------------------------------
+--- Get text from current buffer
+---
+--- Needed for compatibility with Neovim<=0.6 which doesn't have
+--- `vim.api.nvim_buf_get_text()`.
+---@private
+H.get_text = function(start_row, start_col, end_row, end_col)
+  if vim.api.nvim_buf_get_text ~= nil then
+    return vim.api.nvim_buf_get_text(0, start_row, start_col, end_row, end_col, {})
+  end
+  -- TODO: Remove this after Neovim<=0.6 support is dropped
+  local text = H.get_lines(start_row, end_row + 1)
+  if #text == 0 then return text end
+  text[#text] = text[#text]:sub(1, end_col)
+  text[1] = text[1]:sub(start_col + 1)
+  return text
+end
+
+--- Get lines from current buffer
+---
+--- Added for completeness.
+---@private
+H.get_lines = function(start_row, end_row) return vim.api.nvim_buf_get_lines(0, start_row, end_row, true) end
+
+--- Set text in current buffer without affecting marks
+---@private
+H.set_text = function(start_row, start_col, end_row, end_col, replacement)
+  local cmd = string.format(
+    'lockmarks lua vim.api.nvim_buf_set_text(0, %d, %d, %d, %d, %s)',
+    start_row,
+    start_col,
+    end_row,
+    end_col,
+    vim.inspect(replacement)
+  )
+  vim.cmd(cmd)
+end
+
+--- Set lines in current buffer without affecting marks
+---@private
+H.set_lines = function(start_row, end_row, replacement)
+  local cmd = string.format(
+    'lockmarks lua vim.api.nvim_buf_set_lines(0, %d, %d, true, %s)',
+    start_row,
+    end_row,
+    vim.inspect(replacement)
+  )
+  vim.cmd(cmd)
+end
+
 -- Utilities ------------------------------------------------------------------
-H.message = function(msg, hl_group)
+H.message = function(msg, echo_cmd, hl_group)
+  vim.cmd([[echon '' | redraw]])
   vim.cmd('echohl ' .. (hl_group or 'ModeMsg'))
+
   -- Avoid hit-enter-prompt
   local max_width = vim.o.columns * math.max(vim.o.cmdheight - 1, 0) + vim.v.echospace
   msg = vim.fn.strcharpart('(mini.align) ' .. msg, 0, max_width)
-  vim.cmd('echomsg ' .. vim.inspect(msg))
+  vim.cmd((echo_cmd or 'echomsg') .. '' .. vim.inspect(msg))
   vim.cmd('echohl None')
 end
 
@@ -1149,40 +1198,24 @@ end
 
 H.undo = function()
   if H.is_visual_mode() then
+    local cur_mode = vim.fn.mode(1)
+
     -- Can't use `u` in Visual mode because it makes all selection lowercase
     vim.cmd('silent! normal! \27')
-    -- Lock marks for this undo, otherwise it will also undo `<` and `>` marks
+
+    -- Undo
     vim.cmd('silent! lockmarks undo')
-    vim.cmd('silent! normal! gv')
+
+    -- Manually restore selection. There are issues with using restoring marks
+    -- via `gv` (couldn't figure out how to reliably preserve visual mode).
+    -- As this is called only if lines were set, region is cached.
+    local region = H.cache.region
+    vim.api.nvim_win_set_cursor(0, { region.from.line, region.from.col - 1 })
+    vim.cmd('silent! normal!' .. cur_mode)
+    vim.api.nvim_win_set_cursor(0, { region.to.line, region.to.col - 1 })
   else
-    vim.cmd('silent! normal! u')
+    vim.cmd('silent! lockmarks normal! u')
   end
-end
-
---- Set text in current buffer without affecting marks
----@private
-H.set_text = function(start_row, start_col, end_row, end_col, replacement)
-  local cmd = string.format(
-    'lockmarks lua vim.api.nvim_buf_set_text(0, %d, %d, %d, %d, %s)',
-    start_row,
-    start_col,
-    end_row,
-    end_col,
-    vim.inspect(replacement)
-  )
-  vim.cmd(cmd)
-end
-
---- Set lines in current buffer without affecting marks
----@private
-H.set_lines = function(start_row, end_row, replacement)
-  local cmd = string.format(
-    'lockmarks lua vim.api.nvim_buf_set_lines(0, %d, %d, true, %s)',
-    start_row,
-    end_row,
-    vim.inspect(replacement)
-  )
-  vim.cmd(cmd)
 end
 
 return MiniAlign

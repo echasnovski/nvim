@@ -8,7 +8,6 @@ local new_set = MiniTest.new_set
 --stylua: ignore start
 local load_module = function(config) child.mini_load('align', config) end
 local unload_module = function() child.mini_unload('align') end
-local reload_module = function(config) unload_module(); load_module(config) end
 local set_cursor = function(...) return child.set_cursor(...) end
 local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
@@ -281,7 +280,7 @@ T['align_strings()']['respects `steps.justify` argument'] = function()
   -- The `vim.tbl_deep_extend()` in Neovim<0.6 failes here because `justify` is
   -- table while by default it is string.
   -- TODO: Remove this after dropping support for Neovim<=0.5
-  if child.fn.has('nvim-0.6.0') == 0 then return end
+  if child.fn.has('nvim-0.6.0') == 0 then MiniTest.skip('Neovim is <=0.5') end
 
   -- Step. Action should modify parts in place.
   step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]]
@@ -347,7 +346,7 @@ T['align_strings()']['respects `steps.merge` argument'] = function()
   -- The `vim.tbl_deep_extend()` in Neovim<0.6 failes here because `justify` is
   -- table while by default it is string.
   -- TODO: Remove this after dropping support for Neovim<=0.5
-  if child.fn.has('nvim-0.6.0') == 0 then return end
+  if child.fn.has('nvim-0.6.0') == 0 then MiniTest.skip('Neovim is <=0.5') end
 
   -- Step. Action should return array of strings.
   step_str = [[MiniAlign.as_step('tmp', function(parts) return { 'xxx' } end)]]
@@ -966,33 +965,40 @@ T['gen_step']['filter()']['allows usage of global objects'] = function()
 end
 
 -- Integration tests ==========================================================
-local validate_align = function(input_lines, keys, output_lines)
+local validate_keys = function(input_lines, keys, output_lines)
   set_lines(input_lines)
   set_cursor(1, 0)
   type_keys(keys)
   eq(get_lines(), output_lines)
 end
 
+-- NOTEs:
+-- - In Neovim=0.5 some textobjects in Operator-pending mode don't set linewise
+--   mode (like `ip`). However in Visual mode they do. So if Neovim=0.5 support
+--   is needed, write tests with explicit forcing of linewise selection.
+
 T['Align'] = new_set()
 
 T['Align']['works'] = function()
   -- Use neutral split pattern to avoid testing builtin modifiers
-  validate_align({ 'a_b', 'aaa_b' }, { 'ga', '1j', '_' }, { 'a  _b', 'aaa_b' })
+  validate_keys({ 'a_b', 'aaa_b' }, { 'Vj', 'ga', '_' }, { 'a  _b', 'aaa_b' })
 
   -- Allows non-split related modifiers
-  validate_align({ 'a_b', 'aaa_b' }, { 'ga', '1j', 'jc', '_' }, { ' a _b', 'aaa_b' })
+  validate_keys({ 'a_b', 'aaa_b' }, { 'V1j', 'ga', 'jc', '_' }, { ' a _b', 'aaa_b' })
 end
 
 T['Align']['works in Normal mode'] = function()
   -- Should accept any textobject or motion
-  validate_align({ 'a_b', 'aaa_b', '', 'aaaaa_b' }, { 'ga', 'ip', '_' }, { 'a  _b', 'aaa_b', '', 'aaaaa_b' })
-  validate_align({ 'a_b', 'aaa_c' }, { 'ga', '/_c<CR>', '_' }, { 'a  _b', 'aaa_c' })
+  validate_keys({ 'a_b', 'aaa_b', '', 'aaaaa_b' }, { 'ga', 'Vip', '_' }, { 'a  _b', 'aaa_b', '', 'aaaaa_b' })
+  eq(get_cursor(), { 1, 0 })
+
+  validate_keys({ 'a_b', 'aaa_c' }, { 'ga', [[/_\zsc<CR>]], '_' }, { 'a  _b', 'aaa_c' })
 end
 
 T['Align']['allows dot-repeat'] = function()
   set_lines({ 'a_b', 'aaa_b', '', 'aaaaa_b', 'a_b' })
   set_cursor(1, 0)
-  type_keys('ga', 'ip', '_')
+  type_keys('ga', 'Vip', '_')
   eq(get_lines(), { 'a  _b', 'aaa_b', '', 'aaaaa_b', 'a_b' })
 
   set_cursor(4, 0)
@@ -1003,77 +1009,330 @@ end
 T['Align']['works in Visual charwise mode'] = function()
   -- Should use visual selection to extract strings and correctly place result
   -- Should return to Normal mode after finish
-  validate_align({ 'a_b', 'aaa_b' }, { 'v', '1j4l', 'ga', '_' }, { 'a  _b', 'aaa_b' })
-  eq(vim.fn.mode(), 'n')
+  validate_keys({ 'a_b', 'aaa_b' }, { 'v', '1j4l', 'ga', '_' }, { 'a  _b', 'aaa_b' })
+  eq(get_cursor(), { 2, 4 })
+  eq(get_mode(), 'n')
 
   -- Allows using non-split related modifiers
-  validate_align({ 'a_b', 'aaa_b' }, { 'v', '1j4l', 'ga', 'jc', '_' }, { ' a _b', 'aaa_b' })
+  validate_keys({ 'a_b', 'aaa_b' }, { 'v', '1j4l', 'ga', 'jc', '_' }, { ' a _b', 'aaa_b' })
 
   -- Should align for second `_` because it is not inside selection
-  validate_align({ 'a_b_c', 'aaa_bbb_ccc' }, { 'v', '/bb_<CR>', 'ga', '_' }, { 'a  _b_c', 'aaa_bbb_ccc' })
+  validate_keys({ 'a_b_c', 'aaa_bbb_ccc' }, { 'v', '/bb_<CR>', 'ga', '_' }, { 'a  _b_c', 'aaa_bbb_ccc' })
 
   -- Can use `$` without `end_col out of bounds`
-  validate_align({ 'a_b', 'aaa_b' }, { 'v', '1j$', 'ga', '_' }, { 'a  _b', 'aaa_b' })
+  validate_keys({ 'a_b', 'aaa_b' }, { 'v', '1j$', 'ga', '_' }, { 'a  _b', 'aaa_b' })
 end
 
 T['Align']['works in Visual linewise mode'] = function()
-  validate_align({ 'a_b_c', 'aaa_bbb_ccc' }, { 'V', 'ip', 'ga', '_' }, { 'a  _b  _c', 'aaa_bbb_ccc' })
-  eq(vim.fn.mode(), 'n')
+  validate_keys({ 'a_b_c', 'aaa_bbb_ccc' }, { 'V', 'ip', 'ga', '_' }, { 'a  _b  _c', 'aaa_bbb_ccc' })
+  eq(get_mode(), 'n')
 
-  --
+  -- Allows using non-split related modifiers
+  validate_keys({ 'a_b', 'aaa_b' }, { 'V', '1j', 'ga', 'jc', '_' }, { ' a _b', 'aaa_b' })
 end
 
 T['Align']['works in Visual blockwise mode'] = function()
-  -- Correctly computes region in presence of multibyte characters
-  MiniTest.skip()
+  validate_keys({ 'a_b_c', 'aaa_bbb_c' }, { '<C-v>', '1j3l', 'ga', '_' }, { 'a  _b_c', 'aaa_bbb_c' })
+  eq(get_mode(), 'n')
+
+  child.o.virtualedit = 'block'
+
+  -- Selection goes over empty line (at start/middle/end of selection)
+  validate_keys({ '', 'a_b_c', 'aaa_bbb_c' }, { '<C-v>', '2j3l', 'ga', '_' }, { '', 'a  _b_c', 'aaa_bbb_c' })
+  validate_keys({ 'a_b_c', '', 'aaa_bbb_c' }, { '<C-v>', '2j3l', 'ga', '_' }, { 'a  _b_c', '', 'aaa_bbb_c' })
+  validate_keys({ 'a_b_c', 'aaa_bbb_c', '' }, { '<C-v>', '2j3l', 'ga', '_' }, { 'a  _b_c', 'aaa_bbb_c', '' })
+
+  -- Works when selection goes past the line (only right column, both columns)
+  validate_keys({ 'a_b', 'aa_b', 'aaa_b' }, { '1l', '<C-v>', '2j2l', 'ga', '_' }, { 'a  _b', 'aa _b', 'aaa_b' })
+  validate_keys({ 'a_b', 'aaa_b', 'aaaa_b' }, { '2j3l', '<C-v>', '2k2l', 'ga', '_' }, { 'a_b', 'aaa _b', 'aaaa_b' })
+
+  -- Correctly works in presence of multibyte characters
+  validate_keys({ 'ыы_ф', 'ыыы_ф' }, { '1l', '<C-v>', '1j3l', 'ga', '_' }, { 'ыы _ф', 'ыыы_ф' })
 end
 
-T['Align']['works with differnt mapping'] = function() MiniTest.skip() end
+T['Align']['registers visual selection'] = function()
+  set_lines({ 'a_b', 'aa_b', 'vvv', 'vvv' })
 
-T['Align']['works with multibyte characters'] = function() MiniTest.skip() end
+  -- Make preceding visual selection
+  set_cursor(3, 0)
+  type_keys('V', 'j', 'u')
 
-T['Align']['treats non-config modifier as split pattern'] = function() MiniTest.skip() end
+  -- Align in Visual mode
+  set_cursor(1, 0)
+  type_keys('V', 'j', 'ga', '_')
+  eq(get_lines(), { 'a _b', 'aa_b', 'vvv', 'vvv' })
 
-T['Align']['stops on `<Esc>` and `<C-c>`'] = function() MiniTest.skip() end
+  -- Verify that Visual selection got updated
+  type_keys('gv')
+  eq(get_mode(), 'V')
+  eq(child.fn.getpos('v'), { 0, 1, 1, 0 })
+end
 
-T['Align']['has guard against infinite loop'] = function() MiniTest.skip() end
+T['Align']['works with differnt mapping'] = function()
+  unload_module()
+  child.api.nvim_del_keymap('n', 'ga')
+  child.api.nvim_del_keymap('x', 'ga')
+  load_module({ mappings = { start = 'gl' } })
+
+  validate_keys({ 'a_b', 'aaa_b' }, { 'gl', 'Vj', '_' }, { 'a  _b', 'aaa_b' })
+  validate_keys({ 'a_b', 'aaa_b' }, { 'Vj', 'gl', '_' }, { 'a  _b', 'aaa_b' })
+end
+
+T['Align']['works with multibyte characters'] = function()
+  validate_keys(
+    { 'ыффцццф', 'ыыыффцф' },
+    { 'Vj', 'ga', 'ф' },
+    { 'ы  ффцццф', 'ыыыффц  ф' }
+  )
+end
+
+T['Align']['does not ask for modifier if `split` is set'] = function()
+  set_config_steps({ split = [['_']] })
+  set_lines({ 'a_b', 'aa_b' })
+  set_cursor(1, 0)
+  type_keys('Vj', 'ga')
+  eq(get_lines(), { 'a _b', 'aa_b' })
+end
+
+T['Align']['treats non-config modifier as explicit split pattern'] = function()
+  validate_keys({ 'a.b', 'aaa.b' }, { 'ga', 'Vj', '.' }, { 'a  .b', 'aaa.b' })
+  validate_keys({ 'a(b', 'aaa(b' }, { 'ga', 'Vj', '(' }, { 'a  (b', 'aaa(b' })
+end
+
+T['Align']['stops on `<Esc>` and `<C-c>`'] = function()
+  for _, stop_key in ipairs({ '<Esc>', '<C-c>' }) do
+    validate_keys({ 'a_b', 'aa_b' }, { 'Vj', 'ga', stop_key }, { 'a_b', 'aa_b' })
+    eq(get_mode(), 'n')
+  end
+end
+
+T['Align']['has guard against infinite loop'] = function()
+  set_lines({ 'a_b', 'aa_b' })
+  set_cursor(1, 0)
+  type_keys('Vj', 'ga')
+  eq(get_mode(), 'V')
+
+  for _ = 1, 1001 do
+    type_keys('m', ' ', '<CR>')
+  end
+  eq(get_mode(), 'n')
+  eq(get_latest_message(), '(mini.align) Too many modifiers typed.')
+end
 
 T['Align']['does not stop on error during modifier execution'] = function()
-  -- Also waits some time to draw attantion to error
-  MiniTest.skip()
+  child.lua([[MiniAlign.config.modifiers.e = function() error('Bad modifier') end]])
+
+  set_lines({ 'a_b', 'aa_b' })
+  set_cursor(1, 0)
+
+  -- Error in modifier execution should lead to a pause to make message visible
+  local before_time = vim.loop.hrtime()
+  type_keys('Vj', 'ga', 'e')
+  local duration = 0.000001 * (vim.loop.hrtime() - before_time)
+  eq(500 <= duration and duration <= 510, true)
+  expect.match(get_latest_message(), '^%(mini.align%) Modifier "e" should be properly callable%. Reason:')
 end
 
-T['Align']['validates steps after each modifier'] = function() MiniTest.skip() end
-
-T['Align']['prompts helper message after one idle second'] = function()
-  -- Prompts message in debounce-style fashion
-
-  -- Modifiers after shown message update message immediately
+T['Align']['validates steps after each modifier'] = function()
+  child.lua([[MiniAlign.config.modifiers.e = function(steps) steps.pre_split = 1 end]])
+  set_lines({ 'a_b', 'aa_b' })
+  set_cursor(1, 0)
+  type_keys('Vj', 'ga')
+  expect.error(type_keys, 'pre_split.*array of steps', { 'e', '_' })
 end
 
-T['Align']["respects 'selection=exclusive'"] = function() MiniTest.skip() end
+T['Align']['prompts helper message after one idle second'] = new_set({
+  parametrize = { { 'Normal' }, { 'Visual' } },
+}, {
+  test = function(test_mode)
+    child.set_size(12, 20)
+    child.o.cmdheight = 5
 
-T['Align']['does not affect marks'] = function()
-  -- Normal mode
+    -- Prompts message in debounce-style fashion
+    set_lines({ 'a_b', 'aa_b' })
+    set_cursor(1, 0)
+    local keys = test_mode == 'Normal' and { 'ga', 'Vip' } or { 'Vip', 'ga' }
+    type_keys(unpack(keys))
+
+    sleep(1000 - 15)
+    -- Should show no message
+    child.expect_screenshot()
+    type_keys('j', 'r')
+    -- Should show result of modifier 'j'
+    child.expect_screenshot()
+    sleep(1000 - 15)
+    -- Should still show result of modifier 'j'
+    child.expect_screenshot()
+    sleep(15 + 15)
+    -- Should now show helper message
+    child.expect_screenshot()
+
+    -- Shows message immediately if it was already shown
+    type_keys('j', 'c')
+    child.expect_screenshot()
+  end,
+})
+
+T['Align']['helper message does not cause hit-enter-prompt'] = function()
+  child.set_size(6, 20)
+  child.o.cmdheight = 2
+  set_lines({ 'a_b', 'aa_b' })
+  set_cursor(1, 0)
+
+  type_keys('ga', 'Vj')
+  sleep(1000)
+  child.expect_screenshot()
+end
+
+--stylua: ignore
+T['Align']["respects 'selection=exclusive'"] = function()
+  child.o.selection = 'exclusive'
+
+  -- Normal mode charwise
+  validate_keys({ 'a_b_c', 'aa_bb_cc' }, { 'ga', 'v', [[/bb\zs_<CR>]], '_' }, { 'a _b_c', 'aa_bb_cc' })
+  validate_keys({ 'ы_ю_я', 'ыы_юю_яя' }, { 'ga', 'v', [[/юю\zs_<CR>]], '_' }, { 'ы _ю_я', 'ыы_юю_яя' })
+
+  -- Normal mode blockwise
+  validate_keys({ 'a_b_c', 'aa_bb_cc' }, { 'ga', '<C-v>', [[/bb\zs_<CR>]], '_' }, { 'a _b_c', 'aa_bb_cc' })
+  validate_keys({ 'ы_ю_я', 'ыы_юю_яя' }, { 'ga', '<C-v>', [[/юю\zs_<CR>]], '_' }, { 'ы _ю_я', 'ыы_юю_яя' })
 
   -- Visual mode
-  MiniTest.skip()
+  validate_keys({ 'a_b_c', 'aa_bb_cc' }, { 'v1j5l', 'ga', '_' }, { 'a _b_c', 'aa_bb_cc' })
+  validate_keys({ 'ы_ю_я', 'ыы_юю_яя' }, { 'v1j5l', 'ga', '_' }, { 'ы _ю_я', 'ыы_юю_яя' })
+
+  -- Visual mode blockwise
+  validate_keys({ 'a_b_c', 'aa_bb_cc' }, { '<C-v>', '1j5l', 'ga', '_' }, { 'a _b_c', 'aa_bb_cc' })
+  validate_keys({ 'ы_ю_я', 'ыы_юю_яя' }, { '<C-v>', '1j5l', 'ga', '_' }, { 'ы _ю_я', 'ыы_юю_яя' })
+end
+
+T['Align']['does not affect marks'] = function()
+  local validate = function(start_keys)
+    set_lines({ 'a_b', 'aa_b', 'aaa_b' })
+    child.fn.setpos("'a", { 0, 1, 1, 0 })
+    child.fn.setpos("'b", { 0, 3, 1, 0 })
+    set_cursor(1, 0)
+
+    type_keys(start_keys, '_')
+    eq(get_lines(), { 'a _b', 'aa_b', 'aaa_b' })
+    eq(child.api.nvim_buf_get_mark(0, 'a'), { 1, 0 })
+    eq(child.api.nvim_buf_get_mark(0, 'b'), { 3, 0 })
+  end
+
+  -- Normal mode
+  validate({ 'ga', 'v', [[2/_\zsb]], '<CR>' })
+  validate({ 'ga', 'V', 'j' })
+  validate({ 'ga', '<C-v>', [[2/_\zsb]], '<CR>' })
+
+  -- Visual mode
+  validate({ 'v', [[2/_\zsb]], '<CR>', 'ga' })
+  validate({ 'V', 'j', 'ga' })
+  validate({ '<C-v>', [[2/_\zsb]], '<CR>', 'ga' })
 end
 
 T['Align']['respects `vim.{g,b}.minialign_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
-  test = function(var_type) MiniTest.skip() end,
+  test = function(var_type)
+    child[var_type].minialign_disable = true
+
+    validate_keys({ 'a_b', 'aa_b' }, { 'Vj', 'ga', '_' }, { 'a_b', 'aa_b' })
+  end,
 })
 
-T['Align with preview'] = new_set()
+-- Test mostly "preview" part. Hope that other is covered in 'Align' tests.
+T['Align with preview'] =
+  new_set({ hooks = {
+    pre_case = function()
+      child.set_size(12, 30)
+      child.o.cmdheight = 5
+    end,
+  } })
 
-T['Align with preview']['works with multibyte characters'] = function() MiniTest.skip() end
+T['Align with preview']['works'] = new_set({
+  parametrize = {
+    { 'Normal-char' },
+    { 'Normal-line' },
+    { 'Normal-block' },
+    { 'Visual-char' },
+    { 'Visual-line' },
+    { 'Visual-block' },
+  },
+}, {
+  test = function(test_mode)
+    set_lines({ 'a_b_c', 'aaa_bbb_ccc' })
+    set_cursor(1, 0)
+    child.fn.setpos("'a", { 0, 2, 5, 0 })
+
+    local init_keys = ({
+      ['Normal-char'] = { 'gA', 'v', '`a' },
+      ['Normal-line'] = { 'gA', 'V', 'j' },
+      ['Normal-block'] = { 'gA', '<C-v>', '`a' },
+      ['Visual-char'] = { 'v', '`a', 'gA' },
+      ['Visual-line'] = { 'V', 'j', 'gA' },
+      ['Visual-block'] = { '<C-v>', '`a', 'gA' },
+    })[test_mode]
+    type_keys(init_keys)
+
+    -- Should show helper message immediately
+    child.expect_screenshot()
+
+    -- Should show result and not stop preview
+    type_keys('_')
+    child.expect_screenshot()
+
+    type_keys('j', 'r')
+    child.expect_screenshot()
+
+    type_keys('m', '-', '<CR>')
+    child.expect_screenshot()
+
+    -- Hitting `<CR>` accepts current result
+    type_keys('<CR>')
+    -- This should start Insert mode and not right justify by 'a'
+    type_keys('a')
+    child.expect_screenshot()
+  end,
+})
+
+T['Align with preview']['correctly restores visual selection'] = new_set(
+  { parametrize = { { 'Visual-char' }, { 'Visual-line' }, { 'Visual-block' } } },
+  {
+    test = function(test_mode)
+      set_lines({ 'a_b_c', 'aaa_bbb_ccc', '', 'previous selection' })
+      child.fn.setpos("'a", { 0, 2, 5, 0 })
+
+      -- Make "previous selection" to complicate setup
+      set_cursor(4, 9)
+      type_keys('v', '8l', '<Esc>')
+
+      set_cursor(1, 0)
+      local init_keys = ({
+        ['Visual-char'] = { 'v', '`a', 'gA' },
+        ['Visual-line'] = { 'V', 'j', 'gA' },
+        ['Visual-block'] = { '<C-v>', '`a', 'gA' },
+      })[test_mode]
+      type_keys(init_keys, '_')
+      child.expect_screenshot()
+
+      -- Make undo of current result and redo alignment
+      type_keys('jr')
+      child.expect_screenshot()
+    end,
+  }
+)
 
 T['Align with preview']['respects `vim.{g,b}.minialign_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
-  test = function(var_type) MiniTest.skip() end,
+  test = function(var_type)
+    child[var_type].minialign_disable = true
+
+    local lines = { 'a_b', 'aa_b' }
+    set_lines(lines)
+    set_cursor(1, 0)
+    type_keys('Vj', 'gA', '_', '<CR>')
+    eq(get_lines(), lines)
+  end,
 })
 
 T['Modifiers'] = new_set()
