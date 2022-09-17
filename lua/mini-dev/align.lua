@@ -1,8 +1,14 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- TODO:
--- - Figure out a way to ignore areas during splitting (strings, comments,
---   treesitter, etc.). Probably, with `gen_step.split`.
+-- - Implement `options.split_ignore_patterns = { [[".-"]], [['.-']] }` which
+--   should be used in output of `gen_step.default_split`.
+-- - Make modifiers be called with signature `(steps, opts)`.
+-- - ??? CONSIDER REFACTOR: MAYBE ALL "STRING OR ARRAY OF STRINGS" CAN GO AS
+--   OPTIONS WHILE STEPS WILL BE `NIL` BY DEFAULT ???
+-- - Consider changing signature of `MiniAlign.aling_strings` to `(strings,
+--   opts, steps)`.
+-- - Consider case: visual selection + hitting `:`.
 --
 --
 -- Tests:
@@ -201,6 +207,9 @@ MiniAlign.config = {
     end,
   },
 
+  -- Options to be passed to every step
+  options = {},
+
   steps = {
     pre_split = {},
     split = nil,
@@ -213,20 +222,23 @@ MiniAlign.config = {
 --minidoc_afterlines_end
 
 -- Module functionality =======================================================
-MiniAlign.align_strings = function(strings, steps)
+---@param opts table|nil Options. To be passed to steps. Will be extended with
+---   `options` of |MiniAlign.config|.
+MiniAlign.align_strings = function(strings, steps, opts)
   -- Validate arguments
   if not H.is_array_of(strings, H.is_string) then
     H.error('First argument of `MiniAlign.align_strings()` should be array of strings.')
   end
   local norm_steps = H.normalize_steps(steps, 'steps', false)
+  opts = vim.tbl_deep_extend('force', H.get_config().options, opts or {})
 
   -- Pre split
   for _, step in ipairs(norm_steps.pre_split) do
-    H.apply_step(step, strings, 'pre_split')
+    H.apply_step(step, strings, opts, 'pre_split')
   end
 
   -- Split
-  local parts = norm_steps.split.action(strings)
+  local parts = norm_steps.split.action(strings, opts)
   if not H.is_parts(parts) then
     if H.can_be_parts(parts) then
       parts = MiniAlign.as_parts(parts)
@@ -237,19 +249,19 @@ MiniAlign.align_strings = function(strings, steps)
 
   -- Pre justify
   for _, step in ipairs(norm_steps.pre_justify) do
-    H.apply_step(step, parts, 'pre_justify')
+    H.apply_step(step, parts, opts, 'pre_justify')
   end
 
   -- Justify
-  H.apply_step(norm_steps.justify, parts, 'justify')
+  H.apply_step(norm_steps.justify, parts, opts, 'justify')
 
   -- Pre merge
   for _, step in ipairs(norm_steps.pre_merge) do
-    H.apply_step(step, parts, 'pre_merge')
+    H.apply_step(step, parts, opts, 'pre_merge')
   end
 
   -- Merge
-  local new_strings = norm_steps.merge.action(parts)
+  local new_strings = norm_steps.merge.action(parts, opts)
   if not H.is_array_of(new_strings, H.is_string) then H.error('Output of `merge` step should be array of strings.') end
   return new_strings
 end
@@ -257,6 +269,11 @@ end
 --- Align current region with user-supplied steps
 ---
 --- Mostly designed to be used inside mappings.
+---
+--- Will use |MiniAlign.align_strings()| and set the following options in `opts`:
+--- - <offsets>
+--- - <region>
+--- - <mode>
 ---
 ---@param mode string Selection mode. One of 'char', 'line', 'block'.
 MiniAlign.align_user = function(mode)
@@ -509,6 +526,12 @@ MiniAlign.gen_step.default_split = function(pattern)
   return MiniAlign.as_step(step_name, action)
 end
 
+--- Generate default `justify` step
+---
+--- Output uses following options (as part second argument, `opts` table):
+--- - <offsets> - array of numeric left offsets of rows. Used to adjust for
+---   possible not equal indents, like in case of Visual charwise selection
+---   when left edge is not on the first column. Default: array of zeros.
 MiniAlign.gen_step.default_justify = function(side)
   if side == nil then return nil end
 
@@ -519,7 +542,9 @@ MiniAlign.gen_step.default_justify = function(side)
   local step_name = vim.inspect(side)
   if type(side) == 'string' then side = { side } end
 
-  local action = function(parts, _)
+  local action = function(parts, opts)
+    local offsets = opts.offsets or H.tbl_repeat(0, #parts)
+
     -- Recycle `justify` array and precompute padding functions
     local dims = parts.get_dims()
     local pad_funs, justify_arr = {}, {}
@@ -529,10 +554,10 @@ MiniAlign.gen_step.default_justify = function(side)
       pad_funs[j] = H.pad_functions[just]
     end
 
-    -- Compute both cell width and maximum column widths
+    -- Compute cell width and maximum column widths (adjusting for offsets)
     local width_col = {}
     for j = 1, dims.col do
-      width_col[j] = -math.huge
+      width_col[j] = 0
     end
 
     local width = {}
@@ -541,16 +566,21 @@ MiniAlign.gen_step.default_justify = function(side)
       for j, s in ipairs(row) do
         local w = vim.fn.strdisplaywidth(s)
         width[i][j] = w
+
+        -- Compute offset
+        local off = j == 1 and offsets[i] or 0
+
         -- Don't use last column in row to compute column width in case of left
         -- justification (it won't be padded so shouldn't contribute to column)
-        if not (j == #row and justify_arr[j] == 'left') then width_col[j] = math.max(w, width_col[j]) end
+        if not (j == #row and justify_arr[j] == 'left') then width_col[j] = math.max(off + w, width_col[j]) end
       end
     end
 
-    -- Pad cells to have same width across columns
+    -- Pad cells to have same width across columns (adjusting for offsets)
     for i, row in ipairs(parts) do
       for j, s in ipairs(row) do
-        local n_space = width_col[j] - width[i][j]
+        local off = j == 1 and offsets[i] or 0
+        local n_space = width_col[j] - width[i][j] - off
         -- Don't add trailing whitespace for last column
         parts[i][j] = pad_funs[j](s, n_space, j == #row)
       end
@@ -673,6 +703,7 @@ H.setup_config = function(config)
     mappings = { config.mappings, 'table' },
     modifiers = { config.modifiers, H.is_valid_modifiers },
     steps = { config.steps, H.is_valid_steps },
+    options = { config.options, 'table' },
   })
 
   vim.validate({
@@ -783,7 +814,7 @@ end
 
 H.msg_bad_steps = function(steps_name, key, msg) return string.format('`%s.%s` %s', steps_name, key, msg) end
 
-H.apply_step = function(step, arr, step_container_name)
+H.apply_step = function(step, arr, opts, step_container_name)
   local arr_name, predicate, suggest = 'parts', H.is_parts, ' See `:h MiniAlign.as_parts()`.'
   if not H.is_parts(arr) then
     arr_name = 'strings'
@@ -791,7 +822,7 @@ H.apply_step = function(step, arr, step_container_name)
     suggest = ''
   end
 
-  step.action(arr)
+  step.action(arr, opts)
 
   if not predicate(arr) then
     --stylua: ignore
@@ -865,15 +896,24 @@ H.process_current_region = function(lines_were_set, mode, steps)
   -- Undo previously set lines
   if lines_were_set then H.undo() end
 
-  -- Actually process current region. NOTE: use cached value to ensure that
-  -- with preview always the same region is processed. Otherwise there might be
-  -- problems with getting "current" regions in Normal mode as necessary marks
-  -- (`[` and `]`) can be not valid.
+  -- Get current region. NOTE: use cached value to ensure that with preview
+  -- always the same region is processed. Otherwise there might be problems
+  -- with getting "current" regions in Normal mode as necessary marks (`[` and
+  -- `]`) can be not valid.
   local region = H.cache.region or H.get_current_region()
   H.cache.region = region
 
+  -- Construct options
+  local opts = { region = region, mode = mode, offsets = H.tbl_repeat(0, region.to.line - region.from.line + 1) }
+  if mode == 'char' then
+    -- Compute offset of first line for charwise selection
+    local prefix = vim.fn.getline(region.from.line):sub(1, region.from.col - 1)
+    opts.offsets[1] = vim.fn.strdisplaywidth(prefix)
+  end
+
+  -- Actually process region
   local strings = H.region_get_text(region, mode)
-  local strings_aligned = MiniAlign.align_strings(strings, steps)
+  local strings_aligned = MiniAlign.align_strings(strings, steps, opts)
   H.region_set_text(region, mode, strings_aligned)
 
   -- Make sure that latest changes are shown
@@ -1123,8 +1163,10 @@ end
 
 -- Utilities ------------------------------------------------------------------
 H.message = function(msg, echo_cmd, hl_group)
-  vim.cmd([[echon '' | redraw]])
-  vim.cmd('echohl ' .. (hl_group or 'ModeMsg'))
+  vim.cmd([[echon '' | echohl ]] .. (hl_group or 'ModeMsg'))
+
+  -- Force redraw to ensure that `echo` is effective (`:h echo-redraw`)
+  vim.cmd('redraw')
 
   -- Avoid hit-enter-prompt
   local max_width = vim.o.columns * math.max(vim.o.cmdheight - 1, 0) + vim.v.echospace
@@ -1147,6 +1189,14 @@ H.map = function(mode, key, rhs, opts)
 end
 
 H.slice_mod = function(x, i) return x[((i - 1) % #x) + 1] end
+
+H.tbl_repeat = function(val, n)
+  local res = {}
+  for i = 1, n do
+    res[i] = val
+  end
+  return res
+end
 
 H.group_by_mask = function(arr, mask, direction)
   local res, cur_group = {}, {}
@@ -1198,9 +1248,8 @@ end
 
 H.undo = function()
   if H.is_visual_mode() then
-    local cur_mode = vim.fn.mode(1)
-
     -- Can't use `u` in Visual mode because it makes all selection lowercase
+    local cur_mode = vim.fn.mode(1)
     vim.cmd('silent! normal! \27')
 
     -- Undo

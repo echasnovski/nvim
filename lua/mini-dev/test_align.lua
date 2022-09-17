@@ -90,6 +90,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('steps.justify', 'left')
   expect_config('steps.pre_merge', {})
   expect_config('steps.merge', '')
+  expect_config('options', {})
 end
 
 T['setup()']['respects `config` argument'] = function()
@@ -117,6 +118,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ steps = { justify = 1 } }, 'steps.justify', 'one of')
   expect_config_error({ steps = { pre_merge = 1 } }, 'steps.pre_merge', 'array of steps')
   expect_config_error({ steps = { merge = 1 } }, 'steps.merge', 'string, array of strings, or step')
+  expect_config_error({ options = 'a' }, 'options', 'table')
 end
 
 T['setup()']['properly handles `config.mappings`'] = function()
@@ -131,8 +133,8 @@ T['setup()']['properly handles `config.mappings`'] = function()
   eq(has_map('ga'), false)
 end
 
-local validate_align_strings = function(input_strings, steps, ref_strings)
-  local output = child.lua_get('MiniAlign.align_strings(...)', { input_strings, steps })
+local validate_align_strings = function(input_strings, steps, ref_strings, opts)
+  local output = child.lua_get('MiniAlign.align_strings(...)', { input_strings, steps, opts })
   eq(output, ref_strings)
 end
 
@@ -199,6 +201,14 @@ T['align_strings()']['respects `steps.pre_split` argument'] = function()
   -- Uses `MiniAlign.config.steps` as default
   set_config_steps({ pre_split = [[{ MiniAlign.as_step('tmp', function(strings) strings[1] = 'a=b' end) }]] })
   validate_align_strings({ 'aaa=b', 'aa=b' }, { split = '=' }, { 'a =b', 'aa=b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(strings, opts) strings[1] = opts.tmp end)]]
+  cmd = string.format(
+    [[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_split = { %s }, split = '=' }, { tmp = 'xxx' })]],
+    step_str
+  )
+  eq(child.lua_get(cmd), { 'xxx', 'aa=b' })
 end
 
 T['align_strings()']['respects `steps.split` argument'] = function()
@@ -232,6 +242,11 @@ T['align_strings()']['respects `steps.split` argument'] = function()
   -- Uses `MiniAlign.config.steps` as default
   set_config_steps({ split = [[',']] })
   validate_align_strings({ 'a,b', 'aa,b' }, {}, { 'a ,b', 'aa,b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(strings, opts) return MiniAlign.as_parts(opts.tmp) end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { split = %s }, { tmp = { { 'xxx' } } })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx' })
 end
 
 T['align_strings()']['respects `steps.pre_justify` argument'] = function()
@@ -257,6 +272,14 @@ T['align_strings()']['respects `steps.pre_justify` argument'] = function()
   -- Uses `MiniAlign.config.steps` as default
   set_config_steps({ pre_justify = [[{ MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end) }]] })
   validate_align_strings({ 'aaa=b', 'aa=b' }, { split = '=' }, { 'xxx=b', 'aa =b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
+  cmd = string.format(
+    [[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_justify = { %s }, split = '=' }, { tmp = 'xxx' })]],
+    step_str
+  )
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
 end
 
 T['align_strings()']['respects `steps.justify` argument'] = function()
@@ -302,6 +325,14 @@ T['align_strings()']['respects `steps.justify` argument'] = function()
   -- Uses `MiniAlign.config.steps` as default
   set_config_steps({ justify = [['center']] })
   validate_align_strings({ 'a=b', 'aaa=b' }, { split = '=' }, { ' a =b', 'aaa=b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
+  cmd = string.format(
+    [[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { justify = %s, split = '=' }, { tmp = 'xxx' })]],
+    step_str
+  )
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa=b' })
 end
 
 T['align_strings()']['respects `steps.pre_merge` argument'] = function()
@@ -327,6 +358,14 @@ T['align_strings()']['respects `steps.pre_merge` argument'] = function()
   -- Uses `MiniAlign.config.steps` as default
   set_config_steps({ pre_merge = [[{ MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end) }]] })
   validate_align_strings({ 'aaa=b', 'aa=b' }, { split = '=' }, { 'xxx=b', 'aa =b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
+  cmd = string.format(
+    [[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_merge = { %s }, split = '=' }, { tmp = 'xxx' })]],
+    step_str
+  )
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
 end
 
 T['align_strings()']['respects `steps.merge` argument'] = function()
@@ -361,6 +400,25 @@ T['align_strings()']['respects `steps.merge` argument'] = function()
   -- Uses `MiniAlign.config.steps` as default
   set_config_steps({ merge = [['-']] })
   validate_align_strings({ 'a=b' }, { split = '=' }, { 'a-=-b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) return { opts.tmp } end)]]
+  cmd = string.format(
+    [[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { merge = %s, split = '=' }, { tmp = 'xxx' })]],
+    step_str
+  )
+  eq(child.lua_get(cmd), { 'xxx' })
+end
+
+T['align_strings()']['respects `opts` argument'] = function()
+  -- Its usage is explicitly tested inside every test step
+
+  -- Should take default values from `MiniAlign.config.options`
+  child.lua([[MiniAlign.config.options.test = 'xxx']])
+  child.lua([[ MiniAlign.config.steps.pre_split = {
+    MiniAlign.as_step('test', function(strings, opts) strings[1] = opts.test end)
+  }]])
+  eq(child.lua_get([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { split = '=' }, {})]]), { 'xxx', 'aa=b' })
 end
 
 T['align_strings()']['works with multibyte characters'] = function()
@@ -800,6 +858,15 @@ T['gen_step']['default_justify()']['prefers padding left for odd space added'] =
   validate_align_strings({ 'a=b', 'aaaa=b' }, {}, { '  a =b', 'aaaa=b' })
 end
 
+T['gen_step']['default_justify()']['output step uses `opts.offsets`'] = function()
+  set_config_steps({ split = [['=']], justify = [[MiniAlign.gen_step.default_justify('left')]] })
+
+  -- Using `opts.offsets` allows to respect string prefixes but without
+  -- processing them. So in this case output should be the same as with
+  -- `{ '   a=b', '  a=b', 'a=b' }` and equal offsets (but without indents).
+  validate_align_strings({ 'a=b', 'a=b', 'a=b' }, {}, { 'a=b', 'a =b', 'a   =b' }, { offsets = { 3, 2, 0 } })
+end
+
 T['gen_step']['default_merge()'] = new_set()
 
 T['gen_step']['default_merge()']['works'] = function()
@@ -1012,6 +1079,12 @@ T['Align']['works in Visual charwise mode'] = function()
   validate_keys({ 'a_b', 'aaa_b' }, { 'v', '1j4l', 'ga', '_' }, { 'a  _b', 'aaa_b' })
   eq(get_cursor(), { 2, 4 })
   eq(get_mode(), 'n')
+
+  -- Respects offset of first line
+  set_lines({ 'xx_xxa_b', 'a_b' })
+  set_cursor(1, 5)
+  type_keys('vj', 'ga', '_')
+  eq(get_lines(), { 'xx_xxa_b', 'a     _b' })
 
   -- Allows using non-split related modifiers
   validate_keys({ 'a_b', 'aaa_b' }, { 'v', '1j4l', 'ga', 'jc', '_' }, { ' a _b', 'aaa_b' })
@@ -1294,6 +1367,38 @@ T['Align with preview']['works'] = new_set({
   end,
 })
 
+T['Align with preview']['stops preview after `<Esc>` and `<C-c>`'] = function()
+  -- Don't show mode because it causes hit-enter-prompt with Visual selection
+  child.o.showmode = false
+  local validate = function(init_keys, stop_key)
+    child.ensure_normal_mode()
+
+    local lines = { 'a_b', 'aa_b' }
+    set_lines(lines)
+    set_cursor(1, 0)
+    type_keys(init_keys, '_')
+    -- Justify to right side
+    type_keys('jr')
+    eq(get_lines(), { ' a_b', 'aa_b' })
+
+    -- Should reset text to its initial form
+    type_keys(stop_key)
+    eq(get_mode(), 'n')
+    eq(get_lines(), lines)
+    -- This should start Insert mode and not right justify by 'a'
+    type_keys('a')
+    eq(get_mode(), 'i')
+  end
+
+  -- Normal mode
+  validate({ 'gA', 'Vj' }, '<Esc>')
+  validate({ 'gA', 'Vj' }, '<C-c>')
+
+  -- Visual mode
+  validate({ 'Vj', 'gA' }, '<Esc>')
+  validate({ 'Vj', 'gA' }, '<C-c>')
+end
+
 T['Align with preview']['correctly restores visual selection'] = new_set(
   { parametrize = { { 'Visual-char' }, { 'Visual-line' }, { 'Visual-block' } } },
   {
@@ -1336,5 +1441,17 @@ T['Align with preview']['respects `vim.{g,b}.minialign_disable`'] = new_set({
 })
 
 T['Modifiers'] = new_set()
+
+T['Modifiers']['s'] = function() MiniTest.skip() end
+T['Modifiers']['j'] = function() MiniTest.skip() end
+T['Modifiers']['m'] = function() MiniTest.skip() end
+T['Modifiers']['f'] = function() MiniTest.skip() end
+T['Modifiers']['t'] = function() MiniTest.skip() end
+T['Modifiers']['p'] = function() MiniTest.skip() end
+T['Modifiers']['<BS>'] = function() MiniTest.skip() end
+T['Modifiers']['='] = function() MiniTest.skip() end
+T['Modifiers'][','] = function() MiniTest.skip() end
+T['Modifiers'][' '] = function() MiniTest.skip() end
+T['Modifiers']['|'] = function() MiniTest.skip() end
 
 return T
