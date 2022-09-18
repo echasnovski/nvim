@@ -1375,6 +1375,20 @@ T['Align with preview']['works'] = new_set({
   end,
 })
 
+T['Align with preview']['correctly shows all steps in helper message'] = function()
+  child.set_size(12, 30)
+  child.o.cmdheight = 5
+
+  child.lua('_G.dummy_step = function(name) return MiniAlign.as_step(name, function() end) end')
+  set_config_steps({ pre_split = [[{ _G.dummy_step('sss1'), _G.dummy_step('sss2') }]] })
+  set_config_steps({ pre_justify = [[{ _G.dummy_step('jjj1'), _G.dummy_step('jjj2') }]] })
+  set_config_steps({ pre_merge = [[{ _G.dummy_step('mmm1'), _G.dummy_step('mmm2') }]] })
+
+  set_lines({ 'a_b', 'aa_b' })
+  type_keys('gA', 'ip', '_')
+  child.expect_screenshot()
+end
+
 T['Align with preview']['stops preview after `<Esc>` and `<C-c>`'] = function()
   -- Don't show mode because it causes hit-enter-prompt with Visual selection
   child.o.showmode = false
@@ -1434,6 +1448,14 @@ T['Align with preview']['correctly restores visual selection'] = new_set(
   }
 )
 
+T['Align with preview']['processes region before first modifier'] = function()
+  set_config_steps({ split = [['_']], merge = [['--']] })
+  set_lines({ 'a_b', 'aaa_b' })
+  set_cursor(1, 0)
+  type_keys('Vj', 'gA')
+  eq(get_lines(), { 'a  --_--b', 'aaa--_--b' })
+end
+
 T['Align with preview']['respects `vim.{g,b}.minialign_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
@@ -1448,18 +1470,237 @@ T['Align with preview']['respects `vim.{g,b}.minialign_disable`'] = new_set({
   end,
 })
 
-T['Modifiers'] = new_set()
+local init_preview_align = function(lines, keys)
+  child.ensure_normal_mode()
+  set_lines(lines or { 'a_b', 'aaa_b' })
+  set_cursor(1, 0)
+  type_keys(keys or { 'Vj', 'gA' })
+end
 
-T['Modifiers']['s'] = function() MiniTest.skip() end
-T['Modifiers']['j'] = function() MiniTest.skip() end
-T['Modifiers']['m'] = function() MiniTest.skip() end
-T['Modifiers']['f'] = function() MiniTest.skip() end
-T['Modifiers']['t'] = function() MiniTest.skip() end
-T['Modifiers']['p'] = function() MiniTest.skip() end
-T['Modifiers']['<BS>'] = function() MiniTest.skip() end
-T['Modifiers']['='] = function() MiniTest.skip() end
-T['Modifiers'][','] = function() MiniTest.skip() end
-T['Modifiers'][' '] = function() MiniTest.skip() end
-T['Modifiers']['|'] = function() MiniTest.skip() end
+local validate_modifier_stops = function(modifier_key, stop_key)
+  local lines = { 'a_b', 'aaa_b' }
+  init_preview_align(lines)
+
+  type_keys(modifier_key, stop_key)
+  eq(get_mode(), 'V')
+  eq(get_lines(), lines)
+
+  -- Aligning should still be active
+  type_keys('_')
+  eq(get_lines(), { 'a  _b', 'aaa_b' })
+end
+
+T['Modifiers'] =
+  new_set({ hooks = {
+    pre_case = function()
+      child.set_size(12, 30)
+      child.o.cmdheight = 5
+    end,
+  } })
+
+T['Modifiers']['s'] = new_set()
+
+T['Modifiers']['s']['works'] = function()
+  init_preview_align(nil, { 'Vj', 'ga' })
+
+  type_keys('s')
+  child.expect_screenshot()
+  type_keys('_', '<CR>')
+  child.expect_screenshot()
+end
+
+T['Modifiers']['s']['stops on `<Esc>` and `<C-c>`'] = function()
+  validate_modifier_stops('s', '<Esc>')
+  validate_modifier_stops('s', '<C-c>')
+end
+
+T['Modifiers']['s']['allows empty input'] = function()
+  set_config_steps({ justify = [['right']] })
+  local lines = { 'a_b', 'aaa_b' }
+  init_preview_align(lines)
+  type_keys('s', '<CR>')
+
+  -- Using `''` as split means that strings act as single-cell rows
+  eq(get_lines(), { '  a_b', 'aaa_b' })
+end
+
+T['Modifiers']['j'] = new_set()
+
+T['Modifiers']['j']['works'] = new_set({
+  -- Test for all actionable values and one not actionable (should do nothing)
+  parametrize = { { 'l' }, { 'c' }, { 'r' }, { 'n' }, { 'u' } },
+}, {
+  test = function(user_key)
+    set_config_steps({ split = [['_']] })
+    if user_key == 'l' then set_config_steps({ justify = [['right']] }) end
+
+    init_preview_align()
+
+    type_keys('j')
+    child.expect_screenshot()
+
+    type_keys(user_key)
+    child.expect_screenshot()
+  end,
+})
+
+T['Modifiers']['j']['stops on `<Esc>` and `<C-c>`'] = function()
+  local validate = function(stop_key)
+    local lines = { 'a_b', 'aaa_b' }
+    init_preview_align(lines)
+
+    type_keys('j', stop_key)
+
+    -- Aligning should still be active
+    eq(get_mode(), 'V')
+    type_keys('_')
+    eq(get_lines(), { 'a  _b', 'aaa_b' })
+  end
+
+  validate('<Esc>')
+  validate('<C-c>')
+end
+
+T['Modifiers']['m'] = new_set()
+
+T['Modifiers']['m']['works'] = function()
+  init_preview_align(nil, { 'Vj', 'ga' })
+
+  type_keys('m')
+  child.expect_screenshot()
+  type_keys('--', '<CR>')
+  type_keys('_')
+  child.expect_screenshot()
+end
+
+T['Modifiers']['m']['stops on `<Esc>` and `<C-c>`'] = function()
+  validate_modifier_stops('m', '<Esc>')
+  validate_modifier_stops('m', '<C-c>')
+end
+
+T['Modifiers']['m']['allows empty input'] = function()
+  set_config_steps({ split = [['_']], merge = [['--']] })
+  local lines = { 'a_b', 'aaa_b' }
+  init_preview_align(lines)
+  eq(get_lines(), { 'a  --_--b', 'aaa--_--b' })
+
+  -- Should result into `merge = ''`
+  type_keys('m', '<CR>')
+  eq(get_lines(), { 'a  _b', 'aaa_b' })
+end
+
+T['Modifiers']['f'] = new_set()
+
+T['Modifiers']['f']['works'] = function()
+  init_preview_align({ 'a_b', 'aa_b', 'aaa_b' }, { 'V2j', 'ga' })
+
+  type_keys('f')
+  child.expect_screenshot()
+
+  type_keys('row ~= 1', '<CR>')
+  type_keys('_')
+  eq(get_lines(), { 'a_b', 'aa _b', 'aaa_b' })
+end
+
+T['Modifiers']['f']['stpos on `<Esc>` and `<C-c>`'] = function()
+  validate_modifier_stops('f', '<Esc>')
+  validate_modifier_stops('f', '<C-c>')
+end
+
+T['Modifiers']['f']['allows empty input'] = function()
+  set_config_steps({ split = [['_']] })
+  init_preview_align()
+
+  -- Should result into having `''` as special input (filter step without actual filtering)
+  type_keys('f', '<CR>')
+  child.expect_screenshot()
+end
+
+T['Modifiers']['p'] = new_set()
+
+T['Modifiers']['p']['works'] = function()
+  set_config_steps({ split = [['_']] })
+  init_preview_align({ 'a_b_c', 'aaa_bbb_ccc' })
+
+  eq(get_lines(), { 'a  _b  _c', 'aaa_bbb_ccc' })
+  type_keys('p')
+  child.expect_screenshot()
+  eq(get_lines(), { 'a_  b_  c', 'aaa_bbb_ccc' })
+end
+
+T['Modifiers']['t'] = new_set()
+
+T['Modifiers']['t']['works'] = function()
+  set_config_steps({ split = [['_']] })
+  init_preview_align({ ' a _ b _ c', '  aaa _ bbb _  ccc' })
+
+  eq(get_lines(), { ' a    _ b   _ c', '  aaa _ bbb _  ccc' })
+  type_keys('t')
+  child.expect_screenshot()
+  eq(get_lines(), { ' a   _b  _c', '  aaa_bbb_ccc' })
+end
+
+T['Modifiers']['<BS>'] = new_set()
+
+T['Modifiers']['<BS>']['works'] = new_set({ parametrize = { { 'pre_split' }, { 'pre_justify' }, { 'pre_merge' } } }, {
+  test = function(pre_step_name)
+    set_config_steps({ [pre_step_name] = [[{ MiniAlign.as_step('aaa', function() end) }]] })
+    init_preview_align()
+    child.expect_screenshot()
+    type_keys('<BS>')
+    child.expect_screenshot()
+  end,
+})
+
+T['Modifiers']['<BS>']['does nothing if no pre-steps'] = function()
+  local lines = { 'a_b', 'aaa_b' }
+  init_preview_align(lines)
+  child.expect_screenshot()
+  type_keys('<BS>')
+  child.expect_screenshot()
+
+  -- Aligning should still be active
+  type_keys('_')
+  eq(get_lines(), { 'a  _b', 'aaa_b' })
+end
+
+T['Modifiers']['<BS>']['prompts to choose if ambiguous'] = function()
+  child.lua('_G.dummy_step = function(name) return MiniAlign.as_step(name, function() end) end')
+  set_config_steps({ pre_split = [[{ _G.dummy_step('sss') }]] })
+  set_config_steps({ pre_justify = [[{ _G.dummy_step('jjj') }]] })
+  set_config_steps({ pre_merge = [[{ _G.dummy_step('mmm') }]] })
+
+  set_lines({ 'a_b', 'aa_b' })
+  type_keys('gA', 'ip', '_')
+  child.expect_screenshot()
+
+  type_keys('<BS>')
+  child.expect_screenshot()
+  type_keys('s')
+  child.expect_screenshot()
+
+  type_keys('<BS>')
+  child.expect_screenshot()
+  type_keys('j')
+  child.expect_screenshot()
+end
+
+local validate_common_split = function(init_lines, modifier_key)
+  set_lines(init_lines)
+  set_cursor(1, 0)
+  type_keys('VG', 'gA')
+
+  child.expect_screenshot()
+  type_keys(modifier_key)
+  child.expect_screenshot()
+end
+
+T['Modifiers']['<equal sign>'] = function() validate_common_split({ 'a=b', 'aaa=bbb' }, '=') end
+
+T['Modifiers']['<comma>'] = function() validate_common_split({ 'a,b', 'aaa,bbb' }, ',') end
+
+T['Modifiers']['<space bar>'] = function() validate_common_split({ '  a  b', '    aaa    bbb', 'a b' }, ' ') end
+
+T['Modifiers']['<vertical line>'] = function() validate_common_split({ 'a|b', 'aaa|bbb' }, '|') end
 
 return T

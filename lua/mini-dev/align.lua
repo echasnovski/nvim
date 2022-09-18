@@ -153,10 +153,12 @@ MiniAlign.config = {
     -- Modifiers adding 'pre justify' steps
     ['f'] = function(steps)
       local input = H.user_input('Enter filter expression')
-      table.insert(steps.pre_justify, MiniAlign.gen_step.filter(input))
+      local step = MiniAlign.gen_step.filter(input)
+      if step == nil then return end
+      table.insert(steps.pre_justify, step)
     end,
-    ['t'] = function(steps) table.insert(steps.pre_justify, MiniAlign.gen_step.trim()) end,
     ['p'] = function(steps) table.insert(steps.pre_justify, MiniAlign.gen_step.pair()) end,
+    ['t'] = function(steps) table.insert(steps.pre_justify, MiniAlign.gen_step.trim()) end,
 
     -- Delete latest step
     [vim.api.nvim_replace_termcodes('<BS>', true, true, true)] = function(steps)
@@ -203,12 +205,14 @@ MiniAlign.config = {
       table.insert(
         steps.pre_split,
         MiniAlign.as_step('squash', function(strings)
+          -- Replace all space sequences with single space (except indent)
           for i, s in ipairs(strings) do
-            strings[i] = s:gsub('%s+', ' ')
+            strings[i] = s:gsub('()(%s+)', function(n, space) return n == 1 and space or ' ' end)
           end
         end)
       )
-      steps.split = ' '
+      -- Don't use `' '` to respect indent
+      steps.split = '%s+'
     end,
     ['|'] = function(steps)
       steps.split = '|'
@@ -289,19 +293,20 @@ end
 MiniAlign.align_user = function(mode)
   local modifiers = H.get_config().modifiers
   local with_preview = H.cache.with_preview
-  local steps = H.normalize_steps()
+  local steps = H.cache.steps or H.normalize_steps()
+  local steps_are_from_cache = H.cache.steps ~= nil
   H.cache.region = nil
-
-  -- Make early process:
-  -- - If cache is present (enables dot-repeat).
-  -- - If `split` is defined with no preview (no further information needed).
-  if (H.cache.steps ~= nil) or (not with_preview and steps.split ~= nil) then
-    H.process_current_region(false, mode, H.cache.steps or steps)
-    return
-  end
 
   -- Track if lines were actually set to properly undo during preview
   local lines_were_set = false
+
+  -- Make initial process
+  lines_were_set = H.process_current_region(lines_were_set, mode, steps)
+
+  -- Make early return:
+  -- - If cache is present (enables dot-repeat).
+  -- - If `split` is defined with no preview (no further information needed).
+  if steps_are_from_cache or (not with_preview and steps.split ~= nil) then return end
 
   -- Ask user to input modifier id until no more is needed
   local n_iter = 0
@@ -334,6 +339,7 @@ MiniAlign.align_user = function(mode)
         -- helper status message
         local msg = string.format('Modifier %s should be properly callable. Reason: %s', vim.inspect(id), out)
         H.echo({ { msg, 'WarningMsg' } }, true)
+        vim.cmd('redraw')
         vim.loop.sleep(500)
       end
     end
@@ -1073,7 +1079,7 @@ H.user_input = function(prompt, text)
   local on_key = vim.on_key or vim.register_keystroke_callback
   local was_cancelled = false
   on_key(function(key)
-    if key == vim.api.nvim_replace_termcodes('<Esc>', true, true, true) then was_cancelled = true end
+    if key == '\27' then was_cancelled = true end
   end, H.ns_id.input)
 
   -- Ask for input
