@@ -290,6 +290,7 @@ T['align_strings()']['respects `steps.justify` argument'] = function()
   validate_align_strings({ 'a=b', 'aaa=b' }, { split = '=', justify = 'left' },   { 'a  =b', 'aaa=b' })
   validate_align_strings({ 'a=b', 'aaa=b' }, { split = '=', justify = 'center' }, { ' a =b', 'aaa=b' })
   validate_align_strings({ 'a=b', 'aaa=b' }, { split = '=', justify = 'right' },  { '  a=b', 'aaa=b' })
+  validate_align_strings({ 'a=b', 'aaa=b' }, { split = '=', justify = 'none' },   { 'a=b',   'aaa=b' })
   --stylua: ignore end
 
   -- Array of strings (should be recycled)
@@ -619,20 +620,17 @@ end
 
 T['as_parts()']['`trim()` method']['validates arguments'] = function()
   child.lua([[parts = MiniAlign.as_parts({ { ' a ' } })]])
+  local err_pattern
 
   -- `direction`
-  expect.error(function() child.lua([[parts.trim(1)]]) end, '`direction` should be one of "both", "left", "right"')
-  expect.error(function() child.lua([[parts.trim('a')]]) end, '`direction` should be one of "both", "left", "right"')
+  err_pattern = '`direction` should be one of "both", "left", "none", "right"'
+  expect.error(function() child.lua([[parts.trim(1)]]) end, err_pattern)
+  expect.error(function() child.lua([[parts.trim('a')]]) end, err_pattern)
 
   -- `indent`
-  expect.error(
-    function() child.lua([[parts.trim('both', 1)]]) end,
-    '`indent` should be one of "keep", "max", "min", "none"'
-  )
-  expect.error(
-    function() child.lua([[parts.trim('both', 'a')]]) end,
-    '`indent` should be one of "keep", "max", "min", "none"'
-  )
+  err_pattern = '`indent` should be one of "keep", "max", "min", "remove"'
+  expect.error(function() child.lua([[parts.trim('both', 1)]]) end, err_pattern)
+  expect.error(function() child.lua([[parts.trim('both', 'a')]]) end, err_pattern)
 end
 
 T['as_parts()']['`trim()` method']['respects `direction` argument'] = function()
@@ -643,9 +641,10 @@ T['as_parts()']['`trim()` method']['respects `direction` argument'] = function()
   end
 
   --stylua: ignore start
-  validate('both',  { { ' a',  'b',  'c',  'd',  'e' }, { '  f' } })
-  validate('left',  { { ' a ', 'b ', 'c',  'd ', 'e' }, { '  f ' } })
-  validate('right', { { ' a',  ' b', ' c', 'd',  'e' }, { '  f' } })
+  validate('both',  { { ' a',  'b',   'c',  'd',  'e' }, { '  f' } })
+  validate('left',  { { ' a ', 'b ',  'c',  'd ', 'e' }, { '  f ' } })
+  validate('right', { { ' a',  ' b',  ' c', 'd',  'e' }, { '  f' } })
+  validate('none',  { { ' a ', ' b ', ' c', 'd ', 'e' }, { '  f ' } })
   --stylua: ignore end
 end
 
@@ -657,10 +656,10 @@ T['as_parts()']['`trim()` method']['respects `indent` argument'] = function()
   end
 
   --stylua: ignore start
-  validate('keep', { { ' a',  'b' }, { '  c', 'd' } })
-  validate('min',  { { ' a',  'b' }, { ' c',  'd' } })
-  validate('max',  { { '  a', 'b' }, { '  c', 'd' } })
-  validate('none', { { 'a',   'b' }, { 'c',   'd' } })
+  validate('keep',   { { ' a',  'b' }, { '  c', 'd' } })
+  validate('min',    { { ' a',  'b' }, { ' c',  'd' } })
+  validate('max',    { { '  a', 'b' }, { '  c', 'd' } })
+  validate('remove', { { 'a',   'b' }, { 'c',   'd' } })
   --stylua: ignore end
 end
 
@@ -787,6 +786,9 @@ T['gen_step']['default_justify()']['works'] = function()
 
   set_default_justify('right')
   validate_align_strings({ 'a=b', 'aaa=b' }, {}, { '  a=b', 'aaa=b' })
+
+  set_default_justify('none')
+  validate_align_strings({ 'a=b', 'aaa=b' }, {}, { 'a=b', 'aaa=b' })
   --stylua: ignore end
 
   -- Array of strings (should be recycled)
@@ -803,7 +805,7 @@ end
 T['gen_step']['default_justify()']['validates input'] = function()
   expect.error(
     function() child.lua('MiniAlign.gen_step.default_justify(1)') end,
-    [[Justify `side` should one of 'left', 'center', 'right', or array of those]]
+    [[Justify `side` should one of 'left', 'center', 'right', 'none', or array of those]]
   )
 end
 
@@ -829,6 +831,9 @@ T['gen_step']['default_justify()']['works with multibyte characters'] = function
 
   set_default_justify('right')
   validate_align_strings({ 'ы=ю', 'ыыы=ююю' }, {}, { '  ы=  ю', 'ыыы=ююю' })
+
+  set_default_justify('none')
+  validate_align_strings({ 'ы=ю', 'ыыы=ююю' }, {}, { 'ы=ю', 'ыыы=ююю' })
 end
 
 T['gen_step']['default_justify()']['does not add trailing whitespace'] = function()
@@ -842,6 +847,9 @@ T['gen_step']['default_justify()']['does not add trailing whitespace'] = functio
 
   set_default_justify('right')
   validate_align_strings({ 'a=b', '', 'a=bbb' }, {}, { 'a=  b', '', 'a=bbb' })
+
+  set_default_justify('none')
+  validate_align_strings({ 'a=b', '', 'a=bbb' }, {}, { 'a=b', '', 'a=bbb' })
 end
 
 T['gen_step']['default_justify()']['last row element width is ignored for left `justify`'] = function()
@@ -852,7 +860,7 @@ T['gen_step']['default_justify()']['last row element width is ignored for left `
   validate_align_strings({ 'a=b=c', 'a=bb=c', 'a=bbbbb' }, {}, { 'a=b =c', 'a=bb=c', 'a=bbbbb' })
 end
 
-T['gen_step']['default_justify()']['prefers padding left for odd space added'] = function()
+T['gen_step']['default_justify()']['prefers padding left for center `justify`'] = function()
   set_config_steps({ split = [['=']], justify = [[MiniAlign.gen_step.default_justify('center')]] })
 
   validate_align_strings({ 'a=b', 'aaaa=b' }, {}, { '  a =b', 'aaaa=b' })
@@ -953,7 +961,7 @@ T['gen_step']['trim()']['respects `indent` argument'] = function()
   set('max')
   validate_align_strings({ ' a ', '  b ' }, {}, { '  a', '  b' })
 
-  set('none')
+  set('remove')
   validate_align_strings({ ' a ', '  b ' }, {}, { 'a', 'b' })
 end
 

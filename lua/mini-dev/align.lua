@@ -1,13 +1,13 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- TODO:
--- - Implement `options.split_ignore_patterns = { [[".-"]], [['.-']] }` which
---   should be used in output of `gen_step.default_split`.
 -- - Make modifiers be called with signature `(steps, opts)`.
 -- - ??? CONSIDER REFACTOR: MAYBE ALL "STRING OR ARRAY OF STRINGS" CAN GO AS
 --   OPTIONS WHILE STEPS WILL BE `NIL` BY DEFAULT ???
 -- - Consider changing signature of `MiniAlign.aling_strings` to `(strings,
 --   opts, steps)`.
+-- - Implement `options.split_ignore_patterns = { [[".-"]], [['.-']] }` which
+--   should be used in output of `gen_step.default_split`.
 -- - Consider case: visual selection + hitting `:`.
 --
 --
@@ -130,7 +130,12 @@ MiniAlign.config = {
       steps.split = input or steps.split
     end,
     ['j'] = function(steps)
-      H.message('Select justify: (l)eft, (c)enter, (r)ight')
+      -- stylua: ignore
+      H.echo({
+        { 'Select justify: ', 'ModeMsg' }, { 'l', 'Question' }, { 'eft, ' },
+        { 'c', 'Question' }, { 'enter, ' }, { 'r', 'Question' }, { 'ight, ' },
+        { 'n', 'Question' }, { 'one' }
+      })
       local ok, char = pcall(vim.fn.getchar)
       if not ok or char == 27 then return end
       if type(char) == 'number' then char = vim.fn.nr2char(char) end
@@ -138,6 +143,7 @@ MiniAlign.config = {
       if char == 'l' then steps.justify = 'left' end
       if char == 'c' then steps.justify = 'center' end
       if char == 'r' then steps.justify = 'right' end
+      if char == 'n' then steps.justify = 'none' end
     end,
     ['m'] = function(steps)
       local input = H.user_input('Enter merge string')
@@ -167,7 +173,11 @@ MiniAlign.config = {
         return
       end
 
-      H.message('Select step to remove: (s)plit, (j)ustify, (m)erge')
+      --stylua: ignore
+      H.echo({
+        { 'Select pre-step to remove: ', 'ModeMsg' }, { 's', 'Question' }, { 'plit, ' },
+        { 'j', 'Question' }, { 'ustify, ' }, { 'm', 'Question' }, { 'erge' },
+      })
       local ok, char = pcall(vim.fn.getchar)
       if not ok or char == 27 then return end
       if type(char) == 'number' then char = vim.fn.nr2char(char) end
@@ -304,7 +314,7 @@ MiniAlign.align_user = function(mode)
     -- Also stop in case of too many iterations (guard from infinite cycle)
     if id == nil or n_iter > 1000 then
       if lines_were_set then H.undo() end
-      if n_iter > 1000 then H.message('Too many modifiers typed.') end
+      if n_iter > 1000 then H.echo({ { 'Too many modifiers typed.', 'WarningMsg' } }, true) end
       break
     end
 
@@ -323,7 +333,7 @@ MiniAlign.align_user = function(mode)
         -- Force message to appear for 500ms because it might be overridden by
         -- helper status message
         local msg = string.format('Modifier %s should be properly callable. Reason: %s', vim.inspect(id), out)
-        H.message(msg)
+        H.echo({ { msg, 'WarningMsg' } }, true)
         vim.loop.sleep(500)
       end
     end
@@ -536,7 +546,7 @@ MiniAlign.gen_step.default_justify = function(side)
   if side == nil then return nil end
 
   if not (H.is_justify_side(side) or H.is_array_of(side, H.is_justify_side)) then
-    H.error([[Justify `side` should one of 'left', 'center', 'right', or array of those.]])
+    H.error([[Justify `side` should one of 'left', 'center', 'right', 'none', or array of those.]])
   end
 
   local step_name = vim.inspect(side)
@@ -660,13 +670,15 @@ H.pad_functions = {
     if (no_trailing and H.is_whitespace(x)) or H.is_infinite(n_spaces) then return x end
     return string.format('%s%s', string.rep(' ', n_spaces), x)
   end,
+  none = function(x, _, _) return x end,
 }
 
 -- Trim functions
 H.trim_functions = {
+  both = function(x) return H.trim_functions.left(H.trim_functions.right(x)) end,
   left = function(x) return string.gsub(x, '^%s*', '') end,
   right = function(x) return string.gsub(x, '%s*$', '') end,
-  both = function(x) return H.trim_functions.left(H.trim_functions.right(x)) end,
+  none = function(x) return x end,
 }
 
 -- Indentation functions
@@ -686,7 +698,7 @@ H.indent_functions = {
     end
     return vim.tbl_map(function() return min_indent end, indent_arr)
   end,
-  none = function(indent_arr)
+  remove = function(indent_arr)
     return vim.tbl_map(function() return '' end, indent_arr)
   end,
 }
@@ -789,27 +801,31 @@ H.normalize_steps = function(steps, steps_name, allow_nil_split)
   return res
 end
 
-H.steps_to_string = function(steps)
-  -- Assumes `steps` are normalized (all values are converted to steps)
-  local single_to_string = function(prefix, value, pre_steps)
-    local val = ''
-    if value ~= nil then val = value.name end
-
-    local steps = ''
+H.steps_to_echo_chunks = function(steps)
+  local single_to_string = function(pre_steps, value)
+    local steps_str = ''
     if #pre_steps > 0 then
       local pre_names = vim.tbl_map(function(x) return x.name end, pre_steps)
-      steps = string.format('(%s) ', table.concat(pre_names, ', '))
+      steps_str = string.format('(%s) ', table.concat(pre_names, ', '))
     end
 
-    return string.format('%s: %s%s', prefix, steps, val)
+    local val_str = ''
+    if value ~= nil then val_str = value.name end
+
+    return steps_str .. val_str
   end
 
-  local tbl = {
-    single_to_string('Split', steps.split, steps.pre_split),
-    single_to_string('Justify', steps.justify, steps.pre_justify),
-    single_to_string('Merge', steps.merge, steps.pre_merge),
+  return {
+    { 'Split: ', 'ModeMsg' },
+    { single_to_string(steps.pre_split, steps.split) },
+    { ' | ', 'Question' },
+    { 'Justify: ', 'ModeMsg' },
+    { single_to_string(steps.pre_justify, steps.justify) },
+    { ' | ', 'Question' },
+    { 'Merge: ', 'ModeMsg' },
+    { single_to_string(steps.pre_merge, steps.merge) },
+    { ' |', 'Question' },
   }
-  return table.concat(tbl, ' | ') .. ' |'
 end
 
 H.msg_bad_steps = function(steps_name, key, msg) return string.format('`%s.%s` %s', steps_name, key, msg) end
@@ -1036,8 +1052,9 @@ H.user_modifier = function(steps, with_preview)
   vim.defer_fn(function()
     if not needs_help_msg then return end
 
-    -- Use `echo` command instead of `echomsg` to not pollute `:messages`
-    H.message(H.steps_to_string(steps) .. ' Enter modifier', 'echo')
+    local echo_chunks = H.steps_to_echo_chunks(steps)
+    table.insert(echo_chunks, { ' Enter modifier' })
+    H.echo(echo_chunks)
     H.cache.msg_shown = true
   end, delay)
   local ok, char = pcall(vim.fn.getchar)
@@ -1086,7 +1103,7 @@ H.is_step = function(x) return type(x) == 'table' and type(x.name) == 'string' a
 
 H.is_string = function(v) return type(v) == 'string' end
 
-H.is_justify_side = function(x) return x == 'left' or x == 'center' or x == 'right' end
+H.is_justify_side = function(x) return x == 'left' or x == 'center' or x == 'right' or x == 'none' end
 
 H.is_nonempty_region = function(x)
   if type(x) ~= 'table' then return false end
@@ -1162,17 +1179,24 @@ H.set_lines = function(start_row, end_row, replacement)
 end
 
 -- Utilities ------------------------------------------------------------------
-H.message = function(msg, echo_cmd, hl_group)
-  vim.cmd([[echon '' | echohl ]] .. (hl_group or 'ModeMsg'))
-
-  -- Force redraw to ensure that `echo` is effective (`:h echo-redraw`)
-  vim.cmd('redraw')
+H.echo = function(msg, add_to_history)
+  -- Construct message chunks
+  msg = type(msg) == 'string' and { { msg } } or msg
+  table.insert(msg, 1, { '(mini.align) ', 'WarningMsg' })
 
   -- Avoid hit-enter-prompt
   local max_width = vim.o.columns * math.max(vim.o.cmdheight - 1, 0) + vim.v.echospace
-  msg = vim.fn.strcharpart('(mini.align) ' .. msg, 0, max_width)
-  vim.cmd((echo_cmd or 'echomsg') .. '' .. vim.inspect(msg))
-  vim.cmd('echohl None')
+  local chunks, tot_width = {}, 0
+  for _, ch in ipairs(msg) do
+    local new_ch = { vim.fn.strcharpart(ch[1], 0, max_width - tot_width), ch[2] }
+    table.insert(chunks, new_ch)
+    tot_width = tot_width + vim.fn.strdisplaywidth(new_ch[1])
+    if tot_width >= max_width then break end
+  end
+
+  -- Echo. Force redraw to ensure that it is effective (`:h echo-redraw`)
+  vim.cmd([[echo '' | redraw]])
+  vim.api.nvim_echo(chunks, add_to_history, {})
 end
 
 H.error = function(msg) error(string.format('(mini.align) %s', msg), 0) end
