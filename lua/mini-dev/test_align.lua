@@ -144,7 +144,7 @@ T['setup()']['properly handles `config.mappings`'] = function()
 end
 
 local validate_align_strings = function(input_strings, opts, ref_strings, steps)
-  local output = child.lua_get('MiniAlign.align_strings(...)', { input_strings, steps or {}, opts or {} })
+  local output = child.lua_get('MiniAlign.align_strings(...)', { input_strings, opts or {}, steps or {} })
   eq(output, ref_strings)
 end
 
@@ -161,211 +161,13 @@ end
 T['align_strings()']['respects `strings` argument'] =
   function() validate_align_strings({ 'aaa=b', 'aa=b' }, { split_pattern = '=' }, { 'aaa=b', 'aa =b' }) end
 
-T['align_strings()']['validates `steps` argument'] = function()
-  -- `split_pattern` is `''` by default but it is needed for `align_strings()`
-  set_config_opts({ split_pattern = '=' })
-
-  local validate = function(steps_str, error_pattern)
-    expect.error(function()
-      local cmd = string.format([[MiniAlign.align_strings({'a=b', 'aa=b'}, %s)]], steps_str)
-      child.lua(cmd)
-    end, error_pattern)
-  end
-
-  validate([[{ pre_split = 1 }]], 'pre_split.*array of steps')
-  validate([[{ pre_split = { function() end } }]], 'pre_split.*array of steps')
-
-  validate([[{ split = 1 }]], 'split.*step')
-  validate([[{ split = function() end }]], 'split.*step')
-
-  validate([[{ pre_justify = 1 }]], 'pre_justify.*array of steps')
-  validate([[{ pre_justify = { function() end } }]], 'pre_justify.*array of steps')
-
-  validate([[{ justify = 1 }]], 'justify.*step')
-  validate([[{ justify = function() end }]], 'justify.*step')
-
-  validate([[{ pre_merge = 1 }]], 'pre_merge.*array of steps')
-  validate([[{ pre_merge = { function() end } }]], 'pre_merge.*array of steps')
-
-  validate([[{ merge = 1 }]], 'merge.*step')
-  validate([[{ merge = function() end }]], 'merge.*step')
-end
-
-T['align_strings()']['respects `steps.pre_split` argument'] = function()
-  set_config_opts({ split_pattern = '=' })
-  local step_str, cmd
-
-  -- Array of steps
-  step_str = [[MiniAlign.as_step('tmp', function(strings) strings[1] = 'a=b' end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_split = { %s } })]], step_str)
-  eq(child.lua_get(cmd), { 'a =b', 'aa=b' })
-
-  -- Should validate that step correctly modified in place
-  step_str = [[MiniAlign.as_step('tmp', function(strings) strings[1] = 1 end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { pre_split = { %s } })]], step_str)
-  expect.error(child.lua, 'Step `tmp` of `pre_split` should preserve structure of `strings`.', cmd)
-
-  -- Uses `MiniAlign.config.steps` as default
-  set_config_steps({ pre_split = [[{ MiniAlign.as_step('tmp', function(strings) strings[1] = 'a=b' end) }]] })
-  validate_align_strings({ 'aaa=b', 'aa=b' }, { split_pattern = '=' }, { 'a =b', 'aa=b' })
-
-  -- Is called with `opts`
-  step_str = [[MiniAlign.as_step('tmp', function(strings, opts) strings[1] = opts.tmp end)]]
-  cmd =
-    string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_split = { %s } }, { tmp = 'xxx' })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx', 'aa=b' })
-end
-
-T['align_strings()']['respects `steps.split` argument'] = function()
-  local step_str, cmd
-
-  -- Action output should be parts or convertable to it.
-  step_str = [[MiniAlign.as_step('tmp', function(strings) return { { 'a', 'b' }, {'aa', 'b'} } end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { split = %s })]], step_str)
-  eq(child.lua_get(cmd), { 'a b', 'aab' })
-
-  step_str =
-    [[MiniAlign.as_step('tmp', function(strings) return MiniAlign.as_parts({ { 'a', 'b' }, {'aa', 'b'} }) end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { split = %s })]], step_str)
-  eq(child.lua_get(cmd), { 'a b', 'aab' })
-
-  -- Uses `MiniAlign.config.steps` as default
-  set_config_steps({
-    split = [[MiniAlign.as_step('tmp', function(strings) return MiniAlign.as_parts({ { 'a', 'b' }, {'aa', 'b'} }) end)]],
-  })
-  validate_align_strings({ 'a,b', 'aa,b' }, {}, { 'a b', 'aab' })
-
-  -- Should validate that step's output is convertable to parts
-  step_str = [[MiniAlign.as_step('tmp', function(strings) return { { 'a', 1 }, {'aa', 'b'} } end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { split = %s })]], step_str)
-  expect.error(child.lua, 'convertable to parts', cmd)
-
-  -- Is called with `opts`
-  step_str = [[MiniAlign.as_step('tmp', function(strings, opts) return MiniAlign.as_parts(opts.tmp) end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { split = %s }, { tmp = { { 'xxx' } } })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx' })
-end
-
-T['align_strings()']['respects `steps.pre_justify` argument'] = function()
-  set_config_opts({ split_pattern = '=' })
-  local step_str, cmd
-
-  -- Array of steps
-  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_justify = { %s } })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
-
-  -- Should validate that step correctly modified in place
-  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 1 end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { pre_justify = { %s } })]], step_str)
-  expect.error(
-    child.lua,
-    vim.pesc('Step `tmp` of `pre_justify` should preserve structure of `parts`. See `:h MiniAlign.as_parts()`.'),
-    cmd
-  )
-
-  -- Uses `MiniAlign.config.steps` as default
-  set_config_steps({ pre_justify = [[{ MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end) }]] })
-  validate_align_strings({ 'aaa=b', 'aa=b' }, { split_pattern = '=' }, { 'xxx=b', 'aa =b' })
-
-  -- Is called with `opts`
-  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
-  cmd =
-    string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_justify = { %s } }, { tmp = 'xxx' })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
-end
-
-T['align_strings()']['respects `steps.justify` argument'] = function()
-  set_config_opts({ split_pattern = '=' })
-  local step_str, cmd
-
-  -- Action should modify parts in place.
-  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { justify = %s })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx=b', 'aa=b' })
-
-  -- Uses `MiniAlign.config.steps` as default
-  set_config_steps({
-    justify = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]],
-  })
-  validate_align_strings({ 'a=b', 'aa=b' }, { split_pattern = '=' }, { 'xxx=b', 'aa=b' })
-
-  -- Should validate that step correctly modified in place
-  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 1 end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { justify = %s })]], step_str)
-  expect.error(
-    child.lua,
-    -- Using `"left"` as name because names of main steps are synchronized
-    vim.pesc('Step `"left"` of `justify` should preserve structure of `parts`. See `:h MiniAlign.as_parts()`.'),
-    cmd
-  )
-
-  -- Is called with `opts`
-  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { justify = %s }, { tmp = 'xxx' })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx=b', 'aa=b' })
-end
-
-T['align_strings()']['respects `steps.pre_merge` argument'] = function()
-  set_config_opts({ split_pattern = '=' })
-  local step_str, cmd
-
-  -- Array of steps
-  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_merge = { %s } })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
-
-  -- Should validate that step correctly modified in place
-  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 1 end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { pre_merge = { %s } })]], step_str)
-  expect.error(
-    child.lua,
-    vim.pesc('Step `tmp` of `pre_merge` should preserve structure of `parts`. See `:h MiniAlign.as_parts()`.'),
-    cmd
-  )
-
-  -- Uses `MiniAlign.config.steps` as default
-  set_config_steps({ pre_merge = [[{ MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end) }]] })
-  validate_align_strings({ 'aaa=b', 'aa=b' }, { split_pattern = '=' }, { 'xxx=b', 'aa =b' })
-
-  -- Is called with `opts`
-  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
-  cmd =
-    string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { pre_merge = { %s } }, { tmp = 'xxx' })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
-end
-
-T['align_strings()']['respects `steps.merge` argument'] = function()
-  set_config_opts({ split_pattern = '=' })
-  local step_str, cmd
-
-  -- Action should return array of strings.
-  step_str = [[MiniAlign.as_step('tmp', function(parts) return { 'xxx' } end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { merge = %s })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx' })
-
-  -- Uses `MiniAlign.config.steps` as default
-  set_config_steps({ merge = [[MiniAlign.as_step('tmp', function(parts) return { 'xxx' } end)]] })
-  validate_align_strings({ 'a=b' }, { split_pattern = '=' }, { 'xxx' })
-
-  -- Should validate that output is an array of strings
-  step_str = [[MiniAlign.as_step('tmp', function(parts) return { 'a', 1 } end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { merge = %s })]], step_str)
-  expect.error(child.lua, vim.pesc('Output of `merge` step should be array of strings.'), cmd)
-
-  -- Is called with `opts`
-  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) return { opts.tmp } end)]]
-  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { merge = %s }, { tmp = 'xxx' })]], step_str)
-  eq(child.lua_get(cmd), { 'xxx' })
-end
-
 T['align_strings()']['respects `opts` argument'] = function()
   -- Should take default values from `MiniAlign.config.options`
   child.lua([[MiniAlign.config.options.test = 'xxx']])
   child.lua([[ MiniAlign.config.steps.pre_split = {
     MiniAlign.as_step('test', function(strings, opts) strings[1] = opts.test end)
   }]])
-  eq(child.lua_get([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { split_pattern = '=' })]]), { 'xxx', 'aa=b' })
+  eq(child.lua_get([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { split_pattern = '=' }, {})]]), { 'xxx', 'aa=b' })
 end
 
 T['align_strings()']['respects `opts.split_pattern`'] = function()
@@ -409,6 +211,203 @@ T['align_strings()']['respects `opts.merge_delimiter` argument'] = function()
     -- Part resulted from separator is treated the same as any other part
     { 'a-=!b-=!c-=' }
   )
+end
+
+T['align_strings()']['validates `steps` argument'] = function()
+  -- `split_pattern` is `''` by default but it is needed for `align_strings()`
+  set_config_opts({ split_pattern = '=' })
+
+  local validate = function(steps_str, error_pattern)
+    expect.error(function()
+      local cmd = string.format([[MiniAlign.align_strings({'a=b', 'aa=b'}, {}, %s)]], steps_str)
+      child.lua(cmd)
+    end, error_pattern)
+  end
+
+  validate([[{ pre_split = 1 }]], 'pre_split.*array of steps')
+  validate([[{ pre_split = { function() end } }]], 'pre_split.*array of steps')
+
+  validate([[{ split = 1 }]], 'split.*step')
+  validate([[{ split = function() end }]], 'split.*step')
+
+  validate([[{ pre_justify = 1 }]], 'pre_justify.*array of steps')
+  validate([[{ pre_justify = { function() end } }]], 'pre_justify.*array of steps')
+
+  validate([[{ justify = 1 }]], 'justify.*step')
+  validate([[{ justify = function() end }]], 'justify.*step')
+
+  validate([[{ pre_merge = 1 }]], 'pre_merge.*array of steps')
+  validate([[{ pre_merge = { function() end } }]], 'pre_merge.*array of steps')
+
+  validate([[{ merge = 1 }]], 'merge.*step')
+  validate([[{ merge = function() end }]], 'merge.*step')
+end
+
+T['align_strings()']['respects `steps.pre_split` argument'] = function()
+  set_config_opts({ split_pattern = '=' })
+  local step_str, cmd
+
+  -- Array of steps
+  step_str = [[MiniAlign.as_step('tmp', function(strings) strings[1] = 'a=b' end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, {}, { pre_split = { %s } })]], step_str)
+  eq(child.lua_get(cmd), { 'a =b', 'aa=b' })
+
+  -- Should validate that step correctly modified in place
+  step_str = [[MiniAlign.as_step('tmp', function(strings) strings[1] = 1 end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { pre_split = { %s } })]], step_str)
+  expect.error(child.lua, 'Step `tmp` of `pre_split` should preserve structure of `strings`.', cmd)
+
+  -- Uses `MiniAlign.config.steps` as default
+  set_config_steps({ pre_split = [[{ MiniAlign.as_step('tmp', function(strings) strings[1] = 'a=b' end) }]] })
+  validate_align_strings({ 'aaa=b', 'aa=b' }, { split_pattern = '=' }, { 'a =b', 'aa=b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(strings, opts) strings[1] = opts.tmp end)]]
+  cmd =
+    string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { tmp = 'xxx' }, { pre_split = { %s } })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx', 'aa=b' })
+end
+
+T['align_strings()']['respects `steps.split` argument'] = function()
+  local step_str, cmd
+
+  -- Action output should be parts or convertable to it.
+  step_str = [[MiniAlign.as_step('tmp', function(strings) return { { 'a', 'b' }, {'aa', 'b'} } end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { split = %s })]], step_str)
+  eq(child.lua_get(cmd), { 'a b', 'aab' })
+
+  step_str =
+    [[MiniAlign.as_step('tmp', function(strings) return MiniAlign.as_parts({ { 'a', 'b' }, {'aa', 'b'} }) end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { split = %s })]], step_str)
+  eq(child.lua_get(cmd), { 'a b', 'aab' })
+
+  -- Uses `MiniAlign.config.steps` as default
+  set_config_steps({
+    split = [[MiniAlign.as_step('tmp', function(strings) return MiniAlign.as_parts({ { 'a', 'b' }, {'aa', 'b'} }) end)]],
+  })
+  validate_align_strings({ 'a,b', 'aa,b' }, {}, { 'a b', 'aab' })
+
+  -- Should validate that step's output is convertable to parts
+  step_str = [[MiniAlign.as_step('tmp', function(strings) return { { 'a', 1 }, {'aa', 'b'} } end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { split = %s })]], step_str)
+  expect.error(child.lua, 'convertable to parts', cmd)
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(strings, opts) return MiniAlign.as_parts(opts.tmp) end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { tmp = { { 'xxx' } } }, { split = %s })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx' })
+end
+
+T['align_strings()']['respects `steps.pre_justify` argument'] = function()
+  set_config_opts({ split_pattern = '=' })
+  local step_str, cmd
+
+  -- Array of steps
+  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, {}, { pre_justify = { %s } })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
+
+  -- Should validate that step correctly modified in place
+  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 1 end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { pre_justify = { %s } })]], step_str)
+  expect.error(
+    child.lua,
+    vim.pesc('Step `tmp` of `pre_justify` should preserve structure of `parts`. See `:h MiniAlign.as_parts()`.'),
+    cmd
+  )
+
+  -- Uses `MiniAlign.config.steps` as default
+  set_config_steps({ pre_justify = [[{ MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end) }]] })
+  validate_align_strings({ 'aaa=b', 'aa=b' }, { split_pattern = '=' }, { 'xxx=b', 'aa =b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
+  cmd =
+    string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { tmp = 'xxx' }, { pre_justify = { %s } })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
+end
+
+T['align_strings()']['respects `steps.justify` argument'] = function()
+  set_config_opts({ split_pattern = '=' })
+  local step_str, cmd
+
+  -- Action should modify parts in place.
+  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { justify = %s })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa=b' })
+
+  -- Uses `MiniAlign.config.steps` as default
+  set_config_steps({
+    justify = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]],
+  })
+  validate_align_strings({ 'a=b', 'aa=b' }, { split_pattern = '=' }, { 'xxx=b', 'aa=b' })
+
+  -- Should validate that step correctly modified in place
+  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 1 end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { justify = %s })]], step_str)
+  expect.error(
+    child.lua,
+    vim.pesc('Step `tmp` of `justify` should preserve structure of `parts`. See `:h MiniAlign.as_parts()`.'),
+    cmd
+  )
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { tmp = 'xxx' }, { justify = %s })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa=b' })
+end
+
+T['align_strings()']['respects `steps.pre_merge` argument'] = function()
+  set_config_opts({ split_pattern = '=' })
+  local step_str, cmd
+
+  -- Array of steps
+  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, {}, { pre_merge = { %s } })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
+
+  -- Should validate that step correctly modified in place
+  step_str = [[MiniAlign.as_step('tmp', function(parts) parts[1][1] = 1 end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { pre_merge = { %s } })]], step_str)
+  expect.error(
+    child.lua,
+    vim.pesc('Step `tmp` of `pre_merge` should preserve structure of `parts`. See `:h MiniAlign.as_parts()`.'),
+    cmd
+  )
+
+  -- Uses `MiniAlign.config.steps` as default
+  set_config_steps({ pre_merge = [[{ MiniAlign.as_step('tmp', function(parts) parts[1][1] = 'xxx' end) }]] })
+  validate_align_strings({ 'aaa=b', 'aa=b' }, { split_pattern = '=' }, { 'xxx=b', 'aa =b' })
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) parts[1][1] = opts.tmp end)]]
+  cmd =
+    string.format([[MiniAlign.align_strings({ 'aaa=b', 'aa=b' }, { tmp = 'xxx' }, { pre_merge = { %s } })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx=b', 'aa =b' })
+end
+
+T['align_strings()']['respects `steps.merge` argument'] = function()
+  set_config_opts({ split_pattern = '=' })
+  local step_str, cmd
+
+  -- Action should return array of strings.
+  step_str = [[MiniAlign.as_step('tmp', function(parts) return { 'xxx' } end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { merge = %s })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx' })
+
+  -- Uses `MiniAlign.config.steps` as default
+  set_config_steps({ merge = [[MiniAlign.as_step('tmp', function(parts) return { 'xxx' } end)]] })
+  validate_align_strings({ 'a=b' }, { split_pattern = '=' }, { 'xxx' })
+
+  -- Should validate that output is an array of strings
+  step_str = [[MiniAlign.as_step('tmp', function(parts) return { 'a', 1 } end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, {}, { merge = %s })]], step_str)
+  expect.error(child.lua, vim.pesc('Output of `merge` step should be array of strings.'), cmd)
+
+  -- Is called with `opts`
+  step_str = [[MiniAlign.as_step('tmp', function(parts, opts) return { opts.tmp } end)]]
+  cmd = string.format([[MiniAlign.align_strings({ 'a=b', 'aa=b' }, { tmp = 'xxx' }, { merge = %s })]], step_str)
+  eq(child.lua_get(cmd), { 'xxx' })
 end
 
 T['align_strings()']['works with multibyte characters'] = function()
@@ -681,8 +680,8 @@ T['gen_step']['default_split()'] = new_set({
 
 T['gen_step']['default_split()']['works'] = function()
   -- Returns proper step
-  child.lua([[step = MiniAlign.gen_step.default_split('aaa')]])
-  validate_step('step', 'aaa')
+  child.lua([[step = MiniAlign.gen_step.default_split()]])
+  validate_step('step', 'split')
 
   -- Single string
   validate_align_strings({ 'a,b', 'aa,b' }, { split_pattern = ',' }, { 'a ,b', 'aa,b' })
@@ -696,13 +695,27 @@ T['gen_step']['default_split()']['works'] = function()
   )
 end
 
-T['gen_step']['default_split()']['validates input'] = function()
-  expect.error(function() child.lua('MiniAlign.gen_step.default_split(1)') end, 'Step name should be string')
+T['gen_step']['default_split()']['verifies relevant options'] = function()
+  expect.error(
+    function() child.lua([[MiniAlign.align_strings({ 'a' }, { split_pattern = 1 }, {})]]) end,
+    'Option `split_pattern`.*string or array of strings'
+  )
+  expect.error(
+    function() child.lua([[MiniAlign.align_strings({ 'a' }, { split_exclude_patterns = 1 }, {})]]) end,
+    'Option `split_exclude_patterns`.*array of strings'
+  )
 end
 
 T['gen_step']['default_split()']['allows split Lua pattern'] = function()
   set_config_opts({ split_pattern = '%s*=%s*', merge_delimiter = '-' })
   validate_align_strings({ 'a=b  =c=  d  =  e' }, {}, { 'a-=-b-  =-c-=  -d-  =  -e' })
+end
+
+T['gen_step']['default_split()']['verifies bad split pattern'] = function()
+  expect.error(
+    function() child.lua([[MiniAlign.align_strings({ 'a ' }, { split_pattern = '%f[%s]' })]]) end,
+    vim.pesc('(mini.align) Pattern "%f[%s]" can not advance search.')
+  )
 end
 
 T['gen_step']['default_split()']['works with different number of output parts'] = function()
@@ -740,6 +753,43 @@ T['gen_step']['default_split()']['works with special split patterns'] = function
   validate_align_strings({ 'a=b', 'a=bbb' }, {}, { 'a=  -b', 'a=bb-b' })
 end
 
+T['gen_step']['default_split()']['respects `split_exclude_patterns` option'] = function()
+  validate_align_strings(
+    { [[a="=="'=='b=c]], 'a=b=c' },
+    { split_pattern = '=', split_exclude_patterns = { [[".-"]], [['.-']] } },
+    { [[a="=="'=='b=c]], 'a=b        =c' }
+  )
+
+  -- Split match should be ignored if any its edge is inside any forbidden span
+  validate_align_strings(
+    { 'a"<"=b<"=c', 'a<"=b' },
+    { split_pattern = '<"=', split_exclude_patterns = { [[".-"]] } },
+    { 'a"<"=b<"=c', 'a     <"=b' }
+  )
+end
+
+T['gen_step']['default_split()']['works with special exclude patterns'] = function()
+  local lines = { 'a=b', 'cc=d', 'eee=f' }
+  local output_lines = { 'a=b', 'cc =d', 'eee=f' }
+
+  -- Start of line
+  validate_align_strings(lines, { split_pattern = '=', split_exclude_patterns = { '^a.*' } }, output_lines)
+
+  -- End of line
+  validate_align_strings(lines, { split_pattern = '=', split_exclude_patterns = { 'a.*$' } }, output_lines)
+
+  -- Both start of line and end of line
+  validate_align_strings(lines, { split_pattern = '=', split_exclude_patterns = { '^a.*$' } }, output_lines)
+end
+
+T['gen_step']['default_split()']['matches inside forbidden spans do not affect split pattern recycling'] = function()
+  validate_align_strings(
+    { [[a,"b=b"=c,d]], 'aa,bb=cc,dd' },
+    { split_pattern = { ',', '=' }, split_exclude_patterns = { [[".-"]] } },
+    { [[a ,"b=b"=c ,d]], 'aa,bb   =cc,dd' }
+  )
+end
+
 T['gen_step']['default_justify()'] = new_set({
   hooks = {
     pre_case = function() set_config_steps({ justify = [[MiniAlign.gen_step.default_justify('test')]] }) end,
@@ -748,8 +798,8 @@ T['gen_step']['default_justify()'] = new_set({
 
 T['gen_step']['default_justify()']['works'] = function()
   -- Returns proper step
-  child.lua([[step = MiniAlign.gen_step.default_justify('aaa')]])
-  validate_step('step', 'aaa')
+  child.lua([[step = MiniAlign.gen_step.default_justify()]])
+  validate_step('step', 'justify')
 
   -- Single string
   set_config_opts({ split_pattern = '=' })
@@ -771,8 +821,11 @@ T['gen_step']['default_justify()']['works'] = function()
   )
 end
 
-T['gen_step']['default_justify()']['validates input'] = function()
-  expect.error(function() child.lua('MiniAlign.gen_step.default_justify(1)') end, 'Step name should be string')
+T['gen_step']['default_justify()']['verifies relevant options'] = function()
+  expect.error(
+    function() child.lua([[MiniAlign.align_strings({ 'a' }, { justify_side = 1 }, {})]]) end,
+    'Option `justify_side`.*one of.*or array'
+  )
 end
 
 T['gen_step']['default_justify()']['works with multibyte characters'] = function()
@@ -790,11 +843,14 @@ T['gen_step']['default_justify()']['does not add trailing whitespace'] = functio
   set_config_opts({ split_pattern = '=' })
 
   --stylua: ignore start
-  validate_align_strings({ 'a=b', '', 'a=bbb' }, {justify_side = 'left'},   { 'a=b',   '', 'a=bbb' })
-  validate_align_strings({ 'a=b', '', 'a=bbb' }, {justify_side = 'center'}, { 'a= b',  '', 'a=bbb' })
-  validate_align_strings({ 'a=b', '', 'a=bbb' }, {justify_side = 'right'},  { 'a=  b', '', 'a=bbb' })
-  validate_align_strings({ 'a=b', '', 'a=bbb' }, {justify_side = 'none'},   { 'a=b',   '', 'a=bbb' })
+  validate_align_strings({ 'a=b', '', 'a=bbb' }, { justify_side = 'left' },   { 'a=b',   '', 'a=bbb' })
+  validate_align_strings({ 'a=b', '', 'a=bbb' }, { justify_side = 'center' }, { 'a= b',  '', 'a=bbb' })
+  validate_align_strings({ 'a=b', '', 'a=bbb' }, { justify_side = 'right' },  { 'a=  b', '', 'a=bbb' })
+  validate_align_strings({ 'a=b', '', 'a=bbb' }, { justify_side = 'none' },   { 'a=b',   '', 'a=bbb' })
   --stylua: ignore end
+
+  -- Also shouldn't add trailing whitespace in multicharacter split
+  validate_align_strings({ 'aa==bb', 'c=' }, { split_pattern = '=+' }, { 'aa==bb', 'c =' })
 end
 
 T['gen_step']['default_justify()']['last row element width is ignored for left justify side'] = function()
@@ -830,8 +886,8 @@ T['gen_step']['default_merge()']['works'] = function()
   set_config_opts({ split_pattern = '=' })
 
   -- Returns proper step
-  child.lua([[step = MiniAlign.gen_step.default_merge('aaa')]])
-  validate_step('step', 'aaa')
+  child.lua([[step = MiniAlign.gen_step.default_merge()]])
+  validate_step('step', 'merge')
 
   -- Single string
   validate_align_strings({ 'a=b' }, { merge_delimiter = '-' }, { 'a-=-b' })
@@ -845,8 +901,11 @@ T['gen_step']['default_merge()']['works'] = function()
   )
 end
 
-T['gen_step']['default_merge()']['validates input'] = function()
-  expect.error(function() child.lua('MiniAlign.gen_step.default_merge(1)') end, 'Step name should be string')
+T['gen_step']['default_merge()']['verifies relevant options'] = function()
+  expect.error(
+    function() child.lua([[MiniAlign.align_strings({ 'a' }, { merge_delimiter = 1 }, {})]]) end,
+    'Option `merge_delimiter`.*string or array of strings'
+  )
 end
 
 T['gen_step']['default_merge()']['does not merge empty strings in parts'] = function()
@@ -979,6 +1038,70 @@ T['gen_step']['filter()']['allows usage of global objects'] = function()
   set_config_opts({ split_pattern = '=' })
   child.lua('_G.first_row = 1')
   validate_align_strings({ 'a=b=c', 'aa=bb=cc', 'aaa=bbb=ccc' }, {}, { 'a=b=c', 'aa =bb =cc', 'aaa=bbb=ccc' })
+end
+
+T['gen_step']['ignore_split()'] = new_set()
+
+T['gen_step']['ignore_split()']['works'] = function()
+  child.lua([[step = MiniAlign.gen_step.ignore_split()]])
+  validate_step('step', 'ignore')
+
+  -- With default arguments should ignore inside `"` and comments
+  child.o.commentstring = '# %s'
+  set_config_steps({ pre_split = [[{ MiniAlign.gen_step.ignore_split() }]] })
+  validate_align_strings(
+    { '# aaaa=b', 'a"====="=b', 'a=b' },
+    { split_pattern = '=' },
+    { '# aaaa=b', 'a"====="=b', 'a       =b' }
+  )
+end
+
+T['gen_step']['ignore_split()']['validates input'] = function()
+  expect.error(
+    function() child.lua([[MiniAlign.gen_step.ignore_split('(')]]) end,
+    [[Argument `patterns`.*array of strings]]
+  )
+  expect.error(
+    function() child.lua([[MiniAlign.gen_step.ignore_split({}, 1)]]) end,
+    [[Argument `exclude_comment`.*boolean]]
+  )
+end
+
+T['gen_step']['ignore_split()']['respects `patterns` argument'] = function()
+  set_config_steps({ pre_split = [[{ MiniAlign.gen_step.ignore_split({ '*.-*' }) }]] })
+  validate_align_strings({ 'a"="b', 'a*=*=b', 'a=b' }, { split_pattern = '=' }, { 'a"  ="b', 'a*=*=b', 'a   =b' })
+
+  -- Shouldn't add duplicates
+  child.lua([[test_step = MiniAlign.as_step(
+    'test',
+    function(strings, opts) _G.split_exclude_patterns = opts.split_exclude_patterns end
+  )]])
+  child.o.commentstring = '# %s'
+  set_config_steps({ pre_split = [[{ MiniAlign.gen_step.ignore_split({ '*.-*', '".-"' }), test_step }]] })
+  set_config_opts({ split_exclude_patterns = { '".-"' } })
+
+  child.lua([[MiniAlign.align_strings({'a'})]])
+  eq(child.lua_get('_G.split_exclude_patterns'), { '".-"', '*.-*', '# .*' })
+end
+
+T['gen_step']['ignore_split()']['respects `exclude_comment` argument'] = function()
+  set_config_opts({ split_pattern = '=' })
+  child.o.commentstring = '# %s'
+
+  set_config_steps({ pre_split = [[{ MiniAlign.gen_step.ignore_split({}, true) }]] })
+  validate_align_strings({ '# aaa=b', 'a=b', 'aa=b' }, {}, { '# aaa=b', 'a =b', 'aa=b' })
+
+  set_config_steps({ pre_split = [[{ MiniAlign.gen_step.ignore_split({}, false) }]] })
+  validate_align_strings({ '# aaa=b', 'a=b', 'aa=b' }, {}, { '# aaa=b', 'a    =b', 'aa   =b' })
+
+  -- Should work with both `xxx%s` and `xxx%syyy` type of comments
+  child.o.commentstring = '/ %s /'
+  set_config_steps({ pre_split = [[{ MiniAlign.gen_step.ignore_split({}, true) }]] })
+  validate_align_strings(
+    { 'a/ = /=b/ = /=c', 'a=b=c', '/ == /' },
+    {},
+    { 'a/ = /=b/ = /=c', 'a     =b     =c', '/ == /' }
+  )
 end
 
 -- Integration tests ==========================================================
@@ -1334,14 +1457,14 @@ T['Align with preview']['correctly shows all steps in helper message'] = functio
   child.expect_screenshot()
 end
 
-T['Align with preview']['synchronizes name of main steps with their main options'] = function()
+T['Align with preview']['uses option names for main steps'] = function()
   child.set_size(12, 30)
   child.o.cmdheight = 5
   set_config_steps({ split = [[MiniAlign.gen_step.default_split('aaa')]] })
   set_config_steps({ justify = [[MiniAlign.gen_step.default_justify('bbb')]] })
   set_config_steps({ merge = [[MiniAlign.gen_step.default_merge('ccc')]] })
 
-  -- Main names should still reflect main options
+  -- Should show option names instead of step names
   set_lines({ 'a_b', 'aa_b' })
   type_keys('gA', 'ip')
   child.expect_screenshot()
@@ -1560,7 +1683,7 @@ T['Modifiers']['f']['works'] = function()
   eq(get_lines(), { 'a_b', 'aa _b', 'aaa_b' })
 end
 
-T['Modifiers']['f']['stpos on `<Esc>` and `<C-c>`'] = function()
+T['Modifiers']['f']['stops on `<Esc>` and `<C-c>`'] = function()
   validate_modifier_stops('f', '<Esc>')
   validate_modifier_stops('f', '<C-c>')
 end
@@ -1571,6 +1694,19 @@ T['Modifiers']['f']['allows empty input'] = function()
 
   -- Should result into having `''` as special input (filter step without actual filtering)
   type_keys('f', '<CR>')
+  child.expect_screenshot()
+end
+
+T['Modifiers']['i'] = new_set()
+
+T['Modifiers']['i']['works'] = function()
+  child.o.commentstring = '# %s'
+  init_preview_align({ '# aaaaa=b', '"aaaaa=b"', 'a=b', 'aa=b' }, { 'V3j', 'gA' })
+
+  type_keys('s', '=', '<CR>')
+  child.expect_screenshot()
+
+  type_keys('i')
   child.expect_screenshot()
 end
 

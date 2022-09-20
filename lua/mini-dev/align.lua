@@ -1,14 +1,6 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
 -- TODO:
--- - Implement `options.split_ignore_patterns = { [[".-"]], [['.-']] }` which
---   should be used in output of `gen_step.default_split`.
--- - Consider case: visual selection + hitting `:`.
---
---
--- Tests:
---
---
 -- Documentation:
 -- - Setup similar to 'vim-easy-align'. It will use `j` modifier as `<CR>` in
 --   'vim-easy-align'.
@@ -147,17 +139,18 @@ MiniAlign.config = {
       opts.merge_delimiter = input
     end,
 
-    -- Modifiers adding 'pre justify' steps
+    -- Modifiers adding pre-steps
     ['f'] = function(steps, _)
       local input = H.user_input('Enter filter expression')
       local step = MiniAlign.gen_step.filter(input)
       if step == nil then return end
       table.insert(steps.pre_justify, step)
     end,
+    ['i'] = function(steps, _) table.insert(steps.pre_split, MiniAlign.gen_step.ignore_split()) end,
     ['p'] = function(steps, _) table.insert(steps.pre_justify, MiniAlign.gen_step.pair()) end,
     ['t'] = function(steps, _) table.insert(steps.pre_justify, MiniAlign.gen_step.trim()) end,
 
-    -- Delete latest step
+    -- Delete last pre-step
     [vim.api.nvim_replace_termcodes('<BS>', true, true, true)] = function(steps, _)
       local has_pre = {}
       for _, pre in ipairs({ 'pre_split', 'pre_justify', 'pre_merge' }) do
@@ -234,13 +227,13 @@ MiniAlign.config = {
 -- Module functionality =======================================================
 ---@param opts table|nil Options. To be passed to steps. Will be extended with
 ---   `options` of |MiniAlign.config|.
-MiniAlign.align_strings = function(strings, steps, opts)
+MiniAlign.align_strings = function(strings, opts, steps)
   -- Validate arguments
   if not H.is_array_of(strings, H.is_string) then
     H.error('First argument of `MiniAlign.align_strings()` should be array of strings.')
   end
   opts = H.normalize_opts(opts)
-  steps = H.normalize_steps(steps, opts, 'steps')
+  steps = H.normalize_steps(steps, 'steps')
 
   -- Pre split
   for _, step in ipairs(steps.pre_split) do
@@ -290,7 +283,7 @@ MiniAlign.align_user = function(mode)
   local modifiers = H.get_config().modifiers
   local with_preview = H.cache.with_preview
   local opts = H.cache.opts or H.normalize_opts()
-  local steps = H.cache.steps or H.normalize_steps({}, opts)
+  local steps = H.cache.steps or H.normalize_steps()
 
   local steps_are_from_cache = H.cache.steps ~= nil
   H.cache.region = nil
@@ -299,7 +292,7 @@ MiniAlign.align_user = function(mode)
   local lines_were_set = false
 
   -- Make initial process
-  lines_were_set = H.process_current_region(lines_were_set, mode, steps, opts)
+  lines_were_set = H.process_current_region(lines_were_set, mode, opts, steps)
 
   -- Make early return:
   -- - If cache is present (enables dot-repeat).
@@ -310,7 +303,7 @@ MiniAlign.align_user = function(mode)
   local n_iter = 0
   while true do
     -- Get modifier from user
-    local id = H.user_modifier(steps, with_preview)
+    local id = H.user_modifier(with_preview, H.make_status_msg_chunks(opts, steps))
     n_iter = n_iter + 1
 
     -- Stop in case user supplied inappropriate modifer id (abort)
@@ -347,7 +340,7 @@ MiniAlign.align_user = function(mode)
     steps = H.normalize_steps(steps, opts)
 
     -- Process region while tracking if lines were set at least once
-    local lines_now_set = H.process_current_region(lines_were_set, mode, steps, opts)
+    local lines_now_set = H.process_current_region(lines_were_set, mode, opts, steps)
     lines_were_set = lines_were_set or lines_now_set
 
     -- Stop in "no preview" mode right after `split` is defined
@@ -504,7 +497,7 @@ end
 --- Generate common action steps
 MiniAlign.gen_step = {}
 
-MiniAlign.gen_step.default_split = function(name) return MiniAlign.as_step(name, H.default_action_split) end
+MiniAlign.gen_step.default_split = function() return MiniAlign.as_step('split', H.default_action_split) end
 
 --- Generate default `justify` step
 ---
@@ -512,9 +505,9 @@ MiniAlign.gen_step.default_split = function(name) return MiniAlign.as_step(name,
 --- - <justify_offsets> - array of numeric left offsets of rows. Used to adjust for
 ---   possible not equal indents, like in case of Visual charwise selection
 ---   when left edge is not on the first column. Default: array of zeros.
-MiniAlign.gen_step.default_justify = function(name) return MiniAlign.as_step(name, H.default_action_justify) end
+MiniAlign.gen_step.default_justify = function() return MiniAlign.as_step('justify', H.default_action_justify) end
 
-MiniAlign.gen_step.default_merge = function(name) return MiniAlign.as_step(name, H.default_action_merge) end
+MiniAlign.gen_step.default_merge = function() return MiniAlign.as_step('merge', H.default_action_merge) end
 
 MiniAlign.gen_step.trim = function(direction, indent)
   return MiniAlign.as_step('trim', function(parts, _) parts.trim(direction, indent) end)
@@ -528,6 +521,42 @@ MiniAlign.gen_step.filter = function(expr)
   local action = H.make_filter_action(expr)
   if action == nil then return end
   return MiniAlign.as_step('filter', action)
+end
+
+MiniAlign.gen_step.ignore_split = function(patterns, exclude_comment)
+  patterns = patterns or { '".-"' }
+  if exclude_comment == nil then exclude_comment = true end
+
+  -- Validate ingput
+  if not H.is_array_of(patterns, H.is_string) then
+    H.error('Argument `patterns` of `ignore_split()` should be array of strings.')
+  end
+  if type(exclude_comment) ~= 'boolean' then
+    H.error('Argument `exclude_comment` of `ignore_split()` should be boolean.')
+  end
+
+  -- Make action which modifies `opts.split_exclude_patterns`
+  local action = function(_, opts)
+    local excl = opts.split_exclude_patterns or {}
+
+    -- Add supplied patterns while avoiding duplication
+    for _, patt in ipairs(patterns) do
+      if not vim.tbl_contains(excl, patt) then table.insert(excl, patt) end
+    end
+
+    -- Possibly add current comment pattern while avoiding duplication
+    if exclude_comment then
+      -- In 'commentstring', `%s` denotes the comment content
+      local comment_pattern = vim.pesc(vim.o.commentstring):gsub('%%%%s', '.-')
+      -- Ignore to the end of the string if 'commentstring' is like "xxx%s"
+      comment_pattern = comment_pattern:gsub('%.%-%s*$', '.*')
+      if not vim.tbl_contains(excl, comment_pattern) then table.insert(excl, comment_pattern) end
+    end
+
+    opts.split_exclude_patterns = excl
+  end
+
+  return MiniAlign.as_step('ignore', action)
 end
 
 -- Helper data ================================================================
@@ -665,21 +694,16 @@ H.validate_steps = function(x, x_name)
   if not is_valid then H.error(msg) end
 end
 
-H.normalize_steps = function(steps, opts, steps_name)
+H.normalize_steps = function(steps, steps_name)
   -- Infer all defaults from module config
   local res = vim.tbl_deep_extend('force', H.get_config().steps, steps or {})
 
   H.validate_steps(res, steps_name)
 
   -- Possibly fill in default main steps
-  res.split = res.split or MiniAlign.gen_step.default_split('')
-  res.justify = res.justify or MiniAlign.gen_step.default_justify('')
-  res.merge = res.merge or MiniAlign.gen_step.default_merge('')
-
-  -- Ensure synchronized main step names (needed for correct helper message)
-  res.split.name = vim.inspect(opts.split_pattern) or res.split.name
-  res.justify.name = vim.inspect(opts.justify_side) or res.justify.name
-  res.merge.name = vim.inspect(opts.merge_delimiter) or res.merge.name
+  res.split = res.split or MiniAlign.gen_step.default_split()
+  res.justify = res.justify or MiniAlign.gen_step.default_justify()
+  res.merge = res.merge or MiniAlign.gen_step.default_merge()
 
   -- Deep copy to ensure that table values will not be affected (because if a
   -- table value is present only in one input, it is taken as is).
@@ -689,29 +713,6 @@ end
 H.normalize_opts = function(opts)
   local res = vim.tbl_deep_extend('force', H.get_config().options, opts or {})
   return vim.deepcopy(res)
-end
-
-H.steps_to_echo_chunks = function(steps)
-  local single_to_string = function(pre_steps, step)
-    local steps_str = ''
-    if #pre_steps > 0 then
-      local pre_names = vim.tbl_map(function(x) return x.name end, pre_steps)
-      steps_str = string.format('(%s) ', table.concat(pre_names, ', '))
-    end
-    return steps_str .. step.name
-  end
-
-  return {
-    { 'Split: ', 'ModeMsg' },
-    { single_to_string(steps.pre_split, steps.split) },
-    { ' | ', 'Question' },
-    { 'Justify: ', 'ModeMsg' },
-    { single_to_string(steps.pre_justify, steps.justify) },
-    { ' | ', 'Question' },
-    { 'Merge: ', 'ModeMsg' },
-    { single_to_string(steps.pre_merge, steps.merge) },
-    { ' |', 'Question' },
-  }
 end
 
 H.msg_bad_steps = function(steps_name, key, msg) return string.format('`%s.%s` %s', steps_name, key, msg) end
@@ -743,39 +744,84 @@ H.default_action_split = function(string_array, opts)
   -- Prepare options
   local pattern = opts.split_pattern
   if not (H.is_string(pattern) or H.is_array_of(pattern, H.is_string)) then
-    H.error('Split `pattern` should be string or array of strings.')
+    H.error('Option `split_pattern` should be string or array of strings.')
   end
   if type(pattern) == 'string' then pattern = { pattern } end
 
-  -- Make splits
-  local res = {}
-  for i, s in ipairs(string_array) do
-    res[i] = {}
-    local n_total, n, j = s:len(), 0, 0
-    -- Split by recycled `pattern`
-    while n <= n_total do
-      j = j + 1
-      local cur_split = H.slice_mod(pattern, j)
-      local sep_left, sep_right = H.string_find(s, cur_split, n)
-
-      if sep_left == nil then
-        table.insert(res[i], s:sub(n, n_total))
-        break
-      end
-      table.insert(res[i], s:sub(n, sep_left - 1))
-      table.insert(res[i], s:sub(sep_left, sep_right))
-      n = sep_right + 1
-    end
+  local exclude_patterns = opts.split_exclude_patterns or {}
+  if not H.is_array_of(exclude_patterns, H.is_string) then
+    H.error('Option `split_exclude_patterns` should be array of strings.')
   end
 
+  local capture_exclude_regions = vim.tbl_map(function(x)
+    local patt = x
+    patt = x:sub(1, 1) == '^' and ('^()' .. patt:sub(2)) or ('()' .. patt)
+    patt = x:sub(-1, -1) == '$' and (patt:sub(1, -2) .. '()$') or (patt .. '()')
+    return patt
+  end, exclude_patterns)
+
+  local forbidden_spans = {}
+  local add_to_forbidden = function(l, r) table.insert(forbidden_spans, { l, r - 1 }) end
+  local make_forbidden_spans = function(s)
+    forbidden_spans = {}
+    for _, capture_pat in ipairs(capture_exclude_regions) do
+      s:gsub(capture_pat, add_to_forbidden)
+    end
+    return forbidden_spans
+  end
+
+  -- Make splits excluding matches inside forbidden regions
+  local res = vim.tbl_map(
+    function(s) return H.default_action_split_string(s, pattern, make_forbidden_spans) end,
+    string_array
+  )
   return MiniAlign.as_parts(res)
+end
+
+H.default_action_split_string = function(s, pattern_arr, make_forbidden_spans)
+  -- Construct forbidden spans for string
+  local forbidden_spans = make_forbidden_spans(s)
+
+  -- Split by recycled `pattern_arr`
+  local res = {}
+  local n_total, n_latest_add, n_find = s:len(), 0, 0
+  local n_pair = 1
+
+  while true do
+    local cur_split = H.slice_mod(pattern_arr, n_pair)
+    local sep_left, sep_right = H.string_find(s, cur_split, n_find)
+
+    if sep_left == nil then
+      -- Avoid adding empty string because it does nothing but confuses "don't
+      -- add trailspace" logic
+      local rest = s:sub(n_latest_add, n_total)
+      if rest ~= '' then table.insert(res, rest) end
+      break
+    end
+
+    local is_good = #forbidden_spans == 0
+      or not H.is_any_point_inside_any_span({ sep_left, sep_right }, forbidden_spans)
+    if is_good then
+      table.insert(res, s:sub(n_latest_add, sep_left - 1))
+      table.insert(res, s:sub(sep_left, sep_right))
+      n_latest_add = sep_right + 1
+      n_pair = n_pair + 1
+    end
+
+    if (sep_right + 1) <= n_find then
+      H.error(string.format('Pattern %s can not advance search.', vim.inspect(cur_split)))
+    end
+    n_find = sep_right + 1
+  end
+
+  return res
 end
 
 H.default_action_justify = function(parts, opts)
   -- Prepare options
   local side = opts.justify_side
   if not (H.is_justify_side(side) or H.is_array_of(side, H.is_justify_side)) then
-    H.error([[Justify `side` should one of 'left', 'center', 'right', 'none', or array of those.]])
+    H.error([[Option `justify_side` should be one of 'left', 'center', 'right', 'none', or array of those.]])
   end
   if type(side) == 'string' then side = { side } end
 
@@ -827,7 +873,7 @@ H.default_action_merge = function(parts, opts)
   -- Prepare options
   local delimiter = opts.merge_delimiter
   if not (H.is_string(delimiter) or H.is_array_of(delimiter, H.is_string)) then
-    H.error('Merge `delimiter` should be string or array of strings.')
+    H.error('Option `merge_delimiter` should be string or array of strings.')
   end
   if type(delimiter) == 'string' then delimiter = { delimiter } end
 
@@ -897,9 +943,9 @@ end
 -- Work with regions ----------------------------------------------------------
 ---@return boolean Whether some lines were actually set.
 ---@private
-H.process_current_region = function(lines_were_set, mode, steps, opts)
-  -- Cache current steps and options for dot-repeat
-  H.cache.steps, H.cache.opts = steps, opts
+H.process_current_region = function(lines_were_set, mode, opts, steps)
+  -- Cache current options and steps for dot-repeat
+  H.cache.opts, H.cache.steps = opts, steps
 
   -- Undo previously set lines
   if lines_were_set then H.undo() end
@@ -923,7 +969,7 @@ H.process_current_region = function(lines_were_set, mode, steps, opts)
 
   -- Actually process region
   local strings = H.region_get_text(region, mode)
-  local strings_aligned = MiniAlign.align_strings(strings, steps, opts)
+  local strings_aligned = MiniAlign.align_strings(strings, opts, steps)
   H.region_set_text(region, mode, strings_aligned)
 
   -- Make sure that latest changes are shown
@@ -1038,17 +1084,16 @@ H.pos_to_virtcol = function(pos)
   return vim.fn.virtcol({ pos.line, pos.col })
 end
 
--- Work with user input -------------------------------------------------------
-H.user_modifier = function(steps, with_preview)
+-- Work with user interaction --------------------------------------------------
+H.user_modifier = function(with_preview, msg_chunks)
   -- Get from user single character modifier
   local needs_help_msg = true
   local delay = (H.cache.msg_shown or with_preview) and 0 or 1000
   vim.defer_fn(function()
     if not needs_help_msg then return end
 
-    local echo_chunks = H.steps_to_echo_chunks(steps)
-    table.insert(echo_chunks, { ' Enter modifier' })
-    H.echo(echo_chunks)
+    table.insert(msg_chunks, { ' Enter modifier' })
+    H.echo(msg_chunks)
     H.cache.msg_shown = true
   end, delay)
   local ok, char = pcall(vim.fn.getchar)
@@ -1082,6 +1127,29 @@ H.user_input = function(prompt, text)
 
   if not ok or was_cancelled then return end
   return res
+end
+
+H.make_status_msg_chunks = function(opts, steps)
+  local single_to_string = function(pre_steps, opts_value)
+    local steps_str = ''
+    if #pre_steps > 0 then
+      local pre_names = vim.tbl_map(function(x) return x.name end, pre_steps)
+      steps_str = string.format('(%s) ', table.concat(pre_names, ', '))
+    end
+    return steps_str .. vim.inspect(opts_value)
+  end
+
+  return {
+    { 'Split: ', 'ModeMsg' },
+    { single_to_string(steps.pre_split, opts.split_pattern) },
+    { ' | ', 'Question' },
+    { 'Justify: ', 'ModeMsg' },
+    { single_to_string(steps.pre_justify, opts.justify_side) },
+    { ' | ', 'Question' },
+    { 'Merge: ', 'ModeMsg' },
+    { single_to_string(steps.pre_merge, opts.merge_delimiter) },
+    { ' |', 'Question' },
+  }
 end
 
 -- Predicates -----------------------------------------------------------------
@@ -1258,6 +1326,15 @@ H.string_find = function(s, pattern, init)
   if pattern == '' then return nil end
 
   return string.find(s, pattern, init)
+end
+
+H.is_any_point_inside_any_span = function(points, spans)
+  for _, point in ipairs(points) do
+    for _, span in ipairs(spans) do
+      if span[1] <= point and point <= span[2] then return true end
+    end
+  end
+  return false
 end
 
 H.undo = function()
