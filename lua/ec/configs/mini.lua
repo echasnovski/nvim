@@ -41,6 +41,7 @@ vim.defer_fn(function()
       F = require('mini.ai').gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
     },
   })
+  require('mini.align').setup()
   require('mini.bufremove').setup()
   require('mini.comment').setup()
   require('mini.completion').setup({
@@ -64,6 +65,4 @@ vim.defer_fn(function()
   require('mini.surround').setup({ search_method = 'cover_or_next' })
   require('mini.test').setup()
   require('mini.trailspace').setup()
-
-  require('mini-dev.align').setup()
 end, 0)
