@@ -22,14 +22,8 @@ end
 -- Collection of minimal and fast Lua modules
 packadd('mini')
 
--- Align text
-packadd_defer('vim-lion')
-
 -- Wrap function arguments
 packadd_defer('vim-argwrap')
-
--- Swap function arguments (and define better 'argument' text object)
-packadd_defer('sideways')
 
 -- Exchange regions
 packadd_defer('vim-exchange')
