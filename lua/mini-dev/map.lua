@@ -3,7 +3,7 @@
 -- TODO:
 -- Code:
 -- - Validate options.
--- - Write window logic.
+-- - Write window logic. !!! Make sure multiple windows can be opened (one per tabpage) !!!
 -- - Think through integrations API.
 -- - Handle all values of `col_bits` and `row_bits` in `gen_symbols`.
 -- - Refactor and add relevant comments.
@@ -70,10 +70,12 @@ end
 ---@text # Options ~
 MiniMap.config = {
   -- Window options
-  window = {},
+  window = {
+    width = 10,
+  },
 
-  -- Other options
-  options = {
+  -- Encode options
+  encode = {
     symbols = nil,
   },
 }
@@ -87,7 +89,7 @@ MiniMap.encode_strings = function(strings, opts)
     H.error('First argument of `encode_strings()` should be array of strings.')
   end
   opts = vim.tbl_deep_extend('force', { n_rows = math.huge, n_cols = math.huge, trim = true }, opts or {})
-  opts.symbols = opts.symbols or MiniMap.gen_symbols.block(2, 3)
+  opts.symbols = opts.symbols or MiniMap.gen_symbols.block('3x2')
   H.validate_symbols(opts.symbols)
 
   local mask = H.mask_from_strings(strings, opts)
@@ -98,19 +100,37 @@ MiniMap.encode_strings = function(strings, opts)
   return strings_encoded
 end
 
+MiniMap.open = function(win_opts, encode_opts)
+  win_opts = vim.tbl_deep_extend('force', MiniMap.config.window, win_opts or {})
+
+  -- Buffer
+  local buf_id = MiniMap.current.buf_id or vim.api.nvim_create_buf(false, true)
+  MiniMap.current.buf_id = buf_id
+
+  -- Opening window
+  local win_id = vim.api.nvim_open_win(buf_id, false, H.normalize_window_options(win_opts))
+  MiniMap.current.win_id = win_id
+  MiniMap.current.win_opts = win_opts
+
+  -- Window options
+  local window_options = { number = false, signcolumn = 'no', cursorline = false, cursorcolumn = false }
+  for o, v in pairs(window_options) do
+    vim.api.nvim_win_set_option(win_id, o, v)
+  end
+end
+
+MiniMap.close = function()
+  local win_id = MiniMap.current.win_id
+  if win_id ~= nil and vim.api.nvim_win_is_valid(win_id) then vim.api.nvim_win_close(win_id, true) end
+end
+
 MiniMap.gen_symbols = {}
 
-MiniMap.gen_symbols.block = function(col_bits, row_bits)
-  local res = H.block_symbols[col_bits .. 'x' .. row_bits]
-  res.col_bits, res.row_bits = col_bits, row_bits
-  return res
-end
+MiniMap.gen_symbols.block = function(resolution) return H.block_symbols[resolution] end
 
-MiniMap.gen_symbols.dot = function(col_bits, row_bits)
-  local res = H.dot_symbols[col_bits .. 'x' .. row_bits]
-  res.col_bits, res.row_bits = col_bits, row_bits
-  return res
-end
+MiniMap.gen_symbols.dot = function(resolution) return H.dot_symbols[resolution] end
+
+MiniMap.gen_symbols.shade = function(resolution) return H.shade_symbols[resolution] end
 
 -- Helper data ================================================================
 -- Module default config
@@ -122,16 +142,26 @@ H.cache = {}
 --stylua: ignore start
 H.block_symbols = {}
 
-H.block_symbols['2x3'] = {
+H.block_symbols['1x2'] = { ' ', '▌', '▐', '█', bits = { row = 1, col = 2 } }
+
+H.block_symbols['2x1'] = { ' ', '▀', '▄', '█', bits = { row = 2, col = 1 } }
+
+H.block_symbols['2x2'] = {
+  ' ', '▘', '▝', '▀', '▖', '▌', '▞', '▛', '▗', '▚', '▐', '▜', '▄', '▙', '▟', '█',
+  bits = { row = 2, col = 2 },
+}
+
+H.block_symbols['3x2'] = {
   ' ', '🬀', '🬁', '🬂', '🬃', '🬄', '🬅', '🬆', '🬇', '🬈', '🬉', '🬊', '🬋', '🬌', '🬍', '🬎',
   '🬏', '🬐', '🬑', '🬒', '🬓', '▌', '🬔', '🬕', '🬖', '🬗', '🬘', '🬙', '🬚', '🬛', '🬜', '🬝',
   '🬞', '🬟', '🬠', '🬡', '🬢', '🬣', '🬤', '🬥', '🬦', '🬧', '▐', '🬨', '🬩', '🬪', '🬫', '🬬',
   '🬭', '🬮', '🬯', '🬰', '🬱', '🬲', '🬳', '🬴', '🬵', '🬶', '🬷', '🬸', '🬹', '🬺', '🬻', '█',
+  bits = { row = 3, col = 2 },
 }
 
 H.dot_symbols = {}
 
-H.dot_symbols['2x4'] = {
+H.dot_symbols['4x2'] = {
   ' ', '⠁', '⠈', '⠉', '⠂', '⠃', '⠊', '⠋', '⠐', '⠑', '⠘', '⠙', '⠒', '⠓', '⠚', '⠛',
   '⠄', '⠅', '⠌', '⠍', '⠆', '⠇', '⠎', '⠏', '⠔', '⠕', '⠜', '⠝', '⠖', '⠗', '⠞', '⠟',
   '⠠', '⠡', '⠨', '⠩', '⠢', '⠣', '⠪', '⠫', '⠰', '⠱', '⠸', '⠹', '⠲', '⠳', '⠺', '⠻',
@@ -148,7 +178,17 @@ H.dot_symbols['2x4'] = {
   '⣄', '⣅', '⣌', '⣍', '⣆', '⣇', '⣎', '⣏', '⣔', '⣕', '⣜', '⣝', '⣖', '⣗', '⣞', '⣟',
   '⣠', '⣡', '⣨', '⣩', '⣢', '⣣', '⣪', '⣫', '⣰', '⣱', '⣸', '⣹', '⣲', '⣳', '⣺', '⣻',
   '⣤', '⣥', '⣬', '⣭', '⣦', '⣧', '⣮', '⣯', '⣴', '⣵', '⣼', '⣽', '⣶', '⣷', '⣾', '⣿',
+  bits = { row = 4, col = 2 },
 }
+
+H.dot_symbols['3x2'] = { bits = { row = 3, col = 2 } }
+for i = 1,64 do H.dot_symbols['3x2'][i] = H.dot_symbols['4x2'][i] end
+
+H.shade_symbols = {}
+
+H.shade_symbols['2x1'] = { '░', '▒', '▒', '▓', bits = { row = 2, col = 1 } }
+
+H.shade_symbols['1x2'] = { '░', '▒', '▒', '▓', bits = { row = 1, col = 2 } }
 --stylua: ignore end
 
 -- Helper functionality =======================================================
@@ -201,15 +241,15 @@ end
 ---@private
 H.mask_rescale = function(mask, opts)
   -- Infer output number of rows and columns. Should be multiples of
-  -- `symbols.row_bits` and `symbols.col_bits` respectively.
+  -- `symbols.bits.row` and `symbols.bits.col` respectively.
   local n_rows = #mask
   local n_cols = 0
   for _, m_row in ipairs(mask) do
     n_cols = math.max(n_cols, #m_row)
   end
 
-  local res_n_rows = opts.symbols.row_bits * math.min(math.ceil(n_rows / opts.symbols.row_bits), opts.n_rows)
-  local res_n_cols = opts.symbols.col_bits * math.min(math.ceil(n_cols / opts.symbols.col_bits), opts.n_cols)
+  local res_n_rows = opts.symbols.bits.row * math.min(math.ceil(n_rows / opts.symbols.bits.row), opts.n_rows)
+  local res_n_cols = opts.symbols.bits.col * math.min(math.ceil(n_cols / opts.symbols.bits.col), opts.n_cols)
 
   -- Downscale
   local res = {}
@@ -232,8 +272,8 @@ H.mask_rescale = function(mask, opts)
   return res
 end
 
---- Apply sliding window (with `symbols.col_bits` columns and
---- `symbols.row_bits` rows) without overlap. Each application converts boolean
+--- Apply sliding window (with `symbols.bits.col` columns and
+--- `symbols.bits.row` rows) without overlap. Each application converts boolean
 --- mask to symbol assuming symbols are sorted as if dark spots (read left to
 --- right within row, then top to bottom) are bits in binary notation (`true` -
 --- 1, `false` - 0).
@@ -243,7 +283,7 @@ end
 ---@private
 H.mask_to_symbols = function(mask, opts)
   local symbols = opts.symbols
-  local row_bits, col_bits = symbols.row_bits, symbols.col_bits
+  local row_bits, col_bits = symbols.bits.row, symbols.bits.col
 
   local powers_of_two = {}
   for i = 0, (row_bits * col_bits - 1) do
@@ -283,6 +323,21 @@ H.mask_to_symbols = function(mask, opts)
   return res
 end
 
+-- Work with window ------------------------------------------------------------
+H.normalize_window_options = function(win_opts)
+  local has_tabline, has_statusline = vim.o.showtabline > 0, vim.o.laststatus > 0
+
+  local res = vim.deepcopy(win_opts)
+  res.relative = 'editor'
+  res.anchor = 'NE'
+  res.row = has_tabline and 1 or 0
+  res.col = vim.o.columns
+  res.height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0)
+  res.zindex = 10
+
+  return res
+end
+
 -- Predicates ------------------------------------------------------------------
 H.is_array_of = function(x, predicate)
   if not vim.tbl_islist(x) then return false end
@@ -296,10 +351,11 @@ H.is_string = function(x) return type(x) == 'string' end
 
 H.is_symbols = function(x)
   if type(x) ~= 'table' then return false, '`symbols` should be table.' end
-  if type(x.col_bits) ~= 'number' then return false, '`symbols.col_bits` should be number.' end
-  if type(x.row_bits) ~= 'number' then return false, '`symbols.row_bits` should be number.' end
+  if type(x.bits) ~= 'table' then return false, '`symbols.bits` should be table.' end
+  if type(x.bits.col) ~= 'number' then return false, '`symbols.bits.col` should be number.' end
+  if type(x.bits.row) ~= 'number' then return false, '`symbols.bits.row` should be number.' end
 
-  local two_power = x.col_bits * x.row_bits
+  local two_power = x.bits.col * x.bits.row
   for i = 1, 2 ^ two_power do
     if type(x[i]) ~= 'string' then return false, string.format('`symbols[%d]` should be string', i) end
   end
@@ -310,6 +366,13 @@ end
 H.validate_symbols = function(x)
   local ok, msg = H.is_symbols(x)
   if not ok then H.error(msg) end
+end
+
+H.is_window_opened = function()
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if w == MiniMap.win_id then return true end
+  end
+  return false
 end
 
 -- Utilities ------------------------------------------------------------------
