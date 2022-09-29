@@ -2,9 +2,8 @@
 
 -- TODO:
 -- Code:
--- - Implement `toggle_focus()`.
 -- - Think through integrations API.
--- - Think about using it in Inser mode.
+-- - Think about using it in Insert mode.
 -- - Think about how to make encoding so that change in one place of buffer has
 --   small to none effect on the other encoded lines. Probably, is not
 --   feasible, but who knows.
@@ -14,6 +13,11 @@
 -- Tests:
 --
 -- Documentation:
+-- - How to refresh in Insert mode (add autocommands for for TextChangedI and
+--   CursorMovedI).
+-- - Suggestions for scrollbar symbols.
+-- - Update is done in asynchronous (non-blocking) fashion.
+-- - Works best with global statusline. Or use |MiniMap.refresh()|.
 
 -- Documentation ==============================================================
 --- Current buffer overview.
@@ -67,13 +71,25 @@ MiniMap.setup = function(config)
 
   -- Module behavior
   vim.api.nvim_exec(
-    [[augroup MiniStarter
+    [[augroup MiniMap
         au!
-        au BufEnter,TextChanged,TextChangedI * lua MiniMap.on_content_change()
-        au CursorMoved,CursorMovedI,WinScrolled * lua MiniMap.on_view_change()
+        au BufEnter,TextChanged,VimResized * lua MiniMap.on_content_change()
+        au CursorMoved,WinScrolled * lua MiniMap.on_view_change()
+        au CursorMoved * lua MiniMap.on_cursor_change()
+        au WinLeave * lua MiniMap.on_winleave()
       augroup END]],
     false
   )
+
+  if vim.fn.exists('##ModeChanged') == 1 then
+    -- Refresh on every return to Normal mode
+    vim.api.nvim_exec(
+      [[augroup MiniMap
+          au ModeChanged *:n lua MiniMap.on_content_change()
+        augroup END]],
+      false
+    )
+  end
 
   -- Create highlighting
   vim.api.nvim_exec(
@@ -125,7 +141,7 @@ MiniMap.config = {
 --- - <encode_details> - table with information used for latest buffer lines
 ---   encoding. Has same structure as second output of |MiniMap.encode_strings()|
 ---   (`input_` fields correspond to current buffer lines, `output_` - map lines).
----   Used for quick update of range data on the map.
+---   Used for quick update of scrollbar.
 --- - <view> - table with <from_line> and <to_line> keys representing lines for
 ---   start and end of current buffer view.
 --- - <line> - current line number.
@@ -199,25 +215,41 @@ MiniMap.open = function(opts)
     }
     -- Vim's `setlocal` is currently more robust comparing to `opt_local`
     vim.cmd(('silent! noautocmd setlocal %s'):format(table.concat(options, ' ')))
+
+    -- Make it play nicely with other 'mini.nvim' modules
+    vim.b.minicursorword_disable = true
   end)
+
+  -- Make buffer local mappings
+  vim.api.nvim_buf_set_keymap(buf_id, 'n', '<CR>', '<Cmd>lua MiniMap.toggle_focus()<CR>', { noremap = false })
 
   -- Refresh content
   MiniMap.refresh(opts)
 end
 
-MiniMap.refresh = function(opts)
+---@param parts table|nil Which parts to update. Recognised keys with boolean
+---   values (all `true` by default):
+---   - <integrations> - whether to update integrations highlights.
+---   - <lines> - whether to update map lines.
+---   - <scrollbar> - whether to update scrollbar.
+MiniMap.refresh = function(parts, opts)
+  -- Early return
   if H.is_disabled() or not H.is_window_open() then return end
 
-  local buf_id, win_id = MiniMap.current.buf_id, H.get_current_map_win()
+  -- Validate input
+  parts = vim.tbl_deep_extend('force', { integrations = true, lines = true, scrollbar = true }, parts or {})
 
   opts = vim.tbl_deep_extend('force', H.get_config(), MiniMap.current.opts or {}, opts or {})
   H.validate_if(H.is_valid_opts, opts, 'opts')
   MiniMap.current.opts = opts
 
-  H.update_window_config(win_id, opts)
-  H.update_encoded_lines(buf_id, win_id, opts)
-  H.update_range_signs_definitions(opts)
-  H.update_range_signs(buf_id)
+  -- Update map config
+  H.update_map_config()
+
+  -- Possibly update parts in asynchronous fashion
+  if parts.lines then vim.schedule(H.update_map_lines) end
+  if parts.integrations then vim.schedule(H.update_map_integrations) end
+  if parts.scrollbar then vim.schedule(H.update_map_scrollbar) end
 end
 
 MiniMap.close = function()
@@ -236,20 +268,65 @@ MiniMap.toggle = function(opts)
   end
 end
 
+MiniMap.toggle_focus = function()
+  local cur_win, map_win = vim.api.nvim_get_current_win(), H.get_current_map_win()
+  if cur_win == map_win then
+    -- Focus on previous window
+    vim.cmd('wincmd p')
+  else
+    -- Put cursor in map window at line indicator
+    local map_line = H.bufline_to_mapline(MiniMap.current.line, MiniMap.current.encode_details)
+    vim.api.nvim_win_set_cursor(map_win, { map_line, 0 })
+
+    -- Focus on map window
+    vim.api.nvim_set_current_win(map_win)
+  end
+end
+
+MiniMap.toggle_side = function()
+  local cur_side = MiniMap.current.opts.window.side
+  MiniMap.refresh(
+    { integrations = false, lines = false, scrollbar = false },
+    { window = { side = cur_side == 'left' and 'right' or 'left' } }
+  )
+end
+
 MiniMap.gen_encode_symbols = {}
 
-MiniMap.gen_encode_symbols.block = function(resolution) return H.block_symbols[resolution] end
+MiniMap.gen_encode_symbols.block = function(id) return H.block_symbols[id] end
 
-MiniMap.gen_encode_symbols.dot = function(resolution) return H.dot_symbols[resolution] end
+MiniMap.gen_encode_symbols.dot = function(id) return H.dot_symbols[id] end
 
-MiniMap.gen_encode_symbols.shade = function(resolution) return H.shade_symbols[resolution] end
+MiniMap.gen_encode_symbols.shade = function(id) return H.shade_symbols[id] end
 
-MiniMap.on_content_change = function() MiniMap.refresh() end
+MiniMap.on_content_change = function()
+  local buf_type = vim.bo.buftype
+  if not (buf_type == '' or buf_type == 'help') then return end
+  MiniMap.refresh()
+end
 
 MiniMap.on_view_change = function()
-  if H.is_disabled() or not H.is_window_open() then return end
-  H.update_range_signs(MiniMap.current.buf_id)
+  local buf_type = vim.bo.buftype
+  if not (buf_type == '' or buf_type == 'help') then return end
+  MiniMap.refresh({ integrations = false, lines = false })
 end
+
+MiniMap.on_cursor_change = function()
+  -- Synchronize cursors in map and previous window if currently inside map
+  local cur_win, map_win = vim.api.nvim_get_current_win(), H.get_current_map_win()
+  if cur_win ~= map_win then return end
+
+  local prev_win_id = H.cache.previous_win_id
+  if prev_win_id == nil then return end
+
+  local new_line = H.mapline_to_bufline(vim.fn.line('.'), MiniMap.current.encode_details)
+  vim.api.nvim_win_set_cursor(prev_win_id, { new_line, 0 })
+
+  -- Center cursor
+  vim.api.nvim_win_call(prev_win_id, function() vim.cmd('normal! zz') end)
+end
+
+MiniMap.on_winleave = function() H.cache.previous_win_id = vim.api.nvim_get_current_win() end
 
 -- Helper data ================================================================
 -- Module default config
@@ -386,7 +463,7 @@ H.mask_rescale = function(mask, opts)
 
   return res,
     {
-      input_colsmap = n_cols,
+      input_cols = n_cols,
       input_rows = n_rows,
       output_cols = res_n_cols,
       output_rows = res_n_rows,
@@ -509,7 +586,7 @@ end
 
 H.msg_config = function(x_name, msg) return string.format('`%s` should be %s.', x_name, msg) end
 
--- Work with windows -----------------------------------------------------------
+-- Work with map window --------------------------------------------------------
 H.normalize_window_options = function(win_opts, full)
   if full == nil then full = true end
 
@@ -525,10 +602,11 @@ H.normalize_window_options = function(win_opts, full)
     row = has_tabline and 1 or 0,
     col = col,
     width = win_opts.width,
+    -- Can be updated at `VimResized` event
+    height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0),
   }
   if not full then return res end
 
-  res.height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0)
   res.zindex = 10
   res.style = 'minimal'
   return res
@@ -543,20 +621,62 @@ H.is_window_open = function()
   return cur_win_id ~= nil and vim.api.nvim_win_is_valid(cur_win_id)
 end
 
-H.update_window_config = function(win_id, opts)
+-- Work with map updates -------------------------------------------------------
+H.update_map_config = function()
+  local opts = MiniMap.current.opts
+  local win_id = H.get_current_map_win()
+
+  -- Window config
   vim.api.nvim_win_set_config(win_id, H.normalize_window_options(opts.window, false))
   -- Ensure important option value, because `nvim_win_set_config()` reapplies
   -- `style = 'minimal'`. See https://github.com/neovim/neovim/issues/20370 .
   vim.api.nvim_win_set_option(win_id, 'signcolumn', 'yes:1')
-end
 
-H.update_range_signs_definitions = function(opts)
+  -- Scrollbar sign definition
   vim.fn.sign_define('MiniMapView', { text = opts.symbols.current_view, texthl = 'MiniMapSignView' })
   vim.fn.sign_define('MiniMapLine', { text = opts.symbols.current_line, texthl = 'MiniMapSignLine' })
 end
 
-H.update_range_signs = function(buf_id)
-  local cur_details = MiniMap.current.encode_details
+H.update_map_lines = function()
+  local buf_id, opts = MiniMap.current.buf_id, MiniMap.current.opts
+  local win_id = H.get_current_map_win()
+
+  -- Compute output number of rows and columns to fit currently shown window
+  local n_cols = vim.api.nvim_win_get_width(win_id) - 2
+  local n_rows = vim.api.nvim_win_get_height(win_id)
+
+  local buf_lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
+  -- Ensure that current buffer has lines (can be not the case when this is
+  -- executed asynchronously during Neovim closing)
+  if #buf_lines == 0 then return end
+
+  local encoded_lines, details
+  if n_cols <= 0 then
+    -- Case of "only scroll indicator"
+    encoded_lines = {}
+    for _ = 1, n_rows do
+      table.insert(encoded_lines, '')
+    end
+    details = { input_rows = #buf_lines, output_rows = n_rows, resolution = { row = 1, col = 1 } }
+  else
+    -- Case of "full minimap"
+    encoded_lines, details =
+      MiniMap.encode_strings(buf_lines, { n_cols = n_cols, n_rows = n_rows, symbols = opts.symbols.encode })
+  end
+
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, encoded_lines)
+  MiniMap.current.encode_details = details
+
+  -- Force scrollbar update
+  MiniMap.current.view, MiniMap.current.line = {}, nil
+end
+
+H.update_map_integrations = function()
+  -- TODO
+end
+
+H.update_map_scrollbar = function()
+  local buf_id, cur_details = MiniMap.current.buf_id, MiniMap.current.encode_details
   local cur_view, cur_line = MiniMap.current.view, MiniMap.current.line
 
   -- View
@@ -596,34 +716,18 @@ H.update_range_signs = function(buf_id)
   end
 end
 
-H.update_encoded_lines = function(buf_id, win_id, opts)
-  local n_cols = vim.api.nvim_win_get_width(win_id) - 2
-  local n_rows = vim.api.nvim_win_get_height(win_id)
-
-  local buf_lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
-  local encoded_lines, details
-  if n_cols <= 0 then
-    -- Case of "only scroll indicator"
-    encoded_lines = {}
-    for _ = 1, n_rows do
-      table.insert(encoded_lines, '')
-    end
-    details = { input_rows = #buf_lines, output_rows = n_rows, resolution = { row = 1, col = 1 } }
-  else
-    -- Case of "full minimap"
-    encoded_lines, details =
-      MiniMap.encode_strings(buf_lines, { n_cols = n_cols, n_rows = n_rows, symbols = opts.symbols.encode })
-  end
-
-  vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, encoded_lines)
-  MiniMap.current.encode_details = details
-end
-
 H.bufline_to_mapline = function(buf_line, details)
   local coef = (details.output_rows / details.input_rows) / details.resolution.row
 
   -- Lines start from 1
   return math.floor(coef * (buf_line - 1)) + 1
+end
+
+H.mapline_to_bufline = function(map_line, details)
+  local coef = (details.output_rows / details.input_rows) / details.resolution.row
+
+  -- Lines start from 1
+  return math.ceil((map_line - 1) / coef) + 1
 end
 
 H.bufpos_to_mappos = function(buf_pos, details)
