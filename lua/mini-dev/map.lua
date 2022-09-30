@@ -15,7 +15,13 @@
 -- Documentation:
 -- - How to refresh in Insert mode (add autocommands for for TextChangedI and
 --   CursorMovedI).
--- - Suggestions for scrollbar symbols.
+-- - Suggestions for scrollbar symbols:
+--     - View-line pairs:
+--         - '🮇▎' - '▐▌' (centered within 2 cells).
+--         - '▒' - '█'.
+--         - '▒▒' - '██' (span 2 cells).
+--     - Line - '🮚', '▶'.
+--     - View - '┋'.
 -- - Update is done in asynchronous (non-blocking) fashion.
 -- - Works best with global statusline. Or use |MiniMap.refresh()|.
 
@@ -111,8 +117,8 @@ MiniMap.config = {
 
   -- Symbols used to display data
   symbols = {
-    current_line = '█',
-    current_view = '┃',
+    current_line = '▐▌',
+    current_view = '🮇▎',
     encode = {
       ' ', '🬀', '🬁', '🬂', '🬃', '🬄', '🬅', '🬆', '🬇', '🬈', '🬉', '🬊', '🬋', '🬌', '🬍', '🬎',
       '🬏', '🬐', '🬑', '🬒', '🬓', '▌', '🬔', '🬕', '🬖', '🬗', '🬘', '🬙', '🬚', '🬛', '🬜', '🬝',
@@ -133,9 +139,11 @@ MiniMap.config = {
 --- Table with information about current state of map
 ---
 --- At least these keys are supported:
+--- - <buf_id_tbl> - table with buffer identifiers. Field <map> contains
+---   identifier of a buffer used to display map. Field <source> - buffer
+---   identifier which content map is displaying.
 --- - <win_id_tbl> - table of window identifiers used to display map in certain
 ---   tabpage. Keys: tabpage identifier. Values: window identifier.
---- - <buf_id> - identifier of a buffer used to display map.
 --- - <opts> - current options used to control map display. Same structure
 ---   as |MiniMap.config|.
 --- - <encode_details> - table with information used for latest buffer lines
@@ -146,7 +154,7 @@ MiniMap.config = {
 ---   start and end of current buffer view.
 --- - <line> - current line number.
 MiniMap.current = {
-  buf_id = nil,
+  buf_id_tbl = {},
   win_id_tbl = {},
   encode_details = {},
   opts = MiniMap.config,
@@ -157,12 +165,10 @@ MiniMap.current = {
 -- Module functionality =======================================================
 ---@return ... Array of encoded strings and details about the encoding process.
 ---   Table of details has the following fields:
----     - <input_cols> - maximum string width in input `strings`.
----     - <input_rows> - number of input strings.
----     - <output_cols> - maximum string width in output.
----     - <output_rows> - number of strings in output.
----     - <resolution> - resolution of symbols used. Table with <row> and <col>
----       keys for row and column resolution.
+---     - <source_cols> - maximum string width in input `strings`.
+---     - <source_rows> - number of input strings.
+---     - <map_cols> - maximum string width in output.
+---     - <map_rows> - number of strings in output.
 MiniMap.encode_strings = function(strings, opts)
   -- Validate input
   if not H.is_array_of(strings, H.is_string) then
@@ -198,9 +204,9 @@ MiniMap.open = function(opts)
   H.validate_if(H.is_valid_opts, opts, 'opts')
 
   -- Open buffer and window
-  local buf_id = MiniMap.current.buf_id
+  local buf_id = MiniMap.current.buf_id_tbl.map
   if buf_id == nil or not vim.api.nvim_buf_is_valid(buf_id) then buf_id = vim.api.nvim_create_buf(false, true) end
-  MiniMap.current.buf_id = buf_id
+  MiniMap.current.buf_id_tbl.map = buf_id
 
   local win_id = vim.api.nvim_open_win(buf_id, false, H.normalize_window_options(opts.window))
   H.set_current_map_win(win_id)
@@ -210,8 +216,9 @@ MiniMap.open = function(opts)
   vim.api.nvim_win_call(win_id, function()
     --stylua: ignore
     local options = {
-      'buftype=nofile', 'foldcolumn=0', 'foldlevel=999', 'matchpairs=',      'nobuflisted',
-      'nomodeline',     'noreadonly',   'noswapfile',    'signcolumn=yes:1', 'synmaxcol&',
+      'buftype=nofile',   'foldcolumn=0', 'foldlevel=999', 'matchpairs=',      'nobuflisted',
+      'nomodeline',       'noreadonly',   'noswapfile',    'signcolumn=yes:1', 'synmaxcol&',
+      'filetype=minimap',
     }
     -- Vim's `setlocal` is currently more robust comparing to `opt_local`
     vim.cmd(('silent! noautocmd setlocal %s'):format(table.concat(options, ' ')))
@@ -244,12 +251,13 @@ MiniMap.refresh = function(parts, opts)
   MiniMap.current.opts = opts
 
   -- Update map config
+  MiniMap.current.buf_id_tbl.source = vim.api.nvim_get_current_buf()
   H.update_map_config()
 
   -- Possibly update parts in asynchronous fashion
   if parts.lines then vim.schedule(H.update_map_lines) end
-  if parts.integrations then vim.schedule(H.update_map_integrations) end
   if parts.scrollbar then vim.schedule(H.update_map_scrollbar) end
+  if parts.integrations then vim.schedule(H.update_map_integrations) end
 end
 
 MiniMap.close = function()
@@ -275,8 +283,9 @@ MiniMap.toggle_focus = function()
     vim.cmd('wincmd p')
   else
     -- Put cursor in map window at line indicator
-    local map_line = H.bufline_to_mapline(MiniMap.current.line, MiniMap.current.encode_details)
-    vim.api.nvim_win_set_cursor(map_win, { map_line, 0 })
+    local cur_pos = { line = vim.fn.line('.'), col = vim.fn.col('.') }
+    local map_pos = H.convert_position(cur_pos, 'map')
+    vim.api.nvim_win_set_cursor(map_win, { map_pos.line, map_pos.col - 1 })
 
     -- Focus on map window
     vim.api.nvim_set_current_win(map_win)
@@ -299,6 +308,16 @@ MiniMap.gen_encode_symbols.dot = function(id) return H.dot_symbols[id] end
 
 MiniMap.gen_encode_symbols.shade = function(id) return H.shade_symbols[id] end
 
+MiniMap.highlight_regions = function(regions, hl_group, ns_id)
+  if not H.is_array_of(regions, H.is_nonempty_region) then
+    H.error('First argument of `MiniAlign.highlight_regions()` should be array of non-empty regions.')
+  end
+
+  for _, region in ipairs(regions) do
+    H.highlight_region(region, hl_group, ns_id)
+  end
+end
+
 MiniMap.on_content_change = function()
   local buf_type = vim.bo.buftype
   if not (buf_type == '' or buf_type == 'help') then return end
@@ -319,11 +338,13 @@ MiniMap.on_cursor_change = function()
   local prev_win_id = H.cache.previous_win_id
   if prev_win_id == nil then return end
 
-  local new_line = H.mapline_to_bufline(vim.fn.line('.'), MiniMap.current.encode_details)
-  vim.api.nvim_win_set_cursor(prev_win_id, { new_line, 0 })
+  local cur_pos = { line = vim.fn.line('.'), col = vim.fn.col('.') }
+  local buf_pos = H.convert_position(cur_pos, 'source')
+  -- It puts cursor on last line cell if `new_col` is past end of line
+  vim.api.nvim_win_set_cursor(prev_win_id, { buf_pos.line, buf_pos.col - 1 })
 
-  -- Center cursor
-  vim.api.nvim_win_call(prev_win_id, function() vim.cmd('normal! zz') end)
+  -- Open just enough folds and center cursor
+  vim.api.nvim_win_call(prev_win_id, function() vim.cmd('normal! zvzz') end)
 end
 
 MiniMap.on_winleave = function() H.cache.previous_win_id = vim.api.nvim_get_current_win() end
@@ -433,15 +454,18 @@ end
 H.mask_rescale = function(mask, opts)
   -- Infer output number of rows and columns. Should be multiples of
   -- `symbols.resolution.row` and `symbols.resolution.col` respectively.
-  local n_rows = #mask
-  local n_cols = 0
+  local source_rows = #mask
+  local source_cols = 0
   for _, m_row in ipairs(mask) do
-    n_cols = math.max(n_cols, #m_row)
+    source_cols = math.max(source_cols, #m_row)
   end
 
   local resolution = opts.symbols.resolution
-  local res_n_rows = resolution.row * math.min(math.ceil(n_rows / resolution.row), opts.n_rows)
-  local res_n_cols = resolution.col * math.min(math.ceil(n_cols / resolution.col), opts.n_cols)
+  local map_rows = math.min(math.ceil(source_rows / resolution.row), opts.n_rows)
+  local map_cols = math.min(math.ceil(source_cols / resolution.col), opts.n_cols)
+
+  local res_n_rows = resolution.row * map_rows
+  local res_n_cols = resolution.col * map_cols
 
   -- Downscale
   local res = {}
@@ -449,7 +473,7 @@ H.mask_rescale = function(mask, opts)
     res[i] = H.tbl_repeat(false, res_n_cols)
   end
 
-  local rows_coeff, cols_coeff = res_n_rows / n_rows, res_n_cols / n_cols
+  local rows_coeff, cols_coeff = res_n_rows / source_rows, res_n_cols / source_cols
 
   for i, m_row in ipairs(mask) do
     for j, m in ipairs(m_row) do
@@ -461,14 +485,7 @@ H.mask_rescale = function(mask, opts)
     end
   end
 
-  return res,
-    {
-      input_cols = n_cols,
-      input_rows = n_rows,
-      output_cols = res_n_cols,
-      output_rows = res_n_rows,
-      resolution = resolution,
-    }
+  return res, { source_cols = source_cols, source_rows = source_rows, map_cols = map_cols, map_rows = map_rows }
 end
 
 --- Apply sliding window (with `symbols.resolution.col` columns and
@@ -550,13 +567,13 @@ H.is_valid_config_symbols = function(x, x_name)
   if type(x) ~= 'table' then return false, H.msg_config(x_name, 'table') end
 
   -- Current line
-  if not H.is_character(x.current_line) then
-    return false, H.msg_config(x_name .. '.current_line', 'single character')
+  if not H.is_string(x.current_line, 2) then
+    return false, H.msg_config(x_name .. '.current_line', 'one or two characters')
   end
 
   -- Current view
-  if not H.is_character(x.current_view) then
-    return false, H.msg_config(x_name .. '.current_view', 'single character')
+  if not H.is_string(x.current_view, 2) then
+    return false, H.msg_config(x_name .. '.current_view', 'one or two characters')
   end
 
   -- Encode symbols
@@ -638,7 +655,7 @@ H.update_map_config = function()
 end
 
 H.update_map_lines = function()
-  local buf_id, opts = MiniMap.current.buf_id, MiniMap.current.opts
+  local buf_id, opts = MiniMap.current.buf_id_tbl.map, MiniMap.current.opts
   local win_id = H.get_current_map_win()
 
   -- Compute output number of rows and columns to fit currently shown window
@@ -657,7 +674,7 @@ H.update_map_lines = function()
     for _ = 1, n_rows do
       table.insert(encoded_lines, '')
     end
-    details = { input_rows = #buf_lines, output_rows = n_rows, resolution = { row = 1, col = 1 } }
+    details = { source_rows = #buf_lines, map_rows = n_rows }
   else
     -- Case of "full minimap"
     encoded_lines, details =
@@ -673,10 +690,31 @@ end
 
 H.update_map_integrations = function()
   -- TODO
+
+  -- -- Diagnostics
+  -- if vim.fn.has('nvim-0.6') == 0 then return end
+  --
+  -- local severity = vim.diagnostic.severity
+  -- local severity_highlights = {
+  --   [severity.ERROR] = 'DiagnosticFloatingError',
+  --   [severity.WARN] = 'DiagnosticFloatingWarn',
+  --   [severity.INFO] = 'DiagnosticFloatingInfo',
+  --   [severity.HINT] = 'DiagnosticFloatingHint',
+  -- }
+  --
+  -- local diagnostics = vim.diagnostic.get(0)
+  -- for sev, hl_group in pairs(severity_highlights) do
+  --   local severity_diagnostics = vim.tbl_filter(function(x) return x.severity == sev end, diagnostics)
+  --   for _, diag in ipairs(severity_diagnostics) do
+  --     local region =
+  --       { from = { line = diag.lnum + 1, col = diag.col + 1 }, to = { line = diag.end_lnum + 1, col = diag.end_col } }
+  --     H.highlight_region(region, hl_group, 0)
+  --   end
+  -- end
 end
 
 H.update_map_scrollbar = function()
-  local buf_id, cur_details = MiniMap.current.buf_id, MiniMap.current.encode_details
+  local buf_id = MiniMap.current.buf_id_tbl.map
   local cur_view, cur_line = MiniMap.current.view, MiniMap.current.line
 
   -- View
@@ -686,8 +724,8 @@ H.update_map_scrollbar = function()
     vim.fn.sign_unplace('MiniMapView', { buffer = buf_id })
 
     -- Add new view signs
-    local map_from_line = H.bufline_to_mapline(view.from_line, cur_details)
-    local map_to_line = H.bufline_to_mapline(view.to_line, cur_details)
+    local map_from_line = H.convert_linenum(view.from_line, 'map')
+    local map_to_line = H.convert_linenum(view.to_line, 'map')
 
     local list = {}
     for i = map_from_line, map_to_line do
@@ -708,7 +746,7 @@ H.update_map_scrollbar = function()
     vim.fn.sign_unplace('MiniMapLine', { buffer = buf_id })
 
     -- Add new line sign
-    local map_line = H.bufline_to_mapline(current_line, cur_details)
+    local map_line = H.convert_linenum(current_line, 'map')
 
     -- Set higher priority than view signs to be visible over them
     vim.fn.sign_place(0, 'MiniMapLine', 'MiniMapLine', buf_id, { lnum = map_line, priority = 11 })
@@ -716,28 +754,96 @@ H.update_map_scrollbar = function()
   end
 end
 
-H.bufline_to_mapline = function(buf_line, details)
-  local coef = (details.output_rows / details.input_rows) / details.resolution.row
-
-  -- Lines start from 1
-  return math.floor(coef * (buf_line - 1)) + 1
+-- Work with position conversions ----------------------------------------------
+H.convert_linenum = function(linenum, to_type)
+  local details = MiniMap.current.encode_details
+  local coef = details.map_rows / details.source_rows
+  if to_type == 'map' then return math.floor(coef * (linenum - 1)) + 1 end
+  if to_type == 'source' then return math.ceil((linenum - 1) / coef) + 1 end
 end
 
-H.mapline_to_bufline = function(map_line, details)
-  local coef = (details.output_rows / details.input_rows) / details.resolution.row
+H.convert_col = function(buf_id, linenum, col, to_type)
+  local line = vim.api.nvim_buf_get_lines(buf_id, linenum - 1, linenum, true)[1]
+  if line == '' then return 1 end
 
-  -- Lines start from 1
-  return math.ceil((map_line - 1) / coef) + 1
+  local converter = to_type == 'byte' and vim.str_byteindex or vim.str_utfindex
+  local ok, res = pcall(converter, line, col)
+  if ok then return res end
+
+  local width = to_type == 'byte' and line:len() or H.str_width(line)
+  return math.min(math.max(col, 1), width)
 end
 
-H.bufpos_to_mappos = function(buf_pos, details)
-  -- NOTE: assumes `output_cols` and `input_cols` are not `nil`
-  local coef = (details.output_cols / details.input_cols) / details.resolution.col
-  -- Columns start from 0
-  local map_col = math.floor(coef * buf_pos[2])
+H.convert_position = function(pos, to_type)
+  local details = MiniMap.current.encode_details
+  local to_linenum = H.convert_linenum(pos.line, to_type)
 
-  return { H.bufline_to_mapline(buf_pos[1], details), map_col }
+  -- Early return in case there is no map lines (pure scrollbar)
+  if details.map_cols == nil or details.source_cols == nil then return { line = to_linenum, col = 1 } end
+
+  -- Need to convert from byte column to byte column but respecting multibyte
+  -- characters (almost always the case in map buffer)
+  local buf_id_tbl = MiniMap.current.buf_id_tbl
+  local from_buf_id = to_type == 'map' and buf_id_tbl.source or buf_id_tbl.map
+  local to_buf_id = to_type == 'map' and buf_id_tbl.map or buf_id_tbl.source
+
+  -- (from byte column) -> (from cell column)
+  local from_cell_col = H.convert_col(from_buf_id, pos.line, pos.col, 'cell')
+
+  -- (from cell column) -> (to cell column)
+  local coef = details.map_cols / details.source_cols
+  local to_cell_col = to_type == 'map' and (math.floor(coef * (from_cell_col - 1)) + 1)
+    or (math.ceil((from_cell_col - 1) / coef) + 1)
+
+  -- (to cell column) -> (to byte column)
+  local to_byte_col = H.convert_col(to_buf_id, to_linenum, to_cell_col, 'byte')
+
+  return { line = to_linenum, col = to_byte_col }
 end
+
+H.convert_region = function(region, to_type)
+  return {
+    from = H.convert_position(region.from, to_type),
+    to = H.convert_position(region.to, to_type),
+  }
+end
+
+-- Work with highlighting ------------------------------------------------------
+H.highlight_region = function(region, hl_group, ns_id)
+  local details = MiniMap.current.encode_details
+  local max_map_col = details.map_cols
+
+  -- Highlight nothing if there is no place to add highlighting to
+  if max_map_col == nil or max_map_col == 0 then return end
+
+  local buf_id = MiniMap.current.buf_id_tbl.map
+  local map_region = H.convert_region(region, 'map')
+  local from_line, to_line = map_region.from.line, map_region.to.line
+  -- local map_lines = vim.api.nvim_buf_get_lines(buf_id, from_line - 1, to_line, false)
+  -- _G.info = { buf_region = region, map_region = map_region, map_lines = map_lines }
+
+  for line_num = from_line, to_line do
+    local from_col = line_num == from_line and map_region.from.col or 1
+    local to_col = line_num == to_line and map_region.to.col or -1
+
+    vim.api.nvim_buf_add_highlight(buf_id, ns_id, hl_group, line_num - 1, from_col - 1, to_col)
+  end
+end
+
+-- Work with integrations ------------------------------------------------------
+-- H.get_search_matches = function()
+--   if vim.v.hlsearch == 0 or not vim.o.hlsearch then return {} end
+--
+--   local win_view = vim.fn.winsaveview()
+--
+--   MiniMap.search_matches = {}
+--   -- vim.cmd('g//lua table.insert(MiniMap.search_matches, vim.api.nvim_win_get_cursor(0))')
+--   -- MiniMap.search_matches = nil
+--
+--   vim.fn.winrestview(win_view)
+--
+--   -- return n_matches
+-- end
 
 -- Predicates ------------------------------------------------------------------
 H.is_array_of = function(x, predicate)
@@ -748,9 +854,10 @@ H.is_array_of = function(x, predicate)
   return true
 end
 
-H.is_string = function(x) return type(x) == 'string' end
-
-H.is_character = function(x) return H.is_string(x) and H.str_width(x) == 1 end
+H.is_string = function(x, n)
+  n = n or math.huge
+  return type(x) == 'string' and H.str_width(x) <= n
+end
 
 H.is_encode_symbols = function(x, x_name)
   x_name = x_name or 'symbols'
@@ -762,12 +869,17 @@ H.is_encode_symbols = function(x, x_name)
 
   local two_power = x.resolution.col * x.resolution.row
   for i = 1, 2 ^ two_power do
-    if not H.is_character(x[i]) then
-      return false, H.msg_config(string.format('%s[%d]', x_name, i), 'single character')
-    end
+    if not H.is_string(x[i]) then return false, H.msg_config(string.format('%s[%d]', x_name, i), 'single character') end
   end
 
   return true
+end
+
+H.is_nonempty_region = function(x)
+  if type(x) ~= 'table' then return false end
+  local from_is_valid = type(x.from) == 'table' and type(x.from.line) == 'number' and type(x.from.col) == 'number'
+  local to_is_valid = type(x.to) == 'table' and type(x.to.line) == 'number' and type(x.to.col) == 'number'
+  return from_is_valid and to_is_valid
 end
 
 -- Utilities ------------------------------------------------------------------
