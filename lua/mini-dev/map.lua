@@ -299,8 +299,9 @@ MiniMap.toggle_focus = function()
   local cur_win, map_win = vim.api.nvim_get_current_win(), H.get_current_map_win()
 
   if cur_win == map_win then
-    -- Focus on previous window
+    -- Focus on previous window on first non-whitespace character
     vim.cmd('wincmd p')
+    vim.cmd('normal! ^')
   else
     -- Put cursor in map window at line indicator to the right of scrollbar
     local map_line = H.sourceline_to_mapline(vim.fn.line('.'))
@@ -328,40 +329,6 @@ MiniMap.gen_encode_symbols.dot = function(id) return H.dot_symbols[id] end
 MiniMap.gen_encode_symbols.shade = function(id) return H.shade_symbols[id] end
 
 MiniMap.gen_integration = {}
-
-MiniMap.gen_integration.diagnostics = function(severity_highlights)
-  if severity_highlights == nil then
-    local severity = vim.diagnostic.severity
-    severity_highlights = {
-      { severity = severity.WARN, hl_group = 'DiagnosticFloatingWarn' },
-      { severity = severity.ERROR, hl_group = 'DiagnosticFloatingError' },
-    }
-  end
-
-  vim.cmd([[
-    augroup MiniMapDiagnostics
-      au!
-      au DiagnosticChanged * lua MiniMap.refresh({ lines = false, view = false })
-    augroup END]])
-
-  return function()
-    if vim.fn.has('nvim-0.6') == 0 then return {} end
-
-    local line_hl = {}
-    local diagnostics = vim.diagnostic.get(MiniMap.current.buf_data.source)
-    for _, data in ipairs(severity_highlights) do
-      local severity_diagnostics = vim.tbl_filter(function(x) return x.severity == data.severity end, diagnostics)
-      for _, diag in ipairs(severity_diagnostics) do
-        -- Add all diagnostic lines to highlight
-        for i = diag.lnum, diag.end_lnum do
-          table.insert(line_hl, { line = i + 1, hl_group = data.hl_group })
-        end
-      end
-    end
-
-    return line_hl
-  end
-end
 
 MiniMap.gen_integration.builtin_search = function(hl_group)
   hl_group = hl_group or 'Search'
@@ -391,6 +358,76 @@ MiniMap.gen_integration.builtin_search = function(hl_group)
   end
 end
 
+MiniMap.gen_integration.diagnostics = function(severity_highlights)
+  if severity_highlights == nil then
+    local severity = vim.diagnostic.severity
+    severity_highlights = { { severity = severity.ERROR, hl_group = 'DiagnosticFloatingError' } }
+  end
+
+  vim.api.nvim_exec(
+    [[augroup MiniMapDiagnostics
+        au!
+        au DiagnosticChanged * lua MiniMap.refresh({ lines = false, view = false })
+      augroup END]],
+    false
+  )
+
+  return function()
+    if vim.fn.has('nvim-0.6') == 0 then return {} end
+
+    local line_hl = {}
+    local diagnostics = vim.diagnostic.get(MiniMap.current.buf_data.source)
+    for _, data in ipairs(severity_highlights) do
+      local severity_diagnostics = vim.tbl_filter(function(x) return x.severity == data.severity end, diagnostics)
+      for _, diag in ipairs(severity_diagnostics) do
+        -- Add all diagnostic lines to highlight
+        for i = diag.lnum, diag.end_lnum do
+          table.insert(line_hl, { line = i + 1, hl_group = data.hl_group })
+        end
+      end
+    end
+
+    return line_hl
+  end
+end
+
+MiniMap.gen_integration.gitsigns = function(status_highlights)
+  if status_highlights == nil then
+    status_highlights = {
+      add = 'GitSignsAdd',
+      change = 'GitSignsChange',
+      delete = 'GitSignsDelete',
+    }
+  end
+
+  -- There doesn't seem to be an event tracking update of 'gitsigns' hunks
+
+  return function()
+    local gitsigns = require('gitsigns')
+    if gitsigns == nil then return {} end
+
+    local ok, hunks = pcall(gitsigns.get_hunks)
+    if not ok or hunks == nil then return {} end
+
+    local line_hl = {}
+    for _, hunk in ipairs(hunks) do
+      local from_line = hunk.added.start
+      local n_added, n_removed = hunk.added.count, hunk.removed.count
+      local n_lines = math.max(n_added, 1)
+      -- Highlight similar to 'gitsigns' itself:
+      -- - Delete - single first line if nothing was added.
+      -- - Change - added lines that are within first removed lines.
+      -- - Added - added lines after first removed lines.
+      for i = 1, n_lines do
+        local hl_type = (n_added < i and 'delete') or (i <= n_removed and 'change' or 'add')
+        table.insert(line_hl, { line = from_line + i - 1, hl_group = status_highlights[hl_type] })
+      end
+    end
+
+    return line_hl
+  end
+end
+
 MiniMap.on_content_change = function()
   local buf_type = vim.bo.buftype
   if not (buf_type == '' or buf_type == 'help') then return end
@@ -404,15 +441,21 @@ MiniMap.on_view_change = function()
 end
 
 MiniMap.on_cursor_change = function()
-  -- Synchronize cursors in map and previous window if currently inside map
+  -- Operate only inside map window
   local cur_win, map_win = vim.api.nvim_get_current_win(), H.get_current_map_win()
   if cur_win ~= map_win then return end
 
+  -- Don't allow putting cursor inside offset (where scrollbar is)
+  local cur_pos = vim.api.nvim_win_get_cursor(map_win)
+  if cur_pos[2] < MiniMap.current.scrollbar_data.offset then
+    vim.api.nvim_win_set_cursor(map_win, { cur_pos[1], MiniMap.current.scrollbar_data.offset })
+  end
+
+  -- Synchronize cursors in map and previous window
   local prev_win_id = H.cache.previous_win_id
   if prev_win_id == nil then return end
 
-  local source_line = H.mapline_to_sourceline(vim.fn.line('.'))
-  vim.api.nvim_win_set_cursor(prev_win_id, { source_line, 0 })
+  vim.api.nvim_win_set_cursor(prev_win_id, { H.mapline_to_sourceline(cur_pos[1]), 0 })
 
   -- Open just enough folds and center cursor
   vim.api.nvim_win_call(prev_win_id, function() vim.cmd('normal! zvzz') end)
@@ -813,7 +856,6 @@ H.update_map_integrations = function()
   -- Remove previous highlights and signs
   local ns_id = H.ns_id.integrations
   vim.api.nvim_buf_clear_namespace(buf_id, ns_id, 0, -1)
-  vim.fn.sign_unplace('MiniMapMore', { buffer = buf_id })
 
   -- Add line highlights
   local line_counts = {}
@@ -834,6 +876,8 @@ H.update_map_integrations = function()
       virt_text = { { tostring(count), 'MiniMapSymbolMore' } },
       virt_text_pos = 'overlay',
       hl_mode = 'blend',
+      -- Make it show underneath scrollbar
+      priority = 1,
     }
     if count > 1 then vim.api.nvim_buf_set_extmark(buf_id, ns_id, l - 1, col, extmark_opts) end
   end
