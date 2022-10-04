@@ -2,9 +2,7 @@
 
 -- TODO:
 -- Code:
--- - `MiniMap.gen_integration.git`.
 -- - Figure out a way to use `integrations = {}` in default config.
--- - Think about using it in Insert mode.
 -- - Handle all possible/reasonable resolutions in `gen_encode_symbols`.
 -- - Refactor and add relevant comments.
 --
@@ -127,9 +125,9 @@ MiniMap.config = {
   -- Highlight integrations
   integrations = nil,
 
-  -- Symbols used to display data.
-  -- Use `''` (empty string) to disable any (except `encode`).
+  -- Symbols used to display data
   symbols = {
+    --minidoc_replace_start encode = require('mini.map').gen_encode_symbols.block('3x2')
     encode = {
       ' ', '🬀', '🬁', '🬂', '🬃', '🬄', '🬅', '🬆', '🬇', '🬈', '🬉', '🬊', '🬋', '🬌', '🬍', '🬎',
       '🬏', '🬐', '🬑', '🬒', '🬓', '▌', '🬔', '🬕', '🬖', '🬗', '🬘', '🬙', '🬚', '🬛', '🬜', '🬝',
@@ -137,14 +135,25 @@ MiniMap.config = {
       '🬭', '🬮', '🬯', '🬰', '🬱', '🬲', '🬳', '🬴', '🬵', '🬶', '🬷', '🬸', '🬹', '🬺', '🬻', '█',
       resolution = { row = 3, col = 2 },
     },
+    --minidoc_replace_end
+    -- Scrollbar for view and line. Use `''` (empty string) to disable any.
     scroll_line = '▐▌',
     scroll_view = '🮇▎',
   },
 
   -- Window options
   window = {
+    -- Side to stick ('left' or 'right')
     side = 'right',
+
+    -- Whether to show count of multiple integration highlights
+    show_more_integrations = true,
+
+    -- Total width
     width = 10,
+
+    -- Value of 'winblend' option
+    winblend = 25,
   },
 }
 --minidoc_afterlines_end
@@ -160,9 +169,7 @@ MiniMap.config = {
 --- - <opts> - current options used to control map display. Same structure
 ---   as |MiniMap.config|.
 --- - <encode_data> - table with information used for latest buffer lines
----   encoding. Has same structure as second output of |MiniMap.encode_strings()|
----   (`input_` fields correspond to current buffer lines, `output_` - map lines).
----   Used for quick update of scrollbar.
+---   encoding. Primarily used for quick update of scrollbar.
 --- - <scrollbar_data> - table with information about scrollbar. Fields:
 ---     - <view> - table with <from_line> and <to_line> keys representing lines
 ---       for start and end of current buffer view.
@@ -179,12 +186,90 @@ MiniMap.current = {
 }
 
 -- Module functionality =======================================================
----@return ... Array of encoded strings and data about the encoding process.
----   Table of data has the following fields:
----     - <source_cols> - maximum string width in input `strings`.
----     - <source_rows> - number of input strings.
----     - <map_cols> - maximum string width in output.
----     - <map_rows> - number of strings in output.
+--- Encode strings
+---
+--- This takes arbitrary array of strings and computes its non-whitespace
+--- outline. Output is an array of strings with configurable array length, string
+--- width, and symbols representing encoding.
+---
+--- Each symbol is assumed to have resolution within which it can convey binary
+--- information. For example, resolution `3x2` (row resolution 3, column - 2)
+--- means that each symbol can encode 3 rows and 2 columns of binary data. Here
+--- it is used to encode non-whitespace mask. See more in "Encode symbols"
+--- section of |MiniMap.config|.
+---
+--- Encoding has the following steps:
+--- - Convert strings to boolean mask: 2d boolean array with each row
+---   representing a string. Element in every subarray is `true` if corresponding
+---   (possibly multibyte) character in a string is not a whitespace, `false`
+---   otherwise. Note: tabs are expanded into 'tabstop' spaces.
+--- - Rescale to appropriate dimensions:
+---     - Each output dimension is a multiple of symbol resolution just enough to
+---       encode all input strings, but not more than optional supplied dimensions
+---       (`opts.n_rows * resolution.row` and `opts.n_cols * resolution.col`
+---       respectively).
+---     - If input dimensions are too big to fit inside output, perform grid
+---       downscaling with loss of information. Input boolean mask is divided
+---       into 2d-bins with as equal as possible dimensions. Each bin then
+---       converted into single boolean value: `true` if it contains at least
+---       one `true` element, `false` otherwise. This leads to a whitespace
+---       output meaning that <all> entries in a bin are whitespace, while
+---       non-whitespace output means that <some> entry is non-whitespace.
+--- - Convert boolean mask to symbol strings:
+---     - Input rescaled boolean mask is divided into bins with dimensions of
+---       symbol resolution.
+---     - Each bin with resolution dimensions is transformed into encode symbol.
+---       Single convertible `(resolution.row, resolution.col)` boolean
+---       mask is treated as (reversed) binary digit: `true` as 1; `false` as 0.
+---       Traversing left-right, top-bottom (top-left is lowest bit,
+---       bottom-right - highest).
+---
+--- Example ~
+---
+--- Assume the output should have 3 rows of symbols each with width 2. Encode
+--- symbols are ' ', '▌', '▐', '█' with `1x2` resolution.
+---
+--- Assume input strings: >
+---   aaaaa
+---    b b
+---
+---    d d
+---   e e
+--- <
+--- Steps:
+--- - Convert to boolean mask (each row is a boolean array, "t"/"f" ~ `true`/`false`,
+---   empty spots are equivalent to being `false`): >
+---   ttttt
+---   ftft
+---
+---   ftft
+---   tft
+--- <
+--- - Rescale. Output dimensions are `n_rows * resolution.row = 3 * 1 = 3` rows and
+---   `n_cols * resolution.col = 2 * 2 = 4`. It creates as equal as possible grid
+---   with 3 rows and 4 columns and converts bins to single booleans. Result: >
+---   tttt
+---   tftf
+---   ttff
+--- - Convert to symbols. It makes `1x2` bins, treats their input as (reversed)
+---   binary digits (`ff=00=0`, `tf=10=1`, `ft=01=2`, `tt=11=3`) and takes
+---   corresponding symbols from supplied options (value plus 1). Result:
+---   ██
+---   ▌▌
+---   █
+---
+---@param strings table Array of arbitrary strings.
+---@param opts table|nil Options. Possible fields:
+---   - <n_rows> - number of rows in output encoding. If too big, will be
+---     truncated to be maximum needed to encode all input strings (considering
+---     symbols row resolution). Default: `math.huge`.
+---   - <n_cols> - width of every encoding string. If too big, will be truncated
+---     to be maximum needed to encode all input strings (considering symbols
+---     column resolution). Default: `math.huge`.
+---   - <symbols> - array of symbols with extra `resolution` field. See "Encode
+---     symbols" section of |MiniMap.config| for more details.
+---
+---@return table Array of encoded strings.
 MiniMap.encode_strings = function(strings, opts)
   -- Validate input
   if not H.is_array_of(strings, H.is_string) then
@@ -201,9 +286,9 @@ MiniMap.encode_strings = function(strings, opts)
   if type(opts.n_cols) ~= 'number' then H.error('`opts.n_cols` of `encode_strings()` should be number.') end
 
   -- Compute encoding
-  local mask, data = H.mask_from_strings(strings, opts), nil
-  mask, data = H.mask_rescale(mask, opts)
-  return H.mask_to_symbols(mask, opts), data
+  local mask = H.mask_from_strings(strings, opts)
+  mask = H.mask_rescale(mask, opts)
+  return H.mask_to_symbols(mask, opts)
 end
 
 MiniMap.open = function(opts)
@@ -234,17 +319,19 @@ MiniMap.open = function(opts)
     local options = {
       'buftype=nofile',   'foldcolumn=0', 'foldlevel=999', 'matchpairs=',   'nobuflisted',
       'nomodeline',       'noreadonly',   'noswapfile',    'signcolumn=no', 'synmaxcol&',
-      'filetype=minimap',
     }
     -- Vim's `setlocal` is currently more robust comparing to `opt_local`
     vim.cmd(('silent! noautocmd setlocal %s'):format(table.concat(options, ' ')))
+
+    vim.cmd('silent! setlocal filetype=minimap')
 
     -- Make it play nicely with other 'mini.nvim' modules
     vim.b.minicursorword_disable = true
   end)
 
   -- Make buffer local mappings
-  vim.api.nvim_buf_set_keymap(buf_id, 'n', '<CR>', '<Cmd>lua MiniMap.toggle_focus()<CR>', { noremap = false })
+  vim.api.nvim_buf_set_keymap(buf_id, 'n', '<CR>', '<Cmd>lua MiniMap.toggle_focus(false)<CR>', { noremap = false })
+  vim.api.nvim_buf_set_keymap(buf_id, 'n', '<Esc>', '<Cmd>lua MiniMap.toggle_focus(true)<CR>', { noremap = false })
 
   -- Refresh content
   MiniMap.refresh(opts)
@@ -267,10 +354,11 @@ MiniMap.refresh = function(parts, opts)
   MiniMap.current.opts = opts
 
   -- Update current data
-  MiniMap.current.buf_data.source = vim.api.nvim_get_current_buf()
   MiniMap.current.scrollbar_data.offset =
     math.max(H.str_width(opts.symbols.scroll_line), H.str_width(opts.symbols.scroll_view))
-  H.update_map_config()
+
+  -- Update window options
+  H.update_window_opts()
 
   -- Possibly update parts in asynchronous fashion
   if parts.lines then vim.schedule(H.update_map_lines) end
@@ -294,14 +382,22 @@ MiniMap.toggle = function(opts)
   end
 end
 
-MiniMap.toggle_focus = function()
+MiniMap.toggle_focus = function(use_previous_cursor)
+  if use_previous_cursor == nil then use_previous_cursor = false end
+
   if not H.is_window_open() then return end
   local cur_win, map_win = vim.api.nvim_get_current_win(), H.get_current_map_win()
 
   if cur_win == map_win then
-    -- Focus on previous window on first non-whitespace character
-    vim.cmd('wincmd p')
-    vim.cmd('normal! ^')
+    -- Focus on previous window
+    vim.api.nvim_set_current_win(H.cache.previous_win_id)
+
+    -- Use either previous cursor or first non-whitespace character
+    if use_previous_cursor then
+      vim.api.nvim_win_set_cursor(0, H.cache.previous_cursor)
+    else
+      vim.cmd('normal! ^')
+    end
   else
     -- Put cursor in map window at line indicator to the right of scrollbar
     local map_line = H.sourceline_to_mapline(vim.fn.line('.'))
@@ -418,7 +514,8 @@ MiniMap.gen_integration.gitsigns = function(status_highlights)
       -- - Delete - single first line if nothing was added.
       -- - Change - added lines that are within first removed lines.
       -- - Added - added lines after first removed lines.
-      for i = 1, n_lines do
+      -- - Traverse from end to show first lines on top.
+      for i = n_lines, 1, -1 do
         local hl_type = (n_added < i and 'delete') or (i <= n_removed and 'change' or 'add')
         table.insert(line_hl, { line = from_line + i - 1, hl_group = status_highlights[hl_type] })
       end
@@ -429,14 +526,12 @@ MiniMap.gen_integration.gitsigns = function(status_highlights)
 end
 
 MiniMap.on_content_change = function()
-  local buf_type = vim.bo.buftype
-  if not (buf_type == '' or buf_type == 'help') then return end
+  if not H.is_proper_buftype() then return end
   MiniMap.refresh()
 end
 
 MiniMap.on_view_change = function()
-  local buf_type = vim.bo.buftype
-  if not (buf_type == '' or buf_type == 'help') then return end
+  if not H.is_proper_buftype() then return end
   MiniMap.refresh({ integrations = false, lines = false })
 end
 
@@ -461,7 +556,12 @@ MiniMap.on_cursor_change = function()
   vim.api.nvim_win_call(prev_win_id, function() vim.cmd('normal! zvzz') end)
 end
 
-MiniMap.on_winleave = function() H.cache.previous_win_id = vim.api.nvim_get_current_win() end
+MiniMap.on_winleave = function()
+  if not H.is_proper_buftype() then return end
+
+  H.cache.previous_win_id = vim.api.nvim_get_current_win()
+  H.cache.previous_cursor = vim.api.nvim_win_get_cursor(0)
+end
 
 -- Helper data ================================================================
 -- Module default config
@@ -557,9 +657,12 @@ H.mask_from_strings = function(strings, _)
 
   local res = {}
   for i, s in ipairs(strings) do
+    -- Expand tabs into spaces
     local s_ext = s:gsub('\t', tab_space)
     local n_cols = H.str_width(s_ext)
     local mask_row = H.tbl_repeat(true, n_cols)
+
+    -- Detect whitespace
     s_ext:gsub('()%s', function(j) mask_row[vim.str_utfindex(s_ext, j)] = false end)
     res[i] = mask_row
   end
@@ -580,14 +683,19 @@ H.mask_rescale = function(mask, opts)
     source_cols = math.max(source_cols, #m_row)
   end
 
+  -- Compute number of rows and columns in output such that it can contain all
+  -- encoded symbols (taking into account their resolution)
   local resolution = opts.symbols.resolution
   local map_rows = math.min(math.ceil(source_rows / resolution.row), opts.n_rows)
   local map_cols = math.min(math.ceil(source_cols / resolution.col), opts.n_cols)
 
+  -- Make output a multiple of resolution
   local res_n_rows = resolution.row * map_rows
   local res_n_cols = resolution.col * map_cols
 
-  -- Downscale
+  -- Rescale. It uses unequal but optimal bins to map source lines/columns to
+  -- boolean encoding (has target dimensions but multiplied by resolution).
+  -- Value within 2d-bin is `true` if at least one value within it is `true`.
   local res = {}
   for i = 1, res_n_rows do
     res[i] = H.tbl_repeat(false, res_n_cols)
@@ -599,22 +707,20 @@ H.mask_rescale = function(mask, opts)
     for j, m in ipairs(m_row) do
       local res_i = math.floor((i - 1) * rows_coeff) + 1
       local res_j = math.floor((j - 1) * cols_coeff) + 1
-      -- Downscaled block value will be `true` if at least a single element
-      -- within it is `true`
       res[res_i][res_j] = m or res[res_i][res_j]
     end
   end
 
-  return res, { source_cols = source_cols, source_rows = source_rows, map_cols = map_cols, map_rows = map_rows }
+  return res
 end
 
---- Apply sliding window (with `symbols.resolution.col` columns and
---- `symbols.resolution.row` rows) without overlap. Each application converts boolean
---- mask to symbol assuming symbols are sorted as if dark spots (read left to
---- right within row, then top to bottom) are bits in binary notation (`true` -
---- 1, `false` - 0).
+--- Convert extended map mask to strings. Each bin with resolution dimensions
+--- is transformed into encode symbol. Single convertable `(resolution.row,
+--- resolution.col)` boolean mask is treated as binary digit: `true` as 1;
+--- `false` as 0; traversing left-right, top-bottom (top-left is lowest bit,
+--- bottom-right - highest).
 ---
----@param mask table Boolean 2d array to be shown with symbols.
+---@param mask table Boolean 2d array to be shown as symbols.
 ---@return table Array of strings representing input `mask`.
 ---@private
 H.mask_to_symbols = function(mask, opts)
@@ -626,9 +732,8 @@ H.mask_to_symbols = function(mask, opts)
     powers_of_two[i] = 2 ^ i
   end
 
-  local symbols_n_rows = math.ceil(#mask / row_resol)
   -- Assumes rectangular table
-  local symbols_n_cols = math.ceil(#mask[1] / col_resol)
+  local symbols_n_rows, symbols_n_cols = #mask / row_resol, #mask[1] / col_resol
 
   -- Compute symbols array indexes (start from zero)
   local symbol_ind = {}
@@ -636,15 +741,16 @@ H.mask_to_symbols = function(mask, opts)
     symbol_ind[i] = H.tbl_repeat(0, symbols_n_cols)
   end
 
-  local rows_coeff, cols_coeff = symbols_n_rows / #mask, symbols_n_cols / #mask[1]
-
   for i = 0, #mask - 1 do
     local row = mask[i + 1]
+    local row_div, row_mod = math.floor(i / row_resol), i % row_resol
     for j = 0, #row - 1 do
-      local two_power = (i % row_resol) * col_resol + (j % col_resol)
+      local col_div, col_mod = math.floor(j / col_resol), j % col_resol
+
+      local two_power = row_mod * col_resol + col_mod
       local to_add = row[j + 1] and powers_of_two[two_power] or 0
-      local sym_i = math.floor(i * rows_coeff) + 1
-      local sym_j = math.floor(j * cols_coeff) + 1
+
+      local sym_i, sym_j = row_div + 1, col_div + 1
       symbol_ind[sym_i][sym_j] = symbol_ind[sym_i][sym_j] + to_add
     end
   end
@@ -677,7 +783,9 @@ end
 
 H.is_valid_config_integrations = function(x, x_name)
   x_name = x_name or 'config.integrations'
-  -- TODO
+
+  if not H.is_array_of(x, vim.is_callable) then return false, H.msg_config(x_name, 'array of callables') end
+
   return true
 end
 
@@ -712,6 +820,16 @@ H.is_valid_config_window = function(x, x_name)
   -- Width
   if not (type(x.width) == 'number' and x.width > 0) then
     return false, H.msg_config(x_name .. '.width', 'positive number')
+  end
+
+  -- Show "more" integration symbols
+  if type(x.show_more_integrations) ~= 'boolean' then
+    return false, H.msg_config(x_name .. '.show_more_integrations', 'boolean')
+  end
+
+  -- Window local 'winblend'
+  if not (type(x.winblend) == 'number' and 0 <= x.winblend and x.winblend <= 100) then
+    return false, H.msg_config(x_name .. '.winblend', 'number between 0 and 100')
   end
 
   return true
@@ -755,12 +873,15 @@ H.is_window_open = function()
 end
 
 -- Work with map updates -------------------------------------------------------
-H.update_map_config = function()
+H.update_window_opts = function()
   local opts = MiniMap.current.opts
   local win_id = H.get_current_map_win()
 
   -- Window config
   vim.api.nvim_win_set_config(win_id, H.normalize_window_options(opts.window, false))
+
+  -- 'winblend'
+  vim.api.nvim_win_call(win_id, function() vim.cmd('setlocal winblend=' .. opts.window.winblend) end)
 end
 
 H.update_map_lines = function()
@@ -774,27 +895,31 @@ H.update_map_lines = function()
   local n_cols = vim.api.nvim_win_get_width(win_id) - offset
   local n_rows = vim.api.nvim_win_get_height(win_id)
 
-  local buf_lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
+  -- Encode lines from current buffer
+  local source_buf_id = vim.api.nvim_get_current_buf()
+  MiniMap.current.buf_data.source = source_buf_id
+  local buf_lines = vim.api.nvim_buf_get_lines(source_buf_id, 0, -1, true)
   -- Ensure that current buffer has lines (can be not the case when this is
   -- executed asynchronously during Neovim closing)
   if #buf_lines == 0 then return end
 
-  local encoded_lines, data
+  local encoded_lines
   local scrollbar_prefix = string.rep(' ', offset)
   if n_cols <= 0 then
-    -- Case of "only scroll indicator"
+    -- Case of "only scroll indicator". Needed to make scrollbar correctly
+    -- travel from buffer top to bottom.
     encoded_lines = H.tbl_repeat(scrollbar_prefix, n_rows)
-    data = { source_rows = #buf_lines, map_rows = n_rows }
   else
     -- Case of "full minimap"
-    encoded_lines, data =
+    encoded_lines =
       MiniMap.encode_strings(buf_lines, { n_cols = n_cols, n_rows = n_rows, symbols = opts.symbols.encode })
     -- Add whitespace for scrollbar
     encoded_lines = vim.tbl_map(function(x) return string.format('%s%s', scrollbar_prefix, x) end, encoded_lines)
   end
 
+  -- Set map lines
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, encoded_lines)
-  MiniMap.current.encode_data = data
+  MiniMap.current.encode_data = { source_rows = #buf_lines, map_rows = #encoded_lines }
 
   -- Force scrollbar update
   MiniMap.current.scrollbar_data.view, MiniMap.current.scrollbar_data.line = {}, nil
@@ -857,6 +982,11 @@ H.update_map_integrations = function()
   local ns_id = H.ns_id.integrations
   vim.api.nvim_buf_clear_namespace(buf_id, ns_id, 0, -1)
 
+  -- Do nothing more in case of pure scrollbar
+  -- This is after removing "more" signs to allow switching to pure scrollbar
+  -- after such were already visible
+  if H.is_pure_scrollbar() then return end
+
   -- Add line highlights
   local line_counts = {}
   for i, integration in ipairs(integrations) do
@@ -869,17 +999,22 @@ H.update_map_integrations = function()
     end
   end
 
-  -- Add "more integrations" signs
+  -- Possibly add integration counts
+  if not H.get_config().window.show_more_integrations then return end
+
   local col = math.max(MiniMap.current.scrollbar_data.offset - 1, 0)
   for l, count in pairs(line_counts) do
-    local extmark_opts = {
-      virt_text = { { tostring(count), 'MiniMapSymbolMore' } },
-      virt_text_pos = 'overlay',
-      hl_mode = 'blend',
-      -- Make it show underneath scrollbar
-      priority = 1,
-    }
-    if count > 1 then vim.api.nvim_buf_set_extmark(buf_id, ns_id, l - 1, col, extmark_opts) end
+    if count > 1 then
+      local text = count > 9 and '+' or tostring(count)
+      local extmark_opts = {
+        virt_text = { { text, 'MiniMapSymbolMore' } },
+        virt_text_pos = 'overlay',
+        hl_mode = 'blend',
+        -- Make it show above scrollbar
+        priority = 12,
+      }
+      vim.api.nvim_buf_set_extmark(buf_id, ns_id, l - 1, col, extmark_opts)
+    end
   end
 end
 
@@ -929,6 +1064,17 @@ H.is_nonempty_region = function(x)
   local from_is_valid = type(x.from) == 'table' and type(x.from.line) == 'number' and type(x.from.col) == 'number'
   local to_is_valid = type(x.to) == 'table' and type(x.to.line) == 'number' and type(x.to.col) == 'number'
   return from_is_valid and to_is_valid
+end
+
+H.is_proper_buftype = function()
+  local buf_type = vim.bo.buftype
+  return buf_type == '' or buf_type == 'help'
+end
+
+H.is_pure_scrollbar = function()
+  local win_id = H.get_current_map_win()
+  local offset = MiniMap.current.scrollbar_data.offset
+  return vim.api.nvim_win_get_width(win_id) <= offset
 end
 
 -- Utilities ------------------------------------------------------------------
