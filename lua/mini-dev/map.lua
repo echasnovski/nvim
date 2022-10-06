@@ -3,7 +3,6 @@
 -- TODO:
 -- Code:
 -- - Figure out a way to use `integrations = {}` in default config.
--- - Handle all possible/reasonable resolutions in `gen_encode_symbols`.
 -- - Refactor and add relevant comments.
 --
 -- Tests:
@@ -19,7 +18,7 @@
 --     - Line - '🮚', '▶'.
 --     - View - '┋'.
 -- - Update is done in asynchronous (non-blocking) fashion.
--- - Works best with global statusline. Or use |MiniMap.refresh()|.
+-- - Works best with global statusline. Or use |MiniMap.toggle_side()|.
 -- - Justification of supporting only line highlighting and cursor movement:
 --     - Implementation. It is unnecessarily hard to correctly implement column
 --       conversion from source to map coordinates. This is mostly because of
@@ -86,9 +85,12 @@ MiniMap.setup = function(config)
 
   -- Module behavior
   vim.api.nvim_exec(
+    -- Using `vim.schedule()` for `on_content_change()` helps computing more
+    -- precise buffer data. Example: if omitted, terminal buffer is recognized
+    -- as normal and thus map is updated.
     [[augroup MiniMap
         au!
-        au BufEnter,TextChanged,VimResized * lua MiniMap.on_content_change()
+        au BufWinEnter,BufWritePost,TextChanged,VimResized * lua vim.schedule(MiniMap.on_content_change)
         au CursorMoved,WinScrolled * lua MiniMap.on_view_change()
         au CursorMoved * lua MiniMap.on_cursor_change()
         au WinLeave * lua MiniMap.on_winleave()
@@ -169,7 +171,7 @@ MiniMap.config = {
 --- - <opts> - current options used to control map display. Same structure
 ---   as |MiniMap.config|.
 --- - <encode_data> - table with information used for latest buffer lines
----   encoding. Primarily used for quick update of scrollbar.
+---   encoding. Used for quick conversion between source and map coordinates.
 --- - <scrollbar_data> - table with information about scrollbar. Fields:
 ---     - <view> - table with <from_line> and <to_line> keys representing lines
 ---       for start and end of current buffer view.
@@ -204,10 +206,9 @@ MiniMap.current = {
 ---   (possibly multibyte) character in a string is not a whitespace, `false`
 ---   otherwise. Note: tabs are expanded into 'tabstop' spaces.
 --- - Rescale to appropriate dimensions:
----     - Each output dimension is a multiple of symbol resolution just enough to
----       encode all input strings, but not more than optional supplied dimensions
----       (`opts.n_rows * resolution.row` and `opts.n_cols * resolution.col`
----       respectively).
+---     - Each output dimension is just enough to encode all input strings, but
+---       not more than supplied dimensions (`opts.n_rows * resolution.row` and
+---       `opts.n_cols * resolution.col` respectively).
 ---     - If input dimensions are too big to fit inside output, perform grid
 ---       downscaling with loss of information. Input boolean mask is divided
 ---       into 2d-bins with as equal as possible dimensions. Each bin then
@@ -217,7 +218,7 @@ MiniMap.current = {
 ---       non-whitespace output means that <some> entry is non-whitespace.
 --- - Convert boolean mask to symbol strings:
 ---     - Input rescaled boolean mask is divided into bins with dimensions of
----       symbol resolution.
+---       symbol resolution (assuming `false` outer padding).
 ---     - Each bin with resolution dimensions is transformed into encode symbol.
 ---       Single convertible `(resolution.row, resolution.col)` boolean
 ---       mask is treated as (reversed) binary digit: `true` as 1; `false` as 0.
@@ -253,11 +254,11 @@ MiniMap.current = {
 ---   ttff
 --- - Convert to symbols. It makes `1x2` bins, treats their input as (reversed)
 ---   binary digits (`ff=00=0`, `tf=10=1`, `ft=01=2`, `tt=11=3`) and takes
----   corresponding symbols from supplied options (value plus 1). Result:
+---   corresponding symbols from supplied options (value plus 1). Result: >
 ---   ██
 ---   ▌▌
 ---   █
----
+--- <
 ---@param strings table Array of arbitrary strings.
 ---@param opts table|nil Options. Possible fields:
 ---   - <n_rows> - number of rows in output encoding. If too big, will be
@@ -342,7 +343,7 @@ end
 ---   - <integrations> - whether to update integrations highlights.
 ---   - <lines> - whether to update map lines.
 ---   - <scrollbar> - whether to update scrollbar.
-MiniMap.refresh = function(parts, opts)
+MiniMap.refresh = function(opts, parts)
   -- Early return
   if H.is_disabled() or not H.is_window_open() then return end
 
@@ -367,10 +368,7 @@ MiniMap.refresh = function(parts, opts)
 end
 
 MiniMap.close = function()
-  if H.is_disabled() then return end
-
-  local win_id = H.get_current_map_win()
-  pcall(vim.api.nvim_win_close, win_id, true)
+  pcall(vim.api.nvim_win_close, H.get_current_map_win(), true)
   H.set_current_map_win(nil)
 end
 
@@ -411,8 +409,8 @@ end
 MiniMap.toggle_side = function()
   local cur_side = MiniMap.current.opts.window.side
   MiniMap.refresh(
-    { integrations = false, lines = false, scrollbar = false },
-    { window = { side = cur_side == 'left' and 'right' or 'left' } }
+    { window = { side = cur_side == 'left' and 'right' or 'left' } },
+    { integrations = false, lines = false, scrollbar = false }
   )
 end
 
@@ -428,42 +426,73 @@ MiniMap.gen_integration = {}
 
 MiniMap.gen_integration.builtin_search = function(hl_group)
   hl_group = hl_group or 'Search'
+  if type(hl_group) ~= 'string' then
+    H.error('First argument of `gen.integration.builtin_search()` should be string.')
+  end
 
-  vim.cmd([[
-    augroup MiniMapBuiltinSearch
-      au!
-      au OptionSet hlsearch lua MiniMap.refresh({ lines = false, view = false })
-    augroup END]])
+  -- Update when necessary. Not ideal, because it won't react on `n/N/*`, etc.
+  -- See https://github.com/neovim/neovim/issues/18879
+  vim.api.nvim_exec(
+    [[augroup MiniMapBuiltinSearch
+        au!
+        au OptionSet hlsearch lua MiniMap.refresh({}, { lines = false, view = false })
+      augroup END]],
+    false
+  )
 
   return function()
+    -- Do nothing of search is not active
     if vim.v.hlsearch == 0 or not vim.o.hlsearch then return {} end
 
+    -- Do nothing if not inside source buffer (can happen in map buffer, for example)
+    if vim.api.nvim_get_current_buf() ~= MiniMap.current.buf_data.source then return {} end
+
+    -- Save window view to later restore, as the only way to get positions of
+    -- search matches seems to be consecutive application of `search()` and
+    -- retrieving cursor position.
     local win_view = vim.fn.winsaveview()
 
-    MiniMap.search_line_hl = {}
-    local cmd = string.format(
-      [[silent! g//lua table.insert(MiniMap.search_line_hl, { line = vim.fn.line('.'), hl_group = '%s' })]],
-      hl_group
-    )
-    vim.cmd(cmd)
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    local search_count = vim.fn.searchcount({ recompute = true, maxcount = 0 })
+    local search_pattern = vim.fn.getreg('/')
+    local line_hl = {}
+    for _ = 1, search_count.total do
+      vim.fn.search(search_pattern)
+      table.insert(line_hl, { line = vim.fn.line('.'), hl_group = hl_group })
+    end
+
     vim.fn.winrestview(win_view)
 
-    local res = MiniMap.search_line_hl
-    MiniMap.search_line_hl = nil
-    return res
+    return line_hl
   end
 end
 
 MiniMap.gen_integration.diagnostics = function(severity_highlights)
-  if severity_highlights == nil then
-    local severity = vim.diagnostic.severity
-    severity_highlights = { { severity = severity.ERROR, hl_group = 'DiagnosticFloatingError' } }
-  end
+  if severity_highlights == nil then severity_highlights = { error = 'DiagnosticFloatingError' } end
 
+  -- Precompute ordered array of supported levels. Using keys of
+  -- `severity_highlights` is not enough because higher severity should be
+  -- processed later in order to appear on top.
+  local severity_level_names = vim.tbl_filter(
+    function(x) return vim.tbl_contains(vim.tbl_keys(severity_highlights), x) end,
+    { 'hint', 'info', 'warn', 'error' }
+  )
+  if #severity_level_names == 0 then
+    H.error(
+      'Severity highlights of `gen_integration.diagnostics` has incorrect levels. '
+        .. 'See `:h MiniMap.gen_integration.diagnostics`.'
+    )
+  end
+  local severity_data = vim.tbl_map(
+    function(x) return { severity = vim.diagnostic.severity[x:upper()], hl_group = severity_highlights[x] } end,
+    severity_level_names
+  )
+
+  -- Refresh map when needed
   vim.api.nvim_exec(
     [[augroup MiniMapDiagnostics
         au!
-        au DiagnosticChanged * lua MiniMap.refresh({ lines = false, view = false })
+        au DiagnosticChanged * lua MiniMap.refresh({}, { lines = false, view = false })
       augroup END]],
     false
   )
@@ -473,7 +502,7 @@ MiniMap.gen_integration.diagnostics = function(severity_highlights)
 
     local line_hl = {}
     local diagnostics = vim.diagnostic.get(MiniMap.current.buf_data.source)
-    for _, data in ipairs(severity_highlights) do
+    for _, data in ipairs(severity_data) do
       local severity_diagnostics = vim.tbl_filter(function(x) return x.severity == data.severity end, diagnostics)
       for _, diag in ipairs(severity_diagnostics) do
         -- Add all diagnostic lines to highlight
@@ -496,7 +525,15 @@ MiniMap.gen_integration.gitsigns = function(status_highlights)
     }
   end
 
-  -- There doesn't seem to be an event tracking update of 'gitsigns' hunks
+  -- Hope `FugitiveChanged` will be issued when 'gitsigns.nvim' changes hunks
+  -- See https://github.com/lewis6991/gitsigns.nvim/pull/516
+  vim.api.nvim_exec(
+    [[augroup MiniMapGitsigns
+        au!
+        au User FugitiveChanged lua MiniMap.refresh({}, { lines = false, view = false })
+      augroup END]],
+    false
+  )
 
   return function()
     local gitsigns = require('gitsigns')
@@ -532,7 +569,7 @@ end
 
 MiniMap.on_view_change = function()
   if not H.is_proper_buftype() then return end
-  MiniMap.refresh({ integrations = false, lines = false })
+  MiniMap.refresh({}, { integrations = false, lines = false })
 end
 
 MiniMap.on_cursor_change = function()
@@ -683,25 +720,26 @@ H.mask_rescale = function(mask, opts)
     source_cols = math.max(source_cols, #m_row)
   end
 
-  -- Compute number of rows and columns in output such that it can contain all
-  -- encoded symbols (taking into account their resolution)
+  -- Compute effective number of rows and columns in output such that it can
+  -- contain all encoded symbols (taking into account their resolution).
+  -- Don't make it a multiple of resolution at this stage because it can later
+  -- lead to inaccurate representation in some cases. Like with small source
+  -- number of rows it will lead to conversion coefficients greater than 1
+  -- (because `math.ceil()` should be used to round for resolution) and some
+  -- rows in the middle of output will be skipped.
   local resolution = opts.symbols.resolution
-  local map_rows = math.min(math.ceil(source_rows / resolution.row), opts.n_rows)
-  local map_cols = math.min(math.ceil(source_cols / resolution.col), opts.n_cols)
-
-  -- Make output a multiple of resolution
-  local res_n_rows = resolution.row * map_rows
-  local res_n_cols = resolution.col * map_cols
+  local n_rows = math.min(source_rows, opts.n_rows * resolution.row)
+  local n_cols = math.min(source_cols, opts.n_cols * resolution.col)
 
   -- Rescale. It uses unequal but optimal bins to map source lines/columns to
   -- boolean encoding (has target dimensions but multiplied by resolution).
   -- Value within 2d-bin is `true` if at least one value within it is `true`.
   local res = {}
-  for i = 1, res_n_rows do
-    res[i] = H.tbl_repeat(false, res_n_cols)
+  for i = 1, n_rows do
+    res[i] = H.tbl_repeat(false, n_cols)
   end
 
-  local rows_coeff, cols_coeff = res_n_rows / source_rows, res_n_cols / source_cols
+  local rows_coeff, cols_coeff = n_rows / source_rows, n_cols / source_cols
 
   for i, m_row in ipairs(mask) do
     for j, m in ipairs(m_row) do
@@ -733,7 +771,7 @@ H.mask_to_symbols = function(mask, opts)
   end
 
   -- Assumes rectangular table
-  local symbols_n_rows, symbols_n_cols = #mask / row_resol, #mask[1] / col_resol
+  local symbols_n_rows, symbols_n_cols = math.ceil(#mask / row_resol), math.ceil(#mask[1] / col_resol)
 
   -- Compute symbols array indexes (start from zero)
   local symbol_ind = {}
@@ -917,9 +955,17 @@ H.update_map_lines = function()
     encoded_lines = vim.tbl_map(function(x) return string.format('%s%s', scrollbar_prefix, x) end, encoded_lines)
   end
 
-  -- Set map lines
+  -- Set map lines. Compute encode data in a way used in mask rescaling
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, encoded_lines)
-  MiniMap.current.encode_data = { source_rows = #buf_lines, map_rows = #encoded_lines }
+
+  -- Cache encode data to speed up most frequent scrollbar computation
+  local source_rows, resolution_row = #buf_lines, opts.symbols.encode.resolution.row
+  MiniMap.current.encode_data = {
+    source_rows = source_rows,
+    rescaled_rows = math.min(source_rows, n_rows * resolution_row),
+    resolution_row = resolution_row,
+    map_rows = #encoded_lines,
+  }
 
   -- Force scrollbar update
   MiniMap.current.scrollbar_data.view, MiniMap.current.scrollbar_data.line = {}, nil
@@ -947,7 +993,7 @@ H.update_map_scrollbar = function()
     local map_to_line = H.sourceline_to_mapline(view.to_line)
 
     for i = map_from_line, map_to_line do
-      vim.api.nvim_buf_set_extmark(buf_id, ns_id, i - 1, 0, extmark_opts)
+      H.set_extmark_safely(buf_id, ns_id, i - 1, 0, extmark_opts)
     end
 
     MiniMap.current.scrollbar_data.view = view
@@ -967,7 +1013,7 @@ H.update_map_scrollbar = function()
     -- Add new line
     local map_line = H.sourceline_to_mapline(scroll_line)
 
-    vim.api.nvim_buf_set_extmark(buf_id, ns_id, map_line - 1, 0, extmark_opts)
+    H.set_extmark_safely(buf_id, ns_id, map_line - 1, 0, extmark_opts)
     MiniMap.current.scrollbar_data.line = scroll_line
   end
 end
@@ -1013,22 +1059,24 @@ H.update_map_integrations = function()
         -- Make it show above scrollbar
         priority = 12,
       }
-      vim.api.nvim_buf_set_extmark(buf_id, ns_id, l - 1, col, extmark_opts)
+      H.set_extmark_safely(buf_id, ns_id, l - 1, col, extmark_opts)
     end
   end
 end
 
 H.sourceline_to_mapline = function(source_line)
   local data = MiniMap.current.encode_data
-  local coef = data.map_rows / data.source_rows
-  local res = math.floor(coef * (source_line - 1)) + 1
+  local coef = data.rescaled_rows / data.source_rows
+  local rescaled_row = math.floor(coef * (source_line - 1)) + 1
+  local res = math.floor((rescaled_row - 1) / data.resolution_row) + 1
   return math.min(res, data.map_rows)
 end
 
 H.mapline_to_sourceline = function(map_line)
   local data = MiniMap.current.encode_data
-  local coef = data.source_rows / data.map_rows
-  local res = math.ceil(coef * (map_line - 1)) + 1
+  local coef = data.rescaled_rows / data.source_rows
+  local rescaled_row = (map_line - 1) * data.resolution_row + 1
+  local res = math.ceil((rescaled_row - 1) / coef) + 1
   return math.min(res, data.source_rows)
 end
 
@@ -1057,13 +1105,6 @@ H.is_encode_symbols = function(x, x_name)
   end
 
   return true
-end
-
-H.is_nonempty_region = function(x)
-  if type(x) ~= 'table' then return false end
-  local from_is_valid = type(x.from) == 'table' and type(x.from.line) == 'number' and type(x.from.col) == 'number'
-  local to_is_valid = type(x.to) == 'table' and type(x.to.line) == 'number' and type(x.to.col) == 'number'
-  return from_is_valid and to_is_valid
 end
 
 H.is_proper_buftype = function()
@@ -1097,6 +1138,8 @@ else
     vim.highlight.range(buf_id, ns_id, hl_group, { line, MiniMap.current.scrollbar_data.offset }, { line, -1 })
   end
 end
+
+H.set_extmark_safely = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
 
 H.str_width = function(x)
   -- Use first returned value (UTF-32 index, and not UTF-16 one)
