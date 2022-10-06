@@ -3,18 +3,17 @@
 -- TODO:
 -- Code:
 -- - Figure out a way to use `integrations = {}` in default config.
--- - Refactor and add relevant comments.
 --
 -- Tests:
 --
 -- Documentation:
+-- - Integrations should be added from most important to least important (as
+--   highlight are applied on a "first seen" basis).
 -- - How to refresh in Insert mode (add autocommands for for TextChangedI and
 --   CursorMovedI).
 -- - Suggestions for scrollbar symbols:
 --     - View-line pairs:
---         - '🮇▎' - '▐▌' (centered within 2 cells).
 --         - '▒' - '█'.
---         - '▒▒' - '██' (span 2 cells).
 --     - Line - '🮚', '▶'.
 --     - View - '┋'.
 -- - Update is done in asynchronous (non-blocking) fashion.
@@ -52,6 +51,7 @@
 --- # Comparisons~
 ---
 --- - 'wfxr/minimap.vim':
+--- - 'nvim-scrollbar':
 --- - 'lewis6991/satellite.nvim':
 ---
 --- # Disabling~
@@ -65,6 +65,7 @@
 ---@tag MiniMap
 
 -- Module definition ==========================================================
+-- TODO: Make local before release
 MiniMap = {}
 H = {}
 
@@ -90,7 +91,7 @@ MiniMap.setup = function(config)
     -- as normal and thus map is updated.
     [[augroup MiniMap
         au!
-        au BufWinEnter,BufWritePost,TextChanged,VimResized * lua vim.schedule(MiniMap.on_content_change)
+        au BufEnter,BufWritePost,TextChanged,VimResized * lua vim.schedule(MiniMap.on_content_change)
         au CursorMoved,WinScrolled * lua MiniMap.on_view_change()
         au CursorMoved * lua MiniMap.on_cursor_change()
         au WinLeave * lua MiniMap.on_winleave()
@@ -110,9 +111,9 @@ MiniMap.setup = function(config)
 
   -- Create highlighting
   vim.api.nvim_exec(
-    [[hi default link MiniMapSymbolView Delimiter
+    [[hi default link MiniMapSymbolCount Special
       hi default link MiniMapSymbolLine Title
-      hi default link MiniMapSymbolMore Special]],
+      hi default link MiniMapSymbolView Delimiter]],
     false
   )
 end
@@ -125,22 +126,16 @@ end
 ---@text # Options ~
 MiniMap.config = {
   -- Highlight integrations
-  integrations = nil,
+  integrations = {},
 
   -- Symbols used to display data
   symbols = {
-    --minidoc_replace_start encode = require('mini.map').gen_encode_symbols.block('3x2')
-    encode = {
-      ' ', '🬀', '🬁', '🬂', '🬃', '🬄', '🬅', '🬆', '🬇', '🬈', '🬉', '🬊', '🬋', '🬌', '🬍', '🬎',
-      '🬏', '🬐', '🬑', '🬒', '🬓', '▌', '🬔', '🬕', '🬖', '🬗', '🬘', '🬙', '🬚', '🬛', '🬜', '🬝',
-      '🬞', '🬟', '🬠', '🬡', '🬢', '🬣', '🬤', '🬥', '🬦', '🬧', '▐', '🬨', '🬩', '🬪', '🬫', '🬬',
-      '🬭', '🬮', '🬯', '🬰', '🬱', '🬲', '🬳', '🬴', '🬵', '🬶', '🬷', '🬸', '🬹', '🬺', '🬻', '█',
-      resolution = { row = 3, col = 2 },
-    },
-    --minidoc_replace_end
+    -- Encode symbols. Default: `MiniMap.gen_encode_symbols.block('3x2')`
+    encode = nil,
+
     -- Scrollbar for view and line. Use `''` (empty string) to disable any.
-    scroll_line = '▐▌',
-    scroll_view = '🮇▎',
+    scroll_line = '█',
+    scroll_view = '┃',
   },
 
   -- Window options
@@ -149,7 +144,7 @@ MiniMap.config = {
     side = 'right',
 
     -- Whether to show count of multiple integration highlights
-    show_more_integrations = true,
+    show_integration_count = true,
 
     -- Total width
     width = 10,
@@ -176,9 +171,9 @@ MiniMap.config = {
 ---     - <view> - table with <from_line> and <to_line> keys representing lines
 ---       for start and end of current buffer view.
 ---     - <line> - current line number.
----     - <offset> - whitespace offset in map window used to display scrollbar.
----       Equal to maximum width of `opts.symbols.scroll_line` and
----       `opts.symbols.scroll_view`.
+---     - <offset> - whitespace offset in map window used to display scrollbar
+---       and integration count. Equal to maximum width of `opts.symbols.scroll_line`
+---       and `opts.symbols.scroll_view` possibly plus one for integration count.
 MiniMap.current = {
   buf_data = {},
   win_data = {},
@@ -279,12 +274,9 @@ MiniMap.encode_strings = function(strings, opts)
 
   opts = vim.tbl_deep_extend(
     'force',
-    { n_rows = math.huge, n_cols = math.huge, symbols = H.get_config().symbols.encode },
+    { n_rows = math.huge, n_cols = math.huge, symbols = H.get_config().symbols.encode or H.block_symbols['3x2'] },
     opts or {}
   )
-  H.validate_if(H.is_encode_symbols, opts.symbols, 'opts.symbols')
-  if type(opts.n_rows) ~= 'number' then H.error('`opts.n_rows` of `encode_strings()` should be number.') end
-  if type(opts.n_cols) ~= 'number' then H.error('`opts.n_cols` of `encode_strings()` should be number.') end
 
   -- Compute encoding
   local mask = H.mask_from_strings(strings, opts)
@@ -355,8 +347,10 @@ MiniMap.refresh = function(opts, parts)
   MiniMap.current.opts = opts
 
   -- Update current data
-  MiniMap.current.scrollbar_data.offset =
-    math.max(H.str_width(opts.symbols.scroll_line), H.str_width(opts.symbols.scroll_view))
+  MiniMap.current.scrollbar_data.offset = math.max(
+    H.str_width(opts.symbols.scroll_line),
+    H.str_width(opts.symbols.scroll_view)
+  ) + (opts.window.show_integration_count and 1 or 0)
 
   -- Update window options
   H.update_window_opts()
@@ -424,11 +418,8 @@ MiniMap.gen_encode_symbols.shade = function(id) return H.shade_symbols[id] end
 
 MiniMap.gen_integration = {}
 
-MiniMap.gen_integration.builtin_search = function(hl_group)
-  hl_group = hl_group or 'Search'
-  if type(hl_group) ~= 'string' then
-    H.error('First argument of `gen.integration.builtin_search()` should be string.')
-  end
+MiniMap.gen_integration.builtin_search = function(hl_groups)
+  if hl_groups == nil then hl_groups = { search = 'Search' } end
 
   -- Update when necessary. Not ideal, because it won't react on `n/N/*`, etc.
   -- See https://github.com/neovim/neovim/issues/18879
@@ -439,6 +430,8 @@ MiniMap.gen_integration.builtin_search = function(hl_group)
       augroup END]],
     false
   )
+
+  local search_hl = hl_groups.search
 
   return function()
     -- Do nothing of search is not active
@@ -458,7 +451,7 @@ MiniMap.gen_integration.builtin_search = function(hl_group)
     local line_hl = {}
     for _ = 1, search_count.total do
       vim.fn.search(search_pattern)
-      table.insert(line_hl, { line = vim.fn.line('.'), hl_group = hl_group })
+      table.insert(line_hl, { line = vim.fn.line('.'), hl_group = search_hl })
     end
 
     vim.fn.winrestview(win_view)
@@ -467,24 +460,18 @@ MiniMap.gen_integration.builtin_search = function(hl_group)
   end
 end
 
-MiniMap.gen_integration.diagnostics = function(severity_highlights)
-  if severity_highlights == nil then severity_highlights = { error = 'DiagnosticFloatingError' } end
+MiniMap.gen_integration.diagnostics = function(hl_groups)
+  if hl_groups == nil then hl_groups = { error = 'DiagnosticFloatingError' } end
 
   -- Precompute ordered array of supported levels. Using keys of
   -- `severity_highlights` is not enough because higher severity should be
   -- processed later in order to appear on top.
   local severity_level_names = vim.tbl_filter(
-    function(x) return vim.tbl_contains(vim.tbl_keys(severity_highlights), x) end,
+    function(x) return vim.tbl_contains(vim.tbl_keys(hl_groups), x) end,
     { 'hint', 'info', 'warn', 'error' }
   )
-  if #severity_level_names == 0 then
-    H.error(
-      'Severity highlights of `gen_integration.diagnostics` has incorrect levels. '
-        .. 'See `:h MiniMap.gen_integration.diagnostics`.'
-    )
-  end
   local severity_data = vim.tbl_map(
-    function(x) return { severity = vim.diagnostic.severity[x:upper()], hl_group = severity_highlights[x] } end,
+    function(x) return { severity = vim.diagnostic.severity[x:upper()], hl_group = hl_groups[x] } end,
     severity_level_names
   )
 
@@ -516,21 +503,14 @@ MiniMap.gen_integration.diagnostics = function(severity_highlights)
   end
 end
 
-MiniMap.gen_integration.gitsigns = function(status_highlights)
-  if status_highlights == nil then
-    status_highlights = {
-      add = 'GitSignsAdd',
-      change = 'GitSignsChange',
-      delete = 'GitSignsDelete',
-    }
-  end
+MiniMap.gen_integration.gitsigns = function(hl_groups)
+  if hl_groups == nil then hl_groups = { add = 'GitSignsAdd', change = 'GitSignsChange', delete = 'GitSignsDelete' } end
 
-  -- Hope `FugitiveChanged` will be issued when 'gitsigns.nvim' changes hunks
-  -- See https://github.com/lewis6991/gitsigns.nvim/pull/516
+  -- Defer refresh due to async implementation of 'gitsigns.nvim'
   vim.api.nvim_exec(
     [[augroup MiniMapGitsigns
         au!
-        au User FugitiveChanged lua MiniMap.refresh({}, { lines = false, view = false })
+        au User GitsignsUpdate lua vim.schedule(function() MiniMap.refresh({}, { lines = false, view = false }) end)
       augroup END]],
     false
   )
@@ -554,7 +534,7 @@ MiniMap.gen_integration.gitsigns = function(status_highlights)
       -- - Traverse from end to show first lines on top.
       for i = n_lines, 1, -1 do
         local hl_type = (n_added < i and 'delete') or (i <= n_removed and 'change' or 'add')
-        table.insert(line_hl, { line = from_line + i - 1, hl_group = status_highlights[hl_type] })
+        table.insert(line_hl, { line = from_line + i - 1, hl_group = hl_groups[hl_type] })
       end
     end
 
@@ -625,12 +605,18 @@ H.block_symbols['2x2'] = {
   resolution = { row = 2, col = 2 },
 }
 
-H.block_symbols['3x2'] = vim.deepcopy(MiniMap.config.symbols.encode)
+H.block_symbols['3x2'] = {
+  ' ', '🬀', '🬁', '🬂', '🬃', '🬄', '🬅', '🬆', '🬇', '🬈', '🬉', '🬊', '🬋', '🬌', '🬍', '🬎',
+  '🬏', '🬐', '🬑', '🬒', '🬓', '▌', '🬔', '🬕', '🬖', '🬗', '🬘', '🬙', '🬚', '🬛', '🬜', '🬝',
+  '🬞', '🬟', '🬠', '🬡', '🬢', '🬣', '🬤', '🬥', '🬦', '🬧', '▐', '🬨', '🬩', '🬪', '🬫', '🬬',
+  '🬭', '🬮', '🬯', '🬰', '🬱', '🬲', '🬳', '🬴', '🬵', '🬶', '🬷', '🬸', '🬹', '🬺', '🬻', '█',
+  resolution = { row = 3, col = 2 },
+}
 
 H.dot_symbols = {}
 
 H.dot_symbols['4x2'] = {
-  ' ', '⠁', '⠈', '⠉', '⠂', '⠃', '⠊', '⠋', '⠐', '⠑', '⠘', '⠙', '⠒', '⠓', '⠚', '⠛',
+  '⠀', '⠁', '⠈', '⠉', '⠂', '⠃', '⠊', '⠋', '⠐', '⠑', '⠘', '⠙', '⠒', '⠓', '⠚', '⠛',
   '⠄', '⠅', '⠌', '⠍', '⠆', '⠇', '⠎', '⠏', '⠔', '⠕', '⠜', '⠝', '⠖', '⠗', '⠞', '⠟',
   '⠠', '⠡', '⠨', '⠩', '⠢', '⠣', '⠪', '⠫', '⠰', '⠱', '⠸', '⠹', '⠲', '⠳', '⠺', '⠻',
   '⠤', '⠥', '⠬', '⠭', '⠦', '⠧', '⠮', '⠯', '⠴', '⠵', '⠼', '⠽', '⠶', '⠷', '⠾', '⠿',
@@ -832,15 +818,17 @@ H.is_valid_config_symbols = function(x, x_name)
 
   if type(x) ~= 'table' then return false, H.msg_config(x_name, 'table') end
 
+  -- Encode symbols is `nil` by default
+  if x.encode ~= nil then
+    local ok_encode, msg_encode = H.is_encode_symbols(x.encode, x_name .. '.encode')
+    if not ok_encode then return ok_encode, msg_encode end
+  end
+
   -- Current line
   if not H.is_string(x.scroll_line) then return false, H.msg_config(x_name .. '.scroll_line', 'string') end
 
   -- Current view
   if not H.is_string(x.scroll_view) then return false, H.msg_config(x_name .. '.scroll_view', 'string') end
-
-  -- Encode symbols
-  local ok_encode, msg_encode = H.is_encode_symbols(x.encode, x_name .. '.encode')
-  if not ok_encode then return ok_encode, msg_encode end
 
   return true
 end
@@ -861,8 +849,8 @@ H.is_valid_config_window = function(x, x_name)
   end
 
   -- Show "more" integration symbols
-  if type(x.show_more_integrations) ~= 'boolean' then
-    return false, H.msg_config(x_name .. '.show_more_integrations', 'boolean')
+  if type(x.show_integration_count) ~= 'boolean' then
+    return false, H.msg_config(x_name .. '.show_integration_count', 'boolean')
   end
 
   -- Window local 'winblend'
@@ -943,14 +931,16 @@ H.update_map_lines = function()
 
   local encoded_lines
   local scrollbar_prefix = string.rep(' ', offset)
+  local encode_symbols = opts.symbols.encode or H.block_symbols['3x2']
   if n_cols <= 0 then
     -- Case of "only scroll indicator". Needed to make scrollbar correctly
     -- travel from buffer top to bottom.
     encoded_lines = H.tbl_repeat(scrollbar_prefix, n_rows)
   else
     -- Case of "full minimap"
-    encoded_lines =
-      MiniMap.encode_strings(buf_lines, { n_cols = n_cols, n_rows = n_rows, symbols = opts.symbols.encode })
+    local encode_opts = { n_cols = n_cols, n_rows = n_rows, symbols = encode_symbols }
+    encoded_lines = MiniMap.encode_strings(buf_lines, encode_opts)
+
     -- Add whitespace for scrollbar
     encoded_lines = vim.tbl_map(function(x) return string.format('%s%s', scrollbar_prefix, x) end, encoded_lines)
   end
@@ -959,7 +949,7 @@ H.update_map_lines = function()
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, encoded_lines)
 
   -- Cache encode data to speed up most frequent scrollbar computation
-  local source_rows, resolution_row = #buf_lines, opts.symbols.encode.resolution.row
+  local source_rows, resolution_row = #buf_lines, encode_symbols.resolution.row
   MiniMap.current.encode_data = {
     source_rows = source_rows,
     rescaled_rows = math.min(source_rows, n_rows * resolution_row),
@@ -1033,31 +1023,31 @@ H.update_map_integrations = function()
   -- after such were already visible
   if H.is_pure_scrollbar() then return end
 
-  -- Add line highlights
+  -- Add line highlights. Use latest one for every map line.
   local line_counts = {}
-  for i, integration in ipairs(integrations) do
+  for _, integration in ipairs(integrations) do
     local line_hl = integration()
     for _, lh in ipairs(line_hl) do
       local map_line = H.sourceline_to_mapline(lh.line)
-      line_counts[map_line] = (line_counts[map_line] or 0) + 1
-      -- Make sure that integration highlights are placed over previous ones
-      H.add_line_hl(buf_id, ns_id, lh.hl_group, map_line - 1, 10 + i)
+      local cur_count = line_counts[map_line] or 0
+      line_counts[map_line] = cur_count + 1
+
+      -- Actually highlight only first map line occurence
+      if cur_count == 0 then H.add_line_hl(buf_id, ns_id, lh.hl_group, map_line - 1) end
     end
   end
 
   -- Possibly add integration counts
-  if not H.get_config().window.show_more_integrations then return end
+  if not MiniMap.current.opts.window.show_integration_count then return end
 
-  local col = math.max(MiniMap.current.scrollbar_data.offset - 1, 0)
+  local col = MiniMap.current.scrollbar_data.offset - 1
   for l, count in pairs(line_counts) do
     if count > 1 then
       local text = count > 9 and '+' or tostring(count)
       local extmark_opts = {
-        virt_text = { { text, 'MiniMapSymbolMore' } },
+        virt_text = { { text, 'MiniMapSymbolCount' } },
         virt_text_pos = 'overlay',
         hl_mode = 'blend',
-        -- Make it show above scrollbar
-        priority = 12,
       }
       H.set_extmark_safely(buf_id, ns_id, l - 1, col, extmark_opts)
     end
@@ -1101,7 +1091,7 @@ H.is_encode_symbols = function(x, x_name)
 
   local two_power = x.resolution.col * x.resolution.row
   for i = 1, 2 ^ two_power do
-    if not H.is_string(x[i]) then return false, H.msg_config(string.format('%s[%d]', x_name, i), 'single character') end
+    if not H.is_string(x[i]) then return false, H.msg_config(string.format('%s[%d]', x_name, i), 'string') end
   end
 
   return true
@@ -1126,17 +1116,8 @@ H.validate_if = function(predicate, x, x_name)
   if not is_valid then H.error(msg) end
 end
 
--- Use `priority` in Neovim 0.7 because of the regression bug (highlights are
--- not stacked properly): https://github.com/neovim/neovim/issues/17358
-if vim.fn.has('nvim-0.7') == 1 then
-  H.add_line_hl = function(buf_id, ns_id, hl_group, line, priority)
-    --stylua: ignore
-    vim.highlight.range(buf_id, ns_id, hl_group, { line, MiniMap.current.scrollbar_data.offset }, { line, -1 }, { priority = priority })
-  end
-else
-  H.add_line_hl = function(buf_id, ns_id, hl_group, line)
-    vim.highlight.range(buf_id, ns_id, hl_group, { line, MiniMap.current.scrollbar_data.offset }, { line, -1 })
-  end
+H.add_line_hl = function(buf_id, ns_id, hl_group, line)
+  pcall(vim.highlight.range, buf_id, ns_id, hl_group, { line, MiniMap.current.scrollbar_data.offset }, { line, -1 })
 end
 
 H.set_extmark_safely = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
