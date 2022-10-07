@@ -2,7 +2,7 @@
 
 -- TODO:
 -- Code:
--- - Figure out a way to use `integrations = {}` in default config.
+-- - Polish "pure scrollbar"
 --
 -- Tests:
 --
@@ -16,8 +16,8 @@
 --         - '▒' - '█'.
 --     - Line - '🮚', '▶'.
 --     - View - '┋'.
--- - Update is done in asynchronous (non-blocking) fashion.
--- - Works best with global statusline. Or use |MiniMap.toggle_side()|.
+-- - Works best with global statusline. Otherwise |MiniMap.toggle()| and
+--   |MiniMap.toggle_side()| are useful to temporary show needed data.
 -- - Justification of supporting only line highlighting and cursor movement:
 --     - Implementation. It is unnecessarily hard to correctly implement column
 --       conversion from source to map coordinates. This is mostly because of
@@ -48,9 +48,22 @@
 --- to buffer inside `vim.b.minimap_config` which should have same structure
 --- as `MiniMap.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
+--- # Dependencies~
+---
+--- Suggested dependencies (provide extra functionality for integrations):
+--- - Plugin 'lewis6991/gitsigns.nvim' for Git status highlighting via
+---   |MiniMap.gen_integration.gitsigns()|. If missing, no highlighting is added.
+---
 --- # Comparisons~
 ---
 --- - 'wfxr/minimap.vim':
+---     - 'mini.map' doesn't have dependencies while being as fast as Rust
+---       dependency of 'minimap.vim'.
+---     - 'mini.map' can customize encode symbols.
+---     - 'mini.map' can customize integrations.
+---     - 'mini.map' provides slightly different visual interface: scrollbar and
+---       integration counts.
+---     - 'mini.map' updates in asynchronous (non-blocking) fashion.
 --- - 'nvim-scrollbar':
 --- - 'lewis6991/satellite.nvim':
 ---
@@ -86,12 +99,9 @@ MiniMap.setup = function(config)
 
   -- Module behavior
   vim.api.nvim_exec(
-    -- Using `vim.schedule()` for `on_content_change()` helps computing more
-    -- precise buffer data. Example: if omitted, terminal buffer is recognized
-    -- as normal and thus map is updated.
     [[augroup MiniMap
         au!
-        au BufEnter,BufWritePost,TextChanged,VimResized * lua vim.schedule(MiniMap.on_content_change)
+        au BufEnter,BufWritePost,TextChanged,VimResized * lua MiniMap.on_content_change()
         au CursorMoved,WinScrolled * lua MiniMap.on_view_change()
         au CursorMoved * lua MiniMap.on_cursor_change()
         au WinLeave * lua MiniMap.on_winleave()
@@ -165,21 +175,10 @@ MiniMap.config = {
 ---   tabpage. Keys: tabpage identifier. Values: window identifier.
 --- - <opts> - current options used to control map display. Same structure
 ---   as |MiniMap.config|.
---- - <encode_data> - table with information used for latest buffer lines
----   encoding. Used for quick conversion between source and map coordinates.
---- - <scrollbar_data> - table with information about scrollbar. Fields:
----     - <view> - table with <from_line> and <to_line> keys representing lines
----       for start and end of current buffer view.
----     - <line> - current line number.
----     - <offset> - whitespace offset in map window used to display scrollbar
----       and integration count. Equal to maximum width of `opts.symbols.scroll_line`
----       and `opts.symbols.scroll_view` possibly plus one for integration count.
 MiniMap.current = {
   buf_data = {},
   win_data = {},
-  encode_data = {},
   opts = MiniMap.config,
-  scrollbar_data = {},
 }
 
 -- Module functionality =======================================================
@@ -310,8 +309,9 @@ MiniMap.open = function(opts)
   vim.api.nvim_win_call(win_id, function()
     --stylua: ignore
     local options = {
-      'buftype=nofile',   'foldcolumn=0', 'foldlevel=999', 'matchpairs=',   'nobuflisted',
-      'nomodeline',       'noreadonly',   'noswapfile',    'signcolumn=no', 'synmaxcol&',
+      'buftype=nofile', 'foldcolumn=0', 'foldlevel=999', 'matchpairs=',   'nobuflisted',
+      'nomodeline',     'noreadonly',   'noswapfile',    'signcolumn=no', 'synmaxcol&',
+      'nowrap'
     }
     -- Vim's `setlocal` is currently more robust comparing to `opt_local`
     vim.cmd(('silent! noautocmd setlocal %s'):format(table.concat(options, ' ')))
@@ -347,10 +347,8 @@ MiniMap.refresh = function(opts, parts)
   MiniMap.current.opts = opts
 
   -- Update current data
-  MiniMap.current.scrollbar_data.offset = math.max(
-    H.str_width(opts.symbols.scroll_line),
-    H.str_width(opts.symbols.scroll_view)
-  ) + (opts.window.show_integration_count and 1 or 0)
+  H.cache.scrollbar_data.offset = math.max(H.str_width(opts.symbols.scroll_line), H.str_width(opts.symbols.scroll_view))
+    + (opts.window.show_integration_count and 1 or 0)
 
   -- Update window options
   H.update_window_opts()
@@ -382,18 +380,18 @@ MiniMap.toggle_focus = function(use_previous_cursor)
 
   if cur_win == map_win then
     -- Focus on previous window
-    vim.api.nvim_set_current_win(H.cache.previous_win_id)
+    vim.api.nvim_set_current_win(H.cache.previous_win.id)
 
     -- Use either previous cursor or first non-whitespace character
     if use_previous_cursor then
-      vim.api.nvim_win_set_cursor(0, H.cache.previous_cursor)
+      vim.api.nvim_win_set_cursor(0, H.cache.previous_win.cursor)
     else
       vim.cmd('normal! ^')
     end
   else
     -- Put cursor in map window at line indicator to the right of scrollbar
     local map_line = H.sourceline_to_mapline(vim.fn.line('.'))
-    vim.api.nvim_win_set_cursor(map_win, { map_line, MiniMap.current.scrollbar_data.offset })
+    vim.api.nvim_win_set_cursor(map_win, { map_line, H.cache.scrollbar_data.offset })
 
     -- Focus on map window
     vim.api.nvim_set_current_win(map_win)
@@ -426,7 +424,7 @@ MiniMap.gen_integration.builtin_search = function(hl_groups)
   vim.api.nvim_exec(
     [[augroup MiniMapBuiltinSearch
         au!
-        au OptionSet hlsearch lua MiniMap.refresh({}, { lines = false, view = false })
+        au OptionSet hlsearch lua MiniMap.on_integration_change()
       augroup END]],
     false
   )
@@ -438,7 +436,7 @@ MiniMap.gen_integration.builtin_search = function(hl_groups)
     if vim.v.hlsearch == 0 or not vim.o.hlsearch then return {} end
 
     -- Do nothing if not inside source buffer (can happen in map buffer, for example)
-    if vim.api.nvim_get_current_buf() ~= MiniMap.current.buf_data.source then return {} end
+    if not H.is_source_buffer() then return {} end
 
     -- Save window view to later restore, as the only way to get positions of
     -- search matches seems to be consecutive application of `search()` and
@@ -479,7 +477,7 @@ MiniMap.gen_integration.diagnostics = function(hl_groups)
   vim.api.nvim_exec(
     [[augroup MiniMapDiagnostics
         au!
-        au DiagnosticChanged * lua MiniMap.refresh({}, { lines = false, view = false })
+        au DiagnosticChanged * lua MiniMap.on_integration_change()
       augroup END]],
     false
   )
@@ -503,14 +501,16 @@ MiniMap.gen_integration.diagnostics = function(hl_groups)
   end
 end
 
+--- Integration for git signs
+---
+--- Requires 'lewis6991/gitsigns.nvim'.
 MiniMap.gen_integration.gitsigns = function(hl_groups)
   if hl_groups == nil then hl_groups = { add = 'GitSignsAdd', change = 'GitSignsChange', delete = 'GitSignsDelete' } end
 
-  -- Defer refresh due to async implementation of 'gitsigns.nvim'
   vim.api.nvim_exec(
     [[augroup MiniMapGitsigns
         au!
-        au User GitsignsUpdate lua vim.schedule(function() MiniMap.refresh({}, { lines = false, view = false }) end)
+        au User GitSignsUpdate lua MiniMap.on_integration_change()
       augroup END]],
     false
   )
@@ -519,7 +519,7 @@ MiniMap.gen_integration.gitsigns = function(hl_groups)
     local gitsigns = require('gitsigns')
     if gitsigns == nil then return {} end
 
-    local ok, hunks = pcall(gitsigns.get_hunks)
+    local ok, hunks = pcall(gitsigns.get_hunks, MiniMap.current.buf_data.source)
     if not ok or hunks == nil then return {} end
 
     local line_hl = {}
@@ -531,8 +531,7 @@ MiniMap.gen_integration.gitsigns = function(hl_groups)
       -- - Delete - single first line if nothing was added.
       -- - Change - added lines that are within first removed lines.
       -- - Added - added lines after first removed lines.
-      -- - Traverse from end to show first lines on top.
-      for i = n_lines, 1, -1 do
+      for i = 1, n_lines do
         local hl_type = (n_added < i and 'delete') or (i <= n_removed and 'change' or 'add')
         table.insert(line_hl, { line = from_line + i - 1, hl_group = hl_groups[hl_type] })
       end
@@ -542,15 +541,23 @@ MiniMap.gen_integration.gitsigns = function(hl_groups)
   end
 end
 
-MiniMap.on_content_change = function()
+MiniMap.on_content_change = vim.schedule_wrap(function()
+  -- Using `vim.schedule_wrap()` helps computing more precise buffer data.
+  -- Example: if omitted, terminal buffer is recognized as normal and thus map
+  -- is updated.
   if not H.is_proper_buftype() then return end
   MiniMap.refresh()
-end
+end)
 
-MiniMap.on_view_change = function()
-  if not H.is_proper_buftype() then return end
+MiniMap.on_view_change = vim.schedule_wrap(function()
+  if not (H.is_proper_buftype() and H.is_source_buffer()) then return end
   MiniMap.refresh({}, { integrations = false, lines = false })
-end
+end)
+
+MiniMap.on_integration_change = vim.schedule_wrap(function()
+  if not (H.is_proper_buftype() and H.is_source_buffer()) then return end
+  MiniMap.refresh({}, { lines = false, scrollbar = false })
+end)
 
 MiniMap.on_cursor_change = function()
   -- Operate only inside map window
@@ -559,12 +566,12 @@ MiniMap.on_cursor_change = function()
 
   -- Don't allow putting cursor inside offset (where scrollbar is)
   local cur_pos = vim.api.nvim_win_get_cursor(map_win)
-  if cur_pos[2] < MiniMap.current.scrollbar_data.offset then
-    vim.api.nvim_win_set_cursor(map_win, { cur_pos[1], MiniMap.current.scrollbar_data.offset })
+  if cur_pos[2] < H.cache.scrollbar_data.offset then
+    vim.api.nvim_win_set_cursor(map_win, { cur_pos[1], H.cache.scrollbar_data.offset })
   end
 
   -- Synchronize cursors in map and previous window
-  local prev_win_id = H.cache.previous_win_id
+  local prev_win_id = H.cache.previous_win.id
   if prev_win_id == nil then return end
 
   vim.api.nvim_win_set_cursor(prev_win_id, { H.mapline_to_sourceline(cur_pos[1]), 0 })
@@ -574,10 +581,10 @@ MiniMap.on_cursor_change = function()
 end
 
 MiniMap.on_winleave = function()
-  if not H.is_proper_buftype() then return end
+  if not (H.is_proper_buftype() and H.is_source_buffer()) then return end
 
-  H.cache.previous_win_id = vim.api.nvim_get_current_win()
-  H.cache.previous_cursor = vim.api.nvim_win_get_cursor(0)
+  H.cache.previous_win.id = vim.api.nvim_get_current_win()
+  H.cache.previous_win.cursor = vim.api.nvim_win_get_cursor(0)
 end
 
 -- Helper data ================================================================
@@ -585,7 +592,18 @@ end
 H.default_config = MiniMap.config
 
 -- Cache for various operations
-H.cache = {}
+H.cache = {
+  -- Data about previous window. Used for focus related computations.
+  previous_win = {},
+
+  -- Table with information used for latest buffer lines encoding. Used for
+  -- quick conversion between source and map coordinates.
+  encode_data = {},
+
+  -- Table with information about scrollbar. Used for quick scrollbar related
+  -- computations.
+  scrollbar_data = { view = {}, line = nil },
+}
 
 H.ns_id = {
   integrations = vim.api.nvim_create_namespace('MiniMapIntegrations'),
@@ -867,7 +885,8 @@ H.msg_config = function(x_name, msg) return string.format('`%s` should be %s.', 
 H.normalize_window_options = function(win_opts, full)
   if full == nil then full = true end
 
-  local has_tabline, has_statusline = vim.o.showtabline > 0, vim.o.laststatus > 0
+  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local has_statusline = vim.o.laststatus > 0
   local anchor, col = 'NE', vim.o.columns
   if win_opts.side == 'left' then
     anchor, col = 'NW', 0
@@ -917,7 +936,7 @@ H.update_map_lines = function()
   local win_id = H.get_current_map_win()
 
   -- Compute output number of rows and columns to fit currently shown window
-  local offset = MiniMap.current.scrollbar_data.offset
+  local offset = H.cache.scrollbar_data.offset
   local n_cols = vim.api.nvim_win_get_width(win_id) - offset
   local n_rows = vim.api.nvim_win_get_height(win_id)
 
@@ -950,7 +969,7 @@ H.update_map_lines = function()
 
   -- Cache encode data to speed up most frequent scrollbar computation
   local source_rows, resolution_row = #buf_lines, encode_symbols.resolution.row
-  MiniMap.current.encode_data = {
+  H.cache.encode_data = {
     source_rows = source_rows,
     rescaled_rows = math.min(source_rows, n_rows * resolution_row),
     resolution_row = resolution_row,
@@ -958,14 +977,14 @@ H.update_map_lines = function()
   }
 
   -- Force scrollbar update
-  MiniMap.current.scrollbar_data.view, MiniMap.current.scrollbar_data.line = {}, nil
+  H.cache.scrollbar_data.view, H.cache.scrollbar_data.line = {}, nil
 end
 
 H.update_map_scrollbar = function()
   if not H.is_window_open() then return end
 
   local buf_id = MiniMap.current.buf_data.map
-  local cur_view, cur_line = MiniMap.current.scrollbar_data.view or {}, MiniMap.current.scrollbar_data.line
+  local cur_view, cur_line = H.cache.scrollbar_data.view or {}, H.cache.scrollbar_data.line
   local symbols = MiniMap.current.opts.symbols
 
   -- View
@@ -986,7 +1005,7 @@ H.update_map_scrollbar = function()
       H.set_extmark_safely(buf_id, ns_id, i - 1, 0, extmark_opts)
     end
 
-    MiniMap.current.scrollbar_data.view = view
+    H.cache.scrollbar_data.view = view
   end
 
   -- Current line
@@ -1004,7 +1023,7 @@ H.update_map_scrollbar = function()
     local map_line = H.sourceline_to_mapline(scroll_line)
 
     H.set_extmark_safely(buf_id, ns_id, map_line - 1, 0, extmark_opts)
-    MiniMap.current.scrollbar_data.line = scroll_line
+    H.cache.scrollbar_data.line = scroll_line
   end
 end
 
@@ -1040,7 +1059,7 @@ H.update_map_integrations = function()
   -- Possibly add integration counts
   if not MiniMap.current.opts.window.show_integration_count then return end
 
-  local col = MiniMap.current.scrollbar_data.offset - 1
+  local col = H.cache.scrollbar_data.offset - 1
   for l, count in pairs(line_counts) do
     if count > 1 then
       local text = count > 9 and '+' or tostring(count)
@@ -1055,19 +1074,19 @@ H.update_map_integrations = function()
 end
 
 H.sourceline_to_mapline = function(source_line)
-  local data = MiniMap.current.encode_data
+  local data = H.cache.encode_data
   local coef = data.rescaled_rows / data.source_rows
   local rescaled_row = math.floor(coef * (source_line - 1)) + 1
   local res = math.floor((rescaled_row - 1) / data.resolution_row) + 1
-  return math.min(res, data.map_rows)
+  return math.min(math.max(res, 1), data.map_rows)
 end
 
 H.mapline_to_sourceline = function(map_line)
-  local data = MiniMap.current.encode_data
+  local data = H.cache.encode_data
   local coef = data.rescaled_rows / data.source_rows
   local rescaled_row = (map_line - 1) * data.resolution_row + 1
   local res = math.ceil((rescaled_row - 1) / coef) + 1
-  return math.min(res, data.source_rows)
+  return math.min(math.max(res, 1), data.source_rows)
 end
 
 -- Predicates ------------------------------------------------------------------
@@ -1102,9 +1121,11 @@ H.is_proper_buftype = function()
   return buf_type == '' or buf_type == 'help'
 end
 
+H.is_source_buffer = function() return vim.api.nvim_get_current_buf() == MiniMap.current.buf_data.source end
+
 H.is_pure_scrollbar = function()
   local win_id = H.get_current_map_win()
-  local offset = MiniMap.current.scrollbar_data.offset
+  local offset = H.cache.scrollbar_data.offset
   return vim.api.nvim_win_get_width(win_id) <= offset
 end
 
@@ -1117,7 +1138,7 @@ H.validate_if = function(predicate, x, x_name)
 end
 
 H.add_line_hl = function(buf_id, ns_id, hl_group, line)
-  pcall(vim.highlight.range, buf_id, ns_id, hl_group, { line, MiniMap.current.scrollbar_data.offset }, { line, -1 })
+  pcall(vim.highlight.range, buf_id, ns_id, hl_group, { line, H.cache.scrollbar_data.offset }, { line, -1 })
 end
 
 H.set_extmark_safely = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
