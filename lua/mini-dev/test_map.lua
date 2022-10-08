@@ -34,17 +34,21 @@ local eq_keys = function(tbl, ref_keys)
   eq(test_keys, ref_keys_copy)
 end
 
-local get_latest_message = function() return child.cmd_capture('1messages') end
-
 local get_mode = function() return child.api.nvim_get_mode()['mode'] end
+
+local str_width = function(x)
+  -- Use first returned value (UTF-32 index, and not UTF-16 one)
+  local res = vim.str_utfindex(x)
+  return res
+end
 
 local get_resolution_test_file = function(id) return 'tests/dir-map/resolution_' .. id end
 
-local open_map = function(opts) child.lua('MiniMap.open(...)', { opts }) end
+local map_open = function(opts) child.lua('MiniMap.open(...)', { opts }) end
 
-local refresh_map = function(opts, parts) child.lua('MiniMap.refresh(...)', { opts, parts }) end
+local map_refresh = function(opts, parts) child.lua('MiniMap.refresh(...)', { opts, parts }) end
 
-local close_map = function() child.lua('MiniMap.close()') end
+local map_close = function() child.lua('MiniMap.close()') end
 
 local get_map_buf_id = function() return child.lua_get('MiniMap.current.buf_data.map') end
 
@@ -52,6 +56,21 @@ local get_map_win_id =
   function() return child.lua_get('MiniMap.current.win_data[vim.api.nvim_get_current_tabpage()]') end
 
 local get_current = function() return child.lua_get('MiniMap.current') end
+
+local get_map_lines = function()
+  local buf_id = get_map_buf_id()
+
+  local lines = child.api.nvim_buf_get_lines(buf_id, 0, -1, true)
+
+  -- Remove whitespace prefixes
+  local current = get_current()
+  local offset = math.max(str_width(current.opts.symbols.scroll_line), str_width(current.opts.symbols.scroll_view))
+    + (current.opts.window.show_integration_count and 1 or 0)
+
+  return vim.tbl_map(function(x) return x:sub(offset + 1) end, lines)
+end
+
+local get_map_width = function() return child.api.nvim_win_get_width(get_map_win_id()) end
 
 -- Output test set
 T = new_set({
@@ -118,7 +137,7 @@ T['setup()']['creates `config` field'] = function()
   local expect_config = function(field, value) eq(child.lua_get('MiniMap.config.' .. field), value) end
 
   -- Check default values
-  expect_config('integrations', {})
+  expect_config('integrations', vim.NIL)
 
   expect_config('symbols.encode', vim.NIL)
   expect_config('symbols.scroll_line', '█')
@@ -127,7 +146,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('window.side', 'right')
   expect_config('window.show_integration_count', true)
   expect_config('window.width', 10)
-  expect_config('window.winblend', 25)
+  expect_config('window.winblend', 50)
 end
 
 T['setup()']['respects `config` argument'] = function()
@@ -276,28 +295,14 @@ T['open()']['works'] = function()
   set_lines(example_lines)
   set_cursor(1, 0)
 
-  open_map()
+  map_open()
 
   child.expect_screenshot()
 end
 
-T['open()']['correctly update `MiniMap.current`'] = function()
-  open_map()
-  local current = get_current()
-
-  eq_keys(current, { 'buf_data', 'opts', 'win_data' })
-
-  eq_keys(current.buf_data, { 'map', 'source' })
-  eq(current.buf_data.source, child.api.nvim_get_current_buf())
-
-  eq(current.opts, child.lua_get('MiniMap.config'))
-
-  eq_keys(current.win_data, { child.api.nvim_get_current_tabpage() })
-end
-
 T['open()']['correctly computes window config'] = function()
   child.set_size(30, 20)
-  open_map()
+  map_open()
   local win_id = get_map_win_id()
 
   eq(child.api.nvim_win_get_config(win_id), {
@@ -330,7 +335,7 @@ end
 T['open()']['respects `opts.window` argument'] = function()
   set_lines(example_lines)
   local opts = { window = { side = 'left', show_integration_count = false, width = 15, winblend = 50 } }
-  open_map(opts)
+  map_open(opts)
 
   child.expect_screenshot()
   eq(child.api.nvim_win_get_option(get_map_win_id(), 'winblend'), 50)
@@ -339,11 +344,33 @@ T['open()']['respects `opts.window` argument'] = function()
   eq(child.lua_get('MiniMap.current.opts.window'), opts.window)
 end
 
-T['open()']['respects `MiniMap.config.window`'] = function()
+T['open()']['respects `MiniMap.config`'] = function()
   child.lua('MiniMap.config.window.width = 20')
-  open_map()
+  map_open()
   eq(child.api.nvim_win_get_width(get_map_win_id()), 20)
   eq(child.lua_get('MiniMap.current.opts.window.width'), 20)
+end
+
+T['open()']['respects `MiniMap.current`'] = function()
+  child.lua([[MiniMap.current.opts = { window = { side = 'left' } }]])
+  map_open()
+  local win_config = child.api.nvim_win_get_config(get_map_win_id())
+  eq(win_config.anchor, 'NW')
+  eq(win_config.col, 0)
+end
+
+T['open()']['correctly updates `MiniMap.current`'] = function()
+  map_open()
+  local current = get_current()
+
+  eq_keys(current, { 'buf_data', 'opts', 'win_data' })
+
+  eq_keys(current.buf_data, { 'map', 'source' })
+  eq(current.buf_data.source, child.api.nvim_get_current_buf())
+
+  eq(current.opts, child.lua_get('MiniMap.config'))
+
+  eq_keys(current.win_data, { child.api.nvim_get_current_tabpage() })
 end
 
 T['open()']['respects important options when computing window height'] = function()
@@ -354,11 +381,11 @@ T['open()']['respects important options when computing window height'] = functio
       child.o[name] = value
     end
 
-    open_map()
+    map_open()
     local config = child.api.nvim_win_get_config(get_map_win_id())
     eq(config.row, row)
     eq(config.height, height)
-    close_map()
+    map_close()
 
     for name, value in pairs(default_opts) do
       child.o[name] = value
@@ -388,19 +415,42 @@ T['open()']['respects important options when computing window height'] = functio
 end
 
 T['open()']['can be used with already opened window'] = function()
-  open_map()
+  map_open()
   local current = get_current()
-  expect.no_error(open_map)
+  expect.no_error(map_open)
   eq(current, get_current())
 end
 
+T['open()']['can be used in multiple tabpages'] = function()
+  local init_tabpage = child.api.nvim_get_current_tabpage()
+  map_open()
+  child.cmd('tabedit')
+  local second_tabpage = child.api.nvim_get_current_tabpage()
+
+  -- Shouldn't be open in new tabpage
+  eq(get_map_win_id(), vim.NIL)
+
+  -- Should open window and register it as second opened
+  map_open()
+  eq(#get_current().win_data, 2)
+  eq(get_map_win_id() ~= nil, true)
+
+  -- Should be independently closed
+  child.api.nvim_set_current_tabpage(init_tabpage)
+  map_close()
+  eq(child.lua_get('vim.tbl_count(MiniMap.current.win_data)'), 1)
+  eq(get_map_win_id(), vim.NIL)
+
+  child.api.nvim_set_current_tabpage(second_tabpage)
+  eq(get_map_win_id() ~= nil, true)
+end
+
 T['open()']['can open pure scrollbar'] = function()
-  -- child.set_size(15, 30)
-  -- set_lines(example_lines)
-  -- set_cursor(24, 0)
-  -- child.cmd('normal! zz')
-  -- open_map({ window = { width = 1 } })
-  -- child.expect_screenshot()
+  set_lines(example_lines)
+  set_cursor(15, 0)
+  child.cmd('normal! zz')
+  map_open({ window = { width = 1 } })
+  child.expect_screenshot()
 end
 
 T['open()']['respects `vim.{g,b}.minimap_disable`'] = new_set({
@@ -409,18 +459,44 @@ T['open()']['respects `vim.{g,b}.minimap_disable`'] = new_set({
   test = function(var_type)
     child[var_type].minimap_disable = true
 
-    open_map()
+    map_open()
     eq(#child.api.nvim_list_wins(), 1)
   end,
 })
 
 T['refresh()'] = new_set()
 
-T['refresh()']['works'] = function() MiniTest.skip() end
+T['refresh()']['works without opened map'] = function() expect.no_error(map_refresh) end
+
+T['refresh()']['is not affected by `MiniMap.config.window`'] = function()
+  child.lua('MiniMap.config.window.width = 10')
+
+  map_open()
+  eq(get_map_width(), 10)
+
+  child.lua('MiniMap.config.window.width = 20')
+  map_refresh()
+  eq(get_map_width(), 10)
+end
+
+T['refresh()']['updates `MiniMap.current`'] = function()
+  child.lua('MiniMap.config.window.width = 20')
+  map_open()
+  eq(child.api.nvim_win_get_width(get_map_win_id()), 20)
+  eq(child.lua_get('MiniMap.current.opts.window.width'), 20)
+end
+
+T['refresh()']['respects `MiniMap.current`'] = function()
+  -- This should check that any future interactive refresh keeps windows in
+  -- sync options
+  MiniTest.skip()
+end
 
 T['close()'] = new_set()
 
 T['close()']['works'] = function() MiniTest.skip() end
+
+T['close()']['resets `MiniMap.current.opts` after closing last map window'] = function() MiniTest.skip() end
 
 T['toggle()'] = new_set()
 
@@ -448,10 +524,9 @@ end
 T['current'] = new_set()
 
 T['current']['has initial value'] = function()
-  local config = child.lua_get('MiniMap.config')
   eq(get_current(), {
     buf_data = {},
-    opts = config,
+    opts = {},
     win_data = {},
   })
 end
@@ -500,9 +575,14 @@ T['Window'] = new_set()
 
 T['Window']['works'] = function() MiniTest.skip() end
 
-T['Window']['can be opened in multiple tabpages'] = function() MiniTest.skip() end
-
 T['Window']['implements buffer local mappings'] = function() MiniTest.skip() end
+
+T['Window']['respects `MiniMap.current` on every update'] = function()
+  -- Open window in one tabpage
+  -- Open window in other tabpage
+  -- Refresh with different options map window in first tabpage
+  -- Switch to second tabpage and verify it is shown with updated config
+end
 
 T['Window']['can work as pure scrollbar'] = function() MiniTest.skip() end
 

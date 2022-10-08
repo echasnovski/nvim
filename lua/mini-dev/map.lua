@@ -2,7 +2,6 @@
 
 -- TODO:
 -- Code:
--- - Polish "pure scrollbar"
 --
 -- Tests:
 --
@@ -32,9 +31,44 @@
 --     - Faster.
 
 -- Documentation ==============================================================
---- Current buffer overview.
+--- Buffer overview with scrollbar and highlights
 ---
 --- Features:
+--- - Show and manage special floating window displaying overview of current
+---   buffer. Window takes up whole height of Neovim instance and is fixed to a
+---   left/right side. Map content is computed by taking all current lines,
+---   converting it to binary whitespace/non-whitespace mask, rescaling to
+---   appropriate dimensions, and converting back to strings with special
+---   encoding symbols.
+---
+--- - Show scrollbar next to map content. It represents current line and view
+---   (top and bottom visible lines). Can be the only thing showed making map
+---   window a "pure scrollbar". See "Pure scrollbar config" section in
+---   |MiniMap.config|.
+---
+--- - Highlight map lines representing certain data in current buffer. This is
+---   done via configurable callables, called integrations (see "Integrations"
+---   section in |MiniMap.config|). There pre-built generators for common
+---   integrations: builtin search, diagnostics, git line status (see
+---   |MiniMap.gen_integration|).
+---
+--- - All updates (content, scrollbar, integrations) are done in asynchronous
+---   (non-blocking) fashion.
+---
+--- - Focus on map window to quickly browse current buffer. To focus back, hit
+---   <CR> to accept current explored position or <Esc> to go back to original
+---   position. See |MiniMap.toggle_focus()|.
+---
+--- - Customizable via |MiniMap.config| and/or `opts` argument of |MiniMap.open()|
+---   or |MiniMap.refresh()|:
+---     - Encoding symbols used to display binary information of different
+---       resolution (default is 3x2). There are pre-built generators for
+---       different basic character families and resolutions. See
+---       |MiniMap.gen_encode_symbols|.
+---     - Scrollbar symbols, separate for line and view. Can have any width
+---       (even zero, which virtually disables scrollbar).
+---     - Integrations producing map line highlights.
+---     - Window options: side (left/right), width, 'winblend', and more.
 ---
 --- # Setup~
 ---
@@ -57,15 +91,37 @@
 --- # Comparisons~
 ---
 --- - 'wfxr/minimap.vim':
----     - 'mini.map' doesn't have dependencies while being as fast as Rust
----       dependency of 'minimap.vim'.
----     - 'mini.map' can customize encode symbols.
----     - 'mini.map' can customize integrations.
----     - 'mini.map' provides slightly different visual interface: scrollbar and
----       integration counts.
----     - 'mini.map' updates in asynchronous (non-blocking) fashion.
---- - 'nvim-scrollbar':
+---     - 'mini.map' doesn't have dependencies while being as fast as written
+---       in Rust dependency of 'minimap.vim'.
+---     - 'mini.map' uses floating window, while 'minimap.vim' uses regular one.
+---     - 'mini.map' provides slightly different visual interface with
+---       scrollbar and integration counts.
+---     - 'mini.map' allows encode symbols customization, 'minimap.vim' does not.
+---     - 'mini.map' allows full highlight integrations customization, while
+---       only builtin search and git status are supported in 'minimap.vim'.
+---     - 'mini.map' updates in asynchronous (non-blocking) fashion, 'minimap.vim'
+---       does not.
+---     - 'mini.map' can be used as a pure scrollbar, 'minimap.vim' can not.
+--- - 'dstein64/nvim-scrollview':
+---     - 'mini.map' has two-part scrollbar showing current line and view (with
+---       variable height), while 'nvim-scrollview' shows only current view
+---       (with fixed height).
+---     - 'nvim-scrollview' respects folds, i.e. shows view of visible lines,
+---       while 'mini.map' by design always shows view based on actual content.
+---     - 'nvim-scrollview' creates scrollbar which can be dragged with mouse,
+---       while 'mini.nvim' does not by design (use |MiniMap.toggle_focus()|).
+---     - 'mini.map' can show bufer outline, while 'nvim-scrollview' can not.
+---     - 'mini.map' can show highlight integrations, while 'nvim-scrollview'
+---       can not.
+--- - 'petertriho/nvim-scrollbar':
+---     - 'mini.map' has two-part scrollbar showing current line and view (with
+---       variable height), while 'nvim-scrollbar' shows only current view.
+---     - 'mini.map' can show bufer outline, while 'nvim-scrollbar' can not.
+---     - 'mini.map' has fully customizable highlight integrations, while
+---       'nvim-scrollbar' only supports diagnostics and search (with dependency).
 --- - 'lewis6991/satellite.nvim':
+---     - Almost the same differencies as with 'dstein64/nvim-scrollview', except
+---       'satellite.nvim' can display some builtin set of integration highlights.
 ---
 --- # Disabling~
 ---
@@ -76,6 +132,17 @@
 --- recipes.
 ---@tag mini.map
 ---@tag MiniMap
+
+--- How refresh works.
+--- When refresh is updated (on which buftypes, etc.).
+---@tag mini.map-lifecycle
+
+---@alias __opts table|nil Options used to define map configuration. Same structure
+---   as |MiniMap.config|. Will have effect until at least one tabpage has opened
+---   map window. Default values are taken in the following order:
+---   - From `opts` field of |MiniMap.current|.
+---   - From `vim.b.minimap_config`.
+---   - From |MiniMap.config|.
 
 -- Module definition ==========================================================
 -- TODO: Make local before release
@@ -134,16 +201,51 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Options ~
+---
+--- ## Symbols ~
+---
+--- ## Integrations ~
+---
+--- ## Window config
+---
+--- # Pure scrollbar config ~
+---
+--- "Pure scrollbar" is a config when only scrollbar is shown. It has
+--- following differencies from default "map" approach:
+--- - It doesn't perform line encoding with |MiniMap.encode_strings()|
+---   but instead uses encoding with fixed number of lines (equal to window
+---   height).
+--- - Integration highlights are not computed.
+---
+--- Config: >
+---   require('mini.map').setup({
+---     -- Customize `symbols` to your liking
+---
+---     window = {
+---       -- Set this to the maximum width of your scroll symbols (one with
+---       -- defaults) if you want only scrollbar shown or add one to also show
+---       -- one-column map with highlight integrations.
+---       width = 1,
+---
+---       -- Set this to your liking. Try values 0, 25, 50, 75, 100
+---       winblend = 100,
+---
+---       -- Don't need extra column
+---       show_integration_count = false,
+---     }
+---   })
 MiniMap.config = {
-  -- Highlight integrations
-  integrations = {},
+  -- Highlight integrations (none by default)
+  integrations = nil,
 
   -- Symbols used to display data
   symbols = {
-    -- Encode symbols. Default: `MiniMap.gen_encode_symbols.block('3x2')`
+    -- Encode symbols. See `:h MiniMap.config` for specification and
+    -- `:h MiniMap.gen_encode_symbols` for pre-built ones.
+    -- Default: solid blocks with 3x2 resolution.
     encode = nil,
 
-    -- Scrollbar for view and line. Use `''` (empty string) to disable any.
+    -- Scrollbar parts for view and line. Use empty string to disable any.
     scroll_line = '█',
     scroll_view = '┃',
   },
@@ -160,7 +262,7 @@ MiniMap.config = {
     width = 10,
 
     -- Value of 'winblend' option
-    winblend = 25,
+    winblend = 50,
   },
 }
 --minidoc_afterlines_end
@@ -174,11 +276,12 @@ MiniMap.config = {
 --- - <win_data> - table of window identifiers used to display map in certain
 ---   tabpage. Keys: tabpage identifier. Values: window identifier.
 --- - <opts> - current options used to control map display. Same structure
----   as |MiniMap.config|.
+---   as |MiniMap.config|. Takes precedence over global and buffer-local configs.
+---   Is reset when last map window is closed via |MiniMap.close()|.
 MiniMap.current = {
   buf_data = {},
   win_data = {},
-  opts = MiniMap.config,
+  opts = {},
 }
 
 -- Module functionality =======================================================
@@ -283,18 +386,27 @@ MiniMap.encode_strings = function(strings, opts)
   return H.mask_to_symbols(mask, opts)
 end
 
+--- Open map window
+---
+--- This creates and shows map window in current tabpage. It basically has
+--- two steps:
+--- - If not already done, create map buffer (used to set lines and other
+---   visual indicators) and map window.
+--- - Call |MiniMap.refresh()|.
+---
+---@param opts __opts
 MiniMap.open = function(opts)
   -- Early returns
   if H.is_disabled() then return end
 
+  -- Normalize input
+  opts = H.normalize_opts(opts)
+
+  -- Allow execution in case of already opened window
   if H.is_window_open() then
     MiniMap.refresh(opts)
     return
   end
-
-  -- Validate input
-  opts = vim.tbl_deep_extend('force', H.get_config(), opts or {})
-  H.validate_if(H.is_valid_opts, opts, 'opts')
 
   -- Open buffer and window
   local buf_id = MiniMap.current.buf_data.map
@@ -311,7 +423,7 @@ MiniMap.open = function(opts)
     local options = {
       'buftype=nofile', 'foldcolumn=0', 'foldlevel=999', 'matchpairs=',   'nobuflisted',
       'nomodeline',     'noreadonly',   'noswapfile',    'signcolumn=no', 'synmaxcol&',
-      'nowrap'
+      'nowrap',
     }
     -- Vim's `setlocal` is currently more robust comparing to `opt_local`
     vim.cmd(('silent! noautocmd setlocal %s'):format(table.concat(options, ' ')))
@@ -330,25 +442,30 @@ MiniMap.open = function(opts)
   MiniMap.refresh(opts)
 end
 
+--- Refresh map window
+---
+--- This function serves two purposes:
+--- - Update current map configuration via `opts`.
+--- - Update parts of displayed content via `parts`.
+---
+---@param opts __opts
 ---@param parts table|nil Which parts to update. Recognised keys with boolean
 ---   values (all `true` by default):
----   - <integrations> - whether to update integrations highlights.
+---   - <integrations> - whether to update integration highlights.
 ---   - <lines> - whether to update map lines.
 ---   - <scrollbar> - whether to update scrollbar.
 MiniMap.refresh = function(opts, parts)
   -- Early return
   if H.is_disabled() or not H.is_window_open() then return end
 
-  -- Validate input
+  -- Normalize input
+  opts = H.normalize_opts(opts)
   parts = vim.tbl_deep_extend('force', { integrations = true, lines = true, scrollbar = true }, parts or {})
-
-  opts = vim.tbl_deep_extend('force', H.get_config(), MiniMap.current.opts or {}, opts or {})
-  H.validate_if(H.is_valid_opts, opts, 'opts')
-  MiniMap.current.opts = opts
 
   -- Update current data
   H.cache.scrollbar_data.offset = math.max(H.str_width(opts.symbols.scroll_line), H.str_width(opts.symbols.scroll_view))
     + (opts.window.show_integration_count and 1 or 0)
+  MiniMap.current.opts = opts
 
   -- Update window options
   H.update_window_opts()
@@ -362,6 +479,10 @@ end
 MiniMap.close = function()
   pcall(vim.api.nvim_win_close, H.get_current_map_win(), true)
   H.set_current_map_win(nil)
+
+  -- Reset current options if closed last window so as to use config during
+  -- next opening
+  if vim.tbl_count(MiniMap.current.win_data) == 0 then MiniMap.current.opts = {} end
 end
 
 MiniMap.toggle = function(opts)
@@ -808,6 +929,12 @@ H.mask_to_symbols = function(mask, opts)
 end
 
 -- Work with config ------------------------------------------------------------
+H.normalize_opts = function(x)
+  x = vim.tbl_deep_extend('force', H.get_config(), MiniMap.current.opts or {}, x or {})
+  H.validate_if(H.is_valid_opts, x, 'opts')
+  return x
+end
+
 H.is_valid_opts = function(x, x_name)
   x_name = x_name or 'opts'
 
@@ -826,7 +953,9 @@ end
 H.is_valid_config_integrations = function(x, x_name)
   x_name = x_name or 'config.integrations'
 
-  if not H.is_array_of(x, vim.is_callable) then return false, H.msg_config(x_name, 'array of callables') end
+  if x ~= nil then
+    if not H.is_array_of(x, vim.is_callable) then return false, H.msg_config(x_name, 'array of callables') end
+  end
 
   return true
 end
@@ -948,30 +1077,36 @@ H.update_map_lines = function()
   -- executed asynchronously during Neovim closing)
   if #buf_lines == 0 then return end
 
-  local encoded_lines
-  local scrollbar_prefix = string.rep(' ', offset)
   local encode_symbols = opts.symbols.encode or H.block_symbols['3x2']
+  local source_rows, scrollbar_prefix = #buf_lines, string.rep(' ', offset)
+  local encoded_lines, rescaled_rows, resolution_row
   if n_cols <= 0 then
     -- Case of "only scroll indicator". Needed to make scrollbar correctly
     -- travel from buffer top to bottom.
     encoded_lines = H.tbl_repeat(scrollbar_prefix, n_rows)
+
+    -- Note that full encoding was done with single whitespace per line
+    rescaled_rows, resolution_row = n_rows, 1
   else
-    -- Case of "full minimap"
+    -- Case of "full map"
     local encode_opts = { n_cols = n_cols, n_rows = n_rows, symbols = encode_symbols }
     encoded_lines = MiniMap.encode_strings(buf_lines, encode_opts)
 
     -- Add whitespace for scrollbar
     encoded_lines = vim.tbl_map(function(x) return string.format('%s%s', scrollbar_prefix, x) end, encoded_lines)
+
+    -- Note that actual encoding was done
+    resolution_row = encode_symbols.resolution.row
+    rescaled_rows = math.min(source_rows, n_rows * resolution_row)
   end
 
   -- Set map lines. Compute encode data in a way used in mask rescaling
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, encoded_lines)
 
   -- Cache encode data to speed up most frequent scrollbar computation
-  local source_rows, resolution_row = #buf_lines, encode_symbols.resolution.row
   H.cache.encode_data = {
     source_rows = source_rows,
-    rescaled_rows = math.min(source_rows, n_rows * resolution_row),
+    rescaled_rows = rescaled_rows,
     resolution_row = resolution_row,
     map_rows = #encoded_lines,
   }
