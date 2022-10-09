@@ -17,6 +17,58 @@ local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
 
+-- Main function wrappers
+local map_open = function(opts) child.lua('MiniMap.open(...)', { opts }) end
+
+local map_refresh = function(opts, parts) child.lua('MiniMap.refresh(...)', { opts, parts }) end
+
+local map_close = function() child.lua('MiniMap.close()') end
+
+-- Helpers related to 'mini.map'
+local get_resolution_test_file = function(id) return 'tests/dir-map/resolution_' .. id end
+
+local get_map_win_id =
+  function() return child.lua_get('MiniMap.current.win_data[vim.api.nvim_get_current_tabpage()]') end
+
+local get_map_win_side = function()
+  local win_config = child.api.nvim_win_get_config(get_map_win_id())
+  if win_config.anchor == 'NE' and win_config.col == child.o.columns then return 'right' end
+  if win_config.anchor == 'NW' and win_config.col == 0 then return 'left' end
+  return 'something is wrong'
+end
+
+local get_current = function() return child.lua_get('MiniMap.current') end
+
+local get_map_width = function() return child.api.nvim_win_get_width(get_map_win_id()) end
+
+local disable_map_updates = function()
+  child.cmd([[
+    augroup MiniMap
+      au!
+    augroup END
+  ]])
+end
+
+local mock_diagnostic = function() child.cmd('source tests/dir-map/mock-diagnostic.lua') end
+
+local mock_gitsigns = function() child.cmd('set rtp+=tests/dir-map') end
+
+local source_test_integration = function() child.cmd('source tests/dir-map/src-test-integration.lua') end
+
+local mock_test_integration = function()
+  source_test_integration()
+
+  child.lua([[
+    local integrations = MiniMap.config.integrations or {}
+    table.insert(integrations, _G.test_integration)
+    MiniMap.config.integrations = integrations
+  ]])
+end
+
+local source_test_encode_symbols =
+  function() child.lua([[_G.test_encode_symbols = { '1', '2', '3', '4', resolution = { row = 1, col = 2 } }]]) end
+
+-- Various utilities
 local tbl_repeat = function(x, n)
   local res = {}
   for _ = 1, n do
@@ -34,43 +86,7 @@ local eq_keys = function(tbl, ref_keys)
   eq(test_keys, ref_keys_copy)
 end
 
-local get_mode = function() return child.api.nvim_get_mode()['mode'] end
-
-local str_width = function(x)
-  -- Use first returned value (UTF-32 index, and not UTF-16 one)
-  local res = vim.str_utfindex(x)
-  return res
-end
-
-local get_resolution_test_file = function(id) return 'tests/dir-map/resolution_' .. id end
-
-local map_open = function(opts) child.lua('MiniMap.open(...)', { opts }) end
-
-local map_refresh = function(opts, parts) child.lua('MiniMap.refresh(...)', { opts, parts }) end
-
-local map_close = function() child.lua('MiniMap.close()') end
-
-local get_map_buf_id = function() return child.lua_get('MiniMap.current.buf_data.map') end
-
-local get_map_win_id =
-  function() return child.lua_get('MiniMap.current.win_data[vim.api.nvim_get_current_tabpage()]') end
-
-local get_current = function() return child.lua_get('MiniMap.current') end
-
-local get_map_lines = function()
-  local buf_id = get_map_buf_id()
-
-  local lines = child.api.nvim_buf_get_lines(buf_id, 0, -1, true)
-
-  -- Remove whitespace prefixes
-  local current = get_current()
-  local offset = math.max(str_width(current.opts.symbols.scroll_line), str_width(current.opts.symbols.scroll_view))
-    + (current.opts.window.show_integration_count and 1 or 0)
-
-  return vim.tbl_map(function(x) return x:sub(offset + 1) end, lines)
-end
-
-local get_map_width = function() return child.api.nvim_win_get_width(get_map_win_id()) end
+local get_n_shown_windows = function() return #child.api.nvim_tabpage_list_wins(0) end
 
 -- Output test set
 T = new_set({
@@ -112,6 +128,9 @@ local example_lines = {
   'aaaaaaaaaaaaaaaa',
 }
 
+local extended_example_lines = vim.deepcopy(example_lines)
+vim.list_extend(extended_example_lines, example_lines)
+
 -- Unit tests =================================================================
 T['setup()'] = new_set()
 
@@ -146,7 +165,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('window.side', 'right')
   expect_config('window.show_integration_count', true)
   expect_config('window.width', 10)
-  expect_config('window.winblend', 50)
+  expect_config('window.winblend', 25)
 end
 
 T['setup()']['respects `config` argument'] = function()
@@ -246,8 +265,11 @@ T['encode_strings()']['respects `opts.n_cols`'] = function()
 end
 
 T['encode_strings()']['respects `opts.symbols`'] = function()
-  local symbols = { '1', '2', '3', '4', resolution = { row = 1, col = 2 } }
-  eq(encode_strings({ '  aa', 'a  a' }, { symbols = symbols }), { '14', '23' })
+  source_test_encode_symbols()
+  eq(
+    child.lua_get([[MiniMap.encode_strings({ '  aa', 'a  a' }, { symbols = _G.test_encode_symbols })]]),
+    { '14', '23' }
+  )
 end
 
 T['encode_strings()']['works with empty strings'] =
@@ -293,11 +315,42 @@ T['open()'] = new_set({ hooks = { pre_case = function() child.set_size(30, 30) e
 
 T['open()']['works'] = function()
   set_lines(example_lines)
-  set_cursor(1, 0)
+  set_cursor(15, 0)
+  mock_test_integration()
 
   map_open()
 
   child.expect_screenshot()
+end
+
+T['open()']['sets important map buffer options'] = function()
+  local init_buf = child.api.nvim_get_current_buf()
+  map_open()
+  local all_bufs = child.api.nvim_list_bufs()
+  eq(#all_bufs, 2)
+  local map_buf_id = all_bufs[1] == init_buf and all_bufs[2] or all_bufs[1]
+
+  local validate_option = function(name, value) eq(child.api.nvim_buf_get_option(map_buf_id, name), value) end
+
+  validate_option('filetype', 'minimap')
+
+  validate_option('buftype', 'nofile')
+  validate_option('buflisted', false)
+  validate_option('swapfile', false)
+end
+
+T['open()']['sets important window options'] = function()
+  local init_win = child.api.nvim_get_current_win()
+  map_open()
+  local all_wins = child.api.nvim_tabpage_list_wins(0)
+  eq(#all_wins, 2)
+  local map_win_id = all_wins[1] == init_win and all_wins[2] or all_wins[1]
+
+  local validate_option = function(name, value) eq(child.api.nvim_win_get_option(map_win_id, name), value) end
+
+  validate_option('foldcolumn', '0')
+  validate_option('signcolumn', 'auto')
+  validate_option('wrap', false)
 end
 
 T['open()']['correctly computes window config'] = function()
@@ -319,16 +372,30 @@ T['open()']['correctly computes window config'] = function()
   eq(child.api.nvim_win_get_option(win_id, 'winblend'), child.lua_get('MiniMap.config.window.winblend'))
 end
 
+T['open()']['respects `opts.integrations` argument'] = function()
+  set_lines(example_lines)
+  source_test_integration()
+  child.lua('MiniMap.open({ integrations = { _G.test_integration } })')
+  child.expect_screenshot()
+
+  -- Updates current data accordingly
+  eq(child.lua_get('MiniMap.current.opts.integrations[1] == _G.test_integration'), true)
+end
+
 T['open()']['respects `opts.symbols` argument'] = function()
   set_lines(example_lines)
+  source_test_encode_symbols()
   child.lua([[MiniMap.open({
-    symbols = {
-      encode = { '1', '2', '3', '4', resolution = { row = 1, col = 2 } },
-      scroll_line = '>',
-      scroll_view = '+',
-    },
+    symbols = { encode = _G.test_encode_symbols, scroll_line = '>', scroll_view = '+' },
   })]])
 
+  child.expect_screenshot()
+end
+
+T['open()']['allows more than single character in scroll symbols'] = function()
+  set_lines(example_lines)
+  source_test_encode_symbols()
+  map_open({ symbols = { scroll_line = '>|<', scroll_view = '||' } })
   child.expect_screenshot()
 end
 
@@ -354,9 +421,7 @@ end
 T['open()']['respects `MiniMap.current`'] = function()
   child.lua([[MiniMap.current.opts = { window = { side = 'left' } }]])
   map_open()
-  local win_config = child.api.nvim_win_get_config(get_map_win_id())
-  eq(win_config.anchor, 'NW')
-  eq(win_config.col, 0)
+  eq(get_map_win_side(), 'left')
 end
 
 T['open()']['correctly updates `MiniMap.current`'] = function()
@@ -453,6 +518,35 @@ T['open()']['can open pure scrollbar'] = function()
   child.expect_screenshot()
 end
 
+T['open()']['works after previous window was closed manually'] = function()
+  map_open()
+  eq(#child.api.nvim_tabpage_list_wins(0), 2)
+  child.api.nvim_win_close(get_map_win_id(), true)
+  eq(#child.api.nvim_tabpage_list_wins(0), 1)
+
+  expect.no_error(map_open)
+  eq(#child.api.nvim_tabpage_list_wins(0), 2)
+end
+
+T['open()']['shows appropriate integration counts'] = function()
+  child.lua([[_G.integration_many_matches = function()
+    local res = {}
+    for i = 1, 11 do
+      for j = 1, i do
+        table.insert(res, { line = i, hl_group = 'Operator' })
+      end
+    end
+    return res
+  end]])
+
+  set_lines(example_lines)
+  child.lua([[MiniMap.open({
+    integrations = { _G.integration_many_matches },
+    symbols = { encode = { ' ', '█', resolution = { row = 1, col = 1 } } }
+  })]])
+  child.expect_screenshot()
+end
+
 T['open()']['respects `vim.{g,b}.minimap_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
@@ -460,13 +554,99 @@ T['open()']['respects `vim.{g,b}.minimap_disable`'] = new_set({
     child[var_type].minimap_disable = true
 
     map_open()
-    eq(#child.api.nvim_list_wins(), 1)
+    eq(#child.api.nvim_tabpage_list_wins(0), 1)
   end,
 })
 
-T['refresh()'] = new_set()
+T['refresh()'] =
+  new_set({ hooks = {
+    pre_case = function()
+      child.set_size(30, 30)
+      disable_map_updates()
+    end,
+  } })
+
+T['refresh()']['works'] = function()
+  map_open()
+
+  set_lines(example_lines)
+  set_cursor(15, 0)
+  mock_test_integration()
+  child.expect_screenshot()
+
+  map_refresh()
+  child.expect_screenshot()
+end
 
 T['refresh()']['works without opened map'] = function() expect.no_error(map_refresh) end
+
+T['refresh()']['respects `opts.integrations` argument'] = function()
+  set_lines(example_lines)
+  map_open()
+
+  source_test_integration()
+  child.lua('MiniMap.refresh({ integrations = { _G.test_integration } })')
+  child.expect_screenshot()
+
+  -- Updates current data accordingly
+  eq(child.lua_get('MiniMap.current.opts.integrations[1] == _G.test_integration'), true)
+end
+
+T['refresh()']['respects `opts.symbols` argument'] = function()
+  set_lines(example_lines)
+  source_test_encode_symbols()
+
+  map_open()
+
+  child.lua([[MiniMap.refresh({
+    symbols = { encode = _G.test_encode_symbols, scroll_line = '>', scroll_view = '+' },
+  })]])
+  child.expect_screenshot()
+
+  -- Updates current data accordingly
+  eq(child.lua_get('MiniMap.current.opts.symbols.scroll_line'), '>')
+end
+
+T['refresh()']['respects `opts.window` argument'] = function()
+  set_lines(example_lines)
+  map_open()
+
+  local opts = { window = { side = 'left', show_integration_count = false, width = 15, winblend = 50 } }
+  map_refresh(opts)
+
+  child.expect_screenshot()
+  eq(child.api.nvim_win_get_option(get_map_win_id(), 'winblend'), 50)
+
+  -- Updates current data accordingly
+  eq(child.lua_get('MiniMap.current.opts.window'), opts.window)
+end
+
+T['refresh()']['respects `parts` argument'] = function()
+  map_open()
+  child.expect_screenshot()
+
+  set_lines(tbl_repeat('aa aa aa', #example_lines))
+  set_cursor(15, 0)
+  mock_test_integration()
+
+  -- Nothing should have changed in map window
+  map_refresh({}, { integrations = false, lines = false, scrollbar = false })
+  child.expect_screenshot()
+
+  -- Only lines should have changed in map window
+  map_refresh({}, { integrations = false, lines = true, scrollbar = false })
+  child.expect_screenshot()
+
+  -- Only scrollbar should have changed in map window
+  set_lines(example_lines)
+  map_refresh({}, { integrations = false, lines = false, scrollbar = true })
+  child.expect_screenshot()
+
+  -- Only integration highlights should have changed in map window
+  set_cursor(1, 0)
+  map_refresh({}, { integrations = true, lines = false, scrollbar = false })
+  child.expect_screenshot()
+end
 
 T['refresh()']['is not affected by `MiniMap.config.window`'] = function()
   child.lua('MiniMap.config.window.width = 10')
@@ -487,38 +667,147 @@ T['refresh()']['updates `MiniMap.current`'] = function()
 end
 
 T['refresh()']['respects `MiniMap.current`'] = function()
-  -- This should check that any future interactive refresh keeps windows in
-  -- sync options
-  MiniTest.skip()
+  -- Check that any interactive refresh keeps all windows with synced options
+  map_open()
+  child.lua([[MiniMap.current.opts.window.side = 'left']])
+
+  eq(get_map_win_side(), 'right')
+  map_refresh()
+  eq(get_map_win_side(), 'left')
 end
+
+T['refresh()']['respects `vim.{g,b}.minimap_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    disable_map_updates()
+    map_open()
+
+    child[var_type].minimap_disable = true
+    set_lines(example_lines)
+    map_refresh()
+    -- Shouldn't show any map lines
+    child.expect_screenshot()
+  end,
+})
 
 T['close()'] = new_set()
 
-T['close()']['works'] = function() MiniTest.skip() end
+T['close()']['works'] = function()
+  map_open()
+  eq(#child.api.nvim_tabpage_list_wins(0), 2)
+  map_close()
+  eq(#child.api.nvim_tabpage_list_wins(0), 1)
+end
 
-T['close()']['resets `MiniMap.current.opts` after closing last map window'] = function() MiniTest.skip() end
+T['close()']['resets `MiniMap.current.opts` after closing last map window'] = function()
+  local is_current_opts_reset = function() return child.lua_get('vim.tbl_count(MiniMap.current.opts)') == 0 end
+
+  map_open()
+  local init_tabpage = child.api.nvim_get_current_tabpage()
+  child.cmd('tabedit')
+  local second_tabpage = child.api.nvim_get_current_tabpage()
+  map_open()
+
+  eq(#child.api.nvim_list_wins(), 4)
+  eq(is_current_opts_reset(), false)
+
+  child.api.nvim_set_current_tabpage(init_tabpage)
+  map_close()
+  eq(#child.api.nvim_list_wins(), 3)
+  eq(is_current_opts_reset(), false)
+
+  child.api.nvim_set_current_tabpage(second_tabpage)
+  map_close()
+  eq(#child.api.nvim_list_wins(), 2)
+  eq(is_current_opts_reset(), true)
+end
+
+T['close()']['does not error if window was closed manually'] = function()
+  map_open()
+  eq(#child.api.nvim_tabpage_list_wins(0), 2)
+  child.api.nvim_win_close(get_map_win_id(), true)
+  eq(#child.api.nvim_tabpage_list_wins(0), 1)
+
+  -- Should not error and make proper clean up
+  eq(#get_current().win_data, 1)
+  expect.no_error(map_close)
+  eq(#get_current().win_data, 0)
+end
+
+T['close()']['disrespects `vim.{g,b}.minimap_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    map_open()
+    eq(get_n_shown_windows(), 2)
+    child[var_type].minimap_disable = true
+
+    map_close()
+    eq(get_n_shown_windows(), 1)
+  end,
+})
 
 T['toggle()'] = new_set()
 
-T['toggle()']['works'] = function() MiniTest.skip() end
+T['toggle()']['works'] = function()
+  eq(get_n_shown_windows(), 1)
+
+  child.lua('MiniMap.toggle()')
+  eq(get_n_shown_windows(), 2)
+  eq(vim.tbl_count(get_current().win_data), 1)
+
+  child.lua('MiniMap.toggle()')
+  eq(get_n_shown_windows(), 1)
+  eq(vim.tbl_count(get_current().win_data), 0)
+end
 
 T['toggle_focus()'] = new_set()
 
-T['toggle_focus()']['works'] = function() MiniTest.skip() end
+T['toggle_focus()']['works'] = function()
+  set_lines(example_lines)
+  set_cursor(15, 10)
+
+  local init_win = child.api.nvim_get_current_win()
+  map_open()
+  eq(child.api.nvim_get_current_win(), init_win)
+
+  -- Should move focus to map window
+  child.lua('MiniMap.toggle_focus()')
+  eq(child.api.nvim_get_current_win(), get_map_win_id())
+  -- Moving cursor in map window should move cursor in previous window (line -
+  -- first one encoded by the current map line; column - first non-blank)
+  -- More tests in integration tests
+  set_cursor(1, 0)
+
+  child.lua('MiniMap.toggle_focus()')
+  eq(child.api.nvim_get_current_win(), init_win)
+  eq(get_cursor(), { 1, 2 })
+end
+
+T['toggle_focus()']['respects `use_previous_cursor`'] = function()
+  set_lines(example_lines)
+  set_cursor(15, 10)
+  map_open()
+
+  child.lua('MiniMap.toggle_focus()')
+  set_cursor(1, 0)
+  child.lua('MiniMap.toggle_focus(true)')
+  eq(get_cursor(), { 15, 10 })
+end
 
 T['toggle_side()'] = new_set()
 
-T['toggle_side()']['works'] = function() MiniTest.skip() end
+T['toggle_side()']['works'] = function()
+  -- Can be used without opened window
+  expect.no_error(function() child.lua('MiniMap.toggle_side()') end)
 
-local validate_gen_symbols = function(field, id)
-  child.lua(string.format([[_G.symbols = MiniMap.gen_encode_symbols['%s']('%s')]], field, id))
-
-  local cmd = string.format(
-    [[MiniMap.encode_strings(vim.fn.readfile('%s'), { symbols = _G.symbols })]],
-    get_resolution_test_file(id)
-  )
-
-  eq(child.lua_get(cmd), child.lua_get('{ table.concat(_G.symbols) }'))
+  map_open()
+  eq(get_map_win_side(), 'right')
+  child.lua('MiniMap.toggle_side()')
+  eq(get_map_win_side(), 'left')
+  child.lua('MiniMap.toggle_side()')
+  eq(get_map_win_side(), 'right')
 end
 
 T['current'] = new_set()
@@ -531,78 +820,521 @@ T['current']['has initial value'] = function()
   })
 end
 
-T['current']['has correct `buf_data`'] = function() MiniTest.skip() end
+T['current']['has correct `buf_data` structure'] = function()
+  local init_buf = child.api.nvim_get_current_buf()
+  map_open()
+  local all_bufs = child.api.nvim_list_bufs()
+  eq(#all_bufs, 2)
+  local map_buf_id = all_bufs[1] == init_buf and all_bufs[2] or all_bufs[1]
 
-T['current']['has correct `encode_data`'] = function() MiniTest.skip() end
+  eq(child.lua_get('MiniMap.current.buf_data'), { source = init_buf, map = map_buf_id })
+end
 
-T['current']['has correct `opts`'] = function() MiniTest.skip() end
+T['current']['has correct `opts` structure'] = function()
+  map_open()
+  eq(child.lua_get('vim.deep_equal(MiniMap.current.opts, MiniMap.config)'), true)
+end
 
-T['current']['has correct `scrollbar_data`'] = function() MiniTest.skip() end
+T['current']['has correct `win_data` structure'] = function()
+  map_open()
+  local init_tabpage = child.api.nvim_get_current_tabpage()
+  child.cmd('tabedit')
+  local second_tabpage = child.api.nvim_get_current_tabpage()
+  map_open()
 
-T['current']['has correct `win_data`'] = function() MiniTest.skip() end
+  local opts_win_data = child.lua_get('MiniMap.current.win_data')
+  eq_keys(opts_win_data, { init_tabpage, second_tabpage })
 
-T['current']['correctly updates'] = function() MiniTest.skip() end
+  local buf_1 = child.api.nvim_win_get_buf(opts_win_data[init_tabpage])
+  eq(child.api.nvim_buf_get_option(buf_1, 'filetype'), 'minimap')
+
+  local buf_2 = child.api.nvim_win_get_buf(opts_win_data[init_tabpage])
+  eq(child.api.nvim_buf_get_option(buf_2, 'filetype'), 'minimap')
+end
+
+local validate_gen_encode_symbols = function(field, id)
+  child.lua(string.format([[_G.symbols = MiniMap.gen_encode_symbols['%s']('%s')]], field, id))
+
+  local cmd = string.format(
+    [[MiniMap.encode_strings(vim.fn.readfile('%s'), { symbols = _G.symbols })]],
+    get_resolution_test_file(id)
+  )
+
+  eq(child.lua_get(cmd), child.lua_get('{ table.concat(_G.symbols) }'))
+end
 
 T['gen_encode_symbols'] = new_set()
 
+T['gen_encode_symbols']['can be used as `MiniMap.config.symbols.encode`'] = function()
+  child.set_size(30, 30)
+  unload_module()
+  child.lua([[_G.map = require('mini-dev.map')]])
+  child.lua([[_G.map.setup({ symbols = { encode = _G.map.gen_encode_symbols.block('1x2') } })]])
+
+  set_lines(example_lines)
+  map_open()
+  child.expect_screenshot()
+end
+
+T['gen_encode_symbols']['can be used as part of `opts.symbols.encode`'] = function()
+  child.set_size(30, 30)
+
+  set_lines(example_lines)
+  child.lua([[MiniMap.open({ symbols = { encode = MiniMap.gen_encode_symbols.block('1x2') } })]])
+  child.expect_screenshot()
+end
+
 T['gen_encode_symbols']['block()'] = function()
-  validate_gen_symbols('block', '1x2')
-  validate_gen_symbols('block', '2x1')
-  validate_gen_symbols('block', '2x2')
-  validate_gen_symbols('block', '3x2')
+  validate_gen_encode_symbols('block', '1x2')
+  validate_gen_encode_symbols('block', '2x1')
+  validate_gen_encode_symbols('block', '2x2')
+  validate_gen_encode_symbols('block', '3x2')
 end
 
 T['gen_encode_symbols']['dot()'] = function()
-  validate_gen_symbols('dot', '3x2')
-  validate_gen_symbols('dot', '4x2')
+  validate_gen_encode_symbols('dot', '3x2')
+  validate_gen_encode_symbols('dot', '4x2')
 end
 
 T['gen_encode_symbols']['shade()'] = function()
-  validate_gen_symbols('shade', '1x2')
-  validate_gen_symbols('shade', '2x1')
+  validate_gen_encode_symbols('shade', '1x2')
+  validate_gen_encode_symbols('shade', '2x1')
 end
 
-T['gen_integration'] = new_set()
+local map_open_with_integration = function(integration)
+  local cmd = string.format('MiniMap.open({ integrations = { MiniMap.gen_integration.%s() } })', integration)
+  child.lua(cmd)
+end
 
-T['gen_integration']['builtin_search()'] = function() MiniTest.skip() end
+T['gen_integration'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.set_size(30, 30)
+      set_lines(example_lines)
+      set_cursor(15, 0)
+    end,
+  },
+})
 
-T['gen_integration']['diagnostics()'] = function() MiniTest.skip() end
+T['gen_integration']['builtin_search()'] = new_set({
+  hooks = {
+    pre_case = function() end,
+  },
+})
 
-T['gen_integration']['gitsigns()'] = function() MiniTest.skip() end
+T['gen_integration']['builtin_search()']['works'] = function()
+  map_open_with_integration('builtin_search')
+
+  -- It should show counts for actual matches, not matched lines
+  type_keys('/', ' a', '<CR>')
+  child.expect_screenshot()
+
+  -- Should not affect cursor
+  local cur_pos = get_cursor()
+  map_refresh()
+  eq(get_cursor(), cur_pos)
+
+  -- Should respect 'hlsearch' option
+  child.o.hlsearch = false
+  map_refresh()
+  child.expect_screenshot()
+end
+
+T['gen_integration']['builtin_search()']['respects `hl_groups` argument'] = function()
+  map_open_with_integration('builtin_search')
+
+  child.lua([[MiniMap.config.integrations = {
+    MiniMap.gen_integration.builtin_search({ search = 'MiniMapSymbolLine' })
+  }]])
+  type_keys('/', ' a', '<CR>')
+
+  local output = child.lua_get('MiniMap.config.integrations[1]()')
+  for _, v in ipairs(output) do
+    eq(v.hl_group, 'MiniMapSymbolLine')
+  end
+end
+
+T['gen_integration']['builtin_search()']['updates when appropriate'] = function()
+  map_open_with_integration('builtin_search')
+
+  type_keys('/', ' a', '<CR>')
+  child.expect_screenshot()
+
+  -- Should update when 'hlsearch' option is changed
+  child.o.hlsearch = false
+  child.expect_screenshot()
+
+  child.o.hlsearch = true
+  child.expect_screenshot()
+
+  -- Ideally, it should also update when starting highlight search with other
+  -- methods (like after `n/N/*`, etc.), but it currently doesn't seem possible
+  -- See https://github.com/neovim/neovim/issues/18879
+end
+
+T['gen_integration']['builtin_search()']['respects documented keymaps'] = function()
+  if child.fn.has('nvim-0.7.0') == 0 then return end
+
+  map_open_with_integration('builtin_search')
+
+  child.lua([[
+    vim.keymap.set(
+      'n',
+      'n',
+      'n<Cmd>lua MiniMap.refresh({}, {lines = false, scrollbar = false})<CR>'
+    )
+  ]])
+  type_keys('/', ' a', '<CR>')
+  child.cmd('nohlsearch')
+
+  -- Should update map highlighting
+  type_keys('n')
+  child.expect_screenshot()
+end
+
+T['gen_integration']['diagnostic()'] = new_set()
+
+T['gen_integration']['diagnostic()']['works'] = function()
+  mock_diagnostic()
+  map_open_with_integration('diagnostic')
+  child.expect_screenshot()
+end
+
+T['gen_integration']['diagnostic()']['respects `hl_groups` argument'] = function()
+  mock_diagnostic()
+
+  local validate = function(hl_groups)
+    map_close()
+    local cmd = string.format(
+      [[MiniMap.open({ integrations = { MiniMap.gen_integration.diagnostic(%s) } })]],
+      vim.inspect(hl_groups)
+    )
+    child.lua(cmd)
+
+    child.expect_screenshot()
+
+    map_close()
+  end
+
+  -- Each valid non-nil entry results into showing that diagnostic severity
+  validate({ warn = 'DiagnosticFloatingWarn' })
+  validate({ info = 'DiagnosticFloatingInfo' })
+  validate({ hint = 'DiagnosticFloatingHint' })
+
+  -- Higher severity should have higher priority
+  validate({
+    error = 'DiagnosticFloatingError',
+    warn = 'DiagnosticFloatingWarn',
+    info = 'DiagnosticFloatingInfo',
+    hint = 'DiagnosticFloatingHint',
+  })
+end
+
+T['gen_integration']['diagnostic()']['updates when appropriate'] = function()
+  map_open()
+
+  mock_diagnostic()
+  child.lua('MiniMap.current.opts.integrations = { MiniMap.gen_integration.diagnostic() }')
+  child.expect_screenshot()
+  child.cmd('doautocmd DiagnosticChanged')
+  child.expect_screenshot()
+end
+
+T['gen_integration']['gitsigns()'] = new_set()
+
+T['gen_integration']['gitsigns()']['works'] = function()
+  mock_gitsigns()
+  map_open_with_integration('gitsigns')
+  child.expect_screenshot()
+
+  --stylua: ignore
+  eq(
+    child.lua_get('MiniMap.current.opts.integrations[1]()'),
+    {
+      { line = 1,    hl_group = 'GitSignsAdd' },
+      { line = 2,    hl_group = 'GitSignsAdd' },
+      { line = 4,    hl_group = 'GitSignsDelete' },
+      { line = 7,    hl_group = 'GitSignsChange' },
+      { line = 8,    hl_group = 'GitSignsChange' },
+      { line = 9,    hl_group = 'GitSignsAdd' },
+      { line = 10,   hl_group = 'GitSignsAdd' },
+      { line = 11,   hl_group = 'GitSignsAdd' },
+      { line = 12,   hl_group = 'GitSignsAdd' },
+      { line = 0,    hl_group = 'GitSignsDelete' },
+      { line = 1000, hl_group = 'GitSignsAdd' },
+    }
+  )
+end
+
+T['gen_integration']['gitsigns()']['respects `hl_groups` argument'] = function()
+  mock_gitsigns()
+  child.lua([[MiniMap.open({
+    integrations = { MiniMap.gen_integration.gitsigns({ delete = 'Special' }) }
+  })]])
+  child.expect_screenshot()
+
+  eq(
+    child.lua_get('MiniMap.current.opts.integrations[1]()'),
+    { { line = 4, hl_group = 'Special' }, { line = 0, hl_group = 'Special' } }
+  )
+end
+
+T['gen_integration']['gitsigns()']['updates when appropriate'] = function()
+  map_open()
+
+  mock_gitsigns()
+  child.lua('MiniMap.current.opts.integrations = { MiniMap.gen_integration.gitsigns() }')
+  child.expect_screenshot()
+  child.cmd('doautocmd User GitSignsUpdate')
+  child.expect_screenshot()
+end
+
+T['gen_integration']['gitsigns()']['works if no "gitsigns" is detected'] =
+  function() eq(child.lua_get('MiniMap.gen_integration.gitsigns()()'), {}) end
 
 -- Integration tests ==========================================================
 T['Window'] = new_set()
 
-T['Window']['works'] = function() MiniTest.skip() end
+T['Window']['fully updates on buffer enter'] = function()
+  child.set_size(30, 30)
+  mock_test_integration()
 
-T['Window']['implements buffer local mappings'] = function() MiniTest.skip() end
+  local buf_1 = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(buf_1, 0, -1, true, { 'aa', 'aa', 'aa', '   aa', '   aa' })
 
-T['Window']['respects `MiniMap.current` on every update'] = function()
-  -- Open window in one tabpage
-  -- Open window in other tabpage
-  -- Refresh with different options map window in first tabpage
-  -- Switch to second tabpage and verify it is shown with updated config
+  local buf_2 = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(buf_2, 0, -1, true, example_lines)
+
+  child.api.nvim_set_current_buf(buf_1)
+  map_open()
+  child.expect_screenshot()
+
+  child.api.nvim_set_current_buf(buf_2)
+  child.expect_screenshot()
 end
 
-T['Window']['can work as pure scrollbar'] = function() MiniTest.skip() end
+T['Window']['fully updates on buffer write'] = function()
+  child.set_size(15, 20)
+  mock_test_integration()
+  child.o.autoindent = false
+
+  map_open()
+  type_keys('i', 'aaa<CR>', '   aa<CR>', '   aa')
+
+  child.expect_screenshot()
+  child.cmd('doautocmd BufWritePost')
+  child.expect_screenshot()
+end
+
+T['Window']['fully updates on text change in Normal mode'] = function()
+  child.set_size(15, 20)
+  mock_test_integration()
+
+  set_lines({ 'aaa', '   aa', '   aa' })
+  set_cursor(3, 0)
+  map_open()
+
+  child.expect_screenshot()
+  type_keys('d', 'k')
+  child.expect_screenshot()
+end
+
+T['Window']['fully updates on vim resize'] = function()
+  child.set_size(30, 30)
+  mock_test_integration()
+
+  set_lines(extended_example_lines)
+  map_open()
+  child.expect_screenshot()
+  child.o.lines = 15
+  child.expect_screenshot()
+end
+
+T['Window']['fully updates on mode change to Normal'] = function()
+  if child.fn.exists('##ModeChanged') == 0 then return end
+
+  child.set_size(15, 20)
+  mock_test_integration()
+  child.o.autoindent = false
+  set_lines({ 'aa', '   aa', '   aa' })
+  set_cursor(1, 0)
+
+  map_open()
+  type_keys('i', '   bb<CR>', '   bb<CR>', 'bb<CR>')
+  child.expect_screenshot()
+  type_keys('<Esc>')
+  child.expect_screenshot()
+end
+
+T['Window']['implements buffer local mappings'] = function()
+  set_lines(example_lines)
+  map_open()
+
+  local validate = function(key, ref_cursor)
+    set_cursor(15, 10)
+    child.lua('MiniMap.toggle_focus()')
+    set_cursor(1, 0)
+    type_keys(key)
+    eq(get_cursor(), ref_cursor)
+  end
+
+  -- `<CR>` should accept currently showed line in source buffer and put on
+  -- first non-blank character in line
+  validate('<CR>', { 1, 2 })
+
+  -- `<Esc>` should return to exact previous cursor position
+  validate('<Esc>', { 15, 10 })
+end
+
+T['Window']['has options in sync across all opened windows'] = function()
+  map_open()
+  child.cmd('tabedit')
+  map_open()
+
+  type_keys('1gt')
+  map_refresh({ window = { side = 'left' } })
+  eq(get_map_win_side(), 'left')
+
+  type_keys('2gt')
+  eq(get_map_win_side(), 'left')
+end
+
+T['Window']['does not account for folds'] = function()
+  child.set_size(30, 30)
+  set_lines(extended_example_lines)
+
+  map_open()
+  child.expect_screenshot()
+
+  -- Make fold
+  set_cursor(7, 0)
+  type_keys('zf', '24j')
+
+  -- Should treat top and bottom visible lines as is
+  set_cursor(1, 0)
+  type_keys('7G')
+  child.expect_screenshot()
+  type_keys('j')
+  child.expect_screenshot()
+end
 
 T['Scrollbar'] = new_set()
 
-T['Scrollbar']['works'] = function() MiniTest.skip() end
+T['Scrollbar']['updates on cursor movement'] = function()
+  child.set_size(30, 30)
+  set_lines(example_lines)
+  map_open()
+  local init_integration_update_count = child.lua_get('_G.n_test_integration_calls')
 
-T['Focus'] = new_set()
+  set_cursor(1, 0)
+  child.expect_screenshot()
+  type_keys('3j')
+  child.expect_screenshot()
+  type_keys('5l')
+  child.expect_screenshot()
+  type_keys('G')
+  child.expect_screenshot()
 
-T['Focus']['works'] = function() MiniTest.skip() end
-
-T['Focus']['moves cursor in source window'] = function() MiniTest.skip() end
-
-T['Integrations'] = new_set()
-
-T['Integrations']['allow extreme lines in output'] = function()
-  -- So both less than 1 and more than current number of lines
-  MiniTest.skip()
+  -- Integrations shouldn't be called on cursor movement
+  eq(child.lua_get('_G.n_test_integration_calls'), init_integration_update_count)
 end
 
-T['Integrations'] = new_set()
+T['Scrollbar']['updates on source window scrolling'] = function()
+  child.set_size(30, 30)
+  set_lines(example_lines)
+  map_open()
+  local init_integration_update_count = child.lua_get('_G.n_test_integration_calls')
+
+  set_cursor(21, 0)
+  child.expect_screenshot()
+  type_keys('zz')
+  child.expect_screenshot()
+
+  -- Integrations shouldn't be called on window scroll
+  eq(child.lua_get('_G.n_test_integration_calls'), init_integration_update_count)
+end
+
+T['Pure scrollbar'] = new_set()
+
+T['Pure scrollbar']['works'] = function()
+  child.set_size(30, 30)
+  set_lines(example_lines)
+  map_open({ window = { width = 1, show_integration_count = false } })
+
+  -- Should try to span all height in case of few lines
+  child.expect_screenshot()
+  type_keys('G')
+  child.expect_screenshot()
+end
+
+T['Pure scrollbar']['is active when width is lower than offset'] = function()
+  child.set_size(30, 30)
+  set_lines(example_lines)
+
+  -- Still should be pure scrollbar because integration count is shown
+  map_open({ window = { width = 2, show_integration_count = true } })
+  child.expect_screenshot()
+
+  -- Still should be pure scrollbar because scroll symbols are wider
+  map_refresh({ symbols = { scroll_line = '><' }, window = { width = 3 } })
+  child.expect_screenshot()
+
+  -- Should stop being pure scrollbar ones actual encoding can be shown
+  map_refresh({ window = { width = 4 } })
+  child.expect_screenshot()
+end
+
+T['Cursor in map window'] = new_set()
+
+T['Cursor in map window']['moves cursor in source window'] = function()
+  local init_win_id = child.api.nvim_get_current_win()
+  local validate_source_cursor = function(ref_cursor) eq(child.api.nvim_win_get_cursor(init_win_id), ref_cursor) end
+  set_lines(example_lines)
+  set_cursor(1, 0)
+  map_open()
+  child.lua('MiniMap.toggle_focus()')
+
+  eq(get_cursor(), { 1, 2 })
+  validate_source_cursor({ 1, 0 })
+
+  type_keys('j')
+  validate_source_cursor({ 4, 0 })
+
+  -- It puts source cursor on the first source line which is encoded as current
+  -- map line
+  type_keys('G')
+  validate_source_cursor({ 22, 0 })
+end
+
+T['Cursor in map window']['opens enough folds in source window'] = function()
+  child.set_size(30, 30)
+  set_lines(example_lines)
+
+  -- Make fold
+  set_cursor(4, 0)
+  type_keys('zf', '2j')
+  set_cursor(1, 0)
+
+  map_open()
+  child.expect_screenshot()
+  child.lua('MiniMap.toggle_focus()')
+  type_keys('2G')
+  child.expect_screenshot()
+end
+
+T['Cursor in map window']['can not move on scrollbar or integration counts'] = function()
+  set_lines(example_lines)
+  set_cursor(1, 0)
+
+  map_open()
+  child.lua('MiniMap.toggle_focus()')
+  eq(get_cursor(), { 1, 2 })
+
+  type_keys('h')
+  eq(get_cursor(), { 1, 2 })
+
+  type_keys('0')
+  eq(get_cursor(), { 1, 2 })
+end
 
 return T
