@@ -1,35 +1,5 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
--- TODO:
--- Code:
---
--- Tests:
---
--- Documentation:
--- - Integrations should be added from most important to least important (as
---   highlight are applied on a "first seen" basis).
--- - How to refresh in Insert mode (add autocommands for for TextChangedI and
---   CursorMovedI).
--- - Suggestions for scrollbar symbols:
---     - View-line pairs:
---         - '▒' - '█'.
---     - Line - '🮚', '▶'.
---     - View - '┋'.
--- - Works best with global statusline. Otherwise |MiniMap.toggle()| and
---   |MiniMap.toggle_side()| are useful to temporary show needed data.
--- - Justification of supporting only line highlighting and cursor movement:
---     - Implementation. It is unnecessarily hard to correctly implement column
---       conversion from source to map coordinates. This is mostly because of
---       multibyte characters.
---     - User experience. It usually seemed too unnoticable to highlight single
---       cell (mostly because highlighting was done for foreground). Especially
---       with dot encode symbols.
---     - API. It allows for a simpler interface for integrations.
--- - Justification of using extmarks instead of signs:
---     - Higher flexibility in outcome: allows variable offset width based on
---       scroll symbols width.
---     - Faster.
-
 -- Documentation ==============================================================
 --- Buffer overview with scrollbar and highlights
 ---
@@ -39,7 +9,10 @@
 ---   left/right side. Map content is computed by taking all current lines,
 ---   converting it to binary whitespace/non-whitespace mask, rescaling to
 ---   appropriate dimensions, and converting back to strings with special
----   encoding symbols.
+---   encoding symbols. All this is done **very fast** and **asynchronously**.
+---   See |MiniMap.open()|, |MiniMap.refresh()|, |MiniMap.close()|, |MiniMap.toggle()|,
+---   |MiniMap.toggle_side()|.
+---   For a general overview and tips, see |mini.map-usage|.
 ---
 --- - Show scrollbar next to map content. It represents current line and view
 ---   (top and bottom visible lines). Can be the only thing showed making map
@@ -74,6 +47,30 @@
 ---     - Integrations producing map line highlights.
 ---     - Window options: side (left/right), width, 'winblend', and more.
 ---
+--- What it doesn't do:
+--- - Automatically refresh when typing in Insert mode. Although it is done in
+---   non-blocking way, it still might introduce considerable computation overhead
+---   (especially in very large files). You can enable it manually by calling
+---   |MiniMap.on_content_change()| on |TextChangedI| event and
+---   |MiniMap.on_view_change()| on |CursorMovedI| event.
+--- - Has more flexible window configuration. In case a full height floating
+---   window obstructs vision of underlying buffers, use |MiniMap.toggle()| and
+---   |MiniMap.toggle_side()|. Works best with global statusline (|laststatus|
+---   equal to 3).
+--- - Provide autoopen functionality. Due to vast differences in user preference
+---   of when map window should be shown, set up of automatic opening is left
+---   for user. One common approach would be to call `MiniMap.open()` on
+---   |VimEnter| event.
+---   If you use |MiniStarter|, you can modify `<CR>` buffer mapping: >
+---
+---   vim.cmd([[autocmd User MiniStarterOpened
+---     \ lua vim.keymap.set(
+---     \   'n',
+---     \   '<CR>',
+---     \   '<Cmd>lua MiniStarter.eval_current_item(); MiniMap.open()<CR>',
+---     \   { buffer = true }
+---     \ )]])
+--- <
 --- # Setup~
 ---
 --- This module needs a setup with `require('mini.map').setup({})` (replace
@@ -127,6 +124,14 @@
 ---     - Almost the same differencies as with 'dstein64/nvim-scrollview', except
 ---       'satellite.nvim' can display some builtin set of integration highlights.
 ---
+--- # Highlight groups~
+---
+--- * `MiniMapSymbolCount` - counts of per-line integration items.
+--- * `MiniMapSymbolLine` - scrollbar part representing current line.
+--- * `MiniMapSymbolView` - scrollbar part representing current view.
+---
+--- To change any highlight group, modify it directly with |:highlight|.
+---
 --- # Disabling~
 ---
 --- To disable, set `g:minimap_disable` (globally) or `b:minimap_disable`
@@ -137,9 +142,34 @@
 ---@tag mini.map
 ---@tag MiniMap
 
---- How refresh works.
---- When refresh is updated (on which buftypes, etc.).
----@tag mini.map-lifecycle
+--- # Mappings ~
+---
+--- This module doesn't make mappings, only provides functions for users to map
+--- manually. Here is how one |<Leader>| set of mappings can be constructed: >
+---
+---   vim.keymap.set('n', '<Leader>mc', MiniMap.close)
+---   vim.keymap.set('n', '<Leader>mf', MiniMap.toggle_focus)
+---   vim.keymap.set('n', '<Leader>mo', MiniMap.open)
+---   vim.keymap.set('n', '<Leader>mr', MiniMap.refresh)
+---   vim.keymap.set('n', '<Leader>ms', MiniMap.toggle_side)
+---   vim.keymap.set('n', '<Leader>mt', MiniMap.toggle)
+--- <
+--- # How automatic refresh works ~
+---
+--- Automatic refresh is done by calling |MiniMap.refresh()| when appropriate
+--- |events| occur. It is done with targeted `parts` argument value (to avoid
+--- unnecessary computtaions). For example, when only cursor has moved
+--- (|CursorMoved|), only scrollbar is updated; so no recomputation of
+--- integrations or line encoding is done.
+---
+--- To avoid visual clutter, automatic refresh is done only in normal buffers
+--- and help pages (i.e. with |buftype| being empty or "help")
+---
+--- When you think content is not up to date, try one of these:
+--- - Call |MiniMap.refresh()| manually. Make mapping to make it easier.
+--- - Save current buffer, for example with |:write|.
+--- - Exit and enter Normal mode (if your Neovim version supports |ModeChanged|).
+---@tag mini.map-usage
 
 ---@alias __opts table|nil Options used to define map configuration. Same structure
 ---   as |MiniMap.config|. Will have effect until at least one tabpage has opened
@@ -149,9 +179,8 @@
 ---   - From |MiniMap.config|.
 
 -- Module definition ==========================================================
--- TODO: Make local before release
-MiniMap = {}
-H = {}
+local MiniMap = {}
+local H = {}
 
 --- Module setup
 ---
@@ -207,20 +236,131 @@ end
 ---
 --- ## Symbols ~
 ---
+--- Options in `config.symbols` define characters used to display various
+--- information in map window.
+---
+--- ### Encode symbols ~
+---
+--- The `config.symbols.encode` option defines which characters are used to
+--- encode source buffer lines. For details of encode algorithm, see
+--- |MiniMap.encode_strings()|.
+---
+--- This option should be a table with the following structure:
+--- - <resolution> field - table containing <row> and <col> elements with row
+---   and column resolution of each symbol. This defines encoding structure and
+---   number of needed characters.
+--- - Numerical fields 1, 2, ..., 2^(row_resolution * col_resolution). Each symbol
+---   represents a `(row_resolution, col_resolution)` boolean mask (`true` for
+---   non-whitespace, `false` for whitespace), created as (reversed) binary digit:
+---   `true` as 1; `false` as 0. Traversing left-right, top-bottom (top-left is
+---   lowest bit, bottom-right - highest). So first symbol encodes a complete
+---   whitespace, last - complete non-whitespace.
+---
+--- If `nil` (default), output of |MiniMap.gen_encode_symbols.block()| with `'3x2'`
+--- identifier is used.
+---
+--- Example: { '1', '2', '3', '4', resolution = { row = 1, col = 2 } }. This
+--- will encode two characters in each input row. So a string `'  a  aaa'` will
+--- be encoded as `'1234'`.
+---
+--- There are pre-built generators of encode symbols:
+--- - |MiniMap.gen_encode_symbols.block()|
+--- - |MiniMap.gen_encode_symbols.dot()|
+--- - |MiniMap.gen_encode_symbols.shade()|
+---
+--- ### Scrollbar symbols ~
+---
+--- Options `config.symbols.scroll_line` and `config.symbols.scroll_view` define
+--- strings used to represent current line and current view inside map window.
+--- Can have any length, map window content will adjust.
+---
+--- If supplied window width is small enough to only show (part of) of scrollbar,
+--- it is called a "pure scrollbar". The behavior differs slightly from normal map
+--- window. See "Pure scrollbar config" later section.
+---
+--- Some suggestions for scrollbar symbols:
+--- - View-line pairs: '▒' and '█'.
+--- - Line - '🮚', '▶'.
+--- - View - '╎', '┋', '┋'.
+---
 --- ## Integrations ~
 ---
---- ## Window config
+--- Option `config.integrations` is an array of integrations used to define map
+--- line highlights representing some important lines in source buffer.
+--- If `nil` (default), no integrations are used.
+---
+--- Each integration should be a callable returning an array with data about
+--- **source buffer** lines it wants to highlight. Each array element should be
+--- a table with <line> (source buffer line number) and <hl_group> (string with
+--- highlight group name) keys. Note: line number outside of source buffer
+--- count will be converted to a nearest appropriate one.
+---
+--- Example output: >
+---
+---   {
+---     { line = 1, hl_group = 'Search' },
+---     { line = 2, hl_group = 'Operator' },
+---     { line = 9, hl_group = 'Search'}
+---   }
+--- <
+--- Convertion to map highlights is done on a "first seen" basis: actual
+--- highlight group applied to a map line is taken from the first integration
+--- output convertable to that map line. Other integration with duplicated map
+--- line (after conversion) contribute to integration count shown between
+--- scrollbar and encoded lines (if `config.window.show_integration_count` is
+--- `true`).
+---
+--- Previous example output with default `'3x2'` resolution will add |hl-Search|
+--- highlight on map lines 1 and 3, and show integration count 2 on first line.
+---
+--- Every element of integrations array is called one by one from start to end
+--- with their outputs appended to single array. This means that more important
+--- integrations should be placed in the beginning of an array, as this will
+--- make them have higher priority in case other integrations will highlight
+--- same map line.
+---
+--- Example of using `config.integrations`: >
+---
+---   local map = require('mini.map')
+---   map.setup({
+---     integrations = {
+---       map.gen_integration.builtin_search(),
+---       map.gen_integration.gitsigns(),
+---       map.gen_integration.diagnostic(),
+---     },
+---   })
+--- <
+--- ## Window config ~
+---
+--- Option `config.window` defines some properties of map window.
+---
+--- `window.side` - which side to stick map window: `'left'` or `'right'` (default).
+---
+--- `window.show_integration_count` - whether to show integration count between
+--- scrollbar and encoded lines. Integration count is a number of integration
+--- outputs which were converted to same map line. When `true`, adds single
+--- cell column with number from 2 to 9 and character '+' indicating more than
+--- 9 count. Count 1 is not shown, because it is redundant to highlighted map
+--- line. Default: `true`.
+---
+--- `window.width` - width of floating window, including scrollbar and
+--- integration count column. Default: 10.
+---
+--- `window.winblend` - value of |winblend| for map window. Value 0 makes it
+--- completely non-transparent, 100 - completely transparent (content is still
+--- visible, but with slightly different highlights).
 ---
 --- # Pure scrollbar config ~
 ---
---- "Pure scrollbar" is a config when only scrollbar is shown. It has
---- following differencies from default "map" approach:
+--- "Pure scrollbar" is a config when window width is not enough to show
+--- encoded content. It has following differencies from default "map" approach:
 --- - It doesn't perform line encoding with |MiniMap.encode_strings()|
 ---   but instead uses encoding with fixed number of lines (equal to window
 ---   height).
 --- - Integration highlights are not computed.
 ---
 --- Config: >
+---
 ---   require('mini.map').setup({
 ---     -- Customize `symbols` to your liking
 ---
@@ -524,14 +664,42 @@ MiniMap.toggle_side = function()
   )
 end
 
+--- Generate encode symbols
+---
+--- This is a table with function elements. Call to actually get encode symbols.
+--- Each element takes a string resolution identifier of a form `'rxc'` (like `'3x2'`)
+--- where `r` is a row resolution of each symbol (how many rows of binary data it
+--- can encode) and `c` is a column resolution (how many columns it can encode).
 MiniMap.gen_encode_symbols = {}
 
+--- Generate block encode symbols
+---
+--- Outputs use solid block to encode binary data. Example: '🬗', '▟', '█'.
+---
+---@param id string Resolution identifier.
+---   Available values: `'1x2'`, `'2x1'`, `'2x2'`, `'3x2'` (default in 'mini.map').
 MiniMap.gen_encode_symbols.block = function(id) return H.block_symbols[id] end
 
+--- Generate dot encode symbols
+---
+--- Outputs use dots to encode binary data. Example: '⡪', '⣼', '⣿'.
+---
+---@param id string Resolution identifier. Available values: `'4x2'`, `'3x2'`.
 MiniMap.gen_encode_symbols.dot = function(id) return H.dot_symbols[id] end
 
+--- Generate shade encode symbols
+---
+--- Outputs use whole cell shades to encode binary data. They use same set of
+--- characters ('░', '▒', '▒', '▓), but with different resolution.
+---
+---@param id string Resolution identifier. Available values: `'1x2'`, `'2x1'`.
 MiniMap.gen_encode_symbols.shade = function(id) return H.shade_symbols[id] end
 
+--- Generate integrations
+---
+--- This is a table with function elements. Call to actually get encode symbols.
+--- Each element takes a table defining highlight groups used for to highlight
+--- map lines.
 MiniMap.gen_integration = {}
 
 --- Builtin search
@@ -669,8 +837,8 @@ end
 --- Highlight lines which have non-trivial Git status. Requires dependency
 --- 'lewis6991/gitsigns.nvim' installed and set up. Uses |gitsigns.get_hunks()|
 --- and should highlight map lines similarly to how Gitsigns highlights lines
---- in source buffer (except dealing with rescaled input with "first seen is
---- highlighted" rule; see "Integrations" section in |MiniMap.config|).
+--- in source buffer (except dealing with rescaled input on "first seen" bases;
+--- see "Integrations" section in |MiniMap.config|).
 ---
 --- It prompts integration highlighting update on every |gitsigns-event|.
 ---
@@ -717,6 +885,9 @@ MiniMap.gen_integration.gitsigns = function(hl_groups)
   end
 end
 
+--- Act on content change
+---
+--- No need to use it directly, everything is setup in |MiniMap.setup()|.
 MiniMap.on_content_change = vim.schedule_wrap(function()
   -- Using `vim.schedule_wrap()` helps computing more precise buffer data.
   -- Example: if omitted, terminal buffer is recognized as normal and thus map
@@ -725,16 +896,25 @@ MiniMap.on_content_change = vim.schedule_wrap(function()
   MiniMap.refresh()
 end)
 
+--- Act on view change
+---
+--- No need to use it directly, everything is setup in |MiniMap.setup()|.
 MiniMap.on_view_change = vim.schedule_wrap(function()
   if not (H.is_proper_buftype() and H.is_source_buffer()) then return end
   MiniMap.refresh({}, { integrations = false, lines = false })
 end)
 
+--- Act on integration update
+---
+--- No need to use it directly, everything is setup in |MiniMap.setup()|.
 MiniMap.on_integration_update = vim.schedule_wrap(function()
   if not (H.is_proper_buftype() and H.is_source_buffer()) then return end
   MiniMap.refresh({}, { lines = false, scrollbar = false })
 end)
 
+--- Act on |WinLeave|
+---
+--- No need to use it directly, everything is setup in |MiniMap.setup()|.
 MiniMap.on_winleave = function()
   if not (H.is_proper_buftype() and H.is_source_buffer()) then return end
 
@@ -742,6 +922,9 @@ MiniMap.on_winleave = function()
   H.cache.previous_win.cursor = vim.api.nvim_win_get_cursor(0)
 end
 
+--- Track cursor in map buffer
+---
+--- No need to use it directly, everything is setup in |MiniMap.open()|.
 MiniMap.track_map_cursor = function()
   -- Operate only inside map window
   local cur_win, map_win = vim.api.nvim_get_current_win(), H.get_current_map_win()
