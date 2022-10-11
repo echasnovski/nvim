@@ -1,6 +1,13 @@
 require('mini.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 require('mini.starter').setup()
 vim.cmd([[autocmd User MiniStarterOpened setlocal fillchars=eob:\ ]])
+vim.cmd([[autocmd User MiniStarterOpened
+  \ lua vim.keymap.set(
+  \   'n',
+  \   '<CR>',
+  \   '<Cmd>lua MiniStarter.eval_current_item(); MiniMap.open()<CR>',
+  \   { buffer = true }
+  \ )]])
 
 require('mini.statusline').setup({
   content = {
@@ -60,6 +67,15 @@ vim.defer_fn(function()
   require('mini.indentscope').setup()
   require('mini.jump').setup()
   require('mini.jump2d').setup()
+
+  local gen_integr = require('mini.map').gen_integration
+  require('mini.map').setup({
+    integrations = { gen_integr.builtin_search(), gen_integr.gitsigns(), gen_integr.diagnostic() },
+  })
+  for _, key in ipairs({ 'n', 'N', '*' }) do
+    vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
+  end
+
   require('mini.misc').setup()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   require('mini.surround').setup({ search_method = 'cover_or_next' })

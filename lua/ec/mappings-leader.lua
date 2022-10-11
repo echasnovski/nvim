@@ -96,14 +96,15 @@ EC.leader_nmap.L = {
   ['x'] = { [[<Cmd>lua EC.execute_lua_line()<CR>]], 'execute `lua` line' },
 }
 
--- m is for 'make'
-local test_file_command = [[<Cmd>execute 'T FILE='.expand('%:.').' make test_file'<CR>]]
+-- m is for 'map'
 EC.leader_nmap.m = {
   ['name'] = '+Make',
-  ['d'] = { [[<Cmd>T make documentation<CR>]], 'make doc' },
-  ['m'] = { [[<Cmd>T make<CR>]],               'make' },
-  ['t'] = { [[<Cmd>T make test<CR>]],          'make test' },
-  ['T'] = { test_file_command,                 'make test file' },
+  ['c'] = { [[<Cmd>lua MiniMap.close()<CR>]], 'close' },
+  ['f'] = { [[<Cmd>lua MiniMap.toggle_focus()<CR>]], 'focus (toggle)' },
+  ['o'] = { [[<Cmd>lua MiniMap.open()<CR>]], 'open' },
+  ['r'] = { [[<Cmd>lua MiniMap.refresh()<CR>]], 'refresh' },
+  ['s'] = { [[<Cmd>lua MiniMap.toggle_side()<CR>]], 'side (toggle)' },
+  ['t'] = { [[<Cmd>lua MiniMap.toggle()<CR>]], 'toggle' },
 }
 
 -- o is for 'other'
