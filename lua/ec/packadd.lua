@@ -1,8 +1,12 @@
 -- Source plugin and its configuration immediately
 -- @param plugin String with name of plugin as subdirectory in 'pack'
 local packadd = function(plugin)
-  -- Add plugin
-  vim.cmd(string.format([[packadd %s]], plugin))
+  -- Add plugin. Using `packadd!` during startup is better for initialization
+  -- order (see `:h load-plugins`). Use `packadd` otherwise to also force
+  -- 'plugin' scripts to be executed right away.
+  -- local command = vim.v.vim_did_enter == 1 and 'packadd' or 'packadd!'
+  local command = 'packadd'
+  vim.cmd(string.format([[%s %s]], command, plugin))
 
   -- Try execute its configuration
   -- NOTE: configuration file should have the same name as plugin directory
@@ -16,7 +20,7 @@ end
 --
 -- @param plugin String with name of plugin as subdirectory in 'pack'
 local packadd_defer = function(plugin)
-  vim.defer_fn(function() packadd(plugin) end, 0)
+  vim.schedule(function() packadd(plugin) end)
 end
 
 -- Collection of minimal and fast Lua modules
@@ -124,4 +128,4 @@ local plugin_hooks = function()
   end
 end
 
-vim.defer_fn(plugin_hooks, 0)
+vim.schedule(plugin_hooks)

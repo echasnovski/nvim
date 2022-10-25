@@ -42,7 +42,7 @@ require('mini.statusline').setup({
 })
 require('mini.tabline').setup()
 
-vim.defer_fn(function()
+vim.schedule(function()
   require('mini.ai').setup({
     custom_textobjects = {
       F = require('mini.ai').gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
@@ -68,8 +68,13 @@ vim.defer_fn(function()
   require('mini.jump').setup()
   require('mini.jump2d').setup()
 
-  local gen_integr = require('mini.map').gen_integration
-  require('mini.map').setup({
+  local map = require('mini.map')
+  local gen_integr = map.gen_integration
+  local encode_symbols = map.gen_encode_symbols.block('3x2')
+  -- Use dots in `st` terminal because it can render them as blocks
+  if vim.startswith(vim.fn.getenv('TERM'), 'st') then encode_symbols = map.gen_encode_symbols.dot('4x2') end
+  map.setup({
+    symbols = { encode = encode_symbols },
     integrations = { gen_integr.builtin_search(), gen_integr.gitsigns(), gen_integr.diagnostic() },
   })
   for _, key in ipairs({ 'n', 'N', '*' }) do
@@ -81,12 +86,4 @@ vim.defer_fn(function()
   require('mini.surround').setup({ search_method = 'cover_or_next' })
   require('mini.test').setup()
   require('mini.trailspace').setup()
-
-  require('mini-dev.map').setup()
-  vim.keymap.set('n', '<Leader>mc', MiniMap.close)
-  vim.keymap.set('n', '<Leader>mf', MiniMap.toggle_focus)
-  vim.keymap.set('n', '<Leader>mo', MiniMap.open)
-  vim.keymap.set('n', '<Leader>mr', MiniMap.refresh)
-  vim.keymap.set('n', '<Leader>ms', MiniMap.toggle_side)
-  vim.keymap.set('n', '<Leader>mt', MiniMap.toggle)
-end, 0)
+end)

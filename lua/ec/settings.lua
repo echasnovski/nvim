@@ -14,7 +14,6 @@ vim.opt.timeoutlen   = 250      -- Faster response at cost of fast typing
 vim.opt.updatetime   = 300      -- Faster CursorHold
 vim.opt.switchbuf    = 'usetab' -- Use already opened buffers when switching
 vim.opt.modeline     = true     -- Allow modeline
-vim.opt.lazyredraw   = true     -- Use lazy redraw
 
 vim.opt.undofile = true                              -- Enable persistent undo
 vim.opt.undodir  = vim.fn.expand('$HOME/.config/nvim/misc/undodir') -- Set directory for persistent undo
@@ -36,6 +35,11 @@ vim.opt.colorcolumn   = '+1'    -- Draw colored column one step to the right of 
 vim.opt.linebreak     = true    -- Wrap long lines at 'breakat' (if 'wrap' is set)
 vim.opt.shortmess     = 'aoOFc' -- Disable certain messages from |ins-completion-menu|
 vim.opt.showmode      = false   -- Don't show mode in command line
+
+if vim.fn.has('nvim-0.9') == 1
+  -- Don't show "Scanning..." messages (improves 'mini.completion')
+  then vim.cmd('set shortmess+=C')
+end
 
 -- Colors =====================================================================
 vim.opt.background = 'dark' -- Use dark background

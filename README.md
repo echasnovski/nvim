@@ -29,7 +29,7 @@ pack/                   # Directory for plugins/submodules managed with native p
 spell/                  # Files for spelling
 ```
 
-NOTE: Currently this configuration defers sourcing of most time consuming commands (mostly plugins). This is done by using `vim.defer_fn(f, 0)` which defers execution of `f` until Vim is loaded. This doesn't affect general usability: it decreases time before showing fully functional start screen (or asked file) from ~240ms to ~105ms (on a not so quick i3-6100).
+NOTE: Currently this configuration defers sourcing of most time consuming commands (mostly plugins). This is done by using `vim.schedule(f)` which defers execution of `f` until Vim is loaded. This doesn't affect general usability: it decreases time before showing fully functional start screen (or asked file) from ~240ms to ~105ms (on a not so quick i3-6100) to ~65ms (on Ryzen 5600u).
 
 ## Installation
 
