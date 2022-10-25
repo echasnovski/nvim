@@ -91,6 +91,37 @@ EC.open_lazygit = function()
   vim.b.minipairs_disable = true
 end
 
+-- Overwrite `vim.ui.select()` with Telescope ---------------------------------
+EC.ui_select_default = vim.ui.select
+
+vim.ui.select = function(items, opts, on_choice)
+  local pickers = require('telescope.pickers')
+  local finders = require('telescope.finders')
+  local conf = require('telescope.config').values
+  local actions = require('telescope.actions')
+  local action_state = require('telescope.actions.state')
+
+  opts = opts or {}
+
+  -- Create picker options
+  local picker_opts = {
+    prompt_title = opts.prompt,
+    finder = finders.new_table({ results = items }),
+    sorter = conf.generic_sorter(),
+    attach_mappings = function(prompt_bufnr, _)
+      actions.select_default:replace(function()
+        actions.close(prompt_bufnr)
+        local selection = action_state.get_selected_entry()
+        -- Operate only on first selection
+        on_choice(selection[1], selection.index)
+      end)
+      return true
+    end,
+  }
+
+  pickers.new({}, picker_opts):find()
+end
+
 -- Manage 'mini.test' screenshots ---------------------------------------------
 local S = {}
 EC.minitest_screenshots = S
