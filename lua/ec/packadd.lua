@@ -40,7 +40,7 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd('plenary')
 
   -- Updater of current working directory
-  packadd('vim-rooter')
+  -- packadd('vim-rooter')
 
   -- Colorful icons
   packadd('nvim-web-devicons')
