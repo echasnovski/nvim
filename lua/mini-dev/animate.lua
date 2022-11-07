@@ -1,0 +1,484 @@
+-- MIT License Copyright (c) 2022 Evgeni Chasnovski
+
+-- TODO:
+-- Code:
+-- - Create appropriate tracking and autocommands to animate automatically.
+--   Should take into account:
+--     - Multibyte characters.
+--     - Folds?
+--
+-- Tests:
+--
+-- Documentation:
+--
+
+-- Documentation ==============================================================
+--- Animate common Neovim actions
+---
+--- Features:
+--- - Animate cursor movement within same buffer. Cursor path is configurable.
+--- - Animate window scrolling.
+--- - Customizable animation rule.
+---
+--- # Setup~
+---
+--- This module needs a setup with `require('mini.animate').setup({})` (replace
+--- `{}` with your `config` table). It will create global Lua table `MiniAnimate`
+--- which you can use for scripting or manually (with `:lua MiniAnimate.*`).
+---
+--- See |MiniAnimate.config| for available config settings.
+---
+--- You can override runtime config settings (like `config.modifiers`) locally
+--- to buffer inside `vim.b.minianimate_config` which should have same structure
+--- as `MiniAnimate.config`. See |mini.nvim-buffer-local-config| for more details.
+---
+--- # Comparisons~
+---
+--- - '???/neoscroll.nvim':
+--- - '???/specs.nvim':
+---
+--- # Highlight groups~
+---
+--- * `MiniAnimateCursorMove` - highlight of cursor during its animated movement.
+---
+--- To change any highlight group, modify it directly with |:highlight|.
+---
+--- # Disabling~
+---
+--- To disable, set `g:minianimate_disable` (globally) or `b:minianimate_disable`
+--- (for a buffer) to `v:true`. Considering high number of different scenarios
+--- and customization intentions, writing exact rules for disabling module's
+--- functionality is left to user. See |mini.nvim-disabling-recipes| for common
+--- recipes.
+---@tag mini.animate
+---@tag MiniAnimate
+
+---@diagnostic disable:undefined-field
+
+-- Module definition ==========================================================
+-- TODO: make local before release.
+MiniAnimate = {}
+H = {}
+
+--- Module setup
+---
+---@param config table|nil Module config table. See |MiniAnimate.config|.
+---
+---@usage `require('mini.animate').setup({})` (replace `{}` with your `config` table)
+MiniAnimate.setup = function(config)
+  -- Export module
+  _G.MiniAnimate = MiniAnimate
+
+  -- Setup config
+  config = H.setup_config(config)
+
+  -- Apply config
+  H.apply_config(config)
+
+  -- Module behavior
+  vim.api.nvim_exec(
+    [[augroup MiniAnimate
+        au!
+        au CursorMoved * lua MiniAnimate.on_cursor_move()
+      augroup END]],
+    false
+  )
+
+  -- Create highlighting
+  vim.cmd([[hi default MiniAnimateCursorMove gui=reverse,nocombine]])
+end
+
+--- Module config
+---
+--- Default values:
+---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # Options ~
+---
+MiniAnimate.config = {
+  cursor_move = {
+    enable = true,
+    animation_rule = function(_, n) return 250 / n end,
+    animation_path = function(destination) return H.animation_path_line(destination, H.animation_path_default_predicate) end,
+  },
+}
+--minidoc_afterlines_end
+
+-- Module functionality =======================================================
+--- Generate animation rule
+MiniAnimate.gen_animation_rule = {}
+
+MiniAnimate.gen_animation_rule.none = function()
+  return function() return 0 end
+end
+
+MiniAnimate.gen_animation_rule.linear =
+  function(opts) return H.animation_rule_arithmetic(0, H.normalize_animation_rule_opts(opts)) end
+
+MiniAnimate.gen_animation_rule.quadratic =
+  function(opts) return H.animation_rule_arithmetic(1, H.normalize_animation_rule_opts(opts)) end
+
+MiniAnimate.gen_animation_rule.cubic =
+  function(opts) return H.animation_rule_arithmetic(2, H.normalize_animation_rule_opts(opts)) end
+
+MiniAnimate.gen_animation_rule.quartic =
+  function(opts) return H.animation_rule_arithmetic(3, H.normalize_animation_rule_opts(opts)) end
+
+MiniAnimate.gen_animation_rule.exponential =
+  function(opts) return H.animation_rule_geometrical(H.normalize_animation_rule_opts(opts)) end
+
+--- Generate animation path
+---
+--- Animation path - callable which takes `destination` argument (2d integer
+--- point) and return array of relative to (0, 0) places for animation to
+--- visit.
+MiniAnimate.gen_animation_path = {}
+
+MiniAnimate.gen_animation_path.line = function(opts)
+  opts = opts or {}
+  local predicate = opts.predicate or H.animation_path_default_predicate
+
+  return function(destination) return H.animation_path_line(destination, predicate) end
+end
+
+MiniAnimate.gen_animation_path.angle = function(opts)
+  opts = opts or {}
+  local predicate = opts.predicate or H.animation_path_default_predicate
+  local first_direction = opts.first_direction or 'horizontal'
+
+  local make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
+
+  local append_horizontal = function(res, dest_col, const_line)
+    local step = make_step(dest_col)
+    if step == 0 then return end
+    for i = 0, dest_col - step, step do
+      table.insert(res, { const_line, i })
+    end
+  end
+
+  local append_vertical = function(res, dest_line, const_col)
+    local step = make_step(dest_line)
+    if step == 0 then return end
+    for i = 0, dest_line - step, step do
+      table.insert(res, { i, const_col })
+    end
+  end
+
+  return function(destination)
+    -- Don't animate in case of false predicate
+    if not predicate(destination) then return {} end
+
+    -- Travel along horizontal/vertical lines
+    local res = {}
+    if first_direction == 'horizontal' then
+      append_horizontal(res, destination[2], 0)
+      append_vertical(res, destination[1], destination[2])
+    else
+      append_vertical(res, destination[1], 0)
+      append_horizontal(res, destination[2], destination[1])
+    end
+
+    return res
+  end
+end
+
+MiniAnimate.on_cursor_move = function()
+  -- Use virtual column to allow tracking outside of linw width
+  local curpos = vim.fn.getcurpos()
+  local new_cursor_data = { buf_id = vim.api.nvim_get_current_buf(), pos = { curpos[2], curpos[3] + curpos[4] } }
+
+  local cache_cursor_data = H.cache.cursor_data
+  local should_animate = H.get_config().cursor_move.enable
+    and not H.is_disabled()
+    and new_cursor_data.buf_id == cache_cursor_data.buf_id
+
+  if should_animate then
+    H.animate_between(cache_cursor_data.pos, new_cursor_data.pos, MiniAnimate.config.cursor_move)
+  end
+  H.cache.cursor_data = new_cursor_data
+end
+
+-- Helper data ================================================================
+-- Module default config
+H.default_config = MiniAnimate.config
+
+-- Cache for various operations
+H.cache = {
+  cursor_data = {},
+}
+
+H.ns_id = {
+  cursor_move = vim.api.nvim_create_namespace('MiniAnimateCursorMove'),
+}
+
+-- Helper functionality =======================================================
+-- Settings -------------------------------------------------------------------
+H.setup_config = function(config)
+  -- General idea: if some table elements are not present in user-supplied
+  -- `config`, take them from default config
+  vim.validate({ config = { config, 'table', true } })
+  config = vim.tbl_deep_extend('force', H.default_config, config or {})
+
+  vim.validate({
+    cursor_move = { config.cursor_move, H.is_config_cursor_move },
+  })
+
+  return config
+end
+
+H.apply_config = function(config) MiniAnimate.config = config end
+
+H.is_disabled = function() return vim.g.minianimate_disable == true or vim.b.minianimate_disable == true end
+
+H.get_config = function(config)
+  return vim.tbl_deep_extend('force', MiniAnimate.config, vim.b.minianimate_config or {}, config or {})
+end
+
+-- Animation -------------------------------------------------------------------
+H.animate_between = function(from, to, opts)
+  local destination = { to[1] - from[1], to[2] - from[2] }
+  local path = opts.animation_path(destination)
+  if #path == 0 then return end
+
+  local step, n_steps = 1, #path
+  local animation_rule = opts.animation_rule
+
+  local timer = vim.loop.new_timer()
+  local wait_time = 0
+  local draw_step, draw_id
+  draw_step = vim.schedule_wrap(function()
+    H.undraw_cursor_mark(draw_id)
+
+    if n_steps < step then
+      timer:stop()
+      return
+    end
+
+    local pos = path[step]
+    draw_id = H.draw_cursor_mark(from[1] + pos[1], from[2] + pos[2])
+
+    step = step + 1
+    wait_time = wait_time + animation_rule(step, n_steps)
+
+    -- Repeat value of `timer` seems to be rounded down to milliseconds. This
+    -- means that values less than 1 will lead to timer stop repeating. Instead
+    -- call next step function directly.
+    if wait_time < 1 then
+      timer:set_repeat(0)
+      -- Use `return` to make this proper "tail call"
+      return draw_step()
+    else
+      timer:set_repeat(wait_time)
+      wait_time = 0
+      timer:again()
+    end
+  end)
+
+  -- Start non-repeating timer without callback execution
+  timer:start(10000000, 0, draw_step)
+
+  -- Draw step zero (at origin) immediately
+  draw_step()
+end
+
+H.draw_cursor_mark = function(line, col, id)
+  local extmark_opts = {
+    id = id,
+    hl_mode = 'combine',
+    priority = 1000,
+    right_gravity = false,
+    virt_text = { { ' ', 'MiniAnimateCursorMove' } },
+    virt_text_pos = 'overlay',
+  }
+
+  -- Allow drawing mark outside of '$' mark of line (its width plus one)
+  local n_past_line = col - vim.fn.virtcol({ line, '$' })
+  if n_past_line > 0 then
+    col = col - n_past_line
+    extmark_opts.virt_text =
+      { { string.rep(' ', n_past_line), 'MiniIndentscopePrefix' }, { ' ', 'MiniAnimateCursorMove' } }
+  end
+
+  local _, res = pcall(vim.api.nvim_buf_set_extmark, 0, H.ns_id.cursor_move, line - 1, col - 1, extmark_opts)
+  return res
+end
+
+H.undraw_cursor_mark = function(id) pcall(vim.api.nvim_buf_del_extmark, 0, H.ns_id.cursor_move, id) end
+
+-- Animation rules -------------------------------------------------------------
+H.normalize_animation_rule_opts = function(x)
+  x = vim.tbl_deep_extend('force', H.get_config(), { duration = 100, easing = 'in', unit = 'total' }, x or {})
+  H.validate_if(H.is_valid_animation_rule_opts, x, 'opts')
+  return x
+end
+
+H.is_valid_animation_rule_opts = function(x)
+  if type(x.duration) ~= 'number' or x.duration < 0 then
+    return false, [[In `gen_animation()` option `duration` should be a positive number.]]
+  end
+
+  if not vim.tbl_contains({ 'in', 'out', 'in-out' }, x.easing) then
+    return false, [[In `gen_animation()` option `easing` should be one of 'in', 'out', or 'in-out'.]]
+  end
+
+  if not vim.tbl_contains({ 'total', 'step' }, x.unit) then
+    return false, [[In `gen_animation()` option `unit` should be one of 'step' or 'total'.]]
+  end
+
+  return true
+end
+
+--- Imitate common power easing function
+---
+--- Every step is preceeded by waiting time decreasing/increasing in power
+--- series fashion (`d` is "delta", ensures total duration time):
+--- - "in":  d*n^p; d*(n-1)^p; ... ; d*2^p;     d*1^p
+--- - "out": d*1^p; d*2^p;     ... ; d*(n-1)^p; d*n^p
+--- - "in-out": "in" until 0.5*n, "out" afterwards
+---
+--- This way it imitates `power + 1` common easing function because animation
+--- progression behaves as sum of `power` elements.
+---
+---@param power number Power of series.
+---@param opts table Options from `MiniMap.gen_animation` entry.
+---@private
+H.animation_rule_arithmetic = function(power, opts)
+  -- Sum of first `n_steps` natural numbers raised to `power`
+  local arith_power_sum = ({
+    [0] = function(n_steps) return n_steps end,
+    [1] = function(n_steps) return n_steps * (n_steps + 1) / 2 end,
+    [2] = function(n_steps) return n_steps * (n_steps + 1) * (2 * n_steps + 1) / 6 end,
+    [3] = function(n_steps) return n_steps ^ 2 * (n_steps + 1) ^ 2 / 4 end,
+  })[power]
+
+  -- Function which computes common delta so that overall duration will have
+  -- desired value (based on supplied `opts`)
+  local duration_unit, duration_value = opts.unit, opts.duration
+  local make_delta = function(n_steps, is_in_out)
+    local total_time = duration_unit == 'total' and duration_value or (duration_value * n_steps)
+    local total_parts
+    if is_in_out then
+      -- Examples:
+      -- - n_steps=5: 3^d, 2^d, 1^d, 2^d, 3^d
+      -- - n_steps=6: 3^d, 2^d, 1^d, 1^d, 2^d, 3^d
+      total_parts = 2 * arith_power_sum(math.ceil(0.5 * n_steps)) - (n_steps % 2 == 1 and 1 or 0)
+    else
+      total_parts = arith_power_sum(n_steps)
+    end
+    return total_time / total_parts
+  end
+
+  return ({
+    ['in'] = function(s, n) return make_delta(n) * (n - s + 1) ^ power end,
+    ['out'] = function(s, n) return make_delta(n) * s ^ power end,
+    ['in-out'] = function(s, n)
+      local n_half = math.ceil(0.5 * n)
+      local s_halved
+      if n % 2 == 0 then
+        s_halved = s <= n_half and (n_half - s + 1) or (s - n_half)
+      else
+        s_halved = s < n_half and (n_half - s + 1) or (s - n_half + 1)
+      end
+      return make_delta(n, true) * s_halved ^ power
+    end,
+  })[opts.easing]
+end
+
+--- Imitate common exponential easing function
+---
+--- Every step is preceeded by waiting time decreasing/increasing in geometric
+--- progression fashion (`d` is 'delta', ensures total duration time):
+--- - 'in':  (d-1)*d^(n-1); (d-1)*d^(n-2); ...; (d-1)*d^1;     (d-1)*d^0
+--- - 'out': (d-1)*d^0;     (d-1)*d^1;     ...; (d-1)*d^(n-2); (d-1)*d^(n-1)
+--- - 'in-out': 'in' until 0.5*n, 'out' afterwards
+---
+---@param opts table Options from `MiniMap.gen_animation` entry.
+---@private
+H.animation_rule_geometrical = function(opts)
+  -- Function which computes common delta so that overall duration will have
+  -- desired value (based on supplied `opts`)
+  local duration_unit, duration_value = opts.unit, opts.duration
+  local make_delta = function(n_steps, is_in_out)
+    local total_time = duration_unit == 'step' and (duration_value * n_steps) or duration_value
+    -- Exact solution to avoid possible (bad) approximation
+    if n_steps == 1 then return total_time + 1 end
+    if is_in_out then
+      local n_half = math.ceil(0.5 * n_steps)
+      if n_steps % 2 == 1 then total_time = total_time + math.pow(0.5 * total_time + 1, 1 / n_half) - 1 end
+      return math.pow(0.5 * total_time + 1, 1 / n_half)
+    end
+    return math.pow(total_time + 1, 1 / n_steps)
+  end
+
+  return ({
+    ['in'] = function(s, n)
+      local delta = make_delta(n)
+      return (delta - 1) * delta ^ (n - s)
+    end,
+    ['out'] = function(s, n)
+      local delta = make_delta(n)
+      return (delta - 1) * delta ^ (s - 1)
+    end,
+    ['in-out'] = function(s, n)
+      local n_half, delta = math.ceil(0.5 * n), make_delta(n, true)
+      local s_halved
+      if n % 2 == 0 then
+        s_halved = s <= n_half and (n_half - s) or (s - n_half - 1)
+      else
+        s_halved = s < n_half and (n_half - s) or (s - n_half)
+      end
+      return (delta - 1) * delta ^ s_halved
+    end,
+  })[opts.easing]
+end
+
+-- Animation paths -------------------------------------------------------------
+H.animation_path_line = function(destination, predicate)
+  -- Don't animate in case of false predicate
+  if not predicate(destination) then return {} end
+
+  -- Travel along the biggest horizontal/vertical difference, but stop one
+  -- step before destination
+  local l, c = destination[1], destination[2]
+  local l_abs, c_abs = math.abs(l), math.abs(c)
+  local max_diff = math.max(l_abs, c_abs)
+
+  local res = {}
+  for i = 0, max_diff - 1 do
+    local prop = i / max_diff
+    table.insert(res, { H.round(prop * l), H.round(prop * c) })
+  end
+  return res
+end
+
+H.animation_path_default_predicate = function(destination) return destination[1] < -1 or 1 < destination[1] end
+
+-- Predicators -----------------------------------------------------------------
+H.is_config_cursor_move = function(x)
+  if type(x.enable) ~= 'boolean' then return false, H.msg_config('cursor_move.enable', 'boolean') end
+  if not vim.is_callable(x.animation_rule) then return false, H.msg_config('cursor_move.animation_rule', 'callable') end
+  if not vim.is_callable(x.animation_path) then return false, H.msg_config('cursor_move.animation_path', 'callable') end
+
+  return true
+end
+
+H.msg_config = function(x_name, msg) return string.format('`%s` should be %s.', x_name, msg) end
+
+-- Utilities ------------------------------------------------------------------
+H.error = function(msg) error(string.format('(mini.animate) %s', msg), 0) end
+
+H.validate_if = function(predicate, x, x_name)
+  local is_valid, msg = predicate(x, x_name)
+  if not is_valid then H.error(msg) end
+end
+
+H.set_extmark_safely = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
+
+H.str_width = function(x)
+  -- Use first returned value (UTF-32 index, and not UTF-16 one)
+  local res = vim.str_utfindex(x)
+  return res
+end
+
+H.round = function(x) return math.floor(x + 0.5) end
+
+return MiniAnimate
