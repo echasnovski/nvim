@@ -4,10 +4,21 @@
 -- Code:
 -- - Create appropriate tracking and autocommands to animate automatically.
 --   Should take into account:
---     - Multibyte characters.
---     - Folds?
+--     - Folds?  Probably not with reasoning to make "animation of absoulte
+--       cursor movement within buffer".
+--     - Visualizing only inside current view? Probably not with reasoning to
+--       make "animation of absoulte cursor movement within buffer".
+-- - Scroll? Probably, needs the refactor of `H.animate_between()` into general
+--   `H.animate(callback, opts)`.
 --
 -- Tests:
+-- - Cursor move:
+--     - All timing and path generators.
+--     - Mark placing inside/outside line width.
+--     - Multibyte characters.
+--     - Folds.
+--     - Window view.
+--     - Simultenous animations.
 --
 -- Documentation:
 --
@@ -33,13 +44,15 @@
 --- as `MiniAnimate.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons~
----
+--- - Neovide:
 --- - '???/neoscroll.nvim':
 --- - '???/specs.nvim':
 ---
 --- # Highlight groups~
 ---
 --- * `MiniAnimateCursorMove` - highlight of cursor during its animated movement.
+--- * `MiniAnimateCursorMovePrefix` - highlight of space between line end and
+---   cursor animation mark.
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 ---
@@ -85,7 +98,11 @@ MiniAnimate.setup = function(config)
   )
 
   -- Create highlighting
-  vim.cmd([[hi default MiniAnimateCursorMove gui=reverse,nocombine]])
+  vim.api.nvim_exec(
+    [[hi default MiniAnimateCursorMove gui=reverse,nocombine
+      hi MiniAnimateCursorMovePrefix guifg=NONE guibg=NONE gui=nocombine]],
+    false
+  )
 end
 
 --- Module config
@@ -97,52 +114,48 @@ end
 MiniAnimate.config = {
   cursor_move = {
     enable = true,
-    animation_rule = function(_, n) return 250 / n end,
-    animation_path = function(destination) return H.animation_path_line(destination, H.animation_path_default_predicate) end,
+    -- timing = function(_, n) return 250 / n end,
+    timing = function(_, n) return math.min(10, 250 / n) end,
+    path = function(destination) return H.path_line(destination, H.path_default_predicate) end,
   },
 }
 --minidoc_afterlines_end
 
 -- Module functionality =======================================================
 --- Generate animation rule
-MiniAnimate.gen_animation_rule = {}
+MiniAnimate.gen_timing = {}
 
-MiniAnimate.gen_animation_rule.none = function()
+MiniAnimate.gen_timing.none = function()
   return function() return 0 end
 end
 
-MiniAnimate.gen_animation_rule.linear =
-  function(opts) return H.animation_rule_arithmetic(0, H.normalize_animation_rule_opts(opts)) end
+MiniAnimate.gen_timing.linear = function(opts) return H.timing_arithmetic(0, H.normalize_timing_opts(opts)) end
 
-MiniAnimate.gen_animation_rule.quadratic =
-  function(opts) return H.animation_rule_arithmetic(1, H.normalize_animation_rule_opts(opts)) end
+MiniAnimate.gen_timing.quadratic = function(opts) return H.timing_arithmetic(1, H.normalize_timing_opts(opts)) end
 
-MiniAnimate.gen_animation_rule.cubic =
-  function(opts) return H.animation_rule_arithmetic(2, H.normalize_animation_rule_opts(opts)) end
+MiniAnimate.gen_timing.cubic = function(opts) return H.timing_arithmetic(2, H.normalize_timing_opts(opts)) end
 
-MiniAnimate.gen_animation_rule.quartic =
-  function(opts) return H.animation_rule_arithmetic(3, H.normalize_animation_rule_opts(opts)) end
+MiniAnimate.gen_timing.quartic = function(opts) return H.timing_arithmetic(3, H.normalize_timing_opts(opts)) end
 
-MiniAnimate.gen_animation_rule.exponential =
-  function(opts) return H.animation_rule_geometrical(H.normalize_animation_rule_opts(opts)) end
+MiniAnimate.gen_timing.exponential = function(opts) return H.timing_geometrical(H.normalize_timing_opts(opts)) end
 
 --- Generate animation path
 ---
 --- Animation path - callable which takes `destination` argument (2d integer
 --- point) and return array of relative to (0, 0) places for animation to
 --- visit.
-MiniAnimate.gen_animation_path = {}
+MiniAnimate.gen_path = {}
 
-MiniAnimate.gen_animation_path.line = function(opts)
+MiniAnimate.gen_path.line = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.animation_path_default_predicate
+  local predicate = opts.predicate or H.path_default_predicate
 
-  return function(destination) return H.animation_path_line(destination, predicate) end
+  return function(destination) return H.path_line(destination, predicate) end
 end
 
-MiniAnimate.gen_animation_path.angle = function(opts)
+MiniAnimate.gen_path.angle = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.animation_path_default_predicate
+  local predicate = opts.predicate or H.path_default_predicate
   local first_direction = opts.first_direction or 'horizontal'
 
   local make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
@@ -182,8 +195,8 @@ MiniAnimate.gen_animation_path.angle = function(opts)
 end
 
 MiniAnimate.on_cursor_move = function()
-  -- Use virtual column to allow tracking outside of linw width
-  local curpos = vim.fn.getcurpos()
+  -- Use character column to allow tracking outside of linw width
+  local curpos = vim.fn.getcursorcharpos()
   local new_cursor_data = { buf_id = vim.api.nvim_get_current_buf(), pos = { curpos[2], curpos[3] + curpos[4] } }
 
   local cache_cursor_data = H.cache.cursor_data
@@ -204,6 +217,7 @@ H.default_config = MiniAnimate.config
 -- Cache for various operations
 H.cache = {
   cursor_data = {},
+  cursor_mark_id = 1,
 }
 
 H.ns_id = {
@@ -236,28 +250,31 @@ end
 -- Animation -------------------------------------------------------------------
 H.animate_between = function(from, to, opts)
   local destination = { to[1] - from[1], to[2] - from[2] }
-  local path = opts.animation_path(destination)
+  local path = opts.path(destination)
   if #path == 0 then return end
 
   local step, n_steps = 1, #path
-  local animation_rule = opts.animation_rule
+  local timing = opts.timing
 
-  local timer = vim.loop.new_timer()
-  local wait_time = 0
-  local draw_step, draw_id
+  -- Using explicit buffer id allows for animation
+  local draw_opts = { buf_id = vim.api.nvim_get_current_buf(), mark_id = H.cache.cursor_mark_id }
+  H.cache.cursor_mark_id = draw_opts.mark_id + 1
+
+  local timer, wait_time = vim.loop.new_timer(), 0
+  local draw_step
   draw_step = vim.schedule_wrap(function()
-    H.undraw_cursor_mark(draw_id)
+    H.undraw_cursor_mark(draw_opts)
 
-    if n_steps < step then
+    if n_steps < step or vim.api.nvim_get_current_buf() ~= draw_opts.buf_id then
       timer:stop()
       return
     end
 
     local pos = path[step]
-    draw_id = H.draw_cursor_mark(from[1] + pos[1], from[2] + pos[2])
+    H.draw_cursor_mark(from[1] + pos[1], from[2] + pos[2], draw_opts)
 
     step = step + 1
-    wait_time = wait_time + animation_rule(step, n_steps)
+    wait_time = wait_time + timing(step, n_steps)
 
     -- Repeat value of `timer` seems to be rounded down to milliseconds. This
     -- means that values less than 1 will lead to timer stop repeating. Instead
@@ -280,9 +297,9 @@ H.animate_between = function(from, to, opts)
   draw_step()
 end
 
-H.draw_cursor_mark = function(line, col, id)
+H.draw_cursor_mark = function(line, virt_col, opts)
   local extmark_opts = {
-    id = id,
+    id = opts.mark_id,
     hl_mode = 'combine',
     priority = 1000,
     right_gravity = false,
@@ -291,27 +308,28 @@ H.draw_cursor_mark = function(line, col, id)
   }
 
   -- Allow drawing mark outside of '$' mark of line (its width plus one)
-  local n_past_line = col - vim.fn.virtcol({ line, '$' })
+  local n_past_line = virt_col - vim.fn.virtcol({ line, '$' })
   if n_past_line > 0 then
-    col = col - n_past_line
+    virt_col = virt_col - n_past_line
     extmark_opts.virt_text =
-      { { string.rep(' ', n_past_line), 'MiniIndentscopePrefix' }, { ' ', 'MiniAnimateCursorMove' } }
+      { { string.rep(' ', n_past_line), 'MiniAnimateCursorMovePrefix' }, { ' ', 'MiniAnimateCursorMove' } }
   end
 
-  local _, res = pcall(vim.api.nvim_buf_set_extmark, 0, H.ns_id.cursor_move, line - 1, col - 1, extmark_opts)
-  return res
+  local mark_col = H.virtcol2col(0, line, virt_col - 1)
+  pcall(vim.api.nvim_buf_set_extmark, opts.buf_id, H.ns_id.cursor_move, line - 1, mark_col, extmark_opts)
 end
 
-H.undraw_cursor_mark = function(id) pcall(vim.api.nvim_buf_del_extmark, 0, H.ns_id.cursor_move, id) end
+H.undraw_cursor_mark =
+  function(opts) pcall(vim.api.nvim_buf_del_extmark, opts.buf_id, H.ns_id.cursor_move, opts.mark_id) end
 
 -- Animation rules -------------------------------------------------------------
-H.normalize_animation_rule_opts = function(x)
-  x = vim.tbl_deep_extend('force', H.get_config(), { duration = 100, easing = 'in', unit = 'total' }, x or {})
-  H.validate_if(H.is_valid_animation_rule_opts, x, 'opts')
+H.normalize_timing_opts = function(x)
+  x = vim.tbl_deep_extend('force', H.get_config(), { duration = 100, easing = 'in-out', unit = 'total' }, x or {})
+  H.validate_if(H.is_valid_timing_opts, x, 'opts')
   return x
 end
 
-H.is_valid_animation_rule_opts = function(x)
+H.is_valid_timing_opts = function(x)
   if type(x.duration) ~= 'number' or x.duration < 0 then
     return false, [[In `gen_animation()` option `duration` should be a positive number.]]
   end
@@ -341,7 +359,7 @@ end
 ---@param power number Power of series.
 ---@param opts table Options from `MiniMap.gen_animation` entry.
 ---@private
-H.animation_rule_arithmetic = function(power, opts)
+H.timing_arithmetic = function(power, opts)
   -- Sum of first `n_steps` natural numbers raised to `power`
   local arith_power_sum = ({
     [0] = function(n_steps) return n_steps end,
@@ -393,7 +411,7 @@ end
 ---
 ---@param opts table Options from `MiniMap.gen_animation` entry.
 ---@private
-H.animation_rule_geometrical = function(opts)
+H.timing_geometrical = function(opts)
   -- Function which computes common delta so that overall duration will have
   -- desired value (based on supplied `opts`)
   local duration_unit, duration_value = opts.unit, opts.duration
@@ -432,7 +450,7 @@ H.animation_rule_geometrical = function(opts)
 end
 
 -- Animation paths -------------------------------------------------------------
-H.animation_path_line = function(destination, predicate)
+H.path_line = function(destination, predicate)
   -- Don't animate in case of false predicate
   if not predicate(destination) then return {} end
 
@@ -450,13 +468,13 @@ H.animation_path_line = function(destination, predicate)
   return res
 end
 
-H.animation_path_default_predicate = function(destination) return destination[1] < -1 or 1 < destination[1] end
+H.path_default_predicate = function(destination) return destination[1] < -1 or 1 < destination[1] end
 
 -- Predicators -----------------------------------------------------------------
 H.is_config_cursor_move = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('cursor_move.enable', 'boolean') end
-  if not vim.is_callable(x.animation_rule) then return false, H.msg_config('cursor_move.animation_rule', 'callable') end
-  if not vim.is_callable(x.animation_path) then return false, H.msg_config('cursor_move.animation_path', 'callable') end
+  if not vim.is_callable(x.timing) then return false, H.msg_config('cursor_move.timing', 'callable') end
+  if not vim.is_callable(x.path) then return false, H.msg_config('cursor_move.path', 'callable') end
 
   return true
 end
@@ -480,5 +498,9 @@ H.str_width = function(x)
 end
 
 H.round = function(x) return math.floor(x + 0.5) end
+
+-- `virtcol2col()` is only present in Neovim>=0.8. Earlier Neovim versions will
+-- have troubles dealing with multibyte characters.
+H.virtcol2col = vim.fn.virtcol2col or function(_, _, col) return col end
 
 return MiniAnimate
