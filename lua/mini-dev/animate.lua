@@ -8,8 +8,9 @@
 --       cursor movement within buffer".
 --     - Visualizing only inside current view? Probably not with reasoning to
 --       make "animation of absoulte cursor movement within buffer".
--- - Scroll? Probably, needs the refactor of `H.animate_between()` into general
---   `H.animate(callback, opts)`.
+-- - Scroll:
+--     - Deal with back-to-back scrolls.
+--     - Quantify severity of CPU loads.
 --
 -- Tests:
 -- - Cursor move:
@@ -92,11 +93,12 @@ MiniAnimate.setup = function(config)
   vim.api.nvim_exec(
     [[augroup MiniAnimate
         au!
-        au CursorMoved * lua MiniAnimate.on_cursor_move()
+        au CursorMoved * lua MiniAnimate.on_cursor_moved()
+        au WinScrolled * noautocmd lua MiniAnimate.on_win_scrolled()
+        au WinEnter    * noautocmd lua MiniAnimate.on_win_enter()
       augroup END]],
     false
   )
-
   -- Create highlighting
   vim.api.nvim_exec(
     [[hi default MiniAnimateCursorMove gui=reverse,nocombine
@@ -112,11 +114,17 @@ end
 ---@text # Options ~
 ---
 MiniAnimate.config = {
+  -- Path of cursor movement within same buffer
   cursor_move = {
     enable = true,
-    -- timing = function(_, n) return 250 / n end,
     timing = function(_, n) return math.min(10, 250 / n) end,
     path = function(destination) return H.path_line(destination, H.path_default_predicate) end,
+  },
+
+  -- Window vertical scroll
+  scroll = {
+    enable = true,
+    timing = function(_, n) return math.min(10, 250 / n) end,
   },
 }
 --minidoc_afterlines_end
@@ -158,10 +166,8 @@ MiniAnimate.gen_path.angle = function(opts)
   local predicate = opts.predicate or H.path_default_predicate
   local first_direction = opts.first_direction or 'horizontal'
 
-  local make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
-
   local append_horizontal = function(res, dest_col, const_line)
-    local step = make_step(dest_col)
+    local step = H.make_step(dest_col)
     if step == 0 then return end
     for i = 0, dest_col - step, step do
       table.insert(res, { const_line, i })
@@ -169,7 +175,7 @@ MiniAnimate.gen_path.angle = function(opts)
   end
 
   local append_vertical = function(res, dest_line, const_col)
-    local step = make_step(dest_line)
+    local step = H.make_step(dest_line)
     if step == 0 then return end
     for i = 0, dest_line - step, step do
       table.insert(res, { i, const_col })
@@ -194,20 +200,59 @@ MiniAnimate.gen_path.angle = function(opts)
   end
 end
 
-MiniAnimate.on_cursor_move = function()
+MiniAnimate.on_cursor_moved = function()
+  if H.cache.is_inside_animate_scroll then return end
+
+  local cursor_move_config = H.get_config().cursor_move
+
   -- Use character column to allow tracking outside of linw width
   local curpos = vim.fn.getcursorcharpos()
-  local new_cursor_data = { buf_id = vim.api.nvim_get_current_buf(), pos = { curpos[2], curpos[3] + curpos[4] } }
+  local new_tracking = { buf_id = vim.api.nvim_get_current_buf(), pos = { curpos[2], curpos[3] + curpos[4] } }
 
-  local cache_cursor_data = H.cache.cursor_data
-  local should_animate = H.get_config().cursor_move.enable
+  local prev_tracking = H.cache.cursor_tracking
+  local should_animate = cursor_move_config.enable
     and not H.is_disabled()
-    and new_cursor_data.buf_id == cache_cursor_data.buf_id
+    and new_tracking.buf_id == prev_tracking.buf_id
 
   if should_animate then
-    H.animate_between(cache_cursor_data.pos, new_cursor_data.pos, MiniAnimate.config.cursor_move)
+    local animate_step = H.make_cursor_move_step(prev_tracking, new_tracking, cursor_move_config)
+    if animate_step ~= nil then H.animate(animate_step.step_action, animate_step.step_timing) end
   end
-  H.cache.cursor_data = new_cursor_data
+
+  H.cache.cursor_tracking = new_tracking
+end
+
+MiniAnimate.on_win_scrolled = function()
+  if H.cache.is_inside_animate_scroll then return end
+
+  local scroll_config = H.get_config().scroll
+
+  local new_tracking =
+    { buf_id = vim.api.nvim_get_current_buf(), win_id = vim.api.nvim_get_current_win(), view = vim.fn.winsaveview() }
+
+  local prev_tracking = H.cache.scroll_tracking
+  local should_animate = scroll_config.enable
+    and not H.is_disabled()
+    and new_tracking.buf_id == prev_tracking.buf_id
+    and new_tracking.win_id == prev_tracking.win_id
+    and new_tracking.view.topline ~= prev_tracking.view.topline
+
+  if should_animate then
+    local animate_step = H.make_scroll_step(prev_tracking, new_tracking, scroll_config)
+    if animate_step ~= nil then
+      -- Start animating from previous view
+      vim.fn.winrestview(prev_tracking.view)
+      H.cache.is_inside_animate_scroll = true
+      H.animate(animate_step.step_action, animate_step.step_timing)
+    end
+  end
+
+  H.cache.scroll_tracking = new_tracking
+end
+
+MiniAnimate.on_win_enter = function()
+  H.cache.scroll_tracking =
+    { buf_id = vim.api.nvim_get_current_buf(), win_id = vim.api.nvim_get_current_win(), view = vim.fn.winsaveview() }
 end
 
 -- Helper data ================================================================
@@ -216,8 +261,13 @@ H.default_config = MiniAnimate.config
 
 -- Cache for various operations
 H.cache = {
-  cursor_data = {},
+  -- Cursor move animation data
+  cursor_tracking = {},
   cursor_mark_id = 1,
+
+  -- Scroll animation data
+  scroll_tracking = {},
+  is_inside_animate_scroll = false,
 }
 
 H.ns_id = {
@@ -234,6 +284,7 @@ H.setup_config = function(config)
 
   vim.validate({
     cursor_move = { config.cursor_move, H.is_config_cursor_move },
+    scroll = { config.cursor_move, H.is_config_scroll },
   })
 
   return config
@@ -247,34 +298,22 @@ H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniAnimate.config, vim.b.minianimate_config or {}, config or {})
 end
 
--- Animation -------------------------------------------------------------------
-H.animate_between = function(from, to, opts)
-  local destination = { to[1] - from[1], to[2] - from[2] }
-  local path = opts.path(destination)
-  if #path == 0 then return end
-
-  local step, n_steps = 1, #path
-  local timing = opts.timing
-
+-- Animation ------------------------------------------------------------------
+H.animate = function(step_action, step_timing)
   -- Using explicit buffer id allows for animation
-  local draw_opts = { buf_id = vim.api.nvim_get_current_buf(), mark_id = H.cache.cursor_mark_id }
-  H.cache.cursor_mark_id = draw_opts.mark_id + 1
-
+  local step = 1
   local timer, wait_time = vim.loop.new_timer(), 0
+
   local draw_step
   draw_step = vim.schedule_wrap(function()
-    H.undraw_cursor_mark(draw_opts)
-
-    if n_steps < step or vim.api.nvim_get_current_buf() ~= draw_opts.buf_id then
+    local ok, should_continue = pcall(step_action, step)
+    if not (ok and should_continue) then
       timer:stop()
       return
     end
 
-    local pos = path[step]
-    H.draw_cursor_mark(from[1] + pos[1], from[2] + pos[2], draw_opts)
-
     step = step + 1
-    wait_time = wait_time + timing(step, n_steps)
+    wait_time = wait_time + step_timing(step)
 
     -- Repeat value of `timer` seems to be rounded down to milliseconds. This
     -- means that values less than 1 will lead to timer stop repeating. Instead
@@ -295,6 +334,35 @@ H.animate_between = function(from, to, opts)
 
   -- Draw step zero (at origin) immediately
   draw_step()
+end
+
+-- Cursor movement ------------------------------------------------------------
+H.make_cursor_move_step = function(data_from, data_to, opts)
+  local pos_from, pos_to = data_from.pos, data_to.pos
+  local destination = { pos_to[1] - pos_from[1], pos_to[2] - pos_from[2] }
+  local path = opts.path(destination)
+  if #path == 0 then return end
+
+  local n_steps = #path
+  local timing = opts.timing
+
+  -- Using explicit buffer id allows correct animation stop after buffer switch
+  local draw_opts = { buf_id = data_from.buf_id, mark_id = H.cache.cursor_mark_id }
+  H.cache.cursor_mark_id = draw_opts.mark_id + 1
+
+  return {
+    step_action = function(step)
+      H.undraw_cursor_mark(draw_opts)
+
+      -- Don't draw outside of prescribed number of steps or not inside current buffer
+      if n_steps < step or vim.api.nvim_get_current_buf() ~= draw_opts.buf_id then return false end
+
+      local pos = path[step]
+      H.draw_cursor_mark(pos_from[1] + pos[1], pos_from[2] + pos[2], draw_opts)
+      return true
+    end,
+    step_timing = function(step) return timing(step, n_steps) end,
+  }
 end
 
 H.draw_cursor_mark = function(line, virt_col, opts)
@@ -322,7 +390,61 @@ end
 H.undraw_cursor_mark =
   function(opts) pcall(vim.api.nvim_buf_del_extmark, opts.buf_id, H.ns_id.cursor_move, opts.mark_id) end
 
--- Animation rules -------------------------------------------------------------
+-- Scroll ---------------------------------------------------------------------
+H.make_scroll_step = function(data_from, data_to, opts)
+  local from_line, to_line = data_from.view.topline, data_to.view.topline
+  local n_steps = H.get_scroll_n_steps(from_line, to_line)
+  -- Don't animate if scrolling only single line
+  if n_steps <= 1 then return end
+
+  local scroll_once = from_line < to_line and H.scroll_down or H.scroll_up
+
+  local buf_id, win_id, timing = data_from.buf_id, data_from.win_id, opts.timing
+  local stop_scrolling = function(restore_end_view)
+    if restore_end_view then vim.fn.winrestview(data_to.view) end
+    H.cache.is_inside_animate_scroll = false
+    return false
+  end
+
+  return {
+    step_action = function(step)
+      local is_same_win_buf = vim.api.nvim_get_current_buf() == buf_id and vim.api.nvim_get_current_win() == win_id
+      if not is_same_win_buf then return stop_scrolling(false) end
+
+      if n_steps < step then return stop_scrolling(true) end
+
+      local ok, _ = pcall(scroll_once)
+      if not ok then return stop_scrolling(true) end
+
+      return true
+    end,
+    step_timing = function(step) return timing(step, n_steps) end,
+  }
+end
+
+-- Key '\25' is escaped '<C-Y>'
+H.scroll_up = function() vim.cmd('noautocmd normal! \25') end
+
+-- Key '\5' is escaped '<C-E>'
+H.scroll_down = function() vim.cmd('noautocmd normal! \5') end
+
+H.get_scroll_n_steps = function(from_line, to_line)
+  local min_line, max_line = math.min(from_line, to_line), math.max(from_line, to_line)
+
+  -- If `max_line` is inside fold, scrol should stop on the fold (not after)
+  local max_line_fold_start = vim.fn.foldclosed(max_line)
+  local target_line = max_line_fold_start == -1 and max_line or max_line_fold_start
+
+  local i, res = min_line, 0
+  while i < target_line do
+    res = res + 1
+    local end_fold_line = vim.fn.foldclosedend(i)
+    i = (end_fold_line == -1 and i or end_fold_line) + 1
+  end
+  return res
+end
+
+-- Animation timings ----------------------------------------------------------
 H.normalize_timing_opts = function(x)
   x = vim.tbl_deep_extend('force', H.get_config(), { duration = 100, easing = 'in-out', unit = 'total' }, x or {})
   H.validate_if(H.is_valid_timing_opts, x, 'opts')
@@ -449,7 +571,7 @@ H.timing_geometrical = function(opts)
   })[opts.easing]
 end
 
--- Animation paths -------------------------------------------------------------
+-- Animation paths ------------------------------------------------------------
 H.path_line = function(destination, predicate)
   -- Don't animate in case of false predicate
   if not predicate(destination) then return {} end
@@ -470,11 +592,18 @@ end
 
 H.path_default_predicate = function(destination) return destination[1] < -1 or 1 < destination[1] end
 
--- Predicators -----------------------------------------------------------------
+-- Predicators ----------------------------------------------------------------
 H.is_config_cursor_move = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('cursor_move.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('cursor_move.timing', 'callable') end
   if not vim.is_callable(x.path) then return false, H.msg_config('cursor_move.path', 'callable') end
+
+  return true
+end
+
+H.is_config_scroll = function(x)
+  if type(x.enable) ~= 'boolean' then return false, H.msg_config('scroll.enable', 'boolean') end
+  if not vim.is_callable(x.timing) then return false, H.msg_config('scroll.timing', 'callable') end
 
   return true
 end
@@ -496,6 +625,8 @@ H.str_width = function(x)
   local res = vim.str_utfindex(x)
   return res
 end
+
+H.make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
 
 H.round = function(x) return math.floor(x + 0.5) end
 
