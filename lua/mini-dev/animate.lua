@@ -2,15 +2,8 @@
 
 -- TODO:
 -- Code:
--- - Create appropriate tracking and autocommands to animate automatically.
---   Should take into account:
---     - Folds?  Probably not with reasoning to make "animation of absoulte
---       cursor movement within buffer".
---     - Visualizing only inside current view? Probably not with reasoning to
---       make "animation of absoulte cursor movement within buffer".
 -- - Scroll:
---     - Deal with back-to-back scrolls.
---     - Quantify severity of CPU loads.
+--     - Optimize CPU load. Probably, by throttling redrawings somehow.
 --
 -- Tests:
 -- - Cursor move:
@@ -22,7 +15,9 @@
 --     - Simultenous animations.
 --
 -- Documentation:
---
+-- - Manually scrolling (like with `<C-d>`/`<C-u>`) while scrolling animation
+--   is performed leads to a scroll from the window view active at the moment
+--   of manual scroll. Leads to an undershoot of scrolling.
 
 -- Documentation ==============================================================
 --- Animate common Neovim actions
@@ -93,9 +88,9 @@ MiniAnimate.setup = function(config)
   vim.api.nvim_exec(
     [[augroup MiniAnimate
         au!
-        au CursorMoved * lua MiniAnimate.on_cursor_moved()
-        au WinScrolled * noautocmd lua MiniAnimate.on_win_scrolled()
-        au WinEnter    * noautocmd lua MiniAnimate.on_win_enter()
+        au CursorMoved * lua MiniAnimate.auto_cursor_move()
+        au WinScrolled * lua MiniAnimate.auto_scroll()
+        au WinEnter    * lua MiniAnimate.on_win_enter()
       augroup END]],
     false
   )
@@ -130,6 +125,43 @@ MiniAnimate.config = {
 --minidoc_afterlines_end
 
 -- Module functionality =======================================================
+MiniAnimate.animate = function(step_action, step_timing)
+  -- Using explicit buffer id allows for animation
+  local step = 1
+  local timer, wait_time = vim.loop.new_timer(), 0
+
+  local draw_step
+  draw_step = vim.schedule_wrap(function()
+    local ok, should_continue = pcall(step_action, step)
+    if not (ok and should_continue) then
+      timer:stop()
+      return
+    end
+
+    step = step + 1
+    wait_time = wait_time + step_timing(step)
+
+    -- Repeat value of `timer` seems to be rounded down to milliseconds. This
+    -- means that values less than 1 will lead to timer stop repeating. Instead
+    -- call next step function directly.
+    if wait_time < 1 then
+      timer:set_repeat(0)
+      -- Use `return` to make this proper "tail call"
+      return draw_step()
+    else
+      timer:set_repeat(wait_time)
+      wait_time = 0
+      timer:again()
+    end
+  end)
+
+  -- Start non-repeating timer without callback execution
+  timer:start(10000000, 0, draw_step)
+
+  -- Draw step zero (at origin) immediately
+  draw_step()
+end
+
 --- Generate animation rule
 MiniAnimate.gen_timing = {}
 
@@ -200,37 +232,40 @@ MiniAnimate.gen_path.angle = function(opts)
   end
 end
 
-MiniAnimate.on_cursor_moved = function()
-  if H.cache.is_inside_animate_scroll then return end
+MiniAnimate.auto_cursor_move = function()
+  -- Don't animate if inside scroll animation
+  if H.is_inside_scroll() then return end
 
+  -- Track necessary information
+  local prev_tracking, new_tracking = H.cache.cursor_tracking, H.compute_cursor_move_tracking()
+
+  -- Possibly animate
   local cursor_move_config = H.get_config().cursor_move
-
-  -- Use character column to allow tracking outside of linw width
-  local curpos = vim.fn.getcursorcharpos()
-  local new_tracking = { buf_id = vim.api.nvim_get_current_buf(), pos = { curpos[2], curpos[3] + curpos[4] } }
-
-  local prev_tracking = H.cache.cursor_tracking
   local should_animate = cursor_move_config.enable
     and not H.is_disabled()
     and new_tracking.buf_id == prev_tracking.buf_id
 
   if should_animate then
     local animate_step = H.make_cursor_move_step(prev_tracking, new_tracking, cursor_move_config)
-    if animate_step ~= nil then H.animate(animate_step.step_action, animate_step.step_timing) end
+    if animate_step ~= nil then MiniAnimate.animate(animate_step.step_action, animate_step.step_timing) end
   end
 
+  -- Track data
   H.cache.cursor_tracking = new_tracking
 end
 
-MiniAnimate.on_win_scrolled = function()
-  if H.cache.is_inside_animate_scroll then return end
+MiniAnimate.auto_scroll = function()
+  -- Do nothing if `WinScrolled` event was a result of animated scrolling
+  if H.is_inside_scroll() then return end
 
+  -- Stop current animated scrolling if `WinScrolled` comes from somewhere else
+  H.stop_scrolling()
+
+  -- Track necessary information
+  local prev_tracking, new_tracking = H.cache.scroll_tracking, H.compute_scroll_tracking()
+
+  -- Possibly animate
   local scroll_config = H.get_config().scroll
-
-  local new_tracking =
-    { buf_id = vim.api.nvim_get_current_buf(), win_id = vim.api.nvim_get_current_win(), view = vim.fn.winsaveview() }
-
-  local prev_tracking = H.cache.scroll_tracking
   local should_animate = scroll_config.enable
     and not H.is_disabled()
     and new_tracking.buf_id == prev_tracking.buf_id
@@ -240,20 +275,16 @@ MiniAnimate.on_win_scrolled = function()
   if should_animate then
     local animate_step = H.make_scroll_step(prev_tracking, new_tracking, scroll_config)
     if animate_step ~= nil then
-      -- Start animating from previous view
-      vim.fn.winrestview(prev_tracking.view)
-      H.cache.is_inside_animate_scroll = true
-      H.animate(animate_step.step_action, animate_step.step_timing)
+      H.start_scrolling(prev_tracking.view)
+      MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
     end
   end
 
+  -- Track data
   H.cache.scroll_tracking = new_tracking
 end
 
-MiniAnimate.on_win_enter = function()
-  H.cache.scroll_tracking =
-    { buf_id = vim.api.nvim_get_current_buf(), win_id = vim.api.nvim_get_current_win(), view = vim.fn.winsaveview() }
-end
+MiniAnimate.on_win_enter = function() H.cache.scroll_tracking = H.compute_scroll_tracking() end
 
 -- Helper data ================================================================
 -- Module default config
@@ -262,12 +293,13 @@ H.default_config = MiniAnimate.config
 -- Cache for various operations
 H.cache = {
   -- Cursor move animation data
-  cursor_tracking = {},
+  cursor_tracking = { buf_id = nil, pos = {} },
   cursor_mark_id = 1,
 
   -- Scroll animation data
-  scroll_tracking = {},
-  is_inside_animate_scroll = false,
+  scroll_animated_topline = nil,
+  scroll_id = 0,
+  scroll_tracking = { buf_id = nil, win_id = nil, view = {} },
 }
 
 H.ns_id = {
@@ -298,44 +330,6 @@ H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniAnimate.config, vim.b.minianimate_config or {}, config or {})
 end
 
--- Animation ------------------------------------------------------------------
-H.animate = function(step_action, step_timing)
-  -- Using explicit buffer id allows for animation
-  local step = 1
-  local timer, wait_time = vim.loop.new_timer(), 0
-
-  local draw_step
-  draw_step = vim.schedule_wrap(function()
-    local ok, should_continue = pcall(step_action, step)
-    if not (ok and should_continue) then
-      timer:stop()
-      return
-    end
-
-    step = step + 1
-    wait_time = wait_time + step_timing(step)
-
-    -- Repeat value of `timer` seems to be rounded down to milliseconds. This
-    -- means that values less than 1 will lead to timer stop repeating. Instead
-    -- call next step function directly.
-    if wait_time < 1 then
-      timer:set_repeat(0)
-      -- Use `return` to make this proper "tail call"
-      return draw_step()
-    else
-      timer:set_repeat(wait_time)
-      wait_time = 0
-      timer:again()
-    end
-  end)
-
-  -- Start non-repeating timer without callback execution
-  timer:start(10000000, 0, draw_step)
-
-  -- Draw step zero (at origin) immediately
-  draw_step()
-end
-
 -- Cursor movement ------------------------------------------------------------
 H.make_cursor_move_step = function(data_from, data_to, opts)
   local pos_from, pos_to = data_from.pos, data_to.pos
@@ -352,17 +346,26 @@ H.make_cursor_move_step = function(data_from, data_to, opts)
 
   return {
     step_action = function(step)
+      -- Undraw previous mark. Doing it before early return allows to clear
+      -- last animation mark.
       H.undraw_cursor_mark(draw_opts)
 
       -- Don't draw outside of prescribed number of steps or not inside current buffer
       if n_steps < step or vim.api.nvim_get_current_buf() ~= draw_opts.buf_id then return false end
 
+      -- Draw cursor mark
       local pos = path[step]
       H.draw_cursor_mark(pos_from[1] + pos[1], pos_from[2] + pos[2], draw_opts)
       return true
     end,
     step_timing = function(step) return timing(step, n_steps) end,
   }
+end
+
+H.compute_cursor_move_tracking = function()
+  -- Use character column to allow tracking outside of linw width
+  local curpos = vim.fn.getcursorcharpos()
+  return { buf_id = vim.api.nvim_get_current_buf(), pos = { curpos[2], curpos[3] + curpos[4] } }
 end
 
 H.draw_cursor_mark = function(line, virt_col, opts)
@@ -399,23 +402,29 @@ H.make_scroll_step = function(data_from, data_to, opts)
 
   local scroll_once = from_line < to_line and H.scroll_down or H.scroll_up
 
-  local buf_id, win_id, timing = data_from.buf_id, data_from.win_id, opts.timing
-  local stop_scrolling = function(restore_end_view)
-    if restore_end_view then vim.fn.winrestview(data_to.view) end
-    H.cache.is_inside_animate_scroll = false
-    return false
-  end
-
+  local scroll_id, buf_id, win_id = H.cache.scroll_id, data_from.buf_id, data_from.win_id
+  local timing = opts.timing
   return {
     step_action = function(step)
+      -- Stop this animation if other one has already started. Don't use
+      -- `stop_scrolling()` as it will stop animation currently in action.
+      if H.cache.scroll_id ~= scroll_id then return false end
+
+      -- Stop animation if jumped to different buffer or window. Don't restore
+      -- window view as it can only operate on current window.
       local is_same_win_buf = vim.api.nvim_get_current_buf() == buf_id and vim.api.nvim_get_current_win() == win_id
-      if not is_same_win_buf then return stop_scrolling(false) end
+      if not is_same_win_buf then return H.stop_scrolling(false) end
 
-      if n_steps < step then return stop_scrolling(true) end
+      -- Properly stop animation if step is too big
+      if n_steps < step then return H.stop_scrolling(data_to.view) end
 
+      -- Prefomr scroll. Possibly stop on error.
       local ok, _ = pcall(scroll_once)
-      if not ok then return stop_scrolling(true) end
+      if not ok then return H.stop_scrolling(data_to.view) end
 
+      -- Track current topline view in order to distinguish `WinScrolled` event
+      -- from `scroll_once()` and from user
+      H.cache.scroll_animated_topline = vim.fn.line('w0')
       return true
     end,
     step_timing = function(step) return timing(step, n_steps) end,
@@ -423,10 +432,33 @@ H.make_scroll_step = function(data_from, data_to, opts)
 end
 
 -- Key '\25' is escaped '<C-Y>'
-H.scroll_up = function() vim.cmd('noautocmd normal! \25') end
+H.scroll_up = function() vim.cmd('normal! \25') end
 
 -- Key '\5' is escaped '<C-E>'
-H.scroll_down = function() vim.cmd('noautocmd normal! \5') end
+H.scroll_down = function() vim.cmd('normal! \5') end
+
+H.is_inside_scroll = function() return vim.fn.line('w0') == H.cache.scroll_animated_topline end
+
+H.start_scrolling = function(start_view)
+  vim.fn.winrestview(start_view)
+  H.cache.scroll_animated_topline = vim.fn.line('w0')
+  return true
+end
+
+H.stop_scrolling = function(end_view)
+  if end_view ~= nil then vim.fn.winrestview(end_view) end
+  H.cache.scroll_animated_topline = nil
+  H.cache.scroll_id = H.cache.scroll_id + 1
+  return false
+end
+
+H.compute_scroll_tracking = function()
+  return {
+    buf_id = vim.api.nvim_get_current_buf(),
+    win_id = vim.api.nvim_get_current_win(),
+    view = vim.fn.winsaveview(),
+  }
+end
 
 H.get_scroll_n_steps = function(from_line, to_line)
   local min_line, max_line = math.min(from_line, to_line), math.max(from_line, to_line)
