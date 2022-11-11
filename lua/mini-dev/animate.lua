@@ -2,8 +2,17 @@
 
 -- TODO:
 -- Code:
+-- - Cursor move:
+--     - `gen_path` entries for showing only destination position (like
+--       'specs.nvim' and 'beacon.nvim', but one mark at a time).
+--       Possible approaches: alternating jumps within single line, narrowing
+--       2d square spiral.
 -- - Scroll:
---     - Optimize CPU load. Probably, by throttling redrawings somehow.
+--     - Rethink back-to-back scrolling. Consider following cases: spamming
+--       `<C-d>`; mouse wheel scroll.
+--     - One command emitting several `WinScrolled` events should work
+--       properly based on the last view. Example: `nnoremap n nzvzz`.
+-- - Window resize, utilizing `WinScrolled` event.
 --
 -- Tests:
 -- - Cursor move:
@@ -13,6 +22,14 @@
 --     - Folds.
 --     - Window view.
 --     - Simultenous animations.
+-- - Scroll:
+--     - `max_steps` is correctly respected: total number of steps never
+--       exceeds it and subscrolls are divided as equal as possible (with
+--       remainder split in tails).
+--     - Manual scroll during animated scroll is done without jump directly
+--       from current window view.
+--     - One command emitting several `WinScrolled` events should work
+--       properly based on the last view. Example: `nnoremap n nzvzz`.
 --
 -- Documentation:
 -- - Manually scrolling (like with `<C-d>`/`<C-u>`) while scrolling animation
@@ -120,6 +137,7 @@ MiniAnimate.config = {
   scroll = {
     enable = true,
     timing = function(_, n) return math.min(10, 250 / n) end,
+    max_steps = 60,
   },
 }
 --minidoc_afterlines_end
@@ -234,7 +252,7 @@ end
 
 MiniAnimate.auto_cursor_move = function()
   -- Don't animate if inside scroll animation
-  if H.is_inside_scroll() then return end
+  if H.cache.is_scrolling then return end
 
   -- Track necessary information
   local prev_tracking, new_tracking = H.cache.cursor_tracking, H.compute_cursor_move_tracking()
@@ -255,8 +273,8 @@ MiniAnimate.auto_cursor_move = function()
 end
 
 MiniAnimate.auto_scroll = function()
-  -- Do nothing if `WinScrolled` event was a result of animated scrolling
-  if H.is_inside_scroll() then return end
+  -- Don't animate if inside scroll animation
+  if H.cache.is_scrolling then return end
 
   -- Stop current animated scrolling if `WinScrolled` comes from somewhere else
   H.stop_scrolling()
@@ -297,8 +315,7 @@ H.cache = {
   cursor_mark_id = 1,
 
   -- Scroll animation data
-  scroll_animated_topline = nil,
-  scroll_id = 0,
+  is_scrolling = false,
   scroll_tracking = { buf_id = nil, win_id = nil, view = {} },
 }
 
@@ -316,7 +333,7 @@ H.setup_config = function(config)
 
   vim.validate({
     cursor_move = { config.cursor_move, H.is_config_cursor_move },
-    scroll = { config.cursor_move, H.is_config_scroll },
+    scroll = { config.scroll, H.is_config_scroll },
   })
 
   return config
@@ -396,20 +413,21 @@ H.undraw_cursor_mark =
 -- Scroll ---------------------------------------------------------------------
 H.make_scroll_step = function(data_from, data_to, opts)
   local from_line, to_line = data_from.view.topline, data_to.view.topline
-  local n_steps = H.get_scroll_n_steps(from_line, to_line)
+
+  -- Compute how subscrolls are done
+  local total_scroll = H.get_n_visible_lines(from_line, to_line) - 1
+  local n_steps = math.min(total_scroll, opts.max_steps)
+  local step_scrolls = H.divide_equal(total_scroll, n_steps)
+
   -- Don't animate if scrolling only single line
   if n_steps <= 1 then return end
 
   local scroll_once = from_line < to_line and H.scroll_down or H.scroll_up
 
-  local scroll_id, buf_id, win_id = H.cache.scroll_id, data_from.buf_id, data_from.win_id
+  local buf_id, win_id = data_from.buf_id, data_from.win_id
   local timing = opts.timing
   return {
     step_action = function(step)
-      -- Stop this animation if other one has already started. Don't use
-      -- `stop_scrolling()` as it will stop animation currently in action.
-      if H.cache.scroll_id ~= scroll_id then return false end
-
       -- Stop animation if jumped to different buffer or window. Don't restore
       -- window view as it can only operate on current window.
       local is_same_win_buf = vim.api.nvim_get_current_buf() == buf_id and vim.api.nvim_get_current_win() == win_id
@@ -418,13 +436,10 @@ H.make_scroll_step = function(data_from, data_to, opts)
       -- Properly stop animation if step is too big
       if n_steps < step then return H.stop_scrolling(data_to.view) end
 
-      -- Prefomr scroll. Possibly stop on error.
-      local ok, _ = pcall(scroll_once)
+      -- Preform scroll. Possibly stop on error.
+      local ok, _ = pcall(scroll_once, step_scrolls[step])
       if not ok then return H.stop_scrolling(data_to.view) end
 
-      -- Track current topline view in order to distinguish `WinScrolled` event
-      -- from `scroll_once()` and from user
-      H.cache.scroll_animated_topline = vim.fn.line('w0')
       return true
     end,
     step_timing = function(step) return timing(step, n_steps) end,
@@ -432,47 +447,29 @@ H.make_scroll_step = function(data_from, data_to, opts)
 end
 
 -- Key '\25' is escaped '<C-Y>'
-H.scroll_up = function() vim.cmd('normal! \25') end
+H.scroll_up = function(n) vim.cmd(('normal! %d\25'):format(n or 1)) end
 
 -- Key '\5' is escaped '<C-E>'
-H.scroll_down = function() vim.cmd('normal! \5') end
-
-H.is_inside_scroll = function() return vim.fn.line('w0') == H.cache.scroll_animated_topline end
+H.scroll_down = function(n) vim.cmd(('normal! %d\5'):format(n or 1)) end
 
 H.start_scrolling = function(start_view)
   vim.fn.winrestview(start_view)
-  H.cache.scroll_animated_topline = vim.fn.line('w0')
+  H.cache.is_scrolling = true
   return true
 end
 
 H.stop_scrolling = function(end_view)
   if end_view ~= nil then vim.fn.winrestview(end_view) end
-  H.cache.scroll_animated_topline = nil
-  H.cache.scroll_id = H.cache.scroll_id + 1
+  H.cache.is_scrolling = false
   return false
 end
 
 H.compute_scroll_tracking = function()
-  return {
+  local res = {
     buf_id = vim.api.nvim_get_current_buf(),
     win_id = vim.api.nvim_get_current_win(),
     view = vim.fn.winsaveview(),
   }
-end
-
-H.get_scroll_n_steps = function(from_line, to_line)
-  local min_line, max_line = math.min(from_line, to_line), math.max(from_line, to_line)
-
-  -- If `max_line` is inside fold, scrol should stop on the fold (not after)
-  local max_line_fold_start = vim.fn.foldclosed(max_line)
-  local target_line = max_line_fold_start == -1 and max_line or max_line_fold_start
-
-  local i, res = min_line, 0
-  while i < target_line do
-    res = res + 1
-    local end_fold_line = vim.fn.foldclosedend(i)
-    i = (end_fold_line == -1 and i or end_fold_line) + 1
-  end
   return res
 end
 
@@ -636,6 +633,7 @@ end
 H.is_config_scroll = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('scroll.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('scroll.timing', 'callable') end
+  if type(x.max_steps) ~= 'number' then return false, H.msg_config('scroll.max_steps', 'number') end
 
   return true
 end
@@ -650,17 +648,40 @@ H.validate_if = function(predicate, x, x_name)
   if not is_valid then H.error(msg) end
 end
 
-H.set_extmark_safely = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
+H.get_n_visible_lines = function(from_line, to_line)
+  local min_line, max_line = math.min(from_line, to_line), math.max(from_line, to_line)
 
-H.str_width = function(x)
-  -- Use first returned value (UTF-32 index, and not UTF-16 one)
-  local res = vim.str_utfindex(x)
+  -- If `max_line` is inside fold, scrol should stop on the fold (not after)
+  local max_line_fold_start = vim.fn.foldclosed(max_line)
+  local target_line = max_line_fold_start == -1 and max_line or max_line_fold_start
+
+  local i, res = min_line, 1
+  while i < target_line do
+    res = res + 1
+    local end_fold_line = vim.fn.foldclosedend(i)
+    i = (end_fold_line == -1 and i or end_fold_line) + 1
+  end
   return res
 end
 
 H.make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
 
 H.round = function(x) return math.floor(x + 0.5) end
+
+H.divide_equal = function(x, n)
+  local res = {}
+  local base, remainder = math.floor(x / n), x % n
+
+  -- Distribute equally with the remainder being inside tails
+  local tail_left = math.floor(0.5 * remainder)
+  local tail_right = n - (remainder - tail_left)
+  for i = 1, n do
+    local is_in_tail = i <= tail_left or tail_right < i
+    res[i] = base + (is_in_tail and 1 or 0)
+  end
+
+  return res
+end
 
 -- `virtcol2col()` is only present in Neovim>=0.8. Earlier Neovim versions will
 -- have troubles dealing with multibyte characters.
