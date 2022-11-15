@@ -58,13 +58,15 @@ EC.insert_section = function(symbol, total_width)
   symbol = symbol or '='
   total_width = total_width or 79
 
-  -- Insert section template
+  -- Insert template: 'commentstring' but with '%s' replaced by section symbols
   local comment_string = vim.bo.commentstring
-  local section_template = comment_string:format(string.rep(symbol, total_width - 2))
+  local content = string.rep(symbol, total_width - (comment_string:len() - 2))
+  local section_template = comment_string:format(content)
   vim.fn.append(vim.fn.line('.'), section_template)
 
   -- Enable Replace mode in appropriate place
-  vim.fn.cursor(vim.fn.line('.') + 1, 3)
+  local inner_start = comment_string:find('%%s')
+  vim.fn.cursor(vim.fn.line('.') + 1, inner_start)
   vim.cmd([[startreplace]])
 end
 
@@ -94,7 +96,7 @@ end
 local root_cache = {}
 EC.set_buffer_root = function()
   local path = vim.api.nvim_buf_get_name(0)
-  if path == '' then return end
+  if path == '' or vim.fs == nil then return end
 
   local root = root_cache[path]
   if root == nil then

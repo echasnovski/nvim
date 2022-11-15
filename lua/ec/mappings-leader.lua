@@ -51,14 +51,19 @@ EC.leader_nmap.f = {
 }
 
 -- g is for git
+local goto_hunk_cmd = function(direction)
+  local unfold_and_center =
+    [[if MiniAnimate ~= nil then MiniAnimate.execute_after('scroll', 'normal! zvzz') else vim.cmd('normal! zvzz') end]]
+  return string.format([[<Cmd>lua require("gitsigns").%s_hunk(); %s<CR>]], direction, unfold_and_center)
+end
 EC.leader_nmap.g = {
   ['name'] = '+git',
   ['A'] = { [[<Cmd>lua require("gitsigns").stage_buffer()<CR>]],        'add buffer' },
   ['a'] = { [[<Cmd>lua require("gitsigns").stage_hunk()<CR>]],          'add (stage) hunk' },
   ['b'] = { [[<Cmd>lua require("gitsigns").blame_line()<CR>]],          'blame line' },
   ['g'] = { [[<Cmd>lua EC.open_lazygit()<CR>]],                         'git tab' },
-  ['j'] = { [[<Cmd>lua require("gitsigns").next_hunk()<CR>zvzz]],       'next hunk' },
-  ['k'] = { [[<Cmd>lua require("gitsigns").prev_hunk()<CR>zvzz]],       'prev hunk' },
+  ['j'] = { goto_hunk_cmd('next'),                                      'next hunk' },
+  ['k'] = { goto_hunk_cmd('prev'),                                      'prev hunk' },
   ['p'] = { [[<Cmd>lua require("gitsigns").preview_hunk()<CR>]],        'preview hunk' },
   ['q'] = { [[<Cmd>lua require("gitsigns").setqflist()<CR>:copen<CR>]], 'quickfix hunks' },
   ['u'] = { [[<Cmd>lua require("gitsigns").undo_stage_hunk()<CR>]],     'undo stage hunk' },

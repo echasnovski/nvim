@@ -26,8 +26,9 @@ require('nvim-treesitter.configs').setup({
     'toml',
     'tsx',
     'yaml',
+    'vim',
   },
-  highlight = { enable = true },
+  highlight = { enable = true, disable = { 'help' } },
   textobjects = { enable = false },
   indent = { enable = false },
   playground = {
@@ -46,6 +47,7 @@ require('nvim-treesitter.configs').setup({
   --   },
   -- },
 })
+require('vim.treesitter.query').set_query('lua', 'injections', '')
 
 -- Implement custom fold expression for markdown files. Should be defined after
 -- `nvim-treesitter` initialization to avoid issues from lazy loading.
