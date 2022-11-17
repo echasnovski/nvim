@@ -23,14 +23,18 @@
 --       possible (with remainder split in tails).
 --     - Manual scroll during animated scroll is done without jump directly
 --       from current window view.
---     - One command emitting several `WinScrolled` events should work
---       properly based on the last view. Example: `nnoremap n nzvzz`.
+--     - One command resulting into several `WinScrolled` events (like
+--       `nnoremap n nzvzz`) is not really working.
+--       Use `MiniAnimate.execute_after()`.
 --     - There shouldn't be any step after `n_steps`. Specifically, manually
 --       setting cursor *just* after scroll end should not lead to restoring
---       cursor some time later.
+--       cursor some time later. This is more a test for appropriate treatment
+--       of step 0.
 --     - Cursor during scroll should be placed at final position or at first
 --       column of top/bottom line (whichever is closest) if it is outside of
 --       current window view.
+--     - Switching window and/or buffer should result into immediate stop of
+--       animation.
 --
 -- Documentation:
 -- - Manually scrolling (like with `<C-d>`/`<C-u>`) while scrolling animation
@@ -55,6 +59,12 @@
 --       `n<Cmd>lua MiniAnimate.execute_after('scroll', 'normal! zvzz')<CR>`.
 -- - If output of either `config.cursor.path()` or `config.scroll.subscroll()`
 --   is `nil` or array of length 0, animation is suspended.
+-- - Animated of scroll and resize are done only for current window. This is a
+--   current limitation of |WinScrolled| event. Context:
+--     - https://github.com/neovim/neovim/issues/18222
+--     - https://github.com/vim/vim/issues/10628
+--     - https://github.com/neovim/neovim/pull/13589
+--     - https://github.com/neovim/neovim/issues/11532
 
 -- Documentation ==============================================================
 --- Animate common Neovim actions
@@ -191,15 +201,17 @@ MiniAnimate.execute_after = function(animation_type, action)
   end)
 end
 
-MiniAnimate.animate = function(step_action, step_timing)
-  -- Using explicit buffer id allows for animation
-  local step = 1
+-- Action (step 0) - wait (step 1) - action (step 1) - ...
+MiniAnimate.animate = function(step_action, step_timing, opts)
+  opts = vim.tbl_deep_extend('force', { max_steps = 10000000 }, opts or {})
+
+  local step, max_steps = 0, opts.max_steps
   local timer, wait_time = vim.loop.new_timer(), 0
 
   local draw_step
   draw_step = vim.schedule_wrap(function()
     local ok, should_continue = pcall(step_action, step)
-    if not (ok and should_continue) then
+    if not (ok and should_continue and step < max_steps) then
       timer:stop()
       return
     end
@@ -346,7 +358,7 @@ end
 
 --- Generate subscroll
 ---
---- Subscrolls - callable which takes `total_scroll` argument (single positive
+--- Subscroll - callable which takes `total_scroll` argument (single positive
 --- integer) and returns array of positive integers each representing the
 --- amount of lines needs to be scrolled in corresponding step. All subscroll
 --- values should sum to input `total_scroll`.
@@ -363,18 +375,18 @@ MiniAnimate.auto_cursor = function()
   if H.cache.scroll_is_active then return end
 
   -- Update necessary information. NOTE: tracking only on `CursorMoved` and not
-  -- inside every animation step (like in scroll animation) for perfomance
+  -- inside every animation step (like in scroll animation) for performance
   -- reasons: cursor movement is much more common action than scrolling.
-  local prev_tracking, new_tracking = H.cache.cursor_tracking, H.compute_cursor_tracking()
-  H.cache.cursor_tracking = new_tracking
+  local prev_state, new_state = H.cache.cursor_state, H.get_cursor_state()
+  H.cache.cursor_state = new_state
   H.cache.cursor_event_id = H.cache.cursor_event_id + 1
 
   -- Possibly animate
   local cursor_config = H.get_config().cursor
-  local should_animate = cursor_config.enable and not H.is_disabled() and new_tracking.buf_id == prev_tracking.buf_id
+  local should_animate = cursor_config.enable and not H.is_disabled() and new_state.buf_id == prev_state.buf_id
   if not should_animate then return end
 
-  local animate_step = H.make_cursor_step(prev_tracking, new_tracking, cursor_config)
+  local animate_step = H.make_cursor_step(prev_state, new_state, cursor_config)
   if not animate_step then return end
 
   H.start_cursor()
@@ -382,33 +394,32 @@ MiniAnimate.auto_cursor = function()
 end
 
 MiniAnimate.auto_scroll = function()
-  -- Don't animate if nothing has changed sinse last registered scroll.
+  -- Don't animate if nothing has changed since last registered scroll.
   -- Mostly used to distinguish `WinScrolled` from animation and other ones.
-  if H.cache.scroll_tracking.view.topline == vim.fn.line('w0') then return end
+  local prev_state = H.cache.scroll_state
+  if prev_state.view.topline == vim.fn.line('w0') then return end
 
-  -- Update necessary information. NOTE: track information inside every
-  -- animation step mostly to allow smoother animation in case of manual scroll
-  -- is done during animation.
-  local prev_tracking, new_tracking = H.cache.scroll_tracking, H.compute_scroll_tracking()
-  H.cache.scroll_tracking = new_tracking
+  -- Update necessary information
+  local new_state = H.get_scroll_state()
+  H.cache.scroll_state = new_state
   H.cache.scroll_event_id = H.cache.scroll_event_id + 1
 
   -- Possibly animate
   local scroll_config = H.get_config().scroll
   local should_animate = scroll_config.enable
     and not H.is_disabled()
-    and new_tracking.buf_id == prev_tracking.buf_id
-    and new_tracking.win_id == prev_tracking.win_id
+    and new_state.buf_id == prev_state.buf_id
+    and new_state.win_id == prev_state.win_id
   if not should_animate then return end
 
-  local animate_step = H.make_scroll_step(prev_tracking, new_tracking, scroll_config)
+  local animate_step = H.make_scroll_step(prev_state, new_state, scroll_config)
   if not animate_step then return end
 
-  H.start_scroll(prev_tracking.view)
+  H.start_scroll(prev_state)
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
-MiniAnimate.on_win_enter = function() H.cache.scroll_tracking = H.compute_scroll_tracking() end
+MiniAnimate.on_win_enter = function() H.cache.scroll_state = H.get_scroll_state() end
 
 -- Helper data ================================================================
 -- Module default config
@@ -419,12 +430,12 @@ H.cache = {
   -- Cursor move animation data
   cursor_event_id = 0,
   cursor_is_active = false,
-  cursor_tracking = { buf_id = nil, pos = {} },
+  cursor_state = { buf_id = nil, pos = {} },
 
   -- Scroll animation data
   scroll_event_id = 0,
   scroll_is_active = false,
-  scroll_tracking = { buf_id = nil, win_id = nil, view = {} },
+  scroll_state = { buf_id = nil, win_id = nil, view = {} },
 }
 
 H.ns_id = {
@@ -433,8 +444,8 @@ H.ns_id = {
 
 H.animation_done_events = {
   cursor = 'MiniAnimateCursorDone',
-  scroll = 'MiniAnimateScrollDone',
   resize = 'MiniAnimateResizeDone',
+  scroll = 'MiniAnimateScrollDone',
 }
 
 -- Helper functionality =======================================================
@@ -465,8 +476,8 @@ end
 H.emit_done_event = function(animation_type) vim.cmd('doautocmd User ' .. H.animation_done_events[animation_type]) end
 
 -- Cursor ---------------------------------------------------------------------
-H.make_cursor_step = function(data_from, data_to, opts)
-  local pos_from, pos_to = data_from.pos, data_to.pos
+H.make_cursor_step = function(state_from, state_to, opts)
+  local pos_from, pos_to = state_from.pos, state_to.pos
   local destination = { pos_to[1] - pos_from[1], pos_to[2] - pos_from[2] }
   local path = opts.path(destination)
   if path == nil or #path == 0 then return H.stop_cursor() end
@@ -475,7 +486,7 @@ H.make_cursor_step = function(data_from, data_to, opts)
   local timing = opts.timing
 
   -- Using explicit buffer id allows correct animation stop after buffer switch
-  local event_id, buf_id = H.cache.cursor_event_id, data_from.buf_id
+  local event_id, buf_id = H.cache.cursor_event_id, state_from.buf_id
 
   return {
     step_action = function(step)
@@ -488,10 +499,10 @@ H.make_cursor_step = function(data_from, data_to, opts)
       if H.cache.cursor_event_id ~= event_id then return false end
 
       -- Don't draw outside of prescribed number of steps or not inside current buffer
-      if n_steps < step or vim.api.nvim_get_current_buf() ~= buf_id then return H.stop_cursor() end
+      if n_steps <= step or vim.api.nvim_get_current_buf() ~= buf_id then return H.stop_cursor() end
 
-      -- Draw cursor mark
-      local pos = path[step]
+      -- Draw cursor mark (starting from initial zero step)
+      local pos = path[step + 1]
       H.draw_cursor_mark(pos_from[1] + pos[1], pos_from[2] + pos[2], buf_id)
       return true
     end,
@@ -499,8 +510,8 @@ H.make_cursor_step = function(data_from, data_to, opts)
   }
 end
 
-H.compute_cursor_tracking = function()
-  -- Use character column to allow tracking outside of linw width
+H.get_cursor_state = function()
+  -- Use character column to allow tracking outside of line width
   local curpos = vim.fn.getcursorcharpos()
   return { buf_id = vim.api.nvim_get_current_buf(), pos = { curpos[2], curpos[3] + curpos[4] } }
 end
@@ -541,22 +552,22 @@ H.stop_cursor = function()
 end
 
 -- Scroll ---------------------------------------------------------------------
-H.make_scroll_step = function(data_from, data_to, opts)
-  local from_line, to_line = data_from.view.topline, data_to.view.topline
+H.make_scroll_step = function(state_from, state_to, opts)
+  local from_line, to_line = state_from.view.topline, state_to.view.topline
 
   -- Compute how subscrolling is done
   local total_scroll = H.get_n_visible_lines(from_line, to_line) - 1
   local step_scrolls = opts.subscroll(total_scroll)
 
   -- Don't animate if no subscroll steps is returned
-  if step_scrolls == nil or #step_scrolls == 0 then return H.stop_scroll(data_to.view) end
+  if step_scrolls == nil or #step_scrolls == 0 then return H.stop_scroll(state_to) end
 
   -- Compute scrolling key ('\25' and '\5' are escaped '<C-Y>' and '<C-E>') and
   -- final cursor position
   local scroll_key = from_line < to_line and '\5' or '\25'
-  local final_cursor_pos = { data_to.view.lnum, data_to.view.col }
+  local final_cursor_pos = { state_to.view.lnum, state_to.view.col }
 
-  local event_id, buf_id, win_id = H.cache.scroll_event_id, data_from.buf_id, data_from.win_id
+  local event_id, buf_id, win_id = H.cache.scroll_event_id, state_from.buf_id, state_from.win_id
   local n_steps, timing = #step_scrolls, opts.timing
   return {
     step_action = function(step)
@@ -567,20 +578,21 @@ H.make_scroll_step = function(data_from, data_to, opts)
       -- Stop animation if jumped to different buffer or window. Don't restore
       -- window view as it can only operate on current window.
       local is_same_win_buf = vim.api.nvim_get_current_buf() == buf_id and vim.api.nvim_get_current_win() == win_id
-      if not is_same_win_buf then return H.stop_scroll(false) end
+      if not is_same_win_buf then return H.stop_scroll() end
 
       -- Preform scroll. Possibly stop on error.
-      local ok, _ = pcall(H.scroll_step, scroll_key, step_scrolls[step], final_cursor_pos)
-      if not ok then return H.stop_scroll(data_to.view) end
+      -- NOTE: use `0` for scroll step for inital step zero.
+      local ok, _ = pcall(H.scroll_action, scroll_key, step_scrolls[step] or 0, final_cursor_pos)
+      if not ok then return H.stop_scroll(state_to) end
 
-      -- Update current scroll tracking for two reasons:
+      -- Update current scroll state for two reasons:
       -- - Be able to distinguish manual `WinScrolled` event from one created
-      --   by `scroll_step()`.
+      --   by `H.scroll_action()`.
       -- - Be able to start manual scrolling at any animation step.
-      H.cache.scroll_tracking = H.compute_scroll_tracking()
+      H.cache.scroll_state = H.get_scroll_state()
 
       -- Properly stop animation if step is too big
-      if n_steps <= step then return H.stop_scroll(data_to.view) end
+      if n_steps <= step then return H.stop_scroll(state_to) end
 
       return true
     end,
@@ -588,10 +600,13 @@ H.make_scroll_step = function(data_from, data_to, opts)
   }
 end
 
-H.scroll_step = function(key, n, final_cursor_pos)
-  -- Scroll
-  local command = string.format('normal! %d%s', n or 1, key)
-  vim.cmd(command)
+H.scroll_action = function(key, n, final_cursor_pos)
+  -- Scroll. Allow supplying non-valid `n` for initial "scroll" which sets
+  -- cursor immediately, which reduces flicker.
+  if n ~= nil and n > 0 then
+    local command = string.format('normal! %d%s', n, key)
+    vim.cmd(command)
+  end
 
   -- Set cursor to properly handle final cursor position
   local top, bottom = vim.fn.line('w0'), vim.fn.line('w$')
@@ -603,20 +618,20 @@ H.scroll_step = function(key, n, final_cursor_pos)
   vim.api.nvim_win_set_cursor(0, { line, col })
 end
 
-H.start_scroll = function(start_view)
+H.start_scroll = function(start_state)
   H.cache.scroll_is_active = true
-  if start_view ~= nil then vim.fn.winrestview(start_view) end
+  if start_state ~= nil then vim.fn.winrestview(start_state.view) end
   return true
 end
 
-H.stop_scroll = function(end_view)
-  if end_view ~= nil then vim.fn.winrestview(end_view) end
+H.stop_scroll = function(end_state)
+  if end_state ~= nil then vim.fn.winrestview(end_state.view) end
   H.cache.scroll_is_active = false
   H.emit_done_event('scroll')
   return false
 end
 
-H.compute_scroll_tracking = function()
+H.get_scroll_state = function()
   return {
     buf_id = vim.api.nvim_get_current_buf(),
     win_id = vim.api.nvim_get_current_win(),
