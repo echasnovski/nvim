@@ -3,8 +3,13 @@
 -- TODO:
 -- Code:
 -- - Resize:
---     - Ensure there is proper animation for new forcused windows (most common
+--     - Ensure there is proper animation for new focused windows (most common
 --       case). Needs to determine along which dimension to animate.
+--     - Think about simultaneous height and width resizing.
+--     - Think about restoring all original windows using `winrestcmd()`.
+--     - Test more with 'winheight'/'winwidth' and
+--       'winminheight'/'winminwidth'. It should animate resizing of whole
+--       layout with, for example, `set winwidth=60 winminwidth=20`.
 --
 -- Tests:
 -- - General:
@@ -58,7 +63,7 @@
 --       `n<Cmd>lua MiniAnimate.execute_after('scroll', 'normal! zvzz')<CR>`.
 -- - If output of either `config.cursor.path()` or `config.scroll.subscroll()`
 --   is `nil` or array of length 0, animation is suspended.
--- - Animated of scroll and resize are done only for current window. This is a
+-- - Animation of scroll and window are done only for current window. This is a
 --   current limitation of |WinScrolled| event. Context:
 --     - https://github.com/neovim/neovim/issues/18222
 --     - https://github.com/vim/vim/issues/10628
@@ -70,8 +75,8 @@
 ---
 --- Features:
 --- - Animate cursor movement within same buffer. Cursor path is configurable.
---- - Animate window scrolling.
---- - Animate window resize.
+--- - Animate scrolling.
+--- - Animate window close/open/resize.
 --- - Customizable animation rule.
 ---
 --- # Setup~
@@ -135,7 +140,7 @@ MiniAnimate.setup = function(config)
         au!
         au CursorMoved * lua MiniAnimate.auto_cursor()
         au WinScrolled * lua MiniAnimate.auto_scroll()
-        au WinScrolled * lua MiniAnimate.auto_resize()
+        au WinScrolled,WinNew,WinClosed * lua MiniAnimate.auto_window()
         au WinEnter    * lua MiniAnimate.on_win_enter()
       augroup END]],
     false
@@ -158,13 +163,6 @@ MiniAnimate.config = {
     path = function(destination) return H.path_line(destination, H.path_default_predicate) end,
   },
 
-  -- Window resize
-  resize = {
-    enable = true,
-    timing = function(_, n) return math.min(10, 250 / n) end,
-    subresize = function(total_resize) return H.subresize_equal(total_resize) end,
-  },
-
   -- Window vertical scroll
   scroll = {
     enable = true,
@@ -172,6 +170,12 @@ MiniAnimate.config = {
     subscroll = function(total_scroll)
       return H.subscroll_equal(total_scroll, { min_to_animate = 2, max_to_animate = 10000000, max_number = 60 })
     end,
+  },
+
+  -- Close/open/resize window
+  window = {
+    enable = true,
+    timing = function(_, n) return math.min(10, 250 / n) end,
   },
 }
 --minidoc_afterlines_end
@@ -363,20 +367,6 @@ MiniAnimate.gen_path.spiral = function(opts)
   end
 end
 
---- Generate subresize
----
---- Subresize - callable which takes `total_resize` argument (table with
---- <height> and <width> fields for how much vertical and horizontal resizing
---- should be done) and returns array resizing tables (similar to `total_resize`)
---- representing the amount of resizing in corresponding step. All fields in
---- subresize values should sum to corresponding field in input `total_scroll`.
-MiniAnimate.gen_subresize = {}
-
----@param opts table Options. Currently is not used (reserved for future).
-MiniAnimate.gen_subresize.equal = function(opts)
-  return function(total_resize) return H.subresize_equal(total_resize) end
-end
-
 --- Generate subscroll
 ---
 --- Subscroll - callable which takes `total_scroll` argument (single positive
@@ -414,29 +404,31 @@ MiniAnimate.auto_cursor = function()
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
-MiniAnimate.auto_resize = function(is_new)
-  -- Don't animate if nothing has changed since last registered resize.
-  -- Mostly used to distinguish `WinScrolled` from animation and other ones.
-  local prev_state, new_state = H.cache.resize_state, H.get_resize_state()
+MiniAnimate.auto_window = function()
+  -- Don't animate if inside scroll animation
+  if H.cache.scroll_is_active then return end
 
-  local is_same_state = prev_state.win_id == new_state.win_id
-    and prev_state.height == new_state.height
-    and prev_state.width == new_state.width
+  -- Don't animate if nothing has changed since last registered window action.
+  -- Mostly used to distinguish `WinScrolled` from animation and other ones.
+  local prev_state, new_state = H.cache.window_state, H.get_window_state()
+
+  -- TODO: needs a better check
+  local is_same_state = vim.deep_equal(prev_state, new_state)
   if is_same_state then return end
 
   -- Update necessary information.
-  H.cache.resize_state = new_state
-  H.cache.resize_event_id = H.cache.resize_event_id + 1
+  H.cache.window_state = new_state
+  H.cache.window_event_id = H.cache.window_event_id + 1
 
   -- Possibly animate
-  local resize_config = H.get_config().resize
-  local should_animate = resize_config.enable and not H.is_disabled() and new_state.win_id == prev_state.win_id
+  local window_config = H.get_config().window
+  local should_animate = window_config.enable and not H.is_disabled() and new_state.win_id == prev_state.win_id
   if not should_animate then return end
 
-  local animate_step = H.make_resize_step(prev_state, new_state, resize_config)
+  local animate_step = H.make_window_step(prev_state, new_state, window_config)
   if not animate_step then return end
 
-  H.start_resize(prev_state)
+  H.start_window(prev_state)
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
@@ -466,10 +458,7 @@ MiniAnimate.auto_scroll = function()
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
-MiniAnimate.on_win_enter = function()
-  H.cache.scroll_state = H.get_scroll_state()
-  H.cache.resize_state = H.get_resize_state()
-end
+MiniAnimate.on_win_enter = function() H.cache.scroll_state = H.get_scroll_state() end
 
 -- Helper data ================================================================
 -- Module default config
@@ -482,15 +471,15 @@ H.cache = {
   cursor_is_active = false,
   cursor_state = { buf_id = nil, pos = {} },
 
-  -- Resize animation data
-  resize_event_id = 0,
-  resize_is_active = false,
-  resize_state = { win_id = nil, height = nil, width = nil },
-
   -- Scroll animation data
   scroll_event_id = 0,
   scroll_is_active = false,
   scroll_state = { buf_id = nil, win_id = nil, view = {} },
+
+  -- Window animation data
+  window_event_id = 0,
+  window_is_active = false,
+  window_state = { win_id = nil, height = nil, width = nil },
 }
 
 H.ns_id = {
@@ -499,8 +488,8 @@ H.ns_id = {
 
 H.animation_done_events = {
   cursor = 'MiniAnimateCursorDone',
-  resize = 'MiniAnimateResizeDone',
   scroll = 'MiniAnimateScrollDone',
+  window = 'MiniAnimateWindowDone',
 }
 
 -- Helper functionality =======================================================
@@ -513,8 +502,8 @@ H.setup_config = function(config)
 
   vim.validate({
     cursor = { config.cursor, H.is_config_cursor },
-    resize = { config.resize, H.is_config_resize },
     scroll = { config.scroll, H.is_config_scroll },
+    window = { config.window, H.is_config_window },
   })
 
   return config
@@ -607,56 +596,39 @@ H.stop_cursor = function()
   return false
 end
 
--- Resize ---------------------------------------------------------------------
-H.make_resize_step = function(state_from, state_to, opts)
+-- Window ---------------------------------------------------------------------
+H.make_window_step = function(state_from, state_to, opts)
   -- Compute how subresizing is done
-  local height_diff, width_diff = state_to.height - state_from.height, state_to.width - state_from.width
-  local total_resize = { height = math.abs(height_diff), width = math.abs(width_diff) }
-  local step_resizes = opts.subresize(total_resize)
+  state_from, state_to = H.align_window_states(state_from, state_to)
+  if state_from == nil then H.stop_window(state_to) end
 
-  -- Don't animate if no subresize steps is returned
-  if step_resizes == nil or #step_resizes == 0 then return H.stop_resize(state_to) end
+  local flatstate_from, flatstate_to = H.flatten_window_state(state_from), H.flatten_window_state(state_to)
+  local subflatstates = H.tween_window_flatstate(flatstate_from, flatstate_to)
+  if subflatstates == nil or #subflatstates == 0 then return H.stop_window(state_to) end
 
   -- Create animation step
-  local event_id, win_id = H.cache.resize_event_id, state_from.win_id
-  local n_steps, timing = #step_resizes, opts.timing
-
-  -- Compute array of window states for easier step code
-  local height_sign, width_sign = height_diff > 0 and 1 or -1, width_diff > 0 and 1 or -1
-  local step_states, prev_size = {}, state_from
-  for i, resize in ipairs(step_resizes) do
-    --stylua: ignore
-    step_states[i] = {
-      win_id = win_id,
-      height = prev_size.height + height_sign * resize.height,
-      width  = prev_size.width + width_sign * resize.width,
-    }
-    prev_size = step_states[i]
-  end
+  local event_id = H.cache.window_event_id
+  local n_steps, timing = #subflatstates, opts.timing
 
   return {
     step_action = function(step)
+      -- Do nothing on initialization
+      if step == 0 then return true end
+
       -- Stop animation if another resize is active. Don't use `stop_resize()`
       -- because it will also mean to stop parallel animation.
-      if H.cache.resize_event_id ~= event_id then return false end
-
-      -- Stop animation if jumped to different buffer or window. Don't restore
-      -- window view as it can only operate on current window.
-      if not vim.api.nvim_get_current_win() == win_id then return H.stop_resize() end
+      if H.cache.window_event_id ~= event_id then return false end
 
       -- Preform resize. Possibly stop on error.
-      local cur_state = step_states[step]
-      local ok, _ = pcall(H.apply_resize_state, cur_state)
-      if not ok then return H.stop_resize(state_to) end
+      local ok, _ = pcall(H.apply_window_flatstate, subflatstates[step])
+      if not ok then return H.stop_window(state_to) end
 
       -- Update current resize state for two reasons:
-      -- - Be able to distinguish manual `WinScrolled` event from one created
-      --   by `apply_resize_state()`.
-      -- - Be able to start manual resizing at any animation step.
-      H.cache.resize_state = cur_state
+      -- - Be able to start another window action at any animation step.
+      H.cache.window_state = H.get_window_state()
 
       -- Properly stop animation if step is too big
-      if n_steps <= step then return H.stop_resize(state_to) end
+      if n_steps <= step then return H.stop_window(state_to) end
 
       return true
     end,
@@ -664,29 +636,132 @@ H.make_resize_step = function(state_from, state_to, opts)
   }
 end
 
-H.apply_resize_state = function(state)
-  -- Allow supplying non-valid state for initial "resize"
-  if state == nil then return end
-  vim.api.nvim_win_set_height(state.win_id, state.height)
-  vim.api.nvim_win_set_width(state.win_id, state.width)
-end
-
-H.start_resize = function(start_state)
-  H.cache.resize_is_active = true
-  if start_state ~= nil then H.apply_resize_state(start_state) end
+H.start_window = function(start_state)
+  H.cache.window_is_active = true
+  if start_state ~= nil then H.apply_window_state(start_state) end
   return true
 end
 
-H.stop_resize = function(end_state)
-  if end_state ~= nil then H.apply_resize_state(end_state) end
-  H.cache.resize_is_active = false
-  H.emit_done_event('resize')
+H.stop_window = function(end_state)
+  if end_state ~= nil then H.apply_window_state(end_state) end
+  H.cache.window_is_active = false
+  H.emit_done_event('window')
   return false
 end
 
-H.get_resize_state = function()
-  local win_id = vim.api.nvim_get_current_win()
-  return { win_id = win_id, height = vim.api.nvim_win_get_height(win_id), width = vim.api.nvim_win_get_width(win_id) }
+H.get_window_state = function() return H.enhance_winlayout(vim.fn.winlayout()) end
+
+H.enhance_winlayout = function(layout)
+  layout.container = layout[1]
+  layout[1] = nil
+
+  local second = layout[2]
+  layout[2] = nil
+  if layout.container == 'leaf' then
+    -- Second element is a window id
+    layout.win_id = second
+    layout.height = vim.api.nvim_win_get_height(second)
+    layout.width = vim.api.nvim_win_get_width(second)
+    layout.view = vim.api.nvim_win_call(second, vim.fn.winsaveview)
+    return layout
+  end
+
+  -- Second element is an array
+  layout.content = second
+  for i, l in ipairs(second) do
+    second[i] = H.enhance_winlayout(l)
+  end
+  return layout
+end
+
+H.align_window_states = function(state_from, state_to)
+  -- TODO: output should represent same layout of same windows (possibly with
+  -- different dimensions).
+  -- !!! At the moment only ensures that stwo states are aligned !!!
+
+  if state_from.container ~= state_to.container then return nil end
+  if state_from.container == 'leaf' then
+    if state_from.win_id ~= state_to.win_id then return nil end
+    return state_from, state_to
+  end
+
+  if #state_from.content ~= #state_to.content then return nil end
+  for i = 1, #state_from.content do
+    local res = H.align_window_states(state_from.content[i], state_to.content[i])
+    if res == nil then return nil end
+  end
+  return state_from, state_to
+end
+
+H.flatten_window_state = function(state)
+  -- NOTE: It is important to preserve layout order ("more")
+  local res, f = {}, nil
+  f = function(x)
+    if x.container == 'leaf' then
+      -- Use deepcopy to allow adding fields without changing original
+      table.insert(res, vim.deepcopy(x))
+      return
+    end
+
+    return vim.tbl_map(f, x.content)
+  end
+
+  f(state)
+  return res
+end
+
+H.apply_window_state = function(state)
+  if state.container == 'leaf' then
+    local win_id = state.win_id
+    if not vim.api.nvim_win_is_valid(win_id) then return end
+    vim.api.nvim_win_set_height(win_id, state.height)
+    vim.api.nvim_win_set_width(win_id, state.width)
+    vim.api.nvim_win_call(win_id, function() vim.fn.winrestview(state.view) end)
+    return
+  end
+  for _, s in ipairs(state.content) do
+    H.apply_window_state(s)
+  end
+end
+
+H.apply_window_flatstate = function(flatstate)
+  for _, s in ipairs(flatstate) do
+    local win_id = s.win_id
+    if vim.api.nvim_win_is_valid(win_id) then
+      vim.api.nvim_win_set_height(win_id, s.height)
+      vim.api.nvim_win_set_width(win_id, s.width)
+    end
+  end
+end
+
+H.tween_window_flatstate = function(flatstate_from, flatstate_to)
+  -- NOTE: Assumes perferctly aligned states
+  local from, to = flatstate_from, flatstate_to
+
+  -- Compute number of steps
+  local n_steps = 0
+  for i = 1, #from do
+    local height_absidff = math.abs(to[i].height - from[i].height)
+    local width_absidff = math.abs(to[i].width - from[i].width)
+    n_steps = math.max(n_steps, height_absidff, width_absidff)
+  end
+
+  -- Tween for computed number of steps
+  local res = {}
+  for s = 1, n_steps do
+    local step, coef = {}, s / n_steps
+    for i = 1, #from do
+      step[i] = {
+        height = H.convex_point(from[i].height, to[i].height, coef),
+        width = H.convex_point(from[i].width, to[i].width, coef),
+        win_id = from[i].win_id,
+      }
+    end
+
+    res[s] = step
+  end
+
+  return res
 end
 
 -- Scroll ---------------------------------------------------------------------
@@ -935,18 +1010,6 @@ H.subscroll_equal = function(total_scroll, opts)
   return H.divide_equal(total_scroll, n_steps)
 end
 
--- Animation subresize --------------------------------------------------------
-H.subresize_equal = function(total_resize)
-  local n_steps = math.max(total_resize.height, total_resize.width)
-  local step_height = H.divide_equal(total_resize.height, n_steps)
-  local step_width = H.divide_equal(total_resize.width, n_steps)
-  local res = {}
-  for i = 1, n_steps do
-    res[i] = { height = step_height[i], width = step_width[i] }
-  end
-  return res
-end
-
 -- Predicators ----------------------------------------------------------------
 H.is_config_cursor = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('cursor.enable', 'boolean') end
@@ -956,18 +1019,17 @@ H.is_config_cursor = function(x)
   return true
 end
 
-H.is_config_resize = function(x)
-  if type(x.enable) ~= 'boolean' then return false, H.msg_config('resize.enable', 'boolean') end
-  if not vim.is_callable(x.timing) then return false, H.msg_config('resize.timing', 'callable') end
-  if not vim.is_callable(x.subresize) then return false, H.msg_config('resize.subresize', 'callable') end
-
-  return true
-end
-
 H.is_config_scroll = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('scroll.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('scroll.timing', 'callable') end
   if not vim.is_callable(x.subscroll) then return false, H.msg_config('scroll.subscroll', 'callable') end
+
+  return true
+end
+
+H.is_config_window = function(x)
+  if type(x.enable) ~= 'boolean' then return false, H.msg_config('window.enable', 'boolean') end
+  if not vim.is_callable(x.timing) then return false, H.msg_config('window.timing', 'callable') end
 
   return true
 end
@@ -1016,6 +1078,8 @@ H.divide_equal = function(x, n)
 
   return res
 end
+
+H.convex_point = function(x, y, coef) return H.round((1 - coef) * x + coef * y) end
 
 -- `virtcol2col()` is only present in Neovim>=0.8. Earlier Neovim versions will
 -- have troubles dealing with multibyte characters.
