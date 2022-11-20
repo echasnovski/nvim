@@ -140,7 +140,7 @@ MiniAnimate.setup = function(config)
         au!
         au CursorMoved * lua MiniAnimate.auto_cursor()
         au WinScrolled * lua MiniAnimate.auto_scroll()
-        au WinScrolled,WinNew,WinClosed * lua MiniAnimate.auto_window()
+        au WinScrolled,WinNew * lua MiniAnimate.auto_window()
         au WinEnter    * lua MiniAnimate.on_win_enter()
       augroup END]],
     false
@@ -404,34 +404,6 @@ MiniAnimate.auto_cursor = function()
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
-MiniAnimate.auto_window = function()
-  -- Don't animate if inside scroll animation
-  if H.cache.scroll_is_active then return end
-
-  -- Don't animate if nothing has changed since last registered window action.
-  -- Mostly used to distinguish `WinScrolled` from animation and other ones.
-  local prev_state, new_state = H.cache.window_state, H.get_window_state()
-
-  -- TODO: needs a better check
-  local is_same_state = vim.deep_equal(prev_state, new_state)
-  if is_same_state then return end
-
-  -- Update necessary information.
-  H.cache.window_state = new_state
-  H.cache.window_event_id = H.cache.window_event_id + 1
-
-  -- Possibly animate
-  local window_config = H.get_config().window
-  local should_animate = window_config.enable and not H.is_disabled() and new_state.win_id == prev_state.win_id
-  if not should_animate then return end
-
-  local animate_step = H.make_window_step(prev_state, new_state, window_config)
-  if not animate_step then return end
-
-  H.start_window(prev_state)
-  MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
-end
-
 MiniAnimate.auto_scroll = function()
   -- Don't animate if nothing has changed since last registered scroll.
   -- Mostly used to distinguish `WinScrolled` from animation and other ones.
@@ -458,6 +430,36 @@ MiniAnimate.auto_scroll = function()
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
+MiniAnimate.auto_window = function()
+  -- Don't animate if inside scroll animation
+  if H.cache.scroll_is_active then return end
+
+  -- Don't animate if nothing has changed since last registered window action.
+  -- Mostly used to distinguish `WinScrolled` from animation and other ones.
+  local prev_state, new_state = H.cache.window_state, H.get_window_state()
+
+  -- TODO: needs a better check
+  local is_same_state = vim.deep_equal(prev_state, new_state)
+  if is_same_state then return end
+
+  -- Update necessary information.
+  H.cache.window_state = new_state
+  H.cache.window_event_id = H.cache.window_event_id + 1
+
+  -- Possibly animate
+  local window_config = H.get_config().window
+  local should_animate = window_config.enable
+    and not H.is_disabled()
+    and H.is_aligned_window_states(prev_state, new_state)
+  if not should_animate then return end
+
+  local animate_step = H.make_window_step(prev_state, new_state, window_config)
+  if not animate_step then return end
+
+  H.start_window(prev_state)
+  MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
+end
+
 MiniAnimate.on_win_enter = function() H.cache.scroll_state = H.get_scroll_state() end
 
 -- Helper data ================================================================
@@ -479,7 +481,7 @@ H.cache = {
   -- Window animation data
   window_event_id = 0,
   window_is_active = false,
-  window_state = { win_id = nil, height = nil, width = nil },
+  window_state = {},
 }
 
 H.ns_id = {
@@ -525,7 +527,7 @@ H.make_cursor_step = function(state_from, state_to, opts)
   local pos_from, pos_to = state_from.pos, state_to.pos
   local destination = { pos_to[1] - pos_from[1], pos_to[2] - pos_from[2] }
   local path = opts.path(destination)
-  if path == nil or #path == 0 then return H.stop_cursor() end
+  if path == nil or #path == 0 then return end
 
   local n_steps = #path
   local timing = opts.timing
@@ -599,16 +601,13 @@ end
 -- Window ---------------------------------------------------------------------
 H.make_window_step = function(state_from, state_to, opts)
   -- Compute how subresizing is done
-  state_from, state_to = H.align_window_states(state_from, state_to)
-  if state_from == nil then H.stop_window(state_to) end
-
-  local flatstate_from, flatstate_to = H.flatten_window_state(state_from), H.flatten_window_state(state_to)
-  local subflatstates = H.tween_window_flatstate(flatstate_from, flatstate_to)
-  if subflatstates == nil or #subflatstates == 0 then return H.stop_window(state_to) end
+  local statedims_from, statedims_to = H.get_window_state_dims(state_from), H.get_window_state_dims(state_to)
+  local statedims_steps = H.tween_window_statedims(statedims_from, statedims_to)
+  if statedims_steps == nil or #statedims_steps == 0 then return H.stop_window(state_to) end
 
   -- Create animation step
   local event_id = H.cache.window_event_id
-  local n_steps, timing = #subflatstates, opts.timing
+  local n_steps, timing = #statedims_steps, opts.timing
 
   return {
     step_action = function(step)
@@ -620,7 +619,7 @@ H.make_window_step = function(state_from, state_to, opts)
       if H.cache.window_event_id ~= event_id then return false end
 
       -- Preform resize. Possibly stop on error.
-      local ok, _ = pcall(H.apply_window_flatstate, subflatstates[step])
+      local ok, _ = pcall(H.apply_window_statedims, statedims_steps[step])
       if not ok then return H.stop_window(state_to) end
 
       -- Update current resize state for two reasons:
@@ -674,6 +673,13 @@ H.enhance_winlayout = function(layout)
   return layout
 end
 
+H.is_aligned_window_states = function(state_from, state_to)
+  -- TODO: This should check if simple consecutive setting of dimensions will
+  -- lead to desired output. For example, this is not the case with two
+  -- vertically split windows followed by `<C-w>J`.
+  return true
+end
+
 H.align_window_states = function(state_from, state_to)
   -- TODO: output should represent same layout of same windows (possibly with
   -- different dimensions).
@@ -693,8 +699,23 @@ H.align_window_states = function(state_from, state_to)
   return state_from, state_to
 end
 
+H.get_window_state_dims = function(state)
+  local res, f = {}, nil
+  f = function(x)
+    if x.container == 'leaf' then
+      -- Use deepcopy to allow adding fields without changing original
+      res[x.win_id] = { height = x.height, width = x.width }
+      return
+    end
+
+    return vim.tbl_map(f, x.content)
+  end
+
+  f(state)
+  return res
+end
+
 H.flatten_window_state = function(state)
-  -- NOTE: It is important to preserve layout order ("more")
   local res, f = {}, nil
   f = function(x)
     if x.container == 'leaf' then
@@ -764,6 +785,47 @@ H.tween_window_flatstate = function(flatstate_from, flatstate_to)
   return res
 end
 
+H.apply_window_statedims = function(statedims)
+  for win_id, dims in pairs(statedims) do
+    if vim.api.nvim_win_is_valid(win_id) then
+      local cache_cmdheight = vim.o.cmdheight
+      vim.api.nvim_win_set_height(win_id, dims.height)
+      vim.o.cmdheight = cache_cmdheight
+      vim.api.nvim_win_set_width(win_id, dims.width)
+    end
+  end
+end
+
+H.tween_window_statedims = function(statedims_from, statedims_to)
+  -- Operate only on common windows
+  local from, to = H.tbl_intersect_keys(statedims_from, statedims_to)
+  local common_windows = vim.tbl_keys(from)
+
+  -- Compute number of steps
+  local n_steps = 0
+  for _, win_id in ipairs(common_windows) do
+    local height_absidff = math.abs(to[win_id].height - from[win_id].height)
+    local width_absidff = math.abs(to[win_id].width - from[win_id].width)
+    n_steps = math.max(n_steps, height_absidff, width_absidff)
+  end
+
+  -- Tween for computed number of steps
+  local res = {}
+  for s = 1, n_steps do
+    local step, coef = {}, s / n_steps
+    for _, win_id in ipairs(common_windows) do
+      step[win_id] = {
+        height = H.convex_point(from[win_id].height, to[win_id].height, coef),
+        width = H.convex_point(from[win_id].width, to[win_id].width, coef),
+      }
+    end
+
+    res[s] = step
+  end
+
+  return res
+end
+
 -- Scroll ---------------------------------------------------------------------
 H.make_scroll_step = function(state_from, state_to, opts)
   local from_line, to_line = state_from.view.topline, state_to.view.topline
@@ -773,7 +835,7 @@ H.make_scroll_step = function(state_from, state_to, opts)
   local step_scrolls = opts.subscroll(total_scroll)
 
   -- Don't animate if no subscroll steps is returned
-  if step_scrolls == nil or #step_scrolls == 0 then return H.stop_scroll(state_to) end
+  if step_scrolls == nil or #step_scrolls == 0 then return end
 
   -- Compute scrolling key ('\25' and '\5' are escaped '<C-Y>' and '<C-E>') and
   -- final cursor position
@@ -795,7 +857,7 @@ H.make_scroll_step = function(state_from, state_to, opts)
 
       -- Preform scroll. Possibly stop on error.
       -- NOTE: use `0` for scroll step for inital step zero.
-      local ok, _ = pcall(H.scroll_action, scroll_key, step_scrolls[step] or 0, final_cursor_pos)
+      local ok, _ = pcall(H.scroll_action, win_id, scroll_key, step_scrolls[step] or 0, final_cursor_pos)
       if not ok then return H.stop_scroll(state_to) end
 
       -- Update current scroll state for two reasons:
@@ -813,12 +875,14 @@ H.make_scroll_step = function(state_from, state_to, opts)
   }
 end
 
-H.scroll_action = function(key, n, final_cursor_pos)
+H.scroll_action = function(win_id, key, n, final_cursor_pos)
   -- Scroll. Allow supplying non-valid `n` for initial "scroll" which sets
   -- cursor immediately, which reduces flicker.
   if n ~= nil and n > 0 then
     local command = string.format('normal! %d%s', n, key)
-    vim.cmd(command)
+    -- Ensure that scroll is done inside proper window, as it might not be done
+    -- inside current window. See: https://github.com/neovim/neovim/pull/21136
+    vim.api.nvim_win_call(win_id, function() vim.cmd(command) end)
   end
 
   -- Set cursor to properly handle final cursor position
@@ -1084,5 +1148,16 @@ H.convex_point = function(x, y, coef) return H.round((1 - coef) * x + coef * y) 
 -- `virtcol2col()` is only present in Neovim>=0.8. Earlier Neovim versions will
 -- have troubles dealing with multibyte characters.
 H.virtcol2col = vim.fn.virtcol2col or function(_, _, col) return col end
+
+H.tbl_intersect_keys = function(tbl_1, tbl_2)
+  local res_1, res_2 = {}, {}
+  for k, v in pairs(tbl_1) do
+    if tbl_2[k] ~= nil then
+      res_1[k], res_2[k] = v, tbl_2[k]
+    end
+  end
+
+  return res_1, res_2
+end
 
 return MiniAnimate
