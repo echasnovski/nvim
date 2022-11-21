@@ -140,7 +140,6 @@ MiniAnimate.setup = function(config)
         au!
         au CursorMoved * lua MiniAnimate.auto_cursor()
         au WinScrolled * lua MiniAnimate.auto_scroll()
-        au WinScrolled,WinNew * lua MiniAnimate.auto_window()
         au WinEnter    * lua MiniAnimate.on_win_enter()
       augroup END]],
     false
@@ -382,6 +381,14 @@ MiniAnimate.gen_subscroll.equal = function(opts)
 end
 
 MiniAnimate.auto_cursor = function()
+  -- Don't animate if disabled
+  local cursor_config = H.get_config().cursor
+  if not cursor_config.enable or H.is_disabled() then
+    -- Reset state to not use an outdated one if enabled again
+    H.cache.cursor_state = { buf_id = nil, pos = {} }
+    return
+  end
+
   -- Don't animate if inside scroll animation
   if H.cache.scroll_is_active then return end
 
@@ -392,11 +399,10 @@ MiniAnimate.auto_cursor = function()
   H.cache.cursor_state = new_state
   H.cache.cursor_event_id = H.cache.cursor_event_id + 1
 
-  -- Possibly animate
-  local cursor_config = H.get_config().cursor
-  local should_animate = cursor_config.enable and not H.is_disabled() and new_state.buf_id == prev_state.buf_id
-  if not should_animate then return end
+  -- Don't animate if changed buffer
+  if new_state.buf_id ~= prev_state.buf_id then return end
 
+  -- Make animation step data and possibly animate
   local animate_step = H.make_cursor_step(prev_state, new_state, cursor_config)
   if not animate_step then return end
 
@@ -405,8 +411,16 @@ MiniAnimate.auto_cursor = function()
 end
 
 MiniAnimate.auto_scroll = function()
-  -- Don't animate if nothing has changed since last registered scroll.
-  -- Mostly used to distinguish `WinScrolled` from animation and other ones.
+  -- Don't animate if disabled
+  local scroll_config = H.get_config().scroll
+  if not scroll_config.enable or H.is_disabled() then
+    -- Reset state to not use an outdated one if enabled again
+    H.cache.scroll_state = { buf_id = nil, win_id = nil, view = {} }
+    return
+  end
+
+  -- Don't animate if nothing to animate. Mostly used to distinguish
+  -- `WinScrolled` from module animation and other ones.
   local prev_state = H.cache.scroll_state
   if prev_state.view.topline == vim.fn.line('w0') then return end
 
@@ -415,14 +429,10 @@ MiniAnimate.auto_scroll = function()
   H.cache.scroll_state = new_state
   H.cache.scroll_event_id = H.cache.scroll_event_id + 1
 
-  -- Possibly animate
-  local scroll_config = H.get_config().scroll
-  local should_animate = scroll_config.enable
-    and not H.is_disabled()
-    and new_state.buf_id == prev_state.buf_id
-    and new_state.win_id == prev_state.win_id
-  if not should_animate then return end
+  -- Don't animate if changed buffer or window
+  if new_state.buf_id ~= prev_state.buf_id or new_state.win_id ~= prev_state.win_id then return end
 
+  -- Make animation step data and possibly animate
   local animate_step = H.make_scroll_step(prev_state, new_state, scroll_config)
   if not animate_step then return end
 
@@ -431,28 +441,30 @@ MiniAnimate.auto_scroll = function()
 end
 
 MiniAnimate.auto_window = function()
+  -- Don't animate if disabled
+  local window_config = H.get_config().window
+  if not window_config.enable or H.is_disabled() then
+    -- Reset state to not use an outdated one if enabled again
+    H.cache.window_state = {}
+    return
+  end
+
   -- Don't animate if inside scroll animation
   if H.cache.scroll_is_active then return end
 
-  -- Don't animate if nothing has changed since last registered window action.
-  -- Mostly used to distinguish `WinScrolled` from animation and other ones.
+  -- Don't animate if nothing to animate. Mostly used to distinguish
+  -- `WinScrolled` from module animation and other ones.
   local prev_state, new_state = H.cache.window_state, H.get_window_state()
 
-  -- TODO: needs a better check
-  local is_same_state = vim.deep_equal(prev_state, new_state)
+  -- Don't animate if there is nothing to animate. This also stops
+  local is_same_state = H.is_equal_window_states(prev_state, new_state)
   if is_same_state then return end
 
   -- Update necessary information.
   H.cache.window_state = new_state
   H.cache.window_event_id = H.cache.window_event_id + 1
 
-  -- Possibly animate
-  local window_config = H.get_config().window
-  local should_animate = window_config.enable
-    and not H.is_disabled()
-    and H.is_aligned_window_states(prev_state, new_state)
-  if not should_animate then return end
-
+  -- Make animation step data and possibly animate
   local animate_step = H.make_window_step(prev_state, new_state, window_config)
   if not animate_step then return end
 
@@ -598,234 +610,6 @@ H.stop_cursor = function()
   return false
 end
 
--- Window ---------------------------------------------------------------------
-H.make_window_step = function(state_from, state_to, opts)
-  -- Compute how subresizing is done
-  local statedims_from, statedims_to = H.get_window_state_dims(state_from), H.get_window_state_dims(state_to)
-  local statedims_steps = H.tween_window_statedims(statedims_from, statedims_to)
-  if statedims_steps == nil or #statedims_steps == 0 then return H.stop_window(state_to) end
-
-  -- Create animation step
-  local event_id = H.cache.window_event_id
-  local n_steps, timing = #statedims_steps, opts.timing
-
-  return {
-    step_action = function(step)
-      -- Do nothing on initialization
-      if step == 0 then return true end
-
-      -- Stop animation if another resize is active. Don't use `stop_resize()`
-      -- because it will also mean to stop parallel animation.
-      if H.cache.window_event_id ~= event_id then return false end
-
-      -- Preform resize. Possibly stop on error.
-      local ok, _ = pcall(H.apply_window_statedims, statedims_steps[step])
-      if not ok then return H.stop_window(state_to) end
-
-      -- Update current resize state for two reasons:
-      -- - Be able to start another window action at any animation step.
-      H.cache.window_state = H.get_window_state()
-
-      -- Properly stop animation if step is too big
-      if n_steps <= step then return H.stop_window(state_to) end
-
-      return true
-    end,
-    step_timing = function(step) return timing(step, n_steps) end,
-  }
-end
-
-H.start_window = function(start_state)
-  H.cache.window_is_active = true
-  if start_state ~= nil then H.apply_window_state(start_state) end
-  return true
-end
-
-H.stop_window = function(end_state)
-  if end_state ~= nil then H.apply_window_state(end_state) end
-  H.cache.window_is_active = false
-  H.emit_done_event('window')
-  return false
-end
-
-H.get_window_state = function() return H.enhance_winlayout(vim.fn.winlayout()) end
-
-H.enhance_winlayout = function(layout)
-  layout.container = layout[1]
-  layout[1] = nil
-
-  local second = layout[2]
-  layout[2] = nil
-  if layout.container == 'leaf' then
-    -- Second element is a window id
-    layout.win_id = second
-    layout.height = vim.api.nvim_win_get_height(second)
-    layout.width = vim.api.nvim_win_get_width(second)
-    layout.view = vim.api.nvim_win_call(second, vim.fn.winsaveview)
-    return layout
-  end
-
-  -- Second element is an array
-  layout.content = second
-  for i, l in ipairs(second) do
-    second[i] = H.enhance_winlayout(l)
-  end
-  return layout
-end
-
-H.is_aligned_window_states = function(state_from, state_to)
-  -- TODO: This should check if simple consecutive setting of dimensions will
-  -- lead to desired output. For example, this is not the case with two
-  -- vertically split windows followed by `<C-w>J`.
-  return true
-end
-
-H.align_window_states = function(state_from, state_to)
-  -- TODO: output should represent same layout of same windows (possibly with
-  -- different dimensions).
-  -- !!! At the moment only ensures that stwo states are aligned !!!
-
-  if state_from.container ~= state_to.container then return nil end
-  if state_from.container == 'leaf' then
-    if state_from.win_id ~= state_to.win_id then return nil end
-    return state_from, state_to
-  end
-
-  if #state_from.content ~= #state_to.content then return nil end
-  for i = 1, #state_from.content do
-    local res = H.align_window_states(state_from.content[i], state_to.content[i])
-    if res == nil then return nil end
-  end
-  return state_from, state_to
-end
-
-H.get_window_state_dims = function(state)
-  local res, f = {}, nil
-  f = function(x)
-    if x.container == 'leaf' then
-      -- Use deepcopy to allow adding fields without changing original
-      res[x.win_id] = { height = x.height, width = x.width }
-      return
-    end
-
-    return vim.tbl_map(f, x.content)
-  end
-
-  f(state)
-  return res
-end
-
-H.flatten_window_state = function(state)
-  local res, f = {}, nil
-  f = function(x)
-    if x.container == 'leaf' then
-      -- Use deepcopy to allow adding fields without changing original
-      table.insert(res, vim.deepcopy(x))
-      return
-    end
-
-    return vim.tbl_map(f, x.content)
-  end
-
-  f(state)
-  return res
-end
-
-H.apply_window_state = function(state)
-  if state.container == 'leaf' then
-    local win_id = state.win_id
-    if not vim.api.nvim_win_is_valid(win_id) then return end
-    vim.api.nvim_win_set_height(win_id, state.height)
-    vim.api.nvim_win_set_width(win_id, state.width)
-    vim.api.nvim_win_call(win_id, function() vim.fn.winrestview(state.view) end)
-    return
-  end
-  for _, s in ipairs(state.content) do
-    H.apply_window_state(s)
-  end
-end
-
-H.apply_window_flatstate = function(flatstate)
-  for _, s in ipairs(flatstate) do
-    local win_id = s.win_id
-    if vim.api.nvim_win_is_valid(win_id) then
-      vim.api.nvim_win_set_height(win_id, s.height)
-      vim.api.nvim_win_set_width(win_id, s.width)
-    end
-  end
-end
-
-H.tween_window_flatstate = function(flatstate_from, flatstate_to)
-  -- NOTE: Assumes perferctly aligned states
-  local from, to = flatstate_from, flatstate_to
-
-  -- Compute number of steps
-  local n_steps = 0
-  for i = 1, #from do
-    local height_absidff = math.abs(to[i].height - from[i].height)
-    local width_absidff = math.abs(to[i].width - from[i].width)
-    n_steps = math.max(n_steps, height_absidff, width_absidff)
-  end
-
-  -- Tween for computed number of steps
-  local res = {}
-  for s = 1, n_steps do
-    local step, coef = {}, s / n_steps
-    for i = 1, #from do
-      step[i] = {
-        height = H.convex_point(from[i].height, to[i].height, coef),
-        width = H.convex_point(from[i].width, to[i].width, coef),
-        win_id = from[i].win_id,
-      }
-    end
-
-    res[s] = step
-  end
-
-  return res
-end
-
-H.apply_window_statedims = function(statedims)
-  for win_id, dims in pairs(statedims) do
-    if vim.api.nvim_win_is_valid(win_id) then
-      local cache_cmdheight = vim.o.cmdheight
-      vim.api.nvim_win_set_height(win_id, dims.height)
-      vim.o.cmdheight = cache_cmdheight
-      vim.api.nvim_win_set_width(win_id, dims.width)
-    end
-  end
-end
-
-H.tween_window_statedims = function(statedims_from, statedims_to)
-  -- Operate only on common windows
-  local from, to = H.tbl_intersect_keys(statedims_from, statedims_to)
-  local common_windows = vim.tbl_keys(from)
-
-  -- Compute number of steps
-  local n_steps = 0
-  for _, win_id in ipairs(common_windows) do
-    local height_absidff = math.abs(to[win_id].height - from[win_id].height)
-    local width_absidff = math.abs(to[win_id].width - from[win_id].width)
-    n_steps = math.max(n_steps, height_absidff, width_absidff)
-  end
-
-  -- Tween for computed number of steps
-  local res = {}
-  for s = 1, n_steps do
-    local step, coef = {}, s / n_steps
-    for _, win_id in ipairs(common_windows) do
-      step[win_id] = {
-        height = H.convex_point(from[win_id].height, to[win_id].height, coef),
-        width = H.convex_point(from[win_id].width, to[win_id].width, coef),
-      }
-    end
-
-    res[s] = step
-  end
-
-  return res
-end
-
 -- Scroll ---------------------------------------------------------------------
 H.make_scroll_step = function(state_from, state_to, opts)
   local from_line, to_line = state_from.view.topline, state_to.view.topline
@@ -914,6 +698,334 @@ H.get_scroll_state = function()
     win_id = vim.api.nvim_get_current_win(),
     view = vim.fn.winsaveview(),
   }
+end
+
+-- Window ---------------------------------------------------------------------
+H.make_window_step = function(state_from, state_to, opts)
+  -- Compute how subresizing is done
+  local statedims_from, statedims_to = H.get_window_state_dims(state_from), H.get_window_state_dims(state_to)
+  local statedims_steps = H.tween_window_statedims(statedims_from, statedims_to)
+  if statedims_steps == nil or #statedims_steps == 0 then return H.stop_window(state_to) end
+
+  -- Create animation step
+  local event_id = H.cache.window_event_id
+  local n_steps, timing = #statedims_steps, opts.timing
+
+  return {
+    step_action = function(step)
+      -- Do nothing on initialization
+      if step == 0 then return true end
+
+      -- Stop animation if another resize is active. Don't use `stop_resize()`
+      -- because it will also mean to stop parallel animation.
+      if H.cache.window_event_id ~= event_id then return false end
+
+      -- Preform resize. Possibly stop on error.
+      local ok, _ = pcall(H.apply_window_statedims, statedims_steps[step])
+      if not ok then return H.stop_window(state_to) end
+
+      -- Update current resize state for two reasons:
+      -- - Be able to start another window action at any animation step.
+      H.cache.window_state = H.get_window_state()
+
+      -- Properly stop animation if step is too big
+      if n_steps <= step then return H.stop_window(state_to) end
+
+      return true
+    end,
+    step_timing = function(step) return timing(step, n_steps) end,
+  }
+end
+
+H.start_window = function(start_state)
+  H.cache.window_is_active = true
+  if start_state ~= nil then H.apply_window_state(start_state) end
+  return true
+end
+
+H.stop_window = function(end_state)
+  if end_state ~= nil then H.apply_window_state(end_state) end
+  H.cache.window_is_active = false
+  H.emit_done_event('window')
+  return false
+end
+
+H.get_window_state = function() return H.enhance_winlayout(vim.fn.winlayout()) end
+
+H.enhance_winlayout = function(layout)
+  layout.container = layout[1]
+  layout[1] = nil
+
+  local second = layout[2]
+  layout[2] = nil
+  if layout.container == 'leaf' then
+    -- Second element is a window id
+    layout.win_id = second
+    layout.height = vim.api.nvim_win_get_height(second)
+    layout.width = vim.api.nvim_win_get_width(second)
+    layout.view = vim.api.nvim_win_call(second, vim.fn.winsaveview)
+    return layout
+  end
+
+  -- Second element is an array
+  layout.content = second
+  for i, l in ipairs(second) do
+    second[i] = H.enhance_winlayout(l)
+  end
+  return layout
+end
+
+H.is_equal_window_states = function(state_1, state_2, check_dims)
+  if check_dims == nil then check_dims = true end
+
+  if state_1.container ~= state_2.container then return false end
+  if state_1.container == 'leaf' then
+    if state_1.win_id ~= state_2.win_id then return false end
+    if check_dims and (state_1.height ~= state_2.height or state_1.width ~= state_2.width) then return false end
+    return true
+  end
+
+  if #state_1.content ~= #state_2.content then return false end
+  for i = 1, #state_1.content do
+    local res = H.is_equal_window_states(state_1.content[i], state_2.content[i], check_dims)
+    if not res then return false end
+  end
+
+  return true
+end
+
+H.align_window_states = function(state_from, state_to)
+  -- TODO: output should represent same layout of same windows (possibly with
+  -- different dimensions).
+
+  -- Check alignability (stop if can't align):
+  local window_classes = H.classify_windows(state_from, state_to)
+
+  -- - Common windows are in the same layout (not accounting dimensions).
+  --   So that there is no moving of same window (like with `<C-w>J`, etc.).
+  local common_from, common_to =
+    H.filter_window_state(state_from, window_classes.common), H.filter_window_state(state_from, window_classes.common)
+  if not H.is_equal_window_states(common_from, common_to, false) then return nil end
+
+  -- - Not common windows are present in only one input.
+  --   So that there is only closed (present in `state_from`) or opened
+  --   (present in `state_to`) windows.
+  if vim.tbl_count(window_classes.closed) > 0 and vim.tbl_count(window_classes.opened) > 0 then return nil end
+
+  -- Take whole layout from `state_to` and infer aligned dimensions from
+  -- `state_from`:
+  -- - If there are only opened windows:
+  --     - Dimensions of common windows are taken from `state_from`.
+  --     - Dimensions of new windows are set to imitate their "appearance from
+  --       nothing": dimenstion along container (width if window is in "row"
+  --       container, height - if in "col") is set to zero and the other is
+  --       taken from `state_to`.
+  -- - If there are only closed windows, then dimensions of common windows are
+  --   set to imitate "immediate disappear of closed windows". In other words,
+  --   for every closed window add its dimension along container to the nearest
+  --   common window. The concept of "nearest common window" is not that clear:
+  --   try using next common window when traversing (checking only inside
+  --   container is not enough, as it might consist only from closed windows),
+  --   last if none is found.
+end
+
+H.classify_windows = function(state_from, state_to)
+  local winmap_from, winmap_to = H.window_state_to_winmap(state_from), H.window_state_to_winmap(state_to)
+
+  local closed, common, opened = {}, {}, {}
+  for win_id, _ in pairs(winmap_from) do
+    if winmap_to[win_id] then
+      common[win_id] = true
+    else
+      closed[win_id] = true
+    end
+  end
+
+  for win_id, _ in pairs(winmap_to) do
+    if not winmap_from[win_id] then opened[win_id] = true end
+  end
+
+  return { closed = closed, common = common, opened = opened }
+end
+
+-- Window map (`winmap`) table with keys being window id present in layout and
+-- value - number of window during traverse.
+H.window_state_to_winmap = function(state)
+  local res, n = {}, 0
+  local traverse
+  traverse = function(s)
+    if s.container == 'leaf' then
+      n = n + 1
+      -- Using table instead of array is more efficient. Works because there
+      -- can't be two equal window ids.
+      res[s.win_id] = n
+      return
+    end
+    for _, sub_s in ipairs(s.content) do
+      traverse(sub_s)
+    end
+  end
+  traverse(state)
+
+  return res
+end
+
+H.filter_window_state = function(state, winmap)
+  local f
+  f = function(s)
+    if s.container == 'leaf' then
+      if winmap[s.win_id] then return s end
+      return nil
+    end
+
+    -- Construct new content to always preserve it as array. Doing
+    -- `s.content[i] = f(sub_s)` may lead to inconsecutive integer keys.
+    local new_content = {}
+    for _, sub_s in ipairs(s.content) do
+      table.insert(new_content, f(sub_s))
+    end
+
+    -- Possible collapse redundant container
+    if #new_content == 0 then return nil end
+    if #new_content == 1 then return new_content[1] end
+
+    return { container = s.container, content = new_content }
+  end
+  local res = f(vim.deepcopy(state)) or {}
+
+  return res
+end
+
+H.get_window_state_dims = function(state)
+  local res, f = {}, nil
+  f = function(x)
+    if x.container == 'leaf' then
+      -- Use deepcopy to allow adding fields without changing original
+      res[x.win_id] = { height = x.height, width = x.width }
+      return
+    end
+
+    return vim.tbl_map(f, x.content)
+  end
+
+  f(state)
+  return res
+end
+
+H.flatten_window_state = function(state)
+  local res, f = {}, nil
+  f = function(x)
+    if x.container == 'leaf' then
+      -- Use deepcopy to allow adding fields without changing original
+      table.insert(res, vim.deepcopy(x))
+      return
+    end
+
+    return vim.tbl_map(f, x.content)
+  end
+
+  f(state)
+  return res
+end
+
+H.apply_window_state = function(state)
+  if state.container == 'leaf' then
+    local win_id = state.win_id
+    if not vim.api.nvim_win_is_valid(win_id) then return end
+
+    -- If state dimensions are not accurate enough, this settings might lead to
+    -- moving `cmdheight`
+    vim.api.nvim_win_set_height(win_id, state.height)
+    vim.api.nvim_win_set_width(win_id, state.width)
+
+    -- Allow states without `view` (as result of tweening)
+    if state.view ~= nil then vim.api.nvim_win_call(win_id, function() vim.fn.winrestview(state.view) end) end
+    return
+  end
+  for _, s in ipairs(state.content) do
+    H.apply_window_state(s)
+  end
+end
+
+H.apply_window_flatstate = function(flatstate)
+  for _, s in ipairs(flatstate) do
+    local win_id = s.win_id
+    if vim.api.nvim_win_is_valid(win_id) then
+      vim.api.nvim_win_set_height(win_id, s.height)
+      vim.api.nvim_win_set_width(win_id, s.width)
+    end
+  end
+end
+
+H.tween_window_flatstate = function(flatstate_from, flatstate_to)
+  -- NOTE: Assumes perferctly aligned states
+  local from, to = flatstate_from, flatstate_to
+
+  -- Compute number of steps
+  local n_steps = 0
+  for i = 1, #from do
+    local height_absidff = math.abs(to[i].height - from[i].height)
+    local width_absidff = math.abs(to[i].width - from[i].width)
+    n_steps = math.max(n_steps, height_absidff, width_absidff)
+  end
+
+  -- Tween for computed number of steps
+  local res = {}
+  for s = 1, n_steps do
+    local step, coef = {}, s / n_steps
+    for i = 1, #from do
+      step[i] = {
+        height = H.convex_point(from[i].height, to[i].height, coef),
+        width = H.convex_point(from[i].width, to[i].width, coef),
+        win_id = from[i].win_id,
+      }
+    end
+
+    res[s] = step
+  end
+
+  return res
+end
+
+H.apply_window_statedims = function(statedims)
+  for win_id, dims in pairs(statedims) do
+    if vim.api.nvim_win_is_valid(win_id) then
+      local cache_cmdheight = vim.o.cmdheight
+      vim.api.nvim_win_set_height(win_id, dims.height)
+      vim.o.cmdheight = cache_cmdheight
+      vim.api.nvim_win_set_width(win_id, dims.width)
+    end
+  end
+end
+
+H.tween_window_statedims = function(statedims_from, statedims_to)
+  -- Operate only on common windows
+  local from, to = H.tbl_intersect_keys(statedims_from, statedims_to)
+  local common_windows = vim.tbl_keys(from)
+
+  -- Compute number of steps
+  local n_steps = 0
+  for _, win_id in ipairs(common_windows) do
+    local height_absidff = math.abs(to[win_id].height - from[win_id].height)
+    local width_absidff = math.abs(to[win_id].width - from[win_id].width)
+    n_steps = math.max(n_steps, height_absidff, width_absidff)
+  end
+
+  -- Tween for computed number of steps
+  local res = {}
+  for s = 1, n_steps do
+    local step, coef = {}, s / n_steps
+    for _, win_id in ipairs(common_windows) do
+      step[win_id] = {
+        height = H.convex_point(from[win_id].height, to[win_id].height, coef),
+        width = H.convex_point(from[win_id].width, to[win_id].width, coef),
+      }
+    end
+
+    res[s] = step
+  end
+
+  return res
 end
 
 -- Animation timings ----------------------------------------------------------
