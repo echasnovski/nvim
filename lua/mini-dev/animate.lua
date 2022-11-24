@@ -22,9 +22,9 @@
 --     - Folds are ignored.
 --     - Window view does not matter.
 -- - Scroll:
---     - `max_steps` in default `subscroll` correctly respected: total number
+--     - `max_n_output` in default `subscroll` correctly respected: total number
 --       of steps never exceeds it and subscroll are divided as equal as
---       possible (with remainder split in tails).
+--       possible (with remainder equally split between all subscrolls).
 --     - Manual scroll during animated scroll is done without jump directly
 --       from current window view.
 --     - One command resulting into several `WinScrolled` events (like
@@ -54,7 +54,7 @@
 --       results in a new scroll for number of lines defined by 'mousescroll'.
 --       To mitigate this issue, configure `config.scroll.subscroll()` to
 --       return `nil` if number of lines to scroll is less or equal to one
---       emitted by mouse wheel. Like by setting `min_to_animate` option of
+--       emitted by mouse wheel. Like by setting `min_input` option of
 --       |MiniAnimate.gen_subscroll.equal()| to be one greater than that number.
 --     - It breaks the use of several scrolling commands in the same command.
 --       Use |MiniAnimate.execute_after()| to schedule action after reaching
@@ -167,7 +167,7 @@ MiniAnimate.config = {
     enable = true,
     timing = function(_, n) return math.min(10, 250 / n) end,
     subscroll = function(total_scroll)
-      return H.subscroll_equal(total_scroll, { min_to_animate = 2, max_to_animate = 10000000, max_number = 60 })
+      return H.subscroll_equal(total_scroll, { min_input = 2, max_input = 10000000, max_n_output = 60 })
     end,
   },
 
@@ -375,7 +375,7 @@ end
 MiniAnimate.gen_subscroll = {}
 
 MiniAnimate.gen_subscroll.equal = function(opts)
-  opts = vim.tbl_deep_extend('force', { min_to_animate = 2, max_number = 60 }, opts or {})
+  opts = vim.tbl_deep_extend('force', { min_input = 2, max_input = 10000000, max_n_output = 60 }, opts or {})
 
   return function(total_scroll) return H.subscroll_equal(total_scroll, opts) end
 end
@@ -821,12 +821,14 @@ H.align_window_states = function(state_from, state_to)
   --       container, height - if in "col") is set to zero and the other is
   --       taken from `state_to`.
   -- - If there are only closed windows, then dimensions of common windows are
-  --   set to imitate "immediate disappear of closed windows". In other words,
-  --   for every closed window add its dimension along container to the nearest
-  --   common window. The concept of "nearest common window" is not that clear:
-  --   try using next common window when traversing (checking only inside
-  --   container is not enough, as it might consist only from closed windows),
-  --   last if none is found.
+  --   set to imitate "immediate disappear of closed windows". This needs an
+  --   emulation of window closing which will appropriately add to dimension
+  --   along container to "next" sublayout along parent container ("last" if
+  --   deleted window is last in parent container). Adding dimension to a
+  --   particular side should be done recursively imitating removing the split.
+  --   Having emulation of window close, emulate closing one by one in
+  --   `state_from` of all windows known to be closed and (hopefully) treat the
+  --   outcome as starting point for tweening.
 end
 
 H.classify_windows = function(state_from, state_to)
@@ -1179,10 +1181,10 @@ H.path_default_predicate = function(destination) return destination[1] < -1 or 1
 -- Animation subscroll --------------------------------------------------------
 H.subscroll_equal = function(total_scroll, opts)
   -- Animate only when `total_scroll` is inside appropriate range
-  if not (opts.min_to_animate <= total_scroll and total_scroll <= opts.max_to_animate) then return end
+  if not (opts.min_input <= total_scroll and total_scroll <= opts.max_input) then return end
 
-  -- Don't make more than `max_number` steps
-  local n_steps = math.min(total_scroll, opts.max_number)
+  -- Don't make more than `max_n_output` steps
+  local n_steps = math.min(total_scroll, opts.max_n_output)
   return H.divide_equal(total_scroll, n_steps)
 end
 
@@ -1241,17 +1243,10 @@ H.make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
 H.round = function(x) return math.floor(x + 0.5) end
 
 H.divide_equal = function(x, n)
-  local res = {}
-  local base, remainder = math.floor(x / n), x % n
-
-  -- Distribute equally with the remainder being inside tails
-  local tail_left = math.floor(0.5 * remainder)
-  local tail_right = n - (remainder - tail_left)
+  local res, coef = {}, x / n
   for i = 1, n do
-    local is_in_tail = i <= tail_left or tail_right < i
-    res[i] = base + (is_in_tail and 1 or 0)
+    res[i] = math.floor(i * coef) - math.floor((i - 1) * coef)
   end
-
   return res
 end
 
