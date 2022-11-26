@@ -9,7 +9,8 @@
 --       document that scrolling is animated only inside current window (the
 --       most common case).
 -- - Layout:
---     - Animate when there are closed window(s).
+--     - Animate when there are closed window(s). Should work with `:only` and
+--       any current layout.
 --     - Think about accounting for `VimResized`.
 --
 -- Tests:
@@ -110,6 +111,8 @@
 --- - Neovide:
 --- - '???/neoscroll.nvim':
 --- - '???/specs.nvim':
+--- - 'DanilaMihailov/beacon.nvim'
+--- - 'camspiers/lens.vim'
 ---
 --- # Highlight groups~
 ---
@@ -467,7 +470,6 @@ MiniAnimate.auto_scroll = function()
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
-_G.hist = {}
 MiniAnimate.auto_layout = function()
   -- Don't animate if disabled
   local layout_config = H.get_config().layout
@@ -484,7 +486,6 @@ MiniAnimate.auto_layout = function()
   -- Don't animate if nothing to animate. Mostly used to distinguish
   -- `WinScrolled` from module animation and other ones.
   local prev_state, new_state = H.cache.layout_state, H.get_layout_state()
-  table.insert(_G.hist, new_state)
 
   -- Don't animate if there is nothing to animate. This also stops
   local is_same_state = H.layout_state_is_equal(prev_state, new_state)
@@ -750,11 +751,11 @@ H.make_layout_step = function(state_from, state_to, opts)
       -- Do nothing on initialization
       if step == 0 then return true end
 
-      -- Stop animation if another resize is active. Don't use `stop_resize()`
-      -- because it will also mean to stop parallel animation.
+      -- Stop animation if another layout animation is active. Don't use
+      -- `stop_layout()` because it will also mean to stop parallel animation.
       if H.cache.layout_event_id ~= event_id then return false end
 
-      -- Preform resize. Possibly stop on error.
+      -- Preform animation. Possibly stop on error.
       local step_state = H.layout_state_convex(state_from_aligned, state_to, step / n_steps)
       local ok, _ = pcall(H.apply_layout_state, step_state)
       if not ok then return H.stop_layout(state_to) end
@@ -875,6 +876,7 @@ H.layout_state_align_from = function(state_from, state_to)
   -- Take `state_to` layout and infer aligned dimensions from `state_from`
   if has_closed then
     -- There are common and closed windows.
+    --
     -- Dimensions of common windows are set to imitate "immediate disappear of
     -- closed windows". This needs an emulation of window closing which will
     -- appropriately add to dimension along container to "next" sublayout along
@@ -883,6 +885,30 @@ H.layout_state_align_from = function(state_from, state_to)
     -- imitating removing the split. Having emulation of window close, emulate
     -- closing one by one in `state_from` of all windows known to be closed and
     -- (hopefully) treat the outcome as starting point for tweening.
+    --
+    -- !!! OR !!!
+    -- - Open new windows at the exact place as closed ones. This should lead
+    --   to the same layout as `state_from` but with different window ids in
+    --   place of a closed ones. A rough idea:
+    --     - Create scratch buffer (`buf_id`) and command queue holder.
+    --     - Traverse `state_from` layout in natural order. Keep track of last
+    --       common window id within each subcontainer.
+    --     - For each closed window add command to queue that will restore it
+    --       in split once common window is traversed. A command will consist
+    --       from these parts (depending on parent container type and side of
+    --       reopened window relative to latest common window, if present):
+    --       'topleft'/'botright' .. 'split'/'vsplit' .. ' | buffer ' .. buf_id
+    --       Keep track of new window id to map it to id of closed one it is
+    --       ought to replace.
+    --       If there is a common window in current parent container, execute
+    --       command right away.
+    --     - If found new common window, execute all split commands.
+    -- - Update `state_from` with replacing closed window ids by corresponding
+    --   new ones.
+    -- - Replace `state_to` with layout from `state_from`, but dimensions
+    --   reflecting `state_to`: common windows - exact ones, reopened - zero on
+    --   dimension along the parent container.
+    -- - Inside `stop_layout()` close reopened windows.
     -- TODO
     return
   end
