@@ -137,6 +137,60 @@
 MiniAnimate = {}
 H = {}
 
+local buf_id = vim.api.nvim_create_buf(false, true)
+
+_G.animate_window_shade = function(win_id)
+  if not vim.api.nvim_win_is_valid(win_id) then return end
+  local is_normal_win = vim.api.nvim_win_get_config(win_id).relative == ''
+  if not is_normal_win then return end
+
+  local pos = vim.fn.win_screenpos(win_id)
+  local height, width = vim.api.nvim_win_get_height(win_id), vim.api.nvim_win_get_width(win_id)
+
+  local n_steps = math.max(height, width)
+
+  local float_config = {
+    relative = 'editor',
+    anchor = 'NW',
+    width = width,
+    height = height,
+    row = pos[1] - 1,
+    col = pos[2] + 20,
+    focusable = false,
+    zindex = 10,
+    style = 'minimal',
+  }
+  local float_win_id = vim.api.nvim_open_win(buf_id, false, float_config)
+  vim.api.nvim_win_set_option(float_win_id, 'winblend', 60)
+
+  local timing = H.get_config().layout.timing
+
+  local step_action = function(step)
+    if not vim.api.nvim_win_is_valid(float_win_id) then return false end
+
+    if step == 0 then return true end
+
+    if n_steps <= step then
+      vim.api.nvim_win_close(float_win_id, true)
+      return false
+    end
+
+    local coef = step / n_steps
+    local new_config = {
+      relative = 'editor',
+      width = math.ceil((1 - coef) * width),
+      height = math.ceil((1 - coef) * height),
+      row = math.floor(pos[1] + 0.5 * coef * height),
+      col = math.floor(pos[2] + 0.5 * coef * width),
+    }
+    vim.api.nvim_win_set_config(float_win_id, new_config)
+    return true
+  end
+  local step_timing = function(step) return timing(step, n_steps) end
+
+  MiniAnimate.animate(step_action, step_timing)
+end
+
 --- Module setup
 ---
 ---@param config table|nil Module config table. See |MiniAnimate.config|.
