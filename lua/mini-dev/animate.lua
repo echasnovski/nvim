@@ -13,6 +13,8 @@
 --     - Simplify code: simpler state (combination of `winlayout()` output and
 --       table with window dimensions); remove redundant functions.
 --     - Think about accounting for `VimResized`.
+-- - Open/close:
+--     - Remove `H.position_static()` if it is final to not be default.
 --
 -- Tests:
 -- - General:
@@ -207,17 +209,17 @@ MiniAnimate.config = {
   -- Window open
   open = {
     enable = true,
-    timing = function(_, n) return 250 / n end,
-    -- Possibly replace with "sliding window" animation
-    shadow = function(win_id) return H.shadow_static(win_id) end,
+    timing = function(_, n) return 400 / n end,
+    position = function(win_id) return H.position_wipe(win_id, { direction = 'from_edge' }) end,
+    winblend = function(s, n) return 50 + 50 * (s / n) end,
   },
 
   -- Window close
   close = {
     enable = true,
-    timing = function(_, n) return 250 / n end,
-    -- Possibly replace with "sliding window" animation
-    shadow = function(win_id) return H.shadow_static(win_id) end,
+    timing = function(_, n) return 400 / n end,
+    position = function(win_id) return H.position_wipe(win_id, { direction = 'to_edge' }) end,
+    winblend = function(s, n) return 100 - 50 * (s / n) end,
   },
 }
 --minidoc_afterlines_end
@@ -423,16 +425,24 @@ MiniAnimate.gen_subscroll.equal = function(opts)
   return function(total_scroll) return H.subscroll_equal(total_scroll, opts) end
 end
 
---- Generate shadow
-MiniAnimate.gen_shadow = {}
+--- Generate position
+MiniAnimate.gen_position = {}
 
-MiniAnimate.gen_shadow.static = function()
-  return function(win_id) return H.shadow_static(win_id) end
+MiniAnimate.gen_position.static = function(opts)
+  opts = vim.tbl_deep_extend('force', { n_steps = 10 }, opts or {})
+
+  return function(win_id) return H.position_static(win_id, opts) end
 end
 
-MiniAnimate.gen_shadow.center = function(opts)
+MiniAnimate.gen_position.wipe = function(opts)
+  opts = vim.tbl_deep_extend('force', { direction = 'to_edge' }, opts or {})
+
+  return function(win_id) return H.position_wipe(win_id, opts) end
+end
+
+MiniAnimate.gen_position.center = function(opts)
   opts = opts or {}
-  local direction = opts.direction or 'shrink'
+  local direction = opts.direction or 'to_center'
 
   return function(win_id)
     local pos = vim.fn.win_screenpos(win_id)
@@ -442,10 +452,10 @@ MiniAnimate.gen_shadow.center = function(opts)
     local n_steps = math.max(height, width)
     local res = {}
     for step = 1, n_steps do
-      -- Growing and shrinking consist from same shadow, just in reverse order
-      -- Growing should end and shrinking should start with exactly height and
-      -- width of window
-      local numerator = direction == 'shrink' and (step - 1) or (n_steps - step)
+      -- To and from center consist from same position, just in reverse order
+      -- "From" should end and "to" should start with exactly height and width
+      -- of window
+      local numerator = direction == 'to_center' and (step - 1) or (n_steps - step)
       local coef = numerator / n_steps
 
       --stylua: ignore
@@ -464,6 +474,18 @@ MiniAnimate.gen_shadow.center = function(opts)
 
     return res
   end
+end
+
+--- Generate `winblend`
+MiniAnimate.gen_winblend = {}
+
+MiniAnimate.gen_winblend.linear = function(opts)
+  opts = opts or {}
+  local from = opts.from or 50
+  local to = opts.to or 100
+  local diff = to - from
+
+  return function(s, n) return from + (s / n) * diff end
 end
 
 MiniAnimate.auto_cursor = function()
@@ -1188,13 +1210,14 @@ end
 
 -- Open/close -----------------------------------------------------------------
 H.make_openclose_step = function(action_type, win_id, config)
-  -- Compute shadow progression
-  local step_shadows = config.shadow(win_id)
-  if step_shadows == nil or #step_shadows == 0 then return end
+  -- Compute position progression
+  local step_positions = config.position(win_id)
+  if step_positions == nil or #step_positions == 0 then return end
 
   -- Produce animation steps
-  local n_steps = #step_shadows
-  local timing, active_windows = config.timing, H.cache[action_type .. '_active_windows']
+  local n_steps = #step_positions
+  local timing, winblend = config.timing, config.winblend
+  local active_windows = H.cache[action_type .. '_active_windows']
   local float_win_id
 
   return {
@@ -1210,18 +1233,19 @@ H.make_openclose_step = function(action_type, win_id, config)
         H.empty_buf_id = vim.api.nvim_create_buf(false, true)
       end
 
-      local float_config = step_shadows[step + 1]
+      local float_config = step_positions[step + 1]
 
       -- Possibly reopen if it was manually closed (like after `:only`)
       if step == 0 or not vim.api.nvim_win_is_valid(float_win_id) then
         if float_win_id ~= nil then active_windows[float_win_id] = nil end
         float_win_id = vim.api.nvim_open_win(H.empty_buf_id, false, float_config)
         active_windows[float_win_id] = true
-
-        vim.api.nvim_win_set_option(float_win_id, 'winblend', 80)
       else
         vim.api.nvim_win_set_config(float_win_id, float_config)
       end
+
+      local new_winblend = H.round(winblend(step, n_steps))
+      vim.api.nvim_win_set_option(float_win_id, 'winblend', new_winblend)
 
       return true
     end,
@@ -1396,12 +1420,15 @@ H.subscroll_equal = function(total_scroll, opts)
   return H.divide_equal(total_scroll, n_steps)
 end
 
--- Animation shadow -----------------------------------------------------------
-H.shadow_static = function(win_id)
+-- Animation position ---------------------------------------------------------
+H.position_static = function(win_id, opts)
+  if not vim.api.nvim_win_is_valid(win_id) then return {} end
+
   local pos = vim.fn.win_screenpos(win_id)
-  --stylua: ignore
-  return {
-    {
+  local res = {}
+  for i = 1, opts.n_steps do
+    --stylua: ignore
+    res[i] = {
       relative  = 'editor',
       anchor    = 'NW',
       row       = pos[1] - 1,
@@ -1412,7 +1439,90 @@ H.shadow_static = function(win_id)
       zindex    = 1,
       style     = 'minimal',
     }
-  }
+  end
+  return res
+end
+
+--stylua: ignore
+H.position_wipe = function(win_id, opts)
+  if not vim.api.nvim_win_is_valid(win_id) then return {} end
+
+  -- Get window data
+  local win_pos = vim.fn.win_screenpos(win_id)
+  local top_row,    left_col  = win_pos[1],                          win_pos[2]
+  local win_height, win_width = vim.api.nvim_win_get_height(win_id), vim.api.nvim_win_get_width(win_id)
+  local win_container = H.get_window_parent_container(win_id)
+
+  -- Compute progression data
+  local cur_row,   cur_col    = top_row,   left_col
+  local cur_width, cur_height = win_width, win_height
+
+  local increment_row, increment_col, increment_height, increment_width
+  local n_steps
+
+  if win_container == 'col' then
+    -- Determine closest top/bottom screen edge and progress to it
+    local bottom_row = top_row + win_height - 1
+    local is_top_edge_closer = top_row < (vim.o.lines - bottom_row + 1)
+
+    increment_row    = is_top_edge_closer and 0 or 1
+    increment_col    = 0
+    increment_width  = 0
+    increment_height = -1
+    n_steps          = win_height
+  else
+    -- Determine closest left/right screen edge and progress to it
+    local right_col = left_col + win_width - 1
+    local is_left_edge_closer = left_col < (vim.o.columns - right_col + 1)
+
+    increment_row    = 0
+    increment_col    = is_left_edge_closer and 0 or 1
+    increment_width  = -1
+    increment_height = 0
+    n_steps          = win_width
+  end
+
+  -- Make step positions
+  local direction = opts.direction
+  local res = {}
+  for i = 1, n_steps do
+    -- Reverse output if progression is from edge
+    local res_ind = direction == 'to_edge' and i or (n_steps - i + 1)
+    res[res_ind] = {
+      relative  = 'editor',
+      anchor    = 'NW',
+      row       = cur_row - 1,
+      col       = cur_col - 1,
+      width     = cur_width,
+      height    = cur_height,
+      focusable = false,
+      zindex    = 1,
+      style     = 'minimal',
+    }
+    cur_row    = cur_row    + increment_row
+    cur_col    = cur_col    + increment_col
+    cur_height = cur_height + increment_height
+    cur_width  = cur_width  + increment_width
+  end
+  return res
+end
+
+H.get_window_parent_container = function(win_id)
+  local f
+  f = function(layout, parent_container)
+    local container, second = layout[1], layout[2]
+    if container == 'leaf' then
+      if second == win_id then return parent_container end
+      return
+    end
+
+    for _, sub_layout in ipairs(second) do
+      local res = f(sub_layout, container)
+      if res ~= nil then return res end
+    end
+  end
+
+  return f(vim.fn.winlayout()) or 'single'
 end
 
 -- Predicators ----------------------------------------------------------------
@@ -1442,7 +1552,8 @@ end
 H.is_config_open = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('open.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('open.timing', 'callable') end
-  if not vim.is_callable(x.shadow) then return false, H.msg_config('open.shadow', 'callable') end
+  if not vim.is_callable(x.position) then return false, H.msg_config('open.position', 'callable') end
+  if not vim.is_callable(x.winblend) then return false, H.msg_config('open.winblend', 'callable') end
 
   return true
 end
@@ -1450,7 +1561,8 @@ end
 H.is_config_close = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('close.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('close.timing', 'callable') end
-  if not vim.is_callable(x.shadow) then return false, H.msg_config('close.shadow', 'callable') end
+  if not vim.is_callable(x.position) then return false, H.msg_config('close.position', 'callable') end
+  if not vim.is_callable(x.winblend) then return false, H.msg_config('close.winblend', 'callable') end
 
   return true
 end
