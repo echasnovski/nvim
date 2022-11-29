@@ -9,8 +9,9 @@
 --       document that scrolling is animated only inside current window (the
 --       most common case).
 -- - Layout:
---     - Animate when there are closed window(s). Should work with `:only` and
---       any current layout.
+--     - Rename back to `resize` and act only on resize (with same layout).
+--     - Simplify code: simpler state (combination of `winlayout()` output and
+--       table with window dimensions); remove redundant functions.
 --     - Think about accounting for `VimResized`.
 --
 -- Tests:
@@ -137,60 +138,6 @@
 MiniAnimate = {}
 H = {}
 
-local buf_id = vim.api.nvim_create_buf(false, true)
-
-_G.animate_window_shade = function(win_id)
-  if not vim.api.nvim_win_is_valid(win_id) then return end
-  local is_normal_win = vim.api.nvim_win_get_config(win_id).relative == ''
-  if not is_normal_win then return end
-
-  local pos = vim.fn.win_screenpos(win_id)
-  local height, width = vim.api.nvim_win_get_height(win_id), vim.api.nvim_win_get_width(win_id)
-
-  local n_steps = math.max(height, width)
-
-  local float_config = {
-    relative = 'editor',
-    anchor = 'NW',
-    width = width,
-    height = height,
-    row = pos[1] - 1,
-    col = pos[2] + 20,
-    focusable = false,
-    zindex = 10,
-    style = 'minimal',
-  }
-  local float_win_id = vim.api.nvim_open_win(buf_id, false, float_config)
-  vim.api.nvim_win_set_option(float_win_id, 'winblend', 60)
-
-  local timing = H.get_config().layout.timing
-
-  local step_action = function(step)
-    if not vim.api.nvim_win_is_valid(float_win_id) then return false end
-
-    if step == 0 then return true end
-
-    if n_steps <= step then
-      vim.api.nvim_win_close(float_win_id, true)
-      return false
-    end
-
-    local coef = step / n_steps
-    local new_config = {
-      relative = 'editor',
-      width = math.ceil((1 - coef) * width),
-      height = math.ceil((1 - coef) * height),
-      row = math.floor(pos[1] + 0.5 * coef * height),
-      col = math.floor(pos[2] + 0.5 * coef * width),
-    }
-    vim.api.nvim_win_set_config(float_win_id, new_config)
-    return true
-  end
-  local step_timing = function(step) return timing(step, n_steps) end
-
-  MiniAnimate.animate(step_action, step_timing)
-end
-
 --- Module setup
 ---
 ---@param config table|nil Module config table. See |MiniAnimate.config|.
@@ -210,16 +157,16 @@ MiniAnimate.setup = function(config)
   -- NOTEs:
   -- - Inside `WinScrolled` try to first animate layout before scroll to avoid
   --   flickering.
-  -- - Use `WinClosed` to update layout state because it is not always properly
-  --   updated in Neovim<0.9. Use `vim.schedule()` to operate *after* closed
-  --   window is removed from layout.
+  -- - Use `vim.schedule()` for "open" animation to get a window data used for
+  --   displaying (and not one after just opening). Useful for 'nvim-tree'.
   vim.api.nvim_exec(
     [[augroup MiniAnimate
         au!
         au CursorMoved * lua MiniAnimate.auto_cursor()
-        au WinEnter    * lua MiniAnimate.on_win_enter()
-        au WinClosed   * lua vim.schedule(MiniAnimate.on_win_closed)
         au WinScrolled * lua MiniAnimate.auto_layout(); MiniAnimate.auto_scroll()
+        au WinEnter    * lua MiniAnimate.track_scroll_state()
+        au WinNew      * lua vim.schedule(MiniAnimate.auto_openclose)
+        au WinClosed   * lua MiniAnimate.auto_openclose("close")
       augroup END]],
     false
   )
@@ -256,6 +203,22 @@ MiniAnimate.config = {
     enable = true,
     timing = function(_, n) return math.min(10, 250 / n) end,
   },
+
+  -- Window open
+  open = {
+    enable = true,
+    timing = function(_, n) return 250 / n end,
+    -- Possibly replace with "sliding window" animation
+    shadow = function(win_id) return H.shadow_static(win_id) end,
+  },
+
+  -- Window close
+  close = {
+    enable = true,
+    timing = function(_, n) return 250 / n end,
+    -- Possibly replace with "sliding window" animation
+    shadow = function(win_id) return H.shadow_static(win_id) end,
+  },
 }
 --minidoc_afterlines_end
 
@@ -280,7 +243,7 @@ MiniAnimate.execute_after = function(animation_type, action)
   -- effect. This helps creating more universal mappings, because some commands
   -- (like `n`) not always result into scrolling.
   vim.schedule(function()
-    if H.cache.scroll_is_active then
+    if MiniAnimate.is_active(animation_type) then
       -- TODO: use `nvim_create_autocmd()` after Neovim<=0.6 support is dropped
       MiniAnimate._action = callable
       local au_cmd = string.format('au User %s ++once lua MiniAnimate._action(); MiniAnimate._action = nil', event_name)
@@ -460,6 +423,49 @@ MiniAnimate.gen_subscroll.equal = function(opts)
   return function(total_scroll) return H.subscroll_equal(total_scroll, opts) end
 end
 
+--- Generate shadow
+MiniAnimate.gen_shadow = {}
+
+MiniAnimate.gen_shadow.static = function()
+  return function(win_id) return H.shadow_static(win_id) end
+end
+
+MiniAnimate.gen_shadow.center = function(opts)
+  opts = opts or {}
+  local direction = opts.direction or 'shrink'
+
+  return function(win_id)
+    local pos = vim.fn.win_screenpos(win_id)
+    local row, col = pos[1] - 1, pos[2] - 1
+    local height, width = vim.api.nvim_win_get_height(win_id), vim.api.nvim_win_get_width(win_id)
+
+    local n_steps = math.max(height, width)
+    local res = {}
+    for step = 1, n_steps do
+      -- Growing and shrinking consist from same shadow, just in reverse order
+      -- Growing should end and shrinking should start with exactly height and
+      -- width of window
+      local numerator = direction == 'shrink' and (step - 1) or (n_steps - step)
+      local coef = numerator / n_steps
+
+      --stylua: ignore
+      res[step] = {
+        relative  = 'editor',
+        anchor    = 'NW',
+        row       = H.round(row + 0.5 * coef * height),
+        col       = H.round(col + 0.5 * coef * width),
+        width     = math.ceil((1 - coef) * width),
+        height    = math.ceil((1 - coef) * height),
+        focusable = false,
+        zindex    = 1,
+        style     = 'minimal',
+      }
+    end
+
+    return res
+  end
+end
+
 MiniAnimate.auto_cursor = function()
   -- Don't animate if disabled
   local cursor_config = H.get_config().cursor
@@ -524,6 +530,8 @@ MiniAnimate.auto_scroll = function()
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
+MiniAnimate.track_scroll_state = function() H.cache.scroll_state = H.get_scroll_state() end
+
 MiniAnimate.auto_layout = function()
   -- Don't animate if disabled
   local layout_config = H.get_config().layout
@@ -557,10 +565,29 @@ MiniAnimate.auto_layout = function()
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
-MiniAnimate.on_win_enter = function() H.cache.scroll_state = H.get_scroll_state() end
+MiniAnimate.auto_openclose = function(action_type)
+  action_type = action_type or 'open'
 
--- TODO: Remove after Neovim<=0.9 is dropped (very long time from now)
-MiniAnimate.on_win_closed = function() H.cache.layout_state = H.get_layout_state() end
+  -- Don't animate if disabled
+  local config = H.get_config()[action_type]
+  if not config.enable or H.is_disabled() then return end
+
+  -- Get window id to act upon
+  local win_id
+  if action_type == 'close' then win_id = tonumber(vim.fn.expand('<amatch>')) end
+  if action_type == 'open' then win_id = math.max(unpack(vim.api.nvim_list_wins())) end
+
+  -- Don't animate if created window is not right (valid and not floating)
+  if win_id == nil or not vim.api.nvim_win_is_valid(win_id) then return end
+  if vim.api.nvim_win_get_config(win_id).relative ~= '' then return end
+
+  -- Make animation step data and possibly animate
+  local animate_step = H.make_openclose_step(action_type, win_id, config)
+  if not animate_step then return end
+
+  H.start_openclose(action_type)
+  MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
+end
 
 -- Helper data ================================================================
 -- Module default config
@@ -582,16 +609,28 @@ H.cache = {
   layout_event_id = 0,
   layout_is_active = false,
   layout_state = {},
+
+  -- Window open animation data
+  open_is_active = false,
+  open_active_windows = {},
+
+  -- Window close animation data
+  close_is_active = false,
+  close_active_windows = {},
 }
 
 H.ns_id = {
   cursor = vim.api.nvim_create_namespace('MiniAnimateCursor'),
 }
 
+H.empty_buf_id = nil
+
 H.animation_done_events = {
-  cursor = 'MiniAnimateCursorDone',
-  scroll = 'MiniAnimateScrollDone',
-  layout = 'MiniAnimateLayoutDone',
+  cursor = 'MiniAnimateDoneCursor',
+  scroll = 'MiniAnimateDoneScroll',
+  layout = 'MiniAnimateDoneLayout',
+  open = 'MiniAnimateDoneOpen',
+  close = 'MiniAnimateDoneClose',
 }
 
 -- Helper functionality =======================================================
@@ -606,6 +645,8 @@ H.setup_config = function(config)
     cursor = { config.cursor, H.is_config_cursor },
     scroll = { config.scroll, H.is_config_scroll },
     layout = { config.layout, H.is_config_layout },
+    open = { config.open, H.is_config_open },
+    close = { config.close, H.is_config_close },
   })
 
   return config
@@ -974,7 +1015,8 @@ H.layout_state_align_from = function(state_from, state_to)
     --   nothing": dimenstion along container (width if window is in "row"
     --   container, height - if in "col") is set to zero and the other is
     --   taken from `state_to`.
-    return H.layout_state_align_from_with_opened(state_to, pair_summary)
+    -- return H.layout_state_align_from_with_opened(state_to, pair_summary)
+    return
   end
 
   -- Only common windows
@@ -1144,6 +1186,58 @@ H.layout_state_filter = function(state, winmap)
   return res
 end
 
+-- Open/close -----------------------------------------------------------------
+H.make_openclose_step = function(action_type, win_id, config)
+  -- Compute shadow progression
+  local step_shadows = config.shadow(win_id)
+  if step_shadows == nil or #step_shadows == 0 then return end
+
+  -- Produce animation steps
+  local n_steps = #step_shadows
+  local timing, active_windows = config.timing, H.cache[action_type .. '_active_windows']
+  local float_win_id
+
+  return {
+    step_action = function(step)
+      if n_steps <= step then
+        active_windows[float_win_id] = nil
+        vim.api.nvim_win_close(float_win_id, true)
+        return H.stop_openclose(action_type)
+      end
+
+      -- Empty buffer should always be valid (might have been closed by user command)
+      if H.empty_buf_id == nil or not vim.api.nvim_buf_is_valid(H.empty_buf_id) then
+        H.empty_buf_id = vim.api.nvim_create_buf(false, true)
+      end
+
+      local float_config = step_shadows[step + 1]
+
+      -- Possibly reopen if it was manually closed (like after `:only`)
+      if step == 0 or not vim.api.nvim_win_is_valid(float_win_id) then
+        if float_win_id ~= nil then active_windows[float_win_id] = nil end
+        float_win_id = vim.api.nvim_open_win(H.empty_buf_id, false, float_config)
+        active_windows[float_win_id] = true
+
+        vim.api.nvim_win_set_option(float_win_id, 'winblend', 80)
+      else
+        vim.api.nvim_win_set_config(float_win_id, float_config)
+      end
+
+      return true
+    end,
+    step_timing = function(step) return timing(step, n_steps) end,
+  }
+end
+
+H.start_openclose = function(action_type) H.cache[action_type .. '_is_active'] = true end
+
+H.stop_openclose = function(action_type)
+  local active_windows = H.cache[action_type .. '_active_windows']
+  H.cache[action_type .. '_is_active'] = not vim.tbl_isempty(active_windows)
+  H.emit_done_event(action_type)
+  return false
+end
+
 -- Animation timings ----------------------------------------------------------
 H.normalize_timing_opts = function(x)
   x = vim.tbl_deep_extend('force', H.get_config(), { duration = 100, easing = 'in-out', unit = 'total' }, x or {})
@@ -1302,6 +1396,25 @@ H.subscroll_equal = function(total_scroll, opts)
   return H.divide_equal(total_scroll, n_steps)
 end
 
+-- Animation shadow -----------------------------------------------------------
+H.shadow_static = function(win_id)
+  local pos = vim.fn.win_screenpos(win_id)
+  --stylua: ignore
+  return {
+    {
+      relative  = 'editor',
+      anchor    = 'NW',
+      row       = pos[1] - 1,
+      col       = pos[2] - 1,
+      width     = vim.api.nvim_win_get_width(win_id),
+      height    = vim.api.nvim_win_get_height(win_id),
+      focusable = false,
+      zindex    = 1,
+      style     = 'minimal',
+    }
+  }
+end
+
 -- Predicators ----------------------------------------------------------------
 H.is_config_cursor = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('cursor.enable', 'boolean') end
@@ -1322,6 +1435,22 @@ end
 H.is_config_layout = function(x)
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('layout.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('layout.timing', 'callable') end
+
+  return true
+end
+
+H.is_config_open = function(x)
+  if type(x.enable) ~= 'boolean' then return false, H.msg_config('open.enable', 'boolean') end
+  if not vim.is_callable(x.timing) then return false, H.msg_config('open.timing', 'callable') end
+  if not vim.is_callable(x.shadow) then return false, H.msg_config('open.shadow', 'callable') end
+
+  return true
+end
+
+H.is_config_close = function(x)
+  if type(x.enable) ~= 'boolean' then return false, H.msg_config('close.enable', 'boolean') end
+  if not vim.is_callable(x.timing) then return false, H.msg_config('close.timing', 'callable') end
+  if not vim.is_callable(x.shadow) then return false, H.msg_config('close.shadow', 'callable') end
 
   return true
 end
