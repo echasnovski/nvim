@@ -9,12 +9,7 @@
 --       document that scrolling is animated only inside current window (the
 --       most common case).
 -- - Resize:
---     - Think about also tweening view (to avoid all possible view flicker).
---       Test: `set winwidth=120 winheight=40` and hop between two vertically
---       split windows with cursor on `$` (in Neovim nightly).
 --     - Think about accounting for `VimResized`.
--- - Open/close:
---     - Remove `H.position_static()` if it is final to not be default.
 --
 -- Tests:
 -- - General:
@@ -53,6 +48,13 @@
 --     - Works when closing windows (`:quit`, manual command).
 --     - Doesn't animate scroll during animation (including at the end).
 --     - Works with `winheight`/`winwidth` in Neovim>=0.9.
+--     - No view flicker when resizing from small to big width when cursor is
+--       on the end of long line. Tests:
+--         - `set winwidth=120 winheight=40` and hop between two vertically
+--           split windows with cursor on `$` (in Neovim nightly).
+--           This is particularly challenging because it seems that cursor
+--           should always be visible inside current window.
+--         - `<C-w>|` and then `<C-w>=` should not cause view to flicker.
 -- - Open/close:
 --     - Works when open/close tabpage. Including `animate_single` option for
 --       "wipe" position. Including on second time (test using tabpage number
@@ -216,16 +218,16 @@ MiniAnimate.config = {
   open = {
     enable = true,
     timing = function(_, n) return 400 / n end,
-    position = function(win_id) return H.position_wipe(win_id, { direction = 'from_edge', animate_single = false }) end,
-    winblend = function(s, n) return 60 + 40 * (s / n) end,
+    position = function(win_id) return H.position_wipe(win_id, { direction = 'from_edge', animate_single = true }) end,
+    winblend = function(s, n) return 75 + 25 * (s / n) end,
   },
 
   -- Window close
   close = {
     enable = true,
     timing = function(_, n) return 400 / n end,
-    position = function(win_id) return H.position_wipe(win_id, { direction = 'to_edge', animate_single = false }) end,
-    winblend = function(s, n) return 100 - 40 * (s / n) end,
+    position = function(win_id) return H.position_wipe(win_id, { direction = 'to_edge', animate_single = true }) end,
+    winblend = function(s, n) return 100 - 25 * (s / n) end,
   },
 }
 --minidoc_afterlines_end
@@ -434,23 +436,16 @@ end
 --- Generate position
 MiniAnimate.gen_position = {}
 
-MiniAnimate.gen_position.static = function(opts)
-  opts = vim.tbl_deep_extend('force', { n_steps = 10 }, opts or {})
-
-  return function(win_id) return H.position_static(win_id, opts) end
-end
-
-MiniAnimate.gen_position.wipe = function(opts)
-  opts = vim.tbl_deep_extend('force', { direction = 'to_edge', animate_single = false }, opts or {})
-
-  return function(win_id) return H.position_wipe(win_id, opts) end
-end
-
 MiniAnimate.gen_position.center = function(opts)
   opts = opts or {}
   local direction = opts.direction or 'to_center'
+  local animate_single = opts.animate_single
+  if animate_single == nil then animate_single = true end
 
   return function(win_id)
+    -- Possibly don't animate single-layout window (like in open/close tabpage)
+    if not animate_single and H.is_single_window(win_id) then return {} end
+
     local pos = vim.fn.win_screenpos(win_id)
     local row, col = pos[1] - 1, pos[2] - 1
     local height, width = vim.api.nvim_win_get_height(win_id), vim.api.nvim_win_get_width(win_id)
@@ -482,6 +477,42 @@ MiniAnimate.gen_position.center = function(opts)
   end
 end
 
+MiniAnimate.gen_position.static = function(opts)
+  opts = opts or {}
+  local n_steps = opts.n_steps or 10
+  local animate_single = opts.animate_single
+  if animate_single == nil then animate_single = true end
+
+  return function(win_id)
+    -- Possibly don't animate single-layout window (like in open/close tabpage)
+    if not animate_single and H.is_single_window(win_id) then return {} end
+
+    local pos = vim.fn.win_screenpos(win_id)
+    local res = {}
+    for i = 1, n_steps do
+      --stylua: ignore
+      res[i] = {
+        relative  = 'editor',
+        anchor    = 'NW',
+        row       = pos[1] - 1,
+        col       = pos[2] - 1,
+        width     = vim.api.nvim_win_get_width(win_id),
+        height    = vim.api.nvim_win_get_height(win_id),
+        focusable = false,
+        zindex    = 1,
+        style     = 'minimal',
+      }
+    end
+    return res
+  end
+end
+
+MiniAnimate.gen_position.wipe = function(opts)
+  opts = vim.tbl_deep_extend('force', { direction = 'to_edge', animate_single = true }, opts or {})
+
+  return function(win_id) return H.position_wipe(win_id, opts) end
+end
+
 --- Generate `winblend`
 MiniAnimate.gen_winblend = {}
 
@@ -506,8 +537,8 @@ MiniAnimate.auto_cursor = function()
   -- Don't animate if inside scroll animation
   if H.cache.scroll_is_active then return end
 
-  -- Update necessary information. NOTE: tracking only on `CursorMoved` and not
-  -- inside every animation step (like in scroll animation) for performance
+  -- Update necessary information. NOTE: update state only on `CursorMoved` and
+  -- not inside every animation step (like in scroll animation) for performance
   -- reasons: cursor movement is much more common action than scrolling.
   local prev_state, new_state = H.cache.cursor_state, H.get_cursor_state()
   H.cache.cursor_state = new_state
@@ -573,28 +604,23 @@ MiniAnimate.auto_resize = function()
   -- occasional flickering.
   if H.cache.scroll_is_active then return end
 
-  -- Don't animate if nothing to animate. Mostly used to distinguish
-  -- `WinScrolled` from module animation and other ones.
+  -- Update state. This also ensures that window views are up to date.
   local prev_state, new_state = H.cache.resize_state, H.get_resize_state()
-
-  -- Don't animate if there is nothing to animate. This also stops triggering
-  -- animation on window scrolls.
-  local same_state = H.is_equal_resize_state(prev_state, new_state)
-  if same_state.layout and same_state.sizes then return end
-
-  -- Update necessary information because either layout or sizes have changed
   H.cache.resize_state = new_state
-  H.cache.resize_event_id = H.cache.resize_event_id + 1
 
-  -- Don't animate if layouts are different
-  if not same_state.layout then return end
+  -- Don't animate if there is nothing to animate (should be save layout but
+  -- different sizes). This also stops triggering animation on window scrolls.
+  local same_state = H.is_equal_resize_state(prev_state, new_state)
+  if not (same_state.layout and not same_state.sizes) then return end
+
+  -- Register new event only in case there is something to animate
+  H.cache.resize_event_id = H.cache.resize_event_id + 1
 
   -- Make animation step data and possibly animate
   local animate_step = H.make_resize_step(prev_state, new_state, resize_config)
   if not animate_step then return end
 
-  -- Don't apply previous state views because they can be outdated
-  H.start_resize(H.remove_resize_state_view(prev_state))
+  H.start_resize(prev_state)
   MiniAnimate.animate(animate_step.step_action, animate_step.step_timing)
 end
 
@@ -881,7 +907,8 @@ H.make_resize_step = function(state_from, state_to, opts)
 
       -- Preform animation. Possibly stop on error.
       local step_state = H.make_convex_resize_state(state_from, state_to, step / n_steps)
-      local ok, _ = pcall(H.apply_resize_state, step_state)
+      -- Don't restore cursor position to avoid horizontal flicker
+      local ok, _ = pcall(H.apply_resize_state, step_state, false)
       if not ok then return H.stop_resize(state_to) end
 
       -- Properly stop animation if step is too big
@@ -895,12 +922,13 @@ end
 
 H.start_resize = function(start_state)
   H.cache.resize_is_active = true
-  if start_state ~= nil then H.apply_resize_state(start_state) end
+  -- Don't restore cursor position to avoid horizontal flicker
+  if start_state ~= nil then H.apply_resize_state(start_state, false) end
   return true
 end
 
 H.stop_resize = function(end_state)
-  if end_state ~= nil then H.apply_resize_state(end_state) end
+  if end_state ~= nil then H.apply_resize_state(end_state, true) end
   H.cache.resize_is_active = false
   H.emit_done_event('resize')
   return false
@@ -943,7 +971,7 @@ H.get_layout_windows = function(layout)
   return res
 end
 
-H.apply_resize_state = function(state)
+H.apply_resize_state = function(state, full_view)
   for win_id, dims in pairs(state.sizes) do
     -- If state dimensions are not accurate enough, this settings might lead to
     -- moving `cmdheight`
@@ -953,7 +981,22 @@ H.apply_resize_state = function(state)
 
   -- Allow states without `view` (mainly inside animation)
   for win_id, view in pairs(state.views or {}) do
-    vim.api.nvim_win_call(win_id, function() vim.fn.winrestview(view) end)
+    vim.api.nvim_win_call(win_id, function()
+      -- Allow to not restore full view. It mainly solves horizontal flickering
+      -- when resizing from small to big width and cursor is on the end of long
+      -- line. This is especially visible for Neovim>=0.9 and high 'winwidth'.
+      -- Example: `set winwidth=120 winheight=40` and hop between two
+      -- vertically split windows with cursor on `$` in long line.
+      if full_view then
+        vim.fn.winrestview(view)
+        return
+      end
+
+      -- This triggers `CursorMoved` event, but nothing can be done
+      -- (`noautocmd` is of no use, see https://github.com/vim/vim/issues/2084)
+      vim.api.nvim_win_set_cursor(win_id, { view.lnum, view.leftcol })
+      vim.fn.winrestview({ topline = view.topline, leftcol = view.leftcol })
+    end)
   end
 
   -- Update current resize state to be able to start another resize animation
@@ -985,7 +1028,8 @@ H.make_convex_resize_state = function(state_from, state_to, coef)
     }
   end
 
-  -- Intermediate states don't need `layout` and `view` fields
+  -- Intermediate states don't have `layout` (not needed) and `views` (because
+  -- leads to flicker)
   return { sizes = res_sizes }
 end
 
@@ -1202,32 +1246,8 @@ H.subscroll_equal = function(total_scroll, opts)
 end
 
 -- Animation position ---------------------------------------------------------
-H.position_static = function(win_id, opts)
-  if not vim.api.nvim_win_is_valid(win_id) then return {} end
-
-  local pos = vim.fn.win_screenpos(win_id)
-  local res = {}
-  for i = 1, opts.n_steps do
-    --stylua: ignore
-    res[i] = {
-      relative  = 'editor',
-      anchor    = 'NW',
-      row       = pos[1] - 1,
-      col       = pos[2] - 1,
-      width     = vim.api.nvim_win_get_width(win_id),
-      height    = vim.api.nvim_win_get_height(win_id),
-      focusable = false,
-      zindex    = 1,
-      style     = 'minimal',
-    }
-  end
-  return res
-end
-
 --stylua: ignore
 H.position_wipe = function(win_id, opts)
-  if not vim.api.nvim_win_is_valid(win_id) then return {} end
-
   -- Possibly don't animate single-layout window (like in open/close tabpage)
   local win_container = H.get_window_parent_container(win_id)
   if not opts.animate_single and win_container == 'single' then return {} end
@@ -1384,6 +1404,11 @@ end
 
 H.make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
 
+H.is_single_window = function(win_id)
+  local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
+  return #vim.api.nvim_tabpage_list_wins(tabpage_id) == 1
+end
+
 H.round = function(x) return math.floor(x + 0.5) end
 
 H.divide_equal = function(x, n)
@@ -1399,16 +1424,5 @@ H.convex_point = function(x, y, coef) return H.round((1 - coef) * x + coef * y) 
 -- `virtcol2col()` is only present in Neovim>=0.8. Earlier Neovim versions will
 -- have troubles dealing with multibyte characters.
 H.virtcol2col = vim.fn.virtcol2col or function(_, _, col) return col end
-
-H.tbl_intersect_keys = function(tbl_1, tbl_2)
-  local res_1, res_2 = {}, {}
-  for k, v in pairs(tbl_1) do
-    if tbl_2[k] ~= nil then
-      res_1[k], res_2[k] = v, tbl_2[k]
-    end
-  end
-
-  return res_1, res_2
-end
 
 return MiniAnimate
