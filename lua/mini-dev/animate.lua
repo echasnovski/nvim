@@ -211,7 +211,7 @@ MiniAnimate.config = {
   -- Window resize
   resize = {
     enable = true,
-    timing = function(_, n) return math.min(10, 250 / n) end,
+    timing = function(_, n) return 250 / n end,
   },
 
   -- Window open
@@ -518,7 +518,7 @@ MiniAnimate.gen_winblend = {}
 
 MiniAnimate.gen_winblend.linear = function(opts)
   opts = opts or {}
-  local from = opts.from or 50
+  local from = opts.from or 75
   local to = opts.to or 100
   local diff = to - from
 
@@ -986,7 +986,7 @@ H.apply_resize_state = function(state, full_view)
       -- when resizing from small to big width and cursor is on the end of long
       -- line. This is especially visible for Neovim>=0.9 and high 'winwidth'.
       -- Example: `set winwidth=120 winheight=40` and hop between two
-      -- vertically split windows with cursor on `$` in long line.
+      -- vertically split windows with cursor on `$` of long line.
       if full_view then
         vim.fn.winrestview(view)
         return
