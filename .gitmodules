@@ -32,11 +32,11 @@
 	branch = master
 [submodule "nvim-web-devicons"]
 	path = pack/plugins/opt/nvim-web-devicons
-	url = https://github.com/kyazdani42/nvim-web-devicons
+	url = https://github.com/nvim-tree/nvim-web-devicons
 	branch = master
 [submodule "nvim-tree"]
 	path = pack/plugins/opt/nvim-tree
-	url = https://github.com/kyazdani42/nvim-tree.lua
+	url = https://github.com/nvim-tree/nvim-tree.lua
 	branch = master
 [submodule "plenary"]
 	path = pack/plugins/opt/plenary
