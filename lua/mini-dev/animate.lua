@@ -4,12 +4,6 @@
 -- Code:
 -- - General:
 --     - Clean up and refactor.
--- - Scroll:
---     - Think about making it work for `WinScrolled` in any window. If not,
---       document that scrolling is animated only inside current window (the
---       most common case).
--- - Resize:
---     - Think about accounting for `VimResized`.
 --
 -- Tests:
 -- - General:
@@ -83,12 +77,13 @@
 --       right hand side:
 -- `<Cmd>lua vim.cmd('normal! n'); MiniAnimate.execute_after('scroll', 'normal! zvzz')<CR>`.
 --
+-- - Scroll animation is done only for vertical scroll inside current window.
 -- - If output of either `config.cursor.path()` or `config.scroll.subscroll()`
 --   is `nil` or array of length 0, animation is suspended.
 -- - Animation of scroll and resize works best with Neovim>=0.9 (after updates
 --   to |WinScrolled| event and introduction of |WinResized| event). For
---   example, animation resulting from effect of 'winheight'/'winwidth' will
---   work properly.
+--   example, resize animation resulting from effect of 'winheight'/'winwidth'
+--   will work properly.
 --   Context:
 --     - https://github.com/neovim/neovim/issues/18222
 --     - https://github.com/vim/vim/issues/10628
@@ -195,14 +190,14 @@ MiniAnimate.config = {
   -- Path of cursor movement within same buffer
   cursor = {
     enable = true,
-    timing = function(_, n) return math.min(10, 250 / n) end,
-    path = function(destination) return H.path_line(destination, H.path_default_predicate) end,
+    timing = function(s, n) return H.quadratic_inout_default(s, n) end,
+    path = function(destination) return H.path_line(destination, H.path_predicate_default) end,
   },
 
   -- Window vertical scroll
   scroll = {
     enable = true,
-    timing = function(_, n) return math.min(10, 250 / n) end,
+    timing = function(s, n) return H.quadratic_inout_default(s, n) end,
     subscroll = function(total_scroll)
       return H.subscroll_equal(total_scroll, { min_input = 2, max_input = 10000000, max_n_output = 60 })
     end,
@@ -211,23 +206,23 @@ MiniAnimate.config = {
   -- Window resize
   resize = {
     enable = true,
-    timing = function(_, n) return 250 / n end,
+    timing = function(s, n) return H.quadratic_inout_default(s, n) end,
   },
 
   -- Window open
   open = {
     enable = true,
-    timing = function(_, n) return 400 / n end,
-    position = function(win_id) return H.position_wipe(win_id, { direction = 'from_edge', animate_single = true }) end,
-    winblend = function(s, n) return 75 + 25 * (s / n) end,
+    timing = function(s, n) return H.quadratic_in_default(s, n) end,
+    position = function(win_id) return H.position_static(win_id, { n_steps = 25, animate_single = true }) end,
+    winblend = function(s, n) return 80 + 20 * (s / n) end,
   },
 
   -- Window close
   close = {
     enable = true,
-    timing = function(_, n) return 400 / n end,
-    position = function(win_id) return H.position_wipe(win_id, { direction = 'to_edge', animate_single = true }) end,
-    winblend = function(s, n) return 100 - 25 * (s / n) end,
+    timing = function(s, n) return H.quadratic_out_default(s, n) end,
+    position = function(win_id) return H.position_static(win_id, { n_steps = 25, animate_single = true }) end,
+    winblend = function(s, n) return 80 + 20 * (s / n) end,
   },
 }
 --minidoc_afterlines_end
@@ -329,14 +324,14 @@ MiniAnimate.gen_path = {}
 
 MiniAnimate.gen_path.line = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.path_default_predicate
+  local predicate = opts.predicate or H.path_predicate_default
 
   return function(destination) return H.path_line(destination, predicate) end
 end
 
 MiniAnimate.gen_path.angle = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.path_default_predicate
+  local predicate = opts.predicate or H.path_predicate_default
   local first_direction = opts.first_direction or 'horizontal'
 
   local append_horizontal = function(res, dest_col, const_line)
@@ -375,7 +370,7 @@ end
 
 MiniAnimate.gen_path.walls = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.path_default_predicate
+  local predicate = opts.predicate or H.path_predicate_default
   local width = opts.width or 10
 
   return function(destination)
@@ -394,7 +389,7 @@ end
 
 MiniAnimate.gen_path.spiral = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.path_default_predicate
+  local predicate = opts.predicate or H.path_predicate_default
   local width = opts.width or 2
 
   local add_layer = function(res, w, destination)
@@ -478,39 +473,79 @@ MiniAnimate.gen_position.center = function(opts)
 end
 
 MiniAnimate.gen_position.static = function(opts)
+  opts = vim.tbl_deep_extend('force', { n_steps = 25, animate_single = true }, opts or {})
+
+  return function(win_id) return H.position_static(win_id, opts) end
+end
+
+MiniAnimate.gen_position.wipe = function(opts)
   opts = opts or {}
-  local n_steps = opts.n_steps or 10
+  local direction = opts.diration or 'to_edge'
   local animate_single = opts.animate_single
   if animate_single == nil then animate_single = true end
 
   return function(win_id)
     -- Possibly don't animate single-layout window (like in open/close tabpage)
-    if not animate_single and H.is_single_window(win_id) then return {} end
+    local win_container = H.get_window_parent_container(win_id)
+    if not animate_single and win_container == 'single' then return {} end
 
-    local pos = vim.fn.win_screenpos(win_id)
+    -- Get window data
+    local win_pos = vim.fn.win_screenpos(win_id)
+    local top_row, left_col = win_pos[1], win_pos[2]
+    local win_height, win_width = vim.api.nvim_win_get_height(win_id), vim.api.nvim_win_get_width(win_id)
+
+    -- Compute progression data
+    local cur_row, cur_col = top_row, left_col
+    local cur_width, cur_height = win_width, win_height
+
+    local increment_row, increment_col, increment_height, increment_width
+    local n_steps
+
+    if win_container == 'col' then
+      -- Determine closest top/bottom screen edge and progress to it
+      local bottom_row = top_row + win_height - 1
+      local is_top_edge_closer = top_row < (vim.o.lines - bottom_row + 1)
+
+      increment_row = is_top_edge_closer and 0 or 1
+      increment_col = 0
+      increment_width = 0
+      increment_height = -1
+      n_steps = win_height
+    else
+      -- Determine closest left/right screen edge and progress to it
+      local right_col = left_col + win_width - 1
+      local is_left_edge_closer = left_col < (vim.o.columns - right_col + 1)
+
+      increment_row = 0
+      increment_col = is_left_edge_closer and 0 or 1
+      increment_width = -1
+      increment_height = 0
+      n_steps = win_width
+    end
+
+    -- Make step positions
     local res = {}
     for i = 1, n_steps do
-      --stylua: ignore
-      res[i] = {
-        relative  = 'editor',
-        anchor    = 'NW',
-        row       = pos[1] - 1,
-        col       = pos[2] - 1,
-        width     = vim.api.nvim_win_get_width(win_id),
-        height    = vim.api.nvim_win_get_height(win_id),
+      -- Reverse output if progression is from edge
+      local res_ind = direction == 'to_edge' and i or (n_steps - i + 1)
+      res[res_ind] = {
+        relative = 'editor',
+        anchor = 'NW',
+        row = cur_row - 1,
+        col = cur_col - 1,
+        width = cur_width,
+        height = cur_height,
         focusable = false,
-        zindex    = 1,
-        style     = 'minimal',
+        zindex = 1,
+        style = 'minimal',
       }
+      cur_row = cur_row + increment_row
+      cur_col = cur_col + increment_col
+      cur_height = cur_height + increment_height
+      cur_width = cur_width + increment_width
     end
     return res
   end
-end
-
-MiniAnimate.gen_position.wipe = function(opts)
-  opts = vim.tbl_deep_extend('force', { direction = 'to_edge', animate_single = true }, opts or {})
-
-  return function(win_id) return H.position_wipe(win_id, opts) end
 end
 
 --- Generate `winblend`
@@ -1089,22 +1124,22 @@ end
 
 -- Animation timings ----------------------------------------------------------
 H.normalize_timing_opts = function(x)
-  x = vim.tbl_deep_extend('force', H.get_config(), { duration = 100, easing = 'in-out', unit = 'total' }, x or {})
+  x = vim.tbl_deep_extend('force', H.get_config(), { easing = 'in-out', duration = 20, unit = 'step' }, x or {})
   H.validate_if(H.is_valid_timing_opts, x, 'opts')
   return x
 end
 
 H.is_valid_timing_opts = function(x)
   if type(x.duration) ~= 'number' or x.duration < 0 then
-    return false, [[In `gen_animation()` option `duration` should be a positive number.]]
+    return false, [[In `gen_timing` option `duration` should be a positive number.]]
   end
 
   if not vim.tbl_contains({ 'in', 'out', 'in-out' }, x.easing) then
-    return false, [[In `gen_animation()` option `easing` should be one of 'in', 'out', or 'in-out'.]]
+    return false, [[In `gen_timing` option `easing` should be one of 'in', 'out', or 'in-out'.]]
   end
 
   if not vim.tbl_contains({ 'total', 'step' }, x.unit) then
-    return false, [[In `gen_animation()` option `unit` should be one of 'step' or 'total'.]]
+    return false, [[In `gen_timing` option `unit` should be one of 'step' or 'total'.]]
   end
 
   return true
@@ -1122,7 +1157,7 @@ end
 --- progression behaves as sum of `power` elements.
 ---
 ---@param power number Power of series.
----@param opts table Options from `MiniMap.gen_animation` entry.
+---@param opts table Options from `MiniAnimate.gen_timing` entry.
 ---@private
 H.timing_arithmetic = function(power, opts)
   -- Sum of first `n_steps` natural numbers raised to `power`
@@ -1166,6 +1201,10 @@ H.timing_arithmetic = function(power, opts)
   })[opts.easing]
 end
 
+H.quadratic_in_default = H.timing_arithmetic(1, { easing = 'in', duration = 250, unit = 'total' })
+H.quadratic_out_default = H.timing_arithmetic(1, { easing = 'out', duration = 250, unit = 'total' })
+H.quadratic_inout_default = H.timing_arithmetic(1, { easing = 'in-out', duration = 250, unit = 'total' })
+
 --- Imitate common exponential easing function
 ---
 --- Every step is preceeded by waiting time decreasing/increasing in geometric
@@ -1174,7 +1213,7 @@ end
 --- - 'out': (d-1)*d^0;     (d-1)*d^1;     ...; (d-1)*d^(n-2); (d-1)*d^(n-1)
 --- - 'in-out': 'in' until 0.5*n, 'out' afterwards
 ---
----@param opts table Options from `MiniMap.gen_animation` entry.
+---@param opts table Options from `MiniAnimate.gen_timing` entry.
 ---@private
 H.timing_geometrical = function(opts)
   -- Function which computes common delta so that overall duration will have
@@ -1233,7 +1272,7 @@ H.path_line = function(destination, predicate)
   return res
 end
 
-H.path_default_predicate = function(destination) return destination[1] < -1 or 1 < destination[1] end
+H.path_predicate_default = function(destination) return destination[1] < -1 or 1 < destination[1] end
 
 -- Animation subscroll --------------------------------------------------------
 H.subscroll_equal = function(total_scroll, opts)
@@ -1246,67 +1285,25 @@ H.subscroll_equal = function(total_scroll, opts)
 end
 
 -- Animation position ---------------------------------------------------------
---stylua: ignore
-H.position_wipe = function(win_id, opts)
+H.position_static = function(win_id, opts)
   -- Possibly don't animate single-layout window (like in open/close tabpage)
-  local win_container = H.get_window_parent_container(win_id)
-  if not opts.animate_single and win_container == 'single' then return {} end
+  if not opts.animate_single and H.is_single_window(win_id) then return {} end
 
-  -- Get window data
-  local win_pos = vim.fn.win_screenpos(win_id)
-  local top_row,    left_col  = win_pos[1],                          win_pos[2]
-  local win_height, win_width = vim.api.nvim_win_get_height(win_id), vim.api.nvim_win_get_width(win_id)
-
-  -- Compute progression data
-  local cur_row,   cur_col    = top_row,   left_col
-  local cur_width, cur_height = win_width, win_height
-
-  local increment_row, increment_col, increment_height, increment_width
-  local n_steps
-
-  if win_container == 'col' then
-    -- Determine closest top/bottom screen edge and progress to it
-    local bottom_row = top_row + win_height - 1
-    local is_top_edge_closer = top_row < (vim.o.lines - bottom_row + 1)
-
-    increment_row    = is_top_edge_closer and 0 or 1
-    increment_col    = 0
-    increment_width  = 0
-    increment_height = -1
-    n_steps          = win_height
-  else
-    -- Determine closest left/right screen edge and progress to it
-    local right_col = left_col + win_width - 1
-    local is_left_edge_closer = left_col < (vim.o.columns - right_col + 1)
-
-    increment_row    = 0
-    increment_col    = is_left_edge_closer and 0 or 1
-    increment_width  = -1
-    increment_height = 0
-    n_steps          = win_width
-  end
-
-  -- Make step positions
-  local direction = opts.direction
+  local pos = vim.fn.win_screenpos(win_id)
   local res = {}
-  for i = 1, n_steps do
-    -- Reverse output if progression is from edge
-    local res_ind = direction == 'to_edge' and i or (n_steps - i + 1)
-    res[res_ind] = {
-      relative  = 'editor',
-      anchor    = 'NW',
-      row       = cur_row - 1,
-      col       = cur_col - 1,
-      width     = cur_width,
-      height    = cur_height,
-      focusable = false,
-      zindex    = 1,
-      style     = 'minimal',
-    }
-    cur_row    = cur_row    + increment_row
-    cur_col    = cur_col    + increment_col
-    cur_height = cur_height + increment_height
-    cur_width  = cur_width  + increment_width
+  for i = 1, opts.n_steps do
+      --stylua: ignore
+      res[i] = {
+        relative  = 'editor',
+        anchor    = 'NW',
+        row       = pos[1] - 1,
+        col       = pos[2] - 1,
+        width     = vim.api.nvim_win_get_width(win_id),
+        height    = vim.api.nvim_win_get_height(win_id),
+        focusable = false,
+        zindex    = 1,
+        style     = 'minimal',
+      }
   end
   return res
 end
