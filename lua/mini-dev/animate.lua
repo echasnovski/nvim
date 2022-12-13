@@ -2,8 +2,6 @@
 
 -- TODO:
 -- Code:
--- - General:
---     - Clean up and refactor.
 --
 -- Tests:
 -- - General:
@@ -187,17 +185,17 @@ end
 ---@text # Options ~
 ---
 MiniAnimate.config = {
-  -- Path of cursor movement within same buffer
+  -- Cursor path
   cursor = {
     enable = true,
-    timing = function(s, n) return H.quadratic_inout_default(s, n) end,
-    path = function(destination) return H.path_line(destination, H.path_predicate_default) end,
+    timing = function(_, n) return 250 / n end,
+    path = function(destination) return H.path_line(destination, H.default_path_predicate) end,
   },
 
   -- Window vertical scroll
   scroll = {
     enable = true,
-    timing = function(s, n) return H.quadratic_inout_default(s, n) end,
+    timing = function(_, n) return 250 / n end,
     subscroll = function(total_scroll)
       return H.subscroll_equal(total_scroll, { min_input = 2, max_input = 10000000, max_n_output = 60 })
     end,
@@ -206,13 +204,13 @@ MiniAnimate.config = {
   -- Window resize
   resize = {
     enable = true,
-    timing = function(s, n) return H.quadratic_inout_default(s, n) end,
+    timing = function(_, n) return 250 / n end,
   },
 
   -- Window open
   open = {
     enable = true,
-    timing = function(s, n) return H.quadratic_in_default(s, n) end,
+    timing = function(_, n) return 250 / n end,
     position = function(win_id) return H.position_static(win_id, { n_steps = 25, animate_single = true }) end,
     winblend = function(s, n) return 80 + 20 * (s / n) end,
   },
@@ -220,7 +218,7 @@ MiniAnimate.config = {
   -- Window close
   close = {
     enable = true,
-    timing = function(s, n) return H.quadratic_out_default(s, n) end,
+    timing = function(_, n) return 250 / n end,
     position = function(win_id) return H.position_static(win_id, { n_steps = 25, animate_single = true }) end,
     winblend = function(s, n) return 80 + 20 * (s / n) end,
   },
@@ -298,21 +296,74 @@ MiniAnimate.animate = function(step_action, step_timing, opts)
   draw_step()
 end
 
---- Generate animation rule
+--- Generate animation timing
+---
+--- Each field corresponds to one family of progression which can be customized
+--- further by supplying appropriate arguments.
+---
+--- This is a table with function elements. Call to actually get specification.
+---
+--- Example: >
+--- local animation = require('mini.animation')
+--- local gen_timing = animation.gen_timing
+--- animation.setup({
+---   cursor = { timing = gen_timing.linear({ duration = 100, unit = 'total' }) },
+--- })
+---
+---@seealso: |MiniIndentscope.gen_animation|
 MiniAnimate.gen_timing = {}
 
+---@alias __timing_opts table Options that control progression. Possible keys:
+---   - <easing> `(string)` - a subtype of progression. One of "in"
+---     (accelerating from zero speed), "out" (decelerating to zero speed),
+---     "in-out" (default; accelerating halfway, decelerating after).
+---   - <duration> `(number)` - duration (in ms) of a unit. Default: 20.
+---   - <unit> `(string)` - which unit's duration `opts.duration` controls. One
+---     of "step" (default; ensures average duration of step to be `opts.duration`)
+---     or "total" (ensures fixed total duration regardless of scope's range).
+---@alias __timing_return function Timing function (see |MiniAnimate-config|).
+
+--- Generate no animation
+---
+--- Show final result immediately. Usually better to use `enable` field in
+--- `config` if you want to disable animation.
 MiniAnimate.gen_timing.none = function()
   return function() return 0 end
 end
 
+--- Generate linear progression
+---
+---@param opts __timing_opts
+---
+---@return __timing_return
 MiniAnimate.gen_timing.linear = function(opts) return H.timing_arithmetic(0, H.normalize_timing_opts(opts)) end
 
+--- Generate quadratic progression
+---
+---@param opts __timing_opts
+---
+---@return __timing_return
 MiniAnimate.gen_timing.quadratic = function(opts) return H.timing_arithmetic(1, H.normalize_timing_opts(opts)) end
 
+--- Generate cubic progression
+---
+---@param opts __timing_opts
+---
+---@return __timing_return
 MiniAnimate.gen_timing.cubic = function(opts) return H.timing_arithmetic(2, H.normalize_timing_opts(opts)) end
 
+--- Generate quartic progression
+---
+---@param opts __timing_opts
+---
+---@return __timing_return
 MiniAnimate.gen_timing.quartic = function(opts) return H.timing_arithmetic(3, H.normalize_timing_opts(opts)) end
 
+--- Generate exponential progression
+---
+---@param opts __timing_opts
+---
+---@return __timing_return
 MiniAnimate.gen_timing.exponential = function(opts) return H.timing_geometrical(H.normalize_timing_opts(opts)) end
 
 --- Generate animation path
@@ -324,14 +375,14 @@ MiniAnimate.gen_path = {}
 
 MiniAnimate.gen_path.line = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.path_predicate_default
+  local predicate = opts.predicate or H.default_path_predicate
 
   return function(destination) return H.path_line(destination, predicate) end
 end
 
 MiniAnimate.gen_path.angle = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.path_predicate_default
+  local predicate = opts.predicate or H.default_path_predicate
   local first_direction = opts.first_direction or 'horizontal'
 
   local append_horizontal = function(res, dest_col, const_line)
@@ -370,7 +421,7 @@ end
 
 MiniAnimate.gen_path.walls = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.path_predicate_default
+  local predicate = opts.predicate or H.default_path_predicate
   local width = opts.width or 10
 
   return function(destination)
@@ -389,7 +440,7 @@ end
 
 MiniAnimate.gen_path.spiral = function(opts)
   opts = opts or {}
-  local predicate = opts.predicate or H.path_predicate_default
+  local predicate = opts.predicate or H.default_path_predicate
   local width = opts.width or 2
 
   local add_layer = function(res, w, destination)
@@ -414,7 +465,7 @@ MiniAnimate.gen_path.spiral = function(opts)
   end
 end
 
---- Generate subscroll
+--- Generate animation subscroll
 ---
 --- Subscroll - callable which takes `total_scroll` argument (single positive
 --- integer) and returns array of positive integers each representing the
@@ -501,25 +552,22 @@ MiniAnimate.gen_position.wipe = function(opts)
     local increment_row, increment_col, increment_height, increment_width
     local n_steps
 
+    --stylua: ignore
     if win_container == 'col' then
       -- Determine closest top/bottom screen edge and progress to it
       local bottom_row = top_row + win_height - 1
       local is_top_edge_closer = top_row < (vim.o.lines - bottom_row + 1)
 
-      increment_row = is_top_edge_closer and 0 or 1
-      increment_col = 0
-      increment_width = 0
-      increment_height = -1
+      increment_row,   increment_col    = (is_top_edge_closer and 0 or 1), 0
+      increment_width, increment_height = 0,                               -1
       n_steps = win_height
     else
       -- Determine closest left/right screen edge and progress to it
       local right_col = left_col + win_width - 1
       local is_left_edge_closer = left_col < (vim.o.columns - right_col + 1)
 
-      increment_row = 0
-      increment_col = is_left_edge_closer and 0 or 1
-      increment_width = -1
-      increment_height = 0
+      increment_row,   increment_col    =  0, (is_left_edge_closer and 0 or 1)
+      increment_width, increment_height = -1, 0
       n_steps = win_width
     end
 
@@ -548,7 +596,7 @@ MiniAnimate.gen_position.wipe = function(opts)
   end
 end
 
---- Generate `winblend`
+--- Generate `winblend` progression
 MiniAnimate.gen_winblend = {}
 
 MiniAnimate.gen_winblend.linear = function(opts)
@@ -643,7 +691,7 @@ MiniAnimate.auto_resize = function()
   local prev_state, new_state = H.cache.resize_state, H.get_resize_state()
   H.cache.resize_state = new_state
 
-  -- Don't animate if there is nothing to animate (should be save layout but
+  -- Don't animate if there is nothing to animate (should be same layout but
   -- different sizes). This also stops triggering animation on window scrolls.
   local same_state = H.is_equal_resize_state(prev_state, new_state)
   if not (same_state.layout and not same_state.sizes) then return end
@@ -675,6 +723,10 @@ MiniAnimate.auto_openclose = function(action_type)
   if win_id == nil or not vim.api.nvim_win_is_valid(win_id) then return end
   if vim.api.nvim_win_get_config(win_id).relative ~= '' then return end
 
+  -- Register new event only in case there is something to animate
+  local event_id_name = action_type .. '_event_id'
+  H.cache[event_id_name] = H.cache[event_id_name] + 1
+
   -- Make animation step data and possibly animate
   local animate_step = H.make_openclose_step(action_type, win_id, config)
   if not animate_step then return end
@@ -705,20 +757,26 @@ H.cache = {
   resize_state = { layout = {}, sizes = {}, views = {} },
 
   -- Window open animation data
+  open_event_id = 0,
   open_is_active = false,
   open_active_windows = {},
 
   -- Window close animation data
+  close_event_id = 0,
   close_is_active = false,
   close_active_windows = {},
 }
 
+-- Namespaces for module operations
 H.ns_id = {
+  -- Extmarks used to show cursor path
   cursor = vim.api.nvim_create_namespace('MiniAnimateCursor'),
 }
 
+-- Identifier of empty buffer used inside open/close animations
 H.empty_buf_id = nil
 
+-- Names of `User` events triggered after certain type of animation is done
 H.animation_done_events = {
   cursor = 'MiniAnimateDoneCursor',
   scroll = 'MiniAnimateDoneScroll',
@@ -755,7 +813,8 @@ H.get_config = function(config)
 end
 
 -- General animation ----------------------------------------------------------
-H.emit_done_event = function(animation_type) vim.cmd('doautocmd User ' .. H.animation_done_events[animation_type]) end
+H.trigger_done_event =
+  function(animation_type) vim.cmd('doautocmd User ' .. H.animation_done_events[animation_type]) end
 
 -- Cursor ---------------------------------------------------------------------
 H.make_cursor_step = function(state_from, state_to, opts)
@@ -777,10 +836,10 @@ H.make_cursor_step = function(state_from, state_to, opts)
       H.undraw_cursor_mark(buf_id)
 
       -- Stop animation if another cursor movement is active. Don't use
-      -- `stop_cursor()` because it will also mean to stop parallel animation.
+      -- `stop_cursor()` because it will also stop parallel animation.
       if H.cache.cursor_event_id ~= event_id then return false end
 
-      -- Don't draw outside of prescribed number of steps or not inside current buffer
+      -- Don't draw outside of set number of steps or not inside current buffer
       if n_steps <= step or vim.api.nvim_get_current_buf() ~= buf_id then return H.stop_cursor() end
 
       -- Draw cursor mark (starting from initial zero step)
@@ -794,7 +853,7 @@ end
 
 H.get_cursor_state = function()
   -- Use character column to allow tracking outside of line width
-  local curpos = vim.fn.getcursorcharpos()
+  local curpos = H.getcursorcharpos()
   return { buf_id = vim.api.nvim_get_current_buf(), pos = { curpos[2], curpos[3] + curpos[4] } }
 end
 
@@ -829,7 +888,7 @@ end
 
 H.stop_cursor = function()
   H.cache.cursor_is_active = false
-  H.emit_done_event('cursor')
+  H.trigger_done_event('cursor')
   return false
 end
 
@@ -854,7 +913,7 @@ H.make_scroll_step = function(state_from, state_to, opts)
   return {
     step_action = function(step)
       -- Stop animation if another scroll is active. Don't use `stop_scroll()`
-      -- because it will also mean to stop parallel animation.
+      -- because it will stop parallel animation.
       if H.cache.scroll_event_id ~= event_id then return false end
 
       -- Stop animation if jumped to different buffer or window. Don't restore
@@ -908,7 +967,7 @@ end
 H.stop_scroll = function(end_state)
   if end_state ~= nil then vim.fn.winrestview(end_state.view) end
   H.cache.scroll_is_active = false
-  H.emit_done_event('scroll')
+  H.trigger_done_event('scroll')
   return false
 end
 
@@ -922,8 +981,6 @@ end
 
 -- Resize ---------------------------------------------------------------------
 H.make_resize_step = function(state_from, state_to, opts)
-  -- Assumes equal layouts (and thus window sets)
-
   -- Compute number of animation steps
   local n_steps = H.get_resize_n_steps(state_from, state_to)
   if n_steps == nil or n_steps <= 1 then return end
@@ -937,12 +994,12 @@ H.make_resize_step = function(state_from, state_to, opts)
       if step == 0 then return true end
 
       -- Stop animation if another resize animation is active. Don't use
-      -- `stop_resize()` because it will also mean to stop parallel animation.
+      -- `stop_resize()` because it will also stop parallel animation.
       if H.cache.resize_event_id ~= event_id then return false end
 
       -- Preform animation. Possibly stop on error.
       local step_state = H.make_convex_resize_state(state_from, state_to, step / n_steps)
-      -- Don't restore cursor position to avoid horizontal flicker
+      -- Use `false` to not restore cursor position to avoid horizontal flicker
       local ok, _ = pcall(H.apply_resize_state, step_state, false)
       if not ok then return H.stop_resize(state_to) end
 
@@ -965,7 +1022,7 @@ end
 H.stop_resize = function(end_state)
   if end_state ~= nil then H.apply_resize_state(end_state, true) end
   H.cache.resize_is_active = false
-  H.emit_done_event('resize')
+  H.trigger_done_event('resize')
   return false
 end
 
@@ -1008,13 +1065,11 @@ end
 
 H.apply_resize_state = function(state, full_view)
   for win_id, dims in pairs(state.sizes) do
-    -- If state dimensions are not accurate enough, this settings might lead to
-    -- moving `cmdheight`
     vim.api.nvim_win_set_height(win_id, dims.height)
     vim.api.nvim_win_set_width(win_id, dims.width)
   end
 
-  -- Allow states without `view` (mainly inside animation)
+  -- Use `or {}` to allow states without `view` (mainly inside animation)
   for win_id, view in pairs(state.views or {}) do
     vim.api.nvim_win_call(win_id, function()
       -- Allow to not restore full view. It mainly solves horizontal flickering
@@ -1038,8 +1093,6 @@ H.apply_resize_state = function(state, full_view)
   -- at any current animation step. Recompute state to also capture `view`.
   H.cache.resize_state = H.get_resize_state()
 end
-
-H.remove_resize_state_view = function(state) return { layout = state.layout, sizes = state.sizes } end
 
 H.get_resize_n_steps = function(state_from, state_to)
   local sizes_from, sizes_to = state_from.sizes, state_to.sizes
@@ -1074,17 +1127,23 @@ H.make_openclose_step = function(action_type, win_id, config)
   local step_positions = config.position(win_id)
   if step_positions == nil or #step_positions == 0 then return end
 
-  -- Produce animation steps
-  local n_steps = #step_positions
-  local timing, winblend = config.timing, config.winblend
-  local active_windows = H.cache[action_type .. '_active_windows']
+  -- Produce animation steps.
+  local n_steps, event_id_name = #step_positions, action_type .. '_event_id'
+  local timing, winblend, event_id = config.timing, config.winblend, H.cache[event_id_name]
   local float_win_id
 
   return {
     step_action = function(step)
+      -- Stop animation if another similar animation is active. Don't use
+      -- `stop_openclose()` because it will also stop parallel animation.
+      if H.cache[event_id_name] ~= event_id then
+        pcall(vim.api.nvim_win_close, float_win_id, true)
+        return false
+      end
+
+      -- Stop animation if exceeded number of steps
       if n_steps <= step then
-        active_windows[float_win_id] = nil
-        vim.api.nvim_win_close(float_win_id, true)
+        pcall(vim.api.nvim_win_close, float_win_id, true)
         return H.stop_openclose(action_type)
       end
 
@@ -1093,13 +1152,11 @@ H.make_openclose_step = function(action_type, win_id, config)
         H.empty_buf_id = vim.api.nvim_create_buf(false, true)
       end
 
+      -- Set step config to window. Possibly (re)open (it could have been
+      -- manually closed like after `:only`)
       local float_config = step_positions[step + 1]
-
-      -- Possibly reopen if it was manually closed (like after `:only`)
       if step == 0 or not vim.api.nvim_win_is_valid(float_win_id) then
-        if float_win_id ~= nil then active_windows[float_win_id] = nil end
         float_win_id = vim.api.nvim_open_win(H.empty_buf_id, false, float_config)
-        active_windows[float_win_id] = true
       else
         vim.api.nvim_win_set_config(float_win_id, float_config)
       end
@@ -1113,12 +1170,14 @@ H.make_openclose_step = function(action_type, win_id, config)
   }
 end
 
-H.start_openclose = function(action_type) H.cache[action_type .. '_is_active'] = true end
+H.start_openclose = function(action_type)
+  H.cache[action_type .. '_is_active'] = true
+  return true
+end
 
 H.stop_openclose = function(action_type)
-  local active_windows = H.cache[action_type .. '_active_windows']
-  H.cache[action_type .. '_is_active'] = not vim.tbl_isempty(active_windows)
-  H.emit_done_event(action_type)
+  H.cache[action_type .. '_is_active'] = false
+  H.trigger_done_event(action_type)
   return false
 end
 
@@ -1201,10 +1260,6 @@ H.timing_arithmetic = function(power, opts)
   })[opts.easing]
 end
 
-H.quadratic_in_default = H.timing_arithmetic(1, { easing = 'in', duration = 250, unit = 'total' })
-H.quadratic_out_default = H.timing_arithmetic(1, { easing = 'out', duration = 250, unit = 'total' })
-H.quadratic_inout_default = H.timing_arithmetic(1, { easing = 'in-out', duration = 250, unit = 'total' })
-
 --- Imitate common exponential easing function
 ---
 --- Every step is preceeded by waiting time decreasing/increasing in geometric
@@ -1272,7 +1327,7 @@ H.path_line = function(destination, predicate)
   return res
 end
 
-H.path_predicate_default = function(destination) return destination[1] < -1 or 1 < destination[1] end
+H.default_path_predicate = function(destination) return destination[1] < -1 or 1 < destination[1] end
 
 -- Animation subscroll --------------------------------------------------------
 H.subscroll_equal = function(total_scroll, opts)
@@ -1398,6 +1453,10 @@ H.get_n_visible_lines = function(from_line, to_line)
   end
   return res
 end
+
+-- This is needed for compatibility with Neovim<=0.6
+-- TODO: Remove after compatibility with Neovim<=0.6 is dropped
+H.getcursorcharpos = vim.fn.exists('*getcursorcharpos') == 1 and vim.fn.getcursorcharpos or vim.fn.getcurpos
 
 H.make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
 
