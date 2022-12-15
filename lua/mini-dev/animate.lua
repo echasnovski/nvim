@@ -78,6 +78,12 @@
 -- - Scroll animation is done only for vertical scroll inside current window.
 -- - If output of either `config.cursor.path()` or `config.scroll.subscroll()`
 --   is `nil` or array of length 0, animation is suspended.
+-- - Minimum versions:
+--     - `cursor` needs 0.7.0 to work fully (needs |getcursorcharpos()|).
+--     - `scroll` works on all supported versions. Works best with Neovim>=0.9.
+--     - `resize` works on all supported versions. Works best with Neovim>=0.9.
+--     - `open` works on all supported versions.
+--     - `close` works on all supported versions.
 -- - Animation of scroll and resize works best with Neovim>=0.9 (after updates
 --   to |WinScrolled| event and introduction of |WinResized| event). For
 --   example, resize animation resulting from effect of 'winheight'/'winwidth'
@@ -87,6 +93,7 @@
 --     - https://github.com/vim/vim/issues/10628
 --     - https://github.com/neovim/neovim/pull/13589
 --     - https://github.com/neovim/neovim/issues/11532
+-- - Animation done events.
 
 -- Documentation ==============================================================
 --- Animate common Neovim actions
@@ -162,6 +169,7 @@ MiniAnimate.setup = function(config)
   --   flickering.
   -- - Use `vim.schedule()` for "open" animation to get a window data used for
   --   displaying (and not one after just opening). Useful for 'nvim-tree'.
+  -- - Track scroll state immediately to avoid first scroll being non-animated.
   vim.api.nvim_exec(
     [[augroup MiniAnimate
         au!
@@ -173,6 +181,7 @@ MiniAnimate.setup = function(config)
       augroup END]],
     false
   )
+  MiniAnimate.track_scroll_state()
 
   -- Create highlighting
   vim.api.nvim_exec('hi default MiniAnimateCursor gui=reverse,nocombine', false)
@@ -192,7 +201,7 @@ MiniAnimate.config = {
     path = function(destination) return H.path_line(destination, H.default_path_predicate) end,
   },
 
-  -- Window vertical scroll
+  -- Vertical scroll
   scroll = {
     enable = true,
     timing = function(_, n) return 250 / n end,
@@ -226,12 +235,36 @@ MiniAnimate.config = {
 --minidoc_afterlines_end
 
 -- Module functionality =======================================================
+--- Check animation activity
+---
+---@param animation_type string One of supported animation types
+---   (entries of |MiniAnimate.config|).
+---
+---@return boolean Whether the animation is currently active.
 MiniAnimate.is_active = function(animation_type)
   local res = H.cache[animation_type .. '_is_active']
   if res == nil then H.error('Wrong `animation_type` for `is_active()`.') end
   return res
 end
 
+--- Execute action after some animation is done
+---
+--- Execute action immediately if animation is not active (checked with
+--- |MiniAnimate.is_active()|). Else, schedule its execution until after
+--- animation is done (on corresponding |MiniAnimate-done-events|).
+---
+--- Mostly meant to be used inside mappings.
+---
+--- Example ~
+---
+--- A useful `nnoremap n nzvzz` mapping (consecutive application of |n|, |zv|,
+--- and |zz|) should have this right hand side:
+--- `<Cmd>lua vim.cmd('normal! n'); MiniAnimate.execute_after('scroll', 'normal! zvzz')<CR>`.
+---
+---@param animation_type string One of supported animation types
+---   (as in |MiniAnimate.is_active()|).
+---@param action string|function Action to be executed. If string, executed as
+---   command (via |vim.cmd()|).
 MiniAnimate.execute_after = function(animation_type, action)
   local event_name = H.animation_done_events[animation_type]
   if event_name == nil then H.error('Wrong `animation_type` for `execute_after`.') end
@@ -258,6 +291,38 @@ MiniAnimate.execute_after = function(animation_type, action)
 end
 
 -- Action (step 0) - wait (step 1) - action (step 1) - ...
+-- `step_action` should return `false` or `nil` (equivalent to not returning anything explicitly) in order to stop animation.
+--- Animate action
+---
+--- This is equivalent to asynchronous execution of the following algorithm:
+--- - Call `step_action(0)` immediately after calling this function. Stop if
+---   action returned `false` or `nil`.
+--- - Wait `step_timing(1)` milliseconds.
+--- - Call `step_action(1)`. Stop if it returned `false` or `nil`.
+--- - Wait `step_timing(2)` milliseconds.
+--- - Call `step_action(2)`. Stop if it returned `false` or `nil`.
+--- - ...
+---
+---
+--- Notes:
+--- - Animation is also stopped on action error or if maximum number of steps
+---   is reached.
+--- - Asynchronous execution is done with |uv.new_timer()|. It only allows
+---   integer parts as repeat value. This has several implications:
+---     - Outputs of `step_timing()` are accumulated in order to preserve total
+---       execution time.
+---     - Any wait time less than 1 ms means that action will be executed
+---       immediately.
+---
+---@param step_action function Callable which takes `step` (integer 0, 1, 2,
+---   etc. indicating current step) and executes some action. Its return value
+---   defines when animation should stop: values `false` and `nil` (equivalent
+---   to no explicit return) stop animation timer; any other continues it.
+---@param step_timing function Callable which takes `step` (integer 1, 2, etc.
+---   indicating current step) and returns how many milliseconds to wait before
+---   executing step.
+---@param opts table Options. Possible fields:
+---   - <max_steps> - Maximum value of allowed step to execute. Default: 10000000.
 MiniAnimate.animate = function(step_action, step_timing, opts)
   opts = vim.tbl_deep_extend('force', { max_steps = 10000000 }, opts or {})
 
@@ -284,7 +349,7 @@ MiniAnimate.animate = function(step_action, step_timing, opts)
       return draw_step()
     else
       timer:set_repeat(wait_time)
-      wait_time = 0
+      wait_time = wait_time - timer:get_repeat()
       timer:again()
     end
   end)
@@ -482,6 +547,12 @@ end
 --- Generate position
 MiniAnimate.gen_position = {}
 
+MiniAnimate.gen_position.static = function(opts)
+  opts = vim.tbl_deep_extend('force', { n_steps = 25, animate_single = true }, opts or {})
+
+  return function(win_id) return H.position_static(win_id, opts) end
+end
+
 MiniAnimate.gen_position.center = function(opts)
   opts = opts or {}
   local direction = opts.direction or 'to_center'
@@ -521,12 +592,6 @@ MiniAnimate.gen_position.center = function(opts)
 
     return res
   end
-end
-
-MiniAnimate.gen_position.static = function(opts)
-  opts = vim.tbl_deep_extend('force', { n_steps = 25, animate_single = true }, opts or {})
-
-  return function(win_id) return H.position_static(win_id, opts) end
 end
 
 MiniAnimate.gen_position.wipe = function(opts)
@@ -601,7 +666,7 @@ MiniAnimate.gen_winblend = {}
 
 MiniAnimate.gen_winblend.linear = function(opts)
   opts = opts or {}
-  local from = opts.from or 75
+  local from = opts.from or 80
   local to = opts.to or 100
   local diff = to - from
 
@@ -1012,8 +1077,10 @@ H.make_resize_step = function(state_from, state_to, opts)
   }
 end
 
+_G.resize_times = {}
 H.start_resize = function(start_state)
   H.cache.resize_is_active = true
+  table.insert(_G.resize_times, 0.000001 * vim.loop.hrtime())
   -- Don't restore cursor position to avoid horizontal flicker
   if start_state ~= nil then H.apply_resize_state(start_state, false) end
   return true
@@ -1022,6 +1089,7 @@ end
 H.stop_resize = function(end_state)
   if end_state ~= nil then H.apply_resize_state(end_state, true) end
   H.cache.resize_is_active = false
+  table.insert(_G.resize_times, 0.000001 * vim.loop.hrtime())
   H.trigger_done_event('resize')
   return false
 end
@@ -1388,6 +1456,7 @@ end
 
 -- Predicators ----------------------------------------------------------------
 H.is_config_cursor = function(x)
+  if type(x) ~= 'table' then return false, H.msg_config('cursor', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('cursor.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('cursor.timing', 'callable') end
   if not vim.is_callable(x.path) then return false, H.msg_config('cursor.path', 'callable') end
@@ -1396,6 +1465,7 @@ H.is_config_cursor = function(x)
 end
 
 H.is_config_scroll = function(x)
+  if type(x) ~= 'table' then return false, H.msg_config('scroll', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('scroll.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('scroll.timing', 'callable') end
   if not vim.is_callable(x.subscroll) then return false, H.msg_config('scroll.subscroll', 'callable') end
@@ -1404,6 +1474,7 @@ H.is_config_scroll = function(x)
 end
 
 H.is_config_resize = function(x)
+  if type(x) ~= 'table' then return false, H.msg_config('resize', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('resize.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('resize.timing', 'callable') end
 
@@ -1411,6 +1482,7 @@ H.is_config_resize = function(x)
 end
 
 H.is_config_open = function(x)
+  if type(x) ~= 'table' then return false, H.msg_config('open', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('open.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('open.timing', 'callable') end
   if not vim.is_callable(x.position) then return false, H.msg_config('open.position', 'callable') end
@@ -1420,6 +1492,7 @@ H.is_config_open = function(x)
 end
 
 H.is_config_close = function(x)
+  if type(x) ~= 'table' then return false, H.msg_config('close', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('close.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('close.timing', 'callable') end
   if not vim.is_callable(x.position) then return false, H.msg_config('close.position', 'callable') end
