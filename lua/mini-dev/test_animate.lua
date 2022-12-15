@@ -291,55 +291,406 @@ end
 
 T['gen_timing'] = new_set()
 
-T['gen_timing']['none()'] = new_set()
+local validate_timing = function(family, target, opts, tolerance)
+  opts = opts or {}
+  tolerance = tolerance or 0.1
+  local lua_cmd = string.format('_G.f = MiniAnimate.gen_timing.%s(...)', family)
+  child.lua(lua_cmd, { opts })
 
-T['gen_timing']['none()']['works'] = function() MiniTest.skip() end
+  local f = function(...) return child.lua_get('_G.f(...)', { ... }) end
+  for i, _ in ipairs(target) do
+    -- Expect approximate equality
+    eq(math.abs(f(i, #target) - target[i]) <= tolerance, true)
+  end
 
-T['gen_timing']['linear()'] = new_set()
+  child.lua('_G.f = nil')
+end
 
-T['gen_timing']['linear()']['works'] = function() MiniTest.skip() end
+--stylua: ignore
+T['gen_timing']['respects `opts.easing` argument'] = function()
+  validate_timing('none',        { 0,    0,    0,    0,    0 })
+  validate_timing('linear',      { 20,   20,   20,   20,   20 })
+  validate_timing('quadratic',   { 33.3, 26.7, 20,   13.3, 6.7 },  { easing = 'in' })
+  validate_timing('quadratic',   { 6.7,  13.3, 20,   26.7, 33.3 }, { easing = 'out' })
+  validate_timing('quadratic',   { 27.3, 18.2, 9,    18.2, 27.3 }, { easing = 'in-out' })
+  validate_timing('cubic',       { 45.5, 29.1, 16.4, 7.2,  1.8 },  { easing = 'in' })
+  validate_timing('cubic',       { 1.8,  7.2,  16.4, 29.1, 45.5 }, { easing = 'out' })
+  validate_timing('cubic',       { 33.3, 14.8, 3.8,  14.8, 33.3 }, { easing = 'in-out' })
+  validate_timing('quartic',     { 55.5, 28.5, 12,   3.5,  0.5 },  { easing = 'in' })
+  validate_timing('quartic',     { 0.5,  3.5,  12,   28.5, 55.5 }, { easing = 'out' })
+  validate_timing('quartic',     { 38,   11.3, 1.4,  11.3, 38 },   { easing = 'in-out' })
+  validate_timing('exponential', { 60.9, 24.2, 9.6,  3.8,  1.5 },  { easing = 'in' })
+  validate_timing('exponential', { 1.5,  3.8,  9.6,  24.2, 60.9 }, { easing = 'out' })
+  validate_timing('exponential', { 38.4, 10.2, 2.8,  10.2, 38.4 }, { easing = 'in-out' })
 
-T['gen_timing']['quadratic()'] = new_set()
+  -- 'in-out' variants should be always symmetrical
+  validate_timing('quadratic',   { 30,   20,   10,  10,  20,   30 },   { easing = 'in-out' })
+  validate_timing('cubic',       { 38.6, 17.1, 4.3, 4.3, 17.1, 38.6 }, { easing = 'in-out' })
+  validate_timing('quartic',     { 45,   13.3, 1.7, 1.7, 13.3, 45 },   { easing = 'in-out' })
+  validate_timing('exponential', { 45.5, 11.6, 2.9, 2.9, 11.6, 45.5 }, { easing = 'in-out' })
+end
 
-T['gen_timing']['quadratic()']['works'] = function() MiniTest.skip() end
+T['gen_timing']['respects `opts` other arguments'] = function()
+  validate_timing('linear', { 10, 10 }, { unit = 'total' })
+  validate_timing('linear', { 100, 100 }, { duration = 100 })
+  validate_timing('linear', { 50, 50 }, { unit = 'total', duration = 100 })
+end
 
-T['gen_timing']['cubic()'] = new_set()
+T['gen_timing']['validates `opts` values'] = function()
+  local validate = function(opts, err_pattern)
+    expect.error(function() child.lua('MiniAnimate.gen_timing.linear(...)', { opts }) end, err_pattern)
+  end
 
-T['gen_timing']['cubic()']['works'] = function() MiniTest.skip() end
+  validate({ easing = 'a' }, 'one of')
+  validate({ duration = 'a' }, 'number')
+  validate({ duration = -1 }, 'positive')
+  validate({ unit = 'a' }, 'one of')
+end
 
-T['gen_timing']['quartic()'] = new_set()
-
-T['gen_timing']['quartic()']['works'] = function() MiniTest.skip() end
-
-T['gen_timing']['exponential()'] = new_set()
-
-T['gen_timing']['exponential()']['works'] = function() MiniTest.skip() end
+--stylua: ignore
+T['gen_timing']['handles `n_steps=1` for all progression families and `opts.easing`'] = function()
+  validate_timing('none',        { 0 })
+  validate_timing('linear',      { 20 })
+  validate_timing('quadratic',   { 20 }, { easing = 'in' })
+  validate_timing('quadratic',   { 20 }, { easing = 'out' })
+  validate_timing('quadratic',   { 20 }, { easing = 'in-out' })
+  validate_timing('cubic',       { 20 }, { easing = 'in' })
+  validate_timing('cubic',       { 20 }, { easing = 'out' })
+  validate_timing('cubic',       { 20 }, { easing = 'in-out' })
+  validate_timing('quartic',     { 20 }, { easing = 'in' })
+  validate_timing('quartic',     { 20 }, { easing = 'out' })
+  validate_timing('quartic',     { 20 }, { easing = 'in-out' })
+  validate_timing('exponential', { 20 }, { easing = 'in' })
+  validate_timing('exponential', { 20 }, { easing = 'out' })
+  validate_timing('exponential', { 20 }, { easing = 'in-out' })
+end
 
 T['gen_path'] = new_set()
 
 T['gen_path']['line()'] = new_set()
 
-T['gen_path']['line()']['works'] = function() MiniTest.skip() end
+local validate_path = function(destination, output) eq(child.lua_get('_G.test_path(...)', { destination }), output) end
 
-T['gen_path']['line()']['respects `opts.predicate`'] = function() MiniTest.skip() end
+local validate_default_path_predicate = function()
+  -- Default predicate should ignore nearby lines
+  validate_path({ 0, 0 }, {})
+
+  validate_path({ 1, 0 }, {})
+  validate_path({ 1, 100 }, {})
+  validate_path({ 1, -100 }, {})
+
+  validate_path({ -1, 0 }, {})
+  validate_path({ -1, 100 }, {})
+  validate_path({ -1, -100 }, {})
+end
+
+--stylua: ignore
+T['gen_path']['line()']['works'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.line()')
+
+  -- Basic checks
+  validate_path({  3,  3 }, { { 0, 0 }, {  1,  1 }, {  2,  2 } })
+  validate_path({ -3,  3 }, { { 0, 0 }, { -1,  1 }, { -2,  2 } })
+  validate_path({  3, -3 }, { { 0, 0 }, {  1, -1 }, {  2, -2 } })
+  validate_path({ -3, -3 }, { { 0, 0 }, { -1, -1 }, { -2, -2 } })
+
+  -- Default predicate
+  validate_default_path_predicate()
+
+  -- Walks along dimension with further distance
+  validate_path({ 3, 5 }, { { 0, 0 }, { 1, 1 }, { 1, 2 }, { 2, 3 }, { 2, 4 } })
+  validate_path({ 5, 3 }, { { 0, 0 }, { 1, 1 }, { 2, 1 }, { 3, 2 }, { 4, 2 } })
+
+  validate_path({ 3, -5 }, { { 0, 0 }, {  1, -1 }, {  1, -2 }, {  2, -3 }, {  2, -4 } })
+  validate_path({ -5, 3 }, { { 0, 0 }, { -1,  1 }, { -2,  1 }, { -3,  2 }, { -4,  2 } })
+
+  validate_path({ -3, -5 }, { { 0, 0 }, { -1, -1 }, { -1, -2 }, { -2, -3 }, { -2, -4 } })
+  validate_path({ -5, -3 }, { { 0, 0 }, { -1, -1 }, { -2, -1 }, { -3, -2 }, { -4, -2 } })
+end
+
+--stylua: ignore
+T['gen_path']['line()']['respects `opts.predicate`'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.line({ predicate = function() return true end })')
+
+  -- Should allow all non-trivial `destination`
+  validate_path({ 0, 0 }, {})
+  validate_path({  1, 3 }, { { 0, 0 }, { 0, 1 }, {  1, 2 } })
+  validate_path({ -1, 3 }, { { 0, 0 }, { 0, 1 }, { -1, 2 } })
+
+  validate_path({ 3, 3 }, { { 0, 0 }, { 1, 1 }, { 2, 2 } })
+end
 
 T['gen_path']['angle()'] = new_set()
 
-T['gen_path']['angle()']['works'] = function() MiniTest.skip() end
+--stylua: ignore
+T['gen_path']['angle()']['works'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.angle()')
 
-T['gen_path']['line()']['respects `opts.predicate`'] = function() MiniTest.skip() end
+  -- Basic checks
+  validate_path({  3,  3 }, { { 0, 0 }, { 0,  1 }, { 0,  2 }, { 0,  3 }, {  1,  3 }, {  2,  3 }})
+  validate_path({ -3,  3 }, { { 0, 0 }, { 0,  1 }, { 0,  2 }, { 0,  3 }, { -1,  3 }, { -2,  3 }})
+  validate_path({  3, -3 }, { { 0, 0 }, { 0, -1 }, { 0, -2 }, { 0, -3 }, {  1, -3 }, {  2, -3 }})
+  validate_path({ -3, -3 }, { { 0, 0 }, { 0, -1 }, { 0, -2 }, { 0, -3 }, { -1, -3 }, { -2, -3 }})
+
+  -- Default predicate (should ignore nearby lines)
+  validate_default_path_predicate()
+
+  -- Walks along line (horizontal) first
+  validate_path({ 2, 3 }, { { 0, 0 }, { 0, 1 }, { 0, 2 }, { 0, 3 }, { 1, 3 } })
+  validate_path({ 3, 2 }, { { 0, 0 }, { 0, 1 }, { 0, 2 }, { 1, 2 }, { 2, 2 } })
+end
+
+--stylua: ignore
+T['gen_path']['angle()']['respects `opts.predicate`'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.angle({ predicate = function() return true end })')
+
+  -- Should allow all non-trivial `destination`
+  validate_path({ 0, 0 }, {})
+  validate_path({  1, 3 }, { { 0, 0 }, { 0, 1 }, {  0, 2 }, { 0, 3 } })
+  validate_path({ -1, 3 }, { { 0, 0 }, { 0, 1 }, {  0, 2 }, { 0, 3 } })
+
+  validate_path({  3,  3 }, { { 0, 0 }, { 0,  1 }, { 0,  2 }, { 0,  3 }, {  1,  3 }, {  2,  3 }})
+end
+
+--stylua: ignore
+T['gen_path']['angle()']['respects `opts.first_direction`'] = function()
+  child.lua([[_G.test_path = MiniAnimate.gen_path.angle({ first_direction = 'vertical' })]])
+
+  -- Should walk along column (vertical) first
+  validate_path({ 2, 3 }, { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 2, 1 }, { 2, 2 } })
+  validate_path({ 3, 2 }, { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 }, { 3, 1 } })
+end
 
 T['gen_path']['walls()'] = new_set()
 
-T['gen_path']['walls()']['works'] = function() MiniTest.skip() end
+--stylua: ignore
+T['gen_path']['walls()']['works'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.walls()')
 
-T['gen_path']['line()']['respects `opts.predicate`'] = function() MiniTest.skip() end
+  -- Basic checks
+  validate_path(
+  { 3, 3 },
+  {
+    { 3, 3 + 10 }, { 3, 3 - 10 },
+    { 3, 3 +  9 }, { 3, 3 -  9 },
+    { 3, 3 +  8 }, { 3, 3 -  8 },
+    { 3, 3 +  7 }, { 3, 3 -  7 },
+    { 3, 3 +  6 }, { 3, 3 -  6 },
+    { 3, 3 +  5 }, { 3, 3 -  5 },
+    { 3, 3 +  4 }, { 3, 3 -  4 },
+    { 3, 3 +  3 }, { 3, 3 -  3 },
+    { 3, 3 +  2 }, { 3, 3 -  2 },
+    { 3, 3 +  1 }, { 3, 3 -  1 }
+  })
+
+  validate_path(
+  { -3, -3 },
+  {
+    { -3, -3 + 10 }, { -3, -3 - 10 },
+    { -3, -3 +  9 }, { -3, -3 -  9 },
+    { -3, -3 +  8 }, { -3, -3 -  8 },
+    { -3, -3 +  7 }, { -3, -3 -  7 },
+    { -3, -3 +  6 }, { -3, -3 -  6 },
+    { -3, -3 +  5 }, { -3, -3 -  5 },
+    { -3, -3 +  4 }, { -3, -3 -  4 },
+    { -3, -3 +  3 }, { -3, -3 -  3 },
+    { -3, -3 +  2 }, { -3, -3 -  2 },
+    { -3, -3 +  1 }, { -3, -3 -  1 }
+  })
+
+  -- Default predicate (should ignore nearby lines)
+  validate_default_path_predicate()
+end
+
+--stylua: ignore
+T['gen_path']['walls()']['respects `opts.predicate`'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.walls({ predicate = function() return true end })')
+
+  -- Should allow all non-trivial `destination`
+  validate_path({ 0, 0 }, {})
+
+  validate_path(
+  { 1, 3 },
+  {
+    { 1, 3 + 10 }, { 1, 3 - 10 },
+    { 1, 3 +  9 }, { 1, 3 -  9 },
+    { 1, 3 +  8 }, { 1, 3 -  8 },
+    { 1, 3 +  7 }, { 1, 3 -  7 },
+    { 1, 3 +  6 }, { 1, 3 -  6 },
+    { 1, 3 +  5 }, { 1, 3 -  5 },
+    { 1, 3 +  4 }, { 1, 3 -  4 },
+    { 1, 3 +  3 }, { 1, 3 -  3 },
+    { 1, 3 +  2 }, { 1, 3 -  2 },
+    { 1, 3 +  1 }, { 1, 3 -  1 }
+  })
+  validate_path(
+  { -1, 3 },
+  {
+    { -1, 3 + 10 }, { -1, 3 - 10 },
+    { -1, 3 +  9 }, { -1, 3 -  9 },
+    { -1, 3 +  8 }, { -1, 3 -  8 },
+    { -1, 3 +  7 }, { -1, 3 -  7 },
+    { -1, 3 +  6 }, { -1, 3 -  6 },
+    { -1, 3 +  5 }, { -1, 3 -  5 },
+    { -1, 3 +  4 }, { -1, 3 -  4 },
+    { -1, 3 +  3 }, { -1, 3 -  3 },
+    { -1, 3 +  2 }, { -1, 3 -  2 },
+    { -1, 3 +  1 }, { -1, 3 -  1 }
+  })
+end
+
+--stylua: ignore
+T['gen_path']['walls()']['respects `opts.width`'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.walls({ width = 2 })')
+  validate_path(
+  { 3, 3 },
+  {
+    { 3, 3 + 2 }, { 3, 3 - 2 },
+    { 3, 3 + 1 }, { 3, 3 - 1 }
+  })
+
+  child.lua('_G.test_path = MiniAnimate.gen_path.walls({ width = 1 })')
+  validate_path({ 3, 3 }, { { 3, 3 + 1 }, { 3, 3 - 1 } })
+
+  child.lua('_G.test_path = MiniAnimate.gen_path.walls({ width = 0 })')
+  validate_path({ 3, 3 }, {})
+end
 
 T['gen_path']['spiral()'] = new_set()
 
-T['gen_path']['spiral()']['works'] = function() MiniTest.skip() end
+--stylua: ignore
+T['gen_path']['spiral()']['works'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.spiral()')
 
-T['gen_path']['line()']['respects `opts.predicate`'] = function() MiniTest.skip() end
+  -- Basic checks
+  validate_path(
+  { 3, 3 },
+  -- Should go in narrowing spiral
+  {
+    -- Top (width 2)
+    { 3 - 2, 3 - 2 }, { 3 - 2, 3 - 1 }, { 3 - 2, 3 + 0 }, { 3 - 2, 3 + 1 },
+    -- Right (width 2)
+    { 3 - 2, 3 + 2 }, { 3 - 1, 3 + 2 }, { 3 + 0, 3 + 2 }, { 3 + 1, 3 + 2 },
+    -- Bottom (width 2)
+    { 3 + 2, 3 + 2 }, { 3 + 2, 3 + 1 }, { 3 + 2, 3 + 0 }, { 3 + 2, 3 - 1 },
+    -- Left (width 2)
+    { 3 + 2, 3 - 2 }, { 3 + 1, 3 - 2 }, { 3 + 0, 3 - 2 }, { 3 - 1, 3 - 2 },
+    -- Top (width 1)
+    { 3 - 1, 3 - 1 }, { 3 - 1, 3 + 0 },
+    -- Right (width 1)
+    { 3 - 1, 3 + 1 }, { 3 + 0, 3 + 1 },
+    -- Bottom (width 1)
+    { 3 + 1, 3 + 1 }, { 3 + 1, 3 + 0 },
+    -- Left (width 1)
+    { 3 + 1, 3 - 1 }, { 3 + 0, 3 - 1 },
+  })
+
+  -- Default predicate (should ignore nearby lines)
+  validate_default_path_predicate()
+ end
+
+T['gen_path']['spiral()']['respects `opts.predicate`'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.spiral({ predicate = function() return true end })')
+
+  -- Should allow all non-trivial `destination`
+  validate_path({ 0, 0 }, {})
+
+  eq(#child.lua_get('_G.test_path({ 1, 3 })') > 0, true)
+  eq(#child.lua_get('_G.test_path({ 3, 1 })') > 0, true)
+end
+
+--stylua: ignore
+T['gen_path']['spiral()']['respects `opts.width`'] = function()
+  child.lua('_G.test_path = MiniAnimate.gen_path.spiral({ width = 1 })')
+  validate_path(
+  { 3, 3 },
+  {
+    { 3 - 1, 3 - 1 }, { 3 - 1, 3 + 0 },
+    { 3 - 1, 3 + 1 }, { 3 + 0, 3 + 1 },
+    { 3 + 1, 3 + 1 }, { 3 + 1, 3 + 0 },
+    { 3 + 1, 3 - 1 }, { 3 + 0, 3 - 1 },
+  })
+
+  child.lua('_G.test_path = MiniAnimate.gen_path.spiral({ width = 0 })')
+  validate_path({ 3, 3 }, {})
+end
+
+T['gen_subscroll'] = new_set()
+
+local validate_subscroll =
+  function(total_scroll, output) eq(child.lua_get('_G.test_subscroll(...)', { total_scroll }), output) end
+
+T['gen_subscroll']['equal()'] = new_set()
+
+--stylua: ignore
+T['gen_subscroll']['equal()']['works'] = function()
+  child.lua('_G.test_subscroll = MiniAnimate.gen_subscroll.equal()')
+
+  -- Basic checks
+  validate_subscroll(2, { 1, 1 })
+  validate_subscroll(5, { 1, 1, 1, 1, 1 })
+
+  -- Default predicate (should subscroll only for more than 1)
+  validate_subscroll(1, {})
+  validate_subscroll(0, {})
+
+  -- Divides equally between steps if total scroll is more than default maximum
+  -- allowed number of steps
+  validate_subscroll(
+    60,
+    {
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    }
+  )
+  validate_subscroll(
+    63,
+    {
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2,
+    }
+  )
+  validate_subscroll(
+    66,
+    {
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2,
+    }
+  )
+  validate_subscroll(
+    72,
+    {
+      1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2,
+      1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2,
+      1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2,
+    }
+  )
+  validate_subscroll(
+    120 - 3,
+    {
+      1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+      1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+      1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    }
+  )
+end
+
+T['gen_subscroll']['equal()']['respects `opts.predicate`'] = function()
+  child.lua('_G.test_subscroll = MiniAnimate.gen_subscroll.equal({ predicate = function() return true end })')
+
+  -- Should allow all non-trivial `destination`
+  validate_subscroll(0, {})
+  validate_subscroll(1, { 1 })
+end
+
+T['gen_subscroll']['equal()']['respects `opts.max_output_steps`'] = function()
+  child.lua('_G.test_subscroll = MiniAnimate.gen_subscroll.equal({ max_output_steps = 10 })')
+
+  validate_subscroll(11, { 1, 1, 1, 1, 1, 1, 1, 1, 1, 2 })
+end
 
 T['gen_position'] = new_set()
 

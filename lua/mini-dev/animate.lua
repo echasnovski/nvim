@@ -5,18 +5,16 @@
 --
 -- Tests:
 -- - General:
---     - Timing generators work.
 --     - "Single animation active" rule is true for all supported animations.
 --     - Emits "done event" after finishing.
 -- - Cursor move:
---     - Path generators work.
 --     - Mark can be placed inside/outside line width.
 --     - Multibyte characters are respected.
 --     - Folds are ignored.
 --     - Window view does not matter.
 -- - Scroll:
---     - `max_n_output` in default `subscroll` correctly respected: total number
---       of steps never exceeds it and subscroll are divided as equal as
+--     - `max_output_steps` in default `subscroll` correctly respected: total
+--       number of steps never exceeds it and subscroll are divided as equal as
 --       possible (with remainder equally split between all subscrolls).
 --     - Manual scroll during animated scroll is done without jump directly
 --       from current window view.
@@ -198,7 +196,7 @@ MiniAnimate.config = {
   cursor = {
     enable = true,
     timing = function(_, n) return 250 / n end,
-    path = function(destination) return H.path_line(destination, H.default_path_predicate) end,
+    path = function(destination) return H.path_line(destination, { predicate = H.default_path_predicate }) end,
   },
 
   -- Vertical scroll
@@ -206,7 +204,7 @@ MiniAnimate.config = {
     enable = true,
     timing = function(_, n) return 250 / n end,
     subscroll = function(total_scroll)
-      return H.subscroll_equal(total_scroll, { min_input = 2, max_input = 10000000, max_n_output = 60 })
+      return H.subscroll_equal(total_scroll, { predicate = H.default_subscroll_predicate, max_output_steps = 60 })
     end,
   },
 
@@ -439,10 +437,9 @@ MiniAnimate.gen_timing.exponential = function(opts) return H.timing_geometrical(
 MiniAnimate.gen_path = {}
 
 MiniAnimate.gen_path.line = function(opts)
-  opts = opts or {}
-  local predicate = opts.predicate or H.default_path_predicate
+  opts = vim.tbl_deep_extend('force', { predicate = H.default_path_predicate }, opts or {})
 
-  return function(destination) return H.path_line(destination, predicate) end
+  return function(destination) return H.path_line(destination, opts) end
 end
 
 MiniAnimate.gen_path.angle = function(opts)
@@ -493,6 +490,9 @@ MiniAnimate.gen_path.walls = function(opts)
     -- Don't animate in case of false predicate
     if not predicate(destination) then return {} end
 
+    -- Don't animate in case of no movement
+    if destination[1] == 0 and destination[2] == 0 then return {} end
+
     local dest_line, dest_col = destination[1], destination[2]
     local res = {}
     for i = width, 1, -1 do
@@ -522,6 +522,9 @@ MiniAnimate.gen_path.spiral = function(opts)
     -- Don't animate in case of false predicate
     if not predicate(destination) then return {} end
 
+    -- Don't animate in case of no movement
+    if destination[1] == 0 and destination[2] == 0 then return {} end
+
     local res = {}
     for w = width, 1, -1 do
       add_layer(res, w, destination)
@@ -532,14 +535,14 @@ end
 
 --- Generate animation subscroll
 ---
---- Subscroll - callable which takes `total_scroll` argument (single positive
---- integer) and returns array of positive integers each representing the
---- amount of lines needs to be scrolled in corresponding step. All subscroll
+--- Subscroll - callable which takes `total_scroll` argument (single non-negative
+--- integer) and returns array of non-negative integers each representing the
+--- amount of lines needed to be scrolled inside corresponding step. All subscroll
 --- values should sum to input `total_scroll`.
 MiniAnimate.gen_subscroll = {}
 
 MiniAnimate.gen_subscroll.equal = function(opts)
-  opts = vim.tbl_deep_extend('force', { min_input = 2, max_input = 10000000, max_n_output = 60 }, opts or {})
+  opts = vim.tbl_deep_extend('force', { predicate = H.default_subscroll_predicate, max_output_steps = 60 }, opts or {})
 
   return function(total_scroll) return H.subscroll_equal(total_scroll, opts) end
 end
@@ -1377,9 +1380,9 @@ H.timing_geometrical = function(opts)
 end
 
 -- Animation paths ------------------------------------------------------------
-H.path_line = function(destination, predicate)
+H.path_line = function(destination, opts)
   -- Don't animate in case of false predicate
-  if not predicate(destination) then return {} end
+  if not opts.predicate(destination) then return {} end
 
   -- Travel along the biggest horizontal/vertical difference, but stop one
   -- step before destination
@@ -1399,13 +1402,15 @@ H.default_path_predicate = function(destination) return destination[1] < -1 or 1
 
 -- Animation subscroll --------------------------------------------------------
 H.subscroll_equal = function(total_scroll, opts)
-  -- Animate only when `total_scroll` is inside appropriate range
-  if not (opts.min_input <= total_scroll and total_scroll <= opts.max_input) then return end
+  -- Don't animate in case of false predicate
+  if not opts.predicate(total_scroll) then return {} end
 
-  -- Don't make more than `max_n_output` steps
-  local n_steps = math.min(total_scroll, opts.max_n_output)
+  -- Don't make more than `max_output_steps` steps
+  local n_steps = math.min(total_scroll, opts.max_output_steps)
   return H.divide_equal(total_scroll, n_steps)
 end
+
+H.default_subscroll_predicate = function(total_scroll) return total_scroll > 1 end
 
 -- Animation position ---------------------------------------------------------
 H.position_static = function(win_id, opts)
