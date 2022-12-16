@@ -73,12 +73,12 @@ T['setup()']['creates `config` field'] = function()
 
   expect_config('open.enable', true)
   expect_config_function('open.timing')
-  expect_config_function('open.position')
+  expect_config_function('open.winconfig')
   expect_config_function('open.winblend')
 
   expect_config('close.enable', true)
   expect_config_function('close.timing')
-  expect_config_function('close.position')
+  expect_config_function('close.winconfig')
   expect_config_function('close.winblend')
 end
 
@@ -114,13 +114,13 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ open = 'a' }, 'open', 'table')
   expect_config_error({ open = { enable = 'a' } }, 'open.enable', 'boolean')
   expect_config_error({ open = { timing = 'a' } }, 'open.timing', 'callable')
-  expect_config_error({ open = { position = 'a' } }, 'open.position', 'callable')
+  expect_config_error({ open = { winconfig = 'a' } }, 'open.winconfig', 'callable')
   expect_config_error({ open = { winblend = 'a' } }, 'open.winblend', 'callable')
 
   expect_config_error({ close = 'a' }, 'close', 'table')
   expect_config_error({ close = { enable = 'a' } }, 'close.enable', 'boolean')
   expect_config_error({ close = { timing = 'a' } }, 'close.timing', 'callable')
-  expect_config_error({ close = { position = 'a' } }, 'close.position', 'callable')
+  expect_config_error({ close = { winconfig = 'a' } }, 'close.winconfig', 'callable')
   expect_config_error({ close = { winblend = 'a' } }, 'close.winblend', 'callable')
 end
 
@@ -692,25 +692,261 @@ T['gen_subscroll']['equal()']['respects `opts.max_output_steps`'] = function()
   validate_subscroll(11, { 1, 1, 1, 1, 1, 1, 1, 1, 1, 2 })
 end
 
-T['gen_position'] = new_set()
+T['gen_winconfig'] = new_set()
 
-T['gen_position']['static()'] = new_set()
+local validate_winconfig = function(win_id, ref_position_data)
+  local output = child.lua_get('_G.test_winconfig(...)', { win_id })
+  eq(#output, #ref_position_data)
 
-T['gen_position']['static()']['works'] = function() MiniTest.skip() end
+  for step = 1, #output do
+      --stylua: ignore
+      eq(output[step], {
+        relative  = 'editor',
+        anchor    = 'NW',
+        row       = ref_position_data[step].row,
+        col       = ref_position_data[step].col,
+        width     = ref_position_data[step].width,
+        height    = ref_position_data[step].height,
+        focusable = false,
+        zindex    = 1,
+        style     = 'minimal',
+      })
+  end
+end
 
-T['gen_position']['center()'] = new_set()
+T['gen_winconfig']['static()'] = new_set()
 
-T['gen_position']['center()']['works'] = function() MiniTest.skip() end
+T['gen_winconfig']['static()']['works'] = function()
+  child.lua('_G.test_winconfig = MiniAnimate.gen_winconfig.static()')
+  local validate = function(win_id)
+    local pos = child.fn.win_screenpos(win_id)
+    local width, height = child.api.nvim_win_get_width(win_id), child.api.nvim_win_get_height(win_id)
+    local ref_output = {}
+    for i = 1, 25 do
+        --stylua: ignore
+        ref_output[i] = {
+          row       = pos[1] - 1,
+          col       = pos[2] - 1,
+          width     = width,
+          height    = height,
+        }
+    end
+    validate_winconfig(win_id, ref_output)
+  end
 
-T['gen_position']['wipe()'] = new_set()
+  -- Basic checks
+  child.cmd('wincmd v')
+  validate(child.api.nvim_get_current_win())
 
-T['gen_position']['wipe()']['works'] = function() MiniTest.skip() end
+  -- Default predicate (always `true`)
+  child.cmd('only')
+  validate(child.api.nvim_get_current_win())
+end
+
+T['gen_winconfig']['static()']['respects `opts.predicate`'] = function()
+  child.lua([[
+    _G.is_not_single_window = function(win_id)
+      local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
+      return #vim.api.nvim_tabpage_list_wins(tabpage_id) > 1
+    end
+  ]])
+  child.lua('_G.test_winconfig = MiniAnimate.gen_winconfig.static({ predicate = is_not_single_window })')
+
+  validate_winconfig(child.api.nvim_get_current_win(), {})
+end
+
+T['gen_winconfig']['static()']['respects `opts.n_steps`'] = function()
+  child.lua('_G.test_winconfig = MiniAnimate.gen_winconfig.static({ n_steps = 1 })')
+
+  validate_winconfig(child.api.nvim_get_current_win(), {
+    {
+      row = 0,
+      col = 0,
+      width = 80,
+      height = 22,
+    },
+  })
+end
+
+T['gen_winconfig']['center()'] = new_set()
+
+T['gen_winconfig']['center()']['works'] = function()
+  child.lua('_G.test_winconfig = MiniAnimate.gen_winconfig.center()')
+
+  child.o.winwidth, child.o.winheight = 1, 1
+  child.set_size(5, 12)
+
+  child.cmd('wincmd v')
+  --stylua: ignore
+  validate_winconfig(
+    child.api.nvim_get_current_win(),
+    {
+      { col = 0, row = 0, width = 6, height = 3 },
+      { col = 1, row = 0, width = 5, height = 3 },
+      { col = 1, row = 1, width = 4, height = 2 },
+      { col = 2, row = 1, width = 3, height = 2 },
+      { col = 2, row = 1, width = 2, height = 1 },
+      { col = 3, row = 1, width = 1, height = 1 },
+    }
+  )
+end
+
+T['gen_winconfig']['center()']['respects `opts.predicate`'] = function()
+  child.lua([[
+    _G.is_not_single_window = function(win_id)
+      local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
+      return #vim.api.nvim_tabpage_list_wins(tabpage_id) > 1
+    end
+  ]])
+  child.lua('_G.test_winconfig = MiniAnimate.gen_winconfig.center({ predicate = is_not_single_window })')
+
+  validate_winconfig(child.api.nvim_get_current_win(), {})
+end
+
+T['gen_winconfig']['center()']['respects `opts.direction`'] = function()
+  child.lua([[_G.test_winconfig = MiniAnimate.gen_winconfig.center({ direction = 'from_center' })]])
+
+  child.o.winwidth, child.o.winheight = 1, 1
+  child.set_size(5, 12)
+
+  child.cmd('wincmd v')
+  --stylua: ignore
+  validate_winconfig(
+    child.api.nvim_get_current_win(),
+    {
+      { col = 3, row = 1, width = 1, height = 1 },
+      { col = 2, row = 1, width = 2, height = 1 },
+      { col = 2, row = 1, width = 3, height = 2 },
+      { col = 1, row = 1, width = 4, height = 2 },
+      { col = 1, row = 0, width = 5, height = 3 },
+      { col = 0, row = 0, width = 6, height = 3 },
+    }
+  )
+end
+
+T['gen_winconfig']['wipe()'] = new_set()
+
+T['gen_winconfig']['wipe()']['works'] = function()
+  child.lua([[_G.test_winconfig = MiniAnimate.gen_winconfig.wipe()]])
+  local validate = function(command, ref_position_data)
+    child.cmd(command)
+    validate_winconfig(child.api.nvim_get_current_win(), ref_position_data)
+    child.cmd('only')
+  end
+
+  child.o.winwidth, child.o.winheight = 1, 1
+  child.set_size(10, 12)
+
+  -- Left
+  validate('topleft wincmd v', {
+    { col = 0, row = 0, width = 6, height = 8 },
+    { col = 0, row = 0, width = 5, height = 8 },
+    { col = 0, row = 0, width = 4, height = 8 },
+    { col = 0, row = 0, width = 3, height = 8 },
+    { col = 0, row = 0, width = 2, height = 8 },
+    { col = 0, row = 0, width = 1, height = 8 },
+  })
+
+  -- Top
+  validate('topleft wincmd s', {
+    { col = 0, row = 0, width = 12, height = 4 },
+    { col = 0, row = 0, width = 12, height = 3 },
+    { col = 0, row = 0, width = 12, height = 2 },
+    { col = 0, row = 0, width = 12, height = 1 },
+  })
+
+  -- Right
+  validate('botright wincmd v', {
+    { col = 6, row = 0, width = 6, height = 8 },
+    { col = 7, row = 0, width = 5, height = 8 },
+    { col = 8, row = 0, width = 4, height = 8 },
+    { col = 9, row = 0, width = 3, height = 8 },
+    { col = 10, row = 0, width = 2, height = 8 },
+    { col = 11, row = 0, width = 1, height = 8 },
+  })
+
+  -- Bottom
+  validate('botright wincmd s', {
+    { col = 0, row = 4, width = 12, height = 4 },
+    { col = 0, row = 5, width = 12, height = 3 },
+    { col = 0, row = 6, width = 12, height = 2 },
+    { col = 0, row = 7, width = 12, height = 1 },
+  })
+end
+
+T['gen_winconfig']['wipe()']['respects `opts.predicate`'] = function()
+  child.lua([[
+    _G.is_not_single_window = function(win_id)
+      local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
+      return #vim.api.nvim_tabpage_list_wins(tabpage_id) > 1
+    end
+  ]])
+  child.lua('_G.test_winconfig = MiniAnimate.gen_winconfig.wipe({ predicate = is_not_single_window })')
+
+  validate_winconfig(child.api.nvim_get_current_win(), {})
+end
+
+T['gen_winconfig']['wipe()']['respects `opts.direction`'] = function()
+  child.lua([[_G.test_winconfig = MiniAnimate.gen_winconfig.wipe({ direction = 'from_edge' })]])
+  local validate = function(command, ref_position_data)
+    child.cmd(command)
+    validate_winconfig(child.api.nvim_get_current_win(), ref_position_data)
+    child.cmd('only')
+  end
+
+  child.o.winwidth, child.o.winheight = 1, 1
+  child.set_size(10, 12)
+
+  -- Left
+  validate('topleft wincmd v', {
+    { col = 0, row = 0, width = 1, height = 8 },
+    { col = 0, row = 0, width = 2, height = 8 },
+    { col = 0, row = 0, width = 3, height = 8 },
+    { col = 0, row = 0, width = 4, height = 8 },
+    { col = 0, row = 0, width = 5, height = 8 },
+    { col = 0, row = 0, width = 6, height = 8 },
+  })
+
+  -- Top
+  validate('topleft wincmd s', {
+    { col = 0, row = 0, width = 12, height = 1 },
+    { col = 0, row = 0, width = 12, height = 2 },
+    { col = 0, row = 0, width = 12, height = 3 },
+    { col = 0, row = 0, width = 12, height = 4 },
+  })
+
+  -- Right
+  validate('botright wincmd v', {
+    { col = 11, row = 0, width = 1, height = 8 },
+    { col = 10, row = 0, width = 2, height = 8 },
+    { col = 9, row = 0, width = 3, height = 8 },
+    { col = 8, row = 0, width = 4, height = 8 },
+    { col = 7, row = 0, width = 5, height = 8 },
+    { col = 6, row = 0, width = 6, height = 8 },
+  })
+
+  -- Bottom
+  validate('botright wincmd s', {
+    { col = 0, row = 7, width = 12, height = 1 },
+    { col = 0, row = 6, width = 12, height = 2 },
+    { col = 0, row = 5, width = 12, height = 3 },
+    { col = 0, row = 4, width = 12, height = 4 },
+  })
+end
 
 T['gen_winblend'] = new_set()
 
 T['gen_winblend']['linear()'] = new_set()
 
-T['gen_winblend']['linear()']['works'] = function() MiniTest.skip() end
+T['gen_winblend']['linear()']['works'] = function()
+  child.lua('_G.f = MiniAnimate.gen_winblend.linear()')
+  eq(child.lua_get('{ _G.f(1, 10), _G.f(5, 10), _G.f(10, 10) }'), { 82, 90, 100 })
+end
+
+T['gen_winblend']['linear()']['respects `opts`'] = function()
+  child.lua('_G.f = MiniAnimate.gen_winblend.linear({ from = 50, to = 60 })')
+  eq(child.lua_get('{ _G.f(1, 10), _G.f(5, 10), _G.f(10, 10) }'), { 51, 55, 60 })
+end
 
 -- Integration tests ==========================================================
 

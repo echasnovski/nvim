@@ -47,7 +47,7 @@
 --         - `<C-w>|` and then `<C-w>=` should not cause view to flicker.
 -- - Open/close:
 --     - Works when open/close tabpage. Including `animate_single` option for
---       "wipe" position. Including on second time (test using tabpage number
+--       "wipe" winconfig. Including on second time (test using tabpage number
 --       and not tabpage id).
 --
 -- Documentation:
@@ -92,6 +92,12 @@
 --     - https://github.com/neovim/neovim/pull/13589
 --     - https://github.com/neovim/neovim/issues/11532
 -- - Animation done events.
+-- - Example predicates for all animations. Like "don't animate open/close in
+--   case of single window": >
+--   local is_not_single_window = function(win_id)
+--     local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
+--     return #vim.api.nvim_tabpage_list_wins(tabpage_id) > 1
+--   end
 
 -- Documentation ==============================================================
 --- Animate common Neovim actions
@@ -218,7 +224,7 @@ MiniAnimate.config = {
   open = {
     enable = true,
     timing = function(_, n) return 250 / n end,
-    position = function(win_id) return H.position_static(win_id, { n_steps = 25, animate_single = true }) end,
+    winconfig = function(win_id) return H.winconfig_static(win_id, { predicate = H.default_winconfig_predicate, n_steps = 25 }) end,
     winblend = function(s, n) return 80 + 20 * (s / n) end,
   },
 
@@ -226,7 +232,7 @@ MiniAnimate.config = {
   close = {
     enable = true,
     timing = function(_, n) return 250 / n end,
-    position = function(win_id) return H.position_static(win_id, { n_steps = 25, animate_single = true }) end,
+    winconfig = function(win_id) return H.winconfig_static(win_id, { predicate = H.default_winconfig_predicate, n_steps = 25 }) end,
     winblend = function(s, n) return 80 + 20 * (s / n) end,
   },
 }
@@ -319,7 +325,7 @@ end
 ---@param step_timing function Callable which takes `step` (integer 1, 2, etc.
 ---   indicating current step) and returns how many milliseconds to wait before
 ---   executing step.
----@param opts table Options. Possible fields:
+---@param opts table|nil Options. Possible fields:
 ---   - <max_steps> - Maximum value of allowed step to execute. Default: 10000000.
 MiniAnimate.animate = function(step_action, step_timing, opts)
   opts = vim.tbl_deep_extend('force', { max_steps = 10000000 }, opts or {})
@@ -547,24 +553,23 @@ MiniAnimate.gen_subscroll.equal = function(opts)
   return function(total_scroll) return H.subscroll_equal(total_scroll, opts) end
 end
 
---- Generate position
-MiniAnimate.gen_position = {}
+--- Generate winconfig
+MiniAnimate.gen_winconfig = {}
 
-MiniAnimate.gen_position.static = function(opts)
-  opts = vim.tbl_deep_extend('force', { n_steps = 25, animate_single = true }, opts or {})
+MiniAnimate.gen_winconfig.static = function(opts)
+  opts = vim.tbl_deep_extend('force', { predicate = H.default_winconfig_predicate, n_steps = 25 }, opts or {})
 
-  return function(win_id) return H.position_static(win_id, opts) end
+  return function(win_id) return H.winconfig_static(win_id, opts) end
 end
 
-MiniAnimate.gen_position.center = function(opts)
+MiniAnimate.gen_winconfig.center = function(opts)
   opts = opts or {}
+  local predicate = opts.predicate or H.default_winconfig_predicate
   local direction = opts.direction or 'to_center'
-  local animate_single = opts.animate_single
-  if animate_single == nil then animate_single = true end
 
   return function(win_id)
-    -- Possibly don't animate single-layout window (like in open/close tabpage)
-    if not animate_single and H.is_single_window(win_id) then return {} end
+    -- Don't animate in case of false predicate
+    if not predicate(win_id) then return {} end
 
     local pos = vim.fn.win_screenpos(win_id)
     local row, col = pos[1] - 1, pos[2] - 1
@@ -572,15 +577,16 @@ MiniAnimate.gen_position.center = function(opts)
 
     local n_steps = math.max(height, width)
     local res = {}
-    for step = 1, n_steps do
-      -- To and from center consist from same position, just in reverse order
-      -- "From" should end and "to" should start with exactly height and width
-      -- of window
-      local numerator = direction == 'to_center' and (step - 1) or (n_steps - step)
-      local coef = numerator / n_steps
+    -- Progression should be between fully covering target window and minimal
+    -- dimensions in target window center.
+    for i = 1, n_steps do
+      local coef = (i - 1) / n_steps
+
+      -- Reverse output if progression is from center
+      local res_ind = direction == 'to_center' and i or (n_steps - i + 1)
 
       --stylua: ignore
-      res[step] = {
+      res[res_ind] = {
         relative  = 'editor',
         anchor    = 'NW',
         row       = H.round(row + 0.5 * coef * height),
@@ -597,16 +603,14 @@ MiniAnimate.gen_position.center = function(opts)
   end
 end
 
-MiniAnimate.gen_position.wipe = function(opts)
+MiniAnimate.gen_winconfig.wipe = function(opts)
   opts = opts or {}
-  local direction = opts.diration or 'to_edge'
-  local animate_single = opts.animate_single
-  if animate_single == nil then animate_single = true end
+  local predicate = opts.predicate or H.default_winconfig_predicate
+  local direction = opts.direction or 'to_edge'
 
   return function(win_id)
-    -- Possibly don't animate single-layout window (like in open/close tabpage)
-    local win_container = H.get_window_parent_container(win_id)
-    if not animate_single and win_container == 'single' then return {} end
+    -- Don't animate in case of false predicate
+    if not predicate(win_id) then return {} end
 
     -- Get window data
     local win_pos = vim.fn.win_screenpos(win_id)
@@ -620,6 +624,7 @@ MiniAnimate.gen_position.wipe = function(opts)
     local increment_row, increment_col, increment_height, increment_width
     local n_steps
 
+    local win_container = H.get_window_parent_container(win_id)
     --stylua: ignore
     if win_container == 'col' then
       -- Determine closest top/bottom screen edge and progress to it
@@ -639,7 +644,7 @@ MiniAnimate.gen_position.wipe = function(opts)
       n_steps = win_width
     end
 
-    -- Make step positions
+    -- Make step configs
     local res = {}
     for i = 1, n_steps do
       -- Reverse output if progression is from edge
@@ -1194,12 +1199,12 @@ end
 
 -- Open/close -----------------------------------------------------------------
 H.make_openclose_step = function(action_type, win_id, config)
-  -- Compute position progression
-  local step_positions = config.position(win_id)
-  if step_positions == nil or #step_positions == 0 then return end
+  -- Compute winconfig progression
+  local step_winconfigs = config.winconfig(win_id)
+  if step_winconfigs == nil or #step_winconfigs == 0 then return end
 
   -- Produce animation steps.
-  local n_steps, event_id_name = #step_positions, action_type .. '_event_id'
+  local n_steps, event_id_name = #step_winconfigs, action_type .. '_event_id'
   local timing, winblend, event_id = config.timing, config.winblend, H.cache[event_id_name]
   local float_win_id
 
@@ -1225,7 +1230,7 @@ H.make_openclose_step = function(action_type, win_id, config)
 
       -- Set step config to window. Possibly (re)open (it could have been
       -- manually closed like after `:only`)
-      local float_config = step_positions[step + 1]
+      local float_config = step_winconfigs[step + 1]
       if step == 0 or not vim.api.nvim_win_is_valid(float_win_id) then
         float_win_id = vim.api.nvim_open_win(H.empty_buf_id, false, float_config)
       else
@@ -1412,12 +1417,13 @@ end
 
 H.default_subscroll_predicate = function(total_scroll) return total_scroll > 1 end
 
--- Animation position ---------------------------------------------------------
-H.position_static = function(win_id, opts)
-  -- Possibly don't animate single-layout window (like in open/close tabpage)
-  if not opts.animate_single and H.is_single_window(win_id) then return {} end
+-- Animation winconfig --------------------------------------------------------
+H.winconfig_static = function(win_id, opts)
+  -- Don't animate in case of false predicate
+  if not opts.predicate(win_id) then return {} end
 
   local pos = vim.fn.win_screenpos(win_id)
+  local width, height = vim.api.nvim_win_get_width(win_id), vim.api.nvim_win_get_height(win_id)
   local res = {}
   for i = 1, opts.n_steps do
       --stylua: ignore
@@ -1426,8 +1432,8 @@ H.position_static = function(win_id, opts)
         anchor    = 'NW',
         row       = pos[1] - 1,
         col       = pos[2] - 1,
-        width     = vim.api.nvim_win_get_width(win_id),
-        height    = vim.api.nvim_win_get_height(win_id),
+        width     = width,
+        height    = height,
         focusable = false,
         zindex    = 1,
         style     = 'minimal',
@@ -1458,6 +1464,8 @@ H.get_window_parent_container = function(win_id)
   local tabpage_nr = vim.api.nvim_tabpage_get_number(tabpage_id)
   return f(vim.fn.winlayout(tabpage_nr), 'single')
 end
+
+H.default_winconfig_predicate = function(win_id) return true end
 
 -- Predicators ----------------------------------------------------------------
 H.is_config_cursor = function(x)
@@ -1490,7 +1498,7 @@ H.is_config_open = function(x)
   if type(x) ~= 'table' then return false, H.msg_config('open', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('open.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('open.timing', 'callable') end
-  if not vim.is_callable(x.position) then return false, H.msg_config('open.position', 'callable') end
+  if not vim.is_callable(x.winconfig) then return false, H.msg_config('open.winconfig', 'callable') end
   if not vim.is_callable(x.winblend) then return false, H.msg_config('open.winblend', 'callable') end
 
   return true
@@ -1500,7 +1508,7 @@ H.is_config_close = function(x)
   if type(x) ~= 'table' then return false, H.msg_config('close', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('close.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('close.timing', 'callable') end
-  if not vim.is_callable(x.position) then return false, H.msg_config('close.position', 'callable') end
+  if not vim.is_callable(x.winconfig) then return false, H.msg_config('close.winconfig', 'callable') end
   if not vim.is_callable(x.winblend) then return false, H.msg_config('close.winblend', 'callable') end
 
   return true
@@ -1537,11 +1545,6 @@ end
 H.getcursorcharpos = vim.fn.exists('*getcursorcharpos') == 1 and vim.fn.getcursorcharpos or vim.fn.getcurpos
 
 H.make_step = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
-
-H.is_single_window = function(win_id)
-  local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
-  return #vim.api.nvim_tabpage_list_wins(tabpage_id) == 1
-end
 
 H.round = function(x) return math.floor(x + 0.5) end
 
