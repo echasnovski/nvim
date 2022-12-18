@@ -24,6 +24,8 @@ local skip_on_old_neovim = function()
   if child.fn.has('nvim-0.7') == 0 then MiniTest.skip() end
 end
 
+local expect_topline = function(x) eq(child.fn.line('w0'), x) end
+
 -- Data =======================================================================
 local test_times = { total_timing = 250 }
 
@@ -70,6 +72,7 @@ T['setup()']['creates `config` field'] = function()
 
   expect_config('resize.enable', true)
   expect_config_function('resize.timing')
+  expect_config_function('resize.sizes')
 
   expect_config('open.enable', true)
   expect_config_function('open.timing')
@@ -110,6 +113,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ resize = 'a' }, 'resize', 'table')
   expect_config_error({ resize = { enable = 'a' } }, 'resize.enable', 'boolean')
   expect_config_error({ resize = { timing = 'a' } }, 'resize.timing', 'callable')
+  expect_config_error({ resize = { sizes = 'a' } }, 'resize.sizes', 'callable')
 
   expect_config_error({ open = 'a' }, 'open', 'table')
   expect_config_error({ open = { enable = 'a' } }, 'open.enable', 'boolean')
@@ -692,6 +696,116 @@ T['gen_subscroll']['equal()']['respects `opts.max_output_steps`'] = function()
   validate_subscroll(11, { 1, 1, 1, 1, 1, 1, 1, 1, 1, 2 })
 end
 
+T['gen_sizes'] = new_set()
+
+local validate_sizes = function(sizes_from, sizes_to, output)
+  -- Overcome Neovim's "Cannot convert given lua table" for tables with
+  -- window sizes structure (keys like `[1000]`, etc.)
+  local lua_cmd = string.format('vim.inspect(_G.test_sizes(%s, %s))', vim.inspect(sizes_from), vim.inspect(sizes_to))
+  local output_str = child.lua_get(lua_cmd)
+
+  eq(loadstring('return ' .. output_str)(), output)
+end
+
+T['gen_sizes']['equal()'] = new_set()
+
+--stylua: ignore
+T['gen_sizes']['equal()']['works'] = function()
+  child.lua('_G.test_sizes = MiniAnimate.gen_sizes.equal()')
+
+  -- Basic checks
+  validate_sizes(
+  {
+    [1000] = { width = 5, height = 5 },
+    [1001] = { width = 5, height = 7 }
+  },
+  {
+    [1000] = { width = 5, height = 2 },
+    [1001] = { width = 5, height = 10 }
+  },
+  {
+    {
+      [1000] = { width = 5, height = 4 },
+      [1001] = { width = 5, height = 8 }
+    },
+    {
+      [1000] = { width = 5, height = 3 },
+      [1001] = { width = 5, height = 9 }
+    },
+    {
+      [1000] = { width = 5, height = 2 },
+      [1001] = { width = 5, height = 10 }
+    },
+  })
+
+  validate_sizes(
+  {
+    [1000] = { width = 5, height = 5 },
+    [1001] = { width = 5, height = 7 }
+  },
+  {
+    [1000] = { width = 2, height = 5 },
+    [1001] = { width = 8, height = 7 }
+  },
+  {
+    {
+      [1000] = { width = 4, height = 5 },
+      [1001] = { width = 6, height = 7 }
+    },
+    {
+      [1000] = { width = 3, height = 5 },
+      [1001] = { width = 7, height = 7 }
+    },
+    {
+      [1000] = { width = 2, height = 5 },
+      [1001] = { width = 8, height = 7 }
+    },
+  })
+
+  -- Should compute number of steps based on maximum absolute difference
+  validate_sizes(
+  {
+    [1000] = { width = 5, height = 5 },
+    [1001] = { width = 5, height = 5 }
+  },
+  {
+    [1000] = { width = 2, height = 4 },
+    [1001] = { width = 8, height = 6 }
+  },
+  {
+    {
+      [1000] = { width = 4, height = 5 },
+      [1001] = { width = 6, height = 5 }
+    },
+    {
+      [1000] = { width = 3, height = 4 },
+      [1001] = { width = 7, height = 6 }
+    },
+    {
+      [1000] = { width = 2, height = 4 },
+      [1001] = { width = 8, height = 6 }
+    },
+  })
+
+  -- Works for single window
+  validate_sizes({ [1000] = { width = 5, height = 5 } }, { [1000] = { width = 7, height = 10 } }, {})
+end
+
+T['gen_sizes']['equal()']['respects `opts.predicate`'] = function()
+  child.lua([[_G.test_sizes = MiniAnimate.gen_sizes.equal({
+    predicate = function(sizes_from, sizes_to) return #vim.tbl_keys(sizes_from) > 2 end
+  })]])
+
+  -- Should allow all non-trivial `destination`
+  validate_sizes({
+    [1000] = { width = 5, height = 5 },
+    [1001] = { width = 5, height = 5 },
+  }, {
+    [1000] = { width = 2, height = 4 },
+    [1001] = { width = 8, height = 6 },
+  }, {})
+end
+
 T['gen_winconfig'] = new_set()
 
 local validate_winconfig = function(win_id, ref_position_data)
@@ -949,5 +1063,562 @@ T['gen_winblend']['linear()']['respects `opts`'] = function()
 end
 
 -- Integration tests ==========================================================
+T['Cursor'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- Disable other animations for cleaner tests
+      child.lua('MiniAnimate.config.scroll.enable = false')
+      child.lua('MiniAnimate.config.resize.enable = false')
+      child.lua('MiniAnimate.config.open.enable = false')
+      child.lua('MiniAnimate.config.close.enable = false')
+
+      child.set_size(8, 12)
+
+      -- Use quicker timing for convenience
+      child.lua('MiniAnimate.config.cursor.timing = function() return 20 end')
+
+      set_lines({ 'aaaaaaaaaa', 'aaa', '', 'aaa', 'aaaaaaaaaa' })
+      set_cursor(1, 0)
+    end,
+  },
+})
+
+T['Cursor']['works'] = function()
+  type_keys('G')
+  -- Cursor is set immediately
+  eq(get_cursor(), { 5, 0 })
+
+  -- First mark is shown immediately
+  child.expect_screenshot()
+
+  -- Every step is done properly
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+
+  -- Last one should remove mark
+  sleep(20)
+  child.expect_screenshot()
+end
+
+T['Cursor']['works when movement is triggered by outside command'] = function()
+  set_cursor(5, 0)
+  child.expect_screenshot()
+  for _ = 1, 4 do
+    sleep(20)
+    child.expect_screenshot()
+  end
+end
+
+T['Cursor']['works when cursor and/or marks are outside of line'] = function()
+  child.o.virtualedit = 'all'
+  set_cursor(4, 8)
+  child.expect_screenshot()
+  -- Introduce lag for test stability
+  sleep(2)
+  for _ = 1, 8 do
+    sleep(20)
+    child.expect_screenshot()
+  end
+end
+
+T['Cursor']['works with horizontally scrolled window view'] = function()
+  child.o.wrap = false
+  type_keys('2zl')
+  set_cursor(5, 5)
+  child.expect_screenshot()
+  -- Introduce lag for test stability
+  sleep(2)
+  for _ = 1, 4 do
+    sleep(20)
+    child.expect_screenshot()
+  end
+end
+
+T['Cursor']['does not stop if mark should be placed outside of range'] = function()
+  child.lua([[MiniAnimate.config.cursor.path = function(destination)
+    local l, c = destination[1], destination[2]
+    return { { l, c }, { l, c - 10 }, { l, c }, { l + 10, c }, { l, c } }
+  end]])
+  set_cursor(5, 0)
+  child.expect_screenshot()
+  -- Introduce lag for test stability
+  sleep(2)
+  for _ = 1, 5 do
+    sleep(20)
+    child.expect_screenshot()
+  end
+end
+
+T['Cursor']['stops on buffer change'] = function()
+  child.set_size(12, 24)
+  child.o.winwidth = 1
+  child.cmd('vertical botright new')
+  local second_window = child.api.nvim_get_current_win()
+  child.cmd('wincmd h')
+
+  set_cursor(5, 0)
+  child.expect_screenshot()
+  sleep(20 + 2)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+
+  child.api.nvim_set_current_win(second_window)
+  -- Change doesn't happen right away, but inside next animation step
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+end
+
+T['Cursor']['can have only one animation active'] = function()
+  set_cursor(5, 0)
+
+  child.expect_screenshot()
+  sleep(20 + 2)
+  child.expect_screenshot()
+
+  set_cursor(1, 9)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+end
+
+T['Cursor']['works with multibyte characters'] = function()
+  set_lines({ 'ыыы', '🬗🬗🬗', '', 'ы', 'ыыыыыыыы' })
+  set_cursor(1, 0)
+  set_cursor(5, 14)
+  child.expect_screenshot()
+  -- Introduce lag for test stability
+  sleep(2)
+  for _ = 1, 7 do
+    sleep(20)
+    child.expect_screenshot()
+  end
+end
+
+T['Cursor']['respects `enable` config setting'] = function()
+  child.lua('MiniAnimate.config.cursor.enable = false')
+  set_cursor(5, 0)
+  sleep(20 + 5)
+  -- Should show now marks
+  child.expect_screenshot()
+end
+
+T['Cursor']['correctly calls `timing`'] = function()
+  child.lua('_G.args_history = {}')
+  child.lua([[MiniAnimate.config.cursor.timing = function(s, n)
+    table.insert(_G.args_history, { s = s, n = n })
+    return 10
+  end]])
+  set_cursor(5, 0)
+  sleep(50)
+  eq(child.lua_get('_G.args_history'), { { s = 1, n = 4 }, { s = 2, n = 4 }, { s = 3, n = 4 }, { s = 4, n = 4 } })
+end
+
+T['Cursor']['correctly calls `path`'] = function()
+  child.lua('_G.args_history = {}')
+  child.lua([[MiniAnimate.config.cursor.path = function(destination)
+    table.insert(_G.args_history, destination)
+    return { { destination[1] - 1, destination[2] }, { destination[1], destination[2] } }
+  end]])
+
+  set_cursor(5, 9)
+  set_cursor(1, 0)
+  eq(child.lua_get('_G.args_history'), { { 4, 9 }, { -4, -9 } })
+end
+
+T['Cursor']['is not animated if `path` output is empty or `nil`'] = function()
+  child.lua('MiniAnimate.config.cursor.path = function() return {} end')
+  set_cursor(5, 0)
+  -- Should show now marks
+  child.expect_screenshot()
+
+  child.lua('MiniAnimate.config.cursor.path = function() return nil end')
+  set_cursor(1, 0)
+  -- Should show now marks
+  child.expect_screenshot()
+end
+
+T['Cursor']['ignores folds when computing path'] = function()
+  child.lua('MiniAnimate.config.cursor.path = function(destination) _G.destination = destination; return {} end')
+
+  -- Create text with folds
+  set_lines({ 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a' })
+  set_cursor(2, 0)
+  type_keys('zf5j')
+  eq(
+    child.lua('_G.folds = {}; for i = 1, 9 do _G.folds[i] = vim.fn.foldclosed(i) end; return _G.folds'),
+    { -1, 2, 2, 2, 2, 2, 2, -1, -1 }
+  )
+  set_cursor(1, 0)
+  set_cursor(9, 0)
+  -- If folds were not ignored, this number would have been lower
+  eq(child.lua_get('_G.destination'), { 8, 0 })
+end
+
+T['Cursor']['triggers done event'] = function()
+  child.cmd('au User MiniAnimateDoneCursor lua _G.inside_done_event = true')
+  set_cursor(5, 0)
+  sleep(100)
+  eq(child.lua_get('_G.inside_done_event'), true)
+end
+
+T['Cursor']['respects `vim.{g,b}.minianimate_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minianimate_disable = true
+    set_cursor(5, 0)
+    -- Should show now marks
+    child.expect_screenshot()
+
+    child[var_type].minianimate_disable = false
+    -- Needs two cursor movements in order to restore cache
+    set_cursor(1, 0)
+    set_cursor(5, 0)
+    -- Should show initial mark
+    child.expect_screenshot()
+  end,
+})
+
+T['Cursor']['respects buffer-local config'] = function()
+  child.lua('vim.b.minianimate_config = { cursor = { enable = false } }')
+
+  set_cursor(5, 0)
+  -- Should show now marks
+  child.expect_screenshot()
+end
+
+T['Scroll'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- Disable other animations for cleaner tests
+      child.lua('MiniAnimate.config.cursor.enable = false')
+      child.lua('MiniAnimate.config.resize.enable = false')
+      child.lua('MiniAnimate.config.open.enable = false')
+      child.lua('MiniAnimate.config.close.enable = false')
+
+      child.set_size(8, 12)
+
+      -- Use quicker timing for convenience
+      child.lua('MiniAnimate.config.scroll.timing = function() return 20 end')
+
+      --stylua: ignore
+      set_lines({
+        'aaaa', 'bbbb', 'cccc', 'dddd', 'eeee',
+        'ffff', 'gggg', 'hhhh', 'iiii', 'jjjj',
+        'kkkk', 'llll', 'mmmm', 'nnnn', 'oooo',
+      })
+      set_cursor(1, 0)
+    end,
+  },
+})
+
+T['Scroll']['works'] = function()
+  type_keys('3<C-e>')
+
+  -- Shouldn't start right away
+  child.expect_screenshot()
+
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  -- Nothing should happen after final view is reached
+  sleep(20)
+  child.expect_screenshot()
+
+  -- Should work in both directions
+  type_keys('3<C-y>')
+  child.expect_screenshot()
+
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+end
+
+T['Scroll']['works when movement is triggered by outside command'] = function()
+  set_cursor(9, 3)
+  child.expect_screenshot()
+  for _ = 1, 4 do
+    sleep(20)
+    child.expect_screenshot()
+  end
+end
+
+T['Scroll']['allows immediate another scroll animation'] = function()
+  type_keys('10<C-e>')
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+
+  -- Should start from the current window view (and not final)
+  type_keys('2<C-y>')
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+end
+
+T['Scroll']['respects folds'] = function()
+  -- Create folds
+  set_cursor(2, 0)
+  type_keys('zf5j')
+
+  -- Should respect folds
+  set_cursor(1, 0)
+  type_keys('3<C-e>')
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+end
+
+T['Scroll']['places cursor on final position immediately'] = function()
+  set_cursor(9, 3)
+
+  -- If position is not visible, put on first column of closest visible line
+  eq(get_cursor(), { 6, 0 })
+  sleep(20)
+  eq(get_cursor(), { 7, 0 })
+  sleep(20)
+  eq(get_cursor(), { 8, 0 })
+  sleep(20)
+  eq(get_cursor(), { 9, 3 })
+
+  -- Should work both ways
+  set_cursor(1, 3)
+  eq(get_cursor(), { 4, 0 })
+  sleep(20)
+  eq(get_cursor(), { 3, 0 })
+  sleep(20)
+  eq(get_cursor(), { 2, 0 })
+  sleep(20)
+  eq(get_cursor(), { 1, 3 })
+end
+
+T['Scroll']['stops on buffer change'] = function()
+  local buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(buf_id, 0, -1, true, { 'AAAA', 'BBBB', 'CCCC', 'DDDD' })
+
+  type_keys('10<C-e>')
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+
+  child.api.nvim_set_current_buf(buf_id)
+  -- Should not scroll
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+end
+
+T['Scroll']['stops on window change'] = function()
+  child.o.winwidth = 1
+  child.cmd('vertical botright new')
+  local second_window = child.api.nvim_get_current_win()
+  set_lines({ 'AAAA', 'BBBB', 'CCCC', 'DDDD' })
+  child.cmd('wincmd h')
+
+  type_keys('10<C-e>')
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+
+  child.api.nvim_set_current_win(second_window)
+  -- Should not scroll
+  child.expect_screenshot()
+  sleep(20)
+  child.expect_screenshot()
+end
+
+T['Scroll']['works with different keys'] = new_set()
+
+T['Scroll']['works with different keys']['zz'] = function()
+  set_cursor(6, 0)
+  expect_topline(1)
+
+  type_keys('zz')
+  expect_topline(1)
+  sleep(20)
+  expect_topline(2)
+  sleep(20)
+  expect_topline(3)
+  sleep(20)
+  expect_topline(4)
+  sleep(20)
+  expect_topline(4)
+
+  eq(get_cursor(), { 6, 0 })
+end
+
+T['Scroll']['works with different keys']['zb'] = function()
+  type_keys('2<C-e>')
+  sleep(50)
+  set_cursor(6, 0)
+  expect_topline(3)
+
+  type_keys('zb')
+  expect_topline(3)
+  sleep(20)
+  expect_topline(2)
+  sleep(20)
+  expect_topline(1)
+  sleep(20)
+  expect_topline(1)
+
+  eq(get_cursor(), { 6, 0 })
+end
+
+T['Scroll']['works with different keys']['zt'] = function()
+  set_cursor(3, 0)
+  expect_topline(1)
+
+  type_keys('zt')
+  expect_topline(1)
+  sleep(20)
+  expect_topline(2)
+  sleep(20)
+  expect_topline(3)
+  sleep(20)
+  expect_topline(3)
+
+  eq(get_cursor(), { 3, 0 })
+end
+
+T['Scroll']['works with different keys']['gg'] = function()
+  type_keys('3<C-e>')
+  sleep(3 * 20 + 5)
+  expect_topline(4)
+
+  type_keys('gg')
+  expect_topline(4)
+  sleep(20)
+  expect_topline(3)
+  sleep(20)
+  expect_topline(2)
+  sleep(20)
+  expect_topline(1)
+  sleep(20)
+  expect_topline(1)
+
+  eq(get_cursor(), { 1, 0 })
+end
+
+T['Scroll']['works with different keys']['G'] = function()
+  expect_topline(1)
+  type_keys('G')
+  expect_topline(1)
+  sleep(20)
+  expect_topline(2)
+  sleep(20)
+  expect_topline(3)
+
+  sleep(6 * 20 + 2)
+  expect_topline(9)
+  sleep(20)
+  expect_topline(10)
+  sleep(20)
+  expect_topline(10)
+
+  eq(get_cursor(), { 15, 0 })
+end
+
+T['Scroll']['respects `enable` config setting'] = function()
+  child.lua('MiniAnimate.config.scroll.enable = false')
+  type_keys('3<C-e>')
+  -- Should move immediately
+  expect_topline(4)
+end
+
+T['Scroll']['correctly calls `timing`'] = function()
+  child.lua('_G.args_history = {}')
+  child.lua([[MiniAnimate.config.scroll.timing = function(s, n)
+    table.insert(_G.args_history, { s = s, n = n })
+    return 10
+  end]])
+
+  type_keys('4<C-e>')
+  sleep(50)
+  eq(child.lua_get('_G.args_history'), { { s = 1, n = 4 }, { s = 2, n = 4 }, { s = 3, n = 4 }, { s = 4, n = 4 } })
+end
+
+T['Scroll']['correctly calls `subscroll`'] = function()
+  child.lua('_G.args_history = {}')
+  child.lua([[MiniAnimate.config.scroll.subscroll = function(total_scroll)
+    table.insert(_G.args_history, total_scroll)
+    return { 1, 1, 1, 1 }
+  end]])
+
+  type_keys('4<C-e>')
+  sleep(100)
+  eq(child.lua_get('_G.args_history'), { 4 })
+end
+
+T['Scroll']['is not animated if `subscroll` output is empty or `nil`'] = function()
+  child.lua('MiniAnimate.config.scroll.subscroll = function() return {} end')
+  type_keys('10<C-e>')
+  -- Should scroll immediately
+  expect_topline(11)
+
+  child.lua('MiniAnimate.config.scroll.subscroll = function() return nil end')
+  type_keys('10<C-y>')
+  -- Should scroll immediately
+  expect_topline(1)
+end
+
+T['Scroll']['triggers done event'] = function()
+  child.cmd('au User MiniAnimateDoneScroll lua _G.inside_done_event = true')
+  type_keys('3<C-e>')
+  sleep(60 + 5)
+  eq(child.lua_get('_G.inside_done_event'), true)
+end
+
+T['Scroll']['respects `vim.{g,b}.minianimate_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minianimate_disable = true
+    type_keys('3<C-e>')
+    -- Should scroll immediately
+    expect_topline(4)
+
+    child[var_type].minianimate_disable = false
+    -- Needs two scrolls in order to restore cache
+    type_keys('3<C-y>')
+    type_keys('3<C-e>')
+    -- Should not scroll immediately
+    expect_topline(1)
+    sleep(20)
+    expect_topline(2)
+  end,
+})
+
+T['Scroll']['respects buffer-local config'] = function()
+  child.lua('vim.b.minianimate_config = { scroll = { enable = false } }')
+
+  type_keys('3<C-e>')
+  -- Should scroll immediately
+  expect_topline(4)
+end
 
 return T

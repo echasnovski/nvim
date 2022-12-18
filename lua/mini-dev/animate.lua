@@ -2,34 +2,15 @@
 
 -- TODO:
 -- Code:
+-- - Resize:
+--     - Add `sizes` customization (same as `path`, `subscroll`, etc.).
 --
 -- Tests:
 -- - General:
 --     - "Single animation active" rule is true for all supported animations.
 --     - Emits "done event" after finishing.
 -- - Cursor move:
---     - Mark can be placed inside/outside line width.
---     - Multibyte characters are respected.
---     - Folds are ignored.
---     - Window view does not matter.
 -- - Scroll:
---     - `max_output_steps` in default `subscroll` correctly respected: total
---       number of steps never exceeds it and subscroll are divided as equal as
---       possible (with remainder equally split between all subscrolls).
---     - Manual scroll during animated scroll is done without jump directly
---       from current window view.
---     - One command resulting into several `WinScrolled` events (like
---       `nnoremap n nzvzz`) is not really working.
---       Use `MiniAnimate.execute_after()`.
---     - There shouldn't be any step after `n_steps`. Specifically, manually
---       setting cursor *just* after scroll end should not lead to restoring
---       cursor some time later. This is more a test for appropriate treatment
---       of step 0.
---     - Cursor during scroll should be placed at final position or at first
---       column of top/bottom line (whichever is closest) if it is outside of
---       current window view.
---     - Switching window and/or buffer should result into immediate stop of
---       animation.
 -- - Resize:
 --     - Works when resizing windows (`<C-w>|`, `<C-w>_`, `<C-w>=`, other
 --       manual command).
@@ -218,6 +199,9 @@ MiniAnimate.config = {
   resize = {
     enable = true,
     timing = function(_, n) return 250 / n end,
+    sizes = function(sizes_from, sizes_to)
+      return H.sizes_equal(sizes_from, sizes_to, { predicate = H.default_sizes_predicate })
+    end,
   },
 
   -- Window open
@@ -435,7 +419,7 @@ MiniAnimate.gen_timing.quartic = function(opts) return H.timing_arithmetic(3, H.
 ---@return __timing_return
 MiniAnimate.gen_timing.exponential = function(opts) return H.timing_geometrical(H.normalize_timing_opts(opts)) end
 
---- Generate animation path
+--- Generate cursor animation path
 ---
 --- Animation path - callable which takes `destination` argument (2d integer
 --- point in (line, col) coordinates) and returns array of relative to (0, 0)
@@ -539,7 +523,7 @@ MiniAnimate.gen_path.spiral = function(opts)
   end
 end
 
---- Generate animation subscroll
+--- Generate scroll animation subscroll
 ---
 --- Subscroll - callable which takes `total_scroll` argument (single non-negative
 --- integer) and returns array of non-negative integers each representing the
@@ -553,7 +537,16 @@ MiniAnimate.gen_subscroll.equal = function(opts)
   return function(total_scroll) return H.subscroll_equal(total_scroll, opts) end
 end
 
---- Generate winconfig
+--- Generate resize animation sizes
+MiniAnimate.gen_sizes = {}
+
+MiniAnimate.gen_sizes.equal = function(opts)
+  opts = vim.tbl_deep_extend('force', { predicate = H.default_sizes_predicate }, opts or {})
+
+  return function(sizes_from, sizes_to) return H.sizes_equal(sizes_from, sizes_to, opts) end
+end
+
+--- Generate open/close animation winconfig
 MiniAnimate.gen_winconfig = {}
 
 MiniAnimate.gen_winconfig.static = function(opts)
@@ -669,7 +662,7 @@ MiniAnimate.gen_winconfig.wipe = function(opts)
   end
 end
 
---- Generate `winblend` progression
+--- Generate open/close animation `winblend` progression
 MiniAnimate.gen_winblend = {}
 
 MiniAnimate.gen_winblend.linear = function(opts)
@@ -1055,7 +1048,8 @@ end
 -- Resize ---------------------------------------------------------------------
 H.make_resize_step = function(state_from, state_to, opts)
   -- Compute number of animation steps
-  local n_steps = H.get_resize_n_steps(state_from, state_to)
+  local sizes = opts.sizes(state_from.sizes, state_to.sizes)
+  local n_steps = #sizes
   if n_steps == nil or n_steps <= 1 then return end
 
   -- Create animation step
@@ -1071,9 +1065,8 @@ H.make_resize_step = function(state_from, state_to, opts)
       if H.cache.resize_event_id ~= event_id then return false end
 
       -- Preform animation. Possibly stop on error.
-      local step_state = H.make_convex_resize_state(state_from, state_to, step / n_steps)
       -- Use `false` to not restore cursor position to avoid horizontal flicker
-      local ok, _ = pcall(H.apply_resize_state, step_state, false)
+      local ok, _ = pcall(H.apply_resize_state, { sizes = sizes[step] }, false)
       if not ok then return H.stop_resize(state_to) end
 
       -- Properly stop animation if step is too big
@@ -1085,10 +1078,8 @@ H.make_resize_step = function(state_from, state_to, opts)
   }
 end
 
-_G.resize_times = {}
 H.start_resize = function(start_state)
   H.cache.resize_is_active = true
-  table.insert(_G.resize_times, 0.000001 * vim.loop.hrtime())
   -- Don't restore cursor position to avoid horizontal flicker
   if start_state ~= nil then H.apply_resize_state(start_state, false) end
   return true
@@ -1097,7 +1088,6 @@ end
 H.stop_resize = function(end_state)
   if end_state ~= nil then H.apply_resize_state(end_state, true) end
   H.cache.resize_is_active = false
-  table.insert(_G.resize_times, 0.000001 * vim.loop.hrtime())
   H.trigger_done_event('resize')
   return false
 end
@@ -1168,33 +1158,6 @@ H.apply_resize_state = function(state, full_view)
   -- Update current resize state to be able to start another resize animation
   -- at any current animation step. Recompute state to also capture `view`.
   H.cache.resize_state = H.get_resize_state()
-end
-
-H.get_resize_n_steps = function(state_from, state_to)
-  local sizes_from, sizes_to = state_from.sizes, state_to.sizes
-  local max_diff = 0
-  for win_id, dims_from in pairs(sizes_from) do
-    local height_absidff = math.abs(sizes_to[win_id].height - dims_from.height)
-    local width_absidff = math.abs(sizes_to[win_id].width - dims_from.width)
-    max_diff = math.max(max_diff, height_absidff, width_absidff)
-  end
-
-  return max_diff
-end
-
-H.make_convex_resize_state = function(state_from, state_to, coef)
-  local sizes_from, sizes_to = state_from.sizes, state_to.sizes
-  local res_sizes = {}
-  for win_id, dims_from in pairs(sizes_from) do
-    res_sizes[win_id] = {
-      height = H.convex_point(dims_from.height, sizes_to[win_id].height, coef),
-      width = H.convex_point(dims_from.width, sizes_to[win_id].width, coef),
-    }
-  end
-
-  -- Intermediate states don't have `layout` (not needed) and `views` (because
-  -- leads to flicker)
-  return { sizes = res_sizes }
 end
 
 -- Open/close -----------------------------------------------------------------
@@ -1384,7 +1347,7 @@ H.timing_geometrical = function(opts)
   })[opts.easing]
 end
 
--- Animation paths ------------------------------------------------------------
+-- Animation path -------------------------------------------------------------
 H.path_line = function(destination, opts)
   -- Don't animate in case of false predicate
   if not opts.predicate(destination) then return {} end
@@ -1416,6 +1379,42 @@ H.subscroll_equal = function(total_scroll, opts)
 end
 
 H.default_subscroll_predicate = function(total_scroll) return total_scroll > 1 end
+
+-- Animation sizes ------------------------------------------------------------
+H.sizes_equal = function(sizes_from, sizes_to, opts)
+  -- Don't animate in case of false predicate
+  if not opts.predicate(sizes_from, sizes_to) then return {} end
+
+  -- Don't animate single window
+  if #vim.tbl_keys(sizes_from) == 1 then return {} end
+
+  -- Compute number of steps
+  local n_steps = 0
+  for win_id, dims_from in pairs(sizes_from) do
+    local height_absidff = math.abs(sizes_to[win_id].height - dims_from.height)
+    local width_absidff = math.abs(sizes_to[win_id].width - dims_from.width)
+    n_steps = math.max(n_steps, height_absidff, width_absidff)
+  end
+  if n_steps < 1 then return {} end
+
+  -- Make sizes array
+  local res = {}
+  for i = 1, n_steps do
+    local coef = i / n_steps
+    local sub_res = {}
+    for win_id, dims_from in pairs(sizes_from) do
+      sub_res[win_id] = {
+        height = H.convex_point(dims_from.height, sizes_to[win_id].height, coef),
+        width = H.convex_point(dims_from.width, sizes_to[win_id].width, coef),
+      }
+    end
+    res[i] = sub_res
+  end
+
+  return res
+end
+
+H.default_sizes_predicate = function(sizes_from, sizes_to) return true end
 
 -- Animation winconfig --------------------------------------------------------
 H.winconfig_static = function(win_id, opts)
@@ -1490,6 +1489,7 @@ H.is_config_resize = function(x)
   if type(x) ~= 'table' then return false, H.msg_config('resize', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('resize.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('resize.timing', 'callable') end
+  if not vim.is_callable(x.sizes) then return false, H.msg_config('resize.sizes', 'callable') end
 
   return true
 end
