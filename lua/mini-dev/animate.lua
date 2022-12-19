@@ -2,34 +2,13 @@
 
 -- TODO:
 -- Code:
--- - Resize:
---     - Add `sizes` customization (same as `path`, `subscroll`, etc.).
 --
 -- Tests:
 -- - General:
---     - "Single animation active" rule is true for all supported animations.
---     - Emits "done event" after finishing.
 -- - Cursor move:
 -- - Scroll:
 -- - Resize:
---     - Works when resizing windows (`<C-w>|`, `<C-w>_`, `<C-w>=`, other
---       manual command).
---     - Works when opening new windows (`<C-w>v`, `<C-w>s`, other manual
---       command).
---     - Works when closing windows (`:quit`, manual command).
---     - Doesn't animate scroll during animation (including at the end).
---     - Works with `winheight`/`winwidth` in Neovim>=0.9.
---     - No view flicker when resizing from small to big width when cursor is
---       on the end of long line. Tests:
---         - `set winwidth=120 winheight=40` and hop between two vertically
---           split windows with cursor on `$` (in Neovim nightly).
---           This is particularly challenging because it seems that cursor
---           should always be visible inside current window.
---         - `<C-w>|` and then `<C-w>=` should not cause view to flicker.
 -- - Open/close:
---     - Works when open/close tabpage. Including `animate_single` option for
---       "wipe" winconfig. Including on second time (test using tabpage number
---       and not tabpage id).
 --
 -- Documentation:
 -- - Manually scrolling (like with `<C-d>`/`<C-u>`) while scrolling animation
@@ -79,6 +58,8 @@
 --     local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
 --     return #vim.api.nvim_tabpage_list_wins(tabpage_id) > 1
 --   end
+-- - `open.winblend` and `close.winblend` is called for current step (so starts
+--   from 0), opposed from `timing` which is called before step.
 
 -- Documentation ==============================================================
 --- Animate common Neovim actions
@@ -745,7 +726,7 @@ MiniAnimate.auto_resize = function()
   local resize_config = H.get_config().resize
   if not resize_config.enable or H.is_disabled() then
     -- Reset state to not use an outdated one if enabled again
-    H.cache.resize_state = {}
+    H.cache.resize_state = { layout = {}, sizes = {}, views = {} }
     return
   end
 
@@ -1048,9 +1029,9 @@ end
 -- Resize ---------------------------------------------------------------------
 H.make_resize_step = function(state_from, state_to, opts)
   -- Compute number of animation steps
-  local sizes = opts.sizes(state_from.sizes, state_to.sizes)
-  local n_steps = #sizes
-  if n_steps == nil or n_steps <= 1 then return end
+  local step_sizes = opts.sizes(state_from.sizes, state_to.sizes)
+  if step_sizes == nil or #step_sizes == 0 then return end
+  local n_steps = #step_sizes
 
   -- Create animation step
   local event_id, timing = H.cache.resize_event_id, opts.timing
@@ -1066,7 +1047,7 @@ H.make_resize_step = function(state_from, state_to, opts)
 
       -- Preform animation. Possibly stop on error.
       -- Use `false` to not restore cursor position to avoid horizontal flicker
-      local ok, _ = pcall(H.apply_resize_state, { sizes = sizes[step] }, false)
+      local ok, _ = pcall(H.apply_resize_state, { sizes = step_sizes[step] }, false)
       if not ok then return H.stop_resize(state_to) end
 
       -- Properly stop animation if step is too big
@@ -1395,7 +1376,7 @@ H.sizes_equal = function(sizes_from, sizes_to, opts)
     local width_absidff = math.abs(sizes_to[win_id].width - dims_from.width)
     n_steps = math.max(n_steps, height_absidff, width_absidff)
   end
-  if n_steps < 1 then return {} end
+  if n_steps <= 1 then return {} end
 
   -- Make sizes array
   local res = {}
