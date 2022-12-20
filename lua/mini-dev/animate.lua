@@ -1,76 +1,36 @@
 -- MIT License Copyright (c) 2022 Evgeni Chasnovski
 
--- TODO:
--- Code:
---
--- Tests:
--- - General:
--- - Cursor move:
--- - Scroll:
--- - Resize:
--- - Open/close:
---
--- Documentation:
--- - Manually scrolling (like with `<C-d>`/`<C-u>`) while scrolling animation
---   is performed leads to a scroll from the window view active at the moment
---   of manual scroll. Leads to an undershoot of scrolling.
--- - Scroll animation is essentially a precisely scheduled non-blocking
---   subscroll. This has two important interconnected consequences:
---     - If another scroll is attempted to be done during the animation, it is
---       done based on the **currently visible** window view. Example: if user
---       presses |CTRL-D| and then |CTRL-U| when animation is half done, window
---       will not display the previous view half of 'scroll' above it.
---       This especially affects scrolling with mouse wheel, as each its turn
---       results in a new scroll for number of lines defined by 'mousescroll'.
---       To mitigate this issue, configure `config.scroll.subscroll()` to
---       return `nil` if number of lines to scroll is less or equal to one
---       emitted by mouse wheel. Like by setting `min_input` option of
---       |MiniAnimate.gen_subscroll.equal()| to be one greater than that number.
---     - It breaks the use of several scrolling commands in the same command.
---       Use |MiniAnimate.execute_after()| to schedule action after reaching
---       target window view. Example: a useful `nnoremap n nzvzz` mapping
---       (consecutive application of |n|, |zv|, and |zz|) should have this
---       right hand side:
--- `<Cmd>lua vim.cmd('normal! n'); MiniAnimate.execute_after('scroll', 'normal! zvzz')<CR>`.
---
--- - Scroll animation is done only for vertical scroll inside current window.
--- - If output of either `config.cursor.path()` or `config.scroll.subscroll()`
---   is `nil` or array of length 0, animation is suspended.
--- - Minimum versions:
---     - `cursor` needs 0.7.0 to work fully (needs |getcursorcharpos()|).
---     - `scroll` works on all supported versions. Works best with Neovim>=0.9.
---     - `resize` works on all supported versions. Works best with Neovim>=0.9.
---     - `open` works on all supported versions.
---     - `close` works on all supported versions.
--- - Animation of scroll and resize works best with Neovim>=0.9 (after updates
---   to |WinScrolled| event and introduction of |WinResized| event). For
---   example, resize animation resulting from effect of 'winheight'/'winwidth'
---   will work properly.
---   Context:
---     - https://github.com/neovim/neovim/issues/18222
---     - https://github.com/vim/vim/issues/10628
---     - https://github.com/neovim/neovim/pull/13589
---     - https://github.com/neovim/neovim/issues/11532
--- - Animation done events.
--- - Example predicates for all animations. Like "don't animate open/close in
---   case of single window": >
---   local is_not_single_window = function(win_id)
---     local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
---     return #vim.api.nvim_tabpage_list_wins(tabpage_id) > 1
---   end
--- - `open.winblend` and `close.winblend` is called for current step (so starts
---   from 0), opposed from `timing` which is called before step.
-
 -- Documentation ==============================================================
 --- Animate common Neovim actions
 ---
 --- Features:
---- - Animate cursor movement inside same buffer. Cursor path is configurable.
---- - Animate scrolling with a scheduled series of subscrolls ("smooth scrolling").
+--- - Animate cursor movement inside same buffer by showing customizable path.
+---   See |MiniAnimate.config.cursor| for more details.
+--- - Animate scrolling with a series of subscrolls ("smooth scrolling").
+---   See |MiniAnimate.config.scroll| for more details.
 --- - Animate window resize by changing whole layout.
+---   See |MiniAnimate.config.resize| for more details.
 --- - Animate window open/close with a series of floating windows.
---- - Customizable animation timings.
---- - Ability to enable/disable per animation type.
+---   See |MiniAnimate.config.open| and |MiniAnimate.config.close| for more details.
+--- - Timings for all actions can be customized independently.
+---   See |MiniAnimate.config-general| for more details.
+--- - Action animations can be enabled/disabled independently.
+--- - All animations are asynchronous/non-blocking and trigger a targeted event
+---   which can be used to perform actions after animation is done.
+--- - |MiniAnimate.animate()| function which can be used to perform own animations.
+---
+--- Notes:
+--- - Cursor movement is animated inside same window and buffer, not as cursor
+---   moves across the screen.
+--- - Scroll and resize animations are done with "side effects": they actually
+---   change the state of what is animated (window view and sizes
+---   respectively). This has a downside of possibly needing extra work to
+---   account for asynchronous nature of animation (like adjusting certain
+---   mappings, etc.). See |MiniAnimate.config.scroll| and
+---   |MiniAnimate.config.resize| for more details.
+--- - Although all animations work in all supported versions of Neovim, scroll
+---   and resize animations have best experience with Neovim>=0.9 (current nightly
+---   release). This is due to updated implementation of |WinScrolled| event.
 ---
 --- # Setup~
 ---
@@ -85,11 +45,18 @@
 --- as `MiniAnimate.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons~
+---
 --- - Neovide:
---- - '???/neoscroll.nvim':
---- - '???/specs.nvim':
---- - 'DanilaMihailov/beacon.nvim'
---- - 'camspiers/lens.vim'
+--- - 'edluffy/specs.nvim':
+---     - 'mini.animate' approaches cursor movement visualization via
+---       customizable path function, while 'specs.nvim' can customize within
+---       its own visual effects (shading and floating window resizing).
+--- - 'karb94/neoscroll.nvim':
+---     - Scroll animation is triggered only inside dedicated mappings.
+---       'mini.animate' animates scroll resulting from any window view change.
+--- - 'anuvyklack/windows.nvim':
+---     - Resize animation is done via custom commands and mappings, while
+---       'mini.animate' animates any resize out of the box.
 ---
 --- # Highlight groups~
 ---
@@ -110,9 +77,8 @@
 ---@diagnostic disable:undefined-field
 
 -- Module definition ==========================================================
--- TODO: make local before release.
-MiniAnimate = {}
-H = {}
+local MiniAnimate = {}
+local H = {}
 
 --- Module setup
 ---
@@ -157,48 +123,330 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text # Options ~
+---@text
+---                                                     *MiniAnimate.config-general*
+--- # General ~
 ---
+--- - Every animation is a non-blockingly scheduled series of specific actions.
+---   They are executed in a sequence of timed steps controlled by `timing` option.
+---   It is a callable which, given next and total step numbers, returns wait time
+---   (in ms). See |MiniAnimate.gen_timing| for builtin timing functions.
+---   See |MiniAnimate.animate()| for more details about animation process.
+---
+--- - Every animation can be enabled/disabled independently by setting `enable`
+---   option to `true`/`false`.
+---
+--- - Every animation triggers custom |User| event when it is finished. Use it to
+---   schedule some action after certain animation is completed. ALternatively,
+---   you can use |MiniAnimate.execute_after()| (usually preferred in mappings).
+---
+--- - Each animation has its main step generator which defines how particular
+---   animation is done. They all are callables which take some input data and
+---   return an array of step data. Length of that array determines number of
+---   animation steps. Outputs `nil` and empty table result in no animation.
+---
+---                                                      *MiniAnimate.config.cursor*
+--- # Cursor ~
+---
+--- This animation is triggered for each movement of cursor inside same window
+--- and buffer. Its visualization step is placing single extmark (see
+--- |extmarks|) at certain position. This extmark contains single space and is
+--- highlighted with `MiniAnimateCursor` highlight group.
+---
+--- Exact places of extmark and their number is controlled by `path` option. It
+--- is a callable which takes `destination` argument (2d integer point in
+--- `(line, col)` coordinates) and returns array of relative to `(0, 0)` places
+--- for extmark to be placed. Example:
+--- - Input `(2, -3)` means that cursor jumped 2 lines forward and 3
+---   columns backward.
+--- - Output `{ {0, 0}, { 0, -1 }, { 0, -2 }, { 0, -3 }, { 1, -3 } }` means
+---   that path is first visualized along the initial line and then along final
+---   column.
+---
+--- See |MiniAnimate.gen_path| for builtin path generators.
+---
+--- Notes:
+--- - Input `destination` value is computed ignoring folds. This is by design
+---   as it helps better visualize distance between two cursor positions.
+--- - Outputs of path generator resulting in a place where extmark can't be
+---   placed are silently omitted during animation: this step just won't show
+---   any visualization.
+---
+--- Configuration example: >
+---   local animate = require('mini.animate')
+---   animate.setup({
+---     cursor = {
+---       -- Animate for 200 milliseconds with linear easing
+---       timing = animate.gen_timing.linear({ duration = 200, unit = 'total' }),
+---
+---       -- Animate with line-column angle instead of shortest line
+---       path = animate.gen_path.angle(),
+---     }
+---   })
+---
+--- After animation is done, |MiniAnimateDoneCursor| event is triggered.
+---
+---                                                      *MiniAnimate.config.scroll*
+--- # Scroll ~
+---
+--- This animation is triggered for each vertical scroll of current window.
+--- Its visualization step is performing a small subscroll which all in total
+--- will result into needed total scroll.
+---
+--- Exact subscroll values and their number is controlled by `subscroll`
+--- option. It is a callable which takes `total_scroll` argument (single
+--- non-negative integer) and returns array of non-negative integers each
+--- representing the amount of lines needed to be scrolled inside corresponding
+--- step. All subscroll values should sum to input `total_scroll`.
+--- Example:
+--- - Input `5` means that total scroll consists from 5 lines (either up or
+---   down, which doesn't matter).
+--- - Output of `{ 1, 1, 1, 1, 1 }` means that there are 5 equal subscrolls.
+---
+--- See |MiniAnimate.gen_subscroll| for builtin subscroll generators.
+---
+--- Notes:
+--- - Input value of `total_scroll` is computed taking folds into account.
+--- - As scroll animation is essentially a precisely scheduled non-blocking
+---   subscrolls, this has two important interconnected consequences:
+---     - If another scroll is attempted during the animation, it is done based
+---       on the **currently visible** window view. Example: if user presses
+---       |CTRL-D| and then |CTRL-U| when animation is half done, window will
+---       not display the previous view half of 'scroll' above it.
+---       This especially affects scrolling with mouse wheel, as each its turn
+---       results in a new scroll for number of lines defined by 'mousescroll'.
+---       Tweak it to your liking.
+---     - It breaks the use of several scrolling commands in the same command.
+---       Use |MiniAnimate.execute_after()| to schedule action after reaching
+---       target window view.
+---       Example: a useful `nnoremap n nzvzz` mapping (consecutive application
+---       of |n|, |zv|, and |zz|) should have this right hand side: >
+---
+---   <Cmd>lua vim.cmd('normal! n'); MiniAnimate.execute_after('scroll', 'normal! zvzz')<CR>.
+---
+--- - This animation works best with Neovim>=0.9 (after certain updates to
+---   |WinScrolled| event).
+---
+--- Configuration example: >
+---
+---   local animate = require('mini.animate')
+---   animate.setup({
+---     scroll = {
+---       -- Animate for 200 milliseconds with linear easing
+---       timing = animate.gen_timing.linear({ duration = 200, unit = 'total' }),
+---
+---       -- Animate equally but with 120 maximum steps instead of default 60
+---       subscroll = animate.gen_subscroll.equal({ max_output_steps = 120 }),
+---     }
+---   })
+---
+--- After animation is done, |MiniAnimateDoneScroll| event is triggered.
+---
+---                                                      *MiniAnimate.config.resize*
+--- # Resize ~
+---
+--- This animation is triggered for window resize while having same layout of
+--- same windows. For example, it won't trigger when window is opened/closed or
+--- after something like |CTRL-W_K|. Its visualization step is setting certain
+--- sizes to all visible windows with last one being the "true" final sizes.
+---
+--- Exact window step sizes and their number is controlled by `subresize`
+--- option. It is a callable which takes `sizes_from` and `sizes_to` arguments
+--- (both tables with window id as keys and dimension table as value) and
+--- returns array of same shaped data.
+--- Example:
+--- - Inputs
+---   `{ [1000] = {width = 7, height = 5}, [1001] = {width = 7, height = 10} }`
+---   and
+---   `{ [1000] = {width = 9, height = 5}, [1001] = {width = 5, height = 10} }`
+---   mean that window 1000 increased its width by 2 in expense of window 1001.
+--- - The following output demonstrates equal resizing: >
+---
+---   {
+---     { [1000] = {width = 8, height = 5}, [1001] = {width = 6, height = 10} },
+---     { [1000] = {width = 9, height = 5}, [1001] = {width = 5, height = 10} },
+---   }
+---
+--- See |MiniAnimate.gen_subresize| for builtin subscroll generators.
+---
+--- Notes:
+---
+--- - As resize animation is essentially a precisely scheduled non-blocking
+---   subresizes, this has two important interconnected consequences:
+---     - If another resize is attempted during the animation, it is
+---       done based on the **currently visible** window sizes. This might
+---       affect relative resizing.
+---     - It breaks the use of several relative resizing commands in the same
+---       command. Use |MiniAnimate.execute_after()| to schedule action after
+---       reaching target window sizes.
+--- - This animation works best with Neovim>=0.9 (after certain updates to
+---   |WinScrolled| event). For example, resize resulting from effect of
+---   'winheight'/'winwidth' will work properly.
+---
+--- Configuration example: >
+---
+---   local animate = require('mini.animate')
+---   animate.setup({
+---     resize = {
+---       -- Animate for 200 milliseconds with linear easing
+---       timing = animate.gen_timing.linear({ duration = 200, unit = 'total' }),
+---     }
+---   })
+---
+--- After animation is done, |MiniAnimateDoneResize| event is triggered.
+---
+---                               *MiniAnimate.config.close* *MiniAnimate.config.open*
+--- # Window open/close ~
+---
+--- These animations are similarly triggered for window open/close. Their
+--- visualization step is drawing empty floating window with customizable
+--- config and transparency.
+---
+--- Exact window visualization characteristics are controlled by `winconfig`
+--- and `winblend` options.
+---
+--- The `winconfig` option is a callable which takes window id (|window-ID|) as
+--- input and returns an array of floating window configs (as in `config`
+--- argument of |nvim_open_win()|). Its length determines number of animation steps.
+--- Example:
+--- - The following output results into two animation steps with second being
+---   upper left quarter of a first: >
+---   {
+---     {
+---       row      = 0,        col    = 0,
+---       width    = 10,       height = 10,
+---       relative = 'editor', anchor = 'NW', focusable = false,
+---       zindex   = 1,        style  = 'minimal',
+---     },
+---     {
+---       row      = 0,        col    = 0,
+---       width    = 5,        height = 5,
+---       relative = 'editor', anchor = 'NW', focusable = false,
+---       zindex   = 1,        style  = 'minimal',
+---     },
+---   }
+---
+--- The `winblend` option is similar to `timing` option: it is a callable
+--- which, given next and total step numbers, returns value of floating
+--- window's 'winblend' option. Note, that it is called for current step (so
+--- starts from 0), as opposed to `timing` which is called before step.
+--- Example:
+--- - Function `function(s, n) return 80 + 20 * s / n end` results in linear
+---   transition from `winblend` value of 80 to 100.
+---
+--- See |MiniAnimate.gen_winconfig| for builtin window config generators.
+--- See |MiniAnimate.gen_winblend| for builtin window transparency generators.
+---
+--- Configuration example: >
+---
+---   local animate = require('mini.animate')
+---   animate.setup({
+---     open = {
+---       -- Animate for 400 milliseconds with linear easing
+---       timing = animate.gen_timing.linear({ duration = 400, unit = 'total' }),
+---
+---       -- Animate with wiping from nearest edge instead of default static one
+---       winconfig = animate.gen_winconfig.wipe({ direction = 'from_edge' }),
+---
+---       -- Make bigger windows more transparent
+---       winblend = animate.gen_winblend.linear({ from = 80, to = 100 }),
+---     },
+---
+---     close = {
+---       -- Animate for 400 milliseconds with linear easing
+---       timing = animate.gen_timing.linear({ duration = 400, unit = 'total' }),
+---
+---       -- Animate with wiping to nearest edge instead of default static one
+---       winconfig = animate.gen_winconfig.wipe({ direction = 'to_edge' }),
+---
+---       -- Make bigger windows more transparent
+---       winblend = animate.gen_winblend.linear({ from = 100, to = 80 }),
+---     },
+---   })
+---
+--- After animation is done, |MiniAnimateDoneOpen| or |MiniAnimateDoneClose|
+--- event is triggered for `open` and `close` animation respectively.
 MiniAnimate.config = {
   -- Cursor path
   cursor = {
+    -- Whether to enable this animation
     enable = true,
+    -- Timing of animation (how steps will progress in time)
+    --minidoc_replace_start timing = --<function: implements total 250ms animation duration>,
     timing = function(_, n) return 250 / n end,
+    --minidoc_replace_end
+    -- Path generator of visualized cursor movement
+    --minidoc_replace_start path = --<function: implements shortest line path>,
     path = function(destination) return H.path_line(destination, { predicate = H.default_path_predicate }) end,
+    --minidoc_replace_end
   },
 
   -- Vertical scroll
   scroll = {
+    -- Whether to enable this animation
     enable = true,
+    -- Timing of animation (how steps will progress in time)
+    --minidoc_replace_start timing = --<function: implements total 250ms animation duration>,
     timing = function(_, n) return 250 / n end,
+    --minidoc_replace_end
+    -- Subscrolls generator of total scroll
+    --minidoc_replace_start subscroll = --<function: implements equal scroll with at most 60 steps>,
     subscroll = function(total_scroll)
       return H.subscroll_equal(total_scroll, { predicate = H.default_subscroll_predicate, max_output_steps = 60 })
     end,
+    --minidoc_replace_end
   },
 
   -- Window resize
   resize = {
+    -- Whether to enable this animation
     enable = true,
+    -- Timing of animation (how steps will progress in time)
+    --minidoc_replace_start timing = --<function: implements total 250ms animation duration>,
     timing = function(_, n) return 250 / n end,
-    sizes = function(sizes_from, sizes_to)
-      return H.sizes_equal(sizes_from, sizes_to, { predicate = H.default_sizes_predicate })
+    --minidoc_replace_end
+    -- Subresize generator for all steps of resize animations
+    --minidoc_replace_start subresize = --<function: implements equal linear steps>,
+    subresize = function(sizes_from, sizes_to)
+      return H.subresize_equal(sizes_from, sizes_to, { predicate = H.default_subresize_predicate })
     end,
+    --minidoc_replace_end
   },
 
   -- Window open
   open = {
+    -- Whether to enable this animation
     enable = true,
+    -- Timing of animation (how steps will progress in time)
+    --minidoc_replace_start timing = --<function: implements total 250ms animation duration>,
     timing = function(_, n) return 250 / n end,
+    --minidoc_replace_end
+    -- Floating window config generator visualizing specific window
+    --minidoc_replace_start winconfig = --<function: implements static window for 25 steps>,
     winconfig = function(win_id) return H.winconfig_static(win_id, { predicate = H.default_winconfig_predicate, n_steps = 25 }) end,
+    --minidoc_replace_end
+    -- 'winblend' (window transparency) generator for floating window
+    --minidoc_replace_start winblend = --<function: implements equal linear steps from 80 to 100>,
     winblend = function(s, n) return 80 + 20 * (s / n) end,
+    --minidoc_replace_end
   },
 
   -- Window close
   close = {
+    -- Whether to enable this animation
     enable = true,
+    -- Timing of animation (how steps will progress in time)
+    --minidoc_replace_start timing = --<function: implements total 250ms animation duration>,
     timing = function(_, n) return 250 / n end,
+    --minidoc_replace_end
+    -- Floating window config generator visualizing specific window
+    --minidoc_replace_start winconfig = --<function: implements static window for 25 steps>,
     winconfig = function(win_id) return H.winconfig_static(win_id, { predicate = H.default_winconfig_predicate, n_steps = 25 }) end,
+    --minidoc_replace_end
+    -- 'winblend' (window transparency) generator for floating window
+    --minidoc_replace_start winblend = --<function: implements equal linear steps from 80 to 100>,
     winblend = function(s, n) return 80 + 20 * (s / n) end,
+    --minidoc_replace_end
   },
 }
 --minidoc_afterlines_end
@@ -227,8 +475,8 @@ end
 --- Example ~
 ---
 --- A useful `nnoremap n nzvzz` mapping (consecutive application of |n|, |zv|,
---- and |zz|) should have this right hand side:
---- `<Cmd>lua vim.cmd('normal! n'); MiniAnimate.execute_after('scroll', 'normal! zvzz')<CR>`.
+--- and |zz|) should have this right hand side: >
+---   <Cmd>lua vim.cmd('normal! n'); MiniAnimate.execute_after('scroll', 'normal! zvzz')<CR>.
 ---
 ---@param animation_type string One of supported animation types
 ---   (as in |MiniAnimate.is_active()|).
@@ -271,7 +519,6 @@ end
 --- - Wait `step_timing(2)` milliseconds.
 --- - Call `step_action(2)`. Stop if it returned `false` or `nil`.
 --- - ...
----
 ---
 --- Notes:
 --- - Animation is also stopped on action error or if maximum number of steps
@@ -518,16 +765,23 @@ MiniAnimate.gen_subscroll.equal = function(opts)
   return function(total_scroll) return H.subscroll_equal(total_scroll, opts) end
 end
 
---- Generate resize animation sizes
-MiniAnimate.gen_sizes = {}
+--- Generate resize animation subresize
+MiniAnimate.gen_subresize = {}
 
-MiniAnimate.gen_sizes.equal = function(opts)
-  opts = vim.tbl_deep_extend('force', { predicate = H.default_sizes_predicate }, opts or {})
+MiniAnimate.gen_subresize.equal = function(opts)
+  opts = vim.tbl_deep_extend('force', { predicate = H.default_subresize_predicate }, opts or {})
 
-  return function(sizes_from, sizes_to) return H.sizes_equal(sizes_from, sizes_to, opts) end
+  return function(sizes_from, sizes_to) return H.subresize_equal(sizes_from, sizes_to, opts) end
 end
 
 --- Generate open/close animation winconfig
+---
+--- Example predicate for "don't animate open/close in case of single
+--- window": >
+---   local is_not_single_window = function(win_id)
+---     local tabpage_id = vim.api.nvim_win_get_tabpage(win_id)
+---     return #vim.api.nvim_tabpage_list_wins(tabpage_id) > 1
+---   end
 MiniAnimate.gen_winconfig = {}
 
 MiniAnimate.gen_winconfig.static = function(opts)
@@ -1029,7 +1283,7 @@ end
 -- Resize ---------------------------------------------------------------------
 H.make_resize_step = function(state_from, state_to, opts)
   -- Compute number of animation steps
-  local step_sizes = opts.sizes(state_from.sizes, state_to.sizes)
+  local step_sizes = opts.subresize(state_from.sizes, state_to.sizes)
   if step_sizes == nil or #step_sizes == 0 then return end
   local n_steps = #step_sizes
 
@@ -1361,8 +1615,8 @@ end
 
 H.default_subscroll_predicate = function(total_scroll) return total_scroll > 1 end
 
--- Animation sizes ------------------------------------------------------------
-H.sizes_equal = function(sizes_from, sizes_to, opts)
+-- Animation subresize --------------------------------------------------------
+H.subresize_equal = function(sizes_from, sizes_to, opts)
   -- Don't animate in case of false predicate
   if not opts.predicate(sizes_from, sizes_to) then return {} end
 
@@ -1378,7 +1632,7 @@ H.sizes_equal = function(sizes_from, sizes_to, opts)
   end
   if n_steps <= 1 then return {} end
 
-  -- Make sizes array
+  -- Make subresize array
   local res = {}
   for i = 1, n_steps do
     local coef = i / n_steps
@@ -1395,7 +1649,7 @@ H.sizes_equal = function(sizes_from, sizes_to, opts)
   return res
 end
 
-H.default_sizes_predicate = function(sizes_from, sizes_to) return true end
+H.default_subresize_predicate = function(sizes_from, sizes_to) return true end
 
 -- Animation winconfig --------------------------------------------------------
 H.winconfig_static = function(win_id, opts)
@@ -1470,7 +1724,7 @@ H.is_config_resize = function(x)
   if type(x) ~= 'table' then return false, H.msg_config('resize', 'table') end
   if type(x.enable) ~= 'boolean' then return false, H.msg_config('resize.enable', 'boolean') end
   if not vim.is_callable(x.timing) then return false, H.msg_config('resize.timing', 'callable') end
-  if not vim.is_callable(x.sizes) then return false, H.msg_config('resize.sizes', 'callable') end
+  if not vim.is_callable(x.subresize) then return false, H.msg_config('resize.subresize', 'callable') end
 
   return true
 end

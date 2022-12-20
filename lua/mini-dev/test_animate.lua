@@ -127,7 +127,7 @@ T['setup()']['creates `config` field'] = function()
 
   expect_config('resize.enable', true)
   expect_config_function('resize.timing')
-  expect_config_function('resize.sizes')
+  expect_config_function('resize.subresize')
 
   expect_config('open.enable', true)
   expect_config_function('open.timing')
@@ -168,7 +168,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ resize = 'a' }, 'resize', 'table')
   expect_config_error({ resize = { enable = 'a' } }, 'resize.enable', 'boolean')
   expect_config_error({ resize = { timing = 'a' } }, 'resize.timing', 'callable')
-  expect_config_error({ resize = { sizes = 'a' } }, 'resize.sizes', 'callable')
+  expect_config_error({ resize = { subresize = 'a' } }, 'resize.subresize', 'callable')
 
   expect_config_error({ open = 'a' }, 'open', 'table')
   expect_config_error({ open = { enable = 'a' } }, 'open.enable', 'boolean')
@@ -751,25 +751,26 @@ T['gen_subscroll']['equal()']['respects `opts.max_output_steps`'] = function()
   validate_subscroll(11, { 1, 1, 1, 1, 1, 1, 1, 1, 1, 2 })
 end
 
-T['gen_sizes'] = new_set()
+T['gen_subresize'] = new_set()
 
-local validate_sizes = function(sizes_from, sizes_to, output)
+local validate_subresize = function(sizes_from, sizes_to, output)
   -- Overcome Neovim's "Cannot convert given lua table" for tables with
   -- window sizes structure (keys like `[1000]`, etc.)
-  local lua_cmd = string.format('vim.inspect(_G.test_sizes(%s, %s))', vim.inspect(sizes_from), vim.inspect(sizes_to))
+  local lua_cmd =
+    string.format('vim.inspect(_G.test_subresize(%s, %s))', vim.inspect(sizes_from), vim.inspect(sizes_to))
   local output_str = child.lua_get(lua_cmd)
 
   eq(loadstring('return ' .. output_str)(), output)
 end
 
-T['gen_sizes']['equal()'] = new_set()
+T['gen_subresize']['equal()'] = new_set()
 
 --stylua: ignore
-T['gen_sizes']['equal()']['works'] = function()
-  child.lua('_G.test_sizes = MiniAnimate.gen_sizes.equal()')
+T['gen_subresize']['equal()']['works'] = function()
+  child.lua('_G.test_subresize = MiniAnimate.gen_subresize.equal()')
 
   -- Basic checks
-  validate_sizes(
+  validate_subresize(
   {
     [1000] = { width = 5, height = 5 },
     [1001] = { width = 5, height = 7 }
@@ -793,7 +794,7 @@ T['gen_sizes']['equal()']['works'] = function()
     },
   })
 
-  validate_sizes(
+  validate_subresize(
   {
     [1000] = { width = 5, height = 5 },
     [1001] = { width = 5, height = 7 }
@@ -818,7 +819,7 @@ T['gen_sizes']['equal()']['works'] = function()
   })
 
   -- Should compute number of steps based on maximum absolute difference
-  validate_sizes(
+  validate_subresize(
   {
     [1000] = { width = 5, height = 5 },
     [1001] = { width = 5, height = 5 }
@@ -843,16 +844,16 @@ T['gen_sizes']['equal()']['works'] = function()
   })
 
   -- Works for single window
-  validate_sizes({ [1000] = { width = 5, height = 5 } }, { [1000] = { width = 7, height = 10 } }, {})
+  validate_subresize({ [1000] = { width = 5, height = 5 } }, { [1000] = { width = 7, height = 10 } }, {})
 end
 
-T['gen_sizes']['equal()']['respects `opts.predicate`'] = function()
-  child.lua([[_G.test_sizes = MiniAnimate.gen_sizes.equal({
+T['gen_subresize']['equal()']['respects `opts.predicate`'] = function()
+  child.lua([[_G.test_subresize = MiniAnimate.gen_subresize.equal({
     predicate = function(sizes_from, sizes_to) return #vim.tbl_keys(sizes_from) > 2 end
   })]])
 
   -- Should allow all non-trivial `destination`
-  validate_sizes({
+  validate_subresize({
     [1000] = { width = 5, height = 5 },
     [1001] = { width = 5, height = 5 },
   }, {
@@ -1866,9 +1867,9 @@ T['Resize']['correctly calls `timing`'] = function()
   )
 end
 
-T['Resize']['correctly calls `sizes`'] = function()
+T['Resize']['correctly calls `subresize`'] = function()
   child.lua('_G.args_history = {}')
-  child.lua([[MiniAnimate.config.resize.sizes = function(sizes_from, sizes_to)
+  child.lua([[MiniAnimate.config.resize.subresize = function(sizes_from, sizes_to)
     table.insert(_G.args_history, { from = sizes_from, to = sizes_to })
     return { sizes_to }
   end]])
@@ -1893,13 +1894,13 @@ T['Resize']['correctly calls `sizes`'] = function()
   })
 end
 
-T['Resize']['is not animated if `sizes` output is empty or `nil`'] = function()
-  child.lua('MiniAnimate.config.resize.sizes = function() return {} end')
+T['Resize']['is not animated if `subresize` output is empty or `nil`'] = function()
+  child.lua('MiniAnimate.config.resize.subresize = function() return {} end')
   type_keys('<C-w>|')
   -- Should resize immediately
   child.expect_screenshot()
 
-  child.lua('MiniAnimate.config.resize.sizes = function() return nil end')
+  child.lua('MiniAnimate.config.resize.subresize = function() return nil end')
   type_keys('<C-w>=')
   -- Should resize immediately
   child.expect_screenshot()
