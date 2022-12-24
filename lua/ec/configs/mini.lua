@@ -49,6 +49,7 @@ vim.schedule(function()
     },
   })
   require('mini.align').setup()
+  require('mini.animate').setup()
   require('mini.bufremove').setup()
   require('mini.comment').setup()
   require('mini.completion').setup({
@@ -86,6 +87,4 @@ vim.schedule(function()
   require('mini.surround').setup({ search_method = 'cover_or_next' })
   require('mini.test').setup()
   require('mini.trailspace').setup()
-
-  require('mini-dev.animate').setup()
 end)
