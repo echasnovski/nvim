@@ -68,10 +68,10 @@ keymap('n', [[<C-p>]], [[<C-w>p]])
 keymap('t', [[<C-h>]], [[<C-\><C-N><C-w>h]])
 
 -- Use alt + hjkl to resize windows
-keymap('n', [[<M-h>]], [[<Cmd>vertical resize -2<CR>]])
-keymap('n', [[<M-j>]], [[<Cmd>resize -2<CR>]])
-keymap('n', [[<M-k>]], [[<Cmd>resize +2<CR>]])
-keymap('n', [[<M-l>]], [[<Cmd>vertical resize +2<CR>]])
+keymap('n', [[<M-h>]], [[<Cmd>vertical resize -1<CR>]])
+keymap('n', [[<M-j>]], [[<Cmd>resize -1<CR>]])
+keymap('n', [[<M-k>]], [[<Cmd>resize +1<CR>]])
+keymap('n', [[<M-l>]], [[<Cmd>vertical resize +1<CR>]])
 
 -- Alternative way to save
 keymap('n', [[<C-s>]], [[<Cmd>silent w<CR>]])

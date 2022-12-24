@@ -3,17 +3,18 @@
 vim.g.mapleader = ' '
 
 -- General ====================================================================
-vim.opt.hidden       = true     -- Allow switching from unsaved buffer
-vim.opt.wrap         = false    -- Display long lines as just one line
-vim.opt.encoding     = 'utf-8'  -- Display this encoding
-vim.opt.fileencoding = 'utf-8'  -- Use this encoding when writing to file
-vim.opt.mouse        = 'a'      -- Enable mouse
-vim.opt.backup       = false    -- Don't store backup
-vim.opt.writebackup  = false    -- Don't store backup
-vim.opt.timeoutlen   = 250      -- Faster response at cost of fast typing
-vim.opt.updatetime   = 300      -- Faster CursorHold
-vim.opt.switchbuf    = 'usetab' -- Use already opened buffers when switching
-vim.opt.modeline     = true     -- Allow modeline
+vim.opt.hidden       = true           -- Allow switching from unsaved buffer
+vim.opt.wrap         = false          -- Display long lines as just one line
+vim.opt.encoding     = 'utf-8'        -- Display this encoding
+vim.opt.fileencoding = 'utf-8'        -- Use this encoding when writing to file
+vim.opt.mouse        = 'a'            -- Enable mouse
+vim.opt.mousescroll  = 'ver:25,hor:6' -- Customize mouse scroll
+vim.opt.backup       = false          -- Don't store backup
+vim.opt.writebackup  = false          -- Don't store backup
+vim.opt.timeoutlen   = 250            -- Faster response at cost of fast typing
+vim.opt.updatetime   = 300            -- Faster CursorHold
+vim.opt.switchbuf    = 'usetab'       -- Use already opened buffers when switching
+vim.opt.modeline     = true           -- Allow modeline
 
 vim.opt.undofile = true                              -- Enable persistent undo
 vim.opt.undodir  = vim.fn.expand('$HOME/.config/nvim/misc/undodir') -- Set directory for persistent undo
