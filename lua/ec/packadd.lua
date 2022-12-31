@@ -76,9 +76,6 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Display of text colors
   packadd_defer('nvim-colorizer')
 
-  -- Visualize undo tree
-  packadd_defer('undotree')
-
   -- Snippets engine
   packadd_defer('luasnip')
 

@@ -58,10 +58,6 @@
 	path = pack/plugins/opt/neoterm
 	url = https://github.com/kassio/neoterm
 	branch = master
-[submodule "undotree"]
-	path = pack/plugins/opt/undotree
-	url = https://github.com/mbbill/undotree
-	branch = master
 [submodule "which-key"]
 	path = pack/plugins/opt/which-key
 	url = https://github.com/folke/which-key.nvim
