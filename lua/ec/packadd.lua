@@ -39,9 +39,6 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Common dependency for Lua plugins
   packadd('plenary')
 
-  -- Updater of current working directory
-  -- packadd('vim-rooter')
-
   -- Colorful icons
   packadd('nvim-web-devicons')
 

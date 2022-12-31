@@ -54,10 +54,6 @@
 	path = pack/plugins/opt/vim-unimpaired
 	url = https://github.com/tpope/vim-unimpaired
 	branch = master
-[submodule "vim-rooter"]
-	path = pack/plugins/opt/vim-rooter
-	url = https://github.com/airblade/vim-rooter
-	branch = master
 [submodule "neoterm"]
 	path = pack/plugins/opt/neoterm
 	url = https://github.com/kassio/neoterm

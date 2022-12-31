@@ -93,22 +93,6 @@ EC.open_lazygit = function()
   vim.b.minipairs_disable = true
 end
 
-local root_cache = {}
-EC.set_buffer_root = function()
-  local path = vim.api.nvim_buf_get_name(0)
-  if path == '' or vim.fs == nil then return end
-
-  local root = root_cache[path]
-  if root == nil then
-    root = vim.fs.dirname(vim.fs.find({ '.git', 'Makefile', '.root' }, { path = path, upward = true })[1])
-    root_cache[path] = root
-  end
-  if root == nil then return end
-
-  vim.cmd(string.format('lcd %s', root))
-end
-vim.cmd('au BufEnter * lua EC.set_buffer_root()')
-
 -- Overwrite `vim.ui.select()` with Telescope ---------------------------------
 EC.ui_select_default = vim.ui.select
 

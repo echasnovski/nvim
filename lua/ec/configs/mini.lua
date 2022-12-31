@@ -83,6 +83,7 @@ vim.schedule(function()
   end
 
   require('mini.misc').setup()
+  MiniMisc.setup_auto_root()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   require('mini.surround').setup({ search_method = 'cover_or_next' })
   require('mini.test').setup()
