@@ -37,9 +37,11 @@ vim.opt.linebreak     = true    -- Wrap long lines at 'breakat' (if 'wrap' is se
 vim.opt.shortmess     = 'aoOFc' -- Disable certain messages from |ins-completion-menu|
 vim.opt.showmode      = false   -- Don't show mode in command line
 
-if vim.fn.has('nvim-0.9') == 1
+vim.opt.fillchars = 'fold:╌,horiz:═,horizdown:╦,horizup:╩,vert:║,verthoriz:╬,vertleft:╣,vertright:╠'
+
+if vim.fn.has('nvim-0.9') == 1 then
   -- Don't show "Scanning..." messages (improves 'mini.completion')
-  then vim.cmd('set shortmess+=C')
+  vim.cmd('set shortmess+=C')
 end
 
 -- Colors =====================================================================
@@ -54,6 +56,7 @@ end
 -- Use colorscheme later when its plugin is enabled
 -- Use `nested` to allow `ColorScheme` event
 vim.cmd([[au VimEnter * nested ++once colorscheme minicyan]])
+vim.cmd([[au ColorScheme * hi! link WinSeparator NormalFloat]])
 
 -- Other interesting color schemes:
 -- - 'morhetz/gruvbox'

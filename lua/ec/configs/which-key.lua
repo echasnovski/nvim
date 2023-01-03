@@ -15,7 +15,7 @@ wk.setup({
       g = false,
     },
   },
-  window = { padding = { 0, 0, 0, 0 } },
+  window = { padding = { 0, 0, 0, 0 }, border = 'double' },
   layout = { height = { min = 1, max = 10 } },
 })
 

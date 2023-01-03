@@ -62,6 +62,10 @@ vim.schedule(function()
         return MiniCompletion.default_process_items(items, base)
       end,
     },
+    window = {
+      info = { border = 'double' },
+      signature = { border = 'double' },
+    },
   })
   require('mini.cursorword').setup()
   require('mini.doc').setup()
@@ -86,6 +90,12 @@ vim.schedule(function()
   MiniMisc.setup_auto_root()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   require('mini.surround').setup({ search_method = 'cover_or_next' })
-  require('mini.test').setup()
+
+  local test = require('mini.test')
+  local reporter = test.gen_reporter.buffer({ window = { border = 'double' } })
+  test.setup({
+    execute = { reporter = reporter },
+  })
+
   require('mini.trailspace').setup()
 end)

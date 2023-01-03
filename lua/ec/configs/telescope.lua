@@ -1,5 +1,6 @@
 require('telescope').setup({
   defaults = {
+    borderchars = { '═', '║', '═', '║', '╔', '╗', '╝', '╚' },
     sorting_strategy = 'ascending',
     layout_strategy = 'flex',
     layout_config = {

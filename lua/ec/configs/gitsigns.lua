@@ -7,5 +7,6 @@ require('gitsigns').setup({
     delete = { text = '▁' },
     topdelete = { text = '▔' },
   },
+  preview_config = { border = 'double' },
   watch_gitdir = { interval = 1000 },
 })
