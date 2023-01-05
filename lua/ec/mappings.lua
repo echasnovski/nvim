@@ -28,8 +28,19 @@ end
 keymap('n', [[s]], [[<Nop>]])
 keymap('x', [[s]], [[<Nop>]])
 
--- Copy to system clipboard
-keymap('v', [[<C-c>]], [["+y]])
+-- Move by visible lines (don't map in Operator-pending mode because it
+-- severely changes behavior; like `dj` on non-wrapped line will not delete it)
+keymap('n', 'j', 'gj')
+keymap('x', 'j', 'gj')
+keymap('n', 'k', 'gk')
+keymap('x', 'k', 'gk')
+
+-- Move visually selected lines up/down (respects count), autoformat, reselect
+keymap('x', 'J', [[":move '>+" . v:count1     . "<CR>gv=gv"]], { expr = true })
+keymap('x', 'K', [[":move '<-" . (v:count1+1) . "<CR>gv=gv"]], { expr = true })
+
+-- Copy visual selection to system clipboard
+keymap('x', [[<C-c>]], [["+y]])
 
 -- Move with <Alt-hjkl> in non-normal mode. Don't `noremap` in insert mode to
 -- have these keybindings behave exactly like arrows (crucial inside
@@ -47,31 +58,19 @@ keymap('t', [[<M-l>]], [[<Right>]])
 keymap('c', [[<M-h>]], [[<Left>]], { silent = false })
 keymap('c', [[<M-l>]], [[<Right>]], { silent = false })
 
--- Move between buffers
-if vim.fn.exists('g:vscode') == 1 then
-  -- Simulate same TAB behavior in VSCode
-  keymap('n', ']b', [[<Cmd>Tabnext<CR>]])
-  keymap('n', '[b', [[<Cmd>Tabprev<CR>]])
-else
-  keymap('n', ']b', [[<Cmd>bnext<CR>]])
-  keymap('n', '[b', [[<Cmd>bprevious<CR>]])
-end
-
 -- Simpler window navigation
 keymap('n', [[<C-h>]], [[<C-w>h]])
 keymap('n', [[<C-j>]], [[<C-w>j]])
 keymap('n', [[<C-k>]], [[<C-w>k]])
 keymap('n', [[<C-l>]], [[<C-w>l]])
--- Go to previous window (very useful with floating function documentation)
-keymap('n', [[<C-p>]], [[<C-w>p]])
 -- When in terminal, use this to go to Normal mode
 keymap('t', [[<C-h>]], [[<C-\><C-N><C-w>h]])
 
--- Use alt + hjkl to resize windows
-keymap('n', [[<M-h>]], [[<Cmd>vertical resize -1<CR>]])
-keymap('n', [[<M-j>]], [[<Cmd>resize -1<CR>]])
-keymap('n', [[<M-k>]], [[<Cmd>resize +1<CR>]])
-keymap('n', [[<M-l>]], [[<Cmd>vertical resize +1<CR>]])
+-- Use ctrl + arrows to resize windows
+keymap('n', [[<C-Left>]], [[<Cmd>vertical resize -1<CR>]])
+keymap('n', [[<C-Down>]], [[<Cmd>resize -1<CR>]])
+keymap('n', [[<C-Up>]], [[<Cmd>resize +1<CR>]])
+keymap('n', [[<C-Right>]], [[<Cmd>vertical resize +1<CR>]])
 
 -- Alternative way to save
 keymap('n', [[<C-s>]], [[<Cmd>silent w<CR>]])
@@ -81,28 +80,29 @@ keymap('i', [[<C-s>]], [[<Esc><Cmd>silent w<CR>]])
 keymap('i', [[<Tab>]], [[pumvisible() ? "\<C-n>" : "\<Tab>"]], { expr = true })
 keymap('i', [[<S-Tab>]], [[pumvisible() ? "\<C-p>" : "\<S-Tab>"]], { expr = true })
 
--- Extra jumps between folds
--- Jump to the beginning of previous fold
-keymap('n', [[zK]], [[zk[z]])
--- Jump to the end of next fold
-keymap('n', [[zJ]], [[zj]z]])
-
 -- Reselect latest changed, put or yanked text
 keymap('n', [[gV]], '`[v`]')
+
+-- Join lines without moving cursor (set context mark, execute `J` respecting
+-- count, go back to context mark)
+keymap('n', 'J', [['m`' . v:count1 . 'J``']], { expr = true })
 
 -- Make `q:` do nothing instead of opening command-line-window, because it is
 -- often hit by accident
 -- Use c_CTRL-F or Telescope
 keymap('n', [[q:]], [[<Nop>]])
 
--- Search visually highlighted text
-keymap('v', [[g/]], [[y/\V<C-R>=escape(@",'/\')<CR><CR>]])
+-- Search visually selected text (slightly better than builtins in Neovim>=0.8)
+keymap('x', '*', [[y/\V<C-R>=escape(@", '/\')<CR><CR>]])
+keymap('x', '#', [[y?\V<C-R>=escape(@", '/\')<CR><CR>]])
 
--- Stop highlighting of search results
-keymap('n', [[//]], [[:nohlsearch<C-R>=has('diff')?'<BAR>diffupdate':''<CR><CR>]])
+-- Search inside visually highlighted text
+keymap('x', 'g/', '<esc>/\\%V', { silent = false })
+
+-- Stop highlighting of search results. NOTE: this can be done with default
+-- `<C-l>` but this solution deliberately uses `:` instead of `<Cmd>` to go
+-- into Command mode and back which updates 'mini.map'.
+keymap('n', '//', ':nohlsearch | diffupdate<CR>')
 
 -- Delete selection in Select mode (helpful when editing snippet placeholders)
 keymap('s', [[<BS>]], [[<BS>i]])
-
--- Defer `<CR>` mapping for it to not be overridden while deferred plugin load
-vim.defer_fn(function() vim.cmd([[imap <expr> <CR> v:lua.EC.cr_action()]]) end, 100)

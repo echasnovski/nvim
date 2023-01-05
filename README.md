@@ -1,6 +1,6 @@
 # NeoVim setup
 
-This is a setup for Neovim>=0.6. Current structure (might be a bit outdated):
+This is a setup for Neovim>=0.8. Current structure (might be a bit outdated):
 
 ```
 after/                  # Everything that will be sourced last (`:h after-directory`)
@@ -108,7 +108,27 @@ git commit -m "Remove $submodule_path plugin."
 
 Important system dependencies:
 
-- (Optional but highly advisable) **Separate python3 evnironment** (called 'neovim') **with necessary packages** (variable `g:python3_host_prog` should point to Python interpreter of this environment):
+- **Nerd fonts** ([information source](https://gist.github.com/matthewjberger/7dd7e079f282f8138a9dc3b045ebefa0)):
+    - Download a [Nerd Font](https://www.nerdfonts.com/) (good choice is "UbuntuMono Nerd Font").
+    - Unzip and copy to '~/.local/share/fonts'.
+    - Run the command `fc-cache -fv` to manually rebuild the font cache.
+
+- **Tools for finding stuff**:
+    - [ripgrep](https://github.com/BurntSushi/ripgrep#installation)
+
+- **Spelling dictionaries**:
+    - Create '~/.nvim/spell' directory.
+    - Put there English and Russian dictionaries (download from ftp://ftp.vim.org/pub/vim/runtime/spell/).
+
+- **Clipboard support**. One of 'xsel' (preferred) or 'xclip' (had some minor issues after installing 'vim-exchange').
+
+- **Language Server Protocols**. These should be handled manually. For a list of needed LSP providers look at settings for 'nvim-lspconfig'.
+
+- **Pre-commit hooks** (not strictly necessary but "good to have"). This repository uses pre-commit hooks to verify integrity of code. Preferred way of setting this up:
+    - Install `pre-commit`. Preferred way is to use [pipx](https://github.com/pypa/pipx) with `pipx install pre-commit`. There also [other options](https://pre-commit.com/#install).
+    - From the root of this repository run `pre-commit install`. This enables pre-commit checks. Now they will be run before any commit. In case they did something, you need to `git add` those changes before commiting will become allowed.
+
+- (Optional, might work without it) **Separate python3 evnironment** (called 'neovim') **with necessary packages** (variable `g:python3_host_prog` should point to Python interpreter of this environment):
     - Install `pyenv`. Source for installation:  https://linux-notes.org/ustanovka-pyenv-v-unix-linux/. **Note**: it probably can be `conda` or any other environment management tool (with some tweaks to configuration files afterwards).
     - Install recent version of Python.
     - Create 'neovim' environment with `pyenv virtualenv [options] neovim`.
@@ -119,7 +139,7 @@ Important system dependencies:
         python -m pip install pynvim
     ```
 
-- **Neovim node support** (generally taken from https://phoenixnap.com/kb/update-node-js-version), optional but needed for coc.nvim:
+- (Optional, might work without it) **Neovim node support** (generally taken from https://phoenixnap.com/kb/update-node-js-version):
 
     - Install `nvm`:
 
@@ -148,26 +168,6 @@ Important system dependencies:
 
     - Possibly change `node_host_prog` (in 'general/settings.vim') and `coc_node_path` (in 'plugins/coc.nvim') variables with correct path.
     - Possibly change default version of node which is added to `$PATH` via `nvm alias default <version>`.
-
-- **Nerd fonts** ([information source](https://gist.github.com/matthewjberger/7dd7e079f282f8138a9dc3b045ebefa0)):
-    - Download a [Nerd Font](https://www.nerdfonts.com/) (good choice is "UbuntuMono Nerd Font").
-    - Unzip and copy to '~/.local/share/fonts'.
-    - Run the command `fc-cache -fv` to manually rebuild the font cache.
-
-- **Tools for finding stuff**:
-    - [ripgrep](https://github.com/BurntSushi/ripgrep#installation)
-
-- **Spelling dictionaries**:
-    - Create '~/.nvim/spell' directory.
-    - Put there English and Russian dictionaries (download from ftp://ftp.vim.org/pub/vim/runtime/spell/).
-
-- **Clipboard support**. One of 'xsel' (preferred) or 'xclip' (had some minor issues after installing 'vim-exchange').
-
-- **Language Server Protocols**. These should be handled manually. For a list of needed LSP providers look at settings for 'nvim-lspconfig'.
-
-- **Pre-commit hooks** (not strictly necessary but "good to have"). This repository uses pre-commit hooks to verify integrity of code. Preferred way of setting this up:
-    - Install `pre-commit`. Preferred way is to use [pipx](https://github.com/pypa/pipx) with `pipx install pre-commit`. There also [other options](https://pre-commit.com/#install).
-    - From the root of this repository run `pre-commit install`. This enables pre-commit checks. Now they will be run before any commit. In case they did something, you need to `git add` those changes before commiting will become allowed.
 
 ## Notes
 

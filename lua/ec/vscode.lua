@@ -4,6 +4,10 @@ vim.api.nvim_set_keymap('n', 'gc', '<Plug>VSCodeCommentary', {})
 vim.api.nvim_set_keymap('o', 'gc', '<Plug>VSCodeCommentary', {})
 vim.api.nvim_set_keymap('n', 'gcc', '<Plug>VSCodeCommentaryLine', {})
 
+-- Simulate tab switching
+vim.api.nvim_set_keymap('n', ']b', '<Cmd>Tabnext<CR>', {})
+vim.api.nvim_set_keymap('n', '[b', '<Cmd>Tabprev<CR>', {})
+
 -- Workaround for executing visual selection in VS Code (for example, in Python
 -- interactive window)
 local esc = vim.api.nvim_replace_termcodes([[<Esc>]], true, true, true)

@@ -101,6 +101,7 @@ vim.schedule(function()
   MiniMisc.setup_auto_root()
 
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
+  vim.keymap.set('i', '<CR>', 'v:lua.EC.cr_action()', { expr = true })
 
   require('mini.surround').setup({ search_method = 'cover_or_next' })
 
