@@ -1,4 +1,5 @@
 require('mini.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
+
 require('mini.starter').setup()
 vim.cmd([[autocmd User MiniStarterOpened setlocal fillchars=eob:\ ]])
 vim.cmd([[autocmd User MiniStarterOpened
@@ -40,6 +41,7 @@ require('mini.statusline').setup({
     end,
   },
 })
+
 require('mini.tabline').setup()
 
 vim.schedule(function()
@@ -48,9 +50,13 @@ vim.schedule(function()
       F = require('mini.ai').gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
     },
   })
+
   require('mini.align').setup()
+
   require('mini.animate').setup()
+
   require('mini.bufremove').setup()
+
   require('mini.comment').setup()
   require('mini.completion').setup({
     lsp_completion = {
@@ -67,10 +73,15 @@ vim.schedule(function()
       signature = { border = 'double' },
     },
   })
+
   require('mini.cursorword').setup()
+
   require('mini.doc').setup()
+
   require('mini.indentscope').setup()
+
   require('mini.jump').setup()
+
   require('mini.jump2d').setup()
 
   local map = require('mini.map')
@@ -88,7 +99,9 @@ vim.schedule(function()
 
   require('mini.misc').setup()
   MiniMisc.setup_auto_root()
+
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
+
   require('mini.surround').setup({ search_method = 'cover_or_next' })
 
   local test = require('mini.test')
