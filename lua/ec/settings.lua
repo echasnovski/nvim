@@ -34,7 +34,7 @@ vim.go.showmode      = false   -- Don't show mode in command line
 vim.go.list          = true    -- Show helpful character indicators
 
 vim.go.fillchars = 'eob: ,fold:╌,horiz:═,horizdown:╦,horizup:╩,vert:║,verthoriz:╬,vertleft:╣,vertright:╠'
-vim.go.listchars = 'extends:»,precedes:«,nbsp:␣,tab:> '
+vim.go.listchars = 'extends:…,precedes:…,nbsp:␣,tab:> '
 
 if vim.fn.has('nvim-0.9') == 1 then
   -- Don't show "Scanning..." messages (improves 'mini.completion')
@@ -71,6 +71,7 @@ vim.go.virtualedit = 'block'  -- Allow going past the end of line in visual bloc
 vim.go.breakindent = true     -- Indent wrapped lines to match line start
 vim.go.ignorecase  = true     -- Ignore case when searching (use `\C` to force not doing that)
 vim.go.smartcase   = true     -- Don't ignore case when searching if pattern has upper case
+vim.go.infercase   = true     -- Infer letter cases for a richer built-in keyword completion
 vim.opt.iskeyword:append('-') -- Treat dash separated words as a word text object
 
 vim.go.completeopt = 'menuone,noinsert,noselect' -- Customize completions
@@ -111,8 +112,9 @@ vim.cmd([[augroup CustomSettings]])
   -- If don't do this on `FileType`, this keeps magically reappearing.
   vim.cmd([[autocmd FileType * setlocal formatoptions-=c formatoptions-=o]])
 
-  -- Start integrated terminal already in insert mode
+  -- Always enter builtin terminal in Insert mode
   vim.cmd([[autocmd TermOpen * startinsert]])
+  vim.cmd([[autocmd BufEnter * if &buftype=='terminal' | startinsert | endif]])
 
   -- Highlight yanked text
   vim.cmd([[autocmd TextYankPost * silent! lua vim.highlight.on_yank()]])

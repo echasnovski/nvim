@@ -89,17 +89,29 @@ MiniBasics.config = {
     -- Wrapper for 'guicursor'. Possible values: default, blink, ...?
     cursor = 'default',
   },
+
   mappings = {
     -- Or make it `flavor = 'basic'` with later customization?
     basic = true,
 
-    -- `[`/`]` pair mappings from 'tpope/vim-unimpaired'
+    -- `[` / `]` pair mappings from 'tpope/vim-unimpaired'
     -- Plus:
     -- - Windows: `[w`, `]w`.
     -- - Tabpages: `[t`, `]t`.
     next_prev = true,
+
+    -- Like in 'tpope/vim-unimpaired' but instead of `yo` use `\` (or `,` if it
+    -- is used as leader)
+    toggle_options = true,
+
+    -- Better window focus: <C-hjkl> for normal mode, <C-w> for Terminal mode
+    -- (use `<C-w><Esc>` to escape Terminal mode)
+    window_focus = true,
   },
+
   autocommands = {},
+
+  -- ? Abbreviations ?
 }
 --minidoc_afterlines_end
 
