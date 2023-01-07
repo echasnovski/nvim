@@ -32,6 +32,8 @@ vim.go.linebreak     = true    -- Wrap long lines at 'breakat' (if 'wrap' is set
 vim.go.shortmess     = 'aoOFc' -- Disable certain messages from |ins-completion-menu|
 vim.go.showmode      = false   -- Don't show mode in command line
 vim.go.list          = true    -- Show helpful character indicators
+vim.go.winblend      = 15      -- Make floating windows slightly transparent
+vim.go.pumblend      = 15      -- Make builtin completion menus slightly transparent
 
 vim.go.fillchars = 'eob: ,fold:╌,horiz:═,horizdown:╦,horizup:╩,vert:║,verthoriz:╬,vertleft:╣,vertright:╠'
 vim.go.listchars = 'extends:…,precedes:…,nbsp:␣,tab:> '
@@ -54,6 +56,7 @@ end
 -- Use `nested` to allow `ColorScheme` event
 vim.cmd([[au VimEnter * nested ++once colorscheme minicyan]])
 vim.cmd([[au ColorScheme * hi! link WinSeparator NormalFloat]])
+vim.cmd([[au ColorScheme * hi PmenuSel blend=0]])
 
 -- Other interesting color schemes:
 -- - 'morhetz/gruvbox'
