@@ -9,7 +9,7 @@ vim.go.mousescroll  = 'ver:25,hor:6' -- Customize mouse scroll
 vim.go.backup       = false          -- Don't store backup
 vim.go.writebackup  = false          -- Don't store backup
 vim.go.timeoutlen   = 250            -- Faster response at cost of fast typing
-vim.go.updatetime   = 300            -- Faster CursorHold
+vim.go.updatetime   = 300            -- Faster CursorHold and more frequent swap writing
 vim.go.switchbuf    = 'usetab'       -- Use already opened buffers when switching
 
 vim.go.undofile = true                              -- Enable persistent undo

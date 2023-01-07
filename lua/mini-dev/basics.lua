@@ -83,13 +83,14 @@ MiniBasics.config = {
     folds = false,
 
     -- Wrapper for 'fillchars' parts. Possible values: default, single, double,
-    -- rounded, bold, none, ...?
+    -- rounded, bold, dot (with all `·`), none, ...?
     win_border = 'default',
 
     -- Wrapper for 'guicursor'. Possible values: default, blink, ...?
     cursor = 'default',
   },
 
+  -- !!! Add descriptions to all mappings
   mappings = {
     -- Or make it `flavor = 'basic'` with later customization?
     basic = true,
@@ -111,7 +112,8 @@ MiniBasics.config = {
 
   autocommands = {},
 
-  -- ? Abbreviations ?
+  -- ? Abbreviations ? :
+  -- - Insert date `iabbrev date@ <C-R>=strftime("%Y-%m-%d")<CR>`
 }
 --minidoc_afterlines_end
 
