@@ -93,6 +93,88 @@ EC.open_lazygit = function()
   vim.b.minipairs_disable = true
 end
 
+-- Move visually selected region
+--
+-- - Doesn't really work with 'selection=exclusive'. See
+--   https://github.com/vim/vim/issues/11791 .
+--
+-- TODO:
+-- Non-obvious tests:
+-- - Doesn't modify any register or `virtualedit`.
+-- - Works with `virtualedit=all` (can move to outside of line).
+-- - Undos all consecutive moves at once.
+-- - Works with `selection=exclusive`: both horizontal and vertical moves;
+--   inside line, at line end, on empty line.
+-- - Special handling of linewise mode:
+--     - Horizontal movement is donw with indentation.
+--     - Reformatting is done when appropriate.
+EC.move_visual_selection = function(direction)
+  -- This could have been a one-line expression mappings, but there are issues:
+  -- - Initial yanking modifies some register. Not critical, but also not good.
+  -- - Doesn't work at movement edges (first line for `K`, etc.). See
+  --   https://github.com/vim/vim/issues/11786
+  -- - Results into each movement being a separate undo block, which is
+  --   inconvenient with several back-to-back movements.
+  local cur_mode = vim.fn.mode()
+
+  -- Act only inside visual mode
+  if not (cur_mode == 'v' or cur_mode == 'V' or cur_mode == '\22') then return end
+
+  -- Allow undo of consecutive moves at once (direction doesn't matter)
+  local is_moving = vim.deep_equal(H.vis_move_state, H.get_vis_move_state())
+  local normal_command = (is_moving and 'undojoin |' or '') .. ' normal! '
+  local cmd = function(x) vim.cmd(normal_command .. x) end
+
+  -- Cache `v:count1` because it will be reset when executing commands
+  local count1 = vim.v.count1
+
+  if cur_mode == 'V' and (direction == 'left' or direction == 'right') then
+    -- Use indentation as horizontal movement for linewise selection
+    cmd(count1 .. H.indent_keys[direction] .. 'gv')
+  else
+    -- Yank selection while saving caching register
+    local cache_z_reg = vim.fn.getreg('z')
+    cmd('"zx')
+
+    -- Move cursor. If needed, use `'onemore'` 'virtualedit' for these reasons:
+    -- - Allow moving selection at the end of line (later use of `P` makes it impossible).
+    -- - Allow vertical movement in case of `selection=exclusive` (needs go past line end).
+    local cache_virtualedit = vim.o.virtualedit
+    if not string.find(cache_virtualedit, 'all') then vim.o.virtualedit = 'onemore' end
+    cmd(count1 .. H.move_keys[direction])
+
+    -- Paste
+    cmd('"zP')
+
+    -- Select newly moved region. Another way is to use something like `gvhoho`
+    --              moved    aaaa
+    -- but it doesn't work well with selections spanning several lines.
+    cmd('`[1v')
+
+    -- Restore options
+    vim.fn.setreg('z', cache_z_reg)
+    vim.o.virtualedit = cache_virtualedit
+  end
+
+  -- Reformat linewsie selection if `=` can do that
+  if cur_mode == 'V' and (direction == 'up' or direction == 'down') and vim.o.equalprg == '' then cmd('=gv') end
+
+  -- Track new state to allow joining in single undo block
+  H.vis_move_state = H.get_vis_move_state()
+end
+
+H.move_keys = { left = 'h', down = 'j', up = 'k', right = 'l' }
+H.indent_keys = { left = '<', right = '>' }
+
+H.get_vis_move_state =
+  function() return { buf_id = vim.api.nvim_get_current_buf(), changedtick = vim.b.changedtick } end
+H.vis_move_state = H.get_vis_move_state()
+
+vim.keymap.set('x', 'H', [[<Cmd>lua EC.move_visual_selection('left')<CR>]])
+vim.keymap.set('x', 'J', [[<Cmd>lua EC.move_visual_selection('down')<CR>]])
+vim.keymap.set('x', 'K', [[<Cmd>lua EC.move_visual_selection('up')<CR>]])
+vim.keymap.set('x', 'L', [[<Cmd>lua EC.move_visual_selection('right')<CR>]])
+
 -- Overwrite `vim.ui.select()` with Telescope ---------------------------------
 EC.ui_select_default = vim.ui.select
 
