@@ -95,20 +95,31 @@ end
 
 -- Move visually selected region
 --
--- - Doesn't really work with 'selection=exclusive'. See
---   https://github.com/vim/vim/issues/11791 .
+-- - Needs Neovim>=0.9 to work with 'selection=exclusive'. See
+--   https://github.com/neovim/neovim/pull/21735 .
 --
 -- TODO:
+-- Code:
+-- - Polish behavior with folds.
+-- - Try to think about favoring `p` instead of `P` when moved vertically to
+--   line end.
+--
 -- Non-obvious tests:
+-- - Can move any selection (charwise, linewise, blockwise) in any direction
+--   (up, down, left, right) on any interenal position (edge/non-edge line,
+--   edge/non-edge column).
 -- - Doesn't modify any register or `virtualedit`.
--- - Works with `virtualedit=all` (can move to outside of line).
 -- - Undos all consecutive moves at once.
 -- - Works with `selection=exclusive`: both horizontal and vertical moves;
 --   inside line, at line end, on empty line.
 -- - Special handling of linewise mode:
 --     - Horizontal movement is donw with indentation.
 --     - Reformatting is done when appropriate.
-EC.move_visual_selection = function(direction)
+-- - Doesn't create unnecessary jumps.
+-- - Can move past line end.
+EC.move_selection = function(direction, opts)
+  opts = vim.tbl_deep_extend('force', { reindent_linewise = true, allow_past_line_end = true }, opts or {})
+
   -- This could have been a one-line expression mappings, but there are issues:
   -- - Initial yanking modifies some register. Not critical, but also not good.
   -- - Doesn't work at movement edges (first line for `K`, etc.). See
@@ -120,60 +131,114 @@ EC.move_visual_selection = function(direction)
   -- Act only inside visual mode
   if not (cur_mode == 'v' or cur_mode == 'V' or cur_mode == '\22') then return end
 
-  -- Allow undo of consecutive moves at once (direction doesn't matter)
-  local is_moving = vim.deep_equal(H.vis_move_state, H.get_vis_move_state())
-  local normal_command = (is_moving and 'undojoin |' or '') .. ' normal! '
-  local cmd = function(x) vim.cmd(normal_command .. x) end
+  -- Define common predicates
+  local dir_type = (direction == 'up' or direction == 'down') and 'vert' or 'hori'
+  local is_linewise = cur_mode == 'V'
 
-  -- Cache `v:count1` because it will be reset when executing commands
+  -- Cache useful data because it will be reset when executing commands
   local count1 = vim.v.count1
 
-  if cur_mode == 'V' and (direction == 'left' or direction == 'right') then
+  -- Determine of previous action was this type of move
+  local is_moving = vim.deep_equal(H.move_state, H.get_move_state())
+  if not is_moving then H.move_state.curswant = nil end
+
+  -- Allow undo of consecutive moves at once (direction doesn't matter)
+  local normal_command = (is_moving and 'undojoin |' or '') .. ' keepjumps normal! '
+  local cmd = function(x) vim.cmd(normal_command .. x) end
+
+  if is_linewise and dir_type == 'hori' then
     -- Use indentation as horizontal movement for linewise selection
     cmd(count1 .. H.indent_keys[direction] .. 'gv')
   else
-    -- Yank selection while saving caching register
+    -- Cut selection while saving caching register
     local cache_z_reg = vim.fn.getreg('z')
     cmd('"zx')
 
-    -- Move cursor. If needed, use `'onemore'` 'virtualedit' for these reasons:
-    -- - Allow moving selection at the end of line (later use of `P` makes it impossible).
-    -- - Allow vertical movement in case of `selection=exclusive` (needs go past line end).
-    local cache_virtualedit = vim.o.virtualedit
-    if not string.find(cache_virtualedit, 'all') then vim.o.virtualedit = 'onemore' end
-    cmd(count1 .. H.move_keys[direction])
+    -- Detect edge selection: last line(s) for vertical and last character(s)
+    -- for horizontal. At this point (after cutting selection) cursor is on the
+    -- edge which can happen in two cases:
+    --   - Move second to last selection towards edge (like in 'abc' move 'b'
+    --     to right or second to last line down).
+    --   - Move edge selection away from edge (like in 'abc' move 'c' to left
+    --     or last line up).
+    -- Use condition that removed selection was further than current cursor
+    -- to distinguish between two cases.
+    local is_edge_selection_hori = dir_type == 'hori' and vim.fn.col('.') < vim.fn.col("'<")
+    local is_edge_selection_vert = dir_type == 'vert' and vim.fn.line('.') < vim.fn.line("'<")
+    local is_edge_selection = is_edge_selection_hori or is_edge_selection_vert
+
+    -- Possibly add single space to allow moving past end of line
+    if opts.allow_past_line_end and is_edge_selection_hori then cmd('a ') end
+
+    -- Use `p` as paste key instead of `P` in cases which might require moving
+    -- selection to place which is unreachable with `P`: right to be line end
+    -- and down to be last line.
+    local can_go_overline = not is_linewise and direction == 'right'
+    local can_go_overbuf = is_linewise and direction == 'down'
+    local paste_key = (can_go_overline or can_go_overbuf) and 'p' or 'P'
+
+    -- Restore `curswant` to try moving cursor to initial column (just like
+    -- default `hjkl` moves)
+    if dir_type == 'vert' then H.set_curswant(H.move_state.curswant) end
+
+    -- Move cursor with `hjkl` `count1` times dealing with special cases.
+    -- Possibly reduce number of moves by one to not overshoot move.
+    local n = count1 - ((paste_key == 'p' or is_edge_selection) and 1 or 0)
+    if n > 0 then cmd(n .. H.move_keys[direction]) end
+
+    -- Save curswant
+    H.move_state.curswant = H.get_curswant()
 
     -- Paste
-    cmd('"zP')
+    cmd('"z' .. paste_key)
 
     -- Select newly moved region. Another way is to use something like `gvhoho`
-    --              moved    aaaa
     -- but it doesn't work well with selections spanning several lines.
     cmd('`[1v')
 
-    -- Restore options
+    -- Restore intermediate values
     vim.fn.setreg('z', cache_z_reg)
-    vim.o.virtualedit = cache_virtualedit
   end
 
-  -- Reformat linewsie selection if `=` can do that
-  if cur_mode == 'V' and (direction == 'up' or direction == 'down') and vim.o.equalprg == '' then cmd('=gv') end
+  -- Reindent linewise selection if `=` can do that
+  if opts.reindent_linewise and is_linewise and dir_type == 'vert' and vim.o.equalprg == '' then cmd('=gv') end
 
   -- Track new state to allow joining in single undo block
-  H.vis_move_state = H.get_vis_move_state()
+  H.move_state = H.get_move_state()
 end
 
 H.move_keys = { left = 'h', down = 'j', up = 'k', right = 'l' }
 H.indent_keys = { left = '<', right = '>' }
 
-H.get_vis_move_state =
-  function() return { buf_id = vim.api.nvim_get_current_buf(), changedtick = vim.b.changedtick } end
-H.vis_move_state = H.get_vis_move_state()
+H.move_state = { buf_id = nil, changedtick = nil, curswant = nil }
+H.get_move_state = function()
+  return {
+    buf_id = vim.api.nvim_get_current_buf(),
+    changedtick = vim.b.changedtick,
+    curswant = H.move_state.curswant or H.get_curswant(),
+  }
+end
 
-vim.keymap.set('x', 'H', [[<Cmd>lua EC.move_visual_selection('left')<CR>]])
-vim.keymap.set('x', 'J', [[<Cmd>lua EC.move_visual_selection('down')<CR>]])
-vim.keymap.set('x', 'K', [[<Cmd>lua EC.move_visual_selection('up')<CR>]])
-vim.keymap.set('x', 'L', [[<Cmd>lua EC.move_visual_selection('right')<CR>]])
+-- This is needed for compatibility with Neovim<=0.6
+-- TODO: Remove after compatibility with Neovim<=0.6 is dropped
+H.getcursorcharpos = vim.fn.exists('*getcursorcharpos') == 1 and vim.fn.getcursorcharpos or vim.fn.getcurpos
+H.setcursorcharpos = vim.fn.exists('*setcursorcharpos') == 1 and vim.fn.setcursorcharpos or vim.fn.cursor
+
+H.get_curswant = function() return H.getcursorcharpos()[5] end
+H.set_curswant = function(x)
+  if x == nil then return end
+
+  local cursor_pos = H.getcursorcharpos()
+  cursor_pos[5] = x
+  -- `setcursorcharpos()` doesn't take buffer id as first element
+  table.remove(cursor_pos, 1)
+  H.setcursorcharpos(cursor_pos)
+end
+
+vim.keymap.set('x', 'H', [[<Cmd>lua EC.move_selection('left')<CR>]])
+vim.keymap.set('x', 'J', [[<Cmd>lua EC.move_selection('down')<CR>]])
+vim.keymap.set('x', 'K', [[<Cmd>lua EC.move_selection('up')<CR>]])
+vim.keymap.set('x', 'L', [[<Cmd>lua EC.move_selection('right')<CR>]])
 
 -- Overwrite `vim.ui.select()` with Telescope ---------------------------------
 EC.ui_select_default = vim.ui.select
