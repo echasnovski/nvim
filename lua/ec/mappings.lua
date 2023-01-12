@@ -28,12 +28,14 @@ end
 keymap('n', [[s]], [[<Nop>]])
 keymap('x', [[s]], [[<Nop>]])
 
--- Move by visible lines (don't map in Operator-pending mode because it
--- severely changes behavior; like `dj` on non-wrapped line will not delete it)
-keymap('n', 'j', 'gj')
-keymap('x', 'j', 'gj')
-keymap('n', 'k', 'gk')
-keymap('x', 'k', 'gk')
+-- Move by visible lines. Notes:
+-- - Don't map in Operator-pending mode because it severely changes behavior:
+--   like `dj` on non-wrapped line will not delete it.
+-- - Condition on `v:count == 0` to allow easier use of relative line numbers.
+keymap('n', 'j', [[v:count == 0 ? 'gj' : 'j']], { expr = true })
+keymap('x', 'j', [[v:count == 0 ? 'gj' : 'j']], { expr = true })
+keymap('n', 'k', [[v:count == 0 ? 'gk' : 'k']], { expr = true })
+keymap('x', 'k', [[v:count == 0 ? 'gk' : 'k']], { expr = true })
 
 -- Alternative way to save
 keymap('n', [[<C-s>]], [[<Cmd>silent w<CR>]])

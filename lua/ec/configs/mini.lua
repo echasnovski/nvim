@@ -1,7 +1,6 @@
 require('mini.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
 require('mini.starter').setup()
-vim.cmd([[autocmd User MiniStarterOpened setlocal fillchars=eob:\ ]])
 vim.cmd([[autocmd User MiniStarterOpened
   \ lua vim.keymap.set(
   \   'n',

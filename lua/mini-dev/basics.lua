@@ -80,6 +80,9 @@ MiniBasics.config = {
     -- Or make it `flavor = 'basic'` with later customization?
     basic = true,
 
+    -- Extra UI features ('winblend', 'pumblend', 'cmdheight=0')
+    extra_ui = false,
+
     folds = false,
 
     -- Wrapper for 'fillchars' parts. Possible values: default, single, double,
@@ -99,10 +102,13 @@ MiniBasics.config = {
     -- Plus:
     -- - Windows: `[w`, `]w`.
     -- - Tabpages: `[t`, `]t`.
+    -- - Diagnostic: `[d`, `]d`.
     next_prev = true,
 
     -- Like in 'tpope/vim-unimpaired' but instead of `yo` use `\` (or `,` if it
     -- is used as leader)
+    -- Plus:
+    -- - Diagnstics: `\d` (`:h vim.diagnostic.enable`)
     toggle_options = true,
 
     -- Better window focus: <C-hjkl> for normal mode, <C-w> for Terminal mode

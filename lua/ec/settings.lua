@@ -32,8 +32,8 @@ vim.go.linebreak     = true    -- Wrap long lines at 'breakat' (if 'wrap' is set
 vim.go.shortmess     = 'aoOFc' -- Disable certain messages from |ins-completion-menu|
 vim.go.showmode      = false   -- Don't show mode in command line
 vim.go.list          = true    -- Show helpful character indicators
-vim.go.winblend      = 15      -- Make floating windows slightly transparent
-vim.go.pumblend      = 15      -- Make builtin completion menus slightly transparent
+vim.go.winblend      = 10      -- Make floating windows slightly transparent
+vim.go.pumblend      = 10      -- Make builtin completion menus slightly transparent
 
 vim.go.fillchars = 'eob: ,fold:╌,horiz:═,horizdown:╦,horizup:╩,vert:║,verthoriz:╬,vertleft:╣,vertright:╠'
 vim.go.listchars = 'extends:…,precedes:…,nbsp:␣,tab:> '
@@ -115,9 +115,11 @@ vim.cmd([[augroup CustomSettings]])
   -- If don't do this on `FileType`, this keeps magically reappearing.
   vim.cmd([[autocmd FileType * setlocal formatoptions-=c formatoptions-=o]])
 
-  -- Always enter builtin terminal in Insert mode
+  -- Start builtin terminal in Insert mode
+  -- Note: always entering Insert mode in terminal buffer seems like an
+  -- antipattern. Its `BufEnter` autocommand implementation might also bring
+  -- scheduling problems when quickly enter and exit terminal buffer.
   vim.cmd([[autocmd TermOpen * startinsert]])
-  vim.cmd([[autocmd BufEnter * if &buftype=='terminal' | startinsert | endif]])
 
   -- Highlight yanked text
   vim.cmd([[autocmd TextYankPost * silent! lua vim.highlight.on_yank()]])
