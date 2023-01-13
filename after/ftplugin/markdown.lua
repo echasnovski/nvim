@@ -23,3 +23,22 @@ if has_mini_ai then
     },
   }
 end
+
+local has_mini_surround, mini_surround = pcall(require, 'mini.surround')
+if has_mini_surround then
+  vim.b.minisurround_config = {
+    custom_surroundings = {
+      -- Bold
+      B = { input = { '%*%*().-()%*%*' }, output = { left = '**', right = '**' } },
+
+      -- Link
+      L = {
+        input = { '%[().-()%]%(.-%)' },
+        output = function()
+          local link = mini_surround.user_input('Link: ')
+          return { left = '[', right = '](' .. link .. ')' }
+        end,
+      },
+    },
+  }
+end
