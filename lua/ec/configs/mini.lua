@@ -99,6 +99,8 @@ vim.schedule(function()
   require('mini.misc').setup()
   MiniMisc.setup_auto_root()
 
+  require('mini.move').setup()
+
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   vim.keymap.set('i', '<CR>', 'v:lua.EC.cr_action()', { expr = true })
 
