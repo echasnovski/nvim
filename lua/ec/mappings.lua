@@ -95,7 +95,7 @@ keymap('n', [[gV]], '`[v`]')
 -- Join lines without moving cursor (set context mark, execute `J` respecting
 -- count, go back to context mark)
 -- Maybe don't do it? Try observing what is more convenient.
-keymap('n', 'J', [['mz' . v:count1 . 'J`z']], { expr = true })
+-- keymap('n', 'J', [['mz' . v:count1 . 'J`z']], { expr = true })
 
 -- Make `q:` do nothing instead of opening command-line-window, because it is
 -- often hit by accident
