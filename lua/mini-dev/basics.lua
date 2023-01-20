@@ -83,8 +83,6 @@ MiniBasics.config = {
     -- Extra UI features ('winblend', 'pumblend', 'cmdheight=0')
     extra_ui = false,
 
-    folds = false,
-
     -- Wrapper for 'fillchars' parts. Possible values: default, single, double,
     -- rounded, bold, dot (with all `·`), none, ...?
     win_border = 'default',
@@ -103,6 +101,7 @@ MiniBasics.config = {
     -- - Windows: `[w`, `]w`.
     -- - Tabpages: `[t`, `]t`.
     -- - Diagnostic: `[d`, `]d`.
+    -- - Comment lines block: `[c`, `]c` (???)
     next_prev = true,
 
     -- Like in 'tpope/vim-unimpaired' but instead of `yo` use `\` (or `,` if it
@@ -116,7 +115,11 @@ MiniBasics.config = {
     window_focus = true,
   },
 
-  autocommands = {},
+  autocommands = {
+    basic = true,
+
+    relnum_in_visual_mode = false,
+  },
 
   -- ? Abbreviations ? :
   -- - Insert date `iabbrev date@ <C-R>=strftime("%Y-%m-%d")<CR>`
@@ -142,7 +145,13 @@ H.setup_config = function(config)
   return config
 end
 
-H.apply_config = function(config) MiniBasics.config = config end
+H.apply_config = function(config)
+  MiniBasics.config = config
+
+  H.apply_options(config)
+  H.apply_mappings(config)
+  H.apply_autocommands(config)
+end
 
 H.is_disabled = function() return vim.g.minibasics_disable == true or vim.b.minibasics_disable == true end
 
@@ -150,15 +159,104 @@ H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniBasics.config, vim.b.minibasics_config or {}, config or {})
 end
 
--- Config options -------------------------------------------------------------
-H.set_option = function(name, value)
-  local was_set = vim.api.nvim_get_option_info(name).was_set
-  if was_set then return end
+-- Options --------------------------------------------------------------------
+--stylua: ignore
+H.apply_options = function(config)
+  -- Use `local o = vim.o` to copy lines as is or use `vim.o` instead of `o`
+  local o = H.vim_o
 
-  vim.go[name] = value
+  -- Basic options
+  if config.options.basic then
+    -- Leader key
+    if vim.g.mapleader == nil then
+      vim.g.mapleader = ' ' -- Use space as the one and only true Leader key
+    end
+
+    -- General
+    o.splitbelow  = true  -- Horizontal splits will be below
+    o.splitright  = true  -- Vertical splits will be to the right
+    o.undofile    = true  -- Enable persistent undo (see also `:h undodir`)
+
+    o.backup      = false -- Don't store backup while overwriting the file
+    o.writebackup = false -- Don't store backup while overwriting the file
+
+    o.timeoutlen  = 300   -- Wait less for mapping to complete (less lag in some situations)
+    o.updatetime  = 300   -- Make CursorHold faster and more frequent swap writing
+
+    o.mouse       = 'a'   -- Enable mouse for all available modes
+
+    vim.cmd('filetype plugin indent on') -- Enable all filetype plugins
+
+    -- UI
+    o.cursorline    = true    -- Highlight current line
+    o.number        = true    -- Show line numbers
+    o.termguicolors = true    -- Enable gui colors
+
+    o.ruler         = false   -- Don't show cursor position in command line
+    o.showmode      = false   -- Don't show mode in command line
+    o.wrap          = false   -- Display long lines as just one line
+
+    o.signcolumn    = 'yes'   -- Always show sign column (otherwise it will shift text)
+    o.fillchars     = 'eob: ' -- Don't show `~` past last buffer line
+
+    -- Editing
+    o.autoindent  = true -- Use auto indent
+    o.breakindent = true -- Indent wrapped lines to match line start
+    o.ignorecase  = true -- Ignore case when searching (use `\C` to force not doing that)
+    o.incsearch   = true -- Show search results while typing
+    o.infercase   = true -- Infer letter cases for a richer built-in keyword completion
+    o.linebreak   = true -- Wrap long lines at 'breakat' (if 'wrap' is set)
+    o.smartcase   = true -- Don't ignore case when searching if pattern has upper case
+    o.smartindent = true -- Make indenting smart
+
+    o.completeopt   = 'menuone,noinsert,noselect' -- Customize completions
+    o.virtualedit   = 'block'                     -- Allow going past the end of line in visual block mode
+    o.formatoptions = 'qjl1'                      -- Don't autoformat comments
+
+    -- Neovim version dependent
+    if vim.fn.has('nvim-0.9') == 1 then
+      o.shortmess = 'cCFoOTt' -- Reduce command line messages
+      o.splitkeep = 'screen'  -- Reduce scrolling during window split
+    else
+      o.shortmess = 'cFoOTt'  -- Reduce command line messages
+    end
+  end
+
+  -- Some opinioneted extra UI options
+  if config.options.extra_ui then
+    o.pumblend  = 10 -- Make builtin completion menus slightly transparent
+    o.pumheight = 10 -- Make popup menu smaller
+    o.winblend  = 10 -- Make floating windows slightly transparent
+
+    o.listchars = 'extends:…,precedes:…,nbsp:␣' -- Define which helper symbols to show
+    o.list      = true                          -- Show some helper symbols
+
+    -- Enable syntax highlighing if it wasn't already (as it is time consuming)
+    if vim.fn.exists("syntax_on") ~= 1 then
+      vim.cmd([[syntax enable]])
+    end
+
+    -- Neovim version dependent
+    if vim.fn.has('nvim-0.9') == 1 then
+      o.cmdheight = 0 -- Don't show command line (increases screen space)
+    end
+  end
 end
 
--- Config mappings ------------------------------------------------------------
+H.vim_o = setmetatable({}, {
+  __newindex = function(_, name, value)
+    local was_set = vim.api.nvim_get_option_info(name).was_set
+    if was_set then return end
+
+    vim.o[name] = value
+  end,
+})
+
+-- Mappings -------------------------------------------------------------------
+H.apply_mappings = function(config)
+  -- TODO
+end
+
 H.keymap_set = function(mode, lhs, rhs, opts)
   -- Don't map if mapping was already set
   local map = vim.fn.maparg(lhs, mode)
@@ -170,6 +268,36 @@ H.keymap_set = function(mode, lhs, rhs, opts)
 
   -- Map
   H.map(mode, lhs, rhs, opts)
+end
+
+-- Autocommands ---------------------------------------------------------------
+H.apply_autocommands = function(config)
+  -- TODO: use `nvim_create_autocmd()` after Neovim<=0.6 support is dropped
+
+  vim.cmd([[augroup MiniBasicsAutocommands]])
+  vim.cmd([[autocmd!]])
+
+  if config.autocommands.basic then
+    -- Start builtin terminal in Insert mode
+    vim.cmd([[autocmd TermOpen * startinsert]])
+
+    -- Highlight yanked text
+    vim.cmd([[autocmd TextYankPost * silent! lua vim.highlight.on_yank()]])
+  end
+
+  if config.autocommands.relnum_in_visual_mode then
+    -- Show relative line numbers only when they matter (linewise and blockwise
+    -- selection) and 'number' is set (avoids horizontal flickering)
+    vim.cmd([[autocmd ModeChanged *:[V\x16]* let &l:relativenumber = &l:number == 1]])
+    -- - Using `mode () =~#...` handles switching between linewise and blockwise mode.
+    vim.cmd([[autocmd ModeChanged [V\x16]*:* let &l:relativenumber = mode() =~# '^[V\x16]']])
+
+    -- - This is a part of example in `:h ModeChanged`, but I am yet to find the
+    --   use case for it, as it seems like working fine without it.
+    -- vim.cmd([[autocmd WinEnter,WinLeave    * let &l:relativenumber = mode() =~# '^[V\x16]']])
+  end
+
+  vim.cmd([[augroup END]])
 end
 
 -- Predicators ----------------------------------------------------------------

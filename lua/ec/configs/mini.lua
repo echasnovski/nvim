@@ -1,3 +1,13 @@
+require('mini-dev.basics').setup({
+  options = {
+    extra_ui = true,
+  },
+
+  autocommands = {
+    relnum_in_visual_mode = true,
+  },
+})
+
 require('mini.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
 require('mini.starter').setup()
