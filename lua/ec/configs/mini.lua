@@ -1,6 +1,15 @@
 require('mini-dev.basics').setup({
   options = {
     extra_ui = true,
+    win_border = 'double',
+  },
+
+  mappings = {
+    next_prev = true,
+    toggle_options = true,
+    window_navigation = true,
+    window_resize = true,
+    move_with_alt = true,
   },
 
   autocommands = {
