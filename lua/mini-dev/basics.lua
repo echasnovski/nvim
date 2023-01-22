@@ -3,10 +3,10 @@
 -- TODO
 --
 -- Code:
--- - Implement options.
 -- - Implement mappings.
--- - Implement autocommands.
--- - Think more about config structure and options/mappings grouping.
+-- - Add mappings descriptions.
+-- - Implement `goto_comment()`.
+-- - Think about renaming `next_prev_first_last` conflict suffix to 'x'.
 -- - Add as beginner friendly comments as possible.
 --
 -- Tests:
@@ -84,21 +84,23 @@ MiniBasics.config = {
     -- Basic mappings
     basic = true,
 
-    -- Mappings for common "next-previous" pairs. Highly recommended to enable.
-    -- `[` / `]` pair mappings from 'tpope/vim-unimpaired'
-    -- Plus:
-    -- - Windows: `[w`, `]w`.
-    -- - Tabpages: `[t`, `]t`.
-    -- - Diagnostic: `[d`, `]d`.
-    -- - Comment lines block: `[c`, `]c` (???)
-    next_prev = false,
-
     -- Mappings for toggling common options. Highly recommended to enable.
     -- Like in 'tpope/vim-unimpaired' but instead of `yo` use `\` (or `,` if it
     -- is used as leader)
     -- Plus:
     -- - Diagnstics: `\d` (`:h vim.diagnostic.enable`)
     toggle_options = false,
+
+    -- Mappings for common "next-previous" pairs. Highly recommended to enable.
+    -- `[` / `]` pair mappings from 'tpope/vim-unimpaired'
+    -- Plus:
+    -- - Windows: `[w`, `]w`.
+    -- - Diagnostic: `[d`, `]d`.
+    -- - Comment lines block: `[c`, `]c` (???)
+    next_prev = false,
+
+    -- Mapping for common "first-last" pairs.
+    first_last = false,
 
     -- Better window navigation: <C-hjkl> for normal mode, <C-w> for Terminal
     -- mode (use `<C-w><Esc>` to escape Terminal mode)
@@ -122,9 +124,113 @@ MiniBasics.config = {
 }
 --minidoc_afterlines_end
 
+MiniBasics.toggle_diagnostic = function()
+  local buf_id = vim.api.nvim_get_current_buf()
+  local buf_state = H.buffer_diagnostic_state[buf_id]
+  if buf_state == nil then buf_state = true end
+
+  if buf_state then
+    vim.diagnostic.disable(buf_id)
+  else
+    vim.diagnostic.enable(buf_id)
+  end
+
+  local new_buf_state = not buf_state
+  H.buffer_diagnostic_state[buf_id] = new_buf_state
+
+  return new_buf_state and '  diagnostic' or 'nodiagnostic'
+end
+
+MiniBasics.goto_comment = function(opts)
+  opts = vim.tbl_deep_extend('force', { direction = 'next', count = vim.v.count1 }, opts or {})
+
+  -- TODO
+end
+
+MiniBasics.goto_conflict = function(opts)
+  opts = vim.tbl_deep_extend('force', { direction = 'next', count = vim.v.count1 }, opts or {})
+
+  -- Compute list of lines as conflict markers
+  local marked_lines = {}
+  local cur_line, cur_line_ind = vim.fn.line('.'), nil
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
+  for i, l in ipairs(lines) do
+    local l_start = l:sub(1, 8)
+    local is_marked = l_start == '<<<<<<< ' or l_start == '=======' or l_start == '>>>>>>> '
+    if is_marked then
+      table.insert(marked_lines, i)
+
+      -- Track array index of current line (as *index of next marker*)
+      if cur_line <= i then cur_line_ind = cur_line_ind or #marked_lines end
+    end
+  end
+  -- - Correct for when current line is after last conflict marker
+  cur_line_ind = cur_line_ind or 1
+
+  -- Do nothing if there are no conflict markers
+  if #marked_lines == 0 then return end
+
+  -- Compute array index of target marker
+  local is_at_marker = cur_line == marked_lines[cur_line_ind]
+  local ind = ({
+    first = 1,
+    prev = cur_line_ind - opts.count,
+    -- Move by 1 array index less if already at the "next" marker
+    next = cur_line_ind + opts.count - (is_at_marker and 0 or 1),
+    last = #marked_lines,
+  })[opts.direction]
+  -- - Ensure that index is inside array
+  ind = (ind - 1) % #marked_lines + 1
+
+  -- Put cursor on target marker
+  vim.api.nvim_win_set_cursor(0, { marked_lines[ind], 0 })
+end
+
+MiniBasics.goto_window = function(opts)
+  -- NOTE: these solutions are easier, but have drawbacks:
+  -- - Repeat `<C-w>w` / `<C-w>W` `opts.count` times. This causes occasional
+  --   flickering due to `WinLeave/WinEnter` events.
+  -- - Use `<C-w>{count}w` / `<C-w>{count}W` with correctly computed `{count}`.
+  --   This doesn't work well with floating windows (may focus when shouldn't).
+
+  opts = vim.tbl_deep_extend('force', { direction = 'next', count = vim.v.count1 }, opts or {})
+
+  -- Compute list of normal windows in "natural" order.
+  local cur_winnr, cur_winnr_ind = vim.fn.winnr(), nil
+  local normal_windows = {}
+  for i = 1, vim.fn.winnr('$') do
+    local win_id = vim.fn.win_getid(i)
+    local is_normal = vim.api.nvim_win_get_config(win_id).relative == ''
+    if is_normal then
+      table.insert(normal_windows, win_id)
+
+      -- Track array index of current window
+      if cur_winnr == i then cur_winnr_ind = #normal_windows end
+    end
+  end
+  -- - Correct for when current window is not found (like in float)
+  cur_winnr_ind = cur_winnr_ind or 1
+
+  -- Compute array index of target window
+  local ind = ({
+    first = 1,
+    prev = cur_winnr_ind - opts.count,
+    next = cur_winnr_ind + opts.count,
+    last = #normal_windows,
+  })[opts.direction]
+  -- - Ensure that index is inside array
+  ind = (ind - 1) % #normal_windows + 1
+
+  -- Focus target window
+  vim.api.nvim_set_current_win(normal_windows[ind])
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniBasics.config
+
+-- Diagnostic state per buffer
+H.buffer_diagnostic_state = {}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -146,8 +252,9 @@ H.setup_config = function(config)
     ['options.win_border'] = { config.options.win_border, 'string' },
 
     ['mappings.basic'] = { config.mappings.basic, 'boolean' },
-    ['mappings.next_prev'] = { config.mappings.next_prev, 'boolean' },
     ['mappings.toggle_options'] = { config.mappings.toggle_options, 'boolean' },
+    ['mappings.next_prev'] = { config.mappings.next_prev, 'boolean' },
+    ['mappings.first_last'] = { config.mappings.first_last, 'boolean' },
     ['mappings.window_navigation'] = { config.mappings.window_navigation, 'boolean' },
     ['mappings.window_resize'] = { config.mappings.window_resize, 'boolean' },
     ['mappings.move_with_alt'] = { config.mappings.move_with_alt, 'boolean' },
@@ -327,12 +434,82 @@ H.apply_mappings = function(config)
     map('i', '<C-z>', '<C-g>u<Esc>[s1z=`]a<C-g>u')
   end
 
-  if config.mappings.next_prev then
-    -- TODO
+  if config.mappings.toggle_options then
+    -- Define prefix. If you know your leader keys, choose manually.
+    local prefix = [[\]]
+    local leader, local_leader = vim.g.mapleader, vim.g.maplocalleader
+    -- - Default leader key is `\`, so also check for not set Leader key
+    if leader == nil or leader == '' or leader == prefix or local_leader == prefix then
+      -- Try ',' or '|'
+      prefix = (leader ~= ',' and local_leader ~= ',') and ',' or '|'
+    end
+
+    -- Define mappings
+    local map_toggle = function(lhs, rhs, desc) map('n', prefix .. lhs, rhs, { desc = desc }) end
+
+    map_toggle('b', '<Cmd>lua vim.o.bg = vim.o.bg == "dark" and "light" or "dark"<CR>', "Toggle 'background'")
+    map_toggle('c', '<Cmd>setlocal cursorline! cursorline?<CR>',                        "Toggle 'cursorline'")
+    map_toggle('C', '<Cmd>setlocal cursorcolumn! cursorcolumn?<CR>',                    "Toggle 'cursorcolumn'")
+    map_toggle('d', '<Cmd>lua print(MiniBasics.toggle_diagnostic())<CR>',               "Toggle diagnostic")
+    map_toggle('h', '<Cmd>setlocal hlsearch! hlsearch?<CR>',                            "Toggle search highlight")
+    map_toggle('i', '<Cmd>setlocal ignorecase! ignorecase?<CR>',                        "Toggle 'ignorecase'")
+    map_toggle('l', '<Cmd>setlocal list! list?<CR>',                                    "Toggle 'list'")
+    map_toggle('r', '<Cmd>setlocal relativenumber! relativenumber?<CR>',                "Toggle 'relativenumber'")
+    map_toggle('s', '<Cmd>setlocal spell! spell?<CR>',                                  "Toggle 'spell'")
+    map_toggle('w', '<Cmd>setlocal wrap! wrap?<CR>',                                    "Toggle 'wrap'")
   end
 
-  if config.mappings.toggle_options then
-    -- TODO
+  if config.mappings.next_prev then
+    map('n', '[b', "<Cmd>exe v:count1 . 'bprev'<CR>")
+    map('n', ']b', "<Cmd>exe v:count1 . 'bnext'<CR>")
+
+    map('n', '[c', "<Cmd>lua MiniBasics.goto_comment({ direction = 'prev' })<CR>")
+    map('n', ']c', "<Cmd>lua MiniBasics.goto_comment({ direction = 'next' })<CR>")
+
+    map('n', '[d', '<Cmd>lua vim.diagnostic.goto_prev()<CR>')
+    map('n', ']d', '<Cmd>lua vim.diagnostic.goto_next()<CR>')
+
+    map('n', '[l', "<Cmd>exe v:count1 . 'lprev'<CR>")
+    map('n', ']l', "<Cmd>exe v:count1 . 'lnext'<CR>")
+
+    map('n', '[n', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'prev' })<CR>")
+    map('n', ']n', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'next' })<CR>")
+    map('x', '[n', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'prev' })<CR>")
+    map('x', ']n', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'next' })<CR>")
+    map('o', '[n', "V<Cmd>lua MiniBasics.goto_conflict({ direction = 'prev' })<CR>")
+    map('o', ']n', "V<Cmd>lua MiniBasics.goto_conflict({ direction = 'next' })<CR>")
+
+    map('n', '[q', "<Cmd>exe v:count1 . 'cprev'<CR>")
+    map('n', ']q', "<Cmd>exe v:count1 . 'cnext'<CR>")
+
+    map('n', '[w', "<Cmd>lua MiniBasics.goto_window({ direction = 'prev' })<CR>")
+    map('n', ']w', "<Cmd>lua MiniBasics.goto_window({ direction = 'next' })<CR>")
+
+    map('n', '[ ', "<Cmd>call append(line('.') - 1, repeat([''], v:count1))<CR>")
+    map('n', '] ', "<Cmd>call append(line('.'),     repeat([''], v:count1))<CR>")
+  end
+
+  if config.mappings.first_last then
+    map('n', '[B', '<Cmd>bfirst<CR>')
+    map('n', ']B', '<Cmd>blast<CR>')
+
+    map('n', '[C', "<Cmd>lua MiniBasics.goto_comment({ direction = 'first' })<CR>")
+    map('n', ']C', "<Cmd>lua MiniBasics.goto_comment({ direction = 'last' })<CR>")
+
+    map('n', '[D', '<Cmd>lua vim.diagnostic.goto_next({ cursor_position = { 1, 0 } })<CR>')
+    map('n', ']D', '<Cmd>lua vim.diagnostic.goto_prev({ cursor_position = { 1, 0 } })<CR>')
+
+    map('n', '[L', '<Cmd>lfirst<CR>')
+    map('n', ']L', '<Cmd>llast<CR>')
+
+    map('n', '[N', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'first' })<CR>")
+    map('n', ']N', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'last' })<CR>")
+
+    map('n', '[Q', '<Cmd>cfirst<CR>')
+    map('n', ']Q', '<Cmd>clast<CR>')
+
+    map('n', '[W', "<Cmd>lua MiniBasics.goto_window({ direction = 'first' })<CR>")
+    map('n', ']W', "<Cmd>lua MiniBasics.goto_window({ direction = 'last' })<CR>")
   end
 
   if config.mappings.window_navigation then

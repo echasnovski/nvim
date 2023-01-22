@@ -112,4 +112,4 @@ keymap('s', [[<BS>]], [[<BS>i]])
 -- Stop highlighting of search results. NOTE: this can be done with default
 -- `<C-l>` but this solution deliberately uses `:` instead of `<Cmd>` to go
 -- into Command mode and back which updates 'mini.map'.
-keymap('n', [[\h]], ':let v:hlsearch = 1 - v:hlsearch | diffupdate<CR>')
+-- keymap('n', [[\h]], ':let v:hlsearch = 1 - v:hlsearch | diffupdate<CR>')

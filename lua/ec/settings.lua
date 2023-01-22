@@ -37,7 +37,7 @@ vim.o.colorcolumn   = '+1'    -- Draw colored column one step to the right of de
 
 -- vim.o.fillchars = 'eob: ,fold:╌,horiz:═,horizdown:╦,horizup:╩,vert:║,verthoriz:╬,vertleft:╣,vertright:╠'
 -- vim.o.listchars = 'extends:…,precedes:…,nbsp:␣,tab:> '
-vim.opt.fillchars:append('fold:╌,horiz:═,horizdown:╦,horizup:╩,vert:║,verthoriz:╬,vertleft:╣,vertright:╠')
+vim.opt.fillchars:append('fold:╌')
 vim.opt.listchars:append('tab:> ')
 
 -- if vim.fn.has('nvim-0.9') == 1 then

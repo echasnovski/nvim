@@ -5,8 +5,9 @@ require('mini-dev.basics').setup({
   },
 
   mappings = {
-    next_prev = true,
     toggle_options = true,
+    next_prev = true,
+    first_last = true,
     window_navigation = true,
     window_resize = true,
     move_with_alt = true,
