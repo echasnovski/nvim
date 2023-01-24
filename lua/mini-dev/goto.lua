@@ -112,15 +112,10 @@ MiniGoto.comment = function(direction, opts)
 end
 
 MiniGoto.conflict = function(direction, opts)
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last', 'next_buf', 'prev_buf' }, direction) then
-    H.error(
-      [[In `comment()` argument `direction` should be one of 'first', 'prev', 'next', 'last', 'next_buf', 'prev_buf'.]]
-    )
+  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
+    H.error([[In `comment()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
   opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
-
-  -- TODO: Add support for 'next_buf'/'prev_buf' (first actual marker in some
-  -- of next/prev buffer)
 
   -- Compute list of lines as conflict markers
   local marked_lines = {}
@@ -211,43 +206,21 @@ MiniGoto.jump = function(direction, opts)
 end
 
 MiniGoto.location = function(direction, opts)
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last', 'prev_buf', 'next_buf' }, direction) then
-    H.error(
-      [[In `location()` argument `direction` should be one of 'first', 'prev', 'next', 'last', 'prev_buf', 'next_buf'.]]
-    )
+  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
+    H.error([[In `location()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
   opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
 
-  if direction == 'first' then vim.cmd('lfirst | normal! zvzz') end
-  if direction == 'last' then vim.cmd('llast | normal! zvzz') end
-
-  -- TODO: should wrap around (possibly behind option)
-  if direction == 'prev' then vim.cmd(opts.n_times .. 'lprevious | normal! zvzz') end
-  if direction == 'next' then vim.cmd(opts.n_times .. 'lnext | normal! zvzz') end
-
-  -- TODO
-  -- if direction == 'prev_next' then  end
-  -- if direction == 'next_next' then  end
+  H.qf_loc_goto('location', direction, opts)
 end
 
 MiniGoto.quickfix = function(direction, opts)
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last', 'prev_buf', 'next_buf' }, direction) then
-    H.error(
-      [[In `quickfix()` argument `direction` should be one of 'first', 'prev', 'next', 'last', 'prev_buf', 'next_buf'.]]
-    )
+  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
+    H.error([[In `quickfix()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
   opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
 
-  if direction == 'first' then vim.cmd('cfirst | normal! zvzz') end
-  if direction == 'last' then vim.cmd('clast | normal! zvzz') end
-
-  -- TODO: should wrap around (possibly behind option)
-  if direction == 'prev' then vim.cmd(opts.n_times .. 'cprevious | normal! zvzz') end
-  if direction == 'next' then vim.cmd(opts.n_times .. 'cnext | normal! zvzz') end
-
-  -- TODO
-  -- if direction == 'prev_next' then  end
-  -- if direction == 'next_next' then  end
+  H.qf_loc_goto('quickfix', direction, opts)
 end
 
 MiniGoto.window = function(direction, opts)
@@ -349,7 +322,7 @@ H.apply_config = function(config)
   end
 
   if suffixes.conflict ~= '' then
-    local low, up, ctrl = H.get_suffix_variants(suffixes.conflict)
+    local low, up, _ = H.get_suffix_variants(suffixes.conflict)
     H.map('n', '[' .. low, "<Cmd>lua MiniGoto.conflict('prev')<CR>",  { desc = 'Go to previous conflict' })
     H.map('x', '[' .. low, "<Cmd>lua MiniGoto.conflict('prev')<CR>",  { desc = 'Go to previous conflict' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniGoto.conflict('prev')<CR>", { desc = 'Go to previous conflict' })
@@ -357,10 +330,8 @@ H.apply_config = function(config)
     H.map('x', ']' .. low, "<Cmd>lua MiniGoto.conflict('next')<CR>",  { desc = 'Go to next conflict' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniGoto.conflict('next')<CR>", { desc = 'Go to next conflict' })
 
-    H.map('n', '[' .. up,   "<Cmd>lua MiniGoto.conflict('first')<CR>",    { desc = 'Go to first conflict' })
-    H.map('n', ']' .. up,   "<Cmd>lua MiniGoto.conflict('last')<CR>",     { desc = 'Go to last conflict' })
-    H.map('n', '[' .. ctrl, "<Cmd>lua MiniGoto.conflict('prev_buf')<CR>", { desc = 'Go to conflict in previous buffer' })
-    H.map('n', ']' .. ctrl, "<Cmd>lua MiniGoto.conflict('next_buf')<CR>", { desc = 'Go to conflict in next buffer' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniGoto.conflict('first')<CR>", { desc = 'Go to first conflict' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniGoto.conflict('last')<CR>",  { desc = 'Go to last conflict' })
   end
 
   if suffixes.diagnostic ~= '' then
@@ -421,23 +392,19 @@ H.apply_config = function(config)
   end
 
   if suffixes.location ~= '' then
-    local low, up, ctrl = H.get_suffix_variants(suffixes.location)
-    H.map('n', '[' .. low,  "<Cmd>lua MiniGoto.location('prev')<CR>",     { desc = 'Go to previous location' })
-    H.map('n', ']' .. low,  "<Cmd>lua MiniGoto.location('next')<CR>",     { desc = 'Go to next location' })
-    H.map('n', '[' .. up,   "<Cmd>lua MiniGoto.location('first')<CR>",    { desc = 'Go to first location' })
-    H.map('n', ']' .. up,   "<Cmd>lua MiniGoto.location('last')<CR>",     { desc = 'Go to last location' })
-    H.map('n', '[' .. ctrl, "<Cmd>lua MiniGoto.location('prev_buf')<CR>", { desc = 'Go to previous location in another buffer' })
-    H.map('n', ']' .. ctrl, "<Cmd>lua MiniGoto.location('next_buf')<CR>", { desc = 'Go to next location in another buffer' })
+    local low, up, _ = H.get_suffix_variants(suffixes.location)
+    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.location('prev')<CR>",  { desc = 'Go to previous location' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.location('next')<CR>",  { desc = 'Go to next location' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniGoto.location('first')<CR>", { desc = 'Go to first location' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniGoto.location('last')<CR>",  { desc = 'Go to last location' })
   end
 
   if suffixes.quickfix ~= '' then
-    local low, up, ctrl = H.get_suffix_variants(suffixes.quickfix)
-    H.map('n', '[' .. low,  "<Cmd>lua MiniGoto.quickfix('prev')<CR>",     { desc = 'Go to previous quickfix' })
-    H.map('n', ']' .. low,  "<Cmd>lua MiniGoto.quickfix('next')<CR>",     { desc = 'Go to next quickfix' })
-    H.map('n', '[' .. up,   "<Cmd>lua MiniGoto.quickfix('first')<CR>",    { desc = 'Go to first quickfix' })
-    H.map('n', ']' .. up,   "<Cmd>lua MiniGoto.quickfix('last')<CR>",     { desc = 'Go to last quickfix' })
-    H.map('n', '[' .. ctrl, "<Cmd>lua MiniGoto.quickfix('prev_buf')<CR>", { desc = 'Go to previous quickfix in another buffer' })
-    H.map('n', ']' .. ctrl, "<Cmd>lua MiniGoto.quickfix('next_buf')<CR>", { desc = 'Go to next quickfix in another buffer' })
+    local low, up, _ = H.get_suffix_variants(suffixes.quickfix)
+    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.quickfix('prev')<CR>",  { desc = 'Go to previous quickfix' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.quickfix('next')<CR>",  { desc = 'Go to next quickfix' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniGoto.quickfix('first')<CR>", { desc = 'Go to first quickfix' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniGoto.quickfix('last')<CR>",  { desc = 'Go to last quickfix' })
   end
 
   if suffixes.window ~= '' then
@@ -455,6 +422,28 @@ H.get_suffix_variants = function(char)
 end
 
 H.is_disabled = function() return vim.g.minigoto_disable == true or vim.b.minigoto_disable == true end
+
+-- Quickfix/Location lists ----------------------------------------------------
+H.qf_loc_goto = function(list_type, direction, opts)
+  local get_list, goto_command = vim.fn.getqflist, 'cc'
+  if list_type == 'location' then
+    get_list, goto_command = function(...) return vim.fn.getloclist(0, ...) end, 'll'
+  end
+
+  -- Get quickfix list and ensure it is not empty
+  local qf_list = get_list()
+  if #qf_list == 0 then return end
+
+  -- Compute array index of target quickfix entry (wrapping around edges)
+  local n_list, cur_ind = #qf_list, get_list({ idx = 0 }).idx
+  local ind = ({ first = 1, prev = cur_ind - opts.n_times, next = cur_ind + opts.n_times, last = n_list })[direction]
+  -- - Ensure that index is inside array
+  ind = (ind - 1) % n_list + 1
+
+  -- Focus target entry, open enough folds and center
+  local command = string.format('%s %d | normal! zvzz', goto_command, ind)
+  vim.cmd(command)
+end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.goto) %s', msg), 0) end
