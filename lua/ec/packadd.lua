@@ -33,7 +33,7 @@ packadd_defer('vim-argwrap')
 packadd_defer('vim-exchange')
 
 -- Pairs of handy bracket mappings
-packadd_defer('vim-unimpaired')
+-- packadd_defer('vim-unimpaired')
 
 if vim.fn.exists('vscode') ~= 1 then
   -- Common dependency for Lua plugins
