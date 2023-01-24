@@ -3,10 +3,9 @@
 -- TODO
 --
 -- Code:
--- - Implement mappings.
+-- - Find and add new mappings.
+-- - Find and add new autocommands.
 -- - Add mappings descriptions.
--- - Implement `goto_comment()`.
--- - Think about renaming `next_prev_first_last` conflict suffix to 'x'.
 -- - Add as beginner friendly comments as possible.
 --
 -- Tests:
@@ -42,9 +41,8 @@
 ---@diagnostic disable:undefined-field
 
 -- Module definition ==========================================================
--- TODO: make local after release
-MiniBasics = {}
-H = {}
+local MiniBasics = {}
+local H = {}
 
 --- Module setup
 ---
@@ -139,90 +137,6 @@ MiniBasics.toggle_diagnostic = function()
   H.buffer_diagnostic_state[buf_id] = new_buf_state
 
   return new_buf_state and '  diagnostic' or 'nodiagnostic'
-end
-
-MiniBasics.goto_comment = function(opts)
-  opts = vim.tbl_deep_extend('force', { direction = 'next', count = vim.v.count1 }, opts or {})
-
-  -- TODO
-end
-
-MiniBasics.goto_conflict = function(opts)
-  opts = vim.tbl_deep_extend('force', { direction = 'next', count = vim.v.count1 }, opts or {})
-
-  -- Compute list of lines as conflict markers
-  local marked_lines = {}
-  local cur_line, cur_line_ind = vim.fn.line('.'), nil
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
-  for i, l in ipairs(lines) do
-    local l_start = l:sub(1, 8)
-    local is_marked = l_start == '<<<<<<< ' or l_start == '=======' or l_start == '>>>>>>> '
-    if is_marked then
-      table.insert(marked_lines, i)
-
-      -- Track array index of current line (as *index of next marker*)
-      if cur_line <= i then cur_line_ind = cur_line_ind or #marked_lines end
-    end
-  end
-  -- - Correct for when current line is after last conflict marker
-  cur_line_ind = cur_line_ind or 1
-
-  -- Do nothing if there are no conflict markers
-  if #marked_lines == 0 then return end
-
-  -- Compute array index of target marker
-  local is_at_marker = cur_line == marked_lines[cur_line_ind]
-  local ind = ({
-    first = 1,
-    prev = cur_line_ind - opts.count,
-    -- Move by 1 array index less if already at the "next" marker
-    next = cur_line_ind + opts.count - (is_at_marker and 0 or 1),
-    last = #marked_lines,
-  })[opts.direction]
-  -- - Ensure that index is inside array
-  ind = (ind - 1) % #marked_lines + 1
-
-  -- Put cursor on target marker
-  vim.api.nvim_win_set_cursor(0, { marked_lines[ind], 0 })
-end
-
-MiniBasics.goto_window = function(opts)
-  -- NOTE: these solutions are easier, but have drawbacks:
-  -- - Repeat `<C-w>w` / `<C-w>W` `opts.count` times. This causes occasional
-  --   flickering due to `WinLeave/WinEnter` events.
-  -- - Use `<C-w>{count}w` / `<C-w>{count}W` with correctly computed `{count}`.
-  --   This doesn't work well with floating windows (may focus when shouldn't).
-
-  opts = vim.tbl_deep_extend('force', { direction = 'next', count = vim.v.count1 }, opts or {})
-
-  -- Compute list of normal windows in "natural" order.
-  local cur_winnr, cur_winnr_ind = vim.fn.winnr(), nil
-  local normal_windows = {}
-  for i = 1, vim.fn.winnr('$') do
-    local win_id = vim.fn.win_getid(i)
-    local is_normal = vim.api.nvim_win_get_config(win_id).relative == ''
-    if is_normal then
-      table.insert(normal_windows, win_id)
-
-      -- Track array index of current window
-      if cur_winnr == i then cur_winnr_ind = #normal_windows end
-    end
-  end
-  -- - Correct for when current window is not found (like in float)
-  cur_winnr_ind = cur_winnr_ind or 1
-
-  -- Compute array index of target window
-  local ind = ({
-    first = 1,
-    prev = cur_winnr_ind - opts.count,
-    next = cur_winnr_ind + opts.count,
-    last = #normal_windows,
-  })[opts.direction]
-  -- - Ensure that index is inside array
-  ind = (ind - 1) % #normal_windows + 1
-
-  -- Focus target window
-  vim.api.nvim_set_current_win(normal_windows[ind])
 end
 
 -- Helper data ================================================================
@@ -432,6 +346,10 @@ H.apply_mappings = function(config)
     -- it seems to be too harmful anyway.
     map('n', '<C-z>', '[s1z=')
     map('i', '<C-z>', '<C-g>u<Esc>[s1z=`]a<C-g>u')
+
+    -- Add empty lines before and after cursor line
+    map('n', 'gO', "<Cmd>call append(line('.') - 1, repeat([''], v:count1))<CR>")
+    map('n', 'go', "<Cmd>call append(line('.'),     repeat([''], v:count1))<CR>")
   end
 
   if config.mappings.toggle_options then
@@ -450,66 +368,13 @@ H.apply_mappings = function(config)
     map_toggle('b', '<Cmd>lua vim.o.bg = vim.o.bg == "dark" and "light" or "dark"<CR>', "Toggle 'background'")
     map_toggle('c', '<Cmd>setlocal cursorline! cursorline?<CR>',                        "Toggle 'cursorline'")
     map_toggle('C', '<Cmd>setlocal cursorcolumn! cursorcolumn?<CR>',                    "Toggle 'cursorcolumn'")
-    map_toggle('d', '<Cmd>lua print(MiniBasics.toggle_diagnostic())<CR>',               "Toggle diagnostic")
-    map_toggle('h', '<Cmd>setlocal hlsearch! hlsearch?<CR>',                            "Toggle search highlight")
+    map_toggle('d', '<Cmd>lua print(MiniBasics.toggle_diagnostic())<CR>',               'Toggle diagnostic')
+    map_toggle('h', '<Cmd>let v:hlsearch = 1 - v:hlsearch<CR>',                         'Toggle search highlight')
     map_toggle('i', '<Cmd>setlocal ignorecase! ignorecase?<CR>',                        "Toggle 'ignorecase'")
     map_toggle('l', '<Cmd>setlocal list! list?<CR>',                                    "Toggle 'list'")
     map_toggle('r', '<Cmd>setlocal relativenumber! relativenumber?<CR>',                "Toggle 'relativenumber'")
     map_toggle('s', '<Cmd>setlocal spell! spell?<CR>',                                  "Toggle 'spell'")
     map_toggle('w', '<Cmd>setlocal wrap! wrap?<CR>',                                    "Toggle 'wrap'")
-  end
-
-  if config.mappings.next_prev then
-    map('n', '[b', "<Cmd>exe v:count1 . 'bprev'<CR>")
-    map('n', ']b', "<Cmd>exe v:count1 . 'bnext'<CR>")
-
-    map('n', '[c', "<Cmd>lua MiniBasics.goto_comment({ direction = 'prev' })<CR>")
-    map('n', ']c', "<Cmd>lua MiniBasics.goto_comment({ direction = 'next' })<CR>")
-
-    map('n', '[d', '<Cmd>lua vim.diagnostic.goto_prev()<CR>')
-    map('n', ']d', '<Cmd>lua vim.diagnostic.goto_next()<CR>')
-
-    map('n', '[l', "<Cmd>exe v:count1 . 'lprev'<CR>")
-    map('n', ']l', "<Cmd>exe v:count1 . 'lnext'<CR>")
-
-    map('n', '[n', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'prev' })<CR>")
-    map('n', ']n', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'next' })<CR>")
-    map('x', '[n', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'prev' })<CR>")
-    map('x', ']n', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'next' })<CR>")
-    map('o', '[n', "V<Cmd>lua MiniBasics.goto_conflict({ direction = 'prev' })<CR>")
-    map('o', ']n', "V<Cmd>lua MiniBasics.goto_conflict({ direction = 'next' })<CR>")
-
-    map('n', '[q', "<Cmd>exe v:count1 . 'cprev'<CR>")
-    map('n', ']q', "<Cmd>exe v:count1 . 'cnext'<CR>")
-
-    map('n', '[w', "<Cmd>lua MiniBasics.goto_window({ direction = 'prev' })<CR>")
-    map('n', ']w', "<Cmd>lua MiniBasics.goto_window({ direction = 'next' })<CR>")
-
-    map('n', '[ ', "<Cmd>call append(line('.') - 1, repeat([''], v:count1))<CR>")
-    map('n', '] ', "<Cmd>call append(line('.'),     repeat([''], v:count1))<CR>")
-  end
-
-  if config.mappings.first_last then
-    map('n', '[B', '<Cmd>bfirst<CR>')
-    map('n', ']B', '<Cmd>blast<CR>')
-
-    map('n', '[C', "<Cmd>lua MiniBasics.goto_comment({ direction = 'first' })<CR>")
-    map('n', ']C', "<Cmd>lua MiniBasics.goto_comment({ direction = 'last' })<CR>")
-
-    map('n', '[D', '<Cmd>lua vim.diagnostic.goto_next({ cursor_position = { 1, 0 } })<CR>')
-    map('n', ']D', '<Cmd>lua vim.diagnostic.goto_prev({ cursor_position = { 1, 0 } })<CR>')
-
-    map('n', '[L', '<Cmd>lfirst<CR>')
-    map('n', ']L', '<Cmd>llast<CR>')
-
-    map('n', '[N', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'first' })<CR>")
-    map('n', ']N', "<Cmd>lua MiniBasics.goto_conflict({ direction = 'last' })<CR>")
-
-    map('n', '[Q', '<Cmd>cfirst<CR>')
-    map('n', ']Q', '<Cmd>clast<CR>')
-
-    map('n', '[W', "<Cmd>lua MiniBasics.goto_window({ direction = 'first' })<CR>")
-    map('n', ']W', "<Cmd>lua MiniBasics.goto_window({ direction = 'last' })<CR>")
   end
 
   if config.mappings.window_navigation then

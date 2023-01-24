@@ -133,4 +133,6 @@ vim.schedule(function()
   })
 
   require('mini.trailspace').setup()
+
+  require('mini-dev.goto').setup()
 end)
