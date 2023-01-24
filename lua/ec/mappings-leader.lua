@@ -19,8 +19,9 @@ EC.leader_nmap.b = {
 -- e is for 'explore'
 EC.leader_nmap.e = {
   ['name'] = '+explore',
-  ['t'] = { [[<Cmd>NvimTreeToggle<CR>]], 'tree' },
-  ['u'] = { [[<Cmd>UndotreeToggle<CR>]], 'undo-tree' },
+  ['t'] = { [[<Cmd>NvimTreeToggle<CR>]],       'tree' },
+  ['u'] = { [[<Cmd>UndotreeToggle<CR>]],       'undo-tree' },
+  ['q'] = { [[<Cmd>lua EC.toggle_quickfix()<CR>]], 'quickfix' },
 }
 
 -- f is for 'fuzzy find'
