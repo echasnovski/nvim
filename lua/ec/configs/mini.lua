@@ -134,5 +134,5 @@ vim.schedule(function()
 
   require('mini.trailspace').setup()
 
-  require('mini-dev.goto').setup()
+  require('mini-dev.next').setup()
 end)

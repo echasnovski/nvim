@@ -3,7 +3,6 @@
 -- TODO
 --
 -- Code:
--- - Consider renaming to 'mini.next'.
 -- - Think about renaming conflict suffix to 'n' (as in 'unimpaired.vim').
 -- - Other todos across code.
 -- - Ensure the following meaning of `n_times` is followed as much as possible:
@@ -40,11 +39,11 @@
 ---
 --- # Setup ~
 ---
---- This module needs a setup with `require('mini.goto').setup({})` (replace
---- `{}` with your `config` table). It will create global Lua table `MiniGoto`
---- which you can use for scripting or manually (with `:lua MiniGoto.*`).
+--- This module needs a setup with `require('mini.next').setup({})` (replace
+--- `{}` with your `config` table). It will create global Lua table `MiniNext`
+--- which you can use for scripting or manually (with `:lua MiniNext.*`).
 ---
---- See |MiniGoto.config| for available config settings.
+--- See |MiniNext.config| for available config settings.
 ---
 --- # Comparisons ~
 ---
@@ -52,29 +51,29 @@
 ---
 --- # Disabling~
 ---
---- To disable, set `g:minigoto_disable` (globally) or `b:minigoto_disable`
+--- To disable, set `g:mininext_disable` (globally) or `b:mininext_disable`
 --- (for a buffer) to `v:true`. Considering high number of different scenarios
 --- and customization intentions, writing exact rules for disabling module's
 --- functionality is left to user. See |mini.nvim-disabling-recipes| for common
 --- recipes.
----@tag mini.goto
----@tag Minigoto
+---@tag mini.next
+---@tag MiniNext
 
 ---@diagnostic disable:undefined-field
 
 -- Module definition ==========================================================
 -- TODO: make local after release
-MiniGoto = {}
+MiniNext = {}
 H = {}
 
 --- Module setup
 ---
----@param config table|nil Module config table. See |MiniGoto.config|.
+---@param config table|nil Module config table. See |MiniNext.config|.
 ---
----@usage `require('mini.goto').setup({})` (replace `{}` with your `config` table)
-MiniGoto.setup = function(config)
+---@usage `require('mini.next').setup({})` (replace `{}` with your `config` table)
+MiniNext.setup = function(config)
   -- Export module
-  _G.MiniGoto = MiniGoto
+  _G.MiniNext = MiniNext
 
   -- Setup config
   config = H.setup_config(config)
@@ -89,7 +88,7 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text
-MiniGoto.config = {
+MiniNext.config = {
   mapping_suffixes = {
     buffer     = 'b',
     comment    = 'c',
@@ -105,7 +104,7 @@ MiniGoto.config = {
 }
 --minidoc_afterlines_end
 
-MiniGoto.buffer = function(direction, opts)
+MiniNext.buffer = function(direction, opts)
   if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
     H.error([[In `buffer()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
@@ -121,7 +120,7 @@ MiniGoto.buffer = function(direction, opts)
   vim.cmd(n_times .. command)
 end
 
-MiniGoto.comment = function(direction, opts)
+MiniNext.comment = function(direction, opts)
   if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
     H.error([[In `comment()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
@@ -169,7 +168,7 @@ MiniGoto.comment = function(direction, opts)
   vim.cmd('normal! ^')
 end
 
-MiniGoto.conflict = function(direction, opts)
+MiniNext.conflict = function(direction, opts)
   if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
     H.error([[In `comment()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
@@ -205,7 +204,7 @@ MiniGoto.conflict = function(direction, opts)
   vim.api.nvim_win_set_cursor(0, { marked_lines[ind], 0 })
 end
 
-MiniGoto.diagnostic = function(direction, opts)
+MiniNext.diagnostic = function(direction, opts)
   if not vim.tbl_contains({ 'first', 'prev', 'next', 'last', 'next_buf', 'prev_buf' }, direction) then
     H.error(
       [[In `diagnostic()` argument `direction` should be one of 'first', 'prev', 'next', 'last', 'next_buf', 'prev_buf'.]]
@@ -222,7 +221,7 @@ MiniGoto.diagnostic = function(direction, opts)
   if direction == 'last' then vim.diagnostic.goto_prev({ cursor_position = { 1, 0 } }) end
 end
 
-MiniGoto.file = function(direction, opts)
+MiniNext.file = function(direction, opts)
   if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
     H.error([[In `file()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
@@ -273,7 +272,7 @@ MiniGoto.file = function(direction, opts)
   vim.cmd('edit ' .. target_path)
 end
 
-MiniGoto.indent = function(direction, opts)
+MiniNext.indent = function(direction, opts)
   if not vim.tbl_contains({ 'prev_zero', 'prev', 'next', 'next_zero' }, direction) then
     H.error([[In `file()` argument `direction` should be one of 'prev_zero', 'prev', 'next', 'next_zero'.]])
   end
@@ -319,7 +318,7 @@ end
 
 -- Notes:
 -- - Doesn't wrap around edges.
-MiniGoto.jump = function(direction, opts)
+MiniNext.jump = function(direction, opts)
   if not vim.tbl_contains({ 'first', 'prev', 'next', 'last', 'next_buf', 'prev_buf' }, direction) then
     H.error(
       [[In `jump()` argument `direction` should be one of 'first', 'prev', 'next', 'last', 'next_buf', 'prev_buf'.]]
@@ -372,25 +371,25 @@ MiniGoto.jump = function(direction, opts)
   vim.cmd('normal! ' .. math.abs(ind_diff) .. key)
 end
 
-MiniGoto.location = function(direction, opts)
+MiniNext.location = function(direction, opts)
   if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
     H.error([[In `location()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
   opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
 
-  H.goto_qf_loc('location', direction, opts)
+  H.qf_loc_implementation('location', direction, opts)
 end
 
-MiniGoto.quickfix = function(direction, opts)
+MiniNext.quickfix = function(direction, opts)
   if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
     H.error([[In `quickfix()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
   end
   opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
 
-  H.goto_qf_loc('quickfix', direction, opts)
+  H.qf_loc_implementation('quickfix', direction, opts)
 end
 
-MiniGoto.window = function(direction, opts)
+MiniNext.window = function(direction, opts)
   -- NOTE: these solutions are easier, but have drawbacks:
   -- - Repeat `<C-w>w` / `<C-w>W` `opts.count` times. This causes occasional
   --   flickering due to `WinLeave/WinEnter` events.
@@ -436,7 +435,7 @@ end
 
 -- Helper data ================================================================
 -- Module default config
-H.default_config = MiniGoto.config
+H.default_config = MiniNext.config
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -468,140 +467,140 @@ end
 
 --stylua: ignore
 H.apply_config = function(config)
-  MiniGoto.config = config
+  MiniNext.config = config
 
   -- Make mappings
   local suffixes = config.mapping_suffixes
 
   if suffixes.buffer ~= '' then
     local low, up, _ = H.get_suffix_variants(suffixes.buffer)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.buffer('prev')<CR>",  { desc = 'Go to previous buffer' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.buffer('next')<CR>",  { desc = 'Go to next buffer' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniGoto.buffer('first')<CR>", { desc = 'Go to first buffer' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniGoto.buffer('last')<CR>",  { desc = 'Go to last buffer' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.buffer('prev')<CR>",  { desc = 'Previous buffer' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.buffer('next')<CR>",  { desc = 'Next buffer' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniNext.buffer('first')<CR>", { desc = 'First buffer' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniNext.buffer('last')<CR>",  { desc = 'Last buffer' })
   end
 
   if suffixes.comment ~= '' then
     local low, up, _ = H.get_suffix_variants(suffixes.comment)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.comment('prev')<CR>",  { desc = 'Go to previous comment' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniGoto.comment('prev')<CR>",  { desc = 'Go to previous comment' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniGoto.comment('prev')<CR>", { desc = 'Go to previous comment' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.comment('next')<CR>",  { desc = 'Go to next comment' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniGoto.comment('next')<CR>",  { desc = 'Go to next comment' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniGoto.comment('next')<CR>", { desc = 'Go to next comment' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.comment('prev')<CR>",  { desc = 'Previous comment' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniNext.comment('prev')<CR>",  { desc = 'Previous comment' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.comment('prev')<CR>", { desc = 'Previous comment' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.comment('next')<CR>",  { desc = 'Next comment' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniNext.comment('next')<CR>",  { desc = 'Next comment' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.comment('next')<CR>", { desc = 'Next comment' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniGoto.comment('first')<CR>",  { desc = 'Go to first comment' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniGoto.comment('first')<CR>",  { desc = 'Go to first comment' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniGoto.comment('first')<CR>", { desc = 'Go to first comment' })
-    H.map('n', ']' .. up, "<Cmd>lua MiniGoto.comment('last')<CR>",   { desc = 'Go to last comment' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniGoto.comment('last')<CR>",   { desc = 'Go to last comment' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniGoto.comment('last')<CR>",  { desc = 'Go to last comment' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniNext.comment('first')<CR>",  { desc = 'First comment' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniNext.comment('first')<CR>",  { desc = 'First comment' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.comment('first')<CR>", { desc = 'First comment' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniNext.comment('last')<CR>",   { desc = 'Last comment' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniNext.comment('last')<CR>",   { desc = 'Last comment' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.comment('last')<CR>",  { desc = 'Last comment' })
   end
 
   if suffixes.conflict ~= '' then
     local low, up, _ = H.get_suffix_variants(suffixes.conflict)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.conflict('prev')<CR>",  { desc = 'Go to previous conflict' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniGoto.conflict('prev')<CR>",  { desc = 'Go to previous conflict' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniGoto.conflict('prev')<CR>", { desc = 'Go to previous conflict' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.conflict('next')<CR>",  { desc = 'Go to next conflict' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniGoto.conflict('next')<CR>",  { desc = 'Go to next conflict' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniGoto.conflict('next')<CR>", { desc = 'Go to next conflict' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.conflict('prev')<CR>",  { desc = 'Previous conflict' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniNext.conflict('prev')<CR>",  { desc = 'Previous conflict' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.conflict('prev')<CR>", { desc = 'Previous conflict' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.conflict('next')<CR>",  { desc = 'Next conflict' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniNext.conflict('next')<CR>",  { desc = 'Next conflict' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.conflict('next')<CR>", { desc = 'Next conflict' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniGoto.conflict('first')<CR>",  { desc = 'Go to first conflict' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniGoto.conflict('first')<CR>",  { desc = 'Go to first conflict' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniGoto.conflict('first')<CR>", { desc = 'Go to first conflict' })
-    H.map('n', ']' .. up, "<Cmd>lua MiniGoto.conflict('last')<CR>",   { desc = 'Go to last conflict' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniGoto.conflict('last')<CR>",   { desc = 'Go to last conflict' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniGoto.conflict('last')<CR>",  { desc = 'Go to last conflict' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniNext.conflict('first')<CR>",  { desc = 'First conflict' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniNext.conflict('first')<CR>",  { desc = 'First conflict' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.conflict('first')<CR>", { desc = 'First conflict' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniNext.conflict('last')<CR>",   { desc = 'Last conflict' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniNext.conflict('last')<CR>",   { desc = 'Last conflict' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.conflict('last')<CR>",  { desc = 'Last conflict' })
   end
 
   if suffixes.diagnostic ~= '' then
     local low, up, ctrl = H.get_suffix_variants(suffixes.diagnostic)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.diagnostic('prev')<CR>",  { desc = 'Go to previous diagnostic' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniGoto.diagnostic('prev')<CR>",  { desc = 'Go to previous diagnostic' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniGoto.diagnostic('prev')<CR>", { desc = 'Go to previous diagnostic' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.diagnostic('next')<CR>",  { desc = 'Go to next diagnostic' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniGoto.diagnostic('next')<CR>",  { desc = 'Go to next diagnostic' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniGoto.diagnostic('next')<CR>", { desc = 'Go to next diagnostic' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniNext.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.diagnostic('prev')<CR>", { desc = 'Previous diagnostic' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniNext.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.diagnostic('next')<CR>", { desc = 'Next diagnostic' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniGoto.diagnostic('first')<CR>",  { desc = 'Go to first diagnostic' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniGoto.diagnostic('first')<CR>",  { desc = 'Go to first diagnostic' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniGoto.diagnostic('first')<CR>", { desc = 'Go to first diagnostic' })
-    H.map('n', ']' .. up, "<Cmd>lua MiniGoto.diagnostic('last')<CR>",   { desc = 'Go to last diagnostic' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniGoto.diagnostic('last')<CR>",   { desc = 'Go to last diagnostic' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniGoto.diagnostic('last')<CR>",  { desc = 'Go to last diagnostic' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniNext.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniNext.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.diagnostic('first')<CR>", { desc = 'First diagnostic' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniNext.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniNext.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
 
-    H.map('n', '[' .. ctrl, "<Cmd>lua MiniGoto.diagnostic('prev_buf')<CR>", { desc = 'Go to diagnostic in previous buffer' })
-    H.map('n', ']' .. ctrl, "<Cmd>lua MiniGoto.diagnostic('next_buf')<CR>", { desc = 'Go to diagnostic in next buffer' })
+    H.map('n', '[' .. ctrl, "<Cmd>lua MiniNext.diagnostic('prev_buf')<CR>", { desc = 'Diagnostic in previous buffer' })
+    H.map('n', ']' .. ctrl, "<Cmd>lua MiniNext.diagnostic('next_buf')<CR>", { desc = 'Diagnostic in next buffer' })
   end
 
   if suffixes.file ~= '' then
     local low, up, _ = H.get_suffix_variants(suffixes.file)
-    H.map('n', '[' .. low,  "<Cmd>lua MiniGoto.file('prev')<CR>",     { desc = 'Go to previous file' })
-    H.map('n', ']' .. low,  "<Cmd>lua MiniGoto.file('next')<CR>",     { desc = 'Go to next file' })
-    H.map('n', '[' .. up,   "<Cmd>lua MiniGoto.file('first')<CR>",    { desc = 'Go to first file' })
-    H.map('n', ']' .. up,   "<Cmd>lua MiniGoto.file('last')<CR>",     { desc = 'Go to last file' })
+    H.map('n', '[' .. low,  "<Cmd>lua MiniNext.file('prev')<CR>",     { desc = 'Previous file' })
+    H.map('n', ']' .. low,  "<Cmd>lua MiniNext.file('next')<CR>",     { desc = 'Next file' })
+    H.map('n', '[' .. up,   "<Cmd>lua MiniNext.file('first')<CR>",    { desc = 'First file' })
+    H.map('n', ']' .. up,   "<Cmd>lua MiniNext.file('last')<CR>",     { desc = 'Last file' })
   end
 
   if suffixes.indent ~= '' then
     local low, up, _ = H.get_suffix_variants(suffixes.indent)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.indent('prev')<CR>",  { desc = 'Go to previous indent' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniGoto.indent('prev')<CR>",  { desc = 'Go to previous indent' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniGoto.indent('prev')<CR>", { desc = 'Go to previous indent' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.indent('next')<CR>",  { desc = 'Go to next indent' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniGoto.indent('next')<CR>",  { desc = 'Go to next indent' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniGoto.indent('next')<CR>", { desc = 'Go to next indent' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.indent('prev')<CR>",  { desc = 'Previous indent' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniNext.indent('prev')<CR>",  { desc = 'Previous indent' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.indent('prev')<CR>", { desc = 'Previous indent' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.indent('next')<CR>",  { desc = 'Next indent' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniNext.indent('next')<CR>",  { desc = 'Next indent' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.indent('next')<CR>", { desc = 'Next indent' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniGoto.indent('prev_zero')<CR>",  { desc = 'Go to previous zero indent' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniGoto.indent('prev_zero')<CR>",  { desc = 'Go to previous zero indent' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniGoto.indent('prev_zero')<CR>", { desc = 'Go to previous zero indent' })
-    H.map('n', ']' .. up, "<Cmd>lua MiniGoto.indent('next_zero')<CR>",  { desc = 'Go to next zero indent' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniGoto.indent('next_zero')<CR>",  { desc = 'Go to next zero indent' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniGoto.indent('next_zero')<CR>", { desc = 'Go to next zero indent' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniNext.indent('prev_zero')<CR>",  { desc = 'Previous zero indent' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniNext.indent('prev_zero')<CR>",  { desc = 'Previous zero indent' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.indent('prev_zero')<CR>", { desc = 'Previous zero indent' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniNext.indent('next_zero')<CR>",  { desc = 'Next zero indent' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniNext.indent('next_zero')<CR>",  { desc = 'Next zero indent' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.indent('next_zero')<CR>", { desc = 'Next zero indent' })
   end
 
   if suffixes.jump ~= '' then
     local low, up, ctrl = H.get_suffix_variants(suffixes.jump)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.jump('prev')<CR>",  { desc = 'Go to previous jump' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniGoto.jump('prev')<CR>",  { desc = 'Go to previous jump' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniGoto.jump('prev')<CR>", { desc = 'Go to previous jump' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.jump('next')<CR>",  { desc = 'Go to next jump' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniGoto.jump('next')<CR>",  { desc = 'Go to next jump' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniGoto.jump('next')<CR>", { desc = 'Go to next jump' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.jump('prev')<CR>",  { desc = 'Previous jump' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniNext.jump('prev')<CR>",  { desc = 'Previous jump' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.jump('prev')<CR>", { desc = 'Previous jump' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.jump('next')<CR>",  { desc = 'Next jump' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniNext.jump('next')<CR>",  { desc = 'Next jump' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.jump('next')<CR>", { desc = 'Next jump' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniGoto.jump('first')<CR>",  { desc = 'Go to first jump' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniGoto.jump('first')<CR>",  { desc = 'Go to first jump' })
-    H.map('o', '[' .. up, "v<Cmd>lua MiniGoto.jump('first')<CR>", { desc = 'Go to first jump' })
-    H.map('n', ']' .. up, "<Cmd>lua MiniGoto.jump('last')<CR>",   { desc = 'Go to last jump' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniGoto.jump('last')<CR>",   { desc = 'Go to last jump' })
-    H.map('o', ']' .. up, "v<Cmd>lua MiniGoto.jump('last')<CR>",  { desc = 'Go to last jump' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniNext.jump('first')<CR>",  { desc = 'First jump' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniNext.jump('first')<CR>",  { desc = 'First jump' })
+    H.map('o', '[' .. up, "v<Cmd>lua MiniNext.jump('first')<CR>", { desc = 'First jump' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniNext.jump('last')<CR>",   { desc = 'Last jump' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniNext.jump('last')<CR>",   { desc = 'Last jump' })
+    H.map('o', ']' .. up, "v<Cmd>lua MiniNext.jump('last')<CR>",  { desc = 'Last jump' })
 
-    H.map('n', '[' .. ctrl, "<Cmd>lua MiniGoto.jump('prev_buf')<CR>", { desc = 'Go to jump in previous buffer' })
-    H.map('n', ']' .. ctrl, "<Cmd>lua MiniGoto.jump('next_buf')<CR>", { desc = 'Go to jump in next buffer' })
+    H.map('n', '[' .. ctrl, "<Cmd>lua MiniNext.jump('prev_buf')<CR>", { desc = 'Jump in previous buffer' })
+    H.map('n', ']' .. ctrl, "<Cmd>lua MiniNext.jump('next_buf')<CR>", { desc = 'Jump in next buffer' })
   end
 
   if suffixes.location ~= '' then
     local low, up, _ = H.get_suffix_variants(suffixes.location)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.location('prev')<CR>",  { desc = 'Go to previous location' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.location('next')<CR>",  { desc = 'Go to next location' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniGoto.location('first')<CR>", { desc = 'Go to first location' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniGoto.location('last')<CR>",  { desc = 'Go to last location' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.location('prev')<CR>",  { desc = 'Previous location' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.location('next')<CR>",  { desc = 'Next location' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniNext.location('first')<CR>", { desc = 'First location' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniNext.location('last')<CR>",  { desc = 'Last location' })
   end
 
   if suffixes.quickfix ~= '' then
     local low, up, _ = H.get_suffix_variants(suffixes.quickfix)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.quickfix('prev')<CR>",  { desc = 'Go to previous quickfix' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.quickfix('next')<CR>",  { desc = 'Go to next quickfix' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniGoto.quickfix('first')<CR>", { desc = 'Go to first quickfix' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniGoto.quickfix('last')<CR>",  { desc = 'Go to last quickfix' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.quickfix('prev')<CR>",  { desc = 'Previous quickfix' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.quickfix('next')<CR>",  { desc = 'Next quickfix' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniNext.quickfix('first')<CR>", { desc = 'First quickfix' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniNext.quickfix('last')<CR>",  { desc = 'Last quickfix' })
   end
 
   if suffixes.window ~= '' then
     local low, up, _ = H.get_suffix_variants(suffixes.window)
-    H.map('n', '[' .. low, "<Cmd>lua MiniGoto.window('prev')<CR>",  { desc = 'Go to previous window' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniGoto.window('next')<CR>",  { desc = 'Go to next window' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniGoto.window('first')<CR>", { desc = 'Go to first window' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniGoto.window('last')<CR>",  { desc = 'Go to last window' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.window('prev')<CR>",  { desc = 'Previous window' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.window('next')<CR>",  { desc = 'Next window' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniNext.window('first')<CR>", { desc = 'First window' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniNext.window('last')<CR>",  { desc = 'Last window' })
   end
 end
 
@@ -610,7 +609,7 @@ H.get_suffix_variants = function(char)
   return lower, upper, string.format('<C-%s>', lower)
 end
 
-H.is_disabled = function() return vim.g.minigoto_disable == true or vim.b.minigoto_disable == true end
+H.is_disabled = function() return vim.g.mininext_disable == true or vim.b.mininext_disable == true end
 
 -- Conflicts ------------------------------------------------------------------
 H.is_conflict_mark = function(line)
@@ -619,10 +618,10 @@ H.is_conflict_mark = function(line)
 end
 
 -- Quickfix/Location lists ----------------------------------------------------
-H.goto_qf_loc = function(list_type, direction, opts)
-  local get_list, goto_command = vim.fn.getqflist, 'cc'
+H.qf_loc_implementation = function(list_type, direction, opts)
+  local get_list, command = vim.fn.getqflist, 'cc'
   if list_type == 'location' then
-    get_list, goto_command = function(...) return vim.fn.getloclist(0, ...) end, 'll'
+    get_list, command = function(...) return vim.fn.getloclist(0, ...) end, 'll'
   end
 
   -- Get quickfix list and ensure it is not empty
@@ -641,12 +640,12 @@ H.goto_qf_loc = function(list_type, direction, opts)
   ind = (ind - 1) % n_list + 1
 
   -- Focus target entry, open enough folds and center
-  local command = string.format('%s %d | normal! zvzz', goto_command, ind)
+  local command = string.format('%s %d | normal! zvzz', command, ind)
   vim.cmd(command)
 end
 
 -- Utilities ------------------------------------------------------------------
-H.error = function(msg) error(string.format('(mini.goto) %s', msg), 0) end
+H.error = function(msg) error(string.format('(mini.next) %s', msg), 0) end
 
 H.validate_if = function(predicate, x, x_name)
   local is_valid, msg = predicate(x, x_name)
@@ -664,4 +663,4 @@ H.map = function(mode, key, rhs, opts)
   vim.api.nvim_set_keymap(mode, key, rhs, opts)
 end
 
-return MiniGoto
+return MiniNext
