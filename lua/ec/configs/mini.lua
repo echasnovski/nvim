@@ -3,16 +3,11 @@ require('mini-dev.basics').setup({
     extra_ui = true,
     win_border = 'double',
   },
-
   mappings = {
     toggle_options = true,
-    next_prev = true,
-    first_last = true,
-    window_navigation = true,
-    window_resize = true,
+    windows = true,
     move_with_alt = true,
   },
-
   autocommands = {
     relnum_in_visual_mode = true,
   },

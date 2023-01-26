@@ -1,23 +1,35 @@
--- MIT License Copyright (c) 2022 Evgeni Chasnovski
+-- MIT License Copyright (c) 2023 Evgeni Chasnovski
 
--- TODO
---
--- Code:
--- - Find and add new mappings.
--- - Find and add new autocommands.
--- - Add mappings descriptions.
--- - Add as beginner friendly comments as possible.
---
--- Tests:
---
--- Docs:
--- - Mention that it is ok to look at source code and copy things.
---
+-- To study source behind presets, search for:
+-- - `-- Options ---` for `config.options`.
+-- - `-- Mappings ---` for `config.mappings`.
+-- - `-- Autocommands ---` for `config.autocommands`.
 
 -- Documentation ==============================================================
---- Set basic options and mappings
+--- Configurable presets for common options, mappings, and autocommands
+---
+--- Install, create 'init.lua', add `require('mini.basics').setup()` and you
+--- are good to go.
 ---
 --- Features:
+--- - Presets for common options. It will only change option if it wasn't
+---   manually set before. See more in |MiniBasics.config.options|.
+--- - Presets for common mappings. It will only add a mapping if it wasn't
+---   manually created before. See more in |MiniBasics.config.mappings|.
+--- - Presets for common autocommands. See more in |MiniBasics.config.autocommands|.
+--- - Reverse compatibility is a high priority. Any decision to change already
+---   present behavior will be made with great care.
+---
+--- Notes:
+--- - Main goal of this module is to provide a relatively easier way for
+---   new-ish Neovim users to have better "out of the box" experience. It is
+---   based partially on survey among Neovim users and partially is coming from
+---   personal preferences.
+---
+---   It is still recommended to read about used options and mappings and
+---   decide if they are needed. The main way to do that is by reading Neovim's
+---   help pages (linked in |MiniBasics.config.options|) and this module's
+---   source code (thoroughly documented for easier comprehension).
 ---
 --- # Setup ~
 ---
@@ -30,11 +42,13 @@
 --- # Comparisons ~
 ---
 --- - 'tpope/vim-sensible':
+---     - Most of 'tpope/vim-sensible' is already incorporated as default
+---       options in Neovim (see |nvim-default|). This module has a much
+---       broader effect.
 --- - 'tpope/vim-unimpaired':
----
---- # Disabling~
----
---- This module can not be disabled.
+---     - The 'tpope/vim-unimpaired' has mapping for toggling options with `yo`
+---       prefix. This module implements similar functionality with `\` prefix
+---       (see |MiniBasics.config.mappings|).
 ---@tag mini.basics
 ---@tag Minibasics
 
@@ -64,61 +78,252 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text
+---@text                                                      *MiniBasics.config.options*
+--- # Options ~
+---
+--- Usage example: >
+---   require('mini.basics').setup({
+---     options = {
+---       basic = true,
+---       extra_ui = true,
+---       win_border = 'double',
+---     }
+---   })
+---
+--- ## options.basic ~
+---
+--- The `config.options.basic` sets certain options to values which are quite
+--- commonly used (judging by study of available Neovim pre-configurations,
+--- public dotfiles, and surveys).
+--- Any option is changed only if it was not set manually beforehand.
+--- For exact changes, please see source code ('lua/mini/basics.lua').
+---
+--- Here is the list of affected options (put cursor on it and press |CTRL-]|):
+--- - General:
+---     - Sets |<Leader>| key to |<Space>|
+---     - Runs `:filetype pluging indent on` (see |:filetype-overview|)
+---     - |backup|
+---     - |mouse|
+---     - |undofile|
+---     - |writebackup|
+--- - Appearance
+---     - |breakindent|
+---     - |cursorline|
+---     - |fillchars|
+---     - |linebreak|
+---     - |number|
+---     - |ruler|
+---     - |showmode|
+---     - |signcolumn|
+---     - |shortmess|
+---     - |splitbelow|
+---     - |splitkeep| (on Neovim>=0.9)
+---     - |splitright|
+---     - |termguicolors|
+---     - |wrap|
+--- - Editing
+---     - |completeopt|
+---     - |formatoptions|
+---     - |ignorecase|
+---     - |incsearch|
+---     - |infercase|
+---     - |smartcase|
+---     - |smartindent|
+---     - |virtualedit|
+---
+--- ## options.extra_ui ~
+---
+--- The `config.options.extra_ui` sets certain options for visual appearance
+--- which might not be aligned with common preferences, but still worth trying.
+--- Any option is changed only if it was not set manually beforehand.
+--- For exact changes, please see source code ('lua/mini/basics.lua').
+---
+--- List of affected options:
+--- - |cmdheight| (sets to 0 on Neovim>=0.9 as it is not quite stable in 0.8)
+--- - Runs `:syntax on` (see |:syntax-on|)
+--- - |list|
+--- - |listchars|
+--- - |pumblend|
+--- - |pumheight|
+--- - |winblend|
+---
+--- ## options.win_border
+---
+--- The `config.options.win_border` updates |fillchars| to have a consistent set of
+--- characters for window border (`vert`, `horiz`, etc.).
+---
+--- Available values:
+--- - `'bold'` - bold lines.
+--- - `'dot'` - dot in every cell.
+--- - `'double'` - double line.
+--- - `'single'` - single line.
+--- - `'solid'` - no symbol, only background.
+---
+---                                                     *MiniBasics.config.mappings*
+--- # Mappings ~
+---
+--- Usage example: >
+---   require('mini.basics').setup({
+---     mappings = {
+---       basic = true,
+---       toggle_options = true,
+---       windows = true,
+---       move_with_alt = true,
+---     }
+---   })
+---
+--- ## mappings.basic ~
+---
+--- The `config.mappings.basic` creates mappings for certain commonly mapped actions
+--- (judging by study of available Neovim pre-configurations and public dotfiles).
+---
+--- Some of the mappings override built-in ones to either improve their
+--- behavior or override its default not very useful action.
+--- It will only add a mapping if it wasn't manually created before.
+---
+--- Here is a table with created mappings (see |[count]| for its meaning;): >
+---
+---  |Keys   |     Modes       |                  Description                  |
+---  |-------|-----------------|-----------------------------------------------|
+---  | j     | Normal, Visual  | Move down by visible lines                    |
+---  | k     | Normal, Visual  | Move up by visible lines                      |
+---  | go    | Normal          | Add [count] empty lines after cursor          |
+---  | gO    | Normal          | Add [count] empty lines before cursor         |
+---  | gy    | Normal, Visual  | Copy to system clipboard                      |
+---  | gp    | Normal, Visual  | Paste from system clipboard                   |
+---  | gV    | Normal          | Visually select latest changed or yanked text |
+---  | g/    | Visual          | Search inside current visual selection        |
+---  | *     | Visual          | Search forward for current visual selection   |
+---  | #     | Visual          | Search backward for current visual selection  |
+---  | <C-s> | Normal, Visual, | Save and go to Normal mode                    |
+---  |       |     Insert      |                                               |
+---  | <C-z> | Normal          | Correct [count] latest misspelled word        |
+---  | <C-z> | Insert          | Correct latest misspelled word                |
+--- <
+---
+--- ## mappings.toggle_options ~
+---
+--- The `config.mappings.toggle_options` creates mappings which toggle commonly
+--- toggled options.
+---
+--- It will only add a mapping if it wasn't manually created before.
+---
+--- By default it uses `\` as prefix (similar to `/` meaning "or") and single
+--- character to indicate which option to toggle. If `\` is used as |<Leader>|
+--- or |<LocalLeader>|, prefix will be `,`. If it also is one of the Leader
+--- keys, '|' will be used.
+---
+--- Here is a list with created mappings along with options they toggle
+--- (using default `\` prefix; all in Normal mode):
+---
+--- - `\b` - |'background'|.
+--- - `\c` - |'cursorline'|.
+--- - `\C` - |'cursorcolumn'|.
+--- - `\d` - diagnostic (via |vim.diagnostic.enable()| and |vim.diagnostic.disable()|).
+--- - `\h` - |'hlsearch'| (or |v:hlsearch| to be precise).
+--- - `\i` - |'ignorecase'|.
+--- - `\l` - |'list'|.
+--- - `\r` - |'relativenumber'|.
+--- - `\s` - |'spell'|.
+--- - `\w` - |'wrap'|.
+---
+--- ## mappings.windows ~
+---
+--- The `config.mappings.windows` creates mappings for easiere window manipulation.
+---
+--- It will only add a mapping if it wasn't manually created before.
+---
+--- Here is a list with created Normal mode mappings (all mappings respect |[count]|):
+--- - Window navigation:
+---     - `<C-h>` - focus on left window (see |CTRL-W_H|).
+---     - `<C-j>` - focus on below window (see |CTRL-W_J|).
+---     - `<C-k>` - focus on above window (see |CTRL-W_K|).
+---     - `<C-l>` - focus on right window (see |CTRL-W_L|).
+--- - Window resize (all use arrow keys; variants of |resize|; all respect |[count]|):
+---     - `<C-left>`  - decrease window width.
+---     - `<C-down>`  - decrease window height.
+---     - `<C-up>`    - increase window height.
+---     - `<C-right>` - increase window width.
+---
+--- It also creates a `<C-w>` mapping in |Terminal-mode| for easier window
+--- navigation inside builtin |terminal-emulator|. Tip: use `<C-w><Esc>` for
+--- easier Terminal mode exit than |CTRL-\_CTRL-N|.
+---
+--- ## mappings.move_with_alt
+---
+--- The `config.mappings.move_with_alt` creates mappings for a more consistent
+--- cursor move in Insert, Command, and Terminal modes. For example, it proves
+--- useful in combination of autopair plugin (like |MiniPairs|) to move right
+--- outside of inserted pairs (no matter what the pair is).
+---
+--- It will only add a mapping if it wasn't manually created before.
+---
+--- Here is a list of created mappings (`<M-x>` means `Alt`/`Meta` plus `x`):
+--- - `<M-h>` - move cursor left.  Modes: Insert, Terminal, Command.
+--- - `<M-h>` - move cursor down.  Modes: Insert, Terminal.
+--- - `<M-h>` - move cursor up.    Modes: Insert, Terminal.
+--- - `<M-h>` - move cursor right. Modes: Insert, Terminal, Command.
+---
+---                                                 *MiniBasics.config.autocommands*
+--- # Autocommands ~
+---
+--- Usage example: >
+---   require('mini.basics').setup({
+---     autocommands = {
+---       basic = true,
+---       relnum_in_visual_mode = true,
+---     }
+---   })
+---
+--- ## autocommands.basic ~
+---
+--- The `config.autocommands.basic` creates some common autocommands:
+---
+--- - Starts insert mode when opening terminal (see |startinsert| and |TermOpen|).
+--- - Highlights yanked text for a brief period of time (see
+---   |vim.highlight.on_yank()| and |TextYankPost|).
+---
+--- ## autocommands.relnum_in_visual_mode ~
+---
+--- The `config.autocommands.relnum_in_visual_mode` creates autocommands that
+--- enable |relativenumber| in linewise and blockwise Visual modes and disable
+--- otherwise. See |ModeChanged|.
 MiniBasics.config = {
+  -- Options. Set to `false` to disable.
   options = {
-    -- Basic options
+    -- Basic options ('termguicolors', 'number', 'signcolumn', and many more)
     basic = true,
 
-    -- Extra UI features
+    -- Extra UI features ('winblend', 'cmdheight=0', ...)
     extra_ui = false,
 
-    -- Presets for window borders ('single', 'double', etc.)
+    -- Presets for window borders ('single', 'double', ...)
     win_border = 'default',
   },
 
-  -- TODO: !!! Add descriptions to all mappings
+  -- Mappings. Set to `false` to disable.
   mappings = {
-    -- Basic mappings
+    -- Basic mappings (better 'jk', save with Ctrl+S, ...)
     basic = true,
 
-    -- Mappings for toggling common options. Highly recommended to enable.
-    -- Like in 'tpope/vim-unimpaired' but instead of `yo` use `\` (or `,` if it
-    -- is used as leader)
-    -- Plus:
-    -- - Diagnstics: `\d` (`:h vim.diagnostic.enable`)
+    -- Mappings for toggling common options ('wrap', 'spell', 'hlsearch', ...)
     toggle_options = false,
 
-    -- Mappings for common "next-previous" pairs. Highly recommended to enable.
-    -- `[` / `]` pair mappings from 'tpope/vim-unimpaired'
-    -- Plus:
-    -- - Windows: `[w`, `]w`.
-    -- - Diagnostic: `[d`, `]d`.
-    -- - Comment lines block: `[c`, `]c` (???)
-    next_prev = false,
-
-    -- Mapping for common "first-last" pairs.
-    first_last = false,
-
-    -- Better window navigation: <C-hjkl> for normal mode, <C-w> for Terminal
-    -- mode (use `<C-w><Esc>` to escape Terminal mode)
-    window_navigation = false,
-
-    -- Resize windows with <C-arrows>
-    window_resize = false,
+    -- Window navigation with <C-hjkl>, resize with <C-arrows>
+    windows = false,
 
     -- Move cursor in Insert, Command, and Terminal mode with <M-hjkl>
     move_with_alt = false,
   },
 
+  -- Autocommands. Set to `false` to disable
   autocommands = {
+    -- Basic autocommands (highlight on yank, start Insert in terminal, ...)
     basic = true,
 
+    -- Set 'relativenumber' only in linewise and blockwise Visual mode
     relnum_in_visual_mode = false,
   },
-
-  -- ? Abbreviations ? :
-  -- - Insert date `iabbrev date@ <C-R>=strftime("%Y-%m-%d")<CR>`
 }
 --minidoc_afterlines_end
 
@@ -167,10 +372,7 @@ H.setup_config = function(config)
 
     ['mappings.basic'] = { config.mappings.basic, 'boolean' },
     ['mappings.toggle_options'] = { config.mappings.toggle_options, 'boolean' },
-    ['mappings.next_prev'] = { config.mappings.next_prev, 'boolean' },
-    ['mappings.first_last'] = { config.mappings.first_last, 'boolean' },
-    ['mappings.window_navigation'] = { config.mappings.window_navigation, 'boolean' },
-    ['mappings.window_resize'] = { config.mappings.window_resize, 'boolean' },
+    ['mappings.windows'] = { config.mappings.windows, 'boolean' },
     ['mappings.move_with_alt'] = { config.mappings.move_with_alt, 'boolean' },
 
     ['autocommands.basic'] = { config.autocommands.basic, 'boolean' },
@@ -212,7 +414,7 @@ H.apply_options = function(config)
 
     vim.cmd('filetype plugin indent on') -- Enable all filetype plugins
 
-    -- UI
+    -- Appearance
     o.breakindent   = true    -- Indent wrapped lines to match line start
     o.cursorline    = true    -- Highlight current line
     o.linebreak     = true    -- Wrap long lines at 'breakat' (if 'wrap' is set)
@@ -229,7 +431,6 @@ H.apply_options = function(config)
     o.fillchars     = 'eob: ' -- Don't show `~` outside of buffer
 
     -- Editing
-    o.autoindent  = true -- Use auto indent
     o.ignorecase  = true -- Ignore case when searching (use `\C` to force not doing that)
     o.incsearch   = true -- Show search results while typing
     o.infercase   = true -- Infer letter cases for a richer built-in keyword completion
@@ -243,7 +444,7 @@ H.apply_options = function(config)
     -- Neovim version dependent
     if vim.fn.has('nvim-0.9') == 1 then
       opt.shortmess:append('WcC') -- Reduce command line messages
-      o.splitkeep = 'screen'      -- Reduce scrolling during window split
+      o.splitkeep = 'screen'      -- Reduce scroll during window split
     else
       opt.shortmess:append('Wc')  -- Reduce command line messages
     end
@@ -259,9 +460,7 @@ H.apply_options = function(config)
     o.list      = true                          -- Show some helper symbols
 
     -- Enable syntax highlighing if it wasn't already (as it is time consuming)
-    if vim.fn.exists("syntax_on") ~= 1 then
-      vim.cmd([[syntax enable]])
-    end
+    if vim.fn.exists("syntax_on") ~= 1 then vim.cmd([[syntax enable]]) end
 
     -- Neovim version dependent
     if vim.fn.has('nvim-0.9') == 1 then
@@ -318,38 +517,38 @@ H.apply_mappings = function(config)
     map({ 'n', 'x' }, 'j', [[v:count == 0 ? 'gj' : 'j']], { expr = true })
     map({ 'n', 'x' }, 'k', [[v:count == 0 ? 'gk' : 'k']], { expr = true })
 
-    -- Alternative way to save and exit in Normal mode
-    map(  'n',        '<C-s>', '<Cmd>silent w<CR>')
-    map({ 'i', 'x' }, '<C-s>', '<Esc><Cmd>silent w<CR>')
+    -- Add empty lines before and after cursor line
+    map('n', 'gO', "<Cmd>call append(line('.') - 1, repeat([''], v:count1))<CR>", { desc = 'Put empty line above' })
+    map('n', 'go', "<Cmd>call append(line('.'),     repeat([''], v:count1))<CR>", { desc = 'Put empty line below' })
 
     -- Copy/paste with system clipboard
-    map({ 'n', 'x' }, 'gy', '"+y')
-    map(  'n',        'gp', '"+p')
+    map({ 'n', 'x' }, 'gy', '"+y', { desc = 'Copy to system clipboard' })
+    map(  'n',        'gp', '"+p', { desc = 'Paste from system clipboard' })
     -- - Paste in Visual with `P` to not copy selected text (`:h v_P`)
-    map(  'x',        'gp', '"+P')
+    map(  'x',        'gp', '"+P', { desc = 'Paste from system clipboard' })
 
-    -- Reselect latest changed, put or yanked text
-    map('n', 'gV', '"`[" . strpart(getregtype(), 0, 1) . "`]"', { expr = true })
+    -- Reselect latest changed, put, or yanked text
+    map('n', 'gV', '"`[" . strpart(getregtype(), 0, 1) . "`]"', { expr = true, desc = 'Visually select changed text' })
+
+    -- Search inside visually highlighted text. Use `silent = false` for it to
+    -- make effect immediately.
+    map('x', 'g/', '<esc>/\\%V', { silent = false, desc = 'Search inside visual selection' })
 
     -- Search visually selected text (slightly better than builtins in Neovim>=0.8)
     map('x', '*', [[y/\V<C-R>=escape(@", '/\')<CR><CR>]])
     map('x', '#', [[y?\V<C-R>=escape(@", '?\')<CR><CR>]])
 
-    -- Search inside visually highlighted text. Use `silent = false` for it to
-    -- make effect immediately.
-    map('x', 'g/', '<esc>/\\%V', { silent = false })
+    -- Alternative way to save and exit in Normal mode
+    map(  'n',        '<C-s>', '<Cmd>silent w<CR>',      { desc = 'Save' })
+    map({ 'i', 'x' }, '<C-s>', '<Esc><Cmd>silent w<CR>', { desc = 'Save and go to Normal mode' })
 
-    -- Correct latest misspelled word by taking first suggestion. Use `<C-g>u`
-    -- in Insert mode to mark this as separate undoable action.
+    -- Correct latest misspelled word by taking first suggestion.
+    -- Use `<C-g>u` in Insert mode to mark this as separate undoable action.
     -- Source: https://stackoverflow.com/a/16481737
     -- NOTE: this remaps `<C-z>` in Normal mode (completely stops Neovim), but
     -- it seems to be too harmful anyway.
-    map('n', '<C-z>', '[s1z=')
-    map('i', '<C-z>', '<C-g>u<Esc>[s1z=`]a<C-g>u')
-
-    -- Add empty lines before and after cursor line
-    map('n', 'gO', "<Cmd>call append(line('.') - 1, repeat([''], v:count1))<CR>")
-    map('n', 'go', "<Cmd>call append(line('.'),     repeat([''], v:count1))<CR>")
+    map('n', '<C-z>', '[s1z=',                     { desc = 'Correct lastest misspelled word' })
+    map('i', '<C-z>', '<C-g>u<Esc>[s1z=`]a<C-g>u', { desc = 'Correct lastest misspelled word' })
   end
 
   if config.mappings.toggle_options then
@@ -377,40 +576,39 @@ H.apply_mappings = function(config)
     map_toggle('w', '<Cmd>setlocal wrap! wrap?<CR>',                                    "Toggle 'wrap'")
   end
 
-  if config.mappings.window_navigation then
-    map('n', '<C-h>', '<C-w>h')
-    map('n', '<C-j>', '<C-w>j')
-    map('n', '<C-k>', '<C-w>k')
-    map('n', '<C-l>', '<C-w>l')
+  if config.mappings.windows then
+    -- Window navigation
+    map('n', '<C-h>', '<C-w>h', { desc = 'Focus on left window' })
+    map('n', '<C-j>', '<C-w>j', { desc = 'Focus on below window' })
+    map('n', '<C-k>', '<C-w>k', { desc = 'Focus on above window' })
+    map('n', '<C-l>', '<C-w>l', { desc = 'Focus on right window' })
 
-    map('t', '<C-w>', [[<C-\><C-N><C-w>]])
-  end
+    map('t', '<C-w>', [[<C-\><C-N><C-w>]], { desc = 'Focus other window' })
 
-  if config.mappings.window_resize then
-    -- Make it respect `v:count`
-    map('n', '<C-Left>',  '"<Cmd>vertical resize -" . v:count1 . "<CR>"', { expr = true })
-    map('n', '<C-Down>',  '"<Cmd>resize -"          . v:count1 . "<CR>"', { expr = true })
-    map('n', '<C-Up>',    '"<Cmd>resize +"          . v:count1 . "<CR>"', { expr = true })
-    map('n', '<C-Right>', '"<Cmd>vertical resize +" . v:count1 . "<CR>"', { expr = true })
+    -- Window resize (respecting `v:count`)
+    map('n', '<C-Left>',  '"<Cmd>vertical resize -" . v:count1 . "<CR>"', { expr = true, desc = 'Decrease window width' })
+    map('n', '<C-Down>',  '"<Cmd>resize -"          . v:count1 . "<CR>"', { expr = true, desc = 'Decrease window height' })
+    map('n', '<C-Up>',    '"<Cmd>resize +"          . v:count1 . "<CR>"', { expr = true, desc = 'Increase window height' })
+    map('n', '<C-Right>', '"<Cmd>vertical resize +" . v:count1 . "<CR>"', { expr = true, desc = 'Increase window width' })
   end
 
   if config.mappings.move_with_alt then
-    -- Don't `noremap` in insert mode to have these keybindings behave exactly
-    -- like arrows (crucial inside TelescopePrompt)
-    map('i', '<M-h>', '<Left>',  { noremap = false })
-    map('i', '<M-j>', '<Down>',  { noremap = false })
-    map('i', '<M-k>', '<Up>',    { noremap = false })
-    map('i', '<M-l>', '<Right>', { noremap = false })
-
-    map('t', '<M-h>', '<Left>')
-    map('t', '<M-j>', '<Down>')
-    map('t', '<M-k>', '<Up>')
-    map('t', '<M-l>', '<Right>')
-
     -- Move only sideways in command mode. Using `silent = false` makes movements
     -- to be immediately shown.
-    map('c', '<M-h>', '<Left>',  { silent = false })
-    map('c', '<M-l>', '<Right>', { silent = false })
+    map('c', '<M-h>', '<Left>',  { silent = false, desc = 'Left' })
+    map('c', '<M-l>', '<Right>', { silent = false, desc = 'Right' })
+
+    -- Don't `noremap` in insert mode to have these keybindings behave exactly
+    -- like arrows (crucial inside TelescopePrompt)
+    map('i', '<M-h>', '<Left>',  { noremap = false, desc = 'Left' })
+    map('i', '<M-j>', '<Down>',  { noremap = false, desc = 'Down' })
+    map('i', '<M-k>', '<Up>',    { noremap = false, desc = 'Up' })
+    map('i', '<M-l>', '<Right>', { noremap = false, desc = 'Right' })
+
+    map('t', '<M-h>', '<Left>',  { desc = 'Left' })
+    map('t', '<M-j>', '<Down>',  { desc = 'Down' })
+    map('t', '<M-k>', '<Up>',    { desc = 'Up' })
+    map('t', '<M-l>', '<Right>', { desc = 'Right' })
   end
 end
 
@@ -453,35 +651,12 @@ H.apply_autocommands = function(config)
     vim.cmd([[autocmd ModeChanged *:[V\x16]* let &l:relativenumber = &l:number == 1]])
     -- - Using `mode () =~#...` handles switching between linewise and blockwise mode.
     vim.cmd([[autocmd ModeChanged [V\x16]*:* let &l:relativenumber = mode() =~# '^[V\x16]']])
-
-    -- - This is a part of example in `:h ModeChanged`, but I am yet to find the
-    --   use case for it, as it seems like working fine without it.
-    -- vim.cmd([[autocmd WinEnter,WinLeave    * let &l:relativenumber = mode() =~# '^[V\x16]']])
   end
 
   vim.cmd([[augroup END]])
 end
 
--- Predicators ----------------------------------------------------------------
--- H.is_config_cursor = function(x)
---   if type(x) ~= 'table' then return false, H.msg_config('cursor', 'table') end
---   if type(x.enable) ~= 'boolean' then return false, H.msg_config('cursor.enable', 'boolean') end
---   if not vim.is_callable(x.timing) then return false, H.msg_config('cursor.timing', 'callable') end
---   if not vim.is_callable(x.path) then return false, H.msg_config('cursor.path', 'callable') end
---
---   return true
--- end
-
-H.msg_config = function(x_name, msg) return string.format('`%s` should be %s.', x_name, msg) end
-
 -- Utilities ------------------------------------------------------------------
-H.error = function(msg) error(string.format('(mini.basics) %s', msg), 0) end
-
-H.validate_if = function(predicate, x, x_name)
-  local is_valid, msg = predicate(x, x_name)
-  if not is_valid then H.error(msg) end
-end
-
 H.map = function(mode, key, rhs, opts)
   if key == '' then return end
 
