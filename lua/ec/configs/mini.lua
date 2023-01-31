@@ -1,18 +1,3 @@
-require('mini-dev.basics').setup({
-  options = {
-    extra_ui = true,
-    win_border = 'double',
-  },
-  mappings = {
-    toggle_options = true,
-    windows = true,
-    move_with_alt = true,
-  },
-  autocommands = {
-    relnum_in_visual_mode = true,
-  },
-})
-
 require('mini.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
 
 require('mini.starter').setup()
@@ -68,6 +53,20 @@ vim.schedule(function()
   require('mini.align').setup()
 
   require('mini.animate').setup()
+
+  require('mini.basics').setup({
+    options = {
+      -- Manage options manually
+      basic = false,
+    },
+    mappings = {
+      windows = true,
+      move_with_alt = true,
+    },
+    autocommands = {
+      relnum_in_visual_mode = true,
+    },
+  })
 
   require('mini.bufremove').setup()
 
