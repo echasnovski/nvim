@@ -10,8 +10,8 @@
 -- - Think about implementing new directions to `indent()` ('prev' and 'next')
 --   which will traverse all lines with changed indent (not only which are
 --   less).
--- - Think about adding `wrap` option to all functions. This needs a refactor
---   to always use "array -> new index" design.
+-- - Add `wrap` option to all functions. This needs a refactor to always use
+--   "array -> new index" design.
 -- - Think about modifying `MiniNext.config` to have per-item configs
 --   (`suffix`, `wrap`, etc.).
 -- - Other todos across code.
@@ -22,10 +22,10 @@
 --     - For 'last' - it is `n_times - 1` backward starting from last one.
 -- - Ensure that moves guaranteed to be inside current buffer have mappings in
 --   Normal, Visual, and Operator-pending modes.
--- - Consider modifying *all* code to have three parts:
---     - Construct array plus current index (with possible flag `exact_index`);
---     - Compute target index (with or without wrapping around edges).
---     - Perform action on entry with target index.
+-- - Modify *all* code to have three parts:
+--     - Construct target iterator.
+--     - Iterate necessary amount of times.
+--     - Perform action based on current iterator state.
 -- - Refactor and clean up with possible abstractions.
 --
 -- Tests:
@@ -33,14 +33,23 @@
 -- Docs:
 -- - Mention that it is ok to not map defaults and use functions manually.
 -- - General implementation idea is usually as follows:
---     - Construct array of valid targets and the current index in this array.
---     - Depending on `direction`:
---         - For 'first' - it is `n_times - 1` forward starting from first one.
---         - For 'prev' - it is `n_times` backward starting from current one.
---         - For 'next' - it is `n_times` forward starting from current one.
---         - For 'last' - it is `n_times - 1` backward starting from last one.
---     - Walking along array is usually done with wrapping around edges
---       (`buffer`, `window`, `quickfix`), but may be not (`jump`, `indent`).
+--     - Construct target iterator:
+--         - Has idea about curret, first, and last possible states.
+--         - Can go forward and backward from the state (once without wrap).
+--       Like with quickfix list:
+--         - Current quickfix entry, 1, and number of quickfix entries.
+--         - Add 1 or subtract 1 if result is inside range; `nil` otherwise.
+--       This idea is better of computing whole array of possible targets for
+--       at least two reasons:
+--         - It is usually more efficient for common use cases (doesn't compute
+--           whole array for relatively low `n_times`; matters in cases like
+--           `comment`, `indent`).
+--         - Current state is not always a part of target state (like current
+--           line is not always a comment; current position is not on
+--           a jumplist, etc.).
+--     - Iterate target amount of times from current state in target direction.
+--       This can respect wrapping around edges, etc.
+--     - Apply current state.
 
 -- Documentation ==============================================================
 --- Go to next/previous/first/last target
@@ -118,283 +127,318 @@ MiniNext.config = {
 MiniNext.buffer = function(direction, opts)
   if H.is_disabled() then return end
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `buffer()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'buffer')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+
+  -- Define iterator that traverses all valid listed buffers
+  -- (should be same as `:bnext` / `:bprev`)
+  local buf_list = vim.api.nvim_list_bufs()
+  local is_listed = function(buf_id) return vim.api.nvim_buf_is_valid(buf_id) and vim.bo[buf_id].buflisted end
+
+  local iterator = {}
+
+  iterator.forward = function(buf_id)
+    for id = buf_id + 1, buf_list[#buf_list] do
+      if is_listed(id) then return id end
+    end
   end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
 
-  if direction == 'first' then vim.cmd('bfirst') end
-  if direction == 'last' then vim.cmd('blast') end
+  iterator.backward = function(buf_id)
+    for id = buf_id - 1, buf_list[1], -1 do
+      if is_listed(id) then return id end
+    end
+  end
 
-  local n_times = opts.n_times - ((direction == 'first' or direction == 'last') and 1 or 0)
-  if n_times <= 0 then return end
+  iterator.cur_state = vim.api.nvim_get_current_buf()
+  iterator.first_state = iterator.forward(buf_list[1] - 1)
+  iterator.last_state = iterator.backward(buf_list[#buf_list] + 1)
 
-  local command = (direction == 'first' or direction == 'next') and 'bnext' or 'bprevious'
-  vim.cmd(n_times .. command)
+  -- Iterate
+  local res_buf_id = H.iterate(iterator, direction, opts)
+
+  -- Apply
+  vim.api.nvim_set_current_buf(res_buf_id)
 end
 
 MiniNext.comment = function(direction, opts)
   if H.is_disabled() then return end
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `comment()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'comment')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
 
-  -- Make checker for if string is commented.
+  -- Define iterator that traverses all comment block starts in current buffer
   local is_commented = H.make_comment_checker()
   if is_commented == nil then return end
 
-  -- Construct array of comment block starting lines
-  local cur_line, lines = vim.fn.line('.'), vim.api.nvim_buf_get_lines(0, 0, -1, true)
-  local comment_starts, prev_is_commented = {}, false
-  local cur_ind
-  for i, l in ipairs(lines) do
-    local is_comment = is_commented(l)
-    if is_comment and not prev_is_commented then table.insert(comment_starts, i) end
-    prev_is_commented = is_comment
+  local n_lines = vim.api.nvim_buf_line_count(0)
 
-    -- Track array index of current line (as *index of previous comment*)
-    if cur_line == i then cur_ind = #comment_starts end
+  local iterator = {}
+
+  iterator.forward = function(line_num)
+    local prev_is_commented = is_commented(line_num)
+    for lnum = line_num + 1, n_lines do
+      local cur_is_commented = is_commented(lnum)
+      if cur_is_commented and not prev_is_commented then return lnum end
+      prev_is_commented = cur_is_commented
+    end
   end
 
-  if #comment_starts == 0 then return end
+  iterator.backward = function(line_num)
+    local cur_is_commented = is_commented(line_num - 1)
+    for lnum = line_num - 1, 1, -1 do
+      local prev_is_commented = is_commented(lnum - 1)
+      if cur_is_commented and not prev_is_commented then return lnum end
+      cur_is_commented = prev_is_commented
+    end
+  end
 
-  -- Compute array index of target comment start
-  local ind = H.compute_target_ind(comment_starts, cur_ind, {
-    n_times = opts.n_times,
-    direction = direction,
-    current_is_previous = cur_line ~= comment_starts[cur_ind],
-    wrap = true,
-  })
+  iterator.cur_state = vim.fn.line('.')
+  iterator.first_state = iterator.forward(0)
+  iterator.last_state = iterator.backward(n_lines + 1)
 
-  -- Put cursor on first non-blank character of target comment start
-  vim.api.nvim_win_set_cursor(0, { comment_starts[ind], 0 })
+  -- - Do nothing if there is no comments in current buffer
+  if iterator.first_state == nil then return end
+
+  -- Iterate
+  local res_line_num = H.iterate(iterator, direction, opts)
+
+  -- Apply. Put cursor on first non-blank character of target line.
+  vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
   vim.cmd('normal! ^')
 end
 
 MiniNext.conflict = function(direction, opts)
   if H.is_disabled() then return end
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `comment()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'conflict')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
 
-  -- Construct array of conflict markers lines
-  local marked_lines = {}
-  local cur_line, cur_ind = vim.fn.line('.'), nil
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
-  for i, l in ipairs(lines) do
-    if H.is_conflict_mark(l) then table.insert(marked_lines, i) end
+  -- Define iterator that traverses all conflict markers in current buffer
+  local n_lines = vim.api.nvim_buf_line_count(0)
 
-    -- Track array index of current line (as *index of previous marker*)
-    if cur_line == i then cur_ind = #marked_lines end
+  local iterator = {}
+
+  iterator.forward = function(line_num)
+    for lnum = line_num + 1, n_lines do
+      if H.is_conflict_mark(lnum) then return lnum end
+    end
   end
 
-  if #marked_lines == 0 then return end
+  iterator.backward = function(line_num)
+    for lnum = line_num - 1, 1, -1 do
+      if H.is_conflict_mark(lnum) then return lnum end
+    end
+  end
 
-  -- Compute array index of target comment marker
-  local ind = H.compute_target_ind(marked_lines, cur_ind, {
-    n_times = opts.n_times,
-    direction = direction,
-    current_is_previous = cur_line ~= marked_lines[cur_ind],
-    wrap = true,
-  })
+  iterator.cur_state = vim.fn.line('.')
+  iterator.first_state = iterator.forward(0)
+  iterator.last_state = iterator.backward(n_lines + 1)
 
-  -- Put cursor on target marker
-  vim.api.nvim_win_set_cursor(0, { marked_lines[ind], 0 })
+  -- - Do nothing if there is no conflict markers in current buffer
+  if iterator.first_state == nil then return end
+
+  -- Iterate
+  local res_line_num = H.iterate(iterator, direction, opts)
+
+  -- Apply. Put cursor on first non-blank character of target line.
+  vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
+  vim.cmd('normal! ^')
 end
 
 MiniNext.diagnostic = function(direction, opts)
-  if H.is_disabled() then return end
-
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last', 'next_buf', 'prev_buf' }, direction) then
-    H.error(
-      [[In `diagnostic()` argument `direction` should be one of 'first', 'prev', 'next', 'last', 'next_buf', 'prev_buf'.]]
-    )
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
-
-  -- TODO: Add support for 'next_buf'/'prev_buf' (first diagnostic in some of
-  -- next/prev buffer) and `opts.n_times`.
-
-  if direction == 'first' then vim.diagnostic.goto_next({ cursor_position = { 1, 0 } }) end
-  if direction == 'prev' then vim.diagnostic.goto_prev() end
-  if direction == 'next' then vim.diagnostic.goto_next() end
-  if direction == 'last' then vim.diagnostic.goto_prev({ cursor_position = { 1, 0 } }) end
+  -- TODO
+  -- if H.is_disabled() then return end
+  --
+  -- H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'diagnostic')
+  -- opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  --
+  -- -- TODO: Add support for 'next_buf'/'prev_buf' (first diagnostic in some of
+  -- -- next/prev buffer) and `opts.n_times`.
+  --
+  -- if direction == 'first' then vim.diagnostic.goto_next({ cursor_position = { 1, 0 } }) end
+  -- if direction == 'prev' then vim.diagnostic.goto_prev() end
+  -- if direction == 'next' then vim.diagnostic.goto_next() end
+  -- if direction == 'last' then vim.diagnostic.goto_prev({ cursor_position = { 1, 0 } }) end
 end
 
 MiniNext.file = function(direction, opts)
   if H.is_disabled() then return end
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `file()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'file')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
 
-  -- Compute target directory
-  local cur_file_path = vim.api.nvim_buf_get_name(0)
-  local dir_path = cur_file_path ~= '' and vim.fn.fnamemodify(cur_file_path, ':p:h') or vim.fn.getcwd()
+  -- Get file data
+  local file_data = H.get_file_data()
+  if file_data == nil then return end
+  local file_basenames, directory = file_data.file_basenames, file_data.directory
 
-  -- Compute sorted array of all files in target directory
-  local dir_handle = vim.loop.fs_scandir(dir_path)
-  local iterator = function() return vim.loop.fs_scandir_next(dir_handle) end
+  -- Define iterator that traverses all found files
+  local iterator = {}
 
-  local files = {}
-  for path, path_type in iterator do
-    if path_type == 'file' then table.insert(files, path) end
-  end
-
-  if #files == 0 then return end
-  -- - Sort files ignoring case
-  table.sort(files, function(x, y) return x:lower() < y:lower() end)
-
-  -- Compute array index of current buffer file. NOTE: use 0 for buffers
-  -- without name so that "prev" will be last and "next" will be first.
-  local cur_ind = 0
-  if cur_file_path ~= '' then
-    local cur_file_basename = vim.fn.fnamemodify(cur_file_path, ':t')
-    for i, file_name in ipairs(files) do
-      if cur_file_basename == file_name then
-        cur_ind = i
-        break
-      end
+  local get_index = function(basename)
+    if basename == '' then return end
+    for i, cur_basename in ipairs(file_basenames) do
+      if basename == cur_basename then return i end
     end
   end
 
-  -- Compute array index of target file
-  local ind = H.compute_target_ind(files, cur_ind, {
-    direction = direction,
-    n_times = opts.n_times,
-    current_is_previous = cur_ind == 0,
-    wrap = true,
-  })
+  iterator.forward = function(basename)
+    local ind = get_index(basename)
+    if ind == nil or #file_basenames <= ind then return end
+    return file_basenames[ind + 1]
+  end
 
-  -- Open target file
+  iterator.backward = function(basename)
+    local ind = get_index(basename)
+    if ind == nil or ind <= 1 then return end
+    return file_basenames[ind - 1]
+  end
+
+  iterator.cur_state = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':t')
+  iterator.first_state = file_basenames[1]
+  iterator.last_state = file_basenames[#file_basenames]
+
+  -- Iterate
+  local res_basename = H.iterate(iterator, direction, opts)
+  -- - Do nothing if it should open current buffer. Reduces flickering.
+  if res_basename == iterator.cur_state then return end
+
+  -- Apply. Open target_path.
   local path_sep = package.config:sub(1, 1)
-  local target_path = dir_path .. path_sep .. files[ind]
+  local target_path = directory .. path_sep .. res_basename
   vim.cmd('edit ' .. target_path)
 end
 
 MiniNext.indent = function(direction, opts)
-  if H.is_disabled() then return end
+  -- TODO
 
-  if not vim.tbl_contains({ 'prev_min', 'prev_less', 'next_less', 'next_min' }, direction) then
-    H.error([[In `file()` argument `direction` should be one of 'prev_min', 'prev_less', 'next_less', 'next_min'.]])
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
-
-  -- Compute loop data
-  local is_up = direction == 'prev_min' or direction == 'prev_less'
-  local start_line = vim.fn.line('.')
-  local iter_line_fun = is_up and vim.fn.prevnonblank or vim.fn.nextnonblank
-  -- - Make it work for empty start line
-  local start_indent = vim.fn.indent(iter_line_fun(start_line))
-
-  -- Don't move if already on minimum indent
-  if start_indent == 0 then return end
-
-  -- Loop until indent is decreased `n_times` times
-  local cur_line, step = start_line, is_up and -1 or 1
-  local n_times, cur_n_times = (direction == 'prev_min' or direction == 'next_min') and math.huge or opts.n_times, 0
-  local max_new_indent = start_indent - 1
-  local target_line
-  while cur_line > 0 do
-    cur_line = iter_line_fun(cur_line + step)
-    local new_indent = vim.fn.indent(cur_line)
-
-    -- New indent can be negative only if line is outside of present range.
-    -- Don't accept those also.
-    if 0 <= new_indent and new_indent <= max_new_indent then
-      -- Accept result even if can't jump exactly `n_times` times
-      target_line = cur_line
-      max_new_indent = new_indent - 1
-      cur_n_times = cur_n_times + 1
-    end
-
-    -- Stop if reached target `n_times` or can't reduce current indent
-    if n_times <= cur_n_times or max_new_indent < 0 then break end
-  end
-
-  -- Place cursor at first non-blank of target line
-  if target_line == nil then return end
-  vim.api.nvim_win_set_cursor(0, { target_line, 0 })
-  vim.cmd('normal! ^')
+  -- if H.is_disabled() then return end
+  --
+  -- H.validate_direction(direction, { 'prev_min', 'prev_less', 'next_less', 'next_min' }, 'indent')
+  -- opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  --
+  -- -- Compute loop data
+  -- local is_up = direction == 'prev_min' or direction == 'prev_less'
+  -- local start_line = vim.fn.line('.')
+  -- local iter_line_fun = is_up and vim.fn.prevnonblank or vim.fn.nextnonblank
+  -- -- - Make it work for empty start line
+  -- local start_indent = vim.fn.indent(iter_line_fun(start_line))
+  --
+  -- -- Don't move if already on minimum indent
+  -- if start_indent == 0 then return end
+  --
+  -- -- Loop until indent is decreased `n_times` times
+  -- local cur_line, step = start_line, is_up and -1 or 1
+  -- local n_times, cur_n_times = (direction == 'prev_min' or direction == 'next_min') and math.huge or opts.n_times, 0
+  -- local max_new_indent = start_indent - 1
+  -- local target_line
+  -- while cur_line > 0 do
+  --   cur_line = iter_line_fun(cur_line + step)
+  --   local new_indent = vim.fn.indent(cur_line)
+  --
+  --   -- New indent can be negative only if line is outside of present range.
+  --   -- Don't accept those also.
+  --   if 0 <= new_indent and new_indent <= max_new_indent then
+  --     -- Accept result even if can't jump exactly `n_times` times
+  --     target_line = cur_line
+  --     max_new_indent = new_indent - 1
+  --     cur_n_times = cur_n_times + 1
+  --   end
+  --
+  --   -- Stop if reached target `n_times` or can't reduce current indent
+  --   if n_times <= cur_n_times or max_new_indent < 0 then break end
+  -- end
+  --
+  -- -- Place cursor at first non-blank of target line
+  -- if target_line == nil then return end
+  -- vim.api.nvim_win_set_cursor(0, { target_line, 0 })
+  -- vim.cmd('normal! ^')
 end
 
 MiniNext.jump = function(direction, opts)
   if H.is_disabled() then return end
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `jump()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'jump')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
 
-  -- Construct array of jumplist indexes that are inside current buffer
-  local buf_id = vim.api.nvim_get_current_buf()
+  -- Define iterator that traverses all jumplist entries inside current buffer
+  local cur_buf_id = vim.api.nvim_get_current_buf()
   local jump_list, cur_jump_num = unpack(vim.fn.getjumplist())
-  local buf_jump_indexes, cur_ind = H.make_array_jump(jump_list, cur_jump_num)
-  local n_buf_jumps = #buf_jump_indexes
+  local n_list = #jump_list
+  if n_list == 0 then return end
+  -- - Correct for zero-based indexing
+  cur_jump_num = cur_jump_num + 1
 
-  -- Compute array index of target buffer jump. In case current jump is outside
-  -- of jump list, make it that single `direction = 'prev'` results in last
-  -- jump and single `direction = 'next'` - in first (if wrapping).
-  local current_jump = jump_list[buf_jump_indexes[cur_ind]] or {}
-  local current_jump_is_in_current_buffer = buf_id == current_jump.bufnr
-  local current_is_previous = cur_ind > n_buf_jumps or not current_jump_is_in_current_buffer
-  cur_ind = math.min(cur_ind, n_buf_jumps)
+  local iterator = {}
 
-  local ind = H.compute_target_ind(buf_jump_indexes, cur_ind, {
-    direction = direction,
-    n_times = opts.n_times,
-    current_is_previous = current_is_previous,
-    wrap = false,
-  })
+  local is_jump_num_from_current_buffer = function(jump_num)
+    local jump_entry = jump_list[jump_num]
+    if jump_entry == nil then return end
+    return jump_entry.bufnr == cur_buf_id
+  end
 
-  -- Make jump
-  H.make_jump(jump_list, cur_jump_num, buf_jump_indexes[ind])
+  iterator.forward = function(jump_num)
+    for num = jump_num + 1, n_list do
+      if is_jump_num_from_current_buffer(num) then return num end
+    end
+  end
+
+  iterator.backward = function(jump_num)
+    for num = jump_num - 1, 1, -1 do
+      if is_jump_num_from_current_buffer(num) then return num end
+    end
+  end
+
+  iterator.cur_state = cur_jump_num
+  iterator.first_state = iterator.forward(0)
+  iterator.last_state = iterator.backward(n_list + 1)
+
+  -- Iterate
+  local res_jump_num = H.iterate(iterator, direction, opts)
+
+  _G.info = { iterator = iterator, res_jump_num = res_jump_num }
+
+  -- Apply. Make jump.
+  H.make_jump(jump_list, cur_jump_num, res_jump_num)
 end
 
 MiniNext.oldfile = function(direction, opts)
-  if H.is_disabled() then return end
+  -- TODO
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `oldfile()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
-
-  -- Construct array of readable old files including current session
-  -- They should be sorted in order from oldest to newest
-  -- !!!!!!!!!! NOTE: Currently doesn't work as it always updates recent files.
-  -- Need to write own tracking of old files or use only `vim.v.oldfiles`.
-  -- !!!!!!!!!
-  local old_files = H.make_array_oldfiles()
-  if #old_files == 0 then return end
-
-  -- Find current array index based on current buffer path
-  local cur_ind = #old_files
-
-  -- Compute array index of target file
-  local cur_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':p')
-  local ind = H.compute_target_ind(old_files, cur_ind, {
-    direction = direction,
-    n_times = opts.n_times,
-    current_is_previous = old_files[cur_ind] ~= cur_path,
-    wrap = true,
-  })
-
-  -- Open target file
-  vim.cmd('edit ' .. old_files[ind])
+  -- if H.is_disabled() then return end
+  --
+  -- H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'oldfile')
+  -- opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  --
+  -- -- Construct array of readable old files including current session
+  -- -- They should be sorted in order from oldest to newest
+  -- -- !!!!!!!!!! NOTE: Currently doesn't work as it always updates recent files.
+  -- -- Need to write own tracking of old files or use only `vim.v.oldfiles`.
+  -- -- !!!!!!!!!
+  -- local old_files = H.make_array_oldfiles()
+  -- if #old_files == 0 then return end
+  --
+  -- -- Find current array index based on current buffer path
+  -- local cur_ind = #old_files
+  --
+  -- -- Compute array index of target file
+  -- local cur_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':p')
+  -- local ind = H.compute_target_ind(old_files, cur_ind, {
+  --   direction = direction,
+  --   n_times = opts.n_times,
+  --   current_is_previous = old_files[cur_ind] ~= cur_path,
+  --   wrap = true,
+  -- })
+  --
+  -- -- Open target file
+  -- vim.cmd('edit ' .. old_files[ind])
 end
 
 MiniNext.location = function(direction, opts)
   if H.is_disabled() then return end
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `location()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'location')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
 
   H.qf_loc_implementation('location', direction, opts)
 end
@@ -402,10 +446,8 @@ end
 MiniNext.quickfix = function(direction, opts)
   if H.is_disabled() then return end
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `quickfix()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
-  end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'quickfix')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
 
   H.qf_loc_implementation('quickfix', direction, opts)
 end
@@ -413,46 +455,38 @@ end
 MiniNext.window = function(direction, opts)
   if H.is_disabled() then return end
 
-  -- NOTE: these solutions are easier, but have drawbacks:
-  -- - Repeat `<C-w>w` / `<C-w>W` `opts.count` times. This causes occasional
-  --   flickering due to `WinLeave/WinEnter` events.
-  -- - Use `<C-w>{count}w` / `<C-w>{count}W` with correctly computed `{count}`.
-  --   This doesn't work well with floating windows (may focus when shouldn't).
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'window')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
 
-  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
-    H.error([[In `window()` argument `direction` should be one of 'first', 'prev', 'next', 'last'.]])
+  -- Define iterator that traverses all normal windows in "natural" order
+  local is_normal = function(win_nr)
+    local win_id = vim.fn.win_getid(win_nr)
+    return vim.api.nvim_win_get_config(win_id).relative == ''
   end
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
 
-  -- Compute list of normal windows in "natural" order. Can not be optimized to
-  -- not traverse all windows because it has to know how many **normal**
-  -- windows there are to correctly handle wrapping around edges.
-  local cur_winnr, cur_ind = vim.fn.winnr(), nil
-  local normal_windows = {}
-  for i = 1, vim.fn.winnr('$') do
-    local win_id = vim.fn.win_getid(i)
-    local is_normal = vim.api.nvim_win_get_config(win_id).relative == ''
-    if is_normal then
-      table.insert(normal_windows, win_id)
+  local iterator = {}
 
-      -- Track array index of current window
-      if cur_winnr == i then cur_ind = #normal_windows end
+  iterator.forward = function(win_nr)
+    for nr = win_nr + 1, vim.fn.winnr('$') do
+      if is_normal(nr) then return nr end
     end
   end
-  -- - Correct for non-normal (floating) windows in a way that next window is
-  --   the first one and previous - last.
-  cur_ind = cur_ind or 0
 
-  -- Compute array index of target window
-  local ind = H.compute_target_ind(normal_windows, cur_ind, {
-    direction = direction,
-    n_times = opts.n_times,
-    current_is_previous = cur_ind == 0,
-    wrap = true,
-  })
+  iterator.backward = function(win_nr)
+    for nr = win_nr - 1, 1, -1 do
+      if is_normal(nr) then return nr end
+    end
+  end
 
-  -- Focus target window
-  vim.api.nvim_set_current_win(normal_windows[ind])
+  iterator.cur_state = vim.fn.winnr()
+  iterator.first_state = iterator.forward(0)
+  iterator.last_state = iterator.backward(vim.fn.winnr('$') + 1)
+
+  -- Iterate
+  local res_win_nr = H.iterate(iterator, direction, opts)
+
+  -- Apply
+  vim.api.nvim_set_current_win(vim.fn.win_getid(res_win_nr))
 end
 
 -- Helper data ================================================================
@@ -496,7 +530,7 @@ H.apply_config = function(config)
   local suffixes = config.mapping_suffixes
 
   if suffixes.buffer ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.buffer)
+    local low, up = H.get_suffix_variants(suffixes.buffer)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.buffer('prev')<CR>",  { desc = 'Previous buffer' })
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.buffer('next')<CR>",  { desc = 'Next buffer' })
     H.map('n', '[' .. up,  "<Cmd>lua MiniNext.buffer('first')<CR>", { desc = 'First buffer' })
@@ -504,10 +538,11 @@ H.apply_config = function(config)
   end
 
   if suffixes.comment ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.comment)
+    local low, up = H.get_suffix_variants(suffixes.comment)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.comment('prev')<CR>",  { desc = 'Previous comment' })
     H.map('x', '[' .. low, "<Cmd>lua MiniNext.comment('prev')<CR>",  { desc = 'Previous comment' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniNext.comment('prev')<CR>", { desc = 'Previous comment' })
+
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.comment('next')<CR>",  { desc = 'Next comment' })
     H.map('x', ']' .. low, "<Cmd>lua MiniNext.comment('next')<CR>",  { desc = 'Next comment' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniNext.comment('next')<CR>", { desc = 'Next comment' })
@@ -515,16 +550,18 @@ H.apply_config = function(config)
     H.map('n', '[' .. up, "<Cmd>lua MiniNext.comment('first')<CR>",  { desc = 'First comment' })
     H.map('x', '[' .. up, "<Cmd>lua MiniNext.comment('first')<CR>",  { desc = 'First comment' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniNext.comment('first')<CR>", { desc = 'First comment' })
+
     H.map('n', ']' .. up, "<Cmd>lua MiniNext.comment('last')<CR>",   { desc = 'Last comment' })
     H.map('x', ']' .. up, "<Cmd>lua MiniNext.comment('last')<CR>",   { desc = 'Last comment' })
     H.map('o', ']' .. up, "V<Cmd>lua MiniNext.comment('last')<CR>",  { desc = 'Last comment' })
   end
 
   if suffixes.conflict ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.conflict)
+    local low, up = H.get_suffix_variants(suffixes.conflict)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.conflict('prev')<CR>",  { desc = 'Previous conflict' })
     H.map('x', '[' .. low, "<Cmd>lua MiniNext.conflict('prev')<CR>",  { desc = 'Previous conflict' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniNext.conflict('prev')<CR>", { desc = 'Previous conflict' })
+
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.conflict('next')<CR>",  { desc = 'Next conflict' })
     H.map('x', ']' .. low, "<Cmd>lua MiniNext.conflict('next')<CR>",  { desc = 'Next conflict' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniNext.conflict('next')<CR>", { desc = 'Next conflict' })
@@ -532,16 +569,18 @@ H.apply_config = function(config)
     H.map('n', '[' .. up, "<Cmd>lua MiniNext.conflict('first')<CR>",  { desc = 'First conflict' })
     H.map('x', '[' .. up, "<Cmd>lua MiniNext.conflict('first')<CR>",  { desc = 'First conflict' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniNext.conflict('first')<CR>", { desc = 'First conflict' })
+
     H.map('n', ']' .. up, "<Cmd>lua MiniNext.conflict('last')<CR>",   { desc = 'Last conflict' })
     H.map('x', ']' .. up, "<Cmd>lua MiniNext.conflict('last')<CR>",   { desc = 'Last conflict' })
     H.map('o', ']' .. up, "V<Cmd>lua MiniNext.conflict('last')<CR>",  { desc = 'Last conflict' })
   end
 
   if suffixes.diagnostic ~= '' then
-    local low, up, ctrl = H.get_suffix_variants(suffixes.diagnostic)
+    local low, up = H.get_suffix_variants(suffixes.diagnostic)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
     H.map('x', '[' .. low, "<Cmd>lua MiniNext.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniNext.diagnostic('prev')<CR>", { desc = 'Previous diagnostic' })
+
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
     H.map('x', ']' .. low, "<Cmd>lua MiniNext.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniNext.diagnostic('next')<CR>", { desc = 'Next diagnostic' })
@@ -549,16 +588,14 @@ H.apply_config = function(config)
     H.map('n', '[' .. up, "<Cmd>lua MiniNext.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
     H.map('x', '[' .. up, "<Cmd>lua MiniNext.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniNext.diagnostic('first')<CR>", { desc = 'First diagnostic' })
+
     H.map('n', ']' .. up, "<Cmd>lua MiniNext.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
     H.map('x', ']' .. up, "<Cmd>lua MiniNext.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
     H.map('o', ']' .. up, "V<Cmd>lua MiniNext.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
-
-    H.map('n', '[' .. ctrl, "<Cmd>lua MiniNext.diagnostic('prev_buf')<CR>", { desc = 'Diagnostic in previous buffer' })
-    H.map('n', ']' .. ctrl, "<Cmd>lua MiniNext.diagnostic('next_buf')<CR>", { desc = 'Diagnostic in next buffer' })
   end
 
   if suffixes.file ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.file)
+    local low, up = H.get_suffix_variants(suffixes.file)
     H.map('n', '[' .. low,  "<Cmd>lua MiniNext.file('prev')<CR>",     { desc = 'Previous file' })
     H.map('n', ']' .. low,  "<Cmd>lua MiniNext.file('next')<CR>",     { desc = 'Next file' })
     H.map('n', '[' .. up,   "<Cmd>lua MiniNext.file('first')<CR>",    { desc = 'First file' })
@@ -566,10 +603,11 @@ H.apply_config = function(config)
   end
 
   if suffixes.indent ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.indent)
+    local low, up = H.get_suffix_variants(suffixes.indent)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.indent('prev_less')<CR>",  { desc = 'Previous less indent' })
     H.map('x', '[' .. low, "<Cmd>lua MiniNext.indent('prev_less')<CR>",  { desc = 'Previous less indent' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniNext.indent('prev_less')<CR>", { desc = 'Previous less indent' })
+
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.indent('next_less')<CR>",  { desc = 'Next less indent' })
     H.map('x', ']' .. low, "<Cmd>lua MiniNext.indent('next_less')<CR>",  { desc = 'Next less indent' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniNext.indent('next_less')<CR>", { desc = 'Next less indent' })
@@ -577,16 +615,18 @@ H.apply_config = function(config)
     H.map('n', '[' .. up, "<Cmd>lua MiniNext.indent('prev_min')<CR>",  { desc = 'Previous min indent' })
     H.map('x', '[' .. up, "<Cmd>lua MiniNext.indent('prev_min')<CR>",  { desc = 'Previous min indent' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniNext.indent('prev_min')<CR>", { desc = 'Previous min indent' })
+
     H.map('n', ']' .. up, "<Cmd>lua MiniNext.indent('next_min')<CR>",  { desc = 'Next min indent' })
     H.map('x', ']' .. up, "<Cmd>lua MiniNext.indent('next_min')<CR>",  { desc = 'Next min indent' })
     H.map('o', ']' .. up, "V<Cmd>lua MiniNext.indent('next_min')<CR>", { desc = 'Next min indent' })
   end
 
   if suffixes.jump ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.jump)
+    local low, up = H.get_suffix_variants(suffixes.jump)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.jump('prev')<CR>",  { desc = 'Previous jump' })
     H.map('x', '[' .. low, "<Cmd>lua MiniNext.jump('prev')<CR>",  { desc = 'Previous jump' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniNext.jump('prev')<CR>", { desc = 'Previous jump' })
+
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.jump('next')<CR>",  { desc = 'Next jump' })
     H.map('x', ']' .. low, "<Cmd>lua MiniNext.jump('next')<CR>",  { desc = 'Next jump' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniNext.jump('next')<CR>", { desc = 'Next jump' })
@@ -594,13 +634,14 @@ H.apply_config = function(config)
     H.map('n', '[' .. up, "<Cmd>lua MiniNext.jump('first')<CR>",  { desc = 'First jump' })
     H.map('x', '[' .. up, "<Cmd>lua MiniNext.jump('first')<CR>",  { desc = 'First jump' })
     H.map('o', '[' .. up, "v<Cmd>lua MiniNext.jump('first')<CR>", { desc = 'First jump' })
+
     H.map('n', ']' .. up, "<Cmd>lua MiniNext.jump('last')<CR>",   { desc = 'Last jump' })
     H.map('x', ']' .. up, "<Cmd>lua MiniNext.jump('last')<CR>",   { desc = 'Last jump' })
     H.map('o', ']' .. up, "v<Cmd>lua MiniNext.jump('last')<CR>",  { desc = 'Last jump' })
   end
 
   if suffixes.oldfile ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.oldfile)
+    local low, up = H.get_suffix_variants(suffixes.oldfile)
     H.map('n', '[' .. low,  "<Cmd>lua MiniNext.oldfile('prev')<CR>",  { desc = 'Previous oldfile' })
     H.map('n', ']' .. low,  "<Cmd>lua MiniNext.oldfile('next')<CR>",  { desc = 'Next oldfile' })
     H.map('n', '[' .. up,   "<Cmd>lua MiniNext.oldfile('first')<CR>", { desc = 'First oldfile' })
@@ -608,7 +649,7 @@ H.apply_config = function(config)
   end
 
   if suffixes.location ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.location)
+    local low, up = H.get_suffix_variants(suffixes.location)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.location('prev')<CR>",  { desc = 'Previous location' })
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.location('next')<CR>",  { desc = 'Next location' })
     H.map('n', '[' .. up,  "<Cmd>lua MiniNext.location('first')<CR>", { desc = 'First location' })
@@ -616,7 +657,7 @@ H.apply_config = function(config)
   end
 
   if suffixes.quickfix ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.quickfix)
+    local low, up = H.get_suffix_variants(suffixes.quickfix)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.quickfix('prev')<CR>",  { desc = 'Previous quickfix' })
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.quickfix('next')<CR>",  { desc = 'Next quickfix' })
     H.map('n', '[' .. up,  "<Cmd>lua MiniNext.quickfix('first')<CR>", { desc = 'First quickfix' })
@@ -624,7 +665,7 @@ H.apply_config = function(config)
   end
 
   if suffixes.window ~= '' then
-    local low, up, _ = H.get_suffix_variants(suffixes.window)
+    local low, up = H.get_suffix_variants(suffixes.window)
     H.map('n', '[' .. low, "<Cmd>lua MiniNext.window('prev')<CR>",  { desc = 'Previous window' })
     H.map('n', ']' .. low, "<Cmd>lua MiniNext.window('next')<CR>",  { desc = 'Next window' })
     H.map('n', '[' .. up,  "<Cmd>lua MiniNext.window('first')<CR>", { desc = 'First window' })
@@ -632,12 +673,42 @@ H.apply_config = function(config)
   end
 end
 
-H.get_suffix_variants = function(char)
-  local lower, upper = char:lower(), char:upper()
-  return lower, upper, string.format('<C-%s>', lower)
-end
+H.get_suffix_variants = function(char) return char:lower(), char:upper() end
 
 H.is_disabled = function() return vim.g.mininext_disable == true or vim.b.mininext_disable == true end
+
+-- Iterator -------------------------------------------------------------------
+H.iterate = function(iterator, direction, opts)
+  local res_state = iterator.cur_state
+
+  -- Compute loop data
+  local n_times, iter_method = opts.n_times, 'forward'
+
+  if direction == 'prev' then iter_method = 'backward' end
+
+  if direction == 'first' then
+    res_state = iterator.first_state
+    iter_method, n_times = 'forward', n_times - 1
+  end
+
+  if direction == 'last' then
+    res_state = iterator.last_state
+    iter_method, n_times = 'backward', n_times - 1
+  end
+
+  -- Loop
+  local iter = iterator[iter_method]
+  for _ = 1, n_times do
+    local new_state = iter(res_state)
+    if new_state == nil and not opts.wrap then break end
+
+    res_state = new_state or (iter_method == 'forward' and iterator.first_state or iterator.last_state)
+  end
+
+  _G.info = { iterator = iterator, direction = direction, opts = opts, res_state = res_state }
+
+  return res_state
+end
 
 -- Compute target array index -------------------------------------------------
 H.compute_target_ind = function(arr, cur_ind, opts)
@@ -677,44 +748,49 @@ end
 
 -- Comments -------------------------------------------------------------------
 H.make_comment_checker = function()
-  local left, right = unpack(vim.fn.split(vim.o.commentstring, '%s'))
+  local left, right = unpack(vim.fn.split(vim.bo.commentstring, '%s'))
   left, right = left or '', right or ''
   if left == '' and right == '' then return nil end
 
   -- String is commented if it has structure:
   -- <space> <left> <anything> <right> <space>
   local regex = string.format('^%%s-%s.*%s%%s-$', vim.pesc(vim.trim(left)), vim.pesc(vim.trim(right)))
-  return function(line) return line:find(regex) ~= nil end
+
+  -- Check if line with number `line_num` is a comment. NOTE: `getline()`
+  -- return empty string for invalid line number, which makes them *not
+  -- commented*.
+  return function(line_num) return vim.fn.getline(line_num):find(regex) ~= nil end
 end
 
 -- Conflicts ------------------------------------------------------------------
-H.is_conflict_mark = function(line)
-  local l_start = line:sub(1, 8)
+H.is_conflict_mark = function(line_num)
+  local l_start = vim.fn.getline(line_num):sub(1, 8)
   return l_start == '<<<<<<< ' or l_start == '=======' or l_start == '>>>>>>> '
 end
 
--- Jumps ----------------------------------------------------------------------
-H.make_array_jump = function(jump_list, cur_jump_num, buf_id)
-  -- - Correct for zero-indexing
-  cur_jump_num = cur_jump_num + 1
+-- Files ----------------------------------------------------------------------
+H.get_file_data = function()
+  -- Compute target directory
+  local cur_buf_path = vim.api.nvim_buf_get_name(0)
+  local dir_path = cur_buf_path ~= '' and vim.fn.fnamemodify(cur_buf_path, ':p:h') or vim.fn.getcwd()
 
-  local buf_jump_indexes, cur_ind = {}, nil
-  for i, jump_entry in ipairs(jump_list) do
-    if jump_entry.bufnr == buf_id then table.insert(buf_jump_indexes, i) end
+  -- Compute sorted array of all files in target directory
+  local dir_handle = vim.loop.fs_scandir(dir_path)
+  local files_stream = function() return vim.loop.fs_scandir_next(dir_handle) end
 
-    -- Track array index of current jump (as *index of previous jump*)
-    if cur_jump_num == i then cur_ind = #buf_jump_indexes end
+  local files = {}
+  for basename, fs_type in files_stream do
+    if fs_type == 'file' then table.insert(files, basename) end
   end
 
-  if #buf_jump_indexes == 0 then return end
+  -- - Sort files ignoring case
+  table.sort(files, function(x, y) return x:lower() < y:lower() end)
 
-  -- - Account for when current jump is outside of jump list (like just after
-  --   entering buffer).
-  cur_ind = cur_ind or (#buf_jump_indexes + 1)
-
-  return buf_jump_indexes, cur_ind
+  if #files == 0 then return end
+  return { directory = dir_path, file_basenames = files }
 end
 
+-- Jumps ----------------------------------------------------------------------
 H.make_jump = function(jump_list, cur_jump_num, new_jump_num)
   local num_diff = new_jump_num - cur_jump_num
 
@@ -723,6 +799,7 @@ H.make_jump = function(jump_list, cur_jump_num, new_jump_num)
     -- move manually; then jump with "last" direction should move to last jump.
     local jump_entry = jump_list[new_jump_num]
     pcall(vim.fn.cursor, { jump_entry.lnum, jump_entry.col + 1, jump_entry.coladd })
+    return
   end
 
   -- Use builtin mappings to also update current jump entry
@@ -783,21 +860,30 @@ H.qf_loc_implementation = function(list_type, direction, opts)
     get_list, goto_command = function(...) return vim.fn.getloclist(0, ...) end, 'll'
   end
 
-  -- Get quickfix list and ensure it is not empty
-  local qf_list = get_list()
-  if #qf_list == 0 then return end
+  -- Define iterator that traverses quickfix/location list entries
+  local list = get_list()
+  local n_list = #list
+  if n_list == 0 then return end
 
-  -- Compute array index of target quickfix entry (wrapping around edges)
-  local ind = H.compute_target_ind(qf_list, get_list({ idx = 0 }).idx, {
-    direction = direction,
-    n_times = opts.n_times,
-    current_is_previous = false,
-    wrap = true,
-  })
+  local iterator = { cur_state = get_list({ idx = 0 }).idx, first_state = 1, last_state = n_list }
 
+  iterator.forward = function(id)
+    if n_list <= id then return end
+    return id + 1
+  end
+
+  iterator.backward = function(id)
+    if id <= 1 then return end
+    return id - 1
+  end
+
+  -- Iterate
+  local res_id = H.iterate(iterator, direction, opts)
+
+  -- Apply
   -- Focus target entry, open enough folds and center
-  local command = string.format('%s %d | normal! zvzz', goto_command, ind)
-  vim.cmd(command)
+  vim.cmd(goto_command .. ' ' .. res_id)
+  vim.cmd('normal! zvzz')
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -806,6 +892,14 @@ H.error = function(msg) error(string.format('(mini.next) %s', msg), 0) end
 H.validate_if = function(predicate, x, x_name)
   local is_valid, msg = predicate(x, x_name)
   if not is_valid then H.error(msg) end
+end
+
+H.validate_direction = function(direction, choices, fun_name)
+  if not vim.tbl_contains(choices, direction) then
+    local choices_string = "'" .. table.concat(choices, "', '") .. "'"
+    local error_text = string.format('In `%s()` argument `direction` should be one of %s.', fun_name, choices_string)
+    H.error(error_text)
+  end
 end
 
 H.map = function(mode, key, rhs, opts)
