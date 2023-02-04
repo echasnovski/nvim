@@ -104,6 +104,95 @@ EC.toggle_quickfix = function()
   vim.cmd(command)
 end
 
+-- Custom 'statuscolumn' for Neovim>=0.9
+--
+-- Revisit this with a better API.
+--
+-- Ideally, it should **efficiently** allow users to define each column for
+-- a particular signs. Like:
+-- - First column is for signs from 'gitsigns.nvim' and todo-comments.
+-- - Second - diagnostic errors and warnings.
+-- - Then line number.
+-- - Then a column for everything else with highest priority.
+--
+-- Other notes:
+-- - Make sure to allow fixed width for parts to exclude possibility of
+--   horizontal shifts. Relevant, for example, for "absolute number" ->
+--   "relative number" conversion.
+-- - Set up `active()` and `inactive()` with change like in 'mini.statusline'.
+-- - Should somehow not show any status column where it shouldn't be (like in
+--   help files).
+_G.statuscol_times = {}
+EC.statuscolumn = function()
+  local start_time = vim.loop.hrtime()
+
+  local lnum = vim.v.lnum
+
+  -- Line part
+  local line = EC.get_line_statuscolumn_string(lnum, 3)
+
+  -- Sign part
+  local signs = EC.get_sign_statuscolumn_string(lnum, 2)
+
+  local res = string.format('%s%%=%s', signs, line)
+  local end_time = vim.loop.hrtime()
+  table.insert(_G.statuscol_times, 0.000001 * (end_time - start_time))
+  return res
+end
+
+EC.get_line_statuscolumn_string = function(lnum, width)
+  local number, relativenumber = vim.wo.number, vim.wo.relativenumber
+  if not (number or relativenumber) then return '' end
+
+  local is_current_line = lnum == vim.fn.line('.')
+
+  -- Compute correct line number value
+  local show_relnum = relativenumber and not (number and is_current_line)
+  local text = vim.v.virtnum ~= 0 and '' or (show_relnum and vim.v.relnum or (number and lnum or ''))
+  text = tostring(text):sub(1, width)
+
+  -- Compute correct highlight group
+  local hl = 'LineNr'
+  if is_current_line and vim.wo.cursorline then
+    local cursorlineopt = vim.wo.cursorlineopt
+    local cursorline_affects_number = cursorlineopt:find('number') ~= nil or cursorlineopt:find('both') ~= nil
+
+    hl = cursorline_affects_number and 'CursorLineNr' or 'LineNr'
+  elseif vim.wo.relativenumber then
+    local relnum = vim.v.relnum
+    hl = relnum < 0 and 'LineNrAbove' or (relnum > 0 and 'LineNrBelow' or 'LineNr')
+  end
+
+  -- Combine result
+  return string.format('%%#%s#%s ', hl, text)
+end
+
+EC.get_sign_statuscolumn_string = function(lnum, width)
+  local signs = vim.fn.sign_getplaced(vim.api.nvim_get_current_buf(), { group = '*', lnum = lnum })[1].signs
+  if #signs == 0 then return string.rep(' ', width) end
+
+  local parts, sign_definitions = {}, {}
+  local cur_width = 0
+  for i = #signs, 1, -1 do
+    local name = signs[i].name
+
+    local def = sign_definitions[name] or vim.fn.sign_getdefined(name)[1]
+    sign_definitions[name] = def
+
+    cur_width = cur_width + vim.fn.strdisplaywidth(def.text)
+    local s = string.format('%%#%s#%s', def.texthl, vim.trim(def.text or ''))
+    table.insert(parts, s)
+  end
+  local sign_string = table.concat(parts, '') .. string.rep(' ', width - cur_width)
+
+  return sign_string
+end
+
+if vim.fn.exists('&statuscolumn') == 1 then
+  vim.o.signcolumn = 'no'
+  vim.o.statuscolumn = '%!v:lua.EC.statuscolumn()'
+end
+
 -- Overwrite `vim.ui.select()` with Telescope ---------------------------------
 EC.ui_select_default = vim.ui.select
 
