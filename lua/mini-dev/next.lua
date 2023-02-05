@@ -6,14 +6,14 @@
 -- - Think about renaming conflict suffix to 'n' (as in 'unimpaired.vim').
 -- - Think about final design of `oldfile()` - either use `vim.v.oldfiles` or
 --   manually efficiently track recent buffers on every BufEnter (except when
---   it was caused by `oldfile()` itself to allow walking along the history)
--- - Think about implementing new directions to `indent()` ('prev' and 'next')
---   which will traverse all lines with changed indent (not only which are
---   less).
+--   it was caused by `oldfile()` itself to allow walking along the history).
+--   !!! OR !!! implement separately `oldfiles` and `recent_buffers`.
+--   !!! OR !!! update `buffer()` with new option `order` with values 'number'
+--   and 'recency'.
 -- - Add `wrap` option to all functions. This needs a refactor to always use
 --   "array -> new index" design.
 -- - Think about modifying `MiniNext.config` to have per-item configs
---   (`suffix`, `wrap`, etc.).
+--   (`map_suffix` and `options`).
 -- - Other todos across code.
 -- - Ensure the following meaning of `n_times` is followed as much as possible:
 --     - For 'first' - it is `n_times - 1` forward starting from first one.
@@ -99,6 +99,18 @@ MiniNext.setup = function(config)
 
   -- Apply config
   H.apply_config(config)
+
+  -- Module behavior
+  vim.api.nvim_exec(
+    [[augroup MiniNext
+        au!
+        au BufEnter * lua MiniNext.oldfiles_append_buf()
+      augroup END]],
+    false
+  )
+  -- Initialize old files priorities. Use `vim.schedule()` to ensure it is done
+  -- when shada file is loaded.
+  vim.schedule(H.oldfiles_init)
 end
 
 --stylua: ignore
@@ -164,31 +176,39 @@ MiniNext.comment = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'comment')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true, block_side = 'near' }, opts or {})
 
-  -- Define iterator that traverses all comment block starts in current buffer
+  -- Compute loop data to traverse target commented lines in current buffer
   local is_commented = H.make_comment_checker()
   if is_commented == nil then return end
 
-  local n_lines = vim.api.nvim_buf_line_count(0)
+  local predicate = ({
+    start = function(above, cur, _, _) return cur and not above end,
+    ['end'] = function(_, cur, below, _) return cur and not below end,
+    both = function(above, cur, below, _) return cur and not (above and below) end,
+    near = function(_, cur, _, recent) return cur and not recent end,
+  })[opts.block_side]
+  if predicate == nil then return end
 
+  -- Define iterator
   local iterator = {}
 
+  local n_lines = vim.api.nvim_buf_line_count(0)
   iterator.forward = function(line_num)
-    local prev_is_commented = is_commented(line_num)
+    local above, cur = is_commented(line_num), is_commented(line_num + 1)
     for lnum = line_num + 1, n_lines do
-      local cur_is_commented = is_commented(lnum)
-      if cur_is_commented and not prev_is_commented then return lnum end
-      prev_is_commented = cur_is_commented
+      local below = is_commented(lnum + 1)
+      if predicate(above, cur, below, above) then return lnum end
+      above, cur = cur, below
     end
   end
 
   iterator.backward = function(line_num)
-    local cur_is_commented = is_commented(line_num - 1)
+    local cur, below = is_commented(line_num - 1), is_commented(line_num)
     for lnum = line_num - 1, 1, -1 do
-      local prev_is_commented = is_commented(lnum - 1)
-      if cur_is_commented and not prev_is_commented then return lnum end
-      cur_is_commented = prev_is_commented
+      local above = is_commented(lnum - 1)
+      if predicate(above, cur, below, below) then return lnum end
+      below, cur = cur, above
     end
   end
 
@@ -202,9 +222,9 @@ MiniNext.comment = function(direction, opts)
   -- Iterate
   local res_line_num = H.iterate(iterator, direction, opts)
 
-  -- Apply. Put cursor on first non-blank character of target line.
+  -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
-  vim.cmd('normal! ^')
+  vim.cmd('normal! zv^')
 end
 
 MiniNext.conflict = function(direction, opts)
@@ -240,9 +260,9 @@ MiniNext.conflict = function(direction, opts)
   -- Iterate
   local res_line_num = H.iterate(iterator, direction, opts)
 
-  -- Apply. Put cursor on first non-blank character of target line.
+  -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
-  vim.cmd('normal! ^')
+  vim.cmd('normal! zv^')
 end
 
 MiniNext.diagnostic = function(direction, opts)
@@ -310,49 +330,68 @@ MiniNext.file = function(direction, opts)
 end
 
 MiniNext.indent = function(direction, opts)
-  -- TODO
+  if H.is_disabled() then return end
 
-  -- if H.is_disabled() then return end
-  --
-  -- H.validate_direction(direction, { 'prev_min', 'prev_less', 'next_less', 'next_min' }, 'indent')
-  -- opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
-  --
-  -- -- Compute loop data
-  -- local is_up = direction == 'prev_min' or direction == 'prev_less'
-  -- local start_line = vim.fn.line('.')
-  -- local iter_line_fun = is_up and vim.fn.prevnonblank or vim.fn.nextnonblank
-  -- -- - Make it work for empty start line
-  -- local start_indent = vim.fn.indent(iter_line_fun(start_line))
-  --
-  -- -- Don't move if already on minimum indent
-  -- if start_indent == 0 then return end
-  --
-  -- -- Loop until indent is decreased `n_times` times
-  -- local cur_line, step = start_line, is_up and -1 or 1
-  -- local n_times, cur_n_times = (direction == 'prev_min' or direction == 'next_min') and math.huge or opts.n_times, 0
-  -- local max_new_indent = start_indent - 1
-  -- local target_line
-  -- while cur_line > 0 do
-  --   cur_line = iter_line_fun(cur_line + step)
-  --   local new_indent = vim.fn.indent(cur_line)
-  --
-  --   -- New indent can be negative only if line is outside of present range.
-  --   -- Don't accept those also.
-  --   if 0 <= new_indent and new_indent <= max_new_indent then
-  --     -- Accept result even if can't jump exactly `n_times` times
-  --     target_line = cur_line
-  --     max_new_indent = new_indent - 1
-  --     cur_n_times = cur_n_times + 1
-  --   end
-  --
-  --   -- Stop if reached target `n_times` or can't reduce current indent
-  --   if n_times <= cur_n_times or max_new_indent < 0 then break end
-  -- end
-  --
-  -- -- Place cursor at first non-blank of target line
-  -- if target_line == nil then return end
-  -- vim.api.nvim_win_set_cursor(0, { target_line, 0 })
-  -- vim.cmd('normal! ^')
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'indent')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, change_type = 'less' }, opts or {})
+
+  opts.wrap = false
+
+  if direction == 'first' then
+    -- For some reason using `n_times = math.huge` leads to infinite loop
+    direction, opts.n_times = 'prev', vim.api.nvim_buf_line_count(0) + 1
+  end
+  if direction == 'last' then
+    direction, opts.n_times = 'next', vim.api.nvim_buf_line_count(0) + 1
+  end
+
+  -- Compute loop data to traverse target commented lines in current buffer
+  local predicate = ({
+    less = function(new, cur) return new < cur or cur == 0 end,
+    more = function(new, cur) return new > cur end,
+    diff = function(new, cur) return new ~= cur end,
+  })[opts.change_type]
+  if predicate == nil then return end
+
+  -- Define iterator
+  local iterator = {}
+
+  iterator.forward = function(cur_lnum)
+    -- Correctly process empty current line
+    cur_lnum = vim.fn.nextnonblank(cur_lnum)
+    local cur_indent = vim.fn.indent(cur_lnum)
+
+    local new_lnum, new_indent = cur_lnum, cur_indent
+    -- Check with `new_lnum > 0` because `nextnonblank()` returns -1 if line is
+    -- outside of line range
+    while new_lnum > 0 do
+      new_indent = vim.fn.indent(new_lnum)
+      if predicate(new_indent, cur_indent) then return new_lnum end
+      new_lnum = vim.fn.nextnonblank(new_lnum + 1)
+    end
+  end
+
+  iterator.backward = function(cur_lnum)
+    cur_lnum = vim.fn.prevnonblank(cur_lnum)
+    local cur_indent = vim.fn.indent(cur_lnum)
+
+    local new_lnum, new_indent = cur_lnum, cur_indent
+    while new_lnum > 0 do
+      new_indent = vim.fn.indent(new_lnum)
+      if predicate(new_indent, cur_indent) then return new_lnum end
+      new_lnum = vim.fn.prevnonblank(new_lnum - 1)
+    end
+  end
+
+  -- - Don't add first and last states as there is no wrapping around edges
+  iterator.cur_state = vim.fn.line('.')
+
+  -- Iterate
+  local res_line_num = H.iterate(iterator, direction, opts)
+
+  -- Apply. Open just enough folds and put cursor on first non-blank.
+  vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
+  vim.cmd('normal! zv^')
 end
 
 MiniNext.jump = function(direction, opts)
@@ -396,42 +435,48 @@ MiniNext.jump = function(direction, opts)
   -- Iterate
   local res_jump_num = H.iterate(iterator, direction, opts)
 
-  _G.info = { iterator = iterator, res_jump_num = res_jump_num }
-
   -- Apply. Make jump.
   H.make_jump(jump_list, cur_jump_num, res_jump_num)
 end
 
 MiniNext.oldfile = function(direction, opts)
-  -- TODO
+  if H.is_disabled() then return end
 
-  -- if H.is_disabled() then return end
-  --
-  -- H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'oldfile')
-  -- opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
-  --
-  -- -- Construct array of readable old files including current session
-  -- -- They should be sorted in order from oldest to newest
-  -- -- !!!!!!!!!! NOTE: Currently doesn't work as it always updates recent files.
-  -- -- Need to write own tracking of old files or use only `vim.v.oldfiles`.
-  -- -- !!!!!!!!!
-  -- local old_files = H.make_array_oldfiles()
-  -- if #old_files == 0 then return end
-  --
-  -- -- Find current array index based on current buffer path
-  -- local cur_ind = #old_files
-  --
-  -- -- Compute array index of target file
-  -- local cur_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':p')
-  -- local ind = H.compute_target_ind(old_files, cur_ind, {
-  --   direction = direction,
-  --   n_times = opts.n_times,
-  --   current_is_previous = old_files[cur_ind] ~= cur_path,
-  --   wrap = true,
-  -- })
-  --
-  -- -- Open target file
-  -- vim.cmd('edit ' .. old_files[ind])
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'oldfile')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+
+  -- Define iterator that traverses all old files
+  local cur_path = vim.api.nvim_buf_get_name(0)
+
+  H.oldfiles_normalize()
+  local oldfiles = H.oldfiles_get_array()
+  local n_oldfiles = #oldfiles
+
+  local iterator = {}
+
+  iterator.forward = function(ind)
+    if ind == nil or n_oldfiles <= ind then return end
+    return ind + 1
+  end
+
+  iterator.backward = function(ind)
+    if ind == nil or ind <= 1 then return end
+    return ind - 1
+  end
+
+  iterator.cur_state = H.oldfiles_data.recency[cur_path]
+  iterator.first_state = 1
+  iterator.last_state = n_oldfiles
+
+  -- Iterate
+  local res_path_ind = H.iterate(iterator, direction, opts)
+  local res_path = oldfiles[res_path_ind]
+
+  if res_path == cur_path then return end
+
+  -- Apply. Edit file at path while marking it not for tracking.
+  H.oldfiles_data.do_track_next = false
+  vim.cmd('edit ' .. res_path)
 end
 
 MiniNext.location = function(direction, opts)
@@ -489,9 +534,34 @@ MiniNext.window = function(direction, opts)
   vim.api.nvim_set_current_win(vim.fn.win_getid(res_win_nr))
 end
 
+MiniNext.oldfiles_append_buf = function()
+  local path = vim.api.nvim_buf_get_name(0)
+  local should_track = H.oldfiles_data.do_track_next and path ~= '' and vim.bo.buftype == ''
+  if not should_track then
+    -- Reset tracking indicator to allow other buffers to update oldfiles data
+    H.oldfiles_data.do_track_next = true
+    return
+  end
+
+  local n = H.oldfiles_data.max_recency + 1
+  H.oldfiles_data.recency[path] = n
+  H.oldfiles_data.max_recency = n
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniNext.config
+
+-- Tracking of old files for `oldfile()` (this data structure is designed to be
+-- fast to add new file):
+-- - `recency` is a table with file paths as fields and numerical values
+--   indicating how recent file was accessed (higher - more recent).
+-- - `max_recency` is a maximum currently used `recency`. Used to add new file.
+-- - `do_track_next` is an indicator of whether next buffer should update
+--   oldfiles data. It is a key to enabling moving along old files (and not
+--   just going back and forth between two files because they swap places as
+--   two most recent files).
+H.oldfiles_data = { recency = {}, max_recency = 0, do_track_next = true }
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -604,21 +674,21 @@ H.apply_config = function(config)
 
   if suffixes.indent ~= '' then
     local low, up = H.get_suffix_variants(suffixes.indent)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.indent('prev_less')<CR>",  { desc = 'Previous less indent' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniNext.indent('prev_less')<CR>",  { desc = 'Previous less indent' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.indent('prev_less')<CR>", { desc = 'Previous less indent' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniNext.indent('prev')<CR>",  { desc = 'Previous indent' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniNext.indent('prev')<CR>",  { desc = 'Previous indent' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.indent('prev')<CR>", { desc = 'Previous indent' })
 
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.indent('next_less')<CR>",  { desc = 'Next less indent' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniNext.indent('next_less')<CR>",  { desc = 'Next less indent' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.indent('next_less')<CR>", { desc = 'Next less indent' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniNext.indent('next')<CR>",  { desc = 'Next indent' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniNext.indent('next')<CR>",  { desc = 'Next indent' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.indent('next')<CR>", { desc = 'Next indent' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniNext.indent('prev_min')<CR>",  { desc = 'Previous min indent' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniNext.indent('prev_min')<CR>",  { desc = 'Previous min indent' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.indent('prev_min')<CR>", { desc = 'Previous min indent' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniNext.indent('first')<CR>",  { desc = 'First indent' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniNext.indent('first')<CR>",  { desc = 'First indent' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.indent('first')<CR>", { desc = 'First indent' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniNext.indent('next_min')<CR>",  { desc = 'Next min indent' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniNext.indent('next_min')<CR>",  { desc = 'Next min indent' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.indent('next_min')<CR>", { desc = 'Next min indent' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniNext.indent('last')<CR>",  { desc = 'Last indent' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniNext.indent('last')<CR>",  { desc = 'Last indent' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.indent('last')<CR>", { desc = 'Last indent' })
   end
 
   if suffixes.jump ~= '' then
@@ -678,6 +748,19 @@ H.get_suffix_variants = function(char) return char:lower(), char:upper() end
 H.is_disabled = function() return vim.g.mininext_disable == true or vim.b.mininext_disable == true end
 
 -- Iterator -------------------------------------------------------------------
+--@param iterator table Table:
+--   - Fields:
+--       - <cur_state> - object describing current state.
+--       - <first_state> (optional) - object describing first state.
+--       - <last_state> (optional) - object describing last state.
+--   - Methods:
+--       - <forward> - given state, return state in forward direction.
+--       - <backward> - given state, return state in backward direction.
+--@param direction string Direction. One of 'first', 'prev', 'next', 'last'.
+--@param opts table|nil Options with the following keys:
+--   - <n_times> - number of times to iterate.
+--   - <wrap> - whether to wrap around edges when `forward()` or `backward()`
+--     return `nil`.
 H.iterate = function(iterator, direction, opts)
   local res_state = iterator.cur_state
 
@@ -687,12 +770,12 @@ H.iterate = function(iterator, direction, opts)
   if direction == 'prev' then iter_method = 'backward' end
 
   if direction == 'first' then
-    res_state = iterator.first_state
+    res_state = iterator.first_state or res_state
     iter_method, n_times = 'forward', n_times - 1
   end
 
   if direction == 'last' then
-    res_state = iterator.last_state
+    res_state = iterator.last_state or res_state
     iter_method, n_times = 'backward', n_times - 1
   end
 
@@ -702,10 +785,10 @@ H.iterate = function(iterator, direction, opts)
     local new_state = iter(res_state)
     if new_state == nil and not opts.wrap then break end
 
-    res_state = new_state or (iter_method == 'forward' and iterator.first_state or iterator.last_state)
+    new_state = new_state or (iter_method == 'forward' and iterator.first_state or iterator.last_state)
+    if new_state == nil then break end
+    res_state = new_state
   end
-
-  _G.info = { iterator = iterator, direction = direction, opts = opts, res_state = res_state }
 
   return res_state
 end
@@ -799,15 +882,55 @@ H.make_jump = function(jump_list, cur_jump_num, new_jump_num)
     -- move manually; then jump with "last" direction should move to last jump.
     local jump_entry = jump_list[new_jump_num]
     pcall(vim.fn.cursor, { jump_entry.lnum, jump_entry.col + 1, jump_entry.coladd })
-    return
+  else
+    -- Use builtin mappings to also update current jump entry
+    local key = num_diff > 0 and '\t' or '\15'
+    vim.cmd('normal! ' .. math.abs(num_diff) .. key)
   end
 
-  -- Use builtin mappings to also update current jump entry
-  local key = num_diff > 0 and '\t' or '\15'
-  vim.cmd('normal! ' .. math.abs(num_diff) .. key)
+  -- Open just enough folds
+  vim.cmd('normal! zv')
 end
 
 -- Oldfiles -------------------------------------------------------------------
+H.oldfiles_init = function()
+  if vim.v.oldfiles == nil then return end
+
+  local n = #vim.v.oldfiles
+  local recency = {}
+  for i, path in ipairs(vim.v.oldfiles) do
+    if vim.fn.filereadable(path) == 1 then recency[path] = n - i + 1 end
+  end
+
+  H.oldfiles_data = { recency = recency, max_recency = n, do_track_next = true }
+end
+
+H.oldfiles_normalize = function()
+  -- Order currently readable paths in increasing order of recency
+  local recency_pairs = {}
+  for path, rec in pairs(H.oldfiles_data.recency) do
+    if vim.fn.filereadable(path) == 1 then table.insert(recency_pairs, { path, rec }) end
+  end
+  table.sort(recency_pairs, function(x, y) return x[2] < y[2] end)
+
+  -- Construct new tracking data
+  local new_recency = {}
+  for i, pair in ipairs(recency_pairs) do
+    new_recency[pair[1]] = i
+  end
+
+  H.oldfiles_data =
+    { recency = new_recency, max_recency = #recency_pairs, do_track_next = H.oldfiles_data.do_track_next }
+end
+
+H.oldfiles_get_array = function()
+  local res = {}
+  for path, i in pairs(H.oldfiles_data.recency) do
+    res[i] = path
+  end
+  return res
+end
+
 H.make_array_oldfiles = function()
   -- Thanks 'telescope.nvim' for implementation outline
   local file_indexes, n_files = {}, 0
