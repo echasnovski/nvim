@@ -83,7 +83,8 @@ EC.open_lazygit = function()
   vim.cmd('tabedit')
   vim.cmd('setlocal nonumber signcolumn=no')
 
-  vim.fn.termopen('lazygit --git-dir=$(git rev-parse --git-dir)', {
+  -- Unset vim environment variables to be able to call `vim` without errors
+  vim.fn.termopen('VIMRUNTIME= VIM= lazygit --git-dir=$(git rev-parse --git-dir)', {
     on_exit = function()
       vim.cmd('silent! :checktime')
       vim.cmd('silent! :bw')

@@ -44,9 +44,10 @@ require('mini.statusline').setup({
 require('mini.tabline').setup()
 
 vim.schedule(function()
-  require('mini.ai').setup({
+  local ai = require('mini.ai')
+  ai.setup({
     custom_textobjects = {
-      F = require('mini.ai').gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
+      F = ai.gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
     },
   })
 
@@ -71,6 +72,7 @@ vim.schedule(function()
   require('mini.bufremove').setup()
 
   require('mini.comment').setup()
+
   require('mini.completion').setup({
     lsp_completion = {
       source_func = 'omnifunc',
@@ -113,7 +115,7 @@ vim.schedule(function()
   require('mini.misc').setup()
   MiniMisc.setup_auto_root()
 
-  require('mini.move').setup()
+  require('mini.move').setup({ options = { reindent_linewise = false } })
 
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   vim.keymap.set('i', '<CR>', 'v:lua.EC.cr_action()', { expr = true })

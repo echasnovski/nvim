@@ -60,6 +60,7 @@ end
 -- Use `nested` to allow `ColorScheme` event
 vim.cmd('au VimEnter * nested ++once colorscheme minicyan')
 vim.cmd('au ColorScheme * hi! link WinSeparator NormalFloat')
+vim.cmd('au ColorScheme * hi CursorLineNr gui=bold')
 vim.cmd('au ColorScheme * hi PmenuSel blend=0')
 
 -- Other interesting color schemes:

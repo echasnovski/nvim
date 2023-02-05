@@ -63,7 +63,10 @@ nvim_tree.setup({
   },
   renderer = {
     add_trailing = true,
-    indent_markers = { enable = true },
+    indent_markers = {
+      enable = true,
+      icons = { item = '├' },
+    },
     icons = {
       show = {
         git = false, -- Currently causes slowdown
