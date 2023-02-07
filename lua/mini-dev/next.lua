@@ -1,31 +1,27 @@
 -- MIT License Copyright (c) 2023 Evgeni Chasnovski
 
+-- Possible renames
+-- !!! MiniIterate !!!
+-- !!! MiniSwipe !!!
+-- !!! MiniAlong !!!
+-- !!! MiniAdjacent !!!
+-- !!! MiniNear !!!
+-- MiniLoop
+-- MiniCycle
+-- MiniBrackets
+-- MiniChain
+-- MiniSequence
+-- MiniSlide
+
 -- TODO
 --
 -- Code:
--- - Think about renaming conflict suffix to 'n' (as in 'unimpaired.vim').
--- - Think about final design of `oldfile()` - either use `vim.v.oldfiles` or
---   manually efficiently track recent buffers on every BufEnter (except when
---   it was caused by `oldfile()` itself to allow walking along the history).
---   !!! OR !!! implement separately `oldfiles` and `recent_buffers`.
---   !!! OR !!! update `buffer()` with new option `order` with values 'number'
---   and 'recency'.
--- - Add `wrap` option to all functions. This needs a refactor to always use
---   "array -> new index" design.
 -- - Think about modifying `MiniNext.config` to have per-item configs
 --   (`map_suffix` and `options`).
+-- - Try to make `n_times` work in `indent` with 'first' and 'last' direction.
 -- - Other todos across code.
--- - Ensure the following meaning of `n_times` is followed as much as possible:
---     - For 'first' - it is `n_times - 1` forward starting from first one.
---     - For 'prev' - it is `n_times` backward starting from current one.
---     - For 'next' - it is `n_times` forward starting from current one.
---     - For 'last' - it is `n_times - 1` backward starting from last one.
 -- - Ensure that moves guaranteed to be inside current buffer have mappings in
 --   Normal, Visual, and Operator-pending modes.
--- - Modify *all* code to have three parts:
---     - Construct target iterator.
---     - Iterate necessary amount of times.
---     - Perform action based on current iterator state.
 -- - Refactor and clean up with possible abstractions.
 --
 -- Tests:
@@ -34,11 +30,17 @@
 -- - Mention that it is ok to not map defaults and use functions manually.
 -- - General implementation idea is usually as follows:
 --     - Construct target iterator:
---         - Has idea about curret, first, and last possible states.
+--         - Has idea about current state.
 --         - Can go forward and backward from the state (once without wrap).
+--           Returns `nil` if can't iterate.
+--         - Has optional idea about edges (enables wrap and 'first'/'last'):
+--             - Start edge: `forward(start_edge)` is first target state
+--             - End edge: `backward(end_edge)` is last target state.
 --       Like with quickfix list:
---         - Current quickfix entry, 1, and number of quickfix entries.
---         - Add 1 or subtract 1 if result is inside range; `nil` otherwise.
+--         - State: index of current quickfix entry. 1, and number of quickfix entries.
+--         - Forward and backward: add or subtract 1 if result is inside range;
+--           `nil` otherwise.
+--         - Edges: left - 0, right - number of quickfix entries plus 1.
 --       This idea is better of computing whole array of possible targets for
 --       at least two reasons:
 --         - It is usually more efficient for common use cases (doesn't compute
@@ -108,9 +110,6 @@ MiniNext.setup = function(config)
       augroup END]],
     false
   )
-  -- Initialize old files priorities. Use `vim.schedule()` to ensure it is done
-  -- when shada file is loaded.
-  vim.schedule(H.oldfiles_init)
 end
 
 --stylua: ignore
@@ -161,9 +160,9 @@ MiniNext.buffer = function(direction, opts)
     end
   end
 
-  iterator.cur_state = vim.api.nvim_get_current_buf()
-  iterator.first_state = iterator.forward(buf_list[1] - 1)
-  iterator.last_state = iterator.backward(buf_list[#buf_list] + 1)
+  iterator.state = vim.api.nvim_get_current_buf()
+  iterator.start_edge = buf_list[1] - 1
+  iterator.end_edge = buf_list[#buf_list] + 1
 
   -- Iterate
   local res_buf_id = H.iterate(iterator, direction, opts)
@@ -212,12 +211,9 @@ MiniNext.comment = function(direction, opts)
     end
   end
 
-  iterator.cur_state = vim.fn.line('.')
-  iterator.first_state = iterator.forward(0)
-  iterator.last_state = iterator.backward(n_lines + 1)
-
-  -- - Do nothing if there is no comments in current buffer
-  if iterator.first_state == nil then return end
+  iterator.state = vim.fn.line('.')
+  iterator.start_edge = 0
+  iterator.end_edge = n_lines + 1
 
   -- Iterate
   local res_line_num = H.iterate(iterator, direction, opts)
@@ -250,12 +246,9 @@ MiniNext.conflict = function(direction, opts)
     end
   end
 
-  iterator.cur_state = vim.fn.line('.')
-  iterator.first_state = iterator.forward(0)
-  iterator.last_state = iterator.backward(n_lines + 1)
-
-  -- - Do nothing if there is no conflict markers in current buffer
-  if iterator.first_state == nil then return end
+  iterator.state = vim.fn.line('.')
+  iterator.start_edge = 0
+  iterator.end_edge = n_lines + 1
 
   -- Iterate
   local res_line_num = H.iterate(iterator, direction, opts)
@@ -266,19 +259,44 @@ MiniNext.conflict = function(direction, opts)
 end
 
 MiniNext.diagnostic = function(direction, opts)
-  -- TODO
-  -- if H.is_disabled() then return end
-  --
-  -- H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'diagnostic')
-  -- opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, opts or {})
-  --
-  -- -- TODO: Add support for 'next_buf'/'prev_buf' (first diagnostic in some of
-  -- -- next/prev buffer) and `opts.n_times`.
-  --
-  -- if direction == 'first' then vim.diagnostic.goto_next({ cursor_position = { 1, 0 } }) end
-  -- if direction == 'prev' then vim.diagnostic.goto_prev() end
-  -- if direction == 'next' then vim.diagnostic.goto_next() end
-  -- if direction == 'last' then vim.diagnostic.goto_prev({ cursor_position = { 1, 0 } }) end
+  if H.is_disabled() then return end
+
+  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'diagnostic')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+
+  -- Define iterator that traverses all diagnostic entries in current buffer
+  local is_position = function(x) return type(x) == 'table' and #x == 2 end
+  local diag_pos_to_cursor_pos = function(pos) return { pos[1] + 1, pos[2] } end
+  local iterator = {}
+
+  iterator.forward = function(position)
+    local new_pos = vim.diagnostic.get_next_pos({ cursor_position = diag_pos_to_cursor_pos(position), wrap = false })
+    if not is_position(new_pos) then return end
+    return new_pos
+  end
+
+  iterator.backward = function(position)
+    local new_pos = vim.diagnostic.get_prev_pos({ cursor_position = diag_pos_to_cursor_pos(position), wrap = false })
+    if not is_position(new_pos) then return end
+    return new_pos
+  end
+
+  -- - Define states with zero-based indexing as used in `vim.diagnostic`
+  local cursor_pos = vim.api.nvim_win_get_cursor(0)
+  iterator.state = { cursor_pos[1] - 1, cursor_pos[2] }
+
+  iterator.start_edge = { 0, 0 }
+
+  local last_line = vim.api.nvim_buf_line_count(0)
+  local last_line_col = vim.fn.col({ last_line, '$' }) - 1
+  iterator.end_edge = { last_line - 1, math.max(last_line_col - 1, 0) }
+
+  -- Iterate
+  local res_pos = H.iterate(iterator, direction, opts)
+
+  -- Apply. Open just enough folds.
+  vim.api.nvim_win_set_cursor(0, diag_pos_to_cursor_pos(res_pos))
+  vim.cmd('normal! zv')
 end
 
 MiniNext.file = function(direction, opts)
@@ -295,37 +313,40 @@ MiniNext.file = function(direction, opts)
   -- Define iterator that traverses all found files
   local iterator = {}
 
-  local get_index = function(basename)
-    if basename == '' then return end
-    for i, cur_basename in ipairs(file_basenames) do
-      if basename == cur_basename then return i end
+  iterator.forward = function(ind)
+    if ind == nil or #file_basenames <= ind then return end
+    return ind + 1
+  end
+
+  iterator.backward = function(ind)
+    if ind == nil or ind <= 1 then return end
+    return ind - 1
+  end
+
+  -- - Find filename array index of current buffer
+  local cur_basename = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':t')
+  local cur_basename_ind
+  if cur_basename ~= '' then
+    for i, f in ipairs(file_basenames) do
+      if cur_basename == f then
+        cur_basename_ind = i
+        break
+      end
     end
   end
 
-  iterator.forward = function(basename)
-    local ind = get_index(basename)
-    if ind == nil or #file_basenames <= ind then return end
-    return file_basenames[ind + 1]
-  end
-
-  iterator.backward = function(basename)
-    local ind = get_index(basename)
-    if ind == nil or ind <= 1 then return end
-    return file_basenames[ind - 1]
-  end
-
-  iterator.cur_state = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':t')
-  iterator.first_state = file_basenames[1]
-  iterator.last_state = file_basenames[#file_basenames]
+  iterator.state = cur_basename_ind
+  iterator.start_edge = 0
+  iterator.end_edge = #file_basenames + 1
 
   -- Iterate
-  local res_basename = H.iterate(iterator, direction, opts)
+  local res_ind = H.iterate(iterator, direction, opts)
   -- - Do nothing if it should open current buffer. Reduces flickering.
-  if res_basename == iterator.cur_state then return end
+  if res_ind == iterator.state then return end
 
   -- Apply. Open target_path.
   local path_sep = package.config:sub(1, 1)
-  local target_path = directory .. path_sep .. res_basename
+  local target_path = directory .. path_sep .. file_basenames[res_ind]
   vim.cmd('edit ' .. target_path)
 end
 
@@ -333,7 +354,7 @@ MiniNext.indent = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'indent')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, change_type = 'less' }, opts or {})
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, change_type = 'diff' }, opts or {})
 
   opts.wrap = false
 
@@ -384,7 +405,7 @@ MiniNext.indent = function(direction, opts)
   end
 
   -- - Don't add first and last states as there is no wrapping around edges
-  iterator.cur_state = vim.fn.line('.')
+  iterator.state = vim.fn.line('.')
 
   -- Iterate
   local res_line_num = H.iterate(iterator, direction, opts)
@@ -428,9 +449,9 @@ MiniNext.jump = function(direction, opts)
     end
   end
 
-  iterator.cur_state = cur_jump_num
-  iterator.first_state = iterator.forward(0)
-  iterator.last_state = iterator.backward(n_list + 1)
+  iterator.state = cur_jump_num
+  iterator.start_edge = 0
+  iterator.end_edge = n_list + 1
 
   -- Iterate
   local res_jump_num = H.iterate(iterator, direction, opts)
@@ -439,6 +460,7 @@ MiniNext.jump = function(direction, opts)
   H.make_jump(jump_list, cur_jump_num, res_jump_num)
 end
 
+-- Files ordered from oldest to newest.
 MiniNext.oldfile = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -464,9 +486,9 @@ MiniNext.oldfile = function(direction, opts)
     return ind - 1
   end
 
-  iterator.cur_state = H.oldfiles_data.recency[cur_path]
-  iterator.first_state = 1
-  iterator.last_state = n_oldfiles
+  iterator.state = H.oldfiles_data.recency[cur_path]
+  iterator.start_edge = 0
+  iterator.end_edge = n_oldfiles + 1
 
   -- Iterate
   local res_path_ind = H.iterate(iterator, direction, opts)
@@ -475,7 +497,7 @@ MiniNext.oldfile = function(direction, opts)
   if res_path == cur_path then return end
 
   -- Apply. Edit file at path while marking it not for tracking.
-  H.oldfiles_data.do_track_next = false
+  H.oldfiles_data.is_from_oldfile = true
   vim.cmd('edit ' .. res_path)
 end
 
@@ -523,9 +545,9 @@ MiniNext.window = function(direction, opts)
     end
   end
 
-  iterator.cur_state = vim.fn.winnr()
-  iterator.first_state = iterator.forward(0)
-  iterator.last_state = iterator.backward(vim.fn.winnr('$') + 1)
+  iterator.state = vim.fn.winnr()
+  iterator.start_edge = 0
+  iterator.end_edge = vim.fn.winnr('$') + 1
 
   -- Iterate
   local res_win_nr = H.iterate(iterator, direction, opts)
@@ -535,17 +557,39 @@ MiniNext.window = function(direction, opts)
 end
 
 MiniNext.oldfiles_append_buf = function()
+  -- Ensure tracking data is initialized
+  H.oldfiles_ensure_initialized()
+
+  -- Reset tracking indicator to allow proper tracking of next buffer
+  local is_from_oldfile = H.oldfiles_data.is_from_oldfile
+  H.oldfiles_data.is_from_oldfile = false
+
+  -- Track only appropriate buffers (normal buffers with path)
   local path = vim.api.nvim_buf_get_name(0)
-  local should_track = H.oldfiles_data.do_track_next and path ~= '' and vim.bo.buftype == ''
-  if not should_track then
-    -- Reset tracking indicator to allow other buffers to update oldfiles data
-    H.oldfiles_data.do_track_next = true
-    return
+  local is_proper_buffer = path ~= '' and vim.bo.buftype == ''
+  if not is_proper_buffer then return end
+
+  -- Compute which tracking table to update. Logic:
+  -- - If buffer is entered from `oldfile()` then it should postpone update.
+  --   The reason is to allow consecutive `oldfile()` calls to move along old
+  --   files. Updating right away leads to jumping between two latest files.
+  --   Postponing updates is done by updating shadow tracking table.
+  -- - If buffer is entered not from `oldfile()` then it should receive all
+  --   postponed updates and then be updated with current buffer.
+  local track_table
+  if is_from_oldfile then
+    H.shadow_oldfiles_data = H.shadow_oldfiles_data or vim.deepcopy(H.oldfiles_data)
+    track_table = H.shadow_oldfiles_data
+  else
+    H.oldfiles_data = H.shadow_oldfiles_data or H.oldfiles_data
+    track_table = H.oldfiles_data
+    H.shadow_oldfiles_data = nil
   end
 
-  local n = H.oldfiles_data.max_recency + 1
-  H.oldfiles_data.recency[path] = n
-  H.oldfiles_data.max_recency = n
+  -- Update tracking table
+  local n = track_table.max_recency + 1
+  track_table.recency[path] = n
+  track_table.max_recency = n
 end
 
 -- Helper data ================================================================
@@ -557,11 +601,11 @@ H.default_config = MiniNext.config
 -- - `recency` is a table with file paths as fields and numerical values
 --   indicating how recent file was accessed (higher - more recent).
 -- - `max_recency` is a maximum currently used `recency`. Used to add new file.
--- - `do_track_next` is an indicator of whether next buffer should update
---   oldfiles data. It is a key to enabling moving along old files (and not
---   just going back and forth between two files because they swap places as
---   two most recent files).
-H.oldfiles_data = { recency = {}, max_recency = 0, do_track_next = true }
+-- - `is_from_oldfile` is an indicator of buffer change was done inside
+--   `oldfile()` function. It is a key to enabling moving along old files (and
+--   not just going back and forth between two files because they swap places
+--   as two most recent files).
+H.oldfiles_data = nil
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -749,20 +793,22 @@ H.is_disabled = function() return vim.g.mininext_disable == true or vim.b.minine
 
 -- Iterator -------------------------------------------------------------------
 --@param iterator table Table:
---   - Fields:
---       - <cur_state> - object describing current state.
---       - <first_state> (optional) - object describing first state.
---       - <last_state> (optional) - object describing last state.
 --   - Methods:
 --       - <forward> - given state, return state in forward direction.
 --       - <backward> - given state, return state in backward direction.
+--   - Fields:
+--       - <state> - object describing current state.
+--       - <start_edge> (optional) - object with `forward(start_edge)` describes
+--         first state.
+--       - <end_edge> (optional) - object with `backward(end_edge)` describes
+--         last state.
 --@param direction string Direction. One of 'first', 'prev', 'next', 'last'.
 --@param opts table|nil Options with the following keys:
 --   - <n_times> - number of times to iterate.
 --   - <wrap> - whether to wrap around edges when `forward()` or `backward()`
 --     return `nil`.
 H.iterate = function(iterator, direction, opts)
-  local res_state = iterator.cur_state
+  local res_state = iterator.state
 
   -- Compute loop data
   local n_times, iter_method = opts.n_times, 'forward'
@@ -770,63 +816,37 @@ H.iterate = function(iterator, direction, opts)
   if direction == 'prev' then iter_method = 'backward' end
 
   if direction == 'first' then
-    res_state = iterator.first_state or res_state
-    iter_method, n_times = 'forward', n_times - 1
+    res_state = iterator.start_edge or res_state
+    iter_method = 'forward'
   end
 
   if direction == 'last' then
-    res_state = iterator.last_state or res_state
-    iter_method, n_times = 'backward', n_times - 1
+    res_state = iterator.end_edge or res_state
+    iter_method = 'backward'
   end
 
   -- Loop
   local iter = iterator[iter_method]
   for _ = 1, n_times do
+    -- Advance
     local new_state = iter(res_state)
-    if new_state == nil and not opts.wrap then break end
 
-    new_state = new_state or (iter_method == 'forward' and iterator.first_state or iterator.last_state)
-    if new_state == nil then break end
+    if new_state == nil then
+      -- Stop if can't wrap around edges
+      if not opts.wrap then break end
+
+      -- Wrap around edge
+      local edge = iter_method == 'forward' and iterator.start_edge or iterator.end_edge
+      new_state = iter(edge)
+
+      -- Ensure non-nil new state (can happen when there are no targets)
+      if new_state == nil then break end
+    end
+
     res_state = new_state
   end
 
   return res_state
-end
-
--- Compute target array index -------------------------------------------------
-H.compute_target_ind = function(arr, cur_ind, opts)
-  opts = vim.tbl_deep_extend(
-    'force',
-    { n_times = 1, direction = 'next', current_is_previous = false, wrap = true },
-    opts or {}
-  )
-
-  -- Description of logic for computing target index:
-  -- - For 'first' - it is `n_times - 1` forward starting from first one.
-  -- - For 'prev'  - it is `n_times` backward starting from current one.
-  --   Note: move by 1 index less if the first "previous" move should
-  --   land on already "current" array index. This happens if exact current
-  --   position can't fit in array (like in comments, jumplist, etc.).
-  -- - For 'next'  - it is `n_times` forward starting from current one.
-  -- - For 'last'  - it is `n_times - 1` backward starting from last one.
-  local n_arr, dir = #arr, opts.direction
-  local prev_offset = opts.current_is_previous and 1 or 0
-  local res
-  if dir == 'first' then res = opts.n_times end
-  if dir == 'prev' then res = cur_ind - (opts.n_times - prev_offset) end
-  if dir == 'next' then res = cur_ind + opts.n_times end
-  if dir == 'last' then res = n_arr - (opts.n_times - 1) end
-
-  if res == nil then H.error('Wrong `direction` in helper method.') end
-
-  -- Ensure that index is inside array
-  if opts.wrap then
-    res = (res - 1) % n_arr + 1
-  else
-    res = math.min(math.max(res, 1), n_arr)
-  end
-
-  return res
 end
 
 -- Comments -------------------------------------------------------------------
@@ -893,19 +913,10 @@ H.make_jump = function(jump_list, cur_jump_num, new_jump_num)
 end
 
 -- Oldfiles -------------------------------------------------------------------
-H.oldfiles_init = function()
-  if vim.v.oldfiles == nil then return end
-
-  local n = #vim.v.oldfiles
-  local recency = {}
-  for i, path in ipairs(vim.v.oldfiles) do
-    if vim.fn.filereadable(path) == 1 then recency[path] = n - i + 1 end
-  end
-
-  H.oldfiles_data = { recency = recency, max_recency = n, do_track_next = true }
-end
-
 H.oldfiles_normalize = function()
+  -- Ensure that tracking data is initialized
+  H.oldfiles_ensure_initialized()
+
   -- Order currently readable paths in increasing order of recency
   local recency_pairs = {}
   for path, rec in pairs(H.oldfiles_data.recency) do
@@ -920,7 +931,19 @@ H.oldfiles_normalize = function()
   end
 
   H.oldfiles_data =
-    { recency = new_recency, max_recency = #recency_pairs, do_track_next = H.oldfiles_data.do_track_next }
+    { recency = new_recency, max_recency = #recency_pairs, is_from_oldfile = H.oldfiles_data.is_from_oldfile }
+end
+
+H.oldfiles_ensure_initialized = function()
+  if H.oldfiles_data ~= nil or vim.v.oldfiles == nil then return end
+
+  local n = #vim.v.oldfiles
+  local recency = {}
+  for i, path in ipairs(vim.v.oldfiles) do
+    if vim.fn.filereadable(path) == 1 then recency[path] = n - i + 1 end
+  end
+
+  H.oldfiles_data = { recency = recency, max_recency = n, is_from_oldfile = false }
 end
 
 H.oldfiles_get_array = function()
@@ -929,51 +952,6 @@ H.oldfiles_get_array = function()
     res[i] = path
   end
   return res
-end
-
-H.make_array_oldfiles = function()
-  -- Thanks 'telescope.nvim' for implementation outline
-  local file_indexes, n_files = {}, 0
-
-  -- Start with files from current session
-  local buffers_output = vim.split(vim.fn.execute(':buffers t'), '\n')
-  for _, buf_string in ipairs(buffers_output) do
-    local path = H.extract_path_from_command_output(buf_string)
-    if path ~= nil then
-      n_files = n_files + 1
-      file_indexes[path] = n_files
-    end
-  end
-
-  -- Then possibly include new files from shada
-  local shada_files = vim.tbl_filter(
-    -- Use only currently readable new files
-    function(path) return vim.fn.filereadable(path) == 1 and file_indexes[path] == nil end,
-    vim.v.oldfiles
-  )
-
-  for _, path in ipairs(shada_files) do
-    n_files = n_files + 1
-    file_indexes[path] = n_files
-  end
-
-  -- Reverse index automatically converting to array
-  local res = {}
-  for path, index in pairs(file_indexes) do
-    res[n_files - index + 1] = path
-  end
-
-  return res
-end
-
-H.extract_path_from_command_output = function(buf_string)
-  local buf_id = tonumber(string.match(buf_string, '%s*(%d+)'))
-  if not (type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id)) then return end
-
-  local path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf_id), ':p')
-  if not (path ~= '' and vim.fn.filereadable(path) == 1) then return end
-
-  return path
 end
 
 -- Quickfix/Location lists ----------------------------------------------------
@@ -988,34 +966,33 @@ H.qf_loc_implementation = function(list_type, direction, opts)
   local n_list = #list
   if n_list == 0 then return end
 
-  local iterator = { cur_state = get_list({ idx = 0 }).idx, first_state = 1, last_state = n_list }
+  local iterator = {}
 
-  iterator.forward = function(id)
-    if n_list <= id then return end
-    return id + 1
+  iterator.forward = function(ind)
+    if ind == nil or n_list <= ind then return end
+    return ind + 1
   end
 
-  iterator.backward = function(id)
-    if id <= 1 then return end
-    return id - 1
+  iterator.backward = function(ind)
+    if ind == nil or ind <= 1 then return end
+    return ind - 1
   end
+
+  iterator.state = get_list({ idx = 0 }).idx
+  iterator.start_edge = 0
+  iterator.end_edge = n_list + 1
 
   -- Iterate
-  local res_id = H.iterate(iterator, direction, opts)
+  local res_ind = H.iterate(iterator, direction, opts)
 
   -- Apply
   -- Focus target entry, open enough folds and center
-  vim.cmd(goto_command .. ' ' .. res_id)
+  vim.cmd(goto_command .. ' ' .. res_ind)
   vim.cmd('normal! zvzz')
 end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.next) %s', msg), 0) end
-
-H.validate_if = function(predicate, x, x_name)
-  local is_valid, msg = predicate(x, x_name)
-  if not is_valid then H.error(msg) end
-end
 
 H.validate_direction = function(direction, choices, fun_name)
   if not vim.tbl_contains(choices, direction) then
