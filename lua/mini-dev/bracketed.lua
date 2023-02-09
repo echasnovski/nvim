@@ -99,7 +99,8 @@ MiniBracketed.setup = function(config)
   vim.api.nvim_exec(
     [[augroup MiniBracketed
         au!
-        au BufEnter * lua MiniBracketed.oldfiles_append_buf()
+        au BufEnter * lua MiniBracketed.oldfiles_track()
+        au TextYankPost * lua MiniBracketed.yank_track()
       augroup END]],
     false
   )
@@ -128,6 +129,7 @@ MiniBracketed.config = {
   location   = { suffix = 'l', options = {} },
   oldfile    = { suffix = 'o', options = {} },
   quickfix   = { suffix = 'q', options = {} },
+  yank       = { suffix = 'y', options = {} },
   window     = { suffix = 'w', options = {} },
 }
 --minidoc_afterlines_end
@@ -164,6 +166,7 @@ MiniBracketed.buffer = function(direction, opts)
 
   -- Iterate
   local res_buf_id = MiniBracketed.advance(iterator, direction, opts)
+  if res_buf_id == iterator.state then return end
 
   -- Apply
   vim.api.nvim_set_current_buf(res_buf_id)
@@ -175,7 +178,7 @@ MiniBracketed.comment = function(direction, opts)
   H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'comment')
   opts = vim.tbl_deep_extend(
     'force',
-    { n_times = vim.v.count1, wrap = true, block_side = 'near' },
+    { block_side = 'near', n_times = vim.v.count1, wrap = true },
     H.get_config().comment.options,
     opts or {}
   )
@@ -220,6 +223,7 @@ MiniBracketed.comment = function(direction, opts)
 
   -- Iterate
   local res_line_num = MiniBracketed.advance(iterator, direction, opts)
+  if res_line_num == iterator.state then return end
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -256,6 +260,7 @@ MiniBracketed.conflict = function(direction, opts)
 
   -- Iterate
   local res_line_num = MiniBracketed.advance(iterator, direction, opts)
+  if res_line_num == iterator.state then return end
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -298,6 +303,7 @@ MiniBracketed.diagnostic = function(direction, opts)
 
   -- Iterate
   local res_pos = MiniBracketed.advance(iterator, direction, opts)
+  if res_pos == iterator.state then return end
 
   -- Apply. Open just enough folds.
   vim.api.nvim_win_set_cursor(0, diag_pos_to_cursor_pos(res_pos))
@@ -346,7 +352,6 @@ MiniBracketed.file = function(direction, opts)
 
   -- Iterate
   local res_ind = MiniBracketed.advance(iterator, direction, opts)
-  -- - Do nothing if it should open current buffer. Reduces flickering.
   if res_ind == iterator.state then return end
 
   -- Apply. Open target_path.
@@ -361,7 +366,7 @@ MiniBracketed.indent = function(direction, opts)
   H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'indent')
   opts = vim.tbl_deep_extend(
     'force',
-    { n_times = vim.v.count1, change_type = 'less' },
+    { change_type = 'less', n_times = vim.v.count1 },
     H.get_config().indent.options,
     opts or {}
   )
@@ -419,6 +424,7 @@ MiniBracketed.indent = function(direction, opts)
 
   -- Iterate
   local res_line_num = MiniBracketed.advance(iterator, direction, opts)
+  if res_line_num == iterator.state then return end
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -466,7 +472,8 @@ MiniBracketed.jump = function(direction, opts)
   -- Iterate
   local res_jump_num = MiniBracketed.advance(iterator, direction, opts)
 
-  -- Apply. Make jump.
+  -- Apply. Make jump. Allow jumping to current jump entry as it might be
+  -- different from current cursor position.
   H.make_jump(jump_list, cur_jump_num, res_jump_num)
 end
 
@@ -507,19 +514,17 @@ MiniBracketed.oldfile = function(direction, opts)
     return ind - 1
   end
 
-  iterator.state = H.oldfiles_data.recency[cur_path]
+  iterator.state = H.cache.oldfiles.recency[cur_path]
   iterator.start_edge = 0
   iterator.end_edge = n_oldfiles + 1
 
   -- Iterate
   local res_path_ind = MiniBracketed.advance(iterator, direction, opts)
-  local res_path = oldfiles[res_path_ind]
-
-  if res_path == cur_path then return end
+  if res_path_ind == iterator.state then return end
 
   -- Apply. Edit file at path while marking it not for tracking.
-  H.oldfiles_data.is_from_oldfile = true
-  vim.cmd('edit ' .. res_path)
+  H.cache.oldfiles.is_from_oldfile = true
+  vim.cmd('edit ' .. oldfiles[res_path_ind])
 end
 
 MiniBracketed.quickfix = function(direction, opts)
@@ -530,6 +535,45 @@ MiniBracketed.quickfix = function(direction, opts)
     vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().quickfix.options, opts or {})
 
   H.qf_loc_implementation('quickfix', direction, opts)
+end
+
+MiniBracketed.yank = function(direction, opts)
+  if H.is_disabled() then return end
+
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'yank')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().yank.options, opts or {})
+
+  -- Update yank history data
+  local cache = H.cache.yank
+  local n_history = #cache.history
+  local cur_region = H.get_latest_region()
+  if not vim.deep_equal(cur_region, cache.region) then cache.current_id = n_history + 1 end
+
+  -- Define iterator that traverses yank history
+  local iterator = {}
+
+  iterator.next = function(id)
+    if n_history <= id then return nil end
+    return id + 1
+  end
+
+  iterator.prev = function(id)
+    if id <= 1 then return nil end
+    return id - 1
+  end
+
+  iterator.state = cache.current_id
+  iterator.start_edge = 0
+  iterator.end_edge = n_history + 1
+
+  -- Iterate
+  local res_id = MiniBracketed.advance(iterator, direction, opts)
+  _G.info = { iterator = iterator, res_id = res_id }
+
+  -- Apply
+  H.replace_latest_region_with_yank(cache.history[res_id])
+  cache.current_id = res_id
+  cache.region = H.get_latest_region()
 end
 
 MiniBracketed.window = function(direction, opts)
@@ -565,6 +609,7 @@ MiniBracketed.window = function(direction, opts)
 
   -- Iterate
   local res_win_nr = MiniBracketed.advance(iterator, direction, opts)
+  if res_win_nr == iterator.state then return end
 
   -- Apply
   vim.api.nvim_set_current_win(vim.fn.win_getid(res_win_nr))
@@ -592,12 +637,12 @@ end
 ---         last state. If `nil`, can't wrap going backward or use direction 'last'.
 ---@param direction string Direction. One of 'first', 'backward', 'forward', 'last'.
 ---@param opts table|nil Options with the following keys:
----   - <n_times> - number of times to iterate. If can't make exactly `n_times`
----     steps, lowest possible number is made.
 ---   - <wrap> - whether to wrap around edges when `next()` or `prev()` return `nil`.
 ---
 ---@return any Result state. If `nil`, could not reach any valid result state.
 MiniBracketed.advance = function(iterator, direction, opts)
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+
   local res_state = iterator.state
 
   -- Compute loop data
@@ -627,7 +672,7 @@ MiniBracketed.advance = function(iterator, direction, opts)
 
       -- Wrap around edge
       local edge = iterator.start_edge
-      if iter_method == 'prev' then edge = iter_method.end_edge end
+      if iter_method == 'prev' then edge = iterator.end_edge end
       if edge == nil then break end
 
       new_state = iter(edge)
@@ -643,13 +688,13 @@ MiniBracketed.advance = function(iterator, direction, opts)
   return res_state
 end
 
-MiniBracketed.oldfiles_append_buf = function()
+MiniBracketed.oldfiles_track = function()
   -- Ensure tracking data is initialized
   H.oldfiles_ensure_initialized()
 
   -- Reset tracking indicator to allow proper tracking of next buffer
-  local is_from_oldfile = H.oldfiles_data.is_from_oldfile
-  H.oldfiles_data.is_from_oldfile = false
+  local is_from_oldfile = H.cache.oldfiles.is_from_oldfile
+  H.cache.oldfiles.is_from_oldfile = false
 
   -- Track only appropriate buffers (normal buffers with path)
   local path = vim.api.nvim_buf_get_name(0)
@@ -665,11 +710,11 @@ MiniBracketed.oldfiles_append_buf = function()
   --   postponed updates and then be updated with current buffer.
   local track_table
   if is_from_oldfile then
-    H.shadow_oldfiles_data = H.shadow_oldfiles_data or vim.deepcopy(H.oldfiles_data)
+    H.shadow_oldfiles_data = H.shadow_oldfiles_data or vim.deepcopy(H.cache.oldfiles)
     track_table = H.shadow_oldfiles_data
   else
-    H.oldfiles_data = H.shadow_oldfiles_data or H.oldfiles_data
-    track_table = H.oldfiles_data
+    H.cache.oldfiles = H.shadow_oldfiles_data or H.cache.oldfiles
+    track_table = H.cache.oldfiles
     H.shadow_oldfiles_data = nil
   end
 
@@ -679,20 +724,38 @@ MiniBracketed.oldfiles_append_buf = function()
   track_table.max_recency = n
 end
 
+MiniBracketed.yank_track = function()
+  local event = vim.v.event
+  -- Track only explicit yank
+  if event.operator ~= 'y' then return end
+
+  table.insert(H.cache.yank.history, { regcontents = event.regcontents, regtype = event.regtype })
+  H.cache.yank.current_id = #H.cache.yank.history + 1
+end
+
+-- au TextYankPost * lua local event = vim.v.event; table.insert(_G.yanks,
+-- {inclusive = event.inclusive, operator = event.operator, regcontents
+-- = event.regcontents, regname = event.regname, regtype = event.regtype,
+-- visual = event.visual})
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniBracketed.config
 
--- Tracking of old files for `oldfile()` (this data structure is designed to be
--- fast to add new file):
--- - `recency` is a table with file paths as fields and numerical values
---   indicating how recent file was accessed (higher - more recent).
--- - `max_recency` is a maximum currently used `recency`. Used to add new file.
--- - `is_from_oldfile` is an indicator of buffer change was done inside
---   `oldfile()` function. It is a key to enabling moving along old files (and
---   not just going back and forth between two files because they swap places
---   as two most recent files).
-H.oldfiles_data = nil
+H.cache = {
+  -- Tracking of old files for `oldfile()` (this data structure is designed to be
+  -- fast to add new file):
+  -- - `recency` is a table with file paths as fields and numerical values
+  --   indicating how recent file was accessed (higher - more recent).
+  -- - `max_recency` is a maximum currently used `recency`. Used to add new file.
+  -- - `is_from_oldfile` is an indicator of buffer change was done inside
+  --   `oldfile()` function. It is a key to enabling moving along old files (and
+  --   not just going back and forth between two files because they swap places
+  --   as two most recent files).
+  oldfiles = nil,
+
+  yank = { history = {}, current_id = 0, region = {} },
+}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -896,6 +959,14 @@ H.apply_config = function(config)
     H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.quickfix('last')<CR>",     { desc = 'Last quickfix' })
   end
 
+  if config.yank.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.yank.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.yank('first')<CR>",    { desc = 'First yank' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.yank('backward')<CR>", { desc = 'Previous yank' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.yank('forward')<CR>",  { desc = 'Next yank' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.yank('last')<CR>",     { desc = 'Last yank' })
+  end
+
   if config.window.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.window.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.window('first')<CR>",    { desc = 'First window' })
@@ -983,7 +1054,7 @@ H.oldfiles_normalize = function()
 
   -- Order currently readable paths in increasing order of recency
   local recency_pairs = {}
-  for path, rec in pairs(H.oldfiles_data.recency) do
+  for path, rec in pairs(H.cache.oldfiles.recency) do
     if vim.fn.filereadable(path) == 1 then table.insert(recency_pairs, { path, rec }) end
   end
   table.sort(recency_pairs, function(x, y) return x[2] < y[2] end)
@@ -994,12 +1065,12 @@ H.oldfiles_normalize = function()
     new_recency[pair[1]] = i
   end
 
-  H.oldfiles_data =
-    { recency = new_recency, max_recency = #recency_pairs, is_from_oldfile = H.oldfiles_data.is_from_oldfile }
+  H.cache.oldfiles =
+    { recency = new_recency, max_recency = #recency_pairs, is_from_oldfile = H.cache.oldfiles.is_from_oldfile }
 end
 
 H.oldfiles_ensure_initialized = function()
-  if H.oldfiles_data ~= nil or vim.v.oldfiles == nil then return end
+  if H.cache.oldfiles ~= nil or vim.v.oldfiles == nil then return end
 
   local n = #vim.v.oldfiles
   local recency = {}
@@ -1007,12 +1078,12 @@ H.oldfiles_ensure_initialized = function()
     if vim.fn.filereadable(path) == 1 then recency[path] = n - i + 1 end
   end
 
-  H.oldfiles_data = { recency = recency, max_recency = n, is_from_oldfile = false }
+  H.cache.oldfiles = { recency = recency, max_recency = n, is_from_oldfile = false }
 end
 
 H.oldfiles_get_array = function()
   local res = {}
-  for path, i in pairs(H.oldfiles_data.recency) do
+  for path, i in pairs(H.cache.oldfiles.recency) do
     res[i] = path
   end
   return res
@@ -1049,10 +1120,31 @@ H.qf_loc_implementation = function(list_type, direction, opts)
   -- Iterate
   local res_ind = MiniBracketed.advance(iterator, direction, opts)
 
-  -- Apply
-  -- Focus target entry, open enough folds and center
+  -- Apply. Focus target entry, open enough folds and center. Allow jumping to
+  -- current quickfix/loclist entry as it might be different from current
+  -- cursor position.
   vim.cmd(goto_command .. ' ' .. res_ind)
   vim.cmd('normal! zvzz')
+end
+
+-- Yank -----------------------------------------------------------------------
+H.get_latest_region = function()
+  local from, to = vim.fn.getpos("'["), vim.fn.getpos("']")
+  return { from = { line = from[2], col = from[3] }, to = { line = to[2], col = to[3] } }
+end
+
+H.replace_latest_region_with_yank = function(yank_data)
+  -- Delete latest region in "black hole" register
+  local mode = vim.fn.getregtype():sub(1, 1)
+  vim.cmd('normal! `[' .. mode .. '`]' .. '"_d')
+
+  -- Paste yank data using temporary register
+  local cache_z_reg = vim.fn.getreg('z')
+
+  vim.fn.setreg('z', yank_data)
+  vim.cmd('normal! "z' .. (yank_data.regtype == 'V' and 'P' or 'p'))
+
+  vim.fn.setreg('z', cache_z_reg)
 end
 
 -- Utilities ------------------------------------------------------------------
