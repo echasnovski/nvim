@@ -1,22 +1,9 @@
 -- MIT License Copyright (c) 2023 Evgeni Chasnovski
 
--- Possible renames
--- !!! MiniIterate !!!
--- !!! MiniSwipe !!!
--- !!! MiniAlong !!!
--- !!! MiniAdjacent !!!
--- !!! MiniNear !!!
--- MiniLoop
--- MiniCycle
--- MiniBrackets
--- MiniChain
--- MiniSequence
--- MiniSlide
-
 -- TODO
 --
 -- Code:
--- - Think about modifying `MiniNext.config` to have per-item configs
+-- - Think about modifying `MiniBracketed.config` to have per-item configs
 --   (`map_suffix` and `options`).
 -- - Try to make `n_times` work in `indent` with 'first' and 'last' direction.
 -- - Other todos across code.
@@ -54,17 +41,17 @@
 --     - Apply current state.
 
 -- Documentation ==============================================================
---- Go to next/previous/first/last target
+--- Go forward/backward with square brackets
 ---
 --- Features:
 ---
 --- # Setup ~
 ---
---- This module needs a setup with `require('mini.next').setup({})` (replace
---- `{}` with your `config` table). It will create global Lua table `MiniNext`
---- which you can use for scripting or manually (with `:lua MiniNext.*`).
+--- This module needs a setup with `require('mini.bracketed').setup({})` (replace
+--- `{}` with your `config` table). It will create global Lua table `MiniBracketed`
+--- which you can use for scripting or manually (with `:lua MiniBracketed.*`).
 ---
---- See |MiniNext.config| for available config settings.
+--- See |MiniBracketed.config| for available config settings.
 ---
 --- # Comparisons ~
 ---
@@ -72,29 +59,29 @@
 ---
 --- # Disabling~
 ---
---- To disable, set `g:mininext_disable` (globally) or `b:mininext_disable`
+--- To disable, set `g:minibracketed_disable` (globally) or `b:minibracketed_disable`
 --- (for a buffer) to `v:true`. Considering high number of different scenarios
 --- and customization intentions, writing exact rules for disabling module's
 --- functionality is left to user. See |mini.nvim-disabling-recipes| for common
 --- recipes.
----@tag mini.next
----@tag MiniNext
+---@tag mini.bracketed
+---@tag MiniBracketed
 
 ---@diagnostic disable:undefined-field
 
 -- Module definition ==========================================================
 -- TODO: make local after release
-MiniNext = {}
+MiniBracketed = {}
 H = {}
 
 --- Module setup
 ---
----@param config table|nil Module config table. See |MiniNext.config|.
+---@param config table|nil Module config table. See |MiniBracketed.config|.
 ---
----@usage `require('mini.next').setup({})` (replace `{}` with your `config` table)
-MiniNext.setup = function(config)
+---@usage `require('mini.bracketed').setup({})` (replace `{}` with your `config` table)
+MiniBracketed.setup = function(config)
   -- Export module
-  _G.MiniNext = MiniNext
+  _G.MiniBracketed = MiniBracketed
 
   -- Setup config
   config = H.setup_config(config)
@@ -104,9 +91,9 @@ MiniNext.setup = function(config)
 
   -- Module behavior
   vim.api.nvim_exec(
-    [[augroup MiniNext
+    [[augroup MiniBracketed
         au!
-        au BufEnter * lua MiniNext.oldfiles_append_buf()
+        au BufEnter * lua MiniBracketed.oldfiles_append_buf()
       augroup END]],
     false
   )
@@ -118,7 +105,7 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text
-MiniNext.config = {
+MiniBracketed.config = {
   mapping_suffixes = {
     buffer     = 'b',
     comment    = 'c',
@@ -135,7 +122,7 @@ MiniNext.config = {
 }
 --minidoc_afterlines_end
 
-MiniNext.buffer = function(direction, opts)
+MiniBracketed.buffer = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'buffer')
@@ -171,7 +158,7 @@ MiniNext.buffer = function(direction, opts)
   vim.api.nvim_set_current_buf(res_buf_id)
 end
 
-MiniNext.comment = function(direction, opts)
+MiniBracketed.comment = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'comment')
@@ -223,7 +210,7 @@ MiniNext.comment = function(direction, opts)
   vim.cmd('normal! zv^')
 end
 
-MiniNext.conflict = function(direction, opts)
+MiniBracketed.conflict = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'conflict')
@@ -258,7 +245,7 @@ MiniNext.conflict = function(direction, opts)
   vim.cmd('normal! zv^')
 end
 
-MiniNext.diagnostic = function(direction, opts)
+MiniBracketed.diagnostic = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'diagnostic')
@@ -299,7 +286,7 @@ MiniNext.diagnostic = function(direction, opts)
   vim.cmd('normal! zv')
 end
 
-MiniNext.file = function(direction, opts)
+MiniBracketed.file = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'file')
@@ -350,7 +337,7 @@ MiniNext.file = function(direction, opts)
   vim.cmd('edit ' .. target_path)
 end
 
-MiniNext.indent = function(direction, opts)
+MiniBracketed.indent = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'indent')
@@ -415,7 +402,7 @@ MiniNext.indent = function(direction, opts)
   vim.cmd('normal! zv^')
 end
 
-MiniNext.jump = function(direction, opts)
+MiniBracketed.jump = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'jump')
@@ -461,7 +448,7 @@ MiniNext.jump = function(direction, opts)
 end
 
 -- Files ordered from oldest to newest.
-MiniNext.oldfile = function(direction, opts)
+MiniBracketed.oldfile = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'oldfile')
@@ -501,7 +488,7 @@ MiniNext.oldfile = function(direction, opts)
   vim.cmd('edit ' .. res_path)
 end
 
-MiniNext.location = function(direction, opts)
+MiniBracketed.location = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'location')
@@ -510,7 +497,7 @@ MiniNext.location = function(direction, opts)
   H.qf_loc_implementation('location', direction, opts)
 end
 
-MiniNext.quickfix = function(direction, opts)
+MiniBracketed.quickfix = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'quickfix')
@@ -519,7 +506,7 @@ MiniNext.quickfix = function(direction, opts)
   H.qf_loc_implementation('quickfix', direction, opts)
 end
 
-MiniNext.window = function(direction, opts)
+MiniBracketed.window = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'window')
@@ -556,7 +543,7 @@ MiniNext.window = function(direction, opts)
   vim.api.nvim_set_current_win(vim.fn.win_getid(res_win_nr))
 end
 
-MiniNext.oldfiles_append_buf = function()
+MiniBracketed.oldfiles_append_buf = function()
   -- Ensure tracking data is initialized
   H.oldfiles_ensure_initialized()
 
@@ -594,7 +581,7 @@ end
 
 -- Helper data ================================================================
 -- Module default config
-H.default_config = MiniNext.config
+H.default_config = MiniBracketed.config
 
 -- Tracking of old files for `oldfile()` (this data structure is designed to be
 -- fast to add new file):
@@ -638,158 +625,158 @@ end
 
 --stylua: ignore
 H.apply_config = function(config)
-  MiniNext.config = config
+  MiniBracketed.config = config
 
   -- Make mappings
   local suffixes = config.mapping_suffixes
 
   if suffixes.buffer ~= '' then
     local low, up = H.get_suffix_variants(suffixes.buffer)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.buffer('prev')<CR>",  { desc = 'Previous buffer' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.buffer('next')<CR>",  { desc = 'Next buffer' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniNext.buffer('first')<CR>", { desc = 'First buffer' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniNext.buffer('last')<CR>",  { desc = 'Last buffer' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.buffer('prev')<CR>",  { desc = 'Previous buffer' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.buffer('next')<CR>",  { desc = 'Next buffer' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.buffer('first')<CR>", { desc = 'First buffer' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.buffer('last')<CR>",  { desc = 'Last buffer' })
   end
 
   if suffixes.comment ~= '' then
     local low, up = H.get_suffix_variants(suffixes.comment)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.comment('prev')<CR>",  { desc = 'Previous comment' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniNext.comment('prev')<CR>",  { desc = 'Previous comment' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.comment('prev')<CR>", { desc = 'Previous comment' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.comment('prev')<CR>",  { desc = 'Previous comment' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.comment('prev')<CR>",  { desc = 'Previous comment' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.comment('prev')<CR>", { desc = 'Previous comment' })
 
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.comment('next')<CR>",  { desc = 'Next comment' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniNext.comment('next')<CR>",  { desc = 'Next comment' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.comment('next')<CR>", { desc = 'Next comment' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.comment('next')<CR>",  { desc = 'Next comment' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.comment('next')<CR>",  { desc = 'Next comment' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.comment('next')<CR>", { desc = 'Next comment' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniNext.comment('first')<CR>",  { desc = 'First comment' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniNext.comment('first')<CR>",  { desc = 'First comment' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.comment('first')<CR>", { desc = 'First comment' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.comment('first')<CR>",  { desc = 'First comment' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.comment('first')<CR>",  { desc = 'First comment' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.comment('first')<CR>", { desc = 'First comment' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniNext.comment('last')<CR>",   { desc = 'Last comment' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniNext.comment('last')<CR>",   { desc = 'Last comment' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.comment('last')<CR>",  { desc = 'Last comment' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",   { desc = 'Last comment' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",   { desc = 'Last comment' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.comment('last')<CR>",  { desc = 'Last comment' })
   end
 
   if suffixes.conflict ~= '' then
     local low, up = H.get_suffix_variants(suffixes.conflict)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.conflict('prev')<CR>",  { desc = 'Previous conflict' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniNext.conflict('prev')<CR>",  { desc = 'Previous conflict' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.conflict('prev')<CR>", { desc = 'Previous conflict' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.conflict('prev')<CR>",  { desc = 'Previous conflict' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.conflict('prev')<CR>",  { desc = 'Previous conflict' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.conflict('prev')<CR>", { desc = 'Previous conflict' })
 
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.conflict('next')<CR>",  { desc = 'Next conflict' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniNext.conflict('next')<CR>",  { desc = 'Next conflict' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.conflict('next')<CR>", { desc = 'Next conflict' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.conflict('next')<CR>",  { desc = 'Next conflict' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.conflict('next')<CR>",  { desc = 'Next conflict' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.conflict('next')<CR>", { desc = 'Next conflict' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniNext.conflict('first')<CR>",  { desc = 'First conflict' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniNext.conflict('first')<CR>",  { desc = 'First conflict' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.conflict('first')<CR>", { desc = 'First conflict' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.conflict('first')<CR>",  { desc = 'First conflict' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.conflict('first')<CR>",  { desc = 'First conflict' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.conflict('first')<CR>", { desc = 'First conflict' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniNext.conflict('last')<CR>",   { desc = 'Last conflict' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniNext.conflict('last')<CR>",   { desc = 'Last conflict' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.conflict('last')<CR>",  { desc = 'Last conflict' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",   { desc = 'Last conflict' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",   { desc = 'Last conflict' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.conflict('last')<CR>",  { desc = 'Last conflict' })
   end
 
   if suffixes.diagnostic ~= '' then
     local low, up = H.get_suffix_variants(suffixes.diagnostic)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniNext.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.diagnostic('prev')<CR>", { desc = 'Previous diagnostic' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.diagnostic('prev')<CR>", { desc = 'Previous diagnostic' })
 
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniNext.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.diagnostic('next')<CR>", { desc = 'Next diagnostic' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.diagnostic('next')<CR>", { desc = 'Next diagnostic' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniNext.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniNext.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.diagnostic('first')<CR>", { desc = 'First diagnostic' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.diagnostic('first')<CR>", { desc = 'First diagnostic' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniNext.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniNext.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
   end
 
   if suffixes.file ~= '' then
     local low, up = H.get_suffix_variants(suffixes.file)
-    H.map('n', '[' .. low,  "<Cmd>lua MiniNext.file('prev')<CR>",     { desc = 'Previous file' })
-    H.map('n', ']' .. low,  "<Cmd>lua MiniNext.file('next')<CR>",     { desc = 'Next file' })
-    H.map('n', '[' .. up,   "<Cmd>lua MiniNext.file('first')<CR>",    { desc = 'First file' })
-    H.map('n', ']' .. up,   "<Cmd>lua MiniNext.file('last')<CR>",     { desc = 'Last file' })
+    H.map('n', '[' .. low,  "<Cmd>lua MiniBracketed.file('prev')<CR>",     { desc = 'Previous file' })
+    H.map('n', ']' .. low,  "<Cmd>lua MiniBracketed.file('next')<CR>",     { desc = 'Next file' })
+    H.map('n', '[' .. up,   "<Cmd>lua MiniBracketed.file('first')<CR>",    { desc = 'First file' })
+    H.map('n', ']' .. up,   "<Cmd>lua MiniBracketed.file('last')<CR>",     { desc = 'Last file' })
   end
 
   if suffixes.indent ~= '' then
     local low, up = H.get_suffix_variants(suffixes.indent)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.indent('prev')<CR>",  { desc = 'Previous indent' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniNext.indent('prev')<CR>",  { desc = 'Previous indent' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.indent('prev')<CR>", { desc = 'Previous indent' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.indent('prev')<CR>",  { desc = 'Previous indent' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.indent('prev')<CR>",  { desc = 'Previous indent' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.indent('prev')<CR>", { desc = 'Previous indent' })
 
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.indent('next')<CR>",  { desc = 'Next indent' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniNext.indent('next')<CR>",  { desc = 'Next indent' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.indent('next')<CR>", { desc = 'Next indent' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.indent('next')<CR>",  { desc = 'Next indent' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.indent('next')<CR>",  { desc = 'Next indent' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.indent('next')<CR>", { desc = 'Next indent' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniNext.indent('first')<CR>",  { desc = 'First indent' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniNext.indent('first')<CR>",  { desc = 'First indent' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniNext.indent('first')<CR>", { desc = 'First indent' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.indent('first')<CR>",  { desc = 'First indent' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.indent('first')<CR>",  { desc = 'First indent' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.indent('first')<CR>", { desc = 'First indent' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniNext.indent('last')<CR>",  { desc = 'Last indent' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniNext.indent('last')<CR>",  { desc = 'Last indent' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniNext.indent('last')<CR>", { desc = 'Last indent' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.indent('last')<CR>",  { desc = 'Last indent' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.indent('last')<CR>",  { desc = 'Last indent' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.indent('last')<CR>", { desc = 'Last indent' })
   end
 
   if suffixes.jump ~= '' then
     local low, up = H.get_suffix_variants(suffixes.jump)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.jump('prev')<CR>",  { desc = 'Previous jump' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniNext.jump('prev')<CR>",  { desc = 'Previous jump' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniNext.jump('prev')<CR>", { desc = 'Previous jump' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.jump('prev')<CR>",  { desc = 'Previous jump' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.jump('prev')<CR>",  { desc = 'Previous jump' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.jump('prev')<CR>", { desc = 'Previous jump' })
 
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.jump('next')<CR>",  { desc = 'Next jump' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniNext.jump('next')<CR>",  { desc = 'Next jump' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniNext.jump('next')<CR>", { desc = 'Next jump' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.jump('next')<CR>",  { desc = 'Next jump' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.jump('next')<CR>",  { desc = 'Next jump' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.jump('next')<CR>", { desc = 'Next jump' })
 
-    H.map('n', '[' .. up, "<Cmd>lua MiniNext.jump('first')<CR>",  { desc = 'First jump' })
-    H.map('x', '[' .. up, "<Cmd>lua MiniNext.jump('first')<CR>",  { desc = 'First jump' })
-    H.map('o', '[' .. up, "v<Cmd>lua MiniNext.jump('first')<CR>", { desc = 'First jump' })
+    H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.jump('first')<CR>",  { desc = 'First jump' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.jump('first')<CR>",  { desc = 'First jump' })
+    H.map('o', '[' .. up, "v<Cmd>lua MiniBracketed.jump('first')<CR>", { desc = 'First jump' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniNext.jump('last')<CR>",   { desc = 'Last jump' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniNext.jump('last')<CR>",   { desc = 'Last jump' })
-    H.map('o', ']' .. up, "v<Cmd>lua MiniNext.jump('last')<CR>",  { desc = 'Last jump' })
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",   { desc = 'Last jump' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",   { desc = 'Last jump' })
+    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.jump('last')<CR>",  { desc = 'Last jump' })
   end
 
   if suffixes.oldfile ~= '' then
     local low, up = H.get_suffix_variants(suffixes.oldfile)
-    H.map('n', '[' .. low,  "<Cmd>lua MiniNext.oldfile('prev')<CR>",  { desc = 'Previous oldfile' })
-    H.map('n', ']' .. low,  "<Cmd>lua MiniNext.oldfile('next')<CR>",  { desc = 'Next oldfile' })
-    H.map('n', '[' .. up,   "<Cmd>lua MiniNext.oldfile('first')<CR>", { desc = 'First oldfile' })
-    H.map('n', ']' .. up,   "<Cmd>lua MiniNext.oldfile('last')<CR>",  { desc = 'Last oldfile' })
+    H.map('n', '[' .. low,  "<Cmd>lua MiniBracketed.oldfile('prev')<CR>",  { desc = 'Previous oldfile' })
+    H.map('n', ']' .. low,  "<Cmd>lua MiniBracketed.oldfile('next')<CR>",  { desc = 'Next oldfile' })
+    H.map('n', '[' .. up,   "<Cmd>lua MiniBracketed.oldfile('first')<CR>", { desc = 'First oldfile' })
+    H.map('n', ']' .. up,   "<Cmd>lua MiniBracketed.oldfile('last')<CR>",  { desc = 'Last oldfile' })
   end
 
   if suffixes.location ~= '' then
     local low, up = H.get_suffix_variants(suffixes.location)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.location('prev')<CR>",  { desc = 'Previous location' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.location('next')<CR>",  { desc = 'Next location' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniNext.location('first')<CR>", { desc = 'First location' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniNext.location('last')<CR>",  { desc = 'Last location' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.location('prev')<CR>",  { desc = 'Previous location' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.location('next')<CR>",  { desc = 'Next location' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.location('first')<CR>", { desc = 'First location' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.location('last')<CR>",  { desc = 'Last location' })
   end
 
   if suffixes.quickfix ~= '' then
     local low, up = H.get_suffix_variants(suffixes.quickfix)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.quickfix('prev')<CR>",  { desc = 'Previous quickfix' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.quickfix('next')<CR>",  { desc = 'Next quickfix' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniNext.quickfix('first')<CR>", { desc = 'First quickfix' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniNext.quickfix('last')<CR>",  { desc = 'Last quickfix' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.quickfix('prev')<CR>",  { desc = 'Previous quickfix' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.quickfix('next')<CR>",  { desc = 'Next quickfix' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.quickfix('first')<CR>", { desc = 'First quickfix' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.quickfix('last')<CR>",  { desc = 'Last quickfix' })
   end
 
   if suffixes.window ~= '' then
     local low, up = H.get_suffix_variants(suffixes.window)
-    H.map('n', '[' .. low, "<Cmd>lua MiniNext.window('prev')<CR>",  { desc = 'Previous window' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniNext.window('next')<CR>",  { desc = 'Next window' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniNext.window('first')<CR>", { desc = 'First window' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniNext.window('last')<CR>",  { desc = 'Last window' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.window('prev')<CR>",  { desc = 'Previous window' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.window('next')<CR>",  { desc = 'Next window' })
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.window('first')<CR>", { desc = 'First window' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.window('last')<CR>",  { desc = 'Last window' })
   end
 end
 
 H.get_suffix_variants = function(char) return char:lower(), char:upper() end
 
-H.is_disabled = function() return vim.g.mininext_disable == true or vim.b.mininext_disable == true end
+H.is_disabled = function() return vim.g.minibracketed_disable == true or vim.b.minibracketed_disable == true end
 
 -- Iterator -------------------------------------------------------------------
 --@param iterator table Table:
@@ -992,7 +979,7 @@ H.qf_loc_implementation = function(list_type, direction, opts)
 end
 
 -- Utilities ------------------------------------------------------------------
-H.error = function(msg) error(string.format('(mini.next) %s', msg), 0) end
+H.error = function(msg) error(string.format('(mini.bracketed) %s', msg), 0) end
 
 H.validate_direction = function(direction, choices, fun_name)
   if not vim.tbl_contains(choices, direction) then
@@ -1013,4 +1000,4 @@ H.map = function(mode, key, rhs, opts)
   vim.api.nvim_set_keymap(mode, key, rhs, opts)
 end
 
-return MiniNext
+return MiniBracketed
