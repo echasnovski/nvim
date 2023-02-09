@@ -130,5 +130,6 @@ vim.schedule(function()
 
   require('mini.trailspace').setup()
 
-  require('mini-dev.next').setup()
+  require('mini-dev.bracketed').setup()
+  -- require('mini-dev.bracketed').setup({ indent = { suffix = '' } })
 end)

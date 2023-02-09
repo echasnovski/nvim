@@ -3,18 +3,20 @@
 -- TODO
 --
 -- Code:
--- - Think about modifying `MiniBracketed.config` to have per-item configs
---   (`map_suffix` and `options`).
 -- - Try to make `n_times` work in `indent` with 'first' and 'last' direction.
 -- - Other todos across code.
--- - Ensure that moves guaranteed to be inside current buffer have mappings in
---   Normal, Visual, and Operator-pending modes.
 -- - Refactor and clean up with possible abstractions.
 --
 -- Tests:
+-- - Ensure moves that guaranteed to be inside current buffer have mappings in
+--   Normal, Visual, and Operator-pending modes (linewise if source is
+--   linewise, charwise otherwise).
 --
 -- Docs:
 -- - Mention that it is ok to not map defaults and use functions manually.
+-- - Mention in `conflict` about possibility of resolving merge conflicts by
+--   placing cursor on `===` line and executing one of these:
+--   `d]x[xdd` (choose upper part), `d[x]xdd` (choose lower part).
 -- - General implementation idea is usually as follows:
 --     - Construct target iterator:
 --         - Has idea about current state.
@@ -52,6 +54,10 @@
 --- which you can use for scripting or manually (with `:lua MiniBracketed.*`).
 ---
 --- See |MiniBracketed.config| for available config settings.
+---
+--- You can override runtime config settings (like options of sources) locally
+--- to buffer inside `vim.b.minibracketed_config` which should have same structure
+--- as `MiniBracketed.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons ~
 ---
@@ -106,27 +112,32 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text
 MiniBracketed.config = {
-  mapping_suffixes = {
-    buffer     = 'b',
-    comment    = 'c',
-    conflict   = 'x',
-    diagnostic = 'd',
-    file       = 'f',
-    indent     = 'i',
-    jump       = 'j',
-    oldfile    = 'o',
-    location   = 'l',
-    quickfix   = 'q',
-    window     = 'w',
-  }
+  -- First-level elements are tables describing behavior of targets sources:
+  -- - <suffix> - single character suffix. Used after `[` / `]` in mappings.
+  --   For example, with `b` creates `[b`, `]b`, `[B`, `]B` mappings.
+  --   Supply empty string `''` to not create mappings.
+  -- - <opts> - table overriding source options.
+  -- See `:h MiniBracketed.config` for more info.
+  buffer     = { suffix = 'b', options = {} },
+  comment    = { suffix = 'c', options = {} },
+  conflict   = { suffix = 'x', options = {} },
+  diagnostic = { suffix = 'd', options = {} },
+  file       = { suffix = 'f', options = {} },
+  indent     = { suffix = 'i', options = {} },
+  jump       = { suffix = 'j', options = {} },
+  location   = { suffix = 'l', options = {} },
+  oldfile    = { suffix = 'o', options = {} },
+  quickfix   = { suffix = 'q', options = {} },
+  window     = { suffix = 'w', options = {} },
 }
 --minidoc_afterlines_end
 
 MiniBracketed.buffer = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'buffer')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'buffer')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().buffer.options, opts or {})
 
   -- Define iterator that traverses all valid listed buffers
   -- (should be same as `:bnext` / `:bprev`)
@@ -135,13 +146,13 @@ MiniBracketed.buffer = function(direction, opts)
 
   local iterator = {}
 
-  iterator.forward = function(buf_id)
+  iterator.next = function(buf_id)
     for id = buf_id + 1, buf_list[#buf_list] do
       if is_listed(id) then return id end
     end
   end
 
-  iterator.backward = function(buf_id)
+  iterator.prev = function(buf_id)
     for id = buf_id - 1, buf_list[1], -1 do
       if is_listed(id) then return id end
     end
@@ -152,7 +163,7 @@ MiniBracketed.buffer = function(direction, opts)
   iterator.end_edge = buf_list[#buf_list] + 1
 
   -- Iterate
-  local res_buf_id = H.iterate(iterator, direction, opts)
+  local res_buf_id = MiniBracketed.advance(iterator, direction, opts)
 
   -- Apply
   vim.api.nvim_set_current_buf(res_buf_id)
@@ -161,8 +172,13 @@ end
 MiniBracketed.comment = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'comment')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true, block_side = 'near' }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'comment')
+  opts = vim.tbl_deep_extend(
+    'force',
+    { n_times = vim.v.count1, wrap = true, block_side = 'near' },
+    H.get_config().comment.options,
+    opts or {}
+  )
 
   -- Compute loop data to traverse target commented lines in current buffer
   local is_commented = H.make_comment_checker()
@@ -180,7 +196,7 @@ MiniBracketed.comment = function(direction, opts)
   local iterator = {}
 
   local n_lines = vim.api.nvim_buf_line_count(0)
-  iterator.forward = function(line_num)
+  iterator.next = function(line_num)
     local above, cur = is_commented(line_num), is_commented(line_num + 1)
     for lnum = line_num + 1, n_lines do
       local below = is_commented(lnum + 1)
@@ -189,7 +205,7 @@ MiniBracketed.comment = function(direction, opts)
     end
   end
 
-  iterator.backward = function(line_num)
+  iterator.prev = function(line_num)
     local cur, below = is_commented(line_num - 1), is_commented(line_num)
     for lnum = line_num - 1, 1, -1 do
       local above = is_commented(lnum - 1)
@@ -203,7 +219,7 @@ MiniBracketed.comment = function(direction, opts)
   iterator.end_edge = n_lines + 1
 
   -- Iterate
-  local res_line_num = H.iterate(iterator, direction, opts)
+  local res_line_num = MiniBracketed.advance(iterator, direction, opts)
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -213,21 +229,22 @@ end
 MiniBracketed.conflict = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'conflict')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'conflict')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().conflict.options, opts or {})
 
   -- Define iterator that traverses all conflict markers in current buffer
   local n_lines = vim.api.nvim_buf_line_count(0)
 
   local iterator = {}
 
-  iterator.forward = function(line_num)
+  iterator.next = function(line_num)
     for lnum = line_num + 1, n_lines do
       if H.is_conflict_mark(lnum) then return lnum end
     end
   end
 
-  iterator.backward = function(line_num)
+  iterator.prev = function(line_num)
     for lnum = line_num - 1, 1, -1 do
       if H.is_conflict_mark(lnum) then return lnum end
     end
@@ -238,7 +255,7 @@ MiniBracketed.conflict = function(direction, opts)
   iterator.end_edge = n_lines + 1
 
   -- Iterate
-  local res_line_num = H.iterate(iterator, direction, opts)
+  local res_line_num = MiniBracketed.advance(iterator, direction, opts)
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -248,21 +265,22 @@ end
 MiniBracketed.diagnostic = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'diagnostic')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'diagnostic')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().diagnostic.options, opts or {})
 
   -- Define iterator that traverses all diagnostic entries in current buffer
   local is_position = function(x) return type(x) == 'table' and #x == 2 end
   local diag_pos_to_cursor_pos = function(pos) return { pos[1] + 1, pos[2] } end
   local iterator = {}
 
-  iterator.forward = function(position)
+  iterator.next = function(position)
     local new_pos = vim.diagnostic.get_next_pos({ cursor_position = diag_pos_to_cursor_pos(position), wrap = false })
     if not is_position(new_pos) then return end
     return new_pos
   end
 
-  iterator.backward = function(position)
+  iterator.prev = function(position)
     local new_pos = vim.diagnostic.get_prev_pos({ cursor_position = diag_pos_to_cursor_pos(position), wrap = false })
     if not is_position(new_pos) then return end
     return new_pos
@@ -279,7 +297,7 @@ MiniBracketed.diagnostic = function(direction, opts)
   iterator.end_edge = { last_line - 1, math.max(last_line_col - 1, 0) }
 
   -- Iterate
-  local res_pos = H.iterate(iterator, direction, opts)
+  local res_pos = MiniBracketed.advance(iterator, direction, opts)
 
   -- Apply. Open just enough folds.
   vim.api.nvim_win_set_cursor(0, diag_pos_to_cursor_pos(res_pos))
@@ -289,8 +307,8 @@ end
 MiniBracketed.file = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'file')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'file')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().file.options, opts or {})
 
   -- Get file data
   local file_data = H.get_file_data()
@@ -300,12 +318,12 @@ MiniBracketed.file = function(direction, opts)
   -- Define iterator that traverses all found files
   local iterator = {}
 
-  iterator.forward = function(ind)
+  iterator.next = function(ind)
     if ind == nil or #file_basenames <= ind then return end
     return ind + 1
   end
 
-  iterator.backward = function(ind)
+  iterator.prev = function(ind)
     if ind == nil or ind <= 1 then return end
     return ind - 1
   end
@@ -327,7 +345,7 @@ MiniBracketed.file = function(direction, opts)
   iterator.end_edge = #file_basenames + 1
 
   -- Iterate
-  local res_ind = H.iterate(iterator, direction, opts)
+  local res_ind = MiniBracketed.advance(iterator, direction, opts)
   -- - Do nothing if it should open current buffer. Reduces flickering.
   if res_ind == iterator.state then return end
 
@@ -340,17 +358,22 @@ end
 MiniBracketed.indent = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'indent')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, change_type = 'diff' }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'indent')
+  opts = vim.tbl_deep_extend(
+    'force',
+    { n_times = vim.v.count1, change_type = 'less' },
+    H.get_config().indent.options,
+    opts or {}
+  )
 
   opts.wrap = false
 
   if direction == 'first' then
     -- For some reason using `n_times = math.huge` leads to infinite loop
-    direction, opts.n_times = 'prev', vim.api.nvim_buf_line_count(0) + 1
+    direction, opts.n_times = 'backward', vim.api.nvim_buf_line_count(0) + 1
   end
   if direction == 'last' then
-    direction, opts.n_times = 'next', vim.api.nvim_buf_line_count(0) + 1
+    direction, opts.n_times = 'forward', vim.api.nvim_buf_line_count(0) + 1
   end
 
   -- Compute loop data to traverse target commented lines in current buffer
@@ -364,7 +387,7 @@ MiniBracketed.indent = function(direction, opts)
   -- Define iterator
   local iterator = {}
 
-  iterator.forward = function(cur_lnum)
+  iterator.next = function(cur_lnum)
     -- Correctly process empty current line
     cur_lnum = vim.fn.nextnonblank(cur_lnum)
     local cur_indent = vim.fn.indent(cur_lnum)
@@ -379,7 +402,7 @@ MiniBracketed.indent = function(direction, opts)
     end
   end
 
-  iterator.backward = function(cur_lnum)
+  iterator.prev = function(cur_lnum)
     cur_lnum = vim.fn.prevnonblank(cur_lnum)
     local cur_indent = vim.fn.indent(cur_lnum)
 
@@ -395,7 +418,7 @@ MiniBracketed.indent = function(direction, opts)
   iterator.state = vim.fn.line('.')
 
   -- Iterate
-  local res_line_num = H.iterate(iterator, direction, opts)
+  local res_line_num = MiniBracketed.advance(iterator, direction, opts)
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -405,8 +428,8 @@ end
 MiniBracketed.jump = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'jump')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'jump')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().jump.options, opts or {})
 
   -- Define iterator that traverses all jumplist entries inside current buffer
   local cur_buf_id = vim.api.nvim_get_current_buf()
@@ -424,13 +447,13 @@ MiniBracketed.jump = function(direction, opts)
     return jump_entry.bufnr == cur_buf_id
   end
 
-  iterator.forward = function(jump_num)
+  iterator.next = function(jump_num)
     for num = jump_num + 1, n_list do
       if is_jump_num_from_current_buffer(num) then return num end
     end
   end
 
-  iterator.backward = function(jump_num)
+  iterator.prev = function(jump_num)
     for num = jump_num - 1, 1, -1 do
       if is_jump_num_from_current_buffer(num) then return num end
     end
@@ -441,18 +464,29 @@ MiniBracketed.jump = function(direction, opts)
   iterator.end_edge = n_list + 1
 
   -- Iterate
-  local res_jump_num = H.iterate(iterator, direction, opts)
+  local res_jump_num = MiniBracketed.advance(iterator, direction, opts)
 
   -- Apply. Make jump.
   H.make_jump(jump_list, cur_jump_num, res_jump_num)
+end
+
+MiniBracketed.location = function(direction, opts)
+  if H.is_disabled() then return end
+
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'location')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().location.options, opts or {})
+
+  H.qf_loc_implementation('location', direction, opts)
 end
 
 -- Files ordered from oldest to newest.
 MiniBracketed.oldfile = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'oldfile')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'oldfile')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().oldfile.options, opts or {})
 
   -- Define iterator that traverses all old files
   local cur_path = vim.api.nvim_buf_get_name(0)
@@ -463,12 +497,12 @@ MiniBracketed.oldfile = function(direction, opts)
 
   local iterator = {}
 
-  iterator.forward = function(ind)
+  iterator.next = function(ind)
     if ind == nil or n_oldfiles <= ind then return end
     return ind + 1
   end
 
-  iterator.backward = function(ind)
+  iterator.prev = function(ind)
     if ind == nil or ind <= 1 then return end
     return ind - 1
   end
@@ -478,7 +512,7 @@ MiniBracketed.oldfile = function(direction, opts)
   iterator.end_edge = n_oldfiles + 1
 
   -- Iterate
-  local res_path_ind = H.iterate(iterator, direction, opts)
+  local res_path_ind = MiniBracketed.advance(iterator, direction, opts)
   local res_path = oldfiles[res_path_ind]
 
   if res_path == cur_path then return end
@@ -488,20 +522,12 @@ MiniBracketed.oldfile = function(direction, opts)
   vim.cmd('edit ' .. res_path)
 end
 
-MiniBracketed.location = function(direction, opts)
-  if H.is_disabled() then return end
-
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'location')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
-
-  H.qf_loc_implementation('location', direction, opts)
-end
-
 MiniBracketed.quickfix = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'quickfix')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'quickfix')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().quickfix.options, opts or {})
 
   H.qf_loc_implementation('quickfix', direction, opts)
 end
@@ -509,8 +535,9 @@ end
 MiniBracketed.window = function(direction, opts)
   if H.is_disabled() then return end
 
-  H.validate_direction(direction, { 'first', 'prev', 'next', 'last' }, 'window')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, opts or {})
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'window')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().window.options, opts or {})
 
   -- Define iterator that traverses all normal windows in "natural" order
   local is_normal = function(win_nr)
@@ -520,13 +547,13 @@ MiniBracketed.window = function(direction, opts)
 
   local iterator = {}
 
-  iterator.forward = function(win_nr)
+  iterator.next = function(win_nr)
     for nr = win_nr + 1, vim.fn.winnr('$') do
       if is_normal(nr) then return nr end
     end
   end
 
-  iterator.backward = function(win_nr)
+  iterator.prev = function(win_nr)
     for nr = win_nr - 1, 1, -1 do
       if is_normal(nr) then return nr end
     end
@@ -537,10 +564,83 @@ MiniBracketed.window = function(direction, opts)
   iterator.end_edge = vim.fn.winnr('$') + 1
 
   -- Iterate
-  local res_win_nr = H.iterate(iterator, direction, opts)
+  local res_win_nr = MiniBracketed.advance(iterator, direction, opts)
 
   -- Apply
   vim.api.nvim_set_current_win(vim.fn.win_getid(res_win_nr))
+end
+
+--- Advance iterator
+---
+--- TODO (add notes);
+--- - Directions 'first' and 'last' are convenience wrappers for 'next' and
+---   'last' with pre-setting initial state to `start_edge` and `end_edge`.
+--- - List some guarantees and conventions about `nil`: iterator methods are
+---   never called with `nil` as input state.
+--- - Only returns updates `iterator.state` in place (if result state is not `nil`) and
+---   returns new state (can be `nil`).
+---
+---@param iterator table Table:
+---   - Methods:
+---       - <next> - given state, return state in forward direction (no wrap).
+---       - <prev> - given state, return state in backward direction (no wrap).
+---   - Fields:
+---       - <state> - object describing current state.
+---       - <start_edge> (optional) - object with `forward(start_edge)` describes
+---         first state. If `nil`, can't wrap going forward or use direction 'first'.
+---       - <end_edge> (optional) - object with `backward(end_edge)` describes
+---         last state. If `nil`, can't wrap going backward or use direction 'last'.
+---@param direction string Direction. One of 'first', 'backward', 'forward', 'last'.
+---@param opts table|nil Options with the following keys:
+---   - <n_times> - number of times to iterate. If can't make exactly `n_times`
+---     steps, lowest possible number is made.
+---   - <wrap> - whether to wrap around edges when `next()` or `prev()` return `nil`.
+---
+---@return any Result state. If `nil`, could not reach any valid result state.
+MiniBracketed.advance = function(iterator, direction, opts)
+  local res_state = iterator.state
+
+  -- Compute loop data
+  local n_times, iter_method = opts.n_times, 'next'
+
+  if direction == 'backward' then iter_method = 'prev' end
+
+  if direction == 'first' then
+    res_state, iter_method = iterator.start_edge, 'next'
+  end
+
+  if direction == 'last' then
+    res_state, iter_method = iterator.end_edge, 'prev'
+  end
+
+  if res_state == nil then return nil end
+
+  -- Loop
+  local iter = iterator[iter_method]
+  for _ = 1, n_times do
+    -- Advance
+    local new_state = iter(res_state)
+
+    if new_state == nil then
+      -- Stop if can't wrap around edges
+      if not opts.wrap then break end
+
+      -- Wrap around edge
+      local edge = iterator.start_edge
+      if iter_method == 'prev' then edge = iter_method.end_edge end
+      if edge == nil then break end
+
+      new_state = iter(edge)
+
+      -- Ensure non-nil new state (can happen when there are no targets)
+      if new_state == nil then break end
+    end
+
+    -- Allow only partial reach of `n_times`
+    res_state = new_state
+  end
+
+  return res_state
 end
 
 MiniBracketed.oldfiles_append_buf = function()
@@ -602,22 +702,55 @@ H.setup_config = function(config)
   vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
+  --stylua: ignore
   vim.validate({
-    mapping_suffixes = { config.mapping_suffixes, 'table' },
+    ['buffer']     = { config.buffer,     'table' },
+    ['comment']    = { config.comment,    'table' },
+    ['conflict']   = { config.conflict,   'table' },
+    ['diagnostic'] = { config.diagnostic, 'table' },
+    ['file']       = { config.file,       'table' },
+    ['indent']     = { config.indent,     'table' },
+    ['jump']       = { config.jump,       'table' },
+    ['location']   = { config.location,   'table' },
+    ['oldfile']    = { config.oldfile,    'table' },
+    ['quickfix']   = { config.quickfix,   'table' },
+    ['window']     = { config.window,     'table' },
   })
 
+  --stylua: ignore
   vim.validate({
-    ['mapping_suffixes.buffer'] = { config.mapping_suffixes.buffer, 'string' },
-    ['mapping_suffixes.comment'] = { config.mapping_suffixes.comment, 'string' },
-    ['mapping_suffixes.conflict'] = { config.mapping_suffixes.conflict, 'string' },
-    ['mapping_suffixes.diagnostic'] = { config.mapping_suffixes.diagnostic, 'string' },
-    ['mapping_suffixes.file'] = { config.mapping_suffixes.file, 'string' },
-    ['mapping_suffixes.indent'] = { config.mapping_suffixes.indent, 'string' },
-    ['mapping_suffixes.jump'] = { config.mapping_suffixes.jump, 'string' },
-    ['mapping_suffixes.oldfile'] = { config.mapping_suffixes.oldfile, 'string' },
-    ['mapping_suffixes.location'] = { config.mapping_suffixes.location, 'string' },
-    ['mapping_suffixes.quickfix'] = { config.mapping_suffixes.quickfix, 'string' },
-    ['mapping_suffixes.window'] = { config.mapping_suffixes.window, 'string' },
+    ['buffer.suffix']  = { config.buffer.suffix, 'string' },
+    ['buffer.options'] = { config.buffer.options, 'table' },
+
+    ['comment.suffix']  = { config.comment.suffix, 'string' },
+    ['comment.options'] = { config.comment.options, 'table' },
+
+    ['conflict.suffix']  = { config.conflict.suffix, 'string' },
+    ['conflict.options'] = { config.conflict.options, 'table' },
+
+    ['diagnostic.suffix']  = { config.diagnostic.suffix, 'string' },
+    ['diagnostic.options'] = { config.diagnostic.options, 'table' },
+
+    ['file.suffix']  = { config.file.suffix, 'string' },
+    ['file.options'] = { config.file.options, 'table' },
+
+    ['indent.suffix']  = { config.indent.suffix, 'string' },
+    ['indent.options'] = { config.indent.options, 'table' },
+
+    ['jump.suffix']  = { config.jump.suffix, 'string' },
+    ['jump.options'] = { config.jump.options, 'table' },
+
+    ['location.suffix']  = { config.location.suffix, 'string' },
+    ['location.options'] = { config.location.options, 'table' },
+
+    ['oldfile.suffix']  = { config.oldfile.suffix, 'string' },
+    ['oldfile.options'] = { config.oldfile.options, 'table' },
+
+    ['quickfix.suffix']  = { config.quickfix.suffix, 'string' },
+    ['quickfix.options'] = { config.quickfix.options, 'table' },
+
+    ['window.suffix']  = { config.window.suffix, 'string' },
+    ['window.options'] = { config.window.options, 'table' },
   })
 
   return config
@@ -628,149 +761,147 @@ H.apply_config = function(config)
   MiniBracketed.config = config
 
   -- Make mappings
-  local suffixes = config.mapping_suffixes
-
-  if suffixes.buffer ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.buffer)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.buffer('prev')<CR>",  { desc = 'Previous buffer' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.buffer('next')<CR>",  { desc = 'Next buffer' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.buffer('first')<CR>", { desc = 'First buffer' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.buffer('last')<CR>",  { desc = 'Last buffer' })
+  if config.buffer.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.buffer.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.buffer('first')<CR>",    { desc = 'First buffer' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.buffer('backward')<CR>", { desc = 'Previous buffer' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.buffer('forward')<CR>",  { desc = 'Next buffer' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.buffer('last')<CR>",     { desc = 'Last buffer' })
   end
 
-  if suffixes.comment ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.comment)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.comment('prev')<CR>",  { desc = 'Previous comment' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.comment('prev')<CR>",  { desc = 'Previous comment' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.comment('prev')<CR>", { desc = 'Previous comment' })
-
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.comment('next')<CR>",  { desc = 'Next comment' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.comment('next')<CR>",  { desc = 'Next comment' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.comment('next')<CR>", { desc = 'Next comment' })
-
+  if config.comment.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.comment.suffix)
     H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.comment('first')<CR>",  { desc = 'First comment' })
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.comment('first')<CR>",  { desc = 'First comment' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.comment('first')<CR>", { desc = 'First comment' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",   { desc = 'Last comment' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",   { desc = 'Last comment' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.comment('last')<CR>",  { desc = 'Last comment' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.comment('backward')<CR>",  { desc = 'Previous comment' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.comment('backward')<CR>",  { desc = 'Previous comment' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.comment('backward')<CR>", { desc = 'Previous comment' })
+
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.comment('forward')<CR>",  { desc = 'Next comment' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.comment('forward')<CR>",  { desc = 'Next comment' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.comment('forward')<CR>", { desc = 'Next comment' })
+
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",  { desc = 'Last comment' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",  { desc = 'Last comment' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.comment('last')<CR>", { desc = 'Last comment' })
   end
 
-  if suffixes.conflict ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.conflict)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.conflict('prev')<CR>",  { desc = 'Previous conflict' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.conflict('prev')<CR>",  { desc = 'Previous conflict' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.conflict('prev')<CR>", { desc = 'Previous conflict' })
-
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.conflict('next')<CR>",  { desc = 'Next conflict' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.conflict('next')<CR>",  { desc = 'Next conflict' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.conflict('next')<CR>", { desc = 'Next conflict' })
-
+  if config.conflict.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.conflict.suffix)
     H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.conflict('first')<CR>",  { desc = 'First conflict' })
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.conflict('first')<CR>",  { desc = 'First conflict' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.conflict('first')<CR>", { desc = 'First conflict' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",   { desc = 'Last conflict' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",   { desc = 'Last conflict' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.conflict('last')<CR>",  { desc = 'Last conflict' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.conflict('backward')<CR>",  { desc = 'Previous conflict' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.conflict('backward')<CR>",  { desc = 'Previous conflict' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.conflict('backward')<CR>", { desc = 'Previous conflict' })
+
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.conflict('forward')<CR>",  { desc = 'Next conflict' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.conflict('forward')<CR>",  { desc = 'Next conflict' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.conflict('forward')<CR>", { desc = 'Next conflict' })
+
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",  { desc = 'Last conflict' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",  { desc = 'Last conflict' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.conflict('last')<CR>", { desc = 'Last conflict' })
   end
 
-  if suffixes.diagnostic ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.diagnostic)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.diagnostic('prev')<CR>",  { desc = 'Previous diagnostic' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.diagnostic('prev')<CR>", { desc = 'Previous diagnostic' })
-
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.diagnostic('next')<CR>",  { desc = 'Next diagnostic' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.diagnostic('next')<CR>", { desc = 'Next diagnostic' })
-
+  if config.diagnostic.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.diagnostic.suffix)
     H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.diagnostic('first')<CR>", { desc = 'First diagnostic' })
+    H.map('o', '[' .. up, "v<Cmd>lua MiniBracketed.diagnostic('first')<CR>", { desc = 'First diagnostic' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",   { desc = 'Last diagnostic' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.diagnostic('backward')<CR>",  { desc = 'Previous diagnostic' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.diagnostic('backward')<CR>",  { desc = 'Previous diagnostic' })
+    H.map('o', '[' .. low, "v<Cmd>lua MiniBracketed.diagnostic('backward')<CR>", { desc = 'Previous diagnostic' })
+
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.diagnostic('forward')<CR>",  { desc = 'Next diagnostic' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.diagnostic('forward')<CR>",  { desc = 'Next diagnostic' })
+    H.map('o', ']' .. low, "v<Cmd>lua MiniBracketed.diagnostic('forward')<CR>", { desc = 'Next diagnostic' })
+
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
+    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.diagnostic('last')<CR>", { desc = 'Last diagnostic' })
   end
 
-  if suffixes.file ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.file)
-    H.map('n', '[' .. low,  "<Cmd>lua MiniBracketed.file('prev')<CR>",     { desc = 'Previous file' })
-    H.map('n', ']' .. low,  "<Cmd>lua MiniBracketed.file('next')<CR>",     { desc = 'Next file' })
-    H.map('n', '[' .. up,   "<Cmd>lua MiniBracketed.file('first')<CR>",    { desc = 'First file' })
-    H.map('n', ']' .. up,   "<Cmd>lua MiniBracketed.file('last')<CR>",     { desc = 'Last file' })
+  if config.file.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.file.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.file('first')<CR>",    { desc = 'First file' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.file('backward')<CR>", { desc = 'Previous file' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.file('forward')<CR>",  { desc = 'Next file' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.file('last')<CR>",     { desc = 'Last file' })
   end
 
-  if suffixes.indent ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.indent)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.indent('prev')<CR>",  { desc = 'Previous indent' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.indent('prev')<CR>",  { desc = 'Previous indent' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.indent('prev')<CR>", { desc = 'Previous indent' })
-
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.indent('next')<CR>",  { desc = 'Next indent' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.indent('next')<CR>",  { desc = 'Next indent' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.indent('next')<CR>", { desc = 'Next indent' })
-
+  if config.indent.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.indent.suffix)
     H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.indent('first')<CR>",  { desc = 'First indent' })
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.indent('first')<CR>",  { desc = 'First indent' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.indent('first')<CR>", { desc = 'First indent' })
+
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.indent('backward')<CR>",  { desc = 'Previous indent' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.indent('backward')<CR>",  { desc = 'Previous indent' })
+    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.indent('backward')<CR>", { desc = 'Previous indent' })
+
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.indent('forward')<CR>",  { desc = 'Next indent' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.indent('forward')<CR>",  { desc = 'Next indent' })
+    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.indent('forward')<CR>", { desc = 'Next indent' })
 
     H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.indent('last')<CR>",  { desc = 'Last indent' })
     H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.indent('last')<CR>",  { desc = 'Last indent' })
     H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.indent('last')<CR>", { desc = 'Last indent' })
   end
 
-  if suffixes.jump ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.jump)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.jump('prev')<CR>",  { desc = 'Previous jump' })
-    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.jump('prev')<CR>",  { desc = 'Previous jump' })
-    H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.jump('prev')<CR>", { desc = 'Previous jump' })
-
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.jump('next')<CR>",  { desc = 'Next jump' })
-    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.jump('next')<CR>",  { desc = 'Next jump' })
-    H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.jump('next')<CR>", { desc = 'Next jump' })
-
+  if config.jump.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.jump.suffix)
     H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.jump('first')<CR>",  { desc = 'First jump' })
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.jump('first')<CR>",  { desc = 'First jump' })
     H.map('o', '[' .. up, "v<Cmd>lua MiniBracketed.jump('first')<CR>", { desc = 'First jump' })
 
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",   { desc = 'Last jump' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",   { desc = 'Last jump' })
-    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.jump('last')<CR>",  { desc = 'Last jump' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.jump('backward')<CR>",  { desc = 'Previous jump' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.jump('backward')<CR>",  { desc = 'Previous jump' })
+    H.map('o', '[' .. low, "v<Cmd>lua MiniBracketed.jump('backward')<CR>", { desc = 'Previous jump' })
+
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.jump('forward')<CR>",  { desc = 'Next jump' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.jump('forward')<CR>",  { desc = 'Next jump' })
+    H.map('o', ']' .. low, "v<Cmd>lua MiniBracketed.jump('forward')<CR>", { desc = 'Next jump' })
+
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",  { desc = 'Last jump' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",  { desc = 'Last jump' })
+    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.jump('last')<CR>", { desc = 'Last jump' })
   end
 
-  if suffixes.oldfile ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.oldfile)
-    H.map('n', '[' .. low,  "<Cmd>lua MiniBracketed.oldfile('prev')<CR>",  { desc = 'Previous oldfile' })
-    H.map('n', ']' .. low,  "<Cmd>lua MiniBracketed.oldfile('next')<CR>",  { desc = 'Next oldfile' })
-    H.map('n', '[' .. up,   "<Cmd>lua MiniBracketed.oldfile('first')<CR>", { desc = 'First oldfile' })
-    H.map('n', ']' .. up,   "<Cmd>lua MiniBracketed.oldfile('last')<CR>",  { desc = 'Last oldfile' })
+  if config.oldfile.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.oldfile.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.oldfile('first')<CR>",    { desc = 'First oldfile' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.oldfile('backward')<CR>", { desc = 'Previous oldfile' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.oldfile('forward')<CR>",  { desc = 'Next oldfile' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.oldfile('last')<CR>",     { desc = 'Last oldfile' })
   end
 
-  if suffixes.location ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.location)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.location('prev')<CR>",  { desc = 'Previous location' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.location('next')<CR>",  { desc = 'Next location' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.location('first')<CR>", { desc = 'First location' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.location('last')<CR>",  { desc = 'Last location' })
+  if config.location.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.location.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.location('first')<CR>",    { desc = 'First location' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.location('backward')<CR>", { desc = 'Previous location' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.location('forward')<CR>",  { desc = 'Next location' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.location('last')<CR>",     { desc = 'Last location' })
   end
 
-  if suffixes.quickfix ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.quickfix)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.quickfix('prev')<CR>",  { desc = 'Previous quickfix' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.quickfix('next')<CR>",  { desc = 'Next quickfix' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.quickfix('first')<CR>", { desc = 'First quickfix' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.quickfix('last')<CR>",  { desc = 'Last quickfix' })
+  if config.quickfix.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.quickfix.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.quickfix('first')<CR>",    { desc = 'First quickfix' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.quickfix('backward')<CR>", { desc = 'Previous quickfix' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.quickfix('forward')<CR>",  { desc = 'Next quickfix' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.quickfix('last')<CR>",     { desc = 'Last quickfix' })
   end
 
-  if suffixes.window ~= '' then
-    local low, up = H.get_suffix_variants(suffixes.window)
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.window('prev')<CR>",  { desc = 'Previous window' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.window('next')<CR>",  { desc = 'Next window' })
-    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.window('first')<CR>", { desc = 'First window' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.window('last')<CR>",  { desc = 'Last window' })
+  if config.window.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.window.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.window('first')<CR>",    { desc = 'First window' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.window('backward')<CR>", { desc = 'Previous window' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.window('forward')<CR>",  { desc = 'Next window' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.window('last')<CR>",     { desc = 'Last window' })
   end
 end
 
@@ -778,62 +909,8 @@ H.get_suffix_variants = function(char) return char:lower(), char:upper() end
 
 H.is_disabled = function() return vim.g.minibracketed_disable == true or vim.b.minibracketed_disable == true end
 
--- Iterator -------------------------------------------------------------------
---@param iterator table Table:
---   - Methods:
---       - <forward> - given state, return state in forward direction.
---       - <backward> - given state, return state in backward direction.
---   - Fields:
---       - <state> - object describing current state.
---       - <start_edge> (optional) - object with `forward(start_edge)` describes
---         first state.
---       - <end_edge> (optional) - object with `backward(end_edge)` describes
---         last state.
---@param direction string Direction. One of 'first', 'prev', 'next', 'last'.
---@param opts table|nil Options with the following keys:
---   - <n_times> - number of times to iterate.
---   - <wrap> - whether to wrap around edges when `forward()` or `backward()`
---     return `nil`.
-H.iterate = function(iterator, direction, opts)
-  local res_state = iterator.state
-
-  -- Compute loop data
-  local n_times, iter_method = opts.n_times, 'forward'
-
-  if direction == 'prev' then iter_method = 'backward' end
-
-  if direction == 'first' then
-    res_state = iterator.start_edge or res_state
-    iter_method = 'forward'
-  end
-
-  if direction == 'last' then
-    res_state = iterator.end_edge or res_state
-    iter_method = 'backward'
-  end
-
-  -- Loop
-  local iter = iterator[iter_method]
-  for _ = 1, n_times do
-    -- Advance
-    local new_state = iter(res_state)
-
-    if new_state == nil then
-      -- Stop if can't wrap around edges
-      if not opts.wrap then break end
-
-      -- Wrap around edge
-      local edge = iter_method == 'forward' and iterator.start_edge or iterator.end_edge
-      new_state = iter(edge)
-
-      -- Ensure non-nil new state (can happen when there are no targets)
-      if new_state == nil then break end
-    end
-
-    res_state = new_state
-  end
-
-  return res_state
+H.get_config = function(config)
+  return vim.tbl_deep_extend('force', MiniBracketed.config, vim.b.minibracketed_config or {}, config or {})
 end
 
 -- Comments -------------------------------------------------------------------
@@ -955,12 +1032,12 @@ H.qf_loc_implementation = function(list_type, direction, opts)
 
   local iterator = {}
 
-  iterator.forward = function(ind)
+  iterator.next = function(ind)
     if ind == nil or n_list <= ind then return end
     return ind + 1
   end
 
-  iterator.backward = function(ind)
+  iterator.prev = function(ind)
     if ind == nil or ind <= 1 then return end
     return ind - 1
   end
@@ -970,7 +1047,7 @@ H.qf_loc_implementation = function(list_type, direction, opts)
   iterator.end_edge = n_list + 1
 
   -- Iterate
-  local res_ind = H.iterate(iterator, direction, opts)
+  local res_ind = MiniBracketed.advance(iterator, direction, opts)
 
   -- Apply
   -- Focus target entry, open enough folds and center
