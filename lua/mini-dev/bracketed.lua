@@ -471,6 +471,7 @@ MiniBracketed.jump = function(direction, opts)
 
   -- Iterate
   local res_jump_num = MiniBracketed.advance(iterator, direction, opts)
+  if res_jump_num == nil then return end
 
   -- Apply. Make jump. Allow jumping to current jump entry as it might be
   -- different from current cursor position.
@@ -541,25 +542,32 @@ MiniBracketed.yank = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'yank')
-  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().yank.options, opts or {})
+  opts = vim.tbl_deep_extend(
+    'force',
+    { n_times = vim.v.count1, wrap = true, operators = { 'c', 'd', 'y' } },
+    H.get_config().yank.options,
+    opts or {}
+  )
 
   -- Update yank history data
-  local cache = H.cache.yank
-  local n_history = #cache.history
+  local cache, history = H.cache.yank, H.cache.yank.history
+  local n_history = #history
   local cur_region = H.get_latest_region()
-  if not vim.deep_equal(cur_region, cache.region) then cache.current_id = n_history + 1 end
+  if not vim.deep_equal(cur_region, cache.region) then cache.current_id = n_history end
 
   -- Define iterator that traverses yank history
   local iterator = {}
 
   iterator.next = function(id)
-    if n_history <= id then return nil end
-    return id + 1
+    for i = id + 1, n_history do
+      if vim.tbl_contains(opts.operators, history[i].operator) then return i end
+    end
   end
 
   iterator.prev = function(id)
-    if id <= 1 then return nil end
-    return id - 1
+    for i = id - 1, 1, -1 do
+      if vim.tbl_contains(opts.operators, history[i].operator) then return i end
+    end
   end
 
   iterator.state = cache.current_id
@@ -568,7 +576,7 @@ MiniBracketed.yank = function(direction, opts)
 
   -- Iterate
   local res_id = MiniBracketed.advance(iterator, direction, opts)
-  _G.info = { iterator = iterator, res_id = res_id }
+  if res_id == nil then return end
 
   -- Apply
   H.replace_latest_region_with_yank(cache.history[res_id])
@@ -726,17 +734,12 @@ end
 
 MiniBracketed.yank_track = function()
   local event = vim.v.event
-  -- Track only explicit yank
-  if event.operator ~= 'y' then return end
-
-  table.insert(H.cache.yank.history, { regcontents = event.regcontents, regtype = event.regtype })
-  H.cache.yank.current_id = #H.cache.yank.history + 1
+  table.insert(
+    H.cache.yank.history,
+    { operator = event.operator, regcontents = event.regcontents, regtype = event.regtype }
+  )
+  H.cache.yank.current_id = #H.cache.yank.history
 end
-
--- au TextYankPost * lua local event = vim.v.event; table.insert(_G.yanks,
--- {inclusive = event.inclusive, operator = event.operator, regcontents
--- = event.regcontents, regname = event.regname, regtype = event.regtype,
--- visual = event.visual})
 
 -- Helper data ================================================================
 -- Module default config
@@ -1134,14 +1137,16 @@ H.get_latest_region = function()
 end
 
 H.replace_latest_region_with_yank = function(yank_data)
+  -- NOTE: this doesn't break history tracking because it uses named registers
+
   -- Delete latest region in "black hole" register
   local mode = vim.fn.getregtype():sub(1, 1)
-  vim.cmd('normal! `[' .. mode .. '`]' .. '"_d')
+  vim.cmd('normal! `[' .. mode .. '`]' .. 'o"_d')
 
   -- Paste yank data using temporary register
   local cache_z_reg = vim.fn.getreg('z')
 
-  vim.fn.setreg('z', yank_data)
+  vim.fn.setreg('z', yank_data.regcontents, yank_data.regtype)
   vim.cmd('normal! "z' .. (yank_data.regtype == 'V' and 'P' or 'p'))
 
   vim.fn.setreg('z', cache_z_reg)
