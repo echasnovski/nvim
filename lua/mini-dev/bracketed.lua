@@ -11,6 +11,13 @@
 -- - Ensure moves that guaranteed to be inside current buffer have mappings in
 --   Normal, Visual, and Operator-pending modes (linewise if source is
 --   linewise, charwise otherwise).
+-- - Yank:
+--     - Correct initial detection of regtype (charwise/linewise/blockwise) is
+--       correct even if yanked in register.
+--     - Handles all 9 transition pairs of regtype:
+--       c - c - l - c - b - c - l - l - b - l - b - b
+--     - No side effects (doesn't change registers, etc.).
+--     - Squashing undo blocks.
 --
 -- Docs:
 -- - Mention that it is ok to not map defaults and use functions manually.
@@ -223,7 +230,8 @@ MiniBracketed.comment = function(direction, opts)
 
   -- Iterate
   local res_line_num = MiniBracketed.advance(iterator, direction, opts)
-  if res_line_num == iterator.state then return end
+  local is_outside = res_line_num <= 0 or n_lines < res_line_num
+  if res_line_num == nil or res_line_num == iterator.state or is_outside then return end
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -271,8 +279,12 @@ MiniBracketed.diagnostic = function(direction, opts)
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'diagnostic')
-  opts =
-    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().diagnostic.options, opts or {})
+  opts = vim.tbl_deep_extend(
+    'force',
+    { n_times = vim.v.count1, wrap = true, severity = nil },
+    H.get_config().diagnostic.options,
+    opts or {}
+  )
 
   -- Define iterator that traverses all diagnostic entries in current buffer
   local is_position = function(x) return type(x) == 'table' and #x == 2 end
@@ -280,13 +292,15 @@ MiniBracketed.diagnostic = function(direction, opts)
   local iterator = {}
 
   iterator.next = function(position)
-    local new_pos = vim.diagnostic.get_next_pos({ cursor_position = diag_pos_to_cursor_pos(position), wrap = false })
+    local goto_opts = { cursor_position = diag_pos_to_cursor_pos(position), severity = opts.severity, wrap = false }
+    local new_pos = vim.diagnostic.get_next_pos(goto_opts)
     if not is_position(new_pos) then return end
     return new_pos
   end
 
   iterator.prev = function(position)
-    local new_pos = vim.diagnostic.get_prev_pos({ cursor_position = diag_pos_to_cursor_pos(position), wrap = false })
+    local goto_opts = { cursor_position = diag_pos_to_cursor_pos(position), severity = opts.severity, wrap = false }
+    local new_pos = vim.diagnostic.get_prev_pos(goto_opts)
     if not is_position(new_pos) then return end
     return new_pos
   end
@@ -552,8 +566,8 @@ MiniBracketed.yank = function(direction, opts)
   -- Update yank history data
   local cache, history = H.cache.yank, H.cache.yank.history
   local n_history = #history
-  local cur_region = H.get_latest_region()
-  if not vim.deep_equal(cur_region, cache.region) then cache.current_id = n_history end
+  local cur_state = H.get_yank_state()
+  if not vim.deep_equal(cur_state, cache.state) then H.yank_stop_advancing() end
 
   -- Define iterator that traverses yank history
   local iterator = {}
@@ -579,9 +593,10 @@ MiniBracketed.yank = function(direction, opts)
   if res_id == nil then return end
 
   -- Apply
-  H.replace_latest_region_with_yank(cache.history[res_id])
+  H.replace_latest_region_with_yank(cache.history[cache.current_id].regtype, cache.history[res_id])
   cache.current_id = res_id
-  cache.region = H.get_latest_region()
+  cache.is_advancing = true
+  cache.state = H.get_yank_state()
 end
 
 MiniBracketed.window = function(direction, opts)
@@ -733,12 +748,22 @@ MiniBracketed.oldfiles_track = function()
 end
 
 MiniBracketed.yank_track = function()
+  -- Don't track if asked not to
+  if not H.cache.yank.do_track_next then
+    H.cache.yank.do_track_next = true
+    return
+  end
+
   local event = vim.v.event
+
+  -- Track all `TextYankPost` events without exceptions. This leads to a better
+  -- handling of charwise/linewise/blockwise selection detection.
   table.insert(
     H.cache.yank.history,
     { operator = event.operator, regcontents = event.regcontents, regtype = event.regtype }
   )
-  H.cache.yank.current_id = #H.cache.yank.history
+  H.yank_stop_advancing()
+  H.cache.yank.do_track_next = true
 end
 
 -- Helper data ================================================================
@@ -757,7 +782,7 @@ H.cache = {
   --   as two most recent files).
   oldfiles = nil,
 
-  yank = { history = {}, current_id = 0, region = {} },
+  yank = { history = {}, current_id = 0, state = {}, is_advancing = false, do_track_next = true },
 }
 
 -- Helper functionality =======================================================
@@ -1131,23 +1156,32 @@ H.qf_loc_implementation = function(list_type, direction, opts)
 end
 
 -- Yank -----------------------------------------------------------------------
-H.get_latest_region = function()
-  local from, to = vim.fn.getpos("'["), vim.fn.getpos("']")
-  return { from = { line = from[2], col = from[3] }, to = { line = to[2], col = to[3] } }
+H.yank_stop_advancing = function()
+  H.cache.yank.current_id = #H.cache.yank.history
+  H.cache.yank.is_advancing = false
 end
 
-H.replace_latest_region_with_yank = function(yank_data)
-  -- NOTE: this doesn't break history tracking because it uses named registers
+H.get_yank_state = function() return { buf_id = vim.api.nvim_get_current_buf(), changedtick = vim.b.changedtick } end
 
-  -- Delete latest region in "black hole" register
-  local mode = vim.fn.getregtype():sub(1, 1)
-  vim.cmd('normal! `[' .. mode .. '`]' .. 'o"_d')
+H.replace_latest_region_with_yank = function(regtype_before, yank_data)
+  -- Squash all yank advancing in a single undo block
+  local normal_command = (H.cache.yank.is_advancing and 'undojoin | ' or '') .. 'silent normal! '
+  local cmd = function(x) vim.cmd(normal_command .. x) end
+
+  local mode_before = regtype_before:sub(1, 1)
+  local mode_after = yank_data.regtype:sub(1, 1)
+
+  -- Delete latest region in "black hole" register: visually select from start
+  -- to finish, go back to start and delete.
+  H.cache.yank.do_track_next = false
+  cmd('`[' .. mode_before .. '`]' .. 'o"_d')
 
   -- Paste yank data using temporary register
   local cache_z_reg = vim.fn.getreg('z')
-
   vim.fn.setreg('z', yank_data.regcontents, yank_data.regtype)
-  vim.cmd('normal! "z' .. (yank_data.regtype == 'V' and 'P' or 'p'))
+
+  H.cache.yank.do_track_next = false
+  cmd('"z' .. (mode_after == 'V' and 'P' or 'p'))
 
   vim.fn.setreg('z', cache_z_reg)
 end

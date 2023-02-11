@@ -342,31 +342,301 @@ end
 
 T['comment()'] = new_set()
 
-T['comment()']['works'] = function() MiniTest.skip() end
+local validate_comment = function(line_start, direction, line_ref, opts)
+  set_cursor(line_start, 0)
+  child.lua('MiniBracketed.comment(...)', { direction, opts })
+  eq(get_cursor(), { line_ref, 0 })
+end
+
+T['comment()']['works'] = function()
+  child.o.commentstring = '## %s'
+  local lines = { '1', '## 2', '3', '## 4', '5', '## 6', '7', '## 8', '9', '## 10', '11' }
+  set_lines(lines)
+  local line_ref
+
+  -- Forward
+  line_ref = { 2, 4, 4, 6, 6, 8, 8, 10, 10, 2, 2 }
+  for i = 1, #lines do
+    validate_comment(i, 'forward', line_ref[i])
+  end
+
+  -- Backward
+  line_ref = { 10, 10, 2, 2, 4, 4, 6, 6, 8, 8, 10 }
+  for i = 1, #lines do
+    validate_comment(i, 'backward', line_ref[i])
+  end
+
+  -- First
+  line_ref = { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 }
+  for i = 1, #lines do
+    validate_comment(i, 'first', line_ref[i])
+  end
+
+  -- Last
+  line_ref = { 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10 }
+  for i = 1, #lines do
+    validate_comment(i, 'last', line_ref[i])
+  end
+end
+
+T['comment()']['works on first/last lines comments'] = function()
+  child.o.commentstring = '## %s'
+  local lines = { '## 1', '2', '## 3', '4', '## 5' }
+  set_lines(lines)
+  local line_ref
+
+  -- Forward
+  line_ref = { 3, 3, 5, 5, 1 }
+  for i = 1, #lines do
+    validate_comment(i, 'forward', line_ref[i])
+  end
+
+  -- Backward
+  line_ref = { 5, 1, 1, 3, 3 }
+  for i = 1, #lines do
+    validate_comment(i, 'backward', line_ref[i])
+  end
+
+  -- First
+  line_ref = { 1, 1, 1, 1, 1 }
+  for i = 1, #lines do
+    validate_comment(i, 'first', line_ref[i])
+  end
+
+  -- Last
+  line_ref = { 5, 5, 5, 5, 5 }
+  for i = 1, #lines do
+    validate_comment(i, 'last', line_ref[i])
+  end
+end
+
+T['comment()']['works whith one comment or less'] = function()
+  child.o.commentstring = '## %s'
+  local lines
+
+  -- One comment
+  lines = { '1', '## 2', '3' }
+  set_lines(lines)
+
+  for i = 1, #lines do
+    validate_comment(i, 'forward', 2)
+    validate_comment(i, 'backward', 2)
+    validate_comment(i, 'first', 2)
+    validate_comment(i, 'last', 2)
+  end
+
+  -- No comments. Should not move cursor at all
+  set_lines({ '11', '22' })
+
+  for _, dir in ipairs({ forward, backward, first, last }) do
+    set_cursor(1, 1)
+    dir('comment')
+    eq(get_cursor(), { 1, 1 })
+  end
+end
+
+T['comment()']['works when jumping to current line'] = function()
+  child.o.commentstring = '## %s'
+  local lines = { '1', '## 2', '3', '## 4', '5' }
+  set_lines(lines)
+
+  -- Should not move cursor at all
+  set_cursor(2, 1)
+  forward('comment', { n_times = 2 })
+  eq(get_cursor(), { 2, 1 })
+
+  set_cursor(2, 1)
+  backward('comment', { n_times = 2 })
+  eq(get_cursor(), { 2, 1 })
+
+  set_cursor(2, 1)
+  first('comment', { n_times = 3 })
+  eq(get_cursor(), { 2, 1 })
+
+  set_cursor(2, 1)
+  last('comment', { n_times = 2 })
+  eq(get_cursor(), { 2, 1 })
+end
 
 T['comment()']['validates `direction`'] = function()
   expect.error(function() child.lua('MiniBracketed.comment(1)') end, 'comment%(%).*direction.*one of')
   expect.error(function() child.lua([[MiniBracketed.comment('next')]]) end, 'comment%(%).*direction.*one of')
 end
 
-T['comment()']['respects `opts.block_side`'] = function() MiniTest.skip() end
+T['comment()']['respects `opts.block_side`'] = function()
+  child.o.commentstring = '## %s'
+  local lines = { '1', '## 2', '## 3', '## 4', '5', '6', '7', '## 8', '## 9', '## 10', '11' }
+  set_lines(lines)
+  local line_ref
 
-T['comment()']['respects `opts.n_times`'] = function() MiniTest.skip() end
+  -- Default ('near')
+  line_ref = { 2, 8, 8, 8, 8, 8, 8, 2, 2, 2, 2 }
+  for i = 1, #lines do
+    validate_comment(i, 'forward', line_ref[i])
+    validate_comment(i, 'forward', line_ref[i], { block_side = 'near' })
+  end
 
-T['comment()']['respects `opts.wrap`'] = function() MiniTest.skip() end
+  line_ref = { 10, 10, 10, 10, 4, 4, 4, 4, 4, 4, 10 }
+  for i = 1, #lines do
+    validate_comment(i, 'backward', line_ref[i])
+    validate_comment(i, 'backward', line_ref[i], { block_side = 'near' })
+  end
+
+  -- Start
+  line_ref = { 2, 8, 8, 8, 8, 8, 8, 2, 2, 2, 2 }
+  for i = 1, #lines do
+    validate_comment(i, 'forward', line_ref[i], { block_side = 'start' })
+  end
+
+  line_ref = { 8, 8, 2, 2, 2, 2, 2, 2, 8, 8, 8 }
+  for i = 1, #lines do
+    validate_comment(i, 'backward', line_ref[i], { block_side = 'start' })
+  end
+
+  -- End
+  line_ref = { 4, 4, 4, 10, 10, 10, 10, 10, 10, 4, 4 }
+  for i = 1, #lines do
+    validate_comment(i, 'forward', line_ref[i], { block_side = 'end' })
+  end
+
+  line_ref = { 10, 10, 10, 10, 4, 4, 4, 4, 4, 4, 10 }
+  for i = 1, #lines do
+    validate_comment(i, 'backward', line_ref[i], { block_side = 'end' })
+  end
+
+  -- Both
+  line_ref = { 2, 4, 4, 8, 8, 8, 8, 10, 10, 2, 2 }
+  for i = 1, #lines do
+    validate_comment(i, 'forward', line_ref[i], { block_side = 'both' })
+  end
+
+  line_ref = { 10, 10, 2, 2, 4, 4, 4, 4, 8, 8, 10 }
+  for i = 1, #lines do
+    validate_comment(i, 'backward', line_ref[i], { block_side = 'both' })
+  end
+end
+
+T['comment()']['respects `opts.n_times`'] = function()
+  child.o.commentstring = '## %s'
+  local lines = { '1', '## 2', '3', '## 4', '5', '## 6', '7', '## 8', '9' }
+  set_lines(lines)
+  local line_ref
+
+  -- Forward
+  line_ref = { 4, 6, 6, 8, 8, 2, 2, 4, 4 }
+  for i = 1, #lines do
+    validate_comment(i, 'forward', line_ref[i], { n_times = 2 })
+  end
+
+  -- Backward
+  line_ref = { 6, 6, 8, 8, 2, 2, 4, 4, 6 }
+  for i = 1, #lines do
+    validate_comment(i, 'backward', line_ref[i], { n_times = 2 })
+  end
+
+  -- First
+  line_ref = { 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4 }
+  for i = 1, #lines do
+    validate_comment(i, 'first', line_ref[i], { n_times = 2 })
+  end
+
+  -- Last
+  line_ref = { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 }
+  for i = 1, #lines do
+    validate_comment(i, 'last', line_ref[i], { n_times = 2 })
+  end
+end
+
+T['comment()']['respects `opts.wrap`'] = function()
+  child.o.commentstring = '## %s'
+  local lines = { '1', '## 2', '3', '## 4', '5', '## 6', '7', '## 8', '9' }
+  set_lines(lines)
+
+  -- Forward
+  validate_comment(9, 'forward', 9, { wrap = false })
+  validate_comment(8, 'forward', 8, { wrap = false })
+  validate_comment(7, 'forward', 8, { n_times = 1000, wrap = false })
+
+  -- Backward
+  validate_comment(1, 'backward', 1, { wrap = false })
+  validate_comment(2, 'backward', 2, { wrap = false })
+  validate_comment(3, 'backward', 2, { n_times = 1000, wrap = false })
+
+  -- First
+  validate_comment(1, 'first', 8, { n_times = 1000, wrap = false })
+  validate_comment(2, 'first', 8, { n_times = 1000, wrap = false })
+  validate_comment(8, 'first', 8, { n_times = 1000, wrap = false })
+  validate_comment(9, 'first', 8, { n_times = 1000, wrap = false })
+
+  -- Backward
+  validate_comment(1, 'last', 2, { n_times = 1000, wrap = false })
+  validate_comment(2, 'last', 2, { n_times = 1000, wrap = false })
+  validate_comment(8, 'last', 2, { n_times = 1000, wrap = false })
+  validate_comment(9, 'last', 2, { n_times = 1000, wrap = false })
+end
+
+T['comment()']['correctly identifies comment'] = function()
+  -- -- Uses 'commentstring'
+  child.o.commentstring = '## %s //'
+  set_lines({ '1', '## 2', '## 3 //', '4 //' })
+  validate_comment(1, 'forward', 3)
+
+  -- Handles empty comment line
+  child.o.commentstring = '## %s //'
+  set_lines({ '1', '##//', '3', '## //' })
+  validate_comment(1, 'forward', 2)
+  validate_comment(2, 'forward', 4)
+
+  -- Trims whitespace form comment parts
+  child.o.commentstring = '## %s'
+  set_lines({ '1', '##2' })
+  validate_comment(1, 'forward', 2)
+
+  -- Escapes special characters in comment parts
+  child.o.commentstring = '%. %s'
+  set_lines({ '1', '%. 2' })
+  validate_comment(1, 'forward', 2)
+end
+
+T['comment()']['works for indented comments'] = function()
+  child.o.commentstring = '## %s'
+  local lines = { '1', '  ## 2', '    ## 3', '    4', '    ## 5', '  ## 6', '7' }
+  set_lines(lines)
+
+  local validate = function(cur_start, direction, cur_ref, opts)
+    set_cursor(cur_start[1], cur_start[2])
+    child.lua('MiniBracketed.comment(...)', { direction, opts })
+    eq(get_cursor(), cur_ref)
+  end
+
+  -- Should put cursor on first non-whitespace character
+  validate({ 1, 0 }, 'forward', { 2, 2 })
+  validate({ 2, 5 }, 'forward', { 5, 4 })
+
+  validate({ 7, 0 }, 'backward', { 6, 2 })
+  validate({ 6, 5 }, 'backward', { 3, 4 })
+end
 
 T['comment()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
+    child.o.commentstring = '## %s'
+    set_lines({ '1', '# 2' })
+
+    set_cursor(1, 0)
     child[var_type].minibracketed_disable = true
-    MiniTest.skip()
+    forward('comment')
+    eq(get_cursor(), { 1, 0 })
   end,
 })
 
 T['comment()']['respects `vim.b.minibracketed_config`'] = function()
   child.b.minibracketed_config = { comment = { options = { wrap = false } } }
-  MiniTest.skip()
+
+  child.o.commentstring = '## %s'
+  set_lines({ '1', '# 2', '3', '# 4', '5' })
+  validate_comment(4, 'forward', 4)
 end
 
 T['conflict()'] = new_set()
@@ -888,6 +1158,126 @@ T['quickfix()']['respects `vim.b.minibracketed_config`'] = function()
   eq(get_cursor(), cur_pos)
 end
 
+T['yank()'] = new_set()
+
+-- local get_yank = function() return end
+-- local set_yank = function(x) end
+
+-- local setup_yank = function() end
+
+T['yank()']['works'] = function()
+  MiniTest.skip()
+
+  -- Forward
+  validate(1, 'forward', 2)
+  validate(2, 'forward', 3)
+  validate(n - 1, 'forward', n)
+  validate(n, 'forward', 1)
+
+  -- Backward
+  validate(n, 'backward', n - 1)
+  validate(n - 1, 'backward', n - 2)
+  validate(2, 'backward', 1)
+  validate(1, 'backward', n)
+
+  -- First
+  validate(n, 'first', 1)
+  validate(2, 'first', 1)
+  validate(1, 'first', 1)
+
+  -- Last
+  validate(1, 'last', n)
+  validate(2, 'last', n)
+  validate(n, 'last', n)
+end
+
+T['yank()']['validates `direction`'] = function()
+  expect.error(function() child.lua('MiniBracketed.yank(1)') end, 'yank%(%).*direction.*one of')
+  expect.error(function() child.lua([[MiniBracketed.yank('next')]]) end, 'yank%(%).*direction.*one of')
+end
+
+T['yank()']['respects `opts.n_times`'] = function()
+  MiniTest.skip()
+
+  -- Forward
+  validate(1, 'forward', 3, { n_times = 2 })
+  validate(n - 2, 'forward', n, { n_times = 2 })
+  validate(n - 1, 'forward', 1, { n_times = 2 })
+
+  -- Backward
+  validate(n, 'backward', n - 2, { n_times = 2 })
+  validate(3, 'backward', 1, { n_times = 2 })
+  validate(2, 'backward', n, { n_times = 2 })
+
+  -- First
+  validate(n, 'first', 2, { n_times = 2 })
+  validate(2, 'first', 2, { n_times = 2 })
+  validate(1, 'first', 2, { n_times = 2 })
+
+  -- Last
+  validate(1, 'last', n - 1, { n_times = 2 })
+  validate(n - 1, 'last', n - 1, { n_times = 2 })
+  validate(n, 'last', n - 1, { n_times = 2 })
+end
+
+T['yank()']['respects `opts.wrap`'] = function()
+  MiniTest.skip()
+
+  -- Forward
+  validate(n, 'forward', n, { wrap = false })
+  validate(n - 1, 'forward', n, { n_times = 1000, wrap = false })
+
+  -- Backward
+  validate(1, 'backward', 1, { wrap = false })
+  validate(2, 'backward', 1, { n_times = 1000, wrap = false })
+
+  -- First
+  validate(1, 'first', n, { n_times = 1000, wrap = false })
+  validate(n, 'first', n, { n_times = 1000, wrap = false })
+
+  -- Last
+  validate(n, 'last', 1, { n_times = 1000, wrap = false })
+  validate(1, 'last', 1, { n_times = 1000, wrap = false })
+end
+
+T['yank()']['works pasting charwise'] = function()
+  -- From all three regtypes
+  MiniTest.skip()
+end
+
+T['yank()']['works pasting linewise'] = function()
+  -- From all three regtypes
+  MiniTest.skip()
+end
+
+T['yank()']['works pasting blockwise'] = function()
+  -- From all three regtypes
+  MiniTest.skip()
+end
+
+T['yank()']['correctly detects first register type'] = function() MiniTest.skip() end
+
+T['yank()']['does not have side effects'] = function()
+  -- No register is affected
+  MiniTest.skip()
+end
+
+T['yank()']['undos all advances at once'] = function() MiniTest.skip() end
+
+T['yank()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minibracketed_disable = true
+    MiniTest.skip()
+  end,
+})
+
+T['yank()']['respects `vim.b.minibracketed_config`'] = function()
+  child.b.minibracketed_config = { yank = { options = { wrap = false } } }
+  MiniTest.skip()
+end
+
 T['window()'] = new_set()
 
 local get_winnr = function() return child.fn.winnr() end
@@ -1048,15 +1438,27 @@ T['Mappings']['Buffer']['works'] = function() MiniTest.skip() end
 
 T['Mappings']['comment'] = new_set()
 
-T['Mappings']['comment']['works'] = function() MiniTest.skip() end
+T['Mappings']['comment']['works in Normal mode'] = function() MiniTest.skip() end
+
+T['Mappings']['comment']['works in Visual mode'] = function() MiniTest.skip() end
+
+T['Mappings']['comment']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
 T['Mappings']['conflict'] = new_set()
 
-T['Mappings']['conflict']['works'] = function() MiniTest.skip() end
+T['Mappings']['conflict']['works in Normal mode'] = function() MiniTest.skip() end
+
+T['Mappings']['conflict']['works in Visual mode'] = function() MiniTest.skip() end
+
+T['Mappings']['conflict']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
 T['Mappings']['diagnostic'] = new_set()
 
-T['Mappings']['diagnostic']['works'] = function() MiniTest.skip() end
+T['Mappings']['diagnostic']['works in Normal mode'] = function() MiniTest.skip() end
+
+T['Mappings']['diagnostic']['works in Visual mode'] = function() MiniTest.skip() end
+
+T['Mappings']['diagnostic']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
 T['Mappings']['file'] = new_set()
 
@@ -1064,11 +1466,19 @@ T['Mappings']['file']['works'] = function() MiniTest.skip() end
 
 T['Mappings']['indent'] = new_set()
 
-T['Mappings']['indent']['works'] = function() MiniTest.skip() end
+T['Mappings']['indent']['works in Normal mode'] = function() MiniTest.skip() end
+
+T['Mappings']['indent']['works in Visual mode'] = function() MiniTest.skip() end
+
+T['Mappings']['indent']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
 T['Mappings']['jump'] = new_set()
 
-T['Mappings']['jump']['works'] = function() MiniTest.skip() end
+T['Mappings']['jump']['works in Normal mode'] = function() MiniTest.skip() end
+
+T['Mappings']['jump']['works in Visual mode'] = function() MiniTest.skip() end
+
+T['Mappings']['jump']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
 T['Mappings']['location'] = new_set()
 
@@ -1081,6 +1491,10 @@ T['Mappings']['oldfile']['works'] = function() MiniTest.skip() end
 T['Mappings']['quickfix'] = new_set()
 
 T['Mappings']['quickfix']['works'] = function() MiniTest.skip() end
+
+T['Mappings']['yank'] = new_set()
+
+T['Mappings']['yank']['works'] = function() MiniTest.skip() end
 
 T['Mappings']['window'] = new_set()
 
