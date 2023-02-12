@@ -12,12 +12,19 @@
 --   Normal, Visual, and Operator-pending modes (linewise if source is
 --   linewise, charwise otherwise).
 -- - Yank:
---     - Correct initial detection of regtype (charwise/linewise/blockwise) is
---       correct even if yanked in register.
+--     - Initial detection of put-region mode (charwise/linewise/blockwise) is
+--       correct (apart putting from register).
 --     - Handles all 9 transition pairs of regtype:
 --       c - c - l - c - b - c - l - l - b - l - b - b
 --     - No side effects (doesn't change registers, etc.).
 --     - Squashing undo blocks.
+-- - `MiniBracketed.map_put_for_yank()` improves detection of put region:
+--     - Advancing doesn't take into account recently yanked or changed region.
+--       Steps: yank, put; change, yank; advance - should change put region.
+--     - Correctly detects mode of latest put region even if it was put from
+--       register. Steps: `"ay` blockwise selection; `yy` (linewise); `"ap`
+--       (put blockwise into existing line); advance - should replace
+--       originally put blockwise region, not whole line.
 --
 -- Docs:
 -- - Mention that it is ok to not map defaults and use functions manually.
@@ -106,8 +113,8 @@ MiniBracketed.setup = function(config)
   vim.api.nvim_exec(
     [[augroup MiniBracketed
         au!
-        au BufEnter * lua MiniBracketed.oldfiles_track()
-        au TextYankPost * lua MiniBracketed.yank_track()
+        au BufEnter * lua MiniBracketed.track_oldfiles()
+        au TextYankPost * lua MiniBracketed.track_yank()
       augroup END]],
     false
   )
@@ -552,6 +559,24 @@ MiniBracketed.quickfix = function(direction, opts)
   H.qf_loc_implementation('quickfix', direction, opts)
 end
 
+-- Replace "latest put region" with yank history entry
+--
+-- "Latest put region" is (in order of decreasing priority):
+-- - The one from latest `yank` advance.
+-- - The one registered by user with |MiniBracketed.register_put_region()|.
+-- - The one taken from |`[| and |`]| marks.
+--
+-- There are two approaches to managing which "latest put region" will be used:
+-- - Do nothing. In this case region between `[` / `]` marks will always be used
+--   for first `yank` advance.
+--   Although doable, this has several drawbacks: it will use latest yanked or
+--   changed region or the entier buffer if marks are not set.
+--   If remember to advance `yank` only after recent put operation, this should
+--   work as expected.
+--
+-- - Remap common put operations with |MiniBracketed.map_put_for_yank()| (call
+--   it once). After that, only regions from mapped put operations will be used
+--   for first `yank` advance.
 MiniBracketed.yank = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -584,7 +609,7 @@ MiniBracketed.yank = function(direction, opts)
     end
   end
 
-  iterator.state = cache.current_id
+  iterator.state = cache.current_history_id
   iterator.start_edge = 0
   iterator.end_edge = n_history + 1
 
@@ -592,11 +617,37 @@ MiniBracketed.yank = function(direction, opts)
   local res_id = MiniBracketed.advance(iterator, direction, opts)
   if res_id == nil then return end
 
-  -- Apply
-  H.replace_latest_region_with_yank(cache.history[cache.current_id].regtype, cache.history[res_id])
-  cache.current_id = res_id
+  -- Apply. Replace latest put region with yank history entry
+  -- - Account for possible errors when latest region became out of bounds
+  local ok, _ = pcall(H.replace_latest_put_region, cache.history[res_id])
+  if not ok then return end
+
+  cache.current_history_id = res_id
   cache.is_advancing = true
   cache.state = H.get_yank_state()
+end
+
+-- Map put keys for better yank advance
+--
+--@param put_keys table Array of left hand side of mapping keys.
+--   Default: `{ 'p', 'P' }`.
+MiniBracketed.map_put_for_yank = function(put_keys)
+  put_keys = put_keys or { 'p', 'P' }
+
+  for _, lhs in ipairs(put_keys) do
+    vim.keymap.set({ 'n', 'x' }, lhs, function()
+      local buf_id = vim.api.nvim_get_current_buf()
+
+      -- Compute mode of register prior putting (when it is still relevant)
+      local mode = H.get_register_mode(vim.v.register)
+
+      -- Put accounting for register and count
+      vim.cmd('normal! "' .. vim.v.register .. vim.v.count1 .. lhs)
+
+      -- Register user's latest put region
+      H.cache.yank.user_put_regions[buf_id] = H.get_latest_region(mode)
+    end)
+  end
 end
 
 MiniBracketed.window = function(direction, opts)
@@ -711,7 +762,7 @@ MiniBracketed.advance = function(iterator, direction, opts)
   return res_state
 end
 
-MiniBracketed.oldfiles_track = function()
+MiniBracketed.track_oldfiles = function()
   -- Ensure tracking data is initialized
   H.oldfiles_ensure_initialized()
 
@@ -747,7 +798,7 @@ MiniBracketed.oldfiles_track = function()
   track_table.max_recency = n
 end
 
-MiniBracketed.yank_track = function()
+MiniBracketed.track_yank = function()
   -- Don't track if asked not to
   if not H.cache.yank.do_track_next then
     H.cache.yank.do_track_next = true
@@ -782,7 +833,15 @@ H.cache = {
   --   as two most recent files).
   oldfiles = nil,
 
-  yank = { history = {}, current_id = 0, state = {}, is_advancing = false, do_track_next = true },
+  yank = {
+    current_history_id = 0,
+    do_track_next = true,
+    history = {},
+    is_advancing = false,
+    advance_put_regions = {},
+    user_put_regions = {},
+    state = {},
+  },
 }
 
 -- Helper functionality =======================================================
@@ -1157,33 +1216,61 @@ end
 
 -- Yank -----------------------------------------------------------------------
 H.yank_stop_advancing = function()
-  H.cache.yank.current_id = #H.cache.yank.history
+  H.cache.yank.current_history_id = #H.cache.yank.history
   H.cache.yank.is_advancing = false
+  H.cache.yank.advance_put_regions[vim.api.nvim_get_current_buf()] = nil
 end
 
 H.get_yank_state = function() return { buf_id = vim.api.nvim_get_current_buf(), changedtick = vim.b.changedtick } end
 
-H.replace_latest_region_with_yank = function(regtype_before, yank_data)
+H.replace_latest_put_region = function(yank_data)
   -- Squash all yank advancing in a single undo block
   local normal_command = (H.cache.yank.is_advancing and 'undojoin | ' or '') .. 'silent normal! '
   local cmd = function(x) vim.cmd(normal_command .. x) end
 
-  local mode_before = regtype_before:sub(1, 1)
-  local mode_after = yank_data.regtype:sub(1, 1)
+  -- Compute latest put region: from latest `yank` advance; or from user's
+  -- latest put; or from `[`/`]` marks
+  local cache = H.cache.yank
+  local buf_id = vim.api.nvim_get_current_buf()
+  local latest_region = cache.advance_put_regions[buf_id] or cache.user_put_regions[buf_id] or H.get_latest_region()
 
-  -- Delete latest region in "black hole" register: visually select from start
-  -- to finish, go back to start and delete.
+  -- Delete latest region in "black hole" register: visually select from
+  -- finish to start (so that cursor ends up at start) and delete.
+  vim.api.nvim_win_set_cursor(0, { latest_region.to.line, latest_region.to.col - 1 })
+  cmd(latest_region.mode)
+  vim.api.nvim_win_set_cursor(0, { latest_region.from.line, latest_region.from.col - 1 })
+
   H.cache.yank.do_track_next = false
-  cmd('`[' .. mode_before .. '`]' .. 'o"_d')
+  cmd('"_d')
 
   -- Paste yank data using temporary register
   local cache_z_reg = vim.fn.getreg('z')
   vim.fn.setreg('z', yank_data.regcontents, yank_data.regtype)
 
+  local new_mode = yank_data.regtype:sub(1, 1)
   H.cache.yank.do_track_next = false
-  cmd('"z' .. (mode_after == 'V' and 'P' or 'p'))
+  cmd('"z' .. (new_mode == 'V' and 'P' or 'p'))
 
   vim.fn.setreg('z', cache_z_reg)
+
+  -- Register newly put region for correct further advancing
+  cache.advance_put_regions[buf_id] = H.get_latest_region(new_mode)
+end
+
+H.get_latest_region = function(mode)
+  local left, right = vim.fn.getpos("'["), vim.fn.getpos("']")
+  return {
+    from = { line = left[2], col = left[3] },
+    to = { line = right[2], col = right[3] },
+    -- Mode should be one of 'v', 'V', or '\22' ('<C-v>')
+    -- By default use mode of recent or unnamed register
+    mode = mode or H.get_register_mode(vim.v.register),
+  }
+end
+
+H.get_register_mode = function(register)
+  -- Use only first character to correctly get '\22' in blockwise mode
+  return vim.fn.getregtype(register):sub(1, 1)
 end
 
 -- Utilities ------------------------------------------------------------------
