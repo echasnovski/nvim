@@ -61,7 +61,7 @@ local sumneko_root = vim.fn.expand('$HOME/.config/nvim/misc/lua-language-server'
 if vim.fn.isdirectory(sumneko_root) == 1 then
   local sumneko_binary = sumneko_root .. '/bin/lua-language-server'
 
-  lspconfig.sumneko_lua.setup({
+  lspconfig.lua_ls.setup({
     handlers = {
       -- Don't open quickfix list in case of multiple definitions. At the
       -- moment, this conflicts the `a = function()` code style because
