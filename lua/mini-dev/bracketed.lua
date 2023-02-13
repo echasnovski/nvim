@@ -18,7 +18,10 @@
 --       c - c - l - c - b - c - l - l - b - l - b - b
 --     - No side effects (doesn't change registers, etc.).
 --     - Squashing undo blocks.
--- - `MiniBracketed.map_put_for_yank()` improves detection of put region:
+--     - Correctly places new yank entry regarding to cursor: always at cursor
+--       except when previous selection was on edge (line for linwise region,
+--       column otherwise).
+-- - `MiniBracketed.register_put_region()` improves detection of put region:
 --     - Advancing doesn't take into account recently yanked or changed region.
 --       Steps: yank, put; change, yank; advance - should change put region.
 --     - Correctly detects mode of latest put region even if it was put from
@@ -275,7 +278,8 @@ MiniBracketed.conflict = function(direction, opts)
 
   -- Iterate
   local res_line_num = MiniBracketed.advance(iterator, direction, opts)
-  if res_line_num == iterator.state then return end
+  local is_outside = res_line_num <= 0 or n_lines < res_line_num
+  if res_line_num == nil or res_line_num == iterator.state or is_outside then return end
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -445,7 +449,7 @@ MiniBracketed.indent = function(direction, opts)
 
   -- Iterate
   local res_line_num = MiniBracketed.advance(iterator, direction, opts)
-  if res_line_num == iterator.state then return end
+  if res_line_num == nil or res_line_num == iterator.state then return end
 
   -- Apply. Open just enough folds and put cursor on first non-blank.
   vim.api.nvim_win_set_cursor(0, { res_line_num, 0 })
@@ -574,9 +578,15 @@ end
 --   If remember to advance `yank` only after recent put operation, this should
 --   work as expected.
 --
--- - Remap common put operations with |MiniBracketed.map_put_for_yank()| (call
---   it once). After that, only regions from mapped put operations will be used
---   for first `yank` advance.
+-- - Remap common put operations to use |MiniBracketed.register_put_region()|.
+--   After that, only regions from mapped put operations will be used for first
+--   `yank` advance. Example for custom mappings (note use of |:map-expression|): >
+--
+--     local put_keys = { 'p', 'P' }
+--     for _, lhs in ipairs(put_keys) do
+--       local rhs = 'v:lua.MiniBracketed.register_put_region("' .. lhs .. '")'
+--       vim.keymap.set({ 'n', 'x' }, lhs, rhs, { expr = true })
+--     end
 MiniBracketed.yank = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -627,27 +637,27 @@ MiniBracketed.yank = function(direction, opts)
   cache.state = H.get_yank_state()
 end
 
--- Map put keys for better yank advance
+-- Register "latest put region"
 --
---@param put_keys table Array of left hand side of mapping keys.
---   Default: `{ 'p', 'P' }`.
-MiniBracketed.map_put_for_yank = function(put_keys)
-  put_keys = put_keys or { 'p', 'P' }
+-- This function should be called after put register becomes relevant
+-- (|v:register| is appropriately set) but before put operation takes place
+-- (|`[| and |`]| marks become relevant).
+--
+-- Designed to be used in a user-facing expression mapping (see |:map-expression|).
+--
+--@param put_key string Put keys to be remapped.
+--
+--@return string Returns `put_key` for a better usage insde expression mappings.
+MiniBracketed.register_put_region = function(put_key)
+  local buf_id = vim.api.nvim_get_current_buf()
 
-  for _, lhs in ipairs(put_keys) do
-    vim.keymap.set({ 'n', 'x' }, lhs, function()
-      local buf_id = vim.api.nvim_get_current_buf()
+  -- Compute mode of register **before** putting (while it is still relevant)
+  local mode = H.get_register_mode(vim.v.register)
 
-      -- Compute mode of register prior putting (when it is still relevant)
-      local mode = H.get_register_mode(vim.v.register)
+  -- Register latest put region **after** it is done (when it becomes relevant)
+  vim.schedule(function() H.cache.yank.user_put_regions[buf_id] = H.get_latest_region(mode) end)
 
-      -- Put accounting for register and count
-      vim.cmd('normal! "' .. vim.v.register .. vim.v.count1 .. lhs)
-
-      -- Register user's latest put region
-      H.cache.yank.user_put_regions[buf_id] = H.get_latest_region(mode)
-    end)
-  end
+  return put_key
 end
 
 MiniBracketed.window = function(direction, opts)
@@ -1234,6 +1244,15 @@ H.replace_latest_put_region = function(yank_data)
   local buf_id = vim.api.nvim_get_current_buf()
   local latest_region = cache.advance_put_regions[buf_id] or cache.user_put_regions[buf_id] or H.get_latest_region()
 
+  -- Compute later put key based one the current latest region position.
+  -- Prefer `P` but use `p` in cases replaced region was on the edge: last line
+  -- for linewise region or last column otherwise.
+  local is_edge_line = latest_region.to.line == vim.fn.line('$')
+  local is_edge_col = latest_region.to.col == vim.fn.getline(latest_region.to.line):len()
+  local is_edge = is_edge_col
+  if latest_region.mode == 'V' then is_edge = is_edge_line end
+  local put_key = is_edge and 'p' or 'P'
+
   -- Delete latest region in "black hole" register: visually select from
   -- finish to start (so that cursor ends up at start) and delete.
   vim.api.nvim_win_set_cursor(0, { latest_region.to.line, latest_region.to.col - 1 })
@@ -1243,17 +1262,18 @@ H.replace_latest_put_region = function(yank_data)
   H.cache.yank.do_track_next = false
   cmd('"_d')
 
-  -- Paste yank data using temporary register
+  -- Paste yank data using temporary register. Prefer `P` as put key, but use
+  -- `p` if cursor is at line end. Not 100% solution because it
   local cache_z_reg = vim.fn.getreg('z')
   vim.fn.setreg('z', yank_data.regcontents, yank_data.regtype)
 
-  local new_mode = yank_data.regtype:sub(1, 1)
   H.cache.yank.do_track_next = false
-  cmd('"z' .. (new_mode == 'V' and 'P' or 'p'))
+  cmd('"z' .. put_key)
 
   vim.fn.setreg('z', cache_z_reg)
 
   -- Register newly put region for correct further advancing
+  local new_mode = yank_data.regtype:sub(1, 1)
   cache.advance_put_regions[buf_id] = H.get_latest_region(new_mode)
 end
 
