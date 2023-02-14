@@ -21,6 +21,15 @@
 --     - Correctly places new yank entry regarding to cursor: always at cursor
 --       except when previous selection was on edge (line for linwise region,
 --       column otherwise).
+--     - Make sure that user yanking after advancing is properly tracked.
+--       Example:
+--         - Set lines to `one two three`.
+--         - Yank `one` and `two`.
+--         - Paste latest `two`.
+--         - Advance backward (`two` is replaced with `one`).
+--         - Yank `three`.
+--         - Paste it.
+--         - Advance backward (`three` should be replaced with `two`).
 -- - `MiniBracketed.register_put_region()` improves detection of put region:
 --     - Advancing doesn't take into account recently yanked or changed region.
 --       Steps: yank, put; change, yank; advance - should change put region.
@@ -1380,6 +1389,7 @@ H.replace_latest_put_region = function(yank_data)
 
   H.cache.yank.do_track_next = false
   cmd('"_d')
+  H.cache.yank.do_track_next = true
 
   -- Paste yank data using temporary register. Prefer `P` as put key, but use
   -- `p` if cursor is at line end. Not 100% solution because it
@@ -1388,6 +1398,7 @@ H.replace_latest_put_region = function(yank_data)
 
   H.cache.yank.do_track_next = false
   cmd('"z' .. put_key)
+  H.cache.yank.do_track_next = true
 
   vim.fn.setreg('z', cache_z_reg)
 
