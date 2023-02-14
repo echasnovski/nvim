@@ -4,6 +4,10 @@ local child = helpers.new_child_neovim()
 local expect, eq = helpers.expect, helpers.expect.equality
 local new_set = MiniTest.new_set
 
+local path_sep = package.config:sub(1, 1)
+local project_root = vim.fn.fnamemodify(vim.fn.getcwd(), ':p')
+local dir_bracketed_path = project_root .. 'tests/dir-bracketed/'
+
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('bracketed', config) end
@@ -13,6 +17,8 @@ local set_cursor = function(...) return child.set_cursor(...) end
 local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
 local get_lines = function(...) return child.get_lines(...) end
+local make_path = function(...) return table.concat({...}, path_sep):gsub(path_sep .. path_sep, path_sep) end
+local make_testpath = function(...) return make_path(dir_bracketed_path, ...) end
 local type_keys = function(...) return child.type_keys(...) end
 local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
@@ -213,10 +219,10 @@ end
 T['buffer()']['works'] = function()
   local buf_list = setup_buffers()
   local n = #buf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_buf(buf_list[id_start])
     child.lua('MiniBracketed.buffer(...)', { direction, opts })
-    eq(get_buf(), buf_list[id_end])
+    eq(get_buf(), buf_list[id_ref])
   end
 
   -- Forward
@@ -265,10 +271,10 @@ end
 T['buffer()']['respects `opts.n_times`'] = function()
   local buf_list = setup_buffers()
   local n = #buf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_buf(buf_list[id_start])
     child.lua('MiniBracketed.buffer(...)', { direction, opts })
-    eq(get_buf(), buf_list[id_end])
+    eq(get_buf(), buf_list[id_ref])
   end
 
   -- Forward
@@ -295,10 +301,10 @@ end
 T['buffer()']['respects `opts.wrap`'] = function()
   local buf_list = setup_buffers()
   local n = #buf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_buf(buf_list[id_start])
     child.lua('MiniBracketed.buffer(...)', { direction, opts })
-    eq(get_buf(), buf_list[id_end])
+    eq(get_buf(), buf_list[id_ref])
   end
 
   -- Forward
@@ -901,29 +907,183 @@ end
 
 T['file()'] = new_set()
 
-T['file()']['works'] = function() MiniTest.skip() end
+local edit_file = function(rel_path) child.cmd('edit ' .. make_testpath(rel_path)) end
+local get_name = function(buf_id) return child.api.nvim_buf_get_name(buf_id or 0) end
+local validate_name = function(rel_path) eq(get_name(), make_testpath(rel_path)) end
+
+local test_files = { 'file-a', 'file-b', 'file-c', 'file-d', 'file-e' }
+local validate_file = function(id_start, direction, id_ref, opts)
+  edit_file(test_files[id_start])
+  child.lua('MiniBracketed.file(...)', { direction, opts })
+  validate_name(test_files[id_ref])
+end
+
+T['file()']['works'] = function()
+  eq(child.fn.getcwd() .. '/', project_root)
+
+  -- Should traverse files alphabetically in directory of currently opened file
+  local n = #test_files
+
+  -- Forward
+  validate_file(1, 'forward', 2)
+  validate_file(2, 'forward', 3)
+  validate_file(n - 1, 'forward', n)
+  validate_file(n, 'forward', 1)
+
+  -- Backward
+  validate_file(n, 'backward', n - 1)
+  validate_file(n - 1, 'backward', n - 2)
+  validate_file(2, 'backward', 1)
+  validate_file(1, 'backward', n)
+
+  -- First
+  validate_file(n, 'first', 1)
+  validate_file(2, 'first', 1)
+  validate_file(1, 'first', 1)
+
+  -- Last
+  validate_file(1, 'last', n)
+  validate_file(2, 'last', n)
+  validate_file(n, 'last', n)
+end
+
+T['file()']['reuses buffer if file is already opened'] = function()
+  edit_file('file-a')
+  local buf_a = child.api.nvim_get_current_buf()
+  edit_file('file-b')
+  eq(#child.api.nvim_list_bufs(), 2)
+
+  backward('file')
+  validate_name('file-a')
+  eq(child.api.nvim_get_current_buf(), buf_a)
+end
+
+T['file()']['works with non-file current buffer'] = function()
+  eq(child.api.nvim_buf_get_name(0), '')
+  eq(#child.api.nvim_list_bufs(), 1)
+
+  -- Should do nothing
+  forward('file')
+  eq(child.api.nvim_buf_get_name(0), '')
+  eq(#child.api.nvim_list_bufs(), 1)
+end
+
+T['file()']['does not traverses subdirectories'] = function()
+  edit_file('file-a')
+  validate_name('file-a')
+
+  forward('file')
+  validate_name('file-b')
+
+  forward('file')
+  validate_name('file-c')
+
+  forward('file')
+  validate_name('file-d')
+
+  forward('file')
+  validate_name('file-e')
+
+  forward('file')
+  validate_name('file-a')
+end
+
+T['file()']['works for empty directory'] = function()
+  local empty_dir_path = make_testpath('dir-empty')
+  child.fn.mkdir(empty_dir_path, 'p')
+  MiniTest.finally(function() child.fn.delete(empty_dir_path, 'rf') end)
+
+  child.fn.chdir(empty_dir_path)
+
+  local buf_id = child.api.nvim_get_current_buf()
+  eq(child.api.nvim_buf_get_name(buf_id), '')
+
+  forward('file')
+  eq(child.api.nvim_get_current_buf(), buf_id)
+  eq(child.api.nvim_buf_get_name(buf_id), '')
+end
+
+T['file()']['works when jumping to current file'] = function()
+  local n = #test_files
+
+  edit_file('file-a')
+  set_lines('This is unsaved change making buffer modified.')
+  eq(child.bo.modified, true)
+
+  -- Should not call `:edit`, as it causes flicker
+  forward('file', { n_times = n })
+  validate_name('file-a')
+  -- If it called `:edit`, there would be an error message
+  eq(child.cmd_capture('1messages'), '')
+end
 
 T['file()']['validates `direction`'] = function()
   expect.error(function() child.lua('MiniBracketed.file(1)') end, 'file%(%).*direction.*one of')
   expect.error(function() child.lua([[MiniBracketed.file('next')]]) end, 'file%(%).*direction.*one of')
 end
 
-T['file()']['respects `opts.n_times`'] = function() MiniTest.skip() end
+T['file()']['respects `opts.n_times`'] = function()
+  local n = #test_files
 
-T['file()']['respects `opts.wrap`'] = function() MiniTest.skip() end
+  -- Forward
+  validate_file(1, 'forward', 3, { n_times = 2 })
+  validate_file(n - 2, 'forward', n, { n_times = 2 })
+  validate_file(n - 1, 'forward', 1, { n_times = 2 })
+
+  -- Backward
+  validate_file(n, 'backward', n - 2, { n_times = 2 })
+  validate_file(3, 'backward', 1, { n_times = 2 })
+  validate_file(2, 'backward', n, { n_times = 2 })
+
+  -- First
+  validate_file(n, 'first', 2, { n_times = 2 })
+  validate_file(2, 'first', 2, { n_times = 2 })
+  validate_file(1, 'first', 2, { n_times = 2 })
+
+  -- Last
+  validate_file(1, 'last', n - 1, { n_times = 2 })
+  validate_file(n - 1, 'last', n - 1, { n_times = 2 })
+  validate_file(n, 'last', n - 1, { n_times = 2 })
+end
+
+T['file()']['respects `opts.wrap`'] = function()
+  local n = #test_files
+
+  -- Forward
+  validate_file(n, 'forward', n, { wrap = false })
+  validate_file(n - 1, 'forward', n, { n_times = 1000, wrap = false })
+
+  -- Backward
+  validate_file(1, 'backward', 1, { wrap = false })
+  validate_file(2, 'backward', 1, { n_times = 1000, wrap = false })
+
+  -- First
+  validate_file(1, 'first', n, { n_times = 1000, wrap = false })
+  validate_file(n, 'first', n, { n_times = 1000, wrap = false })
+
+  -- Last
+  validate_file(n, 'last', 1, { n_times = 1000, wrap = false })
+  validate_file(1, 'last', 1, { n_times = 1000, wrap = false })
+end
 
 T['file()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
+    edit_file('file-a')
+
     child[var_type].minibracketed_disable = true
-    MiniTest.skip()
+    forward('file')
+    validate_name('file-a')
   end,
 })
 
 T['file()']['respects `vim.b.minibracketed_config`'] = function()
+  edit_file('file-a')
+
   child.b.minibracketed_config = { file = { options = { wrap = false } } }
-  MiniTest.skip()
+  backward('file')
+  validate_name('file-a')
 end
 
 T['indent()'] = new_set()
@@ -1268,8 +1428,8 @@ T['jump()']['works'] = function()
 
   -- Should jump only inside current buffer. This is checked with by using jump
   -- numbers referring only to current buffer.
-  local validate = function(id_start, direction, id_end, opts)
-    local s, e = cur_jump_inds[id_start], cur_jump_inds[id_end]
+  local validate = function(id_start, direction, id_ref, opts)
+    local s, e = cur_jump_inds[id_start], cur_jump_inds[id_ref]
 
     set_jump_num(s)
     child.lua('MiniBracketed.jump(...)', { direction, opts })
@@ -1366,8 +1526,8 @@ T['jump()']['respects `opts.n_times`'] = function()
   local cur_jump_inds = jump_num_per_buf.cur
   local n = #cur_jump_inds
 
-  local validate = function(id_start, direction, id_end, opts)
-    local s, e = cur_jump_inds[id_start], cur_jump_inds[id_end]
+  local validate = function(id_start, direction, id_ref, opts)
+    local s, e = cur_jump_inds[id_start], cur_jump_inds[id_ref]
 
     set_jump_num(s)
     child.lua('MiniBracketed.jump(...)', { direction, opts })
@@ -1401,8 +1561,8 @@ T['jump()']['respects `opts.wrap`'] = function()
   local cur_jump_inds = jump_num_per_buf.cur
   local n = #cur_jump_inds
 
-  local validate = function(id_start, direction, id_end, opts)
-    local s, e = cur_jump_inds[id_start], cur_jump_inds[id_end]
+  local validate = function(id_start, direction, id_ref, opts)
+    local s, e = cur_jump_inds[id_start], cur_jump_inds[id_ref]
 
     set_jump_num(s)
     child.lua('MiniBracketed.jump(...)', { direction, opts })
@@ -1472,11 +1632,11 @@ end
 T['location()']['works'] = function()
   local qf_list = setup_location()
   local n = #qf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_location(id_start)
     child.lua('MiniBracketed.location(...)', { direction, opts })
-    eq(get_location(), id_end)
-    eq(get_cursor(), { qf_list[id_end].lnum, qf_list[id_end].col - 1 })
+    eq(get_location(), id_ref)
+    eq(get_cursor(), { qf_list[id_ref].lnum, qf_list[id_ref].col - 1 })
   end
 
   -- Forward
@@ -1510,11 +1670,11 @@ end
 T['location()']['respects `opts.n_times`'] = function()
   local qf_list = setup_location()
   local n = #qf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_location(id_start)
     child.lua('MiniBracketed.location(...)', { direction, opts })
-    eq(get_location(), id_end)
-    eq(get_cursor(), { qf_list[id_end].lnum, qf_list[id_end].col - 1 })
+    eq(get_location(), id_ref)
+    eq(get_cursor(), { qf_list[id_ref].lnum, qf_list[id_ref].col - 1 })
   end
 
   -- Forward
@@ -1541,11 +1701,11 @@ end
 T['location()']['respects `opts.wrap`'] = function()
   local qf_list = setup_location()
   local n = #qf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_location(id_start)
     child.lua('MiniBracketed.location(...)', { direction, opts })
-    eq(get_location(), id_end)
-    eq(get_cursor(), { qf_list[id_end].lnum, qf_list[id_end].col - 1 })
+    eq(get_location(), id_ref)
+    eq(get_cursor(), { qf_list[id_ref].lnum, qf_list[id_ref].col - 1 })
   end
 
   -- Forward
@@ -1674,11 +1834,11 @@ end
 T['quickfix()']['works'] = function()
   local qf_list = setup_quickfix()
   local n = #qf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_quickfix(id_start)
     child.lua('MiniBracketed.quickfix(...)', { direction, opts })
-    eq(get_quickfix(), id_end)
-    eq(get_cursor(), { qf_list[id_end].lnum, qf_list[id_end].col - 1 })
+    eq(get_quickfix(), id_ref)
+    eq(get_cursor(), { qf_list[id_ref].lnum, qf_list[id_ref].col - 1 })
   end
 
   -- Forward
@@ -1712,11 +1872,11 @@ end
 T['quickfix()']['respects `opts.n_times`'] = function()
   local qf_list = setup_quickfix()
   local n = #qf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_quickfix(id_start)
     child.lua('MiniBracketed.quickfix(...)', { direction, opts })
-    eq(get_quickfix(), id_end)
-    eq(get_cursor(), { qf_list[id_end].lnum, qf_list[id_end].col - 1 })
+    eq(get_quickfix(), id_ref)
+    eq(get_cursor(), { qf_list[id_ref].lnum, qf_list[id_ref].col - 1 })
   end
 
   -- Forward
@@ -1743,11 +1903,11 @@ end
 T['quickfix()']['respects `opts.wrap`'] = function()
   local qf_list = setup_quickfix()
   local n = #qf_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_quickfix(id_start)
     child.lua('MiniBracketed.quickfix(...)', { direction, opts })
-    eq(get_quickfix(), id_end)
-    eq(get_cursor(), { qf_list[id_end].lnum, qf_list[id_end].col - 1 })
+    eq(get_quickfix(), id_ref)
+    eq(get_cursor(), { qf_list[id_ref].lnum, qf_list[id_ref].col - 1 })
   end
 
   -- Forward
@@ -1826,113 +1986,20 @@ T['quickfix()']['respects `vim.b.minibracketed_config`'] = function()
   eq(get_cursor(), cur_pos)
 end
 
-T['yank()'] = new_set()
+T['undo()'] = new_set()
 
--- local get_yank = function() return end
--- local set_yank = function(x) end
+T['undo()']['works'] = function() MiniTest.skip() end
 
--- local setup_yank = function() end
-
-T['yank()']['works'] = function()
-  MiniTest.skip()
-
-  -- Forward
-  validate(1, 'forward', 2)
-  validate(2, 'forward', 3)
-  validate(n - 1, 'forward', n)
-  validate(n, 'forward', 1)
-
-  -- Backward
-  validate(n, 'backward', n - 1)
-  validate(n - 1, 'backward', n - 2)
-  validate(2, 'backward', 1)
-  validate(1, 'backward', n)
-
-  -- First
-  validate(n, 'first', 1)
-  validate(2, 'first', 1)
-  validate(1, 'first', 1)
-
-  -- Last
-  validate(1, 'last', n)
-  validate(2, 'last', n)
-  validate(n, 'last', n)
+T['undo()']['validates `direction`'] = function()
+  expect.error(function() child.lua('MiniBracketed.undo(1)') end, 'undo%(%).*direction.*one of')
+  expect.error(function() child.lua([[MiniBracketed.undo('next')]]) end, 'undo%(%).*direction.*one of')
 end
 
-T['yank()']['validates `direction`'] = function()
-  expect.error(function() child.lua('MiniBracketed.yank(1)') end, 'yank%(%).*direction.*one of')
-  expect.error(function() child.lua([[MiniBracketed.yank('next')]]) end, 'yank%(%).*direction.*one of')
-end
+T['undo()']['respects `opts.n_times`'] = function() MiniTest.skip() end
 
-T['yank()']['respects `opts.n_times`'] = function()
-  MiniTest.skip()
+T['undo()']['respects `opts.wrap`'] = function() MiniTest.skip() end
 
-  -- Forward
-  validate(1, 'forward', 3, { n_times = 2 })
-  validate(n - 2, 'forward', n, { n_times = 2 })
-  validate(n - 1, 'forward', 1, { n_times = 2 })
-
-  -- Backward
-  validate(n, 'backward', n - 2, { n_times = 2 })
-  validate(3, 'backward', 1, { n_times = 2 })
-  validate(2, 'backward', n, { n_times = 2 })
-
-  -- First
-  validate(n, 'first', 2, { n_times = 2 })
-  validate(2, 'first', 2, { n_times = 2 })
-  validate(1, 'first', 2, { n_times = 2 })
-
-  -- Last
-  validate(1, 'last', n - 1, { n_times = 2 })
-  validate(n - 1, 'last', n - 1, { n_times = 2 })
-  validate(n, 'last', n - 1, { n_times = 2 })
-end
-
-T['yank()']['respects `opts.wrap`'] = function()
-  MiniTest.skip()
-
-  -- Forward
-  validate(n, 'forward', n, { wrap = false })
-  validate(n - 1, 'forward', n, { n_times = 1000, wrap = false })
-
-  -- Backward
-  validate(1, 'backward', 1, { wrap = false })
-  validate(2, 'backward', 1, { n_times = 1000, wrap = false })
-
-  -- First
-  validate(1, 'first', n, { n_times = 1000, wrap = false })
-  validate(n, 'first', n, { n_times = 1000, wrap = false })
-
-  -- Last
-  validate(n, 'last', 1, { n_times = 1000, wrap = false })
-  validate(1, 'last', 1, { n_times = 1000, wrap = false })
-end
-
-T['yank()']['works pasting charwise'] = function()
-  -- From all three regtypes
-  MiniTest.skip()
-end
-
-T['yank()']['works pasting linewise'] = function()
-  -- From all three regtypes
-  MiniTest.skip()
-end
-
-T['yank()']['works pasting blockwise'] = function()
-  -- From all three regtypes
-  MiniTest.skip()
-end
-
-T['yank()']['correctly detects first register type'] = function() MiniTest.skip() end
-
-T['yank()']['does not have side effects'] = function()
-  -- No register is affected
-  MiniTest.skip()
-end
-
-T['yank()']['undos all advances at once'] = function() MiniTest.skip() end
-
-T['yank()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
+T['undo()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
@@ -1941,8 +2008,8 @@ T['yank()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
   end,
 })
 
-T['yank()']['respects `vim.b.minibracketed_config`'] = function()
-  child.b.minibracketed_config = { yank = { options = { wrap = false } } }
+T['undo()']['respects `vim.b.minibracketed_config`'] = function()
+  child.b.minibracketed_config = { undo = { options = { wrap = false } } }
   MiniTest.skip()
 end
 
@@ -1980,10 +2047,10 @@ end
 T['window()']['works'] = function()
   local winnr_list = setup_windows()
   local n = #winnr_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_winnr(winnr_list[id_start])
     child.lua('MiniBracketed.window(...)', { direction, opts })
-    eq(get_winnr(), winnr_list[id_end])
+    eq(get_winnr(), winnr_list[id_ref])
   end
 
   -- Forward
@@ -2017,10 +2084,10 @@ end
 T['window()']['respects `opts.n_times`'] = function()
   local winnr_list = setup_windows()
   local n = #winnr_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_winnr(winnr_list[id_start])
     child.lua('MiniBracketed.window(...)', { direction, opts })
-    eq(get_winnr(), winnr_list[id_end])
+    eq(get_winnr(), winnr_list[id_ref])
   end
 
   -- Forward
@@ -2047,10 +2114,10 @@ end
 T['window()']['respects `opts.wrap`'] = function()
   local winnr_list = setup_windows()
   local n = #winnr_list
-  local validate = function(id_start, direction, id_end, opts)
+  local validate = function(id_start, direction, id_ref, opts)
     set_winnr(winnr_list[id_start])
     child.lua('MiniBracketed.window(...)', { direction, opts })
-    eq(get_winnr(), winnr_list[id_end])
+    eq(get_winnr(), winnr_list[id_ref])
   end
 
   -- Forward
@@ -2090,6 +2157,126 @@ T['window()']['respects `vim.b.minibracketed_config`'] = function()
   child.b.minibracketed_config = { window = { options = { wrap = false } } }
   backward('window')
   eq(get_winnr(), winnr_list[1])
+end
+
+T['yank()'] = new_set()
+
+-- local get_yank = function() return end
+-- local set_yank = function(x) end
+
+-- local setup_yank = function() end
+
+T['yank()']['works'] = function()
+  MiniTest.skip()
+
+  -- Forward
+  validate_file(1, 'forward', 2)
+  validate_file(2, 'forward', 3)
+  validate_file(n - 1, 'forward', n)
+  validate_file(n, 'forward', 1)
+
+  -- Backward
+  validate_file(n, 'backward', n - 1)
+  validate_file(n - 1, 'backward', n - 2)
+  validate_file(2, 'backward', 1)
+  validate_file(1, 'backward', n)
+
+  -- First
+  validate_file(n, 'first', 1)
+  validate_file(2, 'first', 1)
+  validate_file(1, 'first', 1)
+
+  -- Last
+  validate_file(1, 'last', n)
+  validate_file(2, 'last', n)
+  validate_file(n, 'last', n)
+end
+
+T['yank()']['validates `direction`'] = function()
+  expect.error(function() child.lua('MiniBracketed.yank(1)') end, 'yank%(%).*direction.*one of')
+  expect.error(function() child.lua([[MiniBracketed.yank('next')]]) end, 'yank%(%).*direction.*one of')
+end
+
+T['yank()']['respects `opts.n_times`'] = function()
+  MiniTest.skip()
+
+  -- Forward
+  validate_file(1, 'forward', 3, { n_times = 2 })
+  validate_file(n - 2, 'forward', n, { n_times = 2 })
+  validate_file(n - 1, 'forward', 1, { n_times = 2 })
+
+  -- Backward
+  validate_file(n, 'backward', n - 2, { n_times = 2 })
+  validate_file(3, 'backward', 1, { n_times = 2 })
+  validate_file(2, 'backward', n, { n_times = 2 })
+
+  -- First
+  validate_file(n, 'first', 2, { n_times = 2 })
+  validate_file(2, 'first', 2, { n_times = 2 })
+  validate_file(1, 'first', 2, { n_times = 2 })
+
+  -- Last
+  validate_file(1, 'last', n - 1, { n_times = 2 })
+  validate_file(n - 1, 'last', n - 1, { n_times = 2 })
+  validate_file(n, 'last', n - 1, { n_times = 2 })
+end
+
+T['yank()']['respects `opts.wrap`'] = function()
+  MiniTest.skip()
+
+  -- Forward
+  validate_file(n, 'forward', n, { wrap = false })
+  validate_file(n - 1, 'forward', n, { n_times = 1000, wrap = false })
+
+  -- Backward
+  validate_file(1, 'backward', 1, { wrap = false })
+  validate_file(2, 'backward', 1, { n_times = 1000, wrap = false })
+
+  -- First
+  validate_file(1, 'first', n, { n_times = 1000, wrap = false })
+  validate_file(n, 'first', n, { n_times = 1000, wrap = false })
+
+  -- Last
+  validate_file(n, 'last', 1, { n_times = 1000, wrap = false })
+  validate_file(1, 'last', 1, { n_times = 1000, wrap = false })
+end
+
+T['yank()']['works pasting charwise'] = function()
+  -- From all three regtypes
+  MiniTest.skip()
+end
+
+T['yank()']['works pasting linewise'] = function()
+  -- From all three regtypes
+  MiniTest.skip()
+end
+
+T['yank()']['works pasting blockwise'] = function()
+  -- From all three regtypes
+  MiniTest.skip()
+end
+
+T['yank()']['correctly detects first register type'] = function() MiniTest.skip() end
+
+T['yank()']['does not have side effects'] = function()
+  -- No register is affected
+  MiniTest.skip()
+end
+
+T['yank()']['undos all advances at once'] = function() MiniTest.skip() end
+
+T['yank()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minibracketed_disable = true
+    MiniTest.skip()
+  end,
+})
+
+T['yank()']['respects `vim.b.minibracketed_config`'] = function()
+  child.b.minibracketed_config = { yank = { options = { wrap = false } } }
+  MiniTest.skip()
 end
 
 T['advance()'] = new_set()
@@ -2160,12 +2347,16 @@ T['Mappings']['quickfix'] = new_set()
 
 T['Mappings']['quickfix']['works'] = function() MiniTest.skip() end
 
-T['Mappings']['yank'] = new_set()
+T['Mappings']['undo'] = new_set()
 
-T['Mappings']['yank']['works'] = function() MiniTest.skip() end
+T['Mappings']['undo']['works'] = function() MiniTest.skip() end
 
 T['Mappings']['window'] = new_set()
 
 T['Mappings']['window']['works'] = function() MiniTest.skip() end
+
+T['Mappings']['yank'] = new_set()
+
+T['Mappings']['yank']['works'] = function() MiniTest.skip() end
 
 return T

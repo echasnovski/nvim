@@ -116,7 +116,7 @@ MiniBracketed.setup = function(config)
   vim.api.nvim_exec(
     [[augroup MiniBracketed
         au!
-        au BufEnter * lua MiniBracketed.track_oldfiles()
+        au BufEnter * lua MiniBracketed.track_oldfile()
         au TextYankPost * lua MiniBracketed.track_yank()
       augroup END]],
     false
@@ -146,8 +146,9 @@ MiniBracketed.config = {
   location   = { suffix = 'l', options = {} },
   oldfile    = { suffix = 'o', options = {} },
   quickfix   = { suffix = 'q', options = {} },
-  yank       = { suffix = 'y', options = {} },
+  undo       = { suffix = 'u', options = {} },
   window     = { suffix = 'w', options = {} },
+  yank       = { suffix = 'y', options = {} },
 }
 --minidoc_afterlines_end
 
@@ -348,9 +349,10 @@ MiniBracketed.file = function(direction, opts)
 
   -- Define iterator that traverses all found files
   local iterator = {}
+  local n_files = #file_basenames
 
   iterator.next = function(ind)
-    if ind == nil or #file_basenames <= ind then return end
+    if ind == nil or n_files <= ind then return end
     return ind + 1
   end
 
@@ -373,7 +375,7 @@ MiniBracketed.file = function(direction, opts)
 
   iterator.state = cur_basename_ind
   iterator.start_edge = 0
-  iterator.end_edge = #file_basenames + 1
+  iterator.end_edge = n_files + 1
 
   -- Iterate
   local res_ind = MiniBracketed.advance(iterator, direction, opts)
@@ -524,14 +526,14 @@ MiniBracketed.oldfile = function(direction, opts)
   -- Define iterator that traverses all old files
   local cur_path = vim.api.nvim_buf_get_name(0)
 
-  H.oldfiles_normalize()
-  local oldfiles = H.oldfiles_get_array()
-  local n_oldfiles = #oldfiles
+  H.oldfile_normalize()
+  local oldfile = H.oldfile_get_array()
+  local n_oldfile = #oldfile
 
   local iterator = {}
 
   iterator.next = function(ind)
-    if ind == nil or n_oldfiles <= ind then return end
+    if ind == nil or n_oldfile <= ind then return end
     return ind + 1
   end
 
@@ -540,17 +542,17 @@ MiniBracketed.oldfile = function(direction, opts)
     return ind - 1
   end
 
-  iterator.state = H.cache.oldfiles.recency[cur_path]
+  iterator.state = H.cache.oldfile.recency[cur_path]
   iterator.start_edge = 0
-  iterator.end_edge = n_oldfiles + 1
+  iterator.end_edge = n_oldfile + 1
 
   -- Iterate
   local res_path_ind = MiniBracketed.advance(iterator, direction, opts)
   if res_path_ind == iterator.state then return end
 
   -- Apply. Edit file at path while marking it not for tracking.
-  H.cache.oldfiles.is_from_oldfile = true
-  vim.cmd('edit ' .. oldfiles[res_path_ind])
+  H.cache.oldfile.is_advancing = true
+  vim.cmd('edit ' .. oldfile[res_path_ind])
 end
 
 MiniBracketed.quickfix = function(direction, opts)
@@ -561,6 +563,103 @@ MiniBracketed.quickfix = function(direction, opts)
     vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().quickfix.options, opts or {})
 
   H.qf_loc_implementation('quickfix', direction, opts)
+end
+
+MiniBracketed.undo = function(direction, opts)
+  if H.is_disabled() then return end
+
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'undo')
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().undo.options, opts or {})
+
+  -- Define iterator that traverses undo states in order they appeared
+  local buf_id = vim.api.nvim_get_current_buf()
+  H.undo_sync(buf_id)
+
+  local iterator = {}
+  local buf_history = H.cache.undo[buf_id]
+  local n = #buf_history
+
+  iterator.next = function(id)
+    if id == nil or n <= id then return end
+    return id + 1
+  end
+
+  iterator.prev = function(id)
+    if id == nil or id <= 1 then return end
+    return id - 1
+  end
+
+  iterator.state = buf_history.current_id
+  iterator.start_edge = 0
+  iterator.end_edge = n + 1
+
+  -- Iterate
+  local res_id = MiniBracketed.advance(iterator, direction, opts)
+  if res_id == nil or res_id == iterator.state then return end
+
+  -- Apply. Move to undo state by number while recording current history id
+  H.cache.undo.is_advancing = true
+  local res_undo_num = buf_history[res_id]
+  vim.cmd('undo ' .. res_undo_num)
+
+  buf_history.current_id = res_id
+end
+
+MiniBracketed.register_undo_state = function()
+  -- If this was called, then no advancing is being made
+  H.cache.undo.is_advancing = false
+
+  -- Synchronize undo history (mostly add new blocks)
+  local buf_id = vim.api.nvim_get_current_buf()
+  local tree = vim.fn.undotree()
+  H.undo_sync(buf_id, tree)
+
+  -- Append new undo state to line history
+  local buf_history = H.cache.undo[buf_id]
+  local n = #buf_history
+  if buf_history[n] ~= tree.seq_cur then
+    buf_history[n + 1] = tree.seq_cur
+    buf_history.current_id = #buf_history
+  end
+end
+
+MiniBracketed.window = function(direction, opts)
+  if H.is_disabled() then return end
+
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'window')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().window.options, opts or {})
+
+  -- Define iterator that traverses all normal windows in "natural" order
+  local is_normal = function(win_nr)
+    local win_id = vim.fn.win_getid(win_nr)
+    return vim.api.nvim_win_get_config(win_id).relative == ''
+  end
+
+  local iterator = {}
+
+  iterator.next = function(win_nr)
+    for nr = win_nr + 1, vim.fn.winnr('$') do
+      if is_normal(nr) then return nr end
+    end
+  end
+
+  iterator.prev = function(win_nr)
+    for nr = win_nr - 1, 1, -1 do
+      if is_normal(nr) then return nr end
+    end
+  end
+
+  iterator.state = vim.fn.winnr()
+  iterator.start_edge = 0
+  iterator.end_edge = vim.fn.winnr('$') + 1
+
+  -- Iterate
+  local res_win_nr = MiniBracketed.advance(iterator, direction, opts)
+  if res_win_nr == iterator.state then return end
+
+  -- Apply
+  vim.api.nvim_set_current_win(vim.fn.win_getid(res_win_nr))
 end
 
 -- Replace "latest put region" with yank history entry
@@ -660,45 +759,6 @@ MiniBracketed.register_put_region = function(put_key)
   return put_key
 end
 
-MiniBracketed.window = function(direction, opts)
-  if H.is_disabled() then return end
-
-  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'window')
-  opts =
-    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().window.options, opts or {})
-
-  -- Define iterator that traverses all normal windows in "natural" order
-  local is_normal = function(win_nr)
-    local win_id = vim.fn.win_getid(win_nr)
-    return vim.api.nvim_win_get_config(win_id).relative == ''
-  end
-
-  local iterator = {}
-
-  iterator.next = function(win_nr)
-    for nr = win_nr + 1, vim.fn.winnr('$') do
-      if is_normal(nr) then return nr end
-    end
-  end
-
-  iterator.prev = function(win_nr)
-    for nr = win_nr - 1, 1, -1 do
-      if is_normal(nr) then return nr end
-    end
-  end
-
-  iterator.state = vim.fn.winnr()
-  iterator.start_edge = 0
-  iterator.end_edge = vim.fn.winnr('$') + 1
-
-  -- Iterate
-  local res_win_nr = MiniBracketed.advance(iterator, direction, opts)
-  if res_win_nr == iterator.state then return end
-
-  -- Apply
-  vim.api.nvim_set_current_win(vim.fn.win_getid(res_win_nr))
-end
-
 --- Advance iterator
 ---
 --- TODO (add notes);
@@ -772,13 +832,15 @@ MiniBracketed.advance = function(iterator, direction, opts)
   return res_state
 end
 
-MiniBracketed.track_oldfiles = function()
+MiniBracketed.track_oldfile = function()
+  if H.is_disabled() then return end
+
   -- Ensure tracking data is initialized
-  H.oldfiles_ensure_initialized()
+  H.oldfile_ensure_initialized()
 
   -- Reset tracking indicator to allow proper tracking of next buffer
-  local is_from_oldfile = H.cache.oldfiles.is_from_oldfile
-  H.cache.oldfiles.is_from_oldfile = false
+  local is_advancing = H.cache.oldfile.is_advancing
+  H.cache.oldfile.is_advancing = false
 
   -- Track only appropriate buffers (normal buffers with path)
   local path = vim.api.nvim_buf_get_name(0)
@@ -793,13 +855,13 @@ MiniBracketed.track_oldfiles = function()
   -- - If buffer is entered not from `oldfile()` then it should receive all
   --   postponed updates and then be updated with current buffer.
   local track_table
-  if is_from_oldfile then
-    H.shadow_oldfiles_data = H.shadow_oldfiles_data or vim.deepcopy(H.cache.oldfiles)
-    track_table = H.shadow_oldfiles_data
+  if is_advancing then
+    H.shadow_oldfile_data = H.shadow_oldfile_data or vim.deepcopy(H.cache.oldfile)
+    track_table = H.shadow_oldfile_data
   else
-    H.cache.oldfiles = H.shadow_oldfiles_data or H.cache.oldfiles
-    track_table = H.cache.oldfiles
-    H.shadow_oldfiles_data = nil
+    H.cache.oldfile = H.shadow_oldfile_data or H.cache.oldfile
+    track_table = H.cache.oldfile
+    H.shadow_oldfile_data = nil
   end
 
   -- Update tracking table
@@ -809,8 +871,9 @@ MiniBracketed.track_oldfiles = function()
 end
 
 MiniBracketed.track_yank = function()
-  -- Don't track if asked not to
-  if not H.cache.yank.do_track_next then
+  -- Don't track if asked not to. Respect `x:minibracketed_disable` to allow
+  -- other functionality disable tracking (like in 'mini.move').
+  if not H.cache.yank.do_track_next or H.is_disabled() then
     H.cache.yank.do_track_next = true
     return
   end
@@ -837,11 +900,21 @@ H.cache = {
   -- - `recency` is a table with file paths as fields and numerical values
   --   indicating how recent file was accessed (higher - more recent).
   -- - `max_recency` is a maximum currently used `recency`. Used to add new file.
-  -- - `is_from_oldfile` is an indicator of buffer change was done inside
-  --   `oldfile()` function. It is a key to enabling moving along old files (and
-  --   not just going back and forth between two files because they swap places
-  --   as two most recent files).
-  oldfiles = nil,
+  -- - `is_advancing` is an indicator that buffer change was done inside
+  --   `oldfile()` function. It is a key to enabling moving along old files
+  --   (and not just going back and forth between two files because they swap
+  --   places as two most recent files).
+  oldfile = nil,
+
+  -- Per buffer history of visited undo states. A table for each buffer id:
+  -- - Numerical fields indicate actual history of visited undo states (from
+  --   oldest to latest).
+  -- - <current_id> - identifier of current history entry (used for iteration).
+  -- - <seq_last> - latest recorded state (`seq_last` from `undotree()`).
+  --
+  -- <is_advancing> - boolean indicating whether currently advancing. Used to
+  --   allow consecutive advances along tracked undo history.
+  undo = { is_advancing = false },
 
   yank = {
     current_history_id = 0,
@@ -1056,12 +1129,15 @@ H.apply_config = function(config)
     H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.quickfix('last')<CR>",     { desc = 'Last quickfix' })
   end
 
-  if config.yank.suffix ~= '' then
-    local low, up = H.get_suffix_variants(config.yank.suffix)
-    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.yank('first')<CR>",    { desc = 'First yank' })
-    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.yank('backward')<CR>", { desc = 'Previous yank' })
-    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.yank('forward')<CR>",  { desc = 'Next yank' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.yank('last')<CR>",     { desc = 'Last yank' })
+  if config.undo.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.undo.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.undo('first')<CR>",    { desc = 'First undo' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.undo('backward')<CR>", { desc = 'Previous undo' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.undo('forward')<CR>",  { desc = 'Next undo' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.undo('last')<CR>",     { desc = 'Last undo' })
+
+    H.map('n', 'u',     'u<Cmd>lua MiniBracketed.register_undo_state()<CR>')
+    H.map('n', '<C-R>', '<C-R><Cmd>lua MiniBracketed.register_undo_state()<CR>')
   end
 
   if config.window.suffix ~= '' then
@@ -1070,6 +1146,14 @@ H.apply_config = function(config)
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.window('backward')<CR>", { desc = 'Previous window' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.window('forward')<CR>",  { desc = 'Next window' })
     H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.window('last')<CR>",     { desc = 'Last window' })
+  end
+
+  if config.yank.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.yank.suffix)
+    H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.yank('first')<CR>",    { desc = 'First yank' })
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.yank('backward')<CR>", { desc = 'Previous yank' })
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.yank('forward')<CR>",  { desc = 'Next yank' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.yank('last')<CR>",     { desc = 'Last yank' })
   end
 end
 
@@ -1144,14 +1228,14 @@ H.make_jump = function(jump_list, cur_jump_num, new_jump_num)
   vim.cmd('normal! zv')
 end
 
--- Oldfiles -------------------------------------------------------------------
-H.oldfiles_normalize = function()
+-- Oldfile --------------------------------------------------------------------
+H.oldfile_normalize = function()
   -- Ensure that tracking data is initialized
-  H.oldfiles_ensure_initialized()
+  H.oldfile_ensure_initialized()
 
   -- Order currently readable paths in increasing order of recency
   local recency_pairs = {}
-  for path, rec in pairs(H.cache.oldfiles.recency) do
+  for path, rec in pairs(H.cache.oldfile.recency) do
     if vim.fn.filereadable(path) == 1 then table.insert(recency_pairs, { path, rec }) end
   end
   table.sort(recency_pairs, function(x, y) return x[2] < y[2] end)
@@ -1162,12 +1246,11 @@ H.oldfiles_normalize = function()
     new_recency[pair[1]] = i
   end
 
-  H.cache.oldfiles =
-    { recency = new_recency, max_recency = #recency_pairs, is_from_oldfile = H.cache.oldfiles.is_from_oldfile }
+  H.cache.oldfile = { recency = new_recency, max_recency = #recency_pairs, is_advancing = H.cache.oldfile.is_advancing }
 end
 
-H.oldfiles_ensure_initialized = function()
-  if H.cache.oldfiles ~= nil or vim.v.oldfiles == nil then return end
+H.oldfile_ensure_initialized = function()
+  if H.cache.oldfile ~= nil or vim.v.oldfiles == nil then return end
 
   local n = #vim.v.oldfiles
   local recency = {}
@@ -1175,12 +1258,12 @@ H.oldfiles_ensure_initialized = function()
     if vim.fn.filereadable(path) == 1 then recency[path] = n - i + 1 end
   end
 
-  H.cache.oldfiles = { recency = recency, max_recency = n, is_from_oldfile = false }
+  H.cache.oldfile = { recency = recency, max_recency = n, is_advancing = false }
 end
 
-H.oldfiles_get_array = function()
+H.oldfile_get_array = function()
   local res = {}
-  for path, i in pairs(H.cache.oldfiles.recency) do
+  for path, i in pairs(H.cache.oldfile.recency) do
     res[i] = path
   end
   return res
@@ -1222,6 +1305,42 @@ H.qf_loc_implementation = function(list_type, direction, opts)
   -- cursor position.
   vim.cmd(goto_command .. ' ' .. res_ind)
   vim.cmd('normal! zvzz')
+end
+
+-- Undo -----------------------------------------------------------------------
+H.undo_sync = function(buf_id, tree)
+  buf_id = buf_id or vim.api.nvim_get_current_buf()
+  tree = tree or vim.fn.undotree()
+
+  -- Get or initialize buffer history of visited undo states
+  local buf_history = H.cache.undo[buf_id] or { current_id = 0, seq_last = -1 }
+  -- local buf_history = H.cache.undo[buf_id] or H.undo_init(tree)
+  H.cache.undo[buf_id] = buf_history
+
+  -- Detect if currently advancing: either if set so manually or if there were
+  -- new undo blocks after the most recent sync
+  local is_advancing = H.cache.undo.is_advancing and buf_history.seq_last == tree.seq_last
+  if is_advancing then return end
+
+  H.cache.is_advancing = false
+
+  -- Append currently advanced undo state to tracked undo history
+  local current_id = buf_history.current_id
+  if buf_history[#buf_history] ~= buf_history[current_id] then table.insert(buf_history, current_id) end
+
+  -- Add all missed undo states created since last sync
+  for i = buf_history.seq_last + 1, tree.seq_last do
+    table.insert(buf_history, i)
+  end
+
+  -- Update data to be most recent
+  buf_history.current_id = #buf_history
+  buf_history.seq_last = tree.seq_last
+end
+
+H.undo_init = function(tree)
+  -- TODO
+  -- Get all undo state numbers
 end
 
 -- Yank -----------------------------------------------------------------------
