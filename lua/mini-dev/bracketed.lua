@@ -10,6 +10,9 @@
 -- - Ensure moves that guaranteed to be inside current buffer have mappings in
 --   Normal, Visual, and Operator-pending modes (linewise if source is
 --   linewise, charwise otherwise).
+-- - Undo:
+--     - Make sure advancing works with `:undo!`. Seems to be a problem because
+--       undo history is not updated after its call.
 --
 -- Docs:
 -- - Mention that it is ok to not map defaults and use functions manually.
@@ -566,7 +569,7 @@ MiniBracketed.undo = function(direction, opts)
 
   -- Define iterator that traverses undo states in order they appeared
   local buf_id = vim.api.nvim_get_current_buf()
-  H.undo_sync(buf_id)
+  H.undo_sync(buf_id, vim.fn.undotree())
 
   local iterator = {}
   local buf_history = H.cache.undo[buf_id]
@@ -592,14 +595,13 @@ MiniBracketed.undo = function(direction, opts)
 
   -- Apply. Move to undo state by number while recording current history id
   H.cache.undo.is_advancing = true
-  local res_undo_num = buf_history[res_id]
-  vim.cmd('undo ' .. res_undo_num)
+  vim.cmd('undo ' .. buf_history[res_id])
 
   buf_history.current_id = res_id
 end
 
 MiniBracketed.register_undo_state = function()
-  -- If this was called, then no advancing is being made
+  -- If this was called, then should stop advancing
   H.cache.undo.is_advancing = false
 
   -- Synchronize undo history (mostly add new blocks)
@@ -607,13 +609,8 @@ MiniBracketed.register_undo_state = function()
   local tree = vim.fn.undotree()
   H.undo_sync(buf_id, tree)
 
-  -- Append new undo state to line history
-  local buf_history = H.cache.undo[buf_id]
-  local n = #buf_history
-  if buf_history[n] ~= tree.seq_cur then
-    buf_history[n + 1] = tree.seq_cur
-    buf_history.current_id = #buf_history
-  end
+  -- Append new undo state to linear history
+  H.undo_append_state(H.cache.undo[buf_id], tree.seq_cur)
 end
 
 MiniBracketed.window = function(direction, opts)
@@ -846,18 +843,18 @@ MiniBracketed.track_oldfile = function()
   -- If advancing, don't touch tracking data to be able to consecutively move
   -- along recent files. Cache advanced buffer name to later update recency of
   -- the last one (just before buffer switching outside of `oldfile()`)
-  local cache = H.cache.oldfile
+  local cache_oldfile = H.cache.oldfile
 
   if is_advancing then
-    cache.last_advanced_bufname = path
+    cache_oldfile.last_advanced_bufname = path
     return
   end
 
   -- If not advancing, update recency of a single latest advanced buffer (if
   -- present) and then update recency of current buffer
-  if cache.last_advanced_bufname ~= nil then
-    H.oldfile_update_recency(cache.last_advanced_bufname)
-    cache.last_advanced_bufname = nil
+  if cache_oldfile.last_advanced_bufname ~= nil then
+    H.oldfile_update_recency(cache_oldfile.last_advanced_bufname)
+    cache_oldfile.last_advanced_bufname = nil
   end
 
   H.oldfile_update_recency(path)
@@ -1330,38 +1327,73 @@ end
 
 -- Undo -----------------------------------------------------------------------
 H.undo_sync = function(buf_id, tree)
-  buf_id = buf_id or vim.api.nvim_get_current_buf()
-  tree = tree or vim.fn.undotree()
+  -- TODO: think about possible optimizations
 
   -- Get or initialize buffer history of visited undo states
-  local buf_history = H.cache.undo[buf_id] or { current_id = 0, seq_last = -1 }
-  -- local buf_history = H.cache.undo[buf_id] or H.undo_init(tree)
-  H.cache.undo[buf_id] = buf_history
+  local buf_history = H.cache.undo[buf_id] or H.undo_init(tree)
 
-  -- Detect if currently advancing: either if set so manually or if there were
-  -- new undo blocks after the most recent sync
+  -- Detect if currently not advancing: either if set so manually or if there
+  -- were new undo blocks after the most recent sync
   local is_advancing = H.cache.undo.is_advancing and buf_history.seq_last == tree.seq_last
   if is_advancing then return end
 
   H.cache.is_advancing = false
 
   -- Append currently advanced undo state to tracked undo history
-  local current_id = buf_history.current_id
-  if buf_history[#buf_history] ~= buf_history[current_id] then table.insert(buf_history, current_id) end
+  H.undo_append_state(buf_history, buf_history[buf_history.current_id])
 
   -- Add all missed undo states created since last sync
   for i = buf_history.seq_last + 1, tree.seq_last do
-    table.insert(buf_history, i)
+    H.undo_append_state(buf_history, i)
   end
 
+  -- Prune history to contain only allowed state numbers. This assumes that
+  -- once undo state is not allowed, it will always be not allowed.
+  -- This step is needed because allowed undo state numbers can:
+  -- - Not start from 1 due to 'undolevels'.
+  -- - Contain range of missing state numbers due to `:undo!`.
+  local allowed_states = H.undo_get_allowed_state_numbers(tree)
+  -- Executing `:undo 0` seems to always be possible (brings back to *before*
+  -- the earliest allowed change).
+  local new_buf_history = { 0 }
+  for _, state_num in ipairs(buf_history) do
+    if allowed_states[state_num] then table.insert(new_buf_history, state_num) end
+  end
+  new_buf_history.current_id = #new_buf_history
+  new_buf_history.seq_last = tree.seq_last
+
   -- Update data to be most recent
+  H.cache.undo[buf_id] = new_buf_history
+end
+
+H.undo_append_state = function(buf_history, state_num)
+  -- Ensure that there are no two consecutive equal states
+  if state_num == nil or buf_history[#buf_history] == state_num then return end
+
+  table.insert(buf_history, state_num)
   buf_history.current_id = #buf_history
-  buf_history.seq_last = tree.seq_last
 end
 
 H.undo_init = function(tree)
-  -- TODO
-  -- Get all undo state numbers
+  local allowed_states = vim.tbl_keys(H.undo_get_allowed_state_numbers(tree))
+  table.sort(allowed_states)
+
+  allowed_states.current_id, allowed_states.seq_last = tree.seq_last, tree.seq_last
+  return allowed_states
+end
+
+H.undo_get_allowed_state_numbers = function(tree)
+  local res = {}
+  local traverse
+  traverse = function(entries)
+    for _, e in ipairs(entries) do
+      if e.alt ~= nil then traverse(e.alt) end
+      res[e.seq] = true
+    end
+  end
+
+  traverse(tree.entries)
+  return res
 end
 
 -- Yank -----------------------------------------------------------------------
@@ -1380,9 +1412,11 @@ H.replace_latest_put_region = function(yank_data)
 
   -- Compute latest put region: from latest `yank` advance; or from user's
   -- latest put; or from `[`/`]` marks
-  local cache = H.cache.yank
+  local cache_yank = H.cache.yank
   local buf_id = vim.api.nvim_get_current_buf()
-  local latest_region = cache.advance_put_regions[buf_id] or cache.user_put_regions[buf_id] or H.get_latest_region()
+  local latest_region = cache_yank.advance_put_regions[buf_id]
+    or cache_yank.user_put_regions[buf_id]
+    or H.get_latest_region()
 
   -- Compute modes for replaced and new regions.
   local latest_mode = latest_region.mode
@@ -1412,7 +1446,7 @@ H.replace_latest_put_region = function(yank_data)
   vim.fn.setreg('z', cache_z_reg)
 
   -- Register newly put region for correct further advancing
-  cache.advance_put_regions[buf_id] = H.get_latest_region(new_mode)
+  cache_yank.advance_put_regions[buf_id] = H.get_latest_region(new_mode)
 end
 
 H.get_latest_region = function(mode)
