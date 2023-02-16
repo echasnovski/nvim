@@ -3,46 +3,21 @@
 -- TODO
 --
 -- Code:
--- - Try to make `n_times` work in `indent` with 'first' and 'last' direction.
 -- - Other todos across code.
--- - Refactor and clean up with possible abstractions.
+-- - Refactor and clean up to increase naming and structure consistency.
 --
 -- Tests:
 -- - Ensure moves that guaranteed to be inside current buffer have mappings in
 --   Normal, Visual, and Operator-pending modes (linewise if source is
 --   linewise, charwise otherwise).
--- - Yank:
---     - Initial detection of put-region mode (charwise/linewise/blockwise) is
---       correct (apart putting from register).
---     - Handles all 9 transition pairs of regtype:
---       c - c - l - c - b - c - l - l - b - l - b - b
---     - No side effects (doesn't change registers, etc.).
---     - Squashing undo blocks.
---     - Correctly places new yank entry regarding to cursor: always at cursor
---       except when previous selection was on edge (line for linwise region,
---       column otherwise).
---     - Make sure that user yanking after advancing is properly tracked.
---       Example:
---         - Set lines to `one two three`.
---         - Yank `one` and `two`.
---         - Paste latest `two`.
---         - Advance backward (`two` is replaced with `one`).
---         - Yank `three`.
---         - Paste it.
---         - Advance backward (`three` should be replaced with `two`).
--- - `MiniBracketed.register_put_region()` improves detection of put region:
---     - Advancing doesn't take into account recently yanked or changed region.
---       Steps: yank, put; change, yank; advance - should change put region.
---     - Correctly detects mode of latest put region even if it was put from
---       register. Steps: `"ay` blockwise selection; `yy` (linewise); `"ap`
---       (put blockwise into existing line); advance - should replace
---       originally put blockwise region, not whole line.
 --
 -- Docs:
 -- - Mention that it is ok to not map defaults and use functions manually.
 -- - Mention in `conflict` about possibility of resolving merge conflicts by
 --   placing cursor on `===` line and executing one of these:
 --   `d]x[xdd` (choose upper part), `d[x]xdd` (choose lower part).
+-- - Directions 'first' and 'last' work differently in `indent()` for
+--   performance reasons.
 -- - General implementation idea is usually as follows:
 --     - Construct target iterator:
 --         - Has idea about current state.
@@ -710,7 +685,7 @@ MiniBracketed.yank = function(direction, opts)
   H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'yank')
   opts = vim.tbl_deep_extend(
     'force',
-    { n_times = vim.v.count1, wrap = true, operators = { 'c', 'd', 'y' } },
+    { n_times = vim.v.count1, operators = { 'c', 'd', 'y' }, wrap = true },
     H.get_config().yank.options,
     opts or {}
   )
@@ -721,7 +696,7 @@ MiniBracketed.yank = function(direction, opts)
   local cur_state = H.get_yank_state()
   if not vim.deep_equal(cur_state, cache.state) then H.yank_stop_advancing() end
 
-  -- Define iterator that traverses yank history
+  -- Define iterator that traverses yank history for entry with proper operator
   local iterator = {}
 
   iterator.next = function(id)
@@ -736,7 +711,7 @@ MiniBracketed.yank = function(direction, opts)
     end
   end
 
-  iterator.state = cache.current_history_id
+  iterator.state = cache.current_id
   iterator.start_edge = 0
   iterator.end_edge = n_history + 1
 
@@ -749,7 +724,7 @@ MiniBracketed.yank = function(direction, opts)
   local ok, _ = pcall(H.replace_latest_put_region, cache.history[res_id])
   if not ok then return end
 
-  cache.current_history_id = res_id
+  cache.current_id = res_id
   cache.is_advancing = true
   cache.state = H.get_yank_state()
 end
@@ -929,17 +904,32 @@ H.cache = {
   -- - <current_id> - identifier of current history entry (used for iteration).
   -- - <seq_last> - latest recorded state (`seq_last` from `undotree()`).
   --
-  -- <is_advancing> - boolean indicating whether currently advancing. Used to
-  --   allow consecutive advances along tracked undo history.
-  undo = { is_advancing = false },
-
-  yank = {
-    current_history_id = 0,
-    history = {},
+  -- TODO: add `history` instead of tracking directly inside the cache table.
+  undo = {
+    -- Whether currently advancing. Used to allow consecutive advances along
+    -- tracked undo history.
     is_advancing = false,
+  },
+
+  -- Cache for `yank` source
+  yank = {
+    -- Per-buffer region of latest advance. Used to corretly determine range
+    -- and mode of latest advanced region.
     advance_put_regions = {},
-    user_put_regions = {},
+    -- Current id of yank entry in yank history
+    current_id = 0,
+    -- Yank history. Each element contains data necessary to replace latest put
+    -- region with yanked one. See `track_yank()`.
+    history = {},
+    -- Whether currently advancing
+    is_advancing = false,
+    -- State of latest yank advancement to determine of currently advancing
     state = {},
+    -- Per-buffer region registered by user as "latest put region". Used to
+    -- overcome limitations of automatic detection of latest put region (like
+    -- not reliable mode detection when pasting from register; respecting not
+    -- only regions of put operations, but also yank and change).
+    user_put_regions = {},
   },
 }
 
@@ -1017,13 +1007,14 @@ end
 H.apply_config = function(config)
   MiniBracketed.config = config
 
-  -- Make mappings
+  -- Make mappings. NOTE: make 'forward'/'backward' *after* 'first'/'last' to
+  -- allow non-letter suffixes define 'forward'/'backward'.
   if config.buffer.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.buffer.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.buffer('first')<CR>",    { desc = 'First buffer' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.buffer('last')<CR>",     { desc = 'Last buffer' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.buffer('backward')<CR>", { desc = 'Previous buffer' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.buffer('forward')<CR>",  { desc = 'Next buffer' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.buffer('last')<CR>",     { desc = 'Last buffer' })
   end
 
   if config.comment.suffix ~= '' then
@@ -1032,6 +1023,10 @@ H.apply_config = function(config)
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.comment('first')<CR>",  { desc = 'First comment' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.comment('first')<CR>", { desc = 'First comment' })
 
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",  { desc = 'Last comment' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",  { desc = 'Last comment' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.comment('last')<CR>", { desc = 'Last comment' })
+
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.comment('backward')<CR>",  { desc = 'Previous comment' })
     H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.comment('backward')<CR>",  { desc = 'Previous comment' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.comment('backward')<CR>", { desc = 'Previous comment' })
@@ -1039,10 +1034,6 @@ H.apply_config = function(config)
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.comment('forward')<CR>",  { desc = 'Next comment' })
     H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.comment('forward')<CR>",  { desc = 'Next comment' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.comment('forward')<CR>", { desc = 'Next comment' })
-
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",  { desc = 'Last comment' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.comment('last')<CR>",  { desc = 'Last comment' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.comment('last')<CR>", { desc = 'Last comment' })
   end
 
   if config.conflict.suffix ~= '' then
@@ -1051,6 +1042,10 @@ H.apply_config = function(config)
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.conflict('first')<CR>",  { desc = 'First conflict' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.conflict('first')<CR>", { desc = 'First conflict' })
 
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",  { desc = 'Last conflict' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",  { desc = 'Last conflict' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.conflict('last')<CR>", { desc = 'Last conflict' })
+
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.conflict('backward')<CR>",  { desc = 'Previous conflict' })
     H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.conflict('backward')<CR>",  { desc = 'Previous conflict' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.conflict('backward')<CR>", { desc = 'Previous conflict' })
@@ -1058,10 +1053,6 @@ H.apply_config = function(config)
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.conflict('forward')<CR>",  { desc = 'Next conflict' })
     H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.conflict('forward')<CR>",  { desc = 'Next conflict' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.conflict('forward')<CR>", { desc = 'Next conflict' })
-
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",  { desc = 'Last conflict' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.conflict('last')<CR>",  { desc = 'Last conflict' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.conflict('last')<CR>", { desc = 'Last conflict' })
   end
 
   if config.diagnostic.suffix ~= '' then
@@ -1070,6 +1061,10 @@ H.apply_config = function(config)
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.diagnostic('first')<CR>",  { desc = 'First diagnostic' })
     H.map('o', '[' .. up, "v<Cmd>lua MiniBracketed.diagnostic('first')<CR>", { desc = 'First diagnostic' })
 
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
+    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.diagnostic('last')<CR>", { desc = 'Last diagnostic' })
+
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.diagnostic('backward')<CR>",  { desc = 'Previous diagnostic' })
     H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.diagnostic('backward')<CR>",  { desc = 'Previous diagnostic' })
     H.map('o', '[' .. low, "v<Cmd>lua MiniBracketed.diagnostic('backward')<CR>", { desc = 'Previous diagnostic' })
@@ -1077,18 +1072,14 @@ H.apply_config = function(config)
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.diagnostic('forward')<CR>",  { desc = 'Next diagnostic' })
     H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.diagnostic('forward')<CR>",  { desc = 'Next diagnostic' })
     H.map('o', ']' .. low, "v<Cmd>lua MiniBracketed.diagnostic('forward')<CR>", { desc = 'Next diagnostic' })
-
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.diagnostic('last')<CR>",  { desc = 'Last diagnostic' })
-    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.diagnostic('last')<CR>", { desc = 'Last diagnostic' })
   end
 
   if config.file.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.file.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.file('first')<CR>",    { desc = 'First file' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.file('last')<CR>",     { desc = 'Last file' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.file('backward')<CR>", { desc = 'Previous file' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.file('forward')<CR>",  { desc = 'Next file' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.file('last')<CR>",     { desc = 'Last file' })
   end
 
   if config.indent.suffix ~= '' then
@@ -1097,6 +1088,10 @@ H.apply_config = function(config)
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.indent('first')<CR>",  { desc = 'First indent' })
     H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.indent('first')<CR>", { desc = 'First indent' })
 
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.indent('last')<CR>",  { desc = 'Last indent' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.indent('last')<CR>",  { desc = 'Last indent' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.indent('last')<CR>", { desc = 'Last indent' })
+
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.indent('backward')<CR>",  { desc = 'Previous indent' })
     H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.indent('backward')<CR>",  { desc = 'Previous indent' })
     H.map('o', '[' .. low, "V<Cmd>lua MiniBracketed.indent('backward')<CR>", { desc = 'Previous indent' })
@@ -1104,10 +1099,6 @@ H.apply_config = function(config)
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.indent('forward')<CR>",  { desc = 'Next indent' })
     H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.indent('forward')<CR>",  { desc = 'Next indent' })
     H.map('o', ']' .. low, "V<Cmd>lua MiniBracketed.indent('forward')<CR>", { desc = 'Next indent' })
-
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.indent('last')<CR>",  { desc = 'Last indent' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.indent('last')<CR>",  { desc = 'Last indent' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.indent('last')<CR>", { desc = 'Last indent' })
   end
 
   if config.jump.suffix ~= '' then
@@ -1116,6 +1107,10 @@ H.apply_config = function(config)
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.jump('first')<CR>",  { desc = 'First jump' })
     H.map('o', '[' .. up, "v<Cmd>lua MiniBracketed.jump('first')<CR>", { desc = 'First jump' })
 
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",  { desc = 'Last jump' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",  { desc = 'Last jump' })
+    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.jump('last')<CR>", { desc = 'Last jump' })
+
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.jump('backward')<CR>",  { desc = 'Previous jump' })
     H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.jump('backward')<CR>",  { desc = 'Previous jump' })
     H.map('o', '[' .. low, "v<Cmd>lua MiniBracketed.jump('backward')<CR>", { desc = 'Previous jump' })
@@ -1123,42 +1118,38 @@ H.apply_config = function(config)
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.jump('forward')<CR>",  { desc = 'Next jump' })
     H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.jump('forward')<CR>",  { desc = 'Next jump' })
     H.map('o', ']' .. low, "v<Cmd>lua MiniBracketed.jump('forward')<CR>", { desc = 'Next jump' })
-
-    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",  { desc = 'Last jump' })
-    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.jump('last')<CR>",  { desc = 'Last jump' })
-    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.jump('last')<CR>", { desc = 'Last jump' })
   end
 
   if config.oldfile.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.oldfile.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.oldfile('first')<CR>",    { desc = 'First oldfile' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.oldfile('last')<CR>",     { desc = 'Last oldfile' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.oldfile('backward')<CR>", { desc = 'Previous oldfile' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.oldfile('forward')<CR>",  { desc = 'Next oldfile' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.oldfile('last')<CR>",     { desc = 'Last oldfile' })
   end
 
   if config.location.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.location.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.location('first')<CR>",    { desc = 'First location' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.location('last')<CR>",     { desc = 'Last location' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.location('backward')<CR>", { desc = 'Previous location' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.location('forward')<CR>",  { desc = 'Next location' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.location('last')<CR>",     { desc = 'Last location' })
   end
 
   if config.quickfix.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.quickfix.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.quickfix('first')<CR>",    { desc = 'First quickfix' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.quickfix('last')<CR>",     { desc = 'Last quickfix' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.quickfix('backward')<CR>", { desc = 'Previous quickfix' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.quickfix('forward')<CR>",  { desc = 'Next quickfix' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.quickfix('last')<CR>",     { desc = 'Last quickfix' })
   end
 
   if config.undo.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.undo.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.undo('first')<CR>",    { desc = 'First undo' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.undo('last')<CR>",     { desc = 'Last undo' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.undo('backward')<CR>", { desc = 'Previous undo' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.undo('forward')<CR>",  { desc = 'Next undo' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.undo('last')<CR>",     { desc = 'Last undo' })
 
     H.map('n', 'u',     'u<Cmd>lua MiniBracketed.register_undo_state()<CR>')
     H.map('n', '<C-R>', '<C-R><Cmd>lua MiniBracketed.register_undo_state()<CR>')
@@ -1167,17 +1158,17 @@ H.apply_config = function(config)
   if config.window.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.window.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.window('first')<CR>",    { desc = 'First window' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.window('last')<CR>",     { desc = 'Last window' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.window('backward')<CR>", { desc = 'Previous window' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.window('forward')<CR>",  { desc = 'Next window' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.window('last')<CR>",     { desc = 'Last window' })
   end
 
   if config.yank.suffix ~= '' then
     local low, up = H.get_suffix_variants(config.yank.suffix)
     H.map('n', '[' .. up,  "<Cmd>lua MiniBracketed.yank('first')<CR>",    { desc = 'First yank' })
+    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.yank('last')<CR>",     { desc = 'Last yank' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.yank('backward')<CR>", { desc = 'Previous yank' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.yank('forward')<CR>",  { desc = 'Next yank' })
-    H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.yank('last')<CR>",     { desc = 'Last yank' })
   end
 end
 
@@ -1375,7 +1366,7 @@ end
 
 -- Yank -----------------------------------------------------------------------
 H.yank_stop_advancing = function()
-  H.cache.yank.current_history_id = #H.cache.yank.history
+  H.cache.yank.current_id = #H.cache.yank.history
   H.cache.yank.is_advancing = false
   H.cache.yank.advance_put_regions[vim.api.nvim_get_current_buf()] = nil
 end
@@ -1385,7 +1376,7 @@ H.get_yank_state = function() return { buf_id = vim.api.nvim_get_current_buf(), 
 H.replace_latest_put_region = function(yank_data)
   -- Squash all yank advancing in a single undo block
   local normal_command = (H.cache.yank.is_advancing and 'undojoin | ' or '') .. 'silent normal! '
-  local cmd = function(x) vim.cmd(normal_command .. x) end
+  local normal_fun = function(x) vim.cmd(normal_command .. x) end
 
   -- Compute latest put region: from latest `yank` advance; or from user's
   -- latest put; or from `[`/`]` marks
@@ -1393,38 +1384,34 @@ H.replace_latest_put_region = function(yank_data)
   local buf_id = vim.api.nvim_get_current_buf()
   local latest_region = cache.advance_put_regions[buf_id] or cache.user_put_regions[buf_id] or H.get_latest_region()
 
-  -- Compute later put key based one the current latest region position.
+  -- Compute modes for replaced and new regions.
+  local latest_mode = latest_region.mode
+  local new_mode = yank_data.regtype:sub(1, 1)
+
+  -- Compute later put key based on replaced and new regions.
   -- Prefer `P` but use `p` in cases replaced region was on the edge: last line
-  -- for linewise region or last column otherwise.
-  local is_edge_line = latest_region.to.line == vim.fn.line('$')
-  local is_edge_col = latest_region.to.col == vim.fn.getline(latest_region.to.line):len()
-  local is_edge = is_edge_col
-  if latest_region.mode == 'V' then is_edge = is_edge_line end
+  -- for linewise-linewise replace or last column for nonlinewise-nonlinewise.
+  local is_linewise = (latest_mode == 'V' and new_mode == 'V')
+  local is_edge_line = is_linewise and latest_region.to.line == vim.fn.line('$')
+
+  local is_charblockwise = (latest_mode ~= 'V' and new_mode ~= 'V')
+  local is_edge_col = is_charblockwise and latest_region.to.col == vim.fn.getline(latest_region.to.line):len()
+
+  local is_edge = is_edge_line or is_edge_col
   local put_key = is_edge and 'p' or 'P'
 
-  -- Delete latest region in "black hole" register: visually select from
-  -- finish to start (so that cursor ends up at start) and delete.
-  vim.api.nvim_win_set_cursor(0, { latest_region.to.line, latest_region.to.col - 1 })
-  cmd(latest_region.mode)
-  vim.api.nvim_win_set_cursor(0, { latest_region.from.line, latest_region.from.col - 1 })
+  -- Delete latest region
+  H.region_delete(latest_region, normal_fun)
 
-  -- - Don't track for this because in future it might trigger `TextYankPost`
-  local cache_disable = vim.b.minibracketed_disable
-  vim.b.minibracketed_disable = true
-  cmd('"_d')
-  vim.b.minibracketed_disable = cache_disable
-
-  -- Paste yank data using temporary register. Prefer `P` as put key, but use
-  -- `p` if cursor is at line end. Not 100% solution because it
+  -- Paste yank data using temporary register
   local cache_z_reg = vim.fn.getreg('z')
   vim.fn.setreg('z', yank_data.regcontents, yank_data.regtype)
 
-  cmd('"z' .. put_key)
+  normal_fun('"z' .. put_key)
 
   vim.fn.setreg('z', cache_z_reg)
 
   -- Register newly put region for correct further advancing
-  local new_mode = yank_data.regtype:sub(1, 1)
   cache.advance_put_regions[buf_id] = H.get_latest_region(new_mode)
 end
 
@@ -1434,9 +1421,31 @@ H.get_latest_region = function(mode)
     from = { line = left[2], col = left[3] },
     to = { line = right[2], col = right[3] },
     -- Mode should be one of 'v', 'V', or '\22' ('<C-v>')
-    -- By default use mode of recent or unnamed register
+    -- By default use mode of current or unnamed register
+    -- NOTE: this breaks if latest paste was not from unnamed register.
+    -- To account for that, use `register_put_region()`.
     mode = mode or H.get_register_mode(vim.v.register),
   }
+end
+
+H.region_delete = function(region, normal_fun)
+  -- Start with `to` to have cursor positioned on region start after deletion
+  vim.api.nvim_win_set_cursor(0, { region.to.line, region.to.col - 1 })
+
+  -- Do nothing more if region is empty (or leads to unnecessary line deletion)
+  local is_empty = region.from.line == region.to.line
+    and region.from.col == region.to.col
+    and vim.fn.getline(region.from.line) == ''
+
+  if is_empty then return end
+
+  -- Select region in correct Visual mode
+  normal_fun(region.mode)
+  vim.api.nvim_win_set_cursor(0, { region.from.line, region.from.col - 1 })
+
+  -- Delete region in "black hole" register
+  -- - NOTE: it doesn't affect history as `"_` doesn't trigger `TextYankPost`
+  normal_fun('"_d')
 end
 
 H.get_register_mode = function(register)

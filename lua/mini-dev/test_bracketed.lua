@@ -2206,11 +2206,19 @@ T['oldfile()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
 }, {
   test = function(var_type)
     local files = setup_oldfile()
+    local n = #files
 
-    local cur_bufname = files[#files]
+    -- `oldfile()` itself shouldn't work
     child[var_type].minibracketed_disable = true
     backward('oldfile')
-    validate_test_file(cur_bufname)
+    validate_test_file(files[n])
+
+    -- Tracking recent files shouldn't work
+    edit_test_file(files[2])
+    edit_test_file(files[n])
+    child[var_type].minibracketed_disable = false
+    backward('oldfile')
+    validate_test_file(files[n - 1])
   end,
 })
 
@@ -2580,32 +2588,539 @@ T['yank()'] = new_set()
 -- local get_yank = function() return end
 -- local set_yank = function(x) end
 
--- local setup_yank = function() end
+---@param ... any Yank entries to populate yank history.
+---   Each element is one of:
+---   - String. Will be yanked in charwise mode.
+---   - Table. First element is array of lines, second - keys used to yank them
+---     (assuming Normal mode and cursor being {1, 0}).
+---@return table Array of arrays with yank history lines.
+---@private
+local setup_yank = function(...)
+  local yank_entries = vim.tbl_map(function(x)
+    -- If entry is string, yank it whole in charwise mode
+    if type(x) == 'string' then return { { x }, '0v$hy' } end
+    return x
+  end, { ... })
+
+  for _, entry in ipairs(yank_entries) do
+    child.ensure_normal_mode()
+    set_lines(entry[1])
+    set_cursor(1, 0)
+    type_keys(entry[2])
+  end
+
+  child.ensure_normal_mode()
+  set_lines({})
+  return vim.tbl_map(function(x) return x[1] end, yank_entries)
+end
 
 T['yank()']['works'] = function()
-  MiniTest.skip()
+  local yanks = setup_yank('one', 'two', 'three', 'four', 'five')
+  local n = #yanks
+  type_keys('p')
+  eq(get_lines(), yanks[n])
+
+  local validate = function(direction, id_ref)
+    child.lua('MiniBracketed.yank(...)', { direction })
+    eq(get_lines(), yanks[id_ref])
+  end
 
   -- Forward
-  validate_file(1, 'forward', 2)
-  validate_file(2, 'forward', 3)
-  validate_file(n - 1, 'forward', n)
-  validate_file(n, 'forward', 1)
+  for i = 1, n do
+    validate('forward', i)
+  end
 
   -- Backward
-  validate_file(n, 'backward', n - 1)
-  validate_file(n - 1, 'backward', n - 2)
-  validate_file(2, 'backward', 1)
-  validate_file(1, 'backward', n)
+  for i = n - 1, 1, -1 do
+    validate('backward', i)
+  end
+  validate('backward', n)
 
   -- First
-  validate_file(n, 'first', 1)
-  validate_file(2, 'first', 1)
-  validate_file(1, 'first', 1)
+  validate('first', 1)
 
   -- Last
-  validate_file(1, 'last', n)
-  validate_file(2, 'last', n)
-  validate_file(n, 'last', n)
+  validate('last', n)
+end
+
+T['yank()']['works advancing charwise<->charwise'] = function()
+  setup_yank('one', 'two')
+
+  set_lines({ '____' })
+  set_cursor(1, 2)
+  type_keys('yl', 'P')
+  eq(get_lines(), { '_____' })
+
+  backward('yank')
+  eq(get_lines(), { '__two__' })
+
+  backward('yank')
+  eq(get_lines(), { '__one__' })
+
+  last('yank')
+  eq(get_lines(), { '_____' })
+end
+
+T['yank()']['works advancing charwise<->linewise'] = function()
+  setup_yank({ { 'line' }, 'yy' })
+
+  set_lines({ '_', '____', '_' })
+  set_cursor(2, 2)
+  type_keys('yl', 'P')
+  eq(get_lines(), { '_', '_____', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', 'line', '____', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', '_____', '_' })
+end
+
+T['yank()']['works advancing charwise<->blockwise'] = function()
+  setup_yank({ { 'bl', 'ock' }, '<C-v>j2ly' })
+
+  set_lines({ '_', '____', '_' })
+  set_cursor(2, 2)
+  type_keys('yl', 'P')
+  eq(get_lines(), { '_', '_____', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', '__bl __', '_ ock' })
+
+  backward('yank')
+  eq(get_lines(), { '_', '_____', '_ ' })
+end
+
+T['yank()']['works with multiline charwise yank entry'] = function()
+  setup_yank({ { 'one', 'aaaa' }, 'v$jy' })
+
+  set_lines({ '_', '____', '_' })
+  set_cursor(2, 2)
+  type_keys('yl', 'P')
+  eq(get_lines(), { '_', '_____', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', '__one', 'aaaa__', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', '_____', '_' })
+end
+
+T['yank()']['works pasting charwise on last column'] = function()
+  setup_yank('one')
+
+  -- Past last column
+  set_lines({ 'xyz' })
+  set_cursor(1, 1)
+  type_keys('vy', '$', 'p')
+  eq(get_lines(), { 'xyzy' })
+
+  backward('yank')
+  eq(get_lines(), { 'xyzone' })
+
+  backward('yank')
+  eq(get_lines(), { 'xyzy' })
+
+  -- Just before last column
+  set_lines({ 'xyz' })
+  set_cursor(1, 2)
+  type_keys('P')
+  eq(get_lines(), { 'xyyz' })
+
+  backward('yank')
+  eq(get_lines(), { 'xyonez' })
+
+  backward('yank')
+  eq(get_lines(), { 'xyyz' })
+
+  -- Replacing linewise region on last line
+  type_keys('yy', 'p')
+  eq(get_lines(), { 'xyyz', 'xyyz' })
+
+  backward('yank')
+  eq(get_lines(), { 'yxyyz' })
+end
+
+T['yank()']['works advancing linewise<->linewise'] = function()
+  setup_yank({ { 'line1' }, 'yy' }, { { 'line2' }, 'yy' })
+
+  set_lines({ '_', '_' })
+  set_cursor(1, 0)
+  type_keys('yy', 'p')
+  eq(get_lines(), { '_', '_', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', 'line2', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', 'line1', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', '_', '_' })
+end
+
+T['yank()']['works advancing linewise<->blockwise'] = function()
+  setup_yank({ { 'bl', 'ock' }, '<C-v>j2ly' })
+
+  set_lines({ '_', '_' })
+  set_cursor(1, 0)
+  type_keys('yy', 'p')
+  eq(get_lines(), { '_', '_', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', 'bl _', 'ock' })
+
+  backward('yank')
+  eq(get_lines(), { '_', '_', '_', '' })
+end
+
+T['yank()']['works with multiline linewise yank entry'] = function()
+  setup_yank({ { 'line1', 'line2' }, 'y2_' })
+
+  set_lines({ '_', '_' })
+  set_cursor(1, 0)
+  type_keys('yy', 'p')
+  eq(get_lines(), { '_', '_', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', 'line1', 'line2', '_' })
+
+  backward('yank')
+  eq(get_lines(), { '_', '_', '_' })
+end
+
+T['yank()']['works pasting linewise on last line'] = function()
+  setup_yank({ { 'line' }, 'yy' })
+
+  -- Past last line
+  set_lines({ 'xxx', '___' })
+  set_cursor(1, 0)
+  type_keys('yy', 'j', 'p')
+  eq(get_lines(), { 'xxx', '___', 'xxx' })
+
+  backward('yank')
+  eq(get_lines(), { 'xxx', '___', 'line' })
+
+  backward('yank')
+  eq(get_lines(), { 'xxx', '___', 'xxx' })
+
+  -- Just before of last line
+  set_lines({ 'yyy', '___' })
+  set_cursor(2, 0)
+  type_keys('P')
+  eq(get_lines(), { 'yyy', 'xxx', '___' })
+
+  backward('yank')
+  eq(get_lines(), { 'yyy', 'line', '___' })
+
+  backward('yank')
+  eq(get_lines(), { 'yyy', 'xxx', '___' })
+
+  -- Replacing non-linewise region on last column
+  set_lines({ 'yyy', '___' })
+  set_cursor(1, 2)
+  type_keys('yl', 'p')
+  eq(get_lines(), { 'yyyy', '___' })
+
+  backward('yank')
+  eq(get_lines(), { 'xxx', 'yyy', '___' })
+end
+
+T['yank()']['works advancing blockwise<->blockwise'] = function()
+  setup_yank({ { 'bl', 'ock1' }, '<C-v>j3ly' }, { { 'block2' }, '<C-v>5ly' })
+
+  set_lines({ '___', '___' })
+  set_cursor(1, 1)
+  type_keys('<C-v>y', 'P')
+  eq(get_lines(), { '____', '___' })
+
+  backward('yank')
+  eq(get_lines(), { '_block2__', '___' })
+
+  backward('yank')
+  eq(get_lines(), { '_bl  __', '_ock1__' })
+
+  backward('yank')
+  eq(get_lines(), { '____', '___' })
+end
+
+T['yank()']['works pasting blockwise on last column'] = function()
+  setup_yank({ { 'bl', 'ock' }, '<C-v>j2ly' })
+
+  -- Past last column
+  set_lines({ 'x__', 'x__' })
+  set_cursor(1, 0)
+  type_keys('<C-v>jy', '$', 'p')
+  eq(get_lines(), { 'x__x', 'x__x' })
+
+  backward('yank')
+  eq(get_lines(), { 'x__bl', 'x__ock' })
+
+  backward('yank')
+  eq(get_lines(), { 'x__x', 'x__x' })
+
+  -- Just before last column
+  set_lines({ '___', '___' })
+  set_cursor(1, 2)
+  type_keys('P')
+  eq(get_lines(), { '__x_', '__x_' })
+
+  backward('yank')
+  eq(get_lines(), { '__bl _', '__ock_' })
+
+  backward('yank')
+  eq(get_lines(), { '__x_', '__x_' })
+
+  -- Replacing linewise region on last line
+  set_lines({ 'aaa' })
+  type_keys('yy', 'p')
+  eq(get_lines(), { 'aaa', 'aaa' })
+
+  backward('yank')
+  eq(get_lines(), { 'xaaa', 'x' })
+end
+
+T['yank()']['works with one yank entry or less'] = function()
+  -- No yank history
+  for _, dir in ipairs({ forward, backward, first, last }) do
+    set_lines({ 'aaa' })
+    set_cursor(1, 0)
+    dir('yank')
+    eq(get_lines(), { 'aaa' })
+    eq(get_cursor(), { 1, 0 })
+  end
+
+  -- Single-entry yank history
+  set_lines({ 'x__' })
+  set_cursor(1, 0)
+  type_keys('ylp')
+  eq(get_lines(), { 'xx__' })
+  eq(get_cursor(), { 1, 1 })
+
+  for _, dir in ipairs({ forward, backward, first, last }) do
+    dir('yank')
+    eq(get_lines(), { 'xx__' })
+    eq(get_cursor(), { 1, 1 })
+  end
+
+  -- No yank entry with proper operator
+  for _, dir in ipairs({ forward, backward, first, last }) do
+    dir('yank', { operators = { 'c' } })
+    eq(get_lines(), { 'xx__' })
+    eq(get_cursor(), { 1, 1 })
+  end
+end
+
+T['yank()']['does not depend on cursor position'] = function()
+  setup_yank('one')
+
+  set_lines({ '___', '___' })
+  set_cursor(1, 0)
+  type_keys('yl', 'p')
+  eq(get_lines(), { '____', '___' })
+
+  set_cursor(2, 2)
+  backward('yank')
+  eq(get_lines(), { '_one__', '___' })
+  eq(get_cursor(), { 1, 3 })
+end
+
+T['yank()']['places cursor at region start during replacement'] = function()
+  setup_yank('x', { { 'xxx' }, 'yy' })
+
+  set_lines({ '___' })
+  type_keys('p')
+  eq(get_lines(), { '___', 'xxx' })
+
+  set_cursor(2, 2)
+  backward('yank')
+  eq(get_lines(), { 'x___' })
+end
+
+T['yank()']['tracks all `TextYankPost` events'] = function()
+  setup_yank({ { 'one' }, '"ayiw' }, { { 'two' }, 'diw' }, { { 'three' }, 'ciw<Esc>' })
+
+  set_lines({ '___' })
+  set_cursor(1, 0)
+  type_keys('yl', 'p')
+  eq(get_lines(), { '____' })
+
+  backward('yank')
+  eq(get_lines(), { '_three__' })
+
+  backward('yank')
+  eq(get_lines(), { '_two__' })
+
+  backward('yank')
+  eq(get_lines(), { '_one__' })
+
+  backward('yank')
+  eq(get_lines(), { '____' })
+end
+
+T['yank()']['tracks yanking right after advancing'] = function()
+  setup_yank('one', 'two')
+
+  set_lines({ '', 'three' })
+  set_cursor(1, 0)
+  type_keys('p')
+  eq(get_lines(), { 'two', 'three' })
+
+  backward('yank')
+  eq(get_lines(), { 'one', 'three' })
+
+  -- It should reset advancing after adding another entry to yank history
+  set_cursor(2, 0)
+  type_keys('yiw', 'P')
+  eq(get_lines(), { 'one', 'threethree' })
+
+  backward('yank')
+  eq(get_lines(), { 'one', 'twothree' })
+end
+
+T['yank()']['does not detect correct region mode when pasted with register'] = function()
+  -- It would be **great** to make it work but seems imposible right now
+  -- See https://github.com/vim/vim/issues/12003
+  setup_yank({ { 'a', 'b' }, '<C-v>j"ay' }, { { 'aaa' }, 'yy' })
+
+  set_lines({ 'xxx', 'yyy' })
+  set_cursor(1, 0)
+  type_keys('"aP')
+  eq(get_lines(), { 'axxx', 'byyy' })
+
+  backward('yank')
+  -- It thinks that region is linewise but it is not. Also at this point yank
+  -- history is { {'a', 'b'}, {'aaa'} } so backward chooses second to last.
+  eq(get_lines(), { 'a', 'b' })
+
+  backward('yank')
+  eq(get_lines(), { 'aaa', '', '' })
+end
+
+T['yank()']['does not have side effects'] = function()
+  setup_yank('one', 'two')
+
+  set_lines({ 'x__' })
+  set_cursor(1, 0)
+  type_keys('"zyl', 'l', 'yl')
+  type_keys('P')
+  eq(get_lines(), { 'x___' })
+  eq(child.fn.getreg('z'), 'x')
+  eq(child.fn.getreg('"'), '_')
+
+  backward('yank')
+  eq(get_lines(), { 'xx__' })
+
+  backward('yank')
+  eq(get_lines(), { 'xtwo__' })
+
+  eq(child.fn.getreg('z'), 'x')
+  eq(child.fn.getreg('"'), '_')
+end
+
+T['yank()']['undos all advances at once'] = function()
+  setup_yank('one', 'two', 'three', 'four')
+
+  type_keys('p')
+  eq(get_lines(), { 'four' })
+
+  backward('yank')
+  eq(get_lines(), { 'three' })
+  backward('yank')
+  eq(get_lines(), { 'two' })
+  backward('yank')
+  eq(get_lines(), { 'one' })
+
+  type_keys('u')
+  eq(get_lines(), { 'four' })
+  type_keys('u')
+  eq(get_lines(), { '' })
+end
+
+T['yank()']['replaces region based on `[` marks `]`'] = function()
+  -- Should replace not only latest put region, but also yanked or changed
+  -- Region from change operation
+  setup_yank('one')
+
+  set_lines({ '____' })
+  set_cursor(1, 1)
+  type_keys('cl<Esc>')
+  eq(get_lines(), { '___' })
+
+  backward('yank')
+  -- - As `_` is now the last entry in history, going backward selects `two`
+  eq(get_lines(), { '_one_' })
+
+  -- Region from yank operation
+  setup_yank('two')
+
+  set_lines({ '____' })
+  set_cursor(1, 1)
+  type_keys('yl')
+
+  backward('yank')
+  eq(get_lines(), { '_two_' })
+end
+
+T['yank()']['respects `register_put_region()` to determine region boundaries'] = function()
+  -- Should take into account only regions coming from the helper; not from
+  -- yank or change operations.
+  set_lines({ 'xaa', 'bbb', 'ccc' })
+
+  set_cursor(1, 0)
+  type_keys('yl', '$', 'P')
+
+  child.lua('MiniBracketed.register_put_region()')
+
+  set_cursor(2, 0)
+  type_keys('ciw', '<Esc>')
+
+  set_cursor(3, 0)
+  type_keys('yiw')
+
+  eq(get_lines(), { 'xaxa', '', 'ccc' })
+  backward('yank')
+  -- - At this moment yank history is `{ 'x', 'bbb', 'ccc' }` with current
+  --   entry being the last one.
+  eq(get_lines(), { 'xabbba', '', 'ccc' })
+end
+
+T['yank()']['respects `register_put_region()` to determine region mode'] = function()
+  -- Currently this is only possible with remapping
+  child.api.nvim_set_keymap('n', 'P', 'v:lua.MiniBracketed.register_put_region("P")', { expr = true })
+
+  setup_yank({ { 'a', 'b' }, '<C-v>j"ay' }, { { 'aaa' }, 'yy' })
+
+  set_lines({ 'xxx', 'yyy' })
+  set_cursor(1, 0)
+  type_keys('"aP')
+  eq(get_lines(), { 'axxx', 'byyy' })
+
+  backward('yank')
+  -- At this point yank history is { { 'a', 'b' }, { 'aaa' } } so backward
+  -- chooses second to last.
+  eq(get_lines(), { 'axxx', 'byyy' })
+  backward('yank')
+  eq(get_lines(), { 'aaa', 'xxx', 'yyy' })
+end
+
+T['yank()']['should reset advancing on buffer change'] = function()
+  local buf_id_new = child.api.nvim_create_buf(true, false)
+  setup_yank('one', 'two', 'three', 'four')
+
+  type_keys('P')
+  eq(get_lines(), { 'four' })
+
+  backward('yank')
+  eq(get_lines(), { 'three' })
+  backward('yank')
+  eq(get_lines(), { 'two' })
+
+  child.api.nvim_set_current_buf(buf_id_new)
+  type_keys('P')
+  eq(get_lines(), { 'four' })
+  backward('yank')
+  eq(get_lines(), { 'three' })
 end
 
 T['yank()']['validates `direction`'] = function()
@@ -2614,90 +3129,175 @@ T['yank()']['validates `direction`'] = function()
 end
 
 T['yank()']['respects `opts.n_times`'] = function()
-  MiniTest.skip()
+  local yanks = setup_yank('one', 'two', 'three', 'four', 'five')
+  local n = #yanks
+  type_keys('p')
+  eq(get_lines(), yanks[n])
+
+  local validate = function(direction, id_ref, opts)
+    child.lua('MiniBracketed.yank(...)', { direction, opts })
+    eq(get_lines(), yanks[id_ref])
+  end
 
   -- Forward
-  validate_file(1, 'forward', 3, { n_times = 2 })
-  validate_file(n - 2, 'forward', n, { n_times = 2 })
-  validate_file(n - 1, 'forward', 1, { n_times = 2 })
+  eq(get_lines(), yanks[n])
+  for i = 1, n do
+    validate('forward', (2 * i - 1) % n + 1, { n_times = 2 })
+  end
 
   -- Backward
-  validate_file(n, 'backward', n - 2, { n_times = 2 })
-  validate_file(3, 'backward', 1, { n_times = 2 })
-  validate_file(2, 'backward', n, { n_times = 2 })
+  eq(get_lines(), yanks[n])
+  for i = 1, n do
+    validate('backward', (n - 2 * i - 1) % n + 1, { n_times = 2 })
+  end
 
   -- First
-  validate_file(n, 'first', 2, { n_times = 2 })
-  validate_file(2, 'first', 2, { n_times = 2 })
-  validate_file(1, 'first', 2, { n_times = 2 })
+  validate('first', 2, { n_times = 2 })
 
   -- Last
-  validate_file(1, 'last', n - 1, { n_times = 2 })
-  validate_file(n - 1, 'last', n - 1, { n_times = 2 })
-  validate_file(n, 'last', n - 1, { n_times = 2 })
+  validate('last', n - 1, { n_times = 2 })
+end
+
+T['yank()']['respects `opts.operators`'] = function()
+  setup_yank({ { 'one' }, '"ayiw' }, { { 'two' }, 'diw' }, { { 'three' }, 'ciw<Esc>' })
+
+  set_lines({ '___' })
+  set_cursor(1, 0)
+  type_keys('yl', 'p')
+  eq(get_lines(), { '____' })
+
+  backward('yank', { operators = { 'y' } })
+  eq(get_lines(), { '_one__' })
+
+  backward('yank', { operators = { 'd' } })
+  eq(get_lines(), { '_two__' })
+
+  backward('yank', { operators = { 'c' } })
+  eq(get_lines(), { '_three__' })
+
+  backward('yank', { operators = { 'y', 'd' } })
+  eq(get_lines(), { '_two__' })
 end
 
 T['yank()']['respects `opts.wrap`'] = function()
-  MiniTest.skip()
+  local yanks = setup_yank('one', 'two', 'three', 'four', 'five')
+  local n = #yanks
+  type_keys('p')
+  eq(get_lines(), yanks[n])
+
+  local validate = function(direction, id_ref, opts)
+    child.lua('MiniBracketed.yank(...)', { direction, opts })
+    eq(get_lines(), yanks[id_ref])
+  end
 
   -- Forward
-  validate_file(n, 'forward', n, { wrap = false })
-  validate_file(n - 1, 'forward', n, { n_times = 1000, wrap = false })
+  eq(get_lines(), yanks[n])
+  validate('forward', n, { wrap = false })
+
+  backward('yank')
+  eq(get_lines(), yanks[n - 1])
+  validate('forward', n, { n_times = 1000, wrap = false })
 
   -- Backward
-  validate_file(1, 'backward', 1, { wrap = false })
-  validate_file(2, 'backward', 1, { n_times = 1000, wrap = false })
+  first('yank')
+  eq(get_lines(), yanks[1])
+  validate('backward', 1, { wrap = false })
+
+  forward('yank')
+  eq(get_lines(), yanks[2])
+  validate('backward', 1, { n_times = 1000, wrap = false })
 
   -- First
-  validate_file(1, 'first', n, { n_times = 1000, wrap = false })
-  validate_file(n, 'first', n, { n_times = 1000, wrap = false })
+  first('yank')
+  eq(get_lines(), yanks[1])
+  validate('first', n, { n_times = 1000, wrap = false })
+
+  last('yank')
+  eq(get_lines(), yanks[n])
+  validate('first', n, { n_times = 1000, wrap = false })
 
   -- Last
-  validate_file(n, 'last', 1, { n_times = 1000, wrap = false })
-  validate_file(1, 'last', 1, { n_times = 1000, wrap = false })
+  last('yank')
+  eq(get_lines(), yanks[n])
+  validate('last', 1, { n_times = 1000, wrap = false })
+
+  first('yank')
+  eq(get_lines(), yanks[1])
+  validate('last', 1, { n_times = 1000, wrap = false })
 end
-
-T['yank()']['works pasting charwise'] = function()
-  -- From all three regtypes
-  MiniTest.skip()
-end
-
-T['yank()']['works pasting linewise'] = function()
-  -- From all three regtypes
-  MiniTest.skip()
-end
-
-T['yank()']['works pasting blockwise'] = function()
-  -- From all three regtypes
-  MiniTest.skip()
-end
-
-T['yank()']['correctly detects first register type'] = function() MiniTest.skip() end
-
-T['yank()']['does not have side effects'] = function()
-  -- No register is affected
-  MiniTest.skip()
-end
-
-T['yank()']['undos all advances at once'] = function() MiniTest.skip() end
 
 T['yank()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
+    setup_yank('one', 'two')
+    type_keys('p')
+    eq(get_lines(), { 'two' })
+
+    -- `yank()` itself shouldn't work
     child[var_type].minibracketed_disable = true
-    MiniTest.skip()
+    backward('yank')
+    eq(get_lines(), { 'two' })
+
+    -- Tracking yank history shouldn't work
+    set_cursor(1, 0)
+    type_keys('yl')
+
+    set_cursor(1, 1)
+    type_keys('yl', 'P')
+    eq(get_lines(), { 'twwo' })
+
+    child[var_type].minibracketed_disable = false
+    -- Yank history should still be { 'one', 'two' } (without 't' and 'w').
+    -- Going backward select second to last entry.
+    backward('yank')
+    eq(get_lines(), { 'tonewo' })
   end,
 })
 
 T['yank()']['respects `vim.b.minibracketed_config`'] = function()
+  setup_yank('one', 'two')
+  type_keys('p')
+  eq(get_lines(), { 'two' })
+
   child.b.minibracketed_config = { yank = { options = { wrap = false } } }
-  MiniTest.skip()
+  forward('yank')
+  eq(get_lines(), { 'two' })
 end
 
+-- Main tests are in `yank()`
 T['register_put_region()'] = new_set()
 
-T['register_put_region()']['works'] = function() MiniTest.skip() end
+T['register_put_region()']['is present'] =
+  function() eq(child.lua_get('type(MiniBracketed.register_put_region)'), 'function') end
+
+T['register_put_region()']['uses `[` and `]` marks'] = function()
+  set_lines({ 'xaa', 'bbb', 'ccc' })
+
+  set_cursor(1, 0)
+  type_keys('yl', '$', 'P')
+
+  -- Should be possible to use it not only on region from put operation
+  -- - Change
+  set_cursor(2, 0)
+  type_keys('ciw', '<Esc>')
+  child.lua('MiniBracketed.register_put_region()')
+
+  eq(get_lines(), { 'xaxa', '', 'ccc' })
+  -- - Yank history at this point: { 'x', 'bbb' }
+  backward('yank')
+  eq(get_lines(), { 'xaxa', 'x', 'ccc' })
+
+  -- - Yank
+  set_cursor(3, 0)
+  type_keys('yiw')
+  child.lua('MiniBracketed.register_put_region()')
+
+  eq(get_lines(), { 'xaxa', 'x', 'ccc' })
+  -- - Yank history at this point: { 'x', 'bbb', 'ccc' }
+  backward('yank')
+  eq(get_lines(), { 'xaxa', 'x', 'bbb' })
+end
 
 T['advance()'] = new_set()
 
@@ -2820,10 +3420,12 @@ end
 -- Integration tests ==========================================================
 T['Mappings'] = new_set()
 
-T['Mappings']['Buffer'] = new_set()
+T['Mappings']['buffer'] = new_set()
 
 -- Should also test with `[count]`
-T['Mappings']['Buffer']['works'] = function() MiniTest.skip() end
+T['Mappings']['buffer']['works'] = function() MiniTest.skip() end
+
+T['Mappings']['buffer']['allows non-letter suffix'] = function() MiniTest.skip() end
 
 T['Mappings']['comment'] = new_set()
 
@@ -2831,7 +3433,12 @@ T['Mappings']['comment']['works in Normal mode'] = function() MiniTest.skip() en
 
 T['Mappings']['comment']['works in Visual mode'] = function() MiniTest.skip() end
 
-T['Mappings']['comment']['works in Operator-pending mode'] = function() MiniTest.skip() end
+T['Mappings']['comment']['works in Operator-pending mode'] = function()
+  -- Should also respect dot-repeat
+  MiniTest.skip()
+end
+
+T['Mappings']['comment']['allows non-letter suffix'] = function() MiniTest.skip() end
 
 T['Mappings']['conflict'] = new_set()
 
@@ -2841,6 +3448,8 @@ T['Mappings']['conflict']['works in Visual mode'] = function() MiniTest.skip() e
 
 T['Mappings']['conflict']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
+T['Mappings']['conflict']['allows non-letter suffix'] = function() MiniTest.skip() end
+
 T['Mappings']['diagnostic'] = new_set()
 
 T['Mappings']['diagnostic']['works in Normal mode'] = function() MiniTest.skip() end
@@ -2849,9 +3458,13 @@ T['Mappings']['diagnostic']['works in Visual mode'] = function() MiniTest.skip()
 
 T['Mappings']['diagnostic']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
+T['Mappings']['diagnostic']['allows non-letter suffix'] = function() MiniTest.skip() end
+
 T['Mappings']['file'] = new_set()
 
 T['Mappings']['file']['works'] = function() MiniTest.skip() end
+
+T['Mappings']['file']['allows non-letter suffix'] = function() MiniTest.skip() end
 
 T['Mappings']['indent'] = new_set()
 
@@ -2861,6 +3474,8 @@ T['Mappings']['indent']['works in Visual mode'] = function() MiniTest.skip() end
 
 T['Mappings']['indent']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
+T['Mappings']['indent']['allows non-letter suffix'] = function() MiniTest.skip() end
+
 T['Mappings']['jump'] = new_set()
 
 T['Mappings']['jump']['works in Normal mode'] = function() MiniTest.skip() end
@@ -2869,28 +3484,42 @@ T['Mappings']['jump']['works in Visual mode'] = function() MiniTest.skip() end
 
 T['Mappings']['jump']['works in Operator-pending mode'] = function() MiniTest.skip() end
 
+T['Mappings']['jump']['allows non-letter suffix'] = function() MiniTest.skip() end
+
 T['Mappings']['location'] = new_set()
 
 T['Mappings']['location']['works'] = function() MiniTest.skip() end
+
+T['Mappings']['location']['allows non-letter suffix'] = function() MiniTest.skip() end
 
 T['Mappings']['oldfile'] = new_set()
 
 T['Mappings']['oldfile']['works'] = function() MiniTest.skip() end
 
+T['Mappings']['oldfile']['allows non-letter suffix'] = function() MiniTest.skip() end
+
 T['Mappings']['quickfix'] = new_set()
 
 T['Mappings']['quickfix']['works'] = function() MiniTest.skip() end
+
+T['Mappings']['quickfix']['allows non-letter suffix'] = function() MiniTest.skip() end
 
 T['Mappings']['undo'] = new_set()
 
 T['Mappings']['undo']['works'] = function() MiniTest.skip() end
 
+T['Mappings']['undo']['allows non-letter suffix'] = function() MiniTest.skip() end
+
 T['Mappings']['window'] = new_set()
 
 T['Mappings']['window']['works'] = function() MiniTest.skip() end
 
+T['Mappings']['window']['allows non-letter suffix'] = function() MiniTest.skip() end
+
 T['Mappings']['yank'] = new_set()
 
 T['Mappings']['yank']['works'] = function() MiniTest.skip() end
+
+T['Mappings']['yank']['allows non-letter suffix'] = function() MiniTest.skip() end
 
 return T
