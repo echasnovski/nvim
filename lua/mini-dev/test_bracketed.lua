@@ -2408,34 +2408,405 @@ end
 
 T['undo()'] = new_set()
 
-T['undo()']['works'] = function() MiniTest.skip() end
+local get_undo_state = function() return child.fn.undotree().seq_cur end
+
+local validate_undo = function(lines, state)
+  eq(get_lines(), lines)
+  eq(get_undo_state(), state)
+end
+
+local validate_undo_history = function(states)
+  first('undo')
+  eq(get_undo_state(), states[1])
+  for i = 2, #states do
+    forward('undo')
+    eq(get_undo_state(), states[i])
+  end
+  forward('undo')
+  eq(get_undo_state(), states[1])
+end
+
+local setup_undo = function(...)
+  local undos = {}
+  undos[1] = { lines = get_lines(), state = get_undo_state() }
+
+  for _, keys in ipairs({ ... }) do
+    type_keys(keys)
+    table.insert(undos, { lines = get_lines(), state = child.fn.undotree().seq_cur })
+  end
+
+  local validate = function(direction, id_ref, opts)
+    child.lua('MiniBracketed.undo(...)', { direction, opts })
+    validate_undo(undos[id_ref].lines, undos[id_ref].state)
+  end
+
+  return undos, validate
+end
+
+T['undo()']['works'] = function()
+  --stylua: ignore
+  local undos, validate = setup_undo(
+    { 'i', 'one', '<Esc>' },    -- one
+    { 'i', ' two', '<Esc>' },   -- one two
+    { '0', 'daw' },             -- two
+    'u',                        -- one two
+    { 'A', ' three', '<Esc>' }, -- one two three
+    'u',                        -- one two
+    '<C-R>'                     -- one two three
+  )
+  local n = #undos
+
+  -- Forward
+  for i = 1, n do
+    validate('forward', i)
+  end
+
+  -- Backward
+  for i = n - 1, 1, -1 do
+    validate('backward', i)
+  end
+  validate('backward', n)
+
+  -- First
+  validate('first', 1)
+
+  -- Last
+  validate('last', n)
+end
+
+T['undo()']['works with pending new undo states'] = function()
+  --stylua: ignore
+  local undos, validate = setup_undo(
+    { 'i', 'one two', '<Esc>' }, -- one two
+    'x',                         -- one tw
+    'x'                          -- one t
+  )
+  local n = #undos
+
+  for i = 1, n do
+    validate('forward', i)
+  end
+end
+
+T['undo()']['correctly tracks state 0'] = function()
+  --stylua: ignore
+  local undos, validate = setup_undo(
+    { 'i', 'one', '<Esc>' }, -- one
+    'u',                     -- <empty>
+    { 'i', 'two', '<Esc>' }, -- two
+    'u'                      -- <empty>
+  )
+  local n = #undos
+
+  for i = 1, n do
+    validate('forward', i)
+  end
+end
+
+T['undo()']["works with low 'undolevels'"] = function()
+  child.o.undolevels = 1
+
+  local undos, _ = setup_undo(
+    { 'i', 'one two three', '<Esc>' }, -- one two three
+    'x', -- one two thre
+    'x', -- one two thr
+    'x', -- one two th
+    'x' -- one two t
+  )
+  local n = #undos
+
+  -- First tracked state is 0. In this case restores before last allowed state.
+  first('undo')
+  validate_undo(undos[n - 2].lines, 0)
+
+  forward('undo')
+  validate_undo(undos[n - 1].lines, undos[n - 1].state)
+
+  forward('undo')
+  validate_undo(undos[n].lines, undos[n].state)
+end
+
+T['undo()']['works with `:undo!` when not advancing'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('`undo!` was implemented in Neovim 0.8') end
+
+  --stylua: ignore
+  setup_undo(
+    { 'i', 'one',    '<Esc>' }, -- one
+    { 'A', ' two',   '<Esc>' }, -- one two
+    { 'A', ' three', '<Esc>' }, -- one two three
+    ':undo! 1<CR>',             -- one (deletes 2 and 3 from allowed states)
+    { 'A', ' four',  '<Esc>' }, -- one four
+    { 'A', ' five',  '<Esc>' }  -- one four five
+  )
+
+  backward('undo')
+  validate_undo({ 'one four' }, 4)
+
+  backward('undo')
+  validate_undo({ 'one' }, 1)
+
+  backward('undo')
+  validate_undo({ '' }, 0)
+
+  backward('undo')
+  validate_undo({ 'one four five' }, 5)
+end
+
+T['undo()']['works with `:undo!` advancing'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('`undo!` was implemented in Neovim 0.8') end
+
+  -- NOTE: Be careful with executing `:undo!` when not in latest undo state
+  -- See: https://github.com/neovim/neovim/issues/22298
+
+  --stylua: ignore
+  setup_undo(
+    { 'i', 'one',    '<Esc>' }, -- one
+    { 'A', ' two',   '<Esc>' }, -- one two
+    { 'A', ' three', '<Esc>' }, -- one two three
+    'u',                        -- one two
+    '<C-R>',                    -- one two three
+    'u',                        -- one two
+    'u',                        -- one
+    '<C-R>',                    -- one two
+    '<C-R>',                    -- one two three
+    'u',                        -- one two
+    'u'                         -- one
+  )
+
+  for _ = 1, 6 do
+    backward('undo')
+  end
+  validate_undo({ 'one two three' }, 3)
+
+  -- Before this call undo history is { 0, 1, 2, 3, 2, 3, 2, 1, 2, 3, 2, 1 }
+  -- with current id being 6 (second state number 3).
+  -- After `:undo! 2`, state 3 is not allowed.
+  --
+  -- At the next synchronization:
+  -- - State 3 should be removed while not allowing same consecutive states.
+  -- - Advancing should stop because there were some not allowed states.
+  --   This also means that current undo state (2) should be registered.
+  --
+  -- This leads to history being { 0, 1, 2, 1, 2, 1, 2 } and current id
+  -- pointing to last history state.
+  child.cmd('undo! 2')
+
+  validate_undo_history({ 0, 1, 2, 1, 2, 1, 2 })
+
+  -- Should proper register next undo state
+  type_keys('A', ' three again', '<Esc>')
+  eq(get_undo_state(), 3)
+  backward('undo')
+  validate_undo({ 'one two' }, 2)
+end
+
+T['undo()']['does not register undo actions without `register_undo_state()`'] = function()
+  -- It would be **great** to implement that, but seems imposible
+  type_keys('i', 'one', '<Esc>')
+  type_keys('A', ' two', '<Esc>')
+  type_keys('A', ' three', '<Esc>')
+
+  type_keys('g-')
+  type_keys('g+')
+  child.cmd('earlier')
+  child.cmd('later')
+
+  -- Ideally, history should be { 0, 1, 2, 3, 2, 3, 2, 3 }, but in reality it
+  -- is { 0, 1, 2, 3 }
+  validate_undo_history({ 0, 1, 2, 3 })
+end
+
+T['undo()']['registers states after `register_undo_state()`'] = function()
+  local register_undo_state = function() child.lua('MiniBracketed.register_undo_state()') end
+  type_keys('i', 'one', '<Esc>')
+  type_keys('A', ' two', '<Esc>')
+  type_keys('A', ' three', '<Esc>')
+
+  type_keys('g-')
+  register_undo_state()
+  type_keys('g+')
+  register_undo_state()
+  child.cmd('earlier')
+  register_undo_state()
+  child.cmd('later')
+  register_undo_state()
+
+  validate_undo_history({ 0, 1, 2, 3, 2, 3, 2, 3 })
+end
+
+T['undo()']['respects [count] in `u` and `<C-R>`'] = function()
+  --stylua: ignore
+  setup_undo(
+    { 'i', 'one',    '<Esc>' }, -- one
+    { 'A', ' two',   '<Esc>' }, -- one two
+    { 'A', ' three', '<Esc>' }, -- one two three
+    '2u',                       -- one
+    '2<C-R>'                    -- one two three
+  )
+
+  validate_undo_history({ 0, 1, 2, 3, 1, 3 })
+end
+
+T['undo()']['tracks advance per buffer'] = function()
+  local buf_init = child.api.nvim_get_current_buf()
+  type_keys('i', 'one', '<Esc>')
+  type_keys('A', ' two', '<Esc>')
+  type_keys('A', ' three', '<Esc>')
+  backward('undo')
+  backward('undo')
+  validate_undo({ 'one' }, 1)
+
+  local buf_new = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(buf_new)
+  type_keys('i', 'one', '<Esc>')
+  type_keys('A', ' two', '<Esc>')
+  backward('undo')
+  validate_undo({ 'one' }, 1)
+
+  -- Changing buffer should not reset advance
+  child.api.nvim_set_current_buf(buf_init)
+  backward('undo')
+  validate_undo({ '' }, 0)
+end
+
+T['undo()']['does not append currently advanced state if same as last one'] = function()
+  --stylua: ignore
+  setup_undo(
+    { 'i', 'one',  '<Esc>' }, -- state 1
+    { 'A', ' two', '<Esc>' }, -- state 2
+    'u'                       -- state 1
+  )
+
+  validate_undo({ 'one' }, 1)
+  backward('undo')
+  validate_undo({ 'one two' }, 2)
+  backward('undo')
+  validate_undo({ 'one' }, 1)
+
+  type_keys('A', ' three', '<Esc>')
+  validate_undo({ 'one three' }, 3)
+
+  backward('undo')
+  validate_undo({ 'one' }, 1)
+
+  -- If currently advanced state was appened, this would repeat state 1
+  backward('undo')
+  validate_undo({ 'one two' }, 2)
+end
 
 T['undo()']['validates `direction`'] = function()
   expect.error(function() child.lua('MiniBracketed.undo(1)') end, 'undo%(%).*direction.*one of')
   expect.error(function() child.lua([[MiniBracketed.undo('next')]]) end, 'undo%(%).*direction.*one of')
 end
 
-T['undo()']['respects `opts.n_times`'] = function() MiniTest.skip() end
+T['undo()']['respects `opts.n_times`'] = function()
+  --stylua: ignore
+  local undos, validate = setup_undo(
+    { 'i', 'one', '<Esc>' },    -- one
+    { 'i', ' two', '<Esc>' },   -- one two
+    { '0', 'daw' },             -- two
+    'u',                        -- one two
+    { 'A', ' three', '<Esc>' }, -- one two three
+    'u',                        -- one two
+    '<C-R>'                     -- one two three
+  )
+  local n = #undos
 
-T['undo()']['respects `opts.wrap`'] = function() MiniTest.skip() end
+  -- Forward
+  validate_undo(undos[n].lines, undos[n].state)
+  for i = 1, n do
+    validate('forward', (2 * i - 1) % n + 1, { n_times = 2 })
+  end
+
+  -- Backward
+  validate_undo(undos[n].lines, undos[n].state)
+  for i = 1, n do
+    validate('backward', (n - 2 * i - 1) % n + 1, { n_times = 2 })
+  end
+
+  -- First
+  validate('first', 2, { n_times = 2 })
+
+  -- Last
+  validate('last', n - 1, { n_times = 2 })
+end
+
+T['undo()']['respects `opts.wrap`'] = function()
+  --stylua: ignore
+  local undos, validate = setup_undo(
+    { 'i', 'one', '<Esc>' },    -- one
+    { 'i', ' two', '<Esc>' },   -- one two
+    { '0', 'daw' },             -- two
+    'u',                        -- one two
+    { 'A', ' three', '<Esc>' }, -- one two three
+    'u',                        -- one two
+    '<C-R>'                     -- one two three
+  )
+  local n = #undos
+
+  -- Forward
+  validate_undo(undos[n].lines, undos[n].state)
+  validate('forward', n, { wrap = false })
+
+  backward('undo')
+  validate_undo(undos[n - 1].lines, undos[n - 1].state)
+  validate('forward', n, { n_times = 1000, wrap = false })
+
+  -- Backward
+  first('undo')
+  validate_undo(undos[1].lines, undos[1].state)
+  validate('backward', 1, { wrap = false })
+
+  forward('undo')
+  validate_undo(undos[2].lines, undos[2].state)
+  validate('backward', 1, { n_times = 1000, wrap = false })
+
+  -- First
+  first('undo')
+  validate_undo(undos[1].lines, undos[1].state)
+  validate('first', n, { n_times = 1000, wrap = false })
+
+  last('undo')
+  validate_undo(undos[n].lines, undos[n].state)
+  validate('first', n, { n_times = 1000, wrap = false })
+
+  -- Last
+  last('undo')
+  validate_undo(undos[n].lines, undos[n].state)
+  validate('last', 1, { n_times = 1000, wrap = false })
+
+  first('undo')
+  validate_undo(undos[1].lines, undos[1].state)
+  validate('last', 1, { n_times = 1000, wrap = false })
+end
 
 T['undo()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
+    type_keys('i', 'one', '<Esc>')
+    type_keys('A', ' two', '<Esc>')
+
     child[var_type].minibracketed_disable = true
-    MiniTest.skip()
+    backward('undo')
+    validate_undo({ 'one two' }, 2)
   end,
 })
 
 T['undo()']['respects `vim.b.minibracketed_config`'] = function()
+  type_keys('i', 'one', '<Esc>')
+  type_keys('A', ' two', '<Esc>')
+
   child.b.minibracketed_config = { undo = { options = { wrap = false } } }
-  MiniTest.skip()
+  forward('undo')
+  validate_undo({ 'one two' }, 2)
 end
 
+-- Most tests are done in `undo()`
 T['register_undo_state()'] = new_set()
 
-T['register_undo_state()']['works'] = function() MiniTest.skip() end
+T['register_undo_state()']['is present'] =
+  function() eq(child.lua_get('type(MiniBracketed.register_undo_state)'), 'function') end
 
 T['window()'] = new_set()
 

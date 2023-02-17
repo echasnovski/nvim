@@ -10,9 +10,8 @@
 -- - Ensure moves that guaranteed to be inside current buffer have mappings in
 --   Normal, Visual, and Operator-pending modes (linewise if source is
 --   linewise, charwise otherwise).
--- - Undo:
---     - Make sure advancing works with `:undo!`. Seems to be a problem because
---       undo history is not updated after its call.
+-- - Refactor common validators for 'works', 'respects `opts.n_times`', and
+--   'respects `opts.wrap`'. This should save quite some lines of code.
 --
 -- Docs:
 -- - Mention that it is ok to not map defaults and use functions manually.
@@ -594,23 +593,23 @@ MiniBracketed.undo = function(direction, opts)
   if res_id == nil or res_id == iterator.state then return end
 
   -- Apply. Move to undo state by number while recording current history id
-  H.cache.undo.is_advancing = true
+  buf_history.is_advancing = true
   vim.cmd('undo ' .. buf_history[res_id])
 
   buf_history.current_id = res_id
 end
 
 MiniBracketed.register_undo_state = function()
-  -- If this was called, then should stop advancing
-  H.cache.undo.is_advancing = false
-
-  -- Synchronize undo history (mostly add new blocks)
   local buf_id = vim.api.nvim_get_current_buf()
   local tree = vim.fn.undotree()
-  H.undo_sync(buf_id, tree)
+
+  -- Synchronize undo history and stop advancing
+  H.undo_sync(buf_id, tree, false)
 
   -- Append new undo state to linear history
-  H.undo_append_state(H.cache.undo[buf_id], tree.seq_cur)
+  local buf_history = H.cache.undo[buf_id]
+  H.undo_append_state(buf_history, tree.seq_cur)
+  buf_history.current_id = #buf_history
 end
 
 MiniBracketed.window = function(direction, opts)
@@ -688,10 +687,10 @@ MiniBracketed.yank = function(direction, opts)
   )
 
   -- Update yank history data
-  local cache, history = H.cache.yank, H.cache.yank.history
+  local cache_yank, history = H.cache.yank, H.cache.yank.history
   local n_history = #history
   local cur_state = H.get_yank_state()
-  if not vim.deep_equal(cur_state, cache.state) then H.yank_stop_advancing() end
+  if not vim.deep_equal(cur_state, cache_yank.state) then H.yank_stop_advancing() end
 
   -- Define iterator that traverses yank history for entry with proper operator
   local iterator = {}
@@ -708,7 +707,7 @@ MiniBracketed.yank = function(direction, opts)
     end
   end
 
-  iterator.state = cache.current_id
+  iterator.state = cache_yank.current_id
   iterator.start_edge = 0
   iterator.end_edge = n_history + 1
 
@@ -718,12 +717,12 @@ MiniBracketed.yank = function(direction, opts)
 
   -- Apply. Replace latest put region with yank history entry
   -- - Account for possible errors when latest region became out of bounds
-  local ok, _ = pcall(H.replace_latest_put_region, cache.history[res_id])
+  local ok, _ = pcall(H.replace_latest_put_region, cache_yank.history[res_id])
   if not ok then return end
 
-  cache.current_id = res_id
-  cache.is_advancing = true
-  cache.state = H.get_yank_state()
+  cache_yank.current_id = res_id
+  cache_yank.is_advancing = true
+  cache_yank.state = H.get_yank_state()
 end
 
 -- Register "latest put region"
@@ -900,13 +899,9 @@ H.cache = {
   --   oldest to latest).
   -- - <current_id> - identifier of current history entry (used for iteration).
   -- - <seq_last> - latest recorded state (`seq_last` from `undotree()`).
-  --
-  -- TODO: add `history` instead of tracking directly inside the cache table.
-  undo = {
-    -- Whether currently advancing. Used to allow consecutive advances along
-    -- tracked undo history.
-    is_advancing = false,
-  },
+  -- - <is_advancing> - whether currently advancing. Used to allow consecutive
+  --   advances along tracked undo history.
+  undo = {},
 
   -- Cache for `yank` source
   yank = {
@@ -1326,44 +1321,52 @@ H.qf_loc_implementation = function(list_type, direction, opts)
 end
 
 -- Undo -----------------------------------------------------------------------
-H.undo_sync = function(buf_id, tree)
-  -- TODO: think about possible optimizations
-
+H.undo_sync = function(buf_id, tree, is_advancing)
   -- Get or initialize buffer history of visited undo states
-  local buf_history = H.cache.undo[buf_id] or H.undo_init(tree)
+  local prev_buf_history = H.cache.undo[buf_id] or H.undo_init(tree)
+  if is_advancing == nil then is_advancing = prev_buf_history.is_advancing end
 
-  -- Detect if currently not advancing: either if set so manually or if there
-  -- were new undo blocks after the most recent sync
-  local is_advancing = H.cache.undo.is_advancing and buf_history.seq_last == tree.seq_last
-  if is_advancing then return end
-
-  H.cache.is_advancing = false
-
-  -- Append currently advanced undo state to tracked undo history
-  H.undo_append_state(buf_history, buf_history[buf_history.current_id])
-
-  -- Add all missed undo states created since last sync
-  for i = buf_history.seq_last + 1, tree.seq_last do
-    H.undo_append_state(buf_history, i)
-  end
-
-  -- Prune history to contain only allowed state numbers. This assumes that
-  -- once undo state is not allowed, it will always be not allowed.
-  -- This step is needed because allowed undo state numbers can:
+  -- Prune current buffer history to contain only allowed state numbers. This
+  -- assumes that once undo state is not allowed, it will always be not
+  -- allowed. This step is needed because allowed undo state numbers can:
   -- - Not start from 1 due to 'undolevels'.
   -- - Contain range of missing state numbers due to `:undo!`.
+  --
+  -- Do this even if advancing because `:undo!` can be executed at any time.
   local allowed_states = H.undo_get_allowed_state_numbers(tree)
-  -- Executing `:undo 0` seems to always be possible (brings back to *before*
-  -- the earliest allowed change).
-  local new_buf_history = { 0 }
-  for _, state_num in ipairs(buf_history) do
-    if allowed_states[state_num] then table.insert(new_buf_history, state_num) end
+
+  local buf_history = {}
+  for i, state_num in ipairs(prev_buf_history) do
+    -- Use only allowed states
+    if allowed_states[state_num] then H.undo_append_state(buf_history, state_num) end
+
+    -- Correctly track current id when advancing
+    if i == prev_buf_history.current_id then buf_history.current_id = #buf_history end
   end
-  new_buf_history.current_id = #new_buf_history
-  new_buf_history.seq_last = tree.seq_last
+  buf_history.current_id = buf_history.current_id or #buf_history
+  buf_history.is_advancing = prev_buf_history.is_advancing
+  buf_history.seq_last = prev_buf_history.seq_last
+
+  H.cache.undo[buf_id] = buf_history
+
+  -- Continue only if not actually advancing: either if set so manually *or* if
+  -- there were additions to undo history *or* some states became not allowed
+  -- (due to `:undo!`).
+  if is_advancing and tree.seq_last <= buf_history.seq_last and #buf_history == #prev_buf_history then return end
+
+  -- Register current undo state (if not equal to last).
+  -- Usually it is a result of advance but also can be due to `:undo`/`:undo!`.
+  H.undo_append_state(buf_history, tree.seq_cur)
+
+  -- Add all new *allowed* undo states created since last sync
+  for new_state = buf_history.seq_last + 1, tree.seq_last do
+    if allowed_states[new_state] then H.undo_append_state(buf_history, new_state) end
+  end
 
   -- Update data to be most recent
-  H.cache.undo[buf_id] = new_buf_history
+  buf_history.current_id = #buf_history
+  buf_history.is_advancing = false
+  buf_history.seq_last = tree.seq_last
 end
 
 H.undo_append_state = function(buf_history, state_num)
@@ -1371,19 +1374,24 @@ H.undo_append_state = function(buf_history, state_num)
   if state_num == nil or buf_history[#buf_history] == state_num then return end
 
   table.insert(buf_history, state_num)
-  buf_history.current_id = #buf_history
 end
 
 H.undo_init = function(tree)
-  local allowed_states = vim.tbl_keys(H.undo_get_allowed_state_numbers(tree))
-  table.sort(allowed_states)
+  -- Assume all previous states are allowed
+  local res = {}
+  for i = 0, tree.seq_last do
+    res[i + 1] = i
+  end
+  res.current_id = #res
+  res.is_advancing = false
+  res.seq_last = tree.seq_last
 
-  allowed_states.current_id, allowed_states.seq_last = tree.seq_last, tree.seq_last
-  return allowed_states
+  return res
 end
 
 H.undo_get_allowed_state_numbers = function(tree)
-  local res = {}
+  -- `:undo 0` is always possible (goes to *before* the first allowed state).
+  local res = { [0] = true }
   local traverse
   traverse = function(entries)
     for _, e in ipairs(entries) do
