@@ -8,47 +8,73 @@
 --
 -- Tests:
 -- - Ensure moves that guaranteed to be inside current buffer have mappings in
---   Normal, Visual, and Operator-pending modes (linewise if source is
+--   Normal, Visual, and Operator-pending modes (linewise if targets are
 --   linewise, charwise otherwise).
 -- - Refactor common validators for 'works', 'respects `opts.n_times`', and
 --   'respects `opts.wrap`'. This should save quite some lines of code.
 --
 -- Docs:
--- - Mention that it is ok to not map defaults and use functions manually.
--- - Mention in `conflict` about possibility of resolving merge conflicts by
---   placing cursor on `===` line and executing one of these:
---   `d]x[xdd` (choose upper part), `d[x]xdd` (choose lower part).
--- - Directions 'first' and 'last' work differently in `indent()` for
---   performance reasons.
--- - General implementation idea is usually as follows:
---     - Construct target iterator:
---         - Has idea about current state.
---         - Can go forward and backward from the state (once without wrap).
---           Returns `nil` if can't iterate.
---         - Has optional idea about edges (enables wrap and 'first'/'last'):
---             - Start edge: `forward(start_edge)` is first target state
---             - End edge: `backward(end_edge)` is last target state.
---       Like with quickfix list:
---         - State: index of current quickfix entry. 1, and number of quickfix entries.
---         - Forward and backward: add or subtract 1 if result is inside range;
---           `nil` otherwise.
---         - Edges: left - 0, right - number of quickfix entries plus 1.
---       This idea is better of computing whole array of possible targets for
---       at least two reasons:
---         - It is usually more efficient for common use cases (doesn't compute
---           whole array for relatively low `n_times`; matters in cases like
---           `comment`, `indent`).
---         - Current state is not always a part of target state (like current
---           line is not always a comment; current position is not on
---           a jumplist, etc.).
---     - Iterate target amount of times from current state in target direction.
---       This can respect wrapping around edges, etc.
---     - Apply current state.
 
 -- Documentation ==============================================================
 --- Go forward/backward with square brackets
 ---
 --- Features:
+--- - Configurable Lua functions to go forward/backward to a certain target
+---   while also creating mappings to go. Each function can be customizated with:
+---     - Direction. One of "forward", "backward", "first" (forward starting
+---       from first one), "last" (backward starting from last one).
+---     - Number of times to go.
+---     - Whether to wrap on edges (going forward on last one goes to first).
+---     - Some other target specific options.
+---
+--- - Mappings using square brackets. They are created using configurable
+---   target suffix and can be selectively disabled.
+---   Each mapping supports |[count]|. Mappings are created in Normal mode; for
+---   targets guaranteed to stay in current buffer also Visual and
+---   Operator-pending (with dot-repeat) modes are cupported.
+---   Using `lower-suffix` and `upper-suffix` (lower and upper case suffix) for
+---   a single target the following mappings are created:
+---     - `[` + `upper-suffix` : go first.
+---     - `[` + `lower-suffix` : go backward.
+---     - `]` + `lower-suffix` : go forward.
+---     - `]` + `upper-suffix` : go last.
+---
+--- - Supported targets (for more information see help for corresponding Lua
+---   function):
+---
+---   `Target`                           `Mappings`         `Lua function`
+---
+---   Buffer.......................... `[B` `[b` `]b` `]B` .... |MiniBracketed.buffer()|
+---
+---   Comment block................... `[C` `[c` `]c` `]C` .... |MiniBracketed.comment()|
+---
+---   Conflict marker................. `[X` `[x` `]x` `]X` .... |MiniBracketed.conflict()|
+---
+---   Diagnostic entry................ `[D` `[d` `]d` `]D` .... |MiniBracketed.diagnostic()|
+---
+---   File on disk.................... `[F` `[f` `]f` `]F` .... |MiniBracketed.file()|
+---
+---   Indent.......................... `[I` `[i` `]i` `]I` .... |MiniBracketed.indent()|
+---
+---   Jump from |jumplist|
+---   inside current buffer........... `[J` `[j` `]j` `]J` .... |MiniBracketed.jump()|
+---
+---   Location from |location-list|      `[L` `[l` `]l` `]L` .... |MiniBracketed.location()|
+---   Old files, both from |v:oldfiles|
+---   and current session............. `[O` `[o` `]o` `]O` .... |MiniBracketed.oldfile()|
+---
+---   Quickfix entry from |Quickfix|.... `[Q` `[q` `]q` `]Q` .... |MiniBracketed.quickfix()|
+---
+---   Tree-sitter parent node......... `[T` `[t` `]t` `]T` .... |MiniBracketed.treesitter()|
+---
+---   Undo states from specially
+---   tracked linear history.......... `[U` `[u` `]u` `]U` .... |MiniBracketed.undo()|
+---
+---   Window in current tab........... `[W` `[w` `]w` `]W` .... |MiniBracketed.window()|
+---
+---   Yank selection replacing
+---   latest put region (works better
+---   with certain manual mappings)....`[Y` `[y` `]y` `]Y` .... |MiniBracketed.yank()|
 ---
 --- # Setup ~
 ---
@@ -58,13 +84,17 @@
 ---
 --- See |MiniBracketed.config| for available config settings.
 ---
---- You can override runtime config settings (like options of sources) locally
+--- You can override runtime config settings (like target options) locally
 --- to buffer inside `vim.b.minibracketed_config` which should have same structure
 --- as `MiniBracketed.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons ~
 ---
 --- - 'tpope/vim-unimpaired':
+---     - Supports buffer, conflict, file, location, and quickfix targets mostly
+---       via built-in commands (like |:bprevious|, etc.) without configuration.
+---     - Supports files from argument list and tags. This module does not.
+---     - Doesn't support most other this module's targets (comment, indent, ...).
 ---
 --- # Disabling~
 ---
@@ -75,6 +105,11 @@
 --- recipes.
 ---@tag mini.bracketed
 ---@tag MiniBracketed
+
+---@alias __bracketed_direction string One of "first", "backward", "forward", "last".
+---@alias __bracketed_opts table|nil Options. A table with fields:
+---   - <n_times> `(number)` - Number of times to advance. Default: |v:count1|.
+---   - <wrap> `(boolean)` - Whether to wrap around edges. Default: `true`.
 
 ---@diagnostic disable:undefined-field
 
@@ -114,14 +149,63 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text
+---@text Options ~
+---
+--- Each entry configures target with the same name and can have data configuring
+--- mapping suffix and target options.
+---
+--- Example of configuration: >
+---
+---   require('mini.bracketed').setup({
+---     -- Map [N, [n, ]n, ]N for conflict marker like in 'tpope/vim-unimpaired'
+---     conflict = { suffix = 'n' },
+---
+---     -- Make diagnostic jump only to errors
+---     diagnostic = { options = { severity = vim.diagnostic.severity.ERROR } },
+---
+---     -- Disable creation of mappings for `indent` target (for example,
+---     -- in favor of ones from |mini.indentscope|)
+---     indent = { suffix = '' },
+---
+---     -- Disable mappings for `window` target in favor of custom ones
+---     window = { suffix = '' },
+---   })
+---
+---   -- Create custom `window` mappings
+---   local map = vim.keymap.set
+---   map('n', '<Leader>wH', "<Cmd>lua MiniBracketed.window('first')<CR>")
+---   map('n', '<Leader>wh', "<Cmd>lua MiniBracketed.window('backward')<CR>")
+---   map('n', '<Leader>wl', "<Cmd>lua MiniBracketed.window('forward')<CR>")
+---   map('n', '<Leader>wL', "<Cmd>lua MiniBracketed.window('last')<CR>")
+---
+--- ## Suffix ~
+---
+--- The `suffix` key is used to create target mappings.
+---
+--- Supply empty string to disable mapping creation for that particular target.
+--- To create a completely different mapping (like with |<Leader>|) use target
+--- function manually.
+---
+--- Using `lower-suffix` and `upper-suffix` (lower and upper case suffix) for
+--- a single target the following mappings are created:
+--- - `[` + `upper-suffix` : go first.
+--- - `[` + `lower-suffix` : go backward.
+--- - `]` + `lower-suffix` : go forward.
+--- - `]` + `upper-suffix` : go last.
+---
+--- When supplied with a non-letter, only forward/backward mappings are created.
+---
+--- ## Options ~
+---
+--- The `options` key is directly forwarded to corresponding Lua function.
 MiniBracketed.config = {
-  -- First-level elements are tables describing behavior of targets sources:
+  -- First-level elements are tables describing behavior of target:
   -- - <suffix> - single character suffix. Used after `[` / `]` in mappings.
-  --   For example, with `b` creates `[b`, `]b`, `[B`, `]B` mappings.
+  --   For example, with `b` creates `[B`, `[b`, `]b`, `]B` mappings.
   --   Supply empty string `''` to not create mappings.
-  -- - <opts> - table overriding source options.
+  -- - <opts> - table overriding target options.
   -- See `:h MiniBracketed.config` for more info.
+
   buffer     = { suffix = 'b', options = {} },
   comment    = { suffix = 'c', options = {} },
   conflict   = { suffix = 'x', options = {} },
@@ -132,12 +216,23 @@ MiniBracketed.config = {
   location   = { suffix = 'l', options = {} },
   oldfile    = { suffix = 'o', options = {} },
   quickfix   = { suffix = 'q', options = {} },
+  treesitter = { suffix = 't', options = {} },
   undo       = { suffix = 'u', options = {} },
   window     = { suffix = 'w', options = {} },
   yank       = { suffix = 'y', options = {} },
 }
 --minidoc_afterlines_end
 
+--- Listed buffer
+---
+--- Go to next/previous listed buffer. Order by their number (see |bufnr()|).
+---
+--- Direction "forward" increases number, "backward" - decreases.
+---
+--- Only listed buffers are used.
+---
+---@param direction __bracketed_direction
+---@param opts __bracketed_opts
 MiniBracketed.buffer = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -235,6 +330,9 @@ MiniBracketed.comment = function(direction, opts)
   vim.cmd('normal! zv^')
 end
 
+-- - Mention in `conflict` about possibility of resolving merge conflicts by
+--   placing cursor on `===` line and executing one of these:
+--   `d]x[xdd` (choose upper part), `d[x]xdd` (choose lower part).
 MiniBracketed.conflict = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -378,6 +476,8 @@ MiniBracketed.file = function(direction, opts)
   vim.cmd('edit ' .. target_path)
 end
 
+-- - Directions 'first' and 'last' work differently in `indent()` for
+--   performance reasons.
 MiniBracketed.indent = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -506,7 +606,22 @@ MiniBracketed.location = function(direction, opts)
   H.qf_loc_implementation('location', direction, opts)
 end
 
--- Files ordered from oldest to newest.
+--- Old files from previous and current sessions
+---
+--- Go to older/newer readable file either from previous session (see |v:oldfiles|)
+--- or the current one (updated automatically after |MiniBracketed.setup()| call).
+---
+--- Direction "forward" goes to more recent files, "backward" - to older.
+---
+--- Notes:
+--- - In current session it tracks only normal buffers (see |'buftype'|) for
+---   some readable file.
+--- - No new file is tracked when advancing this target. Only after buffer
+---   change is done not through this target (like with |MiniBracketed.buffer()|),
+---   it updates recency of last advanced and new buffers.
+---
+---@param direction __bracketed_direction
+---@param opts __bracketed_opts
 MiniBracketed.oldfile = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -560,6 +675,118 @@ MiniBracketed.quickfix = function(direction, opts)
   H.qf_loc_implementation('quickfix', direction, opts)
 end
 
+MiniBracketed.treesitter = function(direction, opts)
+  if vim.fn.has('nvim-0.8') == 0 then H.error('`treesitter()` target works only in Neovim>=0.8.') end
+  if H.is_disabled() then return end
+
+  H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'treesitter')
+  opts =
+    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().treesitter.options, opts or {})
+
+  opts.wrap = false
+
+  if direction == 'first' then
+    direction, opts.n_times = 'backward', math.huge
+  end
+  if direction == 'last' then
+    direction, opts.n_times = 'forward', math.huge
+  end
+
+  -- Define iterator that traverses all node parents (apart from root)
+  local is_root = function(node) return node:parent() == nil end
+
+  local iterator = {}
+
+  iterator.next = function(node)
+    local start_row, start_col = node:end_()
+    local cur_row, cur_col, cur_node = start_row, start_col, node
+    while start_row == cur_row and start_col == cur_col do
+      cur_node = cur_node:parent()
+      if cur_node == nil or is_root(cur_node) then break end
+      cur_row, cur_col = cur_node:end_()
+    end
+    if start_row == cur_row and start_col == cur_col then return end
+
+    return cur_node
+  end
+
+  iterator.prev = function(node)
+    local start_row, start_col = node:start()
+    local cur_row, cur_col, cur_node = start_row, start_col, node
+    while start_row == cur_row and start_col == cur_col do
+      cur_node = cur_node:parent()
+      if cur_node == nil or is_root(cur_node) then break end
+      cur_row, cur_col = cur_node:start()
+    end
+    if start_row == cur_row and start_col == cur_col then return end
+
+    return cur_node
+  end
+
+  local cur_pos = vim.api.nvim_win_get_cursor(0)
+  iterator.state = vim.treesitter.get_node_at_pos(0, cur_pos[1] - 1, cur_pos[2], {})
+
+  -- Iterate
+  local res_node = MiniBracketed.advance(iterator, direction, opts)
+  if res_node == nil then return end
+
+  -- Apply
+  local row, col = res_node:start()
+  if direction == 'forward' then
+    row, col = res_node:end_()
+  end
+  vim.api.nvim_win_set_cursor(0, { row + 1, col })
+end
+
+--- Undo along a tracked linear history
+---
+--- Neovim's default way of managing undo history is through branches (see
+--- |undo-branches|). Basically it means that if you undo several changes and then
+--- make new ones, it creates new undo branch while usually (see |'undolevels'|)
+--- saving previous buffer states in another branch. While there are commands
+--- to navigate by time of undo state creation (like |:earlier| and |:later|),
+--- there is no intuitive way to cycle through them. Existing |g-| and |g+|
+--- cycle through undo states **based on their creation time**, which often
+--- gets confusing really guickly in extensively edited buffer.
+---
+--- This `undo()` target provides a way to cycle through linear undo history
+--- **in order they actually appeared**. It does so by registering any new undo
+--- states plus every time |MiniBracketed.register_undo_state()| is called. To have
+--- more "out of the box" experience, |u| and |<C-R>| are remapped to call it after
+--- they perform their undo/redo.
+---
+--- In a nutshell:
+--- - Keys |u| and |<C-R>| (although remapped) can be used as usual, but every time
+---   they execute new state is recorded in this module's linear undo history.
+--- - Advancing this target goes along linear undo history revealing undo states
+---   **in order they actually appeared**.
+--- - One big difference with built-in methods is that tracked linear history
+---   can repeat undo states (not consecutive, though).
+---
+--- To show more clearly the difference between advancing this target and using
+--- built-in functionality, here is an example:
+---
+--- - Create undo history in a new buffer (|:new|):
+---     - Enter `one two three` text.
+---     - Delete first word with `daw` and undo the change with `u`.
+---     - Delete second word with `daw` and undo the change with `u`.
+---     - Delete third word with `daw` and undo the change with `u`.
+---
+--- - Now try one of the following (each one after performing previous steps in
+---   separate new buffer):
+---     - Press `u`. It goes back to empty buffer. Press `<C-R>` twice and it
+---       goes to the latest change (`one two`). No way to get to other states
+---       (like `two three` or `one three`) with these two keys.
+---
+---     - Press `g-`. It goes to an empty buffer. Press `g+` 4 times. It cycles
+---       through all available undo states **in order they were created**.
+---
+---     - Finally, press `[u`. It goes back to `one two` - state which was
+---       **previously visited** by the user. Another `[u` restores `one two three`.
+---       Use `]U` to go to latest visited undo state.
+---
+---@param direction __bracketed_direction
+---@param opts __bracketed_opts
 MiniBracketed.undo = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -599,6 +826,11 @@ MiniBracketed.undo = function(direction, opts)
   buf_history.current_id = res_id
 end
 
+--- Register state for undo target
+---
+--- Use this function to add current undo state to this module's linear undo
+--- history. It is used in |MiniBracketed.setup()| to remap |u| and |<C-R>|
+--- keys to add their new state to linear undo history.
 MiniBracketed.register_undo_state = function()
   local buf_id = vim.api.nvim_get_current_buf()
   local tree = vim.fn.undotree()
@@ -612,6 +844,16 @@ MiniBracketed.register_undo_state = function()
   buf_history.current_id = #buf_history
 end
 
+--- Normal window
+---
+--- Go to next/previous normal window. Order by their number (see |winnr()|).
+---
+--- Direction "forward" increases number, "backward" - decreases.
+---
+--- Only normal (non-floating) windows are used.
+---
+---@param direction __bracketed_direction
+---@param opts __bracketed_opts
 MiniBracketed.window = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -651,30 +893,57 @@ MiniBracketed.window = function(direction, opts)
   vim.api.nvim_set_current_win(vim.fn.win_getid(res_win_nr))
 end
 
--- Replace "latest put region" with yank history entry
---
--- "Latest put region" is (in order of decreasing priority):
--- - The one from latest `yank` advance.
--- - The one registered by user with |MiniBracketed.register_put_region()|.
--- - The one taken from |`[| and |`]| marks.
---
--- There are two approaches to managing which "latest put region" will be used:
--- - Do nothing. In this case region between `[` / `]` marks will always be used
---   for first `yank` advance.
---   Although doable, this has several drawbacks: it will use latest yanked or
---   changed region or the entier buffer if marks are not set.
---   If remember to advance `yank` only after recent put operation, this should
---   work as expected.
---
--- - Remap common put operations to use |MiniBracketed.register_put_region()|.
---   After that, only regions from mapped put operations will be used for first
---   `yank` advance. Example for custom mappings (note use of |:map-expression|): >
---
---     local put_keys = { 'p', 'P' }
---     for _, lhs in ipairs(put_keys) do
---       local rhs = 'v:lua.MiniBracketed.register_put_region("' .. lhs .. '")'
---       vim.keymap.set({ 'n', 'x' }, lhs, rhs, { expr = true })
---     end
+--- Replace "latest put region" with yank history entry
+---
+--- After |MiniBracketed.setup()| is called, on every yank/delete/change operation
+--- (technically, every trigger of |TextYankPost| event) the object of operation
+--- is added to yank history. Advancing this target will replace the region of
+--- latest put operation (**almost** like after |p| or |P|) with entry from
+--- yank history.
+---
+--- To better detect "latest put region", use |MiniBracketed.register_put_region()|
+--- as described in the next section.
+---
+--- Advancing is done assuming yank history is ordered from oldest to newest:
+--- "backward" goes to older entry, "forward" - to newer.
+---
+--- Example of how to use this target:
+--- - Type `one two three`.
+--- - Yank each word with `yiw`.
+--- - Create new line and press `p`. This should paste `three`.
+--- - Type `[y`. This should replace latest `three` with `two`.
+---
+--- Latest put region ~
+---
+--- "Latest put region" is (in order of decreasing priority):
+--- - The one from latest `yank` advance.
+--- - The one registered by user with |MiniBracketed.register_put_region()|.
+--- - The one taken from |`[| and |`]| marks.
+---
+--- There are two approaches to managing which "latest put region" will be used:
+--- - Do nothing. In this case region between `[` / `]` marks will always be used
+---   for first `yank` advance.
+---   Although doable, this has several drawbacks: it will use latest yanked or
+---   changed region or the entier buffer if marks are not set.
+---   If remember to advance `yank` only after recent put operation, this should
+---   work as expected.
+---
+--- - Remap common put operations to use |MiniBracketed.register_put_region()|.
+---   After that, only regions from mapped put operations will be used for first
+---   `yank` advance. Example of custom mappings (note use of |:map-expression|): >
+---
+---     local put_keys = { 'p', 'P' }
+---     for _, lhs in ipairs(put_keys) do
+---       local rhs = 'v:lua.MiniBracketed.register_put_region("' .. lhs .. '")'
+---       vim.keymap.set({ 'n', 'x' }, lhs, rhs, { expr = true })
+---     end
+---
+---@param direction __bracketed_direction
+---@param opts __bracketed_opts
+---   - <operators> `(table)` - array of operator names ("c", "d", or "y") for
+---     which yank entry should be used to advance. For example, use `{ "y" }`
+---     to use entries actually resulted from yank operation with |y|.
+---     Default: `{ 'c', 'd', 'y' }`.
 MiniBracketed.yank = function(direction, opts)
   if H.is_disabled() then return end
 
@@ -725,17 +994,18 @@ MiniBracketed.yank = function(direction, opts)
   cache_yank.state = H.get_yank_state()
 end
 
--- Register "latest put region"
---
--- This function should be called after put register becomes relevant
--- (|v:register| is appropriately set) but before put operation takes place
--- (|`[| and |`]| marks become relevant).
---
--- Designed to be used in a user-facing expression mapping (see |:map-expression|).
---
---@param put_key string Put keys to be remapped.
---
---@return string Returns `put_key` for a better usage insde expression mappings.
+--- Register "latest put region"
+---
+--- This function should be called after put register becomes relevant
+--- (|v:register| is appropriately set) but before put operation takes place
+--- (|`[| and |`]| marks become relevant).
+---
+--- Designed to be used in a user-facing expression mapping (see |:map-expression|).
+--- For mapping examples see |MiniBracketed.yank()|.
+---
+---@param put_key string Put keys to be remapped.
+---
+---@return string Returns `put_key` for a better usage insde expression mappings.
 MiniBracketed.register_put_region = function(put_key)
   local buf_id = vim.api.nvim_get_current_buf()
 
@@ -750,13 +1020,16 @@ end
 
 --- Advance iterator
 ---
---- TODO (add notes);
---- - Directions 'first' and 'last' are convenience wrappers for 'next' and
----   'last' with pre-setting initial state to `start_edge` and `end_edge`.
---- - List some guarantees and conventions about `nil`: iterator methods are
----   never called with `nil` as input state.
---- - Only returns updates `iterator.state` in place (if result state is not `nil`) and
----   returns new state (can be `nil`).
+--- This is a main function which performs any forward/backward/first/last
+--- advance in this module. Its basic idea is to take iterator (object containing
+--- information about current state and how to go to next/previous one) and go
+--- in certain direction until needed/allowed.
+---
+--- Notes:
+--- - Directions "first" and "last" are convenience wrappers for "forward" and
+---   "backward" with pre-setting initial state to `start_edge` and `end_edge`.
+--- - Iterators `next()` and `prev()` methods should be able to handle `nil` as input.
+--- - This function only returns new state and doesn't modify `iterator.state`.
 ---
 ---@param iterator table Table:
 ---   - Methods:
@@ -765,12 +1038,15 @@ end
 ---   - Fields:
 ---       - <state> - object describing current state.
 ---       - <start_edge> (optional) - object with `forward(start_edge)` describes
----         first state. If `nil`, can't wrap going forward or use direction 'first'.
+---         first state. If `nil`, can't wrap going forward or use direction "first".
 ---       - <end_edge> (optional) - object with `backward(end_edge)` describes
----         last state. If `nil`, can't wrap going backward or use direction 'last'.
----@param direction string Direction. One of 'first', 'backward', 'forward', 'last'.
+---         last state. If `nil`, can't wrap going backward or use direction "last".
+---@param direction string Direction. One of "first", "backward", "forward", "last".
 ---@param opts table|nil Options with the following keys:
----   - <wrap> - whether to wrap around edges when `next()` or `prev()` return `nil`.
+---   - <n_times> `(number)` - number of times to go in input direction.
+---     Default: `v:count1`.
+---   - <wrap> `(boolean)` - whether to wrap around edges when `next()` or
+---     `prev()` return `nil`. Default: `true`.
 ---
 ---@return any Result state. If `nil`, could not reach any valid result state.
 MiniBracketed.advance = function(iterator, direction, opts)
@@ -781,10 +1057,10 @@ MiniBracketed.advance = function(iterator, direction, opts)
   -- - Allow partial reach of `n_times`.
   -- - Don't allow `start_edge` and `end_edge` be the outupt.
   local res_state = iterator.state
-  local cur_state = res_state
 
   -- Compute loop data
-  local n_times, iter_method = opts.n_times, 'next'
+  local iter_method = 'next'
+  local cur_state = res_state
 
   if direction == 'backward' then iter_method = 'prev' end
 
@@ -798,7 +1074,7 @@ MiniBracketed.advance = function(iterator, direction, opts)
 
   -- Loop
   local iter = iterator[iter_method]
-  for _ = 1, n_times do
+  for _ = 1, opts.n_times do
     -- Advance
     cur_state = iter(cur_state)
 
@@ -903,7 +1179,7 @@ H.cache = {
   --   advances along tracked undo history.
   undo = {},
 
-  -- Cache for `yank` source
+  -- Cache for `yank` targets
   yank = {
     -- Per-buffer region of latest advance. Used to corretly determine range
     -- and mode of latest advanced region.
@@ -945,9 +1221,10 @@ H.setup_config = function(config)
     ['location']   = { config.location,   'table' },
     ['oldfile']    = { config.oldfile,    'table' },
     ['quickfix']   = { config.quickfix,   'table' },
-    ['undo']       = { config.undo,     'table' },
+    ['treesitter'] = { config.treesitter, 'table' },
+    ['undo']       = { config.undo,       'table' },
     ['window']     = { config.window,     'table' },
-    ['yank']       = { config.yank,     'table' },
+    ['yank']       = { config.yank,       'table' },
   })
 
   --stylua: ignore
@@ -981,6 +1258,9 @@ H.setup_config = function(config)
 
     ['quickfix.suffix']  = { config.quickfix.suffix, 'string' },
     ['quickfix.options'] = { config.quickfix.options, 'table' },
+
+    ['treesitter.suffix']  = { config.treesitter.suffix, 'string' },
+    ['treesitter.options'] = { config.treesitter.options, 'table' },
 
     ['undo.suffix']  = { config.undo.suffix, 'string' },
     ['undo.options'] = { config.undo.options, 'table' },
@@ -1134,6 +1414,25 @@ H.apply_config = function(config)
     H.map('n', ']' .. up,  "<Cmd>lua MiniBracketed.quickfix('last')<CR>",     { desc = 'Last quickfix' })
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.quickfix('backward')<CR>", { desc = 'Previous quickfix' })
     H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.quickfix('forward')<CR>",  { desc = 'Next quickfix' })
+  end
+
+  if config.treesitter.suffix ~= '' then
+    local low, up = H.get_suffix_variants(config.treesitter.suffix)
+    H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.treesitter('first')<CR>",  { desc = 'First treesitter' })
+    H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.treesitter('first')<CR>",  { desc = 'First treesitter' })
+    H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.treesitter('first')<CR>", { desc = 'First treesitter' })
+
+    H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.treesitter('last')<CR>",  { desc = 'Last treesitter' })
+    H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.treesitter('last')<CR>",  { desc = 'Last treesitter' })
+    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.treesitter('last')<CR>", { desc = 'Last treesitter' })
+
+    H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.treesitter('backward')<CR>",  { desc = 'Previous treesitter' })
+    H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.treesitter('backward')<CR>",  { desc = 'Previous treesitter' })
+    H.map('o', '[' .. low, "v<Cmd>lua MiniBracketed.treesitter('backward')<CR>", { desc = 'Previous treesitter' })
+
+    H.map('n', ']' .. low, "<Cmd>lua MiniBracketed.treesitter('forward')<CR>",  { desc = 'Next treesitter' })
+    H.map('x', ']' .. low, "<Cmd>lua MiniBracketed.treesitter('forward')<CR>",  { desc = 'Next treesitter' })
+    H.map('o', ']' .. low, "v<Cmd>lua MiniBracketed.treesitter('forward')<CR>", { desc = 'Next treesitter' })
   end
 
   if config.undo.suffix ~= '' then
@@ -1318,6 +1617,33 @@ H.qf_loc_implementation = function(list_type, direction, opts)
   -- cursor position.
   vim.cmd(goto_command .. ' ' .. res_ind)
   vim.cmd('normal! zvzz')
+end
+
+-- Treesitter -----------------------------------------------------------------
+H.treesitter_go_up = function(node)
+  local sibling = node:prev_named_sibling()
+  if sibling == nil then return node:parent() end
+
+  local res = sibling
+  -- In theory, it should be `while true`. `for` guards against infinite loop.
+  for _ = 1, 10000 do
+    local n_children = res:named_child_count()
+    if n_children == 0 then return res end
+    res = res:named_child(n_children - 1)
+  end
+end
+
+H.treesitter_go_down = function(node)
+  local child = node:named_child(0)
+  if child ~= nil then return child end
+
+  local res = node
+  for _ = 1, 10000 do
+    local sibling = res:next_named_sibling()
+    if sibling ~= nil then return sibling end
+    res = res:parent()
+    if res == nil then return end
+  end
 end
 
 -- Undo -----------------------------------------------------------------------
