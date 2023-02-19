@@ -2088,6 +2088,152 @@ T['quickfix()']['respects `vim.b.minibracketed_config`'] = function()
   eq(get_cursor(), cur_pos)
 end
 
+T['treesitter()'] = new_set()
+
+local setup_treesitter = function()
+  -- Make `vim.treesitter.get_node_at_pos()` return mock of tree-sitter node
+  -- based on balanced `{}`
+  child.cmd('source ' .. make_testpath('mock/treesitter.lua'))
+
+  -- Reference:
+  -- { root
+  -- { 1
+  -- { 2
+  -- { 3 { 4 { 5 } 4 } 3 }
+  --   2 }
+  --   1 }
+  --   root }
+  local lines = { '{ root', '{ 1', '{ 2', '{ 3 { 4 { 5 } 4 } 3 }', '  2 }', '  1 }', '  root }}' }
+  set_lines(lines)
+
+  -- Rows one-indexed, columns - zero-indexed (like cursor)
+  local nodes = {
+    { from = { 2, 0 }, to = { 6, 4 } },
+    { from = { 3, 0 }, to = { 5, 4 } },
+    { from = { 4, 0 }, to = { 4, 20 } },
+    { from = { 4, 4 }, to = { 4, 16 } },
+    { from = { 4, 8 }, to = { 4, 12 } },
+  }
+  local inside_nodes = { { 2, 2 }, { 3, 2 }, { 4, 2 }, { 4, 6 }, { 4, 10 } }
+
+  local validate = function(pos_before, direction, pos_ref, opts)
+    set_cursor(pos_before[1], pos_before[2])
+    child.lua('MiniBracketed.treesitter(...)', { direction, opts })
+    eq(get_cursor(), pos_ref)
+  end
+
+  return nodes, validate, inside_nodes
+end
+
+T['treesitter()']['works'] = function()
+  local nodes, validate, inside_nodes = setup_treesitter()
+  local n = #nodes
+
+  for i = 1, n do
+    -- Forward. Move to end of current node
+    validate(inside_nodes[i], 'forward', nodes[i].to)
+
+    -- Backward. Move to start of current node
+    validate(inside_nodes[i], 'backward', nodes[i].from)
+
+    -- First. Move to start of latest non-root parent.
+    validate(inside_nodes[i], 'first', nodes[1].from)
+
+    -- Last. Move to end of latest non-root parent.
+    validate(inside_nodes[i], 'last', nodes[1].to)
+  end
+end
+
+T['treesitter()']['moves to other edge of current node'] = function()
+  local nodes, validate, _ = setup_treesitter()
+  local n = #nodes
+
+  for i = 1, n do
+    -- Forward. When on start, move to end of current node
+    validate(nodes[i].from, 'forward', nodes[i].to)
+
+    -- Backward. When on end, move to start of current node
+    validate(nodes[i].to, 'backward', nodes[i].from)
+  end
+end
+
+T['treesitter()']['moves to parent when on corresponding edge of current node'] = function()
+  local nodes, validate = setup_treesitter()
+  local n = #nodes
+
+  for i = 2, n do
+    -- Forward. Move to end of parent node
+    validate(nodes[i].to, 'forward', nodes[i - 1].to)
+
+    -- Backward. Move to start of parent node
+    validate(nodes[i].from, 'backward', nodes[i - 1].from)
+  end
+end
+
+T['treesitter()']['does nothing when in root node'] = function()
+  local _, validate = setup_treesitter()
+
+  for _, direction in ipairs({ 'forward', 'backward', 'first', 'last' }) do
+    validate({ 1, 1 }, direction, { 1, 1 })
+  end
+end
+
+T['treesitter()']['does nothing if no node at cursor'] = function()
+  child.lua('vim.treesitter.get_node_at_pos = function() return nil end')
+
+  for _, dir in ipairs({ forward, backward, first, last }) do
+    set_lines({ '{ aaa }' })
+    set_cursor(1, 2)
+    dir('treesitter')
+    eq(get_cursor(), { 1, 2 })
+  end
+end
+
+T['treesitter()']['requires `vim.treesitter.get_node_at_pos()`'] = function()
+  child.lua('vim.treesitter.get_node_at_pos = nil')
+  expect.error(function() forward('treesitter') end, 'get_node_at_pos%(%).*')
+end
+
+T['treesitter()']['validates `direction`'] = function()
+  setup_treesitter()
+
+  expect.error(function() child.lua('MiniBracketed.treesitter(1)') end, 'treesitter%(%).*direction.*one of')
+  expect.error(function() child.lua([[MiniBracketed.treesitter('next')]]) end, 'treesitter%(%).*direction.*one of')
+end
+
+T['treesitter()']['respects `opts.n_times`'] = function()
+  local nodes, validate, inside_nodes = setup_treesitter()
+  local n = #nodes
+
+  for i = 2, n do
+    -- Forward. Move to end of parent node from inside of current.
+    validate(inside_nodes[i], 'forward', nodes[i - 1].to, { n_times = 2 })
+
+    -- Backward. Move to start of parent node from inside of current.
+    validate(inside_nodes[i], 'backward', nodes[i - 1].from, { n_times = 2 })
+  end
+end
+
+T['treesitter()']['respects `vim.{g,b}.minibracketed_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    local nodes, validate, inside_nodes = setup_treesitter()
+    local n = #nodes
+
+    child[var_type].minibracketed_disable = true
+    validate(inside_nodes[n], 'forward', inside_nodes[n])
+  end,
+})
+
+T['treesitter()']['respects `vim.b.minibracketed_config`'] = function()
+  local nodes, validate, inside_nodes = setup_treesitter()
+  local n = #nodes
+
+  child.b.minibracketed_config = { treesitter = { options = { n_times = 2 } } }
+  validate(inside_nodes[n], 'forward', nodes[n - 1].to)
+end
+
 T['undo()'] = new_set()
 
 local get_undo_state = function() return child.fn.undotree().seq_cur end
@@ -3773,6 +3919,48 @@ T['Mappings']['quickfix']['allows non-letter suffix'] = function()
   -- Only backward/forward should be mapped
   validate_map_quickfix(1, '[,', n)
   validate_map_quickfix(1, '],', 2)
+end
+
+T['Mappings']['treesitter'] = new_set()
+
+T['Mappings']['treesitter']['works'] = function()
+  local nodes, _, inside_nodes = setup_treesitter()
+  local n = #nodes
+
+  -- Normal mode
+  validate_move(inside_nodes[n], '[T', nodes[1].from)
+  validate_move(inside_nodes[n], '2[t', nodes[n - 1].from)
+  validate_move(inside_nodes[n], ']t', nodes[n].to)
+  -- - This target doesn't respect `[count]` for 'first'/'last'
+  validate_move(inside_nodes[n], '2]T', nodes[1].to)
+
+  -- Visual mode
+  validate_move(inside_nodes[n], 'v[T', nodes[1].from)
+  validate_move(inside_nodes[n], 'v2[t', nodes[n - 1].from)
+  validate_move(inside_nodes[n], 'v]t', nodes[n].to)
+  validate_move(inside_nodes[n], 'v2]T', nodes[1].to)
+
+  -- Operator-pending mode
+  local lines = { '{ r { 1 { 2 { 3 } 2 } 1 } r }' }
+  local pos = { 1, 14 }
+  validate_edit(lines, pos, 'd[T', { '{ r  } 2 } 1 } r }' }, { 1, 4 })
+  validate_edit(lines, pos, 'd[t', { '{ r { 1 { 2  } 2 } 1 } r }' }, { 1, 12 })
+  validate_edit(lines, pos, 'd]t', { '{ r { 1 { 2 {  2 } 1 } r }' }, { 1, 14 })
+  validate_edit(lines, pos, 'd]T', { '{ r { 1 { 2 {  r }' }, { 1, 14 })
+
+  -- - Dot-repeat
+  validate_edit(lines, pos, 'd]t.', { '{ r { 1 { 2 {  1 } r }' }, { 1, 14 })
+end
+
+T['Mappings']['treesitter']['allows non-letter suffix'] = function()
+  reload_module({ treesitter = { suffix = ',' } })
+
+  local nodes, _, inside_nodes = setup_treesitter()
+  local n = #nodes
+
+  -- Only backward/forward should be mapped
+  validate_move(inside_nodes[n], '[,', nodes[n].from)
+  validate_move(inside_nodes[n], '],', nodes[n].to)
 end
 
 T['Mappings']['undo'] = new_set()

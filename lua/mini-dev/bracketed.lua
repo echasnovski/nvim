@@ -677,12 +677,13 @@ MiniBracketed.quickfix = function(direction, opts)
 end
 
 MiniBracketed.treesitter = function(direction, opts)
-  if vim.fn.has('nvim-0.8') == 0 then H.error('`treesitter()` target works only in Neovim>=0.8.') end
+  if vim.treesitter.get_node_at_pos == nil then
+    H.error('`treesitter()` target requires `vim.treesitter.get_node_at_pos()`. Use newer Neovim version.')
+  end
   if H.is_disabled() then return end
 
   H.validate_direction(direction, { 'first', 'backward', 'forward', 'last' }, 'treesitter')
-  opts =
-    vim.tbl_deep_extend('force', { n_times = vim.v.count1, wrap = true }, H.get_config().treesitter.options, opts or {})
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1 }, H.get_config().treesitter.options, opts or {})
 
   opts.wrap = false
 
@@ -693,49 +694,69 @@ MiniBracketed.treesitter = function(direction, opts)
     direction, opts.n_times = 'forward', math.huge
   end
 
-  -- Define iterator that traverses all node parents (apart from root)
-  local is_root = function(node) return node:parent() == nil end
+  -- Define iterator that traverses current node and its parents (except root)
+  local is_bad_node = function(node) return node == nil or node:parent() == nil end
+  local is_after = function(row_new, col_new, row_ref, col_ref)
+    return row_ref < row_new or (row_ref == row_new and col_ref < col_new)
+  end
+  local is_before = function(row_new, col_new, row_ref, col_ref) return is_after(row_ref, col_ref, row_new, col_new) end
 
   local iterator = {}
 
-  iterator.next = function(node)
-    local start_row, start_col = node:end_()
-    local cur_row, cur_col, cur_node = start_row, start_col, node
-    while start_row == cur_row and start_col == cur_col do
-      cur_node = cur_node:parent()
-      if cur_node == nil or is_root(cur_node) then break end
-      cur_row, cur_col = cur_node:end_()
-    end
-    if start_row == cur_row and start_col == cur_col then return end
+  -- Traverse node and parents until node's end is after current position
+  iterator.next = function(node_pos)
+    local node = node_pos.node
+    if is_bad_node(node) then return nil end
 
-    return cur_node
+    local init_row, init_col = node_pos.pos[1], node_pos.pos[2]
+    local cur_row, cur_col, cur_node = init_row, init_col, node
+
+    repeat
+      if is_bad_node(cur_node) then break end
+
+      cur_row, cur_col = cur_node:end_()
+      -- Correct for end-exclusiveness
+      cur_col = cur_col - 1
+      cur_node = cur_node:parent()
+    until is_after(cur_row, cur_col, init_row, init_col)
+
+    if not is_after(cur_row, cur_col, init_row, init_col) then return end
+
+    return { node = cur_node, pos = { cur_row, cur_col } }
   end
 
-  iterator.prev = function(node)
-    local start_row, start_col = node:start()
-    local cur_row, cur_col, cur_node = start_row, start_col, node
-    while start_row == cur_row and start_col == cur_col do
-      cur_node = cur_node:parent()
-      if cur_node == nil or is_root(cur_node) then break end
-      cur_row, cur_col = cur_node:start()
-    end
-    if start_row == cur_row and start_col == cur_col then return end
+  -- Traverse node and parents until node's start is before current position
+  iterator.prev = function(node_pos)
+    local node = node_pos.node
+    if is_bad_node(node) then return nil end
 
-    return cur_node
+    local init_row, init_col = node_pos.pos[1], node_pos.pos[2]
+    local cur_row, cur_col, cur_node = init_row, init_col, node
+
+    repeat
+      if is_bad_node(cur_node) then break end
+
+      cur_row, cur_col = cur_node:start()
+      cur_node = cur_node:parent()
+    until is_before(cur_row, cur_col, init_row, init_col)
+
+    if not is_before(cur_row, cur_col, init_row, init_col) then return end
+
+    return { node = cur_node, pos = { cur_row, cur_col } }
   end
 
   local cur_pos = vim.api.nvim_win_get_cursor(0)
-  iterator.state = vim.treesitter.get_node_at_pos(0, cur_pos[1] - 1, cur_pos[2], {})
+  iterator.state = {
+    pos = { cur_pos[1] - 1, cur_pos[2] },
+    node = vim.treesitter.get_node_at_pos(0, cur_pos[1] - 1, cur_pos[2], {}),
+  }
 
   -- Iterate
-  local res_node = MiniBracketed.advance(iterator, direction, opts)
-  if res_node == nil then return end
+  local res_node_pos = MiniBracketed.advance(iterator, direction, opts)
+  if res_node_pos == nil then return end
 
   -- Apply
-  local row, col = res_node:start()
-  if direction == 'forward' then
-    row, col = res_node:end_()
-  end
+  local row, col = res_node_pos.pos[1], res_node_pos.pos[2]
   vim.api.nvim_win_set_cursor(0, { row + 1, col })
 end
 
@@ -1418,11 +1439,11 @@ H.apply_config = function(config)
     local low, up = H.get_suffix_variants(config.treesitter.suffix)
     H.map('n', '[' .. up, "<Cmd>lua MiniBracketed.treesitter('first')<CR>",  { desc = 'Treesitter first' })
     H.map('x', '[' .. up, "<Cmd>lua MiniBracketed.treesitter('first')<CR>",  { desc = 'Treesitter first' })
-    H.map('o', '[' .. up, "V<Cmd>lua MiniBracketed.treesitter('first')<CR>", { desc = 'Treesitter first' })
+    H.map('o', '[' .. up, "v<Cmd>lua MiniBracketed.treesitter('first')<CR>", { desc = 'Treesitter first' })
 
     H.map('n', ']' .. up, "<Cmd>lua MiniBracketed.treesitter('last')<CR>",  { desc = 'Treesitter last' })
     H.map('x', ']' .. up, "<Cmd>lua MiniBracketed.treesitter('last')<CR>",  { desc = 'Treesitter last' })
-    H.map('o', ']' .. up, "V<Cmd>lua MiniBracketed.treesitter('last')<CR>", { desc = 'Treesitter last' })
+    H.map('o', ']' .. up, "v<Cmd>lua MiniBracketed.treesitter('last')<CR>", { desc = 'Treesitter last' })
 
     H.map('n', '[' .. low, "<Cmd>lua MiniBracketed.treesitter('backward')<CR>",  { desc = 'Treesitter backward' })
     H.map('x', '[' .. low, "<Cmd>lua MiniBracketed.treesitter('backward')<CR>",  { desc = 'Treesitter backward' })
