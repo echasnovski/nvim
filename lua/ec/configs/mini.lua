@@ -69,6 +69,8 @@ vim.schedule(function()
     },
   })
 
+  require('mini.bracketed').setup()
+
   require('mini.bufremove').setup()
 
   require('mini.comment').setup()
@@ -130,8 +132,6 @@ vim.schedule(function()
 
   require('mini.trailspace').setup()
 
-  require('mini-dev.bracketed').setup()
-  -- require('mini-dev.bracketed').setup({ indent = { suffix = '' } })
   require('mini-dev.splitjoin').setup()
   vim.keymap.set('n', 'gs', require('mini-dev.splitjoin').toggle)
 end)
