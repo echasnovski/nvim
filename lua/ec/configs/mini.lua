@@ -112,7 +112,7 @@ vim.schedule(function()
     vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
   end
 
-  require('mini.misc').setup()
+  require('mini.misc').setup({ make_global = { 'put', 'put_text', 'stat_summary', 'bench_time' } })
   MiniMisc.setup_auto_root()
 
   require('mini.move').setup({ options = { reindent_linewise = false } })
@@ -132,4 +132,6 @@ vim.schedule(function()
 
   require('mini-dev.bracketed').setup()
   -- require('mini-dev.bracketed').setup({ indent = { suffix = '' } })
+  require('mini-dev.splitjoin').setup()
+  vim.keymap.set('n', 'gs', require('mini-dev.splitjoin').toggle)
 end)
