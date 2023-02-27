@@ -8,9 +8,19 @@
 --   big buffers with many false (not balanced) matches. The second one has
 --   more compact implementation and can be used to ignore matches in strings
 --   (but *slow*).
--- - Ensure that it works both inside strings and comments.
--- - Ensure correct indentation design.
--- - Ensure it works on empty brackets.
+-- - Split from end to start. This should not require extmarks for determining
+--   where to split.
+-- - Design:
+--     - Ensure correct indentation logic:
+--         - Split in such a way that preserve indent of previous line.
+--         - Indent all lines after first split and before last split.
+--     - `split(opts)` and `join(opts)` should be forced variant of toggle.
+--       One of main use cases for `split()` is to update linewise addition of
+--       surrounding to be on separate lines with indented inner ones.
+--     - `split_at(positions)` and `join_at(from_line, to_line)` are low-level split and join.
+-- - Features:
+--     - Ensure that it works both inside strings and comments.
+--     - Ensure it works on empty brackets.
 --
 -- Tests:
 --
@@ -242,12 +252,15 @@ H.find_separators_in_region = function(region, brackets, separators)
 end
 
 H.find_smallest_bracket_region_prev = function(brackets)
-  brackets = H.get_config().brackets
+  brackets = brackets or H.get_config().brackets
 
   -- Find all regions
+  local cur_pos = vim.api.nvim_win_get_cursor(0)
+  local skip = H.make_skip(cur_pos)
+
   local regions = {}
   for _, br in ipairs(brackets) do
-    local from, to = H.find_surrounding_region(br:sub(1, 1), br:sub(2, 2))
+    local from, to = H.find_surrounding_region(br:sub(1, 1), br:sub(2, 2), skip)
     local is_valid_from, is_valid_to = from.line ~= 0 or from.col ~= 0, to.line ~= 0 or to.col ~= 0
     if is_valid_from and is_valid_to then table.insert(regions, { from = from, to = to }) end
   end
@@ -268,19 +281,109 @@ H.find_smallest_bracket_region_prev = function(brackets)
   return res
 end
 
-H.find_surrounding_region = function(left, right)
+H.find_surrounding_region = function(left, right, skip)
   local left_pattern, right_pattern = [[\V]] .. left, [[\V]] .. right
   local searchpairpos = function(flags)
-    local res = vim.fn.searchpairpos(left_pattern, '', right_pattern, 'nWz' .. flags, H.is_cursor_on_string, 0, 50)
+    -- local res = vim.fn.searchpairpos(left_pattern, '', right_pattern, 'nWz' .. flags, skip)
+    local res = vim.fn.searchpairpos(left_pattern, '', right_pattern, 'nWz' .. flags, H.is_cursor_on_string)
     return { line = res[1], col = res[2] }
   end
 
   local row, col = vim.fn.line('.'), vim.fn.col('.')
   local char_at_cursor = vim.fn.getline(row):sub(col, col)
 
-  if char_at_cursor == left then return { row, col }, searchpairpos('') end
-  if char_at_cursor == right then return searchpairpos('b'), { row, col } end
+  if char_at_cursor == left then return { line = row, col = col }, searchpairpos('') end
+  if char_at_cursor == right then return searchpairpos('b'), { line = row, col = col } end
   return searchpairpos('b'), searchpairpos('')
+end
+
+H.get_line_offset = function()
+  -- Compute number of bytes at line starts
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
+  local res, cur_byte = {}, 0
+  for i, l in ipairs(lines) do
+    res[i] = cur_byte
+    cur_byte = cur_byte + l:len() + 1
+  end
+  return res
+end
+
+H.make_skip = function(position)
+  -- Try tree-sitter
+  local skip_regions = H.make_treesitter_skip_regions(position[1], position[2])
+  if skip_regions == nil then return [[synIDattr(synID(line("."), col("."), 0), "name") =~? "string\|comment"]] end
+
+  return function()
+    local cur_pos = vim.api.nvim_win_get_cursor(0)
+    return H.is_pos_in_skip(cur_pos[1], cur_pos[2], skip_regions)
+  end
+end
+
+H.make_treesitter_skip_regions = function(line, col)
+  local lang = vim.bo.filetype
+  local ok, parser = pcall(vim.treesitter.get_parser, 0, lang)
+  if not ok then return nil end
+
+  local skip_regions = {}
+  for i = 1, vim.api.nvim_buf_line_count(0) do
+    skip_regions[i] = {}
+  end
+
+  local string_regions = H.find_treesitter_regions(parser, 'string')
+  if not H.is_pos_in_regions(line, col, string_regions) then H.append_to_skip_regions(skip_regions, string_regions) end
+
+  local comment_regions = H.find_treesitter_regions(parser, 'comment')
+  if not H.is_pos_in_regions(line, col, comment_regions) then
+    H.append_to_skip_regions(skip_regions, comment_regions)
+  end
+
+  return skip_regions
+end
+
+H.append_to_skip_regions = function(skip_regions, regions)
+  for _, r in ipairs(regions) do
+    if r[1] == r[3] then
+      local l_num = r[1]
+      table.insert(skip_regions[l_num], { r[2], r[4] })
+    else
+      table.insert(skip_regions[r[1]], { r[2], math.huge })
+      for i = r[1] + 1, r[3] - 1 do
+        skip_regions[i].all = true
+      end
+      table.insert(skip_regions[r[3]], { 0, r[4] })
+    end
+  end
+end
+
+H.is_pos_in_skip = function(line, col, skip_regions)
+  if skip_regions[line].all then return true end
+
+  for _, span in ipairs(skip_regions[line]) do
+    if span[1] <= col and col < span[2] then return true end
+  end
+  return false
+end
+
+H.is_pos_in_regions = function(line, col, regions)
+  for _, r in ipairs(regions) do
+    if r[1] <= line and line <= r[3] and r[2] <= col and col < r[4] then return true end
+  end
+  return false
+end
+
+H.find_treesitter_regions = function(parser, node_name)
+  local query = vim.treesitter.query.parse_query(parser:lang(), '(' .. node_name .. ') @_capture')
+
+  local ranges = {}
+  for _, tree in ipairs(parser:trees()) do
+    for _, node, _ in query:iter_captures(tree:root(), 0) do
+      local row1, col1, row2, col2 = node:range()
+      -- Make region lines 1-based end-inclusive, columns 0-based end-exclusive
+      table.insert(ranges, { row1 + 1, col1, row2 + 1, col2 })
+    end
+  end
+
+  return ranges
 end
 
 H.find_smallest_bracket_region = function(brackets)
@@ -356,17 +459,6 @@ H.get_neighborhood = function()
     region_to_span = region_to_span,
     span_to_region = span_to_region,
   }
-end
-
-H.get_line_offset = function()
-  -- Compute number of bytes at line starts
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
-  local res, cur_byte = {}, 0
-  for i, l in ipairs(lines) do
-    res[i] = cur_byte
-    cur_byte = cur_byte + l:len() + 1
-  end
-  return res
 end
 
 -- Extmarks at cursor ---------------------------------------------------------
