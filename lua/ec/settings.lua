@@ -62,6 +62,7 @@ vim.cmd('au VimEnter * nested ++once colorscheme minicyan')
 vim.cmd('au ColorScheme * hi! link WinSeparator NormalFloat')
 vim.cmd('au ColorScheme * hi CursorLineNr gui=bold')
 vim.cmd('au ColorScheme * hi PmenuSel blend=0')
+vim.cmd('au ColorScheme * hi Delimiter gui=bold')
 
 -- Other interesting color schemes:
 -- - 'morhetz/gruvbox'

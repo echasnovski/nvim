@@ -26,6 +26,7 @@ local on_attach_custom = function(client, bufnr)
 end
 
 local diagnostic_opts = {
+  float = { border = 'double' },
   -- Show gutter sings
   signs = {
     -- With highest priority
