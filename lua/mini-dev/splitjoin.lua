@@ -3,15 +3,21 @@
 -- TODO:
 --
 -- Code:
--- - Make sure splitting doesn't trigger `InsertEnter` and `InsertLeave`.
 -- - Design:
 --     - Ensure correct indentation logic:
 --         - Split in such a way that preserve indent of previous line.
 --         - Indent all lines after first split and before last split.
+--     - If there is more options, move them into `detect` while creating
+--       `split` and `join` ones.
+--     - Account for the following use cases (???via hooks??? or ???via
+--       targeted options???):
+--         - Join adds single space padding right near brackets.
+--         - Split adds trailing comma.
+--         - Join removes trailing comma.
+--         - Split puts commas on line starts. Needs custom join string.
 -- - Features:
 --     - Ensure that it works both inside strings and comments.
 --     - Ensure it works on empty brackets.
--- - Polish.
 --
 -- Tests:
 --
@@ -19,7 +25,7 @@
 --
 
 -- Documentation ==============================================================
---- Split and join elements in container
+--- Split/join elements inside brackets
 ---
 --- Features:
 ---
@@ -83,10 +89,9 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text Options ~
 MiniSplitjoin.config = {
-  -- TODO: replace with `nil`
-  brackets = { '%b()', '%b[]', '%b{}' },
-  separator = ',',
-  exclude_regions = { '%b""', "%b''", '%b()', '%b[]', '%b{}' },
+  brackets = nil,
+  separator = nil,
+  exclude_regions = nil,
 
   -- Do you want this as a way to manage all nuances?
   -- Like "pad braces"
@@ -107,7 +112,7 @@ MiniSplitjoin.toggle = function(pos, opts)
   pos = pos or vim.api.nvim_win_get_cursor(0)
   opts = H.get_opts(opts)
 
-  local region = H.find_smallest_bracket_region(pos, opts.brackets)
+  local region = opts.region or H.find_smallest_bracket_region(pos, opts.brackets)
   if region == nil then return end
 
   if region.from.line == region.to.line then
@@ -116,7 +121,7 @@ MiniSplitjoin.toggle = function(pos, opts)
     MiniSplitjoin.split_at(positions)
   else
     -- Join
-    MiniSplitjoin.join_at(region.from.line, region.to.lie)
+    MiniSplitjoin.join_at(region.from.line, region.to.line)
   end
 end
 
@@ -124,7 +129,7 @@ MiniSplitjoin.split = function(pos, opts)
   pos = pos or vim.api.nvim_win_get_cursor(0)
   opts = H.get_opts(opts)
 
-  local region = H.find_smallest_bracket_region(pos, opts.brackets)
+  local region = opts.region or H.find_smallest_bracket_region(pos, opts.brackets)
   if region == nil then return end
 
   local positions = H.find_split_positions(region, opts.separator, opts.exclude_regions)
@@ -135,7 +140,7 @@ MiniSplitjoin.join = function(pos, opts)
   pos = pos or vim.api.nvim_win_get_cursor(0)
   opts = H.get_opts(opts)
 
-  local region = H.find_smallest_bracket_region(pos, opts.brackets)
+  local region = opts.region or H.find_smallest_bracket_region(pos, opts.brackets)
   if region == nil then return end
 
   MiniSplitjoin.join_at(region.from.line, region.to.line)
@@ -144,34 +149,26 @@ end
 MiniSplitjoin.split_at = function(positions)
   positions = H.sort_positions(positions)
   local n_pos = #positions
+  local first_pos, last_pos = positions[1], positions[n_pos]
 
   -- Cache intermediately used values
-  local cache = { ci = vim.bo.copyindent, ai = vim.bo.autoindent, si = vim.bo.smartindent, cin = vim.bo.cindent }
-  vim.bo.copyindent, vim.bo.autoindent, vim.bo.smartindent, vim.bo.cindent = true, false, false, false
-
   local cursor_extmark = H.put_extmark_at_cursor()
 
-  -- Split
-  local shiftwidth = vim.fn.shiftwidth()
-  local tab = vim.bo.expandtab and string.rep(' ', shiftwidth) or '\t'
-  for i = n_pos, 1, -1 do
-    vim.api.nvim_win_set_cursor(0, positions[i])
-
-    -- Treat last one specially to split only between edge positions
-    local insert_enter = i == n_pos and 'i' or 'a'
-    local indent_keys = i == n_pos and '' or tab
-    vim.cmd('normal! ' .. insert_enter .. '\r' .. indent_keys .. '\27')
+  -- Split at positions. Do it from end to avoid updating positions due to text
+  -- changes. Treat last one differently to allow it be exactly last bracket.
+  H.split_at_position({ last_pos[1], last_pos[2] - 1 })
+  for i = n_pos - 1, 1, -1 do
+    H.split_at_position(positions[i])
   end
 
-  -- Remove trailing whitespace in inner lines
-  local from_line, to_line = positions[1][1] + 1, positions[n_pos][1] + n_pos - 1
-  vim.cmd('keeppatterns ' .. from_line .. ',' .. to_line .. [[s/\s*$//]])
+  -- Increase indent of inner lines
+  local tab = vim.bo.expandtab and string.rep(' ', vim.fn.shiftwidth()) or '\t'
+  for i = first_pos[1] + 1, last_pos[1] + n_pos - 1 do
+    H.increase_indent(i, tab)
+  end
 
   -- Put cursor back on tracked position
   H.put_cursor_at_extmark(cursor_extmark)
-
-  -- Clear up
-  vim.bo.copyindent, vim.bo.autoindent, vim.bo.smartindent, vim.bo.cindent = cache.ci, cache.ai, cache.si, cache.cin
 end
 
 MiniSplitjoin.join_at = function(from_line, to_line)
@@ -180,9 +177,13 @@ MiniSplitjoin.join_at = function(from_line, to_line)
   -- Join preserving cursor position
   local cursor_extmark = H.put_extmark_at_cursor()
 
-  -- - Use `keepmarks` to preserve `[`/`]` marks
-  local join_command = string.format('keepmarks %s,%sjoin', from_line, to_line)
-  vim.cmd(join_command)
+  -- Join bottom up to avoid updating lines
+  -- Make first and last joins without space
+  if (to_line - from_line) > 1 then H.join_with_below(to_line - 1, '') end
+  for i = to_line - 2, from_line + 1, -1 do
+    H.join_with_below(i, ' ')
+  end
+  H.join_with_below(from_line, '')
 
   H.put_cursor_at_extmark(cursor_extmark)
 end
@@ -201,9 +202,8 @@ H.setup_config = function(config)
   vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
-  --stylua: ignore
   vim.validate({
-    brackets   = { config.brackets,   'table', true },
+    brackets = { config.brackets, 'table', true },
     separator = { config.separators, 'string', true },
     exclude_regions = { config.exclude_regions, 'table', true },
   })
@@ -231,14 +231,37 @@ H.get_opts = function(opts)
   local separator = opts.separator or config.separator or ','
   local exclude_regions = opts.exclude_regions or config.exclude_regions or { '%b()', '%b[]', '%b{}', '%b""', "%b''" }
 
-  return { brackets = brackets, separator = separator, exclude_regions = exclude_regions }
+  return { region = opts.region, brackets = brackets, separator = separator, exclude_regions = exclude_regions }
+end
+
+-- Split ----------------------------------------------------------------------
+H.split_at_position = function(pos)
+  -- Take into account whitespace before-or-at and after split column
+  local line = vim.fn.getline(pos[1])
+  local n_whitespace_left = line:sub(1, pos[2] + 1):match('%s*$'):len()
+  local n_whitespace_right = line:sub(pos[2] + 2):match('^%s*'):len()
+
+  -- Split line into two at column on position (last column of left part).
+  -- Left part stays, right part goes on new line with this lines indent.
+  -- Whitespace around position is removed: left part would contribute trailing
+  -- whitespace, right part would interfer with indent.
+  local line_at = pos[1] - 1
+  local from_col = pos[2] + 1 - n_whitespace_left
+  local to_col = pos[2] + 1 + n_whitespace_right
+  vim.api.nvim_buf_set_text(0, line_at, from_col, line_at, to_col, { '', H.get_indent(line) })
+end
+
+-- Join -----------------------------------------------------------------------
+H.join_with_below = function(line_num, join_string)
+  local lines = vim.api.nvim_buf_get_lines(0, line_num - 1, line_num + 1, true)
+  local above_start_col = lines[1]:len() - lines[1]:match('%s*$'):len()
+  local below_end_col = H.get_indent(lines[2]):len()
+
+  vim.api.nvim_buf_set_text(0, line_num - 1, above_start_col, line_num, below_end_col, { join_string })
 end
 
 -- Regions --------------------------------------------------------------------
 H.find_smallest_bracket_region = function(pos, brackets)
-  pos = pos or vim.api.nvim_win_get_cursor(0)
-  brackets = brackets or { '%b()', '%b[]', '%b{}' }
-
   local neigh = H.get_neighborhood()
   local cur_offset = neigh.pos_to_offset({ line = pos[1], col = pos[2] + 1 })
 
@@ -275,13 +298,16 @@ H.find_split_positions = function(region, separator, exclude_regions)
   local seps = {}
   region_s:gsub(separator .. '()', function(r) table.insert(seps, r - 1) end)
 
-  -- Remove separators that are in excluded regions
+  -- Remove separators that are in excluded regions.
   local inner_string, forbidden = region_s:sub(2, -2), {}
   local add_to_forbidden = function(l, r) table.insert(forbidden, { l + 1, r }) end
 
   for _, pat in ipairs(exclude_regions) do
     inner_string:gsub('()' .. pat .. '()', add_to_forbidden)
   end
+
+  -- -- - Also exclude trailing separator or it will lead to extra empty line
+  inner_string:gsub('()' .. separator .. '%s*()$', add_to_forbidden)
 
   local sub_offsets = vim.tbl_filter(function(x) return not H.is_offset_inside_spans(x, forbidden) end, seps)
 
@@ -375,6 +401,44 @@ H.put_cursor_at_extmark = function(id)
   local new_pos = vim.api.nvim_buf_get_extmark_by_id(0, H.ns_id, id, {})
   vim.api.nvim_win_set_cursor(0, { new_pos[1] + 1, new_pos[2] })
   vim.api.nvim_buf_del_extmark(0, H.ns_id, id)
+end
+
+-- Indent ---------------------------------------------------------------------
+H.get_indent = function(line)
+  -- Make it respect various comment leaders
+  local indent_with_comment = ''
+  for _, leader in ipairs(H.get_comment_leaders()) do
+    local cur_match = line:match('^%s*' .. vim.pesc(leader) .. '%s*')
+    -- Use biggest match in case of several matches. Allows respecting "nested"
+    -- comment leaders like "---" and "--".
+    if type(cur_match) == 'string' and indent_with_comment:len() < cur_match:len() then
+      indent_with_comment = cur_match
+    end
+  end
+
+  if indent_with_comment ~= '' then return indent_with_comment end
+
+  return line:match('^%s*')
+end
+
+H.increase_indent = function(line_num, by_string)
+  local n_indent = H.get_indent(vim.fn.getline(line_num)):len()
+  vim.api.nvim_buf_set_text(0, line_num - 1, n_indent, line_num - 1, n_indent, { by_string })
+end
+
+H.get_comment_leaders = function()
+  local res = {}
+
+  -- From 'commentstring'
+  table.insert(res, vim.split(vim.bo.commentstring, '%%s')[1])
+
+  -- From 'comments'
+  for _, comment_part in ipairs(vim.opt_local.comments:get()) do
+    table.insert(res, comment_part:match(':(.*)$'))
+  end
+
+  -- Ensure there is no whitespace before or after
+  return vim.tbl_map(vim.trim, res)
 end
 
 -- Utilities ------------------------------------------------------------------
