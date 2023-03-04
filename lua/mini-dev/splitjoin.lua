@@ -3,28 +3,27 @@
 -- TODO:
 --
 -- Code:
+-- - When adding edge padding, cursor currently moves.
+--   See: https://github.com/neovim/neovim/issues/22526.
 -- - Design:
---     - ??? Move `config.hooks` into `config.split` and `config.join` ???
---     - ??? Make mappings ???
---     - Account for the following use cases (???via hooks??? or ???via
---       targeted options???):
---         - Split adds trailing comma.
---         - Join removes trailing comma.
---         - Split puts commas on line starts. Needs custom join string.
+--     - Rethink again cost/benefit ratio of added hooks.
 -- - Features:
---     - Split inside visual selection. Decide if it should include brackets or
---       not (like if `va}` or `vi}` should be used to achieve similar to
---       default behavior)
 --
 -- Tests:
 -- - General:
 --     - Cursor should track its current position.
 --     - Ensure that it works both inside strings and comments.
 --     - Ensure it works on empty brackets.
---     - Arrays from `detect` are not extended deeply: `detect.brackets
---       = { '%b()' }` should detect only `()` and not `[]` or `{}`.
+--     - Arrays from `detect` are not extended deeply:
+--       `detect.brackets = { '%b()' }` should detect only `()`, not `[]`/`{}`.
+--     - Mappings should work inside visual selection using
+--       `MiniSplitjoin.get_visual_region()`.
 -- - Split:
 --     - Any whitespace around separators or brackets should be removed.
+--     - Correctly indents and tracks split positions with single argument and
+--       trailing separator. It might not be the case if tracking of split
+--       positions is done not correctly.
+--       Example: 'f(aa,)' should result into {'f(', '\taa,' ')'}.
 -- - Join:
 --     - First and last joins are done without single space padding.
 -- - Comment respect:
@@ -33,8 +32,13 @@
 --       increased block is commented.
 --     - Join removes indent **with** comment leader before join.
 --     - Both 'commentstring' and 'comments' are respected.
--- Documentation:
 --
+-- Documentation:
+-- - Actions can be done on Visual mode selection. Uses
+--   |MiniSplitjoin.get_visual_region()|; treats selection as full brackets
+--   (use `va)` and not `vi)`).
+-- - Order of hook application might be important for correct detection of
+--   brackets.
 
 -- Documentation ==============================================================
 --- Split and join arguments
@@ -79,6 +83,7 @@
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
+---@diagnostic disable:unused-local
 
 -- Module definition ==========================================================
 MiniSplitjoin = {}
@@ -106,6 +111,14 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text Options ~
 MiniSplitjoin.config = {
+  -- Module mappings. Use `''` (empty string) to disable one.
+  -- Created for both Normal and Visual modes.
+  mappings = {
+    toggle = 'gs',
+    split = '',
+    join = '',
+  },
+
   -- Detection options: where split/join should be done
   detect = {
     brackets = nil,
@@ -115,18 +128,16 @@ MiniSplitjoin.config = {
 
   -- Options for splitting
   split = {
-    indent_inner = true,
+    hook_pre = function(positions) return positions end,
+    -- Use empty string to disable indent.
+    indent_string = nil,
+    hook_post = function(split_positions) end,
   },
 
   -- Options for joining
-  join = {},
-
-  -- Move hooks into split and join
-  hooks = {
-    split_pre = function(positions) return positions end,
-    split_post = function(split_positions) _G.hooks_split_post = split_positions end,
-    join_pre = function(from_line, to_line) return from_line, to_line end,
-    join_post = function(join_positions) _G.hooks_join_post = join_positions end,
+  join = {
+    hook_pre = function(from_line, to_line) return from_line, to_line end,
+    hook_post = function(join_positions) end,
   },
 }
 --minidoc_afterlines_end
@@ -160,13 +171,13 @@ MiniSplitjoin.split = function(pos, opts)
   local positions = H.find_split_positions(region, opts.detect.separator, opts.detect.exclude_regions)
 
   -- Call pre-hook to possibly modify positions
-  positions = opts.hooks.split_pre(positions)
+  positions = opts.split.hook_pre(positions)
 
   -- Split at positions
-  local split_positions = MiniSplitjoin.split_at(positions, opts.split)
+  local split_positions = MiniSplitjoin.split_at(positions, { indent_string = opts.split.indent_string })
 
   -- Call post-hook to tweak split result
-  opts.hooks.split_post(split_positions)
+  opts.split.hook_post(split_positions)
 end
 
 MiniSplitjoin.join = function(pos, opts)
@@ -179,13 +190,13 @@ MiniSplitjoin.join = function(pos, opts)
   if region == nil then return end
 
   -- Call pre-hook to possibly modify join lines
-  local from_line, to_line = opts.hooks.join_pre(region.from.line, region.to.line)
+  local from_line, to_line = opts.join.hook_pre(region.from.line, region.to.line)
 
   -- Join consecutive lines to become one
-  local join_positions = MiniSplitjoin.join_at(from_line, to_line, opts.join)
+  local join_positions = MiniSplitjoin.join_at(from_line, to_line, {})
 
   -- Call pos-hook to tweak join result
-  opts.hooks.join_post(join_positions)
+  opts.join.hook_post(join_positions)
 end
 
 MiniSplitjoin.gen_hook = {}
@@ -196,37 +207,102 @@ MiniSplitjoin.gen_hook.pad_edges = function(opts)
   local brackets = opts.brackets or H.get_opts(opts).detect.brackets
 
   return function(join_positions)
-    local first, last = join_positions[1], join_positions[#join_positions]
-    local line, first_col, last_col = first[1], first[2] + 1, last[2] + 1
+    -- Act only on actual join
+    local n_pos = #join_positions
+    if n_pos == 0 then return join_positions end
+
+    -- Act only if brackets are matched. First join position should be exactly
+    -- on left bracket, last - just before right bracket.
+    local first, last = join_positions[1], join_positions[n_pos]
+    local brackets_matched = H.is_positions_inside_brackets(first, { last[1], last[2] + 1 }, brackets)
+    if not brackets_matched then return join_positions end
 
     -- Pad only in case of non-trivial join
-    if first_col == last_col then return end
+    local line, first_col, last_col = first[1] - 1, first[2] + 1, last[2] + 1
+    if first_col == last_col then return join_positions end
 
-    -- Pad only if brackets are matched
-    local linepart = vim.fn.getline(line):sub(first_col, last_col + 1)
-    local brackets_matched = false
-    for _, b in ipairs(brackets) do
-      brackets_matched = brackets_matched or (linepart:find('^' .. b .. '$') ~= nil)
+    -- Add pad
+    H.set_text(line, last_col, line, last_col, { pad })
+    H.set_text(line, first_col, line, first_col, { pad })
+
+    -- Update `join_positions` to reflect text change
+    -- - Account for left pad
+    for i = 2, n_pos do
+      join_positions[i][2] = join_positions[i][2] + 1
     end
-    if not brackets_matched then return end
+    -- - Account for right pad
+    join_positions[n_pos][2] = join_positions[n_pos][2] + 1
 
-    H.set_text(line - 1, last_col, line - 1, last_col, { pad })
-    H.set_text(line - 1, first_col, line - 1, first_col, { pad })
+    return join_positions
   end
 end
 
 MiniSplitjoin.gen_hook.add_trailing_separator = function(opts)
-  return function(split_positions) end
+  opts = opts or {}
+  local sep = opts.sep or ','
+  local brackets = opts.brackets or H.get_opts(opts).detect.brackets
+
+  return function(split_positions)
+    -- Add only in case there is at least one argument
+    local n_pos = #split_positions
+    if n_pos < 2 then return split_positions end
+
+    -- Act only if brackets are matched
+    local first, last = split_positions[1], split_positions[n_pos]
+
+    -- - Infer position of right edge as coming from `split()`
+    local right_edge_line = last[1] + 1
+    local right_edge_col = H.get_indent(vim.fn.getline(right_edge_line)):len()
+    local right_edge_pos = { right_edge_line, right_edge_col }
+
+    local brackets_matched = H.is_positions_inside_brackets(first, right_edge_pos, brackets)
+    if not brackets_matched then return split_positions end
+
+    -- Add only if there is no trailing separator already
+    if H.is_char_at_position(last, sep) then return split_positions end
+
+    -- Add trailing separator
+    H.set_text(last[1] - 1, last[2] + 1, last[1] - 1, last[2] + 1, { sep })
+
+    -- Update `split_positions` to reflect text change
+    split_positions[n_pos] = { last[1], last[2] + 1 }
+    return split_positions
+  end
 end
 
 MiniSplitjoin.gen_hook.remove_trailing_separator = function(opts)
-  return function(join_positions) end
+  opts = opts or {}
+  local sep = opts.sep or ','
+  local brackets = opts.brackets or H.get_opts(opts).detect.brackets
+
+  return function(join_positions)
+    -- Act only on actual join
+    local n_pos = #join_positions
+    if n_pos == 0 then return join_positions end
+
+    -- Act only if brackets are matched. First join position should be exactly
+    -- on left bracket, last - just before right bracket.
+    local first, last = join_positions[1], join_positions[n_pos]
+    local brackets_matched = H.is_positions_inside_brackets(first, { last[1], last[2] + 1 }, brackets)
+    if not brackets_matched then return join_positions end
+
+    -- Act only if there is matched trailing separator
+    _G.char_at_remove_comma = vim.fn.getline(last[1]):sub(last[2] + 1, last[2] + 1)
+    if not H.is_char_at_position(last, sep) then return join_positions end
+
+    -- Remove trailing separator
+    H.set_text(last[1] - 1, last[2], last[1] - 1, last[2] + 1, {})
+
+    -- Update `join_positions` to reflect text change
+    join_positions[n_pos] = { last[1], last[2] - 1 }
+    return join_positions
+  end
 end
 
 -- NOTE: not all `positions` might result into split. Ones resulting into blank
 -- lines are not done.
 MiniSplitjoin.split_at = function(positions, opts)
-  opts = vim.tbl_deep_extend('force', { indent_inner = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { indent_string = nil }, opts or {})
 
   -- Normalize positions: sort and shift last one to the left allowing it be
   -- exactly last bracket
@@ -244,7 +320,7 @@ MiniSplitjoin.split_at = function(positions, opts)
   -- changes.
   for i = n_pos, 1, -1 do
     local split_id = H.split_at_position(positions[i])
-    table.insert(split_extmarks_ids, 1, split_id)
+    if split_id ~= nil then table.insert(split_extmarks_ids, 1, split_id) end
   end
 
   -- Do nothing if there were no actual splits. Can happen if splitting already
@@ -253,7 +329,9 @@ MiniSplitjoin.split_at = function(positions, opts)
   if n_splits == 0 then return {} end
 
   -- Possibly increase indent of inner lines
-  if opts.indent_inner then H.increase_indent(positions[1][1] + 1, positions[n_pos][1] + n_splits - 1) end
+  if opts.indent_string ~= '' then
+    H.increase_indent(positions[1][1] + 1, positions[n_pos][1] + n_splits - 1, opts.indent_string)
+  end
 
   -- Put cursor back on tracked position
   H.put_cursor_at_extmark(cursor_extmark)
@@ -296,7 +374,7 @@ end
 
 MiniSplitjoin.get_visual_region = function()
   local from_pos, to_pos = vim.fn.getpos("'<"), vim.fn.getpos("'>")
-  local from, to = { line = from_pos[2], col = from_pos[3] - 1 }, { line = to_pos[2], col = to_pos[3] + 1 }
+  local from, to = { line = from_pos[2], col = from_pos[3] }, { line = to_pos[2], col = to_pos[3] }
   -- Tweak for linewise Visual selection
   if vim.fn.visualmode() == 'V' then
     from.col, to.col = 0, vim.fn.col({ to.line, '$' })
@@ -305,11 +383,34 @@ MiniSplitjoin.get_visual_region = function()
   return { from = from, to = to }
 end
 
+--- Operator for Normal mode mappings
+---
+--- Main function to be used in expression mappings. No need to use it
+--- directly, everything is setup in |MiniSplitjoin.setup()|.
+---
+---@param task string Name of task task.
+MiniSplitjoin.operator = function(task)
+  local is_init_call = task == 'toggle' or task == 'split' or task == 'join'
+  if not is_init_call then return MiniSplitjoin[H.cache.operator_task]() end
+
+  if H.is_disabled() then
+    -- Using `<Esc>` helps to stop moving cursor caused by current
+    -- implementation detail of adding `' '` inside expression mapping
+    return [[\<Esc>]]
+  end
+
+  H.cache.operator_task = task
+  vim.cmd('set operatorfunc=v:lua.MiniSplitjoin.operator')
+  return 'g@'
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniSplitjoin.config
 
 H.ns_id = vim.api.nvim_create_namespace('MiniSplitjoin')
+
+H.cache = { operator_task = nil }
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -323,7 +424,6 @@ H.setup_config = function(config)
     detect = { config.detect, 'table' },
     split = { config.split, 'table' },
     join = { config.join, 'table' },
-    hooks = { config.hooks, 'table' },
   })
 
   vim.validate({
@@ -331,18 +431,32 @@ H.setup_config = function(config)
     ['detect.separator'] = { config.detect.separators, 'string', true },
     ['detect.exclude_regions'] = { config.detect.exclude_regions, 'table', true },
 
-    ['split.indent_inner'] = { config.split.indent_inner, 'boolean' },
+    ['split.hook_pre'] = { config.split.hook_pre, 'function' },
+    ['split.indent_string'] = { config.split.indent_string, 'boolean', true },
+    ['split.hook_post'] = { config.split.hook_post, 'function' },
 
-    ['hooks.split_pre'] = { config.hooks.split_pre, 'function' },
-    ['hooks.split_post'] = { config.hooks.split_post, 'function' },
-    ['hooks.join_pre'] = { config.hooks.join_pre, 'function' },
-    ['hooks.join_post'] = { config.hooks.join_post, 'function' },
+    ['join.hook_pre'] = { config.join.hook_pre, 'function' },
+    ['join.hook_post'] = { config.join.hook_post, 'function' },
   })
 
   return config
 end
 
-H.apply_config = function(config) MiniSplitjoin.config = config end
+--stylua: ignore
+H.apply_config = function(config)
+  MiniSplitjoin.config = config
+
+  -- Make mappings
+  local maps = config.mappings
+
+  H.map('n', maps.toggle, 'v:lua.MiniSplitjoin.operator("toggle") . " "', { expr = true, desc = 'Toggle arguments' })
+  H.map('n', maps.split,  'v:lua.MiniSplitjoin.operator("split") . " "',  { expr = true, desc = 'Split arguments' })
+  H.map('n', maps.join,   'v:lua.MiniSplitjoin.operator("join") . " "',   { expr = true, desc = 'Join arguments' })
+
+  H.map('x', maps.toggle, ':<C-u>lua MiniSplitjoin.toggle(nil, { region = MiniSplitjoin.get_visual_region() })<CR>', { desc = 'Toggle arguments' })
+  H.map('x', maps.split,  ':<C-u>lua MiniSplitjoin.split(nil,  { region = MiniSplitjoin.get_visual_region() })<CR>', { desc = 'Split arguments' })
+  H.map('x', maps.join,   ':<C-u>lua MiniSplitjoin.join(nil,   { region = MiniSplitjoin.get_visual_region() })<CR>', { desc = 'Join arguments' })
+end
 
 H.is_disabled = function() return vim.g.minisplitjoin_disable == true or vim.b.minisplitjoin_disable == true end
 
@@ -368,7 +482,6 @@ H.get_opts = function(opts)
     detect = vim.tbl_extend('force', default_detect, config.detect, opts.detect or {}),
     split = vim.tbl_deep_extend('force', config.split, opts.split or {}),
     join = vim.tbl_deep_extend('force', config.join, opts.join or {}),
-    hooks = vim.tbl_deep_extend('force', config.hooks, opts.hooks or {}),
   }
 end
 
@@ -488,6 +601,22 @@ H.is_offset_inside_spans = function(ref_point, spans)
   return false
 end
 
+H.is_positions_inside_brackets = function(from_pos, to_pos, brackets)
+  local text_lines = vim.api.nvim_buf_get_text(0, from_pos[1] - 1, from_pos[2], to_pos[1] - 1, to_pos[2] + 1, {})
+  local text = table.concat(text_lines, '\n')
+
+  local brackets_matched = false
+  for _, b in ipairs(brackets) do
+    if text:find('^' .. b .. '$') ~= nil then return true end
+  end
+  return false
+end
+
+H.is_char_at_position = function(position, char)
+  local present_char = vim.fn.getline(position[1]):sub(position[2] + 1, position[2] + 1)
+  return present_char == char
+end
+
 -- Simplified version of "neighborhood" from 'mini.ai':
 -- - Use whol buffer.
 -- - No empty regions or spans.
@@ -558,7 +687,9 @@ H.put_cursor_at_extmark = function(id)
 end
 
 -- Indent ---------------------------------------------------------------------
-H.increase_indent = function(from_line, to_line)
+H.increase_indent = function(from_line, to_line, by_string)
+  if by_string == nil then by_string = vim.bo.expandtab and string.rep(' ', vim.fn.shiftwidth()) or '\t' end
+
   local lines = vim.api.nvim_buf_get_lines(0, from_line - 1, to_line, true)
 
   -- Respect comment leaders only if all lines are commented
@@ -566,7 +697,6 @@ H.increase_indent = function(from_line, to_line)
   local respect_comments = H.is_comment_block(lines, comment_leaders)
 
   -- Increase indent of all lines (end-inclusive)
-  local by_string = vim.bo.expandtab and string.rep(' ', vim.fn.shiftwidth()) or '\t'
   for i, l in ipairs(lines) do
     local n_indent = H.get_indent(l, respect_comments):len()
 
@@ -634,6 +764,12 @@ end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.splitjoin) %s', msg), 0) end
+
+H.map = function(mode, lhs, rhs, opts)
+  if lhs == '' then return end
+  opts = vim.tbl_deep_extend('force', { remap = false, silent = true }, opts or {})
+  vim.keymap.set(mode, lhs, rhs, opts)
+end
 
 H.set_text = function(...) pcall(vim.api.nvim_buf_set_text, 0, ...) end
 
