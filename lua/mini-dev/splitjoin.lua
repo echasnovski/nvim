@@ -32,6 +32,8 @@
 --     - Both 'commentstring' and 'comments' are respected.
 --
 -- Documentation:
+-- - Make sure that any mention of position(s) or region(s) point at
+--   |MiniSplitjoin-glossary|.
 
 -- Documentation ==============================================================
 --- Split and join arguments
@@ -106,19 +108,18 @@
 ---@tag mini.splitjoin
 ---@tag MiniSplitjoin
 
---- - POSITION - array with two elements representing 1-based row number and
+--- - POSITION - table with fields <line> and <col> containing line and column
+---   numbers respectively. Both are 1-indexed.
 ---   0-based column number (like output of |nvim_win_get_cursor()|).
 --- - REGION - table representing region in a buffer. Fields: <from> and
----   <to> for inclusive start and end positions. Each position is also a table
----   with line <line> and column <col> (both start at 1). Example:
+---   <to> for inclusive start and end positions. Example:
 ---   - `{ from = { line = 1, col = 1 }, to = { line = 2, col = 1 } }`
 ---@tag MiniSplitjoin-glossary
 
 ---@alias __splitjoin_options table|nil Options. Has structure from |MiniSplitjoin.config|
 ---   inheriting its default values. Following extra optional fields are allowed:
 ---   - <position> `(table)` - position at which to find smallest bracket region.
----     Rows start from 1, columns - from 0; just like |nvim_win_get_cursor()|.
----     Default: cursor position.
+---     See |MiniSplitjoin-glossary| for the structure. Default: cursor position.
 ---  - <region> `(table)` - region at which to perform action. Assumes
 ---    inclusive both start at left bracket and end at right bracket.
 ---    See |MiniSplitjoin-glossary| for the structure.
@@ -177,6 +178,9 @@ end
 ---
 --- `detect.separator` is a single Lua pattern defining which strings should be
 --- treated as argument separators.
+---
+--- Empty string in `detect.separator` will result in only surrounding brackets
+--- used as separators.
 ---
 --- Default: `','`. So an argument can be separated only with `,`.
 ---
@@ -294,8 +298,8 @@ end
 ---   Note: stop if no join positions are found.
 ---
 --- - Modify separator positions to represent split positions. Last split
----   position (inferred from right bracket) is moved one column to left so
----   right bracket would appear on new line.
+---   position (which is inferred from right bracket) is moved one column to
+---   left so that right bracket would move on new line.
 ---
 --- - Apply all hooks from `opts.split.hooks_pre`. Each is applied on the
 ---   output of previous one. Input of first hook is split positions from
@@ -335,10 +339,11 @@ MiniSplitjoin.split = function(opts)
   -- Split at positions
   local split_positions = MiniSplitjoin.split_at(positions)
 
-  -- Call post-hooks to tweak splits. Add left bracket for easier hook code.
+  -- Call post-hooks to tweak splits. Add right bracket for easier hook code.
   local last = split_positions[#split_positions]
-  local last_next_line = vim.fn.getline(last[1] + 1)
-  table.insert(split_positions, { last[1] + 1, MiniSplitjoin.get_indent(last_next_line):len() })
+  local last_next_line = vim.fn.getline(last.line + 1)
+  local new_col = MiniSplitjoin.get_indent(last_next_line):len() + 1
+  table.insert(split_positions, { line = last.line + 1, col = new_col })
 
   for _, hook in ipairs(opts.split.hooks_post) do
     split_positions = hook(split_positions)
@@ -391,9 +396,9 @@ MiniSplitjoin.join = function(opts)
   -- Join at positions
   local join_positions = MiniSplitjoin.join_at(positions)
 
-  -- Call post-hooks to tweak joins. Add left bracket for easier hook code.
+  -- Call post-hooks to tweak joins. Add right bracket for easier hook code.
   local last = join_positions[#join_positions]
-  table.insert(join_positions, { last[1], last[2] + 1 })
+  table.insert(join_positions, { line = last.line, col = last.col + 1 })
 
   for _, hook in ipairs(opts.join.hooks_post) do
     join_positions = hook(join_positions)
@@ -460,19 +465,19 @@ MiniSplitjoin.gen_hook.pad_brackets = function(opts)
     if not brackets_matched then return join_positions end
 
     -- Pad only in case of non-trivial join
-    if first[1] == last[1] and (last[2] - first[2]) <= 1 then return join_positions end
+    if first.line == last.line and (last.col - first.col) <= 1 then return join_positions end
 
     -- Add pad after left and before right edges
-    H.set_text(first[1] - 1, last[2], first[1] - 1, last[2], { pad })
-    H.set_text(first[1] - 1, first[2] + 1, first[1] - 1, first[2] + 1, { pad })
+    H.set_text(first.line - 1, last.col - 1, first.line - 1, last.col - 1, { pad })
+    H.set_text(first.line - 1, first.col, first.line - 1, first.col, { pad })
 
     -- Update `join_positions` to reflect text change
     -- - Account for left pad
     for i = 2, n_pos do
-      join_positions[i][2] = join_positions[i][2] + n_pad
+      join_positions[i].col = join_positions[i].col + n_pad
     end
     -- - Account for right pad
-    join_positions[n_pos][2] = join_positions[n_pos][2] + n_pad
+    join_positions[n_pos].col = join_positions[n_pos].col + n_pad
 
     return join_positions
   end
@@ -506,13 +511,13 @@ MiniSplitjoin.gen_hook.add_trailing_separator = function(opts)
     if not brackets_matched then return split_positions end
 
     -- Act only if there is no trailing separator already
-    local target_line = vim.fn.getline(last[1] - 1)
+    local target_line = vim.fn.getline(last.line - 1)
     local target_col = target_line:find(vim.pesc(sep) .. '$')
     if target_col ~= nil then return split_positions end
 
     -- Add trailing separator
     local col = target_line:len()
-    H.set_text(last[1] - 2, col, last[1] - 2, col, { sep })
+    H.set_text(last.line - 2, col, last.line - 2, col, { sep })
 
     -- Don't update `split_positions`, as appending to line has no effect
     return split_positions
@@ -548,15 +553,15 @@ MiniSplitjoin.gen_hook.del_trailing_separator = function(opts)
     if not brackets_matched then return join_positions end
 
     -- Act only if there is matched trailing separator
-    local target_line = vim.fn.getline(last[1]):sub(1, last[2])
+    local target_line = vim.fn.getline(last.line):sub(1, last.col - 1)
     local target_col = target_line:find(vim.pesc(sep) .. '%s*$')
     if target_col == nil then return join_positions end
 
     -- Remove trailing separator
-    H.set_text(last[1] - 1, target_col - 1, last[1] - 1, target_col - 1 + n_sep, {})
+    H.set_text(last.line - 1, target_col - 1, last.line - 1, target_col - 1 + n_sep, {})
 
     -- Update `join_positions` to reflect text change
-    join_positions[n_pos] = { last[1], last[2] - n_sep }
+    join_positions[n_pos] = { line = last.line, col = last.col - n_sep }
     return join_positions
   end
 end
@@ -575,8 +580,9 @@ end
 --- - Use output of this function to keep track of input positions.
 ---
 ---@param positions table Array of positions at which to perform split.
----   Note: they don't have to be ordered, but first and last ones will be used
----   to infer lines for which increase indent.
+---   See |MiniSplitjoin-glossary| for their structure. Note: they don't have
+---   to be ordered, but first and last ones will be used to infer lines for
+---   which increase indent.
 ---
 ---@return table Array of new positions to where input `positions` were moved.
 MiniSplitjoin.split_at = function(positions)
@@ -584,7 +590,7 @@ MiniSplitjoin.split_at = function(positions)
   if n_pos == 0 then return {} end
 
   -- Cache values that might change
-  local cursor_extmark = H.put_extmark_at_positions({ vim.api.nvim_win_get_cursor(0) })[1]
+  local cursor_extmark = H.put_extmark_at_positions({ H.get_cursor_pos() })[1]
   local input_extmarks = H.put_extmark_at_positions(positions)
 
   -- Split at extmark positions
@@ -595,7 +601,7 @@ MiniSplitjoin.split_at = function(positions)
   -- Increase indent of inner lines
   local first_new_pos = H.get_extmark_pos(input_extmarks[1])
   local last_new_pos = H.get_extmark_pos(input_extmarks[n_pos])
-  H.increase_indent(first_new_pos[1] + 1, last_new_pos[1])
+  H.increase_indent(first_new_pos.line + 1, last_new_pos.line)
 
   -- Put cursor back on tracked position
   H.put_cursor_at_extmark(cursor_extmark)
@@ -610,9 +616,9 @@ end
 ---
 --- Overview:
 --- - For each position join its line with the next line. Joining is done by
----   replacing trailing whitespace of current line and indent of next line
+---   replacing trailing whitespace of the line and indent of its next line
 ---   (see |MiniSplitjoin.get_indent()|) with a pad string (single space except
----   empty string for first and last positions). To adjust this use hooks
+---   empty string for first and last positions). To adjust this, use hooks
 ---   (for example, see |MiniSplitjoin.gen_hook.pad_brackets()|).
 ---
 --- Notes:
@@ -620,8 +626,8 @@ end
 --- - Use output of this function to keep track of input positions.
 ---
 ---@param positions table Array of positions at which to perform join.
----   Note: they don't have to be ordered, but first and last ones will be have
----   different pad string.
+---   See |MiniSplitjoin-glossary| for their structure. Note: they don't have
+---   to be ordered, but first and last ones will be have different pad string.
 ---
 ---@return table Array of new positions to where input `positions` were moved.
 MiniSplitjoin.join_at = function(positions)
@@ -629,7 +635,7 @@ MiniSplitjoin.join_at = function(positions)
   if n_pos == 0 then return {} end
 
   -- Cache values that might change
-  local cursor_extmark = H.put_extmark_at_positions({ vim.api.nvim_win_get_cursor(0) })[1]
+  local cursor_extmark = H.put_extmark_at_positions({ H.get_cursor_pos() })[1]
   local input_extmarks = H.put_extmark_at_positions(positions)
 
   -- Join at positions which are changing following extmarks
@@ -785,7 +791,7 @@ H.get_opts = function(opts)
   local config = H.get_config()
 
   return {
-    position = opts.position or vim.api.nvim_win_get_cursor(0),
+    position = opts.position or H.get_cursor_pos(),
     region = opts.region,
     -- Extend `detect` not deeply to avoid unwanted values from longer defaults
     detect = vim.tbl_extend('force', default_detect, config.detect, opts.detect or {}),
@@ -799,30 +805,30 @@ H.split_at_extmark = function(extmark_id)
   local pos = H.get_extmark_pos(extmark_id)
 
   -- Split
-  H.set_text(pos[1] - 1, pos[2] + 1, pos[1] - 1, pos[2] + 1, { '', '' })
+  H.set_text(pos.line - 1, pos.col, pos.line - 1, pos.col, { '', '' })
 
   -- Remove trailing whitespace on split line
-  local split_line = vim.fn.getline(pos[1])
+  local split_line = vim.fn.getline(pos.line)
   local start_of_trailspace = split_line:find('%s*$')
-  H.set_text(pos[1] - 1, start_of_trailspace - 1, pos[1] - 1, split_line:len(), {})
+  H.set_text(pos.line - 1, start_of_trailspace - 1, pos.line - 1, split_line:len(), {})
 
   -- Adjust indent on new line
-  local cur_indent = MiniSplitjoin.get_indent(vim.fn.getline(pos[1] + 1))
+  local cur_indent = MiniSplitjoin.get_indent(vim.fn.getline(pos.line + 1))
   local new_indent = MiniSplitjoin.get_indent(split_line)
-  H.set_text(pos[1], 0, pos[1], cur_indent:len(), { new_indent })
+  H.set_text(pos.line, 0, pos.line, cur_indent:len(), { new_indent })
 end
 
 H.find_split_positions = function(region, separator, exclude_regions)
   local sep_positions = H.find_separator_positions(region, separator, exclude_regions)
   local n_pos = #sep_positions
 
-  sep_positions[n_pos][2] = sep_positions[n_pos][2] - 1
+  sep_positions[n_pos].col = sep_positions[n_pos].col - 1
   return sep_positions
 end
 
 -- Join -----------------------------------------------------------------------
 H.join_at_extmark = function(extmark_id, pad)
-  local line_num = H.get_extmark_pos(extmark_id)[1]
+  local line_num = H.get_extmark_pos(extmark_id).line
   if vim.api.nvim_buf_line_count(0) <= line_num then return end
 
   -- Join by replacing trailing whitespace of current line and indent of next
@@ -835,12 +841,13 @@ H.join_at_extmark = function(extmark_id, pad)
 end
 
 H.find_join_positions = function(region, separator, exclude_regions)
-  -- Join whole region into single line
   local lines = vim.api.nvim_buf_get_lines(0, region.from.line - 1, region.to.line, true)
 
+  -- Join whole region into single line
   local res = {}
+  local init_line = region.from.line - 1
   for i = 1, #lines - 1 do
-    table.insert(res, { region.from.line + i - 1, lines[i]:len() - 1 })
+    table.insert(res, { line = init_line + i, col = lines[i]:len() })
   end
   return res
 end
@@ -848,7 +855,7 @@ end
 -- Detect ---------------------------------------------------------------------
 H.find_smallest_bracket_region = function(position, brackets)
   local neigh = H.get_neighborhood()
-  local cur_offset = neigh.pos_to_offset({ line = position[1], col = position[2] + 1 })
+  local cur_offset = neigh.pos_to_offset(position)
 
   local best_span = H.find_smallest_covering(neigh['1d'], cur_offset, brackets)
   if best_span == nil then return nil end
@@ -875,6 +882,8 @@ H.find_smallest_covering = function(line, ref_offset, patterns)
 end
 
 H.find_separator_positions = function(region, separator, exclude_regions)
+  if separator == '' then return { region.from, region.to } end
+
   local neigh = H.get_neighborhood()
   local region_span = neigh.region_to_span(region)
   local region_s = neigh['1d']:sub(region_span.from, region_span.to)
@@ -885,7 +894,7 @@ H.find_separator_positions = function(region, separator, exclude_regions)
 
   -- Remove separators that are in excluded regions.
   local inner_string, forbidden = region_s:sub(2, -2), {}
-  local add_to_forbidden = function(l, r) table.insert(forbidden, { l + 1, r }) end
+  local add_to_forbidden = function(l, r) table.insert(forbidden, { from = l + 1, to = r }) end
 
   for _, pat in ipairs(exclude_regions) do
     inner_string:gsub('()' .. pat .. '()', add_to_forbidden)
@@ -905,22 +914,18 @@ H.find_separator_positions = function(region, separator, exclude_regions)
 
   -- Convert offsets to positions
   local start_offset = region_span.from
-  return vim.tbl_map(function(sub_off)
-    local res = neigh.offset_to_pos(start_offset + sub_off - 1)
-    -- Convert to `nvim_win_get_cursor()` format
-    return { res.line, res.col - 1 }
-  end, sub_offsets)
+  return vim.tbl_map(function(sub_off) return neigh.offset_to_pos(start_offset + sub_off - 1) end, sub_offsets)
 end
 
 H.is_offset_inside_spans = function(ref_point, spans)
   for _, span in ipairs(spans) do
-    if span[1] <= ref_point and ref_point <= span[2] then return true end
+    if span.from <= ref_point and ref_point <= span.to then return true end
   end
   return false
 end
 
 H.is_positions_inside_brackets = function(from_pos, to_pos, brackets)
-  local text_lines = vim.api.nvim_buf_get_text(0, from_pos[1] - 1, from_pos[2], to_pos[1] - 1, to_pos[2] + 1, {})
+  local text_lines = vim.api.nvim_buf_get_text(0, from_pos.line - 1, from_pos.col - 1, to_pos.line - 1, to_pos.col, {})
   local text = table.concat(text_lines, '\n')
 
   for _, b in ipairs(brackets) do
@@ -930,7 +935,7 @@ H.is_positions_inside_brackets = function(from_pos, to_pos, brackets)
 end
 
 H.is_char_at_position = function(position, char)
-  local present_char = vim.fn.getline(position[1]):sub(position[2] + 1, position[2] + 1)
+  local present_char = vim.fn.getline(position.line):sub(position.col, position.col)
   return present_char == char
 end
 
@@ -940,7 +945,7 @@ end
 --
 -- NOTEs:
 -- - `region = { from = { line = a, col = b }, to = { line = c, col = d } }`.
---   End-inclusive charwise selection. All `a`, `b`, `c`, `d` are 1-based.
+--   End-inclusive charwise selection. All `a`, `b`, `c`, `d` are 1-indexed.
 -- - `offset` is the number between 1 to `neigh1d:len()`.
 H.get_neighborhood = function()
   local neigh2d = vim.api.nvim_buf_get_lines(0, 0, -1, false)
@@ -994,14 +999,19 @@ end
 -- Extmarks -------------------------------------------------------------------
 H.put_extmark_at_positions = function(positions)
   return vim.tbl_map(
-    function(pos) return vim.api.nvim_buf_set_extmark(0, H.ns_id, pos[1] - 1, pos[2], {}) end,
+    function(pos) return vim.api.nvim_buf_set_extmark(0, H.ns_id, pos.line - 1, pos.col - 1, {}) end,
     positions
   )
 end
 
 H.get_extmark_pos = function(extmark_id)
   local res = vim.api.nvim_buf_get_extmark_by_id(0, H.ns_id, extmark_id, {})
-  return { res[1] + 1, res[2] }
+  return { line = res[1] + 1, col = res[2] + 1 }
+end
+
+H.get_cursor_pos = function()
+  local cur_pos = vim.api.nvim_win_get_cursor(0)
+  return { line = cur_pos[1], col = cur_pos[2] + 1 }
 end
 
 H.put_cursor_at_extmark = function(id)
