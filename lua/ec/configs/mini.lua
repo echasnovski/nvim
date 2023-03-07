@@ -132,9 +132,10 @@ vim.schedule(function()
 
   require('mini.trailspace').setup()
 
-  require('mini-dev.splitjoin').setup()
-  vim.keymap.set('n', 'gs', '<Cmd>lua MiniSplitjoin.toggle()<CR>')
-  vim.keymap.set('x', 'gs', ':<C-u>lua MiniSplitjoin.toggle(nil, { region = MiniSplitjoin.get_visual_region() })<CR>')
-  vim.keymap.set('n', '<Leader>os', '<Cmd>lua MiniSplitjoin.split()<CR>')
-  vim.keymap.set('n', '<Leader>oj', '<Cmd>lua MiniSplitjoin.join()<CR>')
+  require('mini-dev.splitjoin').setup({
+    mappings = {
+      split = '<Leader>os',
+      join = '<Leader>oj',
+    },
+  })
 end)

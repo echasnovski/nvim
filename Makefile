@@ -5,3 +5,9 @@ NVIM_EXEC ?= nvim
 deps/mini.nvim:
 	@mkdir -p deps
 	git clone --depth 1 https://github.com/echasnovski/mini.nvim $@
+
+test_splitjoin: deps/mini.nvim
+	$(NVIM_EXEC) --version | head -n 1 && echo ''
+	$(NVIM_EXEC) --headless --noplugin -u ./lua/mini-dev/minimal_init.lua \
+		-c "lua require('mini.test').setup()" \
+		-c "lua MiniTest.run_file('lua/mini-dev/test_splitjoin.lua', { execute = { reporter = MiniTest.gen_reporter.stdout({ group_depth = $(GROUP_DEPTH) }) } })"
