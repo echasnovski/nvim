@@ -1,4 +1,5 @@
 local nvim_tree = require('nvim-tree')
+local api = require('nvim-tree.api')
 
 -- Define Custom functions to simulate ranger's "going in" and "going out"
 -- (might break if 'nvim-tree' is major refactored)
@@ -7,7 +8,7 @@ local has_children = function(node) return type(node.nodes) == 'table' and vim.t
 
 local key_down = vim.api.nvim_replace_termcodes('<Down>', true, true, true)
 
-EC.nvim_tree_go_in = function()
+local nvim_tree_go_in = function()
   local node = get_node()
 
   -- Don't go up if cursor is placed on '..'
@@ -23,7 +24,7 @@ EC.nvim_tree_go_in = function()
   end
 
   -- Peform 'edit' action
-  nvim_tree.on_keypress('edit')
+  api.node.open.edit()
 
   -- Don't do anything if tree is not in focus
   if vim.api.nvim_buf_get_option(0, 'filetype') ~= 'NvimTree' then return end
@@ -34,7 +35,7 @@ EC.nvim_tree_go_in = function()
   if has_children(node) then vim.fn.feedkeys(key_down) end
 end
 
-EC.nvim_tree_go_out = function()
+local nvim_tree_go_out = function()
   local node = get_node()
 
   if node.name == '..' then
@@ -42,24 +43,41 @@ EC.nvim_tree_go_out = function()
     return
   end
 
-  nvim_tree.on_keypress('close_node')
+  api.node.navigate.parent_close()
 end
 
+--stylua: ignore
+local on_attach = function(bufnr)
+  local opts = function(desc)
+    return { desc = 'nvim-tree: ' .. desc, buffer = bufnr, noremap = true, silent = true, nowait = true }
+  end
+
+  -- Subset of default mappings
+  vim.keymap.set('n', '<',     api.node.navigate.sibling.prev, opts('Previous Sibling'))
+  vim.keymap.set('n', '<CR>',  api.node.open.edit,             opts('Open'))
+  vim.keymap.set('n', '<Tab>', api.node.open.preview,          opts('Open Preview'))
+  vim.keymap.set('n', '>',     api.node.navigate.sibling.next, opts('Next Sibling'))
+  vim.keymap.set('n', 'a',     api.fs.create,                  opts('Create'))
+  vim.keymap.set('n', 'd',     api.fs.remove,                  opts('Delete'))
+  vim.keymap.set('n', 'g?',    api.tree.toggle_help,           opts('Help'))
+  vim.keymap.set('n', 'o',     api.node.open.no_window_picker, opts('Open: No Window Picker'))
+  vim.keymap.set('n', 'q',     api.tree.close,                 opts('Close'))
+  vim.keymap.set('n', 'r',     api.fs.rename,                  opts('Rename'))
+  vim.keymap.set('n', 'R',     api.tree.reload,                opts('Refresh'))
+
+  -- Custom mappings
+  vim.keymap.set('n', 'h', nvim_tree_go_out, opts('Go out'))
+  vim.keymap.set('n', 'l', nvim_tree_go_in,  opts('Go in'))
+end
 -- Setup plugin
 nvim_tree.setup({
+  on_attach = on_attach,
   hijack_cursor = true,
   update_focused_file = { enable = false },
   git = { enable = false },
   respect_buf_cwd = true,
   view = {
     width = 40,
-    mappings = {
-      custom_only = false,
-      list = {
-        { key = 'l', cb = '<cmd>lua EC.nvim_tree_go_in()<CR>' },
-        { key = 'h', cb = '<cmd>lua EC.nvim_tree_go_out()<CR>' },
-      },
-    },
   },
   renderer = {
     add_trailing = true,
