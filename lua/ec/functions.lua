@@ -43,11 +43,7 @@ end
 EC.cr_action = function()
   if vim.fn.pumvisible() ~= 0 then
     local item_selected = vim.fn.complete_info()['selected'] ~= -1
-    if item_selected then
-      return H.keys['ctrl-y']
-    else
-      return H.keys['ctrl-y_cr']
-    end
+    return item_selected and H.keys['ctrl-y'] or H.keys['ctrl-y_cr']
   else
     return require('mini.pairs').cr()
   end
@@ -189,10 +185,10 @@ EC.get_sign_statuscolumn_string = function(lnum, width)
   return sign_string
 end
 
-if vim.fn.exists('&statuscolumn') == 1 then
-  vim.o.signcolumn = 'no'
-  vim.o.statuscolumn = '%!v:lua.EC.statuscolumn()'
-end
+-- if vim.fn.exists('&statuscolumn') == 1 then
+--   vim.o.signcolumn = 'no'
+--   vim.o.statuscolumn = '%!v:lua.EC.statuscolumn()'
+-- end
 
 -- Overwrite `vim.ui.select()` with Telescope ---------------------------------
 EC.ui_select_default = vim.ui.select

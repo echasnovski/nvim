@@ -21,7 +21,7 @@ local default_opts = {
 
 local keymap = function(mode, keys, cmd, opts)
   local o = vim.tbl_deep_extend('force', default_opts, opts or {})
-  vim.api.nvim_set_keymap(mode, keys, cmd, o)
+  vim.keymap.set(mode, keys, cmd, o)
 end
 
 -- NOTE: Most mappings come from 'mini.basics'
@@ -44,3 +44,7 @@ keymap('s', [[<BS>]], [[<BS>i]])
 -- `<C-l>` but this solution deliberately uses `:` instead of `<Cmd>` to go
 -- into Command mode and back which updates 'mini.map'.
 keymap('n', [[\h]], ':let v:hlsearch = 1 - v:hlsearch<CR>')
+
+-- Paste before/after linewise
+vim.keymap.set({ 'n', 'x' }, '[p', '<Cmd>exe "put! " . v:register<CR>', { desc = 'Paste Above' })
+vim.keymap.set({ 'n', 'x' }, ']p', '<Cmd>exe "put "  . v:register<CR>', { desc = 'Paste Below' })

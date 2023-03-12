@@ -101,8 +101,6 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
         workspace = {
           -- Don't analyze code from submodules
           ignoreSubmodules = true,
-          -- Make the server aware of Neovim runtime files
-          library = { [vim.fn.expand('$VIMRUNTIME/lua')] = true, [vim.fn.expand('$VIMRUNTIME/lua/vim/lsp')] = true },
         },
         -- Do not send telemetry data containing a randomized but unique identifier
         telemetry = {

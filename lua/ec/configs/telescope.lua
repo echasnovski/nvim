@@ -1,5 +1,6 @@
 require('telescope').setup({
   defaults = {
+    border = true,
     borderchars = { '═', '║', '═', '║', '╔', '╗', '╝', '╚' },
     sorting_strategy = 'ascending',
     layout_strategy = 'flex',
@@ -8,6 +9,7 @@ require('telescope').setup({
       vertical = { mirror = true },
       flex = { flip_columns = 140 },
     },
+
     -- Use custom sorter based on more intuitive (at least for me) fuzzy logic
     file_sorter = require('mini.fuzzy').get_telescope_sorter,
     generic_sorter = require('mini.fuzzy').get_telescope_sorter,

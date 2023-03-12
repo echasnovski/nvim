@@ -5,12 +5,6 @@ vim.api.nvim_buf_set_keymap(0, 'i', '<M-i>', ' = ', { noremap = true })
 vim.cmd([[setlocal comments=:---,:--]])
 
 -- Customize 'mini.nvim'
-vim.b.minisurround_config = {
-  custom_surroundings = {
-    s = { input = { '%[%[().-()%]%]' }, output = { left = '[[', right = ']]' } },
-  },
-}
-
 vim.b.miniai_config = {
   custom_textobjects = {
     s = { '%[%[().-()%]%]' },
@@ -35,3 +29,9 @@ if _G.MiniSplitjoin ~= nil then
     join = { hooks_post = { del_comma_curly, pad_curly } },
   }
 end
+
+vim.b.minisurround_config = {
+  custom_surroundings = {
+    s = { input = { '%[%[().-()%]%]' }, output = { left = '[[', right = ']]' } },
+  },
+}
