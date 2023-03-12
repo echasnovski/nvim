@@ -122,6 +122,8 @@ vim.schedule(function()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   vim.keymap.set('i', '<CR>', 'v:lua.EC.cr_action()', { expr = true })
 
+  require('mini.splitjoin').setup()
+
   require('mini.surround').setup({ search_method = 'cover_or_next' })
 
   local test = require('mini.test')
@@ -131,11 +133,4 @@ vim.schedule(function()
   })
 
   require('mini.trailspace').setup()
-
-  require('mini-dev.splitjoin').setup({
-    mappings = {
-      split = '<Leader>os',
-      join = '<Leader>oj',
-    },
-  })
 end)
