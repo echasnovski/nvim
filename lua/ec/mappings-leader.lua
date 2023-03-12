@@ -117,7 +117,6 @@ EC.leader_nmap.m = {
 local trailspace_toggle_command = [[<Cmd>lua vim.b.minitrailspace_disable = not vim.b.minitrailspace_disable<CR>]]
 EC.leader_nmap.o = {
   ['name'] = '+other',
-  ['a'] = { [[<Cmd>ArgWrap<CR>]],                      'arguments split' },
   ['C'] = { [[<Cmd>lua MiniCursorword.toggle()<CR>]],  'cursor word hl toggle' },
   ['d'] = { [[<Cmd>Neogen<CR>]],                       'document' },
   ['h'] = { [[<Cmd>normal cxiacxila<CR>]],             'move arg left' },

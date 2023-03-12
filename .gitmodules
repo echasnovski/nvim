@@ -42,10 +42,6 @@
 	path = pack/plugins/opt/plenary
 	url = https://github.com/nvim-lua/plenary.nvim
 	branch = master
-[submodule "vim-argwrap"]
-	path = pack/plugins/opt/vim-argwrap
-	url = https://github.com/FooSoft/vim-argwrap
-	branch = master
 [submodule "vim-exchange"]
 	path = pack/plugins/opt/vim-exchange
 	url = https://github.com/tommcdo/vim-exchange

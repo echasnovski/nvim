@@ -26,9 +26,6 @@ end
 -- Collection of minimal and fast Lua modules
 packadd('mini')
 
--- Wrap function arguments
-packadd_defer('vim-argwrap')
-
 -- Exchange regions
 packadd_defer('vim-exchange')
 
