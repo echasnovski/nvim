@@ -1,10 +1,12 @@
 -- TODO:
 --
 -- Code:
--- - Think about more proper ways to name color scheme snapshot.
---
--- - Define `Colorscheme` class. Should be the return value of
---   `as_colorscheme()` and `get_current_colorscheme()`.
+-- - Try to understand whether adding `compile` option to `colorscheme.write()`
+--   is worth it. Generally, look at 'catppuccin.nvim', which seems to
+--   mean mostly the same thing as current `write()` (create all
+--   highlight groups with `nvim_set_hl()`). Difference is that Catppuccin
+--   creates two binary files and uses `f = loadfile(...); f()`
+--   instead of `:source`.
 --
 -- - Implement Oklab (https://bottosson.github.io/posts/oklab/) color space
 --   with modified lightness component
@@ -26,20 +28,8 @@
 -- - Fields of `Colorscheme` object:
 --     - `name`
 --     - `groups`
---     - ??? Get rid of it entirely ??? As there are actually created highlight
---       groups if plugin is actually loaded. This simplifies **A LOT**.
---       `integrations` - set of supported plugin integrations which provide
---       theming not through highlight groups. Like 'nvim-lualine/lualine.nvim'
---       and 'utilyre/barbecue.nvim'.
 --
 -- - Planned methods of `Colorscheme` object:
---     - `optimize()` - remove rarely used/unnecessary/known to come from
---       plugin highlight groups (by providing pattern; '^DevIcon' or '^Nvim'),
---       possibly make new highlight groups which later will be linked to
---       (presumably, this improves startup speed).
---     - `write()` - save as plain Lua script file in
---       '<stdpath('config')>/colors/<name>.lua'. The file should be sourceable
---       (and thus usable with `:colorscheme`).
 --     - `ensure_cterm({force = false})` - compute closest terminal colors for
 --       all present gui ones. If `opts.force`, redo present terminal colors.
 --     - `apply()` - apply all colors from color scheme to current session.
@@ -146,23 +136,23 @@ MiniColors.as_colorscheme = function(x)
   local res = vim.deepcopy(x)
 
   -- Fields
-  res.name = res.name or 'minicolors_snapshot'
   res.groups = res.groups or {}
-  res.integrations = res.integrations or {}
+  res.name = res.name
 
   -- Methods
-  res.write = H.colorscheme_write
+  res.apply = H.cs_apply
+  res.compress = H.cs_compress
+  res.write = H.cs_write
 
   return res
 end
 
 MiniColors.get_current_colorscheme = function(opts)
-  opts = vim.tbl_deep_extend('force', { integration_themes = {}, make_unique_name = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { new_name = nil }, opts or {})
 
   return MiniColors.as_colorscheme({
-    name = H.colorscheme_get_current_name(opts.make_unique_name),
-    groups = H.colorscheme_get_current_groups(),
-    integrations = H.colorscheme_get_current_integrations(opts.integration_themes),
+    name = opts.new_name or vim.g.colors_name,
+    groups = H.cs_get_current_groups(),
   })
 end
 
@@ -183,68 +173,94 @@ end
 
 H.apply_config = function(config) MiniColors.config = config end
 
--- Color scheme ---------------------------------------------------------------
-H.colorscheme_write = function(self, opts)
-  opts =
-    vim.tbl_extend('force', { directory = (vim.fn.stdpath('config') .. '/colors'), ensure_unique = true }, opts or {})
+-- Color scheme methods -------------------------------------------------------
+H.cs_apply = function(self)
+  if vim.g.colors_name ~= nil then vim.cmd('highlight clear') end
+  vim.g.colors_name = self.name
 
-  if opts.ensure_unique then H.colorscheme_ensure_unique(self.name) end
+  local hi = vim.api.nvim_set_hl
+  local groups_arr = H.hl_groups_to_array(self.groups)
+  for _, hl_data in ipairs(groups_arr) do
+    hi(0, hl_data.name, hl_data.spec)
+  end
+end
+
+H.cs_compress = function(self)
+  local current_cs = MiniColors.get_current_colorscheme()
+
+  vim.cmd('highlight clear')
+  local clear_cs_groups = MiniColors.get_current_colorscheme().groups
+
+  local new_groups = {}
+  for name, spec in pairs(self.groups) do
+    -- Group should stay only if it adds new information compared to the state
+    -- after `:hi clear`
+    local is_from_clear = vim.deep_equal(clear_cs_groups[name], spec)
+
+    -- `^DevIcon` groups come from 'nvim-tree/nvim-web-devicons' and don't
+    -- really have value outside of that plugin. Plus there are **many** of
+    -- them and they are created in that plugin.
+    local is_devicon = name:find('^DevIcon') ~= nil
+
+    -- `^colorizer_` groups come from 'norcalli/nvim-colorizer.lua' plugin and
+    -- don't really have value outside of that plugin.
+    local is_colorizer = name:find('^colorizer_') ~= nil
+
+    if not (is_from_clear or is_devicon or is_colorizer) then new_groups[name] = spec end
+  end
+
+  current_cs:apply()
+
+  return MiniColors.as_colorscheme({ name = self.name, groups = new_groups })
+end
+
+H.cs_write = function(self, opts)
+  opts = vim.tbl_extend('force', { directory = (vim.fn.stdpath('config') .. '/colors'), name = nil }, opts or {})
+
+  local name = opts.name or H.cs_make_file_basename(self.name)
 
   -- Create file lines
   local lines = {
     [[-- Made with 'mini.colors' module of https://github.com/echasnovski/mini.nvim]],
     '',
-    [[vim.cmd('highlight clear')]],
+    [[if vim.g.colors_name ~= nil then vim.cmd('highlight clear') end]],
     'vim.g.colors_name = ' .. vim.inspect(self.name),
     '',
     '-- Highlight groups',
-    'local hi = function(name, hl_data) vim.api.nvim_set_hl(0, name, hl_data) end',
+    'local hi = vim.api.nvim_set_hl',
     '',
   }
 
-  -- - Highlight groups
   local lines_groups = vim.tbl_map(
-    function(hl) return string.format('hi("%s", %s)', hl.name, vim.inspect(hl.spec, { newline = ' ', indent = '' })) end,
+    function(hl) return string.format('hi(0, "%s", %s)', hl.name, vim.inspect(hl.spec, { newline = ' ', indent = '' })) end,
     H.hl_groups_to_array(self.groups)
   )
   vim.list_extend(lines, lines_groups)
 
-  -- - Plugin integrations
-  vim.list_extend(lines, { '', '-- Plugin integrations' })
-
-  local barbecue = self.integrations.barbecue
-  if barbecue.module ~= nil then
-    vim.list_extend(lines, { '' })
-    local barbecue_lines =
-      string.format([[package.loaded['barbecue.theme.%s'] = %s]], barbecue.theme, vim.inspect(barbecue.module))
-    vim.list_extend(lines, vim.split(barbecue_lines, '\n'))
-  end
-
-  local lualine = self.integrations.lualine
-  if lualine.module ~= nil then
-    vim.list_extend(lines, { '' })
-    local lualine_lines =
-      string.format([[package.loaded['lualine.themes.%s'] = %s]], lualine.theme, vim.inspect(lualine.module))
-    vim.list_extend(lines, vim.split(lualine_lines, '\n'))
-  end
-
   -- Create file and populate with computed lines
   vim.fn.mkdir(opts.directory, 'p')
-  local path = string.format('%s/%s.lua', opts.directory, self.name)
+  local path = string.format('%s/%s.lua', opts.directory, name)
   vim.fn.writefile(lines, path)
 end
 
-H.colorscheme_get_current_name = function(make_unique_name)
-  local res = vim.g.colors_name or 'minicolors_snapshot'
-  if make_unique_name then res = res .. vim.fn.strftime('_%Y%m%d_%H%M%S') end
-  return res
+-- Color scheme helpers -------------------------------------------------------
+H.cs_make_file_basename = function(name)
+  -- If there already is color scheme file named `name`, append unique suffix
+  local all_colorschemes_files = vim.api.nvim_get_runtime_file('colors/*.{vim,lua}', true)
+
+  for _, path in ipairs(all_colorschemes_files) do
+    local file_name = vim.fn.fnamemodify(path, ':t:r')
+    if name == file_name then return name .. vim.fn.strftime('_%Y%m%d_%H%M%S') end
+  end
+
+  return name
 end
 
-H.colorscheme_get_current_groups = function()
+H.cs_get_current_groups = function()
   -- Get present highlight group names and if they are linked
   local group_data = vim.split(vim.api.nvim_exec('highlight', true), '\n')
   local group_names = vim.tbl_map(function(x) return x:match('^(%S+)') end, group_data)
-  local link_data = vim.tbl_map(function(x) return x:match('^%S+.* links to %s-(%S+)$') end, group_data)
+  local link_data = vim.tbl_map(function(x) return x:match('^%S+.* links to (%S+)$') end, group_data)
 
   local res = {}
   for i, name in pairs(group_names) do
@@ -255,43 +271,6 @@ H.colorscheme_get_current_groups = function()
     end
   end
   return res
-end
-
-H.colorscheme_get_current_integrations = function(themes)
-  themes = themes or {}
-  local res = {}
-
-  -- nvim-lualine/lualine.nvim
-  if type(themes.lualine) ~= 'string' then
-    local lualine = H.require_safe('lualine')
-    themes.lualine = lualine == nil and 'auto' or lualine.get_config().options.theme
-  end
-
-  res.lualine = { theme = themes.lualine, module = H.require_safe('lualine.themes.' .. themes.lualine) }
-
-  -- utilyre/barbecue.nvim
-  if type(themes.barbecue) ~= 'string' then
-    local barbecue_config = H.require_safe('barbecue.config')
-    themes.barbecue = barbecue_config == nil and 'auto' or barbecue_config.user.theme
-  end
-  -- - Using 'auto' as theme in config leads to 'barbecue.theme.default' theme
-  if themes.barbecue == 'auto' then themes.barbecue = 'default' end
-
-  res.barbecue = { theme = themes.barbecue, module = H.require_safe('barbecue.theme.' .. themes.barbecue) }
-
-  return res
-end
-
-H.colorscheme_ensure_unique = function(name)
-  local all_colorschemes_files = vim.api.nvim_get_runtime_file('colors/*.{vim,lua}', true)
-
-  for _, path in ipairs(all_colorschemes_files) do
-    local file_name = vim.fn.fnamemodify(path, ':t:r')
-    if name == file_name then
-      local msg = string.format('Color scheme "%s" is already present in runtime at "%s".', name, path)
-      H.error(msg)
-    end
-  end
 end
 
 H.get_hl_by_name = function(name)
@@ -327,49 +306,11 @@ H.hl_groups_to_array = function(hl_groups)
   end
   table.sort(res, function(a, b) return a.name < b.name end)
   return res
-
-  -- -- Deal with linked and non-linked hl_groups separately
-  -- local linked, non_linked = {}, {}
-  -- for name, spec in pairs(hl_groups) do
-  --   if spec.link ~= nil then
-  --     table.insert(linked, { name = name, spec = spec })
-  --   else
-  --     table.insert(non_linked, { name = name, spec = spec })
-  --   end
-  -- end
-  --
-  -- -- Sort non-linked hl_groups alphabetically but put `Normal` first (as it is
-  -- -- "main" group which is nice having listed first)
-  -- table.sort(non_linked, function(a, b)
-  --   if a.name == 'Normal' then return true end
-  --   if b.name == 'Normal' then return false end
-  --   return a.name < b.name
-  -- end)
-  --
-  -- -- Sort linked hl_groups alphabetically. NOTE: there is no need to account
-  -- -- for nested linking because linking to (yet) not existing highlight
-  -- -- group works just fine.
-  -- table.sort(linked, function(a, b) return a.name < b.name end)
-  --
-  -- return vim.list_extend(non_linked, linked)
-end
-
-H.hl_groups_to_strings = function(hl_groups)
-  return vim.tbl_map(
-    function(hl) return string.format('hi("%s", %s)', hl.name, vim.inspect(hl.spec, { newline = ' ', indent = ' ' })) end,
-    H.hl_groups_to_array(hl_groups)
-  )
 end
 
 -- Oklab ----------------------------------------------------------------------
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.colors) %s', msg), 0) end
-
-H.require_safe = function(module)
-  local ok, res = pcall(require, module)
-  if not ok then return nil end
-  return res
-end
 
 return MiniColors
