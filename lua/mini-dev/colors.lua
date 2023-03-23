@@ -1,21 +1,15 @@
 -- TODO:
 --
 -- Code:
--- - Probably, implement OKHSL for (hopefuly) better handling of saturation.
+-- - Think whether it is reasonable to have both 'red-green' and 'blue-yellow'
+--   as they seem to be almost the same thing under current implementation
+--   (which operates on hue circle trying to preserve lightness and chroma).
 --
--- - Experiment with inversion. Maybe differntiate how dark->light and
---   light->dark is done.
+-- - Explore possibility of hooking into `ColorSchemePre` and `ColorScheme`
+--   events to perform automatic transition animation.
 --
--- - Try to understand whether adding `compile` option to `colorscheme.write()`
---   is worth it. Generally, look at 'catppuccin.nvim', which seems to
---   mean mostly the same thing as current `write()` (create all
---   highlight groups with `nvim_set_hl()`). Difference is that Catppuccin
---   creates two binary files and uses `f = loadfile(...); f()`
---   instead of `:source`.
---
--- - Implement Oklab (https://bottosson.github.io/posts/oklab/) color space
---   with modified lightness component
---   (https://bottosson.github.io/posts/colorpicker/#intermission---a-new-lightness-estimate-for-oklab).
+-- - Generally think about unifying units of channels in `color_adjust()` and
+--   `color_shift()`.
 --
 -- - Explore possibility of making `animate_change()` function. Ideally should
 --   be a replacement for `:colorscheme` which takes color scheme name and
@@ -40,16 +34,13 @@
 --       all present gui ones. If `opts.force`, redo present terminal colors.
 --     - `apply()` - apply all colors from color scheme to current session.
 --       See https://github.com/rktjmp/lush.nvim/blob/62180850d230e1650fe5543048bb15c4452916d6/lua/lush.lua#L29
---     - `color_invert()` - invert colors. General idea is to make dark/light
---       color scheme be light/dark while preserving "overall feel".
---     - `change_lightness()` - take one parameter from -1 to 1. Here -1 makes
---       all black and 1 makes all white.
---     - `change_temperature()` - take one parameter from -1 to 1. Here -1 makes
---       the most cool and 1 makes the most warm variant of current colors.
---     - `change_saturation()` - take one parameter from -1 to 1. Here -1 makes
---       all grayscale and 1 makes the most saturated variant of current colors.
+--     - `color_adjust(channel, dial, predicate)`. `channel`: "lightness",
+--       "chroma", "red", "green", "blue", ?"temperature"?, ?"color-blind" or
+--       "red-gree"/"blue-yellow"?
+--     - `color_shift(channel, by, predicate)`.
 --     - `change_colorblind_friendly()` (come up with better name) - takes some
 --       parameters and modifies color scheme to be more colorblind friendly.
+--     - `make_transparent()`
 --
 -- Reference color schemes (for testing purposes):
 -- - folke/tokyonight.nvim (3260 stars)
@@ -77,6 +68,28 @@
 --
 -- Documentation:
 --
+-- - Channels:
+--     - Lightness - corrected `l` component of Oklch.
+--     - Chroma - `c` component of Oklch.
+--     - Hue - `h` component of Oklch.
+--     - Temperature - `b` component of Oklab.
+--     - ????? - `a` component of Oklab.
+--     - Red-green - absolute value of `a` of Oklab.
+--     - Blue-yellow - absolute value of `b` of Oklab.
+--     - Red - `r` component of RGB.
+--     - Green - `g` component of RGB.
+--     - Blue - `b` component of RGB.
+--
+-- - Give examples of approximate hue degree names:
+--     - 0 - pink.
+--     - 30 - red.
+--     - 45 - orange.
+--     - 90 - yellow.
+--     - 135 - green.
+--     - 180 - cyan.
+--     - 225 - light blue.
+--     - 270 - blue.
+--     - 315 - magenta/purple.
 
 --- *mini.colors* Modify and save any color scheme
 --- *MiniColors*
@@ -148,7 +161,9 @@ MiniColors.as_colorscheme = function(x)
 
   -- Methods
   res.apply = H.cs_apply
-  res.color_invert = H.cs_invert
+  res.color_adjust = H.cs_color_adjust
+  res.color_invert = H.cs_color_invert
+  res.color_shift = H.cs_color_shift
   res.color_map = H.cs_color_map
   res.compress = H.cs_compress
   res.write = H.cs_write
@@ -168,18 +183,18 @@ end
 
 MiniColors.hex2oklab = function(hex, opts)
   if hex == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { correct_l = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
 
   local res = H.rgb2oklab(H.hex2rgb(hex))
-  if opts.correct_l then res.l = H.correct_lightness(res.l) end
   res.l, res.a, res.b = 100 * res.l, 100 * res.a, 100 * res.b
+  if opts.corrected_l then res.l = H.correct_lightness(res.l) end
 
   return res
 end
 
 MiniColors.oklab2hex = function(lab, opts)
   if lab == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { correct_l = true, clip_method = 'chroma' }, opts or {})
+  opts = vim.tbl_deep_extend('force', { corrected_l = true, clip_method = 'chroma' }, opts or {})
 
   -- Use Oklch color space because it is used for gamut clipping
   return MiniColors.oklch2hex(H.oklab2oklch(lab), opts)
@@ -187,22 +202,23 @@ end
 
 MiniColors.hex2oklch = function(hex, opts)
   if hex == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { correct_l = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
 
   return H.oklab2oklch(MiniColors.hex2oklab(hex, opts))
 end
 
 MiniColors.oklch2hex = function(lch, opts)
   if lch == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { correct_l = true, clip_method = 'chroma' }, opts or {})
+  opts = vim.tbl_deep_extend('force', { corrected_l = true, clip_method = 'chroma' }, opts or {})
 
   -- Make effort to have point inside gamut. NOTE: not always precise, i.e. not
   -- always results into point in gamut, but sufficiently close.
+  lch.h = lch.h % 360
   local lch_in_gamut = H.clip_to_gamut(lch, opts.clip_method)
 
   local lab = H.oklch2oklab(lch_in_gamut)
+  if opts.corrected_l then lab.l = H.correct_lightness_inv(lab.l) end
   lab.l, lab.a, lab.b = 0.01 * lab.l, 0.01 * lab.a, 0.01 * lab.b
-  if opts.correct_l then lab.l = H.correct_lightness_inv(lab.l) end
 
   return H.rgb2hex(H.oklab2rgb(lab))
 end
@@ -274,6 +290,8 @@ H.cusps = {
   {27.04,65.51},{26.92,65.40},{26.81,65.30},{26.66,65.16},{26.55,65.06},{26.45,64.96},{26.35,64.87},
 }
 
+H.allowed_channels = { 'lightness', 'chroma', 'hue', 'temperature', 'red-green', 'blue-yellow', 'red', 'green', 'blue' }
+
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
 H.setup_config = function(config)
@@ -334,6 +352,28 @@ H.cs_compress = function(self)
   return MiniColors.as_colorscheme({ name = self.name, groups = new_groups, terminal = self.terminal })
 end
 
+H.cs_color_adjust = function(self, channel, dial, predicate, opts)
+  channel = H.normalize_channel(channel or 'lightness')
+  dial = H.normalize_dial(dial or 0)
+  predicate = H.normalize_predicate(predicate)
+  opts = vim.tbl_extend('force', { clip_method = 'chroma' }, opts or {})
+
+  if dial == 0 then return self end
+
+  local adjust_channel = H.color_adjusters[channel]
+  if adjust_channel == nil then
+    local msg = string.format('Channel %s is not supported in `color_adjust()`.', vim.inspect(channel))
+    H.error(msg)
+  end
+
+  local f = function(hex, data)
+    if not predicate(hex, data) then return hex end
+    return adjust_channel(hex, dial, opts.clip_method)
+  end
+
+  return self:color_map(f)
+end
+
 H.cs_color_map = function(self, f)
   local res = vim.deepcopy(self)
 
@@ -346,32 +386,63 @@ H.cs_color_map = function(self, f)
 
   -- Terminal colors
   for i, hex in pairs(res.terminal) do
-    res.terminal[i] = f(hex, { attr = 'terminal', group = 'terminal_color_' .. i })
+    res.terminal[i] = f(hex, { attr = 'term', group = 'terminal_color_' .. i })
   end
 
   return res
 end
 
-H.cs_invert = function(self, opts)
-  opts = vim.tbl_extend(
-    'force',
-    { channel = 'lightness', clip_method = 'chroma', predicate = function(hex, data) return true end },
-    opts or {}
-  )
+H.cs_color_invert = function(self, channel, predicate, opts)
+  channel = H.normalize_channel(channel or 'lightness')
+  predicate = H.normalize_predicate(predicate)
+  opts = vim.tbl_extend('force', { clip_method = 'chroma' }, opts or {})
 
-  local predicate = opts.predicate
+  local invert_channel = H.color_inverters[channel]
+  if invert_channel == nil then
+    local msg = string.format('Channel %s is not supported in `color_invert()`.', vim.inspect(channel))
+    H.error(msg)
+  end
+
   local f = function(hex, data)
     if not predicate(hex, data) then return hex end
-    return H.invert_color(hex, _, opts)
+    return invert_channel(hex, opts.clip_method)
+  end
+
+  return self:color_map(f)
+end
+
+H.cs_color_shift = function(self, channel, by, predicate, opts)
+  channel = H.normalize_channel(channel or 'lightness')
+  by = H.normalize_by(by or 0)
+  predicate = H.normalize_predicate(predicate)
+  opts = vim.tbl_extend('force', { clip_method = 'chroma' }, opts or {})
+
+  if by == 0 then return self end
+
+  local shift_channel = H.color_shifters[channel]
+  if shift_channel == nil then
+    local msg = string.format('Channel %s is not supported in `color_shift()`.', vim.inspect(channel))
+    H.error(msg)
+  end
+
+  local f = function(hex, data)
+    if not predicate(hex, data) then return hex end
+    return shift_channel(hex, by, opts.clip_method)
   end
 
   return self:color_map(f)
 end
 
 H.cs_write = function(self, opts)
-  opts = vim.tbl_extend('force', { directory = (vim.fn.stdpath('config') .. '/colors'), name = nil }, opts or {})
+  opts = vim.tbl_extend(
+    'force',
+    { compress = true, directory = (vim.fn.stdpath('config') .. '/colors'), name = nil },
+    opts or {}
+  )
 
   local name = opts.name or H.make_file_basename(self.name)
+
+  local cs = opts.compress and vim.deepcopy(self):compress() or self
 
   -- Create file lines
   -- - Header
@@ -406,6 +477,40 @@ H.cs_write = function(self, opts)
   vim.fn.mkdir(opts.directory, 'p')
   local path = string.format('%s/%s.lua', opts.directory, name)
   vim.fn.writefile(lines, path)
+end
+
+H.normalize_channel = function(x)
+  if not vim.tbl_contains(H.allowed_channels, x) then
+    local msg =
+      string.format('Channel should be one of %s. Not %s.', table.concat(H.allowed_channels, ', '), vim.inspect(x))
+    H.error(msg)
+  end
+  return x
+end
+
+H.normalize_predicate = function(x)
+  -- Treat `nil` predicate as no predicate
+  if x == nil then x = function() return true end end
+
+  -- Treat string predicate as filter on attribute ('fg', 'bg', etc.)
+  if type(x) == 'string' then
+    local attr_val = x
+    x = function(_, data) return data.attr == attr_val end
+  end
+
+  if not vim.is_callable(x) then H.error('Argument `predicate` should be either attribute string or callable.') end
+
+  return x
+end
+
+H.normalize_dial = function(x)
+  if type(x) ~= 'number' or x < -1 or 1 < x then H.error('Argument `dial` should be a number between -1 and 1.') end
+  return x
+end
+
+H.normalize_by = function(x)
+  if type(x) ~= 'number' then H.error('Argument `by` should be a number.') end
+  return x
 end
 
 -- Color scheme helpers -------------------------------------------------------
@@ -453,7 +558,12 @@ H.get_hl_by_name = function(name)
   local res = vim.api.nvim_get_hl_by_name(name, true)
 
   -- At the moment, having `res[true] = 6` indicates that group is cleared
-  if res[true] ~= nil then return nil end
+  -- NOTE: actually return empty dictionary and not `nil` to preserve
+  -- information that group was cleared. This might matter if highlight group
+  -- was cleared but default links to something else (like if group
+  -- `@lsp.type.variable` is cleared to use tree-sitter highlighting but by
+  -- default it links to `Identifier`).
+  if res[true] ~= nil then return {} end
 
   -- Convert decimal colors to hex strings
   res.fg = H.dec2hex(res.foreground)
@@ -484,26 +594,201 @@ H.hl_groups_to_array = function(hl_groups)
   return res
 end
 
--- Color manipulation ---------------------------------------------------------
-H.invert_color = function(hex, _, opts)
-  -- This usually results into point outside of gamut. That is why
-  -- gamut clipping is important here. It also makes it not immediately
-  -- idempotent.
-  local lch = MiniColors.hex2oklch(hex, { correct_l = true, clip_method = opts.clip_method })
+-- Color adjust ---------------------------------------------------------------
+H.color_adjusters = {}
 
-  if opts.channel == 'lightness' then lch.l = 100 - lch.l end
-  if opts.channel == 'chroma' then
-    -- local cusp = H.cusps[math.floor(lch.h)]
-    -- lch.c = cusp[1] - lch.c
+H.color_adjusters.lightness = function(hex, dial)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
+  local gamut_points = H.get_gamut_points({ l = H.correct_lightness_inv(lch.l), c = lch.c, h = lch.h })
 
-    local gamut_points = H.get_gamut_points({ l = H.correct_lightness_inv(lch.l), c = lch.c, h = lch.h })
-    lch.c = gamut_points.c_upper - lch.c
+  local l_lower = H.correct_lightness(gamut_points.l_lower)
+  local l_upper = H.correct_lightness(gamut_points.l_upper)
+  lch.l = H.doubleconvex_point(lch.l, l_lower, l_upper, dial)
 
-    -- lch.c = 100 - lch.c
-  end
-  if opts.channel == 'hue' then lch.h = (lch.h + 180) % 360 end
+  return MiniColors.oklch2hex(lch, { corrected_l = true })
+end
 
-  return MiniColors.oklch2hex(lch, { correct_l = true })
+H.color_adjusters.chroma = function(hex, dial)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = false })
+  if lch.c == 0 then return hex end
+
+  local gamut_points = H.get_gamut_points(lch)
+
+  lch.c = H.doubleconvex_point(lch.c, gamut_points.c_lower, gamut_points.c_upper, dial)
+
+  return MiniColors.oklch2hex(lch, { corrected_l = false })
+end
+
+-- No adjuster for hue directly as there is no reasonable minimum and maximum
+
+H.color_adjusters.temperature = function(hex, dial, clip_method)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
+
+  -- Minimum temperature is at 270 degree hue, maximum is 90
+  -- After shift minimum is at 0, maximum is 180
+  local h_shifted = (lch.h + 90) % 360
+  local h_new = (h_shifted <= 180) and H.doubleconvex_point(h_shifted, 0, 180, dial)
+    or H.doubleconvex_point(h_shifted, 180, 360, -dial)
+  lch.h = (h_new - 90) % 360
+
+  return MiniColors.oklch2hex(lch, { corrected_l = true, clip_method = clip_method })
+end
+
+H.color_adjusters['red-green'] = function(hex, dial, clip_method)
+  local lch = MiniColors.hex2oklch(hex)
+
+  -- Adjust absolute value of `a` based on quadrant edges:
+  -- - Dial -1 should adjust towards y-axis.
+  -- - Dial 1  should adjust away from y-axis.
+  local quadrant = H.get_quadrant(lch.h)
+  if quadrant == 1 then lch.h = H.doubleconvex_point(lch.h, 90, 0, dial) end
+  if quadrant == 2 then lch.h = H.doubleconvex_point(lch.h, 90, 180, dial) end
+  if quadrant == 3 then lch.h = H.doubleconvex_point(lch.h, 270, 180, dial) end
+  if quadrant == 4 then lch.h = H.doubleconvex_point(lch.h, 270, 360, dial) end
+
+  return MiniColors.oklch2hex(lch, { clip_method = clip_method })
+end
+
+H.color_adjusters['blue-yellow'] =
+  function(hex, dial, clip_method) return H.color_adjusters['red-green'](hex, -dial, clip_method) end
+
+H.color_adjusters.red = function(hex, dial)
+  local rgb = H.hex2rgb(hex)
+  rgb.r = H.doubleconvex_point(rgb.r, 0, 1, dial)
+  return H.rgb2hex(rgb)
+end
+
+H.color_adjusters.green = function(hex, dial)
+  local rgb = H.hex2rgb(hex)
+  rgb.g = H.doubleconvex_point(rgb.g, 0, 1, dial)
+  return H.rgb2hex(rgb)
+end
+
+H.color_adjusters.blue = function(hex, dial)
+  local rgb = H.hex2rgb(hex)
+  rgb.b = H.doubleconvex_point(rgb.b, 0, 1, dial)
+  return H.rgb2hex(rgb)
+end
+
+-- Color inversion ------------------------------------------------------------
+H.color_inverters = {}
+
+H.color_inverters.lightness = function(hex, clip_method)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
+  -- This results into a better output but might result into point outside of
+  -- gamut. That is why gamut clipping is important here. This approach also is
+  -- not one-to-one invertable: applying it twice might lead to slightly
+  -- different colors depending on clip method (like smaller chroma with
+  -- default "chroma" clip method).
+  lch.l = 100 - lch.l
+  return MiniColors.oklch2hex(lch, { corrected_l = true, clip_method = clip_method })
+end
+
+H.color_inverters.chroma = function(hex, clip_method)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = false })
+  -- Don't invert achromatic colors (black, greys, white)
+  if lch.c == 0 then return hex end
+
+  local gamut_points = H.get_gamut_points(lch)
+  lch.c = gamut_points.c_upper - lch.c
+  return MiniColors.oklch2hex(lch, { corrected_l = false, clip_method = clip_method })
+end
+
+-- No inverter for hue directly as there is no reasonable inversion
+
+H.color_inverters.temperature = function(hex, clip_method)
+  -- This is a simpler approach of inverting along the hue circle based on 90
+  -- (highest temperature) and 270 (lowest) degrees
+  local lab = MiniColors.hex2oklab(hex)
+  lab.b = -lab.b
+  return MiniColors.oklab2hex(lab, { clip_method = clip_method })
+end
+
+H.color_inverters['red-green'] = function(hex, clip_method)
+  local lch = MiniColors.hex2oklch(hex)
+  -- Invert absolute value of `a` based on quadrant edges towards y-axis
+  local quadrant = H.get_quadrant(lch.h)
+  lch.h = 90 * (quadrant - 1) + (90 * quadrant - lch.h)
+  return MiniColors.oklch2hex(lch, { clip_method = clip_method })
+end
+
+-- Inverter for 'blue-yellow' is the same as 'red-green' because reducing
+-- red-green along the circle increases blue-yellow and vice versa.
+H.color_inverters['blue-yellow'] = H.color_inverters['red-green']
+
+H.color_inverters.red = function(hex)
+  local rgb = H.hex2rgb(hex)
+  rgb.r = 1 - rgb.r
+  return H.rgb2hex(rgb)
+end
+
+H.color_inverters.green = function(hex)
+  local rgb = H.hex2rgb(hex)
+  rgb.g = 1 - rgb.g
+  return H.rgb2hex(rgb)
+end
+
+H.color_inverters.blue = function(hex)
+  local rgb = H.hex2rgb(hex)
+  rgb.b = 1 - rgb.b
+  return H.rgb2hex(rgb)
+end
+
+-- Color shift ----------------------------------------------------------------
+H.color_shifters = {}
+
+H.color_shifters.lightness = function(hex, by, clip_method)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
+  lch.l = H.clip(lch.l + by, 0, 100)
+  return MiniColors.oklch2hex(lch, { corrected_l = true, clip_method = clip_method })
+end
+
+H.color_shifters.chroma = function(hex, by, clip_method)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = false })
+  local gamut_points = H.get_gamut_points(lch)
+  lch.c = H.clip(lch.c + by, gamut_points.c_lower, gamut_points.c_upper)
+  return MiniColors.oklch2hex(lch, { corrected_l = false, clip_method = clip_method })
+end
+
+H.color_shifters.hue = function(hex, by, clip_method)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
+  -- Positive direction is counter-clockwise
+  lch.h = (lch.h + by) % 360
+  return MiniColors.oklch2hex(lch, { corrected_l = true, clip_method = clip_method })
+end
+
+H.color_shifters.temperature = function(hex, by, clip_method)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
+
+  -- Positive direction is towards 90 degree angle
+  -- Clip to not leave current vertical half
+  local quadrant = H.get_quadrant(lch.h)
+  if quadrant == 1 then lch.h = H.clip(lch.h + by, -90, 90) end
+  if quadrant == 2 then lch.h = H.clip(lch.h - by, 90, 270) end
+  if quadrant == 3 then lch.h = H.clip(lch.h - by, 90, 270) end
+  if quadrant == 4 then lch.h = H.clip(lch.h + by, 270, 450) % 360 end
+
+  return MiniColors.oklch2hex(lch, { corrected_l = true, clip_method = clip_method })
+end
+
+H.color_shifters['red-green'] = function(hex, by, clip_method)
+  local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
+
+  -- Positive direction is away from y-axis
+  -- Clip to not leave current quadrant
+  local quadrant = H.get_quadrant(lch.h)
+  if quadrant == 1 then lch.h = H.clip(lch.h - by, 0, 90) end
+  if quadrant == 2 then lch.h = H.clip(lch.h + by, 90, 180) end
+  if quadrant == 3 then lch.h = H.clip(lch.h - by, 180, 270) end
+  if quadrant == 4 then lch.h = H.clip(lch.h + by, 270, 360) % 360 end
+
+  return MiniColors.oklch2hex(lch, { corrected_l = true, clip_method = clip_method })
+end
+
+H.color_shifters['blue-yellow'] = function(hex, by, clip_method)
+  -- Positive direction is away from x-axis
+  -- Clip to not leave current quadrant
+  return H.color_shifters['red-green'](hex, -by, clip_method)
 end
 
 -- Oklab/Oklch ----------------------------------------------------------------
@@ -605,19 +890,23 @@ H.correct_channel_inv = function(x)
   return (0.0031308 >= x) and (12.92 * x) or (1.055 * math.pow(x, 0.416666667) - 0.055)
 end
 
--- Functions for lightness correction. Assumes input is in [0; 1] range
+-- Functions for lightness correction. Assumes input is in [0; 100] range
 -- https://bottosson.github.io/posts/colorpicker/#intermission---a-new-lightness-estimate-for-oklab
 H.correct_lightness = function(x)
+  x = 0.01 * x
   local k1, k2 = 0.206, 0.03
   local k3 = (1 + k1) / (1 + k2)
 
-  return 0.5 * (k3 * x - k1 + math.sqrt((k3 * x - k1) ^ 2 + 4 * k2 * k3 * x))
+  local res = 0.5 * (k3 * x - k1 + math.sqrt((k3 * x - k1) ^ 2 + 4 * k2 * k3 * x))
+  return 100 * res
 end
 
 H.correct_lightness_inv = function(x)
+  x = 0.01 * x
   local k1, k2 = 0.206, 0.03
   local k3 = (1 + k1) / (1 + k2)
-  return (x / k3) * (x + k1) / (x + k2)
+  local res = (x / k3) * (x + k1) / (x + k2)
+  return 100 * res
 end
 
 -- Get gamut ranges for Lch point. They are computed for its hue leaf as
@@ -696,5 +985,16 @@ H.round = function(x) return math.floor(x + 0.5) end
 H.clip = function(x, from, to) return math.min(math.max(x, from), to) end
 
 H.cuberoot = function(x) return math.pow(x, 0.333333) end
+
+H.sign = function(x) return x == 0 and 0 or (x < 0 and -1 or 1) end
+
+H.get_quadrant = function(degree) return math.floor((degree % 360) / 90) + 1 end
+
+H.convex_point = function(x, y, coef) return (1 - coef) * x + coef * y end
+
+H.doubleconvex_point = function(x, min, max, coef)
+  if coef < 0 then return H.convex_point(x, min, -coef) end
+  return H.convex_point(x, max, coef)
+end
 
 return MiniColors
