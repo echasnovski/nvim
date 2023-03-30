@@ -156,9 +156,7 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
-MiniColors.config = {
-  clip_method = 'chroma',
-}
+MiniColors.config = {}
 --minidoc_afterlines_end
 
 MiniColors.as_colorscheme = function(x)
@@ -174,8 +172,8 @@ MiniColors.as_colorscheme = function(x)
   res.color_adjust = H.cs_color_adjust
   res.color_cut = H.cs_color_cut
   res.color_invert = H.cs_color_invert
-  res.color_shift = H.cs_color_shift
   res.color_map = H.cs_color_map
+  res.color_shift = H.cs_color_shift
   res.compress = H.cs_compress
   res.write = H.cs_write
 
@@ -192,6 +190,75 @@ MiniColors.get_current_colorscheme = function(opts)
   })
 end
 
+MiniColors.interactive = function(opts)
+  opts = vim.tbl_deep_extend(
+    'force',
+    { colorscheme = nil, mappings = { Apply = '<M-a>', Reset = '<M-r>', Quit = '<M-q>', Write = '<M-w>' } },
+    opts or {}
+  )
+  local maps = opts.mappings
+
+  -- Prepare
+  local init_cs = vim.deepcopy(opts.colorscheme) or MiniColors.get_current_colorscheme()
+  local buf_id = vim.api.nvim_create_buf(true, true)
+
+  -- Write header lines
+  local delimiter = '----------'
+  local header_lines = {
+    [[Experiment with color scheme by 'mini.colors']],
+    '',
+    'Non-blank lines after `' .. delimiter .. '` are treated as calls to color scheme methods',
+    'For more information see `:h MiniColors.interactive()`',
+    '',
+    'Current initial color scheme: ' .. init_cs.name,
+    'Current buffer-local mappings (Normal mode):',
+    '  Apply: ' .. maps.Apply,
+    '  Reset: ' .. maps.Reset,
+    '  Quit:  ' .. maps.Quit,
+    '  Write: ' .. maps.Write,
+    '',
+    delimiter,
+    '',
+    '',
+  }
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, header_lines)
+
+  -- Add highlight
+  local hi = function(group, from, to) vim.highlight.range(buf_id, H.ns_id.interactive, group, from, to, {}) end
+  --stylua: ignore start
+  hi('Title',   { 0,  0 },  { 1,  0 })
+  hi('Special', { 5,  30 }, { 6,  0 })
+  hi('Special', { 7,  9 },  { 8,  0 })
+  hi('Special', { 8,  9 },  { 9,  0 })
+  hi('Special', { 9,  9 },  { 10, 0 })
+  hi('Special', { 10, 9 },  { 11, 0 })
+  --stylua: ignore end
+
+  -- Make local mappings
+  local m = function(action, rhs) vim.keymap.set('n', maps[action], rhs, { desc = action, buffer = buf_id }) end
+
+  m('Apply', function()
+    local new_cs = H.apply_interactive_buffer(buf_id, init_cs, delimiter)
+    new_cs:apply()
+  end)
+  m('Reset', function() init_cs:apply() end)
+  m('Quit', function() vim.api.nvim_buf_delete(buf_id, { force = true }) end)
+  m('Write', function()
+    vim.ui.input(
+      { prompt = [[Write to 'colors/' of your config under this name: ]], default = init_cs.name },
+      function(input)
+        if input == nil then return end
+        local new_cs = H.apply_interactive_buffer(buf_id, init_cs, delimiter)
+        new_cs:write({ name = input })
+      end
+    )
+  end)
+
+  -- Make current
+  vim.api.nvim_set_current_buf(buf_id)
+  vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(buf_id), 0 })
+end
+
 MiniColors.hex2oklab = function(hex, opts)
   if hex == nil then return nil end
   opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
@@ -205,7 +272,7 @@ end
 
 MiniColors.oklab2hex = function(lab, opts)
   if lab == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true, clip_method = H.get_config().clip_method }, opts or {})
+  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
 
   -- Use Oklch color space because it is used for gamut clipping
   return MiniColors.oklch2hex(H.oklab2oklch(lab), opts)
@@ -220,12 +287,12 @@ end
 
 MiniColors.oklch2hex = function(lch, opts)
   if lch == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true, clip_method = H.get_config().clip_method }, opts or {})
+  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
 
   -- Make effort to have point inside gamut. NOTE: not always precise, i.e. not
   -- always results into point in gamut, but sufficiently close.
   lch.h = lch.h % 360
-  local lch_in_gamut = H.clip_to_gamut(lch, opts.clip_method)
+  local lch_in_gamut = H.clip_to_gamut(lch)
 
   local lab = H.oklch2oklab(lch_in_gamut)
   if opts.corrected_l then lab.l = H.correct_lightness_inv(lab.l) end
@@ -302,6 +369,8 @@ H.cusps = {
 }
 
 H.allowed_channels = { 'lightness', 'chroma', 'hue', 'temperature', 'pressure', 'a', 'b', 'red', 'green', 'blue' }
+
+H.ns_id = { interactive = vim.api.nvim_create_namespace('MiniColorsInteractive') }
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -451,7 +520,7 @@ end
 H.cs_write = function(self, opts)
   opts = vim.tbl_extend(
     'force',
-    { compress = true, directory = (vim.fn.stdpath('config') .. '/colors'), name = nil },
+    { compress = true, name = nil, directory = (vim.fn.stdpath('config') .. '/colors') },
     opts or {}
   )
 
@@ -976,7 +1045,7 @@ H.get_gamut_points = function(lch)
   return { l_lower = l_lower, l_upper = l_upper, c_lower = c_lower, c_upper = c_upper }
 end
 
-H.clip_to_gamut = function(lch, clip_method)
+H.clip_to_gamut = function(lch)
   -- `lch` should have not corrected lightness
   local res = vim.deepcopy(lch)
   local gamut_points = H.get_gamut_points(lch)
@@ -988,16 +1057,41 @@ H.clip_to_gamut = function(lch, clip_method)
 
   if is_inside_gamut then return res end
 
-  if clip_method == 'chroma' then
-    -- Preserve lightness by clipping chroma
-    res.c = H.clip(res.c, gamut_points.c_lower, gamut_points.c_upper)
+  -- Preserve lightness by clipping chroma
+  res.c = H.clip(res.c, gamut_points.c_lower, gamut_points.c_upper)
+
+  return res
+end
+
+-- Interactive ----------------------------------------------------------------
+H.apply_interactive_buffer = function(buf_id, init_cs, delimiter)
+  -- Create temporart color scheme
+  MiniColors._interactive_cs = vim.deepcopy(init_cs)
+
+  local is_past_delimiter = false
+  local process_line = function(l)
+    if l == delimiter then
+      is_past_delimiter = true
+      return
+    end
+
+    l = vim.trim(l)
+    if not is_past_delimiter or l == '' then return end
+
+    local ok, out = pcall(vim.cmd, 'lua MiniColors._interactive_cs = MiniColors._interactive_cs:' .. l)
+    if not ok then
+      MiniColors._interactive_cs = nil
+      H.error('There was error executing content of interactive buffer: ' .. out)
+    end
   end
 
-  if clip_method == 'lightness' then
-    -- Preserve chroma by clipping lightness
-    res.l = H.clip(res.l, gamut_points.l_lower, gamut_points.l_upper)
+  local lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, true)
+  for _, l in ipairs(lines) do
+    process_line(l)
   end
 
+  local res = MiniColors._interactive_cs
+  MiniColors._interactive_cs = nil
   return res
 end
 
