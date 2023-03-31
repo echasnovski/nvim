@@ -1014,8 +1014,9 @@ end
 --   of input `lch` for in-gamut point. Put it should be pretty rare: ~0.5%
 --   cases for most saturated colors.
 H.get_gamut_points = function(lch)
-  local l, c = lch.l, lch.c
+  local c, l = lch.c, lch.l
   local cusp = H.cusps[math.floor(lch.h % 360)]
+  local c_cusp, l_cusp = cusp[1], cusp[2]
 
   -- Range of allowed lightness is computed based on current chroma:
   -- - Lower is from segment between (0, 0) and cusp.
@@ -1023,12 +1024,12 @@ H.get_gamut_points = function(lch)
   local l_lower, l_upper
   if c < 0 then
     l_lower, l_upper = 0, 100
-  elseif cusp[1] < c then
-    l_lower, l_upper = cusp[2], cusp[2]
+  elseif c_cusp < c then
+    l_lower, l_upper = l_cusp, l_cusp
   else
-    local saturation = c / cusp[1]
-    l_lower = saturation * cusp[2]
-    l_upper = saturation * (cusp[2] - 100) + 100
+    local saturation = c / c_cusp
+    l_lower = saturation * l_cusp
+    l_upper = saturation * (l_cusp - 100) + 100
   end
 
   -- Maximum allowed chroma is computed based on currnet lightness and depends
@@ -1039,10 +1040,33 @@ H.get_gamut_points = function(lch)
   if l < 0 or 100 < l then
     c_upper = 0
   else
-    c_upper = l <= cusp[2] and (cusp[1] * l / cusp[2]) or (cusp[1] * (100 - l) / (100 - cusp[2]))
+    c_upper = l <= l_cusp and (c_cusp * l / l_cusp) or (c_cusp * (100 - l) / (100 - l_cusp))
   end
 
-  return { l_lower = l_lower, l_upper = l_upper, c_lower = c_lower, c_upper = c_upper }
+  -- Intersection of segment between (c, l) and (0, l_cusp) with gamut boundary
+  local c_cusp_clip, l_cusp_clip
+  if c <= 0 then
+    c_cusp_clip, l_cusp_clip = c, l
+  elseif l <= l_cusp then
+    -- Intersection with lower segment
+    local prop = 1 - l / l_cusp
+    c_cusp_clip = c_cusp * c / (c_cusp * prop + c)
+    l_cusp_clip = l_cusp * c_cusp_clip / c_cusp
+  else
+    -- Intersection with upper segment
+    local prop = 1 - (l - 100) / (l_cusp - 100)
+    c_cusp_clip = c_cusp * c / (c_cusp * prop + c)
+    l_cusp_clip = 100 + c_cusp_clip * (l_cusp - 100) / c_cusp
+  end
+
+  return {
+    l_lower = l_lower,
+    l_upper = l_upper,
+    c_lower = c_lower,
+    c_upper = c_upper,
+    l_cusp_clip = l_cusp_clip,
+    c_cusp_clip = c_cusp_clip,
+  }
 end
 
 H.clip_to_gamut = function(lch)
@@ -1050,15 +1074,23 @@ H.clip_to_gamut = function(lch)
   local res = vim.deepcopy(lch)
   local gamut_points = H.get_gamut_points(lch)
 
-  local is_inside_gamut = gamut_points.l_lower <= lch.l
-    and lch.l <= gamut_points.l_upper
-    and gamut_points.c_lower <= lch.c
-    and lch.c <= gamut_points.c_upper
-
+  local is_inside_gamut = gamut_points.c_lower <= lch.c and lch.c <= gamut_points.c_upper
   if is_inside_gamut then return res end
 
-  -- Preserve lightness by clipping chroma
-  res.c = H.clip(res.c, gamut_points.c_lower, gamut_points.c_upper)
+  -- Clip by going towards (0, l_cusp) until in gamut. This approach proved to
+  -- be the best because of reasonable compromise between chroma and lightness.
+  -- In particular when inverting lightness of dark color schemes:
+  -- - Clipping by reducing chroma with constant lightness leads to a dark
+  --   foreground with hardly distinguishable colors.
+  -- - Clipping by adjusting lightness with constant chroma leads to very low
+  --   contrast on a particularly saturated foreground colors.
+  res.l, res.c = gamut_points.l_cusp_clip, gamut_points.c_cusp_clip
+
+  -- Other approaches:
+  -- - Preserve chroma by clipping lightness
+  --   res.l = H.clip(res.l, gamut_points.l_lower, gamut_points.l_upper)
+  -- - Preserve lightness by clipping chroma
+  --   res.c = H.clip(res.c, gamut_points.c_lower, gamut_points.c_upper)
 
   return res
 end
