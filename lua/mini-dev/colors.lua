@@ -1,12 +1,7 @@
 -- TODO:
 --
 -- Code:
--- - Think about possibility of some rudimentary UI for experiments.
---
--- - Explore possibility of hooking into `ColorSchemePre` and `ColorScheme`
---   events to perform automatic transition animation.
---
--- - Explore possibility of making `animate_change()` function. Ideally should
+-- - Explore possibility of making `animate_transition()` function. Ideally should
 --   be a replacement for `:colorscheme` which takes color scheme name and
 --   performs smooth animated transition.
 --   Might have problems due to redraw (maybe use `lazyredraw`?).
@@ -25,8 +20,6 @@
 --     - `terminal` - terminal colors (see `:h terminal-config`)
 --
 -- - Planned methods of `Colorscheme` object:
---     - `ensure_cterm({force = false})` - compute closest terminal colors for
---       all present gui ones. If `opts.force`, redo present terminal colors.
 --     - `color_cut(channel, from, to, predicate, opts)` - exclude regions in
 --       channel. `opts.action` decides what action to perform:
 --         - "rescale" to rescale all colors (usefult to create color-blind
@@ -150,13 +143,33 @@ MiniColors.setup = function(config)
 
   -- Apply config
   H.apply_config(config)
+
+  -- Create user command
+  vim.api.nvim_create_user_command('Colorscheme', function(input)
+    local from_cs = MiniColors.get_current_colorscheme()
+
+    -- Currently there is a brief redraw even with `lazyredraw`.
+    -- Find a way to avoid it.
+    local cache_lazyredraw = vim.o.lazyredraw
+    vim.o.lazyredraw = true
+
+    local ok, _ = pcall(vim.cmd, 'colorscheme ' .. input.args)
+    if ok then
+      local to_cs = MiniColors.get_current_colorscheme()
+      MiniColors.animate_transition(from_cs, to_cs)
+    end
+
+    vim.o.lazyredraw = cache_lazyredraw
+  end, { nargs = 1, complete = 'color' })
 end
 
 --- Module config
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
-MiniColors.config = {}
+MiniColors.config = {
+  gamut_clip = 'cusp',
+}
 --minidoc_afterlines_end
 
 MiniColors.as_colorscheme = function(x)
@@ -175,6 +188,7 @@ MiniColors.as_colorscheme = function(x)
   res.color_map = H.cs_color_map
   res.color_shift = H.cs_color_shift
   res.compress = H.cs_compress
+  res.ensure_cterm = H.cs_ensure_cterm
   res.write = H.cs_write
 
   return res
@@ -259,6 +273,44 @@ MiniColors.interactive = function(opts)
   vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(buf_id), 0 })
 end
 
+MiniColors.animate_transition = function(from_colorscheme, to_colorscheme, opts)
+  opts = opts or {}
+  local n_steps = math.max(opts.n_steps or 40, 1)
+  local step_duration = math.max(opts.step_duration or 25, 1)
+
+  -- Pre-compute common data
+  local from_edge = H.cs_hex_to_oklab(vim.deepcopy(from_colorscheme:compress()))
+  local to_edge = H.cs_hex_to_oklab(vim.deepcopy(to_colorscheme:compress()))
+  local all_group_names = H.union(vim.tbl_keys(from_edge.groups), vim.tbl_keys(to_edge.groups))
+
+  -- Start animation
+  local step = 0
+  local timer = vim.loop.new_timer()
+
+  local draw_step
+  draw_step = vim.schedule_wrap(function()
+    local cs_step = H.compute_animate_step(from_edge, to_edge, step / n_steps, all_group_names)
+    MiniColors.as_colorscheme(H.cs_oklab_to_hex(cs_step)):apply()
+    vim.cmd('redraw')
+
+    step = step + 1
+
+    if n_steps <= step then
+      timer:stop()
+      to_colorscheme:apply()
+      return
+    end
+
+    timer:again()
+  end)
+
+  -- Start repeating timer without callback execution
+  timer:start(10000000, step_duration, draw_step)
+
+  -- Execute initial step (apply `from` color scheme) immediately
+  draw_step()
+end
+
 MiniColors.hex2oklab = function(hex, opts)
   if hex == nil then return nil end
   opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
@@ -272,7 +324,7 @@ end
 
 MiniColors.oklab2hex = function(lab, opts)
   if lab == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', H.get_config(), { corrected_l = true }, opts or {})
 
   -- Use Oklch color space because it is used for gamut clipping
   return MiniColors.oklch2hex(H.oklab2oklch(lab), opts)
@@ -287,12 +339,12 @@ end
 
 MiniColors.oklch2hex = function(lch, opts)
   if lch == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', H.get_config(), { corrected_l = true }, opts or {})
 
   -- Make effort to have point inside gamut. NOTE: not always precise, i.e. not
   -- always results into point in gamut, but sufficiently close.
   lch.h = lch.h % 360
-  local lch_in_gamut = H.clip_to_gamut(lch)
+  local lch_in_gamut = H.clip_to_gamut(lch, opts.gamut_clip)
 
   local lab = H.oklch2oklab(lch_in_gamut)
   if opts.corrected_l then lab.l = H.correct_lightness_inv(lab.l) end
@@ -317,8 +369,8 @@ H.tau = 2 * math.pi
 -- colors lie inside this triangle **AND** not all points inside triangle are
 -- RGB colors. But both proportions are small: around 0.5% with similar modeled
 -- RGB color for first one and around 2.16% for second one.
----@diagnostic disable-next-line
 --stylua: ignore
+---@diagnostic disable-next-line
 H.cusps = {
   [0] = {26.23,64.74},
   {26.14,64.65},{26.06,64.56},{25.98,64.48},{25.91,64.39},{25.82,64.29},{25.76,64.21},{25.70,64.13},{25.65,64.06},
@@ -405,35 +457,8 @@ H.cs_apply = function(self)
   for i, val in pairs(self.terminal) do
     vim.g['terminal_color_' .. i] = val
   end
-end
 
-H.cs_compress = function(self)
-  local current_cs = MiniColors.get_current_colorscheme()
-
-  vim.cmd('highlight clear')
-  local clear_cs_groups = MiniColors.get_current_colorscheme().groups
-
-  local new_groups = {}
-  for name, spec in pairs(self.groups) do
-    -- Group should stay only if it adds new information compared to the state
-    -- after `:hi clear`
-    local is_from_clear = vim.deep_equal(clear_cs_groups[name], spec)
-
-    -- `^DevIcon` groups come from 'nvim-tree/nvim-web-devicons' and don't
-    -- really have value outside of that plugin. Plus there are **many** of
-    -- them and they are created in that plugin.
-    local is_devicon = name:find('^DevIcon') ~= nil
-
-    -- `^colorizer_` groups come from 'norcalli/nvim-colorizer.lua' plugin and
-    -- don't really have value outside of that plugin.
-    local is_colorizer = name:find('^colorizer_') ~= nil
-
-    if not (is_from_clear or is_devicon or is_colorizer) then new_groups[name] = spec end
-  end
-
-  current_cs:apply()
-
-  return MiniColors.as_colorscheme({ name = self.name, groups = new_groups, terminal = self.terminal })
+  return self
 end
 
 H.cs_color_adjust = function(self, channel, coef, predicate)
@@ -517,6 +542,50 @@ H.cs_color_shift = function(self, channel, by, predicate)
   return self:color_map(f)
 end
 
+H.cs_compress = function(self)
+  local current_cs = MiniColors.get_current_colorscheme()
+
+  vim.cmd('highlight clear')
+  local clear_cs_groups = MiniColors.get_current_colorscheme().groups
+
+  local new_groups = {}
+  for name, spec in pairs(self.groups) do
+    -- Group should stay only if it adds new information compared to the state
+    -- after `:hi clear`
+    local is_from_clear = vim.deep_equal(clear_cs_groups[name], spec)
+
+    -- `^DevIcon` groups come from 'nvim-tree/nvim-web-devicons' and don't
+    -- really have value outside of that plugin. Plus there are **many** of
+    -- them and they are created in that plugin.
+    local is_devicon = name:find('^DevIcon') ~= nil
+
+    -- `^colorizer_` groups come from 'norcalli/nvim-colorizer.lua' plugin and
+    -- don't really have value outside of that plugin.
+    local is_colorizer = name:find('^colorizer_') ~= nil
+
+    if not (is_from_clear or is_devicon or is_colorizer) then new_groups[name] = spec end
+  end
+
+  current_cs:apply()
+
+  return MiniColors.as_colorscheme({ name = self.name, groups = new_groups, terminal = self.terminal })
+end
+
+H.cs_ensure_cterm = function(self, opts)
+  opts = vim.tbl_deep_extend('force', { force = true }, opts or {})
+
+  -- Compute Oklab coordinates of terminal colors for better approximation
+  local term_oklab = H.compute_term_oklab()
+
+  local force = opts.force
+  for _, gr in pairs(self.groups) do
+    if gr.fg and (force or not gr.ctermfg) then gr.ctermfg = H.approx_term_color(gr.fg, term_oklab) end
+    if gr.bg and (force or not gr.ctermbg) then gr.ctermbg = H.approx_term_color(gr.bg, term_oklab) end
+  end
+
+  return self
+end
+
 H.cs_write = function(self, opts)
   opts = vim.tbl_extend(
     'force',
@@ -561,6 +630,8 @@ H.cs_write = function(self, opts)
   vim.fn.mkdir(opts.directory, 'p')
   local path = string.format('%s/%s.lua', opts.directory, name)
   vim.fn.writefile(lines, path)
+
+  return self
 end
 
 H.normalize_channel = function(x)
@@ -680,6 +751,125 @@ H.hl_groups_to_array = function(hl_groups)
   return res
 end
 
+-- Terminal colors ------------------------------------------------------------
+H.compute_term_oklab = function()
+  -- Use cached values if they are already computed
+  if H.term_oklab ~= nil then return H.term_oklab end
+
+  local res = {}
+
+  -- Main colors. Don't use 0-15 because they are terminal dependent
+  local cterm_basis = { 0, 95, 135, 175, 215, 255 }
+  for i = 16, 231 do
+    local j = i - 16
+    local r = cterm_basis[math.floor(j / 36) % 6 + 1]
+    local g = cterm_basis[math.floor(j / 6) % 6 + 1]
+    local b = cterm_basis[j % 6 + 1]
+    res[i] = H.rgb2oklab({ r = r, g = g, b = b })
+  end
+
+  -- Grays
+  for i = 232, 255 do
+    local c = 8 + (i - 232) * 10
+    res[i] = H.rgb2oklab({ r = c, g = c, b = c })
+  end
+
+  H.term_oklab = res
+  return res
+end
+
+H.approx_term_color = function(hex, term_oklab)
+  local ref_lab = H.rgb2oklab(H.hex2rgb(hex))
+
+  local best_id, best_dist = nil, math.huge
+  for id, lab in pairs(term_oklab) do
+    local dist = math.abs(ref_lab.l - lab.l) + math.abs(ref_lab.a - lab.a) + math.abs(ref_lab.b - lab.b)
+    if dist < best_dist then
+      best_id, best_dist = id, dist
+    end
+  end
+
+  return best_id
+end
+
+-- Animation ------------------------------------------------------------------
+H.cs_hex_to_oklab = function(cs)
+  cs.groups = vim.tbl_map(function(gr)
+    gr.fg = MiniColors.hex2oklab(gr.fg)
+    gr.bg = MiniColors.hex2oklab(gr.bg)
+    gr.sp = MiniColors.hex2oklab(gr.sp)
+    return gr
+  end, cs.groups)
+
+  cs.terminal = vim.tbl_map(MiniColors.hex2oklab, cs.terminal)
+
+  return cs
+end
+
+H.cs_oklab_to_hex = function(cs)
+  -- Using 'chroma' clipping method preserves lightness which results into
+  -- smoother transitions
+  local oklab2hex = function(lab) return MiniColors.oklab2hex(lab, { gamut_clip = 'chroma' }) end
+  cs.groups = vim.tbl_map(function(gr)
+    gr.fg = oklab2hex(gr.fg)
+    gr.bg = oklab2hex(gr.bg)
+    gr.sp = oklab2hex(gr.sp)
+    return gr
+  end, cs.groups)
+
+  cs.terminal = vim.tbl_map(oklab2hex, cs.terminal)
+
+  return cs
+end
+
+H.compute_animate_step = function(from, to, coef, all_group_names)
+  local groups = {}
+  for _, name in ipairs(all_group_names) do
+    groups[name] = H.convex_hl_group(from.groups[name], to.groups[name], coef)
+  end
+
+  local terminal = {}
+  for i = 0, 15 do
+    terminal[i] = H.convex_lab(from.terminal[i], to.terminal[i], coef)
+  end
+
+  return MiniColors.as_colorscheme({ name = 'transition_step', groups = groups, terminal = terminal })
+end
+
+H.convex_hl_group = function(from, to, coef)
+  if from == nil or to == nil or from.link ~= nil or to.link ~= nil then return H.convex_discrete(from, to, coef) end
+
+  --stylua: ignore
+  return {
+    fg = H.convex_lab(from.fg, to.fg, coef),
+    bg = H.convex_lab(from.bg, to.bg, coef),
+    sp = H.convex_lab(from.sp, to.sp, coef),
+
+    blend = H.round(H.convex_continuous(from.blend, to.blend, coef)),
+
+    bold          = H.convex_discrete(from.bold,          to.bold,          coef),
+    italic        = H.convex_discrete(from.italic,        to.italic,        coef),
+    nocombine     = H.convex_discrete(from.nocombine,     to.nocombine,     coef),
+    reverse       = H.convex_discrete(from.reverse,       to.reverse,       coef),
+    standout      = H.convex_discrete(from.standout,      to.standout,      coef),
+    strikethrough = H.convex_discrete(from.strikethrough, to.strikethrough, coef),
+    undercurl     = H.convex_discrete(from.undercurl,     to.undercurl,     coef),
+    underdashed   = H.convex_discrete(from.underdashed,   to.underdashed,   coef),
+    underdotted   = H.convex_discrete(from.underdotted,   to.underdotted,   coef),
+    underdouble   = H.convex_discrete(from.underdouble,   to.underdouble,   coef),
+    underline     = H.convex_discrete(from.underline,     to.underline,     coef),
+  }
+end
+
+H.convex_lab = function(from_lab, to_lab, coef)
+  if from_lab == nil or to_lab == nil then return H.convex_discrete(from_lab, to_lab, coef) end
+  return {
+    l = H.convex_continuous(from_lab.l, to_lab.l, coef),
+    a = H.convex_continuous(from_lab.a, to_lab.a, coef),
+    b = H.convex_continuous(from_lab.b, to_lab.b, coef),
+  }
+end
+
 -- Channel modifiers ----------------------------------------------------------
 H.modify_lightness = function(hex, f)
   local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
@@ -739,22 +929,19 @@ end
 
 H.modify_red = function(hex, f)
   local rgb = H.hex2rgb(hex)
-  -- Applies `f` for `red` in range [0; 255]
-  rgb.r = H.clip(f(255 * rgb.r) / 255, 0, 1)
+  rgb.r = H.clip(f(rgb.r), 0, 255)
   return H.rgb2hex(rgb)
 end
 
 H.modify_green = function(hex, f)
   local rgb = H.hex2rgb(hex)
-  -- Applies `f` for `green` in range [0; 255]
-  rgb.g = H.clip(f(255 * rgb.g) / 255, 0, 1)
+  rgb.g = H.clip(f(rgb.g), 0, 255)
   return H.rgb2hex(rgb)
 end
 
 H.modify_blue = function(hex, f)
   local rgb = H.hex2rgb(hex)
-  -- Applies `f` for `blue` in range [0; 255]
-  rgb.b = H.clip(f(255 * rgb.b) / 255, 0, 1)
+  rgb.b = H.clip(f(rgb.b), 0, 255)
   return H.rgb2hex(rgb)
 end
 
@@ -889,7 +1076,7 @@ H.color_shifters = {
 -- https://github.com/bottosson/bottosson.github.io/blob/master/misc/colorpicker/colorconversion.js
 -- https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
 
--- HEX <-> RGB in [0;1]
+-- HEX <-> RGB in [0;255]
 H.hex2rgb = function(hex)
   local dec = tonumber(hex:sub(2), 16)
 
@@ -897,24 +1084,24 @@ H.hex2rgb = function(hex)
   local g = math.fmod((dec - b) / 256, 256)
   local r = math.floor(dec / 65536)
 
-  return { r = r / 255, g = g / 255, b = b / 255 }
+  return { r = r, g = g, b = b }
 end
 
 H.rgb2hex = function(rgb)
   -- Use straightforward clipping to [0; 255] here to ensure correctness.
   -- Modify `rgb` prior to this to ensure only a small distortion.
-  local r = H.clip(H.round(255 * rgb.r), 0, 255)
-  local g = H.clip(H.round(255 * rgb.g), 0, 255)
-  local b = H.clip(H.round(255 * rgb.b), 0, 255)
+  local r = H.clip(H.round(rgb.r), 0, 255)
+  local g = H.clip(H.round(rgb.g), 0, 255)
+  local b = H.clip(H.round(rgb.b), 0, 255)
 
   return string.format('#%02x%02x%02x', r, g, b)
 end
 
--- RGB in [0; 1] <-> Oklab in [0; 1]
+-- RGB in [0; 255] <-> Oklab in [0; 1]
 -- https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
 H.rgb2oklab = function(rgb)
   -- Convert to linear RGB
-  local r, g, b = H.correct_channel(rgb.r), H.correct_channel(rgb.g), H.correct_channel(rgb.b)
+  local r, g, b = H.correct_channel(rgb.r / 255), H.correct_channel(rgb.g / 255), H.correct_channel(rgb.b / 255)
 
   -- Convert to Oklab
   local l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
@@ -950,7 +1137,7 @@ H.oklab2rgb = function(lab)
   local g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s
   local b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
 
-  return { r = H.correct_channel_inv(r), g = H.correct_channel_inv(g), b = H.correct_channel_inv(b) }
+  return { r = 255 * H.correct_channel_inv(r), g = 255 * H.correct_channel_inv(g), b = 255 * H.correct_channel_inv(b) }
 end
 
 -- Oklab<-> Oklch
@@ -1069,7 +1256,7 @@ H.get_gamut_points = function(lch)
   }
 end
 
-H.clip_to_gamut = function(lch)
+H.clip_to_gamut = function(lch, gamut_clip)
   -- `lch` should have not corrected lightness
   local res = vim.deepcopy(lch)
   local gamut_points = H.get_gamut_points(lch)
@@ -1084,13 +1271,15 @@ H.clip_to_gamut = function(lch)
   --   foreground with hardly distinguishable colors.
   -- - Clipping by adjusting lightness with constant chroma leads to very low
   --   contrast on a particularly saturated foreground colors.
-  res.l, res.c = gamut_points.l_cusp_clip, gamut_points.c_cusp_clip
+  if gamut_clip == 'cusp' then
+    res.l, res.c = gamut_points.l_cusp_clip, gamut_points.c_cusp_clip
+  end
 
-  -- Other approaches:
-  -- - Preserve chroma by clipping lightness
-  --   res.l = H.clip(res.l, gamut_points.l_lower, gamut_points.l_upper)
-  -- - Preserve lightness by clipping chroma
-  --   res.c = H.clip(res.c, gamut_points.c_lower, gamut_points.c_upper)
+  -- Preserve lightness by clipping chroma
+  if gamut_clip == 'chroma' then res.c = H.clip(res.c, gamut_points.c_lower, gamut_points.c_upper) end
+
+  -- Preserve chroma by clipping lightness
+  if gamut_clip == 'lightness' then res.l = H.clip(res.l, gamut_points.l_lower, gamut_points.l_upper) end
 
   return res
 end
@@ -1130,7 +1319,10 @@ end
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.colors) %s', msg), 0) end
 
-H.round = function(x) return math.floor(x + 0.5) end
+H.round = function(x)
+  if x == nil then return nil end
+  return math.floor(x + 0.5)
+end
 
 H.clip = function(x, from, to) return math.min(math.max(x, from), to) end
 
@@ -1139,6 +1331,27 @@ H.cuberoot = function(x) return math.pow(x, 0.333333) end
 H.dist_circle = function(x, y)
   local d = math.abs(x - y)
   return math.min(d, 360 - d)
+end
+
+H.convex_continuous = function(x, y, coef)
+  if x == nil or y == nil then return H.convex_discrete(x, y, coef) end
+  return H.round((1 - coef) * x + coef * y)
+end
+
+H.convex_discrete = function(x, y, coef)
+  if coef < 0.5 then return x end
+  return y
+end
+
+H.union = function(arr1, arr2)
+  local value_is_present = {}
+  for _, x in ipairs(arr1) do
+    value_is_present[x] = true
+  end
+  for _, x in ipairs(arr2) do
+    value_is_present[x] = true
+  end
+  return vim.tbl_keys(value_is_present)
 end
 
 return MiniColors
