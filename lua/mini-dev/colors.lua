@@ -1,28 +1,15 @@
 -- TODO:
 --
 -- Code:
--- - Explore possibility of making `animate_transition()` function. Ideally should
---   be a replacement for `:colorscheme` which takes color scheme name and
---   performs smooth animated transition.
---   Might have problems due to redraw (maybe use `lazyredraw`?).
---
--- - Explore possibility of `average()`: take array of `Colorscheme` objects
---   and return `Colorscheme` object which is an "average" of all of them:
---     - For boolean options take the mode.
---     - For colors take average Oklab lightness and saturation, but use arc
---       median for circular hues (point which minimizes sum of circular
---       distances to input points). Use color at specific highlight field (fg,
---       bg, sp) only if it is used in the majority of input color schemes.
---
 -- - Fields of `Colorscheme` object:
 --     - `name`
 --     - `groups`
 --     - `terminal` - terminal colors (see `:h terminal-config`)
 --
 -- - Planned methods of `Colorscheme` object:
---     - `color_cut(channel, from, to, predicate, opts)` - exclude regions in
+--     - `color_cut(channel, from, to, opts)` - exclude regions in
 --       channel. `opts.action` decides what action to perform:
---         - "rescale" to rescale all colors (usefult to create color-blind
+--         - "rescale" to rescale all colors (useful to create color-blind
 --           friendly scheme when cutting hue). All colors are affected.
 --         - "clip" to clip to nearest value. Only colors inside cut region are
 --           affected.
@@ -30,7 +17,6 @@
 --       useful, so maybe some other API?.
 --     - `change_colorblind_friendly()` (come up with better name) - takes some
 --       parameters and modifies color scheme to be more colorblind friendly.
---     - `make_transparent()`
 --
 -- Reference color schemes (for testing purposes):
 -- - folke/tokyonight.nvim (3260 stars)
@@ -148,18 +134,16 @@ MiniColors.setup = function(config)
   vim.api.nvim_create_user_command('Colorscheme', function(input)
     local from_cs = MiniColors.get_current_colorscheme()
 
-    -- Currently there is a brief redraw even with `lazyredraw`.
-    -- Find a way to avoid it.
-    local cache_lazyredraw = vim.o.lazyredraw
-    vim.o.lazyredraw = true
-
-    local ok, _ = pcall(vim.cmd, 'colorscheme ' .. input.args)
-    if ok then
-      local to_cs = MiniColors.get_current_colorscheme()
-      MiniColors.animate_transition(from_cs, to_cs)
-    end
-
-    vim.o.lazyredraw = cache_lazyredraw
+    vim.api.nvim_create_autocmd('ColorScheme', {
+      once = true,
+      callback = function()
+        local to_cs = MiniColors.get_current_colorscheme()
+        -- Apply right now to avoid flickering
+        from_cs:apply()
+        MiniColors.animate_transition(from_cs, to_cs)
+      end,
+    })
+    pcall(vim.cmd, 'colorscheme ' .. input.args)
   end, { nargs = 1, complete = 'color' })
 end
 
@@ -168,7 +152,7 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniColors.config = {
-  gamut_clip = 'cusp',
+  gamut_clip = 'chroma',
 }
 --minidoc_afterlines_end
 
@@ -189,6 +173,7 @@ MiniColors.as_colorscheme = function(x)
   res.color_shift = H.cs_color_shift
   res.compress = H.cs_compress
   res.ensure_cterm = H.cs_ensure_cterm
+  res.make_transparent = H.cs_make_transparent
   res.write = H.cs_write
 
   return res
@@ -275,8 +260,8 @@ end
 
 MiniColors.animate_transition = function(from_colorscheme, to_colorscheme, opts)
   opts = opts or {}
-  local n_steps = math.max(opts.n_steps or 40, 1)
-  local step_duration = math.max(opts.step_duration or 25, 1)
+  local n_steps = math.max(opts.n_steps or 25, 1)
+  local step_duration = math.max(opts.step_duration or 40, 1)
 
   -- Pre-compute common data
   local from_edge = H.cs_hex_to_oklab(vim.deepcopy(from_colorscheme:compress()))
@@ -461,47 +446,53 @@ H.cs_apply = function(self)
   return self
 end
 
-H.cs_color_adjust = function(self, channel, coef, predicate)
+H.cs_color_adjust = function(self, channel, coef, opts)
   channel = H.normalize_channel(channel)
   coef = H.normalize_number(coef or 1, 'coef')
-  predicate = H.normalize_predicate(predicate)
+  opts = opts or {}
+  local filter = H.normalize_filter(opts.filter)
+  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
 
   if coef == 1 then return self end
 
   local adjust_channel = H.color_adjusters[channel]
 
   local f = function(hex, data)
-    if not predicate(hex, data) then return hex end
-    return adjust_channel(hex, coef)
+    if not filter(hex, data) then return hex end
+    return adjust_channel(hex, coef, gamut_clip)
   end
 
   return self:color_map(f)
 end
 
-H.cs_color_cut = function(self, channel, from, to, predicate)
+H.cs_color_cut = function(self, channel, from, to, opts)
   channel = H.normalize_channel(channel)
   from, to = H.normalize_from_to(from, to)
-  predicate = H.normalize_predicate(predicate)
+  opts = opts or {}
+  local filter = H.normalize_filter(opts.filter)
+  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
 
   local cut_channel = H.color_cutters[channel]
 
   local f = function(hex, data)
-    if not predicate(hex, data) then return hex end
-    return cut_channel(hex, from, to)
+    if not filter(hex, data) then return hex end
+    return cut_channel(hex, from, to, gamut_clip)
   end
 
   return self:color_map(f)
 end
 
-H.cs_color_invert = function(self, channel, predicate)
+H.cs_color_invert = function(self, channel, opts)
   channel = H.normalize_channel(channel)
-  predicate = H.normalize_predicate(predicate)
+  opts = opts or {}
+  local filter = H.normalize_filter(opts.filter)
+  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
 
   local invert_channel = H.color_inverters[channel]
 
   local f = function(hex, data)
-    if not predicate(hex, data) then return hex end
-    return invert_channel(hex)
+    if not filter(hex, data) then return hex end
+    return invert_channel(hex, gamut_clip)
   end
 
   return self:color_map(f)
@@ -525,18 +516,20 @@ H.cs_color_map = function(self, f)
   return res
 end
 
-H.cs_color_shift = function(self, channel, by, predicate)
+H.cs_color_shift = function(self, channel, by, opts)
   channel = H.normalize_channel(channel)
   by = H.normalize_number(by or 0, 'by')
-  predicate = H.normalize_predicate(predicate)
+  opts = opts or {}
+  local filter = H.normalize_filter(opts.filter)
+  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
 
   if by == 0 then return self end
 
   local shift_channel = H.color_shifters[channel]
 
   local f = function(hex, data)
-    if not predicate(hex, data) then return hex end
-    return shift_channel(hex, by)
+    if not filter(hex, data) then return hex end
+    return shift_channel(hex, by, gamut_clip)
   end
 
   return self:color_map(f)
@@ -568,22 +561,36 @@ H.cs_compress = function(self)
 
   current_cs:apply()
 
-  return MiniColors.as_colorscheme({ name = self.name, groups = new_groups, terminal = self.terminal })
+  return MiniColors.as_colorscheme({ name = self.name, groups = new_groups, terminal = vim.deepcopy(self.terminal) })
 end
 
 H.cs_ensure_cterm = function(self, opts)
+  local res = vim.deepcopy(self)
   opts = vim.tbl_deep_extend('force', { force = true }, opts or {})
 
   -- Compute Oklab coordinates of terminal colors for better approximation
   local term_oklab = H.compute_term_oklab()
 
   local force = opts.force
-  for _, gr in pairs(self.groups) do
+  for _, gr in pairs(res.groups) do
     if gr.fg and (force or not gr.ctermfg) then gr.ctermfg = H.approx_term_color(gr.fg, term_oklab) end
     if gr.bg and (force or not gr.ctermbg) then gr.ctermbg = H.approx_term_color(gr.bg, term_oklab) end
   end
 
-  return self
+  return res
+end
+
+--stylua: ignore
+H.cs_make_transparent = function(self)
+  local res = vim.deepcopy(self)
+
+  local groups = res.groups
+  if groups.Normal ~= nil then groups.Normal.bg, groups.Normal.ctermbg = nil, nil end
+  if groups.NormalNC ~= nil then groups.NormalNC.bg, groups.NormalNC.ctermbg = nil, nil end
+  if groups.WinBar ~= nil then groups.WinBar.bg, groups.WinBar.ctermbg = nil, nil end
+  if groups.WinBarNC ~= nil then groups.WinBarNC.bg, groups.WinBarNC.ctermbg = nil, nil end
+
+  return res
 end
 
 H.cs_write = function(self, opts)
@@ -643,19 +650,25 @@ H.normalize_channel = function(x)
   return x
 end
 
-H.normalize_predicate = function(x)
-  -- Treat `nil` predicate as no predicate
+H.normalize_filter = function(x)
+  -- Treat `nil` filter as no filter
   if x == nil then x = function() return true end end
 
-  -- Treat string predicate as filter on attribute ('fg', 'bg', etc.)
+  -- Treat string filter as filter on attribute ('fg', 'bg', etc.)
   if type(x) == 'string' then
     local attr_val = x
     x = function(_, data) return data.attr == attr_val end
   end
 
-  if not vim.is_callable(x) then H.error('Argument `predicate` should be either attribute string or callable.') end
+  if not vim.is_callable(x) then H.error('Argument `opts.filter` should be either attribute string or callable.') end
 
   return x
+end
+
+H.normalize_gamut_clip = function(x)
+  x = x or H.get_config().gamut_clip
+  if x == 'chroma' or x == 'lightness' or x == 'cusp' then return x end
+  H.error([[Argument `opts.gamut_clip` should one of 'chroma', 'lightness', 'cusp'.]])
 end
 
 H.normalize_number = function(x, arg_name)
@@ -871,25 +884,25 @@ H.convex_lab = function(from_lab, to_lab, coef)
 end
 
 -- Channel modifiers ----------------------------------------------------------
-H.modify_lightness = function(hex, f)
+H.modify_lightness = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
   lch.l = H.clip(f(lch.l), 0, 100)
-  return MiniColors.oklch2hex(lch, { corrected_l = true })
+  return MiniColors.oklch2hex(lch, { corrected_l = true, gamut_clip = gamut_clip })
 end
 
-H.modify_chroma = function(hex, f)
+H.modify_chroma = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
   lch.c = H.clip(f(lch.c), 0, math.huge)
-  return MiniColors.oklch2hex(lch)
+  return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
-H.modify_hue = function(hex, f)
+H.modify_hue = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
   lch.h = f(lch.h) % 360
-  return MiniColors.oklch2hex(lch)
+  return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
-H.modify_temperature = function(hex, f)
+H.modify_temperature = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
 
   -- Temperature is a circular distance to 270 hue degrees
@@ -899,10 +912,10 @@ H.modify_temperature = function(hex, f)
   local new_temp = H.clip(f(temp), 0, 180)
   lch.h = (is_left and (270 - new_temp) or (new_temp - 90)) % 360
 
-  return MiniColors.oklch2hex(lch)
+  return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
-H.modify_pressure = function(hex, f)
+H.modify_pressure = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
 
   -- Pressure is a circular distance to 180 hue degrees
@@ -912,34 +925,34 @@ H.modify_pressure = function(hex, f)
   local new_press = H.clip(f(press), 0, 180)
   lch.h = is_up and (180 - new_press) or (new_press + 180)
 
-  return MiniColors.oklch2hex(lch)
+  return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
-H.modify_a = function(hex, f)
+H.modify_a = function(hex, f, gamut_clip)
   local lab = MiniColors.hex2oklab(hex)
   lab.a = f(lab.a)
-  return MiniColors.oklab2hex(lab)
+  return MiniColors.oklab2hex(lab, { gamut_clip = gamut_clip })
 end
 
-H.modify_b = function(hex, f)
+H.modify_b = function(hex, f, gamut_clip)
   local lab = MiniColors.hex2oklab(hex)
   lab.b = f(lab.b)
-  return MiniColors.oklab2hex(lab)
+  return MiniColors.oklab2hex(lab, { gamut_clip = gamut_clip })
 end
 
-H.modify_red = function(hex, f)
+H.modify_red = function(hex, f, _)
   local rgb = H.hex2rgb(hex)
   rgb.r = H.clip(f(rgb.r), 0, 255)
   return H.rgb2hex(rgb)
 end
 
-H.modify_green = function(hex, f)
+H.modify_green = function(hex, f, _)
   local rgb = H.hex2rgb(hex)
   rgb.g = H.clip(f(rgb.g), 0, 255)
   return H.rgb2hex(rgb)
 end
 
-H.modify_blue = function(hex, f)
+H.modify_blue = function(hex, f, _)
   local rgb = H.hex2rgb(hex)
   rgb.b = H.clip(f(rgb.b), 0, 255)
   return H.rgb2hex(rgb)
@@ -947,8 +960,8 @@ end
 
 -- Color adjust ---------------------------------------------------------------
 H.make_adjuster = function(modifier)
-  return function(hex, coef)
-    return modifier(hex, function(x) return coef * x end)
+  return function(hex, coef, gamut_clip)
+    return modifier(hex, function(x) return coef * x end, gamut_clip)
   end
 end
 
@@ -989,8 +1002,8 @@ H.cut_circular = function(x, from, to)
 end
 
 H.make_cutter = function(modifier)
-  return function(hex, from, to)
-    return modifier(hex, function(x) return H.cut(x, from, to) end)
+  return function(hex, from, to, gamut_clip)
+    return modifier(hex, function(x) return H.cut(x, from, to) end, gamut_clip)
   end
 end
 
@@ -998,8 +1011,8 @@ end
 H.color_cutters = {
   lightness   = H.make_cutter(H.modify_lightness),
   chroma      = H.make_cutter(H.modify_chroma),
-  hue = function(hex, from, to)
-    return H.modify_hue(hex, function(x) return H.cut_circular(x, from, to) end)
+  hue = function(hex, from, to, gamut_clip)
+    return H.modify_hue(hex, function(x) return H.cut_circular(x, from, to) end, gamut_clip)
   end,
   temperature = H.make_cutter(H.modify_temperature),
   pressure    = H.make_cutter(H.modify_pressure),
@@ -1018,9 +1031,9 @@ H.negate_lightness = function(x) return 100 - x end
 H.negate_rgb = function(x) return 255 - x end
 
 H.color_inverters = {
-  lightness = function(hex) return H.modify_lightness(hex, H.negate_lightness) end,
+  lightness = function(hex, gamut_clip) return H.modify_lightness(hex, H.negate_lightness, gamut_clip) end,
 
-  chroma = function(hex)
+  chroma = function(hex, gamut_clip)
     local lch = MiniColors.hex2oklch(hex, { corrected_l = false })
 
     -- Don't invert achromatic colors (black, greys, white)
@@ -1028,20 +1041,20 @@ H.color_inverters = {
 
     local gamut_points = H.get_gamut_points(lch)
     lch.c = gamut_points.c_upper - lch.c
-    return MiniColors.oklch2hex(lch, { corrected_l = false })
+    return MiniColors.oklch2hex(lch, { corrected_l = false, gamut_clip = gamut_clip })
   end,
 
-  hue = function(hex) return H.modify_hue(hex, H.negate) end,
+  hue = function(hex, gamut_clip) return H.modify_hue(hex, H.negate, gamut_clip) end,
 
   -- Using `b` channel is a simpler approach of inverting temperature
-  temperature = function(hex) return H.modify_b(hex, H.negate) end,
+  temperature = function(hex, gamut_clip) return H.modify_b(hex, H.negate, gamut_clip) end,
 
   -- Using `a` channel is a simpler approach of inverting temperature
-  pressure = function(hex) return H.modify_a(hex, H.negate) end,
+  pressure = function(hex, gamut_clip) return H.modify_a(hex, H.negate, gamut_clip) end,
 
-  a = function(hex) return H.modify_a(hex, H.negate) end,
+  a = function(hex, gamut_clip) return H.modify_a(hex, H.negate, gamut_clip) end,
 
-  b = function(hex) return H.modify_b(hex, H.negate) end,
+  b = function(hex, gamut_clip) return H.modify_b(hex, H.negate, gamut_clip) end,
 
   red = function(hex) return H.modify_red(hex, H.negate_rgb) end,
 
@@ -1052,8 +1065,8 @@ H.color_inverters = {
 
 -- Color shift ----------------------------------------------------------------
 H.make_shifter = function(modifier)
-  return function(hex, by)
-    return modifier(hex, function(x) return x + by end)
+  return function(hex, by, gamut_clip)
+    return modifier(hex, function(x) return x + by end, gamut_clip)
   end
 end
 
