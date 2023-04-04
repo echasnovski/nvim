@@ -76,9 +76,9 @@
 --
 -- - Recipes for common tasks:
 --     - Convert dark/light color scheme to be light/dark with
---       `color_invert('lightness', { gamut_clip = 'cusp' })`.
+--       `chan_invert('lightness', { gamut_clip = 'cusp' })`.
 --     - Create monochromatic variant with
---       `color_set('hue', value)` or `color_set('chroma', 0)`.
+--       `chan_set('hue', value)` or `chan_set('chroma', 0)`.
 --     - Ensure constant contrast ratio (set constant lightness for fg and bg).
 --     - Manage temperature by inverting, adjusting, or shifting 'temperature'.
 --     - Manage saturation by inverting, adjusting, or shifting 'temperature'
@@ -166,12 +166,13 @@ MiniColors.as_colorscheme = function(x)
 
   -- Methods
   res.apply = H.cs_apply
-  res.color_adjust = H.cs_color_adjust
-  res.color_cut = H.cs_color_cut
-  res.color_invert = H.cs_color_invert
+  res.chan_adjust = H.cs_chan_adjust
+  res.chan_cut = H.cs_chan_cut
+  res.chan_invert = H.cs_chan_invert
+  res.chan_repel = H.cs_chan_repel
+  res.chan_set = H.cs_chan_set
+  res.chan_shift = H.cs_chan_shift
   res.color_map = H.cs_color_map
-  res.color_set = H.cs_color_set
-  res.color_shift = H.cs_color_shift
   res.compress = H.cs_compress
   res.ensure_cterm = H.cs_ensure_cterm
   res.make_transparent = H.cs_make_transparent
@@ -284,7 +285,7 @@ end
 ---
 --- Starts from current color scheme and loops through `cs_array`.
 MiniColors.animate = function(cs_array, opts)
-  if not (type(cs_array) == 'table' and H.all(vim.tbl_map(H.is_colorscheme, cs_array))) then
+  if not (type(cs_array) == 'table' and H.all(cs_array, H.is_colorscheme)) then
     H.error('Argument `cs_array` should be an array of color schemes.')
   end
   opts = vim.tbl_deep_extend(
@@ -474,7 +475,7 @@ H.cs_apply = function(self)
   return self
 end
 
-H.cs_color_adjust = function(self, channel, coef, opts)
+H.cs_chan_adjust = function(self, channel, coef, opts)
   channel = H.normalize_channel(channel)
   coef = H.normalize_number(coef or 1, 'coef')
   opts = opts or {}
@@ -483,7 +484,7 @@ H.cs_color_adjust = function(self, channel, coef, opts)
 
   if coef == 1 then return self end
 
-  local adjust_channel = H.color_adjusters[channel]
+  local adjust_channel = H.chan_adjusters[channel]
 
   local f = function(hex, data)
     if not filter(hex, data) then return hex end
@@ -493,14 +494,14 @@ H.cs_color_adjust = function(self, channel, coef, opts)
   return self:color_map(f)
 end
 
-H.cs_color_cut = function(self, channel, from, to, opts)
+H.cs_chan_cut = function(self, channel, from, to, opts)
   channel = H.normalize_channel(channel)
   from, to = H.normalize_from_to(from, to)
   opts = opts or {}
   local filter = H.normalize_filter(opts.filter)
   local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
 
-  local cut_channel = H.color_cutters[channel]
+  local cut_channel = H.chan_cutters[channel]
 
   local f = function(hex, data)
     if not filter(hex, data) then return hex end
@@ -510,17 +511,71 @@ H.cs_color_cut = function(self, channel, from, to, opts)
   return self:color_map(f)
 end
 
-H.cs_color_invert = function(self, channel, opts)
+H.cs_chan_invert = function(self, channel, opts)
   channel = H.normalize_channel(channel)
   opts = opts or {}
   local filter = H.normalize_filter(opts.filter)
   local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
 
-  local invert_channel = H.color_inverters[channel]
+  local invert_channel = H.chan_inverters[channel]
 
   local f = function(hex, data)
     if not filter(hex, data) then return hex end
     return invert_channel(hex, gamut_clip)
+  end
+
+  return self:color_map(f)
+end
+
+H.cs_chan_repel = function(self, channel, sources, coef, opts)
+  channel = H.normalize_channel(channel)
+  sources = H.normalize_sources(sources)
+  coef = H.normalize_number(coef, 'coef')
+  opts = opts or {}
+  local filter = H.normalize_filter(opts.filter)
+  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
+
+  local repel_channel = H.chan_repellers[channel]
+
+  local f = function(hex, data)
+    if not filter(hex, data) then return hex end
+    return repel_channel(hex, sources, coef, gamut_clip)
+  end
+
+  return self:color_map(f)
+end
+
+H.cs_chan_set = function(self, channel, value, opts)
+  channel = H.normalize_channel(channel)
+  value = H.normalize_number(value, 'value')
+  opts = opts or {}
+  local filter = H.normalize_filter(opts.filter)
+  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
+
+  local set_channel = H.chan_setters[channel]
+
+  local f = function(hex, data)
+    if not filter(hex, data) then return hex end
+    return set_channel(hex, value, gamut_clip)
+  end
+
+  return self:color_map(f)
+end
+
+H.cs_chan_shift = function(self, channel, by, opts)
+  channel = H.normalize_channel(channel)
+  by = H.normalize_number(by or 0, 'by')
+  opts = opts or {}
+  local filter = H.normalize_filter(opts.filter)
+  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
+
+  if by == 0 then return self end
+
+  local shift_channel = H.chan_shifters[channel]
+
+  local f = function(hex, data)
+    if not filter(hex, data) then return hex end
+    return shift_channel(hex, by, gamut_clip)
   end
 
   return self:color_map(f)
@@ -542,42 +597,6 @@ H.cs_color_map = function(self, f)
   end
 
   return res
-end
-
-H.cs_color_set = function(self, channel, value, opts)
-  channel = H.normalize_channel(channel)
-  value = H.normalize_number(value, 'value')
-  opts = opts or {}
-  local filter = H.normalize_filter(opts.filter)
-  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
-
-  local set_channel = H.color_setters[channel]
-
-  local f = function(hex, data)
-    if not filter(hex, data) then return hex end
-    return set_channel(hex, value, gamut_clip)
-  end
-
-  return self:color_map(f)
-end
-
-H.cs_color_shift = function(self, channel, by, opts)
-  channel = H.normalize_channel(channel)
-  by = H.normalize_number(by or 0, 'by')
-  opts = opts or {}
-  local filter = H.normalize_filter(opts.filter)
-  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
-
-  if by == 0 then return self end
-
-  local shift_channel = H.color_shifters[channel]
-
-  local f = function(hex, data)
-    if not filter(hex, data) then return hex end
-    return shift_channel(hex, by, gamut_clip)
-  end
-
-  return self:color_map(f)
 end
 
 H.cs_compress = function(self)
@@ -724,11 +743,10 @@ H.normalize_number = function(x, arg_name)
   return x
 end
 
-H.normalize_from_to = function(from, to)
-  if type(from) ~= 'number' then H.error('Argument `from` should be a number.') end
-  if type(to) ~= 'number' then H.error('Argument `to` should be a number.') end
-  if to < from then H.error('Argument `from` should not be greater than `to`.') end
-  return from, to
+H.normalize_sources = function(x)
+  if H.is_number(x) then x = { x } end
+  if not H.all(x, H.is_number) then H.error('Argument `source` should be number or array of numbers.') end
+  return x
 end
 
 -- Color scheme helpers -------------------------------------------------------
@@ -983,12 +1001,14 @@ end
 
 H.modify_hue = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
+  if lch.h == nil then return hex end
   lch.h = f(lch.h) % 360
   return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
 H.modify_temperature = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
+  if lch.h == nil then return hex end
 
   -- Temperature is a circular distance to 270 hue degrees
   -- Output value will lie in the same vertical half plane
@@ -1002,6 +1022,7 @@ end
 
 H.modify_pressure = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
+  if lch.h == nil then return hex end
 
   -- Pressure is a circular distance to 180 hue degrees
   -- Output value will lie in the same horizontal half plane
@@ -1043,7 +1064,7 @@ H.modify_blue = function(hex, f, _)
   return H.rgb2hex(rgb)
 end
 
--- Color adjust ---------------------------------------------------------------
+-- Channel adjust -------------------------------------------------------------
 H.make_adjuster = function(modifier)
   return function(hex, coef, gamut_clip)
     return modifier(hex, function(x) return coef * x end, gamut_clip)
@@ -1051,7 +1072,7 @@ H.make_adjuster = function(modifier)
 end
 
 --stylua: ignore
-H.color_adjusters = {
+H.chan_adjusters = {
   lightness   = H.make_adjuster(H.modify_lightness),
   chroma      = H.make_adjuster(H.modify_chroma),
   hue         = H.make_adjuster(H.modify_hue),
@@ -1064,7 +1085,7 @@ H.color_adjusters = {
   blue        = H.make_adjuster(H.modify_blue),
 }
 
--- Color cut ------------------------------------------------------------------
+-- Channel cut ----------------------------------------------------------------
 H.cut = function(x, from, to)
   -- If value is in [from; to], return closest edge. Otherwise return input.
   if x <= from or to <= x then return x end
@@ -1093,7 +1114,7 @@ H.make_cutter = function(modifier)
 end
 
 --stylua: ignore
-H.color_cutters = {
+H.chan_cutters = {
   lightness   = H.make_cutter(H.modify_lightness),
   chroma      = H.make_cutter(H.modify_chroma),
   hue = function(hex, from, to, gamut_clip)
@@ -1108,14 +1129,14 @@ H.color_cutters = {
   blue        = H.make_cutter(H.modify_blue),
 }
 
--- Color inversion ------------------------------------------------------------
+-- Channel invert -------------------------------------------------------------
 H.negate = function(x) return -x end
 
 H.negate_lightness = function(x) return 100 - x end
 
 H.negate_rgb = function(x) return 255 - x end
 
-H.color_inverters = {
+H.chan_inverters = {
   lightness = function(hex, gamut_clip) return H.modify_lightness(hex, H.negate_lightness, gamut_clip) end,
 
   chroma = function(hex, gamut_clip)
@@ -1148,7 +1169,84 @@ H.color_inverters = {
   blue = function(hex) return H.modify_blue(hex, H.negate_rgb) end,
 }
 
--- Color set ------------------------------------------------------------------
+-- Channel repel --------------------------------------------------------------
+H.nudge_repel = function(d, coef)
+  -- Repel nudge will be added to distance from point to source.
+  -- Ideas behind approach:
+  -- - Nudge at `d = 0` should be equal to `coef`.
+  -- - Nudge should monotinically decrease to 0 as distance tends to infinity.
+  -- - The `d + nudge(d)` (distance after adding nudge) should be still
+  --   monotonically increasing as to preserve order of repelled points.
+  return coef * math.exp(-d / coef)
+end
+
+H.nudge_attract = function(d, coef)
+  -- Repel nudge will be added to distance from point to source.
+  -- Ideas behind approach:
+  -- - Adding nudge when `0 <= d <= coef` should lead to 0. This results into all
+  --   points from `coef` neighborhood of source collapse into source.
+  -- - Nudge should monotinically decrease to 0 as distance tends to infinity.
+  -- - The `d + nudge(d)` (distance after adding nudge) should be still
+  --   monotonically increasing as to preserve order of repelled points.
+  return d <= coef and -d or (-coef * math.exp(1 - d / coef))
+end
+
+H.repel = function(x, sources, coef, dist_fun)
+  if coef == 0 then return x end
+
+  local nudge = coef > 0 and H.nudge_repel or H.nudge_attract
+  coef = math.abs(coef)
+
+  local res = x
+  for _, src in ipairs(sources) do
+    res = res + (x < src and -1 or 1) * nudge(dist_fun(x, src), coef)
+  end
+  return res
+end
+
+H.add_circle_sources = function(sources)
+  local res = {}
+  for _, src in ipairs(sources) do
+    table.insert(res, src)
+    table.insert(res, src - 360)
+    table.insert(res, src + 360)
+  end
+  return res
+end
+
+H.make_repeller = function(modifier, min_value, max_value, dist_type)
+  return function(hex, sources, coef, gamut_clip)
+    local f = function(x)
+      local res = H.repel(x, sources, coef, H.dist)
+      return H.clip(res, min_value, max_value)
+    end
+
+    return modifier(hex, f, gamut_clip)
+  end
+end
+
+--stylua: ignore
+H.chan_repellers = {
+  lightness   = H.make_repeller(H.modify_lightness, 0, 100),
+  chroma      = H.make_repeller(H.modify_chroma, 0, 100),
+  hue         = function(hex, sources, coef, gamut_clip)
+    local f = function(x)
+      local res = H.repel(x, H.add_circle_sources(sources), coef, H.dist_circle)
+      return res % 360
+    end
+
+    return H.modify_hue(hex, f, gamut_clip)
+  end,
+  temperature = H.make_repeller(H.modify_temperature, 0, 180),
+  pressure    = H.make_repeller(H.modify_pressure, 0, 180),
+  a           = H.make_repeller(H.modify_a, -math.huge, math.huge),
+  b           = H.make_repeller(H.modify_b, -math.huge, math.huge),
+  red         = H.make_repeller(H.modify_red, 0, 255),
+  green       = H.make_repeller(H.modify_green, 0, 255),
+  blue        = H.make_repeller(H.modify_blue, 0, 255),
+}
+
+-- Channel set ----------------------------------------------------------------
 H.make_setter = function(modifier)
   return function(hex, value, gamut_clip)
     return modifier(hex, function(_) return value end, gamut_clip)
@@ -1156,7 +1254,7 @@ H.make_setter = function(modifier)
 end
 
 --stylua: ignore
-H.color_setters = {
+H.chan_setters = {
   lightness   = H.make_setter(H.modify_lightness),
   chroma      = H.make_setter(H.modify_chroma),
   hue         = H.make_setter(H.modify_hue),
@@ -1169,7 +1267,7 @@ H.color_setters = {
   blue        = H.make_setter(H.modify_blue),
 }
 
--- Color shift ----------------------------------------------------------------
+-- Channel shift --------------------------------------------------------------
 H.make_shifter = function(modifier)
   return function(hex, by, gamut_clip)
     return modifier(hex, function(x) return x + by end, gamut_clip)
@@ -1177,7 +1275,7 @@ H.make_shifter = function(modifier)
 end
 
 --stylua: ignore
-H.color_shifters = {
+H.chan_shifters = {
   lightness   = H.make_shifter(H.modify_lightness),
   chroma      = H.make_shifter(H.modify_chroma),
   hue         = H.make_shifter(H.modify_hue),
@@ -1452,8 +1550,10 @@ H.clip = function(x, from, to) return math.min(math.max(x, from), to) end
 
 H.cuberoot = function(x) return math.pow(x, 0.333333) end
 
+H.dist = function(x, y) return math.abs(x - y) end
+
 H.dist_circle = function(x, y)
-  local d = math.abs(x - y)
+  local d = H.dist(x % 360, y % 360)
   return math.min(d, 360 - d)
 end
 
@@ -1478,9 +1578,12 @@ H.union = function(arr1, arr2)
   return vim.tbl_keys(value_is_present)
 end
 
-H.all = function(arr)
+H.is_number = function(x) return type(x) == 'number' end
+
+H.all = function(arr, predicate)
+  predicate = predicate or function(x) return x end
   for _, x in ipairs(arr) do
-    if not x then return false end
+    if not predicate(x) then return false end
   end
   return true
 end
