@@ -1,6 +1,8 @@
 -- TODO:
 --
 -- Code:
+-- - Properly deal with hue of grays in Oklch. Should not be present.
+--
 -- - Fields of `Colorscheme` object:
 --     - `name`
 --     - `groups`
@@ -72,6 +74,16 @@
 --     - 270 - blue.
 --     - 315 - magenta/purple.
 --
+-- - Recipes for common tasks:
+--     - Convert dark/light color scheme to be light/dark with
+--       `color_invert('lightness', { gamut_clip = 'cusp' })`.
+--     - Create monochromatic variant with
+--       `color_set('hue', value)` or `color_set('chroma', 0)`.
+--     - Ensure constant contrast ratio (set constant lightness for fg and bg).
+--     - Manage temperature by inverting, adjusting, or shifting 'temperature'.
+--     - Manage saturation by inverting, adjusting, or shifting 'temperature'
+--       with possible `{ filter = 'fg' }`.
+--
 -- - General idea of gamut clipping usefulness.
 --
 -- - Most Oklab/Oklch inversions are not exactly invertable.: applying it twice
@@ -132,28 +144,16 @@ MiniColors.setup = function(config)
 
   -- Create user command
   vim.api.nvim_create_user_command('Colorscheme', function(input)
-    local from_cs = MiniColors.get_current_colorscheme()
-
-    vim.api.nvim_create_autocmd('ColorScheme', {
-      once = true,
-      callback = function()
-        local to_cs = MiniColors.get_current_colorscheme()
-        -- Apply right now to avoid flickering
-        from_cs:apply()
-        MiniColors.animate_transition(from_cs, to_cs)
-      end,
-    })
-    pcall(vim.cmd, 'colorscheme ' .. input.args)
-  end, { nargs = 1, complete = 'color' })
+    local cs_array = vim.tbl_map(MiniColors.get_colorscheme, input.fargs)
+    MiniColors.animate(cs_array)
+  end, { nargs = '+', complete = 'color' })
 end
 
 --- Module config
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
-MiniColors.config = {
-  gamut_clip = 'chroma',
-}
+MiniColors.config = {}
 --minidoc_afterlines_end
 
 MiniColors.as_colorscheme = function(x)
@@ -170,6 +170,7 @@ MiniColors.as_colorscheme = function(x)
   res.color_cut = H.cs_color_cut
   res.color_invert = H.cs_color_invert
   res.color_map = H.cs_color_map
+  res.color_set = H.cs_color_set
   res.color_shift = H.cs_color_shift
   res.compress = H.cs_compress
   res.ensure_cterm = H.cs_ensure_cterm
@@ -179,14 +180,35 @@ MiniColors.as_colorscheme = function(x)
   return res
 end
 
-MiniColors.get_current_colorscheme = function(opts)
+MiniColors.get_colorscheme = function(name, opts)
+  if not (name == nil or type(name) == 'string') then H.error('Argument `name` should be string or `nil`.') end
   opts = vim.tbl_deep_extend('force', { new_name = nil }, opts or {})
 
-  return MiniColors.as_colorscheme({
-    name = opts.new_name or vim.g.colors_name,
-    groups = H.get_current_groups(),
-    terminal = H.get_current_terminal(),
+  -- Return current color scheme if no `name` is supplied
+  if name == nil then
+    return MiniColors.as_colorscheme({
+      name = opts.new_name or vim.g.colors_name,
+      groups = H.get_current_groups(),
+      terminal = H.get_current_terminal(),
+    })
+  end
+
+  -- Source supplied color scheme, collect it and return back
+  local current_cs = MiniColors.get_colorscheme()
+  local res, au_id
+  au_id = vim.api.nvim_create_autocmd('ColorScheme', {
+    callback = function()
+      res = MiniColors.get_colorscheme()
+      -- Apply right now to avoid flickering
+      current_cs:apply()
+      -- Explicitly delete autocommand to account for error in `:colorscheme`
+      vim.api.nvim_del_autocmd(au_id)
+    end,
   })
+  local ok, _ = pcall(vim.cmd, 'colorscheme ' .. name)
+  if not ok then H.error(string.format('Could not get color scheme "%s".', name)) end
+
+  return res
 end
 
 MiniColors.interactive = function(opts)
@@ -198,7 +220,7 @@ MiniColors.interactive = function(opts)
   local maps = opts.mappings
 
   -- Prepare
-  local init_cs = vim.deepcopy(opts.colorscheme) or MiniColors.get_current_colorscheme()
+  local init_cs = vim.deepcopy(opts.colorscheme) or MiniColors.get_colorscheme()
   local buf_id = vim.api.nvim_create_buf(true, true)
 
   -- Write header lines
@@ -258,42 +280,43 @@ MiniColors.interactive = function(opts)
   vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(buf_id), 0 })
 end
 
-MiniColors.animate_transition = function(from_colorscheme, to_colorscheme, opts)
-  opts = opts or {}
-  local n_steps = math.max(opts.n_steps or 25, 1)
-  local step_duration = math.max(opts.step_duration or 40, 1)
+--- Animate color scheme change
+---
+--- Starts from current color scheme and loops through `cs_array`.
+MiniColors.animate = function(cs_array, opts)
+  if not (type(cs_array) == 'table' and H.all(vim.tbl_map(H.is_colorscheme, cs_array))) then
+    H.error('Argument `cs_array` should be an array of color schemes.')
+  end
+  opts = vim.tbl_deep_extend(
+    'force',
+    { transition_steps = 25, transition_duration = 1000, show_duration = 1000 },
+    opts or {}
+  )
+
+  if #cs_array == 0 then return end
 
   -- Pre-compute common data
-  local from_edge = H.cs_hex_to_oklab(vim.deepcopy(from_colorscheme:compress()))
-  local to_edge = H.cs_hex_to_oklab(vim.deepcopy(to_colorscheme:compress()))
-  local all_group_names = H.union(vim.tbl_keys(from_edge.groups), vim.tbl_keys(to_edge.groups))
+  local cs_oklab = vim.tbl_map(function(cs) return H.cs_hex_to_oklab(cs:compress()) end, vim.deepcopy(cs_array))
+  local cs_oklab_current = H.cs_hex_to_oklab(MiniColors.get_colorscheme():compress())
 
-  -- Start animation
-  local step = 0
-  local timer = vim.loop.new_timer()
+  -- Make "chain after action" which animates transitions one by one
+  local cs_id, after_action = 1, nil
+  after_action = function(data)
+    -- Ensure authentic color scheme is active
+    cs_array[cs_id]:apply()
 
-  local draw_step
-  draw_step = vim.schedule_wrap(function()
-    local cs_step = H.compute_animate_step(from_edge, to_edge, step / n_steps, all_group_names)
-    MiniColors.as_colorscheme(H.cs_oklab_to_hex(cs_step)):apply()
-    vim.cmd('redraw')
+    -- Advance if possible
+    cs_id = cs_id + 1
+    if #cs_array < cs_id then return end
 
-    step = step + 1
+    -- Wait before starting another animation
+    local callback =
+      function() H.animate_single_transition(cs_oklab[cs_id - 1], cs_oklab[cs_id], after_action, opts) end
 
-    if n_steps <= step then
-      timer:stop()
-      to_colorscheme:apply()
-      return
-    end
+    vim.defer_fn(callback, opts.show_duration)
+  end
 
-    timer:again()
-  end)
-
-  -- Start repeating timer without callback execution
-  timer:start(10000000, step_duration, draw_step)
-
-  -- Execute initial step (apply `from` color scheme) immediately
-  draw_step()
+  H.animate_single_transition(cs_oklab_current, cs_oklab[1], after_action, opts)
 end
 
 MiniColors.hex2oklab = function(hex, opts)
@@ -309,7 +332,7 @@ end
 
 MiniColors.oklab2hex = function(lab, opts)
   if lab == nil then return nil end
-  opts = vim.tbl_deep_extend('force', H.get_config(), { corrected_l = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { corrected_l = true, gamut_clip = 'chroma' }, opts or {})
 
   -- Use Oklch color space because it is used for gamut clipping
   return MiniColors.oklch2hex(H.oklab2oklch(lab), opts)
@@ -324,7 +347,12 @@ end
 
 MiniColors.oklch2hex = function(lch, opts)
   if lch == nil then return nil end
-  opts = vim.tbl_deep_extend('force', H.get_config(), { corrected_l = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { corrected_l = true, gamut_clip = 'chroma' }, opts or {})
+
+  -- Deal with grays
+  if lch.h == nil then
+    lch.c, lch.h = 0, 0
+  end
 
   -- Make effort to have point inside gamut. NOTE: not always precise, i.e. not
   -- always results into point in gamut, but sufficiently close.
@@ -516,6 +544,23 @@ H.cs_color_map = function(self, f)
   return res
 end
 
+H.cs_color_set = function(self, channel, value, opts)
+  channel = H.normalize_channel(channel)
+  value = H.normalize_number(value, 'value')
+  opts = opts or {}
+  local filter = H.normalize_filter(opts.filter)
+  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
+
+  local set_channel = H.color_setters[channel]
+
+  local f = function(hex, data)
+    if not filter(hex, data) then return hex end
+    return set_channel(hex, value, gamut_clip)
+  end
+
+  return self:color_map(f)
+end
+
 H.cs_color_shift = function(self, channel, by, opts)
   channel = H.normalize_channel(channel)
   by = H.normalize_number(by or 0, 'by')
@@ -536,10 +581,10 @@ H.cs_color_shift = function(self, channel, by, opts)
 end
 
 H.cs_compress = function(self)
-  local current_cs = MiniColors.get_current_colorscheme()
+  local current_cs = MiniColors.get_colorscheme()
 
   vim.cmd('highlight clear')
-  local clear_cs_groups = MiniColors.get_current_colorscheme().groups
+  local clear_cs_groups = MiniColors.get_colorscheme().groups
 
   local new_groups = {}
   for name, spec in pairs(self.groups) do
@@ -641,6 +686,9 @@ H.cs_write = function(self, opts)
   return self
 end
 
+H.is_colorscheme =
+  function(x) return type(x) == 'table' and type(x.groups) == 'table' and type(x.terminal) == 'table' end
+
 H.normalize_channel = function(x)
   if not vim.tbl_contains(H.allowed_channels, x) then
     local msg =
@@ -666,7 +714,7 @@ H.normalize_filter = function(x)
 end
 
 H.normalize_gamut_clip = function(x)
-  x = x or H.get_config().gamut_clip
+  x = x or 'chroma'
   if x == 'chroma' or x == 'lightness' or x == 'cusp' then return x end
   H.error([[Argument `opts.gamut_clip` should one of 'chroma', 'lightness', 'cusp'.]])
 end
@@ -806,6 +854,44 @@ H.approx_term_color = function(hex, term_oklab)
 end
 
 -- Animation ------------------------------------------------------------------
+H.animate_single_transition = function(from_cs, to_cs, after_action, opts)
+  local all_group_names = H.union(vim.tbl_keys(from_cs.groups), vim.tbl_keys(to_cs.groups))
+  local n_steps = math.max(opts.transition_steps, 1)
+  local step_duration = math.max(opts.transition_duration / n_steps, 1)
+
+  -- Start animation
+  local cur_step = 1
+  local timer = vim.loop.new_timer()
+
+  local apply_step
+  apply_step = vim.schedule_wrap(function()
+    -- Ensure that current step is not too big. This handles weird issue with
+    -- small `step_duration` when this continued calling after `timer:stop()`.
+    -- Probably due to considerable time it takes to execute single step.
+    if n_steps < cur_step then return end
+
+    -- Compute and apply transition step
+    local cs_step = H.compute_animate_step(from_cs, to_cs, cur_step / n_steps, all_group_names)
+    MiniColors.as_colorscheme(H.cs_oklab_to_hex(cs_step)):apply()
+    vim.cmd('redraw')
+
+    -- Advance
+    cur_step = cur_step + 1
+    if n_steps < cur_step then
+      timer:stop()
+      pcall(after_action, { n_steps = n_steps, cur_step = cur_step })
+      return
+    end
+
+    -- Handle timer repeat here in order to ensure concurrency of steps
+    timer:set_repeat(step_duration)
+    timer:again()
+  end)
+
+  -- Start non-repeating timer
+  timer:start(step_duration, 0, apply_step)
+end
+
 H.cs_hex_to_oklab = function(cs)
   cs.groups = vim.tbl_map(function(gr)
     gr.fg = MiniColors.hex2oklab(gr.fg)
@@ -820,8 +906,7 @@ H.cs_hex_to_oklab = function(cs)
 end
 
 H.cs_oklab_to_hex = function(cs)
-  -- Using 'chroma' clipping method preserves lightness which results into
-  -- smoother transitions
+  -- 'chroma' clipping preserves lightness resulting into smoother transitions
   local oklab2hex = function(lab) return MiniColors.oklab2hex(lab, { gamut_clip = 'chroma' }) end
   cs.groups = vim.tbl_map(function(gr)
     gr.fg = oklab2hex(gr.fg)
@@ -1063,6 +1148,27 @@ H.color_inverters = {
   blue = function(hex) return H.modify_blue(hex, H.negate_rgb) end,
 }
 
+-- Color set ------------------------------------------------------------------
+H.make_setter = function(modifier)
+  return function(hex, value, gamut_clip)
+    return modifier(hex, function(_) return value end, gamut_clip)
+  end
+end
+
+--stylua: ignore
+H.color_setters = {
+  lightness   = H.make_setter(H.modify_lightness),
+  chroma      = H.make_setter(H.modify_chroma),
+  hue         = H.make_setter(H.modify_hue),
+  temperature = H.make_setter(H.modify_temperature),
+  pressure    = H.make_setter(H.modify_pressure),
+  a           = H.make_setter(H.modify_a),
+  b           = H.make_setter(H.modify_b),
+  red         = H.make_setter(H.modify_red),
+  green       = H.make_setter(H.modify_green),
+  blue        = H.make_setter(H.modify_blue),
+}
+
 -- Color shift ----------------------------------------------------------------
 H.make_shifter = function(modifier)
   return function(hex, by, gamut_clip)
@@ -1156,11 +1262,16 @@ end
 -- Oklab<-> Oklch
 H.oklab2oklch = function(lab)
   local c = math.sqrt(lab.a ^ 2 + lab.b ^ 2)
-  local h = H.rad2degree(math.atan2(lab.b, lab.a))
+  local h = nil
+  -- Treat grays specially
+  if c > 0 then h = H.rad2degree(math.atan2(lab.b, lab.a)) end
   return { l = lab.l, c = c, h = h }
 end
 
 H.oklch2oklab = function(lch)
+  -- Treat grays specially
+  if lch.h == nil then return { l = lch.l, a = 0, b = 0 } end
+
   local a = lch.c * math.cos(H.degree2rad(lch.h))
   local b = lch.c * math.sin(H.degree2rad(lch.h))
   return { l = lch.l, a = a, b = b }
@@ -1365,6 +1476,13 @@ H.union = function(arr1, arr2)
     value_is_present[x] = true
   end
   return vim.tbl_keys(value_is_present)
+end
+
+H.all = function(arr)
+  for _, x in ipairs(arr) do
+    if not x then return false end
+  end
+  return true
 end
 
 return MiniColors
