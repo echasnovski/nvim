@@ -1,12 +1,10 @@
 -- TODO:
 --
 -- Code:
--- - Completely refactor color converters to be `to_hex(x)` or `to_oklab(x)`
---   while inferring its input type. It should handle:
---     - Normalization: clip out-of-bounds values, rounding in case of integer
---       values, handle grays, unit conversion aligning with helper code
---       (?maybe use same units?).
---     - All spaces to all spaces.
+-- - Color wheel function for easier color manipulation?
+--
+-- - Make `make_transparent()` configurable with `opts`: `winbar`,
+--   `numbercolumn`, `signcolumn`.
 --
 -- - Planned methods of `Colorscheme` object:
 --     - `change_colorblind_friendly()` (come up with better name) - takes some
@@ -175,14 +173,16 @@ MiniColors.as_colorscheme = function(x)
 
   -- Methods
   res.apply = H.cs_apply
+  res.chan_add = H.cs_chan_add
   res.chan_invert = H.cs_chan_invert
   res.chan_modify = H.cs_chan_modify
+  res.chan_multiply = H.cs_chan_multiply
   res.chan_repel = H.cs_chan_repel
   res.chan_set = H.cs_chan_set
-  res.chan_shift = H.cs_chan_shift
   res.color_modify = H.cs_color_modify
   res.compress = H.cs_compress
   res.ensure_cterm = H.cs_ensure_cterm
+  res.simulate_cvd = H.cs_simulate_cvd
   res.make_transparent = H.cs_make_transparent
   res.write = H.cs_write
 
@@ -341,84 +341,87 @@ MiniColors.to_hex = function(x, opts)
 
   local color_space = H.infer_color_space(x)
   if color_space == 'hex' then return x end
-  if color_space == 'rgb' then return H.rgb2hex(x) end
 
-  local lch
-  if color_space == 'oklab' then lch = H.oklab2oklch({ l = 0.01 * x.l, a = 0.01 * x.a, b = 0.01 * x.b }) end
-  if color_space == 'oklch' then lch = { l = 0.01 * x.l, c = 0.01 * x.c, h = x.h } end
-  if color_space == 'oklsh' then lch = H.oklsh2oklch({ l = 0.01 * x.l, s = 0.01 * x.s, h = x.h }) end
-
-  -- Normalize
-  if lch.h == nil or lch.c <= 0 then
-    -- Deal with grays
-    lch.c, lch.h = 0, 0
-  end
-  lch.l, lch.c, lch.h = H.clip(lch.l, 0, 1), H.clip(lch.c, 0, 1), lch.h % 360
-
-  -- Clip to be in gamut
-  local lch_in_gamut = H.clip_to_gamut(lch, opts.gamut_clip)
+  -- Use `to_rgb()` for a correct gamut clipping
+  local rgb = MiniColors.to_rgb(x, opts)
+  return H.rgb2hex(rgb)
 end
 
-MiniColors.hex2oklab = function(hex, opts)
-  if hex == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
+MiniColors.to_rgb = function(x, opts)
+  if x == nil then return nil end
+  opts = vim.tbl_deep_extend('force', { gamut_clip = 'chroma' }, opts or {})
 
-  local res = H.rgb2oklab(H.hex2rgb(hex))
-  res.l, res.a, res.b = 100 * res.l, 100 * res.a, 100 * res.b
-  if opts.corrected_l then res.l = H.correct_lightness(res.l) end
+  local color_space = H.infer_color_space(x)
+  if color_space == 'hex' then return H.hex2rgb(x) end
+
+  -- Clip non-gray color to be in gamut
+  local lch = MiniColors.to_oklch(x, opts)
+  if lch.h ~= nil then lch = H.clip_to_gamut(lch, opts.gamut_clip) end
+
+  return H.oklab2rgb(H.oklch2oklab(lch))
+end
+
+MiniColors.to_oklab = function(x, opts)
+  if x == nil then return nil end
+
+  return H.oklch2oklab(MiniColors.to_oklch(x, opts))
+end
+
+MiniColors.to_oklch = function(x, opts)
+  if x == nil then return nil end
+
+  local color_space, res = H.infer_color_space(x), nil
+  if color_space == 'hex' then res = H.oklab2oklch(H.rgb2oklab(H.hex2rgb(x))) end
+  if color_space == 'rgb' then res = H.oklab2oklch(H.rgb2oklab(x)) end
+  if color_space == 'oklab' then res = H.oklab2oklch(x) end
+  if color_space == 'oklch' then res = x end
+  if color_space == 'oklsh' then res = H.oklsh2oklch(x) end
+
+  -- Normalize
+  res.l = H.clip(res.l, 0, 100)
+  -- - Deal with grays separately
+  if res.c <= 0 or res.h == nil then
+    res.c, res.h = 0, nil
+  else
+    res.c, res.h = H.clip(res.c, 0, 100), res.h % 360
+  end
 
   return res
 end
 
-MiniColors.oklab2hex = function(lab, opts)
-  if lab == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true, gamut_clip = 'chroma' }, opts or {})
+MiniColors.to_oklsh = function(x, opts)
+  if x == nil then return nil end
 
-  -- Use Oklch color space because it is used for gamut clipping
-  return MiniColors.oklch2hex(H.oklab2oklch(lab), opts)
+  local color_space = H.infer_color_space(x)
+  if color_space == 'oklsh' then return x end
+  return H.oklch2oklsh(MiniColors.to_oklch(x))
 end
 
-MiniColors.hex2oklch = function(hex, opts)
-  if hex == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
-
-  return H.oklab2oklch(MiniColors.hex2oklab(hex, opts))
-end
-
-MiniColors.oklch2hex = function(lch, opts)
-  if lch == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true, gamut_clip = 'chroma' }, opts or {})
-
-  -- Deal with grays
-  if lch.h == nil then
-    lch.c, lch.h = 0, 0
+MiniColors.to_hex_cvd = function(x, cvd_type, severity, opts)
+  if x == nil then return nil end
+  if not (cvd_type == 'protan' or cvd_type == 'deutan' or cvd_type == 'tritan' or cvd_type == 'mono') then
+    H.error([[Argument `cvd_type` should be one of 'protan', 'deutan', 'tritan', 'mono'.]])
   end
 
-  -- Make effort to have point inside gamut. NOTE: not always precise, i.e. not
-  -- always results into point in gamut, but sufficiently close.
-  lch.h = lch.h % 360
-  local lch_in_gamut = H.clip_to_gamut(lch, opts.gamut_clip)
+  -- Simulate monochromacy by setting zero 'crhoma'
+  if cvd_type == 'mono' then
+    local lch = MiniColors.to_oklch(x, opts)
+    lch.c, lch.h = 0, nil
+    return MiniColors.to_hex(lch, opts)
+  end
 
-  local lab = H.oklch2oklab(lch_in_gamut)
-  if opts.corrected_l then lab.l = H.correct_lightness_inv(lab.l) end
-  lab.l, lab.a, lab.b = 0.01 * lab.l, 0.01 * lab.a, 0.01 * lab.b
+  -- Simulate regular CVD by multiplying with appropriate matrix
+  if not H.is_number(severity) then H.error('Argument `severity` should be number.') end
+  severity = H.clip(H.round(10 * severity), 0, 10)
+  local mat = H.cvd_matricies[cvd_type][severity]
+  local rgb = MiniColors.to_rgb(x, opts)
+  local new_rgb = {
+    r = mat[1][1] * rgb.r + mat[1][2] * rgb.g + mat[1][3] * rgb.b,
+    g = mat[2][1] * rgb.r + mat[2][2] * rgb.g + mat[2][3] * rgb.b,
+    b = mat[3][1] * rgb.r + mat[3][2] * rgb.g + mat[3][3] * rgb.b,
+  }
 
-  return H.rgb2hex(H.oklab2rgb(lab))
-end
-
-MiniColors.oklch2oklsh = function(lch, opts)
-  if lch == nil then return nil end
-  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
-
-  if lch.c <= 0 or lch.h == nil then return { l = lch.l, s = 0 } end
-
-  local l, c, h = lch.l, lch.c, lch.h
-  if opts.corrected_l then l = H.correct_lightness_inv(l) end
-
-  local gamut_points = H.get_gamut_points({ l = l, c = c, h = h })
-  local share = c / gamut_points.c_upper
-
-  return { l = lch.l, s = H.clip(100 * share, 0, 100), h = lch.h }
+  return H.rgb2hex(new_rgb)
 end
 
 -- Helper data ================================================================
@@ -437,8 +440,8 @@ H.tau = 2 * math.pi
 -- colors lie inside this triangle **AND** not all points inside triangle are
 -- RGB colors. But both proportions are small: around 0.5% with similar modeled
 -- RGB color for first one and around 2.16% for second one.
---stylua: ignore
----@diagnostic disable-next-line
+--stylua: ignore start
+---@diagnostic disable start
 H.cusps = {
   [0] = {26.23,64.74},
   {26.14,64.65},{26.06,64.56},{25.98,64.48},{25.91,64.39},{25.82,64.29},{25.76,64.21},{25.70,64.13},{25.65,64.06},
@@ -488,7 +491,56 @@ H.cusps = {
   {27.04,65.51},{26.92,65.40},{26.81,65.30},{26.66,65.16},{26.55,65.06},{26.45,64.96},{26.35,64.87},
 }
 
-H.allowed_channels = { 'lightness', 'chroma', 'hue', 'temperature', 'pressure', 'a', 'b', 'red', 'green', 'blue' }
+-- Matricies used to simulate color vision deficiency (CVD; color blindness).
+-- Each first-level entry describes CVD type; second-level - severity times 10.
+-- Source:
+-- https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html
+H.cvd_matricies = {
+  protan = {
+    [00]={{1.000000, 0.000000,  -0.000000}, {0.000000,  1.000000, 0.000000}, {-0.000000, -0.000000, 1.000000}},
+    [01]={{0.856167, 0.182038,  -0.038205}, {0.029342,  0.955115, 0.015544}, {-0.002880, -0.001563, 1.004443}},
+    [02]={{0.734766, 0.334872,  -0.069637}, {0.051840,  0.919198, 0.028963}, {-0.004928, -0.004209, 1.009137}},
+    [03]={{0.630323, 0.465641,  -0.095964}, {0.069181,  0.890046, 0.040773}, {-0.006308, -0.007724, 1.014032}},
+    [04]={{0.539009, 0.579343,  -0.118352}, {0.082546,  0.866121, 0.051332}, {-0.007136, -0.011959, 1.019095}},
+    [05]={{0.458064, 0.679578,  -0.137642}, {0.092785,  0.846313, 0.060902}, {-0.007494, -0.016807, 1.024301}},
+    [06]={{0.385450, 0.769005,  -0.154455}, {0.100526,  0.829802, 0.069673}, {-0.007442, -0.022190, 1.029632}},
+    [07]={{0.319627, 0.849633,  -0.169261}, {0.106241,  0.815969, 0.077790}, {-0.007025, -0.028051, 1.035076}},
+    [08]={{0.259411, 0.923008,  -0.182420}, {0.110296,  0.804340, 0.085364}, {-0.006276, -0.034346, 1.040622}},
+    [09]={{0.203876, 0.990338,  -0.194214}, {0.112975,  0.794542, 0.092483}, {-0.005222, -0.041043, 1.046265}},
+    [10]={{0.152286, 1.052583,  -0.204868}, {0.114503,  0.786281, 0.099216}, {-0.003882, -0.048116, 1.051998}},
+  },
+  deutan = {
+    [00]={{1.000000, 0.000000,  -0.000000}, {0.000000,  1.000000, 0.000000}, {-0.000000, -0.000000, 1.000000}},
+    [01]={{0.866435, 0.177704,  -0.044139}, {0.049567,  0.939063, 0.011370}, {-0.003453, 0.007233,  0.996220}},
+    [02]={{0.760729, 0.319078,  -0.079807}, {0.090568,  0.889315, 0.020117}, {-0.006027, 0.013325,  0.992702}},
+    [03]={{0.675425, 0.433850,  -0.109275}, {0.125303,  0.847755, 0.026942}, {-0.007950, 0.018572,  0.989378}},
+    [04]={{0.605511, 0.528560,  -0.134071}, {0.155318,  0.812366, 0.032316}, {-0.009376, 0.023176,  0.986200}},
+    [05]={{0.547494, 0.607765,  -0.155259}, {0.181692,  0.781742, 0.036566}, {-0.010410, 0.027275,  0.983136}},
+    [06]={{0.498864, 0.674741,  -0.173604}, {0.205199,  0.754872, 0.039929}, {-0.011131, 0.030969,  0.980162}},
+    [07]={{0.457771, 0.731899,  -0.189670}, {0.226409,  0.731012, 0.042579}, {-0.011595, 0.034333,  0.977261}},
+    [08]={{0.422823, 0.781057,  -0.203881}, {0.245752,  0.709602, 0.044646}, {-0.011843, 0.037423,  0.974421}},
+    [09]={{0.392952, 0.823610,  -0.216562}, {0.263559,  0.690210, 0.046232}, {-0.011910, 0.040281,  0.971630}},
+    [10]={{0.367322, 0.860646,  -0.227968}, {0.280085,  0.672501, 0.047413}, {-0.011820, 0.042940,  0.968881}},
+  },
+  tritan = {
+    [00]={{1.000000, 0.000000,  -0.000000}, {0.000000,  1.000000, 0.000000}, {-0.000000, -0.000000, 1.000000}},
+    [01]={{0.926670, 0.092514,  -0.019184}, {0.021191,  0.964503, 0.014306}, {0.008437,  0.054813,  0.936750}},
+    [02]={{0.895720, 0.133330,  -0.029050}, {0.029997,  0.945400, 0.024603}, {0.013027,  0.104707,  0.882266}},
+    [03]={{0.905871, 0.127791,  -0.033662}, {0.026856,  0.941251, 0.031893}, {0.013410,  0.148296,  0.838294}},
+    [04]={{0.948035, 0.089490,  -0.037526}, {0.014364,  0.946792, 0.038844}, {0.010853,  0.193991,  0.795156}},
+    [05]={{1.017277, 0.027029,  -0.044306}, {-0.006113, 0.958479, 0.047634}, {0.006379,  0.248708,  0.744913}},
+    [06]={{1.104996, -0.046633, -0.058363}, {-0.032137, 0.971635, 0.060503}, {0.001336,  0.317922,  0.680742}},
+    [07]={{1.193214, -0.109812, -0.083402}, {-0.058496, 0.979410, 0.079086}, {-0.002346, 0.403492,  0.598854}},
+    [08]={{1.257728, -0.139648, -0.118081}, {-0.078003, 0.975409, 0.102594}, {-0.003316, 0.501214,  0.502102}},
+    [09]={{1.278864, -0.125333, -0.153531}, {-0.084748, 0.957674, 0.127074}, {-0.000989, 0.601151,  0.399838}},
+    [10]={{1.255528, -0.076749, -0.178779}, {-0.078411, 0.930809, 0.147602}, {0.004733,  0.691367,  0.303900}},
+  },
+}
+---@diagnostic disable end
+--stylua: ignore end
+
+H.allowed_channels =
+  { 'lightness', 'chroma', 'saturation', 'hue', 'temperature', 'pressure', 'a', 'b', 'red', 'green', 'blue' }
 
 H.ns_id = { interactive = vim.api.nvim_create_namespace('MiniColorsInteractive') }
 
@@ -529,8 +581,18 @@ H.cs_apply = function(self)
   return self
 end
 
+H.cs_chan_add = function(self, channel, value, opts)
+  channel = H.normalize_channel(channel)
+  value = H.normalize_number(value or 0, 'value')
+  if value == 0 then return vim.deepcopy(self) end
+
+  return self:chan_modify(channel, function(x) return x + value end, opts)
+end
+
 H.cs_chan_invert = function(self, channel, opts)
   channel = H.normalize_channel(channel)
+  -- Don't invert 'chroma' directly because of lack of useful reference point
+  if channel == 'chroma' then channel = 'saturation' end
   return self:chan_modify(channel, H.chan_inverters[channel], opts)
 end
 
@@ -549,6 +611,14 @@ H.cs_chan_modify = function(self, channel, f, opts)
   end
 
   return self:color_modify(f_color)
+end
+
+H.cs_chan_multiply = function(self, channel, coef, opts)
+  channel = H.normalize_channel(channel)
+  coef = H.normalize_number(coef or 1, 'coef')
+  if coef == 1 then return vim.deepcopy(self) end
+
+  return self:chan_modify(channel, function(x) return coef * x end, opts)
 end
 
 H.cs_chan_repel = function(self, channel, sources, coef, opts)
@@ -571,14 +641,6 @@ H.cs_chan_set = function(self, channel, values, opts)
   local f = function(x) return H.find_closest(x, values, dist_fun) end
 
   return self:chan_modify(channel, f, opts)
-end
-
-H.cs_chan_shift = function(self, channel, by, opts)
-  channel = H.normalize_channel(channel)
-  by = H.normalize_number(by or 0, 'by')
-  if by == 0 then return vim.deepcopy(self) end
-
-  return self:chan_modify(channel, function(x) return x + by end, opts)
 end
 
 H.cs_color_modify = function(self, f)
@@ -644,6 +706,11 @@ H.cs_ensure_cterm = function(self, opts)
   end
 
   return res
+end
+
+H.cs_simulate_cvd = function(self, cvd_type, severity, opts)
+  local f = function(hex) return MiniColors.to_hex_cvd(hex, cvd_type, severity, opts) end
+  return self:color_modify(f)
 end
 
 --stylua: ignore
@@ -919,28 +986,28 @@ end
 
 H.cs_hex_to_oklab = function(cs)
   cs.groups = vim.tbl_map(function(gr)
-    gr.fg = MiniColors.hex2oklab(gr.fg)
-    gr.bg = MiniColors.hex2oklab(gr.bg)
-    gr.sp = MiniColors.hex2oklab(gr.sp)
+    gr.fg = MiniColors.to_oklab(gr.fg)
+    gr.bg = MiniColors.to_oklab(gr.bg)
+    gr.sp = MiniColors.to_oklab(gr.sp)
     return gr
   end, cs.groups)
 
-  cs.terminal = vim.tbl_map(MiniColors.hex2oklab, cs.terminal)
+  cs.terminal = vim.tbl_map(MiniColors.to_oklab, cs.terminal)
 
   return cs
 end
 
 H.cs_oklab_to_hex = function(cs)
   -- 'chroma' clipping preserves lightness resulting into smoother transitions
-  local oklab2hex = function(lab) return MiniColors.oklab2hex(lab, { gamut_clip = 'chroma' }) end
+  local to_hex = function(lab) return MiniColors.to_hex(lab, { gamut_clip = 'chroma' }) end
   cs.groups = vim.tbl_map(function(gr)
-    gr.fg = oklab2hex(gr.fg)
-    gr.bg = oklab2hex(gr.bg)
-    gr.sp = oklab2hex(gr.sp)
+    gr.fg = to_hex(gr.fg)
+    gr.bg = to_hex(gr.bg)
+    gr.sp = to_hex(gr.sp)
     return gr
   end, cs.groups)
 
-  cs.terminal = vim.tbl_map(oklab2hex, cs.terminal)
+  cs.terminal = vim.tbl_map(to_hex, cs.terminal)
 
   return cs
 end
@@ -997,26 +1064,32 @@ end
 H.channel_modifiers = {}
 
 H.channel_modifiers.lightness = function(hex, f, gamut_clip)
-  local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
+  local lch = MiniColors.to_oklch(hex)
   lch.l = H.clip(f(lch.l), 0, 100)
-  return MiniColors.oklch2hex(lch, { corrected_l = true, gamut_clip = gamut_clip })
+  return MiniColors.to_hex(lch, { gamut_clip = gamut_clip })
 end
 
 H.channel_modifiers.chroma = function(hex, f, gamut_clip)
-  local lch = MiniColors.hex2oklch(hex)
+  local lch = MiniColors.to_oklch(hex)
   lch.c = H.clip(f(lch.c), 0, math.huge)
-  return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
+  return MiniColors.to_hex(lch, { gamut_clip = gamut_clip })
+end
+
+H.channel_modifiers.saturation = function(hex, f, gamut_clip)
+  local lsh = MiniColors.to_oklsh(hex)
+  lsh.s = H.clip(f(lsh.s), 0, 100)
+  return MiniColors.to_hex(lsh, { gamut_clip = gamut_clip })
 end
 
 H.channel_modifiers.hue = function(hex, f, gamut_clip)
-  local lch = MiniColors.hex2oklch(hex)
+  local lch = MiniColors.to_oklch(hex)
   if lch.h == nil then return hex end
   lch.h = f(lch.h) % 360
-  return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
+  return MiniColors.to_hex(lch, { gamut_clip = gamut_clip })
 end
 
 H.channel_modifiers.temperature = function(hex, f, gamut_clip)
-  local lch = MiniColors.hex2oklch(hex)
+  local lch = MiniColors.to_oklch(hex)
   if lch.h == nil then return hex end
 
   -- Temperature is a circular distance to 270 hue degrees
@@ -1026,11 +1099,11 @@ H.channel_modifiers.temperature = function(hex, f, gamut_clip)
   local new_temp = H.clip(f(temp), 0, 180)
   lch.h = (is_left and (270 - new_temp) or (new_temp - 90)) % 360
 
-  return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
+  return MiniColors.to_hex(lch, { gamut_clip = gamut_clip })
 end
 
 H.channel_modifiers.pressure = function(hex, f, gamut_clip)
-  local lch = MiniColors.hex2oklch(hex)
+  local lch = MiniColors.to_oklch(hex)
   if lch.h == nil then return hex end
 
   -- Pressure is a circular distance to 180 hue degrees
@@ -1040,44 +1113,46 @@ H.channel_modifiers.pressure = function(hex, f, gamut_clip)
   local new_press = H.clip(f(press), 0, 180)
   lch.h = is_up and (180 - new_press) or (new_press + 180)
 
-  return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
+  return MiniColors.to_hex(lch, { gamut_clip = gamut_clip })
 end
 
 H.channel_modifiers.a = function(hex, f, gamut_clip)
-  local lab = MiniColors.hex2oklab(hex)
+  local lab = MiniColors.to_oklab(hex)
   lab.a = f(lab.a)
-  return MiniColors.oklab2hex(lab, { gamut_clip = gamut_clip })
+  return MiniColors.to_hex(lab, { gamut_clip = gamut_clip })
 end
 
 H.channel_modifiers.b = function(hex, f, gamut_clip)
-  local lab = MiniColors.hex2oklab(hex)
+  local lab = MiniColors.to_oklab(hex)
   lab.b = f(lab.b)
-  return MiniColors.oklab2hex(lab, { gamut_clip = gamut_clip })
+  return MiniColors.to_hex(lab, { gamut_clip = gamut_clip })
 end
 
-H.channel_modifiers.red = function(hex, f, _)
+H.channel_modifiers.red = function(hex, f, gamut_clip)
   local rgb = H.hex2rgb(hex)
-  rgb.r = H.clip(f(rgb.r), 0, 255)
-  return H.rgb2hex(rgb)
+  -- Don't clip and use `to_hex()` for a correct gamut clipping
+  rgb.r = f(rgb.r)
+  return MiniColors.to_hex(rgb, { gamut_clip = gamut_clip })
 end
 
-H.channel_modifiers.green = function(hex, f, _)
+H.channel_modifiers.green = function(hex, f, gamut_clip)
   local rgb = H.hex2rgb(hex)
-  rgb.g = H.clip(f(rgb.g), 0, 255)
-  return H.rgb2hex(rgb)
+  rgb.g = f(rgb.g)
+  return MiniColors.to_hex(rgb, { gamut_clip = gamut_clip })
 end
 
-H.channel_modifiers.blue = function(hex, f, _)
+H.channel_modifiers.blue = function(hex, f, gamut_clip)
   local rgb = H.hex2rgb(hex)
-  rgb.b = H.clip(f(rgb.b), 0, 255)
-  return H.rgb2hex(rgb)
+  rgb.b = f(rgb.b)
+  return MiniColors.to_hex(rgb, { gamut_clip = gamut_clip })
 end
 
 -- Channel invert -------------------------------------------------------------
 --stylua: ignore
 H.chan_inverters = {
   lightness   = function(x) return 100 - x end,
-  chroma      = function(x) return 50 - x end,
+  -- chroma is the same as saturation
+  saturation  = function(x) return 100 - x end,
   hue         = function(x) return 360 - x end,
   temperature = function(x) return 180 - x end,
   pressure    = function(x) return 180 - x end,
@@ -1087,17 +1162,6 @@ H.chan_inverters = {
   green       = function(x) return 255-x end,
   blue        = function(x) return 255-x end,
 }
-
--- chroma = function(hex, gamut_clip)
---   local lch = MiniColors.hex2oklch(hex, { corrected_l = false })
---
---   -- Don't invert achromatic colors (black, greys, white)
---   if lch.c == 0 then return hex end
---
---   local gamut_points = H.get_gamut_points(lch)
---   lch.c = gamut_points.c_upper - lch.c
---   return MiniColors.oklch2hex(lch, { corrected_l = false, gamut_clip = gamut_clip })
--- end
 
 -- Channel repel --------------------------------------------------------------
 H.nudge_repel = function(d, coef)
@@ -1192,10 +1256,11 @@ end
 -- chroma relative to maximum possible chroma for this lightness and hue.
 --
 -- NOTEs:
--- - All coordinates in Oklab, Oklch, Oklsh are in [0, 1].
+-- - Coordinates ranges: `l` - [0; 100], `a`/`b` - no range, `c` - [0; 100]
+--   (way less in gamut), `s` - [0; 100], `h` - [0; 360).
 -- - Lightness is always assumed to be corrected
 
--- RGB in [0; 255] <-> Oklab in [0; 1] (lightess is not corrected)
+-- RGB in [0; 255] <-> Oklab
 -- https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
 H.rgb2oklab = function(rgb)
   -- Convert to linear RGB
@@ -1216,11 +1281,12 @@ H.rgb2oklab = function(rgb)
   if math.abs(A) < 1e-4 then A = 0 end
   if math.abs(B) < 1e-4 then B = 0 end
 
-  return { l = L, a = A, b = B }
+  -- Normalize to appropriate range
+  return { l = H.correct_lightness(100 * L), a = 100 * A, b = 100 * B }
 end
 
 H.oklab2rgb = function(lab)
-  local L, A, B = lab.l, lab.a, lab.b
+  local L, A, B = 0.01 * H.correct_lightness_inv(lab.l), 0.01 * lab.a, 0.01 * lab.b
 
   local l_ = L + 0.3963377774 * A + 0.2158037573 * B
   local m_ = L - 0.1055613458 * A - 0.0638541728 * B
@@ -1241,15 +1307,15 @@ end
 -- Oklab <-> Oklch
 H.oklab2oklch = function(lab)
   local c = math.sqrt(lab.a ^ 2 + lab.b ^ 2)
-  local h = nil
   -- Treat grays specially
+  local h = nil
   if c > 0 then h = H.rad2degree(math.atan2(lab.b, lab.a)) end
   return { l = lab.l, c = c, h = h }
 end
 
 H.oklch2oklab = function(lch)
   -- Treat grays specially
-  if lch.h == nil then return { l = lch.l, a = 0, b = 0 } end
+  if lch.c <= 0 or lch.h == nil then return { l = lch.l, a = 0, b = 0 } end
 
   local a = lch.c * math.cos(H.degree2rad(lch.h))
   local b = lch.c * math.sin(H.degree2rad(lch.h))
@@ -1261,16 +1327,16 @@ H.oklch2oklsh = function(lch)
   if lch.c <= 0 or lch.h == nil then return { l = lch.l, s = 0 } end
 
   local gamut_points = H.get_gamut_points(lch)
-  local share = lch.c / (0.01 * gamut_points.c_upper)
+  local percent = 100 * lch.c / gamut_points.c_upper
 
-  return { l = lch.l, s = H.clip(100 * share, 0, 100), h = lch.h }
+  return { l = lch.l, s = H.clip(percent, 0, 100), h = lch.h }
 end
 
 H.oklsh2oklch = function(lsh)
   if lsh.s <= 0 or lsh.h == nil then return { l = lsh.l, c = 0 } end
 
   local gamut_points = H.get_gamut_points(lsh)
-  local c = lsh.s * (0.01 * gamut_points.c_upper)
+  local c = 0.01 * lsh.s * gamut_points.c_upper
 
   return { l = lsh.l, c = H.clip(c, 0, math.huge), h = lsh.h }
 end
@@ -1295,16 +1361,20 @@ end
 -- Functions for lightness correction
 -- https://bottosson.github.io/posts/colorpicker/#intermission---a-new-lightness-estimate-for-oklab
 H.correct_lightness = function(x)
+  x = 0.01 * x
   local k1, k2 = 0.206, 0.03
   local k3 = (1 + k1) / (1 + k2)
 
-  return 0.5 * (k3 * x - k1 + math.sqrt((k3 * x - k1) ^ 2 + 4 * k2 * k3 * x))
+  local res = 0.5 * (k3 * x - k1 + math.sqrt((k3 * x - k1) ^ 2 + 4 * k2 * k3 * x))
+  return 100 * res
 end
 
 H.correct_lightness_inv = function(x)
+  x = 0.01 * x
   local k1, k2 = 0.206, 0.03
   local k3 = (1 + k1) / (1 + k2)
-  return (x / k3) * (x + k1) / (x + k2)
+  local res = (x / k3) * (x + k1) / (x + k2)
+  return 100 * res
 end
 
 -- Get gamut ranges for Lch point. They are computed for its hue leaf as
@@ -1319,7 +1389,7 @@ end
 --   of input `lch` for in-gamut point. Put it should be pretty rare: ~0.5%
 --   cases for most saturated colors.
 H.get_gamut_points = function(lch)
-  local c, l = 100 * lch.c, 100 * H.correct_lightness_inv(lch.l)
+  local c, l = lch.c, H.correct_lightness_inv(lch.l)
   local cusp = H.cusps[math.floor(lch.h % 360)]
   local c_cusp, l_cusp = cusp[1], cusp[2]
 
@@ -1368,10 +1438,10 @@ H.get_gamut_points = function(lch)
   end
 
   return {
-    l_lower = l_lower,
-    l_upper = l_upper,
+    l_lower = H.correct_lightness(l_lower),
+    l_upper = H.correct_lightness(l_upper),
     c_upper = c_upper,
-    l_cusp_clip = l_cusp_clip,
+    l_cusp_clip = H.correct_lightness(l_cusp_clip),
     c_cusp_clip = c_cusp_clip,
   }
 end
