@@ -1,22 +1,14 @@
 -- TODO:
 --
 -- Code:
--- - Properly deal with hue of grays in Oklch. Should not be present.
---
--- - Fields of `Colorscheme` object:
---     - `name`
---     - `groups`
---     - `terminal` - terminal colors (see `:h terminal-config`)
+-- - Completely refactor color converters to be `to_hex(x)` or `to_oklab(x)`
+--   while inferring its input type. It should handle:
+--     - Normalization: clip out-of-bounds values, rounding in case of integer
+--       values, handle grays, unit conversion aligning with helper code
+--       (?maybe use same units?).
+--     - All spaces to all spaces.
 --
 -- - Planned methods of `Colorscheme` object:
---     - `color_cut(channel, from, to, opts)` - exclude regions in
---       channel. `opts.action` decides what action to perform:
---         - "rescale" to rescale all colors (useful to create color-blind
---           friendly scheme when cutting hue). All colors are affected.
---         - "clip" to clip to nearest value. Only colors inside cut region are
---           affected.
---       NOTE: this only allows for a single cut region; having several can be
---       useful, so maybe some other API?.
 --     - `change_colorblind_friendly()` (come up with better name) - takes some
 --       parameters and modifies color scheme to be more colorblind friendly.
 --
@@ -43,12 +35,27 @@
 --     - embark-theme/vim (531 stars)
 --
 -- Tests:
+-- - Grays are properly respected in both modifiers and converters.
 --
 -- Documentation:
+--
+-- - Color spaces:
+--     - Hex - string of the form "#xxxxxx" where `x` is hexadecimal.
+--     - RGB - table with fields `r` (red), `g` (green), `b` (blue).
+--       All numeric inside [0; 255].
+--     - Oklab - table with fields `l` (lightness; numeric in [0; 100]),
+--       `a`, `b` (both numeric in [-50, 50]).
+--     - Oklch - table with fields `l` (lightness; numeric in [0; 100]),
+--       `c` (chroma; numeric in [0, 100]),
+--       `h` (`nil` for grays or numeric in [0, 360)).
+--     - Oklsh - Oklch but with `c` replaced by `s` (saturation; percent of
+--       chroma relative to maximum chroma for particular lightness and hue;
+--       numeric in [0; 100]).
 --
 -- - Channels:
 --     - Lightness - corrected `l` component of Oklch.
 --     - Chroma - `c` component of Oklch.
+--     - Saturation - `s` component of Oklsh.
 --     - Hue - `h` component of Oklch.
 --     - Temperature - circular distance from current hue angle to 270 hue angle.
 --       Ranges from 0 (cool) to 180 (hot) anchored at 270 (blue) and 90
@@ -79,6 +86,8 @@
 --       `chan_invert('lightness', { gamut_clip = 'cusp' })`.
 --     - Create monochromatic variant with
 --       `chan_set('hue', value)` or `chan_set('chroma', 0)`.
+--     - Create a Neovim-themed color scheme:
+--       `chan_set('hue', { 140, 245 })`
 --     - Ensure constant contrast ratio (set constant lightness for fg and bg).
 --     - Manage temperature by inverting, adjusting, or shifting 'temperature'.
 --     - Manage saturation by inverting, adjusting, or shifting 'temperature'
@@ -166,13 +175,12 @@ MiniColors.as_colorscheme = function(x)
 
   -- Methods
   res.apply = H.cs_apply
-  res.chan_adjust = H.cs_chan_adjust
-  res.chan_cut = H.cs_chan_cut
   res.chan_invert = H.cs_chan_invert
+  res.chan_modify = H.cs_chan_modify
   res.chan_repel = H.cs_chan_repel
   res.chan_set = H.cs_chan_set
   res.chan_shift = H.cs_chan_shift
-  res.color_map = H.cs_color_map
+  res.color_modify = H.cs_color_modify
   res.compress = H.cs_compress
   res.ensure_cterm = H.cs_ensure_cterm
   res.make_transparent = H.cs_make_transparent
@@ -264,7 +272,14 @@ MiniColors.interactive = function(opts)
     new_cs:apply()
   end)
   m('Reset', function() init_cs:apply() end)
-  m('Quit', function() vim.api.nvim_buf_delete(buf_id, { force = true }) end)
+  m('Quit', function()
+    local ok, bufremove = pcall(require, 'mini.bufremove')
+    if ok then
+      bufremove.wipeout(buf_id, true)
+    else
+      vim.api.nvim_buf_delete(buf_id, { force = true })
+    end
+  end)
   m('Write', function()
     vim.ui.input(
       { prompt = [[Write to 'colors/' of your config under this name: ]], default = init_cs.name },
@@ -320,6 +335,30 @@ MiniColors.animate = function(cs_array, opts)
   H.animate_single_transition(cs_oklab_current, cs_oklab[1], after_action, opts)
 end
 
+MiniColors.to_hex = function(x, opts)
+  if x == nil then return nil end
+  opts = vim.tbl_deep_extend('force', { gamut_clip = 'chroma' }, opts or {})
+
+  local color_space = H.infer_color_space(x)
+  if color_space == 'hex' then return x end
+  if color_space == 'rgb' then return H.rgb2hex(x) end
+
+  local lch
+  if color_space == 'oklab' then lch = H.oklab2oklch({ l = 0.01 * x.l, a = 0.01 * x.a, b = 0.01 * x.b }) end
+  if color_space == 'oklch' then lch = { l = 0.01 * x.l, c = 0.01 * x.c, h = x.h } end
+  if color_space == 'oklsh' then lch = H.oklsh2oklch({ l = 0.01 * x.l, s = 0.01 * x.s, h = x.h }) end
+
+  -- Normalize
+  if lch.h == nil or lch.c <= 0 then
+    -- Deal with grays
+    lch.c, lch.h = 0, 0
+  end
+  lch.l, lch.c, lch.h = H.clip(lch.l, 0, 1), H.clip(lch.c, 0, 1), lch.h % 360
+
+  -- Clip to be in gamut
+  local lch_in_gamut = H.clip_to_gamut(lch, opts.gamut_clip)
+end
+
 MiniColors.hex2oklab = function(hex, opts)
   if hex == nil then return nil end
   opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
@@ -365,6 +404,21 @@ MiniColors.oklch2hex = function(lch, opts)
   lab.l, lab.a, lab.b = 0.01 * lab.l, 0.01 * lab.a, 0.01 * lab.b
 
   return H.rgb2hex(H.oklab2rgb(lab))
+end
+
+MiniColors.oklch2oklsh = function(lch, opts)
+  if lch == nil then return nil end
+  opts = vim.tbl_deep_extend('force', { corrected_l = true }, opts or {})
+
+  if lch.c <= 0 or lch.h == nil then return { l = lch.l, s = 0 } end
+
+  local l, c, h = lch.l, lch.c, lch.h
+  if opts.corrected_l then l = H.correct_lightness_inv(l) end
+
+  local gamut_points = H.get_gamut_points({ l = l, c = c, h = h })
+  local share = c / gamut_points.c_upper
+
+  return { l = lch.l, s = H.clip(100 * share, 0, 100), h = lch.h }
 end
 
 -- Helper data ================================================================
@@ -475,113 +529,61 @@ H.cs_apply = function(self)
   return self
 end
 
-H.cs_chan_adjust = function(self, channel, coef, opts)
-  channel = H.normalize_channel(channel)
-  coef = H.normalize_number(coef or 1, 'coef')
-  opts = opts or {}
-  local filter = H.normalize_filter(opts.filter)
-  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
-
-  if coef == 1 then return self end
-
-  local adjust_channel = H.chan_adjusters[channel]
-
-  local f = function(hex, data)
-    if not filter(hex, data) then return hex end
-    return adjust_channel(hex, coef, gamut_clip)
-  end
-
-  return self:color_map(f)
-end
-
-H.cs_chan_cut = function(self, channel, from, to, opts)
-  channel = H.normalize_channel(channel)
-  from, to = H.normalize_from_to(from, to)
-  opts = opts or {}
-  local filter = H.normalize_filter(opts.filter)
-  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
-
-  local cut_channel = H.chan_cutters[channel]
-
-  local f = function(hex, data)
-    if not filter(hex, data) then return hex end
-    return cut_channel(hex, from, to, gamut_clip)
-  end
-
-  return self:color_map(f)
-end
-
 H.cs_chan_invert = function(self, channel, opts)
   channel = H.normalize_channel(channel)
+  return self:chan_modify(channel, H.chan_inverters[channel], opts)
+end
+
+H.cs_chan_modify = function(self, channel, f, opts)
+  channel = H.normalize_channel(channel)
+  f = H.normalize_f(f)
   opts = opts or {}
   local filter = H.normalize_filter(opts.filter)
   local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
 
-  local invert_channel = H.chan_inverters[channel]
+  local modify_channel = H.channel_modifiers[channel]
 
-  local f = function(hex, data)
+  local f_color = function(hex, data)
     if not filter(hex, data) then return hex end
-    return invert_channel(hex, gamut_clip)
+    return modify_channel(hex, f, gamut_clip)
   end
 
-  return self:color_map(f)
+  return self:color_modify(f_color)
 end
 
 H.cs_chan_repel = function(self, channel, sources, coef, opts)
   channel = H.normalize_channel(channel)
-  sources = H.normalize_sources(sources)
+  sources = H.normalize_number_array(sources, 'sources')
   coef = H.normalize_number(coef, 'coef')
-  opts = opts or {}
-  local filter = H.normalize_filter(opts.filter)
-  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
 
-  local repel_channel = H.chan_repellers[channel]
+  local dist_fun = channel == 'hue' and H.dist_circle or H.dist
+  sources = channel == 'hue' and H.add_circle_sources(sources) or sources
+  local f = function(x) return H.repel(x, sources, coef, dist_fun) end
 
-  local f = function(hex, data)
-    if not filter(hex, data) then return hex end
-    return repel_channel(hex, sources, coef, gamut_clip)
-  end
-
-  return self:color_map(f)
+  return self:chan_modify(channel, f, opts)
 end
 
-H.cs_chan_set = function(self, channel, value, opts)
+H.cs_chan_set = function(self, channel, values, opts)
   channel = H.normalize_channel(channel)
-  value = H.normalize_number(value, 'value')
-  opts = opts or {}
-  local filter = H.normalize_filter(opts.filter)
-  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
+  values = H.normalize_number_array(values, 'values')
 
-  local set_channel = H.chan_setters[channel]
+  local dist_fun = channel == 'hue' and H.dist_circle or H.dist
+  local f = function(x) return H.find_closest(x, values, dist_fun) end
 
-  local f = function(hex, data)
-    if not filter(hex, data) then return hex end
-    return set_channel(hex, value, gamut_clip)
-  end
-
-  return self:color_map(f)
+  return self:chan_modify(channel, f, opts)
 end
 
 H.cs_chan_shift = function(self, channel, by, opts)
   channel = H.normalize_channel(channel)
   by = H.normalize_number(by or 0, 'by')
-  opts = opts or {}
-  local filter = H.normalize_filter(opts.filter)
-  local gamut_clip = H.normalize_gamut_clip(opts.gamut_clip)
+  if by == 0 then return vim.deepcopy(self) end
 
-  if by == 0 then return self end
-
-  local shift_channel = H.chan_shifters[channel]
-
-  local f = function(hex, data)
-    if not filter(hex, data) then return hex end
-    return shift_channel(hex, by, gamut_clip)
-  end
-
-  return self:color_map(f)
+  return self:chan_modify(channel, function(x) return x + by end, opts)
 end
 
-H.cs_color_map = function(self, f)
+H.cs_color_modify = function(self, f)
+  f = H.normalize_f(f)
+
   local res = vim.deepcopy(self)
 
   -- Highlight groups
@@ -708,6 +710,11 @@ end
 H.is_colorscheme =
   function(x) return type(x) == 'table' and type(x.groups) == 'table' and type(x.terminal) == 'table' end
 
+H.normalize_f = function(f)
+  if not vim.is_callable(f) then H.error('Argument `f` should be callable.') end
+  return f
+end
+
 H.normalize_channel = function(x)
   if not vim.tbl_contains(H.allowed_channels, x) then
     local msg =
@@ -743,9 +750,9 @@ H.normalize_number = function(x, arg_name)
   return x
 end
 
-H.normalize_sources = function(x)
+H.normalize_number_array = function(x, arg_name)
   if H.is_number(x) then x = { x } end
-  if not H.all(x, H.is_number) then H.error('Argument `source` should be number or array of numbers.') end
+  if not H.all(x, H.is_number) then H.error('Argument `' .. arg_name .. '` should be number or array of numbers.') end
   return x
 end
 
@@ -987,26 +994,28 @@ H.convex_lab = function(from_lab, to_lab, coef)
 end
 
 -- Channel modifiers ----------------------------------------------------------
-H.modify_lightness = function(hex, f, gamut_clip)
+H.channel_modifiers = {}
+
+H.channel_modifiers.lightness = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex, { corrected_l = true })
   lch.l = H.clip(f(lch.l), 0, 100)
   return MiniColors.oklch2hex(lch, { corrected_l = true, gamut_clip = gamut_clip })
 end
 
-H.modify_chroma = function(hex, f, gamut_clip)
+H.channel_modifiers.chroma = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
   lch.c = H.clip(f(lch.c), 0, math.huge)
   return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
-H.modify_hue = function(hex, f, gamut_clip)
+H.channel_modifiers.hue = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
   if lch.h == nil then return hex end
   lch.h = f(lch.h) % 360
   return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
-H.modify_temperature = function(hex, f, gamut_clip)
+H.channel_modifiers.temperature = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
   if lch.h == nil then return hex end
 
@@ -1020,7 +1029,7 @@ H.modify_temperature = function(hex, f, gamut_clip)
   return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
-H.modify_pressure = function(hex, f, gamut_clip)
+H.channel_modifiers.pressure = function(hex, f, gamut_clip)
   local lch = MiniColors.hex2oklch(hex)
   if lch.h == nil then return hex end
 
@@ -1034,140 +1043,61 @@ H.modify_pressure = function(hex, f, gamut_clip)
   return MiniColors.oklch2hex(lch, { gamut_clip = gamut_clip })
 end
 
-H.modify_a = function(hex, f, gamut_clip)
+H.channel_modifiers.a = function(hex, f, gamut_clip)
   local lab = MiniColors.hex2oklab(hex)
   lab.a = f(lab.a)
   return MiniColors.oklab2hex(lab, { gamut_clip = gamut_clip })
 end
 
-H.modify_b = function(hex, f, gamut_clip)
+H.channel_modifiers.b = function(hex, f, gamut_clip)
   local lab = MiniColors.hex2oklab(hex)
   lab.b = f(lab.b)
   return MiniColors.oklab2hex(lab, { gamut_clip = gamut_clip })
 end
 
-H.modify_red = function(hex, f, _)
+H.channel_modifiers.red = function(hex, f, _)
   local rgb = H.hex2rgb(hex)
   rgb.r = H.clip(f(rgb.r), 0, 255)
   return H.rgb2hex(rgb)
 end
 
-H.modify_green = function(hex, f, _)
+H.channel_modifiers.green = function(hex, f, _)
   local rgb = H.hex2rgb(hex)
   rgb.g = H.clip(f(rgb.g), 0, 255)
   return H.rgb2hex(rgb)
 end
 
-H.modify_blue = function(hex, f, _)
+H.channel_modifiers.blue = function(hex, f, _)
   local rgb = H.hex2rgb(hex)
   rgb.b = H.clip(f(rgb.b), 0, 255)
   return H.rgb2hex(rgb)
 end
 
--- Channel adjust -------------------------------------------------------------
-H.make_adjuster = function(modifier)
-  return function(hex, coef, gamut_clip)
-    return modifier(hex, function(x) return coef * x end, gamut_clip)
-  end
-end
-
---stylua: ignore
-H.chan_adjusters = {
-  lightness   = H.make_adjuster(H.modify_lightness),
-  chroma      = H.make_adjuster(H.modify_chroma),
-  hue         = H.make_adjuster(H.modify_hue),
-  temperature = H.make_adjuster(H.modify_temperature),
-  pressure    = H.make_adjuster(H.modify_pressure),
-  a           = H.make_adjuster(H.modify_a),
-  b           = H.make_adjuster(H.modify_b),
-  red         = H.make_adjuster(H.modify_red),
-  green       = H.make_adjuster(H.modify_green),
-  blue        = H.make_adjuster(H.modify_blue),
-}
-
--- Channel cut ----------------------------------------------------------------
-H.cut = function(x, from, to)
-  -- If value is in [from; to], return closest edge. Otherwise return input.
-  if x <= from or to <= x then return x end
-  return ((x - from) <= (to - x)) and from or to
-end
-
-H.cut_circular = function(x, from, to)
-  --  Segment to cut out is assumed to be from `from` counter clockwise to `to`
-  -- Normalize `from` and `to` to be in [0; 360)
-  from, to = from % 360, to % 360
-
-  -- Act only on points inside segment which can be either:
-  -- - Usual like [90, 180].
-  -- - Covering zero like [180, 90], which is union of [180; 360) and [0; 90].
-  if from <= to and not (from <= x and x <= to) then return x end
-  if to < from and not (from <= x or x <= to) then return x end
-
-  -- Return closest edge for points inside segment
-  return H.dist_circle(x, from) <= H.dist_circle(x, to) and from or to
-end
-
-H.make_cutter = function(modifier)
-  return function(hex, from, to, gamut_clip)
-    return modifier(hex, function(x) return H.cut(x, from, to) end, gamut_clip)
-  end
-end
-
---stylua: ignore
-H.chan_cutters = {
-  lightness   = H.make_cutter(H.modify_lightness),
-  chroma      = H.make_cutter(H.modify_chroma),
-  hue = function(hex, from, to, gamut_clip)
-    return H.modify_hue(hex, function(x) return H.cut_circular(x, from, to) end, gamut_clip)
-  end,
-  temperature = H.make_cutter(H.modify_temperature),
-  pressure    = H.make_cutter(H.modify_pressure),
-  a           = H.make_cutter(H.modify_a),
-  b           = H.make_cutter(H.modify_b),
-  red         = H.make_cutter(H.modify_red),
-  green       = H.make_cutter(H.modify_green),
-  blue        = H.make_cutter(H.modify_blue),
-}
-
 -- Channel invert -------------------------------------------------------------
-H.negate = function(x) return -x end
-
-H.negate_lightness = function(x) return 100 - x end
-
-H.negate_rgb = function(x) return 255 - x end
-
+--stylua: ignore
 H.chan_inverters = {
-  lightness = function(hex, gamut_clip) return H.modify_lightness(hex, H.negate_lightness, gamut_clip) end,
-
-  chroma = function(hex, gamut_clip)
-    local lch = MiniColors.hex2oklch(hex, { corrected_l = false })
-
-    -- Don't invert achromatic colors (black, greys, white)
-    if lch.c == 0 then return hex end
-
-    local gamut_points = H.get_gamut_points(lch)
-    lch.c = gamut_points.c_upper - lch.c
-    return MiniColors.oklch2hex(lch, { corrected_l = false, gamut_clip = gamut_clip })
-  end,
-
-  hue = function(hex, gamut_clip) return H.modify_hue(hex, H.negate, gamut_clip) end,
-
-  -- Using `b` channel is a simpler approach of inverting temperature
-  temperature = function(hex, gamut_clip) return H.modify_b(hex, H.negate, gamut_clip) end,
-
-  -- Using `a` channel is a simpler approach of inverting temperature
-  pressure = function(hex, gamut_clip) return H.modify_a(hex, H.negate, gamut_clip) end,
-
-  a = function(hex, gamut_clip) return H.modify_a(hex, H.negate, gamut_clip) end,
-
-  b = function(hex, gamut_clip) return H.modify_b(hex, H.negate, gamut_clip) end,
-
-  red = function(hex) return H.modify_red(hex, H.negate_rgb) end,
-
-  green = function(hex) return H.modify_green(hex, H.negate_rgb) end,
-
-  blue = function(hex) return H.modify_blue(hex, H.negate_rgb) end,
+  lightness   = function(x) return 100 - x end,
+  chroma      = function(x) return 50 - x end,
+  hue         = function(x) return 360 - x end,
+  temperature = function(x) return 180 - x end,
+  pressure    = function(x) return 180 - x end,
+  a           = function(x) return -x end,
+  b           = function(x) return -x end,
+  red         = function(x) return 255-x end,
+  green       = function(x) return 255-x end,
+  blue        = function(x) return 255-x end,
 }
+
+-- chroma = function(hex, gamut_clip)
+--   local lch = MiniColors.hex2oklch(hex, { corrected_l = false })
+--
+--   -- Don't invert achromatic colors (black, greys, white)
+--   if lch.c == 0 then return hex end
+--
+--   local gamut_points = H.get_gamut_points(lch)
+--   lch.c = gamut_points.c_upper - lch.c
+--   return MiniColors.oklch2hex(lch, { corrected_l = false, gamut_clip = gamut_clip })
+-- end
 
 -- Channel repel --------------------------------------------------------------
 H.nudge_repel = function(d, coef)
@@ -1214,86 +1144,26 @@ H.add_circle_sources = function(sources)
   return res
 end
 
-H.make_repeller = function(modifier, min_value, max_value, dist_type)
-  return function(hex, sources, coef, gamut_clip)
-    local f = function(x)
-      local res = H.repel(x, sources, coef, H.dist)
-      return H.clip(res, min_value, max_value)
-    end
+-- Color conversion -----------------------------------------------------------
+H.infer_color_space = function(x)
+  if type(x) == 'string' and x:find('#%x%x%x%x%x') ~= nil then return 'hex' end
 
-    return modifier(hex, f, gamut_clip)
+  local err_msg = 'Can not infer color space of ' .. vim.inspect(x)
+  if type(x) ~= 'table' then H.error(err_msg) end
+
+  local is_num = H.is_number
+  if is_num(x.l) then
+    if is_num(x.c) then return 'oklch' end
+    if is_num(x.a) and is_num(x.a) then return 'oklab' end
+    if is_num(x.s) then return 'oklsh' end
   end
+
+  if is_num(x.r) and is_num(x.g) and is_num(x.b) then return 'rgb' end
+
+  H.error(err_msg)
 end
 
---stylua: ignore
-H.chan_repellers = {
-  lightness   = H.make_repeller(H.modify_lightness, 0, 100),
-  chroma      = H.make_repeller(H.modify_chroma, 0, 100),
-  hue         = function(hex, sources, coef, gamut_clip)
-    local f = function(x)
-      local res = H.repel(x, H.add_circle_sources(sources), coef, H.dist_circle)
-      return res % 360
-    end
-
-    return H.modify_hue(hex, f, gamut_clip)
-  end,
-  temperature = H.make_repeller(H.modify_temperature, 0, 180),
-  pressure    = H.make_repeller(H.modify_pressure, 0, 180),
-  a           = H.make_repeller(H.modify_a, -math.huge, math.huge),
-  b           = H.make_repeller(H.modify_b, -math.huge, math.huge),
-  red         = H.make_repeller(H.modify_red, 0, 255),
-  green       = H.make_repeller(H.modify_green, 0, 255),
-  blue        = H.make_repeller(H.modify_blue, 0, 255),
-}
-
--- Channel set ----------------------------------------------------------------
-H.make_setter = function(modifier)
-  return function(hex, value, gamut_clip)
-    return modifier(hex, function(_) return value end, gamut_clip)
-  end
-end
-
---stylua: ignore
-H.chan_setters = {
-  lightness   = H.make_setter(H.modify_lightness),
-  chroma      = H.make_setter(H.modify_chroma),
-  hue         = H.make_setter(H.modify_hue),
-  temperature = H.make_setter(H.modify_temperature),
-  pressure    = H.make_setter(H.modify_pressure),
-  a           = H.make_setter(H.modify_a),
-  b           = H.make_setter(H.modify_b),
-  red         = H.make_setter(H.modify_red),
-  green       = H.make_setter(H.modify_green),
-  blue        = H.make_setter(H.modify_blue),
-}
-
--- Channel shift --------------------------------------------------------------
-H.make_shifter = function(modifier)
-  return function(hex, by, gamut_clip)
-    return modifier(hex, function(x) return x + by end, gamut_clip)
-  end
-end
-
---stylua: ignore
-H.chan_shifters = {
-  lightness   = H.make_shifter(H.modify_lightness),
-  chroma      = H.make_shifter(H.modify_chroma),
-  hue         = H.make_shifter(H.modify_hue),
-  temperature = H.make_shifter(H.modify_temperature),
-  pressure    = H.make_shifter(H.modify_pressure),
-  a           = H.make_shifter(H.modify_a),
-  b           = H.make_shifter(H.modify_b),
-  red         = H.make_shifter(H.modify_red),
-  green       = H.make_shifter(H.modify_green),
-  blue        = H.make_shifter(H.modify_blue),
-}
-
--- Oklab/Oklch ----------------------------------------------------------------
--- Sources:
--- https://github.com/bottosson/bottosson.github.io/blob/master/misc/colorpicker/colorconversion.js
--- https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
-
--- HEX <-> RGB in [0;255]
+-- HEX <-> RGB in [0; 255]
 H.hex2rgb = function(hex)
   local dec = tonumber(hex:sub(2), 16)
 
@@ -1314,7 +1184,18 @@ H.rgb2hex = function(rgb)
   return string.format('#%02x%02x%02x', r, g, b)
 end
 
--- RGB in [0; 255] <-> Oklab in [0; 1]
+-- Sources for Oklab/Oklch:
+-- https://github.com/bottosson/bottosson.github.io/blob/master/misc/colorpicker/colorconversion.js
+-- https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
+--
+-- Oklsh is a local variant of Oklch with `s` for "saturation" - percent of
+-- chroma relative to maximum possible chroma for this lightness and hue.
+--
+-- NOTEs:
+-- - All coordinates in Oklab, Oklch, Oklsh are in [0, 1].
+-- - Lightness is always assumed to be corrected
+
+-- RGB in [0; 255] <-> Oklab in [0; 1] (lightess is not corrected)
 -- https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
 H.rgb2oklab = function(rgb)
   -- Convert to linear RGB
@@ -1357,7 +1238,7 @@ H.oklab2rgb = function(lab)
   return { r = 255 * H.correct_channel_inv(r), g = 255 * H.correct_channel_inv(g), b = 255 * H.correct_channel_inv(b) }
 end
 
--- Oklab<-> Oklch
+-- Oklab <-> Oklch
 H.oklab2oklch = function(lab)
   local c = math.sqrt(lab.a ^ 2 + lab.b ^ 2)
   local h = nil
@@ -1373,6 +1254,25 @@ H.oklch2oklab = function(lch)
   local a = lch.c * math.cos(H.degree2rad(lch.h))
   local b = lch.c * math.sin(H.degree2rad(lch.h))
   return { l = lch.l, a = a, b = b }
+end
+
+-- Oklch <-> Oklsh
+H.oklch2oklsh = function(lch)
+  if lch.c <= 0 or lch.h == nil then return { l = lch.l, s = 0 } end
+
+  local gamut_points = H.get_gamut_points(lch)
+  local share = lch.c / (0.01 * gamut_points.c_upper)
+
+  return { l = lch.l, s = H.clip(100 * share, 0, 100), h = lch.h }
+end
+
+H.oklsh2oklch = function(lsh)
+  if lsh.s <= 0 or lsh.h == nil then return { l = lsh.l, c = 0 } end
+
+  local gamut_points = H.get_gamut_points(lsh)
+  local c = lsh.s * (0.01 * gamut_points.c_upper)
+
+  return { l = lsh.l, c = H.clip(c, 0, math.huge), h = lsh.h }
 end
 
 -- Degree in [0; 360] <-> Radian in [0; 2*pi]
@@ -1392,23 +1292,19 @@ H.correct_channel_inv = function(x)
   return (0.0031308 >= x) and (12.92 * x) or (1.055 * math.pow(x, 0.416666667) - 0.055)
 end
 
--- Functions for lightness correction. Assumes input is in [0; 100] range
+-- Functions for lightness correction
 -- https://bottosson.github.io/posts/colorpicker/#intermission---a-new-lightness-estimate-for-oklab
 H.correct_lightness = function(x)
-  x = 0.01 * x
   local k1, k2 = 0.206, 0.03
   local k3 = (1 + k1) / (1 + k2)
 
-  local res = 0.5 * (k3 * x - k1 + math.sqrt((k3 * x - k1) ^ 2 + 4 * k2 * k3 * x))
-  return 100 * res
+  return 0.5 * (k3 * x - k1 + math.sqrt((k3 * x - k1) ^ 2 + 4 * k2 * k3 * x))
 end
 
 H.correct_lightness_inv = function(x)
-  x = 0.01 * x
   local k1, k2 = 0.206, 0.03
   local k3 = (1 + k1) / (1 + k2)
-  local res = (x / k3) * (x + k1) / (x + k2)
-  return 100 * res
+  return (x / k3) * (x + k1) / (x + k2)
 end
 
 -- Get gamut ranges for Lch point. They are computed for its hue leaf as
@@ -1418,14 +1314,28 @@ end
 -- - Upper segment ((0; 100) to cusp): (100 - y) * c_cusp = x * (100 - L_cusp)
 -- NOTEs:
 -- - It is **very important** that this triangle is computed for **not
---   corrected** lightness. Input should also have **not corrected** lightness.
+--   corrected** lightness. But it is assumed **corrected lightness** in input.
 -- - This approach is not entirely accurate and can results in ranges outside
 --   of input `lch` for in-gamut point. Put it should be pretty rare: ~0.5%
 --   cases for most saturated colors.
 H.get_gamut_points = function(lch)
-  local c, l = lch.c, lch.l
+  local c, l = 100 * lch.c, 100 * H.correct_lightness_inv(lch.l)
   local cusp = H.cusps[math.floor(lch.h % 360)]
   local c_cusp, l_cusp = cusp[1], cusp[2]
+
+  -- Maximum allowed chroma is computed based on current lightness and depends
+  -- on whether `l` is below or above cusp's `l`:
+  -- - If below, then it is from lower triangle segment.
+  -- - If above - from upper segment.
+  local c_upper = nil
+  if l < 0 or 100 < l then
+    c_upper = 0
+  else
+    c_upper = l <= l_cusp and (c_cusp * l / l_cusp) or (c_cusp * (100 - l) / (100 - l_cusp))
+  end
+
+  -- Other points can be computed only if
+  if c == nil then return { c_upper = c_upper } end
 
   -- Range of allowed lightness is computed based on current chroma:
   -- - Lower is from segment between (0, 0) and cusp.
@@ -1439,17 +1349,6 @@ H.get_gamut_points = function(lch)
     local saturation = c / c_cusp
     l_lower = saturation * l_cusp
     l_upper = saturation * (l_cusp - 100) + 100
-  end
-
-  -- Maximum allowed chroma is computed based on currnet lightness and depends
-  -- on whether `l` is below or above cusp's `l`:
-  -- - If below, then it is from lower triangle segment.
-  -- - If above - from upper segment.
-  local c_lower, c_upper = 0, nil
-  if l < 0 or 100 < l then
-    c_upper = 0
-  else
-    c_upper = l <= l_cusp and (c_cusp * l / l_cusp) or (c_cusp * (100 - l) / (100 - l_cusp))
   end
 
   -- Intersection of segment between (c, l) and (0, l_cusp) with gamut boundary
@@ -1471,7 +1370,6 @@ H.get_gamut_points = function(lch)
   return {
     l_lower = l_lower,
     l_upper = l_upper,
-    c_lower = c_lower,
     c_upper = c_upper,
     l_cusp_clip = l_cusp_clip,
     c_cusp_clip = c_cusp_clip,
@@ -1483,7 +1381,7 @@ H.clip_to_gamut = function(lch, gamut_clip)
   local res = vim.deepcopy(lch)
   local gamut_points = H.get_gamut_points(lch)
 
-  local is_inside_gamut = gamut_points.c_lower <= lch.c and lch.c <= gamut_points.c_upper
+  local is_inside_gamut = lch.c <= gamut_points.c_upper
   if is_inside_gamut then return res end
 
   -- Clip by going towards (0, l_cusp) until in gamut. This approach proved to
@@ -1498,7 +1396,7 @@ H.clip_to_gamut = function(lch, gamut_clip)
   end
 
   -- Preserve lightness by clipping chroma
-  if gamut_clip == 'chroma' then res.c = H.clip(res.c, gamut_points.c_lower, gamut_points.c_upper) end
+  if gamut_clip == 'chroma' then res.c = H.clip(res.c, 0, gamut_points.c_upper) end
 
   -- Preserve chroma by clipping lightness
   if gamut_clip == 'lightness' then res.l = H.clip(res.l, gamut_points.l_lower, gamut_points.l_upper) end
@@ -1576,6 +1474,18 @@ H.union = function(arr1, arr2)
     value_is_present[x] = true
   end
   return vim.tbl_keys(value_is_present)
+end
+
+H.find_closest = function(x, values, dist_fun)
+  local best_val, best_dist = nil, math.huge
+  for _, val in ipairs(values) do
+    local cur_dist = dist_fun(x, val)
+    if cur_dist < best_dist then
+      best_val, best_dist = val, cur_dist
+    end
+  end
+
+  return best_val
 end
 
 H.is_number = function(x) return type(x) == 'number' end
