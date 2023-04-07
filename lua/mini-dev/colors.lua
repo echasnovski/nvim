@@ -1,14 +1,6 @@
 -- TODO:
 --
 -- Code:
--- - Color wheel function for easier color manipulation?
---
--- - Make `make_transparent()` configurable with `opts`: `winbar`,
---   `numbercolumn`, `signcolumn`.
---
--- - Planned methods of `Colorscheme` object:
---     - `change_colorblind_friendly()` (come up with better name) - takes some
---       parameters and modifies color scheme to be more colorblind friendly.
 --
 -- Reference color schemes (for testing purposes):
 -- - folke/tokyonight.nvim (3260 stars)
@@ -90,6 +82,25 @@
 --     - Manage temperature by inverting, adjusting, or shifting 'temperature'.
 --     - Manage saturation by inverting, adjusting, or shifting 'temperature'
 --       with possible `{ filter = 'fg' }`.
+--     - Counter color vision deficiency (try combinations of them to see which
+--       one works best):
+--         - `chan_set('saturation', { 10, 90 }, { filter = 'fg' })` improves
+--           contrast. This is usually the best starting approach.
+--         - `chan_repel('hue', x, 45)` with `x` being hue for troubled color:
+--           30 for red, 90 for yellow, 135 for green, 270 for blue.
+--         - Another approach to adjust hues is to force equally spaced palette
+--           (remove ones with which you know you have trouble). For example:
+--             - `chan_set('hue', { 90, 210, 330 })` might be a good choice for
+--               red-green color blindness.
+--             - `chan_set('hue', { 90, 210, 330 })` - for blue-yellow.
+--         - `chan_invert('temperature')` or `chan_invert('pressure')` can
+--           sometimes improve readability.
+--         - If all hope is lost, randomly generating hue help if you are lucky:
+--           `chan_modify('hue', function() return math.random(0, 360) end)`
+--     - For color scheme creators:
+--         - Use |MiniColors-colorscheme-simualte_cvd()| to simulate various
+--           color vision deficiency types to see how color scheme would look
+--           like in the eyes of color blind person.
 --
 -- - General idea of gamut clipping usefulness.
 --
@@ -182,8 +193,8 @@ MiniColors.as_colorscheme = function(x)
   res.color_modify = H.cs_color_modify
   res.compress = H.cs_compress
   res.ensure_cterm = H.cs_ensure_cterm
-  res.simulate_cvd = H.cs_simulate_cvd
   res.make_transparent = H.cs_make_transparent
+  res.simulate_cvd = H.cs_simulate_cvd
   res.write = H.cs_write
 
   return res
@@ -233,42 +244,29 @@ MiniColors.interactive = function(opts)
   local buf_id = vim.api.nvim_create_buf(true, true)
 
   -- Write header lines
-  local delimiter = '----------'
   local header_lines = {
-    [[Experiment with color scheme by 'mini.colors']],
-    '',
-    'Non-blank lines after `' .. delimiter .. '` are treated as calls to color scheme methods',
-    'For more information see `:h MiniColors.interactive()`',
-    '',
-    'Current initial color scheme: ' .. init_cs.name,
-    'Current buffer-local mappings (Normal mode):',
-    '  Apply: ' .. maps.Apply,
-    '  Reset: ' .. maps.Reset,
-    '  Quit:  ' .. maps.Quit,
-    '  Write: ' .. maps.Write,
-    '',
-    delimiter,
+    [[-- Experiment with color scheme using 'mini.colors']],
+    '--',
+    '-- Treat this as regular Lua file',
+    '-- Methods of initial color scheme are made global',
+    '-- See more in `:h MiniColors.interactive()`',
+    '--',
+    '-- Initial color scheme: ' .. init_cs.name,
+    '-- Buffer-local mappings (Normal mode):',
+    '--   Apply: ' .. maps.Apply,
+    '--   Reset: ' .. maps.Reset,
+    '--   Quit:  ' .. maps.Quit,
+    '--   Write: ' .. maps.Write,
     '',
     '',
   }
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, header_lines)
 
-  -- Add highlight
-  local hi = function(group, from, to) vim.highlight.range(buf_id, H.ns_id.interactive, group, from, to, {}) end
-  --stylua: ignore start
-  hi('Title',   { 0,  0 },  { 1,  0 })
-  hi('Special', { 5,  30 }, { 6,  0 })
-  hi('Special', { 7,  9 },  { 8,  0 })
-  hi('Special', { 8,  9 },  { 9,  0 })
-  hi('Special', { 9,  9 },  { 10, 0 })
-  hi('Special', { 10, 9 },  { 11, 0 })
-  --stylua: ignore end
-
   -- Make local mappings
   local m = function(action, rhs) vim.keymap.set('n', maps[action], rhs, { desc = action, buffer = buf_id }) end
 
   m('Apply', function()
-    local new_cs = H.apply_interactive_buffer(buf_id, init_cs, delimiter)
+    local new_cs = H.apply_interactive_buffer(buf_id, init_cs)
     new_cs:apply()
   end)
   m('Reset', function() init_cs:apply() end)
@@ -285,11 +283,14 @@ MiniColors.interactive = function(opts)
       { prompt = [[Write to 'colors/' of your config under this name: ]], default = init_cs.name },
       function(input)
         if input == nil then return end
-        local new_cs = H.apply_interactive_buffer(buf_id, init_cs, delimiter)
+        local new_cs = H.apply_interactive_buffer(buf_id, init_cs)
         new_cs:write({ name = input })
       end
     )
   end)
+
+  -- Set local options
+  vim.bo[buf_id].filetype = 'lua'
 
   -- Make current
   vim.api.nvim_set_current_buf(buf_id)
@@ -397,10 +398,10 @@ MiniColors.to_oklsh = function(x, opts)
   return H.oklch2oklsh(MiniColors.to_oklch(x))
 end
 
-MiniColors.to_hex_cvd = function(x, cvd_type, severity, opts)
+MiniColors.to_cvd_hex = function(x, cvd_type, severity, opts)
   if x == nil then return nil end
   if not (cvd_type == 'protan' or cvd_type == 'deutan' or cvd_type == 'tritan' or cvd_type == 'mono') then
-    H.error([[Argument `cvd_type` should be one of 'protan', 'deutan', 'tritan', 'mono'.]])
+    H.error('Argument `cvd_type` should be one of "protan", "deutan", "tritan", "mono".')
   end
 
   -- Simulate monochromacy by setting zero 'crhoma'
@@ -663,7 +664,8 @@ H.cs_color_modify = function(self, f)
   return res
 end
 
-H.cs_compress = function(self)
+H.cs_compress = function(self, opts)
+  opts = vim.tbl_deep_extend('force', { plugins = true }, opts or {})
   local current_cs = MiniColors.get_colorscheme()
 
   vim.cmd('highlight clear')
@@ -678,11 +680,11 @@ H.cs_compress = function(self)
     -- `^DevIcon` groups come from 'nvim-tree/nvim-web-devicons' and don't
     -- really have value outside of that plugin. Plus there are **many** of
     -- them and they are created in that plugin.
-    local is_devicon = name:find('^DevIcon') ~= nil
+    local is_devicon = opts.plugins and name:find('^DevIcon') ~= nil
 
     -- `^colorizer_` groups come from 'norcalli/nvim-colorizer.lua' plugin and
     -- don't really have value outside of that plugin.
-    local is_colorizer = name:find('^colorizer_') ~= nil
+    local is_colorizer = opts.plugins and name:find('^colorizer_') ~= nil
 
     if not (is_from_clear or is_devicon or is_colorizer) then new_groups[name] = spec end
   end
@@ -708,22 +710,62 @@ H.cs_ensure_cterm = function(self, opts)
   return res
 end
 
-H.cs_simulate_cvd = function(self, cvd_type, severity, opts)
-  local f = function(hex) return MiniColors.to_hex_cvd(hex, cvd_type, severity, opts) end
-  return self:color_modify(f)
-end
+H.cs_make_transparent = function(self, opts)
+  opts = vim.tbl_deep_extend('force', {
+    general = true,
+    float = false,
+    numbercolumn = false,
+    signcolumn = false,
+    statusline = false,
+    tabline = false,
+    winbar = false,
+  }, opts or {})
 
---stylua: ignore
-H.cs_make_transparent = function(self)
   local res = vim.deepcopy(self)
-
   local groups = res.groups
-  if groups.Normal ~= nil then groups.Normal.bg, groups.Normal.ctermbg = nil, nil end
-  if groups.NormalNC ~= nil then groups.NormalNC.bg, groups.NormalNC.ctermbg = nil, nil end
-  if groups.WinBar ~= nil then groups.WinBar.bg, groups.WinBar.ctermbg = nil, nil end
-  if groups.WinBarNC ~= nil then groups.WinBarNC.bg, groups.WinBarNC.ctermbg = nil, nil end
+  local update = function(names)
+    for _, n in pairs(names) do
+      local gr = groups[n]
+      if gr == nil then return end
+      gr.bg, gr.ctermbg = nil, nil
+      gr.blend = 0
+    end
+  end
+
+  if opts.general then
+    update({ 'Normal', 'NormalNC', 'EndOfBuffer', 'MsgArea', 'MsgSeparator', 'VertSplit', 'WinSeparator' })
+  end
+
+  if opts.float then update({ 'FloatBorder', 'FloatTitle', 'NormalFloat' }) end
+
+  if opts.numbercolumn then
+    update({ 'LineNr', 'LineNrAbove', 'LineNrBelow' })
+
+    -- Remove number column background coming from signs
+    local sign_numhl = vim.tbl_map(function(x) return x.numhl end, vim.fn.sign_getdefined())
+    update(sign_numhl)
+  end
+
+  if opts.signcolumn then
+    update({ 'SignColumn' })
+
+    -- Remove generic sign backgrounds (not current)
+    local sign_texthl = vim.tbl_map(function(x) return x.texthl end, vim.fn.sign_getdefined())
+    update(sign_texthl)
+  end
+
+  if opts.statusline then update({ 'StatusLine', 'StatusLineNC', 'StatusLineTerm', 'StatusLineTermNC' }) end
+
+  if opts.tabline then update({ 'TabLine', 'TabLineFill', 'TabLineSel' }) end
+
+  if opts.winbar then update({ 'WinBar', 'WinBarNC' }) end
 
   return res
+end
+
+H.cs_simulate_cvd = function(self, cvd_type, severity, opts)
+  local f = function(hex) return MiniColors.to_cvd_hex(hex, cvd_type, severity, opts) end
+  return self:color_modify(f)
 end
 
 H.cs_write = function(self, opts)
@@ -784,8 +826,8 @@ end
 
 H.normalize_channel = function(x)
   if not vim.tbl_contains(H.allowed_channels, x) then
-    local msg =
-      string.format('Channel should be one of %s. Not %s.', table.concat(H.allowed_channels, ', '), vim.inspect(x))
+    local allowed = table.concat(vim.tbl_map(vim.inspect, H.allowed_channels), ', ')
+    local msg = string.format('Channel should be one of %s. Not %s.', allowed, vim.inspect(x))
     H.error(msg)
   end
   return x
@@ -809,7 +851,7 @@ end
 H.normalize_gamut_clip = function(x)
   x = x or 'chroma'
   if x == 'chroma' or x == 'lightness' or x == 'cusp' then return x end
-  H.error([[Argument `opts.gamut_clip` should one of 'chroma', 'lightness', 'cusp'.]])
+  H.error('Argument `opts.gamut_clip` should one of "chroma", "lightness", "cusp".')
 end
 
 H.normalize_number = function(x, arg_name)
@@ -1475,34 +1517,32 @@ H.clip_to_gamut = function(lch, gamut_clip)
 end
 
 -- Interactive ----------------------------------------------------------------
-H.apply_interactive_buffer = function(buf_id, init_cs, delimiter)
-  -- Create temporart color scheme
+H.apply_interactive_buffer = function(buf_id, init_cs)
+  -- Create temporary color scheme
   MiniColors._interactive_cs = vim.deepcopy(init_cs)
 
-  local is_past_delimiter = false
-  local process_line = function(l)
-    if l == delimiter then
-      is_past_delimiter = true
-      return
-    end
-
-    l = vim.trim(l)
-    if not is_past_delimiter or l == '' then return end
-
-    local ok, out = pcall(vim.cmd, 'lua MiniColors._interactive_cs = MiniColors._interactive_cs:' .. l)
-    if not ok then
-      MiniColors._interactive_cs = nil
-      H.error('There was error executing content of interactive buffer: ' .. out)
+  -- Create initial script lines exposing color scheme and its methods
+  local lines = { 'local self = MiniColors._interactive_cs' }
+  for key, val in pairs(MiniColors._interactive_cs) do
+    if vim.is_callable(val) then
+      local l = string.format('local %s = function(...) self = self:%s(...) end', key, key)
+      table.insert(lines, l)
     end
   end
 
-  local lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, true)
-  for _, l in ipairs(lines) do
-    process_line(l)
-  end
+  -- Add current lines
+  lines = vim.list_extend(lines, vim.api.nvim_buf_get_lines(buf_id, 0, -1, true))
 
-  local res = MiniColors._interactive_cs
+  -- Return final result
+  table.insert(lines, 'return self')
+
+  _G.lines = vim.deepcopy(lines)
+
+  -- Source
+  local ok, res = pcall(loadstring(table.concat(lines, '\n')))
   MiniColors._interactive_cs = nil
+
+  if not ok then error(res) end
   return res
 end
 
