@@ -28,7 +28,7 @@ require('nvim-treesitter.configs').setup({
     'yaml',
     'vim',
   },
-  highlight = { enable = true, disable = { 'help' } },
+  highlight = { enable = true, disable = { 'vimdoc' } },
   textobjects = { enable = false },
   indent = { enable = false },
   playground = {
@@ -47,7 +47,13 @@ require('nvim-treesitter.configs').setup({
   --   },
   -- },
 })
-require('vim.treesitter.query').set_query('lua', 'injections', '')
+
+-- Disable injections in 'lua' language. In Neovim<0.9 it is
+-- `vim.treesitter.query.set_query()`; in Neovim>=0.9 it is
+-- `vim.treesitter.query.set()`.
+local ts_query = require('vim.treesitter.query')
+local ts_query_set = ts_query.set or ts_query.set_query
+ts_query_set('lua', 'injections', '')
 
 -- Implement custom fold expression for markdown files. Should be defined after
 -- `nvim-treesitter` initialization to avoid issues from lazy loading.
