@@ -30,6 +30,7 @@
 -- Documentation:
 --
 -- - Color spaces:
+--     - 8bit - integer between 16 (because 0-15 are not reliable) and 255.
 --     - Hex - string of the form "#xxxxxx" where `x` is hexadecimal.
 --     - RGB - table with fields `r` (red), `g` (green), `b` (blue).
 --       All numeric inside [0; 255].
@@ -231,7 +232,7 @@ MiniColors.get_colorscheme = function(name, opts)
     end,
   })
   local ok, _ = pcall(vim.cmd, 'colorscheme ' .. name)
-  if not ok then H.error(string.format('Could not get color scheme "%s".', name)) end
+  if not ok then H.error(string.format('No color scheme named "%s".', name)) end
 
   return res
 end
@@ -495,7 +496,7 @@ H.cvd_matricies = {
 ---@diagnostic disable end
 --stylua: ignore end
 
-H.allowed_spaces = { 'hex', 'rgb', 'oklab', 'oklch', 'oklsh' }
+H.allowed_spaces = { '8bit', 'hex', 'rgb', 'oklab', 'oklch', 'oklsh' }
 
 H.allowed_channels =
   { 'lightness', 'chroma', 'saturation', 'hue', 'temperature', 'pressure', 'a', 'b', 'red', 'green', 'blue' }
@@ -531,9 +532,10 @@ H.cs_apply = function(self)
     hi(0, hl_data.name, hl_data.spec)
   end
 
-  -- Terminal colors
-  for i, val in pairs(self.terminal) do
-    vim.g['terminal_color_' .. i] = val
+  -- Terminal colors. Apply all colors in order to possibly remove previously
+  -- set ones.
+  for i = 0, 255 do
+    vim.g['terminal_color_' .. i] = self.terminal[i]
   end
 
   return self
@@ -866,14 +868,6 @@ end
 H.get_hl_by_name = function(name)
   local res = vim.api.nvim_get_hl_by_name(name, true)
 
-  -- At the moment, having `res[true] = 6` indicates that group is cleared
-  -- NOTE: actually return empty dictionary and not `nil` to preserve
-  -- information that group was cleared. This might matter if highlight group
-  -- was cleared but default links to something else (like if group
-  -- `@lsp.type.variable` is cleared to use tree-sitter highlighting but by
-  -- default it links to `Identifier`).
-  if res[true] ~= nil then return {} end
-
   -- Convert decimal colors to hex strings
   res.fg = H.dec2hex(res.foreground)
   res.bg = H.dec2hex(res.background)
@@ -885,6 +879,14 @@ H.get_hl_by_name = function(name)
   local cterm_data = vim.api.nvim_get_hl_by_name(name, false)
   res.ctermfg = cterm_data.foreground
   res.ctermbg = cterm_data.background
+
+  -- At the moment, having `res[true] = 6` indicates that group is cleared
+  -- NOTE: actually return empty dictionary and not `nil` to preserve
+  -- information that group was cleared. This might matter if highlight group
+  -- was cleared but default links to something else (like if group
+  -- `@lsp.type.variable` is cleared to use tree-sitter highlighting but by
+  -- default it links to `Identifier`).
+  res[true] = nil
 
   return res
 end
@@ -917,21 +919,21 @@ H.compute_term_oklab = function()
     local r = cterm_basis[math.floor(j / 36) % 6 + 1]
     local g = cterm_basis[math.floor(j / 6) % 6 + 1]
     local b = cterm_basis[j % 6 + 1]
-    res[i] = H.rgb2oklab({ r = r, g = g, b = b })
+    res[i] = MiniColors.convert({ r = r, g = g, b = b }, 'oklab')
   end
 
   -- Grays
   for i = 232, 255 do
     local c = 8 + (i - 232) * 10
-    res[i] = H.rgb2oklab({ r = c, g = c, b = c })
+    res[i] = MiniColors.convert({ r = c, g = c, b = c }, 'oklab')
   end
 
   H.term_oklab = res
   return res
 end
 
-H.approx_term_color = function(hex, term_oklab)
-  local ref_lab = H.rgb2oklab(H.hex2rgb(hex))
+H.approx_term_color = function(x, term_oklab)
+  local ref_lab = MiniColors.convert(x, 'oklab')
 
   local best_id, best_dist = nil, math.huge
   for id, lab in pairs(term_oklab) do
@@ -1027,6 +1029,8 @@ H.convex_hl_group = function(from, to, coef)
 
   --stylua: ignore
   return {
+    -- No `cterm` in convex combination because it is not trivial to create
+    -- proper gradient for them
     fg = H.convex_lab(from.fg, to.fg, coef),
     bg = H.convex_lab(from.bg, to.bg, coef),
     sp = H.convex_lab(from.sp, to.sp, coef),
@@ -1207,12 +1211,18 @@ end
 -- Color conversion -----------------------------------------------------------
 H.converters = {}
 
+H.converters['8bit'] = function(x, _, _) return H.approx_term_color(x, H.compute_term_oklab()) end
+
 H.converters.hex = function(x, from_space, opts)
   if from_space == 'hex' then return x end
   return H.rgb2hex(MiniColors.convert(x, 'rgb', opts))
 end
 
 H.converters.rgb = function(x, from_space, opts)
+  if from_space == '8bit' then
+    local rgb = H.oklab2rgb(H.compute_term_oklab()[x])
+    return vim.tbl_map(H.round, rgb)
+  end
   if from_space == 'hex' then return H.hex2rgb(x) end
 
   if from_space == 'rgb' and (0 <= x.r and x.r <= 255) and (0 <= x.g and x.g <= 255) and (0 <= x.b and x.b <= 255) then
@@ -1230,6 +1240,7 @@ H.converters.oklab = function(x, from_space, opts) return H.oklch2oklab(MiniColo
 
 H.converters.oklch = function(x, from_space, opts)
   local res = nil
+  if from_space == '8bit' then res = H.oklab2oklch(H.compute_term_oklab()[x]) end
   if from_space == 'hex' then res = H.oklab2oklch(H.rgb2oklab(H.hex2rgb(x))) end
   if from_space == 'rgb' then res = H.oklab2oklch(H.rgb2oklab(x)) end
   if from_space == 'oklab' then res = H.oklab2oklch(x) end
@@ -1252,6 +1263,7 @@ end
 H.converters.oklsh = function(x, from_space, opts) return H.oklch2oklsh(MiniColors.convert(x, 'oklch', opts)) end
 
 H.infer_color_space = function(x)
+  if type(x) == 'number' and 16 <= x and x <= 255 then return '8bit' end
   if type(x) == 'string' and x:find('#%x%x%x%x%x') ~= nil then return 'hex' end
 
   local err_msg = 'Can not infer color space of ' .. vim.inspect(x)
