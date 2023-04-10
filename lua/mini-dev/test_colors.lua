@@ -21,6 +21,21 @@ local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 -- Mock test color scheme
 local mock_test_cs = function() child.cmd('set rtp+=lua/mini-dev') end
 
+-- Account for attribute rename in Neovim=0.8
+-- See https://github.com/neovim/neovim/pull/19159
+-- TODO: Remove after compatibility with Neovim=0.7 is dropped
+local init_hl_under_attrs = function()
+  if child.fn.has('nvim-0.8') == 0 then
+    child.lua([[underdashed, underdotted, underdouble = 'underdash', 'underdot', 'underlineline']])
+    return
+  end
+  child.lua([[underdashed, underdotted, underdouble = 'underdashed', 'underdotted', 'underdouble']])
+end
+
+-- Data =======================================================================
+-- Small time used to reduce test flackiness
+local small_time = 20
+
 -- Output test set ============================================================
 T = new_set({
   hooks = {
@@ -155,6 +170,8 @@ T['interactive()']['works'] = function() MiniTest.skip() end
 T['animate()'] = new_set({
   hooks = {
     pre_case = function()
+      init_hl_under_attrs()
+
       -- Create two color scheme objects
       child.lua([[_G.cs_1 = MiniColors.as_colorscheme({
         name = 'cs_1',
@@ -171,9 +188,9 @@ T['animate()'] = new_set({
           TestStandout      = { fg = '#000000', standout      = true },
           TestStrikethrough = { fg = '#000000', strikethrough = true },
           TestUndercurl     = { fg = '#000000', undercurl     = true },
-          TestUnderdashed   = { fg = '#000000', underdashed   = true },
-          TestUnderdotted   = { fg = '#000000', underdotted   = true },
-          TestUnderdouble   = { fg = '#000000', underdouble   = true },
+          TestUnderdashed   = { fg = '#000000', [underdashed] = true },
+          TestUnderdotted   = { fg = '#000000', [underdotted] = true },
+          TestUnderdouble   = { fg = '#000000', [underdouble] = true },
           TestUnderline     = { fg = '#000000', underline     = true },
         },
         terminal = { [0] = '#190000', [7] = '#001900' }
@@ -194,9 +211,9 @@ T['animate()'] = new_set({
           TestStandout      = { fg = '#000000', standout      = false },
           TestStrikethrough = { fg = '#000000', strikethrough = false },
           TestUndercurl     = { fg = '#000000', undercurl     = false },
-          TestUnderdashed   = { fg = '#000000', underdashed   = false },
-          TestUnderdotted   = { fg = '#000000', underdotted   = false },
-          TestUnderdouble   = { fg = '#000000', underdouble   = false },
+          TestUnderdashed   = { fg = '#000000', [underdashed] = false },
+          TestUnderdotted   = { fg = '#000000', [underdotted] = false },
+          TestUnderdouble   = { fg = '#000000', [underdouble] = false },
           TestUnderline     = { fg = '#000000', underline     = false },
         },
         terminal = { [7] = '#000000', [15] = '#000000' }
@@ -236,35 +253,85 @@ T['animate()'] = new_set({
   },
 })
 
+local is_cs_1 = function()
+  local is_name_correct = child.g.colors_name == 'cs_1'
+  local is_normal_correct =
+    vim.deep_equal(child.lua_get('_G.get_relevant_cs_data().groups.Normal'), child.lua_get('_G.cs_1.groups.Normal'))
+  return is_name_correct and is_normal_correct
+end
+
+local is_cs_2 = function()
+  local is_name_correct = child.g.colors_name == 'cs_2'
+  local is_normal_correct =
+    vim.deep_equal(child.lua_get('_G.get_relevant_cs_data().groups.Normal'), child.lua_get('_G.cs_2.groups.Normal'))
+  return is_name_correct and is_normal_correct
+end
+
 --stylua: ignore
 T['animate()']['works'] = function()
-  -- Test only on Neovim>=0.8 as there were changes in highlight attributes
-  -- See https://github.com/neovim/neovim/pull/19159
-  -- TODO: Remove when support for Neovim=0.7 is dropped
-  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('Needs Neovim=0.8 for easier testing.') end
+  local underdashed = child.lua_get('_G.underdashed')
+  local underdotted = child.lua_get('_G.underdotted')
+  local underdouble = child.lua_get('_G.underdouble')
 
   local validate_init = function()
     local cur_cs = child.lua_get('_G.get_relevant_cs_data()')
-    eq(cur_cs.name, 'cs_2')
-    eq(cur_cs.groups.Normal, child.lua_get('_G.cs_2.groups.Normal'))
-    eq(cur_cs.groups.TestSpecial, child.lua_get('_G.cs_2.groups.TestSpecial'))
-    eq(cur_cs.groups.TestLink, child.lua_get('_G.cs_2.groups.TestLink'))
-    eq(child.g.terminal_color_0, vim.NIL)
-    eq(child.g.terminal_color_7, '#000000')
-    eq(child.g.terminal_color_15, '#000000')
+    eq(cur_cs.name, 'cs_1')
+    eq(cur_cs.groups.Normal, child.lua_get('_G.cs_1.groups.Normal'))
+    eq(cur_cs.groups.TestSpecial, child.lua_get('_G.cs_1.groups.TestSpecial'))
+    eq(cur_cs.groups.TestLink, child.lua_get('_G.cs_1.groups.TestLink'))
+    eq(child.g.terminal_color_0, '#190000')
+    eq(child.g.terminal_color_7, '#001900')
+    eq(child.g.terminal_color_15, vim.NIL)
   end
 
-  child.lua('_G.cs_2:apply()')
+  child.lua('_G.cs_1:apply()')
   validate_init()
 
   -- It should animate transition from current color scheme to first in array,
   -- then to second, and so on
-  child.lua([[MiniColors.animate({ _G.cs_1, _G.cs_2 })]])
+  child.lua([[MiniColors.animate({ _G.cs_2, _G.cs_1 })]])
 
   -- Check slightly before half-way
-  local validate_before_half = function(single_hl_created)
+  local validate_before_half = function()
+    -- Account for missing `nocombine` field in Neovim=0.7
+    -- See https://github.com/neovim/neovim/pull/19586
+    -- TODO: Remove after compatibility with Neovim=0.7 is dropped
+    local nocombine = nil
+    if child.fn.has('nvim-0.8') == 1 then nocombine = true end
+
+    eq(
+      child.lua_get('_G.get_relevant_cs_data()'),
+      {
+        name = 'transition_step',
+        groups = {
+          Normal      = { fg = '#090201', bg = '#000901' },
+          TestSpecial = { sp = '#000003', blend = 12 },
+          TestLink    = { link = 'Title' },
+          TestSingle  = { bg = '#000000', fg = '#ffffff', sp = '#aaaaaa', underline = true },
+
+          TestBold          = { fg = '#000000', bold          = true },
+          TestItalic        = { fg = '#000000', italic        = true },
+          TestNocombine     = { fg = '#000000', nocombine     = nocombine },
+          TestReverse       = { fg = '#000000', reverse       = true },
+          TestStandout      = { fg = '#000000', standout      = true },
+          TestStrikethrough = { fg = '#000000', strikethrough = true },
+          TestUndercurl     = { fg = '#000000', undercurl     = true },
+          TestUnderdashed   = { fg = '#000000', [underdashed] = true },
+          TestUnderdotted   = { fg = '#000000', [underdotted] = true },
+          TestUnderdouble   = { fg = '#000000', [underdouble] = true },
+          TestUnderline     = { fg = '#000000', underline     = true },
+        },
+        terminal = { { 0, '#190000' }, { 7, '#000901' }, { 15 } },
+      }
+    )
+  end
+
+  sleep(500 - small_time)
+  validate_before_half()
+
+  -- Check slightly after half-way
+  local validate_after_half = function()
     local test_single_hl = nil
-    if single_hl_created then test_single_hl = {} end
     eq(
       child.lua_get('_G.get_relevant_cs_data()'),
       {
@@ -273,7 +340,7 @@ T['animate()']['works'] = function()
           Normal      = { fg = '#050000', bg = '#030801' },
           TestSpecial = { sp = '#000003', blend = 13 },
           TestLink    = { link = 'Comment' },
-          TestSingle  = test_single_hl,
+          TestSingle  = {},
 
           TestBold          = { fg = '#000000' },
           TestItalic        = { fg = '#000000' },
@@ -292,54 +359,22 @@ T['animate()']['works'] = function()
     )
   end
 
-  sleep(500 - 20)
-  validate_before_half(false)
-
-  -- Check slightly after half-way
-  local validate_after_half = function()
-    eq(
-      child.lua_get('_G.get_relevant_cs_data()'),
-      {
-        name = 'transition_step',
-        groups = {
-          Normal      = { fg = '#090201', bg = '#000901' },
-          TestSpecial = { sp = '#000003', blend = 12 },
-          TestLink    = { link = 'Title' },
-          TestSingle  = { bg = '#000000', fg = '#ffffff', sp = '#aaaaaa', underline = true },
-
-          TestBold          = { fg = '#000000', bold          = true },
-          TestItalic        = { fg = '#000000', italic        = true },
-          TestNocombine     = { fg = '#000000', nocombine     = true },
-          TestReverse       = { fg = '#000000', reverse       = true },
-          TestStandout      = { fg = '#000000', standout      = true },
-          TestStrikethrough = { fg = '#000000', strikethrough = true },
-          TestUndercurl     = { fg = '#000000', undercurl     = true },
-          TestUnderdashed   = { fg = '#000000', underdashed   = true },
-          TestUnderdotted   = { fg = '#000000', underdotted   = true },
-          TestUnderdouble   = { fg = '#000000', underdouble   = true },
-          TestUnderline     = { fg = '#000000', underline     = true },
-        },
-        terminal = { { 0, '#190000' }, { 7, '#000901' }, { 15 } },
-      }
-    )
-  end
-
-  sleep(2 * 20)
+  sleep(2 * small_time)
   validate_after_half()
 
   -- After first transition end it should show intermediate step for 1 second
   local validate_intermediate = function()
     local cur_cs = child.lua_get('_G.get_relevant_cs_data()')
-    eq(cur_cs.name, 'cs_1')
-    eq(cur_cs.groups.Normal, child.lua_get('_G.cs_1.groups.Normal'))
-    eq(cur_cs.groups.TestSpecial, child.lua_get('_G.cs_1.groups.TestSpecial'))
-    eq(cur_cs.groups.TestLink, child.lua_get('_G.cs_1.groups.TestLink'))
-    eq(child.g.terminal_color_0, '#190000')
-    eq(child.g.terminal_color_7, '#001900')
-    eq(child.g.terminal_color_15, vim.NIL)
+    eq(cur_cs.name, 'cs_2')
+    eq(cur_cs.groups.Normal, child.lua_get('_G.cs_2.groups.Normal'))
+    eq(cur_cs.groups.TestSpecial, child.lua_get('_G.cs_2.groups.TestSpecial'))
+    eq(cur_cs.groups.TestLink, child.lua_get('_G.cs_2.groups.TestLink'))
+    eq(child.g.terminal_color_0, vim.NIL)
+    eq(child.g.terminal_color_7, '#000000')
+    eq(child.g.terminal_color_15, '#000000')
   end
 
-  sleep(500 - 20)
+  sleep(500 - small_time)
   validate_intermediate()
 
   sleep(1000 - 10)
@@ -347,21 +382,54 @@ T['animate()']['works'] = function()
 
   -- After showing period it should start transition back to first one (as it
   -- was specially designed command)
-  sleep(500 - 20)
+  sleep(500 - small_time)
   validate_after_half()
 
-  sleep(2 * 20)
-  validate_before_half(true)
+  sleep(2 * small_time)
+  validate_before_half()
 
-  sleep(500 - 20)
+  sleep(500 - small_time)
   validate_init()
 end
 
-T['animate()']['respects `opts.transition_steps`'] = function() end
+T['animate()']['respects `opts.transition_steps`'] = function()
+  child.lua('_G.cs_1:apply()')
+  child.lua([[MiniColors.animate({ _G.cs_2 }, { transition_steps = 2 })]])
 
-T['animate()']['respects `opts.transition_duration`'] = function() MiniTest.skip() end
+  sleep(500 - small_time)
+  eq(is_cs_1(), true)
 
-T['animate()']['respects `opts.show_duration`'] = function() MiniTest.skip() end
+  sleep(2 * small_time)
+  eq(child.lua_get('_G.get_relevant_cs_data().groups.Normal.fg'), '#050000')
+
+  sleep(500 - small_time)
+  eq(is_cs_2(), true)
+end
+
+T['animate()']['respects `opts.transition_duration`'] = function()
+  child.lua([[MiniColors.animate({ _G.cs_2 }, { transition_duration = 500 })]])
+
+  sleep(500 + small_time)
+  eq(is_cs_2(), true)
+end
+
+T['animate()']['respects `opts.show_duration`'] = function()
+  child.lua([[MiniColors.animate({ _G.cs_1, _G.cs_2 }, { show_duration = 100 })]])
+
+  sleep(1000 + small_time)
+  eq(is_cs_1(), true)
+
+  sleep(100 - 2 * small_time)
+  eq(is_cs_1(), true)
+
+  -- Account that first step takes 40 ms
+  sleep(small_time + 40 + 10)
+  eq(is_cs_1(), false)
+end
+
+T['animate()']['validates arguments'] = function()
+  expect.error(function() child.lua('MiniColors.animate(_G.cs_2)') end, 'array of color schemes')
+end
 
 T['convert()'] = new_set()
 

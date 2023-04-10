@@ -307,7 +307,7 @@ end
 ---
 --- Starts from current color scheme and loops through `cs_array`.
 MiniColors.animate = function(cs_array, opts)
-  if not (type(cs_array) == 'table' and H.all(cs_array, H.is_colorscheme)) then
+  if not (vim.tbl_islist(cs_array) and H.all(cs_array, H.is_colorscheme)) then
     H.error('Argument `cs_array` should be an array of color schemes.')
   end
   opts = vim.tbl_deep_extend(
@@ -1048,6 +1048,11 @@ H.convex_hl_group = function(from, to, coef)
     underdotted   = H.convex_discrete(from.underdotted,   to.underdotted,   coef),
     underdouble   = H.convex_discrete(from.underdouble,   to.underdouble,   coef),
     underline     = H.convex_discrete(from.underline,     to.underline,     coef),
+    -- Compatibility with Neovim=0.7
+    -- TODO: Remove when support for Neovim=0.7 is dropped
+    underdash     = H.convex_discrete(from.underdash,     to.underdash,     coef),
+    underdot      = H.convex_discrete(from.underdot,      to.underdot,      coef),
+    underlineline = H.convex_discrete(from.underlineline, to.underlineline, coef),
   }
 end
 
