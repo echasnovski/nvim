@@ -62,13 +62,68 @@ T['setup()']['creates `config` field'] = function() eq(child.lua_get('type(_G.Mi
 
 T['as_colorscheme()'] = new_set()
 
-T['as_colorscheme()']['works'] = function() MiniTest.skip() end
+T['as_colorscheme()']['works'] = function()
+  child.lua([[_G.cs_data = {
+    name = 'my_test_cs',
+    groups = { Normal = { fg = '#ffffff', bg = '#000000' } },
+    terminal = { [0] = '#111111' }
+  }]])
+  child.lua('_G.cs = MiniColors.as_colorscheme(_G.cs_data)')
+
+  -- Fields
+  local validate_field = function(field, value) eq(child.lua_get('_G.cs.' .. field), value) end
+
+  validate_field('name', 'my_test_cs')
+
+  validate_field('groups.Normal', { fg = '#ffffff', bg = '#000000' })
+
+  validate_field('terminal[0]', '#111111')
+
+  -- Methods
+  local validate_method = function(method)
+    local lua_cmd = string.format('type(_G.cs.%s)', method)
+    eq(child.lua_get(lua_cmd), 'function')
+  end
+
+  validate_method('apply')
+  validate_method('add_cterm_attributes')
+  validate_method('add_terminal_colors')
+  validate_method('add_transparency')
+  validate_method('chan_add')
+  validate_method('chan_invert')
+  validate_method('chan_modify')
+  validate_method('chan_multiply')
+  validate_method('chan_repel')
+  validate_method('chan_set')
+  validate_method('color_modify')
+  validate_method('compress')
+  validate_method('get_palette')
+  validate_method('resolve_links')
+  validate_method('simulate_cvd')
+  validate_method('write')
+
+  -- Should not modify input table
+  eq(child.lua_get('type(_G.cs_data.apply)'), 'nil')
+
+  -- Should not require any input data
+  expect.no_error(function() child.lua('MiniColors.as_colorscheme({})') end)
+end
+
+T['as_colorscheme()']['validates arguments'] = function()
+  expect.error(function() child.lua('MiniColors.as_colorscheme(1)', '%(mini%.colors%)table') end)
+end
 
 T['as_colorscheme()']['fields'] = function() MiniTest.skip() end
 
 T['as_colorscheme()']['methods'] = new_set()
 
 T['as_colorscheme()']['methods']['apply()'] = function() MiniTest.skip() end
+
+T['as_colorscheme()']['methods']['add_cterm_attributes()'] = function() MiniTest.skip() end
+
+T['as_colorscheme()']['methods']['add_terminal_colors()'] = function() MiniTest.skip() end
+
+T['as_colorscheme()']['methods']['add_transparency()'] = function() MiniTest.skip() end
 
 T['as_colorscheme()']['methods']['chan_add()'] = function() MiniTest.skip() end
 
@@ -86,9 +141,9 @@ T['as_colorscheme()']['methods']['color_modify()'] = function() MiniTest.skip() 
 
 T['as_colorscheme()']['methods']['compress()'] = function() MiniTest.skip() end
 
-T['as_colorscheme()']['methods']['ensure_cterm()'] = function() MiniTest.skip() end
+T['as_colorscheme()']['methods']['get_palette()'] = function() MiniTest.skip() end
 
-T['as_colorscheme()']['methods']['make_transparent()'] = function() MiniTest.skip() end
+T['as_colorscheme()']['methods']['resolve_links()'] = function() MiniTest.skip() end
 
 T['as_colorscheme()']['methods']['simulate_cvd()'] = function() MiniTest.skip() end
 
@@ -118,6 +173,9 @@ local validate_test_cs = function(cs_var)
   end
 
   validate_method('apply')
+  validate_method('add_cterm_attributes')
+  validate_method('add_terminal_colors')
+  validate_method('add_transparency')
   validate_method('chan_add')
   validate_method('chan_invert')
   validate_method('chan_modify')
@@ -126,8 +184,8 @@ local validate_test_cs = function(cs_var)
   validate_method('chan_set')
   validate_method('color_modify')
   validate_method('compress')
-  validate_method('ensure_cterm')
-  validate_method('make_transparent')
+  validate_method('get_palette')
+  validate_method('resolve_links')
   validate_method('simulate_cvd')
   validate_method('write')
 end
@@ -396,10 +454,10 @@ T['animate()']['respects `opts.transition_steps`'] = function()
   child.lua('_G.cs_1:apply()')
   child.lua([[MiniColors.animate({ _G.cs_2 }, { transition_steps = 2 })]])
 
-  sleep(500 - small_time)
+  sleep(500 - small_time - 10)
   eq(is_cs_1(), true)
 
-  sleep(2 * small_time)
+  sleep(2 * small_time + 10)
   eq(child.lua_get('_G.get_relevant_cs_data().groups.Normal.fg'), '#050000')
 
   sleep(500 - small_time)

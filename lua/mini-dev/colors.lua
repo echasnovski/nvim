@@ -2,6 +2,10 @@
 --
 -- Code:
 --
+-- - Rename 'oklsh' to 'okhsl'.
+--
+-- - Revisit `add_terminal_colors()` for a possibly simpler approach.
+--
 -- Reference color schemes (for testing purposes):
 -- - folke/tokyonight.nvim (3260 stars)
 -- - catppuccin/nvim (2360 stars)
@@ -181,6 +185,7 @@ MiniColors.config = {}
 --minidoc_afterlines_end
 
 MiniColors.as_colorscheme = function(x)
+  if type(x) ~= 'table' then H.error('Input of `as_colorscheme()` should be table.') end
   local res = vim.deepcopy(x)
 
   -- Fields
@@ -189,6 +194,9 @@ MiniColors.as_colorscheme = function(x)
   res.terminal = res.terminal or {}
 
   -- Methods
+  res.add_cterm_attributes = H.cs_add_cterm_attributes
+  res.add_terminal_colors = H.cs_add_terminal_colors
+  res.add_transparency = H.cs_add_transparency
   res.apply = H.cs_apply
   res.chan_add = H.cs_chan_add
   res.chan_invert = H.cs_chan_invert
@@ -198,8 +206,8 @@ MiniColors.as_colorscheme = function(x)
   res.chan_set = H.cs_chan_set
   res.color_modify = H.cs_color_modify
   res.compress = H.cs_compress
-  res.ensure_cterm = H.cs_ensure_cterm
-  res.make_transparent = H.cs_make_transparent
+  res.get_palette = H.cs_get_palette
+  res.resolve_links = H.cs_resolve_links
   res.simulate_cvd = H.cs_simulate_cvd
   res.write = H.cs_write
 
@@ -521,6 +529,123 @@ H.get_config = function(config)
 end
 
 -- Color scheme methods -------------------------------------------------------
+H.cs_add_cterm_attributes = function(self, opts)
+  local res = vim.deepcopy(self)
+  opts = vim.tbl_deep_extend('force', { force = true }, opts or {})
+
+  -- Compute Oklab coordinates of terminal colors for better approximation
+  local term_oklab = H.compute_term_oklab()
+
+  local force = opts.force
+  for _, gr in pairs(res.groups) do
+    if gr.fg and (force or not gr.ctermfg) then gr.ctermfg = H.get_closest_color_id(gr.fg, term_oklab) end
+    if gr.bg and (force or not gr.ctermbg) then gr.ctermbg = H.get_closest_color_id(gr.bg, term_oklab) end
+  end
+
+  return res
+end
+
+H.cs_add_terminal_colors = function(self, opts)
+  local res = vim.deepcopy(self)
+  opts = vim.tbl_deep_extend('force', { force = true, palette_args = {} }, opts or {})
+
+  -- General meaning of terminal colors are taken from here:
+  -- https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
+  -- Regular and bright versions will be equal (to simplify algorithm)
+
+  -- Get palette and convert in Oklch
+  local palette = self:get_palette(opts.palette_args)
+  local palette_oklch = vim.tbl_map(function(x) return MiniColors.convert(x, 'oklch') end, palette)
+
+  local terminal = {}
+
+  -- Black and white are colors with lowest and highest lightness
+  local dist_blackwhite = function(x, y) return H.dist(x.l, y.l) / 100 + H.dist(x.c, y.c) / 30 end
+  local black, black_id = H.get_closest({ l = 0, c = 0 }, palette_oklch, dist_blackwhite)
+  local white, white_id = H.get_closest({ l = 100, c = 0 }, palette_oklch, dist_blackwhite)
+
+  terminal[0], terminal[8] = black, black
+  terminal[7], terminal[15] = white, white
+
+  -- - Remove "black" and "white" so that they won't appear among other colors
+  local first, second = math.min(black_id, white_id), math.max(black_id, white_id)
+  table.remove(palette_oklch, second)
+  table.remove(palette_oklch, first)
+
+  -- Colors are computed as closest to reference taking into account only
+  -- normalized chroma and hue
+  local ref_color_data = {
+    { c = 25, h = 30 }, -- Red
+    { c = 24, h = 150 }, -- Green
+    { c = 18, h = 90 }, -- Yellow
+    { c = 30, h = 270 }, -- Blue
+    { c = 32, h = 330 }, -- Magenta
+    { c = 15, h = 210 }, -- Cyan
+  }
+  local dist_color = function(x, y) return H.dist(x.c, y.c) / 30 + H.dist_circle(x.h, y.h) / 180 end
+  local colors = {}
+  for i, ref in ipairs(ref_color_data) do
+    local col = H.get_closest(ref, palette_oklch, dist_color)
+    terminal[i], terminal[i + 8] = col, col
+  end
+
+  -- Update current `terminal` field
+  for i = 0, 15 do
+    if opts.force or not res.terminal[i] then res.terminal[i] = MiniColors.convert(terminal[i], 'hex') end
+  end
+
+  return res
+end
+
+H.cs_add_transparency = function(self, opts)
+  opts = vim.tbl_deep_extend('force', {
+    general = true,
+    float = false,
+    statuscolumn = false,
+    statusline = false,
+    tabline = false,
+    winbar = false,
+  }, opts or {})
+
+  local res = vim.deepcopy(self)
+  local groups = res.groups
+  local update = function(names)
+    for _, n in pairs(names) do
+      local gr = groups[n]
+      if gr == nil then return end
+      gr.bg, gr.ctermbg = nil, nil
+      gr.blend = 0
+    end
+  end
+
+  if opts.general then
+    update({ 'Normal', 'NormalNC', 'EndOfBuffer', 'MsgArea', 'MsgSeparator', 'VertSplit', 'WinSeparator' })
+  end
+
+  if opts.float then update({ 'FloatBorder', 'FloatTitle', 'NormalFloat' }) end
+
+  if opts.statuscolumn then
+    update({ 'FoldColumn', 'LineNr', 'LineNrAbove', 'LineNrBelow', 'SignColumn' })
+
+    -- Remove statuscolumn background coming from signs
+    local signs = vim.fn.sign_getdefined()
+    local groups = {}
+    for _, sign in ipairs(vim.fn.sign_getdefined()) do
+      table.insert(groups, sign.texthl)
+      table.insert(groups, sign.numhl)
+    end
+    update(groups)
+  end
+
+  if opts.statusline then update({ 'StatusLine', 'StatusLineNC', 'StatusLineTerm', 'StatusLineTermNC' }) end
+
+  if opts.tabline then update({ 'TabLine', 'TabLineFill', 'TabLineSel' }) end
+
+  if opts.winbar then update({ 'WinBar', 'WinBarNC' }) end
+
+  return res
+end
+
 H.cs_apply = function(self)
   if vim.g.colors_name ~= nil then vim.cmd('highlight clear') end
   vim.g.colors_name = self.name
@@ -598,7 +723,7 @@ H.cs_chan_set = function(self, channel, values, opts)
   values = H.normalize_number_array(values, 'values')
 
   local dist_fun = channel == 'hue' and H.dist_circle or H.dist
-  local f = function(x) return H.find_closest(x, values, dist_fun) end
+  local f = function(x) return H.get_closest(x, values, dist_fun) end
 
   return self:chan_modify(channel, f, opts)
 end
@@ -653,71 +778,49 @@ H.cs_compress = function(self, opts)
   return MiniColors.as_colorscheme({ name = self.name, groups = new_groups, terminal = vim.deepcopy(self.terminal) })
 end
 
-H.cs_ensure_cterm = function(self, opts)
-  local res = vim.deepcopy(self)
-  opts = vim.tbl_deep_extend('force', { force = true }, opts or {})
+H.cs_get_palette = function(self, opts)
+  opts = vim.tbl_deep_extend('force', { compress = true, threshold = 0.01 }, opts or {})
 
-  -- Compute Oklab coordinates of terminal colors for better approximation
-  local term_oklab = H.compute_term_oklab()
+  -- Possibly compress and resolve links for a (hopefully) more objective
+  -- representation of color usage
+  local cs = (opts.compress and self:compress() or self):resolve_links()
 
-  local force = opts.force
-  for _, gr in pairs(res.groups) do
-    if gr.fg and (force or not gr.ctermfg) then gr.ctermfg = H.approx_term_color(gr.fg, term_oklab) end
-    if gr.bg and (force or not gr.ctermbg) then gr.ctermbg = H.approx_term_color(gr.bg, term_oklab) end
+  -- Traverse all colors
+  local cs_colors, n_color_uses = {}, 0
+  cs:color_modify(function(hex)
+    cs_colors[hex] = (cs_colors[hex] or 0) + 1
+    n_color_uses = n_color_uses + 1
+  end)
+
+  -- Filter out and sort in descending order of usage count
+  local all_colors = {}
+  _G.cs_colors = cs_colors
+  for hex, count in pairs(cs_colors) do
+    if opts.threshold <= (count / n_color_uses) then table.insert(all_colors, { hex, count }) end
   end
+  table.sort(all_colors, function(a, b) return a[2] > b[2] end)
 
-  return res
+  return vim.tbl_map(function(x) return x[1] end, all_colors)
 end
 
-H.cs_make_transparent = function(self, opts)
-  opts = vim.tbl_deep_extend('force', {
-    general = true,
-    float = false,
-    numbercolumn = false,
-    signcolumn = false,
-    statusline = false,
-    tabline = false,
-    winbar = false,
-  }, opts or {})
-
+H.cs_resolve_links = function(self)
   local res = vim.deepcopy(self)
-  local groups = res.groups
-  local update = function(names)
-    for _, n in pairs(names) do
-      local gr = groups[n]
-      if gr == nil then return end
-      gr.bg, gr.ctermbg = nil, nil
-      gr.blend = 0
+
+  -- Resolve direct links (highlight groups linking to group without link)
+  -- iteratively one level at a time
+  repeat
+    local n_resolved_links = 0
+    for hl_name, hl_data in pairs(res.groups) do
+      -- Resolve link only if:
+      -- - Current highlight group is linked.
+      -- - Target link is present in color scheme and is not itself linked.
+      local link_data = res.groups[hl_data.link]
+      if link_data ~= nil and link_data.link == nil then
+        res.groups[hl_name] = vim.deepcopy(res.groups[hl_data.link])
+        n_resolved_links = n_resolved_links + 1
+      end
     end
-  end
-
-  if opts.general then
-    update({ 'Normal', 'NormalNC', 'EndOfBuffer', 'MsgArea', 'MsgSeparator', 'VertSplit', 'WinSeparator' })
-  end
-
-  if opts.float then update({ 'FloatBorder', 'FloatTitle', 'NormalFloat' }) end
-
-  if opts.numbercolumn then
-    update({ 'LineNr', 'LineNrAbove', 'LineNrBelow' })
-
-    -- Remove number column background coming from signs
-    local sign_numhl = vim.tbl_map(function(x) return x.numhl end, vim.fn.sign_getdefined())
-    update(sign_numhl)
-  end
-
-  if opts.signcolumn then
-    update({ 'SignColumn' })
-
-    -- Remove generic sign backgrounds (not current)
-    local sign_texthl = vim.tbl_map(function(x) return x.texthl end, vim.fn.sign_getdefined())
-    update(sign_texthl)
-  end
-
-  if opts.statusline then update({ 'StatusLine', 'StatusLineNC', 'StatusLineTerm', 'StatusLineTermNC' }) end
-
-  if opts.tabline then update({ 'TabLine', 'TabLineFill', 'TabLineSel' }) end
-
-  if opts.winbar then update({ 'WinBar', 'WinBarNC' }) end
+  until n_resolved_links > 0
 
   return res
 end
@@ -734,7 +837,7 @@ H.cs_write = function(self, opts)
     opts or {}
   )
 
-  local name = opts.name or H.make_file_basename(self.name)
+  local name = opts.name or H.make_file_basename(self.name or 'mini_colors')
 
   local cs = opts.compress and vim.deepcopy(self):compress() or self
 
@@ -745,13 +848,15 @@ H.cs_write = function(self, opts)
     '',
     [[if vim.g.colors_name ~= nil then vim.cmd('highlight clear') end]],
     'vim.g.colors_name = ' .. vim.inspect(self.name),
-    '',
-    '-- Highlight groups',
-    'local hi = vim.api.nvim_set_hl',
-    '',
   }
 
   -- - Highlight groups
+  if vim.tbl_count(self.groups) > 0 then
+    vim.list_extend(lines, { '', '-- Highlight groups', 'local hi = vim.api.nvim_set_hl', '' })
+  else
+    vim.list_extend(lines, { '', '-- No highlight groups defined' })
+  end
+
   local lines_groups = vim.tbl_map(
     function(hl) return string.format('hi(0, "%s", %s)', hl.name, vim.inspect(hl.spec, { newline = ' ', indent = '' })) end,
     H.hl_groups_to_array(self.groups)
@@ -761,7 +866,10 @@ H.cs_write = function(self, opts)
   -- - Terminal colors
   if vim.tbl_count(self.terminal) > 0 then
     vim.list_extend(lines, { '', '-- Terminal colors', 'local g = vim.g', '' })
+  else
+    vim.list_extend(lines, { '', '-- No terminal colors defined' })
   end
+
   for i, hex in pairs(self.terminal) do
     local l = string.format('g.terminal_color_%d = "%s"', i, hex)
     table.insert(lines, l)
@@ -906,6 +1014,7 @@ H.hl_groups_to_array = function(hl_groups)
 end
 
 -- Terminal colors ------------------------------------------------------------
+-- Source: https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
 H.compute_term_oklab = function()
   -- Use cached values if they are already computed
   if H.term_oklab ~= nil then return H.term_oklab end
@@ -932,18 +1041,9 @@ H.compute_term_oklab = function()
   return res
 end
 
-H.approx_term_color = function(x, term_oklab)
-  local ref_lab = MiniColors.convert(x, 'oklab')
-
-  local best_id, best_dist = nil, math.huge
-  for id, lab in pairs(term_oklab) do
-    local dist = math.abs(ref_lab.l - lab.l) + math.abs(ref_lab.a - lab.a) + math.abs(ref_lab.b - lab.b)
-    if dist < best_dist then
-      best_id, best_dist = id, dist
-    end
-  end
-
-  return best_id
+H.get_closest_color_id = function(x, ref_oklab)
+  local _, res = H.get_closest(MiniColors.convert(x, 'oklab'), ref_oklab, H.dist_oklab)
+  return res
 end
 
 -- Animation ------------------------------------------------------------------
@@ -1216,7 +1316,7 @@ end
 -- Color conversion -----------------------------------------------------------
 H.converters = {}
 
-H.converters['8bit'] = function(x, _, _) return H.approx_term_color(x, H.compute_term_oklab()) end
+H.converters['8bit'] = function(x, _, _) return H.get_closest_color_id(x, H.compute_term_oklab()) end
 
 H.converters.hex = function(x, from_space, opts)
   if from_space == 'hex' then return x end
@@ -1574,9 +1674,15 @@ H.cuberoot = function(x) return math.pow(x, 0.333333) end
 H.dist = function(x, y) return math.abs(x - y) end
 
 H.dist_circle = function(x, y)
+  -- Respect gray colors which don't have hue
+  if x == nil and y == nil then return 0 end
+  if x == nil or y == nil then return math.huge end
+
   local d = H.dist(x % 360, y % 360)
   return math.min(d, 360 - d)
 end
+
+H.dist_oklab = function(x, y) return math.abs(x.l - y.l) + math.abs(x.a - y.a) + math.abs(x.b - y.b) end
 
 H.convex_continuous = function(x, y, coef)
   if x == nil or y == nil then return H.convex_discrete(x, y, coef) end
@@ -1599,16 +1705,16 @@ H.union = function(arr1, arr2)
   return vim.tbl_keys(value_is_present)
 end
 
-H.find_closest = function(x, values, dist_fun)
-  local best_val, best_dist = nil, math.huge
-  for _, val in ipairs(values) do
+H.get_closest = function(x, values, dist_fun)
+  local best_val, best_key, best_dist = nil, nil, math.huge
+  for key, val in pairs(values) do
     local cur_dist = dist_fun(x, val)
-    if cur_dist < best_dist then
-      best_val, best_dist = val, cur_dist
+    if cur_dist <= best_dist then
+      best_val, best_key, best_dist = val, key, cur_dist
     end
   end
 
-  return best_val
+  return best_val, best_key
 end
 
 H.is_number = function(x) return type(x) == 'number' end
