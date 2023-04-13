@@ -2,10 +2,6 @@
 --
 -- Code:
 --
--- - Rename 'oklsh' to 'okhsl'.
---
--- - Revisit `add_terminal_colors()` for a possibly simpler approach.
---
 -- Reference color schemes (for testing purposes):
 -- - folke/tokyonight.nvim (3260 stars)
 -- - catppuccin/nvim (2360 stars)
@@ -43,14 +39,14 @@
 --     - Oklch - table with fields `l` (lightness; numeric in [0; 100]),
 --       `c` (chroma; numeric in [0, 100]),
 --       `h` (`nil` for grays or numeric in [0, 360)).
---     - Oklsh - Oklch but with `c` replaced by `s` (saturation; percent of
+--     - Okhsl - Oklch but with `c` replaced by `s` (saturation; percent of
 --       chroma relative to maximum chroma for particular lightness and hue;
 --       numeric in [0; 100]).
 --
 -- - Channels:
 --     - Lightness - corrected `l` component of Oklch.
 --     - Chroma - `c` component of Oklch.
---     - Saturation - `s` component of Oklsh.
+--     - Saturation - `s` component of Okhsl.
 --     - Hue - `h` component of Oklch.
 --     - Temperature - circular distance from current hue angle to 270 hue angle.
 --       Ranges from 0 (cool) to 180 (hot) anchored at 270 (blue) and 90
@@ -185,8 +181,31 @@ MiniColors.config = {}
 --minidoc_afterlines_end
 
 MiniColors.as_colorscheme = function(x)
-  if type(x) ~= 'table' then H.error('Input of `as_colorscheme()` should be table.') end
+  -- Validate input
+  if not H.is_table(x) then H.error('Input of `as_colorscheme()` should be table.') end
+
+  if x.groups ~= nil then
+    if not H.is_table(x.groups) then H.error('Field `groups` of colorscheme should be table or nil.') end
+    if not H.all(x.groups, H.is_table) then H.error('All elements of `groups` colorscheme field should be tables.') end
+  end
+
+  if x.terminal ~= nil then
+    if not H.is_table(x.terminal) then H.error('Field `terminal` of colorscheme should be table or nil.') end
+    if not H.all(x.terminal, H.is_string) then
+      H.error('All elements of `terminal` colorscheme field should be strings.')
+    end
+  end
+
+  -- Create a proper copy
   local res = vim.deepcopy(x)
+
+  -- - Ensure that tables for highlight groups are independent (can not be the
+  --   case if some point to literally the same table)
+  if H.is_table(res.groups) then
+    for key, val in pairs(res.groups) do
+      res.groups[key] = vim.deepcopy(val)
+    end
+  end
 
   -- Fields
   res.groups = res.groups or {}
@@ -327,8 +346,8 @@ MiniColors.animate = function(cs_array, opts)
   if #cs_array == 0 then return end
 
   -- Pre-compute common data
-  local cs_oklab = vim.tbl_map(function(cs) return H.cs_hex_to_oklab(cs:compress()) end, vim.deepcopy(cs_array))
-  local cs_oklab_current = H.cs_hex_to_oklab(MiniColors.get_colorscheme():compress())
+  local cs_oklab = vim.tbl_map(function(cs) return H.cs_hex_to_oklab(vim.deepcopy(cs)) end, cs_array)
+  local cs_oklab_current = H.cs_hex_to_oklab(MiniColors.get_colorscheme())
 
   -- Make "chain after action" which animates transitions one by one
   local cs_id, after_action = 1, nil
@@ -504,7 +523,7 @@ H.cvd_matricies = {
 ---@diagnostic disable end
 --stylua: ignore end
 
-H.allowed_spaces = { '8bit', 'hex', 'rgb', 'oklab', 'oklch', 'oklsh' }
+H.allowed_spaces = { '8bit', 'hex', 'rgb', 'oklab', 'oklch', 'okhsl' }
 
 H.allowed_channels =
   { 'lightness', 'chroma', 'saturation', 'hue', 'temperature', 'pressure', 'a', 'b', 'red', 'green', 'blue' }
@@ -553,37 +572,35 @@ H.cs_add_terminal_colors = function(self, opts)
   -- https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
   -- Regular and bright versions will be equal (to simplify algorithm)
 
+  -- Resolve links to account for linked 'Normal' group
+  local cs = res:resolve_links()
+
   -- Get palette and convert in Oklch
-  local palette = self:get_palette(opts.palette_args)
+  local palette = cs:get_palette(opts.palette_args)
   local palette_oklch = vim.tbl_map(function(x) return MiniColors.convert(x, 'oklch') end, palette)
 
   local terminal = {}
 
-  -- Black and white are colors with lowest and highest lightness
-  local dist_blackwhite = function(x, y) return H.dist(x.l, y.l) / 100 + H.dist(x.c, y.c) / 30 end
-  local black, black_id = H.get_closest({ l = 0, c = 0 }, palette_oklch, dist_blackwhite)
-  local white, white_id = H.get_closest({ l = 100, c = 0 }, palette_oklch, dist_blackwhite)
+  -- Black and white are colors from `Normal` group.
+  local normal = cs.groups.Normal or {}
+  local black, white = normal.bg, normal.fg
 
   terminal[0], terminal[8] = black, black
   terminal[7], terminal[15] = white, white
 
-  -- - Remove "black" and "white" so that they won't appear among other colors
-  local first, second = math.min(black_id, white_id), math.max(black_id, white_id)
-  table.remove(palette_oklch, second)
-  table.remove(palette_oklch, first)
-
-  -- Colors are computed as closest to reference taking into account only
-  -- normalized chroma and hue
+  -- Colors are computed as closest to reference (pre-defined hue with white
+  -- lightness) taking into account only normalized lightness and hue
+  local white_oklch = MiniColors.convert(white, 'oklch')
+  local ref_l = white ~= nil and white_oklch.l or (vim.o.background == 'dark' and 85 or 15)
   local ref_color_data = {
-    { c = 25, h = 30 }, -- Red
-    { c = 24, h = 150 }, -- Green
-    { c = 18, h = 90 }, -- Yellow
-    { c = 30, h = 270 }, -- Blue
-    { c = 32, h = 330 }, -- Magenta
-    { c = 15, h = 210 }, -- Cyan
+    { l = ref_l, h = 30 }, -- Red
+    { l = ref_l, h = 150 }, -- Green
+    { l = ref_l, h = 90 }, -- Yellow
+    { l = ref_l, h = 270 }, -- Blue
+    { l = ref_l, h = 330 }, -- Magenta
+    { l = ref_l, h = 210 }, -- Cyan
   }
-  local dist_color = function(x, y) return H.dist(x.c, y.c) / 30 + H.dist_circle(x.h, y.h) / 180 end
-  local colors = {}
+  local dist_color = function(x, y) return H.dist(x.l, y.l) / 100 + H.dist_circle(x.h, y.h) / 90 end
   for i, ref in ipairs(ref_color_data) do
     local col = H.get_closest(ref, palette_oklch, dist_color)
     terminal[i], terminal[i + 8] = col, col
@@ -794,7 +811,6 @@ H.cs_get_palette = function(self, opts)
 
   -- Filter out and sort in descending order of usage count
   local all_colors = {}
-  _G.cs_colors = cs_colors
   for hex, count in pairs(cs_colors) do
     if opts.threshold <= (count / n_color_uses) then table.insert(all_colors, { hex, count }) end
   end
@@ -820,7 +836,7 @@ H.cs_resolve_links = function(self)
         n_resolved_links = n_resolved_links + 1
       end
     end
-  until n_resolved_links > 0
+  until n_resolved_links == 0
 
   return res
 end
@@ -1065,7 +1081,9 @@ H.animate_single_transition = function(from_cs, to_cs, after_action, opts)
 
     -- Compute and apply transition step
     local cs_step = H.compute_animate_step(from_cs, to_cs, cur_step / n_steps, all_group_names)
-    MiniColors.as_colorscheme(H.cs_oklab_to_hex(cs_step)):apply()
+    -- - Use implementation helper instead of using `as_colorscheme()` to avoid
+    --   unnecessary `deepcopy()` increasing performance
+    H.cs_apply(cs_step)
     vim.cmd('redraw')
 
     -- Advance
@@ -1121,7 +1139,8 @@ H.compute_animate_step = function(from, to, coef, all_group_names)
     terminal[i] = H.convex_lab(from.terminal[i], to.terminal[i], coef)
   end
 
-  return MiniColors.as_colorscheme({ name = 'transition_step', groups = groups, terminal = terminal })
+  local cs_data = { name = 'transition_step', groups = groups, terminal = terminal }
+  return H.cs_oklab_to_hex(cs_data)
 end
 
 H.convex_hl_group = function(from, to, coef)
@@ -1181,7 +1200,7 @@ H.channel_modifiers.chroma = function(hex, f, gamut_clip)
 end
 
 H.channel_modifiers.saturation = function(hex, f, gamut_clip)
-  local lsh = MiniColors.convert(hex, 'oklsh')
+  local lsh = MiniColors.convert(hex, 'okhsl')
   lsh.s = H.clip(f(lsh.s), 0, 100)
   return MiniColors.convert(lsh, 'hex', { gamut_clip = gamut_clip })
 end
@@ -1350,7 +1369,7 @@ H.converters.oklch = function(x, from_space, opts)
   if from_space == 'rgb' then res = H.oklab2oklch(H.rgb2oklab(x)) end
   if from_space == 'oklab' then res = H.oklab2oklch(x) end
   if from_space == 'oklch' then res = x end
-  if from_space == 'oklsh' then res = H.oklsh2oklch(x) end
+  if from_space == 'okhsl' then res = H.okhsl2oklch(x) end
 
   -- Normalize
   res.l = H.clip(res.l, 0, 100)
@@ -1365,7 +1384,7 @@ H.converters.oklch = function(x, from_space, opts)
   return res
 end
 
-H.converters.oklsh = function(x, from_space, opts) return H.oklch2oklsh(MiniColors.convert(x, 'oklch', opts)) end
+H.converters.okhsl = function(x, from_space, opts) return H.oklch2okhsl(MiniColors.convert(x, 'oklch', opts)) end
 
 H.infer_color_space = function(x)
   if type(x) == 'number' and 16 <= x and x <= 255 then return '8bit' end
@@ -1378,7 +1397,7 @@ H.infer_color_space = function(x)
   if is_num(x.l) then
     if is_num(x.c) then return 'oklch' end
     if is_num(x.a) and is_num(x.a) then return 'oklab' end
-    if is_num(x.s) then return 'oklsh' end
+    if is_num(x.s) then return 'okhsl' end
   end
 
   if is_num(x.r) and is_num(x.g) and is_num(x.b) then return 'rgb' end
@@ -1411,7 +1430,7 @@ end
 -- https://github.com/bottosson/bottosson.github.io/blob/master/misc/colorpicker/colorconversion.js
 -- https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
 --
--- Oklsh is a local variant of Oklch with `s` for "saturation" - percent of
+-- Okhsl is a local variant of Oklch with `s` for "saturation" - percent of
 -- chroma relative to maximum possible chroma for this lightness and hue.
 --
 -- NOTEs:
@@ -1481,8 +1500,8 @@ H.oklch2oklab = function(lch)
   return { l = lch.l, a = a, b = b }
 end
 
--- Oklch <-> Oklsh
-H.oklch2oklsh = function(lch)
+-- Oklch <-> Okhsl
+H.oklch2okhsl = function(lch)
   if lch.c <= 0 or lch.h == nil then return { l = lch.l, s = 0 } end
 
   local gamut_points = H.get_gamut_points(lch)
@@ -1491,7 +1510,7 @@ H.oklch2oklsh = function(lch)
   return { l = lch.l, s = H.clip(percent, 0, 100), h = lch.h }
 end
 
-H.oklsh2oklch = function(lsh)
+H.okhsl2oklch = function(lsh)
   if lsh.s <= 0 or lsh.h == nil then return { l = lsh.l, c = 0 } end
 
   local gamut_points = H.get_gamut_points(lsh)
@@ -1690,8 +1709,9 @@ H.convex_continuous = function(x, y, coef)
 end
 
 H.convex_discrete = function(x, y, coef)
-  if coef < 0.5 then return x end
-  return y
+  -- Using `vim.deepcopy()` ensures no side effects
+  if coef < 0.5 then return vim.deepcopy(x) end
+  return vim.deepcopy(y)
 end
 
 H.union = function(arr1, arr2)
@@ -1719,9 +1739,13 @@ end
 
 H.is_number = function(x) return type(x) == 'number' end
 
+H.is_table = function(x) return type(x) == 'table' end
+
+H.is_string = function(x) return type(x) == 'string' end
+
 H.all = function(arr, predicate)
   predicate = predicate or function(x) return x end
-  for _, x in ipairs(arr) do
+  for _, x in pairs(arr) do
     if not predicate(x) then return false end
   end
   return true

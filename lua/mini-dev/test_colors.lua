@@ -110,44 +110,371 @@ T['as_colorscheme()']['works'] = function()
 end
 
 T['as_colorscheme()']['validates arguments'] = function()
-  expect.error(function() child.lua('MiniColors.as_colorscheme(1)', '%(mini%.colors%)table') end)
+  expect.error(function() child.lua('MiniColors.as_colorscheme(1)') end, '%(mini%.colors%).*table')
+
+  expect.error(
+    function() child.lua('MiniColors.as_colorscheme({groups = 1})') end,
+    '%(mini%.colors%).*groups.*table or nil'
+  )
+  expect.error(
+    function() child.lua('MiniColors.as_colorscheme({groups = { 1 }})') end,
+    '%(mini%.colors%).*All elements.*groups.*tables'
+  )
+
+  expect.error(
+    function() child.lua('MiniColors.as_colorscheme({terminal = 1})') end,
+    '%(mini%.colors%).*terminal.*table or nil'
+  )
+  expect.error(
+    function() child.lua('MiniColors.as_colorscheme({terminal = { 1 }})') end,
+    '%(mini%.colors%).*All elements.*terminal.*strings'
+  )
 end
 
-T['as_colorscheme()']['fields'] = function() MiniTest.skip() end
+T['as_colorscheme()']['ensures independence of groups'] = function()
+  child.lua([[_G.hl_group = { fg = '#012345' }]])
+  child.lua([[_G.cs = MiniColors.as_colorscheme({ groups = { Normal = hl_group, NormalNC = hl_group }})]])
 
-T['as_colorscheme()']['methods'] = new_set()
+  eq(child.lua_get('_G.cs.groups.Normal == _G.cs.groups.NormalNC'), false)
+end
 
-T['as_colorscheme()']['methods']['apply()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods'] = new_set()
 
-T['as_colorscheme()']['methods']['add_cterm_attributes()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['add_cterm_attributes()'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal          = { fg = '#5f87af', bg = '#080808' },
+      TestForce       = { fg = '#5f87af', ctermfg = 0 },
+      TestApprox      = { fg = '#5f87aa' },
+      TestNormalCterm = { ctermfg = 67,   ctermbg = 232 },
+      TestSpecial     = { sp = '#00ff00', underline = true },
+    }
+  })]])
 
-T['as_colorscheme()']['methods']['add_terminal_colors()'] = function() MiniTest.skip() end
+  -- Default
+  eq(child.lua_get('_G.cs:add_cterm_attributes().groups'), {
+    -- Updates both `guifg` and `guibg`. Works with chromatics and grays.
+    Normal = { fg = '#5f87af', ctermfg = 67, bg = '#080808', ctermbg = 232 },
+    -- Updates already present `cterm` (`force = true` by default)
+    TestForce = { fg = '#5f87af', ctermfg = 67 },
+    -- Should be able to approximate
+    TestApprox = { fg = '#5f87aa', ctermfg = 67 },
+    -- Doesn't change `cterm` if no corresponding `gui`
+    TestNormalCterm = { ctermbg = 232, ctermfg = 67 },
+    -- Doesn't touch `sp`
+    TestSpecial = { sp = '#00ff00', underline = true },
+  })
 
-T['as_colorscheme()']['methods']['add_transparency()'] = function() MiniTest.skip() end
+  -- - Should return copy without modifying original
+  eq(child.lua_get('_G.cs.groups.Normal.ctermfg'), vim.NIL)
 
-T['as_colorscheme()']['methods']['chan_add()'] = function() MiniTest.skip() end
+  -- With `force = false`
+  eq(child.lua_get('_G.cs:add_cterm_attributes({ force = false }).groups.TestForce'), { fg = '#5f87af', ctermfg = 0 })
+end
 
-T['as_colorscheme()']['methods']['chan_invert()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['add_terminal_colors()'] = new_set()
 
-T['as_colorscheme()']['methods']['chan_modify()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['add_terminal_colors()']['works'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#c7c7c7', bg = '#2e2e2e' },
+      Test1  = { fg = '#ffaea0', bg = '#e0c479' },
+      Test2  = { fg = '#97d9a4', bg = '#70d9eb' },
+      Test3  = { fg = '#aec4ff', sp = '#ecafe6' },
+    }
+  })]])
 
-T['as_colorscheme()']['methods']['chan_multiply()'] = function() MiniTest.skip() end
+  eq(
+    child.lua_get([[vim.deep_equal(_G.cs:add_terminal_colors().terminal, {
+    [0] = '#2e2e2e', [8] = '#2e2e2e',
+    [1] = '#ffaea0', [9] = '#ffaea0',
+    [2] = '#97d9a4', [10] = '#97d9a4',
+    [3] = '#e0c479', [11] = '#e0c479',
+    [4] = '#aec4ff', [12] = '#aec4ff',
+    [5] = '#ecafe6', [13] = '#ecafe6',
+    [6] = '#70d9eb', [14] = '#70d9eb',
+    [7] = '#c7c7c7', [15] = '#c7c7c7',
+  })]]),
+    true
+  )
+end
 
-T['as_colorscheme()']['methods']['chan_repel()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['add_terminal_colors()']['uses present terminal colors'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#c7c7c7', bg = '#2e2e2e' },
+    },
+    terminal = {
+    [0] = '#ffaea0', [8] = '#97d9a4',
+    [1] = '#2e2e2e', [9] = '#e0c479',
+    [2] = '#e0c479', [10] = '#2e2e2e',
+    [3] = '#97d9a4', [11] = '#ffaea0',
+    [4] = '#ecafe6', [12] = '#70d9eb',
+    [5] = '#aec4ff', [13] = '#c7c7c7',
+    [6] = '#c7c7c7', [14] = '#aec4ff',
+    [7] = '#70d9eb', [15] = '#ecafe6',
+  }
+  })]])
 
-T['as_colorscheme()']['methods']['chan_set()'] = function() MiniTest.skip() end
+  eq(
+    child.lua_get([[vim.deep_equal(_G.cs:add_terminal_colors().terminal, {
+    [0] = '#2e2e2e', [8] = '#2e2e2e',
+    [1] = '#ffaea0', [9] = '#ffaea0',
+    [2] = '#97d9a4', [10] = '#97d9a4',
+    [3] = '#e0c479', [11] = '#e0c479',
+    [4] = '#aec4ff', [12] = '#aec4ff',
+    [5] = '#ecafe6', [13] = '#ecafe6',
+    [6] = '#70d9eb', [14] = '#70d9eb',
+    [7] = '#c7c7c7', [15] = '#c7c7c7',
+  })]]),
+    true
+  )
+end
 
-T['as_colorscheme()']['methods']['color_modify()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['add_terminal_colors()']['properly approximates'] = function()
+  local validate_red = function(hex) eq(child.lua_get('_G.cs:add_terminal_colors().terminal[1]'), hex) end
 
-T['as_colorscheme()']['methods']['compress()'] = function() MiniTest.skip() end
+  -- Picks proper red if it exists in palette
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      -- Reference lightness should be taken from `Normal.fg` (80 in this case)
+      Normal = { fg = '#c7c7c7', bg = '#2e2e2e' },
+      -- Proper red with `l = 80, h = 30`
+      Test   = { fg = '#ffaea0' },
+      -- Different lightness
+      TestDiffL = { fg = '#f2a193', bg = '#ffbfb2' },
+      -- Different hue
+      TestDiffH = { fg = '#ffada6', bg = '#ffaf9b' },
+    }
+  })]])
+  validate_red('#ffaea0')
 
-T['as_colorscheme()']['methods']['get_palette()'] = function() MiniTest.skip() end
+  -- Properly picks closest lightness in absence of perfect hue
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#c7c7c7', bg = '#2e2e2e' },
+      -- All have hue 40, but lightness 70, 79, 90
+      TestDiffL = { fg = '#e2967b', bg = '#f1a388', sp = '#ffd7c6' },
+    }
+  })]])
+  validate_red('#f1a388')
 
-T['as_colorscheme()']['methods']['resolve_links()'] = function() MiniTest.skip() end
+  -- Properly picks closest hue in absence of perfect lightness
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#c7c7c7', bg = '#2e2e2e' },
+      -- All have lightness 80, but hue 20, 29, 40
+      TestDiffH = { fg = '#ffadac', bg = '#ffaea1', sp = '#ffb195' },
+    }
+  })]])
+  validate_red('#ffaea1')
 
-T['as_colorscheme()']['methods']['simulate_cvd()'] = function() MiniTest.skip() end
+  -- Doesn't take chroma into account
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#c7c7c7', bg = '#2e2e2e' },
+      -- The `fg` has correct lightness and hue but chroma is only 1
+      -- The `bg` has more vivid colors, but lightness is 74
+      -- So, `fg` should be picked as correct one
+      Test = { fg = '#cdc4c3', bg = '#fe9584' },
+    }
+  })]])
+  validate_red('#cdc4c3')
+end
 
-T['as_colorscheme()']['methods']['write()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['add_terminal_colors()']['respects `opts.force`'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#c7c7c7', bg = '#2e2e2e' },
+      Test   = { fg = '#ffaea0' },
+    },
+    terminal = { [1] = '#012345' }
+  })]])
+
+  eq(child.lua_get('_G.cs:add_terminal_colors({ force = false }).terminal[1]'), '#012345')
+end
+
+T['as_colorscheme() methods']['add_terminal_colors()']['respects `opts.palette_args`'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#c7c7c7', bg = '#2e2e2e' },
+      Test   = { fg = '#012345', bg = '#012345', sp = '#012345' },
+      -- Although this `fg` is a perfect match, it won't be used due to not
+      -- being frequent enough
+      Test2  = { fg = '#ffaea0', bg = '#012345' }
+    }
+  })]])
+
+  eq(child.lua_get('_G.cs:add_terminal_colors({ palette_args = { threshold = 0.5 } }).terminal[1]'), '#012345')
+end
+
+T['as_colorscheme() methods']['add_terminal_colors()']['handles not proper `Normal` highlight group'] = function()
+  -- Absent (should fall back on lightness depending on background)
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      -- The `fg` has fallback lightness for light background, `bg` - for dark
+      Test   = { fg = '#470301', bg = '#ffbfb2' },
+    }
+  })]])
+
+  child.o.background = 'dark'
+  eq(child.lua_get('_G.cs:add_terminal_colors().terminal[1]'), '#ffbfb2')
+
+  child.o.background = 'light'
+  eq(child.lua_get('_G.cs:add_terminal_colors().terminal[1]'), '#470301')
+
+  -- Linked
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      NormalLink = { fg = '#c7c7c7', bg = '#2e2e2e' },
+      Normal = { link = 'NormalLink' },
+      -- The `fg` has perfect fit while `bg` uses fallback lightness
+      Test   = { fg = '#ffaea0', bg = '#ffbfb2' },
+    }
+  })]])
+  eq(child.lua_get('_G.cs:add_terminal_colors().terminal[1]'), '#ffaea0')
+end
+
+T['as_colorscheme() methods']['add_transparency()'] = new_set()
+
+T['as_colorscheme() methods']['add_transparency()']['works'] = function()
+  child.lua([[_G.hl_group = { fg = '#aaaaaa', ctermfg = 255, bg = '#111111', ctermbg = 232, }]])
+  local hl_group = child.lua_get('_G.hl_group')
+  local hl_transparent = { fg = '#aaaaaa', ctermfg = 255, blend = 0 }
+
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      -- General (should be made transparent)
+      Normal = hl_group,
+      NormalNC = { bg = '#111111' },
+      EndOfBuffer = { ctermbg = 232 },
+      MsgArea = { blend = 50 },
+      MsgSeparator = hl_group,
+      VertSplit = hl_group,
+      WinSeparator = hl_group,
+
+      -- Other (should be left as is)
+      NormalFloat = hl_group,
+      SignColumn = hl_group,
+      StatusLine = hl_group,
+      TabLine = hl_group,
+      WinBar = hl_group,
+    }
+  })]])
+
+  child.lua('_G.cs_trans = _G.cs:add_transparency()')
+
+  eq(child.lua_get('_G.cs_trans.groups'), {
+    Normal = hl_transparent,
+    NormalNC = { blend = 0 },
+    EndOfBuffer = { blend = 0 },
+    MsgArea = { blend = 0 },
+    MsgSeparator = hl_transparent,
+    VertSplit = hl_transparent,
+    WinSeparator = hl_transparent,
+
+    NormalFloat = hl_group,
+    SignColumn = hl_group,
+    StatusLine = hl_group,
+    TabLine = hl_group,
+    WinBar = hl_group,
+  })
+
+  -- Should return copy without modifying original
+  eq(child.lua_get('_G.cs.groups.Normal.bg'), '#111111')
+end
+
+T['as_colorscheme() methods']['add_transparency()']['works with not all groups present'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({ groups = { Normal = { bg = '#012345' } } })]])
+  eq(child.lua_get('_G.cs:add_transparency().groups'), { Normal = { blend = 0 } })
+end
+
+T['as_colorscheme() methods']['add_transparency()']['respects `opts`'] = function()
+  child.lua([[_G.hl_group = { fg = '#aaaaaa', ctermfg = 255, bg = '#111111', ctermbg = 232, }]])
+  local hl_group = child.lua_get('_G.hl_group')
+  local hl_transparent = { fg = '#aaaaaa', ctermfg = 255, blend = 0 }
+
+  local validate_groups_become_transparent = function(opts, groups)
+    -- Create colorscheme object
+    local group_fields = vim.tbl_map(function(x) return x .. ' = hl_group' end, groups)
+    local lua_cmd =
+      string.format('_G.cs = MiniColors.as_colorscheme({ groups = { %s } })', table.concat(group_fields, ', '))
+    child.lua(lua_cmd)
+
+    -- Validate
+    local ref_groups = {}
+    for _, gr in ipairs(groups) do
+      ref_groups[gr] = hl_transparent
+    end
+
+    local lua_get_cmd = string.format('_G.cs:add_transparency(%s).groups', vim.inspect(opts))
+    eq(child.lua_get(lua_get_cmd), ref_groups)
+  end
+
+  -- opts.general
+  child.lua([[_G.cs = MiniColors.as_colorscheme({ groups = { Normal = hl_group } })]])
+  eq(child.lua_get('_G.cs:add_transparency({ general = false }).groups.Normal'), hl_group)
+
+  -- Other
+  validate_groups_become_transparent({ float = true }, { 'FloatBorder', 'FloatTitle', 'NormalFloat' })
+  validate_groups_become_transparent(
+    { statuscolumn = true },
+    { 'FoldColumn', 'LineNr', 'LineNrAbove', 'LineNrBelow', 'SignColumn' }
+  )
+  validate_groups_become_transparent(
+    { statusline = true },
+    { 'StatusLine', 'StatusLineNC', 'StatusLineTerm', 'StatusLineTermNC' }
+  )
+  validate_groups_become_transparent({ tabline = true }, { 'TabLine', 'TabLineFill', 'TabLineSel' })
+  validate_groups_become_transparent({ winbar = true }, { 'WinBar', 'WinBarNC' })
+end
+
+T['as_colorscheme() methods']['add_transparency()']['respects sign highlight groups'] = function()
+  child.fn.sign_define('Sign1', { texthl = 'Texthl', numhl = 'Numhl' })
+
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Texthl = { bg = '#111111' },
+      Numhl = { bg = '#111111' },
+    }
+  })]])
+
+  eq(child.lua_get('_G.cs:add_transparency({ statuscolumn = true }).groups'), {
+    Texthl = { blend = 0 },
+    Numhl = { blend = 0 },
+  })
+
+  eq(child.lua_get('_G.cs:add_transparency({}).groups'), {
+    Texthl = { bg = '#111111' },
+    Numhl = { bg = '#111111' },
+  })
+end
+
+T['as_colorscheme() methods']['apply()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['chan_add()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['chan_invert()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['chan_modify()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['chan_multiply()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['chan_repel()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['chan_set()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['color_modify()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['compress()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['get_palette()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['resolve_links()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['simulate_cvd()'] = function() MiniTest.skip() end
+
+T['as_colorscheme() methods']['write()'] = function() MiniTest.skip() end
 
 T['get_colorscheme()'] = new_set()
 
@@ -688,16 +1015,16 @@ T['convert()']['converts to Oklch'] = function()
   validate({ l = 50, c = 10, h = 360 }, { l = 50, c = 10, h = 0 }, 1e-6)
 end
 
-T['convert()']['converts to Oklsh'] = function()
-  local validate = function(x, ref, tol) eq_approx(convert(x, 'oklsh'), ref, tol or 0) end
+T['convert()']['converts to okhsl'] = function()
+  local validate = function(x, ref, tol) eq_approx(convert(x, 'okhsl'), ref, tol or 0) end
 
-  local oklsh_ref = { l = 54.7293, s = 44.0189, h = 249.1588 }
-  validate(67, oklsh_ref, 1e-3)
-  validate('#5f87af', oklsh_ref, 1e-3)
-  validate({ r = 95, g = 135, b = 175 }, oklsh_ref, 1e-3)
-  validate({ l = 54.7293, a = -2.6923, b = -7.0722 }, oklsh_ref, 1e-3)
-  validate({ l = 54.7293, c = 7.5673, h = 249.1588 }, oklsh_ref, 1e-3)
-  validate(oklsh_ref, oklsh_ref, 1e-6)
+  local okhsl_ref = { l = 54.7293, s = 44.0189, h = 249.1588 }
+  validate(67, okhsl_ref, 1e-3)
+  validate('#5f87af', okhsl_ref, 1e-3)
+  validate({ r = 95, g = 135, b = 175 }, okhsl_ref, 1e-3)
+  validate({ l = 54.7293, a = -2.6923, b = -7.0722 }, okhsl_ref, 1e-3)
+  validate({ l = 54.7293, c = 7.5673, h = 249.1588 }, okhsl_ref, 1e-3)
+  validate(okhsl_ref, okhsl_ref, 1e-6)
 
   -- Handles grays
   local gray_ref = { l = 8, s = 0 }
