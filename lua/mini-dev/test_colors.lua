@@ -4,15 +4,12 @@ local child = helpers.new_child_neovim()
 local expect, eq, eq_approx = helpers.expect, helpers.expect.equality, helpers.expect.equality_approx
 local new_set = MiniTest.new_set
 
+local dir_path = 'tests/dir-colors/'
+local colors_path = dir_path .. '/colors/'
+
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('colors', config) end
-local unload_module = function() child.mini_unload('colors') end
-local reload_module = function(config) unload_module(); load_module(config) end
-local set_cursor = function(...) return child.set_cursor(...) end
-local get_cursor = function(...) return child.get_cursor(...) end
-local set_lines = function(...) return child.set_lines(...) end
-local get_lines = function(...) return child.get_lines(...) end
 local type_keys = function(...) return child.type_keys(...) end
 local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
@@ -444,19 +441,421 @@ T['as_colorscheme() methods']['add_transparency()']['respects sign highlight gro
     Numhl = { blend = 0 },
   })
 
-  eq(child.lua_get('_G.cs:add_transparency({}).groups'), {
+  eq(child.lua_get('_G.cs:add_transparency().groups'), {
     Texthl = { bg = '#111111' },
     Numhl = { bg = '#111111' },
   })
 end
 
-T['as_colorscheme() methods']['apply()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['apply()'] = new_set()
 
-T['as_colorscheme() methods']['chan_add()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['apply()']['works'] = function()
+  -- Define current color scheme data
+  child.g.colors_name = 'prior_cs'
+  child.api.nvim_set_hl(0, 'Normal', { fg = '#aaaaaa', bg = '#111111' })
+  child.api.nvim_set_hl(0, 'TestPartial', { fg = '#aaaaaa', bg = '#111111' })
+  child.api.nvim_set_hl(0, 'TestSingle', { fg = '#aaaaaa' })
+  child.g.terminal_color_1 = '#aa0000'
 
-T['as_colorscheme() methods']['chan_invert()'] = function() MiniTest.skip() end
+  -- Create and apply some color scheme
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    name = 'new_cs',
+    groups = {
+      Normal = { fg = '#ffffff', bg = '#000000' },
+      TestPartial = { fg = '#ffffff' },
+      TestNew = { bg = '#000000' }
+    },
+    terminal = { [0] = '#000000' }
+  })]])
+  child.lua('_G.cs:apply()')
 
-T['as_colorscheme() methods']['chan_modify()'] = function() MiniTest.skip() end
+  -- Validate
+  eq(child.g.colors_name, 'new_cs')
+
+  expect.match(child.cmd_capture('hi Normal'), 'guifg=#ffffff%s+guibg=#000000')
+  -- - Should override completely without inheriting `bg`
+  expect.match(child.cmd_capture('hi TestPartial'), 'guifg=#ffffff$')
+  -- - Should clear all highlight groups by default
+  expect.match(child.cmd_capture('hi TestSingle'), 'cleared')
+  -- - Should be able to create new highlight groups
+  expect.match(child.cmd_capture('hi TestNew'), 'guibg=#000000$')
+
+  -- - Should remove all previous terminal colors
+  eq(child.g.terminal_color_0, '#000000')
+  eq(child.g.terminal_color_1, vim.NIL)
+end
+
+T['as_colorscheme() methods']['apply()']['respects `opts.clear`'] = function()
+  child.api.nvim_set_hl(0, 'TestSingle', { fg = '#aaaaaa' })
+
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = { Normal = { fg = '#ffffff' } }
+  })]])
+  child.lua('_G.cs:apply({ clear = false })')
+  expect.match(child.cmd_capture('hi TestSingle'), 'guifg=#aaaaaa$')
+end
+
+local create_basic_cs = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    -- Oklch ~ { l = 50, c = 15, h = 0 }
+    -- Oklab ~ { l = 50, a = 14.96, b = 0.056 }
+    -- Saturation ~ 65
+    -- Temperature = 90
+    -- Pressure = 180
+    -- RGB = { r = 186, g = 74, b = 115 }
+    groups = { Normal = { fg = '#ba4a73' } }
+  })]])
+end
+
+-- Only basic testing here. More thorough tests are in `chan_modify()`.
+T['as_colorscheme() methods']['chan_add()'] = new_set({ hooks = { pre_case = create_basic_cs } })
+
+T['as_colorscheme() methods']['chan_add()']['works'] = function()
+  local validate = function(channel, value, ref_normal_fg, opts_string)
+    opts_string = opts_string or '{}'
+    local lua_cmd = string.format([[_G.cs_modified = _G.cs:chan_add('%s', %s, %s)]], channel, value, opts_string)
+    child.lua(lua_cmd)
+
+    eq(child.lua_get('_G.cs_modified.groups.Normal.fg'), ref_normal_fg)
+  end
+
+  validate('lightness', 10, '#d8658d')
+  validate('chroma', -10, '#906b76')
+  validate('saturation', 10, '#c33f72')
+  validate('hue', 10, '#bd4a62')
+  validate('temperature', 10, '#bd4a62')
+  validate('pressure', -10, '#bd4a62')
+  validate('a', -10, '#906b75')
+  validate('b', 10, '#cb4021')
+  validate('red', 16, '#ca4a73')
+  validate('green', 16, '#ba5a73')
+  validate('blue', 16, '#ba4a83')
+
+  -- Should respect `opts`
+  validate('chroma', 20, '#e30078', [[{ gamut_clip = 'cusp' }]])
+
+  -- With values `nil` and 0 should return copy of input
+  local validate_self_copy = function(value_string)
+    local lua_cmd = string.format([[_G.cs_modified = _G.cs:chan_add('hue', %s)]], value_string)
+    child.lua(lua_cmd)
+
+    eq(child.lua_get('vim.deep_equal(_G.cs, _G.cs_modified)'), true)
+    eq(child.lua_get('_G.cs ~= _G.cs_modified'), true)
+  end
+
+  validate_self_copy('nil')
+  validate_self_copy('0')
+end
+
+T['as_colorscheme() methods']['chan_add()']['validates arguments'] = function()
+  expect.error(function() child.lua('_G.cs:chan_add(1, 10)') end, 'Channel.*one of')
+  expect.error(function() child.lua([[_G.cs:chan_add('aaa', 10)]]) end, 'Channel.*one of')
+
+  expect.error(function() child.lua([[_G.cs:chan_add('hue', 'a')]]) end, '`value`.*number')
+end
+
+-- Only basic testing here. More thorough tests are in `chan_modify()`.
+T['as_colorscheme() methods']['chan_invert()'] = new_set({ hooks = { pre_case = create_basic_cs } })
+
+T['as_colorscheme() methods']['chan_invert()']['works'] = function()
+  -- Use different color with off-center channel values
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = { Normal = { fg = '#432618' } }
+  })]])
+
+  local validate = function(channel, ref_normal_fg, opts_string)
+    opts_string = opts_string or '{}'
+    local lua_cmd = string.format([[_G.cs_modified = _G.cs:chan_invert('%s', %s)]], channel, opts_string)
+    child.lua(lua_cmd)
+
+    eq(child.lua_get('_G.cs_modified.groups.Normal.fg'), ref_normal_fg)
+  end
+
+  validate('lightness', '#e3bdac')
+  -- - Chroma is same as saturation due to lack of good reference point
+  validate('chroma', '#3d291f')
+  validate('saturation', '#3d291f')
+  validate('hue', '#382740')
+  validate('temperature', '#382740')
+  validate('pressure', '#243419')
+  validate('a', '#243419')
+  validate('b', '#382740')
+  validate('red', '#bc2618')
+  validate('green', '#43d918')
+  validate('blue', '#4326e7')
+
+  -- Should respect `opts`
+  child.lua([[_G.cs.groups.Normal.fg = '#fef0cb']])
+  validate('lightness', '#221900', [[{ gamut_clip = 'cusp' }]])
+end
+
+T['as_colorscheme() methods']['chan_invert()']['validates arguments'] = function()
+  expect.error(function() child.lua('_G.cs:chan_invert(1)') end, 'Channel.*one of')
+  expect.error(function() child.lua([[_G.cs:chan_invert('aaa')]]) end, 'Channel.*one of')
+end
+
+T['as_colorscheme() methods']['chan_modify()'] = new_set({ hooks = { pre_case = create_basic_cs } })
+
+local validate_chan_modify = function(channel, function_body, ref_normal_fg, opts_string)
+  opts_string = opts_string or '{}'
+  local lua_cmd = string.format('_G.f = function(x) %s end', function_body)
+  child.lua(lua_cmd)
+
+  local lua_get_cmd = string.format([[_G.cs:chan_modify('%s', _G.f, %s).groups.Normal.fg]], channel, opts_string)
+  eq(child.lua_get(lua_get_cmd), ref_normal_fg)
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "lightness"'] = function()
+  local validate = function(...) validate_chan_modify('lightness', ...) end
+
+  validate('return x - 10', '#9c2e5a')
+
+  -- Should normalize to [0; 100]
+  validate('return 110', '#ffffff')
+  validate('return -10', '#000000')
+
+  -- Should respect `opts.gamut_clip`
+  validate('return 80', '#ff9bbe', [[{ gamut_clip = 'cusp' }]])
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "chroma"'] = function()
+  local validate = function(...) validate_chan_modify('chroma', ...) end
+
+  validate('return x - 10', '#906b76')
+
+  -- Should normalize to positive number
+  validate('return -10', '#777777')
+
+  -- Should respect `opts.gamut_clip`
+  validate('return 25', '#da0072', [[{ gamut_clip = 'cusp' }]])
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "saturation"'] = function()
+  local validate = function(...) validate_chan_modify('saturation', ...) end
+
+  validate('return x - 10', '#b15374')
+
+  -- Should normalize to [0; 100]
+  validate('return 110', '#d70071')
+  validate('return -10', '#777777')
+
+  -- In theory, 'gamut_clip' is unnecessary as it always stays inside gamut
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "hue"'] = function()
+  local validate = function(...) validate_chan_modify('hue', ...) end
+
+  validate('return x + 10', '#bd4a62')
+
+  -- Should periodically normalize to be inside [0; 360)
+  validate('return x + 370', '#bd4a62')
+  validate('return x - 350', '#bd4a62')
+
+  -- Should respect `opts.gamut_clip`
+  validate('return 90', '#a28000', [[{ gamut_clip = 'cusp' }]])
+
+  -- Doesn't have effect on grays (as they have no defined hue)
+  child.lua([[_G.cs.groups.Normal.fg = '#aaaaaa']])
+  validate('return 90', '#aaaaaa')
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "temperature"'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    -- Test on both hue half-planes ([-90; 90] and [90; 270])
+    -- Both colors have temperature 90
+    groups = { Normal = { fg = '#ba4a73', bg = '#68cebb' } }
+  })]])
+
+  local validate = function(function_body, ref_fg_hex, ref_bg_hex, opts_string)
+    opts_string = opts_string or '{}'
+
+    local lua_cmd = string.format('_G.f = function(x) %s end', function_body)
+    child.lua(lua_cmd)
+
+    local lua_get_cmd = string.format([[_G.cs:chan_modify('temperature', _G.f, %s).groups.Normal]], opts_string)
+    eq(child.lua_get(lua_get_cmd), { fg = ref_fg_hex, bg = ref_bg_hex })
+  end
+
+  -- "Temperature" is a circular distance to hue 270
+  validate('return x + 10', '#bd4a62', '#71ceaf')
+
+  -- Should normalize to [0; 180]
+  validate('return 270', '#927300', '#d2b66b')
+  validate('return -90', '#556fce', '#a0b6fa')
+
+  -- Should respect `opts.gamut_clip`
+  validate('return 180', '#a28000', '#d2b66b', [[{ gamut_clip = 'cusp' }]])
+
+  -- Doesn't have effect on grays (as they have no defined hue)
+  child.lua([[_G.cs.groups.Normal.fg = '#aaaaaa']])
+  child.lua([[_G.cs.groups.Normal.bg = '#777777']])
+  validate('return 180', '#aaaaaa', '#777777')
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "pressure"'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    -- Test on both hue half-planes ([0; 180] and [180, 360))
+    -- Both colors have pressure 90
+    groups = { Normal = { fg = '#556fce', bg = '#d2b66b' } }
+  })]])
+
+  local validate = function(function_body, ref_fg_hex, ref_bg_hex, opts_string)
+    opts_string = opts_string or '{}'
+
+    local lua_cmd = string.format('_G.f = function(x) %s end', function_body)
+    child.lua(lua_cmd)
+
+    local lua_get_cmd = string.format([[_G.cs:chan_modify('pressure', _G.f, %s).groups.Normal]], opts_string)
+    eq(child.lua_get(lua_get_cmd), { fg = ref_fg_hex, bg = ref_bg_hex })
+  end
+
+  -- "Pressure" is a circular distance to hue 180
+  validate('return x + 10', '#6769cc', '#dbb26c')
+
+  -- Should normalize to [0; 180]
+  validate('return 270', '#ba4a73', '#ee9eb6')
+  validate('return -90', '#018a79', '#68cebb')
+
+  -- Should respect `opts.gamut_clip`
+  validate('return 0', '#01a38f', '#68cebb', [[{ gamut_clip = 'cusp' }]])
+
+  -- Doesn't have effect on grays (as they have no defined hue)
+  child.lua([[_G.cs.groups.Normal.fg = '#aaaaaa']])
+  child.lua([[_G.cs.groups.Normal.bg = '#777777']])
+  validate('return 180', '#aaaaaa', '#777777')
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "a"'] = function()
+  local validate = function(...) validate_chan_modify('a', ...) end
+
+  validate('return x - 20', '#568178')
+
+  -- Should respect `opts.gamut_clip`
+  validate('return -20', '#00b49e', [[{ gamut_clip = 'cusp' }]])
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "b"'] = function()
+  local validate = function(...) validate_chan_modify('b', ...) end
+
+  validate('return x - 10', '#ab48ae')
+
+  -- Should respect `opts.gamut_clip`
+  validate('return 40', '#dd8c00', [[{ gamut_clip = 'cusp' }]])
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "red"'] = function()
+  local validate = function(...) validate_chan_modify('red', ...) end
+
+  validate('return x - 16', '#aa4a73')
+
+  -- Should normalize to [0; 255]
+  validate('return 300', '#ff4a73')
+  validate('return -50', '#004a73')
+
+  -- In theory, 'gamut_clip' is unnecessary as it always stays inside gamut
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "green"'] = function()
+  local validate = function(...) validate_chan_modify('green', ...) end
+
+  validate('return x - 16', '#ba3a73')
+
+  -- Should normalize to [0; 255]
+  validate('return 300', '#baff73')
+  validate('return -50', '#ba0073')
+
+  -- In theory, 'gamut_clip' is unnecessary as it always stays inside gamut
+end
+
+T['as_colorscheme() methods']['chan_modify()']['works with "blue"'] = function()
+  local validate = function(...) validate_chan_modify('blue', ...) end
+
+  validate('return x - 16', '#ba4a63')
+
+  -- Should normalize to [0; 255]
+  validate('return 300', '#ba4aff')
+  validate('return -50', '#ba4a00')
+
+  -- In theory, 'gamut_clip' is unnecessary as it always stays inside gamut
+end
+
+T['as_colorscheme() methods']['chan_modify()']['validates arguments'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({ groups = { Normal = { fg = '#ffffff' } } })]])
+  child.lua('_G.f = function(x) return x + 1 end')
+
+  expect.error(function() child.lua('_G.cs:chan_modify(1, _G.f)') end, 'Channel.*one of')
+  expect.error(function() child.lua([[_G.cs:chan_modify('aaa', _G.f)]]) end, 'Channel.*one of')
+
+  expect.error(function() child.lua([[_G.cs:chan_modify('hue', 1)]]) end, '`f`.*callable')
+
+  expect.error(function() child.lua([[_G.cs:chan_modify('hue', _G.f, { filter = 1 })]]) end, '`opts%.filter`.*callable')
+  expect.error(
+    function() child.lua([[_G.cs:chan_modify('hue', _G.f, { filter = 'a' })]]) end,
+    '`opts%.filter`.*proper attribute'
+  )
+
+  expect.error(
+    function() child.lua([[_G.cs:chan_modify('hue', _G.f, { gamut_clip = 'a' })]]) end,
+    '`opts%.gamut_clip`.*one of'
+  )
+end
+
+T['as_colorscheme() methods']['chan_modify()']['respects `opts.filter`'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = { Normal = { fg = '#000000', bg = '#000000', sp = '#000000' } },
+    terminal = { [0] = '#000000' },
+  })]])
+  child.lua([[_G.f = function(x) return x + 2 end]])
+
+  -- Allowed attribute strings
+  local validate_attr = function(attr)
+    local lua_cmd = string.format([[_G.cs_modified = _G.cs:chan_modify('lightness', _G.f, { filter = '%s' })]], attr)
+    child.lua(lua_cmd)
+
+    local ref_normal = { fg = '#000000', bg = '#000000', sp = '#000000' }
+    if attr ~= 'term' then ref_normal[attr] = '#020202' end
+    eq(child.lua_get('_G.cs_modified.groups.Normal'), ref_normal)
+
+    local ref_terminal = attr == 'term' and '#020202' or '#000000'
+    eq(child.lua_get('_G.cs_modified.terminal[0]'), ref_terminal)
+  end
+
+  validate_attr('fg')
+  validate_attr('bg')
+  validate_attr('sp')
+  validate_attr('term')
+
+  -- Callable filter
+  child.lua('_G.args_history = {}')
+  child.lua([[_G.filter = function(...)
+    table.insert(_G.args_history, { ... })
+    return false
+  end]])
+
+  eq(child.lua_get([[vim.deep_equal(_G.cs, _G.cs:chan_modify('lightness', _G.f, { filter = _G.filter }))]]), true)
+  -- Ensure consistent order in history as there is no order guarnatee in how
+  -- filter is applied
+  child.lua('table.sort(_G.args_history, function(a, b) return a[2].attr < b[2].attr end)')
+  eq(child.lua_get('_G.args_history'), {
+    { '#000000', { attr = 'bg', group = 'Normal' } },
+    { '#000000', { attr = 'fg', group = 'Normal' } },
+    { '#000000', { attr = 'sp', group = 'Normal' } },
+    { '#000000', { attr = 'term', group = 'terminal_color_0' } },
+  })
+end
+
+T['as_colorscheme() methods']['chan_modify()']['respects `opts.gamut_clip`'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    -- This is approximately { l = 75, c = 5, h = 0 } in Oklch
+    groups = { Normal = { fg = '#d5acb8' } }
+  })]])
+  child.lua([[_G.f = function(_) return 20 end]])
+
+  eq(child.lua_get([[_G.cs:chan_modify('chroma', _G.f).groups.Normal.fg]]), '#ff88b7')
+  eq(child.lua_get([[_G.cs:chan_modify('chroma', _G.f, { gamut_clip = 'chroma' }).groups.Normal.fg]]), '#ff88b7')
+  eq(child.lua_get([[_G.cs:chan_modify('chroma', _G.f, { gamut_clip = 'cusp' }).groups.Normal.fg]]), '#ff7eb1')
+  eq(child.lua_get([[_G.cs:chan_modify('chroma', _G.f, { gamut_clip = 'lightness' }).groups.Normal.fg]]), '#ff68a7')
+end
 
 T['as_colorscheme() methods']['chan_multiply()'] = function() MiniTest.skip() end
 
@@ -464,17 +863,303 @@ T['as_colorscheme() methods']['chan_repel()'] = function() MiniTest.skip() end
 
 T['as_colorscheme() methods']['chan_set()'] = function() MiniTest.skip() end
 
-T['as_colorscheme() methods']['color_modify()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['color_modify()'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#ffffff', bg = '#ffffff' },
+      TestNotAllAttrs = { sp = '#ffffff' },
+    },
+    terminal = { [0] = '#ffffff' }
+  })]])
+  child.lua('_G.args_history = {}')
+  child.lua([[_G.f = function(...)
+    table.insert(_G.args_history, { ... })
+    return '#000000'
+  end]])
 
-T['as_colorscheme() methods']['compress()'] = function() MiniTest.skip() end
+  child.lua('_G.cs_modified = _G.cs:color_modify(_G.f)')
+  eq(child.lua_get('_G.cs_modified.groups.Normal'), { fg = '#000000', bg = '#000000' })
+  eq(child.lua_get('_G.cs_modified.groups.TestNotAllAttrs'), { sp = '#000000' })
+  eq(child.lua_get('_G.cs_modified.terminal[0]'), '#000000')
 
-T['as_colorscheme() methods']['get_palette()'] = function() MiniTest.skip() end
+  child.lua('table.sort(_G.args_history, function(a, b) return a[2].attr < b[2].attr end)')
+  eq(child.lua_get('_G.args_history'), {
+    { '#ffffff', { attr = 'bg', group = 'Normal' } },
+    { '#ffffff', { attr = 'fg', group = 'Normal' } },
+    { '#ffffff', { attr = 'sp', group = 'TestNotAllAttrs' } },
+    { '#ffffff', { attr = 'term', group = 'terminal_color_0' } },
+  })
+end
 
-T['as_colorscheme() methods']['resolve_links()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['compress()'] = new_set()
 
-T['as_colorscheme() methods']['simulate_cvd()'] = function() MiniTest.skip() end
+T['as_colorscheme() methods']['compress()']['works'] = function()
+  -- Compressing should be like removing all highlight groups similar to ones
+  -- that come after `:hi clear`
+  child.cmd('hi clear')
+  child.lua('_G.cs = MiniColors.get_colorscheme()')
+  eq(child.lua_get('vim.tbl_count(_G.cs.groups) == 0'), false)
+  eq(child.lua_get('vim.tbl_count(_G.cs:compress().groups) == 0'), true)
 
-T['as_colorscheme() methods']['write()'] = function() MiniTest.skip() end
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      -- This link is the same as after `:hi clear` so should be removed
+      SpecialChar = { link = 'Special' },
+
+      -- Should preserve manually created highlight groups
+      Test = { fg = '#ffffff' },
+
+      -- By default should exclude groups from some pre-defined plugins
+      DevIconMine = { fg = '#ffffff' },
+      colorizer_mine = { fg = '#ffffff' },
+    },
+    -- Terminal colors should be untouched
+    terminal = { [1] = '#ff0000' }
+  })]])
+  child.lua('_G.cs_compressed = _G.cs:compress()')
+
+  eq(child.lua_get('_G.cs_compressed.groups'), { Test = { fg = '#ffffff' } })
+  eq(child.lua_get('_G.cs_compressed.terminal'), { [1] = '#ff0000' })
+
+  -- Should return full copy of group data
+  child.lua([[_G.cs.groups.Test.bg = '#000000']])
+  child.lua([[_G.cs.terminal[1] = '#000000']])
+
+  eq(child.lua_get('_G.cs_compressed.groups.Test.bg'), vim.NIL)
+  eq(child.lua_get('_G.cs_compressed.terminal[1]'), '#ff0000')
+end
+
+T['as_colorscheme() methods']['compress()']['respects `opts.plugins`'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      DevIconMine = { fg = '#ffffff' },
+      colorizer_mine = { fg = '#ffffff' },
+    }
+  })]])
+
+  eq(child.lua_get('_G.cs:compress({ plugins = false }).groups'), {
+    DevIconMine = { fg = '#ffffff' },
+    colorizer_mine = { fg = '#ffffff' },
+  })
+end
+
+T['as_colorscheme() methods']['compress()']['does not have side effects'] = function()
+  -- As checking equavalence to result of `:hi clear` needs to execute it,
+  -- there should be proper cache and restore of current color scheme
+  child.cmd('hi TestRestore guifg=#ffffff')
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = { Test = { bg = '#000000' } }
+  })]])
+
+  child.lua('_G.cs:compress()')
+  expect.match(child.cmd_capture('hi TestRestore'), 'guifg=#ffffff$')
+end
+
+T['as_colorscheme() methods']['get_palette()'] = new_set()
+
+T['as_colorscheme() methods']['get_palette()']['works'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { fg = '#ffffff', bg = '#000000' },
+      Test = { fg = '#fcb48c', bg = '#ffadac', sp = '#e9c07a' },
+    },
+    terminal = { [0] = '#222222', [1] = '#777777', [15] = '#d4d4d4' },
+  })]])
+
+  -- Should return colors in increasing order of lightness
+  eq(
+    child.lua_get('_G.cs:get_palette()'),
+    { '#000000', '#222222', '#777777', '#ffadac', '#fcb48c', '#e9c07a', '#d4d4d4', '#ffffff' }
+  )
+
+  -- By default returns only colors above small threshold
+  child.lua([[
+    local cs_groups = {}
+    for i = 0, 100 do
+      cs_groups['Test' .. i] = { fg = '#012345' }
+    end
+    cs_groups.TestRare = { fg = '#543210' }
+    _G.cs = MiniColors.as_colorscheme({ groups = cs_groups })
+  ]])
+  eq(child.lua_get('_G.cs:get_palette()'), { '#012345' })
+end
+
+T['as_colorscheme() methods']['get_palette()']['respects `opts.threshold`'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = { Test = { fg = '#012345', bg = '#012345', sp = '#543210' } }
+  })]])
+  eq(child.lua_get('_G.cs:get_palette({ threshold = 0.5 })'), { '#012345' })
+end
+
+T['as_colorscheme() methods']['resolve_links()'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = {
+      Normal = { link = 'Test1' },
+      Test1 = { link = 'Test2' },
+      Test2 = { fg = '#ffffff' },
+      TestImpossible = { link = 'TestMissing' },
+    }
+  })]])
+  child.lua('_G.cs_resolved = _G.cs:resolve_links()')
+
+  eq(child.lua_get('_G.cs_resolved.groups'), {
+    -- Should resolve all nested links
+    Normal = { fg = '#ffffff' },
+    Test1 = { fg = '#ffffff' },
+    Test2 = { fg = '#ffffff' },
+    -- Can't resolve link to a group not defined within color scheme
+    TestImpossible = { link = 'TestMissing' },
+  })
+
+  -- Should return copy without modifying original
+  eq(child.lua_get('_G.cs.groups.Test1.fg'), vim.NIL)
+
+  -- Resolved data should be independent of original link
+  child.lua([[_G.cs_resolved.groups.Test2.fg = '#000000']])
+  eq(child.lua_get('_G.cs_resolved.groups.Test1.fg'), '#ffffff')
+end
+
+T['as_colorscheme() methods']['simulate_cvd()'] = function()
+  -- Test only basics. More thorough ones are in `MiniColors.simulate_cvd()`.
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    groups = { Normal = { fg = '#00ff00', bg = '#00ff00', sp = '#00ff00' } },
+    terminal = { [1] = '#ff0000' },
+  })]])
+
+  child.lua([[_G.cs_cvd = _G.cs:simulate_cvd('protan', 1)]])
+  eq(child.lua_get('_G.cs_cvd.groups'), { Normal = { fg = '#ffc900', bg = '#ffc900', sp = '#ffc900' } })
+  eq(child.lua_get('_G.cs_cvd.terminal[1]'), '#271d00')
+end
+
+T['as_colorscheme() methods']['write()'] = new_set({
+  hooks = {
+    pre_case = function()
+      local lua_cmd = string.format([[vim.fn.stdpath = function() return '%s' end]], dir_path)
+      child.lua(lua_cmd)
+
+      -- Add to `rtp` to be able to discrove color schemes
+      child.cmd('set rtp+=' .. dir_path)
+    end,
+    post_case = function() vim.fn.delete(colors_path, 'rf') end,
+  },
+})
+
+local make_validate_file_lines = function(path)
+  local lines = vim.fn.readfile(path)
+  local lines_string = table.concat(lines, '\n')
+  return function(pat) expect.match(lines_string, pat) end, function(pat) expect.no_match(lines_string, pat) end
+end
+
+T['as_colorscheme() methods']['write()']['works'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    name = 'my_cs',
+    groups = {
+      Normal = { fg = '#ffffff', bg = '#000000' },
+      -- This should be dropped during compression
+      SpecialChar = { link = 'Special' },
+    },
+    terminal = { [1] = '#ff0000' },
+  })]])
+
+  -- Calling `write()` should result into discroverable color scheme
+  child.lua('_G.cs:write()')
+
+  -- Validate
+  expect.match(child.cmd_capture('hi Normal'), 'cleared')
+
+  child.cmd('colorscheme my_cs')
+
+  eq(child.g.colors_name, 'my_cs')
+  expect.match(child.cmd_capture('hi Normal'), 'guifg=#ffffff')
+  eq(child.g.terminal_color_1, '#ff0000')
+
+  -- Make basic checks for file content
+  local validate_match, validate_no_match = make_validate_file_lines(colors_path .. '/my_cs.lua')
+
+  -- - Description comments
+  validate_match([[^%-%- Made with 'mini%.colors']])
+  validate_match([[%-%- Highlight groups]])
+  validate_match([[%-%- Terminal colors]])
+
+  -- - Basic code
+  validate_match([[vim.cmd%('highlight clear'%)]])
+  validate_match([[vim%.g%.colors_name = "my_cs"]])
+  validate_match([["Normal", { bg = "#000000", fg = "#ffffff" }]])
+  validate_match([[g.terminal_color_1 = "#ff0000"]])
+
+  -- - Should compress by default and not include redundant groups
+  validate_no_match('SpecialChar')
+end
+
+T['as_colorscheme() methods']['write()']['makes unique color scheme name'] = function()
+  mock_test_cs()
+
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    -- This color scheme should already be present
+    name = 'test_cs',
+    groups = { Normal = { fg = '#ffffff', bg = '#000000' } },
+    terminal = { [1] = '#ff0000' },
+  })]])
+  child.lua('_G.cs:write()')
+
+  local files = child.fn.readdir(colors_path)
+  eq(#files, 1)
+  -- File name should add timestamp suffix in case of duplicated name
+  expect.match(files[1], 'test_cs_%d%d%d%d%d%d%d%d_%d%d%d%d%d%d%.lua')
+end
+
+T['as_colorscheme() methods']['write()']['handles empty fields'] = function()
+  child.lua('_G.cs = MiniColors.as_colorscheme({})')
+  child.lua('_G.cs:write()')
+
+  -- File name should be inferred as 'mini_colors'
+  local validate_match = make_validate_file_lines(colors_path .. 'mini_colors.lua')
+
+  validate_match('g%.colors_name = nil')
+  validate_match('%-%- No highlight groups defined')
+  validate_match('%-%- No terminal colors defined')
+end
+
+T['as_colorscheme() methods']['write()']['respects `opts.compress`'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    name = 'my_cs',
+    groups = {
+      -- This should be dropped during compression
+      SpecialChar = { link = 'Special' },
+      Normal = { fg = '#ffffff' },
+    }
+  })]])
+  child.lua('_G.cs:write({ compress = false })')
+
+  local validate_match = make_validate_file_lines(colors_path .. 'my_cs.lua')
+  -- It should be present as no compression should have been done
+  validate_match('SpecialChar')
+end
+
+T['as_colorscheme() methods']['write()']['respects `opts.name`'] = function()
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    name = 'blue',
+    groups = { Normal = { fg = '#ffffff' } }
+  })]])
+  child.lua([[_G.cs:write({ name = 'my_cs_from_name' })]])
+
+  eq(child.fn.filereadable(colors_path .. 'my_cs_from_name.lua'), 1)
+end
+
+T['as_colorscheme() methods']['write()']['respects `opts.directory`'] = function()
+  local inner_dir = dir_path .. 'inner_dir/'
+  MiniTest.finally(function() vim.fn.delete(inner_dir, 'rf') end)
+
+  child.lua([[_G.cs = MiniColors.as_colorscheme({
+    name = 'my_cs',
+    groups = { Normal = { fg = '#ffffff' } }
+  })]])
+
+  local write_cmd = string.format([[_G.cs:write({ directory = '%s' })]], inner_dir)
+  child.lua(write_cmd)
+
+  eq(child.fn.filereadable(inner_dir .. 'my_cs.lua'), 1)
+end
 
 T['get_colorscheme()'] = new_set()
 
@@ -529,6 +1214,15 @@ T['get_colorscheme()']['works for some color scheme'] = function()
   mock_test_cs()
   child.lua([[_G.cs = MiniColors.get_colorscheme('test_cs')]])
   validate_test_cs('_G.cs')
+end
+
+T['get_colorscheme()']['works when color is defined by name'] = function()
+  child.cmd('hi Normal guifg=Red guibg=Black')
+  child.g.terminal_color_1 = 'Red'
+
+  child.lua('_G.cs = MiniColors.get_colorscheme()')
+  eq(child.lua_get('_G.cs.groups.Normal'), { fg = '#ff0000', bg = '#000000' })
+  eq(child.lua_get('_G.cs.terminal[1]'), '#ff0000')
 end
 
 T['get_colorscheme()']['validates arguments'] = function()
@@ -916,6 +1610,9 @@ T['convert()']['converts to RGB'] = function()
   validate({ l = 8, s = 0 }, gray_ref, 0.02)
   validate({ l = 8, s = 0, h = 180 }, gray_ref, 0.02)
 
+  -- Normalization
+  validate({ r = 300, g = -10, b = 127 }, { r = 255, g = 0, b = 127 })
+
   -- Performs correct gamut clipping
   -- NOTE: this uses approximate linear model and not entirely correct
   -- Clipping should be correct below and above cusp lightness.
@@ -1171,10 +1868,36 @@ end
 -- Integration tests ==========================================================
 T[':Colorscheme'] = new_set()
 
-T[':Colorscheme']['works'] = function() MiniTest.skip() end
+T[':Colorscheme']['works'] = function()
+  mock_test_cs()
 
-T[':Colorscheme']['accepts several arguments'] = function() MiniTest.skip() end
+  child.cmd('hi Normal guifg=#ffffff')
+  type_keys(':Colorscheme test_cs<CR>')
+  sleep(1000 + small_time)
+  expect.match(child.cmd_capture('hi Normal'), 'guifg=#5f87af')
+end
 
-T[':Colorscheme']['provides proper completion'] = function() MiniTest.skip() end
+T[':Colorscheme']['accepts several arguments'] = function()
+  child.cmd('colorscheme blue')
+  mock_test_cs()
+  type_keys(':Colorscheme test_cs blue<CR>')
+
+  sleep(1000 + small_time)
+  expect.match(child.cmd_capture('hi Normal'), 'guifg=#5f87af')
+
+  sleep(1000 - 2 * small_time)
+  expect.match(child.cmd_capture('hi Normal'), 'guifg=#5f87af')
+
+  sleep(1000 + 2 * small_time)
+  local blue_normal_fg = child.fn.has('nvim-0.8') == 1 and '#ffd700' or '#ffff00'
+  expect.match(child.cmd_capture('hi Normal'), 'guifg=' .. blue_normal_fg)
+end
+
+T[':Colorscheme']['provides proper completion'] = function()
+  mock_test_cs()
+  type_keys(':Colorscheme test_<Tab> blu<Tab>')
+  eq(child.fn.getcmdline(), 'Colorscheme test_cs blue')
+  type_keys('<Esc>')
+end
 
 return T

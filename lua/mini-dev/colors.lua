@@ -180,6 +180,8 @@ end
 MiniColors.config = {}
 --minidoc_afterlines_end
 
+-- Mention that it is a good idea to `cs:compress():resolve_links()` before
+-- applying `get_palette()`.
 MiniColors.as_colorscheme = function(x)
   -- Validate input
   if not H.is_table(x) then H.error('Input of `as_colorscheme()` should be table.') end
@@ -273,7 +275,7 @@ MiniColors.interactive = function(opts)
   local maps = opts.mappings
 
   -- Prepare
-  local init_cs = vim.deepcopy(opts.colorscheme) or MiniColors.get_colorscheme()
+  local init_cs = MiniColors.as_colorscheme(opts.colorscheme) or MiniColors.get_colorscheme()
   local buf_id = vim.api.nvim_create_buf(true, true)
 
   -- Write header lines
@@ -380,7 +382,7 @@ MiniColors.convert = function(x, to_space, opts)
   return H.converters[to_space](x, H.infer_color_space(x), opts)
 end
 
-MiniColors.simulate_cvd = function(x, cvd_type, severity, opts)
+MiniColors.simulate_cvd = function(x, cvd_type, severity)
   if x == nil then return nil end
   if not (cvd_type == 'protan' or cvd_type == 'deutan' or cvd_type == 'tritan' or cvd_type == 'mono') then
     H.error('Argument `cvd_type` should be one of "protan", "deutan", "tritan", "mono".')
@@ -390,15 +392,15 @@ MiniColors.simulate_cvd = function(x, cvd_type, severity, opts)
 
   -- Simulate monochromacy by setting zero 'crhoma'
   if cvd_type == 'mono' then
-    local lch = MiniColors.convert(x, 'oklch', opts)
+    local lch = MiniColors.convert(x, 'oklch')
     lch.c, lch.h = 0, nil
-    return MiniColors.convert(lch, 'hex', opts)
+    return MiniColors.convert(lch, 'hex')
   end
 
   -- Simulate regular CVD by multiplying with appropriate matrix
   severity = H.clip(H.round(10 * severity), 0, 10)
   local mat = H.cvd_matricies[cvd_type][severity]
-  local rgb = MiniColors.convert(x, 'rgb', opts)
+  local rgb = MiniColors.convert(x, 'rgb')
   local new_rgb = {
     r = mat[1][1] * rgb.r + mat[1][2] * rgb.g + mat[1][3] * rgb.b,
     g = mat[2][1] * rgb.r + mat[2][2] * rgb.g + mat[2][3] * rgb.b,
@@ -572,8 +574,9 @@ H.cs_add_terminal_colors = function(self, opts)
   -- https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
   -- Regular and bright versions will be equal (to simplify algorithm)
 
-  -- Resolve links to account for linked 'Normal' group
-  local cs = res:resolve_links()
+  -- Compress (for better palette representation) and resolve links (accounts
+  -- for possibly linked 'Normal' group)
+  local cs = res:compress():resolve_links()
 
   -- Get palette and convert in Oklch
   local palette = cs:get_palette(opts.palette_args)
@@ -663,8 +666,10 @@ H.cs_add_transparency = function(self, opts)
   return res
 end
 
-H.cs_apply = function(self)
-  if vim.g.colors_name ~= nil then vim.cmd('highlight clear') end
+H.cs_apply = function(self, opts)
+  opts = vim.tbl_deep_extend('force', { clear = true }, opts or {})
+
+  if opts.clear then vim.cmd('highlight clear') end
   vim.g.colors_name = self.name
 
   -- Highlight groups
@@ -676,7 +681,7 @@ H.cs_apply = function(self)
 
   -- Terminal colors. Apply all colors in order to possibly remove previously
   -- set ones.
-  for i = 0, 255 do
+  for i = 0, 15 do
     vim.g['terminal_color_' .. i] = self.terminal[i]
   end
 
@@ -792,29 +797,27 @@ H.cs_compress = function(self, opts)
 
   current_cs:apply()
 
-  return MiniColors.as_colorscheme({ name = self.name, groups = new_groups, terminal = vim.deepcopy(self.terminal) })
+  return MiniColors.as_colorscheme({ name = self.name, groups = new_groups, terminal = self.terminal })
 end
 
 H.cs_get_palette = function(self, opts)
-  opts = vim.tbl_deep_extend('force', { compress = true, threshold = 0.01 }, opts or {})
-
-  -- Possibly compress and resolve links for a (hopefully) more objective
-  -- representation of color usage
-  local cs = (opts.compress and self:compress() or self):resolve_links()
+  opts = vim.tbl_deep_extend('force', { threshold = 0.01 }, opts or {})
 
   -- Traverse all colors
-  local cs_colors, n_color_uses = {}, 0
-  cs:color_modify(function(hex)
-    cs_colors[hex] = (cs_colors[hex] or 0) + 1
+  local colors, n_color_uses = {}, 0
+  self:color_modify(function(hex)
+    colors[hex] = (colors[hex] or 0) + 1
     n_color_uses = n_color_uses + 1
   end)
 
-  -- Filter out and sort in descending order of usage count
+  -- Filter out and sort in descending order of lightness
   local all_colors = {}
-  for hex, count in pairs(cs_colors) do
-    if opts.threshold <= (count / n_color_uses) then table.insert(all_colors, { hex, count }) end
+  for hex, count in pairs(colors) do
+    if opts.threshold <= (count / n_color_uses) then
+      table.insert(all_colors, { hex, MiniColors.convert(hex, 'oklch').l })
+    end
   end
-  table.sort(all_colors, function(a, b) return a[2] > b[2] end)
+  table.sort(all_colors, function(a, b) return a[2] < b[2] end)
 
   return vim.tbl_map(function(x) return x[1] end, all_colors)
 end
@@ -855,7 +858,7 @@ H.cs_write = function(self, opts)
 
   local name = opts.name or H.make_file_basename(self.name or 'mini_colors')
 
-  local cs = opts.compress and vim.deepcopy(self):compress() or self
+  local cs = opts.compress and self:compress() or self
 
   -- Create file lines
   -- - Header
@@ -863,11 +866,11 @@ H.cs_write = function(self, opts)
     [[-- Made with 'mini.colors' module of https://github.com/echasnovski/mini.nvim]],
     '',
     [[if vim.g.colors_name ~= nil then vim.cmd('highlight clear') end]],
-    'vim.g.colors_name = ' .. vim.inspect(self.name),
+    'vim.g.colors_name = ' .. vim.inspect(cs.name),
   }
 
   -- - Highlight groups
-  if vim.tbl_count(self.groups) > 0 then
+  if vim.tbl_count(cs.groups) > 0 then
     vim.list_extend(lines, { '', '-- Highlight groups', 'local hi = vim.api.nvim_set_hl', '' })
   else
     vim.list_extend(lines, { '', '-- No highlight groups defined' })
@@ -875,18 +878,18 @@ H.cs_write = function(self, opts)
 
   local lines_groups = vim.tbl_map(
     function(hl) return string.format('hi(0, "%s", %s)', hl.name, vim.inspect(hl.spec, { newline = ' ', indent = '' })) end,
-    H.hl_groups_to_array(self.groups)
+    H.hl_groups_to_array(cs.groups)
   )
   vim.list_extend(lines, lines_groups)
 
   -- - Terminal colors
-  if vim.tbl_count(self.terminal) > 0 then
+  if vim.tbl_count(cs.terminal) > 0 then
     vim.list_extend(lines, { '', '-- Terminal colors', 'local g = vim.g', '' })
   else
     vim.list_extend(lines, { '', '-- No terminal colors defined' })
   end
 
-  for i, hex in pairs(self.terminal) do
+  for i, hex in pairs(cs.terminal) do
     local l = string.format('g.terminal_color_%d = "%s"', i, hex)
     table.insert(lines, l)
   end
@@ -921,12 +924,14 @@ H.normalize_filter = function(x)
   if x == nil then x = function() return true end end
 
   -- Treat string filter as filter on attribute ('fg', 'bg', etc.)
-  if type(x) == 'string' then
+  if x == 'fg' or x == 'bg' or x == 'sp' or x == 'term' then
     local attr_val = x
     x = function(_, data) return data.attr == attr_val end
   end
 
-  if not vim.is_callable(x) then H.error('Argument `opts.filter` should be either attribute string or callable.') end
+  if not vim.is_callable(x) then
+    H.error('Argument `opts.filter` should be either proper attribute string or callable.')
+  end
 
   return x
 end
@@ -961,6 +966,23 @@ H.make_file_basename = function(name)
   return name
 end
 
+-- -- TODO: Use `vim.api.nvim_get_hl()` when it is more stable (doesn't have
+--    issues with including not created highlight highlight groups for semantic
+--    tokens)
+-- H.get_current_groups = function()
+--   local res = {}
+--
+--   for name, new_t in pairs(vim.api.nvim_get_hl(0, {})) do
+--     -- Return plain `{}` instead of `vim.empty_dict()`
+--     local new_t = setmetatable(new_t, nil)
+--     -- Use HEX when needed
+--     new_t.fg, new_t.bg, new_t.sp = H.dec2hex(new_t.fg), H.dec2hex(new_t.bg), H.dec2hex(new_t.sp)
+--     res[name] = new_t
+--   end
+--
+--   return res
+-- end
+
 H.get_current_groups = function()
   -- Get present highlight group names and if they are linked
   local group_data = vim.split(vim.api.nvim_exec('highlight', true), '\n')
@@ -975,17 +997,6 @@ H.get_current_groups = function()
       res[name] = H.get_hl_by_name(name)
     end
   end
-  return res
-end
-
-H.get_current_terminal = function()
-  local res = {}
-  for i = 0, 15 do
-    local col = vim.g['terminal_color_' .. i]
-    -- Use only defined colors with proper HEX values (ignores color names)
-    if type(col) == 'string' and col:find('^#%x%x%x%x%x%x$') ~= nil then res[i] = col end
-  end
-
   return res
 end
 
@@ -1015,8 +1026,18 @@ H.get_hl_by_name = function(name)
   return res
 end
 
+H.get_current_terminal = function()
+  local res = {}
+  for i = 0, 15 do
+    local col = vim.g['terminal_color_' .. i]
+    if type(col) == 'string' then res[i] = H.dec2hex(vim.api.nvim_get_color_by_name(col)) end
+  end
+
+  return res
+end
+
 H.dec2hex = function(dec)
-  if dec == nil then return nil end
+  if dec == nil or dec < 0 then return nil end
   return string.format('#%06x', dec)
 end
 
@@ -1218,7 +1239,7 @@ H.channel_modifiers.temperature = function(hex, f, gamut_clip)
 
   -- Temperature is a circular distance to 270 hue degrees
   -- Output value will lie in the same vertical half plane
-  local is_left = 90 <= lch.h and lch.h <= 270
+  local is_left = 90 <= lch.h and lch.h < 270
   local temp = (is_left and (270 - lch.h) or (lch.h + 90)) % 360
   local new_temp = H.clip(f(temp), 0, 180)
   lch.h = (is_left and (270 - new_temp) or (new_temp - 90)) % 360
@@ -1232,7 +1253,7 @@ H.channel_modifiers.pressure = function(hex, f, gamut_clip)
 
   -- Pressure is a circular distance to 180 hue degrees
   -- Output value will lie in the same horizontal half plane
-  local is_up = 0 <= lch.h and lch.h <= 180
+  local is_up = 0 <= lch.h and lch.h < 180
   local press = is_up and (180 - lch.h) or (lch.h - 180)
   local new_press = H.clip(f(press), 0, 180)
   lch.h = is_up and (180 - new_press) or (new_press + 180)
@@ -1254,20 +1275,19 @@ end
 
 H.channel_modifiers.red = function(hex, f, gamut_clip)
   local rgb = H.hex2rgb(hex)
-  -- Don't clip and use `convert()` for a correct gamut clipping
-  rgb.r = f(rgb.r)
+  rgb.r = H.clip(f(rgb.r), 0, 255)
   return MiniColors.convert(rgb, 'hex', { gamut_clip = gamut_clip })
 end
 
 H.channel_modifiers.green = function(hex, f, gamut_clip)
   local rgb = H.hex2rgb(hex)
-  rgb.g = f(rgb.g)
+  rgb.g = H.clip(f(rgb.g), 0, 255)
   return MiniColors.convert(rgb, 'hex', { gamut_clip = gamut_clip })
 end
 
 H.channel_modifiers.blue = function(hex, f, gamut_clip)
   local rgb = H.hex2rgb(hex)
-  rgb.b = f(rgb.b)
+  rgb.b = H.clip(f(rgb.b), 0, 255)
   return MiniColors.convert(rgb, 'hex', { gamut_clip = gamut_clip })
 end
 
@@ -1349,9 +1369,7 @@ H.converters.rgb = function(x, from_space, opts)
   end
   if from_space == 'hex' then return H.hex2rgb(x) end
 
-  if from_space == 'rgb' and (0 <= x.r and x.r <= 255) and (0 <= x.g and x.g <= 255) and (0 <= x.b and x.b <= 255) then
-    return x
-  end
+  if from_space == 'rgb' then return { r = H.clip(x.r, 0, 255), g = H.clip(x.g, 0, 255), b = H.clip(x.b, 0, 255) } end
 
   -- Clip non-gray color to be in gamut
   local lch = MiniColors.convert(x, 'oklch', opts)
@@ -1526,15 +1544,10 @@ H.degree2rad = function(x) return (x % 360) * H.tau / 360 end
 
 -- Functions for RGB channel correction. Assumes input in [0; 1] range
 -- https://bottosson.github.io/posts/colorwrong/#what-can-we-do%3F
-H.correct_channel = function(x)
-  x = H.clip(x, 0, 1)
-  return 0.04045 < x and math.pow((x + 0.055) / 1.055, 2.4) or (x / 12.92)
-end
+H.correct_channel = function(x) return 0.04045 < x and H.pow((x + 0.055) / 1.055, 2.4) or (x / 12.92) end
 
-H.correct_channel_inv = function(x)
-  x = H.clip(x, 0, 1)
-  return (0.0031308 >= x) and (12.92 * x) or (1.055 * math.pow(x, 0.416666667) - 0.055)
-end
+H.correct_channel_inv =
+  function(x) return (0.0031308 >= x) and (12.92 * x) or (1.055 * H.pow(x, 0.416666667) - 0.055) end
 
 -- Functions for lightness correction
 -- https://bottosson.github.io/posts/colorpicker/#intermission---a-new-lightness-estimate-for-oklab
@@ -1688,7 +1701,9 @@ end
 
 H.clip = function(x, from, to) return math.min(math.max(x, from), to) end
 
-H.cuberoot = function(x) return math.pow(x, 0.333333) end
+H.pow = function(x, p) return (x < 0 and -1 or 1) * math.pow(math.abs(x), p) end
+
+H.cuberoot = function(x) return H.pow(x, 0.333333) end
 
 H.dist = function(x, y) return math.abs(x - y) end
 
