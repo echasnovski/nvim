@@ -1798,8 +1798,8 @@ T['convert()'] = new_set()
 
 local convert = function(...) return child.lua_get('MiniColors.convert(...)', { ... }) end
 
-T['convert()']['converts to 8bit'] = function()
-  local validate = function(x, ref) eq(convert(x, '8bit'), ref) end
+T['convert()']['converts to 8-bit'] = function()
+  local validate = function(x, ref) eq(convert(x, '8-bit'), ref) end
 
   local bit_ref = 67
   validate(bit_ref, bit_ref)

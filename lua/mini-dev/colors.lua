@@ -2,77 +2,9 @@
 --
 -- Code:
 --
--- - Conditionally use `nvim_get_hl()` if backport is made.
---
--- Reference color schemes (for testing purposes):
--- - folke/tokyonight.nvim (3260 stars)
--- - catppuccin/nvim (2360 stars)
--- - rebelot/kanagawa.nvim (2023 stars)
--- - EdenEast/nightfox.nvim (1935 stars)
--- - sainnhe/everforest (1743 stars)
--- - projekt0n/github-nvim-theme (1312 stars)
--- - sainnhe/gruvbox-material (1273 stars)
--- - dracula/vim (1216 stars)
--- - sainnhe/sonokai (1156 stars)
--- - ellisonleao/gruvbox.nvim (904 stars)
--- - Maybe:
---     - navarasu/onedark.nvim (882 stars)
---     - tomasiser/vim-code-dark (837 stars)
---     - rose-pine/neovim (836 stars)
---     - marko-cerovac/material.nvim (723 stars)
---     - sainnhe/edge (703 stars)
---     - bluz71/vim-nightfly-colors (586 stars)
---     - shaunsingh/nord.nvim (578 stars)
---     - bluz71/vim-moonfly-colors (564 stars)
---     - embark-theme/vim (531 stars)
---
 -- Tests:
--- - Grays are properly respected in both modifiers and converters.
 --
 -- Documentation:
---
--- - Color spaces:
---     - 8bit - integer between 16 (because 0-15 are not reliable) and 255.
---     - Hex - string of the form "#xxxxxx" where `x` is hexadecimal.
---     - RGB - table with fields `r` (red), `g` (green), `b` (blue).
---       All numeric inside [0; 255].
---     - Oklab - table with fields `l` (lightness; numeric in [0; 100]),
---       `a`, `b` (both numeric in [-50, 50]).
---     - Oklch - table with fields `l` (lightness; numeric in [0; 100]),
---       `c` (chroma; numeric in [0, 100]),
---       `h` (`nil` for grays or numeric in [0, 360)).
---     - Okhsl - Oklch but with `c` replaced by `s` (saturation; percent of
---       chroma relative to maximum chroma for particular lightness and hue;
---       numeric in [0; 100]).
---
--- - Channels:
---     - Lightness - corrected `l` component of Oklch.
---     - Chroma - `c` component of Oklch.
---     - Saturation - `s` component of Okhsl.
---     - Hue - `h` component of Oklch.
---     - Temperature - circular distance from current hue angle to 270 hue angle.
---       Ranges from 0 (cool) to 180 (hot) anchored at 270 (blue) and 90
---       (yellow) hue degrees. Similar to `b` channel but tries to preserve chroma.
---     - Pressure - circular distance from current hue angle to 180 hue angle.
---       Ranges from 0 to 180 anchored at 180 (greenish) and 0 (redish) hue degrees.
---       Similar to `a` channel but tries to preserve chroma. NOTE: not a wide
---       used term; coined to be similar to temperature.
---     - a - `a` component of Oklab.
---     - b - `b` component of Oklab.
---     - Red - `r` component of RGB.
---     - Green - `g` component of RGB.
---     - Blue - `b` component of RGB.
---
--- - Give examples of approximate hue degree names:
---     - 0 - pink.
---     - 30 - red.
---     - 45 - orange.
---     - 90 - yellow.
---     - 135 - green.
---     - 180 - cyan.
---     - 225 - light blue.
---     - 270 - blue.
---     - 315 - magenta/purple.
 --
 -- - Recipes for common tasks:
 --     - Convert dark/light color scheme to be light/dark with
@@ -111,8 +43,6 @@
 --   might lead to slightly different colors depending on clip method (like
 --   smaller chroma with default "chroma" clip method).
 --
--- - Mention https://bottosson.github.io/misc/colorpicker
---
 -- - Demo ideas:
 --     `chan_add('hue', math.random(0, 359))`
 
@@ -124,8 +54,55 @@
 --- ==============================================================================
 ---
 --- Features:
+--- - Create color scheme object: either from table (|MiniColors.as_colorscheme()|)
+---   or by querying present color schemes (including currently active one; see
+---   |MiniColors.get_colorscheme()|).
+---
+--- - Infer data about color scheme and/or modify based on it:
+---     - Add transparency.
+---     - Infer cterm attributes (|cterm-colors|) based on gui ones making it
+---       compatible with 'notermguicolors'.
+---     - Resolve highlight group links (|:highlight-link|).
+---     - Compress by removing redundant highlight groups.
+---     - Extract palette of used colors and/or infer terminal colors
+---       (|terminal-config|) based on it.
+---
+--- - Modify colors to better fit your taste and/or goals (see more in "Methods"
+---   section of |MiniColors.as_colorscheme()|):
+---     - Apply any function to color hex string.
+---     - Update channels (like lightness, saturation, hue, temperature, red,
+---       green, blue, etc.; see more in |MiniColors-channels|).
+---       Either with general function or one of the implemented methods:
+---         - Add value or multiply by coefficient. Like "add 10 to saturation
+---           of every color" or "multiply saturation by 2" to make colors more
+---           saturated (less gray).
+---         - Invert. Like "invert lightness" to convert between dark/light theme.
+---         - Set to one or more values (closest to current one). Like "set to
+---           one or two hues" to make mono- or di-chromatic color scheme.
+---         - Repel from certain source(s) with stronger effect for closer values.
+---           Like "repel from hue 30" to remove red color from color scheme
+---           with a configurable degree (how much hue is removed).
+---     - Simulate color vision deficiency.
+---
+--- - Once color scheme is ready, either apply it or write it into a Lua file as a
+---   fully functioning separate color scheme.
+---
+--- - Experiment interactively with instant feedback (|MiniColors.interactive()|).
+---
+--- - Animate transition between color schemes either with |MiniColors.animate()|
+---   or with |:Colorscheme| user command.
+---
+--- - Convert within supported color spaces (|MiniColors.convert()|):
+---     - Hex string.
+---     - 8-bit number.
+---     - RGB.
+---     - Oklab, Oklch, Okhsl (https://bottosson.github.io/posts/oklab/).
 ---
 --- Notes:
+--- - There is a collection of |MiniColors-recipes| with code snippets for some
+---   common tasks.
+--- - There is no goal to support as many color spaces as possible, only the
+---   already present ones.
 ---
 --- # Setup~
 ---
@@ -144,6 +121,150 @@
 --- - 'lifepillar/vim-colortemplate':
 --- - 'rktjmp/lush.nvim':
 
+---@tag MiniColors-recipes
+
+--- Color space is a way to quantitatively describe a color. In this module
+--- color spaces are used both as source for |MiniColors-channels| and inputs
+--- for |MiniColors.convert()|
+---
+--- List of supported color spaces (along with their id in parenthesis):
+--- - 8-bit (`8-bit`) - integer between 16 and 255. Usually values 0-15 are also
+---   supported, but they depend on terminal emulator theme which is not reliable.
+---   See https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit .
+---
+--- - Hex (`hex`) - string of the form "#xxxxxx" where `x` is a hexadecimal number.
+---
+--- - RGB (`rgb`) - table with fields `r` (red), `g` (green), `b` (blue).
+---   All numeric values. Visible range is from 0 to 255.
+---
+--- - Oklab (`oklab`) - table with fields `l` (lightness; numeric in [0; 100]),
+---   `a`, `b` (both are unbounded numeric; usually between -30 to 30).
+---   Field `l` describes how light a color is; `a` - how "greed-red";
+---   `b` - how "blue-yellow".
+---
+--- - Oklch (`oklch`) - table with fields `l` (same as in Oklab),
+---   `c` (chroma; positive numeric, usually lower than 32),
+---   `h` (`nil` for grays or numeric in [0, 360)). Field `c` describes how
+---   colorful a color is; `h` - value of "true color" on color circle/wheel.
+---   NOTE: gray colors, being achromatic by nature, don't have hue.
+---
+--- - Okhsl (`okhsl`) - Oklch but with `c` replaced by `s` (saturation; ;
+---   numeric in [0; 100]). Field `s` describes a percent of chroma relative to
+---   maximum visible chroma for the particular lightness and hue combination.
+---   Note, that mathematical model used to compute maximum visible chroma is
+---   approximate which might lead to inaccuracies for highly saturated colors
+---   with relatively low or high lightness.
+---
+--- Sources for Oklab/Oklch/Okhsl:
+--- - https://bottosson.github.io/posts/oklab/ - initial derivation and
+---   introduction of Oklab and Oklch.
+--- - https://bottosson.github.io/misc/colorpicker - interactive color picker.
+---   Great way for a hands-on introduction to concepts of lightness, chroma,
+---   saturation, and hue.
+---
+---                                                          *MiniColors-gamut-clip*
+--- Gamut clip ~
+---
+--- In Neovim highlight group colors are usually specified by their red, green,
+--- and blue values from 0 to 255 in the form of HEX string (see |gui-colors|).
+--- Although plenty, these are not all possible colors.
+---
+--- When performing color manipulation using |MiniColors-colorscheme-methods|
+--- it is possible to end up with "impossible" color (which can't be directly
+--- converted to HEX string). For example, inverting lightness of color "#fce094"
+--- will lead to a color `{ l = 10, c = 10, h = 90 }` in Oklch space, i.e.
+--- "dark yellow" which is impossible to show in HEX.
+---
+--- **Gamut clipping** is an action converting color outside of visible gamut
+--- (colors representable with HEX string) to be inside it while preserving
+--- certain perceptual characteristics as much as possible.
+---
+--- Gamut clipping in this module is done inside Oklch color space. The goal is
+--- to preserve hue as much as possible while manipulating lightness and/or chroma.
+---
+--- List of supported gamut clip methods (along with their id in parenthesis):
+--- - Clip chroma (`'chroma'`) - reduce chroma while preserving lightness until
+---   color is inside visible gamut. Default method.
+---
+--- - Clip lightness (`'lightness'`) - reduce lightness while preserving chroma
+---   until color is inside visible gamut.
+---
+--- - Clip according to "cusp" (`'cusp'`) - reduce both lightness and chroma in
+---   a compromise way depending on hue.
+---   Cusp is a color with the highest chroma inside slice of visible gamut
+---   with the same hue (hue leaf). It is called that way because the slice has
+---   a roughly triangular shape with points at (0, 0) - (0, 100) - "cusp" in
+---   (chroma, lightness) coordinates.
+---   Gamut clipping using "cusp" as reference is done by changing color towards
+---   (0, cusp_lightness) point (gray with lightness equal to that of a current
+---   cusp) until color is inside visible gamut.
+---
+--- In short:
+--- - Usually `'chroma'` is enough.
+--- - If colors are too desaturated - try `'cusp'`.
+--- - If still not colorful enough - try `'lightness'`.
+---
+--- Notes:
+--- - Currently implemented formulas are approximate (by design; to reduce code
+---   complexity) so there might be problems for highly saturated colors with
+---   relatively low or high lightness.
+---@tag MiniColors-color-spaces
+
+--- A color channel is a number describing one particular aspect of a color.
+--- It is usually direct or modified coordinate of a color space. See
+--- |MiniColors-color-spaces| for information on color spaces.
+---
+--- List of supported channels (along with their id in parenthesis):
+--- - Lightness (`lightness`) - corrected `l` component of Oklch. Describes how
+---   light is a color. Ranges from 0 (black dark) to 100 (white light).
+---
+--- - Chroma (`chroma`) - `c` component of Oklch. Describes how colorful is
+---   a color in absolute units. Ranges from 0 (gray) to infinity (more like
+---   30-50 in practice).
+---
+--- - Saturation (`saturation`) - `s` component of Okhsl. Describes how colorful
+---   is color in relative units. Ranges from 0 (gray) to 100 (maximum saturation
+---   for a given lightness-hue combination).
+---
+--- - Hue (`hue`) - `h` component of Oklch. Describes "true color value" like
+---   red/green/blue as a number. It is a periodic value from 0 (included) to 360
+---   (not included). Best perceived as a degree on a color circle/wheel.
+---   Approximate values for common color names:
+---     - 0 - pink.
+---     - 30 - red.
+---     - 60 - orange.
+---     - 90 - yellow.
+---     - 135 - green.
+---     - 180 - cyan.
+---     - 225 - light blue.
+---     - 270 - blue.
+---     - 315 - magenta/purple.
+---
+--- - Temperature - circular distance from current hue to 270 hue angle (blue).
+---   Ranges from 0 (cool) to 180 (hot) anchored at 270 (blue) and 90
+---   (yellow) hue degrees. Similar to `b` channel but tries to preserve chroma.
+---
+--- - Pressure - circular distance from current hue angle to 180 hue angle.
+---   Ranges from 0 (low) to 180 (high) anchored at 180 (greenish) and
+---   0 (redish) hue degrees. Similar to `a` channel but tries to preserve
+---   chroma. Not widely used; added to have something similar to temperature.
+---
+--- - a (`a`) - `a` component of Oklab. Describes how "green-red" a color is.
+---   Can have any value. Negative values are "green-ish", positive - "red-ish".
+---
+--- - b (`b`) - `b` component of Oklab. Describes how "blue-yellow" a color is.
+---   Can have any value. Negative values are "blue-ish", positive - "yellow-ish".
+---
+--- - Red (`red`) - `r` component of RGB. Describes how much red a color has.
+---   Ranges from 0 (no red) to 255 (full red).
+---
+--- - Green (`green`) - `g` component of RGB. Describes how much green a color has.
+---   Ranges from 0 (no green) to 255 (full green).
+---
+--- - Blue (`blue`) - `b` component of RGB. Describes how much blue a color has.
+---   Ranges from 0 (no blue) to 255 (full blue).
+---@tag MiniColors-channels
+
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
 ---@diagnostic disable:unused-local
@@ -154,6 +275,12 @@ MiniColors = {}
 H = {}
 
 --- Module setup
+---
+---                                                               *:Colorscheme*
+--- Calling this function creates a `Colorscheme` user command. It takes one or more
+--- recognized color scheme names and performes animated transition between them
+--- (starting from currently active color scheme). It uses |MiniColors.animte()|
+--- with default option.
 ---
 ---@param config table|nil Module config table. See |MiniSplitjoin.config|.
 ---
@@ -182,8 +309,10 @@ end
 MiniColors.config = {}
 --minidoc_afterlines_end
 
--- Mention that it is a good idea to `cs:compress():resolve_links()` before
--- applying `get_palette()`.
+--- Mention that it is a good idea to `cs:compress():resolve_links()` before
+--- applying `get_palette()`.
+---
+---                                                 *MiniColors-colorscheme-methods*
 MiniColors.as_colorscheme = function(x)
   -- Validate input
   if not H.is_table(x) then H.error('Input of `as_colorscheme()` should be table.') end
@@ -432,6 +561,7 @@ H.tau = 2 * math.pi
 -- RGB color for first one and around 2.16% for second one.
 --stylua: ignore start
 ---@diagnostic disable start
+---@private
 H.cusps = {
   [0] = {26.23,64.74},
   {26.14,64.65},{26.06,64.56},{25.98,64.48},{25.91,64.39},{25.82,64.29},{25.76,64.21},{25.70,64.13},{25.65,64.06},
@@ -529,7 +659,7 @@ H.cvd_matricies = {
 ---@diagnostic disable end
 --stylua: ignore end
 
-H.allowed_spaces = { '8bit', 'hex', 'rgb', 'oklab', 'oklch', 'okhsl' }
+H.allowed_spaces = { '8-bit', 'hex', 'rgb', 'oklab', 'oklch', 'okhsl' }
 
 H.allowed_channels =
   { 'lightness', 'chroma', 'saturation', 'hue', 'temperature', 'pressure', 'a', 'b', 'red', 'green', 'blue' }
@@ -1393,7 +1523,7 @@ end
 -- Color conversion -----------------------------------------------------------
 H.converters = {}
 
-H.converters['8bit'] = function(x, _, _) return H.get_closest_color_id(x, H.compute_term_oklab()) end
+H.converters['8-bit'] = function(x, _, _) return H.get_closest_color_id(x, H.compute_term_oklab()) end
 
 H.converters.hex = function(x, from_space, opts)
   if from_space == 'hex' then return x end
@@ -1401,7 +1531,7 @@ H.converters.hex = function(x, from_space, opts)
 end
 
 H.converters.rgb = function(x, from_space, opts)
-  if from_space == '8bit' then
+  if from_space == '8-bit' then
     local rgb = H.oklab2rgb(H.compute_term_oklab()[x])
     return vim.tbl_map(H.round, rgb)
   end
@@ -1420,7 +1550,7 @@ H.converters.oklab = function(x, from_space, opts) return H.oklch2oklab(MiniColo
 
 H.converters.oklch = function(x, from_space, opts)
   local res = nil
-  if from_space == '8bit' then res = H.oklab2oklch(H.compute_term_oklab()[x]) end
+  if from_space == '8-bit' then res = H.oklab2oklch(H.compute_term_oklab()[x]) end
   if from_space == 'hex' then res = H.oklab2oklch(H.rgb2oklab(H.hex2rgb(x))) end
   if from_space == 'rgb' then res = H.oklab2oklch(H.rgb2oklab(x)) end
   if from_space == 'oklab' then res = H.oklab2oklch(x) end
@@ -1443,7 +1573,7 @@ end
 H.converters.okhsl = function(x, from_space, opts) return H.oklch2okhsl(MiniColors.convert(x, 'oklch', opts)) end
 
 H.infer_color_space = function(x)
-  if type(x) == 'number' and 16 <= x and x <= 255 then return '8bit' end
+  if type(x) == 'number' and 16 <= x and x <= 255 then return '8-bit' end
   if type(x) == 'string' and x:find('^#%x%x%x%x%x%x$') ~= nil then return 'hex' end
 
   local err_msg = 'Can not infer color space of ' .. vim.inspect(x)
