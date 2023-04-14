@@ -2,6 +2,8 @@
 --
 -- Code:
 --
+-- - Conditionally use `nvim_get_hl()` if backport is made.
+--
 -- Reference color schemes (for testing purposes):
 -- - folke/tokyonight.nvim (3260 stars)
 -- - catppuccin/nvim (2360 stars)
@@ -275,7 +277,8 @@ MiniColors.interactive = function(opts)
   local maps = opts.mappings
 
   -- Prepare
-  local init_cs = MiniColors.as_colorscheme(opts.colorscheme) or MiniColors.get_colorscheme()
+  local init_cs = opts.colorscheme == nil and MiniColors.get_colorscheme()
+    or MiniColors.as_colorscheme(opts.colorscheme)
   local buf_id = vim.api.nvim_create_buf(true, true)
 
   -- Write header lines
@@ -283,10 +286,10 @@ MiniColors.interactive = function(opts)
     [[-- Experiment with color scheme using 'mini.colors']],
     '--',
     '-- Treat this as regular Lua file',
-    '-- Methods of initial color scheme are made global',
+    '-- Methods of initial color scheme can be called directly',
     '-- See more in `:h MiniColors.interactive()`',
     '--',
-    '-- Initial color scheme: ' .. init_cs.name,
+    '-- Initial color scheme: ' .. (init_cs.name or '<unnamed>'),
     '-- Buffer-local mappings (Normal mode):',
     '--   Apply: ' .. maps.Apply,
     '--   Reset: ' .. maps.Reset,
@@ -319,6 +322,7 @@ MiniColors.interactive = function(opts)
       function(input)
         if input == nil then return end
         local new_cs = H.apply_interactive_buffer(buf_id, init_cs)
+        new_cs.name = input
         new_cs:write({ name = input })
       end
     )
@@ -690,7 +694,7 @@ end
 
 H.cs_chan_add = function(self, channel, value, opts)
   channel = H.normalize_channel(channel)
-  value = H.normalize_number(value or 0, 'value')
+  value = H.normalize_number(value, 'value')
   if value == 0 then return vim.deepcopy(self) end
 
   return self:chan_modify(channel, function(x) return x + value end, opts)
@@ -722,7 +726,7 @@ end
 
 H.cs_chan_multiply = function(self, channel, coef, opts)
   channel = H.normalize_channel(channel)
-  coef = H.normalize_number(coef or 1, 'coef')
+  coef = H.normalize_number(coef, 'coef')
   if coef == 1 then return vim.deepcopy(self) end
 
   return self:chan_modify(channel, function(x) return coef * x end, opts)
@@ -733,9 +737,12 @@ H.cs_chan_repel = function(self, channel, sources, coef, opts)
   sources = H.normalize_number_array(sources, 'sources')
   coef = H.normalize_number(coef, 'coef')
 
-  local dist_fun = channel == 'hue' and H.dist_circle or H.dist
+  if #sources == {} or coef == 0 then return vim.deepcopy(self) end
+
+  -- Account for periodic nature of "hue" channel
   sources = channel == 'hue' and H.add_circle_sources(sources) or sources
-  local f = function(x) return H.repel(x, sources, coef, dist_fun) end
+  local tie_breaker = H.repel_tie_breakers[channel]
+  local f = function(x) return H.repel(x, sources, coef, tie_breaker) end
 
   return self:chan_modify(channel, f, opts)
 end
@@ -743,6 +750,7 @@ end
 H.cs_chan_set = function(self, channel, values, opts)
   channel = H.normalize_channel(channel)
   values = H.normalize_number_array(values, 'values')
+  if #values == 0 then return H.error('Argument `values` should not be empty.') end
 
   local dist_fun = channel == 'hue' and H.dist_circle or H.dist
   local f = function(x) return H.get_closest(x, values, dist_fun) end
@@ -949,21 +957,19 @@ end
 
 H.normalize_number_array = function(x, arg_name)
   if H.is_number(x) then x = { x } end
-  if not H.all(x, H.is_number) then H.error('Argument `' .. arg_name .. '` should be number or array of numbers.') end
+  if not (H.is_table(x) and H.all(x, H.is_number)) then
+    H.error('Argument `' .. arg_name .. '` should be number or array of numbers.')
+  end
   return x
 end
 
 -- Color scheme helpers -------------------------------------------------------
 H.make_file_basename = function(name)
-  -- If there already is color scheme file named `name`, append unique suffix
-  local all_colorschemes_files = vim.api.nvim_get_runtime_file('colors/*.{vim,lua}', true)
+  -- If there already is color scheme named `name`, append unique suffix
+  local all_colorschemes = vim.fn.getcompletion('', 'color')
 
-  for _, path in ipairs(all_colorschemes_files) do
-    local file_name = vim.fn.fnamemodify(path, ':t:r')
-    if name == file_name then return name .. vim.fn.strftime('_%Y%m%d_%H%M%S') end
-  end
-
-  return name
+  if not vim.tbl_contains(all_colorschemes, name) then return name end
+  return name .. vim.fn.strftime('_%Y%m%d_%H%M%S')
 end
 
 -- -- TODO: Use `vim.api.nvim_get_hl()` when it is more stable (doesn't have
@@ -1308,11 +1314,26 @@ H.chan_inverters = {
 }
 
 -- Channel repel --------------------------------------------------------------
+-- Use tie breakers when target is close to source
+H.repel_tie_breakers = {
+  lightness = 50,
+  chroma = 100,
+  saturation = 50,
+  hue = 180,
+  temperature = 90,
+  pressure = 90,
+  a = 0,
+  b = 0,
+  red = 127,
+  green = 127,
+  blue = 127,
+}
+
 H.nudge_repel = function(d, coef)
   -- Repel nudge will be added to distance from point to source.
   -- Ideas behind approach:
   -- - Nudge at `d = 0` should be equal to `coef`.
-  -- - Nudge should monotinically decrease to 0 as distance tends to infinity.
+  -- - Nudge should monotonically decrease to 0 as distance tends to infinity.
   -- - The `d + nudge(d)` (distance after adding nudge) should be still
   --   monotonically increasing as to preserve order of repelled points.
   return coef * math.exp(-d / coef)
@@ -1323,27 +1344,44 @@ H.nudge_attract = function(d, coef)
   -- Ideas behind approach:
   -- - Adding nudge when `0 <= d <= coef` should lead to 0. This results into all
   --   points from `coef` neighborhood of source collapse into source.
-  -- - Nudge should monotinically decrease to 0 as distance tends to infinity.
+  -- - Nudge should monotonically decrease to 0 as distance tends to infinity.
   -- - The `d + nudge(d)` (distance after adding nudge) should be still
   --   monotonically increasing as to preserve order of repelled points.
   return d <= coef and -d or (-coef * math.exp(1 - d / coef))
 end
 
-H.repel = function(x, sources, coef, dist_fun)
+H.repel = function(x, sources, coef, tie_breaker)
   if coef == 0 then return x end
 
   local nudge = coef > 0 and H.nudge_repel or H.nudge_attract
   coef = math.abs(coef)
 
+  -- Use direction **towards** `tie_breaker` if `x` is very close to source
+  -- to allow more useful repelling from sources on channel allowed edges.
+  -- Example: both `repel(0, { 0 }, 10)` and `repel(100, { 100 }, 10)` should
+  -- result into repelling **inside** [0; 100] resulting into 10 and 90.
+  local tie_breaker_sign = tie_breaker < x and -1 or 1
+
   local res = x
   for _, src in ipairs(sources) do
-    res = res + (x < src and -1 or 1) * nudge(dist_fun(x, src), coef)
+    -- Determine which way to move based on how `x` and source are positioned:
+    -- - Towards tie breaker if tie.
+    -- - To left if `x` is on left of source (and `coef > 0`).
+    -- - To right if `x` is on right of source (and `coef > 0`).
+    is_tie = math.abs(x - src) < 1e-4
+    dir_sign = is_tie and tie_breaker_sign or (x < src and -1 or 1)
+
+    -- Using regular distance is a proper choice even for "hue" channel because
+    -- it allows correct computation of nudge. Its periodic nature is accounted
+    -- by prior adjustment of `sources` (adding periodic ones)
+    res = res + dir_sign * nudge(H.dist(x, src), coef)
   end
   return res
 end
 
 H.add_circle_sources = function(sources)
   local res = {}
+  -- Adding two new sources in periodic fashion makes repel mroe periodic
   for _, src in ipairs(sources) do
     table.insert(res, src)
     table.insert(res, src - 360)
@@ -1406,7 +1444,7 @@ H.converters.okhsl = function(x, from_space, opts) return H.oklch2okhsl(MiniColo
 
 H.infer_color_space = function(x)
   if type(x) == 'number' and 16 <= x and x <= 255 then return '8bit' end
-  if type(x) == 'string' and x:find('#%x%x%x%x%x') ~= nil then return 'hex' end
+  if type(x) == 'string' and x:find('^#%x%x%x%x%x%x$') ~= nil then return 'hex' end
 
   local err_msg = 'Can not infer color space of ' .. vim.inspect(x)
   if type(x) ~= 'table' then H.error(err_msg) end
@@ -1544,10 +1582,10 @@ H.degree2rad = function(x) return (x % 360) * H.tau / 360 end
 
 -- Functions for RGB channel correction. Assumes input in [0; 1] range
 -- https://bottosson.github.io/posts/colorwrong/#what-can-we-do%3F
-H.correct_channel = function(x) return 0.04045 < x and H.pow((x + 0.055) / 1.055, 2.4) or (x / 12.92) end
+H.correct_channel = function(x) return 0.04045 < x and math.pow((x + 0.055) / 1.055, 2.4) or (x / 12.92) end
 
 H.correct_channel_inv =
-  function(x) return (0.0031308 >= x) and (12.92 * x) or (1.055 * H.pow(x, 0.416666667) - 0.055) end
+  function(x) return (0.0031308 >= x) and (12.92 * x) or (1.055 * math.pow(x, 0.416666667) - 0.055) end
 
 -- Functions for lightness correction
 -- https://bottosson.github.io/posts/colorpicker/#intermission---a-new-lightness-estimate-for-oklab
@@ -1669,7 +1707,7 @@ H.apply_interactive_buffer = function(buf_id, init_cs)
   MiniColors._interactive_cs = vim.deepcopy(init_cs)
 
   -- Create initial script lines exposing color scheme and its methods
-  local lines = { 'local self = MiniColors._interactive_cs' }
+  local lines = { '-- Source code for interactive bufer', 'local self = MiniColors._interactive_cs' }
   for key, val in pairs(MiniColors._interactive_cs) do
     if vim.is_callable(val) then
       local l = string.format('local %s = function(...) self = self:%s(...) end', key, key)
@@ -1701,9 +1739,7 @@ end
 
 H.clip = function(x, from, to) return math.min(math.max(x, from), to) end
 
-H.pow = function(x, p) return (x < 0 and -1 or 1) * math.pow(math.abs(x), p) end
-
-H.cuberoot = function(x) return H.pow(x, 0.333333) end
+H.cuberoot = function(x) return math.pow(x, 0.333333) end
 
 H.dist = function(x, y) return math.abs(x - y) end
 
