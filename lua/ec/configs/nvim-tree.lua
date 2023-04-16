@@ -39,7 +39,7 @@ local nvim_tree_go_out = function()
   local node = get_node()
 
   if node.name == '..' then
-    require('nvim-tree.lib').dir_up()
+    require('nvim-tree.api').tree.change_root('..')
     return
   end
 
