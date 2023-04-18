@@ -73,6 +73,9 @@ vim.schedule(function()
 
   require('mini.bufremove').setup()
 
+  -- Don't really need it on daily basis
+  -- require('mini.colors').setup()
+
   require('mini.comment').setup()
 
   require('mini.completion').setup({
