@@ -1,6 +1,10 @@
 -- TODO:
 --
--- - Recheck correctness of hue generation.
+-- - Decide whether to use {30, 90, ...} or {0, 60, 120, ...} grid as reference
+--   (and for both gray background and foregraound). Or some other choice.
+--
+-- Documentation:
+-- - Note about **boled** choices and how to override them.
 
 --- *mini.base2* Generate color scheme based on background and foreground
 --- *MiniBase2*
@@ -114,9 +118,9 @@ MiniBase2.config = {
   -- Saturation level. One of 'low', 'medium', 'high'.
   saturation = 'medium',
 
-  -- Accent color.
-  -- One of 'red', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gray'.
-  accent = 'gray',
+  -- Accent color. One of:
+  -- 'bg', 'fg', 'red', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gray'
+  accent = 'bg',
 
   -- Plugin integrations. Use `default = false` to disable all integrations.
   -- Also can be set per plugin (see |MiniBase16.config|).
@@ -128,9 +132,8 @@ MiniBase2.make_palette = function(opts)
   opts = vim.tbl_deep_extend('force', MiniBase2.config, opts or {})
   local bg = H.validate_hex(opts.background)
   local fg = H.validate_hex(opts.foreground)
-  local saturation = H.validate_one_of(opts.saturation, { 'low', 'medium', 'high' }, 'saturation')
-  local accent =
-    H.validate_one_of(opts.accent, { 'red', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gray' }, 'accent')
+  local saturation = H.validate_one_of(opts.saturation, H.saturation_values, 'saturation')
+  local accent = H.validate_one_of(opts.accent, H.accent_values, 'accent')
 
   local bg_lch, fg_lch = H.hex2oklch(bg), H.hex2oklch(fg)
   local bg_l, fg_l = bg_lch.l, fg_lch.l
@@ -143,39 +146,53 @@ MiniBase2.make_palette = function(opts)
   local bg_l_edge = is_dark and 0 or 100
   local fg_l_edge = is_dark and 100 or 0
 
-  -- Hues. Correct them to be distant from both bg and fg hues.
+  -- Hues. Correct them so that shifted reference 60 degree grid is distant
+  -- from both bg and fg hues. Distance between two sets is assumed as minimum
+  -- distance between all pairs of points.
   local bg_h, fg_h = bg_lch.h, fg_lch.h
+  local period, half_period = 60, 30
   local d
-  if bg_h == nil and fg_h == nil then d = 0 end
-  if bg_h ~= nil and fg_h == nil then d = ((bg_h - 30) % 60 + 30) % 60 end
-  if bg_h == nil and fg_h ~= nil then d = ((fg_h - 30) % 60 + 30) % 60 end
+  if bg_h == nil and fg_h == nil then d = -30 end
+  if bg_h ~= nil and fg_h == nil then d = ((bg_h - 30) % period + half_period) % period end
+  if bg_h == nil and fg_h ~= nil then d = ((fg_h - 30) % period + half_period) % period end
   if bg_h ~= nil and fg_h ~= nil then
     -- Subtract 30 because reference grid starts at 30 (red)
-    local ref_bg, ref_fg = (bg_h - 30) % 60, (fg_h - 30) % 60
-    -- Pick the point most distant from both on a circle with period 60
+    local ref_bg, ref_fg = (bg_h - 30) % period, (fg_h - 30) % period
     local mid = 0.5 * (ref_bg + ref_fg)
-    local mid_alt = (mid + 30) % 60
+    local mid_alt = (mid + half_period) % period
 
-    d = H.dist_circle(mid, ref_bg) < H.dist_circle(mid_alt, ref_bg) and mid_alt or mid
+    d = H.dist_period(mid, ref_bg, period) < H.dist_period(mid_alt, ref_bg, period) and mid_alt or mid
   end
 
-  local hues = { red = 30 + d, yellow = 90 + d, green = 150 + d, cyan = 210 + d, blue = 270 + d, magenta = 330 + d }
+  -- Normalize to [-30, 30] to avoid big shifts in actual hues:
+  -- [0, 30) -> [0, 30]; [30, 60) -> [-30, 0)
+  -- d = d - math.floor(d / half_period) * period
+
+  --stylua: ignore
+  local hues = {
+    bg = bg_h, fg = fg_h,
+    red = 30 + d, yellow = 90 + d, green = 150 + d, cyan = 210 + d, blue = 270 + d, magenta = 330 + d,
+  }
 
   -- Configurable chroma level
   local chroma = ({ low = 5, medium = 10, high = 15 })[saturation]
 
   -- Compute result
-  local golden_point = function(x, y) return 0.618 * x + 0.382 * y end
-
   --stylua: ignore
-  return {
-    bg_edge    = H.oklch2hex({ l = golden_point(bg_l_edge, bg_l), c = bg_lch.c, h = bg_lch.h }),
+  local res = {
+    -- `_out`/`_mid` are third of the way towards reference (edge/center)
+    -- `_out2`/`_mid2` are two thirds
+    bg_out2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * bg_l_edge, c = bg_lch.c, h = bg_lch.h }),
+    bg_out     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * bg_l_edge, c = bg_lch.c, h = bg_lch.h }),
     bg         = bg,
-    bg_center  = H.oklch2hex({ l = golden_point(50, bg_l),        c = bg_lch.c, h = bg_lch.h }),
+    bg_mid     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * 50,        c = bg_lch.c, h = bg_lch.h }),
+    bg_mid2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * 50,        c = bg_lch.c, h = bg_lch.h }),
 
-    fg_edge    = H.oklch2hex({ l = golden_point(fg_l_edge, fg_l), c = fg_lch.c, h = fg_lch.h }),
+    fg_out2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * fg_l_edge, c = fg_lch.c, h = fg_lch.h }),
+    fg_out     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * fg_l_edge, c = fg_lch.c, h = fg_lch.h }),
     fg         = fg,
-    fg_center  = H.oklch2hex({ l = golden_point(50, fg_l),        c = fg_lch.c, h = fg_lch.h }),
+    fg_mid     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * 50,        c = fg_lch.c, h = fg_lch.h }),
+    fg_mid2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * 50,        c = fg_lch.c, h = fg_lch.h }),
 
     gray       = H.oklch2hex({ l = fg_l, c = 0 }),
     gray_bg    = H.oklch2hex({ l = bg_l, c = 0 }),
@@ -197,10 +214,41 @@ MiniBase2.make_palette = function(opts)
 
     magenta    = H.oklch2hex({ l = fg_l, c = chroma, h = hues.magenta }),
     magenta_bg = H.oklch2hex({ l = bg_l, c = chroma, h = hues.magenta }),
-
-    accent     = H.oklch2hex({ l = fg_l, c = chroma, h = hues[accent] }),
-    accent_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues[accent] }),
   }
+
+  -- Manage 'bg' and 'fg' accents separately to ensure that corresponding
+  -- background and foreground colors match exactly
+  --stylua: ignore
+  if accent == 'bg' then
+    res.accent     = H.oklch2hex({ l = fg_l, c = chroma, h = bg_h })
+    res.accent_bg  = bg
+  elseif accent == 'fg' then
+    res.accent     = fg
+    res.accent_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = fg_h })
+  else
+    res.accent     = H.oklch2hex({ l = fg_l, c = chroma, h = hues[accent] })
+    res.accent_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues[accent] })
+  end
+
+  -- Add temporary colors for experiments
+  res.base00 = '#0a2a2a'
+  res.base01 = '#324747'
+  res.base02 = '#556868'
+  res.base03 = '#788a8a'
+  res.base04 = '#bbbbbb'
+  res.base05 = '#d0d0d0'
+  res.base06 = '#e6e6e6'
+  res.base07 = '#fcfcfc'
+  res.base08 = '#ebcd91'
+  res.base09 = '#9f8340'
+  res.base0A = '#209870'
+  res.base0B = '#82e3ba'
+  res.base0C = '#bb6d9b'
+  res.base0D = '#a9d4ff'
+  res.base0E = '#ffb9e5'
+  res.base0F = '#598ab9'
+
+  return res
 end
 
 -- Helper data ================================================================
@@ -209,6 +257,10 @@ H.default_config = MiniBase2.config
 
 -- Color conversion constants
 H.tau = 2 * math.pi
+
+H.saturation_values = { 'low', 'medium', 'high' }
+
+H.accent_values = { 'bg', 'fg', 'red', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gray' }
 
 -- Cusps for Oklch color space. See 'mini.colors' for more details.
 --stylua: ignore start
@@ -275,6 +327,8 @@ H.setup_config = function(config)
   vim.validate({
     background = { config.background, H.is_hex },
     foreground = { config.foreground, H.is_hex },
+    saturation = { config.saturation, H.is_saturation },
+    accent = { config.accent, H.is_accent },
     plugins = { config.plugins, 'table' },
   })
 
@@ -287,9 +341,27 @@ H.apply_config = function(config)
   H.apply_colorscheme(config)
 end
 
+H.is_hex = function(x)
+  local res = type(x) == 'string' and x:find('^#%x%x%x%x%x%x$') ~= nil
+  if res then return true, nil end
+  return false, 'Color string in the form "#rrggbb"'
+end
+
+H.is_saturation = function(x)
+  local res = vim.tbl_contains(H.saturation_values, x)
+  if res then return true, nil end
+  return false, 'One of ' .. table.concat(vim.tbl_map(vim.inspect, H.saturation_values), ', ')
+end
+
+H.is_accent = function(x)
+  local res = vim.tbl_contains(H.accent_values, x)
+  if res then return true, nil end
+  return false, 'One of ' .. table.concat(vim.tbl_map(vim.inspect, H.accent_values), ', ')
+end
+
 -- Palette --------------------------------------------------------------------
 H.validate_hex = function(x, name)
-  if type(x) == 'string' and x:find('^#%x%x%x%x%x%x$') ~= nil then return x end
+  if H.is_hex(x) then return x end
   local msg = string.format('`%s` should be hex color string in the form "#rrggbb", not %s.', name, vim.inspect(x))
   H.error(msg)
 end
@@ -315,14 +387,8 @@ H.apply_colorscheme = function(config)
   -- might cause some issues with `syntax on`.
   vim.g.colors_name = nil
 
-  local p = H.make_palette(config)
+  local p = MiniBase2.make_palette(config)
   local hi = function(name, data) vim.api.nvim_set_hl(0, name, data) end
-  local has_integration = function(name)
-    local entry = config.plugins[name]
-    if entry == nil then return config.plugins.default end
-    return entry
-  end
-
   local has_integration = function(name)
     local entry = config.plugins[name]
     if entry == nil then return config.plugins.default end
@@ -336,160 +402,160 @@ H.apply_colorscheme = function(config)
   -- - Align by commas.
 
   -- Builtin highlighting groups
-  hi('ColorColumn',    {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
-  hi('Conceal',        {fg=p.base0D, bg=p.base00, attr=nil,         sp=nil})
-  hi('CurSearch',      {fg=p.base01, bg=p.base09, attr=nil,         sp=nil})
-  hi('Cursor',         {fg=p.base00, bg=p.base05, attr=nil,         sp=nil})
-  hi('CursorColumn',   {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
-  hi('CursorIM',       {fg=p.base00, bg=p.base05, attr=nil,         sp=nil})
-  hi('CursorLine',     {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
-  hi('CursorLineFold', {fg=p.base0C, bg=p.base01, attr=nil,         sp=nil})
-  hi('CursorLineNr',   {fg=p.base04, bg=p.base01, attr=nil,         sp=nil})
-  hi('CursorLineSign', {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('DiffAdd',        {fg=p.base0B, bg=p.base01, attr=nil,         sp=nil})
-  hi('DiffChange',     {fg=p.base0E, bg=p.base01, attr=nil,         sp=nil})
-  hi('DiffDelete',     {fg=p.base08, bg=p.base01, attr=nil,         sp=nil})
-  hi('DiffText',       {fg=p.base0D, bg=p.base01, attr=nil,         sp=nil})
-  hi('Directory',      {fg=p.base0D, bg=nil,      attr=nil,         sp=nil})
-  hi('EndOfBuffer',    {fg=p.base03, bg=nil,      attr=nil,         sp=nil})
-  hi('ErrorMsg',       {fg=p.base08, bg=p.base00, attr=nil,         sp=nil})
-  hi('FoldColumn',     {fg=p.base0C, bg=p.base01, attr=nil,         sp=nil})
-  hi('Folded',         {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('IncSearch',      {fg=p.base01, bg=p.base09, attr=nil,         sp=nil})
-  hi('lCursor',        {fg=p.base00, bg=p.base05, attr=nil,         sp=nil})
-  hi('LineNr',         {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('LineNrAbove',    {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('LineNrBelow',    {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('MatchParen',     {fg=nil,      bg=p.base02, attr=nil,         sp=nil})
-  hi('ModeMsg',        {fg=p.base0B, bg=nil,      attr=nil,         sp=nil})
-  hi('MoreMsg',        {fg=p.base0B, bg=nil,      attr=nil,         sp=nil})
-  hi('MsgArea',        {fg=p.base05, bg=p.base00, attr=nil,         sp=nil})
-  hi('MsgSeparator',   {fg=p.base04, bg=p.base02, attr=nil,         sp=nil})
-  hi('NonText',        {fg=p.base03, bg=nil,      attr=nil,         sp=nil})
-  hi('Normal',         {fg=p.base05, bg=p.base00, attr=nil,         sp=nil})
-  hi('NormalFloat',    {fg=p.base05, bg=p.base01, attr=nil,         sp=nil})
-  hi('NormalNC',       {fg=p.base05, bg=p.base00, attr=nil,         sp=nil})
-  hi('PMenu',          {fg=p.base05, bg=p.base01, attr=nil,         sp=nil})
-  hi('PMenuSbar',      {fg=nil,      bg=p.base02, attr=nil,         sp=nil})
-  hi('PMenuSel',       {fg=p.base01, bg=p.base05, attr=nil,         sp=nil})
-  hi('PMenuThumb',     {fg=nil,      bg=p.base07, attr=nil,         sp=nil})
-  hi('Question',       {fg=p.base0D, bg=nil,      attr=nil,         sp=nil})
-  hi('QuickFixLine',   {fg=nil,      bg=p.base01, attr=nil,         sp=nil})
-  hi('Search',         {fg=p.base01, bg=p.base0A, attr=nil,         sp=nil})
-  hi('SignColumn',     {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('SpecialKey',     {fg=p.base03, bg=nil,      attr=nil,         sp=nil})
-  hi('SpellBad',       {fg=nil,      bg=nil,      attr='undercurl', sp=p.base08})
-  hi('SpellCap',       {fg=nil,      bg=nil,      attr='undercurl', sp=p.base0D})
-  hi('SpellLocal',     {fg=nil,      bg=nil,      attr='undercurl', sp=p.base0C})
-  hi('SpellRare',      {fg=nil,      bg=nil,      attr='undercurl', sp=p.base0E})
-  hi('StatusLine',     {fg=p.base04, bg=p.base02, attr=nil,         sp=nil})
-  hi('StatusLineNC',   {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('Substitute',     {fg=p.base01, bg=p.base0A, attr=nil,         sp=nil})
-  hi('TabLine',        {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('TabLineFill',    {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('TabLineSel',     {fg=p.base0B, bg=p.base01, attr=nil,         sp=nil})
-  hi('TermCursor',     {fg=nil,      bg=nil,      attr='reverse',   sp=nil})
-  hi('TermCursorNC',   {fg=nil,      bg=nil,      attr='reverse',   sp=nil})
-  hi('Title',          {fg=p.base0D, bg=nil,      attr=nil,         sp=nil})
-  hi('VertSplit',      {fg=p.base02, bg=p.base02, attr=nil,         sp=nil})
-  hi('Visual',         {fg=nil,      bg=p.base02, attr=nil,         sp=nil})
-  hi('VisualNOS',      {fg=p.base08, bg=nil,      attr=nil,         sp=nil})
-  hi('WarningMsg',     {fg=p.base08, bg=nil,      attr=nil,         sp=nil})
-  hi('Whitespace',     {fg=p.base03, bg=nil,      attr=nil,         sp=nil})
-  hi('WildMenu',       {fg=p.base08, bg=p.base0A, attr=nil,         sp=nil})
-  hi('WinBar',         {fg=p.base04, bg=p.base02, attr=nil,         sp=nil})
-  hi('WinBarNC',       {fg=p.base03, bg=p.base01, attr=nil,         sp=nil})
-  hi('WinSeparator',   {fg=p.base02, bg=p.base02, attr=nil,         sp=nil})
+  hi('ColorColumn',    {fg=nil,      bg=p.accent_bg})
+  hi('Conceal',        {fg=p.base0D, bg=p.bg})
+  hi('CurSearch',      {fg=p.bg, bg=p.yellow})
+  hi('Cursor',         {fg=p.bg, bg=p.fg})
+  hi('CursorColumn',   {fg=nil,      bg=p.bg_mid})
+  hi('CursorIM',       {fg=p.bg, bg=p.fg})
+  hi('CursorLine',     {fg=nil,      bg=p.bg_mid})
+  hi('CursorLineFold', {fg=p.accent, bg=nil})
+  hi('CursorLineNr',   {fg=p.accent, bg=nil, bold=true})
+  hi('CursorLineSign', {fg=p.accent, bg=nil})
+  hi('DiffAdd',        {fg=nil, bg=p.green_bg})
+  hi('DiffChange',     {fg=nil, bg=p.yellow_bg})
+  hi('DiffDelete',     {fg=nil, bg=p.red_bg})
+  hi('DiffText',       {fg=nil, bg=p.bg_mid2})
+  hi('Directory',      {fg=p.base0D, bg=nil,    })
+  hi('EndOfBuffer',    {fg=p.bg_mid2, bg=nil,    })
+  hi('ErrorMsg',       {fg=p.red, bg=p.bg})
+  hi('FloatBorder',    {fg=p.accent, bg=p.bg_out})
+  hi('FoldColumn',     {fg=p.base0C, bg=p.base01})
+  hi('Folded',         {fg=p.base03, bg=p.base01})
+  hi('IncSearch',      {fg=p.bg, bg=p.yellow})
+  hi('lCursor',        {fg=p.bg,     bg=p.fg})
+  hi('LineNr',         {fg=p.bg_mid2, bg=nil})
+  hi('LineNrAbove',    {fg=p.bg_mid2, bg=nil})
+  hi('LineNrBelow',    {fg=p.bg_mid2, bg=nil})
+  hi('MatchParen',     {fg=p.accent,      bg=nil})
+  hi('ModeMsg',        {fg=p.base0B, bg=nil,    })
+  hi('MoreMsg',        {fg=p.base0B, bg=nil,    })
+  hi('MsgArea',        {fg=p.fg, bg=p.bg})
+  hi('MsgSeparator',   {fg=p.base04, bg=p.base02})
+  hi('NonText',        {fg=p.base03, bg=nil,    })
+  hi('Normal',         {fg=p.fg, bg=p.bg})
+  hi('NormalFloat',    {fg=p.fg, bg=p.bg_out})
+  hi('NormalNC',       {link='Normal'})
+  hi('PMenu',          {fg=p.fg, bg=p.bg_mid})
+  hi('PMenuSbar',      {link='PMenu'})
+  hi('PMenuSel',       {fg=p.bg_mid, bg=p.fg, blend=0})
+  hi('PMenuThumb',     {fg=nil,      bg=p.bg_mid2})
+  hi('Question',       {fg=p.base0D, bg=nil,    })
+  hi('QuickFixLine',   {fg=nil,      bg=p.base01})
+  hi('Search',         {fg=p.bg, bg=p.green})
+  hi('SignColumn',     {fg=p.bg_mid2, bg=nil})
+  hi('SpecialKey',     {fg=p.base03, bg=nil,    })
+  hi('SpellBad',       {fg=nil,      bg=nil,      sp=p.red, undercurl=true})
+  hi('SpellCap',       {fg=nil,      bg=nil,      sp=p.green, undercurl=true})
+  hi('SpellLocal',     {fg=nil,      bg=nil,      sp=p.yellow, undercurl=true})
+  hi('SpellRare',      {fg=nil,      bg=nil,      sp=p.cyan, undercurl=true})
+  hi('StatusLine',     {fg=p.fg_mid, bg=p.accent_bg})
+  hi('StatusLineNC',   {fg=p.fg_mid, bg=p.bg_out})
+  hi('Substitute',     {fg=p.base01, bg=p.base0A})
+  hi('TabLine',        {fg=p.fg_mid, bg=p.bg_out})
+  hi('TabLineFill',    {link='Tabline'})
+  hi('TabLineSel',     {fg=p.accent, bg=p.bg_out})
+  hi('TermCursor',     {fg=nil,      bg=nil,      reverse=true})
+  hi('TermCursorNC',   {fg=nil,      bg=nil,      reverse=true})
+  hi('Title',          {fg=p.accent, bg=nil,    })
+  hi('VertSplit',      {fg=p.accent, bg=nil})
+  hi('Visual',         {fg=nil,      bg=p.bg_mid2})
+  hi('VisualNOS',      {fg=nil, bg=p.bg_mid})
+  hi('WarningMsg',     {fg=p.yellow, bg=nil,    })
+  hi('Whitespace',     {fg=p.base03, bg=nil,    })
+  hi('WildMenu',       {fg=p.base08, bg=p.base0A})
+  hi('WinBar',         {fg=p.base04, bg=p.base02})
+  hi('WinBarNC',       {fg=p.base03, bg=p.base01})
+  hi('WinSeparator',   {fg=p.accent, bg=nil})
 
   -- Standard syntax (affects treesitter)
-  hi('Boolean',        {fg=p.base09, bg=nil,      attr=nil, sp=nil})
-  hi('Character',      {fg=p.base08, bg=nil,      attr=nil, sp=nil})
-  hi('Comment',        {fg=p.base03, bg=nil,      attr=nil, sp=nil})
-  hi('Conditional',    {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
-  hi('Constant',       {fg=p.base09, bg=nil,      attr=nil, sp=nil})
-  hi('Debug',          {fg=p.base08, bg=nil,      attr=nil, sp=nil})
-  hi('Define',         {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
-  hi('Delimiter',      {fg=p.base0F, bg=nil,      attr=nil, sp=nil})
-  hi('Error',          {fg=p.base00, bg=p.base08, attr=nil, sp=nil})
-  hi('Exception',      {fg=p.base08, bg=nil,      attr=nil, sp=nil})
-  hi('Float',          {fg=p.base09, bg=nil,      attr=nil, sp=nil})
-  hi('Function',       {fg=p.base0D, bg=nil,      attr=nil, sp=nil})
-  hi('Identifier',     {fg=p.base08, bg=nil,      attr=nil, sp=nil})
-  hi('Ignore',         {fg=p.base0C, bg=nil,      attr=nil, sp=nil})
-  hi('Include',        {fg=p.base0D, bg=nil,      attr=nil, sp=nil})
-  hi('Keyword',        {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
-  hi('Label',          {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
-  hi('Macro',          {fg=p.base08, bg=nil,      attr=nil, sp=nil})
-  hi('Number',         {fg=p.base09, bg=nil,      attr=nil, sp=nil})
-  hi('Operator',       {fg=p.base05, bg=nil,      attr=nil, sp=nil})
-  hi('PreCondit',      {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
-  hi('PreProc',        {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
-  hi('Repeat',         {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
-  hi('Special',        {fg=p.base0C, bg=nil,      attr=nil, sp=nil})
-  hi('SpecialChar',    {fg=p.base0F, bg=nil,      attr=nil, sp=nil})
-  hi('SpecialComment', {fg=p.base0C, bg=nil,      attr=nil, sp=nil})
-  hi('Statement',      {fg=p.base08, bg=nil,      attr=nil, sp=nil})
-  hi('StorageClass',   {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
-  hi('String',         {fg=p.base0B, bg=nil,      attr=nil, sp=nil})
-  hi('Structure',      {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
-  hi('Tag',            {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
-  hi('Todo',           {fg=p.base0A, bg=p.base01, attr=nil, sp=nil})
-  hi('Type',           {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
-  hi('Typedef',        {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
+  hi('Boolean',        {link='Constant'})
+  hi('Character',      {link='Constant'})
+  hi('Comment',        {fg=p.fg_mid2, bg=nil,    })
+  hi('Conditional',    {link='Statement'})
+  hi('Constant',       {fg=p.magenta, bg=nil,    })
+  hi('Debug',          {link='Special'})
+  hi('Define',         {link='PreProc'})
+  hi('Delimiter',      {link='Special'})
+  hi('Error',          {fg=nil, bg=p.red_bg})
+  hi('Exception',      {link='Statement'})
+  hi('Float',          {link='Constant'})
+  hi('Function',       {fg=nil, bg=nil, bold=true})
+  hi('Identifier',     {fg=p.yellow, bg=nil,    })
+  hi('Ignore',         {fg=nil, bg=nil,    })
+  hi('Include',        {link='PreProc'})
+  hi('Keyword',        {link='Statement'})
+  hi('Label',          {link='Statement'})
+  hi('Macro',          {link='PreProc'})
+  hi('Number',         {link='Constant'})
+  hi('Operator',       {link='Statement'})
+  hi('PreCondit',      {link='PreProc'})
+  hi('PreProc',        {fg=p.blue, bg=nil})
+  hi('Repeat',         {link='Statement'})
+  hi('Special',        {fg=p.blue, bg=nil,    })
+  hi('SpecialChar',    {link='Special'})
+  hi('SpecialComment', {link='Special'})
+  hi('Statement',      {fg=p.cyan, bg=nil})
+  hi('StorageClass',   {link='Type'})
+  hi('String',         {fg=p.green, bg=nil,    })
+  hi('Structure',      {link='Type'})
+  hi('Tag',            {link='Special'})
+  hi('Todo',           {fg=p.accent, bg=p.accent_bg})
+  hi('Type',           {fg=p.fg, bg=nil,    })
+  hi('Typedef',        {link='Type'})
 
   -- Other community standard
-  hi('Bold',       {fg=nil,      bg=nil, attr='bold',      sp=nil})
-  hi('Italic',     {fg=nil,      bg=nil, attr='italic',    sp=nil})
-  hi('TooLong',    {fg=p.base08, bg=nil, attr=nil,         sp=nil})
-  hi('Underlined', {fg=nil,      bg=nil, attr='underline', sp=nil})
+  hi('Bold',       {fg=nil,      bg=nil, bold=true})
+  hi('Italic',     {fg=nil,      bg=nil, italic=true})
+  hi('Underlined', {fg=nil,      bg=nil, underline=true})
 
   -- Git diff
-  hi('DiffAdded',   {fg=p.base0B, bg=p.base00, attr=nil, sp=nil})
-  hi('DiffFile',    {fg=p.base08, bg=p.base00, attr=nil, sp=nil})
-  hi('DiffLine',    {fg=p.base0D, bg=p.base00, attr=nil, sp=nil})
+  hi('DiffAdded',   {link='DiffAdd'})
+  hi('DiffFile',    {fg=nil, bg=p.yellow_bg})
+  hi('DiffLine',    {fg=nil, bg=p.blue_bg})
   hi('DiffNewFile', {link='DiffAdded'})
   hi('DiffRemoved', {link='DiffFile'})
 
   -- Git commit
-  hi('gitcommitBranch',        {fg=p.base09, bg=nil, attr='bold', sp=nil})
+  hi('gitcommitBranch',        {fg=p.base09, bg=nil, bold=true})
   hi('gitcommitComment',       {link='Comment'})
   hi('gitcommitDiscarded',     {link='Comment'})
-  hi('gitcommitDiscardedFile', {fg=p.base08, bg=nil, attr='bold', sp=nil})
-  hi('gitcommitDiscardedType', {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
-  hi('gitcommitHeader',        {fg=p.base0E, bg=nil, attr=nil,    sp=nil})
-  hi('gitcommitOverflow',      {fg=p.base08, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitDiscardedFile', {fg=p.base08, bg=nil, bold=true})
+  hi('gitcommitDiscardedType', {fg=p.base0D, bg=nil})
+  hi('gitcommitHeader',        {fg=p.base0E, bg=nil})
+  hi('gitcommitOverflow',      {fg=p.base08, bg=nil})
   hi('gitcommitSelected',      {link='Comment'})
-  hi('gitcommitSelectedFile',  {fg=p.base0B, bg=nil, attr='bold', sp=nil})
+  hi('gitcommitSelectedFile',  {fg=p.base0B, bg=nil, bold=true})
   hi('gitcommitSelectedType',  {link='gitcommitDiscardedType'})
-  hi('gitcommitSummary',       {fg=p.base0B, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitSummary',       {fg=p.base0B, bg=nil})
   hi('gitcommitUnmergedFile',  {link='gitcommitDiscardedFile'})
   hi('gitcommitUnmergedType',  {link='gitcommitDiscardedType'})
   hi('gitcommitUntracked',     {link='Comment'})
-  hi('gitcommitUntrackedFile', {fg=p.base0A, bg=nil, attr=nil,    sp=nil})
+  hi('gitcommitUntrackedFile', {fg=p.base0A, bg=nil})
 
   -- Built-in diagnostic
-  hi('DiagnosticError', {fg=p.base08, bg=nil, attr=nil, sp=nil})
-  hi('DiagnosticHint',  {fg=p.base0D, bg=nil, attr=nil, sp=nil})
-  hi('DiagnosticInfo',  {fg=p.base0C, bg=nil, attr=nil, sp=nil})
-  hi('DiagnosticWarn',  {fg=p.base0E, bg=nil, attr=nil, sp=nil})
+  hi('DiagnosticError', {fg=p.red, bg=nil})
+  hi('DiagnosticHint',  {fg=p.cyan, bg=nil})
+  hi('DiagnosticInfo',  {fg=p.green, bg=nil})
+  hi('DiagnosticWarn',  {fg=p.yellow, bg=nil})
 
-  hi('DiagnosticFloatingError', {fg=p.base08, bg=p.base01, attr=nil, sp=nil})
-  hi('DiagnosticFloatingHint',  {fg=p.base0D, bg=p.base01, attr=nil, sp=nil})
-  hi('DiagnosticFloatingInfo',  {fg=p.base0C, bg=p.base01, attr=nil, sp=nil})
-  hi('DiagnosticFloatingWarn',  {fg=p.base0E, bg=p.base01, attr=nil, sp=nil})
+  hi('DiagnosticFloatingError', {fg=p.red, bg=p.bg_mid})
+  hi('DiagnosticFloatingHint',  {fg=p.cyan, bg=p.bg_mid})
+  hi('DiagnosticFloatingInfo',  {fg=p.green, bg=p.bg_mid})
+  hi('DiagnosticFloatingWarn',  {fg=p.yellow, bg=p.bg_mid})
 
-  hi('DiagnosticSignError', {link='DiagnosticFloatingError'})
-  hi('DiagnosticSignHint',  {link='DiagnosticFloatingHint'})
-  hi('DiagnosticSignInfo',  {link='DiagnosticFloatingInfo'})
-  hi('DiagnosticSignWarn',  {link='DiagnosticFloatingWarn'})
+  hi('DiagnosticSignError', {link='DiagnosticError'})
+  hi('DiagnosticSignHint',  {link='DiagnosticHint'})
+  hi('DiagnosticSignInfo',  {link='DiagnosticInfo'})
+  hi('DiagnosticSignWarn',  {link='DiagnosticWarn'})
 
-  hi('DiagnosticUnderlineError', {fg=nil, bg=nil, attr='underline', sp=p.base08})
-  hi('DiagnosticUnderlineHint',  {fg=nil, bg=nil, attr='underline', sp=p.base0D})
-  hi('DiagnosticUnderlineInfo',  {fg=nil, bg=nil, attr='underline', sp=p.base0C})
-  hi('DiagnosticUnderlineWarn',  {fg=nil, bg=nil, attr='underline', sp=p.base0E})
+  hi('DiagnosticUnderlineError', {fg=nil, bg=nil, underline=true, sp=p.red})
+  hi('DiagnosticUnderlineHint',  {fg=nil, bg=nil, underline=true, sp=p.cyan})
+  hi('DiagnosticUnderlineInfo',  {fg=nil, bg=nil, underline=true, sp=p.green})
+  hi('DiagnosticUnderlineWarn',  {fg=nil, bg=nil, underline=true, sp=p.yellow})
 
   -- Built-in LSP
-  hi('LspReferenceText',  {fg=nil, bg=p.base02, attr=nil, sp=nil})
+  hi('LspReferenceText',  {fg=nil, bg=p.bg_mid2})
   hi('LspReferenceRead',  {link='LspReferenceText'})
   hi('LspReferenceWrite', {link='LspReferenceText'})
 
@@ -498,93 +564,105 @@ H.apply_colorscheme = function(config)
   hi('LspCodeLens',          {link='Comment'})
   hi('LspCodeLensSeparator', {link='Comment'})
 
+  -- Tree-sitter
+  if vim.fn.has('nvim-0.8') == 1 then
+    hi('@field', {fg=p.yellow, bg=nil})
+    hi('@variable', {fg=p.fg, bg=nil})
+  end
+
+  -- Semantic tokens
+  if vim.fn.has('nvim-0.9') == 1 then
+    hi('@lsp.type.property', {fg=p.yellow, bg=nil})
+    hi('@lsp.type.variable', {fg=p.fg, bg=nil})
+  end
+
   -- Plugins
   -- echasnovski/mini.nvim
   if has_integration('echasnovski/mini.nvim') then
-    hi('MiniAnimateCursor', {fg=nil, bg=nil, attr='reverse,nocombine', sp=nil})
+    hi('MiniAnimateCursor', {fg=nil, bg=nil, reverse=true, nocombine=true})
 
-    hi('MiniCompletionActiveParameter', {fg=nil, bg=p.base02, attr=nil, sp=nil})
+    hi('MiniCompletionActiveParameter', {fg=nil, bg=p.bg_mid2})
 
-    hi('MiniCursorword',        {fg=nil, bg=nil, attr='underline', sp=nil})
-    hi('MiniCursorwordCurrent', {fg=nil, bg=nil, attr='underline', sp=nil})
+    hi('MiniCursorword',        {fg=nil, bg=nil, underline=true})
+    hi('MiniCursorwordCurrent', {fg=nil, bg=nil, underline=true})
 
-    hi('MiniIndentscopeSymbol',    {fg=p.base0F, bg=nil, attr=nil, sp=nil})
-    hi('MiniIndentscopeSymbolOff', {fg=p.base08, bg=nil, attr=nil, sp=nil})
+    hi('MiniIndentscopeSymbol',    {fg=p.accent, bg=nil})
+    hi('MiniIndentscopeSymbolOff', {fg=p.red, bg=nil})
 
-    hi('MiniJump', {link='SpellRare'})
+    hi('MiniJump', {fg=nil, bg=nil, sp=p.accent, undercurl=true})
 
-    hi('MiniJump2dDim',        {link='Comment'})
-    hi('MiniJump2dSpot',       {fg=p.base07, bg=p.base01, attr='bold,nocombine', sp=nil})
-    hi('MiniJump2dSpotAhead',  {fg=p.base06, bg=p.base00, attr='nocombine',      sp=nil})
+    hi('MiniJump2dDim',        {fg=p.bg_mid2, bg=nil})
+    hi('MiniJump2dSpot',       {fg=p.fg_out2, bg=p.bg_out2, bold=true, nocombine=true})
+    hi('MiniJump2dSpotAhead',  {fg=p.fg_out, bg=p.bg_out, nocombine=true})
     hi('MiniJump2dSpotUnique', {link='MiniJump2dSpot'})
 
-    hi('MiniMapNormal',      {fg=p.base05, bg=p.base01, attr=nil, sp=nil})
-    hi('MiniMapSymbolCount', {fg=p.base0C, bg=nil,      attr=nil, sp=nil})
-    hi('MiniMapSymbolLine',  {fg=p.base0D, bg=nil,      attr=nil, sp=nil})
-    hi('MiniMapSymbolView',  {fg=p.base0F, bg=nil,      attr=nil, sp=nil})
+    hi('MiniMapNormal',      {fg=p.fg_mid2, bg=p.bg_out})
+    hi('MiniMapSymbolCount', {fg=p.gray, bg=nil})
+    hi('MiniMapSymbolLine',  {fg=p.accent, bg=nil})
+    hi('MiniMapSymbolView',  {fg=p.accent, bg=nil})
 
-    hi('MiniStarterCurrent',    {fg=nil,      bg=nil, attr=nil,    sp=nil})
-    hi('MiniStarterFooter',     {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
-    hi('MiniStarterHeader',     {fg=p.base0D, bg=nil, attr=nil,    sp=nil})
+    hi('MiniStarterCurrent',    {fg=nil,      bg=nil})
+    hi('MiniStarterFooter',     {link='Comment'})
+    hi('MiniStarterHeader',     {fg=p.accent, bg=nil, bold=true})
     hi('MiniStarterInactive',   {link='Comment'})
-    hi('MiniStarterItem',       {fg=p.base05, bg=nil, attr=nil,    sp=nil})
-    hi('MiniStarterItemBullet', {fg=p.base0F, bg=nil, attr=nil,    sp=nil})
-    hi('MiniStarterItemPrefix', {fg=p.base08, bg=nil, attr='bold', sp=nil})
-    hi('MiniStarterSection',    {fg=p.base0F, bg=nil, attr=nil,    sp=nil})
-    hi('MiniStarterQuery',      {fg=p.base0B, bg=nil, attr='bold', sp=nil})
+    hi('MiniStarterItem',       {fg=nil, bg=nil})
+    hi('MiniStarterItemBullet', {fg=p.gray, bg=nil})
+    hi('MiniStarterItemPrefix', {fg=p.yellow, bg=nil, bold=true})
+    hi('MiniStarterSection',    {fg=p.magenta, bg=nil})
+    hi('MiniStarterQuery',      {fg=p.green, bg=nil, bold=true})
 
-    hi('MiniStatuslineDevinfo',     {fg=p.base04, bg=p.base02, attr=nil,    sp=nil})
+    hi('MiniStatuslineDevinfo',     {fg=p.fg_mid, bg=p.bg_mid})
     hi('MiniStatuslineFileinfo',    {link='MiniStatuslineDevinfo'})
-    hi('MiniStatuslineFilename',    {fg=p.base03, bg=p.base01, attr=nil,    sp=nil})
+    hi('MiniStatuslineFilename',    {fg=p.fg_mid, bg=p.accent_bg})
     hi('MiniStatuslineInactive',    {link='MiniStatuslineFilename'})
-    hi('MiniStatuslineModeCommand', {fg=p.base00, bg=p.base08, attr='bold', sp=nil})
-    hi('MiniStatuslineModeInsert',  {fg=p.base00, bg=p.base0D, attr='bold', sp=nil})
-    hi('MiniStatuslineModeNormal',  {fg=p.base00, bg=p.base05, attr='bold', sp=nil})
-    hi('MiniStatuslineModeOther',   {fg=p.base00, bg=p.base03, attr='bold', sp=nil})
-    hi('MiniStatuslineModeReplace', {fg=p.base00, bg=p.base0E, attr='bold', sp=nil})
-    hi('MiniStatuslineModeVisual',  {fg=p.base00, bg=p.base0B, attr='bold', sp=nil})
+    hi('MiniStatuslineModeCommand', {fg=p.bg, bg=p.yellow, bold=true})
+    hi('MiniStatuslineModeInsert',  {fg=p.bg, bg=p.cyan, bold=true})
+    hi('MiniStatuslineModeNormal',  {fg=p.bg, bg=p.fg,     bold=true})
+    hi('MiniStatuslineModeOther',   {fg=p.bg, bg=p.magenta, bold=true})
+    hi('MiniStatuslineModeReplace', {fg=p.bg, bg=p.red, bold=true})
+    hi('MiniStatuslineModeVisual',  {fg=p.bg, bg=p.green, bold=true})
 
     hi('MiniSurround', {link='IncSearch'})
 
-    hi('MiniTablineCurrent',         {fg=p.base05, bg=p.base02, attr='bold', sp=nil})
-    hi('MiniTablineFill',            {fg=nil,      bg=nil,      attr=nil,    sp=nil})
-    hi('MiniTablineHidden',          {fg=p.base04, bg=p.base01, attr=nil,    sp=nil})
-    hi('MiniTablineModifiedCurrent', {fg=p.base02, bg=p.base05, attr='bold', sp=nil})
-    hi('MiniTablineModifiedHidden',  {fg=p.base01, bg=p.base04, attr=nil,    sp=nil})
-    hi('MiniTablineModifiedVisible', {fg=p.base02, bg=p.base04, attr='bold', sp=nil})
-    hi('MiniTablineTabpagesection',  {fg=p.base01, bg=p.base0A, attr='bold', sp=nil})
-    hi('MiniTablineVisible',         {fg=p.base05, bg=p.base01, attr='bold', sp=nil})
+    hi('MiniTablineCurrent',         {fg=p.accent, bg=p.bg,     bold=true})
+    hi('MiniTablineFill',            {link='MiniTablineHidden'})
+    hi('MiniTablineHidden',          {fg=p.fg_mid, bg=p.bg_out})
+    hi('MiniTablineModifiedCurrent', {fg=p.bg,     bg=p.accent, bold=true})
+    hi('MiniTablineModifiedHidden',  {fg=p.bg_out, bg=p.fg_mid})
+    hi('MiniTablineModifiedVisible', {fg=p.bg_out, bg=p.fg_mid, bold=true})
+    hi('MiniTablineTabpagesection',  {fg=p.bg,     bg=p.green,  bold=true})
+    hi('MiniTablineVisible',         {fg=p.fg_mid, bg=p.bg_out, bold=true})
 
-    hi('MiniTestEmphasis', {fg=nil,      bg=nil, attr='bold', sp=nil})
-    hi('MiniTestFail',     {fg=p.base08, bg=nil, attr='bold', sp=nil})
-    hi('MiniTestPass',     {fg=p.base0B, bg=nil, attr='bold', sp=nil})
+    hi('MiniTestEmphasis', {fg=nil,      bg=nil, bold=true})
+    hi('MiniTestFail',     {fg=p.red, bg=nil, bold=true})
+    hi('MiniTestPass',     {fg=p.green, bg=nil, bold=true})
 
-    hi('MiniTrailspace', {link='Error'})
+    hi('MiniTrailspace', {fg=nil, bg=p.red_bg})
   end
 
   if has_integration('akinsho/bufferline.nvim') then
-    hi('BufferLineBuffer',              {fg=p.base04, bg=nil,      attr=nil,    sp=nil})
-    hi('BufferLineBufferSelected',      {fg=p.base05, bg=nil,      attr='bold', sp=nil})
-    hi('BufferLineBufferVisible',       {fg=p.base05, bg=nil,      attr=nil,    sp=nil})
+    hi('BufferLineBuffer',              {fg=p.base04, bg=nil})
+    hi('BufferLineBufferSelected',      {fg=p.fg, bg=nil,      bold=true})
+    hi('BufferLineBufferVisible',       {fg=p.fg, bg=nil})
     hi('BufferLineCloseButton',         {link='BufferLineBackground'})
     hi('BufferLineCloseButtonSelected', {link='BufferLineBufferSelected'})
     hi('BufferLineCloseButtonVisible',  {link='BufferLineBufferVisible'})
     hi('BufferLineFill',                {link='Normal'})
-    hi('BufferLineTab',                 {fg=p.base00, bg=p.base0A, attr=nil,    sp=nil})
-    hi('BufferLineTabSelected',         {fg=p.base00, bg=p.base0A, attr='bold', sp=nil})
+    hi('BufferLineTab',                 {fg=p.bg, bg=p.base0A})
+    hi('BufferLineTabSelected',         {fg=p.bg, bg=p.base0A, bold=true})
   end
 
   if has_integration('anuvyklack/hydra.nvim') then
-    hi('HydraRed',      {fg=p.base08, bg=nil, attr=nil, sp=nil})
-    hi('HydraBlue',     {fg=p.base0D, bg=nil, attr=nil, sp=nil})
-    hi('HydraAmaranth', {fg=p.base0E, bg=nil, attr=nil, sp=nil})
-    hi('HydraTeal',     {fg=p.base0B, bg=nil, attr=nil, sp=nil})
-    hi('HydraPink',     {fg=p.base09, bg=nil, attr=nil, sp=nil})
+    hi('HydraRed',      {fg=p.red, bg=nil})
+    hi('HydraBlue',     {fg=p.blue, bg=nil})
+    hi('HydraAmaranth', {fg=p.magenta, bg=nil})
+    hi('HydraTeal',     {fg=p.cyan, bg=nil})
+    hi('HydraPink',     {fg=p.yellow, bg=nil})
     hi('HydraHint',     {link='NormalFloat'})
   end
 
   if has_integration('DanilaMihailov/beacon.nvim') then
-    hi('Beacon', {fg=nil, bg=p.base07, attr=nil, sp=nil})
+    hi('Beacon', {fg=nil, bg=p.fg_out2})
   end
 
   -- folke/trouble.nvim
@@ -594,77 +672,78 @@ H.apply_colorscheme = function(config)
   -- Everything works correctly out of the box
 
   if has_integration('folke/which-key.nvim') then
-    hi('WhichKey',          {fg=p.base0D, bg=nil,      attr=nil, sp=nil})
-    hi('WhichKeyDesc',      {fg=p.base05, bg=nil,      attr=nil, sp=nil})
-    hi('WhichKeyFloat',     {fg=p.base05, bg=p.base01, attr=nil, sp=nil})
-    hi('WhichKeyGroup',     {fg=p.base0E, bg=nil,      attr=nil, sp=nil})
-    hi('WhichKeySeparator', {fg=p.base0B, bg=p.base01, attr=nil, sp=nil})
-    hi('WhichKeyValue',     {fg=p.base03, bg=nil,      attr=nil, sp=nil})
+    hi('WhichKey',          {fg=p.cyan, bg=nil})
+    hi('WhichKeyBorder',    {link='FloatBorder'})
+    hi('WhichKeyDesc',      {fg=p.fg, bg=nil})
+    hi('WhichKeyFloat',     {fg=p.fg, bg=p.bg_out})
+    hi('WhichKeyGroup',     {fg=p.red, bg=nil})
+    hi('WhichKeySeparator', {fg=p.green, bg=nil})
+    hi('WhichKeyValue',     {link='Comment'})
   end
 
   if has_integration('ggandor/leap.nvim') then
-    hi('LeapMatch',          {fg=p.base0E, bg=nil, attr='bold,nocombine', sp=nil})
-    hi('LeapLabelPrimary',   {fg=p.base08, bg=nil, attr='bold,nocombine', sp=nil})
-    hi('LeapLabelSecondary', {fg=p.base05, bg=nil, attr='bold,nocombine', sp=nil})
-    hi('LeapLabelSelected',  {fg=p.base09, bg=nil, attr='bold,nocombine', sp=nil})
+    hi('LeapMatch',          {fg=p.base0E, bg=nil, bold=true, nocombine=true})
+    hi('LeapLabelPrimary',   {fg=p.base08, bg=nil, bold=true, nocombine=true})
+    hi('LeapLabelSecondary', {fg=p.fg, bg=nil, bold=true, nocombine=true})
+    hi('LeapLabelSelected',  {fg=p.base09, bg=nil, bold=true, nocombine=true})
     hi('LeapBackdrop',       {link='Comment'})
   end
 
   if has_integration('glepnir/dashboard-nvim') then
     hi('DashboardCenter',   {link='Delimiter'})
-    hi('DashboardFooter',   {link='Title'})
+    hi('DashboardFooter',   {link='Comment'})
     hi('DashboardHeader',   {link='Title'})
     hi('DashboardShortCut', {link='WarningMsg'})
   end
 
   if has_integration('glepnir/lspsaga.nvim') then
-    hi('LspSagaCodeActionBorder',  {fg=p.base0F, bg=nil, attr=nil,    sp=nil})
-    hi('LspSagaCodeActionContent', {fg=p.base05, bg=nil, attr=nil,    sp=nil})
-    hi('LspSagaCodeActionTitle',   {fg=p.base0D, bg=nil, attr='bold', sp=nil})
+    hi('LspSagaCodeActionBorder',  {fg=p.base0F, bg=nil})
+    hi('LspSagaCodeActionContent', {fg=p.fg, bg=nil})
+    hi('LspSagaCodeActionTitle',   {fg=p.base0D, bg=nil, bold=true})
 
-    hi('Definitions',            {fg=p.base0B, bg=nil, attr=nil, sp=nil})
-    hi('DefinitionsIcon',        {fg=p.base0D, bg=nil, attr=nil, sp=nil})
-    hi('FinderParam',            {fg=p.base08, bg=nil, attr=nil, sp=nil})
-    hi('FinderVirtText',         {fg=p.base09, bg=nil, attr=nil, sp=nil})
-    hi('LspSagaAutoPreview',     {fg=p.base0F, bg=nil, attr=nil, sp=nil})
-    hi('LspSagaFinderSelection', {fg=p.base0A, bg=nil, attr=nil, sp=nil})
-    hi('LspSagaLspFinderBorder', {fg=p.base0F, bg=nil, attr=nil, sp=nil})
-    hi('References',             {fg=p.base0B, bg=nil, attr=nil, sp=nil})
-    hi('ReferencesIcon',         {fg=p.base0D, bg=nil, attr=nil, sp=nil})
-    hi('TargetFileName',         {fg=p.base05, bg=nil, attr=nil, sp=nil})
+    hi('Definitions',            {fg=p.base0B, bg=nil})
+    hi('DefinitionsIcon',        {fg=p.base0D, bg=nil})
+    hi('FinderParam',            {fg=p.base08, bg=nil})
+    hi('FinderVirtText',         {fg=p.base09, bg=nil})
+    hi('LspSagaAutoPreview',     {fg=p.base0F, bg=nil})
+    hi('LspSagaFinderSelection', {fg=p.base0A, bg=nil})
+    hi('LspSagaLspFinderBorder', {fg=p.base0F, bg=nil})
+    hi('References',             {fg=p.base0B, bg=nil})
+    hi('ReferencesIcon',         {fg=p.base0D, bg=nil})
+    hi('TargetFileName',         {fg=p.fg, bg=nil})
 
-    hi('FinderSpinner',       {fg=p.base0B, bg=nil, attr=nil, sp=nil})
-    hi('FinderSpinnerBorder', {fg=p.base0F, bg=nil, attr=nil, sp=nil})
+    hi('FinderSpinner',       {fg=p.base0B, bg=nil})
+    hi('FinderSpinnerBorder', {fg=p.base0F, bg=nil})
     hi('FinderSpinnerTitle',  {link='Title'})
 
-    hi('LspSagaDefPreviewBorder', {fg=p.base0F, bg=nil, attr=nil, sp=nil})
+    hi('LspSagaDefPreviewBorder', {fg=p.base0F, bg=nil})
 
-    hi('LspSagaHoverBorder', {fg=p.base0F, bg=nil, attr=nil, sp=nil})
+    hi('LspSagaHoverBorder', {fg=p.base0F, bg=nil})
 
-    hi('LspSagaRenameBorder', {fg=p.base0F, bg=nil, attr=nil, sp=nil})
+    hi('LspSagaRenameBorder', {fg=p.base0F, bg=nil})
 
-    hi('LspSagaDiagnosticBorder', {fg=p.base0F, bg=nil, attr=nil, sp=nil})
+    hi('LspSagaDiagnosticBorder', {fg=p.base0F, bg=nil})
     hi('LspSagaDiagnosticHeader', {link='Title'})
-    hi('LspSagaDiagnosticSource', {fg=p.base0E, bg=nil, attr=nil, sp=nil})
+    hi('LspSagaDiagnosticSource', {fg=p.base0E, bg=nil})
 
     hi('LspSagaBorderTitle', {link='Title'})
 
-    hi('LspSagaSignatureHelpBorder', {fg=p.base0F, bg=nil, attr=nil, sp=nil})
+    hi('LspSagaSignatureHelpBorder', {fg=p.base0F, bg=nil})
 
-    hi('LSOutlinePreviewBorder', {fg=p.base0F, bg=nil, attr=nil, sp=nil})
-    hi('OutlineDetail',          {fg=p.base03, bg=nil, attr=nil, sp=nil})
-    hi('OutlineFoldPrefix',      {fg=p.base08, bg=nil, attr=nil, sp=nil})
-    hi('OutlineIndentEvn',       {fg=p.base04, bg=nil, attr=nil, sp=nil})
-    hi('OutlineIndentOdd',       {fg=p.base05, bg=nil, attr=nil, sp=nil})
+    hi('LSOutlinePreviewBorder', {fg=p.base0F, bg=nil})
+    hi('OutlineDetail',          {fg=p.base03, bg=nil})
+    hi('OutlineFoldPrefix',      {fg=p.base08, bg=nil})
+    hi('OutlineIndentEvn',       {fg=p.base04, bg=nil})
+    hi('OutlineIndentOdd',       {fg=p.fg, bg=nil})
   end
 
   if has_integration('hrsh7th/nvim-cmp') then
-    hi('CmpItemAbbr',           {fg=p.base05, bg=nil,      attr=nil,    sp=nil})
-    hi('CmpItemAbbrDeprecated', {fg=p.base03, bg=nil,      attr=nil,    sp=nil})
-    hi('CmpItemAbbrMatch',      {fg=p.base0A, bg=nil,      attr='bold', sp=nil})
-    hi('CmpItemAbbrMatchFuzzy', {fg=p.base0A, bg=nil,      attr='bold', sp=nil})
-    hi('CmpItemKind',           {fg=p.base0F, bg=p.base01, attr=nil,    sp=nil})
-    hi('CmpItemMenu',           {fg=p.base05, bg=p.base01, attr=nil,    sp=nil})
+    hi('CmpItemAbbr',           {fg=p.fg, bg=nil})
+    hi('CmpItemAbbrDeprecated', {fg=p.base03, bg=nil})
+    hi('CmpItemAbbrMatch',      {fg=p.base0A, bg=nil,      bold=true})
+    hi('CmpItemAbbrMatchFuzzy', {fg=p.base0A, bg=nil,      bold=true})
+    hi('CmpItemKind',           {fg=p.base0F, bg=p.base01})
+    hi('CmpItemMenu',           {fg=p.fg, bg=p.base01})
 
     hi('CmpItemKindClass',         {link='Type'})
     hi('CmpItemKindColor',         {link='Special'})
@@ -694,53 +773,53 @@ H.apply_colorscheme = function(config)
   end
 
   if has_integration('justinmk/vim-sneak') then
-    hi('Sneak',      {fg=p.base00, bg=p.base0E, attr=nil,    sp=nil})
-    hi('SneakScope', {fg=p.base00, bg=p.base07, attr=nil,    sp=nil})
-    hi('SneakLabel', {fg=p.base00, bg=p.base0E, attr='bold', sp=nil})
+    hi('Sneak',      {fg=p.bg, bg=p.base0E})
+    hi('SneakScope', {fg=p.bg, bg=p.fg_out2})
+    hi('SneakLabel', {fg=p.bg, bg=p.base0E, bold=true})
   end
 
   if has_integration('nvim-tree/nvim-tree.lua') then
-    hi('NvimTreeExecFile',     {fg=p.base0B, bg=nil,      attr='bold',           sp=nil})
-    hi('NvimTreeFolderIcon',   {fg=p.base03, bg=nil,      attr=nil,              sp=nil})
-    hi('NvimTreeGitDeleted',   {fg=p.base08, bg=nil,      attr=nil,              sp=nil})
-    hi('NvimTreeGitDirty',     {fg=p.base08, bg=nil,      attr=nil,              sp=nil})
-    hi('NvimTreeGitMerge',     {fg=p.base0C, bg=nil,      attr=nil,              sp=nil})
-    hi('NvimTreeGitNew',       {fg=p.base0A, bg=nil,      attr=nil,              sp=nil})
-    hi('NvimTreeGitRenamed',   {fg=p.base0E, bg=nil,      attr=nil,              sp=nil})
-    hi('NvimTreeGitStaged',    {fg=p.base0B, bg=nil,      attr=nil,              sp=nil})
-    hi('NvimTreeImageFile',    {fg=p.base0E, bg=nil,      attr='bold',           sp=nil})
+    hi('NvimTreeExecFile',     {fg=p.base0B, bg=nil,      bold=true})
+    hi('NvimTreeFolderIcon',   {fg=p.base03, bg=nil})
+    hi('NvimTreeGitDeleted',   {fg=p.base08, bg=nil})
+    hi('NvimTreeGitDirty',     {fg=p.base08, bg=nil})
+    hi('NvimTreeGitMerge',     {fg=p.base0C, bg=nil})
+    hi('NvimTreeGitNew',       {fg=p.base0A, bg=nil})
+    hi('NvimTreeGitRenamed',   {fg=p.base0E, bg=nil})
+    hi('NvimTreeGitStaged',    {fg=p.base0B, bg=nil})
+    hi('NvimTreeImageFile',    {fg=p.base0E, bg=nil,      bold=true})
     hi('NvimTreeIndentMarker', {link='NvimTreeFolderIcon'})
     hi('NvimTreeOpenedFile',   {link='NvimTreeExecFile'})
     hi('NvimTreeRootFolder',   {link='NvimTreeGitRenamed'})
-    hi('NvimTreeSpecialFile',  {fg=p.base0D, bg=nil,      attr='bold,underline', sp=nil})
-    hi('NvimTreeSymlink',      {fg=p.base0F, bg=nil,      attr='bold',           sp=nil})
-    hi('NvimTreeWindowPicker', {fg=p.base05, bg=p.base01, attr="bold",           sp=nil})
+    hi('NvimTreeSpecialFile',  {fg=p.base0D, bg=nil,      bold=true, underline=true})
+    hi('NvimTreeSymlink',      {fg=p.base0F, bg=nil,      bold=true})
+    hi('NvimTreeWindowPicker', {fg=p.fg, bg=p.base01, bold=true})
   end
 
   if has_integration('lewis6991/gitsigns.nvim') then
-    hi('GitSignsAdd',          {fg=p.base0B, bg=p.base01, attr=nil, sp=nil})
+    hi('GitSignsAdd',          {fg=p.green, bg=nil})
     hi('GitSignsAddLn',        {link='GitSignsAdd'})
     hi('GitSignsAddInline',    {link='GitSignsAdd'})
-    hi('GitSignsChange',       {fg=p.base0E, bg=p.base01, attr=nil, sp=nil})
+    hi('GitSignsChange',       {fg=p.yellow, bg=nil})
     hi('GitSignsChangeLn',     {link='GitSignsChange'})
     hi('GitSignsChangeInline', {link='GitSignsChange'})
-    hi('GitSignsDelete',       {fg=p.base08, bg=p.base01, attr=nil, sp=nil})
+    hi('GitSignsDelete',       {fg=p.red, bg=nil})
     hi('GitSignsDeleteLn',     {link='GitSignsDelete'})
     hi('GitSignsDeleteInline', {link='GitSignsDelete'})
   end
 
   if has_integration('lukas-reineke/indent-blankline.nvim') then
-    hi('IndentBlanklineChar',         {fg=p.base02, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineContextChar',  {fg=p.base0F, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineContextStart', {fg=nil,      bg=nil, attr='underline,nocombine', sp=p.base0F})
-    hi('IndentBlanklineIndent1',      {fg=p.base08, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineIndent2',      {fg=p.base09, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineIndent3',      {fg=p.base0A, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineIndent4',      {fg=p.base0B, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineIndent5',      {fg=p.base0C, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineIndent6',      {fg=p.base0D, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineIndent7',      {fg=p.base0E, bg=nil, attr='nocombine',           sp=nil})
-    hi('IndentBlanklineIndent8',      {fg=p.base0F, bg=nil, attr='nocombine',           sp=nil})
+    hi('IndentBlanklineChar',         {fg=p.base02, bg=nil, nocombine=true})
+    hi('IndentBlanklineContextChar',  {fg=p.base0F, bg=nil, nocombine=true})
+    hi('IndentBlanklineContextStart', {fg=nil,      bg=nil, sp=p.base0F, underline=true, nocombine=true})
+    hi('IndentBlanklineIndent1',      {fg=p.base08, bg=nil, nocombine=true})
+    hi('IndentBlanklineIndent2',      {fg=p.base09, bg=nil, nocombine=true})
+    hi('IndentBlanklineIndent3',      {fg=p.base0A, bg=nil, nocombine=true})
+    hi('IndentBlanklineIndent4',      {fg=p.base0B, bg=nil, nocombine=true})
+    hi('IndentBlanklineIndent5',      {fg=p.base0C, bg=nil, nocombine=true})
+    hi('IndentBlanklineIndent6',      {fg=p.base0D, bg=nil, nocombine=true})
+    hi('IndentBlanklineIndent7',      {fg=p.base0E, bg=nil, nocombine=true})
+    hi('IndentBlanklineIndent8',      {fg=p.base0F, bg=nil, nocombine=true})
   end
 
   if has_integration('neoclide/coc.nvim') then
@@ -761,65 +840,65 @@ H.apply_colorscheme = function(config)
 
     hi('CocCodeLens',             {link='LspCodeLens'})
     hi('CocDisabled',             {link='Comment'})
-    hi('CocMarkdownLink',         {fg=p.base0F, bg=nil,      attr=nil, sp=nil})
-    hi('CocMenuSel',              {fg=nil,      bg=p.base02, attr=nil, sp=nil})
+    hi('CocMarkdownLink',         {fg=p.base0F, bg=nil})
+    hi('CocMenuSel',              {fg=nil,      bg=p.base02})
     hi('CocNotificationProgress', {link='CocMarkdownLink'})
     hi('CocPumVirtualText',       {link='CocMarkdownLink'})
-    hi('CocSearch',               {fg=p.base0A, bg=nil,      attr=nil, sp=nil})
-    hi('CocSelectedText',         {fg=p.base08, bg=nil,      attr=nil, sp=nil})
+    hi('CocSearch',               {fg=p.base0A, bg=nil})
+    hi('CocSelectedText',         {fg=p.base08, bg=nil})
   end
 
   -- nvim-lualine/lualine.nvim
   -- Everything works correctly out of the box
 
   if has_integration('nvim-neo-tree/neo-tree.nvim') then
-    hi('NeoTreeDimText',              {fg=p.base03, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeDotfile',              {fg=p.base04, bg=nil,      attr=nil,    sp=nil})
+    hi('NeoTreeDimText',              {fg=p.base03, bg=nil})
+    hi('NeoTreeDotfile',              {fg=p.base04, bg=nil})
     hi('NeoTreeFadeText1',            {link='NeoTreeDimText'})
-    hi('NeoTreeFadeText2',            {fg=p.base02, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeGitAdded',             {fg=p.base0B, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeGitConflict',          {fg=p.base08, bg=nil,      attr='bold', sp=nil})
-    hi('NeoTreeGitDeleted',           {fg=p.base08, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeGitModified',          {fg=p.base0E, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeGitUnstaged',          {fg=p.base08, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeGitUntracked',         {fg=p.base0A, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeMessage',              {fg=p.base05, bg=p.base01, attr=nil,    sp=nil})
-    hi('NeoTreeModified',             {fg=p.base07, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeRootName',             {fg=p.base0D, bg=nil,      attr='bold', sp=nil})
-    hi('NeoTreeTabInactive',          {fg=p.base04, bg=nil,      attr=nil,    sp=nil})
-    hi('NeoTreeTabSeparatorActive',   {fg=p.base03, bg=p.base02, attr=nil,    sp=nil})
-    hi('NeoTreeTabSeparatorInactive', {fg=p.base01, bg=p.base01, attr=nil,    sp=nil})
+    hi('NeoTreeFadeText2',            {fg=p.base02, bg=nil})
+    hi('NeoTreeGitAdded',             {fg=p.base0B, bg=nil})
+    hi('NeoTreeGitConflict',          {fg=p.base08, bg=nil,      bold=true})
+    hi('NeoTreeGitDeleted',           {fg=p.base08, bg=nil})
+    hi('NeoTreeGitModified',          {fg=p.base0E, bg=nil})
+    hi('NeoTreeGitUnstaged',          {fg=p.base08, bg=nil})
+    hi('NeoTreeGitUntracked',         {fg=p.base0A, bg=nil})
+    hi('NeoTreeMessage',              {fg=p.fg, bg=p.base01})
+    hi('NeoTreeModified',             {fg=p.fg_out2, bg=nil})
+    hi('NeoTreeRootName',             {fg=p.base0D, bg=nil,      bold=true})
+    hi('NeoTreeTabInactive',          {fg=p.base04, bg=nil})
+    hi('NeoTreeTabSeparatorActive',   {fg=p.base03, bg=p.base02})
+    hi('NeoTreeTabSeparatorInactive', {fg=p.base01, bg=p.base01})
   end
 
   if has_integration('nvim-telescope/telescope.nvim') then
-    hi('TelescopeBorder',         {fg=p.base0F, bg=nil,      attr=nil,    sp=nil})
-    hi('TelescopeMatching',       {fg=p.base0A, bg=nil,      attr=nil,    sp=nil})
-    hi('TelescopeMultiSelection', {fg=nil,      bg=p.base01, attr='bold', sp=nil})
-    hi('TelescopeSelection',      {fg=nil,      bg=p.base01, attr='bold', sp=nil})
+    hi('TelescopeBorder',         {fg=p.accent, bg=nil})
+    hi('TelescopeMatching',       {fg=p.green, bg=nil})
+    hi('TelescopeMultiSelection', {fg=nil,      bg=p.bg_out, bold=true})
+    hi('TelescopeSelection',      {fg=nil,      bg=p.bg_out, bold=true})
   end
 
   if has_integration('p00f/nvim-ts-rainbow') then
-    hi('rainbowcol1', {fg=p.base08, bg=nil, attr=nil, sp=nil})
-    hi('rainbowcol2', {fg=p.base09, bg=nil, attr=nil, sp=nil})
-    hi('rainbowcol3', {fg=p.base0A, bg=nil, attr=nil, sp=nil})
-    hi('rainbowcol4', {fg=p.base0B, bg=nil, attr=nil, sp=nil})
-    hi('rainbowcol5', {fg=p.base0C, bg=nil, attr=nil, sp=nil})
-    hi('rainbowcol6', {fg=p.base0D, bg=nil, attr=nil, sp=nil})
-    hi('rainbowcol7', {fg=p.base0E, bg=nil, attr=nil, sp=nil})
+    hi('rainbowcol1', {fg=p.base08, bg=nil})
+    hi('rainbowcol2', {fg=p.base09, bg=nil})
+    hi('rainbowcol3', {fg=p.base0A, bg=nil})
+    hi('rainbowcol4', {fg=p.base0B, bg=nil})
+    hi('rainbowcol5', {fg=p.base0C, bg=nil})
+    hi('rainbowcol6', {fg=p.base0D, bg=nil})
+    hi('rainbowcol7', {fg=p.base0E, bg=nil})
   end
 
   if has_integration('phaazon/hop.nvim') then
-    hi('HopNextKey',   {fg=p.base0E, bg=nil, attr='bold,nocombine', sp=nil})
-    hi('HopNextKey1',  {fg=p.base08, bg=nil, attr='bold,nocombine', sp=nil})
-    hi('HopNextKey2',  {fg=p.base04, bg=nil, attr='bold,nocombine', sp=nil})
-    hi('HopPreview',   {fg=p.base09, bg=nil, attr='bold,nocombine', sp=nil})
+    hi('HopNextKey',   {fg=p.base0E, bg=nil, bold=true, nocombine=true})
+    hi('HopNextKey1',  {fg=p.base08, bg=nil, bold=true, nocombine=true})
+    hi('HopNextKey2',  {fg=p.base04, bg=nil, bold=true, nocombine=true})
+    hi('HopPreview',   {fg=p.base09, bg=nil, bold=true, nocombine=true})
     hi('HopUnmatched', {link='Comment'})
   end
 
   if has_integration('rcarriga/nvim-dap-ui') then
     hi('DapUIScope',                   {link='Title'})
     hi('DapUIType',                    {link='Type'})
-    hi('DapUIModifiedValue',           {fg=p.base0E, bg=nil, attr='bold', sp=nil})
+    hi('DapUIModifiedValue',           {fg=p.base0E, bg=nil, bold=true})
     hi('DapUIDecoration',              {link='Title'})
     hi('DapUIThread',                  {link='String'})
     hi('DapUIStoppedThread',           {link='Title'})
@@ -831,60 +910,60 @@ H.apply_colorscheme = function(config)
     hi('DapUIWatchesError',            {link='DiagnosticError'})
     hi('DapUIBreakpointsPath',         {link='Directory'})
     hi('DapUIBreakpointsInfo',         {link='DiagnosticInfo'})
-    hi('DapUIBreakpointsCurrentLine',  {fg=p.base0B, bg=nil, attr='bold', sp=nil})
+    hi('DapUIBreakpointsCurrentLine',  {fg=p.base0B, bg=nil, bold=true})
     hi('DapUIBreakpointsDisabledLine', {link='Comment'})
   end
 
   if has_integration('rcarriga/nvim-notify') then
-    hi('NotifyDEBUGBorder', {fg=p.base03, bg=nil, attr=nil, sp=nil})
+    hi('NotifyDEBUGBorder', {fg=p.base03, bg=nil})
     hi('NotifyDEBUGIcon',   {link='NotifyDEBUGBorder'})
     hi('NotifyDEBUGTitle',  {link='NotifyDEBUGBorder'})
-    hi('NotifyERRORBorder', {fg=p.base08, bg=nil, attr=nil, sp=nil})
+    hi('NotifyERRORBorder', {fg=p.base08, bg=nil})
     hi('NotifyERRORIcon',   {link='NotifyERRORBorder'})
     hi('NotifyERRORTitle',  {link='NotifyERRORBorder'})
-    hi('NotifyINFOBorder',  {fg=p.base0C, bg=nil, attr=nil, sp=nil})
+    hi('NotifyINFOBorder',  {fg=p.base0C, bg=nil})
     hi('NotifyINFOIcon',    {link='NotifyINFOBorder'})
     hi('NotifyINFOTitle',   {link='NotifyINFOBorder'})
-    hi('NotifyTRACEBorder', {fg=p.base0D, bg=nil, attr=nil, sp=nil})
+    hi('NotifyTRACEBorder', {fg=p.base0D, bg=nil})
     hi('NotifyTRACEIcon',   {link='NotifyTRACEBorder'})
     hi('NotifyTRACETitle',  {link='NotifyTRACEBorder'})
-    hi('NotifyWARNBorder',  {fg=p.base0E, bg=nil, attr=nil, sp=nil})
+    hi('NotifyWARNBorder',  {fg=p.base0E, bg=nil})
     hi('NotifyWARNIcon',    {link='NotifyWARNBorder'})
     hi('NotifyWARNTitle',   {link='NotifyWARNBorder'})
   end
 
   if has_integration('rlane/pounce.nvim') then
-    hi('PounceMatch',      {fg=p.base00, bg=p.base05, attr='bold,nocombine', sp=nil})
-    hi('PounceGap',        {fg=p.base00, bg=p.base03, attr='bold,nocombine', sp=nil})
-    hi('PounceAccept',     {fg=p.base00, bg=p.base08, attr='bold,nocombine', sp=nil})
-    hi('PounceAcceptBest', {fg=p.base00, bg=p.base0B, attr='bold,nocombine', sp=nil})
+    hi('PounceMatch',      {fg=p.bg, bg=p.fg, bold=true, nocombine=true})
+    hi('PounceGap',        {fg=p.bg, bg=p.base03, bold=true, nocombine=true})
+    hi('PounceAccept',     {fg=p.bg, bg=p.base08, bold=true, nocombine=true})
+    hi('PounceAcceptBest', {fg=p.bg, bg=p.base0B, bold=true, nocombine=true})
   end
 
   if has_integration('romgrk/barbar.nvim') then
-    hi('BufferCurrent',       {fg=p.base05, bg=p.base02, attr='bold', sp=nil})
-    hi('BufferCurrentIcon',   {fg=nil,      bg=p.base02, attr=nil,    sp=nil})
+    hi('BufferCurrent',       {fg=p.fg, bg=p.base02, bold=true})
+    hi('BufferCurrentIcon',   {fg=nil,      bg=p.base02})
     hi('BufferCurrentIndex',  {link='BufferCurrentIcon'})
-    hi('BufferCurrentMod',    {fg=p.base08, bg=p.base02, attr='bold', sp=nil})
+    hi('BufferCurrentMod',    {fg=p.base08, bg=p.base02, bold=true})
     hi('BufferCurrentSign',   {link='BufferCurrent'})
-    hi('BufferCurrentTarget', {fg=p.base0E, bg=p.base02, attr='bold', sp=nil})
+    hi('BufferCurrentTarget', {fg=p.base0E, bg=p.base02, bold=true})
 
-    hi('BufferInactive',       {fg=p.base04, bg=p.base01, attr=nil,    sp=nil})
-    hi('BufferInactiveIcon',   {fg=nil,      bg=p.base01, attr=nil,    sp=nil})
+    hi('BufferInactive',       {fg=p.base04, bg=p.base01})
+    hi('BufferInactiveIcon',   {fg=nil,      bg=p.base01})
     hi('BufferInactiveIndex',  {link='BufferInactiveIcon'})
-    hi('BufferInactiveMod',    {fg=p.base08, bg=p.base01, attr=nil,    sp=nil})
+    hi('BufferInactiveMod',    {fg=p.base08, bg=p.base01})
     hi('BufferInactiveSign',   {link='BufferInactive'})
-    hi('BufferInactiveTarget', {fg=p.base0E, bg=p.base01, attr='bold', sp=nil})
+    hi('BufferInactiveTarget', {fg=p.base0E, bg=p.base01, bold=true})
 
     hi('BufferOffset',      {link='Normal'})
-    hi('BufferTabpages',    {fg=p.base01, bg=p.base0A, attr='bold', sp=nil})
+    hi('BufferTabpages',    {fg=p.base01, bg=p.base0A, bold=true})
     hi('BufferTabpageFill', {link='Normal'})
 
-    hi('BufferVisible',       {fg=p.base05, bg=p.base01, attr='bold', sp=nil})
-    hi('BufferVisibleIcon',   {fg=nil,      bg=p.base01, attr=nil,    sp=nil})
+    hi('BufferVisible',       {fg=p.fg, bg=p.base01, bold=true})
+    hi('BufferVisibleIcon',   {fg=nil,      bg=p.base01})
     hi('BufferVisibleIndex',  {link='BufferVisibleIcon'})
-    hi('BufferVisibleMod',    {fg=p.base08, bg=p.base01, attr='bold', sp=nil})
+    hi('BufferVisibleMod',    {fg=p.base08, bg=p.base01, bold=true})
     hi('BufferVisibleSign',   {link='BufferVisible'})
-    hi('BufferVisibleTarget', {fg=p.base0E, bg=p.base01, attr='bold', sp=nil})
+    hi('BufferVisibleTarget', {fg=p.base0E, bg=p.base01, bold=true})
   end
 
   -- simrat39/symbols-outline.nvim
@@ -897,39 +976,39 @@ H.apply_colorscheme = function(config)
   -- Everything works correctly out of the box
 
   if has_integration('williamboman/mason.nvim') then
-    hi('MasonError',                       {fg=p.base08, bg=nil,      attr=nil,    sp=nil})
-    hi('MasonHeader',                      {fg=p.base00, bg=p.base0D, attr='bold', sp=nil})
-    hi('MasonHeaderSecondary',             {fg=p.base00, bg=p.base0F, attr='bold', sp=nil})
+    hi('MasonError',                       {fg=p.base08, bg=nil})
+    hi('MasonHeader',                      {fg=p.bg, bg=p.base0D, bold=true})
+    hi('MasonHeaderSecondary',             {fg=p.bg, bg=p.base0F, bold=true})
     hi('MasonHeading',                     {link='Bold'})
-    hi('MasonHighlight',                   {fg=p.base0F, bg=nil,      attr=nil,    sp=nil})
-    hi('MasonHighlightBlock',              {fg=p.base00, bg=p.base0F, attr=nil,    sp=nil})
+    hi('MasonHighlight',                   {fg=p.base0F, bg=nil})
+    hi('MasonHighlightBlock',              {fg=p.bg, bg=p.base0F})
     hi('MasonHighlightBlockBold',          {link='MasonHeaderSecondary'})
     hi('MasonHighlightBlockBoldSecondary', {link='MasonHeader'})
-    hi('MasonHighlightBlockSecondary',     {fg=p.base00, bg=p.base0D, attr=nil,    sp=nil})
-    hi('MasonHighlightSecondary',          {fg=p.base0D, bg=nil,      attr=nil,    sp=nil})
+    hi('MasonHighlightBlockSecondary',     {fg=p.bg, bg=p.base0D})
+    hi('MasonHighlightSecondary',          {fg=p.base0D, bg=nil})
     hi('MasonLink',                        {link='MasonHighlight'})
     hi('MasonMuted',                       {link='Comment'})
-    hi('MasonMutedBlock',                  {fg=p.base00, bg=p.base03, attr=nil,    sp=nil})
-    hi('MasonMutedBlockBold',              {fg=p.base00, bg=p.base03, attr='bold', sp=nil})
+    hi('MasonMutedBlock',                  {fg=p.bg, bg=p.base03})
+    hi('MasonMutedBlockBold',              {fg=p.bg, bg=p.base03, bold=true})
   end
 
   -- Terminal colors
-  vim.g.terminal_color_0  = palette.bg
-  vim.g.terminal_color_1  = palette.red
-  vim.g.terminal_color_2  = palette.green
-  vim.g.terminal_color_3  = palette.yellow
-  vim.g.terminal_color_4  = palette.blue
-  vim.g.terminal_color_5  = palette.magenta
-  vim.g.terminal_color_6  = palette.cyan
-  vim.g.terminal_color_7  = palette.fg
-  vim.g.terminal_color_8  = palette.bg
-  vim.g.terminal_color_9  = palette.red
-  vim.g.terminal_color_10 = palette.green
-  vim.g.terminal_color_11 = palette.yellow
-  vim.g.terminal_color_12 = palette.blue
-  vim.g.terminal_color_13 = palette.magenta
-  vim.g.terminal_color_14 = palette.cyan
-  vim.g.terminal_color_15 = palette.fg
+  vim.g.terminal_color_0  = p.bg
+  vim.g.terminal_color_1  = p.red
+  vim.g.terminal_color_2  = p.green
+  vim.g.terminal_color_3  = p.yellow
+  vim.g.terminal_color_4  = p.blue
+  vim.g.terminal_color_5  = p.magenta
+  vim.g.terminal_color_6  = p.cyan
+  vim.g.terminal_color_7  = p.fg
+  vim.g.terminal_color_8  = p.bg
+  vim.g.terminal_color_9  = p.red
+  vim.g.terminal_color_10 = p.green
+  vim.g.terminal_color_11 = p.yellow
+  vim.g.terminal_color_12 = p.blue
+  vim.g.terminal_color_13 = p.magenta
+  vim.g.terminal_color_14 = p.cyan
+  vim.g.terminal_color_15 = p.fg
 end
 
 -- Color conversion -----------------------------------------------------------
@@ -1119,9 +1198,10 @@ H.clip = function(x, from, to) return math.min(math.max(x, from), to) end
 
 H.cuberoot = function(x) return math.pow(x, 0.333333) end
 
-H.dist_circle = function(x, y)
-  local d = math.abs((x % 360) - (y % 360))
-  return math.min(d, 360 - d)
+H.dist_period = function(x, y, period)
+  period = period or 360
+  local d = math.abs((x % period) - (y % period))
+  return math.min(d, period - d)
 end
 
 return MiniBase2
