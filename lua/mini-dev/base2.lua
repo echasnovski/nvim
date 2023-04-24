@@ -1,7 +1,13 @@
 -- TODO:
 --
--- - Decide whether to use {30, 90, ...} or {0, 60, 120, ...} grid as reference
---   (and for both gray background and foregraound). Or some other choice.
+-- - Tweak tree-sitter and semantic tokens.
+--
+-- - Use numeric chroma instead of discrete?
+--
+-- - Add plugins:
+--     - 'folke/noice.nvim'
+--     - 'folke/lazy.nvim'
+--     - 'kevinhwang91/nvim-ufo'
 --
 -- Documentation:
 -- - Note about **boled** choices and how to override them.
@@ -30,16 +36,16 @@
 ---     - 'ggandor/leap.nvim'
 ---     - 'glepnir/dashboard-nvim'
 ---     - 'glepnir/lspsaga.nvim'
+---     - 'HiPhish/nvim-ts-rainbow2'
 ---     - 'hrsh7th/nvim-cmp'
 ---     - 'justinmk/vim-sneak'
----     - 'nvim-tree/nvim-tree.lua'
 ---     - 'lewis6991/gitsigns.nvim'
 ---     - 'lukas-reineke/indent-blankline.nvim'
 ---     - 'neoclide/coc.nvim'
 ---     - 'nvim-lualine/lualine.nvim'
 ---     - 'nvim-neo-tree/neo-tree.nvim'
 ---     - 'nvim-telescope/telescope.nvim'
----     - 'p00f/nvim-ts-rainbow'
+---     - 'nvim-tree/nvim-tree.lua'
 ---     - 'phaazon/hop.nvim'
 ---     - 'rcarriga/nvim-dap-ui'
 ---     - 'rcarriga/nvim-notify'
@@ -118,22 +124,22 @@ MiniBase2.config = {
   -- Saturation level. One of 'low', 'medium', 'high'.
   saturation = 'medium',
 
-  -- Accent color. One of:
-  -- 'bg', 'fg', 'red', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gray'
+  -- Accent color. One of: 'bg', 'fg', 'red', 'orange', 'yellow', 'green',
+  -- 'cyan', 'aqua', 'blue', 'purple'
   accent = 'bg',
 
   -- Plugin integrations. Use `default = false` to disable all integrations.
-  -- Also can be set per plugin (see |MiniBase16.config|).
+  -- Also can be set per plugin (see |MiniBase2.config|).
   plugins = { default = true },
 }
 --minidoc_afterlines_end
 
-MiniBase2.make_palette = function(opts)
-  opts = vim.tbl_deep_extend('force', MiniBase2.config, opts or {})
-  local bg = H.validate_hex(opts.background)
-  local fg = H.validate_hex(opts.foreground)
-  local saturation = H.validate_one_of(opts.saturation, H.saturation_values, 'saturation')
-  local accent = H.validate_one_of(opts.accent, H.accent_values, 'accent')
+MiniBase2.make_palette = function(config)
+  config = vim.tbl_deep_extend('force', MiniBase2.config, config or {})
+  local bg = H.validate_hex(config.background)
+  local fg = H.validate_hex(config.foreground)
+  local saturation = H.validate_one_of(config.saturation, H.saturation_values, 'saturation')
+  local accent = H.validate_one_of(config.accent, H.accent_values, 'accent')
 
   local bg_lch, fg_lch = H.hex2oklch(bg), H.hex2oklch(fg)
   local bg_l, fg_l = bg_lch.l, fg_lch.l
@@ -145,37 +151,39 @@ MiniBase2.make_palette = function(opts)
   local is_dark = bg_l <= 50
   local bg_l_edge = is_dark and 0 or 100
   local fg_l_edge = is_dark and 100 or 0
+  local l_mid = 0.5 * (bg_l + fg_l)
 
   -- Hues. Correct them so that shifted reference 60 degree grid is distant
   -- from both bg and fg hues. Distance between two sets is assumed as minimum
   -- distance between all pairs of points.
   local bg_h, fg_h = bg_lch.h, fg_lch.h
-  local period, half_period = 60, 30
+  local period, half_period = 45, 22.5
   local d
-  if bg_h == nil and fg_h == nil then d = -30 end
-  if bg_h ~= nil and fg_h == nil then d = ((bg_h - 30) % period + half_period) % period end
-  if bg_h == nil and fg_h ~= nil then d = ((fg_h - 30) % period + half_period) % period end
+  if bg_h == nil and fg_h == nil then d = 0 end
+  if bg_h ~= nil and fg_h == nil then d = (bg_h % period + half_period) % period end
+  if bg_h == nil and fg_h ~= nil then d = (fg_h % period + half_period) % period end
   if bg_h ~= nil and fg_h ~= nil then
-    -- Subtract 30 because reference grid starts at 30 (red)
-    local ref_bg, ref_fg = (bg_h - 30) % period, (fg_h - 30) % period
+    -- Subtract shift
+    local ref_bg, ref_fg = bg_h % period, fg_h % period
     local mid = 0.5 * (ref_bg + ref_fg)
     local mid_alt = (mid + half_period) % period
 
     d = H.dist_period(mid, ref_bg, period) < H.dist_period(mid_alt, ref_bg, period) and mid_alt or mid
   end
 
-  -- Normalize to [-30, 30] to avoid big shifts in actual hues:
-  -- [0, 30) -> [0, 30]; [30, 60) -> [-30, 0)
-  -- d = d - math.floor(d / half_period) * period
+  -- Normalize to [-half, half] to avoid big shifts in actual hues:
+  -- [0, half) -> [0, half); [half, period) -> [-half, 0)
+  d = d - math.floor(d / half_period) * period
 
   --stylua: ignore
   local hues = {
     bg = bg_h, fg = fg_h,
-    red = 30 + d, yellow = 90 + d, green = 150 + d, cyan = 210 + d, blue = 270 + d, magenta = 330 + d,
+    red  = 0   + d, orange = 45  + d, yellow = 90  + d, green  = 135 + d,
+    cyan = 180 + d, aqua   = 225 + d, blue   = 270 + d, purple = 315 + d,
   }
 
   -- Configurable chroma level
-  local chroma = ({ low = 5, medium = 10, high = 15 })[saturation]
+  local chroma = ({ low = 5, medium = 8, high = 15 })[saturation]
 
   -- Compute result
   --stylua: ignore
@@ -185,20 +193,20 @@ MiniBase2.make_palette = function(opts)
     bg_out2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * bg_l_edge, c = bg_lch.c, h = bg_lch.h }),
     bg_out     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * bg_l_edge, c = bg_lch.c, h = bg_lch.h }),
     bg         = bg,
-    bg_mid     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * 50,        c = bg_lch.c, h = bg_lch.h }),
-    bg_mid2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * 50,        c = bg_lch.c, h = bg_lch.h }),
+    bg_mid     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * l_mid,     c = bg_lch.c, h = bg_lch.h }),
+    bg_mid2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * l_mid,     c = bg_lch.c, h = bg_lch.h }),
 
     fg_out2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * fg_l_edge, c = fg_lch.c, h = fg_lch.h }),
     fg_out     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * fg_l_edge, c = fg_lch.c, h = fg_lch.h }),
     fg         = fg,
-    fg_mid     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * 50,        c = fg_lch.c, h = fg_lch.h }),
-    fg_mid2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * 50,        c = fg_lch.c, h = fg_lch.h }),
-
-    gray       = H.oklch2hex({ l = fg_l, c = 0 }),
-    gray_bg    = H.oklch2hex({ l = bg_l, c = 0 }),
+    fg_mid     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * l_mid,     c = fg_lch.c, h = fg_lch.h }),
+    fg_mid2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * l_mid,     c = fg_lch.c, h = fg_lch.h }),
 
     red        = H.oklch2hex({ l = fg_l, c = chroma, h = hues.red }),
     red_bg     = H.oklch2hex({ l = bg_l, c = chroma, h = hues.red }),
+
+    orange     = H.oklch2hex({ l = fg_l, c = chroma, h = hues.orange }),
+    orange_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues.orange }),
 
     yellow     = H.oklch2hex({ l = fg_l, c = chroma, h = hues.yellow }),
     yellow_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues.yellow }),
@@ -209,11 +217,14 @@ MiniBase2.make_palette = function(opts)
     cyan       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.cyan }),
     cyan_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.cyan }),
 
+    aqua       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.aqua }),
+    aqua_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.aqua }),
+
     blue       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.blue }),
     blue_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.blue }),
 
-    magenta    = H.oklch2hex({ l = fg_l, c = chroma, h = hues.magenta }),
-    magenta_bg = H.oklch2hex({ l = bg_l, c = chroma, h = hues.magenta }),
+    purple    = H.oklch2hex({ l = fg_l, c = chroma, h = hues.purple }),
+    purple_bg = H.oklch2hex({ l = bg_l, c = chroma, h = hues.purple }),
   }
 
   -- Manage 'bg' and 'fg' accents separately to ensure that corresponding
@@ -230,25 +241,24 @@ MiniBase2.make_palette = function(opts)
     res.accent_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues[accent] })
   end
 
-  -- Add temporary colors for experiments
-  res.base00 = '#0a2a2a'
-  res.base01 = '#324747'
-  res.base02 = '#556868'
-  res.base03 = '#788a8a'
-  res.base04 = '#bbbbbb'
-  res.base05 = '#d0d0d0'
-  res.base06 = '#e6e6e6'
-  res.base07 = '#fcfcfc'
-  res.base08 = '#ebcd91'
-  res.base09 = '#9f8340'
-  res.base0A = '#209870'
-  res.base0B = '#82e3ba'
-  res.base0C = '#bb6d9b'
-  res.base0D = '#a9d4ff'
-  res.base0E = '#ffb9e5'
-  res.base0F = '#598ab9'
-
   return res
+end
+
+MiniBase2.random_config = function(opts)
+  local is_dark = vim.o.background == 'dark'
+  local bg_l = is_dark and 15 or 85
+  local fg_l = is_dark and 85 or 15
+  local bg_c = is_dark and 5 or 2
+
+  local hue = math.random(0, 359)
+  local random_config = {
+    background = H.oklch2hex({ l = bg_l, c = bg_c, h = hue }),
+    foreground = H.oklch2hex({ l = fg_l, c = 1, h = hue }),
+    saturation = H.saturation_values[math.random(1, #H.saturation_values)],
+    accent = H.accent_values[math.random(1, #H.accent_values)],
+  }
+
+  return vim.tbl_deep_extend('force', random_config, opts or {})
 end
 
 -- Helper data ================================================================
@@ -260,7 +270,7 @@ H.tau = 2 * math.pi
 
 H.saturation_values = { 'low', 'medium', 'high' }
 
-H.accent_values = { 'bg', 'fg', 'red', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gray' }
+H.accent_values = { 'bg', 'fg', 'red', 'orange', 'yellow', 'green', 'cyan', 'aqua', 'blue', 'purple' }
 
 -- Cusps for Oklch color space. See 'mini.colors' for more details.
 --stylua: ignore start
@@ -336,7 +346,7 @@ H.setup_config = function(config)
 end
 
 H.apply_config = function(config)
-  MiniBase16.config = config
+  MiniBase2.config = config
 
   H.apply_colorscheme(config)
 end
@@ -402,267 +412,329 @@ H.apply_colorscheme = function(config)
   -- - Align by commas.
 
   -- Builtin highlighting groups
-  hi('ColorColumn',    {fg=nil,      bg=p.accent_bg})
-  hi('Conceal',        {fg=p.base0D, bg=p.bg})
-  hi('CurSearch',      {fg=p.bg, bg=p.yellow})
-  hi('Cursor',         {fg=p.bg, bg=p.fg})
-  hi('CursorColumn',   {fg=nil,      bg=p.bg_mid})
-  hi('CursorIM',       {fg=p.bg, bg=p.fg})
-  hi('CursorLine',     {fg=nil,      bg=p.bg_mid})
-  hi('CursorLineFold', {fg=p.accent, bg=nil})
-  hi('CursorLineNr',   {fg=p.accent, bg=nil, bold=true})
-  hi('CursorLineSign', {fg=p.accent, bg=nil})
-  hi('DiffAdd',        {fg=nil, bg=p.green_bg})
-  hi('DiffChange',     {fg=nil, bg=p.yellow_bg})
-  hi('DiffDelete',     {fg=nil, bg=p.red_bg})
-  hi('DiffText',       {fg=nil, bg=p.bg_mid2})
-  hi('Directory',      {fg=p.base0D, bg=nil,    })
-  hi('EndOfBuffer',    {fg=p.bg_mid2, bg=nil,    })
-  hi('ErrorMsg',       {fg=p.red, bg=p.bg})
-  hi('FloatBorder',    {fg=p.accent, bg=p.bg_out})
-  hi('FoldColumn',     {fg=p.base0C, bg=p.base01})
-  hi('Folded',         {fg=p.base03, bg=p.base01})
-  hi('IncSearch',      {fg=p.bg, bg=p.yellow})
-  hi('lCursor',        {fg=p.bg,     bg=p.fg})
-  hi('LineNr',         {fg=p.bg_mid2, bg=nil})
-  hi('LineNrAbove',    {fg=p.bg_mid2, bg=nil})
-  hi('LineNrBelow',    {fg=p.bg_mid2, bg=nil})
-  hi('MatchParen',     {fg=p.accent,      bg=nil})
-  hi('ModeMsg',        {fg=p.base0B, bg=nil,    })
-  hi('MoreMsg',        {fg=p.base0B, bg=nil,    })
-  hi('MsgArea',        {fg=p.fg, bg=p.bg})
-  hi('MsgSeparator',   {fg=p.base04, bg=p.base02})
-  hi('NonText',        {fg=p.base03, bg=nil,    })
-  hi('Normal',         {fg=p.fg, bg=p.bg})
-  hi('NormalFloat',    {fg=p.fg, bg=p.bg_out})
-  hi('NormalNC',       {link='Normal'})
-  hi('PMenu',          {fg=p.fg, bg=p.bg_mid})
-  hi('PMenuSbar',      {link='PMenu'})
-  hi('PMenuSel',       {fg=p.bg_mid, bg=p.fg, blend=0})
-  hi('PMenuThumb',     {fg=nil,      bg=p.bg_mid2})
-  hi('Question',       {fg=p.base0D, bg=nil,    })
-  hi('QuickFixLine',   {fg=nil,      bg=p.base01})
-  hi('Search',         {fg=p.bg, bg=p.green})
-  hi('SignColumn',     {fg=p.bg_mid2, bg=nil})
-  hi('SpecialKey',     {fg=p.base03, bg=nil,    })
-  hi('SpellBad',       {fg=nil,      bg=nil,      sp=p.red, undercurl=true})
-  hi('SpellCap',       {fg=nil,      bg=nil,      sp=p.green, undercurl=true})
-  hi('SpellLocal',     {fg=nil,      bg=nil,      sp=p.yellow, undercurl=true})
-  hi('SpellRare',      {fg=nil,      bg=nil,      sp=p.cyan, undercurl=true})
-  hi('StatusLine',     {fg=p.fg_mid, bg=p.accent_bg})
-  hi('StatusLineNC',   {fg=p.fg_mid, bg=p.bg_out})
-  hi('Substitute',     {fg=p.base01, bg=p.base0A})
-  hi('TabLine',        {fg=p.fg_mid, bg=p.bg_out})
-  hi('TabLineFill',    {link='Tabline'})
-  hi('TabLineSel',     {fg=p.accent, bg=p.bg_out})
-  hi('TermCursor',     {fg=nil,      bg=nil,      reverse=true})
-  hi('TermCursorNC',   {fg=nil,      bg=nil,      reverse=true})
-  hi('Title',          {fg=p.accent, bg=nil,    })
-  hi('VertSplit',      {fg=p.accent, bg=nil})
-  hi('Visual',         {fg=nil,      bg=p.bg_mid2})
-  hi('VisualNOS',      {fg=nil, bg=p.bg_mid})
-  hi('WarningMsg',     {fg=p.yellow, bg=nil,    })
-  hi('Whitespace',     {fg=p.base03, bg=nil,    })
-  hi('WildMenu',       {fg=p.base08, bg=p.base0A})
-  hi('WinBar',         {fg=p.base04, bg=p.base02})
-  hi('WinBarNC',       {fg=p.base03, bg=p.base01})
-  hi('WinSeparator',   {fg=p.accent, bg=nil})
+  hi('ColorColumn',    { fg=nil,       bg=p.bg_mid2 })
+  hi('Conceal',        { fg=p.aqua,    bg=p.bg })
+  hi('CurSearch',      { fg=p.bg,      bg=p.yellow })
+  hi('Cursor',         { fg=p.bg,      bg=p.fg })
+  hi('CursorColumn',   { fg=nil,       bg=p.bg_mid })
+  hi('CursorIM',       { fg=p.bg,      bg=p.fg })
+  hi('CursorLine',     { fg=nil,       bg=p.bg_mid })
+  hi('CursorLineFold', { fg=p.accent,  bg=nil })
+  hi('CursorLineNr',   { fg=p.accent,  bg=nil,       bold=true })
+  hi('CursorLineSign', { fg=p.accent,  bg=nil })
+  hi('DiffAdd',        { fg=nil,       bg=p.green_bg })
+  hi('DiffChange',     { fg=nil,       bg=p.yellow_bg })
+  hi('DiffDelete',     { fg=nil,       bg=p.red_bg })
+  hi('DiffText',       { fg=nil,       bg=p.bg_mid2 })
+  hi('Directory',      { fg=p.aqua,    bg=nil })
+  hi('EndOfBuffer',    { fg=p.bg_mid2, bg=nil })
+  hi('ErrorMsg',       { fg=p.red,     bg=p.bg })
+  hi('FloatBorder',    { fg=p.accent,  bg=p.bg_out })
+  hi('FoldColumn',     { fg=p.fg_mid2, bg=nil })
+  hi('Folded',         { fg=p.fg_mid2, bg=p.bg_mid })
+  hi('IncSearch',      { fg=p.bg,      bg=p.yellow })
+  hi('lCursor',        { fg=p.bg,      bg=p.fg })
+  hi('LineNr',         { fg=p.bg_mid2, bg=nil })
+  hi('LineNrAbove',    { fg=p.bg_mid2, bg=nil })
+  hi('LineNrBelow',    { fg=p.bg_mid2, bg=nil })
+  hi('MatchParen',     { fg=nil,       bg=p.bg_mid2, bold=true })
+  hi('ModeMsg',        { fg=p.green,   bg=nil })
+  hi('MoreMsg',        { fg=p.green,   bg=nil })
+  hi('MsgArea',        { fg=p.fg,      bg=p.bg })
+  hi('MsgSeparator',   { fg=p.fg_mid2, bg=p.bg_mid2 })
+  hi('NonText',        { fg=p.bg_mid2, bg=nil })
+  hi('Normal',         { fg=p.fg,      bg=p.bg })
+  hi('NormalFloat',    { fg=p.fg,      bg=p.bg_out })
+  hi('NormalNC',       { link='Normal' })
+  hi('PMenu',          { fg=p.fg,      bg=p.bg_mid })
+  hi('PMenuSbar',      { link='PMenu' })
+  hi('PMenuSel',       { fg=p.bg,      bg=p.fg,      blend=0 })
+  hi('PMenuThumb',     { fg=nil,       bg=p.bg_mid2 })
+  hi('Question',       { fg=p.aqua,    bg=nil })
+  hi('QuickFixLine',   { fg=nil,       bg=p.bg_mid })
+  hi('Search',         { fg=p.bg,      bg=p.accent })
+  hi('SignColumn',     { fg=p.bg_mid2, bg=nil })
+  hi('SpecialKey',     { fg=p.bg_mid2, bg=nil })
+  hi('SpellBad',       { fg=nil,       bg=nil,       sp=p.red,    undercurl=true })
+  hi('SpellCap',       { fg=nil,       bg=nil,       sp=p.cyan,   undercurl=true })
+  hi('SpellLocal',     { fg=nil,       bg=nil,       sp=p.yellow, undercurl=true })
+  hi('SpellRare',      { fg=nil,       bg=nil,       sp=p.aqua,   undercurl=true })
+  hi('StatusLine',     { fg=p.fg_mid,  bg=p.accent_bg })
+  hi('StatusLineNC',   { fg=p.fg_mid,  bg=p.bg_out })
+  hi('Substitute',     { fg=p.bg,      bg=p.blue })
+  hi('TabLine',        { fg=p.fg_mid,  bg=p.bg_out })
+  hi('TabLineFill',    { link='Tabline' })
+  hi('TabLineSel',     { fg=p.accent,  bg=p.bg_out })
+  hi('TermCursor',     { fg=nil,       bg=nil,       reverse=true })
+  hi('TermCursorNC',   { fg=nil,       bg=nil,       reverse=true })
+  hi('Title',          { fg=p.accent,  bg=nil })
+  hi('VertSplit',      { fg=p.accent,  bg=nil })
+  hi('Visual',         { fg=nil,       bg=p.bg_mid2 })
+  hi('VisualNOS',      { fg=nil,       bg=p.bg_mid })
+  hi('WarningMsg',     { fg=p.yellow,  bg=nil })
+  hi('Whitespace',     { fg=p.bg_mid2, bg=nil })
+  hi('WildMenu',       { link='PMenuSel' })
+  hi('WinBar',         { link='StatusLine' })
+  hi('WinBarNC',       { link='StatusLineNC' })
+  hi('WinSeparator',   { fg=p.accent,  bg=nil })
 
   -- Standard syntax (affects treesitter)
-  hi('Boolean',        {link='Constant'})
-  hi('Character',      {link='Constant'})
-  hi('Comment',        {fg=p.fg_mid2, bg=nil,    })
-  hi('Conditional',    {link='Statement'})
-  hi('Constant',       {fg=p.magenta, bg=nil,    })
-  hi('Debug',          {link='Special'})
-  hi('Define',         {link='PreProc'})
-  hi('Delimiter',      {link='Special'})
-  hi('Error',          {fg=nil, bg=p.red_bg})
-  hi('Exception',      {link='Statement'})
-  hi('Float',          {link='Constant'})
-  hi('Function',       {fg=nil, bg=nil, bold=true})
-  hi('Identifier',     {fg=p.yellow, bg=nil,    })
-  hi('Ignore',         {fg=nil, bg=nil,    })
-  hi('Include',        {link='PreProc'})
-  hi('Keyword',        {link='Statement'})
-  hi('Label',          {link='Statement'})
-  hi('Macro',          {link='PreProc'})
-  hi('Number',         {link='Constant'})
-  hi('Operator',       {link='Statement'})
-  hi('PreCondit',      {link='PreProc'})
-  hi('PreProc',        {fg=p.blue, bg=nil})
-  hi('Repeat',         {link='Statement'})
-  hi('Special',        {fg=p.blue, bg=nil,    })
-  hi('SpecialChar',    {link='Special'})
-  hi('SpecialComment', {link='Special'})
-  hi('Statement',      {fg=p.cyan, bg=nil})
-  hi('StorageClass',   {link='Type'})
-  hi('String',         {fg=p.green, bg=nil,    })
-  hi('Structure',      {link='Type'})
-  hi('Tag',            {link='Special'})
-  hi('Todo',           {fg=p.accent, bg=p.accent_bg})
-  hi('Type',           {fg=p.fg, bg=nil,    })
-  hi('Typedef',        {link='Type'})
+  hi('Boolean',        { link='Constant' })
+  hi('Character',      { link='Constant' })
+  hi('Comment',        { fg=p.fg_mid2, bg=nil })
+  hi('Conditional',    { link='Statement' })
+  hi('Constant',       { fg=p.purple,  bg=nil })
+  hi('Debug',          { link='Special' })
+  hi('Define',         { link='PreProc' })
+  hi('Delimiter',      { fg=p.orange,  bg=nil })
+  hi('Error',          { fg=nil,       bg=p.red_bg })
+  hi('Exception',      { link='Statement' })
+  hi('Float',          { link='Constant' })
+  hi('Function',       { fg=p.aqua,    bg=nil })
+  hi('Identifier',     { fg=p.yellow,  bg=nil })
+  hi('Ignore',         { fg=nil,       bg=nil })
+  hi('Include',        { link='PreProc' })
+  hi('Keyword',        { link='Statement' })
+  hi('Label',          { link='Statement' })
+  hi('Macro',          { link='PreProc' })
+  hi('Number',         { link='Constant' })
+  hi('Operator',       { link='Statement' })
+  hi('PreCondit',      { link='PreProc' })
+  hi('PreProc',        { fg=p.blue,    bg=nil })
+  hi('Repeat',         { link='Statement' })
+  hi('Special',        { fg=p.cyan,    bg=nil })
+  hi('SpecialChar',    { link='Special' })
+  hi('SpecialComment', { link='Special' })
+  hi('Statement',      { fg=nil,       bg=nil,         bold=true })
+  hi('StorageClass',   { link='Type' })
+  hi('String',         { fg=p.green,   bg=nil })
+  hi('Structure',      { link='Type' })
+  hi('Tag',            { link='Special' })
+  hi('Todo',           { fg=p.accent,  bg=p.accent_bg, bold=true })
+  hi('Type',           { fg=p.fg,      bg=nil })
+  hi('Typedef',        { link='Type' })
 
   -- Other community standard
-  hi('Bold',       {fg=nil,      bg=nil, bold=true})
-  hi('Italic',     {fg=nil,      bg=nil, italic=true})
-  hi('Underlined', {fg=nil,      bg=nil, underline=true})
+  hi('Bold',       { fg=nil,      bg=nil, bold=true })
+  hi('Italic',     { fg=nil,      bg=nil, italic=true })
+  hi('Underlined', { fg=nil,      bg=nil, underline=true })
 
   -- Git diff
-  hi('DiffAdded',   {link='DiffAdd'})
-  hi('DiffFile',    {fg=nil, bg=p.yellow_bg})
-  hi('DiffLine',    {fg=nil, bg=p.blue_bg})
-  hi('DiffNewFile', {link='DiffAdded'})
-  hi('DiffRemoved', {link='DiffFile'})
+  hi('DiffAdded',   { link='DiffAdd' })
+  hi('DiffFile',    { fg=nil, bg=p.yellow_bg })
+  hi('DiffLine',    { fg=nil, bg=p.blue_bg })
+  hi('DiffNewFile', { link='DiffAdded' })
+  hi('DiffRemoved', { link='DiffFile' })
 
   -- Git commit
-  hi('gitcommitBranch',        {fg=p.base09, bg=nil, bold=true})
-  hi('gitcommitComment',       {link='Comment'})
-  hi('gitcommitDiscarded',     {link='Comment'})
-  hi('gitcommitDiscardedFile', {fg=p.base08, bg=nil, bold=true})
-  hi('gitcommitDiscardedType', {fg=p.base0D, bg=nil})
-  hi('gitcommitHeader',        {fg=p.base0E, bg=nil})
-  hi('gitcommitOverflow',      {fg=p.base08, bg=nil})
-  hi('gitcommitSelected',      {link='Comment'})
-  hi('gitcommitSelectedFile',  {fg=p.base0B, bg=nil, bold=true})
-  hi('gitcommitSelectedType',  {link='gitcommitDiscardedType'})
-  hi('gitcommitSummary',       {fg=p.base0B, bg=nil})
-  hi('gitcommitUnmergedFile',  {link='gitcommitDiscardedFile'})
-  hi('gitcommitUnmergedType',  {link='gitcommitDiscardedType'})
-  hi('gitcommitUntracked',     {link='Comment'})
-  hi('gitcommitUntrackedFile', {fg=p.base0A, bg=nil})
+  hi('gitcommitBranch',        { fg=p.orange, bg=nil, bold=true })
+  hi('gitcommitComment',       { link='Comment' })
+  hi('gitcommitDiscarded',     { link='Comment' })
+  hi('gitcommitDiscardedFile', { fg=p.yellow, bg=nil, bold=true })
+  hi('gitcommitDiscardedType', { fg=p.aqua,   bg=nil })
+  hi('gitcommitHeader',        { link='Title' })
+  hi('gitcommitOverflow',      { fg=p.yellow, bg=nil })
+  hi('gitcommitSelected',      { link='Comment' })
+  hi('gitcommitSelectedFile',  { fg=p.green,  bg=nil, bold=true })
+  hi('gitcommitSelectedType',  { link='gitcommitDiscardedType' })
+  hi('gitcommitSummary',       { fg=p.green,  bg=nil })
+  hi('gitcommitUnmergedFile',  { link='gitcommitDiscardedFile' })
+  hi('gitcommitUnmergedType',  { link='gitcommitDiscardedType' })
+  hi('gitcommitUntracked',     { link='Comment' })
+  hi('gitcommitUntrackedFile', { fg=p.cyan,   bg=nil })
 
   -- Built-in diagnostic
-  hi('DiagnosticError', {fg=p.red, bg=nil})
-  hi('DiagnosticHint',  {fg=p.cyan, bg=nil})
-  hi('DiagnosticInfo',  {fg=p.green, bg=nil})
-  hi('DiagnosticWarn',  {fg=p.yellow, bg=nil})
+  hi('DiagnosticError', { fg=p.red,    bg=nil })
+  hi('DiagnosticHint',  { fg=p.cyan,   bg=nil })
+  hi('DiagnosticInfo',  { fg=p.aqua,   bg=nil })
+  hi('DiagnosticWarn',  { fg=p.yellow, bg=nil })
 
-  hi('DiagnosticFloatingError', {fg=p.red, bg=p.bg_mid})
-  hi('DiagnosticFloatingHint',  {fg=p.cyan, bg=p.bg_mid})
-  hi('DiagnosticFloatingInfo',  {fg=p.green, bg=p.bg_mid})
-  hi('DiagnosticFloatingWarn',  {fg=p.yellow, bg=p.bg_mid})
+  hi('DiagnosticFloatingError', { fg=p.red,    bg=p.bg_mid })
+  hi('DiagnosticFloatingHint',  { fg=p.cyan,   bg=p.bg_mid })
+  hi('DiagnosticFloatingInfo',  { fg=p.aqua,   bg=p.bg_mid })
+  hi('DiagnosticFloatingWarn',  { fg=p.yellow, bg=p.bg_mid })
 
-  hi('DiagnosticSignError', {link='DiagnosticError'})
-  hi('DiagnosticSignHint',  {link='DiagnosticHint'})
-  hi('DiagnosticSignInfo',  {link='DiagnosticInfo'})
-  hi('DiagnosticSignWarn',  {link='DiagnosticWarn'})
+  hi('DiagnosticSignError', { link='DiagnosticError' })
+  hi('DiagnosticSignHint',  { link='DiagnosticHint' })
+  hi('DiagnosticSignInfo',  { link='DiagnosticInfo' })
+  hi('DiagnosticSignWarn',  { link='DiagnosticWarn' })
 
-  hi('DiagnosticUnderlineError', {fg=nil, bg=nil, underline=true, sp=p.red})
-  hi('DiagnosticUnderlineHint',  {fg=nil, bg=nil, underline=true, sp=p.cyan})
-  hi('DiagnosticUnderlineInfo',  {fg=nil, bg=nil, underline=true, sp=p.green})
-  hi('DiagnosticUnderlineWarn',  {fg=nil, bg=nil, underline=true, sp=p.yellow})
+  hi('DiagnosticUnderlineError', { fg=nil, bg=nil, underline=true, sp=p.red })
+  hi('DiagnosticUnderlineHint',  { fg=nil, bg=nil, underline=true, sp=p.cyan })
+  hi('DiagnosticUnderlineInfo',  { fg=nil, bg=nil, underline=true, sp=p.aqua })
+  hi('DiagnosticUnderlineWarn',  { fg=nil, bg=nil, underline=true, sp=p.yellow })
 
   -- Built-in LSP
-  hi('LspReferenceText',  {fg=nil, bg=p.bg_mid2})
-  hi('LspReferenceRead',  {link='LspReferenceText'})
-  hi('LspReferenceWrite', {link='LspReferenceText'})
+  hi('LspReferenceText',  { fg=nil, bg=p.bg_mid2 })
+  hi('LspReferenceRead',  { link='LspReferenceText' })
+  hi('LspReferenceWrite', { link='LspReferenceText' })
 
-  hi('LspSignatureActiveParameter', {link='LspReferenceText'})
+  hi('LspSignatureActiveParameter', { link='LspReferenceText' })
 
-  hi('LspCodeLens',          {link='Comment'})
-  hi('LspCodeLensSeparator', {link='Comment'})
+  hi('LspCodeLens',          { link='Comment' })
+  hi('LspCodeLensSeparator', { link='Comment' })
 
   -- Tree-sitter
   if vim.fn.has('nvim-0.8') == 1 then
-    hi('@field', {fg=p.yellow, bg=nil})
-    hi('@variable', {fg=p.fg, bg=nil})
+    hi('@text.literal',   { link='Comment' })
+    hi('@text.reference', { link='Identifier' })
+    hi('@text.title',     { link='Title' })
+    hi('@text.uri',       { link='Underlined' })
+    hi('@text.underline', { link='Underlined' })
+    hi('@text.todo',      { link='Todo' })
+
+    hi('@comment',     { link='Comment' })
+    hi('@punctuation', { link='Delimiter' })
+
+    hi('@constant',          { link='Constant' })
+    hi('@constant.builtin',  { link='Special' })
+    hi('@constant.macro',    { link='Define' })
+    hi('@define',            { link='Define' })
+    hi('@macro',             { link='Macro' })
+    hi('@string',            { link='String' })
+    hi('@string.escape',     { link='SpecialChar' })
+    hi('@string.special',    { link='SpecialChar' })
+    hi('@character',         { link='Character' })
+    hi('@character.special', { link='SpecialChar' })
+    hi('@number',            { link='Number' })
+    hi('@boolean',           { link='Boolean' })
+    hi('@float',             { link='Float' })
+
+    hi('@function',         { link='Function' })
+    hi('@function.builtin', { link='Special' })
+    hi('@function.macro',   { link='Macro' })
+    hi('@parameter',        { link='Identifier' })
+    hi('@method',           { link='Function' })
+    hi('@field',            { link='Identifier' })
+    hi('@property',         { link='Identifier' })
+    hi('@constructor',      { link='Special' })
+
+    hi('@conditional',    { link='Conditional' })
+    hi('@repeat',         { link='Repeat' })
+    hi('@label',          { link='Label' })
+    hi('@operator',       { link='Operator' })
+    hi('@keyword',        { link='Keyword' })
+    hi('@keyword.return', { fg=p.orange, bg=nil, bold=true })
+    hi('@exception',      { link='Exception' })
+
+    hi('@variable',        { fg=p.fg, bg=nil })
+    hi('@type',            { link='Type' })
+    hi('@type.definition', { link='Typedef' })
+    hi('@storageclass',    { link='StorageClass' })
+    hi('@structure',       { link='Structure' })
+    hi('@namespace',       { link='Identifier' })
+    hi('@include',         { link='Include' })
+    hi('@preproc',         { link='PreProc' })
+    hi('@debug',           { link='Debug' })
+    hi('@tag',             { link='Tag' })
   end
 
   -- Semantic tokens
   if vim.fn.has('nvim-0.9') == 1 then
-    hi('@lsp.type.property', {fg=p.yellow, bg=nil})
-    hi('@lsp.type.variable', {fg=p.fg, bg=nil})
+    hi('@lsp.type.class',         { link='Structure' })
+    hi('@lsp.type.decorator',     { link='Function' })
+    hi('@lsp.type.enum',          { link='Structure' })
+    hi('@lsp.type.enumMember',    { link='Constant' })
+    hi('@lsp.type.function',      { link='Function' })
+    hi('@lsp.type.interface',     { link='Structure' })
+    hi('@lsp.type.macro',         { link='Macro' })
+    hi('@lsp.type.method',        { link='Function' })
+    hi('@lsp.type.namespace',     { link='Structure' })
+    hi('@lsp.type.parameter',     { link='Identifier' })
+    hi('@lsp.type.property',      { link='Identifier' })
+    hi('@lsp.type.struct',        { link='Structure' })
+    hi('@lsp.type.type',          { link='Type' })
+    hi('@lsp.type.typeParameter', { link='TypeDef' })
+    hi('@lsp.type.variable',      { fg=p.fg, bg=nil })
   end
 
   -- Plugins
   -- echasnovski/mini.nvim
   if has_integration('echasnovski/mini.nvim') then
-    hi('MiniAnimateCursor', {fg=nil, bg=nil, reverse=true, nocombine=true})
+    hi('MiniAnimateCursor', { fg=nil, bg=nil, reverse=true, nocombine=true })
 
-    hi('MiniCompletionActiveParameter', {fg=nil, bg=p.bg_mid2})
+    hi('MiniCompletionActiveParameter', { fg=nil, bg=p.bg_mid2 })
 
-    hi('MiniCursorword',        {fg=nil, bg=nil, underline=true})
-    hi('MiniCursorwordCurrent', {fg=nil, bg=nil, underline=true})
+    hi('MiniCursorword',        { fg=nil, bg=nil, underline=true })
+    hi('MiniCursorwordCurrent', { fg=nil, bg=nil, underline=true })
 
-    hi('MiniIndentscopeSymbol',    {fg=p.accent, bg=nil})
-    hi('MiniIndentscopeSymbolOff', {fg=p.red, bg=nil})
+    hi('MiniIndentscopeSymbol',    { fg=p.accent, bg=nil })
+    hi('MiniIndentscopeSymbolOff', { fg=p.red,    bg=nil })
 
-    hi('MiniJump', {fg=nil, bg=nil, sp=p.accent, undercurl=true})
+    hi('MiniJump', { fg=nil, bg=nil, sp=p.accent, undercurl=true })
 
-    hi('MiniJump2dDim',        {fg=p.bg_mid2, bg=nil})
-    hi('MiniJump2dSpot',       {fg=p.fg_out2, bg=p.bg_out2, bold=true, nocombine=true})
-    hi('MiniJump2dSpotAhead',  {fg=p.fg_out, bg=p.bg_out, nocombine=true})
-    hi('MiniJump2dSpotUnique', {link='MiniJump2dSpot'})
+    hi('MiniJump2dDim',        { fg=p.bg_mid2, bg=nil })
+    hi('MiniJump2dSpot',       { fg=p.fg_out2, bg=p.bg_out2, bold=true, nocombine=true })
+    hi('MiniJump2dSpotAhead',  { fg=p.fg_out,  bg=p.bg_out2, nocombine=true })
+    hi('MiniJump2dSpotUnique', { link='MiniJump2dSpot' })
 
-    hi('MiniMapNormal',      {fg=p.fg_mid2, bg=p.bg_out})
-    hi('MiniMapSymbolCount', {fg=p.gray, bg=nil})
-    hi('MiniMapSymbolLine',  {fg=p.accent, bg=nil})
-    hi('MiniMapSymbolView',  {fg=p.accent, bg=nil})
+    hi('MiniMapNormal',      { fg=p.fg_mid2, bg=p.bg_out })
+    hi('MiniMapSymbolCount', { fg=p.fg_mid2, bg=nil })
+    hi('MiniMapSymbolLine',  { fg=p.accent,  bg=nil })
+    hi('MiniMapSymbolView',  { fg=p.accent,  bg=nil })
 
-    hi('MiniStarterCurrent',    {fg=nil,      bg=nil})
-    hi('MiniStarterFooter',     {link='Comment'})
-    hi('MiniStarterHeader',     {fg=p.accent, bg=nil, bold=true})
-    hi('MiniStarterInactive',   {link='Comment'})
-    hi('MiniStarterItem',       {fg=nil, bg=nil})
-    hi('MiniStarterItemBullet', {fg=p.gray, bg=nil})
-    hi('MiniStarterItemPrefix', {fg=p.yellow, bg=nil, bold=true})
-    hi('MiniStarterSection',    {fg=p.magenta, bg=nil})
-    hi('MiniStarterQuery',      {fg=p.green, bg=nil, bold=true})
+    hi('MiniStarterCurrent',    { fg=nil,       bg=nil })
+    hi('MiniStarterFooter',     { link='Comment' })
+    hi('MiniStarterHeader',     { fg=p.accent,  bg=nil, bold=true })
+    hi('MiniStarterInactive',   { link='Comment' })
+    hi('MiniStarterItem',       { fg=nil,       bg=nil })
+    hi('MiniStarterItemBullet', { fg=p.fg_mid2, bg=nil })
+    hi('MiniStarterItemPrefix', { fg=p.yellow,  bg=nil, bold=true })
+    hi('MiniStarterSection',    { fg=p.purple,  bg=nil })
+    hi('MiniStarterQuery',      { fg=p.green,   bg=nil, bold=true })
 
-    hi('MiniStatuslineDevinfo',     {fg=p.fg_mid, bg=p.bg_mid})
-    hi('MiniStatuslineFileinfo',    {link='MiniStatuslineDevinfo'})
-    hi('MiniStatuslineFilename',    {fg=p.fg_mid, bg=p.accent_bg})
-    hi('MiniStatuslineInactive',    {link='MiniStatuslineFilename'})
-    hi('MiniStatuslineModeCommand', {fg=p.bg, bg=p.yellow, bold=true})
-    hi('MiniStatuslineModeInsert',  {fg=p.bg, bg=p.cyan, bold=true})
-    hi('MiniStatuslineModeNormal',  {fg=p.bg, bg=p.fg,     bold=true})
-    hi('MiniStatuslineModeOther',   {fg=p.bg, bg=p.magenta, bold=true})
-    hi('MiniStatuslineModeReplace', {fg=p.bg, bg=p.red, bold=true})
-    hi('MiniStatuslineModeVisual',  {fg=p.bg, bg=p.green, bold=true})
+    hi('MiniStatuslineDevinfo',     { fg=p.fg_mid, bg=p.bg_mid })
+    hi('MiniStatuslineFileinfo',    { link='MiniStatuslineDevinfo' })
+    hi('MiniStatuslineFilename',    { fg=p.fg_mid, bg=p.accent_bg })
+    hi('MiniStatuslineInactive',    { link='MiniStatuslineFilename' })
+    hi('MiniStatuslineModeCommand', { fg=p.bg,     bg=p.yellow, bold=true })
+    hi('MiniStatuslineModeInsert',  { fg=p.bg,     bg=p.aqua,   bold=true })
+    hi('MiniStatuslineModeNormal',  { fg=p.bg,     bg=p.fg,     bold=true })
+    hi('MiniStatuslineModeOther',   { fg=p.bg,     bg=p.cyan,   bold=true })
+    hi('MiniStatuslineModeReplace', { fg=p.bg,     bg=p.red,    bold=true })
+    hi('MiniStatuslineModeVisual',  { fg=p.bg,     bg=p.green,  bold=true })
 
-    hi('MiniSurround', {link='IncSearch'})
+    hi('MiniSurround', { link='IncSearch' })
 
-    hi('MiniTablineCurrent',         {fg=p.accent, bg=p.bg,     bold=true})
-    hi('MiniTablineFill',            {link='MiniTablineHidden'})
-    hi('MiniTablineHidden',          {fg=p.fg_mid, bg=p.bg_out})
-    hi('MiniTablineModifiedCurrent', {fg=p.bg,     bg=p.accent, bold=true})
-    hi('MiniTablineModifiedHidden',  {fg=p.bg_out, bg=p.fg_mid})
-    hi('MiniTablineModifiedVisible', {fg=p.bg_out, bg=p.fg_mid, bold=true})
-    hi('MiniTablineTabpagesection',  {fg=p.bg,     bg=p.green,  bold=true})
-    hi('MiniTablineVisible',         {fg=p.fg_mid, bg=p.bg_out, bold=true})
+    hi('MiniTablineCurrent',         { fg=p.accent, bg=p.bg,     bold=true })
+    hi('MiniTablineFill',            { link='MiniTablineHidden' })
+    hi('MiniTablineHidden',          { fg=p.fg_mid, bg=p.bg_out })
+    hi('MiniTablineModifiedCurrent', { fg=p.bg,     bg=p.accent, bold=true })
+    hi('MiniTablineModifiedHidden',  { fg=p.bg_out, bg=p.fg_mid })
+    hi('MiniTablineModifiedVisible', { fg=p.bg_out, bg=p.fg_mid, bold=true })
+    hi('MiniTablineTabpagesection',  { fg=p.bg,     bg=p.green,  bold=true })
+    hi('MiniTablineVisible',         { fg=p.fg_mid, bg=p.bg_out, bold=true })
 
-    hi('MiniTestEmphasis', {fg=nil,      bg=nil, bold=true})
-    hi('MiniTestFail',     {fg=p.red, bg=nil, bold=true})
-    hi('MiniTestPass',     {fg=p.green, bg=nil, bold=true})
+    hi('MiniTestEmphasis', { fg=nil,     bg=nil, bold=true })
+    hi('MiniTestFail',     { fg=p.red,   bg=nil, bold=true })
+    hi('MiniTestPass',     { fg=p.green, bg=nil, bold=true })
 
-    hi('MiniTrailspace', {fg=nil, bg=p.red_bg})
+    hi('MiniTrailspace', { fg=nil, bg=p.red_bg })
   end
 
   if has_integration('akinsho/bufferline.nvim') then
-    hi('BufferLineBuffer',              {fg=p.base04, bg=nil})
-    hi('BufferLineBufferSelected',      {fg=p.fg, bg=nil,      bold=true})
-    hi('BufferLineBufferVisible',       {fg=p.fg, bg=nil})
-    hi('BufferLineCloseButton',         {link='BufferLineBackground'})
-    hi('BufferLineCloseButtonSelected', {link='BufferLineBufferSelected'})
-    hi('BufferLineCloseButtonVisible',  {link='BufferLineBufferVisible'})
-    hi('BufferLineFill',                {link='Normal'})
-    hi('BufferLineTab',                 {fg=p.bg, bg=p.base0A})
-    hi('BufferLineTabSelected',         {fg=p.bg, bg=p.base0A, bold=true})
+    hi('BufferLineBuffer',              { fg=p.fg_mid2, bg=nil })
+    hi('BufferLineBufferSelected',      { fg=p.fg,      bg=nil,     bold=true })
+    hi('BufferLineBufferVisible',       { fg=p.fg,      bg=nil })
+    hi('BufferLineCloseButton',         { link='BufferLineBackground' })
+    hi('BufferLineCloseButtonSelected', { link='BufferLineBufferSelected' })
+    hi('BufferLineCloseButtonVisible',  { link='BufferLineBufferVisible' })
+    hi('BufferLineFill',                { link='Normal' })
+    hi('BufferLineTab',                 { fg=p.bg,      bg=p.green })
+    hi('BufferLineTabSelected',         { fg=p.bg,      bg=p.green, bold=true })
   end
 
   if has_integration('anuvyklack/hydra.nvim') then
-    hi('HydraRed',      {fg=p.red, bg=nil})
-    hi('HydraBlue',     {fg=p.blue, bg=nil})
-    hi('HydraAmaranth', {fg=p.magenta, bg=nil})
-    hi('HydraTeal',     {fg=p.cyan, bg=nil})
-    hi('HydraPink',     {fg=p.yellow, bg=nil})
-    hi('HydraHint',     {link='NormalFloat'})
+    hi('HydraRed',      { fg=p.red,    bg=nil })
+    hi('HydraBlue',     { fg=p.aqua,   bg=nil })
+    hi('HydraAmaranth', { fg=p.purple, bg=nil })
+    hi('HydraTeal',     { fg=p.cyan,   bg=nil })
+    hi('HydraPink',     { fg=p.orange, bg=nil })
+    hi('HydraHint',     { link='NormalFloat' })
   end
 
   if has_integration('DanilaMihailov/beacon.nvim') then
-    hi('Beacon', {fg=nil, bg=p.fg_out2})
+    hi('Beacon', { fg=nil, bg=p.fg_out2 })
   end
 
   -- folke/trouble.nvim
@@ -672,298 +744,304 @@ H.apply_colorscheme = function(config)
   -- Everything works correctly out of the box
 
   if has_integration('folke/which-key.nvim') then
-    hi('WhichKey',          {fg=p.cyan, bg=nil})
-    hi('WhichKeyBorder',    {link='FloatBorder'})
-    hi('WhichKeyDesc',      {fg=p.fg, bg=nil})
-    hi('WhichKeyFloat',     {fg=p.fg, bg=p.bg_out})
-    hi('WhichKeyGroup',     {fg=p.red, bg=nil})
-    hi('WhichKeySeparator', {fg=p.green, bg=nil})
-    hi('WhichKeyValue',     {link='Comment'})
+    hi('WhichKey',          { fg=p.cyan,  bg=nil })
+    hi('WhichKeyBorder',    { link='FloatBorder' })
+    hi('WhichKeyDesc',      { fg=p.fg,    bg=nil })
+    hi('WhichKeyFloat',     { fg=p.fg,    bg=p.bg_out })
+    hi('WhichKeyGroup',     { fg=p.red,   bg=nil })
+    hi('WhichKeySeparator', { fg=p.green, bg=nil })
+    hi('WhichKeyValue',     { link='Comment' })
   end
 
   if has_integration('ggandor/leap.nvim') then
-    hi('LeapMatch',          {fg=p.base0E, bg=nil, bold=true, nocombine=true})
-    hi('LeapLabelPrimary',   {fg=p.base08, bg=nil, bold=true, nocombine=true})
-    hi('LeapLabelSecondary', {fg=p.fg, bg=nil, bold=true, nocombine=true})
-    hi('LeapLabelSelected',  {fg=p.base09, bg=nil, bold=true, nocombine=true})
-    hi('LeapBackdrop',       {link='Comment'})
+    hi('LeapMatch',          { fg=p.green,  bg=nil, bold=true, nocombine=true })
+    hi('LeapLabelPrimary',   { fg=p.yellow, bg=nil, bold=true, nocombine=true })
+    hi('LeapLabelSecondary', { fg=p.fg,     bg=nil, bold=true, nocombine=true })
+    hi('LeapLabelSelected',  { fg=p.cyan,   bg=nil, bold=true, nocombine=true })
+    hi('LeapBackdrop',       { link='Comment' })
   end
 
   if has_integration('glepnir/dashboard-nvim') then
-    hi('DashboardCenter',   {link='Delimiter'})
-    hi('DashboardFooter',   {link='Comment'})
-    hi('DashboardHeader',   {link='Title'})
-    hi('DashboardShortCut', {link='WarningMsg'})
+    hi('DashboardCenter',   { link='Delimiter' })
+    hi('DashboardFooter',   { link='Comment' })
+    hi('DashboardHeader',   { link='Title' })
+    hi('DashboardShortCut', { link='WarningMsg' })
   end
 
   if has_integration('glepnir/lspsaga.nvim') then
-    hi('LspSagaCodeActionBorder',  {fg=p.base0F, bg=nil})
-    hi('LspSagaCodeActionContent', {fg=p.fg, bg=nil})
-    hi('LspSagaCodeActionTitle',   {fg=p.base0D, bg=nil, bold=true})
+    hi('LspSagaCodeActionBorder',  { fg=p.accent, bg=nil })
+    hi('LspSagaCodeActionContent', { fg=p.fg,     bg=nil })
+    hi('LspSagaCodeActionTitle',   { fg=p.aqua,   bg=nil, bold=true })
 
-    hi('Definitions',            {fg=p.base0B, bg=nil})
-    hi('DefinitionsIcon',        {fg=p.base0D, bg=nil})
-    hi('FinderParam',            {fg=p.base08, bg=nil})
-    hi('FinderVirtText',         {fg=p.base09, bg=nil})
-    hi('LspSagaAutoPreview',     {fg=p.base0F, bg=nil})
-    hi('LspSagaFinderSelection', {fg=p.base0A, bg=nil})
-    hi('LspSagaLspFinderBorder', {fg=p.base0F, bg=nil})
-    hi('References',             {fg=p.base0B, bg=nil})
-    hi('ReferencesIcon',         {fg=p.base0D, bg=nil})
-    hi('TargetFileName',         {fg=p.fg, bg=nil})
+    hi('Definitions',            { fg=p.green,  bg=nil })
+    hi('DefinitionsIcon',        { fg=p.aqua,   bg=nil })
+    hi('FinderParam',            { fg=p.yellow, bg=nil })
+    hi('FinderVirtText',         { fg=p.orange, bg=nil })
+    hi('LspSagaAutoPreview',     { fg=p.blue,   bg=nil })
+    hi('LspSagaFinderSelection', { fg=p.cyan,   bg=nil })
+    hi('LspSagaLspFinderBorder', { fg=p.accent, bg=nil })
+    hi('References',             { fg=p.green,  bg=nil })
+    hi('ReferencesIcon',         { fg=p.aqua,   bg=nil })
+    hi('TargetFileName',         { fg=p.fg,     bg=nil })
 
-    hi('FinderSpinner',       {fg=p.base0B, bg=nil})
-    hi('FinderSpinnerBorder', {fg=p.base0F, bg=nil})
-    hi('FinderSpinnerTitle',  {link='Title'})
+    hi('FinderSpinner',       { fg=p.green,  bg=nil })
+    hi('FinderSpinnerBorder', { fg=p.accent, bg=nil })
+    hi('FinderSpinnerTitle',  { link='Title' })
 
-    hi('LspSagaDefPreviewBorder', {fg=p.base0F, bg=nil})
+    hi('LspSagaDefPreviewBorder', { fg=p.accent, bg=nil })
 
-    hi('LspSagaHoverBorder', {fg=p.base0F, bg=nil})
+    hi('LspSagaHoverBorder', { fg=p.accent, bg=nil })
 
-    hi('LspSagaRenameBorder', {fg=p.base0F, bg=nil})
+    hi('LspSagaRenameBorder', { fg=p.accent, bg=nil })
 
-    hi('LspSagaDiagnosticBorder', {fg=p.base0F, bg=nil})
-    hi('LspSagaDiagnosticHeader', {link='Title'})
-    hi('LspSagaDiagnosticSource', {fg=p.base0E, bg=nil})
+    hi('LspSagaDiagnosticBorder', { fg=p.accent, bg=nil })
+    hi('LspSagaDiagnosticHeader', { link='Title' })
+    hi('LspSagaDiagnosticSource', { fg=p.orange, bg=nil })
 
-    hi('LspSagaBorderTitle', {link='Title'})
+    hi('LspSagaBorderTitle', { link='Title' })
 
-    hi('LspSagaSignatureHelpBorder', {fg=p.base0F, bg=nil})
+    hi('LspSagaSignatureHelpBorder', { fg=p.accent, bg=nil })
 
-    hi('LSOutlinePreviewBorder', {fg=p.base0F, bg=nil})
-    hi('OutlineDetail',          {fg=p.base03, bg=nil})
-    hi('OutlineFoldPrefix',      {fg=p.base08, bg=nil})
-    hi('OutlineIndentEvn',       {fg=p.base04, bg=nil})
-    hi('OutlineIndentOdd',       {fg=p.fg, bg=nil})
+    hi('LSOutlinePreviewBorder', { fg=p.accent,  bg=nil })
+    hi('OutlineDetail',          { fg=p.bg_mid2, bg=nil })
+    hi('OutlineFoldPrefix',      { fg=p.yellow,  bg=nil })
+    hi('OutlineIndentEvn',       { fg=p.fg_mid2, bg=nil })
+    hi('OutlineIndentOdd',       { fg=p.fg,      bg=nil })
+  end
+
+  if has_integration('HiPhish/nvim-ts-rainbow2') then
+    hi('TSRainbowBlue',   { fg=p.aqua,   bg=nil })
+    hi('TSRainbowCyan',   { fg=p.cyan,   bg=nil })
+    hi('TSRainbowGreen',  { fg=p.green,  bg=nil })
+    hi('TSRainbowOrange', { fg=p.orange, bg=nil })
+    hi('TSRainbowRed',    { fg=p.red,    bg=nil })
+    hi('TSRainbowViolet', { fg=p.purple, bg=nil })
+    hi('TSRainbowYellow', { fg=p.yellow, bg=nil })
   end
 
   if has_integration('hrsh7th/nvim-cmp') then
-    hi('CmpItemAbbr',           {fg=p.fg, bg=nil})
-    hi('CmpItemAbbrDeprecated', {fg=p.base03, bg=nil})
-    hi('CmpItemAbbrMatch',      {fg=p.base0A, bg=nil,      bold=true})
-    hi('CmpItemAbbrMatchFuzzy', {fg=p.base0A, bg=nil,      bold=true})
-    hi('CmpItemKind',           {fg=p.base0F, bg=p.base01})
-    hi('CmpItemMenu',           {fg=p.fg, bg=p.base01})
+    hi('CmpItemAbbr',           { fg=p.fg,     bg=nil })
+    hi('CmpItemAbbrDeprecated', { link='Comment' })
+    hi('CmpItemAbbrMatch',      { fg=p.accent, bg=nil, bold=true })
+    hi('CmpItemAbbrMatchFuzzy', { fg=p.accent, bg=nil, bold=true })
+    hi('CmpItemKind',           { fg=p.fg,     bg=nil })
+    hi('CmpItemMenu',           { fg=p.fg,     bg=nil })
 
-    hi('CmpItemKindClass',         {link='Type'})
-    hi('CmpItemKindColor',         {link='Special'})
-    hi('CmpItemKindConstant',      {link='Constant'})
-    hi('CmpItemKindConstructor',   {link='Type'})
-    hi('CmpItemKindEnum',          {link='Structure'})
-    hi('CmpItemKindEnumMember',    {link='Structure'})
-    hi('CmpItemKindEvent',         {link='Exception'})
-    hi('CmpItemKindField',         {link='Structure'})
-    hi('CmpItemKindFile',          {link='Tag'})
-    hi('CmpItemKindFolder',        {link='Directory'})
-    hi('CmpItemKindFunction',      {link='Function'})
-    hi('CmpItemKindInterface',     {link='Structure'})
-    hi('CmpItemKindKeyword',       {link='Keyword'})
-    hi('CmpItemKindMethod',        {link='Function'})
-    hi('CmpItemKindModule',        {link='Structure'})
-    hi('CmpItemKindOperator',      {link='Operator'})
-    hi('CmpItemKindProperty',      {link='Structure'})
-    hi('CmpItemKindReference',     {link='Tag'})
-    hi('CmpItemKindSnippet',       {link='Special'})
-    hi('CmpItemKindStruct',        {link='Structure'})
-    hi('CmpItemKindText',          {link='Statement'})
-    hi('CmpItemKindTypeParameter', {link='Type'})
-    hi('CmpItemKindUnit',          {link='Special'})
-    hi('CmpItemKindValue',         {link='Identifier'})
-    hi('CmpItemKindVariable',      {link='Delimiter'})
+    hi('CmpItemKindClass',         { link='Type' })
+    hi('CmpItemKindColor',         { link='Special' })
+    hi('CmpItemKindConstant',      { link='Constant' })
+    hi('CmpItemKindConstructor',   { link='Type' })
+    hi('CmpItemKindEnum',          { link='Structure' })
+    hi('CmpItemKindEnumMember',    { link='Structure' })
+    hi('CmpItemKindEvent',         { link='Exception' })
+    hi('CmpItemKindField',         { link='Structure' })
+    hi('CmpItemKindFile',          { link='Tag' })
+    hi('CmpItemKindFolder',        { link='Directory' })
+    hi('CmpItemKindFunction',      { link='Function' })
+    hi('CmpItemKindInterface',     { link='Structure' })
+    hi('CmpItemKindKeyword',       { link='Keyword' })
+    hi('CmpItemKindMethod',        { link='Function' })
+    hi('CmpItemKindModule',        { link='Structure' })
+    hi('CmpItemKindOperator',      { link='Operator' })
+    hi('CmpItemKindProperty',      { link='Structure' })
+    hi('CmpItemKindReference',     { link='Tag' })
+    hi('CmpItemKindSnippet',       { link='Special' })
+    hi('CmpItemKindStruct',        { link='Structure' })
+    hi('CmpItemKindText',          { link='Statement' })
+    hi('CmpItemKindTypeParameter', { link='Type' })
+    hi('CmpItemKindUnit',          { link='Special' })
+    hi('CmpItemKindValue',         { link='Identifier' })
+    hi('CmpItemKindVariable',      { link='Delimiter' })
   end
 
   if has_integration('justinmk/vim-sneak') then
-    hi('Sneak',      {fg=p.bg, bg=p.base0E})
-    hi('SneakScope', {fg=p.bg, bg=p.fg_out2})
-    hi('SneakLabel', {fg=p.bg, bg=p.base0E, bold=true})
-  end
-
-  if has_integration('nvim-tree/nvim-tree.lua') then
-    hi('NvimTreeExecFile',     {fg=p.base0B, bg=nil,      bold=true})
-    hi('NvimTreeFolderIcon',   {fg=p.base03, bg=nil})
-    hi('NvimTreeGitDeleted',   {fg=p.base08, bg=nil})
-    hi('NvimTreeGitDirty',     {fg=p.base08, bg=nil})
-    hi('NvimTreeGitMerge',     {fg=p.base0C, bg=nil})
-    hi('NvimTreeGitNew',       {fg=p.base0A, bg=nil})
-    hi('NvimTreeGitRenamed',   {fg=p.base0E, bg=nil})
-    hi('NvimTreeGitStaged',    {fg=p.base0B, bg=nil})
-    hi('NvimTreeImageFile',    {fg=p.base0E, bg=nil,      bold=true})
-    hi('NvimTreeIndentMarker', {link='NvimTreeFolderIcon'})
-    hi('NvimTreeOpenedFile',   {link='NvimTreeExecFile'})
-    hi('NvimTreeRootFolder',   {link='NvimTreeGitRenamed'})
-    hi('NvimTreeSpecialFile',  {fg=p.base0D, bg=nil,      bold=true, underline=true})
-    hi('NvimTreeSymlink',      {fg=p.base0F, bg=nil,      bold=true})
-    hi('NvimTreeWindowPicker', {fg=p.fg, bg=p.base01, bold=true})
+    hi('Sneak',      { fg=p.bg, bg=p.orange })
+    hi('SneakScope', { fg=p.bg, bg=p.fg_out2 })
+    hi('SneakLabel', { fg=p.bg, bg=p.orange, bold=true })
   end
 
   if has_integration('lewis6991/gitsigns.nvim') then
-    hi('GitSignsAdd',          {fg=p.green, bg=nil})
-    hi('GitSignsAddLn',        {link='GitSignsAdd'})
-    hi('GitSignsAddInline',    {link='GitSignsAdd'})
-    hi('GitSignsChange',       {fg=p.yellow, bg=nil})
-    hi('GitSignsChangeLn',     {link='GitSignsChange'})
-    hi('GitSignsChangeInline', {link='GitSignsChange'})
-    hi('GitSignsDelete',       {fg=p.red, bg=nil})
-    hi('GitSignsDeleteLn',     {link='GitSignsDelete'})
-    hi('GitSignsDeleteInline', {link='GitSignsDelete'})
+    hi('GitSignsAdd',             { fg=p.green,  bg=nil })
+    hi('GitSignsAddLn',           { link='GitSignsAdd' })
+    hi('GitSignsAddInline',       { link='GitSignsAdd' })
+
+    hi('GitSignsChange',          { fg=p.yellow, bg=nil })
+    hi('GitSignsChangeLn',        { link='GitSignsChange' })
+    hi('GitSignsChangeInline',    { link='GitSignsChange' })
+
+    hi('GitSignsDelete',          { fg=p.red,    bg=nil })
+    hi('GitSignsDeleteLn',        { link='GitSignsDelete' })
+    hi('GitSignsDeleteInline',    { link='GitSignsDelete' })
+
+    hi('GitSignsUntracked',       { fg=p.aqua,   bg=nil })
+    hi('GitSignsUntrackedLn',     { link='GitSignsUntracked' })
+    hi('GitSignsUntrackedInline', { link='GitSignsUntracked' })
   end
 
   if has_integration('lukas-reineke/indent-blankline.nvim') then
-    hi('IndentBlanklineChar',         {fg=p.base02, bg=nil, nocombine=true})
-    hi('IndentBlanklineContextChar',  {fg=p.base0F, bg=nil, nocombine=true})
-    hi('IndentBlanklineContextStart', {fg=nil,      bg=nil, sp=p.base0F, underline=true, nocombine=true})
-    hi('IndentBlanklineIndent1',      {fg=p.base08, bg=nil, nocombine=true})
-    hi('IndentBlanklineIndent2',      {fg=p.base09, bg=nil, nocombine=true})
-    hi('IndentBlanklineIndent3',      {fg=p.base0A, bg=nil, nocombine=true})
-    hi('IndentBlanklineIndent4',      {fg=p.base0B, bg=nil, nocombine=true})
-    hi('IndentBlanklineIndent5',      {fg=p.base0C, bg=nil, nocombine=true})
-    hi('IndentBlanklineIndent6',      {fg=p.base0D, bg=nil, nocombine=true})
-    hi('IndentBlanklineIndent7',      {fg=p.base0E, bg=nil, nocombine=true})
-    hi('IndentBlanklineIndent8',      {fg=p.base0F, bg=nil, nocombine=true})
+    hi('IndentBlanklineChar',         { fg=p.bg_mid2, bg=nil, nocombine=true })
+    hi('IndentBlanklineContextChar',  { fg=p.accent,  bg=nil, nocombine=true })
+    hi('IndentBlanklineContextStart', { fg=nil,       bg=nil, sp=p.accent, underline=true, nocombine=true })
+    hi('IndentBlanklineIndent1',      { fg=p.blue,    bg=nil, nocombine=true })
+    hi('IndentBlanklineIndent2',      { fg=p.cyan,    bg=nil, nocombine=true })
+    hi('IndentBlanklineIndent3',      { fg=p.yellow,  bg=nil, nocombine=true })
+    hi('IndentBlanklineIndent4',      { fg=p.red,     bg=nil, nocombine=true })
+    hi('IndentBlanklineIndent5',      { fg=p.aqua,    bg=nil, nocombine=true })
+    hi('IndentBlanklineIndent6',      { fg=p.green,   bg=nil, nocombine=true })
+    hi('IndentBlanklineIndent7',      { fg=p.orange,  bg=nil, nocombine=true })
+    hi('IndentBlanklineIndent8',      { fg=p.purple,  bg=nil, nocombine=true })
   end
 
   if has_integration('neoclide/coc.nvim') then
-    hi('CocErrorHighlight',   {link='DiagnosticError'})
-    hi('CocHintHighlight',    {link='DiagnosticHint'})
-    hi('CocInfoHighlight',    {link='DiagnosticInfo'})
-    hi('CocWarningHighlight', {link='DiagnosticWarn'})
+    hi('CocErrorHighlight',   { link='DiagnosticError' })
+    hi('CocHintHighlight',    { link='DiagnosticHint' })
+    hi('CocInfoHighlight',    { link='DiagnosticInfo' })
+    hi('CocWarningHighlight', { link='DiagnosticWarn' })
 
-    hi('CocErrorFloat',   {link='DiagnosticFloatingError'})
-    hi('CocHintFloat',    {link='DiagnosticFloatingHint'})
-    hi('CocInfoFloat',    {link='DiagnosticFloatingInfo'})
-    hi('CocWarningFloat', {link='DiagnosticFloatingWarn'})
+    hi('CocErrorFloat',   { link='DiagnosticFloatingError' })
+    hi('CocHintFloat',    { link='DiagnosticFloatingHint' })
+    hi('CocInfoFloat',    { link='DiagnosticFloatingInfo' })
+    hi('CocWarningFloat', { link='DiagnosticFloatingWarn' })
 
-    hi('CocErrorSign',   {link='DiagnosticSignError'})
-    hi('CocHintSign',    {link='DiagnosticSignHint'})
-    hi('CocInfoSign',    {link='DiagnosticSignInfo'})
-    hi('CocWarningSign', {link='DiagnosticSignWarn'})
+    hi('CocErrorSign',   { link='DiagnosticSignError' })
+    hi('CocHintSign',    { link='DiagnosticSignHint' })
+    hi('CocInfoSign',    { link='DiagnosticSignInfo' })
+    hi('CocWarningSign', { link='DiagnosticSignWarn' })
 
-    hi('CocCodeLens',             {link='LspCodeLens'})
-    hi('CocDisabled',             {link='Comment'})
-    hi('CocMarkdownLink',         {fg=p.base0F, bg=nil})
-    hi('CocMenuSel',              {fg=nil,      bg=p.base02})
-    hi('CocNotificationProgress', {link='CocMarkdownLink'})
-    hi('CocPumVirtualText',       {link='CocMarkdownLink'})
-    hi('CocSearch',               {fg=p.base0A, bg=nil})
-    hi('CocSelectedText',         {fg=p.base08, bg=nil})
+    hi('CocCodeLens',             { link='LspCodeLens' })
+    hi('CocDisabled',             { link='Comment' })
+    hi('CocMarkdownLink',         { fg=p.blue,   bg=nil })
+    hi('CocMenuSel',              { fg=nil,      bg=p.bg_mid2 })
+    hi('CocNotificationProgress', { link='CocMarkdownLink' })
+    hi('CocPumVirtualText',       { link='CocMarkdownLink' })
+    hi('CocSearch',               { fg=p.blue,   bg=nil })
+    hi('CocSelectedText',         { fg=p.yellow, bg=nil })
   end
 
   -- nvim-lualine/lualine.nvim
   -- Everything works correctly out of the box
 
   if has_integration('nvim-neo-tree/neo-tree.nvim') then
-    hi('NeoTreeDimText',              {fg=p.base03, bg=nil})
-    hi('NeoTreeDotfile',              {fg=p.base04, bg=nil})
-    hi('NeoTreeFadeText1',            {link='NeoTreeDimText'})
-    hi('NeoTreeFadeText2',            {fg=p.base02, bg=nil})
-    hi('NeoTreeGitAdded',             {fg=p.base0B, bg=nil})
-    hi('NeoTreeGitConflict',          {fg=p.base08, bg=nil,      bold=true})
-    hi('NeoTreeGitDeleted',           {fg=p.base08, bg=nil})
-    hi('NeoTreeGitModified',          {fg=p.base0E, bg=nil})
-    hi('NeoTreeGitUnstaged',          {fg=p.base08, bg=nil})
-    hi('NeoTreeGitUntracked',         {fg=p.base0A, bg=nil})
-    hi('NeoTreeMessage',              {fg=p.fg, bg=p.base01})
-    hi('NeoTreeModified',             {fg=p.fg_out2, bg=nil})
-    hi('NeoTreeRootName',             {fg=p.base0D, bg=nil,      bold=true})
-    hi('NeoTreeTabInactive',          {fg=p.base04, bg=nil})
-    hi('NeoTreeTabSeparatorActive',   {fg=p.base03, bg=p.base02})
-    hi('NeoTreeTabSeparatorInactive', {fg=p.base01, bg=p.base01})
+    hi('NeoTreeDimText',              { fg=p.bg_mid2, bg=nil })
+    hi('NeoTreeDotfile',              { fg=p.fg_mid,  bg=nil })
+    hi('NeoTreeFadeText1',            { link='NeoTreeDimText' })
+    hi('NeoTreeFadeText2',            { fg=p.bg_mid2, bg=nil })
+    hi('NeoTreeGitAdded',             { fg=p.green,   bg=nil })
+    hi('NeoTreeGitConflict',          { fg=p.orange,  bg=nil, bold=true })
+    hi('NeoTreeGitDeleted',           { fg=p.red,     bg=nil })
+    hi('NeoTreeGitModified',          { fg=p.yellow,  bg=nil })
+    hi('NeoTreeGitUnstaged',          { fg=p.purple,  bg=nil })
+    hi('NeoTreeGitUntracked',         { fg=p.cyan,    bg=nil })
+    hi('NeoTreeMessage',              { fg=p.fg,      bg=p.bg_mid })
+    hi('NeoTreeModified',             { fg=p.fg_out,  bg=nil })
+    hi('NeoTreeRootName',             { fg=p.accent,  bg=nil, bold=true })
+    hi('NeoTreeTabInactive',          { fg=p.fg_mid2, bg=nil })
+    hi('NeoTreeTabSeparatorActive',   { fg=p.fg_mid2, bg=p.bg_mid2 })
+    hi('NeoTreeTabSeparatorInactive', { fg=p.bg_mid,  bg=p.bg_mid })
   end
 
   if has_integration('nvim-telescope/telescope.nvim') then
-    hi('TelescopeBorder',         {fg=p.accent, bg=nil})
-    hi('TelescopeMatching',       {fg=p.green, bg=nil})
-    hi('TelescopeMultiSelection', {fg=nil,      bg=p.bg_out, bold=true})
-    hi('TelescopeSelection',      {fg=nil,      bg=p.bg_out, bold=true})
+    hi('TelescopeBorder',         { fg=p.accent, bg=nil })
+    hi('TelescopeMatching',       { fg=p.accent, bg=nil, bold=true })
+    hi('TelescopeMultiSelection', { fg=nil,      bg=p.bg_mid, bold=true })
+    hi('TelescopeSelection',      { fg=nil,      bg=p.bg_mid, bold=true })
   end
 
-  if has_integration('p00f/nvim-ts-rainbow') then
-    hi('rainbowcol1', {fg=p.base08, bg=nil})
-    hi('rainbowcol2', {fg=p.base09, bg=nil})
-    hi('rainbowcol3', {fg=p.base0A, bg=nil})
-    hi('rainbowcol4', {fg=p.base0B, bg=nil})
-    hi('rainbowcol5', {fg=p.base0C, bg=nil})
-    hi('rainbowcol6', {fg=p.base0D, bg=nil})
-    hi('rainbowcol7', {fg=p.base0E, bg=nil})
+  if has_integration('nvim-tree/nvim-tree.lua') then
+    hi('NvimTreeExecFile',     { fg=p.green,  bg=nil,       bold=true })
+    hi('NvimTreeFolderIcon',   { fg=p.bg_mid, bg=nil })
+    hi('NvimTreeGitDeleted',   { fg=p.red,    bg=nil })
+    hi('NvimTreeGitDirty',     { fg=p.yellow, bg=nil })
+    hi('NvimTreeGitMerge',     { fg=p.orange, bg=nil })
+    hi('NvimTreeGitNew',       { fg=p.cyan,   bg=nil })
+    hi('NvimTreeGitRenamed',   { fg=p.purple, bg=nil })
+    hi('NvimTreeGitStaged',    { fg=p.green,  bg=nil })
+    hi('NvimTreeImageFile',    { fg=p.orange, bg=nil })
+    hi('NvimTreeIndentMarker', { link='NvimTreeFolderIcon' })
+    hi('NvimTreeOpenedFile',   { link='NvimTreeExecFile' })
+    hi('NvimTreeRootFolder',   { fg=p.accent, bg=nil,       bold=true })
+    hi('NvimTreeSpecialFile',  { fg=p.accent, bg=nil,       underline=true })
+    hi('NvimTreeSymlink',      { fg=p.blue,   bg=nil,       bold=true })
+    hi('NvimTreeWindowPicker', { fg=p.fg,     bg=p.bg_mid2, bold=true })
   end
 
   if has_integration('phaazon/hop.nvim') then
-    hi('HopNextKey',   {fg=p.base0E, bg=nil, bold=true, nocombine=true})
-    hi('HopNextKey1',  {fg=p.base08, bg=nil, bold=true, nocombine=true})
-    hi('HopNextKey2',  {fg=p.base04, bg=nil, bold=true, nocombine=true})
-    hi('HopPreview',   {fg=p.base09, bg=nil, bold=true, nocombine=true})
-    hi('HopUnmatched', {link='Comment'})
+    hi('HopNextKey',   { fg=p.green,  bg=nil, bold=true, nocombine=true })
+    hi('HopNextKey1',  { fg=p.orange, bg=nil, bold=true, nocombine=true })
+    hi('HopNextKey2',  { fg=p.fg_mid, bg=nil, bold=true, nocombine=true })
+    hi('HopPreview',   { fg=p.yellow, bg=nil, bold=true, nocombine=true })
+    hi('HopUnmatched', { link='Comment' })
   end
 
   if has_integration('rcarriga/nvim-dap-ui') then
-    hi('DapUIScope',                   {link='Title'})
-    hi('DapUIType',                    {link='Type'})
-    hi('DapUIModifiedValue',           {fg=p.base0E, bg=nil, bold=true})
-    hi('DapUIDecoration',              {link='Title'})
-    hi('DapUIThread',                  {link='String'})
-    hi('DapUIStoppedThread',           {link='Title'})
-    hi('DapUISource',                  {link='Directory'})
-    hi('DapUILineNumber',              {link='Title'})
-    hi('DapUIFloatBorder',             {link='SpecialChar'})
-    hi('DapUIWatchesEmpty',            {link='ErrorMsg'})
-    hi('DapUIWatchesValue',            {link='String'})
-    hi('DapUIWatchesError',            {link='DiagnosticError'})
-    hi('DapUIBreakpointsPath',         {link='Directory'})
-    hi('DapUIBreakpointsInfo',         {link='DiagnosticInfo'})
-    hi('DapUIBreakpointsCurrentLine',  {fg=p.base0B, bg=nil, bold=true})
-    hi('DapUIBreakpointsDisabledLine', {link='Comment'})
+    hi('DapUIScope',                   { link='Title' })
+    hi('DapUIType',                    { link='Type' })
+    hi('DapUIModifiedValue',           { fg=p.orange, bg=nil, bold=true })
+    hi('DapUIDecoration',              { link='Title' })
+    hi('DapUIThread',                  { link='String' })
+    hi('DapUIStoppedThread',           { link='Title' })
+    hi('DapUISource',                  { link='Directory' })
+    hi('DapUILineNumber',              { link='Title' })
+    hi('DapUIFloatBorder',             { link='SpecialChar' })
+    hi('DapUIWatchesEmpty',            { link='ErrorMsg' })
+    hi('DapUIWatchesValue',            { link='String' })
+    hi('DapUIWatchesError',            { link='DiagnosticError' })
+    hi('DapUIBreakpointsPath',         { link='Directory' })
+    hi('DapUIBreakpointsInfo',         { link='DiagnosticInfo' })
+    hi('DapUIBreakpointsCurrentLine',  { fg=p.green,  bg=nil, bold=true })
+    hi('DapUIBreakpointsDisabledLine', { link='Comment' })
   end
 
   if has_integration('rcarriga/nvim-notify') then
-    hi('NotifyDEBUGBorder', {fg=p.base03, bg=nil})
-    hi('NotifyDEBUGIcon',   {link='NotifyDEBUGBorder'})
-    hi('NotifyDEBUGTitle',  {link='NotifyDEBUGBorder'})
-    hi('NotifyERRORBorder', {fg=p.base08, bg=nil})
-    hi('NotifyERRORIcon',   {link='NotifyERRORBorder'})
-    hi('NotifyERRORTitle',  {link='NotifyERRORBorder'})
-    hi('NotifyINFOBorder',  {fg=p.base0C, bg=nil})
-    hi('NotifyINFOIcon',    {link='NotifyINFOBorder'})
-    hi('NotifyINFOTitle',   {link='NotifyINFOBorder'})
-    hi('NotifyTRACEBorder', {fg=p.base0D, bg=nil})
-    hi('NotifyTRACEIcon',   {link='NotifyTRACEBorder'})
-    hi('NotifyTRACETitle',  {link='NotifyTRACEBorder'})
-    hi('NotifyWARNBorder',  {fg=p.base0E, bg=nil})
-    hi('NotifyWARNIcon',    {link='NotifyWARNBorder'})
-    hi('NotifyWARNTitle',   {link='NotifyWARNBorder'})
+    hi('NotifyDEBUGBorder', { fg=p.green,  bg=nil })
+    hi('NotifyDEBUGIcon',   { link='NotifyDEBUGBorder' })
+    hi('NotifyDEBUGTitle',  { link='NotifyDEBUGBorder' })
+    hi('NotifyERRORBorder', { fg=p.red,    bg=nil })
+    hi('NotifyERRORIcon',   { link='NotifyERRORBorder' })
+    hi('NotifyERRORTitle',  { link='NotifyERRORBorder' })
+    hi('NotifyINFOBorder',  { fg=p.aqua,   bg=nil })
+    hi('NotifyINFOIcon',    { link='NotifyINFOBorder' })
+    hi('NotifyINFOTitle',   { link='NotifyINFOBorder' })
+    hi('NotifyTRACEBorder', { fg=p.cyan,   bg=nil })
+    hi('NotifyTRACEIcon',   { link='NotifyTRACEBorder' })
+    hi('NotifyTRACETitle',  { link='NotifyTRACEBorder' })
+    hi('NotifyWARNBorder',  { fg=p.yellow, bg=nil })
+    hi('NotifyWARNIcon',    { link='NotifyWARNBorder' })
+    hi('NotifyWARNTitle',   { link='NotifyWARNBorder' })
   end
 
   if has_integration('rlane/pounce.nvim') then
-    hi('PounceMatch',      {fg=p.bg, bg=p.fg, bold=true, nocombine=true})
-    hi('PounceGap',        {fg=p.bg, bg=p.base03, bold=true, nocombine=true})
-    hi('PounceAccept',     {fg=p.bg, bg=p.base08, bold=true, nocombine=true})
-    hi('PounceAcceptBest', {fg=p.bg, bg=p.base0B, bold=true, nocombine=true})
+    hi('PounceMatch',      { fg=p.bg, bg=p.fg,      bold=true, nocombine=true })
+    hi('PounceGap',        { fg=p.bg, bg=p.bg_mid2, bold=true, nocombine=true })
+    hi('PounceAccept',     { fg=p.bg, bg=p.yellow,  bold=true, nocombine=true })
+    hi('PounceAcceptBest', { fg=p.bg, bg=p.green,   bold=true, nocombine=true })
   end
 
   if has_integration('romgrk/barbar.nvim') then
-    hi('BufferCurrent',       {fg=p.fg, bg=p.base02, bold=true})
-    hi('BufferCurrentIcon',   {fg=nil,      bg=p.base02})
-    hi('BufferCurrentIndex',  {link='BufferCurrentIcon'})
-    hi('BufferCurrentMod',    {fg=p.base08, bg=p.base02, bold=true})
-    hi('BufferCurrentSign',   {link='BufferCurrent'})
-    hi('BufferCurrentTarget', {fg=p.base0E, bg=p.base02, bold=true})
+    hi('BufferCurrent',        { fg=p.accent, bg=p.bg,      bold=true })
+    hi('BufferCurrentIcon',    { fg=nil,      bg=p.bg })
+    hi('BufferCurrentIndex',   { link='BufferCurrentIcon' })
+    hi('BufferCurrentMod',     { fg=p.accent, bg=p.bg_mid,  bold=true })
+    hi('BufferCurrentSign',    { link='BufferCurrent' })
+    hi('BufferCurrentTarget',  { fg=p.accent, bg=p.bg_mid2, bold=true })
 
-    hi('BufferInactive',       {fg=p.base04, bg=p.base01})
-    hi('BufferInactiveIcon',   {fg=nil,      bg=p.base01})
-    hi('BufferInactiveIndex',  {link='BufferInactiveIcon'})
-    hi('BufferInactiveMod',    {fg=p.base08, bg=p.base01})
-    hi('BufferInactiveSign',   {link='BufferInactive'})
-    hi('BufferInactiveTarget', {fg=p.base0E, bg=p.base01, bold=true})
+    hi('BufferInactive',       { fg=p.fg,     bg=p.bg_out })
+    hi('BufferInactiveIcon',   { fg=nil,      bg=p.bg_out })
+    hi('BufferInactiveIndex',  { link='BufferInactiveIcon' })
+    hi('BufferInactiveMod',    { fg=p.fg,     bg=p.bg_mid })
+    hi('BufferInactiveSign',   { link='BufferInactive' })
+    hi('BufferInactiveTarget', { fg=p.fg,     bg=p.bg_mid2 })
 
-    hi('BufferOffset',      {link='Normal'})
-    hi('BufferTabpages',    {fg=p.base01, bg=p.base0A, bold=true})
-    hi('BufferTabpageFill', {link='Normal'})
+    hi('BufferOffset',         { link='Normal' })
+    hi('BufferTabpages',       { fg=p.bg,     bg=p.green,   bold=true })
+    hi('BufferTabpageFill',    { link='Normal' })
 
-    hi('BufferVisible',       {fg=p.fg, bg=p.base01, bold=true})
-    hi('BufferVisibleIcon',   {fg=nil,      bg=p.base01})
-    hi('BufferVisibleIndex',  {link='BufferVisibleIcon'})
-    hi('BufferVisibleMod',    {fg=p.base08, bg=p.base01, bold=true})
-    hi('BufferVisibleSign',   {link='BufferVisible'})
-    hi('BufferVisibleTarget', {fg=p.base0E, bg=p.base01, bold=true})
+    hi('BufferVisible',        { fg=p.fg,     bg=p.bg,      bold=true })
+    hi('BufferVisibleIcon',    { fg=nil,      bg=p.bg })
+    hi('BufferVisibleIndex',   { link='BufferVisibleIcon' })
+    hi('BufferVisibleMod',     { fg=p.fg,     bg=p.bg_mid,  bold=true })
+    hi('BufferVisibleSign',    { link='BufferVisible' })
+    hi('BufferVisibleTarget',  { fg=p.fg,     bg=p.bg_mid2, bold=true })
   end
 
   -- simrat39/symbols-outline.nvim
@@ -976,20 +1054,20 @@ H.apply_colorscheme = function(config)
   -- Everything works correctly out of the box
 
   if has_integration('williamboman/mason.nvim') then
-    hi('MasonError',                       {fg=p.base08, bg=nil})
-    hi('MasonHeader',                      {fg=p.bg, bg=p.base0D, bold=true})
-    hi('MasonHeaderSecondary',             {fg=p.bg, bg=p.base0F, bold=true})
-    hi('MasonHeading',                     {link='Bold'})
-    hi('MasonHighlight',                   {fg=p.base0F, bg=nil})
-    hi('MasonHighlightBlock',              {fg=p.bg, bg=p.base0F})
-    hi('MasonHighlightBlockBold',          {link='MasonHeaderSecondary'})
-    hi('MasonHighlightBlockBoldSecondary', {link='MasonHeader'})
-    hi('MasonHighlightBlockSecondary',     {fg=p.bg, bg=p.base0D})
-    hi('MasonHighlightSecondary',          {fg=p.base0D, bg=nil})
-    hi('MasonLink',                        {link='MasonHighlight'})
-    hi('MasonMuted',                       {link='Comment'})
-    hi('MasonMutedBlock',                  {fg=p.bg, bg=p.base03})
-    hi('MasonMutedBlockBold',              {fg=p.bg, bg=p.base03, bold=true})
+    hi('MasonError',                       { fg=p.red,    bg=nil })
+    hi('MasonHeader',                      { fg=p.bg,     bg=p.aqua,    bold=true })
+    hi('MasonHeaderSecondary',             { fg=p.bg,     bg=p.blue,    bold=true })
+    hi('MasonHeading',                     { link='Bold' })
+    hi('MasonHighlight',                   { fg=p.accent, bg=nil })
+    hi('MasonHighlightBlock',              { fg=p.bg,     bg=p.accent })
+    hi('MasonHighlightBlockBold',          { link='MasonHeaderSecondary' })
+    hi('MasonHighlightBlockBoldSecondary', { link='MasonHeader' })
+    hi('MasonHighlightBlockSecondary',     { fg=p.bg,     bg=p.aqua })
+    hi('MasonHighlightSecondary',          { fg=p.aqua,   bg=nil })
+    hi('MasonLink',                        { link='MasonHighlight' })
+    hi('MasonMuted',                       { link='Comment' })
+    hi('MasonMutedBlock',                  { fg=p.bg,     bg=p.bg_mid2 })
+    hi('MasonMutedBlockBold',              { fg=p.bg,     bg=p.bg_mid2, bold=true })
   end
 
   -- Terminal colors
@@ -997,16 +1075,16 @@ H.apply_colorscheme = function(config)
   vim.g.terminal_color_1  = p.red
   vim.g.terminal_color_2  = p.green
   vim.g.terminal_color_3  = p.yellow
-  vim.g.terminal_color_4  = p.blue
-  vim.g.terminal_color_5  = p.magenta
+  vim.g.terminal_color_4  = p.aqua
+  vim.g.terminal_color_5  = p.purple
   vim.g.terminal_color_6  = p.cyan
   vim.g.terminal_color_7  = p.fg
   vim.g.terminal_color_8  = p.bg
   vim.g.terminal_color_9  = p.red
   vim.g.terminal_color_10 = p.green
   vim.g.terminal_color_11 = p.yellow
-  vim.g.terminal_color_12 = p.blue
-  vim.g.terminal_color_13 = p.magenta
+  vim.g.terminal_color_12 = p.aqua
+  vim.g.terminal_color_13 = p.purple
   vim.g.terminal_color_14 = p.cyan
   vim.g.terminal_color_15 = p.fg
 end
