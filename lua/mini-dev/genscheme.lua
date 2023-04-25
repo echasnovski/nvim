@@ -1,19 +1,12 @@
 -- TODO:
 --
--- - Tweak tree-sitter and semantic tokens.
---
 -- - Use numeric chroma instead of discrete?
 --
--- - Add plugins:
---     - 'folke/noice.nvim'
---     - 'folke/lazy.nvim'
---     - 'kevinhwang91/nvim-ufo'
---
 -- Documentation:
--- - Note about **boled** choices and how to override them.
+-- - Note about **bold** choices and how to override them.
 
---- *mini.base2* Generate color scheme based on background and foreground
---- *MiniBase2*
+--- *mini.genscheme* Generate configurable color scheme
+--- *MiniGenscheme*
 ---
 --- MIT License Copyright (c) 2023 Evgeni Chasnovski
 ---
@@ -30,6 +23,8 @@
 ---     - 'akinsho/bufferline.nvim'
 ---     - 'anuvyklack/hydra.nvim'
 ---     - 'DanilaMihailov/beacon.nvim'
+---     - 'folke/lazy.nvim'
+---     - 'folke/noice.nvim'
 ---     - 'folke/todo-comments.nvim'
 ---     - 'folke/trouble.nvim'
 ---     - 'folke/which-key.nvim'
@@ -39,6 +34,7 @@
 ---     - 'HiPhish/nvim-ts-rainbow2'
 ---     - 'hrsh7th/nvim-cmp'
 ---     - 'justinmk/vim-sneak'
+---     - 'kevinhwang91/nvim-ufo'
 ---     - 'lewis6991/gitsigns.nvim'
 ---     - 'lukas-reineke/indent-blankline.nvim'
 ---     - 'neoclide/coc.nvim'
@@ -58,19 +54,19 @@
 ---
 --- # Setup~
 ---
---- This module needs a setup with `require('mini.base2').setup({})` (replace
+--- This module needs a setup with `require('mini.genscheme').setup({})` (replace
 --- `{}` with your `config` table). It will create global Lua table
---- `MiniBase2` which you can use for scripting or manually (with
---- `:lua MiniBase2.*`).
+--- `MiniGenscheme` which you can use for scripting or manually (with
+--- `:lua MiniGenscheme.*`).
 ---
---- See |MiniBase2.config| for `config` structure and default values.
+--- See |MiniGenscheme.config| for `config` structure and default values.
 ---
---- This module doesn't have runtime options, so using `vim.b.minibase2_config`
---- will have no effect here.
+--- This module doesn't have runtime options, so using
+--- `vim.b.minigenscheme_config` will have no effect here.
 ---
 --- Example:
 --- >
----   require('mini.base2').setup({
+---   require('mini.genscheme').setup({
 ---     background = '#0a2a2a',
 ---     foreground = '#d0d0d0',
 ---     plugins = {
@@ -86,7 +82,7 @@
 ---     - Put "myscheme.lua" file (name after your chosen theme name) inside
 ---       any "colors" directory reachable from 'runtimepath' ("colors" inside
 ---       your Neovim config directory is usually enough).
----     - Inside "myscheme.lua" call `require('mini.base2').setup()` with your
+---     - Inside "myscheme.lua" call `require('mini.genscheme').setup()` with your
 ---       palette and only after that set |g:colors_name| to "myscheme".
 
 ---@diagnostic disable:undefined-field
@@ -95,16 +91,16 @@
 
 -- Module definition ==========================================================
 -- TODO: make local before public release
-MiniBase2 = {}
+MiniGenscheme = {}
 H = {}
 
 --- Module setup
 ---
 ---
 ---@usage `require('mini.colors').setup({})` (replace `{}` with your `config` table)
-MiniBase2.setup = function(config)
+MiniGenscheme.setup = function(config)
   -- Export module
-  _G.MiniBase2 = MiniBase2
+  _G.MiniGenscheme = MiniGenscheme
 
   -- Setup config
   config = H.setup_config(config)
@@ -117,7 +113,7 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
-MiniBase2.config = {
+MiniGenscheme.config = {
   background = nil,
   foreground = nil,
 
@@ -129,13 +125,13 @@ MiniBase2.config = {
   accent = 'bg',
 
   -- Plugin integrations. Use `default = false` to disable all integrations.
-  -- Also can be set per plugin (see |MiniBase2.config|).
+  -- Also can be set per plugin (see |MiniGenscheme.config|).
   plugins = { default = true },
 }
 --minidoc_afterlines_end
 
-MiniBase2.make_palette = function(config)
-  config = vim.tbl_deep_extend('force', MiniBase2.config, config or {})
+MiniGenscheme.make_palette = function(config)
+  config = vim.tbl_deep_extend('force', MiniGenscheme.config, config or {})
   local bg = H.validate_hex(config.background)
   local fg = H.validate_hex(config.foreground)
   local saturation = H.validate_one_of(config.saturation, H.saturation_values, 'saturation')
@@ -244,7 +240,7 @@ MiniBase2.make_palette = function(config)
   return res
 end
 
-MiniBase2.random_config = function(opts)
+MiniGenscheme.random_config = function(opts)
   local is_dark = vim.o.background == 'dark'
   local bg_l = is_dark and 15 or 85
   local fg_l = is_dark and 85 or 15
@@ -263,7 +259,7 @@ end
 
 -- Helper data ================================================================
 -- Module default config
-H.default_config = MiniBase2.config
+H.default_config = MiniGenscheme.config
 
 -- Color conversion constants
 H.tau = 2 * math.pi
@@ -346,7 +342,7 @@ H.setup_config = function(config)
 end
 
 H.apply_config = function(config)
-  MiniBase2.config = config
+  MiniGenscheme.config = config
 
   H.apply_colorscheme(config)
 end
@@ -397,7 +393,7 @@ H.apply_colorscheme = function(config)
   -- might cause some issues with `syntax on`.
   vim.g.colors_name = nil
 
-  local p = MiniBase2.make_palette(config)
+  local p = MiniGenscheme.make_palette(config)
   local hi = function(name, data) vim.api.nvim_set_hl(0, name, data) end
   local has_integration = function(name)
     local entry = config.plugins[name]
@@ -413,24 +409,24 @@ H.apply_colorscheme = function(config)
 
   -- Builtin highlighting groups
   hi('ColorColumn',    { fg=nil,       bg=p.bg_mid2 })
-  hi('Conceal',        { fg=p.aqua,    bg=p.bg })
+  hi('Conceal',        { fg=p.aqua,    bg=nil })
   hi('CurSearch',      { fg=p.bg,      bg=p.yellow })
   hi('Cursor',         { fg=p.bg,      bg=p.fg })
   hi('CursorColumn',   { fg=nil,       bg=p.bg_mid })
   hi('CursorIM',       { fg=p.bg,      bg=p.fg })
   hi('CursorLine',     { fg=nil,       bg=p.bg_mid })
-  hi('CursorLineFold', { fg=p.accent,  bg=nil })
+  hi('CursorLineFold', { fg=p.bg_mid2, bg=nil })
   hi('CursorLineNr',   { fg=p.accent,  bg=nil,       bold=true })
-  hi('CursorLineSign', { fg=p.accent,  bg=nil })
+  hi('CursorLineSign', { fg=p.bg_mid2, bg=nil })
   hi('DiffAdd',        { fg=nil,       bg=p.green_bg })
   hi('DiffChange',     { fg=nil,       bg=p.yellow_bg })
   hi('DiffDelete',     { fg=nil,       bg=p.red_bg })
   hi('DiffText',       { fg=nil,       bg=p.bg_mid2 })
   hi('Directory',      { fg=p.aqua,    bg=nil })
   hi('EndOfBuffer',    { fg=p.bg_mid2, bg=nil })
-  hi('ErrorMsg',       { fg=p.red,     bg=p.bg })
+  hi('ErrorMsg',       { fg=p.red,     bg=nil })
   hi('FloatBorder',    { fg=p.accent,  bg=p.bg_out })
-  hi('FoldColumn',     { fg=p.fg_mid2, bg=nil })
+  hi('FoldColumn',     { fg=p.bg_mid2, bg=nil })
   hi('Folded',         { fg=p.fg_mid2, bg=p.bg_mid })
   hi('IncSearch',      { fg=p.bg,      bg=p.yellow })
   hi('lCursor',        { fg=p.bg,      bg=p.fg })
@@ -439,8 +435,8 @@ H.apply_colorscheme = function(config)
   hi('LineNrBelow',    { fg=p.bg_mid2, bg=nil })
   hi('MatchParen',     { fg=nil,       bg=p.bg_mid2, bold=true })
   hi('ModeMsg',        { fg=p.green,   bg=nil })
-  hi('MoreMsg',        { fg=p.green,   bg=nil })
-  hi('MsgArea',        { fg=p.fg,      bg=p.bg })
+  hi('MoreMsg',        { fg=p.aqua,    bg=nil })
+  hi('MsgArea',        { link='Normal' })
   hi('MsgSeparator',   { fg=p.fg_mid2, bg=p.bg_mid2 })
   hi('NonText',        { fg=p.bg_mid2, bg=nil })
   hi('Normal',         { fg=p.fg,      bg=p.bg })
@@ -576,19 +572,25 @@ H.apply_colorscheme = function(config)
 
   -- Tree-sitter
   if vim.fn.has('nvim-0.8') == 1 then
+    -- Sources:
+    -- - `:h treesitter-highlight-groups`
+    -- - https://github.com/nvim-treesitter/nvim-treesitter/blob/master/CONTRIBUTING.md#highlights
     hi('@text.literal',   { link='Comment' })
     hi('@text.reference', { link='Identifier' })
     hi('@text.title',     { link='Title' })
     hi('@text.uri',       { link='Underlined' })
     hi('@text.underline', { link='Underlined' })
     hi('@text.todo',      { link='Todo' })
+    hi('@text.note',      { link='MoreMsg' })
+    hi('@text.warning',   { link='WarningMsg' })
+    hi('@text.danger',    { link='ErrorMsg' })
 
     hi('@comment',     { link='Comment' })
     hi('@punctuation', { link='Delimiter' })
 
     hi('@constant',          { link='Constant' })
     hi('@constant.builtin',  { link='Special' })
-    hi('@constant.macro',    { link='Define' })
+    hi('@constant.macro',    { link='Macro' })
     hi('@define',            { link='Define' })
     hi('@macro',             { link='Macro' })
     hi('@string',            { link='String' })
@@ -601,10 +603,12 @@ H.apply_colorscheme = function(config)
     hi('@float',             { link='Float' })
 
     hi('@function',         { link='Function' })
+    hi('@function.call',    { link='Function' })
     hi('@function.builtin', { link='Special' })
     hi('@function.macro',   { link='Macro' })
     hi('@parameter',        { link='Identifier' })
     hi('@method',           { link='Function' })
+    hi('@method.call',      { link='Function' })
     hi('@field',            { link='Identifier' })
     hi('@property',         { link='Identifier' })
     hi('@constructor',      { link='Special' })
@@ -617,35 +621,41 @@ H.apply_colorscheme = function(config)
     hi('@keyword.return', { fg=p.orange, bg=nil, bold=true })
     hi('@exception',      { link='Exception' })
 
-    hi('@variable',        { fg=p.fg, bg=nil })
-    hi('@type',            { link='Type' })
-    hi('@type.definition', { link='Typedef' })
-    hi('@storageclass',    { link='StorageClass' })
-    hi('@structure',       { link='Structure' })
-    hi('@namespace',       { link='Identifier' })
-    hi('@include',         { link='Include' })
-    hi('@preproc',         { link='PreProc' })
-    hi('@debug',           { link='Debug' })
-    hi('@tag',             { link='Tag' })
+    hi('@variable',         { fg=p.fg, bg=nil })
+    hi('@variable.builtin', { link='Special' })
+    hi('@type',             { link='Type' })
+    hi('@type.builtin',     { link='Special' })
+    hi('@type.definition',  { link='Typedef' })
+    hi('@storageclass',     { link='StorageClass' })
+    hi('@structure',        { link='Structure' })
+    hi('@namespace',        { link='Identifier' })
+    hi('@include',          { link='Include' })
+    hi('@preproc',          { link='PreProc' })
+    hi('@debug',            { link='Debug' })
+    hi('@tag',              { link='Tag' })
   end
 
   -- Semantic tokens
   if vim.fn.has('nvim-0.9') == 1 then
+    -- Source: `:h lsp-semantic-highlight`
     hi('@lsp.type.class',         { link='Structure' })
-    hi('@lsp.type.decorator',     { link='Function' })
-    hi('@lsp.type.enum',          { link='Structure' })
-    hi('@lsp.type.enumMember',    { link='Constant' })
-    hi('@lsp.type.function',      { link='Function' })
-    hi('@lsp.type.interface',     { link='Structure' })
+    hi('@lsp.type.decorator',     { link='@function' })
+    hi('@lsp.type.enum',          { link='@type' })
+    hi('@lsp.type.enumMember',    { link='@constant' })
+    hi('@lsp.type.function',      { link='@function' })
+    hi('@lsp.type.interface',     { link='@lsp.type' })
     hi('@lsp.type.macro',         { link='Macro' })
-    hi('@lsp.type.method',        { link='Function' })
-    hi('@lsp.type.namespace',     { link='Structure' })
-    hi('@lsp.type.parameter',     { link='Identifier' })
-    hi('@lsp.type.property',      { link='Identifier' })
-    hi('@lsp.type.struct',        { link='Structure' })
-    hi('@lsp.type.type',          { link='Type' })
-    hi('@lsp.type.typeParameter', { link='TypeDef' })
+    hi('@lsp.type.method',        { link='@method' })
+    hi('@lsp.type.namespace',     { link='@namespace' })
+    hi('@lsp.type.parameter',     { link='@parameter' })
+    hi('@lsp.type.property',      { link='@property' })
+    hi('@lsp.type.struct',        { link='@structure' })
+    hi('@lsp.type.type',          { link='@type' })
+    hi('@lsp.type.typeParameter', { link='@type.definition' })
     hi('@lsp.type.variable',      { fg=p.fg, bg=nil })
+
+    hi('@lsp.mod.defaultLibrary', { link='Special' })
+    hi('@lsp.mod.deprecated',     { fg=p.red, bg=nil })
   end
 
   -- Plugins
@@ -735,6 +745,18 @@ H.apply_colorscheme = function(config)
 
   if has_integration('DanilaMihailov/beacon.nvim') then
     hi('Beacon', { fg=nil, bg=p.fg_out2 })
+  end
+
+  if has_integration('folke/lazy.nvim') then
+    hi('LazyButton',       { fg=nil,      bg=p.bg_mid })
+    hi('LazyButtonActive', { fg=nil,      bg=p.bg_mid2 })
+    hi('LazyDimmed',       { link='Comment' })
+    hi('LazyH1',           { fg=p.accent, bg=p.bg_mid2, bold=true })
+  end
+
+  if has_integration('folke/noice.nvim') then
+    hi('NoiceCmdlinePopupBorder', { fg=p.aqua,   bg=nil })
+    hi('NoiceConfirmBorder',      { fg=p.yellow, bg=nil })
   end
 
   -- folke/trouble.nvim
@@ -847,7 +869,7 @@ H.apply_colorscheme = function(config)
     hi('CmpItemKindReference',     { link='Tag' })
     hi('CmpItemKindSnippet',       { link='Special' })
     hi('CmpItemKindStruct',        { link='Structure' })
-    hi('CmpItemKindText',          { link='Statement' })
+    hi('CmpItemKindText',          { link='Normal' })
     hi('CmpItemKindTypeParameter', { link='Type' })
     hi('CmpItemKindUnit',          { link='Special' })
     hi('CmpItemKindValue',         { link='Identifier' })
@@ -859,6 +881,9 @@ H.apply_colorscheme = function(config)
     hi('SneakScope', { fg=p.bg, bg=p.fg_out2 })
     hi('SneakLabel', { fg=p.bg, bg=p.orange, bold=true })
   end
+
+  -- 'kevinhwang91/nvim-ufo'
+  -- Everything works correctly out of the box
 
   if has_integration('lewis6991/gitsigns.nvim') then
     hi('GitSignsAdd',             { fg=p.green,  bg=nil })
@@ -942,7 +967,7 @@ H.apply_colorscheme = function(config)
 
   if has_integration('nvim-telescope/telescope.nvim') then
     hi('TelescopeBorder',         { fg=p.accent, bg=nil })
-    hi('TelescopeMatching',       { fg=p.accent, bg=nil, bold=true })
+    hi('TelescopeMatching',       { fg=p.accent, bg=nil,      bold=true })
     hi('TelescopeMultiSelection', { fg=nil,      bg=p.bg_mid, bold=true })
     hi('TelescopeSelection',      { fg=nil,      bg=p.bg_mid, bold=true })
   end
@@ -1265,7 +1290,7 @@ end
 
 -- ============================================================================
 -- Utilities ------------------------------------------------------------------
-H.error = function(msg) error(string.format('(mini.base2) %s', msg), 0) end
+H.error = function(msg) error(string.format('(mini.genscheme) %s', msg), 0) end
 
 H.round = function(x)
   if x == nil then return nil end
@@ -1282,4 +1307,4 @@ H.dist_period = function(x, y, period)
   return math.min(d, period - d)
 end
 
-return MiniBase2
+return MiniGenscheme
