@@ -36,11 +36,11 @@ NOTE: Currently this configuration defers sourcing of most time consuming comman
 Basically, this should (after installing system dependencies) work just by cloning this repository and fetching its plugin submodules:
 
 ```bash
-git clone --depth 1 https://github.com/echasnovski/nvim.git
+git clone --filter=blob:none https://github.com/echasnovski/nvim.git
 
 # Download all plugin submodules with latest commit
 # `--recursive` ensures that submodules of plugins are also downloaded
-git submodule update --init --depth 1 --recursive
+git submodule update --init --filter=blob:none --recursive
 ```
 
 ## Maintenance
@@ -50,7 +50,7 @@ git submodule update --init --depth 1 --recursive
 Get the latest updates from submodules' remotes:
 
 ```bash
-git submodule update --remote --init --depth 1 --recursive
+git submodule update --remote --init --filter=blob:none --recursive
 ```
 
 ### Add new plugin
@@ -66,10 +66,10 @@ git submodule update --remote --init --depth 1 --recursive
     # Add submodule which will track branch <branch-to-track> (replace
     # manually with what you want; usually 'main' or 'master').
     # This will download plugin (but not its submodules).
-    git submodule add --name telescope-fzy-native -b <branch-to-track> --depth 1 https://github.com/nvim-telescope/telescope-fzy-native.nvim pack/plugins/opt/telescope-fzy-native
+    git submodule add --name telescope-fzy-native -b <branch-to-track> --filter=blob:none https://github.com/nvim-telescope/telescope-fzy-native.nvim pack/plugins/opt/telescope-fzy-native
 
     # Ensure that all submodules of plugin are also downloaded
-    git submodule update --init --depth 1 --recursive
+    git submodule update --init --filter=blob:none --recursive
     ```
 1. Ensure that plugin is loaded (added to `runtimepath` and all needed files are executed) alongside its custom configuration (goes into 'lua/ec/configs'):
     - If plugin is added to 'start', nothing is needed to be done.
