@@ -5,8 +5,8 @@
 -- Documentation:
 -- - Note about **bold** choices and how to override them.
 
---- *mini.genscheme* Generate configurable color scheme
---- *MiniGenscheme*
+--- *mini.hues* Generate configurable color scheme
+--- *MiniHues*
 ---
 --- MIT License Copyright (c) 2023 Evgeni Chasnovski
 ---
@@ -54,19 +54,19 @@
 ---
 --- # Setup~
 ---
---- This module needs a setup with `require('mini.genscheme').setup({})` (replace
+--- This module needs a setup with `require('mini.hues').setup({})` (replace
 --- `{}` with your `config` table). It will create global Lua table
---- `MiniGenscheme` which you can use for scripting or manually (with
---- `:lua MiniGenscheme.*`).
+--- `MiniHues` which you can use for scripting or manually (with
+--- `:lua MiniHues.*`).
 ---
---- See |MiniGenscheme.config| for `config` structure and default values.
+--- See |MiniHues.config| for `config` structure and default values.
 ---
 --- This module doesn't have runtime options, so using
---- `vim.b.minigenscheme_config` will have no effect here.
+--- `vim.b.minihues_config` will have no effect here.
 ---
 --- Example:
 --- >
----   require('mini.genscheme').setup({
+---   require('mini.hues').setup({
 ---     background = '#0a2a2a',
 ---     foreground = '#d0d0d0',
 ---     plugins = {
@@ -82,7 +82,7 @@
 ---     - Put "myscheme.lua" file (name after your chosen theme name) inside
 ---       any "colors" directory reachable from 'runtimepath' ("colors" inside
 ---       your Neovim config directory is usually enough).
----     - Inside "myscheme.lua" call `require('mini.genscheme').setup()` with your
+---     - Inside "myscheme.lua" call `require('mini.hues').setup()` with your
 ---       palette and only after that set |g:colors_name| to "myscheme".
 
 ---@diagnostic disable:undefined-field
@@ -91,16 +91,16 @@
 
 -- Module definition ==========================================================
 -- TODO: make local before public release
-MiniGenscheme = {}
+MiniHues = {}
 H = {}
 
 --- Module setup
 ---
 ---
----@usage `require('mini.colors').setup({})` (replace `{}` with your `config` table)
-MiniGenscheme.setup = function(config)
+---@usage `require('mini.hues').setup({})` (replace `{}` with your `config` table)
+MiniHues.setup = function(config)
   -- Export module
-  _G.MiniGenscheme = MiniGenscheme
+  _G.MiniHues = MiniHues
 
   -- Setup config
   config = H.setup_config(config)
@@ -113,7 +113,7 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
-MiniGenscheme.config = {
+MiniHues.config = {
   background = nil,
   foreground = nil,
 
@@ -121,17 +121,17 @@ MiniGenscheme.config = {
   saturation = 'medium',
 
   -- Accent color. One of: 'bg', 'fg', 'red', 'orange', 'yellow', 'green',
-  -- 'cyan', 'aqua', 'blue', 'purple'
+  -- 'cyan', 'azure', 'blue', 'purple'
   accent = 'bg',
 
   -- Plugin integrations. Use `default = false` to disable all integrations.
-  -- Also can be set per plugin (see |MiniGenscheme.config|).
+  -- Also can be set per plugin (see |MiniHues.config|).
   plugins = { default = true },
 }
 --minidoc_afterlines_end
 
-MiniGenscheme.make_palette = function(config)
-  config = vim.tbl_deep_extend('force', MiniGenscheme.config, config or {})
+MiniHues.make_palette = function(config)
+  config = vim.tbl_deep_extend('force', MiniHues.config, config or {})
   local bg = H.validate_hex(config.background)
   local fg = H.validate_hex(config.foreground)
   local saturation = H.validate_one_of(config.saturation, H.saturation_values, 'saturation')
@@ -145,8 +145,8 @@ MiniGenscheme.make_palette = function(config)
 
   -- Basic lightness levels
   local is_dark = bg_l <= 50
-  local bg_l_edge = is_dark and 0 or 100
-  local fg_l_edge = is_dark and 100 or 0
+  local l_bg_edge = is_dark and 0 or 100
+  local l_fg_edge = is_dark and 100 or 0
   local l_mid = 0.5 * (bg_l + fg_l)
 
   -- Hues. Correct them so that shifted reference 60 degree grid is distant
@@ -175,25 +175,25 @@ MiniGenscheme.make_palette = function(config)
   local hues = {
     bg = bg_h, fg = fg_h,
     red  = 0   + d, orange = 45  + d, yellow = 90  + d, green  = 135 + d,
-    cyan = 180 + d, aqua   = 225 + d, blue   = 270 + d, purple = 315 + d,
+    cyan = 180 + d, azure  = 225 + d, blue   = 270 + d, purple = 315 + d,
   }
 
   -- Configurable chroma level
-  local chroma = ({ low = 5, medium = 8, high = 15 })[saturation]
+  local chroma = ({ low = 4, medium = 8, high = 16 })[saturation]
 
   -- Compute result
   --stylua: ignore
   local res = {
     -- `_out`/`_mid` are third of the way towards reference (edge/center)
     -- `_out2`/`_mid2` are two thirds
-    bg_out2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * bg_l_edge, c = bg_lch.c, h = bg_lch.h }),
-    bg_out     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * bg_l_edge, c = bg_lch.c, h = bg_lch.h }),
+    bg_out2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * l_bg_edge, c = bg_lch.c, h = bg_lch.h }),
+    bg_out     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * l_bg_edge, c = bg_lch.c, h = bg_lch.h }),
     bg         = bg,
     bg_mid     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * l_mid,     c = bg_lch.c, h = bg_lch.h }),
     bg_mid2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * l_mid,     c = bg_lch.c, h = bg_lch.h }),
 
-    fg_out2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * fg_l_edge, c = fg_lch.c, h = fg_lch.h }),
-    fg_out     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * fg_l_edge, c = fg_lch.c, h = fg_lch.h }),
+    fg_out2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * l_fg_edge, c = fg_lch.c, h = fg_lch.h }),
+    fg_out     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * l_fg_edge, c = fg_lch.c, h = fg_lch.h }),
     fg         = fg,
     fg_mid     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * l_mid,     c = fg_lch.c, h = fg_lch.h }),
     fg_mid2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * l_mid,     c = fg_lch.c, h = fg_lch.h }),
@@ -213,14 +213,14 @@ MiniGenscheme.make_palette = function(config)
     cyan       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.cyan }),
     cyan_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.cyan }),
 
-    aqua       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.aqua }),
-    aqua_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.aqua }),
+    azure      = H.oklch2hex({ l = fg_l, c = chroma, h = hues.azure }),
+    azure_bg   = H.oklch2hex({ l = bg_l, c = chroma, h = hues.azure }),
 
     blue       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.blue }),
     blue_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.blue }),
 
-    purple    = H.oklch2hex({ l = fg_l, c = chroma, h = hues.purple }),
-    purple_bg = H.oklch2hex({ l = bg_l, c = chroma, h = hues.purple }),
+    purple     = H.oklch2hex({ l = fg_l, c = chroma, h = hues.purple }),
+    purple_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues.purple }),
   }
 
   -- Manage 'bg' and 'fg' accents separately to ensure that corresponding
@@ -240,11 +240,11 @@ MiniGenscheme.make_palette = function(config)
   return res
 end
 
-MiniGenscheme.random_config = function(opts)
+MiniHues.random_config = function(opts)
   local is_dark = vim.o.background == 'dark'
-  local bg_l = is_dark and 15 or 85
-  local fg_l = is_dark and 85 or 15
-  local bg_c = is_dark and 5 or 2
+  local bg_l = is_dark and 15 or 90
+  local fg_l = is_dark and 80 or 15
+  local bg_c = is_dark and 5 or 1
 
   local hue = math.random(0, 359)
   local random_config = {
@@ -259,14 +259,14 @@ end
 
 -- Helper data ================================================================
 -- Module default config
-H.default_config = MiniGenscheme.config
+H.default_config = MiniHues.config
 
 -- Color conversion constants
 H.tau = 2 * math.pi
 
 H.saturation_values = { 'low', 'medium', 'high' }
 
-H.accent_values = { 'bg', 'fg', 'red', 'orange', 'yellow', 'green', 'cyan', 'aqua', 'blue', 'purple' }
+H.accent_values = { 'bg', 'fg', 'red', 'orange', 'yellow', 'green', 'cyan', 'azure', 'blue', 'purple' }
 
 -- Cusps for Oklch color space. See 'mini.colors' for more details.
 --stylua: ignore start
@@ -342,7 +342,7 @@ H.setup_config = function(config)
 end
 
 H.apply_config = function(config)
-  MiniGenscheme.config = config
+  MiniHues.config = config
 
   H.apply_colorscheme(config)
 end
@@ -393,7 +393,7 @@ H.apply_colorscheme = function(config)
   -- might cause some issues with `syntax on`.
   vim.g.colors_name = nil
 
-  local p = MiniGenscheme.make_palette(config)
+  local p = MiniHues.make_palette(config)
   local hi = function(name, data) vim.api.nvim_set_hl(0, name, data) end
   local has_integration = function(name)
     local entry = config.plugins[name]
@@ -409,11 +409,11 @@ H.apply_colorscheme = function(config)
 
   -- Builtin highlighting groups
   hi('ColorColumn',    { fg=nil,       bg=p.bg_mid2 })
-  hi('Conceal',        { fg=p.aqua,    bg=nil })
+  hi('Conceal',        { fg=p.azure,   bg=nil })
   hi('CurSearch',      { fg=p.bg,      bg=p.yellow })
   hi('Cursor',         { fg=p.bg,      bg=p.fg })
   hi('CursorColumn',   { fg=nil,       bg=p.bg_mid })
-  hi('CursorIM',       { fg=p.bg,      bg=p.fg })
+  hi('CursorIM',       { link='Cursor' })
   hi('CursorLine',     { fg=nil,       bg=p.bg_mid })
   hi('CursorLineFold', { fg=p.bg_mid2, bg=nil })
   hi('CursorLineNr',   { fg=p.accent,  bg=nil,       bold=true })
@@ -422,20 +422,21 @@ H.apply_colorscheme = function(config)
   hi('DiffChange',     { fg=nil,       bg=p.yellow_bg })
   hi('DiffDelete',     { fg=nil,       bg=p.red_bg })
   hi('DiffText',       { fg=nil,       bg=p.bg_mid2 })
-  hi('Directory',      { fg=p.aqua,    bg=nil })
+  hi('Directory',      { fg=p.azure,   bg=nil })
   hi('EndOfBuffer',    { fg=p.bg_mid2, bg=nil })
   hi('ErrorMsg',       { fg=p.red,     bg=nil })
   hi('FloatBorder',    { fg=p.accent,  bg=p.bg_out })
+  hi('FloatTitle',     { link='Title' })
   hi('FoldColumn',     { fg=p.bg_mid2, bg=nil })
   hi('Folded',         { fg=p.fg_mid2, bg=p.bg_mid })
   hi('IncSearch',      { fg=p.bg,      bg=p.yellow })
   hi('lCursor',        { fg=p.bg,      bg=p.fg })
   hi('LineNr',         { fg=p.bg_mid2, bg=nil })
-  hi('LineNrAbove',    { fg=p.bg_mid2, bg=nil })
-  hi('LineNrBelow',    { fg=p.bg_mid2, bg=nil })
+  hi('LineNrAbove',    { link='LineNr' })
+  hi('LineNrBelow',    { link='LineNr' })
   hi('MatchParen',     { fg=nil,       bg=p.bg_mid2, bold=true })
   hi('ModeMsg',        { fg=p.green,   bg=nil })
-  hi('MoreMsg',        { fg=p.aqua,    bg=nil })
+  hi('MoreMsg',        { fg=p.azure,   bg=nil })
   hi('MsgArea',        { link='Normal' })
   hi('MsgSeparator',   { fg=p.fg_mid2, bg=p.bg_mid2 })
   hi('NonText',        { fg=p.bg_mid2, bg=nil })
@@ -443,10 +444,14 @@ H.apply_colorscheme = function(config)
   hi('NormalFloat',    { fg=p.fg,      bg=p.bg_out })
   hi('NormalNC',       { link='Normal' })
   hi('PMenu',          { fg=p.fg,      bg=p.bg_mid })
+  hi('PMenuExtra',     { link='PMenu' })
+  hi('PMenuExtraSel',  { link='PMenuSel' })
+  hi('PMenuKind',      { link='PMenu' })
+  hi('PMenuKindSel',   { link='PMenuSel' })
   hi('PMenuSbar',      { link='PMenu' })
   hi('PMenuSel',       { fg=p.bg,      bg=p.fg,      blend=0 })
   hi('PMenuThumb',     { fg=nil,       bg=p.bg_mid2 })
-  hi('Question',       { fg=p.aqua,    bg=nil })
+  hi('Question',       { fg=p.azure,   bg=nil })
   hi('QuickFixLine',   { fg=nil,       bg=p.bg_mid })
   hi('Search',         { fg=p.bg,      bg=p.accent })
   hi('SignColumn',     { fg=p.bg_mid2, bg=nil })
@@ -454,7 +459,7 @@ H.apply_colorscheme = function(config)
   hi('SpellBad',       { fg=nil,       bg=nil,       sp=p.red,    undercurl=true })
   hi('SpellCap',       { fg=nil,       bg=nil,       sp=p.cyan,   undercurl=true })
   hi('SpellLocal',     { fg=nil,       bg=nil,       sp=p.yellow, undercurl=true })
-  hi('SpellRare',      { fg=nil,       bg=nil,       sp=p.aqua,   undercurl=true })
+  hi('SpellRare',      { fg=nil,       bg=nil,       sp=p.azure,  undercurl=true })
   hi('StatusLine',     { fg=p.fg_mid,  bg=p.accent_bg })
   hi('StatusLineNC',   { fg=p.fg_mid,  bg=p.bg_out })
   hi('Substitute',     { fg=p.bg,      bg=p.blue })
@@ -486,7 +491,7 @@ H.apply_colorscheme = function(config)
   hi('Error',          { fg=nil,       bg=p.red_bg })
   hi('Exception',      { link='Statement' })
   hi('Float',          { link='Constant' })
-  hi('Function',       { fg=p.aqua,    bg=nil })
+  hi('Function',       { fg=p.azure,   bg=nil })
   hi('Identifier',     { fg=p.yellow,  bg=nil })
   hi('Ignore',         { fg=nil,       bg=nil })
   hi('Include',        { link='PreProc' })
@@ -494,7 +499,7 @@ H.apply_colorscheme = function(config)
   hi('Label',          { link='Statement' })
   hi('Macro',          { link='PreProc' })
   hi('Number',         { link='Constant' })
-  hi('Operator',       { link='Statement' })
+  hi('Operator',       { fg=p.fg,      bg=nil })
   hi('PreCondit',      { link='PreProc' })
   hi('PreProc',        { fg=p.blue,    bg=nil })
   hi('Repeat',         { link='Statement' })
@@ -527,7 +532,7 @@ H.apply_colorscheme = function(config)
   hi('gitcommitComment',       { link='Comment' })
   hi('gitcommitDiscarded',     { link='Comment' })
   hi('gitcommitDiscardedFile', { fg=p.yellow, bg=nil, bold=true })
-  hi('gitcommitDiscardedType', { fg=p.aqua,   bg=nil })
+  hi('gitcommitDiscardedType', { fg=p.azure,  bg=nil })
   hi('gitcommitHeader',        { link='Title' })
   hi('gitcommitOverflow',      { fg=p.yellow, bg=nil })
   hi('gitcommitSelected',      { link='Comment' })
@@ -542,23 +547,33 @@ H.apply_colorscheme = function(config)
   -- Built-in diagnostic
   hi('DiagnosticError', { fg=p.red,    bg=nil })
   hi('DiagnosticHint',  { fg=p.cyan,   bg=nil })
-  hi('DiagnosticInfo',  { fg=p.aqua,   bg=nil })
+  hi('DiagnosticInfo',  { fg=p.azure,  bg=nil })
   hi('DiagnosticWarn',  { fg=p.yellow, bg=nil })
 
-  hi('DiagnosticFloatingError', { fg=p.red,    bg=p.bg_mid })
-  hi('DiagnosticFloatingHint',  { fg=p.cyan,   bg=p.bg_mid })
-  hi('DiagnosticFloatingInfo',  { fg=p.aqua,   bg=p.bg_mid })
-  hi('DiagnosticFloatingWarn',  { fg=p.yellow, bg=p.bg_mid })
+  hi('DiagnosticUnderlineError', { fg=nil, bg=nil, sp=p.red,    underline=true })
+  hi('DiagnosticUnderlineHint',  { fg=nil, bg=nil, sp=p.cyan,   underline=true })
+  hi('DiagnosticUnderlineInfo',  { fg=nil, bg=nil, sp=p.azure,  underline=true })
+  hi('DiagnosticUnderlineWarn',  { fg=nil, bg=nil, sp=p.yellow, underline=true })
+
+  hi('DiagnosticFloatingError', { fg=p.red,    bg=p.bg_out })
+  hi('DiagnosticFloatingHint',  { fg=p.cyan,   bg=p.bg_out })
+  hi('DiagnosticFloatingInfo',  { fg=p.azure,  bg=p.bg_out })
+  hi('DiagnosticFloatingWarn',  { fg=p.yellow, bg=p.bg_out })
+
+  hi('DiagnosticVirtualTextError', { link='DiagnosticError' })
+  hi('DiagnosticVirtualTextWarn',  { link='DiagnosticWarn' })
+  hi('DiagnosticVirtualTextInfo',  { link='DiagnosticInfo' })
+  hi('DiagnosticVirtualTextHint',  { link='DiagnosticHint' })
+  hi('DiagnosticVirtualTextOk',    { link='DiagnosticOk' })
 
   hi('DiagnosticSignError', { link='DiagnosticError' })
-  hi('DiagnosticSignHint',  { link='DiagnosticHint' })
-  hi('DiagnosticSignInfo',  { link='DiagnosticInfo' })
   hi('DiagnosticSignWarn',  { link='DiagnosticWarn' })
+  hi('DiagnosticSignInfo',  { link='DiagnosticInfo' })
+  hi('DiagnosticSignHint',  { link='DiagnosticHint' })
+  hi('DiagnosticSignOk',    { link='DiagnosticOk' })
 
-  hi('DiagnosticUnderlineError', { fg=nil, bg=nil, underline=true, sp=p.red })
-  hi('DiagnosticUnderlineHint',  { fg=nil, bg=nil, underline=true, sp=p.cyan })
-  hi('DiagnosticUnderlineInfo',  { fg=nil, bg=nil, underline=true, sp=p.aqua })
-  hi('DiagnosticUnderlineWarn',  { fg=nil, bg=nil, underline=true, sp=p.yellow })
+  hi('DiagnosticDeprecated',  { fg=nil, bg=nil, sp=p.red, strikethrough=true })
+  hi('DiagnosticUnnecessary', { link='Comment' })
 
   -- Built-in LSP
   hi('LspReferenceText',  { fg=nil, bg=p.bg_mid2 })
@@ -606,7 +621,7 @@ H.apply_colorscheme = function(config)
     hi('@function.call',    { link='Function' })
     hi('@function.builtin', { link='Special' })
     hi('@function.macro',   { link='Macro' })
-    hi('@parameter',        { link='Identifier' })
+    hi('@parameter',        { fg=p.blue, bg=nil })
     hi('@method',           { link='Function' })
     hi('@method.call',      { link='Function' })
     hi('@field',            { link='Identifier' })
@@ -698,7 +713,7 @@ H.apply_colorscheme = function(config)
     hi('MiniStatuslineFilename',    { fg=p.fg_mid, bg=p.accent_bg })
     hi('MiniStatuslineInactive',    { link='MiniStatuslineFilename' })
     hi('MiniStatuslineModeCommand', { fg=p.bg,     bg=p.yellow, bold=true })
-    hi('MiniStatuslineModeInsert',  { fg=p.bg,     bg=p.aqua,   bold=true })
+    hi('MiniStatuslineModeInsert',  { fg=p.bg,     bg=p.azure,  bold=true })
     hi('MiniStatuslineModeNormal',  { fg=p.bg,     bg=p.fg,     bold=true })
     hi('MiniStatuslineModeOther',   { fg=p.bg,     bg=p.cyan,   bold=true })
     hi('MiniStatuslineModeReplace', { fg=p.bg,     bg=p.red,    bold=true })
@@ -736,7 +751,7 @@ H.apply_colorscheme = function(config)
 
   if has_integration('anuvyklack/hydra.nvim') then
     hi('HydraRed',      { fg=p.red,    bg=nil })
-    hi('HydraBlue',     { fg=p.aqua,   bg=nil })
+    hi('HydraBlue',     { fg=p.azure,  bg=nil })
     hi('HydraAmaranth', { fg=p.purple, bg=nil })
     hi('HydraTeal',     { fg=p.cyan,   bg=nil })
     hi('HydraPink',     { fg=p.orange, bg=nil })
@@ -755,7 +770,7 @@ H.apply_colorscheme = function(config)
   end
 
   if has_integration('folke/noice.nvim') then
-    hi('NoiceCmdlinePopupBorder', { fg=p.aqua,   bg=nil })
+    hi('NoiceCmdlinePopupBorder', { fg=p.azure,  bg=nil })
     hi('NoiceConfirmBorder',      { fg=p.yellow, bg=nil })
   end
 
@@ -793,17 +808,17 @@ H.apply_colorscheme = function(config)
   if has_integration('glepnir/lspsaga.nvim') then
     hi('LspSagaCodeActionBorder',  { fg=p.accent, bg=nil })
     hi('LspSagaCodeActionContent', { fg=p.fg,     bg=nil })
-    hi('LspSagaCodeActionTitle',   { fg=p.aqua,   bg=nil, bold=true })
+    hi('LspSagaCodeActionTitle',   { fg=p.azure,  bg=nil, bold=true })
 
     hi('Definitions',            { fg=p.green,  bg=nil })
-    hi('DefinitionsIcon',        { fg=p.aqua,   bg=nil })
+    hi('DefinitionsIcon',        { fg=p.azure,  bg=nil })
     hi('FinderParam',            { fg=p.yellow, bg=nil })
     hi('FinderVirtText',         { fg=p.orange, bg=nil })
     hi('LspSagaAutoPreview',     { fg=p.blue,   bg=nil })
     hi('LspSagaFinderSelection', { fg=p.cyan,   bg=nil })
     hi('LspSagaLspFinderBorder', { fg=p.accent, bg=nil })
     hi('References',             { fg=p.green,  bg=nil })
-    hi('ReferencesIcon',         { fg=p.aqua,   bg=nil })
+    hi('ReferencesIcon',         { fg=p.azure,  bg=nil })
     hi('TargetFileName',         { fg=p.fg,     bg=nil })
 
     hi('FinderSpinner',       { fg=p.green,  bg=nil })
@@ -832,7 +847,7 @@ H.apply_colorscheme = function(config)
   end
 
   if has_integration('HiPhish/nvim-ts-rainbow2') then
-    hi('TSRainbowBlue',   { fg=p.aqua,   bg=nil })
+    hi('TSRainbowBlue',   { fg=p.azure,  bg=nil })
     hi('TSRainbowCyan',   { fg=p.cyan,   bg=nil })
     hi('TSRainbowGreen',  { fg=p.green,  bg=nil })
     hi('TSRainbowOrange', { fg=p.orange, bg=nil })
@@ -842,12 +857,12 @@ H.apply_colorscheme = function(config)
   end
 
   if has_integration('hrsh7th/nvim-cmp') then
-    hi('CmpItemAbbr',           { fg=p.fg,     bg=nil })
+    hi('CmpItemAbbr',           { fg=p.fg, bg=nil })
     hi('CmpItemAbbrDeprecated', { link='Comment' })
-    hi('CmpItemAbbrMatch',      { fg=p.accent, bg=nil, bold=true })
-    hi('CmpItemAbbrMatchFuzzy', { fg=p.accent, bg=nil, bold=true })
-    hi('CmpItemKind',           { fg=p.fg,     bg=nil })
-    hi('CmpItemMenu',           { fg=p.fg,     bg=nil })
+    hi('CmpItemAbbrMatch',      { fg=nil,  bg=nil, bold=true })
+    hi('CmpItemAbbrMatchFuzzy', { fg=nil,  bg=nil, bold=true })
+    hi('CmpItemKind',           { fg=p.fg, bg=nil })
+    hi('CmpItemMenu',           { fg=p.fg, bg=nil })
 
     hi('CmpItemKindClass',         { link='Type' })
     hi('CmpItemKindColor',         { link='Special' })
@@ -898,7 +913,7 @@ H.apply_colorscheme = function(config)
     hi('GitSignsDeleteLn',        { link='GitSignsDelete' })
     hi('GitSignsDeleteInline',    { link='GitSignsDelete' })
 
-    hi('GitSignsUntracked',       { fg=p.aqua,   bg=nil })
+    hi('GitSignsUntracked',       { fg=p.azure,  bg=nil })
     hi('GitSignsUntrackedLn',     { link='GitSignsUntracked' })
     hi('GitSignsUntrackedInline', { link='GitSignsUntracked' })
   end
@@ -911,7 +926,7 @@ H.apply_colorscheme = function(config)
     hi('IndentBlanklineIndent2',      { fg=p.cyan,    bg=nil, nocombine=true })
     hi('IndentBlanklineIndent3',      { fg=p.yellow,  bg=nil, nocombine=true })
     hi('IndentBlanklineIndent4',      { fg=p.red,     bg=nil, nocombine=true })
-    hi('IndentBlanklineIndent5',      { fg=p.aqua,    bg=nil, nocombine=true })
+    hi('IndentBlanklineIndent5',      { fg=p.azure,   bg=nil, nocombine=true })
     hi('IndentBlanklineIndent6',      { fg=p.green,   bg=nil, nocombine=true })
     hi('IndentBlanklineIndent7',      { fg=p.orange,  bg=nil, nocombine=true })
     hi('IndentBlanklineIndent8',      { fg=p.purple,  bg=nil, nocombine=true })
@@ -967,27 +982,27 @@ H.apply_colorscheme = function(config)
 
   if has_integration('nvim-telescope/telescope.nvim') then
     hi('TelescopeBorder',         { fg=p.accent, bg=nil })
-    hi('TelescopeMatching',       { fg=p.accent, bg=nil,      bold=true })
-    hi('TelescopeMultiSelection', { fg=nil,      bg=p.bg_mid, bold=true })
-    hi('TelescopeSelection',      { fg=nil,      bg=p.bg_mid, bold=true })
+    hi('TelescopeMatching',       { fg=nil,      bg=nil, bold=true })
+    hi('TelescopeMultiSelection', { fg=nil,      bg=p.bg_mid2 })
+    hi('TelescopeSelection',      { fg=nil,      bg=p.bg_mid })
   end
 
   if has_integration('nvim-tree/nvim-tree.lua') then
-    hi('NvimTreeExecFile',     { fg=p.green,  bg=nil,       bold=true })
-    hi('NvimTreeFolderIcon',   { fg=p.bg_mid, bg=nil })
-    hi('NvimTreeGitDeleted',   { fg=p.red,    bg=nil })
-    hi('NvimTreeGitDirty',     { fg=p.yellow, bg=nil })
-    hi('NvimTreeGitMerge',     { fg=p.orange, bg=nil })
-    hi('NvimTreeGitNew',       { fg=p.cyan,   bg=nil })
-    hi('NvimTreeGitRenamed',   { fg=p.purple, bg=nil })
-    hi('NvimTreeGitStaged',    { fg=p.green,  bg=nil })
-    hi('NvimTreeImageFile',    { fg=p.orange, bg=nil })
+    hi('NvimTreeExecFile',     { fg=p.green,   bg=nil,       bold=true })
+    hi('NvimTreeFolderIcon',   { fg=p.fg_mid2, bg=nil })
+    hi('NvimTreeGitDeleted',   { fg=p.red,     bg=nil })
+    hi('NvimTreeGitDirty',     { fg=p.yellow,  bg=nil })
+    hi('NvimTreeGitMerge',     { fg=p.orange,  bg=nil })
+    hi('NvimTreeGitNew',       { fg=p.cyan,    bg=nil })
+    hi('NvimTreeGitRenamed',   { fg=p.purple,  bg=nil })
+    hi('NvimTreeGitStaged',    { fg=p.green,   bg=nil })
+    hi('NvimTreeImageFile',    { fg=p.orange,  bg=nil })
     hi('NvimTreeIndentMarker', { link='NvimTreeFolderIcon' })
     hi('NvimTreeOpenedFile',   { link='NvimTreeExecFile' })
-    hi('NvimTreeRootFolder',   { fg=p.accent, bg=nil,       bold=true })
-    hi('NvimTreeSpecialFile',  { fg=p.accent, bg=nil,       underline=true })
-    hi('NvimTreeSymlink',      { fg=p.blue,   bg=nil,       bold=true })
-    hi('NvimTreeWindowPicker', { fg=p.fg,     bg=p.bg_mid2, bold=true })
+    hi('NvimTreeRootFolder',   { fg=p.accent,  bg=nil,       bold=true })
+    hi('NvimTreeSpecialFile',  { fg=p.accent,  bg=nil,       underline=true })
+    hi('NvimTreeSymlink',      { fg=p.blue,    bg=nil,       bold=true })
+    hi('NvimTreeWindowPicker', { fg=p.fg,      bg=p.bg_mid2, bold=true })
   end
 
   if has_integration('phaazon/hop.nvim') then
@@ -1024,7 +1039,7 @@ H.apply_colorscheme = function(config)
     hi('NotifyERRORBorder', { fg=p.red,    bg=nil })
     hi('NotifyERRORIcon',   { link='NotifyERRORBorder' })
     hi('NotifyERRORTitle',  { link='NotifyERRORBorder' })
-    hi('NotifyINFOBorder',  { fg=p.aqua,   bg=nil })
+    hi('NotifyINFOBorder',  { fg=p.azure,  bg=nil })
     hi('NotifyINFOIcon',    { link='NotifyINFOBorder' })
     hi('NotifyINFOTitle',   { link='NotifyINFOBorder' })
     hi('NotifyTRACEBorder', { fg=p.cyan,   bg=nil })
@@ -1080,15 +1095,15 @@ H.apply_colorscheme = function(config)
 
   if has_integration('williamboman/mason.nvim') then
     hi('MasonError',                       { fg=p.red,    bg=nil })
-    hi('MasonHeader',                      { fg=p.bg,     bg=p.aqua,    bold=true })
+    hi('MasonHeader',                      { fg=p.bg,     bg=p.azure,   bold=true })
     hi('MasonHeaderSecondary',             { fg=p.bg,     bg=p.blue,    bold=true })
     hi('MasonHeading',                     { link='Bold' })
     hi('MasonHighlight',                   { fg=p.accent, bg=nil })
     hi('MasonHighlightBlock',              { fg=p.bg,     bg=p.accent })
     hi('MasonHighlightBlockBold',          { link='MasonHeaderSecondary' })
     hi('MasonHighlightBlockBoldSecondary', { link='MasonHeader' })
-    hi('MasonHighlightBlockSecondary',     { fg=p.bg,     bg=p.aqua })
-    hi('MasonHighlightSecondary',          { fg=p.aqua,   bg=nil })
+    hi('MasonHighlightBlockSecondary',     { fg=p.bg,     bg=p.azure })
+    hi('MasonHighlightSecondary',          { fg=p.azure,  bg=nil })
     hi('MasonLink',                        { link='MasonHighlight' })
     hi('MasonMuted',                       { link='Comment' })
     hi('MasonMutedBlock',                  { fg=p.bg,     bg=p.bg_mid2 })
@@ -1100,7 +1115,7 @@ H.apply_colorscheme = function(config)
   vim.g.terminal_color_1  = p.red
   vim.g.terminal_color_2  = p.green
   vim.g.terminal_color_3  = p.yellow
-  vim.g.terminal_color_4  = p.aqua
+  vim.g.terminal_color_4  = p.azure
   vim.g.terminal_color_5  = p.purple
   vim.g.terminal_color_6  = p.cyan
   vim.g.terminal_color_7  = p.fg
@@ -1108,7 +1123,7 @@ H.apply_colorscheme = function(config)
   vim.g.terminal_color_9  = p.red
   vim.g.terminal_color_10 = p.green
   vim.g.terminal_color_11 = p.yellow
-  vim.g.terminal_color_12 = p.aqua
+  vim.g.terminal_color_12 = p.azure
   vim.g.terminal_color_13 = p.purple
   vim.g.terminal_color_14 = p.cyan
   vim.g.terminal_color_15 = p.fg
@@ -1290,7 +1305,7 @@ end
 
 -- ============================================================================
 -- Utilities ------------------------------------------------------------------
-H.error = function(msg) error(string.format('(mini.genscheme) %s', msg), 0) end
+H.error = function(msg) error(string.format('(mini.hues) %s', msg), 0) end
 
 H.round = function(x)
   if x == nil then return nil end
@@ -1307,4 +1322,4 @@ H.dist_period = function(x, y, period)
   return math.min(d, period - d)
 end
 
-return MiniGenscheme
+return MiniHues
