@@ -1,9 +1,6 @@
 -- TODO:
 --
--- - Use numeric chroma instead of discrete?
---
 -- Documentation:
--- - Note about **bold** choices and how to override them.
 
 --- *mini.hues* Generate configurable color scheme
 --- *MiniHues*
@@ -117,6 +114,9 @@ MiniHues.config = {
   background = nil,
   foreground = nil,
 
+  -- Number of hues used for accent colors
+  n_hues = 8,
+
   -- Saturation level. One of 'low', 'medium', 'high'.
   saturation = 'medium',
 
@@ -134,6 +134,7 @@ MiniHues.make_palette = function(config)
   config = vim.tbl_deep_extend('force', MiniHues.config, config or {})
   local bg = H.validate_hex(config.background)
   local fg = H.validate_hex(config.foreground)
+  local n_hues = H.validate_n_hues(config.n_hues)
   local saturation = H.validate_one_of(config.saturation, H.saturation_values, 'saturation')
   local accent = H.validate_one_of(config.accent, H.accent_values, 'accent')
 
@@ -149,34 +150,8 @@ MiniHues.make_palette = function(config)
   local l_fg_edge = is_dark and 100 or 0
   local l_mid = 0.5 * (bg_l + fg_l)
 
-  -- Hues. Correct them so that shifted reference 60 degree grid is distant
-  -- from both bg and fg hues. Distance between two sets is assumed as minimum
-  -- distance between all pairs of points.
-  local bg_h, fg_h = bg_lch.h, fg_lch.h
-  local period, half_period = 45, 22.5
-  local d
-  if bg_h == nil and fg_h == nil then d = 0 end
-  if bg_h ~= nil and fg_h == nil then d = (bg_h % period + half_period) % period end
-  if bg_h == nil and fg_h ~= nil then d = (fg_h % period + half_period) % period end
-  if bg_h ~= nil and fg_h ~= nil then
-    -- Subtract shift
-    local ref_bg, ref_fg = bg_h % period, fg_h % period
-    local mid = 0.5 * (ref_bg + ref_fg)
-    local mid_alt = (mid + half_period) % period
-
-    d = H.dist_period(mid, ref_bg, period) < H.dist_period(mid_alt, ref_bg, period) and mid_alt or mid
-  end
-
-  -- Normalize to [-half, half] to avoid big shifts in actual hues:
-  -- [0, half) -> [0, half); [half, period) -> [-half, 0)
-  d = d - math.floor(d / half_period) * period
-
-  --stylua: ignore
-  local hues = {
-    bg = bg_h, fg = fg_h,
-    red  = 0   + d, orange = 45  + d, yellow = 90  + d, green  = 135 + d,
-    cyan = 180 + d, azure  = 225 + d, blue   = 270 + d, purple = 315 + d,
-  }
+  -- Hues.
+  local hues = H.make_hues(bg_lch.h, fg_lch.h, n_hues)
 
   -- Configurable chroma level
   local chroma = ({ low = 4, medium = 8, high = 16 })[saturation]
@@ -240,21 +215,21 @@ MiniHues.make_palette = function(config)
   return res
 end
 
-MiniHues.random_config = function(opts)
+MiniHues.random_base_colors = function(opts)
+  opts = opts or {}
+  local get_hue = opts.hue_generator or function() return math.random(0, 359) end
+  if not vim.is_callable(get_hue) then H.error('`get_hue` should be callable.') end
+
   local is_dark = vim.o.background == 'dark'
   local bg_l = is_dark and 15 or 90
   local fg_l = is_dark and 80 or 15
   local bg_c = is_dark and 5 or 1
 
-  local hue = math.random(0, 359)
-  local random_config = {
+  local hue = get_hue()
+  return {
     background = H.oklch2hex({ l = bg_l, c = bg_c, h = hue }),
     foreground = H.oklch2hex({ l = fg_l, c = 1, h = hue }),
-    saturation = H.saturation_values[math.random(1, #H.saturation_values)],
-    accent = H.accent_values[math.random(1, #H.accent_values)],
   }
-
-  return vim.tbl_deep_extend('force', random_config, opts or {})
 end
 
 -- Helper data ================================================================
@@ -333,6 +308,7 @@ H.setup_config = function(config)
   vim.validate({
     background = { config.background, H.is_hex },
     foreground = { config.foreground, H.is_hex },
+    n_hues = { config.n_hues, H.is_n_hues },
     saturation = { config.saturation, H.is_saturation },
     accent = { config.accent, H.is_accent },
     plugins = { config.plugins, 'table' },
@@ -353,6 +329,12 @@ H.is_hex = function(x)
   return false, 'Color string in the form "#rrggbb"'
 end
 
+H.is_n_hues = function(x)
+  local res = type(x) == 'number' and 0 <= x and x <= 8
+  if res then return true, nil end
+  return false, 'Number between 0 and 8'
+end
+
 H.is_saturation = function(x)
   local res = vim.tbl_contains(H.saturation_values, x)
   if res then return true, nil end
@@ -366,9 +348,61 @@ H.is_accent = function(x)
 end
 
 -- Palette --------------------------------------------------------------------
+H.make_hues = function(bg_h, fg_h, n_hues)
+  local res = { bg = bg_h, fg = fg_h }
+  if n_hues == 0 then return res end
+
+  -- Generate equidistant circular grid of hues which is the most distant from
+  -- background and foreground hues. Distance between two sets is assumed as
+  -- minimum distance between all pairs of points.
+  local period = 360 / n_hues
+  local half_period = 0.5 * period
+
+  -- - Compute delta which determines the furtherst grid
+  local d
+  if bg_h == nil and fg_h == nil then d = 0 end
+  if bg_h ~= nil and fg_h == nil then d = (bg_h % period + half_period) % period end
+  if bg_h == nil and fg_h ~= nil then d = (fg_h % period + half_period) % period end
+  if bg_h ~= nil and fg_h ~= nil then
+    local ref_bg, ref_fg = bg_h % period, fg_h % period
+    local mid = 0.5 * (ref_bg + ref_fg)
+    local mid_alt = (mid + half_period) % period
+
+    d = H.dist_period(mid, ref_bg, period) < H.dist_period(mid_alt, ref_bg, period) and mid_alt or mid
+  end
+
+  local grid = {}
+  for i = 0, n_hues - 1 do
+    table.insert(grid, i * period + d)
+  end
+
+  -- Normalize equidistant grid to be base 8 colors
+  local dist_fun = function(x, y) return H.dist_period(x, y, 360) end
+  local approx = function(ref_hue) return H.get_closest(ref_hue, grid, dist_fun) end
+
+  --stylua: ignore start
+  res.red    = approx(0)
+  res.orange = approx(45)
+  res.yellow = approx(90)
+  res.green  = approx(135)
+  res.cyan   = approx(180)
+  res.azure  = approx(225)
+  res.blue   = approx(270)
+  res.purple = approx(315)
+  --stylua: ignore end
+
+  return res
+end
+
 H.validate_hex = function(x, name)
   if H.is_hex(x) then return x end
   local msg = string.format('`%s` should be hex color string in the form "#rrggbb", not %s.', name, vim.inspect(x))
+  H.error(msg)
+end
+
+H.validate_n_hues = function(x)
+  if H.is_n_hues(x) then return x end
+  local msg = string.format('`n_hues` should be a number between 0 and 8', name)
   H.error(msg)
 end
 
@@ -1320,6 +1354,18 @@ H.dist_period = function(x, y, period)
   period = period or 360
   local d = math.abs((x % period) - (y % period))
   return math.min(d, period - d)
+end
+
+H.get_closest = function(x, values, dist_fun)
+  local best_val, best_key, best_dist = nil, nil, math.huge
+  for key, val in pairs(values) do
+    local cur_dist = dist_fun(x, val)
+    if cur_dist <= best_dist then
+      best_val, best_key, best_dist = val, key, cur_dist
+    end
+  end
+
+  return best_val, best_key
 end
 
 return MiniHues
