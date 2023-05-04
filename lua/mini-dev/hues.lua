@@ -1,7 +1,3 @@
--- TODO:
---
--- Documentation:
-
 --- *mini.hues* Generate configurable color scheme
 --- *MiniHues*
 ---
@@ -9,10 +5,28 @@
 ---
 --- ==============================================================================
 ---
---- Requires Neovim>=0.8.
+--- Features:
+--- - Required setting two base colors: background and foreground.
+---   See |MiniHues.config| for inspiration.
+---
+--- - Configurable:
+---     - Number of hues used for non-base colors (from 0 to 8).
+---     - Saturation level ('low', 'medium', 'high').
+---     - Accent color used for some selected UI elements.
+---     - Plugin integration (can be selectively enabled for faster startup).
+---
+--- - Random generator for base colors. See |MiniHues.random_base_colors()|.
+---   Powers |randomhue| color scheme.
+---
+--- - Lua function to compute palette used in color scheme.
+---   See |MiniHues.make_palette()|.
 ---
 --- Supported highlight groups:
 --- - Builtin-in Neovim LSP and diagnostic.
+---
+--- - Tree-sitter (|treesitter-highlight-groups|).
+---
+--- - LSP semantic tokens (|lsp-semantic-highlight|).
 ---
 --- - Plugins (either with explicit definition or by verification that default
 ---   highlighting works appropriately):
@@ -52,9 +66,8 @@
 --- # Setup~
 ---
 --- This module needs a setup with `require('mini.hues').setup({})` (replace
---- `{}` with your `config` table). It will create global Lua table
---- `MiniHues` which you can use for scripting or manually (with
---- `:lua MiniHues.*`).
+--- `{}` with your `config` table). It will create global Lua table `MiniHues`
+--- which you can use for scripting or manually (with `:lua MiniHues.*`).
 ---
 --- See |MiniHues.config| for `config` structure and default values.
 ---
@@ -64,8 +77,8 @@
 --- Example:
 --- >
 ---   require('mini.hues').setup({
----     background = '#0a2a2a',
----     foreground = '#d0d0d0',
+---     background = '#002734',
+---     foreground = '#c7c7c7',
 ---     plugins = {
 ---       default = false,
 ---       ['echasnovski/mini.nvim'] = true,
@@ -75,7 +88,7 @@
 --- # Notes~
 ---
 --- - Using `setup()` doesn't actually create a |colorscheme|. It basically
----   creates a coordinated set of |highlight|s. To create your own theme:
+---   creates a coordinated set of |highlight|s. To create your own scheme:
 ---     - Put "myscheme.lua" file (name after your chosen theme name) inside
 ---       any "colors" directory reachable from 'runtimepath' ("colors" inside
 ---       your Neovim config directory is usually enough).
@@ -93,8 +106,9 @@ H = {}
 
 --- Module setup
 ---
----
----@usage `require('mini.hues').setup({})` (replace `{}` with your `config` table)
+---@usage
+--- `require('mini.hues').setup({ background = '#002734', foreground = '#c7c7c7' })`
+--- (add/change input table as you like)
 MiniHues.setup = function(config)
   -- Export module
   _G.MiniHues = MiniHues
@@ -108,13 +122,69 @@ end
 
 --- Module config
 ---
+--- See |MiniHues.make_palette()| for more information about how certain
+--- settings affect output color scheme.
+---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # Options ~
+---
+--- ## Plugin integrations ~
+---
+--- `config.plugins` defines for which supported plugins highlight groups will
+--- be created. Limiting number of integrations slightly decreases startup time.
+--- It is a table with boolean (`true`/`false`) values which are applied as follows:
+--- - If plugin name (as listed in |mini.hues|) has entry, it is used.
+--- - Otherwise `config.plugins.default` is used.
+---
+--- Example which will load only "mini.nvim" integration:
+--- >
+---   require('mini.hues').setup({
+---     background = '#002734',
+---     foreground = '#c0c8cc',
+---     plugins = {
+---       default = false,
+---       ['echasnovski/mini.nvim'] = true,
+---     },
+---   })
+---
+--- # Examples ~
+---
+--- Here are some possible setup configurations (copy first line and then use
+--- only one): >
+---
+---   local setup = require('mini.hues').setup
+---
+---   -- Base colors with different hues
+---   setup({ background = '#351721', foreground = '#cdc4c6' }) -- red
+---   setup({ background = '#361a0d', foreground = '#cdc5c1' }) -- orange
+---   setup({ background = '#2c2101', foreground = '#c9c6c0' }) -- yellow
+---   setup({ background = '#17280e', foreground = '#c4c8c2' }) -- green
+---   setup({ background = '#002923', foreground = '#c0c9c7' }) -- cyan
+---   setup({ background = '#002734', foreground = '#c0c8cc' }) -- azure
+---   setup({ background = '#19213a', foreground = '#c4c6cd' }) -- blue
+---   setup({ background = '#2b1a33', foreground = '#c9c5cb' }) -- purple
+---
+---   -- Different number of non-base hues
+---   setup({ background = '#002734', foreground = '#c0c8cc', n_hues = 6 })
+---   setup({ background = '#002734', foreground = '#c0c8cc', n_hues = 4 })
+---   setup({ background = '#002734', foreground = '#c0c8cc', n_hues = 2 })
+---   setup({ background = '#002734', foreground = '#c0c8cc', n_hues = 0 })
+---
+---   -- Different text saturation
+---   setup({ background = '#002734', foreground = '#c0c8cc', saturation = 'low' })
+---   setup({ background = '#002734', foreground = '#c0c8cc', saturation = 'medium' })
+---   setup({ background = '#002734', foreground = '#c0c8cc', saturation = 'high' })
+---
+---   -- Choose accent color
+---   setup({ background = '#002734', foreground = '#c0c8cc', accent = 'yellow' })
+---   setup({ background = '#002734', foreground = '#c0c8cc', accent = 'blue' })
 MiniHues.config = {
+  -- **Required** base colors as '#rrggbb' hex strings
   background = nil,
   foreground = nil,
 
-  -- Number of hues used for accent colors
+  -- Number of hues used for non-base colors
   n_hues = 8,
 
   -- Saturation level. One of 'low', 'medium', 'high'.
@@ -130,6 +200,76 @@ MiniHues.config = {
 }
 --minidoc_afterlines_end
 
+--- Make palette
+---
+--- General idea of palette generation is that it is mostly based on color channel
+--- information extracted from base colors (background and foreground).
+---
+--- All operations are done inside `Oklch` color space, meaning that each color
+--- is defined by three number:
+--- - Lightness (`l`) - number between 0 (black) and 100 (white) describing how
+---   light is a color.
+--- - Chroma (`c`) - positive number describing how colorful a color is (bigger
+---   values - more colorful; 0 is gray).
+--- - Hue (`h`) - periodic number in [0, 360) describing a value of "true color"
+---   on color circle/wheel.
+---
+--- For more details about `Oklch` see |MiniColors-color-spaces| or
+--- https://bottosson.github.io/posts/oklab/.
+---
+--- Algorithm overview ~
+---
+--- - Extract lightness, chroma, and hue of base colors.
+---
+--- - Generate basic lightness values:
+---     - Background edge: 0 or 100, whichever is closest.
+---     - Foreground edge: 0 or 100, different from background edge.
+---     - Middle: arithmetic mean of background and foreground lightness values.
+---
+--- - Compute background and foreground variants by changing lightness of
+---   background color: two colors closer to background lightness edge and two
+---   closer to middle.
+---
+--- - Pick chroma value for non-base colors based on `config.saturation`.
+---
+--- - Generate hues for non-base colors:
+---     - Fit an equidistant circular grid with `config.n_hues` points to be as
+---       far from both background and foreground hues. This will ensure that
+---       non-base colors are as different as possible from base ones (for
+---       better visual perception).
+---       Example: for background hue 0, foreground hue 180, and `config.n_hues` 2
+---       the output grid will be `{ 90, 270 }`.
+---
+---     - For each reference color hue (which itself is an equidistant grid
+---       of 8 hues) compute the closest value from the grid. This allows
+---       operating in same terms ("red", "green") despite maybe actually
+---       having less different hues.
+---
+--- - Compute for each hue two variants of non-base colors: with background and
+---   foreground lightness values.
+---
+--- - Compute two variants of accent color (with background and foreground
+---   lightness) based on `config.accent`.
+---
+--- Notes:
+--- - Some output colors can have not exact values of generated Oklch channels.
+---   This is due to actually computed colors being impossible to represent via
+---   '#rrggbb' hex string. In this case a process called gamut clipping is done
+---   to reduce lightness and chroma in optimal way while maintaining same hue.
+---   For more information see |MiniColors-gamut-clip|.
+---
+---@param config table Configuration for palette. Same structure as |MiniHues.config|.
+---   Needs to have <background> and <foreground> fields.
+---
+---@return table Palette with the following fields:
+---   - `bg` and `fg` with supplied `background` and `foreground` colors.
+---   - Fields like `bg_*` and `fg_*` are essentially `bg` and `fg` but with
+---     different lightness values: `_edge`/`_edge2` - closer to edge lightness,
+---     `_mid`/`_mid2` - closer to middle lightness.
+---   - Fields for non-base colors (red, orange, yellow, green, cyan, azure,
+---     blue, purple) have the same lightness as foreground.
+---   - Fields for non-base colors with `_bg` suffix have the same lightness as
+---     background.
 MiniHues.make_palette = function(config)
   config = vim.tbl_deep_extend('force', MiniHues.config, config or {})
   local bg = H.validate_hex(config.background)
@@ -150,63 +290,63 @@ MiniHues.make_palette = function(config)
   local l_fg_edge = is_dark and 100 or 0
   local l_mid = 0.5 * (bg_l + fg_l)
 
-  -- Hues.
-  local hues = H.make_hues(bg_lch.h, fg_lch.h, n_hues)
-
   -- Configurable chroma level
   local chroma = ({ low = 4, medium = 8, high = 16 })[saturation]
+
+  -- Hues
+  local hues = H.make_hues(bg_lch.h, fg_lch.h, n_hues)
 
   -- Compute result
   --stylua: ignore
   local res = {
-    -- `_out`/`_mid` are third of the way towards reference (edge/center)
-    -- `_out2`/`_mid2` are two thirds
-    bg_out2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * l_bg_edge, c = bg_lch.c, h = bg_lch.h }),
-    bg_out     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * l_bg_edge, c = bg_lch.c, h = bg_lch.h }),
-    bg         = bg,
-    bg_mid     = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * l_mid,     c = bg_lch.c, h = bg_lch.h }),
-    bg_mid2    = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * l_mid,     c = bg_lch.c, h = bg_lch.h }),
+    -- `_edge`/`_mid` are third of the way towards reference (edge/middle)
+    -- `_edge2`/`_mid2` are two thirds
+    bg_edge2  = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * l_bg_edge, c = bg_lch.c, h = bg_lch.h }),
+    bg_edge   = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * l_bg_edge, c = bg_lch.c, h = bg_lch.h }),
+    bg        = bg,
+    bg_mid    = H.oklch2hex({ l = 0.67 * bg_l + 0.33 * l_mid,     c = bg_lch.c, h = bg_lch.h }),
+    bg_mid2   = H.oklch2hex({ l = 0.33 * bg_l + 0.67 * l_mid,     c = bg_lch.c, h = bg_lch.h }),
 
-    fg_out2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * l_fg_edge, c = fg_lch.c, h = fg_lch.h }),
-    fg_out     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * l_fg_edge, c = fg_lch.c, h = fg_lch.h }),
-    fg         = fg,
-    fg_mid     = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * l_mid,     c = fg_lch.c, h = fg_lch.h }),
-    fg_mid2    = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * l_mid,     c = fg_lch.c, h = fg_lch.h }),
+    fg_edge2  = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * l_fg_edge, c = fg_lch.c, h = fg_lch.h }),
+    fg_edge   = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * l_fg_edge, c = fg_lch.c, h = fg_lch.h }),
+    fg        = fg,
+    fg_mid    = H.oklch2hex({ l = 0.67 * fg_l + 0.33 * l_mid,     c = fg_lch.c, h = fg_lch.h }),
+    fg_mid2   = H.oklch2hex({ l = 0.33 * fg_l + 0.67 * l_mid,     c = fg_lch.c, h = fg_lch.h }),
 
-    red        = H.oklch2hex({ l = fg_l, c = chroma, h = hues.red }),
-    red_bg     = H.oklch2hex({ l = bg_l, c = chroma, h = hues.red }),
+    red       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.red }),
+    red_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.red }),
 
-    orange     = H.oklch2hex({ l = fg_l, c = chroma, h = hues.orange }),
-    orange_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues.orange }),
+    orange    = H.oklch2hex({ l = fg_l, c = chroma, h = hues.orange }),
+    orange_bg = H.oklch2hex({ l = bg_l, c = chroma, h = hues.orange }),
 
-    yellow     = H.oklch2hex({ l = fg_l, c = chroma, h = hues.yellow }),
-    yellow_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues.yellow }),
+    yellow    = H.oklch2hex({ l = fg_l, c = chroma, h = hues.yellow }),
+    yellow_bg = H.oklch2hex({ l = bg_l, c = chroma, h = hues.yellow }),
 
-    green      = H.oklch2hex({ l = fg_l, c = chroma, h = hues.green }),
-    green_bg   = H.oklch2hex({ l = bg_l, c = chroma, h = hues.green }),
+    green     = H.oklch2hex({ l = fg_l, c = chroma, h = hues.green }),
+    green_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues.green }),
 
-    cyan       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.cyan }),
-    cyan_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.cyan }),
+    cyan      = H.oklch2hex({ l = fg_l, c = chroma, h = hues.cyan }),
+    cyan_bg   = H.oklch2hex({ l = bg_l, c = chroma, h = hues.cyan }),
 
-    azure      = H.oklch2hex({ l = fg_l, c = chroma, h = hues.azure }),
-    azure_bg   = H.oklch2hex({ l = bg_l, c = chroma, h = hues.azure }),
+    azure     = H.oklch2hex({ l = fg_l, c = chroma, h = hues.azure }),
+    azure_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues.azure }),
 
-    blue       = H.oklch2hex({ l = fg_l, c = chroma, h = hues.blue }),
-    blue_bg    = H.oklch2hex({ l = bg_l, c = chroma, h = hues.blue }),
+    blue      = H.oklch2hex({ l = fg_l, c = chroma, h = hues.blue }),
+    blue_bg   = H.oklch2hex({ l = bg_l, c = chroma, h = hues.blue }),
 
-    purple     = H.oklch2hex({ l = fg_l, c = chroma, h = hues.purple }),
-    purple_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues.purple }),
+    purple    = H.oklch2hex({ l = fg_l, c = chroma, h = hues.purple }),
+    purple_bg = H.oklch2hex({ l = bg_l, c = chroma, h = hues.purple }),
   }
 
   -- Manage 'bg' and 'fg' accents separately to ensure that corresponding
   -- background and foreground colors match exactly
   --stylua: ignore
   if accent == 'bg' then
-    res.accent     = H.oklch2hex({ l = fg_l, c = chroma, h = bg_h })
+    res.accent     = H.oklch2hex({ l = fg_l, c = chroma, h = bg_lch.h })
     res.accent_bg  = bg
   elseif accent == 'fg' then
     res.accent     = fg
-    res.accent_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = fg_h })
+    res.accent_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = fg_lch.h })
   else
     res.accent     = H.oklch2hex({ l = fg_l, c = chroma, h = hues[accent] })
     res.accent_bg  = H.oklch2hex({ l = bg_l, c = chroma, h = hues[accent] })
@@ -215,6 +355,28 @@ MiniHues.make_palette = function(config)
   return res
 end
 
+--- Generate random base colors
+---
+--- Compute background and foreground colors based on randomly generated hue
+--- and heuristally picked lightness-chroma values.
+---
+--- Notes:
+--- - Respects 'background' (uses different lightness and chroma values for
+---   "dark" and "light" backgrounds).
+---
+--- - When used during startup, might require usage of `math.randomseed()` for
+---   proper random generation. For example: >
+---
+---   local hues = require('mini.hues')
+---   math.randomseed(vim.loop.hrtime())
+---   hues.setup(hues.random_base_colors())
+---
+---@param opts table|nil Options. Possible values:
+---   - <get_hue> `(function)` - callable which will return single number for
+---     output hue. Can be used to limit which hues will be generated.
+---     Default: random integer between 0 and 359.
+---
+---@return table Table with <background> and <foreground> fields.
 MiniHues.random_base_colors = function(opts)
   opts = opts or {}
   local get_hue = opts.hue_generator or function() return math.random(0, 359) end
@@ -225,10 +387,11 @@ MiniHues.random_base_colors = function(opts)
   local fg_l = is_dark and 80 or 15
   local bg_c = is_dark and 5 or 1
 
-  local hue = get_hue()
+  local hue = get_hue() % 360
+  --stylua: ignore
   return {
     background = H.oklch2hex({ l = bg_l, c = bg_c, h = hue }),
-    foreground = H.oklch2hex({ l = fg_l, c = 1, h = hue }),
+    foreground = H.oklch2hex({ l = fg_l, c = 1,    h = hue }),
   }
 end
 
@@ -459,7 +622,7 @@ H.apply_colorscheme = function(config)
   hi('Directory',      { fg=p.azure,   bg=nil })
   hi('EndOfBuffer',    { fg=p.bg_mid2, bg=nil })
   hi('ErrorMsg',       { fg=p.red,     bg=nil })
-  hi('FloatBorder',    { fg=p.accent,  bg=p.bg_out })
+  hi('FloatBorder',    { fg=p.accent,  bg=p.bg_edge })
   hi('FloatTitle',     { link='Title' })
   hi('FoldColumn',     { fg=p.bg_mid2, bg=nil })
   hi('Folded',         { fg=p.fg_mid2, bg=p.bg_mid })
@@ -475,7 +638,7 @@ H.apply_colorscheme = function(config)
   hi('MsgSeparator',   { fg=p.fg_mid2, bg=p.bg_mid2 })
   hi('NonText',        { fg=p.bg_mid2, bg=nil })
   hi('Normal',         { fg=p.fg,      bg=p.bg })
-  hi('NormalFloat',    { fg=p.fg,      bg=p.bg_out })
+  hi('NormalFloat',    { fg=p.fg,      bg=p.bg_edge })
   hi('NormalNC',       { link='Normal' })
   hi('PMenu',          { fg=p.fg,      bg=p.bg_mid })
   hi('PMenuExtra',     { link='PMenu' })
@@ -495,11 +658,11 @@ H.apply_colorscheme = function(config)
   hi('SpellLocal',     { fg=nil,       bg=nil,       sp=p.yellow, undercurl=true })
   hi('SpellRare',      { fg=nil,       bg=nil,       sp=p.azure,  undercurl=true })
   hi('StatusLine',     { fg=p.fg_mid,  bg=p.accent_bg })
-  hi('StatusLineNC',   { fg=p.fg_mid,  bg=p.bg_out })
+  hi('StatusLineNC',   { fg=p.fg_mid,  bg=p.bg_edge })
   hi('Substitute',     { fg=p.bg,      bg=p.blue })
-  hi('TabLine',        { fg=p.fg_mid,  bg=p.bg_out })
+  hi('TabLine',        { fg=p.fg_mid,  bg=p.bg_edge })
   hi('TabLineFill',    { link='Tabline' })
-  hi('TabLineSel',     { fg=p.accent,  bg=p.bg_out })
+  hi('TabLineSel',     { fg=p.accent,  bg=p.bg_edge })
   hi('TermCursor',     { fg=nil,       bg=nil,       reverse=true })
   hi('TermCursorNC',   { fg=nil,       bg=nil,       reverse=true })
   hi('Title',          { fg=p.accent,  bg=nil })
@@ -589,10 +752,10 @@ H.apply_colorscheme = function(config)
   hi('DiagnosticUnderlineInfo',  { fg=nil, bg=nil, sp=p.azure,  underline=true })
   hi('DiagnosticUnderlineWarn',  { fg=nil, bg=nil, sp=p.yellow, underline=true })
 
-  hi('DiagnosticFloatingError', { fg=p.red,    bg=p.bg_out })
-  hi('DiagnosticFloatingHint',  { fg=p.cyan,   bg=p.bg_out })
-  hi('DiagnosticFloatingInfo',  { fg=p.azure,  bg=p.bg_out })
-  hi('DiagnosticFloatingWarn',  { fg=p.yellow, bg=p.bg_out })
+  hi('DiagnosticFloatingError', { fg=p.red,    bg=p.bg_edge })
+  hi('DiagnosticFloatingHint',  { fg=p.cyan,   bg=p.bg_edge })
+  hi('DiagnosticFloatingInfo',  { fg=p.azure,  bg=p.bg_edge })
+  hi('DiagnosticFloatingWarn',  { fg=p.yellow, bg=p.bg_edge })
 
   hi('DiagnosticVirtualTextError', { link='DiagnosticError' })
   hi('DiagnosticVirtualTextWarn',  { link='DiagnosticWarn' })
@@ -722,12 +885,12 @@ H.apply_colorscheme = function(config)
 
     hi('MiniJump', { fg=nil, bg=nil, sp=p.accent, undercurl=true })
 
-    hi('MiniJump2dDim',        { fg=p.bg_mid2, bg=nil })
-    hi('MiniJump2dSpot',       { fg=p.fg_out2, bg=p.bg_out2, bold=true, nocombine=true })
-    hi('MiniJump2dSpotAhead',  { fg=p.fg_out,  bg=p.bg_out2, nocombine=true })
+    hi('MiniJump2dDim',        { fg=p.bg_mid2,  bg=nil })
+    hi('MiniJump2dSpot',       { fg=p.fg_edge2, bg=p.bg_edge2, bold=true, nocombine=true })
+    hi('MiniJump2dSpotAhead',  { fg=p.fg_edge,  bg=p.bg_edge2, nocombine=true })
     hi('MiniJump2dSpotUnique', { link='MiniJump2dSpot' })
 
-    hi('MiniMapNormal',      { fg=p.fg_mid2, bg=p.bg_out })
+    hi('MiniMapNormal',      { fg=p.fg_mid2, bg=p.bg_edge })
     hi('MiniMapSymbolCount', { fg=p.fg_mid2, bg=nil })
     hi('MiniMapSymbolLine',  { fg=p.accent,  bg=nil })
     hi('MiniMapSymbolView',  { fg=p.accent,  bg=nil })
@@ -755,14 +918,14 @@ H.apply_colorscheme = function(config)
 
     hi('MiniSurround', { link='IncSearch' })
 
-    hi('MiniTablineCurrent',         { fg=p.accent, bg=p.bg,     bold=true })
+    hi('MiniTablineCurrent',         { fg=p.accent,  bg=p.bg,      bold=true })
     hi('MiniTablineFill',            { link='MiniTablineHidden' })
-    hi('MiniTablineHidden',          { fg=p.fg_mid, bg=p.bg_out })
-    hi('MiniTablineModifiedCurrent', { fg=p.bg,     bg=p.accent, bold=true })
-    hi('MiniTablineModifiedHidden',  { fg=p.bg_out, bg=p.fg_mid })
-    hi('MiniTablineModifiedVisible', { fg=p.bg_out, bg=p.fg_mid, bold=true })
-    hi('MiniTablineTabpagesection',  { fg=p.bg,     bg=p.green,  bold=true })
-    hi('MiniTablineVisible',         { fg=p.fg_mid, bg=p.bg_out, bold=true })
+    hi('MiniTablineHidden',          { fg=p.fg_mid,  bg=p.bg_edge })
+    hi('MiniTablineModifiedCurrent', { fg=p.bg,      bg=p.accent,  bold=true })
+    hi('MiniTablineModifiedHidden',  { fg=p.bg_edge, bg=p.fg_mid })
+    hi('MiniTablineModifiedVisible', { fg=p.bg_edge, bg=p.fg_mid,  bold=true })
+    hi('MiniTablineTabpagesection',  { fg=p.bg,      bg=p.green,   bold=true })
+    hi('MiniTablineVisible',         { fg=p.fg_mid,  bg=p.bg_edge, bold=true })
 
     hi('MiniTestEmphasis', { fg=nil,     bg=nil, bold=true })
     hi('MiniTestFail',     { fg=p.red,   bg=nil, bold=true })
@@ -793,7 +956,7 @@ H.apply_colorscheme = function(config)
   end
 
   if has_integration('DanilaMihailov/beacon.nvim') then
-    hi('Beacon', { fg=nil, bg=p.fg_out2 })
+    hi('Beacon', { fg=nil, bg=p.fg_edge2 })
   end
 
   if has_integration('folke/lazy.nvim') then
@@ -818,7 +981,7 @@ H.apply_colorscheme = function(config)
     hi('WhichKey',          { fg=p.cyan,  bg=nil })
     hi('WhichKeyBorder',    { link='FloatBorder' })
     hi('WhichKeyDesc',      { fg=p.fg,    bg=nil })
-    hi('WhichKeyFloat',     { fg=p.fg,    bg=p.bg_out })
+    hi('WhichKeyFloat',     { fg=p.fg,    bg=p.bg_edge })
     hi('WhichKeyGroup',     { fg=p.red,   bg=nil })
     hi('WhichKeySeparator', { fg=p.green, bg=nil })
     hi('WhichKeyValue',     { link='Comment' })
@@ -927,7 +1090,7 @@ H.apply_colorscheme = function(config)
 
   if has_integration('justinmk/vim-sneak') then
     hi('Sneak',      { fg=p.bg, bg=p.orange })
-    hi('SneakScope', { fg=p.bg, bg=p.fg_out2 })
+    hi('SneakScope', { fg=p.bg, bg=p.fg_edge2 })
     hi('SneakLabel', { fg=p.bg, bg=p.orange, bold=true })
   end
 
@@ -1007,7 +1170,7 @@ H.apply_colorscheme = function(config)
     hi('NeoTreeGitUnstaged',          { fg=p.purple,  bg=nil })
     hi('NeoTreeGitUntracked',         { fg=p.cyan,    bg=nil })
     hi('NeoTreeMessage',              { fg=p.fg,      bg=p.bg_mid })
-    hi('NeoTreeModified',             { fg=p.fg_out,  bg=nil })
+    hi('NeoTreeModified',             { fg=p.fg_edge, bg=nil })
     hi('NeoTreeRootName',             { fg=p.accent,  bg=nil, bold=true })
     hi('NeoTreeTabInactive',          { fg=p.fg_mid2, bg=nil })
     hi('NeoTreeTabSeparatorActive',   { fg=p.fg_mid2, bg=p.bg_mid2 })
@@ -1099,8 +1262,8 @@ H.apply_colorscheme = function(config)
     hi('BufferCurrentSign',    { link='BufferCurrent' })
     hi('BufferCurrentTarget',  { fg=p.accent, bg=p.bg_mid2, bold=true })
 
-    hi('BufferInactive',       { fg=p.fg,     bg=p.bg_out })
-    hi('BufferInactiveIcon',   { fg=nil,      bg=p.bg_out })
+    hi('BufferInactive',       { fg=p.fg,     bg=p.bg_edge })
+    hi('BufferInactiveIcon',   { fg=nil,      bg=p.bg_edge })
     hi('BufferInactiveIndex',  { link='BufferInactiveIcon' })
     hi('BufferInactiveMod',    { fg=p.fg,     bg=p.bg_mid })
     hi('BufferInactiveSign',   { link='BufferInactive' })
