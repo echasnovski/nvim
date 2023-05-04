@@ -15,7 +15,7 @@
 ---     - Accent color used for some selected UI elements.
 ---     - Plugin integration (can be selectively enabled for faster startup).
 ---
---- - Random generator for base colors. See |MiniHues.random_base_colors()|.
+--- - Random generator for base colors. See |MiniHues.get_random_base_colors()|.
 ---   Powers |randomhue| color scheme.
 ---
 --- - Lua function to compute palette used in color scheme.
@@ -94,6 +94,9 @@
 ---       your Neovim config directory is usually enough).
 ---     - Inside "myscheme.lua" call `require('mini.hues').setup()` with your
 ---       palette and only after that set |g:colors_name| to "myscheme".
+--- - This module doesn't define |cterm-colors| for implementation simplicity.
+---   Use 'mini.colors' module, |MiniColors-colorscheme:add_cterm_attributes()|
+---   in particular.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -155,30 +158,33 @@ end
 ---
 ---   local setup = require('mini.hues').setup
 ---
----   -- Base colors with different hues
----   setup({ background = '#351721', foreground = '#cdc4c6' }) -- red
----   setup({ background = '#361a0d', foreground = '#cdc5c1' }) -- orange
----   setup({ background = '#2c2101', foreground = '#c9c6c0' }) -- yellow
----   setup({ background = '#17280e', foreground = '#c4c8c2' }) -- green
----   setup({ background = '#002923', foreground = '#c0c9c7' }) -- cyan
----   setup({ background = '#002734', foreground = '#c0c8cc' }) -- azure
----   setup({ background = '#19213a', foreground = '#c4c6cd' }) -- blue
----   setup({ background = '#2b1a33', foreground = '#c9c5cb' }) -- purple
+---   -- Choose background and foreground
+---   setup({ background = '#2f1c22', foreground = '#cdc4c6' }) -- red
+---   setup({ background = '#2f1e16', foreground = '#cdc5c1' }) -- orange
+---   setup({ background = '#282211', foreground = '#c9c6c0' }) -- yellow
+---   setup({ background = '#1c2617', foreground = '#c4c8c2' }) -- green
+---   setup({ background = '#112723', foreground = '#c0c9c7' }) -- cyan
+---   setup({ background = '#11262d', foreground = '#c0c8cc' }) -- azure
+---   setup({ background = '#1d2231', foreground = '#c4c6cd' }) -- blue
+---   setup({ background = '#281e2c', foreground = '#c9c5cb' }) -- purple
 ---
----   -- Different number of non-base hues
----   setup({ background = '#002734', foreground = '#c0c8cc', n_hues = 6 })
----   setup({ background = '#002734', foreground = '#c0c8cc', n_hues = 4 })
----   setup({ background = '#002734', foreground = '#c0c8cc', n_hues = 2 })
----   setup({ background = '#002734', foreground = '#c0c8cc', n_hues = 0 })
+---   -- Choose number of accent colors
+---   setup({ background = '#11262d', foreground = '#c0c8cc', n_hues = 6 })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', n_hues = 4 })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', n_hues = 2 })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', n_hues = 0 })
 ---
----   -- Different text saturation
----   setup({ background = '#002734', foreground = '#c0c8cc', saturation = 'low' })
----   setup({ background = '#002734', foreground = '#c0c8cc', saturation = 'medium' })
----   setup({ background = '#002734', foreground = '#c0c8cc', saturation = 'high' })
+---   -- Choose saturation of colored text
+---   setup({ background = '#11262d', foreground = '#c0c8cc', saturation = 'low' })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', saturation = 'medium' })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', saturation = 'high' })
 ---
 ---   -- Choose accent color
----   setup({ background = '#002734', foreground = '#c0c8cc', accent = 'yellow' })
----   setup({ background = '#002734', foreground = '#c0c8cc', accent = 'blue' })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', accent = 'bg' })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', accent = 'red' })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', accent = 'yellow' })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', accent = 'cyan' })
+---   setup({ background = '#11262d', foreground = '#c0c8cc', accent = 'blue' })
 MiniHues.config = {
   -- **Required** base colors as '#rrggbb' hex strings
   background = nil,
@@ -258,6 +264,9 @@ MiniHues.config = {
 ---   to reduce lightness and chroma in optimal way while maintaining same hue.
 ---   For more information see |MiniColors-gamut-clip|.
 ---
+--- - Not all colors are actually used in highlight groups and present for the
+---   sake of completeness.
+---
 ---@param config table Configuration for palette. Same structure as |MiniHues.config|.
 ---   Needs to have <background> and <foreground> fields.
 ---
@@ -272,8 +281,8 @@ MiniHues.config = {
 ---     background.
 MiniHues.make_palette = function(config)
   config = vim.tbl_deep_extend('force', MiniHues.config, config or {})
-  local bg = H.validate_hex(config.background)
-  local fg = H.validate_hex(config.foreground)
+  local bg = H.validate_hex(config.background, 'background')
+  local fg = H.validate_hex(config.foreground, 'foreground')
   local n_hues = H.validate_n_hues(config.n_hues)
   local saturation = H.validate_one_of(config.saturation, H.saturation_values, 'saturation')
   local accent = H.validate_one_of(config.accent, H.accent_values, 'accent')
@@ -360,6 +369,16 @@ end
 --- Compute background and foreground colors based on randomly generated hue
 --- and heuristally picked lightness-chroma values.
 ---
+--- You can recreate a similar functionality but tweaked to your taste
+--- using 'mini.colors': >
+---
+---   local convert = require('mini.colors').convert
+---   local hue = math.random(0, 359)
+---   return {
+---     background = convert({ l = 15, c = 3, h = hue }, 'hex'),
+---     foreground = convert({ l = 80, c = 1, h = hue }, 'hex'),
+---   }
+---
 --- Notes:
 --- - Respects 'background' (uses different lightness and chroma values for
 ---   "dark" and "light" backgrounds).
@@ -369,7 +388,7 @@ end
 ---
 ---   local hues = require('mini.hues')
 ---   math.randomseed(vim.loop.hrtime())
----   hues.setup(hues.random_base_colors())
+---   hues.setup(hues.get_random_base_colors())
 ---
 ---@param opts table|nil Options. Possible values:
 ---   - <get_hue> `(function)` - callable which will return single number for
@@ -377,15 +396,15 @@ end
 ---     Default: random integer between 0 and 359.
 ---
 ---@return table Table with <background> and <foreground> fields.
-MiniHues.random_base_colors = function(opts)
+MiniHues.get_random_base_colors = function(opts)
   opts = opts or {}
-  local get_hue = opts.hue_generator or function() return math.random(0, 359) end
+  local get_hue = opts.get_hue or function() return math.random(0, 359) end
   if not vim.is_callable(get_hue) then H.error('`get_hue` should be callable.') end
 
   local is_dark = vim.o.background == 'dark'
   local bg_l = is_dark and 15 or 90
-  local fg_l = is_dark and 80 or 15
-  local bg_c = is_dark and 5 or 1
+  local fg_l = is_dark and 80 or 20
+  local bg_c = is_dark and 3 or 1
 
   local hue = get_hue() % 360
   --stylua: ignore
@@ -467,6 +486,10 @@ H.setup_config = function(config)
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
+
+  if config.background == nil or config.foreground == nil then
+    H.error('`setup()` needs both `background` and `foreground`.')
+  end
 
   vim.validate({
     background = { config.background, H.is_hex },
@@ -656,7 +679,7 @@ H.apply_colorscheme = function(config)
   hi('SpellBad',       { fg=nil,       bg=nil,       sp=p.red,    undercurl=true })
   hi('SpellCap',       { fg=nil,       bg=nil,       sp=p.cyan,   undercurl=true })
   hi('SpellLocal',     { fg=nil,       bg=nil,       sp=p.yellow, undercurl=true })
-  hi('SpellRare',      { fg=nil,       bg=nil,       sp=p.azure,  undercurl=true })
+  hi('SpellRare',      { fg=nil,       bg=nil,       sp=p.blue,   undercurl=true })
   hi('StatusLine',     { fg=p.fg_mid,  bg=p.accent_bg })
   hi('StatusLineNC',   { fg=p.fg_mid,  bg=p.bg_edge })
   hi('Substitute',     { fg=p.bg,      bg=p.blue })
@@ -742,19 +765,26 @@ H.apply_colorscheme = function(config)
   hi('gitcommitUntrackedFile', { fg=p.cyan,   bg=nil })
 
   -- Built-in diagnostic
+  -- Logic:
+  -- - Error is red.
+  -- - Distance from hue to error hue should increase the less important it is
+  --   (warning - info - ok - hint).
   hi('DiagnosticError', { fg=p.red,    bg=nil })
   hi('DiagnosticHint',  { fg=p.cyan,   bg=nil })
-  hi('DiagnosticInfo',  { fg=p.azure,  bg=nil })
+  hi('DiagnosticInfo',  { fg=p.blue,   bg=nil })
+  hi('DiagnosticOk',    { fg=p.green,  bg=nil })
   hi('DiagnosticWarn',  { fg=p.yellow, bg=nil })
 
   hi('DiagnosticUnderlineError', { fg=nil, bg=nil, sp=p.red,    underline=true })
   hi('DiagnosticUnderlineHint',  { fg=nil, bg=nil, sp=p.cyan,   underline=true })
-  hi('DiagnosticUnderlineInfo',  { fg=nil, bg=nil, sp=p.azure,  underline=true })
+  hi('DiagnosticUnderlineInfo',  { fg=nil, bg=nil, sp=p.blue,   underline=true })
+  hi('DiagnosticUnderlineOk',    { fg=nil, bg=nil, sp=p.green,  underline=true })
   hi('DiagnosticUnderlineWarn',  { fg=nil, bg=nil, sp=p.yellow, underline=true })
 
   hi('DiagnosticFloatingError', { fg=p.red,    bg=p.bg_edge })
   hi('DiagnosticFloatingHint',  { fg=p.cyan,   bg=p.bg_edge })
-  hi('DiagnosticFloatingInfo',  { fg=p.azure,  bg=p.bg_edge })
+  hi('DiagnosticFloatingInfo',  { fg=p.blue,   bg=p.bg_edge })
+  hi('DiagnosticFloatingOk',    { fg=p.green,  bg=p.bg_edge })
   hi('DiagnosticFloatingWarn',  { fg=p.yellow, bg=p.bg_edge })
 
   hi('DiagnosticVirtualTextError', { link='DiagnosticError' })
@@ -864,7 +894,8 @@ H.apply_colorscheme = function(config)
     hi('@lsp.type.struct',        { link='@structure' })
     hi('@lsp.type.type',          { link='@type' })
     hi('@lsp.type.typeParameter', { link='@type.definition' })
-    hi('@lsp.type.variable',      { fg=p.fg, bg=nil })
+    -- - Use variant defined in tree-sitter
+    hi('@lsp.type.variable',      {})
 
     hi('@lsp.mod.defaultLibrary', { link='Special' })
     hi('@lsp.mod.deprecated',     { fg=p.red, bg=nil })
@@ -895,7 +926,7 @@ H.apply_colorscheme = function(config)
     hi('MiniMapSymbolLine',  { fg=p.accent,  bg=nil })
     hi('MiniMapSymbolView',  { fg=p.accent,  bg=nil })
 
-    hi('MiniStarterCurrent',    { fg=nil,       bg=nil })
+    hi('MiniStarterCurrent',    { link='MiniStarterItem' })
     hi('MiniStarterFooter',     { link='Comment' })
     hi('MiniStarterHeader',     { fg=p.accent,  bg=nil, bold=true })
     hi('MiniStarterInactive',   { link='Comment' })

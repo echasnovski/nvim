@@ -3,7 +3,7 @@ local hues = require('mini-dev.hues')
 -- Generate random config with initialized random seed (otherwise it won't be
 -- random during startup)
 math.randomseed(vim.loop.hrtime())
-local base_colors = hues.random_base_colors()
+local base_colors = hues.get_random_base_colors()
 
 hues.setup({
   background = base_colors.background,
