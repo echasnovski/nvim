@@ -1,4 +1,4 @@
-require('mini.sessions').setup({ directory = '~/.config/nvim/misc/sessions' })
+require('mini.sessions').setup({ directory = vim.fn.stdpath('config') .. '/misc/sessions' })
 
 require('mini.starter').setup()
 vim.cmd([[autocmd User MiniStarterOpened

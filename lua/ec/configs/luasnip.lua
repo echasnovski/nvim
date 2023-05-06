@@ -2,7 +2,7 @@ local luasnip = require('luasnip')
 luasnip.config.set_config({ history = true })
 
 -- Load available snippets
-require('luasnip/loaders/from_vscode').lazy_load({ paths = { './misc/snippets' } })
+require('luasnip/loaders/from_vscode').lazy_load({ paths = { vim.fn.stdpath('config') .. '/misc/snippets' } })
 
 -- Make snippet keymaps
 EC.luasnip_go_right = function()

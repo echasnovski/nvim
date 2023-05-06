@@ -9,8 +9,8 @@ vim.o.mousescroll  = 'ver:25,hor:6' -- Customize mouse scroll
 vim.o.switchbuf    = 'usetab'       -- Use already opened buffers when switching
 vim.o.writebackup  = false          -- Don't store backup
 
-vim.o.undodir  = vim.fn.expand('$HOME/.config/nvim/misc/undodir') -- Set directory for persistent undo
-vim.o.undofile = true                                             -- Enable persistent undo
+vim.o.undodir  = vim.fn.stdpath('config') .. '/misc/undodir' -- Set directory for persistent undo
+vim.o.undofile = true                                        -- Enable persistent undo
 
 vim.cmd('filetype plugin indent on') -- Enable all filetype plugins
 
@@ -91,12 +91,12 @@ vim.o.completeopt = 'menuone,noinsert,noselect' -- Customize completions
 vim.o.formatlistpat = [[^\s*[0-9\-\+\*]\+[\.\)]*\s\+]]
 
 -- Spelling ===================================================================
-vim.o.spelllang    = 'en,ru,uk'  -- Define spelling dictionaries
-vim.o.spelloptions = 'camel'     -- Treat parts of camelCase words as seprate words
+vim.o.spelllang    = 'en,ru,uk'   -- Define spelling dictionaries
+vim.o.spelloptions = 'camel'      -- Treat parts of camelCase words as seprate words
 vim.opt.complete:append('kspell') -- Add spellcheck options for autocomplete
 vim.opt.complete:remove('t')      -- Don't use tags for completion
 
-vim.o.dictionary = vim.fn.expand('$HOME/.config/nvim/misc/dict/english.txt') -- Use specific dictionaries
+vim.o.dictionary = vim.fn.stdpath('config') .. '/misc/dict/english.txt' -- Use specific dictionaries
 
 -- Folds ======================================================================
 vim.o.foldmethod  = 'indent' -- Set 'indent' folding method

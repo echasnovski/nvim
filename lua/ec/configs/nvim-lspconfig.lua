@@ -56,9 +56,10 @@ lspconfig.pyright.setup({ on_attach = on_attach_custom })
 -- Lua (sumneko_lua) ==========================================================
 -- Expected to use precompiled binaries from Github releases:
 -- https://github.com/sumneko/lua-language-server/wiki/PreCompiled-Binaries
--- Should be extracted into '.config/nvim/misc' as 'lua-language-server' directory.
--- Code structure is taken from https://www.chrisatmachine.com/Neovim/28-neovim-lua-development/
-local sumneko_root = vim.fn.expand('$HOME/.config/nvim/misc/lua-language-server')
+-- Should be extracted into config's 'misc' as 'lua-language-server' directory.
+-- Code structure is taken from
+-- https://www.chrisatmachine.com/Neovim/28-neovim-lua-development/
+local sumneko_root = vim.fn.stdpath('config') .. '/misc/lua-language-server'
 if vim.fn.isdirectory(sumneko_root) == 1 then
   local sumneko_binary = sumneko_root .. '/bin/lua-language-server'
 
