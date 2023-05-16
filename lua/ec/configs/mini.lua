@@ -136,4 +136,28 @@ vim.schedule(function()
   })
 
   require('mini.trailspace').setup()
+
+  local ok, hipatterns = pcall(require, 'mini-dev.hipatterns')
+  if ok then
+    local gen_hi = hipatterns.gen_highlighters
+    hipatterns.setup({
+      highlighters = {
+        abcd = gen_hi.pattern('abcd', 'Search', {
+          filter = function(buf_id) return vim.bo[buf_id].filetype ~= 'lua' end,
+        }),
+        more_less = {
+          pattern = function(buf_id) return vim.api.nvim_buf_line_count(buf_id) > 300 and 'MORE' or 'LESS' end,
+          group = function(buf_id, match) return match == 'MORE' and 'DiagnosticError' or 'DiagnosticInfo' end,
+          priority = 200,
+        },
+
+        fixme = gen_hi.pattern('%f[%w]FIXME%f[%W]', 'MiniHipatternsFixme'),
+        hack = gen_hi.pattern('%f[%w]HACK%f[%W]', 'MiniHipatternsHack'),
+        todo = gen_hi.pattern('%f[%w]TODO%f[%W]', 'MiniHipatternsTodo'),
+        note = gen_hi.pattern('%f[%w]NOTE%f[%W]', 'MiniHipatternsNote'),
+
+        hex_color = gen_hi.hex_color({ style = 'bg' }),
+      },
+    })
+  end
 end)
