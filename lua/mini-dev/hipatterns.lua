@@ -1,24 +1,13 @@
 -- TODO
 --
 -- Code:
--- - Think again about making `delay` a table with `debounce` entry.
---   Might have a better future-proof.
--- - Think about special handling of terminal buffers, as there seems to be
---   extra delay for processing extmarks. Extra noticable during scroll.
 --
 -- Docs:
 -- - Use only named entries for better buffer-local config (due to
 --   `vim.tbl_deep_extend()` behavior).
--- - Sometimes (especially during frequent buffer updates on same line numbers)
---   highlighting can be outdated or not applied when it should be. This is due
---   to asynchronous nature of updates listening to `on_lines` (|nvim_buf_attach()|).
---   To update them, either use |MiniHipatterns.update()| or scroll window
---   (for example, with |CTRL-E| / |CTRL-Y|; this will ensure up to date
---   highlighting inside window view).
--- - There can be flicker when used together with 'mini.completion' or built-in
---   completion. This is due to https://github.com/neovim/neovim/issues/23653.
---   For better experience with 'mini.completion', make sure that its
---   `config.delay.completion` is less than `config.delay` of this module.
+-- - Suggested way to do per-filetype highlighting:
+--     - Through 'after/ftplugin/xxx.lua' and `vim.b.minihipatterns_config`.
+--     - Through `gen_highlighter` and `filter`.
 
 --- *mini.hipatterns* Highlight patterns in text
 --- *MiniHipatterns*
@@ -28,43 +17,80 @@
 --- ==============================================================================
 ---
 --- Features:
---- - Highlight configurable patterns asynchronously with debounce/throttle.
+--- - Highlight configurable patterns asynchronously with debounce.
+---
+--- See |MiniHipatterns.config| and |MiniHipatterns.gen_highlighter| for examples
+--- of common use cases.
+---
+--- Notes:
+--- - Sometimes (especially during frequent buffer updates on same line numbers)
+---   highlighting can be outdated or not applied when it should be. This is due
+---   to asynchronous nature of updates reacting to text changes (via
+---   `on_lines` of |nvim_buf_attach()|).
+---   To make them up to date, either use |MiniHipatterns.update()| or scroll
+---   window (for example, with |CTRL-E| / |CTRL-Y|; this will ensure up to
+---   date highlighting inside window view).
+---
+--- - There can be flicker when used together with 'mini.completion' or built-in
+---   completion. This is due to https://github.com/neovim/neovim/issues/23653.
+---   For better experience with 'mini.completion', make sure that its
+---   `config.delay.completion` is less than this module's `config.delay.text_change`.
 ---
 --- # Setup ~
 ---
---- This module doesn't need setup, but it can be done to improve usability.
---- Setup with `require('mini.hipatterns').setup({})` (replace `{}` with your
---- `config` table). It will create global Lua table `MiniHipatterns` which you can
---- use for scripting or manually (with `:lua MiniHipatterns.*`).
+--- This module needs a setup with `require('mini.hipatterns').setup({})`
+--- (replace `{}` with your `config` table). It will create global Lua table
+--- `MiniHipatterns` which you can use for scripting or manually (with `:lua
+--- MiniHipatterns.*`).
 ---
 --- See |MiniHipatterns.config| for `config` structure and default values.
 ---
---- This module doesn't have runtime options, so using `vim.b.minihipatterns_config`
---- will have no effect here.
+--- You can override runtime config settings locally to buffer inside
+--- `vim.b.minihipatterns_config` which should have same structure as
+--- `MiniHipatterns.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons ~
 ---
 --- - 'folke/todo-comments':
+---     - Oriented for "TODO", "NOTE", "FIXME" like patterns, while this module
+---       can work with any Lua patterns and computable highlight groups.
+---     - Has functionality beyond text highlighting (sign placing,
+---       "telescope.nvim" extension, etc.), while this module only focuses on
+---       highlighting text.
 --- - 'folke/paint.nvim':
---- - 'norcalli/nvim-colorizer.lua':
+---     - Mostly similar to this module, but with slightly less functionality,
+---       like computed pattern and highlight group, asynchronous delay, etc.
+--- - 'NvChad/nvim-colorizer.lua':
+---     - Oriented for color highlighting, while this module can work with any
+---       Lua patterns and computable highlight groups.
+---     - Has more built-in color spaces to highlight, while this module out of
+---       the box provides only hex color highlighting
+---       (see |MiniHipatterns.gen_highlighter.hex_color()|). Other types are
+---       also possible to implement.
 --- - 'uga-rosa/ccc.nvim':
+---     - Has more than color highlighting functionality, which is compared to
+---       this module in the same way as 'NvChad/nvim-colorizer.lua'.
 ---
 --- # Highlight groups~
 ---
---- * `MiniHipatternsFixme` - .
---- * `MiniHipatternsHack` - .
---- * `MiniHipatternsTodo` - .
---- * `MiniHipatternsNote` - .
+--- * `MiniHipatternsFixme` - suggested group to use for `FIXME`-like patterns.
+--- * `MiniHipatternsHack` - suggested group to use for `HACK`-like patterns.
+--- * `MiniHipatternsTodo` - suggested group to use for `TODO`-like patterns.
+--- * `MiniHipatternsNote` - suggested group to use for `NOTE`-like patterns.
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 ---
 --- # Disabling ~
 ---
---- To disable, set `vim.g.minihipatterns_disable` (globally) or
---- `vim.b.minihipatterns_disable` (for a buffer) to `true`. Considering high
---- number of different scenarios and customization intentions, writing exact
---- rules for disabling module's functionality is left to user. See
---- |mini.nvim-disabling-recipes| for common recipes.
+--- This module can be disabled in three ways:
+--- - Globally: set `vim.g.minihipatterns_disable` to `true`.
+--- - Locally for buffer permanently: set `vim.b.minihipatterns_disable` to `true`.
+--- - Locally for buffer termporarily (until next auto-enabling event):
+---   use |MiniHipatterns.disable()|.
+---
+--- Considering high number of different scenarios and customization
+--- intentions, writing exact rules for disabling module's functionality is
+--- left to user. See |mini.nvim-disabling-recipes| for common recipes.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -101,12 +127,49 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # Options ~
+---
+--- ## Highlighters ~
+---
+--- NOTE: `pattern` should have submatch delimited by placing `()` on start and
+--- end, NOT by surrounding with it. Otherwise it will result in error
+--- containing `number expected, got string`.
+---
+--- ## Delay ~
+---
+--- # Common use cases ~
+---
+--- - TODO, NOTE, etc.
+--- - Color highlighting.
+--- - Trailing whitespace (if don't want to use more tailored 'mini.trailspace'): >
+---
+---   gen_hi.pattern('%f[%s]%s*$', 'Error')
+---
+--- - Indent levels?
+---
+--- - Enable only in certain filetypes (via `vim.b.minihipatterns_config` in
+---   filetype plugin).
+--- - Disable only in certain filetypes (via `vim.b.minihipatterns_disable`).
+--- - Disable in terminal buffer: >
+---
+---   vim.api.nvim_create_autocmd(
+---     'TermOpen',
+---     { callback = function() vim.b.minihipatterns_disable = true end }
+---   )
+---
+--- - Enable only in normal buffers via `opts.filter` in `gen_highlighter`.
 MiniHipatterns.config = {
-  -- Table with highlighters (tables with <pattern>, <group>, <priority> fields)
+  -- Table with highlighters (see |MiniHipatterns.config| for more details)
   highlighters = {},
 
-  -- Delay (in ms) to debounce highlighting after every text change
-  delay = 200,
+  -- Delays (in ms) defining asynchronous highlighting process
+  delay = {
+    -- How much to wait after every text change
+    text_change = 200,
+
+    -- How much to wait after window scroll
+    scroll = 50,
+  },
 }
 --minidoc_afterlines_end
 
@@ -120,7 +183,7 @@ MiniHipatterns.enable = function(buf_id)
   H.update_buf_data(buf_id)
 
   -- Add highlighting to whole buffer
-  H.process_lines(buf_id, 1, vim.api.nvim_buf_line_count(buf_id), H.buf_enabled[buf_id].delay)
+  H.process_lines(buf_id, 1, vim.api.nvim_buf_line_count(buf_id), 0)
 
   -- Add watchers to current buffer
   vim.api.nvim_buf_attach(buf_id, false, {
@@ -128,7 +191,7 @@ MiniHipatterns.enable = function(buf_id)
       local buf_data = H.buf_enabled[buf_id]
       -- Properly detach if registered to detach
       if buf_data == nil then return true end
-      H.process_lines(buf_id, from_line + 1, to_line, buf_data.delay)
+      H.process_lines(buf_id, from_line + 1, to_line, buf_data.delay.text_change)
     end,
     on_reload = function() MiniHipatterns.reload(buf_id) end,
     on_detach = function() MiniHipatterns.disable(buf_id) end,
@@ -166,11 +229,11 @@ MiniHipatterns.update = function(buf_id, from_line, to_line)
   H.process_lines(buf_id, from_line, to_line, 0)
 end
 
-MiniHipatterns.gen_highlighters = {}
+MiniHipatterns.gen_highlighter = {}
 
--- Add note about `%f[%w](aaa)%f[%W]` pattern
+-- Add note about `%f[%w]()aaa()%f[%W]` pattern
 -- Add example with `FIXME`, `HACK`, `TODO`, and `NOTE`.
-MiniHipatterns.gen_highlighters.pattern = function(pattern, group, opts)
+MiniHipatterns.gen_highlighter.pattern = function(pattern, group, opts)
   pattern = H.validate_string(pattern, 'pattern')
   group = H.validate_string(group, 'group')
   opts = vim.tbl_deep_extend('force', { priority = 200, filter = H.always_true }, opts or {})
@@ -179,11 +242,13 @@ MiniHipatterns.gen_highlighters.pattern = function(pattern, group, opts)
 end
 
 -- Works only with enabled |termguicolors|
-MiniHipatterns.gen_highlighters.hex_color = function(opts)
-  opts = vim.tbl_deep_extend('force', { style = 'bg', priority = 200, filter = H.always_true }, opts or {})
+MiniHipatterns.gen_highlighter.hex_color = function(opts)
+  opts = vim.tbl_deep_extend('force', { style = 'full', priority = 200, filter = H.always_true }, opts or {})
+
+  local pattern = opts.style == '#' and '()#()%x%x%x%x%x%x%f[%X]' or '#%x%x%x%x%x%x%f[%X]'
 
   return {
-    pattern = H.wrap_pattern_with_filter('(#%x%x%x%x%x%x)%f[%X]', opts.filter),
+    pattern = H.wrap_pattern_with_filter(pattern, opts.filter),
     group = function(_, match) return H.compute_hex_color_group(match, opts.style) end,
     priority = opts.priority,
   }
@@ -219,7 +284,12 @@ H.setup_config = function(config)
 
   vim.validate({
     highlighters = { config.highlighters, 'table' },
-    delay = { config.delay, 'number' },
+    delay = { config.delay, 'table' },
+  })
+
+  vim.validate({
+    ['delay.text_change'] = { config.delay.text_change, 'number' },
+    ['delay.scroll'] = { config.delay.scroll, 'number' },
   })
 
   return config
@@ -290,7 +360,7 @@ H.on_winscrolled = vim.schedule_wrap(function(data)
 
   -- Debounce without aggregating redraws (only last view should be updated)
   H.timer_view:stop()
-  H.timer_view:start(buf_data.delay, 0, H.process_view)
+  H.timer_view:start(buf_data.delay.scroll, 0, H.process_view)
 end)
 
 -- Validators -----------------------------------------------------------------
@@ -335,15 +405,15 @@ H.normalize_highlighters = function(highlighters)
 end
 
 -- Highlighting ---------------------------------------------------------------
-H.process_lines = vim.schedule_wrap(function(buf_id, from_line, to_line, delay)
+H.process_lines = vim.schedule_wrap(function(buf_id, from_line, to_line, delay_ms)
   table.insert(H.change_queue, { buf_id, from_line, to_line })
 
   -- Debounce
   H.timer_debounce:stop()
-  H.timer_debounce:start(delay, 0, H.process_change_queue)
+  H.timer_debounce:start(delay_ms, 0, H.process_change_queue)
 
   -- -- Throttle
-  -- if not H.timer:is_active() then H.timer:start(delay, 0, H.process_change_queue) end
+  -- if not H.timer:is_active() then H.timer:start(delay_ms, 0, H.process_change_queue) end
 end)
 
 H.process_view = vim.schedule_wrap(function()
@@ -399,7 +469,8 @@ end)
 
 H.apply_highlighter = vim.schedule_wrap(function(hi, buf_id, lines_to_process)
   local pattern, group = hi.pattern(buf_id), hi.group
-  if pattern == nil then return end
+  if type(pattern) ~= 'string' then return end
+  local pattern_has_line_start = pattern:sub(1, 1) == '^'
 
   -- Apply per proper line
   local ns = H.ns_id.highlight
@@ -407,22 +478,26 @@ H.apply_highlighter = vim.schedule_wrap(function(hi, buf_id, lines_to_process)
 
   for l_num, _ in pairs(lines_to_process) do
     local line = H.get_line(buf_id, l_num)
-    local from, to, match = line:find(pattern)
+    local from, to, sub_from, sub_to = line:find(pattern)
 
     while from do
-      if match and match ~= '' then
-        -- Not 100% full proof approach, as `match` string can be contained
-        -- more than once with actual one not being first (like in '%w%w(%w)')
-        from, to = line:find(match, from, true)
-      else
-        match = line:sub(from, to)
-      end
+      -- Compute whole pattern match
+      local match = line:sub(from, to)
 
-      extmark_opts.hl_group = group(buf_id, match)
-      extmark_opts.end_col = to
-      if extmark_opts.hl_group ~= nil then H.set_extmark(buf_id, ns, l_num - 1, from - 1, extmark_opts) end
+      -- Compute (possibly inferred) submatch
+      sub_from, sub_to = sub_from or from, sub_to or (to + 1)
+      local sub_match = line:sub(sub_from, sub_to)
 
-      from, to, match = line:find(pattern, to + 1)
+      -- Set extmark based on submatch
+      extmark_opts.hl_group = group(buf_id, match, sub_match)
+      extmark_opts.end_col = sub_to - 1
+      if extmark_opts.hl_group ~= nil then H.set_extmark(buf_id, ns, l_num - 1, sub_from - 1, extmark_opts) end
+
+      -- Overcome an issue that `string.find()` doesn't recognize `^` when
+      -- `init` is more than 1
+      if pattern_has_line_start then break end
+
+      from, to, sub_from, sub_to = line:find(pattern, to + 1)
     end
   end
 end)
@@ -444,13 +519,13 @@ H.compute_hex_color_group = function(hex_color, style)
   if H.hex_color_groups[group_name] then return group_name end
 
   -- Define highlight group if it is not already defined
-  if style == 'bg' then
+  if style == 'full' or style == '#' then
     -- Compute opposite color based on Oklab lightness (for better contrast)
     local opposite = H.compute_opposite_color(hex)
     vim.api.nvim_set_hl(0, group_name, { fg = opposite, bg = hex_color })
   end
 
-  if style == 'underline' then vim.api.nvim_set_hl(0, group_name, { sp = hex_color, underline = true }) end
+  if style == 'line' then vim.api.nvim_set_hl(0, group_name, { sp = hex_color, underline = true }) end
 
   -- Keep track of created groups to properly react on `:hi clear`
   H.hex_color_groups[group_name] = true

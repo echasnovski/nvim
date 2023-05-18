@@ -139,7 +139,15 @@ vim.schedule(function()
 
   local ok, hipatterns = pcall(require, 'mini-dev.hipatterns')
   if ok then
-    local gen_hi = hipatterns.gen_highlighters
+    local gen_hi = hipatterns.gen_highlighter
+
+    -- local gen_indent_pattern = function(n)
+    --   return function()
+    --     local pad = vim.bo.expandtab and string.rep(' ', vim.fn.shiftwidth()) or '\t'
+    --     return string.format('^%s()%s()', pad:rep(n - 1), pad)
+    --   end
+    -- end
+
     hipatterns.setup({
       highlighters = {
         abcd = gen_hi.pattern('abcd', 'Search', {
@@ -151,12 +159,19 @@ vim.schedule(function()
           priority = 200,
         },
 
-        fixme = gen_hi.pattern('%f[%w]FIXME%f[%W]', 'MiniHipatternsFixme'),
-        hack = gen_hi.pattern('%f[%w]HACK%f[%W]', 'MiniHipatternsHack'),
-        todo = gen_hi.pattern('%f[%w]TODO%f[%W]', 'MiniHipatternsTodo'),
-        note = gen_hi.pattern('%f[%w]NOTE%f[%W]', 'MiniHipatternsNote'),
+        fixme = gen_hi.pattern('%f[%w]()FIXME()%f[%W]', 'MiniHipatternsFixme'),
+        hack = gen_hi.pattern('%f[%w]()HACK()%f[%W]', 'MiniHipatternsHack'),
+        todo = gen_hi.pattern('%f[%w]()TODO()%f[%W]', 'MiniHipatternsTodo'),
+        note = gen_hi.pattern('%f[%w]()NOTE()%f[%W]', 'MiniHipatternsNote'),
 
-        hex_color = gen_hi.hex_color({ style = 'bg' }),
+        hex_color = gen_hi.hex_color(),
+
+        -- trailspace = gen_hi.pattern('%f[%s]%s*$', 'Error'),
+
+        -- indent_level1 = { pattern = gen_indent_pattern(1), group = 'MiniHipatternsNote' },
+        -- indent_level2 = { pattern = gen_indent_pattern(2), group = 'MiniHipatternsTodo' },
+        -- indent_level3 = { pattern = gen_indent_pattern(3), group = 'MiniHipatternsHack' },
+        -- indent_level4 = { pattern = gen_indent_pattern(4), group = 'MiniHipatternsFixme' },
       },
     })
   end
