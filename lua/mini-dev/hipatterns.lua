@@ -3,6 +3,9 @@
 -- Code:
 --
 -- Docs:
+--
+-- Tests:
+-- - Rework `enable() works` test.
 
 --- *mini.hipatterns* Highlight patterns in text
 --- *MiniHipatterns*
@@ -116,6 +119,7 @@ MiniHipatterns.setup = function(config)
 
   -- Define behavior
   H.create_autocommands()
+  H.auto_enable({ buf = vim.api.nvim_get_current_buf() })
 
   -- Create default highlighting
   H.create_default_hl()
@@ -165,43 +169,83 @@ MiniHipatterns.config = {
 }
 --minidoc_afterlines_end
 
-MiniHipatterns.enable = function(buf_id)
+-- NOTE: `:edit` disables this, as it is mostly equivalent to closing and
+-- opening buffer. In order for highlighting to persist after `:edit`, call
+-- `setup()`.
+MiniHipatterns.enable = function(buf_id, config)
   buf_id = H.validate_buf_id(buf_id)
+  config = H.validate_config_arg(config)
 
   -- Don't enable more than once
   if H.is_buf_enabled(buf_id) then return end
 
   -- Register enabled buffer with cached data for performance
-  H.update_buf_data(buf_id)
+  H.update_cache(buf_id, config)
+
+  -- Add buffer watchers
+  vim.api.nvim_buf_attach(buf_id, false, {
+    -- Called on every text change (`:h nvim_buf_lines_event`)
+    on_lines = function(_, _, _, from_line, _, to_line)
+      local buf_cache = H.cache[buf_id]
+      -- Properly detach if highlighting is disabled
+      if buf_cache == nil then return true end
+      H.process_lines(buf_id, from_line + 1, to_line, buf_cache.delay.text_change)
+    end,
+
+    -- Called when buffer content is changed outside of current session
+    on_reload = function() pcall(MiniHipatterns.update, buf_id) end,
+
+    -- Called when buffer is unloaded from memory (`:h nvim_buf_detach_event`),
+    -- **including** `:edit` command
+    on_detach = function() MiniHipatterns.disable(buf_id) end,
+  })
+
+  -- Add buffer autocommands
+  local augroup = vim.api.nvim_create_augroup('MiniHipatternsBuffer' .. buf_id, { clear = true })
+  H.cache[buf_id].augroup = augroup
+
+  local update_buf = vim.schedule_wrap(function()
+    if not H.is_buf_enabled(buf_id) then return end
+
+    H.update_cache(buf_id, config)
+
+    local delay_ms = H.cache[buf_id].delay.text_change
+    H.process_lines(buf_id, 1, vim.api.nvim_buf_line_count(buf_id), delay_ms)
+  end)
+
+  vim.api.nvim_create_autocmd(
+    { 'BufWinEnter', 'FileType' },
+    { group = augroup, buffer = buf_id, callback = update_buf, desc = 'Update highlighting for whole buffer' }
+  )
+
+  vim.api.nvim_create_autocmd(
+    'WinScrolled',
+    { group = augroup, buffer = buf_id, callback = H.update_view, desc = 'Update highlighting in view' }
+  )
 
   -- Add highlighting to whole buffer
   H.process_lines(buf_id, 1, vim.api.nvim_buf_line_count(buf_id), 0)
-
-  -- Add watchers to current buffer
-  vim.api.nvim_buf_attach(buf_id, false, {
-    on_lines = function(_, _, _, from_line, _, to_line)
-      local buf_data = H.buf_enabled[buf_id]
-      -- Properly detach if registered to detach
-      if buf_data == nil then return true end
-      H.process_lines(buf_id, from_line + 1, to_line, buf_data.delay.text_change)
-    end,
-    on_reload = function() pcall(MiniHipatterns.update, buf_id) end,
-    on_detach = function() MiniHipatterns.disable(buf_id) end,
-  })
 end
 
 MiniHipatterns.disable = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
 
-  H.buf_enabled[buf_id] = nil
+  local buf_cache = H.cache[buf_id]
+  H.cache[buf_id] = nil
+
+  vim.api.nvim_del_augroup_by_id(buf_cache.augroup)
   vim.api.nvim_buf_clear_namespace(buf_id, H.ns_id.highlight, 0, -1)
 end
 
-MiniHipatterns.toggle = function(buf_id)
+MiniHipatterns.toggle = function(buf_id, config)
   buf_id = H.validate_buf_id(buf_id)
+  config = H.validate_config_arg(config)
 
-  local f = H.is_buf_enabled(buf_id) and MiniHipatterns.disable or MiniHipatterns.enable
-  f(buf_id)
+  if H.is_buf_enabled(buf_id) then
+    MiniHipatterns.disable(buf_id)
+  else
+    MiniHipatterns.enable(buf_id, config)
+  end
 end
 
 MiniHipatterns.update = function(buf_id, from_line, to_line)
@@ -220,12 +264,12 @@ end
 
 MiniHipatterns.get_enabled_buffers = function()
   local res = {}
-  for buf_id, _ in pairs(H.buf_enabled) do
+  for buf_id, _ in pairs(H.cache) do
     if vim.api.nvim_buf_is_valid(buf_id) then
       table.insert(res, buf_id)
     else
       -- Cleanup after buffer is invalid
-      H.buf_enabled[buf_id] = nil
+      H.cache[buf_id] = nil
     end
   end
 
@@ -268,14 +312,14 @@ H.default_config = MiniHipatterns.config
 H.timer_debounce = vim.loop.new_timer()
 H.timer_view = vim.loop.new_timer()
 
--- Cache of queued changes used for debounced highlighting
-H.change_queue = {}
-
 -- Namespaces
 H.ns_id = { highlight = vim.api.nvim_create_namespace('MiniHipatternsHighlight') }
 
--- Data about processed buffers
-H.buf_enabled = {}
+-- Cache of queued changes used for debounced highlighting
+H.change_queue = {}
+
+-- Cache per enabled buffer
+H.cache = {}
 
 -- Data about created highlight groups for hex colors
 H.hex_color_groups = {}
@@ -310,8 +354,7 @@ H.create_autocommands = function()
     vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
   end
 
-  au('BufWinEnter', '*', H.update_or_enable, 'Enable buffer pattern highlighters')
-  au({ 'WinScrolled', 'FileType' }, '*', H.update_view, 'Update highlighting in the view')
+  au('BufWinEnter', '*', H.auto_enable, 'Enable highlighting')
   au('ColorScheme', '*', H.on_colorscheme, 'Reload all enabled pattern highlighters')
 end
 
@@ -339,13 +382,7 @@ H.get_buf_var = function(buf_id, name)
 end
 
 -- Autocommands ---------------------------------------------------------------
-H.update_or_enable = vim.schedule_wrap(function(data)
-  -- Update buffer data in already enabled buffers
-  if H.is_buf_enabled(data.buf) then
-    H.update_buf_data(data.buf)
-    return
-  end
-
+H.auto_enable = vim.schedule_wrap(function(data)
   -- Autoenable only in valid normal buffers. This function is scheduled so as
   -- to have the relevant `buftype`.
   if vim.api.nvim_buf_is_valid(data.buf) and vim.bo[data.buf].buftype == '' then MiniHipatterns.enable(data.buf) end
@@ -353,8 +390,8 @@ end)
 
 H.update_view = vim.schedule_wrap(function(data)
   -- Update view only in enabled buffers
-  local buf_data = H.buf_enabled[data.buf]
-  if buf_data == nil then return end
+  local buf_cache = H.cache[data.buf]
+  if buf_cache == nil then return end
 
   -- NOTE: due to scheduling (which is necessary for better performance),
   -- current buffer can be not the target one. But as there is no proper (easy
@@ -364,7 +401,7 @@ H.update_view = vim.schedule_wrap(function(data)
 
   -- Debounce without aggregating redraws (only last view should be updated)
   H.timer_view:stop()
-  H.timer_view:start(buf_data.delay.scroll, 0, H.process_view)
+  H.timer_view:start(buf_cache.delay.scroll, 0, H.process_view)
 end)
 
 H.on_colorscheme = function()
@@ -373,7 +410,7 @@ H.on_colorscheme = function()
   H.hex_color_groups = {}
 
   -- Reload all currently enabled buffers
-  for buf_id, _ in pairs(H.buf_enabled) do
+  for buf_id, _ in pairs(H.cache) do
     MiniHipatterns.disable(buf_id)
     MiniHipatterns.enable(buf_id)
   end
@@ -389,20 +426,26 @@ H.validate_buf_id = function(x)
   return x
 end
 
+H.validate_config_arg = function(x)
+  if x == nil or type(x) == 'table' then return x or {} end
+  H.error('`config` should be `nil` or table.')
+end
+
 H.validate_string = function(x, name)
   if type(x) == 'string' then return x end
   H.error(string.format('`%s` should be string.'))
 end
 
 -- Enabling -------------------------------------------------------------------
-H.is_buf_enabled = function(buf_id) return H.buf_enabled[buf_id] ~= nil end
+H.is_buf_enabled = function(buf_id) return H.cache[buf_id] ~= nil end
 
-H.update_buf_data = function(buf_id)
-  local buf_config = H.get_config(nil, buf_id)
-  H.buf_enabled[buf_id] = {
-    highlighters = H.normalize_highlighters(buf_config.highlighters),
-    delay = buf_config.delay,
-  }
+H.update_cache = function(buf_id, config)
+  local buf_cache = H.cache[buf_id] or {}
+  local buf_config = H.get_config(config, buf_id)
+  buf_cache.highlighters = H.normalize_highlighters(buf_config.highlighters)
+  buf_cache.delay = buf_config.delay
+
+  H.cache[buf_id] = buf_cache
 end
 
 H.normalize_highlighters = function(highlighters)
@@ -468,8 +511,8 @@ H.process_buffer_changes = vim.schedule_wrap(function(buf_id, lines_to_process)
   -- Also check if buffer is enabled here mostly for better resilience. It
   -- might be actually needed due to various `schedule_wrap`s leading to change
   -- queue entery with not target (and improper) buffer.
-  local buf_data = H.buf_enabled[buf_id]
-  if not vim.api.nvim_buf_is_valid(buf_id) or H.is_disabled(buf_id) or buf_data == nil then return end
+  local buf_cache = H.cache[buf_id]
+  if not vim.api.nvim_buf_is_valid(buf_id) or H.is_disabled(buf_id) or buf_cache == nil then return end
 
   -- Optimizations are done assuming small-ish number of highlighters and
   -- large-ish number of lines to process
@@ -481,7 +524,7 @@ H.process_buffer_changes = vim.schedule_wrap(function(buf_id, lines_to_process)
   end
 
   -- Add new highlights
-  local highlighters = buf_data.highlighters
+  local highlighters = buf_cache.highlighters
   for _, hi in ipairs(highlighters) do
     H.apply_highlighter(hi, buf_id, lines_to_process)
   end

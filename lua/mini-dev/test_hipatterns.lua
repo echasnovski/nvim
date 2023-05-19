@@ -1,3 +1,4 @@
+-- TODO
 local helpers = dofile('lua/mini-dev/helpers.lua')
 
 local child = helpers.new_child_neovim()
@@ -89,13 +90,11 @@ T['enable()']['works'] = function()
   MiniTest.finally(function() vim.fn.delete(test_file) end)
 
   set_lines({ 'abcd abcd', 'Abcd ABCD', 'abcdabcd' })
-  load_module(test_config)
-
-  child.lua('MiniHipatterns.enable()')
+  child.lua([[require('mini-dev.hipatterns').enable(...)]], { 0, test_config })
 
   -- Should register buffer as enabled
   local init_buf_id = child.api.nvim_get_current_buf()
-  eq(child.lua_get('MiniHipatterns.get_enabled_buffers()'), { init_buf_id })
+  eq(child.lua_get([[require('mini-dev.hipatterns').get_enabled_buffers()]]), { init_buf_id })
 
   -- Should add highlights immediately
   child.expect_screenshot()
@@ -109,20 +108,10 @@ T['enable()']['works'] = function()
   -- - Now there should be highlights
   child.expect_screenshot()
 
-  -- Should enable forced update on reload
-  child.ensure_normal_mode()
-  child.cmd('write ' .. test_file)
-
-  set_cursor(4, 0)
-  type_keys('o', '  abcd', '<Esc>')
-  child.expect_screenshot()
-  child.cmd('update | edit | redraw')
-  child.expect_screenshot()
-
   -- Should disable on buffer detach
-  child.cmd('bd')
-  local new_buf_id = child.api.nvim_get_current_buf()
-  eq(child.lua_get('MiniHipatterns.get_enabled_buffers()'), { new_buf_id })
+  child.ensure_normal_mode()
+  child.cmd('bdelete!')
+  eq(child.lua_get([[require('mini-dev.hipatterns').get_enabled_buffers()]]), {})
 end
 
 T['enable()']['validates arguments'] = function() MiniTest.skip() end
