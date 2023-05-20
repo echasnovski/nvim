@@ -5,7 +5,6 @@
 -- Docs:
 --
 -- Tests:
--- - Rework `enable() works` test.
 
 --- *mini.hipatterns* Highlight patterns in text
 --- *MiniHipatterns*
@@ -119,7 +118,9 @@ MiniHipatterns.setup = function(config)
 
   -- Define behavior
   H.create_autocommands()
-  H.auto_enable({ buf = vim.api.nvim_get_current_buf() })
+  for _, win_id in ipairs(vim.api.nvim_list_wins()) do
+    H.auto_enable({ buf = vim.api.nvim_win_get_buf(win_id) })
+  end
 
   -- Create default highlighting
   H.create_default_hl()
@@ -139,17 +140,22 @@ end
 ---
 --- - Use only named entries for better buffer-local config (due to
 ---   `vim.tbl_deep_extend()` behavior).
+---
 --- ## Delay ~
 ---
 --- # Common use cases ~
 ---
---- - TODO, NOTE, etc.
+--- - FIXME, HACK, TODO, NOTE.
+--- - Frontier pattern: `'%f[%w]()aaa()%f[%W]'`
 --- - Color highlighting.
 --- - Trailing whitespace (if don't want to use more tailored 'mini.trailspace'): >
 ---
----   gen_hi.pattern('%f[%s]%s*$', 'Error')
+---   { pattern = '%f[%s]%s*$', group = 'Error' }
 ---
 --- - Indent levels?
+---
+--- - Some example with justifiable callable `pattern` (???) and `group`
+---   (highlight only in commented lines).
 ---
 --- - Enable only in certain filetypes (via `vim.b.minihipatterns_config` in
 ---   filetype plugin).
@@ -172,6 +178,9 @@ MiniHipatterns.config = {
 -- NOTE: `:edit` disables this, as it is mostly equivalent to closing and
 -- opening buffer. In order for highlighting to persist after `:edit`, call
 -- `setup()`.
+--
+-- NOTE: with default config it will highlight nothing, as there are no default
+-- highlighters.
 MiniHipatterns.enable = function(buf_id, config)
   buf_id = H.validate_buf_id(buf_id)
   config = H.validate_config_arg(config)
@@ -231,6 +240,7 @@ MiniHipatterns.disable = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
 
   local buf_cache = H.cache[buf_id]
+  if buf_cache == nil then return end
   H.cache[buf_id] = nil
 
   vim.api.nvim_del_augroup_by_id(buf_cache.augroup)
@@ -248,6 +258,7 @@ MiniHipatterns.toggle = function(buf_id, config)
   end
 end
 
+-- Update range (doesn't currently active buffer config)
 MiniHipatterns.update = function(buf_id, from_line, to_line)
   buf_id = H.validate_buf_id(buf_id)
 
@@ -268,7 +279,7 @@ MiniHipatterns.get_enabled_buffers = function()
     if vim.api.nvim_buf_is_valid(buf_id) then
       table.insert(res, buf_id)
     else
-      -- Cleanup after buffer is invalid
+      -- Clean up if buffer is invalid and for some reason is still enabled
       H.cache[buf_id] = nil
     end
   end
@@ -281,16 +292,6 @@ end
 
 MiniHipatterns.gen_highlighter = {}
 
--- Add note about `%f[%w]()aaa()%f[%W]` pattern
--- Add example with `FIXME`, `HACK`, `TODO`, and `NOTE`.
-MiniHipatterns.gen_highlighter.pattern = function(pattern, group, opts)
-  pattern = H.validate_string(pattern, 'pattern')
-  group = H.validate_string(group, 'group')
-  opts = vim.tbl_deep_extend('force', { priority = 200, filter = H.always_true }, opts or {})
-
-  return { pattern = H.wrap_pattern_with_filter(pattern, opts.filter), group = group, priority = opts.priority }
-end
-
 -- Works only with enabled |termguicolors|
 MiniHipatterns.gen_highlighter.hex_color = function(opts)
   opts = vim.tbl_deep_extend('force', { style = 'full', priority = 200, filter = H.always_true }, opts or {})
@@ -299,7 +300,7 @@ MiniHipatterns.gen_highlighter.hex_color = function(opts)
 
   return {
     pattern = H.wrap_pattern_with_filter(pattern, opts.filter),
-    group = function(_, match) return H.compute_hex_color_group(match, opts.style) end,
+    group = function(_, _, data) return H.compute_hex_color_group(data.full_match, opts.style) end,
     priority = opts.priority,
   }
 end
@@ -354,7 +355,7 @@ H.create_autocommands = function()
     vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
   end
 
-  au('BufWinEnter', '*', H.auto_enable, 'Enable highlighting')
+  au('BufEnter', '*', H.auto_enable, 'Enable highlighting')
   au('ColorScheme', '*', H.on_colorscheme, 'Reload all enabled pattern highlighters')
 end
 
@@ -368,7 +369,7 @@ end
 
 H.is_disabled = function(buf_id)
   local buf_disable = H.get_buf_var(buf_id, 'minihipatterns_disable')
-  return vim.g.miniindentscope_disable == true or buf_disable == true
+  return vim.g.minihipatterns_disable == true or buf_disable == true
 end
 
 H.get_config = function(config, buf_id)
@@ -383,6 +384,8 @@ end
 
 -- Autocommands ---------------------------------------------------------------
 H.auto_enable = vim.schedule_wrap(function(data)
+  if H.is_buf_enabled(data.buf) then return end
+
   -- Autoenable only in valid normal buffers. This function is scheduled so as
   -- to have the relevant `buftype`.
   if vim.api.nvim_buf_is_valid(data.buf) and vim.bo[data.buf].buftype == '' then MiniHipatterns.enable(data.buf) end
@@ -418,7 +421,8 @@ end
 
 -- Validators -----------------------------------------------------------------
 H.validate_buf_id = function(x)
-  if x == nil or x == 0 then x = vim.api.nvim_get_current_buf() end
+  if x == nil or x == 0 then return vim.api.nvim_get_current_buf() end
+
   if not (type(x) == 'number' and vim.api.nvim_buf_is_valid(x)) then
     H.error('`buf_id` should be `nil` or valid buffer id.')
   end
@@ -544,16 +548,19 @@ H.apply_highlighter = vim.schedule_wrap(function(hi, buf_id, lines_to_process)
     local from, to, sub_from, sub_to = line:find(pattern)
 
     while from and (from <= to) do
-      -- Compute whole pattern match
-      local match = line:sub(from, to)
+      -- Compute full pattern match
+      local full_match = line:sub(from, to)
 
       -- Compute (possibly inferred) submatch
       sub_from, sub_to = sub_from or from, sub_to or (to + 1)
-      local sub_match = line:sub(sub_from, sub_to)
+      -- - Make last column end-inclusive
+      sub_to = sub_to - 1
+      local match = line:sub(sub_from, sub_to)
 
       -- Set extmark based on submatch
-      extmark_opts.hl_group = group(buf_id, match, sub_match)
-      extmark_opts.end_col = sub_to - 1
+      extmark_opts.hl_group =
+        group(buf_id, match, { full_match = full_match, line = l_num, from_col = sub_from, to_col = sub_to })
+      extmark_opts.end_col = sub_to
       if extmark_opts.hl_group ~= nil then H.set_extmark(buf_id, ns, l_num - 1, sub_from - 1, extmark_opts) end
 
       -- Overcome an issue that `string.find()` doesn't recognize `^` when
