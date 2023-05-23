@@ -56,16 +56,6 @@ if vim.fn.exists("syntax_on") ~= 1 then
   vim.cmd([[syntax enable]])
 end
 
--- Use colorscheme later when its plugin is enabled
--- Use `nested` to allow `ColorScheme` event
-vim.cmd('au VimEnter * nested ++once colorscheme randomhue')
-
--- Other interesting color schemes:
--- - 'morhetz/gruvbox'
--- - 'ayu-theme/ayu-vim' (use `let ayucolor = 'mirage'`)
--- - 'sainnhe/everforest'
--- - 'EdenEast/nightfox.nvim' ('terafox' in particular)
-
 -- Editing ====================================================================
 vim.o.autoindent    = true     -- Use auto indent
 vim.o.expandtab     = true     -- Convert tabs to spaces
