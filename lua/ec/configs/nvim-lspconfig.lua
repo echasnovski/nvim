@@ -98,10 +98,14 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
           -- Get the language server to recognize common globals
           globals = { 'vim', 'describe', 'it', 'before_each', 'after_each' },
           disable = { 'need-check-nil' },
+          workspaceDelay = -1,
         },
         workspace = {
           -- Don't analyze code from submodules
           ignoreSubmodules = true,
+        },
+        semantic = {
+          annotation = false,
         },
         -- Do not send telemetry data containing a randomized but unique identifier
         telemetry = {

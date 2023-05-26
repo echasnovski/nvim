@@ -116,7 +116,11 @@ vim.schedule(function()
 
   require('mini.jump').setup()
 
-  require('mini.jump2d').setup()
+  require('mini.jump2d').setup({
+    view = {
+      dim = true,
+    },
+  })
 
   local map = require('mini.map')
   local gen_integr = map.gen_integration

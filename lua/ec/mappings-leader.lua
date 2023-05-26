@@ -117,6 +117,7 @@ EC.leader_nmap.o = {
   ['g'] = { [[<Cmd>lua MiniDoc.generate()<CR>]],       'generate plugin doc' },
   ['l'] = { [[<Cmd>normal cxiacxina<CR>]],             'move arg right' },
   ['r'] = { [[<Cmd>lua MiniMisc.resize_window()<CR>]], 'resize to default width' },
+  ['s'] = { [[<Cmd>lua MiniSessions.select()<CR>]],    'session select' },
   ['S'] = { [[<Cmd>lua EC.insert_section()<CR>]],      'section insert' },
   ['t'] = { [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'trim trailspace' },
   ['T'] = { trailspace_toggle_command,                 'trailspace hl toggle' },

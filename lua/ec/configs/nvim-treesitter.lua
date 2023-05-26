@@ -18,6 +18,7 @@ require('nvim-treesitter.configs').setup({
     'julia',
     'lua',
     'markdown',
+    'markdown_inline',
     'python',
     'r',
     'regex',
@@ -29,6 +30,7 @@ require('nvim-treesitter.configs').setup({
     'vim',
   },
   highlight = { enable = true, disable = { 'vimdoc' } },
+  incremental_selection = { enable = false },
   textobjects = { enable = false },
   indent = { enable = false },
   playground = {
