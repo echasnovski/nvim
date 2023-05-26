@@ -14,14 +14,6 @@
 	path = pack/plugins/opt/nvim-lspconfig
 	url = https://github.com/neovim/nvim-lspconfig
 	branch = master
-[submodule "nvim-colorizer"]
-	path = pack/plugins/opt/nvim-colorizer
-	url = https://github.com/norcalli/nvim-colorizer.lua
-	branch = master
-[submodule "todo-comments"]
-	path = pack/plugins/opt/todo-comments
-	url = https://github.com/folke/todo-comments.nvim
-	branch = main
 [submodule "nvim-treesitter"]
 	path = pack/plugins/opt/nvim-treesitter
 	url = https://github.com/nvim-treesitter/nvim-treesitter

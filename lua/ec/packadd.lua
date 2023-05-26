@@ -64,12 +64,6 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Usage of external actions (formatting, diagnostics, etc.)
   packadd_defer('null-ls')
 
-  -- Todo (and other notes) highlighting
-  packadd_defer('todo-comments')
-
-  -- Display of text colors
-  packadd_defer('nvim-colorizer')
-
   -- Snippets engine
   packadd_defer('luasnip')
 
