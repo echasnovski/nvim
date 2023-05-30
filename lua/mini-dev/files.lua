@@ -3,6 +3,8 @@
 -- Code:
 -- - Implement MacOS Finder with column view type of file explorer:
 --     - Think about always using full path in title.
+--     - Think about least problematic default highlighting of a file (which
+--       mostly likely to not override cursor line).
 --
 -- - Implement 'oil.nvim' like file manipulation:
 --     - Concealed index should encode absolute file path allowing moving files
@@ -34,6 +36,12 @@
 --- - Customizable asynchronous integrations.
 ---
 --- - Highlighting is updated asynchronously with configurable debounce delay.
+---
+--- # Dependencies~
+---
+--- Suggested dependencies (provide extra functionality, will work without them):
+--- - Plugin 'nvim-tree/nvim-web-devicons' for filetype icons near the buffer
+---   name. If missing, default icons will be used.
 ---
 --- # Setup ~
 ---
@@ -99,12 +107,6 @@ MiniFiles.setup = function(config)
   -- Apply config
   H.apply_config(config)
 
-  -- Define behavior
-  H.create_autocommands()
-  for _, win_id in ipairs(vim.api.nvim_list_wins()) do
-    H.auto_enable({ buf = vim.api.nvim_win_get_buf(win_id) })
-  end
-
   -- Create default highlighting
   H.create_default_hl()
 end
@@ -114,6 +116,11 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniFiles.config = {
+  content = {
+    filter = nil,
+    sort = nil,
+  },
+
   mappings = {
     go_left = 'h',
     go_right = 'l',
@@ -121,10 +128,8 @@ MiniFiles.config = {
     quit = 'q',
   },
 
-  view = {
+  windows = {
     border = 'single',
-    filtersort = nil,
-    use_latest = true,
     width_active = 50,
     width_nonactive = 30,
   },
@@ -133,14 +138,17 @@ MiniFiles.config = {
 
 MiniFiles.open = function(path, opts)
   path = H.full_path(path or vim.fn.getcwd())
-  opts = vim.tbl_deep_extend('force', MiniFiles.config, opts or {})
-  opts.view.filtersort = opts.view.filtersort or MiniFiles.default_filtersort
+  opts = vim.tbl_deep_extend('force', H.get_config(), opts or {})
+  opts.content.filter = opts.content.filter or MiniFiles.default_filter
+  opts.content.sort = opts.content.sort or MiniFiles.default_sort
 
-  local view_spec
-  if opts.view.use_latest then view_spec = H.view_history[path] end
-  view_spec = view_spec or H.get_init_view_spec(path)
+  -- Properly close possibly opened in the tabpage explorer
+  MiniFiles.close()
 
-  H.view_open(view_spec, opts)
+  -- Get explorer to open
+  local explorer = H.explorer_history[path] or { branch = { path }, active_depth = 1 }
+
+  H.explorer_open(explorer, opts)
 end
 
 MiniFiles.refresh = function()
@@ -149,26 +157,34 @@ end
 
 MiniFiles.close = function()
   local tabpage_id = vim.api.nvim_get_current_tabpage()
-  local active_view_spec = H.view_registry[tabpage_id]
-  if active_view_spec == nil then return end
+  local cur_explorer = H.opened_explorers[tabpage_id]
+  if cur_explorer == nil then return end
 
   -- Close active windows
-  for _, win_id in pairs(active_view_spec.windows) do
+  for _, win_id in pairs(cur_explorer.windows) do
     pcall(vim.api.nvim_win_close, win_id, true)
   end
-  active_view_spec.windows = nil
+  cur_explorer.windows = nil
+
+  -- Unregister depth buffers
+  cur_explorer.depth_buffers = nil
 
   -- Save to history and remove from registry
-  H.view_history[active_view_spec.branch[1]] = active_view_spec
-  H.view_registry[tabpage_id] = nil
+  H.explorer_history[cur_explorer.branch[1]] = cur_explorer
+  H.opened_explorers[tabpage_id] = nil
 end
 
 MiniFiles.synchronize = function()
   -- TODO
 end
 
-MiniFiles.default_filtersort = function(fs_entries)
-  -- Sort ignoring case. Nothing is filtered by default.
+MiniFiles.default_filter = function(fs_entries)
+  -- Nothing is filtered by default
+  return fs_entries
+end
+
+MiniFiles.default_sort = function(fs_entries)
+  -- Sort ignoring case
   local res = vim.tbl_map(
     function(x) return { name = x.name, fs_type = x.fs_type, lower_name = x.name:lower(), is_dir = x.fs_type == 'directory' } end,
     fs_entries
@@ -186,19 +202,19 @@ H.default_config = MiniFiles.config
 
 -- Namespaces
 H.ns_id = {
-  pane_highlight = vim.api.nvim_create_namespace('MiniFilesPaneHighlight'),
+  highlight = vim.api.nvim_create_namespace('MiniFilesHighlight'),
 }
 
 -- Index of all visited files
 H.path_index = {}
 
--- History of views per root directory. Each entry is a view specification:
+-- History of explorers per root directory. Each entry is an inactive explorer:
 -- - <branch> - array of absolute directory paths from parent to child.
 -- - <active_depth> - id in `branch` of active path.
-H.view_history = {}
+H.explorer_history = {}
 
--- Registry of active view per tabpage
-H.view_registry = {}
+-- Registry of active explorers per tabpage
+H.opened_explorers = {}
 
 -- Registry of depth buffers (to show content at branch depth) per tabpage
 H.depth_buffers = {}
@@ -216,21 +232,23 @@ H.setup_config = function(config)
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
-    view = { config.highlighters, 'table' },
-    mappings = { config.delay, 'table' },
+    content = { config.content, 'table' },
+    mappings = { config.mappings, 'table' },
+    windows = { config.windows, 'table' },
   })
 
   vim.validate({
+    ['content.filter'] = { config.content.filter, 'function', true },
+    ['content.sort'] = { config.content.sort, 'function', true },
+
     ['mappings.go_right'] = { config.mappings.go_right, 'string' },
     ['mappings.go_left'] = { config.mappings.go_right, 'string' },
     ['mappings.synchronize'] = { config.mappings.synchronize, 'string' },
     ['mappings.quit'] = { config.mappings.quit, 'string' },
 
-    ['view.border'] = { config.view.border, 'string' },
-    ['view.filtersort'] = { config.view.filtersort, 'function', true },
-    ['view.use_latest'] = { config.view.use_latest, 'number' },
-    ['view.width_active'] = { config.view.width_active, 'number' },
-    ['view.width_nonactive'] = { config.view.width_nonactive, 'number' },
+    ['windows.border'] = { config.windows.border, 'string' },
+    ['windows.width_active'] = { config.windows.width_active, 'number' },
+    ['windows.width_nonactive'] = { config.windows.width_nonactive, 'number' },
   })
 
   return config
@@ -247,39 +265,38 @@ H.create_default_hl = function()
 
   hi('MiniFilesBorder',    { link = 'FloatBorder' })
   hi('MiniFilesDirectory', { link = 'Directory'   })
-  hi('MiniFilesFile',      { link = 'NormalFloat' })
+  hi('MiniFilesFile',      { link = 'Special'     })
   hi('MiniFilesNormal',    { link = 'NormalFloat' })
   hi('MiniFilesTitle',     { link = 'FloatTitle'  })
 end
 
-H.is_disabled = function(buf_id) return vim.g.minifiles_disable == true or vim.b.minifiles_disable == true end
+H.is_disabled = function() return vim.g.minifiles_disable == true or vim.b.minifiles_disable == true end
 
-H.get_config = function(config, buf_id)
-  return vim.tbl_deep_extend('force', MiniFiles.config, vim.b.minifiles_config or {}, config or {})
-end
+H.get_config =
+  function(config) return vim.tbl_deep_extend('force', MiniFiles.config, vim.b.minifiles_config or {}, config or {}) end
 
--- View -----------------------------------------------------------------------
-H.view_open = function(view_spec, opts)
-  view_spec = H.normalize_view_spec(view_spec)
-  if #view_spec.branch == 0 then return end
+-- Explorers ------------------------------------------------------------------
+H.explorer_open = function(explorer, opts)
+  explorer = H.normalize_explorer(explorer)
+  if #explorer.branch == 0 then return end
 
   local tabpage_id = vim.api.nvim_get_current_tabpage()
 
   local windows = {}
-  local active_depth = view_spec.active_depth
+  local active_depth = explorer.active_depth
   local cur_pane_col = 0
-  local depth_range = H.compute_visible_depth_range(view_spec, opts)
+  local depth_range = H.compute_visible_depth_range(explorer, opts)
   for depth = depth_range.from, depth_range.to do
     -- Prepare buffer
-    local buf_id = H.get_depth_buffer(depth, tabpage_id, opts.mappings)
-    local dir_path = view_spec.branch[depth]
-    H.update_buffer(buf_id, dir_path, opts.view.filtersort)
+    local buf_id = H.depth_buffer_get(tabpage_id, depth, opts.mappings)
+    local dir_path = explorer.branch[depth]
+    H.depth_buffer_update(buf_id, dir_path, opts.content)
 
     -- Create and register floating window
-    local cur_width = depth == active_depth and opts.view.width_active or opts.view.width_nonactive
+    local cur_width = depth == active_depth and opts.windows.width_active or opts.windows.width_nonactive
     local config = {
       col = cur_pane_col,
-      border = opts.view.border,
+      border = opts.windows.border,
       height = vim.api.nvim_buf_line_count(buf_id),
       -- Use full path in first pane
       title = cur_pane_col == 0 and dir_path or vim.fn.fnamemodify(dir_path, ':t'),
@@ -292,13 +309,13 @@ H.view_open = function(view_spec, opts)
     -- Add 2 to account for left and right borders
     cur_pane_col = cur_pane_col + cur_width + 2
   end
-  view_spec.windows = windows
+  explorer.windows = windows
 
   -- Focus on proper window
   vim.api.nvim_set_current_win(windows[active_depth])
 
-  -- Register view as active
-  H.view_registry[tabpage_id] = view_spec
+  -- Register explorer as active
+  H.opened_explorers[tabpage_id] = explorer
 end
 
 H.open_pane = function(buf_id, config)
@@ -341,31 +358,30 @@ H.open_pane = function(buf_id, config)
   vim.wo[res].conceallevel = 3
   vim.wo[res].concealcursor = 'nvic'
 
+  -- Conceal path id
+  vim.api.nvim_win_call(res, function() vim.fn.matchadd('conceal', [[^/\d\+]]) end)
+
   -- Set window highlights
   vim.wo[res].winhighlight = 'FloatBorder:MiniFilesBorder,FloatTitle:MiniFilesTitle,NormalFloat:MiniFilesNormal'
 
   return res
 end
 
-H.get_init_view_spec = function(path) return { branch = { path }, active_depth = 1 } end
-
-H.get_max_pane_height = function() end
-
-H.normalize_view_spec = function(view_spec)
+H.normalize_explorer = function(explorer)
   -- Ensure that all paths from branch are valid directory paths
   local norm_branch = {}
-  for _, dir in ipairs(view_spec.branch) do
+  for _, dir in ipairs(explorer.branch) do
     if vim.fn.isdirectory(dir) == 0 then break end
     table.insert(norm_branch, dir)
   end
 
-  return { branch = norm_branch, active_depth = math.min(view_spec.active_depth, #norm_branch) }
+  return { branch = norm_branch, active_depth = math.min(explorer.active_depth, #norm_branch) }
 end
 
-H.compute_visible_depth_range = function(view_spec, opts)
+H.compute_visible_depth_range = function(explorer, opts)
   -- Compute maximum number panes able to fit in current Neovim instance width
   -- Add 2 to widths to take into account width of left and right borders
-  local w_active, w_nonactive = opts.view.width_active + 2, opts.view.width_nonactive + 2
+  local w_active, w_nonactive = opts.windows.width_active + 2, opts.windows.width_nonactive + 2
   local max_n_panes = math.floor((vim.o.columns - w_active) / w_nonactive)
   max_n_panes = math.max(max_n_panes, 0) + 1
 
@@ -373,7 +389,7 @@ H.compute_visible_depth_range = function(view_spec, opts)
   -- - Always show current entry as centered as possible.
   -- - Show as much as possible.
   -- Logic is similar to how text for 'mini.tabline' is computed.
-  local branch_depth, active_depth = #view_spec.branch, view_spec.active_depth
+  local branch_depth, active_depth = #explorer.branch, explorer.active_depth
   local n_panes = math.min(branch_depth, max_n_panes)
 
   local to = math.min(branch_depth, math.floor(active_depth + 0.5 * n_panes))
@@ -383,28 +399,27 @@ H.compute_visible_depth_range = function(view_spec, opts)
   return { from = from, to = to }
 end
 
-H.get_depth_buffer = function(depth, tabpage_id, mappings)
-  tabpage_id = tabpage_id or vim.api.nvim_get_current_tabpage()
+-- Depth buffers --------------------------------------------------------------
+H.depth_buffer_get = function(tabpage_id, depth, mappings)
+  -- Try return an already created buffer
   local tabpage_buffers = H.depth_buffers[tabpage_id] or {}
-
   local res = tabpage_buffers[depth]
   if res ~= nil then return res end
 
-  -- Create register depth buffer
+  -- Create and register depth buffer
   res = vim.api.nvim_create_buf(false, true)
-
   tabpage_buffers[depth] = res
   H.depth_buffers[tabpage_id] = tabpage_buffers
 
   -- Set buffer options
-  vim.bo[res].filetype = 'minifiles-pane'
+  vim.bo[res].filetype = 'minifiles'
 
   -- Make buffer mappings
   -- TODO
-  -- H.map('n', mappings.go_left, ..., { buffer = res, desc = 'Go left in file view' })
-  -- H.map('n', mappings.go_right, ..., { buffer = res, desc = 'Go right in file view' })
-  H.map('n', mappings.synchronize, MiniFiles.synchronize, { buffer = res, desc = 'Synchronize file view' })
-  H.map('n', mappings.quit, MiniFiles.close, { buffer = res, desc = 'Close file view' })
+  -- H.map('n', mappings.go_left, ..., { buffer = res, desc = 'Go left in file explorer' })
+  -- H.map('n', mappings.go_right, ..., { buffer = res, desc = 'Go right in file explorer' })
+  H.map('n', mappings.synchronize, MiniFiles.synchronize, { buffer = res, desc = 'Synchronize file explorer' })
+  H.map('n', mappings.quit, MiniFiles.close, { buffer = res, desc = 'Close file explorer' })
 
   -- Tweak buffer to be used nicely with other 'mini.nvim' modules
   vim.b[res].minicursorword_disable = true
@@ -412,14 +427,47 @@ H.get_depth_buffer = function(depth, tabpage_id, mappings)
   return res
 end
 
-H.update_buffer = function(buf_id, dir_path, filtersort)
-  local entries = H.read_dir(dir_path, filtersort)
-  local lines = vim.tbl_map(function(x) return x.name end, entries)
+H.depth_buffer_update = function(buf_id, dir_path, content_opts)
+  -- Compute and set lines
+  local fs_entries = H.read_dir(dir_path, content_opts)
+  local get_icon_data = H.make_icon_getter()
+
+  local lines, icon_hl, name_hl = {}, {}, {}
+  for _, entry in ipairs(fs_entries) do
+    local icon, hl = get_icon_data(entry.name, entry.fs_type)
+    table.insert(lines, string.format('/%d %s %s', H.path_index[entry.path], icon, entry.name))
+    table.insert(icon_hl, hl)
+    table.insert(name_hl, entry.fs_type == 'directory' and 'MiniFilesDirectory' or 'MiniFilesFile')
+  end
+
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+
+  -- Add highlighting
+  local ns_id = H.ns_id.highlight
+  vim.api.nvim_buf_clear_namespace(buf_id, ns_id, 0, -1)
+
+  for l_num, l in ipairs(lines) do
+    local icon_start, name_start = l:match('^%S+ ()%S+ ()')
+    H.set_extmark(buf_id, ns_id, l_num - 1, icon_start - 1, { hl_group = icon_hl[l_num], end_col = name_start - 1 })
+    H.set_extmark(buf_id, ns_id, l_num - 1, name_start - 1, { hl_group = name_hl[l_num], end_row = l_num, end_col = 0 })
+  end
 end
 
+H.make_icon_getter = function()
+  local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
+  local get_file_icon = has_devicons and devicons.get_icon or function(...) end
+
+  return function(name, fs_type)
+    if fs_type == 'directory' then return '', 'MiniFilesDirectory' end
+    local icon, hl = get_file_icon(name, nil, { default = false })
+    return icon or '', hl or 'MiniFilesFile'
+  end
+end
+
+-- Windows --------------------------------------------------------------------
+
 -- File system ----------------------------------------------------------------
-H.read_dir = function(dir_path, filtersort)
+H.read_dir = function(dir_path, content_opts)
   local fs = vim.loop.fs_scandir(dir_path)
   local res = {}
   if not fs then return res end
@@ -432,8 +480,7 @@ H.read_dir = function(dir_path, filtersort)
   end
 
   -- Filter and sort entries
-  filtersort = filtersort or MiniFiles.default_filtersort
-  res = filtersort(res)
+  res = content_opts.sort(content_opts.filter(res))
 
   -- Add absolute file paths to result and index
   for _, entry in ipairs(res) do
@@ -505,5 +552,7 @@ H.map = function(mode, lhs, rhs, opts)
   opts = vim.tbl_deep_extend('force', { silent = true }, opts or {})
   vim.keymap.set(mode, lhs, rhs, opts)
 end
+
+H.set_extmark = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
 
 return MiniFiles
