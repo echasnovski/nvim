@@ -2,9 +2,14 @@
 --
 -- Code:
 -- - Implement MacOS Finder with column view type of file explorer:
---     - Think about always using full path in title.
---     - Think about least problematic default highlighting of a file (which
---       mostly likely to not override cursor line).
+--     - Deal with symlinks in `read_dir`. Write now they are mostly treated as
+--       files.
+--
+--     - Deal with changing window view (sometimes shows current line at the
+--       top) when the window is assigned new buffer.
+--
+--     - Think about the best way to keep track of relevant cursor positions,
+--       so that opening from history results in exactly the same view.
 --
 -- - Implement 'oil.nvim' like file manipulation:
 --     - Concealed index should encode absolute file path allowing moving files
@@ -84,6 +89,7 @@
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
 ---@diagnostic disable:unused-local
+---@diagnostic disable:cast-local-type
 
 -- Module definition ==========================================================
 -- TODO: Make local before public release
@@ -131,28 +137,51 @@ MiniFiles.config = {
   windows = {
     border = 'single',
     width_active = 50,
-    width_nonactive = 30,
+    width_nonactive = 15,
   },
 }
 --minidoc_afterlines_end
 
-MiniFiles.open = function(path, opts)
-  path = H.full_path(path or vim.fn.getcwd())
-  opts = vim.tbl_deep_extend('force', H.get_config(), opts or {})
-  opts.content.filter = opts.content.filter or MiniFiles.default_filter
-  opts.content.sort = opts.content.sort or MiniFiles.default_sort
+MiniFiles.open = function(path, use_latest, opts)
+  -- Validate path: allow only valid file system path
+  path = path or vim.fn.getcwd()
+  local fs_type = H.fs_get_type(path)
+  if fs_type == nil then H.error('`path` is not a valid path ("' .. path .. '")') end
+  path = H.fs_full_path(path)
+  -- - Allow file path and use its parent
+  if fs_type == 'file' then path = H.fs_get_parent(path) end
+
+  -- Validate rest of the arguments
+  if use_latest == nil then use_latest = true end
+  opts = H.get_opts(opts)
 
   -- Properly close possibly opened in the tabpage explorer
   MiniFiles.close()
 
   -- Get explorer to open
-  local explorer = H.explorer_history[path] or { branch = { path }, active_depth = 1 }
+  local explorer
+  if use_latest then explorer = H.explorer_history[path] end
+  explorer = explorer or H.explorer_new({ path }, opts)
+  explorer.target_window = vim.api.nvim_get_current_win()
 
-  H.explorer_open(explorer, opts)
+  -- Refresh
+  explorer = H.explorer_refresh(explorer, opts)
+
+  -- Register explorer as active
+  local tabpage_id = vim.api.nvim_get_current_tabpage()
+  H.opened_explorers[tabpage_id] = explorer
 end
 
-MiniFiles.refresh = function()
-  -- TODO
+MiniFiles.refresh = function(opts)
+  local tabpage_id = vim.api.nvim_get_current_tabpage()
+  local cur_explorer = H.opened_explorers[tabpage_id]
+  if cur_explorer == nil then return end
+
+  -- Respect explorer local options supplied inside its `open()` call but give
+  -- current `opts` higher precedence
+  opts = H.get_opts(vim.tbl_deep_extend('force', cur_explorer.opts, opts or {}))
+
+  H.explorer_refresh(cur_explorer, opts)
 end
 
 MiniFiles.close = function()
@@ -161,21 +190,72 @@ MiniFiles.close = function()
   if cur_explorer == nil then return end
 
   -- Close active windows
-  for _, win_id in pairs(cur_explorer.windows) do
+  for i, win_id in pairs(cur_explorer.windows) do
     pcall(vim.api.nvim_win_close, win_id, true)
+    cur_explorer.windows[i] = nil
   end
-  cur_explorer.windows = nil
 
-  -- Unregister depth buffers
-  cur_explorer.depth_buffers = nil
+  -- Invalidate all buffers as not up to date
+  cur_explorer.buffers = {}
 
-  -- Save to history and remove from registry
+  -- Save to history at the root and remove from registry
   H.explorer_history[cur_explorer.branch[1]] = cur_explorer
   H.opened_explorers[tabpage_id] = nil
 end
 
 MiniFiles.synchronize = function()
   -- TODO
+end
+
+MiniFiles.go_right = function(buf_id, line)
+  buf_id = H.validate_depth_buffer(buf_id)
+  line = H.validate_line(buf_id, line)
+
+  local cur_explorer = H.opened_explorers[vim.api.nvim_get_current_tabpage()]
+  if cur_explorer == nil then return end
+
+  local buf_depth = H.depth_buffer_get_depth(buf_id)
+  if buf_depth == nil then return end
+
+  local fs_entry = MiniFiles.get_fs_entry(buf_id, line)
+  if fs_entry == nil then return nil end
+
+  if fs_entry.fs_type == 'file' then
+    -- Open file in target window
+    H.explorer_open_file(cur_explorer, fs_entry.path)
+  else
+    -- Show child directory at next depth
+    H.explorer_open_child_directory(cur_explorer, fs_entry.path, buf_depth + 1)
+  end
+end
+
+MiniFiles.go_left = function(buf_id, line)
+  buf_id = H.validate_depth_buffer(buf_id)
+  line = H.validate_line(buf_id, line)
+
+  local cur_explorer = H.opened_explorers[vim.api.nvim_get_current_tabpage()]
+  if cur_explorer == nil then return end
+
+  local buf_depth = H.depth_buffer_get_depth(buf_id)
+  if buf_depth == nil then return end
+
+  if buf_depth == 1 then
+    H.explorer_open_root_parent(cur_explorer)
+  else
+    cur_explorer.active_depth = buf_depth - 1
+    H.explorer_refresh(cur_explorer, cur_explorer.opts)
+  end
+end
+
+MiniFiles.get_fs_entry = function(buf_id, line)
+  buf_id = H.validate_depth_buffer(buf_id)
+  line = line or vim.fn.line('.')
+
+  local path_id = H.depth_buffer_get_path_id(buf_id, line)
+  if path_id == nil then return nil end
+
+  local path = H.path_index[path_id]
+  return { path = path, fs_type = H.fs_get_type(path), name = H.fs_get_basename(path) }
 end
 
 MiniFiles.default_filter = function(fs_entries)
@@ -208,12 +288,10 @@ H.ns_id = {
 -- Index of all visited files
 H.path_index = {}
 
--- History of explorers per root directory. Each entry is an inactive explorer:
--- - <branch> - array of absolute directory paths from parent to child.
--- - <active_depth> - id in `branch` of active path.
+-- History of explorers per root directory
 H.explorer_history = {}
 
--- Registry of active explorers per tabpage
+-- Registry of opened explorers per tabpage
 H.opened_explorers = {}
 
 -- Registry of depth buffers (to show content at branch depth) per tabpage
@@ -265,7 +343,7 @@ H.create_default_hl = function()
 
   hi('MiniFilesBorder',    { link = 'FloatBorder' })
   hi('MiniFilesDirectory', { link = 'Directory'   })
-  hi('MiniFilesFile',      { link = 'Special'     })
+  hi('MiniFilesFile',      {})
   hi('MiniFilesNormal',    { link = 'NormalFloat' })
   hi('MiniFilesTitle',     { link = 'FloatTitle'  })
 end
@@ -275,99 +353,93 @@ H.is_disabled = function() return vim.g.minifiles_disable == true or vim.b.minif
 H.get_config =
   function(config) return vim.tbl_deep_extend('force', MiniFiles.config, vim.b.minifiles_config or {}, config or {}) end
 
+H.get_opts = function(opts)
+  opts = vim.tbl_deep_extend('force', H.get_config(), opts or {})
+  opts.content.filter = opts.content.filter or MiniFiles.default_filter
+  opts.content.sort = opts.content.sort or MiniFiles.default_sort
+
+  return opts
+end
+
 -- Explorers ------------------------------------------------------------------
-H.explorer_open = function(explorer, opts)
-  explorer = H.normalize_explorer(explorer)
+---@class Explorer
+---
+---@field branch table Array of absolute directory paths from parent to child.
+---   Its ids are called depth.
+---@field active_depth number Id in `branch` of active path.
+---@field opts table Options used for this particular explorer.
+---@field buffers table Table of up to date buffers **per depth**. If buffer is
+---   present, then it doesn't need to be updated.
+---@field windows table Array of currently opened window ids (left to right).
+---@field target_window number Id of window in which files will be opened.
+---@private
+H.explorer_new = function(branch, opts)
+  return {
+    branch = branch,
+    active_depth = 1,
+    opts = opts,
+    buffers = {},
+    windows = {},
+    target_window = vim.api.nvim_get_current_win(),
+  }
+end
+
+H.explorer_refresh = function(explorer, opts)
+  explorer = H.explorer_normalize(explorer, opts)
   if #explorer.branch == 0 then return end
 
   local tabpage_id = vim.api.nvim_get_current_tabpage()
+  local active_depth, buffers, windows = explorer.active_depth, explorer.buffers, explorer.windows
 
-  local windows = {}
-  local active_depth = explorer.active_depth
-  local cur_pane_col = 0
+  local cur_pane_col, active_win_id = 0, nil
   local depth_range = H.compute_visible_depth_range(explorer, opts)
-  for depth = depth_range.from, depth_range.to do
-    -- Prepare buffer
-    local buf_id = H.depth_buffer_get(tabpage_id, depth, opts.mappings)
+  for i = 0, depth_range.to - depth_range.from do
+    local depth = depth_range.from + i
     local dir_path = explorer.branch[depth]
-    H.depth_buffer_update(buf_id, dir_path, opts.content)
 
-    -- Create and register floating window
-    local cur_width = depth == active_depth and opts.windows.width_active or opts.windows.width_nonactive
+    -- Prepare and register buffer
+    local buf_id = buffers[depth]
+    if buf_id == nil then
+      buf_id = H.depth_buffer_get(tabpage_id, depth, opts.mappings)
+      H.depth_buffer_update(buf_id, dir_path, opts.content)
+    end
+    buffers[depth] = buf_id
+
+    -- Create relevant window config
+    local is_active_win = depth == active_depth
+    local cur_width = is_active_win and opts.windows.width_active or opts.windows.width_nonactive
     local config = {
       col = cur_pane_col,
-      border = opts.windows.border,
       height = vim.api.nvim_buf_line_count(buf_id),
-      -- Use full path in first pane
-      title = cur_pane_col == 0 and dir_path or vim.fn.fnamemodify(dir_path, ':t'),
-      -- title = dir_path,
       width = cur_width,
+      title = cur_pane_col == 0 and dir_path or H.fs_get_basename(dir_path),
+      border = opts.windows.border,
     }
-    local win_id = H.open_pane(buf_id, config)
-    windows[depth] = win_id
+
+    -- Prepare and register floating window
+    local win_id = windows[i + 1] or H.window_open(buf_id, config)
+    vim.api.nvim_win_set_buf(win_id, buf_id)
+    windows[i + 1] = win_id
+
+    H.window_update(win_id, config)
+
+    if is_active_win then active_win_id = win_id end
 
     -- Add 2 to account for left and right borders
     cur_pane_col = cur_pane_col + cur_width + 2
   end
+
+  -- Update explorer data
+  explorer.buffers = buffers
   explorer.windows = windows
 
   -- Focus on proper window
-  vim.api.nvim_set_current_win(windows[active_depth])
+  vim.api.nvim_set_current_win(active_win_id)
 
-  -- Register explorer as active
-  H.opened_explorers[tabpage_id] = explorer
+  return explorer
 end
 
-H.open_pane = function(buf_id, config)
-  -- Compute helper data
-  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
-  local has_statusline = vim.o.laststatus > 0
-  -- Remove 2 from maximum hight to accout for top and bottom borders
-  local max_height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0) - 2
-
-  -- Infer extra data
-  config.anchor = 'NW'
-  config.focusable = true
-  config.relative = 'editor'
-  config.row = has_tabline and 1 or 0
-  config.style = 'minimal'
-  config.zindex = 1000
-
-  -- Ensure proper fit
-  config.height = math.min(config.height, max_height)
-  config.width = math.min(config.width, vim.o.columns)
-
-  if vim.fn.has('nvim-0.9') == 0 then
-    -- Titles supported only in Neovim>=0.9
-    config.title = nil
-  else
-    -- Show only tail if title is too long
-    local title_string, width = config.title, config.width
-    local title_chars = vim.fn.strcharlen(title_string)
-    if width < title_chars then
-      title_string = '…' .. vim.fn.strcharpart(title_string, title_chars - width + 1, width - 1)
-    end
-    config.title = title_string
-  end
-
-  -- Open without entering
-  local res = vim.api.nvim_open_win(buf_id, false, config)
-
-  -- Set window options
-  vim.wo[res].cursorline = true
-  vim.wo[res].conceallevel = 3
-  vim.wo[res].concealcursor = 'nvic'
-
-  -- Conceal path id
-  vim.api.nvim_win_call(res, function() vim.fn.matchadd('conceal', [[^/\d\+]]) end)
-
-  -- Set window highlights
-  vim.wo[res].winhighlight = 'FloatBorder:MiniFilesBorder,FloatTitle:MiniFilesTitle,NormalFloat:MiniFilesNormal'
-
-  return res
-end
-
-H.normalize_explorer = function(explorer)
+H.explorer_normalize = function(explorer, opts)
   -- Ensure that all paths from branch are valid directory paths
   local norm_branch = {}
   for _, dir in ipairs(explorer.branch) do
@@ -375,7 +447,76 @@ H.normalize_explorer = function(explorer)
     table.insert(norm_branch, dir)
   end
 
-  return { branch = norm_branch, active_depth = math.min(explorer.active_depth, #norm_branch) }
+  local cur_max_depth = #norm_branch
+
+  explorer.branch = norm_branch
+  explorer.active_depth = math.min(explorer.active_depth, cur_max_depth)
+  explorer.opts = opts
+
+  -- Invalidate unnecessary buffers
+  for depth, _ in pairs(explorer.buffers) do
+    if cur_max_depth < depth then explorer.buffers[depth] = nil end
+  end
+
+  -- Close all unnecessary windows
+  for i = cur_max_depth + 1, #explorer.windows do
+    pcall(vim.api.nvim_win_close, explorer.windows[i], true)
+    explorer.windows[i] = nil
+  end
+
+  return explorer
+end
+
+H.explorer_open_file = function(explorer, path)
+  local target_window = explorer.target_window
+  if not vim.api.nvim_win_is_valid(target_window) then target_window = H.get_first_valid_normal_window() end
+
+  vim.api.nvim_win_call(target_window, function()
+    local cmd = string.format('exec "edit %s"', path)
+    vim.cmd(cmd)
+  end)
+end
+
+H.explorer_open_child_directory = function(explorer, path, at_depth)
+  -- Update active depth
+  explorer.active_depth = at_depth
+
+  -- Invalidate branch and buffer data if opening another path at target depth
+  local is_opened_at_depth = path == explorer.branch[at_depth]
+  if not is_opened_at_depth then
+    -- Update branch data
+    local branch = explorer.branch
+    branch[at_depth] = path
+    for i = at_depth + 1, #branch do
+      branch[i] = nil
+    end
+
+    -- Invalidate outdated buffers
+    local buffers = explorer.buffers
+    for depth, _ in pairs(buffers) do
+      if at_depth <= depth then buffers[depth] = nil end
+    end
+  end
+
+  -- Refresh
+  H.explorer_refresh(explorer, explorer.opts)
+end
+
+H.explorer_open_root_parent = function(explorer)
+  local path = H.fs_get_parent(explorer.branch[1])
+  if path == nil then return end
+
+  -- Update branch data
+  table.insert(explorer.branch, 1, path)
+
+  -- Update active depth
+  explorer.active_depth = 1
+
+  -- Invalidate all buffers
+  explorer.buffers = {}
+
+  -- Refresh
+  H.explorer_refresh(explorer, explorer.opts)
 end
 
 H.compute_visible_depth_range = function(explorer, opts)
@@ -415,11 +556,18 @@ H.depth_buffer_get = function(tabpage_id, depth, mappings)
   vim.bo[res].filetype = 'minifiles'
 
   -- Make buffer mappings
-  -- TODO
-  -- H.map('n', mappings.go_left, ..., { buffer = res, desc = 'Go left in file explorer' })
-  -- H.map('n', mappings.go_right, ..., { buffer = res, desc = 'Go right in file explorer' })
+  --stylua: ignore start
+  H.map('n', mappings.go_left,     MiniFiles.go_left,     { buffer = res, desc = 'Go left in file explorer' })
+  H.map('n', mappings.go_right,    MiniFiles.go_right,    { buffer = res, desc = 'Go right in file explorer' })
   H.map('n', mappings.synchronize, MiniFiles.synchronize, { buffer = res, desc = 'Synchronize file explorer' })
-  H.map('n', mappings.quit, MiniFiles.close, { buffer = res, desc = 'Close file explorer' })
+  H.map('n', mappings.quit,        MiniFiles.close,       { buffer = res, desc = 'Close file explorer' })
+  --stylua: ignore end
+
+  -- Make buffer autocommands
+  local augroup = vim.api.nvim_create_augroup('MiniFiles', { clear = false })
+  local opts =
+    { group = augroup, buffer = res, desc = 'Tweak cursor position', callback = H.depth_buffer_tweak_cursor_position }
+  vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, opts)
 
   -- Tweak buffer to be used nicely with other 'mini.nvim' modules
   vim.b[res].minicursorword_disable = true
@@ -429,13 +577,17 @@ end
 
 H.depth_buffer_update = function(buf_id, dir_path, content_opts)
   -- Compute and set lines
-  local fs_entries = H.read_dir(dir_path, content_opts)
+  local fs_entries = H.fs_read_dir(dir_path, content_opts)
   local get_icon_data = H.make_icon_getter()
+
+  -- - Compute format expression resulting into same width path ids
+  local path_width = math.floor(math.log10(#H.path_index)) + 1
+  local line_format = '/%0' .. path_width .. 'd%s %s'
 
   local lines, icon_hl, name_hl = {}, {}, {}
   for _, entry in ipairs(fs_entries) do
     local icon, hl = get_icon_data(entry.name, entry.fs_type)
-    table.insert(lines, string.format('/%d %s %s', H.path_index[entry.path], icon, entry.name))
+    table.insert(lines, string.format(line_format, H.path_index[entry.path], icon, entry.name))
     table.insert(icon_hl, hl)
     table.insert(name_hl, entry.fs_type == 'directory' and 'MiniFilesDirectory' or 'MiniFilesFile')
   end
@@ -447,10 +599,48 @@ H.depth_buffer_update = function(buf_id, dir_path, content_opts)
   vim.api.nvim_buf_clear_namespace(buf_id, ns_id, 0, -1)
 
   for l_num, l in ipairs(lines) do
-    local icon_start, name_start = l:match('^%S+ ()%S+ ()')
+    local icon_start, name_start = l:match('^/%d+()%S+ ()')
     H.set_extmark(buf_id, ns_id, l_num - 1, icon_start - 1, { hl_group = icon_hl[l_num], end_col = name_start - 1 })
     H.set_extmark(buf_id, ns_id, l_num - 1, name_start - 1, { hl_group = name_hl[l_num], end_row = l_num, end_col = 0 })
   end
+end
+
+H.depth_buffer_tweak_cursor_position = function(data)
+  local cur_cursor = vim.api.nvim_win_get_cursor(0)
+  local cur_offset = H.depth_buffer_get_offset(data.buf, cur_cursor[1])
+
+  if (cur_offset - 1) <= cur_cursor[2] then return end
+
+  vim.api.nvim_win_set_cursor(0, { cur_cursor[1], cur_offset - 1 })
+  -- Make sure that icons are shown
+  vim.cmd('normal! 1000zh')
+end
+
+H.depth_buffer_get_depth = function(buf_id)
+  local tabpage_id = vim.api.nvim_get_current_tabpage()
+  for depth, depth_buf_id in pairs(H.depth_buffers[tabpage_id]) do
+    if buf_id == depth_buf_id then return depth end
+  end
+end
+
+H.depth_buffer_get_offset = function(buf_id, line)
+  local l = vim.api.nvim_buf_get_lines(buf_id, line - 1, line, false)[1]
+  if l == nil then return nil end
+  return l:match('^%S+ ()') or 0
+end
+
+H.depth_buffer_get_path_id = function(buf_id, line)
+  local l = vim.api.nvim_buf_get_lines(buf_id, line - 1, line, false)[1]
+  if l == nil then return nil end
+
+  local id_str = l:match('^/(%d+)')
+  local ok, res = pcall(tonumber, id_str)
+  if not ok then return nil end
+  return res
+end
+
+H.is_depth_buffer = function(buf_id)
+  return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) and vim.bo[buf_id].filetype == 'minifiles'
 end
 
 H.make_icon_getter = function()
@@ -465,9 +655,74 @@ H.make_icon_getter = function()
 end
 
 -- Windows --------------------------------------------------------------------
+H.window_open = function(buf_id, config)
+  -- Add always the same extra data
+  config.anchor = 'NW'
+  config.focusable = true
+  config.relative = 'editor'
+  config.style = 'minimal'
+  -- - Use 99 to allow built-in completion to be on top
+  config.zindex = 99
+
+  -- Add temporary data which will be updated later
+  config.row = 1
+
+  -- Open without entering
+  local res = vim.api.nvim_open_win(buf_id, false, config)
+
+  -- Update non-creation related config elements
+  H.window_update(res, config)
+
+  -- Set permanent window options
+  vim.wo[res].conceallevel = 3
+  vim.wo[res].concealcursor = 'nvic'
+  vim.wo[res].wrap = false
+
+  -- Conceal path id
+  vim.api.nvim_win_call(res, function() vim.fn.matchadd('Conceal', [[^/\d\+]]) end)
+
+  -- Set window highlights
+  vim.wo[res].winhighlight = 'FloatBorder:MiniFilesBorder,FloatTitle:MiniFilesTitle,NormalFloat:MiniFilesNormal'
+
+  return res
+end
+
+H.window_update = function(win_id, config)
+  -- Compute helper data
+  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local has_statusline = vim.o.laststatus > 0
+  -- Remove 2 from maximum hight to accout for top and bottom borders
+  local max_height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0) - 2
+
+  -- Ensure proper fit
+  config.row = has_tabline and 1 or 0
+  config.height = config.height ~= nil and math.min(config.height, max_height) or nil
+  config.width = config.width ~= nil and math.min(config.width, vim.o.columns) or nil
+
+  -- Ensure proper title on Neovim>=0.9 (as they are not supported earlier)
+  if vim.fn.has('nvim-0.9') == 1 and config.title ~= nil then
+    -- Show only tail if title is too long
+    local title_string, width = config.title, config.width
+    local title_chars = vim.fn.strcharlen(title_string)
+    if width < title_chars then
+      title_string = '…' .. vim.fn.strcharpart(title_string, title_chars - width + 1, width - 1)
+    end
+    config.title = title_string
+  else
+    config.title = nil
+  end
+
+  -- Update config
+  config.relative = 'editor'
+  vim.api.nvim_win_set_config(win_id, config)
+
+  -- Restore window options which are overriden by `style = 'minimal'`
+  vim.wo[win_id].cursorline = true
+end
 
 -- File system ----------------------------------------------------------------
-H.read_dir = function(dir_path, content_opts)
+-- TODO: Replace with `vim.fs` after Neovim=0.7 compatibility is dropped
+H.fs_read_dir = function(dir_path, content_opts)
   local fs = vim.loop.fs_scandir(dir_path)
   local res = {}
   if not fs then return res end
@@ -484,7 +739,7 @@ H.read_dir = function(dir_path, content_opts)
 
   -- Add absolute file paths to result and index
   for _, entry in ipairs(res) do
-    local path = H.join_path(dir_path, entry.name)
+    local path = H.fs_child_path(dir_path, entry.name)
     entry.path = path
     H.add_path_to_index(path)
   end
@@ -509,9 +764,26 @@ H.compare_fs_entries = function(a, b)
   return a.lower_name < b.lower_name
 end
 
-H.join_path = function(dir, name) return string.format('%s%s%s', dir, H.path_sep, name) end
+H.fs_child_path = function(dir, name) return string.format('%s%s%s', dir, H.path_sep, name) end
 
-H.full_path = function(path) return vim.fn.fnamemodify(path, ':p'):gsub(H.path_sep .. '$', '') end
+H.fs_full_path = function(path)
+  local res = vim.fn.fnamemodify(path, ':p'):gsub(H.path_sep .. '$', '')
+  return res
+end
+
+H.fs_get_type = function(path)
+  local ok, stat = pcall(vim.loop.fs_stat, path)
+  if not ok or stat == nil then return nil end
+  return vim.fn.isdirectory(path) == 1 and 'directory' or 'file'
+end
+
+H.fs_get_basename = function(path) return vim.fn.fnamemodify(path, ':t') end
+
+H.fs_get_parent = function(path)
+  local res = vim.fn.fnamemodify(path, ':h')
+  if res == path then return nil end
+  return res
+end
 
 -- TODO: Remove when not needed
 H.create_test_dir = function(dir_path, n_dirs, n_files)
@@ -544,6 +816,21 @@ H.create_test_dir = function(dir_path, n_dirs, n_files)
   end
 end
 
+-- Validators -----------------------------------------------------------------
+H.validate_depth_buffer = function(x)
+  if x == nil or x == 0 then x = vim.api.nvim_get_current_buf() end
+  if not H.is_depth_buffer(x) then H.error('`buf_id` should be an identifier of a depth buffer.') end
+  return x
+end
+
+H.validate_line = function(buf_id, x)
+  x = x or vim.fn.line('.')
+  if not (type(x) == 'number' and 1 <= x and x <= vim.api.nvim_buf_line_count(buf_id)) then
+    H.error('`line` should be a valid line number in buffer ' .. buf_id .. '.')
+  end
+  return x
+end
+
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.files) %s', msg), 0) end
 
@@ -554,5 +841,11 @@ H.map = function(mode, lhs, rhs, opts)
 end
 
 H.set_extmark = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
+
+H.get_first_valid_normal_window = function()
+  for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_config(win_id).relative == '' then return win_id end
+  end
+end
 
 return MiniFiles
