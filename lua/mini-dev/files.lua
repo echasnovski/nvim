@@ -2,9 +2,6 @@
 --
 -- Code:
 -- - Implement MacOS Finder with column view type of file explorer:
---     - Add event for every buffer update.
---
---     - Think about limiting number of windows.
 --
 -- - Implement 'oil.nvim' like file manipulation:
 --     - Concealed index should encode absolute file path allowing moving files
@@ -21,8 +18,18 @@
 --     - Shouldn't reuse already created buffers (no new ones should be created
 --       if not needed).
 --
+-- - Restoring cursors in directory views:
+--     - Should restore cursor in earlier visible directory in current session.
+--     - Should properly account for directory content change outside after
+--       explorer was closed (i.e. not store line numbers directly).
+--     - Should properly keep track of the latest available cursor before
+--       `close()`. Like in "go right - go left - move cursor" and it should
+--       remember that cursor was in second to right window on some other line.
+--
 -- Docs:
 -- - Open multiple files in Visual mode.
+--
+-- - `MiniFilesBufferUpdate` `User` event to hook into.
 
 --- *mini.files* Explore and manipulate files
 --- *MiniFiles*
@@ -137,6 +144,7 @@ MiniFiles.config = {
 
   windows = {
     border = 'single',
+    max_number = math.huge,
     width_focus = 50,
     width_nofocus = 15,
   },
@@ -201,6 +209,33 @@ MiniFiles.reset = function()
   H.explorer_refresh(explorer)
 end
 
+MiniFiles.synchronize = function()
+  local explorer = H.explorer_get()
+  if explorer == nil then return end
+
+  -- Update currently shown cursors and invalidate directory views without
+  -- deleting buffer so that cursor "sticks" to its current path (if on path)
+  explorer = H.explorer_update_cursors(explorer)
+
+  for dir_path, dir_view in pairs(explorer.dir_views) do
+    explorer.dir_views[dir_path] = H.dir_view_invalidate(dir_view, false)
+  end
+
+  -- TODO: Parse and apply file system operations.
+  -- `modified_buffers` should contain all `buf_id` which were actually modified
+  local modified_buffers = {}
+  for _, dir_view in pairs(explorer.dir_views) do
+    if H.is_modified_buffer(dir_view.buf_id) then table.insert(modified_buffers, dir_view.buf_id) end
+  end
+
+  -- Force updates on modified buffers
+  for _, buf_id in ipairs(modified_buffers) do
+    H.buffer_update(buf_id, H.opened_buffers[buf_id].dir_path, explorer.opts)
+  end
+
+  H.explorer_refresh(explorer, true)
+end
+
 MiniFiles.close = function()
   local explorer = H.explorer_get()
   if explorer == nil then return end
@@ -210,7 +245,7 @@ MiniFiles.close = function()
 
   -- Invalidate directory views
   for dir_path, dir_view in pairs(explorer.dir_views) do
-    explorer.dir_views[dir_path] = H.dir_view_invalidate(dir_view)
+    explorer.dir_views[dir_path] = H.dir_view_invalidate(dir_view, true)
   end
 
   -- Close shown windows
@@ -224,12 +259,8 @@ MiniFiles.close = function()
   H.opened_explorers[vim.api.nvim_get_current_tabpage()] = nil
 end
 
-MiniFiles.synchronize = function()
-  -- TODO
-end
-
 MiniFiles.go_right = function(buf_id, line)
-  buf_id = H.validate_opened_dir_buffer(buf_id)
+  buf_id = H.validate_opened_buffer(buf_id)
   line = H.validate_line(buf_id, line)
 
   local explorer = H.explorer_get()
@@ -251,7 +282,7 @@ MiniFiles.go_right = function(buf_id, line)
 end
 
 MiniFiles.go_left = function(buf_id, line)
-  buf_id = H.validate_opened_dir_buffer(buf_id)
+  buf_id = H.validate_opened_buffer(buf_id)
   line = H.validate_line(buf_id, line)
 
   local explorer = H.explorer_get()
@@ -269,7 +300,7 @@ MiniFiles.go_left = function(buf_id, line)
 end
 
 MiniFiles.get_fs_entry = function(buf_id, line)
-  buf_id = H.validate_opened_dir_buffer(buf_id)
+  buf_id = H.validate_opened_buffer(buf_id)
   line = line or vim.fn.line('.')
 
   local path_id = H.match_line_path_id(H.get_bufline(buf_id, line))
@@ -315,7 +346,13 @@ H.explorer_history = {}
 -- Register of opened explorers per tabpage
 H.opened_explorers = {}
 
--- Register of opened buffer data for quick access
+-- Register of opened buffer data for quick access. Tables per buffer id:
+-- - <dir_path> - path of directory which contents this buffer displays.
+-- - <win_id> - id of window this buffer is shown. Can be `nil`.
+-- - <n_modified> - number of modifications since last update from this module.
+--   Values bigger than 0 can be treated as if buffer was modified by user.
+--   It uses number instead of boolean is to overcome `TextChanged` event on
+--   initial `buf_set_lines` (`noautocmd` doesn't quick work for this event).
 H.opened_buffers = {}
 
 -- File system data
@@ -347,6 +384,7 @@ H.setup_config = function(config)
     ['mappings.quit'] = { config.mappings.quit, 'string' },
 
     ['windows.border'] = { config.windows.border, 'string' },
+    ['windows.max_number'] = { config.windows.max_number, 'number' },
     ['windows.width_focus'] = { config.windows.width_focus, 'number' },
     ['windows.width_nofocus'] = { config.windows.width_nofocus, 'number' },
   })
@@ -363,11 +401,12 @@ H.create_default_hl = function()
     vim.api.nvim_set_hl(0, name, opts)
   end
 
-  hi('MiniFilesBorder',    { link = 'FloatBorder' })
-  hi('MiniFilesDirectory', { link = 'Directory'   })
-  hi('MiniFilesFile',      {})
-  hi('MiniFilesNormal',    { link = 'NormalFloat' })
-  hi('MiniFilesTitle',     { link = 'FloatTitle'  })
+  hi('MiniFilesBorder',         { link = 'FloatBorder' })
+  hi('MiniFilesBorderModified', { link = 'DiagnosticFloatingWarn' })
+  hi('MiniFilesDirectory',      { link = 'Directory'   })
+  hi('MiniFilesFile',           {})
+  hi('MiniFilesNormal',         { link = 'NormalFloat' })
+  hi('MiniFilesTitle',          { link = 'FloatTitle'  })
 end
 
 H.is_disabled = function() return vim.g.minifiles_disable == true or vim.b.minifiles_disable == true end
@@ -417,12 +456,12 @@ H.explorer_get = function(tabpage_id)
   return H.opened_explorers[tabpage_id]
 end
 
-H.explorer_refresh = function(explorer)
+H.explorer_refresh = function(explorer, skip_cursor_sync)
   explorer = H.explorer_normalize(explorer)
   if #explorer.branch == 0 then return end
 
-  -- Update cursor data in shown directory views
-  explorer = H.explorer_update_cursors(explorer)
+  -- Possibly update cursor data in shown directory views
+  if not skip_cursor_sync then explorer = H.explorer_update_cursors(explorer) end
 
   -- Compute depth range which is possible to show in current window
   local depth_range = H.compute_visible_depth_range(explorer, explorer.opts)
@@ -570,18 +609,20 @@ H.explorer_open_root_parent = function(explorer)
 end
 
 H.compute_visible_depth_range = function(explorer, opts)
-  -- Compute maximum number panes able to fit in current Neovim instance width
+  -- Compute maximum number of windows possible to fit in current Neovim width
   -- Add 2 to widths to take into account width of left and right borders
   local width_focus, width_nofocus = opts.windows.width_focus + 2, opts.windows.width_nofocus + 2
-  local max_n_panes = math.floor((vim.o.columns - width_focus) / width_nofocus)
-  max_n_panes = math.max(max_n_panes, 0) + 1
+  local max_number = math.floor((vim.o.columns - width_focus) / width_nofocus)
+  max_number = math.max(max_number, 0) + 1
+  -- - Account for dedicated option
+  max_number = math.min(math.max(max_number, 1), opts.windows.max_number)
 
   -- Compute which branch entries to show with the following idea:
   -- - Always show focused depth as centered as possible.
   -- - Show as much as possible.
   -- Logic is similar to how text for 'mini.tabline' is computed.
   local branch_depth, depth_focus = #explorer.branch, explorer.depth_focus
-  local n_panes = math.min(branch_depth, max_n_panes)
+  local n_panes = math.min(branch_depth, max_number)
 
   local to = math.min(branch_depth, math.floor(depth_focus + 0.5 * n_panes))
   local from = math.max(1, to - n_panes + 1)
@@ -594,14 +635,14 @@ end
 H.dir_view_ensure_proper = function(dir_view, dir_path, opts)
   -- Ensure proper buffer
   if not H.is_valid_buf(dir_view.buf_id) then
-    H.dir_buffer_delete(dir_view.buf_id)
-    dir_view.buf_id = H.dir_buffer_create(dir_path, opts.mappings)
-    H.dir_buffer_update(dir_view.buf_id, dir_path, opts)
+    H.buffer_delete(dir_view.buf_id)
+    dir_view.buf_id = H.buffer_create(dir_path, opts.mappings)
+    H.buffer_update(dir_view.buf_id, dir_path, opts)
   end
 
   -- Ensure proper cursor. If string, find it as line in current buffer.
   if dir_view.cursor == nil or type(dir_view.cursor) == 'number' then
-    local line = H.dir_buffer_find_line(dir_view.buf_id, dir_view.cursor) or 1
+    local line = H.buffer_find_line(dir_view.buf_id, dir_view.cursor) or 1
     local line_offset = H.match_line_offset(H.get_bufline(dir_view.buf_id, line))
     dir_view.cursor = { line, line_offset - 1 }
   end
@@ -609,7 +650,7 @@ H.dir_view_ensure_proper = function(dir_view, dir_path, opts)
   return dir_view
 end
 
-H.dir_view_invalidate = function(dir_view)
+H.dir_view_invalidate = function(dir_view, delete_buffer)
   -- Replace exact cursor coordinates with path id to try and find later.
   -- This allows more robust opening explorer from history (as directory
   -- content may have changed and exact cursor position would be not valid).
@@ -619,13 +660,15 @@ H.dir_view_invalidate = function(dir_view)
   end
 
   -- Delete buffer
-  H.dir_buffer_delete(dir_view.buf_id)
-  dir_view.buf_id = nil
+  if delete_buffer then
+    H.buffer_delete(dir_view.buf_id)
+    dir_view.buf_id = nil
+  end
 
   return dir_view
 end
 
-H.dir_view_tweak_cursor = function(data)
+H.dir_view_track_cursor = function(data)
   local win_id = H.opened_buffers[data.buf].win_id
   if not H.is_valid_win(win_id) then return end
 
@@ -639,8 +682,15 @@ H.dir_view_tweak_cursor = function(data)
   vim.cmd('normal! 1000zh')
 end
 
--- Directory buffers ----------------------------------------------------------
-H.dir_buffer_create = function(dir_path, mappings)
+H.dir_view_track_modified = function(data)
+  local buf_id = data.buf
+  local new_n_modified = H.opened_buffers[buf_id].n_modified + 1
+  H.opened_buffers[buf_id].n_modified = new_n_modified
+  if new_n_modified > 0 then H.window_update_border_hl(H.opened_buffers[buf_id].win_id) end
+end
+
+-- Buffers --------------------------------------------------------------------
+H.buffer_create = function(dir_path, mappings)
   -- Create buffer
   local buf_id = vim.api.nvim_create_buf(false, true)
 
@@ -670,8 +720,12 @@ H.dir_buffer_create = function(dir_path, mappings)
 
   -- Make buffer autocommands
   local augroup = vim.api.nvim_create_augroup('MiniFiles', { clear = false })
-  local opts = { group = augroup, buffer = buf_id, desc = 'Tweak cursor position', callback = H.dir_view_tweak_cursor }
-  vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, opts)
+  local au = function(events, desc, callback)
+    vim.api.nvim_create_autocmd(events, { group = augroup, buffer = buf_id, desc = desc, callback = callback })
+  end
+
+  au({ 'CursorMoved', 'CursorMovedI' }, 'Tweak cursor position', H.dir_view_track_cursor)
+  au({ 'TextChanged', 'TextChangedI', 'TextChangedP' }, 'Track buffer modification', H.dir_view_track_modified)
 
   -- Tweak buffer to be used nicely with other 'mini.nvim' modules
   vim.b[buf_id].minicursorword_disable = true
@@ -682,7 +736,7 @@ H.dir_buffer_create = function(dir_path, mappings)
   return buf_id
 end
 
-H.dir_buffer_update = function(buf_id, dir_path, opts)
+H.buffer_update = function(buf_id, dir_path, opts)
   -- Compute and set lines
   local fs_entries = H.fs_read_dir(dir_path, opts.content)
   local get_icon_data = H.make_icon_getter()
@@ -699,7 +753,7 @@ H.dir_buffer_update = function(buf_id, dir_path, opts)
     table.insert(name_hl, entry.fs_type == 'directory' and 'MiniFilesDirectory' or 'MiniFilesFile')
   end
 
-  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+  H.set_buflines(buf_id, lines)
 
   -- Add highlighting
   local ns_id = H.ns_id.highlight
@@ -710,17 +764,28 @@ H.dir_buffer_update = function(buf_id, dir_path, opts)
     H.set_extmark(buf_id, ns_id, l_num - 1, icon_start - 1, { hl_group = icon_hl[l_num], end_col = name_start - 1 })
     H.set_extmark(buf_id, ns_id, l_num - 1, name_start - 1, { hl_group = name_hl[l_num], end_row = l_num, end_col = 0 })
   end
+
+  -- Trigger dedicated event
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniFilesBufferUpdate', data = { buf_id = buf_id } })
+
+  -- Reset buffer as not modified
+  H.opened_buffers[buf_id].n_modified = -1
 end
 
-H.dir_buffer_delete = function(buf_id)
+H.buffer_delete = function(buf_id)
   if buf_id == nil then return end
   pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
   H.opened_buffers[buf_id] = nil
 end
 
-H.is_opened_dir_buffer = function(buf_id) return H.opened_buffers[buf_id] ~= nil end
+H.is_opened_buffer = function(buf_id) return H.opened_buffers[buf_id] ~= nil end
 
-H.dir_buffer_find_line = function(buf_id, ref_path_id)
+H.is_modified_buffer = function(buf_id)
+  local data = H.opened_buffers[buf_id]
+  return data ~= nil and data.n_modified > 0
+end
+
+H.buffer_find_line = function(buf_id, ref_path_id)
   if ref_path_id == nil then return nil end
   local lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
   for i, l in ipairs(lines) do
@@ -777,8 +842,8 @@ H.window_open = function(buf_id, config)
   -- Conceal path id
   vim.api.nvim_win_call(res, function() vim.fn.matchadd('Conceal', [[^/\d\+]]) end)
 
-  -- Set window highlights
-  vim.wo[res].winhighlight = 'FloatBorder:MiniFilesBorder,FloatTitle:MiniFilesTitle,NormalFloat:MiniFilesNormal'
+  -- Set permanent window highlights
+  vim.wo[res].winhighlight = 'NormalFloat:MiniFilesNormal,FloatTitle:MiniFilesTitle'
 
   return res
 end
@@ -836,9 +901,22 @@ H.window_set_dir_view = function(win_id, dir_view)
   -- Set 'cursorline' here also because changing buffer might have removed it
   vim.wo[win_id].cursorline = true
 
+  -- Update border highlight based on buffer status
+  H.window_update_border_hl(win_id)
+
   -- Update buffer register
   H.opened_buffers[init_buf_id].win_id = nil
   H.opened_buffers[buf_id].win_id = win_id
+end
+
+H.window_update_border_hl = function(win_id)
+  if not H.is_valid_win(win_id) then return end
+  local buf_id = vim.api.nvim_win_get_buf(win_id)
+
+  local border_hl = H.is_modified_buffer(buf_id) and 'MiniFilesBorderModified' or 'MiniFilesBorder'
+
+  local cur_winhighlight = vim.wo[win_id].winhighlight:gsub(',FloatBorder:%w+', '')
+  vim.wo[win_id].winhighlight = string.format('%s,FloatBorder:%s', cur_winhighlight, border_hl)
 end
 
 -- File system ----------------------------------------------------------------
@@ -944,9 +1022,9 @@ H.create_test_dir = function(dir_path, n_dirs, n_files)
 end
 
 -- Validators -----------------------------------------------------------------
-H.validate_opened_dir_buffer = function(x)
+H.validate_opened_buffer = function(x)
   if x == nil or x == 0 then x = vim.api.nvim_get_current_buf() end
-  if not H.is_opened_dir_buffer(x) then H.error('`buf_id` should be an identifier of an opened directory buffer.') end
+  if not H.is_opened_buffer(x) then H.error('`buf_id` should be an identifier of an opened directory buffer.') end
   return x
 end
 
@@ -972,6 +1050,12 @@ H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nv
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
 
 H.get_bufline = function(buf_id, line) return vim.api.nvim_buf_get_lines(buf_id, line - 1, line, false)[1] end
+
+H.set_buflines = function(buf_id, lines)
+  local cmd =
+    string.format('lockmarks lua vim.api.nvim_buf_set_lines(%d, 0, -1, false, %s)', buf_id, vim.inspect(lines))
+  vim.cmd(cmd)
+end
 
 H.set_extmark = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
 
