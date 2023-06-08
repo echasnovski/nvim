@@ -222,8 +222,7 @@ MiniFiles.synchronize = function()
 
   -- Parse and apply file system operations
   local fs_actions = H.explorer_compute_fs_actions(explorer)
-  -- TODO: Actually apply file system actions
-  -- H.fs_apply_actions(fs_actions)
+  if fs_actions ~= nil and H.fs_actions_confirm(fs_actions) then H.fs_actions_apply(fs_actions) end
 
   -- Force content updates on all explorer buffers. Doing it for *all* of them
   -- and not only on modified once to allow synching outside changes.
@@ -490,6 +489,7 @@ H.explorer_compute_fs_actions = function(explorer)
     local dir_fs_diff = H.buffer_compute_fs_diff(dir_view.buf_id, dir_view.children_path_ids)
     if #dir_fs_diff > 0 then vim.list_extend(fs_diffs, dir_fs_diff) end
   end
+  if #fs_diffs == 0 then return nil end
 
   -- Convert differences into actions
   local create, delete_map, rename, move, raw_copy = {}, {}, {}, {}, {}
@@ -1082,7 +1082,7 @@ H.fs_get_type = function(path)
   return vim.fn.isdirectory(path) == 1 and 'directory' or 'file'
 end
 
-H.fs_get_basename = function(path) return vim.fn.fnamemodify(path, ':t') end
+H.fs_get_basename = function(path) return vim.fn.fnamemodify(H.fs_full_path(path), ':t') end
 
 H.fs_get_parent = function(path)
   local res = vim.fn.fnamemodify(H.fs_full_path(path), ':h')
@@ -1090,35 +1090,71 @@ H.fs_get_parent = function(path)
   return res
 end
 
--- TODO: Remove when not needed
-H.create_test_dir = function(dir_path, n_dirs, n_files)
-  vim.fn.mkdir(vim.fn.fnamemodify(dir_path, ':p'), 'p')
+-- File system actions --------------------------------------------------------
+H.fs_actions_confirm = function(fs_actions)
+  local msg = table.concat(H.fs_actions_to_lines(fs_actions), '\n')
+  local confirm_res = vim.fn.confirm(msg, '&Yes\n&No', 1, 'Question')
+  return confirm_res == 1
+end
 
-  -- Directories
-  local possible_dir_basenames = { '.dir', '.Dir', 'dir', 'DIR', 'DiR', 'dIr' }
-  local n_dir_basenames = #possible_dir_basenames
-  for i = 1, n_dirs do
-    local base_name = possible_dir_basenames[math.random(n_dir_basenames)] .. '_' .. string.format('%06d', i)
-    vim.fn.mkdir(dir_path .. '/' .. base_name)
+H.fs_actions_to_lines = function(fs_actions)
+  -- Gather actions per source directory
+  local actions_per_dir = {}
+
+  local get_dir_actions = function(path)
+    local dir_path = vim.fn.fnamemodify(H.fs_get_parent(path), ':~')
+    local dir_actions = actions_per_dir[dir_path] or {}
+    actions_per_dir[dir_path] = dir_actions
+    return dir_actions
   end
 
-  -- Files
-  --stylua: ignore
-  local possible_file_basenames = {
-    '.dot', '.git', '.gitmodules', '.gitignore',
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
-    'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
-    'u', 'v', 'w', 'x', 'y', 'z',
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J',
-    'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
-    'U', 'V', 'W', 'X', 'Y', 'Z',
-    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
-  }
-  local n_file_basenames = #possible_file_basenames
-  for i = 1, n_files do
-    local base_name = possible_file_basenames[math.random(n_file_basenames)] .. '_' .. string.format('%06d', i)
-    vim.fn.writefile({}, dir_path .. '/' .. base_name)
+  local get_quoted_basename = function(path) return string.format("'%s'", H.fs_get_basename(path)) end
+
+  for _, diff in ipairs(fs_actions.copy) do
+    local dir_actions = get_dir_actions(diff.from)
+    local l = string.format('    COPY: %s to %s', get_quoted_basename(diff.from), vim.fn.fnamemodify(diff.to, ':~'))
+    table.insert(dir_actions, l)
   end
+
+  for _, path in ipairs(fs_actions.create) do
+    local dir_actions = get_dir_actions(path)
+    local fs_type = path:find('/$') == nil and 'file' or 'directory'
+    local l = string.format('  CREATE: %s (%s)', get_quoted_basename(path), fs_type)
+    table.insert(dir_actions, l)
+  end
+
+  for _, path in ipairs(fs_actions.delete) do
+    local dir_actions = get_dir_actions(path)
+    local l = string.format('  DELETE: %s', get_quoted_basename(path))
+    table.insert(dir_actions, l)
+  end
+
+  for _, diff in ipairs(fs_actions.move) do
+    local dir_actions = get_dir_actions(diff.from)
+    local l = string.format('    MOVE: %s to %s', get_quoted_basename(diff.from), vim.fn.fnamemodify(diff.to, ':~'))
+    table.insert(dir_actions, l)
+  end
+
+  for _, diff in ipairs(fs_actions.rename) do
+    local dir_actions = get_dir_actions(diff.from)
+    local l = string.format('  RENAME: %s to %s', get_quoted_basename(diff.from), get_quoted_basename(diff.to))
+    table.insert(dir_actions, l)
+  end
+
+  -- Convert to lines
+  local res = { 'CONFIRM FILE SYSTEM ACTIONS', '' }
+  for dir_path, dir_actions in pairs(actions_per_dir) do
+    table.insert(res, dir_path .. ':')
+    vim.list_extend(res, dir_actions)
+    table.insert(res, '')
+  end
+
+  return res
+end
+
+H.fs_actions_apply = function(fs_actions)
+  -- TODO: Actually apply file system actions
+  _G.fs_actions = fs_actions
 end
 
 -- Validators -----------------------------------------------------------------
