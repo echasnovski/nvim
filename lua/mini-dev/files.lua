@@ -30,7 +30,7 @@
 --
 -- - `MiniFilesBufferUpdate` `User` event to hook into.
 
---- *mini.files* Explore and manipulate files
+--- *mini.files* Explore and manipulate file system
 --- *MiniFiles*
 ---
 --- MIT License Copyright (c) 2023 Evgeni Chasnovski
@@ -698,7 +698,7 @@ H.dir_view_invalidate_cursor = function(dir_view)
   -- Replace exact cursor coordinates with path id to try and find later.
   -- This allows more robust opening explorer from history (as directory
   -- content may have changed and exact cursor position would be not valid).
-  if type(dir_view.cursor) == 'table' then
+  if H.is_valid_buf(dir_view.buf_id) and type(dir_view.cursor) == 'table' then
     local l = H.get_bufline(dir_view.buf_id, dir_view.cursor[1])
     dir_view.cursor = H.match_line_path_id(l)
   end
@@ -789,6 +789,8 @@ H.buffer_create = function(dir_path, mappings)
 end
 
 H.buffer_update = function(buf_id, dir_path, opts)
+  if not H.is_valid_buf(buf_id) then return end
+
   -- Compute and set lines
   local fs_entries = H.fs_read_dir(dir_path, opts.content)
   local get_icon_data = H.make_icon_getter()
@@ -1154,8 +1156,63 @@ end
 
 H.fs_actions_apply = function(fs_actions)
   -- TODO: Actually apply file system actions
-  _G.fs_actions = fs_actions
+
+  -- Copy first to allow later proper deleting
+  for _, diff in ipairs(fs_actions.copy) do
+    pcall(H.fs_copy, diff.from, diff.to)
+  end
+
+  for _, path in ipairs(fs_actions.create) do
+    pcall(H.fs_create, path)
+  end
+
+  for _, diff in ipairs(fs_actions.move) do
+    pcall(H.fs_move, diff.from, diff.to)
+  end
+
+  for _, diff in ipairs(fs_actions.rename) do
+    pcall(H.fs_rename, diff.from, diff.to)
+  end
+
+  -- Delete last to not lose anything too early (just in case)
+  for _, path in ipairs(fs_actions.delete) do
+    pcall(H.fs_delete, path)
+  end
 end
+
+H.fs_create = function(path)
+  -- Create parent directory allowing nested names
+  vim.fn.mkdir(H.fs_get_parent(path), 'p')
+
+  -- Create
+  local fs_type = path:find('/$') == nil and 'file' or 'directory'
+  if fs_type == 'directory' then
+    vim.fn.mkdir(path)
+  else
+    vim.fn.writefile({}, path)
+  end
+end
+
+H.fs_copy = function(from, to)
+  if H.fs_get_type(from) == 'file' then
+    vim.loop.fs_copyfile(from, to)
+    return
+  end
+
+  -- Recursively copy a directory
+  local fs_entries = H.fs_read_dir(from, { filter = MiniFiles.default_filter, sort = function(x) return x end })
+  -- NOTE: Create directory *after* reading entries to allow copy inside itself
+  vim.fn.mkdir(to)
+  for _, entry in ipairs(fs_entries) do
+    H.fs_copy(entry.path, H.fs_child_path(to, entry.name))
+  end
+end
+
+H.fs_delete = function(path) vim.fn.delete(path, 'rf') end
+
+H.fs_move = function(from, to) vim.loop.fs_rename(from, to) end
+
+H.fs_rename = H.fs_move
 
 -- Validators -----------------------------------------------------------------
 H.validate_opened_buffer = function(x)
