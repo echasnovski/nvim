@@ -2,10 +2,12 @@
 --
 -- Code:
 -- - Implement MacOS Finder with column view type of file explorer:
---     - Rethink about "latest used path in tabpage" approach in favor of
---       reverting to use `vim.fn.getcwd()` by default.
---     - Think about automated directory preview on cursor move.
---     - Think about "close after file open" option.
+--     - Think about `cut_left`/`cut_right` (or `make_left`/`make_right`)
+--       mappings which make current directory view the most left (truncates
+--       parents in branch) and the most right (truncates children in branch).
+--     - OR introduce `go_left_plus`/`go_right_plus` (`H`/`L`) which will
+--       accordingly hide current window and close explorer if on file.
+--     - OR add "close after file open" as option.
 --
 -- - Implement 'oil.nvim' like file manipulation:
 --
@@ -27,6 +29,8 @@
 --       remember that cursor was in second to right window on some other line.
 --     - Should follow cursor when creating entry and cursor is on it during
 --       synchronization. Both file and (possibly nested) directory.
+--     - After `open()` with file path, cursor should be focused on file in
+--       that particular directory view.
 --
 -- Docs:
 -- - Open multiple files in Visual mode.
@@ -47,6 +51,18 @@
 --     - `MiniFilesWindowUpdate`
 --
 --     Examples: >
+--     -- Modify buffer mappings
+--     local go_right2 = function()
+--       MiniFiles.go_right(nil, nil, { close_on_file = true })
+--     end
+--     vim.api.nvim_create_autocmd('User', {
+--       pattern = 'MiniFilesBufferCreate',
+--       callback = function(args)
+--         vim.keymap.set('n', 'l', go_right2, { buffer = args.data.buf_id })
+--       end,
+--     })
+--
+--     -- Modify window config
 --     vim.api.nvim_create_autocmd('User', {
 --       pattern = 'MiniFilesWindowOpen',
 --       callback = function(args)
@@ -178,14 +194,17 @@ MiniFiles.config = {
 
 MiniFiles.open = function(path, use_latest, opts)
   -- Validate path: allow only valid file system path
-  local tabpage_id = vim.api.nvim_get_current_tabpage()
-  path = path or H.explorer_tabpage_paths[tabpage_id] or vim.fn.getcwd()
+  path = path or vim.fn.getcwd()
 
   local fs_type = H.fs_get_type(path)
   if fs_type == nil then H.error('`path` is not a valid path ("' .. path .. '")') end
+
   path = H.fs_full_path(path)
-  -- - Allow file path and use its parent
-  if fs_type == 'file' then path = H.fs_get_parent(path) end
+  -- - Allow file path to use its parent while focusing on file
+  local entry_name
+  if fs_type == 'file' then
+    path, entry_name = H.fs_get_parent(path), H.fs_get_basename(path)
+  end
 
   -- Validate rest of the arguments
   if use_latest == nil then use_latest = true end
@@ -201,6 +220,9 @@ MiniFiles.open = function(path, use_latest, opts)
   -- Update explorer data
   explorer.opts = H.normalize_opts(explorer.opts, opts)
   explorer.target_window = vim.api.nvim_get_current_win()
+
+  -- Possibly focus on file
+  explorer = H.explorer_focus_on_entry(explorer, path, entry_name)
 
   -- Refresh
   explorer = H.explorer_refresh(explorer)
@@ -300,13 +322,13 @@ MiniFiles.close = function()
   -- Update histories and unmark as opened
   local tabpage_id, anchor = vim.api.nvim_get_current_tabpage(), explorer.anchor
   H.explorer_path_history[anchor] = explorer
-  H.explorer_tabpage_paths[tabpage_id] = anchor
   H.opened_explorers[tabpage_id] = nil
 end
 
-MiniFiles.go_right = function(buf_id, line)
+MiniFiles.go_right = function(buf_id, line, opts)
   buf_id = H.validate_opened_buffer(buf_id)
   line = H.validate_line(buf_id, line)
+  opts = vim.tbl_deep_extend('force', { close_on_file = false }, opts or {})
 
   local explorer = H.explorer_get()
   if explorer == nil then return end
@@ -320,15 +342,19 @@ MiniFiles.go_right = function(buf_id, line)
   if fs_entry.fs_type == 'file' then
     -- Open file in target window
     H.explorer_open_file(explorer, fs_entry.path)
+
+    -- Possibly close explorer
+    if opts.close_on_file then MiniFiles.close() end
   else
     -- Show child directory at next depth
     H.explorer_open_directory(explorer, fs_entry.path, buf_depth + 1)
   end
 end
 
-MiniFiles.go_left = function(buf_id, line)
+MiniFiles.go_left = function(buf_id, line, opts)
   buf_id = H.validate_opened_buffer(buf_id)
   line = H.validate_line(buf_id, line)
+  opts = vim.tbl_deep_extend('force', {}, opts or {})
 
   local explorer = H.explorer_get()
   if explorer == nil then return end
@@ -387,9 +413,6 @@ H.path_index = {}
 
 -- History of explorers per root directory
 H.explorer_path_history = {}
-
--- History of root paths used per tabpage
-H.explorer_tabpage_paths = {}
 
 -- Register of opened explorers per tabpage
 H.opened_explorers = {}
@@ -533,6 +556,23 @@ H.explorer_refresh = function(explorer, skip_cursor_sync)
   return explorer
 end
 
+H.explorer_focus_on_entry = function(explorer, dir_path, entry_name)
+  if entry_name == nil then return explorer end
+
+  -- Set focus on directory. Reset if it is not in current branch.
+  explorer.depth_focus = H.explorer_get_path_depth(explorer, dir_path)
+  if explorer.depth_focus == nil then
+    explorer.branch, explorer.depth_focus = { dir_path }, 1
+  end
+
+  -- Set cursor on entry
+  local path_dir_view = explorer.dir_views[dir_path] or {}
+  path_dir_view.cursor = entry_name
+  explorer.dir_views[dir_path] = path_dir_view
+
+  return explorer
+end
+
 H.explorer_compute_fs_actions = function(explorer)
   -- Compute differences
   local fs_diffs = {}
@@ -651,12 +691,14 @@ H.explorer_refresh_depth_window = function(explorer, depth, win_count, win_col)
   return cur_width
 end
 
-H.explorer_get_buffer_depth = function(explorer, buf_id)
-  local dir_path = H.opened_buffers[buf_id].dir_path
-  for depth, depth_dir_path in pairs(explorer.branch) do
-    if dir_path == depth_dir_path then return depth end
+H.explorer_get_path_depth = function(explorer, path)
+  for depth, depth_path in pairs(explorer.branch) do
+    if path == depth_path then return depth end
   end
 end
+
+H.explorer_get_buffer_depth =
+  function(explorer, buf_id) return H.explorer_get_path_depth(explorer, H.opened_buffers[buf_id].dir_path) end
 
 H.explorer_open_file = function(explorer, path)
   if not vim.api.nvim_win_is_valid(explorer.target_window) then
@@ -798,10 +840,18 @@ H.dir_view_track_text_change = function(data)
   if new_n_modified > 0 and H.is_valid_win(win_id) then H.window_update_border_hl(win_id) end
 
   -- Track window height
-  if H.is_valid_win(win_id) then
-    local height = math.min(vim.api.nvim_buf_line_count(buf_id), H.window_get_max_height())
-    vim.api.nvim_win_set_height(win_id, height)
-  end
+  if not H.is_valid_win(win_id) then return end
+
+  local n_lines = vim.api.nvim_buf_line_count(buf_id)
+  local height = math.min(n_lines, H.window_get_max_height())
+  vim.api.nvim_win_set_height(win_id, height)
+
+  -- Ensure that only buffer lines are shown. This can be not the case if after
+  -- text edit cursor moved past previous last line.
+  local last_visible_line = vim.fn.line('w0', win_id) + height - 1
+  local out_of_buf_lines = last_visible_line - n_lines
+  -- - Possibly scroll window upward (`\25` is an escaped `<C-y>`)
+  if out_of_buf_lines > 0 then vim.cmd('normal! ' .. out_of_buf_lines .. '\25') end
 end
 
 -- Buffers --------------------------------------------------------------------
@@ -1286,9 +1336,26 @@ end
 
 H.fs_delete = function(path) vim.fn.delete(path, 'rf') end
 
-H.fs_move = function(from, to) vim.loop.fs_rename(from, to) end
+H.fs_move = function(from, to)
+  vim.loop.fs_rename(from, to)
+
+  -- Rename in loaded buffers
+  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+    H.rename_loaded_buffer(buf_id, from, to)
+  end
+end
 
 H.fs_rename = H.fs_move
+
+H.rename_loaded_buffer = function(buf_id, from, to)
+  if not vim.api.nvim_buf_is_loaded(buf_id) then return end
+  local cur_name = vim.api.nvim_buf_get_name(buf_id)
+
+  -- Use `gsub('^' ...)` to also take into account directory renames
+  local new_name = cur_name:gsub('^' .. vim.pesc(from), to)
+  if cur_name == new_name then return end
+  vim.api.nvim_buf_set_name(buf_id, new_name)
+end
 
 -- Validators -----------------------------------------------------------------
 H.validate_opened_buffer = function(x)
