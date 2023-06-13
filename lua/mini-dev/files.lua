@@ -2,14 +2,10 @@
 --
 -- Code:
 -- - Implement MacOS Finder with column view type of file explorer:
---     - Think again about if `trim_left`/`trim_right` is needed.
---       Maybe revert `make_anchor` to trim left?
---       Or remove `make_anchor` entirely.
---
 --     - Think about the most convenient way to "toggle hidden files, etc.".
 --       Maybe `set_option()` which sets options for current explorer?
 --
---     - Hijack netrw.
+--     - Make `MiniFilesNormalFocused` highlight group?
 --
 -- - Implement 'oil.nvim' like file manipulation:
 --
@@ -17,6 +13,14 @@
 --     - Windows and MacOS use case insensitive file names.
 --
 -- Tests:
+-- - Can act as default file explorer:
+--     - Scenarios:
+--         - `nvim .`
+--         - `:edit .`
+--         - `:vsplit .`
+--     - Should hide "scratch directory buffer" on file open.
+--     - Should delete "scratch directory buffer" if nothing opened.
+--
 -- - Going to the root's parent:
 --     - Shouldn't force update of present buffers.
 --     - Should reuse already created buffers (no new ones should be created
@@ -27,6 +31,12 @@
 --     - Should open all files.
 --     - Should open only last directory with cursor moved to its entry (can be
 --       not the case if selection contains directory but cursor is on file).
+--
+-- - Go in:
+--     - Works for files with "bad names" (essentially, uses `fnameescape()`).
+--     - Works for several consecutive calls on same file (without closing
+--       explorer). This might be (was) a problem with set up auto-root from
+--       'mini.misc'.
 --
 -- - Restoring cursors in directory views:
 --     - Should restore cursor in earlier visible directory in current session.
@@ -41,16 +51,7 @@
 --       that particular directory view.
 --
 -- Docs:
--- - Open multiple files in Visual mode.
---
--- - Examples of how `open()` can be used (in mappings also):
---    - `require('mini.files').open()` - open last used `path` (per tabpage).
---    - `require('mini.files').open(vim.fn.getcwd())` - open current working
---      directory using history.
---    - `require('mini.files').open(vim.fn.getcwd(), false)` - open only
---      current working directory.
---    - `require('mini.files').open(vim.api.nvim_buf_get_name(0), false)`
---      - open only directory of current file.
+-- - Open multiple entries in Visual mode.
 --
 -- - `User` events to hook into:
 --     - `MiniFilesBufferCreate`
@@ -60,15 +61,10 @@
 --
 --     Examples: >
 --     -- Modify buffer mappings
---     local go_in_and_close = function()
---       local is_file = MiniFiles.get_fs_entry().fs_type == 'file'
---       MiniFiles.go_in()
---       if is_file then MiniFiles.close() end
---     end
 --     vim.api.nvim_create_autocmd('User', {
 --       pattern = 'MiniFilesBufferCreate',
 --       callback = function(args)
---         vim.keymap.set('n', 'l', go_in_and_close, { buffer = args.data.buf_id })
+--         vim.keymap.set('n', lhs, rhs, { buffer = args.data.buf_id })
 --       end,
 --     })
 --
@@ -95,8 +91,6 @@
 --- - Manipulate files by editing buffers: add, delete, rename, move.
 ---
 --- - Use as default file explorer instead of |netrw|.
----
---- - Customizable asynchronous integrations.
 ---
 --- - Highlighting is updated asynchronously with configurable debounce delay.
 ---
@@ -138,11 +132,12 @@
 ---
 --- # Disabling ~
 ---
---- To disable, set `vim.g.minifiles_disable` (globally) or `vim.b.minifiles_disable`
---- (for a buffer) to `true`. Considering high number of different scenarios
---- and customization intentions, writing exact rules for disabling module's
---- functionality is left to user. See |mini.nvim-disabling-recipes| for common
---- recipes.
+--- This plugin provides only manually started functionality, so no disabling
+--- is available.
+
+---@tag MiniFiles-exploration
+
+---@tag MiniFiles-manipulation
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -171,6 +166,9 @@ MiniFiles.setup = function(config)
   -- Apply config
   H.apply_config(config)
 
+  -- Define behavior
+  H.create_autocommands(config)
+
   -- Create default highlighting
   H.create_default_hl()
 end
@@ -188,13 +186,18 @@ MiniFiles.config = {
 
   mappings = {
     go_in       = 'l',
+    go_in_plus  = 'L',
     go_out      = 'h',
-    make_anchor = '!',
+    go_out_plus = 'H',
     reset       = '<BS>',
     synchronize = '=',
     trim_left   = '<',
     trim_right  = '>',
     quit        = 'q',
+  },
+
+  options = {
+    as_default_explorer = true,
   },
 
   windows = {
@@ -206,6 +209,17 @@ MiniFiles.config = {
 }
 --minidoc_afterlines_end
 
+--- Open file explorer
+---
+--- Recommended usage:
+--- - `MiniFiles.open()` - open current working directory in a latest state.
+--- - `MiniFiles.open(nil, false)` - fresh explorer in current working directory.
+--- - `MiniFiles.open(vim.api.nvim_buf_get_name(0))` - open directory of current
+---    file (in a latest state) with focus on that file.
+--- - `MiniFiles.open(vim.api.nvim_buf_get_name(0), false)` - fresh explorer in
+---    directory of current file.
+--- - `MiniFiles.open(MiniFiles.get_latest_path())` - open last used `path`
+---   (per tabpage). Current working directory for the first time.
 MiniFiles.open = function(path, use_latest, opts)
   -- Validate path: allow only valid file system path
   path = path or vim.fn.getcwd()
@@ -269,16 +283,6 @@ MiniFiles.reset = function()
   H.explorer_refresh(explorer)
 end
 
-MiniFiles.make_anchor = function()
-  local explorer = H.explorer_get()
-  if explorer == nil then return end
-
-  -- Modify anchor
-  explorer.anchor = explorer.branch[explorer.depth_focus]
-
-  H.explorer_refresh(explorer)
-end
-
 MiniFiles.synchronize = function()
   local explorer = H.explorer_get()
   if explorer == nil then return end
@@ -326,6 +330,7 @@ MiniFiles.close = function()
   local tabpage_id, anchor = vim.api.nvim_get_current_tabpage(), explorer.anchor
   H.explorer_path_history[anchor] = explorer
   H.opened_explorers[tabpage_id] = nil
+  H.latest_paths[tabpage_id] = anchor
 end
 
 MiniFiles.go_in = function()
@@ -355,7 +360,7 @@ MiniFiles.trim_left = function()
   local explorer = H.explorer_get()
   if explorer == nil then return end
 
-  explorer = H.explorer_trim_branch(explorer, 1, explorer.depth_focus - 1)
+  explorer = H.explorer_trim_branch_left(explorer)
   H.explorer_refresh(explorer)
 end
 
@@ -363,11 +368,9 @@ MiniFiles.trim_right = function()
   local explorer = H.explorer_get()
   if explorer == nil then return end
 
-  explorer = H.explorer_trim_branch(explorer, explorer.depth_focus + 1, math.huge)
+  explorer = H.explorer_trim_branch_right(explorer)
   H.explorer_refresh(explorer)
 end
-
-MiniFiles.trim_right_left = function() end
 
 MiniFiles.get_fs_entry = function(buf_id, line)
   buf_id = H.validate_opened_buffer(buf_id)
@@ -379,6 +382,8 @@ MiniFiles.get_fs_entry = function(buf_id, line)
   local path = H.path_index[path_id]
   return { path = path, fs_type = H.fs_get_type(path), name = H.fs_get_basename(path) }
 end
+
+MiniFiles.get_latest_path = function() return H.latest_paths[vim.api.nvim_get_current_tabpage()] end
 
 MiniFiles.default_filter = function(fs_entries)
   -- Nothing is filtered by default
@@ -416,6 +421,9 @@ H.explorer_path_history = {}
 -- Register of opened explorers per tabpage
 H.opened_explorers = {}
 
+-- Register of latest used paths per tabpage
+H.latest_paths = {}
+
 -- Register of opened buffer data for quick access. Tables per buffer id:
 -- - <dir_path> - path of directory which contents this buffer displays.
 -- - <win_id> - id of window this buffer is shown. Can be `nil`.
@@ -440,6 +448,7 @@ H.setup_config = function(config)
   vim.validate({
     content = { config.content, 'table' },
     mappings = { config.mappings, 'table' },
+    options = { config.options, 'table' },
     windows = { config.windows, 'table' },
   })
 
@@ -447,14 +456,17 @@ H.setup_config = function(config)
     ['content.filter'] = { config.content.filter, 'function', true },
     ['content.sort'] = { config.content.sort, 'function', true },
 
-    ['mappings.go_out'] = { config.mappings.go_out, 'string' },
     ['mappings.go_in'] = { config.mappings.go_in, 'string' },
-    ['mappings.make_anchor'] = { config.mappings.make_anchor, 'string' },
+    ['mappings.go_in_plus'] = { config.mappings.go_in_plus, 'string' },
+    ['mappings.go_out'] = { config.mappings.go_out, 'string' },
+    ['mappings.go_out_plus'] = { config.mappings.go_out_plus, 'string' },
     ['mappings.reset'] = { config.mappings.reset, 'string' },
     ['mappings.synchronize'] = { config.mappings.synchronize, 'string' },
     ['mappings.trim_left'] = { config.mappings.trim_left, 'string' },
     ['mappings.trim_right'] = { config.mappings.trim_right, 'string' },
     ['mappings.quit'] = { config.mappings.quit, 'string' },
+
+    ['options.as_default_explorer'] = { config.options.as_default_explorer, 'boolean' },
 
     ['windows.max_number'] = { config.windows.max_number, 'number' },
     ['windows.preview'] = { config.windows.preview, 'boolean' },
@@ -466,6 +478,23 @@ H.setup_config = function(config)
 end
 
 H.apply_config = function(config) MiniFiles.config = config end
+
+H.create_autocommands = function(config)
+  local augroup = vim.api.nvim_create_augroup('MiniFiles', {})
+
+  local au = function(event, pattern, callback, desc)
+    vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
+  end
+
+  if config.options.as_default_explorer then
+    -- Stop 'netrw' from showing. Needs `VimEnter` event autocommand if
+    -- this is called prior 'netrw' is set up
+    vim.cmd('silent! autocmd! FileExplorer *')
+    vim.cmd('autocmd VimEnter * ++once silent! autocmd! FileExplorer *')
+
+    au('BufEnter', '*', H.track_dir_edit, 'Track directory edit')
+  end
+end
 
 --stylua: ignore
 H.create_default_hl = function()
@@ -482,8 +511,6 @@ H.create_default_hl = function()
   hi('MiniFilesTitle',          { link = 'FloatTitle'  })
 end
 
-H.is_disabled = function() return vim.g.minifiles_disable == true or vim.b.minifiles_disable == true end
-
 H.get_config =
   function(config) return vim.tbl_deep_extend('force', MiniFiles.config, vim.b.minifiles_config or {}, config or {}) end
 
@@ -493,6 +520,29 @@ H.normalize_opts = function(explorer_opts, opts)
   opts.content.sort = opts.content.sort or MiniFiles.default_sort
 
   return opts
+end
+
+-- Autocommands ---------------------------------------------------------------
+H.track_dir_edit = function(data)
+  local buf_id = data.buf
+
+  -- Make early returns
+  if vim.b[buf_id].minifiles_processed_dir then
+    vim.api.nvim_buf_delete(buf_id, { force = true })
+    return
+  end
+
+  if vim.api.nvim_get_current_buf() ~= buf_id then return end
+
+  local path = vim.api.nvim_buf_get_name(buf_id)
+  if vim.fn.isdirectory(path) ~= 1 then return end
+
+  -- Make directory buffer disappear when it is not needed
+  vim.bo[buf_id].bufhidden = 'wipe'
+  vim.b[buf_id].minifiles_processed_dir = true
+
+  -- Open directory without history
+  vim.schedule(function() MiniFiles.open(path, false) end)
 end
 
 -- Explorers ------------------------------------------------------------------
@@ -676,9 +726,11 @@ end
 
 H.explorer_update_cursors = function(explorer)
   for _, win_id in ipairs(explorer.windows) do
-    local buf_id = vim.api.nvim_win_get_buf(win_id)
-    local dir_path = H.opened_buffers[buf_id].dir_path
-    explorer.dir_views[dir_path].cursor = vim.api.nvim_win_get_cursor(win_id)
+    if H.is_valid_win(win_id) then
+      local buf_id = vim.api.nvim_win_get_buf(win_id)
+      local dir_path = H.opened_buffers[buf_id].dir_path
+      explorer.dir_views[dir_path].cursor = vim.api.nvim_win_get_cursor(win_id)
+    end
   end
 
   return explorer
@@ -734,15 +786,24 @@ end
 H.explorer_get_buffer_depth =
   function(explorer, buf_id) return H.explorer_get_path_depth(explorer, H.opened_buffers[buf_id].dir_path) end
 
+_G.cmd_hist = {}
 H.explorer_open_file = function(explorer, path)
   if not vim.api.nvim_win_is_valid(explorer.target_window) then
     explorer.target_window = H.get_first_valid_normal_window()
   end
 
-  vim.api.nvim_win_call(explorer.target_window, function()
-    local cmd = string.format('exec "edit %s"', path)
-    vim.cmd(cmd)
-  end)
+  -- Try to use already created buffer, if present. This avoids not needed
+  -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
+  local path_buf_id
+  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+    if H.is_valid_buf(buf_id) and vim.api.nvim_buf_get_name(buf_id) == path then path_buf_id = buf_id end
+  end
+
+  if path_buf_id ~= nil then
+    vim.api.nvim_win_set_buf(explorer.target_window, path_buf_id)
+  else
+    vim.fn.win_execute(explorer.target_window, 'edit ' .. vim.fn.fnameescape(path))
+  end
 
   return explorer
 end
@@ -754,10 +815,8 @@ H.explorer_open_directory = function(explorer, path, target_depth)
   -- Truncate rest of the branch if opening another path at target depth
   local show_new_path_at_depth = path ~= explorer.branch[target_depth]
   if show_new_path_at_depth then
-    -- Update branch data
-    local branch = explorer.branch
     explorer.branch[target_depth] = path
-    explorer = H.explorer_trim_branch(explorer, target_depth + 1, math.huge)
+    explorer = H.explorer_trim_branch_right(explorer)
   end
 
   return explorer
@@ -775,21 +834,20 @@ H.explorer_open_root_parent = function(explorer)
   return H.explorer_focus_on_entry(explorer, root_parent, H.fs_get_basename(root))
 end
 
-H.explorer_trim_branch = function(explorer, from, to)
-  local cur_focus, focus_shift = explorer.depth_focus, 0
-  local new_branch = {}
-  for i = 1, #explorer.branch do
-    if from <= i and i <= to then
-      -- Adjust depth focus if branch element to the left is removed
-      focus_shift = focus_shift + (i <= cur_focus and 1 or 0)
-    else
-      table.insert(new_branch, explorer.branch[i])
-    end
+H.explorer_trim_branch_right = function(explorer)
+  for i = explorer.depth_focus + 1, #explorer.branch do
+    explorer.branch[i] = nil
   end
+  return explorer
+end
 
+H.explorer_trim_branch_left = function(explorer)
+  local new_branch = {}
+  for i = explorer.depth_focus, #explorer.branch do
+    table.insert(new_branch, explorer.branch[i])
+  end
   explorer.branch = new_branch
-  explorer.depth_focus = cur_focus - focus_shift
-
+  explorer.depth_focus = 1
   return explorer
 end
 
@@ -900,7 +958,7 @@ H.dir_view_track_cursor = vim.schedule_wrap(function(data)
   if cursor_path == path_to_right then return end
 
   -- - Truncate branch if cursor path is not aligned with what is to the right
-  explorer = H.explorer_trim_branch(explorer, buf_depth + 1, math.huge)
+  explorer = H.explorer_trim_branch_right(explorer)
 
   -- - Show preview if needed
   if explorer.opts.windows.preview and vim.fn.isdirectory(cursor_path) == 1 then
@@ -942,28 +1000,7 @@ H.buffer_create = function(dir_path, mappings)
   H.opened_buffers[buf_id] = { dir_path = dir_path }
 
   -- Make buffer mappings
-  --stylua: ignore start
-  H.map('n', mappings.go_in,       MiniFiles.go_in,       { buffer = buf_id, desc = 'Go in entry' })
-  H.map('n', mappings.go_out,      MiniFiles.go_out,      { buffer = buf_id, desc = 'Go out of directory' })
-  H.map('n', mappings.make_anchor, MiniFiles.make_anchor, { buffer = buf_id, desc = 'Make anchor' })
-  H.map('n', mappings.reset,       MiniFiles.reset,       { buffer = buf_id, desc = 'Reset' })
-  H.map('n', mappings.synchronize, MiniFiles.synchronize, { buffer = buf_id, desc = 'Synchronize' })
-  H.map('n', mappings.trim_left,   MiniFiles.trim_left,   { buffer = buf_id, desc = 'Trim branch left' })
-  H.map('n', mappings.trim_right,  MiniFiles.trim_right,  { buffer = buf_id, desc = 'Trim branch right' })
-  H.map('n', mappings.quit,        MiniFiles.close,       { buffer = buf_id, desc = 'Close' })
-
-  local go_in_visual = function()
-    local line_1, line_2 = vim.fn.line('v'), vim.fn.line('.')
-    -- Go to Normal mode. '\28\14' is an escaped version of `<C-\><C-n>`.
-    vim.cmd('normal! \28\14')
-
-    local explorer = H.explorer_get()
-    local from_line, to_line = math.min(line_1, line_2), math.max(line_1, line_2)
-    explorer = H.explorer_go_in_range(explorer, buf_id, from_line, to_line)
-    H.explorer_refresh(explorer)
-  end
-  H.map('x', mappings.go_in, go_in_visual, { buffer = buf_id, desc = 'Go right in file explorer' })
-  --stylua: ignore end
+  H.buffer_make_mappings(buf_id, mappings)
 
   -- Make buffer autocommands
   local augroup = vim.api.nvim_create_augroup('MiniFiles', { clear = false })
@@ -984,6 +1021,44 @@ H.buffer_create = function(dir_path, mappings)
   vim.api.nvim_exec_autocmds('User', { pattern = 'MiniFilesBufferCreate', data = { buf_id = buf_id } })
 
   return buf_id
+end
+
+H.buffer_make_mappings = function(buf_id, mappings)
+  local go_out_plus = function()
+    MiniFiles.go_out()
+    MiniFiles.trim_right()
+  end
+
+  local go_in_plus = function()
+    local is_at_file = MiniFiles.get_fs_entry().fs_type == 'file'
+    MiniFiles.go_in()
+    if is_at_file then MiniFiles.close() end
+  end
+
+  local go_in_visual = function()
+    local line_1, line_2 = vim.fn.line('v'), vim.fn.line('.')
+    -- Go to Normal mode. '\28\14' is an escaped version of `<C-\><C-n>`.
+    vim.cmd('normal! \28\14')
+
+    local explorer = H.explorer_get()
+    local from_line, to_line = math.min(line_1, line_2), math.max(line_1, line_2)
+    explorer = H.explorer_go_in_range(explorer, buf_id, from_line, to_line)
+    H.explorer_refresh(explorer)
+  end
+
+  --stylua: ignore start
+  H.map('n', mappings.go_in,       MiniFiles.go_in,       { buffer = buf_id, desc = 'Go in entry' })
+  H.map('n', mappings.go_in_plus,  go_in_plus,            { buffer = buf_id, desc = 'Go in entry plus' })
+  H.map('n', mappings.go_out,      MiniFiles.go_out,      { buffer = buf_id, desc = 'Go out of directory' })
+  H.map('n', mappings.go_out_plus, go_out_plus,           { buffer = buf_id, desc = 'Go out of directory plus' })
+  H.map('n', mappings.reset,       MiniFiles.reset,       { buffer = buf_id, desc = 'Reset' })
+  H.map('n', mappings.synchronize, MiniFiles.synchronize, { buffer = buf_id, desc = 'Synchronize' })
+  H.map('n', mappings.trim_left,   MiniFiles.trim_left,   { buffer = buf_id, desc = 'Trim branch left' })
+  H.map('n', mappings.trim_right,  MiniFiles.trim_right,  { buffer = buf_id, desc = 'Trim branch right' })
+  H.map('n', mappings.quit,        MiniFiles.close,       { buffer = buf_id, desc = 'Close' })
+
+  H.map('x', mappings.go_in, go_in_visual, { buffer = buf_id, desc = 'Go in selected entries' })
+  --stylua: ignore end
 end
 
 H.buffer_update = function(buf_id, dir_path, opts)
