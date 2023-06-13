@@ -2,10 +2,6 @@
 --
 -- Code:
 -- - Implement MacOS Finder with column view type of file explorer:
---     - Think about the most convenient way to "toggle hidden files, etc.".
---       Maybe `set_option()` which sets options for current explorer?
---
---     - Make `MiniFilesNormalFocused` highlight group?
 --
 -- - Implement 'oil.nvim' like file manipulation:
 --
@@ -20,6 +16,13 @@
 --         - `:vsplit .`
 --     - Should hide "scratch directory buffer" on file open.
 --     - Should delete "scratch directory buffer" if nothing opened.
+--
+-- - `refresh()`:
+--     - Supplied non-trivial `filter` and/or `sort` should force updates of
+--       all buffers.
+--
+-- - Events:
+--     - Has `data` with both `buf_id` and `win_id` (where relevant).
 --
 -- - Going to the root's parent:
 --     - Shouldn't force update of present buffers.
@@ -94,6 +97,11 @@
 ---
 --- - Highlighting is updated asynchronously with configurable debounce delay.
 ---
+--- What it doesn't do:
+--- - It does not try to be full file explorer.
+---
+--- - Built-in interactive toggle of `filter` and `sort`. See |MiniFiles-examples|.
+---
 --- # Dependencies~
 ---
 --- Suggested dependencies (provide extra functionality, will work without them):
@@ -127,6 +135,7 @@
 --- * `MiniFilesFile`
 --- * `MiniFilesNormal`
 --- * `MiniFilesTitle`
+--- * `MiniFilesTitleFocused`
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 ---
@@ -138,6 +147,12 @@
 ---@tag MiniFiles-exploration
 
 ---@tag MiniFiles-manipulation
+
+--- ?Add some examples?
+---
+--- - How to set up different toggles: "show"/"don't show" dot files, sort
+---   alphabetically without "directory first", etc.
+---@tag MiniFiles-examples
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -245,8 +260,9 @@ MiniFiles.open = function(path, use_latest, opts)
   if use_latest then explorer = H.explorer_path_history[path] end
   explorer = explorer or H.explorer_new(path)
 
-  -- Update explorer data
-  explorer.opts = H.normalize_opts(explorer.opts, opts)
+  -- Update explorer data. Don't use current explorer's data to allow more
+  -- interactive config change by modifying global/local configs.
+  explorer.opts = H.normalize_opts(nil, opts)
   explorer.target_window = vim.api.nvim_get_current_win()
 
   -- Possibly focus on file entry
@@ -260,11 +276,15 @@ MiniFiles.refresh = function(opts)
   local explorer = H.explorer_get()
   if explorer == nil then return end
 
+  -- Decide whether buffers should be forcefully updated
+  local content_opts = (opts or {}).content or {}
+  local force_update = content_opts.filter ~= nil or content_opts.sort ~= nil
+
   -- Respect explorer local options supplied inside its `open()` call but give
   -- current `opts` higher precedence
   explorer.opts = H.normalize_opts(explorer.opts, opts)
 
-  H.explorer_refresh(explorer)
+  H.explorer_refresh(explorer, force_update)
 end
 
 MiniFiles.reset = function()
@@ -287,23 +307,9 @@ MiniFiles.synchronize = function()
   local explorer = H.explorer_get()
   if explorer == nil then return end
 
-  -- Update currently shown cursors and invalidate cursors in directory views
-  -- for them to "stick" to its current path (if on path)
-  explorer = H.explorer_update_cursors(explorer)
-
-  for dir_path, dir_view in pairs(explorer.dir_views) do
-    explorer.dir_views[dir_path] = H.dir_view_encode_cursor(dir_view)
-  end
-
   -- Parse and apply file system operations
   local fs_actions = H.explorer_compute_fs_actions(explorer)
   if fs_actions ~= nil and H.fs_actions_confirm(fs_actions) then H.fs_actions_apply(fs_actions) end
-
-  -- Force content updates on all explorer buffers. Doing it for *all* of them
-  -- and not only on modified once to allow synching outside changes.
-  for dir_path, dir_view in pairs(explorer.dir_views) do
-    dir_view.children_path_ids = H.buffer_update(dir_view.buf_id, dir_path, explorer.opts)
-  end
 
   H.explorer_refresh(explorer, true)
 end
@@ -509,6 +515,7 @@ H.create_default_hl = function()
   hi('MiniFilesFile',           {})
   hi('MiniFilesNormal',         { link = 'NormalFloat' })
   hi('MiniFilesTitle',          { link = 'FloatTitle'  })
+  hi('MiniFilesTitleFocused',   { link = 'FloatTitle' })
 end
 
 H.get_config =
@@ -581,12 +588,24 @@ H.explorer_get = function(tabpage_id)
   return H.opened_explorers[tabpage_id]
 end
 
-H.explorer_refresh = function(explorer, skip_cursor_sync)
+H.explorer_refresh = function(explorer, force_update)
   explorer = H.explorer_normalize(explorer)
   if #explorer.branch == 0 then return end
+  if force_update == nil then force_update = false end
 
-  -- Possibly update cursor data in shown directory views
-  if not skip_cursor_sync then explorer = H.explorer_update_cursors(explorer) end
+  -- Update cursor data in shown directory views
+  explorer = H.explorer_update_cursors(explorer)
+
+  -- Possibly force content updates on all explorer buffers. Doing it for *all*
+  -- of them and not only on modified once to allow synch outside changes.
+  if force_update then
+    for dir_path, dir_view in pairs(explorer.dir_views) do
+      -- Encode cursors to allow them to "stick" to current entry
+      dir_view = H.dir_view_encode_cursor(dir_view)
+      dir_view.children_path_ids = H.buffer_update(dir_view.buf_id, dir_path, explorer.opts)
+      explorer.dir_views[dir_path] = dir_view
+    end
+  end
 
   -- Compute depth range which is possible to show in current window
   local depth_range = H.compute_visible_depth_range(explorer, explorer.opts)
@@ -604,7 +623,7 @@ H.explorer_refresh = function(explorer, skip_cursor_sync)
   -- Focus on proper window
   local win_focus_count = explorer.depth_focus - depth_range.from + 1
   local win_id_focused = explorer.windows[win_focus_count]
-  vim.api.nvim_set_current_win(win_id_focused)
+  H.window_focus(win_id_focused)
 
   -- Register as currently opened
   local tabpage_id = vim.api.nvim_win_get_tabpage(win_id_focused)
@@ -1018,7 +1037,7 @@ H.buffer_create = function(dir_path, mappings)
   vim.bo[buf_id].filetype = 'minifiles'
 
   -- Trigger dedicated event
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniFilesBufferCreate', data = { buf_id = buf_id } })
+  H.trigger_event('MiniFilesBufferCreate', { buf_id = buf_id })
 
   return buf_id
 end
@@ -1093,7 +1112,7 @@ H.buffer_update = function(buf_id, dir_path, opts)
   end
 
   -- Trigger dedicated event
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniFilesBufferUpdate', data = { buf_id = buf_id } })
+  H.trigger_event('MiniFilesBufferUpdate', { buf_id = buf_id, win_id = H.opened_buffers[buf_id].win_id })
 
   -- Reset buffer as not modified
   H.opened_buffers[buf_id].n_modified = -1
@@ -1193,6 +1212,9 @@ H.window_open = function(buf_id, config)
   -- Add temporary data which will be updated later
   config.row = 1
 
+  -- Ensure it works on Neovim<0.9
+  if vim.fn.has('nvim-0.9') == 0 then config.title = nil end
+
   -- Open without entering
   local win_id = vim.api.nvim_open_win(buf_id, false, config)
 
@@ -1205,10 +1227,11 @@ H.window_open = function(buf_id, config)
   vim.api.nvim_win_call(win_id, function() vim.fn.matchadd('Conceal', [[^/\d\+]]) end)
 
   -- Set permanent window highlights
-  vim.wo[win_id].winhighlight = 'NormalFloat:MiniFilesNormal,FloatTitle:MiniFilesTitle'
+  H.window_update_highlight(win_id, 'NormalFloat', 'MiniFilesNormal')
+  H.window_update_highlight(win_id, 'FloatTitle', 'MiniFilesTitle')
 
   -- Trigger dedicated event
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniFilesWindowOpen', data = { win_id = win_id } })
+  H.trigger_event('MiniFilesWindowOpen', { buf_id = buf_id, win_id = win_id })
 
   return win_id
 end
@@ -1241,11 +1264,30 @@ H.window_update = function(win_id, config)
   config.relative = 'editor'
   vim.api.nvim_win_set_config(win_id, config)
 
+  -- Reset basic highlighting (removes possible "focused" highlight group)
+  H.window_update_highlight(win_id, 'FloatTitle', 'MiniFilesTitle')
+
   -- Make sure that 'cursorline' is not overriden by `config.style`
   vim.wo[win_id].cursorline = true
 
   -- Trigger dedicated event
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniFilesWindowUpdate', data = { win_id = win_id } })
+  H.trigger_event('MiniFilesWindowUpdate', { buf_id = vim.api.nvim_win_get_buf(win_id), win_id = win_id })
+end
+
+H.window_update_highlight = function(win_id, new_from, new_to)
+  local new_entry = new_from .. ':' .. new_to
+  local replace_pattern = string.format('(%s:[^,]*)', vim.pesc(new_from))
+  local new_winhighlight, n_replace = vim.wo[win_id].winhighlight:gsub(replace_pattern, new_entry)
+  if n_replace == 0 then new_winhighlight = new_winhighlight .. ',' .. new_entry end
+
+  -- Use `pcall()` because Neovim<0.8 doesn't allow non-existing highlight
+  -- groups inside `winhighlight` (like `FloatTitle` at the time).
+  pcall(function() vim.wo[win_id].winhighlight = new_winhighlight end)
+end
+
+H.window_focus = function(win_id)
+  vim.api.nvim_set_current_win(win_id)
+  H.window_update_highlight(win_id, 'FloatTitle', 'MiniFilesTitleFocused')
 end
 
 H.window_close = function(win_id)
@@ -1281,9 +1323,7 @@ H.window_update_border_hl = function(win_id)
   local buf_id = vim.api.nvim_win_get_buf(win_id)
 
   local border_hl = H.is_modified_buffer(buf_id) and 'MiniFilesBorderModified' or 'MiniFilesBorder'
-
-  local cur_winhighlight = vim.wo[win_id].winhighlight:gsub(',FloatBorder:%w+', '')
-  vim.wo[win_id].winhighlight = string.format('%s,FloatBorder:%s', cur_winhighlight, border_hl)
+  H.window_update_highlight(win_id, 'FloatBorder', border_hl)
 end
 
 H.window_get_max_height = function()
@@ -1538,11 +1578,17 @@ H.map = function(mode, lhs, rhs, opts)
   vim.keymap.set(mode, lhs, rhs, opts)
 end
 
+H.trigger_event = function(event_name, data)
+  -- TODO: Remove after compatibility with Neovim=0.7 is dropped
+  if vim.fn.has('nvim-0.8') == 0 then data = nil end
+  vim.api.nvim_exec_autocmds('User', { pattern = event_name, data = data })
+end
+
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
 
-H.is_whitespace = function(l) return l:find('^%s*$') ~= nil end
-
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
+
+H.is_whitespace = function(l) return l:find('^%s*$') ~= nil end
 
 H.get_bufline = function(buf_id, line) return vim.api.nvim_buf_get_lines(buf_id, line - 1, line, false)[1] end
 
