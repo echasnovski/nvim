@@ -14,7 +14,25 @@ local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
 local get_lines = function(...) return child.get_lines(...) end
 local type_keys = function(...) return child.type_keys(...) end
+local poke_eventloop = function() child.api.nvim_eval('1') end
+local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
+
+-- Tweak `expect_screenshot()` to test only on Neovim>=0.9 (as it introduced
+-- titles). Use `expect_screenshot_orig()` for original testing.
+local expect_screenshot_orig = child.expect_screenshot
+child.expect_screenshot = function(...)
+  if child.fn.has('nvim-0.9') == 0 then return end
+  expect_screenshot_orig(...)
+end
+
+local mock_win_functions = function() child.cmd('source tests/dir-files/mock-win-functions.lua') end
+
+local test_dir = 'tests/dir-files'
+local make_path = function(...)
+  local path = test_dir .. '/' .. table.concat({ ... }, '/')
+  return child.fn.fnamemodify(path, ':p')
+end
 
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
@@ -26,6 +44,8 @@ T = new_set({
   hooks = {
     pre_case = function()
       child.setup()
+      mock_win_functions()
+      child.set_size(15, 80)
       load_module()
     end,
     post_once = child.stop,
@@ -126,16 +146,42 @@ T['open()'] = new_set()
 
 local open = forward_lua('MiniFiles.open')
 
-T['open()']['works'] = function() MiniTest.skip() end
+T['open()']['works with directory path'] = function()
+  open(make_path('common'))
+  child.expect_screenshot()
+end
 
-T['open()']['works with file path'] = function()
-  -- Cursor should be on file in its parent directory view
+T['open()']['works with file path'] = function() MiniTest.skip() end
+
+T['open()']['works with relative paths'] = function() MiniTest.skip() end
+
+T['open()']['focuses on file entry'] = function()
+  -- If in branch, just focus
+
+  -- If not in branch, reset
   MiniTest.skip()
 end
 
 T['open()']['works per tabpage'] = function() MiniTest.skip() end
 
-T['open()']['properly handles `config.mappings`'] = function()
+T['open()']['respects `use_latest`'] = function()
+  -- Should use latest previous state if present
+  MiniTest.skip()
+end
+
+T['open()']['validates input'] = function()
+  -- `path` should be a real path
+  MiniTest.skip()
+end
+
+T['open()'][''] = function() MiniTest.skip() end
+
+T['open()']['properly closes currently opened explorer'] = function()
+  -- Both with and without modified buffers
+  MiniTest.skip()
+end
+
+T['open()']['handles `config.mappings`'] = function()
   local has_map = function(lhs, pattern) return child.cmd_capture('nmap ' .. lhs):find(pattern) ~= nil end
 
   -- Supplying empty string should mean "don't create keymap"
@@ -146,10 +192,7 @@ T['open()']['properly handles `config.mappings`'] = function()
   eq(has_map('l', 'Go in'), false)
 end
 
-T['open()']['properly closes currently opened explorer'] = function()
-  -- Both with and without modified buffers
-  MiniTest.skip()
-end
+T['open()']['respects `vim.b.minifiles_config`'] = function() MiniTest.skip() end
 
 T['refresh()'] = new_set()
 
@@ -286,18 +329,23 @@ T['Mappings']['`close` works'] = function() MiniTest.skip() end
 
 T['Mappings']['`go_in` works'] = function() MiniTest.skip() end
 
-T['Mappings']['`go_in` works in Visual mode'] = function()
+T['Mappings']['`go_in` works in linewise Visual mode'] = function()
   -- Should open all files
 
   -- Should open only last directory with cursor moved to its entry
   MiniTest.skip()
 end
 
-T['Mappings']['`go_in_plus` works'] = function() MiniTest.skip() end
+T['Mappings']['`go_in` ignores non-linewise Visual mode'] = function() MiniTest.skip() end
+
+T['Mappings']['`go_in_plus` works'] = function()
+  -- Should not through error on non-entry (when `get_fs_entry()` returns `nil`)
+  MiniTest.skip()
+end
 
 T['Mappings']['`go_out` works'] = function() MiniTest.skip() end
 
-T['Mappings']['`go_tou_plus` works'] = function() MiniTest.skip() end
+T['Mappings']['`go_out_plus` works'] = function() MiniTest.skip() end
 
 T['Mappings']['`reset` works'] = function() MiniTest.skip() end
 

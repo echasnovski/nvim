@@ -2,14 +2,12 @@
 --
 -- Code:
 -- - Implement MacOS Finder with column view type of file explorer:
---     - ?Add per-buffer `synchronize()`?
---     - ?Implement `:w`/`:write` as `cabbrev <buffer>` to synch per buffer?
---       This might be not the best approach because following the idea "if you
---       edit buffer, then saving/writingit  should apply the changes" means
---       that a proper solution would be to track `FileWritePost`, but this
---       adds more complexity to both buffers and possibly not that trivial (as
---       its description says "After writing to a file, when **not writing the
---       whole buffer**.")
+--     - Think about proper handling of permissions:
+--         - Explicitly check and throgh message prior every fs action (read?).
+--         - Silently ignore (as is now).
+--
+--     - ?Make help window tracked from `explorer` object and not focusable?
+--       And make it `toggle_help()` instead of `show_help`?
 --
 -- - Implement 'oil.nvim' like file manipulation:
 --
@@ -771,8 +769,8 @@ H.explorer_refresh_depth_window = function(explorer, depth, win_count, win_col)
     col = win_col,
     height = vim.api.nvim_buf_line_count(dir_view.buf_id),
     width = cur_width,
-    -- Use full path relative to home directory in left most window
-    title = win_count == 1 and vim.fn.fnamemodify(dir_path, ':p:~') or H.fs_get_basename(dir_path),
+    -- Use shortened full path in left most window
+    title = win_count == 1 and H.fs_shorten_path(H.fs_full_path(dir_path)) or H.fs_get_basename(dir_path),
   }
 
   -- Prepare and register window
@@ -1108,20 +1106,27 @@ H.buffer_make_mappings = function(buf_id, mappings)
   end
 
   local go_in_plus = function()
-    local is_at_file = MiniFiles.get_fs_entry().fs_type == 'file'
+    local fs_entry = MiniFiles.get_fs_entry()
+    local is_at_file = fs_entry ~= nil and fs_entry.fs_type == 'file'
     MiniFiles.go_in()
     if is_at_file then MiniFiles.close() end
   end
 
   local go_in_visual = function()
-    local line_1, line_2 = vim.fn.line('v'), vim.fn.line('.')
-    -- Go to Normal mode. '\28\14' is an escaped version of `<C-\><C-n>`.
-    vim.cmd('normal! \28\14')
+    -- React only on linewise mode, as others can be used for editing
+    if vim.fn.mode() ~= 'V' then return mappings.go_in end
 
-    local explorer = H.explorer_get()
-    local from_line, to_line = math.min(line_1, line_2), math.max(line_1, line_2)
-    explorer = H.explorer_go_in_range(explorer, buf_id, from_line, to_line)
-    H.explorer_refresh(explorer)
+    -- Schedule actions because they are not allowed inside expression mapping
+    vim.schedule(function()
+      local line_1, line_2 = vim.fn.line('v'), vim.fn.line('.')
+      local explorer = H.explorer_get()
+      local from_line, to_line = math.min(line_1, line_2), math.max(line_1, line_2)
+      explorer = H.explorer_go_in_range(explorer, buf_id, from_line, to_line)
+      H.explorer_refresh(explorer)
+    end)
+
+    -- Go to Normal mode. '\28\14' is an escaped version of `<C-\><C-n>`.
+    return [[<C-\><C-n>]]
   end
 
   local buf_map = function(mode, lhs, rhs, desc)
@@ -1141,7 +1146,7 @@ H.buffer_make_mappings = function(buf_id, mappings)
   buf_map('n', mappings.trim_left,   MiniFiles.trim_left,   'Trim branch left')
   buf_map('n', mappings.trim_right,  MiniFiles.trim_right,  'Trim branch right')
 
-  buf_map('x', mappings.go_in, go_in_visual, 'Go in selected entries')
+  H.map('x', mappings.go_in, go_in_visual, { buffer = buf_id, desc = 'Go in selected entries', expr = true })
   --stylua: ignore end
 end
 
@@ -1467,6 +1472,8 @@ H.fs_full_path = function(path)
   return res
 end
 
+H.fs_shorten_path = function(path) return vim.fn.fnamemodify(path, ':~') end
+
 H.fs_get_type = function(path)
   local ok, stat = pcall(vim.loop.fs_stat, path)
   if not ok or stat == nil then return nil end
@@ -1493,7 +1500,7 @@ H.fs_actions_to_lines = function(fs_actions)
   local actions_per_dir = {}
 
   local get_dir_actions = function(path)
-    local dir_path = vim.fn.fnamemodify(H.fs_get_parent(path), ':~')
+    local dir_path = H.fs_shorten_path(H.fs_get_parent(path))
     local dir_actions = actions_per_dir[dir_path] or {}
     actions_per_dir[dir_path] = dir_actions
     return dir_actions
@@ -1503,7 +1510,7 @@ H.fs_actions_to_lines = function(fs_actions)
 
   for _, diff in ipairs(fs_actions.copy) do
     local dir_actions = get_dir_actions(diff.from)
-    local l = string.format('    COPY: %s to %s', get_quoted_basename(diff.from), vim.fn.fnamemodify(diff.to, ':~'))
+    local l = string.format('    COPY: %s to %s', get_quoted_basename(diff.from), H.fs_shorten_path(diff.to))
     table.insert(dir_actions, l)
   end
 
@@ -1522,7 +1529,7 @@ H.fs_actions_to_lines = function(fs_actions)
 
   for _, diff in ipairs(fs_actions.move) do
     local dir_actions = get_dir_actions(diff.from)
-    local l = string.format('    MOVE: %s to %s', get_quoted_basename(diff.from), vim.fn.fnamemodify(diff.to, ':~'))
+    local l = string.format('    MOVE: %s to %s', get_quoted_basename(diff.from), H.fs_shorten_path(diff.to))
     table.insert(dir_actions, l)
   end
 
