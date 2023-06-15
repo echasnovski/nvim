@@ -1,0 +1,29 @@
+name: Test 'mini.files'
+
+on: [push]
+
+jobs:
+  build:
+    name: Test 'mini.files'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim_version: ['v0.7.2', 'v0.8.3', 'v0.9.1', 'nightly']
+
+    steps:
+      - uses: actions/checkout@v3
+      - run: date +%F > todays-date
+      - name: Restore cache for today's nightly.
+        uses: actions/cache@v3
+        with:
+          path: _neovim
+          key: ${{ runner.os }}-x64-${{ hashFiles('todays-date') }}
+      - name: Setup neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim_version }}
+      - name: Run tests
+        run: make test_files
