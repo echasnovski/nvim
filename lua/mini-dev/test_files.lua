@@ -29,15 +29,30 @@ end
 local mock_win_functions = function() child.cmd('source tests/dir-files/mock-win-functions.lua') end
 
 local test_dir = 'tests/dir-files'
-local make_path = function(...)
+local make_test_path = function(...)
   local path = test_dir .. '/' .. table.concat({ ... }, '/')
   return child.fn.fnamemodify(path, ':p')
 end
 
+-- Common validators
+local validate_n_wins = function(n) eq(#child.api.nvim_tabpage_list_wins(0), n) end
+
+-- Common test wrappers
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
   return function(...) return child.lua_get(lua_cmd, { ... }) end
 end
+
+local open = forward_lua('MiniFiles.open')
+local close = forward_lua('MiniFiles.close')
+local go_in = forward_lua('MiniFiles.go_in')
+local go_out = forward_lua('MiniFiles.go_out')
+local trim_left = forward_lua('MiniFiles.trim_left')
+local trim_right = forward_lua('MiniFiles.trim_right')
+
+-- Data =======================================================================
+local test_dir_path = 'tests/dir-files/common'
+local test_file_path = 'tests/dir-files/common/a-file'
 
 -- Output test set ============================================================
 T = new_set({
@@ -144,44 +159,185 @@ end
 
 T['open()'] = new_set()
 
-local open = forward_lua('MiniFiles.open')
-
 T['open()']['works with directory path'] = function()
-  open(make_path('common'))
+  -- Works with relative path
+  open(test_dir_path)
+  child.expect_screenshot()
+  close()
+  validate_n_wins(1)
+
+  -- Works with absolute path
+  open(vim.fn.fnamemodify(test_dir_path, ':p'))
+  child.expect_screenshot()
+  close()
+  validate_n_wins(1)
+
+  -- Works with trailing slash
+  open(test_dir_path .. '/')
   child.expect_screenshot()
 end
 
-T['open()']['works with file path'] = function() MiniTest.skip() end
+T['open()']['works with file path'] = function()
+  -- Works with relative path
+  open(test_file_path)
+  -- Should focus on file entry
+  child.expect_screenshot()
+  close()
 
-T['open()']['works with relative paths'] = function() MiniTest.skip() end
+  -- Works with absolute path
+  open(vim.fn.fnamemodify(test_file_path, ':p'))
+  child.expect_screenshot()
+end
 
-T['open()']['focuses on file entry'] = function()
-  -- If in branch, just focus
+T['open()']['works per tabpage'] = function()
+  open(test_dir_path)
+  child.expect_screenshot()
+
+  child.cmd('tabedit')
+  open(test_dir_path .. '/a-dir')
+  child.expect_screenshot()
+
+  child.cmd('tabnext')
+  child.expect_screenshot()
+end
+
+T['open()']["uses 'nvim-web-devicons' if present"] = function()
+  -- Mock 'nvim-web-devicons'
+  child.cmd('set rtp+=tests/dir-files')
+
+  open(make_test_path('real'))
+  child.expect_screenshot()
+end
+
+T['open()']['history'] = new_set()
+
+T['open()']['history']['opens from history by default'] = function()
+  open(test_dir_path)
+  type_keys('j')
+  go_in()
+  type_keys('2j')
+  child.expect_screenshot()
+
+  close()
+  validate_n_wins(1)
+  open(test_dir_path)
+  -- Should be exactly the same, including cursors
+  child.expect_screenshot()
+end
+
+T['open()']['history']['handles external changes between calls'] = function()
+  local temp_dir = make_test_path('temp')
+  local temp_subdir = make_test_path('temp/subdir')
+  vim.fn.mkdir(temp_subdir, 'p')
+
+  MiniTest.finally(function() vim.fn.delete(temp_dir, 'rf') end)
+
+  open(temp_dir)
+  go_in()
+  child.expect_screenshot({ force = true })
+
+  close()
+  child.fn.delete(temp_subdir, 'rf')
+  open(temp_dir)
+  child.expect_screenshot({ force = true })
+end
+
+T['open()']['history']['respects `use_latest`'] = function()
+  open(test_dir_path)
+  type_keys('j')
+  go_in()
+  type_keys('2j')
+  child.expect_screenshot()
+
+  close()
+  validate_n_wins(1)
+  open(test_dir_path, false)
+  -- Should be as if opened first time
+  child.expect_screenshot()
+end
+
+T['open()']['focuses on file entry when opened from history'] = function()
+  local path = make_test_path('common/a-dir/ab-file')
+
+  -- If in branch, just focus on entry
+  open(path)
+  type_keys('j')
+  go_out()
+  child.expect_screenshot()
+
+  close()
+  open(path)
+  child.expect_screenshot()
 
   -- If not in branch, reset
+  go_out()
+  trim_right()
+  child.expect_screenshot()
+  close()
+
+  open(path)
+  child.expect_screenshot()
+end
+
+T['open()']['normalizes before first refresh when focused on file'] = function()
+  child.lua([[
+    _G.init_nvim_open_win = vim.api.nvim_open_win
+    _G.open_win_count = 0
+    vim.api.nvim_open_win = function(...)
+      _G.open_win_count = _G.open_win_count + 1
+      init_nvim_open_win(...)
+    end
+  ]])
+
+  --
   MiniTest.skip()
 end
 
-T['open()']['works per tabpage'] = function() MiniTest.skip() end
+T['open()']['normalizes before first refresh when focused on directory with `windows.preview`'] = function()
+  child.lua([[
+    _G.init_nvim_open_win = vim.api.nvim_open_win
+    _G.open_win_count = 0
+    vim.api.nvim_open_win = function(...)
+      _G.open_win_count = _G.open_win_count + 1
+      init_nvim_open_win(...)
+    end
+  ]])
 
-T['open()']['respects `use_latest`'] = function()
-  -- Should use latest previous state if present
+  --
   MiniTest.skip()
 end
 
-T['open()']['validates input'] = function()
-  -- `path` should be a real path
+T['open()']['respects `content.filter`'] = function()
+  -- Both from global `config` and `opts`
   MiniTest.skip()
 end
 
-T['open()'][''] = function() MiniTest.skip() end
-
-T['open()']['properly closes currently opened explorer'] = function()
-  -- Both with and without modified buffers
+T['open()']['respects `content.sort`'] = function()
+  -- Both from global `config` and `opts`
   MiniTest.skip()
 end
 
-T['open()']['handles `config.mappings`'] = function()
+T['open()']['respects `windows.max_number`'] = function()
+  -- Both from global `config` and `opts`
+  MiniTest.skip()
+end
+
+T['open()']['respects `windows.preview`'] = function()
+  -- Both from global `config` and `opts`
+  MiniTest.skip()
+end
+
+T['open()']['respects `windows.width_focus` and `windows.width_nofocus`'] = function()
+  -- Both from global `config` and `opts`
+  MiniTest.skip()
+end
+
+T['open()']['respects `mappings`'] = function()
+  -- Both from global `config` and `opts`
+  MiniTest.skip()
+end
+
+T['open()']['does not create mapping for emptry string'] = function()
   local has_map = function(lhs, pattern) return child.cmd_capture('nmap ' .. lhs):find(pattern) ~= nil end
 
   -- Supplying empty string should mean "don't create keymap"
@@ -190,6 +346,15 @@ T['open()']['handles `config.mappings`'] = function()
 
   eq(has_map('q', 'Close'), true)
   eq(has_map('l', 'Go in'), false)
+end
+
+T['open()']['properly closes currently opened explorer'] = function() MiniTest.skip() end
+
+T['open()']['properly closes currently opened explorer with modified buffers'] = function() MiniTest.skip() end
+
+T['open()']['validates input'] = function()
+  -- `path` should be a real path
+  expect.error(function() open('aaa') end, 'path.*not a valid path.*aaa')
 end
 
 T['open()']['respects `vim.b.minifiles_config`'] = function() MiniTest.skip() end
@@ -227,8 +392,6 @@ T['reset()']['works'] = function() MiniTest.skip() end
 
 T['close()'] = new_set()
 
-local close = forward_lua('MiniFiles.close')
-
 T['close()']['works'] = function() MiniTest.skip() end
 
 T['close()']['saves latest cursors'] = function()
@@ -239,9 +402,9 @@ end
 
 T['close()']['checks for modified buffers'] = function() MiniTest.skip() end
 
-T['go_in()'] = new_set()
+T['close()']['works after windows were closed manually'] = function() MiniTest.skip() end
 
-local go_in = forward_lua('MiniFiles.go_in')
+T['go_in()'] = new_set()
 
 T['go_in()']['works'] = function() MiniTest.skip() end
 
@@ -257,9 +420,9 @@ end
 
 T['go_out()'] = new_set()
 
-local go_out = forward_lua('MiniFiles.go_out')
-
 T['go_out()']['works'] = function() MiniTest.skip() end
+
+T['go_out()']['puts cursor on entry describing current directory'] = function() MiniTest.skip() end
 
 T['go_out()']['update root'] = new_set()
 
@@ -268,8 +431,6 @@ T['go_out()']['update root']['reuses buffers without their update'] = function()
 T['go_out()']['update root']['puts cursor on entry describing current root'] = function() MiniTest.skip() end
 
 T['trim_left()'] = new_set()
-
-local trim_left = forward_lua('MiniFiles.trim_left')
 
 T['trim_left()']['works'] = function() MiniTest.skip() end
 
@@ -323,6 +484,13 @@ T['Windows']['react on `VimResized`'] = function()
   MiniTest.skip()
 end
 
+T['Windows']['are in sync with cursor'] = function()
+  -- No trimming when moving left-right
+
+  -- Trims when going up-down
+  MiniTest.skip()
+end
+
 T['Mappings'] = new_set()
 
 T['Mappings']['`close` works'] = function() MiniTest.skip() end
@@ -359,7 +527,9 @@ T['Mappings']['`trim_right` works'] = function() MiniTest.skip() end
 
 T['File manipulation'] = new_set()
 
-T['File manipulation']['respects modified hidden buffers'] = new_set()
+T['File manipulation']['respects modified hidden buffers'] = function() MiniTest.skip() end
+
+T['File manipulation']['never shows past end of buffer'] = function() MiniTest.skip() end
 
 T['File manipulation']['works to create'] = function() MiniTest.skip() end
 

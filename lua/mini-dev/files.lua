@@ -206,12 +206,11 @@ MiniFiles.config = {
 ---   (per tabpage). Current working directory for the first time.
 MiniFiles.open = function(path, use_latest, opts)
   -- Validate path: allow only valid file system path
-  path = path or vim.fn.getcwd()
+  path = H.fs_full_path(path or vim.fn.getcwd())
 
   local fs_type = H.fs_get_type(path)
   if fs_type == nil then H.error('`path` is not a valid path ("' .. path .. '")') end
 
-  path = H.fs_full_path(path)
   -- - Allow file path to use its parent while focusing on file
   local entry_name
   if fs_type == 'file' then
@@ -577,7 +576,20 @@ end
 
 H.explorer_get = function(tabpage_id)
   tabpage_id = tabpage_id or vim.api.nvim_get_current_tabpage()
-  return H.opened_explorers[tabpage_id]
+  local res = H.opened_explorers[tabpage_id]
+
+  if H.explorer_is_visible(res) then return res end
+
+  H.opened_explorers[tabpage_id] = nil
+  return nil
+end
+
+H.explorer_is_visible = function(explorer)
+  if explorer == nil then return nil end
+  for _, win_id in ipairs(explorer.windows) do
+    if H.is_valid_win(win_id) then return true end
+  end
+  return false
 end
 
 H.explorer_refresh = function(explorer, force_update)
@@ -1264,7 +1276,7 @@ H.make_icon_getter = function()
   return function(name, fs_type)
     if fs_type == 'directory' then return '', 'MiniFilesDirectory' end
     local icon, hl = get_file_icon(name, nil, { default = false })
-    return icon or '', hl or 'MiniFilesFile'
+    return icon or '', hl or 'MiniFilesFile'
   end
 end
 
