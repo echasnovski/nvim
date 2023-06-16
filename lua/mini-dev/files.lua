@@ -9,6 +9,15 @@
 --     - ?Make help window tracked from `explorer` object and not focusable?
 --       And make it `toggle_help()` instead of `show_help`?
 --
+--     - Make `open()` to not not open unnecessary windows. Repro:
+--         - `open(path)`.
+--         - `go_in()` on directory.
+--         - `close()`.
+--         - `open(file_child)` where `file_child` is a file child of `path`.
+--           This should cause focus on a file in the first window. But as
+--           second window is no longer in sync with cursor in first window, it
+--           should not be shown in the first place.
+--
 -- - Implement 'oil.nvim' like file manipulation:
 --
 -- - Make an effort to ensure proper work on Windows and MacOS:
@@ -430,6 +439,9 @@ H.latest_paths = {}
 --   It uses number instead of boolean is to overcome `TextChanged` event on
 --   initial `buf_set_lines` (`noautocmd` doesn't quick work for this event).
 H.opened_buffers = {}
+
+-- File system information
+H.is_windows = vim.loop.os_uname().sysname == 'Windows_NT'
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -1474,30 +1486,41 @@ H.compare_fs_entries = function(a, b)
   return a.lower_name < b.lower_name
 end
 
-H.fs_child_path = function(dir, name)
-  local res = string.format('%s/%s', dir, name):gsub('//+', '/')
+H.fs_normalize_path = function(path)
+  -- Use only forward slashes (for proper work on Windows)
+  -- Don't use trailing slashes for proper 'get_parent' (account for plain '/')
+  local res = path:gsub('\\', '/'):gsub('/+', '/'):gsub('(.)/$', '%1')
   return res
 end
 
-H.fs_full_path = function(path)
-  local res = vim.fn.fnamemodify(path, ':p'):gsub('/$', '')
+H.fs_child_path = function(dir, name) return H.fs_normalize_path(string.format('%s/%s', dir, name)) end
+
+H.fs_full_path = function(path) return H.fs_normalize_path(vim.fn.fnamemodify(path, ':p')) end
+
+H.fs_shorten_path = function(path)
+  -- Replace home directory with '~'
+  path = H.fs_normalize_path(path)
+  local home_dir = H.fs_normalize_path(vim.loop.os_homedir() or '~')
+  local res = path:gsub('^' .. vim.pesc(home_dir), '~')
   return res
 end
 
-H.fs_shorten_path = function(path) return vim.fn.fnamemodify(path, ':~') end
+H.fs_get_basename = function(path) return H.fs_normalize_path(path):match('[^/]+$') end
+
+H.fs_get_parent = function(path)
+  path = H.fs_full_path(path)
+
+  -- Deal with Windows' disk root path
+  local is_top = H.is_windows and path:find('^%w:/$') ~= nil or path == '/'
+  if is_top then return nil end
+
+  return H.fs_normalize_path(path:match('^.*/'))
+end
 
 H.fs_get_type = function(path)
   local ok, stat = pcall(vim.loop.fs_stat, path)
   if not ok or stat == nil then return nil end
   return vim.fn.isdirectory(path) == 1 and 'directory' or 'file'
-end
-
-H.fs_get_basename = function(path) return vim.fn.fnamemodify(H.fs_full_path(path), ':t') end
-
-H.fs_get_parent = function(path)
-  local res = vim.fn.fnamemodify(H.fs_full_path(path), ':h')
-  if res == path then return nil end
-  return res
 end
 
 -- File system actions --------------------------------------------------------
@@ -1630,7 +1653,8 @@ H.fs_rename = H.fs_move
 
 H.rename_loaded_buffer = function(buf_id, from, to)
   if not (vim.api.nvim_buf_is_loaded(buf_id) and vim.bo[buf_id].buftype == '') then return end
-  local cur_name = vim.api.nvim_buf_get_name(buf_id)
+  -- Make sure buffer name is normalized (same as `from` and `to`)
+  local cur_name = H.fs_normalize_path(vim.api.nvim_buf_get_name(buf_id))
 
   -- Use `gsub('^' ...)` to also take into account directory renames
   local new_name = cur_name:gsub('^' .. vim.pesc(from), to)
