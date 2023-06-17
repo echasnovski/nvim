@@ -280,31 +280,51 @@ T['open()']['focuses on file entry when opened from history'] = function()
 end
 
 T['open()']['normalizes before first refresh when focused on file'] = function()
+  -- Prepare explorer state to be opened from history
+  open(make_test_path('common'))
+  go_in()
+  validate_n_wins(3)
+  close()
+
+  -- Mock `nvim_open_win()`
   child.lua([[
     _G.init_nvim_open_win = vim.api.nvim_open_win
     _G.open_win_count = 0
     vim.api.nvim_open_win = function(...)
       _G.open_win_count = _G.open_win_count + 1
-      init_nvim_open_win(...)
+      return init_nvim_open_win(...)
     end
   ]])
 
-  --
-  MiniTest.skip()
+  -- Test. Opening file in 'common' directory makes previous two-window view
+  -- not synchronized with cursor (pointing at file while right window is for
+  -- previously opened directory). Make sure that it is made one window prior
+  -- to rendering, otherwise it might result in flickering.
+  open(make_test_path('common/a-file'))
+  child.expect_screenshot()
+  eq(child.lua_get('_G.open_win_count'), 1)
 end
 
 T['open()']['normalizes before first refresh when focused on directory with `windows.preview`'] = function()
+  -- Prepare explorer state to be opened from history
+  open(test_dir_path)
+  validate_n_wins(2)
+  close()
+
+  -- Mock `nvim_open_win()`
   child.lua([[
     _G.init_nvim_open_win = vim.api.nvim_open_win
     _G.open_win_count = 0
     vim.api.nvim_open_win = function(...)
       _G.open_win_count = _G.open_win_count + 1
-      init_nvim_open_win(...)
+      return init_nvim_open_win(...)
     end
   ]])
 
-  --
-  MiniTest.skip()
+  -- Test. It should preview right away without extra window manipulations.
+  open(test_dir_path, true, { windows = { preview = true } })
+  child.expect_screenshot()
+  eq(child.lua_get('_G.open_win_count'), 2)
 end
 
 T['open()']['respects `content.filter`'] = function()

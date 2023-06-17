@@ -9,15 +9,6 @@
 --     - ?Make help window tracked from `explorer` object and not focusable?
 --       And make it `toggle_help()` instead of `show_help`?
 --
---     - Make `open()` to not not open unnecessary windows. Repro:
---         - `open(path)`.
---         - `go_in()` on directory.
---         - `close()`.
---         - `open(file_child)` where `file_child` is a file child of `path`.
---           This should cause focus on a file in the first window. But as
---           second window is no longer in sync with cursor in first window, it
---           should not be shown in the first place.
---
 -- - Implement 'oil.nvim' like file manipulation:
 --
 -- - Make an effort to ensure proper work on Windows and MacOS:
@@ -609,7 +600,8 @@ H.explorer_refresh = function(explorer, force_update)
   if #explorer.branch == 0 then return end
   if force_update == nil then force_update = false end
 
-  -- Update cursor data in shown directory views
+  -- Update cursor data in shown directory views. Do this prior buffer updates
+  -- for cursors to "stick" to current items.
   explorer = H.explorer_update_cursors(explorer)
 
   -- Possibly force content updates on all explorer buffers. Doing it for *all*
@@ -621,6 +613,13 @@ H.explorer_refresh = function(explorer, force_update)
       dir_view.children_path_ids = H.buffer_update(dir_view.buf_id, dir_path, explorer.opts)
       explorer.dir_views[dir_path] = dir_view
     end
+  end
+
+  -- Make sure that cursors point at paths to their right.
+  -- NOTE: Doing this here and not rely on `CursorMoved` autocommand ensures
+  -- that no more windows are opened than necessary (reduces flickering).
+  for depth = 1, #explorer.branch do
+    explorer = H.explorer_sync_cursor_and_branch(explorer, depth)
   end
 
   -- Compute depth range which is possible to show in current window
@@ -671,6 +670,44 @@ H.explorer_normalize = function(explorer)
   for i = cur_max_depth + 1, #explorer.windows do
     H.window_close(explorer.windows[i])
     explorer.windows[i] = nil
+  end
+
+  return explorer
+end
+
+H.explorer_sync_cursor_and_branch = function(explorer, depth)
+  -- Compute helper data while making early returns
+  if #explorer.branch < depth then return explorer end
+
+  local path, path_to_right = explorer.branch[depth], explorer.branch[depth + 1]
+  local dir_view = explorer.dir_views[path]
+  if dir_view == nil then return explorer end
+
+  local buf_id, cursor = dir_view.buf_id, dir_view.cursor
+  if cursor == nil then return explorer end
+
+  -- Compute if path at cursor and path to the right are equal (in sync)
+  local cursor_path
+  if type(cursor) == 'table' and H.is_valid_buf(buf_id) then
+    local l = H.get_bufline(buf_id, cursor[1])
+    cursor_path = H.path_index[H.match_line_path_id(l)]
+  elseif type(cursor) == 'string' then
+    cursor_path = H.fs_child_path(path, cursor)
+  else
+    return explorer
+  end
+
+  if cursor_path == path_to_right then return explorer end
+
+  -- Trim branch if cursor path is not in sync with path to the right
+  for i = depth + 1, #explorer.branch do
+    explorer.branch[i] = nil
+  end
+  explorer.depth_focus = math.min(explorer.depth_focus, #explorer.branch)
+
+  -- Show preview if needed
+  if explorer.opts.windows.preview and vim.fn.isdirectory(cursor_path) == 1 then
+    table.insert(explorer.branch, cursor_path)
   end
 
   return explorer
@@ -1052,18 +1089,14 @@ H.dir_view_track_cursor = vim.schedule_wrap(function(data)
   local buf_depth = H.explorer_get_path_depth(explorer, buf_data.dir_path)
   if buf_depth == nil then return end
 
-  local path_to_right = explorer.branch[buf_depth + 1]
-  local cursor_path = H.path_index[H.match_line_path_id(l)]
-
-  if cursor_path == path_to_right then return end
-
-  -- - Truncate branch if cursor path is not aligned with what is to the right
-  explorer = H.explorer_trim_branch_right(explorer)
-
-  -- - Show preview if needed
-  if explorer.opts.windows.preview and vim.fn.isdirectory(cursor_path) == 1 then
-    table.insert(explorer.branch, cursor_path)
+  -- Update cursor in directory view and sync it with branch
+  local dir_view = explorer.dir_views[buf_data.dir_path]
+  if dir_view ~= nil then
+    dir_view.cursor = cur_cursor
+    explorer.dir_views[buf_data.dir_path] = dir_view
   end
+
+  explorer = H.explorer_sync_cursor_and_branch(explorer, buf_depth)
 
   H.explorer_refresh(explorer)
 end)
