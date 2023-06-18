@@ -96,6 +96,7 @@
 --- # Highlight groups ~
 ---
 --- * `MiniFilesBorder`
+--- * `MiniFilesBorderModified`
 --- * `MiniFilesDirectory`
 --- * `MiniFilesFile`
 --- * `MiniFilesNormal`
@@ -116,7 +117,8 @@
 --- ?Add some examples?
 ---
 --- - How to set up different toggles: "show"/"don't show" dot files, sort
----   alphabetically without "directory first", etc.
+---   alphabetically without "directory first", etc. Basically, call
+---   |MiniFiles.refresh()| with proper `content`.
 ---@tag MiniFiles-examples
 
 ---@alias __minifiles_fs_entries table Array of file system entries. Each one is a table:
@@ -259,7 +261,7 @@ MiniFiles.refresh = function(opts)
   -- current `opts` higher precedence
   explorer.opts = H.normalize_opts(explorer.opts, opts)
 
-  H.explorer_refresh(explorer, force_update)
+  H.explorer_refresh(explorer, { force_update = force_update })
 end
 
 MiniFiles.synchronize = function()
@@ -270,7 +272,7 @@ MiniFiles.synchronize = function()
   local fs_actions = H.explorer_compute_fs_actions(explorer)
   if fs_actions ~= nil and H.fs_actions_confirm(fs_actions) then H.fs_actions_apply(fs_actions) end
 
-  H.explorer_refresh(explorer, true)
+  H.explorer_refresh(explorer, { force_update = true })
 end
 
 MiniFiles.reset = function()
@@ -286,7 +288,8 @@ MiniFiles.reset = function()
     dir_view.cursor = { 1, 0 }
   end
 
-  H.explorer_refresh(explorer)
+  -- Skip update cursors, as they are already set
+  H.explorer_refresh(explorer, { skip_update_cursor = true })
 end
 
 ---@return boolean|nil Whether closing was successful. `nil` if there was
@@ -602,18 +605,18 @@ H.explorer_is_visible = function(explorer)
   return false
 end
 
-H.explorer_refresh = function(explorer, force_update)
+H.explorer_refresh = function(explorer, opts)
   explorer = H.explorer_normalize(explorer)
   if #explorer.branch == 0 then return end
-  if force_update == nil then force_update = false end
+  opts = opts or {}
 
-  -- Update cursor data in shown directory views. Do this prior buffer updates
-  -- for cursors to "stick" to current items.
-  explorer = H.explorer_update_cursors(explorer)
+  -- Update cursor data in shown directory views. Do this prior to buffer
+  -- updates for cursors to "stick" to current items.
+  if not opts.skip_update_cursor then explorer = H.explorer_update_cursors(explorer) end
 
   -- Possibly force content updates on all explorer buffers. Doing it for *all*
   -- of them and not only on modified once to allow synch outside changes.
-  if force_update then
+  if opts.force_update then
     for dir_path, dir_view in pairs(explorer.dir_views) do
       -- Encode cursors to allow them to "stick" to current entry
       dir_view = H.dir_view_encode_cursor(dir_view)
@@ -1239,10 +1242,17 @@ H.buffer_update = function(buf_id, dir_path, opts)
   local ns_id = H.ns_id.highlight
   vim.api.nvim_buf_clear_namespace(buf_id, ns_id, 0, -1)
 
+  local set_hl = function(line, col, hl_opts) H.set_extmark(buf_id, ns_id, line, col, hl_opts) end
+
   for l_num, l in ipairs(lines) do
     local icon_start, name_start = l:match('^/%d+()%S+ ()')
-    H.set_extmark(buf_id, ns_id, l_num - 1, icon_start - 1, { hl_group = icon_hl[l_num], end_col = name_start - 1 })
-    H.set_extmark(buf_id, ns_id, l_num - 1, name_start - 1, { hl_group = name_hl[l_num], end_row = l_num, end_col = 0 })
+
+    -- NOTE: Use `right_gravity = false` for persistent highlights during edit
+    local icon_opts = { hl_group = icon_hl[l_num], end_col = name_start - 1, right_gravity = false }
+    set_hl(l_num - 1, icon_start - 1, icon_opts)
+
+    local name_opts = { hl_group = name_hl[l_num], end_row = l_num, end_col = 0, right_gravity = false }
+    set_hl(l_num - 1, name_start - 1, name_opts)
   end
 
   -- Trigger dedicated event
@@ -1274,6 +1284,7 @@ H.buffer_compute_fs_diff = function(buf_id, ref_path_ids)
     local path_from = H.path_index[path_id]
 
     local name_to = path_id ~= nil and l:sub(H.match_line_offset(l)) or l
+    -- Preserve trailing '/' to distinguish between creating file or directory
     local path_to = H.fs_child_path(dir_path, name_to) .. (vim.endswith(name_to, '/') and '/' or '')
 
     if not H.is_whitespace(name_to) and path_from ~= path_to then
