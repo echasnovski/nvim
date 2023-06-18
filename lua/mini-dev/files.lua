@@ -6,9 +6,6 @@
 --         - Explicitly check and throgh message prior every fs action (read?).
 --         - Silently ignore (as is now).
 --
---     - ?Make help window tracked from `explorer` object and not focusable?
---       And make it `toggle_help()` instead of `show_help`?
---
 -- - Implement 'oil.nvim' like file manipulation:
 --
 -- - Make an effort to ensure proper work on Windows and MacOS:
@@ -122,6 +119,10 @@
 ---   alphabetically without "directory first", etc.
 ---@tag MiniFiles-examples
 
+---@alias __minifiles_fs_entries table Array of file system entries. Each one is a table:
+---   - <name> `(string)` - basename of an entry (including extension).
+---   - <fs_type> `(string)` - one of "file" or "directory".
+
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
 ---@diagnostic disable:unused-local
@@ -161,6 +162,8 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # Content ~
+--- NOTE: `sort` can be used to also filter items.
 MiniFiles.config = {
   content = {
     filter = nil,
@@ -239,6 +242,9 @@ MiniFiles.open = function(path, use_latest, opts)
 
   -- Refresh and register as opened
   H.explorer_refresh(explorer)
+
+  -- Register latest used path
+  H.latest_paths[vim.api.nvim_get_current_tabpage()] = path
 end
 
 MiniFiles.refresh = function(opts)
@@ -315,7 +321,6 @@ MiniFiles.close = function()
   local tabpage_id, anchor = vim.api.nvim_get_current_tabpage(), explorer.anchor
   H.explorer_path_history[anchor] = explorer
   H.opened_explorers[tabpage_id] = nil
-  H.latest_paths[tabpage_id] = anchor
 
   -- Return `true` indicating success in closing
   return true
@@ -383,11 +388,13 @@ end
 
 MiniFiles.get_latest_path = function() return H.latest_paths[vim.api.nvim_get_current_tabpage()] end
 
+---@param fs_entries __minifiles_fs_entries
 MiniFiles.default_filter = function(fs_entries)
   -- Nothing is filtered by default
   return fs_entries
 end
 
+---@param fs_entries __minifiles_fs_entries
 MiniFiles.default_sort = function(fs_entries)
   -- Sort ignoring case
   local res = vim.tbl_map(
@@ -616,7 +623,7 @@ H.explorer_refresh = function(explorer, force_update)
   end
 
   -- Make sure that cursors point at paths to their right.
-  -- NOTE: Doing this here and not rely on `CursorMoved` autocommand ensures
+  -- NOTE: Doing this here and not relying on `CursorMoved` autocommand ensures
   -- that no more windows are opened than necessary (reduces flickering).
   for depth = 1, #explorer.branch do
     explorer = H.explorer_sync_cursor_and_branch(explorer, depth)
@@ -1267,7 +1274,7 @@ H.buffer_compute_fs_diff = function(buf_id, ref_path_ids)
     local path_from = H.path_index[path_id]
 
     local name_to = path_id ~= nil and l:sub(H.match_line_offset(l)) or l
-    local path_to = H.fs_child_path(dir_path, name_to)
+    local path_to = H.fs_child_path(dir_path, name_to) .. (vim.endswith(name_to, '/') and '/' or '')
 
     if not H.is_whitespace(name_to) and path_from ~= path_to then
       table.insert(res, { from = path_from, to = path_to })

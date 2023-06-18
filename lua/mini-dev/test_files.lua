@@ -26,16 +26,46 @@ child.expect_screenshot = function(...)
   expect_screenshot_orig(...)
 end
 
+-- Common mocks
 local mock_win_functions = function() child.cmd('source tests/dir-files/mock-win-functions.lua') end
 
+local mock_confirm = function(user_choice)
+  local lua_cmd = string.format(
+    [[vim.fn.confirm = function(...)
+        _G.confirm_args = { ... }
+        return %d
+      end]],
+    user_choice
+  )
+  child.lua(lua_cmd)
+end
+
+-- Test paths helpers
 local test_dir = 'tests/dir-files'
 local make_test_path = function(...)
   local path = test_dir .. '/' .. table.concat({ ... }, '/')
   return child.fn.fnamemodify(path, ':p')
 end
 
--- Common validators
+-- Common validators and helpers
 local validate_n_wins = function(n) eq(#child.api.nvim_tabpage_list_wins(0), n) end
+
+local validate_fs_entries_arg = function(x)
+  eq(vim.tbl_islist(x), true)
+  for _, val in ipairs(x) do
+    eq(type(val), 'table')
+    eq(type(val.name), 'string')
+    eq(val.fs_type == 'file' or val.fs_type == 'directory', true)
+  end
+end
+
+local validate_confirm_args = function(ref_msg_pattern, ref_choices)
+  local args = child.lua_get('_G.confirm_args')
+  expect.match(args[1], ref_msg_pattern)
+  eq(args[2], ref_choices)
+  if args[3] ~= nil then eq(args[3], 1) end
+  if args[4] ~= nil then eq(args[4], 'Question') end
+end
 
 -- Common test wrappers
 local forward_lua = function(fun_str)
@@ -234,12 +264,12 @@ T['open()']['history']['handles external changes between calls'] = function()
 
   open(temp_dir)
   go_in()
-  child.expect_screenshot({ force = true })
+  child.expect_screenshot()
 
   close()
   child.fn.delete(temp_subdir, 'rf')
   open(temp_dir)
-  child.expect_screenshot({ force = true })
+  child.expect_screenshot()
 end
 
 T['open()']['history']['respects `use_latest`'] = function()
@@ -253,6 +283,61 @@ T['open()']['history']['respects `use_latest`'] = function()
   validate_n_wins(1)
   open(test_dir_path, false)
   -- Should be as if opened first time
+  child.expect_screenshot()
+end
+
+T['open()']['history']['prefers global config before taking from history'] = function()
+  child.lua([[
+    _G.filter_starts_from_a = function(fs_entries)
+      return vim.tbl_filter(function(x) return vim.startswith(x.name, 'a') end, fs_entries)
+    end
+    _G.filter_starts_from_b = function(fs_entries)
+      return vim.tbl_filter(function(x) return vim.startswith(x.name, 'b') end, fs_entries)
+    end
+  ]])
+
+  local lua_cmd = string.format(
+    'MiniFiles.open(%s, false, { content = { filter = _G.filter_starts_from_a } })',
+    vim.inspect(test_dir_path)
+  )
+  child.lua(lua_cmd)
+  child.expect_screenshot()
+
+  close()
+  child.lua('MiniFiles.config.content.filter = _G.filter_starts_from_b')
+  open(test_dir_path, true)
+  child.expect_screenshot()
+end
+
+T['open()']['history']['stores whole branch and not only visible windows'] = function()
+  child.set_size(15, 60)
+  open(test_dir_path)
+  go_in()
+  child.expect_screenshot()
+  close()
+
+  child.set_size(15, 80)
+  -- Should show two windows
+  open(test_dir_path, true)
+  child.expect_screenshot()
+end
+
+T['open()']['history']['is shared across tabpages'] = function()
+  -- Prepare history
+  open(test_dir_path)
+  go_in()
+  child.expect_screenshot()
+  close()
+
+  -- Open in new tabpage
+  child.cmd('tabedit')
+  open(test_dir_path, true)
+  child.expect_screenshot()
+  go_out()
+  close()
+
+  child.cmd('tabnext')
+  open(test_dir_path, true)
   child.expect_screenshot()
 end
 
@@ -328,28 +413,79 @@ T['open()']['normalizes before first refresh when focused on directory with `win
 end
 
 T['open()']['respects `content.filter`'] = function()
-  -- Both from global `config` and `opts`
-  MiniTest.skip()
+  child.lua([[
+    _G.filter_arg = {}
+    MiniFiles.config.content.filter = function(fs_entries)
+      _G.filter_arg = fs_entries
+
+      -- Show only directories
+      return vim.tbl_filter(function(x) return x.fs_type == 'directory' end, fs_entries)
+    end
+  ]])
+
+  open(test_dir_path)
+  child.expect_screenshot()
+  validate_fs_entries_arg(child.lua_get('_G.filter_arg'))
+
+  -- Local value from argument should take precedence
+  child.lua([[
+    _G.filter_starts_from_a = function(fs_entries)
+      return vim.tbl_filter(function(x) return vim.startswith(x.name, 'a') end, fs_entries)
+    end
+  ]])
+
+  local lua_cmd = string.format(
+    [[MiniFiles.open(%s, false, { content = { filter = _G.filter_starts_from_a } })]],
+    vim.inspect(test_dir_path)
+  )
+  child.lua(lua_cmd)
+  child.expect_screenshot()
 end
 
 T['open()']['respects `content.sort`'] = function()
-  -- Both from global `config` and `opts`
-  MiniTest.skip()
+  child.lua([[
+    _G.sort_arg = {}
+    MiniFiles.config.content.sort = function(fs_entries)
+      _G.sort_arg = fs_entries
+
+      -- Sort alphabetically without paying attention to file system type
+      local res = vim.deepcopy(fs_entries)
+      table.sort(res, function(a, b) return a.name < b.name end)
+      return res
+    end
+  ]])
+
+  open(test_dir_path)
+  child.expect_screenshot()
+  validate_fs_entries_arg(child.lua_get('_G.sort_arg'))
+
+  -- Local value from argument should take precedence
+  child.lua([[
+    _G.sort_rev_alpha = function(fs_entries)
+      local res = vim.deepcopy(fs_entries)
+      table.sort(res, function(a, b) return a.name > b.name end)
+      return res
+    end
+  ]])
+
+  local lua_cmd =
+    string.format([[MiniFiles.open(%s, false, { content = { sort = _G.sort_rev_alpha } })]], vim.inspect(test_dir_path))
+  child.lua(lua_cmd)
+  child.expect_screenshot()
 end
 
-T['open()']['respects `windows.max_number`'] = function()
-  -- Both from global `config` and `opts`
-  MiniTest.skip()
-end
+T['open()']['`content.sort` can be used to also filter items'] = function()
+  child.lua([[
+    MiniFiles.config.content.sort = function(fs_entries)
+      -- Sort alphabetically without paying attention to file system type
+      local res = vim.tbl_filter(function(x) return x.fs_type == 'directory' end, fs_entries)
+      table.sort(res, function(a, b) return a.name > b.name end)
+      return res
+    end
+  ]])
 
-T['open()']['respects `windows.preview`'] = function()
-  -- Both from global `config` and `opts`
-  MiniTest.skip()
-end
-
-T['open()']['respects `windows.width_focus` and `windows.width_nofocus`'] = function()
-  -- Both from global `config` and `opts`
-  MiniTest.skip()
+  open(test_dir_path)
+  child.expect_screenshot()
 end
 
 T['open()']['respects `mappings`'] = function()
@@ -368,16 +504,87 @@ T['open()']['does not create mapping for emptry string'] = function()
   eq(has_map('l', 'Go in'), false)
 end
 
-T['open()']['properly closes currently opened explorer'] = function() MiniTest.skip() end
+T['open()']['respects `windows.max_number`'] = function()
+  child.lua('MiniFiles.config.windows.max_number = 1')
+  open(test_dir_path)
+  go_in()
+  child.expect_screenshot()
+  close()
 
-T['open()']['properly closes currently opened explorer with modified buffers'] = function() MiniTest.skip() end
+  -- Local value from argument should take precedence
+  open(test_dir_path, false, { windows = { max_number = 2 } })
+  go_in()
+  child.expect_screenshot()
+end
+
+T['open()']['respects `windows.preview`'] = function()
+  child.lua('MiniFiles.config.windows.preview = true')
+  open(test_dir_path)
+  child.expect_screenshot()
+  close()
+
+  -- Local value from argument should take precedence
+  open(test_dir_path, false, { windows = { preview = false } })
+  child.expect_screenshot()
+end
+
+T['open()']['respects `windows.width_focus` and `windows.width_nofocus`'] = function()
+  child.lua('MiniFiles.config.windows.width_focus = 40')
+  child.lua('MiniFiles.config.windows.width_nofocus = 10')
+  open(test_dir_path)
+  go_in()
+  child.expect_screenshot()
+  close()
+
+  -- Local value from argument should take precedence
+  open(test_dir_path, false, { windows = { width_focus = 30, width_nofocus = 20 } })
+  go_in()
+  child.expect_screenshot()
+end
+
+T['open()']['properly closes currently opened explorer'] = function()
+  local path_1, path_2 = make_test_path('common'), make_test_path('common/a-dir')
+  open(path_1)
+  go_in()
+  validate_n_wins(3)
+
+  -- Should properly close current opened explorer (at least save to history)
+  open(path_2)
+  close()
+
+  open(path_1, true)
+  child.expect_screenshot()
+end
+
+T['open()']['properly closes currently opened explorer with modified buffers'] = function()
+  child.set_size(100, 100)
+
+  local path_1, path_2 = make_test_path('common'), make_test_path('common/a-dir')
+  open(path_1)
+  type_keys('o', 'hello')
+
+  -- Should mention modified buffers and ask for confirmation
+  mock_confirm(1)
+  open(path_2)
+  validate_confirm_args('modified buffer.*close without sync', '&Yes\n&No')
+end
 
 T['open()']['validates input'] = function()
   -- `path` should be a real path
   expect.error(function() open('aaa') end, 'path.*not a valid path.*aaa')
 end
 
-T['open()']['respects `vim.b.minifiles_config`'] = function() MiniTest.skip() end
+T['open()']['respects `vim.b.minifiles_config`'] = function()
+  child.lua([[
+    _G.filter_starts_from_a = function(fs_entries)
+      return vim.tbl_filter(function(x) return vim.startswith(x.name, 'a') end, fs_entries)
+    end
+  ]])
+  child.lua('vim.b.minifiles_config = { content = { filter = _G.filter_starts_from_a } }')
+
+  open(test_dir_path)
+  child.expect_screenshot()
+end
 
 T['refresh()'] = new_set()
 
@@ -480,6 +687,8 @@ local get_latest_path = forward_lua('MiniFiles.get_latest_path')
 
 T['get_latest_path()']['works'] = function() MiniTest.skip() end
 
+T['get_latest_path()']['is updated on `open()`'] = function() MiniTest.skip() end
+
 T['default_filter()'] = new_set()
 
 local default_filter = forward_lua('MiniFiles.default_filter')
@@ -499,21 +708,28 @@ T['File exploration']['works'] = function() MiniTest.skip() end
 
 T['Windows'] = new_set()
 
-T['Windows']['react on `VimResized`'] = function()
-  -- Both increasing and decreasing dimensions
-  MiniTest.skip()
-end
+T['Windows']['correctly computes part of branch to show'] = function() MiniTest.skip() end
 
-T['Windows']['are in sync with cursor'] = function()
+T['Windows']['is in sync with cursor'] = function()
   -- No trimming when moving left-right
 
   -- Trims when going up-down
   MiniTest.skip()
 end
 
+T['Windows']['properly previews'] = function() MiniTest.skip() end
+
+T['Windows']['reacts on `VimResized`'] = function()
+  -- Both increasing and decreasing dimensions
+  MiniTest.skip()
+end
+
 T['Mappings'] = new_set()
 
-T['Mappings']['`close` works'] = function() MiniTest.skip() end
+T['Mappings']['`close` works'] = function()
+  -- Both with default and custom one
+  MiniTest.skip()
+end
 
 T['Mappings']['`go_in` works'] = function() MiniTest.skip() end
 
