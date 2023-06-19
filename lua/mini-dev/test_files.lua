@@ -45,6 +45,11 @@ local test_dir = 'tests/dir-files'
 
 local join_path = function(...) return table.concat({ ... }, '/') end
 
+local full_path = function(...)
+  local res = vim.fn.fnamemodify(join_path(...), ':p'):gsub('(.)/$', '%1')
+  return res
+end
+
 local make_test_path = function(...)
   local path = join_path(test_dir, join_path(...))
   return child.fn.fnamemodify(path, ':p')
@@ -59,11 +64,11 @@ local make_temp_dir = function(name, children)
 
   -- Create children
   for _, path in ipairs(children) do
-    local full_path = temp_dir .. '/' .. path
+    local path_ext = temp_dir .. '/' .. path
     if vim.endswith(path, '/') then
-      vim.fn.mkdir(full_path)
+      vim.fn.mkdir(path_ext)
     else
-      vim.fn.writefile({}, full_path)
+      vim.fn.writefile({}, path_ext)
     end
   end
 
@@ -79,8 +84,9 @@ local validate_fs_entries_arg = function(x)
   eq(vim.tbl_islist(x), true)
   for _, val in ipairs(x) do
     eq(type(val), 'table')
-    eq(type(val.name), 'string')
     eq(val.fs_type == 'file' or val.fs_type == 'directory', true)
+    eq(type(val.name), 'string')
+    eq(type(val.path), 'string')
   end
 end
 
@@ -91,6 +97,11 @@ local validate_confirm_args = function(ref_msg_pattern, ref_choices)
   if args[3] ~= nil then eq(args[3], 1) end
   if args[4] ~= nil then eq(args[4], 'Question') end
 end
+
+local is_file_in_buffer =
+  function(buf_id, path) return string.find(child.api.nvim_buf_get_name(buf_id), vim.pesc(path) .. '$') ~= nil end
+
+local is_file_in_window = function(win_id, path) return is_file_in_buffer(child.api.nvim_win_get_buf(win_id), path) end
 
 -- Common test wrappers
 local forward_lua = function(fun_str)
@@ -105,7 +116,7 @@ local go_out = forward_lua('MiniFiles.go_out')
 local trim_left = forward_lua('MiniFiles.trim_left')
 local trim_right = forward_lua('MiniFiles.trim_right')
 
--- Extmark helpers
+-- Extmark helper
 local get_extmarks_hl = function()
   local ns_id = child.api.nvim_get_namespaces()['MiniFilesHighlight']
   local extmarks = child.api.nvim_buf_get_extmarks(0, ns_id, 0, -1, { details = true })
@@ -115,6 +126,17 @@ end
 -- Data =======================================================================
 local test_dir_path = 'tests/dir-files/common'
 local test_file_path = 'tests/dir-files/common/a-file'
+
+local test_fs_entries = {
+  -- Intentionally in proper order
+  { fs_type = 'directory', name = '.a-dir', path = full_path('.a-dir') },
+  { fs_type = 'directory', name = 'a-dir', path = full_path('a-dir') },
+  { fs_type = 'directory', name = 'b-dir', path = full_path('b-dir') },
+  { fs_type = 'file', name = '.a-file', path = full_path('.a-file') },
+  { fs_type = 'file', name = 'a-file', path = full_path('a-file') },
+  { fs_type = 'file', name = 'A-file-2', path = full_path('A-file-2') },
+  { fs_type = 'file', name = 'b-file', path = full_path('b-file') },
+}
 
 -- Output test set ============================================================
 T = new_set({
@@ -263,6 +285,13 @@ T['open()']['works per tabpage'] = function()
   child.expect_screenshot()
 end
 
+T['open()']['handles problematic entry names'] = function()
+  local temp_dir = make_temp_dir('temp', { '%a bad-file-name', 'a bad-dir.name/' })
+
+  open(temp_dir)
+  child.expect_screenshot()
+end
+
 T['open()']["uses 'nvim-web-devicons' if present"] = function()
   -- Mock 'nvim-web-devicons'
   child.cmd('set rtp+=tests/dir-files')
@@ -371,6 +400,31 @@ T['open()']['history']['is shared across tabpages'] = function()
   child.cmd('tabnext')
   open(test_dir_path, true)
   child.expect_screenshot()
+end
+
+T['open()']['history']['updates target window on every call'] = function()
+  -- Prepare windows
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.cmd('wincmd v')
+  local win_id_2 = child.api.nvim_get_current_win()
+  eq(win_id_1 ~= win_id_2, true)
+
+  -- Put explorer in history which opened in current window
+  open(test_file_path)
+  go_in()
+  close()
+  eq(is_file_in_window(win_id_1, test_file_path), false)
+  eq(is_file_in_window(win_id_2, test_file_path), true)
+
+  child.api.nvim_win_set_buf(win_id_2, child.api.nvim_win_get_buf(win_id_1))
+
+  -- New `open()` call should register new target window
+  child.api.nvim_set_current_win(win_id_1)
+  open(test_file_path)
+  go_in()
+  close()
+  eq(is_file_in_window(win_id_1, test_file_path), true)
+  eq(is_file_in_window(win_id_2, test_file_path), false)
 end
 
 T['open()']['focuses on file entry when opened from history'] = function()
@@ -636,8 +690,6 @@ T['refresh()']['works'] = function()
   child.expect_screenshot()
 end
 
-T['refresh()']['works when no explorer is opened'] = function() expect.no_error(refresh) end
-
 T['refresh()']['preserves explorer options'] = function()
   open(test_dir_path, false, { windows = { width_focus = 45, width_nofocus = 5 } })
   go_in()
@@ -695,6 +747,8 @@ T['refresh()']['updates buffers with non-`nil` `filter` or `sort`'] = function()
   child.expect_screenshot()
 end
 
+T['refresh()']['works when no explorer is opened'] = function() expect.no_error(refresh) end
+
 -- More extensive testing is done in 'File Manipulation'
 T['synchronize()'] = new_set()
 
@@ -727,8 +781,6 @@ T['synchronize()']['works to apply file system actions'] = function()
   synchronize()
   eq(vim.fn.filereadable(new_file_path), 1)
 end
-
-T['synchronize()']['works when no explorer is opened'] = function() expect.no_error(synchronize) end
 
 T['synchronize()']['should follow cursor on current entry path'] = function()
   local temp_dir = make_temp_dir('temp', { 'dir/', 'file' })
@@ -768,6 +820,8 @@ T['synchronize()']['should follow cursor on new path'] = function()
   validate_cur_line(1)
 end
 
+T['synchronize()']['works when no explorer is opened'] = function() expect.no_error(synchronize) end
+
 T['reset()'] = new_set()
 
 local reset = forward_lua('MiniFiles.reset')
@@ -781,8 +835,6 @@ T['reset()']['works'] = function()
   reset()
   child.expect_screenshot()
 end
-
-T['reset()']['works when no explorer is opened'] = function() expect.no_error(reset) end
 
 T['reset()']['works when anchor is not in branch'] = function()
   open(join_path(test_dir_path, 'a-dir'))
@@ -814,6 +866,8 @@ T['reset()']['resets all cursors'] = function()
   validate_cur_line(1)
 end
 
+T['reset()']['works when no explorer is opened'] = function() expect.no_error(reset) end
+
 T['close()'] = new_set()
 
 T['close()']['works'] = function()
@@ -842,8 +896,6 @@ T['close()']['works per tabpage'] = function()
   child.expect_screenshot()
 end
 
-T['close()']['works when no explorer is opened'] = function() eq(close(), vim.NIL) end
-
 T['close()']['checks for modified buffers'] = function()
   open(test_dir_path)
   type_keys('o', 'new', '<Esc>')
@@ -861,39 +913,145 @@ T['close()']['checks for modified buffers'] = function()
   child.expect_screenshot()
 end
 
+T['close()']['works when no explorer is opened'] = function() eq(close(), vim.NIL) end
+
 T['go_in()'] = new_set()
 
-T['go_in()']['works'] = function() MiniTest.skip() end
+T['go_in()']['works on file'] = function()
+  open(test_dir_path)
+  type_keys('/', [[\.a-file]], '<CR>')
+  go_in()
+  close()
+
+  expect.match(child.api.nvim_buf_get_name(0), '%.a%-file$')
+  eq(get_lines(), { '.a-file' })
+end
+
+T['go_in()']['works on files with problematic names'] = function()
+  local bad_name = '%a bad-file-name'
+  local temp_dir = make_temp_dir('temp', { bad_name })
+  vim.fn.writefile({ 'aaa' }, join_path(temp_dir, bad_name))
+
+  open(temp_dir)
+  go_in()
+  close()
+
+  eq(is_file_in_buffer(0, bad_name), true)
+  eq(get_lines(), { 'aaa' })
+end
+
+T['go_in()']['uses already opened buffer without `:edit`'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file' })
+  local file_path = join_path(temp_dir, 'file')
+
+  child.cmd('edit ' .. vim.fn.fnameescape(file_path))
+  local buf_id = child.api.nvim_get_current_buf()
+
+  open(temp_dir)
+  child.fn.writefile({ 'New changes' }, file_path)
+  go_in()
+  -- If `:edit`  was reused, then content would have changed
+  eq(child.api.nvim_buf_get_lines(buf_id, 0, -1, false), { '' })
+end
+
+T['go_in()']['uses proper target window'] = function()
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.cmd('wincmd v')
+  local win_id_2 = child.api.nvim_get_current_win()
+  eq(win_id_1 ~= win_id_2, true)
+
+  open(test_file_path)
+  go_in()
+  eq(is_file_in_window(win_id_1, test_file_path), false)
+  eq(is_file_in_window(win_id_2, test_file_path), true)
+end
+
+T['go_in()']['works if target window is not valid'] = function()
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.cmd('wincmd v')
+  local win_id_2 = child.api.nvim_get_current_win()
+  eq(win_id_1 ~= win_id_2, true)
+
+  open(test_file_path)
+  child.api.nvim_win_close(win_id_2, true)
+  go_in()
+  eq(is_file_in_window(win_id_1, test_file_path), true)
+end
+
+T['go_in()']['works on directory'] = function()
+  open(test_dir_path)
+
+  -- Should open if not already visible
+  go_in()
+  child.expect_screenshot()
+
+  -- Should focus if already visible
+  go_out()
+  go_in()
+  child.expect_screenshot()
+end
 
 T['go_in()']['works when no explorer is opened'] = function() expect.no_error(go_in) end
 
-T['go_in()']['works on files with "bad names"'] = function()
-  -- Like files with names containing space or `%`
-  MiniTest.skip()
-end
-
-T['go_in()']['can be applied consecutively on file'] = function()
-  -- This might be an issue with set up auto-root from 'mini.misc'
-  MiniTest.skip()
-end
-
 T['go_out()'] = new_set()
 
-T['go_out()']['works'] = function() MiniTest.skip() end
+T['go_out()']['works on not branch root'] = function()
+  open(test_dir_path)
+  type_keys('j')
+  go_in()
+
+  -- Should focus parent directory with cursor pointing on entry to the right
+  go_out()
+  child.expect_screenshot()
+end
+
+T['go_out()']['works on branch root'] = function()
+  local path = make_test_path('common', 'a-dir')
+  open(path)
+
+  -- Should focus parent directory with cursor pointing on entry to the right
+  -- Should also preserve visibility of current directory
+  go_out()
+  child.expect_screenshot()
+end
+
+T['go_out()']['root update reuses buffers without their update'] = function()
+  local temp_dir = make_temp_dir('temp', { 'dir/' })
+  local path = join_path(temp_dir, 'dir')
+
+  open(path)
+  child.fn.writefile({}, join_path(path, 'file'))
+  go_out()
+  -- Present buffer should not be updated with new file system information
+  child.expect_screenshot()
+end
 
 T['go_out()']['works when no explorer is opened'] = function() expect.no_error(go_out) end
 
-T['go_out()']['puts cursor on entry describing current directory'] = function() MiniTest.skip() end
-
-T['go_out()']['update root'] = new_set()
-
-T['go_out()']['update root']['reuses buffers without their update'] = function() MiniTest.skip() end
-
-T['go_out()']['update root']['puts cursor on entry describing current root'] = function() MiniTest.skip() end
-
 T['trim_left()'] = new_set()
 
-T['trim_left()']['works'] = function() MiniTest.skip() end
+T['trim_left()']['works'] = function()
+  open(make_test_path('nested'))
+  go_in()
+  go_in()
+  child.expect_screenshot()
+
+  trim_left()
+  child.expect_screenshot()
+end
+
+T['trim_left()']['works when in the middle of the branch'] = function()
+  child.lua('MiniFiles.config.windows.width_focus = 20')
+
+  open(make_test_path('nested'))
+  go_in()
+  go_in()
+  go_out()
+  child.expect_screenshot()
+
+  trim_left()
+  child.expect_screenshot()
+end
 
 T['trim_left()']['works when no explorer is opened'] = function() expect.no_error(trim_left) end
 
@@ -901,7 +1059,30 @@ T['trim_right()'] = new_set()
 
 local trim_right = forward_lua('MiniFiles.trim_right')
 
-T['trim_right()']['works'] = function() MiniTest.skip() end
+T['trim_right()']['works'] = function()
+  open(make_test_path('nested'))
+  go_in()
+  go_in()
+  go_out()
+  go_out()
+  child.expect_screenshot()
+
+  trim_right()
+  child.expect_screenshot()
+end
+
+T['trim_right()']['works when in the middle of the branch'] = function()
+  child.lua('MiniFiles.config.windows.width_focus = 20')
+
+  open(make_test_path('nested'))
+  go_in()
+  go_in()
+  go_out()
+  child.expect_screenshot()
+
+  trim_right()
+  child.expect_screenshot()
+end
 
 T['trim_right()']['works when no explorer is opened'] = function() expect.no_error(trim_right) end
 
@@ -909,44 +1090,161 @@ T['show_help()'] = new_set()
 
 local show_help = forward_lua('MiniFiles.show_help')
 
-T['show_help()']['works'] = function() MiniTest.skip() end
+T['show_help()']['works'] = function()
+  child.set_size(20, 60)
+  open(test_dir_path)
+  local win_id_explorer = child.api.nvim_get_current_win()
+
+  type_keys('2j')
+
+  show_help()
+  child.expect_screenshot()
+
+  -- Should focus on help window
+  eq(child.api.nvim_get_current_win() ~= win_id_explorer, true)
+
+  -- Pressing `q` should close help window and focus on explorer at same line
+  type_keys('q')
+  child.expect_screenshot()
+end
+
+T['show_help()']['opens relatively current window'] = function()
+  child.set_size(20, 60)
+  child.lua('MiniFiles.config.windows.width_focus = 30')
+
+  open(test_dir_path)
+  go_in()
+
+  show_help()
+  child.expect_screenshot()
+end
+
+T['show_help()']['handles non-default mappings'] = function()
+  child.set_size(20, 60)
+  child.lua('MiniFiles.config.mappings.go_in = ""')
+  child.lua('MiniFiles.config.mappings.go_in_plus = "l"')
+
+  open(test_dir_path)
+  show_help()
+  child.expect_screenshot()
+end
+
+T['show_help()']['adjusts window width'] = function()
+  child.set_size(20, 60)
+  child.lua('MiniFiles.config.mappings.go_in = "<C-l>"')
+
+  open(test_dir_path)
+  show_help()
+  child.expect_screenshot()
+end
 
 T['show_help()']['works when no explorer is opened'] = function() expect.no_error(show_help) end
-
-T['show_help()']['handles empty mappings'] = function() MiniTest.skip() end
 
 T['get_fs_entry()'] = new_set()
 
 local get_fs_entry = forward_lua('MiniFiles.get_fs_entry')
 
-T['get_fs_entry()']['works'] = function() MiniTest.skip() end
+T['get_fs_entry()']['works'] = function()
+  open(test_dir_path)
+  local buf_id = child.api.nvim_get_current_buf()
+
+  -- Directory
+  local dir_res = { fs_type = 'directory', name = '.a-dir', path = full_path(test_dir_path, '.a-dir') }
+  eq(get_fs_entry(buf_id, 1), dir_res)
+
+  -- - Should use current cursor line by default
+  eq(get_fs_entry(), dir_res)
+
+  -- - Should allow 0 as buffer id
+  eq(get_fs_entry(0, 1), dir_res)
+
+  -- File
+  local file_res = { fs_type = 'file', name = '.a-file', path = full_path(test_dir_path, '.a-file') }
+  eq(get_fs_entry(buf_id, 4), file_res)
+
+  -- User modified line. Should return "original" entry data (as long as
+  -- entry's path id is not modified)
+  set_cursor(4, 0)
+  type_keys('A', '111', '<Esc>')
+  eq(get_fs_entry(buf_id, 4), file_res)
+
+  -- User created line
+  type_keys('o', 'new_entry', '<Esc>')
+  eq(get_fs_entry(buf_id, 5), vim.NIL)
+end
+
+T['get_fs_entry()']['validates input'] = function()
+  expect.error(function() get_fs_entry() end, 'buf_id.*opened directory buffer')
+
+  open(test_dir_path)
+  expect.error(function() get_fs_entry(0, 1000) end, 'line.*valid line number in buffer %d')
+end
 
 T['get_latest_path()'] = new_set()
 
 local get_latest_path = forward_lua('MiniFiles.get_latest_path')
 
-T['get_latest_path()']['works'] = function() MiniTest.skip() end
+T['get_latest_path()']['works'] = function()
+  -- Initially should return `nil`
+  eq(get_latest_path(), vim.NIL)
 
-T['get_latest_path()']['is updated on `open()`'] = function() MiniTest.skip() end
+  -- Should be updated after `open`
+  open(test_dir_path)
+  eq(get_latest_path(), full_path(test_dir_path))
+
+  -- Should work after `close`
+  close()
+  eq(get_latest_path(), full_path(test_dir_path))
+
+  -- Should work per tabpage
+  child.cmd('tabedit')
+  eq(get_latest_path(), vim.NIL)
+
+  -- Should return parent path for file path (as it is anchor path)
+  local file_path = join_path(test_dir_path, 'a-file')
+  open(file_path)
+  eq(get_latest_path(), full_path(test_dir_path))
+end
 
 T['default_filter()'] = new_set()
 
 local default_filter = forward_lua('MiniFiles.default_filter')
 
-T['default_filter()']['works'] = function() MiniTest.skip() end
+T['default_filter()']['works'] = function()
+  -- Should not filter anything out
+  eq(default_filter(test_fs_entries), test_fs_entries)
+end
 
 T['default_sort()'] = new_set()
 
 local default_sort = forward_lua('MiniFiles.default_sort')
 
-T['default_sort()']['works'] = function() MiniTest.skip() end
+T['default_sort()']['works'] = function()
+  local t = test_fs_entries
+  local fs_entries_shuffled = { t[1], t[7], t[6], t[3], t[5], t[2], t[4] }
+  eq(default_sort(fs_entries_shuffled), test_fs_entries)
+end
 
 -- Integration tests ==========================================================
-T['File exploration'] = new_set()
-
-T['File exploration']['works'] = function() MiniTest.skip() end
-
 T['Windows'] = new_set()
+
+T['Windows']['reuses buffers for hidden directories'] = function()
+  open(test_dir_path)
+  go_in()
+  local buf_id_ref = child.api.nvim_get_current_buf()
+
+  -- Open another directory at this depth
+  go_out()
+  type_keys('j')
+  go_in()
+
+  -- Open again initial directory at this depth. Should reuse buffer.
+  go_out()
+  type_keys('k')
+  go_in()
+
+  eq(child.api.nvim_get_current_buf(), buf_id_ref)
+end
 
 T['Windows']['does not wrap content'] = function()
   child.set_size(10, 20)
@@ -1180,39 +1478,344 @@ end
 T['Mappings'] = new_set()
 
 T['Mappings']['`close` works'] = function()
-  -- Both with default and custom one
-  MiniTest.skip()
+  -- Default
+  open(test_dir_path)
+  validate_n_wins(2)
+  type_keys('q')
+  validate_n_wins(1)
+  close()
+
+  -- User-supplied
+  open(test_dir_path, false, { mappings = { close = 'Q' } })
+  validate_n_wins(2)
+  type_keys('Q')
+  validate_n_wins(1)
+  close()
+
+  -- Empty
+  open(test_dir_path, false, { mappings = { close = '' } })
+  validate_n_wins(2)
+  -- - Needs second `q` to unblock child process after built-in `q`
+  type_keys('q', 'q')
+  validate_n_wins(2)
 end
 
-T['Mappings']['`go_in` works'] = function() MiniTest.skip() end
+T['Mappings']['`go_in` works'] = function()
+  -- Default
+  open(test_dir_path)
+  validate_n_wins(2)
+  type_keys('l')
+  child.expect_screenshot()
+  close()
+
+  -- User-supplied
+  open(test_dir_path, false, { mappings = { go_in = 'Q' } })
+  validate_n_wins(2)
+  type_keys('Q')
+  validate_n_wins(3)
+  close()
+
+  -- Empty
+  open(test_dir_path, false, { mappings = { go_in = '' } })
+  validate_n_wins(2)
+  type_keys('l')
+  validate_n_wins(2)
+end
 
 T['Mappings']['`go_in` works in linewise Visual mode'] = function()
-  -- Should open all files
+  -- DIsable statusline for more portable screenshots
+  child.o.laststatus = 0
 
-  -- Should open only last directory with cursor moved to its entry
-  MiniTest.skip()
+  local has_opened_buffer = function(name)
+    local path = join_path(test_dir_path, name)
+    for _, buf_id in ipairs(child.api.nvim_list_bufs()) do
+      if is_file_in_buffer(buf_id, path) then return true end
+    end
+    return false
+  end
+
+  -- Should open all files
+  open(test_dir_path)
+  set_cursor(4, 0)
+  type_keys('V', '2j')
+
+  type_keys('l')
+  eq(has_opened_buffer('.a-file'), true)
+  eq(has_opened_buffer('a-file'), true)
+  eq(has_opened_buffer('A-file-2'), true)
+  -- - Should go back in Normal mode
+  eq(child.fn.mode(), 'n')
+
+  -- Should go in only last directory with cursor moved to its entry
+  set_cursor(3, 0)
+  type_keys('V', 'k')
+  child.expect_screenshot()
+
+  type_keys('l')
+  child.expect_screenshot()
+  eq(child.fn.mode(), 'n')
+
+  -- Should work when selection contains both files and directories
+  -- Cursor in initial window still should be moved to target entry
+  close()
+  child.cmd('%bwipeout')
+
+  open(test_dir_path, false)
+  set_cursor(3, 0)
+  type_keys('V', 'j')
+
+  type_keys('l')
+  child.expect_screenshot()
+  eq(has_opened_buffer('.a-file'), true)
+  eq(child.fn.mode(), 'n')
 end
 
-T['Mappings']['`go_in` ignores non-linewise Visual mode'] = function() MiniTest.skip() end
+T['Mappings']['`go_in` ignores non-linewise Visual mode'] = function()
+  local validate = function(mode_key)
+    open(test_dir_path, false)
+    validate_n_wins(2)
+
+    type_keys(mode_key, 'l')
+    validate_n_wins(2)
+    eq(child.fn.mode(), mode_key)
+
+    child.ensure_normal_mode()
+    close()
+  end
+
+  validate('v')
+  -- '\22' is an escaped version of `<C-v>`
+  validate('\22')
+end
 
 T['Mappings']['`go_in_plus` works'] = function()
-  -- Should not through error on non-entry (when `get_fs_entry()` returns `nil`)
-  MiniTest.skip()
+  -- Disable statusline for more portable screenshots
+  child.o.laststatus = 0
+
+  -- On directories should be the same as `go_in`
+  -- Default
+  open(test_dir_path)
+  validate_n_wins(2)
+  type_keys('L')
+  child.expect_screenshot()
+  close()
+
+  -- User-supplied
+  open(test_dir_path, false, { mappings = { go_in_plus = 'Q' } })
+  validate_n_wins(2)
+  type_keys('Q')
+  validate_n_wins(3)
+  close()
+
+  -- Empty
+  open(test_dir_path, false, { mappings = { go_in_plus = '' } })
+  validate_n_wins(2)
+  type_keys('L')
+  validate_n_wins(2)
 end
 
-T['Mappings']['`go_out` works'] = function() MiniTest.skip() end
+T['Mappings']['`go_in_plus` works on files'] = function()
+  open(test_file_path)
+  validate_n_wins(2)
 
-T['Mappings']['`go_out_plus` works'] = function() MiniTest.skip() end
+  -- Should open file and close explorer
+  type_keys('L')
+  validate_n_wins(1)
+  eq(is_file_in_buffer(0, test_file_path), true)
+end
 
-T['Mappings']['`reset` works'] = function() MiniTest.skip() end
+T['Mappings']['`go_in_plus` works on non-path entry'] = function()
+  local temp_dir = make_temp_dir('temp', {})
+  open(temp_dir)
 
-T['Mappings']['`show_help` works'] = function() MiniTest.skip() end
+  -- Empty line
+  type_keys('L')
+  eq(child.api.nvim_get_mode().blocking, false)
 
-T['Mappings']['`synchronize` works'] = function() MiniTest.skip() end
+  -- Non-empty line
+  type_keys('i', 'new-entry', '<Esc>')
+  type_keys('L')
+  eq(child.api.nvim_get_mode().blocking, false)
+end
 
-T['Mappings']['`trim_left` works'] = function() MiniTest.skip() end
+T['Mappings']['`go_out` works'] = function()
+  local path = make_test_path('common', 'a-dir')
 
-T['Mappings']['`trim_right` works'] = function() MiniTest.skip() end
+  -- Default
+  open(path)
+  validate_n_wins(2)
+  type_keys('h')
+  child.expect_screenshot()
+  close()
+
+  -- User-supplied
+  open(path, false, { mappings = { go_out = 'Q' } })
+  validate_n_wins(2)
+  type_keys('Q')
+  validate_n_wins(3)
+  close()
+
+  -- Empty
+  open(path, false, { mappings = { go_out = '' } })
+  validate_n_wins(2)
+  type_keys('h')
+  validate_n_wins(2)
+end
+
+T['Mappings']['`go_out_plus` works'] = function()
+  local path = make_test_path('common', 'a-dir')
+
+  -- Default
+  open(path)
+  validate_n_wins(2)
+  type_keys('H')
+  child.expect_screenshot()
+  close()
+
+  -- User-supplied
+  open(path, false, { mappings = { go_out_plus = 'Q' } })
+  validate_n_wins(2)
+  type_keys('Q')
+  child.expect_screenshot()
+  close()
+
+  -- Empty
+  open(path, false, { mappings = { go_out_plus = '' } })
+  validate_n_wins(2)
+  type_keys('H')
+  child.expect_screenshot()
+end
+
+T['Mappings']['`reset` works'] = function()
+  local prepare = function(...)
+    close()
+    open(...)
+    type_keys('j')
+    go_in()
+  end
+
+  -- Default
+  prepare(test_dir_path)
+  validate_n_wins(3)
+  type_keys('<BS>')
+  child.expect_screenshot()
+
+  -- User-supplied
+  prepare(test_dir_path, false, { mappings = { reset = 'Q' } })
+  validate_n_wins(3)
+  type_keys('Q')
+  child.expect_screenshot()
+
+  -- Empty
+  prepare(test_dir_path, false, { mappings = { reset = '' } })
+  validate_n_wins(3)
+  type_keys('<BS>')
+  child.expect_screenshot()
+end
+
+T['Mappings']['`show_help` works'] = function()
+  child.set_size(20, 60)
+
+  -- Default
+  open(test_dir_path)
+  validate_n_wins(2)
+  type_keys('g?')
+  child.expect_screenshot()
+  type_keys('q')
+  close()
+
+  -- User-supplied
+  open(test_dir_path, false, { mappings = { show_help = 'Q' } })
+  validate_n_wins(2)
+  type_keys('Q')
+  child.expect_screenshot()
+  type_keys('q')
+  close()
+
+  -- Empty
+  open(test_dir_path, false, { mappings = { show_help = '' } })
+  validate_n_wins(2)
+  type_keys('g?')
+  child.expect_screenshot()
+end
+
+T['Mappings']['`synchronize` works'] = function()
+  child.set_size(10, 60)
+
+  local temp_dir = make_temp_dir('temp', {})
+  local validate = function(file_name, key)
+    child.expect_screenshot()
+    child.fn.writefile({}, join_path(temp_dir, file_name))
+    type_keys(key)
+    child.expect_screenshot()
+  end
+
+  -- Default
+  open(temp_dir)
+  validate('file-1', '=')
+  close()
+
+  -- User-supplied
+  open(temp_dir, false, { mappings = { synchronize = 'Q' } })
+  validate('file-2', 'Q')
+  close()
+
+  -- Empty
+  open(temp_dir, false, { mappings = { synchronize = '' } })
+  validate('file-3', '=')
+end
+
+T['Mappings']['`trim_left` works'] = function()
+  -- Default
+  open(test_dir_path)
+  go_in()
+  validate_n_wins(3)
+  type_keys('<')
+  child.expect_screenshot()
+  close()
+
+  -- User-supplied
+  open(test_dir_path, false, { mappings = { trim_left = 'Q' } })
+  go_in()
+  validate_n_wins(3)
+  type_keys('Q')
+  validate_n_wins(2)
+  close()
+
+  -- Empty
+  open(test_dir_path, false, { mappings = { trim_left = '' } })
+  go_in()
+  validate_n_wins(3)
+  type_keys('<')
+  validate_n_wins(3)
+end
+
+T['Mappings']['`trim_right` works'] = function()
+  local path = make_test_path('common', 'a-dir')
+
+  -- Default
+  open(path)
+  go_out()
+  validate_n_wins(3)
+  type_keys('>')
+  child.expect_screenshot()
+  close()
+
+  -- User-supplied
+  open(path, false, { mappings = { trim_right = 'Q' } })
+  go_out()
+  validate_n_wins(3)
+  type_keys('Q')
+  validate_n_wins(2)
+  close()
+
+  -- Empty
+  open(path, false, { mappings = { trim_right = '' } })
+  go_out()
+  validate_n_wins(3)
+  type_keys('>')
+  validate_n_wins(3)
+end
 
 T['File manipulation'] = new_set()
 
@@ -1236,6 +1839,11 @@ T['File manipulation']['works to move'] = function() MiniTest.skip() end
 
 T['File manipulation']['handles move directory inside its child'] = function() MiniTest.skip() end
 
+T['File manipulation']['works with problematic names'] = function()
+  -- Like with spaces, etc.
+  MiniTest.skip()
+end
+
 T['Cursors'] = new_set()
 
 T['Cursors']['preserved during navigation'] = function() MiniTest.skip() end
@@ -1252,29 +1860,221 @@ T['Cursors']['shows whole line after moving to line start'] = function() MiniTes
 
 T['Events'] = new_set()
 
-T['Events']['works'] = function()
-  -- Has `data` with both `buf_id` and `win_id` (where relevant)
-  MiniTest.skip()
+local track_event = function(event_name)
+  local lua_cmd = string.format(
+    [[
+    _G.callback_args_data = {}
+    vim.api.nvim_create_autocmd(
+      'User',
+      {
+        pattern = '%s',
+        callback = function(args) table.insert(_G.callback_args_data, args.data) end,
+      }
+    )
+    ]],
+    event_name
+  )
+  child.lua(lua_cmd)
 end
 
-T['Events']['on buffer open can be used to create buffer-local mappings'] = function() MiniTest.skip() end
+local clear_event_track = function() child.lua('_G.callback_args_data = {}') end
 
-T['Events']['on window open can be used to set window-local options'] = function() MiniTest.skip() end
+local validate_event_track = function(ref) eq(child.lua_get('_G.callback_args_data'), ref) end
+
+T['Events']['triggers on buffer create'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('`data` in autocmd callback was introduced in Neovim=0.8.') end
+
+  track_event('MiniFilesBufferCreate')
+
+  open(test_dir_path)
+  validate_event_track({ { buf_id = child.api.nvim_get_current_buf() } })
+  clear_event_track()
+
+  go_in()
+  validate_event_track({ { buf_id = child.api.nvim_get_current_buf() } })
+  clear_event_track()
+
+  -- No event should be triggered if buffer is reused
+  go_out()
+  trim_right()
+  go_in()
+
+  validate_event_track({})
+end
+
+T['Events']['on buffer create can be used to create buffer-local mappings'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('`data` in autocmd callback was introduced in Neovim=0.8.') end
+
+  child.lua([[
+    _G.n = 0
+    local rhs = function() _G.n = _G.n + 1 end
+    vim.api.nvim_create_autocmd(
+      'User',
+      {
+        pattern = 'MiniFilesBufferCreate',
+        callback = function(args) vim.keymap.set('n', 'W', rhs, { buffer = args.data.buf_id }) end,
+      }
+    )
+  ]])
+
+  type_keys('W')
+  eq(child.lua_get('_G.n'), 0)
+
+  open(test_dir_path)
+  type_keys('W')
+  eq(child.lua_get('_G.n'), 1)
+
+  go_in()
+  type_keys('W')
+  eq(child.lua_get('_G.n'), 2)
+end
+
+T['Events']['triggers on buffer update'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('`data` in autocmd callback was introduced in Neovim=0.8.') end
+
+  track_event('MiniFilesBufferUpdate')
+
+  open(test_dir_path)
+  local buf_id_1, win_id_1 = child.api.nvim_get_current_buf(), child.api.nvim_get_current_win()
+  -- No `win_id` on first buffer update
+  validate_event_track({ { buf_id = buf_id_1 } })
+  clear_event_track()
+
+  -- Force buffer updates
+  synchronize()
+  validate_event_track({ { buf_id = buf_id_1, win_id = win_id_1 } })
+  clear_event_track()
+
+  go_in()
+  local buf_id_2, win_id_2 = child.api.nvim_get_current_buf(), child.api.nvim_get_current_win()
+  validate_event_track({ { buf_id = buf_id_2 } })
+  clear_event_track()
+
+  -- Force all buffer to update
+  synchronize()
+
+  local event_track = child.lua_get('_G.callback_args_data')
+  -- - Force order, as there is no order guarantee of event trigger
+  table.sort(event_track, function(a, b) return a.buf_id < b.buf_id end)
+  eq(event_track, { { buf_id = buf_id_1, win_id = win_id_1 }, { buf_id = buf_id_2, win_id = win_id_2 } })
+end
+
+T['Events']['triggers on window open'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('`data` in autocmd callback was introduced in Neovim=0.8.') end
+
+  track_event('MiniFilesWindowOpen')
+
+  open(test_dir_path)
+  local buf_id_1, win_id_1 = child.api.nvim_get_current_buf(), child.api.nvim_get_current_win()
+  -- Should provide both `buf_id` and `win_id`
+  validate_event_track({ { buf_id = buf_id_1, win_id = win_id_1 } })
+  clear_event_track()
+
+  go_in()
+  local buf_id_2, win_id_2 = child.api.nvim_get_current_buf(), child.api.nvim_get_current_win()
+  validate_event_track({ { buf_id = buf_id_2, win_id = win_id_2 } })
+  clear_event_track()
+
+  -- Should indicate reused buffer but not window
+  go_out()
+  trim_right()
+  go_in()
+  local win_id_3 = child.api.nvim_get_current_win()
+  validate_event_track({ { buf_id = buf_id_2, win_id = win_id_3 } })
+end
+
+T['Events']['on window open can be used to set window-local options'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('`data` in autocmd callback was introduced in Neovim=0.8.') end
+
+  child.lua([[
+    vim.api.nvim_create_autocmd('User', {
+      pattern = 'MiniFilesWindowOpen',
+      callback = function(args)
+        vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' })
+      end,
+    })
+  ]])
+
+  open(test_dir_path)
+  child.expect_screenshot()
+
+  go_in()
+  child.expect_screenshot()
+
+  go_out()
+  trim_right()
+  go_in()
+  child.expect_screenshot()
+end
+
+T['Events']['triggers on window update'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('`data` in autocmd callback was introduced in Neovim=0.8.') end
+
+  track_event('MiniFilesWindowUpdate')
+
+  open(test_dir_path)
+  local buf_id_1, win_id_1 = child.api.nvim_get_current_buf(), child.api.nvim_get_current_win()
+  -- Should provide both `buf_id` and `win_id`
+  validate_event_track({ { buf_id = buf_id_1, win_id = win_id_1 } })
+  clear_event_track()
+
+  go_in()
+  local buf_id_2, win_id_2 = child.api.nvim_get_current_buf(), child.api.nvim_get_current_win()
+  local event_track = child.lua_get('_G.callback_args_data')
+  -- - Force order, as there is no order guarantee of event trigger
+  table.sort(event_track, function(a, b) return a.buf_id < b.buf_id end)
+  -- -- Both windows should be updated
+  eq(event_track, { { buf_id = buf_id_1, win_id = win_id_1 }, { buf_id = buf_id_2, win_id = win_id_2 } })
+end
 
 T['Default explorer'] = new_set()
 
-T['Default explorer']['works in `nvim .`'] = function()
-  -- Should hide scract buffer on file open
-  MiniTest.skip()
+T['Default explorer']['works on startup'] = function()
+  vim.loop.os_setenv('USE_AS_DEFAULT_EXPLORER', 'true')
+  child.restart({ '-u', make_test_path('init-default-explorer.lua'), '--', test_dir_path })
+  child.expect_screenshot()
+
+  -- Should hide scratch buffer on file open
+  type_keys('G')
+  go_in()
+  close()
+  eq(#child.api.nvim_list_bufs(), 1)
 end
 
-T['Default explorer']['works in `:edit .`'] = function() MiniTest.skip() end
+T['Default explorer']['respects `options.use_as_default_explorer`'] = function()
+  vim.loop.os_setenv('USE_AS_DEFAULT_EXPLORER', 'false')
+  child.restart({ '-u', make_test_path('init-default-explorer.lua'), '--', test_dir_path })
+  eq(child.bo.filetype, 'netrw')
+end
 
-T['Default explorer']['works in `:vsplit .`'] = function() MiniTest.skip() end
+T['Default explorer']['works in `:edit .`'] = function()
+  child.o.laststatus = 0
+  child.cmd('edit ' .. test_dir_path)
+  child.expect_screenshot()
+end
+
+T['Default explorer']['works in `:vsplit .`'] = function()
+  child.o.laststatus = 0
+
+  child.cmd('vsplit ' .. test_dir_path)
+  child.expect_screenshot()
+
+  type_keys('G')
+  go_in()
+  close()
+  child.expect_screenshot()
+  eq(#child.api.nvim_list_bufs(), 2)
+end
 
 T['Default explorer']['handles close without opening file'] = function()
-  -- Should delete "scratch directory buffer"
-  MiniTest.skip()
+  child.o.laststatus = 0
+  child.cmd('edit ' .. test_dir_path)
+  child.expect_screenshot()
+
+  -- Should close and delete "scratch directory buffer"
+  close()
+  child.expect_screenshot()
+  eq(child.api.nvim_buf_get_name(0), '')
 end
 
 return T

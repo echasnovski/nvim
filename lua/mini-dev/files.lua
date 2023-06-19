@@ -59,9 +59,16 @@
 --- - Use as default file explorer instead of |netrw|.
 ---
 --- What it doesn't do:
---- - It does not try to be full file explorer.
+--- - Try to be full file explorer.
 ---
---- - Built-in interactive toggle of `filter` and `sort`. See |MiniFiles-examples|.
+--- - Work on remote locations (only local file system is supported).
+---
+--- - Provide built-in interactive toggle of `filter` and `sort`.
+---   See |MiniFiles-examples| for some common examples.
+---
+--- - Provide some external information like git or diagnostic status.
+---   This can be achieved by setting |extmarks| on appropriate event(s)
+---   (see |MiniFiles-events|)
 ---
 --- Notes:
 --- - This module is written and throughly tested on Linux. Support for other
@@ -110,9 +117,19 @@
 --- This plugin provides only manually started functionality, so no disabling
 --- is available.
 
+--- Notes:
+--- - Once directory is shown, it is not updated automatically.
+---   Use |MiniFiles.synchronize()| for that.
 ---@tag MiniFiles-exploration
 
 ---@tag MiniFiles-manipulation
+
+--- Notes:
+--- - `win_id` in `args.data` can be `nil` meaning that there is no window yet.
+---   This is true for `MiniFilesBufferCreate` and first call of
+---   `MiniFilesBufferUpdate`. If you need window for the callback, use also
+---   `MiniFilesWindowOpen`.
+---@tag MiniFiles-events
 
 --- ?Add some examples?
 ---
@@ -122,8 +139,9 @@
 ---@tag MiniFiles-examples
 
 ---@alias __minifiles_fs_entries table Array of file system entries. Each one is a table:
----   - <name> `(string)` - basename of an entry (including extension).
 ---   - <fs_type> `(string)` - one of "file" or "directory".
+---   - <name> `(string)` - basename of an entry (including extension).
+---   - <path> `(string)` - full path of an entry.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -339,7 +357,7 @@ MiniFiles.go_in = function()
   H.explorer_refresh(explorer)
 end
 
-MiniFiles.go_out = function(buf_id, line)
+MiniFiles.go_out = function()
   local explorer = H.explorer_get()
   if explorer == nil then return end
 
@@ -389,26 +407,51 @@ MiniFiles.get_fs_entry = function(buf_id, line)
   return { path = path, fs_type = H.fs_get_type(path), name = H.fs_get_basename(path) }
 end
 
+--- Get latest used anchor path
+---
+--- Note: if latest used `path` argument for |MiniFiles.open()| was for file,
+--- this will return its parent (as it is the used anchor path).
 MiniFiles.get_latest_path = function() return H.latest_paths[vim.api.nvim_get_current_tabpage()] end
 
+--- Default filter of file system entries
+---
+--- Currently does not filter anything out.
+---
 ---@param fs_entries __minifiles_fs_entries
+---
+---@return table Filtered array of file system entries.
 MiniFiles.default_filter = function(fs_entries)
   -- Nothing is filtered by default
   return fs_entries
 end
 
+--- Default sort of file systme entries
+---
+--- Sort directories and files separately (alphabetically ignoring case) and
+--- put directories first.
+---
 ---@param fs_entries __minifiles_fs_entries
+---
+---@return table Sorted array of file system entries.
 MiniFiles.default_sort = function(fs_entries)
   -- Sort ignoring case
   local res = vim.tbl_map(
-    function(x) return { name = x.name, fs_type = x.fs_type, lower_name = x.name:lower(), is_dir = x.fs_type == 'directory' } end,
+    function(x)
+      return {
+        fs_type = x.fs_type,
+        name = x.name,
+        path = x.path,
+        lower_name = x.name:lower(),
+        is_dir = x.fs_type == 'directory',
+      }
+    end,
     fs_entries
   )
 
   -- Sort based on default order
   table.sort(res, H.compare_fs_entries)
 
-  return vim.tbl_map(function(x) return { name = x.name, fs_type = x.fs_type } end, res)
+  return vim.tbl_map(function(x) return { name = x.name, fs_type = x.fs_type, path = x.path } end, res)
 end
 
 -- Helper data ================================================================
@@ -443,6 +486,9 @@ H.opened_buffers = {}
 
 -- File system information
 H.is_windows = vim.loop.os_uname().sysname == 'Windows_NT'
+
+-- Register to decide whether autocmd events should be triggered
+H.do_trigger_events = true
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -609,6 +655,10 @@ H.explorer_refresh = function(explorer, opts)
   explorer = H.explorer_normalize(explorer)
   if #explorer.branch == 0 then return end
   opts = opts or {}
+
+  -- Decide whether events should be triggered (yes by default)
+  H.do_trigger_events = opts.do_trigger_events
+  if H.do_trigger_events == nil then H.do_trigger_events = true end
 
   -- Update cursor data in shown directory views. Do this prior to buffer
   -- updates for cursors to "stick" to current items.
@@ -1108,7 +1158,8 @@ H.dir_view_track_cursor = vim.schedule_wrap(function(data)
 
   explorer = H.explorer_sync_cursor_and_branch(explorer, buf_depth)
 
-  H.explorer_refresh(explorer)
+  -- Don't trigger redundant window update events
+  H.explorer_refresh(explorer, { do_trigger_events = false })
 end)
 
 H.dir_view_track_text_change = function(data)
@@ -1184,10 +1235,10 @@ H.buffer_make_mappings = function(buf_id, mappings)
     if vim.fn.mode() ~= 'V' then return mappings.go_in end
 
     -- Schedule actions because they are not allowed inside expression mapping
+    local line_1, line_2 = vim.fn.line('v'), vim.fn.line('.')
+    local from_line, to_line = math.min(line_1, line_2), math.max(line_1, line_2)
     vim.schedule(function()
-      local line_1, line_2 = vim.fn.line('v'), vim.fn.line('.')
       local explorer = H.explorer_get()
-      local from_line, to_line = math.min(line_1, line_2), math.max(line_1, line_2)
       explorer = H.explorer_go_in_range(explorer, buf_id, from_line, to_line)
       H.explorer_refresh(explorer)
     end)
@@ -1500,7 +1551,7 @@ H.fs_read_dir = function(dir_path, content_opts)
     if not (fs_type == 'file' or fs_type == 'directory') then
       fs_type = H.fs_get_type(H.fs_child_path(dir_path, name))
     end
-    table.insert(res, { name = name, fs_type = fs_type })
+    table.insert(res, { fs_type = fs_type, name = name, path = H.fs_child_path(dir_path, name) })
     name, fs_type = vim.loop.fs_scandir_next(fs)
   end
 
@@ -1509,9 +1560,7 @@ H.fs_read_dir = function(dir_path, content_opts)
 
   -- Add new data: absolute file path and its index
   for _, entry in ipairs(res) do
-    local path = H.fs_child_path(dir_path, entry.name)
-    entry.path = path
-    entry.path_id = H.add_path_to_index(path)
+    entry.path_id = H.add_path_to_index(entry.path)
   end
 
   return res
@@ -1742,6 +1791,8 @@ H.map = function(mode, lhs, rhs, opts)
 end
 
 H.trigger_event = function(event_name, data)
+  if not H.do_trigger_events then return end
+
   -- TODO: Remove after compatibility with Neovim=0.7 is dropped
   if vim.fn.has('nvim-0.8') == 0 then data = nil end
   vim.api.nvim_exec_autocmds('User', { pattern = event_name, data = data })
