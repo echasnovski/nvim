@@ -50,6 +50,16 @@ local full_path = function(...)
   return res
 end
 
+local rel_path = function(...)
+  local res = vim.fn.fnamemodify(join_path(...), ':.'):gsub('(.)/$', '%1')
+  return res
+end
+
+local short_path = function(...)
+  local res = vim.fn.fnamemodify(join_path(...), ':~'):gsub('(.)/$', '%1')
+  return res
+end
+
 local make_test_path = function(...)
   local path = join_path(test_dir, join_path(...))
   return child.fn.fnamemodify(path, ':p')
@@ -76,6 +86,16 @@ local make_temp_dir = function(name, children)
 end
 
 -- Common validators and helpers
+local validate_directory = function(...) eq(child.fn.isdirectory(join_path(...)), 1) end
+
+local validate_no_directory = function(...) eq(child.fn.isdirectory(join_path(...)), 0) end
+
+local validate_file = function(...) eq(child.fn.filereadable(join_path(...)), 1) end
+
+local validate_no_file = function(...) eq(child.fn.filereadable(join_path(...)), 0) end
+
+local validate_file_content = function(path, lines) eq(child.fn.readfile(path), lines) end
+
 local validate_cur_line = function(x) eq(get_cursor()[1], x) end
 
 local validate_n_wins = function(n) eq(#child.api.nvim_tabpage_list_wins(0), n) end
@@ -90,13 +110,15 @@ local validate_fs_entries_arg = function(x)
   end
 end
 
-local validate_confirm_args = function(ref_msg_pattern, ref_choices)
+local validate_confirm_args = function(ref_msg_pattern)
   local args = child.lua_get('_G.confirm_args')
   expect.match(args[1], ref_msg_pattern)
-  eq(args[2], ref_choices)
+  if args[2] ~= nil then eq(args[2], '&Yes\n&No') end
   if args[3] ~= nil then eq(args[3], 1) end
   if args[4] ~= nil then eq(args[4], 'Question') end
 end
+
+local make_plain_pattern = function(...) return table.concat(vim.tbl_map(vim.pesc, { ... }), '.*') end
 
 local is_file_in_buffer =
   function(buf_id, path) return string.find(child.api.nvim_buf_get_name(buf_id), vim.pesc(path) .. '$') ~= nil end
@@ -660,7 +682,7 @@ T['open()']['properly closes currently opened explorer with modified buffers'] =
   -- Should mention modified buffers and ask for confirmation
   mock_confirm(1)
   open(path_2)
-  validate_confirm_args('modified buffer.*close without sync', '&Yes\n&No')
+  validate_confirm_args('modified buffer.*close without sync')
 end
 
 T['open()']['validates input'] = function()
@@ -754,7 +776,7 @@ T['synchronize()'] = new_set()
 
 local synchronize = forward_lua('MiniFiles.synchronize')
 
-T['synchronize()']['works to update external file system changes'] = function()
+T['synchronize()']['can update external file system changes'] = function()
   local temp_dir = make_temp_dir('temp', { 'subdir/' })
 
   open(temp_dir)
@@ -768,7 +790,7 @@ T['synchronize()']['works to update external file system changes'] = function()
   validate_cur_line(2)
 end
 
-T['synchronize()']['works to apply file system actions'] = function()
+T['synchronize()']['can apply file system actions'] = function()
   local temp_dir = make_temp_dir('temp', {})
 
   open(temp_dir)
@@ -776,10 +798,10 @@ T['synchronize()']['works to apply file system actions'] = function()
 
   local new_file_path = join_path(temp_dir, 'new-file')
   mock_confirm(1)
-  eq(vim.fn.filereadable(new_file_path), 0)
+  validate_no_file(new_file_path)
 
   synchronize()
-  eq(vim.fn.filereadable(new_file_path), 1)
+  validate_file(new_file_path)
 end
 
 T['synchronize()']['should follow cursor on current entry path'] = function()
@@ -905,7 +927,7 @@ T['close()']['checks for modified buffers'] = function()
   mock_confirm(2)
   eq(close(), false)
   child.expect_screenshot()
-  validate_confirm_args('modified buffer.*close without sync', '&Yes\n&No')
+  validate_confirm_args('modified buffer.*close without sync')
 
   -- Should close if there is confirm
   mock_confirm(1)
@@ -1475,6 +1497,32 @@ T['Windows']['can be closed manually'] = function()
   validate_n_wins(1)
 end
 
+T['Windows']['never shows past end of buffer'] = function()
+  mock_confirm(1)
+
+  -- Modifying buffer in Insert mode
+  open(test_dir_path)
+  type_keys('G', 'o')
+  -- - Should increase height while first line still be visible
+  child.expect_screenshot()
+
+  child.ensure_normal_mode()
+  close()
+
+  -- Modifying buffer in Normal mode
+  open(test_dir_path)
+  type_keys('yj', 'G', 'p')
+  child.expect_screenshot()
+
+  close()
+
+  -- Works when top line is not first buffer line
+  child.set_size(10, 60)
+  open(test_dir_path)
+  type_keys('yj', 'G', 'p')
+  child.expect_screenshot()
+end
+
 T['Mappings'] = new_set()
 
 T['Mappings']['`close` works'] = function()
@@ -1819,44 +1867,641 @@ end
 
 T['File manipulation'] = new_set()
 
-T['File manipulation']['respects modified hidden buffers'] = function() MiniTest.skip() end
+T['File manipulation']['can create'] = function()
+  child.set_size(10, 60)
+  local temp_dir = make_temp_dir('temp', {})
+  open(temp_dir)
 
-T['File manipulation']['never shows past end of buffer'] = function() MiniTest.skip() end
+  set_lines({ 'new-file', 'new-dir/' })
+  set_cursor(1, 0)
+  child.expect_screenshot()
 
-T['File manipulation']['works to create'] = function() MiniTest.skip() end
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
 
-T['File manipulation']['creates nested directories'] = function() MiniTest.skip() end
+  validate_file(temp_dir, 'new-file')
+  validate_directory(temp_dir, 'new-dir')
 
-T['File manipulation']['works to delete'] = function() MiniTest.skip() end
+  local ref_pattern = make_plain_pattern(
+    'CONFIRM FILE SYSTEM ACTIONS',
+    short_path(temp_dir) .. ':',
+    [[  CREATE: 'new-file' (file)]],
+    [[  CREATE: 'new-dir' (directory)]]
+  )
+  validate_confirm_args(ref_pattern)
+end
 
-T['File manipulation']['works to rename'] = function() MiniTest.skip() end
+T['File manipulation']['creates files in nested directories'] = function()
+  child.set_size(10, 60)
+  local temp_dir = make_temp_dir('temp', { 'dir/' })
+  open(temp_dir)
 
-T['File manipulation']['works to copy'] = function() MiniTest.skip() end
+  local lines = get_lines()
+  -- Should work both in present directories and new ones (creating them)
+  lines = vim.list_extend(lines, { 'dir/nested-file', 'dir-1/nested-file-1', 'dir-1/nested-file-2' })
+  set_lines(lines)
+  child.expect_screenshot()
 
-T['File manipulation']['copies directory inside its child'] = function() MiniTest.skip() end
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
 
-T['File manipulation']['works to move'] = function() MiniTest.skip() end
+  validate_file(temp_dir, 'dir', 'nested-file')
+  validate_directory(temp_dir, 'dir-1')
+  validate_file(temp_dir, 'dir-1', 'nested-file-1')
+  validate_file(temp_dir, 'dir-1', 'nested-file-2')
 
-T['File manipulation']['handles move directory inside its child'] = function() MiniTest.skip() end
+  -- Validate separately because order is not guaranteed
+  local ref_pattern_1 = make_plain_pattern(
+    'CONFIRM FILE SYSTEM ACTIONS',
+    short_path(temp_dir) .. '/dir' .. ':',
+    [[  CREATE: 'nested-file' (file)]]
+  )
+  validate_confirm_args(ref_pattern_1)
+
+  local ref_pattern_2 = make_plain_pattern(
+    short_path(temp_dir) .. '/dir-1' .. ':',
+    [[  CREATE: 'nested-file-1' (file)]],
+    [[  CREATE: 'nested-file-2' (file)]]
+  )
+  validate_confirm_args(ref_pattern_2)
+end
+
+T['File manipulation']['creates nested directories'] = function()
+  child.set_size(10, 60)
+  local temp_dir = make_temp_dir('temp', { 'dir/' })
+  open(temp_dir)
+
+  local lines = get_lines()
+  -- Should work both in present directories and new ones (creating them)
+  lines = vim.list_extend(lines, { 'dir/nested-dir/', 'dir-1/nested-dir-1/', 'dir-1/nested-dir-2/' })
+  set_lines(lines)
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_directory(temp_dir, 'dir', 'nested-dir')
+  validate_directory(temp_dir, 'dir-1')
+  validate_directory(temp_dir, 'dir-1', 'nested-dir-1')
+  validate_directory(temp_dir, 'dir-1', 'nested-dir-2')
+
+  -- Validate separately because order is not guaranteed
+  local ref_pattern_1 = make_plain_pattern(
+    'CONFIRM FILE SYSTEM ACTIONS',
+    short_path(temp_dir) .. '/dir' .. ':',
+    [[  CREATE: 'nested-dir' (directory)]]
+  )
+  validate_confirm_args(ref_pattern_1)
+
+  local ref_pattern_2 = make_plain_pattern(
+    short_path(temp_dir) .. '/dir-1' .. ':',
+    [[  CREATE: 'nested-dir-1' (directory)]],
+    [[  CREATE: 'nested-dir-2' (directory)]]
+  )
+  validate_confirm_args(ref_pattern_2)
+end
+
+T['File manipulation']['can delete'] = function()
+  local temp_dir =
+    make_temp_dir('temp', { 'file', 'empty-dir/', 'dir/', 'dir/file', 'dir/nested-dir/', 'dir/nested-dir/file' })
+  open(temp_dir)
+
+  set_lines({})
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_no_file(temp_dir, 'file')
+  validate_no_directory(temp_dir, 'emptry-dir')
+  validate_no_directory(temp_dir, 'dir')
+
+  -- Validate separately because order is not guaranteed
+  local ref_pattern = make_plain_pattern('CONFIRM FILE SYSTEM ACTIONS', short_path(temp_dir) .. ':')
+  validate_confirm_args(ref_pattern)
+
+  validate_confirm_args([[  DELETE: 'dir']])
+  validate_confirm_args([[  DELETE: 'empty%-dir']])
+  validate_confirm_args([[  DELETE: 'file']])
+end
+
+T['File manipulation']['can rename'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file', 'dir/' })
+  open(temp_dir)
+
+  type_keys('C', 'new-dir', '<Esc>')
+  type_keys('j', 'A', '-new', '<Esc>')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_no_file(temp_dir, 'file')
+  validate_file(temp_dir, 'file-new')
+  validate_no_directory(temp_dir, 'dir')
+  validate_directory(temp_dir, 'new-dir')
+
+  -- Validate separately because order is not guaranteed
+  local ref_pattern = make_plain_pattern('CONFIRM FILE SYSTEM ACTIONS', short_path(temp_dir) .. ':')
+  validate_confirm_args(ref_pattern)
+
+  validate_confirm_args([[  RENAME: 'dir' to 'new%-dir']])
+  validate_confirm_args([[  RENAME: 'file' to 'file%-new']])
+end
+
+T['File manipulation']['rename file renames opened buffers'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file' })
+
+  local file_path_prev = join_path(temp_dir, 'file')
+  child.cmd('edit ' .. file_path_prev)
+  local buf_id = child.api.nvim_get_current_buf()
+
+  open(temp_dir)
+  type_keys('C', 'new-file', '<Esc>')
+
+  eq(is_file_in_buffer(buf_id, file_path_prev), true)
+
+  mock_confirm(1)
+  synchronize()
+  eq(is_file_in_buffer(buf_id, join_path(temp_dir, 'new-file')), true)
+end
+
+T['File manipulation']['rename directory renames opened buffers'] = function()
+  local temp_dir = make_temp_dir('temp', { 'dir/', 'dir/file', 'dir/nested/', 'dir/nested/file-2' })
+
+  local file_path_prev = join_path(temp_dir, 'dir', 'file')
+  child.cmd('edit ' .. file_path_prev)
+  local file_buf_id = child.api.nvim_get_current_buf()
+
+  local descendant_path_prev = join_path(temp_dir, 'dir', 'nested', 'file-2')
+  child.cmd('edit ' .. descendant_path_prev)
+  local descendant_buf_id = child.api.nvim_get_current_buf()
+
+  open(temp_dir)
+  type_keys('C', 'new-dir', '<Esc>')
+
+  eq(is_file_in_buffer(file_buf_id, file_path_prev), true)
+  eq(is_file_in_buffer(descendant_buf_id, descendant_path_prev), true)
+
+  mock_confirm(1)
+  synchronize()
+  eq(is_file_in_buffer(file_buf_id, join_path(temp_dir, 'new-dir', 'file')), true)
+  eq(is_file_in_buffer(descendant_buf_id, join_path(temp_dir, 'new-dir', 'nested', 'file-2')), true)
+end
+
+T['File manipulation']['renames even if lines are rearranged'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file-1', 'file-2' })
+  open(temp_dir)
+
+  -- Rearrange lines
+  type_keys('dd', 'p')
+
+  type_keys('gg', 'C', 'new-file-2', '<Esc>')
+  type_keys('j^', 'C', 'new-file-1', '<Esc>')
+
+  mock_confirm(1)
+  synchronize()
+
+  validate_confirm_args([[RENAME: 'file%-2' to 'new%-file%-2']])
+  validate_confirm_args([[RENAME: 'file%-1' to 'new%-file%-1']])
+end
+
+T['File manipulation']['can move file'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file', 'dir/' })
+  open(temp_dir)
+
+  -- Write lines in moved file to check actual move and not "delete-create"
+  child.fn.writefile({ 'File' }, join_path(temp_dir, 'file'))
+
+  -- Perform manipulation
+  type_keys('G', 'dd')
+  go_in()
+  type_keys('V', 'P')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_no_file(temp_dir, 'file')
+  validate_file(temp_dir, 'dir', 'file')
+  validate_file_content(join_path(temp_dir, 'dir', 'file'), { 'File' })
+
+  -- Validate separately because order is not guaranteed
+  local ref_pattern = make_plain_pattern('CONFIRM FILE SYSTEM ACTIONS', short_path(temp_dir) .. ':')
+  validate_confirm_args(ref_pattern)
+
+  -- - Target path should be absolute but can with `~` for home directory
+  local target_path = short_path(temp_dir, 'dir', 'file')
+  local ref_pattern_2 = string.format([[    MOVE: 'file' to '%s']], vim.pesc(target_path))
+  validate_confirm_args(ref_pattern_2)
+end
+
+T['File manipulation']['can move directory'] = function()
+  local temp_dir = make_temp_dir('temp', { 'dir/', 'dir/file', 'dir/nested/', 'dir/nested/file', 'dir-target/' })
+  open(temp_dir)
+
+  -- Write lines in moved file to check actual move and not "delete-create"
+  child.fn.writefile({ 'File' }, join_path(temp_dir, 'dir', 'file'))
+
+  type_keys('dd')
+  go_in()
+  type_keys('V', 'P')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_no_directory(temp_dir, 'dir')
+  validate_directory(temp_dir, 'dir-target', 'dir')
+  validate_file_content(join_path(temp_dir, 'dir-target', 'dir', 'file'), { 'File' })
+
+  local target_path = short_path(temp_dir, 'dir-target', 'dir')
+  local ref_pattern = make_plain_pattern(
+    'CONFIRM FILE SYSTEM ACTIONS',
+    short_path(temp_dir) .. ':',
+    string.format([[    MOVE: 'dir' to '%s']], target_path)
+  )
+  validate_confirm_args(ref_pattern)
+end
+
+T['File manipulation']['handles move directory inside itself'] = function()
+  local temp_dir = make_temp_dir('temp', { 'dir/', 'dir/file', 'dir/nested/' })
+  open(temp_dir)
+
+  type_keys('yy')
+  go_in()
+  go_in()
+  type_keys('V', 'p')
+  go_out()
+  go_out()
+  type_keys('dd')
+  child.expect_screenshot()
+
+  -- Should ask for confirmation but silently not do this
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_directory(temp_dir, 'dir')
+  validate_no_directory(temp_dir, 'dir', 'nested', 'dir')
+
+  validate_confirm_args([[    MOVE: 'dir' to '.*dir/nested/dir']])
+end
+
+T['File manipulation']['can move while changing basename'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file', 'dir/' })
+  open(temp_dir)
+
+  -- Write lines in moved file to check actual move and not "delete-create"
+  child.fn.writefile({ 'File' }, join_path(temp_dir, 'file'))
+
+  -- Perform manipulation
+  type_keys('G', 'dd')
+  go_in()
+  type_keys('V', 'P')
+  -- - Rename
+  type_keys('C', 'new-file', '<Esc>')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_no_file(temp_dir, 'file')
+  validate_file(temp_dir, 'dir', 'new-file')
+  validate_file_content(join_path(temp_dir, 'dir', 'new-file'), { 'File' })
+
+  -- - Target path should be absolute but can with `~` for home directory
+  local target_path = short_path(temp_dir, 'dir', 'new-file')
+  local ref_pattern_2 = string.format([[    MOVE: 'file' to '%s']], vim.pesc(target_path))
+  validate_confirm_args(ref_pattern_2)
+end
+
+T['File manipulation']['can copy file'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file', 'dir/' })
+  open(temp_dir)
+
+  -- Write lines in copied file to check actual copy and not create
+  child.fn.writefile({ 'File' }, join_path(temp_dir, 'file'))
+
+  -- Perform manipulation
+  type_keys('j', 'yy', 'k')
+  go_in()
+  type_keys('V', 'P')
+  -- - Should be able to copy in same directory
+  go_out()
+  type_keys('p', 'C', 'file-copy', '<Esc>')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_file(temp_dir, 'file')
+  validate_file_content(join_path(temp_dir, 'file'), { 'File' })
+  validate_file(temp_dir, 'dir', 'file')
+  validate_file_content(join_path(temp_dir, 'dir', 'file'), { 'File' })
+  validate_file(temp_dir, 'file-copy')
+  validate_file_content(join_path(temp_dir, 'file-copy'), { 'File' })
+
+  -- Validate separately because order is not guaranteed
+  local ref_pattern = make_plain_pattern('CONFIRM FILE SYSTEM ACTIONS', short_path(temp_dir) .. ':')
+  validate_confirm_args(ref_pattern)
+
+  -- - Target path should be absolute but can with `~` for home directory
+  local target_path_1 = short_path(temp_dir, 'dir', 'file')
+  local ref_pattern_1 = string.format([[    COPY: 'file' to '%s']], vim.pesc(target_path_1))
+  validate_confirm_args(ref_pattern_1)
+
+  local target_path_2 = short_path(temp_dir, 'file-copy')
+  local ref_pattern_2 = string.format([[    COPY: 'file' to '%s']], vim.pesc(target_path_2))
+  validate_confirm_args(ref_pattern_2)
+end
+
+T['File manipulation']['can copy directory'] = function()
+  local temp_dir = make_temp_dir('temp', { 'dir/', 'dir/file', 'dir/nested/', 'dir-target/' })
+  open(temp_dir)
+
+  -- Write lines in copied file to check actual copy and not create
+  child.fn.writefile({ 'File' }, join_path(temp_dir, 'dir', 'file'))
+
+  -- Perform manipulation
+  type_keys('yy', 'j')
+  go_in()
+  type_keys('V', 'P')
+  -- - Should be able to copy in same directory
+  go_out()
+  type_keys('p', 'C', 'dir-copy', '<Esc>')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_directory(temp_dir, 'dir')
+  validate_file_content(join_path(temp_dir, 'dir', 'file'), { 'File' })
+
+  validate_directory(temp_dir, 'dir-target', 'dir')
+  validate_file(temp_dir, 'dir-target', 'dir', 'file')
+  validate_file_content(join_path(temp_dir, 'dir-target', 'dir', 'file'), { 'File' })
+  validate_directory(temp_dir, 'dir-target', 'dir', 'nested')
+
+  validate_directory(temp_dir, 'dir-copy')
+  validate_file(temp_dir, 'dir-copy', 'file')
+  validate_file_content(join_path(temp_dir, 'dir-copy', 'file'), { 'File' })
+  validate_directory(temp_dir, 'dir-copy', 'nested')
+
+  -- Validate separately because order is not guaranteed
+  local ref_pattern = make_plain_pattern('CONFIRM FILE SYSTEM ACTIONS', short_path(temp_dir) .. ':')
+  validate_confirm_args(ref_pattern)
+
+  -- - Target path should be absolute but can with `~` for home directory
+  local target_path_1 = short_path(temp_dir, 'dir-target', 'dir')
+  local ref_pattern_1 = string.format([[    COPY: 'dir' to '%s']], vim.pesc(target_path_1))
+  validate_confirm_args(ref_pattern_1)
+
+  local target_path_2 = short_path(temp_dir, 'dir-copy')
+  local ref_pattern_2 = string.format([[    COPY: 'dir' to '%s']], vim.pesc(target_path_2))
+  validate_confirm_args(ref_pattern_2)
+end
+
+T['File manipulation']['can copy directory inside itself'] = function()
+  local temp_dir = make_temp_dir('temp', { 'dir/', 'dir/file', 'dir/nested/' })
+  open(temp_dir)
+
+  -- Write lines in copied file to check actual copy and not create
+  child.fn.writefile({ 'File' }, join_path(temp_dir, 'dir', 'file'))
+
+  -- Perform manipulation
+  type_keys('yy')
+  go_in()
+  type_keys('p')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_directory(temp_dir, 'dir')
+  validate_file_content(join_path(temp_dir, 'dir', 'file'), { 'File' })
+
+  validate_directory(temp_dir, 'dir', 'dir')
+  validate_file(temp_dir, 'dir', 'dir', 'file')
+  validate_file_content(join_path(temp_dir, 'dir', 'dir', 'file'), { 'File' })
+  validate_directory(temp_dir, 'dir', 'dir', 'nested')
+
+  -- Target path should be absolute but can with `~` for home directory
+  local target_path = short_path(temp_dir, 'dir', 'dir')
+  local ref_pattern = string.format([[    COPY: 'dir' to '%s']], vim.pesc(target_path))
+  validate_confirm_args(ref_pattern)
+end
+
+T['File manipulation']['handles simultanious copy and move'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file', 'dir/' })
+  open(temp_dir)
+
+  -- Write lines in copied file to check actual move/copy
+  child.fn.writefile({ 'File' }, join_path(temp_dir, 'file'))
+
+  -- Perform manipulation
+  type_keys('j', 'dd')
+  go_in()
+  -- - Move
+  type_keys('V', 'P')
+  -- - Copy
+  type_keys('P', 'C', 'file-1', '<Esc>')
+
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_no_file(temp_dir, 'file')
+  validate_file(temp_dir, 'dir', 'file')
+  validate_file_content(join_path(temp_dir, 'dir', 'file'), { 'File' })
+  validate_file(temp_dir, 'dir', 'file-1')
+  validate_file_content(join_path(temp_dir, 'dir', 'file-1'), { 'File' })
+
+  -- Validate separately as there is no guarantee which file is copied and
+  -- which is moved
+  validate_confirm_args('    COPY:')
+  validate_confirm_args('    MOVE:')
+end
+
+T['File manipulation']['handles simultanious copy and rename'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file' })
+  open(temp_dir)
+
+  -- Write lines in copied file to check actual move/copy
+  child.fn.writefile({ 'File' }, join_path(temp_dir, 'file'))
+
+  -- Perform manipulation
+  type_keys('yy')
+  -- - Rename
+  type_keys('C', 'file-1', '<Esc>')
+  -- - Copy
+  type_keys('"0p', 'C', 'file-2', '<Esc>')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_no_file(temp_dir, 'file')
+  validate_file(temp_dir, 'file-1')
+  validate_file_content(join_path(temp_dir, 'file-1'), { 'File' })
+  validate_file(temp_dir, 'file-2')
+  validate_file_content(join_path(temp_dir, 'file-2'), { 'File' })
+
+  -- Validate separately as there is no guarantee which file is copied and
+  -- which is moved
+  validate_confirm_args('    COPY:')
+  validate_confirm_args('  RENAME:')
+end
+
+T['File manipulation']['respects modified hidden buffers'] = function()
+  local temp_dir = make_temp_dir('temp', { 'file', 'dir/' })
+  open(temp_dir)
+
+  go_in()
+  type_keys('C', 'new-file', '<Esc>')
+  go_out()
+  trim_right()
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+
+  validate_file(temp_dir, 'dir', 'new-file')
+end
+
+T['File manipulation']['can be not confirmed'] = function()
+  open(test_dir_path)
+  type_keys('o', 'new-file', '<Esc>')
+
+  child.expect_screenshot()
+  mock_confirm(2)
+  synchronize()
+  child.expect_screenshot()
+  validate_no_file(test_dir_path, 'new-file')
+end
 
 T['File manipulation']['works with problematic names'] = function()
-  -- Like with spaces, etc.
-  MiniTest.skip()
+  local temp_dir = make_temp_dir('temp', { [[a %file-]], 'b file' })
+  open(temp_dir)
+
+  -- Perform manipulation
+  -- - Delete
+  type_keys('dd')
+  -- - Rename
+  type_keys('C', 'c file', '<Esc>')
+  -- - Create
+  type_keys('o', 'd file', '<Esc>')
+  child.expect_screenshot()
+
+  mock_confirm(1)
+  synchronize()
+  child.expect_screenshot()
+
+  validate_no_file(temp_dir, [[a %file-]])
+  validate_no_file(temp_dir, 'b file')
+  validate_file(temp_dir, 'c file')
+  validate_file(temp_dir, 'd file')
+end
+
+T['File manipulation']['ignores blank lines'] = function()
+  open(test_dir_path)
+  type_keys('o', '<Esc>', 'yy', 'p')
+  child.expect_screenshot()
+
+  -- Should synchronize without confirmation
+  synchronize()
+  child.expect_screenshot()
+end
+
+T['File manipulation']['ignores identical user-copied entries'] = function()
+  open(test_dir_path)
+  type_keys('yj', 'p')
+  child.expect_screenshot()
+
+  -- Should synchronize without confirmation
+  synchronize()
+  child.expect_screenshot()
 end
 
 T['Cursors'] = new_set()
 
-T['Cursors']['preserved during navigation'] = function() MiniTest.skip() end
+T['Cursors']['are preserved'] = function()
+  open(test_dir_path)
 
-T['Cursors']['preserved after hiding buffer'] = function() MiniTest.skip() end
+  -- During navigation
+  type_keys('j')
+  go_in()
+  go_in()
+  go_out()
+  validate_cur_line(1)
+  type_keys('j')
 
-T['Cursors']['preserved after opening from history'] = function() MiniTest.skip() end
+  go_out()
+  validate_cur_line(2)
 
-T['Cursors']['not allowed to the left of the entry name in Normal mode'] = function() MiniTest.skip() end
+  go_in()
+  validate_cur_line(2)
 
-T['Cursors']['not allowed to the left of the entry name in Insert mode'] = function() MiniTest.skip() end
+  -- In hidden buffers
+  go_out()
+  trim_left()
+  go_in()
+  validate_cur_line(2)
 
-T['Cursors']['shows whole line after moving to line start'] = function() MiniTest.skip() end
+  -- When opening from history
+  close()
+  open(test_dir_path, true)
+  validate_cur_line(2)
+  go_out()
+  validate_cur_line(2)
+end
+
+T['Cursors']['not allowed to the left of the entry name'] = function()
+  open(test_dir_path)
+  local cursor = get_cursor()
+
+  -- Normal mode
+  type_keys('b')
+  eq(get_cursor(), cursor)
+  type_keys('10b')
+  eq(get_cursor(), cursor)
+  type_keys('0')
+  eq(get_cursor(), cursor)
+
+  set_cursor(cursor[1], 0)
+  eq(get_cursor(), cursor)
+
+  -- Insert mode
+  type_keys('i')
+  type_keys('<Left>')
+  eq(get_cursor(), cursor)
+end
+
+T['Cursors']['shows whole line after horizontal scroll'] = function()
+  child.set_size(10, 60)
+
+  open(test_dir_path)
+
+  type_keys('5zl')
+  child.expect_screenshot()
+
+  type_keys('2B')
+  child.expect_screenshot()
+end
 
 T['Events'] = new_set()
 

@@ -1,15 +1,6 @@
 -- TODO:
 --
 -- Code:
--- - Implement MacOS Finder with column view type of file explorer:
---     - Think about proper handling of permissions:
---         - Explicitly check and throgh message prior every fs action (read?).
---         - Silently ignore (as is now).
---
--- - Implement 'oil.nvim' like file manipulation:
---
--- - Make an effort to ensure proper work on Windows and MacOS:
---     - Windows and MacOS use case insensitive file names.
 --
 -- Tests:
 --
@@ -122,6 +113,8 @@
 ---   Use |MiniFiles.synchronize()| for that.
 ---@tag MiniFiles-exploration
 
+--- Notes:
+--- - Add tips about easier file rename without using `h`/`l`.
 ---@tag MiniFiles-manipulation
 
 --- Notes:
@@ -852,7 +845,7 @@ H.explorer_compute_fs_actions = function(explorer)
       end
 
       -- NOTE: Can't use `delete` as array here in order for path to be moved
-      -- or rename only single time
+      -- or renamed only single time
       delete_map[diff.from] = nil
     else
       table.insert(copy, diff)
@@ -1334,10 +1327,13 @@ H.buffer_compute_fs_diff = function(buf_id, ref_path_ids)
     local path_id = H.match_line_path_id(l)
     local path_from = H.path_index[path_id]
 
+    -- Use whole line as name if no path id is detected
     local name_to = path_id ~= nil and l:sub(H.match_line_offset(l)) or l
+
     -- Preserve trailing '/' to distinguish between creating file or directory
     local path_to = H.fs_child_path(dir_path, name_to) .. (vim.endswith(name_to, '/') and '/' or '')
 
+    -- Ignore blank lines and already synced entries (even several user-copied)
     if not H.is_whitespace(name_to) and path_from ~= path_to then
       table.insert(res, { from = path_from, to = path_to })
     elseif path_id ~= nil then
@@ -1645,7 +1641,7 @@ H.fs_actions_to_lines = function(fs_actions)
 
   for _, diff in ipairs(fs_actions.copy) do
     local dir_actions = get_dir_actions(diff.from)
-    local l = string.format('    COPY: %s to %s', get_quoted_basename(diff.from), H.fs_shorten_path(diff.to))
+    local l = string.format("    COPY: %s to '%s'", get_quoted_basename(diff.from), H.fs_shorten_path(diff.to))
     table.insert(dir_actions, l)
   end
 
@@ -1664,7 +1660,7 @@ H.fs_actions_to_lines = function(fs_actions)
 
   for _, diff in ipairs(fs_actions.move) do
     local dir_actions = get_dir_actions(diff.from)
-    local l = string.format('    MOVE: %s to %s', get_quoted_basename(diff.from), H.fs_shorten_path(diff.to))
+    local l = string.format("    MOVE: %s to '%s'", get_quoted_basename(diff.from), H.fs_shorten_path(diff.to))
     table.insert(dir_actions, l)
   end
 
