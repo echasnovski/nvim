@@ -74,7 +74,7 @@ EC.execute_lua_line = function()
   vim.api.nvim_input('<Down>')
 end
 
--- Floating window with lazygit
+-- Tabpage with lazygit
 EC.open_lazygit = function()
   vim.cmd('tabedit')
   vim.cmd('setlocal nonumber signcolumn=no')
