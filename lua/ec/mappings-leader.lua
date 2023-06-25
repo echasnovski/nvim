@@ -19,9 +19,10 @@ EC.leader_nmap.b = {
 -- e is for 'explore'
 EC.leader_nmap.e = {
   ['name'] = '+explore',
-  ['t'] = { [[<Cmd>NvimTreeToggle<CR>]],       'tree' },
-  ['u'] = { [[<Cmd>UndotreeToggle<CR>]],       'undo-tree' },
-  ['q'] = { [[<Cmd>lua EC.toggle_quickfix()<CR>]], 'quickfix' },
+  ['d'] = { [[<Cmd>lua MiniFiles.open()<CR>]],                                       'directory' },
+  ['f'] = { [[<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>]],           'file directory' },
+  ['m'] = { [[<Cmd>lua MiniFiles.open('~/.config/nvim/pack/plugins/opt/mini')<CR>]], 'mini.nvim directory' },
+  ['q'] = { [[<Cmd>lua EC.toggle_quickfix()<CR>]],                                   'quickfix' },
 }
 
 -- f is for 'fuzzy find'

@@ -1,9 +1,5 @@
 vim.cmd('colorscheme randomhue')
 
-local has_files, files = pcall(require, 'mini.files')
-if not has_files then files = require('mini-dev.files') end
-files.setup()
-
 require('mini.sessions').setup({ directory = vim.fn.stdpath('config') .. '/misc/sessions' })
 
 require('mini.starter').setup()
@@ -103,6 +99,8 @@ vim.schedule(function()
   require('mini.cursorword').setup()
 
   require('mini.doc').setup()
+
+  require('mini.files').setup()
 
   local hipatterns = require('mini.hipatterns')
   hipatterns.setup({
