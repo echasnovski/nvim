@@ -26,10 +26,6 @@
 	path = pack/plugins/opt/nvim-web-devicons
 	url = https://github.com/nvim-tree/nvim-web-devicons
 	branch = master
-[submodule "nvim-tree"]
-	path = pack/plugins/opt/nvim-tree
-	url = https://github.com/nvim-tree/nvim-tree.lua
-	branch = master
 [submodule "plenary"]
 	path = pack/plugins/opt/plenary
 	url = https://github.com/nvim-lua/plenary.nvim
