@@ -1,6 +1,74 @@
 -- Helper table
 local H = {}
 
+-- Very early R&D for 'mini.pick'
+-- - Find files
+EC.read_dir_builtin = function(dir_path)
+  local res = {}
+  for name, fs_type in vim.fs.dir(dir_path, { depth = math.huge }) do
+    if fs_type == 'file' then table.insert(res, string.format('%s/%s', dir_path, name)) end
+  end
+  return res
+end
+
+EC.read_dir_find = function(dir_path) return vim.fn.systemlist({ 'find', dir_path, '-type', 'f' }) end
+
+EC.read_dir_rg = function(dir_path)
+  return vim.fn.systemlist({ 'rg', '--files', '--color', 'never', '--no-ignore', '--', dir_path })
+end
+
+EC.read_dir_globpath = function(dir_path) return vim.fn.globpath(dir_path, '**', false, true) end
+
+-- - Find patterns inside file
+EC.read_file_libuv = function(path)
+  -- Read file content
+  local fd = vim.loop.fs_open(path, 'r', 1)
+
+  local is_text = vim.loop.fs_read(fd, 1024, 0):find('\0') == nil
+  local content = ''
+  if is_text then
+    local size = vim.loop.fs_stat(path).size
+    content = vim.loop.fs_read(fd, size, 0)
+  end
+
+  vim.loop.fs_close(fd)
+
+  return vim.split(content, '\n')
+end
+
+EC.read_file_builtin = function(path) return vim.fn.readfile(path) end
+
+EC.find_in_file = function(path, pattern, read_fun)
+  local lines = read_fun(path)
+  if lines == nil then return nil end
+
+  local res = {}
+  for i, l in ipairs(lines) do
+    if string.find(l, pattern) ~= nil then table.insert(res, i) end
+  end
+  return res
+end
+
+-- - Find pattern inside whole directory
+EC.find_in_dir = function(path, pattern, read_dir_fun, read_file_fun)
+  local files = read_dir_fun(path)
+
+  local res = {}
+  for _, file_path in ipairs(files) do
+    local lines = read_file_fun(file_path) or {}
+
+    for i, l in ipairs(lines) do
+      if string.find(l, pattern) ~= nil then table.insert(res, { file_path, i, l }) end
+    end
+  end
+
+  return res
+end
+
+EC.find_in_dir_rg = function(dir_path, pattern)
+  return vim.fn.systemlist({ 'rg', '-e', pattern, '--color', 'never', '--no-ignore', '--', dir_path })
+end
+
 -- Show Neoterm's active REPL, i.e. in which command will be executed when one
 -- of `TREPLSend*` will be used
 EC.print_active_neoterm = function()
