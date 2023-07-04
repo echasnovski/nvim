@@ -5,13 +5,30 @@
 --
 -- - Docs:
 --     - Mostly designed for nested `<Leader>` keymaps.
---     - Don't use in cases there are meaningful mappings with one being prefix
---       of another, as it won't get executed. Examples:
---         - 'mini.comment' and `gc`: there are `gcc` and general `gc`.
+--
+--     - If trigger concists from several keys (like `<Leader>f`), it will be
+--       treated as single key. Matters for `<BS>`.
+--
+--     - Will override already present trigger mapping. Example:
+--         - 'mini.comment' and `gc`: there are `gcc` and general `gc` (would
+--           need `gc<CR>` followed by textobject).
+--
+--     - Isn't really designed to be used in cases where there are meaningful
+--       mappings with one being prefix of another, as it will need extra
+--       `<CR>` to execute shorter mapping
+--       Examples:
 --         - 'mini.surround' and `s`: there are 'next'/'previous' variants.
 --           Or disable both 'next'/'previous' mappings.
 --
 -- - Test:
+--     - Should query until and execute single "logn" keymap. Like if there are
+--       both `]e` and `]eee`, then, `]eee` should be reachable.
+--     - Should leverage `nowait` even if there was new mapping created after
+--       triggers mapped. Example: trigger - `]`, new mapping - `]e` (both
+--       global and buffer-local).
+--     - Should respect `[count]`.
+--     - Should work with multibyte characters.
+--     - Should respect `vim.b.miniclue_config` being set in `FileType` event.
 --
 
 --- *mini.clue* Show mapping clues
@@ -26,6 +43,7 @@
 ---   is, mapping input is active until:
 ---     - Valid mapping is complete: executed it.
 ---     - Latest key makes current key stack not match any mapping: do nothing.
+---     - User presses `<CR>`: execute current key stack.
 ---     - User presses `<Esc>`/`<C-c>`: cancel mapping.
 --- - Show window with clues about next available keys.
 --- - Allow hydra-like submodes.
@@ -125,7 +143,14 @@ H.ns_id = {
 H.state = {
   mode = 'n',
   keys = {},
+  timer = vim.loop.new_timer(),
+  count = 0,
   keymaps = {},
+  win_id = nil,
+}
+
+H.keys = {
+  bs = vim.api.nvim_replace_termcodes('<BS>', true, true, true),
 }
 
 -- Helper functionality =======================================================
@@ -154,20 +179,9 @@ end
 H.apply_config = function(config)
   MiniClue.config = config
 
-  local make_query = function(mode, keys)
-    return function()
-      H.state_set(mode, H.keys_split(keys))
-      -- Do not advance if no other mappings to query
-      if #H.state.keymaps <= 1 then return H.state_reset() end
-      H.state_advance()
-    end
-  end
-
-  for _, trigger in ipairs(config.triggers) do
-    local mode, keys = trigger.mode, trigger.keys
-    -- Use `nowait` to make it a primary source of keymap execution
-    local opts = { nowait = true, desc = 'Query clues after ' .. vim.inspect(keys) }
-    vim.keymap.set(mode, keys, make_query(mode, keys), opts)
+  -- Create trigger keymaps for all existing buffers
+  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+    H.map_triggers({ buf = buf_id })
   end
 end
 
@@ -177,6 +191,10 @@ H.create_autocommands = function(config)
   local au = function(event, pattern, callback, desc)
     vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
   end
+
+  -- Create buffer-local mappings for triggers to fully utilize `<nowait>`
+  -- Use `vim.schedule_wrap` to allow other events to create `vim.b.miniclue_config`
+  au('BufCreate', '*', vim.schedule_wrap(H.map_triggers), 'Create buffer-local trigger keymaps')
 
   -- au('VimResized', '*', MiniClue.refresh, 'Refresh on resize')
 end
@@ -197,37 +215,75 @@ H.get_config =
   function(config) return vim.tbl_deep_extend('force', MiniClue.config, vim.b.miniclue_config or {}, config or {}) end
 
 -- Autocommands ---------------------------------------------------------------
+H.map_triggers = function(data)
+  for _, trigger in ipairs(H.get_config().triggers) do
+    local mode, keys = trigger.mode, trigger.keys
 
--- State ----------------------------------------------------------------------
-H.state_set = function(mode, keys)
-  H.state = { mode = mode, keys = keys }
-  H.state.keymaps = H.filter_keymaps(H.get_all_keymaps(mode), keys)
+    -- Use buffer-local mappings and `nowait` to make it a primary source of
+    -- keymap execution
+    local opts = { buffer = data.buf, nowait = true, desc = 'Query clues after ' .. vim.inspect(keys) }
+
+    vim.keymap.set(mode, keys, H.make_query(mode, keys), opts)
+  end
 end
 
-H.state_advance = function()
-  -- TODO: Remove it and use inside clue window isntead
-  H.state_echo()
+H.make_query = function(mode, string_keys)
+  return function()
+    H.state_set(mode, { vim.api.nvim_replace_termcodes(string_keys, true, false, true) })
+    -- Do not advance if no other mappings to query
+    if #H.state.keymaps <= 1 then return H.state_reset() end
+    H.state_advance()
+  end
+end
 
+-- State ----------------------------------------------------------------------
+H.state_advance = function()
+  -- Handle showing clues: delay first show; update immediately if shown
+  H.state.timer:stop()
+  local delay = H.state.win_id == nil and H.get_config().window.delay or 0
+  H.state.timer:start(delay, 0, H.window_open)
+
+  -- Query user for new key
   local key = H.getcharstr()
 
+  -- Handle key
   if key == nil then return H.state_reset() end
+  if key == '\r' then return H.state_exec() end
 
-  H.state_push(key)
+  if key == H.keys.bs then
+    H.state_pop()
+  else
+    H.state_push(key)
+  end
 
-  local n_keymaps = #H.state.keymaps
-  if n_keymaps > 1 then return H.state_advance() end
-  -- TODO: this will execute even if mapping is not complete. Maybe it is a good thing?
-  if n_keymaps == 1 then return H.state_exec() end
+  -- Advance state
+  -- - Execute if reached single target
+  if H.state_is_at_target() then return H.state_exec() end
+
+  -- - Reset if there are no keys (like after `<BS>`)
+  if #H.state.keys == 0 then return H.state_reset() end
+
+  -- - Query user for more information if there is not enough
+  if #H.state.keymaps >= 1 then return H.state_advance() end
+
+  -- - Fall back for reset
   H.state_reset()
 end
 
+H.state_set = function(mode, keys)
+  H.state = { mode = mode, keys = keys, timer = H.state.timer }
+  H.state.count = vim.v.count
+  H.state.keymaps = H.filter_keymaps(H.get_all_keymaps(mode), keys)
+end
+
 H.state_reset = function()
-  H.state = { mode = 'n', keys = {}, keymaps = {} }
-  H.unecho()
+  H.state = { mode = 'n', keys = {}, count = 0, keymaps = {}, timer = H.state.timer }
+  H.state.timer:stop()
+  H.window_close()
 end
 
 H.state_exec = function()
-  local keys_str = H.keys_tostring(H.state.keys)
+  local keys_str = (H.state.count > 0 and H.state.count or '') .. H.keys_tostring(H.state.keys)
   H.state_reset()
   vim.api.nvim_feedkeys(keys_str, 'mt', false)
 end
@@ -242,7 +298,22 @@ H.state_pop = function()
   H.state.keymaps = H.filter_keymaps(H.get_all_keymaps(H.state.mode), H.state.keys)
 end
 
-H.state_echo = function() H.echo({ { 'Keys: ' }, { H.keys_tomsg(H.state.keys), 'ModeMsg' }, { ' ' } }, false) end
+H.state_is_at_target =
+  function() return #H.state.keymaps == 1 and H.keys_tostring(H.state.keys) == H.state.keymaps[1].lhsraw end
+
+-- Window ---------------------------------------------------------------------
+H.window_open = vim.schedule_wrap(function()
+  -- Create window if not already created
+  if H.state.win_id == nil then H.state.win_id = 1 end
+
+  -- Update content
+  H.echo({ { 'Keys: ' }, { H.keys_tomsg(H.state.keys), 'ModeMsg' }, { ' ' } }, false)
+end)
+
+H.window_close = function()
+  H.unecho()
+  H.state.win_id = nil
+end
 
 -- Keymaps --------------------------------------------------------------------
 H.get_all_keymaps = function(mode)
@@ -276,15 +347,7 @@ end
 
 H.keys_tostring = function(keys) return table.concat(keys, '') end
 
-H.keys_tomsg = function(keys)
-  local keys_readable = vim.tbl_map(vim.fn.keytrans, keys)
-  return table.concat(keys_readable, ' ')
-end
-
-H.keys_split = function(x)
-  -- TODO
-  return { H.escape_leader(x) }
-end
+H.keys_tomsg = function(keys) return vim.fn.keytrans(H.keys_tostring(keys)) end
 
 -- Utilities ------------------------------------------------------------------
 H.echo = function(msg, is_important)
