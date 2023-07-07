@@ -11,6 +11,7 @@
 --
 --       -- Along 'mini.surround'
 --       { mode = 'n', keys = 's' },
+--       { mode = 'x', keys = 's' },
 --
 --       -- For user mappings, built-in mappings, two-char sequence without
 --          mappings (like `gb`)
@@ -26,6 +27,21 @@
 --       -- Along 'mini.ai'
 --       { mode = 'x', keys = 'a' },
 --       { mode = 'o', keys = 'a' },
+--       { mode = 'x', keys = 'i' },
+--       { mode = 'o', keys = 'i' },
+--
+--     - Test cases:
+--       - `<Space>ff`
+--       - `[b`/`]b`
+--       - `[i`/`]i` in Normal, Visual, Operator-pending mode (with dot-repeat)
+--       - `\h`
+--       - 'mini.surround': `saiw)` and `viwsa)`, `sd}`, `sdn}`, `sdl}`
+--       - All operators in `:h operator`; editing once should preserve
+--         dot-repeat.
+--       - `[count]` support
+--       - Register support for operator-pending mode.
+--       - `gg`, `g~`, `go` from 'mini.basics' with dot-repeat
+--       - `g~iw` ("chaining" triggers)
 --
 -- - Docs:
 --     - Mostly designed for nested `<Leader>` keymaps.
@@ -45,8 +61,8 @@
 --           Or disable both 'next'/'previous' mappings.
 --
 -- - Test:
---     - Should query until and execute single "logn" keymap. Like if there are
---       both `]e` and `]eee`, then, `]eee` should be reachable.
+--     - Should query until and execute single "longest" keymap. Like if there
+--       are both `]e` and `]eee`, then, `]eee` should be reachable.
 --     - Should leverage `nowait` even if there was new mapping created after
 --       triggers mapped. Example: trigger - `]`, new mapping - `]e` (both
 --       global and buffer-local).
@@ -153,6 +169,8 @@ MiniClue.config = {
     { mode = 'n', keys = [[\]] },
 
     { mode = 'n', keys = 's' },
+    { mode = 'x', keys = 's' },
+
     { mode = 'n', keys = 'g' },
 
     { mode = 'x', keys = '[' },
@@ -162,6 +180,8 @@ MiniClue.config = {
 
     { mode = 'x', keys = 'a' },
     { mode = 'o', keys = 'a' },
+    { mode = 'x', keys = 'i' },
+    { mode = 'o', keys = 'i' },
   },
   window = {
     delay = 100,
@@ -330,18 +350,42 @@ end
 
 H.state_reset = function()
   H.state = { mode = 'n', trigger_keys = trigger_keys, keys = {}, count = 0, timer = H.state.timer, keymaps = {} }
-  -- H.exit_to_normal_mode()
   H.state.timer:stop()
   H.window_close()
 end
 
+-- TODO: remove when not needed
+_G.log = {}
 H.state_exec = function()
-  -- TODO: Add flag to not utilize triggers
   local mode, trigger_keys = H.state.mode, H.state.trigger_keys
-  -- local keys_mode = ({ x = 'gv', o = vim.v.operator })[mode] or ''
-  local keys_mode = ''
+
+  local keys_mode, keys_register = '', ''
+
+  if mode == 'o' then
+    local operator = vim.v.operator
+    keys_mode = operator
+
+    local uses_register = operator == 'c' or operator == 'd' or operator == 'y'
+    if uses_register then keys_mode = '"' .. vim.v.register .. keys_mode end
+
+    -- TODO: Is it really that only `c` will end up in Insert mode?
+    -- TODO: Why `g@` needs exit?
+    local needs_exit = operator == 'c' or operator == 'g@'
+    if needs_exit then
+      keys_mode = '\28\14' .. keys_mode
+
+      -- TODO: Doing '\28\14' is to work around operator which ends up in Insert
+      -- mode (like `ciw` iwht `i` trigger), BUT it moves cursor one space to left
+      -- (same as `i<Esc>`). Solution: add
+      vim.cmd('au InsertLeave * ++once normal! l')
+    end
+  end
+
   local keys_count = H.state.count > 0 and H.state.count or ''
-  local keys_str = keys_mode .. keys_count .. H.keys_tostring(H.state.keys)
+  local keys_str = H.keys_tostring(H.state.keys)
+
+  local keys_to_type = keys_mode .. keys_count .. keys_str
+  table.insert(_G.log, keys_to_type)
 
   H.state_reset()
 
@@ -350,15 +394,18 @@ H.state_exec = function()
   -- mapping evaluation it is prohibited to modify any buffer.
 
   local buf_id = vim.api.nvim_get_current_buf()
+
+  -- Delete trigger keymap to work around infinite recursion (like if `g` is
+  -- trigger then typing `gg`/`g~` would introduce infinite recursion)
   vim.keymap.del(mode, trigger_keys, { buffer = buf_id })
 
-  -- TODO: Find out which approach is best
-  -- vim.api.nvim_feedkeys(H.keys.ignore .. keys_str, 'mt', false)
-  vim.api.nvim_feedkeys(keys_str, 'm', false)
-  -- vim.cmd('normal ' .. keys_str)
-  -- vim.api.nvim_input(keys_str)
+  -- Execute keys. Using `i` flag is needed to make "chaining triggers" like
+  -- `g~iw` work.
+  -- TODO: BUT `saiw` still doesn't work properly.
+  vim.api.nvim_feedkeys(keys_to_type, 'mit', false)
 
-  H.map_trigger(buf_id, { mode = mode, keys = trigger_keys })
+  -- Remap trigger after keys are executed
+  vim.schedule(function() H.map_trigger(buf_id, { mode = mode, keys = trigger_keys }) end)
 end
 
 H.state_push = function(key)
