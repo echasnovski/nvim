@@ -9,13 +9,19 @@
 --       { mode = 'n', keys = ']' },
 --       { mode = 'n', keys = [[\]] },
 --
---       -- Along 'mini.surround'
---       { mode = 'n', keys = 's' },
---       { mode = 'x', keys = 's' },
+--       -- Insert mode
+--       { mode = 'i', keys = '<C-x>' },
 --
 --       -- For user mappings, built-in mappings, two-char sequence without
 --          mappings (like `gb`)
 --       { mode = 'n', keys = 'g' },
+--
+--       -- Built-in completion
+--       { mode = 'i', keys = '<C-x>' },
+--
+--       -- Along 'mini.surround'
+--       { mode = 'n', keys = 's' },
+--       { mode = 'x', keys = 's' },
 --
 --       -- For user mappings, built-in mappings, two-char sequence without
 --          mappings (like `gb`)
@@ -35,6 +41,7 @@
 --       - `[b`/`]b`
 --       - `[i`/`]i` in Normal, Visual, Operator-pending mode (with dot-repeat)
 --       - `\h`
+--       - `<C-x>` in Insert mode.
 --       - 'mini.surround': `saiw)` and `viwsa)`, `sd}`, `sdn}`, `sdl}`
 --       - All operators in `:h operator`; editing once should preserve
 --         dot-repeat.
@@ -42,6 +49,9 @@
 --       - Register support for operator-pending mode.
 --       - `gg`, `g~`, `go` from 'mini.basics' with dot-repeat
 --       - `g~iw` ("chaining" triggers)
+--
+--     - Think about allowing nested clues for easier use of possible built-in
+--       sets of clues (like for `g`, `z`, `<C-x>` (Insert mode), etc).
 --
 -- - Docs:
 --     - Mostly designed for nested `<Leader>` keymaps.
@@ -159,19 +169,45 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniClue.config = {
-  -- TODO: Make `postkeys` a field of `clues`
-  clues = {},
-  postkeys = {},
+  -- TODO: Decide on better name and use `clue` instead of `desc`?
+  clues = {
+    { mode = 'n', keys = 'g~', desc = 'Switch case' },
+    { mode = 'n', keys = 'gU', desc = 'Make uppercase' },
+    { mode = 'n', keys = 'gu', desc = 'Make lowercase' },
+    { mode = 'n', keys = 'g?', desc = 'Rot13 encode' },
+
+    { mode = 'i', keys = '<C-x><C-l>', desc = 'Complete line' },
+    { mode = 'i', keys = '<C-x><C-f>', desc = 'Complete file path' },
+
+    { mode = 'n', keys = '<C-w>h', desc = 'Focus left', postkeys = '<C-w>' },
+    { mode = 'n', keys = '<C-w>j', desc = 'Focus down', postkeys = '<C-w>' },
+    { mode = 'n', keys = '<C-w>k', desc = 'Focus up', postkeys = '<C-w>' },
+    { mode = 'n', keys = '<C-w>l', desc = 'Focus right', postkeys = '<C-w>' },
+
+    { mode = 'x', keys = 'iw', desc = 'Word' },
+    { mode = 'x', keys = 'if', desc = 'Function call' },
+    { mode = 'o', keys = 'iw', desc = 'Word' },
+    { mode = 'o', keys = 'iw', desc = 'Function call' },
+
+    { mode = 'x', keys = 'aw', desc = 'Word' },
+    { mode = 'x', keys = 'af', desc = 'Function call' },
+    { mode = 'o', keys = 'aw', desc = 'Word' },
+    { mode = 'o', keys = 'aw', desc = 'Function call' },
+  },
+
   triggers = {
     { mode = 'n', keys = '<Leader>' },
     { mode = 'n', keys = '[' },
     { mode = 'n', keys = ']' },
     { mode = 'n', keys = [[\]] },
 
+    { mode = 'i', keys = '<C-x>' },
+
     { mode = 'n', keys = 's' },
     { mode = 'x', keys = 's' },
 
     { mode = 'n', keys = 'g' },
+    { mode = 'n', keys = '<C-w>' },
 
     { mode = 'x', keys = '[' },
     { mode = 'o', keys = '[' },
@@ -183,6 +219,7 @@ MiniClue.config = {
     { mode = 'x', keys = 'i' },
     { mode = 'o', keys = 'i' },
   },
+
   window = {
     delay = 100,
     config = {},
@@ -201,12 +238,13 @@ H.ns_id = {
 
 -- State of user input
 H.state = {
-  trigger = nil,
   mode = 'n',
-  keys = {},
+  -- Raw-byte keys used to trigger state
+  trigger_keys = nil,
+  -- Array of keys
+  query = {},
+  clues = {},
   timer = vim.loop.new_timer(),
-  count = 0,
-  keymaps = {},
   win_id = nil,
 }
 
@@ -225,7 +263,6 @@ H.setup_config = function(config)
 
   vim.validate({
     clues = { config.clues, 'table' },
-    postkeys = { config.postkeys, 'table' },
     triggers = { config.triggers, 'table' },
     window = { config.window, 'table' },
   })
@@ -288,28 +325,32 @@ H.map_buf_triggers = function(data)
 end
 
 H.map_trigger = function(buf_id, trigger)
+  if not H.is_valid_buf(buf_id) then return end
+
   local mode, trigger_keys = trigger.mode, trigger.keys
 
   -- Use buffer-local mappings and `nowait` to make it a primary source of
   -- keymap execution
   local opts = { buffer = buf_id, nowait = true, desc = 'Query clues after ' .. vim.inspect(trigger_keys) }
 
-  vim.keymap.set(mode, trigger_keys, H.make_query(mode, trigger_keys), opts)
+  vim.keymap.set(mode, trigger_keys, H.make_init_query(mode, trigger_keys), opts)
 end
 
-H.make_query = function(mode, trigger_keys)
-  trigger_keys = vim.api.nvim_replace_termcodes(trigger_keys, true, false, true)
+H.make_init_query = function(mode, trigger_keys)
+  trigger_keys = H.replace_termcodes(trigger_keys)
+
   return function()
     H.state_set(mode, trigger_keys, { trigger_keys })
-    -- Do not advance if no other mappings to query
-    if #H.state.keymaps <= 1 then return H.state_reset() end
+    -- Do not advance if no other clues to query. NOTE: it is `<= 1` and not
+    -- `<= 0` because the "init query" mapping should match.
+    if vim.tbl_count(H.state.clues) <= 1 then return H.state_reset() end
     H.state_advance()
   end
 end
 
 -- State ----------------------------------------------------------------------
 H.state_advance = function()
-  -- Handle showing clues: delay first show; update immediately if shown
+  -- Show clues: delay (debounce) first show; update immediately if shown
   H.state.timer:stop()
   local delay = H.state.win_id == nil and H.get_config().window.delay or 0
   H.state.timer:start(delay, 0, H.window_update)
@@ -332,24 +373,24 @@ H.state_advance = function()
   if H.state_is_at_target() then return H.state_exec() end
 
   -- - Reset if there are no keys (like after `<BS>`)
-  if #H.state.keys == 0 then return H.state_reset() end
+  if #H.state.query == 0 then return H.state_reset() end
 
   -- - Query user for more information if there is not enough
   --   NOTE: still advance even if there is single clue because it is still not
   --   a target but can be one.
-  if #H.state.keymaps >= 1 then return H.state_advance() end
+  if vim.tbl_count(H.state.clues) >= 1 then return H.state_advance() end
 
   -- - Fall back for executing what user typed
   H.state_exec()
 end
 
-H.state_set = function(mode, trigger_keys, keys)
-  H.state = { mode = mode, trigger_keys = trigger_keys, keys = keys, count = vim.v.count, timer = H.state.timer }
-  H.state.keymaps = H.filter_keymaps(H.get_all_keymaps(mode), keys)
+H.state_set = function(mode, trigger_keys, query)
+  H.state = { mode = mode, trigger_keys = trigger_keys, query = query, timer = H.state.timer }
+  H.state.clues = H.clues_filter(H.get_clues(mode), query)
 end
 
 H.state_reset = function()
-  H.state = { mode = 'n', trigger_keys = trigger_keys, keys = {}, count = 0, timer = H.state.timer, keymaps = {} }
+  H.state = { mode = 'n', trigger_keys = nil, query = {}, timer = H.state.timer, clues = {} }
   H.state.timer:stop()
   H.window_close()
 end
@@ -359,7 +400,7 @@ _G.log = {}
 H.state_exec = function()
   local mode, trigger_keys = H.state.mode, H.state.trigger_keys
 
-  local keys_mode, keys_register = '', ''
+  local keys_mode = ''
 
   if mode == 'o' then
     local operator = vim.v.operator
@@ -381,10 +422,10 @@ H.state_exec = function()
     end
   end
 
-  local keys_count = H.state.count > 0 and H.state.count or ''
-  local keys_str = H.keys_tostring(H.state.keys)
+  local keys_count = vim.v.count > 0 and vim.v.count or ''
+  local keys = H.query_to_keys(H.state.query)
 
-  local keys_to_type = keys_mode .. keys_count .. keys_str
+  local keys_to_type = keys_mode .. keys_count .. keys
   table.insert(_G.log, keys_to_type)
 
   H.state_reset()
@@ -408,18 +449,18 @@ H.state_exec = function()
   vim.schedule(function() H.map_trigger(buf_id, { mode = mode, keys = trigger_keys }) end)
 end
 
-H.state_push = function(key)
-  table.insert(H.state.keys, key)
-  H.state.keymaps = H.filter_keymaps(H.state.keymaps, H.state.keys)
+H.state_push = function(keys)
+  table.insert(H.state.query, keys)
+  H.state.clues = H.clues_filter(H.state.clues, H.state.query)
 end
 
 H.state_pop = function()
-  H.state.keys[#H.state.keys] = nil
-  H.state.keymaps = H.filter_keymaps(H.get_all_keymaps(H.state.mode), H.state.keys)
+  H.state.query[#H.state.query] = nil
+  H.state.clues = H.clues_filter(H.get_clues(H.state.mode), H.state.query)
 end
 
 H.state_is_at_target =
-  function() return #H.state.keymaps == 1 and H.keys_tostring(H.state.keys) == H.state.keymaps[1].lhsraw end
+  function() return vim.tbl_count(H.state.clues) == 1 and H.state.clues[H.query_to_keys(H.state.query)] ~= nil end
 
 -- Window ---------------------------------------------------------------------
 local n = 1
@@ -435,7 +476,7 @@ H.window_update = vim.schedule_wrap(function()
   n = n + 1
 
   -- Update content
-  H.echo({ { 'Keys: ' }, { H.keys_tomsg(H.state.keys), 'ModeMsg' }, { ' ' } }, false)
+  H.echo({ { 'Keys: ' }, { H.query_to_msg(H.state.query), 'ModeMsg' }, { ' ' } }, false)
 end)
 
 H.window_close = function()
@@ -443,34 +484,40 @@ H.window_close = function()
   H.state.win_id = nil
 end
 
--- Keymaps --------------------------------------------------------------------
--- TODO: Use `config.clues` to list all available key sequences
-H.get_all_keymaps = function(mode)
+-- Clues ----------------------------------------------------------------------
+H.get_clues = function(mode)
   local res = {}
 
-  -- Get both non-buffer and buffer keymaps (favoring latter)
+  -- Order of clue precedence: global mappings < buffer mappings < config clues
   for _, map_data in ipairs(vim.api.nvim_get_keymap(mode)) do
-    res[map_data.lhsraw] = map_data
+    local lhsraw = H.replace_termcodes(map_data.lhs)
+    res[lhsraw] = { desc = map_data.desc }
   end
+
   for _, map_data in ipairs(vim.api.nvim_buf_get_keymap(0, mode)) do
-    res[map_data.lhsraw] = map_data
+    local lhsraw = H.replace_termcodes(map_data.lhs)
+    res[lhsraw] = { desc = map_data.desc }
   end
 
-  return vim.tbl_values(res)
-end
-
-H.filter_keymaps = function(keymaps, keys)
-  local keys_str = H.keys_tostring(keys)
-  local res = {}
-  for _, map_data in ipairs(keymaps) do
-    if vim.startswith(map_data.lhsraw, keys_str) then table.insert(res, map_data) end
+  for _, clue in ipairs(H.get_config().clues) do
+    local lhsraw = H.replace_termcodes(clue.keys)
+    res[lhsraw] = { desc = clue.desc, postkeys = clue.postkeys }
   end
+
   return res
 end
 
-H.keys_tostring = function(keys) return table.concat(keys, '') end
+H.clues_filter = function(clues, query)
+  local keys = H.query_to_keys(query)
+  for clue_keys, _ in pairs(clues) do
+    if not vim.startswith(clue_keys, keys) then clues[clue_keys] = nil end
+  end
+  return clues
+end
 
-H.keys_tomsg = function(keys) return vim.fn.keytrans(H.keys_tostring(keys)) end
+H.query_to_keys = function(query) return table.concat(query, '') end
+
+H.query_to_msg = function(query) return vim.fn.keytrans(H.query_to_keys(query)) end
 
 -- Utilities ------------------------------------------------------------------
 H.echo = function(msg, is_important)
@@ -498,6 +545,7 @@ end
 H.unecho = function() vim.cmd([[echo '' | redraw]]) end
 
 H.message = function(msg) H.echo(msg, true) end
+
 H.error = function(msg) error(string.format('(mini.clue) %s', msg), 0) end
 
 H.map = function(mode, lhs, rhs, opts)
@@ -506,23 +554,18 @@ H.map = function(mode, lhs, rhs, opts)
   vim.keymap.set(mode, lhs, rhs, opts)
 end
 
+H.replace_termcodes = function(x) return vim.api.nvim_replace_termcodes(x, true, false, true) end
+
+H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
+
+H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
+
 H.getcharstr = function()
   local ok, char = pcall(vim.fn.getcharstr)
 
   -- Terminate if couldn't get input (like with <C-c>) or it is `<Esc>`
   if not ok or char == '\27' then return end
   return char
-end
-
-H.exit_to_normal_mode = function()
-  -- Don't use `<C-\><C-n>` in command-line window as they close it
-  if vim.fn.getcmdwintype() ~= '' then
-    local is_vis, cur_mode = H.is_visual_mode()
-    if is_vis then vim.cmd('normal! ' .. cur_mode) end
-  else
-    -- '\28\14' is an escaped version of `<C-\><C-n>`
-    vim.cmd('normal! \28\14')
-  end
 end
 
 return MiniClue
