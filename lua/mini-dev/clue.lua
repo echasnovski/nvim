@@ -238,10 +238,8 @@ H.ns_id = {
 
 -- State of user input
 H.state = {
-  mode = 'n',
-  -- Raw-byte keys used to trigger state
-  trigger_keys = nil,
-  -- Array of keys
+  trigger = nil,
+  -- Array of raw keys
   query = {},
   clues = {},
   timer = vim.loop.new_timer(),
@@ -324,28 +322,41 @@ H.map_buf_triggers = function(data)
   end
 end
 
+-- Triggers -------------------------------------------------------------------
 H.map_trigger = function(buf_id, trigger)
   if not H.is_valid_buf(buf_id) then return end
 
-  local mode, trigger_keys = trigger.mode, trigger.keys
+  -- Compute mapping RHS
+  trigger.keys = H.replace_termcodes(trigger.keys)
 
-  -- Use buffer-local mappings and `nowait` to make it a primary source of
-  -- keymap execution
-  local opts = { buffer = buf_id, nowait = true, desc = 'Query clues after ' .. vim.inspect(trigger_keys) }
+  local rhs = function()
+    -- Don't act if for some reason was entered from executing state
+    if H.is_in_exec then
+      H.is_in_exec = nil
+      return
+    end
 
-  vim.keymap.set(mode, trigger_keys, H.make_init_query(mode, trigger_keys), opts)
-end
-
-H.make_init_query = function(mode, trigger_keys)
-  trigger_keys = H.replace_termcodes(trigger_keys)
-
-  return function()
-    H.state_set(mode, trigger_keys, { trigger_keys })
+    H.state_set(trigger, { trigger.keys })
     -- Do not advance if no other clues to query. NOTE: it is `<= 1` and not
     -- `<= 0` because the "init query" mapping should match.
     if vim.tbl_count(H.state.clues) <= 1 then return H.state_reset() end
     H.state_advance()
   end
+
+  -- Use buffer-local mappings and `nowait` to make it a primary source of
+  -- keymap execution
+  local desc = 'Query clues after ' .. vim.inspect(H.keytrans(trigger.keys))
+  local opts = { buffer = buf_id, nowait = true, desc = desc }
+
+  -- Create mapping
+  vim.keymap.set(trigger.mode, trigger.keys, rhs, opts)
+end
+
+H.disable_trigger = function(buf_id, trigger)
+  if type(trigger) ~= 'table' then return end
+
+  vim.keymap.del(trigger.mode, trigger.keys, { buffer = buf_id })
+  vim.schedule(function() H.map_trigger(buf_id, trigger) end)
 end
 
 -- State ----------------------------------------------------------------------
@@ -384,13 +395,13 @@ H.state_advance = function()
   H.state_exec()
 end
 
-H.state_set = function(mode, trigger_keys, query)
-  H.state = { mode = mode, trigger_keys = trigger_keys, query = query, timer = H.state.timer }
-  H.state.clues = H.clues_filter(H.get_clues(mode), query)
+H.state_set = function(trigger, query)
+  H.state = { trigger = trigger, query = query, timer = H.state.timer, win_id = H.state.win_id }
+  H.state.clues = H.clues_filter(H.get_clues(trigger.mode), query)
 end
 
 H.state_reset = function()
-  H.state = { mode = 'n', trigger_keys = nil, query = {}, timer = H.state.timer, clues = {} }
+  H.state = { trigger = nil, query = {}, timer = H.state.timer, clues = {} }
   H.state.timer:stop()
   H.window_close()
 end
@@ -398,11 +409,9 @@ end
 -- TODO: remove when not needed
 _G.log = {}
 H.state_exec = function()
-  local mode, trigger_keys = H.state.mode, H.state.trigger_keys
-
+  -- Compute keys to type
   local keys_mode = ''
-
-  if mode == 'o' then
+  if H.state.trigger.mode == 'o' then
     local operator = vim.v.operator
     keys_mode = operator
 
@@ -428,25 +437,23 @@ H.state_exec = function()
   local keys_to_type = keys_mode .. keys_count .. keys
   table.insert(_G.log, keys_to_type)
 
+  -- NOTE: VERY IMPORTANT!
+  -- Temporarily disable trigger keymap to work around infinite recursion (like
+  -- if `g` is trigger then typing `gg`/`g~` would introduce infinite
+  -- recursion). Trigger is remapped after keys are executed.
+  H.disable_trigger(vim.api.nvim_get_current_buf(), H.state.trigger)
+
+  -- Add extra (redundant) safety flag to avoid inifinite recursion
+  H.is_in_exec = true
+  vim.schedule(function() H.is_in_exec = nil end)
+
+  -- Reset state
   H.state_reset()
-
-  -- NOTE: expression mapping approach (show clues while user types, and
-  -- return them once it is done) can't be used because during expression
-  -- mapping evaluation it is prohibited to modify any buffer.
-
-  local buf_id = vim.api.nvim_get_current_buf()
-
-  -- Delete trigger keymap to work around infinite recursion (like if `g` is
-  -- trigger then typing `gg`/`g~` would introduce infinite recursion)
-  vim.keymap.del(mode, trigger_keys, { buffer = buf_id })
 
   -- Execute keys. Using `i` flag is needed to make "chaining triggers" like
   -- `g~iw` work.
   -- TODO: BUT `saiw` still doesn't work properly.
   vim.api.nvim_feedkeys(keys_to_type, 'mit', false)
-
-  -- Remap trigger after keys are executed
-  vim.schedule(function() H.map_trigger(buf_id, { mode = mode, keys = trigger_keys }) end)
 end
 
 H.state_push = function(keys)
@@ -456,7 +463,7 @@ end
 
 H.state_pop = function()
   H.state.query[#H.state.query] = nil
-  H.state.clues = H.clues_filter(H.get_clues(H.state.mode), H.state.query)
+  H.state.clues = H.clues_filter(H.get_clues(H.state.trigger.mode), H.state.query)
 end
 
 H.state_is_at_target =
@@ -517,7 +524,7 @@ end
 
 H.query_to_keys = function(query) return table.concat(query, '') end
 
-H.query_to_msg = function(query) return vim.fn.keytrans(H.query_to_keys(query)) end
+H.query_to_msg = function(query) return H.keytrans(H.query_to_keys(query)) end
 
 -- Utilities ------------------------------------------------------------------
 H.echo = function(msg, is_important)
@@ -555,6 +562,9 @@ H.map = function(mode, lhs, rhs, opts)
 end
 
 H.replace_termcodes = function(x) return vim.api.nvim_replace_termcodes(x, true, false, true) end
+
+-- TODO: Remove after compatibility with Neovim=0.7 is dropped
+H.keytrans = vim.fn.has('nvim-0.8') == 1 and vim.fn.keytrans or function(x) return x end
 
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
 
