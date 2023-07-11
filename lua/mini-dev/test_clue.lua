@@ -131,7 +131,6 @@ T['setup()']['creates side effects'] = function()
   validate_hl_group('MiniClueBorder', 'links to FloatBorder')
   validate_hl_group('MiniClueGroup', 'links to DiagnosticFloatingWarn')
   validate_hl_group('MiniClueNextKey', 'links to DiagnosticFloatingHint')
-  validate_hl_group('MiniClueNoKeymap', 'links to DiagnosticFloatingError')
   validate_hl_group('MiniClueNormal', 'links to NormalFloat')
   validate_hl_group('MiniClueSingle', 'links to DiagnosticFloatingInfo')
   validate_hl_group('MiniClueTitle', 'links to FloatTitle')
@@ -173,6 +172,13 @@ T['setup()']['validates `config` argument'] = function()
 end
 
 -- T['setup()']['respects "human-readable" key names'] = function()
+--   -- In `clues` (`keys` and 'postkeys')
+--
+--   -- In `triggers`
+--   MiniTest.skip()
+-- end
+
+-- T['setup()']['respects explicit `<Leader>`'] = function()
 --   -- In `clues` (`keys` and 'postkeys')
 --
 --   -- In `triggers`
@@ -312,23 +318,249 @@ T['Emulating mappings']['works for user keymaps in Visual mode'] = function()
   eq(get_test_map_count('x', ' f'), 3)
 end
 
-T['Emulating mappings']['works for builtin keymaps in Operator-pending mode'] = function()
-  -- Should test with all operators (`:h operators`)
-  MiniTest.skip()
+T['Emulating mappings']['Operator-pending; built-in keymaps'] = new_set({
+  hooks = {
+    pre_case = function()
+      load_module({ triggers = { { mode = 'o', keys = 'i' } } })
+      validate_trigger_keymap('o', 'i')
+    end,
+  },
+})
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['c'] = function()
+  validate_edit1d('aa bb cc', 3, 'ciwdd', 'aa dd cc', 5)
+
+  -- Dot-repeat
+  validate_edit1d('aa bb', 0, 'ciwdd<Esc>w.', 'dd dd', 4)
+
+  -- Should respect register
+  validate_edit1d('aaa', 0, '"aciwxxx', 'xxx', 3)
+  eq(child.fn.getreg('a'), 'aaa')
 end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['d'] = function()
+  validate_edit1d('aa bb cc', 3, 'diw', 'aa  cc', 3)
+
+  -- Should respect register
+  validate_edit1d('aaa', 0, '"adiw', '', 0)
+  eq(child.fn.getreg('a'), 'aaa')
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['y'] = function()
+  validate_edit1d('aa bb cc', 3, 'yiwP', 'aa bbbb cc', 4)
+
+  -- Should respect register
+  validate_edit1d('aaa', 0, '"ayiw', 'aaa', 0)
+  eq(child.fn.getreg('a'), 'aaa')
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['~'] = function()
+  child.o.tildeop = true
+
+  validate_edit1d('aa bb', 0, '~iw', 'AA bb', 0)
+  validate_edit1d('aa bb', 1, '~iw', 'AA bb', 0)
+  validate_edit1d('aa bb', 3, '~iw', 'aa BB', 3)
+
+  -- Dot-repeat
+  validate_edit1d('aa bb', 0, '~iww.', 'AA BB', 3)
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['g~'] = function()
+  validate_edit1d('aa bb', 0, 'g~iw', 'AA bb', 0)
+  validate_edit1d('aa bb', 1, 'g~iw', 'AA bb', 0)
+  validate_edit1d('aa bb', 3, 'g~iw', 'aa BB', 3)
+
+  -- Dot-repeat
+  validate_edit1d('aa bb', 0, 'g~iww.', 'AA BB', 3)
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['gu'] = function()
+  validate_edit1d('AA BB', 0, 'guiw', 'aa BB', 0)
+  validate_edit1d('AA BB', 1, 'guiw', 'aa BB', 0)
+  validate_edit1d('AA BB', 3, 'guiw', 'AA bb', 3)
+
+  -- Dot-repeat
+  validate_edit1d('AA BB', 0, 'guiww.', 'aa bb', 3)
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['gU'] = function()
+  validate_edit1d('aa bb', 0, 'gUiw', 'AA bb', 0)
+  validate_edit1d('aa bb', 1, 'gUiw', 'AA bb', 0)
+  validate_edit1d('aa bb', 3, 'gUiw', 'aa BB', 3)
+
+  -- Dot-repeat
+  validate_edit1d('aa bb', 0, 'gUiww.', 'AA BB', 3)
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['gq'] = function()
+  child.lua([[_G.formatexpr = function()
+    local from, to = vim.v.lnum, vim.v.lnum + vim.v.count - 1
+    local new_lines = {}
+    for _ = 1, vim.v.count do table.insert(new_lines, 'xxx') end
+    vim.api.nvim_buf_set_lines(0, from - 1, to, false, new_lines)
+  end]])
+  child.bo.formatexpr = 'v:lua.formatexpr()'
+
+  validate_edit({ 'aa', 'aa', '', 'bb' }, { 1, 0 }, 'gqip', { 'xxx', 'xxx', '', 'bb' }, { 1, 0 })
+
+  -- Dot-repeat
+  validate_edit({ 'aa', 'aa', '', 'bb', 'bb' }, { 1, 0 }, 'gqipG.', { 'xxx', 'xxx', '', 'xxx', 'xxx' }, { 4, 0 })
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['gw'] = function()
+  child.o.textwidth = 5
+
+  validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, 'gwip', { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
+
+  -- Dot-repeat
+  validate_edit({ 'aaa aaa', '', 'bbb bbb' }, { 1, 0 }, 'gwipG.', { 'aaa', 'aaa', '', 'bbb', 'bbb' }, { 4, 0 })
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['g?'] = function()
+  validate_edit1d('aa bb', 0, 'g?iw', 'nn bb', 0)
+  validate_edit1d('aa bb', 1, 'g?iw', 'nn bb', 0)
+  validate_edit1d('aa bb', 3, 'g?iw', 'aa oo', 3)
+
+  -- Dot-repeat
+  validate_edit1d('aa bb', 0, 'g?iww.', 'nn oo', 3)
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['!'] = function() MiniTest.skip() end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['='] = function()
+  validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, '=ip', { 'aa', 'aa', '', 'bb' }, { 1, 0 })
+
+  -- Dot-repeat
+  validate_edit({ 'aa', '\taa', '', 'bb', '\tbb' }, { 1, 0 }, '=ipG.', { 'aa', 'aa', '', 'bb', 'bb' }, { 4, 0 })
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['>'] = function()
+  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>ip', { '\taa', '', 'bb' }, { 1, 0 })
+
+  -- Dot-repeat
+  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>ip.2j.', { '\t\taa', '', '\tbb' }, { 3, 0 })
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['<'] = function()
+  validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, '<LT>ip', { '\taa', '', 'bb' }, { 1, 0 })
+
+  -- Dot-repeat
+  validate_edit({ '\t\t\taa', '', '\tbb' }, { 1, 0 }, '<LT>ip.2j.', { '\taa', '', 'bb' }, { 3, 1 })
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['zf'] = function()
+  set_lines({ 'aa', 'aa', '', 'bb' })
+  set_cursor(1, 0)
+
+  type_keys('zfip')
+  eq(child.fn.foldclosed(1), 1)
+  eq(child.fn.foldclosed(2), 1)
+  eq(child.fn.foldclosed(3), -1)
+  eq(child.fn.foldclosed(4), -1)
+end
+
+T['Emulating mappings']['Operator-pending; built-in keymaps']['g@'] = function() MiniTest.skip() end
 
 T['Emulating mappings']['works for user keymaps in Operator-pending mode'] = function()
   -- Should test with all operators (`:h operators`)
   MiniTest.skip()
 end
 
-T['Emulating mappings']['works for builtin keymaps in Terminal mode'] = function() MiniTest.skip() end
-
-T['Emulating mappings']['works for user keymaps in Terminal mode'] = function() MiniTest.skip() end
+T['Emulating mappings']['keeps dot-repeat'] = function() MiniTest.skip() end
 
 T['Emulating mappings']['works when both operator and textobject result from triggers'] = function() MiniTest.skip() end
 
+T['Emulating mappings']['works for builtin keymaps in Terminal mode'] = function()
+  load_module({ triggers = { { mode = 't', keys = [[<C-\>]] } } })
+  validate_trigger_keymap('t', [[<C-\>]])
+
+  child.cmd('wincmd v')
+  child.cmd('terminal')
+  -- Wait for terminal to load
+  vim.loop.sleep(100)
+  child.cmd('startinsert')
+  eq(child.fn.mode(), 't')
+
+  type_keys([[<C-\><C-n>]])
+  eq(child.fn.mode(), 'n')
+end
+
+T['Emulating mappings']['works for user keymaps in Terminal mode'] = function()
+  -- Should work for both keymap created before and after making trigger
+  make_test_map('t', '<Space>f')
+  load_module({ triggers = { { mode = 't', keys = '<Space>' } } })
+  make_test_map('t', '<Space>g')
+
+  validate_trigger_keymap('t', '<Space>')
+
+  child.cmd('wincmd v')
+  child.cmd('terminal')
+  -- Wait for terminal to load
+  vim.loop.sleep(100)
+  child.cmd('startinsert')
+  eq(child.fn.mode(), 't')
+
+  type_keys(' f')
+  eq(child.fn.mode(), 't')
+  eq(get_test_map_count('t', ' f'), 1)
+  eq(get_test_map_count('t', ' g'), 0)
+
+  type_keys(' g')
+  eq(child.fn.mode(), 't')
+  eq(get_test_map_count('t', ' f'), 1)
+  eq(get_test_map_count('t', ' g'), 1)
+end
+
+T['Emulating mappings']['works for builtin keymaps in Command-line mode'] = function()
+  load_module({ triggers = { { mode = 'c', keys = '<C-r>' } } })
+  validate_trigger_keymap('c', '<C-R>')
+
+  set_lines({ 'aaa' })
+  set_cursor(1, 0)
+  type_keys(':', '<C-r><C-w>')
+  eq(child.fn.getcmdline(), 'aaa')
+end
+
+T['Emulating mappings']['works for user keymaps in Command-line mode'] = function()
+  -- Should work for both keymap created before and after making trigger
+  make_test_map('c', '<Space>f')
+  load_module({ triggers = { { mode = 'c', keys = '<Space>' } } })
+  make_test_map('c', '<Space>g')
+
+  validate_trigger_keymap('c', '<Space>')
+
+  type_keys(':')
+
+  type_keys(' f')
+  eq(child.fn.mode(), 'c')
+  eq(get_test_map_count('c', ' f'), 1)
+  eq(get_test_map_count('c', ' g'), 0)
+
+  type_keys(' g')
+  eq(child.fn.mode(), 'c')
+  eq(get_test_map_count('c', ' f'), 1)
+  eq(get_test_map_count('c', ' g'), 1)
+end
+
 T['Emulating mappings']['respects `[count]`'] = function() MiniTest.skip() end
+
+T['Emulating mappings']['trigger forwards keys even if no extra clues is set'] = function()
+  load_module({
+    triggers = {
+      { mode = 'c', keys = 'g' },
+      { mode = 'i', keys = 'g' },
+    },
+  })
+  validate_trigger_keymap('c', 'g')
+  validate_trigger_keymap('i', 'g')
+
+  type_keys(':', 'g')
+  eq(child.fn.getcmdline(), 'g')
+
+  child.ensure_normal_mode()
+  type_keys('i', 'g')
+  eq(get_lines(), { 'g' })
+end
 
 T['Emulating mappings']["works with 'mini.ai'"] = function() MiniTest.skip() end
 
@@ -343,5 +575,7 @@ T['Emulating mappings']["works with 'mini.surround'"] = function() MiniTest.skip
 -- T['Emulating mappings']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
 
 -- T['Emulating mappings']['works buffer-local mappings'] = function() MiniTest.skip() end
+
+-- T['Emulating mappings']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 return T

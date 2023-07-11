@@ -121,7 +121,6 @@
 --- * `MiniClueBorder` - window border.
 --- * `MiniClueGroup` - group description in clue window.
 --- * `MiniClueNextKey` - next key label in clue window.
---- * `MiniClueNoKeymap` - clue window entry without keymap.
 --- * `MiniClueNormal` - basic foreground/background highlighting.
 --- * `MiniClueSingle` - single key description in clue window.
 --- * `MiniClueTitle` - window title.
@@ -179,6 +178,9 @@ MiniClue.config = {
     { mode = 'i', keys = '<C-x><C-l>', desc = 'Complete line' },
     { mode = 'i', keys = '<C-x><C-f>', desc = 'Complete file path' },
 
+    { mode = 'c', keys = '<C-r><C-w>', desc = 'Word under cursor' },
+    { mode = 'c', keys = '<C-r>=', desc = 'Expression register' },
+
     { mode = 'n', keys = '<C-w>h', desc = 'Focus left', postkeys = '<C-w>' },
     { mode = 'n', keys = '<C-w>j', desc = 'Focus down', postkeys = '<C-w>' },
     { mode = 'n', keys = '<C-w>k', desc = 'Focus up', postkeys = '<C-w>' },
@@ -202,6 +204,11 @@ MiniClue.config = {
     { mode = 'n', keys = [[\]] },
 
     { mode = 'i', keys = '<C-x>' },
+
+    { mode = 'c', keys = '<C-r>' },
+
+    { mode = 't', keys = '<C-w>' },
+    { mode = 't', keys = '<Space>' },
 
     { mode = 'n', keys = 's' },
     { mode = 'x', keys = 's' },
@@ -306,7 +313,6 @@ H.create_default_hl = function()
   hi('MiniClueBorder',   { link = 'FloatBorder' })
   hi('MiniClueGroup',    { link = 'DiagnosticFloatingWarn' })
   hi('MiniClueNextKey',  { link = 'DiagnosticFloatingHint' })
-  hi('MiniClueNoKeymap', { link = 'DiagnosticFloatingError' })
   hi('MiniClueNormal',   { link = 'NormalFloat' })
   hi('MiniClueSingle',   { link = 'DiagnosticFloatingInfo' })
   hi('MiniClueTitle',    { link = 'FloatTitle' })
@@ -337,15 +343,17 @@ H.map_trigger = function(buf_id, trigger)
     end
 
     H.state_set(trigger, { trigger.keys })
+
     -- Do not advance if no other clues to query. NOTE: it is `<= 1` and not
     -- `<= 0` because the "init query" mapping should match.
-    if vim.tbl_count(H.state.clues) <= 1 then return H.state_reset() end
+    if vim.tbl_count(H.state.clues) <= 1 then return H.state_exec() end
+
     H.state_advance()
   end
 
   -- Use buffer-local mappings and `nowait` to make it a primary source of
   -- keymap execution
-  local desc = 'Query clues after ' .. vim.inspect(H.keytrans(trigger.keys))
+  local desc = string.format('Query clues after "%s"', H.keytrans(trigger.keys))
   local opts = { buffer = buf_id, nowait = true, desc = desc }
 
   -- Create mapping
@@ -410,38 +418,18 @@ end
 _G.log = {}
 H.state_exec = function()
   -- Compute keys to type
-  local keys_mode = ''
-  if H.state.trigger.mode == 'o' then
-    local operator = vim.v.operator
-    keys_mode = operator
-
-    local uses_register = operator == 'c' or operator == 'd' or operator == 'y'
-    if uses_register then keys_mode = '"' .. vim.v.register .. keys_mode end
-
-    -- TODO: Is it really that only `c` will end up in Insert mode?
-    -- TODO: Why `g@` needs exit?
-    local needs_exit = operator == 'c' or operator == 'g@'
-    if needs_exit then
-      keys_mode = '\28\14' .. keys_mode
-
-      -- TODO: Doing '\28\14' is to work around operator which ends up in Insert
-      -- mode (like `ciw` iwht `i` trigger), BUT it moves cursor one space to left
-      -- (same as `i<Esc>`). Solution: add
-      vim.cmd('au InsertLeave * ++once normal! l')
-    end
-  end
-
+  local keys_mode = H.compute_exec_mode_keys(H.state.trigger.mode)
   local keys_count = vim.v.count > 0 and vim.v.count or ''
-  local keys = H.query_to_keys(H.state.query)
+  local keys_query = H.query_to_keys(H.state.query)
 
-  local keys_to_type = keys_mode .. keys_count .. keys
+  local keys_to_type = keys_mode .. keys_count .. keys_query
   table.insert(_G.log, keys_to_type)
 
   -- NOTE: VERY IMPORTANT!
   -- Temporarily disable trigger keymap to work around infinite recursion (like
   -- if `g` is trigger then typing `gg`/`g~` would introduce infinite
   -- recursion). Trigger is remapped after keys are executed.
-  H.disable_trigger(vim.api.nvim_get_current_buf(), H.state.trigger)
+  H.disable_relevant_triggers(H.state.trigger)
 
   -- Add extra (redundant) safety flag to avoid inifinite recursion
   H.is_in_exec = true
@@ -453,7 +441,7 @@ H.state_exec = function()
   -- Execute keys. Using `i` flag is needed to make "chaining triggers" like
   -- `g~iw` work.
   -- TODO: BUT `saiw` still doesn't work properly.
-  vim.api.nvim_feedkeys(keys_to_type, 'mit', false)
+  vim.api.nvim_feedkeys(keys_to_type, 'mit!', false)
 end
 
 H.state_push = function(keys)
@@ -468,6 +456,68 @@ end
 
 H.state_is_at_target =
   function() return vim.tbl_count(H.state.clues) == 1 and H.state.clues[H.query_to_keys(H.state.query)] ~= nil end
+
+H.compute_exec_mode_keys = function(mode)
+  -- Currently only Operator-pending mode needs special keys to reproduce
+  -- actually used operator (because using `feedkeys()` inside Operator-pending
+  -- mode leads to its cancel into Normal/Insert mode)
+  if mode ~= 'o' then return '' end
+
+  local operator = vim.v.operator
+  local res = operator
+
+  -- Add register
+  local uses_register = operator == 'c' or operator == 'd' or operator == 'y'
+  if uses_register then res = '"' .. vim.v.register .. res end
+
+  -- Some operators end up changing mode which affects `feedkeys()`
+  -- Solution: exit to Normal mode
+  local needs_exit = operator == 'c' or operator == '!'
+  if needs_exit then res = '\28\14' .. res end
+
+  -- Doing '\28\14' is a work around for operators ending up in Insert
+  -- mode (like `ciw` with `i` trigger), BUT it moves cursor one space to left
+  -- (same as `i<Esc>`).
+  -- Solution: add one-shot autocommand correcting cursor position.
+  local needs_cursor_correction = operator == 'c'
+  if needs_cursor_correction then vim.cmd('au InsertLeave * ++once normal! l') end
+
+  -- Some operators still perform some redundant operation before `feedkeys()`
+  -- takes effect. Solution: add one-shot autocommand undoing that.
+  local needs_undo_first_col = (operator == '~' or operator == 'g~' or operator == 'g?') and vim.fn.col('.') == 1
+  local needs_undo_indent = operator == '<' or operator == '>'
+  local needs_undo = needs_undo_first_col or needs_undo_indent
+  if needs_undo then vim.cmd('au ModeChanged * ++once undo' .. (vim.fn.has('nvim-0.8') == 1 and '!' or '')) end
+
+  return res
+end
+
+H.disable_relevant_triggers = function(trigger)
+  local buf_id = vim.api.nvim_get_current_buf()
+  H.disable_trigger(buf_id, trigger)
+
+  -- In not Operator-pending only target trigger needs to be disabled
+  if trigger.mode ~= 'o' then return end
+
+  -- In operator-pending mode operator also can be triggerable (like `g~`/`gc`
+  -- if `g` is trigger in Normal mode)
+  local normal_triggers = {}
+  for _, trig in ipairs(H.get_config().triggers) do
+    if trig.mode == 'n' then normal_triggers[trig.keys] = true end
+  end
+
+  local maybe_disable = function(keys)
+    if not normal_triggers[keys] then return end
+    H.disable_trigger(buf_id, { mode = 'n', keys = keys })
+  end
+
+  local operator = vim.v.operator
+  maybe_disable(operator)
+  if operator:len() > 1 then
+    maybe_disable(operator:sub(1, 1))
+    maybe_disable(operator:sub(2, 2))
+  end
+end
 
 -- Window ---------------------------------------------------------------------
 local n = 1
@@ -506,9 +556,12 @@ H.get_clues = function(mode)
     res[lhsraw] = { desc = map_data.desc }
   end
 
-  for _, clue in ipairs(H.get_config().clues) do
-    local lhsraw = H.replace_termcodes(clue.keys)
-    res[lhsraw] = { desc = clue.desc, postkeys = clue.postkeys }
+  local mode_clues = vim.tbl_filter(function(x) return x.mode == mode end, H.get_config().clues)
+  for _, clue in ipairs(mode_clues) do
+    if clue.mode == mode then
+      local lhsraw = H.replace_termcodes(clue.keys)
+      res[lhsraw] = { desc = clue.desc, postkeys = clue.postkeys }
+    end
   end
 
   return res
