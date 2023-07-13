@@ -193,10 +193,14 @@ end
 --   MiniTest.skip()
 -- end
 
--- Integration tests ==========================================================
-T['Emulating mappings'] = new_set()
+T['execute_without_triggers()'] = new_set()
 
-T['Emulating mappings']['works for builtin keymaps in Normal mode'] = function()
+T['execute_without_triggers()']['works'] = function() MiniTest.skip() end
+
+-- Integration tests ==========================================================
+T['Reproducing keys'] = new_set()
+
+T['Reproducing keys']['works for builtin keymaps in Normal mode'] = function()
   load_module({ triggers = { { mode = 'n', keys = 'g' } } })
   validate_trigger_keymap('n', 'g')
 
@@ -218,7 +222,7 @@ T['Emulating mappings']['works for builtin keymaps in Normal mode'] = function()
   eq(get_cursor(), { 2, 0 })
 end
 
-T['Emulating mappings']['works for user keymaps in Normal mode'] = function()
+T['Reproducing keys']['works for user keymaps in Normal mode'] = function()
   -- Should work for both keymap created before and after making trigger
   make_test_map('n', '<Space>f')
   load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
@@ -235,7 +239,14 @@ T['Emulating mappings']['works for user keymaps in Normal mode'] = function()
   eq(get_test_map_count('n', ' g'), 1)
 end
 
-T['Emulating mappings']['works for builtin keymaps in Insert mode'] = function()
+T['Reproducing keys']['respects `[count]` in Normal mode'] = function()
+  load_module({ triggers = { { mode = 'n', keys = 'g' } } })
+  validate_trigger_keymap('n', 'g')
+
+  validate_move1d('aa bb cc', 6, '2ge', 1)
+end
+
+T['Reproducing keys']['works for builtin keymaps in Insert mode'] = function()
   load_module({ triggers = { { mode = 'i', keys = '<C-x>' } } })
   validate_trigger_keymap('i', '<C-X>')
 
@@ -248,7 +259,7 @@ T['Emulating mappings']['works for builtin keymaps in Insert mode'] = function()
   eq(complete_words, { 'aa aa', 'bb bb' })
 end
 
-T['Emulating mappings']['works for user keymaps in Insert mode'] = function()
+T['Reproducing keys']['works for user keymaps in Insert mode'] = function()
   -- Should work for both keymap created before and after making trigger
   make_test_map('i', '<Space>f')
   load_module({ triggers = { { mode = 'i', keys = '<Space>' } } })
@@ -269,7 +280,7 @@ T['Emulating mappings']['works for user keymaps in Insert mode'] = function()
   eq(get_test_map_count('i', ' g'), 1)
 end
 
-T['Emulating mappings']['works for builtin keymaps in Visual mode'] = function()
+T['Reproducing keys']['works for builtin keymaps in Visual mode'] = function()
   load_module({ triggers = { { mode = 'x', keys = 'g' }, { mode = 'x', keys = 'a' } } })
   validate_trigger_keymap('x', 'g')
   validate_trigger_keymap('x', 'a')
@@ -285,7 +296,7 @@ T['Emulating mappings']['works for builtin keymaps in Visual mode'] = function()
   validate_edit1d('aa bb', 0, 'viwg?', 'nn bb', 0)
 end
 
-T['Emulating mappings']['works for user keymaps in Visual mode'] = function()
+T['Reproducing keys']['works for user keymaps in Visual mode'] = function()
   -- Should work for both keymap created before and after making trigger
   make_test_map('x', '<Space>f')
   load_module({ triggers = { { mode = 'x', keys = '<Space>' } } })
@@ -319,7 +330,14 @@ T['Emulating mappings']['works for user keymaps in Visual mode'] = function()
   eq(get_test_map_count('x', ' f'), 3)
 end
 
-T['Emulating mappings']['Operator-pending mode'] = new_set({
+T['Reproducing keys']['respects `[count]` in Visual mode'] = function()
+  load_module({ triggers = { { mode = 'x', keys = 'a' } } })
+  validate_trigger_keymap('x', 'a')
+
+  validate_selection1d('aa bb cc', 0, 'v2aw', 0, 5)
+end
+
+T['Reproducing keys']['Operator-pending mode'] = new_set({
   hooks = {
     pre_case = function()
       -- Make user keymap
@@ -333,7 +351,7 @@ T['Emulating mappings']['Operator-pending mode'] = new_set({
   },
 })
 
-T['Emulating mappings']['Operator-pending mode']['c'] = function()
+T['Reproducing keys']['Operator-pending mode']['c'] = function()
   validate_edit1d('aa bb cc', 3, 'ciwdd', 'aa dd cc', 5)
 
   -- Dot-repeat
@@ -345,9 +363,12 @@ T['Emulating mappings']['Operator-pending mode']['c'] = function()
 
   -- User keymap
   validate_edit1d('aa bb cc', 3, 'cifdd', 'aa dd cc', 5)
+
+  -- Should respect `[count]`
+  validate_edit1d('aa bb cc', 0, 'c2iwdd', 'ddbb cc', 2)
 end
 
-T['Emulating mappings']['Operator-pending mode']['d'] = function()
+T['Reproducing keys']['Operator-pending mode']['d'] = function()
   validate_edit1d('aa bb cc', 3, 'diw', 'aa  cc', 3)
 
   -- Dot-rpeat
@@ -359,9 +380,12 @@ T['Emulating mappings']['Operator-pending mode']['d'] = function()
 
   -- User keymap
   validate_edit1d('aa bb cc', 3, 'dif', 'aa  cc', 3)
+
+  -- Should respect `[count]`
+  validate_edit1d('aa bb cc', 0, 'd2iw', 'bb cc', 0)
 end
 
-T['Emulating mappings']['Operator-pending mode']['y'] = function()
+T['Reproducing keys']['Operator-pending mode']['y'] = function()
   validate_edit1d('aa bb cc', 3, 'yiwP', 'aa bbbb cc', 4)
 
   -- Should respect register
@@ -370,9 +394,12 @@ T['Emulating mappings']['Operator-pending mode']['y'] = function()
 
   -- User keymap
   validate_edit1d('aa bb cc', 3, 'yifP', 'aa bbbb cc', 4)
+
+  -- Should respect `[count]`
+  validate_edit1d('aa bb cc', 0, 'y2iwP', 'aa aa bb cc', 2)
 end
 
-T['Emulating mappings']['Operator-pending mode']['~'] = function()
+T['Reproducing keys']['Operator-pending mode']['~'] = function()
   child.o.tildeop = true
 
   validate_edit1d('aa bb', 0, '~iw', 'AA bb', 0)
@@ -384,9 +411,12 @@ T['Emulating mappings']['Operator-pending mode']['~'] = function()
 
   -- User keymap
   validate_edit1d('aa bb', 0, '~if', 'AA bb', 0)
+
+  -- Should respect `[count]`
+  validate_edit1d('aa bb cc', 0, '~3iw', 'AA BB cc', 0)
 end
 
-T['Emulating mappings']['Operator-pending mode']['g~'] = function()
+T['Reproducing keys']['Operator-pending mode']['g~'] = function()
   validate_edit1d('aa bb', 0, 'g~iw', 'AA bb', 0)
   validate_edit1d('aa bb', 1, 'g~iw', 'AA bb', 0)
   validate_edit1d('aa bb', 3, 'g~iw', 'aa BB', 3)
@@ -396,9 +426,12 @@ T['Emulating mappings']['Operator-pending mode']['g~'] = function()
 
   -- User keymap
   validate_edit1d('aa bb', 0, 'g~if', 'AA bb', 0)
+
+  -- Should respect `[count]`
+  validate_edit1d('aa bb cc', 0, 'g~3iw', 'AA BB cc', 0)
 end
 
-T['Emulating mappings']['Operator-pending mode']['gu'] = function()
+T['Reproducing keys']['Operator-pending mode']['gu'] = function()
   validate_edit1d('AA BB', 0, 'guiw', 'aa BB', 0)
   validate_edit1d('AA BB', 1, 'guiw', 'aa BB', 0)
   validate_edit1d('AA BB', 3, 'guiw', 'AA bb', 3)
@@ -408,9 +441,12 @@ T['Emulating mappings']['Operator-pending mode']['gu'] = function()
 
   -- User keymap
   validate_edit1d('AA BB', 0, 'guif', 'aa BB', 0)
+
+  -- Should respect `[count]`
+  validate_edit1d('AA BB CC', 0, 'gu3iw', 'aa bb CC', 0)
 end
 
-T['Emulating mappings']['Operator-pending mode']['gU'] = function()
+T['Reproducing keys']['Operator-pending mode']['gU'] = function()
   validate_edit1d('aa bb', 0, 'gUiw', 'AA bb', 0)
   validate_edit1d('aa bb', 1, 'gUiw', 'AA bb', 0)
   validate_edit1d('aa bb', 3, 'gUiw', 'aa BB', 3)
@@ -420,9 +456,12 @@ T['Emulating mappings']['Operator-pending mode']['gU'] = function()
 
   -- User keymap
   validate_edit1d('aa bb', 0, 'gUif', 'AA bb', 0)
+
+  -- Should respect `[count]`
+  validate_edit1d('aa bb cc', 0, 'gU3iw', 'AA BB cc', 0)
 end
 
-T['Emulating mappings']['Operator-pending mode']['gq'] = function()
+T['Reproducing keys']['Operator-pending mode']['gq'] = function()
   child.lua([[_G.formatexpr = function()
     local from, to = vim.v.lnum, vim.v.lnum + vim.v.count - 1
     local new_lines = {}
@@ -438,9 +477,12 @@ T['Emulating mappings']['Operator-pending mode']['gq'] = function()
 
   -- User keymap
   validate_edit({ 'aa', 'aa', '', 'bb' }, { 1, 0 }, 'gqiF', { 'xxx', 'xxx', '', 'bb' }, { 1, 0 })
+
+  -- Should respect `[count]`
+  validate_edit({ 'aa', '', 'bb', '', 'cc' }, { 1, 0 }, 'gq3ip', { 'xxx', 'xxx', 'xxx', '', 'cc' }, { 1, 0 })
 end
 
-T['Emulating mappings']['Operator-pending mode']['gw'] = function()
+T['Reproducing keys']['Operator-pending mode']['gw'] = function()
   child.o.textwidth = 5
 
   validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, 'gwip', { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
@@ -450,9 +492,18 @@ T['Emulating mappings']['Operator-pending mode']['gw'] = function()
 
   -- User keymap
   validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, 'gwiF', { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
+
+  -- Should respect `[count]`
+  validate_edit(
+    { 'aaa aaa', '', 'bbb bbb', '', 'cc' },
+    { 1, 0 },
+    'gw3ip',
+    { 'aaa', 'aaa', '', 'bbb', 'bbb', '', 'cc' },
+    { 1, 0 }
+  )
 end
 
-T['Emulating mappings']['Operator-pending mode']['g?'] = function()
+T['Reproducing keys']['Operator-pending mode']['g?'] = function()
   validate_edit1d('aa bb', 0, 'g?iw', 'nn bb', 0)
   validate_edit1d('aa bb', 1, 'g?iw', 'nn bb', 0)
   validate_edit1d('aa bb', 3, 'g?iw', 'aa oo', 3)
@@ -462,9 +513,12 @@ T['Emulating mappings']['Operator-pending mode']['g?'] = function()
 
   -- User keymap
   validate_edit1d('aa bb', 0, 'g?if', 'nn bb', 0)
+
+  -- Should respect `[count]`
+  validate_edit1d('aa bb cc', 0, 'g?3iw', 'nn oo cc', 0)
 end
 
-T['Emulating mappings']['Operator-pending mode']['!'] = function()
+T['Reproducing keys']['Operator-pending mode']['!'] = function()
   validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, '!ipsort<CR>', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 
   -- Dot-repeat
@@ -472,9 +526,18 @@ T['Emulating mappings']['Operator-pending mode']['!'] = function()
 
   -- User keymap
   validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, '!iFsort<CR>', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+
+  -- Should respect `[count]`
+  validate_edit(
+    { 'cc', 'bb', '', 'ee', 'dd', '', 'aa' },
+    { 1, 0 },
+    '!3ipsort<CR>',
+    { '', 'bb', 'cc', 'dd', 'ee', '', 'aa' },
+    { 1, 0 }
+  )
 end
 
-T['Emulating mappings']['Operator-pending mode']['='] = function()
+T['Reproducing keys']['Operator-pending mode']['='] = function()
   validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, '=ip', { 'aa', 'aa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
@@ -482,9 +545,18 @@ T['Emulating mappings']['Operator-pending mode']['='] = function()
 
   -- User keymap
   validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, '=iF', { 'aa', 'aa', '', 'bb' }, { 1, 0 })
+
+  -- Should respect `[count]`
+  validate_edit(
+    { 'aa', '\taa', '', 'bb', '\tbb', '', 'cc' },
+    { 1, 0 },
+    '=3ip',
+    { 'aa', 'aa', '', 'bb', 'bb', '', 'cc' },
+    { 1, 0 }
+  )
 end
 
-T['Emulating mappings']['Operator-pending mode']['>'] = function()
+T['Reproducing keys']['Operator-pending mode']['>'] = function()
   validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>ip', { '\taa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
@@ -492,9 +564,12 @@ T['Emulating mappings']['Operator-pending mode']['>'] = function()
 
   -- User keymap
   validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>iF', { '\taa', '', 'bb' }, { 1, 0 })
+
+  -- Should respect `[count]`
+  validate_edit({ 'aa', '', 'bb', '', 'cc' }, { 1, 0 }, '>3ip', { '\taa', '', '\tbb', '', 'cc' }, { 1, 0 })
 end
 
-T['Emulating mappings']['Operator-pending mode']['<'] = function()
+T['Reproducing keys']['Operator-pending mode']['<'] = function()
   validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, '<LT>ip', { '\taa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
@@ -502,25 +577,36 @@ T['Emulating mappings']['Operator-pending mode']['<'] = function()
 
   -- User keymap
   validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, '<LT>iF', { '\taa', '', 'bb' }, { 1, 0 })
+
+  -- Should respect `[count]`
+  validate_edit({ '\t\taa', '', '\t\tbb', '', 'cc' }, { 1, 0 }, '<LT>3ip', { '\taa', '', '\tbb', '', 'cc' }, { 1, 0 })
 end
 
-T['Emulating mappings']['Operator-pending mode']['zf'] = function()
-  local validate = function(keys)
-    set_lines({ 'aa', 'aa', '', 'bb' })
+T['Reproducing keys']['Operator-pending mode']['zf'] = function()
+  local validate = function(keys, ref_last_folded_line)
+    local lines = { 'aa', 'aa', '', 'bb', '', 'cc' }
+    set_lines(lines)
     set_cursor(1, 0)
 
     type_keys(keys)
-    eq(child.fn.foldclosed(1), 1)
-    eq(child.fn.foldclosed(2), 1)
-    eq(child.fn.foldclosed(3), -1)
-    eq(child.fn.foldclosed(4), -1)
+
+    for i = 1, ref_last_folded_line do
+      eq(child.fn.foldclosed(i), 1)
+    end
+
+    for i = ref_last_folded_line + 1, #lines do
+      eq(child.fn.foldclosed(i), -1)
+    end
   end
 
-  validate('zfip')
-  validate('zfiF')
+  validate('zfip', 2)
+  validate('zfiF', 2)
+
+  -- Should respect `[count]`
+  validate('zf3ip', 4)
 end
 
-T['Emulating mappings']['Operator-pending mode']['g@'] = function()
+T['Reproducing keys']['Operator-pending mode']['g@'] = function()
   child.o.operatorfunc = 'v:lua.operatorfunc'
 
   -- Charwise
@@ -528,7 +614,7 @@ T['Emulating mappings']['Operator-pending mode']['g@'] = function()
     local from, to = vim.fn.col("'["), vim.fn.col("']")
     local line = vim.fn.line('.')
 
-    vim.api.nvim_buf_set_text(0, line - 1, from - 1, line - 1, to, {'xx'})
+    vim.api.nvim_buf_set_text(0, line - 1, from - 1, line - 1, to, { 'xx' })
   end]])
 
   validate_edit1d('aa bb cc', 3, 'g@iw', 'aa xx cc', 3)
@@ -544,6 +630,9 @@ T['Emulating mappings']['Operator-pending mode']['g@'] = function()
   -- - User keymap
   validate_edit1d('aa bb cc', 3, 'g@if', 'aa xx cc', 3)
 
+  -- - Should respect `[count]`
+  validate_edit1d('aa bb cc', 0, 'g@3iw', 'xx cc', 0)
+
   -- Linewise
   child.lua([[_G.operatorfunc = function() vim.cmd("'[,']sort") end]])
 
@@ -558,9 +647,18 @@ T['Emulating mappings']['Operator-pending mode']['g@'] = function()
 
   -- - User keymap
   validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, 'g@iF', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+
+  -- Should respect `[count]`
+  validate_edit(
+    { 'cc', 'bb', '', 'ee', 'dd', '', 'aa' },
+    { 1, 0 },
+    'g@3ip',
+    { '', 'bb', 'cc', 'dd', 'ee', '', 'aa' },
+    { 1, 0 }
+  )
 end
 
-T['Emulating mappings']['Operator-pending mode']['works with operator and textobject from triggers'] = function()
+T['Reproducing keys']['Operator-pending mode']['works with operator and textobject from triggers'] = function()
   load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
   validate_trigger_keymap('n', 'g')
   validate_trigger_keymap('o', 'i')
@@ -585,7 +683,7 @@ T['Emulating mappings']['Operator-pending mode']['works with operator and textob
   set_cursor(1, 0)
 end
 
-T['Emulating mappings']['Operator-pending mode']['respects forced submode'] = function()
+T['Reproducing keys']['Operator-pending mode']['respects forced submode'] = function()
   load_module({ triggers = { { mode = 'o', keys = '`' } } })
   validate_trigger_keymap('o', '`')
 
@@ -606,7 +704,7 @@ T['Emulating mappings']['Operator-pending mode']['respects forced submode'] = fu
   eq(get_lines(), { '', 'bb', '' })
 end
 
-T['Emulating mappings']['works for builtin keymaps in Terminal mode'] = function()
+T['Reproducing keys']['works for builtin keymaps in Terminal mode'] = function()
   load_module({ triggers = { { mode = 't', keys = [[<C-\>]] } } })
   validate_trigger_keymap('t', [[<C-\>]])
 
@@ -621,7 +719,7 @@ T['Emulating mappings']['works for builtin keymaps in Terminal mode'] = function
   eq(child.fn.mode(), 'n')
 end
 
-T['Emulating mappings']['works for user keymaps in Terminal mode'] = function()
+T['Reproducing keys']['works for user keymaps in Terminal mode'] = function()
   -- Should work for both keymap created before and after making trigger
   make_test_map('t', '<Space>f')
   load_module({ triggers = { { mode = 't', keys = '<Space>' } } })
@@ -647,7 +745,7 @@ T['Emulating mappings']['works for user keymaps in Terminal mode'] = function()
   eq(get_test_map_count('t', ' g'), 1)
 end
 
-T['Emulating mappings']['works for builtin keymaps in Command-line mode'] = function()
+T['Reproducing keys']['works for builtin keymaps in Command-line mode'] = function()
   load_module({ triggers = { { mode = 'c', keys = '<C-r>' } } })
   validate_trigger_keymap('c', '<C-R>')
 
@@ -657,7 +755,7 @@ T['Emulating mappings']['works for builtin keymaps in Command-line mode'] = func
   eq(child.fn.getcmdline(), 'aaa')
 end
 
-T['Emulating mappings']['works for user keymaps in Command-line mode'] = function()
+T['Reproducing keys']['works for user keymaps in Command-line mode'] = function()
   -- Should work for both keymap created before and after making trigger
   make_test_map('c', '<Space>f')
   load_module({ triggers = { { mode = 'c', keys = '<Space>' } } })
@@ -678,7 +776,7 @@ T['Emulating mappings']['works for user keymaps in Command-line mode'] = functio
   eq(get_test_map_count('c', ' g'), 1)
 end
 
-T['Emulating mappings']['works for registers'] = function()
+T['Reproducing keys']['works for registers'] = function()
   load_module({ triggers = { { mode = 'n', keys = '"' }, { mode = 'x', keys = '"' } } })
   validate_trigger_keymap('n', '"')
   validate_trigger_keymap('x', '"')
@@ -696,7 +794,7 @@ T['Emulating mappings']['works for registers'] = function()
   eq(child.fn.getreg('"b'), 'bb')
 end
 
-T['Emulating mappings']['works for marks'] = function()
+T['Reproducing keys']['works for marks'] = function()
   load_module({ triggers = { { mode = 'n', keys = "'" }, { mode = 'n', keys = '`' } } })
   validate_trigger_keymap('n', "'")
   validate_trigger_keymap('n', '`')
@@ -716,15 +814,8 @@ T['Emulating mappings']['works for marks'] = function()
   eq(get_cursor(), { 1, 1 })
 end
 
-T['Emulating mappings']['respects `[count]`'] = function() MiniTest.skip() end
-
-T['Emulating mappings']['trigger forwards keys even if no extra clues is set'] = function()
-  load_module({
-    triggers = {
-      { mode = 'c', keys = 'g' },
-      { mode = 'i', keys = 'g' },
-    },
-  })
+T['Reproducing keys']['trigger forwards keys even if no extra clues is set'] = function()
+  load_module({ triggers = { { mode = 'c', keys = 'g' }, { mode = 'i', keys = 'g' } } })
   validate_trigger_keymap('c', 'g')
   validate_trigger_keymap('i', 'g')
 
@@ -736,34 +827,62 @@ T['Emulating mappings']['trigger forwards keys even if no extra clues is set'] =
   eq(get_lines(), { 'g' })
 end
 
-T['Emulating mappings']["works with 'mini.ai'"] = function()
+T['Reproducing keys']['works when key query is executed in presence of longer keymaps'] = function()
+  -- Imitate Lua commenting
+  child.lua([[
+    _G.comment_operator = function()
+      vim.o.operatorfunc = 'v:lua.operatorfunc'
+      return 'g@'
+    end
+
+    _G.comment_line = function() return _G.comment_operator() .. '_' end
+
+    _G.operatorfunc = function()
+      local from, to = vim.fn.line("'["), vim.fn.line("']")
+      local lines = vim.api.nvim_buf_get_lines(0, from - 1, to, false)
+      local new_lines = vim.tbl_map(function(x) return '-- ' .. x end, lines)
+      vim.api.nvim_buf_set_lines(0, from - 1, to, false, new_lines)
+    end
+
+    vim.keymap.set('n', 'gc', _G.comment_operator, { expr = true, replace_keycodes = false })
+    vim.keymap.set('n', 'gcc', _G.comment_line, { expr = true, replace_keycodes = false })
+  ]])
+
+  load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
+  validate_trigger_keymap('n', 'g')
+  validate_trigger_keymap('o', 'i')
+
+  validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, 'gcip', { '-- aa', '-- bb', '', 'cc' }, { 1, 0 })
+end
+
+T['Reproducing keys']["works with 'mini.ai'"] = function()
   -- `i`/`in`/`il` and `a`/`an`/`al`
   MiniTest.skip()
 end
 
-T['Emulating mappings']["works with 'mini.align'"] = function()
+T['Reproducing keys']["works with 'mini.align'"] = function()
   -- Operators `ga` and `gA` work when textobject uses trigger.
   -- Example: `gaip` and `gAip` (both with trigger `g` and not)
   MiniTest.skip()
 end
 
-T['Emulating mappings']["works with 'mini.bracketed'"] = function() MiniTest.skip() end
+T['Reproducing keys']["works with 'mini.bracketed'"] = function() MiniTest.skip() end
 
-T['Emulating mappings']["works with 'mini.comment'"] = function() MiniTest.skip() end
+T['Reproducing keys']["works with 'mini.comment'"] = function() MiniTest.skip() end
 
-T['Emulating mappings']["works with 'mini.indentscope'"] = function() MiniTest.skip() end
+T['Reproducing keys']["works with 'mini.indentscope'"] = function() MiniTest.skip() end
 
-T['Emulating mappings']["works with 'mini.surround'"] = function()
+T['Reproducing keys']["works with 'mini.surround'"] = function()
   -- `saiw` works as expected when `s` and `i` are triggers: doesn't move cursor, no messages.
 
   -- Dot-repeat for every operator
   MiniTest.skip()
 end
 
--- T['Emulating mappings']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
+-- T['Reproducing keys']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
 
--- T['Emulating mappings']['works buffer-local mappings'] = function() MiniTest.skip() end
+-- T['Reproducing keys']['works buffer-local mappings'] = function() MiniTest.skip() end
 
--- T['Emulating mappings']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+-- T['Reproducing keys']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 return T

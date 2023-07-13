@@ -56,6 +56,10 @@
 --     - ?Allow clues to be executable to allow dynamic descriptions? Like for
 --       registers and marks.
 --
+--     - Respect `*_disable` when creating buffer mappings?
+--
+--     - Fix `cina` issue.
+--
 -- - Docs:
 --     - Mostly designed for nested `<Leader>` keymaps.
 --
@@ -241,6 +245,15 @@ MiniClue.config = {
 }
 --minidoc_afterlines_end
 
+MiniClue.execute_without_triggers = function(f, triggers)
+  if not vim.is_callable(f) then H.error('`f` should be callable.') end
+  if H.is_trigger(triggers) then triggers = { triggers } end
+  if not H.is_array_of(triggers, H.is_trigger) then H.error('`triggers` should be trigger or array of triggers.') end
+
+  H.disable_triggers(triggers)
+  return f()
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniClue.config
@@ -346,12 +359,16 @@ H.map_trigger = function(buf_id, trigger)
   trigger.keys = H.replace_termcodes(trigger.keys)
 
   local rhs = function()
-    -- Don't act if for some reason was entered from executing state
-    if H.is_in_exec then
-      H.is_in_exec = nil
+    -- Don't act if for some reason entered the same trigger during state exec
+    local is_in_exec = type(H.exec_trigger) == 'table'
+      and H.exec_trigger.mode == trigger.mode
+      and H.exec_trigger.keys == trigger.keys
+    if is_in_exec then
+      H.exec_trigger = nil
       return
     end
 
+    -- Start user query
     H.state_set(trigger, { trigger.keys })
 
     -- Do not advance if no other clues to query. NOTE: it is `<= 1` and not
@@ -370,11 +387,27 @@ H.map_trigger = function(buf_id, trigger)
   vim.keymap.set(trigger.mode, trigger.keys, rhs, opts)
 end
 
-H.disable_trigger = function(buf_id, trigger)
-  if type(trigger) ~= 'table' then return end
+H.disable_triggers = function(triggers)
+  if not H.is_array_of(triggers, H.is_trigger) then return end
 
-  vim.keymap.del(trigger.mode, trigger.keys, { buffer = buf_id })
-  vim.schedule(function() H.map_trigger(buf_id, trigger) end)
+  -- Compute which supplied triggers are actually registered triggers
+  local triggers_per_mode = {}
+  local config_triggers = H.get_config().triggers
+  for _, trigger in ipairs(config_triggers) do
+    local mode_triggers = triggers_per_mode[trigger.mode] or {}
+    mode_triggers[trigger.keys] = true
+    triggers_per_mode[trigger.mode] = mode_triggers
+  end
+
+  -- Temporarily disable trigger only if it is actually config
+  local buf_id = vim.api.nvim_get_current_buf()
+  for _, trigger in ipairs(triggers) do
+    local is_config_trigger = (triggers_per_mode[trigger.mode] or {})[trigger.keys]
+    if is_config_trigger then
+      vim.keymap.del(trigger.mode, trigger.keys, { buffer = buf_id })
+      vim.schedule(function() H.map_trigger(buf_id, trigger) end)
+    end
+  end
 end
 
 -- State ----------------------------------------------------------------------
@@ -437,9 +470,9 @@ H.state_exec = function()
   -- recursion). Trigger is remapped after keys are executed.
   H.disable_relevant_triggers(H.state.trigger)
 
-  -- Add extra (redundant) safety flag to avoid inifinite recursion
-  H.is_in_exec = true
-  vim.schedule(function() H.is_in_exec = nil end)
+  -- Add extra (redundant) safety flag to try to avoid inifinite recursion
+  H.exec_trigger = H.state.trigger
+  vim.schedule(function() H.exec_trigger = nil end)
 
   -- Reset state
   H.state_reset()
@@ -524,30 +557,26 @@ H.operator_tweaks = {
 }
 
 H.disable_relevant_triggers = function(trigger)
-  local buf_id = vim.api.nvim_get_current_buf()
-  H.disable_trigger(buf_id, trigger)
+  local relevant_triggers = { trigger }
+  if trigger.mode == 'o' then
+    local operator = vim.v.operator
 
-  -- In not Operator-pending only target trigger needs to be disabled
-  if trigger.mode ~= 'o' then return end
+    -- In operator-pending mode operator or its separate characters also can be
+    -- triggerable (like `g~`/`gc` if `g` is trigger in Normal mode)
+    table.insert(relevant_triggers, { mode = 'n', keys = operator })
 
-  -- In operator-pending mode operator also can be triggerable (like `g~`/`gc`
-  -- if `g` is trigger in Normal mode)
-  local normal_triggers = {}
-  for _, trig in ipairs(H.get_config().triggers) do
-    if trig.mode == 'n' then normal_triggers[trig.keys] = true end
+    if operator:len() > 1 then
+      table.insert(relevant_triggers, { mode = 'n', keys = operator:sub(1, 1) })
+      table.insert(relevant_triggers, { mode = 'n', keys = operator:sub(2, 2) })
+    end
+
+    -- Quote can also be triggerable which matters for operators using register
+    if operator == 'c' or operator == 'd' or operator == 'y' then
+      table.insert(relevant_triggers, { mode = 'n', keys = '"' })
+    end
   end
 
-  local maybe_disable = function(keys)
-    if not normal_triggers[keys] then return end
-    H.disable_trigger(buf_id, { mode = 'n', keys = keys })
-  end
-
-  local operator = vim.v.operator
-  maybe_disable(operator)
-  if operator:len() > 1 then
-    maybe_disable(operator:sub(1, 1))
-    maybe_disable(operator:sub(2, 2))
-  end
+  H.disable_triggers(relevant_triggers)
 end
 
 -- Window ---------------------------------------------------------------------
@@ -609,6 +638,17 @@ end
 H.query_to_keys = function(query) return table.concat(query, '') end
 
 H.query_to_msg = function(query) return H.keytrans(H.query_to_keys(query)) end
+
+-- Predicates -----------------------------------------------------------------
+H.is_trigger = function(x) return type(x) == 'table' and type(x.mode) == 'string' and type(x.keys) == 'string' end
+
+H.is_array_of = function(x, predicate)
+  if not vim.tbl_islist(x) then return false end
+  for _, v in ipairs(x) do
+    if not predicate(v) then return false end
+  end
+  return true
+end
 
 -- Utilities ------------------------------------------------------------------
 H.echo = function(msg, is_important)
