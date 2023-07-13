@@ -50,7 +50,8 @@ end
 
 -- Custom validators
 local validate_trigger_keymap = function(mode, keys)
-  local lua_cmd = string.format("vim.fn.maparg('%s', '%s', false, true).desc", replace_termcodes(keys), mode)
+  local lua_cmd =
+    string.format('vim.fn.maparg(%s, %s, false, true).desc', vim.inspect(replace_termcodes(keys)), vim.inspect(mode))
   local map_desc = child.lua_get(lua_cmd)
 
   -- Neovim<0.8 doesn't have `keytrans()` used inside description
@@ -318,16 +319,21 @@ T['Emulating mappings']['works for user keymaps in Visual mode'] = function()
   eq(get_test_map_count('x', ' f'), 3)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps'] = new_set({
+T['Emulating mappings']['Operator-pending mode'] = new_set({
   hooks = {
     pre_case = function()
+      -- Make user keymap
+      child.api.nvim_set_keymap('o', 'if', 'iw', {})
+      child.api.nvim_set_keymap('o', 'iF', 'ip', {})
+
+      -- Register trigger
       load_module({ triggers = { { mode = 'o', keys = 'i' } } })
       validate_trigger_keymap('o', 'i')
     end,
   },
 })
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['c'] = function()
+T['Emulating mappings']['Operator-pending mode']['c'] = function()
   validate_edit1d('aa bb cc', 3, 'ciwdd', 'aa dd cc', 5)
 
   -- Dot-repeat
@@ -336,25 +342,37 @@ T['Emulating mappings']['Operator-pending; built-in keymaps']['c'] = function()
   -- Should respect register
   validate_edit1d('aaa', 0, '"aciwxxx', 'xxx', 3)
   eq(child.fn.getreg('a'), 'aaa')
+
+  -- User keymap
+  validate_edit1d('aa bb cc', 3, 'cifdd', 'aa dd cc', 5)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['d'] = function()
+T['Emulating mappings']['Operator-pending mode']['d'] = function()
   validate_edit1d('aa bb cc', 3, 'diw', 'aa  cc', 3)
+
+  -- Dot-rpeat
+  validate_edit1d('aa bb cc', 0, 'diww.', '  cc', 1)
 
   -- Should respect register
   validate_edit1d('aaa', 0, '"adiw', '', 0)
   eq(child.fn.getreg('a'), 'aaa')
+
+  -- User keymap
+  validate_edit1d('aa bb cc', 3, 'dif', 'aa  cc', 3)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['y'] = function()
+T['Emulating mappings']['Operator-pending mode']['y'] = function()
   validate_edit1d('aa bb cc', 3, 'yiwP', 'aa bbbb cc', 4)
 
   -- Should respect register
   validate_edit1d('aaa', 0, '"ayiw', 'aaa', 0)
   eq(child.fn.getreg('a'), 'aaa')
+
+  -- User keymap
+  validate_edit1d('aa bb cc', 3, 'yifP', 'aa bbbb cc', 4)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['~'] = function()
+T['Emulating mappings']['Operator-pending mode']['~'] = function()
   child.o.tildeop = true
 
   validate_edit1d('aa bb', 0, '~iw', 'AA bb', 0)
@@ -363,36 +381,48 @@ T['Emulating mappings']['Operator-pending; built-in keymaps']['~'] = function()
 
   -- Dot-repeat
   validate_edit1d('aa bb', 0, '~iww.', 'AA BB', 3)
+
+  -- User keymap
+  validate_edit1d('aa bb', 0, '~if', 'AA bb', 0)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['g~'] = function()
+T['Emulating mappings']['Operator-pending mode']['g~'] = function()
   validate_edit1d('aa bb', 0, 'g~iw', 'AA bb', 0)
   validate_edit1d('aa bb', 1, 'g~iw', 'AA bb', 0)
   validate_edit1d('aa bb', 3, 'g~iw', 'aa BB', 3)
 
   -- Dot-repeat
   validate_edit1d('aa bb', 0, 'g~iww.', 'AA BB', 3)
+
+  -- User keymap
+  validate_edit1d('aa bb', 0, 'g~if', 'AA bb', 0)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['gu'] = function()
+T['Emulating mappings']['Operator-pending mode']['gu'] = function()
   validate_edit1d('AA BB', 0, 'guiw', 'aa BB', 0)
   validate_edit1d('AA BB', 1, 'guiw', 'aa BB', 0)
   validate_edit1d('AA BB', 3, 'guiw', 'AA bb', 3)
 
   -- Dot-repeat
   validate_edit1d('AA BB', 0, 'guiww.', 'aa bb', 3)
+
+  -- User keymap
+  validate_edit1d('AA BB', 0, 'guif', 'aa BB', 0)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['gU'] = function()
+T['Emulating mappings']['Operator-pending mode']['gU'] = function()
   validate_edit1d('aa bb', 0, 'gUiw', 'AA bb', 0)
   validate_edit1d('aa bb', 1, 'gUiw', 'AA bb', 0)
   validate_edit1d('aa bb', 3, 'gUiw', 'aa BB', 3)
 
   -- Dot-repeat
   validate_edit1d('aa bb', 0, 'gUiww.', 'AA BB', 3)
+
+  -- User keymap
+  validate_edit1d('aa bb', 0, 'gUif', 'AA bb', 0)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['gq'] = function()
+T['Emulating mappings']['Operator-pending mode']['gq'] = function()
   child.lua([[_G.formatexpr = function()
     local from, to = vim.v.lnum, vim.v.lnum + vim.v.count - 1
     local new_lines = {}
@@ -405,70 +435,176 @@ T['Emulating mappings']['Operator-pending; built-in keymaps']['gq'] = function()
 
   -- Dot-repeat
   validate_edit({ 'aa', 'aa', '', 'bb', 'bb' }, { 1, 0 }, 'gqipG.', { 'xxx', 'xxx', '', 'xxx', 'xxx' }, { 4, 0 })
+
+  -- User keymap
+  validate_edit({ 'aa', 'aa', '', 'bb' }, { 1, 0 }, 'gqiF', { 'xxx', 'xxx', '', 'bb' }, { 1, 0 })
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['gw'] = function()
+T['Emulating mappings']['Operator-pending mode']['gw'] = function()
   child.o.textwidth = 5
 
   validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, 'gwip', { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
   validate_edit({ 'aaa aaa', '', 'bbb bbb' }, { 1, 0 }, 'gwipG.', { 'aaa', 'aaa', '', 'bbb', 'bbb' }, { 4, 0 })
+
+  -- User keymap
+  validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, 'gwiF', { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['g?'] = function()
+T['Emulating mappings']['Operator-pending mode']['g?'] = function()
   validate_edit1d('aa bb', 0, 'g?iw', 'nn bb', 0)
   validate_edit1d('aa bb', 1, 'g?iw', 'nn bb', 0)
   validate_edit1d('aa bb', 3, 'g?iw', 'aa oo', 3)
 
   -- Dot-repeat
   validate_edit1d('aa bb', 0, 'g?iww.', 'nn oo', 3)
+
+  -- User keymap
+  validate_edit1d('aa bb', 0, 'g?if', 'nn bb', 0)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['!'] = function() MiniTest.skip() end
+T['Emulating mappings']['Operator-pending mode']['!'] = function()
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, '!ipsort<CR>', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['='] = function()
+  -- Dot-repeat
+  validate_edit({ 'cc', 'bb', '', 'dd', 'aa' }, { 1, 0 }, '!ipsort<CR>G.', { 'bb', 'cc', '', 'aa', 'dd' }, { 4, 0 })
+
+  -- User keymap
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, '!iFsort<CR>', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+end
+
+T['Emulating mappings']['Operator-pending mode']['='] = function()
   validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, '=ip', { 'aa', 'aa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
   validate_edit({ 'aa', '\taa', '', 'bb', '\tbb' }, { 1, 0 }, '=ipG.', { 'aa', 'aa', '', 'bb', 'bb' }, { 4, 0 })
+
+  -- User keymap
+  validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, '=iF', { 'aa', 'aa', '', 'bb' }, { 1, 0 })
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['>'] = function()
+T['Emulating mappings']['Operator-pending mode']['>'] = function()
   validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>ip', { '\taa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
   validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>ip.2j.', { '\t\taa', '', '\tbb' }, { 3, 0 })
+
+  -- User keymap
+  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>iF', { '\taa', '', 'bb' }, { 1, 0 })
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['<'] = function()
+T['Emulating mappings']['Operator-pending mode']['<'] = function()
   validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, '<LT>ip', { '\taa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
   validate_edit({ '\t\t\taa', '', '\tbb' }, { 1, 0 }, '<LT>ip.2j.', { '\taa', '', 'bb' }, { 3, 1 })
+
+  -- User keymap
+  validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, '<LT>iF', { '\taa', '', 'bb' }, { 1, 0 })
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['zf'] = function()
-  set_lines({ 'aa', 'aa', '', 'bb' })
+T['Emulating mappings']['Operator-pending mode']['zf'] = function()
+  local validate = function(keys)
+    set_lines({ 'aa', 'aa', '', 'bb' })
+    set_cursor(1, 0)
+
+    type_keys(keys)
+    eq(child.fn.foldclosed(1), 1)
+    eq(child.fn.foldclosed(2), 1)
+    eq(child.fn.foldclosed(3), -1)
+    eq(child.fn.foldclosed(4), -1)
+  end
+
+  validate('zfip')
+  validate('zfiF')
+end
+
+T['Emulating mappings']['Operator-pending mode']['g@'] = function()
+  child.o.operatorfunc = 'v:lua.operatorfunc'
+
+  -- Charwise
+  child.lua([[_G.operatorfunc = function()
+    local from, to = vim.fn.col("'["), vim.fn.col("']")
+    local line = vim.fn.line('.')
+
+    vim.api.nvim_buf_set_text(0, line - 1, from - 1, line - 1, to, {'xx'})
+  end]])
+
+  validate_edit1d('aa bb cc', 3, 'g@iw', 'aa xx cc', 3)
+
+  -- - Dot-repeat
+  set_lines({ 'aa bb cc' })
+  set_cursor(1, 3)
+  -- - Seems to need separate `nvim_input` to update event loop
+  type_keys('g@iw', 'w', '.')
+  eq(get_lines(), { 'aa xx xx' })
+  eq(get_cursor(), { 1, 6 })
+
+  -- - User keymap
+  validate_edit1d('aa bb cc', 3, 'g@if', 'aa xx cc', 3)
+
+  -- Linewise
+  child.lua([[_G.operatorfunc = function() vim.cmd("'[,']sort") end]])
+
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, 'g@ip', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+
+  -- - Dot-repeat
+  set_lines({ 'cc', 'bb', '', 'dd', 'aa' })
+  set_cursor(1, 0)
+  type_keys('g@ip', 'G', '.')
+  eq(get_lines(), { 'bb', 'cc', '', 'aa', 'dd' })
+  eq(get_cursor(), { 4, 0 })
+
+  -- - User keymap
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, 'g@iF', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+end
+
+T['Emulating mappings']['Operator-pending mode']['works with operator and textobject from triggers'] = function()
+  load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
+  validate_trigger_keymap('n', 'g')
+  validate_trigger_keymap('o', 'i')
+
+  -- `g~`
+  set_lines({ 'aa bb' })
+  set_cursor(1, 0)
+  -- - Seems to need separate `nvim_input` to update event loop
+  type_keys('g~', 'iw')
+  set_lines({ 'AA bb' })
   set_cursor(1, 0)
 
-  type_keys('zfip')
-  eq(child.fn.foldclosed(1), 1)
-  eq(child.fn.foldclosed(2), 1)
-  eq(child.fn.foldclosed(3), -1)
-  eq(child.fn.foldclosed(4), -1)
+  -- `g@`
+  child.lua([[_G.operatorfunc = function() vim.cmd("'[,']sort") end]])
+  child.o.operatorfunc = 'v:lua.operatorfunc'
+
+  set_lines({ 'cc', 'bb', '', 'aa' })
+  set_cursor(1, 0)
+  -- - Seems to need separate `nvim_input` to update event loop
+  type_keys('g@', 'ip')
+  set_lines({ 'bb', 'cc', '', 'aa' })
+  set_cursor(1, 0)
 end
 
-T['Emulating mappings']['Operator-pending; built-in keymaps']['g@'] = function() MiniTest.skip() end
+T['Emulating mappings']['Operator-pending mode']['respects forced submode'] = function()
+  load_module({ triggers = { { mode = 'o', keys = '`' } } })
+  validate_trigger_keymap('o', '`')
 
-T['Emulating mappings']['works for user keymaps in Operator-pending mode'] = function()
-  -- Should test with all operators (`:h operators`)
-  MiniTest.skip()
+  -- Linewise
+  set_lines({ 'aa', 'bbbb', 'cc' })
+  set_cursor(2, 1)
+  type_keys('mb')
+  set_cursor(1, 0)
+  type_keys('dV`b')
+  eq(get_lines(), { 'cc' })
+
+  -- Blockwise
+  set_lines({ 'aa', 'bbbb', 'cc' })
+  set_cursor(3, 1)
+  type_keys('mc')
+  set_cursor(1, 0)
+  type_keys('d\22`c')
+  eq(get_lines(), { '', 'bb', '' })
 end
-
-T['Emulating mappings']['keeps dot-repeat'] = function() MiniTest.skip() end
-
-T['Emulating mappings']['works when both operator and textobject result from triggers'] = function() MiniTest.skip() end
 
 T['Emulating mappings']['works for builtin keymaps in Terminal mode'] = function()
   load_module({ triggers = { { mode = 't', keys = [[<C-\>]] } } })
@@ -542,6 +678,44 @@ T['Emulating mappings']['works for user keymaps in Command-line mode'] = functio
   eq(get_test_map_count('c', ' g'), 1)
 end
 
+T['Emulating mappings']['works for registers'] = function()
+  load_module({ triggers = { { mode = 'n', keys = '"' }, { mode = 'x', keys = '"' } } })
+  validate_trigger_keymap('n', '"')
+  validate_trigger_keymap('x', '"')
+
+  -- Normal mode
+  set_lines({ 'aa' })
+  set_cursor(1, 0)
+  type_keys('"ayiw')
+  eq(child.fn.getreg('"a'), 'aa')
+
+  -- Visual mode
+  set_lines({ 'bb' })
+  set_cursor(1, 0)
+  type_keys('viw"by')
+  eq(child.fn.getreg('"b'), 'bb')
+end
+
+T['Emulating mappings']['works for marks'] = function()
+  load_module({ triggers = { { mode = 'n', keys = "'" }, { mode = 'n', keys = '`' } } })
+  validate_trigger_keymap('n', "'")
+  validate_trigger_keymap('n', '`')
+
+  set_lines({ 'aa', 'bb' })
+  set_cursor(1, 1)
+  type_keys('ma')
+
+  -- Line jump
+  set_cursor(2, 0)
+  type_keys("'a")
+  eq(get_cursor(), { 1, 0 })
+
+  -- Exact jump
+  set_cursor(2, 0)
+  type_keys('`a')
+  eq(get_cursor(), { 1, 1 })
+end
+
 T['Emulating mappings']['respects `[count]`'] = function() MiniTest.skip() end
 
 T['Emulating mappings']['trigger forwards keys even if no extra clues is set'] = function()
@@ -562,7 +736,16 @@ T['Emulating mappings']['trigger forwards keys even if no extra clues is set'] =
   eq(get_lines(), { 'g' })
 end
 
-T['Emulating mappings']["works with 'mini.ai'"] = function() MiniTest.skip() end
+T['Emulating mappings']["works with 'mini.ai'"] = function()
+  -- `i`/`in`/`il` and `a`/`an`/`al`
+  MiniTest.skip()
+end
+
+T['Emulating mappings']["works with 'mini.align'"] = function()
+  -- Operators `ga` and `gA` work when textobject uses trigger.
+  -- Example: `gaip` and `gAip` (both with trigger `g` and not)
+  MiniTest.skip()
+end
 
 T['Emulating mappings']["works with 'mini.bracketed'"] = function() MiniTest.skip() end
 
@@ -570,7 +753,12 @@ T['Emulating mappings']["works with 'mini.comment'"] = function() MiniTest.skip(
 
 T['Emulating mappings']["works with 'mini.indentscope'"] = function() MiniTest.skip() end
 
-T['Emulating mappings']["works with 'mini.surround'"] = function() MiniTest.skip() end
+T['Emulating mappings']["works with 'mini.surround'"] = function()
+  -- `saiw` works as expected when `s` and `i` are triggers: doesn't move cursor, no messages.
+
+  -- Dot-repeat for every operator
+  MiniTest.skip()
+end
 
 -- T['Emulating mappings']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
 

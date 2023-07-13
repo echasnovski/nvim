@@ -53,8 +53,13 @@
 --     - Think about allowing nested clues for easier use of possible built-in
 --       sets of clues (like for `g`, `z`, `<C-x>` (Insert mode), etc).
 --
+--     - ?Allow clues to be executable to allow dynamic descriptions? Like for
+--       registers and marks.
+--
 -- - Docs:
 --     - Mostly designed for nested `<Leader>` keymaps.
+--
+--     - Can have unexpected behavior in Operator-pending mode.
 --
 --     - If trigger concists from several keys (like `<Leader>f`), it will be
 --       treated as single key. Matters for `<BS>`.
@@ -203,6 +208,8 @@ MiniClue.config = {
     { mode = 'n', keys = ']' },
     { mode = 'n', keys = [[\]] },
 
+    { mode = 'o', keys = "`" },
+
     { mode = 'i', keys = '<C-x>' },
 
     { mode = 'c', keys = '<C-r>' },
@@ -253,10 +260,13 @@ H.state = {
   win_id = nil,
 }
 
+-- Precomputed raw keys
 H.keys = {
   bs = vim.api.nvim_replace_termcodes('<BS>', true, true, true),
-  ignore = vim.api.nvim_replace_termcodes('<Ignore>', true, true, true),
 }
+
+-- Undo command which depends on Neovim version
+H.undo_autocommand = 'au ModeChanged * ++once undo' .. (vim.fn.has('nvim-0.8') == 1 and '!' or '')
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -418,11 +428,7 @@ end
 _G.log = {}
 H.state_exec = function()
   -- Compute keys to type
-  local keys_mode = H.compute_exec_mode_keys(H.state.trigger.mode)
-  local keys_count = vim.v.count > 0 and vim.v.count or ''
-  local keys_query = H.query_to_keys(H.state.query)
-
-  local keys_to_type = keys_mode .. keys_count .. keys_query
+  local keys_to_type = H.compute_exec_keys()
   table.insert(_G.log, keys_to_type)
 
   -- NOTE: VERY IMPORTANT!
@@ -440,8 +446,7 @@ H.state_exec = function()
 
   -- Execute keys. Using `i` flag is needed to make "chaining triggers" like
   -- `g~iw` work.
-  -- TODO: BUT `saiw` still doesn't work properly.
-  vim.api.nvim_feedkeys(keys_to_type, 'mit!', false)
+  vim.api.nvim_feedkeys(keys_to_type, 'mit', false)
 end
 
 H.state_push = function(keys)
@@ -457,40 +462,66 @@ end
 H.state_is_at_target =
   function() return vim.tbl_count(H.state.clues) == 1 and H.state.clues[H.query_to_keys(H.state.query)] ~= nil end
 
-H.compute_exec_mode_keys = function(mode)
+H.compute_exec_keys = function()
+  local keys_count = vim.v.count > 0 and vim.v.count or ''
+  local keys_query = H.query_to_keys(H.state.query)
+  local res = keys_count .. keys_query
+
   -- Currently only Operator-pending mode needs special keys to reproduce
   -- actually used operator (because using `feedkeys()` inside Operator-pending
   -- mode leads to its cancel into Normal/Insert mode)
-  if mode ~= 'o' then return '' end
-
-  local operator = vim.v.operator
-  local res = operator
-
-  -- Add register
-  local uses_register = operator == 'c' or operator == 'd' or operator == 'y'
-  if uses_register then res = '"' .. vim.v.register .. res end
-
-  -- Some operators end up changing mode which affects `feedkeys()`
-  -- Solution: exit to Normal mode
-  local needs_exit = operator == 'c' or operator == '!'
-  if needs_exit then res = '\28\14' .. res end
-
-  -- Doing '\28\14' is a work around for operators ending up in Insert
-  -- mode (like `ciw` with `i` trigger), BUT it moves cursor one space to left
-  -- (same as `i<Esc>`).
-  -- Solution: add one-shot autocommand correcting cursor position.
-  local needs_cursor_correction = operator == 'c'
-  if needs_cursor_correction then vim.cmd('au InsertLeave * ++once normal! l') end
-
-  -- Some operators still perform some redundant operation before `feedkeys()`
-  -- takes effect. Solution: add one-shot autocommand undoing that.
-  local needs_undo_first_col = (operator == '~' or operator == 'g~' or operator == 'g?') and vim.fn.col('.') == 1
-  local needs_undo_indent = operator == '<' or operator == '>'
-  local needs_undo = needs_undo_first_col or needs_undo_indent
-  if needs_undo then vim.cmd('au ModeChanged * ++once undo' .. (vim.fn.has('nvim-0.8') == 1 and '!' or '')) end
+  if H.state.trigger.mode == 'o' then
+    local operator_tweak = H.operator_tweaks[vim.v.operator] or function(x) return x end
+    res = operator_tweak(vim.v.operator .. H.get_forced_submode() .. res)
+  end
 
   return res
 end
+
+-- Some operators needs special tweaking due to their nature:
+-- - Some operators perform on register. Solution: add register explicitly.
+-- - Some operators end up changing mode which affects `feedkeys()`.
+--   Solution: explicitly exit to Normal mode with '\28\14' ('<C-\><C-n>').
+-- - Some operators still perform some redundant operation before `feedkeys()`
+--   takes effect. Solution: add one-shot autocommand undoing that.
+H.operator_tweaks = {
+  ['c'] = function(keys)
+    -- Doing '\28\14' moves cursor one space to left (same as `i<Esc>`).
+    -- Solution: add one-shot autocommand correcting cursor position.
+    vim.cmd('au InsertLeave * ++once normal! l')
+    return '\28\14"' .. vim.v.register .. keys
+  end,
+  ['d'] = function(keys) return '"' .. vim.v.register .. keys end,
+  ['y'] = function(keys) return '"' .. vim.v.register .. keys end,
+  ['~'] = function(keys)
+    if vim.fn.col('.') == 1 then vim.cmd(H.undo_autocommand) end
+    return keys
+  end,
+  ['g~'] = function(keys)
+    if vim.fn.col('.') == 1 then vim.cmd(H.undo_autocommand) end
+    return keys
+  end,
+  ['g?'] = function(keys)
+    if vim.fn.col('.') == 1 then vim.cmd(H.undo_autocommand) end
+    return keys
+  end,
+  ['!'] = function(keys) return '\28\14' .. keys end,
+  ['>'] = function(keys)
+    vim.cmd(H.undo_autocommand)
+    return keys
+  end,
+  ['<'] = function(keys)
+    vim.cmd(H.undo_autocommand)
+    return keys
+  end,
+  ['g@'] = function(keys)
+    -- Cancelling in-process `g@` operator seems to be particularly hard.
+    -- Not even sure why specifically this combination works, but having `x`
+    -- flag in `feedkeys()` is crucial.
+    vim.api.nvim_feedkeys('\28\14', 'nx', false)
+    return '\28\14' .. keys
+  end,
+}
 
 H.disable_relevant_triggers = function(trigger)
   local buf_id = vim.api.nvim_get_current_buf()
@@ -615,6 +646,12 @@ H.map = function(mode, lhs, rhs, opts)
 end
 
 H.replace_termcodes = function(x) return vim.api.nvim_replace_termcodes(x, true, false, true) end
+
+H.get_forced_submode = function()
+  local mode = vim.fn.mode(1)
+  if not mode:sub(1, 2) == 'no' then return '' end
+  return mode:sub(3)
+end
 
 -- TODO: Remove after compatibility with Neovim=0.7 is dropped
 H.keytrans = vim.fn.has('nvim-0.8') == 1 and vim.fn.keytrans or function(x) return x end
