@@ -245,6 +245,20 @@ MiniClue.config = {
 }
 --minidoc_afterlines_end
 
+MiniClue.map_trigger = function(buf_id, trigger)
+  if not H.is_valid_buf(buf_id) then H.error('`buf_id` should be a valid buffer identifier.') end
+  if not H.is_trigger(trigger) then H.error('`trigger` should be a valid trigger data.') end
+
+  H.map_trigger(buf_id, trigger)
+end
+
+MiniClue.unmap_trigger = function(buf_id, trigger)
+  if not H.is_valid_buf(buf_id) then H.error('`buf_id` should be a valid buffer identifier.') end
+  if not H.is_trigger(trigger) then H.error('`trigger` should be a valid trigger data.') end
+
+  pcall(vim.keymap.del, trigger.mode, trigger.keys, { buffer = buf_id })
+end
+
 MiniClue.execute_without_triggers = function(f, triggers)
   if not vim.is_callable(f) then H.error('`f` should be callable.') end
   if H.is_trigger(triggers) then triggers = { triggers } end
@@ -404,7 +418,7 @@ H.disable_triggers = function(triggers)
   for _, trigger in ipairs(triggers) do
     local is_config_trigger = (triggers_per_mode[trigger.mode] or {})[trigger.keys]
     if is_config_trigger then
-      vim.keymap.del(trigger.mode, trigger.keys, { buffer = buf_id })
+      MiniClue.unmap_trigger(buf_id, trigger)
       vim.schedule(function() H.map_trigger(buf_id, trigger) end)
     end
   end

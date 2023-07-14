@@ -93,9 +93,17 @@ local validate_selection = function(lines, cursor, keys, selection_from, selecti
   set_cursor(cursor[1], cursor[2])
 
   type_keys(keys)
+
   eq(child.fn.mode(), visual_mode)
-  eq({ child.fn.line('v'), child.fn.col('v') - 1 }, selection_from)
-  eq({ child.fn.line('.'), child.fn.col('.') - 1 }, selection_to)
+
+  -- Compute two correctly ordered edges
+  local from = { child.fn.line('v'), child.fn.col('v') - 1 }
+  local to = { child.fn.line('.'), child.fn.col('.') - 1 }
+  if to[1] < from[1] or (to[1] == from[1] and to[2] < from[2]) then
+    from, to = to, from
+  end
+  eq(from, selection_from)
+  eq(to, selection_to)
 
   child.ensure_normal_mode()
 end
@@ -193,6 +201,14 @@ end
 --   MiniTest.skip()
 -- end
 
+T['map_trigger()'] = new_set()
+
+T['map_trigger()']['works'] = function() MiniTest.skip() end
+
+T['unmap_trigger()'] = new_set()
+
+T['unmap_trigger()']['works'] = function() MiniTest.skip() end
+
 T['execute_without_triggers()'] = new_set()
 
 T['execute_without_triggers()']['works'] = function() MiniTest.skip() end
@@ -244,6 +260,11 @@ T['Reproducing keys']['respects `[count]` in Normal mode'] = function()
   validate_trigger_keymap('n', 'g')
 
   validate_move1d('aa bb cc', 6, '2ge', 1)
+end
+
+T['Reproducing keys']['works in temporary Normal mode'] = function()
+  -- Like after `<C-o>`
+  MiniTest.skip()
 end
 
 T['Reproducing keys']['works for builtin keymaps in Insert mode'] = function()
@@ -620,12 +641,7 @@ T['Reproducing keys']['Operator-pending mode']['g@'] = function()
   validate_edit1d('aa bb cc', 3, 'g@iw', 'aa xx cc', 3)
 
   -- - Dot-repeat
-  set_lines({ 'aa bb cc' })
-  set_cursor(1, 3)
-  -- - Seems to need separate `nvim_input` to update event loop
-  type_keys('g@iw', 'w', '.')
-  eq(get_lines(), { 'aa xx xx' })
-  eq(get_cursor(), { 1, 6 })
+  validate_edit1d('aa bb cc', 3, { 'g@iw', 'w', '.' }, 'aa xx xx', 6)
 
   -- - User keymap
   validate_edit1d('aa bb cc', 3, 'g@if', 'aa xx cc', 3)
@@ -639,11 +655,13 @@ T['Reproducing keys']['Operator-pending mode']['g@'] = function()
   validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, 'g@ip', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 
   -- - Dot-repeat
-  set_lines({ 'cc', 'bb', '', 'dd', 'aa' })
-  set_cursor(1, 0)
-  type_keys('g@ip', 'G', '.')
-  eq(get_lines(), { 'bb', 'cc', '', 'aa', 'dd' })
-  eq(get_cursor(), { 4, 0 })
+  validate_edit(
+    { 'cc', 'bb', '', 'dd', 'aa' },
+    { 1, 0 },
+    { 'g@ip', 'G', '.' },
+    { 'bb', 'cc', '', 'aa', 'dd' },
+    { 4, 0 }
+  )
 
   -- - User keymap
   validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, 'g@iF', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
@@ -664,23 +682,13 @@ T['Reproducing keys']['Operator-pending mode']['works with operator and textobje
   validate_trigger_keymap('o', 'i')
 
   -- `g~`
-  set_lines({ 'aa bb' })
-  set_cursor(1, 0)
-  -- - Seems to need separate `nvim_input` to update event loop
-  type_keys('g~', 'iw')
-  set_lines({ 'AA bb' })
-  set_cursor(1, 0)
+  validate_edit1d('aa bb', 0, { 'g~', 'iw' }, 'AA bb', 0)
 
   -- `g@`
   child.lua([[_G.operatorfunc = function() vim.cmd("'[,']sort") end]])
   child.o.operatorfunc = 'v:lua.operatorfunc'
 
-  set_lines({ 'cc', 'bb', '', 'aa' })
-  set_cursor(1, 0)
-  -- - Seems to need separate `nvim_input` to update event loop
-  type_keys('g@', 'ip')
-  set_lines({ 'bb', 'cc', '', 'aa' })
-  set_cursor(1, 0)
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, { 'g@', 'ip' }, { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 end
 
 T['Reproducing keys']['Operator-pending mode']['respects forced submode'] = function()
@@ -814,6 +822,14 @@ T['Reproducing keys']['works for marks'] = function()
   eq(get_cursor(), { 1, 1 })
 end
 
+T['Reproducing keys']['works with macros'] = function() MiniTest.skip() end
+
+T['Reproducing keys']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
+
+T['Reproducing keys']['works buffer-local mappings'] = function() MiniTest.skip() end
+
+T['Reproducing keys']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+
 T['Reproducing keys']['trigger forwards keys even if no extra clues is set'] = function()
   load_module({ triggers = { { mode = 'c', keys = 'g' }, { mode = 'i', keys = 'g' } } })
   validate_trigger_keymap('c', 'g')
@@ -855,34 +871,386 @@ T['Reproducing keys']['works when key query is executed in presence of longer ke
   validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, 'gcip', { '-- aa', '-- bb', '', 'cc' }, { 1, 0 })
 end
 
-T['Reproducing keys']["works with 'mini.ai'"] = function()
-  -- `i`/`in`/`il` and `a`/`an`/`al`
-  MiniTest.skip()
+T['Reproducing keys']['mini modules'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- TODO: Update during move into 'mini.nvim'
+      child.cmd('set rtp+=deps/mini.nvim')
+    end,
+  },
+})
+
+local setup_mini_module = function(name, config)
+  local lua_cmd = string.format([[_G.has_module, _G.module = pcall(require, 'mini.%s')]], name)
+  child.lua(lua_cmd)
+  if not child.lua_get('_G.has_module') then return false end
+  child.lua('module.setup()', { config })
+  return true
 end
 
-T['Reproducing keys']["works with 'mini.align'"] = function()
-  -- Operators `ga` and `gA` work when textobject uses trigger.
-  -- Example: `gaip` and `gAip` (both with trigger `g` and not)
-  MiniTest.skip()
+T['Reproducing keys']['mini modules']['mini.ai'] = function()
+  local has_ai = setup_mini_module('ai')
+  if not has_ai then MiniTest.skip("Could not load 'mini.ai'.") end
+
+  load_module({ triggers = { { mode = 'o', keys = 'i' }, { mode = 'o', keys = 'a' } } })
+  validate_trigger_keymap('o', 'i')
+  validate_trigger_keymap('o', 'a')
+
+  -- `i` in Visual mode
+  validate_selection1d('aa(bb)', 0, 'vi)', 3, 4)
+  validate_selection1d('aa ff(bb)', 0, 'vif', 6, 7)
+
+  validate_selection1d('(a(b(cc)b)a)', 5, 'v2i)', 3, 8)
+  validate_selection1d('(a(b(cc)b)a)', 5, 'vi)i)', 3, 8)
+
+  validate_selection1d('(aa) (bb) (cc)', 6, 'vil)', 1, 2)
+  validate_selection1d('(aa) (bb) (cc)', 11, 'v2il)', 1, 2)
+
+  validate_selection1d('(aa) (bb) (cc)', 6, 'vin)', 11, 12)
+  validate_selection1d('(aa) (bb) (cc)', 1, 'v2in)', 11, 12)
+
+  -- `a` in Visual mode
+  validate_selection1d('aa(bb)', 0, 'va)', 2, 5)
+  validate_selection1d('aa ff(bb)', 0, 'vaf', 3, 8)
+
+  validate_selection1d('(a(b(cc)b)a)', 5, 'v2a)', 2, 9)
+  validate_selection1d('(a(b(cc)b)a)', 5, 'va)a)', 2, 9)
+
+  validate_selection1d('(aa) (bb) (cc)', 6, 'val)', 0, 3)
+  validate_selection1d('(aa) (bb) (cc)', 11, 'v2al)', 0, 3)
+
+  validate_selection1d('(aa) (bb) (cc)', 6, 'van)', 10, 13)
+  validate_selection1d('(aa) (bb) (cc)', 1, 'v2an)', 10, 13)
+
+  -- `i` in Operator-pending mode
+  validate_edit1d('aa(bb)', 0, 'di)', 'aa()', 3)
+  validate_edit1d('aa(bb)', 0, 'ci)cc', 'aa(cc)', 5)
+  validate_edit1d('aa(bb)', 0, 'yi)P', 'aa(bbbb)', 4)
+  validate_edit1d('aa ff(bb)', 0, 'dif', 'aa ff()', 6)
+
+  validate_edit1d('(a(b(cc)b)a)', 5, 'd2i)', '(a()a)', 3)
+
+  validate_edit1d('(a(b(cc)b)a)', 5, 'di).', '(a()a)', 3)
+  validate_edit1d('(aa) (bb)', 1, 'ci)cc<Esc>W.', '(cc) (cc)', 7)
+
+  validate_edit1d('(aa) (bb) (cc)', 6, 'dil)', '() (bb) (cc)', 1)
+  validate_edit1d('(aa) (bb) (cc)', 11, 'd2il)', '() (bb) (cc)', 1)
+
+  validate_edit1d('(aa) (bb) (cc)', 6, 'din)', '(aa) (bb) ()', 11)
+  validate_edit1d('(aa) (bb) (cc)', 1, 'd2in)', '(aa) (bb) ()', 11)
+
+  -- `a` in Operator-pending mode
+  validate_edit1d('aa(bb)', 0, 'da)', 'aa', 1)
+  validate_edit1d('aa(bb)', 0, 'ca)cc', 'aacc', 4)
+  validate_edit1d('aa(bb)', 0, 'ya)P', 'aa(bb)(bb)', 5)
+  validate_edit1d('aa ff(bb)', 0, 'daf', 'aa ', 2)
+
+  validate_edit1d('(a(b(cc)b)a)', 5, 'd2a)', '(aa)', 2)
+
+  validate_edit1d('(a(b(cc)b)a)', 5, 'da).', '(aa)', 2)
+  validate_edit1d('(aa) (bb)', 1, 'ca)cc<Esc>W.', 'cc cc', 4)
+
+  validate_edit1d('(aa) (bb) (cc)', 6, 'dal)', ' (bb) (cc)', 0)
+  validate_edit1d('(aa) (bb) (cc)', 11, 'd2al)', ' (bb) (cc)', 0)
+
+  validate_edit1d('(aa) (bb) (cc)', 6, 'dan)', '(aa) (bb) ', 9)
+  validate_edit1d('(aa) (bb) (cc)', 1, 'd2an)', '(aa) (bb) ', 9)
 end
 
-T['Reproducing keys']["works with 'mini.bracketed'"] = function() MiniTest.skip() end
+T['Reproducing keys']['mini modules']['mini.align'] = function()
+  child.set_size(10, 30)
+  child.o.cmdheight = 5
 
-T['Reproducing keys']["works with 'mini.comment'"] = function() MiniTest.skip() end
+  local has_align = setup_mini_module('align')
+  if not has_align then MiniTest.skip("Could not load 'mini.align'.") end
 
-T['Reproducing keys']["works with 'mini.indentscope'"] = function() MiniTest.skip() end
+  -- Works together with 'mini.ai' without `g` as trigger
+  local has_ai = setup_mini_module('ai')
+  if has_ai then
+    load_module({ triggers = { { mode = 'o', keys = 'i' } } })
+    validate_edit({ 'f(', 'a_b', 'aa_b', ')' }, { 2, 0 }, { 'ga', 'if', '_' }, { 'f(', 'a _b', 'aa_b', ')' }, { 1, 1 })
+  end
 
-T['Reproducing keys']["works with 'mini.surround'"] = function()
+  -- Works with `g` as trigger
+  load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
+  validate_trigger_keymap('n', 'g')
+
+  -- - No preview
+  validate_edit({ 'a_b', 'aa_b' }, { 1, 0 }, 'vapga_', { 'a _b', 'aa_b' }, { 2, 0 })
+  validate_edit({ 'a_b', 'aa_b' }, { 1, 0 }, 'gaap_', { 'a _b', 'aa_b' }, { 1, 0 })
+
+  validate_edit(
+    { 'a_b', 'aa_b', '', 'c_d', 'cc_d' },
+    { 1, 0 },
+    'gaap_G.',
+    { 'a _b', 'aa_b', '', 'c _d', 'cc_d' },
+    { 3, 0 }
+  )
+
+  -- - With preview
+  local validate_preview = function(keys)
+    set_lines({ 'a_b', 'aa_b' })
+    set_cursor(1, 0)
+    type_keys(keys)
+    child.expect_screenshot()
+    type_keys('_<CR>')
+    eq(get_lines(), { 'a _b', 'aa_b' })
+  end
+
+  validate_preview('vapgA')
+  validate_preview('gAap')
+
+  -- Works together with 'mini.ai' with `g` as trigger
+  if has_ai then
+    validate_edit({ 'f(', 'a_b', 'aa_b', ')' }, { 2, 0 }, { 'ga', 'if', '_' }, { 'f(', 'a _b', 'aa_b', ')' }, { 1, 1 })
+  end
+end
+
+T['Reproducing keys']['mini modules']['mini.bracketed'] = function()
+  local has_bracketed = setup_mini_module('bracketed')
+  if not has_bracketed then MiniTest.skip("Could not load 'mini.bracketed'.") end
+
+  load_module({
+    triggers = {
+      { mode = 'n', keys = '[' },
+      { mode = 'x', keys = '[' },
+      { mode = 'o', keys = '[' },
+      { mode = 'n', keys = ']' },
+      { mode = 'x', keys = ']' },
+      { mode = 'o', keys = ']' },
+    },
+  })
+  validate_trigger_keymap('n', '[')
+  validate_trigger_keymap('x', '[')
+  validate_trigger_keymap('o', '[')
+  validate_trigger_keymap('n', ']')
+  validate_trigger_keymap('x', ']')
+  validate_trigger_keymap('o', ']')
+
+  -- Normal mode
+  -- - Not same buffer
+  local get_buf = child.api.nvim_get_current_buf
+  local init_buf_id = get_buf()
+  local new_buf_id = child.api.nvim_create_buf(true, false)
+
+  type_keys(']b')
+  eq(get_buf(), new_buf_id)
+
+  type_keys('[b')
+  eq(get_buf(), init_buf_id)
+
+  type_keys(']B')
+  eq(get_buf(), new_buf_id)
+
+  type_keys('[B')
+  eq(get_buf(), init_buf_id)
+
+  type_keys('2[b')
+  eq(get_buf(), init_buf_id)
+
+  -- - Same buffer
+  local indent_lines = { 'aa', '\tbb', '\t\tcc', '\tdd', 'ee' }
+  validate_move(indent_lines, { 3, 2 }, '[i', { 2, 1 })
+  validate_move(indent_lines, { 3, 2 }, ']i', { 4, 1 })
+  validate_move(indent_lines, { 3, 2 }, '2[i', { 1, 0 })
+
+  -- Visual mode
+  validate_selection(indent_lines, { 3, 2 }, 'v[i', { 2, 1 }, { 3, 2 })
+  validate_selection(indent_lines, { 3, 2 }, 'v]i', { 3, 2 }, { 4, 1 })
+  validate_selection(indent_lines, { 3, 2 }, 'v2[i', { 1, 0 }, { 3, 2 })
+
+  validate_selection(indent_lines, { 3, 2 }, 'V[i', { 2, 1 }, { 3, 2 }, 'V')
+
+  -- Operator-pending mode
+  validate_edit(indent_lines, { 3, 2 }, 'd[i', { 'aa', '\tdd', 'ee' }, { 2, 2 })
+  validate_edit(indent_lines, { 3, 2 }, 'd]i', { 'aa', '\tbb', 'ee' }, { 3, 1 })
+  validate_edit(indent_lines, { 3, 2 }, 'd2[i', { '\tdd', 'ee' }, { 1, 2 })
+end
+
+T['Reproducing keys']['mini modules']['mini.comment'] = function()
+  child.o.commentstring = '## %s'
+
+  local has_comment = setup_mini_module('comment')
+  if not has_comment then MiniTest.skip("Could not load 'mini.comment'.") end
+
+  -- Works together with 'mini.ai' without `g` as trigger
+  local has_ai = setup_mini_module('ai')
+  if has_ai then
+    load_module({ triggers = { { mode = 'o', keys = 'i' } } })
+    validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, { 'gc', 'ip' }, { '## aa', '## bb', '', 'cc' }, { 1, 0 })
+  end
+
+  -- Works with `g` as trigger
+  load_module({
+    triggers = {
+      { mode = 'n', keys = 'g' },
+      { mode = 'x', keys = 'g' },
+      { mode = 'o', keys = 'g' },
+
+      { mode = 'o', keys = 'i' },
+    },
+  })
+  validate_trigger_keymap('n', 'g')
+
+  -- Normal mode
+  validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, { 'gc', 'ap' }, { '## aa', '## bb', '##', 'cc' }, { 1, 0 })
+  validate_edit(
+    { 'aa', '', 'bb', '', 'cc' },
+    { 1, 0 },
+    { '2gc', 'ap' },
+    { '## aa', '##', '## bb', '##', 'cc' },
+    { 1, 0 }
+  )
+  validate_edit(
+    { 'aa', '', 'bb', '', 'cc' },
+    { 1, 0 },
+    { 'gc', 'ap', '.' },
+    { '## ## aa', '## ##', '## bb', '##', 'cc' },
+    { 1, 0 }
+  )
+
+  validate_edit({ 'aa', 'bb', '' }, { 1, 0 }, { 'gcc' }, { '## aa', 'bb', '' }, { 1, 0 })
+  validate_edit({ 'aa', 'bb', '' }, { 1, 0 }, { '2gcc' }, { '## aa', '## bb', '' }, { 1, 0 })
+  validate_edit({ 'aa', 'bb', '' }, { 1, 0 }, { 'gcc', 'j', '.' }, { '## aa', '## bb', '' }, { 2, 0 })
+
+  -- Visual mode
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'V', 'gc' }, { '## aa', 'bb' }, { 1, 0 })
+
+  -- Operator-pending mode
+  validate_edit({ '## aa', 'bb' }, { 1, 0 }, { 'dgc' }, { 'bb' }, { 1, 0 })
+  validate_edit({ '## aa', 'bb', '## cc' }, { 1, 0 }, { 'dgc', 'j', '.' }, { 'bb' }, { 1, 0 })
+
+  -- Works together with 'mini.ai' when `g` is trigger
+  if has_ai then
+    validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, { 'gc', 'ip' }, { '## aa', '## bb', '', 'cc' }, { 1, 0 })
+  end
+end
+
+T['Reproducing keys']['mini modules']['mini.indentscope'] = function()
+  local has_indentscope = setup_mini_module('indentscope')
+  if not has_indentscope then MiniTest.skip("Could not load 'mini.indentscope'.") end
+
+  load_module({
+    triggers = {
+      { mode = 'n', keys = '[' },
+      { mode = 'n', keys = ']' },
+
+      { mode = 'x', keys = '[' },
+      { mode = 'x', keys = ']' },
+      { mode = 'x', keys = 'a' },
+      { mode = 'x', keys = 'i' },
+
+      { mode = 'o', keys = '[' },
+      { mode = 'o', keys = ']' },
+      { mode = 'o', keys = 'a' },
+      { mode = 'o', keys = 'i' },
+    },
+  })
+  validate_trigger_keymap('n', '[')
+  validate_trigger_keymap('n', ']')
+  validate_trigger_keymap('x', '[')
+  validate_trigger_keymap('x', ']')
+  validate_trigger_keymap('x', 'a')
+  validate_trigger_keymap('x', 'i')
+  validate_trigger_keymap('o', '[')
+  validate_trigger_keymap('o', ']')
+  validate_trigger_keymap('o', 'a')
+  validate_trigger_keymap('o', 'i')
+
+  local lines = { 'aa', '\tbb', '\t\tcc', '\tdd', 'ee' }
+  local cursor = { 3, 2 }
+
+  -- Normal mode
+  validate_move(lines, cursor, '[i', { 2, 1 })
+  validate_move(lines, cursor, '2[i', { 1, 0 })
+
+  validate_move(lines, cursor, ']i', { 4, 1 })
+  validate_move(lines, cursor, '2]i', { 5, 0 })
+
+  -- Visual mode
+  validate_selection(lines, cursor, 'v[i', { 2, 1 }, { 3, 2 })
+  validate_selection(lines, cursor, 'v2[i', { 1, 0 }, { 3, 2 })
+
+  validate_selection(lines, cursor, 'v]i', { 3, 2 }, { 4, 1 })
+  validate_selection(lines, cursor, 'v2]i', { 3, 2 }, { 5, 0 })
+
+  validate_selection(lines, cursor, 'vai', { 2, 1 }, { 4, 1 }, 'V')
+  validate_selection(lines, cursor, 'v2ai', { 1, 0 }, { 5, 0 }, 'V')
+
+  validate_selection(lines, cursor, 'vii', { 3, 2 }, { 3, 2 }, 'V')
+  validate_selection(lines, cursor, 'v2ii', { 3, 2 }, { 3, 2 }, 'V')
+
+  -- Operator-pending mode
+  validate_edit(lines, cursor, 'd[i', { 'aa', '\tcc', '\tdd', 'ee' }, { 2, 1 })
+  validate_edit(lines, cursor, 'd2[i', { 'cc', '\tdd', 'ee' }, { 1, 0 })
+  validate_edit(lines, cursor, 'd[i.', { 'cc', '\tdd', 'ee' }, { 1, 0 })
+
+  validate_edit(lines, cursor, 'd]i', { 'aa', '\tbb', '\t\tdd', 'ee' }, { 3, 2 })
+  validate_edit(lines, cursor, 'd2]i', { 'aa', '\tbb', 'ee' }, { 3, 0 })
+  validate_edit(lines, cursor, 'd]i.', { 'aa', '\tbb', 'ee' }, { 3, 0 })
+
+  validate_edit(lines, cursor, 'dai', { 'aa', 'ee' }, { 2, 1 })
+  validate_edit(lines, cursor, 'd2ai', { '' }, { 1, 0 })
+  validate_edit(lines, cursor, 'dai.', { 'aa', 'ee' }, { 2, 1 })
+
+  validate_edit(lines, cursor, 'dii', { 'aa', '\tbb', '\tdd', 'ee' }, { 3, 2 })
+  validate_edit(lines, cursor, 'd2ii', { 'aa', '\tbb', '\tdd', 'ee' }, { 3, 2 })
+  validate_edit(lines, cursor, 'dii.', { 'aa', 'ee' }, { 2, 1 })
+end
+
+T['Reproducing keys']['mini modules']['mini.surround'] = function()
   -- `saiw` works as expected when `s` and `i` are triggers: doesn't move cursor, no messages.
 
-  -- Dot-repeat for every operator
-  MiniTest.skip()
+  local has_surround = setup_mini_module('surround')
+  if not has_surround then MiniTest.skip("Could not load 'mini.surround'.") end
+
+  -- Works together with 'mini.ai' without `s` as trigger
+  local has_ai = setup_mini_module('ai')
+  if has_ai then
+    load_module({ triggers = { { mode = 'o', keys = 'i' } } })
+    validate_edit1d('aa bb', 0, { 'sa', 'iw', ')' }, '(aa) bb', 1)
+    validate_edit1d('aa ff(bb)', 0, { 'sa', 'if', ']' }, 'aa ff([bb])', 7)
+  end
+
+  -- Works with `s` as trigger
+  load_module({ triggers = { { mode = 'n', keys = 's' }, { mode = 'o', keys = 'i' } } })
+  validate_trigger_keymap('n', 's')
+  validate_trigger_keymap('o', 'i')
+
+  -- Add
+  validate_edit1d('aa bb', 0, { 'sa', 'iw', ')' }, '(aa) bb', 1)
+  validate_edit1d('aa bb', 0, { '2sa', 'iw', ')' }, '((aa)) bb', 2)
+  validate_edit1d('aa bb', 0, { 'sa', '3iw', ')' }, '(aa bb)', 1)
+  validate_edit1d('aa bb', 0, { '2sa', '3iw', ')' }, '((aa bb))', 2)
+
+  validate_edit1d('aa bb', 0, { 'viw', 'sa', ')' }, '(aa) bb', 1)
+  validate_edit1d('aa bb', 0, { 'viw', '2sa', ')' }, '((aa)) bb', 2)
+
+  validate_edit1d('aa bb', 0, { 'sa', 'iw', ')', 'W', '.' }, '(aa) (bb)', 6)
+
+  -- Delete
+  validate_edit1d('(a(b(cc)b)a)', 5, 'sd)', '(a(bccb)a)', 4)
+  validate_edit1d('(a(b(cc)b)a)', 5, '2sd)', '(ab(cc)ba)', 2)
+
+  validate_edit1d('(a(b(cc)b)a)', 5, 'sd).', '(abccba)', 2)
+
+  validate_edit1d('(aa) (bb) (cc)', 6, 'sdl)', 'aa (bb) (cc)', 0)
+  validate_edit1d('(aa) (bb) (cc)', 11, '2sdl)', 'aa (bb) (cc)', 0)
+
+  validate_edit1d('(aa) (bb) (cc)', 6, 'sdn)', '(aa) (bb) cc', 10)
+  validate_edit1d('(aa) (bb) (cc)', 1, '2sdn)', '(aa) (bb) cc', 10)
+
+  -- Replace
+  validate_edit1d('(a(b(cc)b)a)', 5, 'sr)>', '(a(b<cc>b)a)', 5)
+  validate_edit1d('(a(b(cc)b)a)', 5, '2sr)>', '(a<b(cc)b>a)', 3)
+
+  validate_edit1d('(a(b(cc)b)a)', 5, 'sr)>.', '(a<b<cc>b>a)', 3)
+
+  validate_edit1d('(aa) (bb) (cc)', 6, 'srl)>', '<aa> (bb) (cc)', 1)
+  validate_edit1d('(aa) (bb) (cc)', 11, '2srl)>', '<aa> (bb) (cc)', 1)
+
+  validate_edit1d('(aa) (bb) (cc)', 6, 'srn)>', '(aa) (bb) <cc>', 11)
+  validate_edit1d('(aa) (bb) (cc)', 1, '2srn)>', '(aa) (bb) <cc>', 11)
 end
-
--- T['Reproducing keys']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
-
--- T['Reproducing keys']['works buffer-local mappings'] = function() MiniTest.skip() end
-
--- T['Reproducing keys']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 return T
