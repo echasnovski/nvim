@@ -180,40 +180,168 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ window = { config = 'a' } }, 'window.config', 'table')
 end
 
--- T['setup()']['respects "human-readable" key names'] = function()
---   -- In `clues` (`keys` and 'postkeys')
---
---   -- In `triggers`
---   MiniTest.skip()
--- end
+T['setup()']['respects "human-readable" key names'] = function()
+  -- In `clues` (`keys` and 'postkeys')
 
--- T['setup()']['respects explicit `<Leader>`'] = function()
---   -- In `clues` (`keys` and 'postkeys')
---
---   -- In `triggers`
---   MiniTest.skip()
--- end
+  -- In `triggers`
+  MiniTest.skip()
+end
 
--- T['setup()']['respects "raw" key names'] = function()
---   -- In `clues` (`keys` and 'postkeys')
---
---   -- In `triggers`
---   MiniTest.skip()
--- end
+T['setup()']['respects explicit `<Leader>`'] = function()
+  -- In `clues` (`keys` and 'postkeys')
 
-T['map_trigger()'] = new_set()
+  -- In `triggers`
+  MiniTest.skip()
+end
 
-T['map_trigger()']['works'] = function() MiniTest.skip() end
+T['setup()']['respects "raw" key names'] = function()
+  -- In `clues` (`keys` and 'postkeys')
 
-T['unmap_trigger()'] = new_set()
+  -- In `triggers`
+  MiniTest.skip()
+end
 
-T['unmap_trigger()']['works'] = function() MiniTest.skip() end
+T['setup()']['creates triggers for already created buffers'] = function() MiniTest.skip() end
+
+T['enable_trigger()'] = new_set()
+
+T['enable_trigger()']['works'] = function() MiniTest.skip() end
+
+T['disable_trigger()'] = new_set()
+
+T['disable_trigger()']['works'] = function() MiniTest.skip() end
 
 T['execute_without_triggers()'] = new_set()
 
 T['execute_without_triggers()']['works'] = function() MiniTest.skip() end
 
 -- Integration tests ==========================================================
+T['Triggers'] = new_set()
+
+T['Triggers']['works'] = function() MiniTest.skip() end
+
+T['Triggers']['respect `vim.b.miniclue_disable`'] = function() MiniTest.skip() end
+
+T['Querying keys'] = new_set()
+
+T['Querying keys']['works'] = function()
+  make_test_map('n', '<Space>f')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>')
+
+  type_keys(' ', 'f')
+  eq(get_test_map_count('n', ' f'), 1)
+
+  type_keys(10, ' ', 'f')
+  eq(get_test_map_count('n', ' f'), 2)
+end
+
+T['Querying keys']["does not time out after 'timeoutlen'"] = function()
+  make_test_map('n', '<Space>f')
+  make_test_map('n', '<Space>ff')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+
+  -- Should wait for next key as there are still multiple clues available
+  child.o.timeoutlen = 10
+  type_keys(' ', 'f')
+  sleep(20)
+  eq(get_test_map_count('n', ' f'), 0)
+end
+
+T['Querying keys']['takes into account user-supplied clues'] = function()
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>f', desc = 'My space f' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+  })
+  validate_trigger_keymap('n', '<Space>')
+
+  type_keys(' ')
+  MiniTest.skip('Use screenshot when window with clues is implemented')
+  child.expect_screenshot()
+end
+
+T['Querying keys']['respects `<CR>`'] = function()
+  make_test_map('n', '<Space>f')
+  make_test_map('n', '<Space>ff')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>')
+
+  -- `<CR>` should execute current query
+  child.o.timeoutlen = 10
+  type_keys(' ', 'f', '<CR>')
+  sleep(15)
+  eq(get_test_map_count('n', ' f'), 1)
+end
+
+T['Querying keys']['respects `<Esc>`/`<C-c>`'] = function()
+  make_test_map('n', '<Space>f')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>')
+
+  -- `<Esc>` and `<C-c>` should stop current query
+  local validate = function(key)
+    type_keys(' ', key, 'f')
+    child.ensure_normal_mode()
+    eq(get_test_map_count('n', ' f'), 0)
+  end
+
+  validate('<Esc>')
+  validate('<C-c>')
+end
+
+T['Querying keys']['respects `<BS>`'] = function()
+  make_test_map('n', '<Space>f')
+  make_test_map('n', '<Space>ff')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>')
+
+  -- `<BS>` should remove latest key
+  type_keys(' ', 'f', '<BS>', 'f', 'f')
+  eq(get_test_map_count('n', ' f'), 0)
+  eq(get_test_map_count('n', ' ff'), 1)
+end
+
+T['Querying keys']['can `<BS>` on first element'] = function()
+  make_test_map('n', '<Space>f')
+  make_test_map('n', ',gg')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' }, { mode = 'n', keys = ',g' } } })
+  validate_trigger_keymap('n', '<Space>')
+  validate_trigger_keymap('n', ',g')
+
+  type_keys(' ', '<BS>', ' ', 'f')
+  eq(get_test_map_count('n', ' f'), 1)
+
+  -- Removes first trigger element at once, not by characters
+  type_keys(',g', '<BS>', ',g', 'g')
+  eq(get_test_map_count('n', ',gg'), 1)
+end
+
+T['Querying keys']['allows reaching longest keymap'] = function()
+  make_test_map('n', '<Space>f')
+  make_test_map('n', '<Space>fff')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>')
+
+  type_keys(' ', 'f', 'f', 'f')
+  eq(get_test_map_count('n', ' f'), 0)
+  eq(get_test_map_count('n', ' fff'), 1)
+end
+
+T['Querying keys']['executes even if no extra clues is set'] = function()
+  load_module({ triggers = { { mode = 'c', keys = 'g' }, { mode = 'i', keys = 'g' } } })
+  validate_trigger_keymap('c', 'g')
+  validate_trigger_keymap('i', 'g')
+
+  type_keys(':', 'g')
+  eq(child.fn.getcmdline(), 'g')
+
+  child.ensure_normal_mode()
+  type_keys('i', 'g')
+  eq(get_lines(), { 'g' })
+end
+
 T['Reproducing keys'] = new_set()
 
 T['Reproducing keys']['works for builtin keymaps in Normal mode'] = function()
@@ -221,20 +349,20 @@ T['Reproducing keys']['works for builtin keymaps in Normal mode'] = function()
   validate_trigger_keymap('n', 'g')
 
   -- `ge` (basic test)
-  validate_move1d('aa bb', 3, 'ge', 1)
+  validate_move1d('aa bb', 3, { 'g', 'e' }, 1)
 
   -- `gg` (should avoid infinite recursion)
-  validate_move({ 'aa', 'bb' }, { 2, 0 }, 'gg', { 1, 0 })
+  validate_move({ 'aa', 'bb' }, { 2, 0 }, { 'g', 'g' }, { 1, 0 })
 
   -- `g~` (should work with operators)
-  validate_edit1d('aa bb', 0, 'g~iw', 'AA bb', 0)
+  validate_edit1d('aa bb', 0, { 'g', '~', 'iw' }, 'AA bb', 0)
 
   -- `g'a` (should work with more than one character ahead)
   set_lines({ 'aa', 'bb' })
   set_cursor(2, 0)
   type_keys('ma')
   set_cursor(1, 0)
-  type_keys("g'a")
+  type_keys("g'", 'a')
   eq(get_cursor(), { 2, 0 })
 end
 
@@ -246,11 +374,11 @@ T['Reproducing keys']['works for user keymaps in Normal mode'] = function()
 
   validate_trigger_keymap('n', '<Space>')
 
-  type_keys(' f')
+  type_keys(' ', 'f')
   eq(get_test_map_count('n', ' f'), 1)
   eq(get_test_map_count('n', ' g'), 0)
 
-  type_keys(' g')
+  type_keys(' ', 'g')
   eq(get_test_map_count('n', ' f'), 1)
   eq(get_test_map_count('n', ' g'), 1)
 end
@@ -259,7 +387,7 @@ T['Reproducing keys']['respects `[count]` in Normal mode'] = function()
   load_module({ triggers = { { mode = 'n', keys = 'g' } } })
   validate_trigger_keymap('n', 'g')
 
-  validate_move1d('aa bb cc', 6, '2ge', 1)
+  validate_move1d('aa bb cc', 6, { '2', 'g', 'e' }, 1)
 end
 
 T['Reproducing keys']['works in temporary Normal mode'] = function()
@@ -273,7 +401,7 @@ T['Reproducing keys']['works for builtin keymaps in Insert mode'] = function()
 
   set_lines({ 'aa aa', 'bb bb', '' })
   set_cursor(3, 0)
-  type_keys('i', '<C-x><C-l>')
+  type_keys('i', '<C-x>', '<C-l>')
 
   eq(child.fn.mode(), 'i')
   local complete_words = vim.tbl_map(function(x) return x.word end, child.fn.complete_info().items)
@@ -290,12 +418,12 @@ T['Reproducing keys']['works for user keymaps in Insert mode'] = function()
 
   child.cmd('startinsert')
 
-  type_keys(' f')
+  type_keys(' ', 'f')
   eq(child.fn.mode(), 'i')
   eq(get_test_map_count('i', ' f'), 1)
   eq(get_test_map_count('i', ' g'), 0)
 
-  type_keys(' g')
+  type_keys(' ', 'g')
   eq(child.fn.mode(), 'i')
   eq(get_test_map_count('i', ' f'), 1)
   eq(get_test_map_count('i', ' g'), 1)
@@ -307,14 +435,14 @@ T['Reproducing keys']['works for builtin keymaps in Visual mode'] = function()
   validate_trigger_keymap('x', 'a')
 
   -- `a'` (should work to update selection)
-  validate_selection1d("'aa'", 1, "va'", 0, 3)
+  validate_selection1d("'aa'", 1, { 'v', 'a', "'" }, 0, 3)
 
   -- Should preserve Visual submode
-  validate_selection({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, 'Vap', { 1, 0 }, { 3, 0 }, 'V')
+  validate_selection({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, { 'V', 'a', 'p' }, { 1, 0 }, { 3, 0 }, 'V')
   validate_selection1d("'aa'", 1, "<C-v>a'", 0, 3, replace_termcodes('<C-v>'))
 
   -- `g?` (should work to manipulation selection)
-  validate_edit1d('aa bb', 0, 'viwg?', 'nn bb', 0)
+  validate_edit1d('aa bb', 0, { 'v', 'iw', 'g', '?' }, 'nn bb', 0)
 end
 
 T['Reproducing keys']['works for user keymaps in Visual mode'] = function()
@@ -327,12 +455,12 @@ T['Reproducing keys']['works for user keymaps in Visual mode'] = function()
 
   type_keys('v')
 
-  type_keys(' f')
+  type_keys(' ', 'f')
   eq(child.fn.mode(), 'v')
   eq(get_test_map_count('x', ' f'), 1)
   eq(get_test_map_count('x', ' g'), 0)
 
-  type_keys(' g')
+  type_keys(' ', 'g')
   eq(child.fn.mode(), 'v')
   eq(get_test_map_count('x', ' f'), 1)
   eq(get_test_map_count('x', ' g'), 1)
@@ -340,13 +468,13 @@ T['Reproducing keys']['works for user keymaps in Visual mode'] = function()
   -- Should preserve Visual submode
   child.ensure_normal_mode()
   type_keys('V')
-  type_keys(' f')
+  type_keys(' ', 'f')
   eq(child.fn.mode(), 'V')
   eq(get_test_map_count('x', ' f'), 2)
 
   child.ensure_normal_mode()
   type_keys('<C-v>')
-  type_keys(' f')
+  type_keys(' ', 'f')
   eq(child.fn.mode(), replace_termcodes('<C-v>'))
   eq(get_test_map_count('x', ' f'), 3)
 end
@@ -355,7 +483,7 @@ T['Reproducing keys']['respects `[count]` in Visual mode'] = function()
   load_module({ triggers = { { mode = 'x', keys = 'a' } } })
   validate_trigger_keymap('x', 'a')
 
-  validate_selection1d('aa bb cc', 0, 'v2aw', 0, 5)
+  validate_selection1d('aa bb cc', 0, { 'v', '2', 'a', 'w' }, 0, 5)
 end
 
 T['Reproducing keys']['Operator-pending mode'] = new_set({
@@ -373,113 +501,113 @@ T['Reproducing keys']['Operator-pending mode'] = new_set({
 })
 
 T['Reproducing keys']['Operator-pending mode']['c'] = function()
-  validate_edit1d('aa bb cc', 3, 'ciwdd', 'aa dd cc', 5)
+  validate_edit1d('aa bb cc', 3, { 'c', 'i', 'w', 'dd' }, 'aa dd cc', 5)
 
   -- Dot-repeat
-  validate_edit1d('aa bb', 0, 'ciwdd<Esc>w.', 'dd dd', 4)
+  validate_edit1d('aa bb', 0, { 'c', 'i', 'w', 'dd', '<Esc>w.' }, 'dd dd', 4)
 
   -- Should respect register
-  validate_edit1d('aaa', 0, '"aciwxxx', 'xxx', 3)
+  validate_edit1d('aaa', 0, { '"ac', 'i', 'w', 'xxx' }, 'xxx', 3)
   eq(child.fn.getreg('a'), 'aaa')
 
   -- User keymap
-  validate_edit1d('aa bb cc', 3, 'cifdd', 'aa dd cc', 5)
+  validate_edit1d('aa bb cc', 3, { 'c', 'i', 'f', 'dd' }, 'aa dd cc', 5)
 
   -- Should respect `[count]`
-  validate_edit1d('aa bb cc', 0, 'c2iwdd', 'ddbb cc', 2)
+  validate_edit1d('aa bb cc', 0, { 'c2', 'i', 'w', 'dd' }, 'ddbb cc', 2)
 end
 
 T['Reproducing keys']['Operator-pending mode']['d'] = function()
-  validate_edit1d('aa bb cc', 3, 'diw', 'aa  cc', 3)
+  validate_edit1d('aa bb cc', 3, { 'd', 'i', 'w' }, 'aa  cc', 3)
 
   -- Dot-rpeat
-  validate_edit1d('aa bb cc', 0, 'diww.', '  cc', 1)
+  validate_edit1d('aa bb cc', 0, { 'd', 'i', 'w', 'w.' }, '  cc', 1)
 
   -- Should respect register
-  validate_edit1d('aaa', 0, '"adiw', '', 0)
+  validate_edit1d('aaa', 0, { '"ad', 'i', 'w' }, '', 0)
   eq(child.fn.getreg('a'), 'aaa')
 
   -- User keymap
-  validate_edit1d('aa bb cc', 3, 'dif', 'aa  cc', 3)
+  validate_edit1d('aa bb cc', 3, { 'd', 'i', 'f' }, 'aa  cc', 3)
 
   -- Should respect `[count]`
-  validate_edit1d('aa bb cc', 0, 'd2iw', 'bb cc', 0)
+  validate_edit1d('aa bb cc', 0, { 'd2', 'i', 'w' }, 'bb cc', 0)
 end
 
 T['Reproducing keys']['Operator-pending mode']['y'] = function()
-  validate_edit1d('aa bb cc', 3, 'yiwP', 'aa bbbb cc', 4)
+  validate_edit1d('aa bb cc', 3, { 'y', 'i', 'w', 'P' }, 'aa bbbb cc', 4)
 
   -- Should respect register
-  validate_edit1d('aaa', 0, '"ayiw', 'aaa', 0)
+  validate_edit1d('aaa', 0, { '"ay', 'i', 'w' }, 'aaa', 0)
   eq(child.fn.getreg('a'), 'aaa')
 
   -- User keymap
-  validate_edit1d('aa bb cc', 3, 'yifP', 'aa bbbb cc', 4)
+  validate_edit1d('aa bb cc', 3, { 'y', 'i', 'f', 'P' }, 'aa bbbb cc', 4)
 
   -- Should respect `[count]`
-  validate_edit1d('aa bb cc', 0, 'y2iwP', 'aa aa bb cc', 2)
+  validate_edit1d('aa bb cc', 0, { 'y2', 'i', 'w', 'P' }, 'aa aa bb cc', 2)
 end
 
 T['Reproducing keys']['Operator-pending mode']['~'] = function()
   child.o.tildeop = true
 
-  validate_edit1d('aa bb', 0, '~iw', 'AA bb', 0)
-  validate_edit1d('aa bb', 1, '~iw', 'AA bb', 0)
-  validate_edit1d('aa bb', 3, '~iw', 'aa BB', 3)
+  validate_edit1d('aa bb', 0, { '~', 'i', 'w' }, 'AA bb', 0)
+  validate_edit1d('aa bb', 1, { '~', 'i', 'w' }, 'AA bb', 0)
+  validate_edit1d('aa bb', 3, { '~', 'i', 'w' }, 'aa BB', 3)
 
   -- Dot-repeat
-  validate_edit1d('aa bb', 0, '~iww.', 'AA BB', 3)
+  validate_edit1d('aa bb', 0, { '~', 'i', 'w', 'w.' }, 'AA BB', 3)
 
   -- User keymap
-  validate_edit1d('aa bb', 0, '~if', 'AA bb', 0)
+  validate_edit1d('aa bb', 0, { '~', 'i', 'f' }, 'AA bb', 0)
 
   -- Should respect `[count]`
-  validate_edit1d('aa bb cc', 0, '~3iw', 'AA BB cc', 0)
+  validate_edit1d('aa bb cc', 0, { '~3', 'i', 'w' }, 'AA BB cc', 0)
 end
 
 T['Reproducing keys']['Operator-pending mode']['g~'] = function()
-  validate_edit1d('aa bb', 0, 'g~iw', 'AA bb', 0)
-  validate_edit1d('aa bb', 1, 'g~iw', 'AA bb', 0)
-  validate_edit1d('aa bb', 3, 'g~iw', 'aa BB', 3)
+  validate_edit1d('aa bb', 0, { 'g~', 'i', 'w' }, 'AA bb', 0)
+  validate_edit1d('aa bb', 1, { 'g~', 'i', 'w' }, 'AA bb', 0)
+  validate_edit1d('aa bb', 3, { 'g~', 'i', 'w' }, 'aa BB', 3)
 
   -- Dot-repeat
-  validate_edit1d('aa bb', 0, 'g~iww.', 'AA BB', 3)
+  validate_edit1d('aa bb', 0, { 'g~', 'i', 'w', 'w.' }, 'AA BB', 3)
 
   -- User keymap
-  validate_edit1d('aa bb', 0, 'g~if', 'AA bb', 0)
+  validate_edit1d('aa bb', 0, { 'g~', 'i', 'f' }, 'AA bb', 0)
 
   -- Should respect `[count]`
-  validate_edit1d('aa bb cc', 0, 'g~3iw', 'AA BB cc', 0)
+  validate_edit1d('aa bb cc', 0, { 'g~3', 'i', 'w' }, 'AA BB cc', 0)
 end
 
 T['Reproducing keys']['Operator-pending mode']['gu'] = function()
-  validate_edit1d('AA BB', 0, 'guiw', 'aa BB', 0)
-  validate_edit1d('AA BB', 1, 'guiw', 'aa BB', 0)
-  validate_edit1d('AA BB', 3, 'guiw', 'AA bb', 3)
+  validate_edit1d('AA BB', 0, { 'gu', 'i', 'w' }, 'aa BB', 0)
+  validate_edit1d('AA BB', 1, { 'gu', 'i', 'w' }, 'aa BB', 0)
+  validate_edit1d('AA BB', 3, { 'gu', 'i', 'w' }, 'AA bb', 3)
 
   -- Dot-repeat
-  validate_edit1d('AA BB', 0, 'guiww.', 'aa bb', 3)
+  validate_edit1d('AA BB', 0, { 'gu', 'i', 'w', 'w.' }, 'aa bb', 3)
 
   -- User keymap
-  validate_edit1d('AA BB', 0, 'guif', 'aa BB', 0)
+  validate_edit1d('AA BB', 0, { 'gu', 'i', 'f' }, 'aa BB', 0)
 
   -- Should respect `[count]`
-  validate_edit1d('AA BB CC', 0, 'gu3iw', 'aa bb CC', 0)
+  validate_edit1d('AA BB CC', 0, { 'gu3', 'i', 'w' }, 'aa bb CC', 0)
 end
 
 T['Reproducing keys']['Operator-pending mode']['gU'] = function()
-  validate_edit1d('aa bb', 0, 'gUiw', 'AA bb', 0)
-  validate_edit1d('aa bb', 1, 'gUiw', 'AA bb', 0)
-  validate_edit1d('aa bb', 3, 'gUiw', 'aa BB', 3)
+  validate_edit1d('aa bb', 0, { 'gU', 'i', 'w' }, 'AA bb', 0)
+  validate_edit1d('aa bb', 1, { 'gU', 'i', 'w' }, 'AA bb', 0)
+  validate_edit1d('aa bb', 3, { 'gU', 'i', 'w' }, 'aa BB', 3)
 
   -- Dot-repeat
-  validate_edit1d('aa bb', 0, 'gUiww.', 'AA BB', 3)
+  validate_edit1d('aa bb', 0, { 'gU', 'i', 'w', 'w.' }, 'AA BB', 3)
 
   -- User keymap
-  validate_edit1d('aa bb', 0, 'gUif', 'AA bb', 0)
+  validate_edit1d('aa bb', 0, { 'gU', 'i', 'f' }, 'AA bb', 0)
 
   -- Should respect `[count]`
-  validate_edit1d('aa bb cc', 0, 'gU3iw', 'AA BB cc', 0)
+  validate_edit1d('aa bb cc', 0, { 'gU3', 'i', 'w' }, 'AA BB cc', 0)
 end
 
 T['Reproducing keys']['Operator-pending mode']['gq'] = function()
@@ -491,116 +619,152 @@ T['Reproducing keys']['Operator-pending mode']['gq'] = function()
   end]])
   child.bo.formatexpr = 'v:lua.formatexpr()'
 
-  validate_edit({ 'aa', 'aa', '', 'bb' }, { 1, 0 }, 'gqip', { 'xxx', 'xxx', '', 'bb' }, { 1, 0 })
+  validate_edit({ 'aa', 'aa', '', 'bb' }, { 1, 0 }, { 'gq', 'i', 'p' }, { 'xxx', 'xxx', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
-  validate_edit({ 'aa', 'aa', '', 'bb', 'bb' }, { 1, 0 }, 'gqipG.', { 'xxx', 'xxx', '', 'xxx', 'xxx' }, { 4, 0 })
+  validate_edit(
+    { 'aa', 'aa', '', 'bb', 'bb' },
+    { 1, 0 },
+    { 'gq', 'i', 'p', 'G.' },
+    { 'xxx', 'xxx', '', 'xxx', 'xxx' },
+    { 4, 0 }
+  )
 
   -- User keymap
-  validate_edit({ 'aa', 'aa', '', 'bb' }, { 1, 0 }, 'gqiF', { 'xxx', 'xxx', '', 'bb' }, { 1, 0 })
+  validate_edit({ 'aa', 'aa', '', 'bb' }, { 1, 0 }, { 'gq', 'i', 'F' }, { 'xxx', 'xxx', '', 'bb' }, { 1, 0 })
 
   -- Should respect `[count]`
-  validate_edit({ 'aa', '', 'bb', '', 'cc' }, { 1, 0 }, 'gq3ip', { 'xxx', 'xxx', 'xxx', '', 'cc' }, { 1, 0 })
+  validate_edit(
+    { 'aa', '', 'bb', '', 'cc' },
+    { 1, 0 },
+    { 'gq3', 'i', 'p' },
+    { 'xxx', 'xxx', 'xxx', '', 'cc' },
+    { 1, 0 }
+  )
 end
 
 T['Reproducing keys']['Operator-pending mode']['gw'] = function()
   child.o.textwidth = 5
 
-  validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, 'gwip', { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
+  validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, { 'gw', 'i', 'p' }, { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
-  validate_edit({ 'aaa aaa', '', 'bbb bbb' }, { 1, 0 }, 'gwipG.', { 'aaa', 'aaa', '', 'bbb', 'bbb' }, { 4, 0 })
+  validate_edit(
+    { 'aaa aaa', '', 'bbb bbb' },
+    { 1, 0 },
+    { 'gw', 'i', 'p', 'G.' },
+    { 'aaa', 'aaa', '', 'bbb', 'bbb' },
+    { 4, 0 }
+  )
 
   -- User keymap
-  validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, 'gwiF', { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
+  validate_edit({ 'aaa aaa', '', 'bb' }, { 1, 0 }, { 'gw', 'i', 'F' }, { 'aaa', 'aaa', '', 'bb' }, { 1, 0 })
 
   -- Should respect `[count]`
   validate_edit(
     { 'aaa aaa', '', 'bbb bbb', '', 'cc' },
     { 1, 0 },
-    'gw3ip',
+    { 'gw3i', 'p', '' },
     { 'aaa', 'aaa', '', 'bbb', 'bbb', '', 'cc' },
     { 1, 0 }
   )
 end
 
 T['Reproducing keys']['Operator-pending mode']['g?'] = function()
-  validate_edit1d('aa bb', 0, 'g?iw', 'nn bb', 0)
-  validate_edit1d('aa bb', 1, 'g?iw', 'nn bb', 0)
-  validate_edit1d('aa bb', 3, 'g?iw', 'aa oo', 3)
+  validate_edit1d('aa bb', 0, { 'g?', 'i', 'w' }, 'nn bb', 0)
+  validate_edit1d('aa bb', 1, { 'g?', 'i', 'w' }, 'nn bb', 0)
+  validate_edit1d('aa bb', 3, { 'g?', 'i', 'w' }, 'aa oo', 3)
 
   -- Dot-repeat
-  validate_edit1d('aa bb', 0, 'g?iww.', 'nn oo', 3)
+  validate_edit1d('aa bb', 0, { 'g?', 'i', 'w', 'w.' }, 'nn oo', 3)
 
   -- User keymap
-  validate_edit1d('aa bb', 0, 'g?if', 'nn bb', 0)
+  validate_edit1d('aa bb', 0, { 'g?', 'i', 'f' }, 'nn bb', 0)
 
   -- Should respect `[count]`
-  validate_edit1d('aa bb cc', 0, 'g?3iw', 'nn oo cc', 0)
+  validate_edit1d('aa bb cc', 0, { 'g?3', 'i', 'w' }, 'nn oo cc', 0)
 end
 
 T['Reproducing keys']['Operator-pending mode']['!'] = function()
-  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, '!ipsort<CR>', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, { '!', 'i', 'p', 'sort<CR>' }, { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 
   -- Dot-repeat
-  validate_edit({ 'cc', 'bb', '', 'dd', 'aa' }, { 1, 0 }, '!ipsort<CR>G.', { 'bb', 'cc', '', 'aa', 'dd' }, { 4, 0 })
+  validate_edit(
+    { 'cc', 'bb', '', 'dd', 'aa' },
+    { 1, 0 },
+    { '!', 'i', 'p', 'sort<CR>G.' },
+    { 'bb', 'cc', '', 'aa', 'dd' },
+    { 4, 0 }
+  )
 
   -- User keymap
-  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, '!iFsort<CR>', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, { '!', 'i', 'F', 'sort<CR>' }, { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 
   -- Should respect `[count]`
   validate_edit(
     { 'cc', 'bb', '', 'ee', 'dd', '', 'aa' },
     { 1, 0 },
-    '!3ipsort<CR>',
+    { '!3', 'i', 'p', 'sort<CR>' },
     { '', 'bb', 'cc', 'dd', 'ee', '', 'aa' },
     { 1, 0 }
   )
 end
 
 T['Reproducing keys']['Operator-pending mode']['='] = function()
-  validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, '=ip', { 'aa', 'aa', '', 'bb' }, { 1, 0 })
+  validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, { '=', 'i', 'p' }, { 'aa', 'aa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
-  validate_edit({ 'aa', '\taa', '', 'bb', '\tbb' }, { 1, 0 }, '=ipG.', { 'aa', 'aa', '', 'bb', 'bb' }, { 4, 0 })
+  validate_edit(
+    { 'aa', '\taa', '', 'bb', '\tbb' },
+    { 1, 0 },
+    { '=', 'i', 'p', 'G.' },
+    { 'aa', 'aa', '', 'bb', 'bb' },
+    { 4, 0 }
+  )
 
   -- User keymap
-  validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, '=iF', { 'aa', 'aa', '', 'bb' }, { 1, 0 })
+  validate_edit({ 'aa', '\taa', '', 'bb' }, { 1, 0 }, { '=', 'i', 'F' }, { 'aa', 'aa', '', 'bb' }, { 1, 0 })
 
   -- Should respect `[count]`
   validate_edit(
     { 'aa', '\taa', '', 'bb', '\tbb', '', 'cc' },
     { 1, 0 },
-    '=3ip',
+    { '=3', 'i', 'p' },
     { 'aa', 'aa', '', 'bb', 'bb', '', 'cc' },
     { 1, 0 }
   )
 end
 
 T['Reproducing keys']['Operator-pending mode']['>'] = function()
-  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>ip', { '\taa', '', 'bb' }, { 1, 0 })
+  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, { '>', 'i', 'p' }, { '\taa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
-  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>ip.2j.', { '\t\taa', '', '\tbb' }, { 3, 0 })
+  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, { '>', 'i', 'p', '.2j.' }, { '\t\taa', '', '\tbb' }, { 3, 0 })
 
   -- User keymap
-  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, '>iF', { '\taa', '', 'bb' }, { 1, 0 })
+  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, { '>', 'i', 'F' }, { '\taa', '', 'bb' }, { 1, 0 })
 
   -- Should respect `[count]`
-  validate_edit({ 'aa', '', 'bb', '', 'cc' }, { 1, 0 }, '>3ip', { '\taa', '', '\tbb', '', 'cc' }, { 1, 0 })
+  validate_edit({ 'aa', '', 'bb', '', 'cc' }, { 1, 0 }, { '>3', 'i', 'p' }, { '\taa', '', '\tbb', '', 'cc' }, { 1, 0 })
 end
 
 T['Reproducing keys']['Operator-pending mode']['<'] = function()
-  validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, '<LT>ip', { '\taa', '', 'bb' }, { 1, 0 })
+  validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, { '<', 'i', 'p' }, { '\taa', '', 'bb' }, { 1, 0 })
 
   -- Dot-repeat
-  validate_edit({ '\t\t\taa', '', '\tbb' }, { 1, 0 }, '<LT>ip.2j.', { '\taa', '', 'bb' }, { 3, 1 })
+  validate_edit({ '\t\t\taa', '', '\tbb' }, { 1, 0 }, { '<', 'i', 'p', '.2j.' }, { '\taa', '', 'bb' }, { 3, 1 })
 
   -- User keymap
-  validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, '<LT>iF', { '\taa', '', 'bb' }, { 1, 0 })
+  validate_edit({ '\t\taa', '', 'bb' }, { 1, 0 }, { '<', 'i', 'F' }, { '\taa', '', 'bb' }, { 1, 0 })
 
   -- Should respect `[count]`
-  validate_edit({ '\t\taa', '', '\t\tbb', '', 'cc' }, { 1, 0 }, '<LT>3ip', { '\taa', '', '\tbb', '', 'cc' }, { 1, 0 })
+  validate_edit(
+    { '\t\taa', '', '\t\tbb', '', 'cc' },
+    { 1, 0 },
+    { '<', '3', 'i', 'p' },
+    { '\taa', '', '\tbb', '', 'cc' },
+    { 1, 0 }
+  )
 end
 
 T['Reproducing keys']['Operator-pending mode']['zf'] = function()
@@ -620,11 +784,11 @@ T['Reproducing keys']['Operator-pending mode']['zf'] = function()
     end
   end
 
-  validate('zfip', 2)
-  validate('zfiF', 2)
+  validate({ 'zf', 'i', 'p' }, 2)
+  validate({ 'zf', 'i', 'F' }, 2)
 
   -- Should respect `[count]`
-  validate('zf3ip', 4)
+  validate({ 'zf3', 'i', 'p' }, 4)
 end
 
 T['Reproducing keys']['Operator-pending mode']['g@'] = function()
@@ -638,39 +802,39 @@ T['Reproducing keys']['Operator-pending mode']['g@'] = function()
     vim.api.nvim_buf_set_text(0, line - 1, from - 1, line - 1, to, { 'xx' })
   end]])
 
-  validate_edit1d('aa bb cc', 3, 'g@iw', 'aa xx cc', 3)
+  validate_edit1d('aa bb cc', 3, { 'g@', 'i', 'w' }, 'aa xx cc', 3)
 
   -- - Dot-repeat
-  validate_edit1d('aa bb cc', 3, { 'g@iw', 'w', '.' }, 'aa xx xx', 6)
+  validate_edit1d('aa bb cc', 3, { 'g@', 'i', 'w', 'w.' }, 'aa xx xx', 6)
 
   -- - User keymap
-  validate_edit1d('aa bb cc', 3, 'g@if', 'aa xx cc', 3)
+  validate_edit1d('aa bb cc', 3, { 'g@', 'i', 'f' }, 'aa xx cc', 3)
 
   -- - Should respect `[count]`
-  validate_edit1d('aa bb cc', 0, 'g@3iw', 'xx cc', 0)
+  validate_edit1d('aa bb cc', 0, { 'g@3', 'i', 'w' }, 'xx cc', 0)
 
   -- Linewise
   child.lua([[_G.operatorfunc = function() vim.cmd("'[,']sort") end]])
 
-  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, 'g@ip', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, { 'g@', 'i', 'p' }, { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 
   -- - Dot-repeat
   validate_edit(
     { 'cc', 'bb', '', 'dd', 'aa' },
     { 1, 0 },
-    { 'g@ip', 'G', '.' },
+    { 'g@', 'i', 'p', 'G.' },
     { 'bb', 'cc', '', 'aa', 'dd' },
     { 4, 0 }
   )
 
   -- - User keymap
-  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, 'g@iF', { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, { 'g@', 'i', 'F' }, { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 
   -- Should respect `[count]`
   validate_edit(
     { 'cc', 'bb', '', 'ee', 'dd', '', 'aa' },
     { 1, 0 },
-    'g@3ip',
+    { 'g@3', 'i', 'p' },
     { '', 'bb', 'cc', 'dd', 'ee', '', 'aa' },
     { 1, 0 }
   )
@@ -682,13 +846,13 @@ T['Reproducing keys']['Operator-pending mode']['works with operator and textobje
   validate_trigger_keymap('o', 'i')
 
   -- `g~`
-  validate_edit1d('aa bb', 0, { 'g~', 'iw' }, 'AA bb', 0)
+  validate_edit1d('aa bb', 0, { 'g~', 'i', 'w' }, 'AA bb', 0)
 
   -- `g@`
   child.lua([[_G.operatorfunc = function() vim.cmd("'[,']sort") end]])
   child.o.operatorfunc = 'v:lua.operatorfunc'
 
-  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, { 'g@', 'ip' }, { 'bb', 'cc', '', 'aa' }, { 1, 0 })
+  validate_edit({ 'cc', 'bb', '', 'aa' }, { 1, 0 }, { 'g@', 'i', 'p' }, { 'bb', 'cc', '', 'aa' }, { 1, 0 })
 end
 
 T['Reproducing keys']['Operator-pending mode']['respects forced submode'] = function()
@@ -700,7 +864,7 @@ T['Reproducing keys']['Operator-pending mode']['respects forced submode'] = func
   set_cursor(2, 1)
   type_keys('mb')
   set_cursor(1, 0)
-  type_keys('dV`b')
+  type_keys('dV', '`', 'b')
   eq(get_lines(), { 'cc' })
 
   -- Blockwise
@@ -708,7 +872,7 @@ T['Reproducing keys']['Operator-pending mode']['respects forced submode'] = func
   set_cursor(3, 1)
   type_keys('mc')
   set_cursor(1, 0)
-  type_keys('d\22`c')
+  type_keys('d\22', '`', 'c')
   eq(get_lines(), { '', 'bb', '' })
 end
 
@@ -723,7 +887,7 @@ T['Reproducing keys']['works for builtin keymaps in Terminal mode'] = function()
   child.cmd('startinsert')
   eq(child.fn.mode(), 't')
 
-  type_keys([[<C-\><C-n>]])
+  type_keys([[<C-\>]], '<C-n>')
   eq(child.fn.mode(), 'n')
 end
 
@@ -742,12 +906,12 @@ T['Reproducing keys']['works for user keymaps in Terminal mode'] = function()
   child.cmd('startinsert')
   eq(child.fn.mode(), 't')
 
-  type_keys(' f')
+  type_keys(' ', 'f')
   eq(child.fn.mode(), 't')
   eq(get_test_map_count('t', ' f'), 1)
   eq(get_test_map_count('t', ' g'), 0)
 
-  type_keys(' g')
+  type_keys(' ', 'g')
   eq(child.fn.mode(), 't')
   eq(get_test_map_count('t', ' f'), 1)
   eq(get_test_map_count('t', ' g'), 1)
@@ -759,7 +923,7 @@ T['Reproducing keys']['works for builtin keymaps in Command-line mode'] = functi
 
   set_lines({ 'aaa' })
   set_cursor(1, 0)
-  type_keys(':', '<C-r><C-w>')
+  type_keys(':', '<C-r>', '<C-w>')
   eq(child.fn.getcmdline(), 'aaa')
 end
 
@@ -773,12 +937,12 @@ T['Reproducing keys']['works for user keymaps in Command-line mode'] = function(
 
   type_keys(':')
 
-  type_keys(' f')
+  type_keys(' ', 'f')
   eq(child.fn.mode(), 'c')
   eq(get_test_map_count('c', ' f'), 1)
   eq(get_test_map_count('c', ' g'), 0)
 
-  type_keys(' g')
+  type_keys(' ', 'g')
   eq(child.fn.mode(), 'c')
   eq(get_test_map_count('c', ' f'), 1)
   eq(get_test_map_count('c', ' g'), 1)
@@ -792,13 +956,13 @@ T['Reproducing keys']['works for registers'] = function()
   -- Normal mode
   set_lines({ 'aa' })
   set_cursor(1, 0)
-  type_keys('"ayiw')
+  type_keys('"', 'a', 'yiw')
   eq(child.fn.getreg('"a'), 'aa')
 
   -- Visual mode
   set_lines({ 'bb' })
   set_cursor(1, 0)
-  type_keys('viw"by')
+  type_keys('viw', '"', 'b', 'y')
   eq(child.fn.getreg('"b'), 'bb')
 end
 
@@ -813,34 +977,36 @@ T['Reproducing keys']['works for marks'] = function()
 
   -- Line jump
   set_cursor(2, 0)
-  type_keys("'a")
+  type_keys("'", 'a')
   eq(get_cursor(), { 1, 0 })
 
   -- Exact jump
   set_cursor(2, 0)
-  type_keys('`a')
+  type_keys('`', 'a')
   eq(get_cursor(), { 1, 1 })
 end
 
-T['Reproducing keys']['works with macros'] = function() MiniTest.skip() end
+T['Reproducing keys']['works with macros'] = function()
+  -- Inside single buffer
+
+  -- Inside multiple buffers
+  MiniTest.skip()
+end
 
 T['Reproducing keys']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
 
-T['Reproducing keys']['works buffer-local mappings'] = function() MiniTest.skip() end
+T['Reproducing keys']['works with buffer-local mappings'] = function() MiniTest.skip() end
 
 T['Reproducing keys']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
-T['Reproducing keys']['trigger forwards keys even if no extra clues is set'] = function()
-  load_module({ triggers = { { mode = 'c', keys = 'g' }, { mode = 'i', keys = 'g' } } })
-  validate_trigger_keymap('c', 'g')
-  validate_trigger_keymap('i', 'g')
+T['Reproducing keys']['does not register new triggers'] = function()
+  load_module({ triggers = { { mode = 'o', keys = 'i' } } })
+  validate_trigger_keymap('o', 'i')
 
-  type_keys(':', 'g')
-  eq(child.fn.getcmdline(), 'g')
+  set_lines('aaa')
+  type_keys('"adiw')
 
-  child.ensure_normal_mode()
-  type_keys('i', 'g')
-  eq(get_lines(), { 'g' })
+  validate_trigger_keymap('o', 'i')
 end
 
 T['Reproducing keys']['works when key query is executed in presence of longer keymaps'] = function()
