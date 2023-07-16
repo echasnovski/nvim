@@ -112,6 +112,29 @@ local validate_selection1d = function(line, col, keys, selection_col_from, selec
   validate_selection({ line }, { 1, col }, keys, { 1, selection_col_from }, { 1, selection_col_to }, visual_mode)
 end
 
+-- Custom mocks
+local mock_comment_operators = function()
+  -- Imitate Lua commenting
+  child.lua([[
+    _G.comment_operator = function()
+      vim.o.operatorfunc = 'v:lua.operatorfunc'
+      return 'g@'
+    end
+
+    _G.comment_line = function() return _G.comment_operator() .. '_' end
+
+    _G.operatorfunc = function()
+      local from, to = vim.fn.line("'["), vim.fn.line("']")
+      local lines = vim.api.nvim_buf_get_lines(0, from - 1, to, false)
+      local new_lines = vim.tbl_map(function(x) return '-- ' .. x end, lines)
+      vim.api.nvim_buf_set_lines(0, from - 1, to, false, new_lines)
+    end
+
+    vim.keymap.set('n', 'gc', _G.comment_operator, { expr = true, replace_keycodes = false })
+    vim.keymap.set('n', 'gcc', _G.comment_line, { expr = true, replace_keycodes = false })
+  ]])
+end
+
 -- Data =======================================================================
 
 -- Output test set ============================================================
@@ -203,17 +226,17 @@ end
 
 T['setup()']['creates triggers for already created buffers'] = function() MiniTest.skip() end
 
-T['enable_trigger()'] = new_set()
+T['enable_all_triggers()'] = new_set()
 
-T['enable_trigger()']['works'] = function() MiniTest.skip() end
+T['enable_all_triggers()']['works'] = function() MiniTest.skip() end
 
-T['disable_trigger()'] = new_set()
+T['enable_all_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
-T['disable_trigger()']['works'] = function() MiniTest.skip() end
+T['disable_all_triggers()'] = new_set()
 
-T['execute_without_triggers()'] = new_set()
+T['disable_all_triggers()']['works'] = function() MiniTest.skip() end
 
-T['execute_without_triggers()']['works'] = function() MiniTest.skip() end
+T['disable_all_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 -- Integration tests ==========================================================
 T['Triggers'] = new_set()
@@ -391,8 +414,28 @@ T['Reproducing keys']['respects `[count]` in Normal mode'] = function()
 end
 
 T['Reproducing keys']['works in temporary Normal mode'] = function()
-  -- Like after `<C-o>`
-  MiniTest.skip()
+  load_module({
+    triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } },
+  })
+  validate_trigger_keymap('n', 'g')
+  validate_trigger_keymap('o', 'i')
+
+  -- One step keymap
+  set_lines({ 'aa bb' })
+  child.cmd('startinsert')
+  type_keys('<C-o>', 'g', '~', 'tb')
+  eq(child.fn.mode(), 'i')
+  eq(get_lines(), { 'AA bb' })
+
+  -- Currently doesn't work when there is trigger in Operator-pending mode
+  -- Would be great if it could
+  -- child.ensure_normal_mode()
+  --
+  -- set_lines({ 'aa bb' })
+  -- child.cmd('startinsert')
+  -- type_keys('<C-o>', 'g', '~', 'i', 'w')
+  -- eq(child.fn.mode(), 'i')
+  -- eq(get_lines(), { 'AA bb' })
 end
 
 T['Reproducing keys']['works for builtin keymaps in Insert mode'] = function()
@@ -484,6 +527,18 @@ T['Reproducing keys']['respects `[count]` in Visual mode'] = function()
   validate_trigger_keymap('x', 'a')
 
   validate_selection1d('aa bb cc', 0, { 'v', '2', 'a', 'w' }, 0, 5)
+end
+
+T['Reproducing keys']['works in Select mode'] = function()
+  -- Should work for both keymap created before and after making trigger
+  make_test_map('s', '<Space>f')
+  load_module({ triggers = { { mode = 's', keys = '<Space>' } } })
+  validate_trigger_keymap('s', '<Space>')
+
+  type_keys('v', '<C-g>')
+  eq(child.fn.mode(), 's')
+  type_keys(' ', 'f')
+  eq(get_test_map_count('s', ' f'), 1)
 end
 
 T['Reproducing keys']['Operator-pending mode'] = new_set({
@@ -987,10 +1042,56 @@ T['Reproducing keys']['works for marks'] = function()
 end
 
 T['Reproducing keys']['works with macros'] = function()
-  -- Inside single buffer
+  mock_comment_operators()
+  -- load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
+  load_module({ triggers = { { mode = 'n', keys = 'g' } } })
+  validate_trigger_keymap('n', 'g')
+  -- validate_trigger_keymap('o', 'i')
 
-  -- Inside multiple buffers
-  MiniTest.skip()
+  -- Should work for macro to operate inside multiple buffers
+  -- BUT CURRENTLY IT DOESN'T
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local new_buf_id = child.api.nvim_create_buf(true, false)
+  local setup = function()
+    child.api.nvim_set_current_buf(init_buf_id)
+    child.api.nvim_buf_set_lines(init_buf_id, 0, -1, false, { 'aa', 'bb' })
+    set_cursor(1, 0)
+
+    child.api.nvim_buf_set_lines(new_buf_id, 0, -1, false, { 'cc', 'dd' })
+  end
+  local validate = function()
+    eq(child.api.nvim_buf_get_lines(init_buf_id, 0, -1, false), { '-- AA', '-- bb' })
+    -- eq(child.api.nvim_buf_get_lines(new_buf_id, 0, -1, false), { '-- CC', '-- dd' })
+  end
+
+  setup()
+
+  type_keys('qq', 'g~', 'i', 'w', 'gc', 'i', 'p')
+  -- type_keys(':bnext<CR>', 'g~', 'i', 'w', 'gc', 'i', 'p')
+  type_keys('q')
+
+  validate()
+
+  -- eq(child.fn.getreg('q', 1, 1), { 'g~iwgcip:bnext\rg~iwgcip' })
+  eq(child.fn.getreg('q', 1, 1), { 'g~iwgcip' })
+
+  -- Reproducing multiple times should also work
+  setup()
+  type_keys('@q')
+  validate()
+
+  setup()
+  type_keys('@@')
+  validate()
+end
+
+T['Reproducing keys']['works when key query is executed in presence of longer keymaps'] = function()
+  mock_comment_operators()
+  load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
+  validate_trigger_keymap('n', 'g')
+  validate_trigger_keymap('o', 'i')
+
+  validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, 'gcip', { '-- aa', '-- bb', '', 'cc' }, { 1, 0 })
 end
 
 T['Reproducing keys']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
@@ -1009,35 +1110,7 @@ T['Reproducing keys']['does not register new triggers'] = function()
   validate_trigger_keymap('o', 'i')
 end
 
-T['Reproducing keys']['works when key query is executed in presence of longer keymaps'] = function()
-  -- Imitate Lua commenting
-  child.lua([[
-    _G.comment_operator = function()
-      vim.o.operatorfunc = 'v:lua.operatorfunc'
-      return 'g@'
-    end
-
-    _G.comment_line = function() return _G.comment_operator() .. '_' end
-
-    _G.operatorfunc = function()
-      local from, to = vim.fn.line("'["), vim.fn.line("']")
-      local lines = vim.api.nvim_buf_get_lines(0, from - 1, to, false)
-      local new_lines = vim.tbl_map(function(x) return '-- ' .. x end, lines)
-      vim.api.nvim_buf_set_lines(0, from - 1, to, false, new_lines)
-    end
-
-    vim.keymap.set('n', 'gc', _G.comment_operator, { expr = true, replace_keycodes = false })
-    vim.keymap.set('n', 'gcc', _G.comment_line, { expr = true, replace_keycodes = false })
-  ]])
-
-  load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
-  validate_trigger_keymap('n', 'g')
-  validate_trigger_keymap('o', 'i')
-
-  validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, 'gcip', { '-- aa', '-- bb', '', 'cc' }, { 1, 0 })
-end
-
-T['Reproducing keys']['mini modules'] = new_set({
+T["'mini.nvim' compatibility"] = new_set({
   hooks = {
     pre_case = function()
       -- TODO: Update during move into 'mini.nvim'
@@ -1054,7 +1127,7 @@ local setup_mini_module = function(name, config)
   return true
 end
 
-T['Reproducing keys']['mini modules']['mini.ai'] = function()
+T["'mini.nvim' compatibility"]['mini.ai'] = function()
   local has_ai = setup_mini_module('ai')
   if not has_ai then MiniTest.skip("Could not load 'mini.ai'.") end
 
@@ -1123,7 +1196,7 @@ T['Reproducing keys']['mini modules']['mini.ai'] = function()
   validate_edit1d('(aa) (bb) (cc)', 1, 'd2an)', '(aa) (bb) ', 9)
 end
 
-T['Reproducing keys']['mini modules']['mini.align'] = function()
+T["'mini.nvim' compatibility"]['mini.align'] = function()
   child.set_size(10, 30)
   child.o.cmdheight = 5
 
@@ -1172,7 +1245,25 @@ T['Reproducing keys']['mini modules']['mini.align'] = function()
   end
 end
 
-T['Reproducing keys']['mini modules']['mini.bracketed'] = function()
+T["'mini.nvim' compatibility"]['mini.basics'] = function()
+  local has_basics = setup_mini_module('basics')
+  if not has_basics then MiniTest.skip("Could not load 'mini.basics'.") end
+
+  load_module({ triggers = { { mode = 'n', keys = 'g' } } })
+  validate_trigger_keymap('n', 'g')
+
+  set_lines({ 'aa' })
+
+  type_keys('g', 'O', '.')
+  eq(get_lines(), { '', '', 'aa' })
+  eq(get_cursor(), { 3, 0 })
+
+  type_keys('g', 'o', '.')
+  eq(get_lines(), { '', '', 'aa', '', '' })
+  eq(get_cursor(), { 3, 0 })
+end
+
+T["'mini.nvim' compatibility"]['mini.bracketed'] = function()
   local has_bracketed = setup_mini_module('bracketed')
   if not has_bracketed then MiniTest.skip("Could not load 'mini.bracketed'.") end
 
@@ -1233,7 +1324,7 @@ T['Reproducing keys']['mini modules']['mini.bracketed'] = function()
   validate_edit(indent_lines, { 3, 2 }, 'd2[i', { '\tdd', 'ee' }, { 1, 2 })
 end
 
-T['Reproducing keys']['mini modules']['mini.comment'] = function()
+T["'mini.nvim' compatibility"]['mini.comment'] = function()
   child.o.commentstring = '## %s'
 
   local has_comment = setup_mini_module('comment')
@@ -1292,7 +1383,7 @@ T['Reproducing keys']['mini modules']['mini.comment'] = function()
   end
 end
 
-T['Reproducing keys']['mini modules']['mini.indentscope'] = function()
+T["'mini.nvim' compatibility"]['mini.indentscope'] = function()
   local has_indentscope = setup_mini_module('indentscope')
   if not has_indentscope then MiniTest.skip("Could not load 'mini.indentscope'.") end
 
@@ -1364,7 +1455,7 @@ T['Reproducing keys']['mini modules']['mini.indentscope'] = function()
   validate_edit(lines, cursor, 'dii.', { 'aa', 'ee' }, { 2, 1 })
 end
 
-T['Reproducing keys']['mini modules']['mini.surround'] = function()
+T["'mini.nvim' compatibility"]['mini.surround'] = function()
   -- `saiw` works as expected when `s` and `i` are triggers: doesn't move cursor, no messages.
 
   local has_surround = setup_mini_module('surround')

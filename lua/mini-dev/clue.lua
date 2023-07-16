@@ -36,30 +36,28 @@
 --       { mode = 'x', keys = 'i' },
 --       { mode = 'o', keys = 'i' },
 --
---     - Test cases:
---       - `<Space>ff`
---       - `[b`/`]b`
---       - `[i`/`]i` in Normal, Visual, Operator-pending mode (with dot-repeat)
---       - `\h`
---       - `<C-x>` in Insert mode.
---       - 'mini.surround': `saiw)` and `viwsa)`, `sd}`, `sdn}`, `sdl}`
---       - All operators in `:h operator`; editing once should preserve
---         dot-repeat.
---       - `[count]` support
---       - Register support for operator-pending mode.
---       - `gg`, `g~`, `go` from 'mini.basics' with dot-repeat
---       - `g~iw` ("chaining" triggers)
---
 --     - Think about allowing nested clues for easier use of possible built-in
 --       sets of clues (like for `g`, `z`, `<C-x>` (Insert mode), etc).
 --
 --     - ?Allow clues to be executable to allow dynamic descriptions? Like for
 --       registers and marks.
 --
+--     - Autocreate only in listed and help buffers?
+--
+--     - Try to make "temporary Normal mode" work even for Operator-pending triggers.
+--       If not, at least plan to add documentation.
+--
 -- - Docs:
 --     - Mostly designed for nested `<Leader>` keymaps.
 --
 --     - Can have unexpected behavior in Operator-pending mode.
+--
+--     - Has problems with macros:
+--         - All triggers are disabled during recording of macro due to
+--           technical reasons.
+--         - In some cases can have unexpected behavior reproducing macros.
+--           Use |MiniClue.disable_all_triggers()| prior to executing macro
+--           followed by |MiniClue.enable_all_triggers()|.
 --
 --     - If trigger concists from several keys (like `<Leader>f`), it will be
 --       treated as single key. Matters for `<BS>`.
@@ -76,12 +74,6 @@
 --           Or disable both 'next'/'previous' mappings.
 --
 -- - Test:
---     - Should query until and execute single "longest" keymap. Like if there
---       are both `]e` and `]eee`, then, `]eee` should be reachable.
---     - Should leverage `nowait` even if there was new mapping created after
---       triggers mapped. Example: trigger - `]`, new mapping - `]e` (both
---       global and buffer-local).
---     - Should respect `[count]`.
 --     - Should work with multibyte characters.
 --     - Should respect `vim.b.miniclue_config` being set in `FileType` event.
 --
@@ -245,43 +237,26 @@ MiniClue.config = {
 }
 --minidoc_afterlines_end
 
-MiniClue.enable_trigger = function(buf_id, trigger)
-  if not H.is_valid_buf(buf_id) then H.error('`buf_id` should be a valid buffer identifier.') end
-  if not H.is_trigger(trigger) then H.error('`trigger` should be a valid trigger data.') end
-
-  H.map_trigger(buf_id, trigger)
+MiniClue.enable_all_triggers = function()
+  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+    H.map_buf_triggers(buf_id)
+  end
 end
 
-MiniClue.disable_trigger = function(buf_id, trigger)
+MiniClue.enable_buf_triggers = function(buf_id)
   if not H.is_valid_buf(buf_id) then H.error('`buf_id` should be a valid buffer identifier.') end
-  if not H.is_trigger(trigger) then H.error('`trigger` should be a valid trigger data.') end
-
-  H.unmap_trigger(buf_id, trigger)
+  H.map_buf_triggers(buf_id)
 end
 
-MiniClue.execute_without_triggers = function(f, triggers)
-  if not vim.is_callable(f) then H.error('`f` should be callable.') end
-  if H.is_trigger(triggers) then triggers = { triggers } end
-  if not H.is_array_of(triggers, H.is_trigger) then H.error('`triggers` should be trigger or array of triggers.') end
-
-  -- Alter only active triggers in current buffer
-  local buf_id = vim.api.nvim_get_current_buf()
-  local active_triggers = H.filter_active_triggers(buf_id, triggers)
-
-  -- Disable triggers
-  for _, trigger in ipairs(active_triggers) do
-    H.unmap_trigger(buf_id, trigger)
+MiniClue.disable_all_triggers = function()
+  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+    H.unmap_buf_triggers(buf_id)
   end
+end
 
-  -- Execute function
-  local res = f()
-
-  -- Enable triggers
-  for _, trigger in ipairs(active_triggers) do
-    H.map_trigger(buf_id, trigger)
-  end
-
-  return res
+MiniClue.disable_buf_triggers = function(buf_id)
+  if not H.is_valid_buf(buf_id) then H.error('`buf_id` should be a valid buffer identifier.') end
+  H.unmap_buf_triggers(buf_id)
 end
 
 -- Helper data ================================================================
@@ -302,10 +277,6 @@ H.state = {
   timer = vim.loop.new_timer(),
   win_id = nil,
 }
-
--- Register of active triggers for to increase performance.
--- Indexed as <buf_id>-<mode>-<keys> with `true` indicating active trigger.
-H.active_triggers = {}
 
 -- Precomputed raw keys
 H.keys = {
@@ -341,7 +312,7 @@ H.apply_config = function(config)
   MiniClue.config = config
 
   -- Create trigger keymaps for all existing buffers
-  H.map_all_buf_triggers()
+  MiniClue.enable_all_triggers()
 end
 
 H.is_disabled = function(buf_id)
@@ -358,12 +329,13 @@ H.create_autocommands = function(config)
 
   -- Create buffer-local mappings for triggers to fully utilize `<nowait>`
   -- Use `vim.schedule_wrap` to allow other events to create `vim.b.miniclue_config`
-  au('BufCreate', '*', vim.schedule_wrap(H.map_buf_triggers), 'Create buffer-local trigger keymaps')
+  local map_buf = vim.schedule_wrap(function(data) H.map_buf_triggers(data.buf) end)
+  au('BufCreate', '*', map_buf, 'Create buffer-local trigger keymaps')
 
   -- Disable all triggers when recording macro as they interfer with what is
   -- actually recorded
-  au('RecordingEnter', '*', vim.schedule_wrap(H.unmap_all_buf_triggers), 'Disable all triggers')
-  au('RecordingLeave', '*', vim.schedule_wrap(H.map_all_buf_triggers), 'Enable all triggers')
+  au('RecordingEnter', '*', MiniClue.disable_all_triggers, 'Disable all triggers')
+  au('RecordingLeave', '*', MiniClue.enable_all_triggers, 'Enable all triggers')
 
   -- au('VimResized', '*', MiniClue.refresh, 'Refresh on resize')
 end
@@ -393,21 +365,8 @@ H.get_buf_var = function(buf_id, name)
   return vim.b[buf_id or 0][name]
 end
 
--- Autocommands ---------------------------------------------------------------
-H.map_all_buf_triggers = function()
-  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
-    H.map_buf_triggers({ buf = buf_id })
-  end
-end
-
-H.unmap_all_buf_triggers = function()
-  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
-    H.unmap_buf_triggers({ buf = buf_id })
-  end
-end
-
-H.map_buf_triggers = function(data)
-  local buf_id = data.buf
+-- Triggers -------------------------------------------------------------------
+H.map_buf_triggers = function(buf_id)
   if not H.is_valid_buf(buf_id) then return end
 
   if H.is_disabled(buf_id) then return end
@@ -417,8 +376,7 @@ H.map_buf_triggers = function(data)
   end
 end
 
-H.unmap_buf_triggers = function(data)
-  local buf_id = data.buf
+H.unmap_buf_triggers = function(buf_id)
   if not H.is_valid_buf(buf_id) then return end
 
   for _, trigger in ipairs(H.get_config(nil, buf_id).triggers) do
@@ -426,7 +384,6 @@ H.unmap_buf_triggers = function(data)
   end
 end
 
--- Triggers -------------------------------------------------------------------
 H.map_trigger = function(buf_id, trigger)
   if not H.is_valid_buf(buf_id) then return end
 
@@ -460,13 +417,6 @@ H.map_trigger = function(buf_id, trigger)
 
   -- Create mapping
   vim.keymap.set(trigger.mode, trigger.keys, rhs, opts)
-
-  -- Register trigger
-  local buf_data = H.active_triggers[buf_id] or {}
-  local mode_data = buf_data[trigger.mode] or {}
-  mode_data[trigger.keys] = true
-  buf_data[trigger.mode] = mode_data
-  H.active_triggers[buf_id] = buf_data
 end
 
 H.unmap_trigger = function(buf_id, trigger)
@@ -476,26 +426,6 @@ H.unmap_trigger = function(buf_id, trigger)
 
   -- Delete mapping
   pcall(vim.keymap.del, trigger.mode, trigger.keys, { buffer = buf_id })
-
-  -- Unregister trigger
-  local buf_data = H.active_triggers[buf_id]
-  if buf_data == nil then return end
-  local mode_data = buf_data[trigger.mode]
-  if mode_data == nil then return end
-  mode_data[trigger.keys] = true
-end
-
-H.filter_active_triggers = function(buf_id, triggers)
-  local res = {}
-
-  local active_triggers_per_mode = H.active_triggers[buf_id] or {}
-  for _, trigger in ipairs(triggers) do
-    -- local keys = H.replace_termcodes(trigger.keys)
-    local is_config_trigger = (active_triggers_per_mode[trigger.mode] or {})[trigger.keys]
-    if is_config_trigger then table.insert(res, trigger) end
-  end
-
-  return res
 end
 
 -- State ----------------------------------------------------------------------
@@ -552,21 +482,25 @@ H.state_exec = function()
   local keys_to_type = H.compute_exec_keys()
   table.insert(_G.log, keys_to_type)
 
-  -- NOTE: VERY IMPORTANT!
-  -- Temporarily disable trigger keymap to work around infinite recursion (like
-  -- if `g` is trigger then typing `gg`/`g~` would introduce infinite
-  -- recursion). Trigger is remapped after keys are executed.
-  H.disable_relevant_triggers(H.state.trigger)
-
   -- Add extra (redundant) safety flag to try to avoid inifinite recursion
-  -- H.exec_trigger = H.state.trigger
-  -- vim.schedule(function() H.exec_trigger = nil end)
+  local trigger = H.state.trigger
+  H.exec_trigger = trigger
+  vim.schedule(function() H.exec_trigger = nil end)
 
   -- Reset state
   H.state_reset()
 
+  -- Disable trigger !!!VERY IMPORTANT!!!
+  -- This is a work around infinite recursion (like if `g` is trigger then
+  -- typing `gg`/`g~` would introduce infinite recursion).
+  local buf_id = vim.api.nvim_get_current_buf()
+  H.unmap_trigger(buf_id, trigger)
+
   -- Execute keys. The `i` flag is used to fully support Operator-pending mode.
   vim.api.nvim_feedkeys(keys_to_type, 'mit', false)
+
+  -- Enable trigger back after it can no longer harm
+  vim.schedule(function() H.map_trigger(buf_id, trigger) end)
 end
 
 H.state_push = function(keys)
@@ -586,13 +520,21 @@ H.compute_exec_keys = function()
   local keys_query = H.query_to_keys(H.state.query)
   local res = keys_count .. keys_query
 
-  -- Currently only Operator-pending mode needs special keys to reproduce
-  -- actually used operator (because using `feedkeys()` inside Operator-pending
-  -- mode leads to its cancel into Normal/Insert mode)
-  if H.state.trigger.mode == 'o' then
+  local cur_mode = vim.fn.mode(1)
+
+  -- Using `feedkeys()` inside Operator-pending mode leads to its cancel into
+  -- Normal/Insert mode so extra work should be done to rebuild all keys
+  if cur_mode:find('^no') ~= nil then
     local operator_tweak = H.operator_tweaks[vim.v.operator] or function(x) return x end
     res = operator_tweak(vim.v.operator .. H.get_forced_submode() .. res)
   end
+
+  -- `feedkeys()` inside "temporary" Normal mode is executed **after** it is
+  -- already back from Normal mode. Go into it again with `<C-o>` ('\15').
+  -- NOTE: This only works when Normal mode trigger is triggered in
+  -- "temporary" Normal mode. Still doesn't work when Operator-pending mode is
+  -- triggered afterwards (like in `<C-o>gUiw` with 'i' as trigger).
+  if cur_mode:find('^ni') ~= nil then res = '\15' .. res end
 
   return res
 end
@@ -641,36 +583,6 @@ H.operator_tweaks = {
     return '\28\14' .. keys
   end,
 }
-
-H.disable_relevant_triggers = function(trigger)
-  local relevant_triggers = { trigger }
-  if trigger.mode == 'o' then
-    local operator = vim.v.operator
-
-    -- In operator-pending mode operator or its separate characters also can be
-    -- triggerable (like `g~`/`gc` if `g` is trigger in Normal mode)
-    table.insert(relevant_triggers, { mode = 'n', keys = operator })
-
-    if operator:len() > 1 then
-      table.insert(relevant_triggers, { mode = 'n', keys = operator:sub(1, 1) })
-      table.insert(relevant_triggers, { mode = 'n', keys = operator:sub(2, 2) })
-    end
-
-    -- Quote can also be triggerable which matters for operators using register
-    if operator == 'c' or operator == 'd' or operator == 'y' then
-      table.insert(relevant_triggers, { mode = 'n', keys = '"' })
-    end
-  end
-
-  -- Temporarily disable only active triggers
-  local buf_id = vim.api.nvim_get_current_buf()
-  local active_relevant_triggers = H.filter_active_triggers(buf_id, relevant_triggers)
-
-  for _, trig in ipairs(active_relevant_triggers) do
-    H.unmap_trigger(buf_id, trig)
-    vim.schedule(function() H.map_trigger(buf_id, trig) end)
-  end
-end
 
 -- Window ---------------------------------------------------------------------
 local n = 1
