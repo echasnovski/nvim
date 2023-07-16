@@ -117,6 +117,16 @@ EC.cr_action = function()
   end
 end
 
+-- Functions to move arguments left/right. Depends on 'vim-exchange'
+EC.move_arg = function(direction)
+  local cmd = string.format('normal cxiacxi%sa', direction == 'left' and 'l' or 'n')
+  if _G.MiniClue ~= nil then
+    _G.MiniClue.execute_without_triggers(function() vim.cmd(cmd) end, { mode = 'o', keys = 'i' })
+  else
+    vim.cmd(cmd)
+  end
+end
+
 -- Insert section
 EC.insert_section = function(symbol, total_width)
   symbol = symbol or '='

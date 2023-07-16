@@ -47,7 +47,7 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd_defer('telescope')
 
   -- Show keybindings
-  packadd_defer('which-key')
+  -- packadd_defer('which-key')
 
   -- Interact with hunks
   packadd_defer('gitsigns')
