@@ -53,6 +53,7 @@ local validate_trigger_keymap = function(mode, keys)
   local lua_cmd =
     string.format('vim.fn.maparg(%s, %s, false, true).desc', vim.inspect(replace_termcodes(keys)), vim.inspect(mode))
   local map_desc = child.lua_get(lua_cmd)
+  if map_desc == vim.NIL then error('No such trigger.') end
 
   -- Neovim<0.8 doesn't have `keytrans()` used inside description
   if child.fn.has('nvim-0.8') == 0 then
@@ -203,14 +204,37 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ window = { config = 'a' } }, 'window.config', 'table')
 end
 
-T['setup()']['respects "human-readable" key names'] = function()
-  -- In `clues` (`keys` and 'postkeys')
-
-  -- In `triggers`
-  MiniTest.skip()
+T['setup()']['creates special mapping for `@`'] = function()
+  load_module()
+  expect.match(child.lua_get("vim.fn.maparg('@', 'n', false, true).desc"), 'macro.*mini%.clue')
 end
 
-T['setup()']['respects explicit `<Leader>`'] = function()
+T['setup()']['respects "human-readable" key names'] = function()
+  -- child.g.mapleader = '_'
+  -- make_test_map('n', '<Space><Space>')
+  -- make_test_map('n', '<Space><C-x>')
+  -- make_test_map('n', '<Leader>a')
+  --
+  -- -- In `triggers`
+  -- load_module({
+  --   clues = {
+  --     { mode = 'n', keys = '<Space><Space>', desc = 'Space Space', postkeys = '<Space>' },
+  --     { mode = 'n', keys = '<Space><C-x>', desc = 'Space C-x', postkeys = '<Space>' },
+  --     { mode = 'n', keys = '<Leader>a', desc = 'Leader a', postkeys = '<Leader>' },
+  --   },
+  --   triggers = { { mode = 'n', keys = '<Space>' }, { mode = 'n', keys = '<Leader>' } },
+  -- })
+  -- validate_trigger_keymap('n', '<Space>')
+  -- validate_trigger_keymap('n', '_')
+  --
+  -- type_keys(' ', ' ', '<C-x>')
+  -- eq(get_test_map_count('n', '  '), 1)
+  -- eq(get_test_map_count('n', replace_termcodes(' <C-x>')), 1)
+  --
+  -- -- In `clues` (`keys` and 'postkeys')
+end
+
+T['setup()']['respects `<Leader>`'] = function()
   -- In `clues` (`keys` and 'postkeys')
 
   -- In `triggers`
@@ -224,13 +248,78 @@ T['setup()']['respects "raw" key names'] = function()
   MiniTest.skip()
 end
 
-T['setup()']['creates triggers for already created buffers'] = function() MiniTest.skip() end
+T['setup()']['creates triggers for already created buffers'] = function()
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+
+  load_module({ triggers = { { mode = 'n', keys = 'g' } } })
+  validate_trigger_keymap('n', 'g')
+
+  child.api.nvim_set_current_buf(other_buf_id)
+  validate_trigger_keymap('n', 'g')
+end
+
+T['setup()']['allows clue without `desc`'] = function()
+  -- Should fall back for keymap description or `nil`
+  MiniTest.skip()
+end
+
+T['setup()']['respects `vim.b.miniclue_disable`'] = function()
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_var(other_buf_id, 'miniclue_disable', true)
+
+  load_module({ triggers = { { mode = 'n', keys = 'g' } } })
+  validate_trigger_keymap('n', 'g')
+
+  child.api.nvim_set_current_buf(other_buf_id)
+  expect.error(validate_trigger_keymap, 'No such trigger', 'n', 'g')
+
+  -- Should allow setting `vim.b.miniclue_disable` inside autocommand
+  child.lua([[vim.api.nvim_create_autocmd(
+    'BufAdd',
+    { callback = function(data) vim.b[data.buf].miniclue_disable = true end }
+  )]])
+  local another_buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(another_buf_id)
+  expect.error(validate_trigger_keymap, 'No such trigger', 'n', 'g')
+end
+
+T['setup()']['respects `vim.b.miniclue_config`'] = function()
+  child.lua([[
+    _G.miniclue_config = { triggers = { { mode = 'n', keys = ' ' } } }
+    vim.b.miniclue_config = _G.miniclue_config
+
+    vim.api.nvim_create_autocmd(
+      'BufAdd',
+      { callback = function(data) vim.b[data.buf].miniclue_config = _G.miniclue_config end }
+    )]])
+
+  load_module({ triggers = { { mode = 'n', keys = 'g' } } })
+  validate_trigger_keymap('n', 'g')
+  validate_trigger_keymap('n', '<Space>')
+
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(other_buf_id)
+  validate_trigger_keymap('n', 'g')
+  validate_trigger_keymap('n', '<Space>')
+end
+
+T['enable_buf_triggers()'] = new_set()
+
+T['enable_buf_triggers()']['works'] = function() MiniTest.skip() end
+
+T['enable_buf_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 T['enable_all_triggers()'] = new_set()
 
 T['enable_all_triggers()']['works'] = function() MiniTest.skip() end
 
 T['enable_all_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+
+T['disable_buf_triggers()'] = new_set()
+
+T['disable_buf_triggers()']['works'] = function() MiniTest.skip() end
+
+T['disable_buf_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 T['disable_all_triggers()'] = new_set()
 
@@ -239,11 +328,11 @@ T['disable_all_triggers()']['works'] = function() MiniTest.skip() end
 T['disable_all_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 -- Integration tests ==========================================================
-T['Triggers'] = new_set()
+T['Showing keys'] = new_set()
 
-T['Triggers']['works'] = function() MiniTest.skip() end
+T['Showing keys']['works'] = function() MiniTest.skip() end
 
-T['Triggers']['respect `vim.b.miniclue_disable`'] = function() MiniTest.skip() end
+T['Showing keys']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 T['Querying keys'] = new_set()
 
@@ -363,6 +452,25 @@ T['Querying keys']['executes even if no extra clues is set'] = function()
   child.ensure_normal_mode()
   type_keys('i', 'g')
   eq(get_lines(), { 'g' })
+end
+
+T['Postkeys'] = new_set()
+
+T['Postkeys']['works'] = function()
+  -- make_test_map('n', '<Space>f')
+  -- make_test_map('n', '<Space>x')
+  --
+  -- load_module({
+  --   clues = {
+  --     { mode = 'n', keys = '<Space>f', postkeys = '<Space>' },
+  --     { mode = 'n', keys = '<Space>x', postkeys = '<Space>' },
+  --   },
+  --   triggers = { { mode = 'n', keys = '<Space>' } },
+  -- })
+  --
+  -- type_keys(' ', 'f', 'x', 'f', '<Esc>')
+  -- eq(get_test_map_count('n', ' f'), 2)
+  -- eq(get_test_map_count('n', ' x'), 1)
 end
 
 T['Reproducing keys'] = new_set()
@@ -1043,15 +1151,15 @@ end
 
 T['Reproducing keys']['works with macros'] = function()
   mock_comment_operators()
-  -- load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
-  load_module({ triggers = { { mode = 'n', keys = 'g' } } })
+  load_module({ triggers = { { mode = 'n', keys = 'g' }, { mode = 'o', keys = 'i' } } })
   validate_trigger_keymap('n', 'g')
-  -- validate_trigger_keymap('o', 'i')
+  validate_trigger_keymap('o', 'i')
 
   -- Should work for macro to operate inside multiple buffers
   -- BUT CURRENTLY IT DOESN'T
   local init_buf_id = child.api.nvim_get_current_buf()
   local new_buf_id = child.api.nvim_create_buf(true, false)
+
   local setup = function()
     child.api.nvim_set_current_buf(init_buf_id)
     child.api.nvim_buf_set_lines(init_buf_id, 0, -1, false, { 'aa', 'bb' })
@@ -1059,23 +1167,28 @@ T['Reproducing keys']['works with macros'] = function()
 
     child.api.nvim_buf_set_lines(new_buf_id, 0, -1, false, { 'cc', 'dd' })
   end
+
   local validate = function()
     eq(child.api.nvim_buf_get_lines(init_buf_id, 0, -1, false), { '-- AA', '-- bb' })
-    -- eq(child.api.nvim_buf_get_lines(new_buf_id, 0, -1, false), { '-- CC', '-- dd' })
+    eq(child.api.nvim_buf_get_lines(new_buf_id, 0, -1, false), { '-- CC', '-- dd' })
+
+    -- Make sure that triggers persist because they are temporarily disabled
+    -- for the duration of macro execution
+    validate_trigger_keymap('n', 'g')
+    validate_trigger_keymap('o', 'i')
   end
 
   setup()
 
   type_keys('qq', 'g~', 'i', 'w', 'gc', 'i', 'p')
-  -- type_keys(':bnext<CR>', 'g~', 'i', 'w', 'gc', 'i', 'p')
+  type_keys(':bnext<CR>', 'g~', 'i', 'w', 'gc', 'i', 'p')
   type_keys('q')
 
   validate()
 
-  -- eq(child.fn.getreg('q', 1, 1), { 'g~iwgcip:bnext\rg~iwgcip' })
-  eq(child.fn.getreg('q', 1, 1), { 'g~iwgcip' })
+  eq(child.fn.getreg('q', 1, 1), { 'g~iwgcip:bnext\rg~iwgcip' })
 
-  -- Reproducing multiple times should also work
+  -- Should work reproducing multiple times with differnt keys
   setup()
   type_keys('@q')
   validate()
@@ -1083,6 +1196,18 @@ T['Reproducing keys']['works with macros'] = function()
   setup()
   type_keys('@@')
   validate()
+
+  setup()
+  type_keys('Q')
+  validate()
+
+  -- Should not throw error if user aborted with `<C-c>`
+  setup()
+  type_keys('@', '<C-c>')
+  child.api.nvim_buf_set_lines(init_buf_id, 0, -1, false, { 'aa', 'bb' })
+  child.api.nvim_buf_set_lines(new_buf_id, 0, -1, false, { 'cc', 'dd' })
+  validate_trigger_keymap('n', 'g')
+  validate_trigger_keymap('o', 'i')
 end
 
 T['Reproducing keys']['works when key query is executed in presence of longer keymaps'] = function()

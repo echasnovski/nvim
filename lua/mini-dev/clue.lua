@@ -52,12 +52,13 @@
 --
 --     - Can have unexpected behavior in Operator-pending mode.
 --
+--     - If using |<Leader>| inside config (either as trigger or inside clues),
+--       set it prior running |MiniClue.setup()|.
+--
 --     - Has problems with macros:
 --         - All triggers are disabled during recording of macro due to
---           technical reasons.
---         - In some cases can have unexpected behavior reproducing macros.
---           Use |MiniClue.disable_all_triggers()| prior to executing macro
---           followed by |MiniClue.enable_all_triggers()|.
+--           technical reasons. Would be good if
+--         - The `@` key is specially mapped to temporarily disable triggers.
 --
 --     - If trigger concists from several keys (like `<Leader>f`), it will be
 --       treated as single key. Matters for `<BS>`.
@@ -313,6 +314,24 @@ H.apply_config = function(config)
 
   -- Create trigger keymaps for all existing buffers
   MiniClue.enable_all_triggers()
+
+  -- Tweak macro execution
+  local macro_keymap_opts = { nowait = true, desc = "Execute macro without 'mini.clue' triggers" }
+  local exec_macro = function(keys)
+    local register = H.getcharstr()
+    if register == nil then return end
+    MiniClue.disable_all_triggers()
+    vim.schedule(MiniClue.enable_all_triggers)
+    pcall(vim.api.nvim_feedkeys, '@' .. register, 'nx', false)
+  end
+  vim.keymap.set('n', '@', exec_macro, macro_keymap_opts)
+
+  local exec_latest_macro = function(keys)
+    MiniClue.disable_all_triggers()
+    vim.schedule(MiniClue.enable_all_triggers)
+    vim.api.nvim_feedkeys('Q', 'nx', false)
+  end
+  vim.keymap.set('n', 'Q', exec_latest_macro, macro_keymap_opts)
 end
 
 H.is_disabled = function(buf_id)
@@ -328,9 +347,10 @@ H.create_autocommands = function(config)
   end
 
   -- Create buffer-local mappings for triggers to fully utilize `<nowait>`
-  -- Use `vim.schedule_wrap` to allow other events to create `vim.b.miniclue_config`
+  -- Use `vim.schedule_wrap` to allow other events to create
+  -- `vim.b.miniclue_config` and `vim.b.miniclue_disable`
   local map_buf = vim.schedule_wrap(function(data) H.map_buf_triggers(data.buf) end)
-  au('BufCreate', '*', map_buf, 'Create buffer-local trigger keymaps')
+  au('BufAdd', '*', map_buf, 'Create buffer-local trigger keymaps')
 
   -- Disable all triggers when recording macro as they interfer with what is
   -- actually recorded
@@ -356,8 +376,17 @@ H.create_default_hl = function()
 end
 
 H.get_config = function(config, buf_id)
+  config = config or {}
   local buf_config = H.get_buf_var(buf_id, 'miniclue_config') or {}
-  return vim.tbl_deep_extend('force', MiniClue.config, buf_config, config or {})
+  local global_config = MiniClue.config
+
+  -- Manually reconstruct to allow array elements to be concatenated
+  local res = {
+    clues = H.list_concat(global_config.clues, buf_config.clues, config.clues),
+    triggers = H.list_concat(global_config.triggers, buf_config.triggers, config.triggers),
+    window = vim.tbl_deep_extend('force', global_config.window, buf_config.window or {}, config.window or {}),
+  }
+  return res
 end
 
 H.get_buf_var = function(buf_id, name)
@@ -402,11 +431,6 @@ H.map_trigger = function(buf_id, trigger)
 
     -- Start user query
     H.state_set(trigger, { trigger.keys })
-
-    -- Do not advance if no other clues to query. NOTE: it is `<= 1` and not
-    -- `<= 0` because the "init query" mapping should match.
-    if vim.tbl_count(H.state.clues) <= 1 then return H.state_exec() end
-
     H.state_advance()
   end
 
@@ -429,13 +453,23 @@ H.unmap_trigger = function(buf_id, trigger)
 end
 
 -- State ----------------------------------------------------------------------
+_G.states = {}
 H.state_advance = function()
+  -- Do not advance if no other clues to query. NOTE: it is `<= 1` and not
+  -- `<= 0` because the "init query" mapping should match.
+  if vim.tbl_count(H.state.clues) <= 1 then return H.state_exec() end
+
   -- Show clues: delay (debounce) first show; update immediately if shown
   H.state.timer:stop()
   local delay = H.state.win_id == nil and H.get_config().window.delay or 0
   H.state.timer:start(delay, 0, H.window_update)
 
   -- Query user for new key
+  local state_before = {
+    trigger = vim.deepcopy(H.state.trigger),
+    query = vim.deepcopy(H.state.query),
+    clues = vim.deepcopy(H.state.clues),
+  }
   local key = H.getcharstr()
 
   -- Handle key
@@ -447,6 +481,13 @@ H.state_advance = function()
   else
     H.state_push(key)
   end
+
+  local state_after = {
+    trigger = vim.deepcopy(H.state.trigger),
+    query = vim.deepcopy(H.state.query),
+    clues = vim.deepcopy(H.state.clues),
+  }
+  table.insert(_G.states, { a_before = state_before, b_after = state_after })
 
   -- Advance state
   -- - Execute if reached single target keymap
@@ -469,10 +510,10 @@ H.state_set = function(trigger, query)
   H.state.clues = H.clues_filter(H.get_clues(trigger.mode), query)
 end
 
-H.state_reset = function()
+H.state_reset = function(keep_window)
   H.state = { trigger = nil, query = {}, timer = H.state.timer, clues = {} }
   H.state.timer:stop()
-  H.window_close()
+  if not keep_window then H.window_close() end
 end
 
 -- TODO: remove when not needed
@@ -483,12 +524,14 @@ H.state_exec = function()
   table.insert(_G.log, keys_to_type)
 
   -- Add extra (redundant) safety flag to try to avoid inifinite recursion
-  local trigger = H.state.trigger
+  local trigger, clue = H.state.trigger, H.state_get_query_clue()
+  table.insert(_G.log, { clue })
   H.exec_trigger = trigger
   vim.schedule(function() H.exec_trigger = nil end)
 
   -- Reset state
-  H.state_reset()
+  local keep_window = (clue or {}).postkeys ~= nil
+  H.state_reset(keep_window)
 
   -- Disable trigger !!!VERY IMPORTANT!!!
   -- This is a work around infinite recursion (like if `g` is trigger then
@@ -500,7 +543,14 @@ H.state_exec = function()
   vim.api.nvim_feedkeys(keys_to_type, 'mit', false)
 
   -- Enable trigger back after it can no longer harm
-  vim.schedule(function() H.map_trigger(buf_id, trigger) end)
+  vim.schedule(function()
+    if type(clue) == 'table' and clue.postkeys ~= nil then
+      H.state_set({ mode = trigger.mode, keys = clue.postkeys }, { clue.postkeys })
+      H.state_advance()
+    end
+
+    H.map_trigger(buf_id, trigger)
+  end)
 end
 
 H.state_push = function(keys)
@@ -514,6 +564,11 @@ H.state_pop = function()
 end
 
 H.state_is_at_target = function() return vim.tbl_count(H.state.clues) == 1 end
+
+H.state_get_query_clue = function()
+  local keys = H.query_to_keys(H.state.query)
+  return H.state.clues[keys]
+end
 
 H.compute_exec_keys = function()
   local keys_count = vim.v.count > 0 and vim.v.count or ''
@@ -623,10 +678,12 @@ H.get_clues = function(mode)
 
   local mode_clues = vim.tbl_filter(function(x) return x.mode == mode end, H.get_config().clues)
   for _, clue in ipairs(mode_clues) do
-    if clue.mode == mode then
-      local lhsraw = H.replace_termcodes(clue.keys)
-      res[lhsraw] = { desc = clue.desc, postkeys = clue.postkeys }
-    end
+    local lhsraw = H.replace_termcodes(clue.keys)
+    local res_clue = res[lhsraw] or {}
+    -- Allos clue without `desc` to possibly fall back to keymap's description
+    res_clue.desc = clue.desc or res_clue.desc
+    res_clue.postkeys = H.replace_termcodes(clue.postkeys)
+    res[lhsraw] = res_clue
   end
 
   return res
@@ -657,8 +714,6 @@ end
 
 -- Utilities ------------------------------------------------------------------
 H.echo = function(msg, is_important)
-  if H.get_config().silent then return end
-
   -- Construct message chunks
   msg = type(msg) == 'string' and { { msg } } or msg
   table.insert(msg, 1, { '(mini.clue) ', 'WarningMsg' })
@@ -690,7 +745,10 @@ H.map = function(mode, lhs, rhs, opts)
   vim.keymap.set(mode, lhs, rhs, opts)
 end
 
-H.replace_termcodes = function(x) return vim.api.nvim_replace_termcodes(x, true, false, true) end
+H.replace_termcodes = function(x)
+  if x == nil then return nil end
+  return vim.api.nvim_replace_termcodes(x, true, false, true)
+end
 
 H.get_forced_submode = function()
   local mode = vim.fn.mode(1)
@@ -705,12 +763,27 @@ H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nv
 
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
 
+_G.getcharstr_hist = {}
 H.getcharstr = function()
   local ok, char = pcall(vim.fn.getcharstr)
 
   -- Terminate if couldn't get input (like with <C-c>) or it is `<Esc>`
-  if not ok or char == '\27' then return end
+  if not ok or char == '\27' then
+    table.insert(_G.getcharstr_hist, '')
+    return
+  end
+  table.insert(_G.getcharstr_hist, char)
   return char
+end
+
+H.list_concat = function(...)
+  local res = {}
+  for i = 1, select('#', ...) do
+    for _, x in ipairs(select(i, ...) or {}) do
+      table.insert(res, x)
+    end
+  end
+  return res
 end
 
 return MiniClue
