@@ -18,6 +18,11 @@ local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
 
+local forward_lua = function(fun_str)
+  local lua_cmd = fun_str .. '(...)'
+  return function(...) return child.lua_get(lua_cmd, { ... }) end
+end
+
 -- Mapping helpers
 local replace_termcodes = function(x) return vim.api.nvim_replace_termcodes(x, true, false, true) end
 
@@ -49,9 +54,14 @@ local make_test_map = function(mode, lhs, opts)
 end
 
 -- Custom validators
-local validate_trigger_keymap = function(mode, keys)
-  local lua_cmd =
-    string.format('vim.fn.maparg(%s, %s, false, true).desc', vim.inspect(replace_termcodes(keys)), vim.inspect(mode))
+local validate_trigger_keymap = function(mode, keys, buf_id)
+  buf_id = buf_id or 0
+  local lua_cmd = string.format(
+    [[vim.api.nvim_buf_call(%s, function() return vim.fn.maparg(%s, %s, false, true).desc end)]],
+    buf_id,
+    vim.inspect(replace_termcodes(keys)),
+    vim.inspect(mode)
+  )
   local map_desc = child.lua_get(lua_cmd)
   if map_desc == vim.NIL then error('No such trigger.') end
 
@@ -62,6 +72,10 @@ local validate_trigger_keymap = function(mode, keys)
     local desc_pattern = 'clues after.*"' .. vim.pesc(keys) .. '"'
     expect.match(map_desc, desc_pattern)
   end
+end
+
+local validate_no_trigger_keymap = function(mode, keys, buf_id)
+  expect.error(function() validate_trigger_keymap(mode, keys, buf_id) end, 'No such trigger')
 end
 
 local validate_edit = function(lines_before, cursor_before, keys, lines_after, cursor_after)
@@ -210,52 +224,55 @@ T['setup()']['creates special mapping for `@`'] = function()
 end
 
 T['setup()']['respects "human-readable" key names'] = function()
-  -- child.g.mapleader = '_'
-  -- make_test_map('n', '<Space><Space>')
-  -- make_test_map('n', '<Space><C-x>')
-  -- make_test_map('n', '<Leader>a')
-  --
-  -- -- In `triggers`
-  -- load_module({
-  --   clues = {
-  --     { mode = 'n', keys = '<Space><Space>', desc = 'Space Space', postkeys = '<Space>' },
-  --     { mode = 'n', keys = '<Space><C-x>', desc = 'Space C-x', postkeys = '<Space>' },
-  --     { mode = 'n', keys = '<Leader>a', desc = 'Leader a', postkeys = '<Leader>' },
-  --   },
-  --   triggers = { { mode = 'n', keys = '<Space>' }, { mode = 'n', keys = '<Leader>' } },
-  -- })
-  -- validate_trigger_keymap('n', '<Space>')
-  -- validate_trigger_keymap('n', '_')
-  --
-  -- type_keys(' ', ' ', '<C-x>')
-  -- eq(get_test_map_count('n', '  '), 1)
-  -- eq(get_test_map_count('n', replace_termcodes(' <C-x>')), 1)
-  --
-  -- -- In `clues` (`keys` and 'postkeys')
-end
+  child.g.mapleader = '_'
+  make_test_map('n', '<Space><Space>')
+  make_test_map('n', '<Space><C-x>')
+  make_test_map('n', '<Leader>a')
 
-T['setup()']['respects `<Leader>`'] = function()
-  -- In `clues` (`keys` and 'postkeys')
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space><Space>', desc = 'Space Space', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Space><C-x>', desc = 'Space C-x', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Leader>a', desc = 'Leader a', postkeys = '<Leader>' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' }, { mode = 'n', keys = '<Leader>' } },
+  })
+  validate_trigger_keymap('n', '<Space>')
+  validate_trigger_keymap('n', '_')
 
-  -- In `triggers`
-  MiniTest.skip()
+  type_keys(' ', ' ', '<C-x>')
+  eq(get_test_map_count('n', '  '), 1)
+  eq(get_test_map_count('n', replace_termcodes(' <C-x>')), 1)
 end
 
 T['setup()']['respects "raw" key names'] = function()
-  -- In `clues` (`keys` and 'postkeys')
+  local ctrl_x = replace_termcodes('<C-x>')
+  make_test_map('n', '<Space><Space>')
+  make_test_map('n', '<Space><C-x>')
 
-  -- In `triggers`
-  MiniTest.skip()
+  load_module({
+    clues = {
+      { mode = 'n', keys = '  ', desc = 'Space Space', postkeys = ' ' },
+      { mode = 'n', keys = ' ' .. ctrl_x, desc = 'Space C-x', postkeys = ' ' },
+    },
+    triggers = { { mode = 'n', keys = ' ' } },
+  })
+  validate_trigger_keymap('n', '<Space>')
+
+  type_keys(' ', ' ', '<C-x>')
+  eq(get_test_map_count('n', '  '), 1)
+  eq(get_test_map_count('n', replace_termcodes(' <C-x>')), 1)
 end
 
 T['setup()']['creates triggers for already created buffers'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
   local other_buf_id = child.api.nvim_create_buf(true, false)
 
   load_module({ triggers = { { mode = 'n', keys = 'g' } } })
   validate_trigger_keymap('n', 'g')
 
-  child.api.nvim_set_current_buf(other_buf_id)
-  validate_trigger_keymap('n', 'g')
+  validate_trigger_keymap('n', 'g', init_buf_id)
+  validate_trigger_keymap('n', 'g', other_buf_id)
 end
 
 T['setup()']['allows clue without `desc`'] = function()
@@ -264,14 +281,15 @@ T['setup()']['allows clue without `desc`'] = function()
 end
 
 T['setup()']['respects `vim.b.miniclue_disable`'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
   local other_buf_id = child.api.nvim_create_buf(true, false)
   child.api.nvim_buf_set_var(other_buf_id, 'miniclue_disable', true)
 
   load_module({ triggers = { { mode = 'n', keys = 'g' } } })
   validate_trigger_keymap('n', 'g')
 
-  child.api.nvim_set_current_buf(other_buf_id)
-  expect.error(validate_trigger_keymap, 'No such trigger', 'n', 'g')
+  validate_trigger_keymap('n', 'g', init_buf_id)
+  validate_no_trigger_keymap('n', 'g', other_buf_id)
 
   -- Should allow setting `vim.b.miniclue_disable` inside autocommand
   child.lua([[vim.api.nvim_create_autocmd(
@@ -279,11 +297,11 @@ T['setup()']['respects `vim.b.miniclue_disable`'] = function()
     { callback = function(data) vim.b[data.buf].miniclue_disable = true end }
   )]])
   local another_buf_id = child.api.nvim_create_buf(true, false)
-  child.api.nvim_set_current_buf(another_buf_id)
-  expect.error(validate_trigger_keymap, 'No such trigger', 'n', 'g')
+  validate_no_trigger_keymap('n', 'g', another_buf_id)
 end
 
 T['setup()']['respects `vim.b.miniclue_config`'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
   child.lua([[
     _G.miniclue_config = { triggers = { { mode = 'n', keys = ' ' } } }
     vim.b.miniclue_config = _G.miniclue_config
@@ -294,38 +312,178 @@ T['setup()']['respects `vim.b.miniclue_config`'] = function()
     )]])
 
   load_module({ triggers = { { mode = 'n', keys = 'g' } } })
-  validate_trigger_keymap('n', 'g')
-  validate_trigger_keymap('n', '<Space>')
+  validate_trigger_keymap('n', 'g', init_buf_id)
+  validate_trigger_keymap('n', '<Space>', init_buf_id)
 
   local other_buf_id = child.api.nvim_create_buf(true, false)
-  child.api.nvim_set_current_buf(other_buf_id)
-  validate_trigger_keymap('n', 'g')
-  validate_trigger_keymap('n', '<Space>')
+  validate_trigger_keymap('n', 'g', other_buf_id)
+  validate_trigger_keymap('n', '<Space>', other_buf_id)
+end
+
+T['enable_all_triggers()'] = new_set()
+
+local enable_all_triggers = forward_lua('MiniClue.enable_all_triggers')
+
+T['enable_all_triggers()']['works'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+  child.g.miniclue_disable = true
+
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_no_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_no_trigger_keymap('n', '<Space>', other_buf_id)
+
+  child.g.miniclue_disable = false
+
+  enable_all_triggers()
+  validate_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_trigger_keymap('n', '<Space>', other_buf_id)
+end
+
+T['enable_all_triggers()']['respects `vim.b.miniclue_config`'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+  child.g.miniclue_disable = true
+
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_no_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_no_trigger_keymap('n', '<Space>', other_buf_id)
+
+  child.g.miniclue_disable = false
+  child.b.miniclue_config = { triggers = { { mode = 'n', keys = 'g' } } }
+
+  enable_all_triggers()
+  validate_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_trigger_keymap('n', 'g', init_buf_id)
+  validate_trigger_keymap('n', '<Space>', other_buf_id)
+  validate_no_trigger_keymap('n', 'g', other_buf_id)
 end
 
 T['enable_buf_triggers()'] = new_set()
 
-T['enable_buf_triggers()']['works'] = function() MiniTest.skip() end
+local enable_buf_triggers = forward_lua('MiniClue.enable_buf_triggers')
 
-T['enable_buf_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+T['enable_buf_triggers()']['works'] = function()
+  child.g.miniclue_disable = true
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_no_trigger_keymap('n', '<Space>')
 
-T['enable_all_triggers()'] = new_set()
+  child.g.miniclue_disable = false
 
-T['enable_all_triggers()']['works'] = function() MiniTest.skip() end
+  enable_buf_triggers(0)
+  validate_trigger_keymap('n', '<Space>')
+end
 
-T['enable_all_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+T['enable_buf_triggers()']['respects `buf_id`'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local other_buf_id = child.api.nvim_create_buf(true, false)
 
-T['disable_buf_triggers()'] = new_set()
+  child.g.miniclue_disable = true
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
 
-T['disable_buf_triggers()']['works'] = function() MiniTest.skip() end
+  validate_no_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_no_trigger_keymap('n', '<Space>', other_buf_id)
 
-T['disable_buf_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+  child.g.miniclue_disable = false
+  enable_buf_triggers(init_buf_id)
+
+  validate_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_no_trigger_keymap('n', '<Space>', other_buf_id)
+end
+
+T['enable_buf_triggers()']['validates arguments'] = function()
+  load_module()
+  expect.error(function() enable_buf_triggers('a') end, '`buf_id`.*buffer identifier')
+end
+
+T['enable_buf_triggers()']['respects `vim.b.miniclue_config`'] = function()
+  child.g.miniclue_disable = true
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_no_trigger_keymap('n', '<Space>')
+
+  child.b.miniclue_config = { triggers = { { mode = 'n', keys = 'g' } } }
+  child.g.miniclue_disable = false
+
+  enable_buf_triggers(0)
+  validate_trigger_keymap('n', '<Space>')
+  validate_trigger_keymap('n', 'g')
+end
 
 T['disable_all_triggers()'] = new_set()
 
-T['disable_all_triggers()']['works'] = function() MiniTest.skip() end
+local disable_all_triggers = forward_lua('MiniClue.disable_all_triggers')
 
-T['disable_all_triggers()']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+T['disable_all_triggers()']['works'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_trigger_keymap('n', '<Space>', other_buf_id)
+
+  disable_all_triggers()
+  validate_no_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_no_trigger_keymap('n', '<Space>', other_buf_id)
+end
+
+T['disable_all_triggers()']['respects `vim.b.miniclue_config`'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+
+  child.b.miniclue_config = { triggers = { { mode = 'n', keys = 'g' } } }
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_trigger_keymap('n', 'g', init_buf_id)
+  validate_trigger_keymap('n', '<Space>', other_buf_id)
+
+  disable_all_triggers()
+  validate_no_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_no_trigger_keymap('n', 'g', init_buf_id)
+  validate_no_trigger_keymap('n', '<Space>', other_buf_id)
+end
+
+T['disable_buf_triggers()'] = new_set()
+
+local disable_buf_triggers = forward_lua('MiniClue.disable_buf_triggers')
+
+T['disable_buf_triggers()']['works'] = function()
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>')
+
+  disable_buf_triggers(0)
+  validate_no_trigger_keymap('n', '<Space>')
+end
+
+T['disable_buf_triggers()']['respects `buf_id`'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+
+  validate_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_trigger_keymap('n', '<Space>', other_buf_id)
+
+  disable_buf_triggers(init_buf_id)
+
+  validate_no_trigger_keymap('n', '<Space>', init_buf_id)
+  validate_trigger_keymap('n', '<Space>', other_buf_id)
+end
+
+T['disable_buf_triggers()']['validates arguments'] = function()
+  load_module()
+  expect.error(function() disable_buf_triggers('a') end, '`buf_id`.*buffer identifier')
+end
+
+T['disable_buf_triggers()']['respects `vim.b.miniclue_config`'] = function()
+  child.b.miniclue_config = { triggers = { { mode = 'n', keys = 'g' } } }
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+  validate_trigger_keymap('n', '<Space>')
+  validate_trigger_keymap('n', 'g')
+
+  disable_buf_triggers(0)
+  validate_no_trigger_keymap('n', '<Space>')
+  validate_no_trigger_keymap('n', 'g')
+end
 
 -- Integration tests ==========================================================
 T['Showing keys'] = new_set()
@@ -457,17 +615,19 @@ end
 T['Postkeys'] = new_set()
 
 T['Postkeys']['works'] = function()
-  -- make_test_map('n', '<Space>f')
-  -- make_test_map('n', '<Space>x')
-  --
-  -- load_module({
-  --   clues = {
-  --     { mode = 'n', keys = '<Space>f', postkeys = '<Space>' },
-  --     { mode = 'n', keys = '<Space>x', postkeys = '<Space>' },
-  --   },
-  --   triggers = { { mode = 'n', keys = '<Space>' } },
-  -- })
-  --
+  make_test_map('n', '<Space>f')
+  make_test_map('n', '<Space>x')
+
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>f', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Space>x', postkeys = '<Space>' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+  })
+
+  MiniTest.skip('Rewrite to use screenshots when window is implemented')
+
   -- type_keys(' ', 'f', 'x', 'f', '<Esc>')
   -- eq(get_test_map_count('n', ' f'), 2)
   -- eq(get_test_map_count('n', ' x'), 1)
@@ -1161,11 +1321,11 @@ T['Reproducing keys']['works with macros'] = function()
   local new_buf_id = child.api.nvim_create_buf(true, false)
 
   local setup = function()
-    child.api.nvim_set_current_buf(init_buf_id)
     child.api.nvim_buf_set_lines(init_buf_id, 0, -1, false, { 'aa', 'bb' })
-    set_cursor(1, 0)
-
     child.api.nvim_buf_set_lines(new_buf_id, 0, -1, false, { 'cc', 'dd' })
+
+    child.api.nvim_set_current_buf(init_buf_id)
+    set_cursor(1, 0)
   end
 
   local validate = function()
@@ -1219,11 +1379,21 @@ T['Reproducing keys']['works when key query is executed in presence of longer ke
   validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, 'gcip', { '-- aa', '-- bb', '', 'cc' }, { 1, 0 })
 end
 
-T['Reproducing keys']['works with `<Cmd>` mappings'] = function() MiniTest.skip() end
+T['Reproducing keys']['works with `<Cmd>` mappings'] = function()
+  child.api.nvim_set_keymap('n', '<Space>f', '<Cmd>lua _G.been_here = true<CR>', {})
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
 
-T['Reproducing keys']['works with buffer-local mappings'] = function() MiniTest.skip() end
+  type_keys(' ', 'f')
+  eq(child.lua_get('_G.been_here'), true)
+end
 
-T['Reproducing keys']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+T['Reproducing keys']['works with buffer-local mappings'] = function()
+  child.api.nvim_buf_set_keymap(0, 'n', '<Space>f', '<Cmd>lua _G.been_here = true<CR>', {})
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+
+  type_keys(' ', 'f')
+  eq(child.lua_get('_G.been_here'), true)
+end
 
 T['Reproducing keys']['does not register new triggers'] = function()
   load_module({ triggers = { { mode = 'o', keys = 'i' } } })

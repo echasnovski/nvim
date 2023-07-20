@@ -3,44 +3,17 @@
 -- - Code:
 --     - Think about "alternative keys": 'langmap' and 'iminsert'.
 --
---     - Make it work for the following triggers:
---       { mode = 'n', keys = '<Leader>' },
---       { mode = 'n', keys = '[' },
---       { mode = 'n', keys = ']' },
---       { mode = 'n', keys = [[\]] },
+--     - Update logic of configuring clues, i.e. a clue is:
+--         - Table with <mode> and <keys> fields. Possibly <desc>, <postkeys>.
+--         - An array of such table.
+--         - A callable returning either of previous two.
 --
---       -- Insert mode
---       { mode = 'i', keys = '<C-x>' },
---
---       -- For user mappings, built-in mappings, two-char sequence without
---          mappings (like `gb`)
---       { mode = 'n', keys = 'g' },
---
---       -- Built-in completion
---       { mode = 'i', keys = '<C-x>' },
---
---       -- Along 'mini.surround'
---       { mode = 'n', keys = 's' },
---       { mode = 'x', keys = 's' },
---
---       -- For user mappings, built-in mappings, two-char sequence without
---          mappings (like `gb`)
---       { mode = 'x', keys = '[' },
---       { mode = 'o', keys = '[' },
---       { mode = 'x', keys = ']' },
---       { mode = 'o', keys = ']' },
---
---       -- Along 'mini.ai'
---       { mode = 'x', keys = 'a' },
---       { mode = 'o', keys = 'a' },
---       { mode = 'x', keys = 'i' },
---       { mode = 'o', keys = 'i' },
---
---     - Think about allowing nested clues for easier use of possible built-in
---       sets of clues (like for `g`, `z`, `<C-x>` (Insert mode), etc).
---
---     - ?Allow clues to be executable to allow dynamic descriptions? Like for
---       registers and marks.
+--     - Add `gen_clues` table with callables and preconfigured clues:
+--         - `g`.
+--         - `z`.
+--         - `"` with computable register contents.
+--         - `'` / ``` with computable marks positions.
+--         - `<C-x>` in Insert mode.
 --
 --     - Autocreate only in listed and help buffers?
 --
@@ -453,7 +426,6 @@ H.unmap_trigger = function(buf_id, trigger)
 end
 
 -- State ----------------------------------------------------------------------
-_G.states = {}
 H.state_advance = function()
   -- Do not advance if no other clues to query. NOTE: it is `<= 1` and not
   -- `<= 0` because the "init query" mapping should match.
@@ -487,7 +459,6 @@ H.state_advance = function()
     query = vim.deepcopy(H.state.query),
     clues = vim.deepcopy(H.state.clues),
   }
-  table.insert(_G.states, { a_before = state_before, b_after = state_after })
 
   -- Advance state
   -- - Execute if reached single target keymap
@@ -525,13 +496,12 @@ H.state_exec = function()
 
   -- Add extra (redundant) safety flag to try to avoid inifinite recursion
   local trigger, clue = H.state.trigger, H.state_get_query_clue()
-  table.insert(_G.log, { clue })
   H.exec_trigger = trigger
   vim.schedule(function() H.exec_trigger = nil end)
 
   -- Reset state
-  local keep_window = (clue or {}).postkeys ~= nil
-  H.state_reset(keep_window)
+  local has_postkeys = (clue or {}).postkeys ~= nil
+  H.state_reset(has_postkeys)
 
   -- Disable trigger !!!VERY IMPORTANT!!!
   -- This is a work around infinite recursion (like if `g` is trigger then
@@ -543,14 +513,12 @@ H.state_exec = function()
   vim.api.nvim_feedkeys(keys_to_type, 'mit', false)
 
   -- Enable trigger back after it can no longer harm
-  vim.schedule(function()
-    if type(clue) == 'table' and clue.postkeys ~= nil then
-      H.state_set({ mode = trigger.mode, keys = clue.postkeys }, { clue.postkeys })
-      H.state_advance()
-    end
+  vim.schedule(function() H.map_trigger(buf_id, trigger) end)
 
-    H.map_trigger(buf_id, trigger)
-  end)
+  -- Schedule postkeys. Using `state_set()` and `state_advance()` directly does
+  -- not work because it doesn't guarantee to be executed **after** keys from
+  -- `nvim_feedkeys()`.
+  if has_postkeys then vim.schedule(function() vim.api.nvim_feedkeys(clue.postkeys, 'mit', false) end) end
 end
 
 H.state_push = function(keys)
@@ -763,16 +731,12 @@ H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nv
 
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
 
-_G.getcharstr_hist = {}
 H.getcharstr = function()
   local ok, char = pcall(vim.fn.getcharstr)
 
   -- Terminate if couldn't get input (like with <C-c>) or it is `<Esc>`
-  if not ok or char == '\27' then
-    table.insert(_G.getcharstr_hist, '')
-    return
-  end
-  table.insert(_G.getcharstr_hist, char)
+  if not ok or char == '\27' then return end
+
   return char
 end
 
