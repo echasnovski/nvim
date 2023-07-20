@@ -19,7 +19,71 @@ vim.api.nvim_create_autocmd('User', {
   callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
 })
 
-require('mini-dev.clue').setup()
+require('mini-dev.clue').setup({
+  clues = {
+    EC.leader_group_clues,
+
+    { mode = 'n', keys = 'g~', desc = 'Switch case' },
+    { mode = 'n', keys = 'gU', desc = 'Make uppercase' },
+    { mode = 'n', keys = 'gu', desc = 'Make lowercase' },
+    { mode = 'n', keys = 'g?', desc = 'Rot13 encode' },
+
+    { mode = 'i', keys = '<C-x><C-l>', desc = 'Complete line' },
+    { mode = 'i', keys = '<C-x><C-f>', desc = 'Complete file path' },
+
+    { mode = 'c', keys = '<C-r><C-w>', desc = 'Word under cursor' },
+    { mode = 'c', keys = '<C-r>=', desc = 'Expression register' },
+
+    { mode = 'n', keys = '<C-w>h', desc = 'Focus left', postkeys = '<C-w>' },
+    { mode = 'n', keys = '<C-w>j', desc = 'Focus down', postkeys = '<C-w>' },
+    { mode = 'n', keys = '<C-w>k', desc = 'Focus up', postkeys = '<C-w>' },
+    { mode = 'n', keys = '<C-w>l', desc = 'Focus right', postkeys = '<C-w>' },
+
+    { mode = 'x', keys = 'iw', desc = 'Word' },
+    { mode = 'x', keys = 'if', desc = 'Function call' },
+    { mode = 'o', keys = 'iw', desc = 'Word' },
+    { mode = 'o', keys = 'iw', desc = 'Function call' },
+
+    { mode = 'x', keys = 'aw', desc = 'Word' },
+    { mode = 'x', keys = 'af', desc = 'Function call' },
+    { mode = 'o', keys = 'aw', desc = 'Word' },
+    { mode = 'o', keys = 'aw', desc = 'Function call' },
+  },
+
+  triggers = {
+    { mode = 'n', keys = '<Leader>' },
+    { mode = 'n', keys = '[' },
+    { mode = 'n', keys = ']' },
+    { mode = 'n', keys = [[\]] },
+
+    { mode = 'o', keys = '`' },
+
+    { mode = 'i', keys = '<C-x>' },
+
+    { mode = 'c', keys = '<C-r>' },
+
+    { mode = 't', keys = '<C-w>' },
+    { mode = 't', keys = '<Space>' },
+
+    { mode = 'n', keys = 's' },
+    { mode = 'x', keys = 's' },
+
+    { mode = 'n', keys = 'g' },
+    { mode = 'n', keys = '<C-w>' },
+
+    { mode = 'x', keys = '[' },
+    { mode = 'o', keys = '[' },
+    { mode = 'x', keys = ']' },
+    { mode = 'o', keys = ']' },
+
+    { mode = 'x', keys = 'a' },
+    { mode = 'o', keys = 'a' },
+    { mode = 'x', keys = 'i' },
+    { mode = 'o', keys = 'i' },
+  },
+
+  window = {},
+})
 
 require('mini.statusline').setup({
   content = {

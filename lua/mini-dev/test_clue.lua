@@ -179,7 +179,8 @@ T['setup()']['creates side effects'] = function()
   validate_hl_group('MiniClueGroup', 'links to DiagnosticFloatingWarn')
   validate_hl_group('MiniClueNextKey', 'links to DiagnosticFloatingHint')
   validate_hl_group('MiniClueNormal', 'links to NormalFloat')
-  validate_hl_group('MiniClueSingle', 'links to DiagnosticFloatingInfo')
+  validate_hl_group('MiniClueSeparator', 'links to NormalFloat')
+  validate_hl_group('MiniClueSingle', 'links to NormalFloat')
   validate_hl_group('MiniClueTitle', 'links to FloatTitle')
 end
 
@@ -191,11 +192,13 @@ T['setup()']['creates `config` field'] = function()
   -- Check default values
   local expect_config = function(field, value) eq(child.lua_get('MiniClue.config.' .. field), value) end
 
-  -- expect_config('clues', {})
-  -- expect_config('triggers', {})
-  --
-  -- expect_config('window.delay', 100)
-  -- expect_config('window.config', {})
+  expect_config('clues', {})
+  expect_config('triggers', {})
+
+  expect_config('window.delay', 100)
+  expect_config('window.config', {})
+  expect_config('window.scroll_down', '<C-d>')
+  expect_config('window.scroll_up', '<C-u>')
 end
 
 T['setup()']['respects `config` argument'] = function()
@@ -216,11 +219,23 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ window = 'a' }, 'window', 'table')
   expect_config_error({ window = { delay = 'a' } }, 'window.delay', 'number')
   expect_config_error({ window = { config = 'a' } }, 'window.config', 'table')
+  expect_config_error({ window = { scroll_down = 1 } }, 'window.scroll_down', 'string')
+  expect_config_error({ window = { scroll_up = 1 } }, 'window.scroll_up', 'string')
 end
 
-T['setup()']['creates special mapping for `@`'] = function()
+T['setup()']['creates special mapping for `@` and `Q`'] = function()
   load_module()
   expect.match(child.lua_get("vim.fn.maparg('@', 'n', false, true).desc"), 'macro.*mini%.clue')
+  expect.match(child.lua_get("vim.fn.maparg('Q', 'n', false, true).desc"), 'macro.*mini%.clue')
+
+  -- Mappings should respect [count]
+  type_keys('qq', 'ia<Esc>', 'q')
+
+  type_keys('2@q')
+  eq(get_lines(), { 'aaa' })
+
+  type_keys('2Q')
+  eq(get_lines(), { 'aaaaa' })
 end
 
 T['setup()']['respects "human-readable" key names'] = function()
@@ -490,7 +505,57 @@ T['Showing keys'] = new_set()
 
 T['Showing keys']['works'] = function() MiniTest.skip() end
 
-T['Showing keys']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+T['Showing keys']['respects `config.window.delay`'] = function() MiniTest.skip() end
+
+T['Showing keys']['respects `config.window.config`'] = function() MiniTest.skip() end
+
+T['Showing keys']['respects `config.window.scroll_down`'] = function()
+  -- With default key
+
+  -- With different key
+
+  -- With empty string
+  MiniTest.skip()
+end
+
+T['Showing keys']['respects `config.window.scroll_up`'] = function()
+  -- With default key
+
+  -- With different key
+
+  -- With empty string
+  MiniTest.skip()
+end
+
+T['Clues'] = new_set()
+
+T['Clues']['uses human-readable key names'] = function()
+  -- Should also properly align
+  MiniTest.skip()
+end
+
+T['Clues']['works with multibyte characters'] = function()
+  -- Should also properly align
+  MiniTest.skip()
+end
+
+T['Clues']['shows as group a single non-exact clue'] = function()
+  -- Like for `<Space>ff` when prompt is `<Space>`
+  MiniTest.skip()
+end
+
+T['Clues']['handles no description'] = function() MiniTest.skip() end
+
+T['Clues']['can be callable'] = function() MiniTest.skip() end
+
+T['Clues']['can have callable description'] = function() MiniTest.skip() end
+
+T['Clues']['can be overriden'] = function()
+  -- Like if there is table one but later overriden by user-supplied one
+  MiniTest.skip()
+end
+
+T['Clues']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
 
 T['Querying keys'] = new_set()
 
@@ -632,6 +697,8 @@ T['Postkeys']['works'] = function()
   -- eq(get_test_map_count('n', ' f'), 2)
   -- eq(get_test_map_count('n', ' x'), 1)
 end
+
+T['Postkeys']['does not close window if action changes tabpage'] = function() MiniTest.skip() end
 
 T['Reproducing keys'] = new_set()
 
@@ -1376,7 +1443,7 @@ T['Reproducing keys']['works when key query is executed in presence of longer ke
   validate_trigger_keymap('n', 'g')
   validate_trigger_keymap('o', 'i')
 
-  validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, 'gcip', { '-- aa', '-- bb', '', 'cc' }, { 1, 0 })
+  validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, { 'g', 'c', 'i', 'p' }, { '-- aa', '-- bb', '', 'cc' }, { 1, 0 })
 end
 
 T['Reproducing keys']['works with `<Cmd>` mappings'] = function()

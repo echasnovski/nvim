@@ -3,11 +3,6 @@
 -- - Code:
 --     - Think about "alternative keys": 'langmap' and 'iminsert'.
 --
---     - Update logic of configuring clues, i.e. a clue is:
---         - Table with <mode> and <keys> fields. Possibly <desc>, <postkeys>.
---         - An array of such table.
---         - A callable returning either of previous two.
---
 --     - Add `gen_clues` table with callables and preconfigured clues:
 --         - `g`.
 --         - `z`.
@@ -92,6 +87,7 @@
 --- * `MiniClueBorder` - window border.
 --- * `MiniClueGroup` - group description in clue window.
 --- * `MiniClueNextKey` - next key label in clue window.
+--- * `MiniClueSeparator` - separator in clue window.
 --- * `MiniClueNormal` - basic foreground/background highlighting.
 --- * `MiniClueSingle` - single key description in clue window.
 --- * `MiniClueTitle` - window title.
@@ -143,70 +139,15 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniClue.config = {
-  -- TODO: Decide on better name and use `clue` instead of `desc`?
-  clues = {
-    { mode = 'n', keys = 'g~', desc = 'Switch case' },
-    { mode = 'n', keys = 'gU', desc = 'Make uppercase' },
-    { mode = 'n', keys = 'gu', desc = 'Make lowercase' },
-    { mode = 'n', keys = 'g?', desc = 'Rot13 encode' },
+  clues = {},
 
-    { mode = 'i', keys = '<C-x><C-l>', desc = 'Complete line' },
-    { mode = 'i', keys = '<C-x><C-f>', desc = 'Complete file path' },
-
-    { mode = 'c', keys = '<C-r><C-w>', desc = 'Word under cursor' },
-    { mode = 'c', keys = '<C-r>=', desc = 'Expression register' },
-
-    { mode = 'n', keys = '<C-w>h', desc = 'Focus left', postkeys = '<C-w>' },
-    { mode = 'n', keys = '<C-w>j', desc = 'Focus down', postkeys = '<C-w>' },
-    { mode = 'n', keys = '<C-w>k', desc = 'Focus up', postkeys = '<C-w>' },
-    { mode = 'n', keys = '<C-w>l', desc = 'Focus right', postkeys = '<C-w>' },
-
-    { mode = 'x', keys = 'iw', desc = 'Word' },
-    { mode = 'x', keys = 'if', desc = 'Function call' },
-    { mode = 'o', keys = 'iw', desc = 'Word' },
-    { mode = 'o', keys = 'iw', desc = 'Function call' },
-
-    { mode = 'x', keys = 'aw', desc = 'Word' },
-    { mode = 'x', keys = 'af', desc = 'Function call' },
-    { mode = 'o', keys = 'aw', desc = 'Word' },
-    { mode = 'o', keys = 'aw', desc = 'Function call' },
-  },
-
-  triggers = {
-    { mode = 'n', keys = '<Leader>' },
-    { mode = 'n', keys = '[' },
-    { mode = 'n', keys = ']' },
-    { mode = 'n', keys = [[\]] },
-
-    { mode = 'o', keys = "`" },
-
-    { mode = 'i', keys = '<C-x>' },
-
-    { mode = 'c', keys = '<C-r>' },
-
-    { mode = 't', keys = '<C-w>' },
-    { mode = 't', keys = '<Space>' },
-
-    { mode = 'n', keys = 's' },
-    { mode = 'x', keys = 's' },
-
-    { mode = 'n', keys = 'g' },
-    { mode = 'n', keys = '<C-w>' },
-
-    { mode = 'x', keys = '[' },
-    { mode = 'o', keys = '[' },
-    { mode = 'x', keys = ']' },
-    { mode = 'o', keys = ']' },
-
-    { mode = 'x', keys = 'a' },
-    { mode = 'o', keys = 'a' },
-    { mode = 'x', keys = 'i' },
-    { mode = 'o', keys = 'i' },
-  },
+  triggers = {},
 
   window = {
-    delay = 100,
     config = {},
+    delay = 100,
+    scroll_down = '<C-d>',
+    scroll_up = '<C-u>',
   },
 }
 --minidoc_afterlines_end
@@ -239,7 +180,7 @@ H.default_config = MiniClue.config
 
 -- Namespaces
 H.ns_id = {
-  highlight = vim.api.nvim_create_namespace('MiniClue'),
+  highlight = vim.api.nvim_create_namespace('MiniClueHighlight'),
 }
 
 -- State of user input
@@ -249,12 +190,28 @@ H.state = {
   query = {},
   clues = {},
   timer = vim.loop.new_timer(),
+  buf_id = nil,
   win_id = nil,
+}
+
+-- Default window config
+H.default_win_config = {
+  anchor = 'SE',
+  border = 'single',
+  focusable = false,
+  relative = 'editor',
+  style = 'minimal',
+  width = 30,
+  zindex = 99,
 }
 
 -- Precomputed raw keys
 H.keys = {
   bs = vim.api.nvim_replace_termcodes('<BS>', true, true, true),
+  cr = vim.api.nvim_replace_termcodes('<CR>', true, true, true),
+  exit = vim.api.nvim_replace_termcodes([[<C-\><C-n>]], true, true, true),
+  ctrl_d = vim.api.nvim_replace_termcodes('<C-d>', true, true, true),
+  ctrl_u = vim.api.nvim_replace_termcodes('<C-u>', true, true, true),
 }
 
 -- Undo command which depends on Neovim version
@@ -277,6 +234,8 @@ H.setup_config = function(config)
   vim.validate({
     ['window.delay'] = { config.window.delay, 'number' },
     ['window.config'] = { config.window.config, 'table' },
+    ['window.scroll_down'] = { config.window.scroll_down, 'string' },
+    ['window.scroll_up'] = { config.window.scroll_up, 'string' },
   })
 
   return config
@@ -295,14 +254,14 @@ H.apply_config = function(config)
     if register == nil then return end
     MiniClue.disable_all_triggers()
     vim.schedule(MiniClue.enable_all_triggers)
-    pcall(vim.api.nvim_feedkeys, '@' .. register, 'nx', false)
+    pcall(vim.api.nvim_feedkeys, vim.v.count1 .. '@' .. register, 'nx', false)
   end
   vim.keymap.set('n', '@', exec_macro, macro_keymap_opts)
 
   local exec_latest_macro = function(keys)
     MiniClue.disable_all_triggers()
     vim.schedule(MiniClue.enable_all_triggers)
-    vim.api.nvim_feedkeys('Q', 'nx', false)
+    vim.api.nvim_feedkeys(vim.v.count1 .. 'Q', 'nx', false)
   end
   vim.keymap.set('n', 'Q', exec_latest_macro, macro_keymap_opts)
 end
@@ -330,7 +289,7 @@ H.create_autocommands = function(config)
   au('RecordingEnter', '*', MiniClue.disable_all_triggers, 'Disable all triggers')
   au('RecordingLeave', '*', MiniClue.enable_all_triggers, 'Enable all triggers')
 
-  -- au('VimResized', '*', MiniClue.refresh, 'Refresh on resize')
+  au('VimResized', '*', H.window_update, 'Update window on resize')
 end
 
 --stylua: ignore
@@ -340,12 +299,13 @@ H.create_default_hl = function()
     vim.api.nvim_set_hl(0, name, opts)
   end
 
-  hi('MiniClueBorder',   { link = 'FloatBorder' })
-  hi('MiniClueGroup',    { link = 'DiagnosticFloatingWarn' })
-  hi('MiniClueNextKey',  { link = 'DiagnosticFloatingHint' })
-  hi('MiniClueNormal',   { link = 'NormalFloat' })
-  hi('MiniClueSingle',   { link = 'DiagnosticFloatingInfo' })
-  hi('MiniClueTitle',    { link = 'FloatTitle' })
+  hi('MiniClueBorder',    { link = 'FloatBorder' })
+  hi('MiniClueGroup',     { link = 'DiagnosticFloatingWarn' })
+  hi('MiniClueNextKey',   { link = 'DiagnosticFloatingHint' })
+  hi('MiniClueNormal',    { link = 'NormalFloat' })
+  hi('MiniClueSeparator', { link = 'NormalFloat' })
+  hi('MiniClueSingle',    { link = 'NormalFloat' })
+  hi('MiniClueTitle',     { link = 'FloatTitle' })
 end
 
 H.get_config = function(config, buf_id)
@@ -431,34 +391,33 @@ H.state_advance = function()
   -- `<= 0` because the "init query" mapping should match.
   if vim.tbl_count(H.state.clues) <= 1 then return H.state_exec() end
 
+  local config_window = H.get_config().window
+
   -- Show clues: delay (debounce) first show; update immediately if shown
   H.state.timer:stop()
-  local delay = H.state.win_id == nil and H.get_config().window.delay or 0
+  local delay = H.state.win_id == nil and config_window.delay or 0
   H.state.timer:start(delay, 0, H.window_update)
 
   -- Query user for new key
-  local state_before = {
-    trigger = vim.deepcopy(H.state.trigger),
-    query = vim.deepcopy(H.state.query),
-    clues = vim.deepcopy(H.state.clues),
-  }
   local key = H.getcharstr()
 
   -- Handle key
   if key == nil then return H.state_reset() end
-  if key == '\r' then return H.state_exec() end
+
+  if key == H.keys.cr then return H.state_exec() end
+
+  local is_scroll_down = key == H.replace_termcodes(config_window.scroll_down)
+  local is_scroll_up = key == H.replace_termcodes(config_window.scroll_up)
+  if is_scroll_down or is_scroll_up then
+    H.window_scroll(is_scroll_down and H.keys.ctrl_d or H.keys.ctrl_u)
+    return H.state_advance()
+  end
 
   if key == H.keys.bs then
     H.state_pop()
   else
     H.state_push(key)
   end
-
-  local state_after = {
-    trigger = vim.deepcopy(H.state.trigger),
-    query = vim.deepcopy(H.state.query),
-    clues = vim.deepcopy(H.state.clues),
-  }
 
   -- Advance state
   -- - Execute if reached single target keymap
@@ -478,11 +437,14 @@ end
 
 H.state_set = function(trigger, query)
   H.state = { trigger = trigger, query = query, timer = H.state.timer, win_id = H.state.win_id }
-  H.state.clues = H.clues_filter(H.get_clues(trigger.mode), query)
+  H.state.clues = H.clues_filter(H.clues_get_all(trigger.mode), query)
 end
 
 H.state_reset = function(keep_window)
-  H.state = { trigger = nil, query = {}, timer = H.state.timer, clues = {} }
+  H.state.trigger = nil
+  H.state.query = {}
+  H.state.clues = {}
+
   H.state.timer:stop()
   if not keep_window then H.window_close() end
 end
@@ -501,7 +463,10 @@ H.state_exec = function()
 
   -- Reset state
   local has_postkeys = (clue or {}).postkeys ~= nil
-  H.state_reset(has_postkeys)
+  local is_same_tabpage = H.is_valid_win(H.state.win_id)
+    and vim.api.nvim_win_get_tabpage(H.state.win_id) == vim.api.nvim_get_current_tabpage()
+  local keep_window = has_postkeys and is_same_tabpage
+  H.state_reset(keep_window)
 
   -- Disable trigger !!!VERY IMPORTANT!!!
   -- This is a work around infinite recursion (like if `g` is trigger then
@@ -515,9 +480,9 @@ H.state_exec = function()
   -- Enable trigger back after it can no longer harm
   vim.schedule(function() H.map_trigger(buf_id, trigger) end)
 
-  -- Schedule postkeys. Using `state_set()` and `state_advance()` directly does
-  -- not work because it doesn't guarantee to be executed **after** keys from
-  -- `nvim_feedkeys()`.
+  -- Schedule postkeys. Use `nvim_feedkeys()` because using `state_set()` and
+  -- `state_advance()` directly does not work because it doesn't guarantee to
+  -- be executed **after** keys from `nvim_feedkeys()`.
   if has_postkeys then vim.schedule(function() vim.api.nvim_feedkeys(clue.postkeys, 'mit', false) end) end
 end
 
@@ -528,7 +493,7 @@ end
 
 H.state_pop = function()
   H.state.query[#H.state.query] = nil
-  H.state.clues = H.clues_filter(H.get_clues(H.state.trigger.mode), H.state.query)
+  H.state.clues = H.clues_filter(H.clues_get_all(H.state.trigger.mode), H.state.query)
 end
 
 H.state_is_at_target = function() return vim.tbl_count(H.state.clues) == 1 end
@@ -565,15 +530,15 @@ end
 -- Some operators needs special tweaking due to their nature:
 -- - Some operators perform on register. Solution: add register explicitly.
 -- - Some operators end up changing mode which affects `feedkeys()`.
---   Solution: explicitly exit to Normal mode with '\28\14' ('<C-\><C-n>').
+--   Solution: explicitly exit to Normal mode with '<C-\><C-n>'.
 -- - Some operators still perform some redundant operation before `feedkeys()`
 --   takes effect. Solution: add one-shot autocommand undoing that.
 H.operator_tweaks = {
   ['c'] = function(keys)
-    -- Doing '\28\14' moves cursor one space to left (same as `i<Esc>`).
+    -- Doing '<C-\><C-n>' moves cursor one space to left (same as `i<Esc>`).
     -- Solution: add one-shot autocommand correcting cursor position.
     vim.cmd('au InsertLeave * ++once normal! l')
-    return '\28\14"' .. vim.v.register .. keys
+    return H.keys.exit .. '"' .. vim.v.register .. keys
   end,
   ['d'] = function(keys) return '"' .. vim.v.register .. keys end,
   ['y'] = function(keys) return '"' .. vim.v.register .. keys end,
@@ -589,7 +554,7 @@ H.operator_tweaks = {
     if vim.fn.col('.') == 1 then vim.cmd(H.undo_autocommand) end
     return keys
   end,
-  ['!'] = function(keys) return '\28\14' .. keys end,
+  ['!'] = function(keys) return H.keys.exit .. keys end,
   ['>'] = function(keys)
     vim.cmd(H.undo_autocommand)
     return keys
@@ -602,35 +567,116 @@ H.operator_tweaks = {
     -- Cancelling in-process `g@` operator seems to be particularly hard.
     -- Not even sure why specifically this combination works, but having `x`
     -- flag in `feedkeys()` is crucial.
-    vim.api.nvim_feedkeys('\28\14', 'nx', false)
-    return '\28\14' .. keys
+    vim.api.nvim_feedkeys(H.keys.exit, 'nx', false)
+    return H.keys.exit .. keys
   end,
 }
 
+H.query_to_keys = function(query) return table.concat(query, '') end
+
+H.query_to_title = function(query) return H.keytrans(H.query_to_keys(query)) end
+
 -- Window ---------------------------------------------------------------------
-local n = 1
-_G.window_buf_id = vim.api.nvim_create_buf(false, true)
-
 H.window_update = vim.schedule_wrap(function()
-  -- Create window if not already created
-  if H.state.win_id == nil then H.state.win_id = 1 end
+  if #H.state.query == 0 then return end
 
-  -- Imitate buffer manipulation
-  if not vim.api.nvim_buf_is_valid(_G.window_buf_id) then _G.window_buf_id = vim.api.nvim_create_buf(false, true) end
-  vim.api.nvim_buf_set_lines(_G.window_buf_id, 0, -1, false, { 'Hello', 'World', tostring(n) })
-  n = n + 1
+  -- Create-update buffer showing clues
+  H.state.buf_id = H.buffer_update()
 
-  -- Update content
-  H.echo({ { 'Keys: ' }, { H.query_to_msg(H.state.query), 'ModeMsg' }, { ' ' } }, false)
+  -- Create-update window showing buffer
+  local win_config = H.window_get_config()
+  if not H.is_valid_win(H.state.win_id) then
+    H.state.win_id = H.window_open(win_config)
+  else
+    vim.api.nvim_win_set_config(H.state.win_id, win_config)
+  end
+
+  -- Add redraw because Neovim won't do it when `getcharstr()` is active
+  vim.cmd('redraw')
 end)
 
+H.window_scroll = function(scroll_key)
+  pcall(vim.api.nvim_win_call, H.state.win_id, function() vim.cmd('normal! ' .. scroll_key) end)
+end
+
+H.window_open = function(config)
+  local win_id = vim.api.nvim_open_win(H.state.buf_id, false, config)
+
+  vim.wo[win_id].winhighlight = 'NormalFloat:MiniClueNormal,FloatBorder:MiniClueBorder,FloatTitle:MiniClueTitle'
+  vim.wo[win_id].foldenable = false
+  vim.wo[win_id].wrap = false
+
+  return win_id
+end
+
 H.window_close = function()
-  H.unecho()
+  if H.is_valid_win(H.state.win_id) then vim.api.nvim_win_close(H.state.win_id, true) end
   H.state.win_id = nil
 end
 
+H.window_get_config = function()
+  local has_statusline = vim.o.laststatus > 0
+  local max_height = H.window_get_max_height()
+
+  local cur_config_fields = {
+    row = vim.o.lines - vim.o.cmdheight - (has_statusline and 1 or 0),
+    col = vim.o.columns,
+    height = math.min(vim.api.nvim_buf_line_count(H.state.buf_id), max_height),
+    title = H.query_to_title(H.state.query),
+  }
+  local res = vim.tbl_deep_extend('force', H.default_win_config, cur_config_fields, H.get_config().window.config)
+
+  -- Ensure it works on Neovim<0.9
+  if vim.fn.has('nvim-0.9') == 0 then res.title = nil end
+
+  return res
+end
+
+H.window_get_max_height = function()
+  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local has_statusline = vim.o.laststatus > 0
+  -- Remove 2 from maximum height to account for top and bottom borders
+  return vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0) - 2
+end
+
+-- Buffer ---------------------------------------------------------------------
+H.buffer_update = function()
+  local buf_id = H.state.buf_id
+  if not H.is_valid_buf(buf_id) then buf_id = vim.api.nvim_create_buf(false, true) end
+
+  -- Compute content data
+  local keys = H.query_to_keys(H.state.query)
+  local content = H.clues_to_buffer_content(H.state.clues, keys)
+
+  -- Add lines
+  local lines = {}
+  for _, line_content in ipairs(content) do
+    table.insert(lines, string.format(' %s │ %s', line_content.next_key, line_content.desc))
+  end
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+
+  -- Add highlighting
+  local ns_id = H.ns_id.highlight
+  vim.api.nvim_buf_clear_namespace(buf_id, ns_id, 0, -1)
+
+  local set_hl = function(hl_group, line_from, col_from, line_to, col_to)
+    local opts = { end_row = line_to, end_col = col_to, hl_group = hl_group, hl_eol = true }
+    vim.api.nvim_buf_set_extmark(buf_id, ns_id, line_from, col_from, opts)
+  end
+
+  for i, line_content in ipairs(content) do
+    local sep_col = line_content.next_key:len() + 3
+    set_hl('MiniClueNextKey', i - 1, 0, i - 1, sep_col)
+    set_hl('MiniClueSeparator', i - 1, sep_col + 1, i - 1, sep_col + 2)
+    local desc_hl_group = line_content.is_group and 'MiniClueGroup' or 'MiniClueSingle'
+    set_hl(desc_hl_group, i - 1, sep_col + 2, i, 0)
+  end
+
+  return buf_id
+end
+
 -- Clues ----------------------------------------------------------------------
-H.get_clues = function(mode)
+H.clues_get_all = function(mode)
   local res = {}
 
   -- Order of clue precedence: global mappings < buffer mappings < config clues
@@ -644,16 +690,36 @@ H.get_clues = function(mode)
     res[lhsraw] = { desc = map_data.desc }
   end
 
-  local mode_clues = vim.tbl_filter(function(x) return x.mode == mode end, H.get_config().clues)
+  local config_clues = H.clues_normalize(H.get_config().clues) or {}
+  local mode_clues = vim.tbl_filter(function(x) return x.mode == mode end, config_clues)
   for _, clue in ipairs(mode_clues) do
     local lhsraw = H.replace_termcodes(clue.keys)
+
     local res_clue = res[lhsraw] or {}
     -- Allos clue without `desc` to possibly fall back to keymap's description
-    res_clue.desc = clue.desc or res_clue.desc
+    local desc = clue.desc or res_clue.desc
+    res_clue.desc = vim.is_callable(desc) and desc() or desc
     res_clue.postkeys = H.replace_termcodes(clue.postkeys)
+
     res[lhsraw] = res_clue
   end
 
+  return res
+end
+
+H.clues_normalize = function(clues)
+  local res = {}
+  local process
+  process = function(x)
+    if vim.is_callable(x) then x = x() end
+    if H.is_clue(x) then return table.insert(res, x) end
+    if not vim.tbl_islist(x) then return nil end
+    for _, y in ipairs(x) do
+      process(y)
+    end
+  end
+
+  process(clues)
   return res
 end
 
@@ -665,12 +731,54 @@ H.clues_filter = function(clues, query)
   return clues
 end
 
-H.query_to_keys = function(query) return table.concat(query, '') end
+H.clues_to_buffer_content = function(clues, keys)
+  -- Gather clue data
+  local n_chars = vim.fn.strchars(keys)
+  local keys_pattern = string.format('^%s.', vim.pesc(keys))
+  local next_key_data, next_key_max_width = {}, 0
+  for clue_keys, clue_data in pairs(clues) do
+    -- `strcharpart()` has 0-based index
+    local next_key = H.keytrans(vim.fn.strcharpart(clue_keys, n_chars, 1))
 
-H.query_to_msg = function(query) return H.keytrans(H.query_to_keys(query)) end
+    -- Add non-trivial next key data only if clue matches current keys
+    if next_key ~= '' and clue_keys:find(keys_pattern) ~= nil then
+      -- Update description data
+      local data = next_key_data[next_key] or {}
+      data.n_choices = (data.n_choices or 0) + 1
+
+      -- - Add description directly if it is group clue with description or
+      --   a non-group clue
+      if vim.fn.strchars(clue_keys) == (n_chars + 1) then data.desc = clue_data.desc or '' end
+
+      next_key_data[next_key] = data
+
+      -- Update width data
+      local next_key_width = vim.fn.strchars(next_key)
+      data.next_key_width = next_key_width
+      next_key_max_width = math.max(next_key_max_width, next_key_width)
+    end
+  end
+
+  -- Convert to array with sorting by keys and finalize content
+  local next_keys = vim.tbl_keys(next_key_data)
+  table.sort(next_keys, H.compare_ignorecase)
+
+  local res = {}
+  for _, key in ipairs(next_keys) do
+    local data = next_key_data[key]
+    local is_group = data.n_choices > 1
+    local desc = data.desc or string.format('+%d choice%s', data.n_choices, is_group and 's' or '')
+    local next_key = key .. string.rep(' ', next_key_max_width - data.next_key_width)
+    table.insert(res, { next_key = next_key, desc = desc, is_group = is_group })
+  end
+
+  return res
+end
 
 -- Predicates -----------------------------------------------------------------
 H.is_trigger = function(x) return type(x) == 'table' and type(x.mode) == 'string' and type(x.keys) == 'string' end
+
+H.is_clue = function(x) return type(x) == 'table' and type(x.mode) == 'string' and type(x.keys) == 'string' end
 
 H.is_array_of = function(x, predicate)
   if not vim.tbl_islist(x) then return false end
@@ -748,6 +856,11 @@ H.list_concat = function(...)
     end
   end
   return res
+end
+
+H.compare_ignorecase = function(a, b)
+  local cmp = vim.stricmp(a, b)
+  return cmp == -1 or (cmp == 0 and a < b)
 end
 
 return MiniClue
