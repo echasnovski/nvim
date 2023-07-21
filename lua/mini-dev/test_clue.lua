@@ -18,6 +18,14 @@ local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
 
+-- Tweak `expect_screenshot()` to test only on Neovim>=0.9 (as it introduced
+-- titles). Use `expect_screenshot_orig()` for original testing.
+local expect_screenshot_orig = child.expect_screenshot
+child.expect_screenshot = function(...)
+  if child.fn.has('nvim-0.9') == 0 then return end
+  expect_screenshot_orig(...)
+end
+
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
   return function(...) return child.lua_get(lua_cmd, { ... }) end
@@ -39,6 +47,7 @@ end
 local make_test_map = function(mode, lhs, opts)
   lhs = replace_termcodes(lhs)
   opts = opts or {}
+  opts.desc = 'LHS: ' .. vim.inspect(lhs)
 
   reset_test_map_count(mode, lhs)
 
@@ -178,8 +187,8 @@ T['setup()']['creates side effects'] = function()
   validate_hl_group('MiniClueBorder', 'links to FloatBorder')
   validate_hl_group('MiniClueGroup', 'links to DiagnosticFloatingWarn')
   validate_hl_group('MiniClueNextKey', 'links to DiagnosticFloatingHint')
-  validate_hl_group('MiniClueNormal', 'links to NormalFloat')
-  validate_hl_group('MiniClueSeparator', 'links to NormalFloat')
+  validate_hl_group('MiniClueNextKeyWithPostkeys', 'links to DiagnosticFloatingError')
+  validate_hl_group('MiniClueSeparator', 'links to DiagnosticFloatingInfo')
   validate_hl_group('MiniClueSingle', 'links to NormalFloat')
   validate_hl_group('MiniClueTitle', 'links to FloatTitle')
 end
@@ -195,7 +204,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('clues', {})
   expect_config('triggers', {})
 
-  expect_config('window.delay', 100)
+  expect_config('window.delay', 1000)
   expect_config('window.config', {})
   expect_config('window.scroll_down', '<C-d>')
   expect_config('window.scroll_up', '<C-u>')
@@ -223,7 +232,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ window = { scroll_up = 1 } }, 'window.scroll_up', 'string')
 end
 
-T['setup()']['creates special mapping for `@` and `Q`'] = function()
+T['setup()']['creates mappings for `@` and `Q`'] = function()
   load_module()
   expect.match(child.lua_get("vim.fn.maparg('@', 'n', false, true).desc"), 'macro.*mini%.clue')
   expect.match(child.lua_get("vim.fn.maparg('Q', 'n', false, true).desc"), 'macro.*mini%.clue')
@@ -501,13 +510,22 @@ T['disable_buf_triggers()']['respects `vim.b.miniclue_config`'] = function()
 end
 
 -- Integration tests ==========================================================
-T['Showing keys'] = new_set()
+T['Showing keys'] = new_set({ hooks = { pre_case = function() child.set_size(10, 40) end } })
 
-T['Showing keys']['works'] = function() MiniTest.skip() end
+T['Showing keys']['works'] = function()
+  -- Window should be shown after debounced delay
+  MiniTest.skip()
+end
 
 T['Showing keys']['respects `config.window.delay`'] = function() MiniTest.skip() end
 
+T['Showing keys']['allows zero delay'] = function() MiniTest.skip() end
+
 T['Showing keys']['respects `config.window.config`'] = function() MiniTest.skip() end
+
+T['Showing keys']['can have `config.window.config.width="auto"`'] = function() MiniTest.skip() end
+
+T['Showing keys']['can work inside small instance'] = function() MiniTest.skip() end
 
 T['Showing keys']['respects `config.window.scroll_down`'] = function()
   -- With default key
@@ -527,6 +545,25 @@ T['Showing keys']['respects `config.window.scroll_up`'] = function()
   MiniTest.skip()
 end
 
+T['Showing keys']['highlights groups differently'] = function() MiniTest.skip() end
+
+T['Showing keys']['highlights next key with postkey differently'] = function() MiniTest.skip() end
+
+T['Showing keys']['properly translates special keys'] = function()
+  make_test_map('n', '<Space><Space><<f')
+  make_test_map('n', '<Space><Space><<g')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } }, window = { delay = 0 } })
+
+  type_keys(' ')
+  child.expect_screenshot()
+  type_keys(' ')
+  child.expect_screenshot()
+  type_keys('<')
+  child.expect_screenshot()
+  type_keys('<')
+  child.expect_screenshot()
+end
+
 T['Clues'] = new_set()
 
 T['Clues']['uses human-readable key names'] = function()
@@ -544,7 +581,10 @@ T['Clues']['shows as group a single non-exact clue'] = function()
   MiniTest.skip()
 end
 
-T['Clues']['handles no description'] = function() MiniTest.skip() end
+T['Clues']['handles no description'] = function()
+  -- Both for single and group clues
+  MiniTest.skip()
+end
 
 T['Clues']['can be callable'] = function() MiniTest.skip() end
 
@@ -555,7 +595,103 @@ T['Clues']['can be overriden'] = function()
   MiniTest.skip()
 end
 
+T['Clues']['handles showing group after key with postkeys'] = function()
+  make_test_map('n', '<Space>f')
+  make_test_map('n', '<Space>ga')
+  make_test_map('n', '<Space>gb')
+
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>f', desc = 'With postkeys', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Space>g', desc = 'Group' },
+      { mode = 'n', keys = '<Space>ga', desc = 'Key a' },
+      { mode = 'n', keys = '<Space>gb', desc = 'Key b' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  MiniTest.skip('Currently does not work.')
+
+  type_keys(' ', 'f')
+  child.expect_screenshot()
+  type_keys('g')
+  child.expect_screenshot()
+end
+
 T['Clues']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+
+T['Postkeys'] = new_set({ hooks = { pre_case = function() child.set_size(10, 40) end } })
+
+T['Postkeys']['works'] = function()
+  make_test_map('n', '<Space>f')
+  make_test_map('n', '<Space>x')
+
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>f', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Space>x', postkeys = '<Space>' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
+  type_keys('f')
+  child.expect_screenshot()
+  type_keys('x')
+  child.expect_screenshot()
+
+  type_keys('f', '<Esc>')
+
+  eq(get_test_map_count('n', ' f'), 2)
+  eq(get_test_map_count('n', ' x'), 1)
+end
+
+T['Postkeys']['shows window immediately'] = function()
+  make_test_map('n', '<Space>f')
+  make_test_map('n', '<Space>x')
+
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>f', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Space>x', postkeys = '<Space>' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 10 },
+  })
+
+  type_keys(' ', 'f')
+  child.expect_screenshot()
+end
+
+T['Postkeys']['closes window if postkeys do not end up key querying'] = function()
+  load_module({
+    clues = { { mode = 'n', keys = '<Space>a', desc = 'Desc', postkeys = 'G' } },
+    trigger = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  MiniTest.skip('Does not break when it should.')
+  type_keys(' ', 'a')
+  child.expect_screenshot()
+end
+
+T['Postkeys']['persists window if action changes tabpage'] = function()
+  load_module({
+    clues = { { mode = 'n', keys = '<C-w>T', desc = 'Move to new tabpage', postkeys = '<C-w>' } },
+    triggers = { { mode = 'n', keys = '<C-w>' } },
+    window = { delay = 0 },
+  })
+
+  child.cmd('wincmd v')
+
+  type_keys('<C-w>')
+  child.expect_screenshot()
+  type_keys('T')
+  child.expect_screenshot()
+end
 
 T['Querying keys'] = new_set()
 
@@ -659,7 +795,10 @@ T['Querying keys']['allows reaching longest keymap'] = function()
   load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
   validate_trigger_keymap('n', '<Space>')
 
-  type_keys(' ', 'f', 'f', 'f')
+  child.o.timeoutlen = 5
+  type_keys(' ', 'f', 'f')
+  sleep(10)
+  type_keys('f')
   eq(get_test_map_count('n', ' f'), 0)
   eq(get_test_map_count('n', ' fff'), 1)
 end
@@ -676,29 +815,6 @@ T['Querying keys']['executes even if no extra clues is set'] = function()
   type_keys('i', 'g')
   eq(get_lines(), { 'g' })
 end
-
-T['Postkeys'] = new_set()
-
-T['Postkeys']['works'] = function()
-  make_test_map('n', '<Space>f')
-  make_test_map('n', '<Space>x')
-
-  load_module({
-    clues = {
-      { mode = 'n', keys = '<Space>f', postkeys = '<Space>' },
-      { mode = 'n', keys = '<Space>x', postkeys = '<Space>' },
-    },
-    triggers = { { mode = 'n', keys = '<Space>' } },
-  })
-
-  MiniTest.skip('Rewrite to use screenshots when window is implemented')
-
-  -- type_keys(' ', 'f', 'x', 'f', '<Esc>')
-  -- eq(get_test_map_count('n', ' f'), 2)
-  -- eq(get_test_map_count('n', ' x'), 1)
-end
-
-T['Postkeys']['does not close window if action changes tabpage'] = function() MiniTest.skip() end
 
 T['Reproducing keys'] = new_set()
 

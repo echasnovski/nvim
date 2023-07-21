@@ -19,25 +19,28 @@ vim.api.nvim_create_autocmd('User', {
   callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
 })
 
-require('mini-dev.clue').setup({
+local miniclue = require('mini-dev.clue')
+miniclue.setup({
   clues = {
     EC.leader_group_clues,
+
+    miniclue.gen_clues.builtin_completion(),
+    miniclue.gen_clues.windows({ submode_focus = true, submode_move = true, submode_resize = true }),
+    miniclue.gen_clues.g(),
+
+    { mode = 'n', keys = '<C-w>gga', desc = 'Case 1', postkeys = '<C-w>gg' },
+    { mode = 'n', keys = '<C-w>ggb', desc = 'Case 2', postkeys = '<C-w>gg' },
 
     { mode = 'n', keys = 'g~', desc = 'Switch case' },
     { mode = 'n', keys = 'gU', desc = 'Make uppercase' },
     { mode = 'n', keys = 'gu', desc = 'Make lowercase' },
     { mode = 'n', keys = 'g?', desc = 'Rot13 encode' },
 
-    { mode = 'i', keys = '<C-x><C-l>', desc = 'Complete line' },
-    { mode = 'i', keys = '<C-x><C-f>', desc = 'Complete file path' },
+    { mode = 'i', keys = '<C-x><C-l>', desc = 'MINE Complete line' },
+    { mode = 'i', keys = '<C-x><C-f>', desc = 'MINE Complete file path' },
 
     { mode = 'c', keys = '<C-r><C-w>', desc = 'Word under cursor' },
     { mode = 'c', keys = '<C-r>=', desc = 'Expression register' },
-
-    { mode = 'n', keys = '<C-w>h', desc = 'Focus left', postkeys = '<C-w>' },
-    { mode = 'n', keys = '<C-w>j', desc = 'Focus down', postkeys = '<C-w>' },
-    { mode = 'n', keys = '<C-w>k', desc = 'Focus up', postkeys = '<C-w>' },
-    { mode = 'n', keys = '<C-w>l', desc = 'Focus right', postkeys = '<C-w>' },
 
     { mode = 'x', keys = 'iw', desc = 'Word' },
     { mode = 'x', keys = 'if', desc = 'Function call' },
@@ -52,6 +55,8 @@ require('mini-dev.clue').setup({
 
   triggers = {
     { mode = 'n', keys = '<Leader>' },
+    { mode = 'x', keys = '<Leader>' },
+
     { mode = 'n', keys = '[' },
     { mode = 'n', keys = ']' },
     { mode = 'n', keys = [[\]] },
@@ -69,6 +74,7 @@ require('mini-dev.clue').setup({
     { mode = 'x', keys = 's' },
 
     { mode = 'n', keys = 'g' },
+    { mode = 'x', keys = 'g' },
     { mode = 'n', keys = '<C-w>' },
 
     { mode = 'x', keys = '[' },
@@ -82,7 +88,12 @@ require('mini-dev.clue').setup({
     { mode = 'o', keys = 'i' },
   },
 
-  window = {},
+  window = {
+    delay = 0,
+    config = {
+      width = 'auto',
+    },
+  },
 })
 
 require('mini.statusline').setup({
