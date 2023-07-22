@@ -24,33 +24,22 @@ miniclue.setup({
   clues = {
     EC.leader_group_clues,
 
-    miniclue.gen_clues.builtin_completion(),
-    miniclue.gen_clues.windows({ submode_focus = true, submode_move = true, submode_resize = true }),
     miniclue.gen_clues.g(),
-
-    { mode = 'n', keys = '<C-w>gga', desc = 'Case 1', postkeys = '<C-w>gg' },
-    { mode = 'n', keys = '<C-w>ggb', desc = 'Case 2', postkeys = '<C-w>gg' },
-
-    { mode = 'n', keys = 'g~', desc = 'Switch case' },
-    { mode = 'n', keys = 'gU', desc = 'Make uppercase' },
-    { mode = 'n', keys = 'gu', desc = 'Make lowercase' },
-    { mode = 'n', keys = 'g?', desc = 'Rot13 encode' },
-
-    { mode = 'i', keys = '<C-x><C-l>', desc = 'MINE Complete line' },
-    { mode = 'i', keys = '<C-x><C-f>', desc = 'MINE Complete file path' },
-
-    { mode = 'c', keys = '<C-r><C-w>', desc = 'Word under cursor' },
-    { mode = 'c', keys = '<C-r>=', desc = 'Expression register' },
+    miniclue.gen_clues.z(),
+    miniclue.gen_clues.windows({ submode_focus = true, submode_move = true, submode_resize = true }),
+    miniclue.gen_clues.builtin_completion(),
+    miniclue.gen_clues.marks(),
+    miniclue.gen_clues.registers(),
 
     { mode = 'x', keys = 'iw', desc = 'Word' },
     { mode = 'x', keys = 'if', desc = 'Function call' },
     { mode = 'o', keys = 'iw', desc = 'Word' },
-    { mode = 'o', keys = 'iw', desc = 'Function call' },
+    { mode = 'o', keys = 'if', desc = 'Function call' },
 
     { mode = 'x', keys = 'aw', desc = 'Word' },
     { mode = 'x', keys = 'af', desc = 'Function call' },
     { mode = 'o', keys = 'aw', desc = 'Word' },
-    { mode = 'o', keys = 'aw', desc = 'Function call' },
+    { mode = 'o', keys = 'af', desc = 'Function call' },
   },
 
   triggers = {
@@ -75,7 +64,21 @@ miniclue.setup({
 
     { mode = 'n', keys = 'g' },
     { mode = 'x', keys = 'g' },
+
+    { mode = 'n', keys = 'z' },
+    { mode = 'x', keys = 'z' },
+
     { mode = 'n', keys = '<C-w>' },
+
+    { mode = 'n', keys = '"' },
+    { mode = 'x', keys = '"' },
+    { mode = 'i', keys = '<C-r>' },
+    { mode = 'c', keys = '<C-r>' },
+
+    { mode = 'n', keys = "'" },
+    { mode = 'n', keys = '`' },
+    { mode = 'x', keys = "'" },
+    { mode = 'x', keys = '`' },
 
     { mode = 'x', keys = '[' },
     { mode = 'o', keys = '[' },

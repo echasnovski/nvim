@@ -4,28 +4,13 @@
 --     - Think about "alternative keys": 'langmap' and 'iminsert'.
 --
 --     - Add `gen_clues` table with callables and preconfigured clues:
---         - `z`.
---         - `"` with computable register contents.
 --         - `'` / ``` with computable marks positions.
+--         - 'mini.ai'/'mini.surround'?
 --
 --     - Autocreate only in listed and help buffers?
 --
 --     - Try to make "temporary Normal mode" work even for Operator-pending triggers.
 --       If not, at least plan to add documentation.
---
---     - Make postkeys that change tabpage continue to show already shown
---       window without delay.
---
---     - Make window close if postkeys don't result into querying state.
---       !!!Should not result into flickering postkeys effect!!!
---
---     - Improve sorting of lines in clue buffer: `~` should not be last,
---       ?`<C-*>`/`<M-*>` should be first?.
---
---     - ?? Change priority of clue description to allow keymaps to have priority ??
---       This will result into more up to date information (like with `ga`
---       should show 'mini.align' description if present). Let users modify
---       description of mappings directly if needed.
 --
 --     - ?Add exported log?
 --
@@ -246,31 +231,8 @@ MiniClue.gen_clues = {}
 MiniClue.gen_clues.g = function()
   --stylua: ignore
   return {
-    { mode = 'n', keys = "g'",     desc = "Jump to mark (don't affect jumplist)" },
-    { mode = 'n', keys = 'g#',     desc = 'Search backwards word under cursor' },
-    { mode = 'n', keys = 'g$',     desc = 'Go to rightmost visible column' },
-    { mode = 'n', keys = 'g&',     desc = 'Repeat last `:s` on all lines' },
-    { mode = 'n', keys = 'g*',     desc = 'Search word under cursor' },
-    { mode = 'n', keys = 'g+',     desc = 'Go to newer text state' },
-    { mode = 'n', keys = 'g,',     desc = 'Go to newer position in change list' },
-    { mode = 'n', keys = 'g-',     desc = 'Go to older text state' },
     { mode = 'n', keys = 'g0',     desc = 'Go to leftmost visible column' },
     { mode = 'n', keys = 'g8',     desc = 'Print hex value of char under cursor' },
-    { mode = 'n', keys = 'g;',     desc = 'Go to older position in change list' },
-    { mode = 'n', keys = 'g<',     desc = 'Display previous command output' },
-    { mode = 'n', keys = 'g?',     desc = 'Rot13 encode (operator)' },
-    { mode = 'n', keys = 'g@',     desc = "Call 'operatorfunc' (operator)" },
-    { mode = 'n', keys = 'g]',     desc = '`:tselect` tag under cursor' },
-    { mode = 'n', keys = 'g^',     desc = 'Go to leftmost visible non-whitespace' },
-    { mode = 'n', keys = 'g_',     desc = 'Go to lower line' },
-    { mode = 'n', keys = 'g`',     desc = "Jump to mark (don't affect jumplist)" },
-    { mode = 'n', keys = 'g~',     desc = 'Swap case (operator)' },
-    { mode = 'n', keys = 'g%',     desc = 'Cycle through matching groups' },
-    { mode = 'n', keys = 'g<C-]>', desc = '`:tjump` to tag under cursor' },
-    { mode = 'n', keys = 'g<C-a>', desc = 'Dump a memory profile' },
-    { mode = 'n', keys = 'g<C-g>', desc = 'Show information about cursor' },
-    { mode = 'n', keys = 'g<C-h>', desc = 'Start Select block mode' },
-    { mode = 'n', keys = 'g<Tab>', desc = 'Go to last accessed tabpage' },
     { mode = 'n', keys = 'ga',     desc = 'Print ascii value' },
     { mode = 'n', keys = 'gD',     desc = 'Go to definition in file' },
     { mode = 'n', keys = 'gd',     desc = 'Go to definition in function' },
@@ -305,34 +267,41 @@ MiniClue.gen_clues.g = function()
     { mode = 'n', keys = 'gV',     desc = 'Avoid reselect' },
     { mode = 'n', keys = 'gv',     desc = 'Reselect previous Visual area' },
     { mode = 'n', keys = 'gw',     desc = 'Format text + keep cursor (operator)' },
-    { mode = 'n', keys = 'gx',     desc = 'Execute app for file (with |netrw| plugin)' },
+    { mode = 'n', keys = 'g<C-]>', desc = '`:tjump` to tag under cursor' },
+    { mode = 'n', keys = 'g<C-a>', desc = 'Dump a memory profile' },
+    { mode = 'n', keys = 'g<C-g>', desc = 'Show information about cursor' },
+    { mode = 'n', keys = 'g<C-h>', desc = 'Start Select block mode' },
+    { mode = 'n', keys = 'g<Tab>', desc = 'Go to last accessed tabpage' },
+    { mode = 'n', keys = "g'",     desc = "Jump to mark (don't affect jumplist)" },
+    { mode = 'n', keys = 'g#',     desc = 'Search backwards word under cursor' },
+    { mode = 'n', keys = 'g$',     desc = 'Go to rightmost visible column' },
+    { mode = 'n', keys = 'g%',     desc = 'Cycle through matching groups' },
+    { mode = 'n', keys = 'g&',     desc = 'Repeat last `:s` on all lines' },
+    { mode = 'n', keys = 'g*',     desc = 'Search word under cursor' },
+    { mode = 'n', keys = 'g+',     desc = 'Go to newer text state' },
+    { mode = 'n', keys = 'g,',     desc = 'Go to newer position in change list' },
+    { mode = 'n', keys = 'g-',     desc = 'Go to older text state' },
+    { mode = 'n', keys = 'g;',     desc = 'Go to older position in change list' },
+    { mode = 'n', keys = 'g<',     desc = 'Display previous command output' },
+    { mode = 'n', keys = 'g?',     desc = 'Rot13 encode (operator)' },
+    { mode = 'n', keys = 'g@',     desc = "Call 'operatorfunc' (operator)" },
+    { mode = 'n', keys = 'g]',     desc = '`:tselect` tag under cursor' },
+    { mode = 'n', keys = 'g^',     desc = 'Go to leftmost visible non-whitespace' },
+    { mode = 'n', keys = 'g_',     desc = 'Go to lower line' },
+    { mode = 'n', keys = 'g`',     desc = "Jump to mark (don't affect jumplist)" },
+    { mode = 'n', keys = 'g~',     desc = 'Swap case (operator)' },
 
-    { mode = 'x', keys = 'g]',     desc = '`:tselect` selected tag' },
-    { mode = 'x', keys = 'g?',     desc = 'Rot13 encode' },
-    { mode = 'x', keys = 'g^',     desc = 'Go to leftmost visible non-whitespace' },
-    { mode = 'x', keys = 'g%',     desc = 'Cycle through matching groups' },
-    { mode = 'x', keys = 'g_',     desc = 'Go to lower line' },
+    { mode = 'x', keys = 'gf',     desc = 'Edit selected file' },
+    { mode = 'x', keys = 'gJ',     desc = 'Join selected lines without extra spaces' },
+    { mode = 'x', keys = 'gq',     desc = 'Format selection' },
+    { mode = 'x', keys = 'gV',     desc = 'Avoid reselect' },
+    { mode = 'x', keys = 'gw',     desc = 'Format selection + keep cursor' },
     { mode = 'x', keys = 'g<C-]>', desc = '`:tjump` to selected tag' },
     { mode = 'x', keys = 'g<C-a>', desc = 'Increment with compound' },
     { mode = 'x', keys = 'g<C-g>', desc = 'Show information about selection' },
     { mode = 'x', keys = 'g<C-x>', desc = 'Decrement with compound' },
-    { mode = 'x', keys = 'gE',     desc = 'Go backwards to end of previous WORD' },
-    { mode = 'x', keys = 'ge',     desc = 'Go backwards to end of previous word' },
-    { mode = 'x', keys = 'gf',     desc = 'Edit selected file' },
-    { mode = 'x', keys = 'gJ',     desc = 'Join selected lines without extra spaces' },
-    { mode = 'x', keys = 'gj',     desc = 'Go down by screen lines' },
-    { mode = 'x', keys = 'gk',     desc = 'Go up by screen lines' },
-    { mode = 'x', keys = 'gM',     desc = 'Go to middle of text line' },
-    { mode = 'x', keys = 'gm',     desc = 'Go to middle of screen line' },
-    { mode = 'x', keys = 'gN',     desc = 'Go to previous search match' },
-    { mode = 'x', keys = 'gn',     desc = 'Go to next search match' },
-    { mode = 'x', keys = 'go',     desc = 'Go to byte' },
-    { mode = 'x', keys = 'gg',     desc = 'Go to line (def: first)' },
-    { mode = 'x', keys = 'gJ',     desc = 'Join lines without extra spaces' },
-    { mode = 'x', keys = 'gq',     desc = 'Format selected text' },
-    { mode = 'x', keys = 'gV',     desc = 'Avoid reselect' },
-    { mode = 'x', keys = 'gv',     desc = 'Reselect previous Visual area' },
-    { mode = 'x', keys = 'gw',     desc = 'Format selected text + keep cursor' },
+    { mode = 'x', keys = 'g]',     desc = '`:tselect` selected tag' },
+    { mode = 'x', keys = 'g?',     desc = 'Rot13 encode selection' },
   }
 end
 
@@ -341,12 +310,63 @@ end
 --- Contains clues for the following triggers: >
 ---
 ---   { mode = 'n', keys = 'z' }
+---   { mode = 'x', keys = 'z' }
 ---
 ---@return table Array of clues.
 MiniClue.gen_clues.z = function()
   --stylua: ignore
   return {
-    { mode = 'n', keys = 'zz', desc = 'Center current line' },
+    { mode = 'n', keys = 'zA',   desc = 'Toggle folds recursively' },
+    { mode = 'n', keys = 'za',   desc = 'Toggle fold' },
+    { mode = 'n', keys = 'zb',   desc = 'Redraw at bottom' },
+    { mode = 'n', keys = 'zC',   desc = 'Close folds recursively' },
+    { mode = 'n', keys = 'zc',   desc = 'Close fold' },
+    { mode = 'n', keys = 'zD',   desc = 'Delete folds recursively' },
+    { mode = 'n', keys = 'zd',   desc = 'Delete fold' },
+    { mode = 'n', keys = 'zE',   desc = 'Eliminate all folds' },
+    { mode = 'n', keys = 'ze',   desc = 'Scroll to cursor on right screen side' },
+    { mode = 'n', keys = 'zF',   desc = 'Create fold' },
+    { mode = 'n', keys = 'zf',   desc = 'Create fold (operator)' },
+    { mode = 'n', keys = 'zG',   desc = 'Temporarily mark as correctly spelled' },
+    { mode = 'n', keys = 'zg',   desc = 'Permanently mark as correctly spelled' },
+    { mode = 'n', keys = 'zH',   desc = 'Scroll left half screen' },
+    { mode = 'n', keys = 'zh',   desc = 'Scroll left' },
+    { mode = 'n', keys = 'zi',   desc = "Toggle 'foldenable'" },
+    { mode = 'n', keys = 'zj',   desc = 'Move to start of next fold' },
+    { mode = 'n', keys = 'zk',   desc = 'Move to end of previous fold' },
+    { mode = 'n', keys = 'zL',   desc = 'Scroll right half screen' },
+    { mode = 'n', keys = 'zl',   desc = 'Scroll right' },
+    { mode = 'n', keys = 'zM',   desc = 'Close all folds' },
+    { mode = 'n', keys = 'zm',   desc = 'Fold more' },
+    { mode = 'n', keys = 'zN',   desc = "Set 'foldenable'" },
+    { mode = 'n', keys = 'zn',   desc = "Reset 'foldenable'" },
+    { mode = 'n', keys = 'zO',   desc = 'Open folds recursively' },
+    { mode = 'n', keys = 'zo',   desc = 'Open fold' },
+    { mode = 'n', keys = 'zP',   desc = 'Paste without trailspace' },
+    { mode = 'n', keys = 'zp',   desc = 'Paste without trailspace' },
+    { mode = 'n', keys = 'zR',   desc = 'Open all folds' },
+    { mode = 'n', keys = 'zr',   desc = 'Fold less' },
+    { mode = 'n', keys = 'zs',   desc = 'Scroll to cursor on left screen side' },
+    { mode = 'n', keys = 'zt',   desc = 'Redraw at top' },
+    { mode = 'n', keys = 'zu',   desc = '+Undo spelling commands' },
+    { mode = 'n', keys = 'zug',  desc = 'Undo `zg`' },
+    { mode = 'n', keys = 'zuG',  desc = 'Undo `zG`' },
+    { mode = 'n', keys = 'zuw',  desc = 'Undo `zw`' },
+    { mode = 'n', keys = 'zuW',  desc = 'Undo `zW`' },
+    { mode = 'n', keys = 'zv',   desc = 'Open enough folds' },
+    { mode = 'n', keys = 'zW',   desc = 'Temporarily mark as incorrectly spelled' },
+    { mode = 'n', keys = 'zw',   desc = 'Permanently mark as incorrectly spelled' },
+    { mode = 'n', keys = 'zX',   desc = 'Update folds' },
+    { mode = 'n', keys = 'zx',   desc = 'Update folds + open enough folds' },
+    { mode = 'n', keys = 'zy',   desc = 'Yank without trailing spaces (operator)' },
+    { mode = 'n', keys = 'zz',   desc = 'Redraw at center' },
+    { mode = 'n', keys = 'z+',   desc = 'Redraw under bottom at top' },
+    { mode = 'n', keys = 'z-',   desc = 'Redraw at bottom + cursor on first non-blank' },
+    { mode = 'n', keys = 'z.',   desc = 'Redraw at center + cursor on first non-blank' },
+    { mode = 'n', keys = 'z=',   desc = 'Show spelling suggestions' },
+    { mode = 'n', keys = 'z^',   desc = 'Redraw above top at bottom' },
+
+    { mode = 'x', keys = 'zf',   desc = 'Create fold from selection' },
   }
 end
 
@@ -463,24 +483,52 @@ end
 ---
 --- Contains clues for the following triggers: >
 ---
----   { mode = 'n', keys = '"' }
+---   { mode = 'n', keys = "'" }
+---   { mode = 'n', keys = "g'" }
 ---   { mode = 'n', keys = '`' }
----   { mode = 'x', keys = '"' }
+---   { mode = 'n', keys = 'g`' }
+---   { mode = 'x', keys = "'" }
+---   { mode = 'x', keys = "g'" }
 ---   { mode = 'x', keys = '`' }
+---   { mode = 'x', keys = 'g`' }
 ---
 ---@return table Array of clues.
 ---
 ---@seealso |mark-motions|
-MiniClue.gen_clues.marks = function()
-  local describing_mark = function(mark)
-    -- TODO
-    return mark
+MiniClue.gen_clues.marks = function(opts)
+  describe_marks = function(mode, prefix)
+    local make_clue = function(register, desc) return { mode = mode, keys = prefix .. register, desc = desc } end
+
+    return {
+      make_clue('^', 'Latest insert position'),
+      make_clue('.', 'Latest change'),
+      make_clue('"', 'Latest exited position'),
+      make_clue("'", 'Line before jump'),
+      make_clue('`', 'Position before jump'),
+      make_clue('[', 'Start of latest changed or yanked text'),
+      make_clue(']', 'End of latest changed or yanked text'),
+      make_clue('(', 'Start of sentence'),
+      make_clue(')', 'End of sentence'),
+      make_clue('{', 'Start of paragraph'),
+      make_clue('}', 'End of paragraph'),
+      make_clue('<', 'Start of lastest visual selection'),
+      make_clue('>', 'End of lastest visual selection'),
+    }
   end
 
   --stylua: ignore
   return {
-    { mode = 'n', keys = '"a', desc = describing_mark('a') },
-    { mode = 'n', keys = '`a', desc = describing_mark('a') },
+    -- Normal mode
+    describe_marks('n', "'"),
+    describe_marks('n', "g'"),
+    describe_marks('n', "`"),
+    describe_marks('n', "g`"),
+
+    -- Visual mode
+    describe_marks('x', "'"),
+    describe_marks('x', "g'"),
+    describe_marks('x', "`"),
+    describe_marks('x', "g`"),
   }
 end
 
@@ -489,22 +537,76 @@ end
 --- Contains clues for the following triggers: >
 ---
 ---   { mode = 'n', keys = '"' }
----   { mode = 'n', keys = '`' }
 ---   { mode = 'x', keys = '"' }
----   { mode = 'x', keys = '`' }
+---   { mode = 'i', keys = '<C-r>' }
+---   { mode = 'c', keys = '<C-r>' }
+---
+---@param opts table|nil Options. Possible keys:
+---   - <show_contents> `(boolean)` - whether to show contents of all possible
+---     registers. If `false`, only description of special registers is shown.
+---     Default: `false`.
 ---
 ---@return table Array of clues.
 ---
 ---@seealso |registers|
-MiniClue.gen_clues.registers = function()
-  local describing_register = function(mark)
-    -- TODO
-    return mark
+MiniClue.gen_clues.registers = function(opts)
+  opts = vim.tbl_deep_extend('force', { show_contents = false }, opts or {})
+
+  local describe_registers
+  if opts.show_contents then
+    describe_registers = H.make_clues_with_register_contents
+  else
+    describe_registers = function(mode, prefix)
+      local make_clue = function(register, desc) return { mode = mode, keys = prefix .. register, desc = desc } end
+      return {
+        make_clue('0', 'Latest yank'),
+        make_clue('1', 'Latest big delete'),
+        make_clue('"', 'Default register'),
+        make_clue('#', 'Alternate buffer'),
+        make_clue('%', 'Name of the current file'),
+        make_clue('*', 'Selection clipboard'),
+        make_clue('+', 'System clipboard'),
+        make_clue('-', 'Latest small delete'),
+        make_clue('.', 'Latest inserted text'),
+        make_clue('/', 'Latest search pattern'),
+        make_clue(':', 'Latest executed command'),
+        make_clue('=', 'Result of expression'),
+        make_clue('_', 'Black hole'),
+      }
+    end
   end
 
   --stylua: ignore
   return {
-    { mode = 'n', keys = '"a', desc = describing_register('a') },
+    -- Normal mode
+    describe_registers('n', '"'),
+
+    -- Visual mode
+    describe_registers('x', '"'),
+
+    -- Insert mode
+    describe_registers('i', '<C-r>'),
+
+    { mode = 'i', keys = '<C-r><C-r>', desc = '+Insert register literally' },
+    describe_registers('i', '<C-r><C-r>'),
+
+    { mode = 'i', keys = '<C-r><C-o>', desc = '+Insert register literally + not auto-indent' },
+    describe_registers('i', '<C-r><C-o>'),
+
+    { mode = 'i', keys = '<C-r><C-p>', desc = '+Insert register + fix indent' },
+    describe_registers('i', '<C-r><C-p>'),
+
+    -- Command-line mode
+    describe_registers('c', '<C-r>'),
+
+    { mode = 'c', keys = '<C-r><C-r>', desc = '+Insert register literally' },
+    describe_registers('c', '<C-r><C-r>'),
+
+    { mode = 'c', keys = '<C-r><C-o>', desc = '+Insert register literally + not auto-indent' },
+    describe_registers('c', '<C-r><C-o>'),
+
+    { mode = 'c', keys = '<C-r><C-p>', desc = '+Insert register + fix indent' },
+    describe_registers('c', '<C-r><C-p>'),
   }
 end
 
@@ -726,7 +828,8 @@ H.unmap_trigger = function(buf_id, trigger)
 end
 
 -- State ----------------------------------------------------------------------
-H.state_advance = function()
+H.state_advance = function(opts)
+  opts = opts or {}
   local config_window = H.get_config().window
 
   -- Show clues: delay (debounce) first show; update immediately if shown or
@@ -734,7 +837,11 @@ H.state_advance = function()
   H.state.timer:stop()
   local show_immediately = H.is_valid_win(H.state.win_id) or H.state.is_after_postkeys
   local delay = show_immediately and 0 or config_window.delay
-  H.state.timer:start(delay, 0, H.window_update)
+  H.state.timer:start(delay, 0, function() H.window_update(opts.scroll_to_start) end)
+
+  -- Reset postkeys right now to not flicker when trying to close window during
+  -- "not querying" check
+  H.state.is_after_postkeys = false
 
   -- Query user for new key
   local key = H.getcharstr()
@@ -748,7 +855,7 @@ H.state_advance = function()
   local is_scroll_up = key == H.replace_termcodes(config_window.scroll_up)
   if is_scroll_down or is_scroll_up then
     H.window_scroll(is_scroll_down and H.keys.ctrl_d or H.keys.ctrl_u)
-    return H.state_advance()
+    return H.state_advance({ scroll_to_start = false })
   end
 
   if key == H.keys.bs then
@@ -837,23 +944,17 @@ H.state_apply_postkeys = vim.schedule_wrap(function(postkeys)
   -- executed **after** keys from `nvim_feedkeys()`.
   vim.api.nvim_feedkeys(postkeys, 'mit', false)
 
+  -- Register that possible future querying is a result of postkeys.
+  -- This enables (keep) showing window immediately.
   H.state.is_after_postkeys = true
 
-  -- -- Close window if postkeys do not end up querying keys
-  -- -- Using one-shot `CursorMoved` event
-  -- vim.defer_fn(function()
-  --   local augroup = vim.api.nvim_create_augroup('MiniClueCleanup', { clear = true })
-  --   vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
-  --     once = true,
-  --     callback = function()
-  --       if #H.state.query == 0 then H.window_close() end
-  --     end,
-  --   })
-  -- end, 10)
-
-  -- vim.schedule(function()
-  --   if #H.state.query == 0 then H.window_close() end
-  -- end)
+  -- Defer check of whether postkeys resulted into window.
+  -- Could not find proper way to check this which guarantees to be executed
+  -- after `nvim_feedkeys()` takes effect **end** doesn't result into flicker
+  -- when consecutively applying "submode" keys.
+  vim.defer_fn(function()
+    if #H.state.query == 0 then H.window_close() end
+  end, 50)
 end)
 
 H.state_is_at_target =
@@ -938,7 +1039,7 @@ H.query_to_keys = function(query) return table.concat(query, '') end
 H.query_to_title = function(query) return H.keytrans(H.query_to_keys(query)) end
 
 -- Window ---------------------------------------------------------------------
-H.window_update = vim.schedule_wrap(function()
+H.window_update = vim.schedule_wrap(function(scroll_to_start)
   if #H.state.query == 0 then return H.window_close() end
 
   -- Close window if it is not in current tabpage (as only window is tracked)
@@ -957,6 +1058,10 @@ H.window_update = vim.schedule_wrap(function()
     vim.api.nvim_win_set_config(H.state.win_id, win_config)
   end
 
+  -- Make scroll not persist
+  if scroll_to_start == nil then scroll_to_start = true end
+  if scroll_to_start then vim.api.nvim_win_call(H.state.win_id, function() vim.cmd('normal! gg') end) end
+
   -- Add redraw because Neovim won't do it when `getcharstr()` is active
   vim.cmd('redraw')
 end)
@@ -968,9 +1073,12 @@ end
 H.window_open = function(config)
   local win_id = vim.api.nvim_open_win(H.state.buf_id, false, config)
 
-  vim.wo[win_id].winhighlight = 'FloatBorder:MiniClueBorder,FloatTitle:MiniClueTitle'
   vim.wo[win_id].foldenable = false
   vim.wo[win_id].wrap = false
+
+  -- Neovim=0.7 doesn't support invalid highlight groups in 'winhighlight'
+  local win_hl = 'FloatBorder:MiniClueBorder' .. (vim.fn.has('nvim-0.8') == 1 and ',FloatTitle:MiniClueTitle' or '')
+  vim.wo[win_id].winhighlight = win_hl
 
   return win_id
 end
@@ -1063,29 +1171,32 @@ end
 H.clues_get_all = function(mode)
   local res = {}
 
-  -- Order of clue precedence: global mappings < buffer mappings < config clues
-  for _, map_data in ipairs(vim.api.nvim_get_keymap(mode)) do
-    local lhsraw = H.replace_termcodes(map_data.lhs)
-    res[lhsraw] = { desc = map_data.desc }
-  end
-
-  for _, map_data in ipairs(vim.api.nvim_buf_get_keymap(0, mode)) do
-    local lhsraw = H.replace_termcodes(map_data.lhs)
-    res[lhsraw] = { desc = map_data.desc }
-  end
-
+  -- Order of clue precedence: config clues < buffer mappings < global mappings
   local config_clues = H.clues_normalize(H.get_config().clues) or {}
   local mode_clues = vim.tbl_filter(function(x) return x.mode == mode end, config_clues)
   for _, clue in ipairs(mode_clues) do
     local lhsraw = H.replace_termcodes(clue.keys)
-    local res_clue = res[lhsraw] or {}
+    local desc = clue.desc
+    if vim.is_callable(desc) then desc = desc() end
+    res[lhsraw] = {
+      -- Allows callable clue description
+      desc = desc,
+      postkeys = H.replace_termcodes(clue.postkeys),
+    }
+  end
 
-    -- Allos clue without `desc` to possibly fall back to keymap's description
-    local desc = clue.desc or res_clue.desc
-    res_clue.desc = vim.is_callable(desc) and desc() or desc
-    res_clue.postkeys = H.replace_termcodes(clue.postkeys)
+  for _, map_data in ipairs(vim.api.nvim_get_keymap(mode)) do
+    local lhsraw = H.replace_termcodes(map_data.lhs)
+    local res_data = res[lhsraw] or {}
+    res_data.desc = map_data.desc or ''
+    res[lhsraw] = res_data
+  end
 
-    res[lhsraw] = res_clue
+  for _, map_data in ipairs(vim.api.nvim_buf_get_keymap(0, mode)) do
+    local lhsraw = H.replace_termcodes(map_data.lhs)
+    local res_data = res[lhsraw] or {}
+    res_data.desc = map_data.desc or ''
+    res[lhsraw] = res_data
   end
 
   return res
@@ -1146,9 +1257,14 @@ H.clues_to_buffer_content = function(clues, keys)
     end
   end
 
-  -- Convert to array with sorting by keys and finalize content
-  local next_keys = vim.tbl_keys(next_key_data)
-  table.sort(next_keys, H.compare_ignorecase)
+  -- Convert to array sorted by keys and finalize content
+  local next_keys_extra = vim.tbl_map(
+    function(x) return { key = x, keytype = H.clues_get_next_key_type(x) } end,
+    vim.tbl_keys(next_key_data)
+  )
+  _G.info = { extra = vim.deepcopy(next_keys_extra) }
+  table.sort(next_keys_extra, H.clues_compare_next_key)
+  local next_keys = vim.tbl_map(function(x) return x.key end, next_keys_extra)
 
   local res = {}
   for _, key in ipairs(next_keys) do
@@ -1162,13 +1278,55 @@ H.clues_to_buffer_content = function(clues, keys)
   return res
 end
 
+H.clues_get_next_key_type = function(x)
+  if x:find('^%w$') ~= nil then return 'alphanum' end
+  if x:find('^<.*>$') ~= nil then return 'mod' end
+  return 'other'
+end
+
+H.clues_compare_next_key = function(a, b)
+  local a_type, b_type = a.keytype, b.keytype
+  if a_type == b_type then
+    local cmp = vim.stricmp(a.key, b.key)
+    return cmp == -1 or (cmp == 0 and a.key < b.key)
+  end
+
+  if a_type == 'alphanum' then return true end
+  if b_type == 'alphanum' then return false end
+
+  if a_type == 'mod' then return true end
+  if b_type == 'mod' then return false end
+end
+
+-- Clue generators ------------------------------------------------------------
+H.make_clues_with_register_contents = function(mode, prefix)
+  local get_register_desc = function(register)
+    return function()
+      local ok, value = pcall(vim.fn.getreg, register, 1)
+      if not ok or value == '' then return nil end
+      return vim.inspect(value)
+    end
+  end
+
+  local all_registers = vim.split('0123456789abcdefghijklmnopqrstuvwxyz*+"-:.%/#', '')
+
+  local res = {}
+  for _, register in ipairs(all_registers) do
+    table.insert(res, { mode = mode, keys = prefix .. register, desc = get_register_desc(register) })
+  end
+  table.insert(res, { mode = mode, keys = prefix .. '=', desc = 'Result of expression' })
+
+  return res
+end
+
 -- Predicates -----------------------------------------------------------------
 H.is_trigger = function(x) return type(x) == 'table' and type(x.mode) == 'string' and type(x.keys) == 'string' end
 
 H.is_clue = function(x)
   if type(x) ~= 'table' then return false end
   local mandatory = type(x.mode) == 'string' and type(x.keys) == 'string'
-  local extra = (x.desc == nil or type(x.desc) == 'string') and (x.postkeys == nil or type(x.postkeys) == 'string')
+  local extra = (x.desc == nil or type(x.desc) == 'string' or vim.is_callable(x.desc))
+    and (x.postkeys == nil or type(x.postkeys) == 'string')
   return mandatory and extra
 end
 
@@ -1256,11 +1414,6 @@ H.list_concat = function(...)
     end
   end
   return res
-end
-
-H.compare_ignorecase = function(a, b)
-  local cmp = vim.stricmp(a, b)
-  return cmp == -1 or (cmp == 0 and a < b)
 end
 
 return MiniClue

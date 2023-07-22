@@ -32,7 +32,7 @@ local forward_lua = function(fun_str)
 end
 
 -- Mapping helpers
-local replace_termcodes = function(x) return vim.api.nvim_replace_termcodes(x, true, false, true) end
+local replace_termcodes = function(x) return child.api.nvim_replace_termcodes(x, true, true, true) end
 
 local reset_test_map_count = function(mode, lhs)
   local lua_cmd = string.format([[_G['test_map_%s_%s'] = 0]], mode, replace_termcodes(lhs))
@@ -255,9 +255,9 @@ T['setup()']['respects "human-readable" key names'] = function()
 
   load_module({
     clues = {
-      { mode = 'n', keys = '<Space><Space>', desc = 'Space Space', postkeys = '<Space>' },
-      { mode = 'n', keys = '<Space><C-x>', desc = 'Space C-x', postkeys = '<Space>' },
-      { mode = 'n', keys = '<Leader>a', desc = 'Leader a', postkeys = '<Leader>' },
+      { mode = 'n', keys = '<Space><Space>', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Space><C-x>', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Leader>a', postkeys = '<Leader>' },
     },
     triggers = { { mode = 'n', keys = '<Space>' }, { mode = 'n', keys = '<Leader>' } },
   })
@@ -266,7 +266,12 @@ T['setup()']['respects "human-readable" key names'] = function()
 
   type_keys(' ', ' ', '<C-x>')
   eq(get_test_map_count('n', '  '), 1)
-  eq(get_test_map_count('n', replace_termcodes(' <C-x>')), 1)
+  eq(get_test_map_count('n', ' <C-x>'), 1)
+
+  type_keys('<Esc>')
+
+  type_keys('_', 'a', 'a')
+  eq(get_test_map_count('n', '_a'), 2)
 end
 
 T['setup()']['respects "raw" key names'] = function()
@@ -276,8 +281,8 @@ T['setup()']['respects "raw" key names'] = function()
 
   load_module({
     clues = {
-      { mode = 'n', keys = '  ', desc = 'Space Space', postkeys = ' ' },
-      { mode = 'n', keys = ' ' .. ctrl_x, desc = 'Space C-x', postkeys = ' ' },
+      { mode = 'n', keys = '  ', postkeys = ' ' },
+      { mode = 'n', keys = ' ' .. ctrl_x, postkeys = ' ' },
     },
     triggers = { { mode = 'n', keys = ' ' } },
   })
@@ -509,6 +514,40 @@ T['disable_buf_triggers()']['respects `vim.b.miniclue_config`'] = function()
   validate_no_trigger_keymap('n', 'g')
 end
 
+T['gen_clues'] = new_set()
+
+T['gen_clues']['g()'] = new_set()
+
+T['gen_clues']['g()']['works'] = function() MiniTest.skip() end
+
+T['gen_clues']['z()'] = new_set()
+
+T['gen_clues']['z()']['works'] = function() MiniTest.skip() end
+
+T['gen_clues']['windows()'] = new_set()
+
+T['gen_clues']['windows()']['works'] = function() MiniTest.skip() end
+
+T['gen_clues']['windows()']['respects `opts.submode_focus`'] = function() MiniTest.skip() end
+
+T['gen_clues']['windows()']['respects `opts.submode_move`'] = function() MiniTest.skip() end
+
+T['gen_clues']['windows()']['respects `opts.submode_resize`'] = function() MiniTest.skip() end
+
+T['gen_clues']['builtin_completion()'] = new_set()
+
+T['gen_clues']['builtin_completion()']['works'] = function() MiniTest.skip() end
+
+T['gen_clues']['marks()'] = new_set()
+
+T['gen_clues']['marks()']['works'] = function() MiniTest.skip() end
+
+T['gen_clues']['registers()'] = new_set()
+
+T['gen_clues']['registers()']['works'] = function() MiniTest.skip() end
+
+T['gen_clues']['registers()']['respects `opts.show_contents`'] = function() MiniTest.skip() end
+
 -- Integration tests ==========================================================
 T['Showing keys'] = new_set({ hooks = { pre_case = function() child.set_size(10, 40) end } })
 
@@ -549,6 +588,38 @@ T['Showing keys']['highlights groups differently'] = function() MiniTest.skip() 
 
 T['Showing keys']['highlights next key with postkey differently'] = function() MiniTest.skip() end
 
+T['Showing keys']['scroll is not persistent'] = function()
+  child.set_size(7, 40)
+  --stylua: ignore
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a' }, { mode = 'n', keys = '<Space>b' },
+      { mode = 'n', keys = '<Space>c' }, { mode = 'n', keys = '<Space>d' },
+      { mode = 'n', keys = '<Space>e' }, { mode = 'n', keys = '<Space>f' },
+
+      { mode = 'n', keys = '<Space>ga' }, { mode = 'n', keys = '<Space>gb' },
+      { mode = 'n', keys = '<Space>gc' }, { mode = 'n', keys = '<Space>gd' },
+      { mode = 'n', keys = '<Space>ge' }, { mode = 'n', keys = '<Space>gf' },
+
+      { mode = 'n', keys = '_a' }, { mode = 'n', keys = '_b' },
+      { mode = 'n', keys = '_c' }, { mode = 'n', keys = '_d' },
+      { mode = 'n', keys = '_e' }, { mode = 'n', keys = '_f' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' }, { mode = 'n', keys = '_' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ', '<C-d>', '<C-d>', '<C-d>', '<C-d>')
+  child.expect_screenshot()
+
+  type_keys('g')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  type_keys('_')
+  child.expect_screenshot()
+end
+
 T['Showing keys']['properly translates special keys'] = function()
   make_test_map('n', '<Space><Space><<f')
   make_test_map('n', '<Space><Space><<g')
@@ -564,10 +635,22 @@ T['Showing keys']['properly translates special keys'] = function()
   child.expect_screenshot()
 end
 
-T['Clues'] = new_set()
+T['Showing keys']['reacts to `VimResized`'] = function() MiniTest.skip() end
+
+T['Clues'] = new_set({ hooks = { pre_case = function() child.set_size(10, 40) end } })
 
 T['Clues']['uses human-readable key names'] = function()
   -- Should also properly align
+  MiniTest.skip()
+end
+
+T['Clues']['are properly sorted'] = function() MiniTest.skip() end
+
+T['Clues']['has proper precedence'] = function()
+  -- config.clue < global mapping desc < buffer mapping desc
+
+  -- If mapping doesn't have description, clue should use empty string because
+  -- it shows the most accurate information
   MiniTest.skip()
 end
 
@@ -611,8 +694,6 @@ T['Clues']['handles showing group after key with postkeys'] = function()
     window = { delay = 0 },
   })
 
-  MiniTest.skip('Currently does not work.')
-
   type_keys(' ', 'f')
   child.expect_screenshot()
   type_keys('g')
@@ -649,6 +730,33 @@ T['Postkeys']['works'] = function()
   eq(get_test_map_count('n', ' x'), 1)
 end
 
+T['Postkeys']['works in edge cases'] = function()
+  -- With "looped" submodes
+  make_test_map('n', '<Space>a')
+  make_test_map('n', '_b')
+
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a', postkeys = '_' },
+      { mode = 'n', keys = '_b', postkeys = '<Space>' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' }, { mode = 'n', keys = '_' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
+  type_keys('a')
+  child.expect_screenshot()
+  type_keys('b')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+
+  eq(get_test_map_count('n', ' a'), 1)
+  eq(get_test_map_count('n', '_b'), 1)
+end
+
 T['Postkeys']['shows window immediately'] = function()
   make_test_map('n', '<Space>f')
   make_test_map('n', '<Space>x')
@@ -669,12 +777,13 @@ end
 T['Postkeys']['closes window if postkeys do not end up key querying'] = function()
   load_module({
     clues = { { mode = 'n', keys = '<Space>a', desc = 'Desc', postkeys = 'G' } },
-    trigger = { { mode = 'n', keys = '<Space>' } },
+    triggers = { { mode = 'n', keys = '<Space>' } },
     window = { delay = 0 },
   })
 
-  MiniTest.skip('Does not break when it should.')
   type_keys(' ', 'a')
+  -- 50 ms is a hardcoded check delay
+  sleep(50 + 5)
   child.expect_screenshot()
 end
 
@@ -705,6 +814,18 @@ T['Querying keys']['works'] = function()
 
   type_keys(10, ' ', 'f')
   eq(get_test_map_count('n', ' f'), 2)
+end
+
+T['Querying keys']['allows trigger with more than one character'] = function()
+  make_test_map('n', '<Space>aa')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>a' } } })
+  validate_trigger_keymap('n', '<Space>a')
+
+  type_keys(' ', 'a', 'a')
+  eq(get_test_map_count('n', ' aa'), 1)
+
+  type_keys(10, ' ', 'a', 'a')
+  eq(get_test_map_count('n', ' aa'), 2)
 end
 
 T['Querying keys']["does not time out after 'timeoutlen'"] = function()
