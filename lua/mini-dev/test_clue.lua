@@ -35,17 +35,19 @@ end
 local replace_termcodes = function(x) return child.api.nvim_replace_termcodes(x, true, true, true) end
 
 local reset_test_map_count = function(mode, lhs)
-  local lua_cmd = string.format([[_G['test_map_%s_%s'] = 0]], mode, replace_termcodes(lhs))
+  lhs = vim.fn.escape(replace_termcodes(lhs), [[\]])
+  local lua_cmd = string.format([[_G['test_map_%s_%s'] = 0]], mode, lhs)
   child.lua(lua_cmd)
 end
 
 local get_test_map_count = function(mode, lhs)
-  local lua_cmd = string.format([=[_G['test_map_%s_%s']]=], mode, replace_termcodes(lhs))
+  lhs = vim.fn.escape(replace_termcodes(lhs), [[\]])
+  local lua_cmd = string.format([=[_G['test_map_%s_%s']]=], mode, lhs)
   return child.lua_get(lua_cmd)
 end
 
 local make_test_map = function(mode, lhs, opts)
-  lhs = replace_termcodes(lhs)
+  lhs = vim.fn.escape(replace_termcodes(lhs), [[\]])
   opts = opts or {}
   opts.desc = 'LHS: ' .. vim.inspect(lhs)
 
@@ -304,11 +306,6 @@ T['setup()']['creates triggers for already created buffers'] = function()
   validate_trigger_keymap('n', 'g', other_buf_id)
 end
 
-T['setup()']['allows clue without `desc`'] = function()
-  -- Should fall back for keymap description or `nil`
-  MiniTest.skip()
-end
-
 T['setup()']['respects `vim.b.miniclue_disable`'] = function()
   local init_buf_id = child.api.nvim_get_current_buf()
   local other_buf_id = child.api.nvim_create_buf(true, false)
@@ -564,6 +561,10 @@ T['Showing keys']['respects `config.window.config`'] = function() MiniTest.skip(
 
 T['Showing keys']['can have `config.window.config.width="auto"`'] = function() MiniTest.skip() end
 
+T['Showing keys']['can have `config.window.config.row="auto"`'] = function() MiniTest.skip() end
+
+T['Showing keys']['can have `config.window.config.col="auto"`'] = function() MiniTest.skip() end
+
 T['Showing keys']['can work inside small instance'] = function() MiniTest.skip() end
 
 T['Showing keys']['respects `config.window.scroll_down`'] = function()
@@ -635,7 +636,69 @@ T['Showing keys']['properly translates special keys'] = function()
   child.expect_screenshot()
 end
 
-T['Showing keys']['reacts to `VimResized`'] = function() MiniTest.skip() end
+T['Showing keys']['respects tabline and statusline when computing height'] = function() MiniTest.skip() end
+
+T['Showing keys']['reacts to `VimResized`'] = function()
+  child.set_size(7, 20)
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a' },
+      { mode = 'n', keys = '<Space>b' },
+      { mode = 'n', keys = '<Space>c' },
+      { mode = 'n', keys = '<Space>d' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
+
+  child.set_size(10, 40)
+  child.expect_screenshot()
+end
+
+T['Showing keys']['works with multibyte characters'] = function()
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>f', desc = 'Single-byte #1' },
+      { mode = 'n', keys = '<Space>y', desc = 'Single-byte #2' },
+      { mode = 'n', keys = '<Space>ф', desc = 'Не англомовний опис' },
+      { mode = 'n', keys = '<Space>ы', desc = 'Тест на коректну ширину' },
+      { mode = 'n', keys = '<Space>э', desc = 'Многобайтовая группа' },
+      { mode = 'n', keys = '<Space>эю', desc = 'фыва' },
+      { mode = 'n', keys = '<Space>эя', desc = 'йцукен' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0, config = { width = 'auto' } },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
+  type_keys('э')
+  child.expect_screenshot()
+end
+
+T['Showing keys']['works in Command-line window'] = function()
+  make_test_map('n', '<Space>f')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } }, window = { delay = 0 } })
+  child.o.timeoutlen = 5
+
+  type_keys('q:')
+  type_keys(' ')
+
+  -- Both opening and closing window is disabled at the moment.
+  -- See https://github.com/neovim/neovim/issues/24452 .
+  -- Use screenshots if that is resolved.
+
+  -- Make sure that querying works
+  sleep(5 + 5)
+  type_keys('f')
+
+  eq(get_test_map_count('n', '<Space>f'), 1)
+
+  type_keys(':q<CR>')
+end
 
 T['Clues'] = new_set({ hooks = { pre_case = function() child.set_size(10, 40) end } })
 
@@ -651,11 +714,6 @@ T['Clues']['has proper precedence'] = function()
 
   -- If mapping doesn't have description, clue should use empty string because
   -- it shows the most accurate information
-  MiniTest.skip()
-end
-
-T['Clues']['works with multibyte characters'] = function()
-  -- Should also properly align
   MiniTest.skip()
 end
 
@@ -936,6 +994,64 @@ T['Querying keys']['executes even if no extra clues is set'] = function()
   type_keys('i', 'g')
   eq(get_lines(), { 'g' })
 end
+
+T['Querying keys']['works with multibyte characters'] = function()
+  make_test_map('n', '<Space>фф')
+  make_test_map('n', '<Space>фы')
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>фф', postkeys = '<Space>ф' },
+      { mode = 'n', keys = '<Space>фы', postkeys = '<Space>ф' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>ф' } },
+  })
+  validate_trigger_keymap('n', '<Space>ф')
+
+  type_keys(' ф', 'ф', 'ы', 'ф', '<Esc>')
+  eq(get_test_map_count('n', '<Space>фф'), 2)
+  eq(get_test_map_count('n', '<Space>фы'), 1)
+end
+
+T['Querying keys']["respects 'langmap'"] = function()
+  make_test_map('n', '<Space>a')
+  make_test_map('n', '<Space>A')
+  make_test_map('n', '<Space>s')
+  make_test_map('n', '<Space>S')
+  make_test_map('n', '<Space>d')
+  make_test_map('n', '<Space>D')
+
+  child.o.langmap = [[фФ;aA,ыs,ЫS,вdВD]]
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+
+  local validate_key = function(from, to)
+    local init_count = get_test_map_count('n', ' ' .. to)
+    type_keys(' ', from)
+    eq(get_test_map_count('n', ' ' .. to), init_count + 1)
+  end
+
+  validate_key('ф', 'a')
+  validate_key('Ф', 'A')
+  validate_key('ы', 's')
+  validate_key('Ы', 'S')
+  validate_key('в', 'd')
+  validate_key('В', 'D')
+
+  -- Special cases of 'langmap' currently don't work because later key
+  -- reproducing with `nvim_feedkeys(keys, 'mit')` will inverse meaning second
+  -- time.
+  --
+  -- make_test_map('n', '<Space>;')
+  -- make_test_map('n', '<Space>:')
+  -- child.o.langmap = [[:\;;\;:]]
+  -- child.o.langmap = [[:\;\;:]]
+  --
+  -- make_test_map('n', '<Space>/')
+  -- make_test_map('n', [[<Space>\]])
+  -- child.o.langmap = [[\\/;/\\]]
+  -- child.o.langmap = [[\\//\\]]
+end
+
+T['Querying keys']["respects special cases of 'langmap'"] = function() MiniTest.skip() end
 
 T['Reproducing keys'] = new_set()
 

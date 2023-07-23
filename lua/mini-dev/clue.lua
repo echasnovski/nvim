@@ -1,45 +1,32 @@
 -- TODO:
 --
 -- - Code:
---     - Think about "alternative keys": 'langmap' and 'iminsert'.
---
 --     - Add `gen_clues` table with callables and preconfigured clues:
---         - `'` / ``` with computable marks positions.
 --         - 'mini.ai'/'mini.surround'?
 --
 --     - Autocreate only in listed and help buffers?
 --
---     - Try to make "temporary Normal mode" work even for Operator-pending triggers.
---       If not, at least plan to add documentation.
---
---     - ?Add exported log?
---
 -- - Docs:
 --     - Mostly designed for nested `<Leader>` keymaps.
 --
---     - Can have unexpected behavior in Operator-pending mode.
---
---     - If using |<Leader>| inside config (either as trigger or inside clues),
---       set it prior running |MiniClue.setup()|.
+--     - Doesn't have full support for Operator-pending mode triggers:
+--         - Doesn't work as part of a command in "temporary Normal mode" (like
+--           after |i_CTRL-O|) due to implementation difficulties.
+--         - Can have unexpected behavior with custom operators.
 --
 --     - Has problems with macros:
 --         - All triggers are disabled during recording of macro due to
 --           technical reasons. Would be good if
 --         - The `@` key is specially mapped to temporarily disable triggers.
 --
+--     - If using |<Leader>| inside config (either as trigger or inside clues),
+--       set it prior running |MiniClue.setup()|.
+--
 --     - If trigger concists from several keys (like `<Leader>f`), it will be
 --       treated as single key. Matters for `<BS>`.
 --
---     - Will override already present trigger mapping. Example:
---         - 'mini.comment' and `gc`: there are `gcc` and general `gc` (would
---           need `gc<CR>` followed by textobject).
---
---     - Isn't really designed to be used in cases where there are meaningful
---       mappings with one being prefix of another, as it will need extra
---       `<CR>` to execute shorter mapping
---       Examples:
---         - 'mini.surround' and `s`: there are 'next'/'previous' variants.
---           Or disable both 'next'/'previous' mappings.
+--     - Trigger will fully override same buffer-local mapping and will have
+--       precedence over global mappings. Example:
 --
 -- - Test:
 --     - Should work with multibyte characters.
@@ -60,8 +47,15 @@
 ---     - Latest key makes current key stack not match any mapping: do nothing.
 ---     - User presses `<CR>`: execute current key stack.
 ---     - User presses `<Esc>`/`<C-c>`: cancel mapping.
+---
 --- - Show window with clues about next available keys.
+---
 --- - Allow hydra-like submodes via `postkeys`.
+---
+--- - Stores in-session log of actually used keys which can be used for
+---   analysis of your mapping preferences.
+---
+--- - Basic 'langmap' support during querying.
 ---
 --- # Setup ~
 ---
@@ -496,7 +490,7 @@ end
 ---
 ---@seealso |mark-motions|
 MiniClue.gen_clues.marks = function(opts)
-  describe_marks = function(mode, prefix)
+  local describe_marks = function(mode, prefix)
     local make_clue = function(register, desc) return { mode = mode, keys = prefix .. register, desc = desc } end
 
     return {
@@ -896,12 +890,9 @@ H.state_reset = function(keep_window)
   if not keep_window then H.window_close() end
 end
 
--- TODO: remove when not needed
-_G.log = {}
 H.state_exec = function()
   -- Compute keys to type
   local keys_to_type = H.compute_exec_keys()
-  table.insert(_G.log, keys_to_type)
 
   -- Add extra (redundant) safety flag to try to avoid inifinite recursion
   local trigger, clue = H.state.trigger, H.state_get_query_clue()
@@ -919,6 +910,9 @@ H.state_exec = function()
   H.unmap_trigger(buf_id, trigger)
 
   -- Execute keys. The `i` flag is used to fully support Operator-pending mode.
+  -- Flag `t` imitates keys as if user typed, which is reasonable but has small
+  -- downside with edge cases of 'langmap' (like ':\;;\;:') as it "inverts" key
+  -- meaning second time (at least in Normal mode).
   vim.api.nvim_feedkeys(keys_to_type, 'mit', false)
 
   -- Enable trigger back after it can no longer harm
@@ -939,14 +933,14 @@ H.state_pop = function()
 end
 
 H.state_apply_postkeys = vim.schedule_wrap(function(postkeys)
+  -- Register that possible future querying is a result of postkeys.
+  -- This enables (keep) showing window immediately.
+  H.state.is_after_postkeys = true
+
   -- Use `nvim_feedkeys()` because using `state_set()` and
   -- `state_advance()` directly does not work: it doesn't guarantee to be
   -- executed **after** keys from `nvim_feedkeys()`.
   vim.api.nvim_feedkeys(postkeys, 'mit', false)
-
-  -- Register that possible future querying is a result of postkeys.
-  -- This enables (keep) showing window immediately.
-  H.state.is_after_postkeys = true
 
   -- Defer check of whether postkeys resulted into window.
   -- Could not find proper way to check this which guarantees to be executed
@@ -1040,6 +1034,16 @@ H.query_to_title = function(query) return H.keytrans(H.query_to_keys(query)) end
 
 -- Window ---------------------------------------------------------------------
 H.window_update = vim.schedule_wrap(function(scroll_to_start)
+  -- Don't allow showing windows when Command-line window is active.
+  -- It is possible to open them on Neovim<0.10, but not close.
+  -- On Neovim=0.10 it is not possible to even open at the moment.
+  -- See https://github.com/neovim/neovim/issues/24452
+  --
+  -- If only opening would be possible, update `H.window_close()` to create
+  -- one-shot autocommand to close on 'CmdwinLeave'.
+  if vim.fn.getcmdwintype() ~= '' then return end
+
+  -- Make sure that outdated windows are not shown
   if #H.state.query == 0 then return H.window_close() end
 
   -- Close window if it is not in current tabpage (as only window is tracked)
@@ -1084,13 +1088,15 @@ H.window_open = function(config)
 end
 
 H.window_close = function()
-  if H.is_valid_win(H.state.win_id) then vim.api.nvim_win_close(H.state.win_id, true) end
+  pcall(vim.api.nvim_win_close, H.state.win_id, true)
   H.state.win_id = nil
 end
 
 H.window_get_config = function()
   local has_statusline = vim.o.laststatus > 0
-  local max_height = H.window_get_max_height()
+  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  -- Remove 2 from maximum height to account for top and bottom borders
+  local max_height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0) - 2
 
   local cur_config_fields = {
     row = vim.o.lines - vim.o.cmdheight - (has_statusline and 1 or 0),
@@ -1100,21 +1106,24 @@ H.window_get_config = function()
   }
   local res = vim.tbl_deep_extend('force', H.default_win_config, cur_config_fields, H.get_config().window.config)
 
-  -- Tweak width
+  -- Tweak "auto" fields
   if res.width == 'auto' then res.width = H.buffer_get_width() + 1 end
   res.width = math.min(res.width, vim.o.columns)
+
+  if res.row == 'auto' then
+    local is_on_top = res.anchor == 'NW' or res.anchor == 'NE'
+    res.row = is_on_top and (has_tabline and 1 or 0) or cur_config_fields.row
+  end
+
+  if res.col == 'auto' then
+    local is_on_left = res.anchor == 'NW' or res.anchor == 'SW'
+    res.col = is_on_left and 0 or cur_config_fields.col
+  end
 
   -- Ensure it works on Neovim<0.9
   if vim.fn.has('nvim-0.9') == 0 then res.title = nil end
 
   return res
-end
-
-H.window_get_max_height = function()
-  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
-  local has_statusline = vim.o.laststatus > 0
-  -- Remove 2 from maximum height to account for top and bottom borders
-  return vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0) - 2
 end
 
 -- Buffer ---------------------------------------------------------------------
@@ -1262,7 +1271,6 @@ H.clues_to_buffer_content = function(clues, keys)
     function(x) return { key = x, keytype = H.clues_get_next_key_type(x) } end,
     vim.tbl_keys(next_key_data)
   )
-  _G.info = { extra = vim.deepcopy(next_keys_extra) }
   table.sort(next_keys_extra, H.clues_compare_next_key)
   local next_keys = vim.tbl_map(function(x) return x.key end, next_keys_extra)
 
@@ -1402,8 +1410,50 @@ H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nv
 H.getcharstr = function()
   local ok, char = pcall(vim.fn.getcharstr)
   -- Terminate if couldn't get input (like with <C-c>) or it is `<Esc>`
-  if not ok or char == '\27' then return end
-  return char
+  if not ok or char == '\27' or char == '' then return end
+  return H.get_langmap()[char] or char
+end
+
+H.get_langmap = function()
+  if vim.o.langmap == '' then return {} end
+
+  -- Get langmap parts by splitting at "," not preceded by "\"
+  local langmap_parts = vim.fn.split(vim.o.langmap, '[^\\\\]\\zs,')
+
+  -- Process each langmap part
+  local res = {}
+  for _, part in ipairs(langmap_parts) do
+    H.process_langmap_part(res, part)
+  end
+  return res
+end
+
+H.process_langmap_part = function(res, part)
+  local semicolon_byte_ind = vim.fn.match(part, '[^\\\\]\\zs;') + 1
+
+  -- Part is without ';', like 'aAbB'
+  if semicolon_byte_ind == 0 then
+    -- Drop backslash escapes
+    part = part:gsub('\\([^\\])', '%1')
+
+    for i = 1, vim.fn.strchars(part), 2 do
+      -- `strcharpart()` has 0-based indexes
+      local from, to = vim.fn.strcharpart(part, i - 1, 1), vim.fn.strcharpart(part, i, 1)
+      if from ~= '' and to ~= '' then res[from] = to end
+    end
+
+    return
+  end
+
+  -- Part is with ';', like 'ab;AB'
+  -- - Drop backslash escape
+  local left = part:sub(1, semicolon_byte_ind - 1):gsub('\\([^\\])', '%1')
+  local right = part:sub(semicolon_byte_ind + 1):gsub('\\([^\\])', '%1')
+
+  for i = 1, vim.fn.strchars(left) do
+    local from, to = vim.fn.strcharpart(left, i - 1, 1), vim.fn.strcharpart(right, i - 1, 1)
+    if from ~= '' and to ~= '' then res[from] = to end
+  end
 end
 
 H.list_concat = function(...)
