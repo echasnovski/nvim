@@ -28,9 +28,11 @@
 --     - Trigger will fully override same buffer-local mapping and will have
 --       precedence over global mappings. Example:
 --
+--     - Suggested approach to configuring clues is to create mappings with
+--       `desc` field while supplying to `config.clues` only elements describing
+--       groups and postkeys.
+--
 -- - Test:
---     - Should work with multibyte characters.
---     - Should respect `vim.b.miniclue_config` being set in `FileType` event.
 --
 
 --- *mini.clue* Show mapping clues
@@ -133,6 +135,12 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Clues ~
 ---
+--- `config.clues` is an array defining extra clues to be shown.
+--- Each element is one of:
+--- - Clue table.
+--- - Array of clue tables (possibly several times nested).
+--- - Callable returning either of the previous two.
+---
 --- - Submode for moving with 'mini.move': >
 ---
 ---   -- Uses `<Leader>M` to initiate "move" submode
@@ -169,9 +177,21 @@ end
 --- # Window ~
 ---
 --- - <config.width> can be "auto".
+--- - <config.row> and <config.col> can be "auto" in which case they will be
+---   computed to "stick" to set anchor ("SE" by default; see |nvim_open_win()|).
+---   This allows changing corner in which window is shown: >
+---
+--- - <config.width> can be "auto".
 --- - Add example of different anchor: >
+---
+---   -- Pick one anchor
+---   local anchor = 'NW' -- top-left
+---   local anchor = 'NE' -- top-right
+---   local anchor = 'SW' -- bottom-left
+---   local anchor = 'SE' -- bottom-right
+---
 ---   require('mini.clue').setup({
----     window = { config = { anchor = 'NE', row = 1 } },
+---     window = { config = { anchor = anchor, row = 'auto', col = 'auto' } },
 ---   })
 MiniClue.config = {
   clues = {},
@@ -373,21 +393,21 @@ end
 --- Note: only non-duplicated commands are included. For full list see |CTRL-W|.
 ---
 ---@param opts table|nil Options. Possible keys:
----   - <submode_focus> `(boolean)` - whether to make focus commands a submode
----     by using `postkeys` field. Default: `false`.
----   - <submode_move> `(boolean)` - whether to make move commands a submode
----     by using `postkeys` field. Default: `false`.
----   - <submode_resize> `(boolean)` - whether to make resize commands a submode
----     by using `postkeys` field. Default: `false`.
+---   - <submode_move> `(boolean)` - whether to make move (change layout)
+---     commands a submode by using `postkeys` field. Default: `false`.
+---   - <submode_navigate> `(boolean)` - whether to make navigation (change
+---     focus) commands a submode by using `postkeys` field. Default: `false`.
+---   - <submode_resize> `(boolean)` - whether to make resize (change size)
+---     commands a submode by using `postkeys` field. Default: `false`.
 ---
 ---@return table Array of clues.
 MiniClue.gen_clues.windows = function(opts)
-  local default_opts = { submode_focus = false, submode_move = false, submode_resize = false }
+  local default_opts = { submode_navigate = false, submode_move = false, submode_resize = false }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
-  local postkeys_focus, postkeys_move, postkeys_resize = nil, nil, nil
-  if opts.submode_focus then postkeys_focus = '<C-w>' end
+  local postkeys_move, postkeys_navigate, postkeys_resize = nil, nil, nil
   if opts.submode_move then postkeys_move = '<C-w>' end
+  if opts.submode_navigate then postkeys_navigate = '<C-w>' end
   if opts.submode_resize then postkeys_resize = '<C-w>' end
 
   --stylua: ignore
@@ -402,7 +422,7 @@ MiniClue.gen_clues.windows = function(opts)
     { mode = 'n', keys = '<C-w>_',      desc = 'Set height (def: very high)' },
     { mode = 'n', keys = '<C-w>|',      desc = 'Set width (def: very wide)' },
     { mode = 'n', keys = '<C-w>}',      desc = 'Show tag in preview' },
-    { mode = 'n', keys = '<C-w>b',      desc = 'Focus bottom',            postkeys = postkeys_focus },
+    { mode = 'n', keys = '<C-w>b',      desc = 'Focus bottom',            postkeys = postkeys_navigate },
     { mode = 'n', keys = '<C-w>c',      desc = 'Close' },
     { mode = 'n', keys = '<C-w>d',      desc = 'Split + jump to definition' },
     { mode = 'n', keys = '<C-w>F',      desc = 'Split + edit file name + jump' },
@@ -411,33 +431,33 @@ MiniClue.gen_clues.windows = function(opts)
     { mode = 'n', keys = '<C-w>g]',     desc = 'Split + list tags' },
     { mode = 'n', keys = '<C-w>g}',     desc = 'Do `:ptjump`' },
     { mode = 'n', keys = '<C-w>g<C-]>', desc = 'Split + jump to tag with `:tjump`' },
-    { mode = 'n', keys = '<C-w>g<Tab>', desc = 'Focus last accessed tab', postkeys = postkeys_focus },
+    { mode = 'n', keys = '<C-w>g<Tab>', desc = 'Focus last accessed tab', postkeys = postkeys_navigate },
     { mode = 'n', keys = '<C-w>gF',     desc = 'New tabpage + edit file name + jump' },
     { mode = 'n', keys = '<C-w>gf',     desc = 'New tabpage + edit file name' },
-    { mode = 'n', keys = '<C-w>gT',     desc = 'Focus previous tabpage',  postkeys = postkeys_focus },
-    { mode = 'n', keys = '<C-w>gt',     desc = 'Focus next tabpage',      postkeys = postkeys_focus },
-    { mode = 'n', keys = '<C-w>H',      desc = 'Move to the far left',    postkeys = postkeys_move },
-    { mode = 'n', keys = '<C-w>h',      desc = 'Focus left',              postkeys = postkeys_focus },
+    { mode = 'n', keys = '<C-w>gT',     desc = 'Focus previous tabpage',  postkeys = postkeys_navigate },
+    { mode = 'n', keys = '<C-w>gt',     desc = 'Focus next tabpage',      postkeys = postkeys_navigate },
+    { mode = 'n', keys = '<C-w>H',      desc = 'Move to very left',       postkeys = postkeys_move },
+    { mode = 'n', keys = '<C-w>h',      desc = 'Focus left',              postkeys = postkeys_navigate },
     { mode = 'n', keys = '<C-w>i',      desc = 'Split + jump to declaration' },
-    { mode = 'n', keys = '<C-w>J',      desc = 'Move to the very bottom', postkeys = postkeys_move },
-    { mode = 'n', keys = '<C-w>j',      desc = 'Focus down',              postkeys = postkeys_focus },
-    { mode = 'n', keys = '<C-w>K',      desc = 'Move to the very top',    postkeys = postkeys_move },
-    { mode = 'n', keys = '<C-w>k',      desc = 'Focus up',                postkeys = postkeys_focus },
-    { mode = 'n', keys = '<C-w>L',      desc = 'Move to the far right',   postkeys = postkeys_move },
-    { mode = 'n', keys = '<C-w>l',      desc = 'Focus right',             postkeys = postkeys_focus },
+    { mode = 'n', keys = '<C-w>J',      desc = 'Move to very bottom',     postkeys = postkeys_move },
+    { mode = 'n', keys = '<C-w>j',      desc = 'Focus down',              postkeys = postkeys_navigate },
+    { mode = 'n', keys = '<C-w>K',      desc = 'Move to very top',        postkeys = postkeys_move },
+    { mode = 'n', keys = '<C-w>k',      desc = 'Focus up',                postkeys = postkeys_navigate },
+    { mode = 'n', keys = '<C-w>L',      desc = 'Move to very right',      postkeys = postkeys_move },
+    { mode = 'n', keys = '<C-w>l',      desc = 'Focus right',             postkeys = postkeys_navigate },
     { mode = 'n', keys = '<C-w>n',      desc = 'Open new' },
     { mode = 'n', keys = '<C-w>o',      desc = 'Close all but current' },
-    { mode = 'n', keys = '<C-w>P',      desc = 'Focus preview',           postkeys = postkeys_focus },
-    { mode = 'n', keys = '<C-w>p',      desc = 'Focus previous',          postkeys = postkeys_focus },
+    { mode = 'n', keys = '<C-w>P',      desc = 'Focus preview',           postkeys = postkeys_navigate },
+    { mode = 'n', keys = '<C-w>p',      desc = 'Focus last accessed',     postkeys = postkeys_navigate },
     { mode = 'n', keys = '<C-w>q',      desc = 'Quit current' },
-    { mode = 'n', keys = '<C-w>R',      desc = 'Rotate upwards',          postkeys = postkeys_move },
-    { mode = 'n', keys = '<C-w>r',      desc = 'Rotate downwards',        postkeys = postkeys_move },
+    { mode = 'n', keys = '<C-w>R',      desc = 'Rotate up/left',          postkeys = postkeys_move },
+    { mode = 'n', keys = '<C-w>r',      desc = 'Rotate down/right',       postkeys = postkeys_move },
     { mode = 'n', keys = '<C-w>s',      desc = 'Split horizontally' },
-    { mode = 'n', keys = '<C-w>T',      desc = 'Move to a new tab page',  postkeys = postkeys_move },
-    { mode = 'n', keys = '<C-w>t',      desc = 'Focus top',               postkeys = postkeys_focus },
+    { mode = 'n', keys = '<C-w>T',      desc = 'Create new tabpage + move' },
+    { mode = 'n', keys = '<C-w>t',      desc = 'Focus top',               postkeys = postkeys_navigate },
     { mode = 'n', keys = '<C-w>v',      desc = 'Split vertically' },
-    { mode = 'n', keys = '<C-w>W',      desc = 'Focus previous',          postkeys = postkeys_focus },
-    { mode = 'n', keys = '<C-w>w',      desc = 'Focus next',              postkeys = postkeys_focus },
+    { mode = 'n', keys = '<C-w>W',      desc = 'Focus previous',          postkeys = postkeys_navigate },
+    { mode = 'n', keys = '<C-w>w',      desc = 'Focus next',              postkeys = postkeys_navigate },
     { mode = 'n', keys = '<C-w>x',      desc = 'Exchange windows',        postkeys = postkeys_move },
     { mode = 'n', keys = '<C-w>z',      desc = 'Close preview' },
   }
@@ -453,22 +473,22 @@ end
 MiniClue.gen_clues.builtin_completion = function()
   --stylua: ignore
   return {
-    { mode = 'i', keys = '<C-x><C-d>', desc = 'Complete defined identifiers' },
+    { mode = 'i', keys = '<C-x><C-d>', desc = 'Defined identifiers' },
     { mode = 'i', keys = '<C-x><C-e>', desc = 'Scroll up' },
-    { mode = 'i', keys = '<C-x><C-f>', desc = 'Complete file names' },
-    { mode = 'i', keys = '<C-x><C-i>', desc = 'Complete identifiers' },
-    { mode = 'i', keys = '<C-x><C-k>', desc = 'Complete identifiers from dictionary' },
-    { mode = 'i', keys = '<C-x><C-l>', desc = 'Complete whole lines' },
+    { mode = 'i', keys = '<C-x><C-f>', desc = 'File names' },
+    { mode = 'i', keys = '<C-x><C-i>', desc = 'Identifiers' },
+    { mode = 'i', keys = '<C-x><C-k>', desc = 'Identifiers from dictionary' },
+    { mode = 'i', keys = '<C-x><C-l>', desc = 'Whole lines' },
     { mode = 'i', keys = '<C-x><C-n>', desc = 'Next completion' },
     { mode = 'i', keys = '<C-x><C-o>', desc = 'Omni completion' },
     { mode = 'i', keys = '<C-x><C-p>', desc = 'Previous completion' },
     { mode = 'i', keys = '<C-x><C-s>', desc = 'Spelling suggestions' },
-    { mode = 'i', keys = '<C-x><C-t>', desc = 'Complete identifiers from thesaurus' },
+    { mode = 'i', keys = '<C-x><C-t>', desc = 'Identifiers from thesaurus' },
     { mode = 'i', keys = '<C-x><C-y>', desc = 'Scroll down' },
-    { mode = 'i', keys = '<C-x><C-u>', desc = "Complete with 'completefunc'" },
-    { mode = 'i', keys = '<C-x><C-v>', desc = 'Complete like in : command line' },
-    { mode = 'i', keys = '<C-x><C-z>', desc = 'Stop completion, keeping the text as-is' },
-    { mode = 'i', keys = '<C-x><C-]>', desc = 'Complete tags' },
+    { mode = 'i', keys = '<C-x><C-u>', desc = "With 'completefunc'" },
+    { mode = 'i', keys = '<C-x><C-v>', desc = 'Like in command line' },
+    { mode = 'i', keys = '<C-x><C-z>', desc = 'Stop completion' },
+    { mode = 'i', keys = '<C-x><C-]>', desc = 'Tags' },
     { mode = 'i', keys = '<C-x>s',     desc = 'Spelling suggestions' },
   }
 end
@@ -489,7 +509,7 @@ end
 ---@return table Array of clues.
 ---
 ---@seealso |mark-motions|
-MiniClue.gen_clues.marks = function(opts)
+MiniClue.gen_clues.marks = function()
   local describe_marks = function(mode, prefix)
     local make_clue = function(register, desc) return { mode = mode, keys = prefix .. register, desc = desc } end
 
@@ -505,8 +525,8 @@ MiniClue.gen_clues.marks = function(opts)
       make_clue(')', 'End of sentence'),
       make_clue('{', 'Start of paragraph'),
       make_clue('}', 'End of paragraph'),
-      make_clue('<', 'Start of lastest visual selection'),
-      make_clue('>', 'End of lastest visual selection'),
+      make_clue('<', 'Start of latest visual selection'),
+      make_clue('>', 'End of latest visual selection'),
     }
   end
 
@@ -581,26 +601,23 @@ MiniClue.gen_clues.registers = function(opts)
     -- Insert mode
     describe_registers('i', '<C-r>'),
 
-    { mode = 'i', keys = '<C-r><C-r>', desc = '+Insert register literally' },
+    { mode = 'i', keys = '<C-r><C-r>', desc = '+Insert literally' },
     describe_registers('i', '<C-r><C-r>'),
 
-    { mode = 'i', keys = '<C-r><C-o>', desc = '+Insert register literally + not auto-indent' },
+    { mode = 'i', keys = '<C-r><C-o>', desc = '+Insert literally + not auto-indent' },
     describe_registers('i', '<C-r><C-o>'),
 
-    { mode = 'i', keys = '<C-r><C-p>', desc = '+Insert register + fix indent' },
+    { mode = 'i', keys = '<C-r><C-p>', desc = '+Insert + fix indent' },
     describe_registers('i', '<C-r><C-p>'),
 
     -- Command-line mode
     describe_registers('c', '<C-r>'),
 
-    { mode = 'c', keys = '<C-r><C-r>', desc = '+Insert register literally' },
+    { mode = 'c', keys = '<C-r><C-r>', desc = '+Insert literally' },
     describe_registers('c', '<C-r><C-r>'),
 
-    { mode = 'c', keys = '<C-r><C-o>', desc = '+Insert register literally + not auto-indent' },
+    { mode = 'c', keys = '<C-r><C-o>', desc = '+Insert literally' },
     describe_registers('c', '<C-r><C-o>'),
-
-    { mode = 'c', keys = '<C-r><C-p>', desc = '+Insert register + fix indent' },
-    describe_registers('c', '<C-r><C-p>'),
   }
 end
 
@@ -754,8 +771,9 @@ H.get_config = function(config, buf_id)
 end
 
 H.get_buf_var = function(buf_id, name)
+  buf_id = buf_id or vim.api.nvim_get_current_buf()
   if not H.is_valid_buf(buf_id) then return nil end
-  return vim.b[buf_id or 0][name]
+  return vim.b[buf_id][name]
 end
 
 -- Triggers -------------------------------------------------------------------
@@ -1236,23 +1254,29 @@ H.clues_filter = function(clues, query)
 end
 
 H.clues_to_buffer_content = function(clues, keys)
+  -- Use translated keys to properly handle cases like `<Del>`, `<End>`, etc.
+  keys = H.keytrans(keys)
+
   -- Gather clue data
-  local n_chars = vim.fn.strchars(keys)
-  local keys_pattern = string.format('^%s.', vim.pesc(keys))
+  local keys_len = keys:len()
+  local keys_pattern = string.format('^%s(.+)$', vim.pesc(keys))
+
   local next_key_data, next_key_max_width = {}, 0
   for clue_keys, clue_data in pairs(clues) do
-    -- `strcharpart()` has 0-based index
-    local next_key = H.keytrans(vim.fn.strcharpart(clue_keys, n_chars, 1))
+    local left, _, rest_keys = H.keytrans(clue_keys):find(keys_pattern)
 
-    -- Add non-trivial next key data only if clue matches current keys
-    if next_key ~= '' and clue_keys:find(keys_pattern) ~= nil then
+    -- Add non-trivial next key data only if clue matches current keys plus
+    -- something more
+    if left ~= nil then
+      local next_key = H.clues_get_first_key(rest_keys)
+
       -- Update description data
       local data = next_key_data[next_key] or {}
       data.n_choices = (data.n_choices or 0) + 1
 
       -- - Add description directly if it is group clue with description or
       --   a non-group clue
-      if vim.fn.strchars(clue_keys) == (n_chars + 1) then
+      if next_key == rest_keys then
         data.desc = clue_data.desc or ''
         data.has_postkeys = clue_data.postkeys ~= nil
       end
@@ -1286,6 +1310,19 @@ H.clues_to_buffer_content = function(clues, keys)
   return res
 end
 
+H.clues_get_first_key = function(keys)
+  -- `keys` are assumed to be translated
+  -- Special keys
+  local special = keys:match('^(%b<>)')
+  if special ~= nil then return special end
+
+  -- <
+  if keys:find('^<') ~= nil then return '<' end
+
+  -- Other characters
+  return vim.fn.strcharpart(keys, 0, 1)
+end
+
 H.clues_get_next_key_type = function(x)
   if x:find('^%w$') ~= nil then return 'alphanum' end
   if x:find('^<.*>$') ~= nil then return 'mod' end
@@ -1308,7 +1345,7 @@ end
 
 -- Clue generators ------------------------------------------------------------
 H.make_clues_with_register_contents = function(mode, prefix)
-  local get_register_desc = function(register)
+  local make_register_desc = function(register)
     return function()
       local ok, value = pcall(vim.fn.getreg, register, 1)
       if not ok or value == '' then return nil end
@@ -1320,7 +1357,7 @@ H.make_clues_with_register_contents = function(mode, prefix)
 
   local res = {}
   for _, register in ipairs(all_registers) do
-    table.insert(res, { mode = mode, keys = prefix .. register, desc = get_register_desc(register) })
+    table.insert(res, { mode = mode, keys = prefix .. register, desc = make_register_desc(register) })
   end
   table.insert(res, { mode = mode, keys = prefix .. '=', desc = 'Result of expression' })
 

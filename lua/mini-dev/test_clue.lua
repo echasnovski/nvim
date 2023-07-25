@@ -8,7 +8,6 @@ local new_set = MiniTest.new_set
 --stylua: ignore start
 local load_module = function(config) child.mini_load('clue', config) end
 local unload_module = function() child.mini_unload('clue') end
-local reload_module = function(config) unload_module(); load_module(config) end
 local set_cursor = function(...) return child.set_cursor(...) end
 local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
@@ -17,6 +16,9 @@ local type_keys = function(...) return child.type_keys(...) end
 local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
+
+local get_window = function() return child.api.nvim_get_current_win() end
+local set_window = function(win_id) return child.api.nvim_set_current_win(win_id) end
 
 -- Tweak `expect_screenshot()` to test only on Neovim>=0.9 (as it introduced
 -- titles). Use `expect_screenshot_orig()` for original testing.
@@ -66,7 +68,7 @@ end
 
 -- Custom validators
 local validate_trigger_keymap = function(mode, keys, buf_id)
-  buf_id = buf_id or 0
+  buf_id = buf_id or child.api.nvim_get_current_buf()
   local lua_cmd = string.format(
     [[vim.api.nvim_buf_call(%s, function() return vim.fn.maparg(%s, %s, false, true).desc end)]],
     buf_id,
@@ -329,7 +331,7 @@ end
 T['setup()']['respects `vim.b.miniclue_config`'] = function()
   local init_buf_id = child.api.nvim_get_current_buf()
   child.lua([[
-    _G.miniclue_config = { triggers = { { mode = 'n', keys = ' ' } } }
+    _G.miniclue_config = { triggers = { { mode = 'n', keys = '<Space>' } } }
     vim.b.miniclue_config = _G.miniclue_config
 
     vim.api.nvim_create_autocmd(
@@ -344,6 +346,22 @@ T['setup()']['respects `vim.b.miniclue_config`'] = function()
   local other_buf_id = child.api.nvim_create_buf(true, false)
   validate_trigger_keymap('n', 'g', other_buf_id)
   validate_trigger_keymap('n', '<Space>', other_buf_id)
+end
+
+T['setup()']['respects `vim.b.miniclue_config` in "natural" `FileType` event'] = function()
+  child.lua([[
+    vim.api.nvim_create_autocmd(
+      'FileType',
+      {
+        callback = function(data)
+          vim.b[data.buf].miniclue_config = { triggers = { { mode = 'n', keys = '<Space>' } } }
+        end
+      }
+    )]])
+
+  load_module()
+  child.cmd('edit tmp.lua')
+  validate_trigger_keymap('n', '<Space>')
 end
 
 T['enable_all_triggers()'] = new_set()
@@ -515,79 +533,657 @@ T['gen_clues'] = new_set()
 
 T['gen_clues']['g()'] = new_set()
 
-T['gen_clues']['g()']['works'] = function() MiniTest.skip() end
+T['gen_clues']['g()']['works'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.g() },
+      triggers = { { mode = 'n', keys = 'g' }, { mode = 'x', keys = 'g' } },
+      window = { delay = 0, config = { width = 50 } },
+    })
+  ]])
+  child.cmd('unmap gx')
+  child.cmd('unmap g%')
+
+  child.set_size(65, 55)
+  type_keys('g')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  child.set_size(17, 55)
+  type_keys('v', 'g')
+  child.expect_screenshot()
+end
 
 T['gen_clues']['z()'] = new_set()
 
-T['gen_clues']['z()']['works'] = function() MiniTest.skip() end
+T['gen_clues']['z()']['works'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.z() },
+      triggers = { { mode = 'n', keys = 'z' }, { mode = 'x', keys = 'z' } },
+      window = { delay = 0, config = { width = 52 } },
+    })
+  ]])
+
+  child.set_size(51, 55)
+  type_keys('z')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  child.set_size(10, 55)
+  type_keys('v', 'z')
+  child.expect_screenshot()
+end
 
 T['gen_clues']['windows()'] = new_set()
 
-T['gen_clues']['windows()']['works'] = function() MiniTest.skip() end
+T['gen_clues']['windows()']['works'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.windows() },
+      triggers = { { mode = 'n', keys = '<C-w>' } },
+      window = { delay = 0, config = { width = 45 } },
+    })
+  ]])
 
-T['gen_clues']['windows()']['respects `opts.submode_focus`'] = function() MiniTest.skip() end
+  child.set_size(47, 48)
+  type_keys('<C-w>')
+  child.expect_screenshot()
 
-T['gen_clues']['windows()']['respects `opts.submode_move`'] = function() MiniTest.skip() end
+  child.set_size(15, 48)
+  type_keys('g')
+  child.expect_screenshot()
+end
 
-T['gen_clues']['windows()']['respects `opts.submode_resize`'] = function() MiniTest.skip() end
+T['gen_clues']['windows()']['respects `opts.submode_move`'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.windows({ submode_move = true }) },
+      triggers = { { mode = 'n', keys = '<C-w>' } },
+    })
+  ]])
+
+  local win_init = get_window()
+  local validate = function(keys_layouts)
+    -- Set up
+    set_window(win_init)
+    type_keys('<C-w>')
+
+    -- Test
+    for _, v in ipairs(keys_layouts) do
+      type_keys(v[1])
+      eq(child.fn.winlayout(), v[2])
+    end
+
+    -- Clean up
+    type_keys('<Esc>')
+    set_window(win_init)
+    child.cmd('only')
+  end
+
+  -- Left-right
+  set_window(win_init)
+  child.cmd('rightbelow vertical split')
+  local win_right = get_window()
+
+  validate({
+    { 'L', { 'row', { { 'leaf', win_right }, { 'leaf', win_init } } } },
+    { 'H', { 'row', { { 'leaf', win_init }, { 'leaf', win_right } } } },
+    { 'L', { 'row', { { 'leaf', win_right }, { 'leaf', win_init } } } },
+  })
+
+  -- Top-bottom
+  set_window(win_init)
+  child.cmd('rightbelow split')
+  local win_bottom = get_window()
+
+  validate({
+    { 'J', { 'col', { { 'leaf', win_bottom }, { 'leaf', win_init } } } },
+    { 'K', { 'col', { { 'leaf', win_init }, { 'leaf', win_bottom } } } },
+    { 'J', { 'col', { { 'leaf', win_bottom }, { 'leaf', win_init } } } },
+  })
+
+  -- Rotate up/left
+  set_window(win_init)
+  child.cmd('rightbelow vertical split')
+  local win_row_two = get_window()
+  child.cmd('rightbelow vertical split')
+  local win_row_three = get_window()
+
+  validate({
+    { 'R', { 'row', { { 'leaf', win_row_two }, { 'leaf', win_row_three }, { 'leaf', win_init } } } },
+    { 'R', { 'row', { { 'leaf', win_row_three }, { 'leaf', win_init }, { 'leaf', win_row_two } } } },
+  })
+
+  -- Rotate down/right
+  set_window(win_init)
+  child.cmd('rightbelow split')
+  local win_col_two = get_window()
+  child.cmd('rightbelow split')
+  local win_col_three = get_window()
+
+  validate({
+    { 'r', { 'col', { { 'leaf', win_col_three }, { 'leaf', win_init }, { 'leaf', win_col_two } } } },
+    { 'r', { 'col', { { 'leaf', win_col_two }, { 'leaf', win_col_three }, { 'leaf', win_init } } } },
+  })
+
+  -- Exchange
+  set_window(win_init)
+  child.cmd('rightbelow vertical split')
+  local win_two = get_window()
+  child.cmd('rightbelow vertical split')
+  local win_three = get_window()
+
+  validate({
+    { 'x', { 'row', { { 'leaf', win_two }, { 'leaf', win_init }, { 'leaf', win_three } } } },
+    { 'x', { 'row', { { 'leaf', win_init }, { 'leaf', win_two }, { 'leaf', win_three } } } },
+  })
+end
+
+T['gen_clues']['windows()']['respects `opts.submode_navigate`'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.windows({ submode_navigate = true }) },
+      triggers = { { mode = 'n', keys = '<C-w>' } },
+    })
+  ]])
+
+  local win_init = get_window()
+  local validate = function(keys_wins)
+    -- Set up
+    set_window(win_init)
+    type_keys('<C-w>')
+
+    -- Test
+    for _, v in ipairs(keys_wins) do
+      type_keys(v[1])
+      eq(get_window(), v[2])
+    end
+
+    -- Clean up
+    type_keys('<Esc>')
+    set_window(win_init)
+    child.cmd('only')
+  end
+
+  -- Left-right
+  set_window(win_init)
+  child.cmd('rightbelow vertical split')
+  local win_right = get_window()
+
+  validate({ { 'l', win_right }, { 'h', win_init }, { 'l', win_right } })
+
+  -- Next-previous
+  set_window(win_init)
+  child.cmd('rightbelow vertical split')
+  local win_next = get_window()
+
+  validate({ { 'w', win_next }, { 'W', win_init }, { 'w', win_next } })
+
+  -- Up-down
+  set_window(win_init)
+  child.cmd('rightbelow split')
+  local win_down = get_window()
+
+  validate({ { 'j', win_down }, { 'k', win_init }, { 'j', win_down } })
+
+  -- Top-bottom
+  set_window(win_init)
+  child.cmd('rightbelow split')
+  local win_bottom = get_window()
+
+  validate({ { 'b', win_bottom }, { 't', win_init }, { 'b', win_bottom } })
+
+  -- Last accessed
+  set_window(win_init)
+  child.cmd('rightbelow vertical split')
+  child.cmd('rightbelow vertical split')
+  local win_alt = get_window()
+
+  validate({ { 'p', win_alt }, { 'p', win_init }, { 'p', win_alt } })
+
+  -- Tabs
+  child.cmd('tabnew')
+  local win_tab = get_window()
+
+  validate({ { { 'g', 't' }, win_tab }, { { 'g', 'T' }, win_init }, { { 'g', '<Tab>' }, win_tab } })
+end
+
+T['gen_clues']['windows()']['respects `opts.submode_resize`'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.windows({ submode_resize = true }) },
+      triggers = { { mode = 'n', keys = '<C-w>' } },
+    })
+  ]])
+
+  local win_init = get_window()
+  local get_height = function() return child.api.nvim_win_get_height(0) end
+  local get_width = function() return child.api.nvim_win_get_width(0) end
+  local validate = function(keys_dims)
+    -- Set up
+    set_window(win_init)
+    type_keys('<C-w>')
+
+    -- Test
+    for _, v in ipairs(keys_dims) do
+      type_keys(v[1])
+      eq(child.api.nvim_win_get_height(0), v[2][1])
+      eq(child.api.nvim_win_get_width(0), v[2][2])
+    end
+
+    -- Clean up
+    type_keys('<Esc>')
+    set_window(win_init)
+    child.cmd('only')
+  end
+
+  -- Width
+  set_window(win_init)
+  child.cmd('rightbelow vertical split')
+  local init_width = get_width()
+
+  type_keys('<C-w>')
+
+  type_keys('>')
+  eq(get_width(), init_width + 1)
+  type_keys('>')
+  eq(get_width(), init_width + 2)
+
+  type_keys('<')
+  eq(get_width(), init_width + 1)
+  type_keys('<')
+  eq(get_width(), init_width)
+
+  type_keys('<Esc>')
+  set_window(win_init)
+  child.cmd('only')
+
+  -- Height
+  set_window(win_init)
+  child.cmd('rightbelow split')
+  local init_height = get_height()
+
+  type_keys('<C-w>')
+
+  type_keys('+')
+  eq(get_height(), init_height + 1)
+  type_keys('+')
+  eq(get_height(), init_height + 2)
+
+  type_keys('-')
+  eq(get_height(), init_height + 1)
+  type_keys('-')
+  eq(get_height(), init_height)
+end
 
 T['gen_clues']['builtin_completion()'] = new_set()
 
-T['gen_clues']['builtin_completion()']['works'] = function() MiniTest.skip() end
+T['gen_clues']['builtin_completion()']['works'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.builtin_completion() },
+      triggers = { { mode = 'i', keys = '<C-x>' } },
+      window = { delay = 0, config = { width = 40 } },
+    })
+  ]])
+  child.set_size(23, 45)
+
+  type_keys('i', '<C-x>')
+  child.expect_screenshot()
+end
 
 T['gen_clues']['marks()'] = new_set()
 
-T['gen_clues']['marks()']['works'] = function() MiniTest.skip() end
+T['gen_clues']['marks()']['works'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.marks() },
+      triggers = {
+        { mode = 'n', keys = '`' },
+        { mode = 'n', keys = 'g`' },
+        { mode = 'n', keys = "'" },
+        { mode = 'n', keys = "g'" },
+        { mode = 'x', keys = '`' },
+        { mode = 'x', keys = 'g`' },
+        { mode = 'x', keys = "'" },
+        { mode = 'x', keys = "g'" },
+      },
+      window = { delay = 0, config = { width = 45 } },
+    })
+  ]])
+  child.set_size(20, 50)
+
+  -- Normal mode
+  type_keys("'")
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  type_keys("g'")
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  type_keys('`')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  type_keys('g`')
+  child.expect_screenshot()
+
+  -- Visual mode
+  type_keys('<Esc>')
+  type_keys('v', "'")
+  child.expect_screenshot()
+
+  type_keys('<Esc>', '<Esc>')
+  type_keys('v', "g'")
+  child.expect_screenshot()
+
+  type_keys('<Esc>', '<Esc>')
+  type_keys('v', '`')
+  child.expect_screenshot()
+
+  type_keys('<Esc>', '<Esc>')
+  type_keys('v', 'g`')
+  child.expect_screenshot()
+end
 
 T['gen_clues']['registers()'] = new_set()
 
-T['gen_clues']['registers()']['works'] = function() MiniTest.skip() end
+T['gen_clues']['registers()']['works'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.registers() },
+      triggers = {
+        { mode = 'n', keys = '"' },
+        { mode = 'x', keys = '"' },
+        { mode = 'i', keys = '<C-r>' },
+        { mode = 'c', keys = '<C-r>' },
+      },
+      window = { delay = 0, config = { width = 45 } },
+    })
+  ]])
+  child.set_size(25, 48)
 
-T['gen_clues']['registers()']['respects `opts.show_contents`'] = function() MiniTest.skip() end
+  type_keys('"')
+  child.expect_screenshot()
+
+  type_keys('<Esc>', 'v', '"')
+  child.expect_screenshot()
+
+  type_keys('<Esc>', '<Esc>', 'i', '<C-r>')
+  child.expect_screenshot()
+  type_keys('<C-o>')
+  child.expect_screenshot()
+  type_keys('<BS>', '<C-p>')
+  child.expect_screenshot()
+  type_keys('<BS>', '<C-r>')
+  child.expect_screenshot()
+
+  type_keys('<Esc>', '<Esc>', ':', '<C-r>')
+  child.expect_screenshot()
+  type_keys('<C-o>')
+  child.expect_screenshot()
+  type_keys('<BS>', '<C-r>')
+  child.expect_screenshot()
+end
+
+T['gen_clues']['registers()']['respects `opts.show_contents`'] = function()
+  child.lua([[
+    local miniclue = require('mini-dev.clue')
+    miniclue.setup({
+      clues = { miniclue.gen_clues.registers({ show_contents = true }) },
+      triggers = {
+        { mode = 'n', keys = '"' },
+        { mode = 'x', keys = '"' },
+        { mode = 'i', keys = '<C-r>' },
+        { mode = 'c', keys = '<C-r>' },
+      },
+      window = { delay = 0, config = { width = 30 } },
+    })
+  ]])
+  child.set_size(52, 35)
+
+  -- Mock constant clipboard for better reproducibility of system registers
+  -- (mostly on CI). As `setreg('+', '')` is not guaranteed to be working for
+  -- system clipboard, use `g:clipboard` which copies/pastes nothing.
+  child.lua([[
+    local empty = function() return '' end
+    vim.g.clipboard = {
+      name  = 'myClipboard',
+      copy  = { ['+'] = empty, ['*'] = empty },
+      paste = { ['+'] = empty, ['*'] = empty },
+    }
+  ]])
+
+  -- Populate registers
+  set_lines({ 'aaa', 'bbb' })
+  type_keys('"ayiw')
+  type_keys('"xyip')
+  type_keys('G', 'yiw')
+  type_keys('gg', 'diw')
+
+  type_keys('"')
+  child.expect_screenshot()
+
+  -- Assume all other triggers also show contents
+end
 
 -- Integration tests ==========================================================
 T['Showing keys'] = new_set({ hooks = { pre_case = function() child.set_size(10, 40) end } })
 
 T['Showing keys']['works'] = function()
+  make_test_map('n', '<Space>aa')
+  make_test_map('n', '<Space>ab')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+
   -- Window should be shown after debounced delay
-  MiniTest.skip()
+  type_keys(' ')
+  sleep(990)
+  child.expect_screenshot()
+
+  type_keys('a')
+  sleep(990)
+  child.expect_screenshot()
+  sleep(10 + 5)
+  child.expect_screenshot()
 end
 
-T['Showing keys']['respects `config.window.delay`'] = function() MiniTest.skip() end
+T['Showing keys']['respects `config.window.delay`'] = function()
+  make_test_map('n', '<Space>aa')
+  make_test_map('n', '<Space>ab')
+  load_module({
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 30 },
+  })
 
-T['Showing keys']['allows zero delay'] = function() MiniTest.skip() end
+  type_keys(' ')
+  sleep(20)
+  child.expect_screenshot()
 
-T['Showing keys']['respects `config.window.config`'] = function() MiniTest.skip() end
+  type_keys('a')
+  sleep(20)
+  child.expect_screenshot()
+  sleep(10 + 5)
+  child.expect_screenshot()
+end
 
-T['Showing keys']['can have `config.window.config.width="auto"`'] = function() MiniTest.skip() end
+T['Showing keys']['allows zero delay'] = function()
+  make_test_map('n', '<Space>a')
+  load_module({
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
 
-T['Showing keys']['can have `config.window.config.row="auto"`'] = function() MiniTest.skip() end
+  -- Window should be shown immediately
+  type_keys(' ')
+  child.expect_screenshot()
+end
 
-T['Showing keys']['can have `config.window.config.col="auto"`'] = function() MiniTest.skip() end
+T['Showing keys']['respects `config.window.config`'] = function()
+  make_test_map('n', '<Space>a')
+  load_module({
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0, config = { border = 'double' } },
+  })
 
-T['Showing keys']['can work inside small instance'] = function() MiniTest.skip() end
+  type_keys(' ')
+  child.expect_screenshot()
+end
 
-T['Showing keys']['respects `config.window.scroll_down`'] = function()
+T['Showing keys']['can have `config.window.config.width="auto"`'] = function()
+  make_test_map('n', '<Space>a')
+  load_module({
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0, config = { width = 'auto' } },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
+T['Showing keys']['can have "auto" for `row` and `col` in window config'] = function()
+  make_test_map('n', '<Space>a')
+  load_module({
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0, config = { row = 'auto', col = 'auto' } },
+  })
+
+  -- Should "stick" to anchor ('SE' by default)
+  type_keys(' ')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  child.lua('MiniClue.config.window.config.anchor = "SW"')
+  type_keys(' ')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  child.lua('MiniClue.config.window.config.anchor = "NW"')
+  type_keys(' ')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+  child.lua('MiniClue.config.window.config.anchor = "NE"')
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
+T['Showing keys']['can work with small instance dimensions'] = function()
+  --Stylua: ignore
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a' },
+      { mode = 'n', keys = '<Space>b' },
+      { mode = 'n', keys = '<Space>c' },
+      { mode = 'n', keys = '<Space>d' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  child.set_size(5, 12)
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
+T['Showing keys']['respects `scroll_down` and `scroll_up` in `config.window`'] = function()
+  child.set_size(7, 40)
+
+  --stylua: ignore
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a' }, { mode = 'n', keys = '<Space>b' },
+      { mode = 'n', keys = '<Space>c' }, { mode = 'n', keys = '<Space>d' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
   -- With default key
+  type_keys(' ')
+  child.expect_screenshot()
 
-  -- With different key
+  type_keys('<C-d>')
+  child.expect_screenshot()
+  -- - Should not be able to scroll past edge
+  type_keys('<C-d>')
+  child.expect_screenshot()
 
-  -- With empty string
-  MiniTest.skip()
+  type_keys('<C-u>')
+  child.expect_screenshot()
+  -- - Should not be able to scroll past edge
+  type_keys('<C-u>')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+
+  -- With different keys
+  child.lua([[MiniClue.config.window.scroll_down = '<C-f>']])
+  child.lua([[MiniClue.config.window.scroll_up = '<C-b>']])
+
+  type_keys(' ')
+  child.expect_screenshot()
+
+  type_keys('<C-f>')
+  child.expect_screenshot()
+
+  type_keys('<C-b>')
+  child.expect_screenshot()
+
+  type_keys('<Esc>')
+
+  -- With empty string (should disable special treatment)
+  child.lua([[MiniClue.config.window.scroll_down = '']])
+  child.lua([[MiniClue.config.window.scroll_up = '']])
+
+  type_keys('<Space>', '<C-d>')
+  child.expect_screenshot()
+
+  type_keys('<Space>', '<C-u>')
+  child.expect_screenshot()
 end
 
-T['Showing keys']['respects `config.window.scroll_up`'] = function()
-  -- With default key
+T['Showing keys']['highlights group descriptions differently'] = function()
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a', desc = 'Single #1' },
+      { mode = 'n', keys = '<Space>b', desc = '+Group' },
+      { mode = 'n', keys = '<Space>c', desc = 'Single #2' },
+      { mode = 'n', keys = '<Space>ba' },
+      { mode = 'n', keys = '<Space>bb' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
 
-  -- With different key
-
-  -- With empty string
-  MiniTest.skip()
+  type_keys(' ')
+  child.expect_screenshot()
 end
 
-T['Showing keys']['highlights groups differently'] = function() MiniTest.skip() end
+T['Showing keys']['highlights next key with postkeys differently'] = function()
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a', desc = 'Without postkeys #1' },
+      { mode = 'n', keys = '<Space>b', desc = 'With postkey', postkeys = '<Space>' },
+      { mode = 'n', keys = '<Space>c', desc = 'Without postkeys #2' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
 
-T['Showing keys']['highlights next key with postkey differently'] = function() MiniTest.skip() end
+  type_keys(' ')
+  child.expect_screenshot()
+end
 
 T['Showing keys']['scroll is not persistent'] = function()
   child.set_size(7, 40)
@@ -636,7 +1232,46 @@ T['Showing keys']['properly translates special keys'] = function()
   child.expect_screenshot()
 end
 
-T['Showing keys']['respects tabline and statusline when computing height'] = function() MiniTest.skip() end
+T['Showing keys']['respects tabline, statusline, cmdheight'] = function()
+  child.set_size(7, 40)
+
+  --stylua: ignore
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a' }, { mode = 'n', keys = '<Space>b' },
+      { mode = 'n', keys = '<Space>c' }, { mode = 'n', keys = '<Space>d' },
+      { mode = 'n', keys = '<Space>e' }, { mode = 'n', keys = '<Space>f' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  local validate = function()
+    type_keys(' ')
+    child.expect_screenshot()
+    type_keys('<Esc>')
+  end
+
+  -- Tabline
+  child.o.showtabline = 2
+  validate()
+  child.o.showtabline = 0
+
+  -- Statusline
+  child.o.laststatus = 0
+  validate()
+  child.o.laststatus = 2
+
+  -- Command line height
+  child.o.cmdheight = 2
+  validate()
+
+  -- - Zero command line height
+  if child.fn.has('nvim-0.8') == 1 then
+    child.o.cmdheight = 0
+    validate()
+  end
+end
 
 T['Showing keys']['reacts to `VimResized`'] = function()
   child.set_size(7, 20)
@@ -700,43 +1335,218 @@ T['Showing keys']['works in Command-line window'] = function()
   type_keys(':q<CR>')
 end
 
+T['Showing keys']['respects `vim.b.miniclue_config`'] = function()
+  make_test_map('n', '<Space>a')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } }, window = { delay = 0 } })
+  child.b.miniclue_config = { window = { config = { width = 10 } } }
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
 T['Clues'] = new_set({ hooks = { pre_case = function() child.set_size(10, 40) end } })
 
-T['Clues']['uses human-readable key names'] = function()
-  -- Should also properly align
-  MiniTest.skip()
+T['Clues']['can be configured after load'] = function()
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } }, window = { delay = 0 } })
+  child.lua([[MiniClue.config.clues = { { mode = 'n', keys = '<Space>a' } }]])
+
+  type_keys(' ')
+  child.expect_screenshot()
 end
 
-T['Clues']['are properly sorted'] = function() MiniTest.skip() end
+T['Clues']['uses human-readable names for special keys'] = function()
+  child.cmd('nmap <Space><Space> :echo 1<CR>')
+  child.cmd('nmap <Space><Tab> :echo 2<CR>')
+  child.cmd('nmap <Space><End> :echo 3<CR>')
+  child.cmd('nmap <Space><PageUp> :echo 4<CR>')
+  child.cmd('nmap <Space><C-x> :echo 5<CR>')
+  child.cmd('nmap <Space>< :echo 6<CR>')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } }, window = { delay = 0 } })
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
+T['Clues']['are properly sorted'] = function()
+  child.set_size(15, 40)
+  --stylua: ignore
+  local lhs_arr = {
+    '<Space>0',     '<Space>9',     '<Space>a', '<Space>A', '<Space>x', '<Space>X',
+    '<Space><C-a>', '<Space><C-x>', '<Space>:', '<Space>/'
+  }
+  vim.tbl_map(function(lhs) make_test_map('n', lhs) end, lhs_arr)
+
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } }, window = { delay = 0 } })
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
 
 T['Clues']['has proper precedence'] = function()
-  -- config.clue < global mapping desc < buffer mapping desc
-
+  -- config.clue < global mapping desc < buffer mapping desc.
   -- If mapping doesn't have description, clue should use empty string because
-  -- it shows the most accurate information
-  MiniTest.skip()
-end
+  -- it shows the most accurate information.
+  child.api.nvim_buf_set_keymap(0, 'n', '<Space>a', '<Nop>', { desc = 'Buffer-local <Space>a' })
+  child.api.nvim_buf_set_keymap(0, 'n', '<Space>b', '<Nop>', {})
+  child.api.nvim_set_keymap('n', '<Space>a', '<Nop>', { desc = 'Global <Space>a' })
+  child.api.nvim_set_keymap('n', '<Space>b', '<Nop>', { desc = 'Global <Space>b' })
+  child.api.nvim_set_keymap('n', '<Space>c', '<Nop>', { desc = 'Global <Space>c' })
+  child.api.nvim_set_keymap('n', '<Space>d', '<Nop>', {})
 
-T['Clues']['shows as group a single non-exact clue'] = function()
-  -- Like for `<Space>ff` when prompt is `<Space>`
-  MiniTest.skip()
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a', desc = 'Clue <Space>a' },
+      { mode = 'n', keys = '<Space>b', desc = 'Clue <Space>b' },
+      { mode = 'n', keys = '<Space>c', desc = 'Clue <Space>c' },
+      { mode = 'n', keys = '<Space>d', desc = 'Clue <Space>d' },
+      { mode = 'n', keys = '<Space>e', desc = 'Clue <Space>e' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
 end
 
 T['Clues']['handles no description'] = function()
-  -- Both for single and group clues
-  MiniTest.skip()
+  child.api.nvim_set_keymap('n', '<Space>a', '<Nop>', {})
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>b' },
+      { mode = 'n', keys = '<Space>ca' },
+      { mode = 'n', keys = '<Space>cb' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
 end
 
-T['Clues']['can be callable'] = function() MiniTest.skip() end
+T['Clues']['shows as group a single non-exact clue'] = function()
+  load_module({
+    clues = { { mode = 'n', keys = '<Space>aaa', desc = 'Clue <Space>a' } },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
 
-T['Clues']['can have callable description'] = function() MiniTest.skip() end
-
-T['Clues']['can be overriden'] = function()
-  -- Like if there is table one but later overriden by user-supplied one
-  MiniTest.skip()
+  type_keys(' ')
+  child.expect_screenshot()
+  type_keys('a')
+  child.expect_screenshot()
+  type_keys('a')
+  child.expect_screenshot()
 end
 
-T['Clues']['handles showing group after key with postkeys'] = function()
+T['Clues']['can have nested subarrays'] = function()
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a' },
+      { { mode = 'n', keys = '<Space>b' } },
+      { { { mode = 'n', keys = '<Space>c' } } },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
+T['Clues']['can have callables'] = function()
+  child.lua([[
+    _G.callable_clue_direct = function() return { mode = 'n', keys = '<Space>a' } end
+    _G.callable_clue_direct_with_callable_desc = function()
+      return { mode = 'n', keys = '<Space>b', desc = function() return 'From <Space>b callable' end }
+    end
+    _G.callable_clue_array = function()
+      return {
+        { mode = 'n', keys = '<Space>c' },
+        { mode = 'n', keys = '<Space>d', desc = function() return 'From <Space>d callable' end },
+      }
+    end
+  ]])
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } }, window = { delay = 0 } })
+
+  local validate = function()
+    type_keys(' ')
+    child.expect_screenshot()
+    type_keys('<Esc>')
+  end
+
+  -- Direct
+  child.lua([[MiniClue.config.clues = { _G.callable_clue_direct }]])
+  validate()
+
+  -- Nested in subarray
+  child.lua([[MiniClue.config.clues = { { _G.callable_clue_direct } }]])
+  validate()
+
+  -- With callable description
+  child.lua([[MiniClue.config.clues = { _G.callable_clue_direct_with_callable_desc }]])
+  validate()
+
+  -- Returns array of clues with normal and callable descriptions
+  child.lua([[MiniClue.config.clues = { _G.callable_clue_array }]])
+  validate()
+end
+
+T['Clues']['can have callable description'] = function()
+  child.lua([[
+    require('mini-dev.clue').setup({
+      clues = { { mode = 'n', keys = '<Space>a', desc = function() return 'From callable desc' end } },
+      triggers = { { mode = 'n', keys = '<Space>' } },
+      window = { delay = 0 },
+    })
+  ]])
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
+T['Clues']['silently ignores non-valid clues'] = function()
+  load_module({
+    clues = {
+      -- Valid
+      { mode = 'n', keys = '<Space>a' },
+
+      -- Non-valid
+      '<Space>b',
+      { mode = 1, keys = '<Space>c' },
+      { mode = 'n', keys = 1 },
+      { mode = 'n', keys = '<Space>e', desc = 1 },
+      { mode = 'n', keys = '<Space>f', postkeys = 1 },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
+T['Clues']['uses description from the last entry'] = function()
+  -- Like if there is table entry which later overriden (even by an empty one)
+  -- in later user-supplied one
+  load_module({
+    clues = {
+      { { mode = 'n', keys = '<Space>a', desc = 'First <Space>a' } },
+      { mode = 'n', keys = '<Space>a', desc = 'Second <Space>a' },
+
+      { mode = 'n', keys = '<Space>b', desc = 'First <Space>b' },
+      { mode = 'n', keys = '<Space>b' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
+
+T['Clues']['handles showing group clues after executing key with postkeys'] = function()
   make_test_map('n', '<Space>f')
   make_test_map('n', '<Space>ga')
   make_test_map('n', '<Space>gb')
@@ -758,7 +1568,25 @@ T['Clues']['handles showing group after key with postkeys'] = function()
   child.expect_screenshot()
 end
 
-T['Clues']['respects `vim.b.miniclue_config`'] = function() MiniTest.skip() end
+T['Clues']['respects `vim.b.miniclue_config`'] = function()
+  load_module({
+    clues = {
+      { mode = 'n', keys = '<Space>a', desc = 'From global config' },
+      { mode = 'n', keys = '<Space>b' },
+    },
+    triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
+  })
+  child.b.miniclue_config = {
+    clues = {
+      { mode = 'n', keys = '<Space>a', desc = 'From buffer-local config' },
+      { mode = 'n', keys = '<Space>c' },
+    },
+  }
+
+  type_keys(' ')
+  child.expect_screenshot()
+end
 
 T['Postkeys'] = new_set({ hooks = { pre_case = function() child.set_size(10, 40) end } })
 
@@ -899,16 +1727,19 @@ T['Querying keys']["does not time out after 'timeoutlen'"] = function()
 end
 
 T['Querying keys']['takes into account user-supplied clues'] = function()
+  child.set_size(10, 40)
   load_module({
     clues = {
-      { mode = 'n', keys = '<Space>f', desc = 'My space f' },
+      { mode = 'n', keys = '<Space>a', desc = 'My space a' },
     },
     triggers = { { mode = 'n', keys = '<Space>' } },
+    window = { delay = 0 },
   })
   validate_trigger_keymap('n', '<Space>')
 
   type_keys(' ')
-  MiniTest.skip('Use screenshot when window with clues is implemented')
+  child.expect_screenshot()
+  type_keys('a')
   child.expect_screenshot()
 end
 
@@ -1012,6 +1843,28 @@ T['Querying keys']['works with multibyte characters'] = function()
   eq(get_test_map_count('n', '<Space>фы'), 1)
 end
 
+T['Querying keys']['works with special keys'] = function()
+  child.cmd('nmap <Space><Space>  <Cmd>lua _G.space_space  = true<CR>')
+  child.cmd('nmap <Space><Tab>    <Cmd>lua _G.space_tab    = true<CR>')
+  child.cmd('nmap <Space><End>    <Cmd>lua _G.space_end    = true<CR>')
+  child.cmd('nmap <Space><PageUp> <Cmd>lua _G.space_pageup = true<CR>')
+  child.cmd('nmap <Space><C-x>    <Cmd>lua _G.space_ctrlx  = true<CR>')
+  child.cmd('nmap <Space><        <Cmd>lua _G.space_lt     = true<CR>')
+  load_module({ triggers = { { mode = 'n', keys = '<Space>' } } })
+
+  local validate = function(key, suffix)
+    type_keys(' ', key)
+    eq(child.lua_get('_G.space_' .. suffix), true)
+  end
+
+  validate(' ', 'space')
+  validate('<Tab>', 'tab')
+  validate('<End>', 'end')
+  validate('<PageUp>', 'pageup')
+  validate('<C-x>', 'ctrlx')
+  validate('<', 'lt')
+end
+
 T['Querying keys']["respects 'langmap'"] = function()
   make_test_map('n', '<Space>a')
   make_test_map('n', '<Space>A')
@@ -1050,8 +1903,6 @@ T['Querying keys']["respects 'langmap'"] = function()
   -- child.o.langmap = [[\\/;/\\]]
   -- child.o.langmap = [[\\//\\]]
 end
-
-T['Querying keys']["respects special cases of 'langmap'"] = function() MiniTest.skip() end
 
 T['Reproducing keys'] = new_set()
 
