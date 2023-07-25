@@ -119,12 +119,14 @@ end
 
 -- Functions to move arguments left/right. Depends on 'vim-exchange'
 EC.move_arg = function(direction)
+  local miniclue_is_active = _G.MiniClue ~= nil
+
+  if miniclue_is_active then MiniClue.disable_all_triggers() end
+
   local cmd = string.format('normal cxiacxi%sa', direction == 'left' and 'l' or 'n')
-  if _G.MiniClue ~= nil then
-    _G.MiniClue.execute_without_triggers(function() vim.cmd(cmd) end, { mode = 'o', keys = 'i' })
-  else
-    vim.cmd(cmd)
-  end
+  vim.cmd(cmd)
+
+  if miniclue_is_active then MiniClue.enable_all_triggers() end
 end
 
 -- Insert section

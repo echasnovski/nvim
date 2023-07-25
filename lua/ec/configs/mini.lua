@@ -143,7 +143,11 @@ vim.schedule(function()
 
   require('mini.align').setup()
 
-  require('mini.animate').setup()
+  require('mini.animate').setup({
+    scroll = {
+      timing = function(_, n) return 150 / n end,
+    },
+  })
 
   require('mini.basics').setup({
     options = {
