@@ -545,7 +545,7 @@ T['gen_clues']['g()']['works'] = function()
   child.cmd('unmap gx')
   child.cmd('unmap g%')
 
-  child.set_size(65, 55)
+  child.set_size(66, 55)
   type_keys('g')
   child.expect_screenshot()
 
@@ -988,13 +988,13 @@ T['Showing keys']['works'] = function()
 
   -- Window should be shown after debounced delay
   type_keys(' ')
-  sleep(990)
+  sleep(980)
   child.expect_screenshot()
 
   type_keys('a')
-  sleep(990)
+  sleep(980)
   child.expect_screenshot()
-  sleep(10 + 5)
+  sleep(20 + 5)
   child.expect_screenshot()
 end
 
@@ -1322,13 +1322,14 @@ T['Showing keys']['works in Command-line window'] = function()
   type_keys('q:')
   type_keys(' ')
 
-  -- Both opening and closing window is disabled at the moment.
-  -- See https://github.com/neovim/neovim/issues/24452 .
-  -- Use screenshots if that is resolved.
+  child.expect_screenshot()
 
-  -- Make sure that querying works
   sleep(5 + 5)
   type_keys('f')
+
+  -- Closing floating window is allowed only on Neovim>=0.10.
+  -- See https://github.com/neovim/neovim/issues/24452 .
+  if child.fn.has('nvim-0.10') == 1 then child.expect_screenshot() end
 
   eq(get_test_map_count('n', '<Space>f'), 1)
 
@@ -1527,16 +1528,16 @@ T['Clues']['silently ignores non-valid clues'] = function()
   child.expect_screenshot()
 end
 
-T['Clues']['uses description from the last entry'] = function()
-  -- Like if there is table entry which later overriden (even by an empty one)
-  -- in later user-supplied one
+T['Clues']['can be overriden in later entries'] = function()
+  -- Like if there is table entry which later is partially overriden in
+  -- user-supplied one
   load_module({
     clues = {
       { { mode = 'n', keys = '<Space>a', desc = 'First <Space>a' } },
       { mode = 'n', keys = '<Space>a', desc = 'Second <Space>a' },
 
       { mode = 'n', keys = '<Space>b', desc = 'First <Space>b' },
-      { mode = 'n', keys = '<Space>b' },
+      { mode = 'n', keys = '<Space>b', postkeys = '<Space>' },
     },
     triggers = { { mode = 'n', keys = '<Space>' } },
     window = { delay = 0 },

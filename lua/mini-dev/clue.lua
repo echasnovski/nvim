@@ -281,6 +281,7 @@ MiniClue.gen_clues.g = function()
     { mode = 'n', keys = 'gV',     desc = 'Avoid reselect' },
     { mode = 'n', keys = 'gv',     desc = 'Reselect previous Visual area' },
     { mode = 'n', keys = 'gw',     desc = 'Format text + keep cursor (operator)' },
+    { mode = 'n', keys = 'gx',     desc = 'Execute app for file under cursor' },
     { mode = 'n', keys = 'g<C-]>', desc = '`:tjump` to tag under cursor' },
     { mode = 'n', keys = 'g<C-a>', desc = 'Dump a memory profile' },
     { mode = 'n', keys = 'g<C-g>', desc = 'Show information about cursor' },
@@ -1052,15 +1053,6 @@ H.query_to_title = function(query) return H.keytrans(H.query_to_keys(query)) end
 
 -- Window ---------------------------------------------------------------------
 H.window_update = vim.schedule_wrap(function(scroll_to_start)
-  -- Don't allow showing windows when Command-line window is active.
-  -- It is possible to open them on Neovim<0.10, but not close.
-  -- On Neovim=0.10 it is not possible to even open at the moment.
-  -- See https://github.com/neovim/neovim/issues/24452
-  --
-  -- If only opening would be possible, update `H.window_close()` to create
-  -- one-shot autocommand to close on 'CmdwinLeave'.
-  if vim.fn.getcmdwintype() ~= '' then return end
-
   -- Make sure that outdated windows are not shown
   if #H.state.query == 0 then return H.window_close() end
 
@@ -1106,7 +1098,20 @@ H.window_open = function(config)
 end
 
 H.window_close = function()
-  pcall(vim.api.nvim_win_close, H.state.win_id, true)
+  -- Closing floating window when Command-line window is active is not allowed
+  -- on Neovim<0.10. Make sure it is closed after leaving it.
+  -- See https://github.com/neovim/neovim/issues/24452
+  local win_id = H.state.win_id
+  if vim.fn.has('nvim-0.10') == 0 and vim.fn.getcmdwintype() ~= '' then
+    vim.api.nvim_create_autocmd(
+      'CmdwinLeave',
+      { once = true, callback = function() pcall(vim.api.nvim_win_close, win_id, true) end }
+    )
+    return
+  else
+    pcall(vim.api.nvim_win_close, win_id, true)
+  end
+
   H.state.win_id = nil
 end
 
@@ -1203,13 +1208,18 @@ H.clues_get_all = function(mode)
   local mode_clues = vim.tbl_filter(function(x) return x.mode == mode end, config_clues)
   for _, clue in ipairs(mode_clues) do
     local lhsraw = H.replace_termcodes(clue.keys)
+
+    local res_data = res[lhsraw] or {}
+
     local desc = clue.desc
+    -- - Allow callable clue description
     if vim.is_callable(desc) then desc = desc() end
-    res[lhsraw] = {
-      -- Allows callable clue description
-      desc = desc,
-      postkeys = H.replace_termcodes(clue.postkeys),
-    }
+    -- - Fall back to possibly already present fields to allow partial
+    --   overwrite in later clues. Like to add `postkeys` and inherit `desc`.
+    res_data.desc = desc or res_data.desc
+    res_data.postkeys = H.replace_termcodes(clue.postkeys) or res_data.postkeys
+
+    res[lhsraw] = res_data
   end
 
   for _, map_data in ipairs(vim.api.nvim_get_keymap(mode)) do

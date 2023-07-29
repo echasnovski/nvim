@@ -38,32 +38,33 @@
 37|~  │ V     │ Avoid reselect                           │
 38|~  │ v     │ Reselect previous Visual area            │
 39|~  │ w     │ Format text + keep cursor (operator)     │
-40|~  │ <C-]> │ `:tjump` to tag under cursor             │
-41|~  │ <C-A> │ Dump a memory profile                    │
-42|~  │ <C-G> │ Show information about cursor            │
-43|~  │ <C-H> │ Start Select block mode                  │
-44|~  │ <Tab> │ Go to last accessed tabpage              │
-45|~  │ #     │ Search backwards word under cursor       │
-46|~  │ $     │ Go to rightmost visible column           │
-47|~  │ %     │ Cycle through matching groups            │
-48|~  │ &     │ Repeat last `:s` on all lines            │
-49|~  │ '     │ Jump to mark (don't affect jumplist)     │
-50|~  │ *     │ Search word under cursor                 │
-51|~  │ +     │ Go to newer text state                   │
-52|~  │ ,     │ Go to newer position in change list      │
-53|~  │ -     │ Go to older text state                   │
-54|~  │ ;     │ Go to older position in change list      │
-55|~  │ <     │ Display previous command output          │
-56|~  │ ?     │ Rot13 encode (operator)                  │
-57|~  │ @     │ Call 'operatorfunc' (operator)           │
-58|~  │ ]     │ `:tselect` tag under cursor              │
-59|~  │ ^     │ Go to leftmost visible non-whitespace    │
-60|~  │ _     │ Go to lower line                         │
-61|~  │ `     │ Jump to mark (don't affect jumplist)     │
-62|~  │ ~     │ Swap case (operator)                     │
-63|~  └──────────────────────────────────────────────────┘
-64|[No Name]                            0,0-1          All
-65|                                                       
+40|~  │ x     │ Execute app for file under cursor        │
+41|~  │ <C-]> │ `:tjump` to tag under cursor             │
+42|~  │ <C-A> │ Dump a memory profile                    │
+43|~  │ <C-G> │ Show information about cursor            │
+44|~  │ <C-H> │ Start Select block mode                  │
+45|~  │ <Tab> │ Go to last accessed tabpage              │
+46|~  │ #     │ Search backwards word under cursor       │
+47|~  │ $     │ Go to rightmost visible column           │
+48|~  │ %     │ Cycle through matching groups            │
+49|~  │ &     │ Repeat last `:s` on all lines            │
+50|~  │ '     │ Jump to mark (don't affect jumplist)     │
+51|~  │ *     │ Search word under cursor                 │
+52|~  │ +     │ Go to newer text state                   │
+53|~  │ ,     │ Go to newer position in change list      │
+54|~  │ -     │ Go to older text state                   │
+55|~  │ ;     │ Go to older position in change list      │
+56|~  │ <     │ Display previous command output          │
+57|~  │ ?     │ Rot13 encode (operator)                  │
+58|~  │ @     │ Call 'operatorfunc' (operator)           │
+59|~  │ ]     │ `:tselect` tag under cursor              │
+60|~  │ ^     │ Go to leftmost visible non-whitespace    │
+61|~  │ _     │ Go to lower line                         │
+62|~  │ `     │ Jump to mark (don't affect jumplist)     │
+63|~  │ ~     │ Swap case (operator)                     │
+64|~  └──────────────────────────────────────────────────┘
+65|[No Name]                            0,0-1          All
+66|                                                       
 
 --|---------|---------|---------|---------|---------|-----
 01|0000000000000000000000000000000000000000000000000000000
@@ -128,6 +129,7 @@
 60|1112444444456666666666666666666666666666666666666666662
 61|1112444444456666666666666666666666666666666666666666662
 62|1112444444456666666666666666666666666666666666666666662
-63|1112222222222222222222222222222222222222222222222222222
-64|7777777777777777777777777777777777777777777777777777777
-65|2222222222222222222222222222222222222222222222222222222
+63|1112444444456666666666666666666666666666666666666666662
+64|1112222222222222222222222222222222222222222222222222222
+65|7777777777777777777777777777777777777777777777777777777
+66|2222222222222222222222222222222222222222222222222222222
