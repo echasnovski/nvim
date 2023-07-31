@@ -19,85 +19,75 @@ vim.api.nvim_create_autocmd('User', {
   callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
 })
 
-local miniclue = require('mini-dev.clue')
-miniclue.setup({
-  clues = {
-    EC.leader_group_clues,
+local has_miniclue, miniclue = pcall(require, 'mini.clue')
+if has_miniclue then
+  miniclue.setup({
+    clues = {
+      EC.leader_group_clues,
 
-    miniclue.gen_clues.g(),
-    miniclue.gen_clues.z(),
-    miniclue.gen_clues.windows({ submode_focus = true, submode_move = true, submode_resize = true }),
-    miniclue.gen_clues.builtin_completion(),
-    miniclue.gen_clues.marks(),
-    miniclue.gen_clues.registers(),
-
-    { mode = 'x', keys = 'iw', desc = 'Word' },
-    { mode = 'x', keys = 'if', desc = 'Function call' },
-    { mode = 'o', keys = 'iw', desc = 'Word' },
-    { mode = 'o', keys = 'if', desc = 'Function call' },
-
-    { mode = 'x', keys = 'aw', desc = 'Word' },
-    { mode = 'x', keys = 'af', desc = 'Function call' },
-    { mode = 'o', keys = 'aw', desc = 'Word' },
-    { mode = 'o', keys = 'af', desc = 'Function call' },
-  },
-
-  triggers = {
-    { mode = 'n', keys = '<Leader>' },
-    { mode = 'x', keys = '<Leader>' },
-
-    { mode = 'n', keys = '[' },
-    { mode = 'n', keys = ']' },
-    { mode = 'n', keys = [[\]] },
-
-    { mode = 'o', keys = '`' },
-
-    { mode = 'i', keys = '<C-x>' },
-
-    { mode = 'c', keys = '<C-r>' },
-
-    { mode = 't', keys = '<C-w>' },
-    { mode = 't', keys = '<Space>' },
-
-    { mode = 'n', keys = 's' },
-    { mode = 'x', keys = 's' },
-
-    { mode = 'n', keys = 'g' },
-    { mode = 'x', keys = 'g' },
-
-    { mode = 'n', keys = 'z' },
-    { mode = 'x', keys = 'z' },
-
-    { mode = 'n', keys = '<C-w>' },
-
-    { mode = 'n', keys = '"' },
-    { mode = 'x', keys = '"' },
-    { mode = 'i', keys = '<C-r>' },
-    { mode = 'c', keys = '<C-r>' },
-
-    { mode = 'n', keys = "'" },
-    { mode = 'n', keys = '`' },
-    { mode = 'x', keys = "'" },
-    { mode = 'x', keys = '`' },
-
-    { mode = 'x', keys = '[' },
-    { mode = 'o', keys = '[' },
-    { mode = 'x', keys = ']' },
-    { mode = 'o', keys = ']' },
-
-    { mode = 'x', keys = 'a' },
-    { mode = 'o', keys = 'a' },
-    { mode = 'x', keys = 'i' },
-    { mode = 'o', keys = 'i' },
-  },
-
-  window = {
-    delay = 0,
-    config = {
-      width = 'auto',
+      miniclue.gen_clues.builtin_completion(),
+      miniclue.gen_clues.g(),
+      miniclue.gen_clues.marks(),
+      miniclue.gen_clues.registers(),
+      miniclue.gen_clues.windows({ submode_resize = true }),
+      miniclue.gen_clues.z(),
     },
-  },
-})
+
+    triggers = {
+      { mode = 'n', keys = '<Leader>' },
+      { mode = 'x', keys = '<Leader>' },
+
+      { mode = 'n', keys = '[' },
+      { mode = 'n', keys = ']' },
+      { mode = 'n', keys = [[\]] },
+
+      { mode = 'o', keys = '`' },
+
+      { mode = 'i', keys = '<C-x>' },
+
+      { mode = 't', keys = '<C-w>' },
+      { mode = 't', keys = '<Space>' },
+
+      { mode = 'n', keys = 's' },
+      { mode = 'x', keys = 's' },
+
+      { mode = 'n', keys = 'g' },
+      { mode = 'x', keys = 'g' },
+
+      { mode = 'n', keys = 'z' },
+      { mode = 'x', keys = 'z' },
+
+      { mode = 'n', keys = '<C-w>' },
+
+      { mode = 'n', keys = '"' },
+      { mode = 'x', keys = '"' },
+      { mode = 'i', keys = '<C-r>' },
+      { mode = 'c', keys = '<C-r>' },
+
+      { mode = 'n', keys = "'" },
+      { mode = 'n', keys = '`' },
+      { mode = 'x', keys = "'" },
+      { mode = 'x', keys = '`' },
+
+      { mode = 'x', keys = '[' },
+      { mode = 'o', keys = '[' },
+      { mode = 'x', keys = ']' },
+      { mode = 'o', keys = ']' },
+
+      { mode = 'x', keys = 'a' },
+      { mode = 'o', keys = 'a' },
+      { mode = 'x', keys = 'i' },
+      { mode = 'o', keys = 'i' },
+    },
+
+    window = {
+      delay = 0,
+      config = {
+        width = 'auto',
+      },
+    },
+  })
+end
 
 require('mini.statusline').setup({
   content = {
