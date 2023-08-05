@@ -38,10 +38,6 @@
 	path = pack/plugins/opt/neoterm
 	url = https://github.com/kassio/neoterm
 	branch = master
-[submodule "which-key"]
-	path = pack/plugins/opt/which-key
-	url = https://github.com/folke/which-key.nvim
-	branch = main
 [submodule "luasnip"]
 	path = pack/plugins/opt/luasnip
 	url = https://github.com/L3MON4D3/LuaSnip
