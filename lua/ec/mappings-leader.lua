@@ -84,18 +84,17 @@ local formatting_command = [[<Cmd>lua vim.lsp.buf.formatting()<CR>]]
 if vim.fn.has('nvim-0.8') == 1 then
   formatting_command = [[<Cmd>lua vim.lsp.buf.format({ async = true })<CR>]]
 end
-nmap_leader('lf', formatting_command,                            'Format')
-nmap_leader('lR', [[<Cmd>lua vim.lsp.buf.references()<CR>]],     'References')
 nmap_leader('la', [[<Cmd>lua vim.lsp.buf.signature_help()<CR>]], 'Arguments popup')
 nmap_leader('ld', [[<Cmd>lua vim.diagnostic.open_float()<CR>]],  'Diagnostics popup')
+nmap_leader('lf', formatting_command,                            'Format')
 nmap_leader('li', [[<Cmd>lua vim.lsp.buf.hover()<CR>]],          'Information')
 nmap_leader('lj', [[<Cmd>lua vim.diagnostic.goto_next()<CR>]],   'Next diagnostic')
 nmap_leader('lk', [[<Cmd>lua vim.diagnostic.goto_prev()<CR>]],   'Prev diagnostic')
+nmap_leader('lR', [[<Cmd>lua vim.lsp.buf.references()<CR>]],     'References')
 nmap_leader('lr', [[<Cmd>lua vim.lsp.buf.rename()<CR>]],         'Rename')
 nmap_leader('ls', [[<Cmd>lua vim.lsp.buf.definition()<CR>]],     'Source definition')
 
--- - Using `:` instead of `<Cmd>` to go back to Normal mode after `<CR>`
-xmap_leader('lf' , [[:lua vim.lsp.buf.range_formatting()<CR>]], 'Format selection')
+xmap_leader('lf' , [[<Cmd>lua vim.lsp.buf.format()<CR><Esc>]],   'Format selection')
 
 -- L is for 'Lua'
 nmap_leader('Lf', '<Cmd>luafile %<CR>',                   '`luafile` buffer')
