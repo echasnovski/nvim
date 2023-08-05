@@ -6,11 +6,11 @@ deps/mini.nvim:
 	@mkdir -p deps
 	git clone --filter=blob:none https://github.com/echasnovski/mini.nvim $@
 
-test_clue: deps/mini.nvim
-	for nvim_exec in $(NVIM_EXEC); do \
-		printf "\n======\n\n" ; \
-		$$nvim_exec --version | head -n 1 && echo '' ; \
-		$$nvim_exec --headless --noplugin -u ./lua/mini-dev/minimal_init.lua \
-			-c "lua require('mini.test').setup()" \
-			-c "lua MiniTest.run_file('lua/mini-dev/test_clue.lua', { execute = { reporter = MiniTest.gen_reporter.stdout({ group_depth = $(GROUP_DEPTH) }) } })" ; \
-	done
+# test_clue: deps/mini.nvim
+# 	for nvim_exec in $(NVIM_EXEC); do \
+# 		printf "\n======\n\n" ; \
+# 		$$nvim_exec --version | head -n 1 && echo '' ; \
+# 		$$nvim_exec --headless --noplugin -u ./lua/mini-dev/minimal_init.lua \
+# 			-c "lua require('mini.test').setup()" \
+# 			-c "lua MiniTest.run_file('lua/mini-dev/test_clue.lua', { execute = { reporter = MiniTest.gen_reporter.stdout({ group_depth = $(GROUP_DEPTH) }) } })" ; \
+# 	done

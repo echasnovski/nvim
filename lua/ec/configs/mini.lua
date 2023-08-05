@@ -19,76 +19,6 @@ vim.api.nvim_create_autocmd('User', {
   callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
 })
 
-local has_miniclue, miniclue = pcall(require, 'mini.clue')
-if has_miniclue then
-  miniclue.setup({
-    clues = {
-      EC.leader_group_clues,
-
-      miniclue.gen_clues.builtin_completion(),
-      miniclue.gen_clues.g(),
-      miniclue.gen_clues.marks(),
-      miniclue.gen_clues.registers(),
-      miniclue.gen_clues.windows({ submode_resize = true }),
-      miniclue.gen_clues.z(),
-    },
-
-    triggers = {
-      { mode = 'n', keys = '<Leader>' },
-      { mode = 'x', keys = '<Leader>' },
-
-      { mode = 'n', keys = '[' },
-      { mode = 'n', keys = ']' },
-      { mode = 'n', keys = [[\]] },
-
-      { mode = 'o', keys = '`' },
-
-      { mode = 'i', keys = '<C-x>' },
-
-      { mode = 't', keys = '<C-w>' },
-      { mode = 't', keys = '<Space>' },
-
-      { mode = 'n', keys = 's' },
-      { mode = 'x', keys = 's' },
-
-      { mode = 'n', keys = 'g' },
-      { mode = 'x', keys = 'g' },
-
-      { mode = 'n', keys = 'z' },
-      { mode = 'x', keys = 'z' },
-
-      { mode = 'n', keys = '<C-w>' },
-
-      { mode = 'n', keys = '"' },
-      { mode = 'x', keys = '"' },
-      { mode = 'i', keys = '<C-r>' },
-      { mode = 'c', keys = '<C-r>' },
-
-      { mode = 'n', keys = "'" },
-      { mode = 'n', keys = '`' },
-      { mode = 'x', keys = "'" },
-      { mode = 'x', keys = '`' },
-
-      { mode = 'x', keys = '[' },
-      { mode = 'o', keys = '[' },
-      { mode = 'x', keys = ']' },
-      { mode = 'o', keys = ']' },
-
-      { mode = 'x', keys = 'a' },
-      { mode = 'o', keys = 'a' },
-      { mode = 'x', keys = 'i' },
-      { mode = 'o', keys = 'i' },
-    },
-
-    window = {
-      delay = 0,
-      config = {
-        width = 'auto',
-      },
-    },
-  })
-end
-
 require('mini.statusline').setup({
   content = {
     active = function()
@@ -156,6 +86,59 @@ vim.schedule(function()
   require('mini.bracketed').setup()
 
   require('mini.bufremove').setup()
+
+  local miniclue = require('mini.clue')
+  miniclue.setup({
+    clues = {
+      EC.leader_group_clues,
+      miniclue.gen_clues.builtin_completion(),
+      miniclue.gen_clues.g(),
+      miniclue.gen_clues.marks(),
+      miniclue.gen_clues.registers(),
+      miniclue.gen_clues.windows({ submode_resize = true }),
+      miniclue.gen_clues.z(),
+    },
+
+    triggers = {
+      -- Leader triggers
+      { mode = 'n', keys = '<Leader>' },
+      { mode = 'x', keys = '<Leader>' },
+
+      -- 'mini.bracketed'
+      { mode = 'n', keys = '[' },
+      { mode = 'n', keys = ']' },
+      { mode = 'x', keys = '[' },
+      { mode = 'x', keys = ']' },
+
+      -- Built-in completion
+      { mode = 'i', keys = '<C-x>' },
+
+      -- `g` key
+      { mode = 'n', keys = 'g' },
+      { mode = 'x', keys = 'g' },
+
+      -- Marks
+      { mode = 'n', keys = "'" },
+      { mode = 'n', keys = '`' },
+      { mode = 'x', keys = "'" },
+      { mode = 'x', keys = '`' },
+
+      -- Registers
+      { mode = 'n', keys = '"' },
+      { mode = 'x', keys = '"' },
+      { mode = 'i', keys = '<C-r>' },
+      { mode = 'c', keys = '<C-r>' },
+
+      -- Window commands
+      { mode = 'n', keys = '<C-w>' },
+
+      -- `z` key
+      { mode = 'n', keys = 'z' },
+      { mode = 'x', keys = 'z' },
+    },
+
+    window = { config = { border = 'double' } },
+  })
 
   -- Don't really need it on daily basis
   -- require('mini.colors').setup()
