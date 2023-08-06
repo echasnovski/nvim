@@ -5,19 +5,31 @@
 -- - All should respect forced submode ('v', 'V', '<C-v>')
 -- - All should not modify marks.
 --
+-- - Use output of `getreginfo()` as input for user modifiers (like in `sort`,
+--   `evaluate`, etc.).
+--
 -- - Replace:
+--     - Should respect [reigster] (in Visual, at first and in dot-repeat).
 --     - Should work in all edge-case places: replace on line end, replace
 --       second to line end, replace last line, replace second to last line.
 --
 --
 -- Docs:
+-- - Document official way to remap in Normal (operator and line) and Visual modes.
 --
+-- - Replace:
+--     - `[count]` in `grr` affects number of pastes.
+--     - Respects [count] (in Visual, at first and in dot-repeat).
+--       In Normal mode should differentiate between two counts:
+--       `[count1]gr[count2]{motion}` (`[count1]` is for pasting,
+--       `[count2]` is for textobject/motion).
 --
 --
 -- Tests:
+-- - Replace:
 --
 
---- *mini.operators* Operators
+--- *mini.operators* Text edit operators
 --- *MiniOperators*
 ---
 --- MIT License Copyright (c) 2023 Evgeni Chasnovski
@@ -26,11 +38,14 @@
 ---
 --- Features:
 --- - Operators (already mapped and as functions):
----     - Replace region with register.
+---     - Replace textobject with register.
 ---     - Reput text over different region.
 ---     - Exchange regions.
 ---     - Sort text.
 ---     - Duplicate text.
+---     - Evaluate.
+---     - ?Change case?
+---     - ?Replace textobject with register inside region?.
 ---
 --- - All operators are dot-repeatable and can be applied in Visual mode.
 ---
@@ -59,7 +74,7 @@
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 ---
---- # Disabling~
+--- # Disabling ~
 ---
 --- To disable creating triggers, set `vim.g.minioperators_disable` (globally) or
 --- `vim.b.minioperators_disable` (for a buffer) to `true`. Considering high number
@@ -105,6 +120,7 @@ end
 MiniOperators.config = {
   mappings = {
     duplicate  = 'gd',
+    evaluate   = 'g=',
     exchange   = 'gx',
     replace    = 'gr',
     reput      = 'g.',
@@ -112,8 +128,8 @@ MiniOperators.config = {
   },
 
   options = {
-    make_visual_mappings   = true,
-    make_linewise_mappings = true,
+    make_line_mappings   = true,
+    make_visual_mappings = true,
   }
 }
 --minidoc_afterlines_end
@@ -122,39 +138,35 @@ _G.log = {}
 MiniOperators.replace = function(mode)
   if H.is_disabled() or not vim.o.modifiable then return '' end
 
+  -- If used with 'visual', operate on visual selection
+  if mode == 'visual' then
+    local cmd = string.format('normal! %d"%sP', vim.v.count1, vim.v.register)
+    vim.cmd(cmd)
+    return
+  end
+
   -- If used without arguments inside expression mapping, set it as
   -- 'operatorfunc' and call it again as a result of expression mapping.
   if mode == nil then
     vim.o.operatorfunc = 'v:lua.MiniOperators.replace'
-    return 'g@'
+    H.cache.replace = { count = vim.v.count1, register = vim.v.register }
+
+    -- Reset count to allow two counts: first for paste, second for textobject
+    return vim.api.nvim_replace_termcodes('<Cmd>echon ""<CR>g@', true, true, true)
   end
 
-  if mode == 'visual' then
-    vim.cmd('normal! P')
-    return
-  end
+  table.insert(_G.log, { mode = mode })
+  local cache = H.cache.replace
 
-  -- local ffi = require('ffi')
-  -- ffi.cdef([[ char *get_inserted(void) ]])
-  -- ffi.cdef([[void CancelRedo(void)]])
-  --
-  -- ffi.cdef([[
-  --   typedef struct buffblock buffblock_T;
-  --   typedef struct buffheader buffheader_T;
-  --   typedef struct {
-  --     buffheader_T sr_redobuff;
-  --     buffheader_T sr_old_redobuff;
-  --   } save_redo_T;
-  --   save_redo_T save_redo
-  --   void saveRedobuff(save_redo_T *save_redo)
-  --   void restoreRedobuff(save_redo_T *save_redo)
-  -- ]])
-  --
-  -- local get_redo_buffer = function() return ffi.string(ffi.C.get_inserted()) end
-  -- local save_redo_buffer = function() return ffi.C.saveRedobuff(ffi.C.save_redo) end
-  -- local restore_redo_buffer = function() return ffi.C.restoreRedobuff(ffi.C.save_redo) end
-  --
-  -- local redo_buffer_before = get_redo_buffer()
+  -- Do nothing with empty/unknown register
+  local register_type = H.get_reg_type(cache.register)
+  if register_type == '' then H.error('Register ' .. vim.inspect(cache.register) .. ' is empty or unknown.') end
+
+  -- Allow replacing only matching region submode and register type
+  local region_submode = H.submode_keys[mode]
+  if region_submode ~= register_type then
+    H.error('Replacing is allowed only for region and register with matching submodes (charwise, linewise, blockwise).')
+  end
 
   -- Determine if region is at edge which is needed for the correct paste key
   local to_line = vim.fn.line("']")
@@ -162,36 +174,13 @@ MiniOperators.replace = function(mode)
   local is_edge_col = mode ~= 'line' and vim.fn.col("']") == (vim.fn.col({ to_line, '$' }) - 1)
   local is_edge = is_edge_line or is_edge_col
 
-  -- Delete to black whole register and paste from target register
-  local delete_keys = '`["_d' .. H.submode_keys[mode] .. '`]'
+  -- Delete to black whole register
+  local delete_keys = string.format('`["_d%s`]', region_submode)
   H.cmd_normal(delete_keys)
 
-  local paste_keys = '"' .. vim.v.register .. (is_edge and 'p' or 'P')
+  -- Paste register and adjust cursor
+  local paste_keys = string.format('%d"%s%s`[', cache.count, cache.register, (is_edge and 'p' or 'P'))
   H.cmd_normal(paste_keys)
-
-  -- -- Same thing but without "normal!" which messes with dot-repeat
-  -- -- Delete
-  -- local from_pos = vim.api.nvim_buf_get_mark(0, '[')
-  -- local to_pos = vim.api.nvim_buf_get_mark(0, ']')
-  -- local delete_region = vim.region(0, from_pos, to_pos, H.submode_keys[mode], true)
-  --
-  -- local line_num_arr = vim.tbl_keys(delete_region)
-  -- -- - Delete from the end to preserve line number meaning
-  -- table.sort(line_num_arr, function(a, b) return a > b end)
-  -- for _, line_num in ipairs(line_num_arr) do
-  --   local line_range = delete_region[line_num]
-  --   vim.api.nvim_buf_set_text(0, line_num - 1, line_range[1], line_num - 1, line_range[2], {})
-  -- end
-  --
-  -- -- Paste
-  -- local lines = vim.split(vim.fn.getreg(vim.v.register, 1), '\n')
-  -- local reg_type = vim.fn.getregtype(vim.v.register)
-  -- -- - Convert register type to be suitable for `nvim_put`
-  -- local first_char = ({ v = 'c', V = 'l', ['\16'] = 'b' })[reg_type:sub(1, 1)]
-  -- reg_type = first_char .. reg_type:sub(2)
-  --
-  -- vim.api.nvim_win_set_cursor(0, from_pos)
-  -- vim.api.nvim_put(lines, reg_type, is_edge, false)
 
   return ''
 end
@@ -205,6 +194,12 @@ H.ns_id = {
   highlight = vim.api.nvim_create_namespace('MiniOperatorsHighlight'),
 }
 
+-- Cache for all operators
+H.cache = {
+  exchange = {},
+  replace = {},
+}
+
 -- Submode keys for
 H.submode_keys = {
   char = 'v',
@@ -213,6 +208,7 @@ H.submode_keys = {
 }
 
 -- Helper functionality =======================================================
+
 -- Settings -------------------------------------------------------------------
 H.setup_config = function(config)
   -- General idea: if some table elements are not present in user-supplied
@@ -232,8 +228,8 @@ H.setup_config = function(config)
     ['mappings.reput'] = { config.mappings.reput, 'string' },
     ['mappings.sort'] = { config.mappings.sort, 'string' },
 
+    ['options.make_line_mappings'] = { config.options.make_line_mappings, 'boolean' },
     ['options.make_visual_mappings'] = { config.options.make_visual_mappings, 'boolean' },
-    ['options.make_linewise_mappings'] = { config.options.make_linewise_mappings, 'boolean' },
   })
 
   return config
@@ -246,23 +242,28 @@ H.apply_config = function(config)
   local mappings, options = config.mappings, config.options
 
   local map_all = function(operator_name)
+    -- Map only valid LHS
     local lhs = mappings[operator_name]
+    if type(lhs) ~= 'string' or lhs == '' then return end
+
     local operator_desc = operator_name:sub(1, 1):upper() .. operator_name:sub(2)
 
-    H.map('n', lhs, string.format('v:lua.MiniOperators.%s()', operator_name), { expr = true, desc = operator_desc })
+    local expr_opts = { expr = true, replace_keycodes = false, desc = operator_desc }
+    H.map('n', lhs, string.format('v:lua.MiniOperators.%s()', operator_name), expr_opts)
+
+    if options.make_line_mappings then
+      local line_lhs = lhs .. vim.fn.strcharpart(lhs, vim.fn.strchars(lhs) - 1, 1)
+      H.map('n', line_lhs, lhs .. '_', { remap = true, desc = operator_desc .. ' line' })
+    end
 
     if options.make_visual_mappings then
       local visual_rhs = string.format([[<Cmd>lua MiniOperators.%s('visual')<CR>]], operator_name)
       H.map('x', lhs, visual_rhs, { desc = operator_desc .. ' selection' })
     end
-
-    if options.make_linewise_mappings then
-      local linewise_lhs = lhs .. vim.fn.strcharpart(lhs, vim.fn.strchars(lhs) - 1, 1)
-      H.map('n', linewise_lhs, lhs .. '_', { remap = true, desc = operator_desc .. ' line' })
-    end
   end
 
   map_all('duplicate')
+  map_all('evaluate')
   map_all('exchange')
   map_all('replace')
   map_all('reput')
@@ -278,7 +279,11 @@ end
 H.create_default_hl =
   function() vim.api.nvim_set_hl(0, 'MiniOperatorsExchangeFrom', { default = true, link = 'IncSearch' }) end
 
+-- Replace --------------------------------------------------------------------
+
 -- Utilities ------------------------------------------------------------------
+H.error = function(msg) error(string.format('(mini.operators) %s', msg), 0) end
+
 H.map = function(mode, lhs, rhs, opts)
   if lhs == '' then return end
   opts = vim.tbl_deep_extend('force', { silent = true }, opts or {})
@@ -290,32 +295,22 @@ H.get_submode_keys = function(mode)
   return H.submode_keys[mode]
 end
 
-H.cmd_normal = function(command)
+H.get_reg_type = function(regname) return vim.fn.getregtype(regname):sub(1, 1) end
+
+-- A hack to restore previous dot-repeat action
+H.cancel_redo = function() end;
+(function()
+  local has_ffi, ffi = pcall(require, 'ffi')
+  if not has_ffi then return end
+  local has_cancel_redo = pcall(ffi.cdef, 'void CancelRedo(void)')
+  if not has_cancel_redo then return end
+  H.cancel_redo = function() pcall(ffi.C.CancelRedo) end
+end)()
+
+H.cmd_normal = function(command, cancel_redo)
+  if cancel_redo == nil then cancel_redo = true end
   vim.cmd('silent keepjumps lockmarks normal! ' .. command)
-  local ffi = require('ffi')
-  ffi.cdef([[void CancelRedo(void)]])
-  ffi.C.CancelRedo()
-end
-
-H.make_cmd_normal = function(include_undojoin)
-  local normal_command = (include_undojoin and 'undojoin | ' or '') .. 'silent keepjumps normal! '
-
-  return function(x)
-    -- Caching and restoring data on every command is not necessary but leads
-    -- to a nicer implementation
-
-    -- Disable 'mini.bracketed' to avoid unwanted entries to its yank history
-    local cache_minibracketed_disable = vim.b.minibracketed_disable
-    local cache_unnamed_register = vim.fn.getreg('"')
-
-    -- Don't track possible put commands into yank history
-    vim.b.minibracketed_disable = true
-
-    vim.cmd(normal_command .. x)
-
-    vim.b.minibracketed_disable = cache_minibracketed_disable
-    vim.fn.setreg('"', cache_unnamed_register)
-  end
+  if cancel_redo then H.cancel_redo() end
 end
 
 return MiniOperators
