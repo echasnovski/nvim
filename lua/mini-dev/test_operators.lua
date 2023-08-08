@@ -92,6 +92,247 @@ T['setup()']['validates `config` argument'] = function()
 end
 
 -- Integration tests ==========================================================
+T['Exchange'] = new_set()
+
+T['Exchange']['works charwise in Normal mode'] = function()
+  local keys = { 'gxiw', 'w', 'gxiw' }
+  validate_edit1d('a bb', 0, keys, 'bb a', 3)
+  validate_edit1d('a bb ccc', 0, keys, 'bb a ccc', 3)
+  validate_edit1d('a bb ccc', 3, keys, 'a ccc bb', 6)
+  validate_edit1d('a bb ccc dddd', 3, keys, 'a ccc bb dddd', 6)
+
+  -- With dot-repeat allowing multiple exchanges
+  validate_edit1d('a bb', 0, { 'gxiw', 'w', '.' }, 'bb a', 3)
+  validate_edit1d('a bb ccc dddd', 0, { 'gxiw', 'w', '.', 'w.w.' }, 'bb a dddd ccc', 10)
+
+  -- Different order
+  local keys_back = { 'gxiw', 'b', 'gxiw' }
+  validate_edit1d('a bb', 2, keys_back, 'bb a', 0)
+  validate_edit1d('a bb ccc', 2, keys_back, 'bb a ccc', 0)
+  validate_edit1d('a bb ccc', 5, keys_back, 'a ccc bb', 2)
+  validate_edit1d('a bb ccc dddd', 5, keys_back, 'a ccc bb dddd', 2)
+
+  -- Over several lines
+  set_lines({ 'aa bb', 'cc dd', 'ee ff', 'gg hh' })
+
+  -- - Set marks
+  set_cursor(2, 2)
+  type_keys('ma')
+  set_cursor(4, 2)
+  type_keys('mb')
+
+  -- - Validate
+  set_cursor(1, 0)
+  type_keys('gx`a', '2j', 'gx`b')
+  eq(get_lines(), { 'ee ff', 'gg dd', 'aa bb', 'cc hh' })
+  eq(get_cursor(), { 3, 0 })
+
+  -- Single cell
+  validate_edit1d('aa bb', 0, { 'gxl', 'w', 'gxl' }, 'ba ab', 3)
+end
+
+T['Exchange']['works linewise in Normal mode'] = function()
+  local keys = { 'gx_', 'j', 'gx_' }
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, keys, { 'bb', 'aa' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, keys, { 'bb', 'aa', 'cc' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 2, 0 }, keys, { 'aa', 'cc', 'bb' }, { 3, 0 })
+  validate_edit({ 'aa', 'bb', 'cc', 'dd' }, { 2, 0 }, keys, { 'aa', 'cc', 'bb', 'dd' }, { 3, 0 })
+
+  -- With dot-repeat allowing multiple exchanges
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'gx_', 'j', '.' }, { 'bb', 'aa' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc', 'dd' }, { 1, 0 }, { 'gx_', 'j', '.', 'j.j.' }, { 'bb', 'aa', 'dd', 'cc' }, { 4, 0 })
+
+  -- Different order
+  local keys_back = { 'gx_', 'k', 'gx_' }
+  validate_edit({ 'aa', 'bb' }, { 2, 0 }, keys_back, { 'bb', 'aa' }, { 1, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 2, 0 }, keys_back, { 'bb', 'aa', 'cc' }, { 1, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 3, 0 }, keys_back, { 'aa', 'cc', 'bb' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc', 'dd' }, { 3, 0 }, keys_back, { 'aa', 'cc', 'bb', 'dd' }, { 2, 0 })
+
+  -- Empty line
+  validate_edit({ 'aa', '' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { '', 'aa' }, { 2, 0 })
+  validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { 'bb', '', 'aa' }, { 3, 0 })
+
+  -- Blank line(s)
+  validate_edit({ 'aa', '  ' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { '  ', 'aa' }, { 2, 0 })
+  validate_edit({ ' ', '  ' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { '  ', ' ' }, { 2, 0 })
+
+  -- Over several lines
+  validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, { 'gxip', 'G', 'gxip' }, { 'cc', '', 'aa', 'bb' }, { 3, 0 })
+end
+
+T['Exchange']['works blockwise in Normal mode'] = function()
+  child.lua([[vim.keymap.set('o', 'io', function() vim.cmd('normal! \22') end)]])
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
+  child.lua([[vim.keymap.set('o', 'iE', function() vim.cmd('normal! \22jj') end)]])
+  child.lua([[vim.keymap.set('o', 'il', function() vim.cmd('normal! \22jl') end)]])
+
+  local keys = { 'gxie', 'w', 'gxil' }
+  validate_edit({ 'a bb', 'c dd' }, { 1, 0 }, keys, { 'bb a', 'dd c' }, { 1, 3 })
+  validate_edit({ 'a bb x', 'c dd y' }, { 1, 0 }, keys, { 'bb a x', 'dd c y' }, { 1, 3 })
+  validate_edit({ 'a b xx', 'c d yy' }, { 1, 2 }, keys, { 'a xx b', 'c yy d' }, { 1, 5 })
+  validate_edit({ 'a b xx u', 'c d yy v' }, { 1, 2 }, keys, { 'a xx b u', 'c yy d v' }, { 1, 5 })
+
+  -- With dot-repeat allowing multiple exchanges
+  validate_edit({ 'a bb', 'c dd' }, { 1, 0 }, { 'gxie', 'w', '.' }, { 'b ab', 'd cd' }, { 1, 2 })
+  validate_edit({ 'a b x y', 'c d u v' }, { 1, 0 }, { 'gxie', 'w', '.', 'w.w.' }, { 'b a y x', 'd c v u' }, { 1, 6 })
+
+  -- Different order
+  local keys_back = { 'gxil', 'b', 'gxie' }
+  validate_edit({ 'a bb', 'c dd' }, { 1, 2 }, keys_back, { 'bb a', 'dd c' }, { 1, 0 })
+  validate_edit({ 'a bb x', 'c dd y' }, { 1, 2 }, keys_back, { 'bb a x', 'dd c y' }, { 1, 0 })
+  validate_edit({ 'a b xx', 'c d yy' }, { 1, 4 }, keys_back, { 'a xx b', 'c yy d' }, { 1, 2 })
+  validate_edit({ 'a b xx u', 'c d yy v' }, { 1, 4 }, keys_back, { 'a xx b u', 'c yy d v' }, { 1, 2 })
+
+  -- Spanning empty/blank line
+  validate_edit({ 'a b', '', 'c d' }, { 1, 0 }, { 'gxiE', 'w', 'gxiE' }, { 'b a', '  ', 'd c' }, { 1, 2 })
+  validate_edit({ 'a b', '   ' }, { 1, 0 }, { 'gxie', 'w', 'gxie' }, { 'b a', '   ' }, { 1, 2 })
+
+  -- Single cell
+  validate_edit1d('aa bb', 0, { 'gxio', 'w', 'gxio' }, 'ba ab', 3)
+end
+
+T['Exchange']['works with mixed submodes in Normal mode'] = function()
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
+
+  -- Charwise from - Linewise to
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'gxiw', 'j', 'gx_' }, { 'bb', 'aa', 'cc' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'gx/b$<CR>', 'G', 'gx_' }, { 'ccb', 'aa', 'b' }, { 2, 0 })
+
+  -- Charwise from - Blockwise to
+  validate_edit({ 'aa', 'bc', 'de' }, { 1, 0 }, { 'gxiw', 'j', 'gxie' }, { 'b', 'd', 'aac', 'e' }, { 3, 0 })
+  validate_edit({ 'aa', 'bc', 'de' }, { 1, 0 }, { 'gx/c<CR>', 'jl', 'gxie' }, { 'c', 'eaa', 'db' }, { 2, 1 })
+
+  -- Linewise from - Charwise to
+  validate_edit({ 'aa', 'bb bb' }, { 1, 0 }, { 'gx_', 'j', 'gxiw' }, { 'bb', 'aa bb' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc cc' }, { 1, 0 }, { 'gxj', '2j', 'gxiw' }, { 'cc', 'aa', 'bb cc' }, { 2, 0 })
+
+  -- Linewise from - Blockwise to
+  validate_edit({ 'aa', 'bc', 'de' }, { 1, 0 }, { 'gx_', 'j', 'gxie' }, { 'b', 'd', 'aac', 'e' }, { 3, 0 })
+  validate_edit({ 'aa', 'bb', 'cd', 'ef' }, { 1, 0 }, { 'gxj', '2j', 'gxie' }, { 'c', 'e', 'aad', 'bbf' }, { 3, 0 })
+
+  -- Blockwise from - Charwise to
+  validate_edit({ 'aa', 'bb bb' }, { 1, 0 }, { '<C-v>gx', 'j', 'gxiw' }, { 'bba', 'a bb' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb bb' }, { 1, 0 }, { '<C-v>jgx', 'jw', 'gxiw' }, { 'bba', 'b a', 'b' }, { 2, 2 })
+
+  -- Blockwise from - Linewise to
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { '<C-v>gx', 'j', 'gx_' }, { 'bba', 'a', 'cc' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { '<C-v>jgx', 'G', 'gx_' }, { 'cca', 'b', 'a', 'b' }, { 3, 0 })
+end
+
+T['Exchange']['works in Normal mode for line'] = function() MiniTest.skip() end
+
+T['Exchange']['works in Visual mode'] = function() MiniTest.skip() end
+
+T['Exchange']['works when regions are made in different mode'] = function()
+  -- Normal from - Visual to
+
+  -- Normal to - Visual from
+  MiniTest.skip()
+end
+
+T['Exchange']['respects `config.options.make_line_mappings`'] = function()
+  -- child.api.nvim_del_keymap('n', 'grr')
+  -- load_module({ options = { make_line_mappings = false } })
+  -- eq(child.fn.maparg('grr', 'n'), '')
+  MiniTest.skip()
+end
+
+T['Exchange']['respects `config.options.make_visual_mappings`'] = function()
+  -- child.api.nvim_del_keymap('x', 'gr')
+  -- load_module({ options = { make_visual_mappings = false } })
+  -- eq(child.fn.maparg('gr', 'x'), '')
+  MiniTest.skip()
+end
+
+T['Exchange']['highlights first step'] = function() MiniTest.skip() end
+
+T['Exchange']['can be canceled'] = function() MiniTest.skip() end
+
+T['Exchange']['works in edge cases'] = function()
+  -- -- Start of line
+  -- validate_edit1d('aa bb', 3, { 'yiw', '0', 'griw' }, 'bb bb', 0)
+  --
+  -- -- End of line
+  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'griw' }, 'aa aa', 3)
+  --
+  -- -- First line
+  -- validate_edit({ 'aa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'grr' }, { 'bb', 'bb' }, { 1, 0 })
+  --
+  -- -- Last line
+  -- validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'yy', 'G', 'grr' }, { 'aa', 'bb', 'aa' }, { 3, 0 })
+  MiniTest.skip()
+end
+
+T['Exchange']['works for intersecting regions'] = function()
+  -- Charwise
+  -- Linewise
+  -- Blockwise
+  MiniTest.skip()
+end
+
+T['Exchange']['works for regions in different buffers'] = function() MiniTest.skip() end
+
+T['Exchange']['works for same region'] = function()
+  -- Charwise
+  validate_edit1d('aa bb cc', 4, { 'gxiw', 'gxiw' }, 'aa bb cc', 3)
+
+  -- Linewise
+  validate_edit1d('aa bb cc', 4, { 'gx_', 'gx_' }, 'aa bb cc', 0)
+
+  -- Blockwise
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
+  validate_edit({ 'ab', 'cd' }, { 1, 0 }, { 'gxie', 'gxie' }, { 'ab', 'cd' }, { 1, 0 })
+end
+
+T['Exchange']['does not have side effects'] = function()
+  -- Marks `x`, `y` and registers `1`, `2`
+  MiniTest.skip()
+end
+
+T['Exchange']['works with different base mapping'] = function()
+  -- child.api.nvim_del_keymap('n', 'gr')
+  -- child.api.nvim_del_keymap('n', 'grr')
+  -- child.api.nvim_del_keymap('x', 'gr')
+  --
+  -- load_module({ mappings = { replace = 'cr' } })
+  --
+  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'criw' }, 'aa aa', 3)
+  -- validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
+  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 4)
+  MiniTest.skip()
+end
+
+T['Exchange']['allows custom mappings'] = function()
+  -- child.api.nvim_del_keymap('n', 'gr')
+  -- child.api.nvim_del_keymap('n', 'grr')
+  -- child.api.nvim_del_keymap('x', 'gr')
+  --
+  -- load_module({ mappings = { replace = '' } })
+  --
+  -- child.lua([[
+  --   vim.keymap.set('n', 'cr', 'v:lua.MiniOperators.replace()', { expr = true, replace_keycodes = false, desc = 'Replace' })
+  --   vim.keymap.set('n', 'crr', 'cr_', { remap = true, desc = 'Replace line' })
+  --   vim.keymap.set('x', 'cr', '<Cmd>lua MiniOperators.replace("visual")<CR>', { desc = 'Replace selection' })
+  -- ]])
+  --
+  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'criw' }, 'aa aa', 3)
+  -- validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
+  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 4)
+  MiniTest.skip()
+end
+
+T['Exchange']['respects `vim.{g,b}.minioperators_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    -- child[var_type].minioperators_disable = true
+    --
+    -- validate_edit1d('aa bb', 0, {'yiw', 'w', 'griw'}, 'aa wbb', 4)
+    MiniTest.skip()
+  end,
+})
+
 T['Replace'] = new_set()
 
 T['Replace']['works charwise in Normal mode'] = function()
@@ -112,6 +353,9 @@ T['Replace']['works charwise in Normal mode'] = function()
   type_keys('yiw', 'w', 'gr`a')
   eq(get_lines(), { 'aa aa dd' })
   eq(get_cursor(), { 1, 3 })
+
+  -- Single cell
+  validate_edit1d('aa bb', 0, { 'yl', 'w', 'grl' }, 'aa ab', 3)
 end
 
 T['Replace']['works linewise in Normal mode'] = function()
@@ -123,12 +367,16 @@ T['Replace']['works linewise in Normal mode'] = function()
 end
 
 T['Replace']['works blockwise in Normal mode'] = function()
+  child.lua([[vim.keymap.set('o', 'io', function() vim.cmd('normal! \22') end)]])
   child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
 
   validate_edit({ 'a b c', 'a b c' }, { 1, 0 }, { 'y<C-v>j', 'w', 'grie' }, { 'a a c', 'a a c' }, { 1, 2 })
 
   -- With dot-repeat
   validate_edit({ 'a b c', 'a b c' }, { 1, 0 }, { 'y<C-v>j', 'w', 'grie', 'w', '.' }, { 'a a a', 'a a a' }, { 1, 4 })
+
+  -- Single cell
+  validate_edit1d('aa bb', 0, { '<C-v>y', 'w', 'grio' }, 'aa ab', 3)
 end
 
 T['Replace']['works with mixed submodes in Normal mode'] = function()
@@ -269,6 +517,12 @@ T['Replace']['works in edge cases'] = function()
   validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'yy', 'G', 'grr' }, { 'aa', 'bb', 'aa' }, { 3, 0 })
 end
 
+T['Replace']['does not have side effects'] = function()
+  -- Register type should not change
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'griw' }, { 'aa', 'aa' }, { 2, 0 })
+  eq(child.fn.getregtype('"'), 'V')
+end
+
 T['Replace']['works with different base mapping'] = function()
   child.api.nvim_del_keymap('n', 'gr')
   child.api.nvim_del_keymap('n', 'grr')
@@ -298,5 +552,15 @@ T['Replace']['allows custom mappings'] = function()
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
   validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 4)
 end
+
+T['Replace']['respects `vim.{g,b}.minioperators_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minioperators_disable = true
+
+    validate_edit1d('aa bb', 0, { 'yiw', 'w', 'griw' }, 'aa wbb', 4)
+  end,
+})
 
 return T

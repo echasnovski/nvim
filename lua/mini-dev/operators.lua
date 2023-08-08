@@ -5,15 +5,21 @@
 -- - All should respect forced submode ('v', 'V', '<C-v>')
 -- - All should not modify marks.
 --
+-- - Thinkg about refactoring config to have first-level table for each
+--   operator with 'mapping_base' being inside each one.
+--
 -- - Use output of `getreginfo()` as input for user modifiers (like in `sort`,
 --   `evaluate`, etc.).
 --
 -- - Replace:
+--     - Think about taking indent into account when replacing linewise.
+--       This might be as simple as using `]P` and `]p` instead of `]P`
 --
 -- - Exchange:
 --     - Should allow exchaning text between two buffers. Ideally, `u` should
 --       undo whole exchange and not just latest paste.
 --     - Think about taking indent into account when replacing linewise.
+--       This might be as simple as using `]P` and `]p` instead of `]P`
 --
 --
 -- Docs:
@@ -299,12 +305,15 @@ H.create_default_hl =
 H.exchange_do = function()
   local step_one, step_two = H.cache.exchange.step_one, H.cache.exchange.step_two
 
+  -- Do nothing if regions are the same
+  if H.exchange_is_same_steps(step_one, step_two) then return end
+
   -- Save temporary registers
   local reg_one, reg_two = vim.fn.getreginfo('1'), vim.fn.getreginfo('2')
 
   -- Put regions into registers. NOTE: do it before actual exchange to allow
   -- intersecting regions.
-  local putting_in_register = function(step, register)
+  local populating_register = function(step, register)
     return function()
       H.exchange_set_step_marks(step, { 'x', 'y' })
 
@@ -313,8 +322,8 @@ H.exchange_do = function()
     end
   end
 
-  H.with_temp_context({ buf_id = step_one.buf_id, marks = { 'x', 'y' } }, putting_in_register(step_one, '1'))
-  H.with_temp_context({ buf_id = step_two.buf_id, marks = { 'x', 'y' } }, putting_in_register(step_two, '2'))
+  H.with_temp_context({ buf_id = step_one.buf_id, marks = { 'x', 'y' } }, populating_register(step_one, '1'))
+  H.with_temp_context({ buf_id = step_two.buf_id, marks = { 'x', 'y' } }, populating_register(step_two, '2'))
 
   -- Sequentially replace
   local replacing = function(step, register)
@@ -338,37 +347,55 @@ H.exchange_set_region_extmark = function(mode, add_highlight)
   local submode = H.get_submode(mode)
   local ns_id = H.ns_id.exchange
 
-  -- Compute extmark's range
+  -- Compute regular marks for target region
+  if mode == 'visual' then vim.cmd('normal! \27') end
   local mark_from, mark_to = H.get_region_marks(mode)
 
+  -- Compute extmark's range for target region
   local extmark_from = { mark_from[1] - 1, mark_from[2] }
   local extmark_to = { mark_to[1] - 1, mark_to[2] + 1 }
-  if submode == 'V' then extmark_to[2] = vim.fn.col({ extmark_to[1] + 1, '$' }) - 1 end
+  -- - Tweak columns for linewise marks
+  if submode == 'V' then
+    extmark_from[2] = 0
+    extmark_to[2] = vim.fn.col({ extmark_to[1] + 1, '$' }) - 1
+  end
 
-  -- Set extmark to represent region
+  -- Set extmark to represent region. Add highlighting inside of it only if
+  -- needed and not in blockwise submode (can't highlight that way).
   local buf_id = vim.api.nvim_get_current_buf()
-  local extmark_opts = { end_row = extmark_to[1], end_col = extmark_to[2] }
-  local region_mark_id = vim.api.nvim_buf_set_extmark(buf_id, ns_id, extmark_from[1], extmark_from[2], extmark_opts)
 
-  -- Highlight first region to be exchanged. NOTE: Can't be done directly in
-  -- mark to account for linewise/blockwise region.
-  if add_highlight then
+  local extmark_hl_group
+  if add_highlight and submode ~= H.submode_keys.block then extmark_hl_group = 'MiniOperatorsExchangeFrom' end
+
+  local extmark_opts = {
+    end_row = extmark_to[1],
+    end_col = extmark_to[2],
+    hl_group = extmark_hl_group,
+    -- Using this type of gravity is better for handling empty lines
+    end_right_gravity = true,
+  }
+  local region_extmark_id = vim.api.nvim_buf_set_extmark(buf_id, ns_id, extmark_from[1], extmark_from[2], extmark_opts)
+
+  -- - Possibly add highlighting for blockwise mode
+  if add_highlight and extmark_hl_group == nil then
     -- Highlighting blockwise region needs full register type with width
-    local is_blockwise = submode == H.submode_keys.block
-    local regtype = is_blockwise and H.exchange_get_blockwise_regtype(mark_from, mark_to) or submode
-    vim.highlight.range(buf_id, ns_id, 'MiniOperatorsExchangeFrom', extmark_from, extmark_to, { regtype = regtype })
+    local opts = { regtype = H.exchange_get_blockwise_regtype(mark_from, mark_to) }
+    vim.highlight.range(buf_id, ns_id, 'MiniOperatorsExchangeFrom', extmark_from, extmark_to, opts)
   end
 
   -- Return data to cache
-  return { buf_id = buf_id, submode = submode, mark_id = region_mark_id }
+  return { buf_id = buf_id, submode = submode, extmark_id = region_extmark_id }
+end
+
+H.exchange_get_region_extmark = function(step)
+  return vim.api.nvim_buf_get_extmark_by_id(step.buf_id, H.ns_id.exchange, step.extmark_id, { details = true })
 end
 
 H.exchange_set_step_marks = function(step, mark_names)
-  local extmark_details =
-    vim.api.nvim_buf_get_extmark_by_id(step.buf_id, H.ns_id.exchange, step.mark_id, { details = true })
+  local extmark_details = H.exchange_get_region_extmark(step)
 
   H.set_mark(mark_names[1], { extmark_details[1] + 1, extmark_details[2] })
-  H.set_mark(mark_names[2], { extmark_details[3].end_row + 1, extmark_details[3].end_col })
+  H.set_mark(mark_names[2], { extmark_details[3].end_row + 1, extmark_details[3].end_col - 1 })
 end
 
 H.exchange_get_blockwise_regtype = function(mark_from, mark_to)
@@ -410,6 +437,13 @@ H.exchange_map_stop = function()
   vim.keymap.set('n', target, rhs, { desc = 'Stop exchange' })
 end
 
+H.exchange_is_same_steps = function(step_one, step_two)
+  if step_one.buf_id ~= step_two.buf_id or step_one.submode ~= step_two.submode then return false end
+  -- Region's start and end should be the same
+  local one, two = H.exchange_get_region_extmark(step_one), H.exchange_get_region_extmark(step_two)
+  return one[1] == two[1] and one[2] == two[2] and one[3].end_row == two[3].end_row and one[3].end_col == two[3].end_col
+end
+
 -- Replace --------------------------------------------------------------------
 --- Delete region between two marks and paste from register
 ---
@@ -422,25 +456,33 @@ end
 ---@private
 H.replace_do = function(data)
   local register, submode = data.register, data.submode
+  local mark_from, mark_to = data.mark_from, data.mark_to
 
   -- Do nothing with empty/unknown register
   local register_type = H.get_reg_type(register)
   if register_type == '' then H.error('Register ' .. vim.inspect(register) .. ' is empty or unknown.') end
 
   -- Determine if region is at edge which is needed for the correct paste key
-  local to_line = vim.fn.line("']")
+  local mark_arg = "'" .. mark_to
+  local to_line, to_col = vim.fn.line(mark_arg), vim.fn.col(mark_arg)
+
   local is_edge_line = submode == 'V' and to_line == vim.fn.line('$')
-  local is_edge_col = submode ~= 'V' and vim.fn.col("']") == (vim.fn.col({ to_line, '$' }) - 1)
+  local is_edge_col = submode ~= 'V' and to_col == (vim.fn.col({ to_line, '$' }) - 1)
   local is_edge = is_edge_line or is_edge_col
 
   -- Delete region to black whole register
-  local delete_keys = string.format('`%s"_d%s`%s', data.mark_from, submode, data.mark_to)
+  -- - Delete single character in blockwise submode with inclusive motion.
+  --   See https://github.com/neovim/neovim/issues/24613
+  local is_blockwise_single_cell = submode == H.submode_keys.block
+    and vim.deep_equal(H.get_mark(mark_from), H.get_mark(mark_to))
+  local forced_motion = is_blockwise_single_cell and 'v' or submode
+  local delete_keys = string.format('`%s"_d%s`%s', mark_from, forced_motion, mark_to)
   H.cmd_normal(delete_keys)
 
   -- Paste register (ensuring same submode type as region) and adjust cursor
   H.set_reg_type(register, submode)
 
-  local paste_keys = string.format('%d"%s%s`%s', data.count or 1, register, (is_edge and 'p' or 'P'), data.mark_from)
+  local paste_keys = string.format('%d"%s%s`%s', data.count or 1, register, (is_edge and 'p' or 'P'), mark_from)
   H.cmd_normal(paste_keys)
 
   H.set_reg_type(register, register_type)
@@ -462,15 +504,12 @@ end
 
 -- Marks ----------------------------------------------------------------------
 H.get_region_marks = function(mode)
-  local left, right = '[', ']'
-  if mode == 'visual' then
-    vim.cmd('normal! ' .. vim.api.nvim_replace_termcodes('<Esc>', true, true, true))
-    left, right = '<', '>'
-  end
+  local left = mode == 'visual' and '<' or '['
+  local right = mode == 'visual' and '>' or ']'
   return vim.api.nvim_buf_get_mark(0, left), vim.api.nvim_buf_get_mark(0, right)
 end
 
-H.get_mark = function(mark_name) vim.api.nvim_buf_get_mark(0, mark_name) end
+H.get_mark = function(mark_name) return vim.api.nvim_buf_get_mark(0, mark_name) end
 
 H.set_mark = function(mark_name, mark_data) vim.api.nvim_buf_set_mark(0, mark_name, mark_data[1], mark_data[2], {}) end
 
