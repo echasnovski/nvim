@@ -131,6 +131,34 @@ T['Replace']['works blockwise in Normal mode'] = function()
   validate_edit({ 'a b c', 'a b c' }, { 1, 0 }, { 'y<C-v>j', 'w', 'grie', 'w', '.' }, { 'a a a', 'a a a' }, { 1, 4 })
 end
 
+T['Replace']['works with mixed submodes in Normal mode'] = function()
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
+
+  -- Charwise paste - Linewise region
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'yiw', 'j', 'gr_' }, { 'aa', 'aa', 'cc' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'y/b$<CR>', 'j', 'gr_' }, { 'aa', 'aa', 'b', 'cc' }, { 2, 0 })
+
+  -- Charwise paste - Blockwise region
+  validate_edit({ 'aa', 'bc', 'de' }, { 1, 0 }, { 'yiw', 'j', 'grie' }, { 'aa', 'aac', 'e' }, { 2, 0 })
+  validate_edit({ 'aa', 'bc', 'de' }, { 1, 0 }, { 'y/c<CR>', 'j', 'grie' }, { 'aa', 'aac', 'b e' }, { 2, 0 })
+
+  -- Linewise paste - Charwise region
+  validate_edit({ 'aa', 'bb bb' }, { 1, 0 }, { 'yy', 'j', 'griw' }, { 'aa', 'aa bb' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc cc' }, { 1, 0 }, { 'yj', '2j', 'griw' }, { 'aa', 'bb', 'aa', 'bb cc' }, { 3, 0 })
+
+  -- Linewise paste - Blockwise region
+  validate_edit({ 'aa', 'bc', 'de' }, { 1, 0 }, { 'yy', 'j', 'grie' }, { 'aa', 'aac', 'e' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cd', 'ef' }, { 1, 0 }, { 'yj', '2j', 'grie' }, { 'aa', 'bb', 'aad', 'bbf' }, { 3, 0 })
+
+  -- Blockwise paste - Charwise region
+  validate_edit({ 'aa', 'bb bb' }, { 1, 0 }, { '<C-v>y', 'j', 'griw' }, { 'aa', 'a bb' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb bb' }, { 1, 0 }, { 'y<C-v>j', 'j', 'griw' }, { 'aa', 'a', 'b bb' }, { 2, 0 })
+
+  -- Blockwise paste - Linewise region
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { '<C-v>y', 'j', 'gr_' }, { 'aa', 'a', 'cc' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'y<C-v>j', 'j', 'gr_' }, { 'aa', 'a', 'b', 'cc' }, { 2, 0 })
+end
+
 T['Replace']['works with two types of `[count]` in Normal mode'] = function()
   -- First `[count]` for paste with dot-repeat
   validate_edit1d('aa bb cc dd', 0, { 'yiw', 'w', '2graW' }, 'aa aaaacc dd', 3)
@@ -213,28 +241,6 @@ T['Replace']['validatees `[register]` content'] = function()
 
   expect.error(function() type_keys('"agriw') end, 'Register "a".*empty')
   expect.error(function() type_keys('"Agriw') end, 'Register "A".*unknown')
-end
-
-T['Replace']['allows in Normal mode only matching region submode and register type'] = function()
-  child.o.cmdheight = 10
-  local validate = function(lines, cursor, keys)
-    expect.error(function()
-      set_lines(lines)
-      set_cursor(unpack(cursor))
-      type_keys(keys)
-    end, 'matching.*charwise, linewise, blockwise')
-  end
-
-  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
-
-  validate({ 'aa' }, { 1, 0 }, { 'yiw', 'gr_' })
-  validate({ 'aa', 'bb' }, { 1, 0 }, { 'yiw', 'grie' })
-
-  validate({ 'aa' }, { 1, 0 }, { 'yy', 'griw' })
-  validate({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'grie' })
-
-  validate({ 'aa', 'bb' }, { 1, 0 }, { 'y<C-v>j', 'griw' })
-  validate({ 'aa', 'bb' }, { 1, 0 }, { 'y<C-v>j', 'gr_' })
 end
 
 T['Replace']['respects `config.options.make_line_mappings`'] = function()

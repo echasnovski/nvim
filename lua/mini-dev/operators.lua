@@ -9,9 +9,11 @@
 --   `evaluate`, etc.).
 --
 -- - Replace:
---     - Should respect [reigster] (in Visual, at first and in dot-repeat).
---     - Should work in all edge-case places: replace on line end, replace
---       second to line end, replace last line, replace second to last line.
+--
+-- - Exchange:
+--     - Should allow exchaning text between two buffers. Ideally, `u` should
+--       undo whole exchange and not just latest paste.
+--     - Think about taking indent into account when replacing linewise.
 --
 --
 -- Docs:
@@ -27,6 +29,10 @@
 --
 -- Tests:
 -- - Replace:
+--
+-- - Exchange:
+--     - Should work across buffers.
+--     - Should restore all temporary marks and registers.
 --
 
 --- *mini.operators* Text edit operators
@@ -134,16 +140,8 @@ MiniOperators.config = {
 }
 --minidoc_afterlines_end
 
-_G.log = {}
 MiniOperators.replace = function(mode)
   if H.is_disabled() or not vim.o.modifiable then return '' end
-
-  -- If used with 'visual', operate on visual selection
-  if mode == 'visual' then
-    local cmd = string.format('normal! %d"%sP', vim.v.count1, vim.v.register)
-    vim.cmd(cmd)
-    return
-  end
 
   -- If used without arguments inside expression mapping, set it as
   -- 'operatorfunc' and call it again as a result of expression mapping.
@@ -155,34 +153,53 @@ MiniOperators.replace = function(mode)
     return vim.api.nvim_replace_termcodes('<Cmd>echon ""<CR>g@', true, true, true)
   end
 
-  table.insert(_G.log, { mode = mode })
-  local cache = H.cache.replace
-
-  -- Do nothing with empty/unknown register
-  local register_type = H.get_reg_type(cache.register)
-  if register_type == '' then H.error('Register ' .. vim.inspect(cache.register) .. ' is empty or unknown.') end
-
-  -- Allow replacing only matching region submode and register type
-  local region_submode = H.submode_keys[mode]
-  if region_submode ~= register_type then
-    H.error('Replacing is allowed only for region and register with matching submodes (charwise, linewise, blockwise).')
+  -- If used with 'visual', operate on visual selection
+  if mode == 'visual' then
+    local cmd = string.format('normal! %d"%sP', vim.v.count1, vim.v.register)
+    vim.cmd(cmd)
+    return
   end
 
-  -- Determine if region is at edge which is needed for the correct paste key
-  local to_line = vim.fn.line("']")
-  local is_edge_line = mode == 'line' and to_line == vim.fn.line('$')
-  local is_edge_col = mode ~= 'line' and vim.fn.col("']") == (vim.fn.col({ to_line, '$' }) - 1)
-  local is_edge = is_edge_line or is_edge_col
+  if not (mode == 'char' or mode == 'line' or mode == 'block') then
+    H.error('Incorrect `mode`: ' .. vim.inspect(mode) .. '.')
+  end
 
-  -- Delete to black whole register
-  local delete_keys = string.format('`["_d%s`]', region_submode)
-  H.cmd_normal(delete_keys)
-
-  -- Paste register and adjust cursor
-  local paste_keys = string.format('%d"%s%s`[', cache.count, cache.register, (is_edge and 'p' or 'P'))
-  H.cmd_normal(paste_keys)
+  -- Do replace
+  local cache = H.cache.replace
+  local data =
+    { submode = H.get_submode(mode), register = cache.register, count = cache.count, mark_from = '[', mark_to = ']' }
+  H.replace_do(data)
 
   return ''
+end
+
+MiniOperators.exchange = function(mode)
+  if H.is_disabled() or not vim.o.modifiable then return '' end
+
+  -- If used without arguments inside expression mapping, set it as
+  -- 'operatorfunc' and call it again as a result of expression mapping.
+  if mode == nil then
+    vim.o.operatorfunc = 'v:lua.MiniOperators.exchange'
+    return 'g@'
+  end
+
+  -- Depending on present cache data, perform exchange step
+  if H.cache.exchange.step_one == nil then
+    -- Store data about first region
+    H.cache.exchange.step_one = H.exchange_set_region_extmark(mode, true)
+
+    -- Temporarily remap `<C-c>` to stop the exchange
+    H.exchange_map_stop()
+  else
+    -- Store data about second region
+    H.cache.exchange.step_two = H.exchange_set_region_extmark(mode, false)
+
+    -- Do exchange
+    H.exchange_do()
+
+    -- Stop exchange
+    H.exchange_stop()
+  end
 end
 
 -- Helper data ================================================================
@@ -191,7 +208,7 @@ H.default_config = MiniOperators.config
 
 -- Namespaces
 H.ns_id = {
-  highlight = vim.api.nvim_create_namespace('MiniOperatorsHighlight'),
+  exchange = vim.api.nvim_create_namespace('MiniOperatorsExchange'),
 }
 
 -- Cache for all operators
@@ -208,7 +225,6 @@ H.submode_keys = {
 }
 
 -- Helper functionality =======================================================
-
 -- Settings -------------------------------------------------------------------
 H.setup_config = function(config)
   -- General idea: if some table elements are not present in user-supplied
@@ -279,7 +295,184 @@ end
 H.create_default_hl =
   function() vim.api.nvim_set_hl(0, 'MiniOperatorsExchangeFrom', { default = true, link = 'IncSearch' }) end
 
+-- Exchange -------------------------------------------------------------------
+H.exchange_do = function()
+  local step_one, step_two = H.cache.exchange.step_one, H.cache.exchange.step_two
+
+  -- Save temporary registers
+  local reg_one, reg_two = vim.fn.getreginfo('1'), vim.fn.getreginfo('2')
+
+  -- Put regions into registers. NOTE: do it before actual exchange to allow
+  -- intersecting regions.
+  local putting_in_register = function(step, register)
+    return function()
+      H.exchange_set_step_marks(step, { 'x', 'y' })
+
+      local cmd = string.format('normal! `x"%sy%s`y', register, step.submode)
+      vim.cmd(cmd)
+    end
+  end
+
+  H.with_temp_context({ buf_id = step_one.buf_id, marks = { 'x', 'y' } }, putting_in_register(step_one, '1'))
+  H.with_temp_context({ buf_id = step_two.buf_id, marks = { 'x', 'y' } }, putting_in_register(step_two, '2'))
+
+  -- Sequentially replace
+  local replacing = function(step, register)
+    return function()
+      H.exchange_set_step_marks(step, { 'x', 'y' })
+
+      local replace_data = { count = 1, mark_from = 'x', mark_to = 'y', submode = step.submode, register = register }
+      H.replace_do(replace_data)
+    end
+  end
+
+  H.with_temp_context({ buf_id = step_one.buf_id, marks = { 'x', 'y' } }, replacing(step_one, '2'))
+  H.with_temp_context({ buf_id = step_two.buf_id, marks = { 'x', 'y' } }, replacing(step_two, '1'))
+
+  -- Restore temporary registers
+  vim.fn.setreg('1', reg_one)
+  vim.fn.setreg('2', reg_two)
+end
+
+H.exchange_set_region_extmark = function(mode, add_highlight)
+  local submode = H.get_submode(mode)
+  local ns_id = H.ns_id.exchange
+
+  -- Compute extmark's range
+  local mark_from, mark_to = H.get_region_marks(mode)
+
+  local extmark_from = { mark_from[1] - 1, mark_from[2] }
+  local extmark_to = { mark_to[1] - 1, mark_to[2] + 1 }
+  if submode == 'V' then extmark_to[2] = vim.fn.col({ extmark_to[1] + 1, '$' }) - 1 end
+
+  -- Set extmark to represent region
+  local buf_id = vim.api.nvim_get_current_buf()
+  local extmark_opts = { end_row = extmark_to[1], end_col = extmark_to[2] }
+  local region_mark_id = vim.api.nvim_buf_set_extmark(buf_id, ns_id, extmark_from[1], extmark_from[2], extmark_opts)
+
+  -- Highlight first region to be exchanged. NOTE: Can't be done directly in
+  -- mark to account for linewise/blockwise region.
+  if add_highlight then
+    -- Highlighting blockwise region needs full register type with width
+    local is_blockwise = submode == H.submode_keys.block
+    local regtype = is_blockwise and H.exchange_get_blockwise_regtype(mark_from, mark_to) or submode
+    vim.highlight.range(buf_id, ns_id, 'MiniOperatorsExchangeFrom', extmark_from, extmark_to, { regtype = regtype })
+  end
+
+  -- Return data to cache
+  return { buf_id = buf_id, submode = submode, mark_id = region_mark_id }
+end
+
+H.exchange_set_step_marks = function(step, mark_names)
+  local extmark_details =
+    vim.api.nvim_buf_get_extmark_by_id(step.buf_id, H.ns_id.exchange, step.mark_id, { details = true })
+
+  H.set_mark(mark_names[1], { extmark_details[1] + 1, extmark_details[2] })
+  H.set_mark(mark_names[2], { extmark_details[3].end_row + 1, extmark_details[3].end_col })
+end
+
+H.exchange_get_blockwise_regtype = function(mark_from, mark_to)
+  local f = function()
+    H.set_mark('x', mark_from)
+    H.set_mark('y', mark_to)
+
+    -- Move to `x` mark, yank blockwise to register `z` until `y` mark
+    vim.cmd('normal! `x"zy\22`y')
+
+    return vim.fn.getregtype('z')
+  end
+
+  return H.with_temp_context({ buf_id = 0, marks = { 'x', 'y' }, registers = { 'z' } }, f)
+end
+
+H.exchange_stop = function()
+  local cur, ns_id = H.cache.exchange, H.ns_id.exchange
+  if cur.step_one ~= nil then vim.api.nvim_buf_clear_namespace(cur.step_one.buf_id, ns_id, 0, -1) end
+  if cur.step_two ~= nil then vim.api.nvim_buf_clear_namespace(cur.step_two.buf_id, ns_id, 0, -1) end
+  H.cache.exchange = {}
+end
+
+H.exchange_map_stop = function()
+  local target = '<C-c>'
+  local cur_ctrlc_map = vim.fn.maparg(target, 'n', false, true)
+  local rhs = function()
+    H.exchange_stop()
+    -- NOTE: Neovim<0.8 doesn't have `mapset()`
+    if vim.fn.has('nvim-0.8') == 0 then
+      vim.keymap.del('n', target)
+      return
+    end
+
+    -- Restore previous mapping if it was set
+    if vim.tbl_count(cur_ctrlc_map) == 0 then return end
+    vim.fn.mapset('n', false, cur_ctrlc_map)
+  end
+  vim.keymap.set('n', target, rhs, { desc = 'Stop exchange' })
+end
+
 -- Replace --------------------------------------------------------------------
+--- Delete region between two marks and paste from register
+---
+---@param data table Fields:
+---   - <count> (optional) - Number of times to paste.
+---   - <mark_from> - Name of "from" mark.
+---   - <mark_to> - Name of "to" mark.
+---   - <register> - Name of register from which to paste.
+---   - <submode> - Region submode. One of 'v', 'V', '\22'.
+---@private
+H.replace_do = function(data)
+  local register, submode = data.register, data.submode
+
+  -- Do nothing with empty/unknown register
+  local register_type = H.get_reg_type(register)
+  if register_type == '' then H.error('Register ' .. vim.inspect(register) .. ' is empty or unknown.') end
+
+  -- Determine if region is at edge which is needed for the correct paste key
+  local to_line = vim.fn.line("']")
+  local is_edge_line = submode == 'V' and to_line == vim.fn.line('$')
+  local is_edge_col = submode ~= 'V' and vim.fn.col("']") == (vim.fn.col({ to_line, '$' }) - 1)
+  local is_edge = is_edge_line or is_edge_col
+
+  -- Delete region to black whole register
+  local delete_keys = string.format('`%s"_d%s`%s', data.mark_from, submode, data.mark_to)
+  H.cmd_normal(delete_keys)
+
+  -- Paste register (ensuring same submode type as region) and adjust cursor
+  H.set_reg_type(register, submode)
+
+  local paste_keys = string.format('%d"%s%s`%s', data.count or 1, register, (is_edge and 'p' or 'P'), data.mark_from)
+  H.cmd_normal(paste_keys)
+
+  H.set_reg_type(register, register_type)
+end
+
+-- Registers ------------------------------------------------------------------
+H.get_reg_type = function(regname) return vim.fn.getregtype(regname):sub(1, 1) end
+
+H.set_reg_type = function(regname, new_regtype)
+  local reg_info = vim.fn.getreginfo(regname)
+  local cur_regtype, n_lines = reg_info.regtype:sub(1, 1), #reg_info.regcontents
+
+  -- Do nothing if already the same type
+  if cur_regtype == new_regtype then return end
+
+  reg_info.regtype = new_regtype
+  vim.fn.setreg(regname, reg_info)
+end
+
+-- Marks ----------------------------------------------------------------------
+H.get_region_marks = function(mode)
+  local left, right = '[', ']'
+  if mode == 'visual' then
+    vim.cmd('normal! ' .. vim.api.nvim_replace_termcodes('<Esc>', true, true, true))
+    left, right = '<', '>'
+  end
+  return vim.api.nvim_buf_get_mark(0, left), vim.api.nvim_buf_get_mark(0, right)
+end
+
+H.get_mark = function(mark_name) vim.api.nvim_buf_get_mark(0, mark_name) end
+
+H.set_mark = function(mark_name, mark_data) vim.api.nvim_buf_set_mark(0, mark_name, mark_data[1], mark_data[2], {}) end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.operators) %s', msg), 0) end
@@ -290,12 +483,39 @@ H.map = function(mode, lhs, rhs, opts)
   vim.keymap.set(mode, lhs, rhs, opts)
 end
 
-H.get_submode_keys = function(mode)
+H.get_submode = function(mode)
   if mode == 'visual' then return vim.fn.mode() end
   return H.submode_keys[mode]
 end
 
-H.get_reg_type = function(regname) return vim.fn.getregtype(regname):sub(1, 1) end
+H.with_temp_context = function(context, f)
+  local res
+  vim.api.nvim_buf_call(context.buf_id or 0, function()
+    -- Cache temporary data
+    local marks_data = {}
+    for _, mark_name in ipairs(context.marks or {}) do
+      marks_data[mark_name] = H.get_mark(mark_name)
+    end
+
+    local reg_data = {}
+    for _, reg_name in ipairs(context.registers or {}) do
+      reg_data[reg_name] = vim.fn.getreginfo(reg_name)
+    end
+
+    -- Perform action
+    res = f()
+
+    -- Restore data
+    for mark_name, data in pairs(marks_data) do
+      H.set_mark(mark_name, data)
+    end
+    for reg_name, data in pairs(reg_data) do
+      vim.fn.setreg(reg_name, data)
+    end
+  end)
+
+  return res
+end
 
 -- A hack to restore previous dot-repeat action
 H.cancel_redo = function() end;
