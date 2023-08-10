@@ -64,17 +64,22 @@ T['setup()']['creates `config` field'] = function()
   -- Check default values
   local expect_config = function(field, value) eq(child.lua_get('MiniOperators.config.' .. field), value) end
 
-  expect_config('mappings.replace', 'gr')
+  expect_config('evaluate.prefix', 'g=')
+  expect_config('evaluate.func', vim.NIL)
 
-  expect_config('options.make_line_mappings', true)
-  expect_config('options.make_visual_mappings', true)
+  expect_config('exchange.prefix', 'gx')
+  expect_config('exchange.reindent_linewise', true)
 
-  MiniTest.skip('TODO')
+  expect_config('replace.prefix', 'gr')
+  expect_config('replace.reindent_linewise', true)
+
+  expect_config('sort.prefix', 'gs')
+  expect_config('sort.func', vim.NIL)
 end
 
 T['setup()']['respects `config` argument'] = function()
-  reload_module({ options = { make_visual_mappings = false } })
-  eq(child.lua_get('MiniOperators.config.options.make_visual_mappings'), false)
+  reload_module({ exchange = { reindent_linewise = false } })
+  eq(child.lua_get('MiniOperators.config.exchange.reindent_linewise'), false)
 end
 
 T['setup()']['validates `config` argument'] = function()
@@ -85,38 +90,21 @@ T['setup()']['validates `config` argument'] = function()
 
   expect_config_error('a', 'config', 'table')
 
-  expect_config_error({ mappings = 'a' }, 'mappings', 'table')
-  expect_config_error({ options = 'a' }, 'options', 'table')
+  expect_config_error({ evaluate = 'a' }, 'evaluate', 'table')
+  expect_config_error({ evaluate = { prefix = 1 } }, 'evaluate.prefix', 'string')
+  expect_config_error({ evaluate = { func = 'a' } }, 'evaluate.func', 'function')
 
-  MiniTest.skip('TODO')
-end
+  expect_config_error({ exchange = 'a' }, 'exchange', 'table')
+  expect_config_error({ exchange = { prefix = 1 } }, 'exchange.prefix', 'string')
+  expect_config_error({ exchange = { reindent_linewise = 'a' } }, 'exchange.reindent_linewise', 'boolean')
 
-T['setup()']['respects `config.options.make_line_mappings`'] = function()
-  child.api.nvim_del_keymap('n', 'g==')
-  child.api.nvim_del_keymap('n', 'gxx')
-  child.api.nvim_del_keymap('n', 'grr')
-  child.api.nvim_del_keymap('n', 'gss')
+  expect_config_error({ replace = 'a' }, 'replace', 'table')
+  expect_config_error({ replace = { prefix = 1 } }, 'replace.prefix', 'string')
+  expect_config_error({ replace = { reindent_linewise = 'a' } }, 'replace.reindent_linewise', 'boolean')
 
-  load_module({ options = { make_line_mappings = false } })
-
-  eq(child.fn.maparg('g==', 'n'), '')
-  eq(child.fn.maparg('gxx', 'n'), '')
-  eq(child.fn.maparg('grr', 'n'), '')
-  eq(child.fn.maparg('gss', 'n'), '')
-end
-
-T['setup()']['respects `config.options.make_visual_mappings`'] = function()
-  child.api.nvim_del_keymap('x', 'g=')
-  child.api.nvim_del_keymap('x', 'gx')
-  child.api.nvim_del_keymap('x', 'gr')
-  child.api.nvim_del_keymap('x', 'gs')
-
-  load_module({ options = { make_visual_mappings = false } })
-
-  eq(child.fn.maparg('g=', 'x'), '')
-  eq(child.fn.maparg('gx', 'x'), '')
-  eq(child.fn.maparg('gr', 'x'), '')
-  eq(child.fn.maparg('gs', 'x'), '')
+  expect_config_error({ sort = 'a' }, 'sort', 'table')
+  expect_config_error({ sort = { prefix = 1 } }, 'sort.prefix', 'string')
+  expect_config_error({ sort = { func = 'a' } }, 'sort.func', 'function')
 end
 
 -- Integration tests ==========================================================
@@ -181,12 +169,13 @@ T['Exchange']['works linewise in Normal mode'] = function()
   validate_edit({ 'aa', '' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { '', 'aa' }, { 2, 0 })
   validate_edit({ 'aa', '', 'bb' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { 'bb', '', 'aa' }, { 3, 0 })
 
-  -- Blank line(s)
-  validate_edit({ 'aa', '  ' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { '  ', 'aa' }, { 2, 0 })
-  validate_edit({ ' ', '  ' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { '  ', ' ' }, { 2, 0 })
-
   -- Over several lines
   validate_edit({ 'aa', 'bb', '', 'cc' }, { 1, 0 }, { 'gxip', 'G', 'gxip' }, { 'cc', '', 'aa', 'bb' }, { 3, 0 })
+
+  -- Blank line(s)
+  child.lua('MiniOperators.config.exchange.reindent_linewise = false')
+  validate_edit({ 'aa', '  ' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { '  ', 'aa' }, { 2, 0 })
+  validate_edit({ ' ', '  ' }, { 1, 0 }, { 'gx_', 'G', 'gx_' }, { '  ', ' ' }, { 2, 0 })
 end
 
 T['Exchange']['works blockwise in Normal mode'] = function()
@@ -333,6 +322,41 @@ T['Exchange']['works when regions are made in different modes'] = function()
   validate_edit({ 'ab', 'cd' }, { 1, 0 }, { '<C-v>jgx', 'l', 'gxie' }, { 'ba', 'dc' }, { 1, 1 })
 end
 
+T['Exchange']['correctly reindents linewise'] = function()
+  -- Should exchange indents
+  validate_edit({ '\taa', 'bb' }, { 1, 0 }, { 'gx_', 'j', 'gx_' }, { '\tbb', 'aa' }, { 2, 0 })
+  validate_edit({ '\taa', 'bb' }, { 2, 0 }, { 'gx_', 'k', 'gx_' }, { '\tbb', 'aa' }, { 1, 0 })
+  validate_edit({ '\taa', '\t\tbb' }, { 1, 0 }, { 'gx_', 'j', 'gx_' }, { '\tbb', '\t\taa' }, { 2, 0 })
+  validate_edit({ '\taa', '\t\tbb' }, { 2, 0 }, { 'gx_', 'k', 'gx_' }, { '\tbb', '\t\taa' }, { 1, 0 })
+
+  validate_edit({ '  aa', 'bb' }, { 1, 0 }, { 'gx_', 'j', 'gx_' }, { '  bb', 'aa' }, { 2, 0 })
+  validate_edit({ '  aa', 'bb' }, { 2, 0 }, { 'gx_', 'k', 'gx_' }, { '  bb', 'aa' }, { 1, 0 })
+  validate_edit({ '  aa', '    bb' }, { 1, 0 }, { 'gx_', 'j', 'gx_' }, { '  bb', '    aa' }, { 2, 0 })
+  validate_edit({ '  aa', '    bb' }, { 2, 0 }, { 'gx_', 'k', 'gx_' }, { '  bb', '    aa' }, { 1, 0 })
+
+  -- Should replace current region indent with new one
+  validate_edit({ '\taa', '\t\tbb', 'cc' }, { 1, 0 }, { 'gxj', 'G', 'gx_' }, { '\tcc', 'aa', '\tbb' }, { 2, 0 })
+
+  -- Should preserve tabs vs spaces
+  validate_edit({ '\taa', '  bb' }, { 1, 0 }, { 'gx_', 'j', 'gx_' }, { '\tbb', '  aa' }, { 2, 0 })
+  validate_edit({ '\taa', '  bb' }, { 2, 0 }, { 'gx_', 'k', 'gx_' }, { '\tbb', '  aa' }, { 1, 0 })
+
+  -- Should correctly work in presence of blank lines (compute indent and not
+  -- reindent them)
+  validate_edit(
+    { '\t\taa', '', '\t', '\tcc' },
+    { 1, 0 },
+    { 'gx2j', 'G', 'gx_' },
+    { '\t\tcc', '\taa', '', '\t' },
+    { 2, 0 }
+  )
+end
+
+T['Exchange']['respects `config.exchange.reindent_linewise`'] = function()
+  child.lua('MiniOperators.config.exchange.reindent_linewise = false')
+  validate_edit({ '\taa', 'bb' }, { 1, 0 }, { 'gx_', 'j', 'gx_' }, { 'bb', '\taa' }, { 2, 0 })
+end
+
 T['Exchange']['highlights first step'] = new_set({ parametrize = { { 'charwise' }, { 'linewise' }, { 'blockwise' } } }, {
   test = function(mode)
     child.set_size(5, 12)
@@ -367,19 +391,19 @@ end
 T['Exchange']['works for intersecting regions'] = function()
   -- Charwise
   validate_edit1d('abcd', 0, { 'gx3l', 'l', 'gx3l' }, 'bcdabc', 3)
-  validate_edit1d('abcd', 0, { 'gx4l', 'l', 'gx2l' }, 'abcd', 2)
+  validate_edit1d('abcd', 0, { 'gx4l', 'l', 'gx2l' }, 'abcd', 0)
   validate_edit1d('abcd', 1, { 'gx2l', '0', 'gx4l' }, 'bc', 0)
 
   validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'vjgx', 'vjgx' }, { 'bb', 'caa', 'bc' }, { 2, 1 })
 
   -- Linewise
   validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'Vjgx', 'Vjgx' }, { 'bb', 'cc', 'aa', 'bb' }, { 3, 0 })
-  validate_edit({ 'aa', 'bb', 'cc', '' }, { 1, 0 }, { 'Vipgx', 'k', 'Vgx' }, { 'aa', 'bb', 'cc', '' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc', '' }, { 1, 0 }, { 'Vipgx', 'k', 'Vgx' }, { 'aa', 'bb', 'cc', '' }, { 1, 0 })
   validate_edit({ 'aa', 'bb', 'cc', '' }, { 2, 0 }, { 'Vgx', 'Vipgx' }, { 'bb', '' }, { 1, 0 })
 
   -- Blockwise
   validate_edit({ 'abc', 'def' }, { 1, 0 }, { '<C-v>jlgx', 'l', '<C-v>jlgx' }, { 'bcab', 'efde' }, { 1, 2 })
-  validate_edit({ 'abc', 'def' }, { 1, 0 }, { '<C-v>jllgx', 'l', '<C-v>jgx' }, { 'abc', 'def' }, { 1, 1 })
+  validate_edit({ 'abc', 'def' }, { 1, 0 }, { '<C-v>jllgx', 'l', '<C-v>jgx' }, { 'abc', 'def' }, { 1, 0 })
   validate_edit({ 'abc', 'def' }, { 1, 1 }, { '<C-v>jgx', 'h', '<C-v>jllgx' }, { 'b', 'e' }, { 1, 0 })
 end
 
@@ -457,12 +481,12 @@ T['Exchange']['does not have side effects'] = function()
   if child.fn.has('nvim-0.8') == 1 then eq(child.fn.maparg('<C-c>'), ':echo 1<CR>') end
 end
 
-T['Exchange']['works with different base mapping'] = function()
+T['Exchange']['respects `config.exchange.prefix`'] = function()
   child.api.nvim_del_keymap('n', 'gx')
   child.api.nvim_del_keymap('n', 'gxx')
   child.api.nvim_del_keymap('x', 'gx')
 
-  load_module({ mappings = { exchange = 'cx' } })
+  load_module({ exchange = { prefix = 'cx' } })
 
   validate_edit1d('aa bb', 0, { 'cxiw', 'w', 'cxiw' }, 'bb aa', 3)
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'cxx', 'j', 'cxx' }, { 'bb', 'aa' }, { 2, 0 })
@@ -474,7 +498,7 @@ T['Exchange']['allows custom mappings'] = function()
   child.api.nvim_del_keymap('n', 'gxx')
   child.api.nvim_del_keymap('x', 'gx')
 
-  load_module({ mappings = { exchange = '' } })
+  load_module({ exchange = { prefix = '' } })
 
   child.lua([[
     vim.keymap.set('n', 'cx', 'v:lua.MiniOperators.exchange()', { expr = true, replace_keycodes = false, desc = 'Exchange' })
@@ -487,15 +511,44 @@ T['Exchange']['allows custom mappings'] = function()
   validate_edit1d('aa bb', 0, { 'viwcx', 'w', 'viwcx' }, 'bb aa', 3)
 end
 
+T['Exchange']['respects `selection=exclusive`'] = function()
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
+  child.o.selection = 'exclusive'
+
+  validate_edit1d('aaa bbb x', 0, { 'gxiw', 'w', 'gxiw' }, 'bbb aaa x', 4)
+  validate_edit({ 'aa', 'bb', 'x' }, { 1, 0 }, { 'gx_', 'j', 'gx_' }, { 'bb', 'aa', 'x' }, { 2, 0 })
+  validate_edit({ 'a b c', 'a b c' }, { 1, 0 }, { 'gxie', 'w', 'gxie' }, { 'b a c', 'b a c' }, { 1, 2 })
+end
+
+T['Exchange']["respects 'nomodifiable'"] = function()
+  set_lines({ 'aa bb' })
+  set_cursor(1, 0)
+  child.bo.modifiable = false
+  type_keys('gxe', 'w', 'gx$')
+  eq(get_lines(), { 'aa bb' })
+  eq(get_cursor(), { 1, 4 })
+end
+
 T['Exchange']['respects `vim.{g,b}.minioperators_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
     child[var_type].minioperators_disable = true
-
     validate_edit1d('aa bb', 0, { 'gxiw' }, 'waa bb', 1)
   end,
 })
+
+T['Exchange']['respects `vim.b.minioperators_config`'] = function()
+  child.b.minioperators_config = { exchange = { reindent_linewise = false } }
+
+  validate_edit(
+    { '\taa', '\tbb', 'cc', 'dd' },
+    { 2, 0 },
+    { 'gx_', 'G', 'gx_' },
+    { '\taa', 'dd', 'cc', '\tbb' },
+    { 4, 0 }
+  )
+end
 
 T['Replace'] = new_set()
 
@@ -638,6 +691,47 @@ end
 T['Replace']['works with `[count]` in Visual mode'] =
   function() validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', '2gr' }, 'aa aaaa', 6) end
 
+T['Replace']['correctly reindents linewise'] = function()
+  -- Should use indent from text being replaced
+  validate_edit({ '\taa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', 'aa' }, { 2, 0 })
+  validate_edit({ '\taa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', 'bb' }, { 1, 0 })
+  validate_edit({ '\taa', '\t\tbb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', '\t\taa' }, { 2, 0 })
+  validate_edit({ '\taa', '\t\tbb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', '\t\tbb' }, { 1, 0 })
+
+  validate_edit({ '  aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '  aa', 'aa' }, { 2, 0 })
+  validate_edit({ '  aa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '  bb', 'bb' }, { 1, 0 })
+  validate_edit({ '  aa', '    bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '  aa', '    aa' }, { 2, 0 })
+  validate_edit({ '  aa', '    bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '  bb', '    bb' }, { 1, 0 })
+
+  -- Should replace current region indent with new one
+  validate_edit(
+    { '\taa', '\t\tbb', 'cc' },
+    { 1, 0 },
+    { 'yj', 'G', 'gr_' },
+    { '\taa', '\t\tbb', 'aa', '\tbb' },
+    { 3, 0 }
+  )
+
+  -- Should preserve tabs vs spaces
+  validate_edit({ '\taa', '  bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', '  aa' }, { 2, 0 })
+  validate_edit({ '\taa', '  bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', '  bb' }, { 1, 0 })
+
+  -- Should correctly work in presence of blank lines (compute indent and not
+  -- reindent them)
+  validate_edit(
+    { '\t\taa', '', '\t', '\tcc' },
+    { 1, 0 },
+    { 'y2j', 'G', 'gr_' },
+    { '\t\taa', '', '\t', '\taa', '', '\t' },
+    { 4, 0 }
+  )
+end
+
+T['Replace']['respects `config.replace.reindent_linewise`'] = function()
+  child.lua('MiniOperators.config.replace.reindent_linewise = false')
+  validate_edit({ '\taa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', '\taa' }, { 2, 0 })
+end
+
 T['Replace']['works with `[register]`'] = function()
   -- Normal mode
   validate_edit1d('aa bb cc', 0, { '"xyiw', 'w', 'yiw', 'w', '"xgriw' }, 'aa bb aa', 6)
@@ -669,18 +763,25 @@ T['Replace']['works in edge cases'] = function()
   validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'yy', 'G', 'grr' }, { 'aa', 'bb', 'aa' }, { 3, 0 })
 end
 
+T['Replace']['can replace whole buffer'] = function()
+  set_lines({ 'aa' })
+  type_keys('yy')
+
+  validate_edit({ 'bb', 'cc' }, { 1, 0 }, { 'grip' }, { 'aa' }, { 1, 0 })
+end
+
 T['Replace']['does not have side effects'] = function()
   -- Register type should not change
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'griw' }, { 'aa', 'aa' }, { 2, 0 })
   eq(child.fn.getregtype('"'), 'V')
 end
 
-T['Replace']['works with different base mapping'] = function()
+T['Replace']['respects `config.replace.prefix`'] = function()
   child.api.nvim_del_keymap('n', 'gr')
   child.api.nvim_del_keymap('n', 'grr')
   child.api.nvim_del_keymap('x', 'gr')
 
-  load_module({ mappings = { replace = 'cr' } })
+  load_module({ replace = { prefix = 'cr' } })
 
   validate_edit1d('aa bb', 0, { 'yiw', 'w', 'criw' }, 'aa aa', 3)
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
@@ -692,7 +793,7 @@ T['Replace']['allows custom mappings'] = function()
   child.api.nvim_del_keymap('n', 'grr')
   child.api.nvim_del_keymap('x', 'gr')
 
-  load_module({ mappings = { replace = '' } })
+  load_module({ replace = { prefix = '' } })
 
   child.lua([[
     vim.keymap.set('n', 'cr', 'v:lua.MiniOperators.replace()', { expr = true, replace_keycodes = false, desc = 'Replace' })
@@ -705,14 +806,43 @@ T['Replace']['allows custom mappings'] = function()
   validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 4)
 end
 
+T['Replace']['respects `selection=exclusive`'] = function()
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
+  child.o.selection = 'exclusive'
+
+  validate_edit1d('aaa bbb x', 0, { 'yiw', 'w', 'griw' }, 'aaa aaa x', 4)
+  validate_edit({ 'aa', 'bb', 'x' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { 'aa', 'aa', 'x' }, { 2, 0 })
+  validate_edit({ 'a b c', 'a b c' }, { 1, 0 }, { 'y<C-v>j', 'w', 'grie' }, { 'a a c', 'a a c' }, { 1, 2 })
+end
+
+T['Replace']["respects 'nomodifiable'"] = function()
+  set_lines({ 'aa bb' })
+  set_cursor(1, 0)
+  child.bo.modifiable = false
+  type_keys('yiw', 'w', 'gr$')
+  eq(get_lines(), { 'aa bb' })
+  eq(get_cursor(), { 1, 4 })
+end
+
 T['Replace']['respects `vim.{g,b}.minioperators_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
     child[var_type].minioperators_disable = true
-
     validate_edit1d('aa bb', 0, { 'yiw', 'w', 'griw' }, 'aa wbb', 4)
   end,
 })
+
+T['Replace']['respects `vim.b.minioperators_config`'] = function()
+  child.b.minioperators_config = { replace = { reindent_linewise = false } }
+
+  validate_edit(
+    { '\taa', '\tbb', 'cc', 'dd' },
+    { 2, 0 },
+    { 'yy', 'G', 'gr_' },
+    { '\taa', '\tbb', 'cc', '\tbb' },
+    { 4, 0 }
+  )
+end
 
 return T
