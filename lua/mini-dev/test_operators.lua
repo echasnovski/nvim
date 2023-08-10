@@ -91,6 +91,34 @@ T['setup()']['validates `config` argument'] = function()
   MiniTest.skip('TODO')
 end
 
+T['setup()']['respects `config.options.make_line_mappings`'] = function()
+  child.api.nvim_del_keymap('n', 'g==')
+  child.api.nvim_del_keymap('n', 'gxx')
+  child.api.nvim_del_keymap('n', 'grr')
+  child.api.nvim_del_keymap('n', 'gss')
+
+  load_module({ options = { make_line_mappings = false } })
+
+  eq(child.fn.maparg('g==', 'n'), '')
+  eq(child.fn.maparg('gxx', 'n'), '')
+  eq(child.fn.maparg('grr', 'n'), '')
+  eq(child.fn.maparg('gss', 'n'), '')
+end
+
+T['setup()']['respects `config.options.make_visual_mappings`'] = function()
+  child.api.nvim_del_keymap('x', 'g=')
+  child.api.nvim_del_keymap('x', 'gx')
+  child.api.nvim_del_keymap('x', 'gr')
+  child.api.nvim_del_keymap('x', 'gs')
+
+  load_module({ options = { make_visual_mappings = false } })
+
+  eq(child.fn.maparg('g=', 'x'), '')
+  eq(child.fn.maparg('gx', 'x'), '')
+  eq(child.fn.maparg('gr', 'x'), '')
+  eq(child.fn.maparg('gs', 'x'), '')
+end
+
 -- Integration tests ==========================================================
 T['Exchange'] = new_set()
 
@@ -220,58 +248,176 @@ T['Exchange']['works with mixed submodes in Normal mode'] = function()
   validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { '<C-v>jgx', 'G', 'gx_' }, { 'cca', 'b', 'a', 'b' }, { 3, 0 })
 end
 
-T['Exchange']['works in Normal mode for line'] = function() MiniTest.skip() end
+T['Exchange']['works with `[count]` in Normal mode'] = function()
+  validate_edit1d('aa bb cc dd ee ', 0, { '2gxaw', '2w', 'gx3aw' }, 'cc dd ee aa bb ', 9)
 
-T['Exchange']['works in Visual mode'] = function() MiniTest.skip() end
+  -- With dot-repeat
+  validate_edit1d('aa bb cc dd ', 0, { '2gxaw', '2w', '.', '0.2w.' }, 'aa bb cc dd ', 6)
+end
 
-T['Exchange']['works when regions are made in different mode'] = function()
+T['Exchange']['works in Normal mode for line'] = function()
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'gxx', 'j', 'gxx' }, { 'bb', 'aa' }, { 2, 0 })
+
+  -- With dot-repeat
+  validate_edit({ 'aa', 'bb', 'cc', 'dd' }, { 1, 0 }, { 'gxx', 'j', '.', 'j.j.' }, { 'bb', 'aa', 'dd', 'cc' }, { 4, 0 })
+end
+
+T['Exchange']['works with `[count]` in Normal mode for line'] = function()
+  validate_edit(
+    { 'aa', 'bb', 'cc', 'dd', 'ee' },
+    { 1, 0 },
+    { '2gxx', '2j', '3gxx' },
+    { 'cc', 'dd', 'ee', 'aa', 'bb' },
+    { 4, 0 }
+  )
+
+  -- With dot-repeat
+  validate_edit(
+    { 'aa', 'bb', 'cc', 'dd' },
+    { 1, 0 },
+    { '2gxx', '2j', '.', 'gg.2j.' },
+    { 'aa', 'bb', 'cc', 'dd' },
+    { 3, 0 }
+  )
+end
+
+T['Exchange']['works in Visual mode'] = function()
+  -- Charwise from - Charwise to
+  validate_edit1d('aa bb', 0, { 'viwgx', 'w', 'viwgx' }, 'bb aa', 3)
+  validate_edit1d('aa bb', 3, { 'viwgx', '0', 'viwgx' }, 'bb aa', 0)
+
+  -- Charwise from - Linewise to
+  validate_edit({ 'aa x', 'bb' }, { 1, 0 }, { 'viwgx', 'j', 'Vgx' }, { 'bb x', 'aa' }, { 2, 0 })
+  validate_edit({ 'aa x', 'bb' }, { 2, 0 }, { 'Vgx', 'k0', 'viwgx' }, { 'bb x', 'aa' }, { 1, 0 })
+
+  -- Charwise from - Blockwise to
+  validate_edit({ 'aa x', 'bb', 'cc' }, { 1, 0 }, { 'viwgx', 'j0', '<C-v>jgx' }, { 'b', 'c x', 'aab', 'c' }, { 3, 0 })
+  validate_edit({ 'aa x', 'bb', 'cc' }, { 2, 0 }, { '<C-v>jgx', 'gg0', 'viwgx' }, { 'b', 'c x', 'aab', 'c' }, { 1, 0 })
+
+  -- Linewise from - Charwise to
+  validate_edit({ 'aa', 'bb x' }, { 1, 0 }, { 'Vgx', 'j0', 'viwgx' }, { 'bb', 'aa x' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb x' }, { 2, 0 }, { 'viwgx', 'k', 'Vgx' }, { 'bb', 'aa x' }, { 1, 0 })
+
+  -- Linewise from - Linewise to
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'Vgx', 'j', 'Vgx' }, { 'bb', 'aa' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb' }, { 2, 0 }, { 'Vgx', 'k', 'Vgx' }, { 'bb', 'aa' }, { 1, 0 })
+
+  -- Linewise from - Blockwise to
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'Vgx', 'j0', '<C-v>jgx' }, { 'b', 'c', 'aab', 'c' }, { 3, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 2, 0 }, { '<C-v>jgx', 'gg0', 'Vgx' }, { 'b', 'c', 'aab', 'c' }, { 1, 0 })
+
+  -- Blockwise from - Charwise to
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { '<C-v>jgx', 'G', 'viwgx' }, { 'cca', 'b', 'a', 'b' }, { 3, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 3, 0 }, { 'viwgx', 'gg0', '<C-v>jgx' }, { 'cca', 'b', 'a', 'b' }, { 1, 0 })
+
+  -- Blockwise from - Linewise to
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { '<C-v>jgx', 'G', 'Vgx' }, { 'cca', 'b', 'a', 'b' }, { 3, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 3, 0 }, { 'Vgx', 'gg0', '<C-v>jgx' }, { 'cca', 'b', 'a', 'b' }, { 1, 0 })
+
+  -- Blockwise from - Blockwise to
+  validate_edit({ 'ab', 'cd' }, { 1, 0 }, { '<C-v>jgx', 'l', '<C-v>jgx' }, { 'ba', 'dc' }, { 1, 1 })
+  validate_edit({ 'ab', 'cd' }, { 1, 1 }, { '<C-v>jgx', 'h', '<C-v>jgx' }, { 'ba', 'dc' }, { 1, 0 })
+end
+
+T['Exchange']['works when regions are made in different modes'] = function()
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
+
   -- Normal from - Visual to
+  validate_edit1d('aa bb', 0, { 'gxiw', 'w', 'viwgx' }, 'bb aa', 3)
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'gx_', 'j', 'Vgx' }, { 'bb', 'aa' }, { 2, 0 })
+  validate_edit({ 'ab', 'cd' }, { 1, 0 }, { 'gxie', 'l', '<C-v>jgx' }, { 'ba', 'dc' }, { 1, 1 })
 
   -- Normal to - Visual from
-  MiniTest.skip()
+  validate_edit1d('aa bb', 0, { 'viwgx', 'w', 'gxiw' }, 'bb aa', 3)
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'Vgx', 'j', 'gx_' }, { 'bb', 'aa' }, { 2, 0 })
+  validate_edit({ 'ab', 'cd' }, { 1, 0 }, { '<C-v>jgx', 'l', 'gxie' }, { 'ba', 'dc' }, { 1, 1 })
 end
 
-T['Exchange']['respects `config.options.make_line_mappings`'] = function()
-  -- child.api.nvim_del_keymap('n', 'grr')
-  -- load_module({ options = { make_line_mappings = false } })
-  -- eq(child.fn.maparg('grr', 'n'), '')
-  MiniTest.skip()
-end
+T['Exchange']['highlights first step'] = new_set({ parametrize = { { 'charwise' }, { 'linewise' }, { 'blockwise' } } }, {
+  test = function(mode)
+    child.set_size(5, 12)
+    local keys = ({ charwise = 'gxiw', linewise = 'gx_', blockwise = '<C-v>jlgx' })[mode]
 
-T['Exchange']['respects `config.options.make_visual_mappings`'] = function()
-  -- child.api.nvim_del_keymap('x', 'gr')
-  -- load_module({ options = { make_visual_mappings = false } })
-  -- eq(child.fn.maparg('gr', 'x'), '')
-  MiniTest.skip()
-end
+    set_lines({ 'aa aa', 'bb' })
+    set_cursor(1, 0)
+    type_keys(keys)
+    child.expect_screenshot()
+  end,
+})
 
-T['Exchange']['highlights first step'] = function() MiniTest.skip() end
+T['Exchange']['can be canceled'] = function()
+  child.set_size(5, 12)
+  set_lines({ 'aa bb' })
+  set_cursor(1, 0)
 
-T['Exchange']['can be canceled'] = function() MiniTest.skip() end
+  type_keys('gxiw')
+  child.expect_screenshot()
 
-T['Exchange']['works in edge cases'] = function()
-  -- -- Start of line
-  -- validate_edit1d('aa bb', 3, { 'yiw', '0', 'griw' }, 'bb bb', 0)
-  --
-  -- -- End of line
-  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'griw' }, 'aa aa', 3)
-  --
-  -- -- First line
-  -- validate_edit({ 'aa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'grr' }, { 'bb', 'bb' }, { 1, 0 })
-  --
-  -- -- Last line
-  -- validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'yy', 'G', 'grr' }, { 'aa', 'bb', 'aa' }, { 3, 0 })
-  MiniTest.skip()
+  -- Should reset highlighting and "exchange state"
+  type_keys('<C-c>')
+  child.expect_screenshot()
+
+  type_keys('gxiw', 'w', 'gxiw')
+  eq(get_lines(), { 'bb aa' })
+
+  -- Should cleanup temporary mapping
+  eq(child.fn.maparg('<C-c>'), '')
 end
 
 T['Exchange']['works for intersecting regions'] = function()
   -- Charwise
+  validate_edit1d('abcd', 0, { 'gx3l', 'l', 'gx3l' }, 'bcdabc', 3)
+  validate_edit1d('abcd', 0, { 'gx4l', 'l', 'gx2l' }, 'abcd', 2)
+  validate_edit1d('abcd', 1, { 'gx2l', '0', 'gx4l' }, 'bc', 0)
+
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'vjgx', 'vjgx' }, { 'bb', 'caa', 'bc' }, { 2, 1 })
+
   -- Linewise
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'Vjgx', 'Vjgx' }, { 'bb', 'cc', 'aa', 'bb' }, { 3, 0 })
+  validate_edit({ 'aa', 'bb', 'cc', '' }, { 1, 0 }, { 'Vipgx', 'k', 'Vgx' }, { 'aa', 'bb', 'cc', '' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc', '' }, { 2, 0 }, { 'Vgx', 'Vipgx' }, { 'bb', '' }, { 1, 0 })
+
   -- Blockwise
-  MiniTest.skip()
+  validate_edit({ 'abc', 'def' }, { 1, 0 }, { '<C-v>jlgx', 'l', '<C-v>jlgx' }, { 'bcab', 'efde' }, { 1, 2 })
+  validate_edit({ 'abc', 'def' }, { 1, 0 }, { '<C-v>jllgx', 'l', '<C-v>jgx' }, { 'abc', 'def' }, { 1, 1 })
+  validate_edit({ 'abc', 'def' }, { 1, 1 }, { '<C-v>jgx', 'h', '<C-v>jllgx' }, { 'b', 'e' }, { 1, 0 })
 end
 
-T['Exchange']['works for regions in different buffers'] = function() MiniTest.skip() end
+T['Exchange']['works for regions in different buffers'] = function()
+  local buf_1 = child.api.nvim_create_buf(true, false)
+  local buf_2 = child.api.nvim_create_buf(true, false)
+
+  child.api.nvim_buf_set_lines(buf_1, 0, -1, true, { 'aa', 'aa' })
+  child.api.nvim_buf_set_lines(buf_2, 0, -1, true, { 'bb', 'bb' })
+
+  child.api.nvim_set_current_buf(buf_1)
+  type_keys('gx_')
+  child.api.nvim_set_current_buf(buf_2)
+  type_keys('gx_')
+
+  eq(child.api.nvim_buf_get_lines(buf_1, 0, -1, true), { 'bb', 'aa' })
+  eq(child.api.nvim_buf_get_lines(buf_2, 0, -1, true), { 'aa', 'bb' })
+end
+
+T['Exchange']['accounts for outdated first step buffer'] = function()
+  local buf_1 = child.api.nvim_create_buf(true, false)
+  local buf_2 = child.api.nvim_create_buf(true, false)
+
+  child.api.nvim_buf_set_lines(buf_1, 0, -1, true, { 'aa', 'aa' })
+  child.api.nvim_buf_set_lines(buf_2, 0, -1, true, { 'bb', 'cc' })
+
+  child.api.nvim_set_current_buf(buf_1)
+  type_keys('gx_')
+  child.api.nvim_set_current_buf(buf_2)
+
+  child.api.nvim_buf_delete(buf_1, { force = true })
+  -- Should not error and restart exchange process
+  type_keys('gx_')
+  eq(get_lines(), { 'bb', 'cc' })
+
+  type_keys('j', 'gx_')
+  eq(get_lines(), { 'cc', 'bb' })
+end
 
 T['Exchange']['works for same region'] = function()
   -- Charwise
@@ -281,55 +427,73 @@ T['Exchange']['works for same region'] = function()
   validate_edit1d('aa bb cc', 4, { 'gx_', 'gx_' }, 'aa bb cc', 0)
 
   -- Blockwise
-  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
-  validate_edit({ 'ab', 'cd' }, { 1, 0 }, { 'gxie', 'gxie' }, { 'ab', 'cd' }, { 1, 0 })
+  validate_edit({ 'ab', 'cd' }, { 1, 0 }, { '<C-v>jgx', '<C-v>jgx' }, { 'ab', 'cd' }, { 2, 0 })
 end
 
 T['Exchange']['does not have side effects'] = function()
+  set_lines({ 'aa', 'bb', 'cc' })
+
   -- Marks `x`, `y` and registers `1`, `2`
-  MiniTest.skip()
+  set_cursor(1, 0)
+  type_keys('mx')
+  type_keys('v"1y')
+
+  set_cursor(1, 1)
+  type_keys('my')
+  type_keys('v"2y')
+
+  -- Should properly manage stop mapping
+  child.api.nvim_set_keymap('n', '<C-c>', ':echo 1<CR>', {})
+
+  -- Do exchange
+  set_cursor(2, 0)
+  type_keys('gx_', 'j', 'gx_')
+
+  -- Validate
+  eq(child.api.nvim_buf_get_mark(0, 'x'), { 1, 0 })
+  eq(child.api.nvim_buf_get_mark(0, 'y'), { 1, 1 })
+  eq(child.fn.getreg('1'), 'a')
+  eq(child.fn.getreg('2'), 'a')
+  if child.fn.has('nvim-0.8') == 1 then eq(child.fn.maparg('<C-c>'), ':echo 1<CR>') end
 end
 
 T['Exchange']['works with different base mapping'] = function()
-  -- child.api.nvim_del_keymap('n', 'gr')
-  -- child.api.nvim_del_keymap('n', 'grr')
-  -- child.api.nvim_del_keymap('x', 'gr')
-  --
-  -- load_module({ mappings = { replace = 'cr' } })
-  --
-  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'criw' }, 'aa aa', 3)
-  -- validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
-  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 4)
-  MiniTest.skip()
+  child.api.nvim_del_keymap('n', 'gx')
+  child.api.nvim_del_keymap('n', 'gxx')
+  child.api.nvim_del_keymap('x', 'gx')
+
+  load_module({ mappings = { exchange = 'cx' } })
+
+  validate_edit1d('aa bb', 0, { 'cxiw', 'w', 'cxiw' }, 'bb aa', 3)
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'cxx', 'j', 'cxx' }, { 'bb', 'aa' }, { 2, 0 })
+  validate_edit1d('aa bb', 0, { 'viwcx', 'w', 'viwcx' }, 'bb aa', 3)
 end
 
 T['Exchange']['allows custom mappings'] = function()
-  -- child.api.nvim_del_keymap('n', 'gr')
-  -- child.api.nvim_del_keymap('n', 'grr')
-  -- child.api.nvim_del_keymap('x', 'gr')
-  --
-  -- load_module({ mappings = { replace = '' } })
-  --
-  -- child.lua([[
-  --   vim.keymap.set('n', 'cr', 'v:lua.MiniOperators.replace()', { expr = true, replace_keycodes = false, desc = 'Replace' })
-  --   vim.keymap.set('n', 'crr', 'cr_', { remap = true, desc = 'Replace line' })
-  --   vim.keymap.set('x', 'cr', '<Cmd>lua MiniOperators.replace("visual")<CR>', { desc = 'Replace selection' })
-  -- ]])
-  --
-  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'criw' }, 'aa aa', 3)
-  -- validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
-  -- validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 4)
-  MiniTest.skip()
+  child.api.nvim_del_keymap('n', 'gx')
+  child.api.nvim_del_keymap('n', 'gxx')
+  child.api.nvim_del_keymap('x', 'gx')
+
+  load_module({ mappings = { exchange = '' } })
+
+  child.lua([[
+    vim.keymap.set('n', 'cx', 'v:lua.MiniOperators.exchange()', { expr = true, replace_keycodes = false, desc = 'Exchange' })
+    vim.keymap.set('n', 'cxx', 'cx_', { remap = true, desc = 'Exchange line' })
+    vim.keymap.set('x', 'cx', '<Cmd>lua MiniOperators.exchange("visual")<CR>', { desc = 'Exchange selection' })
+  ]])
+
+  validate_edit1d('aa bb', 0, { 'cxiw', 'w', 'cxiw' }, 'bb aa', 3)
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'cxx', 'j', 'cxx' }, { 'bb', 'aa' }, { 2, 0 })
+  validate_edit1d('aa bb', 0, { 'viwcx', 'w', 'viwcx' }, 'bb aa', 3)
 end
 
 T['Exchange']['respects `vim.{g,b}.minioperators_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
-    -- child[var_type].minioperators_disable = true
-    --
-    -- validate_edit1d('aa bb', 0, {'yiw', 'w', 'griw'}, 'aa wbb', 4)
-    MiniTest.skip()
+    child[var_type].minioperators_disable = true
+
+    validate_edit1d('aa bb', 0, { 'gxiw' }, 'waa bb', 1)
   end,
 })
 
@@ -489,18 +653,6 @@ T['Replace']['validatees `[register]` content'] = function()
 
   expect.error(function() type_keys('"agriw') end, 'Register "a".*empty')
   expect.error(function() type_keys('"Agriw') end, 'Register "A".*unknown')
-end
-
-T['Replace']['respects `config.options.make_line_mappings`'] = function()
-  child.api.nvim_del_keymap('n', 'grr')
-  load_module({ options = { make_line_mappings = false } })
-  eq(child.fn.maparg('grr', 'n'), '')
-end
-
-T['Replace']['respects `config.options.make_visual_mappings`'] = function()
-  child.api.nvim_del_keymap('x', 'gr')
-  load_module({ options = { make_visual_mappings = false } })
-  eq(child.fn.maparg('gr', 'x'), '')
 end
 
 T['Replace']['works in edge cases'] = function()

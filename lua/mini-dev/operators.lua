@@ -32,6 +32,10 @@
 --       `[count1]gr[count2]{motion}` (`[count1]` is for pasting,
 --       `[count2]` is for textobject/motion).
 --
+-- - Exchange:
+--     - Works with most cases of intersecting regions, but not officially
+--       supported.
+--
 --
 -- Tests:
 -- - Replace:
@@ -190,12 +194,12 @@ MiniOperators.exchange = function(mode)
   end
 
   -- Depending on present cache data, perform exchange step
-  if H.cache.exchange.step_one == nil then
+  if not H.exchange_has_step_one() then
     -- Store data about first region
     H.cache.exchange.step_one = H.exchange_set_region_extmark(mode, true)
 
     -- Temporarily remap `<C-c>` to stop the exchange
-    H.exchange_map_stop()
+    H.exchange_set_stop_mapping()
   else
     -- Store data about second region
     H.cache.exchange.step_two = H.exchange_set_region_extmark(mode, false)
@@ -343,6 +347,17 @@ H.exchange_do = function()
   vim.fn.setreg('2', reg_two)
 end
 
+H.exchange_has_step_one = function()
+  local step_one = H.cache.exchange.step_one
+  if type(step_one) ~= 'table' then return false end
+
+  if not vim.api.nvim_buf_is_valid(step_one.buf_id) then
+    H.exchange_stop()
+    return false
+  end
+  return true
+end
+
 H.exchange_set_region_extmark = function(mode, add_highlight)
   local submode = H.get_submode(mode)
   local ns_id = H.ns_id.exchange
@@ -371,8 +386,8 @@ H.exchange_set_region_extmark = function(mode, add_highlight)
     end_row = extmark_to[1],
     end_col = extmark_to[2],
     hl_group = extmark_hl_group,
-    -- Using this type of gravity is better for handling empty lines
-    end_right_gravity = true,
+    -- Using this gravity is better for handling empty lines in linewise mode
+    end_right_gravity = mode == 'line',
   }
   local region_extmark_id = vim.api.nvim_buf_set_extmark(buf_id, ns_id, extmark_from[1], extmark_from[2], extmark_opts)
 
@@ -413,28 +428,31 @@ H.exchange_get_blockwise_regtype = function(mark_from, mark_to)
 end
 
 H.exchange_stop = function()
+  H.exchange_del_stop_mapping()
+
   local cur, ns_id = H.cache.exchange, H.ns_id.exchange
-  if cur.step_one ~= nil then vim.api.nvim_buf_clear_namespace(cur.step_one.buf_id, ns_id, 0, -1) end
-  if cur.step_two ~= nil then vim.api.nvim_buf_clear_namespace(cur.step_two.buf_id, ns_id, 0, -1) end
+  if cur.step_one ~= nil then pcall(vim.api.nvim_buf_clear_namespace, cur.step_one.buf_id, ns_id, 0, -1) end
+  if cur.step_two ~= nil then pcall(vim.api.nvim_buf_clear_namespace, cur.step_two.buf_id, ns_id, 0, -1) end
   H.cache.exchange = {}
 end
 
-H.exchange_map_stop = function()
-  local target = '<C-c>'
-  local cur_ctrlc_map = vim.fn.maparg(target, 'n', false, true)
-  local rhs = function()
-    H.exchange_stop()
-    -- NOTE: Neovim<0.8 doesn't have `mapset()`
-    if vim.fn.has('nvim-0.8') == 0 then
-      vim.keymap.del('n', target)
-      return
-    end
+H.exchange_set_stop_mapping = function()
+  local lhs = '<C-c>'
+  H.cache.exchange.stop_restore_map_data = vim.fn.maparg(lhs, 'n', false, true)
+  vim.keymap.set('n', lhs, H.exchange_stop, { desc = 'Stop exchange' })
+end
 
-    -- Restore previous mapping if it was set
-    if vim.tbl_count(cur_ctrlc_map) == 0 then return end
-    vim.fn.mapset('n', false, cur_ctrlc_map)
+H.exchange_del_stop_mapping = function()
+  local map_data = H.cache.exchange.stop_restore_map_data
+  if map_data == nil then return end
+
+  -- Try restore previous mapping if it was set. NOTE: Neovim<0.8 doesn't have
+  -- `mapset()`, so resort to deleting.
+  if vim.tbl_count(map_data) > 0 and vim.fn.has('nvim-0.8') == 1 then
+    vim.fn.mapset('n', false, map_data)
+  else
+    vim.keymap.del('n', map_data.lhs or '<C-c>')
   end
-  vim.keymap.set('n', target, rhs, { desc = 'Stop exchange' })
 end
 
 H.exchange_is_same_steps = function(step_one, step_two)
@@ -455,6 +473,10 @@ end
 ---   - <submode> - Region submode. One of 'v', 'V', '\22'.
 ---@private
 H.replace_do = function(data)
+  -- NOTE: Ideally, implementation would leverage "Visually select - press `P`"
+  -- approach, but it has issues with dot-repeat. The `cancel_redo()` approach
+  -- doesn't work probably because `P` implementation uses more than one
+  -- dot-repeat overwrite.
   local register, submode = data.register, data.submode
   local mark_from, mark_to = data.mark_from, data.mark_to
 
