@@ -16,6 +16,11 @@ local get_lines = function(...) return child.get_lines(...) end
 local type_keys = function(...) return child.type_keys(...) end
 --stylua: ignore end
 
+local forward_lua = function(fun_str)
+  local lua_cmd = fun_str .. '(...)'
+  return function(...) return child.lua_get(lua_cmd, { ... }) end
+end
+
 -- Custom validators
 local validate_edit = function(lines_before, cursor_before, keys, lines_after, cursor_after)
   child.ensure_normal_mode()
@@ -105,6 +110,121 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ sort = 'a' }, 'sort', 'table')
   expect_config_error({ sort = { prefix = 1 } }, 'sort.prefix', 'string')
   expect_config_error({ sort = { func = 'a' } }, 'sort.func', 'function')
+end
+
+T['exchange()'] = new_set()
+
+T['exchange()']['is present'] = function() eq(child.lua_get('type(MiniOperators.exchange)'), 'function') end
+
+T['replace()'] = new_set()
+
+T['replace()']['is present'] = function() eq(child.lua_get('type(MiniOperators.replace)'), 'function') end
+
+T['sort()'] = new_set()
+
+T['sort()']['is present'] = function() eq(child.lua_get('type(MiniOperators.sort)'), 'function') end
+
+T['default_sort_func()'] = new_set()
+
+local default_sort_func = forward_lua('MiniOperators.default_sort_func')
+
+T['default_sort_func()']['works for charwise'] = function()
+  local validate =
+    function(lines_input, ref_output) eq(default_sort_func({ lines = lines_input, submode = 'v' }), ref_output) end
+
+  -- Basic tests
+  validate({ 'b, a' }, { 'a, b' })
+  validate({ 'b; a' }, { 'a; b' })
+  validate({ 'b a' }, { 'a b' })
+
+  -- Already sorted
+  validate({ 'a, b' }, { 'a, b' })
+
+  -- Correctly picks split pattern (',' > ';' > '%s*')
+  validate({ 'c, a; b' }, { 'a; b, c' })
+  validate({ 'c a; b' }, { 'b; c a' })
+
+  -- Works with whitespace (preserves and sorts without it)
+  validate({ 'e ,  d,   b    ,a,c' }, { 'a ,  b,   c    ,d,e' })
+  validate({ 'e ;  d;   b    ;a;c' }, { 'a ;  b;   c    ;d;e' })
+  validate({ 'c a  b' }, { 'a b  c' })
+
+  -- Works with multiline region
+  validate({ 'c, a, ', 'b' }, { 'a, b, ', 'c' })
+  -- - Here there are essentially three parts: 'c', 'd\na', 'b\ne'.
+  --   They are sorted and then resplit by '\n'.
+  validate({ 'c, d', 'a, b', 'e' }, { 'b', 'e, c, d', 'a' })
+
+  -- Works with empty parts
+  validate({ 'b,,a,' }, { ',,a,b' })
+end
+
+T['default_sort_func()']['works for linewise'] = function()
+  local validate =
+    function(lines_input, ref_output) eq(default_sort_func({ lines = lines_input, submode = 'V' }), ref_output) end
+
+  validate({ 'c', 'a', 'b' }, { 'a', 'b', 'c' })
+  validate({ 'xc', 'xa', 'xb' }, { 'xa', 'xb', 'xc' })
+
+  -- Already sorted
+  validate({ 'a', 'b' }, { 'a', 'b' })
+
+  -- Doesn't ignore whitespace
+  validate({ 'a', ' b' }, { ' b', 'a' })
+end
+
+T['default_sort_func()']['works for blockwise'] = function()
+  local validate =
+    function(lines_input, ref_output) eq(default_sort_func({ lines = lines_input, submode = '\22' }), ref_output) end
+
+  validate({ 'c', 'a', 'b' }, { 'a', 'b', 'c' })
+  validate({ 'xc', 'xa', 'xb' }, { 'xa', 'xb', 'xc' })
+
+  -- Already sorted
+  validate({ 'a', 'b' }, { 'a', 'b' })
+
+  -- Doesn't ignore whitespace
+  validate({ 'a', ' b' }, { ' b', 'a' })
+end
+
+T['default_sort_func()']['respects `opts.compare_fun`'] = function()
+  -- Compare by the second character
+  child.lua('_G.compare_fun = function(a, b) return a:sub(2, 2) < b:sub(2, 2) end')
+
+  eq(
+    child.lua_get([[MiniOperators.default_sort_func(
+        { lines = { 'ab', 'ba' }, submode = 'V' },
+        { compare_fun = _G.compare_fun }
+      )]]),
+    { 'ba', 'ab' }
+  )
+end
+
+T['default_sort_func()']['respects `opts.split_patterns`'] = function()
+  local validate = function(lines_input, ref_output, split_patterns)
+    eq(default_sort_func({ lines = lines_input, submode = 'v' }, { split_patterns = split_patterns }), ref_output)
+  end
+
+  validate({ 'b + c+a' }, { ' c+a+b ' }, { '%+' })
+  validate({ 'b + c+a' }, { 'a + b+c' }, { '%s*%+%s*' })
+
+  validate({ 'b++c+++a' }, { '+++a+b+c' }, { '%+' })
+  validate({ 'b++c+++a' }, { 'a++b+++c' }, { '%++' })
+
+  -- Correctly picks in order
+  validate({ 'c+b-a' }, { 'b-a+c' }, { '%+', '%-' })
+  validate({ 'c-b-a' }, { 'a-b-c' }, { '%+', '%-' })
+end
+
+T['default_sort_func()']['validates arguments'] = function()
+  expect.error(default_sort_func, '`content`', 1)
+  expect.error(default_sort_func, '`content`', {})
+  expect.error(default_sort_func, '`content`', { submode = 'v' })
+  expect.error(default_sort_func, '`content`', { lines = { 'a' } })
+
+  local content = { lines = { 'a', 'b' }, submode = 'V' }
+  expect.error(default_sort_func, '`opts.compare_fun`', content, { compare_fun = 1 })
+  expect.error(default_sort_func, '`opts.split_patterns`', content, { split_patterns = 1 })
 end
 
 -- Integration tests ==========================================================
@@ -350,6 +470,9 @@ T['Exchange']['correctly reindents linewise'] = function()
     { '\t\tcc', '\taa', '', '\t' },
     { 2, 0 }
   )
+
+  -- Should correctly work exchanging **only** blank lines region
+  validate_edit({ 'aa', '\t\t', '\t' }, { 1, 0 }, { 'gx_', 'j', 'gxj' }, { '\t\t', '\t', '\taa' }, { 3, 0 })
 end
 
 T['Exchange']['respects `config.exchange.reindent_linewise`'] = function()
@@ -391,19 +514,19 @@ end
 T['Exchange']['works for intersecting regions'] = function()
   -- Charwise
   validate_edit1d('abcd', 0, { 'gx3l', 'l', 'gx3l' }, 'bcdabc', 3)
-  validate_edit1d('abcd', 0, { 'gx4l', 'l', 'gx2l' }, 'abcd', 0)
+  validate_edit1d('abcd', 0, { 'gx4l', 'l', 'gx2l' }, 'abcd', 2)
   validate_edit1d('abcd', 1, { 'gx2l', '0', 'gx4l' }, 'bc', 0)
 
   validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'vjgx', 'vjgx' }, { 'bb', 'caa', 'bc' }, { 2, 1 })
 
   -- Linewise
   validate_edit({ 'aa', 'bb', 'cc' }, { 1, 0 }, { 'Vjgx', 'Vjgx' }, { 'bb', 'cc', 'aa', 'bb' }, { 3, 0 })
-  validate_edit({ 'aa', 'bb', 'cc', '' }, { 1, 0 }, { 'Vipgx', 'k', 'Vgx' }, { 'aa', 'bb', 'cc', '' }, { 1, 0 })
+  validate_edit({ 'aa', 'bb', 'cc', '' }, { 1, 0 }, { 'Vipgx', 'k', 'Vgx' }, { 'aa', 'bb', 'cc', '' }, { 2, 0 })
   validate_edit({ 'aa', 'bb', 'cc', '' }, { 2, 0 }, { 'Vgx', 'Vipgx' }, { 'bb', '' }, { 1, 0 })
 
   -- Blockwise
   validate_edit({ 'abc', 'def' }, { 1, 0 }, { '<C-v>jlgx', 'l', '<C-v>jlgx' }, { 'bcab', 'efde' }, { 1, 2 })
-  validate_edit({ 'abc', 'def' }, { 1, 0 }, { '<C-v>jllgx', 'l', '<C-v>jgx' }, { 'abc', 'def' }, { 1, 0 })
+  validate_edit({ 'abc', 'def' }, { 1, 0 }, { '<C-v>jllgx', 'l', '<C-v>jgx' }, { 'abc', 'def' }, { 1, 1 })
   validate_edit({ 'abc', 'def' }, { 1, 1 }, { '<C-v>jgx', 'h', '<C-v>jllgx' }, { 'b', 'e' }, { 1, 0 })
 end
 
@@ -481,6 +604,22 @@ T['Exchange']['does not have side effects'] = function()
   if child.fn.has('nvim-0.8') == 1 then eq(child.fn.maparg('<C-c>'), ':echo 1<CR>') end
 end
 
+T['Exchange']['preserves visual marks'] = function()
+  set_lines({ 'aa', 'bb', 'cc' })
+
+  -- Create marks
+  set_cursor(2, 0)
+  type_keys('V', '<Esc>')
+  local vis_mark_form, vis_mark_to = child.api.nvim_buf_get_mark(0, '<'), child.api.nvim_buf_get_mark(0, '>')
+
+  -- Exchange
+  set_cursor(1, 0)
+  type_keys('gx_', 'j', 'gxj')
+  eq(get_lines(), { 'bb', 'cc', 'aa' })
+  eq(child.api.nvim_buf_get_mark(0, '<'), vis_mark_form)
+  eq(child.api.nvim_buf_get_mark(0, '>'), vis_mark_to)
+end
+
 T['Exchange']['respects `config.exchange.prefix`'] = function()
   child.api.nvim_del_keymap('n', 'gx')
   child.api.nvim_del_keymap('n', 'gxx')
@@ -504,11 +643,14 @@ T['Exchange']['allows custom mappings'] = function()
     vim.keymap.set('n', 'cx', 'v:lua.MiniOperators.exchange()', { expr = true, replace_keycodes = false, desc = 'Exchange' })
     vim.keymap.set('n', 'cxx', 'cx_', { remap = true, desc = 'Exchange line' })
     vim.keymap.set('x', 'cx', '<Cmd>lua MiniOperators.exchange("visual")<CR>', { desc = 'Exchange selection' })
+    -- `:<C-u>` approach in Visual mode should also work
+    vim.keymap.set('x', 'cX', ':<C-u>lua MiniOperators.exchange("visual")<CR>', { desc = 'Exchange selection' })
   ]])
 
   validate_edit1d('aa bb', 0, { 'cxiw', 'w', 'cxiw' }, 'bb aa', 3)
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'cxx', 'j', 'cxx' }, { 'bb', 'aa' }, { 2, 0 })
   validate_edit1d('aa bb', 0, { 'viwcx', 'w', 'viwcx' }, 'bb aa', 3)
+  validate_edit1d('aa bb', 0, { 'viwcX', 'w', 'viwcX' }, 'bb aa', 3)
 end
 
 T['Exchange']['respects `selection=exclusive`'] = function()
@@ -581,6 +723,45 @@ T['Replace']['works linewise in Normal mode'] = function()
 
   -- - With dot-repeat
   validate_edit(lines, { 1, 0 }, { 'yy', '2j', 'grip', '2j', '.' }, { 'aa', '', 'aa', '', 'aa' }, { 5, 0 })
+end
+
+T['Replace']['correctly reindents linewise in Normal mode'] = function()
+  -- Should use indent from text being replaced
+  validate_edit({ '\taa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', 'aa' }, { 2, 0 })
+  validate_edit({ '\taa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', 'bb' }, { 1, 0 })
+  validate_edit({ '\taa', '\t\tbb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', '\t\taa' }, { 2, 0 })
+  validate_edit({ '\taa', '\t\tbb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', '\t\tbb' }, { 1, 0 })
+
+  validate_edit({ '  aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '  aa', 'aa' }, { 2, 0 })
+  validate_edit({ '  aa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '  bb', 'bb' }, { 1, 0 })
+  validate_edit({ '  aa', '    bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '  aa', '    aa' }, { 2, 0 })
+  validate_edit({ '  aa', '    bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '  bb', '    bb' }, { 1, 0 })
+
+  -- Should replace current region indent with new one
+  validate_edit(
+    { '\taa', '\t\tbb', 'cc' },
+    { 1, 0 },
+    { 'yj', 'G', 'gr_' },
+    { '\taa', '\t\tbb', 'aa', '\tbb' },
+    { 3, 0 }
+  )
+
+  -- Should preserve tabs vs spaces
+  validate_edit({ '\taa', '  bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', '  aa' }, { 2, 2 })
+  validate_edit({ '\taa', '  bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', '  bb' }, { 1, 0 })
+
+  -- Should correctly work in presence of blank lines (compute indent and not
+  -- reindent them)
+  validate_edit(
+    { '\t\taa', '', '\t', '\tcc' },
+    { 1, 0 },
+    { 'y2j', 'G', 'gr_' },
+    { '\t\taa', '', '\t', '\taa', '', '\t' },
+    { 4, 0 }
+  )
+
+  -- Should correctly work replacing **only** blank lines
+  validate_edit({ 'aa', '\t\t', '\t' }, { 1, 0 }, { 'yy', 'j', 'grj' }, { 'aa', '\taa' }, { 2, 0 })
 end
 
 T['Replace']['works blockwise in Normal mode'] = function()
@@ -658,74 +839,59 @@ T['Replace']['works with `[count]` in Normal mode for line'] = function()
   )
 end
 
-local validate_replace_visual = function(lines_before, cursor_before, keys_without_replace)
-  -- Get reference lines and cursor position assuming replacing in Visual mode
-  -- should be the same as using `P`
-  set_lines(lines_before)
-  set_cursor(unpack(cursor_before))
-  type_keys(keys_without_replace, 'P')
-
-  local lines_after, cursor_after = get_lines(), get_cursor()
-
-  -- Validate
-  validate_edit(lines_before, cursor_before, { keys_without_replace, 'gr' }, lines_after, cursor_after)
-end
-
 T['Replace']['works in Visual mode'] = function()
   -- Charwise selection
-  validate_replace_visual({ 'aa bb' }, { 1, 0 }, { 'yiw', 'w', 'viw' })
-  validate_replace_visual({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'viw' })
-  validate_replace_visual({ 'aa', 'bb' }, { 1, 0 }, { 'y<C-v>j', 'viw' })
+  validate_edit({ 'aa bb' }, { 1, 0 }, { 'yiw', 'w', 'viw', 'gr' }, { 'aa aa' }, { 1, 3 })
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'viw', 'gr' }, { 'aa', 'aa' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'y<C-v>j', 'viw', 'gr' }, { 'a', 'b', 'bb' }, { 1, 0 })
 
   -- Linewise selection
-  validate_replace_visual({ 'aa', 'bb' }, { 1, 0 }, { 'yiw', 'j', 'V' })
-  validate_replace_visual({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'V' })
-  validate_replace_visual({ 'aa', 'bb' }, { 1, 0 }, { 'y<C-v>j', 'j', 'V' })
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yiw', 'j', 'V', 'gr' }, { 'aa', 'aa' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'V', 'gr' }, { 'aa', 'aa' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'y<C-v>j', 'j', 'V', 'gr' }, { 'aa', 'a', 'b' }, { 2, 0 })
 
   -- Blockwise selection
-  validate_replace_visual({ 'a b', 'a b' }, { 1, 0 }, { 'yiw', 'w', '<C-v>j' })
-  validate_replace_visual({ 'a b', 'a b' }, { 1, 0 }, { 'yy', 'w', '<C-v>j' })
-  validate_replace_visual({ 'a b', 'a b' }, { 1, 0 }, { 'y<C-v>j', 'w', '<C-v>j' })
+  validate_edit({ 'a b', 'a b' }, { 1, 0 }, { 'yiw', 'w', '<C-v>j', 'gr' }, { 'a a', 'a ' }, { 1, 2 })
+  validate_edit({ 'a b', 'a b' }, { 1, 0 }, { 'yy', 'w', '<C-v>j', 'gr' }, { 'a a b', 'a ' }, { 1, 2 })
+  validate_edit({ 'a b', 'a b' }, { 1, 0 }, { 'y<C-v>j', 'w', '<C-v>j', 'gr' }, { 'a a', 'a a' }, { 1, 2 })
 end
 
-T['Replace']['works with `[count]` in Visual mode'] =
-  function() validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', '2gr' }, 'aa aaaa', 6) end
-
-T['Replace']['correctly reindents linewise'] = function()
+T['Replace']['correctly reindents linewise in Visual mode'] = function()
   -- Should use indent from text being replaced
-  validate_edit({ '\taa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', 'aa' }, { 2, 0 })
-  validate_edit({ '\taa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', 'bb' }, { 1, 0 })
-  validate_edit({ '\taa', '\t\tbb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', '\t\taa' }, { 2, 0 })
-  validate_edit({ '\taa', '\t\tbb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', '\t\tbb' }, { 1, 0 })
-
-  validate_edit({ '  aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '  aa', 'aa' }, { 2, 0 })
-  validate_edit({ '  aa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '  bb', 'bb' }, { 1, 0 })
-  validate_edit({ '  aa', '    bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '  aa', '    aa' }, { 2, 0 })
-  validate_edit({ '  aa', '    bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '  bb', '    bb' }, { 1, 0 })
+  validate_edit({ '\taa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'V', 'gr' }, { '\taa', 'aa' }, { 2, 0 })
+  validate_edit({ '\taa', 'bb' }, { 2, 0 }, { 'yy', 'k', 'V', 'gr' }, { '\tbb', 'bb' }, { 1, 0 })
+  validate_edit({ '  aa', '    bb' }, { 1, 0 }, { 'yy', 'j', 'V', 'gr' }, { '  aa', '    aa' }, { 2, 0 })
+  validate_edit({ '  aa', '    bb' }, { 2, 0 }, { 'yy', 'k', 'V', 'gr' }, { '  bb', '    bb' }, { 1, 0 })
 
   -- Should replace current region indent with new one
   validate_edit(
     { '\taa', '\t\tbb', 'cc' },
     { 1, 0 },
-    { 'yj', 'G', 'gr_' },
+    { 'yj', 'G', 'V', 'gr' },
     { '\taa', '\t\tbb', 'aa', '\tbb' },
     { 3, 0 }
   )
 
   -- Should preserve tabs vs spaces
-  validate_edit({ '\taa', '  bb' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { '\taa', '  aa' }, { 2, 0 })
-  validate_edit({ '\taa', '  bb' }, { 2, 0 }, { 'yy', 'k', 'gr_' }, { '\tbb', '  bb' }, { 1, 0 })
+  validate_edit({ '\taa', '  bb' }, { 1, 0 }, { 'yy', 'j', 'V', 'gr' }, { '\taa', '  aa' }, { 2, 0 })
+  validate_edit({ '\taa', '  bb' }, { 2, 0 }, { 'yy', 'k', 'V', 'gr' }, { '\tbb', '  bb' }, { 1, 0 })
 
   -- Should correctly work in presence of blank lines (compute indent and not
   -- reindent them)
   validate_edit(
     { '\t\taa', '', '\t', '\tcc' },
     { 1, 0 },
-    { 'y2j', 'G', 'gr_' },
+    { 'y2j', 'G', 'V', 'gr' },
     { '\t\taa', '', '\t', '\taa', '', '\t' },
     { 4, 0 }
   )
+
+  -- Should correctly work replacing **only** blank lines
+  validate_edit({ 'aa', '\t\t', '\t' }, { 1, 0 }, { 'yy', 'j', 'Vj', 'gr' }, { 'aa', '\taa' }, { 2, 0 })
 end
+
+T['Replace']['works with `[count]` in Visual mode'] =
+  function() validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', '2gr' }, 'aa aaaa', 3) end
 
 T['Replace']['respects `config.replace.reindent_linewise`'] = function()
   child.lua('MiniOperators.config.replace.reindent_linewise = false')
@@ -737,7 +903,7 @@ T['Replace']['works with `[register]`'] = function()
   validate_edit1d('aa bb cc', 0, { '"xyiw', 'w', 'yiw', 'w', '"xgriw' }, 'aa bb aa', 6)
 
   -- Visual mode
-  validate_edit1d('aa bb cc', 0, { '"xyiw', 'w', 'yiw', 'w', 'viw', '"xgr' }, 'aa bb aa', 7)
+  validate_edit1d('aa bb cc', 0, { '"xyiw', 'w', 'yiw', 'w', 'viw', '"xgr' }, 'aa bb aa', 6)
 end
 
 T['Replace']['validatees `[register]` content'] = function()
@@ -764,16 +930,40 @@ T['Replace']['works in edge cases'] = function()
 end
 
 T['Replace']['can replace whole buffer'] = function()
-  set_lines({ 'aa' })
-  type_keys('yy')
+  set_lines({ 'aa', 'bb' })
+  type_keys('yip')
 
-  validate_edit({ 'bb', 'cc' }, { 1, 0 }, { 'grip' }, { 'aa' }, { 1, 0 })
+  -- Should preserve all marks
+  set_lines({ 'cc', 'dd' })
+
+  set_cursor(2, 1)
+  type_keys('mx')
+
+  type_keys('grip')
+  eq(get_lines(), { 'aa', 'bb' })
+  eq(child.api.nvim_buf_get_mark(0, 'x'), { 2, 1 })
 end
 
 T['Replace']['does not have side effects'] = function()
   -- Register type should not change
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'griw' }, { 'aa', 'aa' }, { 2, 0 })
   eq(child.fn.getregtype('"'), 'V')
+end
+
+T['Replace']['preserves visual marks'] = function()
+  set_lines({ 'aa', 'bb', 'cc' })
+
+  -- Create marks
+  set_cursor(2, 0)
+  type_keys('V', '<Esc>')
+  local vis_mark_form, vis_mark_to = child.api.nvim_buf_get_mark(0, '<'), child.api.nvim_buf_get_mark(0, '>')
+
+  -- Replace
+  set_cursor(1, 0)
+  type_keys('yy', 'j', 'grj')
+  eq(get_lines(), { 'aa', 'aa' })
+  eq(child.api.nvim_buf_get_mark(0, '<'), vis_mark_form)
+  eq(child.api.nvim_buf_get_mark(0, '>'), vis_mark_to)
 end
 
 T['Replace']['respects `config.replace.prefix`'] = function()
@@ -785,7 +975,7 @@ T['Replace']['respects `config.replace.prefix`'] = function()
 
   validate_edit1d('aa bb', 0, { 'yiw', 'w', 'criw' }, 'aa aa', 3)
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
-  validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 4)
+  validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 3)
 end
 
 T['Replace']['allows custom mappings'] = function()
@@ -799,11 +989,14 @@ T['Replace']['allows custom mappings'] = function()
     vim.keymap.set('n', 'cr', 'v:lua.MiniOperators.replace()', { expr = true, replace_keycodes = false, desc = 'Replace' })
     vim.keymap.set('n', 'crr', 'cr_', { remap = true, desc = 'Replace line' })
     vim.keymap.set('x', 'cr', '<Cmd>lua MiniOperators.replace("visual")<CR>', { desc = 'Replace selection' })
+    -- `:<C-u>` approach in Visual mode should also work
+    vim.keymap.set('x', 'cR', ':<C-u>lua MiniOperators.replace("visual")<CR>', { desc = 'Replace selection' })
   ]])
 
   validate_edit1d('aa bb', 0, { 'yiw', 'w', 'criw' }, 'aa aa', 3)
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
-  validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 4)
+  validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 3)
+  validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cR' }, 'aa aa', 3)
 end
 
 T['Replace']['respects `selection=exclusive`'] = function()
@@ -843,6 +1036,207 @@ T['Replace']['respects `vim.b.minioperators_config`'] = function()
     { '\taa', '\tbb', 'cc', '\tbb' },
     { 4, 0 }
   )
+end
+
+T['Sort'] = new_set()
+
+T['Sort']['works charwise in Normal mode'] = function()
+  -- More testing is done in `default_sort_func()` tests
+
+  validate_edit1d('c, a, b', 0, { 'gs$' }, 'a, b, c', 0)
+
+  -- With dot-repeat
+  validate_edit1d('(b, a) (d, c)', 0, { 'gsi)', 'f(', '.' }, '(a, b) (c, d)', 8)
+
+  -- Over several lines
+  set_lines({ 'b, a', 'd, cx' })
+
+  -- - Set mark
+  set_cursor(2, 4)
+  type_keys('ma')
+
+  -- - Validate
+  set_cursor(1, 0)
+  type_keys('gs`a')
+  eq(get_lines(), { 'a', 'd, b, cx' })
+  eq(get_cursor(), { 1, 0 })
+
+  -- Already sorted
+  validate_edit1d('a, b, c', 0, { 'gs$' }, 'a, b, c', 0)
+
+  -- Correctly picks split pattern
+  validate_edit1d('b, a; c', 0, { 'gs$' }, 'a; c, b', 0)
+
+  -- Works with empty parts
+  validate_edit1d('a,,b,', 0, { 'gs$' }, ',,a,b', 0)
+
+  -- Preserves whitespace
+  validate_edit1d('e ,  d,   b    ,a,c', 0, { 'gs$' }, 'a ,  b,   c    ,d,e', 0)
+end
+
+T['Sort']['works linewise in Normal mode'] = function()
+  validate_edit({ 'cc', 'bb', 'aa' }, { 1, 0 }, { 'gsip' }, { 'aa', 'bb', 'cc' }, { 1, 0 })
+  validate_edit({ 'xc', 'xb', 'xa' }, { 1, 0 }, { 'gsip' }, { 'xa', 'xb', 'xc' }, { 1, 0 })
+
+  -- - With dot-repeat
+  validate_edit({ 'd', 'c', '', 'b', 'a' }, { 1, 0 }, { 'gsip', 'G', '.' }, { 'c', 'd', '', 'a', 'b' }, { 4, 0 })
+end
+
+T['Sort']['works blockwise in Normal mode'] = function()
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
+  child.lua([[vim.keymap.set('o', 'il', function() vim.cmd('normal! \22jl') end)]])
+
+  validate_edit({ 'cb', 'ba', 'ac' }, { 1, 1 }, { 'gsie' }, { 'ca', 'bb', 'ac' }, { 1, 1 })
+  validate_edit({ 'cxb', 'bxa', 'axc' }, { 1, 1 }, { 'gsil' }, { 'cxa', 'bxb', 'axc' }, { 1, 1 })
+
+  -- With dot-repeat
+  validate_edit({ 'cbt', 'bar', 'acs' }, { 1, 1 }, { 'gsie', 'l', '.' }, { 'car', 'bbt', 'acs' }, { 1, 2 })
+end
+
+T['Sort']['works in Normal mode for line'] = function()
+  -- Should apply charwise sort on non-blank part of line
+  validate_edit1d('c, a, b', 0, { 'gss' }, 'a, b, c', 0)
+  validate_edit1d('c; a; b', 0, { 'gss' }, 'a; b; c', 0)
+  validate_edit1d('c a b', 0, { 'gss' }, 'a b c', 0)
+
+  validate_edit({ 't, r, s', 'c, a, b' }, { 1, 0 }, { 'gss' }, { 'r, s, t', 'c, a, b' }, { 1, 0 })
+
+  validate_edit1d('c, a, b', 3, { 'gss' }, 'a, b, c', 0)
+  validate_edit1d('  c, a, b  ', 0, { 'gss' }, '  a, b, c  ', 2)
+
+  validate_edit1d('  c a b  ', 0, { 'gss' }, '  a b c  ', 2)
+
+  -- With dot-repeat
+  validate_edit({ 't, r, s', 'c, a, b' }, { 1, 0 }, { 'gss', 'j', '.' }, { 'r, s, t', 'a, b, c' }, { 2, 0 })
+end
+
+T['Sort']['works in Visual mode'] = function()
+  -- Charwise region
+  validate_edit1d('c, a, b', 0, { 'v$', 'gs' }, 'a, b, c', 0)
+  validate_edit1d('(s, r), a', 0, { 'vi)', 'gs' }, '(r, s), a', 1)
+
+  -- Linewise region
+  validate_edit({ 'cc', 'aa', 'bb' }, { 1, 0 }, { 'vip', 'gs' }, { 'aa', 'bb', 'cc' }, { 1, 0 })
+  validate_edit({ 'ss', 'rr', '', 'aa' }, { 1, 0 }, { 'vip', 'gs' }, { 'rr', 'ss', '', 'aa' }, { 1, 0 })
+
+  -- Blockwise region
+  validate_edit({ 'cb', 'ba', 'ac' }, { 1, 1 }, { '<C-v>j', 'gs' }, { 'ca', 'bb', 'ac' }, { 1, 1 })
+  validate_edit({ 'cxb', 'bxa', 'axc' }, { 1, 1 }, { '<C-v>jl', 'gs' }, { 'cxa', 'bxb', 'axc' }, { 1, 1 })
+end
+
+T['Sort']['respects `config.sort.func`'] = function()
+  -- Compare by the second character
+  child.lua([[MiniOperators.config.sort.func = function(content)
+    local compare_second = function(a, b) return a:sub(2, 2) < b:sub(2, 2) end
+    return MiniOperators.default_sort_func(content, { compare_fun = compare_second })
+  end
+  ]])
+
+  validate_edit({ 'ab', 'ba' }, { 1, 0 }, { 'gsip' }, { 'ba', 'ab' }, { 1, 0 })
+end
+
+T['Sort']["works with 'y' in 'cpoptions'"] = function()
+  child.cmd('set cpoptions+=y')
+
+  -- Dot-repeat should still work
+  validate_edit1d('(b, a) (d, c)', 0, { 'gsi)', 'f(', '.' }, '(a, b) (c, d)', 8)
+end
+
+T['Sort']['does not have side effects'] = function()
+  set_lines({ 'xx', 'bb', 'aa' })
+
+  -- Marks `[`, `]` and register 'x'
+  set_cursor(1, 0)
+  type_keys('v"xy')
+
+  -- Do sort
+  set_cursor(2, 0)
+  type_keys('gsj')
+
+  -- Validate
+  eq(child.api.nvim_buf_get_mark(0, '['), { 2, 0 })
+  eq(child.api.nvim_buf_get_mark(0, ']'), { 3, 0 })
+  eq(child.fn.getreg('x'), 'x')
+end
+
+T['Sort']['preserves visual marks'] = function()
+  set_lines({ 'cc', 'aa', 'bb' })
+
+  -- Create marks
+  set_cursor(2, 0)
+  type_keys('V', '<Esc>')
+  local vis_mark_form, vis_mark_to = child.api.nvim_buf_get_mark(0, '<'), child.api.nvim_buf_get_mark(0, '>')
+
+  -- Sort
+  set_cursor(1, 0)
+  type_keys('gsip')
+  eq(get_lines(), { 'aa', 'bb', 'cc' })
+  eq(child.api.nvim_buf_get_mark(0, '<'), vis_mark_form)
+  eq(child.api.nvim_buf_get_mark(0, '>'), vis_mark_to)
+end
+
+T['Sort']['respects `config.sort.prefix`'] = function()
+  child.api.nvim_del_keymap('n', 'gs')
+  child.api.nvim_del_keymap('n', 'gss')
+  child.api.nvim_del_keymap('x', 'gs')
+
+  load_module({ sort = { prefix = 'cs' } })
+
+  validate_edit1d('c, a, b', 0, { 'cs$' }, 'a, b, c', 0)
+  validate_edit1d('  c, a, b  ', 0, { 'css' }, '  a, b, c  ', 2)
+  validate_edit1d('(c, a, b)', 0, { 'vi)', 'cs' }, '(a, b, c)', 1)
+end
+
+T['Sort']['allows custom mappings'] = function()
+  child.api.nvim_del_keymap('n', 'gs')
+  child.api.nvim_del_keymap('n', 'gss')
+  child.api.nvim_del_keymap('x', 'gs')
+
+  load_module({ sort = { prefix = '' } })
+
+  child.lua([[
+    vim.keymap.set('n', 'cs', 'v:lua.MiniOperators.sort()', { expr = true, replace_keycodes = false, desc = 'Sort' })
+    vim.keymap.set('n', 'css', '^csg_', { remap = true, desc = 'Sort line' })
+    vim.keymap.set('x', 'cs', '<Cmd>lua MiniOperators.sort("visual")<CR>', { desc = 'Sort selection' })
+    -- `:<C-u>` approach in Visual mode should also work
+    vim.keymap.set('x', 'cS', ':<C-u>lua MiniOperators.sort("visual")<CR>', { desc = 'Exchange selection' })
+  ]])
+
+  validate_edit1d('c, a, b', 0, { 'cs$' }, 'a, b, c', 0)
+  validate_edit1d('  c, a, b  ', 0, { 'css' }, '  a, b, c  ', 2)
+  validate_edit1d('(c, a, b)', 0, { 'vi)', 'cs' }, '(a, b, c)', 1)
+  validate_edit1d('(c, a, b)', 0, { 'vi)', 'cS' }, '(a, b, c)', 1)
+end
+
+T['Sort']["respects 'nomodifiable'"] = function()
+  set_lines({ 'b, a' })
+  set_cursor(1, 0)
+  child.bo.modifiable = false
+  type_keys('gs$')
+  eq(get_lines(), { 'b, a' })
+  eq(get_cursor(), { 1, 3 })
+end
+
+T['Sort']['respects `vim.{g,b}.minioperators_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minioperators_disable = true
+    validate_edit1d('b, a', 0, { 'gs$' }, 'b, a', 3)
+  end,
+})
+
+T['Sort']['respects `vim.b.minioperators_config`'] = function()
+  -- Compare by the second character
+  child.lua([[
+    _G.sort_by_second = function(content)
+      local compare_second = function(a, b) return a:sub(2, 2) < b:sub(2, 2) end
+      return MiniOperators.default_sort_func(content, { compare_fun = compare_second })
+    end
+    vim.b.minioperators_config = { sort = { func = _G.sort_by_second } }
+  ]])
+
+  validate_edit({ 'ab', 'ba' }, { 1, 0 }, { 'gsip' }, { 'ba', 'ab' }, { 1, 0 })
 end
 
 return T

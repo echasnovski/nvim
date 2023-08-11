@@ -16,6 +16,10 @@
 -- Docs:
 -- - Document official way to remap in Normal (operator and line) and Visual modes.
 --
+-- - Exchange:
+--     - Works with most cases of intersecting regions, but not officially
+--       supported.
+--
 -- - Replace:
 --     - `[count]` in `grr` affects number of pastes.
 --     - Respects [count] (in Visual, at first and in dot-repeat).
@@ -23,9 +27,11 @@
 --       `[count1]gr[count2]{motion}` (`[count1]` is for pasting,
 --       `[count2]` is for textobject/motion).
 --
--- - Exchange:
---     - Works with most cases of intersecting regions, but not officially
---       supported.
+-- - Sort:
+--     - Example of interactive delimiter.
+--     - Line mapping is charwise. Hence:
+--         - No `[count]` support.
+--         - Different custom line mapping (`^csg_` and not `cs_`).
 --
 --
 -- Tests:
@@ -145,43 +151,20 @@ MiniOperators.config = {
 }
 --minidoc_afterlines_end
 
-MiniOperators.replace = function(mode)
+MiniOperators.evaluate = function(mode)
   if H.is_disabled() or not vim.bo.modifiable then return '' end
 
   -- If used without arguments inside expression mapping, set it as
   -- 'operatorfunc' and call it again as a result of expression mapping.
   if mode == nil then
-    vim.o.operatorfunc = 'v:lua.MiniOperators.replace'
-    H.cache.replace = { count = vim.v.count1, register = vim.v.register }
-
-    -- Reset count to allow two counts: first for paste, second for textobject
-    return vim.api.nvim_replace_termcodes('<Cmd>echon ""<CR>g@', true, true, true)
+    vim.o.operatorfunc = 'v:lua.MiniOperators.evaluate'
+    return 'g@'
   end
 
-  -- If used with 'visual', operate on visual selection
-  if mode == 'visual' then
-    local cmd = string.format('normal! %d"%sP', vim.v.count1, vim.v.register)
-    vim.cmd(cmd)
-    return
-  end
-
-  if not (mode == 'char' or mode == 'line' or mode == 'block') then
-    H.error('Incorrect `mode`: ' .. vim.inspect(mode) .. '.')
-  end
-
-  -- Do replace
-  local cache = H.cache.replace
-  local data = {
-    count = cache.count,
-    mark_from = '[',
-    mark_to = ']',
-    register = cache.register,
-    reindent_linewise = H.get_config().replace.reindent_linewise,
-    submode = H.get_submode(mode),
-  }
-  H.replace_do(data)
-
-  return ''
+  local evaluate_func = H.get_config().evaluate.func or MiniOperators.default_evaluate_func
+  local data = H.get_region_data(mode)
+  data.reindent_linewise = true
+  H.apply_content_func(evaluate_func, data)
 end
 
 MiniOperators.exchange = function(mode)
@@ -213,6 +196,34 @@ MiniOperators.exchange = function(mode)
   end
 end
 
+MiniOperators.replace = function(mode)
+  if H.is_disabled() or not vim.bo.modifiable then return '' end
+
+  -- If used without arguments inside expression mapping, set it as
+  -- 'operatorfunc' and call it again as a result of expression mapping.
+  if mode == nil then
+    vim.o.operatorfunc = 'v:lua.MiniOperators.replace'
+    H.cache.replace = { count = vim.v.count1, register = vim.v.register }
+
+    -- Reset count to allow two counts: first for paste, second for textobject
+    return vim.api.nvim_replace_termcodes('<Cmd>echon ""<CR>g@', true, true, true)
+  end
+
+  -- Do replace
+  -- - Compute `count` and `register` prior getting region data because it
+  --   invalidates them for active Visual mode
+  local count = mode == 'visual' and vim.v.count1 or H.cache.replace.count
+  local register = mode == 'visual' and vim.v.register or H.cache.replace.register
+  local data = H.get_region_data(mode)
+  data.count = count
+  data.register = register
+  data.reindent_linewise = H.get_config().replace.reindent_linewise
+
+  H.replace_do(data)
+
+  return ''
+end
+
 MiniOperators.sort = function(mode)
   if H.is_disabled() or not vim.bo.modifiable then return '' end
 
@@ -223,15 +234,18 @@ MiniOperators.sort = function(mode)
     return 'g@'
   end
 
-  local submode = H.get_submode(mode)
-  if mode == 'visual' then vim.cmd('normal! \27') end
-  local mark_from = mode == 'visual' and '<' or '['
-  local mark_to = mode == 'visual' and '>' or ']'
-
-  H.with_temp_context({ registers = { 'x' } }, function() H.sort_do(mark_from, mark_to, submode) end)
+  local sort_func = H.get_config().sort.func or MiniOperators.default_sort_func
+  H.apply_content_func(sort_func, H.get_region_data(mode))
 end
 
+-- Default sort function
+--
+-- - Pad pattern with `%s*` to include whitepsace into separator.
+--   Example: line "b + a" with "%+" pattern will be sorted as " a+b " while with
+--   "%s*%+%s*" pattern - "a + b".
 MiniOperators.default_sort_func = function(content, opts)
+  if not H.is_content(content) then H.error('`content` should be a content table.') end
+
   opts = vim.tbl_deep_extend('force', { compare_fun = nil, split_patterns = nil }, opts or {})
 
   local compare_fun = opts.compare_fun or function(a, b) return a < b end
@@ -251,6 +265,18 @@ MiniOperators.default_sort_func = function(content, opts)
   local parts, seps = H.sort_charwise_split(lines, split_patterns)
   table.sort(parts, compare_fun)
   return H.sort_charwise_unsplit(parts, seps)
+end
+
+MiniOperators.default_evaluate_func = function(content)
+  if not H.is_content(content) then H.error('`content` should be a content table.') end
+
+  local lines, submode = content.lines, content.submode
+
+  -- In non-blockwise mode return the result of the last line
+  if submode ~= H.submode_keys.block then return H.eval_lua_lines(lines) end
+
+  -- In blockwise selection evaluate and return each line separately
+  return vim.tbl_map(function(l) return H.eval_lua_lines({ l })[1] end, lines)
 end
 
 -- Helper data ================================================================
@@ -322,7 +348,10 @@ H.apply_config = function(config)
     H.map('n', prefix, string.format('v:lua.MiniOperators.%s()', operator_name), expr_opts)
 
     local line_lhs = prefix .. vim.fn.strcharpart(prefix, vim.fn.strchars(prefix) - 1, 1)
-    H.map('n', line_lhs, prefix .. '_', { remap = true, desc = operator_desc .. ' line' })
+    local rhs = prefix .. '_'
+    -- - Make `sort()` line mapping to be charwise
+    if operator_name == 'sort' then rhs = '^' .. prefix .. 'g_' end
+    H.map('n', line_lhs, rhs, { remap = true, desc = operator_desc .. ' line' })
 
     local visual_rhs = string.format([[<Cmd>lua MiniOperators.%s('visual')<CR>]], operator_name)
     H.map('x', prefix, visual_rhs, { desc = operator_desc .. ' selection' })
@@ -342,6 +371,14 @@ end
 
 H.create_default_hl =
   function() vim.api.nvim_set_hl(0, 'MiniOperatorsExchangeFrom', { default = true, link = 'IncSearch' }) end
+
+-- Evaluate -------------------------------------------------------------------
+H.eval_lua_lines = function(lines)
+  lines[#lines] = 'return ' .. lines[#lines]
+  local str_to_eval = table.concat(lines, '\n')
+  local res = assert(loadstring(str_to_eval))()
+  return vim.split(vim.inspect(res), '\n')
+end
 
 -- Exchange -------------------------------------------------------------------
 H.exchange_do = function()
@@ -404,16 +441,16 @@ H.exchange_has_step_one = function()
 end
 
 H.exchange_set_region_extmark = function(mode, add_highlight)
-  local submode = H.get_submode(mode)
   local ns_id = H.ns_id.exchange
 
   -- Compute regular marks for target region
-  if mode == 'visual' then vim.cmd('normal! \27') end
-  local mark_from, mark_to = H.get_region_marks(mode)
+  local region_data = H.get_region_data(mode)
+  local submode = region_data.submode
+  local markcoords_from, markcoords_to = H.get_mark(region_data.mark_from), H.get_mark(region_data.mark_to)
 
   -- Compute extmark's range for target region
-  local extmark_from = { mark_from[1] - 1, mark_from[2] }
-  local extmark_to = { mark_to[1] - 1, mark_to[2] + 1 }
+  local extmark_from = { markcoords_from[1] - 1, markcoords_from[2] }
+  local extmark_to = { markcoords_to[1] - 1, markcoords_to[2] + 1 }
   -- - Tweak columns for linewise marks
   if submode == 'V' then
     extmark_from[2] = 0
@@ -439,7 +476,7 @@ H.exchange_set_region_extmark = function(mode, add_highlight)
   -- - Possibly add highlighting for blockwise mode
   if add_highlight and extmark_hl_group == nil then
     -- Highlighting blockwise region needs full register type with width
-    local opts = { regtype = H.exchange_get_blockwise_regtype(mark_from, mark_to) }
+    local opts = { regtype = H.exchange_get_blockwise_regtype(markcoords_from, markcoords_to) }
     vim.highlight.range(buf_id, ns_id, 'MiniOperatorsExchangeFrom', extmark_from, extmark_to, opts)
   end
 
@@ -564,44 +601,14 @@ H.replace_do = function(data)
     H.cmd_normal(paste_keys)
   end)
 
-  -- Adjust cursor to be at paste start
-  H.cmd_normal('`[', false)
+  -- Adjust cursor to be at start mark
+  H.cmd_normal('`' .. mark_from, false)
 
   -- Adjust for extra empty line after pasting inside empty buffer
-  if covers_linewise_all_buffer then vim.api.nvim_buf_set_lines(0, 0, 1, true, {}) end
+  if covers_linewise_all_buffer then vim.cmd('lockmarks lua vim.api.nvim_buf_set_lines(0, 0, 1, true, {})') end
 end
 
 -- Sort -----------------------------------------------------------------------
-H.sort_do = function(mark_from, mark_to, submode)
-  -- Extract effective region content into "x" register.
-  local yank_keys = string.format('`%s"xy%s`%s', mark_from, submode, mark_to)
-
-  -- Make sure that `[` and `]` marks don't change after yank
-  H.with_temp_context(
-    { marks = { '[', ']' } },
-    -- - Cancel one redo if `y` is dot-repeatable.
-    function() H.cmd_normal(yank_keys, vim.o.cpoptions:find('y') ~= nil) end
-  )
-
-  -- Sort register content
-  local sort_fun = H.get_config().sort.func or MiniOperators.default_sort_func
-  local reg_info = vim.fn.getreginfo('x')
-  local content_init = { lines = reg_info.regcontents, submode = submode }
-  reg_info.regcontents = sort_fun(content_init)
-  vim.fn.setreg('x', reg_info)
-
-  -- Replace region with new register content
-  local replace_data = {
-    count = 1,
-    mark_from = mark_from,
-    mark_to = mark_to,
-    register = 'x',
-    reindent_linewise = false,
-    submode = submode,
-  }
-  H.replace_do(replace_data)
-end
-
 H.sort_charwise_split = function(lines, split_patterns)
   local lines_str = table.concat(lines, '\n')
 
@@ -615,7 +622,7 @@ H.sort_charwise_split = function(lines, split_patterns)
 
   if pat == nil then return lines end
 
-  -- Split while keeping separators
+  -- Split into parts and separators
   local parts, seps = {}, {}
   local init, n = 1, lines_str:len()
   while init < n do
@@ -640,6 +647,43 @@ H.sort_charwise_unsplit = function(parts, seps)
   return vim.split(table.concat(all, ''), '\n')
 end
 
+-- General --------------------------------------------------------------------
+H.apply_content_func = function(content_func, data)
+  local mark_from, mark_to, submode = data.mark_from, data.mark_to, data.submode
+  local reindent_linewise = data.reindent_linewise
+
+  H.with_temp_context({ registers = { 'x' } }, function()
+    -- Extract effective region content into "x" register.
+    local yank_keys = string.format('`%s"xy%s`%s', mark_from, submode, mark_to)
+
+    -- Make sure that `[` and `]` marks don't change after yank
+    H.with_temp_context(
+      { marks = { '[', ']' } },
+      -- - Cancel one redo if `y` is dot-repeatable.
+      function() H.cmd_normal(yank_keys, vim.o.cpoptions:find('y') ~= nil) end
+    )
+
+    -- Apply content function to register content
+    local reg_info = vim.fn.getreginfo('x')
+    local content_init = { lines = reg_info.regcontents, submode = submode }
+    reg_info.regcontents = content_func(content_init)
+    vim.fn.setreg('x', reg_info)
+
+    -- Replace region with new register content
+    local replace_data = {
+      count = 1,
+      mark_from = mark_from,
+      mark_to = mark_to,
+      register = 'x',
+      reindent_linewise = reindent_linewise,
+      submode = submode,
+    }
+    H.replace_do(replace_data)
+  end)
+end
+
+H.is_content = function(x) return type(x) == 'table' and vim.tbl_islist(x.lines) and type(x.submode) == 'string' end
+
 -- Registers ------------------------------------------------------------------
 H.get_reg_type = function(regname) return vim.fn.getregtype(regname):sub(1, 1) end
 
@@ -661,10 +705,17 @@ H.set_reg_indent = function(regname, new_indent)
 end
 
 -- Marks ----------------------------------------------------------------------
-H.get_region_marks = function(mode)
-  local left = mode == 'visual' and '<' or '['
-  local right = mode == 'visual' and '>' or ']'
-  return vim.api.nvim_buf_get_mark(0, left), vim.api.nvim_buf_get_mark(0, right)
+H.get_region_data = function(mode)
+  local submode = H.get_submode(mode)
+  local selection_is_visual = mode == 'visual'
+
+  -- Make sure that visual selection marks are relevant
+  if selection_is_visual and H.is_visual_mode() then vim.cmd('normal! \27') end
+
+  local mark_from = selection_is_visual and '<' or '['
+  local mark_to = selection_is_visual and '>' or ']'
+
+  return { submode = submode, mark_from = mark_from, mark_to = mark_to }
 end
 
 H.get_region_indent = function(mark_from, mark_to)
@@ -680,15 +731,19 @@ H.set_mark = function(mark_name, mark_data) vim.api.nvim_buf_set_mark(0, mark_na
 -- Indent ---------------------------------------------------------------------
 H.compute_indent = function(lines)
   local res_indent, res_indent_width = nil, math.huge
+  local blank_indent, blank_indent_width = nil, math.huge
   for _, l in ipairs(lines) do
     local cur_indent = l:match('^%s*')
     local cur_indent_width = cur_indent:len()
-    if cur_indent_width < l:len() and cur_indent_width < res_indent_width then
+    local is_blank = cur_indent_width == l:len()
+    if not is_blank and cur_indent_width < res_indent_width then
       res_indent, res_indent_width = cur_indent, cur_indent_width
+    elseif is_blank and cur_indent_width < blank_indent_width then
+      blank_indent, blank_indent_width = cur_indent, cur_indent_width
     end
   end
 
-  return res_indent or ''
+  return res_indent or blank_indent or ''
 end
 
 H.update_indent = function(lines, new_indent)
@@ -710,8 +765,13 @@ H.map = function(mode, lhs, rhs, opts)
 end
 
 H.get_submode = function(mode)
-  if mode == 'visual' then return vim.fn.mode() end
+  if mode == 'visual' then return H.is_visual_mode() and vim.fn.mode() or vim.fn.visualmode() end
   return H.submode_keys[mode]
+end
+
+H.is_visual_mode = function()
+  local cur_mode = vim.fn.mode()
+  return cur_mode == 'v' or cur_mode == 'V' or cur_mode == H.submode_keys.block
 end
 
 H.with_temp_context = function(context, f)
@@ -755,7 +815,7 @@ end)()
 
 H.cmd_normal = function(command, cancel_redo)
   if cancel_redo == nil then cancel_redo = true end
-  vim.cmd('silent keepjumps normal! ' .. command)
+  vim.cmd('silent keepjumps lockmarks normal! ' .. command)
   if cancel_redo then H.cancel_redo() end
 end
 
