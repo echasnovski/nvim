@@ -1,17 +1,6 @@
 -- TODO:
 --
 -- Code:
--- - All should not modify marks.
---
--- - Use output of `getreginfo()` as input for user modifiers (like in `sort`,
---   `evaluate`, etc.).
---
--- - Replace:
---
--- - Exchange:
---     - Should allow exchaning text between two buffers. Ideally, `u` should
---       undo whole exchange and not just latest paste.
---
 --
 -- Docs:
 -- - Document official way to remap in Normal (operator and line) and Visual modes.
@@ -35,10 +24,6 @@
 --
 --
 -- Tests:
--- - Replace:
---
--- - Exchange:
---
 
 --- *mini.operators* Text edit operators
 --- *MiniOperators*
@@ -49,16 +34,14 @@
 ---
 --- Features:
 --- - Operators (already mapped and as functions):
----     - Replace textobject with register.
----     - Reput text over different region.
+---     - Evaluate text and replace with its output.
 ---     - Exchange regions.
+---     - Multiply (duplicate) text.
 ---     - Sort text.
----     - Duplicate text.
----     - Evaluate.
----     - ?Change case?
----     - ?Replace textobject with register inside region?.
+---     - Replace text with register.
 ---
---- - All operators are dot-repeatable and can be applied in Visual mode.
+--- - Extra mappings are automatically created for current line and Visual mode.
+--- - All operators are dot-repeatable.
 ---
 --- # Setup ~
 ---
@@ -75,9 +58,32 @@
 --- # Comparisons ~
 ---
 --- - 'gbprod/substitute.nvim':
+---     - Has "replace" and "exchange" variants, but not others from this module.
+---     - Has "replace/substitute" over range functionality, while this module
+---       does not by design (similar to |:s| functionality with relatively
+---       high mental complexity).
+---     - "Replace" highlights pasted text, while in this module it doesn't.
+---     - "Exchange" doesn't work across buffers, while in this module it does.
+---
 --- - 'svermeulen/vim-subversive':
---- - 'vim-scripts/ReplaceWithRegister':
---- - 'tommcdo/vim-exchange'
+---     - Main inspiration for "replace" functionality, so they are mostly similar
+---       for this operator.
+---     - Has "replace/substitute" over range functionality, while this module
+---       does not by design.
+---
+--- - 'tommcdo/vim-exchange':
+---     - Main inspiration for "exchange" functionality, so they are mostly
+---       similar for this operator.
+---     - Doesn't work across buffers, while this module does.
+---
+--- - 'christoomey/vim-sort-motion':
+---     - Uses |:sort| for linewise sorting, while this module uses consistent
+---       sorting algorithm (by default, see |MiniOperators.default_sort_func()|).
+---     - Sorting algorithm can't be customized, while this module allows that
+---       (see `sort.func` in |MiniOperators.config|).
+---     - For charwise region uses only commas as separators, while this module
+---       can also separate by semicolon or whitespace (by default,
+---       see |MiniOperators.default_sort_func()|).
 ---
 --- # Highlight groups ~
 ---
@@ -87,7 +93,7 @@
 ---
 --- # Disabling ~
 ---
---- To disable creating triggers, set `vim.g.minioperators_disable` (globally) or
+--- To disable main functionality, set `vim.g.minioperators_disable` (globally) or
 --- `vim.b.minioperators_disable` (for a buffer) to `true`. Considering high number
 --- of different scenarios and customization intentions, writing exact rules
 --- for disabling module's functionality is left to user. See
@@ -99,6 +105,7 @@
 ---@diagnostic disable:cast-local-type
 
 -- Module definition ==========================================================
+-- TODO: Make local before release
 MiniOperators = {}
 H = {}
 
@@ -127,7 +134,26 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text # Mappings ~
+---@text # Evaluate ~
+---
+--- # Exchange ~
+---
+--- # Multiply ~
+---
+--- Advantages of using "multiply" instead of "yank" + "paste":
+--- - Doesn't modify any register, while separate steps need some register to
+---   hold multiplied text.
+--- - In most cases separate steps would be "yank" + "move cursor" + "paste",
+---   while "multiply" makes it at once.
+---
+--- # Replace ~
+---
+--- Advantages of using "replace" instead of "visually select" + "paste with |v_P|":
+--- - As operator it is dot-repeatable which has cumulative gain in case of
+---   multiple replacing is needed.
+--- - Can automatically reindent.
+---
+--- # Sort ~
 MiniOperators.config = {
   evaluate = {
     prefix = 'g=',
@@ -137,6 +163,10 @@ MiniOperators.config = {
   exchange = {
     prefix = 'gx',
     reindent_linewise = true,
+  },
+
+  multiply = {
+    prefix = 'gm',
   },
 
   replace = {
@@ -194,6 +224,41 @@ MiniOperators.exchange = function(mode)
     -- Stop exchange
     H.exchange_stop()
   end
+end
+
+MiniOperators.multiply = function(mode)
+  if H.is_disabled() or not vim.bo.modifiable then return '' end
+
+  -- If used without arguments inside expression mapping, set it as
+  -- 'operatorfunc' and call it again as a result of expression mapping.
+  if mode == nil then
+    vim.o.operatorfunc = 'v:lua.MiniOperators.multiply'
+    H.cache.multiply = { count = vim.v.count1 }
+
+    -- Reset count to allow two counts: first for paste, second for textobject
+    return vim.api.nvim_replace_termcodes('<Cmd>echon ""<CR>g@', true, true, true)
+  end
+
+  local count = mode == 'visual' and vim.v.count1 or H.cache.multiply.count
+  local data = H.get_region_data(mode)
+  local mark_from, mark_to, submode = data.mark_from, data.mark_to, data.submode
+
+  H.with_temp_context({ marks = { '<', '>', '[', ']' }, registers = { 'x' } }, function()
+    -- Yank to temporary "x" register
+    local yank_keys = string.format('`%s%s`%s"xy', mark_from, submode, mark_to)
+    H.cmd_normal(yank_keys, { cancel_redo = vim.o.cpoptions:find('y') ~= nil })
+
+    -- Adjust cursor for a proper paste
+    local ref_coords = H.multiply_get_ref_coords(mark_from, mark_to, submode)
+    vim.api.nvim_win_set_cursor(0, ref_coords)
+
+    -- Paste after textobject from temporary register
+    H.cmd_normal(count .. '"xp', { lockmarks = false })
+
+    -- Adjust cursor to be at start of pasted text. Not in linewise mode as it
+    -- already is at first non-blank, while this moves to first column.
+    if submode ~= 'V' then vim.cmd('normal! `[') end
+  end)
 end
 
 MiniOperators.replace = function(mode)
@@ -267,6 +332,9 @@ MiniOperators.default_sort_func = function(content, opts)
   return H.sort_charwise_unsplit(parts, seps)
 end
 
+-- Default evaluate function
+--
+-- - Blockwise is evaluated per line using only first lines of outputs.
 MiniOperators.default_evaluate_func = function(content)
   if not H.is_content(content) then H.error('`content` should be a content table.') end
 
@@ -291,6 +359,7 @@ H.ns_id = {
 -- Cache for all operators
 H.cache = {
   exchange = {},
+  multiply = {},
   replace = {},
 }
 
@@ -312,6 +381,7 @@ H.setup_config = function(config)
   vim.validate({
     evaluate = { config.evaluate, 'table' },
     exchange = { config.exchange, 'table' },
+    multiply = { config.multiply, 'table' },
     replace = { config.replace, 'table' },
     sort = { config.sort, 'table' },
   })
@@ -322,6 +392,8 @@ H.setup_config = function(config)
 
     ['exchange.prefix'] = { config.exchange.prefix, 'string' },
     ['exchange.reindent_linewise'] = { config.exchange.reindent_linewise, 'boolean' },
+
+    ['multiply.prefix'] = { config.multiply.prefix, 'string' },
 
     ['replace.prefix'] = { config.replace.prefix, 'string' },
     ['replace.reindent_linewise'] = { config.replace.reindent_linewise, 'boolean' },
@@ -359,6 +431,7 @@ H.apply_config = function(config)
 
   map_all('evaluate')
   map_all('exchange')
+  map_all('multiply')
   map_all('replace')
   map_all('sort')
 end
@@ -374,10 +447,24 @@ H.create_default_hl =
 
 -- Evaluate -------------------------------------------------------------------
 H.eval_lua_lines = function(lines)
-  lines[#lines] = 'return ' .. lines[#lines]
+  local n = #lines
+  lines[n] = (lines[n]:find('^%s*return%s+') == nil and 'return ' or '') .. lines[n]
+
   local str_to_eval = table.concat(lines, '\n')
-  local res = assert(loadstring(str_to_eval))()
-  return vim.split(vim.inspect(res), '\n')
+
+  -- Allow returning tuple with any value(s) being `nil`
+  return H.inspect_objects(assert(loadstring(str_to_eval))())
+end
+
+H.inspect_objects = function(...)
+  local objects = {}
+  -- Not using `{...}` because it removes `nil` input
+  for i = 1, select('#', ...) do
+    local v = select(i, ...)
+    table.insert(objects, vim.inspect(v))
+  end
+
+  return vim.split(table.concat(objects, '\n'), '\n')
 end
 
 -- Exchange -------------------------------------------------------------------
@@ -544,6 +631,31 @@ H.exchange_is_same_steps = function(step_one, step_two)
   return one[1] == two[1] and one[2] == two[2] and one[3].end_row == two[3].end_row and one[3].end_col == two[3].end_col
 end
 
+-- Multiply -------------------------------------------------------------------
+H.multiply_get_ref_coords = function(mark_from, mark_to, submode)
+  local markcoords_from, markcoords_to = H.get_mark(mark_from), H.get_mark(mark_to)
+
+  if submode ~= H.submode_keys.block then return markcoords_to end
+
+  -- In blockwise selection go to top right corner (allowing for presence of
+  -- multibyte characters)
+  local row = math.min(markcoords_from[1], markcoords_to[1])
+  if vim.fn.has('nvim-0.8') == 0 then
+    -- Neovim<0.8 doesn't have `virtcol2col()`
+    local col = math.max(markcoords_from[2], markcoords_to[2])
+    return { row, col - 1 }
+  end
+
+  -- - "from"/"to" may not only be "top-left"/"bottom-right" but also
+  --   "top-right" and "bottom-left"
+  local virtcol_from = vim.fn.virtcol({ markcoords_from[1], markcoords_from[2] + 1 })
+  local virtcol_to = vim.fn.virtcol({ markcoords_to[1], markcoords_to[2] + 1 })
+  local virtcol = math.max(virtcol_from, virtcol_to)
+
+  local col = vim.fn.virtcol2col(0, row, virtcol)
+
+  return { row, col - 1 }
+end
 -- Replace --------------------------------------------------------------------
 --- Delete region between two marks and paste from register
 ---
@@ -602,7 +714,7 @@ H.replace_do = function(data)
   end)
 
   -- Adjust cursor to be at start mark
-  H.cmd_normal('`' .. mark_from, false)
+  H.cmd_normal('`' .. mark_from, { cancel_redo = false })
 
   -- Adjust for extra empty line after pasting inside empty buffer
   if covers_linewise_all_buffer then vim.cmd('lockmarks lua vim.api.nvim_buf_set_lines(0, 0, 1, true, {})') end
@@ -660,7 +772,7 @@ H.apply_content_func = function(content_func, data)
     H.with_temp_context(
       { marks = { '[', ']' } },
       -- - Cancel one redo if `y` is dot-repeatable.
-      function() H.cmd_normal(yank_keys, vim.o.cpoptions:find('y') ~= nil) end
+      function() H.cmd_normal(yank_keys, { cancel_redo = vim.o.cpoptions:find('y') ~= nil }) end
     )
 
     -- Apply content function to register content
@@ -813,9 +925,15 @@ H.cancel_redo = function() end;
   H.cancel_redo = function() pcall(ffi.C.CancelRedo) end
 end)()
 
-H.cmd_normal = function(command, cancel_redo)
+H.cmd_normal = function(command, opts)
+  opts = opts or {}
+  local cancel_redo = opts.cancel_redo
   if cancel_redo == nil then cancel_redo = true end
-  vim.cmd('silent keepjumps lockmarks normal! ' .. command)
+  local lockmarks = opts.lockmarks
+  if lockmarks == nil then lockmarks = true end
+
+  vim.cmd('silent keepjumps ' .. (lockmarks and 'lockmarks ' or '') .. 'noautocmd normal! ' .. command)
+
   if cancel_redo then H.cancel_redo() end
 end
 
