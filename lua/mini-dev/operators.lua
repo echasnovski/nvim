@@ -245,8 +245,8 @@ MiniOperators.multiply = function(mode)
 
   H.with_temp_context({ marks = { '<', '>', '[', ']' }, registers = { 'x' } }, function()
     -- Yank to temporary "x" register
-    local yank_keys = string.format('`%s%s`%s"xy', mark_from, submode, mark_to)
-    H.cmd_normal(yank_keys, { cancel_redo = vim.o.cpoptions:find('y') ~= nil })
+    local yank_data = { mark_from = mark_from, mark_to = mark_to, submode = submode, mode = mode, register = 'x' }
+    H.do_between_marks('y', yank_data)
 
     -- Adjust cursor for a proper paste
     local ref_coords = H.multiply_get_ref_coords(mark_from, mark_to, submode)
@@ -482,9 +482,9 @@ H.exchange_do = function()
   local populating_register = function(step, register)
     return function()
       H.exchange_set_step_marks(step, { 'x', 'y' })
-
-      local cmd = string.format('normal! `x"%sy%s`y', register, step.submode)
-      vim.cmd(cmd)
+      local yank_data =
+        { mark_from = 'x', mark_to = 'y', submode = step.submode, mode = step.mode, register = register }
+      H.do_between_marks('y', yank_data)
     end
   end
 
@@ -500,6 +500,7 @@ H.exchange_do = function()
         count = 1,
         mark_from = 'x',
         mark_to = 'y',
+        mode = step.mode,
         register = register,
         reindent_linewise = H.get_config().exchange.reindent_linewise,
         submode = step.submode,
@@ -538,6 +539,10 @@ H.exchange_set_region_extmark = function(mode, add_highlight)
   -- Compute extmark's range for target region
   local extmark_from = { markcoords_from[1] - 1, markcoords_from[2] }
   local extmark_to = { markcoords_to[1] - 1, markcoords_to[2] + 1 }
+
+  -- Adjust for visual selection in case of 'selection=exclusive'
+  if region_data.mark_to == '>' and vim.o.selection == 'exclusive' then extmark_to[2] = extmark_to[2] - 1 end
+
   -- - Tweak columns for linewise marks
   if submode == 'V' then
     extmark_from[2] = 0
@@ -568,7 +573,7 @@ H.exchange_set_region_extmark = function(mode, add_highlight)
   end
 
   -- Return data to cache
-  return { buf_id = buf_id, submode = submode, extmark_id = region_extmark_id }
+  return { buf_id = buf_id, mode = mode, submode = submode, extmark_id = region_extmark_id }
 end
 
 H.exchange_get_region_extmark = function(step)
@@ -579,21 +584,26 @@ H.exchange_set_step_marks = function(step, mark_names)
   local extmark_details = H.exchange_get_region_extmark(step)
 
   H.set_mark(mark_names[1], { extmark_details[1] + 1, extmark_details[2] })
-  H.set_mark(mark_names[2], { extmark_details[3].end_row + 1, extmark_details[3].end_col - 1 })
+
+  -- Unadjust for visual selection in case of 'selection=exclusive'
+  local should_unadjust = step.mode == 'visual' and vim.o.selection == 'exclusive'
+  local col_offset = should_unadjust and 1 or 0
+
+  H.set_mark(mark_names[2], { extmark_details[3].end_row + 1, extmark_details[3].end_col - 1 + col_offset })
 end
 
-H.exchange_get_blockwise_regtype = function(mark_from, mark_to)
+H.exchange_get_blockwise_regtype = function(markcoords_from, markcoords_to)
   local f = function()
-    H.set_mark('x', mark_from)
-    H.set_mark('y', mark_to)
+    -- Yank into "z" register and return its blockwise type
+    H.set_mark('x', markcoords_from)
+    H.set_mark('y', markcoords_to)
+    local yank_data = { mark_from = 'x', mark_to = 'y', submode = H.submode_keys.block, mode = 'block', register = 't' }
+    H.do_between_marks('y', yank_data)
 
-    -- Move to `x` mark, yank blockwise to register `z` until `y` mark
-    vim.cmd('normal! `x"zy\22`y')
-
-    return vim.fn.getregtype('z')
+    return vim.fn.getregtype('t')
   end
 
-  return H.with_temp_context({ buf_id = 0, marks = { 'x', 'y' }, registers = { 'z' } }, f)
+  return H.with_temp_context({ buf_id = 0, marks = { 'x', 'y' }, registers = { 't' } }, f)
 end
 
 H.exchange_stop = function()
@@ -634,6 +644,7 @@ end
 -- Multiply -------------------------------------------------------------------
 H.multiply_get_ref_coords = function(mark_from, mark_to, submode)
   local markcoords_from, markcoords_to = H.get_mark(mark_from), H.get_mark(mark_to)
+  if mark_to == '>' and vim.o.selection == 'exclusive' then markcoords_to[2] = markcoords_to[2] - 1 end
 
   if submode ~= H.submode_keys.block then return markcoords_to end
 
@@ -656,6 +667,7 @@ H.multiply_get_ref_coords = function(mark_from, mark_to, submode)
 
   return { row, col - 1 }
 end
+
 -- Replace --------------------------------------------------------------------
 --- Delete region between two marks and paste from register
 ---
@@ -663,6 +675,7 @@ end
 ---   - <count> (optional) - Number of times to paste.
 ---   - <mark_from> - Name of "from" mark.
 ---   - <mark_to> - Name of "to" mark.
+---   - <mode> - Operator mode. One of 'visual', 'char', 'line', 'block'.
 ---   - <register> - Name of register from which to paste.
 ---   - <submode> - Region submode. One of 'v', 'V', '\22'.
 ---@private
@@ -681,9 +694,10 @@ H.replace_do = function(data)
   -- Determine if region is at edge which is needed for the correct paste key
   local from_line, _ = unpack(H.get_mark(mark_from))
   local to_line, to_col = unpack(H.get_mark(mark_to))
+  local edge_to_col = vim.fn.col({ to_line, '$' }) - 1 - (vim.o.selection == 'exclusive' and 0 or 1)
 
   local is_edge_line = submode == 'V' and to_line == vim.fn.line('$')
-  local is_edge_col = submode ~= 'V' and to_col == (vim.fn.col({ to_line, '$' }) - 2)
+  local is_edge_col = submode ~= 'V' and to_col == edge_to_col
   local is_edge = is_edge_line or is_edge_col
 
   local covers_linewise_all_buffer = is_edge_line and from_line == 1
@@ -699,8 +713,10 @@ H.replace_do = function(data)
   local is_blockwise_single_cell = submode == H.submode_keys.block
     and vim.deep_equal(H.get_mark(mark_from), H.get_mark(mark_to))
   local forced_motion = is_blockwise_single_cell and 'v' or submode
-  local delete_keys = string.format('`%s"_d%s`%s', mark_from, forced_motion, mark_to)
-  H.cmd_normal(delete_keys)
+
+  local delete_data =
+    { mark_from = mark_from, mark_to = mark_to, submode = forced_motion, mode = data.mode, register = '_' }
+  H.do_between_marks('d', delete_data)
 
   -- Paste register (ensuring same submode type as region)
   H.with_temp_context({ registers = { register } }, function()
@@ -764,16 +780,10 @@ H.apply_content_func = function(content_func, data)
   local mark_from, mark_to, submode = data.mark_from, data.mark_to, data.submode
   local reindent_linewise = data.reindent_linewise
 
-  H.with_temp_context({ registers = { 'x' } }, function()
-    -- Extract effective region content into "x" register.
-    local yank_keys = string.format('`%s"xy%s`%s', mark_from, submode, mark_to)
-
-    -- Make sure that `[` and `]` marks don't change after yank
-    H.with_temp_context(
-      { marks = { '[', ']' } },
-      -- - Cancel one redo if `y` is dot-repeatable.
-      function() H.cmd_normal(yank_keys, { cancel_redo = vim.o.cpoptions:find('y') ~= nil }) end
-    )
+  H.with_temp_context({ marks = { '>' }, registers = { 'x' } }, function()
+    -- Yank effective region content into "x" register.
+    data.register = 'x'
+    H.do_between_marks('y', data)
 
     -- Apply content function to register content
     local reg_info = vim.fn.getreginfo('x')
@@ -786,12 +796,39 @@ H.apply_content_func = function(content_func, data)
       count = 1,
       mark_from = mark_from,
       mark_to = mark_to,
+      mode = data.mode,
       register = 'x',
       reindent_linewise = reindent_linewise,
       submode = submode,
     }
     H.replace_do(replace_data)
   end)
+end
+
+H.do_between_marks = function(operator, data)
+  -- Force 'inclusive' selection as `<C-v>` submode does not force it (while
+  -- `v` does). This means that in case of 'selection=exclusive' marks should
+  -- be adjusted prior to this.
+  local cache_selection = vim.o.selection
+  if data.mode == 'block' and vim.o.selection == 'exclusive' then vim.o.selection = 'inclusive' end
+
+  -- Make sure that marks `[` and `]` don't change after `y`
+  H.with_temp_context({ marks = { '<', '>', '[', ']' } }, function()
+    local mark_from, mark_to, submode, register = data.mark_from, data.mark_to, data.submode, data.register
+    local keys
+    if data.mode == 'visual' then
+      keys = ('`' .. mark_from) .. submode .. ('`' .. mark_to) .. ('"' .. register .. operator)
+    else
+      keys = ('`' .. mark_from) .. ('"' .. register .. operator .. submode) .. ('`' .. mark_to)
+    end
+
+    -- Make sure that outer action is dot-repeatable by cancelling effect of
+    -- `d` or dot-repeatable `y`
+    local cancel_redo = operator == 'd' or (operator == 'y' and vim.o.cpoptions:find('y') ~= nil)
+    H.cmd_normal(keys, { cancel_redo = cancel_redo })
+  end)
+
+  vim.o.selection = cache_selection
 end
 
 H.is_content = function(x) return type(x) == 'table' and vim.tbl_islist(x.lines) and type(x.submode) == 'string' end
@@ -827,7 +864,7 @@ H.get_region_data = function(mode)
   local mark_from = selection_is_visual and '<' or '['
   local mark_to = selection_is_visual and '>' or ']'
 
-  return { submode = submode, mark_from = mark_from, mark_to = mark_to }
+  return { mode = mode, submode = submode, mark_from = mark_from, mark_to = mark_to }
 end
 
 H.get_region_indent = function(mark_from, mark_to)
@@ -905,10 +942,10 @@ H.with_temp_context = function(context, f)
 
     -- Restore data
     for mark_name, data in pairs(marks_data) do
-      H.set_mark(mark_name, data)
+      pcall(H.set_mark, mark_name, data)
     end
     for reg_name, data in pairs(reg_data) do
-      vim.fn.setreg(reg_name, data)
+      pcall(vim.fn.setreg, reg_name, data)
     end
   end)
 

@@ -318,8 +318,10 @@ end
 
 T['Evaluate']['works blockwise in Normal mode'] = function()
   child.lua([[vim.keymap.set('o', 'ia', function() vim.cmd('normal! \22j$') end)]])
+  child.lua([[vim.keymap.set('o', 'ib', function() vim.cmd('normal! \22j4l') end)]])
 
   validate_edit({ '1 + 1', '1 + 2' }, { 1, 0 }, { 'g=ia' }, { '2', '3' }, { 1, 0 })
+  validate_edit({ 'x=10-10=x', 'y=20-20=y' }, { 1, 2 }, { 'g=ib' }, { 'x=0    =x', 'y=0    =y' }, { 1, 2 })
 
   -- With dot-repeat
   validate_edit(
@@ -427,6 +429,19 @@ T['Evaluate']['allows custom mappings'] = function()
   validate_edit1d('1 + 1', 0, { 'c==' }, '2', 0)
   validate_edit1d('1 + 1', 0, { 'v$', 'c=' }, '2', 0)
   validate_edit1d('1 + 1', 0, { 'v$', 'c+' }, '2', 0)
+end
+
+T['Evaluate']["respects 'selection=exclusive'"] = function()
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j3l') end)]])
+  child.o.selection = 'exclusive'
+
+  validate_edit1d('x = (1 + 1) = y', 5, { 'g=i)' }, 'x = (2) = y', 5)
+  validate_edit({ 'local x = 1', 'x + 1' }, { 1, 0 }, { 'g=ip' }, { '2' }, { 1, 0 })
+  validate_edit({ 'x=1-1=x', 'y=1+1=y' }, { 1, 2 }, { 'g=ie' }, { 'x=0  =x', 'y=2  =y' }, { 1, 2 })
+
+  validate_edit1d('x = (1 + 1) = y', 5, { 'vi)', 'g=' }, 'x = (2) = y', 5)
+  validate_edit({ 'local x = 1', 'x + 1' }, { 1, 0 }, { 'Vip', 'g=' }, { '2' }, { 1, 0 })
+  validate_edit({ 'x=1-1=x', 'y=1+1=y' }, { 1, 2 }, { '<C-v>j3l', 'g=' }, { 'x=0  =x', 'y=2  =y' }, { 1, 2 })
 end
 
 T['Evaluate']["respects 'nomodifiable'"] = function()
@@ -722,6 +737,16 @@ T['Exchange']['highlights first step'] = new_set({ parametrize = { { 'charwise' 
   end,
 })
 
+T['Exchange']["correctly highlights first step with 'selection=exclusive'"] = function()
+  child.set_size(5, 12)
+  child.o.selection = 'exclusive'
+
+  set_lines({ 'aaa bbb' })
+  set_cursor(1, 0)
+  type_keys('v2l', 'gx')
+  child.expect_screenshot()
+end
+
 T['Exchange']['can be canceled'] = function()
   child.set_size(5, 12)
   set_lines({ 'aa bb' })
@@ -891,8 +916,15 @@ T['Exchange']['respects `selection=exclusive`'] = function()
   validate_edit({ 'aa', 'bb', 'x' }, { 1, 0 }, { 'gx_', 'j', 'gx_' }, { 'bb', 'aa', 'x' }, { 2, 0 })
   validate_edit({ 'a b c', 'a b c' }, { 1, 0 }, { 'gxie', 'w', 'gxie' }, { 'b a c', 'b a c' }, { 1, 2 })
 
-  MiniTest.skip('TODO')
   validate_edit1d('aaa bbb x', 0, { 'v2l', 'gx', 'w', 'v2l', 'gx' }, 'bba aab x', 4)
+  validate_edit({ 'aa', 'bb', 'x' }, { 1, 0 }, { 'V', 'gx', 'j', 'V', 'gx' }, { 'bb', 'aa', 'x' }, { 2, 0 })
+  validate_edit(
+    { 'aaa bbb', 'ccc ddd' },
+    { 1, 0 },
+    { '<C-v>jll', 'gx', 'w', '<C-v>jll', 'gx' },
+    { 'bba aab', 'ddc ccd' },
+    { 1, 4 }
+  )
 end
 
 T['Exchange']["respects 'nomodifiable'"] = function()
@@ -1185,32 +1217,44 @@ T['Multiply']['allows custom mappings'] = function()
 end
 
 T['Multiply']['respects `selection=exclusive`'] = function()
-  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
   child.o.selection = 'exclusive'
 
-  MiniTest.skip('TODO')
-
-  -- Normal mode
-  -- - Charwise
+  -- Charwise
   validate_edit1d('aa bb', 0, { 'gmiw' }, 'aaaa bb', 2)
-  -- - Linewise
-  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'gm_' }, { 'aa', 'aa', 'bb' }, { 2, 0 })
+  validate_edit1d('aa bb', 0, { 'viw', 'gm', '<Esc>' }, 'aaaa bb', 2)
 
-  -- - Blockwise for all four ways to create block
-  child.lua([[vim.keymap.set('o', 'ia', function() vim.cmd('normal! \22jl') end)]])
-  child.lua([[vim.keymap.set('o', 'ib', function() vim.cmd('normal! \22jh') end)]])
-  child.lua([[vim.keymap.set('o', 'ic', function() vim.cmd('normal! \22kl') end)]])
-  child.lua([[vim.keymap.set('o', 'id', function() vim.cmd('normal! \22kh') end)]])
+  -- Linewise
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'gm_' }, { 'aa', 'aa', 'bb' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'V', 'gm' }, { 'aa', 'aa', 'bb' }, { 2, 0 })
+
+  -- Blockwise for all four ways to create block
+  if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('Blockwise selection has core issues on Neovim<0.9.') end
+
+  -- - Normal mode
+  child.lua([[_G.block_object = function(keys)
+    return function()
+      vim.o.selection = 'inclusive'
+      vim.cmd('normal! \22' .. keys)
+      vim.schedule(function() vim.o.selection = 'exclusive' end)
+    end
+  end]])
+  child.lua([[vim.keymap.set('o', 'ia', _G.block_object('jl'))]])
+  child.lua([[vim.keymap.set('o', 'ib', _G.block_object('jh'))]])
+  child.lua([[vim.keymap.set('o', 'ic', _G.block_object('kl'))]])
+  child.lua([[vim.keymap.set('o', 'id', _G.block_object('kh'))]])
 
   local lines = { 'ab rs', 'cd uv' }
-
   local ref_lines, ref_cursor = { 'abab rs', 'cdcd uv' }, { 1, 2 }
   validate_edit(lines, { 1, 0 }, { 'gmia' }, ref_lines, ref_cursor)
   validate_edit(lines, { 1, 1 }, { 'gmib' }, ref_lines, ref_cursor)
   validate_edit(lines, { 2, 0 }, { 'gmic' }, ref_lines, ref_cursor)
   validate_edit(lines, { 2, 1 }, { 'gmid' }, ref_lines, ref_cursor)
 
-  -- Visual mode
+  -- - Visual mode
+  validate_edit(lines, { 1, 0 }, { '<C-v>jll', 'gm' }, ref_lines, ref_cursor)
+  validate_edit(lines, { 1, 1 }, { '<C-v>jh', 'gm' }, ref_lines, ref_cursor)
+  validate_edit(lines, { 2, 0 }, { '<C-v>kl', 'gm' }, ref_lines, ref_cursor)
+  validate_edit(lines, { 2, 2 }, { '<C-v>khh', 'gm' }, ref_lines, ref_cursor)
 end
 
 T['Multiply']["respects 'nomodifiable'"] = function()
@@ -1545,6 +1589,10 @@ T['Replace']['respects `selection=exclusive`'] = function()
   validate_edit1d('aaa bbb x', 0, { 'yiw', 'w', 'griw' }, 'aaa aaa x', 4)
   validate_edit({ 'aa', 'bb', 'x' }, { 1, 0 }, { 'yy', 'j', 'gr_' }, { 'aa', 'aa', 'x' }, { 2, 0 })
   validate_edit({ 'a b c', 'a b c' }, { 1, 0 }, { 'y<C-v>j', 'w', 'grie' }, { 'a a c', 'a a c' }, { 1, 2 })
+
+  validate_edit1d('aaa bbb x', 0, { 'yiw', 'w', 'viw', 'gr' }, 'aaa aaa x', 4)
+  validate_edit({ 'aa', 'bb', 'x' }, { 1, 0 }, { 'yy', 'j', 'V', 'gr' }, { 'aa', 'aa', 'x' }, { 2, 0 })
+  validate_edit({ 'a b c', 'a b c' }, { 1, 0 }, { 'y<C-v>j', 'w', '<C-v>j', 'gr' }, { 'a a c', 'a a c' }, { 1, 2 })
 end
 
 T['Replace']["respects 'nomodifiable'"] = function()
@@ -1745,6 +1793,19 @@ T['Sort']['allows custom mappings'] = function()
   validate_edit1d('  c, a, b  ', 0, { 'css' }, '  a, b, c  ', 2)
   validate_edit1d('(c, a, b)', 0, { 'vi)', 'cs' }, '(a, b, c)', 1)
   validate_edit1d('(c, a, b)', 0, { 'vi)', 'cS' }, '(a, b, c)', 1)
+end
+
+T['Sort']["respects 'selection=exclusive'"] = function()
+  child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22jll') end)]])
+  child.o.selection = 'exclusive'
+
+  validate_edit1d('(c, a, b)', 1, { 'gsi)' }, '(a, b, c)', 1)
+  validate_edit({ 'bb', 'aa' }, { 1, 0 }, { 'gsip' }, { 'aa', 'bb' }, { 1, 0 })
+  validate_edit({ 'xbax', 'yaby' }, { 1, 1 }, { 'gsie' }, { 'xabx', 'ybay' }, { 1, 1 })
+
+  validate_edit1d('(c, a, b)', 1, { 'vi)', 'gs' }, '(a, b, c)', 1)
+  validate_edit({ 'bb', 'aa' }, { 1, 0 }, { 'Vip', 'gs' }, { 'aa', 'bb' }, { 1, 0 })
+  validate_edit({ 'xbax', 'yaby' }, { 1, 1 }, { '<C-v>jll', 'gs' }, { 'xabx', 'ybay' }, { 1, 1 })
 end
 
 T['Sort']["respects 'nomodifiable'"] = function()
