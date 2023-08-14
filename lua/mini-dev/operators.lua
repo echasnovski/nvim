@@ -1,30 +1,3 @@
--- TODO:
---
--- Code:
---
--- Docs:
--- - Document official way to remap in Normal (operator and line) and Visual modes.
---
--- - Exchange:
---     - Works with most cases of intersecting regions, but not officially
---       supported.
---
--- - Replace:
---     - `[count]` in `grr` affects number of pastes.
---     - Respects [count] (in Visual, at first and in dot-repeat).
---       In Normal mode should differentiate between two counts:
---       `[count1]gr[count2]{motion}` (`[count1]` is for pasting,
---       `[count2]` is for textobject/motion).
---
--- - Sort:
---     - Example of interactive delimiter.
---     - Line mapping is charwise. Hence:
---         - No `[count]` support.
---         - Different custom line mapping (`^csg_` and not `cs_`).
---
---
--- Tests:
-
 --- *mini.operators* Text edit operators
 --- *MiniOperators*
 ---
@@ -33,15 +6,19 @@
 --- ==============================================================================
 ---
 --- Features:
---- - Operators (already mapped and as functions):
----     - Evaluate text and replace with its output.
+--- - Operators:
+---     - Evaluate text and replace with output.
 ---     - Exchange regions.
 ---     - Multiply (duplicate) text.
----     - Sort text.
 ---     - Replace text with register.
+---     - Sort text.
 ---
---- - Extra mappings are automatically created for current line and Visual mode.
---- - All operators are dot-repeatable.
+--- - Automated configurable mappings to operate on textobject, line, selection.
+---   Can be disabled in favor of more control with |MiniOperators.make_mappings()|.
+---
+--- - All operators (non-Visual mode) support |[count]| and dot-repeat.
+---
+--- See |MiniOperators-overview| for more details.
 ---
 --- # Setup ~
 ---
@@ -99,15 +76,89 @@
 --- for disabling module's functionality is left to user. See
 --- |mini.nvim-disabling-recipes| for common recipes.
 
+--- # General overview ~
+---
+--- Operator defines an action that will be performed on a textobject, motion,
+--- or visual selection (similar to |d|, |c|, etc.). When makes sense, it can also
+--- respect supplied register (like "replace").
+---
+--- This module implements each operator in a separate dedicated function
+--- (like |MiniOperators.replace()| for "replace" operator). Each such function
+--- takes `mode` as argument and acts depending on it:
+---
+--- - If `mode` is `nil` (or not explicitly supplied), it sets |operatorfunc|
+---   to itself and returns `g@` assuming being called from expression mapping.
+---   See |:map-operator| and |:map-expression| for more details.
+---
+--- - If `mode` is "char", "line", or "block", it acts as `operatorfunc` and performs
+---   action for region between |`[| and |`]| marks.
+---
+--- - If `mode` is "visual", it performs action for region between |`<| and |`>| marks.
+---
+--- For more details about specific operator, see help for its function:
+---
+--- - Evaluate: |MiniOperators.evaluate()|
+--- - Exchange: |MiniOperators.exchange()|
+--- - Multiply: |MiniOperators.multiply()|
+--- - Replace:  |MiniOperators.replace()|
+--- - Sort:     |MiniOperators.sort()|
+---
+---                                                         *MiniOperators-mappings*
+--- ## Mappings ~
+---
+--- All operators are automatically mapped during |MiniOperators.setup()| execution.
+--- Mappings keys are deduced from `prefix` field of corresponding `config` entry.
+--- See |MiniOperators.config| for more details.
+---
+--- For each operator the following mappings are created:
+---
+--- - In Normal mode to operate on textobject. Uses `prefix` directly.
+--- - In Normal mode to operate on line. Appends to `prefix` the last character.
+---   This aligns with |operator-doubled| and established patterns for operators
+---   with more than two characters, like |guu|, |gUU|, etc.
+--- - In Visual mode to operate on visual selection. Uses `prefix` directly.
+---
+--- Example of default mappings for "replace":
+--- - `gr` in Normal mode for operating on textobject.
+---   Example of usage: `griw` replaces "inner word" with default register.
+--- - `grr` in Normal mode for operating on line.
+---   Example of usage: `grr` replaces current line.
+--- - `gr` in Visual mode for operating on visual selection.
+---   Example of usage: `viwgr` replaces "inner word" selection.
+---
+--- There are two way to customize mappings:
+---
+--- - Change `prefix` in |MiniOperators.setup()| call. For example,
+---   doing `require('mini.operators').setup({ replace = { prefix = 'cr' } })`
+---   will make mappings for `cr`/`crr`/`cr` instead of `gr`/`grr`/`gr`.
+---
+--- - Disable automated mapping creation by supplying empty string as prefix and
+---   use |MiniOperators.make_mappings()| directly. For example: >
+---
+---   -- Disable automated creation of "replace"
+---   local operators = require('mini.operators')
+---   operators.setup({ replace = { prefix = '' } })
+---
+---   -- Make custom mappings
+---   operators.make_mappings(
+---     'replace',
+---     { textobject = 'cr', line = 'crr', selection = 'cr' }
+---   )
+---@tag MiniOperators-overview
+
+---@alias __operators_mode string|nil One of `nil`, `'char'`, `'line'`, `''block`, `'visual'`.
+---@alias __operators_content table Table with the following fields:
+---   - <lines> `(table)` - array with content lines.
+---   - <submode> `(string)` - region submode. One of `'v'`, `'V'`, `'<C-v>'` (escaped).
+
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
 ---@diagnostic disable:unused-local
 ---@diagnostic disable:cast-local-type
 
 -- Module definition ==========================================================
--- TODO: Make local before release
-MiniOperators = {}
-H = {}
+local MiniOperators = {}
+local H = {}
 
 --- Module setup
 ---
@@ -136,51 +187,118 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Evaluate ~
 ---
+--- `evaluate.prefix` is a string used to automatically infer operator mappings keys
+--- during |MiniOperators.setup()|. See |MiniOperators-mappings|.
+---
+--- `evaluate.func` is a function used to actually evaluate text region.
+--- If `nil` (default), |MiniOperators.default_evaluate_func()| is used.
+---
+--- This function will take content table representing selected text as input and
+--- should return array of lines as output (each item is placed on separate line).
+--- Content table has fields `lines` (array of region lines) and `submode` (one
+--- of `v`, `V`, `\22` for charwise, linewise, and blockwise selection).
+---
+--- To customize evaluation per language, set `evaluate.func` in buffer-local
+--- config (`vim.b.minioperators_config`; see |mini.nvim-buffer-local-config|).
+---
 --- # Exchange ~
+---
+--- `exchange.prefix` is a string used to automatically infer operator mappings keys
+--- during |MiniOperators.setup()|. See |MiniOperators-mappings|.
+---
+--- `exchange.reindent_linewise` is a boolean indicating whether newly put linewise
+--- text should preserve indent of a text it is replacing. In other words, if
+--- `false`, regions are exchanged along with their indents; if `true` - without them.
 ---
 --- # Multiply ~
 ---
---- Advantages of using "multiply" instead of "yank" + "paste":
---- - Doesn't modify any register, while separate steps need some register to
----   hold multiplied text.
---- - In most cases separate steps would be "yank" + "move cursor" + "paste",
----   while "multiply" makes it at once.
+--- `multiply.prefix` is a string used to automatically infer operator mappings keys
+--- during |MiniOperators.setup()|. See |MiniOperators-mappings|.
 ---
 --- # Replace ~
 ---
---- Advantages of using "replace" instead of "visually select" + "paste with |v_P|":
---- - As operator it is dot-repeatable which has cumulative gain in case of
----   multiple replacing is needed.
---- - Can automatically reindent.
+--- `replace.prefix` is a string used to automatically infer operator mappings keys
+--- during |MiniOperators.setup()|. See |MiniOperators-mappings|.
+---
+--- `replace.reindent_linewise` is a boolean indicating whether newly put linewise
+--- text should preserve indent of a text it is replacing.
 ---
 --- # Sort ~
+---
+--- `sort.prefix` is a string used to automatically infer operator mappings keys
+--- during |MiniOperators.setup()|. See |MiniOperators-mappings|.
+---
+--- `sort.func` is a function used to actually sort text region.
+--- If `nil` (default), |MiniOperators.default_sort_func()| is used.
+---
+--- Takes content table as input (see "Evaluate" section) and should return
+--- array of lines as output.
+---
+--- Example of `sort.func` which asks user for custom delimiter for charwise region:
+---
+---   local sort_func = function(content)
+---     local opts = {}
+---     if content.submode == 'v' then
+---       -- Ask for delimiter to be treated as is (not as Lua pattern)
+---       local delimiter = vim.fn.input('Sort delimiter: ')
+---       -- Treat surrounding whitespace as part of split
+---       opts.split_patterns = { '%s*' .. vim.pesc(delimiter) .. '%s*' }
+---     end
+---     return MiniOperators.default_sort_func(content, opts)
+---   end
+---
+---   require('mini.operators').setup({ sort = { func = sort_func } })
 MiniOperators.config = {
+  -- Each etnry configures one operator.
+  -- `prefix` defines which keys are mapped during `setup()`: general and
+  -- line operators in Normal mode; operating on selection in Visual mode.
+
+  -- Evaluate text and replace with output
   evaluate = {
     prefix = 'g=',
+
+    -- Function which does the evaluation
     func = nil,
   },
 
+  -- Exchange regions
   exchange = {
     prefix = 'gx',
+
+    -- Whether to reindent new text to match previous indent
     reindent_linewise = true,
   },
 
+  -- Multiply (duplicate) text
   multiply = {
     prefix = 'gm',
   },
 
+  -- Replace text with register
   replace = {
     prefix = 'gr',
+
+    -- Whether to reindent new text to match previous indent
     reindent_linewise = true,
   },
 
+  -- Sort text
   sort = {
     prefix = 'gs',
+
+    -- Function which does the sort
     func = nil,
   }
 }
 --minidoc_afterlines_end
 
+--- Evaluate text and replace with output
+---
+--- It replaces the region with the output of `config.evaluate.func`
+--- By default it is |MiniOperators.default_evaluate_func()| which evaluates
+--- text as a slightly modified Lua code.
+---
+---@param mode __operators_mode
 MiniOperators.evaluate = function(mode)
   if H.is_disabled() or not vim.bo.modifiable then return '' end
 
@@ -197,6 +315,22 @@ MiniOperators.evaluate = function(mode)
   H.apply_content_func(evaluate_func, data)
 end
 
+--- Exchange regions
+---
+--- Has two-step logic:
+--- - First call remembers the region as the one to be exchanged and highlights it
+---   with `MiniOperatorsExchangeFrom` highlight group.
+--- - Second call performs the exchange. Basically, a "yank both regions" and
+---   replace each one with another substeps.
+---
+--- Notes:
+--- - Use `<C-c>` to stop exchanging after the first step.
+---
+--- - Exchanched regions can have different (char,line,block)-wise submodes.
+---
+--- - Works with most cases of intersecting regions, but not officially supported.
+---
+---@param mode __operators_mode
 MiniOperators.exchange = function(mode)
   if H.is_disabled() or not vim.bo.modifiable then return '' end
 
@@ -226,6 +360,25 @@ MiniOperators.exchange = function(mode)
   end
 end
 
+--- Multiply (duplicate) text
+---
+--- Copies a region (without affecting registers) and puts it after it.
+---
+--- Notes:
+--- - Supports two types of |[count]|: `[count1]gm[count2][textobject]` with default
+---   `config.multiply.prefix` makes `[count1]` copies of region defined by
+---   `[count2][textobject]`.
+---
+--- - |[count]| for "line" mapping (`gmm` by default) is treated as `[count1]`
+---   from previous note.
+---
+--- - Advantages of using this instead of "yank" + "paste":
+---    - Doesn't modify any register, while separate steps need some register to
+---      hold multiplied text.
+---    - In most cases separate steps would be "yank" + "move cursor" + "paste",
+---      while "multiply" makes it at once.
+---
+---@param mode __operators_mode
 MiniOperators.multiply = function(mode)
   if H.is_disabled() or not vim.bo.modifiable then return '' end
 
@@ -261,6 +414,22 @@ MiniOperators.multiply = function(mode)
   end)
 end
 
+--- Replace text with register
+---
+--- Notes:
+--- - Supports two types of |[count]|: `[count1]gr[count2][textobject]` with default
+---   `config.multiply.prefix` puts `[count1]` contents of register over region
+---   defined by `[count2][textobject]`.
+---
+--- - |[count]| for "line" mapping (`grr` by default) is treated as `[count1]`
+---   from previous note.
+---
+--- - Advantages of using this instead of "visually select" + "paste with |v_P|":
+---    - As operator it is dot-repeatable which has cumulative gain in case of
+---      multiple replacing is needed.
+---    - Can automatically reindent.
+---
+---@param mode __operators_mode
 MiniOperators.replace = function(mode)
   if H.is_disabled() or not vim.bo.modifiable then return '' end
 
@@ -289,6 +458,17 @@ MiniOperators.replace = function(mode)
   return ''
 end
 
+--- Sort text
+---
+--- It replaces the region with the output of `config.sort.func`
+--- By default it is |MiniOperators.default_sort_func()| which sorts the text
+--- depending on submode.
+---
+--- Notes:
+--- - Default "line" mapping is charwise (as there is not much sense in sorting
+---   linewise a single line). This also results into no |[count]| support.
+---
+---@param mode __operators_mode
 MiniOperators.sort = function(mode)
   if H.is_disabled() or not vim.bo.modifiable then return '' end
 
@@ -303,11 +483,84 @@ MiniOperators.sort = function(mode)
   H.apply_content_func(sort_func, H.get_region_data(mode))
 end
 
--- Default sort function
---
--- - Pad pattern with `%s*` to include whitepsace into separator.
---   Example: line "b + a" with "%+" pattern will be sorted as " a+b " while with
---   "%s*%+%s*" pattern - "a + b".
+--- Make operator mappings
+---
+---@param operator_name string Name of existing operator from this module.
+---@param lhs_tbl table Table with mappings keys. Should have these fields:
+---   - <textobject> `(string)` - Normal mode mapping to operate on textobject.
+---   - <line> `(string)` - Normal mode mapping to operate on line.
+---     Usually an alias for textobject mapping followed by |_|.
+---     For "sort", it operates charwise on whole line without left and right
+---     whitespace (as linewise sorting of single line doesn't have much sense).
+---   - <selection> `(string)` - Visual mode mapping to operate on selection.
+---
+---   Supply empty string to not create a mapping. Note: creating `line` mapping
+---   needs `textobject` mapping to be set.
+---
+---@usage >
+---   require('mini.operators').make_mappings(
+---     'replace',
+---     { textobject = 'cr', line = 'crr', selection = 'cr' }
+---   )
+MiniOperators.make_mappings = function(operator_name, lhs_tbl)
+  -- Validate arguments
+  if not (type(operator_name) == 'string' and MiniOperators[operator_name] ~= nil) then
+    H.error('`operator_name` should be a valid operator name.')
+  end
+  local is_keys_tbl = type(lhs_tbl) == 'table'
+    and type(lhs_tbl.textobject) == 'string'
+    and type(lhs_tbl.line) == 'string'
+    and type(lhs_tbl.selection) == 'string'
+  if not is_keys_tbl then H.error('`lhs_tbl` should be a valid table of keys.') end
+
+  if lhs_tbl.line ~= '' and lhs_tbl.textobject == '' then
+    H.error('Creating mapping for `line` needs mapping for `textobject`.')
+  end
+
+  -- Make mappings
+  local operator_desc = operator_name:sub(1, 1):upper() .. operator_name:sub(2)
+
+  local expr_opts = { expr = true, replace_keycodes = false, desc = operator_desc .. ' operator' }
+  H.map('n', lhs_tbl.textobject, string.format('v:lua.MiniOperators.%s()', operator_name), expr_opts)
+
+  local rhs = lhs_tbl.textobject .. '_'
+  -- - Make `sort()` line mapping to be charwise
+  if operator_name == 'sort' then rhs = '^' .. lhs_tbl.textobject .. 'g_' end
+  H.map('n', lhs_tbl.line, rhs, { remap = true, desc = operator_desc .. ' line' })
+
+  local visual_rhs = string.format([[<Cmd>lua MiniOperators.%s('visual')<CR>]], operator_name)
+  H.map('x', lhs_tbl.selection, visual_rhs, { desc = operator_desc .. ' selection' })
+end
+
+--- Default sort function
+---
+--- Sort text based on region submode:
+---
+--- - For charwise region, split by separator pattern, sort parts, merge back
+---   with separators. Actual pattern is inferred based on the array of patterns
+---   from `opts.split_patterns`: whichever element is present in the text is
+---   used, preferring the earlier one if several are present.
+---   Example: sorting "c, b; a" line with default `opts.split_patterns` results
+---   into "b; a, c" as it is split only by comma.
+---
+--- - For linewise and blockwise regions sort lines as is.
+---
+--- Notes:
+--- - Sort is done with |table.sort()| on an array of lines, which doesn't treat
+---   whitespace or digits specially. Use |:sort| for more complicated tasks.
+---
+--- - Pad pattern in `split_patterns` with `%s*` to include whitespace into
+---   separator. Example: line "b + a" with "%+" pattern will be sorted as
+---   " a+b " (because it is split as "b ", "+", " a" ) while with
+---   "%s*%+%s*" pattern - "a + b" (split as "b", " + ", "a").
+---
+---@param content __operators_content
+---@param opts table|nil Options. Possible fields:
+---   - <compare_fun> `(function)` - compare function compatible with |table.sort()|.
+---     Default: direct compare with `<`.
+---   - <split_patterns> `(table)` - array of split Lua patterns to be used for
+---     charwise submode. Order is important.
+---     Default: `{ '%s*,%s*', '%s*;%s*', '%s+' }`.
 MiniOperators.default_sort_func = function(content, opts)
   if not H.is_content(content) then H.error('`content` should be a content table.') end
 
@@ -332,9 +585,20 @@ MiniOperators.default_sort_func = function(content, opts)
   return H.sort_charwise_unsplit(parts, seps)
 end
 
--- Default evaluate function
---
--- - Blockwise is evaluated per line using only first lines of outputs.
+--- Default evaluate function
+---
+--- Evaluate text as Lua code and return object from last line (like if last
+--- line is prepended with `return` if it doesn't already).
+---
+--- Behavior depends on region submode:
+---
+--- - For charwise and linewise regions, text evaluated as is.
+---
+--- - For blockwise region, lines are evaluated per line using only first lines
+---   of outputs. This allows separate execution of lines in order to provide
+---   something different compared to linewise region.
+---
+---@param content __operators_content
 MiniOperators.default_evaluate_func = function(content)
   if not H.is_content(content) then H.error('`content` should be a content table.') end
 
@@ -414,19 +678,12 @@ H.apply_config = function(config)
     local prefix = config[operator_name].prefix
     if type(prefix) ~= 'string' or prefix == '' then return end
 
-    local operator_desc = operator_name:sub(1, 1):upper() .. operator_name:sub(2)
-
-    local expr_opts = { expr = true, replace_keycodes = false, desc = operator_desc .. ' operator' }
-    H.map('n', prefix, string.format('v:lua.MiniOperators.%s()', operator_name), expr_opts)
-
-    local line_lhs = prefix .. vim.fn.strcharpart(prefix, vim.fn.strchars(prefix) - 1, 1)
-    local rhs = prefix .. '_'
-    -- - Make `sort()` line mapping to be charwise
-    if operator_name == 'sort' then rhs = '^' .. prefix .. 'g_' end
-    H.map('n', line_lhs, rhs, { remap = true, desc = operator_desc .. ' line' })
-
-    local visual_rhs = string.format([[<Cmd>lua MiniOperators.%s('visual')<CR>]], operator_name)
-    H.map('x', prefix, visual_rhs, { desc = operator_desc .. ' selection' })
+    local lhs_tbl = {
+      textobject = prefix,
+      line = prefix .. vim.fn.strcharpart(prefix, vim.fn.strchars(prefix) - 1, 1),
+      selection = prefix,
+    }
+    MiniOperators.make_mappings(operator_name, lhs_tbl)
   end
 
   map_all('evaluate')
@@ -748,7 +1005,7 @@ H.sort_charwise_split = function(lines, split_patterns)
     end
   end
 
-  if pat == nil then return lines end
+  if pat == nil then return lines, {} end
 
   -- Split into parts and separators
   local parts, seps = {}, {}
@@ -816,7 +1073,7 @@ H.do_between_marks = function(operator, data)
   H.with_temp_context({ marks = { '<', '>', '[', ']' } }, function()
     local mark_from, mark_to, submode, register = data.mark_from, data.mark_to, data.submode, data.register
     local keys
-    if data.mode == 'visual' then
+    if data.mode == 'visual' and vim.o.selection == 'exclusive' then
       keys = ('`' .. mark_from) .. submode .. ('`' .. mark_to) .. ('"' .. register .. operator)
     else
       keys = ('`' .. mark_from) .. ('"' .. register .. operator .. submode) .. ('`' .. mark_to)

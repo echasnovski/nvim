@@ -128,6 +128,54 @@ T['sort()'] = new_set()
 
 T['sort()']['is present'] = function() eq(child.lua_get('type(MiniOperators.sort)'), 'function') end
 
+T['make_mappings()'] = new_set()
+
+local make_mappings = forward_lua('MiniOperators.make_mappings')
+
+-- Targeted tests for each operator is done in tests for every operator
+
+T['make_mappings()']['respects empty string as lhs'] = function()
+  child.api.nvim_del_keymap('n', 'gr')
+  child.api.nvim_del_keymap('n', 'grr')
+  child.api.nvim_del_keymap('x', 'gr')
+
+  -- Should not create mapping for that particular variant
+  local lhs_tbl_ref = { textobject = 'cs', line = 'css', selection = 'cs' }
+
+  local validate = function(variant)
+    pcall(child.api.nvim_del_keymap, 'n', 'cs')
+    pcall(child.api.nvim_del_keymap, 'n', 'css')
+    pcall(child.api.nvim_del_keymap, 'x', 'cs')
+
+    local lhs_tbl = vim.deepcopy(lhs_tbl_ref)
+    lhs_tbl[variant] = ''
+    -- Creating mapping for line is not allowed without textobject mapping
+    if variant == 'textobject' then lhs_tbl.line = '' end
+    make_mappings('replace', lhs_tbl)
+
+    local mode = variant == 'selection' and 'x' or 'n'
+    eq(child.fn.maparg(lhs_tbl_ref[variant], mode), '')
+  end
+
+  validate('textobject')
+  validate('line')
+  validate('selection')
+end
+
+T['make_mappings()']['validates arguments'] = function()
+  expect.error(function() make_mappings(1, {}) end, '`operator_name`')
+
+  expect.error(function() make_mappings('replace', 1) end, '`lhs_tbl`')
+  expect.error(function() make_mappings('replace', { textobject = 1, line = 'crr', selection = 'cr' }) end, '`lhs_tbl`')
+  expect.error(function() make_mappings('replace', { textobject = 'cr', line = 1, selection = 'cr' }) end, '`lhs_tbl`')
+  expect.error(function() make_mappings('replace', { textobject = 'cr', line = 'crr', selection = 1 }) end, '`lhs_tbl`')
+
+  expect.error(
+    function() make_mappings('replace', { textobject = '', line = 'crr', selection = 'cr' }) end,
+    '`line`.*`textobject`'
+  )
+end
+
 T['default_sort_func()'] = new_set()
 
 local default_sort_func = forward_lua('MiniOperators.default_sort_func')
@@ -352,6 +400,11 @@ T['Evaluate']['works in Visual mode'] = function()
   validate_edit({ '1 + 1', '1 + 2' }, { 1, 0 }, { '<C-v>j$', 'g=' }, { '2', '3' }, { 1, 0 })
 end
 
+T['Evaluate']['works blockwise in Visual mode with `virtualedit=block`'] = function()
+  child.o.virtualedit = 'block'
+  validate_edit({ 'x=1+1=x', 'y=1+2=y' }, { 1, 2 }, { '<C-v>j2l', 'g=' }, { 'x=2  =x', 'y=3  =y' }, { 1, 2 })
+end
+
 T['Evaluate']['respects `config.evaluate.func`'] = function()
   child.lua([[MiniOperators.config.evaluate.func = function() return { 'a', 'b' } end]])
 
@@ -410,25 +463,17 @@ T['Evaluate']['respects `config.evaluate.prefix`'] = function()
   validate_edit1d('1 + 1', 0, { 'v$', 'c=' }, '2', 0)
 end
 
-T['Evaluate']['allows custom mappings'] = function()
+T['Evaluate']['works with `make_mappings()`'] = function()
   child.api.nvim_del_keymap('n', 'g=')
   child.api.nvim_del_keymap('n', 'g==')
   child.api.nvim_del_keymap('x', 'g=')
 
   load_module({ evaluate = { prefix = '' } })
-
-  child.lua([[
-    vim.keymap.set('n', 'c=', 'v:lua.MiniOperators.evaluate()', { expr = true, replace_keycodes = false, desc = 'Evaluate' })
-    vim.keymap.set('n', 'c==', 'c=_', { remap = true, desc = 'Evaluate line' })
-    vim.keymap.set('x', 'c=', '<Cmd>lua MiniOperators.evaluate("visual")<CR>', { desc = 'Evaluate selection' })
-    -- `:<C-u>` approach in Visual mode should also work
-    vim.keymap.set('x', 'c+', ':<C-u>lua MiniOperators.evaluate("visual")<CR>', { desc = 'Evaluate selection' })
-  ]])
+  make_mappings('evaluate', { textobject = 'c=', line = 'c==', selection = 'c=' })
 
   validate_edit1d('1 + 1', 0, { 'c=$' }, '2', 0)
   validate_edit1d('1 + 1', 0, { 'c==' }, '2', 0)
   validate_edit1d('1 + 1', 0, { 'v$', 'c=' }, '2', 0)
-  validate_edit1d('1 + 1', 0, { 'v$', 'c+' }, '2', 0)
 end
 
 T['Evaluate']["respects 'selection=exclusive'"] = function()
@@ -673,6 +718,11 @@ T['Exchange']['works in Visual mode'] = function()
   validate_edit({ 'ab', 'cd' }, { 1, 1 }, { '<C-v>jgx', 'h', '<C-v>jgx' }, { 'ba', 'dc' }, { 1, 0 })
 end
 
+T['Exchange']['works blockwise in Visual mode with `virtualedit=block`'] = function()
+  child.o.virtualedit = 'block'
+  validate_edit({ 'ab', 'cd' }, { 1, 0 }, { '<C-v>jgx', 'l', '<C-v>jgx' }, { 'ba', 'dc' }, { 1, 1 })
+end
+
 T['Exchange']['works when regions are made in different modes'] = function()
   child.lua([[vim.keymap.set('o', 'ie', function() vim.cmd('normal! \22j') end)]])
 
@@ -887,25 +937,17 @@ T['Exchange']['respects `config.exchange.prefix`'] = function()
   validate_edit1d('aa bb', 0, { 'viwcx', 'w', 'viwcx' }, 'bb aa', 3)
 end
 
-T['Exchange']['allows custom mappings'] = function()
+T['Exchange']['works with `make_mappings()`'] = function()
   child.api.nvim_del_keymap('n', 'gx')
   child.api.nvim_del_keymap('n', 'gxx')
   child.api.nvim_del_keymap('x', 'gx')
 
   load_module({ exchange = { prefix = '' } })
-
-  child.lua([[
-    vim.keymap.set('n', 'cx', 'v:lua.MiniOperators.exchange()', { expr = true, replace_keycodes = false, desc = 'Exchange' })
-    vim.keymap.set('n', 'cxx', 'cx_', { remap = true, desc = 'Exchange line' })
-    vim.keymap.set('x', 'cx', '<Cmd>lua MiniOperators.exchange("visual")<CR>', { desc = 'Exchange selection' })
-    -- `:<C-u>` approach in Visual mode should also work
-    vim.keymap.set('x', 'cX', ':<C-u>lua MiniOperators.exchange("visual")<CR>', { desc = 'Exchange selection' })
-  ]])
+  make_mappings('exchange', { textobject = 'cx', line = 'cxx', selection = 'cx' })
 
   validate_edit1d('aa bb', 0, { 'cxiw', 'w', 'cxiw' }, 'bb aa', 3)
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'cxx', 'j', 'cxx' }, { 'bb', 'aa' }, { 2, 0 })
   validate_edit1d('aa bb', 0, { 'viwcx', 'w', 'viwcx' }, 'bb aa', 3)
-  validate_edit1d('aa bb', 0, { 'viwcX', 'w', 'viwcX' }, 'bb aa', 3)
 end
 
 T['Exchange']['respects `selection=exclusive`'] = function()
@@ -1113,6 +1155,12 @@ T['Multiply']['works with `[count]` in Visual mode'] = function()
   validate_edit(lines, { 2, 1 }, { '<C-v>kh', '2gm' }, ref_lines, ref_cursor)
 end
 
+T['Multiply']['works blockwise in Visual mode with `virtualedit=block`'] = function()
+  if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('Blockwise selection has core issues on Neovim<0.9.') end
+  child.o.virtualedit = 'block'
+  validate_edit({ 'xab rs', 'xcd uv' }, { 1, 1 }, { '<C-v>jl', 'gm' }, { 'xabab rs', 'xcdcd uv' }, { 1, 3 })
+end
+
 T['Multiply']['works with multibyte characters'] = function()
   -- Charwise
   validate_edit({ 'ыыы', 'aa x' }, { 1, 0 }, { 'gm/x<CR>' }, { 'ыыы', 'aa ыыы', 'aa x' }, { 2, 3 })
@@ -1195,25 +1243,17 @@ T['Multiply']['respects `config.multiply.prefix`'] = function()
   validate_edit1d('aa bb', 0, { 'viw', 'cm' }, 'aaaa bb', 2)
 end
 
-T['Multiply']['allows custom mappings'] = function()
+T['Multiply']['works with `make_mappings()`'] = function()
   child.api.nvim_del_keymap('n', 'gm')
   child.api.nvim_del_keymap('n', 'gmm')
   child.api.nvim_del_keymap('x', 'gm')
 
   load_module({ multiply = { prefix = '' } })
-
-  child.lua([[
-    vim.keymap.set('n', 'cm', 'v:lua.MiniOperators.multiply()', { expr = true, replace_keycodes = false, desc = 'Multiply' })
-    vim.keymap.set('n', 'cmm', 'cm_', { remap = true, desc = 'Multiply line' })
-    vim.keymap.set('x', 'cm', '<Cmd>lua MiniOperators.multiply("visual")<CR>', { desc = 'Multiply selection' })
-    -- `:<C-u>` approach in Visual mode should also work
-    vim.keymap.set('x', 'cM', ':<C-u>lua MiniOperators.multiply("visual")<CR>', { desc = 'Multiply selection' })
-  ]])
+  make_mappings('multiply', { textobject = 'cm', line = 'cmm', selection = 'cm' })
 
   validate_edit1d('aa bb', 0, { 'cmiw' }, 'aaaa bb', 2)
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'cmm' }, { 'aa', 'aa', 'bb' }, { 2, 0 })
   validate_edit1d('aa bb', 0, { 'viw', 'cm' }, 'aaaa bb', 2)
-  validate_edit1d('aa bb', 0, { 'viw', 'cM' }, 'aaaa bb', 2)
 end
 
 T['Multiply']['respects `selection=exclusive`'] = function()
@@ -1439,6 +1479,11 @@ T['Replace']['works in Visual mode'] = function()
   validate_edit({ 'a b', 'a b' }, { 1, 0 }, { 'y<C-v>j', 'w', '<C-v>j', 'gr' }, { 'a a', 'a a' }, { 1, 2 })
 end
 
+T['Replace']['works blockwise in Visual mode with `virtualedit=block`'] = function()
+  child.o.virtualedit = 'block'
+  validate_edit({ 'xab', 'xcd' }, { 1, 0 }, { 'y<C-v>j', 'l', '<C-v>j', 'gr' }, { 'xxb', 'xxd' }, { 1, 1 })
+end
+
 T['Replace']['correctly reindents linewise in Visual mode'] = function()
   -- Should use indent from text being replaced
   validate_edit({ '\taa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'V', 'gr' }, { '\taa', 'aa' }, { 2, 0 })
@@ -1561,25 +1606,17 @@ T['Replace']['respects `config.replace.prefix`'] = function()
   validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 3)
 end
 
-T['Replace']['allows custom mappings'] = function()
+T['Replace']['works with `make_mappings()`'] = function()
   child.api.nvim_del_keymap('n', 'gr')
   child.api.nvim_del_keymap('n', 'grr')
   child.api.nvim_del_keymap('x', 'gr')
 
   load_module({ replace = { prefix = '' } })
-
-  child.lua([[
-    vim.keymap.set('n', 'cr', 'v:lua.MiniOperators.replace()', { expr = true, replace_keycodes = false, desc = 'Replace' })
-    vim.keymap.set('n', 'crr', 'cr_', { remap = true, desc = 'Replace line' })
-    vim.keymap.set('x', 'cr', '<Cmd>lua MiniOperators.replace("visual")<CR>', { desc = 'Replace selection' })
-    -- `:<C-u>` approach in Visual mode should also work
-    vim.keymap.set('x', 'cR', ':<C-u>lua MiniOperators.replace("visual")<CR>', { desc = 'Replace selection' })
-  ]])
+  make_mappings('replace', { textobject = 'cr', line = 'crr', selection = 'cr' })
 
   validate_edit1d('aa bb', 0, { 'yiw', 'w', 'criw' }, 'aa aa', 3)
   validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'yy', 'j', 'crr' }, { 'aa', 'aa' }, { 2, 0 })
   validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cr' }, 'aa aa', 3)
-  validate_edit1d('aa bb', 0, { 'yiw', 'w', 'viw', 'cR' }, 'aa aa', 3)
 end
 
 T['Replace']['respects `selection=exclusive`'] = function()
@@ -1654,6 +1691,9 @@ T['Sort']['works charwise in Normal mode'] = function()
   -- Correctly picks split pattern
   validate_edit1d('b, a; c', 0, { 'gs$' }, 'a; c, b', 0)
 
+  -- Without detected separators
+  validate_edit1d('ba', 0, { 'gs$' }, 'ba', 0)
+
   -- Works with empty parts
   validate_edit1d('a,,b,', 0, { 'gs$' }, ',,a,b', 0)
 
@@ -1707,8 +1747,13 @@ T['Sort']['works in Visual mode'] = function()
   validate_edit({ 'ss', 'rr', '', 'aa' }, { 1, 0 }, { 'vip', 'gs' }, { 'rr', 'ss', '', 'aa' }, { 1, 0 })
 
   -- Blockwise region
-  validate_edit({ 'cb', 'ba', 'ac' }, { 1, 1 }, { '<C-v>j', 'gs' }, { 'ca', 'bb', 'ac' }, { 1, 1 })
+  validate_edit({ 'cbx', 'bax', 'acx' }, { 1, 1 }, { '<C-v>2j', 'gs' }, { 'cax', 'bbx', 'acx' }, { 1, 1 })
   validate_edit({ 'cxb', 'bxa', 'axc' }, { 1, 1 }, { '<C-v>jl', 'gs' }, { 'cxa', 'bxb', 'axc' }, { 1, 1 })
+end
+
+T['Sort']['works blockwise in Visual mode with `virtualedit=block`'] = function()
+  child.o.virtualedit = 'block'
+  validate_edit({ 'cbx', 'bax', 'acx' }, { 1, 1 }, { '<C-v>2j', 'gs' }, { 'cax', 'bbx', 'acx' }, { 1, 1 })
 end
 
 T['Sort']['respects `config.sort.func`'] = function()
@@ -1774,25 +1819,17 @@ T['Sort']['respects `config.sort.prefix`'] = function()
   validate_edit1d('(c, a, b)', 0, { 'vi)', 'cs' }, '(a, b, c)', 1)
 end
 
-T['Sort']['allows custom mappings'] = function()
+T['Sort']['works with `make_mappings()`'] = function()
   child.api.nvim_del_keymap('n', 'gs')
   child.api.nvim_del_keymap('n', 'gss')
   child.api.nvim_del_keymap('x', 'gs')
 
   load_module({ sort = { prefix = '' } })
-
-  child.lua([[
-    vim.keymap.set('n', 'cs', 'v:lua.MiniOperators.sort()', { expr = true, replace_keycodes = false, desc = 'Sort' })
-    vim.keymap.set('n', 'css', '^csg_', { remap = true, desc = 'Sort line' })
-    vim.keymap.set('x', 'cs', '<Cmd>lua MiniOperators.sort("visual")<CR>', { desc = 'Sort selection' })
-    -- `:<C-u>` approach in Visual mode should also work
-    vim.keymap.set('x', 'cS', ':<C-u>lua MiniOperators.sort("visual")<CR>', { desc = 'Sort selection' })
-  ]])
+  make_mappings('sort', { textobject = 'cs', line = 'css', selection = 'cs' })
 
   validate_edit1d('c, a, b', 0, { 'cs$' }, 'a, b, c', 0)
   validate_edit1d('  c, a, b  ', 0, { 'css' }, '  a, b, c  ', 2)
   validate_edit1d('(c, a, b)', 0, { 'vi)', 'cs' }, '(a, b, c)', 1)
-  validate_edit1d('(c, a, b)', 0, { 'vi)', 'cS' }, '(a, b, c)', 1)
 end
 
 T['Sort']["respects 'selection=exclusive'"] = function()
