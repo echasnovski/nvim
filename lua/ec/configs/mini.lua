@@ -53,8 +53,6 @@ require('mini.statusline').setup({
 
 require('mini.tabline').setup()
 
-require('mini-dev.operators').setup()
-
 vim.schedule(function()
   local ai = require('mini.ai')
   ai.setup({
@@ -202,6 +200,8 @@ vim.schedule(function()
   MiniMisc.setup_auto_root()
 
   require('mini.move').setup({ options = { reindent_linewise = false } })
+
+  require('mini.operators').setup()
 
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   vim.keymap.set('i', '<CR>', 'v:lua.EC.cr_action()', { expr = true })
