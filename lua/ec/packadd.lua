@@ -49,9 +49,6 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Language server configurations
   packadd_defer('nvim-lspconfig')
 
-  -- File tree explorer
-  packadd_defer('nvim-tree')
-
   -- Tweak Neovim's terminal to be more REPL-aware
   packadd_defer('neoterm')
 

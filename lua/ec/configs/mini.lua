@@ -104,7 +104,10 @@ vim.schedule(function()
       { mode = 'n', keys = '<Leader>' },
       { mode = 'x', keys = '<Leader>' },
 
-      -- 'mini.bracketed'
+      -- mini.basics
+      { mode = 'n', keys = [[\]] },
+
+      -- mini.bracketed
       { mode = 'n', keys = '[' },
       { mode = 'n', keys = ']' },
       { mode = 'x', keys = '[' },
@@ -138,6 +141,13 @@ vim.schedule(function()
     },
 
     window = { config = { border = 'double' } },
+  })
+  -- Enable triggers in help buffer
+  local clue_group = vim.api.nvim_create_augroup('my-miniclue', { clear = true })
+  vim.api.nvim_create_autocmd('FileType', {
+    pattern = 'help',
+    group = clue_group,
+    callback = function(data) MiniClue.enable_buf_triggers(data.buf) end,
   })
 
   -- Don't really need it on daily basis

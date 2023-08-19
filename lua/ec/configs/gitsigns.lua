@@ -13,9 +13,16 @@ require('gitsigns').setup({
 })
 
 local goto_hunk_cmd = function(direction)
-  local unfold_and_center =
-    [[if MiniAnimate ~= nil then MiniAnimate.execute_after('scroll', 'normal! zvzz') else vim.cmd('normal! zvzz') end]]
-  return string.format([[<Cmd>lua require("gitsigns").%s_hunk(); %s<CR>]], direction, unfold_and_center)
+  local center = function() vim.cmd('normal! zvzz') end
+
+  return function()
+    require('gitsigns')[direction .. '_hunk']()
+    if MiniAnimate ~= nil then
+      MiniAnimate.execute_after('scroll', function() vim.defer_fn(center, 5) end)
+    else
+      cetner()
+    end
+  end
 end
 
 vim.keymap.set('n', '[h', goto_hunk_cmd('prev'), { desc = 'Backward hunk' })
