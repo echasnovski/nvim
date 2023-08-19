@@ -26,9 +26,6 @@ end
 -- Collection of minimal and fast Lua modules
 packadd('mini')
 
--- Exchange regions
-packadd_defer('vim-exchange')
-
 if vim.fn.exists('vscode') ~= 1 then
   -- Common dependency for Lua plugins
   packadd('plenary')
