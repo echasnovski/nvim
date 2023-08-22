@@ -1,11 +1,15 @@
 -- TODO:
 --
 -- Code:
+-- - Profile memory usage.
+--
+-- - ?Left/right arrows to adjust caret?
+--
 -- - Close on lost focus.
 --
 -- - Info.
 --
--- - Info.
+-- - Help.
 --
 -- - ??Async callable `source`??
 --
@@ -15,7 +19,14 @@
 --
 -- Tests:
 --
+-- - Automatically respects 'ignorecase'/'smartcase' by adjusting `stritems`.
+--
+-- - Works with multibyte characters.
+--
 -- Docs:
+--
+-- - Default `config.show_item` (`<C-i>`) is usually `<Tab>` on most terminal
+--   emulators.
 --
 
 --- *mini.pick* Pick anything
@@ -96,7 +107,6 @@ H = {}
 ---@param config table|nil Module config table. See |MiniPick.config|.
 ---
 ---@usage `require('mini.pick').setup({})` (replace `{}` with your `config` table).
---- **Neds to have triggers configured**.
 MiniPick.setup = function(config)
   -- Export module
   _G.MiniPick = MiniPick
@@ -148,7 +158,7 @@ MiniPick.config = {
     scroll_up = '<C-b>',
 
     show_help = '<C-h>',
-    show_info = '<C-i>',
+    show_item = '<C-i>',
 
     stop = '<Esc>',
   },
@@ -165,8 +175,8 @@ MiniPick.config = {
 ---   Possible fields:
 ---   - <choose> `(function)` - Callable to be executed on the chosen item.
 ---     Execution is done when picker is still open.
----   - <info> `(function)` - Callable to be executed on item to show its
----     extended info. Should return a buffer identifier to be shown as info.
+---   - <show_item> `(function)` - Callable to be executed on item to show more
+---     information about it. Should return a buffer identifier to be shown.
 ---
 ---   All actions will be called with the following arguments:
 ---   - `item` - selected item; `nil` if user manually stopped picker.
@@ -180,6 +190,7 @@ MiniPick.config = {
 --- @return ... Tuple of selected item and its index. Both are `nil` if user
 ---   manually stopped picker.
 MiniPick.start = function(source, actions, opts)
+  -- TODO: Refactor to be `local_opts` and `global_opts`? This allows adding `source_name`, etc.
   source = H.expand_callable(source)
   if not vim.tbl_islist(source) or #source == 0 then
     H.error('`source` should be a non-empty array or function returning it.')
@@ -189,24 +200,53 @@ MiniPick.start = function(source, actions, opts)
   if type(actions) ~= 'table' then H.error('`actions` should be a table.') end
 
   opts = vim.tbl_deep_extend('force', H.get_config(), opts or {})
-  opts.content.sort = opts.content.sort
-    or function(match_inds, stritems, data) return MiniPick.default_sort('substring', match_inds, stritems, data) end
+  opts.content.sort = opts.content.sort or MiniPick.default_sort
 
   local picker = H.picker_new(source, actions, opts)
   return H.picker_advance(picker)
 end
 
-MiniPick.default_sort = function(match_type, match_inds, stritems, data)
-  if match_type == 'substring' then return H.sort_substring(match_inds, stritems, data) end
-  if match_type == 'fuzzy' then return H.sort_fuzzy(match_inds, stritems, data) end
-  H.error([[`match_type` should be one of 'substring' or 'fuzzy'.]])
+_G.profile = {}
+MiniPick.default_sort = function(match_inds, stritems, data)
+  local start_time = vim.loop.hrtime()
+
+  local match_data, do_sort = H.sort_match(match_inds, stritems, data)
+  local duration_match = 0.000001 * (vim.loop.hrtime() - start_time)
+
+  local res
+  if do_sort then
+    table.sort(match_data, H.sort_compare)
+    res = vim.tbl_map(function(x) return x.ind end, match_data)
+  else
+    res = match_data
+  end
+
+  local duration_total = 0.000001 * (vim.loop.hrtime() - start_time)
+  local n_sorted = #match_inds
+  table.insert(_G.profile, {
+    n_input = #match_inds,
+    n_output = #res,
+    prompt = table.concat(data.query, ''),
+    duration_match = duration_match,
+    duration_match_per_item = duration_match / math.max(#match_inds, 1),
+    duration_sort = (duration_total - duration_match),
+    duration_sort_per_item = (duration_total - duration_match) / math.max(#res, 1),
+    duration_total = duration_total,
+    duration_total_per_item = duration_total / math.max(#match_inds, 1),
+  })
+
+  return res
+end
+
+MiniPick.ui_select = function(items, opts, on_choice)
+  MiniPick.start(items, { choose = function(item, index, _) on_choice(item, index) end }, {})
 end
 
 MiniPick.builtin = {}
 
 MiniPick.builtin.files = function(source_opts, actions, opts)
   local source = vim.fn.systemlist('rg --files --no-ignore --color never')
-  actions = vim.tbl_deep_extend('force', { choose = H.file_edit, info = H.file_preview }, actions or {})
+  actions = vim.tbl_deep_extend('force', { choose = H.file_edit, show_item = H.file_preview }, actions or {})
   return MiniPick.start(source, actions, opts)
 end
 
@@ -259,7 +299,7 @@ H.setup_config = function(config)
     ['mappings.scroll_down'] = { config.mappings.scroll_down, 'string' },
     ['mappings.scroll_up'] = { config.mappings.scroll_up, 'string' },
     ['mappings.show_help'] = { config.mappings.show_help, 'string' },
-    ['mappings.show_info'] = { config.mappings.show_info, 'string' },
+    ['mappings.show_item'] = { config.mappings.show_item, 'string' },
     ['mappings.stop'] = { config.mappings.stop, 'string' },
 
     ['window.config'] = {
@@ -298,12 +338,13 @@ end
 -- Picker object --------------------------------------------------------------
 H.picker_new = function(items, actions, opts)
   -- Compute string items to work with and their initial matches
-  local stritems = {}
+  local stritems, stritems_ignorecase = {}, {}
   for i, x in ipairs(items) do
     x = H.expand_callable(x)
     if type(x) == 'table' then x = x.item end
     local to_add = type(x) == 'string' and x or tostring(x)
     table.insert(stritems, to_add)
+    table.insert(stritems_ignorecase, to_add:lower())
   end
 
   -- Create buffer
@@ -318,18 +359,20 @@ H.picker_new = function(items, actions, opts)
     actions = actions,
     items = items,
     stritems = stritems,
+    stritems_ignorecase = stritems_ignorecase,
     opts = opts,
 
     -- Associated Neovim objects
-    buffers = { main = buf_id, info = nil, help = nil },
+    buffers = { main = buf_id, item = nil, help = nil },
     windows = { main = win_id, init = vim.api.nvim_get_current_win() },
 
     -- Query data
     query = {},
     -- - Array of `stritems` indexes matching current query
     match_inds = nil,
-    -- - History of `match_inds` for query for more performant deletion
-    match_inds_history = {},
+
+    -- Cache per prompt for more performant querying
+    cache = {},
 
     -- View data
     -- - Index range of `match_inds` currently visible. Present for significant
@@ -344,9 +387,6 @@ H.picker_new = function(items, actions, opts)
   -- - All items are matched at the start
   H.picker_set_match_inds(picker, H.seq_along(items))
 
-  -- - Set first item as current
-  H.picker_set_current_ind(picker, 1)
-
   return picker
 end
 
@@ -354,14 +394,13 @@ H.picker_advance = function(picker)
   local special_chars = H.picker_get_special_chars(picker)
 
   -- Start user query
-  local is_abort, should_filtersort = false, false
+  local is_abort, should_filtersort, should_show_main_buf = false, false, true
   while true do
     -- Update picker
-    H.picker_set_bordertext(picker)
-
+    if should_show_main_buf then H.picker_show_main_buf(picker) end
     if should_filtersort then H.picker_filtersort(picker) end
-    should_filtersort = false
 
+    H.picker_set_bordertext(picker)
     H.picker_set_lines(picker)
     vim.cmd('redraw')
 
@@ -372,21 +411,14 @@ H.picker_advance = function(picker)
       break
     end
 
-    local special = special_chars[char]
-    if special ~= nil then
-      local should_stop = H.special_actions[special](picker)
-      if should_stop then break end
-    else
-      -- TODO: Handle unexpected chars (like arrow keys)
+    local action_name = special_chars[char]
+    H.actions[action_name](picker, char)
 
-      -- Adding to query should always switch main buffer
-      H.picker_show_main_buf(picker)
+    local should_stop = action_name == 'stop' or vim.startswith(action_name or '', 'choose')
+    if should_stop then break end
 
-      table.insert(picker.query, char)
-      -- NOTE: Filtersort only when query grows. When it shrinks,
-      -- `match_inds_history` is used to set `match_inds`.
-      should_filtersort = true
-    end
+    should_filtersort = action_name == nil or vim.startswith(action_name or '', 'delete')
+    should_show_main_buf = not vim.startswith(action_name or '', 'show')
   end
 
   local item, index, data = H.picker_make_args(picker)
@@ -442,7 +474,10 @@ end
 
 H.picker_set_match_inds = function(picker, match_inds)
   picker.match_inds = match_inds
-  picker.match_inds_history[#picker.query] = match_inds
+  picker.cache[table.concat(picker.query)] = match_inds
+
+  -- Reset current index if match indexes are updated
+  H.picker_set_current_ind(picker, 1)
 end
 
 H.picker_set_current_ind = function(picker, ind)
@@ -504,12 +539,16 @@ H.picker_set_lines = function(picker)
 end
 
 H.picker_filtersort = function(picker)
-  local stritems, match_inds = picker.stritems, picker.match_inds
+  -- Try to use cache first
+  local new_match_inds = picker.cache[table.concat(picker.query)]
+  if new_match_inds ~= nil then return H.picker_set_match_inds(picker, new_match_inds) end
+
+  local stritems = H.picker_is_ignorecase(picker) and picker.stritems_ignorecase or picker.stritems
+  local match_inds = picker.match_inds
   local filter, sort = picker.opts.content.filter, picker.opts.content.sort
 
   local data = { query = picker.query }
 
-  local new_match_inds = match_inds
   if filter ~= nil then
     new_match_inds = {}
     for i = 1, #match_inds do
@@ -517,10 +556,8 @@ H.picker_filtersort = function(picker)
     end
   end
 
-  new_match_inds = sort(new_match_inds, stritems, data)
-
+  new_match_inds = sort(new_match_inds or match_inds, stritems, data)
   H.picker_set_match_inds(picker, new_match_inds)
-  H.picker_set_current_ind(picker, 1)
 end
 
 H.picker_get_special_chars = function(picker)
@@ -539,6 +576,13 @@ H.picker_get_special_chars = function(picker)
   res[term('<PageUp>')] = 'scroll_up'
 
   return res
+end
+
+H.picker_is_ignorecase = function(picker)
+  if not vim.o.ignorecase then return false end
+  if not vim.o.smartcase then return true end
+  local prompt = table.concat(picker.query, '')
+  return vim.fn.match(prompt, '[[:upper:]]') < 0
 end
 
 H.picker_set_bordertext = function(picker)
@@ -562,17 +606,18 @@ H.picker_stop = function(picker)
   -- Close window and delete buffers
   pcall(vim.api.nvim_win_close, picker.windows.main, true)
   pcall(vim.api.nvim_buf_delete, picker.buffers.main, { force = true })
+  picker.cache = nil
 end
 
-H.special_actions = {
-  choose = function(picker) return H.picker_choose(picker, nil) end,
-  choose_in_split = function(picker) return H.picker_choose(picker, 'split') end,
-  choose_in_tabpage = function(picker) return H.picker_choose(picker, 'tabnew') end,
-  choose_in_vsplit = function(picker) return H.picker_choose(picker, 'vsplit') end,
+H.actions = {
+  choose = function(picker, _) return H.picker_choose(picker, nil) end,
+  choose_in_split = function(picker, _) return H.picker_choose(picker, 'split') end,
+  choose_in_tabpage = function(picker, _) return H.picker_choose(picker, 'tabnew') end,
+  choose_in_vsplit = function(picker, _) return H.picker_choose(picker, 'vsplit') end,
 
-  delete_all = function(picker) H.picker_delete(picker, #picker.query) end,
-  delete_char = function(picker) H.picker_delete(picker, 1) end,
-  delete_word = function(picker)
+  delete_all = function(picker, _) H.picker_delete(picker, #picker.query) end,
+  delete_char = function(picker, _) H.picker_delete(picker, 1) end,
+  delete_word = function(picker, _)
     local n_query, n_del = #picker.query, 0
     if n_query == 0 then return end
     local ref_is_keyword = vim.fn.match(picker.query[n_query], '[[:keyword:]]') >= 0
@@ -584,38 +629,46 @@ H.special_actions = {
     H.picker_delete(picker, n_del)
   end,
 
-  move_down = function(picker) H.picker_move(picker, 1) end,
-  move_up = function(picker) H.picker_move(picker, -1) end,
+  move_down = function(picker, _) H.picker_move_current(picker, 1) end,
+  move_up = function(picker, _) H.picker_move_current(picker, -1) end,
 
-  scroll_down = function(picker) H.picker_move(picker, vim.api.nvim_win_get_height(picker.windows.main)) end,
-  scroll_up = function(picker) H.picker_move(picker, -vim.api.nvim_win_get_height(picker.windows.main)) end,
+  scroll_down = function(picker, _) H.picker_move_current(picker, vim.api.nvim_win_get_height(picker.windows.main)) end,
+  scroll_up = function(picker, _) H.picker_move_current(picker, -vim.api.nvim_win_get_height(picker.windows.main)) end,
 
-  show_info = function(picker)
+  show_help = function(picker, _)
+    -- TODO
+  end,
+
+  show_item = function(picker, _)
     local win_id, buf_id = picker.windows.main, picker.buffers.main
-    if vim.api.nvim_win_get_buf(win_id) == picker.buffers.info then
+    if vim.api.nvim_win_get_buf(win_id) == picker.buffers.item then
       H.picker_show_main_buf(picker)
-      picker.buffers.info = nil
+      picker.buffers.item = nil
       return
     end
 
-    local info = picker.actions.info
-    if not vim.is_callable(info) then return true end
+    local show_item = picker.actions.show_item
+    if not vim.is_callable(show_item) then return true end
 
     local item, index, data = H.picker_make_args(picker)
     if item == nil then return end
 
-    local info_buf_id = info(item, index, data)
+    local info_buf_id = show_item(item, index, data)
     if not H.is_valid_buf(info_buf_id) then return end
 
-    picker.buffers.info = info_buf_id
+    picker.buffers.item = info_buf_id
     vim.api.nvim_win_set_buf(win_id, info_buf_id)
   end,
 
-  stop = function(picker)
-    H.picker_stop(picker)
-    return true
-  end,
+  stop = function(picker, _) H.picker_stop(picker) end,
 }
+setmetatable(H.actions, {
+  -- If no special action, add character to the query
+  __index = function()
+    -- TODO: Handle unexpected chars (like arrow keys)
+    return function(picker, char) table.insert(picker.query, char) end
+  end,
+})
 
 H.picker_choose = function(picker, pre_command)
   local choose = picker.actions.choose
@@ -636,18 +689,10 @@ H.picker_delete = function(picker, n)
   local right, left = #picker.query, math.max(#picker.query - n + 1, 1)
   for i = right, left, -1 do
     picker.query[i] = nil
-    picker.match_inds_history[i] = nil
   end
-
-  -- Restore `match_inds` from history
-  picker.match_inds = picker.match_inds_history[left - 1]
-  H.picker_set_current_ind(picker, 1)
-
-  -- Ensure that main buffer is shown
-  H.picker_show_main_buf(picker)
 end
 
-H.picker_move = function(picker, n)
+H.picker_move_current = function(picker, n)
   local n_matches = #picker.match_inds
   if n_matches == 0 then return end
 
@@ -676,17 +721,154 @@ end
 H.picker_show_main_buf = function(picker) vim.api.nvim_win_set_buf(picker.windows.main, picker.buffers.main) end
 
 -- Sort -----------------------------------------------------------------------
-H.sort_substring = function(match_inds, stritems, data)
-  local query_pattern = vim.pesc(table.concat(data.query, ''))
-  local new_match_inds = {}
-  for _, ind in ipairs(match_inds) do
-    if string.find(stritems[ind], query_pattern) ~= nil then table.insert(new_match_inds, ind) end
+H.sort_match = function(match_inds, stritems, data)
+  local is_exact_plain, is_exact_start, is_exact_end =
+    data.query[1] == "'", data.query[1] == '^', data.query[#data.query] == '$'
+
+  local start_offset = (is_exact_plain or is_exact_start) and 2 or 1
+  local end_offset = (not is_exact_plain and is_exact_end) and -2 or -1
+  local prompt = table.concat(data.query, ''):sub(start_offset, end_offset)
+
+  if prompt == '' then return vim.deepcopy(match_inds), false end
+
+  if not (is_exact_plain or is_exact_start or is_exact_end) then
+    -- NOTE: Using manual query traversing is slower on small queries (1-3) but
+    -- increasingly faster on bigger ones (5+). Probably due to how matching
+    -- with many `.-` is implemented in `string.find()`.
+
+    -- return H.sort_match_fuzzy(match_inds, stritems, data)
+    return H.sort_match_fuzzy_2(match_inds, stritems, data)
   end
-  return new_match_inds
+
+  local prefix = is_exact_start and '^' or ''
+  local suffix = is_exact_end and '$' or ''
+  local pattern = prefix .. vim.pesc(prompt) .. suffix
+
+  return H.sort_match_exact(match_inds, stritems, pattern)
 end
 
-H.sort_fuzzy = function(match_inds, stritems, data)
-  -- TODO
+H.sort_match_exact = function(match_inds, stritems, pattern)
+  local match_data = {}
+  for _, ind in ipairs(match_inds) do
+    local start = string.find(stritems[ind], pattern)
+    if start ~= nil then table.insert(match_data, { width = 0, start = start, ind = ind }) end
+  end
+  return match_data, true
+end
+
+H.sort_match_fuzzy = function(match_inds, stritems, data)
+  local query, query_rev = data.query, {}
+  for i = #query, 1, -1 do
+    -- Use `reverse`
+    table.insert(query_rev, query[i]:reverse())
+  end
+
+  local find_best_positions = H.sort_find_best_positions
+  local match_data = {}
+  for _, ind in ipairs(match_inds) do
+    local pos = find_best_positions(stritems[ind], query, query_rev)
+    if pos ~= nil then table.insert(match_data, { width = pos[#pos] - pos[1] + 1, start = pos[1], ind = ind }) end
+  end
+  return match_data, true
+end
+
+H.sort_find_best_positions = function(candidate, query, query_rev)
+  local n_query = #query
+  if n_query == 0 or vim.fn.strchars(candidate) < n_query then return nil end
+
+  -- Search for query chars match positions with the following properties:
+  -- - All are present in `candidate` in the same order.
+  -- - Has smallest width among all such match positions.
+  -- This same algorithm is used in 'mini.fuzzy' and has more comments.
+
+  local n = 1
+
+  -- Search forward to find matching positions with left-most last char match
+  local pos_last = 0
+  for i = 1, n_query do
+    _, pos_last = string.find(candidate, query[i], pos_last + 1)
+    if not pos_last then break end
+  end
+
+  if not pos_last then
+    table.insert(_G.back_and_fourth_n_iterations, n)
+    return nil
+  end
+  if n_query == 1 then
+    table.insert(_G.back_and_fourth_n_iterations, n)
+    return { pos_last }
+  end
+
+  -- Iteratively try to find better matches by iteratively pulling up first
+  -- matched position (results in smaller width) and advancing last match
+  local best_pos_last, best_width = pos_last, math.huge
+  local n_candidate, rev_candidate = candidate:len(), candidate:reverse()
+
+  local cutoff = H.get_config().cutoff
+  while pos_last do
+    local rev_first = n_candidate - pos_last + 1
+    for i = 2, #query_rev do
+      rev_first = string.find(rev_candidate, query_rev[i], rev_first + 1)
+    end
+    local first = n_candidate - rev_first + 1
+    local width = pos_last - first + 1
+
+    if width < best_width then
+      best_pos_last, best_width = pos_last, width
+    end
+
+    _, pos_last = string.find(candidate, query[n_query], pos_last + 1)
+    n = n + 1
+  end
+  table.insert(_G.back_and_fourth_n_iterations, n)
+
+  -- Actually compute best matched positions from best last letter match
+  local best_positions = { best_pos_last }
+  local rev_pos = n_candidate - best_pos_last + 1
+  for i = 2, #query_rev do
+    rev_pos = string.find(rev_candidate, query_rev[i], rev_pos + 1)
+    table.insert(best_positions, 1, n_candidate - rev_pos + 1)
+  end
+
+  return best_positions
+end
+
+H.sort_match_fuzzy_2 = function(match_inds, stritems, data)
+  local pattern = table.concat(vim.tbl_map(vim.pesc, data.query), '.-')
+
+  local find_best_range = H.sort_find_best_range
+  local match_data = {}
+  for _, ind in ipairs(match_inds) do
+    local range = find_best_range(stritems[ind], pattern)
+    if range ~= nil then table.insert(match_data, { width = range[2] - range[1], start = range[1], ind = ind }) end
+  end
+  return match_data, true
+end
+
+_G.back_and_fourth_n_iterations = {}
+H.sort_find_best_range = function(candidate, pattern)
+  local match = { string.find(candidate, pattern) }
+  if match[1] == nil then return nil end
+
+  -- Possibly improve
+  local best_match, best_width = match, match[2] - match[1]
+  local n = 1
+  while match[1] ~= nil do
+    if (match[2] - match[1]) < best_width then
+      best_match, best_width = match, match[2] - match[1]
+    end
+    match = { string.find(candidate, pattern, match[1] + 1) }
+    n = n + 1
+  end
+  table.insert(_G.back_and_fourth_n_iterations, n)
+
+  return best_match
+end
+
+H.sort_compare = function(a, b)
+  return a.width < b.width
+    or (a.width == b.width and a.start < b.start)
+    or (a.width == b.width and a.start == b.start and a.ind < b.ind)
 end
 
 -- Built-ins ------------------------------------------------------------------
