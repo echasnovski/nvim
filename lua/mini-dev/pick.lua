@@ -25,8 +25,6 @@
 --
 -- Docs:
 --
--- - Default `config.show_item` (`<C-i>`) is usually `<Tab>` on most terminal
---   emulators.
 --
 
 --- *mini.pick* Pick anything
@@ -158,7 +156,7 @@ MiniPick.config = {
     scroll_up = '<C-b>',
 
     show_help = '<C-h>',
-    show_item = '<C-i>',
+    show_item = '<Tab>',
 
     stop = '<Esc>',
   },
@@ -201,6 +199,7 @@ MiniPick.start = function(source, actions, opts)
 
   opts = vim.tbl_deep_extend('force', H.get_config(), opts or {})
   opts.content.sort = opts.content.sort or MiniPick.default_sort
+  -- opts.content.sort = opts.content.sort or MiniPick.builtin_sort
 
   local picker = H.picker_new(source, actions, opts)
   return H.picker_advance(picker)
@@ -216,7 +215,7 @@ MiniPick.default_sort = function(match_inds, stritems, data)
   local res
   if do_sort then
     table.sort(match_data, H.sort_compare)
-    res = vim.tbl_map(function(x) return x.ind end, match_data)
+    res = vim.tbl_map(function(x) return x[3] end, match_data)
   else
     res = match_data
   end
@@ -231,6 +230,30 @@ MiniPick.default_sort = function(match_inds, stritems, data)
     duration_match_per_item = duration_match / math.max(#match_inds, 1),
     duration_sort = (duration_total - duration_match),
     duration_sort_per_item = (duration_total - duration_match) / math.max(#res, 1),
+    duration_total = duration_total,
+    duration_total_per_item = duration_total / math.max(#match_inds, 1),
+  })
+
+  return res
+end
+
+MiniPick.builtin_sort = function(match_inds, stritems, data)
+  local start_time = vim.loop.hrtime()
+
+  local item_list = {}
+  for _, ind in ipairs(match_inds) do
+    table.insert(item_list, { str = stritems[ind], ind = ind })
+  end
+
+  local res_raw = vim.fn.matchfuzzypos(item_list, table.concat(data.query), { key = 'str' })
+  local res = vim.tbl_map(function(x) return x.ind end, res_raw[1])
+
+  local duration_total = 0.000001 * (vim.loop.hrtime() - start_time)
+  local n_sorted = #match_inds
+  table.insert(_G.profile, {
+    n_input = #match_inds,
+    n_output = #res,
+    prompt = table.concat(data.query, ''),
     duration_total = duration_total,
     duration_total_per_item = duration_total / math.max(#match_inds, 1),
   })
@@ -547,6 +570,7 @@ H.picker_filtersort = function(picker)
   local match_inds = picker.match_inds
   local filter, sort = picker.opts.content.filter, picker.opts.content.sort
 
+  -- TODO: make query lowercase if picker is ignorecase
   local data = { query = picker.query }
 
   if filter ~= nil then
@@ -736,8 +760,8 @@ H.sort_match = function(match_inds, stritems, data)
     -- increasingly faster on bigger ones (5+). Probably due to how matching
     -- with many `.-` is implemented in `string.find()`.
 
-    -- return H.sort_match_fuzzy(match_inds, stritems, data)
-    return H.sort_match_fuzzy_2(match_inds, stritems, data)
+    return H.sort_match_fuzzy(match_inds, stritems, data)
+    -- return H.sort_match_fuzzy_2(match_inds, stritems, data)
   end
 
   local prefix = is_exact_start and '^' or ''
@@ -763,11 +787,14 @@ H.sort_match_fuzzy = function(match_inds, stritems, data)
     table.insert(query_rev, query[i]:reverse())
   end
 
-  local find_best_positions = H.sort_find_best_positions
+  -- NOTE: no pullback seems to be **significantly** faster on 2-5 query
+  -- length. Even faster than pattern approach (`fuzzy_2`).
+  -- local find_best_positions = H.sort_find_best_positions
+  local find_best_positions = H.sort_find_best_positions_no_pullback
   local match_data = {}
   for _, ind in ipairs(match_inds) do
     local pos = find_best_positions(stritems[ind], query, query_rev)
-    if pos ~= nil then table.insert(match_data, { width = pos[#pos] - pos[1] + 1, start = pos[1], ind = ind }) end
+    if pos ~= nil then table.insert(match_data, { pos[#pos] - pos[1] + 1, pos[1], ind }) end
   end
   return match_data, true
 end
@@ -833,42 +860,181 @@ H.sort_find_best_positions = function(candidate, query, query_rev)
   return best_positions
 end
 
+H.sort_find_best_positions_no_pullback = function(candidate, query, query_rev)
+  local n_query = #query
+  if n_query == 0 or vim.fn.strchars(candidate) < n_query then return nil end
+
+  -- Search for query chars match positions with the following properties:
+  -- - All are present in `candidate` in the same order.
+  -- - Has smallest width among all such match positions.
+  -- This same algorithm is used in 'mini.fuzzy' and has more comments.
+
+  local n = 1
+
+  -- Search forward to find matching positions with left-most last char match
+  local first, pos_last = string.find(candidate, query[1], 1)
+  if pos_last == nil then return nil end
+  for i = 2, n_query do
+    _, pos_last = string.find(candidate, query[i], pos_last + 1)
+    if not pos_last then break end
+  end
+
+  if not pos_last then
+    table.insert(_G.back_and_fourth_n_iterations, n)
+    return nil
+  end
+  if n_query == 1 then
+    table.insert(_G.back_and_fourth_n_iterations, n)
+    return { pos_last }
+  end
+
+  -- Iteratively try to find better matches by iteratively pulling up first
+  -- matched position (results in smaller width) and advancing last match
+  local best_first, best_pos_last, best_width = first, pos_last, pos_last - first + 1
+  while pos_last do
+    local width = pos_last - first + 1
+
+    if width < best_width then
+      best_first, best_pos_last, best_width = first, pos_last, width
+    end
+
+    first, pos_last = string.find(candidate, query[1], first + 1)
+    if pos_last == nil then break end
+    for i = 2, n_query do
+      _, pos_last = string.find(candidate, query[i], pos_last + 1)
+      if not pos_last then break end
+    end
+    n = n + 1
+  end
+  table.insert(_G.back_and_fourth_n_iterations, n)
+
+  -- Actually compute best matched positions from best last letter match
+  local best_positions = { best_first }
+  local pos = best_first
+  for i = 2, n_query do
+    pos = string.find(candidate, query[i], pos + 1)
+    table.insert(best_positions, pos)
+  end
+
+  return best_positions
+end
+
 H.sort_match_fuzzy_2 = function(match_inds, stritems, data)
+  local query_rev = {}
+  for i = #data.query, 1, -1 do
+    -- Use `reverse`
+    table.insert(query_rev, data.query[i]:reverse())
+  end
   local pattern = table.concat(vim.tbl_map(vim.pesc, data.query), '.-')
+  local rev_pattern = table.concat(vim.tbl_map(vim.pesc, query_rev), '.-')
 
   local find_best_range = H.sort_find_best_range
   local match_data = {}
   for _, ind in ipairs(match_inds) do
-    local range = find_best_range(stritems[ind], pattern)
-    if range ~= nil then table.insert(match_data, { width = range[2] - range[1], start = range[1], ind = ind }) end
+    local from, to = find_best_range(stritems[ind], pattern, rev_pattern)
+    if from ~= nil then table.insert(match_data, { to - from, from, ind }) end
   end
   return match_data, true
 end
 
 _G.back_and_fourth_n_iterations = {}
-H.sort_find_best_range = function(candidate, pattern)
-  local match = { string.find(candidate, pattern) }
-  if match[1] == nil then return nil end
+H.sort_find_best_range = function(candidate, pattern, rev_pattern)
+  local from, to = string.find(candidate, pattern)
+  if from == nil then return nil end
 
   -- Possibly improve
-  local best_match, best_width = match, match[2] - match[1]
+  local best_from, best_to, best_width = from, to, to - from
+  local n_candidate, rev_candidate = candidate:len(), candidate:reverse()
+
   local n = 1
-  while match[1] ~= nil do
-    if (match[2] - match[1]) < best_width then
-      best_match, best_width = match, match[2] - match[1]
+  while from ~= nil do
+    local _, rev_from = string.find(rev_candidate, rev_pattern, n_candidate - to + 1)
+    from = n_candidate - rev_from + 1
+
+    if (to - from) < best_width then
+      best_from, best_to, best_width = from, to, to - from
     end
-    match = { string.find(candidate, pattern, match[1] + 1) }
+    from, to = string.find(candidate, pattern, from + 1)
     n = n + 1
   end
   table.insert(_G.back_and_fourth_n_iterations, n)
 
-  return best_match
+  return best_from, best_to
 end
 
+H.find_query = function(candidate, query)
+  local from, to = string.find(candidate, query[1])
+  if from == nil then return nil, nil end
+  for i = 2, #query do
+    _, to = string.find(candidate, query[i], to + 1)
+    if not to then break end
+  end
+  if to == nil then return nil, nil end
+  return from, to
+end
+
+H.files_find_query = function(files, query)
+  local find_query = H.find_query
+  local n = 0
+  for _, path in ipairs(files) do
+    local from, to = find_query(path, query)
+    if from ~= nil then n = n + 1 end
+  end
+
+  return n
+end
+
+H.files_find_query_pattern = function(files, query)
+  local pattern = table.concat(vim.tbl_map(vim.pesc, query), '.-')
+  local n = 0
+  for _, path in ipairs(files) do
+    local from, to = string.find(path, pattern)
+    if from ~= nil then n = n + 1 end
+  end
+
+  return n
+end
+
+H.files_find_query_vim_pattern = function(files, query)
+  local regex = vim.regex(table.concat(query, [[.\{-}]]))
+  local n = 0
+  for _, path in ipairs(files) do
+    local from, to = regex:match_str(path)
+    if from ~= nil then n = n + 1 end
+  end
+
+  return n
+end
+
+H.files_find_query_matchfuzzy = function(files, query)
+  local prompt = table.concat(query, '')
+  local res = vim.fn.matchfuzzy(files, prompt)
+  return #res
+end
+
+H.files_find_query_mine = function(files, query)
+  local res = MiniPick.default_sort(H.seq_along(files), files, { query = query })
+  return #res
+end
+
+_G.query = vim.split('selection', '')
+
 H.sort_compare = function(a, b)
-  return a.width < b.width
-    or (a.width == b.width and a.start < b.start)
-    or (a.width == b.width and a.start == b.start and a.ind < b.ind)
+  return a[1] < b[1] or (a[1] == b[1] and (a[2] < b[2] or (a[2] == b[2] and a[3] < b[3])))
+
+  -- return a.width < b.width or (a.width == b.width and (a.start < b.start or (a.start == b.start and a.ind < b.ind)))
+
+  -- if a[1] ~= b[1] then return a[1] < b[1] end
+  -- if a[2] ~= b[2] then return a[2] < b[2] end
+  -- return a[3] < b[3]
+
+  -- return a.width < b.width
+  --   or (a.width == b.width and a.start < b.start)
+  --   or (a.width == b.width and a.start == b.start and a.ind < b.ind)
+
+  -- return a[1] < b[1]
+  --   or (a[1] == b[1] and a[2] < b[2])
+  --   or (a[1] == b[1] and a[2] == b[2] and a[3] < b[3])
 end
 
 -- Built-ins ------------------------------------------------------------------

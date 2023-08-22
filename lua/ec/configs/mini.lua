@@ -53,6 +53,8 @@ require('mini.statusline').setup({
 
 require('mini.tabline').setup()
 
+require('mini-dev.pick').setup()
+
 vim.schedule(function()
   local ai = require('mini.ai')
   ai.setup({
