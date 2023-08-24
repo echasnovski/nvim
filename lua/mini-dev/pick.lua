@@ -1,13 +1,13 @@
 -- TODO:
 --
 -- Code:
+-- - Profile memory usage.
+--
 -- - Help.
 --
 -- - ??Async callable `source`??
 --
 -- - Async execution to allow more responsiveness.
---
--- - Profile memory usage.
 --
 -- - Close on lost focus.
 --
@@ -127,6 +127,8 @@ MiniPick.config = {
   content = {
     direction = 'from_top',
     match = nil,
+    -- Increases speed on repeated prompts at price of more memory usage
+    use_cache = false,
   },
 
   delay = {
@@ -152,6 +154,9 @@ MiniPick.config = {
 
     move_down = '<C-n>',
     move_up = '<C-p>',
+
+    -- TODO
+    paste = '<C-r>',
 
     scroll_down = '<C-f>',
     scroll_up = '<C-b>',
@@ -214,7 +219,8 @@ MiniPick.default_match = function(inds, stritems, data)
 
   local new_inds, new_offsets
   if match_data ~= nil then
-    table.sort(match_data, H.match_compare)
+    match_data = H.match_sort(match_data)
+
     new_inds = vim.tbl_map(function(x) return x[3] end, match_data)
     new_offsets = vim.tbl_map(function(x) return x[4] end, match_data)
   else
@@ -283,6 +289,7 @@ H.setup_config = function(config)
   vim.validate({
     ['content.direction'] = { config.content.direction, 'string' },
     ['content.match'] = { config.content.match, 'function', true },
+    ['content.use_cache'] = { config.content.use_cache, 'boolean' },
 
     ['delay.redraw'] = { config.delay.redraw, 'number' },
 
@@ -426,11 +433,14 @@ H.picker_advance = function(picker)
     if should_stop then break end
 
     should_match = action_name == nil or vim.startswith(action_name or '', 'delete')
+    -- TODO: maybe not force main buffer but instead automatically update
+    -- current buffer? This allows going trough matches focused on preview.
     should_show_main_buf = not vim.startswith(action_name or '', 'show')
   end
 
   local item, index, data = H.picker_make_args(picker)
   H.picker_stop(picker)
+  H.picker_free(picker)
 
   if is_abort then return nil, nil end
   return item, index
@@ -483,8 +493,10 @@ H.picker_new_win = function(buf_id, opts)
 end
 
 H.picker_set_matches = function(picker, inds, offsets)
-  picker.matches = { inds = inds, offsets = offsets }
-  picker.cache[table.concat(picker.query)] = { inds = inds, offsets = offsets }
+  picker.matches.inds = inds
+  picker.matches.offsets = offsets
+  if picker.opts.content.use_cache then picker.cache[table.concat(picker.query)] = picker.matches end
+  collectgarbage('collect')
 
   -- Reset current index if match indexes are updated
   H.picker_set_current_ind(picker, 1)
@@ -561,14 +573,16 @@ end
 
 H.picker_match = function(picker)
   -- Try to use cache first
-  local prompt_cache = picker.cache[table.concat(picker.query)]
+  local prompt_cache
+  if picker.opts.content.use_cache then prompt_cache = picker.cache[table.concat(picker.query)] end
   if prompt_cache ~= nil then return H.picker_set_matches(picker, prompt_cache.inds, prompt_cache.offsets) end
 
   local is_ignorecase = H.picker_is_ignorecase(picker)
   local stritems = is_ignorecase and picker.stritems_ignorecase or picker.stritems
-  local data = { query = is_ignorecase and vim.tbl_map(vim.fn.tolower, picker.query) or picker.query }
+  local query = is_ignorecase and vim.tbl_map(vim.fn.tolower, picker.query) or picker.query
+  if #query == 0 then return H.picker_set_matches(picker, H.seq_along(stritems), nil) end
 
-  local new_inds, new_offsets = picker.opts.content.match(picker.matches.inds, stritems, data)
+  local new_inds, new_offsets = picker.opts.content.match(picker.matches.inds, stritems, { query = query })
   H.picker_set_matches(picker, new_inds, new_offsets)
 end
 
@@ -619,10 +633,26 @@ H.picker_set_bordertext = function(picker)
 end
 
 H.picker_stop = function(picker)
-  -- Close window and delete buffers
+  -- Clear namesspaces
+  H.clear_namespace(picker.buffers.main, H.ns_id.current)
+  H.clear_namespace(picker.buffers.main, H.ns_id.offsets)
+
+  -- Close main window and delete buffers
   pcall(vim.api.nvim_win_close, picker.windows.main, true)
-  pcall(vim.api.nvim_buf_delete, picker.buffers.main, { force = true })
+  for _, buf_id in pairs(picker.buffers) do
+    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
+  end
+end
+
+H.picker_free = function(picker)
+  -- Try to force garbage collector
+  picker.matches.inds = nil
+  picker.matches.offsets = nil
   picker.cache = nil
+  picker.stritems, picker.stritems_ignorecase = nil, nil
+  picker.items = nil
+  picker = nil
+  collectgarbage('collect')
 end
 
 --stylua: ignore
@@ -763,6 +793,11 @@ H.match_filter = function(inds, stritems, data)
 
   if n_query == 0 then return nil end
 
+  -- End-matching filtering doesn't result into nested matches.
+  -- Example: type "$", move caret to left, type "m" (filters for "m$") and
+  -- type "d" (should filter for "md$" but it is not a subset of "m$" matches).
+  inds = is_exact_end and H.seq_along(stritems) or inds
+
   if not (is_exact_plain or is_exact_start or is_exact_end) and n_query > 1 then
     return H.match_filter_fuzzy(inds, stritems, query)
   end
@@ -860,22 +895,43 @@ H.find_query = function(s, query, init)
   return first, last
 end
 
-H.match_compare = function(a, b)
-  return a[1] < b[1] or (a[1] == b[1] and (a[2] < b[2] or (a[2] == b[2] and a[3] < b[3])))
+H.match_sort = function(match_data)
+  -- Spread in width-start buckets
+  local buckets, max_width, width_max_start = {}, 0, {}
+  for i = 1, #match_data do
+    local data, width, start = match_data[i], match_data[i][1], match_data[i][2]
+    local buck_width = buckets[width] or {}
+    local buck_start = buck_width[start] or {}
+    table.insert(buck_start, data)
+    buck_width[start] = buck_start
+    buckets[width] = buck_width
 
-  -- return a.width < b.width or (a.width == b.width and (a.start < b.start or (a.start == b.start and a.ind < b.ind)))
+    max_width = math.max(max_width, width)
+    width_max_start[width] = math.max(width_max_start[width] or 0, start)
+  end
 
-  -- if a[1] ~= b[1] then return a[1] < b[1] end
-  -- if a[2] ~= b[2] then return a[2] < b[2] end
-  -- return a[3] < b[3]
+  -- Sort in place (by index to make stable sort) within buckets
+  local compare = function(a, b) return a[3] < b[3] end
+  for _, buck_width in pairs(buckets) do
+    for _, buck_start in pairs(buck_width) do
+      table.sort(buck_start, compare)
+    end
+  end
 
-  -- return a.width < b.width
-  --   or (a.width == b.width and a.start < b.start)
-  --   or (a.width == b.width and a.start == b.start and a.ind < b.ind)
+  -- Gather back in order. Reuse `match_data` for lower memory usage.
+  local n = 1
+  for width = 0, max_width do
+    local buck_width = buckets[width]
+    for start = 1, (width_max_start[width] or 0) do
+      local buck_start = buck_width[start] or {}
+      for i = 1, #buck_start do
+        match_data[n] = buck_start[i]
+        n = n + 1
+      end
+    end
+  end
 
-  -- return a[1] < b[1]
-  --   or (a[1] == b[1] and a[2] < b[2])
-  --   or (a[1] == b[1] and a[2] == b[2] and a[3] < b[3])
+  return match_data
 end
 
 -- Built-ins ------------------------------------------------------------------
@@ -898,6 +954,12 @@ H.file_edit = function(path, _, data)
 end
 
 H.file_preview = function(path)
+  -- Allow input like 'aaa/bbb:10:5' and 'aaa/bbb:10'
+  local location_pattern = ':?(%d*):?%d*$'
+  local start_line = path:match(location_pattern)
+  start_line = tonumber(start_line) or 1
+  path = path:gsub(location_pattern, '')
+
   -- Createe buffer
   local buf_id = vim.api.nvim_create_buf(false, true)
 
@@ -912,9 +974,13 @@ H.file_preview = function(path)
   end
 
   -- Compute lines. Limit number of read lines to work better on large files.
-  local has_lines, read_res = pcall(vim.fn.readfile, path, '', vim.o.lines)
-  -- - Make sure that lines don't contain '\n' (might happen in binary files).
-  local lines = has_lines and vim.split(table.concat(read_res, '\n'), '\n') or {}
+  local has_lines, read_res = pcall(vim.fn.readfile, path, '', start_line + vim.o.lines - 1)
+  local lines = {}
+  if has_lines then
+    lines = vim.list_slice(read_res, start_line, #read_res)
+    -- - Make sure that lines don't contain '\n' (might happen in binary files)
+    lines = vim.split(table.concat(lines, '\n'), '\n')
+  end
 
   -- Set lines
   H.set_buflines(buf_id, lines)
