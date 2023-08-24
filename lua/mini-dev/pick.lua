@@ -1,13 +1,16 @@
 -- TODO:
 --
 -- Code:
+-- - Make sure all actions work when `items` is not yet set.
+--
 -- - Profile memory usage.
 --
 -- - Help.
 --
--- - ??Async callable `source`??
---
--- - Async execution to allow more responsiveness.
+-- - Async execution to allow more responsiveness:
+--     - `get_querytick()`
+--     - `check_running` utilizing coroutines and `vim.schedule()`
+--     - Call `check_running()` during filter and sort iterations.
 --
 -- - Close on lost focus.
 --
@@ -16,6 +19,8 @@
 -- - Adapter for Telescope extensions.
 --
 -- Tests:
+--
+-- - All actions should work when `items` is not yet set.
 --
 -- - Automatically respects 'ignorecase'/'smartcase' by adjusting `stritems`.
 --
@@ -134,6 +139,9 @@ MiniPick.config = {
   delay = {
     -- Delay between forced redraws when picker is active
     redraw = 10,
+
+    -- Delay between start processing and visual feedback about it
+    processing = 50,
   },
 
   -- Special keys for active picker
@@ -173,7 +181,7 @@ MiniPick.config = {
 }
 --minidoc_afterlines_end
 
----@param source table|function Array of items to choose from or callable returning
+---@param items table|function Array of items to choose from or callable returning
 ---   such array.
 ---@param actions table|nil Table of actions to perform on certain special keys.
 ---   Possible fields:
@@ -193,12 +201,9 @@ MiniPick.config = {
 ---
 --- @return ... Tuple of selected item and its index. Both are `nil` if user
 ---   manually stopped picker.
-MiniPick.start = function(source, actions, opts)
+MiniPick.start = function(items, actions, opts)
   -- TODO: Refactor to be `local_opts` and `global_opts`? This allows adding `source_name`, etc.
-  source = H.expand_callable(source)
-  if not vim.tbl_islist(source) or #source == 0 then
-    H.error('`source` should be a non-empty array or function returning it.')
-  end
+  if not (vim.tbl_islist(items) or vim.is_callable(items)) then H.error('`items` should be list or callable.') end
 
   actions = actions or {}
   if type(actions) ~= 'table' then H.error('`actions` should be a table.') end
@@ -206,8 +211,17 @@ MiniPick.start = function(source, actions, opts)
   opts = vim.tbl_deep_extend('force', H.get_config(), opts or {})
   opts.content.match = opts.content.match or MiniPick.default_match
 
-  local picker = H.picker_new(source, actions, opts)
+  local picker = H.picker_new(items, actions, opts)
+  H.active_picker = picker
   return H.picker_advance(picker)
+end
+
+MiniPick.set_items = function(items)
+  if not vim.tbl_islist(items) then H.error('`items` should be list.') end
+  local picker = H.active_picker
+  if picker == nil then return end
+  H.picker_set_items(picker, items)
+  H.picker_update(picker, true, true)
 end
 
 _G.profile = {}
@@ -224,7 +238,7 @@ MiniPick.default_match = function(inds, stritems, data)
     new_inds = vim.tbl_map(function(x) return x[3] end, match_data)
     new_offsets = vim.tbl_map(function(x) return x[4] end, match_data)
   else
-    new_inds = vim.deepcopy(inds)
+    new_inds = H.seq_along(stritems)
   end
 
   local duration_total = 0.000001 * (vim.loop.hrtime() - start_time)
@@ -251,9 +265,14 @@ end
 MiniPick.builtin = {}
 
 MiniPick.builtin.files = function(source_opts, actions, opts)
-  local source = vim.fn.systemlist('rg --files --no-ignore --color never')
   actions = vim.tbl_deep_extend('force', { choose = H.file_edit, show_item = H.file_preview }, actions or {})
-  return MiniPick.start(source, actions, opts)
+  -- TODO: Remove '--no-ignore'
+  return MiniPick.builtin.shell_output({ 'rg', '--files', '--no-ignore', '--color', 'never' }, actions, opts)
+end
+
+MiniPick.builtin.shell_output = function(command, actions, opts)
+  local items = function() H.execute_shell_command(command[1], vim.list_slice(command, 2, #command)) end
+  MiniPick.start(items, actions, opts)
 end
 
 -- Helper data ================================================================
@@ -269,6 +288,7 @@ H.ns_id = {
 -- Timers
 H.timers = {
   getcharstr = vim.loop.new_timer(),
+  processing = vim.loop.new_timer(),
 }
 
 -- Helper functionality =======================================================
@@ -292,6 +312,7 @@ H.setup_config = function(config)
     ['content.use_cache'] = { config.content.use_cache, 'boolean' },
 
     ['delay.redraw'] = { config.delay.redraw, 'number' },
+    ['delay.processing'] = { config.delay.processing, 'number' },
 
     ['mappings.caret_left'] = { config.mappings.caret_left, 'string' },
     ['mappings.caret_right'] = { config.mappings.caret_right, 'string' },
@@ -346,16 +367,6 @@ end
 
 -- Picker object --------------------------------------------------------------
 H.picker_new = function(items, actions, opts)
-  -- Compute string items to work with and their initial matches
-  local stritems, stritems_ignorecase = {}, {}
-  for i, x in ipairs(items) do
-    x = H.expand_callable(x)
-    if type(x) == 'table' then x = x.item end
-    local to_add = type(x) == 'string' and x or tostring(x)
-    table.insert(stritems, to_add)
-    table.insert(stritems_ignorecase, to_add:lower())
-  end
-
   -- Create buffer
   local buf_id = H.picker_new_buf()
 
@@ -366,10 +377,12 @@ H.picker_new = function(items, actions, opts)
   local picker = {
     -- Permanent data about picker (should not change)
     actions = actions,
-    items = items,
-    stritems = stritems,
-    stritems_ignorecase = stritems_ignorecase,
     opts = opts,
+
+    -- Items to pick from
+    items = nil,
+    stritems = nil,
+    stritems_ignorecase = nil,
 
     -- Associated Neovim objects
     buffers = { main = buf_id, item = nil, help = nil },
@@ -388,6 +401,9 @@ H.picker_new = function(items, actions, opts)
       offsets = nil,
     },
 
+    -- Whether picker is currently processing data
+    is_processing = false,
+
     -- Cache for `matches` per prompt for more performant querying
     cache = {},
 
@@ -399,8 +415,10 @@ H.picker_new = function(items, actions, opts)
     current_ind = nil,
   }
 
-  -- - All items are matched at the start but no query items are matched
-  H.picker_set_matches(picker, H.seq_along(items), nil)
+  -- Set items. If already resolved to array, set right away.
+  H.picker_set_processing(picker, true)
+  items = H.expand_callable(items)
+  if vim.tbl_islist(items) then H.picker_set_items(picker, items) end
 
   return picker
 end
@@ -409,15 +427,10 @@ H.picker_advance = function(picker)
   local special_chars = H.picker_get_special_chars(picker)
 
   -- Start user query
-  local is_abort, should_match, should_show_main_buf = false, false, true
+  local is_abort, should_show_main_buf, should_match = false, true, false
   while true do
     -- Update picker
-    if should_show_main_buf then H.picker_show_main_buf(picker) end
-    if should_match then H.picker_match(picker) end
-
-    H.picker_set_bordertext(picker)
-    H.picker_set_lines(picker)
-    H.redraw()
+    H.picker_update(picker, should_show_main_buf, should_match)
 
     -- Advance query
     local char = H.getcharstr()
@@ -444,6 +457,14 @@ H.picker_advance = function(picker)
 
   if is_abort then return nil, nil end
   return item, index
+end
+
+H.picker_update = function(picker, should_show_main_buf, should_match)
+  if should_show_main_buf then H.picker_show_main_buf(picker) end
+  if should_match then H.picker_match(picker) end
+  H.picker_set_bordertext(picker)
+  H.picker_set_lines(picker)
+  H.redraw()
 end
 
 H.picker_new_buf = function()
@@ -486,17 +507,53 @@ H.picker_new_win = function(buf_id, opts)
   vim.wo[win_id].list = true
   vim.wo[win_id].listchars = 'extends:…'
   vim.wo[win_id].wrap = false
-  H.window_update_highlight(win_id, 'NormalFloat', 'MiniPickNormal')
-  H.window_update_highlight(win_id, 'FloatBorder', 'MiniPickBorder')
+  H.win_update_hl(win_id, 'NormalFloat', 'MiniPickNormal')
+  H.win_update_hl(win_id, 'FloatBorder', 'MiniPickBorder')
 
   return win_id
 end
 
-H.picker_set_matches = function(picker, inds, offsets)
+H.picker_set_items = function(picker, items)
+  -- Stop processing
+  H.picker_set_processing(picker, false)
+
+  -- Compute string items to work with and their initial matches
+  local stritems, stritems_ignorecase = {}, {}
+  for i, x in ipairs(items) do
+    x = H.expand_callable(x)
+    if type(x) == 'table' then x = x.item end
+    local to_add = type(x) == 'string' and x or tostring(x)
+    table.insert(stritems, to_add)
+    table.insert(stritems_ignorecase, to_add:lower())
+  end
+
+  picker.items, picker.stritems, picker.stritems_ignorecase = items, stritems, stritems_ignorecase
+
+  -- All items are matched at first but no query characters are matched
+  H.picker_set_matches(picker, H.seq_along(items), nil, {})
+end
+
+H.picker_set_processing = function(picker, value)
+  picker.is_processing = value
+
+  local win_id = picker.windows.main
+  local new_hl_group = value and 'MiniPickBorderProcessing' or 'MiniPickBorder'
+  local update_border_hl = function() H.win_update_hl(win_id, 'FloatBorder', new_hl_group) end
+
+  if value then
+    H.timers.processing:start(picker.opts.delay.processing, 0, vim.schedule_wrap(update_border_hl))
+  else
+    H.timers.processing:stop()
+    update_border_hl()
+  end
+end
+
+H.picker_set_matches = function(picker, inds, offsets, query)
   picker.matches.inds = inds
   picker.matches.offsets = offsets
-  if picker.opts.content.use_cache then picker.cache[table.concat(picker.query)] = picker.matches end
-  collectgarbage('collect')
+
+  query = query or picker.query
+  if picker.opts.content.use_cache then picker.cache[table.concat(query)] = { inds = inds, offsets = offsets } end
 
   -- Reset current index if match indexes are updated
   H.picker_set_current_ind(picker, 1)
@@ -572,6 +629,8 @@ H.picker_highlight_offsets = function(buf_id, ns_id, line_num, cols, line_str)
 end
 
 H.picker_match = function(picker)
+  if picker.items == nil then return end
+
   -- Try to use cache first
   local prompt_cache
   if picker.opts.content.use_cache then prompt_cache = picker.cache[table.concat(picker.query)] end
@@ -642,6 +701,8 @@ H.picker_stop = function(picker)
   for _, buf_id in pairs(picker.buffers) do
     pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
   end
+
+  H.active_picker = nil
 end
 
 H.picker_free = function(picker)
@@ -771,9 +832,11 @@ H.picker_move_current = function(picker, n)
 end
 
 H.picker_make_args = function(picker)
+  local data = { win_id_picker = picker.windows.main, win_id_init = picker.windows.init }
+  if picker.items == nil then return nil, nil, data end
+
   local ind = picker.matches.inds[picker.current_ind]
   local item = picker.items[ind]
-  local data = { win_id_picker = picker.windows.main, win_id_init = picker.windows.init }
   return item, ind, data
 end
 
@@ -935,6 +998,25 @@ H.match_sort = function(match_data)
 end
 
 -- Built-ins ------------------------------------------------------------------
+H.execute_shell_command = function(executable, args)
+  local process, stdout = nil, vim.loop.new_pipe()
+  local opts = { args = args, stdio = { nil, stdout, nil } }
+  process = vim.loop.spawn(executable, opts, function() process:close() end)
+
+  local data_feed = {}
+  stdout:read_start(function(err, data)
+    assert(not err, err)
+    if data then
+      table.insert(data_feed, data)
+    else
+      local items = vim.split(table.concat(data_feed), '\n')
+      data_feed = nil
+      stdout:close()
+      vim.schedule(function() MiniPick.set_items(items) end)
+    end
+  end)
+end
+
 H.file_edit = function(path, _, data)
   if not H.is_valid_win(data.win_id_init) then return end
 
@@ -1037,7 +1119,9 @@ H.getcharstr = function(redraw_delay)
   return char
 end
 
-H.window_update_highlight = function(win_id, new_from, new_to)
+H.win_update_hl = function(win_id, new_from, new_to)
+  if not H.is_valid_win(win_id) then return end
+
   local new_entry = new_from .. ':' .. new_to
   local replace_pattern = string.format('(%s:[^,]*)', vim.pesc(new_from))
   local new_winhighlight, n_replace = vim.wo[win_id].winhighlight:gsub(replace_pattern, new_entry)
