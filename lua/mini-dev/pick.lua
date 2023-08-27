@@ -1,17 +1,13 @@
 -- TODO:
 --
--- Code:
--- - Think about changing signature of user-facing functions: use only `item`
---   while encouraging using `MiniPick.get_picker_info()` for extra data.
---
--- - Add `content.format`. Will allow showing icons. Should be called only for
---   currently displayed lines.
+-- - Add `content.format`. Takes actual item and returns single string. Will
+--   allow showing icons. Should be called only for currently displayed items.
 --
 -- - Add `content.highlight`. Will reduce memory usage, as will be called only
 --   for currently displayed lines. Also would allow more useful "highlight
 --   groups" items.
 --
--- - Add `defaul_` for all config functions: `actions.choose`,
+-- - Add `default_` for all config functions: `actions.choose`,
 --   `actions.preview`, `content.format`, `content.highlight`.
 --
 -- - Actually respect `content.direction`.
@@ -147,7 +143,26 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text # Delay ~
+---@text # Source ~
+---
+--- `config.source` defines single picker related data. Usually should be set
+--- for each picker individually inside |MiniPick.start()|. Setting them directly
+--- in config serves as default fallback.
+---
+--- `source.items` is an array of items to choose from or callable.
+--- Each item can be either string or table containing string `item` field.
+--- Callable can either return array of items directly (use as is) or not
+--- (expected to call |MiniPick.set_items()| explicitly; right away or later).
+---
+--- `source.name` is a string containing the source name.
+---
+--- `source.preview` is a callable to be executed on item to show more
+--- information about it. ??? What signature and what should it return ???
+--- If `nil` (default) uses |MiniPick.default_preview()|.
+---
+--- `source.choose` is also a callable to be executed on the chosen item.
+--- ??? What signature and what should it return ???
+--- If `nil` (default) uses |MiniPick.default_choose()|.
 MiniPick.config = {
   content = {
     direction = 'from_top',
@@ -180,19 +195,33 @@ MiniPick.config = {
     delete_left = '<C-u>',
     delete_word = '<C-w>',
 
+    -- ?? TODO ??
+    -- execute = '<C-e>',
+    -- execute_normal = '<C-o>',
+
     move_down = '<C-n>',
     move_up = '<C-p>',
 
     -- TODO
-    paste = '<C-r>',
+    -- paste = '<C-r>',
 
     scroll_down = '<C-f>',
     scroll_up = '<C-b>',
+    -- TODO
+    -- scroll_left = '<C-h>',
+    -- scroll_right = '<C-l>',
 
     stop = '<Esc>',
 
     toggle_info = '<S-Tab>',
     toggle_preview = '<Tab>',
+  },
+
+  source = {
+    name = nil,
+    items = nil,
+    preview = nil,
+    choose = nil,
   },
 
   window = {
@@ -201,38 +230,13 @@ MiniPick.config = {
 }
 --minidoc_afterlines_end
 
----@param items table|function Array of items to choose from or callable returning
----   such array.
----@param actions table|nil Table of actions to perform on certain special keys.
----   Possible fields:
----   - <choose> `(function)` - Callable to be executed on the chosen item.
----     Execution is done when picker is still open.
----     Should return `true` if picker should be kept open.
----   - <preview> `(function)` - Callable to be executed on item to show more
----     information about it. Should return a buffer identifier to be shown.
----
----   All actions will be called with the following arguments:
----   - `item` - selected item; `nil` if user manually stopped picker.
----   - `index` - index of selected item; `nil` if user manually stopped picker.
----   - `data` - extra useful data. A table with the following fields:
----       - <win_id_picker> - identifier of the picker window.
----       - <win_id_init> - identifier of the window where picker was started.
 ---@param opts table|nil Options. Should have the same structure as |MiniPick.config|.
----   Default values are inferred from there.
+---   Default values are inferred from there. Should have proper `source.items`.
 ---
---- @return ... Tuple of selected item and its index. Both are `nil` if user
----   manually stopped picker.
-MiniPick.start = function(items, actions, opts)
-  -- TODO: Refactor to be `local_opts` and `global_opts`? This allows adding `source_name`, etc.
-  if not (vim.tbl_islist(items) or vim.is_callable(items)) then H.error('`items` should be list or callable.') end
-
-  actions = actions or {}
-  if type(actions) ~= 'table' then H.error('`actions` should be a table.') end
-
-  opts = vim.tbl_deep_extend('force', H.get_config(), opts or {})
-  opts.content.match = opts.content.match or MiniPick.default_match
-
-  local picker = H.picker_new(items, actions, opts)
+--- @return ... Tuple of current item and its index just before picker is stopped.
+MiniPick.start = function(opts)
+  opts = H.validate_picker_opts(opts)
+  local picker = H.picker_new(opts)
   H.active_picker = picker
   return H.picker_advance(picker)
 end
@@ -280,22 +284,35 @@ MiniPick.default_match = function(inds, stritems, data)
 end
 
 MiniPick.ui_select = function(items, opts, on_choice)
-  MiniPick.start(items, { choose = function(item, index, _) on_choice(item, index) end }, {})
+  local picker_opts = {
+    source = {
+      items = items,
+      name = opts.prompt,
+      choose = function(item, index, _) on_choice(item, index) end,
+      preview = function() end,
+    },
+    content = {
+      format = opts.format_item,
+    },
+  }
+
+  MiniPick.start(picker_opts)
 end
 
 MiniPick.builtin = {}
 
-MiniPick.builtin.files = function(source_opts, actions, opts)
-  local default_actions =
-    { choose = H.file_edit, preview = function(path, _, data) H.file_preview(data.buf_id_preview, path) end }
-  actions = vim.tbl_deep_extend('force', default_actions, actions or {})
+MiniPick.builtin.files = function(source_opts, opts)
+  local choose = H.file_edit
+  local preview = function(path, _, data) H.file_preview(data.buf_id_preview, path) end
+  opts = vim.tbl_deep_extend('force', { source = { name = 'Files', choose = choose, preview = preview } }, opts or {})
   -- TODO: Remove '--no-ignore'
-  return MiniPick.builtin.shell_output({ 'rg', '--files', '--no-ignore', '--color', 'never' }, actions, opts)
+  return MiniPick.builtin.shell_output({ 'rg', '--files', '--no-ignore', '--color', 'never' }, opts)
 end
 
-MiniPick.builtin.shell_output = function(command, actions, opts)
+MiniPick.builtin.shell_output = function(command, opts)
   local items = function() H.execute_shell_command(command[1], vim.list_slice(command, 2, #command)) end
-  MiniPick.start(items, actions, opts)
+  opts = vim.tbl_deep_extend('force', { source = { name = 'Shell' } }, opts or {}, { source = { items = items } })
+  MiniPick.start(opts)
 end
 
 -- Helper data ================================================================
@@ -391,17 +408,73 @@ H.create_default_hl = function()
 end
 
 -- Picker object --------------------------------------------------------------
-H.picker_new = function(items, actions, opts)
+H.validate_picker_opts = function(opts)
+  opts = H.get_config(opts)
+
+  local validate_callable = function(x, x_name)
+    if not vim.is_callable(x) then H.error(string.format('`%s` should be callable.', x_name)) end
+  end
+
+  -- Source
+  local source = opts.source
+
+  local items = source.items or {}
+  local is_valid_items = vim.tbl_islist(items) or vim.is_callable(items)
+  if not is_valid_items then H.error('`source.items` should be list or callable.') end
+
+  source.name = tostring(source.name or '<No name>')
+
+  -- source.preview = source.preview or MiniPick.default_preview
+  -- validate_callable(source.preview, 'source.preview')
+
+  -- source.choose = source.choose or MiniPick.default_choose
+  -- validate_callable(source.choose, 'source.choose')
+
+  -- Content
+  local content = opts.content
+  content.match = content.match or MiniPick.default_match
+  validate_callable(content.match, 'content.match')
+
+  -- content.format = content.format or MiniPick.default_format
+  -- validate_callable(content.format, 'content.format')
+
+  -- content.highlight = content.highlight or MiniPick.default_choose
+  -- validate_callable(content.highlight, 'content.highlight')
+
+  local is_valid_direction = content.direction == 'from_top' or content.direction == 'from_bottom'
+  if not is_valid_direction then H.error('`content.direction` should be one of "from_top" or "from_bottom".') end
+
+  if type(content.use_cache) ~= 'boolean' then H.error('`content.use_cache` should be boolean.') end
+
+  -- Delay
+  for key, value in pairs(opts.delay) do
+    local is_valid_value = type(value) == 'number' and value > 0
+    if not is_valid_value then H.error(string.format('`delay.%s` should be a positive number.', key)) end
+  end
+
+  -- Mappings
+  for key, value in pairs(opts.mappings) do
+    if type(value) ~= 'string' then H.error(string.format('`mappings.%s` should be string.', key)) end
+  end
+
+  -- Window
+  local win_config = opts.window.config
+  local is_valid_winconfig = win_config == nil or type(win_config) == 'table' or vim.is_callable(win_config)
+  if not is_valid_winconfig then H.error('`window.config` should be table or callable.') end
+
+  return opts
+end
+
+H.picker_new = function(opts)
   -- Create buffer
   local buf_id = H.picker_new_buf()
 
   -- Create window
-  local win_id = H.picker_new_win(buf_id, opts)
+  local win_id = H.picker_new_win(buf_id, opts.window.config)
 
   -- Constuct and return object
   local picker = {
     -- Permanent data about picker (should not change)
-    actions = actions,
     opts = opts,
 
     -- Items to pick from
@@ -442,7 +515,7 @@ H.picker_new = function(items, actions, opts)
 
   -- Set items. If already resolved to array, set right away.
   H.picker_set_processing(picker, true)
-  items = H.expand_callable(items)
+  local items = H.expand_callable(opts.source.items)
   if vim.tbl_islist(items) then H.picker_set_items(picker, items) end
 
   return picker
@@ -485,7 +558,7 @@ H.picker_new_buf = function()
   return buf_id
 end
 
-H.picker_new_win = function(buf_id, opts)
+H.picker_new_win = function(buf_id, win_config)
   -- Get window config
   local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
   local has_statusline = vim.o.laststatus > 0
@@ -502,7 +575,7 @@ H.picker_new_win = function(buf_id, opts)
     border = 'single',
     style = 'minimal',
   }
-  local config = vim.tbl_deep_extend('force', default_config, H.expand_callable(opts.window.config) or {})
+  local config = vim.tbl_deep_extend('force', default_config, H.expand_callable(win_config) or {})
 
   -- Tweak config values to ensure they are proper
   if config.border == 'none' then config.border = { ' ' } end
@@ -559,12 +632,12 @@ H.picker_set_processing = function(picker, value)
   end
 end
 
-H.picker_set_matches = function(picker, inds, offsets, query)
+H.picker_set_matches = function(picker, inds, offsets, cache_query)
   picker.matches.inds = inds
   picker.matches.offsets = offsets
 
-  query = query or picker.query
-  if picker.opts.content.use_cache then picker.cache[table.concat(query)] = { inds = inds, offsets = offsets } end
+  local cache_prompt = table.concat(cache_query or picker.query)
+  if picker.opts.content.use_cache then picker.cache[cache_prompt] = { inds = inds, offsets = offsets } end
 
   -- Reset current index if match indexes are updated
   H.picker_set_current_ind(picker, 1)
@@ -711,12 +784,12 @@ H.picker_set_bordertext = function(picker)
   -- Compute helper footer only if Neovim version permits
   if vim.fn.has('nvim-0.10') == 1 then
     local info = H.picker_get_general_info(picker)
-    local source = string.format(' %s ', info.source)
+    local source_name = string.format(' %s ', info.source_name)
     local inds = string.format(' %s|%s|%s ', info.relative_current_ind, info.n_items_matched, info.n_items_total)
     local win_width, source_width, inds_width =
-      vim.api.nvim_win_get_width(win_id), vim.fn.strchars(source), vim.fn.strchars(inds)
+      vim.api.nvim_win_get_width(win_id), vim.fn.strchars(source_name), vim.fn.strchars(inds)
 
-    local footer = { { source, 'MiniPickBorderText' } }
+    local footer = { { source_name, 'MiniPickBorderText' } }
     local n_spaces_between = win_width - (source_width + inds_width)
     if n_spaces_between > 0 then
       footer[2] = { H.win_get_bottom_border(win_id):rep(n_spaces_between), 'MiniPickBorder' }
@@ -806,8 +879,12 @@ H.actions = {
 setmetatable(H.actions, {
   -- If no special action, add character to the query
   __index = function()
-    -- TODO: Handle unexpected chars (like arrow keys)
     return function(picker, char)
+      -- Determine if it **is** proper single character
+      if vim.fn.strchars(char) > 1 then return end
+      local ok, char_byte = pcall(string.byte, char)
+      if not ok or char_byte <= 31 or (127 < char_byte and char_byte <= 255) then return end
+
       table.insert(picker.query, picker.caret, char)
       picker.caret = picker.caret + 1
     end
@@ -815,7 +892,7 @@ setmetatable(H.actions, {
 })
 
 H.picker_choose = function(picker, pre_command)
-  local choose = picker.actions.choose
+  local choose = picker.opts.source.choose
   if not vim.is_callable(choose) then return true end
 
   local win_id_init = picker.windows.init
@@ -898,7 +975,7 @@ H.picker_show_info = function(picker)
   local info = H.picker_get_general_info(picker)
   local lines = {
     'General',
-    'Source        │ ' .. info.source,
+    'Source name   │ ' .. info.source_name,
     'Total items   │ ' .. info.n_items_total,
     'Matched items │ ' .. info.n_items_matched,
     'Current index │ ' .. info.relative_current_ind,
@@ -938,7 +1015,7 @@ end
 H.picker_get_general_info = function(picker)
   local has_items = picker.items ~= nil
   return {
-    source = picker.source or '---',
+    source_name = picker.opts.source.name or '---',
     n_items_total = has_items and #picker.items or '-',
     n_items_matched = has_items and #picker.matches.inds or '-',
     relative_current_ind = has_items and picker.current_ind or '-',
@@ -946,7 +1023,7 @@ H.picker_get_general_info = function(picker)
 end
 
 H.picker_show_preview = function(picker)
-  local preview = picker.actions.preview
+  local preview = picker.opts.source.preview
   if not vim.is_callable(preview) then return true end
 
   local item, index, data = H.picker_make_args(picker)
@@ -1117,10 +1194,12 @@ H.match_sort = function(match_data)
 end
 
 -- Built-ins ------------------------------------------------------------------
-H.execute_shell_command = function(executable, args)
+H.execute_shell_command = function(executable, args, opts)
+  opts = vim.tbl_deep_extend('force', { postprocess = function(x) return x end }, opts or {})
+
   local process, stdout = nil, vim.loop.new_pipe()
-  local opts = { args = args, stdio = { nil, stdout, nil } }
-  process = vim.loop.spawn(executable, opts, function() process:close() end)
+  local spawn_opts = { args = args, stdio = { nil, stdout, nil } }
+  process = vim.loop.spawn(executable, spawn_opts, function() process:close() end)
 
   local data_feed = {}
   stdout:read_start(function(err, data)
@@ -1129,6 +1208,7 @@ H.execute_shell_command = function(executable, args)
       table.insert(data_feed, data)
     else
       local items = vim.split(table.concat(data_feed), '\n')
+      items = opts.postprocess(items)
       data_feed = nil
       stdout:close()
       vim.schedule(function() MiniPick.set_items(items) end)
