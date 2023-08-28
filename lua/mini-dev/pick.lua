@@ -1,12 +1,5 @@
 -- TODO:
 --
--- - Add `default_` for all config functions: `actions.choose`, `actions.preview`.
---
--- - Change signatures:
---     - Supply only `item` and/or `buf_id` and/or `query` when appropriate.
---       `index` can be tracked inside `item` if needed. Extra data can be
---       taken from `MiniPick.get_picker_data()`.
---
 -- - Add help tags builtin.
 --
 -- - Deal with `choose_in_quickfix`.
@@ -17,6 +10,8 @@
 --     - `get_querytick()`
 --     - `check_running` utilizing coroutines and `vim.schedule()`
 --     - Call `check_running()` during filter and sort iterations.
+--
+-- - Add live_grep builtin.
 --
 -- - ?Add "recent picker"? Has implications about memory.
 --
@@ -255,10 +250,10 @@ MiniPick.get_picker_data = function()
 end
 
 _G.profile = {}
-MiniPick.default_match = function(inds, stritems, data)
+MiniPick.default_match = function(inds, stritems, query)
   local start_time = vim.loop.hrtime()
 
-  local match_data = H.match_filter(inds, stritems, data)
+  local match_data = H.match_filter(inds, stritems, query)
   local duration_match = 0.000001 * (vim.loop.hrtime() - start_time)
 
   local new_inds
@@ -274,7 +269,7 @@ MiniPick.default_match = function(inds, stritems, data)
   table.insert(_G.profile, {
     n_input = #inds,
     n_output = #new_inds,
-    prompt = table.concat(data.query, ''),
+    prompt = table.concat(query, ''),
     duration_match = duration_match,
     duration_match_per_item = duration_match / math.max(#inds, 1),
     duration_sort = (duration_total - duration_match),
@@ -286,7 +281,7 @@ MiniPick.default_match = function(inds, stritems, data)
   return new_inds
 end
 
-MiniPick.default_show = function(buf_id, items, opts)
+MiniPick.default_show = function(items, buf_id, opts)
   opts = opts or {}
   -- TODO: use commented line
   -- local show_icons = opts.show_icons
@@ -311,7 +306,7 @@ MiniPick.default_show = function(buf_id, items, opts)
   if H.query_is_ignorecase(query) then
     stritems, query = vim.tbl_map(vim.fn.tolower, stritems), vim.tbl_map(vim.fn.tolower, query)
   end
-  local match_data = H.match_filter(H.seq_along(stritems), stritems, { query = query })
+  local match_data = H.match_filter(H.seq_along(stritems), stritems, query)
   if match_data == nil then return end
 
   local extmark_opts = { hl_group = 'MiniPickMatchOffsets', hl_mode = 'combine', priority = 200 }
@@ -325,15 +320,34 @@ MiniPick.default_show = function(buf_id, items, opts)
   end
 end
 
+MiniPick.default_preview = function(item, win_id, opts)
+  opts = vim.tbl_deep_extend('force', { file_n_lines = 3 * vim.o.lines }, opts or {})
+  local item_type, item_value = H.get_item_type(item)
+  if item_type == 'file' then return H.preview_file(item_value, win_id, opts) end
+  if item_type == 'directory' then return H.preview_directory(item_value, win_id) end
+  H.preview_inspect(item, win_id)
+end
+
+MiniPick.default_choose = function(item)
+  local item_type, item_value = H.get_item_type(item)
+  if item_type == 'file' or item_type == 'directory' then return H.choose_path(item_value) end
+  H.choose_print(item)
+end
+
 MiniPick.ui_select = function(items, opts, on_choice)
+  local items_ext = {}
+  for i = 1, #items do
+    table.insert(items_ext, { index = i, item = items[i] })
+  end
+
   local picker_opts = {
     source = {
-      items = items,
+      items = items_ext,
       name = opts.prompt,
-      choose = function(item, index, _) on_choice(item, index) end,
+      choose = function(item) on_choice(item.item, item.index) end,
       preview = function() end,
     },
-    -- Doesn't support `format_item`
+    -- No support of `format_item`: use its output as `item` key of table item.
   }
   MiniPick.start(picker_opts)
 end
@@ -341,9 +355,7 @@ end
 MiniPick.builtin = {}
 
 MiniPick.builtin.files = function(source_opts, opts)
-  local choose = H.file_edit
-  local preview = function(path, _, data) H.file_preview(data.buf_id_preview, path) end
-  opts = vim.tbl_deep_extend('force', { source = { name = 'Files', choose = choose, preview = preview } }, opts or {})
+  opts = vim.tbl_deep_extend('force', { source = { name = 'Files' } }, opts or {})
   -- TODO: Remove '--no-ignore'
   return MiniPick.builtin.shell_output({ 'rg', '--files', '--no-ignore', '--color', 'never' }, opts)
 end
@@ -468,11 +480,11 @@ H.validate_picker_opts = function(opts)
 
   source.name = tostring(source.name or '<No name>')
 
-  -- source.preview = source.preview or MiniPick.default_preview
-  -- validate_callable(source.preview, 'source.preview')
+  source.preview = source.preview or MiniPick.default_preview
+  validate_callable(source.preview, 'source.preview')
 
-  -- source.choose = source.choose or MiniPick.default_choose
-  -- validate_callable(source.choose, 'source.choose')
+  source.choose = source.choose or MiniPick.default_choose
+  validate_callable(source.choose, 'source.choose')
 
   -- Content
   local content = opts.content
@@ -544,9 +556,13 @@ H.picker_new = function(opts)
     cache = {},
 
     -- View data
+    -- - Which buffer should currently be shown
+    view_state = 'main',
+
     -- - Index range of `matches.inds` currently visible. Present for significant
     --   performance increase to render only what is visible.
     visible_range = { from = nil, to = nil },
+
     -- - Index of `matches.inds` pointing at current item
     current_ind = nil,
   }
@@ -576,10 +592,10 @@ H.picker_advance = function(picker)
     if should_stop then break end
   end
 
-  local item, index, data = H.picker_make_args(picker)
+  local item = H.picker_get_current_item(picker)
   H.picker_stop(picker)
   H.picker_free(picker)
-  return item, index
+  return item
 end
 
 H.picker_update = function(picker, should_match)
@@ -683,6 +699,9 @@ H.picker_set_matches = function(picker, inds, cache_query)
 
   -- Reset current index if match indexes are updated
   H.picker_set_current_ind(picker, 1)
+
+  -- Always show result of updated matches
+  H.picker_show_main(picker)
 end
 
 H.picker_set_current_ind = function(picker, ind)
@@ -715,7 +734,7 @@ H.picker_set_lines = function(picker)
 
   local visible_range = picker.visible_range
   if picker.items == nil or visible_range.from == nil or visible_range.to == nil then
-    show(buf_id, {})
+    show({}, buf_id)
     H.clear_namespace(buf_id, H.ns_id.current)
     return
   end
@@ -731,7 +750,7 @@ H.picker_set_lines = function(picker)
     if i == cur_ind then cur_line = #items_to_show end
   end
 
-  show(buf_id, items_to_show)
+  show(items_to_show, buf_id)
 
   -- Make sure that content starts at bottom for "from_bottom" direction
   local n_lines, win_height = vim.api.nvim_buf_line_count(buf_id), vim.api.nvim_win_get_height(win_id)
@@ -750,9 +769,8 @@ H.picker_set_lines = function(picker)
   H.set_extmark(buf_id, H.ns_id.current, cur_line - 1, 0, cur_opts)
 
   -- Update cursor if showing item matches (needed for 'scroll_{left,right}')
-  local is_main_buffer = H.picker_get_view_name(picker) == 'main'
   local is_not_curline = vim.api.nvim_win_get_cursor(win_id)[1] ~= cur_line
-  if is_main_buffer and is_not_curline then vim.api.nvim_win_set_cursor(win_id, { cur_line, 0 }) end
+  if picker.view_state == 'main' and is_not_curline then vim.api.nvim_win_set_cursor(win_id, { cur_line, 0 }) end
 end
 
 H.picker_match = function(picker)
@@ -768,11 +786,8 @@ H.picker_match = function(picker)
   local query = is_ignorecase and vim.tbl_map(vim.fn.tolower, picker.query) or picker.query
   if #query == 0 then return H.picker_set_matches(picker, H.seq_along(stritems), nil) end
 
-  local new_inds = picker.opts.content.match(picker.matches.inds, stritems, { query = query })
+  local new_inds = picker.opts.content.match(picker.matches.inds, stritems, query)
   H.picker_set_matches(picker, new_inds)
-
-  -- Always show result of updated matches
-  H.picker_show_main_buf(picker)
 end
 
 H.query_is_ignorecase = function(query)
@@ -805,9 +820,9 @@ H.picker_set_bordertext = function(picker)
   if vim.fn.has('nvim-0.9') == 0 or not H.is_valid_win(win_id) then return end
 
   -- Compute main text managing views separately and truncating from left
-  local view_name = H.picker_get_view_name(picker)
+  local view_state = picker.view_state
   local config
-  if view_name == 'main' then
+  if view_state == 'main' then
     local query, caret = picker.query, picker.caret
     local before_caret = table.concat(vim.list_slice(query, 1, caret - 1), '')
     local after_caret = table.concat(vim.list_slice(query, caret, #query), '')
@@ -817,12 +832,14 @@ H.picker_set_bordertext = function(picker)
   end
 
   local has_items = picker.items ~= nil
-  if view_name == 'preview' and has_items then
+  if view_state == 'preview' and has_items then
     local stritem_cur = picker.stritems[picker.matches.inds[picker.current_ind]] or ''
     config = { title = { { H.win_trim_to_width(win_id, stritem_cur), 'MiniPickBorderText' } } }
   end
 
-  if view_name == 'info' then config = { title = { { H.win_trim_to_width(win_id, 'Info'), 'MiniPickBorderText' } } } end
+  if view_state == 'info' then
+    config = { title = { { H.win_trim_to_width(win_id, 'Info'), 'MiniPickBorderText' } } }
+  end
 
   -- Compute helper footer only if Neovim version permits
   if vim.fn.has('nvim-0.10') == 1 then
@@ -853,9 +870,9 @@ H.picker_stop = function(picker)
   H.clear_namespace(picker.buffers.main, -1)
 
   pcall(vim.api.nvim_win_close, picker.windows.main, true)
-  for _, buf_id in pairs(picker.buffers) do
-    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
-  end
+  local buf_del = function(buf_id) pcall(vim.api.nvim_buf_delete, buf_id, { force = true }) end
+  buf_del(picker.buffers.main)
+  buf_del(picker.buffers.info)
 
   H.active_picker = nil
   return true
@@ -915,12 +932,12 @@ H.actions = {
   scroll_right = function(picker, _) H.picker_scroll(picker, 'right') end,
 
   toggle_info = function(picker, _)
-    if H.picker_get_view_name(picker) == 'info' then return H.picker_show_main_buf(picker) end
+    if picker.view_state == 'info' then return H.picker_show_main(picker) end
     H.picker_show_info(picker)
   end,
 
   toggle_preview = function(picker, _)
-    if H.picker_get_view_name(picker) == 'preview' then return H.picker_show_main_buf(picker) end
+    if picker.view_state == 'preview' then return H.picker_show_main(picker) end
     H.picker_show_preview(picker)
   end,
 
@@ -947,12 +964,14 @@ H.picker_choose = function(picker, pre_command)
 
   local win_id_init = picker.windows.init
   if pre_command ~= nil and H.is_valid_win(win_id_init) then
-    vim.api.nvim_win_call(win_id_init, function() vim.cmd(pre_command) end)
+    vim.api.nvim_win_call(win_id_init, function()
+      vim.cmd(pre_command)
+      picker.windows.init = vim.api.nvim_get_current_win()
+    end)
   end
 
-  local item, index, data = H.picker_make_args(picker)
   -- Returning nothing, `nil`, or `false` should lead to picker stop
-  return not choose(item, index, data)
+  return not choose(H.picker_get_current_item(picker))
 end
 
 H.picker_delete = function(picker, n)
@@ -963,6 +982,10 @@ H.picker_delete = function(picker, n)
     table.remove(picker.query, i)
   end
   picker.caret = left
+
+  -- Deleting query character increases number of possible matches, so need to
+  -- reset already matched indexes prior deleting. Use cache to speed this up.
+  picker.matches.inds = H.seq_along(picker.items)
 end
 
 H.picker_move_caret = function(picker, n) picker.caret = math.min(math.max(picker.caret + n, 1), #picker.query + 1) end
@@ -989,14 +1012,13 @@ H.picker_move_current = function(picker, n)
 
   -- Update buffer(s)
   H.picker_set_lines(picker)
-  local view_name = H.picker_get_view_name(picker)
-  if view_name == 'info' then H.picker_show_info(picker) end
-  if view_name == 'preview' then H.picker_show_preview(picker) end
+  if picker.view_state == 'info' then H.picker_show_info(picker) end
+  if picker.view_state == 'preview' then H.picker_show_preview(picker) end
 end
 
 H.picker_scroll = function(picker, direction)
   local win_id = picker.windows.main
-  if H.picker_get_view_name(picker) == 'main' and (direction == 'down' or direction == 'up') then
+  if picker.view_state == 'main' and (direction == 'down' or direction == 'up') then
     local n = (direction == 'down' and 1 or -1) * vim.api.nvim_win_get_height(win_id)
     H.picker_move_current(picker, n)
   else
@@ -1005,23 +1027,15 @@ H.picker_scroll = function(picker, direction)
   end
 end
 
-H.picker_make_args = function(picker)
-  local data = { win_id_picker = picker.windows.main, win_id_init = picker.windows.init }
-  if picker.items == nil then return nil, nil, data end
-
-  local ind = picker.matches.inds[picker.current_ind]
-  local item = picker.items[ind]
-  return item, ind, data
+H.picker_get_current_item = function(picker)
+  if picker.items == nil then return nil end
+  return picker.items[picker.matches.inds[picker.current_ind]]
 end
 
-H.picker_get_view_name = function(picker)
-  local buf_id_cur = vim.api.nvim_win_get_buf(picker.windows.main)
-  for name, buf_id in pairs(picker.buffers) do
-    if buf_id == buf_id_cur then return name end
-  end
+H.picker_show_main = function(picker)
+  H.set_winbuf(picker.windows.main, picker.buffers.main)
+  picker.view_state = 'main'
 end
-
-H.picker_show_main_buf = function(picker) vim.api.nvim_win_set_buf(picker.windows.main, picker.buffers.main) end
 
 H.picker_show_info = function(picker)
   -- General information
@@ -1051,18 +1065,19 @@ H.picker_show_info = function(picker)
     table.insert(lines, string.format(format, data.name, data.keys))
   end
 
-  -- Manage buffer
+  -- Manage buffer/window/state
   local buf_id_info = picker.buffers.info
   if not H.is_valid_buf(buf_id_info) then buf_id_info = vim.api.nvim_create_buf(false, true) end
   picker.buffers.info = buf_id_info
 
   H.set_buflines(buf_id_info, lines)
+  H.set_winbuf(picker.windows.main, buf_id_info)
+  picker.view_state = 'info'
+
   local ns_id = H.ns_id.headers
   H.clear_namespace(buf_id_info, ns_id)
   H.set_extmark(buf_id_info, ns_id, 0, 0, { end_row = 1, end_col = 0, hl_group = 'MiniPickInfoHeader' })
   H.set_extmark(buf_id_info, ns_id, 6, 0, { end_row = 7, end_col = 0, hl_group = 'MiniPickInfoHeader' })
-
-  vim.api.nvim_win_set_buf(picker.windows.main, buf_id_info)
 end
 
 H.picker_get_general_info = function(picker)
@@ -1077,30 +1092,25 @@ end
 
 H.picker_show_preview = function(picker)
   local preview = picker.opts.source.preview
-  if not vim.is_callable(preview) then return true end
+  local item = H.picker_get_current_item(picker)
+  if not vim.is_callable(preview) or item == nil then return end
 
-  local item, index, data = H.picker_make_args(picker)
-  if item == nil then return end
-
-  local buf_id_preview = picker.buffers.preview
-  if not H.is_valid_buf(buf_id_preview) then buf_id_preview = vim.api.nvim_create_buf(false, true) end
-  data.buf_id_preview = buf_id_preview
-  picker.buffers.preview = buf_id_preview
-
-  preview(item, index, data)
-  vim.api.nvim_win_set_buf(picker.windows.main, buf_id_preview)
+  local win_id = picker.windows.main
+  preview(item, win_id)
+  picker.buffers.preview = vim.api.nvim_win_get_buf(win_id)
+  picker.view_state = 'preview'
 end
 
--- Sort -----------------------------------------------------------------------
-H.match_filter = function(inds, stritems, data)
-  local query, n_query = data.query, #data.query
+-- Default match --------------------------------------------------------------
+H.match_filter = function(inds, stritems, query)
+  local n_query = #query
   -- 'abc' - fuzzy match; "'abc" and 'a' - exact substring match;
   -- '^abc' and 'abc$' - exact substring match at start and end.
   local is_exact_plain, is_exact_start, is_exact_end = query[1] == "'", query[1] == '^', query[n_query] == '$'
 
   local start_offset = (is_exact_plain or is_exact_start) and 2 or 1
   local end_offset = (not is_exact_plain and is_exact_end) and (n_query - 1) or n_query
-  query = vim.list_slice(data.query, start_offset, end_offset)
+  query = vim.list_slice(query, start_offset, end_offset)
   n_query = #query
 
   if n_query == 0 then return nil end
@@ -1246,7 +1256,106 @@ H.match_sort = function(match_data)
   return match_data
 end
 
--- Defaults -------------------------------------------------------------------
+-- Default show ---------------------------------------------------------------
+H.get_icon = function(x)
+  if vim.fn.isdirectory(x) == 1 then return ' ' end
+  if vim.fn.filereadable(x) == 0 then return '  ' end
+  local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
+  if not has_devicons then return ' ' end
+
+  local icon = devicons.get_icon(x, nil, { default = false })
+  return (icon or '') .. ' '
+end
+
+-- Default preview ------------------------------------------------------------
+H.get_item_type = function(item)
+  local stritem = H.item_to_string(item)
+  local item_path = type(item) == 'table' and item.path or ''
+
+  if vim.fn.filereadable(stritem) == 1 then return 'file', stritem end
+  if vim.fn.filereadable(item_path) == 1 then return 'file', item_path end
+
+  if vim.fn.isdirectory(stritem) == 1 then return 'directory', stritem end
+  if vim.fn.isdirectory(item_path) == 1 then return 'directory', item_path end
+
+  return nil, nil
+end
+
+H.preview_file = function(path, win_id, opts)
+  local buf_id = vim.api.nvim_create_buf(false, true)
+  H.set_winbuf(win_id, buf_id)
+
+  -- Allow input like 'aaa/bbb:10:5' and 'aaa/bbb:10'
+  local location_pattern = ':?(%d*):?%d*$'
+  local start_line = path:match(location_pattern)
+  start_line = tonumber(start_line) or 1
+  path = path:gsub(location_pattern, '')
+
+  -- Determine if file is text. This is not 100% proof, but good enough.
+  -- Source: https://github.com/sharkdp/content_inspector
+  local fd = vim.loop.fs_open(path, 'r', 1)
+  local is_text = vim.loop.fs_read(fd, 1024):find('\0') == nil
+  vim.loop.fs_close(fd)
+  if not is_text then return H.set_buflines(buf_id, { '-Non-text-file-' }) end
+
+  -- Compute lines. Limit number of read lines to work better on large files.
+  local has_lines, read_res = pcall(vim.fn.readfile, path, '', start_line + opts.file_n_lines - 1)
+  local lines = {}
+  if has_lines then
+    lines = vim.list_slice(read_res, start_line, #read_res)
+    -- - Make sure that lines don't contain '\n' (might happen in binary files)
+    lines = vim.split(table.concat(lines, '\n'), '\n')
+  end
+
+  -- Set lines
+  H.set_buflines(buf_id, lines)
+
+  -- Add highlighting on Neovim>=0.8 which has stabilized API
+  if vim.fn.has('nvim-0.8') == 1 then
+    local ft = vim.filetype.match({ buf = buf_id, filename = path })
+    local ok, _ = pcall(vim.treesitter.start, buf_id, ft)
+    if not ok then vim.bo[buf_id].syntax = ft end
+  end
+end
+
+H.preview_directory = function(path, win_id)
+  local buf_id = vim.api.nvim_create_buf(false, true)
+  H.set_winbuf(win_id, buf_id)
+
+  local lines = vim.tbl_map(
+    function(x) return x .. (vim.fn.isdirectory(path .. '/' .. x) == 1 and '/' or '') end,
+    vim.fn.readdir(path)
+  )
+  H.set_buflines(buf_id, lines)
+end
+
+H.preview_inspect = function(obj, win_id)
+  local buf_id = vim.api.nvim_create_buf(false, true)
+  H.set_buflines(buf_id, vim.split(vim.inspect(obj), '\n'))
+  H.set_winbuf(win_id, buf_id)
+end
+
+-- Default choose -------------------------------------------------------------
+H.choose_path = function(path)
+  local win_init = (MiniPick.get_picker_data().windows or {}).init
+  if win_init == nil or not H.is_valid_win(win_init) then return end
+
+  -- Try to use already created buffer, if present. This avoids not needed
+  -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
+  local path_buf_id
+  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+    if H.is_valid_buf(buf_id) and vim.api.nvim_buf_get_name(buf_id) == path then path_buf_id = buf_id end
+  end
+
+  if path_buf_id ~= nil then return H.set_winbuf(win_init, path_buf_id) end
+  -- Avoid possible errors with `:edit`, like present swap file
+  pcall(vim.fn.win_execute, win_init, 'edit ' .. vim.fn.fnameescape(path))
+  vim.api.nvim_set_current_win(win_init)
+end
+
+H.choose_print = function(item) print(vim.inspect(item)) end
+
+-- Builtins -------------------------------------------------------------------
 H.execute_shell_command = function(executable, args, opts)
   opts = vim.tbl_deep_extend('force', { postprocess = function(x) return x end }, opts or {})
 
@@ -1269,72 +1378,6 @@ H.execute_shell_command = function(executable, args, opts)
   end)
 end
 
-H.file_edit = function(path, _, data)
-  if not H.is_valid_win(data.win_id_init) then return end
-
-  -- Try to use already created buffer, if present. This avoids not needed
-  -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
-  local path_buf_id
-  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
-    if H.is_valid_buf(buf_id) and vim.api.nvim_buf_get_name(buf_id) == path then path_buf_id = buf_id end
-  end
-
-  if path_buf_id ~= nil then
-    vim.api.nvim_win_set_buf(data.win_id_init, path_buf_id)
-  elseif vim.fn.filereadable(path) == 1 then
-    -- Avoid possible errors with `:edit`, like present swap file
-    pcall(vim.fn.win_execute, data.win_id_init, 'edit ' .. vim.fn.fnameescape(path))
-  end
-end
-
-H.file_preview = function(buf_id, path, n_lines)
-  -- Allow input like 'aaa/bbb:10:5' and 'aaa/bbb:10'
-  local location_pattern = ':?(%d*):?%d*$'
-  local start_line = path:match(location_pattern)
-  start_line = tonumber(start_line) or 1
-  path = path:gsub(location_pattern, '')
-
-  -- Determine if file is readable
-  if vim.fn.filereadable(path) == 0 then return H.set_buflines(buf_id, { '-Non-readable-file-' }) end
-
-  -- Determine if file is text. This is not 100% proof, but good enough.
-  -- Source: https://github.com/sharkdp/content_inspector
-  local fd = vim.loop.fs_open(path, 'r', 1)
-  local is_text = vim.loop.fs_read(fd, 1024):find('\0') == nil
-  vim.loop.fs_close(fd)
-  if not is_text then return H.set_buflines(buf_id, { '-Non-text-file-' }) end
-
-  -- Compute lines. Limit number of read lines to work better on large files.
-  n_lines = n_lines or (3 * vim.o.lines)
-  local has_lines, read_res = pcall(vim.fn.readfile, path, '', start_line + n_lines - 1)
-  local lines = {}
-  if has_lines then
-    lines = vim.list_slice(read_res, start_line, #read_res)
-    -- - Make sure that lines don't contain '\n' (might happen in binary files)
-    lines = vim.split(table.concat(lines, '\n'), '\n')
-  end
-
-  -- Set lines
-  H.set_buflines(buf_id, lines)
-
-  -- Add highlighting on Neovim>=0.8 which has stabilized API
-  if vim.fn.has('nvim-0.8') == 1 then
-    local ft = vim.filetype.match({ buf = buf_id, filename = path })
-    local ok, _ = pcall(vim.treesitter.start, buf_id, ft)
-    if not ok then vim.bo[buf_id].syntax = ft end
-  end
-end
-
-H.get_icon = function(x)
-  if vim.fn.isdirectory(x) == 1 then return ' ' end
-  if vim.fn.filereadable(x) == 0 then return '  ' end
-  local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
-  if not has_devicons then return ' ' end
-
-  local icon = devicons.get_icon(x, nil, { default = false })
-  return (icon or '') .. ' '
-end
-
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.pick) %s', msg), 0) end
 
@@ -1348,6 +1391,8 @@ H.replace_termcodes = function(x)
 end
 
 H.set_buflines = function(buf_id, lines) pcall(vim.api.nvim_buf_set_lines, buf_id, 0, -1, false, lines) end
+
+H.set_winbuf = function(win_id, buf_id) vim.api.nvim_win_set_buf(win_id, buf_id) end
 
 H.set_extmark = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
 
