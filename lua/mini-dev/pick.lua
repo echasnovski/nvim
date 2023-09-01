@@ -31,6 +31,15 @@
 --
 -- Docs:
 --
+-- - Example mappings to switch `toggle_{preview,info}` and `move_{up,down}`: >
+--   require('mini.pick').setup({
+--     mappings = {
+--       toggle_info    = '<C-k>',
+--       toggle_preview = '<C-p>',
+--       move_down      = '<Tab>',
+--       move_up        = '<S-Tab>',
+--     }
+--   })
 --
 
 --- *mini.pick* Pick anything
@@ -187,7 +196,8 @@ MiniPick.config = {
     delete_left       = '<C-u>',
     delete_word       = '<C-w>',
 
-    execute = '<C-e>',
+    execute        = '<C-e>',
+    execute_normal = '<C-o>',
 
     move_down = '<C-n>',
     move_up   = '<C-p>',
@@ -276,16 +286,18 @@ MiniPick.default_show = function(items, buf_id, opts)
 end
 
 MiniPick.default_preview = function(item, win_id, opts)
-  opts = vim.tbl_deep_extend('force', { file_n_context = 2 * vim.o.lines, file_line_position = 'top' }, opts or {})
-  local item_type, item_value = H.get_item_type(item)
-  if item_type == 'file' then return H.preview_file(item_value, win_id, opts) end
-  if item_type == 'directory' then return H.preview_directory(item_value, win_id) end
+  opts = vim.tbl_deep_extend('force', { n_context_lines = 2 * vim.o.lines, file_line_position = 'top' }, opts or {})
+  local item_data = H.parse_item(item)
+  if item_data.type == 'file' then return H.preview_file(item_data, win_id, opts) end
+  if item_data.type == 'directory' then return H.preview_directory(item_data, win_id) end
+  if item_data.type == 'buffer' then return H.preview_buffer(item_data, win_id, opts) end
   H.preview_inspect(item, win_id)
 end
 
 MiniPick.default_choose = function(item)
-  local item_type, item_value = H.get_item_type(item)
-  if item_type == 'file' or item_type == 'directory' then return H.choose_file(item_value) end
+  local item_data = H.parse_item(item)
+  if item_data.type == 'file' or item_data.type == 'directory' then return H.choose_path(item_data) end
+  if item_data.type == 'buffer' then return H.choose_buffer(item_data) end
   H.choose_print(item)
 end
 
@@ -293,10 +305,9 @@ MiniPick.default_choose_all = function(items, opts)
   opts = vim.tbl_deep_extend('force', { list_type = 'quickfix' }, opts or {})
   local list = {}
   for _, item in ipairs(items) do
-    local item_type, item_value = H.get_item_type(item)
-    if item_type == 'file' then
-      local path, line, col, rest = H.parse_file_path(item_value)
-      table.insert(list, { filename = path, lnum = line or 1, col = col or 1, text = rest or '' })
+    local data = H.parse_item(item)
+    if data.type == 'file' then
+      table.insert(list, { filename = data.value, lnum = data.line or 1, col = data.col or 1, text = data.rest or '' })
     end
   end
 
@@ -411,6 +422,23 @@ MiniPick.builtin.help = function(picker_opts, opts)
   local source = { items = tags, name = 'Help', choose = choose, choose_all = choose_all, preview = preview }
   opts = vim.tbl_deep_extend('force', { source = source }, opts or {})
   return MiniPick.start(opts)
+end
+
+MiniPick.builtin.buffers = function(picker_opts, opts)
+  picker_opts = vim.tbl_deep_extend('force', { include_unlisted = false, include_current = true }, picker_opts or {})
+
+  local buffers_output = vim.api.nvim_exec('buffers' .. (picker_opts.include_unlisted and '!' or ''), true)
+  local cur_buf_id, include_current = vim.api.nvim_get_current_buf(), picker_opts.include_current
+  local items = {}
+  for _, l in ipairs(vim.split(buffers_output, '\n')) do
+    local buf_str, name = l:match('^%s*%d+'), l:match('"(.*)"')
+    local buf_id = tonumber(buf_str)
+    local item = { item = string.format('%s %s', buf_str, name), buf_id = buf_id }
+    if buf_id ~= cur_buf_id or include_current then table.insert(items, item) end
+  end
+
+  opts = vim.tbl_deep_extend('force', { source = { name = 'Buffers' } }, opts or {}, { source = { items = items } })
+  MiniPick.start(opts)
 end
 
 MiniPick.builtin.cli_output = function(picker_opts, opts)
@@ -568,6 +596,7 @@ H.setup_config = function(config)
     ['mappings.delete_left'] = { config.mappings.delete_left, 'string' },
     ['mappings.delete_word'] = { config.mappings.delete_word, 'string' },
     ['mappings.execute'] = { config.mappings.execute, 'string' },
+    ['mappings.execute_normal'] = { config.mappings.execute_normal, 'string' },
     ['mappings.move_down'] = { config.mappings.move_down, 'string' },
     ['mappings.move_up'] = { config.mappings.move_up, 'string' },
     ['mappings.paste'] = { config.mappings.paste, 'string' },
@@ -1092,7 +1121,12 @@ H.actions = {
     H.picker_query_delete(picker, n_del)
   end,
 
-  execute = function(picker, _) vim.cmd(vim.fn.input('Execute: ')) end,
+  execute        = function(picker, _) vim.cmd(vim.fn.input('Execute: ')) end,
+  execute_normal = function(picker, _)
+    local normal_command = vim.fn.input('Execute normal: ')
+    if normal_command:find('^%s') ~= nil then normal_command = '1' .. normal_command end
+    vim.cmd('normal ' .. normal_command)
+  end,
 
   move_down = function(picker, _) H.picker_move_current(picker, 1)  end,
   move_up   = function(picker, _) H.picker_move_current(picker, -1) end,
@@ -1457,13 +1491,65 @@ H.get_icon = function(x)
   return (icon or '') .. ' '
 end
 
+-- Items helpers for default functions ----------------------------------------
+H.parse_item = function(item)
+  local stritem = H.item_to_string(item)
+
+  -- File
+  local path, line, col, rest = H.parse_file_path(stritem)
+  if vim.fn.filereadable(path) == 1 then return { type = 'file', value = path, line = line, col = col, text = rest } end
+
+  -- Directory
+  if vim.fn.isdirectory(stritem) == 1 then return { type = 'directory', value = stritem } end
+
+  -- Buffer
+  local ok, numitem = pcall(tonumber, stritem)
+  if ok and H.is_valid_buf(numitem) then return { type = 'buffer', value = numitem } end
+
+  -- Try parsing table item
+  if type(item) == 'table' then return H.parse_item_table(item) end
+
+  return {}
+end
+
+H.parse_item_table = function(item)
+  local item_path = type(item) == 'table' and item.path or ''
+  local item_buf_id = type(item) == 'table' and (item.buf_id or item.bufnr or item.buf) or nil
+
+  -- File and directory
+  if type(item.path) == 'string' then
+    local path, line, col, rest = H.parse_file_path(item.path)
+    if vim.fn.filereadable(path) == 1 then
+      return { type = 'file', value = path, line = line or item.lnum, col = col or item.col, text = rest }
+    end
+
+    if vim.fn.isdirectory(item.path) == 1 then return { type = 'directory', value = item.path } end
+  end
+
+  -- Buffer
+  local buf_id = item.buf_id or item.bufnr or item.buf
+  if H.is_valid_buf(buf_id) then return { type = 'buffer', value = buf_id, line = item.lnum, col = item.col } end
+
+  return {}
+end
+
+H.parse_file_path = function(x)
+  if type(x) ~= 'string' then return nil end
+  -- Allow inputs like 'aa/bb', 'aa/bb:10', 'aa/bb:10:5', 'aa/bb:10:5:xxx'
+  -- Should also work for paths like 'aa-5'
+  local location_pattern = ':(%d+):?(%d*)(.*)$'
+  local line, col, rest = x:match(location_pattern)
+  local path = x:gsub(location_pattern, '', 1)
+  return path, tonumber(line), tonumber(col), rest or ''
+end
+
 -- Default preview ------------------------------------------------------------
-H.preview_file = function(file, win_id, opts)
+H.preview_file = function(item_data, win_id, opts)
   local buf_id = vim.api.nvim_create_buf(false, true)
   vim.bo[buf_id].bufhidden = 'wipe'
   H.set_winbuf(win_id, buf_id)
 
-  local path, line, col = H.parse_file_path(file)
+  local path, line, col = item_data.value, item_data.line, item_data.col
   local has_pos = line ~= nil
   line, col = line or 1, col or 1
 
@@ -1475,7 +1561,7 @@ H.preview_file = function(file, win_id, opts)
   if not is_text then return H.set_buflines(buf_id, { '-Non-text-file-' }) end
 
   -- Compute lines. Limit number of read lines to work better on large files.
-  local start_line, end_line = math.max(line - opts.file_n_context, 1), line + opts.file_n_context
+  local start_line, end_line = math.max(line - opts.n_context_lines, 1), line + opts.n_context_lines
   local has_lines, read_res = pcall(vim.fn.readfile, path, '', end_line)
   local lines = {}
   if has_lines then lines = vim.list_slice(read_res, start_line, #read_res) end
@@ -1500,15 +1586,36 @@ H.preview_file = function(file, win_id, opts)
   end
 end
 
-H.preview_directory = function(path, win_id)
+H.preview_directory = function(item_data, win_id)
   local buf_id = vim.api.nvim_create_buf(false, true)
   H.set_winbuf(win_id, buf_id)
 
+  local path = item_data.value
   local lines = vim.tbl_map(
     function(x) return x .. (vim.fn.isdirectory(path .. '/' .. x) == 1 and '/' or '') end,
     vim.fn.readdir(path)
   )
   H.set_buflines(buf_id, lines)
+end
+
+H.preview_buffer = function(item_data, win_id, opts)
+  -- NOTE: ideally just setting target buffer to window would be enough, but it
+  -- has side effects. See https://github.com/neovim/neovim/issues/24973 .
+  -- Reading lines and applying custom styling is a rough alternative.
+  local buf_id_item, buf_id = item_data.value, vim.api.nvim_create_buf(false, true)
+  vim.fn.bufload(buf_id_item)
+  H.set_winbuf(win_id, buf_id)
+
+  local line = item_data.line or 1
+  local start_line, end_line = math.max(line - opts.n_context_lines, 1), line + opts.n_context_lines
+  local lines = vim.api.nvim_buf_get_lines(buf_id_item, start_line - 1, end_line, false)
+  H.set_buflines(buf_id, lines)
+
+  local ft = vim.bo[buf_id_item].filetype
+  local ok, _ = pcall(vim.treesitter.start, buf_id, ft)
+  if not ok then vim.bo[buf_id].syntax = ft end
+
+  if item_data.line ~= nil then vim.api.nvim_win_set_cursor(win_id, { item_data.line, (item_data.col or 1) - 1 }) end
 end
 
 H.preview_inspect = function(obj, win_id)
@@ -1517,44 +1624,12 @@ H.preview_inspect = function(obj, win_id)
   H.set_winbuf(win_id, buf_id)
 end
 
-H.get_item_type = function(item)
-  local stritem = H.item_to_string(item)
-  local item_path = type(item) == 'table' and item.path or ''
-
-  if H.is_file_item(stritem) then return 'file', stritem end
-  if H.is_file_item(item_path) then return 'file', item_path end
-
-  if vim.fn.isdirectory(stritem) == 1 then return 'directory', stritem end
-  if vim.fn.isdirectory(item_path) == 1 then return 'directory', item_path end
-
-  if H.is_valid_buf(item) then return 'buffer', item end
-  local buf_field = type(item) == 'table' and (item.buf_id or item.bufnr or item.buf) or nil
-  if H.is_valid_buf(buf_field) then return 'buffer', buf_field end
-
-  return nil, nil
-end
-
-H.parse_file_path = function(x)
-  if type(x) ~= 'string' then return nil end
-  -- Allow inputs like 'aa/bb', 'aa/bb:10', 'aa/bb:10:5', 'aa/bb:10:5:xxx'
-  -- Should also work for paths like 'aa-5'
-  local location_pattern = ':(%d+):?(%d*)(.*)$'
-  local line, col, rest = x:match(location_pattern)
-  local path = x:gsub(location_pattern, '', 1)
-  return path, tonumber(line), tonumber(col), rest or ''
-end
-
-H.is_file_item = function(x)
-  local path = H.parse_file_path(x)
-  return vim.fn.filereadable(path) == 1
-end
-
 -- Default choose -------------------------------------------------------------
-H.choose_file = function(file)
+H.choose_path = function(item_data)
   local win_target = (MiniPick.get_picker_data().windows or {}).target
   if win_target == nil or not H.is_valid_win(win_target) then return end
 
-  local path, line, col = H.parse_file_path(file)
+  local path, line, col = item_data.value, item_data.line, item_data.col
 
   -- Try to use already created buffer, if present. This avoids not needed
   -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
@@ -1563,16 +1638,31 @@ H.choose_file = function(file)
     if H.is_valid_buf(buf_id) and vim.api.nvim_buf_get_name(buf_id) == path then path_buf_id = buf_id end
   end
 
-  if path_buf_id ~= nil then return H.set_winbuf(win_target, path_buf_id) end
-  -- Avoid possible errors with `:edit`, like present swap file
-  local ok = pcall(vim.api.nvim_win_call, win_target, function()
-    vim.cmd('edit ' .. vim.fn.fnameescape(path))
-    if line ~= nil then vim.api.nvim_win_set_cursor(win_target, { line, (col or 1) - 1 }) end
-    vim.cmd('normal! zvzz')
-  end)
+  -- Set buffer in target window
+  if path_buf_id ~= nil then
+    H.set_winbuf(win_target, path_buf_id)
+  else
+    -- Use `pcall()` to avoid possible `:edti` errors, like present swap file
+    vim.api.nvim_win_call(win_target, function() pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(path)) end)
+  end
+
+  H.choose_set_cursor(win_target, line, col)
+end
+
+H.choose_buffer = function(item_data)
+  local win_target = (MiniPick.get_picker_data().windows or {}).target
+  if win_target == nil or not H.is_valid_win(win_target) then return end
+  H.set_winbuf(win_target, item_data.value)
+  H.choose_set_cursor(win_target, item_data.line, item_data.col)
 end
 
 H.choose_print = function(x) print(vim.inspect(x)) end
+
+H.choose_set_cursor = function(win_id, line, col)
+  if line == nil then return end
+  pcall(vim.api.nvim_win_set_cursor, win_id, { line, (col or 1) - 1 })
+  pcall(vim.api.nvim_win_call, win_id, function() vim.cmd('normal! zvzz') end)
+end
 
 -- Builtins -------------------------------------------------------------------
 H.files_get_tool = function()
