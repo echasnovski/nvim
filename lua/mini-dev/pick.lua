@@ -1,7 +1,5 @@
 -- TODO:
 --
--- - Add help tags builtin.
---
 -- - Async execution to allow more responsiveness:
 --     - `get_querytick()`
 --     - `check_running` utilizing coroutines and `vim.schedule()`
@@ -9,11 +7,11 @@
 --
 -- - Close on lost focus.
 --
--- - ?Add `live_grep` builtin?
+-- - Add `buffers` builtin.
 --
 -- - ?Add `diagnostic` builtin?
 --
--- - ?Add "recent picker"? Has implications about memory.
+-- - ?Add "recent picker" builtin? Has implications about memory.
 --
 -- - Make sure all actions work when `items` is not yet set.
 --
@@ -228,67 +226,23 @@ MiniPick.config = {
 MiniPick.start = function(opts)
   opts = H.validate_picker_opts(opts)
   local picker = H.picker_new(opts)
-  H.active_picker = picker
+  H.pickers.active = picker
   return H.picker_advance(picker)
 end
 
-MiniPick.set_picker_items = function(items)
-  if not vim.tbl_islist(items) then H.error('`items` should be list.') end
-  local picker = H.active_picker
-  if picker == nil then return end
-  H.picker_set_items(picker, items)
-  H.picker_update(picker, true)
-end
-
-MiniPick.get_picker_items = function()
-  local picker = H.active_picker
-  if picker == nil then return end
-  return picker.items
-end
-
-MiniPick.get_picker_matches = function()
-  local picker = H.active_picker
-  if picker == nil then return end
-  if picker.items == nil then return { all = nil, current = nil } end
-  local matches = vim.tbl_map(function(ind) return picker.items[ind] end, picker.match_inds)
-  return { all = matches, current = H.picker_get_current_item(picker) }
-end
-
-MiniPick.set_picker_opts = function(opts)
-  local picker = H.active_picker
-  if picker == nil then return nil end
-  picker.opts = vim.tbl_deep_extend('force', picker.opts, opts or {})
-end
-
-MiniPick.get_picker_opts = function(opts)
-  local picker = H.active_picker
-  if picker == nil then return nil end
-  return picker.opts
-end
-
-MiniPick.get_picker_data = function()
-  local picker = H.active_picker
-  if picker == nil then return nil end
-  return { query = picker.query, is_busy = picker.is_busy, windows = picker.windows, buffers = picker.buffers }
-end
-
-MiniPick.get_querytick = function() return H.querytick end
-
 MiniPick.default_match = function(inds, stritems, query)
+  if #query == 0 then return H.seq_along(stritems) end
   local match_data = H.match_filter(inds, stritems, query)
   return match_data ~= nil and H.match_sort(match_data) or H.seq_along(stritems)
 end
 
 MiniPick.default_show = function(items, buf_id, opts)
   opts = opts or {}
-  -- TODO: use commented line
-  -- local show_icons = opts.show_icons
-  local show_icons = true
 
   -- Compute and set lines
   local lines, prefixes = vim.tbl_map(H.item_to_string, items), {}
 
-  if show_icons then prefixes = vim.tbl_map(H.get_icon, lines) end
+  if opts.show_icons then prefixes = vim.tbl_map(H.get_icon, lines) end
   local lines_to_show = {}
   for i, l in ipairs(lines) do
     lines_to_show[i] = (prefixes[i] or '') .. l
@@ -346,9 +300,9 @@ MiniPick.default_choose_all = function(items, opts)
     end
   end
 
-  local win_init = MiniPick.get_picker_data().windows.init
+  local win_target = MiniPick.get_picker_data().windows.target
   if opts.list_type == 'location' then
-    vim.fn.setloclist(win_init, list, ' ')
+    vim.fn.setloclist(win_target, list, ' ')
     vim.schedule(function() vim.cmd('lopen') end)
   end
 
@@ -379,68 +333,180 @@ end
 
 MiniPick.builtin = {}
 
-MiniPick.builtin.files = function(source_opts, opts)
+MiniPick.builtin.files = function(picker_opts, opts)
+  picker_opts = vim.tbl_deep_extend('force', { tool = nil }, picker_opts or {})
   opts = vim.tbl_deep_extend('force', { source = { name = 'Files' } }, opts or {})
-  -- TODO: Remove '--no-ignore'
-  return MiniPick.builtin.shell_output({ 'rg', '--files', '--no-ignore', '--color', 'never' }, opts)
+
+  local tool = picker_opts.tool or H.files_get_tool()
+  if tool == 'libuv' then
+    opts.source.items = H.files_libuv_items
+    return MiniPick.start(opts)
+  end
+
+  return MiniPick.builtin.cli_output({ command = H.files_get_command(tool) }, opts)
 end
 
-MiniPick.builtin.grep = function(source_opts, opts)
+MiniPick.builtin.grep = function(picker_opts, opts)
+  picker_opts = vim.tbl_deep_extend('force', { tool = nil }, picker_opts or {})
   opts = vim.tbl_deep_extend('force', { source = { name = 'Grep' } }, opts or {})
-  local command =
-    { 'rg', '--column', '--line-number', '--no-heading', '--color=never', '--smart-case', '--max-columns=4096', '-e' }
-  table.insert(command, vim.fn.input('Grep pattern: '))
-  return MiniPick.builtin.shell_output(command, opts)
+
+  local tool = picker_opts.tool or H.grep_get_tool()
+  local pattern = vim.fn.input('Grep pattern: ')
+  return MiniPick.builtin.cli_output({ command = H.grep_get_command(tool, pattern) }, opts)
 end
 
-MiniPick.builtin.help = function(opts)
+MiniPick.builtin.grep_live = function(picker_opts, opts)
+  if vim.fn.executable('rg') == 0 then H.error('`grep_live` needs `rg` executable.') end
+
+  local match = function(_, _, query)
+    if #query == 0 then return MiniPick.set_picker_items({}, false) end
+    local command = H.grep_get_command('rg', table.concat(query))
+    -- NOTE: Using `*_from_cli_output()` doesn't quite fit for many updates
+    vim.schedule(function()
+      local items = vim.fn.systemlist(table.concat(command, ' '))
+      MiniPick.set_picker_items(items, false)
+    end)
+  end
+  local show = function(items, buf_id) H.set_buflines(buf_id, items) end
+
+  local default_opts = { source = { items = {}, name = 'Grep live' } }
+  local forced_opts = { content = { match = match, show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, forced_opts)
+  return MiniPick.start(opts)
+end
+
+MiniPick.builtin.help = function(picker_opts, opts)
   -- Get all tags
   local help_buf = vim.api.nvim_create_buf(false, true)
   vim.bo[help_buf].buftype = 'help'
-  local tags
-  vim.api.nvim_buf_call(help_buf, function() tags = vim.fn.taglist('.*') end)
+  local tags = vim.api.nvim_buf_call(help_buf, function() return vim.fn.taglist('.*') end)
   vim.api.nvim_buf_delete(help_buf, { force = true })
+  vim.tbl_map(function(t) t.item = t.name end, tags)
 
   local choose = function(item)
     local data = MiniPick.get_picker_data()
+    -- Don't show help buffer to allow choosing when preview is active
     pcall(vim.api.nvim_win_set_buf, data.windows.main, data.buffers.main)
-    vim.api.nvim_win_call(data.windows.init, function()
-      vim.cmd('help ' .. (item or ''))
-      local help_win = vim.api.nvim_get_current_win()
-      vim.schedule(function() vim.api.nvim_set_current_win(help_win) end)
+    vim.api.nvim_win_call(data.windows.target, function()
+      vim.cmd('help ' .. (item.name or ''))
+      MiniPick.set_picker_target_window(vim.api.nvim_get_current_win())
     end)
   end
 
-  -- TODO: This whole approach works but it forces "minimal" window options.
-  -- Try to explore better options.
+  local choose_all = function(items) choose(items[1]) end
+
   local preview = function(item, win_id)
+    -- Take advantage of `taglist` output on how to open tag
     vim.api.nvim_win_call(win_id, function()
-      if H.is_valid_buf(help_buf) then
-        vim.api.nvim_win_set_buf(help_buf)
-      else
-        vim.cmd('silent noautocmd keepalt edit ' .. vim.o.helpfile)
-        vim.bo.buftype, vim.bo.bufhidden = 'help', 'wipe'
-        help_buf = vim.api.nvim_get_current_buf()
-      end
-      vim.cmd('help ' .. item)
+      vim.cmd('noautocmd edit ' .. vim.fn.fnameescape(item.filename))
+      vim.bo.buflisted, vim.bo.bufhidden, vim.bo.syntax = false, 'wipe', 'help'
+
+      local cache_hlsearch = vim.v.hlsearch
+      vim.cmd('silent keeppatterns ' .. item.cmd)
+      vim.v.hlsearch = cache_hlsearch
+      vim.cmd('normal! zt')
     end)
   end
 
-  local source = {
-    items = vim.tbl_map(function(x) return x.name end, tags),
-    name = 'Help',
-    choose = choose,
-    choose_all = function(items) choose(items[1]) end,
-    preview = preview,
-  }
-  MiniPick.start({ source = source })
+  local source = { items = tags, name = 'Help', choose = choose, choose_all = choose_all, preview = preview }
+  opts = vim.tbl_deep_extend('force', { source = source }, opts or {})
+  return MiniPick.start(opts)
 end
 
-MiniPick.builtin.shell_output = function(command, opts)
-  local items = function() H.execute_shell_command(command[1], vim.list_slice(command, 2, #command)) end
-  opts = vim.tbl_deep_extend('force', { source = { name = 'Shell' } }, opts or {}, { source = { items = items } })
-  MiniPick.start(opts)
+MiniPick.builtin.cli_output = function(picker_opts, opts)
+  picker_opts = picker_opts or {}
+  local command, postprocess = picker_opts.command, picker_opts.postprocess
+  local items = function() MiniPick.set_picker_items_from_cli_output(command, { postprocess = postprocess }) end
+  opts = vim.tbl_deep_extend('force', { source = { name = 'CLI output' } }, opts or {}, { source = { items = items } })
+  return MiniPick.start(opts)
 end
+
+MiniPick.builtin.resume = function()
+  local picker = H.pickers.latest
+  if picker == nil then H.error('There is no latest picker.') end
+
+  local buf_id = H.picker_new_buf()
+  local win_id = H.picker_new_win(buf_id, picker.opts.window.config)
+  picker.buffers = { main = buf_id }
+  picker.windows = { main = win_id, target = vim.api.nvim_get_current_win() }
+  picker.view_state = 'main'
+
+  H.pickers.active = picker
+  return H.picker_advance(picker)
+end
+
+MiniPick.set_picker_items = function(items, do_match)
+  if not vim.tbl_islist(items) then H.error('`items` should be list.') end
+  local picker = H.pickers.active
+  if picker == nil then return end
+  H.picker_set_items(picker, items)
+  if do_match == nil then do_match = true end
+  H.picker_update(picker, do_match)
+end
+
+MiniPick.set_picker_items_from_cli_output = function(command, opts)
+  if not vim.tbl_islist(command) then H.error('`command` should be an array of strings.') end
+  opts = vim.tbl_deep_extend('force', { postprocess = function(x) return x end }, opts or {})
+
+  local executable, args = command[1], vim.list_slice(command, 2, #command)
+  local process, stdout = nil, vim.loop.new_pipe()
+  local spawn_opts = { args = args, stdio = { nil, stdout, nil } }
+  process = vim.loop.spawn(executable, spawn_opts, function() process:close() end)
+
+  local data_feed = {}
+  stdout:read_start(function(err, data)
+    assert(not err, err)
+    if data then
+      table.insert(data_feed, data)
+    else
+      local items = vim.split(table.concat(data_feed), '\n')
+      items = opts.postprocess(items)
+      data_feed = nil
+      stdout:close()
+      vim.schedule(function() MiniPick.set_picker_items(items) end)
+    end
+  end)
+end
+
+MiniPick.get_picker_items = function()
+  local picker = H.pickers.active
+  if picker == nil then return end
+  return picker.items
+end
+
+MiniPick.get_picker_matches = function()
+  local picker = H.pickers.active
+  if picker == nil then return end
+  if picker.items == nil then return { all = nil, current = nil } end
+  local matches = vim.tbl_map(function(ind) return picker.items[ind] end, picker.match_inds)
+  return { all = matches, current = H.picker_get_current_item(picker) }
+end
+
+MiniPick.set_picker_opts = function(opts)
+  local picker = H.pickers.active
+  if picker == nil then return nil end
+  picker.opts = vim.tbl_deep_extend('force', picker.opts, opts or {})
+end
+
+MiniPick.get_picker_opts = function(opts)
+  local picker = H.pickers.active
+  if picker == nil then return nil end
+  return picker.opts
+end
+
+MiniPick.get_picker_data = function()
+  local picker = H.pickers.active
+  if picker == nil then return nil end
+  return { query = picker.query, is_busy = picker.is_busy, windows = picker.windows, buffers = picker.buffers }
+end
+
+MiniPick.set_picker_target_window = function(win_id)
+  local picker = H.pickers.active
+  if picker == nil or not H.is_valid_win(win_id) then return end
+  picker.windows.target = win_id
+end
+
+MiniPick.get_querytick = function() return H.querytick end
 
 -- Helper data ================================================================
 -- Module default config
@@ -459,6 +525,9 @@ H.timers = {
   getcharstr = vim.loop.new_timer(),
   busy = vim.loop.new_timer(),
 }
+
+-- Pickers
+H.pickers = { active = nil, latest = nil }
 
 -- Picker-independent counter of query updates
 H.querytick = 0
@@ -627,7 +696,7 @@ H.picker_new = function(opts)
 
     -- Associated Neovim objects
     buffers = { main = buf_id, preview = nil, info = nil },
-    windows = { main = win_id, init = vim.api.nvim_get_current_win() },
+    windows = { main = win_id, target = vim.api.nvim_get_current_win() },
 
     -- Query data
     query = {},
@@ -670,15 +739,15 @@ end
 H.picker_advance = function(picker)
   local special_chars = H.picker_get_special_chars(picker)
 
-  local should_match = false
+  local do_match = false
   while true do
-    H.picker_update(picker, should_match)
+    H.picker_update(picker, do_match)
 
     local char = H.getcharstr()
     if char == nil then break end
 
     local action_name = special_chars[char]
-    should_match = action_name == nil or vim.startswith(action_name, 'delete') or action_name == 'paste'
+    do_match = action_name == nil or vim.startswith(action_name, 'delete') or action_name == 'paste'
 
     local should_stop = H.actions[action_name](picker, char)
     if should_stop then break end
@@ -686,12 +755,11 @@ H.picker_advance = function(picker)
 
   local item = H.picker_get_current_item(picker)
   H.picker_stop(picker)
-  H.picker_free(picker)
   return item
 end
 
-H.picker_update = function(picker, should_match)
-  if should_match then H.picker_match(picker) end
+H.picker_update = function(picker, do_match)
+  if do_match then H.picker_match(picker) end
   H.picker_set_bordertext(picker)
   H.picker_set_lines(picker)
   H.redraw()
@@ -784,6 +852,7 @@ H.picker_set_busy = function(picker, value)
 end
 
 H.picker_set_matches = function(picker, inds, cache_query)
+  if inds == nil then return end
   H.picker_set_busy(picker, false)
 
   picker.match_inds = inds
@@ -885,7 +954,6 @@ H.picker_match = function(picker)
   local is_ignorecase = H.query_is_ignorecase(picker.query)
   local stritems = is_ignorecase and picker.stritems_ignorecase or picker.stritems
   local query = is_ignorecase and vim.tbl_map(vim.fn.tolower, picker.query) or picker.query
-  if #query == 0 then return H.picker_set_matches(picker, H.seq_along(stritems), nil) end
 
   local new_inds = picker.opts.content.match(picker.match_inds, stritems, query)
   H.picker_set_matches(picker, new_inds)
@@ -970,17 +1038,22 @@ end
 H.picker_stop = function(picker)
   H.clear_namespace(picker.buffers.main, -1)
 
+  pcall(vim.api.nvim_set_current_win, picker.windows.target)
+
   pcall(vim.api.nvim_win_close, picker.windows.main, true)
   local buf_del = function(buf_id) pcall(vim.api.nvim_buf_delete, buf_id, { force = true }) end
   buf_del(picker.buffers.main)
   buf_del(picker.buffers.info)
 
-  H.active_picker = nil
+  local new_latest = vim.deepcopy(picker)
+  H.picker_free(H.pickers.latest)
+  H.pickers = { active = nil, latest = new_latest }
   H.querytick = H.querytick + 1
   return true
 end
 
 H.picker_free = function(picker)
+  if picker == nil then return end
   picker.match_inds = nil
   picker.cache = nil
   picker.stritems, picker.stritems_ignorecase = nil, nil
@@ -1085,11 +1158,11 @@ H.picker_choose = function(picker, pre_command)
   local choose = picker.opts.source.choose
   if not vim.is_callable(choose) then return true end
 
-  local win_id_init = picker.windows.init
-  if pre_command ~= nil and H.is_valid_win(win_id_init) then
-    vim.api.nvim_win_call(win_id_init, function()
+  local win_id_target = picker.windows.target
+  if pre_command ~= nil and H.is_valid_win(win_id_target) then
+    vim.api.nvim_win_call(win_id_target, function()
       vim.cmd(pre_command)
-      picker.windows.init = vim.api.nvim_get_current_win()
+      picker.windows.target = vim.api.nvim_get_current_win()
     end)
   end
 
@@ -1478,11 +1551,10 @@ end
 
 -- Default choose -------------------------------------------------------------
 H.choose_file = function(file)
-  local win_init = (MiniPick.get_picker_data().windows or {}).init
-  if win_init == nil or not H.is_valid_win(win_init) then return end
+  local win_target = (MiniPick.get_picker_data().windows or {}).target
+  if win_target == nil or not H.is_valid_win(win_target) then return end
 
   local path, line, col = H.parse_file_path(file)
-  line, col = line or 1, col or 1
 
   -- Try to use already created buffer, if present. This avoids not needed
   -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
@@ -1491,43 +1563,31 @@ H.choose_file = function(file)
     if H.is_valid_buf(buf_id) and vim.api.nvim_buf_get_name(buf_id) == path then path_buf_id = buf_id end
   end
 
-  if path_buf_id ~= nil then return H.set_winbuf(win_init, path_buf_id) end
+  if path_buf_id ~= nil then return H.set_winbuf(win_target, path_buf_id) end
   -- Avoid possible errors with `:edit`, like present swap file
-  local ok = pcall(vim.api.nvim_win_call, win_init, function()
+  local ok = pcall(vim.api.nvim_win_call, win_target, function()
     vim.cmd('edit ' .. vim.fn.fnameescape(path))
-    vim.api.nvim_win_set_cursor(win_init, { line, col - 1 })
+    if line ~= nil then vim.api.nvim_win_set_cursor(win_target, { line, (col or 1) - 1 }) end
     vim.cmd('normal! zvzz')
   end)
-  vim.api.nvim_set_current_win(win_init)
 end
 
 H.choose_print = function(x) print(vim.inspect(x)) end
 
 -- Builtins -------------------------------------------------------------------
-H.execute_shell_command = function(executable, args, opts)
-  opts = vim.tbl_deep_extend('force', { postprocess = function(x) return x end }, opts or {})
-
-  local process, stdout = nil, vim.loop.new_pipe()
-  local spawn_opts = { args = args, stdio = { nil, stdout, nil } }
-  process = vim.loop.spawn(executable, spawn_opts, function() process:close() end)
-
-  local data_feed = {}
-  stdout:read_start(function(err, data)
-    assert(not err, err)
-    if data then
-      table.insert(data_feed, data)
-    else
-      local items = vim.split(table.concat(data_feed), '\n')
-      items = opts.postprocess(items)
-      data_feed = nil
-      stdout:close()
-      vim.schedule(function() MiniPick.set_picker_items(items) end)
-    end
-  end)
+H.files_get_tool = function()
+  if vim.fn.executable('rg') == 1 then return 'rg' end
+  return 'libuv'
 end
 
-H.files_list_libuv = function()
-  if vim.fn.has('nvim-0.8') == 0 then H.error('Fallback `files` source needs Neovim>=0.8.') end
+H.files_get_command = function(tool)
+  -- TODO: Remove `--no-ignore`
+  if tool == 'rg' then return { 'rg', '--files', '--no-ignore', '--color', 'never' } end
+  H.error([[Wrong 'tool' for `files` builtin.]])
+end
+
+H.files_libuv_items = function()
+  if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "libuv" of `files` builtin needs Neovim>=0.8.') end
   vim.schedule(function()
     local items = {}
     for path_name, path_type in vim.fs.dir('.', { depth = 10000 }) do
@@ -1536,6 +1596,23 @@ H.files_list_libuv = function()
     end
     MiniPick.set_picker_items(items)
   end)
+end
+
+H.grep_get_tool = function()
+  if vim.fn.executable('rg') == 1 then return 'rg' end
+  -- TODO: decide on default `grep` tool
+end
+
+H.grep_get_command = function(tool, pattern)
+  if tool == 'rg' then
+    --stylua: ignore
+    return {
+      'rg',
+      '--column', '--line-number', '--no-heading', '--color=never', '--smart-case', '--max-columns=2048',
+      '-e', vim.inspect(pattern),
+    }
+  end
+  H.error([[Wrong 'tool' for `grep` builtin.]])
 end
 
 -- Utilities ------------------------------------------------------------------
