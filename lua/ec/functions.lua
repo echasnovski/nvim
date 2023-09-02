@@ -1,6 +1,77 @@
 -- Helper table
 local H = {}
 
+-- 'mini.pick' future pickers
+EC.pickers = {}
+
+local pickers_ns_id = vim.api.nvim_create_namespace('ECPickers')
+local pickers_highlight_line = function(buf_id, line, hl_group)
+  local opts = { end_row = line, end_col = 0, hl_mode = 'combine', hl_group = hl_group, priority = 199 }
+  vim.api.nvim_buf_set_extmark(buf_id, pickers_ns_id, line - 1, 0, opts)
+end
+
+local is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
+
+local ensure_text_width = function(text, width)
+  local text_width = vim.fn.strchars(text)
+  if text_width <= width then return text .. string.rep(' ', width - text_width) end
+  return '…' .. vim.fn.strcharpart(text, text_width - width + 1, width - 1)
+end
+
+EC.pickers.diagnostic = function(local_opts, opts)
+  local_opts = vim.tbl_deep_extend('force', { bufnr = nil, get_opts = {} }, local_opts or {})
+
+  local plus_one = function(x)
+    if x == nil then return nil end
+    return x + 1
+  end
+
+  -- NOTE: Use `deepcopy()` because output of `vim.diagnostic.get()` is
+  -- modifiable (although it shouldn't be)
+  local items = vim.deepcopy(vim.diagnostic.get(local_opts.bufnr, local_opts.get_opts))
+
+  -- Compute final path width
+  local path_width = 0
+  for _, item in ipairs(items) do
+    item.path = ''
+    if is_valid_buf(item.bufnr) then item.path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(item.bufnr), ':.') end
+    path_width = math.max(path_width, vim.fn.strchars(item.path))
+  end
+
+  -- Update items
+  for _, item in ipairs(items) do
+    local severity_char = vim.diagnostic.severity[item.severity]:sub(1, 1)
+    local message = item.message:gsub('\n', ' ')
+    item.item = string.format('%s │ %s │ %s', severity_char, ensure_text_width(item.path, path_width), message)
+    item.lnum, item.col, item.end_lnum, item.end_col =
+      plus_one(item.lnum), plus_one(item.col), plus_one(item.end_lnum), plus_one(item.end_col)
+  end
+
+  local hl_groups_ref = {
+    [vim.diagnostic.severity.ERROR] = 'DiagnosticFloatingError',
+    [vim.diagnostic.severity.WARN] = 'DiagnosticFloatingWarn',
+    [vim.diagnostic.severity.INFO] = 'DiagnosticFloatingInfo',
+    [vim.diagnostic.severity.HINT] = 'DiagnosticFloatingHint',
+  }
+
+  local show = function(items_to_show, buf_id)
+    local lines, hl_groups = {}, {}
+    for _, item in ipairs(items_to_show) do
+      table.insert(lines, item.item)
+      table.insert(hl_groups, hl_groups_ref[item.severity])
+    end
+
+    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    for i = 1, #lines do
+      pickers_highlight_line(buf_id, i, hl_groups[i])
+    end
+  end
+
+  local default_opts = { source = { items = items, name = 'Diagnostic' }, content = { show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
+  return MiniPick.start(opts)
+end
+
 -- Very early R&D for 'mini.pick'
 -- - Find files
 EC.read_dir_builtin = function(dir_path)
@@ -260,36 +331,36 @@ end
 --   vim.o.statuscolumn = '%!v:lua.EC.statuscolumn()'
 -- end
 
--- Overwrite `vim.ui.select()` with Telescope ---------------------------------
-EC.ui_select_default = vim.ui.select
-
-vim.ui.select = function(items, opts, on_choice)
-  local pickers = require('telescope.pickers')
-  local finders = require('telescope.finders')
-  local conf = require('telescope.config').values
-  local actions = require('telescope.actions')
-  local action_state = require('telescope.actions.state')
-
-  opts = opts or {}
-
-  -- Create picker options
-  local picker_opts = {
-    prompt_title = opts.prompt,
-    finder = finders.new_table({ results = items }),
-    sorter = conf.generic_sorter(),
-    attach_mappings = function(prompt_bufnr, _)
-      actions.select_default:replace(function()
-        actions.close(prompt_bufnr)
-        local selection = action_state.get_selected_entry()
-        -- Operate only on first selection
-        on_choice(selection[1], selection.index)
-      end)
-      return true
-    end,
-  }
-
-  pickers.new({}, picker_opts):find()
-end
+-- -- Overwrite `vim.ui.select()` with Telescope ---------------------------------
+-- EC.ui_select_default = vim.ui.select
+--
+-- vim.ui.select = function(items, opts, on_choice)
+--   local pickers = require('telescope.pickers')
+--   local finders = require('telescope.finders')
+--   local conf = require('telescope.config').values
+--   local actions = require('telescope.actions')
+--   local action_state = require('telescope.actions.state')
+--
+--   opts = opts or {}
+--
+--   -- Create picker options
+--   local picker_opts = {
+--     prompt_title = opts.prompt,
+--     finder = finders.new_table({ results = items }),
+--     sorter = conf.generic_sorter(),
+--     attach_mappings = function(prompt_bufnr, _)
+--       actions.select_default:replace(function()
+--         actions.close(prompt_bufnr)
+--         local selection = action_state.get_selected_entry()
+--         -- Operate only on first selection
+--         on_choice(selection[1], selection.index)
+--       end)
+--       return true
+--     end,
+--   }
+--
+--   pickers.new({}, picker_opts):find()
+-- end
 
 -- Manage 'mini.test' screenshots ---------------------------------------------
 local S = {}

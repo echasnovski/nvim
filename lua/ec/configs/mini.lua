@@ -54,6 +54,7 @@ require('mini.statusline').setup({
 require('mini.tabline').setup()
 
 require('mini-dev.pick').setup()
+vim.ui.select = MiniPick.ui_select
 
 vim.schedule(function()
   local ai = require('mini.ai')
