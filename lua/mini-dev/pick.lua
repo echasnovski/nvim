@@ -264,8 +264,15 @@ MiniPick.stop = function() H.picker_stop(H.pickers.active) end
 
 MiniPick.default_match = function(inds, stritems, query)
   if #query == 0 then return H.seq_along(stritems) end
-  local match_data = H.match_filter(inds, stritems, query)
-  return match_data ~= nil and H.match_sort(match_data) or H.seq_along(stritems)
+  local f = function()
+    local match_data, match_type = H.match_filter(inds, stritems, query)
+    if match_data == nil then return end
+    if match_type == 'nosort' then return MiniPick.set_picker_match_inds(H.seq_along(stritems)) end
+    local match_inds = H.match_sort(match_data)
+    if match_inds == nil then return end
+    MiniPick.set_picker_match_inds(match_inds)
+  end
+  vim.schedule(coroutine.wrap(f))
 end
 
 MiniPick.default_show = function(items, buf_id, opts)
@@ -492,6 +499,14 @@ MiniPick.set_picker_items = function(items, do_match)
   H.picker_set_items(picker, items)
   if do_match == nil then do_match = true end
   H.picker_update(picker, do_match)
+end
+
+MiniPick.set_picker_match_inds = function(match_inds, query)
+  if not vim.tbl_islist(match_inds) then H.error('`match_inds` should be list.') end
+  local picker = H.pickers.active
+  if picker == nil then return end
+  H.picker_set_match_inds(picker, match_inds, query)
+  H.picker_update(picker, false)
 end
 
 MiniPick.set_picker_items_from_cli_output = function(command, opts)
@@ -890,7 +905,7 @@ H.picker_set_items = function(picker, items)
   picker.items, picker.stritems, picker.stritems_ignorecase = items, stritems, stritems_ignorecase
 
   -- All items are matched at first for empty query
-  H.picker_set_matches(picker, H.seq_along(items), {})
+  H.picker_set_match_inds(picker, H.seq_along(items), {})
 end
 
 H.item_to_string = function(item)
@@ -914,13 +929,13 @@ H.picker_set_busy = function(picker, value)
   end
 end
 
-H.picker_set_matches = function(picker, inds, cache_query)
+H.picker_set_match_inds = function(picker, inds, query)
   if inds == nil then return end
   H.picker_set_busy(picker, false)
 
   picker.match_inds = inds
 
-  local cache_prompt = table.concat(cache_query or picker.query)
+  local cache_prompt = table.concat(query or picker.query)
   if picker.opts.content.use_cache then picker.cache[cache_prompt] = { inds = inds } end
 
   -- Reset current index if match indexes are updated
@@ -984,7 +999,9 @@ H.picker_set_lines = function(picker)
 
   -- Possibly update visible content accounting for "from_bottom" direction
   local range = picker.latest_shown_range
-  local should_show = range.querytick ~= H.querytick or range.from ~= visible_range.from or range.to ~= visible_range.to
+  -- TODO: Figure out why this is not working
+  -- local should_show = range.querytick ~= H.querytick or range.from ~= visible_range.from or range.to ~= visible_range.to
+  local should_show = not picker.is_busy
   if should_show then
     show(items_to_show, buf_id)
     picker.latest_shown_range = { from = visible_range.from, to = visible_range.to, querytick = H.querytick }
@@ -1012,14 +1029,15 @@ H.picker_match = function(picker)
   -- Try to use cache first
   local prompt_cache
   if picker.opts.content.use_cache then prompt_cache = picker.cache[table.concat(picker.query)] end
-  if prompt_cache ~= nil then return H.picker_set_matches(picker, prompt_cache.inds) end
+  if prompt_cache ~= nil then return H.picker_set_match_inds(picker, prompt_cache.inds) end
 
   local is_ignorecase = H.query_is_ignorecase(picker.query)
   local stritems = is_ignorecase and picker.stritems_ignorecase or picker.stritems
   local query = is_ignorecase and vim.tbl_map(vim.fn.tolower, picker.query) or picker.query
 
+  H.picker_set_busy(picker, true)
   local new_inds = picker.opts.content.match(picker.match_inds, stritems, query)
-  H.picker_set_matches(picker, new_inds)
+  H.picker_set_match_inds(picker, new_inds)
 end
 
 H.query_is_ignorecase = function(query)
@@ -1361,7 +1379,7 @@ H.match_filter = function(inds, stritems, query)
   query = vim.list_slice(query, start_offset, end_offset)
   n_query = #query
 
-  if n_query == 0 then return nil end
+  if n_query == 0 then return {}, 'nosort', query end
 
   -- End-matching filtering doesn't result into nested matches.
   -- Example: type "$", move caret to left, type "m" (filters for "m$") and
@@ -1381,8 +1399,10 @@ end
 
 H.match_filter_exact = function(inds, stritems, query, pattern)
   local match_single = H.match_filter_exact_single
+  local check_picker = H.check_picker_every_n(100, H.querytick)
   local match_data = {}
   for _, ind in ipairs(inds) do
+    if not check_picker() then return nil end
     local data = match_single(stritems[ind], ind, pattern)
     if data ~= nil then table.insert(match_data, data) end
   end
@@ -1414,8 +1434,10 @@ end
 
 H.match_filter_fuzzy = function(inds, stritems, query)
   local match_single, find_query = H.match_filter_fuzzy_single, H.find_query
+  local check_picker = H.check_picker_every_n(100, H.querytick)
   local match_data = {}
   for _, ind in ipairs(inds) do
+    if not check_picker() then return nil end
     local data = match_single(stritems[ind], ind, query, find_query)
     if data ~= nil then table.insert(match_data, data) end
   end
@@ -1490,8 +1512,10 @@ H.match_sort = function(match_data)
   end
 
   -- Sort index in place (to make stable sort) within buckets
+  local check_picker = H.check_picker_every_n(10, H.querytick)
   for _, buck_width in pairs(buckets) do
     for _, buck_start in pairs(buck_width) do
+      if not check_picker() then return nil end
       table.sort(buck_start)
     end
   end
@@ -1735,11 +1759,11 @@ end
 
 H.files_fallback_items = function()
   if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "fallback" of `files` builtin needs Neovim>=0.8.') end
-  local check_active = H.check_active_every_n(100)
+  local check_picker = H.check_picker_every_n(100)
   local f = function()
     local items = {}
     for path, path_type in vim.fs.dir('.', { depth = math.huge }) do
-      if not check_active() then return end
+      if not check_picker() then return end
       if path_type == 'file' and H.is_file_text(path) then table.insert(items, path) end
     end
     MiniPick.set_picker_items(items)
@@ -1767,17 +1791,17 @@ end
 
 H.grep_fallback_items = function(pattern)
   if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "lua" of `grep` builtin needs Neovim>=0.8.') end
-  local check_active = H.check_active_every_n(100)
+  local check_picker = H.check_picker_every_n(100)
   local f = function()
     local files = {}
     for path, path_type in vim.fs.dir('.', { depth = math.huge }) do
-      if not check_active() then return end
+      if not check_picker() then return end
       if path_type == 'file' and H.is_file_text(path) then table.insert(files, path) end
     end
 
     local items = {}
     for _, path in ipairs(files) do
-      if not check_active() then return end
+      if not check_picker() then return end
       for lnum, l in ipairs(vim.fn.readfile(path)) do
         local col = string.find(l, pattern)
         if col ~= nil then table.insert(items, string.format('%s:%d:%d:%s', path, lnum, col, l)) end
@@ -1797,13 +1821,14 @@ H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nv
 
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
 
-H.check_active_every_n = function(n)
-  local count = 0
+H.check_picker_every_n = function(n, querytick_ref)
+  local count, dont_check_querytick = 0, querytick_ref == nil
   return function()
     count = count + 1
     if count < n then return true end
     count = 0
-    return MiniPick.is_picker_active()
+    -- Return positive if picker is active and no query updates (if asked)
+    return MiniPick.is_picker_active() and (dont_check_querytick or querytick_ref == H.querytick)
   end
 end
 
