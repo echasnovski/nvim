@@ -1,9 +1,7 @@
 -- TODO:
 --
--- - Make sure that current directory is not changed due to
---   `MiniMisc.setup_auto_root()` when using `buffers` picker.
---
--- - Implement `grep` fallback.
+-- - Add `custom_mappings` for custom actions? Will be called without arguments
+--   assuming they should rely on exported `MiniPick.{get,set}_` functionality.
 --
 -- - Async execution to allow more responsiveness:
 --     - `get_querytick()`
@@ -35,6 +33,10 @@
 --         - Works when "Open tag" -> "Open tag in same file".
 --         - Can be properly aborted.
 --
+--     - Buffers:
+--         - Preview doesn't trigger `BufEnter` which might interfer with many
+--           plugins (like `setup_auto_root()` from 'mini.misc').
+--
 -- Docs:
 --
 -- - Example mappings to switch `toggle_{preview,info}` and `move_{up,down}`: >
@@ -52,6 +54,9 @@
 --   `default_preview` for region data assumes structure similar to
 --   |diagnostic-structure| but with 1-indexing (end line inclusive; end col
 --   exclusive).
+--
+-- - `MiniPick.builtin.grep({ pattern = vim.fn.expand('<cword>') })` to find
+--   word under cursor.
 --
 
 --- *mini.pick* Pick anything
@@ -268,6 +273,7 @@ MiniPick.default_show = function(items, buf_id, opts)
 
   -- Compute and set lines
   local lines, prefixes = vim.tbl_map(H.item_to_string, items), {}
+  lines = vim.tbl_map(function(l) return l:gsub('\n', ' ') end, lines)
 
   if opts.show_icons then prefixes = vim.tbl_map(H.get_icon, lines) end
   local lines_to_show = {}
@@ -367,8 +373,8 @@ MiniPick.builtin.files = function(local_opts, opts)
   opts = vim.tbl_deep_extend('force', { source = { name = 'Files' } }, opts or {})
 
   local tool = local_opts.tool or H.files_get_tool()
-  if tool == 'libuv' then
-    opts.source.items = H.files_libuv_items
+  if tool == 'fallback' then
+    opts.source.items = H.files_fallback_items
     return MiniPick.start(opts)
   end
 
@@ -376,11 +382,16 @@ MiniPick.builtin.files = function(local_opts, opts)
 end
 
 MiniPick.builtin.grep = function(local_opts, opts)
-  local_opts = vim.tbl_deep_extend('force', { tool = nil }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { tool = nil, pattern = nil }, local_opts or {})
   opts = vim.tbl_deep_extend('force', { source = { name = 'Grep' } }, opts or {})
 
   local tool = local_opts.tool or H.grep_get_tool()
-  local pattern = vim.fn.input('Grep pattern: ')
+  local pattern = type(local_opts.pattern) == 'string' and local_opts.pattern or vim.fn.input('Grep pattern: ')
+  if tool == 'fallback' then
+    opts.source.items = function() H.grep_fallback_items(pattern) end
+    return MiniPick.start(opts)
+  end
+
   return MiniPick.builtin.cli_output({ command = H.grep_get_command(tool, pattern) }, opts)
 end
 
@@ -389,8 +400,7 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
 
   local match = function(_, _, query)
     if #query == 0 then return MiniPick.set_picker_items({}, false) end
-    local command = H.grep_get_command('rg', table.concat(query))
-    -- NOTE: Using `*_from_cli_output()` doesn't quite fit for many updates
+    local command = H.grep_get_command('rg', vim.inspect(table.concat(query)))
     vim.schedule(function()
       local items = vim.fn.systemlist(table.concat(command, ' '))
       MiniPick.set_picker_items(items, false)
@@ -547,6 +557,13 @@ MiniPick.set_picker_target_window = function(win_id)
 end
 
 MiniPick.get_querytick = function() return H.querytick end
+
+MiniPick.is_picker_active = function()
+  local co = coroutine.running()
+  if co == nil then return H.pickers.active ~= nil end
+  vim.schedule(function() coroutine.resume(co, H.pickers.active ~= nil) end)
+  return coroutine.yield()
+end
 
 -- Helper data ================================================================
 -- Module default config
@@ -1577,12 +1594,8 @@ H.preview_file = function(item_data, win_id, opts)
   local buf_id = H.set_winbuf_scratch_buffer(win_id)
   local path = item_data.value
 
-  -- Determine if file is text. This is not 100% proof, but good enough.
-  -- Source: https://github.com/sharkdp/content_inspector
-  local fd = vim.loop.fs_open(path, 'r', 1)
-  local is_text = vim.loop.fs_read(fd, 1024):find('\0') == nil
-  vim.loop.fs_close(fd)
-  if not is_text then return H.set_buflines(buf_id, { '-Non-text-file-' }) end
+  -- Fully preview only text files
+  if not H.is_file_text(path) then return H.set_buflines(buf_id, { '-Non-text-file-' }) end
 
   -- Compute lines. Limit number of read lines to work better on large files.
   local has_lines, lines = pcall(vim.fn.readfile, path, '', (item_data.line or 1) + opts.n_context_lines)
@@ -1610,7 +1623,11 @@ H.preview_buffer = function(item_data, win_id, opts)
   local buf_id = H.set_winbuf_scratch_buffer(win_id)
   local buf_id_item = item_data.value
 
+  -- Get lines from buffer ensuring it is loaded without important consequences
+  local cache_eventignore = vim.o.eventignore
+  vim.o.eventignore = 'BufEnter'
   vim.fn.bufload(buf_id_item)
+  vim.o.eventignore = cache_eventignore
   local lines = vim.api.nvim_buf_get_lines(buf_id_item, 0, (item_data.line or 1) + opts.n_context_lines, false)
 
   item_data.filetype, item_data.line_position = vim.bo[buf_id_item].filetype, opts.line_position
@@ -1651,7 +1668,7 @@ H.preview_highlight_region = function(buf_id, line, col, line_end, col_end)
   -- Highlight position/region
   if col == nil then return end
 
-  local end_row, end_col = line - 1, col - 1
+  local end_row, end_col = line - 1, col
   if line_end ~= nil and col_end ~= nil then
     end_row, end_col = line_end - 1, col_end - 1
   end
@@ -1706,7 +1723,7 @@ H.files_get_tool = function()
   if vim.fn.executable('fd') == 1 then return 'fd' end
   if vim.fn.executable('rg') == 1 then return 'rg' end
   if vim.fn.executable('find') == 1 then return 'find' end
-  return 'libuv'
+  return 'fallback'
 end
 
 H.files_get_command = function(tool)
@@ -1716,21 +1733,24 @@ H.files_get_command = function(tool)
   H.error([[Wrong 'tool' for `files` builtin.]])
 end
 
-H.files_libuv_items = function()
-  if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "libuv" of `files` builtin needs Neovim>=0.8.') end
-  vim.schedule(function()
+H.files_fallback_items = function()
+  if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "fallback" of `files` builtin needs Neovim>=0.8.') end
+  local check_active = H.check_active_every_n(100)
+  local f = function()
     local items = {}
-    for path_name, path_type in vim.fs.dir('.', { depth = 10000 }) do
-      -- TODO: Use `vim.schedule()` once in a while to make it more responsive
-      if path_type == 'file' then table.insert(items, path_name) end
+    for path, path_type in vim.fs.dir('.', { depth = math.huge }) do
+      if not check_active() then return end
+      if path_type == 'file' and H.is_file_text(path) then table.insert(items, path) end
     end
     MiniPick.set_picker_items(items)
-  end)
+  end
+
+  vim.schedule(coroutine.wrap(f))
 end
 
 H.grep_get_tool = function()
   if vim.fn.executable('rg') == 1 then return 'rg' end
-  -- TODO: decide on default `grep` tool
+  return 'fallback'
 end
 
 H.grep_get_command = function(tool, pattern)
@@ -1739,10 +1759,35 @@ H.grep_get_command = function(tool, pattern)
     return {
       'rg',
       '--column', '--line-number', '--no-heading', '--color=never', '--smart-case', '--max-columns=2048',
-      '-e', vim.inspect(pattern),
+      '-e', pattern,
     }
   end
   H.error([[Wrong 'tool' for `grep` builtin.]])
+end
+
+H.grep_fallback_items = function(pattern)
+  if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "lua" of `grep` builtin needs Neovim>=0.8.') end
+  local check_active = H.check_active_every_n(100)
+  local f = function()
+    local files = {}
+    for path, path_type in vim.fs.dir('.', { depth = math.huge }) do
+      if not check_active() then return end
+      if path_type == 'file' and H.is_file_text(path) then table.insert(files, path) end
+    end
+
+    local items = {}
+    for _, path in ipairs(files) do
+      if not check_active() then return end
+      for lnum, l in ipairs(vim.fn.readfile(path)) do
+        local col = string.find(l, pattern)
+        if col ~= nil then table.insert(items, string.format('%s:%d:%d:%s', path, lnum, col, l)) end
+      end
+    end
+
+    MiniPick.set_picker_items(items)
+  end
+
+  vim.schedule(coroutine.wrap(f))
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -1751,6 +1796,16 @@ H.error = function(msg) error(string.format('(mini.pick) %s', msg), 0) end
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
 
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
+
+H.check_active_every_n = function(n)
+  local count = 0
+  return function()
+    count = count + 1
+    if count < n then return true end
+    count = 0
+    return MiniPick.is_picker_active()
+  end
+end
 
 H.replace_termcodes = function(x)
   if x == nil then return nil end
@@ -1827,6 +1882,13 @@ end
 H.get_next_char_bytecol = function(line_str, col)
   local utf_index = vim.str_utfindex(line_str, math.min(line_str:len(), col))
   return vim.str_byteindex(line_str, utf_index)
+end
+
+H.is_file_text = function(path)
+  local fd = vim.loop.fs_open(path, 'r', 1)
+  local is_text = vim.loop.fs_read(fd, 1024):find('\0') == nil
+  vim.loop.fs_close(fd)
+  return is_text
 end
 
 --stylua: ignore
