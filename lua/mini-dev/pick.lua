@@ -1,16 +1,13 @@
 -- TODO:
 --
--- - Add `custom_mappings` for custom actions? Will be called without arguments
---   assuming they should rely on exported `MiniPick.{get,set}_` functionality.
+-- - Try to make `grep_live` non-blocking (so that typing one letter doesn't
+--   block on huge projects).
 --
--- - Async execution to allow more responsiveness:
---     - `get_querytick()`
---     - `check_running` utilizing coroutines and `vim.schedule()`
---     - Call `check_running()` during filter and sort iterations.
+-- - Add `source.mappings` for custom actions? Should have fields `key`,
+--   `desc`, `func`. Will be called without arguments assuming they should rely
+--   on exported `MiniPick.{get,set}_` functionality.
 --
 -- - Close on lost focus.
---
--- - ?Add `diagnostic` builtin?
 --
 -- - Make sure all actions work when `items` is not yet set.
 --
@@ -125,6 +122,8 @@
 --- of different scenarios and customization intentions, writing exact rules
 --- for disabling module's functionality is left to user. See
 --- |mini.nvim-disabling-recipes| for common recipes.
+
+---@MiniPick-events
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -272,7 +271,7 @@ MiniPick.default_match = function(inds, stritems, query)
     if match_inds == nil then return end
     MiniPick.set_picker_match_inds(match_inds)
   end
-  vim.schedule(coroutine.wrap(f))
+  coroutine.resume(coroutine.create(f))
 end
 
 MiniPick.default_show = function(items, buf_id, opts)
@@ -366,7 +365,7 @@ MiniPick.ui_select = function(items, opts, on_choice)
     source = {
       items = items_ext,
       name = opts.prompt,
-      choose = function(item) on_choice(item.item_original, item.index) end,
+      choose = function(item) on_choice((item or {}).item_original, (item or {}).index) end,
       preview = H.preview_inspect,
     },
   }
@@ -573,10 +572,10 @@ end
 
 MiniPick.get_querytick = function() return H.querytick end
 
-MiniPick.is_picker_active = function()
+MiniPick.poke_is_picker_active = function()
   local co = coroutine.running()
   if co == nil then return H.pickers.active ~= nil end
-  vim.schedule(function() coroutine.resume(co, H.pickers.active ~= nil) end)
+  H.schedule_resume_is_active(co)
   return coroutine.yield()
 end
 
@@ -803,10 +802,12 @@ H.picker_new = function(opts)
 
   H.querytick = H.querytick + 1
 
-  -- Set items. If already resolved to array, set right away.
+  -- Set items on next event loop to not block when computing stritems
   H.picker_set_busy(picker, true)
   local items = H.expand_callable(opts.source.items)
-  if vim.tbl_islist(items) then H.picker_set_items(picker, items) end
+  if vim.tbl_islist(items) then vim.schedule(function() MiniPick.set_picker_items(items) end) end
+
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' })
 
   return picker
 end
@@ -894,12 +895,14 @@ H.picker_set_items = function(picker, items)
   -- Stop being busy
   H.picker_set_busy(picker, false)
 
-  -- Compute string items to work with and their initial matches
-  local stritems, stritems_ignorecase = {}, {}
+  -- Compute string items to work with (along with their lower variants)
+  local stritems, stritems_ignorecase, tolower = {}, {}, vim.fn.tolower
+  local poke_picker = H.poke_picker_every_n(1000)
   for i, x in ipairs(items) do
+    if not poke_picker() then return end
     local to_add = H.item_to_string(x)
     table.insert(stritems, to_add)
-    table.insert(stritems_ignorecase, vim.fn.tolower(to_add))
+    table.insert(stritems_ignorecase, tolower(to_add))
   end
 
   picker.items, picker.stritems, picker.stritems_ignorecase = items, stritems, stritems_ignorecase
@@ -994,19 +997,17 @@ H.picker_set_lines = function(picker)
     if i == cur_ind then cur_line = #items_to_show end
   end
 
-  local from_bottom_buffer = is_direction_bottom and (vim.api.nvim_win_get_height(win_id) - #items_to_show) or 0
-  cur_line = cur_line + from_bottom_buffer
+  local n_empty_top_lines = is_direction_bottom and (vim.api.nvim_win_get_height(win_id) - #items_to_show) or 0
+  cur_line = cur_line + n_empty_top_lines
 
   -- Possibly update visible content accounting for "from_bottom" direction
   local range = picker.latest_shown_range
-  -- TODO: Figure out why this is not working
-  -- local should_show = range.querytick ~= H.querytick or range.from ~= visible_range.from or range.to ~= visible_range.to
-  local should_show = not picker.is_busy
-  if should_show then
+  local should_show = range.querytick ~= H.querytick or range.from ~= visible_range.from or range.to ~= visible_range.to
+  if should_show and not picker.is_busy then
     show(items_to_show, buf_id)
     picker.latest_shown_range = { from = visible_range.from, to = visible_range.to, querytick = H.querytick }
-    if from_bottom_buffer > 0 then
-      local empty_lines = vim.fn['repeat']({ '' }, from_bottom_buffer)
+    if n_empty_top_lines > 0 then
+      local empty_lines = vim.fn['repeat']({ '' }, n_empty_top_lines)
       vim.api.nvim_buf_set_lines(buf_id, 0, 0, true, empty_lines)
     end
   end
@@ -1091,8 +1092,9 @@ H.picker_set_bordertext = function(picker)
     config = { title = { { H.win_trim_to_width(win_id, 'Info'), 'MiniPickBorderText' } } }
   end
 
-  -- Compute helper footer only if Neovim version permits
-  if vim.fn.has('nvim-0.10') == 1 then
+  -- Compute helper footer only if Neovim version permits and not in busy
+  -- picker (otherwise it will flicker number of matches data on char delete)
+  if vim.fn.has('nvim-0.10') == 1 and not picker.is_busy then
     local info = H.picker_get_general_info(picker)
     local source_name = string.format(' %s ', info.source_name)
     local inds = string.format(' %s|%s|%s ', info.relative_current_ind, info.n_items_matched, info.n_items_total)
@@ -1118,6 +1120,8 @@ end
 
 H.picker_stop = function(picker)
   if picker == nil then return end
+
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStop' })
 
   pcall(vim.api.nvim_set_current_win, picker.windows.target)
 
@@ -1399,10 +1403,10 @@ end
 
 H.match_filter_exact = function(inds, stritems, query, pattern)
   local match_single = H.match_filter_exact_single
-  local check_picker = H.check_picker_every_n(100, H.querytick)
+  local poke_picker = H.poke_picker_every_n(100, H.querytick)
   local match_data = {}
   for _, ind in ipairs(inds) do
-    if not check_picker() then return nil end
+    if not poke_picker() then return nil end
     local data = match_single(stritems[ind], ind, pattern)
     if data ~= nil then table.insert(match_data, data) end
   end
@@ -1434,10 +1438,10 @@ end
 
 H.match_filter_fuzzy = function(inds, stritems, query)
   local match_single, find_query = H.match_filter_fuzzy_single, H.find_query
-  local check_picker = H.check_picker_every_n(100, H.querytick)
+  local poke_picker = H.poke_picker_every_n(100, H.querytick)
   local match_data = {}
   for _, ind in ipairs(inds) do
-    if not check_picker() then return nil end
+    if not poke_picker() then return nil end
     local data = match_single(stritems[ind], ind, query, find_query)
     if data ~= nil then table.insert(match_data, data) end
   end
@@ -1512,10 +1516,10 @@ H.match_sort = function(match_data)
   end
 
   -- Sort index in place (to make stable sort) within buckets
-  local check_picker = H.check_picker_every_n(10, H.querytick)
+  local poke_picker = H.poke_picker_every_n(100, H.querytick)
   for _, buck_width in pairs(buckets) do
     for _, buck_start in pairs(buck_width) do
-      if not check_picker() then return nil end
+      if not poke_picker() then return nil end
       table.sort(buck_start)
     end
   end
@@ -1759,11 +1763,11 @@ end
 
 H.files_fallback_items = function()
   if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "fallback" of `files` builtin needs Neovim>=0.8.') end
-  local check_picker = H.check_picker_every_n(100)
+  local poke_picker = H.poke_picker_every_n(100)
   local f = function()
     local items = {}
     for path, path_type in vim.fs.dir('.', { depth = math.huge }) do
-      if not check_picker() then return end
+      if not poke_picker() then return end
       if path_type == 'file' and H.is_file_text(path) then table.insert(items, path) end
     end
     MiniPick.set_picker_items(items)
@@ -1791,17 +1795,17 @@ end
 
 H.grep_fallback_items = function(pattern)
   if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "lua" of `grep` builtin needs Neovim>=0.8.') end
-  local check_picker = H.check_picker_every_n(100)
+  local poke_picker = H.poke_picker_every_n(100)
   local f = function()
     local files = {}
     for path, path_type in vim.fs.dir('.', { depth = math.huge }) do
-      if not check_picker() then return end
+      if not poke_picker() then return end
       if path_type == 'file' and H.is_file_text(path) then table.insert(files, path) end
     end
 
     local items = {}
     for _, path in ipairs(files) do
-      if not check_picker() then return end
+      if not poke_picker() then return end
       for lnum, l in ipairs(vim.fn.readfile(path)) do
         local col = string.find(l, pattern)
         if col ~= nil then table.insert(items, string.format('%s:%d:%d:%s', path, lnum, col, l)) end
@@ -1814,23 +1818,26 @@ H.grep_fallback_items = function(pattern)
   vim.schedule(coroutine.wrap(f))
 end
 
--- Utilities ------------------------------------------------------------------
-H.error = function(msg) error(string.format('(mini.pick) %s', msg), 0) end
+-- Async ----------------------------------------------------------------------
+H.schedule_resume_is_active = vim.schedule_wrap(function(co) coroutine.resume(co, H.pickers.active ~= nil) end)
 
-H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
-
-H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
-
-H.check_picker_every_n = function(n, querytick_ref)
+H.poke_picker_every_n = function(n, querytick_ref)
   local count, dont_check_querytick = 0, querytick_ref == nil
   return function()
     count = count + 1
     if count < n then return true end
     count = 0
     -- Return positive if picker is active and no query updates (if asked)
-    return MiniPick.is_picker_active() and (dont_check_querytick or querytick_ref == H.querytick)
+    return MiniPick.poke_is_picker_active() and (dont_check_querytick or querytick_ref == H.querytick)
   end
 end
+
+-- Utilities ------------------------------------------------------------------
+H.error = function(msg) error(string.format('(mini.pick) %s', msg), 0) end
+
+H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
+
+H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
 
 H.replace_termcodes = function(x)
   if x == nil then return nil end
