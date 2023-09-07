@@ -56,6 +56,8 @@ require('mini.tabline').setup()
 require('mini-dev.pick').setup()
 vim.ui.select = MiniPick.ui_select
 
+require('mini-dev.extra').setup()
+
 vim.schedule(function()
   local ai = require('mini.ai')
   ai.setup({
