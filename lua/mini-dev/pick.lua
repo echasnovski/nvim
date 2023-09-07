@@ -53,6 +53,10 @@
 --
 -- - Example of `execute` custom action:
 --   execute = function(picker, _) vim.cmd(vim.fn.input('Execute: ')) end,
+--
+-- - <C-c> is hard-coded to always stop the picker.
+--
+-- - Make `refine` action very visible.
 
 --- *mini.pick* Pick anything
 --- *MiniPick*
@@ -221,6 +225,8 @@ MiniPick.config = {
 
     paste = '<C-r>',
 
+    refine = '<C-Space>',
+
     scroll_down  = '<C-f>',
     scroll_up    = '<C-b>',
     scroll_left  = '<C-h>',
@@ -251,18 +257,29 @@ MiniPick.config = {
 ---
 --- @return ... Tuple of current item and its index just before picker is stopped.
 MiniPick.start = function(opts)
+  if MiniPick.is_picker_active() then
+    MiniPick.stop()
+    -- NOTE: Needs `schedule()` for `stop()` to properly finish code flow
+    return vim.schedule(function() MiniPick.start(opts) end)
+  end
+
   opts = H.validate_picker_opts(opts)
   local picker = H.picker_new(opts)
-  H.pickers.active = picker
+  H.pickers.active, H.cache = picker, {}
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' })
   return H.picker_advance(picker)
 end
 
 --- Stop active picker
-MiniPick.stop = function() H.picker_stop(H.pickers.active) end
+MiniPick.stop = function()
+  if not MiniPick.is_picker_active() then return end
+  H.cache.is_force_stop_advance = true
+  if H.cache.is_in_getcharstr then vim.api.nvim_feedkeys('\27', 't', true) end
+end
 
 MiniPick.refresh = function()
+  if not MiniPick.is_picker_active() then return end
   local picker = H.pickers.active
-  if picker == nil then return end
   local config = H.picker_compute_win_config(picker.opts.window.config)
   vim.api.nvim_win_set_config(picker.windows.main, config)
   H.picker_set_current_ind(picker, picker.current_ind, true)
@@ -301,7 +318,7 @@ MiniPick.default_show = function(items, buf_id, opts)
   local ns_id = H.ns_id.offsets
   H.clear_namespace(buf_id, ns_id)
 
-  local stritems, query = lines, MiniPick.get_picker_data().query
+  local stritems, query = lines, MiniPick.get_picker_query()
   if H.query_is_ignorecase(query) then
     stritems, query = vim.tbl_map(vim.fn.tolower, stritems), vim.tbl_map(vim.fn.tolower, query)
   end
@@ -349,16 +366,15 @@ MiniPick.default_choose_all = function(items, opts)
     end
   end
 
-  local win_target = MiniPick.get_picker_data().windows.target
+  local win_target = MiniPick.get_picker_state().windows.target
   if opts.list_type == 'location' then
     vim.fn.setloclist(win_target, list, ' ')
     vim.schedule(function() vim.cmd('lopen') end)
   end
 
   vim.fn.setqflist(list, ' ')
-  local qf_title =
-    string.format('%s:%s', MiniPick.get_picker_opts().source.name, table.concat(MiniPick.get_picker_data().query))
-  vim.fn.setqflist({}, 'a', { title = qf_title })
+  local source_name, prompt = MiniPick.get_picker_opts().source.name, table.concat(MiniPick.get_picker_query())
+  vim.fn.setqflist({}, 'a', { title = source_name .. ':' .. prompt })
   vim.schedule(function() vim.cmd('copen') end)
 end
 
@@ -410,7 +426,9 @@ MiniPick.builtin.grep = function(local_opts, opts)
 end
 
 MiniPick.builtin.grep_live = function(local_opts, opts)
-  if vim.fn.executable('rg') == 0 then H.error('`grep_live` needs `rg` executable.') end
+  local_opts = vim.tbl_deep_extend('force', { tool = nil }, local_opts or {})
+  local tool = local_opts.tool or H.grep_get_tool()
+  if tool == 'fallback' or not H.is_executable(tool) then H.error('`grep_live` needs non-fallback executable tool.') end
 
   local process, set_items_opts = nil, { do_match = false, querytick = H.querytick }
   local match = function(_, _, query)
@@ -480,9 +498,10 @@ MiniPick.builtin.buffers = function(local_opts, opts)
 end
 
 MiniPick.builtin.cli_output = function(local_opts, opts)
-  local_opts = local_opts or {}
-  local command, postprocess = local_opts.command, local_opts.postprocess
-  local items = function() MiniPick.set_picker_items_from_cli_output(command, { postprocess = postprocess }) end
+  local_opts = vim.tbl_deep_extend('force', { command = {}, postprocess = nil, spawn_opts = {} }, local_opts or {})
+  local command = local_opts.command
+  local cli_output_opts = { postprocess = local_opts.postprocess, spawn_opts = local_opts.spawn_opts }
+  local items = vim.schedule_wrap(function() MiniPick.set_picker_items_from_cli_output(command, cli_output_opts) end)
   opts = vim.tbl_deep_extend('force', { source = { name = 'CLI output' } }, opts or {}, { source = { items = items } })
   return MiniPick.start(opts)
 end
@@ -501,17 +520,49 @@ MiniPick.builtin.resume = function()
   return H.picker_advance(picker)
 end
 
+---@seealso |MiniPick.set_picker_items()| and |MiniPick.set_picker_items_from_cli_output()|
+MiniPick.get_picker_items = function() return vim.deepcopy((H.pickers.active or {}).items) end
+
+---@seealso |MiniPick.set_picker_match_inds()|
+MiniPick.get_picker_matches = function()
+  if not MiniPick.is_picker_active() then return end
+  local picker = H.pickers.active
+  if picker.items == nil then return {} end
+
+  local res = { all_ind = vim.deepcopy(picker.match_inds), current_ind = picker.match_inds[picker.current_ind] }
+  res.all = vim.tbl_map(function(ind) return picker.items[ind] end, picker.match_inds)
+  res.current = picker.items[res.current_ind]
+  return res
+end
+
+---@seealso |MiniPick.set_picker_opts()|
+MiniPick.get_picker_opts = function(opts) return vim.deepcopy((H.pickers.active or {}).opts) end
+
+---@seealso |MiniPick.set_picker_target_window()|
+MiniPick.get_picker_state = function()
+  if not MiniPick.is_picker_active() then return end
+  local picker = H.pickers.active
+  return vim.deepcopy({ is_busy = picker.is_busy, buffers = picker.buffers, windows = picker.windows })
+end
+
+---@seealso |MiniPick.set_picker_query()|
+MiniPick.get_picker_query = function() return vim.deepcopy((H.pickers.active or {}).query) end
+
+---@seealso |MiniPick.get_picker_items()|
 MiniPick.set_picker_items = function(items, opts)
   if not vim.tbl_islist(items) then H.error('`items` should be list.') end
-  if H.pickers.active == nil then return end
+  if not MiniPick.is_picker_active() then return end
   opts = vim.tbl_deep_extend('force', { do_match = true, querytick = nil }, opts or {})
+
   -- Set items in async because computing lower `stritems` can block much time
   coroutine.wrap(H.picker_set_items)(H.pickers.active, items, opts)
 end
 
+---@seealso |MiniPick.get_picker_items()|
 MiniPick.set_picker_items_from_cli_output = function(command, opts)
   if not vim.tbl_islist(command) then H.error('`command` should be an array of strings.') end
-  local default_opts = { postprocess = function(x) return x end, set_items_opts = { do_match = true }, spawn_opts = {} }
+  if not MiniPick.is_picker_active() then return end
+  local default_opts = { postprocess = H.cli_output_postprocess, set_items_opts = { do_match = true }, spawn_opts = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local executable, args = command[1], vim.list_slice(command, 2, #command)
@@ -536,46 +587,49 @@ MiniPick.set_picker_items_from_cli_output = function(command, opts)
   return process, pid
 end
 
-MiniPick.set_picker_match_inds = function(match_inds, query)
+---@seealso |MiniPick.get_picker_matches()|
+MiniPick.set_picker_match_inds = function(match_inds, target_query)
   if not vim.tbl_islist(match_inds) then H.error('`match_inds` should be list.') end
-  if H.pickers.active == nil then return end
-  H.picker_set_match_inds(H.pickers.active, match_inds, query)
+  if target_query ~= nil and not vim.tbl_islist(target_query) then H.error('`target_query` should be list.') end
+  if not MiniPick.is_picker_active() then return end
+
+  H.picker_set_match_inds(H.pickers.active, match_inds, target_query)
   H.picker_update(H.pickers.active, false)
 end
 
-MiniPick.get_picker_items = function() return (H.pickers.active or {}).items end
-
-MiniPick.get_picker_matches = function()
-  local picker = H.pickers.active
-  if picker == nil then return end
-  if picker.items == nil then return { all = nil, current = nil } end
-  local matches = vim.tbl_map(function(ind) return picker.items[ind] end, picker.match_inds)
-  return { all = matches, current = H.picker_get_current_item(picker) }
-end
-
+---@seealso |MiniPick.get_picker_opts()|
 MiniPick.set_picker_opts = function(opts)
-  if H.pickers.active == nil then return nil end
+  if not MiniPick.is_picker_active() then return end
   H.pickers.active.opts = vim.tbl_deep_extend('force', H.pickers.active.opts, opts or {})
 end
 
-MiniPick.get_picker_opts = function(opts) return (H.pickers.active or {}).opts end
-
-MiniPick.get_picker_data = function()
-  local picker = H.pickers.active
-  if picker == nil then return nil end
-  return { query = picker.query, is_busy = picker.is_busy, windows = picker.windows, buffers = picker.buffers }
-end
-
+---@seealso |MiniPick.get_picker_state()|
 MiniPick.set_picker_target_window = function(win_id)
-  if H.pickers.active == nil or not H.is_valid_win(win_id) then return end
+  if not (MiniPick.is_picker_active() and H.is_valid_win(win_id)) then return end
   H.pickers.active.windows.target = win_id
 end
 
+---@seealso |MiniPick.get_picker_query()|
+MiniPick.set_picker_query = function(query)
+  if not vim.tbl_islist(query) then H.error('`query` should be list.') end
+  if not MiniPick.is_picker_active() then return end
+
+  H.pickers.active.query, H.pickers.active.caret = query, #query + 1
+  local all_inds = H.seq_along(MiniPick.get_picker_items())
+  H.picker_set_match_inds(H.pickers.active, all_inds, query)
+  H.picker_update(H.pickers.active, true)
+end
+
+--- Get query tick
 MiniPick.get_querytick = function() return H.querytick end
 
+---@seealso |MiniPick.poke_is_picker_active()|
+MiniPick.is_picker_active = function() return H.pickers.active ~= nil end
+
+---@seealso |MiniPick.is_picker_active()|
 MiniPick.poke_is_picker_active = function()
   local co = coroutine.running()
-  if co == nil then return H.pickers.active ~= nil end
+  if co == nil then return MiniPick.is_picker_active() end
   H.schedule_resume_is_active(co)
   return coroutine.yield()
 end
@@ -603,6 +657,9 @@ H.pickers = { active = nil, latest = nil }
 
 -- Picker-independent counter of query updates
 H.querytick = 0
+
+-- General purpose cache
+H.cache = {}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -643,6 +700,7 @@ H.setup_config = function(config)
     ['mappings.move_start'] = { config.mappings.move_start, 'string' },
     ['mappings.move_up'] = { config.mappings.move_up, 'string' },
     ['mappings.paste'] = { config.mappings.paste, 'string' },
+    ['mappings.refine'] = { config.mappings.refine, 'string' },
     ['mappings.scroll_down'] = { config.mappings.scroll_down, 'string' },
     ['mappings.scroll_up'] = { config.mappings.scroll_up, 'string' },
     ['mappings.scroll_left'] = { config.mappings.scroll_left, 'string' },
@@ -816,8 +874,6 @@ H.picker_new = function(opts)
   local items = H.expand_callable(opts.source.items)
   if vim.tbl_islist(items) then vim.schedule(function() MiniPick.set_picker_items(items) end) end
 
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' })
-
   return picker
 end
 
@@ -826,9 +882,12 @@ H.picker_advance = function(picker)
 
   local do_match, is_aborted = false, false
   while true do
+    if H.cache.is_force_stop_advance then break end
     H.picker_update(picker, do_match)
 
     local char = H.getcharstr()
+    if H.cache.is_force_stop_advance then break end
+
     is_aborted = char == nil
     if is_aborted then break end
 
@@ -847,6 +906,7 @@ H.picker_advance = function(picker)
 
   local item
   if not is_aborted then item = H.picker_get_current_item(picker) end
+  H.cache.is_force_stop_advance = nil
   H.picker_stop(picker)
   return item
 end
@@ -974,9 +1034,9 @@ H.picker_set_current_ind = function(picker, ind, force_update)
   ind = (ind - 1) % n_matches + 1
 
   -- (Re)Compute visible range (centers current index if it is currently outside)
-  local from, to = picker.visible_range.from, picker.visible_range.to
-  local should_update = force_update or from == nil or to == nil or not (from <= ind and ind <= to)
-  if should_update and H.is_valid_win(picker.windows.main) then
+  local from, to, querytick = picker.visible_range.from, picker.visible_range.to, picker.visible_range.querytick
+  local needs_update = H.querytick ~= querytick or from == nil or to == nil or not (from <= ind and ind <= to)
+  if (force_update or needs_update) and H.is_valid_win(picker.windows.main) then
     local win_height = vim.api.nvim_win_get_height(picker.windows.main)
     to = math.min(n_matches, math.floor(ind + 0.5 * win_height))
     from = math.max(1, to - win_height + 1)
@@ -985,7 +1045,7 @@ H.picker_set_current_ind = function(picker, ind, force_update)
 
   -- Set data
   picker.current_ind = ind
-  picker.visible_range = { from = from, to = to }
+  picker.visible_range = { from = from, to = to, querytick = H.querytick }
 end
 
 H.picker_set_lines = function(picker)
@@ -1205,6 +1265,24 @@ H.actions = {
     for i = 1, vim.fn.strchars(reg_contents) do
       H.picker_query_add(picker, vim.fn.strcharpart(reg_contents, i - 1, 1))
     end
+  end,
+
+  refine = function(picker, _)
+    -- Make current matches be new items to be matched with default match
+    MiniPick.set_picker_items(MiniPick.get_picker_matches().all)
+    picker.opts.content.match = H.get_config().content.match or MiniPick.default_match
+
+    local cur_name, new_name = picker.opts.source.name, nil
+    local refine_start, _, digits = cur_name:find('%(Refine( ?%d*)%)$')
+    if refine_start == nil then
+      new_name = cur_name .. ' (Refine)'
+    else
+      local new_refine = string.format('(Refine %d)', (tonumber(digits) or 1) + 1)
+      new_name = cur_name:sub(1, refine_start - 1) .. new_refine
+    end
+    picker.opts.source.name = new_name
+
+    MiniPick.set_picker_query({})
   end,
 
   scroll_down  = function(picker, _) H.picker_scroll(picker, 'down')  end,
@@ -1725,7 +1803,7 @@ end
 
 -- Default choose -------------------------------------------------------------
 H.choose_path = function(item_data)
-  local win_target = (MiniPick.get_picker_data().windows or {}).target
+  local win_target = (MiniPick.get_picker_state().windows or {}).target
   if win_target == nil or not H.is_valid_win(win_target) then return end
 
   local path, line, col = item_data.value, item_data.line, item_data.col
@@ -1749,7 +1827,7 @@ H.choose_path = function(item_data)
 end
 
 H.choose_buffer = function(item_data)
-  local win_target = (MiniPick.get_picker_data().windows or {}).target
+  local win_target = (MiniPick.get_picker_state().windows or {}).target
   if win_target == nil or not H.is_valid_win(win_target) then return end
   H.set_winbuf(win_target, item_data.value)
   H.choose_set_cursor(win_target, item_data.line, item_data.col)
@@ -1764,16 +1842,30 @@ H.choose_set_cursor = function(win_id, line, col)
 end
 
 -- Builtins -------------------------------------------------------------------
+H.cli_output_postprocess = function(items)
+  while items[#items] == '' do
+    items[#items] = nil
+  end
+  return items
+end
+
+H.is_executable = function(tool)
+  if tool == 'fallback' then return true end
+  return vim.fn.executable(tool) == 1
+end
+
 H.files_get_tool = function()
-  if vim.fn.executable('fd') == 1 then return 'fd' end
-  if vim.fn.executable('rg') == 1 then return 'rg' end
-  if vim.fn.executable('find') == 1 then return 'find' end
+  if H.is_executable('rg') then return 'rg' end
+  if H.is_executable('fd') then return 'fd' end
+  if H.is_executable('git') then return 'git' end
+  if H.is_executable('find') then return 'find' end
   return 'fallback'
 end
 
 H.files_get_command = function(tool)
-  if tool == 'fd' then return { 'fd', '--type=f', '--hidden', '--follow', '--color=never', '--exclude=.git' } end
   if tool == 'rg' then return { 'rg', '--files', '--hidden', '--follow', '--color=never', '-g', '!.git' } end
+  if tool == 'fd' then return { 'fd', '--type=f', '--hidden', '--follow', '--color=never', '--exclude=.git' } end
+  if tool == 'git' then return { 'git', 'ls-files', '--cached', '--others', '--exclude-standard' } end
   if tool == 'find' then return { 'find', '-type', 'f', '-not', '-path', [[*/\.git/*]], '-printf', '%P\n' } end
   H.error([[Wrong 'tool' for `files` builtin.]])
 end
@@ -1794,18 +1886,19 @@ H.files_fallback_items = function()
 end
 
 H.grep_get_tool = function()
-  if vim.fn.executable('rg') == 1 then return 'rg' end
+  if H.is_executable('rg') then return 'rg' end
+  if H.is_executable('git') then return 'git' end
   return 'fallback'
 end
 
 H.grep_get_command = function(tool, pattern)
   if tool == 'rg' then
-    --stylua: ignore
-    return {
-      'rg',
-      '--column', '--line-number', '--no-heading', '--color=never', '--smart-case', '--max-columns=2048',
-      '--', pattern,
-    }
+    return { 'rg', '--column', '--line-number', '--no-heading', '--color=never', '--smart-case', '--', pattern }
+  end
+  if tool == 'git' then
+    local res = { 'git', 'grep', '--column', '--line-number', '--color=never', '--', pattern }
+    if vim.o.ignorecase then table.insert(res, 6, '--ignore-case') end
+    return res
   end
   H.error([[Wrong 'tool' for `grep` builtin.]])
 end
@@ -1836,7 +1929,7 @@ H.grep_fallback_items = function(pattern)
 end
 
 -- Async ----------------------------------------------------------------------
-H.schedule_resume_is_active = vim.schedule_wrap(function(co) coroutine.resume(co, H.pickers.active ~= nil) end)
+H.schedule_resume_is_active = vim.schedule_wrap(function(co) coroutine.resume(co, MiniPick.is_picker_active()) end)
 
 H.poke_picker_every_n = function(n, querytick_ref)
   local count, dont_check_querytick = 0, querytick_ref == nil
@@ -1901,11 +1994,13 @@ H.redraw_scheduled = vim.schedule_wrap(H.redraw)
 H.getcharstr = function()
   -- Ensure that redraws still happen
   H.timers.getcharstr:start(0, H.get_config().delay.async, H.redraw_scheduled)
+  H.cache.is_in_getcharstr = true
   local ok, char = pcall(vim.fn.getcharstr)
+  H.cache.is_in_getcharstr = nil
   H.timers.getcharstr:stop()
 
-  -- Terminate if couldn't get input (like with <C-c>)
-  if not ok or char == '' then return end
+  -- Terminate if couldn't get input or on hard-coded <C-c>
+  if not ok or char == '' or char == '\3' then return end
   return char
 end
 
@@ -1933,6 +2028,7 @@ H.win_get_bottom_border = function(win_id)
 end
 
 H.seq_along = function(arr)
+  if arr == nil then return nil end
   local res = {}
   for i = 1, #arr do
     table.insert(res, i)
