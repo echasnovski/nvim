@@ -1,17 +1,8 @@
 -- TODO:
 --
--- - Add note about example for "switch to built-in fuzzy match when doing live
---   grep".
---
 -- - Close on lost focus.
 --
--- - Make sure all actions work when `items` is not yet set.
---
 -- - Profile memory usage.
---
--- - Adapter for Telescope "native" sorters.
---
--- - Adapter for Telescope extensions.
 --
 -- Tests:
 --
@@ -22,6 +13,18 @@
 -- - Works with multibyte characters.
 --
 -- - Builtin:
+--     - Files:
+--         - Respects `source.cwd`.
+--
+--     - Grep:
+--         - Respects `source.cwd`.
+--
+--     - Grep live:
+--         - Respects `source.cwd`.
+--
+--     - CLI:
+--         - Respects `source.cwd`.
+--
 --     - Help:
 --         - Works when "Open tag" -> "Open tag in same file".
 --         - Can be properly aborted.
@@ -92,9 +95,9 @@
 ---
 --- See |MiniPick.config| for available config settings.
 ---
---- You can override runtime config settings (but not `config.mappings`) locally
---- to buffer inside `vim.b.minioperators_config` which should have same structure
---- as `MiniPick.config`. See |mini.nvim-buffer-local-config| for more details.
+--- You can override runtime config settings locally to buffer inside
+--- `vim.b.minioperators_config` which should have same structure as
+--- `MiniPick.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons ~
 ---
@@ -116,14 +119,6 @@
 --- * `MiniPickPrompt` - prompt.
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
----
---- # Disabling ~
----
---- To disable main functionality, set `vim.g.minipick_disable` (globally) or
---- `vim.b.minipick_disable` (for a buffer) to `true`. Considering high number
---- of different scenarios and customization intentions, writing exact rules
---- for disabling module's functionality is left to user. See
---- |mini.nvim-disabling-recipes| for common recipes.
 
 ---@MiniPick-events
 
@@ -241,6 +236,7 @@ MiniPick.config = {
   source = {
     name = nil,
     items = nil,
+    cwd = nil,
     preview = nil,
     choose = nil,
     choose_all = nil,
@@ -306,7 +302,10 @@ MiniPick.default_show = function(items, buf_id, opts)
   local lines, prefixes = vim.tbl_map(H.item_to_string, items), {}
   lines = vim.tbl_map(function(l) return l:gsub('\n', ' ') end, lines)
 
-  if opts.show_icons then prefixes = vim.tbl_map(H.get_icon, lines) end
+  if opts.show_icons then
+    local cwd = H.get_cwd()
+    prefixes = vim.tbl_map(function(l) return H.get_icon(l, cwd) end, lines)
+  end
   local lines_to_show = {}
   for i, l in ipairs(lines) do
     lines_to_show[i] = (prefixes[i] or '') .. l
@@ -400,29 +399,29 @@ MiniPick.builtin = {}
 
 MiniPick.builtin.files = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { tool = nil }, local_opts or {})
-  opts = vim.tbl_deep_extend('force', { source = { name = 'Files' } }, opts or {})
-
   local tool = local_opts.tool or H.files_get_tool()
+  opts = vim.tbl_deep_extend('force', { source = { name = string.format('Files (%s)', tool) } }, opts or {})
+
   if tool == 'fallback' then
     opts.source.items = H.files_fallback_items
     return MiniPick.start(opts)
   end
 
-  return MiniPick.builtin.cli_output({ command = H.files_get_command(tool) }, opts)
+  return MiniPick.builtin.cli({ command = H.files_get_command(tool) }, opts)
 end
 
 MiniPick.builtin.grep = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { tool = nil, pattern = nil }, local_opts or {})
-  opts = vim.tbl_deep_extend('force', { source = { name = 'Grep' } }, opts or {})
-
   local tool = local_opts.tool or H.grep_get_tool()
+  opts = vim.tbl_deep_extend('force', { source = { name = string.format('Grep (%s)', tool) } }, opts or {})
+
   local pattern = type(local_opts.pattern) == 'string' and local_opts.pattern or vim.fn.input('Grep pattern: ')
   if tool == 'fallback' then
     opts.source.items = function() H.grep_fallback_items(pattern) end
     return MiniPick.start(opts)
   end
 
-  return MiniPick.builtin.cli_output({ command = H.grep_get_command(tool, pattern) }, opts)
+  return MiniPick.builtin.cli({ command = H.grep_get_command(tool, pattern) }, opts)
 end
 
 MiniPick.builtin.grep_live = function(local_opts, opts)
@@ -430,7 +429,10 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
   local tool = local_opts.tool or H.grep_get_tool()
   if tool == 'fallback' or not H.is_executable(tool) then H.error('`grep_live` needs non-fallback executable tool.') end
 
-  local process, set_items_opts = nil, { do_match = false, querytick = H.querytick }
+  opts = vim.tbl_deep_extend('force', { source = { name = string.format('Grep live (%s)', tool) } }, opts or {})
+
+  local set_items_opts, spawn_opts = { do_match = false, querytick = H.querytick }, { cwd = opts.source.cwd }
+  local process
   local match = function(_, _, query)
     if H.querytick == set_items_opts.querytick then return end
     if #query == 0 then return MiniPick.set_picker_items({}, set_items_opts) end
@@ -438,12 +440,10 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
     set_items_opts.querytick = H.querytick
     pcall(vim.loop.process_kill, process)
     local command = H.grep_get_command('rg', table.concat(query))
-    process = MiniPick.set_picker_items_from_cli_output(command, { set_items_opts = set_items_opts })
+    process = MiniPick.set_picker_items_from_cli(command, { set_items_opts = set_items_opts, spawn_opts = spawn_opts })
   end
 
-  local default_opts = { source = { name = 'Grep live' } }
-  local forced_opts = { source = { items = {} }, content = { match = match } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, forced_opts)
+  opts = vim.tbl_deep_extend('force', opts or {}, { source = { items = {} }, content = { match = match } })
   return MiniPick.start(opts)
 end
 
@@ -497,12 +497,14 @@ MiniPick.builtin.buffers = function(local_opts, opts)
   MiniPick.start(opts)
 end
 
-MiniPick.builtin.cli_output = function(local_opts, opts)
+MiniPick.builtin.cli = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { command = {}, postprocess = nil, spawn_opts = {} }, local_opts or {})
+  opts = vim.tbl_deep_extend('force', { source = { name = 'CLI output' } }, opts or {})
+
   local command = local_opts.command
-  local cli_output_opts = { postprocess = local_opts.postprocess, spawn_opts = local_opts.spawn_opts }
-  local items = vim.schedule_wrap(function() MiniPick.set_picker_items_from_cli_output(command, cli_output_opts) end)
-  opts = vim.tbl_deep_extend('force', { source = { name = 'CLI output' } }, opts or {}, { source = { items = items } })
+  local set_from_cli_opts = { postprocess = local_opts.postprocess, spawn_opts = local_opts.spawn_opts }
+  set_from_cli_opts.spawn_opts.cwd = set_from_cli_opts.spawn_opts.cwd or opts.source.cwd
+  opts.source.items = vim.schedule_wrap(function() MiniPick.set_picker_items_from_cli(command, set_from_cli_opts) end)
   return MiniPick.start(opts)
 end
 
@@ -520,7 +522,7 @@ MiniPick.builtin.resume = function()
   return H.picker_advance(picker)
 end
 
----@seealso |MiniPick.set_picker_items()| and |MiniPick.set_picker_items_from_cli_output()|
+---@seealso |MiniPick.set_picker_items()| and |MiniPick.set_picker_items_from_cli()|
 MiniPick.get_picker_items = function() return vim.deepcopy((H.pickers.active or {}).items) end
 
 ---@seealso |MiniPick.set_picker_match_inds()|
@@ -559,15 +561,16 @@ MiniPick.set_picker_items = function(items, opts)
 end
 
 ---@seealso |MiniPick.get_picker_items()|
-MiniPick.set_picker_items_from_cli_output = function(command, opts)
+MiniPick.set_picker_items_from_cli = function(command, opts)
   if not vim.tbl_islist(command) then H.error('`command` should be an array of strings.') end
   if not MiniPick.is_picker_active() then return end
-  local default_opts = { postprocess = H.cli_output_postprocess, set_items_opts = { do_match = true }, spawn_opts = {} }
+  local default_opts = { postprocess = H.cli_postprocess, set_items_opts = { do_match = true }, spawn_opts = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local executable, args = command[1], vim.list_slice(command, 2, #command)
   local process, pid, stdout = nil, nil, vim.loop.new_pipe()
   local spawn_opts = vim.tbl_deep_extend('force', opts.spawn_opts, { args = args, stdio = { nil, stdout, nil } })
+  if type(spawn_opts.cwd) == 'string' then spawn_opts.cwd = vim.fn.fnamemodify(spawn_opts.cwd, ':p') end
   process, pid = vim.loop.spawn(executable, spawn_opts, function() process:close() end)
 
   local data_feed = {}
@@ -711,6 +714,7 @@ H.setup_config = function(config)
 
     ['source.items'] = { config.source.items, 'table', true },
     ['source.name'] = { config.source.name, 'string', true },
+    ['source.cwd'] = { config.source.cwd, 'string', true },
     ['source.preview'] = { config.source.preview, 'function', true },
     ['source.choose'] = { config.source.choose, 'function', true },
     ['source.choose_all'] = { config.source.choose_all, 'function', true },
@@ -726,8 +730,6 @@ H.setup_config = function(config)
 end
 
 H.apply_config = function(config) MiniPick.config = config end
-
-H.is_disabled = function() return vim.g.minipick_disable == true or vim.b.minipick_disable == true end
 
 H.get_config =
   function(config) return vim.tbl_deep_extend('force', MiniPick.config, vim.b.minipick_config or {}, config or {}) end
@@ -777,6 +779,9 @@ H.validate_picker_opts = function(opts)
   if not is_valid_items then H.error('`source.items` should be list or callable.') end
 
   source.name = tostring(source.name or '<No name>')
+
+  source.cwd = type(source.cwd) == 'string' and vim.fn.fnamemodify(source.cwd, ':p') or vim.fn.getcwd()
+  if vim.fn.isdirectory(source.cwd) == 0 then H.error('`source.cwd` should be a valid directory path.') end
 
   source.preview = source.preview or MiniPick.default_preview
   validate_callable(source.preview, 'source.preview')
@@ -1268,21 +1273,17 @@ H.actions = {
   end,
 
   refine = function(picker, _)
+    if picker.items == nil then return end
+
     -- Make current matches be new items to be matched with default match
-    MiniPick.set_picker_items(MiniPick.get_picker_matches().all)
     picker.opts.content.match = H.get_config().content.match or MiniPick.default_match
+    picker.query, picker.caret = {}, 1
+    MiniPick.set_picker_items(MiniPick.get_picker_matches().all)
 
-    local cur_name, new_name = picker.opts.source.name, nil
-    local refine_start, _, digits = cur_name:find('%(Refine( ?%d*)%)$')
-    if refine_start == nil then
-      new_name = cur_name .. ' (Refine)'
-    else
-      local new_refine = string.format('(Refine %d)', (tonumber(digits) or 1) + 1)
-      new_name = cur_name:sub(1, refine_start - 1) .. new_refine
-    end
-    picker.opts.source.name = new_name
-
-    MiniPick.set_picker_query({})
+    picker._refine = picker._refine or { orig_name = picker.opts.source.name, count = 0 }
+    picker._refine.count = picker._refine.count + 1
+    local count_suffix = picker._refine.count == 1 and '' or (' ' .. picker._refine.count)
+    picker.opts.source.name = string.format('%s (Refine%s)', picker._refine.orig_name, count_suffix)
   end,
 
   scroll_down  = function(picker, _) H.picker_scroll(picker, 'down')  end,
@@ -1635,10 +1636,10 @@ H.match_sort = function(match_data)
 end
 
 -- Default show ---------------------------------------------------------------
-H.get_icon = function(x)
-  if vim.fn.isdirectory(x) == 1 then return ' ' end
-  local path = H.parse_file_path(x)
-  if vim.fn.filereadable(path) == 0 then return '  ' end
+H.get_icon = function(x, cwd)
+  local path_type, path = H.parse_path(x, cwd)
+  if path_type == 'directory' then return ' ' end
+  if path_type == 'none' then return '  ' end
   local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
   if not has_devicons then return ' ' end
 
@@ -1654,12 +1655,9 @@ H.parse_item = function(item)
   -- Parse item's string representation
   local stritem = H.item_to_string(item)
 
-  -- - File
-  local path, line, col, rest = H.parse_file_path(stritem)
-  if vim.fn.filereadable(path) == 1 then return { type = 'file', value = path, line = line, col = col, text = rest } end
-
-  -- - Directory
-  if vim.fn.isdirectory(stritem) == 1 then return { type = 'directory', value = stritem } end
+  -- File or Directory
+  local path_type, path, line, col, rest = H.parse_path(stritem, H.get_cwd())
+  if path_type ~= 'none' then return { type = path_type, value = path, line = line, col = col, text = rest } end
 
   -- - Buffer
   local ok, numitem = pcall(tonumber, stritem)
@@ -1669,13 +1667,10 @@ H.parse_item = function(item)
 end
 
 H.parse_item_table = function(item)
-  local item_path = type(item) == 'table' and item.path or ''
-  local item_buf_id = type(item) == 'table' and (item.buf_id or item.bufnr or item.buf) or nil
-
-  -- File and directory
+  -- File or Directory
   if type(item.path) == 'string' then
-    local path, line, col, rest = H.parse_file_path(item.path)
-    if vim.fn.filereadable(path) == 1 then
+    local path_type, path, line, col, rest = H.parse_path(item.path, H.get_cwd())
+    if path_type == 'file' then
       --stylua: ignore
       return {
         type = 'file',            value    = path,
@@ -1685,7 +1680,7 @@ H.parse_item_table = function(item)
       }
     end
 
-    if vim.fn.isdirectory(item.path) == 1 then return { type = 'directory', value = item.path } end
+    if path_type == 'directory' then return { type = 'directory', value = item.path } end
   end
 
   -- Buffer
@@ -1702,14 +1697,33 @@ H.parse_item_table = function(item)
   return {}
 end
 
-H.parse_file_path = function(x)
+H.parse_path = function(x, cwd)
   if type(x) ~= 'string' then return nil end
   -- Allow inputs like 'aa/bb', 'aa/bb:10', 'aa/bb:10:5', 'aa/bb:10:5:xxx'
   -- Should also work for paths like 'aa-5'
   local location_pattern = ':(%d+):?(%d*)(.*)$'
   local line, col, rest = x:match(location_pattern)
   local path = x:gsub(location_pattern, '', 1)
-  return path, tonumber(line), tonumber(col), rest or ''
+
+  -- Verify that path is real
+  local path_type = H.get_fs_type(path)
+  if path_type == 'none' then
+    path = string.format('%s/%s', cwd, path)
+    path_type = H.get_fs_type(path)
+  end
+
+  return path_type, path, tonumber(line), tonumber(col), rest or ''
+end
+
+H.get_cwd = function()
+  if H.pickers.active == nil then return vim.fn.getcwd() end
+  return H.pickers.active.opts.source.cwd
+end
+
+H.get_fs_type = function(path)
+  if vim.fn.filereadable(path) == 1 then return 'file' end
+  if vim.fn.isdirectory(path) == 1 then return 'directory' end
+  return 'none'
 end
 
 -- Default preview ------------------------------------------------------------
@@ -1777,8 +1791,9 @@ H.preview_set_lines = function(win_id, buf_id, lines, extra)
 
   if vim.fn.has('nvim-0.8') == 1 then
     local ft = extra.filetype or vim.filetype.match({ buf = buf_id, filename = extra.path })
-    local ok, _ = pcall(vim.treesitter.start, buf_id, ft)
-    if not ok then vim.bo[buf_id].syntax = ft end
+    local has_lang, lang = pcall(vim.treesitter.language.get_lang, ft)
+    local has_ts, _ = pcall(vim.treesitter.start, buf_id, has_lang and lang or ft)
+    if not has_ts then vim.bo[buf_id].syntax = ft end
   end
 end
 
@@ -1842,7 +1857,7 @@ H.choose_set_cursor = function(win_id, line, col)
 end
 
 -- Builtins -------------------------------------------------------------------
-H.cli_output_postprocess = function(items)
+H.cli_postprocess = function(items)
   while items[#items] == '' do
     items[#items] = nil
   end
@@ -1863,10 +1878,9 @@ H.files_get_tool = function()
 end
 
 H.files_get_command = function(tool)
-  if tool == 'rg' then return { 'rg', '--files', '--hidden', '--follow', '--color=never', '-g', '!.git' } end
-  if tool == 'fd' then return { 'fd', '--type=f', '--hidden', '--follow', '--color=never', '--exclude=.git' } end
+  if tool == 'rg' then return { 'rg', '--files', '--hidden', '--no-follow', '--color=never', '-g', '!.git' } end
+  if tool == 'fd' then return { 'fd', '--type=f', '--hidden', '--no-follow', '--color=never', '--exclude=.git' } end
   if tool == 'git' then return { 'git', 'ls-files', '--cached', '--others', '--exclude-standard' } end
-  if tool == 'find' then return { 'find', '-type', 'f', '-not', '-path', [[*/\.git/*]], '-printf', '%P\n' } end
   H.error([[Wrong 'tool' for `files` builtin.]])
 end
 
@@ -1891,9 +1905,13 @@ H.grep_get_tool = function()
   return 'fallback'
 end
 
+--stylua: ignore
 H.grep_get_command = function(tool, pattern)
   if tool == 'rg' then
-    return { 'rg', '--column', '--line-number', '--no-heading', '--color=never', '--smart-case', '--', pattern }
+    return {
+      'rg', '--column', '--line-number', '--no-heading', '--hidden', '--no-follow', '--color=never', '--smart-case',
+      '--', pattern,
+    }
   end
   if tool == 'git' then
     local res = { 'git', 'grep', '--column', '--line-number', '--color=never', '--', pattern }
