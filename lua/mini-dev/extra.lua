@@ -80,16 +80,15 @@ MiniExtra.config = {}
 
 MiniExtra.pickers = {}
 
--- TODO: Make respect `cwd`
 MiniExtra.pickers.diagnostic = function(local_opts, opts)
-  local_opts = vim.tbl_deep_extend('force', { bufnr = nil, get_opts = {}, sort_by_severity = true }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { buf_id = nil, get_opts = {}, sort_by_severity = true }, local_opts or {})
 
   local plus_one = function(x)
     if x == nil then return nil end
     return x + 1
   end
 
-  local items = vim.diagnostic.get(local_opts.bufnr, local_opts.get_opts)
+  local items = vim.diagnostic.get(local_opts.buf_id, local_opts.get_opts)
   -- NOTE: Account for output of `vim.diagnostic.get()` being  modifiable:
   -- https://github.com/neovim/neovim/pull/25010
   if vim.fn.has('nvim-0.10') == 0 then items = vim.deepcopy(items) end
@@ -100,8 +99,7 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   -- Compute final path width
   local path_width = 0
   for _, item in ipairs(items) do
-    item.path = ''
-    if H.is_valid_buf(item.bufnr) then item.path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(item.bufnr), ':.') end
+    item.path = H.buf_get_name(item.bufnr) or ''
     path_width = math.max(path_width, vim.fn.strchars(item.path))
   end
 
@@ -140,6 +138,64 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   return MiniPick.start(opts)
 end
 
+MiniExtra.pickers.oldfiles = function(local_opts, opts)
+  local_opts = vim.tbl_deep_extend('force', { include_current_session = true }, local_opts or {})
+
+  -- Compute recency (the more the less recent) of readable files
+  local file_times, oldfiles = {}, vim.v.oldfiles or {}
+  for i = 1, #oldfiles do
+    if vim.fn.filereadable(oldfiles[i]) == 1 then file_times[oldfiles[i]] = i end
+  end
+
+  if local_opts.include_current_session then
+    local good_bufs = vim.tbl_filter(
+      function(x) return vim.fn.filereadable(x.name) == 1 end,
+      vim.fn.getbufinfo({ buflisted = true })
+    )
+    for _, buf_info in ipairs(good_bufs) do
+      file_times[buf_info.name] = -buf_info.lastused
+    end
+  end
+
+  -- Compute items from most to least recent
+  local files_with_times = {}
+  for path, time in pairs(file_times) do
+    table.insert(files_with_times, { path = path, time = time })
+  end
+  table.sort(files_with_times, function(a, b) return a.time < b.time end)
+  local items = vim.tbl_map(function(x) return vim.fn.fnamemodify(x.path, ':.') end, files_with_times)
+
+  opts = vim.tbl_deep_extend('force', { source = { name = 'Oldfiles' } }, opts or {}, { source = { items = items } })
+  MiniPick.start(opts)
+end
+
+MiniExtra.pickers.buffer_lines = function(local_opts, opts)
+  local_opts = vim.tbl_deep_extend('force', { buf_id = nil }, local_opts or {})
+  local buffers, show_source = {}, true
+  if H.is_valid_buf(local_opts.buf_id) then
+    buffers, show_source = { local_opts.buf_id }, false
+  else
+    for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.bo[buf_id].buflisted and vim.bo[buf_id].buftype == '' then table.insert(buffers, buf_id) end
+    end
+  end
+
+  local items = {}
+  for _, buf_id in ipairs(buffers) do
+    H.buf_ensure_loaded(buf_id)
+    local buf_name = H.buf_get_name(buf_id) or ''
+    for lnum, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
+      local prefix = show_source and string.format('%s:%s:', buf_name, lnum) or ''
+      local item = { item = string.format('%s%s', prefix, l), buf_id = buf_id, lnum = lnum }
+      table.insert(items, item)
+    end
+  end
+
+  local default_opts = { source = { name = 'Buffer lines' } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
+  MiniPick.start(opts)
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniExtra.config
@@ -162,9 +218,24 @@ H.pickers_highlight_line = function(buf_id, line, hl_group)
 end
 
 -- Utilities ------------------------------------------------------------------
-H.error = function(msg) error(string.format('(mini.pick) %s', msg), 0) end
+H.error = function(msg) error(string.format('(mini.extra) %s', msg), 0) end
 
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
+
+H.buf_ensure_loaded = function(buf_id)
+  if type(buf_id) ~= 'number' or vim.api.nvim_buf_is_loaded(buf_id) then return end
+  local cache_eventignore = vim.o.eventignore
+  vim.o.eventignore = 'BufEnter'
+  vim.fn.bufload(buf_id)
+  vim.o.eventignore = cache_eventignore
+end
+
+H.buf_get_name = function(buf_id)
+  if not H.is_valid_buf(buf_id) then return nil end
+  local buf_name = vim.api.nvim_buf_get_name(buf_id)
+  if buf_name ~= '' then buf_name = vim.fn.fnamemodify(buf_name, ':.') end
+  return buf_name
+end
 
 H.ensure_text_width = function(text, width)
   local text_width = vim.fn.strchars(text)
