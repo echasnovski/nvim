@@ -128,8 +128,9 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
     end
 
     vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    H.pickers_clear_namespace(buf_id)
     for i = 1, #lines do
-      H.pickers_highlight_line(buf_id, i, hl_groups[i])
+      H.pickers_highlight_line(buf_id, i, hl_groups[i], 199)
     end
   end
 
@@ -138,6 +139,8 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   return MiniPick.start(opts)
 end
 
+-- TODO: Think about tracking **all** buffers (as in 'mini.bracketed') and not
+-- just use current buffers.
 MiniExtra.pickers.oldfiles = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { include_current_session = true }, local_opts or {})
 
@@ -169,7 +172,7 @@ MiniExtra.pickers.oldfiles = function(local_opts, opts)
   MiniPick.start(opts)
 end
 
-MiniExtra.pickers.buffer_lines = function(local_opts, opts)
+MiniExtra.pickers.buf_lines = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { buf_id = nil }, local_opts or {})
   local buffers, show_source = {}, true
   if H.is_valid_buf(local_opts.buf_id) then
@@ -180,20 +183,132 @@ MiniExtra.pickers.buffer_lines = function(local_opts, opts)
     end
   end
 
+  -- TODO: make it async because first loading takes visible time
   local items = {}
   for _, buf_id in ipairs(buffers) do
     H.buf_ensure_loaded(buf_id)
     local buf_name = H.buf_get_name(buf_id) or ''
     for lnum, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
-      local prefix = show_source and string.format('%s:%s:', buf_name, lnum) or ''
-      local item = { item = string.format('%s%s', prefix, l), buf_id = buf_id, lnum = lnum }
+      local prefix = show_source and string.format('%s:', buf_name) or ''
+      local item = { item = string.format('%s%s:%s', prefix, lnum, l), buf_id = buf_id, lnum = lnum }
       table.insert(items, item)
     end
   end
 
-  local default_opts = { source = { name = 'Buffer lines' } }
+  local show = show_source and H.show_with_icons or nil
+  local default_opts = { source = { name = 'Buffer lines' }, content = { show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
-  MiniPick.start(opts)
+  return MiniPick.start(opts)
+end
+
+MiniExtra.pickers.history = function(local_opts, opts)
+  local_opts = vim.tbl_deep_extend('force', { name = 'all' }, local_opts or {})
+
+  -- Validate name
+  local name = local_opts.name
+  --stylua: ignore
+  local name_ids = {
+    cmd = ':',   search = '/', expr  = '=', input = '@', debug = '>',
+    [':'] = ':', ['/']  = '/', ['='] = '=', ['@'] = '@', ['>'] = '>',
+    ['?'] = '?',
+  }
+  if not (name == 'all' or name_ids[name] ~= nil) then
+    H.error('`local_opts.name` in `pickers.history()` should be a valid full name for `:history` command.')
+  end
+
+  -- Construct items
+  local items = {}
+  local all_names = name == 'all' and { 'cmd', 'search', 'expr', 'input', 'debug' } or { name }
+  for _, cur_name in ipairs(all_names) do
+    local cmd_output = vim.api.nvim_exec(':history ' .. cur_name, true)
+    local lines = vim.split(cmd_output, '\n')
+    local id = name_ids[cur_name]
+    -- Output of `:history` is sorted from oldest to newest
+    for i = #lines, 2, -1 do
+      local hist_entry = lines[i]:match('^.-%-?%d+%s+(.*)$')
+      table.insert(items, string.format('%s %s', id, hist_entry))
+    end
+  end
+
+  -- Define functions
+  local choose = function(item)
+    if type(item) ~= 'string' then return end
+    local id, entry = item:match('^(.) (.*)$')
+    if id == ':' then vim.schedule(function() vim.cmd(entry) end) end
+    if id == '/' or id == '?' then vim.schedule(function() vim.fn.feedkeys(id .. entry .. '\r', 'nx') end) end
+  end
+
+  local choose_all = H.pickers_make_choose_all_first(choose)
+  local preview = H.pickers_make_no_preview('history')
+  local default_source =
+    { name = string.format('History (%s)', name), preview = preview, choose = choose, choose_all = choose_all }
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
+  return MiniPick.start(opts)
+end
+
+MiniExtra.pickers.hl_groups = function(local_opts, opts)
+  local_opts = local_opts or {}
+
+  local group_data = vim.split(vim.api.nvim_exec('highlight', true), '\n')
+  local items = {}
+  for _, l in ipairs(group_data) do
+    local group = l:match('^(%S+)')
+    if group ~= nil then table.insert(items, group) end
+  end
+
+  local show = function(items_to_show, buf_id)
+    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, items_to_show)
+    H.pickers_clear_namespace(buf_id)
+    -- Highlight line with highlight group of its item
+    for i = 1, #items_to_show do
+      H.pickers_highlight_line(buf_id, i, items_to_show[i], 300)
+    end
+  end
+
+  local preview = function(item, win_id)
+    local buf_id = H.buf_new_scratch()
+    local lines = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')
+    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    vim.api.nvim_win_set_buf(win_id, buf_id)
+  end
+
+  local choose = function(item)
+    local hl_def = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')[1]
+    hl_def = hl_def:gsub('^(%S+)%s+xxx%s+', '%1 ')
+    vim.schedule(function() vim.fn.feedkeys(':hi ' .. hl_def, 'n') end)
+  end
+
+  local choose_all = H.pickers_make_choose_all_first(choose)
+
+  local default_source = { name = 'Highlight groups', preview = preview, choose = choose, choose_all = choose_all }
+  local default_opts = { source = default_source, content = { show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
+  return MiniPick.start(opts)
+end
+
+MiniExtra.pickers.commands = function(local_opts, opts) end
+
+MiniExtra.pickers.git_files = function(local_opts, opts) end
+
+MiniExtra.pickers.git_commits = function(local_opts, opts) end
+
+MiniExtra.pickers.git_brances = function(local_opts, opts) end
+
+-- ???Heuristically computed "best" files???
+MiniExtra.pickers.frecency = function(local_opts, opts) end
+
+MiniExtra.pickers.options = function(local_opts, opts) end
+
+-- "quickfix", "location", "jump", "change"
+MiniExtra.pickers.list = function(local_opts, opts)
+  local_opts = vim.tbl_deep_extend('force', { name = 'all' }, local_opts or {})
+
+  -- Validate name
+  local name = local_opts.name
+  local name_ids = { quickfix = 'Q', location = 'L', jump = 'J', change = 'C' }
+  if not (name == 'all' or name_ids[name] ~= nil) then
+    H.error('`local_opts.name` in `pickers.list()` should be one of "quickfix", "location", "jump", "change".')
+  end
 end
 
 -- Helper data ================================================================
@@ -212,9 +327,27 @@ H.setup_config = function(config) end
 H.apply_config = function(config) MiniExtra.config = config end
 
 -- Pickers --------------------------------------------------------------------
-H.pickers_highlight_line = function(buf_id, line, hl_group)
-  local opts = { end_row = line, end_col = 0, hl_mode = 'combine', hl_group = hl_group, priority = 199 }
+H.pickers_highlight_line = function(buf_id, line, hl_group, priority)
+  local opts = { end_row = line, end_col = 0, hl_mode = 'blend', hl_group = hl_group, priority = priority }
   vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.pickers, line - 1, 0, opts)
+end
+
+H.pickers_clear_namespace = function(buf_id) pcall(vim.api.nvim_buf_clear_namespace, buf_id, 0, -1) end
+
+H.pickers_make_no_preview = function(picker_name)
+  local msg = string.format('No preview available for `%s` picker', picker_name)
+  return function(_, win_id)
+    local buf_id = H.buf_new_scratch()
+    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, { msg })
+    vim.api.nvim_win_set_buf(win_id, buf_id)
+  end
+end
+
+H.pickers_make_choose_all_first = function(choose_single)
+  return function(items)
+    if #items == 0 then return end
+    choose_single(items[1])
+  end
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -237,10 +370,18 @@ H.buf_get_name = function(buf_id)
   return buf_name
 end
 
+H.buf_new_scratch = function()
+  local buf_id = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf_id].bufhidden = 'wipe'
+  return buf_id
+end
+
 H.ensure_text_width = function(text, width)
   local text_width = vim.fn.strchars(text)
   if text_width <= width then return text .. string.rep(' ', width - text_width) end
   return '…' .. vim.fn.strcharpart(text, text_width - width + 1, width - 1)
 end
+
+H.show_with_icons = function(items, buf_id) MiniPick.default_show(items, buf_id, { show_icons = true }) end
 
 return MiniExtra
