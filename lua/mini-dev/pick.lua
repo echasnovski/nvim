@@ -44,6 +44,9 @@
 
 -- TODO:
 --
+-- - Think about fully making coherent naming for items fields (`line` instead
+--   of `lnum`, `line_end` instead of `end_lnum`, etc.).
+--
 -- - Profile memory usage.
 --
 -- Tests:
@@ -341,8 +344,10 @@ MiniPick.default_match = function(inds, stritems, query)
   coroutine.resume(coroutine.create(f))
 end
 
+-- Default value of `show_icons` is `false`. However, for pickers showing
+-- file/directory paths, `true` is used by default.
 MiniPick.default_show = function(items, buf_id, opts)
-  opts = vim.tbl_deep_extend('force', { show_icons = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { show_icons = false }, opts or {})
 
   -- Compute and set lines
   local lines = vim.tbl_map(H.item_to_string, items)
@@ -403,6 +408,7 @@ MiniPick.default_preview = function(item, win_id, opts)
 end
 
 MiniPick.default_choose = function(item)
+  if item == nil then return end
   local item_data = H.parse_item(item)
   if item_data.type == 'file' or item_data.type == 'directory' then return H.choose_path(item_data) end
   if item_data.type == 'buffer' then return H.choose_buffer(item_data) end
@@ -461,7 +467,8 @@ MiniPick.builtin = {}
 MiniPick.builtin.files = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { tool = nil }, local_opts or {})
   local tool = local_opts.tool or H.files_get_tool()
-  opts = vim.tbl_deep_extend('force', { source = { name = string.format('Files (%s)', tool) } }, opts or {})
+  local default_opts = { source = { name = string.format('Files (%s)', tool) }, content = { show = H.show_with_icons } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   if tool == 'fallback' then
     opts.source.items = H.files_fallback_items
@@ -474,7 +481,8 @@ end
 MiniPick.builtin.grep = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { tool = nil, pattern = nil }, local_opts or {})
   local tool = local_opts.tool or H.grep_get_tool()
-  opts = vim.tbl_deep_extend('force', { source = { name = string.format('Grep (%s)', tool) } }, opts or {})
+  local default_opts = { source = { name = string.format('Grep (%s)', tool) }, content = { show = H.show_with_icons } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local pattern = type(local_opts.pattern) == 'string' and local_opts.pattern or vim.fn.input('Grep pattern: ')
   if tool == 'fallback' then
@@ -490,7 +498,9 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
   local tool = local_opts.tool or H.grep_get_tool()
   if tool == 'fallback' or not H.is_executable(tool) then H.error('`grep_live` needs non-fallback executable tool.') end
 
-  opts = vim.tbl_deep_extend('force', { source = { name = string.format('Grep live (%s)', tool) } }, opts or {})
+  local default_opts =
+    { source = { name = string.format('Grep live (%s)', tool) }, content = { show = H.show_with_icons } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local set_items_opts, spawn_opts = { do_match = false, querytick = H.querytick }, { cwd = opts.source.cwd }
   local process
@@ -550,11 +560,12 @@ MiniPick.builtin.buffers = function(local_opts, opts)
   for _, l in ipairs(vim.split(buffers_output, '\n')) do
     local buf_str, name = l:match('^%s*%d+'), l:match('"(.*)"')
     local buf_id = tonumber(buf_str)
-    local item = { item = string.format('%s %s', buf_str, name), buf_id = buf_id }
+    local item = { item = name, buf_id = buf_id }
     if buf_id ~= cur_buf_id or include_current then table.insert(items, item) end
   end
 
-  opts = vim.tbl_deep_extend('force', { source = { name = 'Buffers' } }, opts or {}, { source = { items = items } })
+  local default_opts = { source = { name = 'Buffers' }, content = { show = H.show_with_icons } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   MiniPick.start(opts)
 end
 
@@ -1713,6 +1724,8 @@ H.get_icon = function(x)
   return { text = (icon or '') .. ' ', hl = hl or 'MiniPickIconFile' }
 end
 
+H.show_with_icons = function(items, buf_id) MiniPick.default_show(items, buf_id, { show_icons = true }) end
+
 -- Items helpers for default functions ----------------------------------------
 H.parse_item = function(item)
   -- Try parsing table item first
@@ -1788,6 +1801,7 @@ H.get_cwd = function()
 end
 
 H.get_fs_type = function(path)
+  if path:find('^~') then path = vim.loop.os_homedir() .. path:sub(2) end
   if vim.fn.filereadable(path) == 1 then return 'file' end
   if vim.fn.isdirectory(path) == 1 then return 'directory' end
   return 'none'
