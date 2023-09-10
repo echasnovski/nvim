@@ -68,6 +68,9 @@ MiniExtra.setup = function(config)
 
   -- Apply config
   H.apply_config(config)
+
+  -- Define behavior
+  H.create_autocommands()
 end
 
 --stylua: ignore
@@ -144,59 +147,46 @@ end
 MiniExtra.pickers.oldfiles = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { include_current_session = true }, local_opts or {})
 
-  -- Compute recency (the more the less recent) of readable files
-  local file_times, oldfiles = {}, vim.v.oldfiles or {}
-  for i = 1, #oldfiles do
-    if vim.fn.filereadable(oldfiles[i]) == 1 then file_times[oldfiles[i]] = i end
-  end
+  H.oldfiles_normalize()
+  local items = H.oldfile_get_array()
 
-  if local_opts.include_current_session then
-    local good_bufs = vim.tbl_filter(
-      function(x) return vim.fn.filereadable(x.name) == 1 end,
-      vim.fn.getbufinfo({ buflisted = true })
-    )
-    for _, buf_info in ipairs(good_bufs) do
-      file_times[buf_info.name] = -buf_info.lastused
-    end
-  end
-
-  -- Compute items from most to least recent
-  local files_with_times = {}
-  for path, time in pairs(file_times) do
-    table.insert(files_with_times, { path = path, time = time })
-  end
-  table.sort(files_with_times, function(a, b) return a.time < b.time end)
-  local items = vim.tbl_map(function(x) return vim.fn.fnamemodify(x.path, ':.') end, files_with_times)
-
-  opts = vim.tbl_deep_extend('force', { source = { name = 'Oldfiles' } }, opts or {}, { source = { items = items } })
+  local show = H.pick_get_config().content.show or H.show_with_icons
+  local default_opts = { source = { name = 'Oldfiles' }, content = { show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   MiniPick.start(opts)
 end
 
 MiniExtra.pickers.buf_lines = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { buf_id = nil }, local_opts or {})
-  local buffers, show_source = {}, true
+  local buffers, all_buffers = {}, true
   if H.is_valid_buf(local_opts.buf_id) then
-    buffers, show_source = { local_opts.buf_id }, false
+    buffers, all_buffers = { local_opts.buf_id }, false
   else
     for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
       if vim.bo[buf_id].buflisted and vim.bo[buf_id].buftype == '' then table.insert(buffers, buf_id) end
     end
   end
 
-  -- TODO: make it async because first loading takes visible time
-  local items = {}
-  for _, buf_id in ipairs(buffers) do
-    H.buf_ensure_loaded(buf_id)
-    local buf_name = H.buf_get_name(buf_id) or ''
-    for lnum, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
-      local prefix = show_source and string.format('%s:', buf_name) or ''
-      local item = { item = string.format('%s%s:%s', prefix, lnum, l), buf_id = buf_id, lnum = lnum }
-      table.insert(items, item)
+  local poke_picker = MiniPick.poke_is_picker_active
+  local f = function()
+    local items = {}
+    for _, buf_id in ipairs(buffers) do
+      if not poke_picker() then return end
+      H.buf_ensure_loaded(buf_id)
+      local buf_name = H.buf_get_name(buf_id) or ''
+      for lnum, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
+        local prefix = all_buffers and string.format('%s:', buf_name) or ''
+        local item = { item = string.format('%s%s:%s', prefix, lnum, l), buf_id = buf_id, lnum = lnum }
+        table.insert(items, item)
+      end
     end
+    MiniPick.set_picker_items(items)
   end
+  local items = vim.schedule_wrap(coroutine.wrap(f))
 
-  local show = show_source and H.show_with_icons or nil
-  local default_opts = { source = { name = 'Buffer lines' }, content = { show = show } }
+  local show = H.pick_get_config().content.show
+  if all_buffers and show == nil then show = H.show_with_icons end
+  local default_opts = { source = { name = 'Buffers lines' }, content = { show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   return MiniPick.start(opts)
 end
@@ -286,7 +276,34 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
   return MiniPick.start(opts)
 end
 
-MiniExtra.pickers.commands = function(local_opts, opts) end
+MiniExtra.pickers.commands = function(local_opts, opts)
+  local_opts = local_opts or {}
+
+  local commands = vim.tbl_deep_extend('force', vim.api.nvim_get_commands({}), vim.api.nvim_buf_get_commands(0, {}))
+
+  local preview = function(item, win_id)
+    local buf_id = H.buf_new_scratch()
+    local data = commands[item]
+    local lines = data == nil and { string.format('No command data for `%s` is yet available.', item) }
+      or vim.split(vim.inspect(data), '\n')
+    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    vim.api.nvim_win_set_buf(win_id, buf_id)
+  end
+
+  local choose = function(item)
+    local data = commands[item] or {}
+    -- If no arguments needed, execute immediately
+    local keys = string.format(':%s%s', item, data.nargs == '0' and '\r' or ' ')
+    vim.schedule(function() vim.fn.feedkeys(keys) end)
+  end
+
+  local choose_all = H.pickers_make_choose_all_first(choose)
+
+  local items = vim.fn.getcompletion('', 'command')
+  local default_source = { name = 'Commands', preview = preview, choose = choose, choose_all = choose_all }
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
+  return MiniPick.start(opts)
+end
 
 MiniExtra.pickers.git_files = function(local_opts, opts) end
 
@@ -311,6 +328,9 @@ MiniExtra.pickers.list = function(local_opts, opts)
   end
 end
 
+-- Should be several useful ones: references, document/workspace symbols, other?
+MiniExtra.pickers.lsp = function(local_opts, opts) end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniExtra.config
@@ -320,11 +340,38 @@ H.ns_id = {
   pickers = vim.api.nvim_create_namespace('MiniExtraPickers'),
 }
 
+-- Various cache
+H.cache = {}
+
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
 H.setup_config = function(config) end
 
 H.apply_config = function(config) MiniExtra.config = config end
+
+H.create_autocommands = function()
+  local augroup = vim.api.nvim_create_augroup('MiniExtra', {})
+
+  local au = function(event, pattern, callback, desc)
+    vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
+  end
+
+  au('BufEnter', '*', H.track_oldfile, 'Track oldfile')
+end
+
+-- Autocommands ---------------------------------------------------------------
+H.track_oldfile = function(data)
+  -- Track only appropriate buffers (normal buffers with path)
+  local path = vim.api.nvim_buf_get_name(data.buf)
+  local is_proper_buffer = path ~= '' and vim.bo[data.buf].buftype == ''
+  if not is_proper_buffer then return end
+
+  -- Ensure tracking data is initialized
+  H.oldfile_ensure_initialized()
+
+  -- Update recency of current path
+  H.oldfile_update_recency(path)
+end
 
 -- Pickers --------------------------------------------------------------------
 H.pickers_highlight_line = function(buf_id, line, hl_group, priority)
@@ -348,6 +395,57 @@ H.pickers_make_choose_all_first = function(choose_single)
     if #items == 0 then return end
     choose_single(items[1])
   end
+end
+
+H.pick_get_config =
+  function() return vim.tbl_deep_extend('force', (MiniPick or {}).config or {}, vim.b.minipick_config or {}) end
+
+-- Oldfiles picker ------------------------------------------------------------
+H.oldfiles_normalize = function()
+  -- Ensure that tracking data is initialized
+  H.oldfile_ensure_initialized()
+
+  -- Order currently readable paths in decreasing order of recency
+  local recency_pairs = {}
+  for path, rec in pairs(H.cache.oldfile.recency) do
+    if vim.fn.filereadable(path) == 1 then table.insert(recency_pairs, { path, rec }) end
+  end
+  table.sort(recency_pairs, function(x, y) return x[2] < y[2] end)
+
+  -- Construct new tracking data with recency from 1 to number of entries
+  local new_recency = {}
+  for i, pair in ipairs(recency_pairs) do
+    new_recency[pair[1]] = i
+  end
+
+  H.cache.oldfile = { recency = new_recency, max_recency = #recency_pairs }
+end
+
+H.oldfile_ensure_initialized = function()
+  if H.cache.oldfile ~= nil or vim.v.oldfiles == nil then return end
+
+  local n = #vim.v.oldfiles
+  local recency = {}
+  for i, path in ipairs(vim.v.oldfiles) do
+    if vim.fn.filereadable(path) == 1 then recency[path] = n - i + 1 end
+  end
+
+  H.cache.oldfile = { recency = recency, max_recency = n }
+end
+
+H.oldfile_get_array = function()
+  local res, n_res = {}, vim.tbl_count(H.cache.oldfile.recency)
+  for path, i in pairs(H.cache.oldfile.recency) do
+    -- Elements with maximum recency should be first
+    res[n_res - i + 1] = vim.fn.fnamemodify(path, ':.')
+  end
+  return res
+end
+
+H.oldfile_update_recency = function(path)
+  local n = H.cache.oldfile.max_recency + 1
+  H.cache.oldfile.recency[path] = n
+  H.cache.oldfile.max_recency = n
 end
 
 -- Utilities ------------------------------------------------------------------

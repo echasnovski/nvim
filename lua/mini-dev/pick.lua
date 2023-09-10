@@ -134,6 +134,18 @@
 ---
 --- See |MiniPick-overview| for more details.
 ---
+--- # Dependencies~
+---
+--- Suggested dependencies (provide extra functionality, will work without them):
+---
+--- - Plugin 'nvim-tree/nvim-web-devicons' for filetype icons near the items.
+---   If missing, default or no icons will be used.
+---
+--- - CLI tool for |MiniPick.builtin.files()|, |MiniPick.builtin.grep()|, and
+---   |MiniPick.builtin.grep_live()|:
+---     - `rg`
+---     - `git`
+---
 --- # Setup ~
 ---
 --- This module needs a setup with `require('mini.pick').setup({})` (replace
@@ -467,9 +479,9 @@ MiniPick.builtin = {}
 MiniPick.builtin.files = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { tool = nil }, local_opts or {})
   local tool = local_opts.tool or H.files_get_tool()
-  local default_opts = { source = { name = string.format('Files (%s)', tool) } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, H.get_config())
-  opts.content.show = opts.content.show or H.show_with_icons
+  local show = H.get_config().content.show or H.show_with_icons
+  local default_opts = { source = { name = string.format('Files (%s)', tool) }, content = { show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   if tool == 'fallback' then
     opts.source.items = H.files_fallback_items
@@ -482,9 +494,9 @@ end
 MiniPick.builtin.grep = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { tool = nil, pattern = nil }, local_opts or {})
   local tool = local_opts.tool or H.grep_get_tool()
-  local default_opts = { source = { name = string.format('Grep (%s)', tool) } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, H.get_config())
-  opts.content.show = opts.content.show or H.show_with_icons
+  local show = H.get_config().content.show or H.show_with_icons
+  local default_opts = { source = { name = string.format('Grep (%s)', tool) }, content = { show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local pattern = type(local_opts.pattern) == 'string' and local_opts.pattern or vim.fn.input('Grep pattern: ')
   if tool == 'fallback' then
@@ -500,9 +512,9 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
   local tool = local_opts.tool or H.grep_get_tool()
   if tool == 'fallback' or not H.is_executable(tool) then H.error('`grep_live` needs non-fallback executable tool.') end
 
-  local default_opts = { source = { name = string.format('Grep live (%s)', tool) } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, H.get_config())
-  opts.content.show = opts.content.show or H.show_with_icons
+  local show = H.get_config().content.show or H.show_with_icons
+  local default_opts = { source = { name = string.format('Grep live (%s)', tool) }, content = { show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local set_items_opts, spawn_opts = { do_match = false, querytick = H.querytick }, { cwd = opts.source.cwd }
   local process
@@ -566,9 +578,9 @@ MiniPick.builtin.buffers = function(local_opts, opts)
     if buf_id ~= cur_buf_id or include_current then table.insert(items, item) end
   end
 
-  local default_opts = { source = { name = 'Buffers' } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, H.get_config(), { source = { items = items } })
-  opts.content.show = opts.content.show or H.show_with_icons
+  local show = H.get_config().content.show or H.show_with_icons
+  local default_opts = { source = { name = 'Buffers' }, content = { show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   MiniPick.start(opts)
 end
 
@@ -842,7 +854,7 @@ end
 
 -- Picker object --------------------------------------------------------------
 H.validate_picker_opts = function(opts)
-  opts = H.get_config(opts)
+  opts = vim.deepcopy(H.get_config(opts))
 
   local validate_callable = function(x, x_name)
     if not vim.is_callable(x) then H.error(string.format('`%s` should be callable.', x_name)) end
