@@ -44,6 +44,9 @@
 
 -- TODO:
 --
+-- - Think about how to enable fuzzy search for special queries:
+--   "'exact", '^start', 'end$'.
+--
 -- - Think about fully making coherent naming for items fields (`line` instead
 --   of `lnum`, `line_end` instead of `end_lnum`, etc.).
 --
@@ -189,8 +192,8 @@
 ---@diagnostic disable:cast-local-type
 
 -- Module definition ==========================================================
-MiniPick = {}
-H = {}
+local MiniPick = {}
+local H = {}
 
 --- Module setup
 ---
@@ -228,7 +231,7 @@ end
 --- `source.items` is an array of items to choose from or callable.
 --- Each item can be either string or table containing string `item` field.
 --- Callable can either return array of items directly (use as is) or not
---- (expected to call |MiniPick.set_items()| explicitly; right away or later).
+--- (expected an explicit |MiniPick.set_picker_items()| call; right away or later).
 ---
 --- `source.name` is a string containing the source name.
 ---
@@ -317,7 +320,11 @@ MiniPick.start = function(opts)
   if MiniPick.is_picker_active() then
     MiniPick.stop()
     -- NOTE: Needs `schedule()` for `stop()` to properly finish code flow
-    return vim.schedule(function() MiniPick.start(opts) end)
+    return vim.schedule(function()
+      -- NOTE: if `MiniPick.stop()` still didn't stop, force clean and start
+      if MiniPick.is_picker_active() then H.pickers.active = nil end
+      MiniPick.start(opts)
+    end)
   end
 
   opts = H.validate_picker_opts(opts)
@@ -381,7 +388,7 @@ MiniPick.default_show = function(items, buf_id, opts)
 
   local stritems, query = lines, MiniPick.get_picker_query()
   if H.query_is_ignorecase(query) then
-    stritems, query = vim.tbl_map(vim.fn.tolower, stritems), vim.tbl_map(vim.fn.tolower, query)
+    stritems, query = vim.tbl_map(H.tolower, stritems), vim.tbl_map(H.tolower, query)
   end
   local match_data, match_type, query_adjusted = H.match_filter(H.seq_along(stritems), stritems, query)
   if match_data == nil then return end
@@ -663,15 +670,12 @@ MiniPick.set_picker_items_from_cli = function(command, opts)
   local data_feed = {}
   stdout:read_start(function(err, data)
     assert(not err, err)
-    if data then
-      table.insert(data_feed, data)
-    else
-      local items = vim.split(table.concat(data_feed), '\n')
-      items = opts.postprocess(items)
-      data_feed = nil
-      stdout:close()
-      vim.schedule(function() MiniPick.set_picker_items(items, opts.set_items_opts) end)
-    end
+    if data then return table.insert(data_feed, data) end
+
+    local items = vim.split(table.concat(data_feed), '\n')
+    items, data_feed = opts.postprocess(items), nil
+    stdout:close()
+    vim.schedule(function() MiniPick.set_picker_items(items, opts.set_items_opts) end)
   end)
 
   return process, pid
@@ -1066,7 +1070,7 @@ H.picker_set_items = function(picker, items, opts)
   -- Compute string items to work with (along with their lower variants)
   local stritems, stritems_ignorecase = {}, {}
   -- NOTE: optimize `tolower` as it severily reduces start time on many items
-  local tolower = vim.o.ignorecase and vim.fn.tolower or function(x) return nil end
+  local tolower = vim.o.ignorecase and H.tolower or function(x) return nil end
   local poke_picker = H.poke_picker_throttle(opts.querytick)
   for i, x in ipairs(items) do
     if not poke_picker() then return end
@@ -1085,7 +1089,7 @@ end
 H.item_to_string = function(item)
   item = H.expand_callable(item)
   if type(item) == 'table' then item = item.item end
-  return type(item) == 'string' and item or tostring(item)
+  return type(item) == 'string' and item or vim.inspect(item, { newline = ' ', indent = '' })
 end
 
 H.picker_set_busy = function(picker, value)
@@ -1200,7 +1204,7 @@ H.picker_match = function(picker)
 
   local is_ignorecase = H.query_is_ignorecase(picker.query)
   local stritems = is_ignorecase and picker.stritems_ignorecase or picker.stritems
-  local query = is_ignorecase and vim.tbl_map(vim.fn.tolower, picker.query) or picker.query
+  local query = is_ignorecase and vim.tbl_map(H.tolower, picker.query) or picker.query
 
   H.picker_set_busy(picker, true)
   local new_inds = picker.opts.content.match(picker.match_inds, stritems, query)
@@ -1419,6 +1423,7 @@ H.picker_query_delete = function(picker, n)
 end
 
 H.picker_choose = function(picker, pre_command)
+  if picker.items == nil then return end
   local choose = picker.opts.source.choose
   if not vim.is_callable(choose) then return true end
 
@@ -1437,6 +1442,7 @@ end
 H.picker_move_caret = function(picker, n) picker.caret = math.min(math.max(picker.caret + n, 1), #picker.query + 1) end
 
 H.picker_move_current = function(picker, by, to)
+  if picker.items == nil then return end
   local n_matches = #picker.match_inds
   if n_matches == 0 then return end
 
@@ -1465,6 +1471,7 @@ H.picker_move_current = function(picker, by, to)
 end
 
 H.picker_scroll = function(picker, direction)
+  if picker.items == nil then return end
   local win_id = picker.windows.main
   if picker.view_state == 'main' and (direction == 'down' or direction == 'up') then
     local n = (direction == 'down' and 1 or -1) * vim.api.nvim_win_get_height(win_id)
@@ -1914,7 +1921,7 @@ end
 -- Default choose -------------------------------------------------------------
 H.choose_path = function(item_data)
   local win_target = (MiniPick.get_picker_state().windows or {}).target
-  if win_target == nil or not H.is_valid_win(win_target) then return end
+  if not H.is_valid_win(win_target) then return end
 
   local path, line, col = item_data.path, item_data.line, item_data.col
 
@@ -1938,7 +1945,7 @@ end
 
 H.choose_buffer = function(item_data)
   local win_target = (MiniPick.get_picker_state().windows or {}).target
-  if win_target == nil or not H.is_valid_win(win_target) then return end
+  if not H.is_valid_win(win_target) then return end
   H.set_winbuf(win_target, item_data.buf_id)
   H.choose_set_cursor(win_target, item_data.line, item_data.col)
 end
@@ -2116,6 +2123,16 @@ H.getcharstr = function()
   if not ok or char == '' or char == '\3' or vim.v.mouse_winid ~= 0 then return end
   return char
 end
+
+H.tolower = (function()
+  -- Cache `tolower` for speed
+  local tolower = vim.fn.tolower
+  return function(x)
+    -- `vim.fn.tolower` can throw errors on bad string (like with '\0')
+    local ok, res = pcall(tolower, x)
+    return ok and res or string.lower(x)
+  end
+end)()
 
 H.win_update_hl = function(win_id, new_from, new_to)
   if not H.is_valid_win(win_id) then return end
