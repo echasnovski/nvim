@@ -1568,12 +1568,13 @@ end
 -- Default match --------------------------------------------------------------
 H.match_filter = function(inds, stritems, query)
   local n_query = #query
-  -- 'abc' - fuzzy match; "'abc" and 'a' - exact substring match;
+  -- 'abc' and '*abc' - fuzzy match; "'abc" and 'a' - exact substring match;
   -- '^abc' and 'abc$' - exact substring match at start and end.
-  local is_exact_plain, is_exact_start, is_exact_end = query[1] == "'", query[1] == '^', query[n_query] == '$'
+  local is_fuzzy_forced, is_exact_plain, is_exact_start, is_exact_end =
+    query[1] == '*', query[1] == "'", query[1] == '^', query[n_query] == '$'
 
-  local start_offset = (is_exact_plain or is_exact_start) and 2 or 1
-  local end_offset = (not is_exact_plain and is_exact_end) and (n_query - 1) or n_query
+  local start_offset = (is_fuzzy_forced or is_exact_plain or is_exact_start) and 2 or 1
+  local end_offset = (not is_fuzzy_forced and not is_exact_plain and is_exact_end) and (n_query - 1) or n_query
   query = vim.list_slice(query, start_offset, end_offset)
   n_query = #query
 
@@ -1584,9 +1585,8 @@ H.match_filter = function(inds, stritems, query)
   -- type "d" (should filter for "md$" but it is not a subset of "m$" matches).
   inds = is_exact_end and H.seq_along(stritems) or inds
 
-  if not (is_exact_plain or is_exact_start or is_exact_end) and n_query > 1 then
-    return H.match_filter_fuzzy(inds, stritems, query), 'fuzzy', query
-  end
+  local is_fuzzy_plain = not (is_exact_plain or is_exact_start or is_exact_end) and n_query > 1
+  if is_fuzzy_forced or is_fuzzy_plain then return H.match_filter_fuzzy(inds, stritems, query), 'fuzzy', query end
 
   local prefix = is_exact_start and '^' or ''
   local suffix = is_exact_end and '$' or ''
@@ -1653,6 +1653,11 @@ H.match_filter_fuzzy_single = function(candidate, index, query, find_query)
   local first, last = find_query(candidate, query, 1)
   if first == nil then return nil end
   if first == last then return { 0, first, index, { first } } end
+
+  -- NOTE: This approach doesn't iterate **all** query matches. It is fine for
+  -- width optimization but maybe not for more (like contiguous groups number).
+  -- Example: for query {'a', 'b', 'c'} candidate 'aaxbbbc' will be matched as
+  -- having 3 groups (indexes 2, 4, 7) but correct one is 2 groups (2, 6, 7).
 
   -- Iteratively try to find better matches by advancing last match
   local best_first, best_last, best_width = first, last, last - first
