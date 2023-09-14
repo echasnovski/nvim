@@ -81,6 +81,34 @@ end
 MiniExtra.config = {}
 --minidoc_afterlines_end
 
+MiniExtra.ai_specs = {}
+
+MiniExtra.ai_specs.line = function(ai_type)
+  local line_num = vim.fn.line('.')
+  local line = vim.fn.getline(line_num)
+  -- Select `\n` past the line for `a` to delete it whole
+  local from_col, to_col = 1, line:len() + 1
+  -- Ignore indentation for `i` textobject and don't remove `\n` past the line
+  if ai_type == 'i' then
+    from_col, to_col = line:match('^(%s*)'):len(), line:len()
+  end
+
+  return { from = { line = line_num, col = from_col }, to = { line = line_num, col = to_col } }
+end
+
+MiniExtra.ai_specs.buffer = function(ai_type)
+  local start_line, end_line = 1, vim.fn.line('$')
+  if ai_type == 'i' then
+    -- Skip first and last blank lines for `i` textobject
+    local first_nonblank, last_nonblank = vim.fn.nextnonblank(start_line), vim.fn.prevnonblank(end_line)
+    start_line = first_nonblank == 0 and start_line or first_nonblank
+    end_line = last_nonblank == 0 and end_line or last_nonblank
+  end
+
+  local to_col = math.max(vim.fn.getline(end_line):len(), 1)
+  return { from = { line = start_line, col = 1 }, to = { line = end_line, col = to_col } }
+end
+
 MiniExtra.pickers = {}
 
 MiniExtra.pickers.diagnostic = function(local_opts, opts)
@@ -404,7 +432,108 @@ end
 -- ???Heuristically computed "best" files???
 MiniExtra.pickers.frecency = function(local_opts, opts) end
 
-MiniExtra.pickers.options = function(local_opts, opts) end
+MiniExtra.pickers.options = function(local_opts, opts)
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+
+  local scope, items = local_opts.scope, {}
+  for name, info in pairs(vim.api.nvim_get_all_options_info()) do
+    if scope == 'all' or scope == info.scope then table.insert(items, { item = name, info = info }) end
+  end
+  table.sort(items, function(a, b) return a.item < b.item end)
+
+  local show = function(items_to_show, buf_id)
+    MiniPick.default_show(items_to_show, buf_id)
+
+    for i, item in ipairs(items_to_show) do
+      if not item.info.was_set then H.pick_highlight_line(buf_id, i, 'Comment', 199) end
+    end
+  end
+
+  local preview = function(item, win_id)
+    local value_source = ({ global = 'o', win = 'wo', buf = 'bo' })[item.info.scope]
+    local has_value, value = pcall(function() return vim[value_source][item.info.name] end)
+    if not has_value then value = '<Option is disabled (will be removed in later Neovim versions)>' end
+
+    local lines = { 'Value:', unpack(vim.split(vim.inspect(value), '\n')), '', 'Info:' }
+    local hl_lines = { 1, #lines }
+    lines = vim.list_extend(lines, vim.split(vim.inspect(item.info), '\n'))
+
+    local buf_id = H.buf_new_scratch()
+    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    H.pick_highlight_line(buf_id, hl_lines[1], 'MiniPickHeader', 200)
+    H.pick_highlight_line(buf_id, hl_lines[2], 'MiniPickHeader', 200)
+
+    vim.api.nvim_win_set_buf(win_id, buf_id)
+  end
+
+  local choose = function(item)
+    local keys = string.format(':set %s%s', item.info.name, item.info.type == 'boolean' and '' or '=')
+    vim.schedule(function() vim.fn.feedkeys(keys) end)
+  end
+
+  local choose_all = H.pick_make_choose_all_first(choose)
+
+  --stylua: ignore
+  local default_opts = {
+    source = { name = string.format('Options (%s)', scope), preview = preview, choose = choose, choose_all = choose_all },
+    content = { show = show },
+  }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
+  return MiniPick.start(opts)
+end
+
+-- MiniExtra.pickers.keymaps = function(local_opts, opts)
+--   local_opts = vim.tbl_deep_extend('force', { mode = 'all', scope = 'all' }, local_opts or {})
+--
+--   local modes = local_opts.mode == 'all' and { 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' } or { local_opts.mode }
+--   local scope = local_opts.scope
+--
+--   local items = {}
+--   local add_keymaps = function(source)
+--     for _, mode in ipairs(modes) do
+--       for _, keymap in ipairs(source(mode)) do
+--         table.insert(items, )
+--       end
+--     end
+--   end
+--
+--   if scope == 'all' or scope == 'buf' then
+--     for _, keymap in ipairs(vim.api.nvim_get_keymap())
+--   end
+--   for name, info in pairs(vim.api.nvim_get_all_options_info()) do
+--     if scope == 'all' or scope == info.scope then
+--       info.item = info.name
+--       table.insert(items, info)
+--     end
+--   end
+--   table.sort(items, function(a, b) return a.item < b.item end)
+--
+--   local show = function(items_to_show, buf_id)
+--     MiniPick.default_show(items_to_show, buf_id)
+--
+--     for i, item in ipairs(items_to_show) do
+--       if not item.was_set then H.pick_highlight_line(buf_id, i, 'Comment', 199) end
+--     end
+--   end
+--
+--   local choose = function(item)
+--     local keys = string.format(':set %s%s', item.name, item.type == 'boolean' and '' or '=')
+--     vim.schedule(function() vim.fn.feedkeys(keys) end)
+--   end
+--
+--   local choose_all = H.pick_make_choose_all_first(choose)
+--
+--   local default_opts = {
+--     source = { name = string.format('Options (%s)', scope), choose = choose, choose_all = choose_all },
+--     content = { show = show },
+--   }
+--   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
+--   return MiniPick.start(opts)
+-- end
+
+MiniExtra.pickers.registers = function(local_opts, opts) end
+
+MiniExtra.pickers.marks = function(local_opts, opts) end
 
 -- "quickfix", "location", "jump", "change"
 MiniExtra.pickers.list = function(local_opts, opts)
@@ -420,6 +549,8 @@ end
 
 -- Should be several useful ones: references, document/workspace symbols, other?
 MiniExtra.pickers.lsp = function(local_opts, opts) end
+
+-- Something with tree-sitter
 
 -- Helper data ================================================================
 -- Module default config

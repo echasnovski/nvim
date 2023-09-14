@@ -174,7 +174,7 @@
 --- * `MiniPickBorderText` - non-prompt on border.
 --- * `MiniPickIconDirectory` - default icon for directory.
 --- * `MiniPickIconFile` - default icon for file.
---- * `MiniPickInfoHeader` - headers in the info buffer.
+--- * `MiniPickHeader` - headers in info buffer and previews.
 --- * `MiniPickMatchCurrent` - current matched item.
 --- * `MiniPickMatchOffsets` - offset characters matching query elements.
 --- * `MiniPickNormal` - basic foreground/background highlighting.
@@ -847,7 +847,7 @@ H.create_default_hl = function()
   hi('MiniPickBorderText',    { link = 'FloatTitle' })
   hi('MiniPickIconDirectory', { link = 'Directory' })
   hi('MiniPickIconFile',      { link = 'MiniPickNormal' })
-  hi('MiniPickInfoHeader',    { link = 'DiagnosticFloatingHint' })
+  hi('MiniPickHeader',        { link = 'DiagnosticFloatingHint' })
   hi('MiniPickMatchCurrent',  { link = 'CursorLine' })
   hi('MiniPickMatchOffsets',  { link = 'DiagnosticFloatingHint' })
   hi('MiniPickNormal',        { link = 'NormalFloat' })
@@ -1540,7 +1540,7 @@ H.picker_show_info = function(picker)
   local ns_id = H.ns_id.headers
   H.clear_namespace(buf_id_info, ns_id)
   for _, lnum in ipairs(hl_lines) do
-    H.set_extmark(buf_id_info, ns_id, lnum - 1, 0, { end_row = lnum, end_col = 0, hl_group = 'MiniPickInfoHeader' })
+    H.set_extmark(buf_id_info, ns_id, lnum - 1, 0, { end_row = lnum, end_col = 0, hl_group = 'MiniPickHeader' })
   end
 end
 
