@@ -1,6 +1,27 @@
 -- Helper table
 local H = {}
 
+-- Backup for "iterate over all fuzzy matches" function
+EC.iterate_query_matches = function(candidate, query)
+  local f, state, n_query = nil, {}, #query
+  f = function(s, active_ind)
+    if active_ind == 0 then return nil, nil end
+    local not_has_matched = #s < n_query
+    local from, to = nil, s[active_ind] or 0
+    for i = active_ind, n_query do
+      from, to = string.find(candidate, query[i], to + 1, true)
+      if from == nil then
+        if not_has_matched then return nil, nil end
+        return f(s, active_ind - 1)
+      end
+      s[i] = from
+    end
+    return n_query, s
+  end
+
+  return f, state, 1
+end
+
 -- Show Neoterm's active REPL, i.e. in which command will be executed when one
 -- of `TREPLSend*` will be used
 EC.print_active_neoterm = function()
