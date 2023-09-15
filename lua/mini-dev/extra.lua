@@ -158,15 +158,15 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
       table.insert(hl_groups, hl_groups_ref[item.severity])
     end
 
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    H.set_buflines(buf_id, lines)
     H.pick_clear_namespace(buf_id)
     for i = 1, #lines do
       H.pick_highlight_line(buf_id, i, hl_groups[i], 199)
     end
   end
 
-  local default_opts = { source = { items = items, name = 'Diagnostic' }, content = { show = show } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
+  local default_opts = { source = H.pick_normalize_source({ name = 'Diagnostic' }), content = { show = show } }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   return MiniPick.start(opts)
 end
 
@@ -178,7 +178,7 @@ MiniExtra.pickers.oldfiles = function(local_opts, opts)
   local items = H.oldfile_get_array()
 
   local show = H.pick_get_config().content.show or H.show_with_icons
-  local default_opts = { source = { name = 'Oldfiles' }, content = { show = show } }
+  local default_opts = { source = H.pick_normalize_source({ name = 'Oldfiles' }), content = { show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   MiniPick.start(opts)
 end
@@ -213,7 +213,7 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
 
   local show = H.pick_get_config().content.show
   if all_buffers and show == nil then show = H.show_with_icons end
-  local default_opts = { source = { name = 'Buffers lines' }, content = { show = show } }
+  local default_opts = { source = H.pick_normalize_source({ name = 'Buffers lines' }), content = { show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   return MiniPick.start(opts)
 end
@@ -247,7 +247,9 @@ MiniExtra.pickers.history = function(local_opts, opts)
     end
   end
 
-  -- Define functions
+  -- Define source
+  local preview = H.pick_make_no_preview('history')
+
   local choose = function(item)
     if type(item) ~= 'string' then return end
     local id, entry = item:match('^(.) (.*)$')
@@ -256,9 +258,10 @@ MiniExtra.pickers.history = function(local_opts, opts)
   end
 
   local choose_all = H.pick_make_choose_all_first(choose)
-  local preview = H.pick_make_no_preview('history')
+
   local default_source =
     { name = string.format('History (%s)', history_type), preview = preview, choose = choose, choose_all = choose_all }
+  default_source = H.pick_normalize_source(default_source)
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
   return MiniPick.start(opts)
 end
@@ -274,7 +277,7 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
   end
 
   local show = function(items_to_show, buf_id)
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, items_to_show)
+    H.set_buflines(buf_id, items_to_show)
     H.pick_clear_namespace(buf_id)
     -- Highlight line with highlight group of its item
     for i = 1, #items_to_show do
@@ -282,11 +285,9 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
     end
   end
 
-  local preview = function(item, win_id)
-    local buf_id = H.buf_new_scratch()
+  local preview = function(item, buf_id)
     local lines = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
-    vim.api.nvim_win_set_buf(win_id, buf_id)
+    H.set_buflines(buf_id, lines)
   end
 
   local choose = function(item)
@@ -298,7 +299,7 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
   local choose_all = H.pick_make_choose_all_first(choose)
 
   local default_source = { name = 'Highlight groups', preview = preview, choose = choose, choose_all = choose_all }
-  local default_opts = { source = default_source, content = { show = show } }
+  local default_opts = { source = H.pick_normalize_source(default_source), content = { show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   return MiniPick.start(opts)
 end
@@ -308,13 +309,11 @@ MiniExtra.pickers.commands = function(local_opts, opts)
 
   local commands = vim.tbl_deep_extend('force', vim.api.nvim_get_commands({}), vim.api.nvim_buf_get_commands(0, {}))
 
-  local preview = function(item, win_id)
-    local buf_id = H.buf_new_scratch()
+  local preview = function(item, buf_id)
     local data = commands[item]
     local lines = data == nil and { string.format('No command data for `%s` is yet available.', item) }
       or vim.split(vim.inspect(data), '\n')
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
-    vim.api.nvim_win_set_buf(win_id, buf_id)
+    H.set_buflines(buf_id, lines)
   end
 
   local choose = function(item)
@@ -328,6 +327,7 @@ MiniExtra.pickers.commands = function(local_opts, opts)
 
   local items = vim.fn.getcompletion('', 'command')
   local default_source = { name = 'Commands', preview = preview, choose = choose, choose_all = choose_all }
+  default_source = H.pick_normalize_source(default_source)
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
   return MiniPick.start(opts)
 end
@@ -346,7 +346,7 @@ MiniExtra.pickers.git_files = function(local_opts, opts)
   if command == nil then H.error('Wrong `local_opts.type` for `pickers.git_files`.') end
 
   local show = H.pick_get_config().content.show or H.show_with_icons
-  local default_source = { name = string.format('Git files (%s)', local_opts.type) }
+  local default_source = H.pick_normalize_source({ name = string.format('Git files (%s)', local_opts.type) })
   opts = vim.tbl_deep_extend('force', { source = default_source, content = { show = show } }, opts or {})
   return MiniPick.builtin.cli({ command = command }, opts)
 end
@@ -375,31 +375,31 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
   if local_opts.path == nil then path = repo_dir end
 
   -- Define source
-  local show_diff_buf = function(item, win_id)
-    local buf_id = H.buf_new_scratch()
+  local show_patch = function(item, buf_id)
     vim.bo[buf_id].syntax = 'diff'
-    H.show_cli_output(buf_id, win_id, { 'git', '-C', repo_dir, '--no-pager', 'show', get_hash(item) })
-    return buf_id
+    H.show_cli_output(buf_id, { 'git', '-C', repo_dir, '--no-pager', 'show', get_hash(item) })
   end
 
-  local preview = show_diff_buf
+  local preview = show_patch
 
-  local choose_show_diff = function(item)
+  local choose_show_patch = function(item)
     local win_target = (MiniPick.get_picker_state().windows or {}).target
     if win_target == nil or not H.is_valid_win(win_target) then return end
-    local buf_id = show_diff_buf(item, win_target)
-    vim.bo[buf_id].buflisted, vim.bo[buf_id].bufhidden = true, ''
+    local buf_id = vim.api.nvim_create_buf(true, true)
+    show_patch(item, buf_id)
+    vim.api.nvim_win_set_buf(win_target, buf_id)
   end
 
   local choose_checkout = function(item)
     vim.schedule(function() vim.fn.system('git -C ' .. repo_dir .. ' checkout ' .. get_hash(item)) end)
   end
 
-  local choose = local_opts.choose_type == 'show_diff' and choose_show_diff or choose_checkout
+  local choose = local_opts.choose_type == 'show_patch' and choose_show_patch or choose_checkout
   local choose_all = H.pick_make_choose_all_first(choose)
 
   local default_source =
     { name = 'Git commits', cwd = repo_dir, preview = preview, choose = choose, choose_all = choose_all }
+  default_source = H.pick_normalize_source(default_source)
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return MiniPick.builtin.cli({ command = command }, opts)
 end
@@ -412,10 +412,8 @@ MiniExtra.pickers.git_branches = function(local_opts, opts)
 
   local get_branch_name = function(item) return item:match('^%*?%s*(%S+)') end
 
-  local preview = function(item, win_id)
-    local buf_id = H.buf_new_scratch()
-    H.show_cli_output(buf_id, win_id, { 'git', 'log', get_branch_name(item), '--format=format:%h %s' })
-    return buf_id
+  local preview = function(item, buf_id)
+    H.show_cli_output(buf_id, { 'git', 'log', get_branch_name(item), '--format=format:%h %s' })
   end
 
   local choose = function(item)
@@ -425,7 +423,7 @@ MiniExtra.pickers.git_branches = function(local_opts, opts)
   local choose_all = H.pick_make_choose_all_first(choose)
 
   local default_source = { name = 'Git branches', preview = preview, choose = choose, choose_all = choose_all }
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
+  opts = vim.tbl_deep_extend('force', { source = H.pick_normalize_source(default_source) }, opts or {})
   return MiniPick.builtin.cli({ command = command }, opts)
 end
 
@@ -449,7 +447,7 @@ MiniExtra.pickers.options = function(local_opts, opts)
     end
   end
 
-  local preview = function(item, win_id)
+  local preview = function(item, buf_id)
     local value_source = ({ global = 'o', win = 'wo', buf = 'bo' })[item.info.scope]
     local has_value, value = pcall(function() return vim[value_source][item.info.name] end)
     if not has_value then value = '<Option is disabled (will be removed in later Neovim versions)>' end
@@ -458,12 +456,9 @@ MiniExtra.pickers.options = function(local_opts, opts)
     local hl_lines = { 1, #lines }
     lines = vim.list_extend(lines, vim.split(vim.inspect(item.info), '\n'))
 
-    local buf_id = H.buf_new_scratch()
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    H.set_buflines(buf_id, lines)
     H.pick_highlight_line(buf_id, hl_lines[1], 'MiniPickHeader', 200)
     H.pick_highlight_line(buf_id, hl_lines[2], 'MiniPickHeader', 200)
-
-    vim.api.nvim_win_set_buf(win_id, buf_id)
   end
 
   local choose = function(item)
@@ -474,66 +469,135 @@ MiniExtra.pickers.options = function(local_opts, opts)
   local choose_all = H.pick_make_choose_all_first(choose)
 
   --stylua: ignore
-  local default_opts = {
-    source = { name = string.format('Options (%s)', scope), preview = preview, choose = choose, choose_all = choose_all },
-    content = { show = show },
-  }
+  local name = string.format('Options (%s)', scope)
+  local default_source = { name = name, preview = preview, choose = choose, choose_all = choose_all }
+  local default_opts = { source = H.pick_normalize_source(default_source), content = { show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   return MiniPick.start(opts)
 end
 
--- MiniExtra.pickers.keymaps = function(local_opts, opts)
---   local_opts = vim.tbl_deep_extend('force', { mode = 'all', scope = 'all' }, local_opts or {})
---
---   local modes = local_opts.mode == 'all' and { 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' } or { local_opts.mode }
---   local scope = local_opts.scope
---
---   local items = {}
---   local add_keymaps = function(source)
---     for _, mode in ipairs(modes) do
---       for _, keymap in ipairs(source(mode)) do
---         table.insert(items, )
---       end
---     end
---   end
---
---   if scope == 'all' or scope == 'buf' then
---     for _, keymap in ipairs(vim.api.nvim_get_keymap())
---   end
---   for name, info in pairs(vim.api.nvim_get_all_options_info()) do
---     if scope == 'all' or scope == info.scope then
---       info.item = info.name
---       table.insert(items, info)
---     end
---   end
---   table.sort(items, function(a, b) return a.item < b.item end)
---
---   local show = function(items_to_show, buf_id)
---     MiniPick.default_show(items_to_show, buf_id)
---
---     for i, item in ipairs(items_to_show) do
---       if not item.was_set then H.pick_highlight_line(buf_id, i, 'Comment', 199) end
---     end
---   end
---
---   local choose = function(item)
---     local keys = string.format(':set %s%s', item.name, item.type == 'boolean' and '' or '=')
---     vim.schedule(function() vim.fn.feedkeys(keys) end)
---   end
---
---   local choose_all = H.pick_make_choose_all_first(choose)
---
---   local default_opts = {
---     source = { name = string.format('Options (%s)', scope), choose = choose, choose_all = choose_all },
---     content = { show = show },
---   }
---   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
---   return MiniPick.start(opts)
--- end
+MiniExtra.pickers.keymaps = function(local_opts, opts)
+  local_opts = vim.tbl_deep_extend('force', { mode = 'all', scope = 'all' }, local_opts or {})
+  local modes = local_opts.mode == 'all' and { 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' } or { local_opts.mode }
+  local scope = local_opts.scope
 
-MiniExtra.pickers.registers = function(local_opts, opts) end
+  -- Create items
+  local keytrans = vim.fn.has('nvim-0.8') == 1 and vim.fn.keytrans or function(x) return x end
+  local items = {}
+  local max_lhs_width = 0
+  local populate_items = function(source)
+    for _, mode in ipairs(modes) do
+      for _, maparg in ipairs(source(mode)) do
+        local desc = maparg.desc ~= nil and vim.inspect(maparg.desc) or maparg.rhs
+        local lhs_trans = keytrans(maparg.lhsraw or maparg.lhs)
+        max_lhs_width = math.max(vim.fn.strchars(lhs_trans), max_lhs_width)
+        table.insert(items, { lhs_trans = lhs_trans, desc = desc, maparg = maparg })
+      end
+    end
+  end
 
-MiniExtra.pickers.marks = function(local_opts, opts) end
+  if scope == 'all' or scope == 'buf' then populate_items(function(m) return vim.api.nvim_buf_get_keymap(0, m) end) end
+  if scope == 'all' or scope == 'global' then populate_items(vim.api.nvim_get_keymap) end
+
+  for _, item in ipairs(items) do
+    local buf_map_indicator = item.maparg.buffer == 0 and ' ' or '@'
+    local lhs = H.ensure_text_width(item.lhs_trans, max_lhs_width)
+    item.item = string.format('%s %s │ %s │ %s', item.maparg.mode, buf_map_indicator, lhs, item.desc or '')
+  end
+
+  -- Define source
+  local get_callback_pos = function(maparg)
+    if type(maparg.callback) ~= 'function' then return nil, nil end
+    local info = debug.getinfo(maparg.callback)
+    local path = info.source:gsub('^@', '')
+    if vim.fn.filereadable(path) == 0 then return nil, nil end
+    return path, info.linedefined
+  end
+
+  local preview = function(item, buf_id)
+    local path, lnum = get_callback_pos(item.maparg)
+    if path ~= nil then
+      item.path, item.lnum = path, lnum
+      return MiniPick.default_preview(item, buf_id)
+    end
+    local lines = vim.split(vim.inspect(item.maparg), '\n')
+    H.set_buflines(buf_id, lines)
+  end
+
+  local choose = function(item)
+    local keys = vim.api.nvim_replace_termcodes(item.maparg.lhs, true, true, true)
+    vim.schedule(function() vim.fn.feedkeys(keys) end)
+  end
+
+  local choose_all = H.pick_make_choose_all_first(choose)
+
+  local name = string.format('Keymaps (%s)', scope)
+  local default_source = { name = name, preview = preview, choose = choose, choose_all = choose_all }
+  default_source = H.pick_normalize_source(default_source)
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
+  return MiniPick.start(opts)
+end
+
+MiniExtra.pickers.registers = function(local_opts, opts)
+  local_opts = local_opts or {}
+
+  local describe_register = function(register)
+    local ok, value = pcall(vim.fn.getreg, register, 1)
+    if not ok then return '' end
+    return value
+  end
+
+  local all_registers = vim.split('"*+:.%/#=-0123456789abcdefghijklmnopqrstuvwxyz', '')
+
+  local items = {}
+  for _, register in ipairs(all_registers) do
+    local item = string.format('%s │ %s', register, describe_register(register))
+    table.insert(items, { register = register, item = item })
+  end
+
+  local choose = vim.schedule_wrap(function(item)
+    local reg, mode = item.register, vim.fn.mode()
+    local keys = string.format('"%s%s', reg, reg == '=' and '' or 'P')
+    if mode == 'i' or mode == 'c' then keys = '\18' .. reg end
+    vim.fn.feedkeys(keys)
+  end)
+
+  local choose_all = H.pick_make_choose_all_first(choose)
+
+  local preview = H.pick_make_no_preview('Registers')
+
+  local default_source = { name = 'Registers', preview = preview, choose = choose, choose_all = choose_all }
+  default_source = H.pick_normalize_source(default_source)
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
+  return MiniPick.start(opts)
+end
+
+MiniExtra.pickers.marks = function(local_opts, opts)
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+  local scope = local_opts.scope
+
+  -- Create items
+  local items = {}
+  local populate_items = function(mark_list)
+    for _, info in ipairs(mark_list) do
+      local path
+      if type(info.file) == 'string' then path = vim.fn.fnamemodify(info.file, ':p:.') end
+      local buf_id
+      if path == nil then buf_id = info.pos[1] end
+
+      local line, col = info.pos[2], math.abs(info.pos[3])
+      local stritem = string.format('%s │ %s:%s:%s', info.mark:sub(2), path or '', line, col)
+      table.insert(items, { item = stritem, buf_id = buf_id, path = path, lnum = line, col = col })
+    end
+  end
+
+  if scope == 'all' or scope == 'buf' then populate_items(vim.fn.getmarklist(vim.api.nvim_get_current_buf())) end
+  if scope == 'all' or scope == 'global' then populate_items(vim.fn.getmarklist()) end
+
+  local default_source = H.pick_normalize_source({ name = string.format('Marks (%s)', scope) })
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
+  return MiniPick.start(opts)
+end
 
 -- "quickfix", "location", "jump", "change"
 MiniExtra.pickers.list = function(local_opts, opts)
@@ -541,9 +605,9 @@ MiniExtra.pickers.list = function(local_opts, opts)
 
   -- Validate name
   local name = local_opts.name
-  local name_ids = { quickfix = 'Q', location = 'L', jump = 'J', change = 'C' }
+  local name_ids = { quickfix = 'Q', location = 'L', jump = 'J', change = 'C', tag = 'T' }
   if not (name == 'all' or name_ids[name] ~= nil) then
-    H.error('`local_opts.name` in `pickers.list()` should be one of "quickfix", "location", "jump", "change".')
+    H.error('`local_opts.name` in `pickers.list()` should be one of "quickfix", "location", "jump", "change", "tag".')
   end
 end
 
@@ -595,6 +659,12 @@ H.track_oldfile = function(data)
 end
 
 -- Pickers --------------------------------------------------------------------
+H.pick_normalize_source = function(source)
+  local defaults =
+    { preview = MiniPick.default_preview, choose = MiniPick.default_choose, choose_all = MiniPick.default_choose_all }
+  return vim.tbl_deep_extend('force', defaults, source or {})
+end
+
 H.pick_highlight_line = function(buf_id, line, hl_group, priority)
   local opts = { end_row = line, end_col = 0, hl_mode = 'blend', hl_group = hl_group, priority = priority }
   vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.pickers, line - 1, 0, opts)
@@ -604,11 +674,7 @@ H.pick_clear_namespace = function(buf_id) pcall(vim.api.nvim_buf_clear_namespace
 
 H.pick_make_no_preview = function(picker_name)
   local msg = string.format('No preview available for `%s` picker', picker_name)
-  return function(_, win_id)
-    local buf_id = H.buf_new_scratch()
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, { msg })
-    vim.api.nvim_win_set_buf(win_id, buf_id)
-  end
+  return function(_, buf_id) H.set_buflines(buf_id, { msg }) end
 end
 
 H.pick_make_choose_all_first = function(choose_single)
@@ -670,7 +736,7 @@ H.oldfile_update_recency = function(path)
 end
 
 -- CLI ------------------------------------------------------------------------
-H.show_cli_output = function(buf_id, win_id, command)
+H.show_cli_output = function(buf_id, command)
   local executable, args = command[1], vim.list_slice(command, 2, #command)
   local process, stdout = nil, vim.loop.new_pipe()
   local spawn_opts = { args = args, stdio = { nil, stdout, nil } }
@@ -680,11 +746,10 @@ H.show_cli_output = function(buf_id, win_id, command)
   stdout:read_start(vim.schedule_wrap(function(err, data)
     assert(not err, err)
     if data then return table.insert(data_feed, data) end
-    if not (H.is_valid_buf(buf_id) or H.is_valid_win(win_id)) then return end
+    if not H.is_valid_buf(buf_id) then return end
 
     local lines = vim.split(table.concat(data_feed), '\n')
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
-    vim.api.nvim_win_set_buf(win_id, buf_id)
+    H.set_buflines(buf_id, lines)
   end))
 end
 
@@ -708,11 +773,7 @@ H.buf_get_name = function(buf_id)
   return buf_name
 end
 
-H.buf_new_scratch = function()
-  local buf_id = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf_id].bufhidden = 'wipe'
-  return buf_id
-end
+H.set_buflines = function(buf_id, lines) vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines) end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.extra) %s', msg), 0) end

@@ -417,13 +417,13 @@ MiniPick.default_show = function(items, buf_id, opts)
   end
 end
 
-MiniPick.default_preview = function(item, win_id, opts)
+MiniPick.default_preview = function(item, buf_id, opts)
   opts = vim.tbl_deep_extend('force', { n_context_lines = 2 * vim.o.lines, line_position = 'top' }, opts or {})
   local item_data = H.parse_item(item)
-  if item_data.type == 'file' then return H.preview_file(item_data, win_id, opts) end
-  if item_data.type == 'directory' then return H.preview_directory(item_data, win_id) end
-  if item_data.type == 'buffer' then return H.preview_buffer(item_data, win_id, opts) end
-  H.preview_inspect(item, win_id)
+  if item_data.type == 'file' then return H.preview_file(item_data, buf_id, opts) end
+  if item_data.type == 'directory' then return H.preview_directory(item_data, buf_id) end
+  if item_data.type == 'buffer' then return H.preview_buffer(item_data, buf_id, opts) end
+  H.preview_inspect(item, buf_id)
 end
 
 MiniPick.default_choose = function(item)
@@ -552,9 +552,9 @@ MiniPick.builtin.help = function(local_opts, opts)
   -- didn't quite work when choosing tags in same file consecutively.
   local choose = function(item) end
   local choose_all = function(items) end
-  local preview = function(item, win_id)
+  local preview = function(item, buf_id)
     -- Take advantage of `taglist` output on how to open tag
-    vim.api.nvim_win_call(win_id, function()
+    vim.api.nvim_buf_call(buf_id, function()
       vim.cmd('noautocmd edit ' .. vim.fn.fnameescape(item.filename))
       vim.bo.buflisted, vim.bo.bufhidden, vim.bo.syntax = false, 'wipe', 'help'
 
@@ -1559,9 +1559,11 @@ H.picker_show_preview = function(picker)
   local item = H.picker_get_current_item(picker)
   if not vim.is_callable(preview) or item == nil then return end
 
-  local win_id = picker.windows.main
-  preview(item, win_id)
-  picker.buffers.preview = vim.api.nvim_win_get_buf(win_id)
+  local win_id, buf_id = picker.windows.main, vim.api.nvim_create_buf(false, true)
+  vim.bo[buf_id].bufhidden = 'wipe'
+  H.set_winbuf(win_id, buf_id)
+  preview(item, buf_id)
+  picker.buffers.preview = buf_id
   picker.view_state = 'preview'
 end
 
@@ -1850,9 +1852,7 @@ H.get_fs_type = function(path)
 end
 
 -- Default preview ------------------------------------------------------------
-H.preview_file = function(item_data, win_id, opts)
-  local buf_id = H.set_winbuf_scratch_buffer(win_id)
-
+H.preview_file = function(item_data, buf_id, opts)
   -- Fully preview only text files
   if not H.is_file_text(item_data.path) then return H.set_buflines(buf_id, { '-Non-text-file-' }) end
 
@@ -1861,12 +1861,10 @@ H.preview_file = function(item_data, win_id, opts)
   if not has_lines then return end
 
   item_data.line_position = opts.line_position
-  H.preview_set_lines(win_id, buf_id, lines, item_data)
+  H.preview_set_lines(buf_id, lines, item_data)
 end
 
-H.preview_directory = function(item_data, win_id)
-  local buf_id = H.set_winbuf_scratch_buffer(win_id)
-
+H.preview_directory = function(item_data, buf_id)
   local path = item_data.path
   local lines = vim.tbl_map(
     function(x) return x .. (vim.fn.isdirectory(path .. '/' .. x) == 1 and '/' or '') end,
@@ -1875,38 +1873,36 @@ H.preview_directory = function(item_data, win_id)
   H.set_buflines(buf_id, lines)
 end
 
-H.preview_buffer = function(item_data, win_id, opts)
+H.preview_buffer = function(item_data, buf_id, opts)
   -- NOTE: ideally just setting target buffer to window would be enough, but it
   -- has side effects. See https://github.com/neovim/neovim/issues/24973 .
-  -- Reading lines and applying custom styling is a rough alternative.
-  local buf_id = H.set_winbuf_scratch_buffer(win_id)
-  local buf_id_item = item_data.buf_id
+  -- Reading lines and applying custom styling is a passable alternative.
+  local buf_id_source = item_data.buf_id
 
   -- Get lines from buffer ensuring it is loaded without important consequences
   local cache_eventignore = vim.o.eventignore
   vim.o.eventignore = 'BufEnter'
-  vim.fn.bufload(buf_id_item)
+  vim.fn.bufload(buf_id_source)
   vim.o.eventignore = cache_eventignore
-  local lines = vim.api.nvim_buf_get_lines(buf_id_item, 0, (item_data.line or 1) + opts.n_context_lines, false)
+  local lines = vim.api.nvim_buf_get_lines(buf_id_source, 0, (item_data.line or 1) + opts.n_context_lines, false)
 
-  item_data.filetype, item_data.line_position = vim.bo[buf_id_item].filetype, opts.line_position
-  H.preview_set_lines(win_id, buf_id, lines, item_data)
+  item_data.filetype, item_data.line_position = vim.bo[buf_id_source].filetype, opts.line_position
+  H.preview_set_lines(buf_id, lines, item_data)
 end
 
-H.preview_inspect = function(obj, win_id)
-  local buf_id = vim.api.nvim_create_buf(false, true)
-  H.set_buflines(buf_id, vim.split(vim.inspect(obj), '\n'))
-  H.set_winbuf(win_id, buf_id)
-end
+H.preview_inspect = function(obj, buf_id) H.set_buflines(buf_id, vim.split(vim.inspect(obj), '\n')) end
 
-H.preview_set_lines = function(win_id, buf_id, lines, extra)
+H.preview_set_lines = function(buf_id, lines, extra)
   -- Lines
   H.set_buflines(buf_id, lines)
 
-  -- Position
-  pcall(vim.api.nvim_win_set_cursor, win_id, { extra.line or 1, (extra.col or 1) - 1 })
-  local pos_keys = ({ top = 'zt', center = 'zz', bottom = 'zb' })[extra.line_position] or 'zt'
-  vim.api.nvim_win_call(win_id, function() vim.cmd('normal! ' .. pos_keys) end)
+  -- Cursor position and window view
+  local win_id = MiniPick.get_picker_state().windows.main
+  if H.is_valid_win(win_id) then
+    pcall(vim.api.nvim_win_set_cursor, win_id, { extra.line or 1, (extra.col or 1) - 1 })
+    local pos_keys = ({ top = 'zt', center = 'zz', bottom = 'zb' })[extra.line_position] or 'zt'
+    vim.api.nvim_win_call(win_id, function() vim.cmd('normal! ' .. pos_keys) end)
+  end
 
   -- Highlighting
   H.preview_highlight_region(buf_id, extra.line, extra.col, extra.line_end, extra.col_end)
@@ -2102,25 +2098,18 @@ H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nv
 
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
 
-H.replace_termcodes = function(x)
-  if x == nil then return nil end
-  return vim.api.nvim_replace_termcodes(x, true, true, true)
-end
-
 H.set_buflines = function(buf_id, lines) pcall(vim.api.nvim_buf_set_lines, buf_id, 0, -1, false, lines) end
 
 H.set_winbuf = function(win_id, buf_id) vim.api.nvim_win_set_buf(win_id, buf_id) end
 
-H.set_winbuf_scratch_buffer = function(win_id)
-  local buf_id = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf_id].bufhidden = 'wipe'
-  H.set_winbuf(win_id, buf_id)
-  return buf_id
-end
-
 H.set_extmark = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
 
 H.clear_namespace = function(buf_id, ns_id) pcall(vim.api.nvim_buf_clear_namespace, buf_id, ns_id, 0, -1) end
+
+H.replace_termcodes = function(x)
+  if x == nil then return nil end
+  return vim.api.nvim_replace_termcodes(x, true, true, true)
+end
 
 H.expand_callable = function(x)
   if vim.is_callable(x) then return x() end
