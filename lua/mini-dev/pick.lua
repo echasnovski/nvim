@@ -399,7 +399,7 @@ MiniPick.default_show = function(items, buf_id, opts)
   -- Place offset highlights accounting for possible shift due to prefixes
   local extmark_opts = { hl_group = 'MiniPickMatchOffsets', hl_mode = 'combine', priority = 200 }
   for i = 1, #match_data do
-    local row, offsets = match_data[i][3], match_offsets[i]
+    local row, offsets = match_data[i][4], match_offsets[i]
     local start_offset = prefix_data[row].text:len()
     for _, off in ipairs(offsets) do
       extmark_opts.end_row, extmark_opts.end_col = row - 1, start_offset + H.get_next_char_bytecol(lines[row], off)
@@ -1612,7 +1612,7 @@ H.match_filter_exact_single = function(candidate, index, pattern, rel_offsets)
   local start = string.find(candidate, pattern)
   if start == nil then return nil end
 
-  return { 0, start, index }
+  return { 1, 0, start, index }
 end
 
 H.match_offsets_exact = function(match_data, query)
@@ -1624,7 +1624,7 @@ H.match_offsets_exact = function(match_data, query)
 
   local res = {}
   for i = 1, #match_data do
-    res[i] = vim.tbl_map(function(x) return match_data[i][2] + x end, rel_offsets)
+    res[i] = vim.tbl_map(function(x) return match_data[i][3] + x end, rel_offsets)
   end
 
   return res
@@ -1643,43 +1643,43 @@ H.match_filter_fuzzy = function(inds, stritems, query)
 end
 
 H.match_filter_fuzzy_single = function(candidate, index, query, find_query)
-  -- Search for query chars match positions with the following properties:
-  -- - All are present in `candidate` in the same order.
-  -- - Has smallest width among all such match positions.
-  -- - Among same width has smallest first match.
-  -- This same algorithm is used in 'mini.fuzzy' and has more comments.
+  -- - Candidate is matched if all query chars are present in same order.
+  -- - For matched candidate compute information about "best" match: number of
+  --   contiguous groups, width, match start, index. Those are listed from most
+  --   important to least important.
+  --   NOTE: Information is computed not based on **all** possible matches but
+  --   only on a small handful (smallest width matches for every possible start
+  --   match). It is fine to optimize width but not contiguous groups number.
+  --   This is essentially a performance/relevance compromise.
+  --   Example: for query {'a', 'b', 'c'} candidate 'aaxbbbc' will be matched as
+  --   having 3 groups (indexes 2, 4, 7) but correct one is 2 groups (2, 6, 7).
 
   -- Search forward to find matching positions with left-most last char match
-  local first, last = find_query(candidate, query, 1)
-  if first == nil then return nil end
-  if first == last then return { 0, first, index, { first } } end
+  local groups, first, last = find_query(candidate, query, 1)
+  if groups == nil then return nil end
+  if groups == 1 then return { 1, last - first, first, index } end
 
-  -- NOTE: This approach doesn't iterate **all** query matches. It is fine for
-  -- width optimization but maybe not for more (like contiguous groups number).
-  -- Example: for query {'a', 'b', 'c'} candidate 'aaxbbbc' will be matched as
-  -- having 3 groups (indexes 2, 4, 7) but correct one is 2 groups (2, 6, 7).
-
-  -- Iteratively try to find better matches by advancing last match
-  local best_first, best_last, best_width = first, last, last - first
-  while last do
+  -- Iteratively try to find better matches by advancing first match
+  local best_groups, best_first, best_last, best_width = groups, first, last, last - first
+  while groups do
     local width = last - first
-    if width < best_width then
-      best_first, best_last, best_width = first, last, width
+    if groups < best_groups or (groups == best_groups and width < best_width) then
+      best_groups, best_first, best_last, best_width = groups, first, last, width
     end
 
-    first, last = find_query(candidate, query, first + 1)
+    groups, first, last = find_query(candidate, query, first + 1)
   end
 
   -- NOTE: No field names is not clear code, but consistently better performant
-  return { best_last - best_first, best_first, index }
+  return { best_groups, best_last - best_first, best_first, index }
 end
 
 H.match_offsets_fuzzy = function(match_data, query, stritems)
   local res, n_query = {}, #query
   for i_match, data in ipairs(match_data) do
-    local offsets, to = { data[2] }, data[2]
+    local s, offsets, to = stritems[data[4]], { data[3] }, data[3]
     for j_query = 2, n_query do
-      offsets[j_query], to = string.find(stritems[data[3]], query[j_query], to + 1, true)
+      offsets[j_query], to = string.find(s, query[j_query], to + 1, true)
     end
     res[i_match] = offsets
   end
@@ -1688,49 +1688,64 @@ end
 
 H.find_query = function(s, query, init)
   local first, to = string.find(s, query[1], init, true)
-  if first == nil then return nil, nil end
+  if first == nil then return nil, nil, nil end
 
   -- Both `first` and `last` indicate the start byte of first and last match
-  local last = first
+  local last, groups = first, 1
   for i = 2, #query do
+    local prev_to = to
     last, to = string.find(s, query[i], to + 1, true)
-    if not last then return nil, nil end
+    if not last then return nil, nil, nil end
+    groups = groups + ((last > prev_to + 1) and 1 or 0)
   end
-  return first, last
+  return groups, first, last
 end
 
 H.match_sort = function(match_data)
-  -- Spread indexes in width-start buckets
-  local buckets, max_width, width_max_start = {}, 0, {}
+  -- Spread indexes in groups-width-start buckets tracking maximum values
+  local buckets, max_groups, groups_max_width, groups_width_max_start = {}, 0, {}, {}
   for i = 1, #match_data do
-    local data, width, start = match_data[i], match_data[i][1], match_data[i][2]
-    local buck_width = buckets[width] or {}
+    local data = match_data[i]
+    local groups, width, start = data[1], data[2], data[3]
+    local buck_groups = buckets[groups] or {}
+    local buck_width = buck_groups[width] or {}
     local buck_start = buck_width[start] or {}
-    table.insert(buck_start, data[3])
+    table.insert(buck_start, data[4])
     buck_width[start] = buck_start
-    buckets[width] = buck_width
+    buck_groups[width] = buck_width
+    buckets[groups] = buck_groups
 
-    max_width = math.max(max_width, width)
+    max_groups = math.max(max_groups, groups)
+    groups_max_width[groups] = math.max(groups_max_width[groups] or 0, width)
+
+    local width_max_start = groups_width_max_start[groups] or {}
     width_max_start[width] = math.max(width_max_start[width] or 0, start)
+    groups_width_max_start[groups] = width_max_start
   end
 
   -- Sort index in place (to make stable sort) within buckets
   local poke_picker = H.poke_picker_throttle(H.querytick)
-  for _, buck_width in pairs(buckets) do
-    for _, buck_start in pairs(buck_width) do
-      if not poke_picker() then return nil end
-      table.sort(buck_start)
+  for _, buck_groups in pairs(buckets) do
+    for _, buck_width in pairs(buck_groups) do
+      for _, buck_start in pairs(buck_width) do
+        if not poke_picker() then return nil end
+        table.sort(buck_start)
+      end
     end
   end
 
   -- Gather indexes back in order
   local res = {}
-  for width = 0, max_width do
-    local buck_width = buckets[width]
-    for start = 1, (width_max_start[width] or 0) do
-      local buck_start = buck_width[start] or {}
-      for i = 1, #buck_start do
-        table.insert(res, buck_start[i])
+  for groups = 1, max_groups do
+    local buck_groups = buckets[groups]
+    local width_max_start = groups_width_max_start[groups] or {}
+    for width = 0, (groups_max_width[groups] or -1) do
+      local buck_width = buck_groups[width]
+      for start = 1, (width_max_start[width] or 0) do
+        local buck_start = buck_width[start] or {}
+        for i = 1, #buck_start do
+          table.insert(res, buck_start[i])
+        end
       end
     end
   end
