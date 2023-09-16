@@ -12,8 +12,6 @@
 --     - Lua string spec.
 --
 -- - 'mini.ai':
---     - Line.
---     - Buffer.
 --
 -- Tests:
 --
@@ -109,9 +107,12 @@ MiniExtra.ai_specs.buffer = function(ai_type)
   return { from = { line = start_line, col = 1 }, to = { line = end_line, col = to_col } }
 end
 
+-- - Advise to call |MiniPick.setup()| before calling these. Or at least ensure
+--   that highlight groups are defined.
 MiniExtra.pickers = {}
 
 MiniExtra.pickers.diagnostic = function(local_opts, opts)
+  local pick = H.validate_pick('diagnostic')
   local_opts = vim.tbl_deep_extend('force', { buf_id = nil, get_opts = {}, sort_by_severity = true }, local_opts or {})
 
   local plus_one = function(x)
@@ -165,25 +166,26 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
     end
   end
 
-  local default_opts = { source = H.pick_normalize_source({ name = 'Diagnostic' }), content = { show = show } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  local default_opts = { source = { name = 'Diagnostic' }, content = { show = show } }
+  return H.pick_start(items, default_opts, opts)
 end
 
 -- TODO: Use only pure `vim.v.oldfiles` in favor of 'mini.frecency'
 MiniExtra.pickers.oldfiles = function(local_opts, opts)
+  local pick = H.validate_pick('oldfiles')
   local_opts = vim.tbl_deep_extend('force', { include_current_session = true }, local_opts or {})
 
   H.oldfiles_normalize()
   local items = H.oldfile_get_array()
 
   local show = H.pick_get_config().content.show or H.show_with_icons
-  local default_opts = { source = H.pick_normalize_source({ name = 'Oldfiles' }), content = { show = show } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
-  MiniPick.start(opts)
+  local default_opts = { source = { name = 'Oldfiles' }, content = { show = show } }
+  return H.pick_start(items, default_opts, opts)
 end
 
 MiniExtra.pickers.buf_lines = function(local_opts, opts)
+  local pick = H.validate_pick('buf_lines')
+
   local_opts = vim.tbl_deep_extend('force', { buf_id = nil }, local_opts or {})
   local buffers, all_buffers = {}, true
   if H.is_valid_buf(local_opts.buf_id) then
@@ -194,7 +196,7 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
     end
   end
 
-  local poke_picker = MiniPick.poke_is_picker_active
+  local poke_picker = pick.poke_is_picker_active
   local f = function()
     local items = {}
     for _, buf_id in ipairs(buffers) do
@@ -207,18 +209,18 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
         table.insert(items, item)
       end
     end
-    MiniPick.set_picker_items(items)
+    pick.set_picker_items(items)
   end
   local items = vim.schedule_wrap(coroutine.wrap(f))
 
   local show = H.pick_get_config().content.show
   if all_buffers and show == nil then show = H.show_with_icons end
-  local default_opts = { source = H.pick_normalize_source({ name = 'Buffers lines' }), content = { show = show } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  local default_opts = { source = { name = 'Buffers lines' }, content = { show = show } }
+  return H.pick_start(items, default_opts, opts)
 end
 
 MiniExtra.pickers.history = function(local_opts, opts)
+  local pick = H.validate_pick('history')
   local_opts = vim.tbl_deep_extend('force', { type = 'all' }, local_opts or {})
 
   -- Validate name
@@ -261,12 +263,11 @@ MiniExtra.pickers.history = function(local_opts, opts)
 
   local default_source =
     { name = string.format('History (%s)', history_type), preview = preview, choose = choose, choose_all = choose_all }
-  default_source = H.pick_normalize_source(default_source)
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  return H.pick_start(items, { source = default_source }, opts)
 end
 
 MiniExtra.pickers.hl_groups = function(local_opts, opts)
+  local pick = H.validate_pick('hl_groups')
   local_opts = local_opts or {}
 
   local group_data = vim.split(vim.api.nvim_exec('highlight', true), '\n')
@@ -299,12 +300,12 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
   local choose_all = H.pick_make_choose_all_first(choose)
 
   local default_source = { name = 'Highlight groups', preview = preview, choose = choose, choose_all = choose_all }
-  local default_opts = { source = H.pick_normalize_source(default_source), content = { show = show } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  local default_opts = { source = default_source, content = { show = show } }
+  return H.pick_start(items, default_opts, opts)
 end
 
 MiniExtra.pickers.commands = function(local_opts, opts)
+  local pick = H.validate_pick('commands')
   local_opts = local_opts or {}
 
   local commands = vim.tbl_deep_extend('force', vim.api.nvim_get_commands({}), vim.api.nvim_buf_get_commands(0, {}))
@@ -326,13 +327,12 @@ MiniExtra.pickers.commands = function(local_opts, opts)
   local choose_all = H.pick_make_choose_all_first(choose)
 
   local items = vim.fn.getcompletion('', 'command')
-  local default_source = { name = 'Commands', preview = preview, choose = choose, choose_all = choose_all }
-  default_source = H.pick_normalize_source(default_source)
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  local default_opts = { source = { name = 'Commands', preview = preview, choose = choose, choose_all = choose_all } }
+  return H.pick_start(items, default_opts, opts)
 end
 
 MiniExtra.pickers.git_files = function(local_opts, opts)
+  local pick = H.validate_pick('git_files')
   local_opts = vim.tbl_deep_extend('force', { type = 'tracked' }, local_opts or {})
 
   --stylua: ignore
@@ -346,9 +346,9 @@ MiniExtra.pickers.git_files = function(local_opts, opts)
   if command == nil then H.error('Wrong `local_opts.type` for `pickers.git_files`.') end
 
   local show = H.pick_get_config().content.show or H.show_with_icons
-  local default_source = H.pick_normalize_source({ name = string.format('Git files (%s)', local_opts.type) })
+  local default_source = { name = string.format('Git files (%s)', local_opts.type) }
   opts = vim.tbl_deep_extend('force', { source = default_source, content = { show = show } }, opts or {})
-  return MiniPick.builtin.cli({ command = command }, opts)
+  return pick.builtin.cli({ command = command }, opts)
 end
 
 -- `git_commits()` - all commits from parent Git repository of cwd
@@ -356,6 +356,7 @@ end
 -- `git_commits({ path = vim.api.nvim_buf_get_name(0) })` - commits affecting
 --   file in current buffer
 MiniExtra.pickers.git_commits = function(local_opts, opts)
+  local pick = H.validate_pick('git_commits')
   local_opts = vim.tbl_deep_extend('force', { path = nil, choose_type = 'checkout' }, local_opts or {})
 
   -- Normalize target path
@@ -383,7 +384,7 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
   local preview = show_patch
 
   local choose_show_patch = function(item)
-    local win_target = (MiniPick.get_picker_state().windows or {}).target
+    local win_target = (pick.get_picker_state().windows or {}).target
     if win_target == nil or not H.is_valid_win(win_target) then return end
     local buf_id = vim.api.nvim_create_buf(true, true)
     show_patch(item, buf_id)
@@ -399,12 +400,12 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
 
   local default_source =
     { name = 'Git commits', cwd = repo_dir, preview = preview, choose = choose, choose_all = choose_all }
-  default_source = H.pick_normalize_source(default_source)
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
-  return MiniPick.builtin.cli({ command = command }, opts)
+  return pick.builtin.cli({ command = command }, opts)
 end
 
 MiniExtra.pickers.git_branches = function(local_opts, opts)
+  local pick = H.validate_pick('git_branches')
   local_opts = vim.tbl_deep_extend('force', { include_remote = false }, local_opts or {})
 
   local command = { 'git', 'branch', '-v', '--no-color', '--list' }
@@ -423,14 +424,12 @@ MiniExtra.pickers.git_branches = function(local_opts, opts)
   local choose_all = H.pick_make_choose_all_first(choose)
 
   local default_source = { name = 'Git branches', preview = preview, choose = choose, choose_all = choose_all }
-  opts = vim.tbl_deep_extend('force', { source = H.pick_normalize_source(default_source) }, opts or {})
-  return MiniPick.builtin.cli({ command = command }, opts)
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
+  return pick.builtin.cli({ command = command }, opts)
 end
 
--- ???Heuristically computed "best" files???
-MiniExtra.pickers.frecency = function(local_opts, opts) end
-
 MiniExtra.pickers.options = function(local_opts, opts)
+  local pick = H.validate_pick('options')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
 
   local scope, items = local_opts.scope, {}
@@ -440,7 +439,7 @@ MiniExtra.pickers.options = function(local_opts, opts)
   table.sort(items, function(a, b) return a.item < b.item end)
 
   local show = function(items_to_show, buf_id)
-    MiniPick.default_show(items_to_show, buf_id)
+    pick.default_show(items_to_show, buf_id)
 
     for i, item in ipairs(items_to_show) do
       if not item.info.was_set then H.pick_highlight_line(buf_id, i, 'Comment', 199) end
@@ -471,12 +470,12 @@ MiniExtra.pickers.options = function(local_opts, opts)
   --stylua: ignore
   local name = string.format('Options (%s)', scope)
   local default_source = { name = name, preview = preview, choose = choose, choose_all = choose_all }
-  local default_opts = { source = H.pick_normalize_source(default_source), content = { show = show } }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  local default_opts = { source = default_source, content = { show = show } }
+  return H.pick_start(items, default_opts, opts)
 end
 
 MiniExtra.pickers.keymaps = function(local_opts, opts)
+  local pick = H.validate_pick('keymaps')
   local_opts = vim.tbl_deep_extend('force', { mode = 'all', scope = 'all' }, local_opts or {})
   local modes = local_opts.mode == 'all' and { 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' } or { local_opts.mode }
   local scope = local_opts.scope
@@ -518,7 +517,7 @@ MiniExtra.pickers.keymaps = function(local_opts, opts)
     local path, lnum = get_callback_pos(item.maparg)
     if path ~= nil then
       item.path, item.lnum = path, lnum
-      return MiniPick.default_preview(item, buf_id)
+      return pick.default_preview(item, buf_id)
     end
     local lines = vim.split(vim.inspect(item.maparg), '\n')
     H.set_buflines(buf_id, lines)
@@ -532,13 +531,12 @@ MiniExtra.pickers.keymaps = function(local_opts, opts)
   local choose_all = H.pick_make_choose_all_first(choose)
 
   local name = string.format('Keymaps (%s)', scope)
-  local default_source = { name = name, preview = preview, choose = choose, choose_all = choose_all }
-  default_source = H.pick_normalize_source(default_source)
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  local default_opts = { source = { name = name, preview = preview, choose = choose, choose_all = choose_all } }
+  return H.pick_start(items, default_opts, opts)
 end
 
 MiniExtra.pickers.registers = function(local_opts, opts)
+  local pick = H.validate_pick('registers')
   local_opts = local_opts or {}
 
   local describe_register = function(register)
@@ -567,12 +565,11 @@ MiniExtra.pickers.registers = function(local_opts, opts)
   local preview = H.pick_make_no_preview('Registers')
 
   local default_source = { name = 'Registers', preview = preview, choose = choose, choose_all = choose_all }
-  default_source = H.pick_normalize_source(default_source)
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  return H.pick_start(items, { source = default_source }, opts)
 end
 
 MiniExtra.pickers.marks = function(local_opts, opts)
+  local pick = H.validate_pick('marks')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
   local scope = local_opts.scope
 
@@ -594,13 +591,13 @@ MiniExtra.pickers.marks = function(local_opts, opts)
   if scope == 'all' or scope == 'buf' then populate_items(vim.fn.getmarklist(vim.api.nvim_get_current_buf())) end
   if scope == 'all' or scope == 'global' then populate_items(vim.fn.getmarklist()) end
 
-  local default_source = H.pick_normalize_source({ name = string.format('Marks (%s)', scope) })
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
-  return MiniPick.start(opts)
+  local default_opts = { source = { name = string.format('Marks (%s)', scope) } }
+  return H.pick_start(items, default_opts, opts)
 end
 
 -- "quickfix", "location", "jump", "change"
 MiniExtra.pickers.list = function(local_opts, opts)
+  local pick = H.validate_pick('list')
   local_opts = vim.tbl_deep_extend('force', { name = 'all' }, local_opts or {})
 
   -- Validate name
@@ -612,9 +609,12 @@ MiniExtra.pickers.list = function(local_opts, opts)
 end
 
 -- Should be several useful ones: references, document/workspace symbols, other?
-MiniExtra.pickers.lsp = function(local_opts, opts) end
+MiniExtra.pickers.lsp = function(local_opts, opts) local pick = H.validate_pick('lsp') end
 
 -- Something with tree-sitter
+
+-- ???Heuristically computed "best" files???
+MiniExtra.pickers.frecency = function(local_opts, opts) end
 
 -- Helper data ================================================================
 -- Module default config
@@ -659,10 +659,20 @@ H.track_oldfile = function(data)
 end
 
 -- Pickers --------------------------------------------------------------------
-H.pick_normalize_source = function(source)
-  local defaults =
-    { preview = MiniPick.default_preview, choose = MiniPick.default_choose, choose_all = MiniPick.default_choose_all }
-  return vim.tbl_deep_extend('force', defaults, source or {})
+H.validate_pick = function(fun_name)
+  local has_pick, pick = pcall(require, 'mini-dev.pick')
+  if not has_pick then
+    H.error(string.format([[`pickers.%s()` requires 'mini.pick' which can not be found.]], fun_name))
+  end
+  return pick
+end
+
+H.pick_start = function(items, default_opts, opts)
+  local pick = H.validate_pick()
+  local fallback =
+    { source = { preview = pick.default_preview, choose = pick.default_choose, choose_all = pick.default_choose_all } }
+  local opts_final = vim.tbl_deep_extend('force', fallback, default_opts, opts or {}, { source = { items = items } })
+  return pick.start(opts_final)
 end
 
 H.pick_highlight_line = function(buf_id, line, hl_group, priority)
@@ -684,8 +694,12 @@ H.pick_make_choose_all_first = function(choose_single)
   end
 end
 
-H.pick_get_config =
-  function() return vim.tbl_deep_extend('force', (MiniPick or {}).config or {}, vim.b.minipick_config or {}) end
+H.pick_get_config = function()
+  return vim.tbl_deep_extend('force', (require('mini-dev.pick') or {}).config or {}, vim.b.minipick_config or {})
+end
+
+H.show_with_icons =
+  function(items, buf_id) require('mini-dev.pick').default_show(items, buf_id, { show_icons = true }) end
 
 -- Oldfiles picker ------------------------------------------------------------
 H.oldfiles_normalize = function()
@@ -785,7 +799,5 @@ H.ensure_text_width = function(text, width)
   if text_width <= width then return text .. string.rep(' ', width - text_width) end
   return '…' .. vim.fn.strcharpart(text, text_width - width + 1, width - 1)
 end
-
-H.show_with_icons = function(items, buf_id) MiniPick.default_show(items, buf_id, { show_icons = true }) end
 
 return MiniExtra
