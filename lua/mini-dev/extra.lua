@@ -259,10 +259,7 @@ MiniExtra.pickers.history = function(local_opts, opts)
     if id == '/' or id == '?' then vim.schedule(function() vim.fn.feedkeys(id .. entry .. '\r', 'nx') end) end
   end
 
-  local choose_all = H.pick_make_choose_all_first(choose)
-
-  local default_source =
-    { name = string.format('History (%s)', history_type), preview = preview, choose = choose, choose_all = choose_all }
+  local default_source = { name = string.format('History (%s)', history_type), preview = preview, choose = choose }
   return H.pick_start(items, { source = default_source }, opts)
 end
 
@@ -297,9 +294,7 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
     vim.schedule(function() vim.fn.feedkeys(':hi ' .. hl_def, 'n') end)
   end
 
-  local choose_all = H.pick_make_choose_all_first(choose)
-
-  local default_source = { name = 'Highlight groups', preview = preview, choose = choose, choose_all = choose_all }
+  local default_source = { name = 'Highlight groups', preview = preview, choose = choose }
   local default_opts = { source = default_source, content = { show = show } }
   return H.pick_start(items, default_opts, opts)
 end
@@ -324,10 +319,8 @@ MiniExtra.pickers.commands = function(local_opts, opts)
     vim.schedule(function() vim.fn.feedkeys(keys) end)
   end
 
-  local choose_all = H.pick_make_choose_all_first(choose)
-
   local items = vim.fn.getcompletion('', 'command')
-  local default_opts = { source = { name = 'Commands', preview = preview, choose = choose, choose_all = choose_all } }
+  local default_opts = { source = { name = 'Commands', preview = preview, choose = choose } }
   return H.pick_start(items, default_opts, opts)
 end
 
@@ -396,10 +389,8 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
   end
 
   local choose = local_opts.choose_type == 'show_patch' and choose_show_patch or choose_checkout
-  local choose_all = H.pick_make_choose_all_first(choose)
 
-  local default_source =
-    { name = 'Git commits', cwd = repo_dir, preview = preview, choose = choose, choose_all = choose_all }
+  local default_source = { name = 'Git commits', cwd = repo_dir, preview = preview, choose = choose }
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command }, opts)
 end
@@ -421,9 +412,7 @@ MiniExtra.pickers.git_branches = function(local_opts, opts)
     vim.schedule(function() vim.fn.system('git checkout ' .. get_branch_name(item)) end)
   end
 
-  local choose_all = H.pick_make_choose_all_first(choose)
-
-  local default_source = { name = 'Git branches', preview = preview, choose = choose, choose_all = choose_all }
+  local default_source = { name = 'Git branches', preview = preview, choose = choose }
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command }, opts)
 end
@@ -465,12 +454,8 @@ MiniExtra.pickers.options = function(local_opts, opts)
     vim.schedule(function() vim.fn.feedkeys(keys) end)
   end
 
-  local choose_all = H.pick_make_choose_all_first(choose)
-
-  --stylua: ignore
   local name = string.format('Options (%s)', scope)
-  local default_source = { name = name, preview = preview, choose = choose, choose_all = choose_all }
-  local default_opts = { source = default_source, content = { show = show } }
+  local default_opts = { source = { name = name, preview = preview, choose = choose }, content = { show = show } }
   return H.pick_start(items, default_opts, opts)
 end
 
@@ -528,10 +513,7 @@ MiniExtra.pickers.keymaps = function(local_opts, opts)
     vim.schedule(function() vim.fn.feedkeys(keys) end)
   end
 
-  local choose_all = H.pick_make_choose_all_first(choose)
-
-  local name = string.format('Keymaps (%s)', scope)
-  local default_opts = { source = { name = name, preview = preview, choose = choose, choose_all = choose_all } }
+  local default_opts = { source = { name = string.format('Keymaps (%s)', scope), preview = preview, choose = choose } }
   return H.pick_start(items, default_opts, opts)
 end
 
@@ -560,12 +542,9 @@ MiniExtra.pickers.registers = function(local_opts, opts)
     vim.fn.feedkeys(keys)
   end)
 
-  local choose_all = H.pick_make_choose_all_first(choose)
-
   local preview = H.pick_make_no_preview('Registers')
 
-  local default_source = { name = 'Registers', preview = preview, choose = choose, choose_all = choose_all }
-  return H.pick_start(items, { source = default_source }, opts)
+  return H.pick_start(items, { source = { name = 'Registers', preview = preview, choose = choose } }, opts)
 end
 
 MiniExtra.pickers.marks = function(local_opts, opts)
@@ -609,7 +588,36 @@ MiniExtra.pickers.list = function(local_opts, opts)
 end
 
 -- Should be several useful ones: references, document/workspace symbols, other?
-MiniExtra.pickers.lsp = function(local_opts, opts) local pick = H.validate_pick('lsp') end
+-- Basically, everything in `vim.lsp.buf` that has `on_list` option.
+-- Notes:
+-- - Needs Neovim>=0.8.
+-- - Doesn't return anything.
+MiniExtra.pickers.lsp = function(local_opts, opts)
+  if vim.fn.has('nvim-0.8') == 0 then H.error('`lsp` picker requires Neovim>=0.8.') end
+  local pick = H.validate_pick('lsp')
+  local_opts = vim.tbl_deep_extend('force', { source = nil }, local_opts or {})
+
+  --stylua: ignore
+  local supported_sources = {
+    'declaration', 'definition', 'document_symbol', 'implementation', 'references', 'type_definition', 'workspace_symbol',
+  }
+  local source = local_opts.source
+  if source == nil then H.error('`lsp` picker needs explicit source.') end
+  if not vim.tbl_contains(supported_sources, source) then
+    local msg = string.format(
+      '`lsp` picker does not support "%s" source. Should be one of %s.',
+      source,
+      table.concat(vim.tbl_map(vim.inspect, supported_sources), ', ')
+    )
+    H.error(msg)
+  end
+
+  if source == 'references' then return vim.lsp.buf[source](nil, { on_list = H.lsp_make_on_list(source, opts) }) end
+  if source == 'workspace_symbol' then
+    return vim.lsp.buf[source]('', { on_list = H.lsp_make_on_list(source, opts) })
+  end
+  return vim.lsp.buf[source]({ on_list = H.lsp_make_on_list(source, opts) })
+end
 
 -- Something with tree-sitter
 
@@ -687,13 +695,6 @@ H.pick_make_no_preview = function(picker_name)
   return function(_, buf_id) H.set_buflines(buf_id, { msg }) end
 end
 
-H.pick_make_choose_all_first = function(choose_single)
-  return function(items)
-    if #items == 0 then return end
-    choose_single(items[1])
-  end
-end
-
 H.pick_get_config = function()
   return vim.tbl_deep_extend('force', (require('mini-dev.pick') or {}).config or {}, vim.b.minipick_config or {})
 end
@@ -747,6 +748,43 @@ H.oldfile_update_recency = function(path)
   local n = H.cache.oldfile.max_recency + 1
   H.cache.oldfile.recency[path] = n
   H.cache.oldfile.max_recency = n
+end
+
+-- LSP picker -----------------------------------------------------------------
+H.lsp_make_on_list = function(source, opts)
+  -- Align list of symbols by its type at the beginning
+  local process = function(items)
+    items = vim.tbl_map(H.lsp_make_file_posistion, items)
+    table.sort(items, function(a, b) return a.item < b.item end)
+    return items
+  end
+
+  local show
+  -- if source == 'document_symbol' or source == 'workspace_symbol' then
+  --   show = function(items, buf_id)
+  --     -- TODO: Add highlight according to `item.kind` using `@lsp.type.xxx`
+  --     -- highlight groups
+  --
+  --   end
+  -- end
+
+  return function(data)
+    local items = vim.tbl_map(function(x)
+      x.item, x.path = x.text or '', x.filename or nil
+      return x
+    end, data.items)
+    items = process(items)
+
+    local default_opts = { source = { name = string.format('LSP (%s)', source) }, content = { show = show } }
+    return H.pick_start(items, default_opts, opts)
+  end
+end
+
+H.lsp_make_file_posistion = function(item)
+  if item.path == nil then return end
+  local path = vim.fn.fnamemodify(item.path, ':p:.')
+  item.item = string.format('%s:%s:%s: %s', path, item.lnum or 1, item.col or 1, item.item)
+  return item
 end
 
 -- CLI ------------------------------------------------------------------------

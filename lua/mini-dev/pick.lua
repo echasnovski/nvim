@@ -43,14 +43,11 @@
 --   items during startup.
 
 -- TODO:
+-- Code:
 --
--- - Think about how to enable fuzzy search for special queries:
---   "'exact", '^start', 'end$'.
---
--- - Think about fully making coherent naming for items fields (`line` instead
---   of `lnum`, `line_end` instead of `end_lnum`, etc.).
---
--- - Profile memory usage.
+-- - **Again** rethink hard about "close on lost focus" logic. It is useful
+--   because errors might come not only from picker's life cycle while leaving
+--   picker window hanging.
 --
 -- Tests:
 --
@@ -435,9 +432,10 @@ MiniPick.default_choose = function(item)
 end
 
 MiniPick.default_choose_all = function(items, opts)
+  if #items == 0 then return end
   opts = vim.tbl_deep_extend('force', { list_type = 'quickfix' }, opts or {})
 
-  -- Construct a list
+  -- Construct a potential quickfix/location list
   local list = {}
   for _, item in ipairs(items) do
     local data = H.parse_item(item)
@@ -448,7 +446,13 @@ MiniPick.default_choose_all = function(items, opts)
       table.insert(list, entry)
     end
   end
-  if #list == 0 then return end
+
+  -- Fall back to choosing first item if no quickfix list was constructed
+  if #list == 0 then
+    if not MiniPick.is_picker_active() then return end
+    local choose = MiniPick.get_picker_opts().source.choose
+    return choose(items[1])
+  end
 
   -- Set as quickfix or location list
   local win_target = MiniPick.get_picker_state().windows.target
@@ -470,15 +474,14 @@ MiniPick.ui_select = function(items, opts, on_choice)
     table.insert(items_ext, { index = i, item = format_item(items[i]), item_original = items[i] })
   end
 
-  local picker_opts = {
-    source = {
-      items = items_ext,
-      name = opts.prompt,
-      choose = function(item) on_choice((item or {}).item_original, (item or {}).index) end,
-      preview = H.preview_inspect,
-    },
-  }
-  MiniPick.start(picker_opts)
+  local choose = function(item)
+    if item == nil then return end
+    on_choice(item.item_original, item.index)
+    MiniPick.set_picker_target_window(vim.api.nvim_get_current_win())
+  end
+
+  local source = { items = items_ext, name = opts.prompt, choose = choose, preview = H.preview_inspect }
+  MiniPick.start({ source = source })
 end
 
 MiniPick.builtin = {}
@@ -632,7 +635,7 @@ MiniPick.get_picker_matches = function()
 end
 
 ---@seealso |MiniPick.set_picker_opts()|
-MiniPick.get_picker_opts = function(opts) return vim.deepcopy((H.pickers.active or {}).opts) end
+MiniPick.get_picker_opts = function() return vim.deepcopy((H.pickers.active or {}).opts) end
 
 ---@seealso |MiniPick.set_picker_target_window()|
 MiniPick.get_picker_state = function()
@@ -1019,6 +1022,7 @@ end
 H.picker_new_buf = function()
   local buf_id = vim.api.nvim_create_buf(false, true)
   vim.bo[buf_id].filetype = 'minipick'
+  vim.bo[buf_id].matchpairs = ''
   return buf_id
 end
 
@@ -1088,7 +1092,7 @@ end
 
 H.item_to_string = function(item)
   item = H.expand_callable(item)
-  if type(item) == 'table' then item = item.item end
+  if type(item) == 'table' then item = item.item or item.text end
   return type(item) == 'string' and item or vim.inspect(item, { newline = ' ', indent = '' })
 end
 
