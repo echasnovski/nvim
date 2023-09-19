@@ -153,16 +153,11 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   }
 
   local show = function(items_to_show, buf_id)
-    local lines, hl_groups = {}, {}
-    for _, item in ipairs(items_to_show) do
-      table.insert(lines, item.item)
-      table.insert(hl_groups, hl_groups_ref[item.severity])
-    end
+    pick.default_show(items_to_show, buf_id)
 
-    H.set_buflines(buf_id, lines)
     H.pick_clear_namespace(buf_id)
-    for i = 1, #lines do
-      H.pick_highlight_line(buf_id, i, hl_groups[i], 199)
+    for i, item in ipairs(items_to_show) do
+      H.pick_highlight_line(buf_id, i, hl_groups_ref[item.severity], 199)
     end
   end
 
@@ -574,19 +569,6 @@ MiniExtra.pickers.marks = function(local_opts, opts)
   return H.pick_start(items, default_opts, opts)
 end
 
--- "quickfix", "location", "jump", "change"
-MiniExtra.pickers.list = function(local_opts, opts)
-  local pick = H.validate_pick('list')
-  local_opts = vim.tbl_deep_extend('force', { name = 'all' }, local_opts or {})
-
-  -- Validate name
-  local name = local_opts.name
-  local name_ids = { quickfix = 'Q', location = 'L', jump = 'J', change = 'C', tag = 'T' }
-  if not (name == 'all' or name_ids[name] ~= nil) then
-    H.error('`local_opts.name` in `pickers.list()` should be one of "quickfix", "location", "jump", "change", "tag".')
-  end
-end
-
 -- Should be several useful ones: references, document/workspace symbols, other?
 -- Basically, everything in `vim.lsp.buf` that has `on_list` option.
 -- Notes:
@@ -620,6 +602,48 @@ MiniExtra.pickers.lsp = function(local_opts, opts)
 end
 
 -- Something with tree-sitter
+MiniExtra.pickers.treesitter = function(local_opts, opts)
+  if vim.fn.has('nvim-0.8') == 0 then H.error('`treesitter` picker requires Neovim>=0.8.') end
+  local pick = H.validate_pick('treesitter')
+  local_opts = vim.tbl_deep_extend('force', {}, local_opts or {})
+
+  local buf_id = vim.api.nvim_get_current_buf()
+  local parser = vim.treesitter.get_parser(buf_id)
+  if parser == nil then H.error('`treesitter` picker requires active tree-sitter parser.') end
+
+  -- Make items by traversing root tree
+  local items, traverse = {}, nil
+  traverse = function(node, depth)
+    if depth >= 1000 then return end
+    for child in node:iter_children() do
+      if child:named() then
+        local lnum, col = child:range()
+        local stritem = string.format('%s:%s: %s', lnum + 1, col + 1, child:type() or '')
+        table.insert(items, { item = stritem, buf_id = buf_id, lnum = lnum + 1, col = col + 1 })
+
+        traverse(child, depth + 1)
+      end
+    end
+  end
+
+  local root = parser:parse(true)[1]:root()
+  traverse(root, 1)
+
+  return H.pick_start(items, { source = { name = 'Tree-sitter nodes' } }, opts)
+end
+
+-- "quickfix", "location", "jump", "change"
+MiniExtra.pickers.list = function(local_opts, opts)
+  local pick = H.validate_pick('list')
+  local_opts = vim.tbl_deep_extend('force', { name = 'all' }, local_opts or {})
+
+  -- Validate name
+  local name = local_opts.name
+  local name_ids = { quickfix = 'Q', location = 'L', jump = 'J', change = 'C', tag = 'T' }
+  if not (name == 'all' or name_ids[name] ~= nil) then
+    H.error('`local_opts.name` in `pickers.list()` should be one of "quickfix", "location", "jump", "change", "tag".')
+  end
+end
 
 -- ???Heuristically computed "best" files???
 MiniExtra.pickers.frecency = function(local_opts, opts) end
@@ -691,8 +715,8 @@ end
 H.pick_clear_namespace = function(buf_id) pcall(vim.api.nvim_buf_clear_namespace, buf_id, 0, -1) end
 
 H.pick_make_no_preview = function(picker_name)
-  local msg = string.format('No preview available for `%s` picker', picker_name)
-  return function(_, buf_id) H.set_buflines(buf_id, { msg }) end
+  local lines = { string.format('No preview available for `%s` picker', picker_name) }
+  return function(_, buf_id) H.set_buflines(buf_id, lines) end
 end
 
 H.pick_get_config = function()
@@ -752,32 +776,55 @@ end
 
 -- LSP picker -----------------------------------------------------------------
 H.lsp_make_on_list = function(source, opts)
-  -- Align list of symbols by its type at the beginning
+  -- Prepend file position info to item and sort
   local process = function(items)
-    items = vim.tbl_map(H.lsp_make_file_posistion, items)
-    table.sort(items, function(a, b) return a.item < b.item end)
+    if source ~= 'document_symbol' then items = vim.tbl_map(H.lsp_make_file_posistion, items) end
+    table.sort(items, H.lsp_items_compare)
     return items
   end
 
+  -- Highlight symbol kind on Neovim>=0.9 (when `@lsp.type` groups introduced)
   local show
-  -- if source == 'document_symbol' or source == 'workspace_symbol' then
-  --   show = function(items, buf_id)
-  --     -- TODO: Add highlight according to `item.kind` using `@lsp.type.xxx`
-  --     -- highlight groups
-  --
-  --   end
-  -- end
+  if source == 'document_symbol' or source == 'workspace_symbol' then
+    local pick = H.validate_pick()
+    show = function(items_to_show, buf_id)
+      pick.default_show(items_to_show, buf_id)
+
+      H.pick_clear_namespace(buf_id)
+      for i, item in ipairs(items_to_show) do
+        -- Highlight using '@...' style highlight group with similar name
+        local hl_group = string.format('@%s', string.lower(item.kind or 'unknown'))
+        H.pick_highlight_line(buf_id, i, hl_group, 199)
+      end
+    end
+  end
 
   return function(data)
-    local items = vim.tbl_map(function(x)
-      x.item, x.path = x.text or '', x.filename or nil
-      return x
-    end, data.items)
+    local items = data.items
+    for _, item in ipairs(data.items) do
+      item.item, item.path = item.text or '', item.filename or nil
+    end
     items = process(items)
 
     local default_opts = { source = { name = string.format('LSP (%s)', source) }, content = { show = show } }
     return H.pick_start(items, default_opts, opts)
   end
+end
+
+H.lsp_items_compare = function(a, b)
+  local a_path, b_path = a.path or '', b.path or ''
+  if a_path < b_path then return true end
+  if a_path > b_path then return false end
+
+  local a_lnum, b_lnum = a.lnum or 1, b.lnum or 1
+  if a_lnum < b_lnum then return true end
+  if a_lnum > b_lnum then return false end
+
+  local a_col, b_col = a.col or 1, b.col or 1
+  if a_col < b_col then return true end
+  if a_col > b_col then return false end
+
+  return tostring(a) < tostring(b)
 end
 
 H.lsp_make_file_posistion = function(item)
