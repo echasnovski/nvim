@@ -139,10 +139,9 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   for _, item in ipairs(items) do
     local severity = vim.diagnostic.severity[item.severity] or ' '
     local text = item.message:gsub('\n', ' ')
-    item.item = string.format('%s │ %s │ %s', severity:sub(1, 1), H.ensure_text_width(item.path, path_width), text)
+    item.text = string.format('%s │ %s │ %s', severity:sub(1, 1), H.ensure_text_width(item.path, path_width), text)
     item.lnum, item.col, item.end_lnum, item.end_col =
       plus_one(item.lnum), plus_one(item.col), plus_one(item.end_lnum), plus_one(item.end_col)
-    item.text = string.format('%s %s', severity, text)
   end
 
   local hl_groups_ref = {
@@ -200,8 +199,7 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
       local buf_name = H.buf_get_name(buf_id) or ''
       for lnum, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
         local prefix = all_buffers and string.format('%s:', buf_name) or ''
-        local item = { item = string.format('%s%s:%s', prefix, lnum, l), buf_id = buf_id, lnum = lnum }
-        table.insert(items, item)
+        table.insert(items, { text = string.format('%s%s:%s', prefix, lnum, l), bufnr = buf_id, lnum = lnum })
       end
     end
     pick.set_picker_items(items)
@@ -418,9 +416,9 @@ MiniExtra.pickers.options = function(local_opts, opts)
 
   local scope, items = local_opts.scope, {}
   for name, info in pairs(vim.api.nvim_get_all_options_info()) do
-    if scope == 'all' or scope == info.scope then table.insert(items, { item = name, info = info }) end
+    if scope == 'all' or scope == info.scope then table.insert(items, { text = name, info = info }) end
   end
-  table.sort(items, function(a, b) return a.item < b.item end)
+  table.sort(items, function(a, b) return a.text < b.text end)
 
   local show = function(items_to_show, buf_id)
     pick.default_show(items_to_show, buf_id)
@@ -481,7 +479,7 @@ MiniExtra.pickers.keymaps = function(local_opts, opts)
   for _, item in ipairs(items) do
     local buf_map_indicator = item.maparg.buffer == 0 and ' ' or '@'
     local lhs = H.ensure_text_width(item.lhs_trans, max_lhs_width)
-    item.item = string.format('%s %s │ %s │ %s', item.maparg.mode, buf_map_indicator, lhs, item.desc or '')
+    item.text = string.format('%s %s │ %s │ %s', item.maparg.mode, buf_map_indicator, lhs, item.desc or '')
   end
 
   -- Define source
@@ -526,8 +524,8 @@ MiniExtra.pickers.registers = function(local_opts, opts)
 
   local items = {}
   for _, register in ipairs(all_registers) do
-    local item = string.format('%s │ %s', register, describe_register(register))
-    table.insert(items, { register = register, item = item })
+    local text = string.format('%s │ %s', register, describe_register(register))
+    table.insert(items, { register = register, text = text })
   end
 
   local choose = vim.schedule_wrap(function(item)
@@ -557,8 +555,8 @@ MiniExtra.pickers.marks = function(local_opts, opts)
       if path == nil then buf_id = info.pos[1] end
 
       local line, col = info.pos[2], math.abs(info.pos[3])
-      local stritem = string.format('%s │ %s%s:%s', info.mark:sub(2), path == nil and '' or (path .. ':'), line, col)
-      table.insert(items, { item = stritem, buf_id = buf_id, path = path, lnum = line, col = col })
+      local text = string.format('%s │ %s%s:%s', info.mark:sub(2), path == nil and '' or (path .. ':'), line, col)
+      table.insert(items, { text = text, bufnr = buf_id, path = path, lnum = line, col = col })
     end
   end
 
@@ -618,8 +616,8 @@ MiniExtra.pickers.treesitter = function(local_opts, opts)
     for child in node:iter_children() do
       if child:named() then
         local lnum, col = child:range()
-        local stritem = string.format('%s:%s: %s', lnum + 1, col + 1, child:type() or '')
-        table.insert(items, { item = stritem, buf_id = buf_id, lnum = lnum + 1, col = col + 1 })
+        local text = string.format('%s:%s: %s', lnum + 1, col + 1, child:type() or '')
+        table.insert(items, { text = text, bufnr = buf_id, lnum = lnum + 1, col = col + 1 })
 
         traverse(child, depth + 1)
       end
@@ -801,7 +799,7 @@ H.lsp_make_on_list = function(source, opts)
   return function(data)
     local items = data.items
     for _, item in ipairs(data.items) do
-      item.item, item.path = item.text or '', item.filename or nil
+      item.text, item.path = item.text or '', item.filename or nil
     end
     items = process(items)
 
@@ -829,7 +827,7 @@ end
 H.lsp_make_file_posistion = function(item)
   if item.path == nil then return end
   local path = vim.fn.fnamemodify(item.path, ':p:.')
-  item.item = string.format('%s:%s:%s: %s', path, item.lnum or 1, item.col or 1, item.item)
+  item.text = string.format('%s:%s:%s: %s', path, item.lnum or 1, item.col or 1, item.text)
   return item
 end
 

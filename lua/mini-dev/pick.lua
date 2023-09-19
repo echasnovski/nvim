@@ -468,15 +468,15 @@ MiniPick.default_choose_all = function(items, opts)
 end
 
 MiniPick.ui_select = function(items, opts, on_choice)
-  local format_item = opts.format_item or function(x) return tostring(x) end
+  local format_item = opts.format_item or H.item_to_string
   local items_ext = {}
   for i = 1, #items do
-    table.insert(items_ext, { index = i, item = format_item(items[i]), item_original = items[i] })
+    table.insert(items_ext, { text = format_item(items[i]), item = items[i], index = i })
   end
 
   local choose = function(item)
     if item == nil then return end
-    on_choice(item.item_original, item.index)
+    on_choice(item.item, item.index)
     MiniPick.set_picker_target_window(vim.api.nvim_get_current_win())
   end
 
@@ -548,7 +548,7 @@ MiniPick.builtin.help = function(local_opts, opts)
   vim.bo[help_buf].buftype = 'help'
   local tags = vim.api.nvim_buf_call(help_buf, function() return vim.fn.taglist('.*') end)
   vim.api.nvim_buf_delete(help_buf, { force = true })
-  vim.tbl_map(function(t) t.item = t.name end, tags)
+  vim.tbl_map(function(t) t.text = t.name end, tags)
 
   -- NOTE: Choosing is done after returning item. This is done to properly
   -- overcome special nature of `:help {subject}` command. For example, it
@@ -584,7 +584,7 @@ MiniPick.builtin.buffers = function(local_opts, opts)
   for _, l in ipairs(vim.split(buffers_output, '\n')) do
     local buf_str, name = l:match('^%s*%d+'), l:match('"(.*)"')
     local buf_id = tonumber(buf_str)
-    local item = { item = name, buf_id = buf_id }
+    local item = { text = name, bufnr = buf_id }
     if buf_id ~= cur_buf_id or include_current then table.insert(items, item) end
   end
 
@@ -1092,7 +1092,7 @@ end
 
 H.item_to_string = function(item)
   item = H.expand_callable(item)
-  if type(item) == 'table' then item = item.item or item.text end
+  if type(item) == 'table' then item = item.text end
   return type(item) == 'string' and item or vim.inspect(item, { newline = ' ', indent = '' })
 end
 
@@ -1792,7 +1792,7 @@ end
 
 H.parse_item_table = function(item)
   -- Buffer
-  local buf_id = item.buf_id or item.bufnr or item.buf
+  local buf_id = item.bufnr or item.buf_id or item.buf
   if H.is_valid_buf(buf_id) then
     --stylua: ignore
     return {
