@@ -176,7 +176,7 @@
 --- * `MiniPickIconFile` - default icon for file.
 --- * `MiniPickHeader` - headers in info buffer and previews.
 --- * `MiniPickMatchCurrent` - current matched item.
---- * `MiniPickMatchOffsets` - offset characters matching query elements.
+--- * `MiniPickMatchRanges` - ranges matching query elements.
 --- * `MiniPickNormal` - basic foreground/background highlighting.
 --- * `MiniPickPreviewLine` - target line in preview.
 --- * `MiniPickPreviewRegion` - target region in preview.
@@ -393,17 +393,17 @@ MiniPick.default_show = function(items, buf_id, opts)
   local match_data, match_type, query_adjusted = H.match_filter(H.seq_along(stritems), stritems, query)
   if match_data == nil then return end
 
-  local match_offsets_fun = match_type == 'fuzzy' and H.match_offsets_fuzzy or H.match_offsets_exact
-  local match_offsets = match_offsets_fun(match_data, query_adjusted, stritems)
+  local match_ranges_fun = match_type == 'fuzzy' and H.match_ranges_fuzzy or H.match_ranges_exact
+  local match_ranges = match_ranges_fun(match_data, query_adjusted, stritems)
 
   -- Place offset highlights accounting for possible shift due to prefixes
-  local extmark_opts = { hl_group = 'MiniPickMatchOffsets', hl_mode = 'combine', priority = 200 }
+  local extmark_opts = { hl_group = 'MiniPickMatchRanges', hl_mode = 'combine', priority = 200 }
   for i = 1, #match_data do
-    local row, offsets = match_data[i][3], match_offsets[i]
+    local row, ranges = match_data[i][3], match_ranges[i]
     local start_offset = prefix_data[row].text:len()
-    for _, off in ipairs(offsets) do
-      extmark_opts.end_row, extmark_opts.end_col = row - 1, start_offset + H.get_next_char_bytecol(lines[row], off)
-      H.set_extmark(buf_id, ns_id, row - 1, start_offset + off - 1, extmark_opts)
+    for _, range in ipairs(ranges) do
+      extmark_opts.end_row, extmark_opts.end_col = row - 1, start_offset + range[2]
+      H.set_extmark(buf_id, ns_id, row - 1, start_offset + range[1] - 1, extmark_opts)
     end
   end
 
@@ -849,7 +849,7 @@ H.create_default_hl = function()
   hi('MiniPickIconFile',      { link = 'MiniPickNormal' })
   hi('MiniPickHeader',        { link = 'DiagnosticFloatingHint' })
   hi('MiniPickMatchCurrent',  { link = 'CursorLine' })
-  hi('MiniPickMatchOffsets',  { link = 'DiagnosticFloatingHint' })
+  hi('MiniPickMatchRanges',   { link = 'DiagnosticFloatingHint' })
   hi('MiniPickNormal',        { link = 'NormalFloat' })
   hi('MiniPickPreviewLine',   { link = 'CursorLine' })
   hi('MiniPickPreviewRegion', { link = 'IncSearch' })
@@ -1405,6 +1405,10 @@ H.picker_query_add = function(picker, char)
   table.insert(picker.query, picker.caret, char)
   picker.caret = picker.caret + 1
   H.querytick = H.querytick + 1
+
+  -- Adding space might increase number of possible matches due to "grouped
+  -- fuzzy" matches. Example: 'ab cd' prompt adding ' ' to become 'ab c d'.
+  if picker.items ~= nil and char == ' ' then picker.match_inds = H.seq_along(picker.items) end
 end
 
 H.picker_query_delete = function(picker, n)
@@ -1569,25 +1573,29 @@ end
 
 -- Default match --------------------------------------------------------------
 H.match_filter = function(inds, stritems, query)
-  local n_query = #query
-  -- 'abc' and '*abc' - fuzzy match; "'abc" and 'a' - exact substring match;
-  -- '^abc' and 'abc$' - exact substring match at start and end.
+  local prompt = table.concat(query)
+  -- 'abc' and '*abc' - fuzzy; "'abc" and 'a' - exact substring;
+  -- 'ab c' - grouped fuzzy; '^abc' and 'abc$' - exact substring at start/end.
   local is_fuzzy_forced, is_exact_plain, is_exact_start, is_exact_end =
-    query[1] == '*', query[1] == "'", query[1] == '^', query[n_query] == '$'
+    query[1] == '*', query[1] == "'", query[1] == '^', query[#query] == '$'
+  local is_fuzzy_grouped = prompt:find(' ') ~= nil
 
-  local start_offset = (is_fuzzy_forced or is_exact_plain or is_exact_start) and 2 or 1
-  local end_offset = (not is_fuzzy_forced and not is_exact_plain and is_exact_end) and (n_query - 1) or n_query
-  query = vim.list_slice(query, start_offset, end_offset)
-  n_query = #query
+  if is_fuzzy_forced or is_exact_plain or is_exact_start or is_exact_end then
+    local start_offset = (is_fuzzy_forced or is_exact_plain or is_exact_start) and 2 or 1
+    local end_offset = #query - ((not is_fuzzy_forced and not is_exact_plain and is_exact_end) and 1 or 0)
+    query = vim.list_slice(query, start_offset, end_offset)
+  elseif is_fuzzy_grouped then
+    query = vim.split(prompt, ' +')
+  end
 
-  if n_query == 0 then return {}, 'nosort', query end
+  if #query == 0 then return {}, 'nosort', query end
 
   -- End-matching filtering doesn't result into nested matches.
   -- Example: type "$", move caret to left, type "m" (filters for "m$") and
   -- type "d" (should filter for "md$" but it is not a subset of "m$" matches).
   inds = is_exact_end and H.seq_along(stritems) or inds
 
-  local is_fuzzy_plain = not (is_exact_plain or is_exact_start or is_exact_end) and n_query > 1
+  local is_fuzzy_plain = not (is_exact_plain or is_exact_start or is_exact_end) and #query > 1
   if is_fuzzy_forced or is_fuzzy_plain then return H.match_filter_fuzzy(inds, stritems, query), 'fuzzy', query end
 
   local prefix = is_exact_start and '^' or ''
@@ -1617,16 +1625,18 @@ H.match_filter_exact_single = function(candidate, index, pattern, rel_offsets)
   return { 0, start, index }
 end
 
-H.match_offsets_exact = function(match_data, query)
-  -- All matches have same match offsets relative to match start
-  local rel_offsets = { 0 }
-  for i = 2, #query do
-    rel_offsets[i] = rel_offsets[i - 1] + query[i - 1]:len()
+H.match_ranges_exact = function(match_data, query)
+  -- All matches have same match ranges relative to match start
+  local cur_start, rel_ranges = 0, {}
+  for i = 1, #query do
+    rel_ranges[i] = { cur_start, cur_start + query[i]:len() - 1 }
+    cur_start = rel_ranges[i][2] + 1
   end
 
   local res = {}
   for i = 1, #match_data do
-    res[i] = vim.tbl_map(function(x) return match_data[i][2] + x end, rel_offsets)
+    local start = match_data[i][2]
+    res[i] = vim.tbl_map(function(x) return { start + x[1], start + x[2] } end, rel_ranges)
   end
 
   return res
@@ -1676,14 +1686,16 @@ H.match_filter_fuzzy_single = function(candidate, index, query, find_query)
   return { best_last - best_first, best_first, index }
 end
 
-H.match_offsets_fuzzy = function(match_data, query, stritems)
-  local res, n_query = {}, #query
+H.match_ranges_fuzzy = function(match_data, query, stritems)
+  local res, n_query, query_lens = {}, #query, vim.tbl_map(string.len, query)
   for i_match, data in ipairs(match_data) do
-    local offsets, to = { data[2] }, data[2]
+    local s, from, to = stritems[data[3]], data[2], data[2] + query_lens[1] - 1
+    local ranges = { { from, to } }
     for j_query = 2, n_query do
-      offsets[j_query], to = string.find(stritems[data[3]], query[j_query], to + 1, true)
+      from, to = string.find(s, query[j_query], to + 1, true)
+      ranges[j_query] = { from, to }
     end
-    res[i_match] = offsets
+    res[i_match] = ranges
   end
   return res
 end
