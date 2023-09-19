@@ -557,7 +557,7 @@ MiniExtra.pickers.marks = function(local_opts, opts)
       if path == nil then buf_id = info.pos[1] end
 
       local line, col = info.pos[2], math.abs(info.pos[3])
-      local stritem = string.format('%s │ %s:%s:%s', info.mark:sub(2), path or '', line, col)
+      local stritem = string.format('%s │ %s%s:%s', info.mark:sub(2), path == nil and '' or (path .. ':'), line, col)
       table.insert(items, { item = stritem, buf_id = buf_id, path = path, lnum = line, col = col })
     end
   end
@@ -605,13 +605,13 @@ end
 MiniExtra.pickers.treesitter = function(local_opts, opts)
   if vim.fn.has('nvim-0.8') == 0 then H.error('`treesitter` picker requires Neovim>=0.8.') end
   local pick = H.validate_pick('treesitter')
-  local_opts = vim.tbl_deep_extend('force', {}, local_opts or {})
+  local_opts = local_opts or {}
 
   local buf_id = vim.api.nvim_get_current_buf()
   local parser = vim.treesitter.get_parser(buf_id)
   if parser == nil then H.error('`treesitter` picker requires active tree-sitter parser.') end
 
-  -- Make items by traversing root tree
+  -- Make items by traversing roots of all trees (including injections)
   local items, traverse = {}, nil
   traverse = function(node, depth)
     if depth >= 1000 then return end
@@ -626,8 +626,7 @@ MiniExtra.pickers.treesitter = function(local_opts, opts)
     end
   end
 
-  local root = parser:parse(true)[1]:root()
-  traverse(root, 1)
+  parser:for_each_tree(function(ts_tree, _) traverse(ts_tree:root(), 1) end)
 
   return H.pick_start(items, { source = { name = 'Tree-sitter nodes' } }, opts)
 end
