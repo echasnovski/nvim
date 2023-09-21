@@ -318,8 +318,8 @@ MiniPick.start = function(opts)
     MiniPick.stop()
     -- NOTE: Needs `schedule()` for `stop()` to properly finish code flow
     return vim.schedule(function()
-      -- NOTE: if `MiniPick.stop()` still didn't stop, force clean and start
-      if MiniPick.is_picker_active() then H.pickers.active = nil end
+      -- NOTE: if `MiniPick.stop()` still didn't stop, force abort
+      if MiniPick.is_picker_active() then H.picker_stop(H.pickers.active, true) end
       MiniPick.start(opts)
     end)
   end
@@ -348,15 +348,19 @@ MiniPick.refresh = function()
 end
 
 MiniPick.default_match = function(inds, stritems, query)
-  if #query == 0 then return H.seq_along(stritems) end
+  local is_active = MiniPick.is_picker_active()
+  local set_match_inds = is_active and MiniPick.set_picker_match_inds or function(x) return x end
   local f = function()
+    if #query == 0 then return set_match_inds(H.seq_along(stritems)) end
     local match_data, match_type = H.match_filter(inds, stritems, query)
     if match_data == nil then return end
-    if match_type == 'nosort' then return MiniPick.set_picker_match_inds(H.seq_along(stritems)) end
+    if match_type == 'nosort' then return set_match_inds(H.seq_along(stritems)) end
     local match_inds = H.match_sort(match_data)
     if match_inds == nil then return end
-    MiniPick.set_picker_match_inds(match_inds)
+    return set_match_inds(match_inds)
   end
+
+  if not is_active then return f() end
   coroutine.resume(coroutine.create(f))
 end
 
@@ -607,7 +611,7 @@ end
 
 MiniPick.builtin.resume = function()
   local picker = H.pickers.latest
-  if picker == nil then H.error('There is no latest picker.') end
+  if picker == nil then H.error('There is no picker to resume.') end
 
   local buf_id = H.picker_new_buf()
   local win_id = H.picker_new_win(buf_id, picker.opts.window.config)
@@ -615,7 +619,8 @@ MiniPick.builtin.resume = function()
   picker.windows = { main = win_id, target = vim.api.nvim_get_current_win() }
   picker.view_state = 'main'
 
-  H.pickers.active = picker
+  H.pickers.active, H.cache = picker, {}
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' })
   return H.picker_advance(picker)
 end
 
@@ -1060,6 +1065,7 @@ H.picker_compute_win_config = function(win_config)
     row = max_height + (has_tabline and 1 or 0),
     border = 'single',
     style = 'minimal',
+    noautocmd = true,
   }
   local config = vim.tbl_deep_extend('force', default_config, H.expand_callable(win_config) or {})
 
@@ -1279,7 +1285,8 @@ H.picker_set_bordertext = function(picker)
 
   -- Compute helper footer only if Neovim version permits and not in busy
   -- picker (otherwise it will flicker number of matches data on char delete)
-  if vim.fn.has('nvim-0.10') == 1 and not picker.is_busy then
+  local nvim_has_window_footer = vim.fn.has('nvim-0.10') == 1
+  if nvim_has_window_footer and not picker.is_busy then
     local info = H.picker_get_general_info(picker)
     local source_name = string.format(' %s ', info.source_name)
     local inds = string.format(' %s|%s|%s ', info.relative_current_ind, info.n_items_matched, info.n_items_total)
@@ -1293,10 +1300,10 @@ H.picker_set_bordertext = function(picker)
       footer[3] = { inds, 'MiniPickBorderText' }
     end
     config.footer, config.footer_pos = footer, 'left'
+  end
 
-    if picker.opts.options.direction ~= 'from_top' then
-      config.title, config.footer = config.footer, config.title
-    end
+  if nvim_has_window_footer and picker.opts.options.direction == 'from_bottom' then
+    config.title, config.footer = config.footer, config.title
   end
 
   vim.api.nvim_win_set_config(win_id, config)
@@ -1411,10 +1418,6 @@ H.picker_query_add = function(picker, char)
   table.insert(picker.query, picker.caret, char)
   picker.caret = picker.caret + 1
   H.querytick = H.querytick + 1
-
-  -- Adding space might increase number of possible matches due to "grouped
-  -- fuzzy" matches. Example: 'ab cd' prompt adding ' ' to become 'ab c d'.
-  if picker.items ~= nil and char == ' ' then picker.match_inds = H.seq_along(picker.items) end
 end
 
 H.picker_query_delete = function(picker, n)
@@ -1596,10 +1599,11 @@ H.match_filter = function(inds, stritems, query)
 
   if #query == 0 then return {}, 'nosort', query end
 
-  -- End-matching filtering doesn't result into nested matches.
-  -- Example: type "$", move caret to left, type "m" (filters for "m$") and
+  -- Exact end and grouped fuzzy filtering not always result in nested matches.
+  -- Example #1: type "$", move caret to left, type "m" (filters for "m$") and
   -- type "d" (should filter for "md$" but it is not a subset of "m$" matches).
-  inds = is_exact_end and H.seq_along(stritems) or inds
+  -- Example #2: type 'ab c', move caret to after `a`, type `d`.
+  inds = (is_exact_end or is_fuzzy_grouped) and H.seq_along(stritems) or inds
 
   local is_fuzzy_plain = not (is_exact_plain or is_exact_start or is_exact_end) and #query > 1
   if is_fuzzy_forced or is_fuzzy_plain then return H.match_filter_fuzzy(inds, stritems, query), 'fuzzy', query end
@@ -2082,6 +2086,9 @@ H.poke_picker_every_n = function(n, querytick_ref)
 end
 
 H.poke_picker_throttle = function(querytick_ref)
+  -- Allow calling this even if no picker is active
+  if not MiniPick.is_picker_active() then return function() return true end end
+
   local latest_time, dont_check_querytick = vim.loop.hrtime(), querytick_ref == nil
   local threshold = 1000000 * H.get_config().delay.async
   local hrtime = vim.loop.hrtime
@@ -2131,8 +2138,11 @@ H.getcharstr = function()
   H.cache.is_in_getcharstr = nil
   H.timers.getcharstr:stop()
 
-  -- Terminate if couldn't get input; on hard-coded <C-c>; on any mouse click
-  if not ok or char == '' or char == '\3' or vim.v.mouse_winid ~= 0 then return end
+  -- Terminate if no input, on hard-coded <C-c>, or outside mouse click
+  local main_win_id
+  if H.pickers.active ~= nil then main_win_id = H.pickers.active.windows.main end
+  local is_bad_mouse_click = vim.v.mouse_winid ~= 0 and vim.v.mouse_winid ~= main_win_id
+  if not ok or char == '' or char == '\3' or is_bad_mouse_click then return end
   return char
 end
 

@@ -66,9 +66,6 @@ MiniExtra.setup = function(config)
 
   -- Apply config
   H.apply_config(config)
-
-  -- Define behavior
-  H.create_autocommands()
 end
 
 --stylua: ignore
@@ -113,14 +110,19 @@ MiniExtra.pickers = {}
 
 MiniExtra.pickers.diagnostic = function(local_opts, opts)
   local pick = H.validate_pick('diagnostic')
-  local_opts = vim.tbl_deep_extend('force', { buf_id = nil, get_opts = {}, sort_by_severity = true }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all', get_opts = {}, sort_by_severity = true }, local_opts or {})
+
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'current' }, 'diagnostic')
 
   local plus_one = function(x)
     if x == nil then return nil end
     return x + 1
   end
 
-  local items = vim.diagnostic.get(local_opts.buf_id, local_opts.get_opts)
+  local diag_buf_id
+  if scope == 'current' then diag_buf_id = vim.api.nvim_get_current_buf() end
+  local items = vim.diagnostic.get(diag_buf_id, local_opts.get_opts)
+
   -- NOTE: Account for output of `vim.diagnostic.get()` being  modifiable:
   -- https://github.com/neovim/neovim/pull/25010
   if vim.fn.has('nvim-0.10') == 0 then items = vim.deepcopy(items) end
@@ -163,13 +165,17 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   return H.pick_start(items, { source = { name = 'Diagnostic', show = show } }, opts)
 end
 
--- TODO: Use only pure `vim.v.oldfiles` in favor of 'mini.frecency'
 MiniExtra.pickers.oldfiles = function(local_opts, opts)
   local pick = H.validate_pick('oldfiles')
-  local_opts = vim.tbl_deep_extend('force', { include_current_session = true }, local_opts or {})
+  local_opts = local_opts or {}
 
-  H.oldfiles_normalize()
-  local items = H.oldfile_get_array()
+  local oldfiles = vim.v.oldfiles
+  if not vim.tbl_islist(oldfiles) then H.error('`oldfiles` picker needs valid `v:oldfiles`.') end
+
+  local items = {}
+  for _, path in ipairs(oldfiles) do
+    if vim.fn.filereadable(path) == 1 then table.insert(items, path) end
+  end
 
   local show = H.pick_get_config().source.show or H.show_with_icons
   return H.pick_start(items, { source = { name = 'Oldfiles', show = show } }, opts)
@@ -177,15 +183,18 @@ end
 
 MiniExtra.pickers.buf_lines = function(local_opts, opts)
   local pick = H.validate_pick('buf_lines')
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
 
-  local_opts = vim.tbl_deep_extend('force', { buf_id = nil }, local_opts or {})
-  local buffers, all_buffers = {}, true
-  if H.is_valid_buf(local_opts.buf_id) then
-    buffers, all_buffers = { H.buf_resolve(local_opts.buf_id) }, false
-  else
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'current' }, 'buf_lines')
+  local is_scope_all = scope == 'all'
+
+  local buffers = {}
+  if is_scope_all then
     for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
       if vim.bo[buf_id].buflisted and vim.bo[buf_id].buftype == '' then table.insert(buffers, buf_id) end
     end
+  else
+    buffers = { vim.api.nvim_get_current_buf() }
   end
 
   local poke_picker = pick.poke_is_picker_active
@@ -196,7 +205,7 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
       H.buf_ensure_loaded(buf_id)
       local buf_name = H.buf_get_name(buf_id) or ''
       for lnum, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
-        local prefix = all_buffers and string.format('%s:', buf_name) or ''
+        local prefix = is_scope_all and string.format('%s:', buf_name) or ''
         table.insert(items, { text = string.format('%s%s:%s', prefix, lnum, l), bufnr = buf_id, lnum = lnum })
       end
     end
@@ -205,30 +214,28 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
   local items = vim.schedule_wrap(coroutine.wrap(f))
 
   local show = H.pick_get_config().source.show
-  if all_buffers and show == nil then show = H.show_with_icons end
+  if is_scope_all and show == nil then show = H.show_with_icons end
   return H.pick_start(items, { source = { name = 'Buffers lines', show = show } }, opts)
 end
 
 MiniExtra.pickers.history = function(local_opts, opts)
   local pick = H.validate_pick('history')
-  local_opts = vim.tbl_deep_extend('force', { type = 'all' }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
 
-  -- Validate name
-  local history_type = local_opts.type
+  local allowed_scope = { 'all', 'cmd', 'search', 'expr', 'input', 'debug', ':', '/', '?', '=', '@', '>' }
+  local scope = H.pick_validate_scope(local_opts, allowed_scope, 'history')
+
   --stylua: ignore
   local type_ids = {
     cmd = ':',   search = '/', expr  = '=', input = '@', debug = '>',
     [':'] = ':', ['/']  = '/', ['='] = '=', ['@'] = '@', ['>'] = '>',
     ['?'] = '?',
   }
-  if not (history_type == 'all' or type_ids[history_type] ~= nil) then
-    H.error('`local_opts.name` in `pickers.history()` should be a valid full name for `:history` command.')
-  end
 
   -- Construct items
   local items = {}
-  local all_types = history_type == 'all' and { 'cmd', 'search', 'expr', 'input', 'debug' } or { history_type }
-  for _, cur_name in ipairs(all_types) do
+  local names = scope == 'all' and { 'cmd', 'search', 'expr', 'input', 'debug' } or { scope }
+  for _, cur_name in ipairs(names) do
     local cmd_output = vim.api.nvim_exec(':history ' .. cur_name, true)
     local lines = vim.split(cmd_output, '\n')
     local id = type_ids[cur_name]
@@ -249,7 +256,7 @@ MiniExtra.pickers.history = function(local_opts, opts)
     if id == '/' or id == '?' then vim.schedule(function() vim.fn.feedkeys(id .. entry .. '\r', 'nx') end) end
   end
 
-  local default_source = { name = string.format('History (%s)', history_type), preview = preview, choose = choose }
+  local default_source = { name = string.format('History (%s)', scope), preview = preview, choose = choose }
   return H.pick_start(items, { source = default_source }, opts)
 end
 
@@ -315,7 +322,10 @@ end
 
 MiniExtra.pickers.git_files = function(local_opts, opts)
   local pick = H.validate_pick('git_files')
-  local_opts = vim.tbl_deep_extend('force', { type = 'tracked' }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { scope = 'tracked' }, local_opts or {})
+
+  local allowed_scope = { 'tracked', 'modified', 'untracked', 'ignored', 'deleted' }
+  local scope = H.pick_validate_scope(local_opts, allowed_scope, 'git_files')
 
   --stylua: ignore
   local command = ({
@@ -324,11 +334,10 @@ MiniExtra.pickers.git_files = function(local_opts, opts)
     untracked = { 'git', 'ls-files', '--others' },
     ignored   = { 'git', 'ls-files', '--others', '--ignored', '--exclude-standard' },
     deleted   = { 'git', 'ls-files', '--deleted' },
-  })[local_opts.type]
-  if command == nil then H.error('Wrong `local_opts.type` for `pickers.git_files`.') end
+  })[local_opts.scope]
 
   local show = H.pick_get_config().source.show or H.show_with_icons
-  local default_source = { name = string.format('Git files (%s)', local_opts.type), show = show }
+  local default_source = { name = string.format('Git files (%s)', local_opts.scope), show = show }
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command }, opts)
 end
@@ -386,10 +395,12 @@ end
 
 MiniExtra.pickers.git_branches = function(local_opts, opts)
   local pick = H.validate_pick('git_branches')
-  local_opts = vim.tbl_deep_extend('force', { include_remote = false }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'local', 'remotes' }, 'git_branches')
 
   local command = { 'git', 'branch', '-v', '--no-color', '--list' }
-  if local_opts.include_remote then table.insert(command, 3, '--all') end
+  if scope == 'all' or scope == 'remotes' then table.insert(command, 3, '--' .. scope) end
 
   local get_branch_name = function(item) return item:match('^%*?%s*(%S+)') end
 
@@ -410,7 +421,9 @@ MiniExtra.pickers.options = function(local_opts, opts)
   local pick = H.validate_pick('options')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
 
-  local scope, items = local_opts.scope, {}
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'global', 'win', 'buf' }, 'options')
+
+  local items = {}
   for name, info in pairs(vim.api.nvim_get_all_options_info()) do
     if scope == 'all' or scope == info.scope then table.insert(items, { text = name, info = info }) end
   end
@@ -451,16 +464,18 @@ end
 MiniExtra.pickers.keymaps = function(local_opts, opts)
   local pick = H.validate_pick('keymaps')
   local_opts = vim.tbl_deep_extend('force', { mode = 'all', scope = 'all' }, local_opts or {})
-  local modes = local_opts.mode == 'all' and { 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' } or { local_opts.mode }
-  local scope = local_opts.scope
+
+  local mode = H.pick_validate_one_of('mode', local_opts, { 'all', 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' }, 'keymaps')
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'global', 'buf' }, 'keymaps')
 
   -- Create items
   local keytrans = vim.fn.has('nvim-0.8') == 1 and vim.fn.keytrans or function(x) return x end
   local items = {}
   local max_lhs_width = 0
   local populate_items = function(source)
-    for _, mode in ipairs(modes) do
-      for _, maparg in ipairs(source(mode)) do
+    local modes = mode == 'all' and { 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' } or { mode }
+    for _, m in ipairs(modes) do
+      for _, maparg in ipairs(source(m)) do
         local desc = maparg.desc ~= nil and vim.inspect(maparg.desc) or maparg.rhs
         local lhs_trans = keytrans(maparg.lhsraw or maparg.lhs)
         max_lhs_width = math.max(vim.fn.strchars(lhs_trans), max_lhs_width)
@@ -539,7 +554,8 @@ end
 MiniExtra.pickers.marks = function(local_opts, opts)
   local pick = H.validate_pick('marks')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
-  local scope = local_opts.scope
+
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'global', 'buf' }, 'marks')
 
   -- Create items
   local items = {}
@@ -571,28 +587,18 @@ end
 MiniExtra.pickers.lsp = function(local_opts, opts)
   if vim.fn.has('nvim-0.8') == 0 then H.error('`lsp` picker requires Neovim>=0.8.') end
   local pick = H.validate_pick('lsp')
-  local_opts = vim.tbl_deep_extend('force', { source = nil }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { scope = nil }, local_opts or {})
 
+  if local_opts.scope == nil then H.error('`lsp` picker needs explicit scope.') end
   --stylua: ignore
-  local supported_sources = {
+  local allowed_scopes = {
     'declaration', 'definition', 'document_symbol', 'implementation', 'references', 'type_definition', 'workspace_symbol',
   }
-  local source = local_opts.source
-  if source == nil then H.error('`lsp` picker needs explicit source.') end
-  if not vim.tbl_contains(supported_sources, source) then
-    local msg = string.format(
-      '`lsp` picker does not support "%s" source. Should be one of %s.',
-      source,
-      table.concat(vim.tbl_map(vim.inspect, supported_sources), ', ')
-    )
-    H.error(msg)
-  end
+  local scope = H.pick_validate_scope(local_opts, allowed_scopes, 'lsp')
 
-  if source == 'references' then return vim.lsp.buf[source](nil, { on_list = H.lsp_make_on_list(source, opts) }) end
-  if source == 'workspace_symbol' then
-    return vim.lsp.buf[source]('', { on_list = H.lsp_make_on_list(source, opts) })
-  end
-  return vim.lsp.buf[source]({ on_list = H.lsp_make_on_list(source, opts) })
+  if scope == 'references' then return vim.lsp.buf[scope](nil, { on_list = H.lsp_make_on_list(scope, opts) }) end
+  if scope == 'workspace_symbol' then return vim.lsp.buf[scope]('', { on_list = H.lsp_make_on_list(scope, opts) }) end
+  return vim.lsp.buf[scope]({ on_list = H.lsp_make_on_list(scope, opts) })
 end
 
 -- Something with tree-sitter
@@ -611,16 +617,19 @@ MiniExtra.pickers.treesitter = function(local_opts, opts)
     if depth >= 1000 then return end
     for child in node:iter_children() do
       if child:named() then
-        local lnum, col = child:range()
-        local text = string.format('%s:%s: %s', lnum + 1, col + 1, child:type() or '')
-        table.insert(items, { text = text, bufnr = buf_id, lnum = lnum + 1, col = col + 1 })
+        local lnum, col, end_lnum, end_col = child:range()
+        lnum, col, end_lnum, end_col = lnum + 1, col + 1, end_lnum + 1, end_col + 1
+        local indent = string.rep(' ', depth)
+        local text = string.format('%s%s (%s:%s - %s:%s)', indent, child:type() or '', lnum, col, end_lnum, end_col)
+        local item = { text = text, bufnr = buf_id, lnum = lnum, col = col, end_lnum = end_lnum, end_col = end_col }
+        table.insert(items, item)
 
         traverse(child, depth + 1)
       end
     end
   end
 
-  parser:for_each_tree(function(ts_tree, _) traverse(ts_tree:root(), 1) end)
+  parser:for_each_tree(function(ts_tree, _) traverse(ts_tree:root(), 0) end)
 
   return H.pick_start(items, { source = { name = 'Tree-sitter nodes' } }, opts)
 end
@@ -638,8 +647,7 @@ MiniExtra.pickers.list = function(local_opts, opts)
   end
 end
 
--- ???Heuristically computed "best" files???
-MiniExtra.pickers.frecency = function(local_opts, opts) end
+-- ??? "shellcmd" via `vim.fn.getcompletion('', 'shellcmd')` and resulting into `:!<item> ` ???
 
 -- Helper data ================================================================
 -- Module default config
@@ -658,30 +666,6 @@ H.cache = {}
 H.setup_config = function(config) end
 
 H.apply_config = function(config) MiniExtra.config = config end
-
-H.create_autocommands = function()
-  local augroup = vim.api.nvim_create_augroup('MiniExtra', {})
-
-  local au = function(event, pattern, callback, desc)
-    vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
-  end
-
-  au('BufEnter', '*', H.track_oldfile, 'Track oldfile')
-end
-
--- Autocommands ---------------------------------------------------------------
-H.track_oldfile = function(data)
-  -- Track only appropriate buffers (normal buffers with path)
-  local path = vim.api.nvim_buf_get_name(data.buf)
-  local is_proper_buffer = path ~= '' and vim.bo[data.buf].buftype == ''
-  if not is_proper_buffer then return end
-
-  -- Ensure tracking data is initialized
-  H.oldfile_ensure_initialized()
-
-  -- Update recency of current path
-  H.oldfile_update_recency(path)
-end
 
 -- Pickers --------------------------------------------------------------------
 H.validate_pick = function(fun_name)
@@ -712,6 +696,20 @@ H.pick_make_no_preview = function(picker_name)
   return function(_, buf_id) H.set_buflines(buf_id, lines) end
 end
 
+H.pick_validate_one_of = function(target, opts, values, picker_name)
+  if vim.tbl_contains(values, opts[target]) then return opts[target] end
+  local msg = string.format(
+    '`pickers.%s` has wrong "%s" local option (%s). Should be one of %s.',
+    picker_name,
+    target,
+    vim.inspect(opts[target]),
+    table.concat(vim.tbl_map(vim.inspect, values), ', ')
+  )
+  H.error(msg)
+end
+
+H.pick_validate_scope = function(...) return H.pick_validate_one_of('scope', ...) end
+
 H.pick_get_config = function()
   return vim.tbl_deep_extend('force', (require('mini-dev.pick') or {}).config or {}, vim.b.minipick_config or {})
 end
@@ -719,59 +717,11 @@ end
 H.show_with_icons =
   function(items, buf_id) require('mini-dev.pick').default_show(items, buf_id, { show_icons = true }) end
 
--- Oldfiles picker ------------------------------------------------------------
-H.oldfiles_normalize = function()
-  -- Ensure that tracking data is initialized
-  H.oldfile_ensure_initialized()
-
-  -- Order currently readable paths in decreasing order of recency
-  local recency_pairs = {}
-  for path, rec in pairs(H.cache.oldfile.recency) do
-    if vim.fn.filereadable(path) == 1 then table.insert(recency_pairs, { path, rec }) end
-  end
-  table.sort(recency_pairs, function(x, y) return x[2] < y[2] end)
-
-  -- Construct new tracking data with recency from 1 to number of entries
-  local new_recency = {}
-  for i, pair in ipairs(recency_pairs) do
-    new_recency[pair[1]] = i
-  end
-
-  H.cache.oldfile = { recency = new_recency, max_recency = #recency_pairs }
-end
-
-H.oldfile_ensure_initialized = function()
-  if H.cache.oldfile ~= nil or vim.v.oldfiles == nil then return end
-
-  local n = #vim.v.oldfiles
-  local recency = {}
-  for i, path in ipairs(vim.v.oldfiles) do
-    if vim.fn.filereadable(path) == 1 then recency[path] = n - i + 1 end
-  end
-
-  H.cache.oldfile = { recency = recency, max_recency = n }
-end
-
-H.oldfile_get_array = function()
-  local res, n_res = {}, vim.tbl_count(H.cache.oldfile.recency)
-  for path, i in pairs(H.cache.oldfile.recency) do
-    -- Elements with maximum recency should be first
-    res[n_res - i + 1] = vim.fn.fnamemodify(path, ':.')
-  end
-  return res
-end
-
-H.oldfile_update_recency = function(path)
-  local n = H.cache.oldfile.max_recency + 1
-  H.cache.oldfile.recency[path] = n
-  H.cache.oldfile.max_recency = n
-end
-
 -- LSP picker -----------------------------------------------------------------
 H.lsp_make_on_list = function(source, opts)
   -- Prepend file position info to item and sort
   local process = function(items)
-    if source ~= 'document_symbol' then items = vim.tbl_map(H.lsp_make_file_posistion, items) end
+    if source ~= 'document_symbol' then items = vim.tbl_map(H.lsp_prepend_file_position, items) end
     table.sort(items, H.lsp_items_compare)
     return items
   end
@@ -819,7 +769,7 @@ H.lsp_items_compare = function(a, b)
   return tostring(a) < tostring(b)
 end
 
-H.lsp_make_file_posistion = function(item)
+H.lsp_prepend_file_position = function(item)
   if item.path == nil then return end
   local path = vim.fn.fnamemodify(item.path, ':p:.')
   item.text = string.format('%s:%s:%s: %s', path, item.lnum or 1, item.col or 1, item.text)
