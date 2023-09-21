@@ -637,14 +637,19 @@ end
 -- "quickfix", "location", "jump", "change"
 MiniExtra.pickers.list = function(local_opts, opts)
   local pick = H.validate_pick('list')
-  local_opts = vim.tbl_deep_extend('force', { name = 'all' }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { scope = nil }, local_opts or {})
 
-  -- Validate name
-  local name = local_opts.name
-  local name_ids = { quickfix = 'Q', location = 'L', jump = 'J', change = 'C', tag = 'T' }
-  if not (name == 'all' or name_ids[name] ~= nil) then
-    H.error('`local_opts.name` in `pickers.list()` should be one of "quickfix", "location", "jump", "change", "tag".')
-  end
+  if local_opts.scope == nil then H.error('`list` picker needs explicit scope.') end
+  local allowed_scopes = { 'quickfix', 'location', 'jump', 'change' }
+  local scope = H.pick_validate_scope(local_opts, allowed_scopes, 'list')
+
+  local ok, items = pcall(H.list_get[scope])
+  if not ok then items = {} end
+
+  items = vim.tbl_filter(function(x) return H.is_valid_buf(x.bufnr) end, items)
+  items = vim.tbl_map(H.list_enhance_item, items)
+
+  return H.pick_start(items, { source = { name = string.format('List (%s)', scope) } }, opts)
 end
 
 -- ??? "shellcmd" via `vim.fn.getcompletion('', 'shellcmd')` and resulting into `:!<item> ` ???
@@ -689,6 +694,23 @@ H.pick_highlight_line = function(buf_id, line, hl_group, priority)
   vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.pickers, line - 1, 0, opts)
 end
 
+H.pick_prepend_position = function(item)
+  local path
+  if item.path ~= nil then
+    path = item.path
+  elseif H.is_valid_buf(item.bufnr) then
+    local name = vim.api.nvim_buf_get_name(item.bufnr)
+    if name ~= '' then path = name end
+  end
+  if path == nil then return item end
+
+  path = vim.fn.fnamemodify(path, ':p:.')
+  local cur_text = item.text
+  local suffix = (cur_text == nil or cur_text == '') and '' or (': ' .. item.text)
+  item.text = string.format('%s:%s:%s%s', path, item.lnum or 1, item.col or 1, suffix)
+  return item
+end
+
 H.pick_clear_namespace = function(buf_id) pcall(vim.api.nvim_buf_clear_namespace, buf_id, 0, -1) end
 
 H.pick_make_no_preview = function(picker_name)
@@ -721,7 +743,7 @@ H.show_with_icons =
 H.lsp_make_on_list = function(source, opts)
   -- Prepend file position info to item and sort
   local process = function(items)
-    if source ~= 'document_symbol' then items = vim.tbl_map(H.lsp_prepend_file_position, items) end
+    if source ~= 'document_symbol' then items = vim.tbl_map(H.pick_prepend_position, items) end
     table.sort(items, H.lsp_items_compare)
     return items
   end
@@ -769,11 +791,42 @@ H.lsp_items_compare = function(a, b)
   return tostring(a) < tostring(b)
 end
 
-H.lsp_prepend_file_position = function(item)
-  if item.path == nil then return end
-  local path = vim.fn.fnamemodify(item.path, ':p:.')
-  item.text = string.format('%s:%s:%s: %s', path, item.lnum or 1, item.col or 1, item.text)
+-- List picker ----------------------------------------------------------------
+H.list_get = {
+  quickfix = function() return vim.tbl_map(H.list_enhance_qf_loc, vim.fn.getqflist()) end,
+
+  location = function() return vim.tbl_map(H.list_enhance_qf_loc, vim.fn.getloclist(0)) end,
+
+  jump = function()
+    local raw = vim.fn.getjumplist()[1]
+    -- Tweak output: reverse for more relevance; make 1-based column
+    local res, n = {}, #raw
+    for i, x in ipairs(raw) do
+      x.col = x.col + 1
+      res[n - i + 1] = x
+    end
+    return res
+  end,
+
+  change = function()
+    local res = vim.fn.getchangelist()[1]
+    local cur_buf = vim.api.nvim_get_current_buf()
+    for _, x in ipairs(res) do
+      res.bufnr = cur_buf
+    end
+    return res
+  end,
+}
+
+H.list_enhance_qf_loc = function(item)
+  if item.end_lnum == 0 then item.end_lnum = nil end
+  if item.end_col == 0 then item.end_col = nil end
   return item
+end
+
+H.list_enhance_item = function(item)
+  if vim.fn.filereadable(item.filename) == 1 then item.path = item.filename end
+  return H.pick_prepend_position(item)
 end
 
 -- CLI ------------------------------------------------------------------------

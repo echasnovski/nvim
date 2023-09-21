@@ -45,10 +45,6 @@
 -- TODO:
 -- Code:
 --
--- - **Again** rethink hard about "close on lost focus" logic. It is useful
---   because errors might come not only from picker's life cycle while leaving
---   picker window hanging.
---
 -- Tests:
 --
 -- - All actions should work when `items` is not yet set.
@@ -101,8 +97,11 @@
 -- - `MiniPick.builtin.grep({ pattern = vim.fn.expand('<cword>') })` to find
 --   word under cursor.
 --
--- - Example of `execute` custom action:
---   execute = function(picker, _) vim.cmd(vim.fn.input('Execute: ')) end,
+-- - Example of `execute` custom mappings:
+--   execute = {
+--     char = '<C-e>',
+--     func = function() vim.cmd(vim.fn.input('Execute: ')) end,
+--   }
 --
 -- - <C-c> is hard-coded to always stop the picker.
 --
@@ -327,6 +326,7 @@ MiniPick.start = function(opts)
   opts = H.validate_picker_opts(opts)
   local picker = H.picker_new(opts)
   H.pickers.active, H.cache = picker, {}
+  H.picker_track_lost_focus(picker)
   vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' })
   return H.picker_advance(picker)
 end
@@ -442,11 +442,11 @@ MiniPick.default_choose_all = function(items, opts)
   -- Construct a potential quickfix/location list
   local list = {}
   for _, item in ipairs(items) do
-    local data = H.parse_item(item)
-    if data.type == 'file' or data.type == 'buffer' then
-      local entry = { bufnr = data.buf_id, filename = data.path }
-      entry.lnum, entry.col, entry.text = data.line or 1, data.col or 1, data.text or ''
-      entry.end_lnum, entry.end_col = data.line_end, data.col_end
+    local item_data = H.parse_item(item)
+    if item_data.type == 'file' or item_data.type == 'buffer' then
+      local entry = { bufnr = item_data.buf_id, filename = item_data.path }
+      entry.lnum, entry.col, entry.text = item_data.line or 1, item_data.col or 1, item_data.text or ''
+      entry.end_lnum, entry.end_col = item_data.line_end, item_data.col_end
       table.insert(list, entry)
     end
   end
@@ -567,7 +567,8 @@ MiniPick.builtin.help = function(local_opts, opts)
 
       local cache_hlsearch = vim.v.hlsearch
       vim.cmd('silent keeppatterns ' .. item.cmd)
-      vim.v.hlsearch = cache_hlsearch
+      -- Here `vim.v` doesn't work: https://github.com/neovim/neovim/issues/25294
+      vim.cmd('let v:hlsearch=' .. cache_hlsearch)
       vim.cmd('normal! zt')
     end)
   end
@@ -614,9 +615,10 @@ MiniPick.builtin.resume = function()
   if picker == nil then H.error('There is no picker to resume.') end
 
   local buf_id = H.picker_new_buf()
+  local win_target = vim.api.nvim_get_current_win()
   local win_id = H.picker_new_win(buf_id, picker.opts.window.config)
   picker.buffers = { main = buf_id }
-  picker.windows = { main = win_id, target = vim.api.nvim_get_current_win() }
+  picker.windows = { main = win_id, target = win_target }
   picker.view_state = 'main'
 
   H.pickers.active, H.cache = picker, {}
@@ -934,6 +936,7 @@ H.picker_new = function(opts)
   local buf_id = H.picker_new_buf()
 
   -- Create window
+  local win_target = vim.api.nvim_get_current_win()
   local win_id = H.picker_new_win(buf_id, opts.window.config)
 
   -- Constuct and return object
@@ -948,7 +951,7 @@ H.picker_new = function(opts)
 
     -- Associated Neovim objects
     buffers = { main = buf_id, preview = nil, info = nil },
-    windows = { main = win_id, target = vim.api.nvim_get_current_win() },
+    windows = { main = win_id, target = win_target },
 
     -- Query data
     query = {},
@@ -1030,19 +1033,20 @@ H.picker_new_buf = function()
   local buf_id = vim.api.nvim_create_buf(false, true)
   vim.bo[buf_id].filetype = 'minipick'
   vim.bo[buf_id].matchpairs = ''
+  vim.b[buf_id].minicursorword_disable = true
   return buf_id
 end
 
 H.picker_new_win = function(buf_id, win_config)
-  -- Create window without focus. Instead focus cursor on Command line to not
-  -- have it seen on top of floating window text.
-  local win_id = vim.api.nvim_open_win(buf_id, false, H.picker_compute_win_config(win_config))
-  vim.cmd('noautocmd normal! :')
+  -- Create window and focus on it. Focus cursor on Command line to not see it.
+  local win_id = vim.api.nvim_open_win(buf_id, true, H.picker_compute_win_config(win_config))
+  if vim.fn.mode() == 'n' then vim.cmd('noautocmd normal! :') end
 
   -- Set window-local data
   vim.wo[win_id].foldenable = false
   vim.wo[win_id].list = true
   vim.wo[win_id].listchars = 'extends:…'
+  vim.wo[win_id].scrolloff = 0
   vim.wo[win_id].wrap = false
   H.win_update_hl(win_id, 'NormalFloat', 'MiniPickNormal')
   H.win_update_hl(win_id, 'FloatBorder', 'MiniPickBorder')
@@ -1076,6 +1080,24 @@ H.picker_compute_win_config = function(win_config)
   config.width = math.min(config.width, max_width - 2)
 
   return config
+end
+
+H.picker_track_lost_focus = function(picker)
+  local timer = vim.loop.new_timer()
+  local stop_timer = vim.schedule_wrap(function()
+    timer:stop()
+    if not timer:is_closing() then timer:close() end
+  end)
+  vim.api.nvim_create_autocmd('User', { once = true, pattern = 'MiniPickStop', callback = stop_timer })
+
+  local track = vim.schedule_wrap(function()
+    local is_cur_win = vim.api.nvim_get_current_win() == picker.windows.main
+    local is_proper_focus = is_cur_win and (H.cache.is_in_getcharstr or vim.fn.mode() ~= 'n')
+    if is_proper_focus then return end
+    H.picker_stop(picker, true)
+    stop_timer()
+  end)
+  timer:start(1000, 1000, track)
 end
 
 H.picker_set_items = function(picker, items, opts)
@@ -1276,6 +1298,8 @@ H.picker_set_bordertext = function(picker)
   local has_items = picker.items ~= nil
   if view_state == 'preview' and has_items then
     local stritem_cur = picker.stritems[picker.match_inds[picker.current_ind]] or ''
+    -- Sanitize title
+    stritem_cur = stritem_cur:gsub('[%s%z]', ' ')
     config = { title = { { H.win_trim_to_width(win_id, stritem_cur), 'MiniPickBorderText' } } }
   end
 
@@ -1310,20 +1334,25 @@ H.picker_set_bordertext = function(picker)
   vim.wo[win_id].list = true
 end
 
-H.picker_stop = function(picker)
+H.picker_stop = function(picker, abort)
   if picker == nil then return end
 
   vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStop' })
 
-  pcall(vim.api.nvim_set_current_win, picker.windows.target)
+  if abort then
+    H.pickers = {}
+  else
+    pcall(vim.api.nvim_set_current_win, picker.windows.target)
+
+    local new_latest = vim.deepcopy(picker)
+    H.picker_free(H.pickers.latest)
+    H.pickers = { active = nil, latest = new_latest }
+  end
 
   pcall(vim.api.nvim_win_close, picker.windows.main, true)
   pcall(vim.api.nvim_buf_delete, picker.buffers.main, { force = true })
   pcall(vim.api.nvim_buf_delete, picker.buffers.info, { force = true })
 
-  local new_latest = vim.deepcopy(picker)
-  H.picker_free(H.pickers.latest)
-  H.pickers = { active = nil, latest = new_latest }
   H.querytick = H.querytick + 1
 end
 
@@ -1832,7 +1861,7 @@ H.parse_path = function(x)
   if type(x) ~= 'string' or x == '' then return nil end
   -- Allow inputs like 'aa/bb', 'aa/bb:10', 'aa/bb:10:5', 'aa/bb:10:5:xxx'
   -- Should also work for paths like 'aa-5'
-  local location_pattern = ':(%d+):?(%d*)(.*)$'
+  local location_pattern = ':(%d+):?(%d*):?(.*)$'
   local line, col, rest = x:match(location_pattern)
   local path = x:gsub(location_pattern, '', 1)
 
@@ -1946,11 +1975,9 @@ H.choose_path = function(item_data)
   local win_target = (MiniPick.get_picker_state().windows or {}).target
   if not H.is_valid_win(win_target) then return end
 
-  local path, line, col = item_data.path, item_data.line, item_data.col
-
   -- Try to use already created buffer, if present. This avoids not needed
   -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
-  local path_buf_id
+  local path, path_buf_id = item_data.path, nil
   for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
     if H.is_valid_buf(buf_id) and vim.api.nvim_buf_get_name(buf_id) == path then path_buf_id = buf_id end
   end
@@ -1963,7 +1990,7 @@ H.choose_path = function(item_data)
     vim.api.nvim_win_call(win_target, function() pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(path)) end)
   end
 
-  H.choose_set_cursor(win_target, line, col)
+  H.choose_set_cursor(win_target, item_data.line, item_data.col)
 end
 
 H.choose_buffer = function(item_data)
@@ -2189,6 +2216,7 @@ H.seq_along = function(arr)
 end
 
 H.get_next_char_bytecol = function(line_str, col)
+  if type(line_str) ~= 'string' then return col end
   local utf_index = vim.str_utfindex(line_str, math.min(line_str:len(), col))
   return vim.str_byteindex(line_str, utf_index)
 end
