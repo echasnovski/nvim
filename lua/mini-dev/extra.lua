@@ -160,8 +160,7 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
     end
   end
 
-  local default_opts = { source = { name = 'Diagnostic' }, content = { show = show } }
-  return H.pick_start(items, default_opts, opts)
+  return H.pick_start(items, { source = { name = 'Diagnostic', show = show } }, opts)
 end
 
 -- TODO: Use only pure `vim.v.oldfiles` in favor of 'mini.frecency'
@@ -172,9 +171,8 @@ MiniExtra.pickers.oldfiles = function(local_opts, opts)
   H.oldfiles_normalize()
   local items = H.oldfile_get_array()
 
-  local show = H.pick_get_config().content.show or H.show_with_icons
-  local default_opts = { source = { name = 'Oldfiles' }, content = { show = show } }
-  return H.pick_start(items, default_opts, opts)
+  local show = H.pick_get_config().source.show or H.show_with_icons
+  return H.pick_start(items, { source = { name = 'Oldfiles', show = show } }, opts)
 end
 
 MiniExtra.pickers.buf_lines = function(local_opts, opts)
@@ -206,10 +204,9 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
   end
   local items = vim.schedule_wrap(coroutine.wrap(f))
 
-  local show = H.pick_get_config().content.show
+  local show = H.pick_get_config().source.show
   if all_buffers and show == nil then show = H.show_with_icons end
-  local default_opts = { source = { name = 'Buffers lines' }, content = { show = show } }
-  return H.pick_start(items, default_opts, opts)
+  return H.pick_start(items, { source = { name = 'Buffers lines', show = show } }, opts)
 end
 
 MiniExtra.pickers.history = function(local_opts, opts)
@@ -287,9 +284,8 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
     vim.schedule(function() vim.fn.feedkeys(':hi ' .. hl_def, 'n') end)
   end
 
-  local default_source = { name = 'Highlight groups', preview = preview, choose = choose }
-  local default_opts = { source = default_source, content = { show = show } }
-  return H.pick_start(items, default_opts, opts)
+  local default_source = { name = 'Highlight groups', show = show, preview = preview, choose = choose }
+  return H.pick_start(items, { source = default_source }, opts)
 end
 
 MiniExtra.pickers.commands = function(local_opts, opts)
@@ -331,9 +327,9 @@ MiniExtra.pickers.git_files = function(local_opts, opts)
   })[local_opts.type]
   if command == nil then H.error('Wrong `local_opts.type` for `pickers.git_files`.') end
 
-  local show = H.pick_get_config().content.show or H.show_with_icons
-  local default_source = { name = string.format('Git files (%s)', local_opts.type) }
-  opts = vim.tbl_deep_extend('force', { source = default_source, content = { show = show } }, opts or {})
+  local show = H.pick_get_config().source.show or H.show_with_icons
+  local default_source = { name = string.format('Git files (%s)', local_opts.type), show = show }
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command }, opts)
 end
 
@@ -448,8 +444,8 @@ MiniExtra.pickers.options = function(local_opts, opts)
   end
 
   local name = string.format('Options (%s)', scope)
-  local default_opts = { source = { name = name, preview = preview, choose = choose }, content = { show = show } }
-  return H.pick_start(items, default_opts, opts)
+  local default_source = { name = name, show = show, preview = preview, choose = choose }
+  return H.pick_start(items, { source = default_source }, opts)
 end
 
 MiniExtra.pickers.keymaps = function(local_opts, opts)
@@ -803,8 +799,7 @@ H.lsp_make_on_list = function(source, opts)
     end
     items = process(items)
 
-    local default_opts = { source = { name = string.format('LSP (%s)', source) }, content = { show = show } }
-    return H.pick_start(items, default_opts, opts)
+    return H.pick_start(items, { source = { name = string.format('LSP (%s)', source), show = show } }, opts)
   end
 end
 

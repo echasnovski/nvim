@@ -240,22 +240,11 @@ end
 --- ??? What signature and what should it return ???
 --- If `nil` (default) uses |MiniPick.default_choose()|.
 MiniPick.config = {
-  content = {
-    match = nil,
-
-    show = nil,
-
-    direction = 'from_top',
-
-    -- Cache matches to ~ncrease speed on repeated prompts (uses more memory)
-    use_cache = false,
-  },
-
   delay = {
     -- Delay between forcing asynchronous behavior
     async = 10,
 
-    -- Delay between start processing and visual feedback about it
+    -- Delay between source start and visual feedback about it
     busy = 50,
   },
 
@@ -294,11 +283,22 @@ MiniPick.config = {
     toggle_preview = '<Tab>',
   },
 
+  options = {
+    direction = 'from_top',
+
+    -- Cache matches to increase speed on repeated prompts (uses more memory)
+    use_cache = false,
+  },
+
   source = {
-    name = nil,
     items = nil,
+    name = nil,
     cwd = nil,
+
+    match = nil,
+    show = nil,
     preview = nil,
+
     choose = nil,
     choose_all = nil,
   },
@@ -489,8 +489,8 @@ MiniPick.builtin = {}
 MiniPick.builtin.files = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { tool = nil }, local_opts or {})
   local tool = local_opts.tool or H.files_get_tool()
-  local show = H.get_config().content.show or H.show_with_icons
-  local default_opts = { source = { name = string.format('Files (%s)', tool) }, content = { show = show } }
+  local show = H.get_config().source.show or H.show_with_icons
+  local default_opts = { source = { name = string.format('Files (%s)', tool), show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   if tool == 'fallback' then
@@ -504,8 +504,8 @@ end
 MiniPick.builtin.grep = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { tool = nil, pattern = nil }, local_opts or {})
   local tool = local_opts.tool or H.grep_get_tool()
-  local show = H.get_config().content.show or H.show_with_icons
-  local default_opts = { source = { name = string.format('Grep (%s)', tool) }, content = { show = show } }
+  local show = H.get_config().source.show or H.show_with_icons
+  local default_opts = { source = { name = string.format('Grep (%s)', tool), show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local pattern = type(local_opts.pattern) == 'string' and local_opts.pattern or vim.fn.input('Grep pattern: ')
@@ -522,8 +522,8 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
   local tool = local_opts.tool or H.grep_get_tool()
   if tool == 'fallback' or not H.is_executable(tool) then H.error('`grep_live` needs non-fallback executable tool.') end
 
-  local show = H.get_config().content.show or H.show_with_icons
-  local default_opts = { source = { name = string.format('Grep live (%s)', tool) }, content = { show = show } }
+  local show = H.get_config().source.show or H.show_with_icons
+  local default_opts = { source = { name = string.format('Grep live (%s)', tool), show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local set_items_opts, spawn_opts = { do_match = false, querytick = H.querytick }, { cwd = opts.source.cwd }
@@ -538,7 +538,7 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
     process = MiniPick.set_picker_items_from_cli(command, { set_items_opts = set_items_opts, spawn_opts = spawn_opts })
   end
 
-  opts = vim.tbl_deep_extend('force', opts or {}, { source = { items = {} }, content = { match = match } })
+  opts = vim.tbl_deep_extend('force', opts or {}, { source = { items = {}, match = match } })
   return MiniPick.start(opts)
 end
 
@@ -588,8 +588,8 @@ MiniPick.builtin.buffers = function(local_opts, opts)
     if buf_id ~= cur_buf_id or include_current then table.insert(items, item) end
   end
 
-  local show = H.get_config().content.show or H.show_with_icons
-  local default_opts = { source = { name = 'Buffers' }, content = { show = show } }
+  local show = H.get_config().source.show or H.show_with_icons
+  local default_opts = { source = { name = 'Buffers', show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
   MiniPick.start(opts)
 end
@@ -767,18 +767,14 @@ H.setup_config = function(config)
   config = vim.tbl_deep_extend('force', H.default_config, config or {})
 
   vim.validate({
-    content = { config.content, 'table' },
     delay = { config.delay, 'table' },
     mappings = { config.mappings, 'table' },
+    options = { config.options, 'table' },
+    source = { config.source, 'table' },
     window = { config.window, 'table' },
   })
 
   vim.validate({
-    ['content.match'] = { config.content.match, 'function', true },
-    ['content.show'] = { config.content.show, 'function', true },
-    ['content.direction'] = { config.content.direction, 'string' },
-    ['content.use_cache'] = { config.content.use_cache, 'boolean' },
-
     ['delay.async'] = { config.delay.async, 'number' },
     ['delay.busy'] = { config.delay.busy, 'number' },
 
@@ -806,9 +802,14 @@ H.setup_config = function(config)
     ['mappings.toggle_info'] = { config.mappings.toggle_info, 'string' },
     ['mappings.toggle_preview'] = { config.mappings.toggle_preview, 'string' },
 
-    ['source.items'] = { config.source.items, 'table', true },
+    ['options.direction'] = { config.options.direction, 'string' },
+    ['options.use_cache'] = { config.options.use_cache, 'boolean' },
+
     ['source.name'] = { config.source.name, 'string', true },
+    ['source.items'] = { config.source.items, 'table', true },
     ['source.cwd'] = { config.source.cwd, 'string', true },
+    ['source.match'] = { config.source.match, 'function', true },
+    ['source.show'] = { config.source.show, 'function', true },
     ['source.preview'] = { config.source.preview, 'function', true },
     ['source.choose'] = { config.source.choose, 'function', true },
     ['source.choose_all'] = { config.source.choose_all, 'function', true },
@@ -879,6 +880,12 @@ H.validate_picker_opts = function(opts)
   source.cwd = type(source.cwd) == 'string' and vim.fn.fnamemodify(source.cwd, ':p') or vim.fn.getcwd()
   if vim.fn.isdirectory(source.cwd) == 0 then H.error('`source.cwd` should be a valid directory path.') end
 
+  source.match = source.match or MiniPick.default_match
+  validate_callable(source.match, 'source.match')
+
+  source.show = source.show or MiniPick.default_show
+  validate_callable(source.show, 'source.show')
+
   source.preview = source.preview or MiniPick.default_preview
   validate_callable(source.preview, 'source.preview')
 
@@ -888,18 +895,13 @@ H.validate_picker_opts = function(opts)
   source.choose_all = source.choose_all or MiniPick.default_choose_all
   validate_callable(source.choose_all, 'source.choose_all')
 
-  -- Content
-  local content = opts.content
-  content.match = content.match or MiniPick.default_match
-  validate_callable(content.match, 'content.match')
+  -- Options
+  local options = opts.options
 
-  content.show = content.show or MiniPick.default_show
-  validate_callable(content.show, 'content.show')
+  local is_valid_direction = options.direction == 'from_top' or options.direction == 'from_bottom'
+  if not is_valid_direction then H.error('`options.direction` should be one of "from_top" or "from_bottom".') end
 
-  local is_valid_direction = content.direction == 'from_top' or content.direction == 'from_bottom'
-  if not is_valid_direction then H.error('`content.direction` should be one of "from_top" or "from_bottom".') end
-
-  if type(content.use_cache) ~= 'boolean' then H.error('`content.use_cache` should be boolean.') end
+  if type(options.use_cache) ~= 'boolean' then H.error('`options.use_cache` should be boolean.') end
 
   -- Delay
   for key, value in pairs(opts.delay) do
@@ -1118,7 +1120,7 @@ H.picker_set_match_inds = function(picker, inds, query)
   picker.match_inds = inds
 
   local cache_prompt = table.concat(query or picker.query)
-  if picker.opts.content.use_cache then picker.cache[cache_prompt] = { inds = inds } end
+  if picker.opts.options.use_cache then picker.cache[cache_prompt] = { inds = inds } end
 
   -- Always show result of updated matches
   H.picker_show_main(picker)
@@ -1160,7 +1162,7 @@ H.picker_set_lines = function(picker)
 
   local visible_range = picker.visible_range
   if picker.items == nil or visible_range.from == nil or visible_range.to == nil then
-    picker.opts.content.show({}, buf_id)
+    picker.opts.source.show({}, buf_id)
     H.clear_namespace(buf_id, H.ns_id.current)
     return
   end
@@ -1168,7 +1170,7 @@ H.picker_set_lines = function(picker)
   -- Construct target items
   local items_to_show, items, inds = {}, picker.items, picker.match_inds
   local cur_ind, cur_line = picker.current_ind, nil
-  local is_direction_bottom = picker.opts.content.direction == 'from_bottom'
+  local is_direction_bottom = picker.opts.options.direction == 'from_bottom'
   local from = is_direction_bottom and visible_range.to or visible_range.from
   local to = is_direction_bottom and visible_range.from or visible_range.to
   for i = from, to, (from <= to and 1 or -1) do
@@ -1179,8 +1181,8 @@ H.picker_set_lines = function(picker)
   local n_empty_top_lines = is_direction_bottom and (vim.api.nvim_win_get_height(win_id) - #items_to_show) or 0
   cur_line = cur_line + n_empty_top_lines
 
-  -- Update visible content accounting for "from_bottom" direction
-  picker.opts.content.show(items_to_show, buf_id)
+  -- Update visible lines accounting for "from_bottom" direction
+  picker.opts.source.show(items_to_show, buf_id)
   if n_empty_top_lines > 0 then
     local empty_lines = vim.fn['repeat']({ '' }, n_empty_top_lines)
     vim.api.nvim_buf_set_lines(buf_id, 0, 0, true, empty_lines)
@@ -1203,7 +1205,7 @@ H.picker_match = function(picker)
 
   -- Try to use cache first
   local prompt_cache
-  if picker.opts.content.use_cache then prompt_cache = picker.cache[table.concat(picker.query)] end
+  if picker.opts.options.use_cache then prompt_cache = picker.cache[table.concat(picker.query)] end
   if prompt_cache ~= nil then return H.picker_set_match_inds(picker, prompt_cache.inds) end
 
   local is_ignorecase = H.query_is_ignorecase(picker.query)
@@ -1211,7 +1213,7 @@ H.picker_match = function(picker)
   local query = is_ignorecase and vim.tbl_map(H.tolower, picker.query) or picker.query
 
   H.picker_set_busy(picker, true)
-  local new_inds = picker.opts.content.match(picker.match_inds, stritems, query)
+  local new_inds = picker.opts.source.match(picker.match_inds, stritems, query)
   H.picker_set_match_inds(picker, new_inds)
 end
 
@@ -1292,7 +1294,7 @@ H.picker_set_bordertext = function(picker)
     end
     config.footer, config.footer_pos = footer, 'left'
 
-    if picker.opts.content.direction ~= 'from_top' then
+    if picker.opts.options.direction ~= 'from_top' then
       config.title, config.footer = config.footer, config.title
     end
   end
@@ -1375,7 +1377,7 @@ H.actions = {
     if picker.items == nil then return end
 
     -- Make current matches be new items to be matched with default match
-    picker.opts.content.match = H.get_config().content.match or MiniPick.default_match
+    picker.opts.source.match = H.get_config().source.match or MiniPick.default_match
     picker.query, picker.caret = {}, 1
     MiniPick.set_picker_items(MiniPick.get_picker_matches().all)
 
@@ -1456,7 +1458,7 @@ H.picker_move_current = function(picker, by, to)
 
   if to == nil then
     -- Account for content direction
-    by = (picker.opts.content.direction == 'from_top' and 1 or -1) * by
+    by = (picker.opts.options.direction == 'from_top' and 1 or -1) * by
 
     -- Wrap around edges only if current index is at edge
     to = picker.current_ind
