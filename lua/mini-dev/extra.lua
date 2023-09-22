@@ -634,7 +634,6 @@ MiniExtra.pickers.treesitter = function(local_opts, opts)
   return H.pick_start(items, { source = { name = 'Tree-sitter nodes' } }, opts)
 end
 
--- "quickfix", "location", "jump", "change"
 MiniExtra.pickers.list = function(local_opts, opts)
   local pick = H.validate_pick('list')
   local_opts = vim.tbl_deep_extend('force', { scope = nil }, local_opts or {})
@@ -649,7 +648,18 @@ MiniExtra.pickers.list = function(local_opts, opts)
   items = vim.tbl_filter(function(x) return H.is_valid_buf(x.bufnr) end, items)
   items = vim.tbl_map(H.list_enhance_item, items)
 
-  return H.pick_start(items, { source = { name = string.format('List (%s)', scope) } }, opts)
+  local choose = function(item)
+    local ok, _ = pcall(pick.default_choose, item)
+    if not ok then return end
+
+    -- Force 'buflisted' on opened item
+    local win_target = pick.get_picker_state().windows.target
+    local buf_id = vim.api.nvim_win_get_buf(win_target)
+    add_to_log('list choose', win_target, buf_id, vim.api.nvim_buf_get_name(buf_id))
+    vim.bo[buf_id].buflisted = true
+  end
+
+  return H.pick_start(items, { source = { name = string.format('List (%s)', scope), choose = choose } }, opts)
 end
 
 -- ??? "shellcmd" via `vim.fn.getcompletion('', 'shellcmd')` and resulting into `:!<item> ` ???

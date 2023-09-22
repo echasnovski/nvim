@@ -97,11 +97,16 @@
 -- - `MiniPick.builtin.grep({ pattern = vim.fn.expand('<cword>') })` to find
 --   word under cursor.
 --
--- - Example of `execute` custom mappings:
+-- - Example of `execute` custom mappings: >
+--
 --   execute = {
 --     char = '<C-e>',
 --     func = function() vim.cmd(vim.fn.input('Execute: ')) end,
 --   }
+--
+-- - Example picker for arglist: >
+--
+--   MiniPick.start({ source = { items = vim.fn.argv(), name = 'Arglist' } })
 --
 -- - <C-c> is hard-coded to always stop the picker.
 --
