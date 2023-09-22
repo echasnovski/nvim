@@ -177,6 +177,7 @@
 --- * `MiniPickIconFile` - default icon for file.
 --- * `MiniPickHeader` - headers in info buffer and previews.
 --- * `MiniPickMatchCurrent` - current matched item.
+--- * `MiniPickMatchMarked` - marked matched items.
 --- * `MiniPickMatchRanges` - ranges matching query elements.
 --- * `MiniPickNormal` - basic foreground/background highlighting.
 --- * `MiniPickPreviewLine` - target line in preview.
@@ -258,15 +259,18 @@ MiniPick.config = {
     caret_right = '<Right>',
 
     choose            = '<CR>',
-    choose_all        = '<C-a>',
     choose_in_split   = '<C-s>',
     choose_in_tabpage = '<C-t>',
     choose_in_vsplit  = '<C-v>',
+    choose_marked     = '<M-CR>',
 
     delete_char       = '<BS>',
     delete_char_right = '<Del>',
     delete_left       = '<C-u>',
     delete_word       = '<C-w>',
+
+    mark     = '<C-x>',
+    mark_all = '<C-a>',
 
     move_down  = '<C-n>',
     move_start = '<C-g>',
@@ -296,15 +300,15 @@ MiniPick.config = {
 
   source = {
     items = nil,
-    name = nil,
-    cwd = nil,
+    name  = nil,
+    cwd   = nil,
 
-    match = nil,
-    show = nil,
+    match   = nil,
+    show    = nil,
     preview = nil,
 
-    choose = nil,
-    choose_all = nil,
+    choose        = nil,
+    choose_marked = nil,
   },
 
   window = {
@@ -440,7 +444,7 @@ MiniPick.default_choose = function(item)
   H.choose_print(item)
 end
 
-MiniPick.default_choose_all = function(items, opts)
+MiniPick.default_choose_marked = function(items, opts)
   if #items == 0 then return end
   opts = vim.tbl_deep_extend('force', { list_type = 'quickfix' }, opts or {})
 
@@ -563,7 +567,7 @@ MiniPick.builtin.help = function(local_opts, opts)
   -- overcome special nature of `:help {subject}` command. For example, it
   -- didn't quite work when choosing tags in same file consecutively.
   local choose = function(item) end
-  local choose_all = function(items) end
+  local choose_marked = function(items) end
   local preview = function(item, buf_id)
     -- Take advantage of `taglist` output on how to open tag
     vim.api.nvim_buf_call(buf_id, function()
@@ -578,7 +582,7 @@ MiniPick.builtin.help = function(local_opts, opts)
     end)
   end
 
-  local source = { items = tags, name = 'Help', choose = choose, choose_all = choose_all, preview = preview }
+  local source = { items = tags, name = 'Help', choose = choose, choose_marked = choose_marked, preview = preview }
   opts = vim.tbl_deep_extend('force', { source = source }, opts or {})
   local item = MiniPick.start(opts)
   if item ~= nil then vim.cmd('help ' .. (item.name or '')) end
@@ -639,10 +643,14 @@ MiniPick.get_picker_matches = function()
   if not MiniPick.is_picker_active() then return end
   local picker = H.pickers.active
   if picker.items == nil then return {} end
+  local items = picker.items
 
   local res = { all_ind = vim.deepcopy(picker.match_inds), current_ind = picker.match_inds[picker.current_ind] }
-  res.all = vim.tbl_map(function(ind) return picker.items[ind] end, picker.match_inds)
+  res.all = vim.tbl_map(function(ind) return items[ind] end, picker.match_inds)
   res.current = picker.items[res.current_ind]
+  local marked_ind = vim.tbl_keys(picker.marked_inds_map)
+  table.sort(marked_ind)
+  res.marked_ind, res.marked = marked_ind, vim.tbl_map(function(ind) return items[ind] end, marked_ind)
   return res
 end
 
@@ -749,7 +757,7 @@ H.default_config = MiniPick.config
 
 -- Namespaces
 H.ns_id = {
-  current = vim.api.nvim_create_namespace('MiniPickCurrent'),
+  matches = vim.api.nvim_create_namespace('MiniPickMatches'),
   offsets = vim.api.nvim_create_namespace('MiniPickOffsets'),
   headers = vim.api.nvim_create_namespace('MiniPickHeaders'),
   preview = vim.api.nvim_create_namespace('MiniPickPreview'),
@@ -793,14 +801,16 @@ H.setup_config = function(config)
     ['mappings.caret_left'] = { config.mappings.caret_left, 'string' },
     ['mappings.caret_right'] = { config.mappings.caret_right, 'string' },
     ['mappings.choose'] = { config.mappings.choose, 'string' },
-    ['mappings.choose_all'] = { config.mappings.choose_all, 'string' },
     ['mappings.choose_in_split'] = { config.mappings.choose_in_split, 'string' },
     ['mappings.choose_in_tabpage'] = { config.mappings.choose_in_tabpage, 'string' },
     ['mappings.choose_in_vsplit'] = { config.mappings.choose_in_vsplit, 'string' },
+    ['mappings.choose_marked'] = { config.mappings.choose_marked, 'string' },
     ['mappings.delete_char'] = { config.mappings.delete_char, 'string' },
     ['mappings.delete_char_right'] = { config.mappings.delete_char_right, 'string' },
     ['mappings.delete_left'] = { config.mappings.delete_left, 'string' },
     ['mappings.delete_word'] = { config.mappings.delete_word, 'string' },
+    ['mappings.mark'] = { config.mappings.mark, 'string' },
+    ['mappings.mark_all'] = { config.mappings.mark_all, 'string' },
     ['mappings.move_down'] = { config.mappings.move_down, 'string' },
     ['mappings.move_start'] = { config.mappings.move_start, 'string' },
     ['mappings.move_up'] = { config.mappings.move_up, 'string' },
@@ -824,7 +834,7 @@ H.setup_config = function(config)
     ['source.show'] = { config.source.show, 'function', true },
     ['source.preview'] = { config.source.preview, 'function', true },
     ['source.choose'] = { config.source.choose, 'function', true },
-    ['source.choose_all'] = { config.source.choose_all, 'function', true },
+    ['source.choose_marked'] = { config.source.choose_marked, 'function', true },
 
     ['window.config'] = {
       config.window.config,
@@ -865,6 +875,7 @@ H.create_default_hl = function()
   hi('MiniPickIconFile',      { link = 'MiniPickNormal' })
   hi('MiniPickHeader',        { link = 'DiagnosticFloatingHint' })
   hi('MiniPickMatchCurrent',  { link = 'CursorLine' })
+  hi('MiniPickMatchMarked',   { link = 'Visual' })
   hi('MiniPickMatchRanges',   { link = 'DiagnosticFloatingHint' })
   hi('MiniPickNormal',        { link = 'NormalFloat' })
   hi('MiniPickPreviewLine',   { link = 'CursorLine' })
@@ -904,8 +915,8 @@ H.validate_picker_opts = function(opts)
   source.choose = source.choose or MiniPick.default_choose
   validate_callable(source.choose, 'source.choose')
 
-  source.choose_all = source.choose_all or MiniPick.default_choose_all
-  validate_callable(source.choose_all, 'source.choose_all')
+  source.choose_marked = source.choose_marked or MiniPick.default_choose_marked
+  validate_callable(source.choose_marked, 'source.choose_marked')
 
   -- Options
   local options = opts.options
@@ -964,6 +975,8 @@ H.picker_new = function(opts)
     caret = 1,
     -- - Array of `stritems` indexes matching current query
     match_inds = nil,
+    -- - Map of of currently marked `stritems` indexes (as keys)
+    marked_inds_map = {},
 
     -- Whether picker is currently busy processing data
     is_busy = false,
@@ -1119,6 +1132,7 @@ H.picker_set_items = function(picker, items, opts)
   end
 
   picker.items, picker.stritems, picker.stritems_ignorecase = items, stritems, stritems_ignorecase
+  picker.marked_inds_map = {}
   H.picker_set_busy(picker, false)
 
   H.picker_set_match_inds(picker, H.seq_along(items), {})
@@ -1196,23 +1210,26 @@ H.picker_set_lines = function(picker)
   local visible_range = picker.visible_range
   if picker.items == nil or visible_range.from == nil or visible_range.to == nil then
     picker.opts.source.show({}, buf_id)
-    H.clear_namespace(buf_id, H.ns_id.current)
+    H.clear_namespace(buf_id, H.ns_id.matches)
     return
   end
 
   -- Construct target items
-  local items_to_show, items, inds = {}, picker.items, picker.match_inds
+  local items_to_show, items, match_inds = {}, picker.items, picker.match_inds
   local cur_ind, cur_line = picker.current_ind, nil
+  local marked_inds_map, marked_lines = picker.marked_inds_map, {}
   local is_direction_bottom = picker.opts.options.direction == 'from_bottom'
   local from = is_direction_bottom and visible_range.to or visible_range.from
   local to = is_direction_bottom and visible_range.from or visible_range.to
   for i = from, to, (from <= to and 1 or -1) do
-    table.insert(items_to_show, items[inds[i]])
+    table.insert(items_to_show, items[match_inds[i]])
     if i == cur_ind then cur_line = #items_to_show end
+    if marked_inds_map[match_inds[i]] then table.insert(marked_lines, #items_to_show) end
   end
 
   local n_empty_top_lines = is_direction_bottom and (vim.api.nvim_win_get_height(win_id) - #items_to_show) or 0
   cur_line = cur_line + n_empty_top_lines
+  marked_lines = vim.tbl_map(function(x) return x + n_empty_top_lines end, marked_lines)
 
   -- Update visible lines accounting for "from_bottom" direction
   picker.opts.source.show(items_to_show, buf_id)
@@ -1221,14 +1238,23 @@ H.picker_set_lines = function(picker)
     vim.api.nvim_buf_set_lines(buf_id, 0, 0, true, empty_lines)
   end
 
+  local ns_id = H.ns_id.matches
+  H.clear_namespace(buf_id, ns_id)
+
+  -- Add highlighting for marked lines
+  local marked_opts = { end_col = 0, hl_group = 'MiniPickMatchMarked', priority = 202 }
+  for _, line in ipairs(marked_lines) do
+    marked_opts.end_line = line
+    H.set_extmark(buf_id, ns_id, line - 1, 0, marked_opts)
+  end
+
   -- Update current item
   if cur_line > vim.api.nvim_buf_line_count(buf_id) then return end
 
-  H.clear_namespace(buf_id, H.ns_id.current)
   local cur_opts = { end_row = cur_line, end_col = 0, hl_eol = true, hl_group = 'MiniPickMatchCurrent', priority = 201 }
-  H.set_extmark(buf_id, H.ns_id.current, cur_line - 1, 0, cur_opts)
+  H.set_extmark(buf_id, ns_id, cur_line - 1, 0, cur_opts)
 
-  -- Update cursor if showing item matches (needed for 'scroll_{left,right}')
+  -- - Update cursor if showing item matches (needed for 'scroll_{left,right}')
   local is_not_curline = vim.api.nvim_win_get_cursor(win_id)[1] ~= cur_line
   if picker.view_state == 'main' and is_not_curline then vim.api.nvim_win_set_cursor(win_id, { cur_line, 0 }) end
 end
@@ -1318,7 +1344,9 @@ H.picker_set_bordertext = function(picker)
   if nvim_has_window_footer and not picker.is_busy then
     local info = H.picker_get_general_info(picker)
     local source_name = string.format(' %s ', info.source_name)
-    local inds = string.format(' %s|%s|%s ', info.relative_current_ind, info.n_items_matched, info.n_items_total)
+    local marked_inds = info.n_items_marked == 0 and '' or (info.n_items_marked .. '/')
+    local inds =
+      string.format(' %s|%s%s|%s ', info.relative_current_ind, marked_inds, info.n_items_matched, info.n_items_total)
     local win_width, source_width, inds_width =
       vim.api.nvim_win_get_width(win_id), vim.fn.strchars(source_name), vim.fn.strchars(inds)
 
@@ -1365,7 +1393,7 @@ H.picker_free = function(picker)
   if picker == nil then return end
   picker.match_inds = nil
   picker.cache = nil
-  picker.stritems, picker.stritems_ignorecase = nil, nil
+  picker.stritems, picker.stritems_ignorecase, picker.marked_inds_map = nil, nil, nil
   picker.items = nil
   picker = nil
   vim.schedule(function() collectgarbage('collect') end)
@@ -1376,15 +1404,15 @@ H.actions = {
   caret_left  = function(picker, _) H.picker_move_caret(picker, -1) end,
   caret_right = function(picker, _) H.picker_move_caret(picker, 1)  end,
 
-  choose             = function(picker, _) return H.picker_choose(picker, nil)      end,
-  choose_all         = function(picker, _)
-    local choose_all = picker.opts.source.choose_all
-    if not vim.is_callable(choose_all) then return true end
-    return not choose_all(MiniPick.get_picker_matches().all)
+  choose            = function(picker, _) return H.picker_choose(picker, nil)      end,
+  choose_in_split   = function(picker, _) return H.picker_choose(picker, 'split')  end,
+  choose_in_tabpage = function(picker, _) return H.picker_choose(picker, 'tabnew') end,
+  choose_in_vsplit  = function(picker, _) return H.picker_choose(picker, 'vsplit') end,
+  choose_marked     = function(picker, _)
+    local choose_marked = picker.opts.source.choose_marked
+    if not vim.is_callable(choose_marked) then return true end
+    return not choose_marked(MiniPick.get_picker_matches().marked)
   end,
-  choose_in_split    = function(picker, _) return H.picker_choose(picker, 'split')  end,
-  choose_in_tabpage  = function(picker, _) return H.picker_choose(picker, 'tabnew') end,
-  choose_in_vsplit   = function(picker, _) return H.picker_choose(picker, 'vsplit') end,
 
   delete_char       = function(picker, _) H.picker_query_delete(picker, 1)                end,
   delete_char_right = function(picker, _) H.picker_query_delete(picker, 0)                end,
@@ -1400,6 +1428,9 @@ H.actions = {
     end
     H.picker_query_delete(picker, n_del)
   end,
+
+  mark     = function(picker, _) H.picker_mark_indexes(picker, 'current') end,
+  mark_all = function(picker, _) H.picker_mark_indexes(picker, 'all') end,
 
   move_down  = function(picker, _) H.picker_move_current(picker, 1)  end,
   move_start = function(picker, _) H.picker_move_current(picker, nil, 1)  end,
@@ -1486,6 +1517,26 @@ H.picker_choose = function(picker, pre_command)
   return not choose(H.picker_get_current_item(picker))
 end
 
+H.picker_mark_indexes = function(picker, range_type)
+  if picker.items == nil then return end
+  local test_inds = range_type == 'current' and { picker.match_inds[picker.current_ind] } or picker.match_inds
+
+  -- Mark if not all marked, unmark otherwise
+  local marked_inds_map, is_all_marked = picker.marked_inds_map, true
+  for _, ind in ipairs(test_inds) do
+    is_all_marked = is_all_marked and marked_inds_map[ind]
+  end
+
+  -- NOTE: Set to `nil` and not `false` for easier counting of present values
+  local new_val
+  if not is_all_marked then new_val = true end
+  for _, ind in ipairs(test_inds) do
+    marked_inds_map[ind] = new_val
+  end
+
+  if picker.view_state == 'info' then H.picker_show_info(picker) end
+end
+
 H.picker_move_caret = function(picker, n) picker.caret = math.min(math.max(picker.caret + n, 1), #picker.query + 1) end
 
 H.picker_move_current = function(picker, by, to)
@@ -1511,8 +1562,7 @@ H.picker_move_current = function(picker, by, to)
 
   H.picker_set_current_ind(picker, to)
 
-  -- Update buffer(s)
-  H.picker_set_lines(picker)
+  -- Update not main buffer(s)
   if picker.view_state == 'info' then H.picker_show_info(picker) end
   if picker.view_state == 'preview' then H.picker_show_preview(picker) end
 end
@@ -1547,6 +1597,7 @@ H.picker_show_info = function(picker)
     'Source name   │ ' .. info.source_name,
     'Total items   │ ' .. info.n_items_total,
     'Matched items │ ' .. info.n_items_matched,
+    'Marked items  │ ' .. info.n_items_marked,
     'Current index │ ' .. info.relative_current_ind,
   }
   local hl_lines = { 1 }
@@ -1597,6 +1648,7 @@ H.picker_get_general_info = function(picker)
     source_name = picker.opts.source.name or '---',
     n_items_total = has_items and #picker.items or '-',
     n_items_matched = has_items and #picker.match_inds or '-',
+    n_items_marked = has_items and vim.tbl_count(picker.marked_inds_map) or '-',
     relative_current_ind = has_items and picker.current_ind or '-',
   }
 end

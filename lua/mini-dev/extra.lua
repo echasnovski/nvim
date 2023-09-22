@@ -693,8 +693,13 @@ end
 
 H.pick_start = function(items, default_opts, opts)
   local pick = H.validate_pick()
-  local fallback =
-    { source = { preview = pick.default_preview, choose = pick.default_choose, choose_all = pick.default_choose_all } }
+  local fallback = {
+    source = {
+      preview = pick.default_preview,
+      choose = pick.default_choose,
+      choose_marked = pick.default_choose_marked,
+    },
+  }
   local opts_final = vim.tbl_deep_extend('force', fallback, default_opts, opts or {}, { source = { items = items } })
   return pick.start(opts_final)
 end
