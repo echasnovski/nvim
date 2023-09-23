@@ -126,15 +126,18 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   -- NOTE: Account for output of `vim.diagnostic.get()` being  modifiable:
   -- https://github.com/neovim/neovim/pull/25010
   if vim.fn.has('nvim-0.10') == 0 then items = vim.deepcopy(items) end
-  if local_opts.sort_by_severity then
-    table.sort(items, function(a, b) return (a.severity or 0) < (b.severity or 0) end)
-  end
 
   -- Compute final path width
   local path_width = 0
   for _, item in ipairs(items) do
     item.path = H.buf_get_name(item.bufnr) or ''
     path_width = math.max(path_width, vim.fn.strchars(item.path))
+  end
+
+  -- Sort
+  -- TODO: ?Sort by path?
+  if local_opts.sort_by_severity then
+    table.sort(items, function(a, b) return (a.severity or 0) < (b.severity or 0) end)
   end
 
   -- Update items
@@ -642,15 +645,14 @@ MiniExtra.pickers.list = function(local_opts, opts)
   local allowed_scopes = { 'quickfix', 'location', 'jump', 'change' }
   local scope = H.pick_validate_scope(local_opts, allowed_scopes, 'list')
 
-  local ok, items = pcall(H.list_get[scope])
-  if not ok then items = {} end
+  local has_items, items = pcall(H.list_get[scope])
+  if not has_items then items = {} end
 
   items = vim.tbl_filter(function(x) return H.is_valid_buf(x.bufnr) end, items)
   items = vim.tbl_map(H.list_enhance_item, items)
 
   local choose = function(item)
-    local ok, _ = pcall(pick.default_choose, item)
-    if not ok then return end
+    pick.default_choose(item)
 
     -- Force 'buflisted' on opened item
     local win_target = pick.get_picker_state().windows.target

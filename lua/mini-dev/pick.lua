@@ -47,35 +47,6 @@
 --
 -- Tests:
 --
--- - All actions should work when `items` is not yet set.
---
--- - Automatically respects 'ignorecase'/'smartcase' by adjusting `stritems`.
---
--- - Works with multibyte characters.
---
--- - Any mouse click stops picker.
---
--- - Builtin:
---     - Files:
---         - Respects `source.cwd`.
---
---     - Grep:
---         - Respects `source.cwd`.
---
---     - Grep live:
---         - Respects `source.cwd`.
---
---     - CLI:
---         - Respects `source.cwd`.
---
---     - Help:
---         - Works when "Open tag" -> "Open tag in same file".
---         - Can be properly aborted.
---
---     - Buffers:
---         - Preview doesn't trigger `BufEnter` which might interfer with many
---           plugins (like `setup_auto_root()` from 'mini.misc').
---
 -- Docs:
 --
 -- - Example mappings to switch `toggle_{preview,info}` and `move_{up,down}`: >
@@ -125,11 +96,9 @@
 ---
 --- - Customizable
 ---     - "On choice" action.
----     - Filter and sort.
+---     - Match algorithm.
 ---     - On-demand item's extended info (usually preview).
 ---     - Mappings for special actions.
----
---- - Converters for Telescope pickers and sorters.
 ---
 --- - |vim.ui.select()| wrapper.
 ---
@@ -194,8 +163,8 @@
 ---@diagnostic disable:cast-local-type
 
 -- Module definition ==========================================================
-local MiniPick = {}
-local H = {}
+MiniPick = {}
+H = {}
 
 --- Module setup
 ---
@@ -281,9 +250,9 @@ MiniPick.config = {
     refine = '<C-Space>',
 
     scroll_down  = '<C-f>',
-    scroll_up    = '<C-b>',
     scroll_left  = '<C-h>',
     scroll_right = '<C-l>',
+    scroll_up    = '<C-b>',
 
     stop = '<Esc>',
 
@@ -722,7 +691,8 @@ end
 
 ---@seealso |MiniPick.get_picker_state()|
 MiniPick.set_picker_target_window = function(win_id)
-  if not (MiniPick.is_picker_active() and H.is_valid_win(win_id)) then return end
+  if not H.is_valid_win(win_id) then H.error('`win_id` in `set_picker_target_window()` is not valid.') end
+  if not MiniPick.is_picker_active() then return end
   H.pickers.active.windows.target = win_id
 end
 
@@ -765,8 +735,9 @@ H.ns_id = {
 
 -- Timers
 H.timers = {
-  getcharstr = vim.loop.new_timer(),
   busy = vim.loop.new_timer(),
+  focus = vim.loop.new_timer(),
+  getcharstr = vim.loop.new_timer(),
 }
 
 -- Pickers
@@ -827,8 +798,8 @@ H.setup_config = function(config)
     ['options.direction'] = { config.options.direction, 'string' },
     ['options.use_cache'] = { config.options.use_cache, 'boolean' },
 
-    ['source.name'] = { config.source.name, 'string', true },
     ['source.items'] = { config.source.items, 'table', true },
+    ['source.name'] = { config.source.name, 'string', true },
     ['source.cwd'] = { config.source.cwd, 'string', true },
     ['source.match'] = { config.source.match, 'function', true },
     ['source.show'] = { config.source.show, 'function', true },
@@ -1092,7 +1063,7 @@ H.picker_compute_win_config = function(win_config)
   local config = vim.tbl_deep_extend('force', default_config, H.expand_callable(win_config) or {})
 
   -- Tweak config values to ensure they are proper
-  if config.border == 'none' then config.border = { ' ' } end
+  if config.border == 'none' then config.border = { '', ' ', '', '', '', ' ', '', '' } end
   -- - Account for border
   config.height = math.min(config.height, max_height - 2)
   config.width = math.min(config.width, max_width - 2)
@@ -1101,11 +1072,7 @@ H.picker_compute_win_config = function(win_config)
 end
 
 H.picker_track_lost_focus = function(picker)
-  local timer = vim.loop.new_timer()
-  local stop_timer = vim.schedule_wrap(function()
-    timer:stop()
-    if not timer:is_closing() then timer:close() end
-  end)
+  local stop_timer = vim.schedule_wrap(function() H.timers.focus:stop() end)
   vim.api.nvim_create_autocmd('User', { once = true, pattern = 'MiniPickStop', callback = stop_timer })
 
   local track = vim.schedule_wrap(function()
@@ -1115,7 +1082,7 @@ H.picker_track_lost_focus = function(picker)
     H.picker_stop(picker, true)
     stop_timer()
   end)
-  timer:start(1000, 1000, track)
+  H.timers.focus:start(1000, 1000, track)
 end
 
 H.picker_set_items = function(picker, items, opts)
@@ -1342,29 +1309,33 @@ H.picker_set_bordertext = function(picker)
   -- picker (otherwise it will flicker number of matches data on char delete)
   local nvim_has_window_footer = vim.fn.has('nvim-0.10') == 1
   if nvim_has_window_footer and not picker.is_busy then
-    local info = H.picker_get_general_info(picker)
-    local source_name = string.format(' %s ', info.source_name)
-    local marked_inds = info.n_items_marked == 0 and '' or (info.n_items_marked .. '/')
-    local inds =
-      string.format(' %s|%s%s|%s ', info.relative_current_ind, marked_inds, info.n_items_matched, info.n_items_total)
-    local win_width, source_width, inds_width =
-      vim.api.nvim_win_get_width(win_id), vim.fn.strchars(source_name), vim.fn.strchars(inds)
-
-    local footer = { { source_name, 'MiniPickBorderText' } }
-    local n_spaces_between = win_width - (source_width + inds_width)
-    if n_spaces_between > 0 then
-      footer[2] = { H.win_get_bottom_border(win_id):rep(n_spaces_between), 'MiniPickBorder' }
-      footer[3] = { inds, 'MiniPickBorderText' }
-    end
-    config.footer, config.footer_pos = footer, 'left'
+    config.footer, config.footer_pos = H.picker_compute_footer(picker, win_id), 'left'
   end
 
+  -- Respect `options.direction`
   if nvim_has_window_footer and picker.opts.options.direction == 'from_bottom' then
     config.title, config.footer = config.footer, config.title
   end
 
   vim.api.nvim_win_set_config(win_id, config)
   vim.wo[win_id].list = true
+end
+
+H.picker_compute_footer = function(picker, win_id)
+  local info = H.picker_get_general_info(picker)
+  local source_name = string.format(' %s ', info.source_name)
+  local marked_inds = info.n_marked == 0 and '' or (info.n_marked .. '/')
+  local inds = string.format(' %s|%s%s|%s ', info.relative_current_ind, marked_inds, info.n_matched, info.n_total)
+  local win_width, source_width, inds_width =
+    vim.api.nvim_win_get_width(win_id), vim.fn.strchars(source_name), vim.fn.strchars(inds)
+
+  local footer = { { source_name, 'MiniPickBorderText' } }
+  local n_spaces_between = win_width - (source_width + inds_width)
+  if n_spaces_between > 0 then
+    footer[2] = { H.win_get_bottom_border(win_id):rep(n_spaces_between), 'MiniPickBorder' }
+    footer[3] = { inds, 'MiniPickBorderText' }
+  end
+  return footer
 end
 
 H.picker_stop = function(picker, abort)
@@ -1595,9 +1566,9 @@ H.picker_show_info = function(picker)
   local lines = {
     'General',
     'Source name   │ ' .. info.source_name,
-    'Total items   │ ' .. info.n_items_total,
-    'Matched items │ ' .. info.n_items_matched,
-    'Marked items  │ ' .. info.n_items_marked,
+    'Total items   │ ' .. info.n_total,
+    'Matched items │ ' .. info.n_matched,
+    'Marked items  │ ' .. info.n_marked,
     'Current index │ ' .. info.relative_current_ind,
   }
   local hl_lines = { 1 }
@@ -1646,9 +1617,9 @@ H.picker_get_general_info = function(picker)
   local has_items = picker.items ~= nil
   return {
     source_name = picker.opts.source.name or '---',
-    n_items_total = has_items and #picker.items or '-',
-    n_items_matched = has_items and #picker.match_inds or '-',
-    n_items_marked = has_items and vim.tbl_count(picker.marked_inds_map) or '-',
+    n_total = has_items and #picker.items or '-',
+    n_matched = has_items and #picker.match_inds or '-',
+    n_marked = has_items and vim.tbl_count(picker.marked_inds_map) or '-',
     relative_current_ind = has_items and picker.current_ind or '-',
   }
 end
