@@ -267,6 +267,7 @@ T['default_match()']['respects special queries'] = function()
     'a b c',
   }
 
+  -- All should also test for just inserting special char
   -- Forced fuzzy
   -- Forced exact
   -- Exact start or/and exact end
@@ -279,11 +280,35 @@ T['default_match()']['works with multibyte characters'] = function()
   MiniTest.skip()
 end
 
+T['default_match()']['works with special characters'] = function()
+  -- Like `.`, `\`.
+  -- Both in exact and fuzzy matches
+  MiniTest.skip()
+end
+
 T['default_show()'] = new_set()
 
 T['default_show()']['works'] = function() MiniTest.skip() end
 
+T['default_show()']['respects `opts.show_icons`'] = function()
+  -- Both with and without 'nvim-web-devicons'
+  MiniTest.skip()
+end
+
+T['default_show()']['shows icons for only present file system entries'] = function() MiniTest.skip() end
+
+T['default_show()']['handles stritems with present `\n`'] = function() MiniTest.skip() end
+
+T['default_show()']["respects 'ignorecase'/'smartcase'"] = function() MiniTest.skip() end
+
+T['default_show()']['handles query similar to `default_match`'] = function()
+  -- Like forced exact and others should be properly highlighted
+  MiniTest.skip()
+end
+
 T['default_show()']['works with multibyte characters'] = function() MiniTest.skip() end
+
+T['default_show()']['works with non-single-char-entries queries'] = function() MiniTest.skip() end
 
 T['default_preview()'] = new_set()
 
@@ -443,7 +468,7 @@ T['Overall view'] = new_set()
 T['Overall view']['shows prompt'] = function()
   -- Initial
   -- After typical typing
-  -- After moving caret
+  -- After moving caret, both usual case and with spaces (as it might modify query)
   MiniTest.skip()
 end
 
@@ -577,6 +602,11 @@ end
 
 T['Key query process']['respects mouse click'] = function()
   -- Inside main window - ignore; outside - stop
+  MiniTest.skip()
+end
+
+T['Key query process']['handles not configured key presses'] = function()
+  -- Like `<M-a>`, `<Shift> + <arrow>`, etc.
   MiniTest.skip()
 end
 

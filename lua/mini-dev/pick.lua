@@ -1726,7 +1726,6 @@ H.match_filter_fuzzy_single = function(candidate, index, query, find_query)
   -- - All are present in `candidate` in the same order.
   -- - Has smallest width among all such match positions.
   -- - Among same width has smallest first match.
-  -- This same algorithm is used in 'mini.fuzzy' and has more comments.
 
   -- Search forward to find matching positions with left-most last char match
   local first, last = find_query(candidate, query, 1)
