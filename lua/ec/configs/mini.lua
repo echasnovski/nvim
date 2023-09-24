@@ -11,14 +11,6 @@ vim.cmd([[autocmd User MiniStarterOpened
   \   { buffer = true }
   \ )]])
 
-require('mini.files').setup({ windows = { preview = true } })
-local minifiles_augroup = vim.api.nvim_create_augroup('ec-mini-files', {})
-vim.api.nvim_create_autocmd('User', {
-  group = minifiles_augroup,
-  pattern = 'MiniFilesWindowOpen',
-  callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
-})
-
 require('mini.statusline').setup({
   content = {
     active = function()
@@ -179,6 +171,14 @@ vim.schedule(function()
   require('mini.cursorword').setup()
 
   require('mini.doc').setup()
+
+  require('mini.files').setup({ windows = { preview = true } })
+  local minifiles_augroup = vim.api.nvim_create_augroup('ec-mini-files', {})
+  vim.api.nvim_create_autocmd('User', {
+    group = minifiles_augroup,
+    pattern = 'MiniFilesWindowOpen',
+    callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
+  })
 
   local hipatterns = require('mini.hipatterns')
   hipatterns.setup({

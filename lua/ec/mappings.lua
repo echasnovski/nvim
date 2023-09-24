@@ -10,14 +10,7 @@ vim.opt.langmap = table.concat(langmap_keys, ',')
 -- stylua: ignore end
 
 -- Helper function
-local default_opts = {
-  noremap = true,
-  silent = true,
-  expr = false,
-  nowait = false,
-  script = false,
-  unique = false,
-}
+local default_opts = { noremap = true, silent = true, expr = false, nowait = false, script = false, unique = false }
 
 local keymap = function(mode, keys, cmd, opts)
   local o = vim.tbl_deep_extend('force', default_opts, opts or {})

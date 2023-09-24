@@ -17,11 +17,8 @@ local goto_hunk_cmd = function(direction)
 
   return function()
     require('gitsigns')[direction .. '_hunk']()
-    if MiniAnimate ~= nil then
-      MiniAnimate.execute_after('scroll', function() vim.defer_fn(center, 5) end)
-    else
-      cetner()
-    end
+    if MiniAnimate == nil then return center() end
+    MiniAnimate.execute_after('scroll', function() vim.defer_fn(center, 5) end)
   end
 end
 

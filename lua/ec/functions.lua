@@ -22,6 +22,31 @@ EC.iterate_query_matches = function(candidate, query)
   return f, state, 1
 end
 
+-- Log for personal use during debugging
+EC.log = {}
+
+local start_hrtime = vim.loop.hrtime()
+_G.add_to_log = function(...)
+  local t = { ... }
+  t.timestamp = 0.000001 * (vim.loop.hrtime() - start_hrtime)
+  table.insert(EC.log, vim.deepcopy(t))
+end
+
+local log_buf_id
+EC.log_print = function()
+  if log_buf_id == nil or not vim.api.nvim_buf_is_valid(log_buf_id) then
+    log_buf_id = vim.api.nvim_create_buf(true, true)
+  end
+  vim.api.nvim_win_set_buf(0, log_buf_id)
+  vim.api.nvim_buf_set_lines(log_buf_id, 0, -1, false, vim.split(vim.inspect(EC.log), '\n'))
+end
+
+EC.log_clear = function()
+  EC.log = {}
+  start_hrtime = vim.loop.hrtime()
+  vim.cmd('echo "Cleared EC.log"')
+end
+
 -- Show Neoterm's active REPL, i.e. in which command will be executed when one
 -- of `TREPLSend*` will be used
 EC.print_active_neoterm = function()
@@ -39,8 +64,9 @@ end
 
 -- Create scratch buffer and focus on it
 EC.new_scratch_buffer = function()
-  local buf = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_win_set_buf(0, buf)
+  local buf_id = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_win_set_buf(0, buf_id)
+  return buf_id
 end
 
 -- Make action for `<CR>` which respects completion and autopairs
