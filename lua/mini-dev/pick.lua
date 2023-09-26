@@ -261,7 +261,7 @@ MiniPick.config = {
   },
 
   options = {
-    direction = 'from_top',
+    content_direction = 'from_top',
 
     -- Cache matches to increase speed on repeated prompts (uses more memory)
     use_cache = false,
@@ -795,7 +795,7 @@ H.setup_config = function(config)
     ['mappings.toggle_info'] = { config.mappings.toggle_info, 'string' },
     ['mappings.toggle_preview'] = { config.mappings.toggle_preview, 'string' },
 
-    ['options.direction'] = { config.options.direction, 'string' },
+    ['options.content_direction'] = { config.options.content_direction, 'string' },
     ['options.use_cache'] = { config.options.use_cache, 'boolean' },
 
     ['source.items'] = { config.source.items, 'table', true },
@@ -856,6 +856,9 @@ end
 
 -- Picker object --------------------------------------------------------------
 H.validate_picker_opts = function(opts)
+  opts = opts or {}
+  if type(opts) ~= 'table' then H.error('Picker options should be table.') end
+
   opts = vim.deepcopy(H.get_config(opts))
 
   local validate_callable = function(x, x_name)
@@ -871,8 +874,9 @@ H.validate_picker_opts = function(opts)
 
   source.name = tostring(source.name or '<No name>')
 
-  source.cwd = type(source.cwd) == 'string' and vim.fn.fnamemodify(source.cwd, ':p') or vim.fn.getcwd()
+  source.cwd = source.cwd or vim.fn.getcwd()
   if vim.fn.isdirectory(source.cwd) == 0 then H.error('`source.cwd` should be a valid directory path.') end
+  source.cwd = vim.fn.fnamemodify(source.cwd, ':p')
 
   source.match = source.match or MiniPick.default_match
   validate_callable(source.match, 'source.match')
@@ -889,14 +893,6 @@ H.validate_picker_opts = function(opts)
   source.choose_marked = source.choose_marked or MiniPick.default_choose_marked
   validate_callable(source.choose_marked, 'source.choose_marked')
 
-  -- Options
-  local options = opts.options
-
-  local is_valid_direction = options.direction == 'from_top' or options.direction == 'from_bottom'
-  if not is_valid_direction then H.error('`options.direction` should be one of "from_top" or "from_bottom".') end
-
-  if type(options.use_cache) ~= 'boolean' then H.error('`options.use_cache` should be boolean.') end
-
   -- Delay
   for key, value in pairs(opts.delay) do
     local is_valid_value = type(value) == 'number' and value > 0
@@ -904,11 +900,25 @@ H.validate_picker_opts = function(opts)
   end
 
   -- Mappings
-  for key, x in pairs(opts.mappings) do
-    if type(key) ~= 'string' then H.error('`mappings` should have only string fields.') end
-    local ok = type(x) == 'string' or (type(x) == 'table' and type(x.char) == 'string' and vim.is_callable(x.func))
-    if not ok then H.error(string.format('`mappings["%s"]` should be string or table with `char` and `func`.', key)) end
+  local default_mappings = H.default_config.mappings
+  for field, x in pairs(opts.mappings) do
+    if type(field) ~= 'string' then H.error('`mappings` should have only string fields.') end
+    local is_def_action = default_mappings[field] ~= nil
+    if is_def_action and type(x) ~= 'string' then
+      H.error(string.format('Mapping for default action "%s" should be string.', field))
+    end
+    if not is_def_action and not (type(x) == 'table' and type(x.char) == 'string' and vim.is_callable(x.func)) then
+      H.error(string.format('Mapping for manual action "%s" should be table with `char` and `func`.', field))
+    end
   end
+
+  -- Options
+  local options = opts.options
+
+  local is_ok_direction = options.content_direction == 'from_top' or options.content_direction == 'from_bottom'
+  if not is_ok_direction then H.error('`options.content_direction` should be one of "from_top" or "from_bottom".') end
+
+  if type(options.use_cache) ~= 'boolean' then H.error('`options.use_cache` should be boolean.') end
 
   -- Window
   local win_config = opts.window.config
@@ -1185,7 +1195,7 @@ H.picker_set_lines = function(picker)
   local items_to_show, items, match_inds = {}, picker.items, picker.match_inds
   local cur_ind, cur_line = picker.current_ind, nil
   local marked_inds_map, marked_lines = picker.marked_inds_map, {}
-  local is_direction_bottom = picker.opts.options.direction == 'from_bottom'
+  local is_direction_bottom = picker.opts.options.content_direction == 'from_bottom'
   local from = is_direction_bottom and visible_range.to or visible_range.from
   local to = is_direction_bottom and visible_range.from or visible_range.to
   for i = from, to, (from <= to and 1 or -1) do
@@ -1279,7 +1289,7 @@ end
 
 H.picker_set_bordertext = function(picker)
   local win_id = picker.windows.main
-  if vim.fn.has('nvim-0.9') == 0 or not H.is_valid_win(win_id) then return end
+  if not H.is_valid_win(win_id) then return end
 
   -- Compute main text managing views separately and truncating from left
   local view_state = picker.view_state
@@ -1313,13 +1323,16 @@ H.picker_set_bordertext = function(picker)
   end
 
   -- Respect `options.direction`
-  if nvim_has_window_footer and picker.opts.options.direction == 'from_bottom' then
+  if nvim_has_window_footer and picker.opts.options.content_direction == 'from_bottom' then
     config.title, config.footer = config.footer, config.title
   end
 
   vim.api.nvim_win_set_config(win_id, config)
   vim.wo[win_id].list = true
 end
+
+-- - No border text functionality is available in Neovim<0.9
+if vim.fn.has('nvim-0.9') == 0 then H.picker_set_bordertext = function() return end end
 
 H.picker_compute_footer = function(picker, win_id)
   local info = H.picker_get_general_info(picker)
@@ -1517,7 +1530,7 @@ H.picker_move_current = function(picker, by, to)
 
   if to == nil then
     -- Account for content direction
-    by = (picker.opts.options.direction == 'from_top' and 1 or -1) * by
+    by = (picker.opts.options.content_direction == 'from_top' and 1 or -1) * by
 
     -- Wrap around edges only if current index is at edge
     to = picker.current_ind

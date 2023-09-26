@@ -9,14 +9,23 @@ local new_set = MiniTest.new_set
 local load_module = function(config) child.mini_load('pick', config) end
 local unload_module = function() child.mini_unload('pick') end
 local type_keys = function(...) return child.type_keys(...) end
+local poke_eventloop = function() child.api.nvim_eval('1') end
+local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 --stylua: ignore end
 
--- Tweak `expect_screenshot()` to test only on Neovim>=0.9 (as it introduced
--- titles). Use `expect_screenshot_orig()` for original testing.
-local expect_screenshot_orig = child.expect_screenshot
-child.expect_screenshot = function(...)
-  if child.fn.has('nvim-0.9') == 0 then return end
-  expect_screenshot_orig(...)
+-- Tweak `expect_screenshot()` to test only on Neovim=0.9 (as it introduced
+-- titles and 0.10 introduced footer).
+-- Use `child.expect_screenshot_orig()` for original testing.
+child.expect_screenshot_orig = child.expect_screenshot
+child.expect_screenshot = function(opts, allow_past_09)
+  -- TODO: Regenerate all screenshots with 0.10 after its stable release
+  if child.fn.has('nvim-0.9') == 0 or child.fn.has('nvim-0.10') == 1 then return end
+  child.expect_screenshot_orig(opts)
+end
+
+child.has_float_footer = function()
+  -- https://github.com/neovim/neovim/pull/24739
+  return child.fn.has('nvim-0.10') == 1
 end
 
 -- Test paths helpers
@@ -28,21 +37,43 @@ local forward_lua = function(fun_str)
   return function(...) return child.lua_get(lua_cmd, { ... }) end
 end
 
-local start = forward_lua('MiniPick.start')
+local get_picker_state = forward_lua('MiniPick.get_picker_state')
+local get_picker_query = forward_lua('MiniPick.get_picker_query')
+local is_picker_active = forward_lua('MiniPick.is_picker_active')
+
+-- Use `child.api_notify` to allow user input while child process awaits for
+-- `start()` to return a value
+local start = function(...) child.lua_notify('MiniPick.start(...)', { ... }) end
+
 local start_with_items = function(items, name) start({ source = { items = items, name = name } }) end
+
+-- Common test helpers
+local validate_buf_option =
+  function(buf_id, option_name, option_value) eq(child.api.nvim_buf_get_option(buf_id, option_name), option_value) end
+
+local validate_win_option =
+  function(win_id, option_name, option_value) eq(child.api.nvim_win_get_option(win_id, option_name), option_value) end
 
 -- Common mocks
 
 -- Data =======================================================================
-local test_items = { 'abc', 'a_b_c', 'c_a_b', 'b_c_a' }
+local test_items = { 'a_b_c', 'abc', 'a_b_b', 'c_a_a', 'b_c_c' }
 
 -- Output test set ============================================================
 local T = new_set({
   hooks = {
     pre_case = function()
       child.setup()
+
+      -- Make more comfortable screenshots
       child.set_size(15, 40)
+      child.o.laststatus = 0
+      child.o.ruler = false
+
       load_module()
+
+      -- Make border differentiable in screenshots
+      child.cmd('hi MiniPickBorder ctermfg=2')
     end,
     post_once = child.stop,
   },
@@ -60,6 +91,10 @@ T['setup()']['creates side effects'] = function()
 
   -- Highlight groups
   local validate_hl_group = function(name, ref) expect.match(child.cmd_capture('hi ' .. name), ref) end
+
+  -- - Make sure to clear highlight groups defined for better screenshots
+  child.cmd('hi clear MiniPickBorder')
+  load_module()
 
   validate_hl_group('MiniPickBorder', 'links to FloatBorder')
   validate_hl_group('MiniPickBorderBusy', 'links to DiagnosticFloatingWarn')
@@ -111,7 +146,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('mappings.toggle_info', '<S-Tab>')
   expect_config('mappings.toggle_preview', '<Tab>')
 
-  expect_config('options.direction', 'from_top')
+  expect_config('options.content_direction', 'from_top')
   expect_config('options.use_cache', false)
 
   expect_config('source.items', vim.NIL)
@@ -172,7 +207,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ mappings = { toggle_preview = 1 } }, 'mappings.toggle_preview', 'string')
 
   expect_config_error({ options = 'a' }, 'options', 'table')
-  expect_config_error({ options = { direction = 1 } }, 'options.direction', 'string')
+  expect_config_error({ options = { content_direction = 1 } }, 'options.content_direction', 'string')
   expect_config_error({ options = { use_cache = 1 } }, 'options.use_cache', 'boolean')
 
   expect_config_error({ source = 'a' }, 'source', 'table')
@@ -189,21 +224,151 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ window = { config = 1 } }, 'window.config', 'table or callable')
 end
 
+-- This set mostly contains general function testing which doesn't fit into
+-- more specialized integration tests later
 T['start()'] = new_set()
 
-T['start()']['works'] = function() MiniTest.skip() end
+T['start()']['works'] = function()
+  child.lua_notify('_G.picked_item = MiniPick.start(...)', { { source = { items = test_items } } })
+  child.expect_screenshot()
 
-T['start()']['returns chosen value'] = function() MiniTest.skip() end
+  -- Should focus on floating window
+  eq(child.api.nvim_get_current_win(), get_picker_state().windows.main)
 
-T['start()']['creates proper buffer'] = function() MiniTest.skip() end
+  -- Should close window after an item and print it (as per `default_choose()`)
+  type_keys('<CR>')
+  child.expect_screenshot()
 
-T['start()']['creates proper window'] = function() MiniTest.skip() end
+  -- Should return picked value
+  eq(child.lua_get('_G.picked_item'), test_items[1])
+end
 
-T['start()']['tracks lost focus'] = function() MiniTest.skip() end
+T['start()']['works with window footer'] = function()
+  -- TODO: Use this as primary test after support for Neovim<=0.9 is dropped
+  if not child.has_float_footer() then return end
 
-T['start()']['validates `opts`'] = function() MiniTest.skip() end
+  child.lua_notify('_G.picked_item = MiniPick.start(...)', { { source = { items = test_items } } })
+  child.expect_screenshot_orig()
 
-T['start()']['correctly computes stritems'] = function() MiniTest.skip() end
+  eq(child.api.nvim_get_current_win(), get_picker_state().windows.main)
+  type_keys('<CR>')
+  child.expect_screenshot_orig()
+  eq(child.lua_get('_G.picked_item'), test_items[1])
+end
+
+T['start()']['can be started without explicit items'] = function()
+  child.lua_notify('_G.picked_item = MiniPick.start()')
+  child.expect_screenshot()
+  type_keys('<CR>')
+  eq(child.lua_get('_G.picked_item'), vim.NIL)
+end
+
+T['start()']['creates proper window'] = function()
+  start_with_items(test_items)
+  local win_id = get_picker_state().windows.main
+  eq(child.api.nvim_win_is_valid(win_id), true)
+
+  local win_config = child.api.nvim_win_get_config(win_id)
+  eq(win_config.relative, 'editor')
+  eq(win_config.focusable, true)
+
+  validate_win_option(win_id, 'list', true)
+  validate_win_option(win_id, 'listchars', 'extends:…')
+  validate_win_option(win_id, 'wrap', false)
+end
+
+T['start()']['creates proper main buffer'] = function()
+  start_with_items(test_items)
+  local buf_id = get_picker_state().buffers.main
+  eq(child.api.nvim_buf_is_valid(buf_id), true)
+  validate_buf_option(buf_id, 'filetype', 'minipick')
+  validate_buf_option(buf_id, 'buflisted', false)
+  validate_buf_option(buf_id, 'buftype', 'nofile')
+end
+
+T['start()']['tracks lost focus'] = function()
+  child.lua_notify([[MiniPick.start({
+    source = { items = { 'a', 'b' } },
+    mappings = { error = { char = 'e', func = function() error() end } },
+  })]])
+  child.expect_screenshot()
+  type_keys('e')
+  -- By default it checks inside a timer with 1 second period
+  sleep(1000 + 50)
+  child.expect_screenshot()
+end
+
+T['start()']['validates `opts`'] = function()
+  local validate = function(opts, error_pattern)
+    expect.error(function() child.lua('MiniPick.start(...)', { opts }) end, error_pattern)
+  end
+
+  validate(1, 'Picker options.*table')
+
+  validate({ delay = { async = 'a' } }, '`delay.async`.*number')
+  validate({ delay = { async = 0 } }, '`delay.async`.*positive')
+  validate({ delay = { busy = 'a' } }, '`delay.busy`.*number')
+  validate({ delay = { busy = 0 } }, '`delay.busy`.*positive')
+
+  validate({ options = { content_direction = 1 } }, '`options%.content_direction`.*one of')
+  validate({ options = { use_cache = 1 } }, '`options%.use_cache`.*boolean')
+
+  validate({ mappings = { [1] = '<C-f>' } }, '`mappings`.*only string fields')
+  validate({ mappings = { choose = 1 } }, 'Mapping for default action "choose".*string')
+  expect.error(
+    function() child.lua('MiniPick.start({ mappings = { choose = { char = "a", func = function() end } } })') end,
+    'default action.*string'
+  )
+  validate(
+    { mappings = { ['Manual action'] = 1 } },
+    'Mapping for manual action "Manual action".*table with `char` and `func`'
+  )
+
+  validate({ source = { items = 1 } }, '`source%.items`.*list or callable')
+  validate({ source = { cwd = 1 } }, '`source%.cwd`.*valid directory path')
+  validate({ source = { cwd = 'not-existing-path' } }, '`source%.cwd`.*valid directory path')
+  validate({ source = { match = 1 } }, '`source%.match`.*callable')
+  validate({ source = { show = 1 } }, '`source%.show`.*callable')
+  validate({ source = { preview = 1 } }, '`source%.preview`.*callable')
+  validate({ source = { choose = 1 } }, '`source%.choose`.*callable')
+  validate({ source = { choose_marked = 1 } }, '`source%.choose_marked`.*callable')
+
+  validate({ window = { config = 1 } }, '`window%.config`.*table or callable')
+end
+
+T['start()']['respects `source.items`'] = function()
+  -- Test strings, tables, callables
+  MiniTest.skip()
+end
+
+T['start()']['correctly computes stritems'] = function()
+  -- From string, table, callable
+  MiniTest.skip()
+end
+
+T['start()']['respects `source.name`'] = function()
+  start({ source = { items = test_items, name = 'Hello' } })
+  eq(child.lua_get('MiniPick.get_picker_opts().source.name'), 'Hello')
+  if child.has_float_footer() then child.expect_screenshot_orig() end
+end
+
+T['start()']['respects `source.cwd`'] = function() MiniTest.skip() end
+
+T['start()']['respects `mappings`'] = function()
+  -- Works
+
+  -- Validates correct structure (string or table with proper fields)
+  MiniTest.skip()
+end
+
+T['start()']['allows manual mappings'] = function()
+  child.lua_notify([[MiniPick.start({
+      source = { items = { 'a', 'b' } },
+      mappings = { manual = { char = 'm', func = function() _G.been_here = true end } },
+    })]])
+  type_keys('m')
+  eq(child.lua_get('_G.been_here'), true)
+end
 
 T['start()']['respects `window.config`'] = function()
   -- As table
@@ -212,11 +377,17 @@ T['start()']['respects `window.config`'] = function()
   MiniTest.skip()
 end
 
+T['start()']['allows callable `items`'] = function() MiniTest.skip() end
+
 T['start()']['stops currently active picker'] = function() MiniTest.skip() end
 
 T['start()']['stops impoperly aborted previous picker'] = function() MiniTest.skip() end
 
 T['start()']['triggers `MiniPickStart` User event'] = function() MiniTest.skip() end
+
+T['start()']['respects global config'] = function() MiniTest.skip() end
+
+T['start()']['respects `vim.b.minipick_config`'] = function() MiniTest.skip() end
 
 T['stop()'] = new_set()
 
@@ -473,7 +644,7 @@ T['Overall view']['shows prompt'] = function()
 end
 
 T['Overall view']['uses footer for extra info'] = function()
-  if child.fn.has('nvim-0.10') == 0 then return end
+  if not child.has_float_footer() then return end
 
   -- Basic test
 
@@ -483,19 +654,28 @@ T['Overall view']['uses footer for extra info'] = function()
 end
 
 T['Overall view']['correctly infers footer empty space'] = function()
+  if not child.has_float_footer() then return end
+
   -- Check both `border = 'double'` and `border = <custom_array>`
   MiniTest.skip()
 end
 
-T['Overall view']['respects `options.direction`'] = function()
-  if child.fn.has('nvim-0.10') == 0 then return end
+T['Overall view']['does not show footer if not items is set'] = function()
+  if not child.has_float_footer() then return end
+
+  start()
+  child.expect_screenshot_orig()
+end
+
+T['Overall view']['respects `options.content_direction`'] = function()
+  if not child.has_float_footer() then return end
 
   -- Should switch title and footer
   MiniTest.skip()
 end
 
 T['Overall view']['truncates border text'] = function()
-  if child.fn.has('nvim-0.10') == 0 then return end
+  if not child.has_float_footer() then return end
 
   MiniTest.skip()
 end
@@ -528,7 +708,7 @@ T['Main view']['uses dedicated highlight groups'] = function()
   MiniTest.skip()
 end
 
-T['Main view']['works with `options.direction="from_bottom"`'] = function()
+T['Main view']['works with `options.content_direction="from_bottom"`'] = function()
   -- Both with `default_show` and custom `source.show`
   MiniTest.skip()
 end
@@ -609,5 +789,7 @@ T['Key query process']['handles not configured key presses'] = function()
   -- Like `<M-a>`, `<Shift> + <arrow>`, etc.
   MiniTest.skip()
 end
+
+T['Mappings'] = new_set()
 
 return T
