@@ -163,10 +163,19 @@
 ---@diagnostic disable:cast-local-type
 
 -- Module definition ==========================================================
-MiniPick = {}
-H = {}
+local MiniPick = {}
+local H = {}
 
 --- Module setup
+---
+---                                                                   *:Pick*
+--- Calling this function creates a `:Pick` user command. It takes picker name
+--- from |MiniPick.registry| as mandatory first argument and executes it with
+--- following (expanded, |expandcmd()|) |<f-args>| combined in a single table.
+---
+--- Example: >
+---
+---   :Pick files tool='git'
 ---
 ---@param config table|nil Module config table. See |MiniPick.config|.
 ---
@@ -186,6 +195,14 @@ MiniPick.setup = function(config)
 
   -- Create default highlighting
   H.create_default_hl()
+
+  -- Create user command
+  vim.api.nvim_create_user_command('Pick', function(input)
+    local name, local_opts = H.command_parse_fargs(input.fargs)
+    local f = MiniPick.registry[name]
+    if f == nil then H.error(string.format('There is no picker named "%s" in registry.', name)) end
+    f(local_opts)
+  end, { nargs = '+', complete = H.command_complete, desc = "Pick from 'mini.pick' registry" })
 end
 
 --stylua: ignore
@@ -612,6 +629,25 @@ MiniPick.builtin.resume = function()
   return H.picker_advance(picker)
 end
 
+--- Picker registry
+---
+--- Place for users and extensions to manage pickers with their commonly used
+--- global options. By default contains all |MiniPick.builtin| entries.
+---
+--- Serves as a source for |:Pick| command.
+MiniPick.registry = {}
+
+for name, f in pairs(MiniPick.builtin) do
+  MiniPick.registry[name] = function(local_opts) return f(local_opts) end
+end
+
+-- TODO: Uncomment when 'mini.extra' is released
+-- if type(MiniExtra) == 'table' then
+--   for name, f in pairs(MiniExtra.pickers) do
+--     MiniPick.registry[name] = function(local_opts) return f(local_opts) end
+--   end
+-- end
+
 ---@seealso |MiniPick.set_picker_items()| and |MiniPick.set_picker_items_from_cli()|
 MiniPick.get_picker_items = function() return vim.deepcopy((H.pickers.active or {}).items) end
 
@@ -862,6 +898,26 @@ H.create_default_hl = function()
   hi('MiniPickPreviewLine',   { link = 'CursorLine' })
   hi('MiniPickPreviewRegion', { link = 'IncSearch' })
   hi('MiniPickPrompt',        { link = 'DiagnosticFloatingInfo' })
+end
+
+-- Command --------------------------------------------------------------------
+H.command_parse_fargs = function(fargs)
+  local name, opts_parts = fargs[1], vim.tbl_map(vim.fn.expandcmd, vim.list_slice(fargs, 2, #fargs))
+  local tbl_string = string.format('{ %s }', table.concat(opts_parts, ', '))
+  local lua_load = loadstring('return ' .. tbl_string)
+  if lua_load == nil then H.error('Could not convert extra command arguments to table: ' .. tbl_string) end
+  return name, lua_load()
+end
+
+H.command_complete = function(_, line, col)
+  local prefix_from, prefix_to, prefix = string.find(line, '^%S+%s+(%S*)')
+  if col < prefix_from or prefix_to < col then return {} end
+  local candidates = vim.tbl_filter(
+    function(x) return tostring(x):find(prefix, 1, true) ~= nil end,
+    vim.tbl_keys(MiniPick.registry)
+  )
+  table.sort(candidates)
+  return candidates
 end
 
 -- Picker object --------------------------------------------------------------

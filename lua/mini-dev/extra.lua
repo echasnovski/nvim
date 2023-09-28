@@ -604,7 +604,6 @@ MiniExtra.pickers.lsp = function(local_opts, opts)
   return vim.lsp.buf[scope]({ on_list = H.lsp_make_on_list(scope, opts) })
 end
 
--- Something with tree-sitter
 MiniExtra.pickers.treesitter = function(local_opts, opts)
   if vim.fn.has('nvim-0.8') == 0 then H.error('`treesitter` picker requires Neovim>=0.8.') end
   local pick = H.validate_pick('treesitter')
@@ -664,7 +663,12 @@ MiniExtra.pickers.list = function(local_opts, opts)
   return H.pick_start(items, { source = { name = string.format('List (%s)', scope), choose = choose } }, opts)
 end
 
--- ??? "shellcmd" via `vim.fn.getcompletion('', 'shellcmd')` and resulting into `:!<item> ` ???
+-- Register in 'mini.pick'
+if type(MiniPick) == 'table' then
+  for name, f in pairs(MiniExtra.pickers) do
+    MiniPick.registry[name] = function(local_opts) return f(local_opts) end
+  end
+end
 
 -- Helper data ================================================================
 -- Module default config
