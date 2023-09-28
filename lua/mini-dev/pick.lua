@@ -292,18 +292,26 @@ MiniPick.config = {
 --- @return ... Tuple of current item and its index just before picker is stopped.
 MiniPick.start = function(opts)
   if MiniPick.is_picker_active() then
+    -- Try proper 'key query process' stop
     MiniPick.stop()
-    -- NOTE: Needs `schedule()` for `stop()` to properly finish code flow
-    return vim.schedule(function()
+    -- NOTE: Needs `defer_fn()` for `stop()` to properly finish code flow and
+    -- not be executed before it
+    return vim.defer_fn(function()
       -- NOTE: if `MiniPick.stop()` still didn't stop, force abort
       if MiniPick.is_picker_active() then H.picker_stop(H.pickers.active, true) end
       MiniPick.start(opts)
-    end)
+    end, 0.5)
   end
 
   opts = H.validate_picker_opts(opts)
   local picker = H.picker_new(opts)
   H.pickers.active, H.cache = picker, {}
+
+  H.picker_set_busy(picker, true)
+  local items = H.expand_callable(opts.source.items)
+  -- - Set items on next event loop to not block when computing stritems
+  if vim.tbl_islist(items) then vim.schedule(function() MiniPick.set_picker_items(items) end) end
+
   H.picker_track_lost_focus(picker)
   vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' })
   return H.picker_advance(picker)
@@ -313,7 +321,7 @@ end
 MiniPick.stop = function()
   if not MiniPick.is_picker_active() then return end
   H.cache.is_force_stop_advance = true
-  if H.cache.is_in_getcharstr then vim.api.nvim_feedkeys('\27', 't', true) end
+  if H.cache.is_in_getcharstr then vim.api.nvim_feedkeys('\3', 't', true) end
 end
 
 MiniPick.refresh = function()
@@ -607,6 +615,8 @@ end
 ---@seealso |MiniPick.set_picker_items()| and |MiniPick.set_picker_items_from_cli()|
 MiniPick.get_picker_items = function() return vim.deepcopy((H.pickers.active or {}).items) end
 
+MiniPick.get_picker_stritems = function() return vim.deepcopy((H.pickers.active or {}).stritems) end
+
 ---@seealso |MiniPick.set_picker_match_inds()|
 MiniPick.get_picker_matches = function()
   if not MiniPick.is_picker_active() then return end
@@ -638,7 +648,7 @@ MiniPick.get_picker_query = function() return vim.deepcopy((H.pickers.active or 
 
 ---@seealso |MiniPick.get_picker_items()|
 MiniPick.set_picker_items = function(items, opts)
-  if not vim.tbl_islist(items) then H.error('`items` should be list.') end
+  if not vim.tbl_islist(items) then H.error('`items` should be array.') end
   if not MiniPick.is_picker_active() then return end
   opts = vim.tbl_deep_extend('force', { do_match = true, querytick = nil }, opts or {})
 
@@ -675,8 +685,8 @@ end
 
 ---@seealso |MiniPick.get_picker_matches()|
 MiniPick.set_picker_match_inds = function(match_inds, target_query)
-  if not vim.tbl_islist(match_inds) then H.error('`match_inds` should be list.') end
-  if target_query ~= nil and not vim.tbl_islist(target_query) then H.error('`target_query` should be list.') end
+  if not vim.tbl_islist(match_inds) then H.error('`match_inds` should be array.') end
+  if target_query ~= nil and not vim.tbl_islist(target_query) then H.error('`target_query` should be array.') end
   if not MiniPick.is_picker_active() then return end
 
   H.picker_set_match_inds(H.pickers.active, match_inds, target_query)
@@ -698,7 +708,7 @@ end
 
 ---@seealso |MiniPick.get_picker_query()|
 MiniPick.set_picker_query = function(query)
-  if not vim.tbl_islist(query) then H.error('`query` should be list.') end
+  if not vim.tbl_islist(query) then H.error('`query` should be array.') end
   if not MiniPick.is_picker_active() then return end
 
   H.pickers.active.query, H.pickers.active.caret = query, #query + 1
@@ -870,7 +880,7 @@ H.validate_picker_opts = function(opts)
 
   local items = source.items or {}
   local is_valid_items = vim.tbl_islist(items) or vim.is_callable(items)
-  if not is_valid_items then H.error('`source.items` should be list or callable.') end
+  if not is_valid_items then H.error('`source.items` should be array or callable.') end
 
   source.name = tostring(source.name or '<No name>')
 
@@ -978,11 +988,6 @@ H.picker_new = function(opts)
   }
 
   H.querytick = H.querytick + 1
-
-  -- Set items on next event loop to not block when computing stritems
-  H.picker_set_busy(picker, true)
-  local items = H.expand_callable(opts.source.items)
-  if vim.tbl_islist(items) then vim.schedule(function() MiniPick.set_picker_items(items) end) end
 
   return picker
 end
@@ -1118,8 +1123,9 @@ end
 
 H.item_to_string = function(item)
   item = H.expand_callable(item)
-  if type(item) == 'table' then item = item.text end
-  return type(item) == 'string' and item or vim.inspect(item, { newline = ' ', indent = '' })
+  if type(item) == 'string' then return item end
+  if type(item) == 'table' and type(item.text) == 'string' then return item.text end
+  return vim.inspect(item, { newline = ' ', indent = '' })
 end
 
 H.picker_set_busy = function(picker, value)

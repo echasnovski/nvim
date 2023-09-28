@@ -37,6 +37,10 @@ local forward_lua = function(fun_str)
   return function(...) return child.lua_get(lua_cmd, { ... }) end
 end
 
+local stop = forward_lua('MiniPick.stop')
+local get_picker_items = forward_lua('MiniPick.get_picker_items')
+local get_picker_stritems = forward_lua('MiniPick.get_picker_stritems')
+local get_picker_matches = forward_lua('MiniPick.get_picker_matches')
 local get_picker_state = forward_lua('MiniPick.get_picker_state')
 local get_picker_query = forward_lua('MiniPick.get_picker_query')
 local is_picker_active = forward_lua('MiniPick.is_picker_active')
@@ -324,7 +328,7 @@ T['start()']['validates `opts`'] = function()
     'Mapping for manual action "Manual action".*table with `char` and `func`'
   )
 
-  validate({ source = { items = 1 } }, '`source%.items`.*list or callable')
+  validate({ source = { items = 1 } }, '`source%.items`.*array or callable')
   validate({ source = { cwd = 1 } }, '`source%.cwd`.*valid directory path')
   validate({ source = { cwd = 'not-existing-path' } }, '`source%.cwd`.*valid directory path')
   validate({ source = { match = 1 } }, '`source%.match`.*callable')
@@ -337,13 +341,59 @@ T['start()']['validates `opts`'] = function()
 end
 
 T['start()']['respects `source.items`'] = function()
-  -- Test strings, tables, callables
-  MiniTest.skip()
+  -- Array
+  start_with_items({ 'a', 'b' })
+  child.expect_screenshot()
+  stop()
+
+  -- Callable returning array of items
+  child.lua([[_G.items_callable_return = function() return { 'c', 'd' } end]])
+  child.lua_notify('MiniPick.start({ source = { items = _G.items_callable_return } })')
+  child.expect_screenshot()
+  stop()
+
+  -- Callable setting items manually
+  child.lua([[_G.items_callable_later = function() MiniPick.set_picker_items({ 'e', 'f' }) end]])
+  child.lua_notify('MiniPick.start({ source = { items = _G.items_callable_later } })')
+  poke_eventloop()
+  child.expect_screenshot()
+  stop()
+
+  -- Callable setting items manually *later*
+  child.lua([[_G.items_callable_later = function()
+    vim.schedule(function() MiniPick.set_picker_items({ 'g', 'h' }) end)
+  end]])
+  child.lua_notify('MiniPick.start({ source = { items = _G.items_callable_later } })')
+  poke_eventloop()
+  child.expect_screenshot()
+  stop()
 end
 
 T['start()']['correctly computes stritems'] = function()
-  -- From string, table, callable
-  MiniTest.skip()
+  child.set_size(15, 80)
+  child.lua_notify([[MiniPick.start({ source = { items = {
+    'string_item',
+    { text = 'table_item' },
+    { a = 'fallback item', b = 1 },
+    function() return 'string_item_from_callable' end,
+    function() return { text = 'table_item_from_callable' } end,
+    function() return { c = 'fallback item from callable', d = 1 } end,
+  } } })]])
+  child.expect_screenshot()
+end
+
+T['start()']['resolves items after making picker active'] = function()
+  child.lua_notify([[MiniPick.start({ source = {
+    items = function()
+      _G.picker_is_active = MiniPick.is_picker_active()
+      _G.picker_name = MiniPick.get_picker_opts().source.name
+      return { 'a', 'b' }
+    end,
+    name = 'This picker'
+  } })]])
+  eq(get_picker_stritems(), { 'a', 'b' })
+  eq(child.lua_get('_G.picker_is_active'), true)
+  eq(child.lua_get('_G.picker_name'), 'This picker')
 end
 
 T['start()']['respects `source.name`'] = function()
@@ -352,13 +402,157 @@ T['start()']['respects `source.name`'] = function()
   if child.has_float_footer() then child.expect_screenshot_orig() end
 end
 
-T['start()']['respects `source.cwd`'] = function() MiniTest.skip() end
+T['start()']['respects `source.cwd`'] = function()
+  local lua_cmd = string.format(
+    [[MiniPick.start({ source = {
+      items = function() return { MiniPick.get_picker_opts().source.cwd } end,
+      cwd = %s,
+    } })]],
+    vim.inspect(test_dir)
+  )
+  child.lua_notify(lua_cmd)
+  eq(get_picker_stritems(), { vim.fn.fnamemodify(test_dir, ':p') })
+end
+
+T['start()']['respects `source.match`'] = function()
+  child.lua_notify([[MiniPick.start({ source = {
+    items = { 'a', 'b', 'c' },
+    match = function(...)
+      _G.match_args = { ... }
+      return { 2 }
+    end,
+  } })]])
+
+  child.expect_screenshot()
+  eq(get_picker_matches().all, { 'b' })
+  eq(child.lua_get('_G.match_args'), { { 1, 2, 3 }, { 'a', 'b', 'c' }, {} })
+
+  type_keys('x')
+  eq(get_picker_matches().all, { 'b' })
+  eq(child.lua_get('_G.match_args'), { { 2 }, { 'a', 'b', 'c' }, { 'x' } })
+end
+
+T['start()']['respects `source.show`'] = function()
+  child.lua_notify([[MiniPick.start({ source = {
+    items = { 'a', { text = 'b' }, 'bb' },
+    show = function(items_to_show, buf_id, ...)
+      _G.show_args = { items_to_show, buf_id, ... }
+      local lines = vim.tbl_map(
+        function(x) return '__' .. (type(x) == 'table' and x.text or x) end,
+        items_to_show
+      )
+      vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    end,
+  } })]])
+  local buf_id = get_picker_state().buffers.main
+
+  child.expect_screenshot()
+  eq(child.lua_get('_G.show_args'), { { 'a', { text = 'b' }, 'bb' }, buf_id })
+
+  type_keys('b')
+  child.expect_screenshot()
+  eq(child.lua_get('_G.show_args'), { { { text = 'b' }, 'bb' }, buf_id })
+end
+
+T['start()']['respects `source.preview`'] = function()
+  child.lua_notify([[MiniPick.start({ source = {
+    items = { 'a', { text = 'b' }, 'bb' },
+    preview = function(item, buf_id, ...)
+      _G.preview_args = { item, buf_id, ... }
+      local stritem = type(item) == 'table' and item.text or item
+      vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, { 'Preview: ' .. stritem })
+    end,
+  } })]])
+  local validate_preview_args = function(item_ref)
+    local preview_args = child.lua_get('_G.preview_args')
+    eq(preview_args[1], item_ref)
+    eq(child.api.nvim_buf_is_valid(preview_args[2]), true)
+  end
+
+  type_keys('<Tab>')
+
+  child.expect_screenshot()
+  validate_preview_args('a')
+  local preview_buf_id_1 = child.lua_get('_G.preview_args')[2]
+
+  type_keys('<C-n>')
+  child.expect_screenshot()
+  validate_preview_args({ text = 'b' })
+  eq(preview_buf_id_1 ~= child.lua_get('_G.preview_args')[2], true)
+end
+
+T['start()']['respects `source.choose`'] = function()
+  child.lua_notify([[MiniPick.start({ source = {
+    items = { 'a', { text = 'b' }, 'bb' },
+    choose = function(...) _G.choose_args = { ... } end,
+  } })]])
+
+  type_keys('<C-n>', '<CR>')
+  eq(child.lua_get('_G.choose_args'), { { text = 'b' } })
+  eq(is_picker_active(), false)
+end
+
+T['start()']['respects `source.choose_marked`'] = function()
+  child.lua_notify([[MiniPick.start({ source = {
+    items = { 'a', { text = 'b' }, 'bb' },
+    choose_marked = function(...) _G.choose_marked_args = { ... } end,
+  } })]])
+
+  type_keys('<C-x>', '<C-n>', '<C-x>', '<M-CR>')
+  eq(child.lua_get('_G.choose_marked_args'), { { 'a', { text = 'b' } } })
+  eq(is_picker_active(), false)
+end
 
 T['start()']['respects `mappings`'] = function()
-  -- Works
+  start({ source = { items = { 'a', 'b' } }, mappings = { stop = 'c' } })
+  eq(is_picker_active(), true)
+  type_keys('a')
+  eq(is_picker_active(), true)
+  type_keys('c')
+  eq(is_picker_active(), false)
+end
 
-  -- Validates correct structure (string or table with proper fields)
-  MiniTest.skip()
+T['start()']['respects `options.content_direction`'] = function()
+  start({ source = { items = { 'a', 'b' } }, options = { content_direction = 'from_bottom' } })
+  child.expect_screenshot()
+end
+
+T['start()']['respects `options.use_cache`'] = function()
+  child.lua('_G.match_n_calls = 0')
+  local validate_calls = function(n_calls_ref, match_items_ref)
+    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
+    eq(get_picker_matches().all, match_items_ref)
+  end
+
+  child.lua_notify([[MiniPick.start({
+    source = {
+      items = { 'a', 'b', 'bb' },
+      match = function(...)
+        _G.match_n_calls = _G.match_n_calls + 1
+        return MiniPick.default_match(...)
+      end,
+    },
+    options = { use_cache = true },
+  })]])
+  validate_calls(0, { 'a', 'b', 'bb' })
+
+  type_keys('b')
+  validate_calls(1, { 'b', 'bb' })
+
+  type_keys('b')
+  validate_calls(2, { 'bb' })
+
+  type_keys('<BS>')
+  validate_calls(2, { 'b', 'bb' })
+
+  type_keys('<BS>')
+  validate_calls(2, { 'a', 'b', 'bb' })
+
+  type_keys('b')
+  validate_calls(2, { 'b', 'bb' })
+
+  type_keys('x')
+  validate_calls(3, {})
 end
 
 T['start()']['allows manual mappings'] = function()
@@ -372,30 +566,76 @@ end
 
 T['start()']['respects `window.config`'] = function()
   -- As table
+  start({ source = { items = { 'a', 'b', 'c' } }, window = { config = { border = 'double' } } })
+  child.expect_screenshot()
+  stop()
 
   -- As callable
-  MiniTest.skip()
+  child.lua_notify([[MiniPick.start({
+    source = { items = { 'a', 'b', 'c' } },
+    window = { config = function() return { anchor = 'NW', row = 2, width = vim.o.columns } end },
+  })]])
+  child.expect_screenshot()
+  stop()
 end
 
-T['start()']['allows callable `items`'] = function() MiniTest.skip() end
+T['start()']['stops currently active picker'] = function()
+  start_with_items({ 'a', 'b', 'c' })
+  eq(is_picker_active(), true)
+  start_with_items({ 'd', 'e', 'f' })
+  sleep(2)
+  child.expect_screenshot()
+end
 
-T['start()']['stops currently active picker'] = function() MiniTest.skip() end
+T['start()']['stops impoperly aborted previous picker'] = function()
+  child.lua_notify([[MiniPick.start({
+    source = { items = { 'a', 'b', 'c' } },
+    mappings = { error = { char = 'e', func = function() error() end } },
+  })]])
+  child.expect_screenshot()
+  type_keys('e')
 
-T['start()']['stops impoperly aborted previous picker'] = function() MiniTest.skip() end
+  start({ source = { items = { 'd', 'e', 'f' } }, window = { config = { width = 10 } } })
+  child.expect_screenshot()
+end
 
-T['start()']['triggers `MiniPickStart` User event'] = function() MiniTest.skip() end
+T['start()']['triggers `MiniPickStart` User event'] = function()
+  child.cmd('au User MiniPickStart lua _G.n_user_start = (_G.n_user_start or 0) + 1')
+  start_with_items(test_items)
+  eq(child.lua_get('_G.n_user_start'), 1)
+end
 
-T['start()']['respects global config'] = function() MiniTest.skip() end
+T['start()']['respects global config'] = function()
+  child.lua([[MiniPick.config.window.config = { anchor = 'NW', row = 1 }]])
+  start_with_items({ 'a', 'b', 'c' })
+  child.expect_screenshot()
+end
 
-T['start()']['respects `vim.b.minipick_config`'] = function() MiniTest.skip() end
+T['start()']['respects `vim.b.minipick_config`'] = function()
+  child.lua([[MiniPick.config.window.config = { anchor = 'NW', row = 1 }]])
+  child.b.minipick_config = { window = { config = { row = 3, width = 10 } } }
+  start_with_items({ 'a', 'b', 'c' })
+  child.expect_screenshot()
+end
 
 T['stop()'] = new_set()
 
-T['stop()']['works'] = function() MiniTest.skip() end
+T['stop()']['works'] = function()
+  start_with_items(test_items)
+  child.expect_screenshot()
+  stop()
+  child.expect_screenshot()
+  eq(is_picker_active(), false)
+end
 
-T['stop()']['can be called without active picker'] = function() MiniTest.skip() end
+T['stop()']['can be called without active picker'] = function() expect.no_error(stop) end
 
-T['stop()']['triggers `MiniPickStop` User event'] = function() MiniTest.skip() end
+T['stop()']['triggers `MiniPickStop` User event'] = function()
+  child.cmd('au User MiniPickStop lua _G.n_user_stop = (_G.n_user_stop or 0) + 1')
+  start_with_items(test_items)
+  stop()
+  eq(child.lua_get('_G.n_user_stop'), 1)
+end
 
 T['refresh()'] = new_set()
 
@@ -561,11 +801,17 @@ T['get_picker_items()']['works'] = function() MiniTest.skip() end
 
 T['get_picker_items()']['can be called without active picker'] = function() MiniTest.skip() end
 
+T['get_picker_stritems()'] = new_set()
+
+T['get_picker_stritems()']['works'] = function() MiniTest.skip() end
+
+T['get_picker_stritems()']['can be called without active picker'] = function() MiniTest.skip() end
+
 T['get_picker_matches()'] = new_set()
 
 T['get_picker_matches()']['works'] = function() MiniTest.skip() end
 
-T['get_picker_items()']['can be called without active picker'] = function() MiniTest.skip() end
+T['get_picker_matches()']['can be called without active picker'] = function() MiniTest.skip() end
 
 T['get_picker_opts()'] = new_set()
 
@@ -667,11 +913,11 @@ T['Overall view']['does not show footer if not items is set'] = function()
   child.expect_screenshot_orig()
 end
 
-T['Overall view']['respects `options.content_direction`'] = function()
+T['Overall view']['respects `options.content_direction` with footer'] = function()
   if not child.has_float_footer() then return end
 
-  -- Should switch title and footer
-  MiniTest.skip()
+  start({ source = { items = { 'a', 'b' } }, options = { content_direction = 'from_bottom' } })
+  child.expect_screenshot_orig()
 end
 
 T['Overall view']['truncates border text'] = function()
@@ -750,6 +996,13 @@ T['Matching'] = new_set()
 
 T['Matching']['works'] = function() MiniTest.skip() end
 
+T['Matching']['narrows matched indexes with query progression'] = function() MiniTest.skip() end
+
+T['Matching']['allows returning wider set of match indexes'] = function()
+  -- Like if input is `{ 1 }` for 3 items, returning `{ 1, 2 }` should work
+  MiniTest.skip()
+end
+
 T['Matching']["respects 'ignorecase'"] = function() MiniTest.skip() end
 
 T['Matching']["respects 'smartcase'"] = function() MiniTest.skip() end
@@ -762,8 +1015,6 @@ T['Key query process']['does not block'] = function()
   -- Allows actions to be executed: from RPC, inside a timer
   MiniTest.skip()
 end
-
-T['Key query process']['narrows matched indexes with query progression'] = function() MiniTest.skip() end
 
 T['Key query process']['resets matched indexes after deleting query character'] = function() MiniTest.skip() end
 
@@ -791,5 +1042,7 @@ T['Key query process']['handles not configured key presses'] = function()
 end
 
 T['Mappings'] = new_set()
+
+T['Mappings']['works with `choose_*`'] = function() MiniTest.skip() end
 
 return T
