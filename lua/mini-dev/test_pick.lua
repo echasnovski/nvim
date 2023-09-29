@@ -43,6 +43,7 @@ local get_picker_stritems = forward_lua('MiniPick.get_picker_stritems')
 local get_picker_matches = forward_lua('MiniPick.get_picker_matches')
 local get_picker_state = forward_lua('MiniPick.get_picker_state')
 local get_picker_query = forward_lua('MiniPick.get_picker_query')
+local set_picker_items = forward_lua('MiniPick.set_picker_items')
 local is_picker_active = forward_lua('MiniPick.is_picker_active')
 
 -- Use `child.api_notify` to allow user input while child process awaits for
@@ -58,10 +59,25 @@ local validate_buf_option =
 local validate_win_option =
   function(win_id, option_name, option_value) eq(child.api.nvim_win_get_option(win_id, option_name), option_value) end
 
+local seq_along = function(x)
+  local res = {}
+  for i = 1, #x do
+    res[i] = i
+  end
+  return res
+end
+
 -- Common mocks
 
 -- Data =======================================================================
 local test_items = { 'a_b_c', 'abc', 'a_b_b', 'c_a_a', 'b_c_c' }
+
+local many_items = {}
+for i = 1, 1000000 do
+  many_items[3 * i - 2] = 'ab'
+  many_items[3 * i - 1] = 'ac'
+  many_items[3 * i] = 'bb'
+end
 
 -- Output test set ============================================================
 local T = new_set({
@@ -639,67 +655,352 @@ end
 
 T['refresh()'] = new_set()
 
-T['refresh()']['works'] = function() MiniTest.skip() end
+local refresh = forward_lua('MiniPick.refresh')
 
-T['refresh()']['is called on `VimResized`'] = function() MiniTest.skip() end
+T['refresh()']['works'] = function()
+  start_with_items(test_items)
+  child.expect_screenshot()
 
-T['refresh()']['can be called without active picker'] = function() MiniTest.skip() end
+  child.lua('MiniPick.set_picker_opts({ window = { config = { width = 10 } } })')
+  refresh()
+  child.expect_screenshot()
+end
 
-T['refresh()']['recomputes window config'] = function() MiniTest.skip() end
+T['refresh()']['is called on `VimResized`'] = function()
+  child.set_size(15, 40)
+  start_with_items(test_items)
+  child.expect_screenshot()
+
+  child.set_size(15, 20)
+  child.expect_screenshot()
+end
+
+T['refresh()']['can be called without active picker'] = function() expect.no_error(refresh) end
+
+T['refresh()']['recomputes window config'] = function()
+  child.lua([[
+    _G.width = 0
+    _G.win_config = function()
+      _G.width = _G.width + 10
+      return { width = _G.width }
+    end
+  ]])
+
+  child.lua_notify([[MiniPick.start({ source = { items = { 'a', 'b', 'c' } }, window = { config = _G.win_config } })]])
+  child.expect_screenshot()
+  refresh()
+  child.expect_screenshot()
+end
 
 T['default_match()'] = new_set()
 
-T['default_match()']['works with active picker'] = function() MiniTest.skip() end
+local default_match = forward_lua('MiniPick.default_match')
 
-T['default_match()']['does not block query update'] = function()
-  -- Basically, it should pokes correctly and stops current match
-  -- And respect `delay.async`
-  MiniTest.skip()
+local validate_match =
+  function(stritems, query, output_ref) eq(default_match(seq_along(stritems), stritems, query), output_ref) end
+
+T['default_match()']['works with active picker'] = function()
+  start_with_items(test_items)
+  type_keys('a')
+  child.expect_screenshot()
+  type_keys('b')
+  child.expect_screenshot()
 end
 
-T['default_match()']['works without active picker'] = function() MiniTest.skip() end
+T['default_match()']['does not block query update'] = function()
+  child.lua([[
+    _G.log = {}
+    _G.default_match_wrapper = function(inds, stritems, query)
+      table.insert(_G.log, { n_match_inds = #inds, query = vim.deepcopy(query) })
+      MiniPick.default_match(inds, stritems, query)
+    end
+  ]])
+  child.lua_notify('MiniPick.start({ source = { match = _G.default_match_wrapper }, delay = { async = 1 } })')
 
-T['default_match()']['works with empty query'] = function() MiniTest.skip() end
+  -- Set many items and wait until it completely sets
+  set_picker_items(many_items)
+  sleep(1000)
 
-T['default_match()']['filters items that match query with gaps'] = function() MiniTest.skip() end
+  -- Type three characters very quickly. If `default_match()` were blocking,
+  -- each press would lead to calling `source.match` with the result of
+  -- matching on prior query. In this test every key press should interrupt
+  -- currently active matching and start a new one with the latest available
+  -- set of `match_inds` (which should be all inds as match is, hopefully,
+  -- never finishes).
+  type_keys('a')
+  sleep(1)
+  type_keys('b')
+  sleep(1)
+  type_keys('c')
+  sleep(1)
+  child.expect_screenshot()
+  eq(child.lua_get('_G.log'), {
+    { n_match_inds = #many_items, query = {} },
+    { n_match_inds = #many_items, query = { 'a' } },
+    { n_match_inds = #many_items, query = { 'a', 'b' } },
+    { n_match_inds = #many_items, query = { 'a', 'b', 'c' } },
+  })
+end
 
-T['default_match()']['sorts by match width -> match start -> item index'] = function() MiniTest.skip() end
+T['default_match()']['works without active picker'] = function()
+  local stritems, query = { 'aab', 'ac', 'ab' }, { 'a', 'b' }
+  eq(default_match({ 1, 2, 3 }, stritems, query), { 3, 1 })
+  eq(default_match({ 2, 3 }, stritems, query), { 3 })
+end
+
+T['default_match()']['works with empty inputs'] = function()
+  local match_inds, stritems, query = seq_along(test_items), { 'ab', 'cd' }, { 'a' }
+  eq(default_match({}, stritems, query), {})
+  eq(default_match({}, {}, query), {})
+  eq(default_match(match_inds, stritems, {}), seq_along(stritems))
+end
+
+T['default_match()']['filters items that match query with gaps'] = function()
+  -- Regular cases
+  validate_match({ 'a__', 'b' }, { 'a' }, { 1 })
+  validate_match({ '_a_', 'b' }, { 'a' }, { 1 })
+  validate_match({ '__a', 'b' }, { 'a' }, { 1 })
+  validate_match({ 'b', 'a__' }, { 'a' }, { 2 })
+  validate_match({ 'b', '_a_' }, { 'a' }, { 2 })
+  validate_match({ 'b', '__a' }, { 'a' }, { 2 })
+
+  validate_match({ 'a', 'ab', 'a_b', 'a_b_b', 'ba' }, { 'a', 'b' }, { 2, 3, 4 })
+  validate_match({ 'a', 'ab', 'a_b', 'a_b_b', 'ba' }, { 'a', 'b', 'b' }, { 4 })
+
+  validate_match({ 'a', 'ab', 'axb', 'a?b', 'a\tb' }, { 'a', 'b' }, { 2, 3, 4, 5 })
+
+  -- Non-single-char-entries queries (each should match exactly)
+  validate_match({ 'a', 'b', 'ab_', 'a_b', '_ab' }, { 'ab' }, { 3, 5 })
+  validate_match({ 'abcd_', '_abcd', 'a_bcd', 'ab_cd', 'abc_d' }, { 'ab', 'cd' }, { 1, 2, 4 })
+
+  -- Edge casees
+  validate_match({ 'a', 'b', '' }, { 'a' }, { 1 })
+
+  validate_match({ 'a', 'b', '' }, { '' }, { 1, 2, 3 })
+  validate_match({ 'a', 'b', '' }, { '', '' }, { 1, 2, 3 })
+end
+
+T['default_match()']['sorts by match width -> match start -> item index'] = function()
+  local query_ab, query_abc = { 'a', 'b' }, { 'a', 'b', 'c' }
+
+  -- Width differs
+  validate_match({ 'ab', 'a_b', 'a__b' }, query_ab, { 1, 2, 3 })
+  validate_match({ 'ab', 'a__b', 'a_b' }, query_ab, { 1, 3, 2 })
+  validate_match({ 'a__b', 'ab', 'a_b' }, query_ab, { 2, 3, 1 })
+  validate_match({ 'a_b', 'ab', 'a__b' }, query_ab, { 2, 1, 3 })
+  validate_match({ 'a_b', 'a__b', 'ab' }, query_ab, { 3, 1, 2 })
+  validate_match({ 'a__b', 'a_b', 'ab' }, query_ab, { 3, 2, 1 })
+
+  validate_match({ '_a__b', '_a_b', '_ab' }, query_ab, { 3, 2, 1 })
+
+  validate_match({ 'a__b_a___b', 'a_b_a___b', 'ab_a___b' }, query_ab, { 3, 2, 1 })
+
+  validate_match({ 'a_b_c', 'a_bc', 'abc' }, query_abc, { 3, 2, 1 })
+  validate_match({ '_a_b_c', '_a_bc', '_abc' }, query_abc, { 3, 2, 1 })
+  validate_match({ 'a_b_c_a__b__c', 'a_bc_a__b__c', 'abc_a__b__c' }, query_abc, { 3, 2, 1 })
+
+  validate_match({ 'ab__cd', 'ab_cd', 'abcd' }, { 'ab', 'cd' }, { 3, 2, 1 })
+
+  -- Start differs with equal width
+  validate_match({ 'ab', '_ab', '__ab' }, query_ab, { 1, 2, 3 })
+  validate_match({ 'ab', '__ab', '_ab' }, query_ab, { 1, 3, 2 })
+  validate_match({ '_ab', 'ab', '__ab' }, query_ab, { 2, 1, 3 })
+  validate_match({ '__ab', 'ab', '_ab' }, query_ab, { 2, 3, 1 })
+  validate_match({ '_ab', '__ab', 'ab' }, query_ab, { 3, 1, 2 })
+  validate_match({ '__ab', '_ab', 'ab' }, query_ab, { 3, 2, 1 })
+
+  validate_match({ '__abc', '_abc', 'abc' }, query_abc, { 3, 2, 1 })
+
+  validate_match({ '__abc_a_b_c', '_abc_a_b_c', 'abc_a_b_c' }, query_abc, { 3, 2, 1 })
+  validate_match({ 'a_b_c__abc', 'a_b_c_abc', 'a_b_cabc' }, query_abc, { 3, 2, 1 })
+
+  validate_match({ '__a_b_c', '_a__bc', 'ab__c' }, query_abc, { 3, 2, 1 })
+
+  validate_match({ '__ab_cd_e', '_ab__cde', 'abcd__e' }, { 'ab', 'cd', 'e' }, { 3, 2, 1 })
+
+  -- Index differs with equal width and start
+  validate_match({ 'a_b_c', 'a__bc', 'ab__c' }, query_abc, { 1, 2, 3 })
+  validate_match({ 'axbxc', 'a??bc', 'ab\t\tc' }, query_abc, { 1, 2, 3 })
+
+  validate_match({ 'ab_cd_e', 'ab__cde', 'abcd__e' }, { 'ab', 'cd', 'e' }, { 1, 2, 3 })
+end
+
+T['default_match()']['filters and sorts'] = function()
+  validate_match({ 'a_b_c', 'abc', 'a_b_b', 'c_a_a', 'b_c_c' }, { 'a', 'b' }, { 2, 1, 3 })
+  validate_match({ 'xabcd', 'axbcd', 'abxcd', 'abcxd', 'abcdx' }, { 'ab', 'cd' }, { 5, 1, 3 })
+end
 
 T['default_match()']['respects special queries'] = function()
-  local items = {
-    '^abc',
-    'xx^axbc',
-    "'abc",
-    "xx'axbc",
-    'abc$',
-    'abxc$xx',
-    '*abc',
-    'xx*axbc',
-    'a b c',
+  --stylua: ignore
+  local stritems = {
+    '*abc',    -- 1
+    '_*_a_bc', -- 2
+    "'abc",    -- 3
+    "_'_a_bc", -- 4
+    '^abc',    -- 5
+    '_^_a_bc', -- 6
+    'abc$',    -- 7
+    'ab_c_$_', -- 8
+    'a b c',   -- 9
+    ' a  bc',  -- 10
   }
+  local all_inds = seq_along(stritems)
+  local validate = function(query, output_ref) validate_match(stritems, query, output_ref) end
+  local validate_same_as = function(query, query_ref)
+    eq(default_match(all_inds, stritems, query), default_match(all_inds, stritems, query_ref))
+  end
 
-  -- All should also test for just inserting special char
+  -- Precedence:
+  -- "forced fuzzy" = "forced exact" > "exact start/end" > "grouped fuzzy"
+
   -- Forced fuzzy
+  validate_same_as({ '*' }, { '' })
+  validate_same_as({ '*', 'a' }, { 'a' })
+  validate_same_as({ '*', 'a', 'b' }, { 'a', 'b' })
+
+  validate({ '*', '*', 'a' }, { 1, 2 })
+  validate({ '*', "'", 'a' }, { 3, 4 })
+  validate({ '*', '^', 'a' }, { 5, 6 })
+  validate({ '*', 'a', '$' }, { 7, 8 })
+  validate({ '*', 'a', ' ', 'b' }, { 9, 10 })
+
   -- Forced exact
-  -- Exact start or/and exact end
-  -- Grouped fuzzy
-  MiniTest.skip()
+  validate_same_as({ "'" }, { '' })
+  validate_same_as({ "'", 'a' }, { 'a' })
+  validate_same_as({ "'", 'a', 'b' }, { 'ab' })
+
+  validate({ "'", '*', 'a' }, { 1 })
+  validate({ "'", "'", 'a' }, { 3 })
+  validate({ "'", '^', 'a' }, { 5 })
+  validate({ "'", 'c', '$' }, { 7 })
+  validate({ "'", 'a', ' ', 'b' }, { 9 })
+
+  -- Exact start
+  validate_same_as({ '^' }, { '' })
+  validate({ '^', 'a' }, { 7, 8, 9 })
+  validate({ '^', 'a', 'b' }, { 7, 8 })
+
+  validate({ '^', '^', 'a' }, { 5 })
+  validate({ '^', "'", 'a' }, { 3 })
+  validate({ '^', '*', 'a' }, { 1 })
+  validate({ '^', ' ', 'a' }, { 10 })
+
+  -- Exact end
+  validate({ '$' }, all_inds)
+  validate({ 'c', '$' }, { 1, 3, 5, 9, 10, 2, 4, 6 })
+  validate({ 'b', 'c', '$' }, { 1, 3, 5, 10, 2, 4, 6 })
+
+  validate({ ' ', 'c', '$' }, { 9 })
+
+  -- Grouped
+  validate_same_as({ 'a', ' ' }, { 'a' })
+  validate_same_as({ 'a', ' ', ' ' }, { 'a' })
+  validate_same_as({ 'a', ' ', 'b' }, { 'a', 'b' })
+  validate_same_as({ 'a', ' ', ' ', 'b' }, { 'a', 'b' })
+  validate_same_as({ 'a', ' ', 'b', ' ' }, { 'a', 'b' })
+  validate_same_as({ 'a', ' ', 'b', ' ', 'c' }, { 'a', 'b', 'c' })
+  validate_same_as({ 'a', ' ', 'b', ' ', ' ', 'c' }, { 'a', 'b', 'c' })
+  validate_same_as({ 'a', ' ', 'b', ' ', 'c', ' ' }, { 'a', 'b', 'c' })
+
+  validate({ 'a', 'b', ' ', 'c' }, { 7, 1, 3, 5, 8 })
+  validate({ 'a', ' ', 'b', 'c' }, { 7, 1, 3, 5, 2, 4, 6, 10 })
+  validate({ 'a', 'b', 'c', ' ' }, { 7, 1, 3, 5 })
+
+  validate({ 'ab', ' ', 'c' }, { 7, 1, 3, 5, 8 })
+
+  -- - Whitespace inside non-whitespace elements shouldn't matter
+  validate({ 'a b', ' ', 'c' }, { 9 })
+
+  -- - Amount and type of whitespace inside "split" elements shouldn't matter
+  validate_same_as({ 'ab', '  ', 'c' }, { 'ab', ' ', 'c' })
+  validate_same_as({ 'ab', '\t', 'c' }, { 'ab', ' ', 'c' })
+
+  -- - Only whitespace is allowed
+  validate_same_as({ ' ' }, { '' })
+  validate_same_as({ ' ', ' ' }, { '' })
+
+  -- Combination
+  validate_same_as({ '^', '$' }, { '' })
+  validate({ '^', 'a', ' ', 'b', ' ', 'c', '$' }, { 9 })
+
+  -- Not special
+  validate({ 'a', '*' }, {})
+  validate({ 'a', "'" }, {})
+  validate({ 'a', '^' }, {})
+  validate({ '$', 'a' }, {})
+end
+
+T['default_match()']['only input indexes can be in the output'] = function()
+  eq(default_match({ 1, 2, 4 }, { 'a', '_a', '__a', 'b' }, { 'a' }), { 1, 2 })
+
+  -- Special modes
+  eq(default_match({ 1, 2, 4 }, { 'a', '_a', '__a', 'b' }, { "'", 'a' }), { 1, 2 })
+  eq(default_match({ 1, 2, 4 }, { 'a', '_a', '__a', 'b' }, { '*', 'a' }), { 1, 2 })
+  eq(default_match({ 1, 2, 4 }, { 'a', 'a_', 'a__', 'b' }, { '^', 'a' }), { 1, 2 })
+  eq(default_match({ 1, 2, 4 }, { 'a', '_a', '__a', 'b' }, { 'a', '$' }), { 1, 2 })
+
+  eq(default_match({ 1, 2, 4 }, { 'abc', 'ab_c', 'ab__c', 'a_b_c' }, { 'a', 'b', ' ', 'c' }), { 1, 2 })
 end
 
 T['default_match()']['works with multibyte characters'] = function()
-  -- Both for match and highlight
-  MiniTest.skip()
+  -- In query
+  validate_match({ 'ы', 'ф', 'd' }, { 'ы' }, { 1 })
+
+  validate_match({ 'ы__ф', 'ы_ф', 'ыф', 'ы', 'фы' }, { 'ы', 'ф' }, { 3, 2, 1 })
+  validate_match({ '__ыф', '_ыф', 'ыф' }, { 'ы', 'ф' }, { 3, 2, 1 })
+  validate_match({ '__ы_ф_я', '__ы__фя', '__ыф__я' }, { 'ы', 'ф', 'я' }, { 1, 2, 3 })
+
+  validate_match({ 'ы_ф', '_ыф', 'ы' }, { '*', 'ы', 'ф' }, { 2, 1 })
+  validate_match({ 'ы_ф', '_ыф', 'ы' }, { "'", 'ы', 'ф' }, { 2 })
+  validate_match({ 'ы_ф', '_ыф', 'ы' }, { '^', 'ы' }, { 1, 3 })
+  validate_match({ 'ы_ф', '_ыф', 'ы' }, { 'ф', '$' }, { 1, 2 })
+  validate_match({ 'ыы_ф', 'ы_ыф' }, { 'ы', 'ы', ' ', 'ф' }, { 1 })
+
+  validate_match({ '_│_│', '│_│_', '_│_' }, { '│', '│' }, { 2, 1 })
+
+  validate_match({ 'ыdф', '_ы_d_ф' }, { 'ы', 'd', 'ф' }, { 1, 2 })
+
+  -- In stritems
+  validate_match({ 'aыbыc', 'abыc' }, { 'a', 'b', 'c' }, { 2, 1 })
 end
 
 T['default_match()']['works with special characters'] = function()
-  -- Like `.`, `\`.
-  -- Both in exact and fuzzy matches
-  MiniTest.skip()
+  -- function() validate_match('(.+*%-)', 'a(a.a+a*a%a-a)', { 2, 4, 6, 8, 10, 12, 14 }) end
+  local validate_match_special_char = function(char)
+    local stritems = { 'a' .. char .. 'b', 'a_b' }
+    validate_match(stritems, { char }, { 1 })
+    validate_match(stritems, { 'a', char, 'b' }, { 1 })
+  end
+
+  validate_match_special_char('.')
+  validate_match_special_char('+')
+  validate_match_special_char('%')
+  validate_match_special_char('-')
+  validate_match_special_char('(')
+  validate_match_special_char(')')
+
+  validate_match({ 'a*b', 'a_b' }, { 'a', '*', 'b' }, { 1 })
+  validate_match({ 'a^b', 'a_b' }, { 'a', '^', 'b' }, { 1 })
+  validate_match({ 'a$b', 'a_b' }, { 'a', '$', 'b' }, { 1 })
+end
+
+T['default_match()']['respects case'] = function()
+  -- Ignore and smart case should come from how picker uses `source.match`
+  validate_match({ 'ab', 'aB', 'Ba', 'AB' }, { 'a', 'b' }, { 1 })
+  validate_match({ 'ab', 'aB', 'Ba', 'AB' }, { 'a', 'B' }, { 2 })
 end
 
 T['default_show()'] = new_set()
 
 T['default_show()']['works'] = function() MiniTest.skip() end
+
+T['default_show()']['shows best match'] = function()
+  -- validate_match('ab', 'a__b_a__b_ab', { 11, 12 })
+  -- validate_match('ab', 'a__b_ab_a__b', { 6, 7 })
+  -- validate_match('ab', 'ab_a__b_a__b', { 1, 2 })
+  --
+  -- validate_match('ab', 'ab__ab', { 1, 2 })
+end
 
 T['default_show()']['respects `opts.show_icons`'] = function()
   -- Both with and without 'nvim-web-devicons'
@@ -836,6 +1137,31 @@ T['set_picker_items()'] = new_set()
 T['set_picker_items()']['works'] = function() MiniTest.skip() end
 
 T['set_picker_items()']['can be called without active picker'] = function() MiniTest.skip() end
+
+T['set_picker_items()']['does not block picker'] = function()
+  child.lua([[
+    _G.log = {}
+    _G.l_key = {
+      char = 'l',
+      func = function()
+        table.insert(
+          _G.log,
+          { is_busy = MiniPick.get_picker_state().is_busy, items_type = type(MiniPick.get_picker_items()) }
+        )
+      end
+    }
+    _G.mappings = { add_to_log = _G.l_key }
+  ]])
+  child.lua_notify('MiniPick.start({ mappings = { add_to_log = _G.l_key }, delay = { async = 1 } })')
+
+  -- Set many items and start typing right away. Key presses should be
+  -- processed right away even though there is an items preprocessing is going.
+  set_picker_items(many_items)
+  type_keys('l')
+  sleep(1)
+  stop()
+  eq(child.lua_get('_G.log'), { { is_busy = true, items_type = 'nil' } })
+end
 
 T['set_picker_items_from_cli()'] = new_set()
 
@@ -997,6 +1323,10 @@ T['Matching'] = new_set()
 T['Matching']['works'] = function() MiniTest.skip() end
 
 T['Matching']['narrows matched indexes with query progression'] = function() MiniTest.skip() end
+
+T['Matching']['resets matched indexes after deleting'] = function() MiniTest.skip() end
+
+T['Matching']['resets matched indexes after adding character inside query'] = function() MiniTest.skip() end
 
 T['Matching']['allows returning wider set of match indexes'] = function()
   -- Like if input is `{ 1 }` for 3 items, returning `{ 1, 2 }` should work

@@ -350,6 +350,48 @@ MiniPick.refresh = function()
   H.picker_update(picker, false)
 end
 
+--- Default match
+---
+--- Filter target stritems to contain query and sort from best to worst matches.
+--- By default (if no special modes apply) it does the following fuzzy matching.
+---
+--- Stritem contains query if it contains all its elements verbatim in the same
+--- order (possibly with gaps, i.e. not strictly one after another). Note:
+--- empty query and empty string element is contained in any string.
+---
+--- Sorting is done with the following ordering:
+--- - The smaller the match width (end column minus start column) the better.
+--- - Among same match width, the smaller start column the better.
+--- - Among same match width and start column, preserve original order.
+---
+--- Special modes ~
+---
+--- - Forced modes:
+---     - Query starts with "*": match the rest fuzzy (without other modes).
+---     - Query starts with "'": match the rest exactly (without gaps).
+---
+--- - Place modes:
+---     - Query starts with '^': match the rest exactly at start.
+---     - Query ends with '$': match the rest exactly at end.
+---     - Both modes can be used simultaneously.
+---
+--- - Grouped: query contains at least one whitespace element. Output is computed
+---   as if query is split at whitespace indexes with concatenation between them.
+---
+--- Precedence:
+---   "forced exact" = "forced fuzzy" > "place start/end" > "grouped" > "default"
+---
+--- Examples ~
+--- > TODO!!!!
+---
+---@param inds table Array of `stritems` indexes to match. All of them should point
+---   at string elements of `stritems`. No check is done for performance reasons.
+---@param stritems table Array of all stritems.
+---@param query table Array of strings.
+---
+---@return table|nil Depending of whether there is an active picker:
+---   - If yes, `nil` is returned with |MiniPick.set_picker_match_inds()| used later.
+---   - If no, array of `stritems` indexes matching the `query` (from best to worst).
 MiniPick.default_match = function(inds, stritems, query)
   local is_active = MiniPick.is_picker_active()
   local set_match_inds = is_active and MiniPick.set_picker_match_inds or function(x) return x end
@@ -1099,7 +1141,7 @@ end
 
 H.picker_new_win = function(buf_id, win_config)
   -- Create window and focus on it. Focus cursor on Command line to not see it.
-  local win_id = vim.api.nvim_open_win(buf_id, true, H.picker_compute_win_config(win_config))
+  local win_id = vim.api.nvim_open_win(buf_id, true, H.picker_compute_win_config(win_config, true))
   if vim.fn.mode() == 'n' then vim.cmd('noautocmd normal! :') end
 
   -- Set window-local data
@@ -1114,7 +1156,7 @@ H.picker_new_win = function(buf_id, win_config)
   return win_id
 end
 
-H.picker_compute_win_config = function(win_config)
+H.picker_compute_win_config = function(win_config, is_for_open)
   local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
   local has_statusline = vim.o.laststatus > 0
   local max_height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0)
@@ -1129,7 +1171,7 @@ H.picker_compute_win_config = function(win_config)
     row = max_height + (has_tabline and 1 or 0),
     border = 'single',
     style = 'minimal',
-    noautocmd = true,
+    noautocmd = is_for_open,
   }
   local config = vim.tbl_deep_extend('force', default_config, H.expand_callable(win_config) or {})
 
@@ -1529,6 +1571,11 @@ H.picker_query_add = function(picker, char)
   table.insert(picker.query, picker.caret, char)
   picker.caret = picker.caret + 1
   H.querytick = H.querytick + 1
+
+  -- Adding character inside query might not result into narrowing matches, so
+  -- reset match indexes. Use cache to speed this up.
+  local should_reset = picker.items ~= nil and picker.caret <= #picker.query
+  if should_reset then picker.match_inds = H.seq_along(picker.items) end
 end
 
 H.picker_query_delete = function(picker, n)
@@ -1714,28 +1761,21 @@ end
 
 -- Default match --------------------------------------------------------------
 H.match_filter = function(inds, stritems, query)
-  local prompt = table.concat(query)
   -- 'abc' and '*abc' - fuzzy; "'abc" and 'a' - exact substring;
   -- 'ab c' - grouped fuzzy; '^abc' and 'abc$' - exact substring at start/end.
   local is_fuzzy_forced, is_exact_plain, is_exact_start, is_exact_end =
     query[1] == '*', query[1] == "'", query[1] == '^', query[#query] == '$'
-  local is_fuzzy_grouped = prompt:find(' ') ~= nil
+  local is_grouped, grouped_parts = H.match_query_group(query)
 
   if is_fuzzy_forced or is_exact_plain or is_exact_start or is_exact_end then
     local start_offset = (is_fuzzy_forced or is_exact_plain or is_exact_start) and 2 or 1
     local end_offset = #query - ((not is_fuzzy_forced and not is_exact_plain and is_exact_end) and 1 or 0)
     query = vim.list_slice(query, start_offset, end_offset)
-  elseif is_fuzzy_grouped then
-    query = vim.split(prompt, ' +')
+  elseif is_grouped then
+    query = grouped_parts
   end
 
   if #query == 0 then return {}, 'nosort', query end
-
-  -- Exact end and grouped fuzzy filtering not always result in nested matches.
-  -- Example #1: type "$", move caret to left, type "m" (filters for "m$") and
-  -- type "d" (should filter for "md$" but it is not a subset of "m$" matches).
-  -- Example #2: type 'ab c', move caret to after `a`, type `d`.
-  inds = (is_exact_end or is_fuzzy_grouped) and H.seq_along(stritems) or inds
 
   local is_fuzzy_plain = not (is_exact_plain or is_exact_start or is_exact_end) and #query > 1
   if is_fuzzy_forced or is_fuzzy_plain then return H.match_filter_fuzzy(inds, stritems, query), 'fuzzy', query end
@@ -1785,7 +1825,7 @@ H.match_ranges_exact = function(match_data, query)
 end
 
 H.match_filter_fuzzy = function(inds, stritems, query)
-  local match_single, find_query = H.match_filter_fuzzy_single, H.find_query
+  local match_single, find_query = H.match_filter_fuzzy_single, H.match_find_query
   local poke_picker = H.poke_picker_throttle(H.querytick)
   local match_data = {}
   for _, ind in ipairs(inds) do
@@ -1841,7 +1881,7 @@ H.match_ranges_fuzzy = function(match_data, query, stritems)
   return res
 end
 
-H.find_query = function(s, query, init)
+H.match_find_query = function(s, query, init)
   local first, to = string.find(s, query[1], init, true)
   if first == nil then return nil, nil end
 
@@ -1852,6 +1892,16 @@ H.find_query = function(s, query, init)
     if not last then return nil, nil end
   end
   return first, last
+end
+
+H.match_query_group = function(query)
+  local parts = { {} }
+  for _, x in ipairs(query) do
+    local is_whitespace = x:find('^%s+$') ~= nil
+    if is_whitespace then table.insert(parts, {}) end
+    if not is_whitespace then table.insert(parts[#parts], x) end
+  end
+  return #parts > 1, vim.tbl_map(table.concat, parts)
 end
 
 H.match_sort = function(match_data)
@@ -2250,10 +2300,7 @@ H.replace_termcodes = function(x)
   return vim.api.nvim_replace_termcodes(x, true, true, true)
 end
 
-H.expand_callable = function(x)
-  if vim.is_callable(x) then return x() end
-  return x
-end
+H.expand_callable = function(x) return vim.is_callable(x) and x() or x end
 
 H.redraw = function() vim.cmd('redraw') end
 
