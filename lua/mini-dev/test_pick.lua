@@ -1206,6 +1206,10 @@ T['poke_is_picker_active()'] = new_set()
 T['poke_is_picker_active()']['works'] = function() MiniTest.skip() end
 
 -- Integration tests ==========================================================
+T[':Pick'] = new_set()
+
+T[':Pick']['works'] = function() MiniTest.skip() end
+
 T['Overall view'] = new_set()
 
 T['Overall view']['shows prompt'] = function()

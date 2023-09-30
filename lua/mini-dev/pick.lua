@@ -157,6 +157,10 @@
 
 ---@MiniPick-events
 
+---@MiniPick-source-specification
+
+---@MiniPick-lifecycle
+
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
 ---@diagnostic disable:unused-local
@@ -364,6 +368,10 @@ end
 --- - Among same match width, the smaller start column the better.
 --- - Among same match width and start column, preserve original order.
 ---
+--- Notes:
+--- - Most common interactive usage results into `query` containing one typed
+---   character per element.
+---
 --- Special modes ~
 ---
 --- - Forced modes:
@@ -378,7 +386,7 @@ end
 --- - Grouped: query contains at least one whitespace element. Output is computed
 ---   as if query is split at whitespace indexes with concatenation between them.
 ---
---- Precedence:
+--- Precedence of modes:
 ---   "forced exact" = "forced fuzzy" > "place start/end" > "grouped" > "default"
 ---
 --- Examples ~
@@ -611,7 +619,9 @@ MiniPick.builtin.help = function(local_opts, opts)
       vim.bo.buflisted, vim.bo.bufhidden, vim.bo.syntax = false, 'wipe', 'help'
 
       local cache_hlsearch = vim.v.hlsearch
-      vim.cmd('silent keeppatterns ' .. item.cmd)
+      -- Make a "very nomagic" search to account for special characters in tag
+      local search_cmd = string.gsub(item.cmd, '^/', '/\\V')
+      vim.cmd('silent keeppatterns ' .. search_cmd)
       -- Here `vim.v` doesn't work: https://github.com/neovim/neovim/issues/25294
       vim.cmd('let v:hlsearch=' .. cache_hlsearch)
       vim.cmd('normal! zt')
