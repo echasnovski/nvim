@@ -156,8 +156,8 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
     [vim.diagnostic.severity.HINT] = 'DiagnosticFloatingHint',
   }
 
-  local show = function(items_to_show, buf_id)
-    pick.default_show(items_to_show, buf_id)
+  local show = function(buf_id, items_to_show, query)
+    pick.default_show(buf_id, items_to_show, query)
 
     H.pick_clear_namespace(buf_id)
     for i, item in ipairs(items_to_show) do
@@ -274,7 +274,7 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
     if group ~= nil then table.insert(items, group) end
   end
 
-  local show = function(items_to_show, buf_id)
+  local show = function(buf_id, items_to_show, query)
     H.set_buflines(buf_id, items_to_show)
     H.pick_clear_namespace(buf_id)
     -- Highlight line with highlight group of its item
@@ -283,7 +283,7 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
     end
   end
 
-  local preview = function(item, buf_id)
+  local preview = function(buf_id, item)
     local lines = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')
     H.set_buflines(buf_id, lines)
   end
@@ -304,7 +304,7 @@ MiniExtra.pickers.commands = function(local_opts, opts)
 
   local commands = vim.tbl_deep_extend('force', vim.api.nvim_get_commands({}), vim.api.nvim_buf_get_commands(0, {}))
 
-  local preview = function(item, buf_id)
+  local preview = function(buf_id, item)
     local data = commands[item]
     local lines = data == nil and { string.format('No command data for `%s` is yet available.', item) }
       or vim.split(vim.inspect(data), '\n')
@@ -370,7 +370,7 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
   if local_opts.path == nil then path = repo_dir end
 
   -- Define source
-  local show_patch = function(item, buf_id)
+  local show_patch = function(buf_id, item)
     vim.bo[buf_id].syntax = 'diff'
     H.show_cli_output(buf_id, { 'git', '-C', repo_dir, '--no-pager', 'show', get_hash(item) })
   end
@@ -381,7 +381,7 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
     local win_target = (pick.get_picker_state().windows or {}).target
     if win_target == nil or not H.is_valid_win(win_target) then return end
     local buf_id = vim.api.nvim_create_buf(true, true)
-    show_patch(item, buf_id)
+    show_patch(buf_id, item)
     vim.api.nvim_win_set_buf(win_target, buf_id)
   end
 
@@ -407,7 +407,7 @@ MiniExtra.pickers.git_branches = function(local_opts, opts)
 
   local get_branch_name = function(item) return item:match('^%*?%s*(%S+)') end
 
-  local preview = function(item, buf_id)
+  local preview = function(buf_id, item)
     H.show_cli_output(buf_id, { 'git', 'log', get_branch_name(item), '--format=format:%h %s' })
   end
 
@@ -432,18 +432,18 @@ MiniExtra.pickers.options = function(local_opts, opts)
   end
   table.sort(items, function(a, b) return a.text < b.text end)
 
-  local show = function(items_to_show, buf_id)
-    pick.default_show(items_to_show, buf_id)
+  local show = function(buf_id, items_to_show, query)
+    pick.default_show(buf_id, items_to_show, query)
 
     for i, item in ipairs(items_to_show) do
       if not item.info.was_set then H.pick_highlight_line(buf_id, i, 'Comment', 199) end
     end
   end
 
-  local preview = function(item, buf_id)
+  local preview = function(buf_id, item)
     local value_source = ({ global = 'o', win = 'wo', buf = 'bo' })[item.info.scope]
     local has_value, value = pcall(function() return vim[value_source][item.info.name] end)
-    if not has_value then value = '<Option is disabled (will be removed in later Neovim versions)>' end
+    if not has_value then value = '<Option is deprecated (will be removed in later Neovim versions)>' end
 
     local lines = { 'Value:', unpack(vim.split(vim.inspect(value), '\n')), '', 'Info:' }
     local hl_lines = { 1, #lines }
@@ -505,11 +505,11 @@ MiniExtra.pickers.keymaps = function(local_opts, opts)
     return path, info.linedefined
   end
 
-  local preview = function(item, buf_id)
+  local preview = function(buf_id, item)
     local path, lnum = get_callback_pos(item.maparg)
     if path ~= nil then
       item.path, item.lnum = path, lnum
-      return pick.default_preview(item, buf_id)
+      return pick.default_preview(buf_id, item)
     end
     local lines = vim.split(vim.inspect(item.maparg), '\n')
     H.set_buflines(buf_id, lines)
@@ -549,7 +549,7 @@ MiniExtra.pickers.registers = function(local_opts, opts)
     vim.fn.feedkeys(keys)
   end)
 
-  local preview = H.pick_make_no_preview('Registers')
+  local preview = H.pick_make_no_preview('registers')
 
   return H.pick_start(items, { source = { name = 'Registers', preview = preview, choose = choose } }, opts)
 end
@@ -736,7 +736,7 @@ H.pick_clear_namespace = function(buf_id) pcall(vim.api.nvim_buf_clear_namespace
 
 H.pick_make_no_preview = function(picker_name)
   local lines = { string.format('No preview available for `%s` picker', picker_name) }
-  return function(_, buf_id) H.set_buflines(buf_id, lines) end
+  return function(buf_id, _) H.set_buflines(buf_id, lines) end
 end
 
 H.pick_validate_one_of = function(target, opts, values, picker_name)
@@ -758,7 +758,7 @@ H.pick_get_config = function()
 end
 
 H.show_with_icons =
-  function(items, buf_id) require('mini-dev.pick').default_show(items, buf_id, { show_icons = true }) end
+  function(buf_id, items, query) require('mini-dev.pick').default_show(buf_id, items, query, { show_icons = true }) end
 
 -- LSP picker -----------------------------------------------------------------
 H.lsp_make_on_list = function(source, opts)
@@ -773,8 +773,8 @@ H.lsp_make_on_list = function(source, opts)
   local show
   if source == 'document_symbol' or source == 'workspace_symbol' then
     local pick = H.validate_pick()
-    show = function(items_to_show, buf_id)
-      pick.default_show(items_to_show, buf_id)
+    show = function(buf_id, items_to_show, query)
+      pick.default_show(buf_id, items_to_show, query)
 
       H.pick_clear_namespace(buf_id)
       for i, item in ipairs(items_to_show) do

@@ -30,6 +30,9 @@ end
 
 -- Test paths helpers
 local test_dir = 'tests/dir-pick'
+local real_files_dir = 'tests/dir-pick/real-files'
+
+local join_path = function(...) return table.concat({ ... }, '/') end
 
 -- Common test wrappers
 local forward_lua = function(fun_str)
@@ -451,8 +454,8 @@ end
 T['start()']['respects `source.show`'] = function()
   child.lua_notify([[MiniPick.start({ source = {
     items = { 'a', { text = 'b' }, 'bb' },
-    show = function(items_to_show, buf_id, ...)
-      _G.show_args = { items_to_show, buf_id, ... }
+    show = function(buf_id, items_to_show, query, ...)
+      _G.show_args = { buf_id, items_to_show, query, ... }
       local lines = vim.tbl_map(
         function(x) return '__' .. (type(x) == 'table' and x.text or x) end,
         items_to_show
@@ -463,38 +466,38 @@ T['start()']['respects `source.show`'] = function()
   local buf_id = get_picker_state().buffers.main
 
   child.expect_screenshot()
-  eq(child.lua_get('_G.show_args'), { { 'a', { text = 'b' }, 'bb' }, buf_id })
+  eq(child.lua_get('_G.show_args'), { buf_id, { 'a', { text = 'b' }, 'bb' }, {} })
 
   type_keys('b')
   child.expect_screenshot()
-  eq(child.lua_get('_G.show_args'), { { { text = 'b' }, 'bb' }, buf_id })
+  eq(child.lua_get('_G.show_args'), { buf_id, { { text = 'b' }, 'bb' }, { 'b' } })
 end
 
 T['start()']['respects `source.preview`'] = function()
   child.lua_notify([[MiniPick.start({ source = {
     items = { 'a', { text = 'b' }, 'bb' },
-    preview = function(item, buf_id, ...)
-      _G.preview_args = { item, buf_id, ... }
+    preview = function(buf_id, item, ...)
+      _G.preview_args = { buf_id, item, ... }
       local stritem = type(item) == 'table' and item.text or item
       vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, { 'Preview: ' .. stritem })
     end,
   } })]])
   local validate_preview_args = function(item_ref)
     local preview_args = child.lua_get('_G.preview_args')
-    eq(preview_args[1], item_ref)
-    eq(child.api.nvim_buf_is_valid(preview_args[2]), true)
+    eq(child.api.nvim_buf_is_valid(preview_args[1]), true)
+    eq(preview_args[2], item_ref)
   end
 
   type_keys('<Tab>')
 
   child.expect_screenshot()
   validate_preview_args('a')
-  local preview_buf_id_1 = child.lua_get('_G.preview_args')[2]
+  local preview_buf_id_1 = child.lua_get('_G.preview_args')[1]
 
   type_keys('<C-n>')
   child.expect_screenshot()
   validate_preview_args({ text = 'b' })
-  eq(preview_buf_id_1 ~= child.lua_get('_G.preview_args')[2], true)
+  eq(preview_buf_id_1 ~= child.lua_get('_G.preview_args')[1], true)
 end
 
 T['start()']['respects `source.choose`'] = function()
@@ -990,41 +993,351 @@ T['default_match()']['respects case'] = function()
   validate_match({ 'ab', 'aB', 'Ba', 'AB' }, { 'a', 'B' }, { 2 })
 end
 
-T['default_show()'] = new_set()
+T['default_show()'] = new_set({ hooks = { pre_case = function() child.set_size(10, 20) end } })
 
-T['default_show()']['works'] = function() MiniTest.skip() end
+local default_show = forward_lua('MiniPick.default_show')
+
+T['default_show()']['works'] = function()
+  child.set_size(15, 40)
+  start_with_items({ 'abc', 'a_bc', 'a__bc' })
+  type_keys('a', 'b')
+  child.expect_screenshot()
+end
+
+T['default_show()']['works without active picker'] = function()
+  -- Allows 0 buffer id for current buffer
+  default_show(0, { 'abc', 'a_bc', 'a__bc' }, { 'a', 'b' })
+  child.expect_screenshot()
+
+  -- Allows non-current buffer
+  local new_buf_id = child.api.nvim_create_buf(false, true)
+  default_show(new_buf_id, { 'def', 'd_ef', 'd__ef' }, { 'd', 'e' })
+  child.api.nvim_set_current_buf(new_buf_id)
+  child.expect_screenshot()
+end
 
 T['default_show()']['shows best match'] = function()
-  -- validate_match('ab', 'a__b_a__b_ab', { 11, 12 })
-  -- validate_match('ab', 'a__b_ab_a__b', { 6, 7 })
-  -- validate_match('ab', 'ab_a__b_a__b', { 1, 2 })
-  --
-  -- validate_match('ab', 'ab__ab', { 1, 2 })
+  default_show(0, { 'a__b_a__b_ab', 'a__b_ab_a__b', 'ab_a__b_a__b', 'ab__ab' }, { 'a', 'b' })
+  child.expect_screenshot()
+
+  default_show(0, { 'aabbccddee' }, { 'a', 'b', 'c', 'd', 'e' })
+  child.expect_screenshot()
 end
 
 T['default_show()']['respects `opts.show_icons`'] = function()
-  -- Both with and without 'nvim-web-devicons'
-  MiniTest.skip()
+  child.set_size(10, 45)
+  local items = vim.tbl_map(function(x) return join_path(real_files_dir, x) end, vim.fn.readdir(real_files_dir))
+  table.insert(items, test_dir)
+  table.insert(items, 'non-existing')
+  table.insert(items, { text = 'non-string' })
+  local query = { 'i', 'i' }
+
+  -- Without 'nvim-web-devicons'
+  default_show(0, items, query, { show_icons = true })
+  child.expect_screenshot()
+
+  -- With 'nvim-web-devicons'
+  child.cmd('set rtp+=tests/dir-pick')
+  default_show(0, items, query, { show_icons = true })
+  child.expect_screenshot()
 end
 
-T['default_show()']['shows icons for only present file system entries'] = function() MiniTest.skip() end
+T['default_show()']['handles stritems with non-trivial whitespace'] = function()
+  child.o.tabstop = 3
+  default_show(0, { 'With\nnewline', 'With\ttab' }, {})
+  child.expect_screenshot()
+end
 
-T['default_show()']['handles stritems with present `\n`'] = function() MiniTest.skip() end
+T['default_show()']["respects 'ignorecase'/'smartcase'"] = function()
+  child.set_size(7, 12)
+  local items = { 'a_b', 'a_B', 'A_b', 'A_B' }
 
-T['default_show()']["respects 'ignorecase'/'smartcase'"] = function() MiniTest.skip() end
+  local validate = function()
+    default_show(0, items, { 'a', 'b' })
+    child.expect_screenshot()
+    default_show(0, items, { 'a', 'B' })
+    child.expect_screenshot()
+  end
+
+  -- Respect case
+  child.o.ignorecase, child.o.smartcase = false, false
+  validate()
+
+  -- Ignore case
+  child.o.ignorecase, child.o.smartcase = true, false
+  validate()
+
+  -- Smart case
+  child.o.ignorecase, child.o.smartcase = true, true
+  validate()
+end
 
 T['default_show()']['handles query similar to `default_match`'] = function()
-  -- Like forced exact and others should be properly highlighted
-  MiniTest.skip()
+  child.set_size(15, 15)
+  local items = { 'abc', '_abc', 'a_bc', 'ab_c', 'abc_', '*abc', "'abc", '^abc', 'abc$', 'a b c' }
+
+  local validate = function(query)
+    default_show(0, items, query)
+    child.expect_screenshot()
+  end
+
+  validate({ '*', 'a', 'b' })
+  validate({ "'", 'a', 'b' })
+  validate({ '^', 'a', 'b' })
+  validate({ 'b', 'c', '$' })
+  validate({ 'a', 'b', ' ', 'c' })
 end
 
-T['default_show()']['works with multibyte characters'] = function() MiniTest.skip() end
+T['default_show()']['works with multibyte characters'] = function()
+  local items = { 'ыdф', 'ыы_d_ф', '_ыы_d_ф' }
 
-T['default_show()']['works with non-single-char-entries queries'] = function() MiniTest.skip() end
+  -- In query
+  default_show(0, items, { 'ы', 'ф' })
+  child.expect_screenshot()
+
+  -- Not in query
+  default_show(0, items, { 'd' })
+  child.expect_screenshot()
+end
+
+T['default_show()']['works with non-single-char-entries queries'] = function()
+  local items = { '_abc', 'a_bc', 'ab_c', 'abc_' }
+  local validate = function(query)
+    default_show(0, items, query)
+    child.expect_screenshot()
+  end
+
+  validate({ 'ab', 'c' })
+  validate({ 'abc' })
+  validate({ 'a b', ' ', 'c' })
+end
 
 T['default_preview()'] = new_set()
 
-T['default_preview()']['works'] = function() MiniTest.skip() end
+local default_preview = forward_lua('MiniPick.default_preview')
+
+local validate_preview = function(items)
+  start_with_items(items)
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  for _ = 1, (#items - 1) do
+    type_keys('<C-n>')
+    child.expect_screenshot()
+  end
+end
+
+T['default_preview()']['works'] = function() validate_preview({ join_path(real_files_dir, 'b.txt') }) end
+
+T['default_preview()']['works without active picker'] = function()
+  -- Allows 0 buffer id for current buffer
+  default_preview(0, join_path(real_files_dir, 'b.txt'))
+  child.expect_screenshot()
+
+  -- Allows non-current buffer
+  local new_buf_id = child.api.nvim_create_buf(false, true)
+  default_preview(new_buf_id, join_path(real_files_dir, 'LICENSE'))
+  child.api.nvim_set_current_buf(new_buf_id)
+  child.expect_screenshot()
+end
+
+T['default_preview()']['works for file path'] = function()
+  local items = {
+    -- Item as string
+    join_path(real_files_dir, 'b.txt'),
+
+    -- Item as table with `path` field
+    { text = join_path(real_files_dir, 'LICENSE'), path = join_path(real_files_dir, 'LICENSE') },
+
+    -- Non-text file
+    join_path(real_files_dir, 'c.gif'),
+  }
+  validate_preview(items)
+end
+
+T['default_preview()']['shows line in file path'] = function()
+  local path = join_path(real_files_dir, 'b.txt')
+  local items = {
+    path .. ':3',
+    { text = path .. ':line-in-path', path = path .. ':6' },
+    { text = path .. ':line-separate', path = path, lnum = 8 },
+  }
+  validate_preview(items)
+end
+
+T['default_preview()']['shows position in file path'] = function()
+  local path = join_path(real_files_dir, 'b.txt')
+  local items = {
+    path .. ':3:4',
+    { text = path .. ':pos-in-path', path = path .. ':6:2' },
+    { text = path .. ':pos-separate', path = path, lnum = 8, col = 3 },
+  }
+  validate_preview(items)
+end
+
+T['default_preview()']['shows range in file path'] = function()
+  local path = join_path(real_files_dir, 'b.txt')
+  local items = {
+    { text = path .. ':range-oneline', path = path, lnum = 8, col = 3, end_lnum = 8, end_col = 5 },
+    { text = path .. ':range-manylines', path = path, lnum = 9, col = 3, end_lnum = 11, end_col = 4 },
+  }
+  validate_preview(items)
+end
+
+T['default_preview()']['has syntax highlighting in file path'] = function()
+  local items = {
+    -- With tree-sitter
+    join_path(real_files_dir, 'a.lua'),
+
+    -- With built-in syntax
+    join_path(real_files_dir, 'Makefile'),
+  }
+  validate_preview(items)
+end
+
+T['default_preview()']['loads context in file path'] = function()
+  start_with_items({ join_path(real_files_dir, 'b.txt') })
+  type_keys('<Tab>')
+  child.expect_screenshot()
+  type_keys('<C-f>')
+  child.expect_screenshot()
+  type_keys('<C-f>')
+  child.expect_screenshot()
+end
+
+T['default_preview()']['works for directory path'] = function() validate_preview({ test_dir }) end
+
+T['default_preview()']['works for buffer'] = function()
+  local buf_id_1 = child.api.nvim_create_buf(false, false)
+  local buf_id_2 = child.api.nvim_create_buf(true, false)
+  local buf_id_3 = child.api.nvim_create_buf(false, true)
+  local buf_id_4 = child.api.nvim_create_buf(true, true)
+
+  child.api.nvim_buf_set_lines(buf_id_1, 0, -1, false, { 'This is buffer #1' })
+  child.api.nvim_buf_set_lines(buf_id_2, 0, -1, false, { 'This is buffer #2' })
+  child.api.nvim_buf_set_lines(buf_id_3, 0, -1, false, { 'This is buffer #3' })
+  child.api.nvim_buf_set_lines(buf_id_4, 0, -1, false, { 'This is buffer #4' })
+
+  local items = {
+    -- As string convertible to number
+    tostring(buf_id_1),
+
+    -- As table with `bufnr` field
+    { text = 'Buffer #2', bufnr = buf_id_2 },
+
+    -- As table with `buf_id` field
+    { text = 'Buffer #3', buf_id = buf_id_3 },
+
+    -- As table with `buf` field
+    { text = 'Buffer #4', buf = buf_id_4 },
+  }
+  validate_preview(items)
+end
+
+local mock_buffer = function()
+  local buf_id = child.api.nvim_create_buf(true, false)
+  local lines = {}
+  for i = 1, 20 do
+    table.insert(lines, string.format('Line %d in buffer %d', i, buf_id))
+  end
+  child.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+  return buf_id
+end
+
+T['default_preview()']['shows line in buffer'] = function()
+  local buf_id = mock_buffer()
+  validate_preview({ { text = 'Line in buffer', bufnr = buf_id, lnum = 4 } })
+end
+
+T['default_preview()']['shows position in buffer'] = function()
+  local buf_id = mock_buffer()
+  validate_preview({ { text = 'Position in buffer', bufnr = buf_id, lnum = 6, col = 3 } })
+end
+
+T['default_preview()']['shows range in buffer'] = function()
+  local buf_id = mock_buffer()
+  local items = {
+    { text = 'Oneline range in buffer', bufnr = buf_id, lnum = 8, col = 3, end_lnum = 8, end_col = 6 },
+    { text = 'Manylines range in buffer', bufnr = buf_id, lnum = 10, col = 3, end_lnum = 12, end_col = 4 },
+  }
+  validate_preview(items)
+end
+
+T['default_preview()']['has syntax highlighting in buffer'] = function()
+  child.cmd('edit ' .. join_path(real_files_dir, 'a.lua'))
+  local buf_id_lua = child.api.nvim_get_current_buf()
+  child.cmd('edit ' .. join_path(real_files_dir, 'Makefile'))
+  local buf_id_makefile = child.api.nvim_get_current_buf()
+  child.cmd('enew')
+
+  local items = {
+    { text = 'Tree-sitter highlighting', bufnr = buf_id_lua },
+    { text = 'Built-in syntax', bufnr = buf_id_makefile },
+  }
+  validate_preview(items)
+end
+
+T['default_preview()']['loads context in buffer'] = function()
+  child.cmd('edit ' .. join_path(real_files_dir, 'b.txt'))
+  local buf_id = child.api.nvim_get_current_buf()
+  child.cmd('enew')
+
+  start_with_items({ { text = 'Buffer', bufnr = buf_id } })
+  type_keys('<Tab>')
+  child.expect_screenshot()
+  type_keys('<C-f>')
+  child.expect_screenshot()
+  type_keys('<C-f>')
+  child.expect_screenshot()
+end
+
+T['default_preview()']['has fallback'] = function()
+  child.set_size(10, 40)
+  validate_preview({ -1, { text = 'Random table' } })
+end
+
+T['default_preview()']['respects `opts.n_context_lines`'] = function()
+  child.lua([[MiniPick.config.source.preview = function(buf_id, item)
+    return MiniPick.default_preview(buf_id, item, { n_context_lines = 2 })
+  end]])
+  local path = join_path(real_files_dir, 'b.txt')
+  child.cmd('edit ' .. path)
+  local buf_id = child.api.nvim_get_current_buf()
+  child.cmd('enew')
+
+  local items = {
+    -- File line
+    path .. ':4',
+
+    -- Buffer line
+    { text = 'Buffer', bufnr = buf_id, lnum = 7 },
+  }
+  validate_preview(items)
+end
+
+T['default_preview()']['respects `opts.line_position`'] = new_set({
+  parametrize = { { 'top' }, { 'center' }, { 'bottom' } },
+}, {
+  function(line_position)
+    child.lua('_G.line_position = ' .. vim.inspect(line_position))
+    child.lua([[MiniPick.config.source.preview = function(buf_id, item)
+        return MiniPick.default_preview(buf_id, item, { line_position = _G.line_position })
+      end]])
+    local path = join_path(real_files_dir, 'b.txt')
+    child.cmd('edit ' .. path)
+    local buf_id = child.api.nvim_get_current_buf()
+    child.cmd('enew')
+
+    local items = {
+      -- File line
+      path .. ':10',
+
+      -- Buffer line
+      { text = 'Buffer', bufnr = buf_id, lnum = 12 },
+    }
+    validate_preview(items)
+  end,
+})
 
 T['default_choose()'] = new_set()
 

@@ -419,12 +419,13 @@ end
 
 -- Default value of `show_icons` is `false`. However, for pickers showing
 -- file/directory paths, `true` is used by default.
-MiniPick.default_show = function(items, buf_id, opts)
+MiniPick.default_show = function(buf_id, items, query, opts)
   opts = vim.tbl_deep_extend('force', { show_icons = false }, opts or {})
 
   -- Compute and set lines
   local lines = vim.tbl_map(H.item_to_string, items)
-  lines = vim.tbl_map(function(l) return l:gsub('\n', ' ') end, lines)
+  local tab_spaces = string.rep(' ', vim.o.tabstop)
+  lines = vim.tbl_map(function(l) return l:gsub('\n', ' '):gsub('\t', tab_spaces) end, lines)
 
   local get_prefix_data = opts.show_icons and H.get_icon or function() return { text = '' } end
   local prefix_data = vim.tbl_map(get_prefix_data, lines)
@@ -440,15 +441,14 @@ MiniPick.default_show = function(items, buf_id, opts)
   local ns_id = H.ns_id.offsets
   H.clear_namespace(buf_id, ns_id)
 
-  local stritems, query = lines, MiniPick.get_picker_query()
   if H.query_is_ignorecase(query) then
-    stritems, query = vim.tbl_map(H.tolower, stritems), vim.tbl_map(H.tolower, query)
+    lines, query = vim.tbl_map(H.tolower, lines), vim.tbl_map(H.tolower, query)
   end
-  local match_data, match_type, query_adjusted = H.match_filter(H.seq_along(stritems), stritems, query)
+  local match_data, match_type, query_adjusted = H.match_filter(H.seq_along(lines), lines, query)
   if match_data == nil then return end
 
   local match_ranges_fun = match_type == 'fuzzy' and H.match_ranges_fuzzy or H.match_ranges_exact
-  local match_ranges = match_ranges_fun(match_data, query_adjusted, stritems)
+  local match_ranges = match_ranges_fun(match_data, query_adjusted, lines)
 
   -- Place offset highlights accounting for possible shift due to prefixes
   local extmark_opts = { hl_group = 'MiniPickMatchRanges', hl_mode = 'combine', priority = 200 }
@@ -471,7 +471,7 @@ MiniPick.default_show = function(items, buf_id, opts)
   end
 end
 
-MiniPick.default_preview = function(item, buf_id, opts)
+MiniPick.default_preview = function(buf_id, item, opts)
   opts = vim.tbl_deep_extend('force', { n_context_lines = 2 * vim.o.lines, line_position = 'top' }, opts or {})
   local item_data = H.parse_item(item)
   if item_data.type == 'file' then return H.preview_file(item_data, buf_id, opts) end
@@ -612,7 +612,7 @@ MiniPick.builtin.help = function(local_opts, opts)
   -- didn't quite work when choosing tags in same file consecutively.
   local choose = function(item) end
   local choose_marked = function(items) end
-  local preview = function(item, buf_id)
+  local preview = function(buf_id, item)
     -- Take advantage of `taglist` output on how to open tag
     vim.api.nvim_buf_call(buf_id, function()
       vim.cmd('noautocmd edit ' .. vim.fn.fnameescape(item.filename))
@@ -1298,9 +1298,9 @@ H.picker_set_lines = function(picker)
 
   if picker.is_busy then return end
 
-  local visible_range = picker.visible_range
+  local visible_range, query = picker.visible_range, picker.query
   if picker.items == nil or visible_range.from == nil or visible_range.to == nil then
-    picker.opts.source.show({}, buf_id)
+    picker.opts.source.show(buf_id, {}, query)
     H.clear_namespace(buf_id, H.ns_id.matches)
     return
   end
@@ -1323,7 +1323,7 @@ H.picker_set_lines = function(picker)
   marked_lines = vim.tbl_map(function(x) return x + n_empty_top_lines end, marked_lines)
 
   -- Update visible lines accounting for "from_bottom" direction
-  picker.opts.source.show(items_to_show, buf_id)
+  picker.opts.source.show(buf_id, items_to_show, query)
   if n_empty_top_lines > 0 then
     local empty_lines = vim.fn['repeat']({ '' }, n_empty_top_lines)
     vim.api.nvim_buf_set_lines(buf_id, 0, 0, true, empty_lines)
@@ -1764,7 +1764,7 @@ H.picker_show_preview = function(picker)
   local win_id, buf_id = picker.windows.main, vim.api.nvim_create_buf(false, true)
   vim.bo[buf_id].bufhidden = 'wipe'
   H.set_winbuf(win_id, buf_id)
-  preview(item, buf_id)
+  preview(buf_id, item)
   picker.buffers.preview = buf_id
   picker.view_state = 'preview'
 end
@@ -1962,11 +1962,12 @@ H.get_icon = function(x)
   local has_devicons, devicons = pcall(require, 'nvim-web-devicons')
   if not has_devicons then return { text = ' ', hl = 'MiniPickIconFile' } end
 
-  local icon, hl = devicons.get_icon(path, nil, { default = false })
+  local icon, hl = devicons.get_icon(vim.fn.fnamemodify(path, ':t'), nil, { default = false })
   return { text = (icon or '') .. ' ', hl = hl or 'MiniPickIconFile' }
 end
 
-H.show_with_icons = function(items, buf_id) MiniPick.default_show(items, buf_id, { show_icons = true }) end
+H.show_with_icons =
+  function(buf_id, items, query) MiniPick.default_show(buf_id, items, query, { show_icons = true }) end
 
 -- Items helpers for default functions ----------------------------------------
 H.parse_item = function(item)
@@ -2094,14 +2095,6 @@ H.preview_set_lines = function(buf_id, lines, extra)
   -- Lines
   H.set_buflines(buf_id, lines)
 
-  -- Cursor position and window view
-  local win_id = MiniPick.get_picker_state().windows.main
-  if H.is_valid_win(win_id) then
-    pcall(vim.api.nvim_win_set_cursor, win_id, { extra.line or 1, (extra.col or 1) - 1 })
-    local pos_keys = ({ top = 'zt', center = 'zz', bottom = 'zb' })[extra.line_position] or 'zt'
-    vim.api.nvim_win_call(win_id, function() vim.cmd('normal! ' .. pos_keys) end)
-  end
-
   -- Highlighting
   H.preview_highlight_region(buf_id, extra.line, extra.col, extra.line_end, extra.col_end)
 
@@ -2111,6 +2104,13 @@ H.preview_set_lines = function(buf_id, lines, extra)
     local has_ts, _ = pcall(vim.treesitter.start, buf_id, has_lang and lang or ft)
     if not has_ts then vim.bo[buf_id].syntax = ft end
   end
+
+  -- Cursor position and window view
+  local state = MiniPick.get_picker_state()
+  local win_id = state ~= nil and state.windows.main or vim.fn.bufwinid(buf_id)
+  pcall(vim.api.nvim_win_set_cursor, win_id, { extra.line or 1, (extra.col or 1) - 1 })
+  local pos_keys = ({ top = 'zt', center = 'zz', bottom = 'zb' })[extra.line_position] or 'zt'
+  pcall(vim.api.nvim_win_call, win_id, function() vim.cmd('normal! ' .. pos_keys) end)
 end
 
 H.preview_highlight_region = function(buf_id, line, col, line_end, col_end)
