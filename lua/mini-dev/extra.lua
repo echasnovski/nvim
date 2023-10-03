@@ -389,15 +389,15 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
   return pick.builtin.cli({ command = command }, opts)
 end
 
-MiniExtra.pickers.git_diff = function(local_opts, opts)
-  local pick = H.validate_pick('git_diff')
+MiniExtra.pickers.git_hunks = function(local_opts, opts)
+  local pick = H.validate_pick('git_hunks')
   local_opts = vim.tbl_deep_extend('force', { path = nil, scope = 'unstaged', n_context = 3 }, local_opts or {})
 
   local path, path_type = H.git_normalize_path(local_opts.path, 'git_commits')
-  local scope = H.pick_validate_scope(local_opts, { 'unstaged', 'staged' }, 'git_diff')
+  local scope = H.pick_validate_scope(local_opts, { 'unstaged', 'staged' }, 'git_hunks')
   local ok_context, n_context = pcall(math.floor, local_opts.n_context)
   if not (ok_context and n_context >= 0) then
-    H.error('`n_context` option in `git_diff` picker should be non-negative number.')
+    H.error('`n_context` option in `git_hunks` picker should be non-negative number.')
   end
 
   local command = { 'git', 'diff', '--patch', '--unified=' .. n_context, '--color=never', '--', path }
@@ -415,7 +415,7 @@ MiniExtra.pickers.git_diff = function(local_opts, opts)
 
   -- TODO: Think about adding "toggle stage" mapping or choose option
 
-  local name = string.format('Git diff (%s %s)', scope, local_opts.path == nil and 'for path' or 'all')
+  local name = string.format('Git hunks (%s %s)', scope, local_opts.path == nil and 'all' or 'for path')
   local default_source = { name = name, cwd = repo_dir, preview = preview }
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command, postprocess = postprocess }, opts)
@@ -681,7 +681,6 @@ MiniExtra.pickers.list = function(local_opts, opts)
     -- Force 'buflisted' on opened item
     local win_target = pick.get_picker_state().windows.target
     local buf_id = vim.api.nvim_win_get_buf(win_target)
-    add_to_log('list choose', win_target, buf_id, vim.api.nvim_buf_get_name(buf_id))
     vim.bo[buf_id].buflisted = true
   end
 
@@ -809,23 +808,37 @@ H.git_difflines_to_hunkitems = function(lines, n_context)
 
   local cur_path, is_in_hunk = nil, false
   local items = {}
-  for i, l in ipairs(lines) do
+  for _, l in ipairs(lines) do
     if l:find(header_pattern) ~= nil then is_in_hunk = false end
 
-    cur_path = l:match(to_path_pattern) or cur_path
+    local path_match = l:match(to_path_pattern)
+    if path_match ~= nil and not is_in_hunk then cur_path = path_match end
 
     local hunk_start = l:match(hunk_pattern)
     if hunk_start ~= nil then
       is_in_hunk = true
       local lnum = tonumber(hunk_start) + n_context
-      table.insert(items, { text = cur_path .. ':' .. lnum, path = cur_path, lnum = lnum, hunk = {} })
+      table.insert(items, { path = cur_path, lnum = lnum, hunk = {} })
     end
 
     if is_in_hunk then table.insert(items[#items].hunk, l) end
   end
 
-  -- TODO: Think about more useful text for better eyeballing from main list.
-  -- Like adding first line of hunk (after paths align like in `diagnostic`).
+  -- Construct aligned text from path and hunk header
+  local text_parts, path_width, coords_width = {}, 0, 0
+  for i, item in ipairs(items) do
+    local coords, header = item.hunk[1]:match('@@ (.-) @@ ?(.*)$')
+    coords, header = coords or '', header or ''
+    text_parts[i] = { item.path, coords, header }
+    path_width = math.max(path_width, vim.fn.strchars(item.path))
+    coords_width = math.max(coords_width, vim.fn.strchars(coords))
+  end
+
+  for i, item in ipairs(items) do
+    local parts = text_parts[i]
+    local path, coords = H.ensure_text_width(parts[1], path_width), H.ensure_text_width(parts[2], coords_width)
+    item.text = string.format('%s │ %s │ %s', path, coords, parts[3])
+  end
 
   return items
 end

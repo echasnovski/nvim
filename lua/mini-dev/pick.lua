@@ -373,7 +373,7 @@ end
 --- - Most common interactive usage results into `query` containing one typed
 ---   character per element.
 ---
---- Special modes ~
+--- # Special modes ~
 ---
 --- - Forced modes:
 ---     - Query starts with "*": match the rest fuzzy (without other modes).
@@ -390,7 +390,7 @@ end
 --- Precedence of modes:
 ---   "forced exact" = "forced fuzzy" > "place start/end" > "grouped" > "default"
 ---
---- Examples ~
+--- # Examples ~
 --- > TODO!!!!
 ---
 ---@param inds table Array of `stritems` indexes to match. All of them should point
@@ -763,9 +763,9 @@ MiniPick.set_picker_items_from_cli = function(command, opts)
     if data then return table.insert(data_feed, data) end
 
     local items = vim.split(table.concat(data_feed), '\n')
-    items, data_feed = opts.postprocess(items), nil
+    data_feed = nil
     stdout:close()
-    vim.schedule(function() MiniPick.set_picker_items(items, opts.set_items_opts) end)
+    vim.schedule(function() MiniPick.set_picker_items(opts.postprocess(items), opts.set_items_opts) end)
   end)
 
   return process, pid
@@ -1142,10 +1142,8 @@ H.picker_update = function(picker, do_match)
 end
 
 H.picker_new_buf = function()
-  local buf_id = vim.api.nvim_create_buf(false, true)
+  local buf_id = H.create_scratch_buf()
   vim.bo[buf_id].filetype = 'minipick'
-  vim.bo[buf_id].matchpairs = ''
-  vim.b[buf_id].minicursorword_disable = true
   return buf_id
 end
 
@@ -1730,7 +1728,7 @@ H.picker_show_info = function(picker)
 
   -- Manage buffer/window/state
   local buf_id_info = picker.buffers.info
-  if not H.is_valid_buf(buf_id_info) then buf_id_info = vim.api.nvim_create_buf(false, true) end
+  if not H.is_valid_buf(buf_id_info) then buf_id_info = H.create_scratch_buf() end
   picker.buffers.info = buf_id_info
 
   H.set_buflines(buf_id_info, lines)
@@ -1760,7 +1758,7 @@ H.picker_show_preview = function(picker)
   local item = H.picker_get_current_item(picker)
   if not vim.is_callable(preview) or item == nil then return end
 
-  local win_id, buf_id = picker.windows.main, vim.api.nvim_create_buf(false, true)
+  local win_id, buf_id = picker.windows.main, H.create_scratch_buf()
   vim.bo[buf_id].bufhidden = 'wipe'
   H.set_winbuf(win_id, buf_id)
   preview(buf_id, item)
@@ -2295,6 +2293,14 @@ H.error = function(msg) error(string.format('(mini.pick) %s', msg), 0) end
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
 
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
+
+H.create_scratch_buf = function()
+  local buf_id = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf_id].matchpairs = ''
+  vim.b[buf_id].minicursorword_disable = true
+  vim.b[buf_id].miniindentscope_disable = true
+  return buf_id
+end
 
 H.set_buflines = function(buf_id, lines) pcall(vim.api.nvim_buf_set_lines, buf_id, 0, -1, false, lines) end
 
