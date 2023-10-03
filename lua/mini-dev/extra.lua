@@ -218,7 +218,7 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
 
   local show = H.pick_get_config().source.show
   if is_scope_all and show == nil then show = H.show_with_icons end
-  return H.pick_start(items, { source = { name = 'Buffers lines', show = show } }, opts)
+  return H.pick_start(items, { source = { name = string.format('Buffers lines (%s)', scope), show = show } }, opts)
 end
 
 MiniExtra.pickers.history = function(local_opts, opts)
@@ -353,20 +353,12 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
   local pick = H.validate_pick('git_commits')
   local_opts = vim.tbl_deep_extend('force', { path = nil, choose_type = 'checkout' }, local_opts or {})
 
-  -- Normalize target path
-  local path = type(local_opts.path) == 'string' and local_opts.path or vim.fn.getcwd()
-  if path == '' then H.error('Path in `git_commits` is empty.') end
-  path = vim.fn.fnamemodify(path, ':p')
-  local path_is_dir, path_is_file = vim.fn.isdirectory(path) == 1, vim.fn.filereadable(path) == 1
-  if not (path_is_dir or path_is_file) then H.error('Path ' .. path .. ' is not a valid path.') end
-
+  local path, path_type = H.git_normalize_path(local_opts.path, 'git_commits')
   local command = { 'git', 'log', [[--format=format:%h %s]], '--', path }
   local get_hash = function(item) return (item or ''):match('^(%S+)') end
 
-  -- Compute path to git repo containing target path
-  local path_dir = path_is_dir and path or vim.fn.fnamemodify(path, ':h')
-  local repo_dir = vim.fn.systemlist('git -C ' .. path_dir .. ' rev-parse --show-toplevel')[1]
-  if vim.v.shell_error ~= 0 then H.error('Could not find git repo for ' .. path .. '.') end
+  -- Compute path to repo with target path (as it might differ from current)
+  local repo_dir = H.git_get_repo_dir(path, path_type)
   if local_opts.path == nil then path = repo_dir end
 
   -- Define source
@@ -391,9 +383,42 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
 
   local choose = local_opts.choose_type == 'show_patch' and choose_show_patch or choose_checkout
 
-  local default_source = { name = 'Git commits', cwd = repo_dir, preview = preview, choose = choose }
+  local name = string.format('Git commits (%s)', local_opts.path == nil and 'all' or 'for path')
+  local default_source = { name = name, cwd = repo_dir, preview = preview, choose = choose }
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command }, opts)
+end
+
+MiniExtra.pickers.git_diff = function(local_opts, opts)
+  local pick = H.validate_pick('git_diff')
+  local_opts = vim.tbl_deep_extend('force', { path = nil, scope = 'unstaged', n_context = 3 }, local_opts or {})
+
+  local path, path_type = H.git_normalize_path(local_opts.path, 'git_commits')
+  local scope = H.pick_validate_scope(local_opts, { 'unstaged', 'staged' }, 'git_diff')
+  local ok_context, n_context = pcall(math.floor, local_opts.n_context)
+  if not (ok_context and n_context >= 0) then
+    H.error('`n_context` option in `git_diff` picker should be non-negative number.')
+  end
+
+  local command = { 'git', 'diff', '--patch', '--unified=' .. n_context, '--color=never', '--', path }
+  if scope == 'staged' then table.insert(command, 4, '--cached') end
+
+  local repo_dir = H.git_get_repo_dir(path, path_type)
+  if local_opts.path == nil then path = repo_dir end
+
+  local postprocess = function(lines) return H.git_difflines_to_hunkitems(lines, n_context) end
+
+  local preview = function(buf_id, item)
+    vim.bo[buf_id].syntax = 'diff'
+    H.set_buflines(buf_id, item.hunk)
+  end
+
+  -- TODO: Think about adding "toggle stage" mapping or choose option
+
+  local name = string.format('Git diff (%s %s)', scope, local_opts.path == nil and 'for path' or 'all')
+  local default_source = { name = name, cwd = repo_dir, preview = preview }
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
+  return pick.builtin.cli({ command = command, postprocess = postprocess }, opts)
 end
 
 MiniExtra.pickers.git_branches = function(local_opts, opts)
@@ -759,6 +784,51 @@ end
 
 H.show_with_icons =
   function(buf_id, items, query) require('mini-dev.pick').default_show(buf_id, items, query, { show_icons = true }) end
+
+-- Git picker -----------------------------------------------------------------
+H.git_normalize_path = function(path, picker_name)
+  local path = type(path) == 'string' and path or vim.fn.getcwd()
+  if path == '' then H.error(string.format('Path in `%s` is empty.', picker_name)) end
+  path = vim.fn.fnamemodify(path, ':p')
+  local path_is_dir, path_is_file = vim.fn.isdirectory(path) == 1, vim.fn.filereadable(path) == 1
+  if not (path_is_dir or path_is_file) then H.error('Path ' .. path .. ' is not a valid path.') end
+  return path, path_is_dir and 'directory' or 'file'
+end
+
+H.git_get_repo_dir = function(path, path_type)
+  local path_dir = path_type == 'directory' and path or vim.fn.fnamemodify(path, ':h')
+  local repo_dir = vim.fn.systemlist('git -C ' .. path_dir .. ' rev-parse --show-toplevel')[1]
+  if vim.v.shell_error ~= 0 then H.error('Could not find git repo for ' .. path .. '.') end
+  return repo_dir
+end
+
+H.git_difflines_to_hunkitems = function(lines, n_context)
+  local header_pattern = '^diff %-%-git'
+  local hunk_pattern = '^@@ %-%d+,%d+ %+(%d+),%d+ @@'
+  local to_path_pattern = '^%+%+%+ b/(.*)$'
+
+  local cur_path, is_in_hunk = nil, false
+  local items = {}
+  for i, l in ipairs(lines) do
+    if l:find(header_pattern) ~= nil then is_in_hunk = false end
+
+    cur_path = l:match(to_path_pattern) or cur_path
+
+    local hunk_start = l:match(hunk_pattern)
+    if hunk_start ~= nil then
+      is_in_hunk = true
+      local lnum = tonumber(hunk_start) + n_context
+      table.insert(items, { text = cur_path .. ':' .. lnum, path = cur_path, lnum = lnum, hunk = {} })
+    end
+
+    if is_in_hunk then table.insert(items[#items].hunk, l) end
+  end
+
+  -- TODO: Think about more useful text for better eyeballing from main list.
+  -- Like adding first line of hunk (after paths align like in `diagnostic`).
+
+  return items
+end
 
 -- LSP picker -----------------------------------------------------------------
 H.lsp_make_on_list = function(source, opts)

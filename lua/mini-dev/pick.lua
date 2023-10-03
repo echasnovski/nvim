@@ -65,8 +65,9 @@
 --   |diagnostic-structure| but with 1-indexing (end line inclusive; end col
 --   exclusive).
 --
--- - `MiniPick.builtin.grep({ pattern = vim.fn.expand('<cword>') })` to find
---   word under cursor.
+-- - Find a word under cursor:
+--     - In Lua: `MiniPick.builtin.grep({ pattern = vim.fn.expand('<cword>') })`
+--     - In command `:Pick grep pattern='<cword>'`
 --
 -- - Example of `execute` custom mappings: >
 --
@@ -693,12 +694,11 @@ for name, f in pairs(MiniPick.builtin) do
   MiniPick.registry[name] = function(local_opts) return f(local_opts) end
 end
 
--- TODO: Uncomment when 'mini.extra' is released
--- if type(MiniExtra) == 'table' then
---   for name, f in pairs(MiniExtra.pickers) do
---     MiniPick.registry[name] = function(local_opts) return f(local_opts) end
---   end
--- end
+if type(MiniExtra) == 'table' then
+  for name, f in pairs(MiniExtra.pickers) do
+    MiniPick.registry[name] = function(local_opts) return f(local_opts) end
+  end
+end
 
 ---@seealso |MiniPick.set_picker_items()| and |MiniPick.set_picker_items_from_cli()|
 MiniPick.get_picker_items = function() return vim.deepcopy((H.pickers.active or {}).items) end
@@ -1347,7 +1347,7 @@ H.picker_set_lines = function(picker)
 
   -- - Update cursor if showing item matches (needed for 'scroll_{left,right}')
   local is_not_curline = vim.api.nvim_win_get_cursor(win_id)[1] ~= cur_line
-  if picker.view_state == 'main' and is_not_curline then vim.api.nvim_win_set_cursor(win_id, { cur_line, 0 }) end
+  if picker.view_state == 'main' and is_not_curline then H.set_cursor(win_id, cur_line, 1) end
 end
 
 H.picker_match = function(picker)
@@ -1473,16 +1473,16 @@ H.picker_stop = function(picker, abort)
   if abort then
     H.pickers = {}
   else
-    pcall(vim.api.nvim_set_current_win, picker.windows.target)
-
     local new_latest = vim.deepcopy(picker)
     H.picker_free(H.pickers.latest)
     H.pickers = { active = nil, latest = new_latest }
   end
 
+  H.set_curwin(picker.windows.target)
   pcall(vim.api.nvim_win_close, picker.windows.main, true)
   pcall(vim.api.nvim_buf_delete, picker.buffers.main, { force = true })
   pcall(vim.api.nvim_buf_delete, picker.buffers.info, { force = true })
+  picker.windows, picker.buffers = {}, {}
 
   H.querytick = H.querytick + 1
 end
@@ -1604,9 +1604,8 @@ H.picker_query_delete = function(picker, n)
 end
 
 H.picker_choose = function(picker, pre_command)
-  if picker.items == nil then return end
-  local choose = picker.opts.source.choose
-  if not vim.is_callable(choose) then return true end
+  local cur_item = H.picker_get_current_item(picker)
+  if cur_item == nil or not vim.is_callable(picker.opts.source.choose) then return true end
 
   local win_id_target = picker.windows.target
   if pre_command ~= nil and H.is_valid_win(win_id_target) then
@@ -1617,7 +1616,7 @@ H.picker_choose = function(picker, pre_command)
   end
 
   -- Returning nothing, `nil`, or `false` should lead to picker stop
-  return not choose(H.picker_get_current_item(picker))
+  return not picker.opts.source.choose(cur_item)
 end
 
 H.picker_mark_indexes = function(picker, range_type)
@@ -2108,7 +2107,7 @@ H.preview_set_lines = function(buf_id, lines, extra)
   -- Cursor position and window view
   local state = MiniPick.get_picker_state()
   local win_id = state ~= nil and state.windows.main or vim.fn.bufwinid(buf_id)
-  pcall(vim.api.nvim_win_set_cursor, win_id, { extra.line or 1, (extra.col or 1) - 1 })
+  H.set_cursor(win_id, extra.line, extra.col)
   local pos_keys = ({ top = 'zt', center = 'zz', bottom = 'zb' })[extra.line_position] or 'zt'
   pcall(vim.api.nvim_win_call, win_id, function() vim.cmd('normal! ' .. pos_keys) end)
 end
@@ -2166,7 +2165,7 @@ H.choose_print = function(x) print(vim.inspect(x)) end
 
 H.choose_set_cursor = function(win_id, line, col)
   if line == nil then return end
-  pcall(vim.api.nvim_win_set_cursor, win_id, { line, (col or 1) - 1 })
+  H.set_cursor(win_id, line, col)
   pcall(vim.api.nvim_win_call, win_id, function() vim.cmd('normal! zvzz') end)
 end
 
@@ -2302,6 +2301,17 @@ H.set_buflines = function(buf_id, lines) pcall(vim.api.nvim_buf_set_lines, buf_i
 H.set_winbuf = function(win_id, buf_id) vim.api.nvim_win_set_buf(win_id, buf_id) end
 
 H.set_extmark = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
+
+H.set_cursor = function(win_id, lnum, col) pcall(vim.api.nvim_win_set_cursor, win_id, { lnum or 1, (col or 1) - 1 }) end
+
+H.set_curwin = function(win_id)
+  if not H.is_valid_win(win_id) then return end
+  -- Explicitly preserve cursor to fix Neovim<=0.9 after choosing position in
+  -- already shown buffer
+  local cursor = vim.api.nvim_win_get_cursor(win_id)
+  vim.api.nvim_set_current_win(win_id)
+  H.set_cursor(win_id, cursor[1], cursor[2] + 1)
+end
 
 H.clear_namespace = function(buf_id, ns_id) pcall(vim.api.nvim_buf_clear_namespace, buf_id, ns_id, 0, -1) end
 
