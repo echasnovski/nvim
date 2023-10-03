@@ -8,6 +8,8 @@ local new_set = MiniTest.new_set
 --stylua: ignore start
 local load_module = function(config) child.mini_load('pick', config) end
 local unload_module = function() child.mini_unload('pick') end
+local set_cursor = function(...) return child.set_cursor(...) end
+local get_cursor = function(...) return child.get_cursor(...) end
 local type_keys = function(...) return child.type_keys(...) end
 local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
@@ -33,6 +35,8 @@ local test_dir = 'tests/dir-pick'
 local real_files_dir = 'tests/dir-pick/real-files'
 
 local join_path = function(...) return table.concat({ ... }, '/') end
+
+local real_file = function(basename) return join_path(real_files_dir, basename) end
 
 -- Common test wrappers
 local forward_lua = function(fun_str)
@@ -61,6 +65,19 @@ local validate_buf_option =
 
 local validate_win_option =
   function(win_id, option_name, option_value) eq(child.api.nvim_win_get_option(win_id, option_name), option_value) end
+
+local validate_buf_name = function(buf_id, name)
+  buf_id = buf_id or child.api.nvim_get_current_buf()
+  name = name ~= '' and child.fn.fnamemodify(name, ':p') or ''
+  name = name:gsub('/+$', '')
+  eq(child.api.nvim_buf_get_name(buf_id), name)
+end
+
+local validate_no_buf_name = function(buf_id, name)
+  buf_id = buf_id or child.api.nvim_get_current_buf()
+  name = name ~= '' and child.fn.fnamemodify(name, ':p') or ''
+  eq(child.api.nvim_buf_get_name(buf_id) == name, false)
+end
 
 local seq_along = function(x)
   local res = {}
@@ -1026,7 +1043,7 @@ end
 
 T['default_show()']['respects `opts.show_icons`'] = function()
   child.set_size(10, 45)
-  local items = vim.tbl_map(function(x) return join_path(real_files_dir, x) end, vim.fn.readdir(real_files_dir))
+  local items = vim.tbl_map(real_file, vim.fn.readdir(real_files_dir))
   table.insert(items, test_dir)
   table.insert(items, 'non-existing')
   table.insert(items, { text = 'non-string' })
@@ -1127,16 +1144,16 @@ local validate_preview = function(items)
   end
 end
 
-T['default_preview()']['works'] = function() validate_preview({ join_path(real_files_dir, 'b.txt') }) end
+T['default_preview()']['works'] = function() validate_preview({ real_file('b.txt') }) end
 
 T['default_preview()']['works without active picker'] = function()
   -- Allows 0 buffer id for current buffer
-  default_preview(0, join_path(real_files_dir, 'b.txt'))
+  default_preview(0, real_file('b.txt'))
   child.expect_screenshot()
 
   -- Allows non-current buffer
   local new_buf_id = child.api.nvim_create_buf(false, true)
-  default_preview(new_buf_id, join_path(real_files_dir, 'LICENSE'))
+  default_preview(new_buf_id, real_file('LICENSE'))
   child.api.nvim_set_current_buf(new_buf_id)
   child.expect_screenshot()
 end
@@ -1144,19 +1161,19 @@ end
 T['default_preview()']['works for file path'] = function()
   local items = {
     -- Item as string
-    join_path(real_files_dir, 'b.txt'),
+    real_file('b.txt'),
 
     -- Item as table with `path` field
-    { text = join_path(real_files_dir, 'LICENSE'), path = join_path(real_files_dir, 'LICENSE') },
+    { text = real_file('LICENSE'), path = real_file('LICENSE') },
 
     -- Non-text file
-    join_path(real_files_dir, 'c.gif'),
+    real_file('c.gif'),
   }
   validate_preview(items)
 end
 
 T['default_preview()']['shows line in file path'] = function()
-  local path = join_path(real_files_dir, 'b.txt')
+  local path = real_file('b.txt')
   local items = {
     path .. ':3',
     { text = path .. ':line-in-path', path = path .. ':6' },
@@ -1166,7 +1183,7 @@ T['default_preview()']['shows line in file path'] = function()
 end
 
 T['default_preview()']['shows position in file path'] = function()
-  local path = join_path(real_files_dir, 'b.txt')
+  local path = real_file('b.txt')
   local items = {
     path .. ':3:4',
     { text = path .. ':pos-in-path', path = path .. ':6:2' },
@@ -1176,7 +1193,7 @@ T['default_preview()']['shows position in file path'] = function()
 end
 
 T['default_preview()']['shows range in file path'] = function()
-  local path = join_path(real_files_dir, 'b.txt')
+  local path = real_file('b.txt')
   local items = {
     { text = path .. ':range-oneline', path = path, lnum = 8, col = 3, end_lnum = 8, end_col = 5 },
     { text = path .. ':range-manylines', path = path, lnum = 9, col = 3, end_lnum = 11, end_col = 4 },
@@ -1187,16 +1204,16 @@ end
 T['default_preview()']['has syntax highlighting in file path'] = function()
   local items = {
     -- With tree-sitter
-    join_path(real_files_dir, 'a.lua'),
+    real_file('a.lua'),
 
     -- With built-in syntax
-    join_path(real_files_dir, 'Makefile'),
+    real_file('Makefile'),
   }
   validate_preview(items)
 end
 
 T['default_preview()']['loads context in file path'] = function()
-  start_with_items({ join_path(real_files_dir, 'b.txt') })
+  start_with_items({ real_file('b.txt') })
   type_keys('<Tab>')
   child.expect_screenshot()
   type_keys('<C-f>')
@@ -1205,7 +1222,8 @@ T['default_preview()']['loads context in file path'] = function()
   child.expect_screenshot()
 end
 
-T['default_preview()']['works for directory path'] = function() validate_preview({ test_dir }) end
+T['default_preview()']['works for directory path'] =
+  function() validate_preview({ test_dir, { text = real_files_dir, path = real_files_dir } }) end
 
 T['default_preview()']['works for buffer'] = function()
   local buf_id_1 = child.api.nvim_create_buf(false, false)
@@ -1264,9 +1282,9 @@ T['default_preview()']['shows range in buffer'] = function()
 end
 
 T['default_preview()']['has syntax highlighting in buffer'] = function()
-  child.cmd('edit ' .. join_path(real_files_dir, 'a.lua'))
+  child.cmd('edit ' .. real_file('a.lua'))
   local buf_id_lua = child.api.nvim_get_current_buf()
-  child.cmd('edit ' .. join_path(real_files_dir, 'Makefile'))
+  child.cmd('edit ' .. real_file('Makefile'))
   local buf_id_makefile = child.api.nvim_get_current_buf()
   child.cmd('enew')
 
@@ -1278,7 +1296,7 @@ T['default_preview()']['has syntax highlighting in buffer'] = function()
 end
 
 T['default_preview()']['loads context in buffer'] = function()
-  child.cmd('edit ' .. join_path(real_files_dir, 'b.txt'))
+  child.cmd('edit ' .. real_file('b.txt'))
   local buf_id = child.api.nvim_get_current_buf()
   child.cmd('enew')
 
@@ -1300,7 +1318,7 @@ T['default_preview()']['respects `opts.n_context_lines`'] = function()
   child.lua([[MiniPick.config.source.preview = function(buf_id, item)
     return MiniPick.default_preview(buf_id, item, { n_context_lines = 2 })
   end]])
-  local path = join_path(real_files_dir, 'b.txt')
+  local path = real_file('b.txt')
   child.cmd('edit ' .. path)
   local buf_id = child.api.nvim_get_current_buf()
   child.cmd('enew')
@@ -1323,7 +1341,7 @@ T['default_preview()']['respects `opts.line_position`'] = new_set({
     child.lua([[MiniPick.config.source.preview = function(buf_id, item)
         return MiniPick.default_preview(buf_id, item, { line_position = _G.line_position })
       end]])
-    local path = join_path(real_files_dir, 'b.txt')
+    local path = real_file('b.txt')
     child.cmd('edit ' .. path)
     local buf_id = child.api.nvim_get_current_buf()
     child.cmd('enew')
@@ -1341,7 +1359,277 @@ T['default_preview()']['respects `opts.line_position`'] = new_set({
 
 T['default_choose()'] = new_set()
 
-T['default_choose()']['works'] = function() MiniTest.skip() end
+local default_choose = forward_lua('MiniPick.default_choose')
+
+local choose_item = function(item)
+  start_with_items({ item })
+  type_keys('<CR>')
+  eq(is_picker_active(), false)
+end
+
+T['default_choose()']['works'] = function()
+  local path = real_file('b.txt')
+  choose_item(path)
+  validate_buf_name(0, path)
+end
+
+T['default_choose()']['respects picker target window'] = function()
+  child.cmd('botright wincmd v')
+  local buf_id_1 = child.api.nvim_create_buf(false, true)
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.api.nvim_win_set_buf(win_id_1, buf_id_1)
+  child.cmd('wincmd h')
+  local buf_id_2 = child.api.nvim_create_buf(false, true)
+  local win_id_2 = child.api.nvim_get_current_win()
+  child.api.nvim_win_set_buf(win_id_2, buf_id_2)
+
+  child.api.nvim_set_current_win(win_id_1)
+  local path = real_file('b.txt')
+  start_with_items({ path })
+  child.lua(string.format('MiniPick.set_picker_target_window(%d)', win_id_2))
+  type_keys('<CR>')
+
+  eq(child.api.nvim_win_get_buf(win_id_1), buf_id_1)
+  validate_buf_name(buf_id_1, '')
+  eq(child.api.nvim_win_get_buf(win_id_2), buf_id_2)
+  validate_buf_name(buf_id_2, path)
+end
+
+T['default_choose()']['works without active picker'] = function()
+  child.cmd('botright wincmd v')
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.cmd('wincmd h')
+  local win_id_2 = child.api.nvim_get_current_win()
+
+  child.api.nvim_set_current_win(win_id_1)
+  local path = real_file('b.txt')
+  default_choose(path)
+
+  -- Should use current window as target
+  validate_buf_name(child.api.nvim_win_get_buf(win_id_1), path)
+  validate_buf_name(child.api.nvim_win_get_buf(win_id_2), '')
+end
+
+T['default_choose()']['works for file path'] = function()
+  local validate = function(item, path, pos)
+    local win_id = child.api.nvim_get_current_win()
+    default_choose(item)
+
+    local buf_id = child.api.nvim_win_get_buf(win_id)
+    validate_buf_name(buf_id, path)
+    if pos ~= nil then eq(child.api.nvim_win_get_cursor(win_id), pos) end
+
+    -- Cleanup
+    child.api.nvim_buf_delete(buf_id, { force = true })
+  end
+
+  local path = real_file('b.txt')
+
+  -- Path
+  validate(path, path, { 1, 0 })
+  validate({ text = path, path = path }, path, { 1, 0 })
+
+  -- Path with line
+  validate(path .. ':4', path, { 4, 0 })
+  validate({ text = path, path = path, lnum = 6 }, path, { 6, 0 })
+
+  -- Path with position
+  validate(path .. ':8:2', path, { 8, 1 })
+  validate({ text = path, path = path, lnum = 10, col = 4 }, path, { 10, 3 })
+
+  -- Path with range
+  validate({ text = path, path = path, lnum = 12, col = 5, end_lnum = 14, end_col = 3 }, path, { 12, 4 })
+end
+
+T['default_choose()']['reuses opened buffer for file path'] = function()
+  local path = real_file('b.txt')
+  child.cmd('edit ' .. path)
+  local buf_id_path = child.api.nvim_get_current_buf()
+  validate_buf_name(buf_id_path, path)
+  set_cursor(5, 3)
+
+  local buf_id_alt = child.api.nvim_create_buf(true, false)
+
+  local validate = function(pos)
+    eq(child.api.nvim_win_get_buf(0), buf_id_path)
+    validate_buf_name(buf_id_path, path)
+    eq(child.api.nvim_win_get_cursor(0), pos)
+  end
+
+  -- Reuses without setting cursor
+  child.api.nvim_set_current_buf(buf_id_alt)
+  default_choose(path)
+  validate({ 5, 3 })
+
+  -- Reuses with setting cursor
+  child.api.nvim_set_current_buf(buf_id_alt)
+  default_choose(path .. ':7:2')
+  validate({ 7, 1 })
+end
+
+T['default_choose()']['works for directory path'] = function()
+  local validate = function(item, path)
+    local buf_id_init = child.api.nvim_get_current_buf()
+    default_choose(item)
+
+    local buf_id_cur = child.api.nvim_get_current_buf()
+    eq(child.bo.filetype, 'netrw')
+    validate_buf_name(buf_id_init, path)
+
+    -- Cleanup
+    child.api.nvim_buf_delete(buf_id_init, { force = true })
+    child.api.nvim_buf_delete(buf_id_cur, { force = true })
+  end
+
+  validate(test_dir, test_dir)
+  validate({ text = test_dir, path = test_dir }, test_dir)
+end
+
+T['default_choose()']['works for buffer'] = function()
+  local buf_id_tmp = child.api.nvim_create_buf(false, true)
+
+  local setup_buffer = function(pos)
+    local buf_id = child.api.nvim_create_buf(true, false)
+    child.api.nvim_buf_set_lines(buf_id, 0, -1, false, vim.fn['repeat']({ 'aaaaaaaaaaaaaaaaaaaa' }, 20))
+
+    local cur_buf = child.api.nvim_win_get_buf(0)
+    child.api.nvim_set_current_buf(buf_id)
+    child.api.nvim_win_set_cursor(0, pos)
+    child.api.nvim_win_set_buf(0, cur_buf)
+
+    return buf_id
+  end
+
+  local validate = function(item, buf_id, pos)
+    local win_id = child.api.nvim_get_current_win()
+    child.api.nvim_win_set_buf(0, buf_id_tmp)
+
+    default_choose(item)
+
+    eq(child.api.nvim_win_get_buf(win_id), buf_id)
+    if pos ~= nil then eq(child.api.nvim_win_get_cursor(win_id), pos) end
+
+    -- Cleanup
+    child.api.nvim_buf_delete(buf_id, { force = true })
+  end
+
+  local buf_id
+
+  -- Buffer without position should reuse current cursor
+  buf_id = setup_buffer({ 1, 1 })
+  validate(buf_id, buf_id, { 1, 1 })
+
+  buf_id = setup_buffer({ 2, 2 })
+  validate(tostring(buf_id), buf_id, { 2, 2 })
+
+  -- Buffer in table
+  buf_id = setup_buffer({ 3, 3 })
+  validate({ text = 'buffer', bufnr = buf_id }, buf_id, { 3, 3 })
+
+  buf_id = setup_buffer({ 4, 4 })
+  validate({ text = 'buffer', buf_id = buf_id }, buf_id, { 4, 4 })
+
+  buf_id = setup_buffer({ 5, 5 })
+  validate({ text = 'buffer', buf = buf_id }, buf_id, { 5, 5 })
+
+  -- Buffer with line
+  buf_id = setup_buffer({ 6, 6 })
+  validate({ text = 'buffer', bufnr = buf_id, lnum = 7 }, buf_id, { 7, 0 })
+
+  -- Buffer with position
+  buf_id = setup_buffer({ 6, 6 })
+  validate({ text = 'buffer', bufnr = buf_id, lnum = 8, col = 8 }, buf_id, { 8, 7 })
+
+  -- Buffer with range
+  buf_id = setup_buffer({ 6, 6 })
+  validate({ text = 'buffer', bufnr = buf_id, lnum = 9, col = 9, end_lnum = 10, end_col = 8 }, buf_id, { 9, 8 })
+
+  -- Already shown buffer
+  local setup_current_buf = function(pos)
+    child.api.nvim_buf_set_lines(0, 0, -1, false, vim.fn['repeat']({ 'aaaaaaaaaaaaaaaaaaaa' }, 20))
+    child.api.nvim_win_set_cursor(0, pos)
+    return child.api.nvim_get_current_buf()
+  end
+
+  buf_id = setup_current_buf({ 11, 11 })
+  validate(buf_id, buf_id, { 11, 11 })
+
+  buf_id = setup_current_buf({ 12, 12 })
+  validate({ text = 'buffer', bufnr = buf_id, lnum = 13 }, buf_id, { 13, 0 })
+
+  buf_id = setup_current_buf({ 12, 12 })
+  validate({ text = 'buffer', bufnr = buf_id, lnum = 14, col = 14 }, buf_id, { 14, 13 })
+
+  buf_id = setup_current_buf({ 12, 12 })
+  validate({ text = 'buffer', bufnr = buf_id, lnum = 15, col = 15, end_lnum = 16, end_col = 14 }, buf_id, { 15, 14 })
+end
+
+T['default_choose()']['ensures valid target window'] = function()
+  local choose_with_bad_target_window = function(item)
+    child.cmd('botright wincmd v')
+    local win_id = child.api.nvim_get_current_win()
+
+    start_with_items({ item })
+    local lua_cmd = string.format([[vim.api.nvim_win_call(%d, function() vim.cmd('close') end)]], win_id)
+    child.lua(lua_cmd)
+
+    type_keys('<CR>')
+  end
+
+  -- Path
+  local path = real_file('b.txt')
+  choose_with_bad_target_window(path)
+  validate_buf_name(child.api.nvim_get_current_buf(), path)
+
+  -- Buffer
+  local buf_id = child.api.nvim_create_buf(true, false)
+  choose_with_bad_target_window({ text = 'buffer', bufnr = buf_id })
+  eq(child.api.nvim_get_current_buf(), buf_id)
+end
+
+T['default_choose()']['centers cursor'] = function()
+  local validate = function(item, ref_topline)
+    choose_item(item)
+    eq(child.fn.line('w0'), ref_topline)
+  end
+
+  -- Path
+  local path = real_file('b.txt')
+  validate({ text = path, path = path, lnum = 10 }, 4)
+
+  -- Buffer
+  local buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(buf_id, 0, -1, false, vim.fn['repeat']({ 'aaaaaaaaaa' }, 100))
+  validate({ text = 'buffer', bufnr = buf_id, lnum = 12 }, 6)
+end
+
+T['default_choose()']['opens just enough folds'] = function()
+  child.api.nvim_buf_set_lines(0, 0, -1, false, vim.fn['repeat']({ 'aaaaaaaaaa' }, 100))
+  child.cmd('2,3fold')
+  child.cmd('12,13fold')
+
+  eq(child.fn.foldclosed(2), 2)
+  eq(child.fn.foldclosed(3), 2)
+  eq(child.fn.foldclosed(12), 12)
+  eq(child.fn.foldclosed(13), 12)
+
+  default_choose({ text = 'buffer', bufnr = child.api.nvim_get_current_buf(), lnum = 12 })
+
+  eq(child.fn.foldclosed(2), 2)
+  eq(child.fn.foldclosed(3), 2)
+  eq(child.fn.foldclosed(12), -1)
+  eq(child.fn.foldclosed(13), -1)
+end
+
+T['default_choose()']['has print fallback'] = function()
+  choose_item({ text = 'regular-table' })
+  eq(child.cmd_capture('messages'), '\n{\n  text = "regular-table"\n}')
+end
+
+T['default_choose()']['does nothing for `nil` input'] = function()
+  expect.no_error(function() default_choose() end)
+  eq(child.cmd_capture('messages'), '')
+end
 
 T['default_choose_marked()'] = new_set()
 
@@ -1463,9 +1751,9 @@ T['set_picker_items()']['does not block picker'] = function()
         )
       end
     }
-    _G.mappings = { add_to_log = _G.l_key }
+    _G.mappings = { append_log = _G.l_key }
   ]])
-  child.lua_notify('MiniPick.start({ mappings = { add_to_log = _G.l_key }, delay = { async = 1 } })')
+  child.lua_notify('MiniPick.start({ mappings = { append_log = _G.l_key }, delay = { async = 1 } })')
 
   -- Set many items and start typing right away. Key presses should be
   -- processed right away even though there is an items preprocessing is going.
@@ -1481,6 +1769,8 @@ T['set_picker_items_from_cli()'] = new_set()
 T['set_picker_items_from_cli()']['works'] = function() MiniTest.skip() end
 
 T['set_picker_items_from_cli()']['can be called without active picker'] = function() MiniTest.skip() end
+
+T['set_picker_items_from_cli()']['can have postprocess use Vimscript functions'] = function() MiniTest.skip() end
 
 T['set_picker_match_inds()'] = new_set()
 

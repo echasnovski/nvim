@@ -483,9 +483,13 @@ end
 
 MiniPick.default_choose = function(item)
   if item == nil then return end
+  local picker_state = MiniPick.get_picker_state()
+  local win_target = picker_state ~= nil and picker_state.windows.target or vim.api.nvim_get_current_win()
+  if not H.is_valid_win(win_target) then win_target = H.get_first_valid_normal_window() end
+
   local item_data = H.parse_item(item)
-  if item_data.type == 'file' or item_data.type == 'directory' then return H.choose_path(item_data) end
-  if item_data.type == 'buffer' then return H.choose_buffer(item_data) end
+  if item_data.type == 'file' or item_data.type == 'directory' then return H.choose_path(item_data, win_target) end
+  if item_data.type == 'buffer' then return H.choose_buffer(item_data, win_target) end
   H.choose_print(item)
 end
 
@@ -2130,10 +2134,7 @@ H.preview_highlight_region = function(buf_id, line, col, line_end, col_end)
 end
 
 -- Default choose -------------------------------------------------------------
-H.choose_path = function(item_data)
-  local win_target = (MiniPick.get_picker_state().windows or {}).target
-  if not H.is_valid_win(win_target) then return end
-
+H.choose_path = function(item_data, win_target)
   -- Try to use already created buffer, if present. This avoids not needed
   -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
   local path, path_buf_id = item_data.path, nil
@@ -2145,16 +2146,14 @@ H.choose_path = function(item_data)
   if path_buf_id ~= nil then
     H.set_winbuf(win_target, path_buf_id)
   else
-    -- Use `pcall()` to avoid possible `:edti` errors, like present swap file
+    -- Use `pcall()` to avoid possible `:edit` errors, like present swap file
     vim.api.nvim_win_call(win_target, function() pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(path)) end)
   end
 
   H.choose_set_cursor(win_target, item_data.line, item_data.col)
 end
 
-H.choose_buffer = function(item_data)
-  local win_target = (MiniPick.get_picker_state().windows or {}).target
-  if not H.is_valid_win(win_target) then return end
+H.choose_buffer = function(item_data, win_target)
   H.set_winbuf(win_target, item_data.buf_id)
   H.choose_set_cursor(win_target, item_data.line, item_data.col)
 end
@@ -2300,6 +2299,12 @@ H.create_scratch_buf = function()
   vim.b[buf_id].minicursorword_disable = true
   vim.b[buf_id].miniindentscope_disable = true
   return buf_id
+end
+
+H.get_first_valid_normal_window = function()
+  for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_config(win_id).relative == '' then return win_id end
+  end
 end
 
 H.set_buflines = function(buf_id, lines) pcall(vim.api.nvim_buf_set_lines, buf_id, 0, -1, false, lines) end
