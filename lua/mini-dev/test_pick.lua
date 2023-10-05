@@ -1633,18 +1633,278 @@ end
 
 T['default_choose_marked()'] = new_set()
 
-T['default_choose_marked()']['works'] = function() MiniTest.skip() end
+local default_choose_marked = forward_lua('MiniPick.default_choose_marked')
+
+local validate_qfitem = function(input, ref)
+  local eq_if_nonnil = function(x, y)
+    if y ~= nil then eq(x, y) end
+  end
+
+  eq_if_nonnil(input.bufnr, ref.bufnr)
+  if ref.filename ~= nil then validate_buf_name(input.bufnr, ref.filename) end
+  eq_if_nonnil(input.lnum, ref.lnum)
+  eq_if_nonnil(input.col, ref.col)
+  eq_if_nonnil(input.end_lnum, ref.end_lnum)
+  eq_if_nonnil(input.end_col, ref.end_col)
+  eq_if_nonnil(input.text, ref.text)
+end
+
+T['default_choose_marked()']['works'] = function()
+  local path = real_file('b.txt')
+  start_with_items({ path })
+  type_keys('<C-x>', '<M-CR>')
+  eq(is_picker_active(), false)
+
+  -- Should create and open quickfix list
+  eq(#child.api.nvim_list_wins(), 2)
+  eq(child.bo.filetype, 'qf')
+
+  local qflist = child.fn.getqflist()
+  eq(#qflist, 1)
+  validate_qfitem(qflist[1], { filename = path, lnum = 1, col = 1, end_lnum = 0, end_col = 0, text = '' })
+end
+
+T['default_choose_marked()']['creates proper title'] = function()
+  local validate = function(keys, title)
+    local path = real_file('b.txt')
+    start_with_items({ path }, 'Picker name')
+    type_keys(keys, '<C-x>', '<M-CR>')
+    eq(is_picker_active(), false)
+    eq(child.fn.getqflist({ title = true }).title, title)
+  end
+
+  validate({}, 'Picker name')
+  validate({ 'b', '.', 't' }, 'Picker name : b.t')
+end
+
+T['default_choose_marked()']['sets as last list'] = function()
+  local path = real_file('b.txt')
+  child.fn.setqflist({}, ' ', { items = { { filename = path, lnum = 2, col = 2 } }, nr = '$' })
+  child.fn.setqflist({}, ' ', { items = { { filename = path, lnum = 3, col = 3 } }, nr = '$' })
+  child.cmd('colder')
+
+  start_with_items({ path })
+  type_keys('<C-x>', '<M-CR>')
+  local list_data = child.fn.getqflist({ all = true })
+  validate_qfitem(list_data.items[1], { filename = path, lnum = 1, col = 1 })
+  eq(list_data.nr, 3)
+end
+
+T['default_choose_marked()']['works without active picker'] = function()
+  local path_1, path_2 = real_file('b.txt'), real_file('LICENSE')
+  default_choose_marked({ path_1, path_2 })
+
+  eq(#child.api.nvim_list_wins(), 2)
+  eq(child.bo.filetype, 'qf')
+
+  local list_data = child.fn.getqflist({ all = true })
+  eq(#list_data.items, 2)
+  validate_qfitem(list_data.items[1], { filename = path_1, lnum = 1, col = 1, end_lnum = 0, end_col = 0, text = '' })
+  validate_qfitem(list_data.items[2], { filename = path_2, lnum = 1, col = 1, end_lnum = 0, end_col = 0, text = '' })
+
+  eq(list_data.title, '<No picker>')
+end
+
+T['default_choose_marked()']['creates quickfix list from file/buffer positions'] = function()
+  local path = real_file('b.txt')
+  local buf_id = child.api.nvim_create_buf(true, false)
+  local buf_id_scratch = child.api.nvim_create_buf(false, true)
+
+  local items = {
+    -- File path
+    path,
+
+    { text = 'filepath', path = path },
+
+    path .. ':3',
+    { text = path, path = path, lnum = 4 },
+
+    path .. ':5:5',
+    path .. ':6:6:' .. 'extra text',
+    { text = path, path = path, lnum = 7, col = 7 },
+
+    { text = path, path = path, lnum = 8, col = 8, end_lnum = 9, end_col = 9 },
+    { text = path, path = path, lnum = 8, col = 9, end_lnum = 9 },
+
+    -- Buffer
+    buf_id,
+    tostring(buf_id),
+    { text = 'buffer', bufnr = buf_id },
+
+    buf_id_scratch,
+
+    { text = 'buffer', bufnr = buf_id, lnum = 5 },
+
+    { text = 'buffer', bufnr = buf_id, lnum = 6, col = 6 },
+
+    { text = 'buffer', bufnr = buf_id, lnum = 7, col = 7, end_lnum = 8, end_col = 8 },
+    { text = 'buffer', bufnr = buf_id, lnum = 7, col = 8, end_lnum = 8 },
+  }
+
+  start_with_items(items)
+  type_keys('<C-a>', '<M-CR>')
+  local qflist = child.fn.getqflist()
+  eq(#qflist, #items)
+
+  validate_qfitem(qflist[1], { filename = path, lnum = 1, col = 1, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[2], { filename = path, lnum = 1, col = 1, end_lnum = 0, end_col = 0, text = 'filepath' })
+  validate_qfitem(qflist[3], { filename = path, lnum = 3, col = 1, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[4], { filename = path, lnum = 4, col = 1, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[5], { filename = path, lnum = 5, col = 5, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[6], { filename = path, lnum = 6, col = 6, end_lnum = 0, end_col = 0, text = 'extra text' })
+  validate_qfitem(qflist[7], { filename = path, lnum = 7, col = 7, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[8], { filename = path, lnum = 8, col = 8, end_lnum = 9, end_col = 9 })
+  validate_qfitem(qflist[9], { filename = path, lnum = 8, col = 9, end_lnum = 9, end_col = 0 })
+
+  validate_qfitem(qflist[10], { bufnr = buf_id, lnum = 1, col = 1, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[11], { bufnr = buf_id, lnum = 1, col = 1, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[12], { bufnr = buf_id, lnum = 1, col = 1, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[13], { bufnr = buf_id_scratch, lnum = 1, col = 1, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[14], { bufnr = buf_id, lnum = 5, col = 1, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[15], { bufnr = buf_id, lnum = 6, col = 6, end_lnum = 0, end_col = 0 })
+  validate_qfitem(qflist[16], { bufnr = buf_id, lnum = 7, col = 7, end_lnum = 8, end_col = 8 })
+  validate_qfitem(qflist[17], { bufnr = buf_id, lnum = 7, col = 8, end_lnum = 8, end_col = 0 })
+end
 
 T['default_choose_marked()']['falls back to choosing first item'] = function()
-  -- Can also be called without active picker
+  child.lua_notify(
+    [[MiniPick.start({source = { items = { -1, { text = 'some_table' }, -3 }, choose = function(item) _G.chosen_item = item end, }})]]
+  )
+  type_keys('<C-n>', '<C-x>', '<C-n>', '<C-x>', '<M-CR>')
+  eq(is_picker_active(), false)
 
-  -- Test
-  MiniTest.skip()
+  eq(child.lua_get('_G.chosen_item'), { text = 'some_table' })
+
+  -- Can also be called without active picker and error
+  expect.no_error(function() default_choose_marked({ -1, { text = 'some_table' } }) end)
+end
+
+T['default_choose_marked()']['works for edge case input'] = function()
+  expect.error(default_choose_marked, '`items`.*array')
+  expect.no_error(function() default_choose_marked({}) end)
+end
+
+T['default_choose_marked()']['respects `opts.list_type`'] = function()
+  local win_id = child.api.nvim_get_current_win()
+  local buf_id = child.api.nvim_create_buf(true, false)
+
+  child.lua([[MiniPick.config.source.choose_marked = function(items)
+    return MiniPick.default_choose_marked(items, { list_type = 'location' })
+  end]])
+  start_with_items({ { bufnr = buf_id } }, 'list_type test')
+  type_keys('<C-x>', '<M-CR>')
+  eq(is_picker_active(), false)
+
+  -- Should create and open location list
+  eq(#child.api.nvim_list_wins(), 2)
+  eq(child.bo.filetype, 'qf')
+
+  local loclist = child.fn.getloclist(win_id, { all = true })
+  eq(#loclist.items, 1)
+  validate_qfitem(loclist.items[1], { bufnr = buf_id, lnum = 1, col = 1, end_lnum = 0, end_col = 0, text = '' })
+
+  eq(loclist.title, 'list_type test')
+
+  -- No quickfix lists should be created
+  eq(child.fn.getqflist({ nr = true }).nr, 0)
+end
+
+T['default_choose_marked()']['ensures valid target window for location list'] = function()
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.cmd('botright wincmd v')
+  local win_id_2 = child.api.nvim_get_current_win()
+  child.api.nvim_set_current_win(win_id_1)
+
+  local buf_id = child.api.nvim_create_buf(true, false)
+  child.lua([[MiniPick.config.source.choose_marked = function(items)
+    return MiniPick.default_choose_marked(items, { list_type = 'location' })
+  end]])
+
+  start_with_items({ { bufnr = buf_id } }, 'ensure valid window')
+  local lua_cmd = string.format([[vim.api.nvim_win_call(%d, function() vim.cmd('close') end)]], win_id_1)
+  child.lua(lua_cmd)
+  type_keys('<C-x>', '<M-CR>')
+  eq(is_picker_active(), false)
+
+  eq(child.fn.getloclist(win_id_2, { title = true }).title, 'ensure valid window')
 end
 
 T['ui_select()'] = new_set()
 
-T['ui_select()']['works'] = function() MiniTest.skip() end
+local ui_select = function(items, opts, on_choice_str)
+  opts = opts or {}
+  on_choice_str = on_choice_str or 'function(...) _G.args = { ... } end'
+  local lua_cmd = string.format('MiniPick.ui_select(%s, %s, %s)', vim.inspect(items), vim.inspect(opts), on_choice_str)
+  child.lua_notify(lua_cmd)
+end
+
+T['ui_select()']['works'] = function()
+  ui_select({ -1, -2 })
+  child.expect_screenshot()
+  type_keys('<C-n>', '<CR>')
+  eq(child.lua_get('_G.args'), { -2, 2 })
+end
+
+T['ui_select()']['calls `on_choice(nil)` in case of abort'] = function()
+  ui_select({ -1, -2 })
+  type_keys('<C-c>')
+  eq(child.lua_get('_G.args'), {})
+end
+
+T['ui_select()']['preserves target window after `on_choice`'] = function()
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.cmd('botright wincmd v')
+  local win_id_2 = child.api.nvim_get_current_win()
+  child.api.nvim_set_current_win(win_id_1)
+
+  local on_choice_str = string.format('function() vim.api.nvim_set_current_win(%d) end', win_id_2)
+  ui_select({ -1, -2 }, {}, on_choice_str)
+  type_keys('<CR>')
+  eq(child.api.nvim_get_current_win(), win_id_2)
+end
+
+T['ui_select()']['respects `opts.prompt` and `opts.kind`'] = function()
+  local validate = function(opts, source_name)
+    ui_select({ -1, -2 }, opts)
+    eq(child.lua_get('MiniPick.get_picker_opts().source.name'), source_name)
+    stop()
+  end
+
+  -- Should try using use both as source name (preferring `kind` over `prompt`)
+  validate({ prompt = 'Prompt' }, 'Prompt')
+  validate({ prompt = 'Prompt', kind = 'Kind' }, 'Kind')
+end
+
+T['ui_select()']['respects `opts.format_item`'] = function()
+  child.lua_notify([[MiniPick.ui_select(
+    { { var = 'abc' }, { var = 'def' } },
+    { format_item = function(x) return x.var end },
+    function(...) _G.args = { ... } end
+  )]])
+
+  -- Should use formatted output as regular stritems
+  eq(get_picker_stritems(), { 'abc', 'def' })
+  type_keys('d', '<CR>')
+  eq(child.lua_get('_G.args'), { { var = 'def' }, 2 })
+end
+
+T['ui_select()']['shows only original item in preview'] = function()
+  child.lua_notify([[MiniPick.ui_select({ { var = 'abc' } }, { format_item = function(x) return x.var end })]])
+  type_keys('<Tab>')
+  child.expect_screenshot()
+end
+
+T['ui_select()']['respects `opts.preview_item`'] = function()
+  child.lua_notify([[MiniPick.ui_select(
+    { { var = 'abc' } },
+    {
+      format_item = function(x) return x.var end,
+      preview_item = function(x) return { 'My preview', 'Var = ' .. x.var } end,
+    }
+  )]])
+  type_keys('<Tab>')
+  child.expect_screenshot()
+end
 
 T['builtin.files()'] = new_set()
 

@@ -494,6 +494,7 @@ MiniPick.default_choose = function(item)
 end
 
 MiniPick.default_choose_marked = function(items, opts)
+  if not vim.tbl_islist(items) then H.error('`items` should be an array') end
   if #items == 0 then return end
   opts = vim.tbl_deep_extend('force', { list_type = 'quickfix' }, opts or {})
 
@@ -510,23 +511,30 @@ MiniPick.default_choose_marked = function(items, opts)
   end
 
   -- Fall back to choosing first item if no quickfix list was constructed
+  local is_active = MiniPick.is_picker_active()
   if #list == 0 then
-    if not MiniPick.is_picker_active() then return end
+    if not is_active then return end
     local choose = MiniPick.get_picker_opts().source.choose
     return choose(items[1])
   end
 
   -- Set as quickfix or location list
-  local win_target = MiniPick.get_picker_state().windows.target
-  if opts.list_type == 'location' then
-    vim.fn.setloclist(win_target, list, ' ')
-    vim.schedule(function() vim.cmd('lopen') end)
+  local title = '<No picker>'
+  if is_active then
+    local source_name, prompt = MiniPick.get_picker_opts().source.name, table.concat(MiniPick.get_picker_query())
+    title = source_name .. (prompt == '' and '' or (' : ' .. prompt))
   end
+  local list_data = { items = list, title = title, nr = '$' }
 
-  vim.fn.setqflist(list, ' ')
-  local source_name, prompt = MiniPick.get_picker_opts().source.name, table.concat(MiniPick.get_picker_query())
-  vim.fn.setqflist({}, 'a', { title = source_name .. ':' .. prompt })
-  vim.schedule(function() vim.cmd('copen') end)
+  if opts.list_type == 'location' then
+    local win_target = MiniPick.get_picker_state().windows.target
+    if not H.is_valid_win(win_target) then win_target = H.get_first_valid_normal_window() end
+    vim.fn.setloclist(win_target, {}, ' ', list_data)
+    vim.schedule(function() vim.cmd('lopen') end)
+  else
+    vim.fn.setqflist({}, ' ', list_data)
+    vim.schedule(function() vim.cmd('copen') end)
+  end
 end
 
 MiniPick.ui_select = function(items, opts, on_choice)
@@ -536,14 +544,21 @@ MiniPick.ui_select = function(items, opts, on_choice)
     table.insert(items_ext, { text = format_item(items[i]), item = items[i], index = i })
   end
 
+  local preview_item = vim.is_callable(opts.preview_item) and opts.preview_item
+    or function(x) return vim.split(vim.inspect(x), '\n') end
+  local preview = function(buf_id, item) H.set_buflines(buf_id, preview_item(item.item)) end
+
+  local was_aborted = true
   local choose = function(item)
+    was_aborted = false
     if item == nil then return end
     on_choice(item.item, item.index)
     MiniPick.set_picker_target_window(vim.api.nvim_get_current_win())
   end
 
-  local source = { items = items_ext, name = opts.prompt, choose = choose, preview = H.preview_inspect }
-  MiniPick.start({ source = source })
+  local source = { items = items_ext, name = opts.kind or opts.prompt, preview = preview, choose = choose }
+  local item = MiniPick.start({ source = source })
+  if item == nil and was_aborted then on_choice(nil) end
 end
 
 MiniPick.builtin = {}
@@ -1448,7 +1463,7 @@ H.picker_set_bordertext = function(picker)
 end
 
 -- - No border text functionality is available in Neovim<0.9
-if vim.fn.has('nvim-0.9') == 0 then H.picker_set_bordertext = function() return end end
+if vim.fn.has('nvim-0.9') == 0 then H.picker_set_bordertext = function() end end
 
 H.picker_compute_footer = function(picker, win_id)
   local info = H.picker_get_general_info(picker)
@@ -2011,7 +2026,7 @@ H.parse_item_table = function(item)
         type = 'file',            path     = path,
         line = line or item.lnum, line_end = item.end_lnum,
         col  = col or item.col,   col_end  = item.end_col,
-        text = rest or item.text,
+        text = rest ~= '' and rest or item.text,
       }
     end
 
