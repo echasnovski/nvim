@@ -19,5 +19,8 @@ vim.g.neoterm_autoinsert = 1
 -- Scroll to recent command when it is executed
 vim.g.neoterm_autoscroll = 1
 
+-- Don't automap keys
+vim.keymap.del('n', ',tt')
+
 -- Change default shell to zsh (if it is installed)
 if vim.fn.executable('zsh') == 1 then vim.g.neoterm_shell = 'zsh' end

@@ -47,6 +47,7 @@ require('mini.tabline').setup()
 
 require('mini-dev.pick').setup()
 vim.ui.select = MiniPick.ui_select
+vim.keymap.set('n', ',', [[<Cmd>Pick buf_lines scope='current'<CR>]], { nowait = true })
 
 require('mini-dev.extra').setup()
 
@@ -55,6 +56,8 @@ vim.schedule(function()
   ai.setup({
     custom_textobjects = {
       F = ai.gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
+      L = MiniExtra.ai_specs.line,
+      B = MiniExtra.ai_specs.buffer,
     },
   })
 

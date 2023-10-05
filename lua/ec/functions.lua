@@ -247,8 +247,10 @@ S.browse = function(dir_path)
   dir_path = dir_path or 'tests/screenshots'
   S.files = vim.fn.readdir(dir_path)
   S.dir_path = dir_path
+  local preview_item = function(x) return vim.fn.readfile(dir_path .. '/' .. x) end
+  local ui_opts = { prompt = 'Choose screenshot:', preview_item = preview_item }
 
-  vim.ui.select(S.files, { prompt = 'Choose screenshot:' }, function(_, idx)
+  vim.ui.select(S.files, ui_opts, function(_, idx)
     if idx == nil then return end
     S.file_id = idx
 
@@ -288,8 +290,8 @@ S.setup_windows = function()
   for _, buf_id in ipairs({ S.buf_id_text, S.buf_id_attr }) do
     vim.api.nvim_buf_set_keymap(buf_id, 'n', 'q', ':tabclose!<CR>', { noremap = true })
     vim.api.nvim_buf_set_keymap(buf_id, 'n', 'D', '<Cmd>lua EC.minitest_screenshots.delete_current()<CR>', { noremap = true })
-    vim.api.nvim_buf_set_keymap(buf_id, 'n', 'J', '<Cmd>lua EC.minitest_screenshots.show_next()<CR>', { noremap = true })
-    vim.api.nvim_buf_set_keymap(buf_id, 'n', 'K', '<Cmd>lua EC.minitest_screenshots.show_prev()<CR>', { noremap = true })
+    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-n>', '<Cmd>lua EC.minitest_screenshots.show_next()<CR>', { noremap = true })
+    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-p>', '<Cmd>lua EC.minitest_screenshots.show_prev()<CR>', { noremap = true })
   end
   --stylua: ignore end
 end
