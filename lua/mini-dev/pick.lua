@@ -571,7 +571,7 @@ MiniPick.builtin.files = function(local_opts, opts)
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   if tool == 'fallback' then
-    opts.source.items = H.files_fallback_items
+    opts.source.items = function() H.files_fallback_items(opts.source.cwd) end
     return MiniPick.start(opts)
   end
 
@@ -587,7 +587,7 @@ MiniPick.builtin.grep = function(local_opts, opts)
 
   local pattern = type(local_opts.pattern) == 'string' and local_opts.pattern or vim.fn.input('Grep pattern: ')
   if tool == 'fallback' then
-    opts.source.items = function() H.grep_fallback_items(pattern) end
+    opts.source.items = function() H.grep_fallback_items(pattern, opts.source.cwd) end
     return MiniPick.start(opts)
   end
 
@@ -755,7 +755,7 @@ MiniPick.get_picker_query = function() return vim.deepcopy((H.pickers.active or 
 
 ---@seealso |MiniPick.get_picker_items()|
 MiniPick.set_picker_items = function(items, opts)
-  if not vim.tbl_islist(items) then H.error('`items` should be array.') end
+  if not vim.tbl_islist(items) then H.error('`items` should be an array.') end
   if not MiniPick.is_picker_active() then return end
   opts = vim.tbl_deep_extend('force', { do_match = true, querytick = nil }, opts or {})
 
@@ -765,9 +765,9 @@ end
 
 ---@seealso |MiniPick.get_picker_items()|
 MiniPick.set_picker_items_from_cli = function(command, opts)
-  if not vim.tbl_islist(command) then H.error('`command` should be an array of strings.') end
+  if not H.is_array_of(command, 'string') then H.error('`command` should be an array of strings.') end
   if not MiniPick.is_picker_active() then return end
-  local default_opts = { postprocess = H.cli_postprocess, set_items_opts = { do_match = true }, spawn_opts = {} }
+  local default_opts = { postprocess = H.cli_postprocess, set_items_opts = {}, spawn_opts = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   local executable, args = command[1], vim.list_slice(command, 2, #command)
@@ -779,7 +779,7 @@ MiniPick.set_picker_items_from_cli = function(command, opts)
   local data_feed = {}
   stdout:read_start(function(err, data)
     assert(not err, err)
-    if data then return table.insert(data_feed, data) end
+    if data ~= nil then return table.insert(data_feed, data) end
 
     local items = vim.split(table.concat(data_feed), '\n')
     data_feed = nil
@@ -792,8 +792,10 @@ end
 
 ---@seealso |MiniPick.get_picker_matches()|
 MiniPick.set_picker_match_inds = function(match_inds, target_query)
-  if not vim.tbl_islist(match_inds) then H.error('`match_inds` should be array.') end
-  if target_query ~= nil and not vim.tbl_islist(target_query) then H.error('`target_query` should be array.') end
+  if not H.is_array_of(match_inds, 'number') then H.error('`match_inds` should be an array of numbers.') end
+  if target_query ~= nil and not H.is_array_of(target_query, 'string') then
+    H.error('`target_query` should be an array of strings.')
+  end
   if not MiniPick.is_picker_active() then return end
 
   H.picker_set_match_inds(H.pickers.active, match_inds, target_query)
@@ -815,7 +817,7 @@ end
 
 ---@seealso |MiniPick.get_picker_query()|
 MiniPick.set_picker_query = function(query)
-  if not vim.tbl_islist(query) then H.error('`query` should be array.') end
+  if not H.is_array_of(query, 'string') then H.error('`query` should be an array of strings.') end
   if not MiniPick.is_picker_active() then return end
 
   H.pickers.active.query, H.pickers.active.caret = query, #query + 1
@@ -2198,7 +2200,6 @@ H.files_get_tool = function()
   if H.is_executable('rg') then return 'rg' end
   if H.is_executable('fd') then return 'fd' end
   if H.is_executable('git') then return 'git' end
-  if H.is_executable('find') then return 'find' end
   return 'fallback'
 end
 
@@ -2209,14 +2210,15 @@ H.files_get_command = function(tool)
   H.error([[Wrong 'tool' for `files` builtin.]])
 end
 
-H.files_fallback_items = function()
-  if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "fallback" of `files` builtin needs Neovim>=0.8.') end
+H.files_fallback_items = function(cwd)
+  if vim.fn.has('nvim-0.9') == 0 then H.error('Tool "fallback" of `files` builtin needs Neovim>=0.8.') end
+  cwd = cwd or '.'
   local poke_picker = H.poke_picker_throttle()
   local f = function()
     local items = {}
-    for path, path_type in vim.fs.dir('.', { depth = math.huge }) do
+    for path, path_type in vim.fs.dir(cwd, { depth = math.huge }) do
       if not poke_picker() then return end
-      if path_type == 'file' and H.is_file_text(path) then table.insert(items, path) end
+      if path_type == 'file' and H.is_file_text(string.format('%s/%s', cwd, path)) then table.insert(items, path) end
     end
     MiniPick.set_picker_items(items)
   end
@@ -2246,22 +2248,28 @@ H.grep_get_command = function(tool, pattern)
   H.error([[Wrong 'tool' for `grep` builtin.]])
 end
 
-H.grep_fallback_items = function(pattern)
-  if vim.fn.has('nvim-0.8') == 0 then H.error('Tool "lua" of `grep` builtin needs Neovim>=0.8.') end
+H.grep_fallback_items = function(pattern, cwd)
+  if vim.fn.has('nvim-0.9') == 0 then H.error('Tool "fallback" of `grep` builtin needs Neovim>=0.8.') end
+  cwd = cwd or '.'
   local poke_picker = H.poke_picker_throttle()
   local f = function()
-    local files = {}
-    for path, path_type in vim.fs.dir('.', { depth = math.huge }) do
+    local files, files_full = {}, {}
+    for path, path_type in vim.fs.dir(cwd, { depth = math.huge }) do
       if not poke_picker() then return end
-      if path_type == 'file' and H.is_file_text(path) then table.insert(files, path) end
+      local path_full = string.format('%s/%s', cwd, path)
+      if path_type == 'file' and H.is_file_text(path_full) then
+        table.insert(files, path)
+        table.insert(files_full, path_full)
+      end
     end
 
     local items = {}
-    for _, path in ipairs(files) do
+    for i, path in ipairs(files_full) do
+      local file = files[i]
       if not poke_picker() then return end
       for lnum, l in ipairs(vim.fn.readfile(path)) do
         local col = string.find(l, pattern)
-        if col ~= nil then table.insert(items, string.format('%s:%d:%d:%s', path, lnum, col, l)) end
+        if col ~= nil then table.insert(items, string.format('%s:%d:%d:%s', file, lnum, col, l)) end
       end
     end
 
@@ -2307,6 +2315,14 @@ H.error = function(msg) error(string.format('(mini.pick) %s', msg), 0) end
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
 
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
+
+H.is_array_of = function(x, ref_type)
+  if not vim.tbl_islist(x) then return false end
+  for i = 1, #x do
+    if type(x[i]) ~= ref_type then return false end
+  end
+  return true
+end
 
 H.create_scratch_buf = function()
   local buf_id = vim.api.nvim_create_buf(false, true)
