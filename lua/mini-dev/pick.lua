@@ -606,12 +606,12 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
   local set_items_opts, spawn_opts = { do_match = false, querytick = H.querytick }, { cwd = opts.source.cwd }
   local process
   local match = function(_, _, query)
+    pcall(vim.loop.process_kill, process)
     if H.querytick == set_items_opts.querytick then return end
     if #query == 0 then return MiniPick.set_picker_items({}, set_items_opts) end
 
     set_items_opts.querytick = H.querytick
-    pcall(vim.loop.process_kill, process)
-    local command = H.grep_get_command('rg', table.concat(query))
+    local command = H.grep_get_command(tool, table.concat(query))
     process = MiniPick.set_picker_items_from_cli(command, { set_items_opts = set_items_opts, spawn_opts = spawn_opts })
   end
 
@@ -671,16 +671,17 @@ MiniPick.builtin.buffers = function(local_opts, opts)
   local show = H.get_config().source.show or H.show_with_icons
   local default_opts = { source = { name = 'Buffers', show = show } }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {}, { source = { items = items } })
-  MiniPick.start(opts)
+  return MiniPick.start(opts)
 end
 
 MiniPick.builtin.cli = function(local_opts, opts)
   local_opts = vim.tbl_deep_extend('force', { command = {}, postprocess = nil, spawn_opts = {} }, local_opts or {})
-  opts = vim.tbl_deep_extend('force', { source = { name = 'CLI output' } }, opts or {})
+  local name = string.format('CLI (%s)', tostring(local_opts.command[1] or ''))
+  opts = vim.tbl_deep_extend('force', { source = { name = name } }, opts or {})
+  local_opts.spawn_opts.cwd = local_opts.spawn_opts.cwd or opts.source.cwd
 
   local command = local_opts.command
   local set_from_cli_opts = { postprocess = local_opts.postprocess, spawn_opts = local_opts.spawn_opts }
-  set_from_cli_opts.spawn_opts.cwd = set_from_cli_opts.spawn_opts.cwd or opts.source.cwd
   opts.source.items = vim.schedule_wrap(function() MiniPick.set_picker_items_from_cli(command, set_from_cli_opts) end)
   return MiniPick.start(opts)
 end
@@ -747,7 +748,10 @@ MiniPick.get_picker_opts = function() return vim.deepcopy((H.pickers.active or {
 MiniPick.get_picker_state = function()
   if not MiniPick.is_picker_active() then return end
   local picker = H.pickers.active
-  return vim.deepcopy({ is_busy = picker.is_busy, buffers = picker.buffers, windows = picker.windows })
+  --stylua: ignore
+  return vim.deepcopy({
+    is_busy = picker.is_busy, buffers = picker.buffers, windows = picker.windows, caret = picker.caret
+  })
 end
 
 ---@seealso |MiniPick.set_picker_query()|
@@ -765,7 +769,8 @@ end
 
 ---@seealso |MiniPick.get_picker_items()|
 MiniPick.set_picker_items_from_cli = function(command, opts)
-  if not H.is_array_of(command, 'string') then H.error('`command` should be an array of strings.') end
+  local is_valid_command = H.is_array_of(command, 'string') and #command >= 1
+  if not is_valid_command then H.error('`command` should be an array of strings.') end
   if not MiniPick.is_picker_active() then return end
   local default_opts = { postprocess = H.cli_postprocess, set_items_opts = {}, spawn_opts = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
@@ -821,6 +826,7 @@ MiniPick.set_picker_query = function(query)
   if not MiniPick.is_picker_active() then return end
 
   H.pickers.active.query, H.pickers.active.caret = query, #query + 1
+  H.querytick = H.querytick + 1
   local all_inds = H.seq_along(MiniPick.get_picker_items())
   H.picker_set_match_inds(H.pickers.active, all_inds, query)
   H.picker_update(H.pickers.active, true)

@@ -3,6 +3,7 @@ _G.process_log = {}
 local n_pid, n_stdout = 0, 0
 local new_process = function(pid)
   return {
+    pid = pid,
     close = function(_) table.insert(_G.process_log, 'Process ' .. pid .. ' was closed.') end,
   }
 end
@@ -45,3 +46,5 @@ vim.loop.spawn = function(path, options, on_exit)
   local pid = 'Pid_' .. n_pid
   return new_process(pid), pid
 end
+
+vim.loop.process_kill = function(process) table.insert(_G.process_log, 'Process ' .. process.pid .. ' was killed.') end

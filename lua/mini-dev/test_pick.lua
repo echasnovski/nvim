@@ -56,6 +56,7 @@ local get_picker_matches = forward_lua('MiniPick.get_picker_matches')
 local get_picker_state = forward_lua('MiniPick.get_picker_state')
 local get_picker_query = forward_lua('MiniPick.get_picker_query')
 local set_picker_items = forward_lua('MiniPick.set_picker_items')
+local set_picker_query = forward_lua('MiniPick.set_picker_query')
 local is_picker_active = forward_lua('MiniPick.is_picker_active')
 
 -- Use `child.api_notify` to allow user input while child process awaits for
@@ -127,6 +128,8 @@ local mock_cli_return = function(items) mock_stdout_feed({ table.concat(items, '
 
 local get_spawn_log = function() return child.lua_get('_G.spawn_log') end
 
+local clear_spawn_log = function() child.lua('_G.spawn_log = {}') end
+
 local validate_spawn_log = function(ref, index)
   local present = get_spawn_log()
   if type(index) == 'number' then present = present[index] end
@@ -134,6 +137,8 @@ local validate_spawn_log = function(ref, index)
 end
 
 local get_process_log = function() return child.lua_get('_G.process_log') end
+
+local clear_process_log = function() child.lua('_G.process_log = {}') end
 
 -- Data =======================================================================
 local test_items = { 'a_b_c', 'abc', 'a_b_b', 'c_a_a', 'b_c_c' }
@@ -1992,7 +1997,7 @@ T['builtin.files()']['correctly chooses default tool'] = function()
 
     -- Cleanup
     type_keys('\3')
-    child.lua('_G.spawn_log = {}')
+    clear_spawn_log()
   end
 
   validate({ 'rg', 'fd', 'git' }, 'rg')
@@ -2014,7 +2019,7 @@ T['builtin.files()']['respects `local_opts.tool`'] = function()
 
     -- Cleanup
     type_keys('\3')
-    child.lua('_G.spawn_log = {}')
+    clear_spawn_log()
   end
 
   validate('rg', { '--files', '--hidden', '--no-follow' })
@@ -2062,7 +2067,7 @@ T['builtin.files()']['respects `opts.source.cwd` for cli spawn'] = function()
   builtin_files({}, { source = { cwd = test_dir } })
 
   local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p')
-  eq(child.lua_get('MiniPick.get_picker_opts().source.cwd'), test_dir_absolute)
+  validate_picker_option('source.cwd', test_dir_absolute)
   eq(get_spawn_log()[1].options.cwd, test_dir_absolute)
 end
 
@@ -2101,7 +2106,7 @@ T['builtin.grep()']['correctly chooses default tool'] = function()
 
     -- Cleanup
     type_keys('\3')
-    child.lua('_G.spawn_log = {}')
+    clear_spawn_log()
   end
 
   validate({ 'rg', 'git' }, 'rg')
@@ -2132,7 +2137,7 @@ T['builtin.grep()']['respects `local_opts.tool`'] = new_set({ parametrize = { { 
 
       -- Cleanup
       type_keys('\3')
-      child.lua('_G.spawn_log = {}')
+      clear_spawn_log()
     end
 
     validate('rg', { '--column', '--line-number', '--no-heading', '--hidden', '--smart-case', '--', 'test' })
@@ -2190,7 +2195,7 @@ T['builtin.grep()']['respects `opts.source.cwd` for cli spawn'] = function()
   builtin_grep({ pattern = 'b' }, { source = { cwd = test_dir } })
 
   local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p')
-  eq(child.lua_get('MiniPick.get_picker_opts().source.cwd'), test_dir_absolute)
+  validate_picker_option('source.cwd', test_dir_absolute)
   eq(get_spawn_log()[1].options.cwd, test_dir_absolute)
 end
 
@@ -2206,50 +2211,534 @@ end
 
 T['builtin.grep_live()'] = new_set({ hooks = { pre_case = mock_spawn } })
 
-T['builtin.grep_live()']['works'] = function() MiniTest.skip() end
+local builtin_grep_live = forward_lua_notify('MiniPick.builtin.grep_live')
 
-T['builtin.grep_live()']['correctly chooses default tool'] = function() MiniTest.skip() end
+local validate_last_grep_pattern = function(pattern)
+  local log = get_spawn_log()
+  local spawn_args = log[#log].options.args
+  eq({ spawn_args[#spawn_args - 1], spawn_args[#spawn_args] }, { '--', pattern })
+end
 
-T['builtin.grep_live()']['respects `local_opts.tool`'] = function() MiniTest.skip() end
+T['builtin.grep_live()']['works'] = function()
+  child.set_size(10, 70)
+  mock_fn_executable({ 'rg' })
+  local items = { real_file('a.lua') .. ':3:3:a', real_file('b.txt') .. ':1:1:b' }
 
-T['builtin.grep_live()']['respects `source.cwd`'] = function() MiniTest.skip() end
+  -- Should show no items for empty query
+  child.lua_notify([[_G.grep_live_item = MiniPick.builtin.grep_live()]])
+  eq(get_picker_items(), {})
 
-T['builtin.grep_live()']['respects `source.show` from config'] = function() MiniTest.skip() end
+  -- Should grep pattern after every query update
+  mock_cli_return(items)
+  type_keys('b')
+  eq(get_picker_items(), items)
+  validate_last_grep_pattern('b')
+
+  mock_cli_return({ items[2] })
+  type_keys('t')
+  eq(get_picker_items(), { items[2] })
+  validate_last_grep_pattern('bt')
+
+  -- Should use icons by default
+  child.expect_screenshot()
+
+  -- Should set correct name
+  validate_picker_option('source.name', 'Grep live (rg)')
+
+  -- Should return chosen value
+  type_keys('<CR>')
+  eq(child.lua_get('_G.grep_live_item'), items[2])
+end
+
+T['builtin.grep_live()']['always shows no items for empty query'] = function()
+  mock_fn_executable({ 'rg' })
+  local items = { real_file('a.lua') .. ':3:3:a', real_file('b.txt') .. ':1:1:b' }
+
+  -- Showing empty query should be done without extra spawn
+  mock_cli_return(items)
+  builtin_grep_live()
+  eq(get_picker_items(), {})
+  eq(#get_spawn_log(), 0)
+
+  mock_cli_return(items)
+  type_keys('b')
+  eq(get_picker_items(), items)
+  eq(#get_spawn_log(), 1)
+
+  mock_cli_return({ items[1] })
+  type_keys('<C-u>')
+  eq(get_picker_items(), {})
+  eq(#get_spawn_log(), 1)
+end
+
+T['builtin.grep_live()']['kills grep process on every non-empty query update'] = function()
+  mock_fn_executable({ 'rg' })
+  local items = { real_file('a.lua') .. ':3:3:a', real_file('b.txt') .. ':1:1:b' }
+
+  builtin_grep_live()
+  eq(get_process_log(), {})
+
+  mock_cli_return(items)
+  type_keys('b')
+  -- - No process to kill before making query non-empty
+  eq(get_process_log(), { 'Stdout Stdout_1 was closed.', 'Process Pid_1 was closed.' })
+  clear_process_log()
+
+  mock_cli_return({ items[2] })
+  type_keys('y')
+  --Stylua: ignore
+  eq(get_process_log(), { 'Process Pid_1 was killed.', 'Stdout Stdout_2 was closed.', 'Process Pid_2 was closed.' })
+  clear_process_log()
+
+  type_keys('<C-u>')
+  eq(get_process_log(), { 'Process Pid_2 was killed.' })
+end
+
+T['builtin.grep_live()']['works with programmatic query update'] = function()
+  mock_fn_executable({ 'rg' })
+  builtin_grep_live()
+
+  mock_cli_return({ real_file('b.txt') .. ':1:1:b' })
+  set_picker_query({ 'b', 't' })
+  validate_last_grep_pattern('bt')
+
+  set_picker_query({ 'ab', '', 'cd' })
+  validate_last_grep_pattern('abcd')
+end
+
+T['builtin.grep_live()']['correctly chooses default tool'] = function()
+  local validate = function(executables, ref_tool)
+    mock_fn_executable(executables)
+    mock_cli_return({ real_file('b.txt') .. ':3:3:b' })
+    builtin_grep_live()
+    type_keys('b')
+    eq(child.lua_get('_G.spawn_log[1].executable'), ref_tool)
+    validate_picker_option('source.name', string.format('Grep live (%s)', ref_tool))
+
+    -- Cleanup
+    type_keys('\3')
+    clear_spawn_log()
+  end
+
+  -- Needs executable non-fallback "grep" tool
+  validate({ 'rg', 'git' }, 'rg')
+  validate({ 'git' }, 'git')
+
+  mock_fn_executable({})
+  expect.error(function() child.lua('MiniPick.builtin.grep_live()') end, '`grep_live`.*non%-fallback')
+end
+
+T['builtin.grep_live()']['respects `local_opts.tool`'] = function()
+  local validate = function(tool, ref_args)
+    mock_fn_executable({ tool })
+    mock_cli_return({})
+    builtin_grep_live({ tool = tool })
+    type_keys('b')
+
+    local spawn_data = child.lua_get('_G.spawn_log[1]')
+    eq(spawn_data.executable, tool)
+
+    -- Tool should be called with proper arguments
+    validate_contains_all(spawn_data.options.args, ref_args)
+
+    -- Cleanup
+    type_keys('\3')
+    clear_spawn_log()
+  end
+
+  validate('rg', { '--column', '--line-number', '--no-heading', '--hidden', '--smart-case', '--', 'b' })
+  validate('git', { 'grep', '--column', '--line-number', '--', 'b' })
+
+  -- Should not accept "fallback" tool
+  mock_fn_executable({})
+  expect.error(
+    function() child.lua([[MiniPick.builtin.grep_live({ tool = 'fallback' })]]) end,
+    '`grep_live`.*non%-fallback'
+  )
+end
+
+T['builtin.grep_live()']['respects `source.show` from config'] = function()
+  child.set_size(10, 70)
+
+  -- A recommended way to disable icons
+  child.lua('MiniPick.config.source.show = MiniPick.default_show')
+  mock_fn_executable({ 'rg' })
+  builtin_grep_live()
+  mock_cli_return({ real_file('b.txt') .. ':1:1' })
+  type_keys('b')
+  child.expect_screenshot()
+end
+
+T['builtin.grep_live()']['respects `opts`'] = function()
+  mock_fn_executable({ 'rg' })
+  builtin_grep_live({}, { source = { name = 'My name' } })
+  validate_picker_option('source.name', 'My name')
+end
+
+T['builtin.grep_live()']['respects `opts.source.cwd` for cli spawn'] = function()
+  mock_fn_executable({ 'rg' })
+  builtin_grep_live({}, { source = { cwd = test_dir } })
+  mock_cli_return({ real_file('b.txt') .. ':1:1' })
+  type_keys('b')
+
+  local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p')
+  validate_picker_option('source.cwd', test_dir_absolute)
+  eq(get_spawn_log()[1].options.cwd, test_dir_absolute)
+end
 
 T['builtin.help()'] = new_set()
 
-T['builtin.help()']['works'] = function() MiniTest.skip() end
+local builtin_help = forward_lua_notify('MiniPick.builtin.help')
 
-T['builtin.help()']['can be properly aborted'] = function() MiniTest.skip() end
+T['builtin.help()']['works'] = function()
+  child.lua_notify('_G.help_item = MiniPick.builtin.help()')
+  child.expect_screenshot()
+
+  -- Should set correct name
+  validate_picker_option('source.name', 'Help')
+
+  -- Should return chosen value
+  local item = get_picker_matches().current
+  type_keys('<CR>')
+  eq(child.lua_get('_G.help_item'), item)
+
+  -- Should open help page as choosing
+  child.expect_screenshot()
+end
+
+T['builtin.help()']['has proper preview'] = function()
+  child.set_size(15, 80)
+
+  -- Shouldn't have side effects for serach pattern and `v:hlsearch`
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'aa', 'bb', 'aa' })
+  type_keys('/', 'aa', '<CR>')
+  child.cmd('let v:hlsearch=0')
+
+  builtin_help()
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  eq(child.v.hlsearch, 0)
+  eq(child.fn.getreg('/'), 'aa')
+end
+
+T['builtin.help()']['works for help tags with special characters'] = function()
+  child.set_size(15, 80)
+  builtin_help()
+  set_picker_query({ 'c_CTRL-K' })
+  type_keys('<Tab>')
+  child.expect_screenshot()
+end
+
+T['builtin.help()']['works when help window is alreay opened'] = function()
+  -- Open non-current help window
+  child.cmd('help')
+  child.cmd('wincmd w')
+
+  builtin_help()
+
+  -- Should open help in already opened help window (just like `:help`)
+  type_keys('<CR>')
+  child.expect_screenshot()
+  eq(#child.api.nvim_list_wins(), 2)
+end
+
+T['builtin.help()']['can be properly aborted'] = function()
+  builtin_help()
+  type_keys('\3')
+  eq(#child.api.nvim_list_wins(), 1)
+end
 
 T['builtin.help()']['handles consecutive applications'] = function()
-  -- - Works when "Open tag" -> "Open tag in same file".
-  MiniTest.skip()
+  builtin_help()
+  set_picker_query({ ':help' })
+  type_keys('<CR>')
+
+  builtin_help()
+  set_picker_query({ ':helpg' })
+  type_keys('<CR>')
+
+  child.expect_screenshot()
 end
 
-T['builtin.buffers()'] = new_set()
-
-T['builtin.buffers()']['works'] = function() MiniTest.skip() end
-
-T['builtin.buffers()']['preview does not trigger buffer events'] = function()
-  -- - Preview doesn't trigger `BufEnter` which might interfer with many
-  --   plugins (like `setup_auto_root()` from 'mini.misc').
-  MiniTest.skip()
+T['builtin.help()']['respects `opts`'] = function()
+  builtin_help({}, { source = { name = 'My name' } })
+  validate_picker_option('source.name', 'My name')
 end
 
-T['builtin.buffers()']['respects `source.show` from config'] = function() MiniTest.skip() end
+T['builtin.buffers()'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- Mock test buffers
+      child.cmd('edit ' .. real_file('b.txt'))
+      child.api.nvim_create_buf(true, false)
+      child.api.nvim_create_buf(false, true)
+      child.cmd('edit ' .. real_file('LICENSE'))
+    end,
+  },
+})
 
-T['builtin.cli()'] = new_set()
+local builtin_buffers = forward_lua_notify('MiniPick.builtin.buffers')
 
-T['builtin.cli()']['works'] = function() MiniTest.skip() end
+T['builtin.buffers()']['works'] = function()
+  child.set_size(10, 70)
 
-T['builtin.cli()']['respects `source.cwd`'] = function() MiniTest.skip() end
+  -- Should show no items for empty query
+  child.lua_notify([[_G.buffers_item = MiniPick.builtin.buffers()]])
+
+  -- Should use icons by default
+  child.expect_screenshot()
+
+  -- Should set correct name
+  validate_picker_option('source.name', 'Buffers')
+
+  -- Should return chosen value
+  local item = get_picker_matches().current
+  type_keys('<CR>')
+  eq(child.lua_get('_G.buffers_item'), item)
+end
+
+T['builtin.buffers()']['respects `local_opts.include_current`'] = function()
+  child.set_size(10, 70)
+  builtin_buffers({ include_current = false })
+  child.expect_screenshot()
+end
+
+T['builtin.buffers()']['respects `local_opts.include_unlisted`'] = function()
+  builtin_buffers({ include_unlisted = true })
+  child.expect_screenshot()
+end
+
+T['builtin.buffers()']['respects `source.show` from config'] = function()
+  -- A recommended way to disable icons
+  child.lua('MiniPick.config.source.show = MiniPick.default_show')
+  builtin_buffers()
+  child.expect_screenshot()
+end
+
+T['builtin.buffers()']['respects `opts`'] = function()
+  builtin_buffers({}, { source = { name = 'My name' } })
+  validate_picker_option('source.name', 'My name')
+end
+
+T['builtin.cli()'] = new_set({ hooks = { pre_case = mock_spawn } })
+
+local builtin_cli = forward_lua_notify('MiniPick.builtin.cli')
+
+T['builtin.cli()']['works'] = function()
+  mock_cli_return({ 'aa', 'bb' })
+  child.lua_notify([[_G.cli_item = MiniPick.builtin.cli({ command = { 'echo', 'xx\nyy' } })]])
+
+  -- - Sleep as items are set inside `schedule_wrap`ed function
+  sleep(1)
+  eq(get_picker_items(), { 'aa', 'bb' })
+
+  -- Should set correct name
+  validate_picker_option('source.name', 'CLI (echo)')
+
+  -- Should return chosen value
+  type_keys('<CR>')
+  eq(child.lua_get('_G.cli_item'), 'aa')
+end
+
+T['builtin.cli()']['respects `local_opts.postprocess`'] = function()
+  mock_cli_return({ 'aa', 'bb' })
+  child.lua([[_G.postprocess = function(...) _G.args = { ... }; return { 'x', 'y', 'z' } end]])
+  child.lua_notify([[MiniPick.builtin.cli({ command = { 'echo', 'xx\nyy' }, postprocess = postprocess })]])
+  sleep(1)
+  eq(child.lua_get('_G.args'), { { 'aa', 'bb' } })
+  eq(get_picker_items(), { 'x', 'y', 'z' })
+end
+
+T['builtin.cli()']['respects `local_opts.spawn_opts`'] = function()
+  builtin_cli({ command = { 'echo', 'aa\nbb' }, spawn_opts = { env = { AAA = 'xxx' } } })
+  eq(get_spawn_log()[1].options, { args = { 'aa\nbb' }, env = { AAA = 'xxx' } })
+end
+
+T['builtin.cli()']['respects `opts.source.cwd` for cli spawn'] = function()
+  local command = { 'echo', 'aa\nbb' }
+  local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p')
+
+  local validate = function(local_opts, opts, ref_cwd, source_cwd)
+    builtin_cli(local_opts, opts)
+    validate_picker_option('source.cwd', source_cwd or ref_cwd)
+    eq(get_spawn_log()[1].options.cwd, ref_cwd)
+
+    -- Cleanup
+    type_keys('\3')
+    clear_spawn_log()
+  end
+
+  -- Should use it as `spawn_opts.cwd` if it is not present
+  validate({ command = command }, { source = { cwd = test_dir } }, test_dir_absolute)
+  validate(
+    { command = command, spawn_opts = { cwd = real_files_dir } },
+    { source = { cwd = test_dir } },
+    vim.fn.fnamemodify(real_files_dir, ':p'),
+    test_dir_absolute
+  )
+end
+
+T['builtin.cli()']['respects `opts`'] = function()
+  builtin_cli({}, { source = { name = 'My name' } })
+  validate_picker_option('source.name', 'My name')
+end
 
 T['builtin.resume()'] = new_set()
 
-T['builtin.resume()']['works'] = function() MiniTest.skip() end
+local builtin_resume = forward_lua_notify('MiniPick.builtin.resume')
 
-T['builtin.resume()']['can be called consecutively'] = function() MiniTest.skip() end
+T['builtin.resume()']['works'] = function()
+  local items = { 'aa', 'bb', 'cc' }
+  start_with_items(items)
+  type_keys('a')
+  eq(get_picker_matches().all, { 'aa' })
+  type_keys('<CR>')
+
+  -- Should trigger `MiniPickStart` user event
+  child.cmd('au User MiniPickStart lua _G.n_pick_start = (_G.n_pick_start or 0) + 1')
+  child.lua_notify('_G.resume_item = MiniPick.builtin.resume()')
+  eq(child.lua_get('_G.n_pick_start'), 1)
+
+  -- Should preserve as much as state as possible from latest picker
+  child.expect_screenshot()
+  eq(get_picker_items(), items)
+  eq(get_picker_matches().all, { 'aa' })
+  eq(get_picker_query(), { 'a' })
+
+  type_keys('<C-u>')
+  eq(get_picker_matches().all, items)
+  type_keys('b')
+  eq(get_picker_matches().all, { 'bb' })
+
+  -- Should return value
+  type_keys('<CR>')
+  eq(child.lua_get('_G.resume_item'), 'bb')
+end
+
+T['builtin.resume()']['can be called after previous picker was aborted'] = function()
+  start_with_items({ 'aa', 'bb' })
+  type_keys('a', '\3')
+
+  builtin_resume()
+  eq(get_picker_query(), { 'a' })
+  eq(get_picker_matches().all, { 'aa' })
+  eq(get_picker_items(), { 'aa', 'bb' })
+end
+
+T['builtin.resume()']['preserves query cache'] = function()
+  child.lua('_G.match_n_calls = 0')
+  local validate_calls = function(n_calls_ref, match_items_ref)
+    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
+    eq(get_picker_matches().all, match_items_ref)
+  end
+
+  child.lua_notify([[MiniPick.start({
+    source = {
+      items = { 'a', 'b', 'bb' },
+      match = function(...)
+        _G.match_n_calls = _G.match_n_calls + 1
+        return MiniPick.default_match(...)
+      end,
+    },
+    options = { use_cache = true },
+  })]])
+  validate_calls(0, { 'a', 'b', 'bb' })
+
+  type_keys('b')
+  validate_calls(1, { 'b', 'bb' })
+
+  type_keys('b')
+  validate_calls(2, { 'bb' })
+
+  -- Close and resume
+  type_keys('\3')
+  builtin_resume()
+  validate_calls(2, { 'bb' })
+
+  type_keys('<BS>')
+  validate_calls(2, { 'b', 'bb' })
+
+  type_keys('<BS>')
+  validate_calls(2, { 'a', 'b', 'bb' })
+end
+
+T['builtin.resume()']['recomputes target window'] = function()
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.cmd('botright wincmd v')
+  local win_id_2 = child.api.nvim_get_current_win()
+  child.api.nvim_set_current_win(win_id_1)
+
+  start_with_items({ 'a' })
+  eq(get_picker_state().windows.target, win_id_1)
+  type_keys('\3')
+
+  child.api.nvim_set_current_win(win_id_2)
+  builtin_resume()
+  eq(get_picker_state().windows.target, win_id_2)
+end
+
+T['builtin.resume()']['can be called consecutively'] = function()
+  local validate = function(query, matches, items)
+    eq(get_picker_query(), query)
+    eq(get_picker_matches().all, matches)
+    eq(get_picker_items(), items)
+  end
+
+  start_with_items({ 'aa', 'bb' })
+  type_keys('a')
+  validate({ 'a' }, { 'aa' }, { 'aa', 'bb' })
+  type_keys('\3')
+
+  builtin_resume()
+  type_keys('<C-u>', 'b')
+  validate({ 'b' }, { 'bb' }, { 'aa', 'bb' })
+  type_keys('\3')
+
+  builtin_resume()
+  type_keys('b')
+  validate({ 'b', 'b' }, { 'bb' }, { 'aa', 'bb' })
+  type_keys('\3')
+end
+
+T['builtin.resume()']['validates if no picker was previously called'] = function()
+  expect.error(function() child.lua('MiniPick.builtin.resume()') end, 'no picker to resume')
+end
+
+T['registry'] = new_set()
+
+T['registry']['works'] = function()
+  eq(child.lua_get('type(MiniPick.registry)'), 'table')
+
+  -- All methods from `builtin` should be present
+  local builtin_methods = child.lua_get('vim.tbl_keys(MiniPick.builtin)')
+  table.sort(builtin_methods)
+  local registry_methods = child.lua_get('vim.tbl_keys(MiniPick.registry)')
+  table.sort(registry_methods)
+  eq(builtin_methods, registry_methods)
+
+  local actual_types = child.lua_get('vim.tbl_map(type, MiniPick.registry)')
+  local ref_types = {}
+  for _, key in ipairs(builtin_methods) do
+    ref_types[key] = 'function'
+  end
+  eq(actual_types, ref_types)
+end
+
+T['registry']['should contain values from `MiniExtra.pickers` if present'] = function()
+  unload_module()
+  child.lua([[package.loaded['mini-dev.pick'] = nil]])
+
+  child.lua('_G.MiniExtra = { pickers = { miniextra_method = function() end } }')
+  load_module()
+  eq(child.lua_get('type(MiniPick.registry.miniextra_method)'), 'function')
+end
+
+T['registry']['is not reloaded in `setup()`'] = function()
+  child.lua([[MiniPick.registry.custom = function() end]])
+  child.lua([[require('mini-dev.pick').setup()]])
+  eq(child.lua_get('type(MiniPick.registry.custom)'), 'function')
+end
 
 T['get_picker_items()'] = new_set()
 
@@ -2324,7 +2813,9 @@ local set_picker_items_from_cli = function(...)
   -- Work around tuples and callables being not transferrable through RPC
   local tuple = child.lua(
     [[local process, pid = MiniPick.set_picker_items_from_cli(...)
-      return { vim.tbl_keys(process), pid }]],
+      local process_keys = vim.tbl_keys(process)
+      table.sort(process_keys)
+      return { process_keys, pid }]],
     { ... }
   )
   return unpack(tuple)
@@ -2347,14 +2838,14 @@ T['set_picker_items_from_cli()']['works'] = function()
   eq(get_process_log(), { 'Stdout Stdout_1 was closed.', 'Process Pid_1 was closed.' })
 
   -- Should return proper data
-  eq(process_keys, { 'close' })
+  eq(process_keys, { 'close', 'pid' })
   eq(pid, 'Pid_1')
 end
 
 T['set_picker_items_from_cli()']['can override items'] = function()
   start_with_items({ 'a', 'b', 'c' })
   mock_stdout_feed({ 'd\ne\nf' })
-  set_picker_items_from_cli({})
+  set_picker_items_from_cli({ 'echo' })
   eq(get_picker_items(), { 'd', 'e', 'f' })
 end
 
@@ -2433,6 +2924,7 @@ end
 
 T['set_picker_items_from_cli()']['validates arguments'] = function()
   expect.error(function() set_picker_items_from_cli(1) end, '`command`.*array of strings')
+  expect.error(function() set_picker_items_from_cli({}) end, '`command`.*array of strings')
   expect.error(function() set_picker_items_from_cli({ 'a', 2, 'c' }) end, '`command`.*array of strings')
 end
 
