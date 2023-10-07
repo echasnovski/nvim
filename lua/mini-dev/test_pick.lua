@@ -43,6 +43,15 @@ end
 
 local real_file = function(basename) return join_path(real_files_dir, basename) end
 
+local setup_windows_pair = function()
+  child.cmd('botright wincmd v')
+  local win_id_1 = child.api.nvim_get_current_win()
+  child.cmd('wincmd h')
+  local win_id_2 = child.api.nvim_get_current_win()
+  child.api.nvim_set_current_win(win_id_1)
+  return win_id_1, win_id_2
+end
+
 -- Common test wrappers
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
@@ -62,6 +71,7 @@ local get_picker_state = forward_lua('MiniPick.get_picker_state')
 local get_picker_query = forward_lua('MiniPick.get_picker_query')
 local set_picker_items = forward_lua('MiniPick.set_picker_items')
 local set_picker_query = forward_lua('MiniPick.set_picker_query')
+local get_querytick = forward_lua('MiniPick.get_querytick')
 local is_picker_active = forward_lua('MiniPick.is_picker_active')
 
 -- Use `child.api_notify` to allow user input while child process awaits for
@@ -503,7 +513,9 @@ T['start()']['respects `source.cwd`'] = function()
     vim.inspect(test_dir)
   )
   child.lua_notify(lua_cmd)
-  eq(get_picker_stritems(), { full_path(test_dir) })
+  local actual_cwd = get_picker_stritems()[1]
+  eq(actual_cwd, full_path(test_dir))
+  eq(actual_cwd:find('/$'), nil)
 end
 
 T['start()']['respects `source.match`'] = function()
@@ -1437,16 +1449,12 @@ T['default_choose()']['works'] = function()
 end
 
 T['default_choose()']['respects picker target window'] = function()
-  child.cmd('botright wincmd v')
+  local win_id_1, win_id_2 = setup_windows_pair()
   local buf_id_1 = child.api.nvim_create_buf(false, true)
-  local win_id_1 = child.api.nvim_get_current_win()
   child.api.nvim_win_set_buf(win_id_1, buf_id_1)
-  child.cmd('wincmd h')
   local buf_id_2 = child.api.nvim_create_buf(false, true)
-  local win_id_2 = child.api.nvim_get_current_win()
   child.api.nvim_win_set_buf(win_id_2, buf_id_2)
 
-  child.api.nvim_set_current_win(win_id_1)
   local path = real_file('b.txt')
   start_with_items({ path })
   child.lua(string.format('MiniPick.set_picker_target_window(%d)', win_id_2))
@@ -1459,12 +1467,7 @@ T['default_choose()']['respects picker target window'] = function()
 end
 
 T['default_choose()']['works without active picker'] = function()
-  child.cmd('botright wincmd v')
-  local win_id_1 = child.api.nvim_get_current_win()
-  child.cmd('wincmd h')
-  local win_id_2 = child.api.nvim_get_current_win()
-
-  child.api.nvim_set_current_win(win_id_1)
+  local win_id_1, win_id_2 = setup_windows_pair()
   local path = real_file('b.txt')
   default_choose(path)
 
@@ -1873,10 +1876,7 @@ T['default_choose_marked()']['respects `opts.list_type`'] = function()
 end
 
 T['default_choose_marked()']['ensures valid target window for location list'] = function()
-  local win_id_1 = child.api.nvim_get_current_win()
-  child.cmd('botright wincmd v')
-  local win_id_2 = child.api.nvim_get_current_win()
-  child.api.nvim_set_current_win(win_id_1)
+  local win_id_1, win_id_2 = setup_windows_pair()
 
   local buf_id = child.api.nvim_create_buf(true, false)
   child.lua([[MiniPick.config.source.choose_marked = function(items)
@@ -1915,10 +1915,7 @@ T['ui_select()']['calls `on_choice(nil)` in case of abort'] = function()
 end
 
 T['ui_select()']['preserves target window after `on_choice`'] = function()
-  local win_id_1 = child.api.nvim_get_current_win()
-  child.cmd('botright wincmd v')
-  local win_id_2 = child.api.nvim_get_current_win()
-  child.api.nvim_set_current_win(win_id_1)
+  local _, win_id_2 = setup_windows_pair()
 
   local on_choice_str = string.format('function() vim.api.nvim_set_current_win(%d) end', win_id_2)
   ui_select({ -1, -2 }, {}, on_choice_str)
@@ -2669,10 +2666,7 @@ T['builtin.resume()']['preserves query cache'] = function()
 end
 
 T['builtin.resume()']['recomputes target window'] = function()
-  local win_id_1 = child.api.nvim_get_current_win()
-  child.cmd('botright wincmd v')
-  local win_id_2 = child.api.nvim_get_current_win()
-  child.api.nvim_set_current_win(win_id_1)
+  local win_id_1, win_id_2 = setup_windows_pair()
 
   start_with_items({ 'a' })
   eq(get_picker_state().windows.target, win_id_1)
@@ -2747,45 +2741,408 @@ end
 
 T['get_picker_items()'] = new_set()
 
-T['get_picker_items()']['works'] = function() MiniTest.skip() end
+T['get_picker_items()']['works'] = function()
+  local items = { 'aa', { text = 'bb' } }
+  start_with_items(items)
+  child.lua('_G.res = MiniPick.get_picker_items()')
+  eq(child.lua_get('_G.res'), items)
 
-T['get_picker_items()']['can be called without active picker'] = function() MiniTest.skip() end
+  -- Returns copy
+  child.lua([[_G.res[2].text = 'xx']])
+  eq(child.lua_get('MiniPick.get_picker_items()'), items)
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(get_picker_items(), vim.NIL)
+end
+
+T['get_picker_items()']['handles callables'] = function()
+  -- Should return actual `items` after global callable expansion
+  child.lua_notify([[MiniPick.start({ source = { items = function() return { 'aa' } end } })]])
+  eq(get_picker_items(), { 'aa' })
+  type_keys('\3')
+
+  -- Should not expand callable item
+  child.lua_notify([[MiniPick.start({ source = { items = { function() return 'aa' end } } })]])
+  eq(child.lua_get('type(MiniPick.get_picker_items()[1])'), 'function')
+end
 
 T['get_picker_stritems()'] = new_set()
 
-T['get_picker_stritems()']['works'] = function() MiniTest.skip() end
+T['get_picker_stritems()']['works'] = function()
+  local items, stritems = { 'aa', { text = 'bb' } }, { 'aa', 'bb' }
+  start_with_items(items)
+  child.lua('_G.res = MiniPick.get_picker_stritems()')
+  eq(child.lua_get('_G.res'), stritems)
 
-T['get_picker_stritems()']['can be called without active picker'] = function() MiniTest.skip() end
+  -- Returns copy
+  child.lua([[_G.res[2] = 'xx']])
+  eq(child.lua_get('MiniPick.get_picker_stritems()'), stritems)
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(get_picker_stritems(), vim.NIL)
+end
+
+T['get_picker_stritems()']['handles callables'] = function()
+  -- Should always return array of strings
+  child.lua_notify([[MiniPick.start({ source = { items = function() return { 'aa' } end } })]])
+  eq(get_picker_stritems(), { 'aa' })
+  type_keys('\3')
+
+  child.lua_notify([[MiniPick.start({ source = { items = { function() return 'aa' end } } })]])
+  eq(get_picker_stritems(), { 'aa' })
+end
 
 T['get_picker_matches()'] = new_set()
 
-T['get_picker_matches()']['works'] = function() MiniTest.skip() end
+T['get_picker_matches()']['works'] = function()
+  local items = { { text = 'aa' }, 'bb', 'cc' }
+  start_with_items(items)
+  child.lua('_G.res = MiniPick.get_picker_matches()')
 
-T['get_picker_matches()']['can be called without active picker'] = function() MiniTest.skip() end
+  local ref =
+    { all = items, all_inds = { 1, 2, 3 }, current = items[1], current_ind = 1, marked = {}, marked_inds = {} }
+  eq(child.lua_get('_G.res'), ref)
+
+  -- Returns copy
+  child.lua([[_G.res.all[1], _G.res.all_inds[1] = 'xx', 100]])
+  child.lua([[_G.res.current, _G.res.current_ind = 'yy', 200]])
+  child.lua([[_G.res.marked[1], _G.res.marked_inds[1] = 'tt', 300]])
+  eq(get_picker_matches(), ref)
+end
+
+T['get_picker_matches()']['reacts to change in all matches'] = function()
+  local validate = function(ref_all, ref_all_inds)
+    local matches = get_picker_matches()
+    eq(matches.all, ref_all)
+    eq(matches.all_inds, ref_all_inds)
+  end
+
+  local items = { 'a', 'bb', 'b' }
+  start_with_items(items)
+  validate(items, { 1, 2, 3 })
+
+  type_keys('b')
+  validate({ 'bb', 'b' }, { 2, 3 })
+
+  type_keys('b')
+  validate({ 'bb' }, { 2 })
+
+  type_keys('x')
+  validate({}, {})
+end
+
+T['get_picker_matches()']['reacts to change in current match'] = function()
+  local validate = function(ref_current, ref_current_ind)
+    local matches = get_picker_matches()
+    eq(matches.current, ref_current)
+    eq(matches.current_ind, ref_current_ind)
+  end
+
+  local items = { 'a', 'b', 'c' }
+  start_with_items(items)
+  validate(items[1], 1)
+
+  type_keys('<C-n>')
+  validate(items[2], 2)
+
+  type_keys('<C-p>')
+  validate(items[1], 1)
+end
+
+T['get_picker_matches()']['reacts to change in marked matches'] = function()
+  local validate = function(ref_marked, ref_marked_inds)
+    local matches = get_picker_matches()
+    eq(matches.marked, ref_marked)
+    eq(matches.marked_inds, ref_marked_inds)
+  end
+
+  local items = { 'a', 'b', 'c' }
+  start_with_items(items)
+  validate({}, {})
+
+  type_keys('<C-x>')
+  validate({ items[1] }, { 1 })
+
+  type_keys('<C-n>', '<C-n>', '<C-x>')
+  validate({ items[1], items[3] }, { 1, 3 })
+end
+
+T['get_picker_matches()']['handles no matches'] = function()
+  -- When no active picker
+  eq(get_picker_matches(), vim.NIL)
+
+  -- When no items were set
+  start_with_items()
+  eq(get_picker_items(), vim.NIL)
+  eq(get_picker_matches(), {})
+
+  -- When `items` is empty table
+  set_picker_items({})
+  eq(get_picker_items(), {})
+  eq(get_picker_matches(), {})
+end
 
 T['get_picker_opts()'] = new_set()
 
-T['get_picker_opts()']['works'] = function() MiniTest.skip() end
+T['get_picker_opts()']['works'] = function()
+  child.lua('MiniPick.config.window.config = { col = 2 }')
+  child.lua('_G.choose = function(item) print(item) end')
+  child.lua_notify([[MiniPick.start({ source = { items = { 'a', 'b' }, name = 'My name', choose = _G.choose } })]])
 
-T['get_picker_opts()']['can be called without active picker'] = function() MiniTest.skip() end
+  child.lua([[_G.res = MiniPick.get_picker_opts()]])
+
+  local validate_as_config = function(field)
+    local lua_cmd = string.format('vim.deep_equal(_G.res.%s, MiniPick.config.%s)', field, field)
+    eq(child.lua_get(lua_cmd), true)
+  end
+
+  validate_as_config('delay')
+  validate_as_config('mappings')
+  validate_as_config('options')
+  validate_as_config('config')
+
+  -- - Not supplied `source` callables chould be inferred
+  eq(child.lua_get('_G.res.source.items'), { 'a', 'b' })
+  eq(child.lua_get('_G.res.source.name'), 'My name')
+  eq(child.lua_get('_G.res.source.cwd'), full_path(child.fn.getcwd()))
+
+  eq(child.lua_get('_G.res.source.match == MiniPick.default_match'), true)
+  eq(child.lua_get('_G.res.source.show == MiniPick.default_show'), true)
+  eq(child.lua_get('_G.res.source.preview == MiniPick.default_preview'), true)
+  eq(child.lua_get('_G.res.source.choose == _G.choose'), true)
+  eq(child.lua_get('_G.res.source.choose_marked == MiniPick.default_choose_marked'), true)
+
+  -- Returns copy
+  child.lua([[_G.res.delay.busy, _G.res.source.name = -10, 'Hello']])
+  child.lua('_G.opts_2 = MiniPick.get_picker_opts()')
+  eq(child.lua_get('_G.opts_2.delay.busy == MiniPick.config.delay.busy'), true)
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(child.lua_get('MiniPick.get_picker_opts()'), vim.NIL)
+end
 
 T['get_picker_state()'] = new_set()
 
-T['get_picker_state()']['works'] = function() MiniTest.skip() end
+T['get_picker_state()']['works'] = function()
+  local items = { { text = 'aa' }, 'bb', 'cc' }
+  start_with_items(items)
+  child.lua('_G.res = MiniPick.get_picker_state()')
+  local res = child.lua_get('_G.res')
 
-T['get_picker_state()']['can be called without active picker'] = function() MiniTest.skip() end
+  eq(child.api.nvim_buf_is_valid(res.buffers.main), true)
+  eq(child.api.nvim_win_is_valid(res.windows.main), true)
+  eq(child.api.nvim_win_is_valid(res.windows.target), true)
+  eq(res.caret, 1)
+  eq(res.is_busy, false)
+
+  -- Returns copy
+  child.lua([[_G.res.buffers.main, _G.res.windows.main = -100, -101]])
+  local state = get_picker_state()
+  eq(child.api.nvim_buf_is_valid(state.buffers.main), true)
+  eq(child.api.nvim_win_is_valid(state.windows.main), true)
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(get_picker_state(), vim.NIL)
+end
+
+T['get_picker_state()']['reacts to creation of preview and info views'] = function()
+  local validate = function(ref)
+    local actual = vim.tbl_map(function(x)
+      if x == nil then return nil end
+      return child.api.nvim_buf_is_valid(x)
+    end, get_picker_state().buffers)
+    eq(actual, ref)
+  end
+
+  start_with_items({ 'a', 'b', 'c' })
+  validate({ main = true, preview = nil, info = nil })
+
+  type_keys('<Tab>')
+  validate({ main = true, preview = true, info = nil })
+
+  type_keys('<S-Tab>')
+  -- - Preview buffers have 'bufhidden' set to 'wipe', so become not valid
+  validate({ main = true, preview = false, info = true })
+
+  type_keys('<Tab>')
+  -- - Info buffers are persistent during picker session
+  validate({ main = true, preview = true, info = true })
+end
+
+T['get_picker_state()']['reacts to change in target window'] = function()
+  local win_id_1, win_id_2 = setup_windows_pair()
+
+  start_with_items()
+  eq(get_picker_state().windows.target, win_id_1)
+
+  child.lua(string.format('MiniPick.set_picker_target_window(%d)', win_id_2))
+  eq(get_picker_state().windows.target, win_id_2)
+end
+
+T['get_picker_state()']['properly detects when picker is busy'] = function()
+  child.lua([[_G.match_defer = function()
+    local f = function()
+      local co = coroutine.running()
+      vim.defer_fn(function() coroutine.resume(co) end, 10)
+      coroutine.yield()
+
+      MiniPick.set_picker_match_inds({ 1 })
+    end
+
+    coroutine.resume(coroutine.create(f))
+  end]])
+  child.lua_notify('MiniPick.start({ source = { match = match_defer } })')
+
+  -- Between starting picker and first setting items
+  eq(get_picker_state().is_busy, true)
+  set_picker_items({ 'a', 'b' }, { do_match = false })
+  eq(get_picker_state().is_busy, false)
+
+  -- Between starting match and displaying its results
+  type_keys('a')
+  eq(get_picker_state().is_busy, true)
+  sleep(10 + 10)
+  eq(get_picker_state().is_busy, false)
+end
+
+T['get_picker_state()']['reacts to caret update'] = function()
+  start_with_items({ 'a', 'b', 'bb' })
+  eq(get_picker_state().caret, 1)
+
+  type_keys('abc')
+  eq(get_picker_state().caret, 4)
+
+  type_keys('<Left>')
+  eq(get_picker_state().caret, 3)
+
+  type_keys('<BS>')
+  eq(get_picker_state().caret, 2)
+end
 
 T['get_picker_query()'] = new_set()
 
-T['get_picker_query()']['works'] = function() MiniTest.skip() end
+T['get_picker_query()']['works'] = function()
+  start_with_items()
+  child.lua('_G.res = MiniPick.get_picker_query()')
+  eq(child.lua_get('_G.res'), {})
 
-T['get_picker_query()']['can be called without active picker'] = function() MiniTest.skip() end
+  -- Returns copy
+  child.lua([[_G.res[1] = 'a']])
+  eq(get_picker_query(), {})
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(get_picker_query(), vim.NIL)
+end
+
+T['get_picker_query()']['reacts to query update'] = function()
+  local items = { 'a', 'b', 'bb' }
+  start_with_items(items)
+
+  -- Manual
+  eq(get_picker_query(), {})
+  type_keys('b')
+  eq(get_picker_query(), { 'b' })
+  type_keys('b')
+  eq(get_picker_query(), { 'b', 'b' })
+  type_keys('b')
+  eq(get_picker_query(), { 'b', 'b', 'b' })
+  type_keys('<BS>')
+  eq(get_picker_query(), { 'b', 'b' })
+  type_keys('<C-u>')
+  eq(get_picker_query(), {})
+
+  -- Programmatic
+  set_picker_query({ 'aa', 'bb' })
+  eq(get_picker_query(), { 'aa', 'bb' })
+end
 
 T['set_picker_items()'] = new_set()
 
-T['set_picker_items()']['works'] = function() MiniTest.skip() end
+local set_picker_items = forward_lua('MiniPick.set_picker_items')
 
-T['set_picker_items()']['can be called without active picker'] = function() MiniTest.skip() end
+T['set_picker_items()']['works'] = function()
+  start_with_items()
+  set_picker_items({ 'a', 'b' })
+  eq(get_picker_items(), { 'a', 'b' })
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(get_picker_query(), vim.NIL)
+end
+
+T['set_picker_items()']['resets match inds prior to matching'] = function()
+  start_with_items({ 'a', 'b', 'bb' })
+  type_keys('b')
+  eq(get_picker_matches().all_inds, { 2, 3 })
+
+  set_picker_items({ 'b', 'bb', 'a' })
+  eq(get_picker_matches().all_inds, { 1, 2 })
+end
+
+T['set_picker_items()']['resets marked inds'] = function()
+  start_with_items({ 'a', 'b', 'bb' })
+  type_keys('<C-x>', '<C-n>', '<C-x>')
+  eq(get_picker_matches().marked_inds, { 1, 2 })
+
+  set_picker_items({ 'a', 'b', 'bb' })
+  eq(get_picker_matches().marked_inds, {})
+end
+
+T['set_picker_items()']['resets query cache'] = function()
+  child.lua_notify([[MiniPick.start({ source = { items = { 'a', 'b' } }, options = { use_cache = true } })]])
+  type_keys('a')
+  eq(get_picker_matches().all_inds, { 1 })
+  type_keys('<BS>')
+
+  set_picker_items({ 'x', 'a', 'aa' })
+  type_keys('a')
+  eq(get_picker_matches().all_inds, { 2, 3 })
+end
+
+T['set_picker_items()']['respects `opts.do_match`'] = function()
+  child.lua('_G.match_n_calls = 0')
+  local validate_calls = function(n_calls_ref) eq(child.lua_get('_G.match_n_calls'), n_calls_ref) end
+
+  child.lua_notify([[MiniPick.start({
+    source = {
+      match = function(...)
+        _G.match_n_calls = _G.match_n_calls + 1
+        return MiniPick.default_match(...)
+      end,
+    },
+  })]])
+  validate_calls(0)
+
+  set_picker_items({ 'a', 'b' }, { do_match = false })
+  validate_calls(0)
+
+  type_keys('a')
+  validate_calls(1)
+
+  set_picker_items({ 'aa', 'bb' }, { do_match = false })
+  validate_calls(1)
+end
+
+T['set_picker_items()']['respects `opts.querytick`'] = function()
+  -- Should check every `delay.async` milliseconds if global querytick is the
+  -- same as supplied. If not - abort without setting items.
+  child.lua('MiniPick.config.delay.async = 1')
+
+  start_with_items()
+  set_picker_items(many_items, { querytick = -1 })
+  eq(get_picker_items(), vim.NIL)
+end
 
 T['set_picker_items()']['does not block picker'] = function()
   child.lua([[
@@ -2810,6 +3167,11 @@ T['set_picker_items()']['does not block picker'] = function()
   sleep(1)
   stop()
   eq(child.lua_get('_G.log'), { { is_busy = true, items_type = 'nil' } })
+end
+
+T['set_picker_items()']['validates arguments'] = function()
+  start_with_items()
+  expect.error(function() set_picker_items(1) end, '`items`.*array')
 end
 
 T['set_picker_items_from_cli()'] = new_set({ hooks = { pre_case = mock_spawn } })
@@ -2928,6 +3290,7 @@ T['set_picker_items_from_cli()']['forces absolute path of `opts.spawn_opts.cwd`'
 end
 
 T['set_picker_items_from_cli()']['validates arguments'] = function()
+  start_with_items()
   expect.error(function() set_picker_items_from_cli(1) end, '`command`.*array of strings')
   expect.error(function() set_picker_items_from_cli({}) end, '`command`.*array of strings')
   expect.error(function() set_picker_items_from_cli({ 'a', 2, 'c' }) end, '`command`.*array of strings')
@@ -2935,39 +3298,295 @@ end
 
 T['set_picker_match_inds()'] = new_set()
 
-T['set_picker_match_inds()']['works'] = function() MiniTest.skip() end
+local set_picker_match_inds = forward_lua('MiniPick.set_picker_match_inds')
 
-T['set_picker_match_inds()']['can be called without active picker'] = function() MiniTest.skip() end
+T['set_picker_match_inds()']['works'] = function()
+  child.lua_notify([[MiniPick.start({
+    source = {
+      items = { 'a', 'b', 'bb' },
+      match = function() MiniPick.set_picker_match_inds({ 2 }) end,
+    },
+  })]])
+  child.expect_screenshot()
+  eq(get_picker_matches().all_inds, { 2 })
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(set_picker_match_inds({ 1 }), vim.NIL)
+end
+
+T['set_picker_match_inds()']['updates cache'] = function()
+  child.lua('_G.match_n_calls = 0')
+  local validate_calls = function(n_calls_ref, match_items_ref)
+    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
+    eq(get_picker_matches().all, match_items_ref)
+  end
+
+  child.lua_notify([[MiniPick.start({
+    source = {
+      items = { 'a', 'b', 'bb' },
+      match = function(...)
+        _G.match_n_calls = _G.match_n_calls + 1
+        return MiniPick.default_match(...)
+      end,
+    },
+    options = { use_cache = true },
+  })]])
+  validate_calls(0, { 'a', 'b', 'bb' })
+
+  type_keys('a')
+  validate_calls(1, { 'a' })
+  eq(get_picker_matches().all_inds, { 1 })
+
+  -- - Setting match inds should not trigger `source.match`
+  set_picker_match_inds({ 2, 3 })
+  validate_calls(1, { 'b', 'bb' })
+
+  type_keys('<BS>')
+  validate_calls(1, { 'a', 'b', 'bb' })
+
+  type_keys('a')
+  validate_calls(1, { 'b', 'bb' })
+end
+
+T['set_picker_match_inds()']['validates arguments'] = function()
+  start_with_items()
+  expect.error(function() set_picker_match_inds(1) end, '`match_inds`.*array')
+  expect.error(function() set_picker_match_inds({ 'a' }) end, '`match_inds`.*numbers')
+end
 
 T['set_picker_opts()'] = new_set()
 
-T['set_picker_opts()']['works'] = function() MiniTest.skip() end
+T['set_picker_opts()']['works'] = function()
+  local expect_screenshot = function()
+    if child.has_float_footer() then child.expect_screenshot_orig() end
+  end
 
-T['set_picker_opts()']['can be called without active picker'] = function() MiniTest.skip() end
+  start_with_items({ 'a', 'b', 'bb' })
+  expect_screenshot()
+
+  child.lua([[MiniPick.set_picker_opts({ source = { name = 'My name' }, window = { config = { col = 5 } } })]])
+  expect_screenshot()
+
+  -- Should rerun match
+  child.lua('MiniPick.set_picker_opts({ source = { match = function() return { 2 } end } })')
+  eq(get_picker_matches().all_inds, { 2 })
+  expect_screenshot()
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(child.lua([[MiniPick.set_picker_opts({ source = { name = 'New name' } })]]), vim.NIL)
+end
 
 T['set_picker_target_window()'] = new_set()
 
-T['set_picker_target_window()']['works'] = function() MiniTest.skip() end
+T['set_picker_target_window()']['works'] = function()
+  local win_id_1, win_id_2 = setup_windows_pair()
+  local path = real_file('b.txt')
+  start_with_items({ path })
+  child.lua(string.format('MiniPick.set_picker_target_window(%d)', win_id_2))
+  type_keys('<CR>')
 
-T['set_picker_target_window()']['can be called without active picker'] = function() MiniTest.skip() end
+  validate_buf_name(child.api.nvim_win_get_buf(win_id_1), '')
+  validate_buf_name(child.api.nvim_win_get_buf(win_id_2), path)
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  local lua_cmd = string.format('MiniPick.set_picker_target_window(%d)', win_id_2)
+  eq(child.lua_get(lua_cmd), vim.NIL)
+end
+
+T['set_picker_target_window()']['validates arguments'] = function()
+  start_with_items()
+  expect.error(function() child.lua('MiniPick.set_picker_target_window(-1)') end, '`win_id`.*not a valid window')
+end
 
 T['set_picker_query()'] = new_set()
 
-T['set_picker_query()']['works'] = function() MiniTest.skip() end
+T['set_picker_query()']['works'] = function()
+  start_with_items({ 'a', 'b', 'bb' })
 
-T['set_picker_query()']['can be called without active picker'] = function() MiniTest.skip() end
+  -- Should update querytick
+  local querytick = get_querytick()
+  set_picker_query({ 'b', 'b' })
+  eq(get_querytick(), querytick + 1)
+
+  -- Should match and update visual feedback
+  child.expect_screenshot()
+
+  -- Can be called without active picker
+  type_keys('\3')
+  eq(is_picker_active(), false)
+  eq(set_picker_query({ 'a' }), vim.NIL)
+end
+
+T['set_picker_query()']['resets caret'] = function()
+  start_with_items({ 'a', 'b', 'bb' })
+  type_keys('b', 'b', '<Left>')
+  eq(get_picker_state().caret, 2)
+
+  set_picker_query({ 'x', 'x', 'x', 'x' })
+  eq(get_picker_state().caret, 5)
+
+  set_picker_query({ 'x' })
+  eq(get_picker_state().caret, 2)
+end
+
+T['set_picker_query()']['respects cache'] = function()
+  child.lua('_G.match_n_calls = 0')
+  local validate_calls = function(n_calls_ref, match_items_ref)
+    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
+    eq(get_picker_matches().all, match_items_ref)
+  end
+
+  child.lua_notify([[MiniPick.start({
+    source = {
+      items = { 'a', 'b', 'bb' },
+      match = function(...)
+        _G.match_n_calls = _G.match_n_calls + 1
+        return MiniPick.default_match(...)
+      end,
+    },
+    options = { use_cache = true },
+  })]])
+  validate_calls(0, { 'a', 'b', 'bb' })
+
+  -- Should update it
+  set_picker_query({ 'b' })
+  validate_calls(1, { 'b', 'bb' })
+
+  type_keys('<BS>', 'b')
+  validate_calls(1, { 'b', 'bb' })
+
+  -- Should use it
+  type_keys('<BS>')
+  set_picker_query({ 'b' })
+  validate_calls(1, { 'b', 'bb' })
+end
+
+T['set_picker_query()']['resets match inds prior to matching'] = function()
+  start_with_items({ 'a', 'b', 'bb' })
+  type_keys('b')
+  eq(get_picker_matches().all_inds, { 2, 3 })
+
+  set_picker_query({ 'a' })
+  eq(get_picker_matches().all_inds, { 1 })
+end
+
+T['set_picker_query()']['validates arguments'] = function()
+  start_with_items()
+  expect.error(function() set_picker_query(1) end, '`query`.*array')
+  expect.error(function() set_picker_query({ 1 }) end, '`query`.*strings')
+end
 
 T['get_querytick()'] = new_set()
 
-T['get_querytick()']['works'] = function() MiniTest.skip() end
+local get_querytick = forward_lua('MiniPick.get_querytick')
+
+T['get_querytick()']['works'] = function()
+  local init_querytick = get_querytick()
+  eq(type(init_querytick), 'number')
+
+  local validate = function(increase) eq(get_querytick(), init_querytick + increase) end
+
+  -- Should increase after start, any query update, and stop, but not on move
+  -- - Start
+  start_with_items({ 'a', 'b', 'bb' })
+  validate(1)
+
+  -- - Query update
+  type_keys('a')
+  validate(2)
+
+  type_keys('<C-u>')
+  validate(3)
+
+  set_picker_query({ 'a', 'b' })
+  validate(4)
+
+  type_keys('<BS>')
+  validate(5)
+
+  -- - Move
+  type_keys('<Left>')
+  validate(5)
+
+  type_keys('<C-n>')
+  validate(5)
+
+  type_keys('<C-p>')
+  validate(5)
+
+  type_keys('<C-f>')
+  validate(5)
+
+  -- - Change view
+  type_keys('<Tab>')
+  validate(5)
+
+  type_keys('<S-Tab>')
+  validate(5)
+
+  -- - Stop
+  type_keys('\3')
+  validate(6)
+end
+
+T['get_querytick()']['updates even with enabled cache'] = function()
+  child.lua_notify([[MiniPick.start({ source = { items = { 'a', 'b' } }, options = { use_cache = true } })]])
+  local init_querytick = get_querytick()
+
+  type_keys('a')
+  eq(get_querytick(), init_querytick + 1)
+
+  type_keys('<BS>')
+  eq(get_querytick(), init_querytick + 2)
+
+  type_keys('a')
+  eq(get_querytick(), init_querytick + 3)
+end
 
 T['is_picker_active()'] = new_set()
 
-T['is_picker_active()']['works'] = function() MiniTest.skip() end
+T['is_picker_active()']['works'] = function()
+  eq(is_picker_active(), false)
+  start_with_items()
+  eq(is_picker_active(), true)
+  type_keys('\3')
+  eq(is_picker_active(), false)
+end
 
 T['poke_is_picker_active()'] = new_set()
 
-T['poke_is_picker_active()']['works'] = function() MiniTest.skip() end
+local poke_is_picker_active = forward_lua('MiniPick.poke_is_picker_active')
+
+T['poke_is_picker_active()']['works without running coroutine'] = function()
+  eq(poke_is_picker_active(), false)
+  start_with_items()
+  eq(poke_is_picker_active(), true)
+  type_keys('\3')
+  eq(poke_is_picker_active(), false)
+end
+
+T['poke_is_picker_active()']['works with running coroutine'] = function()
+  start_with_items()
+  eq(poke_is_picker_active(), true)
+
+  child.lua([[
+    -- Poke on next event loop
+    local f = function() _G.is_active_poke = MiniPick.poke_is_picker_active() end
+    coroutine.resume(coroutine.create(f))
+    _G.is_active_direct = MiniPick.is_picker_active()
+
+    -- Close picker in this event loop
+    vim.api.nvim_input('\3')
+  ]])
+  eq(child.lua_get('_G.is_active_direct'), true)
+  eq(child.lua_get('_G.is_active_poke'), false)
+end
 
 -- Integration tests ==========================================================
 T[':Pick'] = new_set()

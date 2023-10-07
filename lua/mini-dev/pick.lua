@@ -348,11 +348,7 @@ end
 
 MiniPick.refresh = function()
   if not MiniPick.is_picker_active() then return end
-  local picker = H.pickers.active
-  local config = H.picker_compute_win_config(picker.opts.window.config)
-  vim.api.nvim_win_set_config(picker.windows.main, config)
-  H.picker_set_current_ind(picker, picker.current_ind, true)
-  H.picker_update(picker, false)
+  H.picker_update(H.pickers.active, false, true)
 end
 
 --- Default match
@@ -729,15 +725,15 @@ MiniPick.get_picker_stritems = function() return vim.deepcopy((H.pickers.active 
 MiniPick.get_picker_matches = function()
   if not MiniPick.is_picker_active() then return end
   local picker = H.pickers.active
-  if picker.items == nil then return {} end
   local items = picker.items
+  if items == nil or #items == 0 then return {} end
 
-  local res = { all_ind = vim.deepcopy(picker.match_inds), current_ind = picker.match_inds[picker.current_ind] }
+  local res = { all_inds = vim.deepcopy(picker.match_inds), current_ind = picker.match_inds[picker.current_ind] }
   res.all = vim.tbl_map(function(ind) return items[ind] end, picker.match_inds)
   res.current = picker.items[res.current_ind]
-  local marked_ind = vim.tbl_keys(picker.marked_inds_map)
-  table.sort(marked_ind)
-  res.marked_ind, res.marked = marked_ind, vim.tbl_map(function(ind) return items[ind] end, marked_ind)
+  local marked_inds = vim.tbl_keys(picker.marked_inds_map)
+  table.sort(marked_inds)
+  res.marked_inds, res.marked = marked_inds, vim.tbl_map(function(ind) return items[ind] end, marked_inds)
   return res
 end
 
@@ -750,7 +746,7 @@ MiniPick.get_picker_state = function()
   local picker = H.pickers.active
   --stylua: ignore
   return vim.deepcopy({
-    is_busy = picker.is_busy, buffers = picker.buffers, windows = picker.windows, caret = picker.caret
+    buffers = picker.buffers, windows = picker.windows, caret = picker.caret, is_busy = picker.is_busy
   })
 end
 
@@ -769,9 +765,9 @@ end
 
 ---@seealso |MiniPick.get_picker_items()|
 MiniPick.set_picker_items_from_cli = function(command, opts)
+  if not MiniPick.is_picker_active() then return end
   local is_valid_command = H.is_array_of(command, 'string') and #command >= 1
   if not is_valid_command then H.error('`command` should be an array of strings.') end
-  if not MiniPick.is_picker_active() then return end
   local default_opts = { postprocess = H.cli_postprocess, set_items_opts = {}, spawn_opts = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
@@ -796,14 +792,10 @@ MiniPick.set_picker_items_from_cli = function(command, opts)
 end
 
 ---@seealso |MiniPick.get_picker_matches()|
-MiniPick.set_picker_match_inds = function(match_inds, target_query)
-  if not H.is_array_of(match_inds, 'number') then H.error('`match_inds` should be an array of numbers.') end
-  if target_query ~= nil and not H.is_array_of(target_query, 'string') then
-    H.error('`target_query` should be an array of strings.')
-  end
+MiniPick.set_picker_match_inds = function(match_inds)
   if not MiniPick.is_picker_active() then return end
-
-  H.picker_set_match_inds(H.pickers.active, match_inds, target_query)
+  if not H.is_array_of(match_inds, 'number') then H.error('`match_inds` should be an array of numbers.') end
+  H.picker_set_match_inds(H.pickers.active, match_inds)
   H.picker_update(H.pickers.active, false)
 end
 
@@ -811,24 +803,24 @@ end
 MiniPick.set_picker_opts = function(opts)
   if not MiniPick.is_picker_active() then return end
   H.pickers.active.opts = vim.tbl_deep_extend('force', H.pickers.active.opts, opts or {})
+  H.picker_update(H.pickers.active, true, true)
 end
 
 ---@seealso |MiniPick.get_picker_state()|
 MiniPick.set_picker_target_window = function(win_id)
-  if not H.is_valid_win(win_id) then H.error('`win_id` in `set_picker_target_window()` is not valid.') end
   if not MiniPick.is_picker_active() then return end
+  if not H.is_valid_win(win_id) then H.error('`win_id` is not a valid window identifier.') end
   H.pickers.active.windows.target = win_id
 end
 
 ---@seealso |MiniPick.get_picker_query()|
 MiniPick.set_picker_query = function(query)
-  if not H.is_array_of(query, 'string') then H.error('`query` should be an array of strings.') end
   if not MiniPick.is_picker_active() then return end
+  if not H.is_array_of(query, 'string') then H.error('`query` should be an array of strings.') end
 
   H.pickers.active.query, H.pickers.active.caret = query, #query + 1
   H.querytick = H.querytick + 1
-  local all_inds = H.seq_along(MiniPick.get_picker_items())
-  H.picker_set_match_inds(H.pickers.active, all_inds, query)
+  H.pickers.active.match_inds = H.seq_along(MiniPick.get_picker_items())
   H.picker_update(H.pickers.active, true)
 end
 
@@ -1161,8 +1153,13 @@ H.picker_advance = function(picker)
   return item
 end
 
-H.picker_update = function(picker, do_match)
+H.picker_update = function(picker, do_match, update_window)
   if do_match then H.picker_match(picker) end
+  if update_window then
+    local config = H.picker_compute_win_config(picker.opts.window.config)
+    vim.api.nvim_win_set_config(picker.windows.main, config)
+    H.picker_set_current_ind(picker, picker.current_ind, true)
+  end
   H.picker_set_bordertext(picker)
   H.picker_set_lines(picker)
   H.redraw()
@@ -1247,10 +1244,10 @@ H.picker_set_items = function(picker, items, opts)
   end
 
   picker.items, picker.stritems, picker.stritems_ignorecase = items, stritems, stritems_ignorecase
-  picker.marked_inds_map = {}
+  picker.cache, picker.marked_inds_map = {}, {}
   H.picker_set_busy(picker, false)
 
-  H.picker_set_match_inds(picker, H.seq_along(items), {})
+  H.picker_set_match_inds(picker, H.seq_along(items))
   H.picker_update(picker, opts.do_match)
 end
 
@@ -1276,13 +1273,13 @@ H.picker_set_busy = function(picker, value)
   end
 end
 
-H.picker_set_match_inds = function(picker, inds, query)
+H.picker_set_match_inds = function(picker, inds)
   if inds == nil then return end
   H.picker_set_busy(picker, false)
 
   picker.match_inds = inds
 
-  local cache_prompt = table.concat(query or picker.query)
+  local cache_prompt = table.concat(picker.query)
   if picker.opts.options.use_cache then picker.cache[cache_prompt] = { inds = inds } end
 
   -- Always show result of updated matches
@@ -2288,17 +2285,6 @@ end
 -- Async ----------------------------------------------------------------------
 H.schedule_resume_is_active = vim.schedule_wrap(function(co) coroutine.resume(co, MiniPick.is_picker_active()) end)
 
-H.poke_picker_every_n = function(n, querytick_ref)
-  local count, dont_check_querytick = 0, querytick_ref == nil
-  return function()
-    count = count + 1
-    if count < n then return true end
-    count = 0
-    -- Return positive if picker is active and no query updates (if asked)
-    return MiniPick.poke_is_picker_active() and (dont_check_querytick or querytick_ref == H.querytick)
-  end
-end
-
 H.poke_picker_throttle = function(querytick_ref)
   -- Allow calling this even if no picker is active
   if not MiniPick.is_picker_active() then return function() return true end end
@@ -2306,12 +2292,13 @@ H.poke_picker_throttle = function(querytick_ref)
   local latest_time, dont_check_querytick = vim.loop.hrtime(), querytick_ref == nil
   local threshold = 1000000 * H.get_config().delay.async
   local hrtime = vim.loop.hrtime
+  local poke_is_picker_active = MiniPick.poke_is_picker_active
   return function()
     local now = hrtime()
     if (now - latest_time) < threshold then return true end
     latest_time = now
     -- Return positive if picker is active and no query updates (if asked)
-    return MiniPick.poke_is_picker_active() and (dont_check_querytick or querytick_ref == H.querytick)
+    return poke_is_picker_active() and (dont_check_querytick or querytick_ref == H.querytick)
   end
 end
 
