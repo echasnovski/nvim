@@ -36,6 +36,11 @@ local real_files_dir = 'tests/dir-pick/real-files'
 
 local join_path = function(...) return table.concat({ ... }, '/') end
 
+local full_path = function(x)
+  local res = vim.fn.fnamemodify(x, ':p'):gsub('/$', '')
+  return res
+end
+
 local real_file = function(basename) return join_path(real_files_dir, basename) end
 
 -- Common test wrappers
@@ -74,7 +79,7 @@ local validate_win_option =
 
 local validate_buf_name = function(buf_id, name)
   buf_id = buf_id or child.api.nvim_get_current_buf()
-  name = name ~= '' and child.fn.fnamemodify(name, ':p') or ''
+  name = name ~= '' and full_path(name) or ''
   name = name:gsub('/+$', '')
   eq(child.api.nvim_buf_get_name(buf_id), name)
 end
@@ -498,7 +503,7 @@ T['start()']['respects `source.cwd`'] = function()
     vim.inspect(test_dir)
   )
   child.lua_notify(lua_cmd)
-  eq(get_picker_stritems(), { vim.fn.fnamemodify(test_dir, ':p') })
+  eq(get_picker_stritems(), { full_path(test_dir) })
 end
 
 T['start()']['respects `source.match`'] = function()
@@ -2036,7 +2041,7 @@ T['builtin.files()']['has fallback tool'] = function()
 
   local cwd = join_path(test_dir, 'builtin-tests')
   builtin_files({ tool = 'fallback' }, { source = { cwd = cwd } })
-  validate_picker_option('source.cwd', vim.fn.fnamemodify(cwd, ':p'))
+  validate_picker_option('source.cwd', full_path(cwd))
 
   -- Sleep because fallback is async
   sleep(5)
@@ -2066,7 +2071,7 @@ T['builtin.files()']['respects `opts.source.cwd` for cli spawn'] = function()
   mock_cli_return({})
   builtin_files({}, { source = { cwd = test_dir } })
 
-  local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p')
+  local test_dir_absolute = full_path(test_dir)
   validate_picker_option('source.cwd', test_dir_absolute)
   eq(get_spawn_log()[1].options.cwd, test_dir_absolute)
 end
@@ -2163,7 +2168,7 @@ T['builtin.grep()']['has fallback tool'] = new_set({ parametrize = { { 'default'
     local cwd = join_path(test_dir, 'builtin-tests')
     builtin_grep({ tool = 'fallback', pattern = pattern }, { source = { cwd = cwd } })
     type_keys(keys)
-    validate_picker_option('source.cwd', vim.fn.fnamemodify(cwd, ':p'))
+    validate_picker_option('source.cwd', full_path(cwd))
 
     -- Sleep because fallback is async
     sleep(5)
@@ -2194,7 +2199,7 @@ T['builtin.grep()']['respects `opts.source.cwd` for cli spawn'] = function()
   mock_cli_return({})
   builtin_grep({ pattern = 'b' }, { source = { cwd = test_dir } })
 
-  local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p')
+  local test_dir_absolute = full_path(test_dir)
   validate_picker_option('source.cwd', test_dir_absolute)
   eq(get_spawn_log()[1].options.cwd, test_dir_absolute)
 end
@@ -2381,7 +2386,7 @@ T['builtin.grep_live()']['respects `opts.source.cwd` for cli spawn'] = function(
   mock_cli_return({ real_file('b.txt') .. ':1:1' })
   type_keys('b')
 
-  local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p')
+  local test_dir_absolute = full_path(test_dir)
   validate_picker_option('source.cwd', test_dir_absolute)
   eq(get_spawn_log()[1].options.cwd, test_dir_absolute)
 end
@@ -2557,7 +2562,7 @@ end
 
 T['builtin.cli()']['respects `opts.source.cwd` for cli spawn'] = function()
   local command = { 'echo', 'aa\nbb' }
-  local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p')
+  local test_dir_absolute = full_path(test_dir)
 
   local validate = function(local_opts, opts, ref_cwd, source_cwd)
     builtin_cli(local_opts, opts)
@@ -2574,7 +2579,7 @@ T['builtin.cli()']['respects `opts.source.cwd` for cli spawn'] = function()
   validate(
     { command = command, spawn_opts = { cwd = real_files_dir } },
     { source = { cwd = test_dir } },
-    vim.fn.fnamemodify(real_files_dir, ':p'),
+    full_path(real_files_dir),
     test_dir_absolute
   )
 end
@@ -2918,7 +2923,7 @@ T['set_picker_items_from_cli()']['forces absolute path of `opts.spawn_opts.cwd`'
   set_picker_items_from_cli({ 'echo', 'arg' }, { spawn_opts = { cwd = 'tests' } })
   validate_spawn_log({
     executable = 'echo',
-    options = { args = { 'arg' }, cwd = vim.fn.fnamemodify('tests', ':p') },
+    options = { args = { 'arg' }, cwd = full_path('tests') },
   }, 1)
 end
 

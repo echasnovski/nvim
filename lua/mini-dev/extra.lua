@@ -687,6 +687,33 @@ MiniExtra.pickers.list = function(local_opts, opts)
   return H.pick_start(items, { source = { name = string.format('List (%s)', scope), choose = choose } }, opts)
 end
 
+MiniExtra.pickers.explorer = function(local_opts, opts)
+  local pick = H.validate_pick('explorer')
+  local_opts = vim.tbl_deep_extend('force', { cwd = nil, filter = nil, sort = nil }, local_opts or {})
+  local filter = local_opts.filter or function() return true end
+  if not vim.is_callable(filter) then H.error('`local_opts.filter` should be callable.') end
+  local sort = local_opts.sort or H.explorer_default_sort
+  if not vim.is_callable(sort) then H.error('`local_opts.sort` should be callable.') end
+
+  local choose = function(item)
+    local path = item.path
+    if vim.fn.filereadable(path) == 1 then return pick.default_choose(path) end
+
+    pick.set_picker_items(H.explorer_make_items(path, filter, sort))
+    pick.set_picker_opts({ source = { cwd = path } })
+    pick.set_picker_query({})
+    return true
+  end
+
+  local show = function(buf_id, items, query) return pick.default_show(buf_id, items, query, { show_icons = true }) end
+
+  local cwd = vim.fn.getcwd()
+  local items = H.explorer_make_items(cwd, filter, sort)
+  local source = { items = items, name = 'File explorer', cwd = cwd, show = show, choose = choose }
+  opts = vim.tbl_deep_extend('force', { source = source }, opts or {})
+  return pick.start(opts)
+end
+
 -- Register in 'mini.pick'
 if type(MiniPick) == 'table' then
   for name, f in pairs(MiniExtra.pickers) do
@@ -931,6 +958,38 @@ end
 H.list_enhance_item = function(item)
   if vim.fn.filereadable(item.filename) == 1 then item.path = item.filename end
   return H.pick_prepend_position(item)
+end
+
+-- Explorer picker ------------------------------------------------------------
+H.explorer_make_items = function(path, filter, sort)
+  if vim.fn.isdirectory(path) == 0 then return {} end
+  local res = { { path = vim.fn.fnamemodify(path, ':h'), text = '..' } }
+  for _, basename in ipairs(vim.fn.readdir(path)) do
+    table.insert(res, { path = string.format('%s/%s', path, basename), text = basename })
+  end
+
+  return sort(vim.tbl_filter(filter, res))
+end
+
+H.explorer_default_sort = function(items)
+  -- Sort ignoring case
+  local res = vim.tbl_map(
+    function(x) return { path = x.path, text = x.text, is_dir = vim.fn.isdirectory(x.path) == 1, lower_name = x.text:lower() } end,
+    items
+  )
+
+  local compare = function(a, b)
+    -- Put directory first
+    if a.is_dir and not b.is_dir then return true end
+    if not a.is_dir and b.is_dir then return false end
+
+    -- Otherwise order alphabetically ignoring case
+    return a.lower_name < b.lower_name
+  end
+
+  table.sort(res, compare)
+
+  return vim.tbl_map(function(x) return { path = x.path, text = x.text } end, res)
 end
 
 -- CLI ------------------------------------------------------------------------

@@ -778,7 +778,7 @@ MiniPick.set_picker_items_from_cli = function(command, opts)
   local executable, args = command[1], vim.list_slice(command, 2, #command)
   local process, pid, stdout = nil, nil, vim.loop.new_pipe()
   local spawn_opts = vim.tbl_deep_extend('force', opts.spawn_opts, { args = args, stdio = { nil, stdout, nil } })
-  if type(spawn_opts.cwd) == 'string' then spawn_opts.cwd = vim.fn.fnamemodify(spawn_opts.cwd, ':p') end
+  if type(spawn_opts.cwd) == 'string' then spawn_opts.cwd = H.full_path(spawn_opts.cwd) end
   process, pid = vim.loop.spawn(executable, spawn_opts, function() process:close() end)
 
   local data_feed = {}
@@ -1021,7 +1021,7 @@ H.validate_picker_opts = function(opts)
 
   source.cwd = source.cwd or vim.fn.getcwd()
   if vim.fn.isdirectory(source.cwd) == 0 then H.error('`source.cwd` should be a valid directory path.') end
-  source.cwd = vim.fn.fnamemodify(source.cwd, ':p')
+  source.cwd = H.full_path(source.cwd)
 
   source.match = source.match or MiniPick.default_match
   validate_callable(source.match, 'source.match')
@@ -1722,6 +1722,7 @@ H.picker_show_info = function(picker)
   local lines = {
     'General',
     'Source name   │ ' .. info.source_name,
+    'Source cwd    │ ' .. info.source_cwd,
     'Total items   │ ' .. info.n_total,
     'Matched items │ ' .. info.n_matched,
     'Marked items  │ ' .. info.n_marked,
@@ -1773,6 +1774,7 @@ H.picker_get_general_info = function(picker)
   local has_items = picker.items ~= nil
   return {
     source_name = picker.opts.source.name or '---',
+    source_cwd = picker.opts.source.cwd or '---',
     n_total = has_items and #picker.items or '-',
     n_matched = has_items and #picker.match_inds or '-',
     n_marked = has_items and vim.tbl_count(picker.marked_inds_map) or '-',
@@ -2089,10 +2091,8 @@ end
 
 H.preview_directory = function(item_data, buf_id)
   local path = item_data.path
-  local lines = vim.tbl_map(
-    function(x) return x .. (vim.fn.isdirectory(path .. '/' .. x) == 1 and '/' or '') end,
-    vim.fn.readdir(path)
-  )
+  local format = function(x) return x .. (vim.fn.isdirectory(path .. '/' .. x) == 1 and '/' or '') end
+  local lines = vim.tbl_map(format, vim.fn.readdir(path))
   H.set_buflines(buf_id, lines)
 end
 
@@ -2444,5 +2444,7 @@ H.is_file_text = function(path)
   vim.loop.fs_close(fd)
   return is_text
 end
+
+H.full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('/$', '')) end
 
 return MiniPick
