@@ -434,8 +434,8 @@ MiniPick.default_show = function(buf_id, items, query, opts)
 
   H.set_buflines(buf_id, lines_to_show)
 
-  -- Extract match offsets
-  local ns_id = H.ns_id.offsets
+  -- Extract match ranges
+  local ns_id = H.ns_id.ranges
   H.clear_namespace(buf_id, ns_id)
 
   if H.query_is_ignorecase(query) then
@@ -447,7 +447,7 @@ MiniPick.default_show = function(buf_id, items, query, opts)
   local match_ranges_fun = match_type == 'fuzzy' and H.match_ranges_fuzzy or H.match_ranges_exact
   local match_ranges = match_ranges_fun(match_data, query_adjusted, lines)
 
-  -- Place offset highlights accounting for possible shift due to prefixes
+  -- Place range highlights accounting for possible shift due to prefixes
   local extmark_opts = { hl_group = 'MiniPickMatchRanges', hl_mode = 'combine', priority = 200 }
   for i = 1, #match_data do
     local row, ranges = match_data[i][3], match_ranges[i]
@@ -840,14 +840,14 @@ end
 
 -- Helper data ================================================================
 -- Module default config
-H.default_config = MiniPick.config
+H.default_config = vim.deepcopy(MiniPick.config)
 
 -- Namespaces
 H.ns_id = {
   matches = vim.api.nvim_create_namespace('MiniPickMatches'),
-  offsets = vim.api.nvim_create_namespace('MiniPickOffsets'),
   headers = vim.api.nvim_create_namespace('MiniPickHeaders'),
   preview = vim.api.nvim_create_namespace('MiniPickPreview'),
+  ranges = vim.api.nvim_create_namespace('MiniPickRanges'),
 }
 
 -- Timers
@@ -872,7 +872,7 @@ H.setup_config = function(config)
   -- General idea: if some table elements are not present in user-supplied
   -- `config`, take them from default config
   vim.validate({ config = { config, 'table', true } })
-  config = vim.tbl_deep_extend('force', H.default_config, config or {})
+  config = vim.tbl_deep_extend('force', vim.deepcopy(H.default_config), config or {})
 
   vim.validate({
     delay = { config.delay, 'table' },
@@ -973,7 +973,7 @@ end
 
 -- Command --------------------------------------------------------------------
 H.command_parse_fargs = function(fargs)
-  local name, opts_parts = fargs[1], vim.tbl_map(vim.fn.expandcmd, vim.list_slice(fargs, 2, #fargs))
+  local name, opts_parts = fargs[1], vim.tbl_map(H.expandcmd, vim.list_slice(fargs, 2, #fargs))
   local tbl_string = string.format('{ %s }', table.concat(opts_parts, ', '))
   local lua_load = loadstring('return ' .. tbl_string)
   if lua_load == nil then H.error('Could not convert extra command arguments to table: ' .. tbl_string) end
@@ -1481,7 +1481,8 @@ H.picker_compute_footer = function(picker, win_id)
   local footer = { { source_name, 'MiniPickBorderText' } }
   local n_spaces_between = win_width - (source_width + inds_width)
   if n_spaces_between > 0 then
-    footer[2] = { H.win_get_bottom_border(win_id):rep(n_spaces_between), 'MiniPickBorder' }
+    local border_hl = picker.is_busy and 'MiniPickBorderBusy' or 'MiniPickBorder'
+    footer[2] = { H.win_get_bottom_border(win_id):rep(n_spaces_between), border_hl }
     footer[3] = { inds, 'MiniPickBorderText' }
   end
   return footer
@@ -1833,7 +1834,7 @@ H.match_filter_exact = function(inds, stritems, query, pattern)
   return match_data
 end
 
-H.match_filter_exact_single = function(candidate, index, pattern, rel_offsets)
+H.match_filter_exact_single = function(candidate, index, pattern)
   local start = string.find(candidate, pattern)
   if start == nil then return nil end
 
@@ -2356,6 +2357,11 @@ H.replace_termcodes = function(x)
 end
 
 H.expand_callable = function(x) return vim.is_callable(x) and x() or x end
+
+H.expandcmd = function(x)
+  local ok, res = pcall(vim.fn.expandcmd, x)
+  return ok and res or x
+end
 
 H.redraw = function() vim.cmd('redraw') end
 

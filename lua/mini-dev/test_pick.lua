@@ -114,12 +114,29 @@ local validate_picker_option = function(string_index, ref)
   eq(value, ref)
 end
 
+local validate_picker_view =
+  function(view_name) eq(child.api.nvim_get_current_buf(), get_picker_state().buffers[view_name]) end
+
 local seq_along = function(x)
   local res = {}
   for i = 1, #x do
     res[i] = i
   end
   return res
+end
+
+local make_match_with_count = function()
+  child.lua('_G.match_n_calls = 0')
+  local validate_match_calls = function(n_calls_ref, match_inds_ref)
+    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
+    eq(get_picker_matches().all_inds, match_inds_ref)
+  end
+
+  child.lua_notify([[_G.match_with_count = function(...)
+    _G.match_n_calls = _G.match_n_calls + 1
+    return MiniPick.default_match(...)
+  end]])
+  return validate_match_calls
 end
 
 -- Common mocks
@@ -130,6 +147,9 @@ local mock_fn_executable = function(available_executables)
   )
   child.lua(lua_cmd)
 end
+
+local mock_picker_cwd =
+  function(cwd) child.lua(string.format('MiniPick.set_picker_opts({ source = { cwd = %s } })', vim.inspect(cwd))) end
 
 local mock_spawn = function()
   local mock_file = join_path(test_dir, 'mocks', 'spawn.lua')
@@ -359,6 +379,23 @@ T['start()']['works with window footer'] = function()
   eq(child.api.nvim_get_current_win(), get_picker_state().windows.main)
   type_keys('<CR>')
   child.expect_screenshot_orig()
+  eq(child.lua_get('_G.picked_item'), test_items[1])
+end
+
+T['start()']['works on Neovim<0.9'] = function()
+  if child.fn.has('nvim-0.9') == 1 then return end
+
+  child.lua_notify('_G.picked_item = MiniPick.start(...)', { { source = { items = test_items } } })
+  child.expect_screenshot_orig()
+
+  -- Should focus on floating window
+  eq(child.api.nvim_get_current_win(), get_picker_state().windows.main)
+
+  -- Should close window after an item and print it (as per `default_choose()`)
+  type_keys('<CR>')
+  child.expect_screenshot_orig()
+
+  -- Should return picked value
   eq(child.lua_get('_G.picked_item'), test_items[1])
 end
 
@@ -622,50 +659,49 @@ T['start()']['respects `options.content_direction`'] = function()
 end
 
 T['start()']['respects `options.use_cache`'] = function()
-  child.lua('_G.match_n_calls = 0')
-  local validate_calls = function(n_calls_ref, match_items_ref)
-    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
-    eq(get_picker_matches().all, match_items_ref)
-  end
-
+  local validate_match_calls = make_match_with_count()
   child.lua_notify([[MiniPick.start({
-    source = {
-      items = { 'a', 'b', 'bb' },
-      match = function(...)
-        _G.match_n_calls = _G.match_n_calls + 1
-        return MiniPick.default_match(...)
-      end,
-    },
+    source = { items = { 'a', 'b', 'bb' }, match = _G.match_with_count },
     options = { use_cache = true },
   })]])
-  validate_calls(0, { 'a', 'b', 'bb' })
+  validate_match_calls(0, { 1, 2, 3 })
 
   type_keys('b')
-  validate_calls(1, { 'b', 'bb' })
+  validate_match_calls(1, { 2, 3 })
 
   type_keys('b')
-  validate_calls(2, { 'bb' })
+  validate_match_calls(2, { 3 })
 
   type_keys('<BS>')
-  validate_calls(2, { 'b', 'bb' })
+  validate_match_calls(2, { 2, 3 })
 
   type_keys('<BS>')
-  validate_calls(2, { 'a', 'b', 'bb' })
+  validate_match_calls(2, { 1, 2, 3 })
 
   type_keys('b')
-  validate_calls(2, { 'b', 'bb' })
+  validate_match_calls(2, { 2, 3 })
 
   type_keys('x')
-  validate_calls(3, {})
+  validate_match_calls(3, {})
 end
 
 T['start()']['allows manual mappings'] = function()
+  -- Both in global and local config
+  child.lua([[MiniPick.config.mappings.manual_global = {
+    char = '<C-d>',
+    func = function() _G.been_global = true end,
+  }]])
+
   child.lua_notify([[MiniPick.start({
-      source = { items = { 'a', 'b' } },
-      mappings = { manual = { char = 'm', func = function() _G.been_here = true end } },
-    })]])
+    source = { items = { 'a', 'b' } },
+    mappings = { manual = { char = 'm', func = function() _G.been_local = true end } },
+  })]])
+
   type_keys('m')
-  eq(child.lua_get('_G.been_here'), true)
+  eq(child.lua_get('_G.been_local'), true)
+
+  type_keys('<C-d>')
+  eq(child.lua_get('_G.been_global'), true)
 end
 
 T['start()']['respects `window.config`'] = function()
@@ -1320,7 +1356,7 @@ T['default_preview()']['works for buffer'] = function()
   validate_preview(items)
 end
 
-local mock_buffer = function()
+local mock_buffer_for_preview = function()
   local buf_id = child.api.nvim_create_buf(true, false)
   local lines = {}
   for i = 1, 20 do
@@ -1331,17 +1367,17 @@ local mock_buffer = function()
 end
 
 T['default_preview()']['shows line in buffer'] = function()
-  local buf_id = mock_buffer()
+  local buf_id = mock_buffer_for_preview()
   validate_preview({ { text = 'Line in buffer', bufnr = buf_id, lnum = 4 } })
 end
 
 T['default_preview()']['shows position in buffer'] = function()
-  local buf_id = mock_buffer()
+  local buf_id = mock_buffer_for_preview()
   validate_preview({ { text = 'Position in buffer', bufnr = buf_id, lnum = 6, col = 3 } })
 end
 
 T['default_preview()']['shows range in buffer'] = function()
-  local buf_id = mock_buffer()
+  local buf_id = mock_buffer_for_preview()
   local items = {
     { text = 'Oneline range in buffer', bufnr = buf_id, lnum = 8, col = 3, end_lnum = 8, end_col = 6 },
     { text = 'Manylines range in buffer', bufnr = buf_id, lnum = 10, col = 3, end_lnum = 12, end_col = 4 },
@@ -2468,17 +2504,14 @@ T['builtin.help()']['respects `opts`'] = function()
   validate_picker_option('source.name', 'My name')
 end
 
-T['builtin.buffers()'] = new_set({
-  hooks = {
-    pre_case = function()
-      -- Mock test buffers
-      child.cmd('edit ' .. real_file('b.txt'))
-      child.api.nvim_create_buf(true, false)
-      child.api.nvim_create_buf(false, true)
-      child.cmd('edit ' .. real_file('LICENSE'))
-    end,
-  },
-})
+local mock_opened_buffers = function()
+  child.cmd('edit ' .. real_file('b.txt'))
+  child.api.nvim_create_buf(true, false)
+  child.api.nvim_create_buf(false, true)
+  child.cmd('edit ' .. real_file('LICENSE'))
+end
+
+T['builtin.buffers()'] = new_set({ hooks = { pre_case = mock_opened_buffers } })
 
 local builtin_buffers = forward_lua_notify('MiniPick.builtin.buffers')
 
@@ -2628,41 +2661,55 @@ T['builtin.resume()']['can be called after previous picker was aborted'] = funct
   eq(get_picker_items(), { 'aa', 'bb' })
 end
 
-T['builtin.resume()']['preserves query cache'] = function()
-  child.lua('_G.match_n_calls = 0')
-  local validate_calls = function(n_calls_ref, match_items_ref)
-    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
-    eq(get_picker_matches().all, match_items_ref)
-  end
+T['builtin.resume()']['always starts in main view'] = function()
+  start_with_items({ 'a' })
+  type_keys('<Tab>')
+  validate_picker_view('preview')
+  type_keys('\3')
 
+  builtin_resume()
+  validate_picker_view('main')
+
+  type_keys('<S-Tab>')
+  validate_picker_view('info')
+  type_keys('\3')
+
+  builtin_resume()
+  validate_picker_view('main')
+end
+
+T['builtin.resume()']['preserves query cache'] = function()
+  local validate_match_calls = make_match_with_count()
   child.lua_notify([[MiniPick.start({
-    source = {
-      items = { 'a', 'b', 'bb' },
-      match = function(...)
-        _G.match_n_calls = _G.match_n_calls + 1
-        return MiniPick.default_match(...)
-      end,
-    },
+    source = { items = { 'a', 'b', 'bb' }, match = _G.match_with_count },
     options = { use_cache = true },
   })]])
-  validate_calls(0, { 'a', 'b', 'bb' })
+  validate_match_calls(0, { 1, 2, 3 })
 
   type_keys('b')
-  validate_calls(1, { 'b', 'bb' })
+  validate_match_calls(1, { 2, 3 })
 
   type_keys('b')
-  validate_calls(2, { 'bb' })
+  validate_match_calls(2, { 3 })
 
   -- Close and resume
   type_keys('\3')
   builtin_resume()
-  validate_calls(2, { 'bb' })
+  validate_match_calls(2, { 3 })
 
   type_keys('<BS>')
-  validate_calls(2, { 'b', 'bb' })
+  validate_match_calls(2, { 2, 3 })
 
   type_keys('<BS>')
-  validate_calls(2, { 'a', 'b', 'bb' })
+  validate_match_calls(2, { 1, 2, 3 })
+end
+
+T['builtin.resume()']['preserves marked items'] = function()
+  start_with_items({ 'aa', 'bb' })
+  type_keys('<C-x>', '\3')
+
+  builtin_resume()
+  eq(get_picker_matches().marked_inds, { 1 })
 end
 
 T['builtin.resume()']['recomputes target window'] = function()
@@ -3111,27 +3158,18 @@ T['set_picker_items()']['resets query cache'] = function()
 end
 
 T['set_picker_items()']['respects `opts.do_match`'] = function()
-  child.lua('_G.match_n_calls = 0')
-  local validate_calls = function(n_calls_ref) eq(child.lua_get('_G.match_n_calls'), n_calls_ref) end
-
-  child.lua_notify([[MiniPick.start({
-    source = {
-      match = function(...)
-        _G.match_n_calls = _G.match_n_calls + 1
-        return MiniPick.default_match(...)
-      end,
-    },
-  })]])
-  validate_calls(0)
+  local validate_match_calls = make_match_with_count()
+  child.lua_notify([[MiniPick.start({ source = { match = _G.match_with_count } })]])
+  validate_match_calls(0, nil)
 
   set_picker_items({ 'a', 'b' }, { do_match = false })
-  validate_calls(0)
+  validate_match_calls(0, { 1, 2 })
 
   type_keys('a')
-  validate_calls(1)
+  validate_match_calls(1, { 1 })
 
   set_picker_items({ 'aa', 'bb' }, { do_match = false })
-  validate_calls(1)
+  validate_match_calls(1, { 1, 2 })
 end
 
 T['set_picker_items()']['respects `opts.querytick`'] = function()
@@ -3147,18 +3185,13 @@ end
 T['set_picker_items()']['does not block picker'] = function()
   child.lua([[
     _G.log = {}
-    _G.l_key = {
-      char = 'l',
-      func = function()
-        table.insert(
-          _G.log,
-          { is_busy = MiniPick.get_picker_state().is_busy, items_type = type(MiniPick.get_picker_items()) }
-        )
-      end
-    }
-    _G.mappings = { append_log = _G.l_key }
+    _G.log_func = function()
+      local entry = { is_busy = MiniPick.get_picker_state().is_busy, items_type = type(MiniPick.get_picker_items()) }
+      table.insert(_G.log, entry)
+    end
+    _G.mappings = { append_log = { char = 'l', func = _G.log_func } }
   ]])
-  child.lua_notify('MiniPick.start({ mappings = { append_log = _G.l_key }, delay = { async = 1 } })')
+  child.lua_notify('MiniPick.start({ mappings = _G.mappings, delay = { async = 1 } })')
 
   -- Set many items and start typing right away. Key presses should be
   -- processed right away even though there is an items preprocessing is going.
@@ -3317,37 +3350,25 @@ T['set_picker_match_inds()']['works'] = function()
 end
 
 T['set_picker_match_inds()']['updates cache'] = function()
-  child.lua('_G.match_n_calls = 0')
-  local validate_calls = function(n_calls_ref, match_items_ref)
-    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
-    eq(get_picker_matches().all, match_items_ref)
-  end
-
+  local validate_match_calls = make_match_with_count()
   child.lua_notify([[MiniPick.start({
-    source = {
-      items = { 'a', 'b', 'bb' },
-      match = function(...)
-        _G.match_n_calls = _G.match_n_calls + 1
-        return MiniPick.default_match(...)
-      end,
-    },
+    source = { items = { 'a', 'b', 'bb' }, match = _G.match_with_count },
     options = { use_cache = true },
   })]])
-  validate_calls(0, { 'a', 'b', 'bb' })
+  validate_match_calls(0, { 1, 2, 3 })
 
   type_keys('a')
-  validate_calls(1, { 'a' })
-  eq(get_picker_matches().all_inds, { 1 })
+  validate_match_calls(1, { 1 })
 
   -- - Setting match inds should not trigger `source.match`
   set_picker_match_inds({ 2, 3 })
-  validate_calls(1, { 'b', 'bb' })
+  validate_match_calls(1, { 2, 3 })
 
   type_keys('<BS>')
-  validate_calls(1, { 'a', 'b', 'bb' })
+  validate_match_calls(1, { 1, 2, 3 })
 
   type_keys('a')
-  validate_calls(1, { 'b', 'bb' })
+  validate_match_calls(1, { 2, 3 })
 end
 
 T['set_picker_match_inds()']['validates arguments'] = function()
@@ -3436,35 +3457,24 @@ T['set_picker_query()']['resets caret'] = function()
 end
 
 T['set_picker_query()']['respects cache'] = function()
-  child.lua('_G.match_n_calls = 0')
-  local validate_calls = function(n_calls_ref, match_items_ref)
-    eq(child.lua_get('_G.match_n_calls'), n_calls_ref)
-    eq(get_picker_matches().all, match_items_ref)
-  end
-
+  local validate_match_calls = make_match_with_count()
   child.lua_notify([[MiniPick.start({
-    source = {
-      items = { 'a', 'b', 'bb' },
-      match = function(...)
-        _G.match_n_calls = _G.match_n_calls + 1
-        return MiniPick.default_match(...)
-      end,
-    },
+    source = { items = { 'a', 'b', 'bb' }, match = _G.match_with_count },
     options = { use_cache = true },
   })]])
-  validate_calls(0, { 'a', 'b', 'bb' })
+  validate_match_calls(0, { 1, 2, 3 })
 
   -- Should update it
   set_picker_query({ 'b' })
-  validate_calls(1, { 'b', 'bb' })
+  validate_match_calls(1, { 2, 3 })
 
   type_keys('<BS>', 'b')
-  validate_calls(1, { 'b', 'bb' })
+  validate_match_calls(1, { 2, 3 })
 
   -- Should use it
   type_keys('<BS>')
   set_picker_query({ 'b' })
-  validate_calls(1, { 'b', 'bb' })
+  validate_match_calls(1, { 2, 3 })
 end
 
 T['set_picker_query()']['resets match inds prior to matching'] = function()
@@ -3591,38 +3601,118 @@ end
 -- Integration tests ==========================================================
 T[':Pick'] = new_set()
 
-T[':Pick']['works'] = function() MiniTest.skip() end
+T[':Pick']['works'] = function()
+  mock_opened_buffers()
+
+  local validate = function(args)
+    child.api_notify.nvim_exec('Pick ' .. args, false)
+    eq(is_picker_active(), true)
+    child.expect_screenshot()
+    type_keys('\3')
+  end
+
+  validate('buffers')
+  validate('buffers include_unlisted=true')
+end
+
+T[':Pick']['correctly parses arguments'] = function()
+  child.lua('MiniPick.registry.aaa = function(...) _G.args = { ... } end')
+
+  child.cmd([[Pick aaa b='b' c=3 d={x=1,\ y=2}]])
+  eq(child.lua_get('_G.args'), { { b = 'b', c = 3, d = { x = 1, y = 2 } } })
+
+  -- Expands arguments
+  child.cmd('edit ' .. real_file('b.txt'))
+  child.cmd([[Pick aaa basename='%:t' extension='%:e']])
+  eq(child.lua_get('_G.args'), { { basename = 'b.txt', extension = 'txt' } })
+
+  -- Throws informative error (here because of not escaped whitespace)
+  expect.error(function() child.cmd([[Pick aaa t={ a = 1}]]) end, 'Could not convert.*to table.*t={,')
+end
+
+T[':Pick']['has proper complete'] = function()
+  child.set_size(10, 20)
+  local validate = function(keys)
+    type_keys(':Pick ', keys, '<Tab>')
+    child.expect_screenshot()
+    type_keys('\3')
+  end
+
+  validate({})
+  validate({ 'f' })
+  validate({ 'f x', '<Left>', '<Left>' })
+end
+
+T[':Pick']['validates arguments'] = function()
+  expect.error(function() child.cmd('Pick aaa') end, 'no picker named "aaa"')
+end
 
 T['Overall view'] = new_set()
 
 T['Overall view']['shows prompt'] = function()
+  child.set_size(10, 20)
+  start_with_items()
+
   -- Initial
+  child.expect_screenshot()
+
   -- After typical typing
-  -- After moving caret, both usual case and with spaces (as it might modify query)
-  MiniTest.skip()
+  type_keys('a')
+  child.expect_screenshot()
+  type_keys(' b')
+  child.expect_screenshot()
+
+  -- After moving caret
+  type_keys('<Left>')
+  child.expect_screenshot()
+  type_keys('<Left>')
+  child.expect_screenshot()
 end
 
 T['Overall view']['uses footer for extra info'] = function()
   if not child.has_float_footer() then return end
 
-  -- Basic test
+  start_with_items({ 'a', 'b', 'bb', 'bbb' }, 'My name')
+  child.expect_screenshot_orig()
 
-  -- Should update after marking
+  -- Should update after matching
+  type_keys('b')
+  child.expect_screenshot_orig()
 
-  MiniTest.skip()
+  -- Should update after moving
+  type_keys('<C-n>')
+  child.expect_screenshot_orig()
+
+  -- Should update after marking and unmarking
+  type_keys('<C-x>')
+  child.expect_screenshot_orig()
+  type_keys('<C-x>')
+  child.expect_screenshot_orig()
+
+  -- Should correctly show no matches
+  type_keys('x')
+  child.expect_screenshot_orig()
 end
 
 T['Overall view']['correctly infers footer empty space'] = function()
   if not child.has_float_footer() then return end
 
+  local validate = function(win_config)
+    local lua_cmd = string.format('MiniPick.config.window.config = %s', vim.inspect(win_config))
+    child.lua(lua_cmd)
+    start_with_items({ 'a' })
+    child.expect_screenshot_orig()
+    type_keys('\3')
+  end
+
   -- Check both `border = 'double'` and `border = <custom_array>`
-  MiniTest.skip()
+  validate({ border = 'double' })
+  validate({ border = { '!', '@', '#', '$', '%', '^', '&', '*' } })
 end
 
-T['Overall view']['does not show footer if not items is set'] = function()
+T['Overall view']['does not show footer if items are not set'] = function()
   if not child.has_float_footer() then return end
-
-  start()
+  start_with_items()
   child.expect_screenshot_orig()
 end
 
@@ -3636,72 +3726,358 @@ end
 T['Overall view']['truncates border text'] = function()
   if not child.has_float_footer() then return end
 
-  MiniTest.skip()
+  local validate = function(...)
+    child.set_size(...)
+    start_with_items({ 'a' }, 'Very long name')
+    set_picker_query({ 'very long query' })
+    child.expect_screenshot_orig()
+    type_keys('\3')
+  end
+
+  validate(10, 20)
+  -- Should not partially show footer indexes, only in full (when space allows)
+  validate(10, 35)
 end
 
-T['Overall view']['allows "none" as border'] = function() MiniTest.skip() end
+T['Overall view']['allows "none" as border'] = function()
+  if not child.has_float_footer() then return end
 
-T['Overall view']['respects tabline and statusline'] = function() MiniTest.skip() end
+  child.lua([[MiniPick.config.window.config = { border = 'none' }]])
+  start_with_items({ 'a' }, 'My name')
+  child.expect_screenshot_orig()
+end
 
-T['Overall view']['allows very large dimensions'] = function() MiniTest.skip() end
+T['Overall view']["respects tabline, statusline, 'cmdheight'"] = function()
+  local validate = function()
+    start_with_items({ 'a' }, 'My name')
+    child.expect_screenshot()
+    type_keys('\3')
+  end
+
+  child.set_size(10, 20)
+
+  child.o.showtabline, child.o.laststatus = 2, 2
+  validate()
+
+  child.o.showtabline, child.o.laststatus = 2, 0
+  validate()
+
+  child.o.showtabline, child.o.laststatus = 0, 2
+  validate()
+
+  child.o.showtabline, child.o.laststatus = 0, 0
+  validate()
+
+  if child.fn.has('nvim-0.8') == 0 then return end
+  child.o.cmdheight = 0
+  validate()
+
+  child.o.cmdheight = 3
+  validate()
+end
+
+T['Overall view']['allows very large dimensions'] = function()
+  child.lua('MiniPick.config.window.config = { height = 100, width = 200 }')
+  start_with_items({ 'a' }, 'My name')
+  child.expect_screenshot()
+end
 
 T['Overall view']['uses dedicated highlight groups'] = function()
-  -- MiniPickBorder
-  -- MiniPickBorderBusy
-  -- MiniPickBorderText
-  -- MiniPickNormal
-  -- MiniPickPrompt
-  MiniTest.skip()
+  start_with_items(nil, 'My name')
+  local win_id = get_picker_state().windows.main
+  sleep(child.lua_get('MiniPick.config.delay.busy') + 5)
+
+  -- Busy picker
+  eq(get_picker_state().is_busy, true)
+
+  local winhighlight = child.api.nvim_win_get_option(win_id, 'winhighlight')
+  expect.match(winhighlight, 'NormalFloat:MiniPickNormal')
+  expect.match(winhighlight, 'FloatBorder:MiniPickBorderBusy')
+
+  local win_config = child.api.nvim_win_get_config(win_id)
+  if child.fn.has('nvim-0.9') == 1 then eq(win_config.title, { { '> ▏', 'MiniPickPrompt' } }) end
+
+  -- Not busy picker
+  set_picker_items({ 'a' })
+  eq(get_picker_state().is_busy, false)
+
+  winhighlight = child.api.nvim_win_get_option(win_id, 'winhighlight')
+  expect.match(winhighlight, 'FloatBorder:MiniPickBorder')
+
+  if child.has_float_footer() then
+    win_config = child.api.nvim_win_get_config(win_id)
+    local footer = win_config.footer
+    eq(footer[1], { ' My name ', 'MiniPickBorderText' })
+    eq(footer[2][2], 'MiniPickBorder')
+    eq(footer[3], { ' 1|1|1 ', 'MiniPickBorderText' })
+  end
 end
 
-T['Overall view']['is shown over number and sign columns'] = function() MiniTest.skip() end
+T['Overall view']['is shown over number and sign columns'] = function()
+  child.set_size(10, 20)
+  child.o.number, child.o.signcolumn = true, 'yes'
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'a', 'b', 'c', 'd', 'e' })
+  start_with_items({ 'a' })
+  child.expect_screenshot()
+end
 
 T['Main view'] = new_set()
 
-T['Main view']['works'] = function() MiniTest.skip() end
-
 T['Main view']['uses dedicated highlight groups'] = function()
-  -- MiniPickIconDirectory
-  -- MiniPickIconFile
-  -- MiniPickMatchCurrent
-  -- MiniPickMatchMarked
-  -- MiniPickMatchRanges
-  MiniTest.skip()
+  local validate_extmark =
+    function(extmark_data, line, hl_group) eq({ extmark_data[2], extmark_data[4].hl_group }, { line - 1, hl_group }) end
+
+  child.lua([[MiniPick.config.source.show = function(buf_id, items, query)
+    return MiniPick.default_show(buf_id, items, query, { show_icons = true })
+  end]])
+  start_with_items({ real_file('b.txt'), test_dir, 'marked', 'current' })
+  local buf_id = get_picker_state().buffers.main
+  type_keys('<C-n>', '<C-n>', '<C-x>', '<C-n>')
+
+  local match_ns_id = child.api.nvim_get_namespaces().MiniPickMatches
+  local match_extmarks = child.api.nvim_buf_get_extmarks(buf_id, match_ns_id, 0, -1, { details = true })
+  validate_extmark(match_extmarks[1], 3, 'MiniPickMatchMarked')
+  validate_extmark(match_extmarks[2], 4, 'MiniPickMatchCurrent')
+
+  type_keys('d', 'i', 'r')
+
+  local ranges_ns_id = child.api.nvim_get_namespaces().MiniPickRanges
+  local ranges_extmarks = child.api.nvim_buf_get_extmarks(buf_id, ranges_ns_id, 0, -1, { details = true })
+  validate_extmark(ranges_extmarks[1], 1, 'MiniPickIconFile')
+  validate_extmark(ranges_extmarks[2], 1, 'MiniPickMatchRanges')
+  validate_extmark(ranges_extmarks[3], 1, 'MiniPickMatchRanges')
+  validate_extmark(ranges_extmarks[4], 1, 'MiniPickMatchRanges')
+  validate_extmark(ranges_extmarks[5], 2, 'MiniPickIconDirectory')
+  validate_extmark(ranges_extmarks[6], 2, 'MiniPickMatchRanges')
+  validate_extmark(ranges_extmarks[7], 2, 'MiniPickMatchRanges')
+  validate_extmark(ranges_extmarks[8], 2, 'MiniPickMatchRanges')
 end
 
-T['Main view']['works with `options.content_direction="from_bottom"`'] = function()
-  -- Both with `default_show` and custom `source.show`
-  MiniTest.skip()
+T['Main view']['works with `content_direction`="from_bottom"'] = function()
+  child.set_size(10, 30)
+  child.lua([[MiniPick.config.options.content_direction = 'from_bottom']])
+  local items = { 'a', 'b', 'bb', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7' }
+
+  local validate = function()
+    child.expect_screenshot()
+
+    type_keys('<C-p>')
+    child.expect_screenshot()
+
+    type_keys('b')
+    child.expect_screenshot()
+
+    type_keys('<C-p>')
+    child.expect_screenshot()
+
+    type_keys('<C-p>')
+    child.expect_screenshot()
+
+    type_keys('\3')
+  end
+
+  -- With `default_show`
+  start_with_items(items)
+  validate()
+
+  -- With custom `show`
+  local lua_cmd = string.format(
+    [[_G.custom_show = function(buf_id, items, query)
+        local lines = vim.tbl_map(function(x) return 'Item ' .. x end, items)
+        -- Lines should still be set as if direction is from top
+        vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+      end
+
+      MiniPick.start({ source = { items = %s, show = _G.custom_show } })]],
+    vim.inspect(items)
+  )
+  child.lua_notify(lua_cmd)
+  validate()
 end
 
 T['Info view'] = new_set()
 
-T['Info view']['works'] = function() MiniTest.skip() end
+T['Info view']['works'] = function()
+  child.set_size(40, 60)
+  child.lua('MiniPick.config.window.config = { height = 40 }')
 
-T['Info view']['uses dedicated highlight groups'] = function()
-  -- MiniPickHeader
-  MiniTest.skip()
+  start_with_items({ 'a', 'b', 'bb' }, 'My name')
+  mock_picker_cwd('mock/current-dir')
+  type_keys('<S-Tab>')
+  child.expect_screenshot()
 end
 
-T['Info view']['respects manual mappings'] = function() MiniTest.skip() end
+T['Info view']['respects manual mappings'] = function()
+  child.set_size(20, 60)
+  child.lua([[MiniPick.config.mappings.custom_action = { char = '<C-d>', func = function() print('Hello') end }]])
+  child.lua([[MiniPick.config.mappings.another_action = { char = '<C-e>', func = function() print('World') end }]])
+  child.lua([[MiniPick.config.window.config = { height = 20 }]])
 
-T['Info view']['is updated after moving/marking current item'] = function() MiniTest.skip() end
+  start_with_items({ 'a', 'b', 'bb' }, 'My name')
+  mock_picker_cwd('mock/current-dir')
+  type_keys('<S-Tab>')
+  child.expect_screenshot()
+end
 
-T['Info view']['switches to main after query update'] = function() MiniTest.skip() end
+T['Info view']['uses dedicated highlight groups'] = function()
+  local validate_extmark =
+    function(extmark_data, line, hl_group) eq({ extmark_data[2], extmark_data[4].hl_group }, { line - 1, hl_group }) end
+
+  child.lua([[MiniPick.config.mappings.custom_action = { char = '<C-d>', func = function() print('Hello') end }]])
+  start_with_items({ 'a', 'b', 'bb' }, 'My name')
+  type_keys('<S-Tab>')
+  local buf_id = get_picker_state().buffers.info
+
+  local header_ns_id = child.api.nvim_get_namespaces().MiniPickHeaders
+  local header_extmarks = child.api.nvim_buf_get_extmarks(buf_id, header_ns_id, 0, -1, { details = true })
+  validate_extmark(header_extmarks[1], 1, 'MiniPickHeader')
+  validate_extmark(header_extmarks[2], 9, 'MiniPickHeader')
+  validate_extmark(header_extmarks[3], 12, 'MiniPickHeader')
+end
+
+T['Info view']['is updated after moving/marking current item'] = function()
+  child.set_size(15, 40)
+  start_with_items({ 'a', 'b', 'bb' }, 'My name')
+  mock_picker_cwd('mock/current-dir')
+  type_keys('<S-Tab>')
+  child.expect_screenshot()
+
+  -- Move
+  type_keys('<C-n>')
+  child.expect_screenshot()
+
+  -- Mark
+  type_keys('<C-x>')
+  child.expect_screenshot()
+
+  -- Unmark
+  type_keys('<C-x>')
+  child.expect_screenshot()
+end
+
+T['Info view']['switches to main after query update'] = function()
+  local validate = function(key)
+    type_keys('<S-Tab>')
+    validate_picker_view('info')
+    type_keys(key)
+    validate_picker_view('main')
+  end
+
+  start_with_items({ 'a', 'b', 'bb' }, 'My name')
+
+  validate('b')
+  validate('<C-u>')
+  -- Even if query did not change
+  validate('<C-u>')
+end
+
+T['Info view']['supports vertical and horizontal scroll'] = function()
+  start_with_items({ 'a' })
+  mock_picker_cwd('mock/current-dir')
+  type_keys('<S-Tab>')
+
+  local validate = function(key)
+    type_keys(key)
+    child.expect_screenshot()
+  end
+
+  validate('<C-l>')
+  validate('<C-h>')
+  validate('<C-f>')
+  validate('<C-b>')
+end
 
 T['Preview'] = new_set()
 
-T['Preview']['works'] = function() MiniTest.skip() end
-
-T['Preview']['uses dedicated highlight groups'] = function()
-  -- MiniPickPreviewLine
-  -- MiniPickPreviewRegion
-  MiniTest.skip()
+T['Preview']['works'] = function()
+  start_with_items({ real_file('b.txt') }, 'My name')
+  type_keys('<Tab>')
+  child.expect_screenshot()
 end
 
-T['Preview']['is updated after moving current item'] = function() MiniTest.skip() end
+T['Preview']['uses dedicated highlight groups'] = function()
+  local preview_ns_id = child.api.nvim_get_namespaces().MiniPickPreview
+  local validate_preview_extmark = function(line, pos)
+    local buf_id = get_picker_state().buffers.preview
+    local preview_extmarks = child.api.nvim_buf_get_extmarks(buf_id, preview_ns_id, 0, -1, { details = true })
 
-T['Preview']['switches to main after query update'] = function() MiniTest.skip() end
+    eq({ preview_extmarks[1][2], preview_extmarks[1][4].hl_group }, { line - 1, 'MiniPickPreviewLine' })
+    if pos ~= nil then
+      eq({ preview_extmarks[2][2], preview_extmarks[2][4].hl_group }, { pos - 1, 'MiniPickPreviewRegion' })
+    end
+  end
+
+  local path = real_file('b.txt')
+  local items = {
+    { text = 'Preview line', path = path, lnum = 3 },
+    { text = 'Preview position', path = path, lnum = 4, col = 2 },
+    { text = 'Preview range', path = path, lnum = 5, col = 3, end_lnum = 6, end_col = 2 },
+  }
+  start_with_items(items, 'My name')
+
+  type_keys('<Tab>')
+  validate_preview_extmark(3, nil, nil)
+
+  type_keys('<C-n>')
+  validate_preview_extmark(4, 4)
+
+  type_keys('<C-n>')
+  validate_preview_extmark(5, 5)
+end
+
+T['Preview']['is updated after moving current item'] = function()
+  child.set_size(15, 40)
+  start_with_items({ 'a', 'b', 'bb' }, 'My name')
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  type_keys('<C-n>')
+  child.expect_screenshot()
+end
+
+T['Preview']['remains same during (un)marking'] = function()
+  start_with_items({ 'a', 'b', 'bb' }, 'My name')
+  type_keys('<Tab>')
+  local buf_id = get_picker_state().buffers.preview
+  eq(child.api.nvim_get_current_buf(), buf_id)
+
+  type_keys('<C-x>')
+  eq(child.api.nvim_get_current_buf(), buf_id)
+
+  type_keys('<C-x>')
+  eq(child.api.nvim_get_current_buf(), buf_id)
+end
+
+T['Preview']['switches to main after query update'] = function()
+  local validate = function(key)
+    type_keys('<Tab>')
+    validate_picker_view('preview')
+    type_keys(key)
+    validate_picker_view('main')
+  end
+
+  start_with_items({ 'a', 'b', 'bb' }, 'My name')
+
+  validate('b')
+  validate('<C-u>')
+  -- Even if query did not change
+  validate('<C-u>')
+end
+
+T['Preview']['supports vertical and horizontal scroll'] = function()
+  start_with_items({ real_file('b.txt') })
+  type_keys('<Tab>')
+
+  local validate = function(key)
+    type_keys(key)
+    child.expect_screenshot()
+  end
+
+  validate('<C-l>')
+  validate('<C-h>')
+  validate('<C-f>')
+  validate('<C-b>')
+end
 
 T['Marking'] = new_set()
 
@@ -3725,6 +4101,10 @@ end
 T['Matching']["respects 'ignorecase'"] = function() MiniTest.skip() end
 
 T['Matching']["respects 'smartcase'"] = function() MiniTest.skip() end
+
+T['Caching'] = new_set()
+
+T['Caching']['works'] = function() MiniTest.skip() end
 
 T['Key query process'] = new_set()
 
@@ -3759,6 +4139,14 @@ T['Key query process']['handles not configured key presses'] = function()
   -- Like `<M-a>`, `<Shift> + <arrow>`, etc.
   MiniTest.skip()
 end
+
+T['Navigation'] = new_set()
+
+T['Navigation']['works for next/prev'] = function() MiniTest.skip() end
+
+T['Navigation']['works for vertical scroll'] = function() MiniTest.skip() end
+
+T['Navigation']['works for horizontal scroll'] = function() MiniTest.skip() end
 
 T['Mappings'] = new_set()
 
