@@ -80,6 +80,14 @@
 --
 --   MiniPick.start({ source = { items = vim.fn.argv(), name = 'Arglist' } })
 --
+-- - Example of simple `match()`: >
+--
+--   local match_exact = function(match_inds, stritems, query)
+--     local prompt_pattern = vim.pesc(table.concat(query))
+--     local f = function(i) return stritems[i]:find(prompt_pattern) ~= nil end
+--     return vim.tbl_filter(f, match_inds)
+--   end
+--
 -- - <C-c> is hard-coded to always stop the picker.
 --
 -- - Make `refine` action very visible.
@@ -269,7 +277,8 @@ MiniPick.config = {
 
     paste = '<C-r>',
 
-    refine = '<C-Space>',
+    refine        = '<C-Space>',
+    refine_marked = '<M-Space>',
 
     scroll_down  = '<C-f>',
     scroll_left  = '<C-h>',
@@ -904,6 +913,7 @@ H.setup_config = function(config)
     ['mappings.move_up'] = { config.mappings.move_up, 'string' },
     ['mappings.paste'] = { config.mappings.paste, 'string' },
     ['mappings.refine'] = { config.mappings.refine, 'string' },
+    ['mappings.refine_marked'] = { config.mappings.refine_marked, 'string' },
     ['mappings.scroll_down'] = { config.mappings.scroll_down, 'string' },
     ['mappings.scroll_up'] = { config.mappings.scroll_up, 'string' },
     ['mappings.scroll_left'] = { config.mappings.scroll_left, 'string' },
@@ -1040,11 +1050,11 @@ H.validate_picker_opts = function(opts)
   local default_mappings = H.default_config.mappings
   for field, x in pairs(opts.mappings) do
     if type(field) ~= 'string' then H.error('`mappings` should have only string fields.') end
-    local is_def_action = default_mappings[field] ~= nil
-    if is_def_action and type(x) ~= 'string' then
-      H.error(string.format('Mapping for default action "%s" should be string.', field))
+    local is_builtin_action = default_mappings[field] ~= nil
+    if is_builtin_action and type(x) ~= 'string' then
+      H.error(string.format('Mapping for built-in action "%s" should be string.', field))
     end
-    if not is_def_action and not (type(x) == 'table' and type(x.char) == 'string' and vim.is_callable(x.func)) then
+    if not is_builtin_action and not (type(x) == 'table' and type(x.char) == 'string' and vim.is_callable(x.func)) then
       H.error(string.format('Mapping for manual action "%s" should be table with `char` and `func`.', field))
     end
   end
@@ -1127,7 +1137,7 @@ H.picker_advance = function(picker)
     if H.cache.is_force_stop_advance then break end
     H.picker_update(picker, do_match)
 
-    local char = H.getcharstr()
+    local char = H.getcharstr(picker.opts.delay.async)
     if H.cache.is_force_stop_advance then break end
 
     is_aborted = char == nil
@@ -1137,13 +1147,13 @@ H.picker_advance = function(picker)
     do_match = cur_data.name == nil or vim.startswith(cur_data.name, 'delete') or cur_data.name == 'paste'
     is_aborted = cur_data.name == 'stop'
 
+    local should_stop
     if cur_data.is_custom then
-      cur_data.func()
+      should_stop = cur_data.func()
     else
-      local func = cur_data.func or H.picker_query_add
-      local should_stop = func(picker, char)
-      if should_stop then break end
+      should_stop = (cur_data.func or H.picker_query_add)(picker, char)
     end
+    if should_stop then break end
   end
 
   local item
@@ -1232,9 +1242,7 @@ end
 
 H.picker_set_items = function(picker, items, opts)
   -- Compute string items to work with (along with their lower variants)
-  local stritems, stritems_ignorecase = {}, {}
-  -- NOTE: optimize `tolower` as it severily reduces start time on many items
-  local tolower = vim.o.ignorecase and H.tolower or function(x) return nil end
+  local stritems, stritems_ignorecase, tolower = {}, {}, H.tolower
   local poke_picker = H.poke_picker_throttle(opts.querytick)
   for i, x in ipairs(items) do
     if not poke_picker() then return end
@@ -1368,8 +1376,8 @@ H.picker_set_lines = function(picker)
   H.set_extmark(buf_id, ns_id, cur_line - 1, 0, cur_opts)
 
   -- - Update cursor if showing item matches (needed for 'scroll_{left,right}')
-  local is_not_curline = vim.api.nvim_win_get_cursor(win_id)[1] ~= cur_line
-  if picker.view_state == 'main' and is_not_curline then H.set_cursor(win_id, cur_line, 1) end
+  local cursor = vim.api.nvim_win_get_cursor(win_id)
+  if picker.view_state == 'main' and cursor[1] ~= cur_line then H.set_cursor(win_id, cur_line, cursor[2] + 1) end
 end
 
 H.picker_match = function(picker)
@@ -1392,8 +1400,7 @@ end
 H.query_is_ignorecase = function(query)
   if not vim.o.ignorecase then return false end
   if not vim.o.smartcase then return true end
-  local prompt = table.concat(query, '')
-  return vim.fn.match(prompt, '[[:upper:]]') < 0
+  return vim.fn.match(table.concat(query), '[[:upper:]]') < 0
 end
 
 H.picker_get_char_data = function(picker, skip_alternatives)
@@ -1473,8 +1480,8 @@ if vim.fn.has('nvim-0.9') == 0 then H.picker_set_bordertext = function() end end
 H.picker_compute_footer = function(picker, win_id)
   local info = H.picker_get_general_info(picker)
   local source_name = string.format(' %s ', info.source_name)
-  local marked_inds = info.n_marked == 0 and '' or (info.n_marked .. '/')
-  local inds = string.format(' %s|%s%s|%s ', info.relative_current_ind, marked_inds, info.n_matched, info.n_total)
+  local n_marked_text = info.n_marked == 0 and '' or (info.n_marked .. '/')
+  local inds = string.format(' %s|%s|%s%s ', info.relative_current_ind, info.n_matched, n_marked_text, info.n_total)
   local win_width, source_width, inds_width =
     vim.api.nvim_win_get_width(win_id), vim.fn.strchars(source_name), vim.fn.strchars(inds)
 
@@ -1558,27 +1565,17 @@ H.actions = {
   move_up    = function(picker, _) H.picker_move_current(picker, -1) end,
 
   paste = function(picker, _)
-    local register = H.getcharstr()
+    local register = H.getcharstr(picker.opts.delay.async)
     local has_register, reg_contents = pcall(vim.fn.getreg, register)
     if not has_register then return end
+    reg_contents = reg_contents:gsub('[\n\t]', ' ')
     for i = 1, vim.fn.strchars(reg_contents) do
       H.picker_query_add(picker, vim.fn.strcharpart(reg_contents, i - 1, 1))
     end
   end,
 
-  refine = function(picker, _)
-    if picker.items == nil then return end
-
-    -- Make current matches be new items to be matched with default match
-    picker.opts.source.match = H.get_config().source.match or MiniPick.default_match
-    picker.query, picker.caret = {}, 1
-    MiniPick.set_picker_items(MiniPick.get_picker_matches().all)
-
-    picker._refine = picker._refine or { orig_name = picker.opts.source.name, count = 0 }
-    picker._refine.count = picker._refine.count + 1
-    local count_suffix = picker._refine.count == 1 and '' or (' ' .. picker._refine.count)
-    picker.opts.source.name = string.format('%s (Refine%s)', picker._refine.orig_name, count_suffix)
-  end,
+  refine        = function(picker, _) H.picker_refine(picker, 'all') end,
+  refine_marked = function(picker, _) H.picker_refine(picker, 'marked') end,
 
   scroll_down  = function(picker, _) H.picker_scroll(picker, 'down')  end,
   scroll_up    = function(picker, _) H.picker_scroll(picker, 'up')    end,
@@ -1692,8 +1689,21 @@ H.picker_move_current = function(picker, by, to)
   if picker.view_state == 'preview' then H.picker_show_preview(picker) end
 end
 
-H.picker_scroll = function(picker, direction)
+H.picker_refine = function(picker, refine_type)
   if picker.items == nil then return end
+
+  -- Make current matches be new items to be matched with default match
+  picker.opts.source.match = H.get_config().source.match or MiniPick.default_match
+  picker.query, picker.caret = {}, 1
+  MiniPick.set_picker_items(MiniPick.get_picker_matches()[refine_type] or {})
+
+  picker._refine = picker._refine or { orig_name = picker.opts.source.name, count = 0 }
+  picker._refine.count = picker._refine.count + 1
+  local count_suffix = picker._refine.count == 1 and '' or (' ' .. picker._refine.count)
+  picker.opts.source.name = string.format('%s (Refine%s)', picker._refine.orig_name, count_suffix)
+end
+
+H.picker_scroll = function(picker, direction)
   local win_id = picker.windows.main
   if picker.view_state == 'main' and (direction == 'down' or direction == 'up') then
     local n = (direction == 'down' and 1 or -1) * vim.api.nvim_win_get_height(win_id)
@@ -2367,9 +2377,9 @@ H.redraw = function() vim.cmd('redraw') end
 
 H.redraw_scheduled = vim.schedule_wrap(H.redraw)
 
-H.getcharstr = function()
+H.getcharstr = function(delay_async)
   -- Ensure that redraws still happen
-  H.timers.getcharstr:start(0, H.get_config().delay.async, H.redraw_scheduled)
+  H.timers.getcharstr:start(0, delay_async, H.redraw_scheduled)
   H.cache.is_in_getcharstr = true
   local ok, char = pcall(vim.fn.getcharstr)
   H.cache.is_in_getcharstr = nil

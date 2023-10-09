@@ -15,7 +15,7 @@
 14|│Mappings (built-in)                  │                     
 15|│Caret left        │ <Left>           │                     
 16|│Caret right       │ <Right>          │                     
-17|│Choose            │ <CR>             │                     
+17|│Choose            │ a                │                     
 18|│Choose in split   │ <C-s>            │                     
 19|└─────────────────────────────────────┘                     
 20|                                                            
