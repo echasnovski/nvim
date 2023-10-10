@@ -292,7 +292,8 @@ MiniPick.config = {
   },
 
   options = {
-    content_direction = 'from_top',
+    -- Whether to show content from bottom to top
+    content_from_bottom = false,
 
     -- Cache matches to increase speed on repeated prompts (uses more memory)
     use_cache = false,
@@ -398,15 +399,15 @@ end
 --- # Examples ~
 --- > TODO!!!!
 ---
+---@param stritems table Array of all stritems.
 ---@param inds table Array of `stritems` indexes to match. All of them should point
 ---   at string elements of `stritems`. No check is done for performance reasons.
----@param stritems table Array of all stritems.
 ---@param query table Array of strings.
 ---
 ---@return table|nil Depending of whether there is an active picker:
 ---   - If yes, `nil` is returned with |MiniPick.set_picker_match_inds()| used later.
 ---   - If no, array of `stritems` indexes matching the `query` (from best to worst).
-MiniPick.default_match = function(inds, stritems, query)
+MiniPick.default_match = function(stritems, inds, query)
   local is_active = MiniPick.is_picker_active()
   local set_match_inds = is_active and MiniPick.set_picker_match_inds or function(x) return x end
   local f = function()
@@ -480,10 +481,10 @@ end
 MiniPick.default_preview = function(buf_id, item, opts)
   opts = vim.tbl_deep_extend('force', { n_context_lines = 2 * vim.o.lines, line_position = 'top' }, opts or {})
   local item_data = H.parse_item(item)
-  if item_data.type == 'file' then return H.preview_file(item_data, buf_id, opts) end
-  if item_data.type == 'directory' then return H.preview_directory(item_data, buf_id) end
-  if item_data.type == 'buffer' then return H.preview_buffer(item_data, buf_id, opts) end
-  H.preview_inspect(item, buf_id)
+  if item_data.type == 'file' then return H.preview_file(buf_id, item_data, opts) end
+  if item_data.type == 'directory' then return H.preview_directory(buf_id, item_data) end
+  if item_data.type == 'buffer' then return H.preview_buffer(buf_id, item_data, opts) end
+  H.preview_inspect(buf_id, item)
 end
 
 MiniPick.default_choose = function(item)
@@ -493,8 +494,8 @@ MiniPick.default_choose = function(item)
   if not H.is_valid_win(win_target) then win_target = H.get_first_valid_normal_window() end
 
   local item_data = H.parse_item(item)
-  if item_data.type == 'file' or item_data.type == 'directory' then return H.choose_path(item_data, win_target) end
-  if item_data.type == 'buffer' then return H.choose_buffer(item_data, win_target) end
+  if item_data.type == 'file' or item_data.type == 'directory' then return H.choose_path(win_target, item_data) end
+  if item_data.type == 'buffer' then return H.choose_buffer(win_target, item_data) end
   H.choose_print(item)
 end
 
@@ -509,8 +510,8 @@ MiniPick.default_choose_marked = function(items, opts)
     local item_data = H.parse_item(item)
     if item_data.type == 'file' or item_data.type == 'buffer' then
       local entry = { bufnr = item_data.buf_id, filename = item_data.path }
-      entry.lnum, entry.col, entry.text = item_data.line or 1, item_data.col or 1, item_data.text or ''
-      entry.end_lnum, entry.end_col = item_data.line_end, item_data.col_end
+      entry.lnum, entry.col, entry.text = item_data.lnum or 1, item_data.col or 1, item_data.text or ''
+      entry.end_lnum, entry.end_col = item_data.end_lnum, item_data.end_col
       table.insert(list, entry)
     end
   end
@@ -922,7 +923,7 @@ H.setup_config = function(config)
     ['mappings.toggle_info'] = { config.mappings.toggle_info, 'string' },
     ['mappings.toggle_preview'] = { config.mappings.toggle_preview, 'string' },
 
-    ['options.content_direction'] = { config.options.content_direction, 'string' },
+    ['options.content_from_bottom'] = { config.options.content_from_bottom, 'boolean' },
     ['options.use_cache'] = { config.options.use_cache, 'boolean' },
 
     ['source.items'] = { config.source.items, 'table', true },
@@ -1055,16 +1056,13 @@ H.validate_picker_opts = function(opts)
       H.error(string.format('Mapping for built-in action "%s" should be string.', field))
     end
     if not is_builtin_action and not (type(x) == 'table' and type(x.char) == 'string' and vim.is_callable(x.func)) then
-      H.error(string.format('Mapping for manual action "%s" should be table with `char` and `func`.', field))
+      H.error(string.format('Mapping for custom action "%s" should be table with `char` and `func`.', field))
     end
   end
 
   -- Options
   local options = opts.options
-
-  local is_ok_direction = options.content_direction == 'from_top' or options.content_direction == 'from_bottom'
-  if not is_ok_direction then H.error('`options.content_direction` should be one of "from_top" or "from_bottom".') end
-
+  if type(options.content_from_bottom) ~= 'boolean' then H.error('`options.content_from_bottom` should be boolean.') end
   if type(options.use_cache) ~= 'boolean' then H.error('`options.use_cache` should be boolean.') end
 
   -- Window
@@ -1338,19 +1336,19 @@ H.picker_set_lines = function(picker)
   -- Construct target items
   local items_to_show, items, match_inds = {}, picker.items, picker.match_inds
   local cur_ind, cur_line = picker.current_ind, nil
-  local marked_inds_map, marked_lines = picker.marked_inds_map, {}
-  local is_direction_bottom = picker.opts.options.content_direction == 'from_bottom'
-  local from = is_direction_bottom and visible_range.to or visible_range.from
-  local to = is_direction_bottom and visible_range.from or visible_range.to
+  local marked_inds_map, marked_lnums = picker.marked_inds_map, {}
+  local is_from_bottom = picker.opts.options.content_from_bottom
+  local from = is_from_bottom and visible_range.to or visible_range.from
+  local to = is_from_bottom and visible_range.from or visible_range.to
   for i = from, to, (from <= to and 1 or -1) do
     table.insert(items_to_show, items[match_inds[i]])
     if i == cur_ind then cur_line = #items_to_show end
-    if marked_inds_map[match_inds[i]] then table.insert(marked_lines, #items_to_show) end
+    if marked_inds_map[match_inds[i]] then table.insert(marked_lnums, #items_to_show) end
   end
 
-  local n_empty_top_lines = is_direction_bottom and (vim.api.nvim_win_get_height(win_id) - #items_to_show) or 0
+  local n_empty_top_lines = is_from_bottom and (vim.api.nvim_win_get_height(win_id) - #items_to_show) or 0
   cur_line = cur_line + n_empty_top_lines
-  marked_lines = vim.tbl_map(function(x) return x + n_empty_top_lines end, marked_lines)
+  marked_lnums = vim.tbl_map(function(x) return x + n_empty_top_lines end, marked_lnums)
 
   -- Update visible lines accounting for "from_bottom" direction
   picker.opts.source.show(buf_id, items_to_show, query)
@@ -1364,9 +1362,9 @@ H.picker_set_lines = function(picker)
 
   -- Add highlighting for marked lines
   local marked_opts = { end_col = 0, hl_group = 'MiniPickMatchMarked', priority = 202 }
-  for _, line in ipairs(marked_lines) do
-    marked_opts.end_line = line
-    H.set_extmark(buf_id, ns_id, line - 1, 0, marked_opts)
+  for _, lnum in ipairs(marked_lnums) do
+    marked_opts.end_row = lnum
+    H.set_extmark(buf_id, ns_id, lnum - 1, 0, marked_opts)
   end
 
   -- Update current item
@@ -1393,7 +1391,7 @@ H.picker_match = function(picker)
   local query = is_ignorecase and vim.tbl_map(H.tolower, picker.query) or picker.query
 
   H.picker_set_busy(picker, true)
-  local new_inds = picker.opts.source.match(picker.match_inds, stritems, query)
+  local new_inds = picker.opts.source.match(stritems, picker.match_inds, query)
   H.picker_set_match_inds(picker, new_inds)
 end
 
@@ -1409,12 +1407,7 @@ H.picker_get_char_data = function(picker, skip_alternatives)
 
   -- Use alternative keys for some common actions
   local alt_chars = {}
-  if not skip_alternatives then
-    --stylua: ignore
-    alt_chars = {
-      move_down = '<Down>', move_start = '<Home>', move_up = '<Up>', scroll_down = '<PageDown>', scroll_up = '<PageUp>',
-    }
-  end
+  if not skip_alternatives then alt_chars = { move_down = '<Down>', move_start = '<Home>', move_up = '<Up>' } end
 
   -- Process
   for name, rhs in pairs(picker.opts.mappings) do
@@ -1465,8 +1458,8 @@ H.picker_set_bordertext = function(picker)
     config.footer, config.footer_pos = H.picker_compute_footer(picker, win_id), 'left'
   end
 
-  -- Respect `options.direction`
-  if nvim_has_window_footer and picker.opts.options.content_direction == 'from_bottom' then
+  -- Respect `options.content_from_bottom`
+  if nvim_has_window_footer and picker.opts.options.content_from_bottom then
     config.title, config.footer = config.footer, config.title
   end
 
@@ -1536,11 +1529,7 @@ H.actions = {
   choose_in_split   = function(picker, _) return H.picker_choose(picker, 'split')  end,
   choose_in_tabpage = function(picker, _) return H.picker_choose(picker, 'tabnew') end,
   choose_in_vsplit  = function(picker, _) return H.picker_choose(picker, 'vsplit') end,
-  choose_marked     = function(picker, _)
-    local choose_marked = picker.opts.source.choose_marked
-    if not vim.is_callable(choose_marked) then return true end
-    return not choose_marked(MiniPick.get_picker_matches().marked)
-  end,
+  choose_marked     = function(picker, _) return not picker.opts.source.choose_marked(MiniPick.get_picker_matches().marked) end,
 
   delete_char       = function(picker, _) H.picker_query_delete(picker, 1)                end,
   delete_char_right = function(picker, _) H.picker_query_delete(picker, 0)                end,
@@ -1625,7 +1614,7 @@ end
 
 H.picker_choose = function(picker, pre_command)
   local cur_item = H.picker_get_current_item(picker)
-  if cur_item == nil or not vim.is_callable(picker.opts.source.choose) then return true end
+  if cur_item == nil then return true end
 
   local win_id_target = picker.windows.target
   if pre_command ~= nil and H.is_valid_win(win_id_target) then
@@ -1668,7 +1657,7 @@ H.picker_move_current = function(picker, by, to)
 
   if to == nil then
     -- Account for content direction
-    by = (picker.opts.options.content_direction == 'from_top' and 1 or -1) * by
+    by = (picker.opts.options.content_from_bottom and -1 or 1) * by
 
     -- Wrap around edges only if current index is at edge
     to = picker.current_ind
@@ -1793,7 +1782,7 @@ end
 H.picker_show_preview = function(picker)
   local preview = picker.opts.source.preview
   local item = H.picker_get_current_item(picker)
-  if not vim.is_callable(preview) or item == nil then return end
+  if item == nil then return end
 
   local win_id, buf_id = picker.windows.main, H.create_scratch_buf()
   vim.bo[buf_id].bufhidden = 'wipe'
@@ -2016,8 +2005,8 @@ H.parse_item = function(item)
   if ok and H.is_valid_buf(numitem) then return { type = 'buffer', buf_id = numitem } end
 
   -- File or Directory
-  local path_type, path, line, col, rest = H.parse_path(stritem)
-  if path_type ~= 'none' then return { type = path_type, path = path, line = line, col = col, text = rest } end
+  local path_type, path, lnum, col, rest = H.parse_path(stritem)
+  if path_type ~= 'none' then return { type = path_type, path = path, lnum = lnum, col = col, text = rest } end
 
   return {}
 end
@@ -2029,21 +2018,21 @@ H.parse_item_table = function(item)
     --stylua: ignore
     return {
       type = 'buffer',  buf_id   = buf_id,
-      line = item.lnum, line_end = item.end_lnum,
-      col  = item.col,  col_end  = item.end_col,
+      lnum = item.lnum, end_lnum = item.end_lnum,
+      col  = item.col,  end_col  = item.end_col,
       text = item.text,
     }
   end
 
   -- File or Directory
   if type(item.path) == 'string' then
-    local path_type, path, line, col, rest = H.parse_path(item.path)
+    local path_type, path, lnum, col, rest = H.parse_path(item.path)
     if path_type == 'file' then
       --stylua: ignore
       return {
         type = 'file',            path     = path,
-        line = line or item.lnum, line_end = item.end_lnum,
-        col  = col or item.col,   col_end  = item.end_col,
+        lnum = lnum or item.lnum, end_lnum = item.end_lnum,
+        col  = col or item.col,   end_col  = item.end_col,
         text = rest ~= '' and rest or item.text,
       }
     end
@@ -2059,7 +2048,7 @@ H.parse_path = function(x)
   -- Allow inputs like 'aa/bb', 'aa/bb:10', 'aa/bb:10:5', 'aa/bb:10:5:xxx'
   -- Should also work for paths like 'aa-5'
   local location_pattern = ':(%d+):?(%d*):?(.*)$'
-  local line, col, rest = x:match(location_pattern)
+  local lnum, col, rest = x:match(location_pattern)
   local path = x:gsub(location_pattern, '', 1)
 
   -- Verify that path is real
@@ -2069,7 +2058,7 @@ H.parse_path = function(x)
     path_type = H.get_fs_type(path)
   end
 
-  return path_type, path, tonumber(line), tonumber(col), rest or ''
+  return path_type, path, tonumber(lnum), tonumber(col), rest or ''
 end
 
 H.get_cwd = function()
@@ -2085,26 +2074,26 @@ H.get_fs_type = function(path)
 end
 
 -- Default preview ------------------------------------------------------------
-H.preview_file = function(item_data, buf_id, opts)
+H.preview_file = function(buf_id, item_data, opts)
   -- Fully preview only text files
   if not H.is_file_text(item_data.path) then return H.set_buflines(buf_id, { '-Non-text-file-' }) end
 
   -- Compute lines. Limit number of read lines to work better on large files.
-  local has_lines, lines = pcall(vim.fn.readfile, item_data.path, '', (item_data.line or 1) + opts.n_context_lines)
+  local has_lines, lines = pcall(vim.fn.readfile, item_data.path, '', (item_data.lnum or 1) + opts.n_context_lines)
   if not has_lines then return end
 
   item_data.line_position = opts.line_position
   H.preview_set_lines(buf_id, lines, item_data)
 end
 
-H.preview_directory = function(item_data, buf_id)
+H.preview_directory = function(buf_id, item_data)
   local path = item_data.path
   local format = function(x) return x .. (vim.fn.isdirectory(path .. '/' .. x) == 1 and '/' or '') end
   local lines = vim.tbl_map(format, vim.fn.readdir(path))
   H.set_buflines(buf_id, lines)
 end
 
-H.preview_buffer = function(item_data, buf_id, opts)
+H.preview_buffer = function(buf_id, item_data, opts)
   -- NOTE: ideally just setting target buffer to window would be enough, but it
   -- has side effects. See https://github.com/neovim/neovim/issues/24973 .
   -- Reading lines and applying custom styling is a passable alternative.
@@ -2115,20 +2104,20 @@ H.preview_buffer = function(item_data, buf_id, opts)
   vim.o.eventignore = 'BufEnter'
   vim.fn.bufload(buf_id_source)
   vim.o.eventignore = cache_eventignore
-  local lines = vim.api.nvim_buf_get_lines(buf_id_source, 0, (item_data.line or 1) + opts.n_context_lines, false)
+  local lines = vim.api.nvim_buf_get_lines(buf_id_source, 0, (item_data.lnum or 1) + opts.n_context_lines, false)
 
   item_data.filetype, item_data.line_position = vim.bo[buf_id_source].filetype, opts.line_position
   H.preview_set_lines(buf_id, lines, item_data)
 end
 
-H.preview_inspect = function(obj, buf_id) H.set_buflines(buf_id, vim.split(vim.inspect(obj), '\n')) end
+H.preview_inspect = function(buf_id, obj) H.set_buflines(buf_id, vim.split(vim.inspect(obj), '\n')) end
 
 H.preview_set_lines = function(buf_id, lines, extra)
   -- Lines
   H.set_buflines(buf_id, lines)
 
   -- Highlighting
-  H.preview_highlight_region(buf_id, extra.line, extra.col, extra.line_end, extra.col_end)
+  H.preview_highlight_region(buf_id, extra.lnum, extra.col, extra.end_lnum, extra.end_col)
 
   if vim.fn.has('nvim-0.8') == 1 then
     local ft = extra.filetype or vim.filetype.match({ buf = buf_id, filename = extra.path })
@@ -2140,32 +2129,33 @@ H.preview_set_lines = function(buf_id, lines, extra)
   -- Cursor position and window view
   local state = MiniPick.get_picker_state()
   local win_id = state ~= nil and state.windows.main or vim.fn.bufwinid(buf_id)
-  H.set_cursor(win_id, extra.line, extra.col)
+  H.set_cursor(win_id, extra.lnum, extra.col)
   local pos_keys = ({ top = 'zt', center = 'zz', bottom = 'zb' })[extra.line_position] or 'zt'
   pcall(vim.api.nvim_win_call, win_id, function() vim.cmd('normal! ' .. pos_keys) end)
 end
 
-H.preview_highlight_region = function(buf_id, line, col, line_end, col_end)
+H.preview_highlight_region = function(buf_id, lnum, col, end_lnum, end_col)
   -- Highlight line
-  if line == nil then return end
-  local hl_line_opts = { end_row = line, end_col = 0, hl_eol = true, hl_group = 'MiniPickPreviewLine', priority = 201 }
-  H.set_extmark(buf_id, H.ns_id.preview, line - 1, 0, hl_line_opts)
+  if lnum == nil then return end
+  local hl_line_opts = { end_row = lnum, end_col = 0, hl_eol = true, hl_group = 'MiniPickPreviewLine', priority = 201 }
+  H.set_extmark(buf_id, H.ns_id.preview, lnum - 1, 0, hl_line_opts)
 
   -- Highlight position/region
   if col == nil then return end
 
-  local end_row, end_col = line - 1, col
-  if line_end ~= nil and col_end ~= nil then
-    end_row, end_col = line_end - 1, col_end - 1
+  local ext_end_row, ext_end_col = lnum - 1, col
+  if end_lnum ~= nil and end_col ~= nil then
+    ext_end_row, ext_end_col = end_lnum - 1, end_col - 1
   end
-  end_col = H.get_next_char_bytecol(vim.fn.getbufline(buf_id, end_row + 1)[1], end_col)
+  ext_end_col = H.get_next_char_bytecol(vim.fn.getbufline(buf_id, ext_end_row + 1)[1], ext_end_col)
 
-  local hl_region_opts = { end_row = end_row, end_col = end_col, hl_group = 'MiniPickPreviewRegion', priority = 202 }
-  H.set_extmark(buf_id, H.ns_id.preview, line - 1, col - 1, hl_region_opts)
+  local hl_region_opts = { end_row = ext_end_row, end_col = ext_end_col, priority = 202 }
+  hl_region_opts.hl_group = 'MiniPickPreviewRegion'
+  H.set_extmark(buf_id, H.ns_id.preview, lnum - 1, col - 1, hl_region_opts)
 end
 
 -- Default choose -------------------------------------------------------------
-H.choose_path = function(item_data, win_target)
+H.choose_path = function(win_target, item_data)
   -- Try to use already created buffer, if present. This avoids not needed
   -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
   local path, path_buf_id = item_data.path, nil
@@ -2181,19 +2171,19 @@ H.choose_path = function(item_data, win_target)
     vim.api.nvim_win_call(win_target, function() pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(path)) end)
   end
 
-  H.choose_set_cursor(win_target, item_data.line, item_data.col)
+  H.choose_set_cursor(win_target, item_data.lnum, item_data.col)
 end
 
-H.choose_buffer = function(item_data, win_target)
+H.choose_buffer = function(win_target, item_data)
   H.set_winbuf(win_target, item_data.buf_id)
-  H.choose_set_cursor(win_target, item_data.line, item_data.col)
+  H.choose_set_cursor(win_target, item_data.lnum, item_data.col)
 end
 
 H.choose_print = function(x) print(vim.inspect(x)) end
 
-H.choose_set_cursor = function(win_id, line, col)
-  if line == nil then return end
-  H.set_cursor(win_id, line, col)
+H.choose_set_cursor = function(win_id, lnum, col)
+  if lnum == nil then return end
+  H.set_cursor(win_id, lnum, col)
   pcall(vim.api.nvim_win_call, win_id, function() vim.cmd('normal! zvzz') end)
 end
 

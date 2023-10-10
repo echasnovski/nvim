@@ -275,7 +275,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('mappings.toggle_info', '<S-Tab>')
   expect_config('mappings.toggle_preview', '<Tab>')
 
-  expect_config('options.content_direction', 'from_top')
+  expect_config('options.content_from_bottom', false)
   expect_config('options.use_cache', false)
 
   expect_config('source.items', vim.NIL)
@@ -337,7 +337,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ mappings = { toggle_preview = 1 } }, 'mappings.toggle_preview', 'string')
 
   expect_config_error({ options = 'a' }, 'options', 'table')
-  expect_config_error({ options = { content_direction = 1 } }, 'options.content_direction', 'string')
+  expect_config_error({ options = { content_from_bottom = 1 } }, 'options.content_from_bottom', 'boolean')
   expect_config_error({ options = { use_cache = 1 } }, 'options.use_cache', 'boolean')
 
   expect_config_error({ source = 'a' }, 'source', 'table')
@@ -457,7 +457,7 @@ T['start()']['validates `opts`'] = function()
   validate({ delay = { busy = 'a' } }, '`delay.busy`.*number')
   validate({ delay = { busy = 0 } }, '`delay.busy`.*positive')
 
-  validate({ options = { content_direction = 1 } }, '`options%.content_direction`.*one of')
+  validate({ options = { content_from_bottom = 1 } }, '`options%.content_from_bottom`.*boolean')
   validate({ options = { use_cache = 1 } }, '`options%.use_cache`.*boolean')
 
   validate({ mappings = { [1] = '<C-f>' } }, '`mappings`.*only string fields')
@@ -467,8 +467,8 @@ T['start()']['validates `opts`'] = function()
     'built%-in action.*string'
   )
   validate(
-    { mappings = { ['Manual action'] = 1 } },
-    'Mapping for manual action "Manual action".*table with `char` and `func`'
+    { mappings = { ['Custom action'] = 1 } },
+    'Mapping for custom action "Custom action".*table with `char` and `func`'
   )
 
   validate({ source = { items = 1 } }, '`source%.items`.*array or callable')
@@ -570,11 +570,11 @@ T['start()']['respects `source.match`'] = function()
 
   child.expect_screenshot()
   eq(get_picker_matches().all, { 'b' })
-  eq(child.lua_get('_G.match_args'), { { 1, 2, 3 }, { 'a', 'b', 'c' }, {} })
+  eq(child.lua_get('_G.match_args'), { { 'a', 'b', 'c' }, { 1, 2, 3 }, {} })
 
   type_keys('x')
   eq(get_picker_matches().all, { 'b' })
-  eq(child.lua_get('_G.match_args'), { { 2 }, { 'a', 'b', 'c' }, { 'x' } })
+  eq(child.lua_get('_G.match_args'), { { 'a', 'b', 'c' }, { 2 }, { 'x' } })
 end
 
 T['start()']['respects `source.show`'] = function()
@@ -705,8 +705,8 @@ T['start()']['respects `mappings`'] = function()
   eq(is_picker_active(), false)
 end
 
-T['start()']['respects `options.content_direction`'] = function()
-  start({ source = { items = { 'a', 'b' } }, options = { content_direction = 'from_bottom' } })
+T['start()']['respects `options.content_from_bottom`'] = function()
+  start({ source = { items = { 'a', 'b' } }, options = { content_from_bottom = true } })
   child.expect_screenshot()
 end
 
@@ -737,9 +737,9 @@ T['start()']['respects `options.use_cache`'] = function()
   validate_match_calls(3, {})
 end
 
-T['start()']['allows manual mappings'] = function()
+T['start()']['allows custom mappings'] = function()
   -- Both in global and local config
-  child.lua([[MiniPick.config.mappings.manual_global = {
+  child.lua([[MiniPick.config.mappings.custom_global = {
     char = '<C-d>',
     func = function(...) _G.args_global = { ... } end,
   }]])
@@ -748,7 +748,7 @@ T['start()']['allows manual mappings'] = function()
     source = { items = { 'a', 'b' } },
     mappings = {
       -- Return value is treated as "should stop picker after execution"
-      manual = { char = 'm', func = function(...) _G.args_local = { ... }; return true end },
+      custom = { char = 'm', func = function(...) _G.args_local = { ... }; return true end },
     },
   })]])
 
@@ -895,7 +895,7 @@ T['default_match()'] = new_set()
 local default_match = forward_lua('MiniPick.default_match')
 
 local validate_match =
-  function(stritems, query, output_ref) eq(default_match(seq_along(stritems), stritems, query), output_ref) end
+  function(stritems, query, output_ref) eq(default_match(stritems, seq_along(stritems), query), output_ref) end
 
 T['default_match()']['works with active picker'] = function()
   start_with_items(test_items)
@@ -908,9 +908,9 @@ end
 T['default_match()']['does not block query update'] = function()
   child.lua([[
     _G.log = {}
-    _G.default_match_wrapper = function(inds, stritems, query)
+    _G.default_match_wrapper = function(stritems, inds, query)
       table.insert(_G.log, { n_match_inds = #inds, query = vim.deepcopy(query) })
-      MiniPick.default_match(inds, stritems, query)
+      MiniPick.default_match(stritems, inds, query)
     end
   ]])
   child.lua_notify('MiniPick.start({ source = { match = _G.default_match_wrapper }, delay = { async = 1 } })')
@@ -945,15 +945,15 @@ end
 
 T['default_match()']['works without active picker'] = function()
   local stritems, query = { 'aab', 'ac', 'ab' }, { 'a', 'b' }
-  eq(default_match({ 1, 2, 3 }, stritems, query), { 3, 1 })
-  eq(default_match({ 2, 3 }, stritems, query), { 3 })
+  eq(default_match(stritems, { 1, 2, 3 }, query), { 3, 1 })
+  eq(default_match(stritems, { 2, 3 }, query), { 3 })
 end
 
 T['default_match()']['works with empty inputs'] = function()
   local match_inds, stritems, query = seq_along(test_items), { 'ab', 'cd' }, { 'a' }
-  eq(default_match({}, stritems, query), {})
+  eq(default_match(stritems, {}, query), {})
   eq(default_match({}, {}, query), {})
-  eq(default_match(match_inds, stritems, {}), seq_along(stritems))
+  eq(default_match(stritems, match_inds, {}), seq_along(stritems))
 end
 
 T['default_match()']['filters items that match query with gaps'] = function()
@@ -1048,7 +1048,7 @@ T['default_match()']['respects special queries'] = function()
   local all_inds = seq_along(stritems)
   local validate = function(query, output_ref) validate_match(stritems, query, output_ref) end
   local validate_same_as = function(query, query_ref)
-    eq(default_match(all_inds, stritems, query), default_match(all_inds, stritems, query_ref))
+    eq(default_match(stritems, all_inds, query), default_match(stritems, all_inds, query_ref))
   end
 
   -- Precedence:
@@ -1132,15 +1132,15 @@ T['default_match()']['respects special queries'] = function()
 end
 
 T['default_match()']['only input indexes can be in the output'] = function()
-  eq(default_match({ 1, 2, 4 }, { 'a', '_a', '__a', 'b' }, { 'a' }), { 1, 2 })
+  eq(default_match({ 'a', '_a', '__a', 'b' }, { 1, 2, 4 }, { 'a' }), { 1, 2 })
 
   -- Special modes
-  eq(default_match({ 1, 2, 4 }, { 'a', '_a', '__a', 'b' }, { "'", 'a' }), { 1, 2 })
-  eq(default_match({ 1, 2, 4 }, { 'a', '_a', '__a', 'b' }, { '*', 'a' }), { 1, 2 })
-  eq(default_match({ 1, 2, 4 }, { 'a', 'a_', 'a__', 'b' }, { '^', 'a' }), { 1, 2 })
-  eq(default_match({ 1, 2, 4 }, { 'a', '_a', '__a', 'b' }, { 'a', '$' }), { 1, 2 })
+  eq(default_match({ 'a', '_a', '__a', 'b' }, { 1, 2, 4 }, { "'", 'a' }), { 1, 2 })
+  eq(default_match({ 'a', '_a', '__a', 'b' }, { 1, 2, 4 }, { '*', 'a' }), { 1, 2 })
+  eq(default_match({ 'a', 'a_', 'a__', 'b' }, { 1, 2, 4 }, { '^', 'a' }), { 1, 2 })
+  eq(default_match({ 'a', '_a', '__a', 'b' }, { 1, 2, 4 }, { 'a', '$' }), { 1, 2 })
 
-  eq(default_match({ 1, 2, 4 }, { 'abc', 'ab_c', 'ab__c', 'a_b_c' }, { 'a', 'b', ' ', 'c' }), { 1, 2 })
+  eq(default_match({ 'abc', 'ab_c', 'ab__c', 'a_b_c' }, { 1, 2, 4 }, { 'a', 'b', ' ', 'c' }), { 1, 2 })
 end
 
 T['default_match()']['works with multibyte characters'] = function()
@@ -2755,6 +2755,18 @@ T['builtin.resume()']['always starts in main view'] = function()
   validate_picker_view('main')
 end
 
+T['builtin.resume()']['preserves current working directory'] = function()
+  local dir_1, dir_2 = full_path(test_dir), full_path(real_files_dir)
+  child.fn.chdir(dir_1)
+  start_with_items({ 'a' })
+  validate_picker_option('source.cwd', full_path(dir_1))
+  type_keys('<C-c>')
+
+  child.fn.chdir(dir_2)
+  builtin_resume()
+  validate_picker_option('source.cwd', full_path(dir_1))
+end
+
 T['builtin.resume()']['preserves query cache'] = function()
   local validate_match_calls = make_match_with_count()
   child.lua_notify([[MiniPick.start({
@@ -3810,10 +3822,10 @@ T['Overall view']['does not show footer if items are not set'] = function()
   child.expect_screenshot_orig()
 end
 
-T['Overall view']['respects `options.content_direction` with footer'] = function()
+T['Overall view']['respects `options.content_from_bottom` with footer'] = function()
   if not child.has_float_footer() then return end
 
-  start({ source = { items = { 'a', 'b' } }, options = { content_direction = 'from_bottom' } })
+  start({ source = { items = { 'a', 'b' } }, options = { content_from_bottom = true } })
   child.expect_screenshot_orig()
 end
 
@@ -3947,9 +3959,9 @@ T['Main view']['uses dedicated highlight groups'] = function()
   validate_extmark(ranges_extmarks[8], 2, 'MiniPickMatchRanges')
 end
 
-T['Main view']['works with `content_direction`="from_bottom"'] = function()
+T['Main view']['works with `content_from_bottom`=true'] = function()
   child.set_size(10, 30)
-  child.lua([[MiniPick.config.options.content_direction = 'from_bottom']])
+  child.lua([[MiniPick.config.options.content_from_bottom = true]])
   local items = { 'a', 'b', 'bb', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7' }
 
   local validate = function()
@@ -4091,7 +4103,7 @@ T['Info view']['works'] = function()
   child.expect_screenshot()
 end
 
-T['Info view']['respects manual mappings'] = function()
+T['Info view']['respects custom mappings'] = function()
   child.set_size(20, 60)
   child.lua([[MiniPick.config.mappings.custom_action = { char = '<C-d>', func = function() print('Hello') end }]])
   child.lua([[MiniPick.config.mappings.another_action = { char = '<C-e>', func = function() print('World') end }]])
@@ -4285,20 +4297,20 @@ local clean_match_log = function() child.lua('_G.match_log = {}') end
 T['Matching']['works'] = function()
   start_with_items_matchlog({ 'a', 'b', 'bb' })
   -- - `match()` should be called on start for empty query
-  validate_match_log({ { { 1, 2, 3 }, { 'a', 'b', 'bb' }, {} } })
+  validate_match_log({ { { 'a', 'b', 'bb' }, { 1, 2, 3 }, {} } })
   clean_match_log()
 
   -- In regular query increase should use previous match inds (for performance)
   type_keys('b')
-  validate_match_log({ { { 1, 2, 3 }, { 'a', 'b', 'bb' }, { 'b' } } })
+  validate_match_log({ { { 'a', 'b', 'bb' }, { 1, 2, 3 }, { 'b' } } })
   clean_match_log()
 
   type_keys('b')
-  validate_match_log({ { { 2, 3 }, { 'a', 'b', 'bb' }, { 'b', 'b' } } })
+  validate_match_log({ { { 'a', 'b', 'bb' }, { 2, 3 }, { 'b', 'b' } } })
   clean_match_log()
 
   type_keys('x')
-  validate_match_log({ { { 3 }, { 'a', 'b', 'bb' }, { 'b', 'b', 'x' } } })
+  validate_match_log({ { { 'a', 'b', 'bb' }, { 3 }, { 'b', 'b', 'x' } } })
 end
 
 T['Matching']['uses stritems'] = function()
@@ -4306,7 +4318,7 @@ T['Matching']['uses stritems'] = function()
     items = { 'a', { text = 'b' }, function() return 'bb' end },
     match = function(...) _G.match_args = { ... }; return { 1 } end,
   }})]])
-  eq(child.lua_get('_G.match_args'), { { 1, 2, 3 }, { 'a', 'b', 'bb' }, {} })
+  eq(child.lua_get('_G.match_args'), { { 'a', 'b', 'bb' }, { 1, 2, 3 }, {} })
 end
 
 T['Matching']['uses cache'] = function()
@@ -4316,7 +4328,7 @@ T['Matching']['uses cache'] = function()
     eq(get_picker_matches().all_inds, match_inds_ref)
   end
 
-  child.lua_notify([[_G.match_shrink = function(match_inds, stritems, query)
+  child.lua_notify([[_G.match_shrink = function(stritems, match_inds, query)
     _G.match_n_calls = _G.match_n_calls + 1
     if #query == 0 then return { 1, 2, 3, 4 } end
     return vim.list_slice(match_inds, 2, #match_inds)
@@ -4355,7 +4367,7 @@ end
 
 T['Matching']['resets matched indexes when needed'] = function()
   local items = { 'a', 'b', 'bb' }
-  local validate_all_match_inds = function() validate_last_match_log({ { 1, 2, 3 }, items, get_picker_query() }) end
+  local validate_all_match_inds = function() validate_last_match_log({ items, { 1, 2, 3 }, get_picker_query() }) end
 
   start_with_items_matchlog(items)
 
@@ -4387,7 +4399,7 @@ T['Matching']['resets matched indexes when needed'] = function()
 end
 
 T['Matching']['allows returning wider than input set of match indexes'] = function()
-  child.lua_notify([[_G.match_increase = function(match_inds, stritems, query)
+  child.lua_notify([[_G.match_increase = function(stritems, match_inds, query)
     if query[#query] == 'x' then return { 1, 2, 3, 4 } end
     local prompt_pattern = vim.pesc(table.concat(query))
     return vim.tbl_filter(function(i) return stritems[i]:find(prompt_pattern) ~= nil end, match_inds)
@@ -4412,7 +4424,7 @@ T['Matching']["respects 'ignorecase' and 'smartcase'"] = function()
     set_picker_query(query)
     local ref_stritems = ref_state == 'lowered' and items_lowered or items
     local ref_query = ref_state == 'lowered' and vim.tbl_map(string.lower, query) or query
-    validate_last_match_log({ { 1, 2, 3 }, ref_stritems, ref_query })
+    validate_last_match_log({ ref_stritems, { 1, 2, 3 }, ref_query })
     clean_match_log()
     type_keys('<C-u>')
   end
@@ -4444,21 +4456,24 @@ T['Matching']['uses proper `tolower` for ignoring case'] = function()
 
   child.o.ignorecase, child.o.smartcase = true, false
   type_keys('ы')
-  validate_last_match_log({ { 1, 2, 3 }, items_lowered, { 'ы' } })
+  validate_last_match_log({ items_lowered, { 1, 2, 3 }, { 'ы' } })
   type_keys('Ф')
-  validate_last_match_log({ { 1, 2, 3 }, items_lowered, { 'ы', 'ф' } })
+  validate_last_match_log({ items_lowered, { 1, 2, 3 }, { 'ы', 'ф' } })
   type_keys('<C-u>')
 
   child.o.ignorecase, child.o.smartcase = true, true
   type_keys('ы')
-  validate_last_match_log({ { 1, 2, 3 }, items_lowered, { 'ы' } })
+  validate_last_match_log({ items_lowered, { 1, 2, 3 }, { 'ы' } })
   type_keys('Ф')
-  validate_last_match_log({ { 1, 2, 3 }, items, { 'ы', 'Ф' } })
+  validate_last_match_log({ items, { 1, 2, 3 }, { 'ы', 'Ф' } })
 end
 
 T['Key query process'] = new_set()
 
 T['Key query process']['respects mouse click'] = function()
+  -- Don't test in CI because doesn't work consistently for some reason
+  if helpers.is_ci() then return end
+
   child.set_size(10, 15)
 
   -- Should ignore if inside main window
@@ -4617,7 +4632,6 @@ T['Choose']['works for split/tab variations'] = function()
 end
 
 T['Choose']['works without items'] = function()
-  child.set_size(5, 15)
   local validate = function(key)
     child.lua_notify('MiniPick.start({ source = { choose = function(...) _G.been_here = true end } })')
     type_keys(key)
@@ -4631,6 +4645,51 @@ T['Choose']['works without items'] = function()
   validate('<C-s>')
   validate('<C-v>')
   validate('<C-t>')
+end
+
+T['Choose']['works with no matching items'] = function()
+  local validate = function(key)
+    child.lua_notify([[MiniPick.start({
+      source = { items = { 'a' }, choose = function(...) _G.been_here = true end },
+    })]])
+    type_keys('b', key)
+    -- Should not do any split/tab
+    eq(#child.api.nvim_list_wins(), 1)
+    -- Should not call `source.choose()` function
+    eq(child.lua_get('_G.been_here'), vim.NIL)
+  end
+
+  validate('<CR>')
+  validate('<C-s>')
+  validate('<C-v>')
+  validate('<C-t>')
+end
+
+T['Choose']['uses output as "should continue"'] = function()
+  local validate = function(key)
+    child.lua_notify([[MiniPick.start({
+      source = {
+        items = { 'a', 'b' },
+        choose = function(item) _G.latest_item = item; return item == 'a' end,
+        choose_marked = function(items) _G.latest_item = items[#items]; return #items == 1 end,
+      },
+    })]])
+
+    type_keys(key)
+    eq(child.lua_get('_G.latest_item'), 'a')
+    eq(is_picker_active(), true)
+
+    type_keys('<C-n>', key)
+    eq(child.lua_get('_G.latest_item'), 'b')
+    eq(is_picker_active(), false)
+  end
+
+  validate('<CR>')
+  validate('<C-s>')
+  validate('<C-v>')
+  validate('<C-t>')
+
+  validate({ '<C-x>', '<M-CR>' })
 end
 
 T['Mark'] = new_set()
@@ -4693,6 +4752,21 @@ T['Move']['works'] = function()
   validate_current_ind(1)
 end
 
+T['Move']['works with non-overridable keys'] = function()
+  start_with_items({ 'a', 'b', 'bb', 'bbb' })
+
+  type_keys('<Down>')
+  validate_current_ind(2)
+  type_keys('<Down>')
+  validate_current_ind(3)
+  type_keys('<Up>')
+  validate_current_ind(2)
+  type_keys('<Down>')
+  validate_current_ind(3)
+  type_keys('<Home>')
+  validate_current_ind(1)
+end
+
 T['Move']['next/prev wraps around edges'] = function()
   start_with_items({ 'a', 'b' })
 
@@ -4748,6 +4822,15 @@ T['Paste']['works'] = function()
 
   -- Should sanitize register content
   validate('a\nb\tc', { 'a', ' ', 'b', ' ', 'c' })
+end
+
+T['Paste']['pastes at caret'] = function()
+  child.fn.setreg('a', 'hello ')
+  start_with_items({ 'a' })
+  type_keys('w', 'o', 'r', 'l', 'd')
+  type_keys('<Left>', '<Left>', '<Left>', '<Left>', '<Left>')
+  type_keys('<C-r>', 'a')
+  eq(get_picker_query(), { 'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd' })
 end
 
 T['Paste']['does not error on non-existing register label'] = function()

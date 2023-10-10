@@ -2,6 +2,9 @@ name: Test 'mini.pick'
 
 on: [push]
 
+env:
+  IS_CI: true
+
 jobs:
   build:
     name: Test 'mini.pick'

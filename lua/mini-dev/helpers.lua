@@ -174,4 +174,7 @@ Helpers.mark_flaky = function()
   end)
 end
 
+-- Test if running in CI. Should be used to condition as a very last resort.
+Helpers.is_ci = function() return os.getenv('IS_CI') ~= nil end
+
 return Helpers
