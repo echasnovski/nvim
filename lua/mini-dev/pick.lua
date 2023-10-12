@@ -737,7 +737,6 @@ MiniPick.start = function(opts)
   if vim.tbl_islist(items) then vim.schedule(function() MiniPick.set_picker_items(items) end) end
 
   H.picker_track_lost_focus(picker)
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' })
   return H.picker_advance(picker)
 end
 
@@ -1057,7 +1056,7 @@ MiniPick.builtin.help = function(local_opts, opts)
 end
 
 MiniPick.builtin.buffers = function(local_opts, opts)
-  local_opts = vim.tbl_deep_extend('force', { include_unlisted = false, include_current = true }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { include_current = true, include_unlisted = false }, local_opts or {})
 
   local buffers_output = vim.api.nvim_exec('buffers' .. (local_opts.include_unlisted and '!' or ''), true)
   local cur_buf_id, include_current = vim.api.nvim_get_current_buf(), local_opts.include_current
@@ -1099,7 +1098,6 @@ MiniPick.builtin.resume = function()
   picker.view_state = 'main'
 
   H.pickers.active, H.cache = picker, {}
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' })
   return H.picker_advance(picker)
 end
 
@@ -1452,9 +1450,9 @@ H.validate_picker_opts = function(opts)
 
   source.name = tostring(source.name or '<No name>')
 
-  source.cwd = source.cwd or vim.fn.getcwd()
+  if type(source.cwd) == 'string' then source.cwd = H.full_path(source.cwd) end
+  if source.cwd == nil then source.cwd = vim.fn.getcwd() end
   if vim.fn.isdirectory(source.cwd) == 0 then H.error('`source.cwd` should be a valid directory path.') end
-  source.cwd = H.full_path(source.cwd)
 
   source.match = source.match or MiniPick.default_match
   validate_callable(source.match, 'source.match')
@@ -1558,10 +1556,12 @@ H.picker_new = function(opts)
 end
 
 H.picker_advance = function(picker)
+  vim.schedule(function() vim.api.nvim_exec_autocmds('User', { pattern = 'MiniPickStart' }) end)
+
   local char_data = H.picker_get_char_data(picker)
 
   local do_match, is_aborted = false, false
-  while true do
+  for _ = 1, 1000000 do
     if H.cache.is_force_stop_advance then break end
     H.picker_update(picker, do_match)
 
@@ -2590,7 +2590,8 @@ H.choose_path = function(win_target, item_data)
   -- `:edit` call and avoids some problems with auto-root from 'mini.misc'.
   local path, path_buf_id = item_data.path, nil
   for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
-    if H.is_valid_buf(buf_id) and vim.api.nvim_buf_get_name(buf_id) == path then path_buf_id = buf_id end
+    local is_target = H.is_valid_buf(buf_id) and vim.bo[buf_id].buflisted and vim.api.nvim_buf_get_name(buf_id) == path
+    if is_target then path_buf_id = buf_id end
   end
 
   -- Set buffer in target window
@@ -2645,7 +2646,7 @@ H.files_get_command = function(tool)
 end
 
 H.files_fallback_items = function(cwd)
-  if vim.fn.has('nvim-0.9') == 0 then H.error('Tool "fallback" of `files` builtin needs Neovim>=0.8.') end
+  if vim.fn.has('nvim-0.9') == 0 then H.error('Tool "fallback" of `files` builtin needs Neovim>=0.9.') end
   cwd = cwd or '.'
   local poke_picker = H.poke_picker_throttle()
   local f = function()
@@ -2683,7 +2684,7 @@ H.grep_get_command = function(tool, pattern)
 end
 
 H.grep_fallback_items = function(pattern, cwd)
-  if vim.fn.has('nvim-0.9') == 0 then H.error('Tool "fallback" of `grep` builtin needs Neovim>=0.8.') end
+  if vim.fn.has('nvim-0.9') == 0 then H.error('Tool "fallback" of `grep` builtin needs Neovim>=0.9.') end
   cwd = cwd or '.'
   local poke_picker = H.poke_picker_throttle()
   local f = function()

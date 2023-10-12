@@ -141,6 +141,21 @@ local make_match_with_count = function()
   return validate_match_calls
 end
 
+local make_event_log = function()
+  child.lua([[
+  _G.event_log = {}
+  _G.track_event = function()
+    local buf_id = MiniPick.get_picker_state().buffers.main
+    local entry
+    if not vim.api.nvim_buf_is_valid(buf_id) then
+      entry = 'Main buffer is invalid'
+    else
+      entry = #vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
+    end
+    table.insert(_G.event_log, entry)
+  end]])
+end
+
 -- Common mocks
 local mock_fn_executable = function(available_executables)
   local lua_cmd = string.format(
@@ -814,9 +829,12 @@ T['start()']['stops impoperly aborted previous picker'] = function()
 end
 
 T['start()']['triggers `MiniPickStart` User event'] = function()
-  child.cmd('au User MiniPickStart lua _G.n_user_start = (_G.n_user_start or 0) + 1')
+  make_event_log()
+  child.cmd('au User MiniPickStart lua _G.track_event()')
   start_with_items(test_items)
-  eq(child.lua_get('_G.n_user_start'), 1)
+
+  -- User event should be triggered when all elements are usually set
+  eq(child.lua_get('_G.event_log'), { #test_items })
 end
 
 T['start()']['respects global config'] = function()
@@ -845,10 +863,12 @@ end
 T['stop()']['can be called without active picker'] = function() expect.no_error(stop) end
 
 T['stop()']['triggers `MiniPickStop` User event'] = function()
-  child.cmd('au User MiniPickStop lua _G.n_user_stop = (_G.n_user_stop or 0) + 1')
+  make_event_log()
+  child.cmd('au User MiniPickStop lua _G.track_event()')
   start_with_items(test_items)
   stop()
-  eq(child.lua_get('_G.n_user_stop'), 1)
+  -- User event should be triggered while buffer is still valid
+  eq(child.lua_get('_G.event_log'), { #test_items })
 end
 
 T['refresh()'] = new_set()
@@ -1373,11 +1393,11 @@ T['default_preview()']['shows position in file path'] = function()
   validate_preview(items)
 end
 
-T['default_preview()']['shows range in file path'] = function()
+T['default_preview()']['shows region in file path'] = function()
   local path = real_file('b.txt')
   local items = {
-    { text = path .. ':range-oneline', path = path, lnum = 8, col = 3, end_lnum = 8, end_col = 5 },
-    { text = path .. ':range-manylines', path = path, lnum = 9, col = 3, end_lnum = 11, end_col = 4 },
+    { text = path .. ':region-oneline', path = path, lnum = 8, col = 3, end_lnum = 8, end_col = 5 },
+    { text = path .. ':region-manylines', path = path, lnum = 9, col = 3, end_lnum = 11, end_col = 4 },
   }
   validate_preview(items)
 end
@@ -1418,6 +1438,9 @@ T['default_preview()']['works for buffer'] = function()
   child.api.nvim_buf_set_lines(buf_id_4, 0, -1, false, { 'This is buffer #4' })
 
   local items = {
+    -- As number
+    buf_id_1,
+
     -- As string convertible to number
     tostring(buf_id_1),
 
@@ -1453,11 +1476,11 @@ T['default_preview()']['shows position in buffer'] = function()
   validate_preview({ { text = 'Position in buffer', bufnr = buf_id, lnum = 6, col = 3 } })
 end
 
-T['default_preview()']['shows range in buffer'] = function()
+T['default_preview()']['shows region in buffer'] = function()
   local buf_id = mock_buffer_for_preview()
   local items = {
-    { text = 'Oneline range in buffer', bufnr = buf_id, lnum = 8, col = 3, end_lnum = 8, end_col = 6 },
-    { text = 'Manylines range in buffer', bufnr = buf_id, lnum = 10, col = 3, end_lnum = 12, end_col = 4 },
+    { text = 'Oneline region in buffer', bufnr = buf_id, lnum = 8, col = 3, end_lnum = 8, end_col = 6 },
+    { text = 'Manylines region in buffer', bufnr = buf_id, lnum = 10, col = 3, end_lnum = 12, end_col = 4 },
   }
   validate_preview(items)
 end
@@ -1616,11 +1639,11 @@ T['default_choose()']['works for file path'] = function()
   validate(path .. ':8:2', path, { 8, 1 })
   validate({ text = path, path = path, lnum = 10, col = 4 }, path, { 10, 3 })
 
-  -- Path with range
+  -- Path with region
   validate({ text = path, path = path, lnum = 12, col = 5, end_lnum = 14, end_col = 3 }, path, { 12, 4 })
 end
 
-T['default_choose()']['reuses opened buffer for file path'] = function()
+T['default_choose()']['reuses opened listed buffer for file path'] = function()
   local path = real_file('b.txt')
   child.cmd('edit ' .. path)
   local buf_id_path = child.api.nvim_get_current_buf()
@@ -1644,6 +1667,13 @@ T['default_choose()']['reuses opened buffer for file path'] = function()
   child.api.nvim_set_current_buf(buf_id_alt)
   default_choose(path .. ':7:2')
   validate({ 7, 1 })
+
+  -- Doesn't reuse if unlisted
+  child.api.nvim_set_current_buf(buf_id_alt)
+  child.cmd('bdelete ' .. buf_id_path)
+  default_choose(path)
+  validate({ 1, 0 })
+  eq(child.api.nvim_buf_get_option(buf_id_path, 'buflisted'), true)
 end
 
 T['default_choose()']['works for directory path'] = function()
@@ -1719,7 +1749,7 @@ T['default_choose()']['works for buffer'] = function()
   buf_id = setup_buffer({ 6, 6 })
   validate({ text = 'buffer', bufnr = buf_id, lnum = 8, col = 8 }, buf_id, { 8, 7 })
 
-  -- Buffer with range
+  -- Buffer with region
   buf_id = setup_buffer({ 6, 6 })
   validate({ text = 'buffer', bufnr = buf_id, lnum = 9, col = 9, end_lnum = 10, end_col = 8 }, buf_id, { 9, 8 })
 
@@ -2145,7 +2175,7 @@ end
 T['builtin.files()']['has fallback tool'] = function()
   if child.fn.has('nvim-0.9') == 0 then
     local f = function() child.lua([[MiniPick.builtin.files({ tool = 'fallback' })]]) end
-    expect.error(f, 'Tool "fallback" of `files`.*0%.8')
+    expect.error(f, 'Tool "fallback" of `files`.*0%.9')
     return
   end
 
@@ -2264,7 +2294,7 @@ T['builtin.grep()']['has fallback tool'] = new_set({ parametrize = { { 'default'
   test = function(pattern_type)
     if child.fn.has('nvim-0.9') == 0 then
       local f = function() child.lua([[MiniPick.builtin.grep({ tool = 'fallback', pattern = 'x' })]]) end
-      expect.error(f, 'Tool "fallback" of `grep`.*0%.8')
+      expect.error(f, 'Tool "fallback" of `grep`.*0%.9')
       return
     end
 
@@ -2701,31 +2731,34 @@ T['builtin.resume()'] = new_set()
 local builtin_resume = forward_lua_notify('MiniPick.builtin.resume')
 
 T['builtin.resume()']['works'] = function()
-  local items = { 'aa', 'bb', 'cc' }
+  local items = { 'a', 'b', 'bb' }
   start_with_items(items)
-  type_keys('a')
-  eq(get_picker_matches().all, { 'aa' })
+  type_keys('b')
+  eq(get_picker_matches().all, { 'b', 'bb' })
   type_keys('<CR>')
 
-  -- Should trigger `MiniPickStart` user event
-  child.cmd('au User MiniPickStart lua _G.n_pick_start = (_G.n_pick_start or 0) + 1')
+  make_event_log()
+  child.cmd('au User MiniPickStart lua _G.track_event()')
+
   child.lua_notify('_G.resume_item = MiniPick.builtin.resume()')
-  eq(child.lua_get('_G.n_pick_start'), 1)
+
+  -- User event should be triggered when all elements are usually set
+  eq(child.lua_get('_G.event_log'), { 2 })
 
   -- Should preserve as much as state as possible from latest picker
   child.expect_screenshot()
   eq(get_picker_items(), items)
-  eq(get_picker_matches().all, { 'aa' })
-  eq(get_picker_query(), { 'a' })
+  eq(get_picker_matches().all, { 'b', 'bb' })
+  eq(get_picker_query(), { 'b' })
 
   type_keys('<C-u>')
   eq(get_picker_matches().all, items)
-  type_keys('b')
-  eq(get_picker_matches().all, { 'bb' })
+  type_keys('a')
+  eq(get_picker_matches().all, { 'a' })
 
   -- Should return value
   type_keys('<CR>')
-  eq(child.lua_get('_G.resume_item'), 'bb')
+  eq(child.lua_get('_G.resume_item'), 'a')
 end
 
 T['builtin.resume()']['can be called after previous picker was aborted'] = function()
@@ -4208,7 +4241,7 @@ T['Preview']['uses dedicated highlight groups'] = function()
   local items = {
     { text = 'Preview line', path = path, lnum = 3 },
     { text = 'Preview position', path = path, lnum = 4, col = 2 },
-    { text = 'Preview range', path = path, lnum = 5, col = 3, end_lnum = 6, end_col = 2 },
+    { text = 'Preview region', path = path, lnum = 5, col = 3, end_lnum = 6, end_col = 2 },
   }
   start_with_items(items, 'My name')
 
@@ -4932,6 +4965,21 @@ T['Refine']['works when no items are set'] = function()
   type_keys('<C-Space>')
   type_keys('<M-Space>')
   child.expect_screenshot()
+end
+
+T['Stop'] = new_set()
+
+T['Stop']['triggers User event'] = function()
+  child.cmd('au User MiniPickStop lua _G.track_event()')
+  local validate = function(key)
+    make_event_log()
+    start_with_items({ 'a', 'b', 'bb' })
+    type_keys('b', key)
+    eq(child.lua_get('_G.event_log'), { 2 })
+  end
+
+  validate('<Esc>')
+  validate('<C-c>')
 end
 
 return T
