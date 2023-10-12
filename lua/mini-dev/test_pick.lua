@@ -388,6 +388,13 @@ T['start()']['works'] = function()
   eq(child.lua_get('_G.picked_item'), test_items[1])
 end
 
+T['start()']['returns `nil` when there is no current match'] = function()
+  child.lua_notify('_G.picked_item = MiniPick.start(...)', { { source = { items = test_items } } })
+  type_keys('x')
+  type_keys('<CR>')
+  eq(child.lua_get('_G.picked_item'), vim.NIL)
+end
+
 T['start()']['works with window footer'] = function()
   -- TODO: Use this as primary test after support for Neovim<=0.9 is dropped
   if not child.has_float_footer() then return end

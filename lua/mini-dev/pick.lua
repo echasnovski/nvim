@@ -9,11 +9,10 @@
 ---
 --- - Single window general purpose interface for picking element from any array.
 ---
---- - On demand toggleable preview and info view.
+--- - On demand toggleable preview and info views.
 ---
 --- - Interactive query matching (filter+sort) with fast non-blocking default
----   which does fuzzy matching by default while allowing other modes
----   (see |MiniPick.default_match()|).
+---   which does fuzzy matching and allows other modes (|MiniPick.default_match()|).
 ---
 --- - Built-in pickers (see |MiniPick.builtin|):
 ---     - Files.
@@ -27,16 +26,7 @@
 ---
 --- - |vim.ui.select()| wrapper (see |MiniPick.ui_select()|).
 ---
---- - Minimal yet flexible source specification (see |MiniPick-source|) with:
----     - Items (array, callable, or manually set later).
----     - Source name.
----     - Working directory.
----     - Matching algorithm.
----     - Way matches are shown in main window.
----     - Item preview.
----     - "On choice" action for current and "marked" items.
----
---- - Rich and customizable built-in actions when picker is active:
+--- - Rich and customizable built-in |MiniPick-actions| when picker is active:
 ---     - Manually change currently focused item.
 ---     - Scroll vertically and horizontally.
 ---     - Toggle preview or info view.
@@ -44,15 +34,24 @@
 ---     - Refine current matches (make them part of a new picker).
 ---     - And many more.
 ---
---- - Custom actions configured globally, per buffer, or per picker.
+--- - Minimal yet flexible |MiniPick-source| specification with:
+---     - Items (array, callable, or manually set later).
+---     - Source name.
+---     - Working directory.
+---     - Matching algorithm.
+---     - Way matches are shown in main window.
+---     - Item preview.
+---     - "On choice" action for current and marked items.
+---
+--- - Custom actions/keys can be configured globally, per buffer, or per picker.
 ---
 --- - Out of the box support for 'ignorecase' and 'smartcase'.
 ---
 --- - Match caching to increase responsiveness on repeated prompts.
 ---
 --- Notes:
---- - Works on all supported versions but using Neovim>=0.9 is recommended with
----   Neovim>=0.10 giving more visual feedback in floating window footer.
+--- - Works on all supported versions but using Neovim>=0.9 is recommended.
+---   Neovim>=0.10 will give more visual feedback in floating window footer.
 ---
 --- Sources with more details:
 --- - |MiniPick-overview|
@@ -65,8 +64,8 @@
 ---
 --- Suggested dependencies (provide extra functionality, will work without them):
 ---
---- - Plugin 'nvim-tree/nvim-web-devicons' for filetype icons near the items.
----   If missing, default or no icons will be used.
+--- - Plugin 'nvim-tree/nvim-web-devicons' for filetype icons near the items
+---   representing actual paths. If missing, default or no icons will be used.
 ---
 ---                                                             *MiniPick-cli-tools*
 --- - CLI tool(s) to power |MiniPick.builtin.files()|, |MiniPick.builtin.grep()|, and
@@ -101,7 +100,7 @@
 ---
 --- - 'ibhagwan/fzf-lua':
 ---     - Mostly same comparison as with 'nvim-telescope/telescope.nvim'.
----     - Requires 'junegunn/fzf' installed to power fuzzy matchgin, while this
+---     - Requires 'junegunn/fzf' installed to power fuzzy matching, while this
 ---       module provides built-in Lua matching.
 ---
 --- # Highlight groups ~
@@ -204,6 +203,10 @@
 --- Example of source to choose from |arglist|: >
 ---   { items = vim.fn.argv, name = 'Arglist' }
 --- <
+---
+--- Note: this is mostly useful for writing pickers. Can safely skip if you
+--- want to just use provided pickers.
+---
 ---                                                          *MiniPick-source.items*
 --- # Items ~
 ---
@@ -589,7 +592,7 @@
 ---   local pick = require('mini.pick')
 ---   pick.setup({ source = { show = pick.default_show } })
 ---
---- - Example mappings to switch `toggle_{preview,info}` and `move_{up,down}`: >
+--- - Mappings to switch `toggle_{preview,info}` and `move_{up,down}`: >
 ---
 ---   require('mini.pick').setup({
 ---     mappings = {
@@ -600,7 +603,7 @@
 ---     }
 ---   })
 ---
---- - Example of "cursor tooltip" window style: >
+--- - "Cursor tooltip" window style: >
 ---
 ---   {
 ---     window = {
@@ -611,6 +614,9 @@
 ---     },
 ---   }
 ---
+--- - Change window border style: >
+---
+---   { window = { config = { border = 'double' } } }
 ---@tag MiniPick-examples
 
 ---@alias __pick_builtin_opts table|nil Options forwarded to |MiniPick.start()|.
@@ -681,7 +687,7 @@ end
 --- Smaller values give smoother user experience at the cost of more computations.
 ---
 --- `delay.busy` is a delay between when some computation starts and showing
---- visual feedback about it by setting window border to have `MiniPickBorderBusy`
+--- visual feedback about it by making window border to have `MiniPickBorderBusy`
 --- highlight group.
 --- Smaller values will give feedback faster at the cost of feeling like flicker.
 ---
@@ -696,12 +702,12 @@ end
 ---
 --- `options.content_from_bottom` is a boolean indicating whether content should be
 --- shown from bottom to top. That means that best matches will be shown at
---- the bottom. Note: for better experience use Neovim>=0.10 which has floating
+--- the bottom. Note: for better experience use Neovim>=0.10, which has floating
 --- window footer capability. Default: `false`.
 ---
 --- `options.use_cache` is a boolean indicating whether match results should be
---- cached per prompt (concatenated query). This results into faster responce
---- on repreated prompts (like when deleting query entries) at the cost of using
+--- cached per prompt (i.e. concatenated query). This results into faster response
+--- on repeated prompts (like when deleting query entries) at the cost of using
 --- more memory. Default: `false`.
 ---
 --- # Source ~
@@ -709,6 +715,7 @@ end
 --- `config.source` defines fallbacks for source specification. For example, this
 --- can be used to change default `match` to use different implementation or `show`
 --- to not show icons for some |MiniPick.builtin| pickers (see |MiniPick-examples|).
+--- See |MiniPick-source| for more information.
 ---
 --- # Window ~
 ---
@@ -852,7 +859,9 @@ end
 --- Default match
 ---
 --- Filter target stritems to contain query and sort from best to worst matches.
+---
 --- Implements default value for |MiniPick-source.match|.
+---
 --- By default (if no special modes apply) it does the following fuzzy matching:
 ---
 --- - Stritem contains query if it contains all its elements verbatim in the same
@@ -887,7 +896,7 @@ end
 ---
 --- # Examples ~
 ---
---- Assuming `stritems` being `{ '_abc', 'a_bc', 'ab_c', 'abc_' }`, here are
+--- Assuming `stritems` are `{ '_abc', 'a_bc', 'ab_c', 'abc_' }`, here are some
 --- example matches based on prompt (concatenated query): >
 ---
 ---   | Prompt | Matches                |
@@ -909,7 +918,7 @@ end
 ---
 --- Having query `{ 'ab', 'c' }` is the same as "ab c" prompt.
 ---
---- You can have a feel of hwo this works with this command: >
+--- You can have a feel of how this works with this command: >
 ---
 ---   MiniPick.start({ source = { items = { '_abc', 'a_bc', 'ab_c', 'abc_' } } })
 ---
@@ -940,9 +949,10 @@ end
 
 --- Default show
 ---
---- Show items in a buffer and highlight parts actually matching query (assuming
+--- Show items in a buffer and highlight parts that actually match query (assuming
 --- match is done with |MiniPick.default_match()|). Lines are computed based on
 --- the |MiniPick-source.items-stritems|.
+---
 --- Implements default value for |MiniPick-source.show|.
 ---
 --- Uses the following highlight groups (see |MiniPick| for their description):
@@ -960,8 +970,8 @@ end
 ---   - <show_icons> `(boolean)` - whether to show icons for entries recognized as
 ---     valid actually present paths on disk (see |MiniPick-source.items-common|),
 ---     empty space otherwise.
----     Default: `false`. Note: |MiniPick.builtin| pickers showing
----     file/directory paths have `true` used by default.
+---     Default: `false`. Note: |MiniPick.builtin| pickers showing file/directory
+---     paths use `true` by default.
 MiniPick.default_show = function(buf_id, items, query, opts)
   opts = vim.tbl_deep_extend('force', { show_icons = false }, opts or {})
 
@@ -1019,7 +1029,7 @@ end
 --- Preview item. Logic follows the rules in |MiniPick-source.items-common|:
 --- - File and buffer are shown at the start.
 --- - Directory has its content listed.
---- - Line, position, region in file or buffer are shown at start.
+--- - Line/position/region in file or buffer is shown at start.
 --- - Others are shown directly with |vim.inspect()|.
 ---
 --- Implements default value for |MiniPick-source.preview|.
@@ -1033,7 +1043,7 @@ end
 ---@param item any Item to preview.
 ---@param opts table|nil Options. Possible values:
 ---   - <n_context_lines> `(number)` - number of lines to load past target position
----     when reading from disk. Useful for explore context. Default: twice 'lines'.
+---     when reading from disk. Useful to explore context. Default: 'lines' twice.
 ---   - <line_position> `(string)` - where in the window to show item position.
 ---     One of "top", "center", "bottom". Default: "top".
 MiniPick.default_preview = function(buf_id, item, opts)
@@ -1051,7 +1061,7 @@ end
 --- - File and directory are called with |:edit| in the target window, possibly
 ---   followed by setting cursor at the start of line/position/region.
 --- - Buffer is set as current in target window.
---- - Others have the output of |vim.inspect()| printed.
+--- - Others have the output of |vim.inspect()| printed in Command line.
 ---
 --- Implements default value for |MiniPick-source.choose|.
 ---
@@ -1125,7 +1135,7 @@ MiniPick.default_choose_marked = function(items, opts)
   end
 end
 
---- Select
+--- Select rewrite
 ---
 --- Function which can be used to directly override |vim.ui.select()| to use
 --- 'mini.pick' for any "select" type of tasks.
@@ -1377,7 +1387,7 @@ end
 ---   -- Adding custom picker
 ---   require('mini.pick').registry.arglist = function()
 ---     local source = { items = vim.fn.argv, name = 'Arglist' }
----     return MiniPick.start({ sourcee = source })
+---     return MiniPick.start({ source = source })
 ---   end
 ---
 ---   -- Make `:Pick files` accept `cwd`
@@ -1407,14 +1417,22 @@ MiniPick.get_picker_items = function() return vim.deepcopy((H.pickers.active or 
 
 --- Get stritems of active picker
 ---
----@return table|nil Picker stritems or `nil` if no active picker.
+---@return table|nil Picker stritems (|MiniPick-source.items-stritems|) or `nil` if
+---   no active picker.
 ---
 ---@seealso |MiniPick.set_picker_items()| and |MiniPick.set_picker_items_from_cli()|
 MiniPick.get_picker_stritems = function() return vim.deepcopy((H.pickers.active or {}).stritems) end
 
---- Get stritems of active picker
+--- Get matches of active picker
 ---
----@return table|nil Picker stritems or `nil` if no active picker.
+---@return table|nil Picker matches or `nil` if no active picker. Matches is a table
+---   with the following fields:
+---   - <all> `(table|nil)` - all currently matched items.
+---   - <all_inds> `(table|nil)` - indexes of all currently matched items.
+---   - <current> `(any)` - current matched item.
+---   - <current_ind> `(number|nil)` - index of current matched item.
+---   - <marked> `(table|nil)` - marked items.
+---   - <marked_inds> `(table|nil)` - indexes of marked items.
 ---
 ---@seealso |MiniPick.set_picker_match_inds()|
 MiniPick.get_picker_matches = function()
@@ -1434,7 +1452,8 @@ end
 
 --- Get config of active picker
 ---
----@return table|nil Picker config (its input `opts` table) or `nil` if no active picker.
+---@return table|nil Picker config (`start()`'s input `opts` table) or `nil` if
+---   no active picker.
 ---
 ---@seealso |MiniPick.set_picker_opts()|
 MiniPick.get_picker_opts = function() return vim.deepcopy((H.pickers.active or {}).opts) end
@@ -1442,11 +1461,11 @@ MiniPick.get_picker_opts = function() return vim.deepcopy((H.pickers.active or {
 --- Get state data of active picker
 ---
 ---@return table|nil Table with picker state data or `nil` if no active picker.
----   State data consists from following fields:
+---   State data is a table with the following fields:
 ---   - <buffers> `(table)` - table with `main`, `preview`, `info` fields representing
----     buffer identifier for corresponding view (can be `nil`).
+---     buffer identifier (or `nil`) for corresponding view.
 ---   - <windows> `(table)` - table with `main` and `target` fields representing
----     window identifiers for main and target () windows.
+---     window identifiers for main and target windows.
 ---   - <caret> `(number)` - caret column.
 ---   - <is_bust> `(boolean)` - whether picker is busy with computations.
 ---
@@ -1476,7 +1495,7 @@ MiniPick.get_picker_query = function() return vim.deepcopy((H.pickers.active or 
 ---   - <do_match> `(boolean)` - whether to perform match after setting items.
 ---     Default: `true`.
 ---   - <querytick> `(number|nil)` - value of querytick (|MiniPick.get_querytick()|)
----     to perioudically check against when setting items. If current querytick
+---     to periodically check against when setting items. If checked querytick
 ---     differs from supplied, no items are set.
 ---
 ---@seealso |MiniPick.get_picker_items()| and |MiniPick.get_picker_stritems()|
@@ -1538,7 +1557,7 @@ end
 --- Set match indexes for active picker
 ---
 --- This is intended to be used inside custom asynchronous |MiniPick-source.match|
---- implementations.
+--- implementations. See |MiniPick.poke_is_picker_active()| for an example.
 ---
 ---@param match_inds table Array of numbers indicating which elements of picker's
 ---   stritems match the query.
@@ -1590,8 +1609,8 @@ end
 
 --- Get query tick
 ---
---- Query tick is a unique identifier. Intended to be used to detect user activity
---- during and across |MiniPick.start()| calls for an effecient non-blocking
+--- Query tick is a unique query identifier. Intended to be used to detect user
+--- activity during and between |MiniPick.start()| calls for efficient non-blocking
 --- functionality. Updates after any query change, picker start and stop.
 ---
 --- See |MiniPick.poke_is_picker_active()| for usage example.
