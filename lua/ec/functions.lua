@@ -1,27 +1,6 @@
 -- Helper table
 local H = {}
 
--- Backup for "iterate over all fuzzy matches" function
-EC.iterate_query_matches = function(candidate, query)
-  local f, state, n_query = nil, {}, #query
-  f = function(s, active_ind)
-    if active_ind == 0 then return nil, nil end
-    local not_has_matched = #s < n_query
-    local from, to = nil, s[active_ind] or 0
-    for i = active_ind, n_query do
-      from, to = string.find(candidate, query[i], to + 1, true)
-      if from == nil then
-        if not_has_matched then return nil, nil end
-        return f(s, active_ind - 1)
-      end
-      s[i] = from
-    end
-    return n_query, s
-  end
-
-  return f, state, 1
-end
-
 -- Log for personal use during debugging
 EC.log = {}
 
@@ -289,7 +268,7 @@ S.setup_windows = function()
   -- Set up behavior
   for _, buf_id in ipairs({ S.buf_id_text, S.buf_id_attr }) do
     vim.api.nvim_buf_set_keymap(buf_id, 'n', 'q', ':tabclose!<CR>', { noremap = true })
-    vim.api.nvim_buf_set_keymap(buf_id, 'n', 'D', '<Cmd>lua EC.minitest_screenshots.delete_current()<CR>', { noremap = true })
+    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-d>', '<Cmd>lua EC.minitest_screenshots.delete_current()<CR>', { noremap = true })
     vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-n>', '<Cmd>lua EC.minitest_screenshots.show_next()<CR>', { noremap = true })
     vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-p>', '<Cmd>lua EC.minitest_screenshots.show_prev()<CR>', { noremap = true })
   end
