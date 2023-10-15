@@ -45,10 +45,6 @@ require('mini.statusline').setup({
 
 require('mini.tabline').setup()
 
-require('mini-dev.pick').setup()
-vim.ui.select = MiniPick.ui_select
-vim.keymap.set('n', ',', [[<Cmd>Pick buf_lines scope='current'<CR>]], { nowait = true })
-
 require('mini-dev.extra').setup()
 
 vim.schedule(function()
@@ -223,6 +219,10 @@ vim.schedule(function()
 
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   vim.keymap.set('i', '<CR>', 'v:lua.EC.cr_action()', { expr = true })
+
+  require('mini.pick').setup()
+  vim.ui.select = MiniPick.ui_select
+  vim.keymap.set('n', ',', [[<Cmd>Pick buf_lines scope='current'<CR>]], { nowait = true })
 
   require('mini.splitjoin').setup()
 

@@ -741,7 +741,7 @@ H.apply_config = function(config) MiniExtra.config = config end
 
 -- Pickers --------------------------------------------------------------------
 H.validate_pick = function(fun_name)
-  local has_pick, pick = pcall(require, 'mini-dev.pick')
+  local has_pick, pick = pcall(require, 'mini.pick')
   if not has_pick then
     H.error(string.format([[`pickers.%s()` requires 'mini.pick' which can not be found.]], fun_name))
   end
@@ -805,11 +805,11 @@ end
 H.pick_validate_scope = function(...) return H.pick_validate_one_of('scope', ...) end
 
 H.pick_get_config = function()
-  return vim.tbl_deep_extend('force', (require('mini-dev.pick') or {}).config or {}, vim.b.minipick_config or {})
+  return vim.tbl_deep_extend('force', (require('mini.pick') or {}).config or {}, vim.b.minipick_config or {})
 end
 
 H.show_with_icons =
-  function(buf_id, items, query) require('mini-dev.pick').default_show(buf_id, items, query, { show_icons = true }) end
+  function(buf_id, items, query) require('mini.pick').default_show(buf_id, items, query, { show_icons = true }) end
 
 -- Git picker -----------------------------------------------------------------
 H.git_normalize_path = function(path, picker_name)
