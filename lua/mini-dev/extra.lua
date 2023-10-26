@@ -45,8 +45,16 @@
 ---
 --- - 'chrisgrieser/nvim-various-textobjs':
 
----@alias __pick_builtin_local_opts table|nil Options defining behavior of this particular picker.
----@alias __pick_builtin_opts table|nil Options forwarded to |MiniPick.start()|.
+---@alias __extra_pickers_local_opts table|nil Options defining behavior of this particular picker.
+---@alias __extra_pickers_opts table|nil Options forwarded to |MiniPick.start()|.
+---@alias __extra_pickers_git_notes Notes:
+--- - Requires executable `git`.
+--- - Requires target path to be part of git repository.
+--- - Present for exploration and navigation purposes. Doing any Git operations
+---   is suggested to be done in a dedicated Git client and are not planned.
+---@alias __extra_pickers_git_path - <path> `(string|nil)` - target path for Git operation. Also used to find
+---     Git repository (as path's parent one) inside which to construct items.
+---     Default: `nil` for root of Git repository containing |current-directory|.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -125,7 +133,7 @@ MiniExtra.pickers = {}
 ---
 --- Pick from |vim.diagnostic| using |vim.diagnostic.get()|.
 ---
----@param local_opts __pick_builtin_local_opts
+---@param local_opts __extra_pickers_local_opts
 ---   Possible fields:
 ---   - <get_opts> `(table)` - options for |vim.diagnostic.get()|. Can be used
 ---     to limit severity or namespace. Default: {}.
@@ -133,7 +141,7 @@ MiniExtra.pickers = {}
 ---     Default: "all".
 ---   - <sort_by> `(string)` - sort priority. One of "severity", "path", "none".
 ---     Default: "severity".
----@param opts __pick_builtin_opts
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.diagnostic = function(local_opts, opts)
   local pick = H.validate_pick('diagnostic')
   local_opts = vim.tbl_deep_extend('force', { get_opts = {}, scope = 'all', sort_by = 'severity' }, local_opts or {})
@@ -195,9 +203,9 @@ end
 ---
 --- Pick from |v:oldfiles| entries representing readable files.
 ---
----@param local_opts __pick_builtin_local_opts
+---@param local_opts __extra_pickers_local_opts
 ---   Not used at the moment.
----@param opts __pick_builtin_opts
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.oldfiles = function(local_opts, opts)
   local pick = H.validate_pick('oldfiles')
   local oldfiles = vim.v.oldfiles
@@ -221,11 +229,11 @@ end
 --- Pick from buffer lines. Notes:
 --- - Loads all target currently unloaded buffers.
 ---
----@param local_opts __pick_builtin_local_opts
+---@param local_opts __extra_pickers_local_opts
 ---   Possible fields:
 ---   - <scope> `(string)` - one of "all" (normal listed buffers) or "current".
 ---     Default: "all".
----@param opts __pick_builtin_opts
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.buf_lines = function(local_opts, opts)
   local pick = H.validate_pick('buf_lines')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
@@ -278,12 +286,12 @@ end
 --- - Command history: `MiniExtra.pickers.history({ scope = ':' })`
 --- - Search history: `:Pick history scope='/'`
 ---
----@param local_opts __pick_builtin_local_opts
+---@param local_opts __extra_pickers_local_opts
 ---   Possible fields:
 ---   - <scope> `(string)` - any allowed {name} flag of |:history| option.
 ---     Note: only full words are allowed (like "cmd", "search", etc.).
 ---     Default: "all".
----@param opts __pick_builtin_opts
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.history = function(local_opts, opts)
   local pick = H.validate_pick('history')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
@@ -334,9 +342,9 @@ end
 --- - Preview shows highlights definitinon (as in |:highlight| with {group-name}).
 --- - Choosing places highlight definition in Command line to update and apply.
 ---
----@param local_opts __pick_builtin_local_opts
+---@param local_opts __extra_pickers_local_opts
 ---   Not used at the moment.
----@param opts __pick_builtin_opts
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.hl_groups = function(local_opts, opts)
   local pick = H.validate_pick('hl_groups')
 
@@ -380,9 +388,9 @@ end
 --- - Choosing either executes command (if reliably known that it doesn't need
 ---   arguments) or populates Command line with the command.
 ---
----@param local_opts __pick_builtin_local_opts
+---@param local_opts __extra_pickers_local_opts
 ---   Not used at the moment.
----@param opts __pick_builtin_opts
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.commands = function(local_opts, opts)
   local pick = H.validate_pick('commands')
 
@@ -407,25 +415,53 @@ MiniExtra.pickers.commands = function(local_opts, opts)
   return H.pick_start(items, default_opts, opts)
 end
 
-MiniExtra.pickers.git_files = function(local_opts, opts)
-  local pick = H.validate_pick('git_files')
-  H.validate_git('git_files')
+--- Git branches picker
+---
+--- Pick from Git branches using `git branch`.
+---
+--- __extra_pickers_git_notes
+--- - On choose opens scratch buffer with branch's history.
+---
+--- Examples ~
+---
+--- - `MiniExtra.pickers.git_branches({ scope = 'local' })` - local branches of
+---   Git repository containing |current-directory|.
+--- - `:Pick git_branches path='%'` - all branches of Git repository containing
+---   current file.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   __extra_pickers_git_path
+---   - <scope> `(string)` - branch scope to show. One of "all", "local", "remotes".
+---     Default: "all".
+---@param opts __extra_pickers_opts
+MiniExtra.pickers.git_branches = function(local_opts, opts)
+  local pick = H.validate_pick('git_branches')
+  H.validate_git('git_branches')
 
-  local_opts = vim.tbl_deep_extend('force', { scope = 'tracked' }, local_opts or {})
-  local allowed_scope = { 'tracked', 'modified', 'untracked', 'ignored', 'deleted' }
-  local scope = H.pick_validate_scope(local_opts, allowed_scope, 'git_files')
+  local_opts = vim.tbl_deep_extend('force', { path = nil, scope = 'all' }, local_opts or {})
 
-  --stylua: ignore
-  local command = ({
-    tracked   = { 'git', 'ls-files', '--cached' },
-    modified  = { 'git', 'ls-files', '--modified' },
-    untracked = { 'git', 'ls-files', '--others' },
-    ignored   = { 'git', 'ls-files', '--others', '--ignored', '--exclude-standard' },
-    deleted   = { 'git', 'ls-files', '--deleted' },
-  })[local_opts.scope]
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'local', 'remotes' }, 'git_branches')
 
-  local show = H.pick_get_config().source.show or H.show_with_icons
-  local default_source = { name = string.format('Git files (%s)', local_opts.scope), show = show }
+  -- Compute path to repo with target path (as it might differ from current)
+  local path, path_type = H.git_normalize_path(local_opts.path, 'git_branches')
+  local repo_dir = H.git_get_repo_dir(path, path_type)
+
+  -- Define source
+  local show_history = function(buf_id, item)
+    local branch = item:match('^%*?%s*(%S+)')
+    local cmd = { 'git', '-C', repo_dir, 'log', branch, '--format=format:%h %s' }
+    H.cli_show_output(buf_id, cmd)
+  end
+
+  local preview = show_history
+  local choose = H.make_show_in_target_win('git_branches', show_history)
+
+  local command = { 'git', 'branch', '-v', '--no-color', '--list' }
+  if scope == 'all' or scope == 'remotes' then table.insert(command, 3, '--' .. scope) end
+
+  local name = string.format('Git branches (%s)', scope)
+  local default_source = { name = name, cwd = repo_dir, preview = preview, choose = choose }
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command }, opts)
 end
@@ -434,34 +470,47 @@ end
 -- `git_commits({ path = vim.fn.getcwd() })` - commits affecting files from cwd
 -- `git_commits({ path = vim.api.nvim_buf_get_name(0) })` - commits affecting
 --   file in current buffer
+
+--- Git commits picker
+---
+--- Pick from Git commits using `git log`.
+---
+--- __extra_pickers_git_notes
+--- - On choose opens scratch buffer with commit's diff.
+---
+--- Examples ~
+---
+--- - `MiniExtra.pickers.git_commits()` - all commits from parent Git
+---   repository of |current-directory|.
+--- - `MiniExtra.pickers.git_commits({ path = 'subdir' })` - commits affecting
+---   files from 'subdir' subdirectory.
+--- - `:Pick git_commits path='%'` commits affecting current file.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   __extra_pickers_git_path
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.git_commits = function(local_opts, opts)
   local pick = H.validate_pick('git_commits')
   H.validate_git('git_commits')
 
-  local_opts = vim.tbl_deep_extend('force', { path = nil, choose_type = 'checkout' }, local_opts or {})
-  local choose_type = H.pick_validate_one_of('choose_type', local_opts, { 'checkout', 'show_patch' }, 'git_commits')
-
-  local path, path_type = H.git_normalize_path(local_opts.path, 'git_commits')
-  local command = { 'git', 'log', [[--format=format:%h %s]], '--', path }
-  local get_hash = function(item) return (item or ''):match('^(%S+)') end
+  local_opts = vim.tbl_deep_extend('force', { path = nil }, local_opts or {})
 
   -- Compute path to repo with target path (as it might differ from current)
+  local path, path_type = H.git_normalize_path(local_opts.path, 'git_commits')
   local repo_dir = H.git_get_repo_dir(path, path_type)
   if local_opts.path == nil then path = repo_dir end
 
   -- Define source
   local show_patch = function(buf_id, item)
     vim.bo[buf_id].syntax = 'diff'
-    H.show_cli_output(buf_id, { 'git', '-C', repo_dir, '--no-pager', 'show', get_hash(item) })
+    local hash = (item or ''):match('^(%S+)')
+    H.cli_show_output(buf_id, { 'git', '-C', repo_dir, '--no-pager', 'show', hash })
   end
-
   local preview = show_patch
+  local choose = H.make_show_in_target_win('git_commits', show_patch)
 
-  local choose_show_patch = H.make_show_in_target_win('git_commits', show_patch)
-  local choose_checkout = function(item)
-    vim.schedule(function() vim.fn.system('git -C ' .. repo_dir .. ' checkout ' .. get_hash(item)) end)
-  end
-  local choose = choose_type == 'show_patch' and choose_show_patch or choose_checkout
+  local command = { 'git', 'log', [[--format=format:%h %s]], '--', path }
 
   local name = string.format('Git commits (%s)', local_opts.path == nil and 'all' or 'for path')
   local default_source = { name = name, cwd = repo_dir, preview = preview, choose = choose }
@@ -469,95 +518,118 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
   return pick.builtin.cli({ command = command }, opts)
 end
 
+--- Git files picker
+---
+--- Pick from Git files using `git ls-files`.
+---
+--- __extra_pickers_git_notes
+---
+--- Examples ~
+---
+--- - `MiniExtra.pickers.git_files({ scope = 'ignored' })` - ignored files from
+---   parent Git repository of |current-directory|.
+--- - `:Pick git_files path='subdir' scope='modified'` - files from 'subdir'
+---   subdirectory which are ignored by Git.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   __extra_pickers_git_path
+---   - <scope> `(string)` - files scope to show. One of
+---       - "tracked"   (`--cached`   Git flag).
+---       - "modified"  (`--modified` Git flag).
+---       - "untracked" (`--others`   Git flag).
+---       - "ignored"   (`--ignored`  Git flag).
+---       - "deleted"   (`--deleted`  Git flag).
+---     Default: "tracked".
+---@param opts __extra_pickers_opts
+MiniExtra.pickers.git_files = function(local_opts, opts)
+  local pick = H.validate_pick('git_files')
+  H.validate_git('git_files')
+
+  local_opts = vim.tbl_deep_extend('force', { path = nil, scope = 'tracked' }, local_opts or {})
+  local allowed_scope = { 'tracked', 'modified', 'untracked', 'ignored', 'deleted' }
+  local scope = H.pick_validate_scope(local_opts, allowed_scope, 'git_files')
+
+  -- Compute path to repo with target path (as it might differ from current)
+  local path, path_type = H.git_normalize_path(local_opts.path, 'git_files')
+  H.git_get_repo_dir(path, path_type)
+  local path_dir = path_type == 'directory' and path or vim.fn.fnamemodify(path, ':h')
+
+  -- Define source
+  local show = H.pick_get_config().source.show or H.show_with_icons
+
+  --stylua: ignore
+  local command = ({
+    tracked   = { 'git', '-C', path_dir, 'ls-files', '--cached' },
+    modified  = { 'git', '-C', path_dir, 'ls-files', '--modified' },
+    untracked = { 'git', '-C', path_dir, 'ls-files', '--others' },
+    ignored   = { 'git', '-C', path_dir, 'ls-files', '--others', '--ignored', '--exclude-standard' },
+    deleted   = { 'git', '-C', path_dir, 'ls-files', '--deleted' },
+  })[local_opts.scope]
+
+  local name = string.format('Git files (%s)', local_opts.scope)
+  local default_source = { name = name, cwd = path_dir, show = show }
+  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
+  return pick.builtin.cli({ command = command }, opts)
+end
+
+--- Git hunks picker
+---
+--- Pick from Git hunks using `git diff`.
+---
+--- __extra_pickers_git_notes
+--- - On choose navigates to hunk's first change.
+---
+--- Examples ~
+---
+--- - `MiniExtra.pickers.git_hunks({ scope = 'staged' })` - staged hunks from
+---   parent Git repository of |current-directory|.
+--- - `:Pick git_hunks path='%' n_context=0` - hunks from current file with
+---   preview showing no context.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <n_context> `(number)` - number of context lines to show in hunk's preview.
+---     Default: 3.
+---   __extra_pickers_git_path
+---   - <scope> `(string)` - hunks scope to show. One of "unstaged" or "staged".
+---     Default: "unstaged".
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.git_hunks = function(local_opts, opts)
   local pick = H.validate_pick('git_hunks')
   H.validate_git('git_hunks')
 
-  local default_local_opts = { path = nil, choose_type = 'navigate', scope = 'unstaged', n_context = 3 }
+  local default_local_opts = { n_context = 3, path = nil, scope = 'unstaged' }
   local_opts = vim.tbl_deep_extend('force', default_local_opts, local_opts or {})
-  local choose_type = H.pick_validate_one_of('choose_type', local_opts, { 'navigate', 'index' }, 'git_commits')
 
-  local path, path_type = H.git_normalize_path(local_opts.path, 'git_commits')
-  local scope = H.pick_validate_scope(local_opts, { 'unstaged', 'staged' }, 'git_hunks')
   local ok_context, n_context = pcall(math.floor, local_opts.n_context)
   if not (ok_context and n_context >= 0) then
     H.error('`n_context` option in `git_hunks` picker should be non-negative number.')
   end
+  local scope = H.pick_validate_scope(local_opts, { 'unstaged', 'staged' }, 'git_hunks')
 
-  -- Define source
-  local command = { 'git', 'diff', '--patch', '--unified=' .. n_context, '--color=never', '--', path }
-  if scope == 'staged' then table.insert(command, 4, '--cached') end
-
+  -- Compute path to repo with target path (as it might differ from current)
+  local path, path_type = H.git_normalize_path(local_opts.path, 'git_hunks')
   local repo_dir = H.git_get_repo_dir(path, path_type)
   if local_opts.path == nil then path = repo_dir end
 
-  local postprocess = function(lines) return H.git_difflines_to_hunkitems(lines, n_context) end
-
+  -- Define source
   local preview = function(buf_id, item)
     vim.bo[buf_id].syntax = 'diff'
-    H.set_buflines(buf_id, item.hunk)
+    local lines = vim.deepcopy(item.header)
+    vim.list_extend(lines, item.hunk)
+    H.set_buflines(buf_id, lines)
   end
 
-  local choose_stage = function(item)
-    -- Create file with patch
-    local tempfile = vim.fn.tempname()
-    local patch_lines = item.header
-    patch_lines = vim.list_extend(patch_lines, item.hunk)
-    vim.fn.writefile(patch_lines, tempfile)
+  local command = { 'git', 'diff', '--patch', '--unified=' .. n_context, '--color=never', '--', path }
+  if scope == 'staged' then table.insert(command, 4, '--cached') end
 
-    -- Apply patch to index in correct "direction"
-    local command = { 'git', 'apply', '--cached', '--', tempfile }
-    if scope == 'staged' then table.insert(command, 4, '--reverse') end
-    vim.fn.system(command)
-
-    -- Continue using picker
-    return true
-  end
-
-  local choose_staged_marked = function(items)
-    vim.tbl_map(choose_stage, items)
-    return true
-  end
-
-  local choose = choose_type == 'index' and choose_stage or pick.default_choose
-  local choose_marked = choose_type == 'index' and choose_staged_marked or pick.default_choose_marked
+  local postprocess = function(lines) return H.git_difflines_to_hunkitems(lines, n_context) end
 
   local name = string.format('Git hunks (%s %s)', scope, local_opts.path == nil and 'all' or 'for path')
-  local default_source =
-    { name = name, cwd = repo_dir, preview = preview, choose = choose, choose_marked = choose_marked }
+  local default_source = { name = name, cwd = repo_dir, preview = preview }
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command, postprocess = postprocess }, opts)
-end
-
-MiniExtra.pickers.git_branches = function(local_opts, opts)
-  local pick = H.validate_pick('git_branches')
-  H.validate_git('git_branches')
-
-  local_opts = vim.tbl_deep_extend('force', { scope = 'all', choose_type = 'checkout' }, local_opts or {})
-  local scope = H.pick_validate_scope(local_opts, { 'all', 'local', 'remotes' }, 'git_branches')
-  local choose_type = H.pick_validate_one_of('choose_type', local_opts, { 'checkout', 'show_history' }, 'git_commits')
-
-  local command = { 'git', 'branch', '-v', '--no-color', '--list' }
-  if scope == 'all' or scope == 'remotes' then table.insert(command, 3, '--' .. scope) end
-
-  local get_branch_name = function(item) return item:match('^%*?%s*(%S+)') end
-
-  -- Define source
-  local show_history = function(buf_id, item)
-    H.show_cli_output(buf_id, { 'git', 'log', get_branch_name(item), '--format=format:%h %s' })
-  end
-
-  local preview = show_history
-
-  local choose_show_history = H.make_show_in_target_win('git_branches', show_history)
-  local choose_checkout = function(item)
-    vim.schedule(function() vim.fn.system('git -C ' .. repo_dir .. ' checkout ' .. get_branch_name(item)) end)
-  end
-  local choose = choose_type == 'show_history' and choose_show_history or choose_checkout
-
-  local default_source = { name = 'Git branches', preview = preview, choose = choose }
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
-  return pick.builtin.cli({ command = command }, opts)
 end
 
 MiniExtra.pickers.options = function(local_opts, opts)
@@ -877,9 +949,9 @@ MiniExtra.pickers.hipatterns = function(local_opts, opts)
 end
 
 -- Register in 'mini.pick'
-if type(MiniPick) == 'table' then
+if type(_G.MiniPick) == 'table' then
   for name, f in pairs(MiniExtra.pickers) do
-    MiniPick.registry[name] = function(local_opts) return f(local_opts) end
+    _G.MiniPick.registry[name] = function(local_opts) return f(local_opts) end
   end
 end
 
@@ -971,7 +1043,7 @@ H.pick_get_config = function()
 end
 
 H.make_show_in_target_win = function(fun_name, show_fun)
-  local pick = validate_pick(fun_name)
+  local pick = H.validate_pick(fun_name)
   return function(item)
     local win_target = (pick.get_picker_state().windows or {}).target
     if win_target == nil or not H.is_valid_win(win_target) then return end
@@ -1037,12 +1109,14 @@ end
 
 H.git_difflines_to_hunkitems = function(lines, n_context)
   local header_pattern = '^diff %-%-git'
-  local hunk_pattern = '^@@ %-%d+,%d+ %+(%d+),%d+ @@'
+  local hunk_pattern = '^@@ %-%d+,?%d* %+(%d+),?%d* @@'
   local to_path_pattern = '^%+%+%+ b/(.*)$'
 
+  -- Parse diff lines
   local cur_header, cur_path, is_in_hunk = {}, nil, false
   local items = {}
   for _, l in ipairs(lines) do
+    -- Separate path header and hunk for better granularity
     if l:find(header_pattern) ~= nil then
       is_in_hunk = false
       cur_header = {}
@@ -1054,8 +1128,8 @@ H.git_difflines_to_hunkitems = function(lines, n_context)
     local hunk_start = l:match(hunk_pattern)
     if hunk_start ~= nil then
       is_in_hunk = true
-      local lnum = tonumber(hunk_start) + n_context
-      table.insert(items, { path = cur_path, lnum = lnum, header = vim.deepcopy(cur_header), hunk = {} })
+      local item = { path = cur_path, lnum = tonumber(hunk_start), header = vim.deepcopy(cur_header), hunk = {} }
+      table.insert(items, item)
     end
 
     if is_in_hunk then
@@ -1065,12 +1139,24 @@ H.git_difflines_to_hunkitems = function(lines, n_context)
     end
   end
 
+  -- Correct line number to point at the first change
+  local try_correct_lnum = function(item, i)
+    if item.hunk[i]:find('^[+-]') == nil then return false end
+    item.lnum = item.lnum + i - 2
+    return true
+  end
+  for _, item in ipairs(items) do
+    for i = 2, #item.hunk do
+      if try_correct_lnum(item, i) then break end
+    end
+  end
+
   -- Construct aligned text from path and hunk header
   local text_parts, path_width, coords_width = {}, 0, 0
   for i, item in ipairs(items) do
-    local coords, header = item.hunk[1]:match('@@ (.-) @@ ?(.*)$')
-    coords, header = coords or '', header or ''
-    text_parts[i] = { item.path, coords, header }
+    local coords, title = item.hunk[1]:match('@@ (.-) @@ ?(.*)$')
+    coords, title = coords or '', title or ''
+    text_parts[i] = { item.path, coords, title }
     path_width = math.max(path_width, vim.fn.strchars(item.path))
     coords_width = math.max(coords_width, vim.fn.strchars(coords))
   end
@@ -1207,21 +1293,41 @@ H.explorer_default_sort = function(items)
 end
 
 -- CLI ------------------------------------------------------------------------
-H.show_cli_output = function(buf_id, command)
+H.cli_run = function(command, stdout_hook)
+  stdout_hook = stdout_hook or function() end
   local executable, args = command[1], vim.list_slice(command, 2, #command)
-  local process, stdout = nil, vim.loop.new_pipe()
-  local spawn_opts = { args = args, stdio = { nil, stdout, nil } }
+  local process, stdout, stderr = nil, vim.loop.new_pipe(), vim.loop.new_pipe()
+  local spawn_opts = { args = args, stdio = { nil, stdout, stderr } }
   process = vim.loop.spawn(executable, spawn_opts, function() process:close() end)
 
-  local data_feed = {}
-  stdout:read_start(vim.schedule_wrap(function(err, data)
-    assert(not err, err)
-    if data then return table.insert(data_feed, data) end
+  H.cli_read_stream(stdout, stdout_hook)
+  H.cli_read_stream(stderr, function(lines)
+    local msg = table.concat(lines, '\n')
+    if msg == '' then return end
+    H.error(msg)
+  end)
+end
+
+H.cli_show_output = function(buf_id, command)
+  local stdout_hook = function(lines)
     if not H.is_valid_buf(buf_id) then return end
+    H.set_buflines(buf_id, lines)
+  end
+  H.cli_run(command, stdout_hook)
+end
+
+H.cli_read_stream = function(stream, post_hook)
+  local data_feed = {}
+  local callback = vim.schedule_wrap(function(err, data)
+    assert(not err, err)
+    if data ~= nil then return table.insert(data_feed, data) end
 
     local lines = vim.split(table.concat(data_feed), '\n')
-    H.set_buflines(buf_id, lines)
-  end))
+    data_feed = nil
+    stream:close()
+    post_hook(lines)
+  end)
+  stream:read_start(callback)
 end
 
 -- Buffers --------------------------------------------------------------------
