@@ -148,11 +148,7 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
 
   local diag_buf_id
   if scope == 'current' then diag_buf_id = vim.api.nvim_get_current_buf() end
-  local items = vim.diagnostic.get(diag_buf_id, local_opts.get_opts)
-
-  -- NOTE: Account for output of `vim.diagnostic.get()` being modifiable:
-  -- https://github.com/neovim/neovim/pull/25010
-  if vim.fn.has('nvim-0.10') == 0 then items = vim.deepcopy(items) end
+  local items = vim.deepcopy(vim.diagnostic.get(diag_buf_id, local_opts.get_opts))
 
   -- Compute final path width
   local path_width = 0
@@ -163,14 +159,8 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   end
 
   -- Sort
-  if sort_by == 'severity' then
-    local compare = function(a, b) return a.severity < b.severity or (a.severity == b.severity and a.path < b.path) end
-    table.sort(items, compare)
-  end
-  if sort_by == 'path' then
-    local compare = function(a, b) return a.path < b.path or (a.path == b.path and a.severity < b.severity) end
-    table.sort(items, compare)
-  end
+  local compare = H.diagnostic_make_compare(sort_by)
+  if vim.is_callable(compare) then table.sort(items, compare) end
 
   -- Update items
   for _, item in ipairs(items) do
@@ -192,7 +182,7 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   local show = function(buf_id, items_to_show, query)
     pick.default_show(buf_id, items_to_show, query)
 
-    H.pick_clear_namespace(buf_id)
+    H.pick_clear_namespace(buf_id, H.ns_id.pickers)
     for i, item in ipairs(items_to_show) do
       H.pick_highlight_line(buf_id, i, hl_groups_ref[item.severity], 199)
     end
@@ -210,18 +200,20 @@ end
 ---@param opts __pick_builtin_opts
 MiniExtra.pickers.oldfiles = function(local_opts, opts)
   local pick = H.validate_pick('oldfiles')
-  local_opts = local_opts or {}
-
   local oldfiles = vim.v.oldfiles
-  if not vim.tbl_islist(oldfiles) then H.error('`oldfiles` picker needs valid `v:oldfiles`.') end
+  if not vim.tbl_islist(oldfiles) then H.error('`pickers.oldfiles` picker needs valid `v:oldfiles`.') end
 
-  local items = {}
-  for _, path in ipairs(oldfiles) do
-    if vim.fn.filereadable(path) == 1 then table.insert(items, path) end
-  end
+  local items = vim.schedule_wrap(function()
+    local cwd = pick.get_picker_opts().source.cwd
+    local res = {}
+    for _, path in ipairs(oldfiles) do
+      if vim.fn.filereadable(path) == 1 then table.insert(res, H.short_path(path, cwd)) end
+    end
+    pick.set_picker_items(res)
+  end)
 
   local show = H.pick_get_config().source.show or H.show_with_icons
-  return H.pick_start(items, { source = { name = 'Oldfiles', show = show } }, opts)
+  return H.pick_start(items, { source = { name = 'Old files', show = show } }, opts)
 end
 
 --- Buffer lines picker
@@ -270,9 +262,28 @@ MiniExtra.pickers.buf_lines = function(local_opts, opts)
 
   local show = H.pick_get_config().source.show
   if is_scope_all and show == nil then show = H.show_with_icons end
-  return H.pick_start(items, { source = { name = string.format('Buffers lines (%s)', scope), show = show } }, opts)
+  return H.pick_start(items, { source = { name = string.format('Buffer lines (%s)', scope), show = show } }, opts)
 end
 
+--- Neovim history picker
+---
+--- Pick from output of |:history|. Notes:
+--- - Has no preview.
+--- - Choosing action depends on scope:
+---     - For "cmd" / ":" scopes, the command is executed.
+---     - For "search" / "/" / "?" scopes, serach is redone.
+---     - For other scopes nothing is done (but chosen item is still returned).
+---
+--- Examples:
+--- - Command history: `MiniExtra.pickers.history({ scope = ':' })`
+--- - Search history: `:Pick history scope='/'`
+---
+---@param local_opts __pick_builtin_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - any allowed {name} flag of |:history| option.
+---     Note: only full words are allowed (like "cmd", "search", etc.).
+---     Default: "all".
+---@param opts __pick_builtin_opts
 MiniExtra.pickers.history = function(local_opts, opts)
   local pick = H.validate_pick('history')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
@@ -305,20 +316,31 @@ MiniExtra.pickers.history = function(local_opts, opts)
   local preview = H.pick_make_no_preview('history')
 
   local choose = function(item)
-    if type(item) ~= 'string' then return end
+    if not (type(item) == 'string' and vim.fn.mode() == 'n') then return end
     local id, entry = item:match('^(.) (.*)$')
-    if id == ':' then vim.schedule(function() vim.cmd(entry) end) end
-    if id == '/' or id == '?' then vim.schedule(function() vim.fn.feedkeys(id .. entry .. '\r', 'nx') end) end
+    if id == ':' or id == '/' or id == '?' then
+      vim.schedule(function() vim.fn.feedkeys(id .. entry .. '\r', 'nx') end)
+    end
   end
 
   local default_source = { name = string.format('History (%s)', scope), preview = preview, choose = choose }
   return H.pick_start(items, { source = default_source }, opts)
 end
 
+--- Highlight groups picker
+---
+--- Pick and preview highlight groups. Notes:
+--- - Item line is colored with same highlight group it represents.
+--- - Preview shows highlights definitinon (as in |:highlight| with {group-name}).
+--- - Choosing places highlight definition in Command line to update and apply.
+---
+---@param local_opts __pick_builtin_local_opts
+---   Not used at the moment.
+---@param opts __pick_builtin_opts
 MiniExtra.pickers.hl_groups = function(local_opts, opts)
   local pick = H.validate_pick('hl_groups')
-  local_opts = local_opts or {}
 
+  -- Construct items
   local group_data = vim.split(vim.api.nvim_exec('highlight', true), '\n')
   local items = {}
   for _, l in ipairs(group_data) do
@@ -328,13 +350,14 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
 
   local show = function(buf_id, items_to_show, query)
     H.set_buflines(buf_id, items_to_show)
-    H.pick_clear_namespace(buf_id)
+    H.pick_clear_namespace(buf_id, H.ns_id.pickers)
     -- Highlight line with highlight group of its item
     for i = 1, #items_to_show do
       H.pick_highlight_line(buf_id, i, items_to_show[i], 300)
     end
   end
 
+  -- Define source
   local preview = function(buf_id, item)
     local lines = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')
     H.set_buflines(buf_id, lines)
@@ -350,9 +373,18 @@ MiniExtra.pickers.hl_groups = function(local_opts, opts)
   return H.pick_start(items, { source = default_source }, opts)
 end
 
+--- Neovim commands picker
+---
+--- Pick from Neovim built-in (|ex-commands|) and |user-commands|. Notes:
+--- - Preview shows information about the command (if available).
+--- - Choosing either executes command (if reliably known that it doesn't need
+---   arguments) or populates Command line with the command.
+---
+---@param local_opts __pick_builtin_local_opts
+---   Not used at the moment.
+---@param opts __pick_builtin_opts
 MiniExtra.pickers.commands = function(local_opts, opts)
   local pick = H.validate_pick('commands')
-  local_opts = local_opts or {}
 
   local commands = vim.tbl_deep_extend('force', vim.api.nvim_get_commands({}), vim.api.nvim_buf_get_commands(0, {}))
 
@@ -377,8 +409,9 @@ end
 
 MiniExtra.pickers.git_files = function(local_opts, opts)
   local pick = H.validate_pick('git_files')
-  local_opts = vim.tbl_deep_extend('force', { scope = 'tracked' }, local_opts or {})
+  H.validate_git('git_files')
 
+  local_opts = vim.tbl_deep_extend('force', { scope = 'tracked' }, local_opts or {})
   local allowed_scope = { 'tracked', 'modified', 'untracked', 'ignored', 'deleted' }
   local scope = H.pick_validate_scope(local_opts, allowed_scope, 'git_files')
 
@@ -403,6 +436,8 @@ end
 --   file in current buffer
 MiniExtra.pickers.git_commits = function(local_opts, opts)
   local pick = H.validate_pick('git_commits')
+  H.validate_git('git_commits')
+
   local_opts = vim.tbl_deep_extend('force', { path = nil, choose_type = 'checkout' }, local_opts or {})
   local choose_type = H.pick_validate_one_of('choose_type', local_opts, { 'checkout', 'show_patch' }, 'git_commits')
 
@@ -436,11 +471,10 @@ end
 
 MiniExtra.pickers.git_hunks = function(local_opts, opts)
   local pick = H.validate_pick('git_hunks')
-  local_opts = vim.tbl_deep_extend(
-    'force',
-    { path = nil, choose_type = 'navigate', scope = 'unstaged', n_context = 3 },
-    local_opts or {}
-  )
+  H.validate_git('git_hunks')
+
+  local default_local_opts = { path = nil, choose_type = 'navigate', scope = 'unstaged', n_context = 3 }
+  local_opts = vim.tbl_deep_extend('force', default_local_opts, local_opts or {})
   local choose_type = H.pick_validate_one_of('choose_type', local_opts, { 'navigate', 'index' }, 'git_commits')
 
   local path, path_type = H.git_normalize_path(local_opts.path, 'git_commits')
@@ -497,8 +531,9 @@ end
 
 MiniExtra.pickers.git_branches = function(local_opts, opts)
   local pick = H.validate_pick('git_branches')
-  local_opts = vim.tbl_deep_extend('force', { scope = 'all', choose_type = 'checkout' }, local_opts or {})
+  H.validate_git('git_branches')
 
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all', choose_type = 'checkout' }, local_opts or {})
   local scope = H.pick_validate_scope(local_opts, { 'all', 'local', 'remotes' }, 'git_branches')
   local choose_type = H.pick_validate_one_of('choose_type', local_opts, { 'checkout', 'show_history' }, 'git_commits')
 
@@ -829,7 +864,7 @@ MiniExtra.pickers.hipatterns = function(local_opts, opts)
   local show = function(buf_id, items_to_show, query)
     pick.default_show(buf_id, items_to_show, query)
 
-    H.pick_clear_namespace(buf_id)
+    H.pick_clear_namespace(buf_id, H.ns_id.pickers)
     for i, item in ipairs(items_to_show) do
       local end_col = string.len(item.highlighter)
       local opts = { hl_group = item.hl_group, end_row = i - 1, end_col = end_col, priority = 1 }
@@ -910,7 +945,7 @@ H.pick_prepend_position = function(item)
   return item
 end
 
-H.pick_clear_namespace = function(buf_id) pcall(vim.api.nvim_buf_clear_namespace, buf_id, 0, -1) end
+H.pick_clear_namespace = function(buf_id, ns_id) pcall(vim.api.nvim_buf_clear_namespace, buf_id, ns_id, 0, -1) end
 
 H.pick_make_no_preview = function(picker_name)
   local lines = { string.format('No preview available for `%s` picker', picker_name) }
@@ -949,7 +984,41 @@ end
 H.show_with_icons =
   function(buf_id, items, query) require('mini.pick').default_show(buf_id, items, query, { show_icons = true }) end
 
--- Git picker -----------------------------------------------------------------
+-- Diagnostic picker ----------------------------------------------------------
+H.diagnostic_make_compare = function(sort_by)
+  if sort_by == 'severity' then
+    return function(a, b)
+      if a.severity < b.severity then return true end
+      if a.severity > b.severity then return false end
+      if a.path < b.path then return true end
+      if a.path > b.path then return false end
+      if a.lnum < b.lnum then return true end
+      if a.lnum > b.lnum then return false end
+      return a.col < b.col
+    end
+  end
+  if sort_by == 'path' then
+    return function(a, b)
+      if a.path < b.path then return true end
+      if a.path > b.path then return false end
+      if a.severity < b.severity then return true end
+      if a.severity > b.severity then return false end
+      if a.lnum < b.lnum then return true end
+      if a.lnum > b.lnum then return false end
+      return a.col < b.col
+    end
+  end
+
+  return nil
+end
+
+-- Git pickers ----------------------------------------------------------------
+H.validate_git = function(picker_name)
+  if vim.fn.executable('git') == 1 then return true end
+  local msg = string.format('`pickers.%s` requires executable `git`.', picker_name)
+  H.error(msg)
+end
+
 H.git_normalize_path = function(path, picker_name)
   local path = type(path) == 'string' and path or vim.fn.getcwd()
   if path == '' then H.error(string.format('Path in `%s` is empty.', picker_name)) end
@@ -1184,6 +1253,13 @@ H.ensure_text_width = function(text, width)
   local text_width = vim.fn.strchars(text)
   if text_width <= width then return text .. string.rep(' ', width - text_width) end
   return '…' .. vim.fn.strcharpart(text, text_width - width + 1, width - 1)
+end
+
+H.short_path = function(path, cwd)
+  cwd = cwd or vim.fn.getcwd()
+  if not vim.startswith(path, cwd) then return path end
+  local res = path:sub(cwd:len() + 1):gsub('^/+', ''):gsub('/+$', '')
+  return res
 end
 
 return MiniExtra

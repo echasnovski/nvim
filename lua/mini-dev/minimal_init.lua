@@ -1,5 +1,5 @@
 -- Add project root as full path to runtime path (in order to be able to
--- `require()`) modules from this module
+-- `require()` modules
 vim.cmd([[let &rtp.=','.getcwd()]])
 
 -- Set up 'mini.test' only when calling headless Neovim (like with `make test`)
