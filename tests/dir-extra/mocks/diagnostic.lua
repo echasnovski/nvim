@@ -2,9 +2,9 @@ local severity = vim.diagnostic.severity
 _G.diag_ns = vim.api.nvim_create_namespace('mock-diagnostics')
 
 -- Open files
-vim.cmd('edit tests/dir-extra/mock/diagnostic-file-1')
+vim.cmd('edit tests/dir-extra/mocks/diagnostic-file-1')
 _G.buf_id_1 = vim.api.nvim_get_current_buf()
-vim.cmd('edit tests/dir-extra/mock/diagnostic-file-2')
+vim.cmd('edit tests/dir-extra/mocks/diagnostic-file-2')
 _G.buf_id_2 = vim.api.nvim_get_current_buf()
 
 -- Define diagnostic

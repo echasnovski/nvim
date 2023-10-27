@@ -2,8 +2,8 @@
 01|                                                                      
 02|~                                                                     
 03|┌> ▏────────────────────────────────────────┐                         
-04|│ tests/dir-extra/real-files/LICENSE       │                         
-05|│ tests/dir-extra/mock/diagnostic.lua      │                         
+04|│tests/dir-extra/real-files/LICENSE         │                         
+05|│tests/dir-extra/mocks/diagnostic.lua       │                         
 06|│                                           │                         
 07|│                                           │                         
 08|│                                           │                         

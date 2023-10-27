@@ -13,7 +13,6 @@
 --     - Indent textobject.
 --
 -- - 'mini.hipatterns':
---     - Basic TODO/FIXME/etc. notes.
 --
 -- Tests:
 --
@@ -52,8 +51,8 @@
 --- - Requires target path to be part of git repository.
 --- - Present for exploration and navigation purposes. Doing any Git operations
 ---   is suggested to be done in a dedicated Git client and are not planned.
----@alias __extra_pickers_git_path - <path> `(string|nil)` - target path for Git operation. Also used to find
----     Git repository (as path's parent one) inside which to construct items.
+---@alias __extra_pickers_git_path - <path> `(string|nil)` - target path for Git operation (if required). Also
+---     used to find Git repository inside which to construct items.
 ---     Default: `nil` for root of Git repository containing |current-directory|.
 
 ---@diagnostic disable:undefined-field
@@ -89,37 +88,104 @@ end
 MiniExtra.config = {}
 --minidoc_afterlines_end
 
-MiniExtra.ai_specs = {}
+--- 'mini.ai' textobject specification generators
+---
+--- This is a table with function elements. Call to actually get specification.
+---
+--- Assumed to be used as part of |MiniAi.setup()|. Example: >
+---
+---   local gen_ai_spec = require('mini.extra').gen_ai_spec
+---   require('mini.ai').setup({
+---     custom_textobjects = {
+---       L = gen_ai_spec.line(),
+---       B = gen_ai_spec.buffer(),
+---     },
+---   })
+MiniExtra.gen_ai_spec = {}
 
-MiniExtra.ai_specs.line = function(ai_type)
-  local line_num = vim.fn.line('.')
-  local line = vim.fn.getline(line_num)
-  -- Select `\n` past the line for `a` to delete it whole
-  local from_col, to_col = 1, line:len() + 1
-  -- Ignore indentation for `i` textobject and don't remove `\n` past the line
-  if ai_type == 'i' then
-    from_col, to_col = line:match('^(%s*)'):len(), line:len()
+--- Current line textobject
+---
+--- Notes:
+--- - `a` textobject selects charwise whole line.
+--- - `i` textobject selects charwise line after initial indent.
+---
+---@return function Specification for |MiniAi| textobject.
+MiniExtra.gen_ai_spec.line = function()
+  return function(ai_type)
+    local line_num = vim.fn.line('.')
+    local line = vim.fn.getline(line_num)
+    -- Ignore indentation for `i` textobject
+    local from_col = ai_type == 'a' and 1 or (line:match('^(%s*)'):len() + 1)
+    -- Don't select `\n` past the line to operate within a line
+    local to_col = line:len()
+
+    return { from = { line = line_num, col = from_col }, to = { line = line_num, col = to_col } }
   end
-
-  return { from = { line = line_num, col = from_col }, to = { line = line_num, col = to_col } }
 end
 
-MiniExtra.ai_specs.buffer = function(ai_type)
-  local start_line, end_line = 1, vim.fn.line('$')
-  if ai_type == 'i' then
-    -- Skip first and last blank lines for `i` textobject
-    local first_nonblank, last_nonblank = vim.fn.nextnonblank(start_line), vim.fn.prevnonblank(end_line)
-    start_line = first_nonblank == 0 and start_line or first_nonblank
-    end_line = last_nonblank == 0 and end_line or last_nonblank
-  end
+--- Current buffer textobject
+---
+--- Notes:
+--- - `a` textobject selects charwise all lines in a buffer.
+--- - `i` textobject selects charwise all lines except blank lines at start and end.
+---
+---@return function Specification for |MiniAi| textobject.
+MiniExtra.gen_ai_spec.buffer = function()
+  return function(ai_type)
+    local start_line, end_line = 1, vim.fn.line('$')
+    if ai_type == 'i' then
+      -- Skip first and last blank lines for `i` textobject
+      local first_nonblank, last_nonblank = vim.fn.nextnonblank(start_line), vim.fn.prevnonblank(end_line)
+      -- Do nothing for buffer with all blanks
+      if first_nonblank == 0 or last_nonblank == 0 then return { from = { line = start_line, col = 1 } } end
+      start_line, end_line = first_nonblank, last_nonblank
+    end
 
-  local to_col = math.max(vim.fn.getline(end_line):len(), 1)
-  return { from = { line = start_line, col = 1 }, to = { line = end_line, col = to_col } }
+    local to_col = math.max(vim.fn.getline(end_line):len(), 1)
+    return { from = { line = start_line, col = 1 }, to = { line = end_line, col = to_col } }
+  end
+end
+
+--- 'mini.hipatterns' highlighter generators
+---
+--- This is a table with function elements. Call to actually get specification.
+---
+--- Assumed to be used as part of |MiniHipatterns.setup()|. Example: >
+---
+---   local hi_words = require('mini.extra').gen_highlighter.words
+---   require('mini.hipatterns').setup({
+---     highlighters = {
+---       todo = hi_words({ 'TODO', 'Todo', 'todo' }, 'MiniHipatternsTodo'),
+---     },
+---   })
+MiniExtra.gen_highlighter = {}
+
+--- Highlight words
+---
+--- Notes:
+--- - Words should start and end with alphanumeric symbol (latin letter or digit).
+--- - Words will be highlighted only in full and not if part bigger word, i.e.
+---   there should not be alphanumeric symbole before and after it.
+---
+---@param words table Array of words to highlight. Will be matched as is, not
+---   as Lua pattern.
+---@param group string|function Proper `group` field of `highlighter`.
+---   See |MiniHipatterns.config|.
+---@param extmark_opts any Proper `extmark_opts` field of `highlighter`.
+---   See |MiniHipatterns.config|.
+MiniExtra.gen_highlighter.words = function(words, group, extmark_opts)
+  if not vim.tbl_islist(words) then H.error('`words` should be an array.') end
+  if not (type(group) == 'string' or vim.is_callable(group)) then H.error('`group` should be string or callable.') end
+  local pattern = vim.tbl_map(function(x)
+    if type(x) ~= 'string' then H.error('All elements of `words` should be strings.') end
+    return '%f[%w]()' .. vim.pesc(x) .. '()%f[%W]'
+  end, words)
+  return { pattern = pattern, group = group, extmark_opts = extmark_opts }
 end
 
 --- 'mini.pick' pickers
 ---
---- A table with picker for |MiniPick| (which is a hard dependency). Notes:
+--- A table with |MiniPick| pickers (which is a hard dependency). Notes:
 --- - All have the same signature:
 ---     - <local_opts> - optional table with options local to picker.
 ---     - <opts> - optional table with options forwarded to |MiniPick.start()|.
@@ -127,6 +193,10 @@ end
 --- - All use default versions of |MiniPick-source.preview|, |MiniPick-source.choose|,
 ---   and |MiniPick-source.choose_marked| if not stated otherwise.
 ---   Shown text and |MiniPick-source.show| are targeted to the picked items.
+---
+--- Examples of usage:
+--- - As Lua code: `MiniExtra.pickers.buf_lines()`.
+--- - With |:Pick| command: `:Pick buf_lines scope='current'`
 MiniExtra.pickers = {}
 
 --- Built-in diagnostic picker
@@ -445,7 +515,7 @@ MiniExtra.pickers.git_branches = function(local_opts, opts)
 
   -- Compute path to repo with target path (as it might differ from current)
   local path, path_type = H.git_normalize_path(local_opts.path, 'git_branches')
-  local repo_dir = H.git_get_repo_dir(path, path_type)
+  local repo_dir = H.git_get_repo_dir(path, path_type, 'git_branches')
 
   -- Define source
   local show_history = function(buf_id, item)
@@ -465,11 +535,6 @@ MiniExtra.pickers.git_branches = function(local_opts, opts)
   opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {})
   return pick.builtin.cli({ command = command }, opts)
 end
-
--- `git_commits()` - all commits from parent Git repository of cwd
--- `git_commits({ path = vim.fn.getcwd() })` - commits affecting files from cwd
--- `git_commits({ path = vim.api.nvim_buf_get_name(0) })` - commits affecting
---   file in current buffer
 
 --- Git commits picker
 ---
@@ -498,7 +563,7 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
 
   -- Compute path to repo with target path (as it might differ from current)
   local path, path_type = H.git_normalize_path(local_opts.path, 'git_commits')
-  local repo_dir = H.git_get_repo_dir(path, path_type)
+  local repo_dir = H.git_get_repo_dir(path, path_type, 'git_commits')
   if local_opts.path == nil then path = repo_dir end
 
   -- Define source
@@ -552,7 +617,7 @@ MiniExtra.pickers.git_files = function(local_opts, opts)
 
   -- Compute path to repo with target path (as it might differ from current)
   local path, path_type = H.git_normalize_path(local_opts.path, 'git_files')
-  H.git_get_repo_dir(path, path_type)
+  H.git_get_repo_dir(path, path_type, 'git_files')
   local path_dir = path_type == 'directory' and path or vim.fn.fnamemodify(path, ':h')
 
   -- Define source
@@ -610,7 +675,7 @@ MiniExtra.pickers.git_hunks = function(local_opts, opts)
 
   -- Compute path to repo with target path (as it might differ from current)
   local path, path_type = H.git_normalize_path(local_opts.path, 'git_hunks')
-  local repo_dir = H.git_get_repo_dir(path, path_type)
+  local repo_dir = H.git_get_repo_dir(path, path_type, 'git_hunks')
   if local_opts.path == nil then path = repo_dir end
 
   -- Define source
@@ -777,7 +842,7 @@ MiniExtra.pickers.marks = function(local_opts, opts)
   local populate_items = function(mark_list)
     for _, info in ipairs(mark_list) do
       local path
-      if type(info.file) == 'string' then path = vim.fn.fnamemodify(info.file, ':p:.') end
+      if type(info.file) == 'string' then path = H.full_path(info.file) end
       local buf_id
       if path == nil then buf_id = info.pos[1] end
 
@@ -1094,16 +1159,19 @@ end
 H.git_normalize_path = function(path, picker_name)
   local path = type(path) == 'string' and path or vim.fn.getcwd()
   if path == '' then H.error(string.format('Path in `%s` is empty.', picker_name)) end
-  path = vim.fn.fnamemodify(path, ':p')
+  path = H.full_path(path)
   local path_is_dir, path_is_file = vim.fn.isdirectory(path) == 1, vim.fn.filereadable(path) == 1
   if not (path_is_dir or path_is_file) then H.error('Path ' .. path .. ' is not a valid path.') end
   return path, path_is_dir and 'directory' or 'file'
 end
 
-H.git_get_repo_dir = function(path, path_type)
+H.git_get_repo_dir = function(path, path_type, picker_name)
   local path_dir = path_type == 'directory' and path or vim.fn.fnamemodify(path, ':h')
   local repo_dir = vim.fn.systemlist('git -C ' .. path_dir .. ' rev-parse --show-toplevel')[1]
-  if vim.v.shell_error ~= 0 then H.error('Could not find git repo for ' .. path .. '.') end
+  if vim.v.shell_error ~= 0 then
+    local msg = string.format('`pickers.%s` could not find Git repo for %s.', picker_name, path)
+    H.error(msg)
+  end
   return repo_dir
 end
 
@@ -1318,7 +1386,7 @@ end
 
 H.cli_read_stream = function(stream, post_hook)
   local data_feed = {}
-  local callback = vim.schedule_wrap(function(err, data)
+  local callback = function(err, data)
     assert(not err, err)
     if data ~= nil then return table.insert(data_feed, data) end
 
@@ -1326,7 +1394,7 @@ H.cli_read_stream = function(stream, post_hook)
     data_feed = nil
     stream:close()
     post_hook(lines)
-  end)
+  end
   stream:read_start(callback)
 end
 
@@ -1360,6 +1428,8 @@ H.ensure_text_width = function(text, width)
   if text_width <= width then return text .. string.rep(' ', width - text_width) end
   return '…' .. vim.fn.strcharpart(text, text_width - width + 1, width - 1)
 end
+
+H.full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('(.)/$', '%1')) end
 
 H.short_path = function(path, cwd)
   cwd = cwd or vim.fn.getcwd()
