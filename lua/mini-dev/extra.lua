@@ -568,9 +568,9 @@ MiniExtra.pickers.git_commits = function(local_opts, opts)
 
   -- Define source
   local show_patch = function(buf_id, item)
-    vim.bo[buf_id].syntax = 'diff'
-    local hash = (item or ''):match('^(%S+)')
-    H.cli_show_output(buf_id, { 'git', '-C', repo_dir, '--no-pager', 'show', hash })
+    if type(item) ~= 'string' then return end
+    vim.bo[buf_id].syntax = 'git'
+    H.cli_show_output(buf_id, { 'git', '-C', repo_dir, '--no-pager', 'show', item:match('^(%S+)') })
   end
   local preview = show_patch
   local choose = H.make_show_in_target_win('git_commits', show_patch)
@@ -667,10 +667,10 @@ MiniExtra.pickers.git_hunks = function(local_opts, opts)
   local default_local_opts = { n_context = 3, path = nil, scope = 'unstaged' }
   local_opts = vim.tbl_deep_extend('force', default_local_opts, local_opts or {})
 
-  local ok_context, n_context = pcall(math.floor, local_opts.n_context)
-  if not (ok_context and n_context >= 0) then
-    H.error('`n_context` option in `git_hunks` picker should be non-negative number.')
+  if not (type(local_opts.n_context) == 'number' and local_opts.n_context >= 0) then
+    H.error('`n_context` option in `pickers.git_hunks` picker should be non-negative number.')
   end
+  local n_context = math.floor(local_opts.n_context)
   local scope = H.pick_validate_scope(local_opts, { 'unstaged', 'staged' }, 'git_hunks')
 
   -- Compute path to repo with target path (as it might differ from current)
@@ -697,6 +697,18 @@ MiniExtra.pickers.git_hunks = function(local_opts, opts)
   return pick.builtin.cli({ command = command, postprocess = postprocess }, opts)
 end
 
+--- Neovim options picker
+---
+--- Pick and preview data about Neovim options. Notes:
+--- - Item line is colored based on whether it was set (dimmed if wasn't).
+--- - Preview shows option value in target window and its general information.
+--- - Choosing places option name in Command line to update and apply.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - options to show. One of "all", "global", "win", "buf".
+---     Default: "all".
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.options = function(local_opts, opts)
   local pick = H.validate_pick('options')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
@@ -712,14 +724,20 @@ MiniExtra.pickers.options = function(local_opts, opts)
   local show = function(buf_id, items_to_show, query)
     pick.default_show(buf_id, items_to_show, query)
 
+    H.pick_clear_namespace(buf_id, H.ns_id.pickers)
     for i, item in ipairs(items_to_show) do
       if not item.info.was_set then H.pick_highlight_line(buf_id, i, 'Comment', 199) end
     end
   end
 
   local preview = function(buf_id, item)
+    local pick_windows = pick.get_picker_state().windows
+    local target_win_id = pick_windows.target
+    if not H.is_valid_win(target_win_id) then target_win_id = pick_windows.main end
     local value_source = ({ global = 'o', win = 'wo', buf = 'bo' })[item.info.scope]
-    local has_value, value = pcall(function() return vim[value_source][item.info.name] end)
+    local has_value, value = pcall(function()
+      return vim.api.nvim_win_call(target_win_id, function() return vim[value_source][item.info.name] end)
+    end)
     if not has_value then value = '<Option is deprecated (will be removed in later Neovim versions)>' end
 
     local lines = { 'Value:', unpack(vim.split(vim.inspect(value), '\n')), '', 'Info:' }
@@ -741,25 +759,40 @@ MiniExtra.pickers.options = function(local_opts, opts)
   return H.pick_start(items, { source = default_source }, opts)
 end
 
+--- Neovim keymaps picker
+---
+--- Pick and preview data about Neovim keymaps. Notes:
+--- - Item line contains data about keymap mode, whether it is buffer local, its
+---   left hand side, and inferred description.
+--- - Preview shows keymap data or callback source (if present and reachable).
+--- - Choosing emulates pressing the left hand side of the keymap.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <mode> `(string)` - modes to show. One of "all" or appropriate mode
+---     for |nvim_set_keymap()|. Default: "all".
+---   - <scope> `(string)` - scopes to show. One of "all", "global", "buf".
+---     Default: "all".
+---@param opts __extra_pickers_opts
 MiniExtra.pickers.keymaps = function(local_opts, opts)
   local pick = H.validate_pick('keymaps')
   local_opts = vim.tbl_deep_extend('force', { mode = 'all', scope = 'all' }, local_opts or {})
 
-  local mode = H.pick_validate_one_of('mode', local_opts, { 'all', 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' }, 'keymaps')
+  local mode = H.pick_validate_one_of('mode', local_opts, { 'all', 'n', 'x', 's', 'o', 'i', 'l', 'c', 't' }, 'keymaps')
   local scope = H.pick_validate_scope(local_opts, { 'all', 'global', 'buf' }, 'keymaps')
 
   -- Create items
   local keytrans = vim.fn.has('nvim-0.8') == 1 and vim.fn.keytrans or function(x) return x end
   local items = {}
+  local populate_modes = mode == 'all' and { 'n', 'x', 's', 'o', 'i', 'l', 'c', 't' } or { mode }
   local max_lhs_width = 0
   local populate_items = function(source)
-    local modes = mode == 'all' and { 'n', 'x', 'i', 'o', 'c', 't', 's', 'l' } or { mode }
-    for _, m in ipairs(modes) do
+    for _, m in ipairs(populate_modes) do
       for _, maparg in ipairs(source(m)) do
         local desc = maparg.desc ~= nil and vim.inspect(maparg.desc) or maparg.rhs
-        local lhs_trans = keytrans(maparg.lhsraw or maparg.lhs)
-        max_lhs_width = math.max(vim.fn.strchars(lhs_trans), max_lhs_width)
-        table.insert(items, { lhs_trans = lhs_trans, desc = desc, maparg = maparg })
+        local lhs = keytrans(maparg.lhsraw or maparg.lhs)
+        max_lhs_width = math.max(vim.fn.strchars(lhs), max_lhs_width)
+        table.insert(items, { lhs = lhs, desc = desc, maparg = maparg })
       end
     end
   end
@@ -769,8 +802,8 @@ MiniExtra.pickers.keymaps = function(local_opts, opts)
 
   for _, item in ipairs(items) do
     local buf_map_indicator = item.maparg.buffer == 0 and ' ' or '@'
-    local lhs = H.ensure_text_width(item.lhs_trans, max_lhs_width)
-    item.text = string.format('%s %s │ %s │ %s', item.maparg.mode, buf_map_indicator, lhs, item.desc or '')
+    local lhs_text = H.ensure_text_width(item.lhs, max_lhs_width)
+    item.text = string.format('%s %s │ %s │ %s', item.maparg.mode, buf_map_indicator, lhs_text, item.desc or '')
   end
 
   -- Define source
@@ -1377,10 +1410,10 @@ H.cli_run = function(command, stdout_hook)
 end
 
 H.cli_show_output = function(buf_id, command)
-  local stdout_hook = function(lines)
+  local stdout_hook = vim.schedule_wrap(function(lines)
     if not H.is_valid_buf(buf_id) then return end
     H.set_buflines(buf_id, lines)
-  end
+  end)
   H.cli_run(command, stdout_hook)
 end
 
