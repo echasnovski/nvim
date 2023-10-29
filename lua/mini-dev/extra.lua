@@ -46,6 +46,7 @@
 
 ---@alias __extra_pickers_local_opts table|nil Options defining behavior of this particular picker.
 ---@alias __extra_pickers_opts table|nil Options forwarded to |MiniPick.start()|.
+---@alias __extra_pickers_return any Output of the called picker.
 ---@alias __extra_pickers_git_notes Notes:
 --- - Requires executable `git`.
 --- - Requires target path to be part of git repository.
@@ -212,6 +213,8 @@ MiniExtra.pickers = {}
 ---   - <sort_by> `(string)` - sort priority. One of "severity", "path", "none".
 ---     Default: "severity".
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.diagnostic = function(local_opts, opts)
   local pick = H.validate_pick('diagnostic')
   local_opts = vim.tbl_deep_extend('force', { get_opts = {}, scope = 'all', sort_by = 'severity' }, local_opts or {})
@@ -276,6 +279,8 @@ end
 ---@param local_opts __extra_pickers_local_opts
 ---   Not used at the moment.
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.oldfiles = function(local_opts, opts)
   local pick = H.validate_pick('oldfiles')
   local oldfiles = vim.v.oldfiles
@@ -304,6 +309,8 @@ end
 ---   - <scope> `(string)` - one of "all" (normal listed buffers) or "current".
 ---     Default: "all".
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.buf_lines = function(local_opts, opts)
   local pick = H.validate_pick('buf_lines')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
@@ -362,6 +369,8 @@ end
 ---     Note: only full words are allowed (like "cmd", "search", etc.).
 ---     Default: "all".
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.history = function(local_opts, opts)
   local pick = H.validate_pick('history')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
@@ -415,6 +424,8 @@ end
 ---@param local_opts __extra_pickers_local_opts
 ---   Not used at the moment.
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.hl_groups = function(local_opts, opts)
   local pick = H.validate_pick('hl_groups')
 
@@ -461,6 +472,8 @@ end
 ---@param local_opts __extra_pickers_local_opts
 ---   Not used at the moment.
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.commands = function(local_opts, opts)
   local pick = H.validate_pick('commands')
 
@@ -505,6 +518,8 @@ end
 ---   - <scope> `(string)` - branch scope to show. One of "all", "local", "remotes".
 ---     Default: "all".
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.git_branches = function(local_opts, opts)
   local pick = H.validate_pick('git_branches')
   H.validate_git('git_branches')
@@ -555,6 +570,8 @@ end
 ---   Possible fields:
 ---   __extra_pickers_git_path
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.git_commits = function(local_opts, opts)
   local pick = H.validate_pick('git_commits')
   H.validate_git('git_commits')
@@ -607,6 +624,8 @@ end
 ---       - "deleted"   (`--deleted`  Git flag).
 ---     Default: "tracked".
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.git_files = function(local_opts, opts)
   local pick = H.validate_pick('git_files')
   H.validate_git('git_files')
@@ -660,6 +679,8 @@ end
 ---   - <scope> `(string)` - hunks scope to show. One of "unstaged" or "staged".
 ---     Default: "unstaged".
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.git_hunks = function(local_opts, opts)
   local pick = H.validate_pick('git_hunks')
   H.validate_git('git_hunks')
@@ -709,6 +730,8 @@ end
 ---   - <scope> `(string)` - options to show. One of "all", "global", "win", "buf".
 ---     Default: "all".
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.options = function(local_opts, opts)
   local pick = H.validate_pick('options')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
@@ -771,9 +794,11 @@ end
 ---   Possible fields:
 ---   - <mode> `(string)` - modes to show. One of "all" or appropriate mode
 ---     for |nvim_set_keymap()|. Default: "all".
----   - <scope> `(string)` - scopes to show. One of "all", "global", "buf".
+---   - <scope> `(string)` - scope to show. One of "all", "global", "buf".
 ---     Default: "all".
 ---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.keymaps = function(local_opts, opts)
   local pick = H.validate_pick('keymaps')
   local_opts = vim.tbl_deep_extend('force', { mode = 'all', scope = 'all' }, local_opts or {})
@@ -834,12 +859,24 @@ MiniExtra.pickers.keymaps = function(local_opts, opts)
   return H.pick_start(items, default_opts, opts)
 end
 
+--- Neovim registers picker
+---
+--- Pick from Neovim |registers|. Notes:
+--- - There is no preview as all information is in the item's text.
+--- - Choosing pastes content of a register: with |i_CTRL-R| in Insert mode,
+---   |c_CTRL-R| in Command-line mode, and |P| otherwise. Note: expression
+---   register |quote=| is reevaluated (if present) and pasted.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Not used at the moment.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.registers = function(local_opts, opts)
   local pick = H.validate_pick('registers')
-  local_opts = local_opts or {}
 
-  local describe_register = function(register)
-    local ok, value = pcall(vim.fn.getreg, register, 1)
+  local describe_register = function(regname)
+    local ok, value = pcall(vim.fn.getreg, regname, 1)
     if not ok then return '' end
     return value
   end
@@ -847,14 +884,17 @@ MiniExtra.pickers.registers = function(local_opts, opts)
   local all_registers = vim.split('"*+:.%/#=-0123456789abcdefghijklmnopqrstuvwxyz', '')
 
   local items = {}
-  for _, register in ipairs(all_registers) do
-    local text = string.format('%s │ %s', register, describe_register(register))
-    table.insert(items, { register = register, text = text })
+  for _, regname in ipairs(all_registers) do
+    local regcontents = describe_register(regname)
+    local text = string.format('%s │ %s', regname, regcontents)
+    table.insert(items, { regname = regname, regcontents = regcontents, text = text })
   end
 
   local choose = vim.schedule_wrap(function(item)
-    local reg, mode = item.register, vim.fn.mode()
+    local reg, regcontents, mode = item.regname, item.regcontents, vim.fn.mode()
+    if reg == '=' and regcontents ~= '' then reg = reg .. item.regcontents .. '\r' end
     local keys = string.format('"%s%s', reg, reg == '=' and '' or 'P')
+    -- In Insert and Command-line modes use `<C-r><regname>`
     if mode == 'i' or mode == 'c' then keys = '\18' .. reg end
     vim.fn.feedkeys(keys)
   end)
@@ -864,6 +904,17 @@ MiniExtra.pickers.registers = function(local_opts, opts)
   return H.pick_start(items, { source = { name = 'Registers', preview = preview, choose = choose } }, opts)
 end
 
+--- Neovim marks picker
+---
+--- Pick and preview position of Neovim |mark|s.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - scope to show. One of "all", "global", "buf".
+---     Default: "all".
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.marks = function(local_opts, opts)
   local pick = H.validate_pick('marks')
   local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
@@ -875,7 +926,7 @@ MiniExtra.pickers.marks = function(local_opts, opts)
   local populate_items = function(mark_list)
     for _, info in ipairs(mark_list) do
       local path
-      if type(info.file) == 'string' then path = H.full_path(info.file) end
+      if type(info.file) == 'string' then path = vim.fn.fnamemodify(info.file, ':.') end
       local buf_id
       if path == nil then buf_id = info.pos[1] end
 
@@ -892,17 +943,42 @@ MiniExtra.pickers.marks = function(local_opts, opts)
   return H.pick_start(items, default_opts, opts)
 end
 
--- Should be several useful ones: references, document/workspace symbols, other?
--- Basically, everything in `vim.lsp.buf` that has `on_list` option.
--- Notes:
--- - Needs Neovim>=0.8.
--- - Doesn't return anything.
+--- LSP picker
+---
+--- Pick and navigate with LSP methods. Notes:
+--- - Needs an explicit scope from a list of supported ones:
+---     - "declaration".
+---     - "definition".
+---     - "document_symbol".
+---     - "implementation".
+---     - "references".
+---     - "type_definition".
+---     - "workspace_symbol".
+--- - Requires Neovim>=0.8.
+--- - Directly relies on `vim.lsp.buf` methods which support |lsp-on-list-handler|.
+---   In particular, it means that picker is started only if LSP server return
+---   list of locations and not a single location.
+--- - Doesn't return anything due to async nature of `vim.lsp.buf` methods.
+---
+--- Examples ~
+---
+--- - `MiniExtra.pickers.lsp({ scope = 'references' })` - references of the
+---   symbol under cursor.
+--- - `:Pick lsp document_symbol` - symbols in current file.
+---
+---@param local_opts table Options defining behavior of this particular picker.
+---   Possible fields:
+---   - <scope> `(string)` - LSP method to use. One of the supported ones (see
+---     list above). Default: `nil` which means explicit scope is needed.
+---@param opts __extra_pickers_opts
+---
+---@return nil Nothing is returned.
 MiniExtra.pickers.lsp = function(local_opts, opts)
-  if vim.fn.has('nvim-0.8') == 0 then H.error('`lsp` picker requires Neovim>=0.8.') end
+  if vim.fn.has('nvim-0.8') == 0 then H.error('`pickers.lsp` requires Neovim>=0.8.') end
   local pick = H.validate_pick('lsp')
   local_opts = vim.tbl_deep_extend('force', { scope = nil }, local_opts or {})
 
-  if local_opts.scope == nil then H.error('`lsp` picker needs explicit scope.') end
+  if local_opts.scope == nil then H.error('`pickers.lsp` needs explicit scope.') end
   --stylua: ignore
   local allowed_scopes = {
     'declaration', 'definition', 'document_symbol', 'implementation', 'references', 'type_definition', 'workspace_symbol',
@@ -911,7 +987,7 @@ MiniExtra.pickers.lsp = function(local_opts, opts)
 
   if scope == 'references' then return vim.lsp.buf[scope](nil, { on_list = H.lsp_make_on_list(scope, opts) }) end
   if scope == 'workspace_symbol' then return vim.lsp.buf[scope]('', { on_list = H.lsp_make_on_list(scope, opts) }) end
-  return vim.lsp.buf[scope]({ on_list = H.lsp_make_on_list(scope, opts) })
+  vim.lsp.buf[scope]({ on_list = H.lsp_make_on_list(scope, opts) })
 end
 
 MiniExtra.pickers.treesitter = function(local_opts, opts)
@@ -1280,14 +1356,16 @@ H.lsp_make_on_list = function(source, opts)
     return items
   end
 
-  -- Highlight symbol kind on Neovim>=0.9 (when `@lsp.type` groups introduced)
+  -- Highlight items with highlight group corresponding to the symbol kind.
+  -- Note: `@type` groups were introduced in Neovim 0.8 which is minimal
+  -- version for `pickers.lsp` to work.
   local show
   if source == 'document_symbol' or source == 'workspace_symbol' then
     local pick = H.validate_pick()
     show = function(buf_id, items_to_show, query)
       pick.default_show(buf_id, items_to_show, query)
 
-      H.pick_clear_namespace(buf_id)
+      H.pick_clear_namespace(buf_id, H.ns_id.pickers)
       for i, item in ipairs(items_to_show) do
         -- Highlight using '@...' style highlight group with similar name
         local hl_group = string.format('@%s', string.lower(item.kind or 'unknown'))
