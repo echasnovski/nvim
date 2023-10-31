@@ -1,18 +1,6 @@
 -- TODO:
 --
--- - 'mini.pick':
---     - Sort alphabetically inside |MiniExtra.pickers|?
---
--- - 'mini.clue':
---     - Clues for 'mini.surround' and 'mini.ai'.
---
--- - 'mini.surround':
---     - Lua string spec.
---
 -- - 'mini.ai':
---     - Indent textobject.
---
--- - 'mini.hipatterns':
 --
 -- Tests:
 --
@@ -44,6 +32,14 @@
 ---
 --- - 'chrisgrieser/nvim-various-textobjs':
 
+---@diagnostic disable:undefined-field
+---@diagnostic disable:discard-returns
+---@diagnostic disable:unused-local
+---@diagnostic disable:cast-local-type
+---@diagnostic disable:undefined-doc-name
+---@diagnostic disable:luadoc-miss-type-name
+
+---@alias __extra_ai_spec_return function Function implementing |MiniAi-textobject-specification|.
 ---@alias __extra_pickers_local_opts table|nil Options defining behavior of this particular picker.
 ---@alias __extra_pickers_opts table|nil Options forwarded to |MiniPick.start()|.
 ---@alias __extra_pickers_return any Output of the called picker.
@@ -56,14 +52,9 @@
 ---     used to find Git repository inside which to construct items.
 ---     Default: `nil` for root of Git repository containing |current-directory|.
 
----@diagnostic disable:undefined-field
----@diagnostic disable:discard-returns
----@diagnostic disable:unused-local
----@diagnostic disable:cast-local-type
-
 -- Module definition ==========================================================
-MiniExtra = {}
-H = {}
+local MiniExtra = {}
+local H = {}
 
 --- Module setup
 ---
@@ -98,8 +89,10 @@ MiniExtra.config = {}
 ---   local gen_ai_spec = require('mini.extra').gen_ai_spec
 ---   require('mini.ai').setup({
 ---     custom_textobjects = {
----       L = gen_ai_spec.line(),
 ---       B = gen_ai_spec.buffer(),
+---       D = gen_ai_spec.diagnostic(),
+---       I = gen_ai_spec.indent(),
+---       L = gen_ai_spec.line(),
 ---     },
 ---   })
 MiniExtra.gen_ai_spec = {}
@@ -110,7 +103,7 @@ MiniExtra.gen_ai_spec = {}
 --- - `a` textobject selects charwise all lines in a buffer.
 --- - `i` textobject selects charwise all lines except blank lines at start and end.
 ---
----@return function Specification for |MiniAi| textobject.
+---@return __extra_ai_spec_return
 MiniExtra.gen_ai_spec.buffer = function()
   return function(ai_type)
     local start_line, end_line = 1, vim.fn.line('$')
@@ -127,13 +120,64 @@ MiniExtra.gen_ai_spec.buffer = function()
   end
 end
 
+--- Current buffer diagnostic textobject
+---
+--- Notes:
+--- - Both `a` and `i` textobjects return |vim.diagnostic.get()| output for the
+---   current buffer modified to fit |MiniAi-textobject-specification|.
+---
+---@param severity any Which severity to use. Forwarded to |vim.diagnostic.get()|.
+---   Default: `nil` to use all diagnostic entries.
+---
+---@return __extra_ai_spec_return
+MiniExtra.gen_ai_spec.diagnostic = function(severity)
+  return function(ai_type)
+    local cur_diag = vim.diagnostic.get(0, { severity = severity })
+
+    local regions = {}
+    for _, diag in ipairs(cur_diag) do
+      local from = { line = diag.lnum + 1, col = diag.col + 1 }
+      local to = { line = diag.end_lnum + 1, col = diag.end_col }
+      if to.line == nil or to.col == nil then to = { line = diag.lnum + 1, col = diag.col + 1 } end
+      table.insert(regions, { from = from, to = to })
+    end
+    return regions
+  end
+end
+
+--- Current buffer indent scopes textobject
+---
+--- Indent scope is a set of consecutive lines with the following properties:
+--- - Top (first) and bottom (last) lines are non-blank.
+--- - There is at least one non-blank line between top and bottom.
+--- - All non-blank lines between top and bottom have strictly greater indent
+---   (perceived number of spaces respecting |tabstop|) than either top or bottom.
+---
+--- Notes:
+--- - `a` textobject selects linewise whole lines including top and bottom.
+--- - `i` textobject selects charwise from next to top and to before the bottom.
+--- - Differences with |MiniIndentscope.textobject|:
+---     - This textobject always treats blank lines on top and bottom of `i`
+---       textobject as part of it, while 'mini.indentscope' can conigure that.
+---     - This textobject can select non-covering scopes, while
+---       'mini.indentscope' can not (by design).
+---     - In this textobject scope computation is done only by "casting rays" from
+---       top to bottom and not in both ways as in 'mini.indentscope'.
+---       This works in most common scenarios and doesn't work only if bottom
+---       indent is expected to be larger than the top.
+---
+---@return function Function implementing |MiniAi-textobject-specification|.
+---   It returns array of regions representing all indent scopes in the buffer
+---   ordered increasingly by the start line.
+MiniExtra.gen_ai_spec.indent = function() return H.ai_indent_spec end
+
 --- Current line textobject
 ---
 --- Notes:
 --- - `a` textobject selects charwise whole line.
 --- - `i` textobject selects charwise line after initial indent.
 ---
----@return function Specification for |MiniAi| textobject.
+---@return __extra_ai_spec_return
 MiniExtra.gen_ai_spec.line = function()
   return function(ai_type)
     local line_num = vim.fn.line('.')
@@ -1272,6 +1316,72 @@ H.cache = {}
 H.setup_config = function(config) end
 
 H.apply_config = function(config) MiniExtra.config = config end
+
+-- Mini.ai specifications -----------------------------------------------------
+H.ai_indent_spec = function(ai_type)
+  -- Compute buffer data
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local tab_spaces = string.rep(' ', vim.bo.tabstop)
+
+  -- Traverse lines from top to bottom casting rays
+  local indents, rays, rays_final = {}, {}, {}
+  for i, l in ipairs(lines) do
+    indents[i] = l:match('^([ \t]*)')
+
+    -- Ray can be updated only on non-blank line
+    local is_blank = indents[i]:len() ~= l:len()
+    if is_blank then H.ai_indent_update_rays(i, indents[i]:gsub('\t', tab_spaces):len(), rays, rays_final) end
+  end
+
+  -- The `rays` stack can be not empty at this point which means that there are
+  -- non-empty lines at buffer end without "closing". Ignore them.
+
+  -- Sort for better output
+  table.sort(rays_final, function(a, b) return a.from_line < b.from_line end)
+
+  -- Compute regions:
+  -- - `a` is as if linewise from start to end.
+  -- - `i` is as if charwise not including edge whitespace on start and end.
+  local from_offset, to_offset, to_col_offset = 0, 0, 1
+  if ai_type == 'i' then
+    from_offset, to_offset, to_col_offset = 1, -1, 0
+  end
+  local res = {}
+  for i, ray in ipairs(rays_final) do
+    local from_line, to_line = ray.from_line + from_offset, ray.to_line + to_offset
+    local from_col = ai_type == 'a' and 1 or (indents[from_line]:len() + 1)
+    local to_col = lines[to_line]:len() + to_col_offset
+    res[i] = { from = { line = from_line, col = from_col }, to = { line = to_line, col = to_col } }
+  end
+  return res
+end
+
+H.ai_indent_update_rays = function(line_num, indent, rays, rays_final)
+  -- Update rays with finite indent
+  -- `rays` is a stack of cast rays (sorted by increasing start indent).
+  -- Each ray has `from_line` and `to_line` indicating start of `a` textobject.
+  for i = #rays, 1, -1 do
+    local ray = rays[i]
+    -- If current indent is bigger, then ray is cast over non-blank region.
+    -- This assumes that line at `line_num` is not blank.
+    if ray.indent < indent then
+      ray.is_empty = false
+      -- All previously cast rays are already marked as non-blank if they are
+      break
+    end
+
+    -- If ray was cast from bigger indent then current and spans over
+    -- non-empty region, finalize it as it has hit its limit
+    if not ray.is_empty then
+      ray.to_line = line_num
+      table.insert(rays_final, ray)
+    end
+    rays[i] = nil
+  end
+
+  -- Start new ray
+  table.insert(rays, { indent = indent, from_line = line_num, is_empty = true })
+end
 
 -- Pickers --------------------------------------------------------------------
 H.validate_pick = function(fun_name)

@@ -84,6 +84,19 @@ local validate_edit1d = function(line_before, col_before, keys, line_after, col_
   validate_edit({ line_before }, { 1, col_before }, keys, { line_after }, { 1, col_after })
 end
 
+local validate_selection = function(selection_from, selection_to, visual_mode)
+  eq(child.fn.mode(), visual_mode or 'v')
+
+  -- Compute two correctly ordered edges
+  local from = { child.fn.line('v'), child.fn.col('v') - 1 }
+  local to = { child.fn.line('.'), child.fn.col('.') - 1 }
+  if to[1] < from[1] or (to[1] == from[1] and to[2] < from[2]) then
+    from, to = to, from
+  end
+  eq(from, selection_from)
+  eq(to, selection_to)
+end
+
 local validate_picker_name =
   function(ref_name) eq(child.lua_get('MiniPick.get_picker_opts().source.name'), ref_name) end
 
@@ -289,6 +302,205 @@ T['gen_ai_spec']['buffer()']['works as `i` textobject'] = function()
   child.api.nvim_set_current_buf(buf_id_2)
   type_keys('.')
   eq(get_lines(), { ' ', 'xx', ' ' })
+end
+
+T['gen_ai_spec']['diagnostic()'] = new_set({
+  hooks = {
+    pre_case = function()
+      local mock_path = make_testpath('mocks', 'diagnostic.lua')
+      child.lua(string.format('dofile("%s")', mock_path))
+    end,
+  },
+})
+
+T['gen_ai_spec']['diagnostic()']['works'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { D = MiniExtra.gen_ai_spec.diagnostic() } })]])
+  local buf_cur, buf_other = child.api.nvim_get_current_buf(), child.lua_get('_G.buf_id_1')
+
+  local validate = function(ai_type)
+    child.ensure_normal_mode()
+    child.api.nvim_set_current_buf(buf_cur)
+    set_cursor(1, 0)
+
+    type_keys('v', ai_type, 'D')
+    validate_selection({ 1, 0 }, { 1, 4 })
+
+    -- Consecutive application should work
+    type_keys(ai_type, 'D')
+    validate_selection({ 2, 0 }, { 2, 6 })
+
+    -- Should support `[count]`
+    type_keys('2', ai_type, 'D')
+    validate_selection({ 4, 0 }, { 4, 3 })
+
+    -- Should support `next`/`prev`
+    type_keys(ai_type, 'l', 'D')
+    validate_selection({ 3, 0 }, { 3, 3 })
+
+    type_keys(ai_type, 'n', 'D')
+    validate_selection({ 4, 0 }, { 4, 3 })
+
+    -- Different buffer
+    child.ensure_normal_mode()
+    child.api.nvim_set_current_buf(buf_other)
+    set_cursor(2, 0)
+    type_keys('v', ai_type, 'D')
+    validate_selection({ 2, 2 }, { 2, 6 })
+  end
+
+  -- Both `a` and `i` should behave the same
+  validate('a')
+  validate('i')
+end
+
+T['gen_ai_spec']['diagnostic()']['respects `severity` argument'] = function()
+  child.lua([[require('mini.ai').setup({
+    custom_textobjects = { D = MiniExtra.gen_ai_spec.diagnostic(vim.diagnostic.severity.WARN) },
+  })]])
+  local buf_other = child.lua_get('_G.buf_id_1')
+  child.api.nvim_set_current_buf(buf_other)
+
+  local validate = function(ai_type)
+    child.ensure_normal_mode()
+    set_cursor(1, 0)
+
+    type_keys('v', ai_type, 'D')
+    validate_selection({ 1, 6 }, { 1, 12 })
+    type_keys(ai_type, 'D')
+    validate_selection({ 3, 2 }, { 3, 8 })
+  end
+
+  validate('a')
+  validate('i')
+end
+
+T['gen_ai_spec']['indent()'] = new_set()
+
+local ai_indent = function(...) return child.lua_get('MiniExtra.gen_ai_spec.indent()(...)', { ... }) end
+
+T['gen_ai_spec']['indent()']['works as `a` textobject'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { I = MiniExtra.gen_ai_spec.indent() } })]])
+
+  set_lines({ 'aa', ' bb', '  cc', ' bb', 'aa', ' bb', 'aa', ' bb', 'aa' })
+
+  set_cursor(3, 0)
+  type_keys('v', 'aI')
+  validate_selection({ 2, 0 }, { 4, 3 })
+
+  -- Consecutive application should work
+  type_keys('aI')
+  validate_selection({ 1, 0 }, { 5, 2 })
+
+  -- Should support `[count]`
+  type_keys('2aI')
+  validate_selection({ 7, 0 }, { 9, 2 })
+
+  -- Should support `next`/`prev`
+  type_keys('alI')
+  validate_selection({ 5, 0 }, { 7, 2 })
+
+  type_keys('anI')
+  validate_selection({ 7, 0 }, { 9, 2 })
+end
+
+T['gen_ai_spec']['indent()']['works as `i` textobject'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { I = MiniExtra.gen_ai_spec.indent() } })]])
+
+  set_lines({ 'aa', ' bb', '  cc', ' bb', 'aa', ' bb', 'aa', ' bb', 'aa' })
+
+  set_cursor(3, 0)
+  type_keys('v', 'iI')
+  validate_selection({ 3, 2 }, { 3, 3 })
+
+  -- Consecutive application should work
+  type_keys('iI')
+  validate_selection({ 2, 1 }, { 4, 2 })
+
+  -- Should support `[count]`
+  type_keys('2iI')
+  validate_selection({ 8, 1 }, { 8, 2 })
+
+  -- Should support `next`/`prev`
+  type_keys('ilI')
+  validate_selection({ 6, 1 }, { 6, 2 })
+
+  type_keys('inI')
+  validate_selection({ 8, 1 }, { 8, 2 })
+end
+
+T['gen_ai_spec']['indent()']['works when started on blank line'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { I = MiniExtra.gen_ai_spec.indent() } })]])
+  set_lines({ 'aa', '', '   ', ' bb', 'aa' })
+  local validate = function(line, col)
+    child.ensure_normal_mode()
+    set_cursor(line, col)
+    type_keys('v', 'aI')
+    validate_selection({ 1, 0 }, { 5, 2 })
+  end
+
+  validate(2, 0)
+  validate(3, 2)
+end
+
+T['gen_ai_spec']['indent()']['returns correct structure'] = function()
+  set_lines({ 'aa', ' bb', '  cc', ' bb', 'aa' })
+  eq(ai_indent('a'), {
+    { from = { line = 1, col = 1 }, to = { line = 5, col = 3 } },
+    { from = { line = 2, col = 1 }, to = { line = 4, col = 4 } },
+  })
+  eq(ai_indent('i'), {
+    { from = { line = 2, col = 2 }, to = { line = 4, col = 3 } },
+    { from = { line = 3, col = 3 }, to = { line = 3, col = 4 } },
+  })
+end
+
+local validate_ai_indent = function(ref_region_lines)
+  local output = ai_indent('a')
+  local output_region_lines = {}
+  for _, region in ipairs(output) do
+    table.insert(output_region_lines, { region.from.line, region.to.line })
+  end
+  eq(output_region_lines, ref_region_lines)
+end
+
+T['gen_ai_spec']['indent()']['works with tabs'] = function()
+  -- When only tabs are present
+  set_lines({ 'aa', '\tbb', '\t\tcc', '\tbb', 'aa' })
+  validate_ai_indent({ { 1, 5 }, { 2, 4 } })
+
+  -- Should respect 'tabstop' if tabs and spaces are mixed
+  child.o.tabstop = 3
+  set_lines({ '   aa', '    cc', '\t\txx', ' \tyy', '   aa' })
+  validate_ai_indent({ { 1, 5 }, { 2, 4 } })
+end
+
+T['gen_ai_spec']['indent()']['ignores blank lines indent when computing scopes'] = function()
+  set_lines({ 'aa', ' bb', '    ', '', 'aa' })
+  validate_ai_indent({ { 1, 5 } })
+end
+
+T['gen_ai_spec']['indent()']['includes edge blank lines in `i` textobject'] = function()
+  set_lines({ 'aa', '', '  ', ' bb', '  ', '', 'aa' })
+  validate_ai_indent({ { 1, 7 } })
+end
+
+T['gen_ai_spec']['indent()']['ignores not enclosed regions'] = function()
+  set_lines({ '', '  ', 'aa', ' bb', 'aa', '  ', '' })
+  validate_ai_indent({ { 3, 5 } })
+
+  set_lines({ '', '  ', 'aa', '  ', '' })
+  validate_ai_indent({})
+end
+
+T['gen_ai_spec']['indent()']['does not include scopes with only blank inside'] = function()
+  set_lines({ 'aa', ' bb', '  ', '', '  ', ' bb', 'aa' })
+  validate_ai_indent({ { 1, 7 } })
+end
+
+T['gen_ai_spec']['indent()']['casts rays from top to bottom'] = function()
+  -- NOTE: Not necessarily a good feature, but a documented behavior
+  set_lines({ ' bb', '   dd', '  cc', 'aa' })
+  validate_ai_indent({ { 1, 4 } })
 end
 
 T['gen_ai_spec']['line()'] = new_set()
