@@ -228,43 +228,6 @@ T['General']['pickers are added to `MiniPick.registry`'] = new_set(
 
 T['gen_ai_spec'] = new_set({ hooks = { pre_case = load_module } })
 
-T['gen_ai_spec']['line()'] = new_set()
-
-T['gen_ai_spec']['line()']['works as `a` textobject'] = function()
-  child.lua([[require('mini.ai').setup({ custom_textobjects = { L = MiniExtra.gen_ai_spec.line() } })]])
-
-  validate_edit1d('aa', 0, { 'caL', 'xx', '<Esc>' }, 'xx', 1)
-  validate_edit1d('  aa', 0, { 'caL', 'xx', '<Esc>' }, 'xx', 1)
-  validate_edit1d('\taa', 0, { 'caL', 'xx', '<Esc>' }, 'xx', 1)
-  validate_edit1d('  aa', 2, { 'caL', 'xx', '<Esc>' }, 'xx', 1)
-
-  -- Should operate charwise inside a line
-  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 1 }, { 'daL' }, { '', 'bb', 'cc' }, { 1, 0 })
-  validate_edit({ 'aa', 'bb', 'cc' }, { 2, 1 }, { 'daL' }, { 'aa', '', 'cc' }, { 2, 0 })
-  validate_edit({ 'aa', 'bb', 'cc' }, { 3, 1 }, { 'daL' }, { 'aa', 'bb', '' }, { 3, 0 })
-
-  -- Should work with dot-repeat
-  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'caL', 'xx', '<Esc>', 'j', '.' }, { 'xx', 'xx' }, { 2, 1 })
-end
-
-T['gen_ai_spec']['line()']['works as `i` textobject'] = function()
-  child.lua([[require('mini.ai').setup({ custom_textobjects = { L = MiniExtra.gen_ai_spec.line() } })]])
-
-  validate_edit1d('aa', 0, { 'ciL', 'xx', '<Esc>' }, 'xx', 1)
-  validate_edit1d('  aa', 0, { 'ciL', 'xx', '<Esc>' }, '  xx', 3)
-  validate_edit1d('\taa', 0, { 'ciL', 'xx', '<Esc>' }, '\txx', 2)
-  validate_edit1d(' \taa', 0, { 'ciL', 'xx', '<Esc>' }, ' \txx', 3)
-  validate_edit1d('  aa', 2, { 'ciL', 'xx', '<Esc>' }, '  xx', 3)
-
-  -- Should operate charwise inside a line
-  validate_edit({ '  aa', '  bb', '  cc' }, { 1, 1 }, { 'diL' }, { '  ', '  bb', '  cc' }, { 1, 1 })
-  validate_edit({ '  aa', '  bb', '  cc' }, { 2, 1 }, { 'diL' }, { '  aa', '  ', '  cc' }, { 2, 1 })
-  validate_edit({ '  aa', '  bb', '  cc' }, { 3, 1 }, { 'diL' }, { '  aa', '  bb', '  ' }, { 3, 1 })
-
-  -- Should work with dot-repeat
-  validate_edit({ '  aa', '  bb' }, { 1, 0 }, { 'ciL', 'xx', '<Esc>', 'j', '.' }, { '  xx', '  xx' }, { 2, 3 })
-end
-
 T['gen_ai_spec']['buffer()'] = new_set()
 
 T['gen_ai_spec']['buffer()']['works as `a` textobject'] = function()
@@ -328,6 +291,43 @@ T['gen_ai_spec']['buffer()']['works as `i` textobject'] = function()
   eq(get_lines(), { ' ', 'xx', ' ' })
 end
 
+T['gen_ai_spec']['line()'] = new_set()
+
+T['gen_ai_spec']['line()']['works as `a` textobject'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { L = MiniExtra.gen_ai_spec.line() } })]])
+
+  validate_edit1d('aa', 0, { 'caL', 'xx', '<Esc>' }, 'xx', 1)
+  validate_edit1d('  aa', 0, { 'caL', 'xx', '<Esc>' }, 'xx', 1)
+  validate_edit1d('\taa', 0, { 'caL', 'xx', '<Esc>' }, 'xx', 1)
+  validate_edit1d('  aa', 2, { 'caL', 'xx', '<Esc>' }, 'xx', 1)
+
+  -- Should operate charwise inside a line
+  validate_edit({ 'aa', 'bb', 'cc' }, { 1, 1 }, { 'daL' }, { '', 'bb', 'cc' }, { 1, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 2, 1 }, { 'daL' }, { 'aa', '', 'cc' }, { 2, 0 })
+  validate_edit({ 'aa', 'bb', 'cc' }, { 3, 1 }, { 'daL' }, { 'aa', 'bb', '' }, { 3, 0 })
+
+  -- Should work with dot-repeat
+  validate_edit({ 'aa', 'bb' }, { 1, 0 }, { 'caL', 'xx', '<Esc>', 'j', '.' }, { 'xx', 'xx' }, { 2, 1 })
+end
+
+T['gen_ai_spec']['line()']['works as `i` textobject'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { L = MiniExtra.gen_ai_spec.line() } })]])
+
+  validate_edit1d('aa', 0, { 'ciL', 'xx', '<Esc>' }, 'xx', 1)
+  validate_edit1d('  aa', 0, { 'ciL', 'xx', '<Esc>' }, '  xx', 3)
+  validate_edit1d('\taa', 0, { 'ciL', 'xx', '<Esc>' }, '\txx', 2)
+  validate_edit1d(' \taa', 0, { 'ciL', 'xx', '<Esc>' }, ' \txx', 3)
+  validate_edit1d('  aa', 2, { 'ciL', 'xx', '<Esc>' }, '  xx', 3)
+
+  -- Should operate charwise inside a line
+  validate_edit({ '  aa', '  bb', '  cc' }, { 1, 1 }, { 'diL' }, { '  ', '  bb', '  cc' }, { 1, 1 })
+  validate_edit({ '  aa', '  bb', '  cc' }, { 2, 1 }, { 'diL' }, { '  aa', '  ', '  cc' }, { 2, 1 })
+  validate_edit({ '  aa', '  bb', '  cc' }, { 3, 1 }, { 'diL' }, { '  aa', '  bb', '  ' }, { 3, 1 })
+
+  -- Should work with dot-repeat
+  validate_edit({ '  aa', '  bb' }, { 1, 0 }, { 'ciL', 'xx', '<Esc>', 'j', '.' }, { '  xx', '  xx' }, { 2, 3 })
+end
+
 T['gen_highlighter'] = new_set({ hooks = { pre_case = load_module } })
 
 T['gen_highlighter']['words()'] = new_set()
@@ -387,6 +387,134 @@ T['pickers']["validate no 'mini.pick'"] = function()
       child.lua(lua_cmd)
     end, err_pattern)
   end
+end
+
+T['pickers']['buf_lines()'] = new_set()
+
+local pick_buf_lines = forward_lua_notify('MiniExtra.pickers.buf_lines')
+
+local setup_buffers = function()
+  -- Normal buffer with name
+  local buf_id_1 = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(buf_id_1, 0, -1, false, { 'This is', '  buffer 1' })
+  child.api.nvim_buf_set_name(buf_id_1, 'buffer-1')
+
+  -- Normal buffer without name
+  local buf_id_2 = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(buf_id_2, 0, -1, false, { 'This is', '  buffer 2' })
+
+  -- Normal buffer without lines
+  local buf_id_3 = child.api.nvim_create_buf(true, false)
+
+  -- Not listed normal buffer
+  local buf_id_4 = child.api.nvim_create_buf(false, false)
+
+  -- Not normal buffer
+  local buf_id_5 = child.api.nvim_create_buf(false, true)
+
+  -- Set current buffer
+  local buf_init = child.api.nvim_get_current_buf()
+  child.api.nvim_set_current_buf(buf_id_1)
+  child.api.nvim_buf_delete(buf_init, { force = true })
+
+  return { buf_id_1, buf_id_2, buf_id_3, buf_id_4, buf_id_5 }
+end
+
+T['pickers']['buf_lines()']['works'] = function()
+  local buffers = setup_buffers()
+
+  child.lua_notify('_G.return_item = MiniExtra.pickers.buf_lines()')
+  validate_picker_name('Buffer lines (all)')
+  child.expect_screenshot()
+
+  -- Should properly choose (and also support choosing in same buffer)
+  type_keys('<C-n>')
+  type_keys('<CR>')
+  validate_buf_name(0, 'buffer-1')
+  eq(get_cursor(), { 2, 0 })
+
+  -- Should return chosen value with proper structure
+  eq(child.lua_get('_G.return_item'), { bufnr = 2, lnum = 2, text = 'buffer-1:2:  buffer 1' })
+end
+
+T['pickers']['buf_lines()']['respects `local_opts.scope`'] = function()
+  setup_buffers()
+  pick_buf_lines({ scope = 'current' })
+  validate_picker_name('Buffer lines (current)')
+  child.expect_screenshot()
+end
+
+T['pickers']['buf_lines()']['can not show icons'] = function()
+  setup_buffers()
+  child.lua('MiniPick.config.source.show = MiniPick.default_show')
+  pick_buf_lines()
+  child.expect_screenshot()
+end
+
+T['pickers']['buf_lines()']['respects `opts`'] = function()
+  pick_buf_lines({}, { source = { name = 'My name' } })
+  validate_picker_name('My name')
+end
+
+T['pickers']['buf_lines()']['validates arguments'] = function()
+  local validate = function(local_opts, error_pattern)
+    expect.error(function() child.lua('MiniExtra.pickers.buf_lines(...)', { local_opts }) end, error_pattern)
+  end
+  validate({ scope = '1' }, '`pickers%.buf_lines`.*"scope".*"1".*one of')
+end
+
+T['pickers']['commands()'] = new_set()
+
+local pick_commands = forward_lua_notify('MiniExtra.pickers.commands')
+
+T['pickers']['commands()']['works'] = function()
+  child.set_size(10, 80)
+
+  child.lua_notify('_G.return_item = MiniExtra.pickers.commands()')
+  validate_picker_name('Commands')
+  type_keys("'chdir")
+  child.expect_screenshot()
+
+  -- Should have proper preview
+  type_keys('<Tab>')
+  -- - No data for built-in commands is yet available
+  child.expect_screenshot()
+
+  -- Should properly choose
+  type_keys('<CR>')
+  eq(child.fn.getcmdline(), 'chdir ')
+  eq(child.fn.getcmdpos(), 7)
+
+  -- Should return chosen value
+  eq(child.lua_get('_G.return_item'), 'chdir')
+end
+
+T['pickers']['commands()']['respects user commands'] = function()
+  child.set_size(25, 75)
+  child.cmd('command -nargs=0 MyCommand lua _G.my_command = true')
+  child.cmd('command -nargs=* -buffer MyCommandBuf lua _G.my_command_buf = true')
+
+  -- Both global and buffer-local
+  pick_commands()
+  type_keys('^MyCommand')
+  eq(get_picker_matches().all, { 'MyCommand', 'MyCommandBuf' })
+
+  -- Should have proper preview with data
+  type_keys('<Tab>')
+  child.expect_screenshot()
+  type_keys('<C-n>')
+  child.expect_screenshot()
+
+  -- Should on choose execute command if it is without arguments
+  type_keys('<C-p>', '<CR>')
+  eq(is_picker_active(), false)
+  eq(child.lua_get('_G.my_command'), true)
+  eq(child.lua_get('_G.my_command_buf'), vim.NIL)
+end
+
+T['pickers']['commands()']['respects `opts`'] = function()
+  pick_commands({}, { source = { name = 'My name' } })
+  validate_picker_name('My name')
 end
 
 T['pickers']['diagnostic()'] = new_set({
@@ -538,389 +666,182 @@ T['pickers']['diagnostic()']['validates arguments'] = function()
   validate({ sort_by = '1' }, '`pickers%.diagnostic`.*"sort_by".*"1".*one of')
 end
 
-T['pickers']['oldfiles()'] = new_set()
+T['pickers']['explorer()'] = new_set()
 
-local pick_oldfiles = forward_lua_notify('MiniExtra.pickers.oldfiles')
+local pick_explorer = forward_lua_notify('MiniExtra.pickers.explorer')
 
-T['pickers']['oldfiles()']['works'] = function()
-  child.set_size(10, 70)
-  local path_1, path_2 = real_file('LICENSE'), make_testpath('mocks', 'diagnostic.lua')
-  local ref_oldfiles = { full_path(path_1), full_path(path_2), 'not-existing' }
-  child.v.oldfiles = ref_oldfiles
+T['pickers']['explorer()']['works'] = function()
+  local init_dir = full_path(make_testpath('explorer'))
+  child.fn.chdir(init_dir)
 
-  child.lua_notify('_G.return_item = MiniExtra.pickers.oldfiles()')
-  validate_picker_name('Old files')
+  child.lua_notify('_G.return_item = MiniExtra.pickers.explorer()')
+  validate_picker_name('File explorer')
+  validate_picker_cwd(init_dir)
+  local init_items = get_picker_items()
   child.expect_screenshot()
 
-  -- Should have proper items (only readable files with short paths)
-  eq(get_picker_items(), { path_1, path_2 })
-
-  -- Should properly choose
-  type_keys('<CR>')
-  validate_buf_name(0, path_1)
-  eq(get_cursor(), { 1, 0 })
-
-  --stylua: ignore
-  -- Should return chosen value with proper structure
-  eq(child.lua_get('_G.return_item'), path_1)
-end
-
-T['pickers']['oldfiles()']['works with empty `v:oldfiles`'] = function()
-  child.v.oldfiles = {}
-  pick_oldfiles()
-  eq(get_picker_items(), {})
-end
-
-T['pickers']['oldfiles()']['can not show icons'] = function()
-  child.set_size(10, 70)
-  local ref_oldfiles = { full_path(real_file('LICENSE')), full_path(make_testpath('mocks', 'diagnostic.lua')) }
-  child.v.oldfiles = ref_oldfiles
-
-  child.lua('MiniPick.config.source.show = MiniPick.default_show')
-  pick_oldfiles()
+  -- Can navigate inside directory
+  type_keys('<C-n>', '<CR>')
   child.expect_screenshot()
-end
+  validate_picker_name('File explorer')
+  validate_picker_cwd(join_path(init_dir, 'dir1'))
 
-T['pickers']['oldfiles()']['respects `opts`'] = function()
-  pick_oldfiles({}, { source = { name = 'My name' } })
-  validate_picker_name('My name')
-end
+  -- - Should actually change items
+  eq(vim.deep_equal(init_items, get_picker_items()), false)
 
-T['pickers']['oldfiles()']['respects `opts.source.cwd`'] = function()
-  child.set_size(10, 70)
-  local ref_oldfiles = { full_path(real_file('LICENSE')), full_path(make_testpath('mocks', 'diagnostic.lua')) }
-  child.v.oldfiles = ref_oldfiles
-
-  pick_oldfiles({}, { source = { cwd = real_files_dir } })
-  local items = get_picker_items()
-  eq(items[1], 'LICENSE')
-  expect.match(items[2], vim.pesc(ref_oldfiles[2]))
-end
-
-T['pickers']['buf_lines()'] = new_set()
-
-local pick_buf_lines = forward_lua_notify('MiniExtra.pickers.buf_lines')
-
-local setup_buffers = function()
-  -- Normal buffer with name
-  local buf_id_1 = child.api.nvim_create_buf(true, false)
-  child.api.nvim_buf_set_lines(buf_id_1, 0, -1, false, { 'This is', '  buffer 1' })
-  child.api.nvim_buf_set_name(buf_id_1, 'buffer-1')
-
-  -- Normal buffer without name
-  local buf_id_2 = child.api.nvim_create_buf(true, false)
-  child.api.nvim_buf_set_lines(buf_id_2, 0, -1, false, { 'This is', '  buffer 2' })
-
-  -- Normal buffer without lines
-  local buf_id_3 = child.api.nvim_create_buf(true, false)
-
-  -- Not listed normal buffer
-  local buf_id_4 = child.api.nvim_create_buf(false, false)
-
-  -- Not normal buffer
-  local buf_id_5 = child.api.nvim_create_buf(false, true)
-
-  -- Set current buffer
-  local buf_init = child.api.nvim_get_current_buf()
-  child.api.nvim_set_current_buf(buf_id_1)
-  child.api.nvim_buf_delete(buf_init, { force = true })
-
-  return { buf_id_1, buf_id_2, buf_id_3, buf_id_4, buf_id_5 }
-end
-
-T['pickers']['buf_lines()']['works'] = function()
-  local buffers = setup_buffers()
-
-  child.lua_notify('_G.return_item = MiniExtra.pickers.buf_lines()')
-  validate_picker_name('Buffer lines (all)')
-  child.expect_screenshot()
-
-  -- Should properly choose (and also support choosing in same buffer)
-  type_keys('<C-n>')
-  type_keys('<CR>')
-  validate_buf_name(0, 'buffer-1')
-  eq(get_cursor(), { 2, 0 })
-
-  -- Should return chosen value with proper structure
-  eq(child.lua_get('_G.return_item'), { bufnr = 2, lnum = 2, text = 'buffer-1:2:  buffer 1' })
-end
-
-T['pickers']['buf_lines()']['respects `local_opts.scope`'] = function()
-  setup_buffers()
-  pick_buf_lines({ scope = 'current' })
-  validate_picker_name('Buffer lines (current)')
-  child.expect_screenshot()
-end
-
-T['pickers']['buf_lines()']['can not show icons'] = function()
-  setup_buffers()
-  child.lua('MiniPick.config.source.show = MiniPick.default_show')
-  pick_buf_lines()
-  child.expect_screenshot()
-end
-
-T['pickers']['buf_lines()']['respects `opts`'] = function()
-  pick_buf_lines({}, { source = { name = 'My name' } })
-  validate_picker_name('My name')
-end
-
-T['pickers']['buf_lines()']['validates arguments'] = function()
-  local validate = function(local_opts, error_pattern)
-    expect.error(function() child.lua('MiniExtra.pickers.buf_lines(...)', { local_opts }) end, error_pattern)
-  end
-  validate({ scope = '1' }, '`pickers%.buf_lines`.*"scope".*"1".*one of')
-end
-
-T['pickers']['history()'] = new_set({
-  hooks = {
-    pre_case = function()
-      child.cmd('set history=100')
-
-      -- Command-line history
-      child.lua('_G.n = 0')
-      type_keys(':lua _G.n = _G.n + 1<CR>')
-      type_keys(':lua _G.n = _G.n + 2<CR>')
-
-      -- Search history
-      child.api.nvim_buf_set_lines(0, 0, -1, false, { 'aaa', 'bbb' })
-      type_keys('/aaa<CR>')
-      type_keys('/bbb<CR>')
-
-      -- Expressions history
-      type_keys('O', '<C-r>=1+1<CR>', '<Esc>')
-      type_keys('o', '<C-r>=2+2<CR>', '<Esc>')
-
-      -- Input history
-      child.lua_notify([[vim.fn.input('Prompt')]])
-      type_keys('input 1', '<CR>')
-      child.lua_notify([[vim.fn.input('Prompt')]])
-      type_keys('input 2', '<CR>')
-
-      -- Debug mode
-      -- Can't really emulate debug mode
-
-      child.api.nvim_buf_set_lines(0, 0, -1, false, {})
-    end,
-  },
-})
-
-local pick_history = forward_lua_notify('MiniExtra.pickers.history')
-
-T['pickers']['history()']['works'] = function()
-  child.set_size(20, 70)
-
-  child.lua_notify('_G.return_item = MiniExtra.pickers.history()')
-  -- - Should by default list all history
-  validate_picker_name('History (all)')
-  child.expect_screenshot()
-
-  -- Should have no preview
+  -- Can preview directory (both regular and `..`) and file
   type_keys('<Tab>')
   child.expect_screenshot()
+  type_keys('<C-n>')
+  child.expect_screenshot()
+  type_keys('<C-n>')
+  child.expect_screenshot()
 
-  -- Should return chosen value with proper structure
+  -- Can navigate up
+  type_keys('<C-g>', '<CR>')
+  child.expect_screenshot()
+  validate_picker_cwd(init_dir)
+
+  -- Can choose file
+  type_keys('<C-p>', '<CR>')
+  validate_buf_name(0, 'file3')
+  eq(get_lines(), { 'File 3' })
+
+  -- Should return chosen value
+  eq(child.lua_get('_G.return_item'), { fs_type = 'file', path = join_path(init_dir, 'file3'), text = 'file3' })
+end
+
+T['pickers']['explorer()']['works with query'] = function()
+  local init_dir = full_path(make_testpath('explorer'))
+  child.fn.chdir(init_dir)
+
+  pick_explorer()
+  type_keys('^D')
+  eq(get_picker_matches().all, { { fs_type = 'directory', path = join_path(init_dir, 'Dir2'), text = 'Dir2/' } })
+
   type_keys('<CR>')
-  eq(child.lua_get('_G.return_item'), ': lua _G.n = _G.n + 2')
+  eq(get_picker_matches().all, {
+    { fs_type = 'directory', path = init_dir, text = '..' },
+    { fs_type = 'file', path = join_path(init_dir, 'Dir2', 'file2-1'), text = 'file2-1' },
+  })
+  -- - Should reset the query
+  eq(child.lua_get('MiniPick.get_picker_query()'), {})
 end
 
-T['pickers']['history()']['works for command-line history'] = function()
-  -- Works
-  pick_history({ scope = 'cmd' })
-  eq(get_picker_items(), { ': lua _G.n = _G.n + 2', ': lua _G.n = _G.n + 1' })
-  validate_picker_name('History (cmd)')
-
-  -- Should execute command on choose
-  local n = child.lua_get('_G.n')
-  type_keys('<C-n>', '<CR>')
-  eq(child.lua_get('_G.n'), n + 1)
-
-  -- Should work with aliases
-  pick_history({ scope = ':' })
-  validate_picker_name('History (:)')
-  -- - NOTE: now it doesn't update command line history, but probably should
-  --   (just couldn't find a way to achieve this)
-  eq(get_picker_items(), { ': lua _G.n = _G.n + 2', ': lua _G.n = _G.n + 1' })
-end
-
-T['pickers']['history()']['works for search history'] = function()
-  set_lines({ 'bbb', '  aaa' })
-
-  -- Works
-  pick_history({ scope = 'search' })
-  validate_picker_name('History (search)')
-  eq(get_picker_items(), { '/ bbb', '/ aaa' })
-
-  -- Should restart search on choose (and update history)
-  type_keys('<C-n>', '<CR>')
-  eq(get_cursor(), { 2, 2 })
-  eq(child.o.hlsearch, true)
-  -- - `:history` lists from oldest to newest
-  expect.match(child.cmd_capture('history search'), 'bbb.*aaa')
-
-  -- Should work with aliases
-  pick_history({ scope = '/' })
-  validate_picker_name('History (/)')
-  eq(get_picker_items(), { '/ aaa', '/ bbb' })
+T['pickers']['explorer()']['can be resumed'] = function()
+  local init_dir = full_path(make_testpath('explorer'))
+  child.fn.chdir(init_dir)
+  pick_explorer()
+  type_keys('<C-n>', '<CR>', '<C-n>')
+  child.expect_screenshot()
   stop_picker()
 
-  -- - For `?` alias should search backward
-  set_lines({ 'aaa', 'bbb', 'aaa' })
-  set_cursor(2, 0)
-  pick_history({ scope = '?' })
-  validate_picker_name('History (?)')
-  eq(get_picker_items(), { '? aaa', '? bbb' })
-
-  type_keys('<CR>')
-  eq(get_cursor(), { 1, 0 })
-  eq(child.o.hlsearch, true)
+  child.lua_notify('MiniPick.builtin.resume()')
+  validate_picker_cwd(join_path(init_dir, 'dir1'))
+  child.expect_screenshot()
 end
 
-T['pickers']['history()']['works for expression register history'] = function()
-  pick_history({ scope = 'expr' })
-  validate_picker_name('History (expr)')
-  eq(get_picker_items(), { '= 2+2', '= 1+1' })
+T['pickers']['explorer()']['respects `local_opts.cwd`'] = function()
+  local validate = function(cwd, ref_picker_cwd)
+    local nvim_cwd = child.fn.getcwd()
+    pick_explorer({ cwd = cwd })
+    validate_picker_cwd(ref_picker_cwd)
 
-  -- Nothing is expected to be done on choose
-  type_keys('<CR>')
+    -- Neovim's directory should not change
+    eq(child.fn.getcwd(), nvim_cwd)
 
-  -- Should work with aliases
-  pick_history({ scope = '=' })
-  validate_picker_name('History (=)')
-  eq(get_picker_items(), { '= 2+2', '= 1+1' })
-end
-
-T['pickers']['history()']['works for input history'] = function()
-  pick_history({ scope = 'input' })
-  validate_picker_name('History (input)')
-  eq(get_picker_items(), { '@ input 2', '@ input 1' })
-
-  -- Nothing is expected to be done on choose
-  type_keys('<CR>')
-
-  -- Should work with aliases
-  pick_history({ scope = '@' })
-  validate_picker_name('History (@)')
-  eq(get_picker_items(), { '@ input 2', '@ input 1' })
-end
-
-T['pickers']['history()']['respects `opts`'] = function()
-  pick_history({}, { source = { name = 'My name' } })
-  validate_picker_name('My name')
-end
-
-T['pickers']['history()']['validates arguments'] = function()
-  local validate = function(local_opts, error_pattern)
-    expect.error(function() child.lua('MiniExtra.pickers.history(...)', { local_opts }) end, error_pattern)
+    -- Cleanup
+    stop_picker()
   end
-  validate({ scope = '1' }, '`pickers%.history`.*"scope".*"1".*one of')
+
+  local path = make_testpath('explorer')
+
+  -- Relative path
+  validate(path, full_path(path))
+
+  -- Absolute path
+  validate(full_path(path), full_path(path))
+
+  -- Parent path
+  child.fn.chdir(path)
+  validate('..', test_dir_absolute)
 end
 
-T['pickers']['hl_groups()'] = new_set()
-
-local pick_hl_groups = forward_lua_notify('MiniExtra.pickers.hl_groups')
-
-T['pickers']['hl_groups()']['works'] = function()
-  child.cmd('colorscheme default')
-  child.set_size(10, 80)
-
-  child.lua_notify('_G.return_item = MiniExtra.pickers.hl_groups()')
-  validate_picker_name('Highlight groups')
-  type_keys('^Diff')
+T['pickers']['explorer()']['respects `local_opts.filter`'] = function()
+  local init_dir = full_path(make_testpath('explorer'))
+  child.fn.chdir(init_dir)
+  child.lua([[
+    _G.filter_log = {}
+    _G.dir_filter = function(item)
+      table.insert(_G.filter_log, vim.deepcopy(item))
+      return item.fs_type == 'directory'
+    end
+  ]])
+  child.lua_notify('MiniExtra.pickers.explorer({ filter = _G.dir_filter })')
   child.expect_screenshot()
 
-  -- Should use same group for line highlighting
-  local matches = get_picker_matches().all
-  validate_partial_equal_arr(get_extra_picker_extmarks(0, -1), {
-    { row = 0, col = 0, hl_group = matches[1] },
-    { row = 1, col = 0, hl_group = matches[2] },
-    { row = 2, col = 0, hl_group = matches[3] },
-    { row = 3, col = 0, hl_group = matches[4] },
-  })
-
-  -- Should have proper preview
-  type_keys('<Tab>')
+  -- Should work when navigate into subdirectory
+  type_keys('<C-n>', '<CR>')
   child.expect_screenshot()
 
-  -- Should properly choose
-  type_keys('<CR>')
-  eq(child.fn.getcmdline(), 'hi DiffAdd ctermbg=4 guibg=DarkBlue')
-  eq(child.fn.getcmdpos(), 36)
-
-  -- Should return chosen value
-  eq(child.lua_get('_G.return_item'), 'DiffAdd')
+  -- Should be called with proper arguments
+  local filter_log = child.lua_get('_G.filter_log')
+  eq(#filter_log, 7 + 3)
+  eq(filter_log[1], { fs_type = 'directory', path = test_dir_absolute, text = '..' })
 end
 
-T['pickers']['hl_groups()']['respects non-default/linked highlight groups'] = function()
-  child.set_size(10, 40)
-  child.cmd('hi AAAA guifg=#aaaaaa')
-  child.cmd('hi link AAAB AAAA')
-
-  pick_hl_groups()
-  type_keys('^AAA')
+T['pickers']['explorer()']['respects `local_opts.sort`'] = function()
+  local init_dir = full_path(make_testpath('explorer'))
+  child.fn.chdir(init_dir)
+  child.lua([[
+    _G.sort_log = {}
+    _G.sort_plain = function(items)
+      table.insert(_G.sort_log, vim.deepcopy(items))
+      local res = vim.deepcopy(items)
+      table.sort(res, function(a, b) return a.text < b.text end)
+      return res
+    end
+  ]])
+  child.lua_notify('MiniExtra.pickers.explorer({ sort = _G.sort_plain })')
   child.expect_screenshot()
-  validate_partial_equal_arr(get_extra_picker_extmarks(0, -1), {
-    { row = 0, col = 0, hl_group = 'AAAA' },
-    { row = 1, col = 0, hl_group = 'AAAB' },
-  })
+
+  -- Should work when navigate into subdirectory
+  type_keys('<C-n>', '<C-n>', '<C-n>', '<CR>')
+  child.expect_screenshot()
+
+  -- Should be called with proper arguments
+  local sort_log = child.lua_get('_G.sort_log')
+  eq(#sort_log, 2)
+  eq(vim.tbl_islist(sort_log[1]), true)
+  eq(sort_log[1][1], { fs_type = 'directory', path = test_dir_absolute, text = '..' })
 end
 
-T['pickers']['hl_groups()']['respects `opts`'] = function()
-  pick_hl_groups({}, { source = { name = 'My name' } })
+T['pickers']['explorer()']['can not show icons'] = function()
+  local init_dir = full_path(make_testpath('explorer'))
+  child.fn.chdir(init_dir)
+
+  child.lua('MiniPick.config.source.show = MiniPick.default_show')
+  pick_explorer()
+  child.expect_screenshot()
+  type_keys('<C-n>', '<CR>')
+  child.expect_screenshot()
+end
+
+T['pickers']['explorer()']['respects `opts`'] = function()
+  local init_dir = full_path(make_testpath('explorer'))
+  child.fn.chdir(init_dir)
+  pick_explorer({}, { source = { name = 'My name' } })
   validate_picker_name('My name')
 end
 
-T['pickers']['commands()'] = new_set()
+T['pickers']['explorer()']['validates arguments'] = function()
+  local validate = function(local_opts, error_pattern)
+    expect.error(function() child.lua('MiniExtra.pickers.explorer(...)', { local_opts }) end, error_pattern)
+  end
 
-local pick_commands = forward_lua_notify('MiniExtra.pickers.commands')
-
-T['pickers']['commands()']['works'] = function()
-  child.set_size(10, 80)
-
-  child.lua_notify('_G.return_item = MiniExtra.pickers.commands()')
-  validate_picker_name('Commands')
-  type_keys("'chdir")
-  child.expect_screenshot()
-
-  -- Should have proper preview
-  type_keys('<Tab>')
-  -- - No data for built-in commands is yet available
-  child.expect_screenshot()
-
-  -- Should properly choose
-  type_keys('<CR>')
-  eq(child.fn.getcmdline(), 'chdir ')
-  eq(child.fn.getcmdpos(), 7)
-
-  -- Should return chosen value
-  eq(child.lua_get('_G.return_item'), 'chdir')
-end
-
-T['pickers']['commands()']['respects user commands'] = function()
-  child.set_size(25, 75)
-  child.cmd('command -nargs=0 MyCommand lua _G.my_command = true')
-  child.cmd('command -nargs=* -buffer MyCommandBuf lua _G.my_command_buf = true')
-
-  -- Both global and buffer-local
-  pick_commands()
-  type_keys('^MyCommand')
-  eq(get_picker_matches().all, { 'MyCommand', 'MyCommandBuf' })
-
-  -- Should have proper preview with data
-  type_keys('<Tab>')
-  child.expect_screenshot()
-  type_keys('<C-n>')
-  child.expect_screenshot()
-
-  -- Should on choose execute command if it is without arguments
-  type_keys('<C-p>', '<CR>')
-  eq(is_picker_active(), false)
-  eq(child.lua_get('_G.my_command'), true)
-  eq(child.lua_get('_G.my_command_buf'), vim.NIL)
-end
-
-T['pickers']['commands()']['respects `opts`'] = function()
-  pick_commands({}, { source = { name = 'My name' } })
-  validate_picker_name('My name')
+  validate({ cwd = '1' }, '`local_opts%.cwd`.*valid directory path')
+  validate({ filter = '1' }, '`local_opts%.filter`.*callable')
+  validate({ sort = '1' }, '`local_opts%.sort`.*callable')
 end
 
 T['pickers']['git_branches()'] = new_set({ hooks = { pre_case = mock_spawn } })
@@ -1497,109 +1418,324 @@ T['pickers']['git_hunks()']['validates arguments'] = function()
   validate({ scope = '1' }, '`pickers%.git_hunks`.*"scope".*"1".*one of')
 end
 
-T['pickers']['options()'] = new_set()
+T['pickers']['hipatterns()'] = new_set()
 
-local pick_options = forward_lua_notify('MiniExtra.pickers.options')
+local pick_hipatterns = forward_lua_notify('MiniExtra.pickers.hipatterns')
 
-T['pickers']['options()']['works'] = function()
-  child.set_size(35, 60)
+local setup_hipatterns = function()
+  child.lua([[require('mini.hipatterns').setup({
+    highlighters = {
+      minmax = { pattern = { 'min', 'max' }, group = 'Error' },
+      ['local'] = { pattern = 'local', group = 'Comment' },
+    },
+    delay = { text_change = 20 },
+  })]])
+  child.cmd('edit ' .. real_file('a.lua'))
+  local buf_id_1 = child.api.nvim_create_buf(true, false)
 
-  child.lua_notify('_G.return_item = MiniExtra.pickers.options()')
-  validate_picker_name('Options (all)')
-  type_keys('^cursor')
+  local buf_id_2 = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(buf_id_2)
+  child.api.nvim_buf_set_lines(buf_id_2, 0, -1, false, { '', 'min', 'max', 'local' })
+  sleep(20 + 5)
+
+  -- Should not be present in results
+  local buf_id_not_enabled = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(buf_id_not_enabled, 0, -1, false, { 'min max local' })
+
+  return buf_id_1, buf_id_2
+end
+
+T['pickers']['hipatterns()']['works'] = function()
+  child.set_size(15, 120)
+  local _, buf_id_2 = setup_hipatterns()
+
+  child.lua_notify('_G.return_item = MiniExtra.pickers.hipatterns()')
+  validate_picker_name('Mini.hipatterns matches (all)')
   child.expect_screenshot()
+
+  -- Should highlight highlighter's name with its group
+  local ns_id = child.api.nvim_get_namespaces().MiniExtraPickers
+  local extmarks = child.api.nvim_buf_get_extmarks(0, ns_id, 0, -1, { details = true })
+  local extmark_data = vim.tbl_map(
+    function(x) return { row = x[2], row_end = x[4].end_row, col = x[3], col_end = x[4].end_col, hl_group = x[4].hl_group } end,
+    extmarks
+  )
+  --stylua: ignore
+  eq(extmark_data, {
+    { hl_group = 'Comment', row = 0, row_end = 0, col = 0, col_end = 5 },
+    { hl_group = 'Comment', row = 1, row_end = 1, col = 0, col_end = 5 },
+    { hl_group = 'Error',   row = 2, row_end = 2, col = 0, col_end = 6 },
+    { hl_group = 'Error',   row = 3, row_end = 3, col = 0, col_end = 6 },
+    { hl_group = 'Comment', row = 4, row_end = 4, col = 0, col_end = 5 },
+    { hl_group = 'Error',   row = 5, row_end = 5, col = 0, col_end = 6 },
+    { hl_group = 'Error',   row = 6, row_end = 6, col = 0, col_end = 6 },
+  })
+
+  -- Can preview match region
+  type_keys('<C-p>', '<Tab>')
+  child.expect_screenshot()
+
+  -- Should properly choose by positioning on region start
+  type_keys('<CR>')
+  eq(child.api.nvim_get_current_buf(), buf_id_2)
+  eq(get_cursor(), { 3, 0 })
+
+  -- Should return chosen value
+  eq(child.lua_get('_G.return_item'), {
+    bufnr = buf_id_2,
+    highlighter = 'minmax',
+    hl_group = 'Error',
+    lnum = 3,
+    end_lnum = 3,
+    col = 1,
+    end_col = 4,
+    text = 'minmax │ Buffer_3:3:1:max',
+  })
+end
+
+T['pickers']['hipatterns()']['respects `local_opts.scope`'] = function()
+  child.set_size(15, 50)
+  setup_hipatterns()
+  pick_hipatterns({ scope = 'current' })
+  validate_picker_name('Mini.hipatterns matches (current)')
+  child.expect_screenshot()
+end
+
+T['pickers']['hipatterns()']['respects `local_opts.highlighters`'] = function()
+  child.set_size(15, 120)
+  setup_hipatterns()
+
+  pick_hipatterns({ highlighters = { 'minmax' } })
+  child.expect_screenshot()
+  stop_picker()
+
+  -- Empty table
+  pick_hipatterns({ highlighters = {} })
+  eq(get_picker_items(), {})
+end
+
+T['pickers']['hipatterns()']['respects `opts`'] = function()
+  setup_hipatterns()
+  pick_hipatterns({}, { source = { name = 'My name' } })
+  validate_picker_name('My name')
+end
+
+T['pickers']['hipatterns()']["checks for present 'mini.hipatterns'"] = function()
+  child.lua([[
+    local require_orig = require
+    require = function(x)
+      if x == 'mini.hipatterns' then error() end
+      require_orig(x)
+    end
+  ]])
+  expect.error(function() child.lua('MiniExtra.pickers.hipatterns()') end, '`pickers%.hipatterns`.*mini%.hipatterns')
+end
+
+T['pickers']['hipatterns()']['validates arguments'] = function()
+  local validate = function(local_opts, error_pattern)
+    expect.error(function() child.lua('MiniExtra.pickers.hipatterns(...)', { local_opts }) end, error_pattern)
+  end
+
+  validate({ scope = '1' }, '`pickers%.hipatterns`.*"scope".*"1".*one of')
+  validate({ highlighters = '1' }, '`local_opts%.highlighters.*array')
+end
+
+T['pickers']['history()'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.cmd('set history=100')
+
+      -- Command-line history
+      child.lua('_G.n = 0')
+      type_keys(':lua _G.n = _G.n + 1<CR>')
+      type_keys(':lua _G.n = _G.n + 2<CR>')
+
+      -- Search history
+      child.api.nvim_buf_set_lines(0, 0, -1, false, { 'aaa', 'bbb' })
+      type_keys('/aaa<CR>')
+      type_keys('/bbb<CR>')
+
+      -- Expressions history
+      type_keys('O', '<C-r>=1+1<CR>', '<Esc>')
+      type_keys('o', '<C-r>=2+2<CR>', '<Esc>')
+
+      -- Input history
+      child.lua_notify([[vim.fn.input('Prompt')]])
+      type_keys('input 1', '<CR>')
+      child.lua_notify([[vim.fn.input('Prompt')]])
+      type_keys('input 2', '<CR>')
+
+      -- Debug mode
+      -- Can't really emulate debug mode
+
+      child.api.nvim_buf_set_lines(0, 0, -1, false, {})
+    end,
+  },
+})
+
+local pick_history = forward_lua_notify('MiniExtra.pickers.history')
+
+T['pickers']['history()']['works'] = function()
+  child.set_size(20, 70)
+
+  child.lua_notify('_G.return_item = MiniExtra.pickers.history()')
+  -- - Should by default list all history
+  validate_picker_name('History (all)')
+  child.expect_screenshot()
+
+  -- Should have no preview
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  -- Should return chosen value with proper structure
+  type_keys('<CR>')
+  eq(child.lua_get('_G.return_item'), ': lua _G.n = _G.n + 2')
+end
+
+T['pickers']['history()']['works for command-line history'] = function()
+  -- Works
+  pick_history({ scope = 'cmd' })
+  eq(get_picker_items(), { ': lua _G.n = _G.n + 2', ': lua _G.n = _G.n + 1' })
+  validate_picker_name('History (cmd)')
+
+  -- Should execute command on choose
+  local n = child.lua_get('_G.n')
+  type_keys('<C-n>', '<CR>')
+  eq(child.lua_get('_G.n'), n + 1)
+
+  -- Should work with aliases
+  pick_history({ scope = ':' })
+  validate_picker_name('History (:)')
+  -- - NOTE: now it doesn't update command line history, but probably should
+  --   (just couldn't find a way to achieve this)
+  eq(get_picker_items(), { ': lua _G.n = _G.n + 2', ': lua _G.n = _G.n + 1' })
+end
+
+T['pickers']['history()']['works for search history'] = function()
+  set_lines({ 'bbb', '  aaa' })
+
+  -- Works
+  pick_history({ scope = 'search' })
+  validate_picker_name('History (search)')
+  eq(get_picker_items(), { '/ bbb', '/ aaa' })
+
+  -- Should restart search on choose (and update history)
+  type_keys('<C-n>', '<CR>')
+  eq(get_cursor(), { 2, 2 })
+  eq(child.o.hlsearch, true)
+  -- - `:history` lists from oldest to newest
+  expect.match(child.cmd_capture('history search'), 'bbb.*aaa')
+
+  -- Should work with aliases
+  pick_history({ scope = '/' })
+  validate_picker_name('History (/)')
+  eq(get_picker_items(), { '/ aaa', '/ bbb' })
+  stop_picker()
+
+  -- - For `?` alias should search backward
+  set_lines({ 'aaa', 'bbb', 'aaa' })
+  set_cursor(2, 0)
+  pick_history({ scope = '?' })
+  validate_picker_name('History (?)')
+  eq(get_picker_items(), { '? aaa', '? bbb' })
+
+  type_keys('<CR>')
+  eq(get_cursor(), { 1, 0 })
+  eq(child.o.hlsearch, true)
+end
+
+T['pickers']['history()']['works for expression register history'] = function()
+  pick_history({ scope = 'expr' })
+  validate_picker_name('History (expr)')
+  eq(get_picker_items(), { '= 2+2', '= 1+1' })
+
+  -- Nothing is expected to be done on choose
+  type_keys('<CR>')
+
+  -- Should work with aliases
+  pick_history({ scope = '=' })
+  validate_picker_name('History (=)')
+  eq(get_picker_items(), { '= 2+2', '= 1+1' })
+end
+
+T['pickers']['history()']['works for input history'] = function()
+  pick_history({ scope = 'input' })
+  validate_picker_name('History (input)')
+  eq(get_picker_items(), { '@ input 2', '@ input 1' })
+
+  -- Nothing is expected to be done on choose
+  type_keys('<CR>')
+
+  -- Should work with aliases
+  pick_history({ scope = '@' })
+  validate_picker_name('History (@)')
+  eq(get_picker_items(), { '@ input 2', '@ input 1' })
+end
+
+T['pickers']['history()']['respects `opts`'] = function()
+  pick_history({}, { source = { name = 'My name' } })
+  validate_picker_name('My name')
+end
+
+T['pickers']['history()']['validates arguments'] = function()
+  local validate = function(local_opts, error_pattern)
+    expect.error(function() child.lua('MiniExtra.pickers.history(...)', { local_opts }) end, error_pattern)
+  end
+  validate({ scope = '1' }, '`pickers%.history`.*"scope".*"1".*one of')
+end
+
+T['pickers']['hl_groups()'] = new_set()
+
+local pick_hl_groups = forward_lua_notify('MiniExtra.pickers.hl_groups')
+
+T['pickers']['hl_groups()']['works'] = function()
+  child.cmd('colorscheme default')
+  child.set_size(10, 80)
+
+  child.lua_notify('_G.return_item = MiniExtra.pickers.hl_groups()')
+  validate_picker_name('Highlight groups')
+  type_keys('^Diff')
+  child.expect_screenshot()
+
+  -- Should use same group for line highlighting
+  local matches = get_picker_matches().all
+  validate_partial_equal_arr(get_extra_picker_extmarks(0, -1), {
+    { row = 0, col = 0, hl_group = matches[1] },
+    { row = 1, col = 0, hl_group = matches[2] },
+    { row = 2, col = 0, hl_group = matches[3] },
+    { row = 3, col = 0, hl_group = matches[4] },
+  })
 
   -- Should have proper preview
   type_keys('<Tab>')
   child.expect_screenshot()
 
-  -- - Should use proper highlight group for headers
-  validate_partial_equal_arr(get_extra_picker_extmarks(0, -1), {
-    { row = 0, col = 0, hl_group = 'MiniPickHeader' },
-    { row = 3, col = 0, hl_group = 'MiniPickHeader' },
-  })
-
   -- Should properly choose
   type_keys('<CR>')
-  eq(child.fn.getcmdline(), 'set cursorbind')
-  eq(child.fn.getcmdpos(), 15)
+  eq(child.fn.getcmdline(), 'hi DiffAdd ctermbg=4 guibg=DarkBlue')
+  eq(child.fn.getcmdpos(), 36)
 
   -- Should return chosen value
-  eq(child.lua_get('_G.return_item'), { text = 'cursorbind', info = child.api.nvim_get_option_info('cursorbind') })
+  eq(child.lua_get('_G.return_item'), 'DiffAdd')
 end
 
-T['pickers']['options()']['respects set options'] = function()
+T['pickers']['hl_groups()']['respects non-default/linked highlight groups'] = function()
   child.set_size(10, 40)
-  child.o.cursorline = true
-  child.wo.cursorcolumn = true
-  child.bo.commentstring = '### %s'
+  child.cmd('hi AAAA guifg=#aaaaaa')
+  child.cmd('hi link AAAB AAAA')
 
-  pick_options()
-  type_keys('^cursor')
+  pick_hl_groups()
+  type_keys('^AAA')
   child.expect_screenshot()
-
-  -- Should highlight not set options as dimmed
   validate_partial_equal_arr(get_extra_picker_extmarks(0, -1), {
-    { row = 0, col = 0, hl_group = 'Comment' },
-    { row = 3, col = 0, hl_group = 'Comment' },
+    { row = 0, col = 0, hl_group = 'AAAA' },
+    { row = 1, col = 0, hl_group = 'AAAB' },
   })
-
-  -- Should show valid present value (in the scope of target) window in preview
-  -- - Window local option
-  type_keys('<C-n>', '<Tab>')
-  child.expect_screenshot()
-
-  -- Buffer-local option
-  type_keys('<C-u>', '^commentstring', '<Tab>')
-  child.expect_screenshot()
 end
 
-T['pickers']['options()']['correctly chooses non-binary options'] = function()
-  pick_options()
-  type_keys('^laststatus', '<CR>')
-  eq(child.fn.getcmdline(), 'set laststatus=')
-  eq(child.fn.getcmdpos(), 16)
-end
-
-T['pickers']['options()']['correctly previews deprecated options'] = function()
-  child.set_size(10, 115)
-  pick_options()
-  type_keys('^aleph', '<Tab>')
-  child.expect_screenshot()
-end
-
-T['pickers']['options()']['respects `local_opts.scope`'] = function()
-  local validate = function(scope)
-    pick_options({ scope = scope })
-    validate_picker_name('Options (' .. scope .. ')')
-
-    if scope == 'all' then return stop_picker() end
-
-    -- Validate proper set of options
-    for _, item in ipairs(get_picker_items()) do
-      eq(child.api.nvim_get_option_info(item.text).scope, scope)
-    end
-
-    stop_picker()
-  end
-
-  validate('all')
-  validate('global')
-  validate('win')
-  validate('buf')
-end
-
-T['pickers']['options()']['respects `opts`'] = function()
-  pick_options({}, { source = { name = 'My name' } })
+T['pickers']['hl_groups()']['respects `opts`'] = function()
+  pick_hl_groups({}, { source = { name = 'My name' } })
   validate_picker_name('My name')
-end
-
-T['pickers']['options()']['validates arguments'] = function()
-  local validate = function(local_opts, error_pattern)
-    expect.error(function() child.lua('MiniExtra.pickers.options(...)', { local_opts }) end, error_pattern)
-  end
-
-  validate({ scope = '1' }, '`pickers%.options`.*"scope".*"1".*one of')
 end
 
 T['pickers']['keymaps()'] = new_set()
@@ -1751,211 +1887,147 @@ T['pickers']['keymaps()']['validates arguments'] = function()
   validate({ scope = '1' }, '`pickers%.keymaps`.*"scope".*"1".*one of')
 end
 
-T['pickers']['registers()'] = new_set()
+T['pickers']['list()'] = new_set()
 
-local pick_registers = forward_lua_notify('MiniExtra.pickers.registers')
+local pick_list = forward_lua_notify('MiniExtra.pickers.list')
 
-local setup_registers = function()
-  child.fn.setreg('a', 'Register a')
-  child.fn.setreg('=', '1 + 1')
-  set_lines({ 'Yank register' })
-  type_keys('yy')
-  set_lines({})
-end
+local validate_qf_loc = function(scope)
+  child.set_size(20, 70)
 
-T['pickers']['registers()']['works'] = function()
-  child.set_size(80, 40)
-  setup_registers()
+  -- Setup quickfix/location list
+  local path = real_file('a.lua')
+  child.cmd('edit ' .. path)
+  child.cmd('enew')
+  local buf_cur = child.api.nvim_get_current_buf()
+  set_lines({ 'aaaaa', 'bbbbb', 'ccccc', 'ddddd', 'eeeee' })
+  local list = {
+    { filename = full_path(path), lnum = 1, col = 7, text = 'File' },
+    { bufnr = buf_cur, lnum = 2, col = 2, text = 'Buffer' },
+    { bufnr = buf_cur, lnum = 3, col = 3, end_lnum = 4, end_col = 4 },
+  }
+  if scope == 'quickfix' then child.fn.setqflist(list) end
+  if scope == 'location' then child.fn.setloclist(0, list) end
 
-  -- Mock constant clipboard for better reproducibility of system registers
-  -- (mostly on CI). As `setreg('+', '')` is not guaranteed to be working for
-  -- system clipboard, use `g:clipboard` which copies/pastes nothing.
-  child.lua([[
-    local empty = function() return '' end
-    vim.g.clipboard = {
-      name  = 'myClipboard',
-      copy  = { ['+'] = empty, ['*'] = empty },
-      paste = { ['+'] = empty, ['*'] = empty },
-    }
-  ]])
-
-  child.lua_notify('_G.return_item = MiniExtra.pickers.registers()')
-  validate_picker_name('Registers')
+  -- Start picker
+  child.lua_notify('_G.return_item = MiniExtra.pickers.list({ scope = ' .. vim.inspect(scope) .. ' })')
+  validate_picker_name('List (' .. scope .. ')')
   child.expect_screenshot()
 
-  -- Should have no preview
-  type_keys('<Tab>')
-  child.expect_screenshot()
-
-  -- Should properly choose pasting register contents
-  type_keys('^a', '<CR>')
-  eq(get_lines(), { 'Register a' })
-
-  -- Should return chosen value
-  eq(child.lua_get('_G.return_item'), { regname = 'a', regcontents = 'Register a', text = 'a │ Register a' })
-end
-
-T['pickers']['registers()']['can be chosen in non-Normal modes'] = function()
-  setup_registers()
-  local pick_reg_a = function()
-    pick_registers()
-    type_keys('^a', '<CR>')
-  end
-
-  -- -- Doesn't really work in Visual mode because 'mini.pick' doesn't
-  -- type_keys('i', 'toremove', '<Esc>', 'viw')
-  -- pick_reg_a()
-  -- eq(is_picker_active(), false)
-  -- eq(get_lines(), { 'Register a' })
-  -- eq(child.fn.mode(), 'v')
-  -- child.ensure_normal_mode()
-  -- set_lines({})
-
-  -- Insert mode
-  type_keys('i')
-  pick_reg_a()
-  eq(is_picker_active(), false)
-  eq(get_lines(), { 'Register a' })
-  eq(child.fn.mode(), 'i')
-  child.ensure_normal_mode()
-  set_lines({})
-
-  -- Command-line mode
-  type_keys(':')
-  pick_reg_a()
-  eq(is_picker_active(), false)
-  eq(child.fn.mode(), 'c')
-  eq(child.fn.getcmdline(), 'Register a')
-  eq(child.fn.getcmdpos(), 11)
-  child.ensure_normal_mode()
-  set_lines({})
-end
-
-T['pickers']['registers()']['works with expression register'] = function()
-  setup_registers()
-  local pick_expr_reg = function()
-    pick_registers()
-    type_keys('^=', '<CR>')
-  end
-
-  -- Should reevaluate and paste
-  -- - Normal mode
-  pick_expr_reg()
-  eq(get_lines(), { '2' })
-  eq(child.fn.mode(), 'n')
-  set_lines({})
-
-  -- - Insert mode
-  type_keys('i')
-  pick_expr_reg()
-  eq(get_lines(), { '2' })
-  eq(child.fn.mode(), 'i')
-  child.ensure_normal_mode()
-  set_lines({})
-
-  -- - Command-line mode
-  type_keys(':')
-  pick_expr_reg()
-  eq(child.fn.mode(), 'c')
-  eq(child.fn.getcmdline(), '2')
-  eq(child.fn.getcmdpos(), 2)
-  child.ensure_normal_mode()
-  set_lines({})
-end
-
-T['pickers']['registers()']['respects `opts`'] = function()
-  pick_registers({}, { source = { name = 'My name' } })
-  validate_picker_name('My name')
-end
-
-T['pickers']['marks()'] = new_set()
-
-local pick_marks = forward_lua_notify('MiniExtra.pickers.marks')
-
-local setup_marks = function()
-  child.cmd('edit ' .. real_file('a.lua'))
-  local buf_file = child.api.nvim_get_current_buf()
-  set_cursor(1, 5)
-  type_keys('mA')
-  set_cursor(1, 0)
-
-  local buf_main = child.api.nvim_create_buf(true, false)
-  child.api.nvim_set_current_buf(buf_main)
-  set_lines({ 'Line 1-1', 'Line 1-2', 'Line 1-3' })
-  set_cursor(1, 3)
-  type_keys('ma')
-  set_cursor(3, 5)
-  type_keys('mb')
-  set_cursor(1, 0)
-
-  local buf_alt = child.api.nvim_create_buf(true, false)
-  child.api.nvim_set_current_buf(buf_alt)
-  set_lines({ 'Line 2-1', 'Line 2-2', 'line 2-3' })
-  set_cursor(2, 2)
-  type_keys('ma')
-  set_cursor(1, 0)
-
-  child.api.nvim_set_current_buf(buf_main)
-
-  return { main = buf_main, alt = buf_alt, file = buf_file }
-end
-
-T['pickers']['marks()']['works'] = function()
-  child.set_size(20, 40)
-  setup_marks()
-
-  child.lua_notify('_G.return_item = MiniExtra.pickers.marks()')
-  validate_picker_name('Marks (all)')
-  child.expect_screenshot()
-
-  -- Should preview mark's position
+  -- Should preview position/region
   type_keys('<Tab>')
   child.expect_screenshot()
   type_keys('<C-n>')
   child.expect_screenshot()
-  type_keys('<C-n>', '<C-n>', '<C-n>', '<C-n>')
+  type_keys('<C-n>')
   child.expect_screenshot()
 
-  -- Should properly choose by positioning on mark
-  local path = real_file('a.lua')
+  -- Should properly choose by positioning on region start
   type_keys('<CR>')
-  validate_buf_name(0, path)
-  eq(get_cursor(), { 1, 5 })
+  eq(child.api.nvim_get_current_buf(), buf_cur)
+  eq(get_cursor(), { 3, 2 })
 
   -- Should return chosen value
-  eq(child.lua_get('_G.return_item'), { col = 6, lnum = 1, path = path, text = 'A │ ' .. path .. ':1:6' })
+  validate_partial_equal_arr(
+    { child.lua_get('_G.return_item') },
+    { { bufnr = 2, lnum = 3, end_lnum = 4, col = 3, end_col = 4, text = 'Buffer_2:3:3' } }
+  )
 end
 
-T['pickers']['marks()']['respects `local_opts.scope`'] = function()
-  local buffers = setup_marks()
-  child.set_size(15, 40)
+T['pickers']['list()']['works for `quickfix`'] = function() validate_qf_loc('quickfix') end
 
-  pick_marks({ scope = 'global' })
-  child.expect_screenshot()
-  stop_picker()
+T['pickers']['list()']['works for `location`'] = function() validate_qf_loc('location') end
 
-  pick_marks({ scope = 'buf' })
-  validate_picker_name('Marks (buf)')
-  child.expect_screenshot()
-  stop_picker()
+T['pickers']['list()']['works for `jump`'] = function()
+  child.set_size(20, 70)
 
-  child.api.nvim_set_current_buf(buffers.alt)
-  pick_marks({ scope = 'buf' })
+  -- Setup jump list
+  local path = real_file('a.lua')
+  child.cmd('edit ' .. path)
+  type_keys('G')
+
+  child.cmd('enew')
+  local buf_cur = child.api.nvim_get_current_buf()
+  set_lines({ 'aaaaa', 'bbbbb' })
+  type_keys('G', 'gg')
+
+  -- Start picker
+  child.lua_notify([[_G.return_item = MiniExtra.pickers.list({ scope = 'jump' })]])
+  validate_picker_name('List (jump)')
   child.expect_screenshot()
-  stop_picker()
+
+  -- Should preview position
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  -- Should properly choose by moving to position
+  type_keys('<CR>')
+  eq(child.api.nvim_get_current_buf(), buf_cur)
+  eq(get_cursor(), { 2, 0 })
+
+  -- Should return chosen value
+  validate_partial_equal_arr(
+    { child.lua_get('_G.return_item') },
+    { { bufnr = buf_cur, lnum = 2, col = 1, text = 'Buffer_2:2:1' } }
+  )
 end
 
-T['pickers']['marks()']['respects `opts`'] = function()
-  pick_marks({}, { source = { name = 'My name' } })
+T['pickers']['list()']['works for `change`'] = function()
+  child.set_size(20, 70)
+
+  -- Setup jump list
+  local path = real_file('a.lua')
+  child.cmd('edit ' .. path)
+  set_cursor(1, 1)
+  type_keys('i', ' Change 1 ', '<Esc>')
+
+  set_cursor(3, 3)
+  type_keys('i', ' Change 2 ', '<Esc>')
+
+  -- Start picker
+  child.lua_notify([[_G.return_item = MiniExtra.pickers.list({ scope = 'change' })]])
+  validate_picker_name('List (change)')
+  child.expect_screenshot()
+
+  -- Should preview position
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  -- Should properly choose by moving to position
+  type_keys('<CR>')
+  eq(get_cursor(), { 1, 9 })
+
+  -- Should return chosen value
+  validate_partial_equal_arr(
+    { child.lua_get('_G.return_item') },
+    { { bufnr = 1, col = 10, coladd = 0, lnum = 1, text = path .. ':1:10' } }
+  )
+end
+
+T['pickers']['list()']['works with empty list'] = function()
+  local validate = function(scope)
+    pick_list({ scope = scope })
+    eq(get_picker_items(), {})
+    stop_picker()
+  end
+
+  validate('quickfix')
+  validate('location')
+  validate('jump')
+  validate('change')
+end
+
+T['pickers']['list()']['respects `opts`'] = function()
+  pick_list({ scope = 'jump' }, { source = { name = 'My name' } })
   validate_picker_name('My name')
 end
 
-T['pickers']['marks()']['validates arguments'] = function()
+T['pickers']['list()']['validates arguments'] = function()
   local validate = function(local_opts, error_pattern)
-    expect.error(function() child.lua('MiniExtra.pickers.marks(...)', { local_opts }) end, error_pattern)
+    expect.error(function() child.lua('MiniExtra.pickers.list(...)', { local_opts }) end, error_pattern)
   end
 
-  validate({ scope = '1' }, '`pickers%.marks`.*"scope".*"1".*one of')
+  validate({}, '`pickers%.list` needs an explicit scope')
+  validate({ scope = '1' }, '`pickers%.list`.*"scope".*"1".*one of')
 end
 
 T['pickers']['lsp()'] = new_set()
@@ -2108,508 +2180,375 @@ T['pickers']['lsp()']['validates arguments'] = function()
   validate({ scope = '1' }, '`pickers%.lsp`.*"scope".*"1".*one of')
 end
 
-T['pickers']['treesitter()'] = new_set()
+T['pickers']['marks()'] = new_set()
 
-local pick_treesitter = forward_lua_notify('MiniExtra.pickers.treesitter')
+local pick_marks = forward_lua_notify('MiniExtra.pickers.marks')
 
-local setup_treesitter = function()
-  local path = real_file('a.lua')
-  child.cmd('edit ' .. path)
-  child.lua('vim.treesitter.start()')
-  sleep(10)
+local setup_marks = function()
+  child.cmd('edit ' .. real_file('a.lua'))
+  local buf_file = child.api.nvim_get_current_buf()
+  set_cursor(1, 5)
+  type_keys('mA')
+  set_cursor(1, 0)
 
-  return path
+  local buf_main = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(buf_main)
+  set_lines({ 'Line 1-1', 'Line 1-2', 'Line 1-3' })
+  set_cursor(1, 3)
+  type_keys('ma')
+  set_cursor(3, 5)
+  type_keys('mb')
+  set_cursor(1, 0)
+
+  local buf_alt = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(buf_alt)
+  set_lines({ 'Line 2-1', 'Line 2-2', 'line 2-3' })
+  set_cursor(2, 2)
+  type_keys('ma')
+  set_cursor(1, 0)
+
+  child.api.nvim_set_current_buf(buf_main)
+
+  return { main = buf_main, alt = buf_alt, file = buf_file }
 end
 
-T['pickers']['treesitter()']['works'] = function()
-  if child.fn.has('nvim-0.8') == 0 then return end
-  child.set_size(52, 70)
-  local path = setup_treesitter()
+T['pickers']['marks()']['works'] = function()
+  child.set_size(20, 40)
+  setup_marks()
 
-  child.lua_notify('_G.return_item = MiniExtra.pickers.treesitter()')
-  validate_picker_name('Tree-sitter nodes')
+  child.lua_notify('_G.return_item = MiniExtra.pickers.marks()')
+  validate_picker_name('Marks (all)')
   child.expect_screenshot()
 
-  -- Should preview node's region
+  -- Should preview mark's position
   type_keys('<Tab>')
   child.expect_screenshot()
   type_keys('<C-n>')
   child.expect_screenshot()
+  type_keys('<C-n>', '<C-n>', '<C-n>', '<C-n>')
+  child.expect_screenshot()
 
-  -- Should properly choose by positioning on region start
+  -- Should properly choose by positioning on mark
+  local path = real_file('a.lua')
   type_keys('<CR>')
   validate_buf_name(0, path)
-  eq(get_cursor(), { 1, 6 })
+  eq(get_cursor(), { 1, 5 })
 
   -- Should return chosen value
-  eq(child.lua_get('_G.return_item'), {
-    bufnr = child.api.nvim_get_current_buf(),
-    col = 7,
-    end_col = 12,
-    end_lnum = 1,
-    lnum = 1,
-    text = ' assignment_statement (1:7 - 1:12)',
-  })
+  eq(child.lua_get('_G.return_item'), { col = 6, lnum = 1, path = path, text = 'A │ ' .. path .. ':1:6' })
 end
 
-T['pickers']['treesitter()']['checks for active tree-sitter'] = function()
-  if child.fn.has('nvim-0.8') == 0 then return end
-  expect.error(function() child.lua('MiniExtra.pickers.treesitter()') end, '`pickers%.treesitter`.*parser')
-end
+T['pickers']['marks()']['respects `local_opts.scope`'] = function()
+  local buffers = setup_marks()
+  child.set_size(15, 40)
 
-T['pickers']['lsp()']['throws error on Neovim<0.8'] = function()
-  if child.fn.has('nvim-0.8') == 1 then return end
-  expect.error(function() child.lua([[MiniExtra.pickers.treesitter()]]) end, '`pickers%.treesitter`.*0%.8')
-end
-
-T['pickers']['treesitter()']['respects `opts`'] = function()
-  if child.fn.has('nvim-0.8') == 0 then return end
-  setup_treesitter()
-  pick_treesitter({}, { source = { name = 'My name' } })
-  validate_picker_name('My name')
-end
-
-T['pickers']['list()'] = new_set()
-
-local pick_list = forward_lua_notify('MiniExtra.pickers.list')
-
-local validate_qf_loc = function(scope)
-  child.set_size(20, 70)
-
-  -- Setup quickfix/location list
-  local path = real_file('a.lua')
-  child.cmd('edit ' .. path)
-  child.cmd('enew')
-  local buf_cur = child.api.nvim_get_current_buf()
-  set_lines({ 'aaaaa', 'bbbbb', 'ccccc', 'ddddd', 'eeeee' })
-  local list = {
-    { filename = full_path(path), lnum = 1, col = 7, text = 'File' },
-    { bufnr = buf_cur, lnum = 2, col = 2, text = 'Buffer' },
-    { bufnr = buf_cur, lnum = 3, col = 3, end_lnum = 4, end_col = 4 },
-  }
-  if scope == 'quickfix' then child.fn.setqflist(list) end
-  if scope == 'location' then child.fn.setloclist(0, list) end
-
-  -- Start picker
-  child.lua_notify('_G.return_item = MiniExtra.pickers.list({ scope = ' .. vim.inspect(scope) .. ' })')
-  validate_picker_name('List (' .. scope .. ')')
-  child.expect_screenshot()
-
-  -- Should preview position/region
-  type_keys('<Tab>')
-  child.expect_screenshot()
-  type_keys('<C-n>')
-  child.expect_screenshot()
-  type_keys('<C-n>')
-  child.expect_screenshot()
-
-  -- Should properly choose by positioning on region start
-  type_keys('<CR>')
-  eq(child.api.nvim_get_current_buf(), buf_cur)
-  eq(get_cursor(), { 3, 2 })
-
-  -- Should return chosen value
-  validate_partial_equal_arr(
-    { child.lua_get('_G.return_item') },
-    { { bufnr = 2, lnum = 3, end_lnum = 4, col = 3, end_col = 4, text = 'Buffer_2:3:3' } }
-  )
-end
-
-T['pickers']['list()']['works for `quickfix`'] = function() validate_qf_loc('quickfix') end
-
-T['pickers']['list()']['works for `location`'] = function() validate_qf_loc('location') end
-
-T['pickers']['list()']['works for `jump`'] = function()
-  child.set_size(20, 70)
-
-  -- Setup jump list
-  local path = real_file('a.lua')
-  child.cmd('edit ' .. path)
-  type_keys('G')
-
-  child.cmd('enew')
-  local buf_cur = child.api.nvim_get_current_buf()
-  set_lines({ 'aaaaa', 'bbbbb' })
-  type_keys('G', 'gg')
-
-  -- Start picker
-  child.lua_notify([[_G.return_item = MiniExtra.pickers.list({ scope = 'jump' })]])
-  validate_picker_name('List (jump)')
-  child.expect_screenshot()
-
-  -- Should preview position
-  type_keys('<Tab>')
-  child.expect_screenshot()
-
-  -- Should properly choose by moving to position
-  type_keys('<CR>')
-  eq(child.api.nvim_get_current_buf(), buf_cur)
-  eq(get_cursor(), { 2, 0 })
-
-  -- Should return chosen value
-  validate_partial_equal_arr(
-    { child.lua_get('_G.return_item') },
-    { { bufnr = buf_cur, lnum = 2, col = 1, text = 'Buffer_2:2:1' } }
-  )
-end
-
-T['pickers']['list()']['works for `change`'] = function()
-  child.set_size(20, 70)
-
-  -- Setup jump list
-  local path = real_file('a.lua')
-  child.cmd('edit ' .. path)
-  set_cursor(1, 1)
-  type_keys('i', ' Change 1 ', '<Esc>')
-
-  set_cursor(3, 3)
-  type_keys('i', ' Change 2 ', '<Esc>')
-
-  -- Start picker
-  child.lua_notify([[_G.return_item = MiniExtra.pickers.list({ scope = 'change' })]])
-  validate_picker_name('List (change)')
-  child.expect_screenshot()
-
-  -- Should preview position
-  type_keys('<Tab>')
-  child.expect_screenshot()
-
-  -- Should properly choose by moving to position
-  type_keys('<CR>')
-  eq(get_cursor(), { 1, 9 })
-
-  -- Should return chosen value
-  validate_partial_equal_arr(
-    { child.lua_get('_G.return_item') },
-    { { bufnr = 1, col = 10, coladd = 0, lnum = 1, text = path .. ':1:10' } }
-  )
-end
-
-T['pickers']['list()']['works with empty list'] = function()
-  local validate = function(scope)
-    pick_list({ scope = scope })
-    eq(get_picker_items(), {})
-    stop_picker()
-  end
-
-  validate('quickfix')
-  validate('location')
-  validate('jump')
-  validate('change')
-end
-
-T['pickers']['list()']['respects `opts`'] = function()
-  pick_list({ scope = 'jump' }, { source = { name = 'My name' } })
-  validate_picker_name('My name')
-end
-
-T['pickers']['list()']['validates arguments'] = function()
-  local validate = function(local_opts, error_pattern)
-    expect.error(function() child.lua('MiniExtra.pickers.list(...)', { local_opts }) end, error_pattern)
-  end
-
-  validate({}, '`pickers%.list` needs an explicit scope')
-  validate({ scope = '1' }, '`pickers%.list`.*"scope".*"1".*one of')
-end
-
-T['pickers']['explorer()'] = new_set()
-
-local pick_explorer = forward_lua_notify('MiniExtra.pickers.explorer')
-
-T['pickers']['explorer()']['works'] = function()
-  local init_dir = full_path(make_testpath('explorer'))
-  child.fn.chdir(init_dir)
-
-  child.lua_notify('_G.return_item = MiniExtra.pickers.explorer()')
-  validate_picker_name('File explorer')
-  validate_picker_cwd(init_dir)
-  local init_items = get_picker_items()
-  child.expect_screenshot()
-
-  -- Can navigate inside directory
-  type_keys('<C-n>', '<CR>')
-  child.expect_screenshot()
-  validate_picker_name('File explorer')
-  validate_picker_cwd(join_path(init_dir, 'dir1'))
-
-  -- - Should actually change items
-  eq(vim.deep_equal(init_items, get_picker_items()), false)
-
-  -- Can preview directory (both regular and `..`) and file
-  type_keys('<Tab>')
-  child.expect_screenshot()
-  type_keys('<C-n>')
-  child.expect_screenshot()
-  type_keys('<C-n>')
-  child.expect_screenshot()
-
-  -- Can navigate up
-  type_keys('<C-g>', '<CR>')
-  child.expect_screenshot()
-  validate_picker_cwd(init_dir)
-
-  -- Can choose file
-  type_keys('<C-p>', '<CR>')
-  validate_buf_name(0, 'file3')
-  eq(get_lines(), { 'File 3' })
-
-  -- Should return chosen value
-  eq(child.lua_get('_G.return_item'), { fs_type = 'file', path = join_path(init_dir, 'file3'), text = 'file3' })
-end
-
-T['pickers']['explorer()']['works with query'] = function()
-  local init_dir = full_path(make_testpath('explorer'))
-  child.fn.chdir(init_dir)
-
-  pick_explorer()
-  type_keys('^D')
-  eq(get_picker_matches().all, { { fs_type = 'directory', path = join_path(init_dir, 'Dir2'), text = 'Dir2/' } })
-
-  type_keys('<CR>')
-  eq(get_picker_matches().all, {
-    { fs_type = 'directory', path = init_dir, text = '..' },
-    { fs_type = 'file', path = join_path(init_dir, 'Dir2', 'file2-1'), text = 'file2-1' },
-  })
-  -- - Should reset the query
-  eq(child.lua_get('MiniPick.get_picker_query()'), {})
-end
-
-T['pickers']['explorer()']['can be resumed'] = function()
-  local init_dir = full_path(make_testpath('explorer'))
-  child.fn.chdir(init_dir)
-  pick_explorer()
-  type_keys('<C-n>', '<CR>', '<C-n>')
+  pick_marks({ scope = 'global' })
   child.expect_screenshot()
   stop_picker()
 
-  child.lua_notify('MiniPick.builtin.resume()')
-  validate_picker_cwd(join_path(init_dir, 'dir1'))
+  pick_marks({ scope = 'buf' })
+  validate_picker_name('Marks (buf)')
   child.expect_screenshot()
+  stop_picker()
+
+  child.api.nvim_set_current_buf(buffers.alt)
+  pick_marks({ scope = 'buf' })
+  child.expect_screenshot()
+  stop_picker()
 end
 
-T['pickers']['explorer()']['respects `local_opts.cwd`'] = function()
-  local validate = function(cwd, ref_picker_cwd)
-    local nvim_cwd = child.fn.getcwd()
-    pick_explorer({ cwd = cwd })
-    validate_picker_cwd(ref_picker_cwd)
-
-    -- Neovim's directory should not change
-    eq(child.fn.getcwd(), nvim_cwd)
-
-    -- Cleanup
-    stop_picker()
-  end
-
-  local path = make_testpath('explorer')
-
-  -- Relative path
-  validate(path, full_path(path))
-
-  -- Absolute path
-  validate(full_path(path), full_path(path))
-
-  -- Parent path
-  child.fn.chdir(path)
-  validate('..', test_dir_absolute)
-end
-
-T['pickers']['explorer()']['respects `local_opts.filter`'] = function()
-  local init_dir = full_path(make_testpath('explorer'))
-  child.fn.chdir(init_dir)
-  child.lua([[
-    _G.filter_log = {}
-    _G.dir_filter = function(item)
-      table.insert(_G.filter_log, vim.deepcopy(item))
-      return item.fs_type == 'directory'
-    end
-  ]])
-  child.lua_notify('MiniExtra.pickers.explorer({ filter = _G.dir_filter })')
-  child.expect_screenshot()
-
-  -- Should work when navigate into subdirectory
-  type_keys('<C-n>', '<CR>')
-  child.expect_screenshot()
-
-  -- Should be called with proper arguments
-  local filter_log = child.lua_get('_G.filter_log')
-  eq(#filter_log, 7 + 3)
-  eq(filter_log[1], { fs_type = 'directory', path = test_dir_absolute, text = '..' })
-end
-
-T['pickers']['explorer()']['respects `local_opts.sort`'] = function()
-  local init_dir = full_path(make_testpath('explorer'))
-  child.fn.chdir(init_dir)
-  child.lua([[
-    _G.sort_log = {}
-    _G.sort_plain = function(items)
-      table.insert(_G.sort_log, vim.deepcopy(items))
-      local res = vim.deepcopy(items)
-      table.sort(res, function(a, b) return a.text < b.text end)
-      return res
-    end
-  ]])
-  child.lua_notify('MiniExtra.pickers.explorer({ sort = _G.sort_plain })')
-  child.expect_screenshot()
-
-  -- Should work when navigate into subdirectory
-  type_keys('<C-n>', '<C-n>', '<C-n>', '<CR>')
-  child.expect_screenshot()
-
-  -- Should be called with proper arguments
-  local sort_log = child.lua_get('_G.sort_log')
-  eq(#sort_log, 2)
-  eq(vim.tbl_islist(sort_log[1]), true)
-  eq(sort_log[1][1], { fs_type = 'directory', path = test_dir_absolute, text = '..' })
-end
-
-T['pickers']['explorer()']['can not show icons'] = function()
-  local init_dir = full_path(make_testpath('explorer'))
-  child.fn.chdir(init_dir)
-
-  child.lua('MiniPick.config.source.show = MiniPick.default_show')
-  pick_explorer()
-  child.expect_screenshot()
-  type_keys('<C-n>', '<CR>')
-  child.expect_screenshot()
-end
-
-T['pickers']['explorer()']['respects `opts`'] = function()
-  local init_dir = full_path(make_testpath('explorer'))
-  child.fn.chdir(init_dir)
-  pick_explorer({}, { source = { name = 'My name' } })
+T['pickers']['marks()']['respects `opts`'] = function()
+  pick_marks({}, { source = { name = 'My name' } })
   validate_picker_name('My name')
 end
 
-T['pickers']['explorer()']['validates arguments'] = function()
+T['pickers']['marks()']['validates arguments'] = function()
   local validate = function(local_opts, error_pattern)
-    expect.error(function() child.lua('MiniExtra.pickers.explorer(...)', { local_opts }) end, error_pattern)
+    expect.error(function() child.lua('MiniExtra.pickers.marks(...)', { local_opts }) end, error_pattern)
   end
 
-  validate({ cwd = '1' }, '`local_opts%.cwd`.*valid directory path')
-  validate({ filter = '1' }, '`local_opts%.filter`.*callable')
-  validate({ sort = '1' }, '`local_opts%.sort`.*callable')
+  validate({ scope = '1' }, '`pickers%.marks`.*"scope".*"1".*one of')
 end
 
-T['pickers']['hipatterns()'] = new_set()
+T['pickers']['oldfiles()'] = new_set()
 
-local pick_hipatterns = forward_lua_notify('MiniExtra.pickers.hipatterns')
+local pick_oldfiles = forward_lua_notify('MiniExtra.pickers.oldfiles')
 
-local setup_hipatterns = function()
-  child.lua([[require('mini.hipatterns').setup({
-    highlighters = {
-      minmax = { pattern = { 'min', 'max' }, group = 'Error' },
-      ['local'] = { pattern = 'local', group = 'Comment' },
-    },
-    delay = { text_change = 20 },
-  })]])
-  child.cmd('edit ' .. real_file('a.lua'))
-  local buf_id_1 = child.api.nvim_create_buf(true, false)
+T['pickers']['oldfiles()']['works'] = function()
+  child.set_size(10, 70)
+  local path_1, path_2 = real_file('LICENSE'), make_testpath('mocks', 'diagnostic.lua')
+  local ref_oldfiles = { full_path(path_1), full_path(path_2), 'not-existing' }
+  child.v.oldfiles = ref_oldfiles
 
-  local buf_id_2 = child.api.nvim_create_buf(true, false)
-  child.api.nvim_set_current_buf(buf_id_2)
-  child.api.nvim_buf_set_lines(buf_id_2, 0, -1, false, { '', 'min', 'max', 'local' })
-  sleep(20 + 5)
-
-  -- Should not be present in results
-  local buf_id_not_enabled = child.api.nvim_create_buf(true, false)
-  child.api.nvim_buf_set_lines(buf_id_not_enabled, 0, -1, false, { 'min max local' })
-
-  return buf_id_1, buf_id_2
-end
-
-T['pickers']['hipatterns()']['works'] = function()
-  child.set_size(15, 120)
-  local _, buf_id_2 = setup_hipatterns()
-
-  child.lua_notify('_G.return_item = MiniExtra.pickers.hipatterns()')
-  validate_picker_name('Mini.hipatterns matches (all)')
+  child.lua_notify('_G.return_item = MiniExtra.pickers.oldfiles()')
+  validate_picker_name('Old files')
   child.expect_screenshot()
 
-  -- Should highlight highlighter's name with its group
-  local ns_id = child.api.nvim_get_namespaces().MiniExtraPickers
-  local extmarks = child.api.nvim_buf_get_extmarks(0, ns_id, 0, -1, { details = true })
-  local extmark_data = vim.tbl_map(
-    function(x) return { row = x[2], row_end = x[4].end_row, col = x[3], col_end = x[4].end_col, hl_group = x[4].hl_group } end,
-    extmarks
-  )
+  -- Should have proper items (only readable files with short paths)
+  eq(get_picker_items(), { path_1, path_2 })
+
+  -- Should properly choose
+  type_keys('<CR>')
+  validate_buf_name(0, path_1)
+  eq(get_cursor(), { 1, 0 })
+
   --stylua: ignore
-  eq(extmark_data, {
-    { hl_group = 'Comment', row = 0, row_end = 0, col = 0, col_end = 5 },
-    { hl_group = 'Comment', row = 1, row_end = 1, col = 0, col_end = 5 },
-    { hl_group = 'Error',   row = 2, row_end = 2, col = 0, col_end = 6 },
-    { hl_group = 'Error',   row = 3, row_end = 3, col = 0, col_end = 6 },
-    { hl_group = 'Comment', row = 4, row_end = 4, col = 0, col_end = 5 },
-    { hl_group = 'Error',   row = 5, row_end = 5, col = 0, col_end = 6 },
-    { hl_group = 'Error',   row = 6, row_end = 6, col = 0, col_end = 6 },
-  })
-
-  -- Can preview match region
-  type_keys('<C-p>', '<Tab>')
-  child.expect_screenshot()
-
-  -- Should properly choose by positioning on region start
-  type_keys('<CR>')
-  eq(child.api.nvim_get_current_buf(), buf_id_2)
-  eq(get_cursor(), { 3, 0 })
-
-  -- Should return chosen value
-  eq(child.lua_get('_G.return_item'), {
-    bufnr = buf_id_2,
-    highlighter = 'minmax',
-    hl_group = 'Error',
-    lnum = 3,
-    end_lnum = 3,
-    col = 1,
-    end_col = 4,
-    text = 'minmax │ Buffer_3:3:1:max',
-  })
+  -- Should return chosen value with proper structure
+  eq(child.lua_get('_G.return_item'), path_1)
 end
 
-T['pickers']['hipatterns()']['respects `local_opts.scope`'] = function()
-  child.set_size(15, 50)
-  setup_hipatterns()
-  pick_hipatterns({ scope = 'current' })
-  validate_picker_name('Mini.hipatterns matches (current)')
-  child.expect_screenshot()
-end
-
-T['pickers']['hipatterns()']['respects `local_opts.highlighters`'] = function()
-  child.set_size(15, 120)
-  setup_hipatterns()
-
-  pick_hipatterns({ highlighters = { 'minmax' } })
-  child.expect_screenshot()
-  stop_picker()
-
-  -- Empty table
-  pick_hipatterns({ highlighters = {} })
+T['pickers']['oldfiles()']['works with empty `v:oldfiles`'] = function()
+  child.v.oldfiles = {}
+  pick_oldfiles()
   eq(get_picker_items(), {})
 end
 
-T['pickers']['hipatterns()']['respects `opts`'] = function()
-  setup_hipatterns()
-  pick_hipatterns({}, { source = { name = 'My name' } })
+T['pickers']['oldfiles()']['can not show icons'] = function()
+  child.set_size(10, 70)
+  local ref_oldfiles = { full_path(real_file('LICENSE')), full_path(make_testpath('mocks', 'diagnostic.lua')) }
+  child.v.oldfiles = ref_oldfiles
+
+  child.lua('MiniPick.config.source.show = MiniPick.default_show')
+  pick_oldfiles()
+  child.expect_screenshot()
+end
+
+T['pickers']['oldfiles()']['respects `opts`'] = function()
+  pick_oldfiles({}, { source = { name = 'My name' } })
   validate_picker_name('My name')
 end
 
-T['pickers']['hipatterns()']["checks for present 'mini.hipatterns'"] = function()
-  child.lua([[
-    local require_orig = require
-    require = function(x)
-      if x == 'mini.hipatterns' then error() end
-      require_orig(x)
-    end
-  ]])
-  expect.error(function() child.lua('MiniExtra.pickers.hipatterns()') end, '`pickers%.hipatterns`.*mini%.hipatterns')
+T['pickers']['oldfiles()']['respects `opts.source.cwd`'] = function()
+  child.set_size(10, 70)
+  local ref_oldfiles = { full_path(real_file('LICENSE')), full_path(make_testpath('mocks', 'diagnostic.lua')) }
+  child.v.oldfiles = ref_oldfiles
+
+  pick_oldfiles({}, { source = { cwd = real_files_dir } })
+  local items = get_picker_items()
+  eq(items[1], 'LICENSE')
+  expect.match(items[2], vim.pesc(ref_oldfiles[2]))
 end
 
-T['pickers']['hipatterns()']['validates arguments'] = function()
-  local validate = function(local_opts, error_pattern)
-    expect.error(function() child.lua('MiniExtra.pickers.hipatterns(...)', { local_opts }) end, error_pattern)
+T['pickers']['options()'] = new_set()
+
+local pick_options = forward_lua_notify('MiniExtra.pickers.options')
+
+T['pickers']['options()']['works'] = function()
+  child.set_size(35, 60)
+
+  child.lua_notify('_G.return_item = MiniExtra.pickers.options()')
+  validate_picker_name('Options (all)')
+  type_keys('^cursor')
+  child.expect_screenshot()
+
+  -- Should have proper preview
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  -- - Should use proper highlight group for headers
+  validate_partial_equal_arr(get_extra_picker_extmarks(0, -1), {
+    { row = 0, col = 0, hl_group = 'MiniPickHeader' },
+    { row = 3, col = 0, hl_group = 'MiniPickHeader' },
+  })
+
+  -- Should properly choose
+  type_keys('<CR>')
+  eq(child.fn.getcmdline(), 'set cursorbind')
+  eq(child.fn.getcmdpos(), 15)
+
+  -- Should return chosen value
+  eq(child.lua_get('_G.return_item'), { text = 'cursorbind', info = child.api.nvim_get_option_info('cursorbind') })
+end
+
+T['pickers']['options()']['respects set options'] = function()
+  child.set_size(10, 40)
+  child.o.cursorline = true
+  child.wo.cursorcolumn = true
+  child.bo.commentstring = '### %s'
+
+  pick_options()
+  type_keys('^cursor')
+  child.expect_screenshot()
+
+  -- Should highlight not set options as dimmed
+  validate_partial_equal_arr(get_extra_picker_extmarks(0, -1), {
+    { row = 0, col = 0, hl_group = 'Comment' },
+    { row = 3, col = 0, hl_group = 'Comment' },
+  })
+
+  -- Should show valid present value (in the scope of target) window in preview
+  -- - Window local option
+  type_keys('<C-n>', '<Tab>')
+  child.expect_screenshot()
+
+  -- Buffer-local option
+  type_keys('<C-u>', '^commentstring', '<Tab>')
+  child.expect_screenshot()
+end
+
+T['pickers']['options()']['correctly chooses non-binary options'] = function()
+  pick_options()
+  type_keys('^laststatus', '<CR>')
+  eq(child.fn.getcmdline(), 'set laststatus=')
+  eq(child.fn.getcmdpos(), 16)
+end
+
+T['pickers']['options()']['correctly previews deprecated options'] = function()
+  child.set_size(10, 115)
+  pick_options()
+  type_keys('^aleph', '<Tab>')
+  child.expect_screenshot()
+end
+
+T['pickers']['options()']['respects `local_opts.scope`'] = function()
+  local validate = function(scope)
+    pick_options({ scope = scope })
+    validate_picker_name('Options (' .. scope .. ')')
+
+    if scope == 'all' then return stop_picker() end
+
+    -- Validate proper set of options
+    for _, item in ipairs(get_picker_items()) do
+      eq(child.api.nvim_get_option_info(item.text).scope, scope)
+    end
+
+    stop_picker()
   end
 
-  validate({ scope = '1' }, '`pickers%.hipatterns`.*"scope".*"1".*one of')
-  validate({ highlighters = '1' }, '`local_opts%.highlighters.*array')
+  validate('all')
+  validate('global')
+  validate('win')
+  validate('buf')
+end
+
+T['pickers']['options()']['respects `opts`'] = function()
+  pick_options({}, { source = { name = 'My name' } })
+  validate_picker_name('My name')
+end
+
+T['pickers']['options()']['validates arguments'] = function()
+  local validate = function(local_opts, error_pattern)
+    expect.error(function() child.lua('MiniExtra.pickers.options(...)', { local_opts }) end, error_pattern)
+  end
+
+  validate({ scope = '1' }, '`pickers%.options`.*"scope".*"1".*one of')
+end
+
+T['pickers']['registers()'] = new_set()
+
+local pick_registers = forward_lua_notify('MiniExtra.pickers.registers')
+
+local setup_registers = function()
+  child.fn.setreg('a', 'Register a')
+  child.fn.setreg('=', '1 + 1')
+  set_lines({ 'Yank register' })
+  type_keys('yy')
+  set_lines({})
+end
+
+T['pickers']['registers()']['works'] = function()
+  child.set_size(80, 40)
+  setup_registers()
+
+  -- Mock constant clipboard for better reproducibility of system registers
+  -- (mostly on CI). As `setreg('+', '')` is not guaranteed to be working for
+  -- system clipboard, use `g:clipboard` which copies/pastes nothing.
+  child.lua([[
+    local empty = function() return '' end
+    vim.g.clipboard = {
+      name  = 'myClipboard',
+      copy  = { ['+'] = empty, ['*'] = empty },
+      paste = { ['+'] = empty, ['*'] = empty },
+    }
+  ]])
+
+  child.lua_notify('_G.return_item = MiniExtra.pickers.registers()')
+  validate_picker_name('Registers')
+  child.expect_screenshot()
+
+  -- Should have no preview
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  -- Should properly choose pasting register contents
+  type_keys('^a', '<CR>')
+  eq(get_lines(), { 'Register a' })
+
+  -- Should return chosen value
+  eq(child.lua_get('_G.return_item'), { regname = 'a', regcontents = 'Register a', text = 'a │ Register a' })
+end
+
+T['pickers']['registers()']['can be chosen in non-Normal modes'] = function()
+  setup_registers()
+  local pick_reg_a = function()
+    pick_registers()
+    type_keys('^a', '<CR>')
+  end
+
+  -- -- Doesn't really work in Visual mode because 'mini.pick' doesn't
+  -- type_keys('i', 'toremove', '<Esc>', 'viw')
+  -- pick_reg_a()
+  -- eq(is_picker_active(), false)
+  -- eq(get_lines(), { 'Register a' })
+  -- eq(child.fn.mode(), 'v')
+  -- child.ensure_normal_mode()
+  -- set_lines({})
+
+  -- Insert mode
+  type_keys('i')
+  pick_reg_a()
+  eq(is_picker_active(), false)
+  eq(get_lines(), { 'Register a' })
+  eq(child.fn.mode(), 'i')
+  child.ensure_normal_mode()
+  set_lines({})
+
+  -- Command-line mode
+  type_keys(':')
+  pick_reg_a()
+  eq(is_picker_active(), false)
+  eq(child.fn.mode(), 'c')
+  eq(child.fn.getcmdline(), 'Register a')
+  eq(child.fn.getcmdpos(), 11)
+  child.ensure_normal_mode()
+  set_lines({})
+end
+
+T['pickers']['registers()']['works with expression register'] = function()
+  setup_registers()
+  local pick_expr_reg = function()
+    pick_registers()
+    type_keys('^=', '<CR>')
+  end
+
+  -- Should reevaluate and paste
+  -- - Normal mode
+  pick_expr_reg()
+  eq(get_lines(), { '2' })
+  eq(child.fn.mode(), 'n')
+  set_lines({})
+
+  -- - Insert mode
+  type_keys('i')
+  pick_expr_reg()
+  eq(get_lines(), { '2' })
+  eq(child.fn.mode(), 'i')
+  child.ensure_normal_mode()
+  set_lines({})
+
+  -- - Command-line mode
+  type_keys(':')
+  pick_expr_reg()
+  eq(child.fn.mode(), 'c')
+  eq(child.fn.getcmdline(), '2')
+  eq(child.fn.getcmdpos(), 2)
+  child.ensure_normal_mode()
+  set_lines({})
+end
+
+T['pickers']['registers()']['respects `opts`'] = function()
+  pick_registers({}, { source = { name = 'My name' } })
+  validate_picker_name('My name')
 end
 
 T['pickers']['spell()'] = new_set()
@@ -2662,6 +2601,67 @@ T['pickers']['spell()']['validates arguments'] = function()
 
   validate({ n_suggestions = '1' }, '`local_opts%.n_suggestions.*number')
   validate({ n_suggestions = 0 }, '`local_opts%.n_suggestions.*positive')
+end
+
+T['pickers']['treesitter()'] = new_set()
+
+local pick_treesitter = forward_lua_notify('MiniExtra.pickers.treesitter')
+
+local setup_treesitter = function()
+  local path = real_file('a.lua')
+  child.cmd('edit ' .. path)
+  child.lua('vim.treesitter.start()')
+  sleep(10)
+
+  return path
+end
+
+T['pickers']['treesitter()']['works'] = function()
+  if child.fn.has('nvim-0.8') == 0 then return end
+  child.set_size(52, 70)
+  local path = setup_treesitter()
+
+  child.lua_notify('_G.return_item = MiniExtra.pickers.treesitter()')
+  validate_picker_name('Tree-sitter nodes')
+  child.expect_screenshot()
+
+  -- Should preview node's region
+  type_keys('<Tab>')
+  child.expect_screenshot()
+  type_keys('<C-n>')
+  child.expect_screenshot()
+
+  -- Should properly choose by positioning on region start
+  type_keys('<CR>')
+  validate_buf_name(0, path)
+  eq(get_cursor(), { 1, 6 })
+
+  -- Should return chosen value
+  eq(child.lua_get('_G.return_item'), {
+    bufnr = child.api.nvim_get_current_buf(),
+    col = 7,
+    end_col = 12,
+    end_lnum = 1,
+    lnum = 1,
+    text = ' assignment_statement (1:7 - 1:12)',
+  })
+end
+
+T['pickers']['treesitter()']['checks for active tree-sitter'] = function()
+  if child.fn.has('nvim-0.8') == 0 then return end
+  expect.error(function() child.lua('MiniExtra.pickers.treesitter()') end, '`pickers%.treesitter`.*parser')
+end
+
+T['pickers']['treesitter()']['throws error on Neovim<0.8'] = function()
+  if child.fn.has('nvim-0.8') == 1 then return end
+  expect.error(function() child.lua([[MiniExtra.pickers.treesitter()]]) end, '`pickers%.treesitter`.*0%.8')
+end
+
+T['pickers']['treesitter()']['respects `opts`'] = function()
+  if child.fn.has('nvim-0.8') == 0 then return end
+  setup_treesitter()
+  pick_treesitter({}, { source = { name = 'My name' } })
+  validate_picker_name('My name')
 end
 
 return T

@@ -104,26 +104,6 @@ MiniExtra.config = {}
 ---   })
 MiniExtra.gen_ai_spec = {}
 
---- Current line textobject
----
---- Notes:
---- - `a` textobject selects charwise whole line.
---- - `i` textobject selects charwise line after initial indent.
----
----@return function Specification for |MiniAi| textobject.
-MiniExtra.gen_ai_spec.line = function()
-  return function(ai_type)
-    local line_num = vim.fn.line('.')
-    local line = vim.fn.getline(line_num)
-    -- Ignore indentation for `i` textobject
-    local from_col = ai_type == 'a' and 1 or (line:match('^(%s*)'):len() + 1)
-    -- Don't select `\n` past the line to operate within a line
-    local to_col = line:len()
-
-    return { from = { line = line_num, col = from_col }, to = { line = line_num, col = to_col } }
-  end
-end
-
 --- Current buffer textobject
 ---
 --- Notes:
@@ -144,6 +124,26 @@ MiniExtra.gen_ai_spec.buffer = function()
 
     local to_col = math.max(vim.fn.getline(end_line):len(), 1)
     return { from = { line = start_line, col = 1 }, to = { line = end_line, col = to_col } }
+  end
+end
+
+--- Current line textobject
+---
+--- Notes:
+--- - `a` textobject selects charwise whole line.
+--- - `i` textobject selects charwise line after initial indent.
+---
+---@return function Specification for |MiniAi| textobject.
+MiniExtra.gen_ai_spec.line = function()
+  return function(ai_type)
+    local line_num = vim.fn.line('.')
+    local line = vim.fn.getline(line_num)
+    -- Ignore indentation for `i` textobject
+    local from_col = ai_type == 'a' and 1 or (line:match('^(%s*)'):len() + 1)
+    -- Don't select `\n` past the line to operate within a line
+    local to_col = line:len()
+
+    return { from = { line = line_num, col = from_col }, to = { line = line_num, col = to_col } }
   end
 end
 
@@ -199,6 +199,93 @@ end
 --- - As Lua code: `MiniExtra.pickers.buf_lines()`.
 --- - With |:Pick| command: `:Pick buf_lines scope='current'`
 MiniExtra.pickers = {}
+
+--- Buffer lines picker
+---
+--- Pick from buffer lines. Notes:
+--- - Loads all target currently unloaded buffers.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - one of "all" (normal listed buffers) or "current".
+---     Default: "all".
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.buf_lines = function(local_opts, opts)
+  local pick = H.validate_pick('buf_lines')
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'current' }, 'buf_lines')
+  local is_scope_all = scope == 'all'
+
+  -- Define non-blocking callable `items` because getting all lines from all
+  -- buffers (plus loading them) may take visibly long time
+  local buffers = {}
+  if is_scope_all then
+    for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.bo[buf_id].buflisted and vim.bo[buf_id].buftype == '' then table.insert(buffers, buf_id) end
+    end
+  else
+    buffers = { vim.api.nvim_get_current_buf() }
+  end
+
+  local poke_picker = pick.poke_is_picker_active
+  local f = function()
+    local items = {}
+    for _, buf_id in ipairs(buffers) do
+      if not poke_picker() then return end
+      H.buf_ensure_loaded(buf_id)
+      local buf_name = H.buf_get_name(buf_id) or ''
+      for lnum, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
+        local prefix = is_scope_all and string.format('%s:', buf_name) or ''
+        table.insert(items, { text = string.format('%s%s:%s', prefix, lnum, l), bufnr = buf_id, lnum = lnum })
+      end
+    end
+    pick.set_picker_items(items)
+  end
+  local items = vim.schedule_wrap(coroutine.wrap(f))
+
+  local show = H.pick_get_config().source.show
+  if is_scope_all and show == nil then show = H.show_with_icons end
+  return H.pick_start(items, { source = { name = string.format('Buffer lines (%s)', scope), show = show } }, opts)
+end
+
+--- Neovim commands picker
+---
+--- Pick from Neovim built-in (|ex-commands|) and |user-commands|. Notes:
+--- - Preview shows information about the command (if available).
+--- - Choosing either executes command (if reliably known that it doesn't need
+---   arguments) or populates Command line with the command.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Not used at the moment.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.commands = function(local_opts, opts)
+  local pick = H.validate_pick('commands')
+
+  local commands = vim.tbl_deep_extend('force', vim.api.nvim_get_commands({}), vim.api.nvim_buf_get_commands(0, {}))
+
+  local preview = function(buf_id, item)
+    local data = commands[item]
+    local lines = data == nil and { string.format('No command data for `%s` is yet available.', item) }
+      or vim.split(vim.inspect(data), '\n')
+    H.set_buflines(buf_id, lines)
+  end
+
+  local choose = function(item)
+    local data = commands[item] or {}
+    -- If no arguments needed, execute immediately
+    local keys = string.format(':%s%s', item, data.nargs == '0' and '\r' or ' ')
+    vim.schedule(function() vim.fn.feedkeys(keys) end)
+  end
+
+  local items = vim.fn.getcompletion('', 'command')
+  local default_opts = { source = { name = 'Commands', preview = preview, choose = choose } }
+  return H.pick_start(items, default_opts, opts)
+end
 
 --- Built-in diagnostic picker
 ---
@@ -272,230 +359,66 @@ MiniExtra.pickers.diagnostic = function(local_opts, opts)
   return H.pick_start(items, { source = { name = string.format('Diagnostic (%s)', scope), show = show } }, opts)
 end
 
---- Old files picker
+--- File explorer picker
 ---
---- Pick from |v:oldfiles| entries representing readable files.
+--- Explore file system and open file. Notes:
+--- - Choosing a directory navigates inside that directory changing picker's
+---   items and current working directory.
+--- - Query and preview work as usual, not only `move_next`/`move_prev` can be used.
+--- - Preview works for any item.
+---
+--- Examples ~
+---
+--- - `MiniExtra.pickers.explorer()`
+--- - `:Pick explorer cwd='..'` - open explorer in parent directory.
 ---
 ---@param local_opts __extra_pickers_local_opts
----   Not used at the moment.
+---   Possible fields:
+---   - <cwd> `(string)` - initial directory to explore. Should be a valid
+---     directory path. Default: `nil` for |current-directory|.
+---   - <filter> `(function)` - callable predicate to filter items to show.
+---     Will be called for every item and should return `true` if it should be
+---     shown. Each item is a table with the following fields:
+---       - <fs_type> `(string)` - path type. One of "directory" or "file".
+---       - <path> `(string)` - file system entry path.
+---       - <text> `(string)` - text to show (path's basename).
+---   - <sort> `(function)` - callable item sorter. Will be called with array
+---     of items (each element with structure as described above) and should
+---     return sorted array of items.
 ---@param opts __extra_pickers_opts
 ---
 ---@return __extra_pickers_return
-MiniExtra.pickers.oldfiles = function(local_opts, opts)
-  local pick = H.validate_pick('oldfiles')
-  local oldfiles = vim.v.oldfiles
-  if not vim.tbl_islist(oldfiles) then H.error('`pickers.oldfiles` picker needs valid `v:oldfiles`.') end
+MiniExtra.pickers.explorer = function(local_opts, opts)
+  local pick = H.validate_pick('explorer')
 
-  local items = vim.schedule_wrap(function()
-    local cwd = pick.get_picker_opts().source.cwd
-    local res = {}
-    for _, path in ipairs(oldfiles) do
-      if vim.fn.filereadable(path) == 1 then table.insert(res, H.short_path(path, cwd)) end
-    end
-    pick.set_picker_items(res)
-  end)
+  local_opts = vim.tbl_deep_extend('force', { cwd = nil, filter = nil, sort = nil }, local_opts or {})
+  local cwd = local_opts.cwd or vim.fn.getcwd()
+  if vim.fn.isdirectory(cwd) == 0 then H.error('`local_opts.cwd` should be valid directory path.') end
+  -- - Call twice "full path" to make sure that possible '..' are collapsed
+  cwd = H.full_path(vim.fn.fnamemodify(cwd, ':p'))
+  local filter = local_opts.filter or function() return true end
+  if not vim.is_callable(filter) then H.error('`local_opts.filter` should be callable.') end
+  local sort = local_opts.sort or H.explorer_default_sort
+  if not vim.is_callable(sort) then H.error('`local_opts.sort` should be callable.') end
+
+  -- Define source
+  local choose = function(item)
+    local path = item.path
+    if vim.fn.filereadable(path) == 1 then return pick.default_choose(path) end
+    if vim.fn.isdirectory(path) == 0 then return false end
+
+    pick.set_picker_items(H.explorer_make_items(path, filter, sort))
+    pick.set_picker_opts({ source = { cwd = path } })
+    pick.set_picker_query({})
+    return true
+  end
 
   local show = H.pick_get_config().source.show or H.show_with_icons
-  return H.pick_start(items, { source = { name = 'Old files', show = show } }, opts)
-end
 
---- Buffer lines picker
----
---- Pick from buffer lines. Notes:
---- - Loads all target currently unloaded buffers.
----
----@param local_opts __extra_pickers_local_opts
----   Possible fields:
----   - <scope> `(string)` - one of "all" (normal listed buffers) or "current".
----     Default: "all".
----@param opts __extra_pickers_opts
----
----@return __extra_pickers_return
-MiniExtra.pickers.buf_lines = function(local_opts, opts)
-  local pick = H.validate_pick('buf_lines')
-  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
-
-  local scope = H.pick_validate_scope(local_opts, { 'all', 'current' }, 'buf_lines')
-  local is_scope_all = scope == 'all'
-
-  -- Define non-blocking callable `items` because getting all lines from all
-  -- buffers (plus loading them) may take visibly long time
-  local buffers = {}
-  if is_scope_all then
-    for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.bo[buf_id].buflisted and vim.bo[buf_id].buftype == '' then table.insert(buffers, buf_id) end
-    end
-  else
-    buffers = { vim.api.nvim_get_current_buf() }
-  end
-
-  local poke_picker = pick.poke_is_picker_active
-  local f = function()
-    local items = {}
-    for _, buf_id in ipairs(buffers) do
-      if not poke_picker() then return end
-      H.buf_ensure_loaded(buf_id)
-      local buf_name = H.buf_get_name(buf_id) or ''
-      for lnum, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
-        local prefix = is_scope_all and string.format('%s:', buf_name) or ''
-        table.insert(items, { text = string.format('%s%s:%s', prefix, lnum, l), bufnr = buf_id, lnum = lnum })
-      end
-    end
-    pick.set_picker_items(items)
-  end
-  local items = vim.schedule_wrap(coroutine.wrap(f))
-
-  local show = H.pick_get_config().source.show
-  if is_scope_all and show == nil then show = H.show_with_icons end
-  return H.pick_start(items, { source = { name = string.format('Buffer lines (%s)', scope), show = show } }, opts)
-end
-
---- Neovim history picker
----
---- Pick from output of |:history|. Notes:
---- - Has no preview.
---- - Choosing action depends on scope:
----     - For "cmd" / ":" scopes, the command is executed.
----     - For "search" / "/" / "?" scopes, serach is redone.
----     - For other scopes nothing is done (but chosen item is still returned).
----
---- Examples:
---- - Command history: `MiniExtra.pickers.history({ scope = ':' })`
---- - Search history: `:Pick history scope='/'`
----
----@param local_opts __extra_pickers_local_opts
----   Possible fields:
----   - <scope> `(string)` - any allowed {name} flag of |:history| option.
----     Note: only full words are allowed (like "cmd", "search", etc.).
----     Default: "all".
----@param opts __extra_pickers_opts
----
----@return __extra_pickers_return
-MiniExtra.pickers.history = function(local_opts, opts)
-  local pick = H.validate_pick('history')
-  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
-
-  local allowed_scope = { 'all', 'cmd', 'search', 'expr', 'input', 'debug', ':', '/', '?', '=', '@', '>' }
-  local scope = H.pick_validate_scope(local_opts, allowed_scope, 'history')
-
-  --stylua: ignore
-  local type_ids = {
-    cmd = ':',   search = '/', expr  = '=', input = '@', debug = '>',
-    [':'] = ':', ['/']  = '/', ['='] = '=', ['@'] = '@', ['>'] = '>',
-    ['?'] = '?',
-  }
-
-  -- Construct items
-  local items = {}
-  local names = scope == 'all' and { 'cmd', 'search', 'expr', 'input', 'debug' } or { scope }
-  for _, cur_name in ipairs(names) do
-    local cmd_output = vim.api.nvim_exec(':history ' .. cur_name, true)
-    local lines = vim.split(cmd_output, '\n')
-    local id = type_ids[cur_name]
-    -- Output of `:history` is sorted from oldest to newest
-    for i = #lines, 2, -1 do
-      local hist_entry = lines[i]:match('^.-%-?%d+%s+(.*)$')
-      table.insert(items, string.format('%s %s', id, hist_entry))
-    end
-  end
-
-  -- Define source
-  local preview = H.pick_make_no_preview('history')
-
-  local choose = function(item)
-    if not (type(item) == 'string' and vim.fn.mode() == 'n') then return end
-    local id, entry = item:match('^(.) (.*)$')
-    if id == ':' or id == '/' or id == '?' then
-      vim.schedule(function() vim.fn.feedkeys(id .. entry .. '\r', 'nx') end)
-    end
-  end
-
-  local default_source = { name = string.format('History (%s)', scope), preview = preview, choose = choose }
-  return H.pick_start(items, { source = default_source }, opts)
-end
-
---- Highlight groups picker
----
---- Pick and preview highlight groups. Notes:
---- - Item line is colored with same highlight group it represents.
---- - Preview shows highlights definitinon (as in |:highlight| with {group-name}).
---- - Choosing places highlight definition in Command line to update and apply.
----
----@param local_opts __extra_pickers_local_opts
----   Not used at the moment.
----@param opts __extra_pickers_opts
----
----@return __extra_pickers_return
-MiniExtra.pickers.hl_groups = function(local_opts, opts)
-  local pick = H.validate_pick('hl_groups')
-
-  -- Construct items
-  local group_data = vim.split(vim.api.nvim_exec('highlight', true), '\n')
-  local items = {}
-  for _, l in ipairs(group_data) do
-    local group = l:match('^(%S+)')
-    if group ~= nil then table.insert(items, group) end
-  end
-
-  local show = function(buf_id, items_to_show, query)
-    H.set_buflines(buf_id, items_to_show)
-    H.pick_clear_namespace(buf_id, H.ns_id.pickers)
-    -- Highlight line with highlight group of its item
-    for i = 1, #items_to_show do
-      H.pick_highlight_line(buf_id, i, items_to_show[i], 300)
-    end
-  end
-
-  -- Define source
-  local preview = function(buf_id, item)
-    local lines = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')
-    H.set_buflines(buf_id, lines)
-  end
-
-  local choose = function(item)
-    local hl_def = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')[1]
-    hl_def = hl_def:gsub('^(%S+)%s+xxx%s+', '%1 ')
-    vim.schedule(function() vim.fn.feedkeys(':hi ' .. hl_def, 'n') end)
-  end
-
-  local default_source = { name = 'Highlight groups', show = show, preview = preview, choose = choose }
-  return H.pick_start(items, { source = default_source }, opts)
-end
-
---- Neovim commands picker
----
---- Pick from Neovim built-in (|ex-commands|) and |user-commands|. Notes:
---- - Preview shows information about the command (if available).
---- - Choosing either executes command (if reliably known that it doesn't need
----   arguments) or populates Command line with the command.
----
----@param local_opts __extra_pickers_local_opts
----   Not used at the moment.
----@param opts __extra_pickers_opts
----
----@return __extra_pickers_return
-MiniExtra.pickers.commands = function(local_opts, opts)
-  local pick = H.validate_pick('commands')
-
-  local commands = vim.tbl_deep_extend('force', vim.api.nvim_get_commands({}), vim.api.nvim_buf_get_commands(0, {}))
-
-  local preview = function(buf_id, item)
-    local data = commands[item]
-    local lines = data == nil and { string.format('No command data for `%s` is yet available.', item) }
-      or vim.split(vim.inspect(data), '\n')
-    H.set_buflines(buf_id, lines)
-  end
-
-  local choose = function(item)
-    local data = commands[item] or {}
-    -- If no arguments needed, execute immediately
-    local keys = string.format(':%s%s', item, data.nargs == '0' and '\r' or ' ')
-    vim.schedule(function() vim.fn.feedkeys(keys) end)
-  end
-
-  local items = vim.fn.getcompletion('', 'command')
-  local default_opts = { source = { name = 'Commands', preview = preview, choose = choose } }
-  return H.pick_start(items, default_opts, opts)
+  local items = H.explorer_make_items(cwd, filter, sort)
+  local source = { items = items, name = 'File explorer', cwd = cwd, show = show, choose = choose }
+  opts = vim.tbl_deep_extend('force', { source = source }, opts or {})
+  return pick.start(opts)
 end
 
 --- Git branches picker
@@ -718,67 +641,184 @@ MiniExtra.pickers.git_hunks = function(local_opts, opts)
   return pick.builtin.cli({ command = command, postprocess = postprocess }, opts)
 end
 
---- Neovim options picker
+--- Matches from 'mini.hipatterns' picker
 ---
---- Pick and preview data about Neovim options. Notes:
---- - Item line is colored based on whether it was set (dimmed if wasn't).
---- - Preview shows option value in target window and its general information.
---- - Choosing places option name in Command line to update and apply.
+--- Pick from |MiniHipatterns| matches using |MiniHipatterns.get_matches()|.
+--- Notes:
+--- - Requires 'mini.hipatterns'.
+--- - Highlighter identifier is highlighted with its highlight group.
 ---
 ---@param local_opts __extra_pickers_local_opts
 ---   Possible fields:
----   - <scope> `(string)` - options to show. One of "all", "global", "win", "buf".
----     Default: "all".
+---   - <scope> `(string)` - one of "all" (buffers with enabled
+---     'mini.hipatterns') or "current" (buffer). Default: "all".
+---   - <highlighters> `(table|nil)` - highlighters for which to find matches.
+---     Forwarded to |MiniHipatterns.get_matches()|. Default: `nil`.
 ---@param opts __extra_pickers_opts
 ---
 ---@return __extra_pickers_return
-MiniExtra.pickers.options = function(local_opts, opts)
-  local pick = H.validate_pick('options')
-  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+MiniExtra.pickers.hipatterns = function(local_opts, opts)
+  local pick = H.validate_pick('hipatterns')
+  local has_hipatterns, hipatterns = pcall(require, 'mini.hipatterns')
+  if not has_hipatterns then H.error([[`pickers.hipatterns` requires 'mini.hipatterns' which can not be found.]]) end
 
-  local scope = H.pick_validate_scope(local_opts, { 'all', 'global', 'win', 'buf' }, 'options')
-
-  local items = {}
-  for name, info in pairs(vim.api.nvim_get_all_options_info()) do
-    if scope == 'all' or scope == info.scope then table.insert(items, { text = name, info = info }) end
+  local_opts = vim.tbl_deep_extend('force', { highlighters = nil, scope = 'all' }, local_opts or {})
+  if local_opts.highlighters ~= nil and not vim.tbl_islist(local_opts.highlighters) then
+    H.error('`local_opts.highlighters` should be an array of highlighter identifiers.')
   end
-  table.sort(items, function(a, b) return a.text < b.text end)
+  local highlighters = local_opts.highlighters
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'current' }, 'hipatterns')
+
+  -- Get items
+  local buffers = scope == 'all' and hipatterns.get_enabled_buffers() or { vim.api.nvim_get_current_buf() }
+  local items, highlighter_width = {}, 0
+  for _, buf_id in ipairs(buffers) do
+    local lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
+    local buf_name = H.buf_get_name(buf_id)
+    if buf_name == '' then buf_name = 'Buffer_' .. buf_id end
+
+    for _, match in ipairs(hipatterns.get_matches(buf_id, highlighters)) do
+      match.highlighter = tostring(match.highlighter)
+      match.buf_name, match.line = buf_name, lines[match.lnum]
+      table.insert(items, match)
+      highlighter_width = math.max(highlighter_width, vim.fn.strchars(match.highlighter))
+    end
+  end
+
+  for _, item in ipairs(items) do
+    --stylua: ignore
+    item.text = string.format(
+      '%s │ %s:%d:%d:%s',
+      H.ensure_text_width(item.highlighter, highlighter_width),
+      item.buf_name, item.lnum, item.col, item.line
+    )
+    item.buf_name, item.line = nil, nil
+  end
 
   local show = function(buf_id, items_to_show, query)
     pick.default_show(buf_id, items_to_show, query)
 
     H.pick_clear_namespace(buf_id, H.ns_id.pickers)
     for i, item in ipairs(items_to_show) do
-      if not item.info.was_set then H.pick_highlight_line(buf_id, i, 'Comment', 199) end
+      local end_col = string.len(item.highlighter)
+      local extmark_opts = { hl_group = item.hl_group, end_row = i - 1, end_col = end_col, priority = 1 }
+      vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.pickers, i - 1, 0, extmark_opts)
     end
   end
 
+  local name = string.format('Mini.hipatterns matches (%s)', scope)
+  return H.pick_start(items, { source = { name = name, show = show } }, opts)
+end
+
+--- Neovim history picker
+---
+--- Pick from output of |:history|. Notes:
+--- - Has no preview.
+--- - Choosing action depends on scope:
+---     - For "cmd" / ":" scopes, the command is executed.
+---     - For "search" / "/" / "?" scopes, serach is redone.
+---     - For other scopes nothing is done (but chosen item is still returned).
+---
+--- Examples:
+--- - Command history: `MiniExtra.pickers.history({ scope = ':' })`
+--- - Search history: `:Pick history scope='/'`
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - any allowed {name} flag of |:history| option.
+---     Note: only full words are allowed (like "cmd", "search", etc.).
+---     Default: "all".
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.history = function(local_opts, opts)
+  local pick = H.validate_pick('history')
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+
+  local allowed_scope = { 'all', 'cmd', 'search', 'expr', 'input', 'debug', ':', '/', '?', '=', '@', '>' }
+  local scope = H.pick_validate_scope(local_opts, allowed_scope, 'history')
+
+  --stylua: ignore
+  local type_ids = {
+    cmd = ':',   search = '/', expr  = '=', input = '@', debug = '>',
+    [':'] = ':', ['/']  = '/', ['='] = '=', ['@'] = '@', ['>'] = '>',
+    ['?'] = '?',
+  }
+
+  -- Construct items
+  local items = {}
+  local names = scope == 'all' and { 'cmd', 'search', 'expr', 'input', 'debug' } or { scope }
+  for _, cur_name in ipairs(names) do
+    local cmd_output = vim.api.nvim_exec(':history ' .. cur_name, true)
+    local lines = vim.split(cmd_output, '\n')
+    local id = type_ids[cur_name]
+    -- Output of `:history` is sorted from oldest to newest
+    for i = #lines, 2, -1 do
+      local hist_entry = lines[i]:match('^.-%-?%d+%s+(.*)$')
+      table.insert(items, string.format('%s %s', id, hist_entry))
+    end
+  end
+
+  -- Define source
+  local preview = H.pick_make_no_preview('history')
+
+  local choose = function(item)
+    if not (type(item) == 'string' and vim.fn.mode() == 'n') then return end
+    local id, entry = item:match('^(.) (.*)$')
+    if id == ':' or id == '/' or id == '?' then
+      vim.schedule(function() vim.fn.feedkeys(id .. entry .. '\r', 'nx') end)
+    end
+  end
+
+  local default_source = { name = string.format('History (%s)', scope), preview = preview, choose = choose }
+  return H.pick_start(items, { source = default_source }, opts)
+end
+
+--- Highlight groups picker
+---
+--- Pick and preview highlight groups. Notes:
+--- - Item line is colored with same highlight group it represents.
+--- - Preview shows highlights definitinon (as in |:highlight| with {group-name}).
+--- - Choosing places highlight definition in Command line to update and apply.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Not used at the moment.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.hl_groups = function(local_opts, opts)
+  local pick = H.validate_pick('hl_groups')
+
+  -- Construct items
+  local group_data = vim.split(vim.api.nvim_exec('highlight', true), '\n')
+  local items = {}
+  for _, l in ipairs(group_data) do
+    local group = l:match('^(%S+)')
+    if group ~= nil then table.insert(items, group) end
+  end
+
+  local show = function(buf_id, items_to_show, query)
+    H.set_buflines(buf_id, items_to_show)
+    H.pick_clear_namespace(buf_id, H.ns_id.pickers)
+    -- Highlight line with highlight group of its item
+    for i = 1, #items_to_show do
+      H.pick_highlight_line(buf_id, i, items_to_show[i], 300)
+    end
+  end
+
+  -- Define source
   local preview = function(buf_id, item)
-    local pick_windows = pick.get_picker_state().windows
-    local target_win_id = pick_windows.target
-    if not H.is_valid_win(target_win_id) then target_win_id = pick_windows.main end
-    local value_source = ({ global = 'o', win = 'wo', buf = 'bo' })[item.info.scope]
-    local has_value, value = pcall(function()
-      return vim.api.nvim_win_call(target_win_id, function() return vim[value_source][item.info.name] end)
-    end)
-    if not has_value then value = '<Option is deprecated (will be removed in later Neovim versions)>' end
-
-    local lines = { 'Value:', unpack(vim.split(vim.inspect(value), '\n')), '', 'Info:' }
-    local hl_lines = { 1, #lines }
-    lines = vim.list_extend(lines, vim.split(vim.inspect(item.info), '\n'))
-
+    local lines = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')
     H.set_buflines(buf_id, lines)
-    H.pick_highlight_line(buf_id, hl_lines[1], 'MiniPickHeader', 200)
-    H.pick_highlight_line(buf_id, hl_lines[2], 'MiniPickHeader', 200)
   end
 
   local choose = function(item)
-    local keys = string.format(':set %s%s', item.info.name, item.info.type == 'boolean' and '' or '=')
-    vim.schedule(function() vim.fn.feedkeys(keys) end)
+    local hl_def = vim.split(vim.api.nvim_exec('hi ' .. item, true), '\n')[1]
+    hl_def = hl_def:gsub('^(%S+)%s+xxx%s+', '%1 ')
+    vim.schedule(function() vim.fn.feedkeys(':hi ' .. hl_def, 'n') end)
   end
 
-  local name = string.format('Options (%s)', scope)
-  local default_source = { name = name, show = show, preview = preview, choose = choose }
+  local default_source = { name = 'Highlight groups', show = show, preview = preview, choose = choose }
   return H.pick_start(items, { source = default_source }, opts)
 end
 
@@ -859,88 +899,52 @@ MiniExtra.pickers.keymaps = function(local_opts, opts)
   return H.pick_start(items, default_opts, opts)
 end
 
---- Neovim registers picker
+--- Neovim lists picker
 ---
---- Pick from Neovim |registers|. Notes:
---- - There is no preview as all information is in the item's text.
---- - Choosing pastes content of a register: with |i_CTRL-R| in Insert mode,
----   |c_CTRL-R| in Command-line mode, and |P| otherwise. Note: expression
----   register |quote=| is reevaluated (if present) and pasted.
+--- Pick and navigate to elements of the following Neovim lists:
+--- - |quickfix| list.
+--- - |location-list| of current window.
+--- - |jumplist|.
+--- - |changelist|.
 ---
----@param local_opts __extra_pickers_local_opts
----   Not used at the moment.
----@param opts __extra_pickers_opts
+--- Note: it requires explicit `scope`.
 ---
----@return __extra_pickers_return
-MiniExtra.pickers.registers = function(local_opts, opts)
-  local pick = H.validate_pick('registers')
-
-  local describe_register = function(regname)
-    local ok, value = pcall(vim.fn.getreg, regname, 1)
-    if not ok then return '' end
-    return value
-  end
-
-  local all_registers = vim.split('"*+:.%/#=-0123456789abcdefghijklmnopqrstuvwxyz', '')
-
-  local items = {}
-  for _, regname in ipairs(all_registers) do
-    local regcontents = describe_register(regname)
-    local text = string.format('%s │ %s', regname, regcontents)
-    table.insert(items, { regname = regname, regcontents = regcontents, text = text })
-  end
-
-  local choose = vim.schedule_wrap(function(item)
-    local reg, regcontents, mode = item.regname, item.regcontents, vim.fn.mode()
-    if reg == '=' and regcontents ~= '' then reg = reg .. item.regcontents .. '\r' end
-    local keys = string.format('"%s%s', reg, reg == '=' and '' or 'P')
-    -- In Insert and Command-line modes use `<C-r><regname>`
-    if mode == 'i' or mode == 'c' then keys = '\18' .. reg end
-    vim.fn.feedkeys(keys)
-  end)
-
-  local preview = H.pick_make_no_preview('registers')
-
-  return H.pick_start(items, { source = { name = 'Registers', preview = preview, choose = choose } }, opts)
-end
-
---- Neovim marks picker
+--- Examples ~
 ---
---- Pick and preview position of Neovim |mark|s.
+--- - `MiniExtra.pickers.list({ scope = 'quickfix' })` - quickfix list.
+--- - `:Pick list scope='jump'` - jump list.
 ---
 ---@param local_opts __extra_pickers_local_opts
 ---   Possible fields:
----   - <scope> `(string)` - scope to show. One of "all", "global", "buf".
----     Default: "all".
+---   - <scope> `(string)` - type of list to show. One of "quickfix", "location",
+---     "jump", "change". Default: `nil` which means explicit scope is needed.
 ---@param opts __extra_pickers_opts
 ---
 ---@return __extra_pickers_return
-MiniExtra.pickers.marks = function(local_opts, opts)
-  local pick = H.validate_pick('marks')
-  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+MiniExtra.pickers.list = function(local_opts, opts)
+  local pick = H.validate_pick('list')
+  local_opts = vim.tbl_deep_extend('force', { scope = nil }, local_opts or {})
 
-  local scope = H.pick_validate_scope(local_opts, { 'all', 'global', 'buf' }, 'marks')
+  if local_opts.scope == nil then H.error('`pickers.list` needs an explicit scope.') end
+  local allowed_scopes = { 'quickfix', 'location', 'jump', 'change' }
+  local scope = H.pick_validate_scope(local_opts, allowed_scopes, 'list')
 
-  -- Create items
-  local items = {}
-  local populate_items = function(mark_list)
-    for _, info in ipairs(mark_list) do
-      local path
-      if type(info.file) == 'string' then path = vim.fn.fnamemodify(info.file, ':.') end
-      local buf_id
-      if path == nil then buf_id = info.pos[1] end
+  local has_items, items = pcall(H.list_get[scope])
+  if not has_items then items = {} end
 
-      local line, col = info.pos[2], math.abs(info.pos[3])
-      local text = string.format('%s │ %s%s:%s', info.mark:sub(2), path == nil and '' or (path .. ':'), line, col)
-      table.insert(items, { text = text, bufnr = buf_id, path = path, lnum = line, col = col })
-    end
+  items = vim.tbl_filter(function(x) return H.is_valid_buf(x.bufnr) end, items)
+  items = vim.tbl_map(H.list_enhance_item, items)
+
+  local choose = function(item)
+    pick.default_choose(item)
+
+    -- Force 'buflisted' on opened item
+    local win_target = pick.get_picker_state().windows.target
+    local buf_id = vim.api.nvim_win_get_buf(win_target)
+    vim.bo[buf_id].buflisted = true
   end
 
-  if scope == 'all' or scope == 'buf' then populate_items(vim.fn.getmarklist(vim.api.nvim_get_current_buf())) end
-  if scope == 'all' or scope == 'global' then populate_items(vim.fn.getmarklist()) end
-
-  local default_opts = { source = { name = string.format('Marks (%s)', scope) } }
-  return H.pick_start(items, default_opts, opts)
+  return H.pick_start(items, { source = { name = string.format('List (%s)', scope), choose = choose } }, opts)
 end
 
 --- LSP picker
@@ -990,6 +994,218 @@ MiniExtra.pickers.lsp = function(local_opts, opts)
   vim.lsp.buf[scope]({ on_list = H.lsp_make_on_list(scope, opts) })
 end
 
+--- Neovim marks picker
+---
+--- Pick and preview position of Neovim |mark|s.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - scope to show. One of "all", "global", "buf".
+---     Default: "all".
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.marks = function(local_opts, opts)
+  local pick = H.validate_pick('marks')
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'global', 'buf' }, 'marks')
+
+  -- Create items
+  local items = {}
+  local populate_items = function(mark_list)
+    for _, info in ipairs(mark_list) do
+      local path
+      if type(info.file) == 'string' then path = vim.fn.fnamemodify(info.file, ':.') end
+      local buf_id
+      if path == nil then buf_id = info.pos[1] end
+
+      local line, col = info.pos[2], math.abs(info.pos[3])
+      local text = string.format('%s │ %s%s:%s', info.mark:sub(2), path == nil and '' or (path .. ':'), line, col)
+      table.insert(items, { text = text, bufnr = buf_id, path = path, lnum = line, col = col })
+    end
+  end
+
+  if scope == 'all' or scope == 'buf' then populate_items(vim.fn.getmarklist(vim.api.nvim_get_current_buf())) end
+  if scope == 'all' or scope == 'global' then populate_items(vim.fn.getmarklist()) end
+
+  local default_opts = { source = { name = string.format('Marks (%s)', scope) } }
+  return H.pick_start(items, default_opts, opts)
+end
+
+--- Old files picker
+---
+--- Pick from |v:oldfiles| entries representing readable files.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Not used at the moment.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.oldfiles = function(local_opts, opts)
+  local pick = H.validate_pick('oldfiles')
+  local oldfiles = vim.v.oldfiles
+  if not vim.tbl_islist(oldfiles) then H.error('`pickers.oldfiles` picker needs valid `v:oldfiles`.') end
+
+  local items = vim.schedule_wrap(function()
+    local cwd = pick.get_picker_opts().source.cwd
+    local res = {}
+    for _, path in ipairs(oldfiles) do
+      if vim.fn.filereadable(path) == 1 then table.insert(res, H.short_path(path, cwd)) end
+    end
+    pick.set_picker_items(res)
+  end)
+
+  local show = H.pick_get_config().source.show or H.show_with_icons
+  return H.pick_start(items, { source = { name = 'Old files', show = show } }, opts)
+end
+
+--- Neovim options picker
+---
+--- Pick and preview data about Neovim options. Notes:
+--- - Item line is colored based on whether it was set (dimmed if wasn't).
+--- - Preview shows option value in target window and its general information.
+--- - Choosing places option name in Command line to update and apply.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - options to show. One of "all", "global", "win", "buf".
+---     Default: "all".
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.options = function(local_opts, opts)
+  local pick = H.validate_pick('options')
+  local_opts = vim.tbl_deep_extend('force', { scope = 'all' }, local_opts or {})
+
+  local scope = H.pick_validate_scope(local_opts, { 'all', 'global', 'win', 'buf' }, 'options')
+
+  local items = {}
+  for name, info in pairs(vim.api.nvim_get_all_options_info()) do
+    if scope == 'all' or scope == info.scope then table.insert(items, { text = name, info = info }) end
+  end
+  table.sort(items, function(a, b) return a.text < b.text end)
+
+  local show = function(buf_id, items_to_show, query)
+    pick.default_show(buf_id, items_to_show, query)
+
+    H.pick_clear_namespace(buf_id, H.ns_id.pickers)
+    for i, item in ipairs(items_to_show) do
+      if not item.info.was_set then H.pick_highlight_line(buf_id, i, 'Comment', 199) end
+    end
+  end
+
+  local preview = function(buf_id, item)
+    local pick_windows = pick.get_picker_state().windows
+    local target_win_id = pick_windows.target
+    if not H.is_valid_win(target_win_id) then target_win_id = pick_windows.main end
+    local value_source = ({ global = 'o', win = 'wo', buf = 'bo' })[item.info.scope]
+    local has_value, value = pcall(function()
+      return vim.api.nvim_win_call(target_win_id, function() return vim[value_source][item.info.name] end)
+    end)
+    if not has_value then value = '<Option is deprecated (will be removed in later Neovim versions)>' end
+
+    local lines = { 'Value:', unpack(vim.split(vim.inspect(value), '\n')), '', 'Info:' }
+    local hl_lines = { 1, #lines }
+    lines = vim.list_extend(lines, vim.split(vim.inspect(item.info), '\n'))
+
+    H.set_buflines(buf_id, lines)
+    H.pick_highlight_line(buf_id, hl_lines[1], 'MiniPickHeader', 200)
+    H.pick_highlight_line(buf_id, hl_lines[2], 'MiniPickHeader', 200)
+  end
+
+  local choose = function(item)
+    local keys = string.format(':set %s%s', item.info.name, item.info.type == 'boolean' and '' or '=')
+    vim.schedule(function() vim.fn.feedkeys(keys) end)
+  end
+
+  local name = string.format('Options (%s)', scope)
+  local default_source = { name = name, show = show, preview = preview, choose = choose }
+  return H.pick_start(items, { source = default_source }, opts)
+end
+
+--- Neovim registers picker
+---
+--- Pick from Neovim |registers|. Notes:
+--- - There is no preview as all information is in the item's text.
+--- - Choosing pastes content of a register: with |i_CTRL-R| in Insert mode,
+---   |c_CTRL-R| in Command-line mode, and |P| otherwise. Note: expression
+---   register |quote=| is reevaluated (if present) and pasted.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Not used at the moment.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.registers = function(local_opts, opts)
+  local pick = H.validate_pick('registers')
+
+  local describe_register = function(regname)
+    local ok, value = pcall(vim.fn.getreg, regname, 1)
+    if not ok then return '' end
+    return value
+  end
+
+  local all_registers = vim.split('"*+:.%/#=-0123456789abcdefghijklmnopqrstuvwxyz', '')
+
+  local items = {}
+  for _, regname in ipairs(all_registers) do
+    local regcontents = describe_register(regname)
+    local text = string.format('%s │ %s', regname, regcontents)
+    table.insert(items, { regname = regname, regcontents = regcontents, text = text })
+  end
+
+  local choose = vim.schedule_wrap(function(item)
+    local reg, regcontents, mode = item.regname, item.regcontents, vim.fn.mode()
+    if reg == '=' and regcontents ~= '' then reg = reg .. item.regcontents .. '\r' end
+    local keys = string.format('"%s%s', reg, reg == '=' and '' or 'P')
+    -- In Insert and Command-line modes use `<C-r><regname>`
+    if mode == 'i' or mode == 'c' then keys = '\18' .. reg end
+    vim.fn.feedkeys(keys)
+  end)
+
+  local preview = H.pick_make_no_preview('registers')
+
+  return H.pick_start(items, { source = { name = 'Registers', preview = preview, choose = choose } }, opts)
+end
+
+--- Neovim spell suggestions picker
+---
+--- Pick and apply spell suggestions. Notes:
+--- - No preview is available.
+--- - Choosing replaces current word (|<cword>|) with suggestion.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <n_suggestions> `(number)` - number of spell suggestions. Default: 25.
+---
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.spell = function(local_opts, opts)
+  local pick = H.validate_pick('spell')
+  local_opts = vim.tbl_deep_extend('force', { n_suggestions = 25 }, local_opts or {})
+
+  local n_suggestions = local_opts.n_suggestions
+  if not (type(n_suggestions) == 'number' and n_suggestions > 0) then
+    H.error('`local_opts.n_suggestions` should be a positive number.')
+  end
+
+  local word = vim.fn.expand('<cword>')
+  local suggestions = vim.fn.spellsuggest(word, n_suggestions)
+  local items = {}
+  for i, sugg in ipairs(suggestions) do
+    table.insert(items, { text = sugg, index = i })
+  end
+
+  -- Define scope
+  local preview = H.pick_make_no_preview('spell')
+  local choose = vim.schedule_wrap(function(item) vim.cmd('normal! ' .. item.index .. 'z=') end)
+
+  local name = 'Spell suggestions for ' .. vim.inspect(word)
+  return H.pick_start(items, { source = { name = name, preview = preview, choose = choose } }, opts)
+end
+
 --- Tree-sitter nodes picker
 ---
 --- Pick and navigate to |treesitter| nodes of current buffer. Notes:
@@ -1030,222 +1246,6 @@ MiniExtra.pickers.treesitter = function(local_opts, opts)
   parser:for_each_tree(function(ts_tree, _) traverse(ts_tree:root(), 0) end)
 
   return H.pick_start(items, { source = { name = 'Tree-sitter nodes' } }, opts)
-end
-
---- Neovim lists picker
----
---- Pick and navigate to elements of the following Neovim lists:
---- - |quickfix| list.
---- - |location-list| of current window.
---- - |jumplist|.
---- - |changelist|.
----
---- Note: it requires explicit `scope`.
----
---- Examples ~
----
---- - `MiniExtra.pickers.list({ scope = 'quickfix' })` - quickfix list.
---- - `:Pick list scope='jump'` - jump list.
----
----@param local_opts __extra_pickers_local_opts
----   Possible fields:
----   - <scope> `(string)` - type of list to show. One of "quickfix", "location",
----     "jump", "change". Default: `nil` which means explicit scope is needed.
----@param opts __extra_pickers_opts
----
----@return __extra_pickers_return
-MiniExtra.pickers.list = function(local_opts, opts)
-  local pick = H.validate_pick('list')
-  local_opts = vim.tbl_deep_extend('force', { scope = nil }, local_opts or {})
-
-  if local_opts.scope == nil then H.error('`pickers.list` needs an explicit scope.') end
-  local allowed_scopes = { 'quickfix', 'location', 'jump', 'change' }
-  local scope = H.pick_validate_scope(local_opts, allowed_scopes, 'list')
-
-  local has_items, items = pcall(H.list_get[scope])
-  if not has_items then items = {} end
-
-  items = vim.tbl_filter(function(x) return H.is_valid_buf(x.bufnr) end, items)
-  items = vim.tbl_map(H.list_enhance_item, items)
-
-  local choose = function(item)
-    pick.default_choose(item)
-
-    -- Force 'buflisted' on opened item
-    local win_target = pick.get_picker_state().windows.target
-    local buf_id = vim.api.nvim_win_get_buf(win_target)
-    vim.bo[buf_id].buflisted = true
-  end
-
-  return H.pick_start(items, { source = { name = string.format('List (%s)', scope), choose = choose } }, opts)
-end
-
---- File explorer picker
----
---- Explore file system and open file. Notes:
---- - Choosing a directory navigates inside that directory changing picker's
----   items and current working directory.
---- - Query and preview work as usual, not only `move_next`/`move_prev` can be used.
---- - Preview works for any item.
----
---- Examples ~
----
---- - `MiniExtra.pickers.explorer()`
---- - `:Pick explorer cwd='..'` - open explorer in parent directory.
----
----@param local_opts __extra_pickers_local_opts
----   Possible fields:
----   - <cwd> `(string)` - initial directory to explore. Should be a valid
----     directory path. Default: `nil` for |current-directory|.
----   - <filter> `(function)` - callable predicate to filter items to show.
----     Will be called for every item and should return `true` if it should be
----     shown. Each item is a table with the following fields:
----       - <fs_type> `(string)` - path type. One of "directory" or "file".
----       - <path> `(string)` - file system entry path.
----       - <text> `(string)` - text to show (path's basename).
----   - <sort> `(function)` - callable item sorter. Will be called with array
----     of items (each element with structure as described above) and should
----     return sorted array of items.
----@param opts __extra_pickers_opts
----
----@return __extra_pickers_return
-MiniExtra.pickers.explorer = function(local_opts, opts)
-  local pick = H.validate_pick('explorer')
-
-  local_opts = vim.tbl_deep_extend('force', { cwd = nil, filter = nil, sort = nil }, local_opts or {})
-  local cwd = local_opts.cwd or vim.fn.getcwd()
-  if vim.fn.isdirectory(cwd) == 0 then H.error('`local_opts.cwd` should be valid directory path.') end
-  -- - Call twice "full path" to make sure that possible '..' are collapsed
-  cwd = H.full_path(vim.fn.fnamemodify(cwd, ':p'))
-  local filter = local_opts.filter or function() return true end
-  if not vim.is_callable(filter) then H.error('`local_opts.filter` should be callable.') end
-  local sort = local_opts.sort or H.explorer_default_sort
-  if not vim.is_callable(sort) then H.error('`local_opts.sort` should be callable.') end
-
-  -- Define source
-  local choose = function(item)
-    local path = item.path
-    if vim.fn.filereadable(path) == 1 then return pick.default_choose(path) end
-    if vim.fn.isdirectory(path) == 0 then return false end
-
-    pick.set_picker_items(H.explorer_make_items(path, filter, sort))
-    pick.set_picker_opts({ source = { cwd = path } })
-    pick.set_picker_query({})
-    return true
-  end
-
-  local show = H.pick_get_config().source.show or H.show_with_icons
-
-  local items = H.explorer_make_items(cwd, filter, sort)
-  local source = { items = items, name = 'File explorer', cwd = cwd, show = show, choose = choose }
-  opts = vim.tbl_deep_extend('force', { source = source }, opts or {})
-  return pick.start(opts)
-end
-
---- Matches from 'mini.hipatterns' picker
----
---- Pick from |MiniHipatterns| matches using |MiniHipatterns.get_matches()|.
---- Notes:
---- - Requires 'mini.hipatterns'.
---- - Highlighter identifier is highlighted with its highlight group.
----
----@param local_opts __extra_pickers_local_opts
----   Possible fields:
----   - <scope> `(string)` - one of "all" (buffers with enabled
----     'mini.hipatterns') or "current" (buffer). Default: "all".
----   - <highlighters> `(table|nil)` - highlighters for which to find matches.
----     Forwarded to |MiniHipatterns.get_matches()|. Default: `nil`.
----@param opts __extra_pickers_opts
----
----@return __extra_pickers_return
-MiniExtra.pickers.hipatterns = function(local_opts, opts)
-  local pick = H.validate_pick('hipatterns')
-  local has_hipatterns, hipatterns = pcall(require, 'mini.hipatterns')
-  if not has_hipatterns then H.error([[`pickers.hipatterns` requires 'mini.hipatterns' which can not be found.]]) end
-
-  local_opts = vim.tbl_deep_extend('force', { highlighters = nil, scope = 'all' }, local_opts or {})
-  if local_opts.highlighters ~= nil and not vim.tbl_islist(local_opts.highlighters) then
-    H.error('`local_opts.highlighters` should be an array of highlighter identifiers.')
-  end
-  local highlighters = local_opts.highlighters
-  local scope = H.pick_validate_scope(local_opts, { 'all', 'current' }, 'hipatterns')
-
-  -- Get items
-  local buffers = scope == 'all' and hipatterns.get_enabled_buffers() or { vim.api.nvim_get_current_buf() }
-  local items, highlighter_width = {}, 0
-  for _, buf_id in ipairs(buffers) do
-    local lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
-    local buf_name = H.buf_get_name(buf_id)
-    if buf_name == '' then buf_name = 'Buffer_' .. buf_id end
-
-    for _, match in ipairs(hipatterns.get_matches(buf_id, highlighters)) do
-      match.highlighter = tostring(match.highlighter)
-      match.buf_name, match.line = buf_name, lines[match.lnum]
-      table.insert(items, match)
-      highlighter_width = math.max(highlighter_width, vim.fn.strchars(match.highlighter))
-    end
-  end
-
-  for _, item in ipairs(items) do
-    --stylua: ignore
-    item.text = string.format(
-      '%s │ %s:%d:%d:%s',
-      H.ensure_text_width(item.highlighter, highlighter_width),
-      item.buf_name, item.lnum, item.col, item.line
-    )
-    item.buf_name, item.line = nil, nil
-  end
-
-  local show = function(buf_id, items_to_show, query)
-    pick.default_show(buf_id, items_to_show, query)
-
-    H.pick_clear_namespace(buf_id, H.ns_id.pickers)
-    for i, item in ipairs(items_to_show) do
-      local end_col = string.len(item.highlighter)
-      local extmark_opts = { hl_group = item.hl_group, end_row = i - 1, end_col = end_col, priority = 1 }
-      vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.pickers, i - 1, 0, extmark_opts)
-    end
-  end
-
-  local name = string.format('Mini.hipatterns matches (%s)', scope)
-  return H.pick_start(items, { source = { name = name, show = show } }, opts)
-end
-
---- Neovim spell suggestions picker
----
---- Pick and apply spell suggestions. Notes:
---- - No preview is available.
---- - Choosing replaces current word (|<cword>|) with suggestion.
----
----@param local_opts __extra_pickers_local_opts
----   Possible fields:
----   - <n_suggestions> `(number)` - number of spell suggestions. Default: 25.
----
----@param opts __extra_pickers_opts
----
----@return __extra_pickers_return
-MiniExtra.pickers.spell = function(local_opts, opts)
-  local pick = H.validate_pick('spell')
-  local_opts = vim.tbl_deep_extend('force', { n_suggestions = 25 }, local_opts or {})
-
-  local n_suggestions = local_opts.n_suggestions
-  if not (type(n_suggestions) == 'number' and n_suggestions > 0) then
-    H.error('`local_opts.n_suggestions` should be a positive number.')
-  end
-
-  local word = vim.fn.expand('<cword>')
-  local suggestions = vim.fn.spellsuggest(word, n_suggestions)
-  local items = {}
-  for i, sugg in ipairs(suggestions) do
-    table.insert(items, { text = sugg, index = i })
-  end
-
-  -- Define scope
-  local preview = H.pick_make_no_preview('spell')
-  local choose = vim.schedule_wrap(function(item) vim.cmd('normal! ' .. item.index .. 'z=') end)
-
-  local name = 'Spell suggestions for ' .. vim.inspect(word)
-  return H.pick_start(items, { source = { name = name, preview = preview, choose = choose } }, opts)
 end
 
 -- Register in 'mini.pick'
