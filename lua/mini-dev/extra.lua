@@ -1211,6 +1211,43 @@ MiniExtra.pickers.hipatterns = function(local_opts, opts)
   return H.pick_start(items, { source = { name = name, show = show } }, opts)
 end
 
+--- Neovim spell suggestions picker
+---
+--- Pick and apply spell suggestions. Notes:
+--- - No preview is available.
+--- - Choosing replaces current word (|<cword>|) with suggestion.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <n_suggestions> `(number)` - number of spell suggestions. Default: 25.
+---
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
+MiniExtra.pickers.spell = function(local_opts, opts)
+  local pick = H.validate_pick('spell')
+  local_opts = vim.tbl_deep_extend('force', { n_suggestions = 25 }, local_opts or {})
+
+  local n_suggestions = local_opts.n_suggestions
+  if not (type(n_suggestions) == 'number' and n_suggestions > 0) then
+    H.error('`local_opts.n_suggestions` should be a positive number.')
+  end
+
+  local word = vim.fn.expand('<cword>')
+  local suggestions = vim.fn.spellsuggest(word, n_suggestions)
+  local items = {}
+  for i, sugg in ipairs(suggestions) do
+    table.insert(items, { text = sugg, index = i })
+  end
+
+  -- Define scope
+  local preview = H.pick_make_no_preview('spell')
+  local choose = vim.schedule_wrap(function(item) vim.cmd('normal! ' .. item.index .. 'z=') end)
+
+  local name = 'Spell suggestions for ' .. vim.inspect(word)
+  return H.pick_start(items, { source = { name = name, preview = preview, choose = choose } }, opts)
+end
+
 -- Register in 'mini.pick'
 if type(_G.MiniPick) == 'table' then
   for name, f in pairs(MiniExtra.pickers) do

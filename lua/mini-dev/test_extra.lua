@@ -2612,4 +2612,56 @@ T['pickers']['hipatterns()']['validates arguments'] = function()
   validate({ highlighters = '1' }, '`local_opts%.highlighters.*array')
 end
 
+T['pickers']['spell()'] = new_set()
+
+local pick_spell = forward_lua_notify('MiniExtra.pickers.spell')
+
+local setup_spell = function()
+  set_lines({ 'hello wold' })
+  set_cursor(1, 8)
+end
+
+T['pickers']['spell()']['works'] = function()
+  child.set_size(15, 70)
+
+  setup_spell()
+  child.lua_notify('_G.return_item = MiniExtra.pickers.spell()')
+  validate_picker_name('Spell suggestions for "wold"')
+  eq(#get_picker_items(), 25)
+  child.expect_screenshot()
+
+  -- Should have no preview
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  -- Should properly choose by replacing suggestion
+  type_keys('<CR>')
+  eq(get_lines(), { 'hello world' })
+  eq(get_cursor(), { 1, 6 })
+
+  -- Should return chosen value
+  eq(child.lua_get('_G.return_item'), { index = 1, text = 'world' })
+end
+
+T['pickers']['spell()']['respects `local_opts.n_suggestions`'] = function()
+  setup_spell()
+  pick_spell({ n_suggestions = 10 })
+  eq(#get_picker_items(), 10)
+end
+
+T['pickers']['spell()']['respects `opts`'] = function()
+  setup_spell()
+  pick_spell({}, { source = { name = 'My name' } })
+  validate_picker_name('My name')
+end
+
+T['pickers']['spell()']['validates arguments'] = function()
+  local validate = function(local_opts, error_pattern)
+    expect.error(function() child.lua('MiniExtra.pickers.spell(...)', { local_opts }) end, error_pattern)
+  end
+
+  validate({ n_suggestions = '1' }, '`local_opts%.n_suggestions.*number')
+  validate({ n_suggestions = 0 }, '`local_opts%.n_suggestions.*positive')
+end
+
 return T
