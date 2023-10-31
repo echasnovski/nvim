@@ -964,7 +964,7 @@ end
 ---
 --- - `MiniExtra.pickers.lsp({ scope = 'references' })` - references of the
 ---   symbol under cursor.
---- - `:Pick lsp document_symbol` - symbols in current file.
+--- - `:Pick lsp scope='document_symbol'` - symbols in current file.
 ---
 ---@param local_opts table Options defining behavior of this particular picker.
 ---   Possible fields:
@@ -978,7 +978,7 @@ MiniExtra.pickers.lsp = function(local_opts, opts)
   local pick = H.validate_pick('lsp')
   local_opts = vim.tbl_deep_extend('force', { scope = nil }, local_opts or {})
 
-  if local_opts.scope == nil then H.error('`pickers.lsp` needs explicit scope.') end
+  if local_opts.scope == nil then H.error('`pickers.lsp` needs an explicit scope.') end
   --stylua: ignore
   local allowed_scopes = {
     'declaration', 'definition', 'document_symbol', 'implementation', 'references', 'type_definition', 'workspace_symbol',
@@ -990,14 +990,24 @@ MiniExtra.pickers.lsp = function(local_opts, opts)
   vim.lsp.buf[scope]({ on_list = H.lsp_make_on_list(scope, opts) })
 end
 
+--- Tree-sitter nodes picker
+---
+--- Pick and navigate to |treesitter| nodes of current buffer. Notes:
+--- - Requires Neovim>=0.8.
+--- - Requires active tree-sitter parser in the current buffer.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Not used at the moment.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.treesitter = function(local_opts, opts)
-  if vim.fn.has('nvim-0.8') == 0 then H.error('`treesitter` picker requires Neovim>=0.8.') end
+  if vim.fn.has('nvim-0.8') == 0 then H.error('`pickers.treesitter` requires Neovim>=0.8.') end
   local pick = H.validate_pick('treesitter')
-  local_opts = local_opts or {}
 
   local buf_id = vim.api.nvim_get_current_buf()
-  local parser = vim.treesitter.get_parser(buf_id)
-  if parser == nil then H.error('`treesitter` picker requires active tree-sitter parser.') end
+  local has_parser, parser = pcall(vim.treesitter.get_parser, buf_id)
+  if not has_parser or parser == nil then H.error('`pickers.treesitter` requires active tree-sitter parser.') end
 
   -- Make items by traversing roots of all trees (including injections)
   local items, traverse = {}, nil
@@ -1022,11 +1032,33 @@ MiniExtra.pickers.treesitter = function(local_opts, opts)
   return H.pick_start(items, { source = { name = 'Tree-sitter nodes' } }, opts)
 end
 
+--- Neovim lists picker
+---
+--- Pick and navigate to elements of the following Neovim lists:
+--- - |quickfix| list.
+--- - |location-list| of current window.
+--- - |jumplist|.
+--- - |changelist|.
+---
+--- Note: it requires explicit `scope`.
+---
+--- Examples ~
+---
+--- - `MiniExtra.pickers.list({ scope = 'quickfix' })` - quickfix list.
+--- - `:Pick list scope='jump'` - jump list.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - type of list to show. One of "quickfix", "location",
+---     "jump", "change". Default: `nil` which means explicit scope is needed.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.list = function(local_opts, opts)
   local pick = H.validate_pick('list')
   local_opts = vim.tbl_deep_extend('force', { scope = nil }, local_opts or {})
 
-  if local_opts.scope == nil then H.error('`list` picker needs explicit scope.') end
+  if local_opts.scope == nil then H.error('`pickers.list` needs an explicit scope.') end
   local allowed_scopes = { 'quickfix', 'location', 'jump', 'change' }
   local scope = H.pick_validate_scope(local_opts, allowed_scopes, 'list')
 
@@ -1048,17 +1080,53 @@ MiniExtra.pickers.list = function(local_opts, opts)
   return H.pick_start(items, { source = { name = string.format('List (%s)', scope), choose = choose } }, opts)
 end
 
+--- File explorer picker
+---
+--- Explore file system and open file. Notes:
+--- - Choosing a directory navigates inside that directory changing picker's
+---   items and current working directory.
+--- - Query and preview work as usual, not only `move_next`/`move_prev` can be used.
+--- - Preview works for any item.
+---
+--- Examples ~
+---
+--- - `MiniExtra.pickers.explorer()`
+--- - `:Pick explorer cwd='..'` - open explorer in parent directory.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <cwd> `(string)` - initial directory to explore. Should be a valid
+---     directory path. Default: `nil` for |current-directory|.
+---   - <filter> `(function)` - callable predicate to filter items to show.
+---     Will be called for every item and should return `true` if it should be
+---     shown. Each item is a table with the following fields:
+---       - <fs_type> `(string)` - path type. One of "directory" or "file".
+---       - <path> `(string)` - file system entry path.
+---       - <text> `(string)` - text to show (path's basename).
+---   - <sort> `(function)` - callable item sorter. Will be called with array
+---     of items (each element with structure as described above) and should
+---     return sorted array of items.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.explorer = function(local_opts, opts)
   local pick = H.validate_pick('explorer')
+
   local_opts = vim.tbl_deep_extend('force', { cwd = nil, filter = nil, sort = nil }, local_opts or {})
+  local cwd = local_opts.cwd or vim.fn.getcwd()
+  if vim.fn.isdirectory(cwd) == 0 then H.error('`local_opts.cwd` should be valid directory path.') end
+  -- - Call twice "full path" to make sure that possible '..' are collapsed
+  cwd = H.full_path(vim.fn.fnamemodify(cwd, ':p'))
   local filter = local_opts.filter or function() return true end
   if not vim.is_callable(filter) then H.error('`local_opts.filter` should be callable.') end
   local sort = local_opts.sort or H.explorer_default_sort
   if not vim.is_callable(sort) then H.error('`local_opts.sort` should be callable.') end
 
+  -- Define source
   local choose = function(item)
     local path = item.path
     if vim.fn.filereadable(path) == 1 then return pick.default_choose(path) end
+    if vim.fn.isdirectory(path) == 0 then return false end
 
     pick.set_picker_items(H.explorer_make_items(path, filter, sort))
     pick.set_picker_opts({ source = { cwd = path } })
@@ -1066,21 +1134,40 @@ MiniExtra.pickers.explorer = function(local_opts, opts)
     return true
   end
 
-  local show = function(buf_id, items, query) return pick.default_show(buf_id, items, query, { show_icons = true }) end
+  local show = H.pick_get_config().source.show or H.show_with_icons
 
-  local cwd = vim.fn.getcwd()
   local items = H.explorer_make_items(cwd, filter, sort)
   local source = { items = items, name = 'File explorer', cwd = cwd, show = show, choose = choose }
   opts = vim.tbl_deep_extend('force', { source = source }, opts or {})
   return pick.start(opts)
 end
 
+--- Matches from 'mini.hipatterns' picker
+---
+--- Pick from |MiniHipatterns| matches using |MiniHipatterns.get_matches()|.
+--- Notes:
+--- - Requires 'mini.hipatterns'.
+--- - Highlighter identifier is highlighted with its highlight group.
+---
+---@param local_opts __extra_pickers_local_opts
+---   Possible fields:
+---   - <scope> `(string)` - one of "all" (buffers with enabled
+---     'mini.hipatterns') or "current" (buffer). Default: "all".
+---   - <highlighters> `(table|nil)` - highlighters for which to find matches.
+---     Forwarded to |MiniHipatterns.get_matches()|. Default: `nil`.
+---@param opts __extra_pickers_opts
+---
+---@return __extra_pickers_return
 MiniExtra.pickers.hipatterns = function(local_opts, opts)
   local pick = H.validate_pick('hipatterns')
   local has_hipatterns, hipatterns = pcall(require, 'mini.hipatterns')
-  if not has_hipatterns then H.error([[`pickers.hipatterns()` requires 'mini.hipatterns' which can not be found.]]) end
+  if not has_hipatterns then H.error([[`pickers.hipatterns` requires 'mini.hipatterns' which can not be found.]]) end
 
-  local_opts = vim.tbl_deep_extend('force', { scope = 'all', highlighters = nil }, local_opts or {})
+  local_opts = vim.tbl_deep_extend('force', { highlighters = nil, scope = 'all' }, local_opts or {})
+  if local_opts.highlighters ~= nil and not vim.tbl_islist(local_opts.highlighters) then
+    H.error('`local_opts.highlighters` should be an array of highlighter identifiers.')
+  end
+  local highlighters = local_opts.highlighters
   local scope = H.pick_validate_scope(local_opts, { 'all', 'current' }, 'hipatterns')
 
   -- Get items
@@ -1088,8 +1175,10 @@ MiniExtra.pickers.hipatterns = function(local_opts, opts)
   local items, highlighter_width = {}, 0
   for _, buf_id in ipairs(buffers) do
     local lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
-    local buf_name = H.buf_get_name(buf_id) or ''
-    for _, match in ipairs(hipatterns.get_matches(buf_id, local_opts.highlighters)) do
+    local buf_name = H.buf_get_name(buf_id)
+    if buf_name == '' then buf_name = 'Buffer_' .. buf_id end
+
+    for _, match in ipairs(hipatterns.get_matches(buf_id, highlighters)) do
       match.highlighter = tostring(match.highlighter)
       match.buf_name, match.line = buf_name, lines[match.lnum]
       table.insert(items, match)
@@ -1113,8 +1202,8 @@ MiniExtra.pickers.hipatterns = function(local_opts, opts)
     H.pick_clear_namespace(buf_id, H.ns_id.pickers)
     for i, item in ipairs(items_to_show) do
       local end_col = string.len(item.highlighter)
-      local opts = { hl_group = item.hl_group, end_row = i - 1, end_col = end_col, priority = 1 }
-      vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.pickers, i - 1, 0, opts)
+      local extmark_opts = { hl_group = item.hl_group, end_row = i - 1, end_col = end_col, priority = 1 }
+      vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.pickers, i - 1, 0, extmark_opts)
     end
   end
 
@@ -1180,13 +1269,13 @@ H.pick_prepend_position = function(item)
     path = item.path
   elseif H.is_valid_buf(item.bufnr) then
     local name = vim.api.nvim_buf_get_name(item.bufnr)
-    if name ~= '' then path = name end
+    path = name == '' and ('Buffer_' .. item.bufnr) or name
   end
   if path == nil then return item end
 
   path = vim.fn.fnamemodify(path, ':p:.')
-  local cur_text = item.text
-  local suffix = (cur_text == nil or cur_text == '') and '' or (': ' .. item.text)
+  local text = item.text or ''
+  local suffix = text == '' and '' or (': ' .. text)
   item.text = string.format('%s:%s:%s%s', path, item.lnum or 1, item.col or 1, suffix)
   return item
 end
@@ -1266,7 +1355,7 @@ H.validate_git = function(picker_name)
 end
 
 H.git_normalize_path = function(path, picker_name)
-  local path = type(path) == 'string' and path or vim.fn.getcwd()
+  path = type(path) == 'string' and path or vim.fn.getcwd()
   if path == '' then H.error(string.format('Path in `%s` is empty.', picker_name)) end
   path = H.full_path(path)
   local path_is_dir, path_is_file = vim.fn.isdirectory(path) == 1, vim.fn.filereadable(path) == 1
@@ -1419,10 +1508,10 @@ H.list_get = {
   end,
 
   change = function()
-    local res = vim.fn.getchangelist()[1]
     local cur_buf = vim.api.nvim_get_current_buf()
+    local res = vim.fn.getchangelist(cur_buf)[1]
     for _, x in ipairs(res) do
-      res.bufnr = cur_buf
+      x.bufnr = cur_buf
     end
     return res
   end,
@@ -1431,6 +1520,10 @@ H.list_get = {
 H.list_enhance_qf_loc = function(item)
   if item.end_lnum == 0 then item.end_lnum = nil end
   if item.end_col == 0 then item.end_col = nil end
+  if H.is_valid_buf(item.bufnr) then
+    local filename = vim.api.nvim_buf_get_name(item.bufnr)
+    if filename ~= '' then item.filename = filename end
+  end
   return item
 end
 
@@ -1442,9 +1535,11 @@ end
 -- Explorer picker ------------------------------------------------------------
 H.explorer_make_items = function(path, filter, sort)
   if vim.fn.isdirectory(path) == 0 then return {} end
-  local res = { { path = vim.fn.fnamemodify(path, ':h'), text = '..' } }
+  local res = { { fs_type = 'directory', path = vim.fn.fnamemodify(path, ':h'), text = '..' } }
   for _, basename in ipairs(vim.fn.readdir(path)) do
-    table.insert(res, { path = string.format('%s/%s', path, basename), text = basename })
+    local subpath = string.format('%s/%s', path, basename)
+    local fs_type = vim.fn.isdirectory(subpath) == 1 and 'directory' or 'file'
+    table.insert(res, { fs_type = fs_type, path = subpath, text = basename .. (fs_type == 'directory' and '/' or '') })
   end
 
   return sort(vim.tbl_filter(filter, res))
@@ -1452,10 +1547,13 @@ end
 
 H.explorer_default_sort = function(items)
   -- Sort ignoring case
-  local res = vim.tbl_map(
-    function(x) return { path = x.path, text = x.text, is_dir = vim.fn.isdirectory(x.path) == 1, lower_name = x.text:lower() } end,
-    items
-  )
+  local res = vim.tbl_map(function(x)
+      --stylua: ignore
+      return {
+        fs_type = x.fs_type, path = x.path, text = x.text,
+        is_dir = x.fs_type == 'directory', lower_name = x.text:lower(),
+      }
+  end, items)
 
   local compare = function(a, b)
     -- Put directory first
@@ -1468,7 +1566,7 @@ H.explorer_default_sort = function(items)
 
   table.sort(res, compare)
 
-  return vim.tbl_map(function(x) return { path = x.path, text = x.text } end, res)
+  return vim.tbl_map(function(x) return { fs_type = x.fs_type, path = x.path, text = x.text } end, res)
 end
 
 -- CLI ------------------------------------------------------------------------
