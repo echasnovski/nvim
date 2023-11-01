@@ -540,6 +540,136 @@ T['gen_ai_spec']['line()']['works as `i` textobject'] = function()
   validate_edit({ '  aa', '  bb' }, { 1, 0 }, { 'ciL', 'xx', '<Esc>', 'j', '.' }, { '  xx', '  xx' }, { 2, 3 })
 end
 
+T['gen_ai_spec']['number()'] = new_set()
+
+T['gen_ai_spec']['number()']['works as `a` textobject'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { N = MiniExtra.gen_ai_spec.number() } })]])
+
+  set_lines({ '111', '-222', '3.33', '-4.44' })
+
+  set_cursor(1, 0)
+  type_keys('v', 'aN')
+  validate_selection({ 1, 0 }, { 1, 2 })
+
+  -- Consecutive application should work
+  type_keys('aN')
+  validate_selection({ 2, 0 }, { 2, 3 })
+
+  -- Should support `[count]`
+  type_keys('2aN')
+  validate_selection({ 4, 0 }, { 4, 4 })
+
+  -- Should support `next`/`prev`
+  type_keys('alN')
+  validate_selection({ 3, 0 }, { 3, 3 })
+
+  type_keys('anN')
+  validate_selection({ 4, 0 }, { 4, 4 })
+end
+
+--stylua: ignore
+T['gen_ai_spec']['number()']['works as `a` in all necessary cases'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { N = MiniExtra.gen_ai_spec.number() } })]])
+
+  local validate = function(number_string)
+    local ref_output = number_string:gsub('.', 'x')
+    validate_edit1d(number_string, 0, {'vaN', 'rx'}, ref_output, 0)
+  end
+
+  validate('1')
+  validate('11')
+  validate('-2')
+  validate('-22')
+  validate('3.3')
+  validate('3.33')
+  validate('33.3')
+  validate('-4.4')
+  validate('-4.44')
+  validate('-44.4')
+
+  validate('00')
+  validate('-00')
+  validate('00.00')
+  validate('-00.00')
+
+  validate_edit1d('-.11', 0, { 'vaN', 'rx' }, '-.xx', 2)
+  validate_edit1d('.11',  0, { 'vaN', 'rx' }, '.xx',  1)
+end
+
+T['gen_ai_spec']['number()']['works as `i` textobject'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { N = MiniExtra.gen_ai_spec.number() } })]])
+
+  set_lines({ '11.2-33 44' })
+
+  set_cursor(1, 0)
+  type_keys('v', 'iN')
+  validate_selection({ 1, 0 }, { 1, 1 })
+
+  -- Consecutive application should work
+  type_keys('iN')
+  validate_selection({ 1, 3 }, { 1, 3 })
+
+  -- Should support `[count]`
+  type_keys('2iN')
+  validate_selection({ 1, 8 }, { 1, 9 })
+
+  -- Should support `next`/`prev`
+  type_keys('ilN')
+  validate_selection({ 1, 5 }, { 1, 6 })
+
+  type_keys('inN')
+  validate_selection({ 1, 8 }, { 1, 9 })
+end
+
+T['gen_ai_spec']['number()']['works as `i` in all necessary cases'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { N = MiniExtra.gen_ai_spec.number() } })]])
+
+  local validate = function(line_before, line_after, col_after)
+    validate_edit1d(line_before, 0, { 'viN', 'rx' }, line_after, col_after)
+  end
+
+  validate('1', 'x', 0)
+  validate('11', 'xx', 0)
+  validate('-2', '-x', 1)
+  validate('-22', '-xx', 1)
+  validate(' 3.3', ' x.3', 1)
+  validate(' 3.33', ' x.33', 1)
+  validate('33.3', 'xx.3', 0)
+  validate('-4.4', '-x.4', 1)
+  validate('-4.44', '-x.44', 1)
+  validate('-44.4', '-xx.4', 1)
+
+  validate('00', 'xx', 0)
+  validate('-00', '-xx', 1)
+  validate('00.00', 'xx.00', 0)
+  validate('-00.00', '-xx.00', 1)
+
+  validate('.11', '.xx', 1)
+  validate('-.11', '-.xx', 2)
+  validate_edit1d('11.22', 3, { 'viN', 'rx' }, '11.xx', 3)
+end
+
+T['gen_ai_spec']['number()']['works with cursor on any part of match'] = function()
+  child.lua([[require('mini.ai').setup({ custom_textobjects = { N = MiniExtra.gen_ai_spec.number() } })]])
+
+  -- `a` textobject
+  set_lines({ '-123.456 789' })
+  for i = 0, 7 do
+    child.ensure_normal_mode()
+    set_cursor(1, i)
+    type_keys('v', 'aN')
+    validate_selection({ 1, 0 }, { 1, 7 })
+  end
+
+  -- `i` textobject
+  for i = 8, 11 do
+    child.ensure_normal_mode()
+    set_cursor(1, i)
+    type_keys('v', 'iN')
+    validate_selection({ 1, 9 }, { 1, 11 })
+  end
+end
+
 T['gen_highlighter'] = new_set({ hooks = { pre_case = load_module } })
 
 T['gen_highlighter']['words()'] = new_set()

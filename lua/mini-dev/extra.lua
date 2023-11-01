@@ -1,13 +1,3 @@
--- TODO:
---
--- - 'mini.ai':
---
--- Tests:
---
---
--- Docs:
---
-
 --- *mini.extra* Extra 'mini.nvim' functionality
 --- *MiniExtra*
 ---
@@ -17,20 +7,31 @@
 ---
 --- Features:
 ---
+--- - Various pickers for 'mini.pick'. See |MiniExtra.pickers|.
+--- - Various textobject specifications for 'mini.ai'. See |MiniExtra.gen_ai_spec|.
+--- - Various highlighters for 'mini.hipatterns'. See |MiniExtra.gen_highlighter|.
+---
+--- Notes:
+--- - This module requires only those 'mini.nvim' modules which are needed for
+---   a particular functionality: 'mini.pick' for pickers, etc.
+---
 --- # Setup ~
 ---
---- This module needs a setup with `require('mini.extra').setup({})` (replace
---- `{}` with your `config` table). It will create global Lua table `MiniExtra`
---- which you can use for scripting or manually (with `:lua MiniExtra.*`).
+--- This module doesn't need setup, but it can be done to improve usability.
+--- Setup with `require('mini.extra').setup({})` (replace `{}` with your
+--- `config` table). It will create global Lua table `MiniExtra` which you can
+--- use for scripting or manually (with `:lua MiniExtra.*`).
 ---
---- See |MiniExtra.config| for available config settings.
+--- See |MiniExtra.config| for `config` structure and default values.
 ---
---- This module doesn't have runtime options, so using `vim.b.minimisc_config`
+--- This module doesn't have runtime options, so using `vim.b.miniextra_config`
 --- will have no effect here.
 ---
 --- # Comparisons ~
 ---
---- - 'chrisgrieser/nvim-various-textobjs':
+--- - 'nvim-telescope/telescope.nvim' and 'ibhagwan/fzf-lua':
+---     - With |MiniExtra.pickers|, 'mini.pick' is reasonably on par with regard
+---       to built-in pickers.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -93,6 +94,7 @@ MiniExtra.config = {}
 ---       D = gen_ai_spec.diagnostic(),
 ---       I = gen_ai_spec.indent(),
 ---       L = gen_ai_spec.line(),
+---       N = gen_ai_spec.number(),
 ---     },
 ---   })
 MiniExtra.gen_ai_spec = {}
@@ -188,6 +190,52 @@ MiniExtra.gen_ai_spec.line = function()
     local to_col = line:len()
 
     return { from = { line = line_num, col = from_col }, to = { line = line_num, col = to_col } }
+  end
+end
+
+--- Number textobject
+---
+--- Notes:
+--- - `a` textobject selects a whole number possibly preceded with "-" and
+---   possibly followed by decimal part (dot and digits).
+--- - `i` textobject selects consecutive digits.
+---
+---@return __extra_ai_spec_return
+MiniExtra.gen_ai_spec.number = function()
+  local digits_pattern = '%f[%d]%d+%f[%D]'
+
+  local find_a_number = function(line, init)
+    -- First find consecutive digits
+    local from, to = line:find(digits_pattern, init)
+    if from == nil then return nil, nil end
+
+    -- Make sure that hese digits were not processed before. This can happen
+    -- because 'miin.ai' does next with `init = from + 1`, meaning that
+    -- "-12.34" was already matched, then it would try to match starting from
+    -- "1": we want to avoid matching that right away and avoid matching "34"
+    -- from this number.
+    if from == init and line:sub(from - 1, from - 1) == '-' then
+      init = to + 1
+      from, to = line:find(digits_pattern, init)
+    end
+    if from == nil then return nil, nil end
+
+    if line:sub(from - 2):find('^%d%.') ~= nil then
+      init = to + 1
+      from, to = line:find(digits_pattern, init)
+    end
+    if from == nil then return nil, nil end
+
+    -- Match the whole number with minus and decimal part
+    if line:sub(from - 1, from - 1) == '-' then from = from - 1 end
+    local dec_part = line:sub(to + 1):match('^%.%d+()')
+    if dec_part ~= nil then to = to + dec_part - 1 end
+    return from, to
+  end
+
+  return function(ai_type)
+    if ai_type == 'i' then return { digits_pattern } end
+    return { find_a_number, { '^().*()$' } }
   end
 end
 
