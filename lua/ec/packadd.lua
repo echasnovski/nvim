@@ -19,69 +19,70 @@ end
 -- for plugins that are not directly related to startup process.
 --
 -- @param plugin String with name of plugin as subdirectory in 'pack'
-local packadd_defer = function(plugin)
-  vim.schedule(function() packadd(plugin) end)
+local packadd_later = function(plugin)
+  EC.later(function() packadd(plugin) end)
 end
 
 -- Collection of minimal and fast Lua modules
-packadd('mini')
+EC.now(function() packadd('mini') end)
 
 if vim.fn.exists('vscode') ~= 1 then
-  -- Common dependency for Lua plugins
-  packadd('plenary')
-
   -- Colorful icons
   packadd('nvim-web-devicons')
+
+  -- -- Common dependency for Lua plugins
+  packadd_later('plenary')
 
   -- Treesitter: advanced syntax parsing. Add highlighting and text objects.
   -- NOTE: when opening file directly (`nvim <file>`) defered initialization
   -- results into highlighting change right after opening. If it bothers,
   -- change to `packadd()`.
-  packadd_defer('nvim-treesitter')
-  packadd_defer('nvim-treesitter-textobjects')
+  packadd_later('nvim-treesitter')
+  packadd_later('nvim-treesitter-textobjects')
 
   -- Fuzzy finder
-  packadd_defer('telescope')
+  packadd_later('telescope')
 
   -- Interact with hunks
-  packadd_defer('gitsigns')
+  packadd_later('gitsigns')
 
   -- Language server configurations
-  packadd_defer('nvim-lspconfig')
+  packadd_later('nvim-lspconfig')
 
   -- Tweak Neovim's terminal to be more REPL-aware
-  packadd_defer('neoterm')
+  packadd_later('neoterm')
 
   -- Usage of external actions (formatting, diagnostics, etc.)
-  packadd_defer('null-ls')
+  packadd_later('null-ls')
 
   -- Snippets engine
-  packadd_defer('luasnip')
+  packadd_later('luasnip')
 
   -- Documentation generator
-  packadd_defer('neogen')
+  packadd_later('neogen')
 
   -- Test runner
-  packadd_defer('vim-test')
+  packadd_later('vim-test')
 
   -- Helper to populate quickfix list with test results
-  packadd_defer('vim-dispatch')
+  packadd_later('vim-dispatch')
 
   -- Filetype: csv
-  packadd_defer('rainbow_csv')
+  vim.g.disable_rainbow_csv_autodetect = true
+  packadd_later('rainbow_csv')
 
   -- Filetype: pandoc and rmarkdown
   -- This option should be set before loading plugin to take effect. See
   -- https://github.com/vim-pandoc/vim-pandoc/issues/342
   vim.g['pandoc#filetypes#pandoc_markdown'] = 0
   -- vim.cmd([[let g:pandoc#filetypes#pandoc_markdown = 0]])
-  packadd_defer('vim-pandoc')
-  packadd_defer('vim-pandoc-syntax')
-  packadd_defer('vim-rmarkdown')
+  packadd_later('vim-pandoc')
+  packadd_later('vim-pandoc-syntax')
+  packadd_later('vim-rmarkdown')
 
   -- Markdown preview (has rather big disk size usage, around 50M)
   -- NOTE: this exact name is important to make plugin work
-  packadd_defer('markdown-preview.nvim')
+  packadd_later('markdown-preview.nvim')
 end
 
 -- Do plugin hooks (find a better way to do this; maybe after custom update)
@@ -101,4 +102,4 @@ local plugin_hooks = function()
   end
 end
 
-vim.schedule(plugin_hooks)
+EC.later(plugin_hooks)

@@ -1,70 +1,76 @@
-vim.cmd('colorscheme randomhue')
+local now, later = EC.now, EC.later
 
-require('mini.sessions').setup({ directory = vim.fn.stdpath('config') .. '/misc/sessions' })
+-- Step one -------------------------------------------------------------------
+now(function() vim.cmd('colorscheme randomhue') end)
 
-require('mini.starter').setup()
-vim.cmd([[autocmd User MiniStarterOpened
-  \ lua vim.keymap.set(
-  \   'n',
-  \   '<CR>',
-  \   '<Cmd>lua MiniStarter.eval_current_item(); MiniMap.open()<CR>',
-  \   { buffer = true }
-  \ )]])
+now(function() require('mini.sessions').setup({ directory = vim.fn.stdpath('config') .. '/misc/sessions' }) end)
 
-require('mini.statusline').setup({
-  content = {
-    active = function()
-      -- stylua: ignore start
-      local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
-      local spell         = vim.wo.spell and (MiniStatusline.is_truncated(120) and 'S' or 'SPELL') or ''
-      local wrap          = vim.wo.wrap  and (MiniStatusline.is_truncated(120) and 'W' or 'WRAP')  or ''
-      local git           = MiniStatusline.section_git({ trunc_width = 75 })
-      -- Default diagnstics icon has some problems displaying in Kitty terminal
-      local diagnostics   = MiniStatusline.section_diagnostics({ trunc_width = 75 })
-      local filename      = MiniStatusline.section_filename({ trunc_width = 140 })
-      local fileinfo      = MiniStatusline.section_fileinfo({ trunc_width = 120 })
-      local searchcount   = MiniStatusline.section_searchcount({ trunc_width = 75})
-      local location      = MiniStatusline.section_location({ trunc_width = 75 })
+now(function() require('mini.starter').setup() end)
 
-      -- Usage of `MiniStatusline.combine_groups()` ensures highlighting and
-      -- correct padding with spaces between groups (accounts for 'missing'
-      -- sections, etc.)
-      return MiniStatusline.combine_groups({
-        { hl = mode_hl,                  strings = { mode, spell, wrap } },
-        { hl = 'MiniStatuslineDevinfo',  strings = { git, diagnostics } },
-        '%<', -- Mark general truncate point
-        { hl = 'MiniStatuslineFilename', strings = { filename } },
-        '%=', -- End left alignment
-        { hl = 'MiniStatuslineFileinfo', strings = { fileinfo } },
-        { hl = mode_hl,                  strings = { searchcount, location } },
-      })
-      -- stylua: ignore end
-    end,
-  },
-})
+-- TODO: Add `section_searchcount` to 'mini.statusline' default
+now(function() require('mini.statusline').setup() end)
 
-require('mini.tabline').setup()
+now(function() require('mini.tabline').setup() end)
 
-vim.schedule(function()
-  require('mini.extra').setup()
+-- Step two -------------------------------------------------------------------
+later(function() require('mini.extra').setup() end)
+
+later(function()
+  local gen_word_spec = function(use_nonblank)
+    if use_nonblank == nil then use_nonblank = false end
+
+    local matchstrpos = vim.fn.matchstrpos
+    local char = use_nonblank and '[^ \t\n]' or '\\k'
+    local a_keyword_pattern = string.format('[ \t]*%s\\+[ \t]*', char)
+
+    local find_a_keyword = function(line, init)
+      local m = matchstrpos(line, a_keyword_pattern, init - 1)
+      local from, to = m[2] + 1, m[3]
+
+      -- Make it not select parts of word as they would match during 'mini.ai'
+      -- iterative search (with `init = from + 1`).
+      -- Overcome the fact that callable inside 'mini.ai' composed pattern
+      -- can't return index strictly less than `init`
+      if from == init and init ~= 1 then
+        -- FIXME: This clause is wrongly entered if previous keyword consists
+        -- from single character. Example: "x xxx x"
+        init = line:sub(1, to):match('()%s*$')
+        m = matchstrpos(line, a_keyword_pattern, init - 1)
+        from, to = m[2] + 1, m[3]
+      end
+
+      if from == 0 then return nil, nil end
+
+      -- Use only single whitespace (preferring trailing)
+      if line:sub(to, to):find('[ \t]') ~= nil then from = line:find('[^ \t]', from) end
+
+      return from, to
+    end
+
+    return { find_a_keyword, '^%s*()%S*()%s*$' }
+  end
 
   local ai = require('mini.ai')
   ai.setup({
     custom_textobjects = {
       F = ai.gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
-      L = MiniExtra.ai_specs.line,
-      B = MiniExtra.ai_specs.buffer,
+      -- w = gen_word_spec(false),
+      -- W = gen_word_spec(true),
     },
   })
+end)
 
-  require('mini.align').setup()
+later(function() require('mini.align').setup() end)
 
+later(function()
   require('mini.animate').setup({
     scroll = {
       timing = function(_, n) return 150 / n end,
     },
   })
+end)
 
+later(function()
   require('mini.basics').setup({
     options = {
       -- Manage options manually
@@ -78,11 +84,13 @@ vim.schedule(function()
       relnum_in_visual_mode = true,
     },
   })
+end)
 
-  require('mini.bracketed').setup()
+later(function() require('mini.bracketed').setup() end)
 
-  require('mini.bufremove').setup()
+later(function() require('mini.bufremove').setup() end)
 
+later(function()
   local miniclue = require('mini.clue')
   miniclue.setup({
     clues = {
@@ -145,12 +153,14 @@ vim.schedule(function()
     group = clue_group,
     callback = function(data) MiniClue.enable_buf_triggers(data.buf) end,
   })
+end)
 
-  -- Don't really need it on daily basis
-  -- require('mini.colors').setup()
+-- Don't really need it on daily basis
+-- later(function() require('mini.colors').setup() end)
 
-  require('mini.comment').setup()
+later(function() require('mini.comment').setup() end)
 
+later(function()
   require('mini.completion').setup({
     lsp_completion = {
       source_func = 'omnifunc',
@@ -166,11 +176,13 @@ vim.schedule(function()
       signature = { border = 'double' },
     },
   })
+end)
 
-  require('mini.cursorword').setup()
+later(function() require('mini.cursorword').setup() end)
 
-  require('mini.doc').setup()
+later(function() require('mini.doc').setup() end)
 
+later(function()
   require('mini.files').setup({ windows = { preview = true } })
   local minifiles_augroup = vim.api.nvim_create_augroup('ec-mini-files', {})
   vim.api.nvim_create_autocmd('User', {
@@ -178,25 +190,30 @@ vim.schedule(function()
     pattern = 'MiniFilesWindowOpen',
     callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
   })
+end)
 
+later(function()
   local hipatterns = require('mini.hipatterns')
+  local hi_words = MiniExtra.gen_highlighter.words
   hipatterns.setup({
     highlighters = {
-      fixme = { pattern = '%f[%w]()FIXME()%f[%W]', group = 'MiniHipatternsFixme' },
-      hack = { pattern = '%f[%w]()HACK()%f[%W]', group = 'MiniHipatternsHack' },
-      todo = { pattern = '%f[%w]()TODO()%f[%W]', group = 'MiniHipatternsTodo' },
-      note = { pattern = '%f[%w]()NOTE()%f[%W]', group = 'MiniHipatternsNote' },
+      fixme = hi_words({ 'FIXME', 'Fixme', 'fixme' }, 'MiniHipatternsFixme'),
+      hack = hi_words({ 'HACK', 'Hack', 'hack' }, 'MiniHipatternsHack'),
+      todo = hi_words({ 'TODO', 'Todo', 'todo' }, 'MiniHipatternsTodo'),
+      note = hi_words({ 'NOTE', 'Note', 'note' }, 'MiniHipatternsNote'),
 
       hex_color = hipatterns.gen_highlighter.hex_color(),
     },
   })
+end)
 
-  require('mini.indentscope').setup()
+later(function() require('mini.indentscope').setup() end)
 
-  require('mini.jump').setup()
+later(function() require('mini.jump').setup() end)
 
-  require('mini.jump2d').setup({ view = { dim = true } })
+later(function() require('mini.jump2d').setup({ view = { dim = true } }) end)
 
+later(function()
   local map = require('mini.map')
   local gen_integr = map.gen_integration
   local encode_symbols = map.gen_encode_symbols.block('3x2')
@@ -209,30 +226,38 @@ vim.schedule(function()
   for _, key in ipairs({ 'n', 'N', '*' }) do
     vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
   end
+end)
 
+later(function()
   require('mini.misc').setup({ make_global = { 'put', 'put_text', 'stat_summary', 'bench_time' } })
   MiniMisc.setup_auto_root()
+end)
 
-  require('mini.move').setup({ options = { reindent_linewise = false } })
+later(function() require('mini.move').setup({ options = { reindent_linewise = false } }) end)
 
-  require('mini.operators').setup()
+later(function() require('mini.operators').setup() end)
 
+later(function()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
   vim.keymap.set('i', '<CR>', 'v:lua.EC.cr_action()', { expr = true })
+end)
 
-  require('mini.pick').setup()
+later(function()
+  require('mini.pick').setup({ window = { config = { border = 'double' } } })
   vim.ui.select = MiniPick.ui_select
   vim.keymap.set('n', ',', [[<Cmd>Pick buf_lines scope='current'<CR>]], { nowait = true })
+end)
 
-  require('mini.splitjoin').setup()
+later(function() require('mini.splitjoin').setup() end)
 
-  require('mini.surround').setup({ search_method = 'cover_or_next' })
+later(function() require('mini.surround').setup({ search_method = 'cover_or_next' }) end)
 
+later(function()
   local test = require('mini.test')
   local reporter = test.gen_reporter.buffer({ window = { border = 'double' } })
   test.setup({
     execute = { reporter = reporter },
   })
-
-  require('mini.trailspace').setup()
 end)
+
+later(function() require('mini.trailspace').setup() end)

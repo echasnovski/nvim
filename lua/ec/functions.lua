@@ -1,6 +1,56 @@
 -- Helper table
 local H = {}
 
+-- Functions for managing startup. Basically both are `try-catch` implementing
+-- "two step startup": some should execute immediately and some - later
+-- (strictly preserving order and not blocking in between).
+EC.now = function(f)
+  local ok, err = pcall(f)
+  if not ok then table.insert(H.exec_errors, err) end
+  H.schedule_finish()
+end
+
+H.later_callback_queue = {}
+
+EC.later = function(f)
+  table.insert(H.later_callback_queue, f)
+  H.schedule_finish()
+end
+
+H.finish_is_scheduled = false
+
+H.schedule_finish = function()
+  if H.finish_is_scheduled then return end
+  vim.schedule(H.finish)
+  H.finish_is_scheduled = true
+end
+
+H.finish = function()
+  local timer, step_delay = vim.loop.new_timer(), 1
+  local f = nil
+  f = vim.schedule_wrap(function()
+    local callback = H.later_callback_queue[1]
+    if callback == nil then
+      H.finish_is_scheduled = false
+      H.report_errors()
+      return
+    end
+
+    table.remove(H.later_callback_queue, 1)
+    EC.now(callback)
+    timer:start(step_delay, 0, f)
+  end)
+  timer:start(step_delay, 0, f)
+end
+
+H.exec_errors = {}
+
+H.report_errors = function()
+  if #H.exec_errors == 0 then return end
+  local msg = 'There were errors during startup:\n\n' .. table.concat(H.exec_errors, '\n\n')
+  vim.api.nvim_echo({ { msg, 'ErrorMsg' } }, true, {})
+end
+
 -- Log for personal use during debugging
 EC.log = {}
 
@@ -289,7 +339,7 @@ S.show = function(path)
   vim.list_extend(attr_lines, vim.list_slice(lines, n + 3, 2 * n + 3))
   vim.api.nvim_buf_set_lines(S.buf_id_attr, 0, -1, true, attr_lines)
 
-  pcall(MiniTrailspace.unhighlight)
+  pcall(function() MiniTrailspace.unhighlight() end)
 end
 
 S.sync_cursor = function()
