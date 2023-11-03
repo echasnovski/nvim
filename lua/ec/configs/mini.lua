@@ -45,9 +45,9 @@ require('mini.statusline').setup({
 
 require('mini.tabline').setup()
 
-require('mini-dev.extra').setup()
-
 vim.schedule(function()
+  require('mini.extra').setup()
+
   local ai = require('mini.ai')
   ai.setup({
     custom_textobjects = {
