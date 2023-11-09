@@ -6,10 +6,13 @@
 -- - Implement "frecency" sort.
 --
 -- - Think about renaming "history" to something else (besides "data") to also
---   show that it tracks flags along with visit data.
+--   show that it tracks flags along with visit data. Ideas: "track", "log".
 --
 -- - Implement `goto` ("next", "previous", "first", "last") with custom
 --   `filter` and `sort`.
+--
+-- - Think about also storing "from" and "to" paths to have a sense of how
+--   navigation is done.
 --
 -- - Think about how to mitigate several opened Neovim instances using same
 --   visits history.
@@ -152,7 +155,7 @@ MiniVisits.register = function(file, cwd)
   H.history.current[cwd] = cwd_tbl
 end
 
-MiniVisits.history_get = function(scope)
+MiniVisits.get = function(scope)
   scope = scope or 'all'
   H.validate_scope(scope)
 
@@ -160,7 +163,7 @@ MiniVisits.history_get = function(scope)
   return H.get_all_history()
 end
 
-MiniVisits.history_set = function(scope, history)
+MiniVisits.set = function(scope, history)
   scope = scope or 'all'
   H.validate_scope(scope)
   H.validate_history(history, '`history`')
@@ -171,8 +174,8 @@ MiniVisits.history_set = function(scope, history)
   end
 end
 
-MiniVisits.history_read = function(path)
-  local path = path or H.get_config().store.path
+MiniVisits.read = function(path)
+  path = path or H.get_config().store.path
   H.validate_string(path, 'path')
   if vim.fn.filereadable(path) == 0 then return nil end
 
@@ -181,7 +184,7 @@ MiniVisits.history_read = function(path)
   return res
 end
 
-MiniVisits.history_write = function(path, history)
+MiniVisits.write = function(path, history)
   local store_config = H.get_config().store
   path = path or store_config.path
   H.validate_string(path, 'path')
@@ -204,7 +207,7 @@ MiniVisits.history_write = function(path, history)
   vim.fn.writefile(lines, path)
 
   -- Set written history (to make normalized history current)
-  MiniVisits.history_set('all', history)
+  MiniVisits.set('all', history)
 end
 
 MiniVisits.default_filter = function(file_data) return true end
@@ -283,7 +286,7 @@ H.create_autocommands = function(config)
 
   if config.register.event ~= '' then au(config.register.event, '*', H.autoregister_visit, 'Auto register visit') end
   if config.store.autowrite then
-    au('VimLeavePre', '*', function() pcall(MiniVisits.history_write) end, 'Autowrite visits history')
+    au('VimLeavePre', '*', function() pcall(MiniVisits.write) end, 'Autowrite visits history')
   end
 end
 
@@ -315,13 +318,11 @@ end
 H.get_all_history = function()
   H.load_previous_history()
 
-  local previous, current = vim.deepcopy(H.history.previous or {}), vim.deepcopy(H.history.current)
-
-  -- Merge history tables per cwd
-  local res = {}
-  local cwd_arr = H.union_arr(vim.tbl_keys(previous), vim.tbl_keys(current))
-  for _, cwd in ipairs(cwd_arr) do
-    res[cwd] = H.merge_cwd_history_pair(previous[cwd], current[cwd])
+  -- Extend previous history per cwd with current
+  local res = vim.deepcopy(H.history.previous or {})
+  for cwd, cwd_tbl in pairs(vim.deepcopy(H.history.current)) do
+    res[cwd] = res[cwd] or {}
+    H.extend_cwd_history(res[cwd], cwd_tbl)
   end
 
   return res
@@ -330,36 +331,32 @@ end
 H.get_nocwd_history = function(history)
   local res = {}
   for cwd, cwd_tbl in pairs(history) do
-    res = H.merge_cwd_history_pair(res, cwd_tbl)
+    H.extend_cwd_history(res, cwd_tbl)
   end
   return res
 end
 
-H.merge_cwd_history_pair = function(cwd_tbl_1, cwd_tbl_2)
-  cwd_tbl_1, cwd_tbl_2 = cwd_tbl_1 or {}, cwd_tbl_2 or {}
-
-  -- Merge two tables taking special care for `count` and `latest` for files
-  -- present in both cwd tables
-  local res = vim.tbl_deep_extend('force', cwd_tbl_1, cwd_tbl_2)
-  local files_both = H.intersect_arr(vim.tbl_keys(cwd_tbl_1), vim.tbl_keys(cwd_tbl_2))
-  for _, file in ipairs(files_both) do
-    local file_tbl_1, file_tbl_2 = cwd_tbl_1[file], cwd_tbl_2[file]
+H.extend_cwd_history = function(cwd_tbl_ref, cwd_tbl_new)
+  -- Add data from the new table taking special care for `count` and `latest`
+  for file, file_tbl_new in pairs(cwd_tbl_new) do
+    local file_tbl_ref = cwd_tbl_ref[file] or {}
+    local file_tbl = vim.tbl_deep_extend('force', file_tbl_ref, file_tbl_new)
 
     -- Add all counts together
-    res[file].count = file_tbl_1.count + file_tbl_2.count
+    file_tbl.count = (file_tbl_ref.count or 0) + file_tbl_new.count
 
     -- Compute the latest visit
-    res[file].latest = math.max(file_tbl_1.latest, file_tbl_2.latest)
+    file_tbl.latest = math.max(file_tbl_ref.latest or -math.huge, file_tbl_new.latest)
 
     -- Flags should be already proper union of both flags
-  end
 
-  return res
+    cwd_tbl_ref[file] = file_tbl
+  end
 end
 
 H.load_previous_history = function()
   if type(H.history.previous) == 'table' then return end
-  H.history.previous = MiniVisits.history_read()
+  H.history.previous = MiniVisits.read()
 end
 
 H.history_prune = function(history, prune_non_paths, threshold)
@@ -450,30 +447,6 @@ H.buf_get_file = function(buf_id)
   if vim.bo[buf_id].buftype ~= '' then return nil end
   local res = vim.api.nvim_buf_get_name(buf_id)
   if res == '' then return end
-  return res
-end
-
-H.union_arr = function(x, y)
-  local res = {}
-  for _, val in pairs(x) do
-    res[val] = true
-  end
-  for _, val in pairs(y) do
-    res[val] = true
-  end
-  return vim.tbl_keys(res)
-end
-
-H.intersect_arr = function(x, y)
-  local x_map = {}
-  for _, val in pairs(x) do
-    x_map[val] = true
-  end
-
-  local res = {}
-  for _, val in pairs(y) do
-    if x_map[val] then table.insert(res, val) end
-  end
   return res
 end
 
