@@ -12,6 +12,74 @@ now(function() require('mini.statusline').setup() end)
 
 now(function() require('mini.tabline').setup() end)
 
+now(function()
+  require('mini-dev.visits').setup()
+  vim.keymap.set('n', '<Leader>va', function() MiniVisits.add_flag() end, { desc = 'Add flag' })
+  vim.keymap.set('n', '<Leader>vr', function() MiniVisits.remove_flag() end, { desc = 'Remove flag' })
+end)
+
+EC.pick_visits = function(local_opts, opts)
+  local default_local_opts =
+    { cwd = vim.fn.getcwd(), filter = nil, preserve_sort = true, recency_weight = 0.5, scope = 'all', sort = nil }
+  local_opts = vim.tbl_deep_extend('force', default_local_opts, local_opts or {})
+
+  local full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('(.)/$', '%1')) end
+  local short_path = function(path, cwd)
+    cwd = cwd or vim.fn.getcwd()
+    if not vim.startswith(path, cwd) then return vim.fn.fnamemodify(path, ':~') end
+    local res = path:sub(cwd:len() + 1):gsub('^/+', ''):gsub('/+$', '')
+    return res
+  end
+
+  local pick = require('mini.pick')
+  local cwd = local_opts.cwd == '' and vim.fn.getcwd() or full_path(local_opts.cwd)
+
+  -- Define source
+  local filter = local_opts.filter or MiniVisits.gen_filter.default()
+  local sort = local_opts.sort or MiniVisits.gen_sort.default({ recency_weight = local_opts.recency_weight })
+  local items = vim.schedule_wrap(function()
+    -- NOTE: Use `local_opts.cwd` instead of `cwd` to allow `cwd = ''` to not
+    -- mean "current directory"
+    local files = MiniVisits.list_files(local_opts.cwd, local_opts.scope, { filter = filter, sort = sort })
+    files = vim.tbl_map(function(x) return short_path(x, cwd) end, files)
+    pick.set_picker_items(files)
+  end)
+
+  local show = function(buf_id, items_to_show, query)
+    require('mini.pick').default_show(buf_id, items_to_show, query, { show_icons = true })
+  end
+
+  local match
+  if local_opts.preserve_sort then
+    match = function(stritems, inds, query)
+      local res = MiniPick.default_match(stritems, inds, query, true)
+      table.sort(res)
+      return res
+    end
+  end
+
+  local default_source = { items = items, name = 'Visits', cwd = cwd, match = match, show = show }
+  opts = vim.tbl_deep_extend('force', opts or {}, { source = default_source })
+  return pick.start(opts)
+end
+
+EC.pick_visits_flags = function(local_opts, opts)
+  -- TODO
+end
+
+vim.defer_fn(function()
+  if _G.MiniPick == nil then return end
+  _G.MiniPick.registry.visits = EC.pick_visits
+
+  vim.keymap.set('n', '<Leader>fv', '<Cmd>Pick visits cwd=""<CR>', { desc = 'Visits (frecency)' })
+  vim.keymap.set('n', '<Leader>fV', '<Cmd>Pick visits<CR>', { desc = 'Visits (frecency, cwd)' })
+
+  -- local oldfiles_all = '<Cmd>Pick visits recency_weight=1 cwd="" match_exact=false<CR>'
+  -- vim.keymap.set('n', '<Leader>fo', oldfiles_all, { desc = 'Visits (recent)' })
+  -- local oldfiles_cwd = '<Cmd>Pick visits recency_weight=1 match_exact=false<CR>'
+  -- vim.keymap.set('n', '<Leader>fO', oldfiles_cwd, { desc = 'Visits (recent, cwd)' })
+end, 1000)
+
 -- Step two -------------------------------------------------------------------
 later(function() require('mini.extra').setup() end)
 

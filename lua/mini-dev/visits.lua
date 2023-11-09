@@ -1,12 +1,12 @@
 -- TODO:
 --
 -- Code:
--- - Implement `list_files` with custom `filter` and `sort`.
---
--- - Implement "frecency" sort.
---
 -- - Think about renaming "history" to something else (besides "data") to also
---   show that it tracks flags along with visit data. Ideas: "track", "log".
+--   show that it tracks flags along with visit data.
+--   Ideas: "index", "metadata", "track", "log".
+--
+-- - Think about adding `edit_flagged_files` to interactively edit them as in
+--   Harpoon.
 --
 -- - Implement `goto` ("next", "previous", "first", "last") with custom
 --   `filter` and `sort`.
@@ -19,8 +19,6 @@
 --
 -- - Think about the best approach to track custom data. Or even if it should
 --   not be allowed.
---
--- - Implement helpers around flags as alternative to 'harpoon.nvim'.
 --
 -- Tests:
 --
@@ -142,17 +140,75 @@ MiniVisits.config = {
 --minidoc_afterlines_end
 
 MiniVisits.register = function(file, cwd)
-  H.validate_string(file, 'file')
-  cwd = cwd or vim.fn.getcwd()
-  H.validate_string(cwd, 'cwd')
-  if cwd == '' then H.error('`cwd` should not be empty string.') end
+  file = H.validate_file(file, true)
+  cwd = H.validate_cwd(cwd, true)
+  H.ensure_history_entry(file, cwd)
 
-  local cwd_tbl = H.history.current[cwd] or {}
-  local file_tbl = cwd_tbl[file] or {}
-  file_tbl.count = (file_tbl.count or 0) + 1
+  local file_tbl = H.history.current[cwd][file]
+  file_tbl.count = file_tbl.count + 1
   file_tbl.latest = os.time()
-  cwd_tbl[file] = file_tbl
-  H.history.current[cwd] = cwd_tbl
+end
+
+MiniVisits.add_flag = function(flag, file, cwd)
+  flag = H.validate_flag(flag)
+  file = H.validate_file(file, true)
+  cwd = H.validate_cwd(cwd, true)
+  H.ensure_history_entry(file, cwd)
+
+  local file_tbl = H.history.current[cwd][file]
+  local flags = file_tbl.flags or {}
+  flags[flag] = true
+  file_tbl.flags = flags
+end
+
+MiniVisits.remove_flag = function(flag, file, cwd)
+  flag = H.validate_flag(flag)
+  file = H.validate_file(file, true)
+  cwd = H.validate_cwd(cwd, true)
+  H.ensure_history_entry(file, cwd)
+
+  local file_tbl = H.history.current[cwd][file]
+  local flags = file_tbl.flags
+  if type(flags) ~= 'table' then return end
+
+  flags[flag] = nil
+  if vim.tbl_count(flags) == 0 then file_tbl.flags = nil end
+end
+
+MiniVisits.list_files = function(cwd, scope, opts)
+  cwd = H.validate_cwd(cwd, false)
+  scope = H.validate_scope(scope)
+
+  opts = vim.tbl_deep_extend('force', { filter = nil, sort = nil }, opts or {})
+  local filter = H.validate_filter(opts.filter)
+  local sort = H.validate_sort(opts.sort)
+
+  local file_data_arr = H.get_file_data_arr(cwd, scope)
+  local res_arr = sort(vim.tbl_filter(filter, file_data_arr))
+  return vim.tbl_map(function(x) return x.path end, res_arr)
+end
+
+MiniVisits.list_flags = function(cwd, scope, opts)
+  cwd = H.validate_cwd(cwd, false)
+  scope = H.validate_scope(scope)
+
+  opts = vim.tbl_deep_extend('force', { filter = nil }, opts or {})
+  local filter = H.validate_filter(opts.filter)
+
+  local file_data_arr = H.get_file_data_arr(cwd, scope)
+  local res_arr = vim.tbl_filter(filter, file_data_arr)
+
+  local all_flags = {}
+  for _, file_data in ipairs(res_arr) do
+    if type(file_data.flags) == 'table' then
+      for flag, _ in pairs(file_data.flags) do
+        all_flags[flag] = true
+      end
+    end
+  end
+  local res = vim.tbl_keys(all_flags)
+  table.sort(res)
+  return res
 end
 
 MiniVisits.get = function(scope)
@@ -176,7 +232,7 @@ end
 
 MiniVisits.read = function(path)
   path = path or H.get_config().store.path
-  H.validate_string(path, 'path')
+  H.validate_string(path, 'path', true)
   if vim.fn.filereadable(path) == 0 then return nil end
 
   local ok, res = pcall(dofile, path)
@@ -187,7 +243,7 @@ end
 MiniVisits.write = function(path, history)
   local store_config = H.get_config().store
   path = path or store_config.path
-  H.validate_string(path, 'path')
+  H.validate_string(path, 'path', true)
   history = history or H.get_all_history()
   H.validate_history(history, '`history`')
 
@@ -210,10 +266,48 @@ MiniVisits.write = function(path, history)
   MiniVisits.set('all', history)
 end
 
-MiniVisits.default_filter = function(file_data) return true end
+MiniVisits.gen_filter = {}
 
--- TODO
-MiniVisits.default_sort = function(file_data_arr) return vim.deepcopy(file_data_arr) end
+MiniVisits.gen_filter.default = function(_)
+  return function() return true end
+end
+
+MiniVisits.gen_sort = {}
+
+MiniVisits.gen_sort.default = function(opts)
+  opts = vim.tbl_deep_extend('force', { recency_weight = 0.5 }, opts or {})
+  local recency_weight = opts.recency_weight
+  local is_weight = type(recency_weight) == 'number' and 0 <= recency_weight and recency_weight <= 1
+  if not is_weight then H.error('`opts.recency_weight` should be number between 0 and 1.') end
+
+  return function(file_data_arr)
+    -- Add ranks for `count` and `latest`
+    table.sort(file_data_arr, function(a, b) return a.count > b.count end)
+    H.add_rank(file_data_arr, 'count')
+    table.sort(file_data_arr, function(a, b) return a.latest > b.latest end)
+    H.add_rank(file_data_arr, 'latest')
+
+    -- Compute final rank and sort by it
+    for _, file_data in ipairs(file_data_arr) do
+      file_data.rank = (1 - recency_weight) * file_data.count_rank + recency_weight * file_data.latest_rank
+    end
+    table.sort(file_data_arr, function(a, b) return a.rank < b.rank or (a.rank == b.rank and a.path < b.path) end)
+    return file_data_arr
+  end
+end
+
+MiniVisits.gen_sort.z = function()
+  return function(file_data_arr)
+    local now = os.time()
+    for _, file_data in ipairs(file_data_arr) do
+      -- Source: https://github.com/rupa/z/blob/master/z.sh#L151
+      local dtime = math.max(now - file_data.latest, 0.0001)
+      file_data.z = 10000 * file_data.count * (3.75 / ((0.0001 * dtime + 1) + 0.25))
+    end
+    table.sort(file_data_arr, function(a, b) return a.z > b.z or (a.z == b.z and a.path < b.path) end)
+    return file_data_arr
+  end
+end
 
 MiniVisits.default_normalize = function(history, opts)
   H.validate_history(history)
@@ -320,7 +414,7 @@ H.get_all_history = function()
 
   -- Extend previous history per cwd with current
   local res = vim.deepcopy(H.history.previous or {})
-  for cwd, cwd_tbl in pairs(vim.deepcopy(H.history.current)) do
+  for cwd, cwd_tbl in pairs(H.history.current) do
     res[cwd] = res[cwd] or {}
     H.extend_cwd_history(res[cwd], cwd_tbl)
   end
@@ -337,6 +431,8 @@ H.get_nocwd_history = function(history)
 end
 
 H.extend_cwd_history = function(cwd_tbl_ref, cwd_tbl_new)
+  cwd_tbl_new = vim.deepcopy(cwd_tbl_new)
+
   -- Add data from the new table taking special care for `count` and `latest`
   for file, file_tbl_new in pairs(cwd_tbl_new) do
     local file_tbl_ref = cwd_tbl_ref[file] or {}
@@ -354,9 +450,26 @@ H.extend_cwd_history = function(cwd_tbl_ref, cwd_tbl_new)
   end
 end
 
+H.get_file_data_arr = function(cwd, scope)
+  local history = MiniVisits.get(scope)
+  local cwd_tbl = cwd == '' and H.get_nocwd_history(history) or vim.deepcopy(history[cwd] or {})
+  local file_data_arr = {}
+  for file, file_tbl in pairs(cwd_tbl) do
+    file_tbl.path = file
+    table.insert(file_data_arr, file_tbl)
+  end
+  return file_data_arr
+end
+
 H.load_previous_history = function()
   if type(H.history.previous) == 'table' then return end
   H.history.previous = MiniVisits.read()
+end
+
+H.ensure_history_entry = function(file, cwd)
+  local cwd_tbl = H.history.current[cwd] or {}
+  cwd_tbl[file] = cwd_tbl[file] or { count = 0, latest = 0 }
+  H.history.current[cwd] = cwd_tbl
 end
 
 H.history_prune = function(history, prune_non_paths, threshold)
@@ -392,7 +505,65 @@ H.history_decay_cwd = function(cwd_tbl, threshold, target)
   end
 end
 
+H.add_rank = function(arr, key)
+  local rank_key, ties = key .. '_rank', {}
+  for i, tbl in ipairs(arr) do
+    -- Assumes `arr` is an array of tables sorted from best to worst
+    tbl[rank_key] = i
+
+    -- Track ties
+    if i > 1 and tbl[key] == arr[i - 1][key] then
+      local val = tbl[key]
+      local data = ties[val] or { n = 1, sum = i - 1 }
+      data.n, data.sum = data.n + 1, data.sum + i
+      ties[val] = data
+    end
+  end
+
+  -- Correct for ties using mid-rank
+  for i, tbl in ipairs(arr) do
+    local tie_data = ties[tbl[key]]
+    if tie_data ~= nil then tbl[rank_key] = tie_data.sum / tie_data.n end
+  end
+end
+
 -- Validators -----------------------------------------------------------------
+H.validate_file = function(x, noempty)
+  x = x or H.buf_get_file(vim.api.nvim_get_current_buf())
+  H.validate_string(x, 'file', noempty)
+  return H.full_path(x)
+end
+
+H.validate_cwd = function(x, noempty)
+  x = x or vim.fn.getcwd()
+  H.validate_string(x, 'cwd', noempty)
+  return x == '' and '' or H.full_path(x)
+end
+
+H.validate_filter = function(x)
+  local config = H.get_config()
+  x = x or config.list.filter or MiniVisits.gen_filter.default()
+  if type(x) == 'string' then
+    local flag = x
+    x = function(file_data) return (file_data.flags or {})[flag] end
+  end
+  if not vim.is_callable(x) then H.error('`filter` should be callable or string flag name.') end
+  return x
+end
+
+H.validate_sort = function(x)
+  local config = H.get_config()
+  x = x or config.list.sort or MiniVisits.gen_sort.default()
+  if not vim.is_callable(x) then H.error('`sort` should be callable.') end
+  return x
+end
+
+H.validate_flag = function(x)
+  x = x or vim.fn.input('Enter flag: ')
+  H.validate_string(x, 'flag', false)
+  return x
+end
+
 H.validate_history = function(x, name)
   name = name or '`history`'
   if type(x) ~= 'table' then H.error(name .. ' should be a table.') end
@@ -407,12 +578,12 @@ H.validate_history = function(x, name)
       if type(file_tbl.count) ~= 'number' then H.error('`count` entries in ' .. name .. ' should be numbers.') end
       if type(file_tbl.latest) ~= 'number' then H.error('`latest` entries in ' .. name .. ' should be numbers.') end
 
-      H.validate_flags(x.flags)
+      H.validate_flags_field(x.flags)
     end
   end
 end
 
-H.validate_flags = function(x)
+H.validate_flags_field = function(x)
   if x == nil then return end
   if type(x) ~= 'table' then H.error('`flags` should be a table.') end
 
@@ -427,13 +598,14 @@ H.validate_flags = function(x)
 end
 
 H.validate_scope = function(x)
-  if x == 'all' or x == 'previous' or x == 'current' then return end
+  x = x or 'all'
+  if x == 'all' or x == 'previous' or x == 'current' then return x end
   H.error('`scope` should be one of "all", "previous", "current".')
 end
 
-H.validate_string = function(x, name)
-  if type(x) == 'string' then return end
-  H.error(string.format('`%s` should be string.', name))
+H.validate_string = function(x, name, noempty)
+  if type(x) == 'string' and not (noempty and x == '') then return end
+  H.error(string.format('`%s` should be a non-empty string.', name))
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -449,5 +621,7 @@ H.buf_get_file = function(buf_id)
   if res == '' then return end
   return res
 end
+
+H.full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('(.)/$', '%1')) end
 
 return MiniVisits
