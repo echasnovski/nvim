@@ -1,26 +1,38 @@
 -- TODO:
 --
 -- Code:
--- - Think about renaming "history" to something else (besides "data") to also
---   show that it tracks flags along with visit data.
---   Ideas: "index", "metadata", "track", "log".
+-- - Allow empty string for both `file` and `cwd` (meaning "all available") in
+--   all their usage.
 --
--- - Think about adding `edit_flagged_files` to interactively edit them as in
---   Harpoon.
+-- FIXME: READ THIS!
+-- - Think about how to mitigate several opened Neovim instances using same
+--   visit index. Ideas:
+--     - Do not account for them at all, i.e. "last written wins". To make it
+--       less visible, delay reading from stored file as much as possible, i.e.
+--       read only when needed (`register` and `add_flag` does not need;
+--       `remove_flag` does, though).
+--
+--       As a side effect of this approach, it seems better to remove the
+--       notion of "scope" altogether. There doesn't seem to be much use cases
+--       for "previous", while "current" can be emulated with having cutoff by
+--       "latest" (?maybe even store initial time of loading?).
+--
+--     - Try to account for it by always having separate "previous" and
+--       "current" indexes while allowing to manually (or automatically?)
+--       update to the latest data.
+--       This gets tedious when trying to account for anything outside of
+--       "count" and "latest", i.e. "flags" and user data. For example,
+--       removing flags properly is pretty much imposible here (as it implies
+--       persistent modification of flags).
+--
+--       Another idea to allow this is to treat flags as not persistent and
+--       only for current session.
 --
 -- - Implement `goto` ("next", "previous", "first", "last") with custom
 --   `filter` and `sort`.
 --
--- - Think about also storing "from" and "to" paths to have a sense of how
---   navigation is done.
---
--- - Think about how to mitigate several opened Neovim instances using same
---   visits history.
---
--- - Think about the best approach to track custom data. Or even if it should
---   not be allowed.
---
 -- Tests:
+-- - All combinations of empty/nonempty + file/cwd work for all cases.
 --
 -- Docs:
 
@@ -33,16 +45,20 @@
 ---
 --- Features:
 ---
---- - Persistently track file visit history per working directory.
+--- - Persistently track file visits per working directory. Stored visit index is
+---   human readable and editable.
 ---
 --- - Configurable automated visit register logic:
 ---     - On user-defined event.
 ---     - After staying in same file for user-defined amount of time.
 ---
---- - Function to list files based on visits history with custom filter and
----   sort (uses "frecency" by default). Can be used as source for various pickers.
+--- - Function to list files based on visit index with custom filter and sort
+---   (uses "frecency" by default). Can be used as source for various pickers.
 ---
---- - ??? Customizable history data ???.
+--- - Wrappers for |vim.ui.select()| to select files or marks.
+---   See |MiniVisits.select_files()| and |MiniVisits.select_marks()|.
+---
+--- - ??? Customizable index data ???.
 ---
 --- # Setup ~
 ---
@@ -105,7 +121,7 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniVisits.config = {
-  -- How visit history is converted to list of files
+  -- How visit file index is converted to list of files
   list = {
     -- Predicate for which files to include
     filter = nil,
@@ -125,49 +141,52 @@ MiniVisits.config = {
     delay = 1,
   },
 
-  -- How visit history is stored
+  -- How visit index is stored
   store = {
-    -- Whether to write all history before Neovim is closed
+    -- Whether to write all visits before Neovim is closed
     autowrite = true,
 
-    -- Function to ensure that written history is relevant
+    -- Function to ensure that written index is relevant
     normalize = nil,
 
-    -- Path to store visits history
-    path = vim.fn.stdpath('data') .. '/mini-visits-history',
+    -- Path to store visit index
+    path = vim.fn.stdpath('data') .. '/mini-visits-index',
   },
 }
 --minidoc_afterlines_end
 
 MiniVisits.register = function(file, cwd)
-  file = H.validate_file(file, true)
-  cwd = H.validate_cwd(cwd, true)
-  H.ensure_history_entry(file, cwd)
+  file = H.validate_file(file)
+  cwd = H.validate_cwd(cwd)
+  if file == '' or cwd == '' then H.error('Both `file` and `cwd` should not be empty.') end
 
-  local file_tbl = H.history.current[cwd][file]
+  H.ensure_current_index_entry(file, cwd)
+  local file_tbl = H.index.current[cwd][file]
   file_tbl.count = file_tbl.count + 1
   file_tbl.latest = os.time()
 end
 
 MiniVisits.add_flag = function(flag, file, cwd)
-  flag = H.validate_flag(flag)
+  flag = flag or vim.fn.input('Enter flag to add: ')
+  flag = H.validate_string(flag, 'flag')
   file = H.validate_file(file, true)
   cwd = H.validate_cwd(cwd, true)
-  H.ensure_history_entry(file, cwd)
+  H.ensure_current_index_entry(file, cwd)
 
-  local file_tbl = H.history.current[cwd][file]
+  local file_tbl = H.index.current[cwd][file]
   local flags = file_tbl.flags or {}
   flags[flag] = true
   file_tbl.flags = flags
 end
 
 MiniVisits.remove_flag = function(flag, file, cwd)
-  flag = H.validate_flag(flag)
+  flag = flag or vim.fn.input('Enter flag to remove: ')
+  flag = H.validate_string(flag, 'flag')
   file = H.validate_file(file, true)
   cwd = H.validate_cwd(cwd, true)
-  H.ensure_history_entry(file, cwd)
+  H.ensure_current_index_entry(file, cwd)
 
-  local file_tbl = H.history.current[cwd][file]
+  local file_tbl = H.index.current[cwd][file]
   local flags = file_tbl.flags
   if type(flags) ~= 'table' then return end
 
@@ -175,11 +194,11 @@ MiniVisits.remove_flag = function(flag, file, cwd)
   if vim.tbl_count(flags) == 0 then file_tbl.flags = nil end
 end
 
-MiniVisits.list_files = function(cwd, scope, opts)
+MiniVisits.list_files = function(cwd, opts)
   cwd = H.validate_cwd(cwd, false)
-  scope = H.validate_scope(scope)
 
-  opts = vim.tbl_deep_extend('force', { filter = nil, sort = nil }, opts or {})
+  opts = vim.tbl_deep_extend('force', { scope = 'all', filter = nil, sort = nil }, opts or {})
+  local scope = H.validate_scope(opts.scope)
   local filter = H.validate_filter(opts.filter)
   local sort = H.validate_sort(opts.sort)
 
@@ -188,11 +207,11 @@ MiniVisits.list_files = function(cwd, scope, opts)
   return vim.tbl_map(function(x) return x.path end, res_arr)
 end
 
-MiniVisits.list_flags = function(cwd, scope, opts)
+MiniVisits.list_flags = function(cwd, opts)
   cwd = H.validate_cwd(cwd, false)
-  scope = H.validate_scope(scope)
 
-  opts = vim.tbl_deep_extend('force', { filter = nil }, opts or {})
+  opts = vim.tbl_deep_extend('force', { scope = 'all', filter = nil }, opts or {})
+  local scope = H.validate_scope(opts.scope)
   local filter = H.validate_filter(opts.filter)
 
   local file_data_arr = H.get_file_data_arr(cwd, scope)
@@ -211,22 +230,52 @@ MiniVisits.list_flags = function(cwd, scope, opts)
   return res
 end
 
+MiniVisits.select_files = function(cwd, opts)
+  local files = MiniVisits.list_files(cwd, opts)
+  local items = vim.tbl_map(function(path) return { path = path, text = H.short_path(path, cwd) } end, files)
+  local select_opts = { prompt = 'Files from visits', format_item = function(item) return item.text end }
+  local on_choice = function(item)
+    if item == nil then return end
+    pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(item.path))
+  end
+
+  vim.ui.select(items, select_opts, on_choice)
+end
+
+MiniVisits.select_flags = function(cwd, opts)
+  local flags = MiniVisits.list_flags(cwd, opts)
+  opts = opts or {}
+  local on_choice = function(flag)
+    if flag == nil then return end
+
+    -- Select among subset of files with chosen flag
+    local filter_cur = (opts or {}).filter or MiniVisits.gen_filter.default()
+    local new_opts = vim.deepcopy(opts)
+    new_opts.filter = function(file_data)
+      return filter_cur(file_data) and type(file_data.flags) == 'table' and file_data.flags[flag]
+    end
+    MiniVisits.select_files(cwd, new_opts)
+  end
+
+  vim.ui.select(flags, { prompt = 'Flags from visits' }, on_choice)
+end
+
 MiniVisits.get = function(scope)
   scope = scope or 'all'
   H.validate_scope(scope)
 
-  if scope == 'current' or scope == 'previous' then return H.history[scope] end
-  return H.get_all_history()
+  if scope == 'current' or scope == 'previous' then return H.index[scope] end
+  return H.get_all_index()
 end
 
-MiniVisits.set = function(scope, history)
+MiniVisits.set = function(scope, index)
   scope = scope or 'all'
   H.validate_scope(scope)
-  H.validate_history(history, '`history`')
+  H.validate_index(index, '`index`')
 
-  if scope == 'current' or scope == 'previous' then H.history[scope] = history end
+  if scope == 'current' or scope == 'previous' then H.index[scope] = index end
   if scope == 'all' then
-    H.history.previous, H.history.current = {}, history
+    H.index.previous, H.index.current = {}, index
   end
 end
 
@@ -240,17 +289,17 @@ MiniVisits.read = function(path)
   return res
 end
 
-MiniVisits.write = function(path, history)
+MiniVisits.write = function(path, index)
   local store_config = H.get_config().store
   path = path or store_config.path
   H.validate_string(path, 'path', true)
-  history = history or H.get_all_history()
-  H.validate_history(history, '`history`')
+  index = index or H.get_all_index()
+  H.validate_index(index, '`index`')
 
-  -- Normalize history
+  -- Normalize index
   local normalize = vim.is_callable(store_config.normalize) and store_config.normalize or MiniVisits.default_normalize
-  history = normalize(history)
-  H.validate_history(history, 'normalized `history`')
+  index = normalize(index)
+  H.validate_index(index, 'normalized `index`')
 
   -- Ensure writable path
   path = vim.fn.fnamemodify(path, ':p')
@@ -258,18 +307,18 @@ MiniVisits.write = function(path, history)
   vim.fn.mkdir(path_dir, 'p')
 
   -- Write
-  local lines = vim.split(vim.inspect(history), '\n')
+  local lines = vim.split(vim.inspect(index), '\n')
   lines[1] = 'return ' .. lines[1]
   vim.fn.writefile(lines, path)
 
-  -- Set written history (to make normalized history current)
-  MiniVisits.set('all', history)
+  -- Set written index (to make normalized index current)
+  MiniVisits.set('all', index)
 end
 
 MiniVisits.gen_filter = {}
 
-MiniVisits.gen_filter.default = function(_)
-  return function() return true end
+MiniVisits.gen_filter.default = function()
+  return function(file_data) return true end
 end
 
 MiniVisits.gen_sort = {}
@@ -309,16 +358,18 @@ MiniVisits.gen_sort.z = function()
   end
 end
 
-MiniVisits.default_normalize = function(history, opts)
-  H.validate_history(history)
+MiniVisits.default_normalize = function(index, opts)
+  H.validate_index(index)
   local default_opts = { decay_threshold = 50, decay_target = 45, prune_threshold = 0.5, prune_non_paths = false }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
-  local res = vim.deepcopy(history)
-  H.history_prune(res, opts.prune_non_paths, opts.prune_threshold)
+  local res = vim.deepcopy(index)
+  H.index_prune(res, opts.prune_non_paths, opts.prune_threshold)
   for cwd, cwd_tbl in pairs(res) do
-    H.history_decay_cwd(cwd_tbl, opts.decay_threshold, opts.decay_target)
+    H.index_decay_cwd(cwd_tbl, opts.decay_threshold, opts.decay_target)
   end
+  -- Ensure that no file has count smaller than threshold
+  H.index_prune(res, false, opts.prune_threshold)
   return res
 end
 
@@ -331,8 +382,8 @@ H.timers = {
   register = vim.loop.new_timer(),
 }
 
--- Visit history for current and previous sessions
-H.history = {
+-- Visit index for current and previous sessions
+H.index = {
   previous = nil,
   current = {},
 }
@@ -380,7 +431,7 @@ H.create_autocommands = function(config)
 
   if config.register.event ~= '' then au(config.register.event, '*', H.autoregister_visit, 'Auto register visit') end
   if config.store.autowrite then
-    au('VimLeavePre', '*', function() pcall(MiniVisits.write) end, 'Autowrite visits history')
+    au('VimLeavePre', '*', function() pcall(MiniVisits.write) end, 'Autowrite visit index')
   end
 end
 
@@ -408,29 +459,29 @@ H.autoregister_visit = function(data)
   H.timers.register:start(H.get_config().register.delay, 0, f)
 end
 
--- Visit history --------------------------------------------------------------
-H.get_all_history = function()
-  H.load_previous_history()
+-- Visit index ----------------------------------------------------------------
+H.get_all_index = function()
+  H.load_previous_index()
 
-  -- Extend previous history per cwd with current
-  local res = vim.deepcopy(H.history.previous or {})
-  for cwd, cwd_tbl in pairs(H.history.current) do
+  -- Extend previous index per cwd with current
+  local res = vim.deepcopy(H.index.previous or {})
+  for cwd, cwd_tbl in pairs(H.index.current) do
     res[cwd] = res[cwd] or {}
-    H.extend_cwd_history(res[cwd], cwd_tbl)
+    H.extend_cwd_index(res[cwd], cwd_tbl)
   end
 
   return res
 end
 
-H.get_nocwd_history = function(history)
+H.get_nocwd_index = function(index)
   local res = {}
-  for cwd, cwd_tbl in pairs(history) do
-    H.extend_cwd_history(res, cwd_tbl)
+  for cwd, cwd_tbl in pairs(index) do
+    H.extend_cwd_index(res, cwd_tbl)
   end
   return res
 end
 
-H.extend_cwd_history = function(cwd_tbl_ref, cwd_tbl_new)
+H.extend_cwd_index = function(cwd_tbl_ref, cwd_tbl_new)
   cwd_tbl_new = vim.deepcopy(cwd_tbl_new)
 
   -- Add data from the new table taking special care for `count` and `latest`
@@ -451,8 +502,8 @@ H.extend_cwd_history = function(cwd_tbl_ref, cwd_tbl_new)
 end
 
 H.get_file_data_arr = function(cwd, scope)
-  local history = MiniVisits.get(scope)
-  local cwd_tbl = cwd == '' and H.get_nocwd_history(history) or vim.deepcopy(history[cwd] or {})
+  local index = MiniVisits.get(scope)
+  local cwd_tbl = cwd == '' and H.get_nocwd_index(index) or vim.deepcopy(index[cwd] or {})
   local file_data_arr = {}
   for file, file_tbl in pairs(cwd_tbl) do
     file_tbl.path = file
@@ -461,24 +512,43 @@ H.get_file_data_arr = function(cwd, scope)
   return file_data_arr
 end
 
-H.load_previous_history = function()
-  if type(H.history.previous) == 'table' then return end
-  H.history.previous = MiniVisits.read()
+-- H.resolve_file_cwd_pairs = function(file, cwd, scope)
+--   if scope == 'previous' then H.load_previous_index() end
+--   local index = H.index[scope] or {}
+--
+--   -- Empty cwd means all available cwds
+--   local cwd_arr = cwd == '' and vim.tbl_keys(index) or { cwd }
+--
+--   -- Empty file means all available files in all target cwds
+--   if file ~= '' then return vim.tbl_map(function(x) return { file = file, cwd = x } end, cwd_arr) end
+--   local res = {}
+--   for _, dir in ipairs(cwd_arr) do
+--     local cwd_tbl = index[dir] or {}
+--     for f, _ in pairs(cwd_tbl) do
+--       table.insert(res, { file = f, cwd = dir })
+--     end
+--   end
+--   return res
+-- end
+
+H.load_previous_index = function()
+  if type(H.index.previous) == 'table' then return end
+  H.index.previous = MiniVisits.read()
 end
 
-H.ensure_history_entry = function(file, cwd)
-  local cwd_tbl = H.history.current[cwd] or {}
+H.ensure_current_index_entry = function(file, cwd)
+  local cwd_tbl = H.index.current[cwd] or {}
   cwd_tbl[file] = cwd_tbl[file] or { count = 0, latest = 0 }
-  H.history.current[cwd] = cwd_tbl
+  H.index.current[cwd] = cwd_tbl
 end
 
-H.history_prune = function(history, prune_non_paths, threshold)
+H.index_prune = function(index, prune_non_paths, threshold)
   if type(threshold) ~= 'number' then H.error('Prune threshold should be number.') end
 
-  for cwd, cwd_tbl in pairs(history) do
-    if prune_non_paths and vim.fn.isdirectory(cwd) == 0 then history[cwd] = nil end
+  for cwd, cwd_tbl in pairs(index) do
+    if prune_non_paths and vim.fn.isdirectory(cwd) == 0 then index[cwd] = nil end
   end
-  for cwd, cwd_tbl in pairs(history) do
+  for cwd, cwd_tbl in pairs(index) do
     for file, file_tbl in pairs(cwd_tbl) do
       local should_prune = (prune_non_paths and vim.fn.filereadable(file) == 0) or file_tbl.count < threshold
       if should_prune then cwd_tbl[file] = nil end
@@ -486,7 +556,7 @@ H.history_prune = function(history, prune_non_paths, threshold)
   end
 end
 
-H.history_decay_cwd = function(cwd_tbl, threshold, target)
+H.index_decay_cwd = function(cwd_tbl, threshold, target)
   if type(threshold) ~= 'number' then H.error('Decay threshold should be number.') end
   if type(target) ~= 'number' then H.error('Decay target should be number.') end
 
@@ -558,14 +628,8 @@ H.validate_sort = function(x)
   return x
 end
 
-H.validate_flag = function(x)
-  x = x or vim.fn.input('Enter flag: ')
-  H.validate_string(x, 'flag', false)
-  return x
-end
-
-H.validate_history = function(x, name)
-  name = name or '`history`'
+H.validate_index = function(x, name)
+  name = name or '`index`'
   if type(x) ~= 'table' then H.error(name .. ' should be a table.') end
   for cwd, cwd_tbl in pairs(x) do
     if type(cwd) ~= 'string' then H.error('First level keys in ' .. name .. ' should be strings.') end
@@ -604,7 +668,7 @@ H.validate_scope = function(x)
 end
 
 H.validate_string = function(x, name, noempty)
-  if type(x) == 'string' and not (noempty and x == '') then return end
+  if type(x) == 'string' and not (noempty and x == '') then return x end
   H.error(string.format('`%s` should be a non-empty string.', name))
 end
 
@@ -623,5 +687,12 @@ H.buf_get_file = function(buf_id)
 end
 
 H.full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('(.)/$', '%1')) end
+
+H.short_path = function(path, cwd)
+  cwd = cwd or vim.fn.getcwd()
+  if not vim.startswith(path, cwd) then return path end
+  local res = path:sub(cwd:len() + 1):gsub('^/+', ''):gsub('/+$', '')
+  return res
+end
 
 return MiniVisits
