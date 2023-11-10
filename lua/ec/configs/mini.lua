@@ -40,9 +40,9 @@ EC.pick_visits = function(local_opts, opts)
   local items = vim.schedule_wrap(function()
     -- NOTE: Use `local_opts.cwd` instead of `cwd` to allow `cwd = ''` to not
     -- mean "current directory"
-    local files = MiniVisits.list_files(local_opts.cwd, local_opts.scope, { filter = filter, sort = sort })
-    files = vim.tbl_map(function(x) return short_path(x, cwd) end, files)
-    pick.set_picker_items(files)
+    local paths = MiniVisits.list_paths(local_opts.cwd, { scope = local_opts.scope, filter = filter, sort = sort })
+    paths = vim.tbl_map(function(x) return short_path(x, cwd) end, paths)
+    pick.set_picker_items(paths)
   end)
 
   local show = function(buf_id, items_to_show, query)
