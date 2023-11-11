@@ -1,10 +1,6 @@
 -- TODO:
 --
 -- Code:
--- - ?Rename `get`, `set`, `normalize`, `read`, `write` with `_index` suffix?
---
--- - Implement `goto` ("next", "previous", "first", "last") with custom
---   `filter` and `sort`.
 --
 -- Tests:
 -- - All combinations of empty/nonempty + path/cwd work for all cases.
@@ -27,17 +23,25 @@
 --- - Persistently track file system visits per working directory.
 ---   Stored visit index is human readable and editable.
 ---
---- - Configurable automated visit register logic:
----     - On user-defined event.
----     - After staying in same path for user-defined amount of time.
+--- - Visit index is normalized on every write to contain relevant information.
+---   Exact details can be customized. See |MiniVisits.normalize()|.
 ---
---- - Function to list paths based on visit index with custom filter and sort
----   (uses "frecency" by default). Can be used as source for various pickers.
+--- - Built-in ability to persistently use path labels.
+---   See |MiniVisits.add_label()| and |MiniVisits.remove_label()|.
 ---
---- - Wrappers for |vim.ui.select()| to select paths or flags.
----   See |MiniVisits.select_paths()| and |MiniVisits.select_flags()|.
+--- - Exported functions to reuse visit data:
+---     - List visited paths/labels with custom filter and sort (uses "robust
+---       frecency" by default). Can be used as source for pickers.
+---       See |MiniVisits.list_paths()| and |MiniVisits.list_labels()|.
 ---
---- - ??? Customizable index data ???.
+---     - Select visited paths/labels using |vim.ui.select()|.
+---       See |MiniVisits.select_paths()| and |MiniVisits.select_labels()|.
+---
+---     - Navigate to certain path in target direction ("forward", "backward",
+---       "first", "last"). See |MiniVisits.goto_path()|.
+---
+--- - Exported functions to manually update visit index allowing persistent
+---   track of any user information. See `*_index()` functions.
 ---
 --- # Setup ~
 ---
@@ -64,6 +68,9 @@
 --- number of different scenarios and customization intentions, writing exact
 --- rules for disabling module's functionality is left to user. See
 --- |mini.nvim-disabling-recipes| for common recipes.
+
+--- Workflow examples ~
+---@tag MiniVisits-examples
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -120,6 +127,9 @@ MiniVisits.config = {
     delay = 1,
   },
 
+  -- Whether to disable showing non-error feedback
+  silent = false,
+
   -- How visit index is stored
   store = {
     -- Whether to write all visits before Neovim is closed
@@ -134,7 +144,10 @@ MiniVisits.config = {
 }
 --minidoc_afterlines_end
 
-MiniVisits.register = function(path, cwd)
+---@return boolean Whether registering was actually done.
+MiniVisits.register_visit = function(path, cwd)
+  if H.is_disabled() then return false end
+
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
   if path == '' or cwd == '' then H.error('Both `path` and `cwd` should not be empty.') end
@@ -143,54 +156,57 @@ MiniVisits.register = function(path, cwd)
   local path_tbl = H.index[cwd][path]
   path_tbl.count = path_tbl.count + 1
   path_tbl.latest = os.time()
+  return true
 end
 
-MiniVisits.add_flag = function(flag, path, cwd)
+MiniVisits.add_label = function(label, path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
 
-  if flag == nil then
-    -- Suggest all flags from cwd in completion
-    flag = H.get_flag_from_user('Enter flag to add', MiniVisits.list_flags('', cwd))
-    if flag == nil then return end
+  if label == nil then
+    -- Suggest all labels from cwd in completion
+    label = H.get_label_from_user('Enter label to add', MiniVisits.list_labels('', cwd))
+    if label == nil then return end
   end
-  flag = H.validate_string(flag, 'flag')
+  label = H.validate_string(label, 'label')
 
-  -- Add flag to all target path-cwd pairs
+  -- Add label to all target path-cwd pairs
   local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
   for _, pair in ipairs(path_cwd_pairs) do
     H.ensure_index_entry(pair.path, pair.cwd)
     local path_tbl = H.index[pair.cwd][pair.path]
-    local flags = path_tbl.flags or {}
-    flags[flag] = true
-    path_tbl.flags = flags
+    local labels = path_tbl.labels or {}
+    labels[label] = true
+    path_tbl.labels = labels
   end
+
+  H.echo(string.format('Added %s label.', vim.inspect(label)))
 end
 
--- TODO: Rewrite to suggest list of present flags in `inputlist` and do nothing
--- if `path` doesn't exist in `cwd`
-MiniVisits.remove_flag = function(flag, path, cwd)
+MiniVisits.remove_label = function(label, path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
 
-  if flag == nil then
-    -- Suggest only flags from target path-cwd pairs
-    flag = H.get_flag_from_user('Enter flag to remove', MiniVisits.list_flags(path, cwd))
-    if flag == nil then return end
+  if label == nil then
+    -- Suggest only labels from target path-cwd pairs
+    label = H.get_label_from_user('Enter label to remove', MiniVisits.list_labels(path, cwd))
+    if label == nil then return end
   end
-  flag = H.validate_string(flag, 'flag')
+  label = H.validate_string(label, 'label')
 
-  -- Remove flag from all target path-cwd pairs (ignoring not present ones and
-  -- collapsing `flags` if removed last flag)
+  -- Remove label from all target path-cwd pairs (ignoring not present ones and
+  -- collapsing `labels` if removed last label)
   H.ensure_read_index()
   local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
   for _, pair in ipairs(path_cwd_pairs) do
     local path_tbl = (H.index[pair.cwd] or {})[pair.path]
-    if type(path_tbl) == 'table' and type(path_tbl.flags) == 'table' then
-      path_tbl.flags[flag] = nil
-      if vim.tbl_count(path_tbl.flags) == 0 then path_tbl.flags = nil end
+    if type(path_tbl) == 'table' and type(path_tbl.labels) == 'table' then
+      path_tbl.labels[label] = nil
+      if vim.tbl_count(path_tbl.labels) == 0 then path_tbl.labels = nil end
     end
   end
+
+  H.echo(string.format('Removed %s label.', vim.inspect(label)))
 end
 
 MiniVisits.list_paths = function(cwd, opts)
@@ -205,7 +221,7 @@ MiniVisits.list_paths = function(cwd, opts)
   return vim.tbl_map(function(x) return x.path end, res_arr)
 end
 
-MiniVisits.list_flags = function(path, cwd, opts)
+MiniVisits.list_labels = function(path, cwd, opts)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
 
@@ -215,21 +231,21 @@ MiniVisits.list_flags = function(path, cwd, opts)
   local path_data_arr = H.make_path_array(path, cwd)
   local res_arr = vim.tbl_filter(filter, path_data_arr)
 
-  -- Count flags
-  local flag_counts = {}
+  -- Count labels
+  local label_counts = {}
   for _, path_data in ipairs(res_arr) do
-    for flag, _ in pairs(path_data.flags or {}) do
-      flag_counts[flag] = (flag_counts[flag] or 0) + 1
+    for lable, _ in pairs(path_data.labels or {}) do
+      label_counts[lable] = (label_counts[lable] or 0) + 1
     end
   end
 
   -- Sort from most to least common
-  local flag_arr = {}
-  for flag, count in pairs(flag_counts) do
-    table.insert(flag_arr, { count, flag })
+  local label_arr = {}
+  for label, count in pairs(label_counts) do
+    table.insert(label_arr, { count, label })
   end
-  table.sort(flag_arr, function(a, b) return a[1] > b[1] end)
-  return vim.tbl_map(function(x) return x[2] end, flag_arr)
+  table.sort(label_arr, function(a, b) return a[1] > b[1] end)
+  return vim.tbl_map(function(x) return x[2] end, label_arr)
 end
 
 MiniVisits.select_paths = function(cwd, opts)
@@ -237,36 +253,76 @@ MiniVisits.select_paths = function(cwd, opts)
   local cwd_to_short = cwd == '' and vim.fn.getcwd() or cwd
   local items = vim.tbl_map(function(path) return { path = path, text = H.short_path(path, cwd_to_short) } end, paths)
   local select_opts = { prompt = 'Visited paths', format_item = function(item) return item.text end }
-  local on_choice = function(item)
-    if item == nil then return end
-    pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(item.path))
-  end
+  local on_choice = function(item) H.edit_path((item or {}).path) end
 
   vim.ui.select(items, select_opts, on_choice)
 end
 
-MiniVisits.select_flags = function(path, cwd, opts)
-  local flags = MiniVisits.list_flags(path, cwd, opts)
+MiniVisits.select_labels = function(path, cwd, opts)
+  local items = MiniVisits.list_labels(path, cwd, opts)
   opts = opts or {}
-  local on_choice = function(flag)
-    if flag == nil then return end
+  local on_choice = function(label)
+    if label == nil then return end
 
-    -- Select among subset of paths with chosen flag
+    -- Select among subset of paths with chosen label
     local filter_cur = (opts or {}).filter or MiniVisits.gen_filter.default()
     local new_opts = vim.deepcopy(opts)
     new_opts.filter = function(path_data)
-      return filter_cur(path_data) and type(path_data.flags) == 'table' and path_data.flags[flag]
+      return filter_cur(path_data) and type(path_data.labels) == 'table' and path_data.labels[label]
     end
     MiniVisits.select_paths(cwd, new_opts)
   end
 
-  vim.ui.select(flags, { prompt = 'Visited flags' }, on_choice)
+  vim.ui.select(items, { prompt = 'Visited labels' }, on_choice)
+end
+
+MiniVisits.goto_path = function(direction, cwd, opts)
+  if not (direction == 'first' or direction == 'backward' or direction == 'forward' or direction == 'last') then
+    H.error('`direction` should be one of "first", "backward", "forward", "last".')
+  end
+  local is_move_forward = (direction == 'first' or direction == 'forward')
+
+  local default_opts = { filter = nil, sort = nil, n_times = vim.v.count1, wrap = false }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
+  local all_paths = MiniVisits.list_paths(cwd, { filter = opts.filter, sort = opts.sort })
+
+  local n_tot = #all_paths
+  if n_tot == 0 then return end
+
+  -- Compute current index
+  local cur_ind
+  if direction == 'first' then cur_ind = 0 end
+  if direction == 'last' then cur_ind = n_tot + 1 end
+  if direction == 'backward' or direction == 'forward' then
+    local cur_path = H.buf_get_path(vim.api.nvim_get_current_buf())
+    for i, path in ipairs(all_paths) do
+      if path == cur_path then
+        cur_ind = i
+        break
+      end
+    end
+  end
+
+  -- - If not on path from the list, make going forward start from the
+  --   beginning and backward - from end
+  if cur_ind == nil then cur_ind = is_move_forward and 0 or (n_tot + 1) end
+
+  -- Compute target index ensuring that it is inside `[1, #all_paths]`
+  local res_ind = cur_ind + opts.n_times * (is_move_forward and 1 or -1)
+  res_ind = opts.wrap and ((res_ind - 1) % n_tot + 1) or math.min(math.max(res_ind, 1), n_tot)
+
+  -- Open path with no visit autoregister (for default `register.event`)
+  -- Use `vim.g` instead of `vim.b` to not register in **next** buffer
+  local cache_disabled = vim.g.minivisits_disable
+  vim.g.minivisits_disable = true
+  H.edit_path(all_paths[res_ind])
+  vim.g.minivisits_disable = cache_disabled
 end
 
 --- Get active visit index
 ---
 ---@return table Copy of currently active visit index table.
-MiniVisits.get = function()
+MiniVisits.get_index = function()
   H.ensure_read_index()
   return vim.deepcopy(H.index)
 end
@@ -274,14 +330,14 @@ end
 --- Set active visit index
 ---
 ---@param index table Visit index table.
-MiniVisits.set = function(index)
+MiniVisits.set_index = function(index)
   H.validate_index(index, '`index`')
   H.index = vim.deepcopy(index)
   H.cache.needs_index_read = false
 end
 
-MiniVisits.normalize = function(index)
-  index = index or MiniVisits.get()
+MiniVisits.normalize_index = function(index)
+  index = index or MiniVisits.get_index()
   H.validate_index(index, '`index`')
 
   local config = H.get_config()
@@ -293,7 +349,7 @@ MiniVisits.normalize = function(index)
   return new_index
 end
 
-MiniVisits.read = function(store_path)
+MiniVisits.read_index = function(store_path)
   store_path = store_path or H.get_config().store.path
   if store_path == '' then return nil end
   H.validate_string(store_path, 'path')
@@ -304,14 +360,14 @@ MiniVisits.read = function(store_path)
   return res
 end
 
-MiniVisits.write = function(store_path, index)
+MiniVisits.write_index = function(store_path, index)
   store_path = store_path or H.get_config().store.path
   H.validate_string(store_path, 'path')
-  index = index or MiniVisits.get()
+  index = index or MiniVisits.get_index()
   H.validate_index(index, '`index`')
 
   -- Normalize index
-  index = MiniVisits.normalize(index)
+  index = MiniVisits.normalize_index(index)
 
   -- Ensure writable path
   store_path = vim.fn.fnamemodify(store_path, ':p')
@@ -422,6 +478,7 @@ H.setup_config = function(config)
   vim.validate({
     list = { config.list, 'table' },
     register = { config.register, 'table' },
+    silent = { config.silent, 'boolean' },
     store = { config.store, 'table' },
   })
 
@@ -451,7 +508,7 @@ H.create_autocommands = function(config)
 
   if config.register.event ~= '' then au(config.register.event, '*', H.autoregister_visit, 'Auto register visit') end
   if config.store.autowrite then
-    au('VimLeavePre', '*', function() pcall(MiniVisits.write) end, 'Autowrite visit index')
+    au('VimLeavePre', '*', function() pcall(MiniVisits.write_index) end, 'Autowrite visit index')
   end
 end
 
@@ -463,6 +520,8 @@ end
 
 -- Autocommands ---------------------------------------------------------------
 H.autoregister_visit = function(data)
+  -- Recognize the register opportunity by stopping timer before check for
+  -- disabling. This is important for `goto_path` functionality.
   H.timers.register:stop()
   if H.is_disabled() then return end
 
@@ -472,7 +531,10 @@ H.autoregister_visit = function(data)
     -- tracking visits from switching between normal and non-normal buffers)
     local path = H.buf_get_path(buf_id)
     if path == nil or path == H.cache.latest_registered_path then return end
-    MiniVisits.register(path, vim.fn.getcwd())
+
+    local success = MiniVisits.register_visit(path, vim.fn.getcwd())
+    if not success then return end
+
     H.cache.latest_registered_path = path
   end)
 
@@ -484,7 +546,7 @@ H.ensure_read_index = function()
   if not H.cache.needs_index_read then return end
 
   -- Try reading previous index
-  local res_index = MiniVisits.read()
+  local res_index = MiniVisits.read_index()
   local is_index = pcall(H.validate_index, res_index)
   if not is_index then return end
 
@@ -528,7 +590,7 @@ H.resolve_path_cwd = function(path, cwd)
 end
 
 H.make_path_array = function(path, cwd)
-  local index = MiniVisits.get()
+  local index = MiniVisits.get_index()
   local path_tbl = {}
   for _, pair in ipairs(H.resolve_path_cwd(path, cwd)) do
     local path_tbl_to_merge = (index[pair.cwd] or {})[pair.path]
@@ -551,7 +613,7 @@ H.merge_path_tbls = function(path_tbl_ref, path_tbl_new)
   -- Compute the latest visit
   path_tbl.latest = math.max(path_tbl_ref.latest, path_tbl_new.latest)
 
-  -- Flags should be already a proper union of both flags
+  -- Labels should be already a proper union of both labels
 
   return path_tbl
 end
@@ -590,9 +652,9 @@ H.index_decay_cwd = function(cwd_tbl, threshold, target)
   end
 end
 
-H.get_flag_from_user = function(prompt, flags_complete)
+H.get_label_from_user = function(prompt, labels_complete)
   MiniVisits._complete = function(arg_lead)
-    return vim.tbl_filter(function(x) return x:find(arg_lead, 1, true) ~= nil end, flags_complete)
+    return vim.tbl_filter(function(x) return x:find(arg_lead, 1, true) ~= nil end, labels_complete)
   end
   local completion = 'customlist,v:lua.MiniVisits._complete'
   local input_opts = { prompt = prompt .. ': ', completion = completion, cancelreturn = false }
@@ -618,10 +680,10 @@ end
 H.validate_filter = function(x)
   x = x or MiniVisits.gen_filter.default()
   if type(x) == 'string' then
-    local flag = x
-    x = function(path_data) return (path_data.flags or {})[flag] end
+    local label = x
+    x = function(path_data) return (path_data.labels or {})[label] end
   end
-  if not vim.is_callable(x) then H.error('`filter` should be callable or string flag name.') end
+  if not vim.is_callable(x) then H.error('`filter` should be callable or string label name.') end
   return x
 end
 
@@ -645,21 +707,21 @@ H.validate_index = function(x, name)
       if type(path_tbl.count) ~= 'number' then H.error('`count` entries in ' .. name .. ' should be numbers.') end
       if type(path_tbl.latest) ~= 'number' then H.error('`latest` entries in ' .. name .. ' should be numbers.') end
 
-      H.validate_flags_field(x.flags)
+      H.validate_labels_field(x.labels)
     end
   end
 end
 
-H.validate_flags_field = function(x)
+H.validate_labels_field = function(x)
   if x == nil then return end
-  if type(x) ~= 'table' then H.error('`flags` should be a table.') end
+  if type(x) ~= 'table' then H.error('`labels` should be a table.') end
 
   for key, value in pairs(x) do
     if type(key) ~= 'string' then
-      H.error('Keys in `flags` table should be strings (not ' .. vim.inspect(key) .. ').')
+      H.error('Keys in `labels` table should be strings (not ' .. vim.inspect(key) .. ').')
     end
     if value ~= true then
-      H.error('Values in `flags` table should only be `true` (not ' .. vim.inspect(value) .. ').')
+      H.error('Values in `labels` table should only be `true` (not ' .. vim.inspect(value) .. ').')
     end
   end
 end
@@ -670,6 +732,18 @@ H.validate_string = function(x, name)
 end
 
 -- Utilities ------------------------------------------------------------------
+H.echo = function(msg)
+  if H.get_config().silent then return end
+
+  -- Construct message chunks
+  msg = type(msg) == 'string' and { { msg } } or msg
+  table.insert(msg, 1, { '(mini.visits) ', 'WarningMsg' })
+
+  -- Echo. Force redraw to ensure that it is effective (`:h echo-redraw`)
+  vim.cmd([[echo '' | redraw]])
+  vim.api.nvim_echo(msg, false, {})
+end
+
 H.error = function(msg) error(string.format('(mini.visits) %s', msg), 0) end
 
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
@@ -701,6 +775,27 @@ H.tbl_add_rank = function(arr, key)
   for i, tbl in ipairs(arr) do
     local tie_data = ties[tbl[key]]
     if tie_data ~= nil then tbl[rank_key] = tie_data.sum / tie_data.n end
+  end
+end
+
+H.edit_path = function(path)
+  if path == nil then return end
+
+  -- Try to reuse buffer
+  local path_buf_id
+  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+    local is_target = H.is_valid_buf(buf_id) and vim.bo[buf_id].buflisted and H.buf_get_path(buf_id) == path
+    if is_target then path_buf_id = buf_id end
+  end
+
+  if path_buf_id ~= nil then
+    vim.api.nvim_win_set_buf(0, path_buf_id)
+    vim.bo[path_buf_id].buflisted = true
+  else
+    -- Use relative path for a better initial view in `:buffers`
+    local path_norm = vim.fn.fnameescape(vim.fn.fnamemodify(path, ':.'))
+    local ok = pcall(vim.cmd, 'edit ' .. path_norm)
+    if ok then vim.bo.buflisted = true end
   end
 end
 
