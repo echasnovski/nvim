@@ -2,6 +2,8 @@
 --
 -- Code:
 --
+-- - Think about how to make "track only once per session" easier.
+--
 -- Tests:
 -- - All combinations of empty/nonempty + path/cwd work for all cases.
 --
@@ -35,13 +37,18 @@
 ---       See |MiniVisits.list_paths()| and |MiniVisits.list_labels()|.
 ---
 ---     - Select visited paths/labels using |vim.ui.select()|.
----       See |MiniVisits.select_paths()| and |MiniVisits.select_labels()|.
+---       See |MiniVisits.select_path()| and |MiniVisits.select_labels()|.
 ---
 ---     - Navigate to certain path in target direction ("forward", "backward",
 ---       "first", "last"). See |MiniVisits.goto_path()|.
 ---
 --- - Exported functions to manually update visit index allowing persistent
 ---   track of any user information. See `*_index()` functions.
+---
+--- Sources with more details:
+--- - |MiniVisits-overview|
+--- - |MiniVisits-index-specification|
+--- - |MiniVisits-examples|
 ---
 --- # Setup ~
 ---
@@ -69,7 +76,261 @@
 --- rules for disabling module's functionality is left to user. See
 --- |mini.nvim-disabling-recipes| for common recipes.
 
---- Workflow examples ~
+--- # Tracking visits ~
+---
+--- File system visits (both directory and files) tracking is done in two steps:
+--- - On every dedicated event (`config.track.event`, |BufEnter| by default) timer
+---   is (re)started to actually register visit after certain amount of time
+---   (`config.track.delay` milliseconds, 1000 by default). It is not registered
+---   immediately to allow navigation to target buffer in several steps
+---   (for example, with |:bnext| / |:bprevious|).
+---
+--- - When delay time passes without any dedicated events being triggered
+---   (meaning user is "settled" on certain buffer), |MiniVisits.add_visit()|
+---   is called if all of the following conditions are met:
+---     - Module is not disabled (see "Disabling" section in |MiniVisits|).
+---     - Buffer is normal with non-empty name (used as visit path).
+---     - Visit path does not equal the latest tracked one. This is to allow
+---       temporary enter of non-normal buffers (like help, terminal, etc.)
+---       without artificial increase of visit count.
+---
+--- Visit is autoregistered for |current-directory| and leads to increase of count
+--- and latest time of visit. See |MiniVisits-index-specification| for more details.
+---
+--- Notes:
+--- - All data is stored _only_ in in-session Lua variable (for quick operation)
+---   and at `config.store.path` on disk (for persistent usage). It is automatically
+---   written to disk before every Neovim exit (if `config.store.autowrite` is set).
+---
+--- - Tracking can be disabled by supplying empty string as `track.event`.
+---   Then it is up to the user to properly call |MiniVisits.add_visit()|.
+---
+--- # Reusing visits ~
+---
+--- Visit data can be reused in at least these ways:
+---
+--- - Get a list of visited paths (see |MiniVisits.list_paths()|) and use it
+---   to visualize/pick/navigate visit history.
+---
+--- - Select one of the visited paths to open it (see |MiniVisits.select_path()|).
+---
+--- - Move along visit history (see |MiniVisits.goto_path()|).
+---
+--- - Utilize labels. Any visit can be added a one ore more labels (like "core",
+---   "tmp", etc.). They are bound to the visit (path registered for certain
+---   directory) and are stored persistently.
+---   Labels can be used to manually create groups of files and/or directories
+---   that have particular interest to the user.
+---   There is no one "write" way to use them, though. See |MiniVisits-examples|
+---   for some inspiration.
+---
+--- - Utilizing custom data. Visit index can be manipulated manually using
+---   `_index()` set of functions. All "storeable" (i.e. not functions or
+---   metatables) user data inside index is then stored on disk, so it can be
+---   used to create any kind of workflow user wants.
+---
+--- See |MiniVisits-examples| for some actual configuration and workflow examples.
+---@tag MiniVisits-overview
+
+--- # Structure ~
+---
+--- Visit index is a table containing actual data in two level deep nested tables.
+---
+--- First level keys are paths of current working directory (a.k.a "cwd") for
+--- which visits are registered.
+---
+--- Second level keys are actual visit paths. Their values are tables with visit
+--- data which should follow these requirements:
+--- - Field `count` should be present and be a number. It represents the number
+---   of times this path was visited under particular cwd.
+--- - Field `latest` should be present and be a number. It represents the time
+---   of latest visit. By default computed with |os.time()| (up to a second).
+--- - Field `labels` might not be present. If present, it should be a table
+---   with string labels as keys and `true` as values. It represents labels of
+---   the path wunder certain cwd.
+---
+--- Notes:
+--- - All paths are absolute.
+--- - Visit path should not necessarily be a part of corresponding cwd.
+--- - Both `count` and `latest` can be any number: whole, fractional, negative, etc.
+---
+--- Example of an index data: >
+---
+---   {
+---     ['/home/user/project_1'] = {
+---       ['home/user/project_1/file'] = { count = 3, latest = 1699796000 },
+---       ['home/user/project_1/subdir'] = {
+---         count = 10, latest = 1699797000, labels = { core = true },
+---       },
+---     },
+---     ['/home/user/project_2'] = {
+---       ['home/user/project_1/file'] = {
+---         count = 0, latest = 0, labels = { other = true },
+---       },
+---       ['home/user/project_2/README'] = { count = 1, latest = 1699798000 },
+---     },
+---   }
+--- <
+--- # Storage ~
+---
+--- When stored on disk, visit index is a file containing Lua code returning
+--- visit index table. It can be edited by hand as long as it contains a valid
+--- Lua code (to be run executed with |dofile()|).
+---
+--- # Normalization ~
+---
+--- To ensure that visit index contains mostly relevant data, it gets normalized:
+--- automatically inside |MiniVisits.write_index()| or via |MiniVisits.normalize()|.
+---
+--- What normalization actually does can be configured in `config.store.normalize`.
+---
+--- See |MiniVisits.gen_normalize.default()| for default normalization approach.
+---@tag MiniVisits-index-specification
+
+--- # Workflow examples ~
+---
+--- This module provides a flexible framework for working with file system visits.
+--- Exact choice of how to organize workflow is left to the user.
+--- Here are some examples for inspiration which can be combined together.
+---
+--- ## Use different sorting ~
+---
+--- Default sorting in |MiniVisits.gen_sort.default()| allows flexible adjustment
+--- of which feature to prefer more: recency or frequency. Here is an example of
+--- how to make set of keymaps for three types of sorting combined with two types
+--- of scopes (all visits and only for current cwd): >
+---
+---   local make_select_path = function(select_global, recency_weight)
+---     local visits = require('mini.visits')
+---     local sort = visits.gen_sort.default({ recency_weight = recency_weight })
+---     local select_opts = { sort = sort }
+---     return function()
+---       local cwd = select_global and '' or vim.fn.getcwd()
+---       visits.select_path(cwd, select_opts)
+---     end
+---   end
+---
+---   local map = function(lhs, desc, ...)
+---     vim.keymap.set('n', lhs, make_select_path(...), { desc = desc })
+---   end
+---
+---   -- Adjust LHS and description to your liking
+---   map('<Leader>vr', 'Select recent (all)',   true,  1)
+---   map('<Leader>vR', 'Select recent (cwd)',   false, 1)
+---   map('<Leader>vy', 'Select frecent (all)',  true,  0.5)
+---   map('<Leader>vY', 'Select frecent (cwd)',  false, 0.5)
+---   map('<Leader>vf', 'Select frequent (all)', true,  0)
+---   map('<Leader>vF', 'Select frequent (cwd)', false, 0)
+--- <
+---
+--- Note: If you have |MiniPick|, consider using |MiniExtra.pickers.visits()|.
+---
+--- ## Use manual labels ~
+---
+--- Labels is a powerful tool to create groups of associated paths.
+--- Usual workflow consists of:
+--- - Add label with |MiniVisits.add_label()| (prompts for actual label).
+--- - Remove label with |MiniVisits.remove_label()| (prompts for actual label).
+--- - When need to use labeled groups, call |MiniVisits.select_label()| which
+---   will then call |MiniVisits.select_path()| to select path among those
+---   having selected label.
+---   Note: If you have |MiniPick|, consider using |MiniExtra.pickers.visit_labels()|.
+---
+--- To make this workflow smoother, here is an example of keymaps: >
+---
+---   local map_vis = function(keys, call, desc)
+---     local rhs = '<Cmd>lua MiniVisits.' .. call .. '<CR>'
+---     vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
+---   end
+---
+---   map_vis('vv', 'add_label()',          'Add label')
+---   map_vis('vV', 'remove_label()',       'Remove label')
+---   map_vis('vl', 'select_label("", "")', 'Select label (all)')
+---   map_vis('vL', 'select_label()',       'Select label (cwd)')
+--- <
+--- ## Use fixed labels ~
+---
+--- During work on every project there is usually a handful of files where core
+--- activity is concentrated. This is can be made easier by creating mappings
+--- which add/remove special fixed label (for example, "core") and select paths
+--- with that label for both all and current cwd. Example: >
+---
+---   local map_vis = function(keys, call, desc)
+---     local rhs = '<Cmd>lua MiniVisits.' .. call .. '<CR>'
+---     vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
+---   end
+---
+---   map_vis('vv', 'add_label("core")',                     'Add to core')
+---   map_vis('vV', 'remove_label("core")',                  'Remove from core')
+---   map_vis('vc', 'select_path("", { filter = "core" })',  'Select core (all)')
+---   map_vis('vC', 'select_path(nil, { filter = "core" })', 'Select core (cwd)')
+--- <
+--- ## Use automated labels ~
+---
+--- When using version control system (such as Git), usually there is already
+--- an identifier grouping files you are working with - branch name.
+--- Here is an example of keymaps to add/remove label equal to branch name: >
+---
+---   local map_branch = function(keys, action, desc)
+---     local rhs = function()
+---       local branch = vim.fn.system('git rev-parse --abbrev-ref HEAD')
+---       if vim.v.shell_error ~= 0 then return nil end
+---       branch = vim.trim(branch)
+---       require('mini.visits')[action](branch)
+---     end
+---     vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
+---   end
+---
+---   map_branch('vb', 'add_label',    'Add branch label')
+---   map_branch('vB', 'remove_label', 'Remove branch label')
+--- <
+--- # Setup examples ~
+---
+--- ## Track once per session ~
+---
+--- By default tracking is done on every |BufEnter| event. This allows tracking
+--- visits that are done inside current sessions, more accurately representing
+--- how file navigation is done.
+---
+--- As an alternative, tracking can be done only once per session. As this
+--- will be done less frequently, it is a good idea to adjust normalization.
+--- Example: >
+---
+---   local visits = require('mini.visits')
+---
+---   -- Adjust values to your liking
+---   local norm_opts = { decay_threshold = 250, decay_target = 200 }
+---   visits.setup({
+---     store = { normalize = visits.gen_normalize.default(norm_opts) },
+---   })
+---
+---   -- Create autocommand which checks if visit wasa registered
+---   -- after this code was executed
+---   local init_time = os.time()
+---   local disable_after_once = function(buf_id)
+---     -- Make sure that buffer is appropriate
+---     if not vim.api.nvim_buf_is_valid(buf_id) then return end
+---     if vim.bo[buf_id].buftype ~= '' then return end
+---     local path = vim.api.nvim_buf_get_name(buf_id)
+---     if path == '' then return end
+---
+---     -- Get visit data
+---     local cwd_index = MiniVisits.get_index()[vim.fn.getcwd()]
+---     local path_data = (cwd_index or {})[path]
+---     if path_data == nil then return end
+---
+---     -- Disable visiting if already visited in current session
+---     if path_data.latest < init_time then return end
+---     vim.b[buf_id].minivisits_disable = true
+---   end
+---
+---   vim.api.nvim_create_autocmd(
+---     'BufEnter',
+---     {
+---       callback = function(data) disable_after_once(data.buf) end,
+---       desc = 'Register visit only once',
+---     }
+---   )
 ---@tag MiniVisits-examples
 
 ---@diagnostic disable:undefined-field
@@ -80,6 +341,7 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
+-- TODO: Add `local` before release
 MiniVisits = {}
 H = {}
 
@@ -116,17 +378,6 @@ MiniVisits.config = {
     sort = nil,
   },
 
-  -- How visit registering is done
-  register = {
-    -- Start visit register timer at this event
-    -- Supply empty string (`''`) to not create this automatically
-    event = 'BufEnter',
-
-    -- Debounce delay after event to register a visit
-    -- TODO: Change to 1000
-    delay = 1,
-  },
-
   -- Whether to disable showing non-error feedback
   silent = false,
 
@@ -141,13 +392,21 @@ MiniVisits.config = {
     -- Path to store visit index
     path = vim.fn.stdpath('data') .. '/mini-visits-index',
   },
+
+  -- How visit tracking is done
+  track = {
+    -- Start visit register timer at this event
+    -- Supply empty string (`''`) to not create this automatically
+    event = 'BufEnter',
+
+    -- Debounce delay after event to register a visit
+    delay = 1000,
+  },
 }
 --minidoc_afterlines_end
 
 ---@return boolean Whether registering was actually done.
-MiniVisits.register_visit = function(path, cwd)
-  if H.is_disabled() then return false end
-
+MiniVisits.add_visit = function(path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
   if path == '' or cwd == '' then H.error('Both `path` and `cwd` should not be empty.') end
@@ -157,6 +416,28 @@ MiniVisits.register_visit = function(path, cwd)
   path_tbl.count = path_tbl.count + 1
   path_tbl.latest = os.time()
   return true
+end
+
+--- Remove visit
+---
+--- Notes:
+--- - Affects only in-session Lua variable. To make it persistent,
+---   call |MiniVisits.write_index()|.
+MiniVisits.remove_visit = function(path, cwd)
+  path = H.validate_path(path)
+  cwd = H.validate_cwd(cwd)
+
+  -- Remove all target visits
+  H.ensure_read_index()
+  local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
+  for _, pair in ipairs(path_cwd_pairs) do
+    local cwd_tbl = H.index[pair.cwd]
+    if type(cwd_tbl) == 'table' then cwd_tbl[pair.path] = nil end
+  end
+
+  for dir, _ in pairs(H.index) do
+    if vim.tbl_count(H.index[dir]) == 0 then H.index[dir] = nil end
+  end
 end
 
 MiniVisits.add_label = function(label, path, cwd)
@@ -209,6 +490,24 @@ MiniVisits.remove_label = function(label, path, cwd)
   H.echo(string.format('Removed %s label.', vim.inspect(label)))
 end
 
+--- List visit paths
+---
+---
+--- # Filter ~
+---
+--- # Sort ~
+---
+--- Paths in result list can be sorted. Some common examples:
+--- - By frequency: from most to least frequent.
+--- - By recency: from latest to earliest.
+--- - By frecency: via combination of frequency and recency.
+--- - By custom sorting rule.
+---
+--- By default "robust frecency" approach is used. It independently ranks visits
+--- by recency and frequency, combines numerical ranks with weights, and uses
+--- that number to sort from best to worst.
+--- See |MiniVisits.get_sort.default()| for more details.
+--- See |MiniVisits.gen_sort| for built-in sorting approaches.
 MiniVisits.list_paths = function(cwd, opts)
   cwd = H.validate_cwd(cwd)
 
@@ -248,7 +547,8 @@ MiniVisits.list_labels = function(path, cwd, opts)
   return vim.tbl_map(function(x) return x[2] end, label_arr)
 end
 
-MiniVisits.select_paths = function(cwd, opts)
+--- Note: if you have |MiniPick|, consider using |MiniExtra.pickers.visits()|.
+MiniVisits.select_path = function(cwd, opts)
   local paths = MiniVisits.list_paths(cwd, opts)
   local cwd_to_short = cwd == '' and vim.fn.getcwd() or cwd
   local items = vim.tbl_map(function(path) return { path = path, text = H.short_path(path, cwd_to_short) } end, paths)
@@ -258,7 +558,8 @@ MiniVisits.select_paths = function(cwd, opts)
   vim.ui.select(items, select_opts, on_choice)
 end
 
-MiniVisits.select_labels = function(path, cwd, opts)
+--- Note: if you have |MiniPick|, consider using |MiniExtra.pickers.visit_labels()|.
+MiniVisits.select_label = function(path, cwd, opts)
   local items = MiniVisits.list_labels(path, cwd, opts)
   opts = opts or {}
   local on_choice = function(label)
@@ -270,7 +571,7 @@ MiniVisits.select_labels = function(path, cwd, opts)
     new_opts.filter = function(path_data)
       return filter_cur(path_data) and type(path_data.labels) == 'table' and path_data.labels[label]
     end
-    MiniVisits.select_paths(cwd, new_opts)
+    MiniVisits.select_path(cwd, new_opts)
   end
 
   vim.ui.select(items, { prompt = 'Visited labels' }, on_choice)
@@ -311,7 +612,7 @@ MiniVisits.goto_path = function(direction, cwd, opts)
   local res_ind = cur_ind + opts.n_times * (is_move_forward and 1 or -1)
   res_ind = opts.wrap and ((res_ind - 1) % n_tot + 1) or math.min(math.max(res_ind, 1), n_tot)
 
-  -- Open path with no visit autoregister (for default `register.event`)
+  -- Open path with no visit track (for default `track.event`)
   -- Use `vim.g` instead of `vim.b` to not register in **next** buffer
   local cache_disabled = vim.g.minivisits_disable
   vim.g.minivisits_disable = true
@@ -342,7 +643,7 @@ MiniVisits.normalize_index = function(index)
 
   local config = H.get_config()
   local normalize = config.store.normalize
-  if not vim.is_callable(normalize) then normalize = MiniVisits.default_normalize end
+  if not vim.is_callable(normalize) then normalize = MiniVisits.gen_normalize.default() end
   local new_index = normalize(vim.deepcopy(index))
   H.validate_index(new_index, 'normalized `index`')
 
@@ -355,9 +656,7 @@ MiniVisits.read_index = function(store_path)
   H.validate_string(store_path, 'path')
   if vim.fn.filereadable(store_path) == 0 then return nil end
 
-  local ok, res = pcall(dofile, store_path)
-  if not ok then return nil end
-  return res
+  return dofile(store_path)
 end
 
 MiniVisits.write_index = function(store_path, index)
@@ -427,19 +726,23 @@ MiniVisits.gen_sort.z = function()
   end
 end
 
-MiniVisits.default_normalize = function(index, opts)
-  H.validate_index(index)
-  local default_opts = { decay_threshold = 50, decay_target = 45, prune_threshold = 0.5, prune_paths = false }
+MiniVisits.gen_normalize = {}
+
+MiniVisits.gen_normalize.default = function(opts)
+  local default_opts = { decay_threshold = 1000, decay_target = 800, prune_threshold = 0.5, prune_paths = false }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
-  local res = vim.deepcopy(index)
-  H.index_prune(res, opts.prune_paths, opts.prune_threshold)
-  for cwd, cwd_tbl in pairs(res) do
-    H.index_decay_cwd(cwd_tbl, opts.decay_threshold, opts.decay_target)
+  return function(index)
+    H.validate_index(index)
+    local res = vim.deepcopy(index)
+    H.index_prune(res, opts.prune_paths, opts.prune_threshold)
+    for cwd, cwd_tbl in pairs(res) do
+      H.index_decay_cwd(cwd_tbl, opts.decay_threshold, opts.decay_target)
+    end
+    -- Ensure that no path has count smaller than threshold
+    H.index_prune(res, false, opts.prune_threshold)
+    return res
   end
-  -- Ensure that no path has count smaller than threshold
-  H.index_prune(res, false, opts.prune_threshold)
-  return res
 end
 
 -- Helper data ================================================================
@@ -448,7 +751,7 @@ H.default_config = MiniVisits.config
 
 -- Various timers
 H.timers = {
-  register = vim.loop.new_timer(),
+  track = vim.loop.new_timer(),
 }
 
 -- Current visit index
@@ -456,8 +759,8 @@ H.index = {}
 
 -- Various cache
 H.cache = {
-  -- Latest registered path used to not autoregister same path in a row
-  latest_registered_path = nil,
+  -- Latest tracked path used to not autoregister same path in a row
+  latest_tracked_path = nil,
 
   -- Whether index is yet to be read from the stored path, as it is not read
   -- right away delaying until it is absolutely necessary
@@ -477,21 +780,21 @@ H.setup_config = function(config)
 
   vim.validate({
     list = { config.list, 'table' },
-    register = { config.register, 'table' },
     silent = { config.silent, 'boolean' },
     store = { config.store, 'table' },
+    track = { config.track, 'table' },
   })
 
   vim.validate({
     ['list.filter'] = { config.list.filter, 'function', true },
     ['list.sort'] = { config.list.sort, 'function', true },
 
-    ['register.delay'] = { config.register.delay, 'number' },
-    ['register.event'] = { config.register.event, 'string' },
-
     ['store.autowrite'] = { config.store.autowrite, 'boolean' },
     ['store.normalize'] = { config.store.normalize, 'function', true },
     ['store.path'] = { config.store.path, 'string' },
+
+    ['track.delay'] = { config.track.delay, 'number' },
+    ['track.event'] = { config.track.event, 'string' },
   })
 
   return config
@@ -506,39 +809,51 @@ H.create_autocommands = function(config)
     vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
   end
 
-  if config.register.event ~= '' then au(config.register.event, '*', H.autoregister_visit, 'Auto register visit') end
-  if config.store.autowrite then
-    au('VimLeavePre', '*', function() pcall(MiniVisits.write_index) end, 'Autowrite visit index')
-  end
+  if config.track.event ~= '' then au(config.track.event, '*', H.autoregister_visit, 'Auto register visit') end
+  au('VimLeavePre', '*', function()
+    if not H.get_config().store.autowrite then return end
+    pcall(MiniVisits.write_index)
+  end, 'Autowrite visit index')
 end
 
-H.is_disabled = function() return vim.g.minivisits_disable == true or vim.b.minivisits_disable == true end
+H.is_disabled = function(buf_id)
+  local buf_disable = H.get_buf_var(buf_id, 'minivisits_disable')
+  return vim.g.minivisits_disable == true or buf_disable == true
+end
 
 H.get_config = function(config, buf_id)
-  return vim.tbl_deep_extend('force', MiniVisits.config, vim.b.minivisits_config or {}, config or {})
+  local buf_config = H.get_buf_var(buf_id, 'minivisits_config') or {}
+  return vim.tbl_deep_extend('force', MiniVisits.config, buf_config, config or {})
+end
+
+H.get_buf_var = function(buf_id, name)
+  if not H.is_valid_buf(buf_id) then return nil end
+  return vim.b[buf_id or 0][name]
 end
 
 -- Autocommands ---------------------------------------------------------------
 H.autoregister_visit = function(data)
   -- Recognize the register opportunity by stopping timer before check for
   -- disabling. This is important for `goto_path` functionality.
-  H.timers.register:stop()
-  if H.is_disabled() then return end
-
+  H.timers.track:stop()
   local buf_id = data.buf
+  if H.is_disabled(buf_id) then return end
+
   local f = vim.schedule_wrap(function()
+    if H.is_disabled(buf_id) then return end
+
     -- Register only normal buffer if it is not the latest registered (avoids
     -- tracking visits from switching between normal and non-normal buffers)
     local path = H.buf_get_path(buf_id)
-    if path == nil or path == H.cache.latest_registered_path then return end
+    if path == nil or path == H.cache.latest_tracked_path then return end
 
-    local success = MiniVisits.register_visit(path, vim.fn.getcwd())
+    local success = MiniVisits.add_visit(path, vim.fn.getcwd())
     if not success then return end
 
-    H.cache.latest_registered_path = path
+    H.cache.latest_tracked_path = path
   end)
 
-  H.timers.register:start(H.get_config().register.delay, 0, f)
+  H.timers.track:start(H.get_config(nil, buf_id).track.delay, 0, f)
 end
 
 -- Visit index ----------------------------------------------------------------
@@ -546,7 +861,8 @@ H.ensure_read_index = function()
   if not H.cache.needs_index_read then return end
 
   -- Try reading previous index
-  local res_index = MiniVisits.read_index()
+  local ok, res_index = pcall(MiniVisits.read_index)
+  if not ok then return end
   local is_index = pcall(H.validate_index, res_index)
   if not is_index then return end
 
