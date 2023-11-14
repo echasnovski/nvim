@@ -8,6 +8,7 @@ local new_set = MiniTest.new_set
 --stylua: ignore start
 local load_module = function(config) child.mini_load('visits', config) end
 local unload_module = function() child.mini_unload('visits') end
+local type_keys = function(...) return child.type_keys(...) end
 local poke_eventloop = function() child.api.nvim_eval('1') end
 local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 local edit = function(path) child.cmd('edit ' .. child.fn.fnameescape(path)) end
@@ -28,7 +29,7 @@ local make_testpath = function(...) return join_path(test_dir_absolute, ...) end
 
 local cleanup_dirs = function()
   -- Clean up any possible side effects in `XDG_DATA_HOME` directory
-  vim.fn.delete(join_path(test_dir, 'nvim'), 'rf')
+  vim.fn.delete(join_path(test_dir_absolute, 'nvim'), 'rf')
 end
 
 -- Common test wrappers
@@ -38,6 +39,7 @@ local forward_lua = function(fun_str)
 end
 
 local get_index = forward_lua('MiniVisits.get_index')
+local set_index = forward_lua('MiniVisits.set_index')
 
 -- Common test helpers
 local validate_buf_name = function(buf_id, name)
@@ -97,17 +99,19 @@ local validate_index = function(index_out, index_ref)
   eq(index_out, index_ref)
 end
 
--- Data =======================================================================
-local test_index = {
-  [make_testpath('dir_1')] = {
-    [make_testpath('dir_1', 'file_1-1')] = { count = 1, latest = os.time() },
-    [make_testpath('dir_1', 'file_1-2')] = { count = 2, latest = os.time() + 1 },
-  },
-  [make_testpath('dir_2')] = {
-    [make_testpath('dir_2', 'file_2-1')] = { count = 3, latest = os.time() + 3 },
-    [make_testpath('dir_1', 'file_1-2')] = { count = 4, latest = os.time() + 4 },
-  },
-}
+local make_ref_index_full = function(ref_index)
+  local ref_full = {}
+  for cwd, cwd_tbl in pairs(ref_index) do
+    local cwd_tbl_full = {}
+    for path, path_tbl in pairs(cwd_tbl) do
+      cwd_tbl_full[make_testpath(path)] = path_tbl
+    end
+    ref_full[make_testpath(cwd)] = cwd_tbl_full
+  end
+  return ref_full
+end
+
+local set_index_from_ref = function(ref) set_index(make_ref_index_full(ref)) end
 
 -- Output test set ============================================================
 local T = new_set({
@@ -117,14 +121,14 @@ local T = new_set({
       cleanup_dirs()
 
       -- Make `stdpath('data')` point to test directory
-      local lua_cmd = string.format([[vim.loop.os_setenv('XDG_DATA_HOME', %s)]], vim.inspect(test_dir))
+      local lua_cmd = string.format([[vim.loop.os_setenv('XDG_DATA_HOME', %s)]], vim.inspect(test_dir_absolute))
       child.lua(lua_cmd)
 
       -- Load module
       load_module()
 
       -- Make more comfortable screenshots
-      child.set_size(15, 40)
+      child.set_size(5, 60)
       child.o.laststatus = 0
       child.o.ruler = false
     end,
@@ -201,8 +205,8 @@ local register_visit = forward_lua('MiniVisits.register_visit')
 
 T['register_visit()']['works'] = function()
   -- Should not check if arguments represent present paths on disk
-  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
   local file_full, file_2_full = full_path('file'), full_path('dir/file-2')
+  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
 
   -- Should create entry if it is not present treating input as file system
   -- entries (relative to current directory in this case)
@@ -253,7 +257,7 @@ end
 
 T['register_visit()']['does not affect other stored data'] = function()
   local path, cwd = make_testpath('file'), test_dir_absolute
-  child.lua([[MiniVisits.set_index(...)]], { { [cwd] = { [path] = { count = 0, latest = 0, aaa = { bbb = true } } } } })
+  set_index({ [cwd] = { [path] = { count = 0, latest = 0, aaa = { bbb = true } } } })
   register_visit(path, cwd)
   eq(get_index(), { [cwd] = { [path] = { count = 1, latest = os.time(), aaa = { bbb = true } } } })
 end
@@ -294,8 +298,8 @@ T['add_path()']['works'] = function()
 end
 
 T['add_path()']['works with empty string arguments'] = function()
-  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
   local file_full, file_2_full = full_path('file'), full_path('file-2')
+  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
   local init_tbl = { count = 0, latest = 0 }
 
   -- If no visits, should result into no added paths
@@ -330,7 +334,7 @@ end
 
 T['add_path()']['does not affect other stored data'] = function()
   local path, cwd = make_testpath('file'), test_dir_absolute
-  child.lua([[MiniVisits.set_index(...)]], { { [cwd] = { [path] = { count = 0, latest = 0, aaa = { bbb = true } } } } })
+  set_index({ [cwd] = { [path] = { count = 0, latest = 0, aaa = { bbb = true } } } })
   add_path(path, cwd)
   eq(get_index(), { [cwd] = { [path] = { count = 0, latest = 0, aaa = { bbb = true } } } })
 end
@@ -344,41 +348,709 @@ T['add_label()'] = new_set()
 
 local add_label = forward_lua('MiniVisits.add_label')
 
-T['add_label()']['works'] = function() MiniTest.skip() end
+T['add_label()']['works'] = function()
+  -- Should not check if arguments represent present paths on disk
+  local file_full, dir_full = full_path('file'), full_path('dir')
 
-T['add_label()']['validates arguments'] = function() MiniTest.skip() end
+  -- Should add path if it is not present
+  add_label('aaa', 'file', 'dir')
+  eq(get_index(), { [dir_full] = { [file_full] = { count = 0, labels = { aaa = true }, latest = 0 } } })
+
+  -- Should show feedback message
+  child.expect_screenshot()
+
+  -- Should add to already existing path-cwd pair
+  add_label('bbb', 'file', 'dir')
+  eq(get_index(), { [dir_full] = { [file_full] = { count = 0, labels = { aaa = true, bbb = true }, latest = 0 } } })
+
+  -- Should not affect already present data
+  register_visit('file', 'dir')
+  add_label('ccc', 'file', 'dir')
+  eq(get_index(), {
+    [dir_full] = { [file_full] = { count = 1, labels = { aaa = true, bbb = true, ccc = true }, latest = os.time() } },
+  })
+end
+
+T['add_label()']['works with empty string arguments'] = function()
+  local file_full, file_2_full = full_path('file'), full_path('file-2')
+  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
+
+  -- If no visits, should result into no added paths and labels
+  add_path('', 'dir')
+  eq(get_index(), {})
+  add_path('file', '')
+  eq(get_index(), {})
+  add_path('', '')
+  eq(get_index(), {})
+
+  -- Empty string for `path` should mean "add to all present paths in cwd"
+  add_path('file', 'dir')
+  add_path('file-2', 'dir')
+  add_label('aaa', '', 'dir')
+  eq(get_index(), {
+    [dir_full] = {
+      [file_full] = { count = 0, labels = { aaa = true }, latest = 0 },
+      [file_2_full] = { count = 0, labels = { aaa = true }, latest = 0 },
+    },
+  })
+
+  -- Empty string for `cwd` should mean "add to path in all present cwds"
+  add_path('file', 'dir-2')
+  add_label('bbb', 'file', '')
+  eq(get_index(), {
+    [dir_full] = {
+      [file_full] = { count = 0, labels = { aaa = true, bbb = true }, latest = 0 },
+      [file_2_full] = { count = 0, labels = { aaa = true }, latest = 0 },
+    },
+    [dir_2_full] = {
+      [file_full] = { count = 0, labels = { bbb = true }, latest = 0 },
+    },
+  })
+
+  -- Both empty strings should mean "add to all present paths in present cwds"
+  add_label('ccc', '', '')
+  eq(get_index(), {
+    [dir_full] = {
+      [file_full] = { count = 0, labels = { aaa = true, bbb = true, ccc = true }, latest = 0 },
+      [file_2_full] = { count = 0, labels = { aaa = true, ccc = true }, latest = 0 },
+    },
+    [dir_2_full] = {
+      [file_full] = { count = 0, labels = { bbb = true, ccc = true }, latest = 0 },
+    },
+  })
+end
+
+T['add_label()']['uses current data as defaults for path and cwd'] = function()
+  local path = make_testpath('file')
+  edit(path)
+  add_label('aaa')
+  eq(get_index(), { [child.fn.getcwd()] = { [path] = { count = 0, labels = { aaa = true }, latest = 0 } } })
+end
+
+T['add_label()']['asks user for label if it is not supplied'] = function()
+  local file_full, file_2_full = full_path('file'), full_path('file-2')
+  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
+
+  child.lua_notify([[MiniVisits.add_label(nil, 'file', 'dir')]])
+  child.expect_screenshot()
+  type_keys('aaa', '<CR>')
+  eq(get_index(), { [dir_full] = { [file_full] = { count = 0, labels = { aaa = true }, latest = 0 } } })
+
+  -- Has completion with all labels from target cwd
+  add_label('abb', 'file-2', 'dir')
+  add_label('bbb', 'file', 'dir')
+  add_label('ccc', 'file', 'dir-2')
+  add_label('ddd', 'file-2', 'dir-2')
+
+  child.lua_notify([[MiniVisits.add_label(nil, 'file', 'dir')]])
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  -- - Should properly filter it
+  type_keys('<C-e>', 'a', '<Tab>')
+  child.expect_screenshot()
+
+  -- - Can be canceled without adding any label
+  type_keys('<C-c>')
+  eq(get_index(), {
+    [dir_full] = {
+      [file_full] = { count = 0, labels = { aaa = true, bbb = true }, latest = 0 },
+      [file_2_full] = { count = 0, labels = { abb = true }, latest = 0 },
+    },
+    [dir_2_full] = {
+      [file_full] = { count = 0, labels = { ccc = true }, latest = 0 },
+      [file_2_full] = { count = 0, labels = { ddd = true }, latest = 0 },
+    },
+  })
+end
+
+T['add_label()']['does not affect other stored data'] = function()
+  local path, cwd = make_testpath('file'), test_dir_absolute
+  set_index({ [cwd] = { [path] = { count = 0, latest = 0, aaa = { bbb = true } } } })
+  add_label('xxx', path, cwd)
+  eq(get_index(), { [cwd] = { [path] = { count = 0, labels = { xxx = true }, latest = 0, aaa = { bbb = true } } } })
+end
+
+T['add_label()']['validates arguments'] = function()
+  expect.error(function() add_label(1, 'file', 'dir') end, '`label`.*string')
+  expect.error(function() add_label('aaa', 1, 'dir') end, '`path`.*string')
+  expect.error(function() add_label('aaa', 'file', 1) end, '`cwd`.*string')
+end
 
 T['remove_path()'] = new_set()
 
 local remove_path = forward_lua('MiniVisits.remove_path')
 
-T['remove_path()']['works'] = function() MiniTest.skip() end
+T['remove_path()']['works'] = function()
+  -- Should not check if arguments represent present paths on disk
+  local dir_full = full_path('dir')
+  local file_full, file_2_full = full_path('file'), full_path('file-2')
 
-T['remove_path()']['validates arguments'] = function() MiniTest.skip() end
+  add_path('file', 'dir')
+  eq(get_index(), { [dir_full] = { [file_full] = { count = 0, latest = 0 } } })
+  remove_path('file', 'dir')
+  eq(get_index(), {})
+
+  -- Should do nothing if path-cwd already absent
+  remove_path('file', 'dir')
+  eq(get_index(), {})
+end
+
+T['remove_path()']['works with empty string arguments'] = function()
+  local file_full, file_2_full = full_path('file'), full_path('file-2')
+  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
+  local init_tbl = { count = 0, latest = 0 }
+
+  -- If no visits, should result into no errors
+  remove_path('', 'dir')
+  eq(get_index(), {})
+  remove_path('file', '')
+  eq(get_index(), {})
+  remove_path('', '')
+  eq(get_index(), {})
+
+  -- Empty string for `path` should mean "remove all present paths in cwd".
+  add_path('file', 'dir')
+  add_path('file-2', 'dir')
+  add_path('file', 'dir-2')
+  remove_path('', 'dir')
+  eq(get_index(), { [dir_2_full] = { [file_full] = init_tbl } })
+
+  -- Empty string for `cwd` should mean "remove path from all visited cwds".
+  add_path('file', 'dir')
+  add_path('file-2', 'dir')
+  remove_path('file', '')
+  eq(get_index(), { [dir_full] = { [file_2_full] = init_tbl } })
+
+  -- Both empty strings should essentially mean "remove all present"
+  add_path('file', 'dir')
+  add_path('file-2', 'dir')
+  remove_path('', '')
+  eq(get_index(), {})
+end
+
+T['remove_path()']['uses current data as defaults'] = function()
+  local path = make_testpath('file')
+  edit(path)
+  add_path()
+  eq(get_index(), { [child.fn.getcwd()] = { [path] = { count = 0, latest = 0 } } })
+
+  remove_path()
+  eq(get_index(), {})
+end
+
+T['remove_path()']['validates arguments'] = function()
+  expect.error(function() remove_path(1, 'dir') end, '`path`.*string')
+  expect.error(function() remove_path('file', 1) end, '`cwd`.*string')
+end
 
 T['remove_label()'] = new_set()
 
 local remove_label = forward_lua('MiniVisits.remove_label')
 
-T['remove_label()']['works'] = function() MiniTest.skip() end
+T['remove_label()']['works'] = function()
+  -- Should not check if arguments represent present paths on disk
+  local file_full, dir_full = full_path('file'), full_path('dir')
 
-T['remove_label()']['validates arguments'] = function() MiniTest.skip() end
+  add_label('aaa', 'file', 'dir')
+  eq(get_index(), { [dir_full] = { [file_full] = { count = 0, labels = { aaa = true }, latest = 0 } } })
+
+  remove_label('aaa', 'file', 'dir')
+  eq(get_index(), { [dir_full] = { [file_full] = { count = 0, latest = 0 } } })
+
+  -- Should show feedback message
+  child.expect_screenshot()
+
+  -- Should not affect already present data
+  register_visit('file', 'dir')
+  add_label('bbb', 'file', 'dir')
+  add_label('ccc', 'file', 'dir')
+  remove_label('bbb', 'file', 'dir')
+  eq(get_index(), {
+    [dir_full] = { [file_full] = { count = 1, labels = { ccc = true }, latest = os.time() } },
+  })
+end
+
+T['remove_label()']['works with empty string arguments'] = function()
+  local file_full, file_2_full = full_path('file'), full_path('file-2')
+  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
+
+  -- If no visits, should result into no error
+  remove_path('', 'dir')
+  eq(get_index(), {})
+  remove_path('file', '')
+  eq(get_index(), {})
+  remove_path('', '')
+  eq(get_index(), {})
+
+  -- Empty string for `path` should mean "remove from all present paths in cwd"
+  add_label('aaa', 'file', 'dir')
+  add_label('aaa', 'file-2', 'dir')
+  add_label('aaa', 'file', 'dir-2')
+  remove_label('aaa', '', 'dir')
+  eq(get_index(), {
+    [dir_full] = {
+      [file_full] = { count = 0, latest = 0 },
+      [file_2_full] = { count = 0, latest = 0 },
+    },
+    [dir_2_full] = {
+      [file_full] = { count = 0, labels = { aaa = true }, latest = 0 },
+    },
+  })
+
+  -- Empty string for `cwd` should mean "remove from path in all present cwds"
+  add_label('aaa', 'file', 'dir')
+  add_label('aaa', 'file-2', 'dir')
+  remove_label('aaa', 'file', '')
+  eq(get_index(), {
+    [dir_full] = {
+      [file_full] = { count = 0, latest = 0 },
+      [file_2_full] = { count = 0, labels = { aaa = true }, latest = 0 },
+    },
+    [dir_2_full] = {
+      [file_full] = { count = 0, latest = 0 },
+    },
+  })
+
+  -- Both empty should mean "remove from all present paths in present cwds"
+  add_label('aaa', 'file', 'dir')
+  add_label('aaa', 'file', 'dir-2')
+  remove_label('aaa', '', '')
+  eq(get_index(), {
+    [dir_full] = {
+      [file_full] = { count = 0, latest = 0 },
+      [file_2_full] = { count = 0, latest = 0 },
+    },
+    [dir_2_full] = {
+      [file_full] = { count = 0, latest = 0 },
+    },
+  })
+end
+
+T['remove_label()']['uses current data as defaults for path and cwd'] = function()
+  local path = make_testpath('file')
+  edit(path)
+  add_label('aaa')
+  eq(get_index(), { [child.fn.getcwd()] = { [path] = { count = 0, labels = { aaa = true }, latest = 0 } } })
+
+  remove_label('aaa')
+  eq(get_index(), { [child.fn.getcwd()] = { [path] = { count = 0, latest = 0 } } })
+end
+
+T['remove_label()']['asks user for label if it is not supplied'] = function()
+  local file_full, file_2_full = full_path('file'), full_path('file-2')
+  local dir_full, dir_2_full = full_path('dir'), full_path('dir-2')
+
+  add_label('aaa', 'file', 'dir')
+  add_label('bbb', 'file', 'dir')
+
+  child.lua_notify([[MiniVisits.remove_label(nil, 'file', 'dir')]])
+  child.expect_screenshot()
+  type_keys('aaa', '<CR>')
+  eq(get_index(), { [dir_full] = { [file_full] = { count = 0, labels = { bbb = true }, latest = 0 } } })
+
+  -- Has completion with all labels from target path-cwd pair
+  add_label('aaa', 'file', 'dir')
+  add_label('abb', 'file', 'dir')
+  add_label('bbb', 'file', 'dir')
+
+  add_label('ccc', 'file-2', 'dir')
+  add_label('ddd', 'file', 'dir-2')
+
+  child.lua_notify([[MiniVisits.remove_label(nil, 'file', 'dir')]])
+  type_keys('<Tab>')
+  child.expect_screenshot()
+
+  -- - Should properly filter it
+  type_keys('<C-e>', 'a', '<Tab>')
+  child.expect_screenshot()
+
+  -- - Can be canceled without adding any label
+  type_keys('<C-c>')
+  eq(get_index(), {
+    [dir_full] = {
+      [file_full] = { count = 0, labels = { aaa = true, abb = true, bbb = true }, latest = 0 },
+      [file_2_full] = { count = 0, labels = { ccc = true }, latest = 0 },
+    },
+    [dir_2_full] = {
+      [file_full] = { count = 0, labels = { ddd = true }, latest = 0 },
+    },
+  })
+end
+
+T['remove_label()']['does not affect other stored data'] = function()
+  local path, cwd = make_testpath('file'), test_dir_absolute
+  set_index({ [cwd] = { [path] = { count = 0, labels = { xxx = true }, latest = 0, aaa = { bbb = true } } } })
+  remove_label('xxx', path, cwd)
+  eq(get_index(), { [cwd] = { [path] = { count = 0, latest = 0, aaa = { bbb = true } } } })
+end
+
+T['remove_label()']['validates arguments'] = function()
+  expect.error(function() remove_label(1, 'file', 'dir') end, '`label`.*string')
+  expect.error(function() remove_label('aaa', 1, 'dir') end, '`path`.*string')
+  expect.error(function() remove_label('aaa', 'file', 1) end, '`cwd`.*string')
+end
 
 T['list_paths()'] = new_set()
 
 local list_paths = forward_lua('MiniVisits.list_paths')
 
-T['list_paths()']['works'] = function() MiniTest.skip() end
+T['list_paths()']['works'] = function()
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 2, latest = os.time() - 3 },
+      ['dir_1/file_1-2'] = { count = 1, latest = os.time() - 4 },
+    },
+    dir_2 = {
+      ['dir_2/file_2-1'] = { count = 3, latest = os.time() - 2 },
+      ['dir_1/file_1-2'] = { count = 4, latest = os.time() - 1 },
+    },
+  }
+  set_index_from_ref(ref_index)
 
-T['list_paths()']['validates arguments'] = function() MiniTest.skip() end
+  local validate_dir_1 =
+    function(cwd) eq(list_paths(cwd), { make_testpath('dir_1', 'file_1-1'), make_testpath('dir_1', 'file_1-2') }) end
+
+  -- Should work with relative path `cwd`
+  local rel_cwd = join_path(test_dir, 'dir_1')
+  validate_dir_1(rel_cwd)
+
+  -- Should work with absolute path `cwd`
+  local abs_cwd = full_path(rel_cwd)
+  validate_dir_1(abs_cwd)
+
+  -- Should use current working directory by default
+  child.fn.chdir(make_testpath('dir_1'))
+  validate_dir_1(nil)
+
+  -- Should work with empty string `cwd` meaning "all visited cwds"
+  eq(
+    list_paths(''),
+    { make_testpath('dir_1', 'file_1-2'), make_testpath('dir_2', 'file_2-1'), make_testpath('dir_1', 'file_1-1') }
+  )
+
+  -- Should not affect the index
+  eq(get_index(), make_ref_index_full(ref_index))
+end
+
+T['list_paths()']['respects `opts.filter`'] = function()
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 2, latest = 10 },
+      ['dir_1/file_1-2'] = { count = 1, latest = 9 },
+    },
+  }
+  set_index_from_ref(ref_index)
+
+  child.lua([[
+    _G.filter_args_log = {}
+    _G.filter = function(...)
+      table.insert(_G.filter_args_log, { ... })
+      local path_data = ({ ... })[1]
+      return path_data.count > 1
+    end]])
+
+  child.lua('_G.cwd = ' .. vim.inspect(make_testpath('dir_1')))
+  eq(child.lua_get([[MiniVisits.list_paths(cwd, { filter = _G.filter })]]), { make_testpath('dir_1', 'file_1-1') })
+
+  local args_log = child.lua_get('_G.filter_args_log')
+  -- - Ensure same order in test, as there is no guarantee of order
+  table.sort(args_log, function(a, b) return a[1].path < b[1].path end)
+  eq(args_log, {
+    { { count = 2, latest = 10, path = make_testpath('dir_1', 'file_1-1') } },
+    { { count = 1, latest = 9, path = make_testpath('dir_1', 'file_1-2') } },
+  })
+end
+
+T['list_paths()']['respects `opts.sort`'] = function()
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 2, latest = 10 },
+      ['dir_1/file_1-2'] = { count = 1, latest = 9 },
+    },
+  }
+  set_index_from_ref(ref_index)
+
+  child.lua([[
+    _G.sort_args_log = {}
+    _G.sort = function(...)
+      table.insert(_G.sort_args_log, { ... })
+      local path_data_arr = vim.deepcopy(({ ... })[1])
+      table.sort(path_data_arr, function(a, b) return a.count < b.count end)
+      return path_data_arr
+    end]])
+
+  child.lua('_G.cwd = ' .. vim.inspect(make_testpath('dir_1')))
+  eq(
+    child.lua_get([[MiniVisits.list_paths(_G.cwd, { sort = _G.sort })]]),
+    { make_testpath('dir_1', 'file_1-2'), make_testpath('dir_1', 'file_1-1') }
+  )
+
+  local args_log = child.lua_get('_G.sort_args_log')
+  eq(vim.tbl_count(args_log), 1)
+  local path_data_arr = args_log[1][1]
+  -- - Ensure same order in test, as there is no guarantee of order
+  table.sort(path_data_arr, function(a, b) return a.path < b.path end)
+  eq(path_data_arr, {
+    { count = 2, latest = 10, path = make_testpath('dir_1', 'file_1-1') },
+    { count = 1, latest = 9, path = make_testpath('dir_1', 'file_1-2') },
+  })
+end
+
+T['list_paths()']['allows `opts.sort` to return non-related array'] = function()
+  child.lua([[_G.sort = function() return { { path = 'bb' }, { path = 'aa' } } end]])
+  eq(child.lua_get([[MiniVisits.list_paths('', { sort = _G.sort })]]), { 'bb', 'aa' })
+end
+
+T['list_paths()']['properly merges visit data for filter and sort'] = function()
+  --stylua: ignore
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 2, latest = 10, aaa = 1 },
+      ['dir_1/file_1-2'] = { count = 1, latest = 9, bbb  = 'a' },
+      ['file']           = { count = 1, latest = 8, data = { bool = true, num = 2, str = 'b' } },
+    },
+    dir_2 = {
+      ['dir_1/file_1-1'] = { count = 11, latest = 100, ccc = 3 },
+      ['file']           = { count = 10, latest = 1, data = { bool2 = true, num2 = 2, str2 = 'b' } },
+    }
+  }
+  set_index_from_ref(ref_index)
+
+  child.lua([[
+    _G.filter_args_log, _G.sort_args_log = {}, {}
+    _G.filter = function(...)
+      table.insert(_G.filter_args_log, { ... })
+      return true
+    end
+    _G.sort = function(...)
+      table.insert(_G.sort_args_log, { ... })
+      return ({...})[1]
+    end]])
+
+  child.lua_get([[MiniVisits.list_paths('', { filter = _G.filter, sort = _G.sort })]])
+
+  -- Filter
+  local filter_args_log = child.lua_get('_G.filter_args_log')
+  -- - Ensure same order in test, as there is no guarantee of order
+  table.sort(filter_args_log, function(a, b) return a[1].path < b[1].path end)
+
+  eq(filter_args_log, {
+    -- `count` should be summed, `latest` should be reduced with `math.max`,
+    -- non-related fields should be merged
+    { { count = 13, latest = 100, path = make_testpath('dir_1', 'file_1-1'), aaa = 1, ccc = 3 } },
+    { { count = 1, latest = 9, path = make_testpath('dir_1', 'file_1-2'), bbb = 'a' } },
+    {
+      {
+        count = 11,
+        latest = 8,
+        path = make_testpath('file'),
+        data = { bool = true, bool2 = true, num = 2, num2 = 2, str = 'b', str2 = 'b' },
+      },
+    },
+  })
+
+  -- Sort
+  local sort_args_log = child.lua_get('_G.sort_args_log')
+  eq(vim.tbl_count(sort_args_log), 1)
+  local path_data_arr = sort_args_log[1][1]
+  -- - Ensure same order in test, as there is no guarantee of order
+  table.sort(path_data_arr, function(a, b) return a.path < b.path end)
+
+  eq(path_data_arr, {
+    { count = 13, latest = 100, path = make_testpath('dir_1', 'file_1-1'), aaa = 1, ccc = 3 },
+    { count = 1, latest = 9, path = make_testpath('dir_1', 'file_1-2'), bbb = 'a' },
+    {
+      count = 11,
+      latest = 8,
+      path = make_testpath('file'),
+      data = { bool = true, bool2 = true, num = 2, num2 = 2, str = 'b', str2 = 'b' },
+    },
+  })
+end
+
+T['list_paths()']['respects `config.list`'] = function()
+  set_index_from_ref({ dir_1 = { file = { count = 1, latest = 10 } } })
+
+  child.lua([[
+    _G.filter = function()
+      _G.filter_been_here = true
+      return true
+    end
+    _G.sort = function(...)
+      _G.sort_been_here = true
+      return ({...})[1]
+    end]])
+  child.lua('MiniVisits.config.list = { filter = _G.filter, sort = _G.sort }')
+
+  list_paths('')
+
+  eq(child.lua_get('_G.filter_been_here'), true)
+  eq(child.lua_get('_G.sort_been_here'), true)
+end
+
+T['list_paths()']['validates arguments'] = function()
+  expect.error(function() list_paths(1) end, '`cwd`.*string')
+end
 
 T['list_labels()'] = new_set()
 
 local list_labels = forward_lua('MiniVisits.list_labels')
 
-T['list_labels()']['works'] = function() MiniTest.skip() end
+T['list_labels()']['works'] = function()
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 0, labels = { xxx = true, bbb = true }, latest = 0 },
+      ['dir_1/file_1-2'] = { count = 0, labels = { xxx = true, aaa = true }, latest = 0 },
+    },
+    dir_2 = {
+      ['dir_2/file_2-1'] = { count = 0, latest = 0 },
+      ['dir_1/file_1-2'] = { count = 0, labels = { xxx = true, yyy = true }, latest = 0 },
+    },
+  }
+  set_index_from_ref(ref_index)
 
-T['list_labels()']['validates arguments'] = function() MiniTest.skip() end
+  -- Should first sort by decreasing frequency of appeareance for different
+  -- paths. Ties should be resolved alphabetically.
+
+  -- Should work with relative paths
+  local rel_path = join_path(test_dir, 'dir_1', 'file_1-1')
+  local rel_cwd = join_path(test_dir, 'dir_1')
+  eq(list_labels(rel_path, rel_cwd), { 'bbb', 'xxx' })
+
+  -- Should work with absolute paths
+  local abs_path = full_path(rel_path)
+  local abs_cwd = full_path(rel_cwd)
+  eq(list_labels(abs_path, abs_cwd), { 'bbb', 'xxx' })
+
+  -- Should use current file and directory as defaults
+  child.fn.chdir(make_testpath('dir_1'))
+  edit('file_1-1')
+  eq(list_labels(), { 'bbb', 'xxx' })
+
+  -- Should work with empty string `path` meaning "all paths in target cwd"
+  eq(list_labels('', abs_cwd), { 'xxx', 'aaa', 'bbb' })
+
+  -- Should work with empty string `cwd` meaning "path in all cwds"
+  -- - NOTE: Although `xxx` label happens twice, it is still counted as one
+  --   because it is for the same path.
+  eq(list_labels(make_testpath('dir_1', 'file_1-2'), ''), { 'aaa', 'xxx', 'yyy' })
+
+  -- Should work with both empty strings meaning "all visits"
+  eq(list_labels('', ''), { 'xxx', 'aaa', 'bbb', 'yyy' })
+
+  -- Should work with empty string `cwd` meaning "all visited cwds"
+  eq(get_index(), make_ref_index_full(ref_index))
+end
+
+T['list_labels()']['respects `opts.filter`'] = function()
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 2, labels = { xxx = true, aaa = true }, latest = 10 },
+      ['dir_1/file_1-2'] = { count = 1, labels = { xxx = true, bbb = true }, latest = 9 },
+    },
+  }
+  set_index_from_ref(ref_index)
+
+  child.lua([[
+    _G.filter_args_log = {}
+    _G.filter = function(...)
+      table.insert(_G.filter_args_log, { ... })
+      local path_data = ({ ... })[1]
+      return path_data.count > 1
+    end]])
+
+  child.lua('_G.cwd = ' .. vim.inspect(make_testpath('dir_1')))
+  eq(child.lua_get([[MiniVisits.list_labels('', cwd, { filter = _G.filter })]]), { 'aaa', 'xxx' })
+
+  local args_log = child.lua_get('_G.filter_args_log')
+  -- - Ensure same order in test, as there is no guarantee of order
+  table.sort(args_log, function(a, b) return a[1].path < b[1].path end)
+  eq(args_log, {
+    { { count = 2, labels = { xxx = true, aaa = true }, latest = 10, path = make_testpath('dir_1', 'file_1-1') } },
+    { { count = 1, labels = { xxx = true, bbb = true }, latest = 9, path = make_testpath('dir_1', 'file_1-2') } },
+  })
+end
+
+T['list_labels()']['properly merges visit data for filter'] = function()
+  --stylua: ignore
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 2, labels = { xxx = true, aaa = true }, latest = 10, aaa = 1 },
+      ['dir_1/file_1-2'] = { count = 1, labels = { xxx = true, bbb = true }, latest = 9, bbb  = 'a' },
+      ['file']           = { count = 1, latest = 8, data = { bool = true, num = 2, str = 'b' } },
+    },
+    dir_2 = {
+      ['dir_1/file_1-1'] = { count = 11, labels = { xxx = true, ccc = true }, latest = 100, ccc = 3 },
+      ['file']           = { count = 10, latest = 1, data = { bool2 = true, num2 = 2, str2 = 'b' } },
+    }
+  }
+  set_index_from_ref(ref_index)
+
+  child.lua([[
+    _G.filter_args_log = {}
+    _G.filter = function(...)
+      table.insert(_G.filter_args_log, { ... })
+      return true
+    end]])
+
+  child.lua_get([[MiniVisits.list_labels('', '', { filter = _G.filter })]])
+
+  local filter_args_log = child.lua_get('_G.filter_args_log')
+  -- - Ensure same order in test, as there is no guarantee of order
+  table.sort(filter_args_log, function(a, b) return a[1].path < b[1].path end)
+
+  eq(filter_args_log, {
+    -- `count` should be summed, `latest` should be reduced with `math.max`,
+    -- non-related fields should be merged
+    {
+      {
+        count = 13,
+        labels = { xxx = true, aaa = true, ccc = true },
+        latest = 100,
+        path = make_testpath('dir_1', 'file_1-1'),
+        aaa = 1,
+        ccc = 3,
+      },
+    },
+    {
+      {
+        count = 1,
+        labels = { xxx = true, bbb = true },
+        latest = 9,
+        path = make_testpath('dir_1', 'file_1-2'),
+        bbb = 'a',
+      },
+    },
+    {
+      {
+        count = 11,
+        latest = 8,
+        path = make_testpath('file'),
+        data = { bool = true, bool2 = true, num = 2, num2 = 2, str = 'b', str2 = 'b' },
+      },
+    },
+  })
+end
+
+T['list_labels()']['respects `config.list`'] = function()
+  set_index_from_ref({ dir_1 = { file = { count = 1, labels = { xxx = true }, latest = 10 } } })
+
+  child.lua([[
+    _G.filter = function()
+      _G.filter_been_here = true
+      return true
+    end]])
+  child.lua('MiniVisits.config.list = { filter = _G.filter }')
+
+  list_labels('', '')
+  eq(child.lua_get('_G.filter_been_here'), true)
+end
+
+T['list_labels()']['validates arguments'] = function()
+  expect.error(function() list_labels(1, 'cwd') end, '`path`.*string')
+  expect.error(function() list_labels('file', 1) end, '`cwd`.*string')
+end
 
 T['select_path()'] = new_set()
 
@@ -411,8 +1083,6 @@ T['get_index()']['works'] = function() MiniTest.skip() end
 T['get_index()']['validates arguments'] = function() MiniTest.skip() end
 
 T['set_index()'] = new_set()
-
-local set_index = forward_lua('MiniVisits.set_index')
 
 T['set_index()']['works'] = function() MiniTest.skip() end
 
@@ -447,6 +1117,8 @@ T['write_index()'] = new_set()
 local write_index = forward_lua('MiniVisits.write_index')
 
 T['write_index()']['works'] = function() MiniTest.skip() end
+
+T['write_index()']['creates parent directory'] = function() MiniTest.skip() end
 
 T['write_index()']['validates arguments'] = function() MiniTest.skip() end
 

@@ -43,6 +43,12 @@
 --- - Exported functions to manually update visit index allowing persistent
 ---   track of any user information. See `*_index()` functions.
 ---
+--- Notes:
+--- - All data is stored _only_ in in-session Lua variable (for quick operation)
+---   and at `config.store.path` on disk (for persistent usage).
+--- - Most of functions affect an in-session data which gets written to disk only
+---   before Neovim is closing or when users asks to.
+---
 --- Sources with more details:
 --- - |MiniVisits-overview|
 --- - |MiniVisits-index-specification|
@@ -283,6 +289,19 @@
 ---   map_branch('vB', 'remove_label', 'Remove branch label')
 ---@tag MiniVisits-examples
 
+---@alias __visits_path string|nil Visit path. Can be empty string to mean "all visited
+---   paths for `cwd`". Default: path of current buffer.
+---@alias __visits_cwd string|nil Visit cwd (project directory). Can be empty string to mean
+---   "all visited cwd". Default: |current-directory|.
+---@alias __visits_filter - <filter> `(function)` - predicate to filter paths. For more information
+---     about how it is used, see |MiniVisits.config|.
+---     Default: value of `config.list.filter` or |MiniVisits.gen_filter.default()|
+---     if it is `nil`.
+---@alias __visits_sort - <sort> `(function)` - path data sorter. For more information about how
+---     it is used, see |MiniVisits.config|.
+---     Default: value of `config.list.sort` or |MiniVisits.gen_filter.sort()|
+---     if it is `nil`.
+
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
 ---@diagnostic disable:unused-local
@@ -377,13 +396,12 @@ end
 
 --- Add path to index
 ---
---- Ensures that there is an entry for path-cwd pair. If entry is already
---- present, does nothing. If not - creates it with `count` and `latest` set to 0.
+--- Ensures that there is a (one or more) entry for path-cwd pair. If entry is
+--- already present, does nothing. If not - creates it with `count` and
+--- `latest` set to 0.
 ---
----@param path string|nil Visit path. Can be empty string to mean "all visited
----   paths for `cwd`". Default: path of current buffer.
----@param cwd string|nil Visit cwd (project directory). Can be empty string to mean
----   "all visited cwd". Default: |current-directory|.
+---@param path __visits_path
+---@param cwd __visits_cwd
 MiniVisits.add_path = function(path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
@@ -394,6 +412,15 @@ MiniVisits.add_path = function(path, cwd)
   end
 end
 
+--- Add label to path
+---
+--- Steps:
+--- - Ensure that there is an entry for path-cwd pair.
+--- - Add label to the entry.
+---
+---@param label string|nil Label string. Default: `nil` to ask from user.
+---@param path __visits_path
+---@param cwd __visits_cwd
 MiniVisits.add_label = function(label, path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
@@ -420,9 +447,15 @@ end
 
 --- Remove path
 ---
+--- Deletes a (one or more) entry for path-cwd pair from an index. If entry is
+--- already absent, does nothing.
+---
 --- Notes:
 --- - Affects only in-session Lua variable. To make it persistent,
 ---   call |MiniVisits.write_index()|.
+---
+---@param path __visits_path
+---@param cwd __visits_cwd
 MiniVisits.remove_path = function(path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
@@ -440,6 +473,14 @@ MiniVisits.remove_path = function(path, cwd)
   end
 end
 
+--- Remove label from path
+---
+--- Steps:
+--- - Remove label from (one or more) index entry.
+--- - If it was last label in an entry, remove `labels` key.
+---
+---@param path __visits_path
+---@param cwd __visits_cwd
 MiniVisits.remove_label = function(label, path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
@@ -468,22 +509,33 @@ end
 
 --- List visit paths
 ---
+--- Convert visit index for certain cwd into an ordered list of visited paths.
+--- Supports custom filtering and sorting.
 ---
---- # Filter ~
+--- Examples:
+--- - Get paths sorted from most to least recent: >
 ---
---- # Sort ~
+---   local sort_recent = MiniVisits.gen_sort.default({ recency_weight = 1 })
+---   MiniVisits.list_paths(nil, { sort = sort_recent })
+--- <
+--- - Get paths from all cwd sorted from most to least frequent: >
 ---
---- Paths in result list can be sorted. Some common examples:
---- - By frequency: from most to least frequent.
---- - By recency: from latest to earliest.
---- - By frecency: via combination of frequency and recency.
---- - By custom sorting rule.
+---   local sort_frequent = MiniVisits.gen_sort.default({ recency_weight = 0 })
+---   MiniVisits.list_paths('', { sort = sort_frequent })
+--- <
+--- - Get paths not including hidden: >
 ---
---- By default "robust frecency" approach is used. It independently ranks visits
---- by recency and frequency, combines numerical ranks with weights, and uses
---- that number to sort from best to worst.
---- See |MiniVisits.get_sort.default()| for more details.
---- See |MiniVisits.gen_sort| for built-in sorting approaches.
+---   local is_not_hidden = function(path_data)
+---     return not vim.startswith(vim.fn.fnamemodify(path_data.path, ':t'), '.')
+---   end
+---   MiniVisits.list_paths(nil, { filter = is_not_hidden })
+--- <
+---@param cwd __visits_cwd
+---@param opts table|nil Options. Possible fields:
+---   __visits_filter
+---   __visits_sort
+---
+---@return table Array of visited paths.
 MiniVisits.list_paths = function(cwd, opts)
   cwd = H.validate_cwd(cwd)
 
@@ -496,11 +548,40 @@ MiniVisits.list_paths = function(cwd, opts)
   return vim.tbl_map(function(x) return x.path end, res_arr)
 end
 
+--- List visit labels
+---
+--- Convert visit index for certain path-cwd pair into an ordered list of labels.
+--- Supports custom filtering for paths. Result is ordered from most to least
+--- frequent label.
+---
+--- Examples:
+--- - Get labels for current path-cwd pair: >
+---
+---   MiniVisits.list_labels()
+--- <
+--- - Get labels for current path across all cwd: >
+---
+---   MiniVisits.list_labels(nil, '')
+--- <
+--- - Get all available labels excluding ones from hidden files: >
+---
+---   local is_not_hidden = function(path_data)
+---     return not vim.startswith(vim.fn.fnamemodify(path_data.path, ':t'), '.')
+---   end
+---   MiniVisits.list_labels('', '', { filter = is_not_hidden })
+--- <
+---@param path __visits_path
+---@param cwd __visits_cwd
+---@param opts table|nil Options. Possible fields:
+---   __visits_filter
+---   __visits_sort
+---
+---@return table Array of available labels.
 MiniVisits.list_labels = function(path, cwd, opts)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
 
-  opts = vim.tbl_deep_extend('force', H.get_config().list, opts or {})
+  opts = vim.tbl_deep_extend('force', { filter = H.get_config().list.filter }, opts or {})
   local filter = H.validate_filter(opts.filter)
 
   local path_data_arr = H.make_path_array(path, cwd)
@@ -509,8 +590,8 @@ MiniVisits.list_labels = function(path, cwd, opts)
   -- Count labels
   local label_counts = {}
   for _, path_data in ipairs(res_arr) do
-    for lable, _ in pairs(path_data.labels or {}) do
-      label_counts[lable] = (label_counts[lable] or 0) + 1
+    for label, _ in pairs(path_data.labels or {}) do
+      label_counts[label] = (label_counts[label] or 0) + 1
     end
   end
 
@@ -519,7 +600,7 @@ MiniVisits.list_labels = function(path, cwd, opts)
   for label, count in pairs(label_counts) do
     table.insert(label_arr, { count, label })
   end
-  table.sort(label_arr, function(a, b) return a[1] > b[1] end)
+  table.sort(label_arr, function(a, b) return a[1] > b[1] or (a[1] == b[1] and a[2] < b[2]) end)
   return vim.tbl_map(function(x) return x[2] end, label_arr)
 end
 
@@ -673,6 +754,18 @@ end
 
 MiniVisits.gen_sort = {}
 
+---
+--- Paths in result list can be sorted. Some common examples:
+--- - By frequency: from most to least frequent.
+--- - By recency: from latest to earliest.
+--- - By frecency: via combination of frequency and recency.
+--- - By custom sorting rule.
+---
+--- By default "robust frecency" approach is used. It independently ranks visits
+--- by recency and frequency, combines numerical ranks with weights, and uses
+--- that number to sort from best to worst.
+--- See |MiniVisits.get_sort.default()| for more details.
+--- See |MiniVisits.gen_sort| for built-in sorting approaches.
 MiniVisits.gen_sort.default = function(opts)
   opts = vim.tbl_deep_extend('force', { recency_weight = 0.5 }, opts or {})
   local recency_weight = opts.recency_weight
@@ -680,6 +773,8 @@ MiniVisits.gen_sort.default = function(opts)
   if not is_weight then H.error('`opts.recency_weight` should be number between 0 and 1.') end
 
   return function(path_data_arr)
+    path_data_arr = vim.deepcopy(path_data_arr)
+
     -- Add ranks for `count` and `latest`
     table.sort(path_data_arr, function(a, b) return a.count > b.count end)
     H.tbl_add_rank(path_data_arr, 'count')
