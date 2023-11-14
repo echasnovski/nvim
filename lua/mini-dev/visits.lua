@@ -2,8 +2,6 @@
 --
 -- Code:
 --
--- - Think about how to make "track only once per session" easier.
---
 -- Tests:
 -- - All combinations of empty/nonempty + path/cwd work for all cases.
 --
@@ -136,8 +134,8 @@
 ---
 --- Visit index is a table containing actual data in two level deep nested tables.
 ---
---- First level keys are paths of current working directory (a.k.a "cwd") for
---- which visits are registered.
+--- First level keys are paths of project directory (a.k.a "cwd") for which
+--- visits are registered.
 ---
 --- Second level keys are actual visit paths. Their values are tables with visit
 --- data which should follow these requirements:
@@ -357,7 +355,15 @@ MiniVisits.config = {
 }
 --minidoc_afterlines_end
 
----@return boolean Whether registering was actually done.
+--- Register visit
+---
+--- Steps:
+--- - Ensure that there is an entry for path-cwd pair.
+--- - Add 1 to visit `count`.
+--- - Set `latest` visit time to equal current time.
+---
+---@param path string|nil Visit path. Default: path of current buffer.
+---@param cwd string|nil Visit cwd (project directory). Default: |current-directory|.
 MiniVisits.register_visit = function(path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
@@ -367,9 +373,17 @@ MiniVisits.register_visit = function(path, cwd)
   local path_tbl = H.index[cwd][path]
   path_tbl.count = path_tbl.count + 1
   path_tbl.latest = os.time()
-  return true
 end
 
+--- Add path to index
+---
+--- Ensures that there is an entry for path-cwd pair. If entry is already
+--- present, does nothing. If not - creates it with `count` and `latest` set to 0.
+---
+---@param path string|nil Visit path. Can be empty string to mean "all visited
+---   paths for `cwd`". Default: path of current buffer.
+---@param cwd string|nil Visit cwd (project directory). Can be empty string to mean
+---   "all visited cwd". Default: |current-directory|.
 MiniVisits.add_path = function(path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
@@ -815,8 +829,8 @@ H.autoregister_visit = function(data)
     local path = H.buf_get_path(buf_id)
     if path == nil or path == H.cache.latest_tracked_path then return end
 
-    local success = MiniVisits.register_visit(path, vim.fn.getcwd())
-    if not success then return end
+    local ok = pcall(MiniVisits.register_visit, path, vim.fn.getcwd())
+    if not ok then return end
 
     H.cache.latest_tracked_path = path
   end)
