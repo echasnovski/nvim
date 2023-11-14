@@ -86,7 +86,7 @@
 ---   (for example, with |:bnext| / |:bprevious|).
 ---
 --- - When delay time passes without any dedicated events being triggered
----   (meaning user is "settled" on certain buffer), |MiniVisits.add_visit()|
+---   (meaning user is "settled" on certain buffer), |MiniVisits.register_visit()|
 ---   is called if all of the following conditions are met:
 ---     - Module is not disabled (see "Disabling" section in |MiniVisits|).
 ---     - Buffer is normal with non-empty name (used as visit path).
@@ -103,7 +103,7 @@
 ---   written to disk before every Neovim exit (if `config.store.autowrite` is set).
 ---
 --- - Tracking can be disabled by supplying empty string as `track.event`.
----   Then it is up to the user to properly call |MiniVisits.add_visit()|.
+---   Then it is up to the user to properly call |MiniVisits.register_visit()|.
 ---
 --- # Reusing visits ~
 ---
@@ -283,54 +283,6 @@
 ---
 ---   map_branch('vb', 'add_label',    'Add branch label')
 ---   map_branch('vB', 'remove_label', 'Remove branch label')
---- <
---- # Setup examples ~
----
---- ## Track once per session ~
----
---- By default tracking is done on every |BufEnter| event. This allows tracking
---- visits that are done inside current sessions, more accurately representing
---- how file navigation is done.
----
---- As an alternative, tracking can be done only once per session. As this
---- will be done less frequently, it is a good idea to adjust normalization.
---- Example: >
----
----   local visits = require('mini.visits')
----
----   -- Adjust values to your liking
----   local norm_opts = { decay_threshold = 250, decay_target = 200 }
----   visits.setup({
----     store = { normalize = visits.gen_normalize.default(norm_opts) },
----   })
----
----   -- Create autocommand which checks if visit wasa registered
----   -- after this code was executed
----   local init_time = os.time()
----   local disable_after_once = function(buf_id)
----     -- Make sure that buffer is appropriate
----     if not vim.api.nvim_buf_is_valid(buf_id) then return end
----     if vim.bo[buf_id].buftype ~= '' then return end
----     local path = vim.api.nvim_buf_get_name(buf_id)
----     if path == '' then return end
----
----     -- Get visit data
----     local cwd_index = MiniVisits.get_index()[vim.fn.getcwd()]
----     local path_data = (cwd_index or {})[path]
----     if path_data == nil then return end
----
----     -- Disable visiting if already visited in current session
----     if path_data.latest < init_time then return end
----     vim.b[buf_id].minivisits_disable = true
----   end
----
----   vim.api.nvim_create_autocmd(
----     'BufEnter',
----     {
----       callback = function(data) disable_after_once(data.buf) end,
----       desc = 'Register visit only once',
----     }
----   )
 ---@tag MiniVisits-examples
 
 ---@diagnostic disable:undefined-field
@@ -396,7 +348,7 @@ MiniVisits.config = {
   -- How visit tracking is done
   track = {
     -- Start visit register timer at this event
-    -- Supply empty string (`''`) to not create this automatically
+    -- Supply empty string (`''`) to not do this automatically
     event = 'BufEnter',
 
     -- Debounce delay after event to register a visit
@@ -406,7 +358,7 @@ MiniVisits.config = {
 --minidoc_afterlines_end
 
 ---@return boolean Whether registering was actually done.
-MiniVisits.add_visit = function(path, cwd)
+MiniVisits.register_visit = function(path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
   if path == '' or cwd == '' then H.error('Both `path` and `cwd` should not be empty.') end
@@ -418,25 +370,13 @@ MiniVisits.add_visit = function(path, cwd)
   return true
 end
 
---- Remove visit
----
---- Notes:
---- - Affects only in-session Lua variable. To make it persistent,
----   call |MiniVisits.write_index()|.
-MiniVisits.remove_visit = function(path, cwd)
+MiniVisits.add_path = function(path, cwd)
   path = H.validate_path(path)
   cwd = H.validate_cwd(cwd)
 
-  -- Remove all target visits
-  H.ensure_read_index()
   local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
   for _, pair in ipairs(path_cwd_pairs) do
-    local cwd_tbl = H.index[pair.cwd]
-    if type(cwd_tbl) == 'table' then cwd_tbl[pair.path] = nil end
-  end
-
-  for dir, _ in pairs(H.index) do
-    if vim.tbl_count(H.index[dir]) == 0 then H.index[dir] = nil end
+    H.ensure_index_entry(pair.path, pair.cwd)
   end
 end
 
@@ -462,6 +402,28 @@ MiniVisits.add_label = function(label, path, cwd)
   end
 
   H.echo(string.format('Added %s label.', vim.inspect(label)))
+end
+
+--- Remove path
+---
+--- Notes:
+--- - Affects only in-session Lua variable. To make it persistent,
+---   call |MiniVisits.write_index()|.
+MiniVisits.remove_path = function(path, cwd)
+  path = H.validate_path(path)
+  cwd = H.validate_cwd(cwd)
+
+  -- Remove all target visits
+  H.ensure_read_index()
+  local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
+  for _, pair in ipairs(path_cwd_pairs) do
+    local cwd_tbl = H.index[pair.cwd]
+    if type(cwd_tbl) == 'table' then cwd_tbl[pair.path] = nil end
+  end
+
+  for dir, _ in pairs(H.index) do
+    if vim.tbl_count(H.index[dir]) == 0 then H.index[dir] = nil end
+  end
 end
 
 MiniVisits.remove_label = function(label, path, cwd)
@@ -635,6 +597,12 @@ MiniVisits.set_index = function(index)
   H.validate_index(index, '`index`')
   H.index = vim.deepcopy(index)
   H.cache.needs_index_read = false
+end
+
+MiniVisits.reset_index = function()
+  local ok, stored_index = pcall(MiniVisits.read_index)
+  if not ok or stored_index == nil then return end
+  MiniVisits.set_index(stored_index)
 end
 
 MiniVisits.normalize_index = function(index)
@@ -847,7 +815,7 @@ H.autoregister_visit = function(data)
     local path = H.buf_get_path(buf_id)
     if path == nil or path == H.cache.latest_tracked_path then return end
 
-    local success = MiniVisits.add_visit(path, vim.fn.getcwd())
+    local success = MiniVisits.register_visit(path, vim.fn.getcwd())
     if not success then return end
 
     H.cache.latest_tracked_path = path
