@@ -113,6 +113,23 @@ end
 
 local set_index_from_ref = function(ref) set_index(make_ref_index_full(ref)) end
 
+-- Common mocks
+local mock_ui_select = function(choice_index)
+  local lua_cmd = string.format(
+    [[
+    _G.ui_select_log = {}
+    vim.ui.select = function(items, opts, on_choice)
+      table.insert(_G.ui_select_log, { items = items, prompt = opts.prompt })
+      on_choice(items[%s], %s)
+    end]],
+    choice_index,
+    choice_index
+  )
+  child.lua(lua_cmd)
+end
+
+local get_ui_select_log = function() return child.lua_get('_G.ui_select_log') end
+
 -- Output test set ============================================================
 local T = new_set({
   hooks = {
@@ -1056,45 +1073,458 @@ T['select_path()'] = new_set()
 
 local select_path = forward_lua('MiniVisits.select_path')
 
-T['select_path()']['works'] = function() MiniTest.skip() end
+T['select_path()']['works'] = function()
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 2, latest = 10 },
+      ['dir_1/file_1-2'] = { count = 1, latest = 9 },
+    },
+  }
+  set_index_from_ref(ref_index)
 
-T['select_path()']['validates arguments'] = function() MiniTest.skip() end
+  child.fn.chdir(make_testpath('dir_1'))
+
+  mock_ui_select(1)
+  select_path()
+  eq(get_ui_select_log(), {
+    {
+      items = {
+        { path = make_testpath('dir_1', 'file_1-1'), text = 'file_1-1' },
+        { path = make_testpath('dir_1', 'file_1-2'), text = 'file_1-2' },
+      },
+      prompt = 'Visited paths',
+    },
+  })
+  validate_buf_name(0, 'file_1-1')
+end
+
+T['select_path()']['properly shortens paths'] = function()
+  local home_dir = child.lua_get('vim.loop.os_homedir()')
+
+  local dir_path = make_testpath('dir_1')
+  child.fn.chdir(dir_path)
+  set_index({
+    [dir_path] = {
+      [join_path(dir_path, 'subdir', 'file_1-1-1')] = { count = 2, latest = 10 },
+      [join_path(home_dir, 'file')] = { count = 1, latest = 9 },
+    },
+  })
+
+  mock_ui_select(1)
+  select_path()
+  local items = get_ui_select_log()[1].items
+  eq(items[1].text, 'subdir/file_1-1-1')
+  eq(items[2].text, '~/file')
+end
+
+T['select_path()']['can be properly canceled'] = function()
+  local ref_index = { dir_1 = { file = { count = 1, latest = 10 } } }
+  set_index_from_ref(ref_index)
+
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local init_buf_name = child.api.nvim_buf_get_name(init_buf_id)
+  mock_ui_select(nil)
+  select_path()
+
+  eq(child.api.nvim_get_current_buf(), init_buf_id)
+  eq(child.api.nvim_buf_get_name(0), init_buf_name)
+end
+
+T['select_path()']['reuses current buffer when opening path'] = function()
+  local ref_index = { dir_1 = { file = { count = 1, latest = 10 } } }
+  set_index_from_ref(ref_index)
+
+  child.fn.chdir(make_testpath('dir_1'))
+  edit(make_testpath('file'))
+  local file_buf_id = child.api.nvim_get_current_buf()
+
+  edit(make_testpath('dir_1/file_1-1'))
+  child.api.nvim_buf_set_option(file_buf_id, 'buflisted', false)
+
+  mock_ui_select(1)
+  select_path()
+
+  eq(child.api.nvim_get_current_buf(), file_buf_id)
+  -- Should make unlisted buffer listed
+  eq(child.bo.buflisted, true)
+end
+
+T['select_path()']['forwards arguments to `list_paths()`'] = function()
+  local ref_index = { dir_1 = { file = { count = 1, latest = 10 } } }
+  set_index_from_ref(ref_index)
+
+  child.fn.chdir(make_testpath('dir_1'))
+  child.lua([[
+    MiniVisits.list_paths = function(...)
+      _G.list_paths_args = { ... }
+      return { 'file' }
+    end]])
+
+  mock_ui_select(1)
+  select_path('aaa', { opts = true })
+  validate_buf_name(0, 'file')
+
+  eq(child.lua_get('_G.list_paths_args'), { 'aaa', { opts = true } })
+end
+
+T['select_path()']['validates arguments'] = function()
+  expect.error(function() select_path(1) end, '`cwd`.*string')
+end
 
 T['select_label()'] = new_set()
 
 local select_label = forward_lua('MiniVisits.select_label')
 
-T['select_label()']['works'] = function() MiniTest.skip() end
+T['select_label()']['works'] = function()
+  local ref_index = {
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 3, labels = { xxx = true, aaa = true }, latest = 10 },
+      ['dir_1/file_1-2'] = { count = 2, labels = { xxx = true, bbb = true }, latest = 9 },
+      ['dir_1/subdir/file_1-1-1'] = { count = 1, labels = { bbb = true }, latest = 8 },
+    },
+  }
+  set_index_from_ref(ref_index)
 
-T['select_label()']['validates arguments'] = function() MiniTest.skip() end
+  child.fn.chdir(make_testpath('dir_1'))
+  edit('file')
 
-T['goto_path()'] = new_set()
+  mock_ui_select(1)
+  select_label('', child.fn.getcwd())
+  eq(get_ui_select_log(), {
+    { items = { 'bbb', 'xxx', 'aaa' }, prompt = 'Visited labels' },
+    {
+      items = {
+        { path = make_testpath('dir_1', 'file_1-2'), text = 'file_1-2' },
+        { path = make_testpath('dir_1', 'subdir', 'file_1-1-1'), text = 'subdir/file_1-1-1' },
+      },
+      prompt = 'Visited paths',
+    },
+  })
+  validate_buf_name(0, 'file_1-2')
+end
 
-local goto_path = forward_lua('MiniVisits.goto_path')
+T['select_label()']['can be properly canceled'] = function()
+  local ref_index = { dir_1 = { file = { count = 1, labels = { aaa = true }, latest = 10 } } }
+  set_index_from_ref(ref_index)
 
-T['goto_path()']['works'] = function() MiniTest.skip() end
+  local init_buf_id = child.api.nvim_get_current_buf()
+  local init_buf_name = child.api.nvim_buf_get_name(init_buf_id)
+  mock_ui_select(nil)
+  select_label(make_testpath('file'))
 
-T['goto_path()']['validates arguments'] = function() MiniTest.skip() end
+  eq(child.api.nvim_get_current_buf(), init_buf_id)
+  eq(child.api.nvim_buf_get_name(0), init_buf_name)
+end
+
+T['select_label()']['forwards arguments to `list_labels()` and `select_path()`'] = function()
+  local ref_index = { dir_1 = { file = { count = 1, labels = { aaa = true }, latest = 10 } } }
+  set_index_from_ref(ref_index)
+
+  child.fn.chdir(make_testpath('dir_1'))
+  child.lua([[
+    MiniVisits.list_labels = function(...)
+      _G.list_labels_args = { ... }
+      return { 'aaa' }
+    end
+    MiniVisits.select_path = function(...) _G.select_path_args = { ... } end]])
+
+  mock_ui_select(1)
+  select_label('path', 'cwd', { opts = true })
+
+  eq(child.lua_get('_G.list_labels_args'), { 'path', 'cwd', { opts = true } })
+  eq(child.lua_get('_G.select_path_args[1]'), 'cwd')
+
+  child.lua('_G.passed_filter = _G.select_path_args[2].filter')
+  eq(child.lua_get([[_G.passed_filter({ labels = { aaa = true } })]]), true)
+  eq(child.lua_get([[_G.passed_filter({ labels = { bbb = true } }) == true]]), false)
+end
+
+T['select_label()']['validates arguments'] = function()
+  expect.error(function() select_label(1, 'cwd') end, '`path`.*string')
+  expect.error(function() select_label('file', 1) end, '`cwd`.*string')
+end
+
+T['iterate_paths()'] = new_set()
+
+local iterate_paths = forward_lua('MiniVisits.iterate_paths')
+
+local setup_index_for_iterate = function()
+  set_index_from_ref({
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 3, latest = 3 },
+      ['dir_1/file_1-2'] = { count = 2, latest = 2 },
+      ['dir_1/file_1-3'] = { count = 1, latest = 1 },
+    },
+  })
+  local dir_path = make_testpath('dir_1')
+  child.fn.chdir(dir_path)
+end
+
+local validate_iterate = function(init_path, direction, opts, ref_path)
+  if init_path ~= nil then edit(init_path) end
+  iterate_paths(direction, child.fn.getcwd(), opts)
+  validate_buf_name(0, ref_path)
+end
+
+--stylua: ignore
+T['iterate_paths()']['works'] = function()
+  setup_index_for_iterate()
+
+  validate_iterate('file_1-2', 'first',    {}, 'file_1-1')
+  validate_iterate('file_1-3', 'backward', {}, 'file_1-2')
+  validate_iterate('file_1-1', 'forward',  {}, 'file_1-2')
+  validate_iterate('file_1-2', 'last',     {}, 'file_1-3')
+end
+
+--stylua: ignore
+T['iterate_paths()']['works when current path is not in array'] = function()
+  setup_index_for_iterate()
+  local validate = function(...)
+    edit('file')
+    validate_iterate(...)
+  end
+
+  validate(nil, 'first',    {}, 'file_1-1')
+  validate(nil, 'backward', {}, 'file_1-3')
+  validate(nil, 'forward',  {}, 'file_1-1')
+  validate(nil, 'last',     {}, 'file_1-3')
+
+  validate(nil, 'first',    { n_times = 2 }, 'file_1-2')
+  validate(nil, 'backward', { n_times = 2 }, 'file_1-2')
+  validate(nil, 'forward',  { n_times = 2 }, 'file_1-2')
+  validate(nil, 'last',     { n_times = 2 }, 'file_1-2')
+end
+
+--stylua: ignore
+T['iterate_paths()']['works when current buffer does not have path'] = function()
+  setup_index_for_iterate()
+  local validate = function(...)
+    child.api.nvim_set_current_buf(child.api.nvim_create_buf(false, true))
+    validate_iterate(...)
+  end
+
+  validate(nil, 'first',    {}, 'file_1-1')
+  validate(nil, 'backward', {}, 'file_1-3')
+  validate(nil, 'forward',  {}, 'file_1-1')
+  validate(nil, 'last',     {}, 'file_1-3')
+end
+
+T['iterate_paths()']['works if there are not paths to iterate'] = function()
+  local validate = function(direction)
+    local init_buf = child.api.nvim_get_current_buf()
+    iterate_paths(direction)
+    eq(child.api.nvim_get_current_buf(), init_buf)
+    eq(child.api.nvim_buf_get_name(0), '')
+  end
+
+  validate('first')
+  validate('backward')
+  validate('forward')
+  validate('last')
+end
+
+T['iterate_paths()']['reuses current buffer when opening path'] = function()
+  setup_index_for_iterate()
+  edit(join_path(child.fn.getcwd(), 'file_1-1'))
+  local file_buf_id = child.api.nvim_get_current_buf()
+
+  edit(join_path(child.fn.getcwd(), 'file_1-2'))
+  child.api.nvim_buf_set_option(file_buf_id, 'buflisted', false)
+
+  iterate_paths('first')
+
+  eq(child.api.nvim_get_current_buf(), file_buf_id)
+  -- Should make unlisted buffer listed
+  eq(child.bo.buflisted, true)
+end
+
+T['iterate_paths()']['does not track visit'] = function()
+  child.lua('MiniVisits.config.track.delay = 10')
+  setup_index_for_iterate()
+  local init_index = get_index()
+
+  iterate_paths('first')
+  sleep(10 + 5)
+  iterate_paths('forward')
+  sleep(10 + 5)
+  iterate_paths('backward')
+  sleep(10 + 5)
+  iterate_paths('last')
+  sleep(10 + 5)
+
+  eq(get_index(), init_index)
+
+  -- Should properly cleanup
+  eq(child.g.minivisits_disable, vim.NIL)
+  for _, buf_id in ipairs(child.api.nvim_list_bufs()) do
+    local lua_cmd = string.format('vim.b[%d].minivisits_disable', buf_id)
+    eq(child.lua_get(lua_cmd), vim.NIL)
+  end
+end
+
+T['iterate_paths()']['respects `cwd` argument'] = function()
+  setup_index_for_iterate()
+  child.fn.chdir('subdir')
+
+  iterate_paths('first', make_testpath('dir_1'))
+  validate_buf_name(0, make_testpath('dir_1', 'file_1-1'))
+end
+
+T['iterate_paths()']['respects `opts.filter`'] = function()
+  set_index_from_ref({
+    dir_1 = {
+      ['dir_1/file_1-1'] = { count = 1, labels = { aaa = true }, latest = 1 },
+      ['dir_1/file_1-2'] = { count = 10, latest = 10 },
+    },
+  })
+
+  iterate_paths('first', make_testpath('dir_1'), { filter = 'aaa' })
+  validate_buf_name(0, make_testpath('dir_1', 'file_1-1'))
+end
+
+T['iterate_paths()']['respects `opts.sort`'] = function()
+  child.lua([[_G.sort = function() return { { path = 'new-file' } } end]])
+  child.lua([[MiniVisits.iterate_paths('first', nil, { sort = _G.sort })]])
+  validate_buf_name(0, 'new-file')
+end
+
+--stylua: ignore
+T['iterate_paths()']['respects `opts.n_times`'] = function()
+  setup_index_for_iterate()
+
+  validate_iterate('file_1-3', 'first',    { n_times = 2 }, 'file_1-2')
+  validate_iterate('file_1-3', 'backward', { n_times = 2 }, 'file_1-1')
+  validate_iterate('file_1-1', 'forward',  { n_times = 2 }, 'file_1-3')
+  validate_iterate('file_1-1', 'last',     { n_times = 2 }, 'file_1-2')
+end
+
+--stylua: ignore
+T['iterate_paths()']['respects `opts.wrap`'] = function()
+  setup_index_for_iterate()
+
+  -- No wrap by default
+  validate_iterate('file_1-1', 'first',    { n_times = 5 }, 'file_1-3')
+  validate_iterate('file_1-2', 'backward', { n_times = 5 }, 'file_1-1')
+  validate_iterate('file_1-2', 'forward',  { n_times = 5 }, 'file_1-3')
+  validate_iterate('file_1-1', 'last',     { n_times = 5 }, 'file_1-1')
+
+  validate_iterate('file_1-1', 'first',    { n_times = 5, wrap = true }, 'file_1-2')
+  validate_iterate('file_1-2', 'backward', { n_times = 5, wrap = true }, 'file_1-3')
+  validate_iterate('file_1-2', 'forward',  { n_times = 5, wrap = true }, 'file_1-1')
+  validate_iterate('file_1-1', 'last',     { n_times = 5, wrap = true }, 'file_1-2')
+end
+
+T['iterate_paths()']['validates arguments'] = function()
+  expect.error(function() iterate_paths(1, 'cwd') end, '`direction`.*one of')
+  expect.error(function() iterate_paths('forward', 1) end, '`cwd`.*string')
+end
 
 T['get_index()'] = new_set()
 
-T['get_index()']['works'] = function() MiniTest.skip() end
+T['get_index()']['works'] = function()
+  child.lua('MiniVisits.config.track.delay = 10')
+  eq(get_index(), {})
 
-T['get_index()']['validates arguments'] = function() MiniTest.skip() end
+  local path = make_testpath('file')
+  edit(path)
+  sleep(10 + 5)
+  eq(get_index(), { [child.fn.getcwd()] = { [path] = { count = 1, latest = os.time() } } })
+
+  -- Should return table copy
+  local is_ok = child.lua([[
+    _G.cur_index = MiniVisits.get_index()
+    _G.ref_index = vim.deepcopy(_G.cur_index)
+    _G.cur_index['aa'] = {}
+    return vim.deep_equal(MiniVisits.get_index(), _G.ref_index)
+  ]])
+  eq(is_ok, true)
+end
 
 T['set_index()'] = new_set()
 
-T['set_index()']['works'] = function() MiniTest.skip() end
+T['set_index()']['works'] = function()
+  child.lua('MiniVisits.config.track.delay = 10')
 
-T['set_index()']['validates arguments'] = function() MiniTest.skip() end
+  local path, cwd = make_testpath('file'), child.fn.getcwd()
+  child.lua(string.format('_G.path, _G.cwd = %s, %s', vim.inspect(path), vim.inspect(cwd)))
+  child.lua([[
+    _G.index_ref = { [vim.fn.getcwd()] = { [_G.path] = { count = 1, latest = 10 } } }
+    MiniVisits.set_index(_G.index_ref)
+  ]])
+
+  eq(get_index(), { [cwd] = { [path] = { count = 1, latest = 10 } } })
+
+  -- Should set table copy
+  edit(path)
+  sleep(10 + 5)
+  eq(get_index(), { [cwd] = { [path] = { count = 2, latest = os.time() } } })
+  eq(child.lua_get('_G.index_ref'), { [cwd] = { [path] = { count = 1, latest = 10 } } })
+end
+
+T['set_index()']['treats set index as whole history and not only current session'] = function()
+  local store_path = make_testpath('tmp-index')
+  MiniTest.finally(function() child.fn.delete(store_path, 'rf') end)
+  child.fn.writefile({ 'return { aaa = { bbb = { count = 10, latest = 10 } } }' }, store_path)
+
+  child.lua('MiniVisits.config.track.delay = 10')
+  child.lua('MiniVisits.config.store.path = ' .. vim.inspect(store_path))
+
+  local path, cwd = make_testpath('file'), child.fn.getcwd()
+  set_index({ [cwd] = { [path] = { count = 1, latest = os.time() } } })
+  eq(list_paths(''), { path })
+
+  child.lua([[MiniVisits.config.store.path = vim.fn.stdpath('data') .. '/mini-visits-index']])
+end
+
+T['set_index()']['validates arguments'] = function()
+  local validate = function(x, error_pattern)
+    expect.error(function() set_index(x) end, error_pattern)
+  end
+
+  validate(1, '`index`.*table')
+  validate({ { path = { count = 1, latest = 1 } } }, 'First level keys in `index`.*strings')
+  validate({ cwd = 1 }, 'First level values in `index`.*tables')
+  validate({ cwd = { { count = 1, latest = 1 } } }, 'Second level keys in `index`.*strings')
+  validate({ cwd = { path = 1 } }, 'Second level values in `index`.*tables')
+  validate({ cwd = { path = { count = '1', latest = 1 } } }, '`count`.*in `index`.*numbers')
+  validate({ cwd = { path = { count = 1, latest = '1' } } }, '`latest`.*in `index`.*numbers')
+  validate({ cwd = { path = { count = 1, latest = 1, labels = 1 } } }, '`labels`.*table')
+  validate({ cwd = { path = { count = 1, latest = 1, labels = { true } } } }, 'Keys in `labels`.*strings')
+  validate({ cwd = { path = { count = 1, latest = 1, labels = { aaa = 1 } } } }, 'Values in `labels`.*`true`')
+end
 
 T['reset_index()'] = new_set()
 
 local reset_index = forward_lua('MiniVisits.reset_index')
 
-T['reset_index()']['works'] = function() MiniTest.skip() end
+T['reset_index()']['works'] = function()
+  local store_path = child.lua_get('MiniVisits.config.store.path')
+  child.fn.mkdir(vim.fn.fnamemodify(store_path, ':h'), 'p')
+  child.fn.writefile({ 'return { aaa = { bbb = { count = 10, latest = 10 } } }' }, store_path)
 
-T['reset_index()']['validates arguments'] = function() MiniTest.skip() end
+  local path, cwd = make_testpath('file'), child.fn.getcwd()
+  set_index({ [cwd] = { [path] = { count = 1, latest = os.time() } } })
+
+  child.lua('MiniVisits.reset_index()')
+  eq(get_index(), { aaa = { bbb = { count = 10, latest = 10 } } })
+end
+
+T['reset_index()']['does nothing if feading index failed'] = function()
+  -- No index file
+  local index = { [child.fn.getcwd()] = { [make_testpath('file')] = { count = 1, latest = 10 } } }
+  set_index(index)
+
+  reset_index()
+  eq(get_index(), index)
+
+  -- Error during `MiniVisits.read_index()`
+  local store_path = child.lua_get('MiniVisits.config.store.path')
+  child.fn.mkdir(vim.fn.fnamemodify(store_path, ':h'), 'p')
+  child.fn.writefile({ 'Not a Lua code' }, store_path)
+
+  reset_index()
+  eq(get_index(), index)
+end
 
 T['normalize_index()'] = new_set()
 

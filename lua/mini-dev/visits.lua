@@ -37,8 +37,8 @@
 ---     - Select visited paths/labels using |vim.ui.select()|.
 ---       See |MiniVisits.select_path()| and |MiniVisits.select_labels()|.
 ---
----     - Navigate to certain path in target direction ("forward", "backward",
----       "first", "last"). See |MiniVisits.goto_path()|.
+---     - Iterate through visit paths in target direction ("forward", "backward",
+---       "first", "last"). See |MiniVisits.iterate_paths()|.
 ---
 --- - Exported functions to manually update visit index allowing persistent
 ---   track of any user information. See `*_index()` functions.
@@ -118,7 +118,7 @@
 ---
 --- - Select one of the visited paths to open it (see |MiniVisits.select_path()|).
 ---
---- - Move along visit history (see |MiniVisits.goto_path()|).
+--- - Move along visit history (see |MiniVisits.iterate_paths()|).
 ---
 --- - Utilize labels. Any visit can be added a one ore more labels (like "core",
 ---   "tmp", etc.). They are bound to the visit (path registered for certain
@@ -259,6 +259,7 @@
 --- which add/remove special fixed label (for example, "core") and select paths
 --- with that label for both all and current cwd. Example: >
 ---
+---   -- Create and select
 ---   local map_vis = function(keys, call, desc)
 ---     local rhs = '<Cmd>lua MiniVisits.' .. call .. '<CR>'
 ---     vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
@@ -268,6 +269,20 @@
 ---   map_vis('vV', 'remove_label("core")',                  'Remove from core')
 ---   map_vis('vc', 'select_path("", { filter = "core" })',  'Select core (all)')
 ---   map_vis('vC', 'select_path(nil, { filter = "core" })', 'Select core (cwd)')
+---
+---   -- Iterate based on recency
+---   local map_iterate_core = function(lhs, direction, desc)
+---     local opts = { filter = 'core', sort = sort_latest, wrap = true }
+---     local rhs = function()
+---       MiniVisits.iterate_paths(direction, vim.fn.getcwd(), opts)
+---     end
+---     vim.keymap.set('n', lhs, rhs, { desc = desc })
+---   end
+---
+---   map_iterate_core('[{', 'last',     'Core label (earliest)')
+---   map_iterate_core('[[', 'forward',  'Core label (earlier)')
+---   map_iterate_core(']]', 'backward', 'Core label (later)')
+---   map_iterate_core(']}', 'first',    'Core label (latest)')
 --- <
 --- ## Use automated labels ~
 ---
@@ -604,7 +619,24 @@ MiniVisits.list_labels = function(path, cwd, opts)
   return vim.tbl_map(function(x) return x[2] end, label_arr)
 end
 
+--- Select visit path
+---
+--- Uses |vim.ui.select()| with an output of |MiniVisits.list_paths()| and
+--- calls |:edit| on the chosen item.
+---
 --- Note: if you have |MiniPick|, consider using |MiniExtra.pickers.visits()|.
+---
+--- Examples:
+---
+--- - Select from all visitsed paths: `MiniVisits.select_path('')`
+---
+--- - Select from paths under current directory sorted from most to least recent: >
+---
+---   local sort_recent = MiniVisits.gen_sort.default({ recency_weight = 1 })
+---   MiniVisits.select_path(nil, { sort = sort_recent })
+--- <
+---@param cwd string|nil Forwarded to |MiniVisits.list_paths()|.
+---@param opts table|nil Forwarded to |MiniVisits.list_paths()|.
 MiniVisits.select_path = function(cwd, opts)
   local paths = MiniVisits.list_paths(cwd, opts)
   local cwd_to_short = cwd == '' and vim.fn.getcwd() or cwd
@@ -615,7 +647,29 @@ MiniVisits.select_path = function(cwd, opts)
   vim.ui.select(items, select_opts, on_choice)
 end
 
+--- Select visit label
+---
+--- Uses |vim.ui.select()| with an output of |MiniVisits.list_labels()| and
+--- calls |MiniVisits.select_path()| to get target paths with selected label.
+---
 --- Note: if you have |MiniPick|, consider using |MiniExtra.pickers.visit_labels()|.
+---
+--- Examples:
+---
+--- - Select from lables of current path: `MiniVisits.select_label()`
+---
+--- - Select from all visited lables: `MiniVisits.select_label('', '')`
+---
+--- - Select from current project labels and sort paths (after choosing) from most
+---   to least recent: >
+---
+---   local sort_recent = MiniVisits.gen_sort.default({ recency_weight = 1 })
+---   MiniVisits.select_label('', nil, { sort = sort_recent })
+--- <
+---@param path string|nil Forwarded to |MiniVisits.list_labels()|.
+---@param cwd string|nil Forwarded to |MiniVisits.list_labels()|.
+---@param opts table|nil Forwarded to both |MiniVisits.list_labels()|
+---  and |MiniVisits.select_paths()| (after choosing a label).
 MiniVisits.select_label = function(path, cwd, opts)
   local items = MiniVisits.list_labels(path, cwd, opts)
   opts = opts or {}
@@ -634,7 +688,44 @@ MiniVisits.select_label = function(path, cwd, opts)
   vim.ui.select(items, { prompt = 'Visited labels' }, on_choice)
 end
 
-MiniVisits.goto_path = function(direction, cwd, opts)
+--- Iterate visit paths
+---
+--- Steps:
+--- - Compute a sorted array of target paths using |MiniVisits.list_paths()|.
+--- - Identify the current index inside the array based on path of current buffer.
+--- - Iterate through the array certain amount of times in a dedicated direction:
+---     - For "first" direction - forward starting from index 0 (so that single
+---       first iteration leads to first path).
+---     - For "backward" direction - backward starting from current index.
+---     - For "forward" direction - forward starting from current index.
+---     - For "last" direction - backward starting from index after the last one
+---       (so taht single first iteration leads to the last path).
+---
+--- Notes:
+--- - Moslty designed to be used as a mapping. See `MiniVisits-examples`.
+--- - If path from current buffer is not in the output of `MiniVisits.list_paths()`,
+---   starting index is such that first iteartion lands on first item if iterating
+---   forward and last item otherwise.
+--- - Navigation with this function is not tracked (see |MiniVisits-overview|).
+---   This is done to allow consecutive application without affecting
+---   underlying list of paths.
+---
+--- Examples assuming underlying array of files `{ "file1", "file2", "file3" }`:
+---
+--- - `MiniVisits("first")` results into focusing on "file1".
+--- - `MiniVisits("backward", { n_times = 2 })` from "file3" results into "file1".
+--- - `MiniVisits("forward", { n_times = 10 })` from "file1" results into "file3".
+--- - `MiniVisits("last", { n_times = 3, wrap = true })` results into "file3".
+---
+---@param direction string One of "first", "backward", "forward", "last".
+---@param cwd string|nil Forwarded to |MiniVisits.list_paths()|.
+---@param opts table|nil Options. Possible fields:
+---   - <filter> `(function)` - forwarded to |MiniVisits.list_paths()|.
+---   - <sort> `(function)` - forwarded to |MiniVisits.list_paths()|.
+---   - <n_times> `(number)` - number of steps to go in certain direction.
+---     Default: |v:count1|.
+---   - <wrap> `(boolean)` - whether to wrap around list edges. Default: `false`.
+MiniVisits.iterate_paths = function(direction, cwd, opts)
   if not (direction == 'first' or direction == 'backward' or direction == 'forward' or direction == 'last') then
     H.error('`direction` should be one of "first", "backward", "forward", "last".')
   end
@@ -694,6 +785,10 @@ MiniVisits.set_index = function(index)
   H.cache.needs_index_read = false
 end
 
+--- Reset active visit index
+---
+--- Set currently active visit index to the output of |MiniVisits.read_index()|.
+--- Does nothing if reading the index failed.
 MiniVisits.reset_index = function()
   local ok, stored_index = pcall(MiniVisits.read_index)
   if not ok or stored_index == nil then return end
@@ -911,7 +1006,7 @@ end
 -- Autocommands ---------------------------------------------------------------
 H.autoregister_visit = function(data)
   -- Recognize the register opportunity by stopping timer before check for
-  -- disabling. This is important for `goto_path` functionality.
+  -- disabling. This is important for `iterate_paths` functionality.
   H.timers.track:stop()
   local buf_id = data.buf
   if H.is_disabled(buf_id) then return end
@@ -1100,7 +1195,7 @@ H.validate_index = function(x, name)
       if type(path_tbl.count) ~= 'number' then H.error('`count` entries in ' .. name .. ' should be numbers.') end
       if type(path_tbl.latest) ~= 'number' then H.error('`latest` entries in ' .. name .. ' should be numbers.') end
 
-      H.validate_labels_field(x.labels)
+      H.validate_labels_field(path_tbl.labels)
     end
   end
 end
@@ -1110,12 +1205,8 @@ H.validate_labels_field = function(x)
   if type(x) ~= 'table' then H.error('`labels` should be a table.') end
 
   for key, value in pairs(x) do
-    if type(key) ~= 'string' then
-      H.error('Keys in `labels` table should be strings (not ' .. vim.inspect(key) .. ').')
-    end
-    if value ~= true then
-      H.error('Values in `labels` table should only be `true` (not ' .. vim.inspect(value) .. ').')
-    end
+    if type(key) ~= 'string' then H.error('Keys in `labels` table should be strings.') end
+    if value ~= true then H.error('Values in `labels` table should only be `true`.') end
   end
 end
 
@@ -1177,7 +1268,7 @@ H.edit_path = function(path)
   -- Try to reuse buffer
   local path_buf_id
   for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
-    local is_target = H.is_valid_buf(buf_id) and vim.bo[buf_id].buflisted and H.buf_get_path(buf_id) == path
+    local is_target = H.is_valid_buf(buf_id) and H.buf_get_path(buf_id) == path
     if is_target then path_buf_id = buf_id end
   end
 
@@ -1187,8 +1278,7 @@ H.edit_path = function(path)
   else
     -- Use relative path for a better initial view in `:buffers`
     local path_norm = vim.fn.fnameescape(vim.fn.fnamemodify(path, ':.'))
-    local ok = pcall(vim.cmd, 'edit ' .. path_norm)
-    if ok then vim.bo.buflisted = true end
+    pcall(vim.cmd, 'edit ' .. path_norm)
   end
 end
 
