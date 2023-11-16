@@ -1530,53 +1530,395 @@ T['normalize_index()'] = new_set()
 
 local normalize_index = forward_lua('MiniVisits.normalize_index')
 
-T['normalize_index()']['works'] = function() MiniTest.skip() end
+T['normalize_index()']['works'] = function()
+  local path, cwd = make_testpath('file'), child.fn.getcwd()
+  local index = { [cwd] = { [path] = { count = 1, labels = { aaa = true }, latest = os.time() } } }
+  set_index(index)
 
-T['normalize_index()']['validates arguments'] = function() MiniTest.skip() end
+  -- Should return the output of `MiniVisits.gen_normalize.default` by default
+  child.lua([[MiniVisits.gen_normalize.default = function()
+    return function(...)
+      _G.normalize_args = { ... }
+      return ...
+    end
+  end]])
+
+  eq(normalize_index(), index)
+  eq(child.lua_get('_G.normalize_args'), { index })
+
+  -- Should respect input even if there is session index present
+  local index_2 = { cwd = { path = { count = 1, latest = 10 } } }
+  eq(normalize_index(index_2), index_2)
+end
+
+T['normalize_index()']['respects `config.store.normalize`'] = function()
+  local path, cwd = make_testpath('file'), child.fn.getcwd()
+  local index = { [cwd] = { [path] = { count = 1, labels = { aaa = true }, latest = os.time() } } }
+  set_index(index)
+
+  -- Should return the output of `MiniVisits.gen_normalize.default` by default
+  child.lua([[MiniVisits.config.store.normalize = function(...)
+    _G.normalize_args = { ... }
+    return ...
+  end]])
+
+  eq(normalize_index(), index)
+  eq(child.lua_get('_G.normalize_args'), { index })
+end
+
+T['normalize_index()']['validates output'] = function()
+  child.lua('MiniVisits.config.store.normalize = function() return 1 end')
+  expect.error(normalize_index, '`index` after normalization')
+end
+
+T['normalize_index()']['validates arguments'] = function()
+  expect.error(function() normalize_index(1) end, '`index`.*table')
+end
 
 T['read_index()'] = new_set()
 
 local read_index = forward_lua('MiniVisits.read_index')
 
-T['read_index()']['works'] = function() MiniTest.skip() end
+T['read_index()']['works'] = function()
+  local store_path = child.lua_get('MiniVisits.config.store.path')
+  child.fn.mkdir(vim.fn.fnamemodify(store_path, ':h'), 'p')
+  child.fn.writefile({ 'return { aaa = { bbb = { count = 10, latest = 10 } } }' }, store_path)
 
-T['read_index()']['validates arguments'] = function() MiniTest.skip() end
+  eq(read_index(), { aaa = { bbb = { count = 10, latest = 10 } } })
+end
+
+T['read_index()']['respects `store_path` argument'] = function()
+  local store_path = make_testpath('test-index')
+  MiniTest.finally(function() vim.fn.delete(store_path) end)
+  child.fn.writefile({ 'return { aaa = { bbb = { count = 10, latest = 10 } } }' }, store_path)
+
+  eq(read_index(store_path), { aaa = { bbb = { count = 10, latest = 10 } } })
+end
+
+T['read_index()']['returns `nil` if can not locate file'] = function()
+  eq(read_index('non-existing-file'), vim.NIL)
+  eq(read_index(''), vim.NIL)
+end
+
+T['read_index()']['throws error if Lua sourcing failed'] = function()
+  local store_path = make_testpath('test-index')
+  MiniTest.finally(function() vim.fn.delete(store_path) end)
+  child.fn.writefile({ 'return {' }, store_path)
+  expect.error(function() read_index(store_path) end)
+end
+
+T['read_index()']['validates arguments'] = function()
+  expect.error(function() read_index(1) end, '`store_path`.*string')
+end
 
 T['write_index()'] = new_set()
 
 local write_index = forward_lua('MiniVisits.write_index')
 
-T['write_index()']['works'] = function() MiniTest.skip() end
+T['write_index()']['works'] = function()
+  local path, cwd = make_testpath('file'), child.fn.getcwd()
+  local index = { [cwd] = { [path] = { count = 1, latest = os.time() } } }
+  set_index(index)
 
-T['write_index()']['creates parent directory'] = function() MiniTest.skip() end
+  -- Should call `normalize_index` and write its output
+  child.lua([[MiniVisits.normalize_index = function(index)
+    _G.input_index = vim.deepcopy(index)
+    return { aaa = { bbb = { count = 10, latest = 10 } } }
+  end]])
 
-T['write_index()']['validates arguments'] = function() MiniTest.skip() end
+  write_index()
+  local store_path = child.lua_get('MiniVisits.config.store.path')
+  eq(
+    table.concat(vim.fn.readfile(store_path), '\n'),
+    'return {\n  aaa = {\n    bbb = {\n      count = 10,\n      latest = 10\n    }\n  }\n}'
+  )
+
+  eq(child.lua_get('_G.input_index'), index)
+end
+
+T['write_index()']['respects arguments'] = function()
+  -- Should create non-existing parent directories
+  local store_path = make_testpath('nondir/subdir/test-index')
+  MiniTest.finally(function() vim.fn.delete(store_path) end)
+  local index = { aaa = { bbb = { count = 10, latest = 10 } } }
+  write_index(store_path, index)
+
+  eq(
+    table.concat(vim.fn.readfile(store_path), '\n'),
+    'return {\n  aaa = {\n    bbb = {\n      count = 10,\n      latest = 10\n    }\n  }\n}'
+  )
+end
+
+T['write_index()']['validates arguments'] = function()
+  expect.error(function() write_index(1, { aaa = { bbb = { count = 10, latest = 10 } } }) end, '`store_path`.*string')
+  expect.error(function() write_index(make_testpath('test-index'), 1) end, '`index`.*table')
+end
 
 T['gen_filter'] = new_set()
 
 T['gen_filter']['default()'] = new_set()
 
-T['gen_filter']['default()']['works'] = function() MiniTest.skip() end
+T['gen_filter']['default()']['works'] = function()
+  child.lua('_G.f = MiniVisits.gen_filter.default()')
+  eq(child.lua_get('_G.f()'), true)
+  eq(child.lua_get('_G.f({ aaa = { bbb = { count = 10, latest = 10 } } })'), true)
+end
 
 T['gen_filter']['this_session()'] = new_set()
 
-T['gen_filter']['this_session()']['works'] = function() MiniTest.skip() end
+T['gen_filter']['this_session()']['works'] = function()
+  child.lua('_G.session_start = os.time()')
+  child.lua('_G.f = MiniVisits.gen_filter.this_session()')
+
+  eq(child.lua_get('_G.f({ latest = _G.session_start - 10 })'), false)
+  eq(child.lua_get('_G.f({ latest = _G.session_start + 10 })'), true)
+end
 
 T['gen_sort'] = new_set()
 
 T['gen_sort']['default()'] = new_set()
 
-T['gen_sort']['default()']['works'] = function() MiniTest.skip() end
+local validate_gen_sort = function(method, path_data_arr, recency_weight, ref_paths)
+  child.lua([[_G.path_data_arr = ]] .. vim.inspect(path_data_arr))
+  child.lua([[_G.path_data_arr_ref = vim.deepcopy(_G.path_data_arr)]])
+
+  local out = child.lua_get(
+    'MiniVisits.gen_sort.' .. method .. '(...)(_G.path_data_arr)',
+    { { recency_weight = recency_weight } }
+  )
+  local out_paths = vim.tbl_map(function(x) return x.path end, out)
+  eq(out_paths, ref_paths)
+
+  -- Should not modify input array
+  eq(child.lua_get('vim.deep_equal(_G.path_data_arr, _G.path_data_arr_ref)'), true)
+end
+
+--stylua: ignore
+T['gen_sort']['default()']['works'] = function()
+  local path_data_arr = {
+    { path = 'aaa', count = 100, latest = 3 },   -- ranked 1 and 2
+    { path = 'bbb', count = 3,   latest = 2 },   -- ranked 2 and 3
+    { path = 'ccc', count = 2,   latest = 100 }, -- ranked 3 and 1
+    { path = 'ddd', count = 1,   latest = 1 },   -- ranked 4 and 4
+  }
+
+  validate_gen_sort('default', path_data_arr, nil, { 'aaa', 'ccc', 'bbb', 'ddd' })
+  validate_gen_sort('default', path_data_arr, 0.5, { 'aaa', 'ccc', 'bbb', 'ddd' })
+  validate_gen_sort('default', path_data_arr, 0,   { 'aaa', 'bbb', 'ccc', 'ddd' })
+  validate_gen_sort('default', path_data_arr, 1,   { 'ccc', 'aaa', 'bbb', 'ddd' })
+end
+
+T['gen_sort']['default()']['handles ties'] = function()
+  local path_data_arr = {
+    { path = 'aaa', count = 9, latest = 4 }, -- ranked 1 and 4 = 2.5
+    { path = 'bbb', count = 2, latest = 6 }, -- ranked 4 and 2 = 3
+    { path = 'ccc', count = 2, latest = 5 }, -- ranked 4 and 3 = 3.5
+    { path = 'ddd', count = 2, latest = 1 }, -- ranked 4 and 7 = 5.5
+    { path = 'eee', count = 2, latest = 3 }, -- ranked 4 and 5 = 4.5
+    { path = 'fff', count = 2, latest = 2 }, -- ranked 4 and 6 = 5
+    { path = 'ggg', count = 1, latest = 7 }, -- ranked 7 and 1 = 4
+  }
+
+  -- In ranks (should assign average rank)
+  validate_gen_sort('default', path_data_arr, 0.5, { 'aaa', 'bbb', 'ccc', 'ggg', 'eee', 'fff', 'ddd' })
+
+  -- In output score (should sort by path)
+  validate_gen_sort('default', path_data_arr, 0, { 'aaa', 'bbb', 'ccc', 'ddd', 'eee', 'fff', 'ggg' })
+end
 
 T['gen_sort']['z()'] = new_set()
 
-T['gen_sort']['z()']['works'] = function() MiniTest.skip() end
+T['gen_sort']['z()']['works'] = function()
+  local cur_time = os.time()
+  local path_data_arr = {
+    { path = 'aaa', count = 2, latest = cur_time - 1 },
+    { path = 'bbb', count = 3, latest = cur_time - 10000 },
+    { path = 'ccc', count = 4, latest = cur_time - 20000 },
+    { path = 'ddd', count = 1, latest = cur_time - 30000 },
+  }
+
+  validate_gen_sort('z', path_data_arr, 0, { 'aaa', 'bbb', 'ccc', 'ddd' })
+end
 
 T['gen_normalize'] = new_set()
 
 T['gen_normalize']['default()'] = new_set()
 
-T['gen_normalize']['default()']['works'] = function() MiniTest.skip() end
+local validate_default_normalize = function(opts, index_input, index_ref)
+  child.lua('_G.normalize = MiniVisits.gen_normalize.default(...)', { opts })
+  eq(child.lua_get('_G.normalize(...)', { index_input }), index_ref)
+end
+
+T['gen_normalize']['default()']['works'] = function()
+  local path, path_2, path_3 =
+    make_testpath('file'), make_testpath('dir_1', 'file_1-1'), make_testpath('dir_1', 'file_1-2')
+  local cwd, cwd_2 = child.fn.getcwd(), test_dir_absolute
+
+  validate_default_normalize({}, {
+    [cwd] = {
+      [path] = { count = 600, labels = { aaa = true }, latest = 10 },
+      [path_2] = { count = 400, latest = 20 },
+      [path_3] = { count = 1, latest = 30 },
+      ['non-path'] = { count = 1, latest = 40 },
+    },
+    [cwd_2] = {
+      [path] = { count = 10, labels = { bbb = true }, latest = 100 },
+      ['non-path-2'] = { count = 20, latest = 200 },
+    },
+  }, {
+    [cwd] = {
+      -- Should multiply each `count` by `800 / 1002` and keep 2 decimal places
+      [path] = { count = 479.04, labels = { aaa = true }, latest = 10 },
+      [path_2] = { count = 319.36, latest = 20 },
+      [path_3] = { count = 0.8, latest = 30 },
+      -- Should not prune non-paths by default
+      ['non-path'] = { count = 0.8, latest = 40 },
+    },
+    [cwd_2] = {
+      -- Should decay per cwd
+      [path] = { count = 10, labels = { bbb = true }, latest = 100 },
+      ['non-path-2'] = { count = 20, latest = 200 },
+    },
+  })
+
+  -- Does decay even for a single entry
+  validate_default_normalize(
+    {},
+    { [cwd] = { [path] = { count = 1001, latest = 10 } } },
+    { [cwd] = { [path] = { count = 800, latest = 10 } } }
+  )
+
+  -- Works even for a very large total `count` sum
+  validate_default_normalize(
+    {},
+    { [cwd] = { [path] = { count = 10000, latest = 10 }, [path_2] = { count = 10000, latest = 20 } } },
+    { [cwd] = { [path] = { count = 400, latest = 10 }, [path_2] = { count = 400, latest = 20 } } }
+  )
+end
+
+T['gen_normalize']['default()']['prunes before and after decay'] = function()
+  local path, path_2 = make_testpath('file'), make_testpath('dir_1', 'file_1-1')
+  local cwd = child.fn.getcwd()
+
+  -- Before decay
+  validate_default_normalize({}, {
+    [cwd] = {
+      [path] = { count = 999.9, latest = 10 },
+      [path_2] = { count = 0.4, latest = 20 },
+    },
+  }, {
+    [cwd] = {
+      -- There is no decay as `path_2` entry was removed before and total sum
+      -- is now below threshold
+      [path] = { count = 999.9, latest = 10 },
+    },
+  })
+
+  -- After decay
+  validate_default_normalize({}, {
+    [cwd] = {
+      [path] = { count = 1000, latest = 10 },
+      [path_2] = { count = 0.51, latest = 20 },
+    },
+  }, {
+    [cwd] = {
+      -- There is decay in `path` and no `path_2` entry as no pruning was done
+      -- before decay. After it, `path_2` has `count = 0.41` and is pruned.
+      [path] = { count = 799.59, latest = 10 },
+    },
+  })
+end
+
+T['gen_normalize']['default()']['respects `opts.decay_threshold`'] = function()
+  local path, path_2 = make_testpath('file'), make_testpath('dir_1', 'file_1-1')
+  local cwd = child.fn.getcwd()
+
+  local index = {
+    [cwd] = {
+      [path] = { count = 800, latest = 10 },
+      [path_2] = { count = 150, latest = 20 },
+    },
+  }
+
+  validate_default_normalize({}, index, index)
+
+  validate_default_normalize({ decay_threshold = 949.9 }, index, {
+    [cwd] = {
+      [path] = { count = 673.68, latest = 10 },
+      [path_2] = { count = 126.32, latest = 20 },
+    },
+  })
+end
+
+T['gen_normalize']['default()']['respects `opts.decay_target`'] = function()
+  local path, path_2 = make_testpath('file'), make_testpath('dir_1', 'file_1-1')
+  local cwd = child.fn.getcwd()
+
+  local index = {
+    [cwd] = {
+      [path] = { count = 800, latest = 10 },
+      [path_2] = { count = 201, latest = 20 },
+    },
+  }
+
+  validate_default_normalize({}, index, {
+    [cwd] = {
+      [path] = { count = 639.36, latest = 10 },
+      [path_2] = { count = 160.64, latest = 20 },
+    },
+  })
+
+  validate_default_normalize({ decay_target = 100 }, index, {
+    [cwd] = {
+      [path] = { count = 79.92, latest = 10 },
+      [path_2] = { count = 20.08, latest = 20 },
+    },
+  })
+end
+
+T['gen_normalize']['default()']['respects `opts.prune_paths`'] = function()
+  local path, path_2 = make_testpath('file'), make_testpath('dir_1', 'file_1-1')
+  local cwd, cwd_2 = child.fn.getcwd(), test_dir_absolute
+
+  local index = {
+    [cwd] = {
+      [path] = { count = 10, latest = 10 },
+      ['non-path'] = { count = 10, latest = 10 },
+    },
+    ['non-cwd'] = {
+      [path] = { count = 20, latest = 20 },
+    },
+    [cwd_2] = {
+      ['non-path'] = { count = 30, latest = 30 },
+    },
+  }
+
+  -- Should not remove paths by default
+  validate_default_normalize({}, index, index)
+
+  validate_default_normalize({ prune_paths = true }, index, { [cwd] = { [path] = { count = 10, latest = 10 } } })
+end
+
+T['gen_normalize']['default()']['respects `opts.prune_threshold`'] = function()
+  local path, path_2 = make_testpath('file'), make_testpath('dir_1', 'file_1-1')
+  local cwd = child.fn.getcwd()
+
+  local index = {
+    [cwd] = {
+      [path] = { count = 0.4, latest = 10 },
+      [path_2] = { count = 1, latest = 20 },
+    },
+  }
+
+  validate_default_normalize({}, index, { [cwd] = { [path_2] = { count = 1, latest = 20 } } })
+
+  validate_default_normalize({ prune_threshold = 1.01 }, index, {})
+  validate_default_normalize({ prune_threshold = 0.1 }, index, index)
+end
+
+T['gen_normalize']['default()']['has output validating arguments'] = function()
+  expect.error(function() child.lua('MiniVisits.gen_normalize.default()(1)') end, '`index`.*table')
+end
 
 -- Integration tests ----------------------------------------------------------
 T['Tracking'] = new_set()

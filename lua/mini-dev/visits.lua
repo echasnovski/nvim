@@ -352,6 +352,24 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text                                                         *MiniVisits.config.list*
+--- # List ~
+--- !!!!!!!!!!!!!!!!!!!!!!!!!!!!
+---
+--- By default "robust frecency" approach is used. It independently ranks visits
+--- by recency and frequency, combines numerical ranks with weights, and uses
+--- that number to sort from best to worst.
+--- See |MiniVisits.get_sort.default()| for more details.
+--- See |MiniVisits.gen_sort| for built-in sorting approaches.
+---
+--- # Silent ~
+---
+--- # Store ~
+---
+--- Decay in normalization is very important and is a mechanism to "forget" old
+--- visits.
+---
+--- # Track ~
 MiniVisits.config = {
   -- How visit index is converted to list of paths
   list = {
@@ -795,6 +813,15 @@ MiniVisits.reset_index = function()
   MiniVisits.set_index(stored_index)
 end
 
+--- Normalize visit index
+---
+--- Applies `config.store.normalize` (|MiniVisits.gen_normalize.default()| by default)
+--- to the input index object and returns the output (if it fits in the definition
+--- of index object; see |MiniVisits-index-specification|).
+---
+---@param index table|nil Index object. Default: copy of the current index.
+---
+---@return table Normalized index object.
 MiniVisits.normalize_index = function(index)
   index = index or MiniVisits.get_index()
   H.validate_index(index, '`index`')
@@ -803,23 +830,44 @@ MiniVisits.normalize_index = function(index)
   local normalize = config.store.normalize
   if not vim.is_callable(normalize) then normalize = MiniVisits.gen_normalize.default() end
   local new_index = normalize(vim.deepcopy(index))
-  H.validate_index(new_index, 'normalized `index`')
+  H.validate_index(new_index, '`index` after normalization')
 
   return new_index
 end
 
+--- Read visit index from disk
+---
+---@param store_path string|nil Path on the disk containing visit index data.
+---   Default: `config.store.path`.
+---   Notes:
+---     - Can return `nil` if path is empty string or file is not readable.
+---     - File is sourced with |dofile()| as regular Lua file.
+---
+---@return table|nil Output of the file source.
 MiniVisits.read_index = function(store_path)
   store_path = store_path or H.get_config().store.path
   if store_path == '' then return nil end
-  H.validate_string(store_path, 'path')
+  H.validate_string(store_path, 'store_path')
   if vim.fn.filereadable(store_path) == 0 then return nil end
 
   return dofile(store_path)
 end
 
+--- Write visit index to disk
+---
+--- Steps:
+--- - Normalize index with |MiniVisits.normalize_index()|.
+--- - Ensure path is valid.
+--- - Write index object to the path so that it is readable
+---   with |MiniVisits.read_index()|.
+---
+---@param store_path string|nil Path on the disk where to write visit index data.
+---   Default: `config.store.path`. Note: if empty string, nothing is written.
+---@param index table|nil Index object to write to disk.
 MiniVisits.write_index = function(store_path, index)
   store_path = store_path or H.get_config().store.path
-  H.validate_string(store_path, 'path')
+  H.validate_string(store_path, 'store_path')
+  if store_path == '' then return end
   index = index or MiniVisits.get_index()
   H.validate_index(index, '`index`')
 
@@ -837,30 +885,67 @@ MiniVisits.write_index = function(store_path, index)
   vim.fn.writefile(lines, store_path)
 end
 
+--- Generate filter function
+---
+--- This is a table with function elements. Call to actually get specification.
 MiniVisits.gen_filter = {}
 
+--- Default filter
+---
+--- Always returns `true` resulting in no filter.
+---
+---@return function Visit filter function. See |MiniVisits.config.list| for more details.
 MiniVisits.gen_filter.default = function()
   return function(path_data) return true end
 end
 
+--- Filter visits from current session
+---
+---@return function Visit filter function. See |MiniVisits.config.list| for more details.
 MiniVisits.gen_filter.this_session = function()
   return function(path_data) return H.cache.session_start_time <= path_data.latest end
 end
 
+--- Generate sort function
+---
+--- This is a table with function elements. Call to actually get specification.
 MiniVisits.gen_sort = {}
 
+--- Default sort
 ---
---- Paths in result list can be sorted. Some common examples:
---- - By frequency: from most to least frequent.
---- - By recency: from latest to earliest.
---- - By frecency: via combination of frequency and recency.
---- - By custom sorting rule.
+--- Sort paths using "robust frecency" approach. It relies on the rank operation:
+--- based on certain reference number for every item, assign it a number
+--- between 1 (best) and number of items (worst). Ties are dealt with "average
+--- rank" approach: each element with a same reference number is assigned
+--- an average rank among such elements. This way total rank sum depends only
+--- on number of paths.
 ---
---- By default "robust frecency" approach is used. It independently ranks visits
---- by recency and frequency, combines numerical ranks with weights, and uses
---- that number to sort from best to worst.
---- See |MiniVisits.get_sort.default()| for more details.
---- See |MiniVisits.gen_sort| for built-in sorting approaches.
+--- Here is an algorithm outline:
+--- - Rank paths based on frequency (`count` value in index): from most to
+---   least frequent.
+--- - Rank paths based on recency (`latest` value in index): from most to
+---   least recent.
+--- - Combine ranks from previous steps with weights:
+---   `score = (1 - w) * rank_frequency + w * rank_recency`, where `w` is
+---   "recency weight". The smaller
+---
+--- Examples:
+--- - Default recency weight 0.5 results into "robust frecency" sorting: it
+---   combines both frequency and recency.
+---   This is called a "robust frecency" because actual values don't have direct
+---   effect on the outcome, only ordering matters. For example, if there is a very
+---   frequent file with `count = 100` while all others have `count = 5`, it will not
+---   massively dominate the outcome as long as it is not very recent.
+---
+--- - Having recency weight 1 results into "from most to least recent" sorting.
+---
+--- - Having recency weight 0 results into "from most to least frequent" sorting.
+---
+---@param opts table|nil Option. Possible fields:
+---   - <recency_weight> `(number)` - a number between 0 and 1 for recency weight.
+---     Default: 0.5.
+---
+---@return function Visit sort function. See |MiniVisits.config.list| for more details.
 MiniVisits.gen_sort.default = function(opts)
   opts = vim.tbl_deep_extend('force', { recency_weight = 0.5 }, opts or {})
   local recency_weight = opts.recency_weight
@@ -885,8 +970,14 @@ MiniVisits.gen_sort.default = function(opts)
   end
 end
 
+--- Z sort
+---
+--- Sort as in https://github.com/rupa/z.
+---
+---@return function Visit sort function. See |MiniVisits.config.list| for more details.
 MiniVisits.gen_sort.z = function()
   return function(path_data_arr)
+    path_data_arr = vim.deepcopy(path_data_arr)
     local now = os.time()
     for _, path_data in ipairs(path_data_arr) do
       -- Source: https://github.com/rupa/z/blob/master/z.sh#L151
@@ -898,8 +989,39 @@ MiniVisits.gen_sort.z = function()
   end
 end
 
+--- Generate normalize function
+---
+--- This is a table with function elements. Call to actually get specification.
 MiniVisits.gen_normalize = {}
 
+--- Generate default normalize function
+---
+--- Steps:
+--- - Prune visits, i.e. remove outdated visits:
+---     - If `count` number of visits is below prune threshold, remove that visit
+---       entry from particular cwd (it can still be present in others).
+---     - If either first (cwd) or second (path) level key doesn't represent an
+---       actual path on disk, remove the whole associated value.
+---       Note: this is not done by default.
+---
+--- - Decay visits, i.e. possibly make visits more outdated. This is an important
+---   part to the whole usability: together with pruning it results into automated
+---   removing of paths which were visited long ago and are not relevant.
+---
+---   Decay is done per cwd if total sum of `count` values exceeds decay threshold.
+---   It is performed through multiplying each `count` by same coefficient so that
+---   the new total sum of `count` is equal to some smaller target value. Note: only
+---   two decimal places are preserved, so the outcome might not be exact.
+---
+--- - Prune once more to ensure that there are no outdated paths after decay.
+---
+---@param opts Options. Possible fields:
+---   - <decay_threshold> `(number)` - decay threshold. Default: 1000.
+---   - <decay_target> `(number)` - decay target. Default: 800.
+---   - <prune_threshold> `(number)` - prune threshold. Default: 0.5.
+---   - <prune_paths> `(boolean)` - whether to prune outdated paths. Default: false.
+---
+---@return function Visit index normalize function. See "Store" in |MiniVisits.config|.
 MiniVisits.gen_normalize.default = function(opts)
   local default_opts = { decay_threshold = 1000, decay_target = 800, prune_threshold = 0.5, prune_paths = false }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
@@ -1109,15 +1231,23 @@ end
 H.index_prune = function(index, prune_paths, threshold)
   if type(threshold) ~= 'number' then H.error('Prune threshold should be number.') end
 
+  -- Possibly prune non-path cwds
   for cwd, cwd_tbl in pairs(index) do
     if prune_paths and vim.fn.isdirectory(cwd) == 0 then index[cwd] = nil end
   end
+
+  -- Prune on path level
   for cwd, cwd_tbl in pairs(index) do
     for path, path_tbl in pairs(cwd_tbl) do
       local should_prune_path = prune_paths and not (vim.fn.filereadable(path) == 1 or vim.fn.isdirectory(path) == 1)
       local should_prune = should_prune_path or path_tbl.count < threshold
       if should_prune then cwd_tbl[path] = nil end
     end
+  end
+
+  -- Remove possible cwd tables which were only with non-paths entries
+  for cwd, cwd_tbl in pairs(index) do
+    if vim.tbl_count(cwd_tbl) == 0 then index[cwd] = nil end
   end
 end
 
@@ -1135,7 +1265,7 @@ H.index_decay_cwd = function(cwd_tbl, threshold, target)
   -- Decay (multiply counts by coefficient to have total count equal target)
   local coef = target / total_count
   for _, path_tbl in pairs(cwd_tbl) do
-    -- Round to track only two decimal places
+    -- Round to preserve only two decimal places
     path_tbl.count = math.floor(100 * coef * path_tbl.count + 0.5) / 100
   end
 end
