@@ -1,15 +1,9 @@
--- TODO:
+-- TODO: Before release add 'mini.extra' pickers!
 --
--- Code:
 --
--- Tests:
--- - All combinations of empty/nonempty + path/cwd work for all cases.
 --
--- - Can track both file and directory visits.
 --
--- - How it works with several Neovim instances opened ("last who wrote wins").
 --
--- Docs:
 
 --- *mini.visits* Track and reuse file system visits
 --- *MiniVisits*
@@ -20,19 +14,20 @@
 ---
 --- Features:
 ---
---- - Persistently track file system visits per working directory.
----   Stored visit index is human readable and editable.
+--- - Persistently track file system visits (both files and directories)
+---   per project directory. Store visit index is human readable and editable.
 ---
 --- - Visit index is normalized on every write to contain relevant information.
 ---   Exact details can be customized. See |MiniVisits.normalize()|.
 ---
---- - Built-in ability to persistently use path labels.
+--- - Built-in ability to persistently use label paths for later use.
 ---   See |MiniVisits.add_label()| and |MiniVisits.remove_label()|.
 ---
 --- - Exported functions to reuse visit data:
 ---     - List visited paths/labels with custom filter and sort (uses "robust
 ---       frecency" by default). Can be used as source for pickers.
 ---       See |MiniVisits.list_paths()| and |MiniVisits.list_labels()|.
+---       See |MiniVisits.gen_filter| and |MiniVisits.gen_sort|.
 ---
 ---     - Select visited paths/labels using |vim.ui.select()|.
 ---       See |MiniVisits.select_path()| and |MiniVisits.select_labels()|.
@@ -48,6 +43,8 @@
 ---   and at `config.store.path` on disk (for persistent usage).
 --- - Most of functions affect an in-session data which gets written to disk only
 ---   before Neovim is closing or when users asks to.
+--- - It doesn't account for paths being renamed or moved. Manual intervention
+---   to the visit index is required here.
 ---
 --- Sources with more details:
 --- - |MiniVisits-overview|
@@ -69,8 +66,34 @@
 --- # Comparisons ~
 ---
 --- - 'nvim-telescope/telescope-frecency.nvim':
+---     - It stores array of actual visit timestamps, while this module tracks
+---       only total number and latest timestamp of visits. This is by design
+---       as a different trade-off between how much data is being used/stored
+---       and complexity of underlying "frecency" sorting.
+---     - By default tracks a buffer only once per session, while this module
+---       tracks on every meaningful buffer enter. This leads to a more relevant
+---       in-session sorting.
+---     - Implements an original frecency algorithm of Firefox's address bar,
+---       while this module uses own "robust frecency" approach.
+---     - Mostly designed to work with 'nvim-telescope/telescope.nvim', while
+---       this module provides general function to list paths and select
+---       with |vim.ui.select()|.
+---     - Does not allow use of custom data (like labels), while this module does.
 ---
 --- - 'ThePrimeagen/harpoon':
+---     - Has slightly different concept than general labeling, which more
+---       resembles adding paths to an ordered stack. This module implements
+---       a more common labeling which does not imply order with ability to
+---       make it automated depending on the task and/or preference.
+---     - Implements marks as positions in a path, while this module labels paths.
+---     - Writes data on disk after every meaning change, while this module is
+---       more conservative and read only when Neovim closes or when asked to.
+---     - Has support for labeling terminals, while this modules is oriented
+---       only towards paths.
+---     - Has dedicated UI to manage marks, while this module does not by design.
+---       There are functions for adding and removing label from the path.
+---     - Does not provide functionality to track and reuse any visited path,
+---       while this module does.
 ---
 --- # Disabling ~
 ---
@@ -87,14 +110,14 @@
 ---   is (re)started to actually register visit after certain amount of time
 ---   (`config.track.delay` milliseconds, 1000 by default). It is not registered
 ---   immediately to allow navigation to target buffer in several steps
----   (for example, with |:bnext| / |:bprevious|).
+---   (for example, with series of |:bnext| / |:bprevious|).
 ---
 --- - When delay time passes without any dedicated events being triggered
 ---   (meaning user is "settled" on certain buffer), |MiniVisits.register_visit()|
 ---   is called if all of the following conditions are met:
 ---     - Module is not disabled (see "Disabling" section in |MiniVisits|).
 ---     - Buffer is normal with non-empty name (used as visit path).
----     - Visit path does not equal the latest tracked one. This is to allow
+---     - Visit path does not equal to the latest tracked one. This is to allow
 ---       temporary enter of non-normal buffers (like help, terminal, etc.)
 ---       without artificial increase of visit count.
 ---
@@ -120,12 +143,12 @@
 ---
 --- - Move along visit history (see |MiniVisits.iterate_paths()|).
 ---
---- - Utilize labels. Any visit can be added a one ore more labels (like "core",
+--- - Utilize labels. Any visit can be added a one or more labels (like "core",
 ---   "tmp", etc.). They are bound to the visit (path registered for certain
 ---   directory) and are stored persistently.
 ---   Labels can be used to manually create groups of files and/or directories
 ---   that have particular interest to the user.
----   There is no one "write" way to use them, though. See |MiniVisits-examples|
+---   There is no one right way to use them, though. See |MiniVisits-examples|
 ---   for some inspiration.
 ---
 --- - Utilizing custom data. Visit index can be manipulated manually using
@@ -145,13 +168,14 @@
 ---
 --- Second level keys are actual visit paths. Their values are tables with visit
 --- data which should follow these requirements:
---- - Field `count` should be present and be a number. It represents the number
+--- - Field <count> should be present and be a number. It represents the number
 ---   of times this path was visited under particular cwd.
---- - Field `latest` should be present and be a number. It represents the time
----   of latest visit. By default computed with |os.time()| (up to a second).
---- - Field `labels` might not be present. If present, it should be a table
+--- - Field <latest> should be present and be a number. It represents the time
+---   of latest path visit under particular cwd.
+---   By default computed with |os.time()| (up to a second).
+--- - Field <labels> might not be present. If present, it should be a table
 ---   with string labels as keys and `true` as values. It represents labels of
----   the path wunder certain cwd.
+---   the path under particular cwd.
 ---
 --- Notes:
 --- - All paths are absolute.
@@ -179,7 +203,13 @@
 ---
 --- When stored on disk, visit index is a file containing Lua code returning
 --- visit index table. It can be edited by hand as long as it contains a valid
---- Lua code (to be run executed with |dofile()|).
+--- Lua code (to be executed with |dofile()|).
+---
+--- Notes:
+--- - Storage is implemented in such a way that it doesn't really support more
+---   than one parallel Neovim processes. Meaning that if there are two or more
+---   simultaneous Neovim processes with same visit index storage path, the last
+---   one writing to it will preserve its visit history while others - won't.
 ---
 --- # Normalization ~
 ---
@@ -255,7 +285,7 @@
 --- ## Use fixed labels ~
 ---
 --- During work on every project there is usually a handful of files where core
---- activity is concentrated. This is can be made easier by creating mappings
+--- activity is concentrated. This can be made easier by creating mappings
 --- which add/remove special fixed label (for example, "core") and select paths
 --- with that label for both all and current cwd. Example: >
 ---
@@ -287,7 +317,7 @@
 --- ## Use automated labels ~
 ---
 --- When using version control system (such as Git), usually there is already
---- an identifier grouping files you are working with - branch name.
+--- an identifier that groups files you are working with - branch name.
 --- Here is an example of keymaps to add/remove label equal to branch name: >
 ---
 ---   local map_branch = function(keys, action, desc)
@@ -309,13 +339,13 @@
 ---@alias __visits_cwd string|nil Visit cwd (project directory). Can be empty string to mean
 ---   "all visited cwd". Default: |current-directory|.
 ---@alias __visits_filter - <filter> `(function)` - predicate to filter paths. For more information
----     about how it is used, see |MiniVisits.config|.
----     Default: value of `config.list.filter` or |MiniVisits.gen_filter.default()|
----     if it is `nil`.
+---     about how it is used, see |MiniVisits.config.list|.
+---     Default: value of `config.list.filter` with |MiniVisits.gen_filter.default()|
+---     as its default.
 ---@alias __visits_sort - <sort> `(function)` - path data sorter. For more information about how
----     it is used, see |MiniVisits.config|.
+---     it is used, see |MiniVisits.config.list|.
 ---     Default: value of `config.list.sort` or |MiniVisits.gen_filter.sort()|
----     if it is `nil`.
+---     as its default.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -354,22 +384,71 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text                                                         *MiniVisits.config.list*
 --- # List ~
---- !!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ---
---- By default "robust frecency" approach is used. It independently ranks visits
---- by recency and frequency, combines numerical ranks with weights, and uses
---- that number to sort from best to worst.
---- See |MiniVisits.get_sort.default()| for more details.
---- See |MiniVisits.gen_sort| for built-in sorting approaches.
+--- `config.list` defines how visit index is converted to a path list by default.
+---
+--- `list.filter` is a callable which should take a path data and return `true` if
+--- this path should be present in the list.
+--- Default: output of |MiniVisits.gen_filter.default()|.
+---
+--- Path data is a table with at least these fields:
+--- - <path> `(string)` - absolute path of visit.
+--- - <count> `(number)` - number of visits.
+--- - <latest> `(number)` - timestamp of latest visit.
+--- - <labels> `(table|nil)` - table of labels (has string keys with `true` values).
+---
+--- Notes:
+--- - Both `count` and `latest` (in theory) can be any number. But built-in tracking
+---   results into positive integer `count` and `latest` coming from |os.time()|.
+--- - There can be other entries if they are set by user as index entry.
+---
+--- `list.sort` is a callable which should take an array of path data and return
+--- a sorted array of path data (or at least tables each containing <path> field).
+--- Default: output of |MiniVisits.get_sort.default()|.
+--- Single path data entry is a table with a same structure as for `list.filter`.
+---
+--- Note, that `list.sort` can be used both to filter, sort, or even return paths
+--- unrelated to the input.
 ---
 --- # Silent ~
 ---
+--- `config.silent` is a boolean controlling whether to show non-error feedback
+--- (like adding/removing labels, etc.). Default: `false`.
+---
 --- # Store ~
 ---
---- Decay in normalization is very important and is a mechanism to "forget" old
---- visits.
+--- `config.store` defines how visit index is stored on disk to enable persistent
+--- data across several sessions.
+---
+--- `store.autowrite` is a boolean controlling whether to write visit data to
+--- disk on |VimLeavePre| event. Default: `true`.
+---
+--- `store.normalize` is a callable which should take visit index
+--- (see |MiniVisits-index-specification|) as input and return "normalized" visit
+--- index as output. This is used to ensure that visit index is up to date and
+--- contains only relevant data. For example, it controls how old and
+--- irrelevant visits are "forgotten", and more.
+--- Default: output of |MiniVisits.gen_normalize.default()|.
+---
+--- `store.path` is a path to which visit index is written. See "Storage" section
+--- of |MiniVisits-index-specification| for more details.
+--- Note: set to empty string to disable any writing with not explicitly set
+--- path (including the one on |VimLeavePre|).
+--- Default: "mini-visits-index" file inside |$XDG_DATA_HOME|.
 ---
 --- # Track ~
+---
+--- `config.track` defines how visits are tracked (index entry is autoupdated).
+--- See "Tracking visits" section in |MiniVisits-overview| for more details.
+---
+--- `track.event` is a proper Neovim |{event}| on which track get triggered.
+--- Note: set to empty string to disable automated tracking.
+--- Default: |BufEnter|.
+---
+--- `track.delay` is a delay in milliseconds after event is triggered and visit
+--- is autoregistered.
+--- Default: 1000 (to allow navigation between buffers without tracking
+--- intermediate ones).
 MiniVisits.config = {
   -- How visit index is converted to list of paths
   list = {
@@ -430,7 +509,7 @@ end
 --- Add path to index
 ---
 --- Ensures that there is a (one or more) entry for path-cwd pair. If entry is
---- already present, does nothing. If not - creates it with `count` and
+--- already present, does nothing. If not - creates it with both `count` and
 --- `latest` set to 0.
 ---
 ---@param path __visits_path
@@ -484,8 +563,8 @@ end
 --- already absent, does nothing.
 ---
 --- Notes:
---- - Affects only in-session Lua variable. To make it persistent,
----   call |MiniVisits.write_index()|.
+--- - Affects only in-session Lua variable. Call |MiniVisits.write_index()| to
+---   make it persistent.
 ---
 ---@param path __visits_path
 ---@param cwd __visits_cwd
@@ -512,6 +591,7 @@ end
 --- - Remove label from (one or more) index entry.
 --- - If it was last label in an entry, remove `labels` key.
 ---
+---@param label string|nil Label string. Default: `nil` to ask from user.
 ---@param path __visits_path
 ---@param cwd __visits_cwd
 MiniVisits.remove_label = function(label, path, cwd)
@@ -646,7 +726,7 @@ end
 ---
 --- Examples:
 ---
---- - Select from all visitsed paths: `MiniVisits.select_path('')`
+--- - Select from all visited paths: `MiniVisits.select_path('')`
 ---
 --- - Select from paths under current directory sorted from most to least recent: >
 ---
@@ -674,9 +754,9 @@ end
 ---
 --- Examples:
 ---
---- - Select from lables of current path: `MiniVisits.select_label()`
+--- - Select from labels of current path: `MiniVisits.select_label()`
 ---
---- - Select from all visited lables: `MiniVisits.select_label('', '')`
+--- - Select from all visited labels: `MiniVisits.select_label('', '')`
 ---
 --- - Select from current project labels and sort paths (after choosing) from most
 ---   to least recent: >
@@ -717,13 +797,13 @@ end
 ---     - For "backward" direction - backward starting from current index.
 ---     - For "forward" direction - forward starting from current index.
 ---     - For "last" direction - backward starting from index after the last one
----       (so taht single first iteration leads to the last path).
+---       (so that single first iteration leads to the last path).
 ---
 --- Notes:
---- - Moslty designed to be used as a mapping. See `MiniVisits-examples`.
+--- - Mostly designed to be used as a mapping. See `MiniVisits-examples`.
 --- - If path from current buffer is not in the output of `MiniVisits.list_paths()`,
----   starting index is such that first iteartion lands on first item if iterating
----   forward and last item otherwise.
+---   starting index is inferred such that first iteration lands on first item
+---   (if iterating forward) or last item (if iterating backward).
 --- - Navigation with this function is not tracked (see |MiniVisits-overview|).
 ---   This is done to allow consecutive application without affecting
 ---   underlying list of paths.
@@ -733,7 +813,7 @@ end
 --- - `MiniVisits("first")` results into focusing on "file1".
 --- - `MiniVisits("backward", { n_times = 2 })` from "file3" results into "file1".
 --- - `MiniVisits("forward", { n_times = 10 })` from "file1" results into "file3".
---- - `MiniVisits("last", { n_times = 3, wrap = true })` results into "file3".
+--- - `MiniVisits("last", { n_times = 4, wrap = true })` results into "file3".
 ---
 ---@param direction string One of "first", "backward", "forward", "last".
 ---@param cwd string|nil Forwarded to |MiniVisits.list_paths()|.
@@ -841,7 +921,7 @@ end
 ---   Default: `config.store.path`.
 ---   Notes:
 ---     - Can return `nil` if path is empty string or file is not readable.
----     - File is sourced with |dofile()| as regular Lua file.
+---     - File is sourced with |dofile()| as a regular Lua file.
 ---
 ---@return table|nil Output of the file source.
 MiniVisits.read_index = function(store_path)
@@ -857,7 +937,7 @@ end
 ---
 --- Steps:
 --- - Normalize index with |MiniVisits.normalize_index()|.
---- - Ensure path is valid.
+--- - Ensure path is valid (all parent directories are created, etc.).
 --- - Write index object to the path so that it is readable
 ---   with |MiniVisits.read_index()|.
 ---
@@ -892,7 +972,7 @@ MiniVisits.gen_filter = {}
 
 --- Default filter
 ---
---- Always returns `true` resulting in no filter.
+--- Always returns `true` resulting in no actual filter.
 ---
 ---@return function Visit filter function. See |MiniVisits.config.list| for more details.
 MiniVisits.gen_filter.default = function()
@@ -921,21 +1001,19 @@ MiniVisits.gen_sort = {}
 --- on number of paths.
 ---
 --- Here is an algorithm outline:
---- - Rank paths based on frequency (`count` value in index): from most to
----   least frequent.
---- - Rank paths based on recency (`latest` value in index): from most to
----   least recent.
+--- - Rank paths based on frequency (`count` value): from most to least frequent.
+--- - Rank paths based on recency (`latest` value): from most to least recent.
 --- - Combine ranks from previous steps with weights:
 ---   `score = (1 - w) * rank_frequency + w * rank_recency`, where `w` is
----   "recency weight". The smaller
+---   "recency weight". The smaller this weight the less recency affects outcome.
 ---
 --- Examples:
 --- - Default recency weight 0.5 results into "robust frecency" sorting: it
 ---   combines both frequency and recency.
 ---   This is called a "robust frecency" because actual values don't have direct
----   effect on the outcome, only ordering matters. For example, if there is a very
----   frequent file with `count = 100` while all others have `count = 5`, it will not
----   massively dominate the outcome as long as it is not very recent.
+---   effect on the outcome, only ordering matters. For example, if there is
+---   a very frequent file with `count = 100` while all others have `count = 5`,
+---   it will not massively dominate the outcome as long as it is not very recent.
 ---
 --- - Having recency weight 1 results into "from most to least recent" sorting.
 ---
@@ -1008,10 +1086,10 @@ MiniVisits.gen_normalize = {}
 ---   part to the whole usability: together with pruning it results into automated
 ---   removing of paths which were visited long ago and are not relevant.
 ---
----   Decay is done per cwd if total sum of `count` values exceeds decay threshold.
+---   Decay is done per cwd if its total `count` values sum exceeds decay threshold.
 ---   It is performed through multiplying each `count` by same coefficient so that
----   the new total sum of `count` is equal to some smaller target value. Note: only
----   two decimal places are preserved, so the outcome might not be exact.
+---   the new total sum of `count` is equal to some smaller target value.
+---   Note: only two decimal places are preserved, so the sum might not be exact.
 ---
 --- - Prune once more to ensure that there are no outdated paths after decay.
 ---
@@ -1019,7 +1097,7 @@ MiniVisits.gen_normalize = {}
 ---   - <decay_threshold> `(number)` - decay threshold. Default: 1000.
 ---   - <decay_target> `(number)` - decay target. Default: 800.
 ---   - <prune_threshold> `(number)` - prune threshold. Default: 0.5.
----   - <prune_paths> `(boolean)` - whether to prune outdated paths. Default: false.
+---   - <prune_paths> `(boolean)` - whether to prune outdated paths. Default: `false`.
 ---
 ---@return function Visit index normalize function. See "Store" in |MiniVisits.config|.
 MiniVisits.gen_normalize.default = function(opts)
@@ -1284,7 +1362,7 @@ end
 
 -- Validators -----------------------------------------------------------------
 H.validate_path = function(x)
-  x = x or H.buf_get_path(vim.api.nvim_get_current_buf())
+  x = x or H.buf_get_path(vim.api.nvim_get_current_buf()) or ''
   H.validate_string(x, 'path')
   return x == '' and '' or H.full_path(x)
 end
