@@ -7,7 +7,6 @@ now(function() require('mini.sessions').setup({ directory = vim.fn.stdpath('conf
 
 now(function() require('mini.starter').setup() end)
 
--- TODO: Add `section_searchcount` to 'mini.statusline' default
 now(function() require('mini.statusline').setup() end)
 
 now(function() require('mini.tabline').setup() end)
@@ -20,33 +19,38 @@ now(function()
 
   -- Labels
   table.insert(EC.leader_group_clues, { mode = 'n', keys = '<Leader>v', desc = '+Visits' })
-  vim.keymap.set('n', '<Leader>va', function() MiniVisits.add_label('core') end,    { desc = 'Add "core" label' })
-  vim.keymap.set('n', '<Leader>vA', function() MiniVisits.add_label() end,          { desc = 'Add label' })
-  vim.keymap.set('n', '<Leader>vr', function() MiniVisits.remove_label('core') end, { desc = 'Remove "core" label' })
-  vim.keymap.set('n', '<Leader>vR', function() MiniVisits.remove_label() end,       { desc = 'Remove label' })
 
-  local make_pick_core = function(cwd, name)
-    return function()
-      EC.pick_visits({ cwd = cwd, filter = 'core', sort = sort_latest }, { source = { name = name } })
+  local map_vis = function(keys, call, desc)
+    local rhs = '<Cmd>lua MiniVisits.' .. call .. '<CR>'
+    vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
+  end
+  map_vis('vv', 'add_label("core")',    'Add "core" label')
+  map_vis('vV', 'remove_label("core")', 'Remove "core" label')
+  map_vis('vl', 'add_label()',          'Add label')
+  map_vis('vL', 'remove_label()',       'Remove label')
+
+  --  Pick core
+  local map_pick_core = function(keys, cwd, desc)
+    local rhs = function()
+      EC.pick_visits({ cwd = cwd, filter = 'core', sort = sort_latest }, { source = { name = desc } })
     end
+    vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
   end
 
-  vim.keymap.set('n', '<Leader>vc', make_pick_core('',  'Core visits (all)'), { desc = 'Core visits (all)' })
-  vim.keymap.set('n', '<Leader>vC', make_pick_core(nil, 'Core visits (cwd)'), { desc = 'Core visits (cwd)' })
+  map_pick_core('vc', '',  'Core visits (all)')
+  map_pick_core('vC', nil, 'Core visits (all)')
 
-  vim.keymap.set('n', '<Leader>vl', '<Cmd>Pick visit_labels cwd=""<CR>', { desc = 'Visit labels (all)' })
-  vim.keymap.set('n', '<Leader>vL', '<Cmd>Pick visit_labels<CR>',        { desc = 'Visit labels (cwd)' })
-
-  -- Goto navigation
-  local make_goto_core_label = function(direction)
+  -- Iteration
+  local map_iterate_core = function(lhs, direction, desc)
     local opts = { filter = 'core', sort = sort_latest, wrap = true }
-    return function() MiniVisits.goto_path(direction, vim.fn.getcwd(), opts) end
+    local rhs = function() MiniVisits.iterate_paths(direction, vim.fn.getcwd(), opts) end
+    vim.keymap.set('n', lhs, rhs, { desc = desc })
   end
 
-  vim.keymap.set('n', '[{', make_goto_core_label('last'),     { desc = 'Core label (earliest)' })
-  vim.keymap.set('n', '[[', make_goto_core_label('forward'),  { desc = 'Core label (earlier)' })
-  vim.keymap.set('n', ']]', make_goto_core_label('backward'), { desc = 'Core label (later)' })
-  vim.keymap.set('n', ']}', make_goto_core_label('first'),    { desc = 'Core label (latest)' })
+  map_iterate_core('[{', 'last',     'Core label (earliest)')
+  map_iterate_core('[[', 'forward',  'Core label (earlier)')
+  map_iterate_core(']]', 'backward', 'Core label (later)')
+  map_iterate_core(']}', 'first',    'Core label (latest)')
 end)
 
 -- Pickers for 'mini.visits' that would go into 'mini.extra'
@@ -154,46 +158,10 @@ end, 1000)
 later(function() require('mini.extra').setup() end)
 
 later(function()
-  local gen_word_spec = function(use_nonblank)
-    if use_nonblank == nil then use_nonblank = false end
-
-    local matchstrpos = vim.fn.matchstrpos
-    local char = use_nonblank and '[^ \t\n]' or '\\k'
-    local a_keyword_pattern = string.format('[ \t]*%s\\+[ \t]*', char)
-
-    local find_a_keyword = function(line, init)
-      local m = matchstrpos(line, a_keyword_pattern, init - 1)
-      local from, to = m[2] + 1, m[3]
-
-      -- Make it not select parts of word as they would match during 'mini.ai'
-      -- iterative search (with `init = from + 1`).
-      -- Overcome the fact that callable inside 'mini.ai' composed pattern
-      -- can't return index strictly less than `init`
-      if from == init and init ~= 1 then
-        -- FIXME: This clause is wrongly entered if previous keyword consists
-        -- from single character. Example: "x xxx x"
-        init = line:sub(1, to):match('()%s*$')
-        m = matchstrpos(line, a_keyword_pattern, init - 1)
-        from, to = m[2] + 1, m[3]
-      end
-
-      if from == 0 then return nil, nil end
-
-      -- Use only single whitespace (preferring trailing)
-      if line:sub(to, to):find('[ \t]') ~= nil then from = line:find('[^ \t]', from) end
-
-      return from, to
-    end
-
-    return { find_a_keyword, '^%s*()%S*()%s*$' }
-  end
-
   local ai = require('mini.ai')
   ai.setup({
     custom_textobjects = {
       F = ai.gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
-      -- w = gen_word_spec(false),
-      -- W = gen_word_spec(true),
     },
   })
 end)
@@ -202,9 +170,7 @@ later(function() require('mini.align').setup() end)
 
 later(function()
   require('mini.animate').setup({
-    scroll = {
-      timing = function(_, n) return 150 / n end,
-    },
+    scroll = { enable = false },
   })
 end)
 

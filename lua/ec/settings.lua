@@ -15,25 +15,25 @@ vim.o.undofile = true                                        -- Enable persisten
 vim.cmd('filetype plugin indent on') -- Enable all filetype plugins
 
 -- UI =========================================================================
-vim.o.breakindent   = true     -- Indent wrapped lines to match line start
-vim.o.colorcolumn   = '+1'     -- Draw colored column one step to the right of desired maximum width
-vim.o.cursorline    = true     -- Enable highlighting of the current line
-vim.o.laststatus    = 2        -- Always show statusline
-vim.o.linebreak     = true     -- Wrap long lines at 'breakat' (if 'wrap' is set)
-vim.o.list          = true     -- Show helpful character indicators
-vim.o.number        = true     -- Show line numbers
-vim.o.pumblend      = 10       -- Make builtin completion menus slightly transparent
-vim.o.pumheight     = 10       -- Make popup menu smaller
-vim.o.ruler         = false    -- Don't show cursor position
-vim.o.shortmess     = 'aoOWFc' -- Disable certain messages from |ins-completion-menu|
-vim.o.showmode      = false    -- Don't show mode in command line
-vim.o.showtabline   = 2        -- Always show tabline
-vim.o.signcolumn    = 'yes'    -- Always show signcolumn or it would frequently shift
-vim.o.splitbelow    = true     -- Horizontal splits will be below
-vim.o.splitright    = true     -- Vertical splits will be to the right
-vim.o.termguicolors = true     -- Enable gui colors
-vim.o.winblend      = 10       -- Make floating windows slightly transparent
-vim.o.wrap          = false    -- Display long lines as just one line
+vim.o.breakindent   = true      -- Indent wrapped lines to match line start
+vim.o.colorcolumn   = '+1'      -- Draw colored column one step to the right of desired maximum width
+vim.o.cursorline    = true      -- Enable highlighting of the current line
+vim.o.laststatus    = 2         -- Always show statusline
+vim.o.linebreak     = true      -- Wrap long lines at 'breakat' (if 'wrap' is set)
+vim.o.list          = true      -- Show helpful character indicators
+vim.o.number        = true      -- Show line numbers
+vim.o.pumblend      = 10        -- Make builtin completion menus slightly transparent
+vim.o.pumheight     = 10        -- Make popup menu smaller
+vim.o.ruler         = false     -- Don't show cursor position
+vim.o.shortmess     = 'aoOWFcS' -- Disable certain messages from |ins-completion-menu|
+vim.o.showmode      = false     -- Don't show mode in command line
+vim.o.showtabline   = 2         -- Always show tabline
+vim.o.signcolumn    = 'yes'     -- Always show signcolumn or it would frequently shift
+vim.o.splitbelow    = true      -- Horizontal splits will be below
+vim.o.splitright    = true      -- Vertical splits will be to the right
+vim.o.termguicolors = true      -- Enable gui colors
+vim.o.winblend      = 10        -- Make floating windows slightly transparent
+vim.o.wrap          = false     -- Display long lines as just one line
 
 vim.o.fillchars = table.concat(
   { 'eob: ', 'fold:╌', 'horiz:═', 'horizdown:╦', 'horizup:╩', 'vert:║', 'verthoriz:╬', 'vertleft:╣', 'vertright:╠' },

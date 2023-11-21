@@ -65,17 +65,11 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
 
   lspconfig.lua_ls.setup({
     handlers = {
-      -- Don't open quickfix list in case of multiple definitions. At the
-      -- moment, this conflicts the `a = function()` code style because
-      -- sumneko_lua treats both `a` and `function()` to be definitions of `a`.
-      ['textDocument/definition'] = function(_, result, ctx, _)
-        -- Adapted from source:
-        -- https://github.com/neovim/neovim/blob/master/runtime/lua/vim/lsp/handlers.lua#L341-L366
-        if result == nil or vim.tbl_isempty(result) then return nil end
-        local client = vim.lsp.get_client_by_id(ctx.client_id)
-
-        local res = vim.tbl_islist(result) and result[1] or result
-        vim.lsp.util.jump_to_location(res, client.offset_encoding)
+      -- Show only one definition to be usable with `a = function()` style.
+      -- Because LuaLS treats both `a` and `function()` as definitions of `a`.
+      ['textDocument/definition'] = function(err, result, ctx, config)
+        if type(result) == 'table' then result = { result[1] } end
+        vim.lsp.handlers['textDocument/definition'](err, result, ctx, config)
       end,
     },
     cmd = { sumneko_binary, '-E', sumneko_root .. '/main.lua' },
