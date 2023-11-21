@@ -56,7 +56,11 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd_later('null-ls')
 
   -- Snippets engine
-  packadd_later('luasnip')
+  if vim.fn.has('nvim-0.10') == 1 then
+    require('my_snippets')
+  else
+    packadd_later('luasnip')
+  end
 
   -- Documentation generator
   packadd_later('neogen')
