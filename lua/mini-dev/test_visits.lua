@@ -1427,8 +1427,10 @@ T['get_index()']['works'] = function()
 
   local path = make_testpath('file')
   edit(path)
-  sleep(10 + 5)
-  eq(get_index(), { [child.fn.getcwd()] = { [path] = { count = 1, latest = os.time() } } })
+  sleep(10)
+  local latest = os.time()
+  sleep(5)
+  eq(get_index(), { [child.fn.getcwd()] = { [path] = { count = 1, latest = latest } } })
 
   -- Should return table copy
   local is_ok = child.lua([[
@@ -1456,8 +1458,10 @@ T['set_index()']['works'] = function()
 
   -- Should set table copy
   edit(path)
-  sleep(10 + 5)
-  eq(get_index(), { [cwd] = { [path] = { count = 2, latest = os.time() } } })
+  sleep(10)
+  local latest = os.time()
+  sleep(5)
+  eq(get_index(), { [cwd] = { [path] = { count = 2, latest = latest } } })
   eq(child.lua_get('_G.index_ref'), { [cwd] = { [path] = { count = 1, latest = 10 } } })
 end
 
@@ -1640,18 +1644,94 @@ T['write_index()']['respects arguments'] = function()
   -- Should create non-existing parent directories
   local store_path = make_testpath('nondir/subdir/test-index')
   MiniTest.finally(function() vim.fn.delete(store_path) end)
-  local index = { aaa = { bbb = { count = 10, latest = 10 } } }
+  local path, cwd = make_testpath('file'), child.fn.getcwd()
+  local index = { [cwd] = { [path] = { count = 1, latest = os.time() } } }
   write_index(store_path, index)
 
-  eq(
-    table.concat(vim.fn.readfile(store_path), '\n'),
-    'return {\n  aaa = {\n    bbb = {\n      count = 10,\n      latest = 10\n    }\n  }\n}'
-  )
+  eq(table.concat(vim.fn.readfile(store_path), '\n'), 'return ' .. vim.inspect(index))
 end
 
 T['write_index()']['validates arguments'] = function()
   expect.error(function() write_index(1, { aaa = { bbb = { count = 10, latest = 10 } } }) end, '`store_path`.*string')
   expect.error(function() write_index(make_testpath('test-index'), 1) end, '`index`.*table')
+end
+
+T['rename_in_index()'] = new_set()
+
+local rename_in_index = forward_lua('MiniVisits.rename_in_index')
+
+T['rename_in_index()']['works for files'] = function()
+  local path, cwd = make_testpath('file'), test_dir_absolute
+  local index = {
+    [cwd] = {
+      [path] = { count = 1, latest = 10 },
+      [path .. '_suffix'] = { count = 2, latest = 11 },
+    },
+    [cwd .. '_2'] = {
+      [path] = { count = 10, latest = 100 },
+      [path .. '_suffix'] = { count = 20, latest = 110 },
+    },
+  }
+  set_index(index)
+
+  -- Should rename only full matches in whole index object
+  eq(rename_in_index(path, path .. '_new'), {
+    [cwd] = {
+      [path .. '_new'] = { count = 1, latest = 10 },
+      [path .. '_suffix'] = { count = 2, latest = 11 },
+    },
+    [cwd .. '_2'] = {
+      [path .. '_new'] = { count = 10, latest = 100 },
+      [path .. '_suffix'] = { count = 20, latest = 110 },
+    },
+  })
+
+  -- Should allow specifying index as argument
+  eq(
+    rename_in_index(path, path .. '_very_new', { [cwd] = { [path] = { count = 2, latest = 20 } } }),
+    { [cwd] = { [path .. '_very_new'] = { count = 2, latest = 20 } } }
+  )
+
+  -- Should nor affect current index
+  eq(get_index(), index)
+end
+
+T['rename_in_index()']['works for directories'] = function()
+  local path = make_testpath('dir_1', 'file_1-1')
+  local cwd, cwd_2 = make_testpath('dir_1'), make_testpath('dir_1_1')
+  local index = {
+    [cwd] = { [path] = { count = 1, latest = 10 } },
+    [cwd_2] = { [path] = { count = 10, latest = 100 } },
+  }
+  set_index(index)
+
+  -- Should rename both full matches and as a parent
+  local path_to = cwd .. '_new'
+  eq(rename_in_index(cwd, path_to), {
+    [path_to] = { [join_path(path_to, 'file_1-1')] = { count = 1, latest = 10 } },
+    [cwd_2] = { [join_path(path_to, 'file_1-1')] = { count = 10, latest = 100 } },
+  })
+
+  -- Should allow specifying index as argument
+  eq(
+    rename_in_index(cwd, cwd .. '_very_new', { [cwd] = { [path] = { count = 2, latest = 20 } } }),
+    { [cwd .. '_very_new'] = { [join_path(cwd .. '_very_new', 'file_1-1')] = { count = 2, latest = 20 } } }
+  )
+
+  -- Can rename directory to its child
+  eq(
+    rename_in_index(cwd, cwd .. '/child', { [cwd] = { [path] = { count = 2, latest = 20 } } }),
+    { [cwd .. '/child'] = { [join_path(cwd .. '/child', 'file_1-1')] = { count = 2, latest = 20 } } }
+  )
+
+  -- Should nor affect current index
+  eq(get_index(), index)
+end
+
+T['rename_in_index()']['validates_arguments'] = function()
+  expect.error(function() rename_in_index(1, 'bbb') end, '`path_from`.*string')
+  expect.error(function() rename_in_index('aaa', 2) end, '`path_to`.*string')
+  expect.error(function() rename_in_index('aaa', 'bbb', 1) end, '`index`.*table')
 end
 
 T['gen_filter'] = new_set()
@@ -1767,17 +1847,15 @@ T['gen_normalize']['default()']['works'] = function()
     },
   }, {
     [cwd] = {
-      -- Should multiply each `count` by `800 / 1002` and keep 2 decimal places
-      [path] = { count = 479.04, labels = { aaa = true }, latest = 10 },
-      [path_2] = { count = 319.36, latest = 20 },
+      -- Should multiply each `count` by `800 / 1001` and keep 2 decimal places
+      [path] = { count = 479.52, labels = { aaa = true }, latest = 10 },
+      [path_2] = { count = 319.68, latest = 20 },
       [path_3] = { count = 0.8, latest = 30 },
-      -- Should not prune non-paths by default
-      ['non-path'] = { count = 0.8, latest = 40 },
+      -- Should prune non-paths by default
     },
     [cwd_2] = {
       -- Should decay per cwd
       [path] = { count = 10, labels = { bbb = true }, latest = 100 },
-      ['non-path-2'] = { count = 20, latest = 200 },
     },
   })
 
@@ -1876,6 +1954,23 @@ T['gen_normalize']['default()']['respects `opts.decay_target`'] = function()
   })
 end
 
+T['gen_normalize']['default()']['respects `opts.prune_threshold`'] = function()
+  local path, path_2 = make_testpath('file'), make_testpath('dir_1', 'file_1-1')
+  local cwd = child.fn.getcwd()
+
+  local index = {
+    [cwd] = {
+      [path] = { count = 0.4, latest = 10 },
+      [path_2] = { count = 1, latest = 20 },
+    },
+  }
+
+  validate_default_normalize({}, index, { [cwd] = { [path_2] = { count = 1, latest = 20 } } })
+
+  validate_default_normalize({ prune_threshold = 1.01 }, index, {})
+  validate_default_normalize({ prune_threshold = 0.1 }, index, index)
+end
+
 T['gen_normalize']['default()']['respects `opts.prune_paths`'] = function()
   local path, path_2 = make_testpath('file'), make_testpath('dir_1', 'file_1-1')
   local cwd, cwd_2 = child.fn.getcwd(), test_dir_absolute
@@ -1894,26 +1989,9 @@ T['gen_normalize']['default()']['respects `opts.prune_paths`'] = function()
   }
 
   -- Should not remove paths by default
-  validate_default_normalize({}, index, index)
+  validate_default_normalize({}, index, { [cwd] = { [path] = { count = 10, latest = 10 } } })
 
-  validate_default_normalize({ prune_paths = true }, index, { [cwd] = { [path] = { count = 10, latest = 10 } } })
-end
-
-T['gen_normalize']['default()']['respects `opts.prune_threshold`'] = function()
-  local path, path_2 = make_testpath('file'), make_testpath('dir_1', 'file_1-1')
-  local cwd = child.fn.getcwd()
-
-  local index = {
-    [cwd] = {
-      [path] = { count = 0.4, latest = 10 },
-      [path_2] = { count = 1, latest = 20 },
-    },
-  }
-
-  validate_default_normalize({}, index, { [cwd] = { [path_2] = { count = 1, latest = 20 } } })
-
-  validate_default_normalize({ prune_threshold = 1.01 }, index, {})
-  validate_default_normalize({ prune_threshold = 0.1 }, index, index)
+  validate_default_normalize({ prune_paths = false }, index, index)
 end
 
 T['gen_normalize']['default()']['has output validating arguments'] = function()

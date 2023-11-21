@@ -43,8 +43,13 @@
 ---   and at `config.store.path` on disk (for persistent usage).
 --- - Most of functions affect an in-session data which gets written to disk only
 ---   before Neovim is closing or when users asks to.
---- - It doesn't account for paths being renamed or moved. Manual intervention
----   to the visit index is required here.
+--- - It doesn't account for paths being renamed or moved (because there is no
+---   general way to detect that). Usually a manual intervention to the visit
+---   index is required after the change but _before_ the next writing to disk
+---   (usually before closing current session) because it will treat previous
+---   path as deleted and remove it from index.
+---   There is a |MiniVisits.rename_in_index()| helper for that.
+---   If rename/move is done with |MiniFiles|, index is autoupdated.
 ---
 --- Sources with more details:
 --- - |MiniVisits-overview|
@@ -944,6 +949,7 @@ end
 ---@param store_path string|nil Path on the disk where to write visit index data.
 ---   Default: `config.store.path`. Note: if empty string, nothing is written.
 ---@param index table|nil Index object to write to disk.
+---   Default: current session index.
 MiniVisits.write_index = function(store_path, index)
   store_path = store_path or H.get_config().store.path
   H.validate_string(store_path, 'store_path')
@@ -963,6 +969,56 @@ MiniVisits.write_index = function(store_path, index)
   local lines = vim.split(vim.inspect(index), '\n')
   lines[1] = 'return ' .. lines[1]
   vim.fn.writefile(lines, store_path)
+end
+
+--- Rename path in index
+---
+--- A helper to react for a path rename/move in order to preserve its visit data.
+--- It works both for file and directory paths.
+---
+--- Notes:
+--- - It does not update current index, but returns an index object.
+---   Use |MiniVisits.set_index()| to make it current.
+--- - Do not append directory path with `/`. Use same paths as for files.
+---
+--- Assuming `path_from` and `path_to` are variables containing full paths
+--- before and after rename/move, here is an example updating current index: >
+---
+---   local new_index = MiniVisits.rename_in_index(path_from, path_to)
+---   MiniVisits.set_index(new_index)
+--- <
+---@param path_from string Full path to be renamed.
+---@param path_to string Full path to be replaced with.
+---@param index table|nil Index object inside which to perform renaming.
+---   Default: current session index.
+---
+---@return table Index object with renamed path.
+MiniVisits.rename_in_index = function(path_from, path_to, index)
+  path_from = H.validate_string(path_from, 'path_from')
+  path_to = H.validate_string(path_to, 'path_to')
+  index = index or MiniVisits.get_index()
+  H.validate_index(index, '`index`')
+
+  local path_from_pattern = vim.pesc(path_from)
+  local pattern_from_full = string.format('^%s$', path_from_pattern)
+  local pattern_from_parent_dir = string.format('^(%s)/', path_from_pattern)
+  local path_to_parent_dir = path_to .. '/'
+
+  local replace = function(x)
+    if string.find(x, pattern_from_full) ~= nil then return path_to end
+    return string.gsub(x, pattern_from_parent_dir, path_to_parent_dir)
+  end
+
+  local res = {}
+  for cwd, cwd_tbl in pairs(index) do
+    local new_cwd_tbl = {}
+    for path, path_tbl in pairs(cwd_tbl) do
+      new_cwd_tbl[replace(path)] = vim.deepcopy(path_tbl)
+    end
+    res[replace(cwd)] = new_cwd_tbl
+  end
+
+  return res
 end
 
 --- Generate filter function
@@ -1080,7 +1136,6 @@ MiniVisits.gen_normalize = {}
 ---       entry from particular cwd (it can still be present in others).
 ---     - If either first (cwd) or second (path) level key doesn't represent an
 ---       actual path on disk, remove the whole associated value.
----       Note: this is not done by default.
 ---
 --- - Decay visits, i.e. possibly make visits more outdated. This is an important
 ---   part to the whole usability: together with pruning it results into automated
@@ -1097,11 +1152,11 @@ MiniVisits.gen_normalize = {}
 ---   - <decay_threshold> `(number)` - decay threshold. Default: 1000.
 ---   - <decay_target> `(number)` - decay target. Default: 800.
 ---   - <prune_threshold> `(number)` - prune threshold. Default: 0.5.
----   - <prune_paths> `(boolean)` - whether to prune outdated paths. Default: `false`.
+---   - <prune_paths> `(boolean)` - whether to prune outdated paths. Default: `true`.
 ---
 ---@return function Visit index normalize function. See "Store" in |MiniVisits.config|.
 MiniVisits.gen_normalize.default = function(opts)
-  local default_opts = { decay_threshold = 1000, decay_target = 800, prune_threshold = 0.5, prune_paths = false }
+  local default_opts = { decay_threshold = 1000, decay_target = 800, prune_threshold = 0.5, prune_paths = true }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   return function(index)
@@ -1186,6 +1241,14 @@ H.create_autocommands = function(config)
     if not H.get_config().store.autowrite then return end
     pcall(MiniVisits.write_index)
   end, 'Autowrite visit index')
+
+  -- React to file manipulation with 'mini.files'
+  au('User', { 'MiniFilesActionRename', 'MiniFilesActionMove' }, function(args)
+    local cur_index = MiniVisits.get_index()
+    local ok, new_index = pcall(MiniVisits.rename_in_index, args.data.from, args.data.to, cur_index)
+    if not ok then return end
+    MiniVisits.set_index(new_index)
+  end, 'Rename in index')
 end
 
 H.is_disabled = function(buf_id)
@@ -1490,7 +1553,8 @@ H.edit_path = function(path)
   end
 end
 
-H.full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('(.)/$', '%1')) end
+H.full_path =
+  function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('\\', '/'):gsub('/+', '/'):gsub('(.)/$', '%1')) end
 
 H.short_path = function(path, cwd)
   cwd = cwd or vim.fn.getcwd()
