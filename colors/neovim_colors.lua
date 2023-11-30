@@ -4,8 +4,10 @@
 -- General goals:
 -- - Be "Neovim branded", i.e. follow outlined example from
 --   https://github.com/neovim/neovim/issues/14790
---   That generally means to have two main hues (green and cyan) plus at least
---   one reserved for very occasional attention (red/error and yellow/warning).
+--   That generally means to mostly have "green-blue" feel plus at least one
+--   reserved for very occasional attention: red for severe, yellow for mild.
+-- - Be extra minimal for `notermguicolors` while allowing more shades for
+--   when `termguicolors` is set.
 -- - Be accessible, i.e. have enough contrast ratios (CR):
 --     - Fully passable `Normal` highlight group: CR>=7.
 --     - Passable `Visual` highlight group (with `Normal` foreground): CR>=4.5.
@@ -46,10 +48,11 @@ local colors = require('mini.colors')
 local l = { 6, 13, 20, 35 }
 
 -- REFERENCE CHROMA VALUES
--- Chosen experimentally.
-local c = { grey = 1, low = 5, mid = 12, high = 20 }
+-- Chosen experimentally. Darker colors usually need higher chroma to appear
+-- visibly different (combined with proper gamut clipping)
+local c = { grey = 1, light = 10, dark = 15 }
 
--- REFERENCE HUE VALUES.
+-- REFERENCE HUE VALUES
 -- - Grey is used for UI background and foreground. It is not exactly an
 --   achromatic grey, but a "colored grey" (very desaturated colors). It adds
 --   at least some character to the color scheme.
@@ -60,10 +63,19 @@ local c = { grey = 1, low = 5, mid = 12, high = 20 }
 -- - Red hue is taken roughly the same as in reference #D96D6A
 -- - Green hue is taken roughly the same as in reference #87FFAF
 -- - Cyan hue is taken roughly the same as in reference #00E6E6
-local h = { grey = 270, red = 25, yellow = 90, green = 150, cyan = 195 }
+-- - Yellow, blue, and magenta are chosen to be visibly different from others.
+local h = {
+  grey = 270,
+  red = 25,
+  yellow = 90,
+  green = 150,
+  cyan = 195,
+  blue = 240,
+  magenta = 330,
+}
 
 -- WHETHER TO OPEN A BUFFER WITH DATA
-local show_data_buffer = true
+local show_data_buffer = false
 
 -- WHETHER TO APPLY CURRENT COLOR SCHEME
 local apply_colorscheme = true
@@ -74,36 +86,32 @@ local round = function(x) return math.floor(10 * x + 0.5) / 10 end
 
 --stylua: ignore
 local palette_dark = {
-  grey1      = convert(l[1], c.grey, h.grey),  -- NormalFloat
-  grey2      = convert(l[2], c.grey, h.grey),  -- Normal bg
-  grey3      = convert(l[3], c.grey, h.grey),  -- CursorLine
-  grey4      = convert(l[4], c.grey, h.grey),  -- Visual
+  grey1   = convert(l[1], c.grey, h.grey),  -- NormalFloat
+  grey2   = convert(l[2], c.grey, h.grey),  -- Normal bg
+  grey3   = convert(l[3], c.grey, h.grey),  -- CursorLine
+  grey4   = convert(l[4], c.grey, h.grey),  -- Visual
 
-  red        = convert(l[2], c.high, h.red),    -- DiffDelete
-  red_dim    = convert(l[2], c.mid,  h.red),
-  yellow     = convert(l[2], c.high, h.yellow), -- Search
-  yellow_dim = convert(l[2], c.mid,  h.yellow),
-  green      = convert(l[2], c.high, h.green),  -- DiffAdd
-  green_dim  = convert(l[2], c.mid,  h.green),
-  cyan       = convert(l[2], c.high, h.cyan),   -- DiffChange
-  cyan_dim   = convert(l[2], c.mid,  h.cyan),
+  red     = convert(l[2], c.dark, h.red),    -- DiffDelete
+  yellow  = convert(l[2], c.dark, h.yellow), -- Search
+  green   = convert(l[2], c.dark, h.green),  -- DiffAdd
+  cyan    = convert(l[2], c.dark, h.cyan),   -- DiffChange
+  blue    = convert(l[2], c.dark, h.blue),
+  magenta = convert(l[2], c.dark, h.magenta),
 }
 
 --stylua: ignore
 local palette_light = {
-  grey1      = convert(100 - l[1], c.grey, h.grey),
-  grey2      = convert(100 - l[2], c.grey, h.grey), -- Normal fg
-  grey3      = convert(100 - l[3], c.grey, h.grey),
-  grey4      = convert(100 - l[4], c.grey, h.grey), -- Comment
+  grey1   = convert(100 - l[1], c.grey, h.grey),
+  grey2   = convert(100 - l[2], c.grey, h.grey),   -- Normal fg
+  grey3   = convert(100 - l[3], c.grey, h.grey),
+  grey4   = convert(100 - l[4], c.grey, h.grey),   -- Comment
 
-  red        = convert(100 - l[2], c.mid, h.red),    -- DiagnosticError
-  red_dim    = convert(100 - l[2], c.low, h.red),
-  yellow     = convert(100 - l[2], c.mid, h.yellow), -- DiagnosticWarn
-  yellow_dim = convert(100 - l[2], c.low, h.yellow),
-  green      = convert(100 - l[2], c.mid, h.green),  -- String,     DiagnosticOk
-  green_dim  = convert(100 - l[2], c.low, h.green),  -- Identifier, DiagnosticHint
-  cyan       = convert(100 - l[2], c.mid, h.cyan),   -- Function,   DiagnosticInfo
-  cyan_dim   = convert(100 - l[2], c.low, h.cyan),   -- Special
+  red     = convert(100 - l[2], c.light, h.red),     -- DiagnosticError
+  yellow  = convert(100 - l[2], c.light, h.yellow),  -- DiagnosticWarn
+  green   = convert(100 - l[2], c.light, h.green),   -- String,     DiagnosticOk
+  cyan    = convert(100 - l[2], c.light, h.cyan),    -- Function,   DiagnosticInfo
+  blue    = convert(100 - l[2], c.light, h.blue),    -- Identifier, DiagnosticHint
+  magenta = convert(100 - l[2], c.light, h.magenta),
 }
 
 -- 8-bit color approximations =================================================
@@ -151,29 +159,35 @@ local contrast_ratios = {
   dark_cur_line = get_contrast_ratio(palette_light.grey2, palette_dark.grey3),
   dark_visual   = get_contrast_ratio(palette_light.grey2, palette_dark.grey4),
 
-  dark_comment     = get_contrast_ratio(palette_light.grey4, palette_dark.grey2),
-  dark_comment_cur = get_contrast_ratio(palette_light.grey4, palette_dark.grey3),
-  dark_comment_vis = get_contrast_ratio(palette_light.grey4, palette_dark.grey4),
-
   light_normal   = get_contrast_ratio(palette_dark.grey2, palette_light.grey2),
   light_cur_line = get_contrast_ratio(palette_dark.grey2, palette_light.grey3),
   light_visual   = get_contrast_ratio(palette_dark.grey2, palette_light.grey4),
+
+  dark_comment     = get_contrast_ratio(palette_light.grey4, palette_dark.grey2),
+  dark_comment_cur = get_contrast_ratio(palette_light.grey4, palette_dark.grey3),
+  dark_comment_vis = get_contrast_ratio(palette_light.grey4, palette_dark.grey4),
 
   light_comment     = get_contrast_ratio(palette_dark.grey4, palette_light.grey2),
   light_comment_cur = get_contrast_ratio(palette_dark.grey4, palette_light.grey3),
   light_comment_vis = get_contrast_ratio(palette_dark.grey4, palette_light.grey4),
 
-  red    = get_contrast_ratio(palette_light.red, palette_dark.grey2),
-  red_bg = get_contrast_ratio(palette_light.grey1, palette_dark.red),
+  dark_red  = get_contrast_ratio(palette_light.red, palette_dark.grey2),
+  light_red = get_contrast_ratio(palette_dark.red, palette_light.grey2),
 
-  yellow    = get_contrast_ratio(palette_light.yellow, palette_dark.grey2),
-  yellow_bg = get_contrast_ratio(palette_light.grey1, palette_dark.yellow),
+  dark_yellow  = get_contrast_ratio(palette_light.yellow, palette_dark.grey2),
+  light_yellow = get_contrast_ratio(palette_dark.yellow, palette_light.grey2),
 
-  green    = get_contrast_ratio(palette_light.green, palette_dark.grey2),
-  green_bg = get_contrast_ratio(palette_light.grey1, palette_dark.green),
+  dark_green  = get_contrast_ratio(palette_light.green, palette_dark.grey2),
+  light_green = get_contrast_ratio(palette_dark.green, palette_light.grey2),
 
-  cyan    = get_contrast_ratio(palette_light.cyan, palette_dark.grey2),
-  cyan_bg = get_contrast_ratio(palette_light.grey1, palette_dark.cyan),
+  dark_cyan  = get_contrast_ratio(palette_light.cyan, palette_dark.grey2),
+  light_cyan = get_contrast_ratio(palette_dark.cyan, palette_light.grey2),
+
+  dark_blue  = get_contrast_ratio(palette_light.blue, palette_dark.grey2),
+  light_blue = get_contrast_ratio(palette_dark.blue, palette_light.grey2),
+
+  dark_magenta  = get_contrast_ratio(palette_light.magenta, palette_dark.grey2),
+  light_magenta = get_contrast_ratio(palette_dark.magenta, palette_light.grey2),
 }
 
 -- Buffer with data ===========================================================
@@ -199,18 +213,16 @@ end
 
 --stylua: ignore
 local color_src_names = {
-  cyan       = 'Cyan',
-  cyan_dim   = 'CyanDim',
-  green      = 'Green',
-  green_dim  = 'GreenDim',
-  grey1      = 'Grey1',
-  grey2      = 'Grey2',
-  grey3      = 'Grey3',
-  grey4      = 'Grey4',
-  red        = 'Red',
-  red_dim    = 'RedDim',
-  yellow     = 'Yellow',
-  yellow_dim = 'YellowDim',
+  blue    = 'Blue',
+  cyan    = 'Cyan',
+  green   = 'Green',
+  grey1   = 'Grey1',
+  grey2   = 'Grey2',
+  grey3   = 'Grey3',
+  grey4   = 'Grey4',
+  magenta = 'Magenta',
+  red     = 'Red',
+  yellow  = 'Yellow',
 }
 local color_names = vim.tbl_keys(color_src_names)
 table.sort(color_names)
@@ -239,11 +251,7 @@ local make_color_use_lines = function(bg, palette_8bit)
     local src_name = (bg == 'dark' and 'NvimDark' or 'NvimLight') .. color_src_names[color]
     local suffix = bg == 'dark' and 'bg' or 'fg'
     local gui = string.format('gui%s=%s', suffix, src_name)
-
-    -- Use `cterm**` attribute only for not dimmed colors
-    local cterm_value = color:find('_dim$') == nil and palette_8bit[color] or 'NONE'
-    local cterm = string.format('cterm%s=%s', suffix, cterm_value)
-
+    local cterm = string.format('cterm%s=%s', suffix, palette_8bit[color])
     table.insert(res, gui .. ' ' .. cterm)
   end
 
@@ -349,12 +357,12 @@ local enable_colorscheme = function()
   hi('MatchParen',           { fg=nil,       bg=bg.grey4, bold=true })
   hi('ModeMsg',              { fg=fg.green,  bg=nil })
   hi('MoreMsg',              { fg=fg.cyan,   bg=nil })
-  hi('MsgArea',              { link='Normal' })
+  hi('MsgArea',              { fg=nil,       bg=nil })
   hi('MsgSeparator',         { link='StatusLine' })
   hi('NonText',              { fg=bg.grey4,  bg=nil })
   hi('Normal',               { fg=fg.grey2,  bg=bg.grey2 })
   hi('NormalFloat',          { fg=fg.grey2,  bg=bg.grey1 })
-  hi('NormalNC',             { link='Normal' })
+  hi('NormalNC',             { fg=nil,       bg=nil })
   hi('PMenu',                { fg=fg.grey2,  bg=bg.grey3 })
   hi('PMenuExtra',           { link='PMenu' })
   hi('PMenuExtraSel',        { link='PMenuSel' })
@@ -383,9 +391,9 @@ local enable_colorscheme = function()
   hi('TabLineFill',          { link='Tabline' })
   hi('TabLineSel',           { fg=nil,       bg=nil,      bold = true })
   hi('TermCursor',           { fg=nil,       bg=nil,      reverse=true })
-  hi('TermCursorNC',         { fg=nil,       bg=nil,      reverse=true })
+  hi('TermCursorNC',         { fg=nil,       bg=nil })
   hi('Title',                { fg=nil,       bg=nil,      bold=true })
-  hi('VertSplit',            { link='Normal' })
+  hi('VertSplit',            { link='WinSeparator' })
   hi('Visual',               { fg=nil,       bg=bg.grey4 })
   hi('VisualNOS',            { link='Visual' })
   hi('WarningMsg',           { fg=fg.yellow, bg=nil })
@@ -405,8 +413,8 @@ local enable_colorscheme = function()
   hi('Boolean',   { link='Constant' })
   hi('Float',     { link='Number' })
 
-  hi('Identifier', { fg=fg.green_dim, bg=nil }) -- frequent but important to get "main" branded color
-  hi('Function',   { fg=fg.cyan,      bg=nil }) -- not so frequent but important to get "main" branded color
+  hi('Identifier', { fg=fg.blue, bg=nil }) -- frequent but important to get "main" branded color
+  hi('Function',   { fg=fg.cyan, bg=nil }) -- not so frequent but important to get "main" branded color
 
   hi('Statement',   { fg=fg.grey2, bg=nil, bold=true }) -- bold choice (get it?) for accessibility
   hi('Conditional', { link='Statement' })
@@ -427,10 +435,10 @@ local enable_colorscheme = function()
   hi('Structure',    { link='Type' })
   hi('Typedef',      { link='Type' })
 
-  hi('Special',        { fg=fg.cyan_dim, bg=nil }) -- frequent but important to get "main" branded color
+  hi('Special',        { fg=fg.grey2, bg=nil })
   hi('Tag',            { link='Special' })
   hi('SpecialChar',    { link='Special' })
-  hi('Delimiter',      { fg=nil,         bg=nil })
+  hi('Delimiter',      { fg=nil,      bg=nil })
   hi('SpecialComment', { link='Special' })
   hi('Debug',          { link='Special' })
 
@@ -446,23 +454,23 @@ local enable_colorscheme = function()
   hi('diffRemoved', { fg=fg.red,   bg=nil })
 
   -- Built-in diagnostic
-  hi('DiagnosticError', { fg=fg.red,       bg=nil })
-  hi('DiagnosticWarn',  { fg=fg.yellow,    bg=nil })
-  hi('DiagnosticInfo',  { fg=fg.cyan,      bg=nil })
-  hi('DiagnosticHint',  { fg=fg.green_dim, bg=nil })
-  hi('DiagnosticOk',    { fg=fg.green,     bg=nil })
+  hi('DiagnosticError', { fg=fg.red,    bg=nil })
+  hi('DiagnosticWarn',  { fg=fg.yellow, bg=nil })
+  hi('DiagnosticInfo',  { fg=fg.cyan,   bg=nil })
+  hi('DiagnosticHint',  { fg=fg.blue,   bg=nil })
+  hi('DiagnosticOk',    { fg=fg.green,  bg=nil })
 
-  hi('DiagnosticUnderlineError', { fg=nil, bg=nil, sp=fg.red,       underline=true })
-  hi('DiagnosticUnderlineWarn',  { fg=nil, bg=nil, sp=fg.yellow,    underline=true })
-  hi('DiagnosticUnderlineInfo',  { fg=nil, bg=nil, sp=fg.cyan,      underline=true })
-  hi('DiagnosticUnderlineHint',  { fg=nil, bg=nil, sp=fg.green_dim, underline=true })
-  hi('DiagnosticUnderlineOk',    { fg=nil, bg=nil, sp=fg.green,     underline=true })
+  hi('DiagnosticUnderlineError', { fg=nil, bg=nil, sp=fg.red,    underline=true })
+  hi('DiagnosticUnderlineWarn',  { fg=nil, bg=nil, sp=fg.yellow, underline=true })
+  hi('DiagnosticUnderlineInfo',  { fg=nil, bg=nil, sp=fg.cyan,   underline=true })
+  hi('DiagnosticUnderlineHint',  { fg=nil, bg=nil, sp=fg.blue,   underline=true })
+  hi('DiagnosticUnderlineOk',    { fg=nil, bg=nil, sp=fg.green,  underline=true })
 
-  hi('DiagnosticFloatingError', { fg=fg.red,       bg=bg.grey1 })
-  hi('DiagnosticFloatingWarn',  { fg=fg.yellow,    bg=bg.grey1 })
-  hi('DiagnosticFloatingInfo',  { fg=fg.cyan,      bg=bg.grey1 })
-  hi('DiagnosticFloatingHint',  { fg=fg.green_dim, bg=bg.grey1 })
-  hi('DiagnosticFloatingOk',    { fg=fg.green,     bg=bg.grey1 })
+  hi('DiagnosticFloatingError', { fg=fg.red,    bg=bg.grey1 })
+  hi('DiagnosticFloatingWarn',  { fg=fg.yellow, bg=bg.grey1 })
+  hi('DiagnosticFloatingInfo',  { fg=fg.cyan,   bg=bg.grey1 })
+  hi('DiagnosticFloatingHint',  { fg=fg.blue,   bg=bg.grey1 })
+  hi('DiagnosticFloatingOk',    { fg=fg.green,  bg=bg.grey1 })
 
   hi('DiagnosticVirtualTextError', { link='DiagnosticError' })
   hi('DiagnosticVirtualTextWarn',  { link='DiagnosticWarn' })
@@ -555,19 +563,19 @@ local enable_colorscheme = function()
 
   -- Terminal colors (not ideal)
   vim.g.terminal_color_0  = bg.grey2
-  vim.g.terminal_color_1  = fg.red -- red
-  vim.g.terminal_color_2  = fg.green -- green
-  vim.g.terminal_color_3  = fg.yellow -- yellow
-  vim.g.terminal_color_4  = fg.cyan_dim -- blue
-  vim.g.terminal_color_5  = fg.red_dim -- magenta
-  vim.g.terminal_color_6  = fg.cyan -- cyan
+  vim.g.terminal_color_1  = fg.red
+  vim.g.terminal_color_2  = fg.green
+  vim.g.terminal_color_3  = fg.yellow
+  vim.g.terminal_color_4  = fg.blue
+  vim.g.terminal_color_5  = fg.magenta
+  vim.g.terminal_color_6  = fg.cyan
   vim.g.terminal_color_7  = fg.grey2
   vim.g.terminal_color_8  = bg.grey2
   vim.g.terminal_color_9  = fg.red
   vim.g.terminal_color_10 = fg.green
   vim.g.terminal_color_11 = fg.yellow
-  vim.g.terminal_color_12 = fg.cyan_dim
-  vim.g.terminal_color_13 = fg.red_dim
+  vim.g.terminal_color_12 = fg.blue
+  vim.g.terminal_color_13 = fg.magenta
   vim.g.terminal_color_14 = fg.cyan
   vim.g.terminal_color_15 = fg.grey2
   --stylua: ignore end
