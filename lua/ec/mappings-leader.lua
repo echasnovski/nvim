@@ -64,12 +64,12 @@ nmap_leader('fl', [[<Cmd>Pick buf_lines scope='all'<CR>]],             'Lines (a
 nmap_leader('fL', [[<Cmd>Pick buf_lines scope='current'<CR>]],         'Lines (current)')
 nmap_leader('fm', [[<Cmd>Pick git_hunks<CR>]],                         'Modified hunks (all)')
 nmap_leader('fM', [[<Cmd>Pick git_hunks path='%'<CR>]],                'Modified hunks (current)')
--- nmap_leader('fo', [[<Cmd>Pick oldfiles<CR>]],                          'Old files')
--- nmap_leader('fO', [[<Cmd>Pick options<CR>]],                           'Options')
 nmap_leader('fr', [[<Cmd>Pick resume<CR>]],                            'Resume')
 nmap_leader('fR', [[<Cmd>Pick lsp scope='references'<CR>]],            'References (LSP)')
 nmap_leader('fs', [[<Cmd>Pick lsp scope='workspace_symbol'<CR>]],      'Symbols workspace (LSP)')
 nmap_leader('fS', [[<Cmd>Pick lsp scope='document_symbol'<CR>]],       'Symbols buffer (LSP)')
+nmap_leader('fv', [[<Cmd>Pick visit_paths cwd=''<CR>]],                'Visit paths (all)')
+nmap_leader('fV', [[<Cmd>Pick visit_paths<CR>]],                       'Visit paths (cwd)')
 
 -- g is for git
 nmap_leader('gA', [[<Cmd>lua require("gitsigns").stage_buffer()<CR>]],        'Add buffer')

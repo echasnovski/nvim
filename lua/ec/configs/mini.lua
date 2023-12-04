@@ -11,149 +11,6 @@ now(function() require('mini.statusline').setup() end)
 
 now(function() require('mini.tabline').setup() end)
 
---stylua: ignore
-now(function()
-  local visits = require('mini-dev.visits')
-  visits.setup()
-  local sort_latest = visits.gen_sort.default({ recency_weight = 1 })
-
-  -- Labels
-  table.insert(EC.leader_group_clues, { mode = 'n', keys = '<Leader>v', desc = '+Visits' })
-
-  local map_vis = function(keys, call, desc)
-    local rhs = '<Cmd>lua MiniVisits.' .. call .. '<CR>'
-    vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
-  end
-  map_vis('vv', 'add_label("core")',    'Add "core" label')
-  map_vis('vV', 'remove_label("core")', 'Remove "core" label')
-  map_vis('vl', 'add_label()',          'Add label')
-  map_vis('vL', 'remove_label()',       'Remove label')
-
-  --  Pick core
-  local map_pick_core = function(keys, cwd, desc)
-    local rhs = function()
-      EC.pick_visits({ cwd = cwd, filter = 'core', sort = sort_latest }, { source = { name = desc } })
-    end
-    vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
-  end
-
-  map_pick_core('vc', '',  'Core visits (all)')
-  map_pick_core('vC', nil, 'Core visits (all)')
-
-  -- Iteration
-  local map_iterate_core = function(lhs, direction, desc)
-    local opts = { filter = 'core', sort = sort_latest, wrap = true }
-    local rhs = function() MiniVisits.iterate_paths(direction, vim.fn.getcwd(), opts) end
-    vim.keymap.set('n', lhs, rhs, { desc = desc })
-  end
-
-  map_iterate_core('[{', 'last',     'Core label (earliest)')
-  map_iterate_core('[[', 'forward',  'Core label (earlier)')
-  map_iterate_core(']]', 'backward', 'Core label (later)')
-  map_iterate_core(']}', 'first',    'Core label (latest)')
-end)
-
--- Pickers for 'mini.visits' that would go into 'mini.extra'
-local full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('(.)/$', '%1')) end
-local short_path = function(path, cwd)
-  cwd = cwd or vim.fn.getcwd()
-  if not vim.startswith(path, cwd) then return vim.fn.fnamemodify(path, ':~') end
-  local res = path:sub(cwd:len() + 1):gsub('^/+', ''):gsub('/+$', '')
-  return res
-end
-
-local show_with_icons = function(buf_id, items_to_show, query)
-  require('mini.pick').default_show(buf_id, items_to_show, query, { show_icons = true })
-end
-
-EC.pick_visits = function(local_opts, opts)
-  local default_local_opts = { cwd = nil, filter = nil, preserve_sort = false, recency_weight = 0.5, sort = nil }
-  local_opts = vim.tbl_deep_extend('force', default_local_opts, local_opts or {})
-
-  local pick = require('mini.pick')
-  local cwd = local_opts.cwd or vim.fn.getcwd()
-  -- NOTE: Use separate cwd to allow `cwd = ''` to not mean "current directory"
-  local is_for_cwd = cwd ~= ''
-  local picker_cwd = cwd == '' and vim.fn.getcwd() or full_path(cwd)
-
-  -- Define source
-  local filter = local_opts.filter or MiniVisits.gen_filter.default()
-  local sort = local_opts.sort or MiniVisits.gen_sort.default({ recency_weight = local_opts.recency_weight })
-  local items = vim.schedule_wrap(function()
-    local paths = MiniVisits.list_paths(cwd, { filter = filter, sort = sort })
-    paths = vim.tbl_map(function(x) return short_path(x, picker_cwd) end, paths)
-    pick.set_picker_items(paths)
-  end)
-
-  -- local show = H.pick_get_config().source.show or H.show_with_icons
-  local show = show_with_icons
-
-  local match
-  if local_opts.preserve_sort then
-    match = function(stritems, inds, query)
-      local res = pick.default_match(stritems, inds, query, true)
-      table.sort(res)
-      return res
-    end
-  end
-
-  local name = string.format('Visits (%s)', is_for_cwd and 'cwd' or 'all')
-  local default_source = { name = name, cwd = picker_cwd, match = match, show = show }
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
-  return pick.start(opts)
-end
-
-EC.pick_visit_labels = function(local_opts, opts)
-  local default_local_opts = { path = '', cwd = nil, filter = nil, sort = nil }
-  local_opts = vim.tbl_deep_extend('force', default_local_opts, local_opts or {})
-
-  local pick = require('mini.pick')
-  local cwd = local_opts.cwd or vim.fn.getcwd()
-  -- NOTE: Use separate cwd to allow `cwd = ''` to not mean "current directory"
-  local is_for_cwd = cwd ~= ''
-  local picker_cwd = cwd == '' and vim.fn.getcwd() or full_path(cwd)
-
-  local filter = local_opts.filter or MiniVisits.gen_filter.default()
-  local items = MiniVisits.list_labels(local_opts.path, local_opts.cwd, { filter = filter })
-
-  -- Define source
-  local list_label_paths = function(label)
-    local new_filter =
-      function(path_data) return filter(path_data) and type(path_data.labels) == 'table' and path_data.labels[label] end
-    local all_paths = MiniVisits.list_paths(local_opts.cwd, { filter = new_filter, sort = local_opts.sort })
-    return vim.tbl_map(function(path) return short_path(path, picker_cwd) end, all_paths)
-  end
-
-  local preview = function(buf_id, label) vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, list_label_paths(label)) end
-  local choose = function(label)
-    if label == nil then return end
-
-    pick.set_picker_items(list_label_paths(label), { do_match = false })
-    pick.set_picker_query({})
-    local name = string.format('Paths for %s label', vim.inspect(label))
-    pick.set_picker_opts({ source = { name = name, show = show_with_icons, choose = pick.default_choose } })
-    return true
-  end
-
-  local name = string.format('Visit labels (%s)', is_for_cwd and 'cwd' or 'all')
-  local default_source = { name = name, cwd = picker_cwd, preview = preview, choose = choose }
-  opts = vim.tbl_deep_extend('force', { source = default_source }, opts or {}, { source = { items = items } })
-  return pick.start(opts)
-end
-
---stylua: ignore start
--- vim.keymap.set('n', '<Leader>fo', '<Cmd>Pick visits recency_weight=1 cwd=""<CR>', { desc = 'Old visits (all)' })
--- vim.keymap.set('n', '<Leader>fO', '<Cmd>Pick visits recency_weight=1<CR>',        { desc = 'Old visits (cwd)' })
-vim.keymap.set('n', '<Leader>fv', '<Cmd>Pick visits cwd=""<CR>',       { desc = 'Visits (all)' })
-vim.keymap.set('n', '<Leader>fV', '<Cmd>Pick visits<CR>',              { desc = 'Visits (cwd)' })
---stylua: ignore end
-
-vim.defer_fn(function()
-  if _G.MiniPick == nil then return end
-  _G.MiniPick.registry.visits = EC.pick_visits
-  _G.MiniPick.registry.visit_labels = EC.pick_visit_labels
-end, 1000)
-
 -- Step two -------------------------------------------------------------------
 later(function() require('mini.extra').setup() end)
 
@@ -365,3 +222,34 @@ later(function()
 end)
 
 later(function() require('mini.trailspace').setup() end)
+
+later(function()
+  require('mini.visits').setup()
+
+  -- Labels
+  table.insert(EC.leader_group_clues, { mode = 'n', keys = '<Leader>v', desc = '+Visits' })
+
+  local map_vis = function(keys, call, desc)
+    local rhs = '<Cmd>lua MiniVisits.' .. call .. '<CR>'
+    vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
+  end
+
+  --stylua: ignore start
+  map_vis('vv', 'add_label("core")',    'Add "core" label')
+  map_vis('vV', 'remove_label("core")', 'Remove "core" label')
+  map_vis('vl', 'add_label()',          'Add label')
+  map_vis('vL', 'remove_label()',       'Remove label')
+  --stylua: ignore end
+
+  -- Pick core
+  local map_pick_core = function(keys, cwd, desc)
+    local sort_latest = MiniVisits.gen_sort.default({ recency_weight = 1 })
+    local rhs = function()
+      MiniExtra.pickers.visit_paths({ cwd = cwd, filter = 'core', sort = sort_latest }, { source = { name = desc } })
+    end
+    vim.keymap.set('n', '<Leader>' .. keys, rhs, { desc = desc })
+  end
+
+  map_pick_core('vc', '', 'Core visits (all)')
+  map_pick_core('vC', nil, 'Core visits (all)')
+end)
