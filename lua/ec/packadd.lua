@@ -40,9 +40,6 @@ if vim.fn.exists('vscode') ~= 1 then
   packadd_later('nvim-treesitter')
   packadd_later('nvim-treesitter-textobjects')
 
-  -- Fuzzy finder
-  packadd_later('telescope')
-
   -- Interact with hunks
   packadd_later('gitsigns')
 

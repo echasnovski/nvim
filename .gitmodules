@@ -1,7 +1,3 @@
-[submodule "telescope"]
-	path = pack/plugins/opt/telescope
-	url = https://github.com/nvim-telescope/telescope.nvim.git
-	branch = master
 [submodule "gitsigns"]
 	path = pack/plugins/opt/gitsigns
   url = https://github.com/lewis6991/gitsigns.nvim
