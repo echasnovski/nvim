@@ -30,9 +30,6 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Colorful icons
   packadd('nvim-web-devicons')
 
-  -- -- Common dependency for Lua plugins
-  packadd_later('plenary')
-
   -- Treesitter: advanced syntax parsing. Add highlighting and text objects.
   -- NOTE: when opening file directly (`nvim <file>`) defered initialization
   -- results into highlighting change right after opening. If it bothers,

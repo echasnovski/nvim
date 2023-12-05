@@ -18,10 +18,6 @@
 	path = pack/plugins/opt/nvim-web-devicons
 	url = https://github.com/nvim-tree/nvim-web-devicons
 	branch = master
-[submodule "plenary"]
-	path = pack/plugins/opt/plenary
-	url = https://github.com/nvim-lua/plenary.nvim
-	branch = master
 [submodule "neoterm"]
 	path = pack/plugins/opt/neoterm
 	url = https://github.com/kassio/neoterm
