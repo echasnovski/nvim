@@ -52,8 +52,8 @@ if vim.fn.exists('vscode') ~= 1 then
   -- Tweak Neovim's terminal to be more REPL-aware
   packadd_later('neoterm')
 
-  -- Usage of external actions (formatting, diagnostics, etc.)
-  packadd_later('null-ls')
+  -- Formatting
+  packadd_later('conform')
 
   -- Snippets engine
   if vim.fn.has('nvim-0.10') == 1 then

@@ -6,10 +6,6 @@
 	path = pack/plugins/opt/gitsigns
   url = https://github.com/lewis6991/gitsigns.nvim
 	branch = main
-[submodule "null-ls"]
-	path = pack/plugins/opt/null-ls
-	url = https://github.com/jose-elias-alvarez/null-ls.nvim
-	branch = main
 [submodule "nvim-lspconfig"]
 	path = pack/plugins/opt/nvim-lspconfig
 	url = https://github.com/neovim/nvim-lspconfig
@@ -73,4 +69,8 @@
 [submodule "markdown-preview.nvim"]
 	path = pack/plugins/opt/markdown-preview.nvim
 	url = https://github.com/iamcco/markdown-preview.nvim
+	branch = master
+[submodule "conform"]
+	path = pack/plugins/opt/conform
+	url = https://github.com/stevearc/conform.nvim
 	branch = master

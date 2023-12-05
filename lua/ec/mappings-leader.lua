@@ -83,10 +83,7 @@ nmap_leader('gx', [[<Cmd>lua require("gitsigns").reset_hunk()<CR>]],          'D
 nmap_leader('gX', [[<Cmd>lua require("gitsigns").reset_buffer()<CR>]],        'Discard (reset) buffer')
 
 -- l is for 'LSP' (Language Server Protocol)
-local formatting_command = [[<Cmd>lua vim.lsp.buf.formatting()<CR>]]
-if vim.fn.has('nvim-0.8') == 1 then
-  formatting_command = [[<Cmd>lua vim.lsp.buf.format({ async = true })<CR>]]
-end
+local formatting_command = [[<Cmd>lua require('conform').format({ lsp_fallback = true })<CR>]]
 nmap_leader('la', [[<Cmd>lua vim.lsp.buf.signature_help()<CR>]], 'Arguments popup')
 nmap_leader('ld', [[<Cmd>lua vim.diagnostic.open_float()<CR>]],  'Diagnostics popup')
 nmap_leader('lf', formatting_command,                            'Format')
@@ -97,7 +94,7 @@ nmap_leader('lR', [[<Cmd>lua vim.lsp.buf.references()<CR>]],     'References')
 nmap_leader('lr', [[<Cmd>lua vim.lsp.buf.rename()<CR>]],         'Rename')
 nmap_leader('ls', [[<Cmd>lua vim.lsp.buf.definition()<CR>]],     'Source definition')
 
-xmap_leader('lf' , [[<Cmd>lua vim.lsp.buf.format()<CR><Esc>]],   'Format selection')
+xmap_leader('lf', formatting_command,                            'Format selection')
 
 -- L is for 'Lua'
 nmap_leader('Lc', '<Cmd>lua EC.log_clear()<CR>',                   'Clear log')
