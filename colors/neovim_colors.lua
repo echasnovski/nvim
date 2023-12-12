@@ -43,9 +43,10 @@ local colors = require('mini.colors')
 -- - Level 3 is `CursorLine` background.
 -- - Level 4 is `Visual` background and `Comment` foreground.
 --
--- Value for level 2 is taken from #14790 (as lightness of #1e1e1e).
+-- Initially value for level 2 was taken from #14790 (as lightness of #1e1e1e).
+-- Levels 1 and 2 are adjusted according to request in #26369.
 -- Others are the result of experiments to have passable contrast ratios.
-local l = { 6, 13, 20, 35 }
+local l = { 5, 10, 20, 35 }
 
 -- REFERENCE CHROMA VALUES
 -- Chosen experimentally. Darker colors usually need higher chroma to appear
@@ -328,7 +329,7 @@ local enable_colorscheme = function()
   -- General UI
   hi('ColorColumn',          { fg=nil,       bg=bg.grey4 })
   hi('Conceal',              { fg=bg.grey4,  bg=nil })
-  hi('CurSearch',            { link='Search' })
+  hi('CurSearch',            { fg=bg.grey1,  bg=fg.yellow })
   hi('Cursor',               { fg=nil,       bg=nil })
   hi('CursorColumn',         { fg=nil,       bg=bg.grey3 })
   hi('CursorIM',             { link='Cursor' })
@@ -344,8 +345,8 @@ local enable_colorscheme = function()
   hi('EndOfBuffer',          { link='NonText' })
   hi('ErrorMsg',             { fg=fg.red,    bg=nil })
   hi('FloatBorder',          { link='NormalFloat' })
-  hi('FloatShadow',          { fg=bg.grey1,  bg=nil,      blend=80 })
-  hi('FloatShadowThrough',   { fg=bg.grey1,  bg=nil,      blend=100 })
+  hi('FloatShadow',          { fg=nil,       bg=bg.grey4, blend=80 })
+  hi('FloatShadowThrough',   { fg=nil,       bg=bg.grey4, blend=100 })
   hi('FloatTitle',           { link='Title' })
   hi('FoldColumn',           { link='SignColumn' })
   hi('Folded',               { fg=fg.grey4,  bg=bg.grey3 })
@@ -361,9 +362,9 @@ local enable_colorscheme = function()
   hi('MsgSeparator',         { link='StatusLine' })
   hi('NonText',              { fg=bg.grey4,  bg=nil })
   hi('Normal',               { fg=fg.grey2,  bg=bg.grey2 })
-  hi('NormalFloat',          { fg=fg.grey2,  bg=bg.grey1 })
+  hi('NormalFloat',          { fg=nil,  bg=bg.grey1 })
   hi('NormalNC',             { fg=nil,       bg=nil })
-  hi('PMenu',                { fg=fg.grey2,  bg=bg.grey3 })
+  hi('PMenu',                { fg=nil,  bg=bg.grey3 })
   hi('PMenuExtra',           { link='PMenu' })
   hi('PMenuExtraSel',        { link='PMenuSel' })
   hi('PMenuKind',            { link='PMenu' })
@@ -372,7 +373,7 @@ local enable_colorscheme = function()
   hi('PMenuSel',             { fg=bg.grey3,  bg=fg.grey2, blend=0 })
   hi('PMenuThumb',           { fg=nil,       bg=bg.grey4 })
   hi('Question',             { fg=fg.cyan,   bg=nil })
-  hi('QuickFixLine',         { fg=nil,       bg=nil,      bold=true })
+  hi('QuickFixLine',         { fg=fg.cyan,   bg=nil })
   hi('RedrawDebugNormal',    { fg=nil,       bg=nil,      reverse=true })
   hi('RedrawDebugClear',     { fg=nil,       bg=bg.cyan })
   hi('RedrawDebugComposed',  { fg=nil,       bg=bg.green })
@@ -406,7 +407,7 @@ local enable_colorscheme = function()
   -- Syntax (`:h group-name`)
   hi('Comment', { fg=fg.grey4, bg=nil })
 
-  hi('Constant',  { fg=fg.grey2, bg=nil })
+  hi('Constant',  { fg=nil, bg=nil })
   hi('String',    { fg=fg.green, bg=nil })
   hi('Character', { link='Constant' })
   hi('Number',    { link='Constant' })
@@ -416,29 +417,29 @@ local enable_colorscheme = function()
   hi('Identifier', { fg=fg.blue, bg=nil }) -- frequent but important to get "main" branded color
   hi('Function',   { fg=fg.cyan, bg=nil }) -- not so frequent but important to get "main" branded color
 
-  hi('Statement',   { fg=fg.grey2, bg=nil, bold=true }) -- bold choice (get it?) for accessibility
+  hi('Statement',   { fg=nil, bg=nil, bold=true }) -- bold choice (get it?) for accessibility
   hi('Conditional', { link='Statement' })
   hi('Repeat',      { link='Statement' })
   hi('Label',       { link='Statement' })
-  hi('Operator',    { fg=fg.grey2, bg=nil }) -- seems too much to be bold for mostly singl-character words
+  hi('Operator',    { fg=nil, bg=nil }) -- seems too much to be bold for mostly singl-character words
   hi('Keyword',     { link='Statement' })
   hi('Exception',   { link='Statement' })
 
-  hi('PreProc',   { fg=fg.grey2, bg=nil })
+  hi('PreProc',   { fg=nil, bg=nil })
   hi('Include',   { link='PreProc' })
   hi('Define',    { link='PreProc' })
   hi('Macro',     { link='PreProc' })
   hi('PreCondit', { link='PreProc' })
 
-  hi('Type',         { fg=fg.grey2, bg=nil })
+  hi('Type',         { fg=nil, bg=nil })
   hi('StorageClass', { link='Type' })
   hi('Structure',    { link='Type' })
   hi('Typedef',      { link='Type' })
 
-  hi('Special',        { fg=fg.grey2, bg=nil })
+  hi('Special',        { fg=fg.cyan, bg=nil }) -- not so frequent but important to get "main" branded color
   hi('Tag',            { link='Special' })
   hi('SpecialChar',    { link='Special' })
-  hi('Delimiter',      { fg=nil,      bg=nil })
+  hi('Delimiter',      { fg=nil,     bg=nil })
   hi('SpecialComment', { link='Special' })
   hi('Debug',          { link='Special' })
 
