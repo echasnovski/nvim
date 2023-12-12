@@ -60,6 +60,24 @@ end
 vim.keymap.set({ 'i', 's' }, '<C-l>', go_right)
 vim.keymap.set({ 'i', 's' }, '<C-h>', go_left)
 
+-- Tweak to stop snippet session when exiting into Normal mode
+-- -- NOTE: autocommand doesn't work because currently tabstop selection in
+-- -- `vim.snippet` itself exits into Normal mode
+-- -- (see https://github.com/neovim/neovim/issues/26449#issuecomment-1845843529)
+-- local augroup = vim.api.nvim_create_augroup('my_snippets', {})
+-- local opts = {
+--   pattern = '*:n',
+--   group = augroup,
+--   callback = function() vim.snippet.exit() end,
+--   desc = 'Stop snippet session when exiting to Normal mode',
+-- }
+-- vim.api.nvim_create_autocmd('ModeChanged', opts)
+
+vim.keymap.set({ 'i', 's' }, '<C-e>', function()
+  vim.snippet.exit()
+  vim.fn.feedkeys('\27', 'n')
+end, { desc = 'Stop snippet session' })
+
 -- -- Notify about presence of snippet. This is my attempt to try to live without
 -- -- snippet autocompletion. At least for the time being to get used to new
 -- -- snippets. NOTE: this code is run *very* frequently, but it seems to be fast
