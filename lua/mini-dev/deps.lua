@@ -1,6 +1,8 @@
 -- TODO:
 --
 -- Code:
+-- - Do not forget about submodules in `create()` and `fetch()`.
+-- - Do not forget about stashing changes before `checkout()`.
 --
 -- Docs:
 -- - Add examples of user commands in |MiniDeps-actions|.
@@ -29,8 +31,6 @@
 ---     - Basename of target plugin directory.
 ---     - Checkout target: branch, commit, tag, any manual shell subcommand.
 ---     - Hooks to call before/after plugin is created/changed/deleted.
----     - Whether plugin is optional or should be sourced at start ("opt" vs
----       "start" package subdirectories).
 ---
 --- - Automated show and save of fetch results to review before updating.
 ---
@@ -39,15 +39,6 @@
 ---
 --- - Helpers to implement two-stage startup: |MiniDeps.now()| and |MiniDeps.later()|.
 ---   See |MiniDeps-examples| for how to implement basic lazy loading with them.
----
---- Notes:
----
---- - All module's data is stored in `config.path.package` directory inside
----   "pack/deps" subdirectory. It itself has the following subdirectories:
----     - `opt` with optional plugins (sourced after |:packadd|).
----     - `start` with non-optional plugins (sourced at start unconditionally).
----     - `fetch` with history of the new data after |MiniDeps.fetch()|.
----     - `rollback` with history of the snapshots before |MiniDeps.checkout()|.
 ---
 --- What it doesn't do:
 ---
@@ -58,7 +49,7 @@
 ---   inside of them, 'mini.deps' will be updated to use it automatically.
 ---
 --- - Manage plugins which are developed without Git. The suggested approach is
----   to create a separate package (like "pack/nogit" near "pack/deps").
+---   to create a separate package (see |packages|).
 ---
 --- Sources with more details:
 --- - |MiniDeps-examples|.
@@ -92,75 +83,155 @@
 --- - 'lewis6991/pckr.nvim' :
 ---
 
---- Actions ~
+--- # Directory structure ~
 ---
---- This sections describes which actions are implemented in the module.
---- Any action is available as lua function and user command (described in tag).
+--- All module's data is stored in `config.path.package` directory inside
+--- "pack/deps" subdirectory. It itself has the following subdirectories:
 ---
----                                                                       *:DepsAdd*
---- <Add> - main action to add plugins:
---- - <Create> plugin.
---- - Make sure it can be used in current session.
+--- - `opt` with optional plugins (sourced after |:packadd|).
+---   |MiniDeps.create()| uses this directory.
 ---
----                                                                    *:DepsCreate*
---- <Create> - create plugin directory:
---- - If in `path.package` there is no directory with target basename , clone
----   plugin from its source URI.
---- - If plugin is present, but in the wrong subdirectory, move plugin.
---- - If plugin is present in correct subdirectory, do nothing.
+--- - `start` with non-optional plugins (sourced at start unconditionally).
+---   All its subdirectories are recognized as plugins and can be updated,
+---   removed, etc. To actually use, move installed plugin from `opt` directory.
 ---
----                                                                    *:DepsUpdate*
---- <Update> - main actinon to update plugins:
---- - <Fetch> new data from source URI.
---- - <Checkout> according to plugin specification.
+--- - `fetch` with history of the new data after |MiniDeps.fetch()|.
+---   Each file contains a log of fetched changes for later review.
 ---
----                                                                     *:DepsFetch*
---- <Fetch> - download plugin Git metadata without affecting plugin itself:
---- - Use `git fetch` to fetch data from source URI.
---- - Use `git log` to get newly fetched data and save output to the file in
----   fetch history.
---- - Create and show scratch buffer with the log.
----
----                                                                    *:DepsRemove*
---- <Remove> - main action to remove plugins:
---- - If plugin is present in `path.package` directory, delete its directory.
---- - If not present, do nothing.
----
----                                                                      *:DepsSync*
---- <Sync> - synchronous `path.package` directory to have only added plugins:
---- - <Remove> plugins which are not currently present in 'runtimpath'.
----
----                                                                  *:DepsSnapshot*
---- <Snapshot> - create a snapshot of current state of plugins:
---- - Get current commit of every plugin directory in `path.package`.
---- - Create a snapshot: table with plugin directory basenames as keys and
----   commits as values.
---- - Write the table to `path.snapshot` file in the form of a Lua code
----   appropriate for |dofile()|.
----
----                                                                  *:DepsCheckout*
---- <Checkout> - checkout plugins according to the input:
---- - If no input, checkout all <Add>ed plugins according to their specification.
---- - If table input, treat it as a snapshot object and checkout actually present
----   plugins according to it.
---- - If string input, treat it as file path with snapshot (as after <Snapshot>
----   action). Source the file expecting returned table and apply previous step.
----
----@tag MiniDeps-actions
+--- - `rollback` with history of automated snapshots. Each file is created
+---   automatically before every run of |MiniDeps.checkout()|.
+---   This can be used together with |MiniDeps.checkout()| to roll back after
+---   unfortunate update.
+---@tag MiniDeps-directory-structure
 
---- Usage examples ~
+--- # Plugin specification ~
 ---
---- # Inside config ~
+--- Each plugin dependency is managed based on its specification (a.k.a. "spec").
+--- See |MiniDeps-examples| for how it is suggested to be used inside user config.
 ---
---- ## Two-stage loading ~
+--- Specification is a table with the following fields:
 ---
---- # Inside session ~
+--- - <source> `(string)` - field with URI of plugin source.
+---   Can be anything allowed by `git clone`.
+---   This is the only required field. Others are optional.
 ---
+--- - <name> `(string|nil)` - directory basename of where to put plugin source.
+---   It is put in "pack/deps/opt" subdirectory of `config.path.package`.
+---   Default: basename of a <source>.
+---
+--- - <checkout> `(string|boolean|nil)` - Git checkout target to be used
+---   in |MiniDeps.checkout| when called without arguments.
+---   Can be anything supported by `git checkout` - branch, commit, tag, etc.
+---   Can also be `false` to not perform `git checkout` at all.
+---
+--- - <hooks> `(table|nil)` - table with callable hooks to call on certain events.
+---   Each hook is executed without arguments. Possible hook names:
+---     - <pre_create>  - before creating plugin directory.
+---     - <post_create> - after  creating plugin directory.
+---     - <pre_change>  - before making change in plugin directory.
+---     - <post_change> - after  making change in plugin directory.
+---     - <pre_delete>  - before deleting plugin directory.
+---     - <post_delete> - after  deleting plugin directory.
+---
+--- Note: for simplicity, specification is also allowed to be a string. It is
+--- assumed to be in a GitHub "user/repo" format and is transformed into
+--- `source` like "https://github.com/user/repo", other fields being default.
+---@tag MiniDeps-plugin-specification
+
+--- # User commands ~
+---                                                                       *:DepsAdd*
+---                                                                    *:DepsCreate*
+---                                                                    *:DepsUpdate*
+---                                                                     *:DepsFetch*
+---                                                                    *:DepsRemove*
+---                                                                     *:DepsClean*
+---                                                                  *:DepsSnapshot*
+---                                                                  *:DepsCheckout*
+---@tag MiniDeps-commands
+
+--- # Usage examples ~
+---
+--- Make sure that `git` CLI tool is installed.
+---
+--- ## Inside config ~
+--- >
+---   -- Make sure that code from 'mini.deps' can be executed
+---   vim.cmd('packadd mini.nvim') -- or 'packadd mini.deps' if using standalone
+---
+---   local deps = require('mini.deps')
+---   local add, now, later = deps.add, deps.now, deps.later
+---
+---   -- Tweak setup to your liking
+---   deps.setup()
+---
+---   -- Run code safely with `now()`
+---   now(function() vim.cmd('colorscheme randomhue') end)
+---   now(function() require('mini.starter').setup() end)
+---   now(function() require('mini.statusline').setup() end)
+---   now(function() require('mini.tabline').setup() end)
+---
+---   -- Delay code execution safely with `later()`
+---   later(function() require('mini.ai').setup() end)
+---   later(function()
+---     require('mini.pick').setup()
+---     vim.ui.select = MiniPick.ui_select
+---   end)
+---
+---   -- Use plugins
+---   now(function()
+---     -- If doesn't exist, will create from supplied URI
+---     add('nvim-tree/nvim-web-devicons')
+---     require('nvim-web-devicons').setup()
+---   end)
+---
+---   later(function()
+---     local is_010 = vim.fn.has('nvim-0.10') == 1
+---     add({
+---       -- Use full form of plugin specification
+---       source = 'https://github.com/nvim-treesitter/nvim-treesitter',
+---       checkout = is_010 and 'main' or 'master',
+---       hooks = { post_change = function() vim.cmd('TSUpdate') end },
+---     })
+---
+---     -- Run any code related to plugin's config
+---     local parsers = { 'bach', 'python', 'r' }
+---     if is_010 then
+---       require('nvim-treesitter').setup({ ensure_install = parsers })
+---     else
+---       require('nvim-treesitter.configs').setup({ ensure_installed = parsers })
+---     end
+---   end)
+--- <
+--- ## Plugin management ~
+---
+--- - To update plugins, run |:DepsUpdate| and wait for visual feedback
+---   that data is fetched and plugins are checked out.
+---   Alternatively, run |:DepsFetch|, examine the changes, and run |:DepsCheckout|
+---   if you want that changes to take effect.
+---
+--- - To save current plugin state, run |:DepsSnapshot|. This will save exact
+---   state of plugins into some file ('deps-snapshot' in config directory by
+---   default). This is usually tracked with version control to have the most
+---   recent information about working setup.
+---
+--- - To revert to some previous state, run |:DepsCheckout| with a snapshot file.
+---   Either with manually created (after |:DepsSnapshot|) or automatically
+---   created (before every |:DepsCheckout|; stored in "rollback" package
+---   directory, see |MiniDeps-directory-structure|).
+---   Note: |:DepsCheckout| has Tab-completion for these files.
+---
+--- - To remove a plugin, run `:DepsRemove <plugin basename>`. Following example
+---   config earlier, `:DepsRemove nvim-treesitter` will remove
+---   'nvim-treesitter/nvim-treesitter' plugin.
+---   Alternatively, remove `add()` call from config, restart Neovim, and
+---   run |:DepsClean|.
+---   Alternatively (if there are no relevant hooks for deleting plugin) manually
+---   delete plugin directory.
 ---@tag MiniDeps-examples
 
---- Plugin specification ~
----
----@tag MiniDeps-plugin-specification
+---@alias __deps_spec table|string Object with |MiniDeps-plugin-specification|.
+---@alias __deps_name table|string Plugin name present in current session specifications
+---   or an array of them.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -200,21 +271,6 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniDeps.config = {
-  -- Hooks to be called for every plugin
-  hooks = {
-    -- Before and after creating plugin directory
-    pre_create = nil,
-    post_create = nil,
-
-    -- Before and after changing plugin content
-    pre_change = nil,
-    post_change = nil,
-
-    -- Before and after deleteing plugin directory
-    pre_delete = nil,
-    post_delete = nil,
-  },
-
   -- Paths describing where to store data
   path = {
     -- Directory for built-in package.
@@ -227,39 +283,112 @@ MiniDeps.config = {
 }
 --minidoc_afterlines_end
 
-MiniDeps.add = function()
+--- Add plugin
+---
+--- - Call |MiniDeps.create()|.
+--- - Make sure it can be used in current session.
+---
+---@param spec __deps_spec
+MiniDeps.add = function(spec)
   -- TODO
 end
 
-MiniDeps.create = function()
+--- Create plugin
+---
+--- - Register `spec` as specification in current session.
+--- - If there is no directory present with `spec.name`:
+---     - Execute `spec.hooks.pre_create`.
+---     - Use `git clone` to clone plugin from its source URI into "pack/deps/opt".
+---     - Execute `spec.hooks.post_create`.
+---     - Run |MiniDeps.checkout()| with plugin's name.
+---
+---@param spec __deps_spec
+MiniDeps.create = function(spec)
   -- TODO
 end
 
-MiniDeps.update = function()
+--- Update plugin
+---
+--- - Use |MiniDeps.fetch()| to get new data from source URI.
+--- - Use |MiniDeps.checkout()| to checkout according to plugin specification.
+---
+---@param name __deps_name
+MiniDeps.update = function(name)
   -- TODO
 end
 
-MiniDeps.fetch = function()
+--- Fetch new plugin data
+---
+--- - Use `git fetch` to fetch data from source URI.
+--- - Use `git log` to get newly fetched data and save output to the file in
+---   fetch history.
+--- - Create and show scratch buffer with the log.
+---
+--- Notes:
+--- - This function is asynchronously.
+--- - This does not affect actual plugin code. Run |MiniDeps.checkout()| for that.
+---
+---@param name __deps_name
+MiniDeps.fetch = function(name)
   -- TODO
   -- Outline:
   -- - Get value of `FETCH_HEAD`.
-  -- - `git fetch`.
+  -- - `git fetch --all --write-fetch-head`.
   -- - Get log as `git log <prev_FETCH_HEAD>..FETCH_HEAD`.
 end
 
-MiniDeps.remove = function()
+--- Remove plugin
+---
+--- - If there is directory present with `spec.name`:
+---     - Execute `spec.hooks.pre_delete`.
+---     - Delete plugin directory.
+---     - Execute `spec.hooks.post_delete`.
+---
+---@param name __deps_name
+MiniDeps.remove = function(name)
   -- TODO
 end
 
-MiniDeps.sync = function()
+--- Clean plugins
+---
+--- - Delete plugin directories which are currently not present in 'runtimpath'.
+MiniDeps.clean = function()
   -- TODO
 end
 
-MiniDeps.snapshot = function()
+--- Create snapshot file
+---
+--- - Get current commit of every plugin directory in `path.package`.
+--- - Create a snapshot object: table with plugin directory basenames as keys
+---   and commits as values.
+--- - Write the table to `path` file in the form of a Lua code ready for |dofile()|.
+---
+---@param path string|nil A valid path on disk where to write snapshot file.
+---   Default: `config.path.snapshot`.
+MiniDeps.snapshot = function(path)
   -- TODO
 end
 
-MiniDeps.checkout = function()
+--- Checkout plugins
+---
+--- - If no input, checkout all plugins registered in current session
+---   (with |MiniDeps.add()| or |MiniDeps.create()|) according to their specification.
+---   See |MiniDeps.get_session_data()|.
+--- - If table input, treat it as a snapshot object (as described
+---   in |MiniDeps.snapshot()|) and checkout acutally present on dick plugins
+---   according to it. That is, entries in snapshot table which are not present
+---   on disk are ignored.
+--- - If string input, treat it as file path with snapshot (as
+---   after |MiniDeps.snapshot()|). Source the file expecting returned table and
+---   apply previous step.
+---
+---@param target table|string|nil A checkout target. Default: `nil`.
+MiniDeps.checkout = function(target)
+  -- TODO
+end
+
+--- Get session data
+MiniDeps.get_session_data = function()
   -- TODO
 end
 
@@ -299,18 +428,10 @@ H.setup_config = function(config)
   config = vim.tbl_deep_extend('force', vim.deepcopy(H.default_config), config or {})
 
   vim.validate({
-    hooks = { config.hooks, 'table' },
     path = { config.path, 'table' },
   })
 
   vim.validate({
-    ['hooks.pre_create'] = { config.hooks.pre_create, 'function', true },
-    ['hooks.post_create'] = { config.hooks.post_create, 'function', true },
-    ['hooks.pre_change'] = { config.hooks.pre_change, 'function', true },
-    ['hooks.post_change'] = { config.hooks.post_change, 'function', true },
-    ['hooks.pre_delete'] = { config.hooks.pre_delete, 'function', true },
-    ['hooks.post_delete'] = { config.hooks.post_delete, 'function', true },
-
     ['path.package'] = { config.path.package, 'string' },
     ['path.snapshot'] = { config.path.snapshot, 'string' },
   })
@@ -326,6 +447,28 @@ end
 
 H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniDeps.config, vim.b.minideps_config or {}, config or {})
+end
+
+-- Plugin specification -------------------------------------------------------
+H.validate_spec = function(x)
+  if type(x) == 'string' then x = { source = 'https://github.com/' .. x } end
+
+  if type(x) ~= 'table' then H.error('Plugin spec should be table.') end
+  if type(x.source) ~= 'string' then H.error('`source` in plugin spec should be string.') end
+  if not (x.target == nil or type(x.target) == 'string') then H.error('`target` in plugin spec should be string.') end
+  if not (x.checkout == nil or type(x.checkout) == 'string' or x.checkout == false) then
+    H.error('`checkout` in plugin spec should be string or `false`.')
+  end
+
+  if not (x.hooks == nil or type(x.hooks) == 'table') then H.error('`hooks` in plugin spec should be table.') end
+  local hook_names = { 'pre_create', 'post_create', 'pre_change', 'post_change', 'pre_delete', 'post_delete' }
+  for _, hook_name in ipairs(hook_names) do
+    if not (x[hook_name] == nil or vim.is_callable(x[hook_name])) then
+      H.error('`hooks.' .. hook_name .. '` should be callable.')
+    end
+  end
+
+  return x
 end
 
 -- Two-stage execution --------------------------------------------------------
