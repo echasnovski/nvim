@@ -21,8 +21,8 @@
 --- - Manage plugins utilizing Git and built-in |packages| with these actions:
 ---     - Add / create.
 ---     - Update / fetch.
----     - Remove / sync.
 ---     - Snapshot / checkout.
+---     - Remove / clean.
 ---     All these actions are available both as Lua functions and user commands
 ---     (see |MiniDeps.setup()).
 ---
@@ -143,17 +143,17 @@
 ---                                                                    *:DepsCreate*
 ---                                                                    *:DepsUpdate*
 ---                                                                     *:DepsFetch*
----                                                                    *:DepsRemove*
----                                                                     *:DepsClean*
 ---                                                                  *:DepsSnapshot*
 ---                                                                  *:DepsCheckout*
+---                                                                    *:DepsRemove*
+---                                                                     *:DepsClean*
 ---@tag MiniDeps-commands
 
 --- # Usage examples ~
 ---
 --- Make sure that `git` CLI tool is installed.
 ---
---- ## Inside config ~
+--- ## In config ~
 --- >
 ---   -- Make sure that code from 'mini.deps' can be executed
 ---   vim.cmd('packadd mini.nvim') -- or 'packadd mini.deps' if using standalone
@@ -166,18 +166,16 @@
 ---
 ---   -- Run code safely with `now()`
 ---   now(function() vim.cmd('colorscheme randomhue') end)
----   now(function() require('mini.starter').setup() end)
 ---   now(function() require('mini.statusline').setup() end)
 ---   now(function() require('mini.tabline').setup() end)
 ---
 ---   -- Delay code execution safely with `later()`
----   later(function() require('mini.ai').setup() end)
 ---   later(function()
 ---     require('mini.pick').setup()
 ---     vim.ui.select = MiniPick.ui_select
 ---   end)
 ---
----   -- Use plugins
+---   -- Use external plugins
 ---   now(function()
 ---     -- If doesn't exist, will create from supplied URI
 ---     add('nvim-tree/nvim-web-devicons')
@@ -204,29 +202,25 @@
 --- <
 --- ## Plugin management ~
 ---
---- - To update plugins, run |:DepsUpdate| and wait for visual feedback
----   that data is fetched and plugins are checked out.
----   Alternatively, run |:DepsFetch|, examine the changes, and run |:DepsCheckout|
----   if you want that changes to take effect.
+--- `:DepsAdd user/repo` adds plugin from https://github.com/user/repo to the
+--- current session (clones it, if it not present). See |:DepsAdd|.
+--- To add plugin in every session, see previous section.
 ---
---- - To save current plugin state, run |:DepsSnapshot|. This will save exact
----   state of plugins into some file ('deps-snapshot' in config directory by
----   default). This is usually tracked with version control to have the most
----   recent information about working setup.
+--- `:DepsUpdate` updates all plugins with new changes from their sources.
+--- See |:DepsUpdate|.
+--- Alternatively: `:DepsFetch` followed by `:DepsCheckout`.
 ---
---- - To revert to some previous state, run |:DepsCheckout| with a snapshot file.
----   Either with manually created (after |:DepsSnapshot|) or automatically
----   created (before every |:DepsCheckout|; stored in "rollback" package
----   directory, see |MiniDeps-directory-structure|).
----   Note: |:DepsCheckout| has Tab-completion for these files.
+--- `:DepsSnapshot` creates snapshot file in default location ('deps-snapshot'
+--- file in config directory). See |:DepsSnapshot|.
 ---
---- - To remove a plugin, run `:DepsRemove <plugin basename>`. Following example
----   config earlier, `:DepsRemove nvim-treesitter` will remove
----   'nvim-treesitter/nvim-treesitter' plugin.
----   Alternatively, remove `add()` call from config, restart Neovim, and
----   run |:DepsClean|.
----   Alternatively (if there are no relevant hooks for deleting plugin) manually
----   delete plugin directory.
+--- `:DepsCheckout path/to/snapshot` makes present plugins have state from the
+--- snapshot file. See |:DepsCheckout|.
+---
+--- `:DepsRemove repo` removes plugin with basename "repo". Do not forget to
+--- update config to not add same plugin. See |:DepsRemove|.
+--- Alternatively: `:DepsClean` removes all plugins which are not loaded in
+--- current session. See |:DepsClean|.
+--- Alternatively: manually delete plugin directory (if no hooks are set up).
 ---@tag MiniDeps-examples
 
 ---@alias __deps_spec table|string Object with |MiniDeps-plugin-specification|.
@@ -241,8 +235,8 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
-local MiniDeps = {}
-local H = {}
+MiniDeps = {}
+H = {}
 
 --- Module setup
 ---
@@ -337,25 +331,6 @@ MiniDeps.fetch = function(name)
   -- - Get log as `git log <prev_FETCH_HEAD>..FETCH_HEAD`.
 end
 
---- Remove plugin
----
---- - If there is directory present with `spec.name`:
----     - Execute `spec.hooks.pre_delete`.
----     - Delete plugin directory.
----     - Execute `spec.hooks.post_delete`.
----
----@param name __deps_name
-MiniDeps.remove = function(name)
-  -- TODO
-end
-
---- Clean plugins
----
---- - Delete plugin directories which are currently not present in 'runtimpath'.
-MiniDeps.clean = function()
-  -- TODO
-end
-
 --- Create snapshot file
 ---
 --- - Get current commit of every plugin directory in `path.package`.
@@ -384,6 +359,25 @@ end
 ---
 ---@param target table|string|nil A checkout target. Default: `nil`.
 MiniDeps.checkout = function(target)
+  -- TODO
+end
+
+--- Remove plugin
+---
+--- - If there is directory present with `spec.name`:
+---     - Execute `spec.hooks.pre_delete`.
+---     - Delete plugin directory.
+---     - Execute `spec.hooks.post_delete`.
+---
+---@param name __deps_name
+MiniDeps.remove = function(name)
+  -- TODO
+end
+
+--- Clean plugins
+---
+--- - Delete plugin directories which are currently not present in 'runtimpath'.
+MiniDeps.clean = function()
   -- TODO
 end
 
