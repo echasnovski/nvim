@@ -4,13 +4,13 @@ on: [push, pull_request]
 
 jobs:
   stylua:
-    name: stylua
-    runs-on: ubuntu-20.04
+    name: Formatting
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: JohnnyMorganz/stylua-action@1.0.0
+      - uses: actions/checkout@v4
+      - uses: JohnnyMorganz/stylua-action@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          version: 0.14.0
+          version: v0.19.0
           # CLI arguments
           args: --color always --check .
