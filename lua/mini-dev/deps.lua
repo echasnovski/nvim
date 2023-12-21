@@ -465,6 +465,72 @@ H.validate_spec = function(x)
   return x
 end
 
+-- CLI ------------------------------------------------------------------------
+--- Run commands in parallel while blocking event loop
+---
+---@param commands table Array with array commands (like in |jobstart()|).
+---
+---@return table Array (same length as `commands`) with `out` and `err` feeds of jobs.
+---@private
+H.cli_run = function(commands, n_threads, timeout)
+  n_threads = n_threads or math.max(math.floor(0.8 * #vim.loop.cpu_info()), 1)
+  timeout = timeout or 300000
+
+  local n_total, id_started, n_finished = #commands, 0, 0
+  if n_total == 0 then return {} end
+
+  local job_feeds = {}
+  for i = 1, n_total do
+    job_feeds[i] = { out = {}, err = {} }
+  end
+
+  local run_next
+  run_next = function()
+    if n_total <= id_started then return end
+    id_started = id_started + 1
+    local id = id_started
+
+    local command, out_feed, err_feed = commands[id], job_feeds[id].out, job_feeds[id].err
+    local executable, args = command[1], vim.list_slice(command, 2, #command)
+    local process, stdout, stderr = nil, vim.loop.new_pipe(), vim.loop.new_pipe()
+    local spawn_opts = { args = args, stdio = { nil, stdout, stderr } }
+
+    local on_exit = function(code)
+      if code ~= 0 then table.insert(err_feed, 'PROCESS EXITED WITH ERROR CODE ' .. code .. '\n') end
+      process:close()
+      n_finished = n_finished + 1
+      run_next()
+    end
+    process = vim.loop.spawn(executable, spawn_opts, on_exit)
+
+    H.cli_read_stream(stdout, out_feed)
+    H.cli_read_stream(stderr, err_feed)
+  end
+
+  for _ = 1, n_threads do
+    run_next()
+  end
+
+  vim.wait(timeout, function() return n_total <= n_finished end, 100)
+
+  return job_feeds
+end
+
+H.cli_read_stream = function(stream, feed)
+  local callback = function(err, data)
+    if err then return table.insert(feed, 'ERROR: ' .. err) end
+    if data ~= nil then return table.insert(feed, data) end
+    stream:close()
+  end
+  stream:read_start(callback)
+end
+
+-- vim.fn.writefile({}, 'worklog')
+-- _G.test_commands = {}
+-- for i = 1, 18 do
+--   table.insert(_G.test_commands, { './date-and-sleep.sh', tostring(i) })
+-- end
+
 -- Two-stage execution --------------------------------------------------------
 H.schedule_finish = function()
   if H.cache.finish_is_scheduled then return end
