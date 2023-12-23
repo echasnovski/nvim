@@ -11,7 +11,7 @@
 --- *mini.deps* Plugin manager
 --- *MiniDeps*
 ---
---- MIT License Copyright (c) 2023 Evgeni Chasnovski
+--- MIT License Copyright (c) 2024 Evgeni Chasnovski
 ---
 --- ==============================================================================
 ---
@@ -74,7 +74,7 @@
 --- # Comparisons ~
 ---
 --- - 'folke/lazy.nvim':
----     - Has dependenies. This module does not by design.
+---     - Can declare dependenies. This module does not by design.
 ---
 --- - 'savq/paq-nvim':
 ---     - Main inspiration.
@@ -130,6 +130,8 @@
 ---
 --- - <hooks> `(table|nil)` - table with callable hooks to call on certain events.
 ---   Each hook is executed without arguments. Possible hook names:
+---     - <pre_add>     - before adding plugin.
+---     - <post_add>    - after  adding plugin.
 ---     - <pre_create>  - before creating plugin directory.
 ---     - <post_create> - after  creating plugin directory.
 ---     - <pre_change>  - before making change in plugin directory.
@@ -156,8 +158,10 @@
 ---
 --- Make sure that `git` CLI tool is installed.
 ---
---- ## In config ~
---- >
+--- ## In config (functional style) ~
+---
+--- Recommended approach to organize config: >
+---
 ---   -- Make sure that code from 'mini.deps' can be executed
 ---   vim.cmd('packadd mini.nvim') -- or 'packadd mini.deps' if using standalone
 ---
@@ -203,6 +207,36 @@
 ---     end
 ---   end)
 --- <
+--- ## In config (declaration style) ~
+---
+--- Alternative approach to organize plugin specification. Allows parallel plugin
+--- creation at the cost of more code nesting and less granular error handling: >
+---
+---   local spec_now = {
+---     {
+---       source = 'nvim-tree/nvim-web-devicons',
+---       hooks = {
+---         post_add = { function() require('nvim-web-devicons').setup() end },
+---       },
+---     },
+---   }
+---   now(function() add(spec_now) end)
+---
+---   local spec_later = {
+---     {
+---       source = 'nvim-treesitter/nvim-treesitter',
+---       checkout = 'main',
+---       hooks = {
+---         post_add = function()
+---           local parsers = { 'bach', 'python', 'r' }
+---           require('nvim-treesitter').setup({ ensure_install = parsers })
+---         end,
+---         post_change = function() vim.cmd('TSUpdate') end,
+---       },
+---     },
+---   }
+---   later(function() add(spec_later) end)
+--- <
 --- ## Plugin management ~
 ---
 --- `:DepsAdd user/repo` adds plugin from https://github.com/user/repo to the
@@ -240,7 +274,7 @@
 
 -- Module definition ==========================================================
 MiniDeps = {}
-H = {}
+local H = {}
 
 --- Module setup
 ---
@@ -310,9 +344,13 @@ MiniDeps.add = function(spec)
   if not string.find(vim.o.packpath, vim.pesc(pack_path)) then vim.o.packpath = vim.o.packpath .. ',' .. pack_path end
 
   -- Make sure plugins are in 'runtimepath'
+  H.exec_hook(spec_arr, 'pre_add')
+
   for _, sp in ipairs(spec_arr) do
     vim.cmd('packadd ' .. sp.name)
   end
+
+  H.exec_hook(spec_arr, 'post_add')
 
   return spec_arr
 end
@@ -337,15 +375,14 @@ MiniDeps.create = function(spec)
   vim.fn.mkdir(deps_dir, 'p')
 
   -- Preprocess specifications
+  local spec_arr_to_create = {}
   for _, sp in ipairs(spec_arr) do
     H.session_specs[sp.name] = sp
     sp.path, sp.to_create = H.get_plugin_path(sp.name, deps_dir)
+    if sp.to_create then table.insert(spec_arr_to_create, sp) end
   end
 
-  -- Execute pre hooks
-  for _, sp in ipairs(spec_arr) do
-    if sp.to_create and vim.is_callable(sp.hooks.pre_create) then sp.hooks.pre_create() end
-  end
+  H.exec_hook(spec_arr_to_create, 'pre_create')
 
   -- Create
   local jobs = {}
@@ -360,10 +397,7 @@ MiniDeps.create = function(spec)
 
   -- TODO: Notify about errors when there is a converter from `job` to lines.
 
-  -- Execute post hooks
-  for _, sp in ipairs(spec_arr) do
-    if sp.to_create and vim.is_callable(sp.hooks.post_create) then sp.hooks.post_create() end
-  end
+  H.exec_hook(spec_arr_to_create, 'post_create')
 
   -- Checkout only those plugins which did not error earlier
   local checkout_target = {}
@@ -561,8 +595,8 @@ H.get_plugin_path = function(name, deps_dir)
   local is_start_present, is_opt_present = vim.loop.fs_stat(start_path) ~= nil, vim.loop.fs_stat(opt_path) ~= nil
   -- Use 'opt' directory by default
   local path = is_start_present and start_path or opt_path
-  local is_present = not (is_start_present or is_opt_present)
-  return path, is_present
+  local is_absent = not (is_start_present or is_opt_present)
+  return path, is_absent
 end
 
 -- Plugin specification -------------------------------------------------------
@@ -594,7 +628,10 @@ H.normalize_spec = function(x)
 
   x.hooks = x.hooks or {}
   if type(x.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
-  local hook_names = { 'pre_create', 'post_create', 'pre_change', 'post_change', 'pre_delete', 'post_delete' }
+  --stylua: ignore
+  local hook_names = {
+    'pre_add', 'post_add', 'pre_create', 'post_create', 'pre_change', 'post_change', 'pre_delete', 'post_delete',
+  }
   for _, hook_name in ipairs(hook_names) do
     if not (x[hook_name] == nil or vim.is_callable(x[hook_name])) then
       H.error('`hooks.' .. hook_name .. '` should be callable.')
@@ -602,6 +639,12 @@ H.normalize_spec = function(x)
   end
 
   return x
+end
+
+H.exec_hook = function(spec_arr, hook_name)
+  for _, sp in ipairs(spec_arr) do
+    if vim.is_callable(sp.hooks[hook_name]) then sp.hooks[hook_name]() end
+  end
 end
 
 -- CLI ------------------------------------------------------------------------
