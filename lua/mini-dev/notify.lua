@@ -1,10 +1,12 @@
 -- TODO:
 --
 -- Code:
+-- - Auto set up for LSP progress.
 --
 -- Docs:
 --
 -- Tests:
+-- - Handles width computation for empty lines inside notification.
 
 --- *mini.notify* Show notifications
 --- *MiniNotify*
@@ -15,11 +17,12 @@
 ---
 --- Features:
 ---
---- - Show one or more notifications in top right corner.
+--- - Show one or more notifications in a single floating window.
 ---
 --- - Manage notifications (add, update, remove, clear).
 ---
---- - Keep history which can be accessed with |MiniNotify.get_history()|.
+--- - Keep history which can be accessed with |MiniNotify.get_history()|
+---   and shown with |MiniNotify.show_history()|.
 ---
 --- - |vim.notify()| wrapper generator (see |MiniNotify.make_notify()|).
 ---
@@ -44,6 +47,22 @@
 ---
 --- - 'rcarriga/nvim-notify':
 ---     - .
+---
+--- # Highlight groups ~
+---
+--- * `MiniNotifyBorder` - window border.
+--- * `MiniNotifyNormal` - basic foreground/background highlighting.
+--- * `MiniNotifyTitle` - window title.
+---
+--- To change any highlight group, modify it directly with |:highlight|.
+---
+--- # Disabling ~
+---
+--- To disable showing notifications, set `vim.g.mininotify_disable` (globally) or
+--- `vim.b.mininotify_disable` (for a buffer) to `true`. Considering high number
+--- of different scenarios and customization intentions, writing exact rules
+--- for disabling module's functionality is left to user. See
+--- |mini.nvim-disabling-recipes| for common recipes.
 
 --- # Notification specification ~
 ---
@@ -54,7 +73,8 @@
 --- - <hl_group> `(string)` - highlight group with which notification is shown.
 --- - <ts_add> `(number)` - timestamp of when notification was added.
 --- - <ts_update> `(number)` - timestamp of the latest notification update.
---- - <ts_remove> `(number)` - timestamp of when notification was removed.
+--- - <ts_remove> `(number|nil)` - timestamp of when notification was removed.
+---   It is `nil` if notification was never removed and thus considered "active".
 ---@tag MiniNotify-specification
 
 ---@diagnostic disable:undefined-field
@@ -66,7 +86,7 @@
 
 -- Module definition ==========================================================
 MiniNotify = {}
-local H = {}
+H = {}
 
 --- Module setup
 ---
@@ -84,12 +104,31 @@ MiniNotify.setup = function(config)
 
   -- Apply config
   H.apply_config(config)
+
+  -- Define behavior
+  H.create_autocommands(config)
+
+  -- Create default highlighting
+  H.create_default_hl()
 end
 
 --- Module config
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # General info ~
+--- # Window ~
+---
+--- `config.window` defines behavior of notification window.
+---
+--- `config.window.config` is a table defining floating window characteristics
+--- or a callable returning such table (will be called with identifier of
+--- window's buffer already showing notifications). It should have the same
+--- structure as in |nvim_open_win()|. It has the following default values:
+--- - `width` is chosen to fit buffer content but not more than 38.2% of 'columns'.
+--- - `height` is chosen to fit buffer content with enabled 'wrap'.
+--- - `anchor`, `col`, and `row` are "NE", 'columns', and 0 or 1 (depending on tabline).
+--- - `zindex` is 999 to be as much on top as reasonably possible.
 MiniNotify.config = {
   -- Whether to set up notifications about LSP progress
   setup_lsp_progress = true,
@@ -100,11 +139,11 @@ MiniNotify.config = {
 
   -- Window options
   window = {
+    -- Floating window config
+    config = {},
+
     -- Value of 'winblend' option
     winblend = 25,
-
-    -- Z-index
-    zindex = 999,
   },
 }
 --minidoc_afterlines_end
@@ -113,25 +152,47 @@ MiniNotify.config = {
 --
 -- Add notification and remove it after timeout.
 MiniNotify.make_notify = function(opts)
+  local level_names = {}
+  for k, v in pairs(vim.log.levels) do
+    level_names[v] = k
+  end
+
   --stylua: ignore
   local default_opts = {
-    ERROR = { timeout = 10000, hl = 'DiagnosticError' },
-    WARN  = { timeout = 10000, hl = 'DiagnosticWarn'  },
-    INFO  = { timeout = 10000, hl = 'DiagnosticInfo'  },
-    DEBUG = { timeout = -1,    hl = 'DiagnosticHint'  },
-    TRACE = { timeout = -1,    hl = 'DiagnosticOk'    },
+    ERROR = { timeout = 10000, hl = 'DiagnosticFloatingError' },
+    WARN  = { timeout = 10000, hl = 'DiagnosticFloatingWarn'  },
+    INFO  = { timeout = 10000, hl = 'DiagnosticFloatingInfo'  },
+    DEBUG = { timeout = 0,     hl = 'DiagnosticFloatingHint'  },
+    TRACE = { timeout = 0,     hl = 'DiagnosticFloatingOk'    },
+    OFF   = { timeout = 0,     hl = 'MiniNotifyNormal'        },
   }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
+  for _, val in pairs(opts) do
+    if type(val) ~= 'table' then H.error('Level data should be table.') end
+    if type(val.timeout) ~= 'number' then H.error('`timeout` in level data should be number.') end
+    if type(val.hl) ~= 'string' then H.error('`hl` in level data should be string.') end
+  end
+
   return function(msg, level)
-    -- TODO
+    level = level or vim.log.levels.INFO
+    local level_name = level_names[level]
+    if level_name == nil then H.error('Only valid values of `vim.log.levels` are supported.') end
+
+    local level_data = opts[level_name]
+    if level_data.timeout <= 0 then return end
+
+    local id = MiniNotify.add(msg, level_name, level_data.hl)
+    vim.defer_fn(function() MiniNotify.remove(id) end, level_data.timeout)
   end
 end
 
 ---@return number Notification identifier.
 MiniNotify.add = function(msg, level, hl_group)
   H.validate_msg(msg)
+  level = level or 'INFO'
   H.validate_level(level)
+  hl_group = hl_group or 'MiniNotifyNormal'
   H.validate_hl_group(hl_group)
 
   local cur_ts = vim.loop.hrtime()
@@ -150,7 +211,7 @@ end
 
 ---@param id number Identifier of currently active notification
 ---   as returned by |MiniNotify.add()|.
----@param new_data table Table with data to update. Keys should be as in non-timestamp
+---@param new_data table Table with data to update. Keys should be as non-timestamp
 ---   fields of |MiniNotify-specification|.
 MiniNotify.update = function(id, new_data)
   local notif = H.active[id]
@@ -170,34 +231,73 @@ MiniNotify.update = function(id, new_data)
 end
 
 MiniNotify.remove = function(id)
+  local notif = H.active[id]
+  if notif == nil then return end
+  notif.ts_remove = vim.loop.hrtime()
   H.active[id] = nil
+
   MiniNotify.refresh()
 end
 
 MiniNotify.clear = function()
+  local cur_ts = vim.loop.hrtime()
+  for id, _ in pairs(H.active) do
+    H.active[id].ts_remove = cur_ts
+  end
   H.active = {}
+
   MiniNotify.refresh()
 end
 
 MiniNotify.refresh = function()
-  -- - Normalize windows and buffers.
-  --     - Discard windows which are not in the current tab page.
-  -- - Sort entries of `H.active`.
-  -- - Show from first to last but only until there is vertical space.
+  -- Prepare array of active notifications
+  local notif_arr = vim.deepcopy(vim.tbl_values(H.active))
+  local sort = H.get_config().sort
+  if not vim.is_callable(sort) then sort = MiniNotify.default_sort end
+  notif_arr = sort(notif_arr)
 
-  -- TODO
+  if not H.is_notification_array(notif_arr) then H.error('Output of `config.sort` should be an notification array.') end
+  if #notif_arr == 0 then return H.window_close() end
+
+  -- Refresh buffer
+  local buf_id = H.cache.buf_id
+  if not H.is_valid_buf(buf_id) then buf_id = H.buffer_create() end
+  H.buffer_refresh(buf_id, notif_arr)
+
+  -- Refresh window
+  local win_id = H.cache.win_id
+  if not (H.is_valid_win(win_id) and H.is_win_in_tabpage(win_id)) then
+    H.window_close()
+    win_id = H.window_open(buf_id)
+  else
+    H.window_refresh()
+  end
+
+  -- Update cache
+  H.cache.buf_id, H.cache.win_id = buf_id, win_id
 end
 
--- Get history
---
--- In order from oldest to newest based on the creation time.
--- Content is based on the last valid update.
+--- Get history
+---
+--- In order from oldest to newest based on the creation time.
+--- Content is based on the last valid update.
+--- Can be used to get any notification by its id or only active notifications
+--- by checking if they were removed (`ts_remove ~= nil`).
 MiniNotify.get_history = function() return vim.deepcopy(H.history) end
 
-MiniNotify.default_sort = function(arr)
-  local arr_copy = vim.deepcopy(arr)
-  table.sort(arr_copy, H.notif_compare)
-  return arr_copy
+--- Show history
+---
+--- Open a scratch buffer with all history.
+MiniNotify.show_history = function()
+  local buf_id = vim.api.nvim_create_buf(true, true)
+  local notif_arr = MiniNotify.get_history()
+  H.buffer_refresh(buf_id, notif_arr)
+  vim.api.nvim_win_set_buf(0, buf_id)
+end
+
+MiniNotify.default_sort = function(notif_arr)
+  table.sort(notif_arr, H.notif_compare)
+  return notif_arr
 end
 
 -- Helper data ================================================================
@@ -213,6 +313,18 @@ H.history = {}
 -- Priorities of levels
 H.level_priority = { ERROR = 6, WARN = 5, INFO = 4, DEBUG = 3, TRACE = 2, OFF = 1 }
 
+-- Namespaces
+H.ns_id = {
+  highlight = vim.api.nvim_create_namespace('MiniNotifyHighlight'),
+}
+
+-- Various cache
+H.cache = {
+  -- Notification buffer and window
+  buf_id = nil,
+  win_id = nil,
+}
+
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
 H.setup_config = function(config)
@@ -224,20 +336,21 @@ H.setup_config = function(config)
   vim.validate({
     setup_lsp_progress = { config.setup_lsp_progress, 'boolean' },
     sort = { config.sort, 'function', true },
+    window = { config.window, 'table' },
+  })
+
+  local is_table_or_callable = function(x) return type(x) == 'table' or vim.is_callable(x) end
+  vim.validate({
+    ['window.config'] = { config.window.config, is_table_or_callable, 'table or callable' },
+    ['window.winblend'] = { config.window.winblend, 'number' },
   })
 
   return config
 end
 
-H.apply_config = function(config)
-  MiniNotify.config = config
+H.apply_config = function(config) MiniNotify.config = config end
 
-  if config.setup_lsp_progress then
-    -- TODO
-  end
-end
-
-H.create_autocommands = function()
+H.create_autocommands = function(config)
   local augroup = vim.api.nvim_create_augroup('MiniNotify', {})
 
   local au = function(event, pattern, callback, desc)
@@ -245,10 +358,146 @@ H.create_autocommands = function()
   end
 
   au('TabEnter', '*', function() MiniNotify.refresh() end, 'Refresh in notifications in new tabpage')
+
+  if config.setup_lsp_progress then
+    -- TODO
+  end
+end
+
+--stylua: ignore
+H.create_default_hl = function()
+  local hi = function(name, opts)
+    opts.default = true
+    vim.api.nvim_set_hl(0, name, opts)
+  end
+
+  hi('MiniNotifyBorder', { link = 'FloatBorder' })
+  hi('MiniNotifyNormal', { link = 'NormalFloat' })
+  hi('MiniNotifyTitle',  { link = 'FloatTitle'  })
 end
 
 H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniNotify.config, vim.b.mininotify_config or {}, config or {})
+end
+
+-- Buffer ---------------------------------------------------------------------
+H.buffer_create = function()
+  local buf_id = vim.api.nvim_create_buf(false, true)
+  -- Close if this buffer becomes current
+  vim.api.nvim_create_autocmd('BufEnter', { buffer = buf_id, callback = function() MiniNotify.clear() end })
+  return buf_id
+end
+
+H.buffer_refresh = function(buf_id, notif_arr)
+  local ns_id = H.ns_id.highlight
+
+  -- Ensure clear buffer
+  vim.api.nvim_buf_clear_namespace(buf_id, ns_id, 0, -1)
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, {})
+
+  -- Compute lines and highlight regions
+  local lines, highlights = {}, {}
+  for _, notif in ipairs(notif_arr) do
+    local notif_lines = vim.split(notif.msg, '\n')
+    for _, l in ipairs(notif_lines) do
+      table.insert(lines, l)
+    end
+    table.insert(highlights, { group = notif.hl_group, from_line = #lines - #notif_lines + 1, to_line = #lines })
+    -- Separate with empty lines
+    table.insert(lines, '')
+  end
+  -- Don't keep last empty line
+  table.remove(lines, #lines)
+
+  -- Set lines and highlighting
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, lines)
+  local extmark_opts = { end_col = 0, hl_eol = true, hl_mode = 'combine' }
+  for _, hi_data in ipairs(highlights) do
+    extmark_opts.end_row, extmark_opts.hl_group = hi_data.to_line, hi_data.group
+    vim.api.nvim_buf_set_extmark(buf_id, ns_id, hi_data.from_line - 1, 0, extmark_opts)
+  end
+end
+
+H.buffer_get_width = function(buf_id)
+  local lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
+  local res = 0
+  for _, l in ipairs(lines) do
+    res = math.max(res, vim.fn.strdisplaywidth(l))
+  end
+  return res
+end
+
+H.buffer_default_dimensions = function(buf_id)
+  local line_widths = vim.tbl_map(vim.fn.strdisplaywidth, vim.api.nvim_buf_get_lines(buf_id, 0, -1, true))
+
+  -- Compute width so as to fit all lines
+  local width = 0
+  for _, l_w in ipairs(line_widths) do
+    width = math.max(width, l_w)
+  end
+  -- - Limit from above for better visuals
+  width = math.min(width, math.floor(0.382 * vim.o.columns))
+
+  -- Compute height based on the width so as to fit all lines with 'wrap' on
+  local height = 0
+  for _, l_w in ipairs(line_widths) do
+    height = height + math.floor(math.max(l_w - 1, 0) / width) + 1
+  end
+
+  return width, height
+end
+
+-- Window ---------------------------------------------------------------------
+H.window_open = function(buf_id)
+  local config = H.window_compute_config(buf_id, true)
+  local win_id = vim.api.nvim_open_win(buf_id, false, config)
+
+  vim.wo[win_id].foldenable = false
+  vim.wo[win_id].wrap = true
+  vim.wo[win_id].winblend = H.get_config().window.winblend
+
+  -- Neovim=0.7 doesn't support invalid highlight groups in 'winhighlight'
+  vim.wo[win_id].winhighlight = 'NormalFloat:MiniNotifyNormal,FloatBorder:MiniNotifyBorder'
+    .. (vim.fn.has('nvim-0.8') == 1 and ',FloatTitle:MiniNotifyTitle' or '')
+
+  return win_id
+end
+
+H.window_refresh = function()
+  local win_id = H.cache.win_id
+  local buf_id = vim.api.nvim_win_get_buf(win_id)
+  local new_config = H.window_compute_config(buf_id)
+  vim.api.nvim_win_set_config(win_id, new_config)
+end
+
+H.window_compute_config = function(buf_id, is_for_open)
+  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local has_statusline = vim.o.laststatus > 0
+  local max_height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0)
+  local max_width = vim.o.columns
+
+  local default_config = { relative = 'editor', style = 'minimal', noautocmd = is_for_open, zindex = 999 }
+  default_config.anchor, default_config.col, default_config.row = 'NE', vim.o.columns, has_tabline and 1 or 0
+  default_config.width, default_config.height = H.buffer_default_dimensions(buf_id)
+  default_config.border = 'single'
+  -- Make it focusable to close after it is focused (like after mouse click)
+  default_config.focusable = true
+
+  local win_config = H.get_config().window.config
+  if vim.is_callable(win_config) then win_config = win_config(buf_id) end
+  local config = vim.tbl_deep_extend('force', default_config, win_config or {})
+
+  -- Tweak config values to ensure they are proper, accounting for border
+  local offset = config.border == 'none' and 0 or 2
+  config.height = math.min(config.height, max_height - offset)
+  config.width = math.min(config.width, max_width - offset)
+
+  return config
+end
+
+H.window_close = function()
+  if H.is_valid_win(H.cache.win_id) then vim.api.nvim_win_close(H.cache.win_id, true) end
+  H.cache.win_id = nil
 end
 
 -- Notifications --------------------------------------------------------------
@@ -262,6 +511,24 @@ end
 
 H.validate_hl_group = function(x)
   if type(x) ~= 'string' then H.error('`hl_group` should be string.') end
+end
+
+H.is_notification = function(x)
+  return type(x) == 'table'
+    and type(x.msg) == 'string'
+    and vim.log.levels[x.level] ~= nil
+    and type(x.hl_group) == 'string'
+    and type(x.ts_add) == 'number'
+    and type(x.ts_update) == 'number'
+    and (x.ts_remove == nil or type(x.ts_remove) == 'number')
+end
+
+H.is_notification_array = function(x)
+  if not vim.tbl_islist(x) then return false end
+  for _, y in ipairs(x) do
+    if not H.is_notification(y) then return false end
+  end
+  return true
 end
 
 H.notif_compare = function(a, b)
