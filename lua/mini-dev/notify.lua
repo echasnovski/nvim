@@ -1,12 +1,12 @@
 -- TODO:
 --
 -- Code:
--- - Auto set up for LSP progress.
 --
 -- Docs:
 --
 -- Tests:
 -- - Handles width computation for empty lines inside notification.
+-- - Handles empty string message.
 
 --- *mini.notify* Show notifications
 --- *MiniNotify*
@@ -116,12 +116,40 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text # General info ~
+---@text # LSP progress ~
+---
+--- `config.lsp_progress` defines automated notifications for LSP progress.
+--- A progress is shown as single updating notification containing all
+--- information about the progress.
+--- It is done inside |MiniNotify.setup()| via setting |lsp-handler| for
+--- "$/progress" method. Note: LSP handler prior to setting up this module
+--- is saved and executed inside new handler.
+---
+--- `lsp_progress.enable` is a boolean indicating whether LSP progress should
+--- be shown in notifications. Can be disabled in current session.
+--- Default: `true`.
+---
+--- `lsp_progress.duration_last` is a number of milliseconds for the last
+--- notification message to be shown on screen before removing it.
+--- Default: 1000.
+---
+--- Notes:
+--- - This respects previously set handler by saving and calling it.
+--- - Overrding `vim.lsp.handlers` for "$/progress" method disables notifications.
+---
+--- # Sort ~
+---
+--- `config.sort` is a function which takes array of notification objects
+--- (see |MiniNotify-specification|) and returns an array of similar objects.
+--- It can be used to define custom order and filter for notifications to be
+--- shown simultaneously.
+--- Default: `nil` for |MiniNotify.default_sort()|.
+---
 --- # Window ~
 ---
 --- `config.window` defines behavior of notification window.
 ---
---- `config.window.config` is a table defining floating window characteristics
+--- `window.config` is a table defining floating window characteristics
 --- or a callable returning such table (will be called with identifier of
 --- window's buffer already showing notifications). It should have the same
 --- structure as in |nvim_open_win()|. It has the following default values:
@@ -129,9 +157,18 @@ end
 --- - `height` is chosen to fit buffer content with enabled 'wrap'.
 --- - `anchor`, `col`, and `row` are "NE", 'columns', and 0 or 1 (depending on tabline).
 --- - `zindex` is 999 to be as much on top as reasonably possible.
+---
+--- `window.winblend` defines 'winblend' value for notification window.
+--- Default: 25.
 MiniNotify.config = {
-  -- Whether to set up notifications about LSP progress
-  setup_lsp_progress = true,
+  -- Notifications about LSP progress
+  lsp_progress = {
+    -- Whether to enable showing them
+    enable = true,
+
+    -- Duration (in ms) of how long last message should be shown
+    duration_last = 1000,
+  },
 
   -- Function which orders notification array from most to least important
   -- By default orders first by level and then by update timestamp
@@ -159,12 +196,12 @@ MiniNotify.make_notify = function(opts)
 
   --stylua: ignore
   local default_opts = {
-    ERROR = { timeout = 10000, hl = 'DiagnosticFloatingError' },
-    WARN  = { timeout = 10000, hl = 'DiagnosticFloatingWarn'  },
-    INFO  = { timeout = 10000, hl = 'DiagnosticFloatingInfo'  },
-    DEBUG = { timeout = 0,     hl = 'DiagnosticFloatingHint'  },
-    TRACE = { timeout = 0,     hl = 'DiagnosticFloatingOk'    },
-    OFF   = { timeout = 0,     hl = 'MiniNotifyNormal'        },
+    ERROR = { timeout = 5000, hl = 'DiagnosticError'  },
+    WARN  = { timeout = 5000, hl = 'DiagnosticWarn'   },
+    INFO  = { timeout = 5000, hl = 'DiagnosticInfo'   },
+    DEBUG = { timeout = 0,    hl = 'DiagnosticHint'   },
+    TRACE = { timeout = 0,    hl = 'DiagnosticOk'     },
+    OFF   = { timeout = 0,    hl = 'MiniNotifyNormal' },
   }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
@@ -230,6 +267,7 @@ MiniNotify.update = function(id, new_data)
   MiniNotify.refresh()
 end
 
+---@param id number|nil
 MiniNotify.remove = function(id)
   local notif = H.active[id]
   if notif == nil then return end
@@ -273,6 +311,9 @@ MiniNotify.refresh = function()
     H.window_refresh()
   end
 
+  -- Redraw
+  vim.cmd('redraw')
+
   -- Update cache
   H.cache.buf_id, H.cache.win_id = buf_id, win_id
 end
@@ -291,6 +332,7 @@ MiniNotify.get_history = function() return vim.deepcopy(H.history) end
 MiniNotify.show_history = function()
   local buf_id = vim.api.nvim_create_buf(true, true)
   local notif_arr = MiniNotify.get_history()
+  table.sort(notif_arr, function(a, b) return a.ts_update < b.ts_update end)
   H.buffer_refresh(buf_id, notif_arr)
   vim.api.nvim_win_set_buf(0, buf_id)
 end
@@ -309,6 +351,9 @@ H.active = {}
 
 -- History of all notifications in order they are created
 H.history = {}
+
+-- Map of LSP progress process id to notification data
+H.lsp_progress = {}
 
 -- Priorities of levels
 H.level_priority = { ERROR = 6, WARN = 5, INFO = 4, DEBUG = 3, TRACE = 2, OFF = 1 }
@@ -334,13 +379,15 @@ H.setup_config = function(config)
   config = vim.tbl_deep_extend('force', vim.deepcopy(H.default_config), config or {})
 
   vim.validate({
-    setup_lsp_progress = { config.setup_lsp_progress, 'boolean' },
+    lsp_progress = { config.lsp_progress, 'table' },
     sort = { config.sort, 'function', true },
     window = { config.window, 'table' },
   })
 
   local is_table_or_callable = function(x) return type(x) == 'table' or vim.is_callable(x) end
   vim.validate({
+    ['lsp_progress.enable'] = { config.lsp_progress.enable, 'boolean' },
+    ['lsp_progress.duration_last'] = { config.lsp_progress.duration_last, 'number' },
     ['window.config'] = { config.window.config, is_table_or_callable, 'table or callable' },
     ['window.winblend'] = { config.window.winblend, 'number' },
   })
@@ -348,7 +395,10 @@ H.setup_config = function(config)
   return config
 end
 
-H.apply_config = function(config) MiniNotify.config = config end
+H.apply_config = function(config)
+  MiniNotify.config = config
+  if config.lsp_progress.enable then vim.lsp.handlers['$/progress'] = H.notify_lsp_progress end
+end
 
 H.create_autocommands = function(config)
   local augroup = vim.api.nvim_create_augroup('MiniNotify', {})
@@ -358,10 +408,6 @@ H.create_autocommands = function(config)
   end
 
   au('TabEnter', '*', function() MiniNotify.refresh() end, 'Refresh in notifications in new tabpage')
-
-  if config.setup_lsp_progress then
-    -- TODO
-  end
 end
 
 --stylua: ignore
@@ -380,11 +426,67 @@ H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniNotify.config, vim.b.mininotify_config or {}, config or {})
 end
 
+-- LSP progress ---------------------------------------------------------------
+-- Cache original handler only once (to avoid infinite loop)
+if vim.lsp.handlers['$/progress before mini.notify'] == nil then
+  vim.lsp.handlers['"$/progress" before mini.notify'] = vim.lsp.handlers['$/progress']
+end
+
+H.notify_lsp_progress = function(err, result, ctx, config)
+  -- Make basic response processing. First call original LSP handler.
+  -- On Neovim>=0.10 this is crucial to not override `LspProgress` event.
+  if vim.is_callable(vim.lsp.handlers['"$/progress" before mini.notify']) then
+    vim.lsp.handlers['"$/progress" before mini.notify'](err, result, ctx, config)
+  end
+
+  local lsp_progress_config = H.get_config().lsp_progress
+  if not lsp_progress_config.enable then return end
+
+  if err ~= nil then return vim.notify(vim.inspect(err), vim.log.levels.ERROR) end
+  if result == nil then return end
+  local value = result.value
+
+  -- Construct LSP progress id
+  local client_name = vim.lsp.get_client_by_id(ctx.client_id).name
+  if type(client_name) ~= 'string' then client_name = string.format('LSP[id=%s]', ctx.client_id) end
+
+  local buf_id = ctx.bufnr or vim.api.nvim_get_current_buf()
+  local lsp_progress_id = buf_id .. client_name .. (result.token or '')
+  local progress_data = H.lsp_progress[lsp_progress_id] or {}
+
+  -- Stop notifications without update on progress end (for cleaner history).
+  -- Delay removal to not cause flicker.
+  if value.kind == 'end' then
+    H.lsp_progress[lsp_progress_id] = nil
+    local delay = math.max(lsp_progress_config.duration_last, 0)
+    vim.defer_fn(function() MiniNotify.remove(progress_data.notif_id) end, delay)
+    return
+  end
+
+  -- Cache title because it is only supplied on 'begin'
+  if value.kind == 'begin' then progress_data.title = value.title end
+
+  -- Make notification
+  --stylua: ignore
+  local msg = string.format(
+    '%s: %s %s (%s%%)',
+    client_name, progress_data.title or '', value.message or '', value.percentage or ''
+  )
+
+  if progress_data.notif_id == nil then
+    progress_data.notif_id = MiniNotify.add(msg)
+  else
+    MiniNotify.update(progress_data.notif_id, { msg = msg })
+  end
+
+  -- Cache progress data
+  H.lsp_progress[lsp_progress_id] = progress_data
+end
+
 -- Buffer ---------------------------------------------------------------------
 H.buffer_create = function()
   local buf_id = vim.api.nvim_create_buf(false, true)
-  -- Close if this buffer becomes current
-  vim.api.nvim_create_autocmd('BufEnter', { buffer = buf_id, callback = function() MiniNotify.clear() end })
+  vim.bo[buf_id].filetype = 'mininotify'
   return buf_id
 end
 
@@ -431,7 +533,7 @@ H.buffer_default_dimensions = function(buf_id)
   local line_widths = vim.tbl_map(vim.fn.strdisplaywidth, vim.api.nvim_buf_get_lines(buf_id, 0, -1, true))
 
   -- Compute width so as to fit all lines
-  local width = 0
+  local width = 1
   for _, l_w in ipairs(line_widths) do
     width = math.max(width, l_w)
   end
@@ -480,8 +582,8 @@ H.window_compute_config = function(buf_id, is_for_open)
   default_config.anchor, default_config.col, default_config.row = 'NE', vim.o.columns, has_tabline and 1 or 0
   default_config.width, default_config.height = H.buffer_default_dimensions(buf_id)
   default_config.border = 'single'
-  -- Make it focusable to close after it is focused (like after mouse click)
-  default_config.focusable = true
+  -- Don't allow focus to not disrupt window navigation
+  default_config.focusable = false
 
   local win_config = H.get_config().window.config
   if vim.is_callable(win_config) then win_config = win_config(buf_id) end

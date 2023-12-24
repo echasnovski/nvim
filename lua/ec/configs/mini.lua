@@ -3,6 +3,11 @@ local now, later = EC.now, EC.later
 -- Step one -------------------------------------------------------------------
 now(function() vim.cmd('colorscheme randomhue') end)
 
+now(function()
+  require('mini-dev.notify').setup()
+  vim.notify = MiniNotify.make_notify()
+end)
+
 now(function() require('mini.sessions').setup({ directory = vim.fn.stdpath('config') .. '/misc/sessions' }) end)
 
 now(function() require('mini.starter').setup() end)
