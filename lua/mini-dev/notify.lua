@@ -1,13 +1,3 @@
--- TODO:
---
--- Code:
---
--- Docs:
---
--- Tests:
--- - Handles width computation for empty lines inside notification.
--- - Handles empty string message.
-
 --- *mini.notify* Show notifications
 --- *MiniNotify*
 ---
@@ -21,12 +11,12 @@
 ---
 --- - Manage notifications (add, update, remove, clear).
 ---
---- - Track history which can be accessed with |MiniNotify.get_history()|
----   and shown with |MiniNotify.show_history()|.
----
 --- - |vim.notify()| wrapper generator (see |MiniNotify.make_notify()|).
 ---
 --- - Automated show of LSP progress report.
+---
+--- - Track history which can be accessed with |MiniNotify.get_all()|
+---   and shown with |MiniNotify.show_history()|.
 ---
 --- # Setup ~
 ---
@@ -92,8 +82,8 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
-MiniNotify = {}
-H = {}
+local MiniNotify = {}
+local H = {}
 
 --- Module setup
 ---
@@ -235,26 +225,26 @@ MiniNotify.config = {
 ---   -- Defaults
 ---   vim.notify = require('mini.notify').make_notify()
 ---
----   -- Change timeout for errors to be shown longer
----   local opts = { ERROR = { timeout = 10000 } }
+---   -- Change duration for errors to be shown longer
+---   local opts = { ERROR = { duration = 10000 } }
 ---   vim.notify = require('mini.notify').make_notify(opts)
 --- <
 ---@param opts table|nil Options to configure behavior of notification `level`
 ---   (as in |MiniNotfiy.add()|). Fields are the same as names of `vim.log.levels`
 ---   with values being tables with possible fields:
----     - <timeout> `(number)` - duration (in ms) of how much a notification
+---     - <duration> `(number)` - duration (in ms) of how much a notification
 ---       should be shown.
 ---     - <hl_group> `(string)` - highlight group of notification.
 ---   Only data different to default can be supplied.
 ---
 ---   Default: >
 ---     {
----       ERROR = { timeout = 5000, hl_group = 'DiagnosticError'  },
----       WARN  = { timeout = 5000, hl_group = 'DiagnosticWarn'   },
----       INFO  = { timeout = 5000, hl_group = 'DiagnosticInfo'   },
----       DEBUG = { timeout = 0,    hl_group = 'DiagnosticHint'   },
----       TRACE = { timeout = 0,    hl_group = 'DiagnosticOk'     },
----       OFF   = { timeout = 0,    hl_group = 'MiniNotifyNormal' },
+---       ERROR = { duration = 5000, hl_group = 'DiagnosticError'  },
+---       WARN  = { duration = 5000, hl_group = 'DiagnosticWarn'   },
+---       INFO  = { duration = 5000, hl_group = 'DiagnosticInfo'   },
+---       DEBUG = { duration = 0,    hl_group = 'DiagnosticHint'   },
+---       TRACE = { duration = 0,    hl_group = 'DiagnosticOk'     },
+---       OFF   = { duration = 0,    hl_group = 'MiniNotifyNormal' },
 ---     }
 MiniNotify.make_notify = function(opts)
   local level_names = {}
@@ -264,18 +254,18 @@ MiniNotify.make_notify = function(opts)
 
   --stylua: ignore
   local default_opts = {
-    ERROR = { timeout = 5000, hl_group = 'DiagnosticError'  },
-    WARN  = { timeout = 5000, hl_group = 'DiagnosticWarn'   },
-    INFO  = { timeout = 5000, hl_group = 'DiagnosticInfo'   },
-    DEBUG = { timeout = 0,    hl_group = 'DiagnosticHint'   },
-    TRACE = { timeout = 0,    hl_group = 'DiagnosticOk'     },
-    OFF   = { timeout = 0,    hl_group = 'MiniNotifyNormal' },
+    ERROR = { duration = 5000, hl_group = 'DiagnosticError'  },
+    WARN  = { duration = 5000, hl_group = 'DiagnosticWarn'   },
+    INFO  = { duration = 5000, hl_group = 'DiagnosticInfo'   },
+    DEBUG = { duration = 0,    hl_group = 'DiagnosticHint'   },
+    TRACE = { duration = 0,    hl_group = 'DiagnosticOk'     },
+    OFF   = { duration = 0,    hl_group = 'MiniNotifyNormal' },
   }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
   for _, val in pairs(opts) do
     if type(val) ~= 'table' then H.error('Level data should be table.') end
-    if type(val.timeout) ~= 'number' then H.error('`timeout` in level data should be number.') end
+    if type(val.duration) ~= 'number' then H.error('`duration` in level data should be number.') end
     if type(val.hl_group) ~= 'string' then H.error('`hl_group` in level data should be string.') end
   end
 
@@ -285,10 +275,10 @@ MiniNotify.make_notify = function(opts)
     if level_name == nil then H.error('Only valid values of `vim.log.levels` are supported.') end
 
     local level_data = opts[level_name]
-    if level_data.timeout <= 0 then return end
+    if level_data.duration <= 0 then return end
 
     local id = MiniNotify.add(msg, level_name, level_data.hl_group)
-    vim.defer_fn(function() MiniNotify.remove(id) end, level_data.timeout)
+    vim.defer_fn(function() MiniNotify.remove(id) end, level_data.duration)
   end
 end
 
@@ -326,7 +316,7 @@ end
 
 --- Update active notification
 ---
---- Modify notification data.
+--- Modify data of active notification.
 ---
 ---@param id number Identifier of currently active notification as returned
 ---   by |MiniNotify.add()|.
@@ -354,7 +344,8 @@ end
 --- If notification is active, make it not active (by setting `ts_remove` field).
 --- If not active, do nothing.
 ---
----@param id number|nil Identifier of notification. Can be `nil` to do nothing.
+---@param id number|nil Identifier of previously added notification.
+---   If not, nothing is done (silently).
 MiniNotify.remove = function(id)
   local notif = H.active[id]
   if notif == nil then return end
@@ -386,6 +377,8 @@ end
 --- - Apply `config.content.format` to each element of notification array.
 --- - Construct content from notifications and show them in a window.
 MiniNotify.refresh = function()
+  if H.is_disabled() then H.window_close() end
+
   -- Prepare array of active notifications
   local notif_arr = vim.deepcopy(vim.tbl_values(H.active))
   local config_content = H.get_config().content
@@ -419,25 +412,28 @@ MiniNotify.refresh = function()
   H.cache.buf_id, H.cache.win_id = buf_id, win_id
 end
 
---- Get history
+--- Get previously added notification by id
 ---
---- Get array of used notifications with keys being notification identifiers.
+---@param id number Identifier of notification.
 ---
---- Can be used to get any notification by its id or only active notifications.
---- Examples: >
+---@return table Notification object (see |MiniNotify-specification|).
+MiniNotify.get = function(id) return vim.deepcopy(H.history[id]) end
+
+--- Get all previously added notifications
 ---
----   -- Get notification with identifier `id`
----   MiniNotify.get_history()[id]
+--- Get map of used notifications with keys being notification identifiers.
+---
+--- Can be used to get only active notifications. Example: >
 ---
 ---   -- Get active notifications
 ---   vim.tbl_filter(
 ---     function(notif) return notif.ts_remove == nil end,
----     MiniNotify.get_history()
+---     MiniNotify.get_all()
 ---   )
 --- <
----@return table Array of notification objects (see |MiniNotify-specification|).
----   Note: message is taken from last valid update.
-MiniNotify.get_history = function() return vim.deepcopy(H.history) end
+---@return table Map with notification object values (see |MiniNotify-specification|).
+---   Note: messages are taken from last valid update.
+MiniNotify.get_all = function() return vim.deepcopy(H.history) end
 
 --- Show history
 ---
@@ -449,7 +445,7 @@ MiniNotify.get_history = function() return vim.deepcopy(H.history) end
 MiniNotify.show_history = function()
   -- Prepare content
   local config_content = H.get_config().content
-  local notif_arr = MiniNotify.get_history()
+  local notif_arr = MiniNotify.get_all()
   table.sort(notif_arr, function(a, b) return a.ts_update < b.ts_update end)
   local format = vim.is_callable(config_content.format) and config_content.format or MiniNotify.default_format
   notif_arr = H.notif_apply_format(notif_arr, format)
@@ -576,6 +572,8 @@ H.create_default_hl = function()
   hi('MiniNotifyNormal', { link = 'NormalFloat' })
   hi('MiniNotifyTitle',  { link = 'FloatTitle'  })
 end
+
+H.is_disabled = function() return vim.g.mininotify_disable == true or vim.b.mininotify_disable == true end
 
 H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniNotify.config, vim.b.mininotify_config or {}, config or {})
