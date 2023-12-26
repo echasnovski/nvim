@@ -137,12 +137,19 @@ end
 --- - This respects previously set handler by saving and calling it.
 --- - Overrding `vim.lsp.handlers` for "$/progress" method disables notifications.
 ---
---- # Sort ~
+--- # Content ~
 ---
---- `config.sort` is a function which takes array of notification objects
+--- `config.content` defines how notifications are shown.
+---
+--- `content.format` is a function which takes single notification object
+--- (see |MiniNotify-specification|) and returns a string to be used directly
+--- in notification window.
+---
+--- `content.sort` is a function which takes array of notification objects
 --- (see |MiniNotify-specification|) and returns an array of similar objects.
---- It can be used to define custom order and filter for notifications to be
+--- It can be used to define custom order and filter for notifications which are
 --- shown simultaneously.
+--- Note: Input contains notifications before applying `content.format`.
 --- Default: `nil` for |MiniNotify.default_sort()|.
 ---
 --- # Window ~
@@ -170,8 +177,17 @@ MiniNotify.config = {
     duration_last = 1000,
   },
 
-  -- Function which orders notification array from most to least important
-  -- By default orders first by level and then by update timestamp
+  -- Content modification
+  content = {
+    -- Function which formats the notification message
+    -- By default prepends message with notification time
+    format = nil,
+
+    -- Function which orders notification array from most to least important
+    -- By default orders first by level and then by update timestamp
+    sort = nil,
+  },
+
   sort = nil,
 
   -- Window options
@@ -232,7 +248,7 @@ MiniNotify.add = function(msg, level, hl_group)
   hl_group = hl_group or 'MiniNotifyNormal'
   H.validate_hl_group(hl_group)
 
-  local cur_ts = vim.loop.hrtime()
+  local cur_ts = H.get_timestamp()
   local new_notif = { msg = msg, level = level, hl_group = hl_group, ts_add = cur_ts, ts_update = cur_ts }
 
   local new_id = #H.history + 1
@@ -262,7 +278,7 @@ MiniNotify.update = function(id, new_data)
   notif.msg = new_data.msg or notif.msg
   notif.level = new_data.level or notif.level
   notif.hl_group = new_data.hl_group or notif.hl_group
-  notif.ts_update = vim.loop.hrtime()
+  notif.ts_update = H.get_timestamp()
 
   MiniNotify.refresh()
 end
@@ -271,14 +287,14 @@ end
 MiniNotify.remove = function(id)
   local notif = H.active[id]
   if notif == nil then return end
-  notif.ts_remove = vim.loop.hrtime()
+  notif.ts_remove = H.get_timestamp()
   H.active[id] = nil
 
   MiniNotify.refresh()
 end
 
 MiniNotify.clear = function()
-  local cur_ts = vim.loop.hrtime()
+  local cur_ts = H.get_timestamp()
   for id, _ in pairs(H.active) do
     H.active[id].ts_remove = cur_ts
   end
@@ -290,12 +306,15 @@ end
 MiniNotify.refresh = function()
   -- Prepare array of active notifications
   local notif_arr = vim.deepcopy(vim.tbl_values(H.active))
-  local sort = H.get_config().sort
-  if not vim.is_callable(sort) then sort = MiniNotify.default_sort end
-  notif_arr = sort(notif_arr)
+  local config_content = H.get_config().content
 
-  if not H.is_notification_array(notif_arr) then H.error('Output of `config.sort` should be an notification array.') end
+  local sort = vim.is_callable(config_content.sort) and config_content.sort or MiniNotify.default_sort
+  notif_arr = sort(notif_arr)
+  if not H.is_notification_array(notif_arr) then H.error('Output of `content.sort` should be notification array.') end
   if #notif_arr == 0 then return H.window_close() end
+
+  local format = vim.is_callable(config_content.format) and config_content.format or MiniNotify.default_format
+  notif_arr = H.notif_apply_format(notif_arr, format)
 
   -- Refresh buffer
   local buf_id = H.cache.buf_id
@@ -320,21 +339,54 @@ end
 
 --- Get history
 ---
---- In order from oldest to newest based on the creation time.
---- Content is based on the last valid update.
---- Can be used to get any notification by its id or only active notifications
---- by checking if they were removed (`ts_remove ~= nil`).
+--- Get array of used notifications with keys being notifications identifiers.
+---
+--- Can be used to get any notification by its id or only active notifications.
+--- Examples: >
+---
+---   -- Get notification with identifier `id`
+---   MiniNotify.get_history()[id]
+---
+---   -- Get active notifications
+---   vim.tbl_filter(
+---     function(notif) return notif.ts_remove == nil end,
+---     MiniNotify.get_history()
+---   )
+--- <
+---@return table Array of notification objects (see |MiniNotify-specification|).
+---   Note: message is taken from last valid update.
 MiniNotify.get_history = function() return vim.deepcopy(H.history) end
 
 --- Show history
 ---
---- Open a scratch buffer with all history.
+--- Open or reuse a scratch buffer with all previously shown notifications.
+--- Note:
+--- - Content is ordered from oldest to newest based on latest update time.
+--- - Message is formatted with `config.content.format`.
 MiniNotify.show_history = function()
-  local buf_id = vim.api.nvim_create_buf(true, true)
+  -- Prepare content
+  local config_content = H.get_config().content
   local notif_arr = MiniNotify.get_history()
   table.sort(notif_arr, function(a, b) return a.ts_update < b.ts_update end)
+  local format = vim.is_callable(config_content.format) and config_content.format or MiniNotify.default_format
+  notif_arr = H.notif_apply_format(notif_arr, format)
+
+  -- Show content in a reusable buffer
+  local buf_id
+  for _, id in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[id].filetype == 'mininotify-history' then buf_id = id end
+  end
+  if buf_id == nil then
+    buf_id = vim.api.nvim_create_buf(true, true)
+    vim.bo[buf_id].filetype = 'mininotify-history'
+  end
   H.buffer_refresh(buf_id, notif_arr)
   vim.api.nvim_win_set_buf(0, buf_id)
+end
+
+MiniNotify.default_format = function(notif)
+  local time = vim.fn.strftime('%H:%M:%S', math.floor(notif.ts_update))
+  return string.format('(%s) %s', time, notif.msg)
 end
 
 MiniNotify.default_sort = function(notif_arr)
@@ -380,12 +432,14 @@ H.setup_config = function(config)
 
   vim.validate({
     lsp_progress = { config.lsp_progress, 'table' },
-    sort = { config.sort, 'function', true },
+    content = { config.content, 'table' },
     window = { config.window, 'table' },
   })
 
   local is_table_or_callable = function(x) return type(x) == 'table' or vim.is_callable(x) end
   vim.validate({
+    ['content.format'] = { config.content.format, 'function', true },
+    ['content.sort'] = { config.content.sort, 'function', true },
     ['lsp_progress.enable'] = { config.lsp_progress.enable, 'boolean' },
     ['lsp_progress.duration_last'] = { config.lsp_progress.duration_last, 'number' },
     ['window.config'] = { config.window.config, is_table_or_callable, 'table or callable' },
@@ -429,14 +483,14 @@ end
 -- LSP progress ---------------------------------------------------------------
 -- Cache original handler only once (to avoid infinite loop)
 if vim.lsp.handlers['$/progress before mini.notify'] == nil then
-  vim.lsp.handlers['"$/progress" before mini.notify'] = vim.lsp.handlers['$/progress']
+  vim.lsp.handlers['$/progress before mini.notify'] = vim.lsp.handlers['$/progress']
 end
 
 H.notify_lsp_progress = function(err, result, ctx, config)
   -- Make basic response processing. First call original LSP handler.
   -- On Neovim>=0.10 this is crucial to not override `LspProgress` event.
   if vim.is_callable(vim.lsp.handlers['"$/progress" before mini.notify']) then
-    vim.lsp.handlers['"$/progress" before mini.notify'](err, result, ctx, config)
+    vim.lsp.handlers['$/progress before mini.notify'](err, result, ctx, config)
   end
 
   local lsp_progress_config = H.get_config().lsp_progress
@@ -505,11 +559,7 @@ H.buffer_refresh = function(buf_id, notif_arr)
       table.insert(lines, l)
     end
     table.insert(highlights, { group = notif.hl_group, from_line = #lines - #notif_lines + 1, to_line = #lines })
-    -- Separate with empty lines
-    table.insert(lines, '')
   end
-  -- Don't keep last empty line
-  table.remove(lines, #lines)
 
   -- Set lines and highlighting
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, true, lines)
@@ -633,6 +683,15 @@ H.is_notification_array = function(x)
   return true
 end
 
+H.notif_apply_format = function(notif_arr, format)
+  for _, notif in ipairs(notif_arr) do
+    local res = format(notif)
+    if type(res) ~= 'string' then H.error('Output of `content.format` should be string.') end
+    notif.msg = res
+  end
+  return notif_arr
+end
+
 H.notif_compare = function(a, b)
   local a_priority, b_priority = H.level_priority[a.level], H.level_priority[b.level]
   return a_priority > b_priority or (a_priority == b_priority and a.ts_update > b.ts_update)
@@ -646,5 +705,11 @@ H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nv
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
 
 H.is_win_in_tabpage = function(win_id) return vim.api.nvim_win_get_tabpage(win_id) == vim.api.nvim_get_current_tabpage() end
+
+H.get_timestamp = function()
+  -- This is more acceptable for `vim.fn.strftime()` than `vim.loop.hrtime()`
+  local seconds, microseconds = vim.loop.gettimeofday()
+  return seconds + 0.000001 * microseconds
+end
 
 return MiniNotify
