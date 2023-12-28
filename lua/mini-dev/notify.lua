@@ -175,6 +175,8 @@ end
 --- structure as in |nvim_open_win()|. It has the following default values
 --- which show notifications in the upper right corner with upper limit on width:
 --- - `width` is chosen to fit buffer content but not more than 38.2% of 'columns'.
+---   To have higher maximum width, use function in `config.window` which computes
+---   dimensions inside of it (based on buffer content).
 --- - `height` is chosen to fit buffer content with enabled 'wrap'.
 --- - `anchor`, `col`, and `row` are "NE", 'columns', and 0 or 1 (depending on tabline).
 --- - `border` is "single".
@@ -263,7 +265,8 @@ MiniNotify.make_notify = function(opts)
   }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
 
-  for _, val in pairs(opts) do
+  for key, val in pairs(opts) do
+    if default_opts[key] == nil then H.error('Keys should be log level names.') end
     if type(val) ~= 'table' then H.error('Level data should be table.') end
     if type(val.duration) ~= 'number' then H.error('`duration` in level data should be number.') end
     if type(val.hl_group) ~= 'string' then H.error('`hl_group` in level data should be string.') end
@@ -377,7 +380,7 @@ end
 --- - Apply `config.content.format` to each element of notification array.
 --- - Construct content from notifications and show them in a window.
 MiniNotify.refresh = function()
-  if H.is_disabled() then H.window_close() end
+  if H.is_disabled() then return H.window_close() end
 
   -- Prepare array of active notifications
   local notif_arr = vim.deepcopy(vim.tbl_values(H.active))
@@ -402,7 +405,8 @@ MiniNotify.refresh = function()
     H.window_close()
     win_id = H.window_open(buf_id)
   else
-    H.window_refresh()
+    local new_config = H.window_compute_config(buf_id)
+    vim.api.nvim_win_set_config(win_id, new_config)
   end
 
   -- Redraw
@@ -548,7 +552,7 @@ end
 
 H.apply_config = function(config)
   MiniNotify.config = config
-  if config.lsp_progress.enable then vim.lsp.handlers['$/progress'] = H.notify_lsp_progress end
+  if config.lsp_progress.enable then vim.lsp.handlers['$/progress'] = H.lsp_progress_handler end
 end
 
 H.create_autocommands = function(config)
@@ -585,10 +589,10 @@ if vim.lsp.handlers['$/progress before mini.notify'] == nil then
   vim.lsp.handlers['$/progress before mini.notify'] = vim.lsp.handlers['$/progress']
 end
 
-H.notify_lsp_progress = function(err, result, ctx, config)
+H.lsp_progress_handler = function(err, result, ctx, config)
   -- Make basic response processing. First call original LSP handler.
   -- On Neovim>=0.10 this is crucial to not override `LspProgress` event.
-  if vim.is_callable(vim.lsp.handlers['"$/progress" before mini.notify']) then
+  if vim.is_callable(vim.lsp.handlers['$/progress before mini.notify']) then
     vim.lsp.handlers['$/progress before mini.notify'](err, result, ctx, config)
   end
 
@@ -596,7 +600,7 @@ H.notify_lsp_progress = function(err, result, ctx, config)
   if not lsp_progress_config.enable then return end
 
   if err ~= nil then return vim.notify(vim.inspect(err), vim.log.levels.ERROR) end
-  if result == nil then return end
+  if not (type(result) == 'table' and type(result.value) == 'table') then return end
   local value = result.value
 
   -- Construct LSP progress id
@@ -607,7 +611,11 @@ H.notify_lsp_progress = function(err, result, ctx, config)
   local lsp_progress_id = buf_id .. client_name .. (result.token or '')
   local progress_data = H.lsp_progress[lsp_progress_id] or {}
 
-  -- Stop notifications without update on progress end (for cleaner history).
+  -- Store percentage to be used if no new one was sent
+  progress_data.percentage = value.percentage or progress_data.percentage or 0
+
+  -- Stop notifications without update on progress end.
+  -- This usually results into a cleaner and more informative history.
   -- Delay removal to not cause flicker.
   if value.kind == 'end' then
     H.lsp_progress[lsp_progress_id] = nil
@@ -623,7 +631,7 @@ H.notify_lsp_progress = function(err, result, ctx, config)
   --stylua: ignore
   local msg = string.format(
     '%s: %s %s (%s%%)',
-    client_name, progress_data.title or '', value.message or '', value.percentage or ''
+    client_name, progress_data.title or '', value.message or '', progress_data.percentage
   )
 
   if progress_data.notif_id == nil then
@@ -669,15 +677,6 @@ H.buffer_refresh = function(buf_id, notif_arr)
   end
 end
 
-H.buffer_get_width = function(buf_id)
-  local lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
-  local res = 0
-  for _, l in ipairs(lines) do
-    res = math.max(res, vim.fn.strdisplaywidth(l))
-  end
-  return res
-end
-
 H.buffer_default_dimensions = function(buf_id)
   local line_widths = vim.tbl_map(vim.fn.strdisplaywidth, vim.api.nvim_buf_get_lines(buf_id, 0, -1, true))
 
@@ -712,13 +711,6 @@ H.window_open = function(buf_id)
     .. (vim.fn.has('nvim-0.8') == 1 and ',FloatTitle:MiniNotifyTitle' or '')
 
   return win_id
-end
-
-H.window_refresh = function()
-  local win_id = H.cache.win_id
-  local buf_id = vim.api.nvim_win_get_buf(win_id)
-  local new_config = H.window_compute_config(buf_id)
-  vim.api.nvim_win_set_config(win_id, new_config)
 end
 
 H.window_compute_config = function(buf_id, is_for_open)
