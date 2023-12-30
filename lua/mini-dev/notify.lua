@@ -149,8 +149,8 @@ end
 --- `config.lsp_progress` defines automated notifications for LSP progress.
 --- It is implemented as a single updating notification containing all
 --- information about the progress.
---- Setting up is done inside |MiniNotify.setup()| via setting |lsp-handler| for
---- "$/progress" method.
+--- Setting up is done inside |MiniNotify.setup()| via |vim.schedule()|'ed setting
+--- of |lsp-handler| for "$/progress" method.
 ---
 --- `lsp_progress.enable` is a boolean indicating whether LSP progress should
 --- be shown in notifications. Can be disabled in current session.
@@ -552,7 +552,18 @@ end
 
 H.apply_config = function(config)
   MiniNotify.config = config
-  if config.lsp_progress.enable then vim.lsp.handlers['$/progress'] = H.lsp_progress_handler end
+
+  if config.lsp_progress.enable then
+    -- Use `vim.schedule` to reduce startup time (sourcing `vim.lsp` is costly)
+    vim.schedule(function()
+      -- Cache original handler only once (to avoid infinite loop)
+      if vim.lsp.handlers['$/progress before mini.notify'] == nil then
+        vim.lsp.handlers['$/progress before mini.notify'] = vim.lsp.handlers['$/progress']
+      end
+
+      vim.lsp.handlers['$/progress'] = H.lsp_progress_handler
+    end)
+  end
 end
 
 H.create_autocommands = function(config)
@@ -584,11 +595,6 @@ H.get_config = function(config)
 end
 
 -- LSP progress ---------------------------------------------------------------
--- Cache original handler only once (to avoid infinite loop)
-if vim.lsp.handlers['$/progress before mini.notify'] == nil then
-  vim.lsp.handlers['$/progress before mini.notify'] = vim.lsp.handlers['$/progress']
-end
-
 H.lsp_progress_handler = function(err, result, ctx, config)
   -- Make basic response processing. First call original LSP handler.
   -- On Neovim>=0.10 this is crucial to not override `LspProgress` event.
