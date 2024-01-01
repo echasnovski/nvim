@@ -1,7 +1,7 @@
 local all_snippets = {
   ['if'] = 'if $1 then\n\t$0\nend',
-  ['ife'] = 'if $1 then\n\t$0\nelse\n\t$3\nend',
-  ['then'] = 'then\n\t$1\nend$0',
+  ['ife'] = 'if $1 then\n\t$0\nelse\n\t-- TODO\nend',
+  ['then'] = 'then\n\t$0\nend',
   ['eif'] = 'elseif $1 then\n\t$0\nend',
   ['  el'] = 'else\n$0',
   ['fun'] = 'function($1)\n\t$0\nend',
@@ -16,7 +16,7 @@ local all_snippets = {
   ['desc'] = "describe('$1', function()\n\t$0\nend)",
   ['it'] = "it('$1', function()\n\t$0\nend)",
   ['TS'] = "T['$1'] = new_set()$0",
-  ['T'] = "T['$1']['$2'] = function()\n\t$0\n\tMiniTest.skip()\nend",
+  ['T'] = "T['$1']['$2'] = function()\n\t$0MiniTest.skip()\nend",
 }
 
 local close_pumvisible = function()
