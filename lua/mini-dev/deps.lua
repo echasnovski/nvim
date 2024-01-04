@@ -2,12 +2,8 @@
 --
 -- Code:
 --
--- - Do not forget about stashing changes before `checkout()`.
---
--- - Make sure that `checkout()` does not create many snapshots in 'rollback'
---   after every call to `create()` (as is the case for initial config setup).
---   Either don't create those files during `create()` at all or think about if
---   there is a need for 'rollback' directory.
+-- - **REALLY** think about operating **only** on plugins which were added to
+--   current session. This shoudl simplify **A LOT**.
 --
 -- Docs:
 -- - Add examples of user commands in |MiniDeps-actions|.
@@ -98,7 +94,7 @@
 ---   Each file contains a log of fetched changes for later review.
 ---
 --- - `rollback` with history of automated snapshots. Each file is created
----   automatically before every run of |MiniDeps.checkout()|.
+---   automatically before (almost) every run of |MiniDeps.checkout()|.
 ---   This can be used together with |MiniDeps.checkout()| to roll back after
 ---   unfortunate update.
 ---@tag MiniDeps-directory-structure
@@ -323,11 +319,11 @@ end
 
 --- Create plugin
 ---
---- - If there is no directory present with `spec.name`:
----     - Execute `spec.hooks.pre_create`.
+--- - If there is no directory present with `opts.name`:
+---     - Execute `opts.hooks.pre_create`.
 ---     - Use `git clone` to clone plugin from its source URI into "pack/deps/opt".
----     - Execute `spec.hooks.post_create`.
----     - Run |MiniDeps.checkout()| with plugin's name.
+---     - Execute `opts.hooks.post_create`.
+---     - Checkout according to `opts.checkout`.
 ---
 ---@param source __deps_source
 ---@param opts __deps_spec_opts
@@ -336,22 +332,21 @@ MiniDeps.create = function(source, opts)
 
   -- Do not override already existing plugin
   local path, is_present = H.get_plugin_path(spec.name)
-  if is_present then return H.notify('Plugin ' .. vim.inspect(spec.name) .. ' already exists.', 'WARN') end
+  if is_present then return H.notify('Plugin `' .. spec.name .. '` already exists.', 'WARN') end
 
   -- Create
   H.maybe_exec(spec.hooks.pre_create)
 
   local command = H.git_commands.clone(spec.source, path)
-  local exit_msg = 'Done creating ' .. vim.inspect(spec.name)
+  local exit_msg = 'Done creating `' .. spec.name .. '`'
   local job = H.cli_new_job(command, vim.fn.getcwd(), exit_msg)
 
-  H.notify('(0/1) Start creating ' .. vim.inspect(spec.name) .. '.')
+  H.notify('(0/1) Start creating `' .. spec.name .. '`.')
   H.cli_run({ job })
 
   -- - Stop if there were errors
   if #job.err > 0 then
-    local msg = string.format('There were errors during creation of %s.\n%s', table.concat(job.err))
-    H.notify(msg, 'ERROR')
+    H.cli_show_err(job, string.format('creation of `%s`', spec.name))
     return
   end
 
@@ -404,52 +399,98 @@ end
 ---@param path string|nil A valid path on disk where to write snapshot file.
 ---   Default: `config.path.snapshot`.
 MiniDeps.snapshot = function(path)
-  -- TODO
+  path = path or H.full_path(H.get_config().path.snapshot)
+  if type(path) ~= 'string' then H.error('`path` should be string.') end
+
+  -- Create snapshot
+  local plugin_paths = H.get_all_plugin_paths()
+  local jobs = vim.tbl_map(function(p) return H.cli_new_job(H.git_commands.snapshot, p) end, plugin_paths)
+  H.cli_run(jobs)
+
+  local snapshot = {}
+  for i, job in ipairs(jobs) do
+    local name = vim.fn.fnamemodify(plugin_paths[i], ':t')
+    H.cli_show_err(job, 'creating snapshot for `' .. name .. '`')
+    local head_commit = H.cli_stream_tostring(job.out)
+    if #job.err == 0 and head_commit ~= '' then snapshot[name] = head_commit end
+  end
+
+  -- Write snapshot
+  if vim.tbl_count(snapshot) == 0 then return end
+  local lines = vim.split(vim.inspect(snapshot), '\n')
+  lines[1] = 'return ' .. lines[1]
+  vim.fn.mkdir(vim.fn.fnamemodify(path, ':h'), 'p')
+  vim.fn.writefile(lines, path)
+
+  H.notify('Created snapshot at ' .. vim.inspect(path) .. '.')
 end
 
 --- Checkout plugins
 ---
---- - If table input, treat it as a map of checkout targets for plugin names.
----   Fields are plugin names and values are checkout targets as
----   in |MiniDeps-plugin-specification|.
----   Notes:
----   - Only present on disk plugins are checked out. That is, plugin names
----     which are not present on disk are ignored.
+--- - Create rollback snapshot with |MiniDeps.snapshot()|. It is created inside
+---   "rollback" directory (see |MiniDeps-directory-structure|) with current
+---   timestamp as name. Note: rollback snapshot is not created if checkout
+---   `target` is itself a path to a rollback snapshot file.
 ---
----   Example of checkout target: >
----     { plugin_1 = true, plugin_2 = false, plugin_3 = 'main' }
+--- - Execute `pre_change` hook for every plugin about to be checked out if it
+---   is registered in current session.
+---
+--- - Checkout according to `target` which can take several forms:
+---   - If table, treat it as a map of checkout targets for plugin names.
+---     Fields are plugin names and values are checkout targets as
+---     in |MiniDeps-plugin-specification|.
+---
+---     Example of checkout target: >
+---       { ['plugin_1.nvim'] = true, plugin_2 = false, plugin_3 = 'main' }
 --- <
---- - If string input, treat as snapshot file path (as after |MiniDeps.snapshot()|).
----   Source the file expecting returned table and apply previous step.
+---   - If string, treat as snapshot file path (as after |MiniDeps.snapshot()|).
+---     Source the file expecting returned table and apply previous step.
 ---
---- - If no input, checkout all plugins added to current session
----   (with |MiniDeps.add()|) according to their specs.
----   See |MiniDeps.get_session()|.
+---   - If `nil`, checkout all plugins added to current session
+---     (with |MiniDeps.add()|) according to the specs. See |MiniDeps.get_session()|.
+---
+--- - Execute `post_change` hook for every checked out plugin if it is registered
+---   in current session.
+---
+--- Note that not all plugins are checked out:
+--- - If plugin is not present on disk, it is silently skipped.
+--- - If plugin's session spec contains `checkout = false`, it is silently skipped.
 ---
 ---@param target table|string|nil A checkout target. Default: `nil`.
-MiniDeps.checkout = function(target)
+MiniDeps.checkout = function(target, opts)
   -- Normalize to be an array
   local target_arr = H.normalize_checkout_target(target)
 
   -- Infer default checkout targets early to properly call `*_change` hooks
   H.infer_default_checkout(target_arr)
   target_arr = vim.tbl_filter(function(x) return type(x.checkout) == 'string' end, target_arr)
-
   if #target_arr == 0 then return end
 
-  -- TODO: Create rollback snapshot
+  -- Create rollback snapshot
+  local rollback_dir = H.get_package_path() .. '/pack/deps/rollback/'
+  local is_target_rollback = type(target) == 'string' and vim.startswith(H.full_path(target), rollback_dir)
+  if not is_target_rollback then
+    local snapshot_path = rollback_dir .. H.get_timestamp()
+    MiniDeps.snapshot(snapshot_path)
+  end
 
-  -- TODO: Get and execute both hooks from current session and `target_arr`
+  -- Checkout
+  local names = vim.tbl_map(function(x) return x.name end, target_arr)
+  local hooks_arr = H.get_session_hooks(names)
+  for _, hooks in ipairs(hooks_arr) do
+    H.maybe_exec(hooks.pre_change)
+  end
 
-  add_to_log('checkout target', target_arr)
   H.do_checkout(target_arr)
 
-  -- TODO
+  for _, hooks in ipairs(hooks_arr) do
+    H.maybe_exec(hooks.post_change)
+  end
 end
 
 --- Remove plugins
 ---
---- - If there is directory present with `spec.name`:
+--- - For every element in `names`, if there is a plugin directory with that name:
 ---     - Execute `spec.hooks.pre_delete`.
 ---     - Delete plugin directory.
 ---     - Execute `spec.hooks.post_delete`.
@@ -543,7 +584,7 @@ H.apply_config = function(config)
 
   -- Add target package path to 'packpath'
   local pack_path = H.full_path(config.path.package)
-  if not string.find(vim.o.packpath, vim.pesc(pack_path)) then vim.o.packpath = vim.o.packpath .. ',' .. pack_path end
+  vim.cmd('set packpath+=' .. vim.fn.fnameescape(pack_path))
 end
 
 H.create_user_commands = function(config)
@@ -566,15 +607,17 @@ H.git_commands = {
       source, path,
     }
   end,
-  stash = {},
+  stash = function(timestamp)
+    return { 'git', 'stash', '--quiet', '--message', '(mini.deps) ' .. timestamp .. ' Stash before checkout.' }
+  end,
   checkout = function(target)
     if type(target) ~= 'string' then return {} end
     return { 'git', 'checkout', '--quiet', target }
   end,
   get_default_checkout = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+  snapshot = { 'git', 'rev-parse', 'HEAD' },
   fetch = { 'git', 'fetch', '--quiet', '--recurse-submodules=yes', 'origin' },
   -- { 'git', 'log', '--format=%h - %ai - %an%n  %s%n', 'main~~..main' }, -- log after fetch
-  -- { 'git', 'rev-parse', 'HEAD'}, -- snapshot
 }
 
 -- Plugin specification -------------------------------------------------------
@@ -610,6 +653,14 @@ H.normalize_spec = function(source, opts)
   return spec
 end
 
+H.get_session_hooks = function(names)
+  local res = {}
+  for _, spec in ipairs(MiniDeps.get_session()) do
+    if vim.tbl_contains(names, spec.name) then table.insert(res, spec.hooks) end
+  end
+  return res
+end
+
 -- File system ----------------------------------------------------------------
 H.get_plugin_path = function(name, package_path)
   if type(name) ~= 'string' then return end
@@ -631,34 +682,54 @@ end
 
 H.get_package_path = function() return H.full_path(H.get_config().path.package) end
 
+H.get_all_plugin_paths = function(package_path)
+  package_path = package_path or H.get_package_path()
+  local res = {}
+
+  local opt_path = package_path .. '/pack/deps/opt'
+  vim.list_extend(res, H.readdir(opt_path))
+  local start_path = package_path .. '/pack/deps/start'
+  vim.list_extend(res, H.readdir(start_path))
+
+  return vim.tbl_filter(function(x) return vim.fn.isdirectory(x) == 1 end, res)
+end
+
 -- Checkout/Snapshot ----------------------------------------------------------
 H.normalize_checkout_target = function(x)
   -- Convert to array which includes only present plugins
   local res, ok = {}, nil
-  local package_path = H.get_package_path()
+  local session, package_path = MiniDeps.get_session(), H.get_package_path()
 
   -- Use session specs by default
   if x == nil then
-    for _, spec in ipairs(MiniDeps.get_session()) do
-      local path = H.get_plugin_path(spec.name, package_path)
-      table.insert(res, { name = spec.name, checkout = spec.checkout, path = path })
+    for _, spec in ipairs(session) do
+      local path, is_present = H.get_plugin_path(spec.name, package_path)
+      local should_add = is_present and spec.checkout ~= false
+      if should_add then table.insert(res, { name = spec.name, checkout = spec.checkout, path = path }) end
     end
     return res
   end
 
   -- Treat string input as path to snapshot file
   if type(x) == 'string' then
-    ok, x = pcall(dofile, vim.fn.fnamemodify(x, ':p'))
+    ok, x = pcall(dofile, H.full_path(x))
     if not ok then H.error('Checkout target is not a path to proper snapshot.') end
   end
 
   -- Input should be a map from plugin names to checkout target
   if type(x) ~= 'table' then H.error('Checkout target should be table.') end
 
-  for key, value in pairs(x) do
-    local path, is_present = H.get_plugin_path(key, package_path)
-    local should_add = is_present and (type(value) == 'string' or type(value) == 'boolean')
-    if should_add then table.insert(res, { name = key, checkout = value, path = path }) end
+  -- - Precompute session targets to check if plugin is blocked from checkout
+  local session_checkout = {}
+  for _, spec in ipairs(session) do
+    session_checkout[spec.name] = spec.checkout
+  end
+
+  for name, target in pairs(x) do
+    local path, is_present = H.get_plugin_path(name, package_path)
+    local is_proper_target = type(target) == 'string' or type(target) == 'boolean'
+    local should_add = is_present and is_proper_target and session_checkout[name] ~= false
+    if should_add then table.insert(res, { name = name, checkout = target, path = path }) end
   end
 
   return res
@@ -666,15 +737,31 @@ end
 
 H.do_checkout = function(target_arr)
   local jobs = {}
+
+  -- Stash before checkout
+  local stash_command = H.git_commands.stash(H.get_timestamp())
   for i, target in ipairs(target_arr) do
-    local command = H.git_commands.checkout(target.checkout)
-    local exit_msg = string.format('Checkout out %s in %s', vim.inspect(target.checkout), vim.inspect(target.name))
-    jobs[i] = H.cli_new_job(command, target.path, exit_msg)
+    jobs[i] = H.cli_new_job(stash_command, target.path)
   end
 
   H.cli_run(jobs)
 
-  -- TODO: Show errors
+  -- Checkout
+  for i, target in ipairs(target_arr) do
+    jobs[i].command = H.git_commands.checkout(target.checkout)
+    jobs[i].exit_msg = string.format('Done checking out `%s` in `%s`', target.checkout, target.name)
+    jobs[i].out = {}
+  end
+
+  H.cli_run(jobs)
+
+  -- Show and register errors
+  for i, job in ipairs(jobs) do
+    local target = target_arr[i]
+    if #job.err > 0 then target.is_checkout_error = true end
+    local action_name = string.format('checkout `%s` in `%s`', target.checkout, target.name)
+    H.cli_show_err(job, action_name)
+  end
 end
 
 H.infer_default_checkout = function(target_arr)
@@ -691,13 +778,10 @@ H.infer_default_checkout = function(target_arr)
 
   for i, target in ipairs(targets_to_infer) do
     local job_out = jobs[i].out[1] or ''
-    jobs[i].out = {}
-
     local def_checkout = string.match(job_out, '^origin/(%S+)')
     target.checkout = def_checkout
     if def_checkout == nil then
-      local name = vim.fn.fnamemodify(target.path, ':t')
-      local msg = 'Could not find default branch for ' .. name .. '.'
+      local msg = 'Could not find default branch for `' .. target.name .. '`.'
       H.notify(msg, 'WARN')
     end
   end
@@ -761,77 +845,29 @@ H.cli_read_stream = function(stream, feed)
   stream:read_start(callback)
 end
 
+H.cli_stream_tostring = function(stream) return (table.concat(stream):gsub('\n+$', '')) end
+
 H.cli_new_job = function(command, cwd, exit_msg)
   return { command = command, cwd = cwd, exit_msg = exit_msg, out = {}, err = {} }
 end
 
--- vim.fn.delete('clones', 'rf')
--- vim.fn.mkdir('clones', 'p')
+H.cli_job_to_lines = function(job, title)
+  local lines = { title, '' }
+  local err = H.cli_stream_tostring(job.err)
+  if err ~= '' then vim.list_extend(lines, vim.split('# ERRORS\n\n' .. err, '\n')) end
+  table.insert(lines, '')
 
-_G.repos = {
-  'mini.nvim',
-  'mini.ai',
-  'mini.align',
-  -- 'mini.animate',
-  -- 'mini.base16',
-  -- 'mini.basics',
-  -- 'mini.bracketed',
-  -- 'mini.bufremove',
-  -- 'mini.clue',
-  -- 'mini.colors',
-  -- 'mini.comment',
-  -- 'mini.completion',
-  -- 'mini.cursorword',
-  -- 'mini.doc',
-  -- 'mini.extra',
-  -- 'mini.files',
-  -- 'mini.fuzzy',
-  -- 'mini.hipatterns',
-  -- 'mini.hues',
-  -- 'mini.indentscope',
-  -- 'mini.jump',
-  -- 'mini.jump2d',
-  -- 'mini.map',
-  -- 'mini.misc',
-  -- 'mini.move',
-  -- 'mini.operators',
-  -- 'mini.pairs',
-  -- 'mini.pick',
-  -- 'mini.sessions',
-  -- 'mini.splitjoin',
-  -- 'mini.starter',
-  -- 'mini.statusline',
-  -- 'mini.surround',
-  -- 'mini.tabline',
-  -- 'mini.test',
-  -- 'mini.trailspace',
-  -- 'mini.visits',
-}
+  local out = H.cli_stream_tostring(job.out)
+  if out ~= '' then vim.list_extend(lines, vim.split('# OUTPUT\n\n' .. out, '\n')) end
+  table.insert(lines, '')
 
-_G.test_jobs = {}
---stylua: ignore
-for _, repo in ipairs(repos) do
-  local name = repo:sub(6)
-  local job = H.cli_new_job(
-    { 'git', '-C', 'clones', 'clone', '--quiet', '--filter=blob:none', 'https://github.com/echasnovski/' .. repo, name }, -- create
-    -- { 'git', '-C', 'clones/' .. name, 'fetch', '--quiet', 'origin', 'main' }, -- fetch
-    -- { 'git', '-C', 'clones/' .. name, 'log', '--format=%h - %ai - %an%n  %s%n', 'main~~..main' }, -- log after fetch
-    -- { 'git', '-C', 'clones/' .. name, 'checkout', '--quiet', 'HEAD~' }, -- checkout
-    -- { 'git', '-C', 'clones/' .. name, 'checkout', '--quiet', 'main' }, -- checkout
-    -- { 'git', '-C', 'clones/' .. name, 'checkout', '--quiet', 'v0.10.0' }, -- checkout
-    -- { 'git', '-C', 'clones/' .. name, 'rev-parse', '--abbrev-ref', 'origin/HEAD'}, -- checkout default
-    -- { 'git', '-C', 'clones/' .. name, 'rev-parse', 'HEAD'}, -- snapshot
-
-    'Done with ' .. vim.inspect(name)
-  )
-  table.insert(_G.test_jobs, job)
+  return lines
 end
 
--- vim.fn.writefile({}, 'worklog')
--- _G.test_commands = {}
--- for i = 1, 18 do
---   table.insert(_G.test_commands, { './date-and-sleep.sh', tostring(i) })
--- end
+H.cli_show_err = function(job, action_name)
+  if #job.err == 0 then return end
+  H.notify('Error during ' .. action_name .. '\n' .. H.cli_stream_tostring(job.err), 'ERROR')
+end
 
 -- Two-stage execution --------------------------------------------------------
 H.schedule_finish = function()
@@ -880,14 +916,13 @@ H.notify = vim.schedule_wrap(function(msg, level)
   vim.cmd('redraw')
 end)
 
-H.to_lines = function(arr)
-  local s = table.concat(arr):gsub('\n+$', '')
-  return vim.split(s, '\n')
+H.maybe_exec = function(f, ...)
+  if not vim.is_callable(f) then return end
+  local ok, err = pcall(f, ...)
+  if not ok then H.notify('Error during hook execution:\n' .. err, 'WARN') end
 end
 
-H.maybe_exec = function(f, ...)
-  if vim.is_callable() then f(...) end
-end
+H.get_timestamp = function() return vim.fn.strftime('%Y%m%d%H%M%S') end
 
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
 
@@ -898,6 +933,12 @@ H.short_path = function(path, cwd)
   if not vim.startswith(path, cwd) then return vim.fn.fnamemodify(path, ':~') end
   local res = path:sub(cwd:len() + 1):gsub('^/+', ''):gsub('/+$', '')
   return res
+end
+
+H.readdir = function(path)
+  if vim.fn.isdirectory(path) ~= 1 then return {} end
+  path = H.full_path(path)
+  return vim.tbl_map(function(x) return path .. '/' .. x end, vim.fn.readdir(path))
 end
 
 return MiniDeps
