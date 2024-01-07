@@ -4,7 +4,7 @@ local now, later = EC.now, EC.later
 now(function() vim.cmd('colorscheme randomhue') end)
 
 now(function()
-  require('mini-dev.notify').setup()
+  require('mini.notify').setup({ window = { config = { border = 'double' } } })
   vim.notify = MiniNotify.make_notify()
 end)
 
