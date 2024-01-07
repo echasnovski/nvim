@@ -2,8 +2,17 @@
 --
 -- Code:
 --
--- - Think about changing snapshot format (and consequently checkout target) to
---   be an array of reduced specs (with `name` and `checkout` right now).
+-- - Think about adding `MiniDeps.diff()` to show log of commits which will be
+--   added if `checkout()` is done. Should first try if `origin/<checkout>` is
+--   a valid target and then decide whether to do `git log
+--   HEAD..origin/<checkout>` or `git log HEAD..<checkout>`.
+--   Should also account for the `checkout = false` and show "<No change>".
+--
+--   This will alow to avoid all issues with improper `FETCH_HEAD` and 'fetch/'
+--   directory by moving this action to the user.
+--
+-- - Think about not allowing table input for `checkout()` as it complicates
+--   things quite a bit.
 --
 -- - Implement `depends` spec.
 --
@@ -11,6 +20,13 @@
 -- - Add examples of user commands in |MiniDeps-actions|.
 --
 -- Tests:
+-- - Fetch:
+--     - Update `origin` remote to be `source`.
+--
+-- - Checkout:
+--     - Should **not** update `checkout` data in session.
+--       To update that, remove from session and add with proper `checkout`.
+--     - Hooks should be executed in order defined in current session.
 
 --- *mini.deps* Plugin manager
 --- *MiniDeps*
@@ -233,6 +249,7 @@
 ---@alias __deps_spec_opts table|nil Optional spec fields. See |MiniDeps-plugin-specification|.
 ---@alias __deps_names table Array of plugin names registered in current session
 ---   with |MiniDeps.add()|. See |MiniDeps.get_session()|.
+---   Default: names of all registered plugins.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -303,7 +320,11 @@ MiniDeps.config = {
 ---     - Use `git clone` to clone plugin from its source URI into "pack/deps/opt".
 ---     - Checkout according to `opts.checkout`.
 ---     - Execute `opts.hooks.post_create`.
---- - Register plugin's spec in current session.
+---   Note: If plugin directory is present, no actions with it is done to increase
+---   performance during startup. In particular, it does not checkout according
+---   `opts.checkout`. Use |MiniDeps.checkout()| explicitly.
+--- - Register plugin's spec in current session if there is no plugin with the
+---   same name already registered.
 --- - Make sure it can be used in current session (see |:packadd|).
 ---
 ---@param source __deps_source
@@ -407,7 +428,7 @@ MiniDeps.update = function(names)
 
   local checkout_target = {}
   for _, spec in ipairs(MiniDeps.get_session()) do
-    if vim.tbl_contains(names, spec.name) then checkout_target[spec.name] = spec.checkout end
+    if names == nil or vim.tbl_contains(names, spec.name) then checkout_target[spec.name] = spec.checkout end
   end
   MiniDeps.checkout(checkout_target)
 end
@@ -425,18 +446,75 @@ end
 ---
 ---@param names __deps_names
 MiniDeps.fetch = function(names)
-  -- TODO
-  -- Outline:
-  -- - Get value of `FETCH_HEAD`.
-  -- - Set `origin` to `source` from session spec.
-  -- - `git fetch --all --write-fetch-head`.
-  -- - Get log as `git log <prev_FETCH_HEAD>..FETCH_HEAD`.
-  add_to_log('fetch', { names = names })
+  local spec_arr = H.convert_names_to_spec_arr(names)
+  local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
+
+  -- Get current `FETCH_HEAD` for proper log of newly fetched data
+  for _, job in ipairs(jobs) do
+    job.command = H.git_commands.get_fetch_head
+  end
+
+  H.cli_run(jobs)
+
+  local fetch_heads = {}
+  for i, job in ipairs(jobs) do
+    -- NOTE: FETCH_HEAD can be not present just after `clone`
+    fetch_heads[i] = #job.err == 0 and H.cli_stream_tostring(job.out) or 'HEAD'
+    job.err, job.out = {}, {}
+  end
+
+  -- Ensure `origin` is set to `source`
+  for i, job in ipairs(jobs) do
+    job.command = H.git_commands.set_origin(spec_arr[i].source)
+  end
+  H.cli_run(jobs)
+  for _, job in ipairs(jobs) do
+    job.out = {}
+  end
+
+  -- Fetch
+  for i, job in ipairs(jobs) do
+    job.command = H.git_commands.fetch
+    job.exit_msg = string.format('Done fetching `%s`', spec_arr[i].name)
+  end
+  H.cli_run(jobs)
+  for _, job in ipairs(jobs) do
+    job.exit_msg, job.out = nil, {}
+  end
+
+  -- Get log of fetched data
+  for i, job in ipairs(jobs) do
+    job.command = H.git_commands.get_fetch_log(fetch_heads[i])
+  end
+  H.cli_run(jobs)
+
+  -- Postprocess
+  local fetched_log = {}
+  for i, job in ipairs(jobs) do
+    if i > 1 then table.insert(fetched_log, '') end
+
+    local spec = spec_arr[i]
+    local lines = H.cli_job_to_lines(job, spec.name, 'FETCH LOG')
+    vim.list_extend(fetched_log, lines)
+
+    -- Notify about errors explicitly
+    local action_name = string.format('fetching `%s` from `%s`', spec.name, spec.source)
+    H.cli_show_err(job, action_name)
+  end
+
+  -- Write fetch log and show it in new buffer
+  local fetch_dir = H.get_package_path() .. '/pack/deps/fetch/'
+  vim.fn.mkdir(fetch_dir, 'p')
+  local log_path = fetch_dir .. 'fetch-' .. H.get_timestamp()
+  vim.fn.writefile(fetched_log, log_path)
+
+  vim.cmd('edit ' .. vim.fn.fnameescape(log_path))
+  vim.bo.modifiable = false
 end
 
 --- Create snapshot file
 ---
---- - Get commit of all plugins registered in current session via |MiniDeps.add()|.
+--- - Get commit of all plugins registered via |MiniDeps.add()| in current session.
 --- - Create a snapshot: table with plugin names as keys and commits as values.
 --- - Write the table to `path` file in the form of a Lua code ready for |dofile()|.
 ---
@@ -473,17 +551,20 @@ end
 ---
 --- - Create rollback snapshot with |MiniDeps.snapshot()|. It is created inside
 ---   "rollback" directory (see |MiniDeps-directory-structure|) with current
----   timestamp as name. Note: rollback snapshot is not created if checkout
+---   timestamp in file name. Note: rollback snapshot is not created if checkout
 ---   `target` is itself a path to a rollback snapshot file.
 ---
 --- - Checkout according to `target`. For all proper entries:
 ---     - Execute all `pre_change` hooks.
 ---     - Use `git checkout` to do checkouts.
+---     - Use `git merge` to possibly sync with local copy of remote branch,
+---       making results of |MiniDeps.fetch()| present in code on disk.
 ---     - Execute all `post_change` hooks.
 ---
 ---   Notes:
 ---     - Checkout only entries for plugin names registered with |MiniDeps.add()|.
 ---     - If plugin is registered with `checkout = false`, it is not checked out.
+---     - Hooks and checkout are done in order of the current session.
 ---
 --- Checkout `target` can take several forms:
 --- - If table, treat it as a map of checkout targets for plugin names.
@@ -502,9 +583,9 @@ end
 ---@param target table|string|nil A checkout target. Default: `nil`.
 MiniDeps.checkout = function(target)
   -- Convert checkout target to spec array with relevant `checkout`
-  local spec_arr = H.normalize_checkout_target(target)
+  local spec_arr = H.convert_checkout_target_to_spec_arr(target)
 
-  -- Infer default checkout targets early to properly call `*_change` hooks
+  -- Infer default checkout targets early to call only needed `*_change` hooks
   H.infer_default_checkout(spec_arr)
   spec_arr = vim.tbl_filter(function(x) return type(x.checkout) == 'string' end, spec_arr)
   if #spec_arr == 0 then return end
@@ -513,7 +594,8 @@ MiniDeps.checkout = function(target)
   local rollback_dir = H.get_package_path() .. '/pack/deps/rollback/'
   local is_target_rollback = type(target) == 'string' and vim.startswith(H.full_path(target), rollback_dir)
   if not is_target_rollback then
-    local snapshot_path = rollback_dir .. H.get_timestamp()
+    vim.fn.mkdir(rollback_dir, 'p')
+    local snapshot_path = rollback_dir .. 'snapshot-' .. H.get_timestamp()
     MiniDeps.snapshot(snapshot_path)
   end
 
@@ -635,10 +717,14 @@ H.git_commands = {
     if type(target) ~= 'string' then return {} end
     return { 'git', 'checkout', '--quiet', target }
   end,
+  sync_with_local_remote = { 'git', 'merge', '--quiet', '--ff-only' },
+  sync_fetch_head = { 'git', 'update-ref', 'FETCH_HEAD', 'HEAD' },
+  fetch = { 'git', 'fetch', '--quiet', '--recurse-submodules=yes', '--write-fetch-head', 'origin' },
+  get_fetch_head = { 'git', 'rev-parse', 'FETCH_HEAD' },
+  set_origin = function(source) return { 'git', 'remote', 'set-url', 'origin', source } end,
+  get_fetch_log = function(from) return { 'git', 'log', from .. '..FETCH_HEAD' } end,
   get_default_checkout = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
   snapshot = { 'git', 'rev-parse', 'HEAD' },
-  fetch = { 'git', 'fetch', '--quiet', '--recurse-submodules=yes', 'origin' },
-  -- { 'git', 'log', '--format=%h - %ai - %an%n  %s%n', 'main~~..main' }, -- log after fetch
 }
 
 -- Plugin specification -------------------------------------------------------
@@ -658,9 +744,7 @@ H.normalize_spec = function(source, opts)
 
   spec.checkout = opts.checkout
   if spec.checkout == nil then spec.checkout = true end
-  if not (type(spec.checkout) == 'string' or type(spec.checkout) == 'boolean') then
-    H.error('`checkout` in plugin spec should be string or boolean.')
-  end
+  if not H.is_proper_checkout(spec.checkout) then H.error('`checkout` in plugin spec should be string or boolean.') end
 
   spec.hooks = opts.hooks or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
@@ -714,8 +798,22 @@ H.do_create = function(spec)
   H.do_checkout(spec_arr)
 end
 
+-- Fetch ----------------------------------------------------------------------
+H.convert_names_to_spec_arr = function(x)
+  local session = MiniDeps.get_session()
+  if x == nil then return session end
+  if not vim.tbl_islist(x) then H.error('`names` should be array.') end
+
+  local res = {}
+  for _, spec in ipairs(session) do
+    if vim.tbl_contains(x, spec.name) then table.insert(res, spec) end
+  end
+
+  return res
+end
+
 -- Checkout/Snapshot ----------------------------------------------------------
-H.normalize_checkout_target = function(x)
+H.convert_checkout_target_to_spec_arr = function(x)
   local session = MiniDeps.get_session()
 
   -- Use session specs by default
@@ -739,16 +837,17 @@ H.normalize_checkout_target = function(x)
   -- Add appropriate session specs with `checkout` updated to target
   local res = {}
   for _, spec in ipairs(session) do
-    local target = x[spec.name]
-    local is_proper_target = type(target) == 'string' or target == true
-    if is_proper_target and spec.checkout ~= false then
-      spec.checkout = target
+    local new_checkout = x[spec.name]
+    if H.is_proper_checkout(new_checkout) and spec.checkout ~= false then
+      spec.checkout = new_checkout
       table.insert(res, spec)
     end
   end
 
   return res
 end
+
+H.is_proper_checkout = function(x) return type(x) == 'string' or type(x) == 'boolean' end
 
 H.do_checkout = function(spec_arr)
   local jobs = {}
@@ -773,10 +872,23 @@ H.do_checkout = function(spec_arr)
   -- Register and show errors
   for i, spec in ipairs(spec_arr) do
     local job = jobs[i]
-    if #job.err > 0 then spec.is_checkout_error = true end
     local action_name = string.format('checkout `%s` in `%s`', spec.checkout, spec.name)
-    H.cli_show_err(job, action_name)
+    H.cli_show_err(jobs[i], action_name)
   end
+
+  -- Synchronize with local remotes (for previous `fetch` to have effect)
+  for _, job in ipairs(jobs) do
+    job.command, job.exit_msg = H.git_commands.sync_with_local_remote, nil
+  end
+  H.cli_run(jobs)
+
+  -- Synchronize `FETCH_HEAD` to point to `HEAD`. It can be outdated if
+  -- checking out to a different branch. If not done, next `fetch()` will
+  -- show not proper log.
+  for _, job in ipairs(jobs) do
+    job.command = H.git_commands.sync_fetch_head
+  end
+  H.cli_run(jobs)
 end
 
 H.infer_default_checkout = function(spec_arr)
@@ -866,15 +978,15 @@ H.cli_new_job = function(command, cwd, exit_msg)
   return { command = command, cwd = cwd, exit_msg = exit_msg, out = {}, err = {} }
 end
 
-H.cli_job_to_lines = function(job, title)
-  local lines = { title, '' }
+H.cli_job_to_lines = function(job, title, output_title)
+  local lines = { '=== ' .. (title or '') .. ' ===' }
   local err = H.cli_stream_tostring(job.err)
-  if err ~= '' then vim.list_extend(lines, vim.split('# ERRORS\n\n' .. err, '\n')) end
-  table.insert(lines, '')
+  if err ~= '' then vim.list_extend(lines, vim.split('--- ERRORS ---\n\n' .. err .. '\n', '\n')) end
 
   local out = H.cli_stream_tostring(job.out)
-  if out ~= '' then vim.list_extend(lines, vim.split('# OUTPUT\n\n' .. out, '\n')) end
-  table.insert(lines, '')
+  if out == '' then out = '<Nothing>' end
+  output_title = output_title or 'OUTPUT'
+  vim.list_extend(lines, vim.split('--- ' .. output_title .. ' ---\n\n' .. out, '\n'))
 
   return lines
 end
