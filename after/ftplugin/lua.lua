@@ -2,7 +2,7 @@ vim.api.nvim_buf_set_keymap(0, 'i', '<M-i>', ' = ', { noremap = true })
 
 -- Use custom comment leaders to allow both nested variants (`--` and `----`)
 -- and "docgen" variant (`---`).
-vim.cmd([[setlocal comments=:---,:--]])
+vim.bo.comments = ':---,:--'
 
 -- Customize 'mini.nvim'
 vim.b.miniai_config = {
