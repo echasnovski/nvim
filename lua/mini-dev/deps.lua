@@ -2,6 +2,27 @@
 --
 -- Code:
 --
+-- - Implement one-stop `update()`.
+--
+-- - Add `track` to spec as source branch to get updates from.
+--   Keep treating `checkout` as the checkout target. This distinction
+--   allows to both automated update from some branch or (more importantly)
+--   "freezing" plugin at certain commit/tag while allowing to track updates
+--   waiting for the right time to update `checkout`.
+--   Both are `nil` by default meaning assuming default branch.
+--
+-- - Split `checkout` into `track` (string checkout target or `nil` for default
+--   branch) and `freeze` (whether to perform update or not).
+--
+-- - Think about relevance and effect of `rollback()`.
+--
+-- - Implement `depends` spec.
+--
+-- - Generate help tags after create and change. Basically, in `do_checkout()`.
+--
+-- - Think about not allowing table input for `checkout()` as it complicates
+--   things quite a bit.
+--
 -- - Think about adding `MiniDeps.diff()` to show log of commits which will be
 --   added if `checkout()` is done. Should first try if `origin/<checkout>` is
 --   a valid target and then decide whether to do `git log
@@ -10,11 +31,6 @@
 --
 --   This will alow to avoid all issues with improper `FETCH_HEAD` and 'fetch/'
 --   directory by moving this action to the user.
---
--- - Think about not allowing table input for `checkout()` as it complicates
---   things quite a bit.
---
--- - Implement `depends` spec.
 --
 -- Docs:
 -- - Add examples of user commands in |MiniDeps-actions|.
@@ -39,8 +55,9 @@
 ---
 --- - Manage plugins utilizing Git and built-in |packages| with these actions:
 ---     - Add / remove / clean.
----     - Update / fetch.
----     - Snapshot / checkout.
+---     - Update / rollback.
+---     - Fetch / preview / checkout.
+---     - Save snapshot / load snapshot.
 ---     All these actions are available both as Lua functions and user commands
 ---     (see |MiniDeps.setup()).
 ---
@@ -50,11 +67,6 @@
 ---     - Checkout target: branch, commit, tag, etc.
 ---     - Dependencies to be set up prior to the target plugin.
 ---     - Hooks to call before/after plugin is created/changed/deleted.
----
---- - Automated show and save of fetch results to review.
----
---- - Automated save of current snapshot prior to checkout for easier rollback in
----   case something does not work as expected.
 ---
 --- - Helpers to implement two-stage startup: |MiniDeps.now()| and |MiniDeps.later()|.
 ---   See |MiniDeps-examples| for how to implement basic lazy loading with them.
@@ -104,16 +116,13 @@
 ---   Creating inside |MiniDeps.add()| uses this directory.
 ---
 --- - `start` with non-optional plugins (sourced at start unconditionally).
----   All its subdirectories are recognized as plugins and can be updated,
----   removed, etc. To actually use it, move installed plugin from `opt` directory.
+---   All its subdirectories are recognized as plugins by this module.
+---   To actually use it, move installed plugin from `opt` directory.
+---   HOWEVER, there will be less long-term confusion if only `opt` is used.
 ---
---- - `fetch` with history of the new data after |MiniDeps.fetch()|.
----   Each file contains a log of fetched changes for later review.
----
---- - `rollback` with history of automated snapshots. Each file is created
----   automatically before (almost) every run of |MiniDeps.checkout()|.
----   This can be used together with |MiniDeps.checkout()| to roll back after
----   unfortunate update.
+--- - `rollback` with a history of automated snapshots. Those are created
+---   with |MiniDeps.snapsave()| before every |MiniDeps.update()| and
+---   are used by |MiniDeps.rollback()|.
 ---@tag MiniDeps-directory-structure
 
 --- # Plugin specification ~
@@ -160,9 +169,12 @@
 ---                                                                    *:DepsRemove*
 ---                                                                     *:DepsClean*
 ---                                                                    *:DepsUpdate*
+---                                                                  *:DepsRollback*
 ---                                                                     *:DepsFetch*
----                                                                  *:DepsSnapshot*
+---                                                                   *:DepsPreview*
 ---                                                                  *:DepsCheckout*
+---                                                                  *:DepsSnapsave*
+---                                                                  *:DepsSnapload*
 ---@tag MiniDeps-commands
 
 --- # Usage examples ~
@@ -313,16 +325,16 @@ MiniDeps.config = {
 }
 --minidoc_afterlines_end
 
---- Add plugin
+--- Add plugin to current session
 ---
 --- - If there is no directory present with plugin's name, create it:
 ---     - Execute `opts.hooks.pre_create`.
 ---     - Use `git clone` to clone plugin from its source URI into "pack/deps/opt".
 ---     - Checkout according to `opts.checkout`.
 ---     - Execute `opts.hooks.post_create`.
----   Note: If plugin directory is present, no actions with it is done to increase
----   performance during startup. In particular, it does not checkout according
----   `opts.checkout`. Use |MiniDeps.checkout()| explicitly.
+---   Note: If plugin directory is present, no action with it is done (to increase
+---   performance during startup). In particular, it does not checkout according
+---   to `opts.checkout`. Use |MiniDeps.checkout()| explicitly.
 --- - Register plugin's spec in current session if there is no plugin with the
 ---   same name already registered.
 --- - Make sure it can be used in current session (see |:packadd|).
@@ -348,9 +360,8 @@ MiniDeps.add = function(source, opts)
   vim.cmd('packadd ' .. spec.name)
 end
 
---- Remove plugin
+--- Remove plugin from current session
 ---
---- - If plugin directory can not be found, do nothing.
 --- - Remove plugin path from 'runtimpath'.
 --- - Remove plugin spec from current session (if present).
 --- - If `delete_dir`, delete plugin directory:
@@ -358,11 +369,13 @@ end
 ---     - Delete plugin directory.
 ---     - Execute `post_delete` hook (if plugin with input name is registered).
 ---
+--- Note: if plugin directory can not be found, nothing is done.
+---
 ---@param name string Plugin directory name in |MiniDeps-directory-structure|.
----@param delete_dir boolean|nil Whether to delete plugin directory. Default: `true`.
+---@param delete_dir boolean|nil Whether to delete plugin directory. Default: `false`.
 MiniDeps.remove = function(name, delete_dir)
   if type(name) ~= 'string' then H.error('`name` should be string.') end
-  if delete_dir == nil then delete_dir = true end
+  if delete_dir == nil then delete_dir = false end
 
   local path, is_present = H.get_plugin_path(name)
   if not is_present then return end
@@ -419,18 +432,23 @@ end
 
 --- Update plugins
 ---
---- - Use |MiniDeps.fetch()| to get new data from source URI.
---- - Use |MiniDeps.checkout()| to checkout according to session's plugin specs.
----
----@param names __deps_names
-MiniDeps.update = function(names)
-  MiniDeps.fetch(names)
+---@param opts table|nil Options. Possible fields:
+---   - <confirm> `(boolean)` - whether to confirm before making an update.
+---     Default: `true`.
+---   - <names> `(table)` - array of plugin names to update.
+---     Default: all plugins registered in current session with |MiniDeps.add()|.
+---   - <remote> `(boolean)` - whether to check for updates at remote source.
+---     Default: `true`.
+MiniDeps.update = function(opts)
+  opts = vim.tbl_deep_extend('force', { confirm = true, names = nil, remote = true }, opts or {})
+  local spec_arr = H.convert_names_to_spec_arr(opts.names)
+  local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
 
-  local checkout_target = {}
-  for _, spec in ipairs(MiniDeps.get_session()) do
-    if names == nil or vim.tbl_contains(names, spec.name) then checkout_target[spec.name] = spec.checkout end
-  end
-  MiniDeps.checkout(checkout_target)
+  -- Fetch data if asked
+  if opts.remote then H.do_fetch(spec_arr) end
+
+  -- Infer repo data
+  H.infer_repo_data(spec_arr)
 end
 
 --- Fetch new data of plugins
@@ -586,7 +604,7 @@ MiniDeps.checkout = function(target)
   local spec_arr = H.convert_checkout_target_to_spec_arr(target)
 
   -- Infer default checkout targets early to call only needed `*_change` hooks
-  H.infer_default_checkout(spec_arr)
+  H.infer_repo_data(spec_arr)
   spec_arr = vim.tbl_filter(function(x) return type(x.checkout) == 'string' end, spec_arr)
   if #spec_arr == 0 then return end
 
@@ -685,6 +703,9 @@ end
 H.apply_config = function(config)
   MiniDeps.config = config
 
+  -- Clear current session to allow resourcing script with `setup()` call
+  H.session = {}
+
   -- Add target package path to 'packpath'
   local pack_path = H.full_path(config.path.package)
   vim.cmd('set packpath+=' .. vim.fn.fnameescape(pack_path))
@@ -719,11 +740,15 @@ H.git_commands = {
   end,
   sync_with_local_remote = { 'git', 'merge', '--quiet', '--ff-only' },
   sync_fetch_head = { 'git', 'update-ref', 'FETCH_HEAD', 'HEAD' },
-  fetch = { 'git', 'fetch', '--quiet', '--recurse-submodules=yes', '--write-fetch-head', 'origin' },
+  fetch = { 'git', 'fetch', '--quiet', '--tags', '--recurse-submodules=yes', 'origin' },
   get_fetch_head = { 'git', 'rev-parse', 'FETCH_HEAD' },
   set_origin = function(source) return { 'git', 'remote', 'set-url', 'origin', source } end,
   get_fetch_log = function(from) return { 'git', 'log', from .. '..FETCH_HEAD' } end,
-  get_default_checkout = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+  log = function(range)
+    return { 'git', 'log', '--pretty=format:%h | %ai | %an%d%n  %s%n', '--decorate-refs=refs/tags', range }
+  end,
+  get_head = { 'git', 'rev-parse', 'HEAD' },
+  get_default_branch = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
   snapshot = { 'git', 'rev-parse', 'HEAD' },
 }
 
@@ -794,11 +819,11 @@ H.do_create = function(spec)
 
   -- Checkout. Don't use `MiniDeps.checkout` to skip rollback making and hooks.
   local spec_arr = { spec }
-  H.infer_default_checkout(spec_arr)
+  H.infer_repo_data(spec_arr)
   H.do_checkout(spec_arr)
 end
 
--- Fetch ----------------------------------------------------------------------
+-- Update ---------------------------------------------------------------------
 H.convert_names_to_spec_arr = function(x)
   local session = MiniDeps.get_session()
   if x == nil then return session end
@@ -811,6 +836,75 @@ H.convert_names_to_spec_arr = function(x)
 
   return res
 end
+
+H.do_fetch = function(spec_arr)
+  local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
+
+  -- Ensure `origin` is set to `source`
+  for i, job in ipairs(jobs) do
+    job.command = H.git_commands.set_origin(spec_arr[i].source)
+  end
+
+  H.cli_run(jobs)
+
+  -- Fetch
+  for i, job in ipairs(jobs) do
+    job.command = H.git_commands.fetch
+    job.exit_msg = string.format('Done downloading new data for `%s`', spec_arr[i].name)
+  end
+
+  H.cli_run(jobs)
+
+  -- Show errors
+  for i, job in ipairs(jobs) do
+    H.cli_show_err(job, string.format('downloading new data for `%s`', spec_arr[i].name))
+  end
+end
+
+H.infer_repo_data = function(spec_arr)
+  local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
+
+  -- Default branch
+  for i, job in ipairs(jobs) do
+    job.command = spec_arr[i].checkout == true and H.git_commands.get_default_branch or {}
+  end
+
+  H.cli_run(jobs)
+
+  for i, job in ipairs(jobs) do
+    local def_branch = string.match(job.out[1] or '', '^origin/(%S+)')
+    if spec_arr[i].checkout == true then spec_arr[i].checkout = def_branch or 'main' end
+    H.cli_show_err(job, 'computing default branch for `' .. spec_arr[i].name .. '`')
+    job.err, job.out = {}, {}
+  end
+
+  -- Pending changes
+  for i, job in ipairs(jobs) do
+    -- NOTE: This will error if `checkout` is not a branch
+    job.command = H.git_commands.log('HEAD..origin/' .. spec_arr[i].checkout)
+  end
+
+  H.cli_run(jobs)
+
+  for i, job in ipairs(jobs) do
+    local out = H.cli_stream_tostring(job.out)
+    spec_arr[i].log_pending = (#job.err == 0 and out ~= '') and out or '<Nothing>'
+    job.err, job.out = {}, {}
+  end
+
+  -- Current HEAD
+  for i, job in ipairs(jobs) do
+    job.command = H.git_commands.get_head
+  end
+
+  H.cli_run(jobs)
+
+  for i, job in ipairs(jobs) do
+    spec_arr[i].head = H.cli_stream_tostring(job.out)
+  end
+end
+
+-- Fetch ----------------------------------------------------------------------
 
 -- Checkout/Snapshot ----------------------------------------------------------
 H.convert_checkout_target_to_spec_arr = function(x)
@@ -889,29 +983,6 @@ H.do_checkout = function(spec_arr)
     job.command = H.git_commands.sync_fetch_head
   end
   H.cli_run(jobs)
-end
-
-H.infer_default_checkout = function(spec_arr)
-  local specs_to_infer, jobs = {}, {}
-  for _, spec in ipairs(spec_arr) do
-    if spec.checkout == true then
-      table.insert(specs_to_infer, spec)
-      table.insert(jobs, H.cli_new_job(H.git_commands.get_default_checkout, spec.path))
-    end
-  end
-
-  H.cli_run(jobs)
-
-  for i, spec in ipairs(specs_to_infer) do
-    local job_out = jobs[i].out[1] or ''
-    local def_checkout = string.match(job_out, '^origin/(%S+)')
-    if type(def_checkout) == 'string' then
-      spec.checkout = def_checkout
-    else
-      local msg = 'Could not find default branch for `' .. spec.name .. '`.'
-      H.notify(msg, 'WARN')
-    end
-  end
 end
 
 -- CLI ------------------------------------------------------------------------
