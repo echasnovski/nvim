@@ -6,18 +6,16 @@
 --
 -- - Check if `git rev-parse <tag>` works if tag was only fetched from remote.
 --
--- - Add `track` to spec as source branch to get updates from.
---   Keep treating `checkout` as the checkout target. This distinction
---   allows to both automated update from some branch or (more importantly)
---   "freezing" plugin at certain commit/tag while allowing to track updates
---   waiting for the right time to update `checkout`.
---   Both are `nil` by default meaning assuming default branch.
+-- - ?Add highlighting to interactive feedback?
 --
--- - Make sure that `update_checkout()` stashes changes.
+-- - `update_checkout()`:
+--     - Make sure that `update_checkout()` stashes changes.
+--     - Include `*_update` hooks.
+--     - Refactor to be usable in `add()`.
+--
+-- - Think about renaming `track` in spec to `monitor`.
 --
 -- - Consider moving `now()` and `later()` to 'mini.misc'.
---
--- - Think about relevance and effect of `rollback()`.
 --
 -- - Implement `depends` spec.
 --
@@ -25,6 +23,12 @@
 --
 -- Docs:
 -- - Add examples of user commands in |MiniDeps-actions|.
+-- - Clarify distinction in how to use `checkout` and `track`. They allow both
+--   automated update from some branch and (more importantly) "freezing" plugin
+--   at certain commit/tag while allowing to track updates waiting for the
+--   right time to update `checkout`.
+-- - In update reports note that `>`/`<` means commit will be added/reverted.
+-- - To freeze plugin from updates use `checkout = 'HEAD'`.
 --
 -- Tests:
 -- - Fetch:
@@ -149,8 +153,8 @@
 ---   Each hook is executed without arguments. Possible hook names:
 ---     - <pre_create>  - before creating plugin directory.
 ---     - <post_create> - after  creating plugin directory.
----     - <pre_change>  - before making change in plugin directory.
----     - <post_change> - after  making change in plugin directory.
+---     - <pre_update>  - before making update in plugin directory.
+---     - <post_update> - after  making update in plugin directory.
 ---     - <pre_delete>  - before deleting plugin directory.
 ---     - <post_delete> - after  deleting plugin directory.
 ---   Default: empty table for no hooks.
@@ -210,7 +214,7 @@
 ---       'nvim-treesitter/nvim-treesitter',
 ---       {
 ---         checkout = is_010 and 'main' or 'master',
----         hooks = { post_change = function() vim.cmd('TSUpdate') end },
+---         hooks = { post_update = function() vim.cmd('TSUpdate') end },
 ---       }
 ---     )
 ---
@@ -364,8 +368,6 @@ end
 ---     - Delete plugin directory.
 ---     - Execute `post_delete` hook (if plugin with input name is registered).
 ---
---- Note: if plugin directory can not be found, nothing is done.
----
 ---@param name string Plugin directory name in |MiniDeps-directory-structure|.
 ---@param delete_dir boolean|nil Whether to delete plugin directory. Default: `false`.
 MiniDeps.remove = function(name, delete_dir)
@@ -373,7 +375,7 @@ MiniDeps.remove = function(name, delete_dir)
   if delete_dir == nil then delete_dir = false end
 
   local path, is_present = H.get_plugin_path(name)
-  if not is_present then return end
+  if not is_present then return H.error('`' .. name .. '` is not a name of present plugin.') end
 
   -- Find current session data for plugin
   local session, session_id = MiniDeps.get_session(), nil
@@ -457,28 +459,23 @@ MiniDeps.update = function(opts)
   -- Checkout if asked
   if not opts.confirm then H.update_checkout(jobs, specs) end
 
+  -- Compute report lines
+  local spec_lines = {}
+  for i, s in ipairs(specs) do
+    local errors = H.cli_stream_tostring(jobs[i].err)
+    spec_lines[i] = H.update_compute_spec_report(s, errors)
+  end
+  local lines = vim.split(table.concat(spec_lines, '\n\n\n'), '\n')
+
+  add_to_log('post update', { lines = lines })
+
+  -- Make feedback
+  local feedback = opts.confirm and H.update_feedback_confirm or H.update_feedback_log
+  feedback(lines, specs)
+
   -- Show job errors
   for i, job in ipairs(jobs) do
     H.cli_job_show_err(job, 'updating plugin `' .. specs[i].name .. '`')
-  end
-
-  -- Compute report lines
-  local lines = H.update_compute_report(specs, opts.confirm)
-
-  add_to_log('post update', { jobs = jobs, lines = lines, specs = specs })
-
-  -- Show report
-  H.update_show_report(specs, opts)
-
-  -- Proceed based on whether this should need confirmation or not
-  if opts.confirm then
-    -- Show report lines in new buffer in current window
-    local buf_id = vim.api.nvim_create_buf(false, true)
-    vim.bo[buf_id].buftype = 'acwrite'
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
-    vim.api.nvim_win_set_buf(0, buf_id)
-
-    -- Create
   end
 end
 
@@ -757,10 +754,8 @@ H.git_commands = {
   clone = function(source, path)
     --stylua: ignore
     return {
-      'git', 'clone',
-      '--quiet', '--filter=blob:none',
-      '--recurse-submodules', '--also-filter-submodules',
-      '--origin', 'origin',
+      'git', 'clone', '--filter=blob:none',
+      '--recurse-submodules', '--also-filter-submodules', '--origin', 'origin',
       source, path,
     }
   end,
@@ -817,7 +812,7 @@ H.normalize_spec = function(source, opts)
 
   spec.hooks = opts.hooks or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
-  local hook_names = { 'pre_create', 'post_create', 'pre_change', 'post_change', 'pre_delete', 'post_delete' }
+  local hook_names = { 'pre_create', 'post_create', 'pre_update', 'post_update', 'pre_delete', 'post_delete' }
   for _, hook_name in ipairs(hook_names) do
     if not (spec[hook_name] == nil or vim.is_callable(spec[hook_name])) then
       H.error('`hooks.' .. hook_name .. '` in plugin spec should be callable.')
@@ -987,25 +982,109 @@ H.update_get_log = function(jobs, specs, field_from, field_to, field_out)
   H.cli_job_clean(jobs)
 end
 
-H.update_checkout = function(jobs, specs)
+H.update_checkout = function(jobs, specs, lines)
+  -- Stash changes
+  local stash_command = H.git_commands.stash(H.get_timestamp())
+  for i, job in ipairs(jobs) do
+    job.command = stash_command
+  end
+  H.cli_run(jobs)
+
+  -- Checkout (only if there were no errors and it is a non-trivial checkout)
   for i, s in ipairs(specs) do
-    local needs_checkout = s.head ~= s.checkout_to
-    jobs[i].command = needs_checkout and H.git_commands.checkout(specs[i].checkout_to) or {}
+    local needs_checkout = #jobs[i].err == 0 and s.head ~= s.checkout_to
+    -- Use dummy command in order to show "No checkout message"
+    jobs[i].command = needs_checkout and H.git_commands.checkout(specs[i].checkout_to) or { 'git', 'log', '-1' }
     jobs[i].exit_msg = needs_checkout and string.format('Checked out `%s` in plugin `%s`', s.checkout, s.name)
-      or string.format('No changes for plugin `%s`', s.name)
+      or string.format('No checkout for plugin `%s`', s.name)
   end
   H.cli_run(jobs)
   H.cli_job_clean(jobs)
 end
 
-H.update_compute_report = function(specs, confirm)
-  -- TODO
-  -- - Add interactive header on `confirm` with descriptions of what this is
-  --   and what to do next.
-  -- - In logs add note that `>`/`<` means commit will be added/reverted
+H.update_compute_spec_report = function(spec, errors)
+  if errors ~= '' then return string.format('--- %s ---\n\n%s', spec.name, errors) end
+
+  -- Compute title surrounding based on whether plugin needs an update
+  local surrounding = spec.head == spec.checkout_to and '---' or '+++'
+  local track_is_same_to_checkout = spec.head == spec.track_from and spec.checkout_to == spec.track_to
+  local track_log = track_is_same_to_checkout and '<Same as pending updates>' or spec.track_log
+  local parts = {
+    string.format('%s %s %s\n\n', surrounding, spec.name, surrounding),
+    string.format('Source:              %s\n', spec.source),
+    string.format('State before update: %s\n', spec.head),
+    string.format('State after  update: %s\n', spec.checkout_to),
+    string.format('\nPending updates from `%s`:\n\n', spec.checkout),
+    spec.checkout_log,
+    string.format('\n\nTracking updates from `%s`:\n\n', spec.track),
+    track_log,
+  }
+  return table.concat(parts, '')
 end
 
-H.update_show_report = function(specs, opts)
+H.update_feedback_confirm = function(lines, specs)
+  -- Add helper header
+  local report = {
+    'This is a confirmation report before an update.',
+    '',
+    'Line `+++ <plugin_name> +++` means plugin will be updated.',
+    'See details below the line.',
+    'Remove this line to not update particular plugin.',
+    '',
+    'Line `--- <plugin_name> ---` means plugin will not be updated.',
+    'See details below the line.',
+    '',
+    'To finish update, save this buffer (for example, with `:write` command).',
+    'To abort update, leave this buffer (stop showing in current window).',
+    '',
+    '',
+  }
+  vim.list_extend(report, lines)
+
+  -- Show report in new buffer in current window
+  local buf_id = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf_id, 'mini.deps confirmation report')
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, report)
+  vim.bo[buf_id].buftype, vim.bo[buf_id].filetype = 'acwrite', 'minideps-confirm'
+
+  local win_id = vim.api.nvim_get_current_win()
+  local init_win_buf_id = vim.api.nvim_win_get_buf(win_id)
+  vim.api.nvim_win_set_buf(win_id, buf_id)
+  vim.cmd('setlocal wrap')
+
+  -- Define basic highlighting
+  vim.cmd('syntax match Title          "^+++ .* +++$"')
+  vim.cmd('syntax match Title          "^--- .* ---$"')
+  vim.cmd('syntax match DiagnosticHint "^Source.\\{-}\\zs[^ ]\\+$"')
+  vim.cmd('syntax match DiagnosticHint "^State.\\{-}\\zs[^ ]\\+$"')
+  vim.cmd('syntax match diffRemoved    "^< .*\\n  .*$"')
+  vim.cmd('syntax match diffAdded      "^> .*\\n  .*$"')
+  vim.cmd('syntax match Comment        "^<.*>$"')
+
+  -- Create buffer autocommands
+  local delete_buffer = function() pcall(vim.api.nvim_buf_delete, buf_id, { force = true }) end
+
+  local finish_update = function()
+    -- Compute plugin names to update
+    local names = {}
+    for _, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
+      local cur_name = string.match(l, '^%+%+%+ (.*) %+%+%+$')
+      if cur_name ~= nil then table.insert(names, cur_name) end
+    end
+
+    -- Delete buffer
+    pcall(vim.api.nvim_win_set_buf, win_id, init_win_buf_id)
+    delete_buffer()
+
+    -- Update
+    MiniDeps.update({ confirm = false, names = names, remote = false })
+  end
+
+  vim.api.nvim_create_autocmd('BufWriteCmd', { once = true, buffer = buf_id, callback = finish_update })
+  vim.api.nvim_create_autocmd('BufWinLeave', { buffer = buf_id, callback = vim.schedule_wrap(delete_buffer) })
+end
+
+H.update_feedback_log = function(lines)
   -- TODO
 end
 
