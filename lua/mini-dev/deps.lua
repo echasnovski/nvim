@@ -4,6 +4,8 @@
 --
 -- - Implement one-stop `update()`.
 --
+-- - Check if `git rev-parse <tag>` works if tag was only fetched from remote.
+--
 -- - Add `track` to spec as source branch to get updates from.
 --   Keep treating `checkout` as the checkout target. This distinction
 --   allows to both automated update from some branch or (more importantly)
@@ -11,26 +13,15 @@
 --   waiting for the right time to update `checkout`.
 --   Both are `nil` by default meaning assuming default branch.
 --
--- - Split `checkout` into `track` (string checkout target or `nil` for default
---   branch) and `freeze` (whether to perform update or not).
+-- - Make sure that `update_checkout()` stashes changes.
+--
+-- - Consider moving `now()` and `later()` to 'mini.misc'.
 --
 -- - Think about relevance and effect of `rollback()`.
 --
 -- - Implement `depends` spec.
 --
 -- - Generate help tags after create and change. Basically, in `do_checkout()`.
---
--- - Think about not allowing table input for `checkout()` as it complicates
---   things quite a bit.
---
--- - Think about adding `MiniDeps.diff()` to show log of commits which will be
---   added if `checkout()` is done. Should first try if `origin/<checkout>` is
---   a valid target and then decide whether to do `git log
---   HEAD..origin/<checkout>` or `git log HEAD..<checkout>`.
---   Should also account for the `checkout = false` and show "<No change>".
---
---   This will alow to avoid all issues with improper `FETCH_HEAD` and 'fetch/'
---   directory by moving this action to the user.
 --
 -- Docs:
 -- - Add examples of user commands in |MiniDeps-actions|.
@@ -141,16 +132,17 @@
 ---   It is put in "pack/deps/opt" subdirectory of `config.path.package`.
 ---   Default: basename of a <source>.
 ---
---- - <checkout> `(string|boolean|nil)` - default Git checkout target.
+--- - <checkout> `(string|nil)` - checkout target used to set state during update.
 ---   Can be anything supported by `git checkout` - branch, commit, tag, etc.
----   Can also be boolean:
----     - `true` to checkout to latest default branch (`main` / `master` / etc.)
----     - `false` to not perform `git checkout` at all.
----   Default: `true`.
+---   Default: `nil` for default branch (usually "main" or "master").
+---
+--- - <track> `(string|nil)` - tracking branch used to show new changes if
+---   there is nothing new to checkout. Should be a name of present Git branch.
+---   Default: `nil` for default branch (usually "main" or "master").
 ---
 --- - <depends> `(table|nil)` - array of strings with plugin sources. Each plugin
----   will be set up prior to the target.
----   Note: for more configuration of dependencies, set them up separately.
+---   will be set up prior to the target. Note: for more configuration of
+---   dependencies, set them up separately prior to adding the target.
 ---   Default: `{}`.
 ---
 --- - <hooks> `(table|nil)` - table with callable hooks to call on certain events.
@@ -318,6 +310,9 @@ MiniDeps.config = {
 
     -- Default file path for a snapshot
     snapshot = vim.fn.stdpath('config') .. '/deps-snapshot',
+
+    -- Update log
+    log = vim.fn.stdpath('state') .. '/deps-update-log',
   },
 
   -- Whether to disable showing non-error feedback
@@ -441,14 +436,50 @@ end
 ---     Default: `true`.
 MiniDeps.update = function(opts)
   opts = vim.tbl_deep_extend('force', { confirm = true, names = nil, remote = true }, opts or {})
-  local spec_arr = H.convert_names_to_spec_arr(opts.names)
-  local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
 
-  -- Fetch data if asked
-  if opts.remote then H.do_fetch(spec_arr) end
+  -- Compute target specs and reusable jobs (are not run if there was an error)
+  local specs = H.convert_names_to_specs(opts.names)
+  if #specs == 0 then return H.notify('Nothing to update.') end
+  local jobs = vim.tbl_map(function(s) return H.cli_new_job({}, s.path) end, specs)
 
-  -- Infer repo data
-  H.infer_repo_data(spec_arr)
+  -- Prepare repositories
+  H.update_prepare(jobs, specs)
+
+  -- Preprocess before downloading (updates `specs` in place)
+  H.update_preprocess(jobs, specs)
+
+  -- Download data if asked
+  if opts.remote then H.update_download(jobs, specs) end
+
+  -- Process data for update
+  H.update_process(jobs, specs)
+
+  -- Checkout if asked
+  if not opts.confirm then H.update_checkout(jobs, specs) end
+
+  -- Show job errors
+  for i, job in ipairs(jobs) do
+    H.cli_job_show_err(job, 'updating plugin `' .. specs[i].name .. '`')
+  end
+
+  -- Compute report lines
+  local lines = H.update_compute_report(specs, opts.confirm)
+
+  add_to_log('post update', { jobs = jobs, lines = lines, specs = specs })
+
+  -- Show report
+  H.update_show_report(specs, opts)
+
+  -- Proceed based on whether this should need confirmation or not
+  if opts.confirm then
+    -- Show report lines in new buffer in current window
+    local buf_id = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf_id].buftype = 'acwrite'
+    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+    vim.api.nvim_win_set_buf(0, buf_id)
+
+    -- Create
+  end
 end
 
 --- Fetch new data of plugins
@@ -464,7 +495,7 @@ end
 ---
 ---@param names __deps_names
 MiniDeps.fetch = function(names)
-  local spec_arr = H.convert_names_to_spec_arr(names)
+  local spec_arr = H.convert_names_to_specs(names)
   local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
 
   -- Get current `FETCH_HEAD` for proper log of newly fetched data
@@ -517,7 +548,7 @@ MiniDeps.fetch = function(names)
 
     -- Notify about errors explicitly
     local action_name = string.format('fetching `%s` from `%s`', spec.name, spec.source)
-    H.cli_show_err(job, action_name)
+    H.cli_job_show_err(job, action_name)
   end
 
   -- Write fetch log and show it in new buffer
@@ -544,13 +575,13 @@ MiniDeps.snapshot = function(path)
 
   -- Create snapshot
   local plugin_paths = vim.tbl_map(function(x) return x.path end, MiniDeps.get_session())
-  local jobs = vim.tbl_map(function(p) return H.cli_new_job(H.git_commands.snapshot, p) end, plugin_paths)
+  local jobs = vim.tbl_map(function(p) return H.cli_new_job(H.git_commands.get_hash('HEAD'), p) end, plugin_paths)
   H.cli_run(jobs)
 
   local snapshot = {}
   for i, job in ipairs(jobs) do
     local name = vim.fn.fnamemodify(plugin_paths[i], ':t')
-    H.cli_show_err(job, 'creating snapshot for `' .. name .. '`')
+    H.cli_job_show_err(job, 'creating snapshot for `' .. name .. '`')
     local head_commit = H.cli_stream_tostring(job.out)
     if #job.err == 0 and head_commit ~= '' then snapshot[name] = head_commit end
   end
@@ -695,6 +726,7 @@ H.setup_config = function(config)
     ['job.timeout'] = { config.job.timeout, 'number' },
     ['path.package'] = { config.path.package, 'string' },
     ['path.snapshot'] = { config.path.snapshot, 'string' },
+    ['path.log'] = { config.path.log, 'string' },
   })
 
   return config
@@ -704,6 +736,7 @@ H.apply_config = function(config)
   MiniDeps.config = config
 
   -- Clear current session to allow resourcing script with `setup()` call
+  -- TODO: Use `remove()` on every present entry in `H.session`?
   H.session = {}
 
   -- Add target package path to 'packpath'
@@ -734,21 +767,26 @@ H.git_commands = {
   stash = function(timestamp)
     return { 'git', 'stash', '--quiet', '--message', '(mini.deps) ' .. timestamp .. ' Stash before checkout.' }
   end,
-  checkout = function(target)
-    if type(target) ~= 'string' then return {} end
-    return { 'git', 'checkout', '--quiet', target }
-  end,
+  checkout = function(target) return { 'git', 'checkout', '--quiet', target } end,
   sync_with_local_remote = { 'git', 'merge', '--quiet', '--ff-only' },
   sync_fetch_head = { 'git', 'update-ref', 'FETCH_HEAD', 'HEAD' },
   fetch = { 'git', 'fetch', '--quiet', '--tags', '--recurse-submodules=yes', 'origin' },
   get_fetch_head = { 'git', 'rev-parse', 'FETCH_HEAD' },
   set_origin = function(source) return { 'git', 'remote', 'set-url', 'origin', source } end,
+  get_default_origin_branch = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+  is_origin_branch = function(name)
+    -- Returns branch's name if it is present
+    return { 'git', 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/' .. name }
+  end,
+  get_hash = function(rev) return { 'git', 'rev-parse', rev } end,
+  get_remote_branches = { 'git', 'branch', '--remotes', '--format=%(refname:short)' },
   get_fetch_log = function(from) return { 'git', 'log', from .. '..FETCH_HEAD' } end,
   log = function(range)
-    return { 'git', 'log', '--pretty=format:%h | %ai | %an%d%n  %s%n', '--decorate-refs=refs/tags', range }
+    -- `--topo-order` makes showing divergent branches nicer
+    -- `--decorate-refs` shows only tags near commits (not `origin/main`, etc.)
+    --stylua: ignore
+    return { 'git', 'log', '--pretty=format:%m %h | %ai | %an%d%n  %s%n', '--topo-order', '--decorate-refs=refs/tags', range }
   end,
-  get_head = { 'git', 'rev-parse', 'HEAD' },
-  get_default_branch = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
   snapshot = { 'git', 'rev-parse', 'HEAD' },
 }
 
@@ -768,8 +806,14 @@ H.normalize_spec = function(source, opts)
   if type(spec.name) ~= 'string' then H.error('`name` in plugin spec should be string.') end
 
   spec.checkout = opts.checkout
-  if spec.checkout == nil then spec.checkout = true end
-  if not H.is_proper_checkout(spec.checkout) then H.error('`checkout` in plugin spec should be string or boolean.') end
+  if not (spec.checkout == nil or type(spec.checkout) == 'string') then
+    H.error('`checkout` in plugin spec should be string.')
+  end
+
+  spec.track = opts.track
+  if not (spec.track == nil or type(spec.track) == 'string') then
+    H.error('`track` in plugin spec should be string.')
+  end
 
   spec.hooks = opts.hooks or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
@@ -812,10 +856,8 @@ H.do_create = function(spec)
   H.cli_run({ job })
 
   -- Stop if there were errors
-  if #job.err > 0 then
-    H.cli_show_err(job, string.format('creation of `%s`', spec.name))
-    return
-  end
+  H.cli_job_show_err(job, string.format('creation of `%s`', spec.name))
+  if #job.err > 0 then return end
 
   -- Checkout. Don't use `MiniDeps.checkout` to skip rollback making and hooks.
   local spec_arr = { spec }
@@ -824,7 +866,7 @@ H.do_create = function(spec)
 end
 
 -- Update ---------------------------------------------------------------------
-H.convert_names_to_spec_arr = function(x)
+H.convert_names_to_specs = function(x)
   local session = MiniDeps.get_session()
   if x == nil then return session end
   if not vim.tbl_islist(x) then H.error('`names` should be array.') end
@@ -837,28 +879,134 @@ H.convert_names_to_spec_arr = function(x)
   return res
 end
 
-H.do_fetch = function(spec_arr)
-  local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
-
+H.update_prepare = function(jobs, specs)
   -- Ensure `origin` is set to `source`
   for i, job in ipairs(jobs) do
-    job.command = H.git_commands.set_origin(spec_arr[i].source)
+    job.command = H.git_commands.set_origin(specs[i].source)
+  end
+  H.cli_run(jobs)
+  H.cli_job_clean(jobs)
+end
+
+H.update_preprocess = function(jobs, specs)
+  -- Commit of current head
+  for i, job in ipairs(jobs) do
+    job.command, job.out = H.git_commands.get_hash('HEAD'), {}
+  end
+  H.cli_run(jobs)
+  for i, s in ipairs(specs) do
+    s.head = H.cli_stream_tostring(jobs[i].out)
   end
 
+  -- Default branch
+  for i, job in ipairs(jobs) do
+    job.command, job.out = H.git_commands.get_default_origin_branch, {}
+  end
   H.cli_run(jobs)
+  for i, s in ipairs(specs) do
+    s.def_branch = H.cli_stream_tostring(jobs[i].out):gsub('^origin/', '')
+    s.checkout = s.checkout or s.def_branch
+    s.track = s.track or s.def_branch
+  end
 
-  -- Fetch
+  -- Commit from which to track
+  H.update_get_track_commit(jobs, specs, 'track_from')
+end
+
+H.update_download = function(jobs, specs)
   for i, job in ipairs(jobs) do
     job.command = H.git_commands.fetch
-    job.exit_msg = string.format('Done downloading new data for `%s`', spec_arr[i].name)
+    job.exit_msg = string.format('Done downloading remote updates for `%s`', specs[i].name)
   end
 
+  H.notify('Started downloading remote updates')
   H.cli_run(jobs)
 
-  -- Show errors
+  -- Clean reusable jobs
+  H.cli_job_clean(jobs)
+end
+
+H.update_process = function(jobs, specs)
+  -- Target checkout commit
   for i, job in ipairs(jobs) do
-    H.cli_show_err(job, string.format('downloading new data for `%s`', spec_arr[i].name))
+    job.command, job.out = H.git_commands.is_origin_branch(specs[i].checkout), {}
   end
+  H.cli_run(jobs)
+  for i, job in ipairs(jobs) do
+    local is_branch = H.cli_stream_tostring(job.out):find('%S') ~= nil
+    local checkout = specs[i].checkout
+    job.command = is_branch and H.git_commands.get_hash('origin/' .. checkout) or H.git_commands.get_hash(checkout)
+    job.out = {}
+  end
+  H.cli_run(jobs)
+  for i, s in ipairs(specs) do
+    s.checkout_to = H.cli_stream_tostring(jobs[i].out)
+  end
+
+  -- Target track commit
+  H.update_get_track_commit(jobs, specs, 'track_to')
+
+  -- Checkout log: what will be added after checkout (reverted commits omitted)
+  H.update_get_log(jobs, specs, 'head', 'checkout_to', 'checkout_log')
+
+  -- Track log: what has changed in track branch during this download
+  H.update_get_log(jobs, specs, 'track_from', 'track_to', 'track_log')
+end
+
+H.update_get_track_commit = function(jobs, specs, field)
+  for i, job in ipairs(jobs) do
+    job.command, job.out = H.git_commands.is_origin_branch(specs[i].track), {}
+  end
+  H.cli_run(jobs)
+  for i, job in ipairs(jobs) do
+    local is_branch = H.cli_stream_tostring(job.out):find('%S') ~= nil
+    job.command = is_branch and H.git_commands.get_hash('origin/' .. specs[i].track) or {}
+    job.out = {}
+  end
+  H.cli_run(jobs)
+  for i, s in ipairs(specs) do
+    local out = H.cli_stream_tostring(jobs[i].out)
+    s[field] = out ~= '' and out or s.head
+  end
+
+  H.cli_job_clean(jobs)
+end
+
+H.update_get_log = function(jobs, specs, field_from, field_to, field_out)
+  for i, job in ipairs(jobs) do
+    -- Use `...` to include both branches in case they diverge
+    local range = specs[i][field_from] .. '...' .. specs[i][field_to]
+    job.command, job.out = H.git_commands.log(range), {}
+  end
+  H.cli_run(jobs)
+  for i, s in ipairs(specs) do
+    local out = H.cli_stream_tostring(jobs[i].out)
+    s[field_out] = out ~= '' and out or '<Nothing>'
+  end
+
+  H.cli_job_clean(jobs)
+end
+
+H.update_checkout = function(jobs, specs)
+  for i, s in ipairs(specs) do
+    local needs_checkout = s.head ~= s.checkout_to
+    jobs[i].command = needs_checkout and H.git_commands.checkout(specs[i].checkout_to) or {}
+    jobs[i].exit_msg = needs_checkout and string.format('Checked out `%s` in plugin `%s`', s.checkout, s.name)
+      or string.format('No changes for plugin `%s`', s.name)
+  end
+  H.cli_run(jobs)
+  H.cli_job_clean(jobs)
+end
+
+H.update_compute_report = function(specs, confirm)
+  -- TODO
+  -- - Add interactive header on `confirm` with descriptions of what this is
+  --   and what to do next.
+  -- - In logs add note that `>`/`<` means commit will be added/reverted
+end
+
+H.update_show_report = function(specs, opts)
+  -- TODO
 end
 
 H.infer_repo_data = function(spec_arr)
@@ -866,7 +1014,7 @@ H.infer_repo_data = function(spec_arr)
 
   -- Default branch
   for i, job in ipairs(jobs) do
-    job.command = spec_arr[i].checkout == true and H.git_commands.get_default_branch or {}
+    job.command = spec_arr[i].checkout == true and H.git_commands.get_default_origin_branch or {}
   end
 
   H.cli_run(jobs)
@@ -874,7 +1022,7 @@ H.infer_repo_data = function(spec_arr)
   for i, job in ipairs(jobs) do
     local def_branch = string.match(job.out[1] or '', '^origin/(%S+)')
     if spec_arr[i].checkout == true then spec_arr[i].checkout = def_branch or 'main' end
-    H.cli_show_err(job, 'computing default branch for `' .. spec_arr[i].name .. '`')
+    H.cli_job_show_err(job, 'computing default branch for `' .. spec_arr[i].name .. '`')
     job.err, job.out = {}, {}
   end
 
@@ -903,8 +1051,6 @@ H.infer_repo_data = function(spec_arr)
     spec_arr[i].head = H.cli_stream_tostring(job.out)
   end
 end
-
--- Fetch ----------------------------------------------------------------------
 
 -- Checkout/Snapshot ----------------------------------------------------------
 H.convert_checkout_target_to_spec_arr = function(x)
@@ -967,7 +1113,7 @@ H.do_checkout = function(spec_arr)
   for i, spec in ipairs(spec_arr) do
     local job = jobs[i]
     local action_name = string.format('checkout `%s` in `%s`', spec.checkout, spec.name)
-    H.cli_show_err(jobs[i], action_name)
+    H.cli_job_show_err(jobs[i], action_name)
   end
 
   -- Synchronize with local remotes (for previous `fetch` to have effect)
@@ -1062,9 +1208,15 @@ H.cli_job_to_lines = function(job, title, output_title)
   return lines
 end
 
-H.cli_show_err = function(job, action_name)
+H.cli_job_show_err = function(job, action_name)
   if #job.err == 0 then return end
   H.notify('Error during ' .. action_name .. '\n' .. H.cli_stream_tostring(job.err), 'ERROR')
+end
+
+H.cli_job_clean = function(jobs)
+  for _, job in ipairs(jobs) do
+    job.command, job.exit_msg, job.out = {}, nil, {}
+  end
 end
 
 -- Two-stage execution --------------------------------------------------------
