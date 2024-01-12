@@ -6,7 +6,7 @@
 --
 -- - Check if `git rev-parse <tag>` works if tag was only fetched from remote.
 --
--- - ?Add highlighting to interactive feedback?
+-- - Update `remove()` to also unload plugin's modules.
 --
 -- - `update_checkout()`:
 --     - Make sure that `update_checkout()` stashes changes.
@@ -49,17 +49,20 @@
 --- Features:
 ---
 --- - Manage plugins utilizing Git and built-in |packages| with these actions:
----     - Add / remove / clean.
----     - Update / rollback.
----     - Fetch / preview / checkout.
----     - Save snapshot / load snapshot.
+---     - Add / remove plugin in current session.
+---       See |MiniDeps.add()| and |MiniDeps.remove()|.
+---     - Delete unused plugins. See |MiniDeps.clean()|.
+---     - Update with/without confirm, with/without downloading new data.
+---       See |MiniDeps.update()|.
+---     - Save / load snapshot. See |MiniDeps.snap_save()| and |MiniDeps.snap_load()|.
 ---     All these actions are available both as Lua functions and user commands
----     (see |MiniDeps.setup()).
+---     (see |MiniDeps-commands|).
 ---
 --- - Minimal yet flexible plugin specification:
 ---     - Mandatory plugin source.
 ---     - Name of target plugin directory.
 ---     - Checkout target: branch, commit, tag, etc.
+---     - Tracking branch to monitor updates without checking out.
 ---     - Dependencies to be set up prior to the target plugin.
 ---     - Hooks to call before/after plugin is created/changed/deleted.
 ---
@@ -74,6 +77,7 @@
 --- Sources with more details:
 --- - |MiniDeps-examples|.
 --- - |MiniDeps-plugin-specification|.
+--- - |MiniDeps-commands|.
 ---
 --- # Dependencies ~
 ---
@@ -153,8 +157,8 @@
 ---   Each hook is executed without arguments. Possible hook names:
 ---     - <pre_create>  - before creating plugin directory.
 ---     - <post_create> - after  creating plugin directory.
----     - <pre_update>  - before making update in plugin directory.
----     - <post_update> - after  making update in plugin directory.
+---     - <pre_change>  - before making update in plugin directory.
+---     - <post_change> - after  making update in plugin directory.
 ---     - <pre_delete>  - before deleting plugin directory.
 ---     - <post_delete> - after  deleting plugin directory.
 ---   Default: empty table for no hooks.
@@ -165,12 +169,8 @@
 ---                                                                    *:DepsRemove*
 ---                                                                     *:DepsClean*
 ---                                                                    *:DepsUpdate*
----                                                                  *:DepsRollback*
----                                                                     *:DepsFetch*
----                                                                   *:DepsPreview*
----                                                                  *:DepsCheckout*
----                                                                  *:DepsSnapsave*
----                                                                  *:DepsSnapload*
+---                                                                  *:DepsSnapSave*
+---                                                                  *:DepsSnapLoad*
 ---@tag MiniDeps-commands
 
 --- # Usage examples ~
@@ -214,7 +214,7 @@
 ---       'nvim-treesitter/nvim-treesitter',
 ---       {
 ---         checkout = is_010 and 'main' or 'master',
----         hooks = { post_update = function() vim.cmd('TSUpdate') end },
+---         hooks = { post_change = function() vim.cmd('TSUpdate') end },
 ---       }
 ---     )
 ---
@@ -313,10 +313,10 @@ MiniDeps.config = {
     package = vim.fn.stdpath('data') .. '/site',
 
     -- Default file path for a snapshot
-    snapshot = vim.fn.stdpath('config') .. '/deps-snapshot',
+    snapshot = vim.fn.stdpath('config') .. '/mini-deps-snap',
 
     -- Update log
-    log = vim.fn.stdpath('state') .. '/deps-update-log',
+    log = vim.fn.stdpath('state') .. '/mini-deps.log',
   },
 
   -- Whether to disable showing non-error feedback
@@ -347,9 +347,9 @@ MiniDeps.add = function(source, opts)
   local path, is_present = H.get_plugin_path(spec.name)
   spec.path = path
   if not is_present then
-    H.maybe_exec(spec.hooks.pre_create)
+    H.exec_hook('pre_create', spec.hooks)
     H.do_create(spec)
-    H.maybe_exec(spec.hooks.post_create)
+    H.exec_hook('post_create', spec.hooks)
   end
 
   -- Register plugin's spec in current session
@@ -391,9 +391,9 @@ MiniDeps.remove = function(name, delete_dir)
   if not delete_dir then return end
 
   local spec = session[session_id] or { hooks = {} }
-  H.maybe_exec(spec.hooks.pre_delete)
+  H.exec_hook('pre_delete', spec.hooks)
   vim.fn.delete(path, 'rf')
-  H.maybe_exec(spec.hooks.post_delete)
+  H.exec_hook('post_delete', spec.hooks)
   H.notify('(1/1) Deleted plugin `' .. name .. '` from disk.')
 end
 
@@ -439,7 +439,7 @@ end
 MiniDeps.update = function(opts)
   opts = vim.tbl_deep_extend('force', { confirm = true, names = nil, remote = true }, opts or {})
 
-  -- Compute target specs and reusable jobs (are not run if there was an error)
+  -- Compute target specs and reusable jobs (stop further running after error)
   local specs = H.convert_names_to_specs(opts.names)
   if #specs == 0 then return H.notify('Nothing to update.') end
   local jobs = vim.tbl_map(function(s) return H.cli_new_job({}, s.path) end, specs)
@@ -456,22 +456,13 @@ MiniDeps.update = function(opts)
   -- Process data for update
   H.update_process(jobs, specs)
 
-  -- Checkout if asked
+  -- Checkout if asked (before feedback to include possible checkout errors)
   if not opts.confirm then H.update_checkout(jobs, specs) end
 
-  -- Compute report lines
-  local spec_lines = {}
-  for i, s in ipairs(specs) do
-    local errors = H.cli_stream_tostring(jobs[i].err)
-    spec_lines[i] = H.update_compute_spec_report(s, errors)
-  end
-  local lines = vim.split(table.concat(spec_lines, '\n\n\n'), '\n')
-
-  add_to_log('post update', { lines = lines })
-
   -- Make feedback
+  local lines = H.update_compute_feedback_lines(jobs, specs)
   local feedback = opts.confirm and H.update_feedback_confirm or H.update_feedback_log
-  feedback(lines, specs)
+  feedback(lines)
 
   -- Show job errors
   for i, job in ipairs(jobs) do
@@ -479,105 +470,26 @@ MiniDeps.update = function(opts)
   end
 end
 
---- Fetch new data of plugins
----
---- - Use `git fetch` to fetch data from source URI.
---- - Use `git log` to get newly fetched data and save output to the file in
----   fetch history.
---- - Create and show scratch buffer with the log.
----
---- Notes:
---- - This function is executed asynchronously.
---- - This does not affect actual plugin code. Run |MiniDeps.checkout()| for that.
----
----@param names __deps_names
-MiniDeps.fetch = function(names)
-  local spec_arr = H.convert_names_to_specs(names)
-  local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
-
-  -- Get current `FETCH_HEAD` for proper log of newly fetched data
-  for _, job in ipairs(jobs) do
-    job.command = H.git_commands.get_fetch_head
-  end
-
-  H.cli_run(jobs)
-
-  local fetch_heads = {}
-  for i, job in ipairs(jobs) do
-    -- NOTE: FETCH_HEAD can be not present just after `clone`
-    fetch_heads[i] = #job.err == 0 and H.cli_stream_tostring(job.out) or 'HEAD'
-    job.err, job.out = {}, {}
-  end
-
-  -- Ensure `origin` is set to `source`
-  for i, job in ipairs(jobs) do
-    job.command = H.git_commands.set_origin(spec_arr[i].source)
-  end
-  H.cli_run(jobs)
-  for _, job in ipairs(jobs) do
-    job.out = {}
-  end
-
-  -- Fetch
-  for i, job in ipairs(jobs) do
-    job.command = H.git_commands.fetch
-    job.exit_msg = string.format('Done fetching `%s`', spec_arr[i].name)
-  end
-  H.cli_run(jobs)
-  for _, job in ipairs(jobs) do
-    job.exit_msg, job.out = nil, {}
-  end
-
-  -- Get log of fetched data
-  for i, job in ipairs(jobs) do
-    job.command = H.git_commands.get_fetch_log(fetch_heads[i])
-  end
-  H.cli_run(jobs)
-
-  -- Postprocess
-  local fetched_log = {}
-  for i, job in ipairs(jobs) do
-    if i > 1 then table.insert(fetched_log, '') end
-
-    local spec = spec_arr[i]
-    local lines = H.cli_job_to_lines(job, spec.name, 'FETCH LOG')
-    vim.list_extend(fetched_log, lines)
-
-    -- Notify about errors explicitly
-    local action_name = string.format('fetching `%s` from `%s`', spec.name, spec.source)
-    H.cli_job_show_err(job, action_name)
-  end
-
-  -- Write fetch log and show it in new buffer
-  local fetch_dir = H.get_package_path() .. '/pack/deps/fetch/'
-  vim.fn.mkdir(fetch_dir, 'p')
-  local log_path = fetch_dir .. 'fetch-' .. H.get_timestamp()
-  vim.fn.writefile(fetched_log, log_path)
-
-  vim.cmd('edit ' .. vim.fn.fnameescape(log_path))
-  vim.bo.modifiable = false
-end
-
---- Create snapshot file
+--- Save snapshot file
 ---
 --- - Get commit of all plugins registered via |MiniDeps.add()| in current session.
---- - Create a snapshot: table with plugin names as keys and commits as values.
---- - Write the table to `path` file in the form of a Lua code ready for |dofile()|.
+--- - Create a snapshot data binding plugins name and commit.
+--- - Write snapshot to `path` file.
 ---
 ---@param path string|nil A valid path on disk where to write snapshot file.
 ---   Default: `config.path.snapshot`.
-MiniDeps.snapshot = function(path)
+MiniDeps.snap_save = function(path)
   path = path or H.full_path(H.get_config().path.snapshot)
   if type(path) ~= 'string' then H.error('`path` should be string.') end
 
   -- Create snapshot
-  local plugin_paths = vim.tbl_map(function(x) return x.path end, MiniDeps.get_session())
-  local jobs = vim.tbl_map(function(p) return H.cli_new_job(H.git_commands.get_hash('HEAD'), p) end, plugin_paths)
+  local session = MiniDeps.get_session()
+  local jobs = vim.tbl_map(function(s) return H.cli_new_job(H.git_commands.get_hash('HEAD'), s.path) end, session)
   H.cli_run(jobs)
 
   local snapshot = {}
   for i, job in ipairs(jobs) do
-    local name = vim.fn.fnamemodify(plugin_paths[i], ':t')
+    local name = session[i].name
     H.cli_job_show_err(job, 'creating snapshot for `' .. name .. '`')
     local head_commit = H.cli_stream_tostring(job.out)
     if #job.err == 0 and head_commit ~= '' then snapshot[name] = head_commit end
@@ -593,67 +505,43 @@ MiniDeps.snapshot = function(path)
   H.notify('Created snapshot at ' .. vim.inspect(path) .. '.')
 end
 
---- Checkout plugins
+--- Load snapshot file
 ---
---- - Create rollback snapshot with |MiniDeps.snapshot()|. It is created inside
----   "rollback" directory (see |MiniDeps-directory-structure|) with current
----   timestamp in file name. Note: rollback snapshot is not created if checkout
----   `target` is itself a path to a rollback snapshot file.
+--- - Read snapshot file.
+--- - Compute plugins to be affected: those registered via |MiniDeps.add()| and
+---   present in the snapshot file.
+--- - Checkout plugins to have new state.
+---   Note: `checkout` field from actual session data is not updated. It means
+---   that next call to |MiniDeps.update()| will update according to spec supplied
+---   in |MiniDeps.add()|.
 ---
---- - Checkout according to `target`. For all proper entries:
----     - Execute all `pre_change` hooks.
----     - Use `git checkout` to do checkouts.
----     - Use `git merge` to possibly sync with local copy of remote branch,
----       making results of |MiniDeps.fetch()| present in code on disk.
----     - Execute all `post_change` hooks.
----
----   Notes:
----     - Checkout only entries for plugin names registered with |MiniDeps.add()|.
----     - If plugin is registered with `checkout = false`, it is not checked out.
----     - Hooks and checkout are done in order of the current session.
----
---- Checkout `target` can take several forms:
---- - If table, treat it as a map of checkout targets for plugin names.
----   Fields are plugin names and values are checkout targets as
----   in |MiniDeps-plugin-specification|.
----
----   Example of table checkout target: >
----     { ['plugin_1.nvim'] = true, ['nvim-plugin_2'] = 'main' }
---- <
---- - If string, treat as snapshot file path (as after |MiniDeps.snapshot()|).
----   Source the file expecting returned table and apply previous step.
----
---- - If `nil`, checkout all plugins added to current session with |MiniDeps.add()|
----   according to their specs. See |MiniDeps.get_session()|.
----
----@param target table|string|nil A checkout target. Default: `nil`.
-MiniDeps.checkout = function(target)
-  -- Convert checkout target to spec array with relevant `checkout`
-  local spec_arr = H.convert_checkout_target_to_spec_arr(target)
+---@param path string|nil A valid path on disk from where to read snapshot file.
+---   Default: `config.path.snapshot`.
+MiniDeps.snap_load = function(path)
+  path = path or H.full_path(H.get_config().path.snapshot)
+  if vim.fn.filereadable(path) ~= 1 then H.error('`path` should be path to a readable file.') end
 
-  -- Infer default checkout targets early to call only needed `*_change` hooks
-  H.infer_repo_data(spec_arr)
-  spec_arr = vim.tbl_filter(function(x) return type(x.checkout) == 'string' end, spec_arr)
-  if #spec_arr == 0 then return end
+  local ok, snap = pcall(dofile, H.full_path(path))
+  if not (ok and type(snap) == 'table') then H.error('Checkout target is not a path to proper snapshot.') end
 
-  -- Create rollback snapshot
-  local rollback_dir = H.get_package_path() .. '/pack/deps/rollback/'
-  local is_target_rollback = type(target) == 'string' and vim.startswith(H.full_path(target), rollback_dir)
-  if not is_target_rollback then
-    vim.fn.mkdir(rollback_dir, 'p')
-    local snapshot_path = rollback_dir .. 'snapshot-' .. H.get_timestamp()
-    MiniDeps.snapshot(snapshot_path)
+  -- Construct specs with `checkout` replaced from snapshot
+  local specs = {}
+  for _, s in ipairs(MiniDeps.get_session()) do
+    local new_checkout = snap[s.name]
+    if type(new_checkout) == 'string' then
+      s.checkout = new_checkout
+      table.insert(specs, s)
+    end
   end
 
   -- Checkout
-  for _, spec in ipairs(spec_arr) do
-    H.maybe_exec(spec.hooks.pre_change)
-  end
+  local jobs = vim.tbl_map(function(s) return H.cli_new_job({}, s.path) end, specs)
+  H.do_checkout(jobs, specs, true)
 
-  H.do_checkout(spec_arr)
-
-  for _, spec in ipairs(spec_arr) do
-    H.maybe_exec(spec.hooks.post_change)
+  -- Show errors
+  for i, s in ipairs(specs) do
+    local action_name = string.format('checkout `%s` in `%s`', s.checkout, s.name)
+    H.cli_job_show_err(jobs[i], action_name)
   end
 end
 
@@ -732,8 +620,11 @@ end
 H.apply_config = function(config)
   MiniDeps.config = config
 
-  -- Clear current session to allow resourcing script with `setup()` call
-  -- TODO: Use `remove()` on every present entry in `H.session`?
+  -- Remove current plugins to allow resourcing script with `setup()` call
+  local session = MiniDeps.get_session()
+  for _, spec in ipairs(session) do
+    MiniDeps.remove(spec.name)
+  end
   H.session = {}
 
   -- Add target package path to 'packpath'
@@ -754,7 +645,7 @@ H.git_commands = {
   clone = function(source, path)
     --stylua: ignore
     return {
-      'git', 'clone', '--filter=blob:none',
+      'git', 'clone', '--quiet', '--filter=blob:none',
       '--recurse-submodules', '--also-filter-submodules', '--origin', 'origin',
       source, path,
     }
@@ -763,10 +654,7 @@ H.git_commands = {
     return { 'git', 'stash', '--quiet', '--message', '(mini.deps) ' .. timestamp .. ' Stash before checkout.' }
   end,
   checkout = function(target) return { 'git', 'checkout', '--quiet', target } end,
-  sync_with_local_remote = { 'git', 'merge', '--quiet', '--ff-only' },
-  sync_fetch_head = { 'git', 'update-ref', 'FETCH_HEAD', 'HEAD' },
   fetch = { 'git', 'fetch', '--quiet', '--tags', '--recurse-submodules=yes', 'origin' },
-  get_fetch_head = { 'git', 'rev-parse', 'FETCH_HEAD' },
   set_origin = function(source) return { 'git', 'remote', 'set-url', 'origin', source } end,
   get_default_origin_branch = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
   is_origin_branch = function(name)
@@ -774,7 +662,6 @@ H.git_commands = {
     return { 'git', 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/' .. name }
   end,
   get_hash = function(rev) return { 'git', 'rev-parse', rev } end,
-  get_remote_branches = { 'git', 'branch', '--remotes', '--format=%(refname:short)' },
   get_fetch_log = function(from) return { 'git', 'log', from .. '..FETCH_HEAD' } end,
   log = function(range)
     -- `--topo-order` makes showing divergent branches nicer
@@ -801,20 +688,16 @@ H.normalize_spec = function(source, opts)
   if type(spec.name) ~= 'string' then H.error('`name` in plugin spec should be string.') end
 
   spec.checkout = opts.checkout
-  if not (spec.checkout == nil or type(spec.checkout) == 'string') then
-    H.error('`checkout` in plugin spec should be string.')
-  end
+  if spec.checkout and type(spec.checkout) ~= 'string' then H.error('`checkout` in plugin spec should be string.') end
 
   spec.track = opts.track
-  if not (spec.track == nil or type(spec.track) == 'string') then
-    H.error('`track` in plugin spec should be string.')
-  end
+  if spec.track and type(spec.track) ~= 'string' then H.error('`track` in plugin spec should be string.') end
 
   spec.hooks = opts.hooks or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
-  local hook_names = { 'pre_create', 'post_create', 'pre_update', 'post_update', 'pre_delete', 'post_delete' }
+  local hook_names = { 'pre_create', 'post_create', 'pre_change', 'post_change', 'pre_delete', 'post_delete' }
   for _, hook_name in ipairs(hook_names) do
-    if not (spec[hook_name] == nil or vim.is_callable(spec[hook_name])) then
+    if spec[hook_name] and not vim.is_callable(spec[hook_name]) then
       H.error('`hooks.' .. hook_name .. '` in plugin spec should be callable.')
     end
   end
@@ -911,10 +794,10 @@ end
 H.update_download = function(jobs, specs)
   for i, job in ipairs(jobs) do
     job.command = H.git_commands.fetch
-    job.exit_msg = string.format('Done downloading remote updates for `%s`', specs[i].name)
+    job.exit_msg = string.format('Done downloading updates for `%s`', specs[i].name)
   end
 
-  H.notify('Started downloading remote updates')
+  H.notify('Start downloading updates')
   H.cli_run(jobs)
 
   -- Clean reusable jobs
@@ -923,20 +806,7 @@ end
 
 H.update_process = function(jobs, specs)
   -- Target checkout commit
-  for i, job in ipairs(jobs) do
-    job.command, job.out = H.git_commands.is_origin_branch(specs[i].checkout), {}
-  end
-  H.cli_run(jobs)
-  for i, job in ipairs(jobs) do
-    local is_branch = H.cli_stream_tostring(job.out):find('%S') ~= nil
-    local checkout = specs[i].checkout
-    job.command = is_branch and H.git_commands.get_hash('origin/' .. checkout) or H.git_commands.get_hash(checkout)
-    job.out = {}
-  end
-  H.cli_run(jobs)
-  for i, s in ipairs(specs) do
-    s.checkout_to = H.cli_stream_tostring(jobs[i].out)
-  end
+  H.update_get_checkout_commit(jobs, specs)
 
   -- Target track commit
   H.update_get_track_commit(jobs, specs, 'track_to')
@@ -946,6 +816,31 @@ H.update_process = function(jobs, specs)
 
   -- Track log: what has changed in track branch during this download
   H.update_get_log(jobs, specs, 'track_from', 'track_to', 'track_log')
+
+  -- Whether checkout is needed
+  for i, s in ipairs(specs) do
+    s.needs_checkout = #jobs[i].err == 0 and s.head ~= s.checkout_to
+  end
+end
+
+H.update_get_checkout_commit = function(jobs, specs)
+  for i, job in ipairs(jobs) do
+    job.command, job.out = H.git_commands.is_origin_branch(specs[i].checkout), {}
+  end
+  H.cli_run(jobs)
+  for i, job in ipairs(jobs) do
+    local is_branch = H.cli_stream_tostring(job.out):find('%S') ~= nil
+    local checkout = specs[i].checkout
+    -- Allow checking out not only origin branch (like tag and commit)
+    job.command = is_branch and H.git_commands.get_hash('origin/' .. checkout) or H.git_commands.get_hash(checkout)
+    -- Don't recompute checkout commit if it is already computed
+    if specs[i].checkout_to ~= nil then job.command = {} end
+    job.out = {}
+  end
+  H.cli_run(jobs)
+  for i, s in ipairs(specs) do
+    s.checkout_to = s.checkout_to or H.cli_stream_tostring(jobs[i].out)
+  end
 end
 
 H.update_get_track_commit = function(jobs, specs, field)
@@ -982,63 +877,84 @@ H.update_get_log = function(jobs, specs, field_from, field_to, field_out)
   H.cli_job_clean(jobs)
 end
 
-H.update_checkout = function(jobs, specs, lines)
+H.update_checkout = function(jobs, specs)
   -- Stash changes
   local stash_command = H.git_commands.stash(H.get_timestamp())
   for i, job in ipairs(jobs) do
-    job.command = stash_command
+    job.command = H.needs_checkout and stash_command or {}
   end
   H.cli_run(jobs)
 
   -- Checkout (only if there were no errors and it is a non-trivial checkout)
   for i, s in ipairs(specs) do
-    local needs_checkout = #jobs[i].err == 0 and s.head ~= s.checkout_to
     -- Use dummy command in order to show "No checkout message"
-    jobs[i].command = needs_checkout and H.git_commands.checkout(specs[i].checkout_to) or { 'git', 'log', '-1' }
-    jobs[i].exit_msg = needs_checkout and string.format('Checked out `%s` in plugin `%s`', s.checkout, s.name)
-      or string.format('No checkout for plugin `%s`', s.name)
+    jobs[i].command = s.needs_checkout and H.git_commands.checkout(specs[i].checkout_to) or { 'git', 'log', '-1' }
+    jobs[i].exit_msg = s.needs_checkout and string.format('Checked out `%s` in plugin `%s`', s.checkout, s.name)
+      or string.format('No checkout needed for plugin `%s`', s.name)
   end
   H.cli_run(jobs)
   H.cli_job_clean(jobs)
 end
 
-H.update_compute_spec_report = function(spec, errors)
+H.update_compute_feedback_lines = function(jobs, specs)
+  -- Construct lines with metadata for later sort
+  local spec_lines_data = {}
+  for i, s in ipairs(specs) do
+    local err_lines = H.cli_stream_tostring(jobs[i].err)
+    spec_lines_data[i] = { H.update_compute_report_spec(s, err_lines), s.needs_checkout, i }
+  end
+
+  -- Sort lines to put those with updates first
+  local compare = function(a, b)
+    if a[2] and not b[2] then return true end
+    if not a[2] and b[2] then return false end
+    return a[3] < b[3]
+  end
+  table.sort(spec_lines_data, compare)
+
+  local spec_lines = vim.tbl_map(function(x) return x[1] end, spec_lines_data)
+  return vim.split(table.concat(spec_lines, '\n\n\n'), '\n')
+end
+
+H.update_compute_report_spec = function(spec, errors)
   if errors ~= '' then return string.format('--- %s ---\n\n%s', spec.name, errors) end
 
   -- Compute title surrounding based on whether plugin needs an update
-  local surrounding = spec.head == spec.checkout_to and '---' or '+++'
-  local track_is_same_to_checkout = spec.head == spec.track_from and spec.checkout_to == spec.track_to
-  local track_log = track_is_same_to_checkout and '<Same as pending updates>' or spec.track_log
+  local surrounding = spec.needs_checkout and '+++' or '---'
   local parts = {
     string.format('%s %s %s\n\n', surrounding, spec.name, surrounding),
     string.format('Source:              %s\n', spec.source),
     string.format('State before update: %s\n', spec.head),
     string.format('State after  update: %s\n', spec.checkout_to),
-    string.format('\nPending updates from `%s`:\n\n', spec.checkout),
+    string.format('\nPending updates for `%s`:\n\n', spec.checkout),
     spec.checkout_log,
-    string.format('\n\nTracking updates from `%s`:\n\n', spec.track),
-    track_log,
   }
+  if spec.checkout ~= spec.track then
+    table.insert(parts, string.format('\n\nTracking updates for `%s`:\n\n', spec.track))
+    table.insert(parts, spec.track_log)
+  end
   return table.concat(parts, '')
 end
 
-H.update_feedback_confirm = function(lines, specs)
+H.update_feedback_confirm = function(lines)
   -- Add helper header
   local report = {
     'This is a confirmation report before an update.',
     '',
     'Line `+++ <plugin_name> +++` means plugin will be updated.',
-    'See details below the line.',
-    'Remove this line to not update particular plugin.',
+    'See update details below the line.',
+    'Remove the line to not update that plugin.',
+    'Such plugins are shown first.',
     '',
     'Line `--- <plugin_name> ---` means plugin will not be updated.',
-    'See details below the line.',
+    'See reasons below the line.',
     '',
     'To finish update, save this buffer (for example, with `:write` command).',
-    'To abort update, leave this buffer (stop showing in current window).',
+    'To abort update, leave this buffer (stop showing it in current window).',
     '',
     '',
   }
+  local n_header = #report - 2
   vim.list_extend(report, lines)
 
   -- Show report in new buffer in current window
@@ -1053,16 +969,19 @@ H.update_feedback_confirm = function(lines, specs)
   vim.cmd('setlocal wrap')
 
   -- Define basic highlighting
-  vim.cmd('syntax match Title          "^+++ .* +++$"')
-  vim.cmd('syntax match Title          "^--- .* ---$"')
-  vim.cmd('syntax match DiagnosticHint "^Source.\\{-}\\zs[^ ]\\+$"')
-  vim.cmd('syntax match DiagnosticHint "^State.\\{-}\\zs[^ ]\\+$"')
-  vim.cmd('syntax match diffRemoved    "^< .*\\n  .*$"')
-  vim.cmd('syntax match diffAdded      "^> .*\\n  .*$"')
-  vim.cmd('syntax match Comment        "^<.*>$"')
+  vim.cmd('syntax region DiagnosticHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
+  vim.cmd([[
+    syntax match DiffAdd        "^+++ .* +++$"
+    syntax match DiffDelete     "^--- .* ---$"
+    syntax match DiagnosticInfo "^Source.\{-}\zs[^ ]\+$"
+    syntax match DiagnosticInfo "^State.\{-}\zs[^ ]\+$"
+    syntax match diffRemoved    "^< .*\n  .*$"
+    syntax match diffAdded      "^> .*\n  .*$"
+    syntax match Comment        "^<.*>$"
+  ]])
 
   -- Create buffer autocommands
-  local delete_buffer = function() pcall(vim.api.nvim_buf_delete, buf_id, { force = true }) end
+  local delete_buffer = vim.schedule_wrap(function() pcall(vim.api.nvim_buf_delete, buf_id, { force = true }) end)
 
   local finish_update = function()
     -- Compute plugin names to update
@@ -1081,94 +1000,43 @@ H.update_feedback_confirm = function(lines, specs)
   end
 
   vim.api.nvim_create_autocmd('BufWriteCmd', { once = true, buffer = buf_id, callback = finish_update })
-  vim.api.nvim_create_autocmd('BufWinLeave', { buffer = buf_id, callback = vim.schedule_wrap(delete_buffer) })
+  -- Use `nested` to allow other events, like `WinEnter` for proper statusline
+  vim.api.nvim_create_autocmd('BufWinLeave', { buffer = buf_id, nested = true, callback = delete_buffer })
 end
 
 H.update_feedback_log = function(lines)
-  -- TODO
+  local title = string.format('========== Update %s ==========', vim.fn.strftime('%Y-%m-%d %H:%M:%S'))
+  table.insert(lines, 1, title)
+  table.insert(lines, '')
+
+  local log_path = H.get_config().path.log
+  vim.fn.mkdir(vim.fn.fnamemodify(log_path, ':h'), 'p')
+  vim.fn.writefile(lines, log_path, 'a')
 end
 
-H.infer_repo_data = function(spec_arr)
-  local jobs = vim.tbl_map(function(spec) return H.cli_new_job({}, spec.path) end, spec_arr)
-
-  -- Default branch
-  for i, job in ipairs(jobs) do
-    job.command = spec_arr[i].checkout == true and H.git_commands.get_default_origin_branch or {}
-  end
-
-  H.cli_run(jobs)
-
-  for i, job in ipairs(jobs) do
-    local def_branch = string.match(job.out[1] or '', '^origin/(%S+)')
-    if spec_arr[i].checkout == true then spec_arr[i].checkout = def_branch or 'main' end
-    H.cli_job_show_err(job, 'computing default branch for `' .. spec_arr[i].name .. '`')
-    job.err, job.out = {}, {}
-  end
-
-  -- Pending changes
-  for i, job in ipairs(jobs) do
-    -- NOTE: This will error if `checkout` is not a branch
-    job.command = H.git_commands.log('HEAD..origin/' .. spec_arr[i].checkout)
-  end
-
-  H.cli_run(jobs)
-
-  for i, job in ipairs(jobs) do
-    local out = H.cli_stream_tostring(job.out)
-    spec_arr[i].log_pending = (#job.err == 0 and out ~= '') and out or '<Nothing>'
-    job.err, job.out = {}, {}
-  end
-
-  -- Current HEAD
-  for i, job in ipairs(jobs) do
-    job.command = H.git_commands.get_head
-  end
-
-  H.cli_run(jobs)
-
-  for i, job in ipairs(jobs) do
-    spec_arr[i].head = H.cli_stream_tostring(job.out)
-  end
-end
-
--- Checkout/Snapshot ----------------------------------------------------------
-H.convert_checkout_target_to_spec_arr = function(x)
-  local session = MiniDeps.get_session()
-
-  -- Use session specs by default
-  if x == nil then
-    x = {}
-    for _, spec in ipairs(session) do
-      x[spec.name] = spec.checkout
+-- Checkout -------------------------------------------------------------------
+H.do_checkout = function(jobs, specs, exec_hooks)
+  -- Compute whether checkout is needed
+  -- Compute checkout target
+  -- Stash changes if checkout is actually done
+  -- Execute `pre_change` hooks
+  if exec_hooks then
+    for i, s in ipairs(specs) do
+      if #jobs[i].err == 0 and s.needs_checkout then H.exec_hook('pre_change', s.hooks) end
     end
   end
 
-  -- Treat string input as path to snapshot file
-  if type(x) == 'string' then
-    local ok, out = pcall(dofile, H.full_path(x))
-    if not (ok and type(out) == 'table') then H.error('Checkout target is not a path to proper snapshot.') end
-    x = out
-  end
+  -- Checkout
 
-  -- Input should be a map from plugin names to checkout target
-  if type(x) ~= 'table' then H.error('Checkout target should be table.') end
-
-  -- Add appropriate session specs with `checkout` updated to target
-  local res = {}
-  for _, spec in ipairs(session) do
-    local new_checkout = x[spec.name]
-    if H.is_proper_checkout(new_checkout) and spec.checkout ~= false then
-      spec.checkout = new_checkout
-      table.insert(res, spec)
+  -- Execute `post_change` hooks
+  if exec_hooks then
+    for i, s in ipairs(specs) do
+      if #jobs[i].err == 0 and s.needs_checkout then H.exec_hook('post_change', s.hooks) end
     end
   end
-
-  return res
 end
 
-H.is_proper_checkout = function(x) return type(x) == 'string' or type(x) == 'boolean' end
-
-H.do_checkout = function(spec_arr)
+H.prev_do_checkout = function(spec_arr)
   local jobs = {}
 
   -- Stash before checkout
@@ -1274,19 +1142,6 @@ H.cli_new_job = function(command, cwd, exit_msg)
   return { command = command, cwd = cwd, exit_msg = exit_msg, out = {}, err = {} }
 end
 
-H.cli_job_to_lines = function(job, title, output_title)
-  local lines = { '=== ' .. (title or '') .. ' ===' }
-  local err = H.cli_stream_tostring(job.err)
-  if err ~= '' then vim.list_extend(lines, vim.split('--- ERRORS ---\n\n' .. err .. '\n', '\n')) end
-
-  local out = H.cli_stream_tostring(job.out)
-  if out == '' then out = '<Nothing>' end
-  output_title = output_title or 'OUTPUT'
-  vim.list_extend(lines, vim.split('--- ' .. output_title .. ' ---\n\n' .. out, '\n'))
-
-  return lines
-end
-
 H.cli_job_show_err = function(job, action_name)
   if #job.err == 0 then return end
   H.notify('Error during ' .. action_name .. '\n' .. H.cli_stream_tostring(job.err), 'ERROR')
@@ -1345,24 +1200,15 @@ H.notify = vim.schedule_wrap(function(msg, level)
   vim.cmd('redraw')
 end)
 
-H.maybe_exec = function(f, ...)
-  if not vim.is_callable(f) then return end
-  local ok, err = pcall(f, ...)
-  if not ok then H.notify('Error during hook execution:\n' .. err, 'WARN') end
+H.exec_hook = function(name, hooks, ...)
+  if not vim.is_callable(hooks[name]) then return end
+  local ok, err = pcall(hooks[name], ...)
+  if not ok then H.notify('Error executing ' .. name .. ' hook:\n' .. err, 'WARN') end
 end
 
 H.get_timestamp = function() return vim.fn.strftime('%Y%m%d%H%M%S') end
 
-H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
-
 H.full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('\\', '/'):gsub('/+', '/'):gsub('(.)/$', '%1')) end
-
-H.short_path = function(path, cwd)
-  cwd = cwd or vim.fn.getcwd()
-  if not vim.startswith(path, cwd) then return vim.fn.fnamemodify(path, ':~') end
-  local res = path:sub(cwd:len() + 1):gsub('^/+', ''):gsub('/+$', '')
-  return res
-end
 
 H.readdir = function(path)
   if vim.fn.isdirectory(path) ~= 1 then return {} end
