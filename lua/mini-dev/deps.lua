@@ -2,24 +2,30 @@
 --
 -- Code:
 --
--- - Implement one-stop `update()`.
---
--- - Check if `git rev-parse <tag>` works if tag was only fetched from remote.
+-- - Refactor `add()` (by adding `plugs_create()`?) and finish refactoring `plugs_checkout()`.
 --
 -- - Update `remove()` to also unload plugin's modules.
 --
--- - `update_checkout()`:
---     - Make sure that `update_checkout()` stashes changes.
---     - Include `*_update` hooks.
+-- - Stop using special "session" notion in favor of parsing 'runtimepath' for
+--   proper ancestors of `config.path.package` (excluding 'after').
+--   Make sure that order is correct.
+--
+-- - Rethink about making `add()` and `remove()` accept list (of specs/names
+--   respectively) or possible a `...`.
+--   In `add()` allow either one `source` of `name` to be present.
+--   String spec is treated as `source` if it contains at least one '/', as
+--   `name` otherwise.
+--   Update `remove()` to still accept `delete_dir` as second argument but
+--   operate on all target plugins.
+--
+-- - `plugs_checkout()`:
 --     - Refactor to be usable in `add()`.
+--
+-- - Add `snap_get()` and `snap_set()`.
 --
 -- - Think about renaming `track` in spec to `monitor`.
 --
--- - Consider moving `now()` and `later()` to 'mini.misc'.
---
 -- - Implement `depends` spec.
---
--- - Generate help tags after create and change. Basically, in `do_checkout()`.
 --
 -- Docs:
 -- - Add examples of user commands in |MiniDeps-actions|.
@@ -439,35 +445,38 @@ end
 MiniDeps.update = function(opts)
   opts = vim.tbl_deep_extend('force', { confirm = true, names = nil, remote = true }, opts or {})
 
-  -- Compute target specs and reusable jobs (stop further running after error)
-  local specs = H.convert_names_to_specs(opts.names)
-  if #specs == 0 then return H.notify('Nothing to update.') end
-  local jobs = vim.tbl_map(function(s) return H.cli_new_job({}, s.path) end, specs)
+  -- Compute array of plugin data to be reused in update. Each contains a CLI
+  -- job "assigned" to plugin's path which stops execution after first error.
+  local plugs = H.plugs_from_names(opts.names)
+  if #plugs == 0 then return H.notify('Nothing to update.') end
 
   -- Prepare repositories
-  H.update_prepare(jobs, specs)
+  H.plugs_ensure_origin(plugs)
 
-  -- Preprocess before downloading (updates `specs` in place)
-  H.update_preprocess(jobs, specs)
+  -- Preprocess before downloading
+  H.plugs_ensure_target_refs(plugs)
+  H.plugs_infer_head(plugs)
+  H.plugs_infer_commit(plugs, 'track', 'track_from')
 
   -- Download data if asked
-  if opts.remote then H.update_download(jobs, specs) end
+  if opts.remote then H.plugs_download_updates(plugs) end
 
   -- Process data for update
-  H.update_process(jobs, specs)
+  H.plugs_infer_commit(plugs, 'checkout', 'checkout_to')
+  H.plugs_infer_commit(plugs, 'track', 'track_to')
+  H.plugs_infer_log(plugs, 'head', 'checkout_to', 'checkout_log')
+  H.plugs_infer_log(plugs, 'track_from', 'track_to', 'track_log')
 
   -- Checkout if asked (before feedback to include possible checkout errors)
-  if not opts.confirm then H.update_checkout(jobs, specs) end
+  if not opts.confirm then H.plugs_checkout(plugs) end
 
   -- Make feedback
-  local lines = H.update_compute_feedback_lines(jobs, specs)
+  local lines = H.update_compute_feedback_lines(plugs)
   local feedback = opts.confirm and H.update_feedback_confirm or H.update_feedback_log
   feedback(lines)
 
   -- Show job errors
-  for i, job in ipairs(jobs) do
-    H.cli_job_show_err(job, 'updating plugin `' .. specs[i].name .. '`')
-  end
+  H.plugs_show_job_errors(plugs, 'update')
 end
 
 --- Save snapshot file
@@ -654,7 +663,8 @@ H.git_commands = {
     return { 'git', 'stash', '--quiet', '--message', '(mini.deps) ' .. timestamp .. ' Stash before checkout.' }
   end,
   checkout = function(target) return { 'git', 'checkout', '--quiet', target } end,
-  fetch = { 'git', 'fetch', '--quiet', '--tags', '--recurse-submodules=yes', 'origin' },
+  -- Using '--tags --force' means conflicting tags will be synced with remote
+  fetch = { 'git', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
   set_origin = function(source) return { 'git', 'remote', 'set-url', 'origin', source } end,
   get_default_origin_branch = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
   is_origin_branch = function(name)
@@ -662,14 +672,16 @@ H.git_commands = {
     return { 'git', 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/' .. name }
   end,
   get_hash = function(rev) return { 'git', 'rev-parse', rev } end,
-  get_fetch_log = function(from) return { 'git', 'log', from .. '..FETCH_HEAD' } end,
-  log = function(range)
+  log = function(from, to)
     -- `--topo-order` makes showing divergent branches nicer
     -- `--decorate-refs` shows only tags near commits (not `origin/main`, etc.)
     --stylua: ignore
-    return { 'git', 'log', '--pretty=format:%m %h | %ai | %an%d%n  %s%n', '--topo-order', '--decorate-refs=refs/tags', range }
+    return {
+      'git', 'log',
+      '--pretty=format:%m %h | %ai | %an%d%n  %s%n', '--topo-order', '--decorate-refs=refs/tags',
+      from .. '...' .. to,
+    }
   end,
-  snapshot = { 'git', 'rev-parse', 'HEAD' },
 }
 
 -- Plugin specification -------------------------------------------------------
@@ -703,6 +715,150 @@ H.normalize_spec = function(source, opts)
   end
 
   return spec
+end
+
+-- Plugin operations ----------------------------------------------------------
+H.plugs_from_names = function(names)
+  local session = MiniDeps.get_session()
+  if names and not vim.tbl_islist(names) then H.error('`names` should be array.') end
+
+  local res = {}
+  for _, spec in ipairs(session) do
+    if names == nil or vim.tbl_contains(names, spec.name) then
+      spec.job = H.cli_new_job({}, spec.path)
+      table.insert(res, spec)
+    end
+  end
+
+  return res
+end
+
+H.plugs_exec_hooks = function(plugs, name)
+  for _, p in ipairs(plugs) do
+    local has_error = p.job and #p.job.err > 0
+    local should_execute = vim.is_callable(p.hooks[name]) and not has_error
+    if should_execute then
+      local ok, err = pcall(p.hooks[name])
+      if not ok then
+        local msg = string.format('Error executing %s hook in plugin `%s`:\n%s', name, p.name, err)
+        H.notify(msg, 'WARN')
+      end
+    end
+  end
+end
+
+H.plugs_run_jobs = function(plugs, prepare, process)
+  if vim.is_callable(prepare) then vim.tbl_map(prepare, plugs) end
+
+  H.cli_run(vim.tbl_map(function(p) return p.job end, plugs))
+
+  if vim.is_callable(process) then vim.tbl_map(process, plugs) end
+
+  -- Clean jobs. Preserve errors for jobs to be properly reusable.
+  for _, p in ipairs(plugs) do
+    p.job.command, p.job.exit_msg, p.job.out = {}, nil, {}
+  end
+end
+
+H.plugs_show_job_errors = function(plugs, action_name)
+  for _, p in ipairs(plugs) do
+    local err = H.cli_stream_tostring(p.job.err)
+    if err ~= '' then
+      local msg = string.format('Error in plugin `%s` during %s\n%s', p.name, action_name, err)
+      H.notify(msg, 'ERROR')
+    end
+  end
+end
+
+H.plugs_ensure_origin = function(plugs)
+  local prepare = function(p) p.job.command = p.source and H.git_commands.set_origin(p.source) or {} end
+  H.plugs_run_jobs(plugs, prepare)
+end
+
+H.plugs_ensure_target_refs = function(plugs)
+  local prepare = function(p) p.job.command = H.git_commands.get_default_origin_branch end
+  local process = function(p)
+    local def_branch = H.cli_stream_tostring(p.job.out):gsub('^origin/', '')
+    p.checkout = p.checkout or def_branch
+    p.track = p.track or def_branch
+  end
+  H.plugs_run_jobs(plugs, prepare, process)
+end
+
+H.plugs_infer_head = function(plugs)
+  local prepare = function(p) p.job.command = p.head == nil and H.git_commands.get_hash('HEAD') or {} end
+  local process = function(p) p.head = p.head or H.cli_stream_tostring(p.job.out) end
+  H.plugs_run_jobs(plugs, prepare, process)
+end
+
+H.plugs_infer_commit = function(plugs, field_ref, field_out)
+  -- Determine if reference points to an origin branch (to avoid error later)
+  local prepare = function(p)
+    -- Don't recompute commit if it is already computed
+    p.job.command = p[field_out] == nil and H.git_commands.is_origin_branch(p[field_ref]) or {}
+  end
+  local process = function(p) p.is_ref_origin_branch = H.cli_stream_tostring(p.job.out):find('%S') ~= nil end
+  H.plugs_run_jobs(plugs, prepare, process)
+
+  -- Infer commit depending on whether it points to origin branch
+  prepare = function(p)
+    local ref = (p.is_ref_origin_branch and 'origin/' or '') .. p[field_ref]
+    p.job.command = p[field_out] == nil and H.git_commands.get_hash(ref) or {}
+  end
+  process = function(p)
+    p[field_out] = p[field_out] or H.cli_stream_tostring(p.job.out)
+    p.is_ref_origin_branch = nil
+  end
+  H.plugs_run_jobs(plugs, prepare, process)
+end
+
+H.plugs_infer_log = function(plugs, field_from, field_to, field_out)
+  local prepare = function(p) p.job.command = H.git_commands.log(p[field_from], p[field_to]) end
+  local process = function(p) p[field_out] = H.cli_stream_tostring(p.job.out) end
+  H.plugs_run_jobs(plugs, prepare, process)
+end
+
+H.plugs_download_updates = function(plugs)
+  local prepare = function(p)
+    p.job.command = H.git_commands.fetch
+    p.job.exit_msg = string.format('Done downloading updates for `%s`', p.name)
+  end
+  H.notify(string.format('(0/%d) Started downloading updates', #plugs))
+  H.plugs_run_jobs(plugs, prepare)
+end
+
+H.plugs_checkout = function(plugs, exec_hooks)
+  H.plugs_infer_head(plugs)
+  H.plugs_infer_commit(plugs, 'checkout', 'checkout_to')
+
+  -- Stash changes
+  local stash_command = H.git_commands.stash(H.get_timestamp())
+  local prepare = function(p)
+    p.needs_checkout = p.head ~= p.checkout_to
+    p.job.command = p.needs_checkout and stash_command or {}
+  end
+  H.plugs_run_jobs(plugs, prepare)
+
+  -- Execute pre hooks
+  H.plugs_exec_hooks(plugs, 'pre_change')
+
+  -- Checkout
+  prepare = function(p)
+    -- Use dummy command in order to show "No checkout message"
+    p.job.command = p.needs_checkout and H.git_commands.checkout(p.checkout_to) or { 'git', 'log', '-1' }
+    p.job.exit_msg = p.needs_checkout and string.format('Checked out `%s` in plugin `%s`', p.checkout, p.name)
+      or string.format('No checkout needed for plugin `%s`', p.name)
+  end
+  H.plugs_run_jobs(plugs, prepare)
+
+  -- Execute pre hooks
+  H.plugs_exec_hooks(plugs, 'post_change')
+
+  -- (Re)Generate help tags
+  for _, p in ipairs(plugs) do
+    local doc_dir = p.path .. '/doc'
+    if vim.fn.isdirectory(doc_dir) == 1 then vim.cmd('helptags ' .. vim.fn.fnameescape(doc_dir)) end
+  end
 end
 
 -- File system ----------------------------------------------------------------
@@ -744,195 +900,55 @@ H.do_create = function(spec)
 end
 
 -- Update ---------------------------------------------------------------------
-H.convert_names_to_specs = function(x)
-  local session = MiniDeps.get_session()
-  if x == nil then return session end
-  if not vim.tbl_islist(x) then H.error('`names` should be array.') end
-
-  local res = {}
-  for _, spec in ipairs(session) do
-    if vim.tbl_contains(x, spec.name) then table.insert(res, spec) end
-  end
-
-  return res
-end
-
-H.update_prepare = function(jobs, specs)
-  -- Ensure `origin` is set to `source`
-  for i, job in ipairs(jobs) do
-    job.command = H.git_commands.set_origin(specs[i].source)
-  end
-  H.cli_run(jobs)
-  H.cli_job_clean(jobs)
-end
-
-H.update_preprocess = function(jobs, specs)
-  -- Commit of current head
-  for i, job in ipairs(jobs) do
-    job.command, job.out = H.git_commands.get_hash('HEAD'), {}
-  end
-  H.cli_run(jobs)
-  for i, s in ipairs(specs) do
-    s.head = H.cli_stream_tostring(jobs[i].out)
-  end
-
-  -- Default branch
-  for i, job in ipairs(jobs) do
-    job.command, job.out = H.git_commands.get_default_origin_branch, {}
-  end
-  H.cli_run(jobs)
-  for i, s in ipairs(specs) do
-    s.def_branch = H.cli_stream_tostring(jobs[i].out):gsub('^origin/', '')
-    s.checkout = s.checkout or s.def_branch
-    s.track = s.track or s.def_branch
-  end
-
-  -- Commit from which to track
-  H.update_get_track_commit(jobs, specs, 'track_from')
-end
-
-H.update_download = function(jobs, specs)
-  for i, job in ipairs(jobs) do
-    job.command = H.git_commands.fetch
-    job.exit_msg = string.format('Done downloading updates for `%s`', specs[i].name)
-  end
-
-  H.notify('Start downloading updates')
-  H.cli_run(jobs)
-
-  -- Clean reusable jobs
-  H.cli_job_clean(jobs)
-end
-
-H.update_process = function(jobs, specs)
-  -- Target checkout commit
-  H.update_get_checkout_commit(jobs, specs)
-
-  -- Target track commit
-  H.update_get_track_commit(jobs, specs, 'track_to')
-
-  -- Checkout log: what will be added after checkout (reverted commits omitted)
-  H.update_get_log(jobs, specs, 'head', 'checkout_to', 'checkout_log')
-
-  -- Track log: what has changed in track branch during this download
-  H.update_get_log(jobs, specs, 'track_from', 'track_to', 'track_log')
-
-  -- Whether checkout is needed
-  for i, s in ipairs(specs) do
-    s.needs_checkout = #jobs[i].err == 0 and s.head ~= s.checkout_to
-  end
-end
-
-H.update_get_checkout_commit = function(jobs, specs)
-  for i, job in ipairs(jobs) do
-    job.command, job.out = H.git_commands.is_origin_branch(specs[i].checkout), {}
-  end
-  H.cli_run(jobs)
-  for i, job in ipairs(jobs) do
-    local is_branch = H.cli_stream_tostring(job.out):find('%S') ~= nil
-    local checkout = specs[i].checkout
-    -- Allow checking out not only origin branch (like tag and commit)
-    job.command = is_branch and H.git_commands.get_hash('origin/' .. checkout) or H.git_commands.get_hash(checkout)
-    -- Don't recompute checkout commit if it is already computed
-    if specs[i].checkout_to ~= nil then job.command = {} end
-    job.out = {}
-  end
-  H.cli_run(jobs)
-  for i, s in ipairs(specs) do
-    s.checkout_to = s.checkout_to or H.cli_stream_tostring(jobs[i].out)
-  end
-end
-
-H.update_get_track_commit = function(jobs, specs, field)
-  for i, job in ipairs(jobs) do
-    job.command, job.out = H.git_commands.is_origin_branch(specs[i].track), {}
-  end
-  H.cli_run(jobs)
-  for i, job in ipairs(jobs) do
-    local is_branch = H.cli_stream_tostring(job.out):find('%S') ~= nil
-    job.command = is_branch and H.git_commands.get_hash('origin/' .. specs[i].track) or {}
-    job.out = {}
-  end
-  H.cli_run(jobs)
-  for i, s in ipairs(specs) do
-    local out = H.cli_stream_tostring(jobs[i].out)
-    s[field] = out ~= '' and out or s.head
-  end
-
-  H.cli_job_clean(jobs)
-end
-
-H.update_get_log = function(jobs, specs, field_from, field_to, field_out)
-  for i, job in ipairs(jobs) do
-    -- Use `...` to include both branches in case they diverge
-    local range = specs[i][field_from] .. '...' .. specs[i][field_to]
-    job.command, job.out = H.git_commands.log(range), {}
-  end
-  H.cli_run(jobs)
-  for i, s in ipairs(specs) do
-    local out = H.cli_stream_tostring(jobs[i].out)
-    s[field_out] = out ~= '' and out or '<Nothing>'
-  end
-
-  H.cli_job_clean(jobs)
-end
-
-H.update_checkout = function(jobs, specs)
-  -- Stash changes
-  local stash_command = H.git_commands.stash(H.get_timestamp())
-  for i, job in ipairs(jobs) do
-    job.command = H.needs_checkout and stash_command or {}
-  end
-  H.cli_run(jobs)
-
-  -- Checkout (only if there were no errors and it is a non-trivial checkout)
-  for i, s in ipairs(specs) do
-    -- Use dummy command in order to show "No checkout message"
-    jobs[i].command = s.needs_checkout and H.git_commands.checkout(specs[i].checkout_to) or { 'git', 'log', '-1' }
-    jobs[i].exit_msg = s.needs_checkout and string.format('Checked out `%s` in plugin `%s`', s.checkout, s.name)
-      or string.format('No checkout needed for plugin `%s`', s.name)
-  end
-  H.cli_run(jobs)
-  H.cli_job_clean(jobs)
-end
-
-H.update_compute_feedback_lines = function(jobs, specs)
+H.update_compute_feedback_lines = function(plugs)
   -- Construct lines with metadata for later sort
-  local spec_lines_data = {}
-  for i, s in ipairs(specs) do
-    local err_lines = H.cli_stream_tostring(jobs[i].err)
-    spec_lines_data[i] = { H.update_compute_report_spec(s, err_lines), s.needs_checkout, i }
+  local plug_data = {}
+  for i, p in ipairs(plugs) do
+    local lines = H.update_compute_report_single(p)
+    plug_data[i] = { lines = lines, has_error = p.has_error, has_updates = p.has_updates, index = i }
   end
 
-  -- Sort lines to put those with updates first
+  -- Sort to put first ones with errors, then with updates, then rest
   local compare = function(a, b)
-    if a[2] and not b[2] then return true end
-    if not a[2] and b[2] then return false end
-    return a[3] < b[3]
+    if a.has_error and not b.has_error then return true end
+    if not a.has_error and b.has_error then return false end
+    if a.has_updates and not b.has_updates then return true end
+    if not a.has_updates and b.has_updates then return false end
+    return a.index < b.index
   end
-  table.sort(spec_lines_data, compare)
+  table.sort(plug_data, compare)
 
-  local spec_lines = vim.tbl_map(function(x) return x[1] end, spec_lines_data)
-  return vim.split(table.concat(spec_lines, '\n\n\n'), '\n')
+  local plug_lines = vim.tbl_map(function(x) return x.lines end, plug_data)
+  return vim.split(table.concat(plug_lines, '\n\n'), '\n')
 end
 
-H.update_compute_report_spec = function(spec, errors)
-  if errors ~= '' then return string.format('--- %s ---\n\n%s', spec.name, errors) end
+H.update_compute_report_single = function(p)
+  p.has_error, p.has_updates = #p.job.err > 0, p.head ~= p.checkout_to
+
+  local err = H.cli_stream_tostring(p.job.err)
+  if err ~= '' then return string.format('!!! %s !!!\n\n%s', p.name, err) end
 
   -- Compute title surrounding based on whether plugin needs an update
-  local surrounding = spec.needs_checkout and '+++' or '---'
+  local surrounding = p.has_updates and '+++' or '---'
   local parts = {
-    string.format('%s %s %s\n\n', surrounding, spec.name, surrounding),
-    string.format('Source:              %s\n', spec.source),
-    string.format('State before update: %s\n', spec.head),
-    string.format('State after  update: %s\n', spec.checkout_to),
-    string.format('\nPending updates for `%s`:\n\n', spec.checkout),
-    spec.checkout_log,
+    string.format('%s %s %s\n', surrounding, p.name, surrounding),
+    string.format('Source:              %s\n', p.source),
+    string.format('State before update: %s\n', p.head),
+    string.format('State after  update: %s', p.checkout_to),
   }
-  if spec.checkout ~= spec.track then
-    table.insert(parts, string.format('\n\nTracking updates for `%s`:\n\n', spec.track))
-    table.insert(parts, spec.track_log)
+
+  -- Show pending updates only if they are present
+  if p.has_updates then
+    table.insert(parts, string.format('\n\nPending updates for `%s`:\n', p.checkout))
+    table.insert(parts, p.checkout_log)
   end
+
+  -- Show tracking updates only if user asked for them
+  if p.checkout ~= p.track then
+    table.insert(parts, string.format('\n\nTracking updates for `%s`:\n', p.track))
+    table.insert(parts, p.track_log ~= '' and p.track_log or '<Nothing>')
+  end
+
   return table.concat(parts, '')
 end
 
@@ -944,17 +960,17 @@ H.update_feedback_confirm = function(lines)
     'Line `+++ <plugin_name> +++` means plugin will be updated.',
     'See update details below the line.',
     'Remove the line to not update that plugin.',
-    'Such plugins are shown first.',
     '',
-    'Line `--- <plugin_name> ---` means plugin will not be updated.',
-    'See reasons below the line.',
+    "Line `!!! <plugin_name> !!!` means plugin had an error and won't be updated.",
+    'See error details below the line.',
+    '',
+    'Line `--- <plugin_name> ---` means plugin has nothing to update.',
     '',
     'To finish update, save this buffer (for example, with `:write` command).',
     'To abort update, leave this buffer (stop showing it in current window).',
     '',
-    '',
   }
-  local n_header = #report - 2
+  local n_header = #report - 1
   vim.list_extend(report, lines)
 
   -- Show report in new buffer in current window
@@ -971,8 +987,9 @@ H.update_feedback_confirm = function(lines)
   -- Define basic highlighting
   vim.cmd('syntax region DiagnosticHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
   vim.cmd([[
+    syntax match DiffDelete     "^!!! .* !!!$"
     syntax match DiffAdd        "^+++ .* +++$"
-    syntax match DiffDelete     "^--- .* ---$"
+    syntax match Title          "^--- .* ---$"
     syntax match DiagnosticInfo "^Source.\{-}\zs[^ ]\+$"
     syntax match DiagnosticInfo "^State.\{-}\zs[^ ]\+$"
     syntax match diffRemoved    "^< .*\n  .*$"
@@ -1201,6 +1218,9 @@ H.notify = vim.schedule_wrap(function(msg, level)
 end)
 
 H.exec_hook = function(name, hooks, ...)
+  if not vim.is_callable(hooks[name]) then return end
+  local ok, err = pcall(hooks[name], ...)
+  if not ok then H.notify('Error executing ' .. name .. ' hook:\n' .. err, 'WARN') end
   if not vim.is_callable(hooks[name]) then return end
   local ok, err = pcall(hooks[name], ...)
   if not ok then H.notify('Error executing ' .. name .. ' hook:\n' .. err, 'WARN') end
