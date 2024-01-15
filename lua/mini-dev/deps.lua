@@ -2,6 +2,8 @@
 --
 -- Code:
 --
+-- - ?Define and use dedicated highlight groups for 'minideps-confirm' buffer?
+--
 -- - `plugs_checkout()`:
 --     - Invesitgate why help tags are recomputed but help page is not updated
 --       if previously was displayed after valid `:help` command.
@@ -12,13 +14,16 @@
 --
 -- - Rethink about making `add()` and `remove()` accept list (of specs/names
 --   respectively). This will allow having canonical `opts` as second argument.
---   In `add()` allow either one `source` of `name` to be present.
---   String spec is treated as `source` if it contains at least one '/', as
---   `name` otherwise.
---   Update `remove()` to still accept `delete_dir` as second argument but
---   operate on all target plugins.
+--     - In `add()` allow either one `source` of `name` to be present.
+--     - String spec is treated as `source` if it contains at least one '/', as
+--       `name` otherwise.
+--     - Update `remove()` to still accept `delete_dir` as second argument but
+--       operate on all target plugins.
+--     - Update `:DepsAdd` and `:DepsRemove` commands.
 --
 -- - Implement `depends` spec.
+--
+-- - Consider adding/documenting automated reloading of 'init.lua'.
 --
 -- - Think about renaming `track` in spec to `monitor`.
 --
@@ -291,8 +296,8 @@ MiniDeps.setup = function(config)
   -- Apply config
   H.apply_config(config)
 
-  -- Define behavior
-  H.create_user_commands(config)
+  -- Create user commands
+  H.create_user_commands()
 end
 
 --stylua: ignore
@@ -306,8 +311,8 @@ MiniDeps.config = {
     -- Number of parallel threads to use. Default: 80% of all available.
     n_threads = nil,
 
-    -- Timeout (in ms) which each job should take on average
-    timeout = 60000,
+    -- Timeout (in ms) of each job (on average)
+    timeout = 30000,
   },
 
   -- Paths describing where to store data
@@ -351,7 +356,8 @@ MiniDeps.add = function(source, opts)
   local path, is_present = H.get_plugin_path(spec.name)
   spec.path = path
   if not is_present then
-    spec.job = H.cli_new_job({}, vim.fn.getcwd())
+    vim.fn.mkdir(path, 'p')
+    spec.job = H.cli_new_job({}, path)
     local plugs = { spec }
     H.plugs_exec_hooks(plugs, 'pre_create')
     H.plugs_create(plugs)
@@ -642,7 +648,7 @@ H.apply_config = function(config)
   -- Remove current plugins to allow resourcing script with `setup()` call
   local session = MiniDeps.get_session()
   for _, spec in ipairs(session) do
-    MiniDeps.remove(spec.name)
+    pcall(MiniDeps.remove, spec.name)
   end
   H.session = {}
 
@@ -651,12 +657,45 @@ H.apply_config = function(config)
   vim.cmd('set packpath+=' .. vim.fn.fnameescape(pack_path))
 end
 
-H.create_user_commands = function(config)
-  -- TODO
-end
-
 H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniDeps.config, vim.b.minideps_config or {}, config or {})
+end
+
+H.create_user_commands = function()
+  local new_cmd = vim.api.nvim_create_user_command
+
+  local get_plugin_names = function()
+    return vim.tbl_map(function(s) return s.name end, MiniDeps.get_session())
+  end
+  local complete_names = function(arg, _, _)
+    return vim.tbl_filter(function(n) return vim.startswith(n, arg) end, get_plugin_names())
+  end
+
+  local add = function(input) MiniDeps.add(input.fargs[1]) end
+  new_cmd('DepsAdd', add, { nargs = '?', desc = 'Add plugin to session' })
+
+  local remove = function(input) MiniDeps.remove(input.fargs[1], input.bang) end
+  local remove_opts = { bang = true, complete = complete_names, nargs = 1, desc = 'Remove plugin from session' }
+  new_cmd('DepsRemove', remove, remove_opts)
+
+  local make_update_cmd = function(name, remote, desc)
+    local callback = function(input)
+      local names = #input.fargs == 0 and get_plugin_names() or input.fargs
+      MiniDeps.update({ confirm = not input.bang, names = names, remote = remote })
+    end
+    local opts = { bang = true, complete = complete_names, nargs = '*', desc = desc }
+    new_cmd(name, callback, opts)
+  end
+  make_update_cmd('DepsUpdate', true, 'Update plugins')
+  make_update_cmd('DepsUpdateLocal', false, 'Update plugins without downloading from source')
+
+  new_cmd('DepsClean', function() MiniDeps.clean() end, { desc = 'Clean unused plugins' })
+
+  local snap_save = function(input) MiniDeps.snap_save(input.fargs[1]) end
+  new_cmd('DepsSnapSave', snap_save, { nargs = '?', complete = 'file', desc = 'Save plugin snapshot' })
+
+  local snap_load = function(input) MiniDeps.snap_load(input.fargs[1]) end
+  new_cmd('DepsSnapLoad', snap_load, { nargs = '?', complete = 'file', desc = 'Load plugin snapshot' })
 end
 
 -- Git commands ---------------------------------------------------------------
@@ -795,11 +834,13 @@ H.plugs_checkout = function(plugs, exec_hooks)
   -- Execute pre hooks
   if exec_hooks then H.plugs_exec_hooks(plugs, 'post_change') end
 
-  -- (Re)Generate help tags
+  -- (Re)Generate help tags according to the current help files
   for _, p in ipairs(plugs) do
     local doc_dir = p.path .. '/doc'
+    vim.fn.delete(doc_dir .. '/tags')
     local has_help_files = vim.fn.glob(doc_dir .. '/**') ~= ''
     if has_help_files then vim.cmd('helptags ' .. vim.fn.fnameescape(doc_dir)) end
+    if not has_help_files then vim.fn.delete(doc_dir, 'rf') end
   end
 end
 
@@ -1003,15 +1044,14 @@ H.update_feedback_confirm = function(lines)
   vim.list_extend(report, lines)
 
   -- Show report in new buffer in current window
-  local buf_id = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf_id, 'mini.deps confirmation report')
+  local buf_id = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_buf_set_name(buf_id, 'mini.deps update confirmation')
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, report)
-  vim.bo[buf_id].buftype, vim.bo[buf_id].filetype = 'acwrite', 'minideps-confirm'
+  vim.bo[buf_id].buftype, vim.bo[buf_id].filetype, vim.bo[buf_id].modified = 'acwrite', 'minideps-confirm', false
 
   local win_id = vim.api.nvim_get_current_win()
   local init_win_buf_id = vim.api.nvim_win_get_buf(win_id)
   vim.api.nvim_win_set_buf(win_id, buf_id)
-  vim.cmd('setlocal wrap')
 
   -- Define basic highlighting
   vim.cmd('syntax region DiagnosticHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
@@ -1095,7 +1135,7 @@ H.cli_run = function(jobs)
       if code ~= 0 then table.insert(job.err, 1, 'PROCESS EXITED WITH ERROR CODE ' .. code .. '\n') end
       process:close()
       n_finished = n_finished + 1
-      if type(exit_msg) == 'string' then H.notify(string.format('(%d/%d) %s.', n_finished, n_total, exit_msg)) end
+      if type(exit_msg) == 'string' then H.notify(string.format('(%d/%d) %s', n_finished, n_total, exit_msg)) end
       run_next()
     end
 
