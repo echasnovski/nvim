@@ -2,37 +2,31 @@
 --
 -- Code:
 --
--- - ?Define and use dedicated highlight groups for 'minideps-confirm' buffer?
---
 -- - `plugs_checkout()`:
 --     - Invesitgate why help tags are recomputed but help page is not updated
 --       if previously was displayed after valid `:help` command.
 --
--- - Stop using special "session" notion in favor of parsing 'runtimepath' for
---   proper ancestors of `config.path.package` (excluding 'after').
---   Make sure that order is correct.
---
 -- - Rethink about making `add()` and `remove()` accept list (of specs/names
---   respectively). This will allow having canonical `opts` as second argument.
+--   respectively) OR at least `add()` to accept proper specification table.
+--   This will allow having canonical `opts` as second argument.
 --     - In `add()` allow either one `source` of `name` to be present.
---     - String spec is treated as `source` if it contains at least one '/', as
---       `name` otherwise.
+--     - String is treated as `name` if it has no '/', otherwise - `source`.
 --     - Update `remove()` to still accept `delete_dir` as second argument but
 --       operate on all target plugins.
 --     - Update `:DepsAdd` and `:DepsRemove` commands.
 --
--- - Implement `depends` spec.
+-- - Implement `depends` spec:
+--     - Should add them prior to target one.
+--     - Should remove them (if asked) in `remove()`.
 --
--- - Consider adding/documenting automated reloading of 'init.lua'.
---
--- - Think about renaming `track` in spec to `monitor`.
+-- - Consider adding/documenting automated reloading after 'init.lua' has changed.
 --
 -- Docs:
 -- - Add examples of user commands in |MiniDeps-actions|.
--- - Clarify distinction in how to use `checkout` and `track`. They allow both
---   automated update from some branch and (more importantly) "freezing" plugin
---   at certain commit/tag while allowing to track updates waiting for the
---   right time to update `checkout`.
+-- - Clarify distinction in how to use `checkout` and `monitor`. They allow
+--   both automated update from some branch and (more importantly) "freezing"
+--   plugin at certain commit/tag while allowing to monitor updates waiting for
+--   the right time to update `checkout`.
 -- - In update reports note that `>`/`<` means commit will be added/reverted.
 -- - To freeze plugin from updates use `checkout = 'HEAD'`.
 --
@@ -71,7 +65,7 @@
 ---     - Mandatory plugin source.
 ---     - Name of target plugin directory.
 ---     - Checkout target: branch, commit, tag, etc.
----     - Tracking branch to monitor updates without checking out.
+---     - Monitor branch to track updates without checking out.
 ---     - Dependencies to be set up prior to the target plugin.
 ---     - Hooks to call before/after plugin is created/changed/deleted.
 ---
@@ -114,7 +108,22 @@
 ---
 --- - 'lewis6991/pckr.nvim' :
 ---
+--- # Highlight groups ~
+---
+--- Highlight groups are used inside confirmation buffer after |MiniDeps.update()|.
+---
+--- * `MiniDepsChangeAdded`   - added change (commit) during update.
+--- * `MiniDepsChangeRemoved` - removed change (commit) during update.
+--- * `MiniDepsHint`          - various hints.
+--- * `MiniDepsInfo`          - various information.
+--- * `MiniDepsPlaceholder`   - placeholder when there is no valuable information.
+--- * `MiniDepsTitleError`    - title when plugin had errors during update.
+--- * `MiniDepsTitleSame`     - title when plugin has no changes to update.
+--- * `MiniDepsTitleUpdate`   - title when plugin has changes to update.
+---
+--- To change any highlight group, modify it directly with |:highlight|.
 
+-- TODO; ?Remove this in favor of linking to |packages| in overview?
 --- # Directory structure ~
 ---
 --- All module's data is stored in `config.path.package` directory inside
@@ -127,10 +136,6 @@
 ---   All its subdirectories are recognized as plugins by this module.
 ---   To actually use it, move installed plugin from `opt` directory.
 ---   HOWEVER, there will be less long-term confusion if only `opt` is used.
----
---- - `rollback` with a history of automated snapshots. Those are created
----   with |MiniDeps.snapsave()| before every |MiniDeps.update()| and
----   are used by |MiniDeps.rollback()|.
 ---@tag MiniDeps-directory-structure
 
 --- # Plugin specification ~
@@ -153,8 +158,8 @@
 ---   Can be anything supported by `git checkout` - branch, commit, tag, etc.
 ---   Default: `nil` for default branch (usually "main" or "master").
 ---
---- - <track> `(string|nil)` - tracking branch used to show new changes if
----   there is nothing new to checkout. Should be a name of present Git branch.
+--- - <monitor> `(string|nil)` - monitor branch used to track new changes from
+---   different target than `checkout`. Should be a name of present Git branch.
 ---   Default: `nil` for default branch (usually "main" or "master").
 ---
 --- - <depends> `(table|nil)` - array of strings with plugin sources. Each plugin
@@ -178,6 +183,7 @@
 ---                                                                    *:DepsRemove*
 ---                                                                     *:DepsClean*
 ---                                                                    *:DepsUpdate*
+---                                                             *:DepsUpdateOffline*
 ---                                                                  *:DepsSnapSave*
 ---                                                                  *:DepsSnapLoad*
 ---@tag MiniDeps-commands
@@ -264,9 +270,6 @@
 
 ---@alias __deps_source string Plugin's source. See |MiniDeps-plugin-specification|.
 ---@alias __deps_spec_opts table|nil Optional spec fields. See |MiniDeps-plugin-specification|.
----@alias __deps_names table Array of plugin names registered in current session
----   with |MiniDeps.add()|. See |MiniDeps.get_session()|.
----   Default: names of all registered plugins.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -295,6 +298,9 @@ MiniDeps.setup = function(config)
 
   -- Apply config
   H.apply_config(config)
+
+  -- Create default highlighting
+  H.create_default_hl()
 
   -- Create user commands
   H.create_user_commands()
@@ -342,7 +348,7 @@ MiniDeps.config = {
 ---     - Execute `opts.hooks.post_create`.
 ---   Note: If plugin directory is present, no action with it is done (to increase
 ---   performance during startup). In particular, it does not checkout according
----   to `opts.checkout`. Use |MiniDeps.checkout()| explicitly.
+---   to `opts.checkout`. Use |MiniDeps.update()| explicitly.
 --- - Register plugin's spec in current session if there is no plugin with the
 ---   same name already registered.
 --- - Make sure it can be used in current session (see |:packadd|).
@@ -364,8 +370,8 @@ MiniDeps.add = function(source, opts)
     H.plugs_exec_hooks(plugs, 'post_create')
   end
 
-  -- Register plugin's spec in current session
-  table.insert(H.session, spec)
+  -- Register plugin's spec for current session
+  H.session[path] = spec
 
   -- Add plugin to current session
   vim.cmd('packadd ' .. spec.name)
@@ -373,10 +379,10 @@ end
 
 --- Remove plugin from current session
 ---
---- - Remove plugin path from 'runtimpath'.
+--- - Remove plugin path from 'runtimpath' (if earlier put there via this module).
 --- - Remove plugin spec from current session (if present).
 --- - Unload all cached Lua modules from plugin. This enables resetting plugin
----   functionality after possible next |MiniDeps.add()|.
+---   functionality after possibly later call to |MiniDeps.add()|.
 --- - If `delete_dir`, delete plugin directory:
 ---     - Execute `pre_delete` hook (if plugin with input name is registered).
 ---     - Delete plugin directory.
@@ -391,21 +397,19 @@ MiniDeps.remove = function(name, delete_dir)
   local path, is_present = H.get_plugin_path(name)
   if not is_present then return H.error('`' .. name .. '` is not a name of present plugin.') end
 
-  -- Find current session data for plugin
-  local session, session_id = MiniDeps.get_session(), nil
-  for i, spec in ipairs(session) do
-    if spec.name == name then session_id = i end
-  end
+  -- Find current session spec for plugin
+  local spec = H.session[path] or { hooks = {} }
 
-  -- Remove plugin
-  vim.cmd('set rtp-=' .. vim.fn.fnameescape(path))
-  if session_id ~= nil then table.remove(H.session, session_id) end
+  -- Remove plugin from current session. Update runtimepath only for non-start
+  -- plugins as most likely they were not added there by 'mini.deps'.
+  local is_added = H.session[path] ~= nil
+  if is_added then vim.cmd('set rtp-=' .. vim.fn.fnameescape(path)) end
+  H.session[path] = nil
   H.unload_lua_modules(path)
 
   -- Possibly delete directory
   if not delete_dir then return end
 
-  local spec = session[session_id] or { hooks = {} }
   local plugs = { spec }
   H.plugs_exec_hooks(plugs, 'pre_delete')
   vim.fn.delete(path, 'rf')
@@ -445,37 +449,37 @@ end
 
 --- Update plugins
 ---
+---@param names table|nil Array of plugin names to update.
+---  Default: all plugins registered in current session.
 ---@param opts table|nil Options. Possible fields:
 ---   - <force> `(boolean)` - whether to force update without confirmation.
 ---     Default: `false`.
----   - <names> `(table)` - array of plugin names to update.
----     Default: all plugins registered in current session with |MiniDeps.add()|.
 ---   - <offline> `(boolean)` - whether to skip downloading updates from sources.
 ---     Default: `false`.
-MiniDeps.update = function(opts)
-  opts = vim.tbl_deep_extend('force', { force = false, names = nil, offline = false }, opts or {})
+MiniDeps.update = function(names, opts)
+  opts = vim.tbl_deep_extend('force', { force = false, offline = false }, opts or {})
 
   -- Compute array of plugin data to be reused in update. Each contains a CLI
   -- job "assigned" to plugin's path which stops execution after first error.
-  local plugs = H.plugs_from_names(opts.names)
+  local plugs = H.plugs_from_names(names)
   if #plugs == 0 then return H.notify('Nothing to update.') end
 
-  -- Prepare repositories
-  H.plugs_ensure_origin(plugs)
+  -- Prepare repositories and specifications
+  H.plugs_ensure_origin_source(plugs)
 
   -- Preprocess before downloading
   H.plugs_ensure_target_refs(plugs)
   H.plugs_infer_head(plugs)
-  H.plugs_infer_commit(plugs, 'track', 'track_from')
+  H.plugs_infer_commit(plugs, 'monitor', 'monitor_from')
 
   -- Download data if asked
   if not opts.offline then H.plugs_download_updates(plugs) end
 
   -- Process data for update
   H.plugs_infer_commit(plugs, 'checkout', 'checkout_to')
-  H.plugs_infer_commit(plugs, 'track', 'track_to')
+  H.plugs_infer_commit(plugs, 'monitor', 'monitor_to')
   H.plugs_infer_log(plugs, 'head', 'checkout_to', 'checkout_log')
-  H.plugs_infer_log(plugs, 'track_from', 'track_to', 'track_log')
+  H.plugs_infer_log(plugs, 'monitor_from', 'monitor_to', 'monitor_log')
 
   -- Checkout if asked (before feedback to include possible checkout errors)
   if opts.force then H.plugs_checkout(plugs, true) end
@@ -491,7 +495,7 @@ end
 
 --- Compute snapshot
 ---
----@return table A snapshot table: plugin names as keys and string state as values.
+---@return table A snapshot table: plugin names as keys and state as values.
 ---   All plugins in current session are processed.
 MiniDeps.snap_get = function()
   local plugs = H.plugs_from_names()
@@ -513,7 +517,7 @@ end
 ---   to |MiniDeps.update()| might override the result of this function.
 ---   To make changes permanent, set `checkout` spec field to state from snapshot.
 ---
----@param snap table A snapshot table: plugin names as keys and string state as values.
+---@param snap table A snapshot table: plugin names as keys and state as values.
 ---   Only plugins in current session are processed.
 MiniDeps.snap_set = function(snap)
   if type(snap) ~= 'table' then H.error('Snapshot should be a table.') end
@@ -570,20 +574,22 @@ end
 
 --- Get session data
 MiniDeps.get_session = function()
-  -- TODO: Use `nvim_list_runtime_paths()` directly.
+  local deps_path_esc = vim.pesc(H.get_package_path() .. '/pack/deps')
+  local pattern_match_opt = string.format('^%s/opt/([^/]+)$', deps_path_esc)
+  local pattern_match_start = string.format('^%s/start/([^/]+)$', deps_path_esc)
+  local rtp = vim.api.nvim_list_runtime_paths()
 
-  -- Normalize `H.session`. Prefere spec (entirely) which was added earlier.
-  local session, present_names = {}, {}
-  for _, spec in ipairs(H.session) do
-    if not present_names[spec.name] then
-      table.insert(session, spec)
-      present_names[spec.name] = true
+  local res = {}
+  for i = #rtp, 1, -1 do
+    local name = string.match(rtp[i], pattern_match_opt) or string.match(rtp[i], pattern_match_start)
+    if name ~= nil then
+      local spec = H.session[rtp[i]] or { path = rtp[i], name = name, hooks = {} }
+      table.insert(res, spec)
     end
   end
-  H.session = session
 
   -- Return copy to not allow modification in place
-  return vim.deepcopy(session)
+  return vim.deepcopy(res)
 end
 
 MiniDeps.now = function(f)
@@ -601,8 +607,7 @@ end
 -- Module default config
 H.default_config = MiniDeps.config
 
--- Array of current session plugin specs. NOTE: Having it as array allows to
--- respect order in which plugins were added (at cost of later normalization).
+-- Map of current session plugin specs with full path as key
 H.session = {}
 
 -- Various cache
@@ -661,6 +666,23 @@ H.get_config = function(config)
   return vim.tbl_deep_extend('force', MiniDeps.config, vim.b.minideps_config or {}, config or {})
 end
 
+--stylua: ignore
+H.create_default_hl = function()
+  local hi = function(name, opts)
+    opts.default = true
+    vim.api.nvim_set_hl(0, name, opts)
+  end
+
+  hi('MiniDepsChangeAdded',   { link = 'diffAdded' })
+  hi('MiniDepsChangeRemoved', { link = 'diffRemoved' })
+  hi('MiniDepsHint',          { link = 'DiagnosticHint' })
+  hi('MiniDepsInfo',          { link = 'DiagnosticInfo' })
+  hi('MiniDepsPlaceholder',   { link = 'Comment' })
+  hi('MiniDepsTitleError',    { link = 'Error' })
+  hi('MiniDepsTitleSame',     { link = 'Title' })
+  hi('MiniDepsTitleUpdate',   { link = 'DiffAdd' })
+end
+
 H.create_user_commands = function()
   local new_cmd = vim.api.nvim_create_user_command
 
@@ -681,7 +703,7 @@ H.create_user_commands = function()
   local make_update_cmd = function(name, offline, desc)
     local callback = function(input)
       local names = #input.fargs == 0 and get_plugin_names() or input.fargs
-      MiniDeps.update({ force = input.bang, names = names, offline = offline })
+      MiniDeps.update(names, { force = input.bang, offline = offline })
     end
     local opts = { bang = true, complete = complete_names, nargs = '*', desc = desc }
     new_cmd(name, callback, opts)
@@ -715,6 +737,7 @@ H.git_cmd = {
   -- Using '--tags --force' means conflicting tags will be synced with remote
   fetch = { 'git', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
   set_origin = function(source) return { 'git', 'remote', 'set-url', 'origin', source } end,
+  get_origin = { 'git', 'remote', 'get-url', 'origin' },
   get_default_origin_branch = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
   is_origin_branch = function(name)
     -- Returns branch's name if it is present
@@ -737,10 +760,12 @@ H.git_cmd = {
 H.normalize_spec = function(source, opts)
   local spec = {}
 
-  if type(source) ~= 'string' then H.error('Plugin source should be string.') end
-  -- Allow 'user/repo' as source
-  if source:find('^[^/]+/[^/]+$') ~= nil then source = 'https://github.com/' .. source end
-  spec.source = source
+  if source ~= nil then
+    if type(source) ~= 'string' then H.error('Plugin source should be string.') end
+    -- Allow 'user/repo' as source
+    if source:find('^[^/]+/[^/]+$') ~= nil then source = 'https://github.com/' .. source end
+    spec.source = source
+  end
 
   opts = opts or {}
   if type(opts) ~= 'table' then H.error([[Plugin's optional spec should be table.]]) end
@@ -751,8 +776,8 @@ H.normalize_spec = function(source, opts)
   spec.checkout = opts.checkout
   if spec.checkout and type(spec.checkout) ~= 'string' then H.error('`checkout` in plugin spec should be string.') end
 
-  spec.track = opts.track
-  if spec.track and type(spec.track) ~= 'string' then H.error('`track` in plugin spec should be string.') end
+  spec.monitor = opts.monitor
+  if spec.monitor and type(spec.monitor) ~= 'string' then H.error('`monitor` in plugin spec should be string.') end
 
   spec.hooks = opts.hooks or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
@@ -774,7 +799,7 @@ H.plugs_exec_hooks = function(plugs, name)
     if should_execute then
       local ok, err = pcall(p.hooks[name])
       if not ok then
-        local msg = string.format('Error executing %s hook in plugin `%s`:\n%s', name, p.name, err)
+        local msg = string.format('Error executing %s hook in `%s`:\n%s', name, p.name, err)
         H.notify(msg, 'WARN')
       end
     end
@@ -784,7 +809,8 @@ end
 H.plugs_create = function(plugs)
   -- Clone
   local prepare = function(p)
-    p.job.command = H.git_cmd.clone(p.source, p.path)
+    if p.source == nil and #p.job.err == 0 then p.job.err = { 'SPECIFICATION HAS NO `source` TO CREATE PLUGIN.' } end
+    p.job.command = H.git_cmd.clone(p.source or '', p.path)
     p.job.exit_msg = string.format('Done creating `%s`', p.name)
   end
   H.notify(string.format('(0/%d) Creating plugins', #plugs))
@@ -826,8 +852,8 @@ H.plugs_checkout = function(plugs, exec_hooks)
   prepare = function(p)
     -- Use dummy command in order to show "No checkout message"
     p.job.command = p.needs_checkout and H.git_cmd.checkout(p.checkout_to) or { 'git', 'log', '-1' }
-    p.job.exit_msg = p.needs_checkout and string.format('Checked out `%s` in plugin `%s`', p.checkout, p.name)
-      or string.format('No checkout needed for plugin `%s`', p.name)
+    p.job.exit_msg = p.needs_checkout and string.format('Checked out `%s` in `%s`', p.checkout, p.name)
+      or string.format('No checkout needed for `%s`', p.name)
   end
   H.plugs_run_jobs(plugs, prepare)
 
@@ -877,26 +903,27 @@ H.plugs_show_job_errors = function(plugs, action_name)
   for _, p in ipairs(plugs) do
     local err = H.cli_stream_tostring(p.job.err)
     if err ~= '' then
-      local msg = string.format('Error in plugin `%s` during %s\n%s', p.name, action_name, err)
+      local msg = string.format('Error in `%s` during %s\n%s', p.name, action_name, err)
       H.notify(msg, 'ERROR')
     end
   end
 end
 
-H.plugs_ensure_origin = function(plugs)
-  local prepare = function(p) p.job.command = p.source and H.git_cmd.set_origin(p.source) or {} end
-  H.plugs_run_jobs(plugs, prepare)
+H.plugs_ensure_origin_source = function(plugs)
+  local prepare = function(p) p.job.command = p.source and H.git_cmd.set_origin(p.source) or H.git_cmd.get_origin end
+  local process = function(p) p.source = p.source or H.cli_stream_tostring(p.job.out) end
+  H.plugs_run_jobs(plugs, prepare, process)
 end
 
 H.plugs_ensure_target_refs = function(plugs)
   local prepare = function(p)
-    local needs_infer = p.checkout == nil or p.track == nil
+    local needs_infer = p.checkout == nil or p.monitor == nil
     p.job.command = needs_infer and H.git_cmd.get_default_origin_branch or {}
   end
   local process = function(p)
     local def_branch = H.cli_stream_tostring(p.job.out):gsub('^origin/', '')
     p.checkout = p.checkout or def_branch
-    p.track = p.track or def_branch
+    p.monitor = p.monitor or def_branch
   end
   H.plugs_run_jobs(plugs, prepare, process)
 end
@@ -1003,24 +1030,24 @@ H.update_compute_report_single = function(p)
   local parts = { string.format('%s %s %s\n', surrounding, p.name, surrounding) }
 
   if p.head == p.checkout_to then
-    table.insert(parts, 'Source: ' .. p.source .. '\n')
-    table.insert(parts, 'State:  ' .. p.head)
+    table.insert(parts, 'Source: ' .. (p.source or '<None>') .. '\n')
+    table.insert(parts, string.format('State:  %s (%s)', p.checkout_to, p.checkout))
   else
-    table.insert(parts, 'Source:       ' .. p.source .. '\n')
+    table.insert(parts, 'Source:       ' .. (p.source or '<None>') .. '\n')
     table.insert(parts, 'State before: ' .. p.head .. '\n')
-    table.insert(parts, 'State after:  ' .. p.checkout_to)
+    table.insert(parts, string.format('State after:  %s (%s)', p.checkout_to, p.checkout))
   end
 
   -- Show pending updates only if they are present
   if p.has_updates then
-    table.insert(parts, string.format('\n\nPending updates for `%s`:\n', p.checkout))
+    table.insert(parts, string.format('\n\nPending updates from `%s`:\n', p.checkout))
     table.insert(parts, p.checkout_log)
   end
 
-  -- Show tracking updates only if user asked for them
-  if p.checkout ~= p.track then
-    table.insert(parts, string.format('\n\nTracking updates for `%s`:\n', p.track))
-    table.insert(parts, p.track_log ~= '' and p.track_log or '<Nothing>')
+  -- Show monitor updates only if user asked for them
+  if p.checkout ~= p.monitor then
+    table.insert(parts, string.format('\n\nMonitor updates from `%s`:\n', p.monitor))
+    table.insert(parts, p.monitor_log ~= '' and p.monitor_log or '<Nothing>')
   end
 
   return table.concat(parts, '')
@@ -1041,37 +1068,40 @@ H.update_feedback_confirm = function(lines)
     'Line `--- <plugin_name> ---` means plugin has nothing to update.',
     '',
     'To finish update, save this buffer (for example, with `:write` command).',
-    'To abort update, leave this buffer (stop showing it in current window).',
+    'To cancel update, hide this buffer (for example, with `:tabclose` command).',
     '',
   }
   local n_header = #report - 1
   vim.list_extend(report, lines)
 
-  -- Show report in new buffer in current window
+  -- Show report in new buffer in separate tabpage
   local buf_id = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_buf_set_name(buf_id, 'mini.deps update confirmation')
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, report)
   vim.bo[buf_id].buftype, vim.bo[buf_id].filetype, vim.bo[buf_id].modified = 'acwrite', 'minideps-confirm', false
 
-  local win_id = vim.api.nvim_get_current_win()
-  local init_win_buf_id = vim.api.nvim_win_get_buf(win_id)
-  vim.api.nvim_win_set_buf(win_id, buf_id)
+  vim.cmd('tab sbuffer ' .. buf_id)
+  local tabpage_id = vim.api.nvim_get_current_tabpage()
 
   -- Define basic highlighting
-  vim.cmd('syntax region DiagnosticHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
+  vim.cmd('syntax region MiniDepsHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
   vim.cmd([[
-    syntax match DiffDelete     "^!!! .* !!!$"
-    syntax match DiffAdd        "^+++ .* +++$"
-    syntax match Title          "^--- .* ---$"
-    syntax match DiagnosticInfo "^Source.\{-}\zs[^ ]\+$"
-    syntax match DiagnosticInfo "^State.\{-}\zs[^ ]\+$"
-    syntax match diffRemoved    "^< .*\n  .*$"
-    syntax match diffAdded      "^> .*\n  .*$"
-    syntax match Comment        "^<.*>$"
+    syntax match MiniDepsTitleError    "^!!! .\+ !!!$"
+    syntax match MiniDepsTitleUpdate   "^+++ .\+ +++$"
+    syntax match MiniDepsTitleSame     "^--- .\+ ---$"
+    syntax match MiniDepsInfo          "^Source: \+\zs[^ ]\+"
+    syntax match MiniDepsInfo          "^State[^:]*: \+\zs[^ ]\+\ze"
+    syntax match MiniDepsHint          "\(^State.\+\)\@<=(.\+)$"
+    syntax match MiniDepsChangeRemoved "^< .*\n  .*$"
+    syntax match MiniDepsChangeAdded   "^> .*\n  .*$"
+    syntax match MiniDepsPlaceholder   "^<.*>$"
   ]])
 
   -- Create buffer autocommands
-  local delete_buffer = vim.schedule_wrap(function() pcall(vim.api.nvim_buf_delete, buf_id, { force = true }) end)
+  local delete_buffer = vim.schedule_wrap(function()
+    pcall(function() vim.cmd('tabclose ' .. vim.api.nvim_tabpage_get_number(tabpage_id)) end)
+    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
+  end)
 
   local finish_update = function()
     -- Compute plugin names to update
@@ -1081,12 +1111,9 @@ H.update_feedback_confirm = function(lines)
       if cur_name ~= nil then table.insert(names, cur_name) end
     end
 
-    -- Delete buffer
-    pcall(vim.api.nvim_win_set_buf, win_id, init_win_buf_id)
+    -- Delete buffer and update
     delete_buffer()
-
-    -- Update
-    MiniDeps.update({ force = true, names = names, offline = true })
+    MiniDeps.update(names, { force = true, offline = true })
   end
 
   -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
