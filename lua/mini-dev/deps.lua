@@ -41,7 +41,7 @@
 --     - `get_session()` should return in order user added them.
 --
 -- - Update:
---     - Should `origin` remote to be `source` even if `remote = false`.
+--     - Should set `origin` remote branch to be `source` even if `offline = true`.
 --
 -- - Checkout:
 --     - Should **not** update `checkout` data in session.
@@ -311,7 +311,7 @@ MiniDeps.config = {
     -- Number of parallel threads to use. Default: 80% of all available.
     n_threads = nil,
 
-    -- Timeout (in ms) of each job (on average)
+    -- Timeout (in ms) for each job before force quit
     timeout = 30000,
   },
 
@@ -446,14 +446,14 @@ end
 --- Update plugins
 ---
 ---@param opts table|nil Options. Possible fields:
----   - <confirm> `(boolean)` - whether to confirm before making an update.
----     Default: `true`.
+---   - <force> `(boolean)` - whether to force update without confirmation.
+---     Default: `false`.
 ---   - <names> `(table)` - array of plugin names to update.
 ---     Default: all plugins registered in current session with |MiniDeps.add()|.
----   - <remote> `(boolean)` - whether to check for updates at remote source.
----     Default: `true`.
+---   - <offline> `(boolean)` - whether to skip downloading updates from sources.
+---     Default: `false`.
 MiniDeps.update = function(opts)
-  opts = vim.tbl_deep_extend('force', { confirm = true, names = nil, remote = true }, opts or {})
+  opts = vim.tbl_deep_extend('force', { force = false, names = nil, offline = false }, opts or {})
 
   -- Compute array of plugin data to be reused in update. Each contains a CLI
   -- job "assigned" to plugin's path which stops execution after first error.
@@ -469,7 +469,7 @@ MiniDeps.update = function(opts)
   H.plugs_infer_commit(plugs, 'track', 'track_from')
 
   -- Download data if asked
-  if opts.remote then H.plugs_download_updates(plugs) end
+  if not opts.offline then H.plugs_download_updates(plugs) end
 
   -- Process data for update
   H.plugs_infer_commit(plugs, 'checkout', 'checkout_to')
@@ -478,11 +478,11 @@ MiniDeps.update = function(opts)
   H.plugs_infer_log(plugs, 'track_from', 'track_to', 'track_log')
 
   -- Checkout if asked (before feedback to include possible checkout errors)
-  if not opts.confirm then H.plugs_checkout(plugs, true) end
+  if opts.force then H.plugs_checkout(plugs, true) end
 
   -- Make feedback
   local lines = H.update_compute_feedback_lines(plugs)
-  local feedback = opts.confirm and H.update_feedback_confirm or H.update_feedback_log
+  local feedback = opts.force and H.update_feedback_log or H.update_feedback_confirm
   feedback(lines)
 
   -- Show job errors
@@ -678,16 +678,16 @@ H.create_user_commands = function()
   local remove_opts = { bang = true, complete = complete_names, nargs = 1, desc = 'Remove plugin from session' }
   new_cmd('DepsRemove', remove, remove_opts)
 
-  local make_update_cmd = function(name, remote, desc)
+  local make_update_cmd = function(name, offline, desc)
     local callback = function(input)
       local names = #input.fargs == 0 and get_plugin_names() or input.fargs
-      MiniDeps.update({ confirm = not input.bang, names = names, remote = remote })
+      MiniDeps.update({ force = input.bang, names = names, offline = offline })
     end
     local opts = { bang = true, complete = complete_names, nargs = '*', desc = desc }
     new_cmd(name, callback, opts)
   end
-  make_update_cmd('DepsUpdate', true, 'Update plugins')
-  make_update_cmd('DepsUpdateLocal', false, 'Update plugins without downloading from source')
+  make_update_cmd('DepsUpdate', false, 'Update plugins')
+  make_update_cmd('DepsUpdateOffline', true, 'Update plugins without downloading from source')
 
   new_cmd('DepsClean', function() MiniDeps.clean() end, { desc = 'Clean unused plugins' })
 
@@ -1000,12 +1000,16 @@ H.update_compute_report_single = function(p)
 
   -- Compute title surrounding based on whether plugin needs an update
   local surrounding = p.has_updates and '+++' or '---'
-  local parts = {
-    string.format('%s %s %s\n', surrounding, p.name, surrounding),
-    string.format('Source:              %s\n', p.source),
-    string.format('State before update: %s\n', p.head),
-    string.format('State after  update: %s', p.checkout_to),
-  }
+  local parts = { string.format('%s %s %s\n', surrounding, p.name, surrounding) }
+
+  if p.head == p.checkout_to then
+    table.insert(parts, 'Source: ' .. p.source .. '\n')
+    table.insert(parts, 'State:  ' .. p.head)
+  else
+    table.insert(parts, 'Source:       ' .. p.source .. '\n')
+    table.insert(parts, 'State before: ' .. p.head .. '\n')
+    table.insert(parts, 'State after:  ' .. p.checkout_to)
+  end
 
   -- Show pending updates only if they are present
   if p.has_updates then
@@ -1082,7 +1086,7 @@ H.update_feedback_confirm = function(lines)
     delete_buffer()
 
     -- Update
-    MiniDeps.update({ confirm = false, names = names, remote = false })
+    MiniDeps.update({ force = true, names = names, offline = true })
   end
 
   -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
@@ -1104,10 +1108,11 @@ end
 H.cli_run = function(jobs)
   local config_job = H.get_config().job
   local n_threads = config_job.n_threads or math.floor(0.8 * #vim.loop.cpu_info())
-  local timeout = config_job.timeout or 60000
+  local timeout = config_job.timeout or 30000
 
   local n_total, id_started, n_finished = #jobs, 0, 0
   if n_total == 0 then return end
+  local is_finished = function() return n_total <= n_finished end
 
   local run_next
   run_next = function()
@@ -1133,7 +1138,7 @@ H.cli_run = function(jobs)
     -- Register job finish and start a new one from the queue
     local on_exit = function(code)
       if code ~= 0 then table.insert(job.err, 1, 'PROCESS EXITED WITH ERROR CODE ' .. code .. '\n') end
-      process:close()
+      if not process:is_closing() then process:close() end
       n_finished = n_finished + 1
       if type(exit_msg) == 'string' then H.notify(string.format('(%d/%d) %s', n_finished, n_total, exit_msg)) end
       run_next()
@@ -1142,13 +1147,18 @@ H.cli_run = function(jobs)
     process = vim.loop.spawn(executable, spawn_opts, on_exit)
     H.cli_read_stream(stdout, job.out)
     H.cli_read_stream(stderr, job.err)
+    vim.defer_fn(function()
+      if is_finished() then return end
+      pcall(vim.loop.process_kill, process, 15)
+      if #job.err == 0 then job.err = { 'PROCESS REACHED TIMEOUT.' } end
+    end, timeout)
   end
 
   for _ = 1, math.max(n_threads, 1) do
     run_next()
   end
 
-  vim.wait(timeout * n_total, function() return n_total <= n_finished end, 1)
+  vim.wait(timeout * n_total, is_finished, 1)
 end
 
 H.cli_read_stream = function(stream, feed)
