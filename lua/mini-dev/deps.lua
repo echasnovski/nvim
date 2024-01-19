@@ -19,6 +19,11 @@
 --     - Should add them prior to target one.
 --     - Should remove them (if asked) in `remove()`.
 --
+-- - ?Add `version` support to install version through tags?
+--
+-- - Update `update()` in interactive mode to show available tags created after
+--   current state (?if it doesn't track branch?).
+--
 -- - Consider adding/documenting automated reloading after 'init.lua' has changed.
 --
 -- Docs:
@@ -86,6 +91,7 @@
 ---
 --- For most of its functionality this plugin relies on `git` CLI tool.
 --- See https://git-scm.com/ for more information about how to install it.
+--- Actual knowledge of Git is not required but helpful.
 ---
 --- # Setup ~
 ---
@@ -143,16 +149,23 @@
 --- Each plugin dependency is managed based on its specification (a.k.a. "spec").
 --- See |MiniDeps-examples| for how it is suggested to be used inside user config.
 ---
---- Mandatory:
---- - <source> `(string)` - field with URI of plugin source.
----   Can be anything allowed by `git clone`.
----   Note: as the most common case, URI of the format "user/repo" is transformed
----   into "https://github.com/user/repo". For relative path use "./user/repo".
+--- Specification can be a single string which is inferred as:
+--- - Plugin <name> if it doesn't contain "/".
+--- - Plugin <source> otherwise.
 ---
---- Optional:
+--- Specification is primarily a table with the following fields:
+---
+--- - <source> `(string|nil)` - field with URI of plugin source used during creation
+---   update. Can be anything allowed by `git clone`.
+---   Notes:
+---     - As the most common case, URI of the format "user/repo" is transformed
+---       into "https://github.com/user/repo".
+---     - It is required for creating plugin, but can be omitted afterwards.
+---
 --- - <name> `(string|nil)` - directory basename of where to put plugin source.
 ---   It is put in "pack/deps/opt" subdirectory of `config.path.package`.
----   Default: basename of a <source>.
+---   Default: basename of <source> if it is present, otherwise should be
+---   provided explicitly.
 ---
 --- - <checkout> `(string|nil)` - checkout target used to set state during update.
 ---   Can be anything supported by `git checkout` - branch, commit, tag, etc.
@@ -180,12 +193,45 @@
 
 --- # User commands ~
 ---                                                                       *:DepsAdd*
+--- `:DepsAdd user/repo` makes plugin from https://github.com/user/repo available
+--- in the current session (also creates it, if it is not present).
+--- To add plugin in every session, put |MiniDeps.add()| in |init.lua|.
+---
 ---                                                                    *:DepsRemove*
+--- `:DepsRemove repo` makes plugin with name "repo" not available in the
+--- current session.
+--- `:DepsRemove! repo` also deletes plugin's directory from disk.
+--- Do not forget to update config to not add same plugin in next session.
+---
 ---                                                                     *:DepsClean*
+--- `:DepsClean` deletes plugins from disk not loaded in current session.
+---
 ---                                                                    *:DepsUpdate*
+--- `:DepsUpdate` updates all plugins with new changes from their sources. It shows
+--- confirmation buffer in a separate |tabpage| with information about an upcoming
+--- update to review and (selectively) apply. See |MiniDeps.update()| for more info.
+---
+--- `:DepsUpdate name1 name2` updates plugins with names `name1` and `name2`.
+---
+--- `:DepsUpdate!` and `:DepsUpdate! name1 name2` update without confirmation.
+--- You can see what was done in the log file (|DepsShowLog|).
+---
 ---                                                             *:DepsUpdateOffline*
+--- `:DepsUpdateOffline` is same as |:DepsUpdate| but doesn't download new updates
+--- from sources. Useful to synchronize plugin specification in code and on disk
+--- without unnecessary downloads.
+---
+---                                                                   *:DepsShowLog*
+--- `:DepsShowLog` opens log file to review.
+---
 ---                                                                  *:DepsSnapSave*
+--- `:DepsSnapSave` creates snapshot file in default location (see |MiniDeps.config|).
+--- `:DepsSnapSave path` creates snapshot file at `path`.
+---
 ---                                                                  *:DepsSnapLoad*
+---
+--- `:DepsSnapLoad` loads snapshot file from default location (see |MiniDeps.config|).
+--- `:DepsSnapLoad path` loads snapshot file at `path`.
 ---@tag MiniDeps-commands
 
 --- # Usage examples ~
@@ -226,8 +272,8 @@
 ---   later(function()
 ---     local is_010 = vim.fn.has('nvim-0.10') == 1
 ---     add(
----       'nvim-treesitter/nvim-treesitter',
 ---       {
+---         source = 'nvim-treesitter/nvim-treesitter',
 ---         checkout = is_010 and 'main' or 'master',
 ---         hooks = { post_change = function() vim.cmd('TSUpdate') end },
 ---       }
@@ -242,30 +288,6 @@
 ---     end
 ---   end)
 --- <
---- ## Plugin management ~
----
---- `:DepsAdd user/repo` makes plugin from https://github.com/user/repo available
---- in the current session (also creates it, if it is not present). See |:DepsAdd|.
---- To add plugin in every session, see previous section.
----
---- `:DepsRemove repo` makes plugin with name "repo" not available in the
---- current session and deletes its directory from disk. Do not forget to
---- update config to not add same plugin in next session. See |:DepsRemove|.
---- Alternatively: manually delete plugin directory (if no hooks are set up).
----
---- `:DepsClean` removes plugins not loaded in current session. See |:DepsClean|.
----
---- `:DepsUpdate` updates all plugins with new changes from their sources.
---- See |:DepsUpdate|.
----
---- `:DepsFetch` fetches new data from plugins sources and not affects code on disk.
---- See |:DepsFetch|.
----
---- `:DepsSnapshot` creates snapshot file in default location (by default,
---- "deps-snapshot" file in config directory). See |:DepsSnapshot|.
----
---- `:DepsCheckout path/to/snapshot` makes present plugins have state from the
---- snapshot file. See |:DepsCheckout|.
 ---@tag MiniDeps-examples
 
 ---@alias __deps_source string Plugin's source. See |MiniDeps-plugin-specification|.
@@ -353,10 +375,9 @@ MiniDeps.config = {
 ---   same name already registered.
 --- - Make sure it can be used in current session (see |:packadd|).
 ---
----@param source __deps_source
----@param opts __deps_spec_opts
-MiniDeps.add = function(source, opts)
-  local spec = H.normalize_spec(source, opts)
+---@param spec table|string Plugin specification. See |MiniDeps-plugin-specification|.
+MiniDeps.add = function(spec)
+  spec = H.normalize_spec(spec)
 
   -- Decide whether to create plugin
   local path, is_present = H.get_plugin_path(spec.name)
@@ -370,8 +391,8 @@ MiniDeps.add = function(source, opts)
     H.plugs_exec_hooks(plugs, 'post_create')
   end
 
-  -- Register plugin's spec for current session
-  H.session[path] = spec
+  -- Register plugin's spec for current session if it wasn't already
+  H.session[path] = H.session[path] or spec
 
   -- Add plugin to current session
   vim.cmd('packadd ' .. spec.name)
@@ -448,6 +469,8 @@ MiniDeps.clean = function()
 end
 
 --- Update plugins
+---
+--- TODO: !!!!!!!!!!!!!!!!!!!!!!!!!!
 ---
 ---@param names table|nil Array of plugin names to update.
 ---  Default: all plugins registered in current session.
@@ -694,7 +717,7 @@ H.create_user_commands = function()
   end
 
   local add = function(input) MiniDeps.add(input.fargs[1]) end
-  new_cmd('DepsAdd', add, { nargs = '?', desc = 'Add plugin to session' })
+  new_cmd('DepsAdd', add, { nargs = '?', complete = complete_names, desc = 'Add plugin to session' })
 
   local remove = function(input) MiniDeps.remove(input.fargs[1], input.bang) end
   local remove_opts = { bang = true, complete = complete_names, nargs = 1, desc = 'Remove plugin from session' }
@@ -711,7 +734,10 @@ H.create_user_commands = function()
   make_update_cmd('DepsUpdate', false, 'Update plugins')
   make_update_cmd('DepsUpdateOffline', true, 'Update plugins without downloading from source')
 
-  new_cmd('DepsClean', function() MiniDeps.clean() end, { desc = 'Clean unused plugins' })
+  local log_callback = function() vim.cmd('edit ' .. vim.fn.fnameescape(H.get_config().path.log)) end
+  new_cmd('DepsShowLog', log_callback, { desc = 'Show log' })
+
+  new_cmd('DepsClean', function() MiniDeps.clean() end, { desc = 'Delete unused plugins' })
 
   local snap_save = function(input) MiniDeps.snap_save(input.fargs[1]) end
   new_cmd('DepsSnapSave', snap_save, { nargs = '?', complete = 'file', desc = 'Save plugin snapshot' })
@@ -757,35 +783,36 @@ H.git_cmd = {
 }
 
 -- Plugin specification -------------------------------------------------------
-H.normalize_spec = function(source, opts)
-  local spec = {}
-
-  if source ~= nil then
-    if type(source) ~= 'string' then H.error('Plugin source should be string.') end
-    -- Allow 'user/repo' as source
-    if source:find('^[^/]+/[^/]+$') ~= nil then source = 'https://github.com/' .. source end
-    spec.source = source
+H.normalize_spec = function(spec)
+  -- Prepare
+  if type(spec) == 'string' then
+    local field = string.find(spec, '/') ~= nil and 'source' or 'name'
+    spec = { [field] = spec }
   end
+  if type(spec) ~= 'table' then H.error('Plugin spec should be table.') end
 
-  opts = opts or {}
-  if type(opts) ~= 'table' then H.error([[Plugin's optional spec should be table.]]) end
+  local has_min_fields = type(spec.source) == 'string' or type(spec.name) == 'string'
+  if not has_min_fields then H.error('Plugin spec should have either `source` or `name`.') end
 
-  spec.name = opts.name or vim.fn.fnamemodify(source, ':t')
+  -- Normalize
+  spec = vim.deepcopy(spec)
+
+  if spec.source and type(spec.source) ~= 'string' then H.error('`source` in plugin spec should be string.') end
+  local is_user_repo = type(spec.source) == 'string' and spec.source:find('^[^/]+/[^/]+$') ~= nil
+  if is_user_repo then spec.source = 'https://github.com/' .. spec.source end
+
+  spec.name = spec.name or vim.fn.fnamemodify(spec.source, ':t')
   if type(spec.name) ~= 'string' then H.error('`name` in plugin spec should be string.') end
 
-  spec.checkout = opts.checkout
   if spec.checkout and type(spec.checkout) ~= 'string' then H.error('`checkout` in plugin spec should be string.') end
-
-  spec.monitor = opts.monitor
   if spec.monitor and type(spec.monitor) ~= 'string' then H.error('`monitor` in plugin spec should be string.') end
 
-  spec.hooks = opts.hooks or {}
+  spec.hooks = vim.deepcopy(spec.hooks) or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
   local hook_names = { 'pre_create', 'post_create', 'pre_change', 'post_change', 'pre_delete', 'post_delete' }
   for _, hook_name in ipairs(hook_names) do
-    if spec[hook_name] and not vim.is_callable(spec[hook_name]) then
-      H.error('`hooks.' .. hook_name .. '` in plugin spec should be callable.')
-    end
+    local is_not_hook = spec[hook_name] and not vim.is_callable(spec[hook_name])
+    if is_not_hook then H.error('`hooks.' .. hook_name .. '` in plugin spec should be callable.') end
   end
 
   return spec
@@ -1002,7 +1029,8 @@ H.update_compute_feedback_lines = function(plugs)
   local plug_data = {}
   for i, p in ipairs(plugs) do
     local lines = H.update_compute_report_single(p)
-    plug_data[i] = { lines = lines, has_error = p.has_error, has_updates = p.has_updates, index = i }
+    --stylua: ignore
+    plug_data[i] = { lines = lines, has_error = p.has_error, has_updates = p.has_updates, has_monitor = p.has_monitor, index = i }
   end
 
   -- Sort to put first ones with errors, then with updates, then rest
@@ -1011,6 +1039,8 @@ H.update_compute_feedback_lines = function(plugs)
     if not a.has_error and b.has_error then return false end
     if a.has_updates and not b.has_updates then return true end
     if not a.has_updates and b.has_updates then return false end
+    if a.has_monitor and not b.has_monitor then return true end
+    if not a.has_monitor and b.has_monitor then return false end
     return a.index < b.index
   end
   table.sort(plug_data, compare)
@@ -1020,7 +1050,7 @@ H.update_compute_feedback_lines = function(plugs)
 end
 
 H.update_compute_report_single = function(p)
-  p.has_error, p.has_updates = #p.job.err > 0, p.head ~= p.checkout_to
+  p.has_error, p.has_updates, p.has_monitor = #p.job.err > 0, p.head ~= p.checkout_to, p.checkout ~= p.monitor
 
   local err = H.cli_stream_tostring(p.job.err)
   if err ~= '' then return string.format('!!! %s !!!\n\n%s', p.name, err) end
@@ -1045,7 +1075,7 @@ H.update_compute_report_single = function(p)
   end
 
   -- Show monitor updates only if user asked for them
-  if p.checkout ~= p.monitor then
+  if p.has_monitor then
     table.insert(parts, string.format('\n\nMonitor updates from `%s`:\n', p.monitor))
     table.insert(parts, p.monitor_log ~= '' and p.monitor_log or '<Nothing>')
   end
