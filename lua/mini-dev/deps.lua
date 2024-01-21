@@ -2,9 +2,7 @@
 --
 -- Code:
 --
--- - `plugs_checkout()`:
---     - Invesitgate why help tags are recomputed but help page is not updated
---       if previously was displayed after valid `:help` command.
+-- - Rethink about supporting "hot reloading".
 --
 -- - Rethink about making `add()` and `remove()` accept list (of specs/names
 --   respectively) OR at least `add()` to accept proper specification table.
@@ -182,12 +180,12 @@
 ---
 --- - <hooks> `(table|nil)` - table with callable hooks to call on certain events.
 ---   Each hook is executed without arguments. Possible hook names:
----     - <pre_create>  - before creating plugin directory.
----     - <post_create> - after  creating plugin directory.
----     - <pre_change>  - before making update in plugin directory.
----     - <post_change> - after  making update in plugin directory.
----     - <pre_delete>  - before deleting plugin directory.
----     - <post_delete> - after  deleting plugin directory.
+---     - <pre_install>  - before creating plugin directory.
+---     - <post_install> - after  creating plugin directory.
+---     - <pre_change>   - before making update in plugin directory.
+---     - <post_change>  - after  making update in plugin directory.
+---     - <pre_delete>   - before deleting plugin directory.
+---     - <post_delete>  - after  deleting plugin directory.
 ---   Default: empty table for no hooks.
 ---@tag MiniDeps-plugin-specification
 
@@ -353,7 +351,7 @@ MiniDeps.config = {
     snapshot = vim.fn.stdpath('config') .. '/mini-deps-snap',
 
     -- Update log
-    log = vim.fn.stdpath('state') .. '/mini-deps.log',
+    log = vim.fn.stdpath(vim.fn.has('nvim-0.8') == 1 and 'state' or 'data') .. '/mini-deps.log',
   },
 
   -- Whether to disable showing non-error feedback
@@ -364,10 +362,10 @@ MiniDeps.config = {
 --- Add plugin to current session
 ---
 --- - If there is no directory present with plugin's name, create it:
----     - Execute `opts.hooks.pre_create`.
+---     - Execute `opts.hooks.pre_install`.
 ---     - Use `git clone` to clone plugin from its source URI into "pack/deps/opt".
 ---     - Checkout according to `opts.checkout`.
----     - Execute `opts.hooks.post_create`.
+---     - Execute `opts.hooks.post_install`.
 ---   Note: If plugin directory is present, no action with it is done (to increase
 ---   performance during startup). In particular, it does not checkout according
 ---   to `opts.checkout`. Use |MiniDeps.update()| explicitly.
@@ -383,12 +381,15 @@ MiniDeps.add = function(spec)
   local path, is_present = H.get_plugin_path(spec.name)
   spec.path = path
   if not is_present then
-    vim.fn.mkdir(path, 'p')
-    spec.job = H.cli_new_job({}, path)
-    local plugs = { spec }
-    H.plugs_exec_hooks(plugs, 'pre_create')
-    H.plugs_create(plugs)
-    H.plugs_exec_hooks(plugs, 'post_create')
+    local plugs = vim.deepcopy({ spec })
+    for _, p in ipairs(plugs) do
+      p.job = H.cli_new_job({}, vim.fn.getcwd())
+    end
+
+    H.plugs_exec_hooks(plugs, 'pre_install')
+    H.notify(string.format('Installing `%s`', plugs[#plugs].name))
+    H.plugs_install(plugs)
+    H.plugs_exec_hooks(plugs, 'post_install')
   end
 
   -- Register plugin's spec for current session if it wasn't already
@@ -400,36 +401,42 @@ end
 
 --- Remove plugin from current session
 ---
---- - Remove plugin path from 'runtimpath' (if earlier put there via this module).
 --- - Remove plugin spec from current session (if present).
 --- - Unload all cached Lua modules from plugin. This enables resetting plugin
 ---   functionality after possibly later call to |MiniDeps.add()|.
---- - If `delete_dir`, delete plugin directory:
+--- - If `opts.from_rtp` is `true`, remove plugin path from 'runtimpath' (if it
+---   was put there via this module).
+--- - If `opts.from_disk` is `true`, delete plugin directory:
 ---     - Execute `pre_delete` hook (if plugin with input name is registered).
 ---     - Delete plugin directory.
 ---     - Execute `post_delete` hook (if plugin with input name is registered).
 ---
 ---@param name string Plugin directory name in |MiniDeps-directory-structure|.
----@param delete_dir boolean|nil Whether to delete plugin directory. Default: `false`.
-MiniDeps.remove = function(name, delete_dir)
+---@param opts table|nil Options. Possible fields:
+---   - <from_disk> (`boolean`) - whether to delete plugin directory.
+---     Default: `false`.
+---   - <from_rtp> (`boolean`) - whether to remove plugin path from 'runtimepath'.
+---     Default: `true`.
+MiniDeps.remove = function(name, opts)
   if type(name) ~= 'string' then H.error('`name` should be string.') end
-  if delete_dir == nil then delete_dir = false end
+  opts = vim.tbl_deep_extend('force', { from_disk = false, from_rtp = true }, opts or {})
 
   local path, is_present = H.get_plugin_path(name)
   if not is_present then return H.error('`' .. name .. '` is not a name of present plugin.') end
 
   -- Find current session spec for plugin
-  local spec = H.session[path] or { hooks = {} }
+  local is_added = H.session[path] ~= nil
+  local spec = is_added and H.session[path] or { hooks = {} }
 
   -- Remove plugin from current session. Update runtimepath only for non-start
   -- plugins as most likely they were not added there by 'mini.deps'.
-  local is_added = H.session[path] ~= nil
-  if is_added then vim.cmd('set rtp-=' .. vim.fn.fnameescape(path)) end
   H.session[path] = nil
   H.unload_lua_modules(path)
+  H.remove_autocommands(path)
+  if is_added and opts.from_rtp then vim.cmd('set rtp-=' .. vim.fn.fnameescape(path)) end
 
   -- Possibly delete directory
-  if not delete_dir then return end
+  if not opts.from_disk then return end
 
   local plugs = { spec }
   H.plugs_exec_hooks(plugs, 'pre_delete')
@@ -598,21 +605,22 @@ end
 --- Get session data
 MiniDeps.get_session = function()
   local deps_path_esc = vim.pesc(H.get_package_path() .. '/pack/deps')
-  local pattern_match_opt = string.format('^%s/opt/([^/]+)$', deps_path_esc)
-  local pattern_match_start = string.format('^%s/start/([^/]+)$', deps_path_esc)
+  local pattern = string.format('^%s/([^/]+)/([^/]+)$', deps_path_esc)
   local rtp = vim.api.nvim_list_runtime_paths()
 
   local res = {}
   for i = #rtp, 1, -1 do
-    local name = string.match(rtp[i], pattern_match_opt) or string.match(rtp[i], pattern_match_start)
-    if name ~= nil then
-      local spec = H.session[rtp[i]] or { path = rtp[i], name = name, hooks = {} }
+    local dir, name = string.match(rtp[i], pattern)
+    local spec = H.session[rtp[i]]
+    -- Session consists from properly added 'opt' plugins and all 'start' ones
+    if dir == 'start' or (dir == 'opt' and spec ~= nil) then
+      spec = vim.deepcopy(spec) or { path = rtp[i], name = name, hooks = {} }
       table.insert(res, spec)
     end
   end
 
   -- Return copy to not allow modification in place
-  return vim.deepcopy(res)
+  return res
 end
 
 MiniDeps.now = function(f)
@@ -673,10 +681,12 @@ end
 H.apply_config = function(config)
   MiniDeps.config = config
 
-  -- Remove current plugins to allow resourcing script with `setup()` call
+  -- Remove current plugins to allow resourcing script with `setup()` call.
+  -- Do not remove from 'runtimepath' to allow them be discoverable via
+  -- `require()` to mitigate their usage in not cleaned autocommands.
   local session = MiniDeps.get_session()
   for _, spec in ipairs(session) do
-    pcall(MiniDeps.remove, spec.name)
+    pcall(MiniDeps.remove, spec.name, { from_disk = false, from_rtp = false })
   end
   H.session = {}
 
@@ -707,7 +717,8 @@ H.create_default_hl = function()
 end
 
 H.create_user_commands = function()
-  local new_cmd = vim.api.nvim_create_user_command
+  -- Do not create commands immediately to increase startup time
+  local new_cmd = vim.schedule_wrap(vim.api.nvim_create_user_command)
 
   local get_plugin_names = function()
     return vim.tbl_map(function(s) return s.name end, MiniDeps.get_session())
@@ -719,7 +730,7 @@ H.create_user_commands = function()
   local add = function(input) MiniDeps.add(input.fargs[1]) end
   new_cmd('DepsAdd', add, { nargs = '?', complete = complete_names, desc = 'Add plugin to session' })
 
-  local remove = function(input) MiniDeps.remove(input.fargs[1], input.bang) end
+  local remove = function(input) MiniDeps.remove(input.fargs[1], { from_disk = input.bang }) end
   local remove_opts = { bang = true, complete = complete_names, nargs = 1, desc = 'Remove plugin from session' }
   new_cmd('DepsRemove', remove, remove_opts)
 
@@ -769,7 +780,9 @@ H.git_cmd = {
     -- Returns branch's name if it is present
     return { 'git', 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/' .. name }
   end,
-  get_hash = function(rev) return { 'git', 'rev-parse', rev } end,
+  -- Using `rev-list -1` shows a commit of revision, while `rev-parse` shows
+  -- hash of revision. Those are different for annotated tags.
+  get_hash = function(rev) return { 'git', 'rev-list', '-1', rev } end,
   log = function(from, to)
     -- `--topo-order` makes showing divergent branches nicer
     -- `--decorate-refs` shows only tags near commits (not `origin/main`, etc.)
@@ -809,7 +822,7 @@ H.normalize_spec = function(spec)
 
   spec.hooks = vim.deepcopy(spec.hooks) or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
-  local hook_names = { 'pre_create', 'post_create', 'pre_change', 'post_change', 'pre_delete', 'post_delete' }
+  local hook_names = { 'pre_install', 'post_install', 'pre_change', 'post_change', 'pre_delete', 'post_delete' }
   for _, hook_name in ipairs(hook_names) do
     local is_not_hook = spec[hook_name] and not vim.is_callable(spec[hook_name])
     if is_not_hook then H.error('`hooks.' .. hook_name .. '` in plugin spec should be callable.') end
@@ -833,21 +846,21 @@ H.plugs_exec_hooks = function(plugs, name)
   end
 end
 
-H.plugs_create = function(plugs)
+H.plugs_install = function(plugs)
   -- Clone
   local prepare = function(p)
-    if p.source == nil and #p.job.err == 0 then p.job.err = { 'SPECIFICATION HAS NO `source` TO CREATE PLUGIN.' } end
+    if p.source == nil and #p.job.err == 0 then p.job.err = { 'SPECIFICATION HAS NO `source` TO INSTALL PLUGIN.' } end
     p.job.command = H.git_cmd.clone(p.source or '', p.path)
-    p.job.exit_msg = string.format('Done creating `%s`', p.name)
+    p.job.exit_msg = string.format('Done installing `%s`', p.name)
   end
-  H.notify(string.format('(0/%d) Creating plugins', #plugs))
   H.plugs_run_jobs(plugs, prepare)
 
   -- Checkout
+  vim.tbl_map(function(p) p.job.cwd = p.path end, plugs)
   H.plugs_checkout(plugs, false)
 
   -- Show errors
-  H.plugs_show_job_errors(plugs, 'creating plugins')
+  H.plugs_show_job_errors(plugs, 'installing plugins')
 end
 
 H.plugs_download_updates = function(plugs)
@@ -877,10 +890,11 @@ H.plugs_checkout = function(plugs, exec_hooks)
 
   -- Checkout
   prepare = function(p)
-    -- Use dummy command in order to show "No checkout message"
-    p.job.command = p.needs_checkout and H.git_cmd.checkout(p.checkout_to) or { 'git', 'log', '-1' }
-    p.job.exit_msg = p.needs_checkout and string.format('Checked out `%s` in `%s`', p.checkout, p.name)
-      or string.format('No checkout needed for `%s`', p.name)
+    p.job.command = {}
+    if p.needs_checkout then
+      p.job.command = H.git_cmd.checkout(p.checkout_to)
+      p.job.exit_msg = string.format('Checked out `%s` in `%s`', p.checkout, p.name)
+    end
   end
   H.plugs_run_jobs(plugs, prepare)
 
@@ -1020,6 +1034,15 @@ H.unload_lua_modules = function(path)
   -- Get normalized loaded modules (as `require` allows '/' and '.' separators)
   for m, _ in pairs(package.loaded) do
     if modules[m:gsub('%.', '/')] then package.loaded[m] = nil end
+  end
+end
+
+H.remove_autocommands = function(path)
+  path = '@' .. path .. (path:sub(-1) == '/' and '' or '/')
+  for _, au in ipairs(vim.api.nvim_get_autocmds({})) do
+    local cb = au.callback
+    local is_from_path = type(cb) == 'function' and vim.startswith(debug.getinfo(cb).source, path)
+    if is_from_path then vim.api.nvim_del_autocmd(au.id) end
   end
 end
 
