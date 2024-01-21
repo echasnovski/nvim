@@ -1,4 +1,5 @@
--- Currently used language servers:
+-- All language servers are expected to be installed with 'mason.vnim'.
+-- Currently used ones:
 -- - clangd for C/C++
 -- - pyright for Python
 -- - r_language_server for R
@@ -8,10 +9,8 @@
 local lspconfig = require('lspconfig')
 
 -- Preconfiguration ===========================================================
-local on_attach_custom = function(client, bufnr)
-  local function buf_set_option(name, value) vim.api.nvim_buf_set_option(bufnr, name, value) end
-
-  buf_set_option('omnifunc', 'v:lua.MiniCompletion.completefunc_lsp')
+local on_attach_custom = function(client, buf_id)
+  vim.bo[buf_id].omnifunc = 'v:lua.MiniCompletion.completefunc_lsp'
 
   -- Mappings are created globally for simplicity
 
@@ -54,14 +53,10 @@ lspconfig.r_language_server.setup({
 lspconfig.pyright.setup({ on_attach = on_attach_custom })
 
 -- Lua (sumneko_lua) ==========================================================
--- Expected to use precompiled binaries from Github releases:
--- https://github.com/sumneko/lua-language-server/wiki/PreCompiled-Binaries
--- Should be extracted into config's 'misc' as 'lua-language-server' directory.
--- Code structure is taken from
--- https://www.chrisatmachine.com/Neovim/28-neovim-lua-development/
-local sumneko_root = vim.fn.stdpath('config') .. '/misc/lua-language-server'
-if vim.fn.isdirectory(sumneko_root) == 1 then
-  local sumneko_binary = sumneko_root .. '/bin/lua-language-server'
+local luals_root = vim.fn.stdpath('data') .. '/mason'
+if vim.fn.isdirectory(luals_root) == 1 then
+  -- if false then
+  local sumneko_binary = luals_root .. '/bin/lua-language-server'
 
   lspconfig.lua_ls.setup({
     handlers = {
@@ -72,7 +67,7 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
         vim.lsp.handlers['textDocument/definition'](err, result, ctx, config)
       end,
     },
-    cmd = { sumneko_binary, '-E', sumneko_root .. '/main.lua' },
+    cmd = { sumneko_binary },
     on_attach = function(client, bufnr)
       on_attach_custom(client, bufnr)
       -- Reduce unnecessarily long list of completion triggers for better
@@ -92,14 +87,12 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
           -- Get the language server to recognize common globals
           globals = { 'vim', 'describe', 'it', 'before_each', 'after_each' },
           disable = { 'need-check-nil' },
+          -- Don't make workspace diagnostic, as it consumes too much CPU and RAM
           workspaceDelay = -1,
         },
         workspace = {
           -- Don't analyze code from submodules
           ignoreSubmodules = true,
-        },
-        semantic = {
-          annotation = false,
         },
         -- Do not send telemetry data containing a randomized but unique identifier
         telemetry = {
@@ -111,7 +104,6 @@ if vim.fn.isdirectory(sumneko_root) == 1 then
 end
 
 -- C/C++ (clangd) =============================================================
--- Install as system package (`sudo pacman -S llvm clang`)
 lspconfig.clangd.setup({ on_attach = on_attach_custom })
 
 -- Typescript (tsserver) ======================================================

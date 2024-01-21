@@ -8,9 +8,7 @@ vim.o.mouse        = 'a'            -- Enable mouse
 vim.o.mousescroll  = 'ver:25,hor:6' -- Customize mouse scroll
 vim.o.switchbuf    = 'usetab'       -- Use already opened buffers when switching
 vim.o.writebackup  = false          -- Don't store backup
-
-vim.o.undodir  = vim.fn.stdpath('config') .. '/misc/undodir' -- Set directory for persistent undo
-vim.o.undofile = true                                        -- Enable persistent undo
+vim.o.undofile     = true           -- Enable persistent undo
 
 vim.cmd('filetype plugin indent on') -- Enable all filetype plugins
 
@@ -39,10 +37,7 @@ vim.o.fillchars = table.concat(
   { 'eob: ', 'fold:╌', 'horiz:═', 'horizdown:╦', 'horizup:╩', 'vert:║', 'verthoriz:╬', 'vertleft:╣', 'vertright:╠' },
   ','
 )
-vim.o.listchars =table.concat(
-  { 'extends:…', 'nbsp:␣', 'precedes:…', 'tab:> ' },
-  ','
-)
+vim.o.listchars = table.concat({ 'extends:…', 'nbsp:␣', 'precedes:…', 'tab:> ' }, ',')
 
 if vim.fn.has('nvim-0.9') == 1 then
   vim.opt.shortmess:append('C') -- Don't show "Scanning..." messages
@@ -52,9 +47,7 @@ end
 -- Colors =====================================================================
 -- Enable syntax highlighing if it wasn't already (as it is time consuming)
 -- Don't use defer it because it affects start screen appearance
-if vim.fn.exists("syntax_on") ~= 1 then
-  vim.cmd([[syntax enable]])
-end
+if vim.fn.exists('syntax_on') ~= 1 then vim.cmd('syntax enable') end
 
 -- Editing ====================================================================
 vim.o.autoindent    = true     -- Use auto indent
@@ -70,8 +63,6 @@ vim.o.tabstop       = 2        -- Insert 2 spaces for a tab
 vim.o.virtualedit   = 'block'  -- Allow going past the end of line in visual block mode
 
 vim.opt.iskeyword:append('-')  -- Treat dash separated words as a word text object
-
-vim.o.completeopt = 'menuone,noinsert,noselect' -- Customize completions
 
 -- Define pattern for a start of 'numbered' list. This is responsible for
 -- correct formatting of lists when using `gw`. This basically reads as 'at
@@ -92,13 +83,17 @@ vim.o.dictionary = vim.fn.stdpath('config') .. '/misc/dict/english.txt' -- Use s
 vim.o.foldmethod  = 'indent' -- Set 'indent' folding method
 vim.o.foldlevel   = 1        -- Display all folds except top ones
 vim.o.foldnestmax = 10       -- Create folds only for some number of nested levels
+vim.g.markdown_folding = 1   -- Use folding by heading in markdown files
 
 -- Custom autocommands ========================================================
-vim.cmd([[augroup CustomSettings]])
-  vim.cmd([[autocmd!]])
-
-  -- Don't auto-wrap comments and don't insert comment leader after hitting 'o'
-  -- If don't do this on `FileType`, this keeps magically reappearing.
-  vim.cmd([[autocmd FileType * setlocal formatoptions-=c formatoptions-=o]])
-vim.cmd([[augroup END]])
+local augroup = vim.api.nvim_create_augroup('CustomSettings', {})
+vim.api.nvim_create_autocmd('FileType', {
+  callback = function()
+    -- Don't auto-wrap comments and don't insert comment leader after hitting 'o'
+    -- If don't do this on `FileType`, this keeps reappearing due to being set in
+    -- filetype plugins.
+    vim.cmd('autocmd FileType * setlocal formatoptions-=c formatoptions-=o')
+  end,
+  desc = [[Ensure proper 'formatoptions']],
+})
 --stylua: ignore end

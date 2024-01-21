@@ -1,24 +1,25 @@
 -- Show line after desired maximum text width
-vim.opt_local.colorcolumn = '89'
+vim.cmd('setlocal colorcolumn=89')
 
 -- Keybindings
-vim.api.nvim_buf_set_keymap(0, 'i', '<M-i>', ' = ', { noremap = true })
+vim.keymap.set('i', '<M-i>', ' = ', { buffer = 0 })
 
 -- Indentation
 vim.g.pyindent_open_paren = 'shiftwidth()'
 vim.g.pyindent_continue = 'shiftwidth()'
 
 -- Section insert
-EC.section_python = function()
+Config.section_python = function()
+  local cur_line = vim.fn.line('.')
   -- Insert section template
-  vim.fn.append(vim.fn.line('.'), '# %% ')
+  vim.fn.append(cur_line, '# %% ')
 
   -- Enable Insert mode in appropriate place
-  vim.fn.cursor(vim.fn.line('.') + 1, 5)
-  vim.cmd([[startinsert!]])
+  vim.api.nvim_win_set_cursor(0, { cur_line + 1, 4 })
+  vim.cmd('startinsert!')
 end
 
-vim.api.nvim_buf_set_keymap(0, 'n', '<M-s>', '<Cmd>lua EC.section_python()<CR>', { noremap = true })
-vim.api.nvim_buf_set_keymap(0, 'i', '<M-s>', '<Cmd>lua EC.section_python()<CR>', { noremap = true })
+vim.keymap.set({ 'n', 'i' }, '<M-s>', '<Cmd>lua Config.section_python()<CR>', { buffer = 0 })
 
+-- mini.indentscope
 vim.b.miniindentscope_config = { options = { border = 'top' } }

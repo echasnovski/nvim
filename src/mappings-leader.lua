@@ -2,7 +2,7 @@
 
 -- Create global tables with information about clue groups in certain modes
 -- Structure of tables is taken to be compatible with 'mini.clue'.
-EC.leader_group_clues = {
+_G.Config.leader_group_clues = {
   { mode = 'n', keys = '<Leader>b', desc = '+Buffer' },
   { mode = 'n', keys = '<Leader>e', desc = '+Explore' },
   { mode = 'n', keys = '<Leader>f', desc = '+Find' },
@@ -14,6 +14,7 @@ EC.leader_group_clues = {
   { mode = 'n', keys = '<Leader>r', desc = '+R' },
   { mode = 'n', keys = '<Leader>t', desc = '+Terminal/Minitest' },
   { mode = 'n', keys = '<Leader>T', desc = '+Test' },
+  { mode = 'n', keys = '<Leader>v', desc = '+Visits' },
 
   { mode = 'x', keys = '<Leader>l', desc = '+LSP' },
   { mode = 'x', keys = '<Leader>r', desc = '+R' },
@@ -35,15 +36,16 @@ end
 nmap_leader('ba', [[<Cmd>b#<CR>]],                                 'Alternate')
 nmap_leader('bd', [[<Cmd>lua MiniBufremove.delete()<CR>]],         'Delete')
 nmap_leader('bD', [[<Cmd>lua MiniBufremove.delete(0, true)<CR>]],  'Delete!')
-nmap_leader('bs', [[<Cmd>lua EC.new_scratch_buffer()<CR>]],        'Scratch')
+nmap_leader('bs', [[<Cmd>lua Config.new_scratch_buffer()<CR>]],    'Scratch')
 nmap_leader('bw', [[<Cmd>lua MiniBufremove.wipeout()<CR>]],        'Wipeout')
 nmap_leader('bW', [[<Cmd>lua MiniBufremove.wipeout(0, true)<CR>]], 'Wipeout!')
 
 -- e is for 'explore'
-nmap_leader('ed', [[<Cmd>lua MiniFiles.open()<CR>]],                                       'Directory')
-nmap_leader('ef', [[<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>]],           'File directory')
-nmap_leader('em', [[<Cmd>lua MiniFiles.open('~/.config/nvim/pack/plugins/opt/mini')<CR>]], 'Mini.nvim directory')
-nmap_leader('eq', [[<Cmd>lua EC.toggle_quickfix()<CR>]],                                   'Quickfix')
+nmap_leader('ed', [[<Cmd>lua MiniFiles.open()<CR>]],                                                   'Directory')
+nmap_leader('ef', [[<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>]],                       'File directory')
+nmap_leader('em', [[<Cmd>lua MiniFiles.open('~/.local/share/nvim/site/pack/deps/opt/mini.nvim')<CR>]], 'Mini.nvim directory')
+nmap_leader('ep', [[<Cmd>lua MiniFiles.open('~/.local/share/nvim/site/pack/deps/opt')<CR>]],           'Plugins directory')
+nmap_leader('eq', [[<Cmd>lua Config.toggle_quickfix()<CR>]],                                           'Quickfix')
 
 -- f is for 'fuzzy find'
 nmap_leader('f/', [[<Cmd>Pick history scope='/'<CR>]],                 '"/" history')
@@ -75,7 +77,7 @@ nmap_leader('fV', [[<Cmd>Pick visit_paths<CR>]],                       'Visit pa
 nmap_leader('gA', [[<Cmd>lua require("gitsigns").stage_buffer()<CR>]],        'Add buffer')
 nmap_leader('ga', [[<Cmd>lua require("gitsigns").stage_hunk()<CR>]],          'Add (stage) hunk')
 nmap_leader('gb', [[<Cmd>lua require("gitsigns").blame_line()<CR>]],          'Blame line')
-nmap_leader('gg', [[<Cmd>lua EC.open_lazygit()<CR>]],                         'Git tab')
+nmap_leader('gg', [[<Cmd>lua Config.open_lazygit()<CR>]],                     'Git tab')
 nmap_leader('gp', [[<Cmd>lua require("gitsigns").preview_hunk()<CR>]],        'Preview hunk')
 nmap_leader('gq', [[<Cmd>lua require("gitsigns").setqflist()<CR>:copen<CR>]], 'Quickfix hunks')
 nmap_leader('gu', [[<Cmd>lua require("gitsigns").undo_stage_hunk()<CR>]],     'Undo stage hunk')
@@ -83,10 +85,10 @@ nmap_leader('gx', [[<Cmd>lua require("gitsigns").reset_hunk()<CR>]],          'D
 nmap_leader('gX', [[<Cmd>lua require("gitsigns").reset_buffer()<CR>]],        'Discard (reset) buffer')
 
 -- l is for 'LSP' (Language Server Protocol)
-local formatting_command = [[<Cmd>lua require('conform').format({ lsp_fallback = true })<CR>]]
+local formatting_cmd = [[<Cmd>lua require('conform').format({ lsp_fallback = true })<CR>]]
 nmap_leader('la', [[<Cmd>lua vim.lsp.buf.signature_help()<CR>]], 'Arguments popup')
 nmap_leader('ld', [[<Cmd>lua vim.diagnostic.open_float()<CR>]],  'Diagnostics popup')
-nmap_leader('lf', formatting_command,                            'Format')
+nmap_leader('lf', formatting_cmd,                                'Format')
 nmap_leader('li', [[<Cmd>lua vim.lsp.buf.hover()<CR>]],          'Information')
 nmap_leader('lj', [[<Cmd>lua vim.diagnostic.goto_next()<CR>]],   'Next diagnostic')
 nmap_leader('lk', [[<Cmd>lua vim.diagnostic.goto_prev()<CR>]],   'Prev diagnostic')
@@ -94,13 +96,13 @@ nmap_leader('lR', [[<Cmd>lua vim.lsp.buf.references()<CR>]],     'References')
 nmap_leader('lr', [[<Cmd>lua vim.lsp.buf.rename()<CR>]],         'Rename')
 nmap_leader('ls', [[<Cmd>lua vim.lsp.buf.definition()<CR>]],     'Source definition')
 
-xmap_leader('lf', formatting_command,                            'Format selection')
+xmap_leader('lf', formatting_cmd,                                'Format selection')
 
 -- L is for 'Lua'
-nmap_leader('Lc', '<Cmd>lua EC.log_clear()<CR>',                   'Clear log')
+nmap_leader('Lc', '<Cmd>lua Config.log_clear()<CR>',               'Clear log')
 nmap_leader('LL', '<Cmd>luafile %<CR><Cmd>echo "Sourced lua"<CR>', 'Source buffer')
-nmap_leader('Ls', '<Cmd>lua EC.log_print()<CR>',                   'Show log')
-nmap_leader('Lx', '<Cmd>lua EC.execute_lua_line()<CR>',            'Execute `lua` line')
+nmap_leader('Ls', '<Cmd>lua Config.log_print()<CR>',               'Show log')
+nmap_leader('Lx', '<Cmd>lua Config.execute_lua_line()<CR>',        'Execute `lua` line')
 
 -- m is for 'map'
 nmap_leader('mc', [[<Cmd>lua MiniMap.close()<CR>]],        'Close')
@@ -120,7 +122,7 @@ nmap_leader('og', [[<Cmd>lua MiniDoc.generate()<CR>]],       'Generate plugin do
 nmap_leader('ol', [[<Cmd>normal gxiagxina<CR>]],             'Move arg right')
 nmap_leader('or', [[<Cmd>lua MiniMisc.resize_window()<CR>]], 'Resize to default width')
 nmap_leader('os', [[<Cmd>lua MiniSessions.select()<CR>]],    'Session select')
-nmap_leader('oS', [[<Cmd>lua EC.insert_section()<CR>]],      'Section insert')
+nmap_leader('oS', [[<Cmd>lua Config.insert_section()<CR>]],  'Section insert')
 nmap_leader('ot', [[<Cmd>lua MiniTrailspace.trim()<CR>]],    'Trim trailspace')
 nmap_leader('oT', trailspace_toggle_command,                 'Trailspace hl toggle')
 nmap_leader('oz', [[<Cmd>lua MiniMisc.zoom()<CR>]],          'Zoom toggle')
@@ -146,20 +148,16 @@ nmap_leader('s', [[<Cmd>TREPLSendLine<CR>j]], 'Send to terminal')
 -- - In simple visual mode send text and move to the last character in
 --   selection and move to the right. Otherwise (like in line or block visual
 --   mode) send text and move one line down from bottom of selection.
-xmap_leader(
-  's',
-  [[mode() ==# "v" ? ":TREPLSendSelection<CR>`>l" : ":TREPLSendSelection<CR>'>j"]],
-  'Send to terminal',
-  { expr = true }
-)
+local send_selection_cmd = [[mode() ==# "v" ? ":TREPLSendSelection<CR>`>l" : ":TREPLSendSelection<CR>'>j"]]
+xmap_leader('s', send_selection_cmd, 'Send to terminal', { expr = true })
 
 -- t is for 'terminal' (uses 'neoterm') and 'minitest'
-nmap_leader('ta', '<Cmd>lua MiniTest.run()<CR>',                   'Test run all')
-nmap_leader('tf', '<Cmd>lua MiniTest.run_file()<CR>',              'Test run file')
-nmap_leader('tl', '<Cmd>lua MiniTest.run_at_location()<CR>',       'Test run location')
-nmap_leader('ts', '<Cmd>lua EC.minitest_screenshots.browse()<CR>', 'Test show screenshot')
-nmap_leader('tT', '<Cmd>belowright Tnew<CR>',                      'Terminal (horizontal)')
-nmap_leader('tt', '<Cmd>vertical Tnew<CR>',                        'Terminal (vertical)')
+nmap_leader('ta', '<Cmd>lua MiniTest.run()<CR>',                       'Test run all')
+nmap_leader('tf', '<Cmd>lua MiniTest.run_file()<CR>',                  'Test run file')
+nmap_leader('tl', '<Cmd>lua MiniTest.run_at_location()<CR>',           'Test run location')
+nmap_leader('ts', '<Cmd>lua Config.minitest_screenshots.browse()<CR>', 'Test show screenshot')
+nmap_leader('tT', '<Cmd>belowright Tnew<CR>',                          'Terminal (horizontal)')
+nmap_leader('tt', '<Cmd>vertical Tnew<CR>',                            'Terminal (vertical)')
 
 -- T is for 'test'
 nmap_leader('TF', [[<Cmd>TestFile -strategy=make | copen<CR>]],    'File (quickfix)')
@@ -170,4 +168,20 @@ nmap_leader('TN', [[<Cmd>TestNearest -strategy=make | copen<CR>]], 'Nearest (qui
 nmap_leader('Tn', [[<Cmd>TestNearest<CR>]],                        'Nearest')
 nmap_leader('TS', [[<Cmd>TestSuite -strategy=make | copen<CR>]],   'Suite (quickfix)')
 nmap_leader('Ts', [[<Cmd>TestSuite<CR>]],                          'Suite')
+
+-- v is for 'visits'
+nmap_leader('vv', '<Cmd>lua MiniVisits.add_label("core")<CR>',    'Add "core" label')
+nmap_leader('vV', '<Cmd>lua MiniVisits.remove_label("core")<CR>', 'Remove "core" label')
+nmap_leader('vl', '<Cmd>lua MiniVisits.add_label()<CR>',          'Add label')
+nmap_leader('vL', '<Cmd>lua MiniVisits.remove_label()<CR>',       'Remove label')
+
+local map_pick_core = function(keys, cwd, desc)
+  local rhs = function()
+    local sort_latest = MiniVisits.gen_sort.default({ recency_weight = 1 })
+    MiniExtra.pickers.visit_paths({ cwd = cwd, filter = 'core', sort = sort_latest }, { source = { name = desc } })
+  end
+  nmap_leader(keys, rhs, desc)
+end
+map_pick_core('vc', '', 'Core visits (all)')
+map_pick_core('vC', nil, 'Core visits (cwd)')
 -- stylua: ignore end

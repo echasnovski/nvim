@@ -1,84 +1,34 @@
 -- Helper table
 local H = {}
 
--- Functions for managing startup. Basically both are `try-catch` implementing
--- "two step startup": some should execute immediately and some - later
--- (strictly preserving order and not blocking in between).
-EC.now = function(f)
-  local ok, err = pcall(f)
-  if not ok then table.insert(H.exec_errors, err) end
-  H.schedule_finish()
-end
-
-H.later_callback_queue = {}
-
-EC.later = function(f)
-  table.insert(H.later_callback_queue, f)
-  H.schedule_finish()
-end
-
-H.finish_is_scheduled = false
-
-H.schedule_finish = function()
-  if H.finish_is_scheduled then return end
-  vim.schedule(H.finish)
-  H.finish_is_scheduled = true
-end
-
-H.finish = function()
-  local timer, step_delay = vim.loop.new_timer(), 1
-  local f = nil
-  f = vim.schedule_wrap(function()
-    local callback = H.later_callback_queue[1]
-    if callback == nil then
-      H.finish_is_scheduled = false
-      H.report_errors()
-      return
-    end
-
-    table.remove(H.later_callback_queue, 1)
-    EC.now(callback)
-    timer:start(step_delay, 0, f)
-  end)
-  timer:start(step_delay, 0, f)
-end
-
-H.exec_errors = {}
-
-H.report_errors = function()
-  if #H.exec_errors == 0 then return end
-  local msg = 'There were errors during startup:\n\n' .. table.concat(H.exec_errors, '\n\n')
-  vim.api.nvim_echo({ { msg, 'ErrorMsg' } }, true, {})
-end
-
 -- Log for personal use during debugging
-EC.log = {}
+Config.log = {}
 
 local start_hrtime = vim.loop.hrtime()
 _G.add_to_log = function(...)
   local t = { ... }
   t.timestamp = 0.000001 * (vim.loop.hrtime() - start_hrtime)
-  table.insert(EC.log, vim.deepcopy(t))
+  table.insert(Config.log, vim.deepcopy(t))
 end
 
 local log_buf_id
-EC.log_print = function()
+Config.log_print = function()
   if log_buf_id == nil or not vim.api.nvim_buf_is_valid(log_buf_id) then
     log_buf_id = vim.api.nvim_create_buf(true, true)
   end
   vim.api.nvim_win_set_buf(0, log_buf_id)
-  vim.api.nvim_buf_set_lines(log_buf_id, 0, -1, false, vim.split(vim.inspect(EC.log), '\n'))
+  vim.api.nvim_buf_set_lines(log_buf_id, 0, -1, false, vim.split(vim.inspect(Config.log), '\n'))
 end
 
-EC.log_clear = function()
-  EC.log = {}
+Config.log_clear = function()
+  Config.log = {}
   start_hrtime = vim.loop.hrtime()
-  vim.cmd('echo "Cleared EC.log"')
+  vim.cmd('echo "Cleared log"')
 end
 
 -- Show Neoterm's active REPL, i.e. in which command will be executed when one
 -- of `TREPLSend*` will be used
-EC.print_active_neoterm = function()
+Config.print_active_neoterm = function()
   local msg
   if vim.fn.exists('g:neoterm.repl') == 1 and vim.fn.exists('g:neoterm.repl.instance_id') == 1 then
     msg = 'Active REPL neoterm id: ' .. vim.g.neoterm.repl.instance_id
@@ -92,7 +42,7 @@ EC.print_active_neoterm = function()
 end
 
 -- Create scratch buffer and focus on it
-EC.new_scratch_buffer = function()
+Config.new_scratch_buffer = function()
   local buf_id = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_win_set_buf(0, buf_id)
   return buf_id
@@ -116,7 +66,7 @@ end
 --     - If item is not selected, close popup and execute '<CR>'. Reasoning
 --       behind this is to explicitly select desired completion (currently this
 --       is also done with one '<Tab>' keystroke).
-EC.cr_action = function()
+Config.cr_action = function()
   if vim.fn.pumvisible() ~= 0 then
     local item_selected = vim.fn.complete_info()['selected'] ~= -1
     return item_selected and H.keys['ctrl-y'] or H.keys['ctrl-y_cr']
@@ -126,7 +76,7 @@ EC.cr_action = function()
 end
 
 -- Insert section
-EC.insert_section = function(symbol, total_width)
+Config.insert_section = function(symbol, total_width)
   symbol = symbol or '='
   total_width = total_width or 79
 
@@ -143,7 +93,7 @@ EC.insert_section = function(symbol, total_width)
 end
 
 -- Execute current line with `lua`
-EC.execute_lua_line = function()
+Config.execute_lua_line = function()
   local line = 'lua ' .. vim.api.nvim_get_current_line()
   vim.api.nvim_command(line)
   print(line)
@@ -151,7 +101,7 @@ EC.execute_lua_line = function()
 end
 
 -- Tabpage with lazygit
-EC.open_lazygit = function()
+Config.open_lazygit = function()
   vim.cmd('tabedit')
   vim.cmd('setlocal nonumber signcolumn=no')
 
@@ -169,7 +119,7 @@ EC.open_lazygit = function()
 end
 
 -- Toggle quickfix window
-EC.toggle_quickfix = function()
+Config.toggle_quickfix = function()
   local quickfix_wins = vim.tbl_filter(
     function(win_id) return vim.fn.getwininfo(win_id)[1].quickfix == 1 end,
     vim.api.nvim_tabpage_list_wins(0)
@@ -198,16 +148,16 @@ end
 -- - Should somehow not show any status column where it shouldn't be (like in
 --   help files).
 _G.statuscol_times = {}
-EC.statuscolumn = function()
+Config.statuscolumn = function()
   local start_time = vim.loop.hrtime()
 
   local lnum = vim.v.lnum
 
   -- Line part
-  local line = EC.get_line_statuscolumn_string(lnum, 3)
+  local line = H.get_line_statuscolumn_string(lnum, 3)
 
   -- Sign part
-  local signs = EC.get_sign_statuscolumn_string(lnum, 2)
+  local signs = H.get_sign_statuscolumn_string(lnum, 2)
 
   local res = string.format('%s%%=%s', signs, line)
   local end_time = vim.loop.hrtime()
@@ -215,7 +165,7 @@ EC.statuscolumn = function()
   return res
 end
 
-EC.get_line_statuscolumn_string = function(lnum, width)
+H.get_line_statuscolumn_string = function(lnum, width)
   local number, relativenumber = vim.wo.number, vim.wo.relativenumber
   if not (number or relativenumber) then return '' end
 
@@ -242,7 +192,7 @@ EC.get_line_statuscolumn_string = function(lnum, width)
   return string.format('%%#%s#%s ', hl, text)
 end
 
-EC.get_sign_statuscolumn_string = function(lnum, width)
+H.get_sign_statuscolumn_string = function(lnum, width)
   local signs = vim.fn.sign_getplaced(vim.api.nvim_get_current_buf(), { group = '*', lnum = lnum })[1].signs
   if #signs == 0 then return string.rep(' ', width) end
 
@@ -265,12 +215,12 @@ end
 
 -- if vim.fn.exists('&statuscolumn') == 1 then
 --   vim.o.signcolumn = 'no'
---   vim.o.statuscolumn = '%!v:lua.EC.statuscolumn()'
+--   vim.o.statuscolumn = '%!v:lua.Config.statuscolumn()'
 -- end
 
 -- Manage 'mini.test' screenshots ---------------------------------------------
 local S = {}
-EC.minitest_screenshots = S
+Config.minitest_screenshots = S
 
 S.browse = function(dir_path)
   dir_path = dir_path or 'tests/screenshots'
@@ -294,13 +244,13 @@ S.setup_windows = function()
   S.buf_id_text = vim.api.nvim_get_current_buf()
   S.win_id_text = vim.api.nvim_get_current_win()
   vim.cmd('setlocal bufhidden=wipe nobuflisted')
-  vim.cmd('au CursorMoved <buffer> lua EC.minitest_screenshots.sync_cursor()')
+  vim.cmd('au CursorMoved <buffer> lua Config.minitest_screenshots.sync_cursor()')
 
   vim.cmd('belowright wincmd v | wincmd = | enew')
   S.buf_id_attr = vim.api.nvim_get_current_buf()
   S.win_id_attr = vim.api.nvim_get_current_win()
   vim.cmd('setlocal bufhidden=wipe nobuflisted')
-  vim.cmd('au CursorMoved <buffer> lua EC.minitest_screenshots.sync_cursor()')
+  vim.cmd('au CursorMoved <buffer> lua Config.minitest_screenshots.sync_cursor()')
 
   vim.api.nvim_set_current_win(S.win_id_text)
 
@@ -318,9 +268,9 @@ S.setup_windows = function()
   -- Set up behavior
   for _, buf_id in ipairs({ S.buf_id_text, S.buf_id_attr }) do
     vim.api.nvim_buf_set_keymap(buf_id, 'n', 'q', ':tabclose!<CR>', { noremap = true })
-    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-d>', '<Cmd>lua EC.minitest_screenshots.delete_current()<CR>', { noremap = true })
-    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-n>', '<Cmd>lua EC.minitest_screenshots.show_next()<CR>', { noremap = true })
-    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-p>', '<Cmd>lua EC.minitest_screenshots.show_prev()<CR>', { noremap = true })
+    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-d>', '<Cmd>lua Config.minitest_screenshots.delete_current()<CR>', { noremap = true })
+    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-n>', '<Cmd>lua Config.minitest_screenshots.show_next()<CR>', { noremap = true })
+    vim.api.nvim_buf_set_keymap(buf_id, 'n', '<C-p>', '<Cmd>lua Config.minitest_screenshots.show_prev()<CR>', { noremap = true })
   end
   --stylua: ignore end
 end
@@ -368,7 +318,6 @@ S.delete_current = function()
   print('Deleted file ' .. vim.inspect(path))
 end
 
--- Split-join arguments -------------------------------------------------------
 -- Helper data ================================================================
 -- Commonly used keys
 H.keys = {

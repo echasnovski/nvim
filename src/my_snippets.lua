@@ -84,11 +84,11 @@ end, { desc = 'Stop snippet session' })
 -- -- enough (~0.1ms during normal typing).
 -- local luasnip_ns = vim.api.nvim_create_namespace('luasnip')
 --
--- EC.luasnip_notify_clear = function() vim.api.nvim_buf_clear_namespace(0, luasnip_ns, 0, -1) end
+-- Config.luasnip_notify_clear = function() vim.api.nvim_buf_clear_namespace(0, luasnip_ns, 0, -1) end
 --
--- EC.luasnip_notify = function()
+-- Config.luasnip_notify = function()
 --   if not luasnip.expandable() then
---     EC.luasnip_notify_clear()
+--     Config.luasnip_notify_clear()
 --     return
 --   end
 --
@@ -96,5 +96,5 @@ end, { desc = 'Stop snippet session' })
 --   vim.api.nvim_buf_set_virtual_text(0, luasnip_ns, line, { { '!', 'Special' } }, {})
 -- end
 --
--- vim.cmd([[au InsertEnter,CursorMovedI,TextChangedI,TextChangedP * lua pcall(EC.luasnip_notify)]])
--- vim.cmd([[au InsertLeave * lua pcall(EC.luasnip_notify_clear)]])
+-- vim.cmd([[au InsertEnter,CursorMovedI,TextChangedI,TextChangedP * lua pcall(Config.luasnip_notify)]])
+-- vim.cmd([[au InsertLeave * lua pcall(Config.luasnip_notify_clear)]])

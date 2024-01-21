@@ -1,10 +1,4 @@
-dein
 tags*
 .netrwhist
-pythonpath.vim
-nodepath.vim
 autoload/plugged/*
-paths.vim
-wiki/
-lua-language-server
 deps/
