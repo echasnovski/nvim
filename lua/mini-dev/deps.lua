@@ -2,27 +2,21 @@
 --
 -- Code:
 --
--- - Rethink about supporting "hot reloading".
+-- - Rethink the whole "session" implementation to not rely on 'runtimepath'
+--   and instead track order by itself. Maybe to be an array (again).
+--   And maybe not treat 'start/' directories differently. Or probably not.
 --
--- - Rethink about making `add()` and `remove()` accept list (of specs/names
---   respectively) OR at least `add()` to accept proper specification table.
---   This will allow having canonical `opts` as second argument.
---     - In `add()` allow either one `source` of `name` to be present.
---     - String is treated as `name` if it has no '/', otherwise - `source`.
---     - Update `remove()` to still accept `delete_dir` as second argument but
---       operate on all target plugins.
---     - Update `:DepsAdd` and `:DepsRemove` commands.
+-- - Consistently handle "start" - "done with one" - "done" notifications.
+--
+-- - Rethink about making `add()` accept list `spec` to allow parallel install.
+--   Update `:DepsAdd` command.
 --
 -- - Implement `depends` spec:
 --     - Should add them prior to target one.
---     - Should remove them (if asked) in `remove()`.
 --
 -- - ?Add `version` support to install version through tags?
 --
--- - Update `update()` in interactive mode to show available tags created after
---   current state (?if it doesn't track branch?).
---
--- - Consider adding/documenting automated reloading after 'init.lua' has changed.
+-- - Think about adding `show_releases()` which shows all/relevant git tags.
 --
 -- Docs:
 -- - Add examples of user commands in |MiniDeps-actions|.
@@ -39,11 +33,11 @@
 --
 -- - Update:
 --     - Should set `origin` remote branch to be `source` even if `offline = true`.
+--     - Hooks should be executed in order defined in current session.
 --
--- - Checkout:
+-- - Snapshot set:
 --     - Should **not** update `checkout` data in session.
 --       To update that, remove from session and add with proper `checkout`.
---     - Hooks should be executed in order defined in current session.
 
 --- *mini.deps* Plugin manager
 --- *MiniDeps*
@@ -55,8 +49,7 @@
 --- Features:
 ---
 --- - Manage plugins utilizing Git and built-in |packages| with these actions:
----     - Add / remove plugin in current session.
----       See |MiniDeps.add()| and |MiniDeps.remove()|.
+---     - Add plugin to current session. See |MiniDeps.add()|.
 ---     - Delete unused plugins. See |MiniDeps.clean()|.
 ---     - Update with/without confirm, with/without downloading new data.
 ---       See |MiniDeps.update()|.
@@ -65,7 +58,7 @@
 ---     (see |MiniDeps-commands|).
 ---
 --- - Minimal yet flexible plugin specification:
----     - Mandatory plugin source.
+---     - Plugin source.
 ---     - Name of target plugin directory.
 ---     - Checkout target: branch, commit, tag, etc.
 ---     - Monitor branch to track updates without checking out.
@@ -79,8 +72,13 @@
 ---
 --- - Manage plugins which are developed without Git. The suggested approach is
 ---   to create a separate package (see |packages|).
+--- - Provide ways to completely remove or update plugin's functionality in
+---   current session. Although this is partially doable, it can not be done
+---   in full (yet) because plugins can have untraceable side effects
+---   (autocmmands, mappings, etc.).
 ---
 --- Sources with more details:
+--- - |MiniDeps-overview|. !!!!!!!!! TODO !!!!!!!!!
 --- - |MiniDeps-examples|.
 --- - |MiniDeps-plugin-specification|.
 --- - |MiniDeps-commands|.
@@ -184,8 +182,6 @@
 ---     - <post_install> - after  creating plugin directory.
 ---     - <pre_change>   - before making update in plugin directory.
 ---     - <post_change>  - after  making update in plugin directory.
----     - <pre_delete>   - before deleting plugin directory.
----     - <post_delete>  - after  deleting plugin directory.
 ---   Default: empty table for no hooks.
 ---@tag MiniDeps-plugin-specification
 
@@ -194,12 +190,6 @@
 --- `:DepsAdd user/repo` makes plugin from https://github.com/user/repo available
 --- in the current session (also creates it, if it is not present).
 --- To add plugin in every session, put |MiniDeps.add()| in |init.lua|.
----
----                                                                    *:DepsRemove*
---- `:DepsRemove repo` makes plugin with name "repo" not available in the
---- current session.
---- `:DepsRemove! repo` also deletes plugin's directory from disk.
---- Do not forget to update config to not add same plugin in next session.
 ---
 ---                                                                     *:DepsClean*
 --- `:DepsClean` deletes plugins from disk not loaded in current session.
@@ -369,8 +359,8 @@ MiniDeps.config = {
 ---   Note: If plugin directory is present, no action with it is done (to increase
 ---   performance during startup). In particular, it does not checkout according
 ---   to `opts.checkout`. Use |MiniDeps.update()| explicitly.
---- - Register plugin's spec in current session if there is no plugin with the
----   same name already registered.
+--- - Register plugin's spec in current session. Adding plugin several times
+---   updates its session specs.
 --- - Make sure it can be used in current session (see |:packadd|).
 ---
 ---@param spec table|string Plugin specification. See |MiniDeps-plugin-specification|.
@@ -393,62 +383,16 @@ MiniDeps.add = function(spec)
   end
 
   -- Register plugin's spec for current session if it wasn't already
-  H.session[path] = H.session[path] or spec
+  H.session[path] = vim.tbl_deep_extend('force', H.session[path] or {}, spec)
 
   -- Add plugin to current session
   vim.cmd('packadd ' .. spec.name)
 end
 
---- Remove plugin from current session
----
---- - Remove plugin spec from current session (if present).
---- - Unload all cached Lua modules from plugin. This enables resetting plugin
----   functionality after possibly later call to |MiniDeps.add()|.
---- - If `opts.from_rtp` is `true`, remove plugin path from 'runtimpath' (if it
----   was put there via this module).
---- - If `opts.from_disk` is `true`, delete plugin directory:
----     - Execute `pre_delete` hook (if plugin with input name is registered).
----     - Delete plugin directory.
----     - Execute `post_delete` hook (if plugin with input name is registered).
----
----@param name string Plugin directory name in |MiniDeps-directory-structure|.
----@param opts table|nil Options. Possible fields:
----   - <from_disk> (`boolean`) - whether to delete plugin directory.
----     Default: `false`.
----   - <from_rtp> (`boolean`) - whether to remove plugin path from 'runtimepath'.
----     Default: `true`.
-MiniDeps.remove = function(name, opts)
-  if type(name) ~= 'string' then H.error('`name` should be string.') end
-  opts = vim.tbl_deep_extend('force', { from_disk = false, from_rtp = true }, opts or {})
-
-  local path, is_present = H.get_plugin_path(name)
-  if not is_present then return H.error('`' .. name .. '` is not a name of present plugin.') end
-
-  -- Find current session spec for plugin
-  local is_added = H.session[path] ~= nil
-  local spec = is_added and H.session[path] or { hooks = {} }
-
-  -- Remove plugin from current session. Update runtimepath only for non-start
-  -- plugins as most likely they were not added there by 'mini.deps'.
-  H.session[path] = nil
-  H.unload_lua_modules(path)
-  H.remove_autocommands(path)
-  if is_added and opts.from_rtp then vim.cmd('set rtp-=' .. vim.fn.fnameescape(path)) end
-
-  -- Possibly delete directory
-  if not opts.from_disk then return end
-
-  local plugs = { spec }
-  H.plugs_exec_hooks(plugs, 'pre_delete')
-  vim.fn.delete(path, 'rf')
-  H.plugs_exec_hooks(plugs, 'post_delete')
-  H.notify('(1/1) Deleted plugin `' .. name .. '` from disk.')
-end
-
 --- Clean plugins
 ---
 --- - Delete plugin directories (based on |MiniDeps-directory-structure|) which
----   are currently not present in 'runtimpath'.
+---   are not registered in current session.
 MiniDeps.clean = function()
   -- Get map of all runtime paths
   local is_in_rtp = {}
@@ -456,19 +400,14 @@ MiniDeps.clean = function()
     is_in_rtp[path] = true
   end
 
-  -- Get all paths from packages 'opt/' and 'start/'
-  local deps_path, all_plugin_paths = H.get_package_path() .. '/pack/deps', {}
-  vim.list_extend(all_plugin_paths, H.readdir(deps_path .. '/opt'))
-  vim.list_extend(all_plugin_paths, H.readdir(deps_path .. '/start'))
-
   -- Filter only proper plugin directories which are not present in 'runtime'
   local is_absent_plugin = function(x) return vim.fn.isdirectory(x) == 1 and not is_in_rtp[x] end
-  local absent_paths = vim.tbl_filter(is_absent_plugin, all_plugin_paths)
+  local absent_paths = vim.tbl_filter(is_absent_plugin, H.get_all_plugin_paths())
   local n_to_delete = #absent_paths
 
   for i, path in ipairs(absent_paths) do
     vim.fn.delete(path, 'rf')
-    local msg = string.format('(%d/%d) Deleted plugin `%s` from disk.', i, n_to_delete, vim.fn.fnamemodify(path, ':t'))
+    local msg = string.format('(%d/%d) Deleted `%s` from disk.', i, n_to_delete, vim.fn.fnamemodify(path, ':t'))
     H.notify(msg)
   end
 
@@ -606,9 +545,9 @@ end
 MiniDeps.get_session = function()
   local deps_path_esc = vim.pesc(H.get_package_path() .. '/pack/deps')
   local pattern = string.format('^%s/([^/]+)/([^/]+)$', deps_path_esc)
-  local rtp = vim.api.nvim_list_runtime_paths()
 
-  local res = {}
+  -- Traverse
+  local res, rtp = {}, vim.api.nvim_list_runtime_paths()
   for i = #rtp, 1, -1 do
     local dir, name = string.match(rtp[i], pattern)
     local spec = H.session[rtp[i]]
@@ -681,13 +620,7 @@ end
 H.apply_config = function(config)
   MiniDeps.config = config
 
-  -- Remove current plugins to allow resourcing script with `setup()` call.
-  -- Do not remove from 'runtimepath' to allow them be discoverable via
-  -- `require()` to mitigate their usage in not cleaned autocommands.
-  local session = MiniDeps.get_session()
-  for _, spec in ipairs(session) do
-    pcall(MiniDeps.remove, spec.name, { from_disk = false, from_rtp = false })
-  end
+  -- Reset current session to allow resourcing script with `setup()` call
   H.session = {}
 
   -- Add target package path to 'packpath'
@@ -720,26 +653,25 @@ H.create_user_commands = function()
   -- Do not create commands immediately to increase startup time
   local new_cmd = vim.schedule_wrap(vim.api.nvim_create_user_command)
 
-  local get_plugin_names = function()
-    return vim.tbl_map(function(s) return s.name end, MiniDeps.get_session())
+  local complete_session_names = function(arg, _, _)
+    local session_names = vim.tbl_map(function(s) return s.name end, MiniDeps.get_session())
+    return vim.tbl_filter(function(n) return vim.startswith(n, arg) end, session_names)
   end
-  local complete_names = function(arg, _, _)
-    return vim.tbl_filter(function(n) return vim.startswith(n, arg) end, get_plugin_names())
+  local complete_disk_names = function(arg, _, _)
+    local disk_names = vim.tbl_map(function(p) return vim.fn.fnamemodify(p, ':t') end, H.get_all_plugin_paths())
+    return vim.tbl_filter(function(n) return vim.startswith(n, arg) end, disk_names)
   end
 
   local add = function(input) MiniDeps.add(input.fargs[1]) end
-  new_cmd('DepsAdd', add, { nargs = '?', complete = complete_names, desc = 'Add plugin to session' })
-
-  local remove = function(input) MiniDeps.remove(input.fargs[1], { from_disk = input.bang }) end
-  local remove_opts = { bang = true, complete = complete_names, nargs = 1, desc = 'Remove plugin from session' }
-  new_cmd('DepsRemove', remove, remove_opts)
+  new_cmd('DepsAdd', add, { nargs = '?', complete = complete_disk_names, desc = 'Add plugin to session' })
 
   local make_update_cmd = function(name, offline, desc)
     local callback = function(input)
-      local names = #input.fargs == 0 and get_plugin_names() or input.fargs
+      local names
+      if #input.fargs > 0 then names = input.fargs end
       MiniDeps.update(names, { force = input.bang, offline = offline })
     end
-    local opts = { bang = true, complete = complete_names, nargs = '*', desc = desc }
+    local opts = { bang = true, complete = complete_session_names, nargs = '*', desc = desc }
     new_cmd(name, callback, opts)
   end
   make_update_cmd('DepsUpdate', false, 'Update plugins')
@@ -822,7 +754,7 @@ H.normalize_spec = function(spec)
 
   spec.hooks = vim.deepcopy(spec.hooks) or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
-  local hook_names = { 'pre_install', 'post_install', 'pre_change', 'post_change', 'pre_delete', 'post_delete' }
+  local hook_names = { 'pre_install', 'post_install', 'pre_change', 'post_change' }
   for _, hook_name in ipairs(hook_names) do
     local is_not_hook = spec[hook_name] and not vim.is_callable(spec[hook_name])
     if is_not_hook then H.error('`hooks.' .. hook_name .. '` in plugin spec should be callable.') end
@@ -986,7 +918,10 @@ H.plugs_infer_commit = function(plugs, field_ref, field_out)
 
   -- Infer commit depending on whether it points to origin branch
   prepare = function(p)
-    local ref = (p.is_ref_origin_branch and 'origin/' or '') .. p[field_ref]
+    -- Force `checkout = 'HEAD'` to always point to current commit to freeze
+    -- updates. This is needed because `origin/HEAD` is also present.
+    local is_from_origin = p.is_ref_origin_branch and p[field_ref] ~= 'HEAD'
+    local ref = (is_from_origin and 'origin/' or '') .. p[field_ref]
     p.job.command = p[field_out] == nil and H.git_cmd.get_hash(ref) or {}
   end
   process = function(p)
@@ -1018,33 +953,14 @@ H.get_plugin_path = function(name)
   return opt_path, false
 end
 
+H.get_all_plugin_paths = function()
+  local deps_path, res = H.get_package_path() .. '/pack/deps', {}
+  vim.list_extend(res, H.readdir(deps_path .. '/opt'))
+  vim.list_extend(res, H.readdir(deps_path .. '/start'))
+  return res
+end
+
 H.get_package_path = function() return H.full_path(H.get_config().path.package) end
-
--- Remove ---------------------------------------------------------------------
-H.unload_lua_modules = function(path)
-  -- Compute all modules to unload
-  local lua_subdir = path .. '/lua/'
-  local lua_files = vim.fn.glob(lua_subdir .. '**/*.lua', true, true)
-  local modules, n_prefix = {}, lua_subdir:len()
-  for _, p in ipairs(lua_files) do
-    local m = p:sub(n_prefix + 1):gsub('/init%.lua$', ''):gsub('%.lua$', '')
-    modules[m] = true
-  end
-
-  -- Get normalized loaded modules (as `require` allows '/' and '.' separators)
-  for m, _ in pairs(package.loaded) do
-    if modules[m:gsub('%.', '/')] then package.loaded[m] = nil end
-  end
-end
-
-H.remove_autocommands = function(path)
-  path = '@' .. path .. (path:sub(-1) == '/' and '' or '/')
-  for _, au in ipairs(vim.api.nvim_get_autocmds({})) do
-    local cb = au.callback
-    local is_from_path = type(cb) == 'function' and vim.startswith(debug.getinfo(cb).source, path)
-    if is_from_path then vim.api.nvim_del_autocmd(au.id) end
-  end
-end
 
 -- Update ---------------------------------------------------------------------
 H.update_compute_feedback_lines = function(plugs)
@@ -1145,8 +1061,8 @@ H.update_feedback_confirm = function(lines)
     syntax match MiniDepsInfo          "^Source: \+\zs[^ ]\+"
     syntax match MiniDepsInfo          "^State[^:]*: \+\zs[^ ]\+\ze"
     syntax match MiniDepsHint          "\(^State.\+\)\@<=(.\+)$"
-    syntax match MiniDepsChangeRemoved "^< .*\n  .*$"
     syntax match MiniDepsChangeAdded   "^> .*\n  .*$"
+    syntax match MiniDepsChangeRemoved "^< .*\n  .*$"
     syntax match MiniDepsPlaceholder   "^<.*>$"
   ]])
 
@@ -1164,9 +1080,9 @@ H.update_feedback_confirm = function(lines)
       if cur_name ~= nil then table.insert(names, cur_name) end
     end
 
-    -- Delete buffer and update
-    delete_buffer()
+    -- Update and delete buffer (in that order, to show that update is done)
     MiniDeps.update(names, { force = true, offline = true })
+    delete_buffer()
   end
 
   -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
