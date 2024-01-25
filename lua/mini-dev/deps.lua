@@ -2,24 +2,23 @@
 --
 -- Code:
 --
--- - Rethink the whole "session" implementation to not rely on 'runtimepath'
---   and instead track order by itself. Maybe to be an array (again).
---   And maybe not treat 'start/' directories differently. Or probably not.
---
 -- - Consistently handle "start" - "done with one" - "done" notifications.
+--
+-- - Add `opts` to `clean()` with `opts.force = false` (default) showing
+--   confirmation buffer.
 --
 -- - Rethink about making `add()` accept list `spec` to allow parallel install.
 --   Update `:DepsAdd` command.
---
--- - Implement `depends` spec:
---     - Should add them prior to target one.
 --
 -- - ?Add `version` support to install version through tags?
 --
 -- - Think about adding `show_releases()` which shows all/relevant git tags.
 --
 -- Docs:
+-- - Document the whole concept of "session". Probably in `get_session()` and
+--   link to it.
 -- - Add examples of user commands in |MiniDeps-actions|.
+-- - Add examples with `depends`.
 -- - Clarify distinction in how to use `checkout` and `monitor`. They allow
 --   both automated update from some branch and (more importantly) "freezing"
 --   plugin at certain commit/tag while allowing to monitor updates waiting for
@@ -29,7 +28,8 @@
 --
 -- Tests:
 -- - Session:
---     - `get_session()` should return in order user added them.
+--     - `get_session()` should return in order user added them. Plus 'start'
+--       plugins which are actually in 'runtimepath' at the end.
 --
 -- - Update:
 --     - Should set `origin` remote branch to be `source` even if `offline = true`.
@@ -50,7 +50,7 @@
 ---
 --- - Manage plugins utilizing Git and built-in |packages| with these actions:
 ---     - Add plugin to current session. See |MiniDeps.add()|.
----     - Delete unused plugins. See |MiniDeps.clean()|.
+---     - Delete unused plugins with/without confirm. See |MiniDeps.clean()|.
 ---     - Update with/without confirm, with/without downloading new data.
 ---       See |MiniDeps.update()|.
 ---     - Get / set / save / load snapshot. See `MiniDeps.snap_*()` functions.
@@ -112,7 +112,8 @@
 ---
 --- # Highlight groups ~
 ---
---- Highlight groups are used inside confirmation buffer after |MiniDeps.update()|.
+--- Highlight groups are used inside confirmation buffers
+--- after |MiniDeps.update()| and |MiniDeps.clean()|.
 ---
 --- * `MiniDepsChangeAdded`   - added change (commit) during update.
 --- * `MiniDepsChangeRemoved` - removed change (commit) during update.
@@ -157,6 +158,7 @@
 ---     - As the most common case, URI of the format "user/repo" is transformed
 ---       into "https://github.com/user/repo".
 ---     - It is required for creating plugin, but can be omitted afterwards.
+---   Default: `nil` to rely on source set up during install.
 ---
 --- - <name> `(string|nil)` - directory basename of where to put plugin source.
 ---   It is put in "pack/deps/opt" subdirectory of `config.path.package`.
@@ -171,9 +173,8 @@
 ---   different target than `checkout`. Should be a name of present Git branch.
 ---   Default: `nil` for default branch (usually "main" or "master").
 ---
---- - <depends> `(table|nil)` - array of strings with plugin sources. Each plugin
----   will be set up prior to the target. Note: for more configuration of
----   dependencies, set them up separately prior to adding the target.
+--- - <depends> `(table|nil)` - array of plugin specifications (strings or
+---   tables) to be added prior to the target.
 ---   Default: `{}`.
 ---
 --- - <hooks> `(table|nil)` - table with callable hooks to call on certain events.
@@ -192,7 +193,11 @@
 --- To add plugin in every session, put |MiniDeps.add()| in |init.lua|.
 ---
 ---                                                                     *:DepsClean*
---- `:DepsClean` deletes plugins from disk not loaded in current session.
+--- `:DepsClean` deletes plugins from disk not loaded in current session. It shows
+--- confirmation buffer in a separate |tabpage| with information about an upcoming
+--- deletes to review and (selectively) apply. See |MiniDeps.clean()| for more info.
+---
+--- `:DepsClean!` deletes plugins without confirmation.
 ---
 ---                                                                    *:DepsUpdate*
 --- `:DepsUpdate` updates all plugins with new changes from their sources. It shows
@@ -365,35 +370,51 @@ MiniDeps.config = {
 ---
 ---@param spec table|string Plugin specification. See |MiniDeps-plugin-specification|.
 MiniDeps.add = function(spec)
-  spec = H.normalize_spec(spec)
+  -- Normalize specification
+  local plugs = {}
+  H.expand_spec(plugs, spec)
 
-  -- Decide whether to create plugin
-  local path, is_present = H.get_plugin_path(spec.name)
-  spec.path = path
-  if not is_present then
-    local plugs = vim.deepcopy({ spec })
-    for _, p in ipairs(plugs) do
+  -- Process
+  local plugs_to_install = {}
+  for i, p in ipairs(plugs) do
+    local path, is_present = H.get_plugin_path(p.name)
+    p.path = path
+    if not is_present then table.insert(plugs_to_install, vim.deepcopy(p)) end
+  end
+
+  -- Install
+  if #plugs_to_install > 0 then
+    for _, p in ipairs(plugs_to_install) do
       p.job = H.cli_new_job({}, vim.fn.getcwd())
     end
 
-    H.plugs_exec_hooks(plugs, 'pre_install')
     H.notify(string.format('Installing `%s`', plugs[#plugs].name))
-    H.plugs_install(plugs)
-    H.plugs_exec_hooks(plugs, 'post_install')
+    H.plugs_exec_hooks(plugs_to_install, 'pre_install')
+    H.plugs_install(plugs_to_install)
+    H.plugs_exec_hooks(plugs_to_install, 'post_install')
   end
 
-  -- Register plugin's spec for current session if it wasn't already
-  H.session[path] = vim.tbl_deep_extend('force', H.session[path] or {}, spec)
+  -- Add plugins to current session
+  for _, p in ipairs(plugs) do
+    -- Register in 'mini.deps' session
+    table.insert(H.session, p)
 
-  -- Add plugin to current session
-  vim.cmd('packadd ' .. spec.name)
+    -- Add to 'runtimepath'
+    vim.cmd('packadd ' .. p.name)
+  end
 end
 
 --- Clean plugins
 ---
 --- - Delete plugin directories (based on |MiniDeps-directory-structure|) which
 ---   are not registered in current session.
-MiniDeps.clean = function()
+---
+---@param opts table|nil Options. Possible fields:
+---   - <force> `(boolean)` - whether to force delete without confirmation.
+---     Default: `false`.
+MiniDeps.clean = function(opts)
+  opts = vim.tbl_deep_extend('force', { force = false }, opts or {})
+
   -- Get map of all runtime paths
   local is_in_rtp = {}
   for _, path in ipairs(vim.api.nvim_list_runtime_paths()) do
@@ -402,6 +423,10 @@ MiniDeps.clean = function()
 
   -- Filter only proper plugin directories which are not present in 'runtime'
   local is_absent_plugin = function(x) return vim.fn.isdirectory(x) == 1 and not is_in_rtp[x] end
+
+  -- TODO
+  if not opts.force then return H.clean_confirm() end
+
   local absent_paths = vim.tbl_filter(is_absent_plugin, H.get_all_plugin_paths())
   local n_to_delete = #absent_paths
 
@@ -543,23 +568,26 @@ end
 
 --- Get session data
 MiniDeps.get_session = function()
-  local deps_path_esc = vim.pesc(H.get_package_path() .. '/pack/deps')
-  local pattern = string.format('^%s/([^/]+)/([^/]+)$', deps_path_esc)
+  -- Normalize `H.session` allowing specs for same plugin
+  local res, plugin_ids = {}, {}
+  local add_spec = function(spec)
+    local id = plugin_ids[spec.path] or (#res + 1)
+    res[id] = vim.tbl_deep_extend('force', res[id] or {}, spec)
+    plugin_ids[spec.path] = id
+  end
+  vim.tbl_map(add_spec, H.session)
+  H.session = res
 
-  -- Traverse
-  local res, rtp = {}, vim.api.nvim_list_runtime_paths()
-  for i = #rtp, 1, -1 do
-    local dir, name = string.match(rtp[i], pattern)
-    local spec = H.session[rtp[i]]
-    -- Session consists from properly added 'opt' plugins and all 'start' ones
-    if dir == 'start' or (dir == 'opt' and spec ~= nil) then
-      spec = vim.deepcopy(spec) or { path = rtp[i], name = name, hooks = {} }
-      table.insert(res, spec)
-    end
+  -- Add 'start/' plugins that are in 'rtp'
+  local start_path = H.get_package_path() .. '/pack/deps/start'
+  local pattern = string.format('^%s/([^/]+)$', vim.pesc(start_path))
+  for _, path in ipairs(vim.api.nvim_list_runtime_paths()) do
+    local name = string.match(path, pattern)
+    if name ~= nil then add_spec({ path = path, name = name, hooks = {} }) end
   end
 
   -- Return copy to not allow modification in place
-  return res
+  return vim.deepcopy(res)
 end
 
 MiniDeps.now = function(f)
@@ -577,7 +605,7 @@ end
 -- Module default config
 H.default_config = MiniDeps.config
 
--- Map of current session plugin specs with full path as key
+-- Array of plugin specs
 H.session = {}
 
 -- Various cache
@@ -694,7 +722,8 @@ H.git_cmd = {
   clone = function(source, path)
     --stylua: ignore
     return {
-      'git', 'clone', '--quiet', '--filter=blob:none',
+      'git', '-c', 'gc.auto=0', 'clone',
+      '--quiet', '--filter=blob:none',
       '--recurse-submodules', '--also-filter-submodules', '--origin', 'origin',
       source, path,
     }
@@ -704,7 +733,8 @@ H.git_cmd = {
   end,
   checkout = function(target) return { 'git', 'checkout', '--quiet', target } end,
   -- Using '--tags --force' means conflicting tags will be synced with remote
-  fetch = { 'git', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
+  -- Using '-c gc.auto=0' disables `stderr` "packing" messages
+  fetch = { 'git', '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
   set_origin = function(source) return { 'git', 'remote', 'set-url', 'origin', source } end,
   get_origin = { 'git', 'remote', 'get-url', 'origin' },
   get_default_origin_branch = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
@@ -728,7 +758,7 @@ H.git_cmd = {
 }
 
 -- Plugin specification -------------------------------------------------------
-H.normalize_spec = function(spec)
+H.expand_spec = function(target, spec)
   -- Prepare
   if type(spec) == 'string' then
     local field = string.find(spec, '/') ~= nil and 'source' or 'name'
@@ -760,7 +790,14 @@ H.normalize_spec = function(spec)
     if is_not_hook then H.error('`hooks.' .. hook_name .. '` in plugin spec should be callable.') end
   end
 
-  return spec
+  -- Expand dependencies recursively
+  spec.depends = vim.deepcopy(spec.depends) or {}
+  if not vim.tbl_islist(spec.depends) then H.error('`depends` in plugin spec should be array.') end
+  for _, dep_spec in ipairs(spec.depends) do
+    H.expand_spec(target, dep_spec)
+  end
+
+  table.insert(target, spec)
 end
 
 -- Plugin operations ----------------------------------------------------------
@@ -1045,7 +1082,7 @@ H.update_feedback_confirm = function(lines)
 
   -- Show report in new buffer in separate tabpage
   local buf_id = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_name(buf_id, 'mini.deps update confirmation')
+  vim.api.nvim_buf_set_name(buf_id, 'mini.deps confirm update')
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, report)
   vim.bo[buf_id].buftype, vim.bo[buf_id].filetype, vim.bo[buf_id].modified = 'acwrite', 'minideps-confirm', false
 
@@ -1061,8 +1098,8 @@ H.update_feedback_confirm = function(lines)
     syntax match MiniDepsInfo          "^Source: \+\zs[^ ]\+"
     syntax match MiniDepsInfo          "^State[^:]*: \+\zs[^ ]\+\ze"
     syntax match MiniDepsHint          "\(^State.\+\)\@<=(.\+)$"
-    syntax match MiniDepsChangeAdded   "^> .*\n  .*$"
-    syntax match MiniDepsChangeRemoved "^< .*\n  .*$"
+    syntax match MiniDepsChangeAdded   "^> .*$"
+    syntax match MiniDepsChangeRemoved "^< .*$"
     syntax match MiniDepsPlaceholder   "^<.*>$"
   ]])
 
