@@ -2,21 +2,14 @@
 --
 -- Code:
 --
--- - Consistently handle "start" - "done with one" - "done" notifications.
---
--- - Add `opts` to `clean()` with `opts.force = false` (default) showing
---   confirmation buffer.
---
 -- - Rethink about making `add()` accept list `spec` to allow parallel install.
 --   Update `:DepsAdd` command.
---
--- - ?Add `version` support to install version through tags?
 --
 -- - Think about adding `show_releases()` which shows all/relevant git tags.
 --
 -- Docs:
--- - Document the whole concept of "session". Probably in `get_session()` and
---   link to it.
+-- - Actuall document two-stage execution. First step - for UI necessary to
+--   make initial screen draw, second step - everything else.
 -- - Add examples of user commands in |MiniDeps-actions|.
 -- - Add examples with `depends`.
 -- - Clarify distinction in how to use `checkout` and `monitor`. They allow
@@ -54,6 +47,7 @@
 ---     - Update with/without confirm, with/without downloading new data.
 ---       See |MiniDeps.update()|.
 ---     - Get / set / save / load snapshot. See `MiniDeps.snap_*()` functions.
+---
 ---     All these actions are available both as Lua functions and user commands
 ---     (see |MiniDeps-commands|).
 ---
@@ -356,21 +350,22 @@ MiniDeps.config = {
 
 --- Add plugin to current session
 ---
---- - If there is no directory present with plugin's name, create it:
+--- - Process specification by expanding dependencies into single sepc array.
+--- - Install (in parallel) absent (on disk) plugins:
 ---     - Execute `opts.hooks.pre_install`.
 ---     - Use `git clone` to clone plugin from its source URI into "pack/deps/opt".
 ---     - Checkout according to `opts.checkout`.
 ---     - Execute `opts.hooks.post_install`.
 ---   Note: If plugin directory is present, no action with it is done (to increase
 ---   performance during startup). In particular, it does not checkout according
----   to `opts.checkout`. Use |MiniDeps.update()| explicitly.
---- - Register plugin's spec in current session. Adding plugin several times
----   updates its session specs.
---- - Make sure it can be used in current session (see |:packadd|).
+---   to `opts.checkout`. Use |MiniDeps.update()| or |:DepsUpdateOffline| explicitly.
+--- - Register spec(s) in current session.
+---   Note: Adding plugin several times updates its session specs.
+--- - Make sure plugin(s) can be used in current session (see |:packadd|).
 ---
 ---@param spec table|string Plugin specification. See |MiniDeps-plugin-specification|.
 MiniDeps.add = function(spec)
-  -- Normalize specification
+  -- Normalize
   local plugs = {}
   H.expand_spec(plugs, spec)
 
@@ -406,8 +401,11 @@ end
 
 --- Clean plugins
 ---
---- - Delete plugin directories (based on |MiniDeps-directory-structure|) which
----   are not registered in current session.
+--- - Compute absent plugins: not registered in current session
+---   (see |MiniDeps.get_session()|) but present on disk in dedicated "deps" package
+---   (inside `config.path.package`).
+--- - If cleaning is forced, delete all absent plugins from disk.
+---   Otherwise show confirmation buffer with instructions on how to proceed.
 ---
 ---@param opts table|nil Options. Possible fields:
 ---   - <force> `(boolean)` - whether to force delete without confirmation.
@@ -415,36 +413,33 @@ end
 MiniDeps.clean = function(opts)
   opts = vim.tbl_deep_extend('force', { force = false }, opts or {})
 
-  -- Get map of all runtime paths
-  local is_in_rtp = {}
-  for _, path in ipairs(vim.api.nvim_list_runtime_paths()) do
-    is_in_rtp[path] = true
+  -- Compute path candidates to delete
+  local is_in_session = {}
+  for _, s in ipairs(MiniDeps.get_session()) do
+    is_in_session[s.path] = true
   end
 
-  -- Filter only proper plugin directories which are not present in 'runtime'
-  local is_absent_plugin = function(x) return vim.fn.isdirectory(x) == 1 and not is_in_rtp[x] end
-
-  -- TODO
-  if not opts.force then return H.clean_confirm() end
-
+  local is_absent_plugin = function(x) return vim.fn.isdirectory(x) == 1 and not is_in_session[x] end
   local absent_paths = vim.tbl_filter(is_absent_plugin, H.get_all_plugin_paths())
-  local n_to_delete = #absent_paths
 
-  for i, path in ipairs(absent_paths) do
-    vim.fn.delete(path, 'rf')
-    local msg = string.format('(%d/%d) Deleted `%s` from disk.', i, n_to_delete, vim.fn.fnamemodify(path, ':t'))
-    H.notify(msg)
-  end
-
-  H.notify('Done cleaning plugins.')
+  -- Clean
+  if #absent_paths == 0 then return H.notify('Nothing to clean.') end
+  local clean_fun = opts.force and H.clean_delete or H.clean_confirm
+  clean_fun(absent_paths)
 end
 
 --- Update plugins
 ---
---- TODO: !!!!!!!!!!!!!!!!!!!!!!!!!!
+--- - Synchronize specs with state of plugins on disk (set `source`, etc.).
+--- - Infer data before downloading updates.
+--- - If not offline, download updates (in parallel).
+--- - Infer data after downloading updates.
+--- - If update is forced, apply all changes immediately while updating log
+---   file (at `config.path.log`; use |:DepsShowLog| to review).
+---   Otherwise show confirmation buffer with instructions on how to proceed.
 ---
 ---@param names table|nil Array of plugin names to update.
----  Default: all plugins registered in current session.
+---  Default: all plugins from current session (see |MiniDeps.get_session()|).
 ---@param opts table|nil Options. Possible fields:
 ---   - <force> `(boolean)` - whether to force update without confirmation.
 ---     Default: `false`.
@@ -507,7 +502,7 @@ end
 ---
 --- Notes:
 --- - Checking out states from snapshot does not update session plugin spec
----   (`checkout` field in particular). In particular, it means that next call
+---   (`checkout` field in particular). Among others, it means that next call
 ---   to |MiniDeps.update()| might override the result of this function.
 ---   To make changes permanent, set `checkout` spec field to state from snapshot.
 ---
@@ -532,7 +527,8 @@ end
 
 --- Save snapshot
 ---
----@param path string|nil A valid path on disk where to write snapshot.
+---@param path string|nil A valid path on disk where to write snapshot computed
+---   with |MiniDeps.snap_get()|.
 ---   Default: `config.path.snapshot`.
 MiniDeps.snap_save = function(path)
   path = path or H.full_path(H.get_config().path.snapshot)
@@ -547,7 +543,7 @@ MiniDeps.snap_save = function(path)
   vim.fn.mkdir(vim.fn.fnamemodify(path, ':h'), 'p')
   vim.fn.writefile(lines, path)
 
-  H.notify('Done creating snapshot at ' .. vim.inspect(path) .. '.')
+  H.notify('Created snapshot at ' .. vim.inspect(path) .. '.')
 end
 
 --- Load snapshot file
@@ -566,7 +562,14 @@ MiniDeps.snap_load = function(path)
   MiniDeps.snap_set(snap)
 end
 
---- Get session data
+--- Get session
+---
+--- Plugin is registered in current session if it either:
+--- - Was added with |MiniDeps.add()|.
+--- - Is a "start" plugin and present in 'runtimpath'.
+---
+---@return session table Array with specifications of all plugins registered in
+---   current session.
 MiniDeps.get_session = function()
   -- Normalize `H.session` allowing specs for same plugin
   local res, plugin_ids = {}, {}
@@ -590,12 +593,33 @@ MiniDeps.get_session = function()
   return vim.deepcopy(res)
 end
 
+--- Execute function now
+---
+--- Safely execute function immediately. Errors are shown with |vim.notify()|
+--- later, after all queued functions (including with |MiniDeps.later()|)
+--- are executed, thus not blocking execution of next code in file.
+---
+--- Assumed to be used as a first step during two-stage config execution to
+--- load plugins immediately during startup.
+---
+---@param f function Callable to execute.
 MiniDeps.now = function(f)
   local ok, err = pcall(f)
   if not ok then table.insert(H.cache.exec_errors, err) end
   H.schedule_finish()
 end
 
+--- Execute function later
+---
+--- Queue function to be safely executed later without blocking execution of
+--- next code in file. All queued functions are guaranteed to be executed in
+--- order they were added.
+--- Errors are shown with |vim.notify()| after all queued functions are executed.
+---
+--- Assumed to be used as a second step during two-stage config execution to
+--- load plugins "lazily" after startup.
+---
+---@param f function Callable to execute.
 MiniDeps.later = function(f)
   table.insert(H.cache.later_callback_queue, f)
   H.schedule_finish()
@@ -705,10 +729,11 @@ H.create_user_commands = function()
   make_update_cmd('DepsUpdate', false, 'Update plugins')
   make_update_cmd('DepsUpdateOffline', true, 'Update plugins without downloading from source')
 
-  local log_callback = function() vim.cmd('edit ' .. vim.fn.fnameescape(H.get_config().path.log)) end
-  new_cmd('DepsShowLog', log_callback, { desc = 'Show log' })
+  local show_log = function() vim.cmd('edit ' .. vim.fn.fnameescape(H.get_config().path.log)) end
+  new_cmd('DepsShowLog', show_log, { desc = 'Show log' })
 
-  new_cmd('DepsClean', function() MiniDeps.clean() end, { desc = 'Delete unused plugins' })
+  local clean = function(input) MiniDeps.clean({ force = input.bang }) end
+  new_cmd('DepsClean', clean, { bang = true, desc = 'Delete unused plugins' })
 
   local snap_save = function(input) MiniDeps.snap_save(input.fargs[1]) end
   new_cmd('DepsSnapSave', snap_save, { nargs = '?', complete = 'file', desc = 'Save plugin snapshot' })
@@ -820,7 +845,7 @@ H.plugs_install = function(plugs)
   local prepare = function(p)
     if p.source == nil and #p.job.err == 0 then p.job.err = { 'SPECIFICATION HAS NO `source` TO INSTALL PLUGIN.' } end
     p.job.command = H.git_cmd.clone(p.source or '', p.path)
-    p.job.exit_msg = string.format('Done installing `%s`', p.name)
+    p.job.exit_msg = string.format('Installed `%s`', p.name)
   end
   H.plugs_run_jobs(plugs, prepare)
 
@@ -835,9 +860,9 @@ end
 H.plugs_download_updates = function(plugs)
   local prepare = function(p)
     p.job.command = H.git_cmd.fetch
-    p.job.exit_msg = string.format('Done downloading updates for `%s`', p.name)
+    p.job.exit_msg = string.format('Downloaded updates for `%s`', p.name)
   end
-  H.notify(string.format('(0/%d) Downloading updates', #plugs))
+  H.notify('Downloading ' .. #plugs .. ' updates')
   H.plugs_run_jobs(plugs, prepare)
 end
 
@@ -999,6 +1024,57 @@ end
 
 H.get_package_path = function() return H.full_path(H.get_config().path.package) end
 
+-- Clean ----------------------------------------------------------------------
+H.clean_confirm = function(paths)
+  -- Compute lines
+  local lines = {
+    'This is a confirmation report before a clean.',
+    '',
+    'Lines `- <plugin>` show plugins to be deleted from disk.',
+    'Remove line to not delete that plugin.',
+    '',
+    'To finish clean, save this buffer (for example, with `:write` command).',
+    'To cancel clean, hide this buffer (for example, with `:tabclose` command).',
+    '',
+  }
+  local n_header = #lines - 1
+  for _, p in ipairs(paths) do
+    table.insert(lines, string.format('- %s (%s)', vim.fn.fnamemodify(p, ':t'), p))
+  end
+
+  -- Show report in new buffer in separate tabpage
+  local finish_clean = function(buf_id)
+    -- Compute plugin paths to update
+    local paths_to_delete = {}
+    for _, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
+      local cur_path = string.match(l, '^%- .* %((.*)%)$')
+      if cur_path ~= nil then table.insert(paths_to_delete, cur_path) end
+    end
+
+    if #paths_to_delete == 0 then return H.notify('Nothing to delete.') end
+    H.clean_delete(paths_to_delete)
+  end
+  H.show_confirm_buf(lines, 'mini.deps confirm clean', finish_clean)
+
+  -- Define basic highlighting
+  vim.cmd('syntax region MiniDepsHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
+
+  -- Define conceal to show only name with whole path when cursor is on it
+  vim.cmd('syntax conceal on')
+  vim.cmd([[syntax match MiniDepsInfo "\s\+(.\{-})$"]])
+  vim.cmd('syntax conceal off')
+  vim.cmd('setlocal conceallevel=3')
+end
+
+H.clean_delete = function(paths)
+  local n_to_delete = #paths
+  for i, p in ipairs(paths) do
+    vim.fn.delete(p, 'rf')
+    local msg = string.format('(%d/%d) Deleted `%s` from disk.', i, n_to_delete, vim.fn.fnamemodify(p, ':t'))
+    H.notify(msg)
+  end
+end
+
 -- Update ---------------------------------------------------------------------
 H.update_compute_feedback_lines = function(plugs)
   -- Construct lines with metadata for later sort
@@ -1081,13 +1157,19 @@ H.update_feedback_confirm = function(lines)
   vim.list_extend(report, lines)
 
   -- Show report in new buffer in separate tabpage
-  local buf_id = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_name(buf_id, 'mini.deps confirm update')
-  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, report)
-  vim.bo[buf_id].buftype, vim.bo[buf_id].filetype, vim.bo[buf_id].modified = 'acwrite', 'minideps-confirm', false
+  local finish_update = function(buf_id)
+    -- Compute plugin names to update
+    local names = {}
+    for _, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
+      local cur_name = string.match(l, '^%+%+%+ (.*) %+%+%+$')
+      if cur_name ~= nil then table.insert(names, cur_name) end
+    end
 
-  vim.cmd('tab sbuffer ' .. buf_id)
-  local tabpage_id = vim.api.nvim_get_current_tabpage()
+    -- Update and delete buffer (in that order, to show that update is done)
+    MiniDeps.update(names, { force = true, offline = true })
+  end
+
+  H.show_confirm_buf(report, 'mini.deps confirm update', finish_update)
 
   -- Define basic highlighting
   vim.cmd('syntax region MiniDepsHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
@@ -1102,29 +1184,6 @@ H.update_feedback_confirm = function(lines)
     syntax match MiniDepsChangeRemoved "^< .*$"
     syntax match MiniDepsPlaceholder   "^<.*>$"
   ]])
-
-  -- Create buffer autocommands
-  local delete_buffer = vim.schedule_wrap(function()
-    pcall(function() vim.cmd('tabclose ' .. vim.api.nvim_tabpage_get_number(tabpage_id)) end)
-    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
-  end)
-
-  local finish_update = function()
-    -- Compute plugin names to update
-    local names = {}
-    for _, l in ipairs(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)) do
-      local cur_name = string.match(l, '^%+%+%+ (.*) %+%+%+$')
-      if cur_name ~= nil then table.insert(names, cur_name) end
-    end
-
-    -- Update and delete buffer (in that order, to show that update is done)
-    MiniDeps.update(names, { force = true, offline = true })
-    delete_buffer()
-  end
-
-  -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
-  vim.api.nvim_create_autocmd('BufWriteCmd', { buffer = buf_id, nested = true, callback = finish_update })
-  vim.api.nvim_create_autocmd('BufWinLeave', { buffer = buf_id, nested = true, callback = delete_buffer })
 end
 
 H.update_feedback_log = function(lines)
@@ -1135,6 +1194,32 @@ H.update_feedback_log = function(lines)
   local log_path = H.get_config().path.log
   vim.fn.mkdir(vim.fn.fnamemodify(log_path, ':h'), 'p')
   vim.fn.writefile(lines, log_path, 'a')
+end
+
+-- Confirm --------------------------------------------------------------------
+H.show_confirm_buf = function(lines, name, exec_on_write)
+  -- Show buffer
+  local buf_id = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_buf_set_name(buf_id, name)
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
+  vim.bo[buf_id].buftype, vim.bo[buf_id].filetype, vim.bo[buf_id].modified = 'acwrite', 'minideps-confirm', false
+  vim.cmd('tab sbuffer ' .. buf_id)
+  local tabpage_id = vim.api.nvim_get_current_tabpage()
+
+  -- Define buffer autocommands for leave and write
+  local delete_buffer = vim.schedule_wrap(function()
+    pcall(function() vim.cmd('tabclose ' .. vim.api.nvim_tabpage_get_number(tabpage_id)) end)
+    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
+  end)
+
+  local finish = function()
+    exec_on_write(buf_id)
+    delete_buffer()
+  end
+
+  -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
+  vim.api.nvim_create_autocmd('BufWriteCmd', { buffer = buf_id, nested = true, callback = finish })
+  vim.api.nvim_create_autocmd('BufWinLeave', { buffer = buf_id, nested = true, callback = delete_buffer })
 end
 
 -- CLI ------------------------------------------------------------------------
@@ -1236,12 +1321,9 @@ end
 
 H.report_errors = function()
   if #H.cache.exec_errors == 0 then return end
-  local msg_lines = {
-    { '(mini.deps) ', 'WarningMsg' },
-    { 'There were errors during two-stage execution:\n\n', 'MoreMsg' },
-    { table.concat(H.cache.exec_errors, '\n\n'), 'ErrorMsg' },
-  }
+  local error_lines = table.concat(H.cache.exec_errors, '\n\n')
   H.cache.exec_errors = {}
+  H.notify('(mini.deps) There were errors during two-stage execution:\n\n' .. error_lines, 'ERROR')
   vim.api.nvim_echo(msg_lines, true, {})
 end
 
