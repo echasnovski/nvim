@@ -1,23 +1,23 @@
 -- Initialization =============================================================
 -- Define main config table
 _G.Config = {
-  package_path = vim.fn.stdpath('data') .. '/site/',
-  source_path = vim.fn.stdpath('config') .. '/src/',
+  path_package = vim.fn.stdpath('data') .. '/site/',
+  path_source = vim.fn.stdpath('config') .. '/src/',
 }
 
 -- Ensure 'mini.nvim' is set up
-local mini_path = Config.package_path .. 'pack/deps/opt/mini.nvim'
+local mini_path = Config.path_package .. 'pack/deps/opt/mini.nvim'
 if not vim.loop.fs_stat(mini_path) then
   vim.cmd([[echo "Installing 'mini.nvim'" | redraw]])
   local clone_cmd = { 'git', 'clone', '--filter=blob:none', 'https://github.com/echasnovski/mini.nvim', mini_path }
   vim.fn.system(clone_cmd)
 end
 vim.cmd('packadd mini.nvim')
-require('mini-dev.deps').setup({ path = { package = Config.package_path } })
+require('mini-dev.deps').setup({ path = { package = Config.path_package } })
 
 -- Define helpers
 local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
-local source = function(path) dofile(Config.source_path .. path) end
+local source = function(path) dofile(Config.path_source .. path) end
 
 -- Settings and mappings ======================================================
 now(function() source('settings.lua') end)
@@ -250,7 +250,7 @@ now(function() add('nvim-tree/nvim-web-devicons') end)
 later(function()
   add({
     source = 'nvim-treesitter/nvim-treesitter',
-    checkout = 'v0.9.2',
+    checkout = 'master',
     hooks = { post_change = function() vim.cmd('TSUpdate') end },
   })
   add('nvim-treesitter/nvim-treesitter-textobjects')
@@ -291,9 +291,9 @@ end)
 
 -- Snippets
 later(function()
-  if vim.fn.has('nvim-0.10') == 1 then return source('my_snippets.lua') end
   add('L3MON4D3/LuaSnip')
-  source('plugins/luasnip.lua')
+  local src_file = vim.fn.has('nvim-0.10') == 1 and 'my_snippets.lua' or 'plugins/luasnip.lua'
+  source(src_file)
 end)
 
 -- Documentation generator
@@ -309,9 +309,7 @@ end)
 
 -- Test runner
 later(function()
-  -- TODO: Use `depends`
-  add('vim-test/vim-test')
-  add('tpope/vim-dispatch')
+  add({ source = 'vim-test/vim-test', depends = { 'tpope/vim-dispatch' } })
   vim.cmd([[let test#strategy = 'neoterm']])
   vim.cmd([[let test#python#runner = 'pytest']])
 end)
@@ -328,10 +326,10 @@ later(function()
   -- https://github.com/vim-pandoc/vim-pandoc/issues/342
   vim.g['pandoc#filetypes#pandoc_markdown'] = 0
 
-  -- TODO: Use `depends`
-  add('vim-pandoc/vim-pandoc')
-  add('vim-pandoc/vim-pandoc-syntax')
-  add('vim-pandoc/vim-rmarkdown')
+  add({
+    source = 'vim-pandoc/vim-rmarkdown',
+    depends = { 'vim-pandoc/vim-pandoc', 'vim-pandoc/vim-pandoc-syntax' },
+  })
 
   -- Show raw symbols
   vim.g['pandoc#syntax#conceal#use'] = 0

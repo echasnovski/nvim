@@ -88,11 +88,12 @@ vim.g.markdown_folding = 1   -- Use folding by heading in markdown files
 -- Custom autocommands ========================================================
 local augroup = vim.api.nvim_create_augroup('CustomSettings', {})
 vim.api.nvim_create_autocmd('FileType', {
+  group = augroup,
   callback = function()
     -- Don't auto-wrap comments and don't insert comment leader after hitting 'o'
     -- If don't do this on `FileType`, this keeps reappearing due to being set in
     -- filetype plugins.
-    vim.cmd('autocmd FileType * setlocal formatoptions-=c formatoptions-=o')
+    vim.cmd('setlocal formatoptions-=c formatoptions-=o')
   end,
   desc = [[Ensure proper 'formatoptions']],
 })
