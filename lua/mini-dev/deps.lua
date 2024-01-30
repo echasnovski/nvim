@@ -2,13 +2,8 @@
 --
 -- Code:
 --
--- - Rethink about making `add()` accept list `spec` to allow parallel install.
---   Update `:DepsAdd` command.
---
--- - Think about adding `show_releases()` which shows all/relevant git tags.
---
 -- Docs:
--- - Actuall document two-stage execution. First step - for UI necessary to
+-- - Actually document two-stage execution. First step - for UI necessary to
 --   make initial screen draw, second step - everything else.
 -- - Add examples of user commands in |MiniDeps-actions|.
 -- - Add examples with `depends`.
@@ -43,9 +38,9 @@
 ---
 --- - Manage plugins utilizing Git and built-in |packages| with these actions:
 ---     - Add plugin to current session. See |MiniDeps.add()|.
----     - Delete unused plugins with/without confirm. See |MiniDeps.clean()|.
 ---     - Update with/without confirm, with/without downloading new data.
 ---       See |MiniDeps.update()|.
+---     - Delete unused plugins with/without confirm. See |MiniDeps.clean()|.
 ---     - Get / set / save / load snapshot. See `MiniDeps.snap_*()` functions.
 ---
 ---     All these actions are available both as Lua functions and user commands
@@ -120,6 +115,21 @@
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 
+--- # Directory structure ~
+---
+--- Uses |packages| as data sctructure.
+---
+--- # Adding plugins ~
+---
+--- # Updating plugins ~
+---
+--- # Removing plugins ~
+---
+--- # Working with snapshots ~
+---
+---
+---@tag MiniDeps-overview
+
 -- TODO; ?Remove this in favor of linking to |packages| in overview?
 --- # Directory structure ~
 ---
@@ -184,32 +194,34 @@
 ---                                                                       *:DepsAdd*
 --- `:DepsAdd user/repo` makes plugin from https://github.com/user/repo available
 --- in the current session (also creates it, if it is not present).
+--- Accepts only single string |MiniDeps-plugin-specification|.
 --- To add plugin in every session, put |MiniDeps.add()| in |init.lua|.
 ---
----                                                                     *:DepsClean*
---- `:DepsClean` deletes plugins from disk not loaded in current session. It shows
---- confirmation buffer in a separate |tabpage| with information about an upcoming
---- deletes to review and (selectively) apply. See |MiniDeps.clean()| for more info.
----
---- `:DepsClean!` deletes plugins without confirmation.
----
 ---                                                                    *:DepsUpdate*
---- `:DepsUpdate` updates all plugins with new changes from their sources. It shows
---- confirmation buffer in a separate |tabpage| with information about an upcoming
---- update to review and (selectively) apply. See |MiniDeps.update()| for more info.
+--- `:DepsUpdate` synchronizes plugins with their session specifications and
+--- updates them with new changes from sources. It shows confirmation buffer in
+--- a separate |tabpage| with information about an upcoming update to review
+--- and (selectively) apply. See |MiniDeps.update()| for more info.
 ---
---- `:DepsUpdate name1 name2` updates plugins with names `name1` and `name2`.
+--- `:DepsUpdate name` updates plugin with name `name`. Any number of names is allowed.
 ---
---- `:DepsUpdate!` and `:DepsUpdate! name1 name2` update without confirmation.
+--- `:DepsUpdate!` and `:DepsUpdate! name` update without confirmation.
 --- You can see what was done in the log file (|DepsShowLog|).
 ---
 ---                                                             *:DepsUpdateOffline*
 --- `:DepsUpdateOffline` is same as |:DepsUpdate| but doesn't download new updates
---- from sources. Useful to synchronize plugin specification in code and on disk
---- without unnecessary downloads.
+--- from sources. Useful to only synchronize plugin specification in code and
+--- on disk without unnecessary downloads.
 ---
 ---                                                                   *:DepsShowLog*
 --- `:DepsShowLog` opens log file to review.
+---
+---                                                                     *:DepsClean*
+--- `:DepsClean` deletes plugins from disk not added to current session. It shows
+--- confirmation buffer in a separate |tabpage| with information about an upcoming
+--- deletes to review and (selectively) apply. See |MiniDeps.clean()| for more info.
+---
+--- `:DepsClean!` deletes plugins without confirmation.
 ---
 ---                                                                  *:DepsSnapSave*
 --- `:DepsSnapSave` creates snapshot file in default location (see |MiniDeps.config|).
@@ -399,35 +411,6 @@ MiniDeps.add = function(spec)
   end
 end
 
---- Clean plugins
----
---- - Compute absent plugins: not registered in current session
----   (see |MiniDeps.get_session()|) but present on disk in dedicated "deps" package
----   (inside `config.path.package`).
---- - If cleaning is forced, delete all absent plugins from disk.
----   Otherwise show confirmation buffer with instructions on how to proceed.
----
----@param opts table|nil Options. Possible fields:
----   - <force> `(boolean)` - whether to force delete without confirmation.
----     Default: `false`.
-MiniDeps.clean = function(opts)
-  opts = vim.tbl_deep_extend('force', { force = false }, opts or {})
-
-  -- Compute path candidates to delete
-  local is_in_session = {}
-  for _, s in ipairs(MiniDeps.get_session()) do
-    is_in_session[s.path] = true
-  end
-
-  local is_absent_plugin = function(x) return vim.fn.isdirectory(x) == 1 and not is_in_session[x] end
-  local absent_paths = vim.tbl_filter(is_absent_plugin, H.get_all_plugin_paths())
-
-  -- Clean
-  if #absent_paths == 0 then return H.notify('Nothing to clean.') end
-  local clean_fun = opts.force and H.clean_delete or H.clean_confirm
-  clean_fun(absent_paths)
-end
-
 --- Update plugins
 ---
 --- - Synchronize specs with state of plugins on disk (set `source`, etc.).
@@ -480,6 +463,35 @@ MiniDeps.update = function(names, opts)
 
   -- Show job errors
   H.plugs_show_job_errors(plugs, 'update')
+end
+
+--- Clean plugins
+---
+--- - Compute absent plugins: not registered in current session
+---   (see |MiniDeps.get_session()|) but present on disk in dedicated "deps" package
+---   (inside `config.path.package`).
+--- - If cleaning is forced, delete all absent plugins from disk.
+---   Otherwise show confirmation buffer with instructions on how to proceed.
+---
+---@param opts table|nil Options. Possible fields:
+---   - <force> `(boolean)` - whether to force delete without confirmation.
+---     Default: `false`.
+MiniDeps.clean = function(opts)
+  opts = vim.tbl_deep_extend('force', { force = false }, opts or {})
+
+  -- Compute path candidates to delete
+  local is_in_session = {}
+  for _, s in ipairs(MiniDeps.get_session()) do
+    is_in_session[s.path] = true
+  end
+
+  local is_absent_plugin = function(x) return vim.fn.isdirectory(x) == 1 and not is_in_session[x] end
+  local absent_paths = vim.tbl_filter(is_absent_plugin, H.get_all_plugin_paths())
+
+  -- Clean
+  if #absent_paths == 0 then return H.notify('Nothing to clean.') end
+  local clean_fun = opts.force and H.clean_delete or H.clean_confirm
+  clean_fun(absent_paths)
 end
 
 --- Compute snapshot
@@ -677,7 +689,7 @@ H.apply_config = function(config)
 
   -- Add target package path to 'packpath'
   local pack_path = H.full_path(config.path.package)
-  vim.cmd('set packpath+=' .. vim.fn.fnameescape(pack_path))
+  vim.cmd('set packpath^=' .. vim.fn.fnameescape(pack_path))
 end
 
 H.get_config = function(config)
@@ -729,7 +741,11 @@ H.create_user_commands = function()
   make_update_cmd('DepsUpdate', false, 'Update plugins')
   make_update_cmd('DepsUpdateOffline', true, 'Update plugins without downloading from source')
 
-  local show_log = function() vim.cmd('edit ' .. vim.fn.fnameescape(H.get_config().path.log)) end
+  local show_log = function()
+    vim.cmd('edit ' .. vim.fn.fnameescape(H.get_config().path.log))
+    H.update_add_syntax()
+    vim.cmd([[syntax match Title "^\(==========\).*\1$"]])
+  end
   new_cmd('DepsShowLog', show_log, { desc = 'Show log' })
 
   local clean = function(input) MiniDeps.clean({ force = input.bang }) end
@@ -1034,7 +1050,7 @@ H.clean_confirm = function(paths)
     'Remove line to not delete that plugin.',
     '',
     'To finish clean, save this buffer (for example, with `:write` command).',
-    'To cancel clean, hide this buffer (for example, with `:tabclose` command).',
+    'To cancel clean, wipe this buffer (for example, with `:quit` command).',
     '',
   }
   local n_header = #lines - 1
@@ -1150,7 +1166,7 @@ H.update_feedback_confirm = function(lines)
     'Line `--- <plugin_name> ---` means plugin has nothing to update.',
     '',
     'To finish update, save this buffer (for example, with `:write` command).',
-    'To cancel update, hide this buffer (for example, with `:tabclose` command).',
+    'To cancel update, wipe this buffer (for example, with `:quit` command).',
     '',
   }
   local n_header = #report - 1
@@ -1173,6 +1189,10 @@ H.update_feedback_confirm = function(lines)
 
   -- Define basic highlighting
   vim.cmd('syntax region MiniDepsHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
+  H.update_add_syntax()
+end
+
+H.update_add_syntax = function()
   vim.cmd([[
     syntax match MiniDepsTitleError    "^!!! .\+ !!!$"
     syntax match MiniDepsTitleUpdate   "^+++ .\+ +++$"
@@ -1323,8 +1343,7 @@ H.report_errors = function()
   if #H.cache.exec_errors == 0 then return end
   local error_lines = table.concat(H.cache.exec_errors, '\n\n')
   H.cache.exec_errors = {}
-  H.notify('(mini.deps) There were errors during two-stage execution:\n\n' .. error_lines, 'ERROR')
-  vim.api.nvim_echo(msg_lines, true, {})
+  H.notify('There were errors during two-stage execution:\n\n' .. error_lines, 'ERROR')
 end
 
 -- Utilities ------------------------------------------------------------------
