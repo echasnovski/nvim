@@ -593,7 +593,13 @@ MiniDeps.get_session = function()
   local res, plugin_ids = {}, {}
   local add_spec = function(spec)
     local id = plugin_ids[spec.path] or (#res + 1)
+    -- Treat `depends` differently as it is an array and direct merge is bad
+    -- Also: https://github.com/neovim/neovim/pull/15094#discussion_r671663938
+    local depends = vim.deepcopy((res[id] or {}).depends or {})
+    vim.list_extend(depends, spec.depends or {})
     res[id] = vim.tbl_deep_extend('force', res[id] or {}, spec)
+    res[id].depends = depends
+
     plugin_ids[spec.path] = id
   end
   vim.tbl_map(add_spec, H.session)
@@ -604,7 +610,7 @@ MiniDeps.get_session = function()
   local pattern = string.format('^%s/([^/]+)$', vim.pesc(start_path))
   for _, path in ipairs(vim.api.nvim_list_runtime_paths()) do
     local name = string.match(path, pattern)
-    if name ~= nil then add_spec({ path = path, name = name, hooks = {} }) end
+    if name ~= nil then add_spec({ path = path, name = name, hooks = {}, depends = {} }) end
   end
 
   -- Return copy to not allow modification in place

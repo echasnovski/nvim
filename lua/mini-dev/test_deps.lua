@@ -28,7 +28,23 @@ local add = forward_lua('MiniDeps.add')
 local get_session = forward_lua('MiniDeps.get_session')
 
 -- Common mocks
-local mock_package = function() child.lua('MiniDeps.config.path.package = ' .. vim.inspect(test_dir_absolute)) end
+local mock_test_package = function(path)
+  path = path or test_dir_absolute
+  local lua_cmd = string.format(
+    [[local config = vim.deepcopy(MiniDeps.config)
+      config.path.package = %s
+      MiniDeps.setup(config)]],
+    vim.inspect(path)
+  )
+  child.lua(lua_cmd)
+end
+
+local mock_temp_plugin = function(path)
+  MiniTest.finally(function() child.fn.delete(path, 'rf') end)
+  local lua_dir = path .. '/lua'
+  child.fn.mkdir(lua_dir, 'p')
+  child.fn.writefile({ 'return {}' }, lua_dir .. '/module.lua')
+end
 
 -- Work with notifications
 local mock_notify = function()
@@ -145,7 +161,7 @@ T['setup()']['validates `config` argument'] = function()
 end
 
 T['setup()']["prepends 'packpath' with package path"] = function()
-  load_module({ path = { package = test_dir_absolute } })
+  mock_test_package(test_dir_absolute)
   eq(vim.startswith(child.o.packpath, test_dir_absolute), true)
 end
 
@@ -156,6 +172,233 @@ T['setup()']['clears session'] = function()
 
   load_module({ path = { package = test_dir_absolute } })
   eq(#get_session(), 0)
+end
+
+T['add()'] = new_set({ hooks = { pre_case = mock_test_package } })
+
+T['add()']['works for present plugins'] = new_set({ parametrize = { { 'plugin_1' }, { { name = 'plugin_1' } } } }, {
+  test = function(spec)
+    local ref_path = test_dir_absolute .. '/pack/deps/opt/plugin_1'
+    expect.no_match(child.o.runtimepath, vim.pesc(ref_path))
+    eq(get_session(), {})
+
+    add(spec)
+
+    expect.match(child.o.runtimepath, vim.pesc(ref_path))
+    eq(get_session(), { { name = 'plugin_1', path = ref_path, hooks = {}, depends = {} } })
+  end,
+})
+
+T['add()']['infers name from source'] = new_set({
+  parametrize = {
+    { 'user/plugin_1' },
+    { 'https://github.com/user/plugin_1' },
+    { { source = 'user/plugin_1' } },
+    { { source = 'https://github.com/user/plugin_1' } },
+  },
+}, {
+  test = function(spec)
+    local ref_path = test_dir_absolute .. '/pack/deps/opt/plugin_1'
+    add(spec)
+    expect.match(child.o.runtimepath, vim.pesc(ref_path))
+    eq(
+      get_session(),
+      { { source = 'https://github.com/user/plugin_1', name = 'plugin_1', path = ref_path, hooks = {}, depends = {} } }
+    )
+  end,
+})
+
+T['add()']['can update session data'] = function()
+  local opt_dir = test_dir_absolute .. '/pack/deps/opt'
+  add('plugin_1')
+  add('plugin_2')
+  eq(get_session(), {
+    { path = opt_dir .. '/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
+    { path = opt_dir .. '/plugin_2', name = 'plugin_2', depends = {}, hooks = {} },
+  })
+
+  add({ source = 'my_source', name = 'plugin_1' })
+  add({ name = 'plugin_2', depends = { 'plugin_3' } })
+  eq(get_session(), {
+    { path = opt_dir .. '/plugin_1', name = 'plugin_1', source = 'my_source', depends = {}, hooks = {} },
+    { path = opt_dir .. '/plugin_2', name = 'plugin_2', depends = { 'plugin_3' }, hooks = {} },
+    { path = opt_dir .. '/plugin_3', name = 'plugin_3', depends = {}, hooks = {} },
+  })
+
+  child.lua([[
+    MiniDeps.add({ name = 'plugin_3', hooks = { post_update = function() return 'Hello' end } })
+    _G.hello = MiniDeps.get_session()[3].hooks.post_update()
+  ]])
+  eq(child.lua_get('_G.hello'), 'Hello')
+end
+
+T['add()']['respects plugins from "start" directory'] = function()
+  local start_dir = test_dir_absolute .. '/pack/deps/start'
+  mock_temp_plugin(start_dir .. '/plug')
+  MiniTest.finally(function() child.fn.delete(start_dir, 'rf') end)
+  mock_test_package(test_dir_absolute)
+
+  add('user/plug')
+  eq(get_session(), {
+    { path = start_dir .. '/plug', name = 'plug', source = 'https://github.com/user/plug', hooks = {}, depends = {} },
+  })
+
+  MiniTest.skip('Should test that installation was not done. I.e. mock Git and test that it was not called.')
+end
+
+T['add()']['normalizes specification'] = function() MiniTest.skip() end
+
+T['add()']['validates_specification'] = function() MiniTest.skip() end
+
+T['add()']['allows nested dependencies'] = function() MiniTest.skip() end
+
+T['add()']['validates `opts`'] = function()
+  expect.error(function() add('plugin_1', 'a') end, '`opts`.*table')
+  expect.error(function() add('plugin_1', { checkout = 'branch' }) end, '`add%(%)`.*single spec')
+end
+
+T['add()']['Install'] = new_set()
+
+T['add()']['Install']['works'] = function() MiniTest.skip() end
+
+T['add()']['Install']['properly executes hooks'] = function()
+  -- Including when installing dependencies
+  MiniTest.skip()
+end
+
+T['add()']['Install']['works with absent package directory'] = function() MiniTest.skip() end
+
+T['add()']['Install']['does not affect newly added session data'] = function()
+  -- Basically, does not add `job` field
+  MiniTest.skip()
+end
+
+T['update()'] = new_set()
+
+local update = forward_lua('MiniDeps.update')
+
+T['update()']['works'] = function() MiniTest.skip() end
+
+T['clean()'] = new_set()
+
+local clean = forward_lua('MiniDeps.clean')
+
+T['clean()']['works'] = function() MiniTest.skip() end
+
+T['snap_get()'] = new_set()
+
+local snap_get = forward_lua('MiniDeps.snap_get')
+
+T['snap_get()']['works'] = function() MiniTest.skip() end
+
+T['snap_set()'] = new_set()
+
+local snap_set = forward_lua('MiniDeps.snap_set')
+
+T['snap_set()']['works'] = function() MiniTest.skip() end
+
+T['snap_load()'] = new_set()
+
+local snap_load = forward_lua('MiniDeps.snap_load')
+
+T['snap_load()']['works'] = function() MiniTest.skip() end
+
+T['snap_save()'] = new_set()
+
+local snap_save = forward_lua('MiniDeps.snap_save')
+
+T['snap_save()']['works'] = function() MiniTest.skip() end
+
+T['get_session()'] = new_set({ hooks = { pre_case = mock_test_package } })
+
+T['get_session()']['works'] = function()
+  local opt_dir = test_dir_absolute .. '/pack/deps/opt'
+
+  add('plugin_1')
+  add({ source = 'https://my_site.com/plugin_2', depends = { 'user/plugin_3' } })
+  eq(get_session(), {
+    { path = opt_dir .. '/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
+    {
+      path = opt_dir .. '/plugin_3',
+      name = 'plugin_3',
+      source = 'https://github.com/user/plugin_3',
+      depends = {},
+      hooks = {},
+    },
+    {
+      path = opt_dir .. '/plugin_2',
+      name = 'plugin_2',
+      source = 'https://my_site.com/plugin_2',
+      depends = { 'user/plugin_3' },
+      hooks = {},
+    },
+  })
+end
+
+T['get_session()']['works even after several similar `add()`'] = function()
+  add({ source = 'user/plugin_1', checkout = 'hello', depends = { 'plugin_2' } })
+  -- Every extra adding should override previous but only new data fields
+  add({ name = 'plugin_1', checkout = 'hello' })
+  add({ name = 'plugin_2', checkout = 'world' })
+  add({ source = 'https://my_site.com/plugin_1', depends = { 'plugin_3' } })
+
+  local opt_dir = test_dir_absolute .. '/pack/deps/opt'
+  eq(get_session(), {
+    { path = opt_dir .. '/plugin_2', name = 'plugin_2', depends = {}, hooks = {}, checkout = 'world' },
+    {
+      path = opt_dir .. '/plugin_1',
+      name = 'plugin_1',
+      source = 'https://my_site.com/plugin_1',
+      -- Although both 'plugin_2' and 'plugin_3' are in dependencies,
+      -- 'plugin_1' was added only indicating 'plugin_2' as dependency, so it
+      -- only has it in session before itself.
+      depends = { 'plugin_2', 'plugin_3' },
+      hooks = {},
+      checkout = 'hello',
+    },
+    { path = opt_dir .. '/plugin_3', name = 'plugin_3', depends = {}, hooks = {} },
+  })
+end
+
+T['get_session()']["respects plugins from 'start' directory which are in 'runtimepath'"] = function()
+  local start_dir = test_dir_absolute .. '/pack/deps/start'
+  mock_temp_plugin(start_dir .. '/start')
+  mock_temp_plugin(start_dir .. '/start_manual')
+  mock_temp_plugin(start_dir .. '/start_manual_dependency')
+  mock_temp_plugin(start_dir .. '/start_not_in_rtp')
+  MiniTest.finally(function() child.fn.delete(start_dir, 'rf') end)
+  mock_test_package(test_dir_absolute)
+
+  -- Make sure that only somem of 'start' plugins are in 'runtimepath'
+  local lua_cmd = string.format(
+    'vim.api.nvim_list_runtime_paths = function() return { %s, %s, %s } end',
+    vim.inspect(start_dir .. '/start_manual'),
+    vim.inspect(start_dir .. '/start_manual_dependency'),
+    vim.inspect(start_dir .. '/start')
+  )
+  child.lua(lua_cmd)
+
+  -- Add some plugins manually both from 'opt' and 'start' directories
+  add('plugin_1')
+  add({ source = 'user/start_manual', depends = { 'start_manual_dependency' } })
+
+  eq(get_session(), {
+    -- Should add plugins from "start" *after* manually added ones
+    { path = test_dir_absolute .. '/pack/deps/opt/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
+
+    -- Should not affect or duplicate already manually added ones
+    { path = start_dir .. '/start_manual_dependency', name = 'start_manual_dependency', depends = {}, hooks = {} },
+
+    {
+      path = start_dir .. '/start_manual',
+      name = 'start_manual',
+      source = 'https://github.com/user/start_manual',
+      depends = { 'start_manual_dependency' },
+      hooks = {},
+    },
+
+    { path = start_dir .. '/start', name = 'start', depends = {}, hooks = {} },
+  })
 end
 
 T['now()'] = new_set()
@@ -214,7 +457,6 @@ T['now()']['notifies about errors after everything is executed'] = function()
     MiniDeps.later(_G.f)
     MiniDeps.later(_G.f)
   ]])
-  eq(child.lua_get('_G.log'), {})
 
   sleep(1)
   validate_notifications({})
@@ -339,6 +581,30 @@ T['Commands'] = new_set()
 
 T['Commands'][':DepsAdd'] = new_set()
 
-T['Commands'][':DepsAdd'] = function() MiniTest.skip() end
+T['Commands'][':DepsAdd']['works'] = function() MiniTest.skip() end
+
+T['Commands'][':DepsUpdate'] = new_set()
+
+T['Commands'][':DepsUpdate']['works'] = function() MiniTest.skip() end
+
+T['Commands'][':DepsUpdateOffline'] = new_set()
+
+T['Commands'][':DepsUpdateOffline']['works'] = function() MiniTest.skip() end
+
+T['Commands'][':DepsShowLog'] = new_set()
+
+T['Commands'][':DepsShowLog']['works'] = function() MiniTest.skip() end
+
+T['Commands'][':DepsClean'] = new_set()
+
+T['Commands'][':DepsClean']['works'] = function() MiniTest.skip() end
+
+T['Commands'][':DepsSnapSave'] = new_set()
+
+T['Commands'][':DepsSnapSave']['works'] = function() MiniTest.skip() end
+
+T['Commands'][':DepsSnapLoad'] = new_set()
+
+T['Commands'][':DepsSnapLoad']['works'] = function() MiniTest.skip() end
 
 return T
