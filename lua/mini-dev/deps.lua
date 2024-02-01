@@ -109,6 +109,7 @@
 --- * `MiniDepsHint`          - various hints.
 --- * `MiniDepsInfo`          - various information.
 --- * `MiniDepsPlaceholder`   - placeholder when there is no valuable information.
+--- * `MiniDepsTitle`         - various titles.
 --- * `MiniDepsTitleError`    - title when plugin had errors during update.
 --- * `MiniDepsTitleSame`     - title when plugin has no changes to update.
 --- * `MiniDepsTitleUpdate`   - title when plugin has changes to update.
@@ -376,7 +377,12 @@ MiniDeps.config = {
 --- - Make sure plugin(s) can be used in current session (see |:packadd|).
 ---
 ---@param spec table|string Plugin specification. See |MiniDeps-plugin-specification|.
-MiniDeps.add = function(spec)
+---@param opts table|nil Options. Not used at the moment.
+MiniDeps.add = function(spec, opts)
+  opts = opts or {}
+  if type(opts) ~= 'table' then H.error('`opts` should be table.') end
+  if opts.source or opts.name or opts.checkout then H.error('`add()` accepts only single spec.') end
+
   -- Normalize
   local plugs = {}
   H.expand_spec(plugs, spec)
@@ -708,8 +714,9 @@ H.create_default_hl = function()
   hi('MiniDepsHint',          { link = 'DiagnosticHint' })
   hi('MiniDepsInfo',          { link = 'DiagnosticInfo' })
   hi('MiniDepsPlaceholder',   { link = 'Comment' })
-  hi('MiniDepsTitleError',    { link = 'Error' })
-  hi('MiniDepsTitleSame',     { link = 'Title' })
+  hi('MiniDepsTitle',         { link = 'Title' })
+  hi('MiniDepsTitleError',    { link = 'DiffDelete' })
+  hi('MiniDepsTitleSame',     { link = 'DiffText' })
   hi('MiniDepsTitleUpdate',   { link = 'DiffAdd' })
 end
 
@@ -744,7 +751,7 @@ H.create_user_commands = function()
   local show_log = function()
     vim.cmd('edit ' .. vim.fn.fnameescape(H.get_config().path.log))
     H.update_add_syntax()
-    vim.cmd([[syntax match Title "^\(==========\).*\1$"]])
+    vim.cmd([[syntax match MiniDepsTitle "^\(==========\).*\1$"]])
   end
   new_cmd('DepsShowLog', show_log, { desc = 'Show log' })
 
@@ -1157,11 +1164,11 @@ H.update_feedback_confirm = function(lines)
     'This is a confirmation report before an update.',
     '',
     'Line `+++ <plugin_name> +++` means plugin will be updated.',
-    'See update details below the line.',
+    'See update details below it.',
     'Remove the line to not update that plugin.',
     '',
     "Line `!!! <plugin_name> !!!` means plugin had an error and won't be updated.",
-    'See error details below the line.',
+    'See error details below it.',
     '',
     'Line `--- <plugin_name> ---` means plugin has nothing to update.',
     '',

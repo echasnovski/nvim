@@ -96,8 +96,9 @@ T['setup()']['creates side effects'] = function()
   has_highlight('MiniDepsHint', 'links to DiagnosticHint')
   has_highlight('MiniDepsInfo', 'links to DiagnosticInfo')
   has_highlight('MiniDepsPlaceholder', 'links to Comment')
-  has_highlight('MiniDepsTitleError', 'links to Error')
-  has_highlight('MiniDepsTitleSame', 'links to Title')
+  has_highlight('MiniDepsTitle', 'links to Title')
+  has_highlight('MiniDepsTitleError', 'links to DiffDelete')
+  has_highlight('MiniDepsTitleSame', 'links to DiffText')
   has_highlight('MiniDepsTitleUpdate', 'links to DiffAdd')
 end
 
