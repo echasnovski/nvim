@@ -184,10 +184,10 @@
 ---
 --- - <hooks> `(table|nil)` - table with callable hooks to call on certain events.
 ---   Each hook is executed without arguments. Possible hook names:
----     - <pre_install>  - before creating plugin directory.
----     - <post_install> - after  creating plugin directory.
----     - <pre_change>   - before making update in plugin directory.
----     - <post_change>  - after  making update in plugin directory.
+---     - <pre_install>   - before creating plugin directory.
+---     - <post_install>  - after  creating plugin directory.
+---     - <pre_checkout>  - before making change in plugin directory.
+---     - <post_checkout> - after  making change in plugin directory.
 ---   Default: empty table for no hooks.
 ---@tag MiniDeps-plugin-specification
 
@@ -275,7 +275,7 @@
 ---       {
 ---         source = 'nvim-treesitter/nvim-treesitter',
 ---         checkout = is_010 and 'main' or 'master',
----         hooks = { post_change = function() vim.cmd('TSUpdate') end },
+---         hooks = { post_checkout = function() vim.cmd('TSUpdate') end },
 ---       }
 ---     )
 ---
@@ -346,14 +346,16 @@ MiniDeps.config = {
   -- Paths describing where to store data
   path = {
     -- Directory for built-in package.
-    -- All data is actually stored in the 'pack/deps' subdirectory.
+    -- All plugins are actually stored in 'pack/deps' subdirectory.
     package = vim.fn.stdpath('data') .. '/site',
 
     -- Default file path for a snapshot
     snapshot = vim.fn.stdpath('config') .. '/mini-deps-snap',
 
-    -- Update log
-    log = vim.fn.stdpath(vim.fn.has('nvim-0.8') == 1 and 'state' or 'data') .. '/mini-deps.log',
+    -- Log file
+    --minidoc_replace_start log = vim.fn.stdpath('log') .. '/mini-deps.log'
+    log = vim.fn.stdpath(vim.fn.has('nvim-0.8') == 1 and 'log' or 'data') .. '/mini-deps.log',
+    --minidoc_replace_end
   },
 
   -- Whether to disable showing non-error feedback
@@ -364,13 +366,14 @@ MiniDeps.config = {
 --- Add plugin to current session
 ---
 --- - Process specification by expanding dependencies into single sepc array.
---- - Install (in parallel) absent (on disk) plugins:
+--- - Ensure plugin is present on disk along with its dependencies by installing
+---   (in parallel) absent ones:
 ---     - Execute `opts.hooks.pre_install`.
 ---     - Use `git clone` to clone plugin from its source URI into "pack/deps/opt".
 ---     - Checkout according to `opts.checkout`.
 ---     - Execute `opts.hooks.post_install`.
----   Note: If plugin directory is present, no action with it is done (to increase
----   performance during startup). In particular, it does not checkout according
+---   Note: To increase performance, this step only ensures presence on disk
+---   and nothing else. In particular, it does not checkout according
 ---   to `opts.checkout`. Use |MiniDeps.update()| or |:DepsUpdateOffline| explicitly.
 --- - Register spec(s) in current session.
 ---   Note: Adding plugin several times updates its session specs.
@@ -821,7 +824,7 @@ H.expand_spec = function(target, spec)
   if type(spec) ~= 'table' then H.error('Plugin spec should be table.') end
 
   local has_min_fields = type(spec.source) == 'string' or type(spec.name) == 'string'
-  if not has_min_fields then H.error('Plugin spec should have either `source` or `name`.') end
+  if not has_min_fields then H.error('Plugin spec should have proper `source` or `name`.') end
 
   -- Normalize
   spec = vim.deepcopy(spec)
@@ -832,19 +835,21 @@ H.expand_spec = function(target, spec)
 
   spec.name = spec.name or vim.fn.fnamemodify(spec.source, ':t')
   if type(spec.name) ~= 'string' then H.error('`name` in plugin spec should be string.') end
+  if string.find(spec.name, '/') ~= nil then H.error('`name` in plugin spec should not contain "/".') end
+  if spec.name == '' then H.error('`name` in plugin spec should not be empty.') end
 
   if spec.checkout and type(spec.checkout) ~= 'string' then H.error('`checkout` in plugin spec should be string.') end
   if spec.monitor and type(spec.monitor) ~= 'string' then H.error('`monitor` in plugin spec should be string.') end
 
   spec.hooks = vim.deepcopy(spec.hooks) or {}
   if type(spec.hooks) ~= 'table' then H.error('`hooks` in plugin spec should be table.') end
-  local hook_names = { 'pre_install', 'post_install', 'pre_change', 'post_change' }
+  local hook_names = { 'pre_install', 'post_install', 'pre_checkout', 'post_checkout' }
   for _, hook_name in ipairs(hook_names) do
-    local is_not_hook = spec[hook_name] and not vim.is_callable(spec[hook_name])
+    local is_not_hook = spec.hooks[hook_name] and not vim.is_callable(spec.hooks[hook_name])
     if is_not_hook then H.error('`hooks.' .. hook_name .. '` in plugin spec should be callable.') end
   end
 
-  -- Expand dependencies recursively
+  -- Expand dependencies recursively before adding current spec to target
   spec.depends = vim.deepcopy(spec.depends) or {}
   if not vim.tbl_islist(spec.depends) then H.error('`depends` in plugin spec should be array.') end
   for _, dep_spec in ipairs(spec.depends) do
@@ -909,7 +914,7 @@ H.plugs_checkout = function(plugs, exec_hooks)
   H.plugs_run_jobs(plugs, prepare)
 
   -- Execute pre hooks
-  if exec_hooks then H.plugs_exec_hooks(plugs, 'pre_change') end
+  if exec_hooks then H.plugs_exec_hooks(plugs, 'pre_checkout') end
 
   -- Checkout
   prepare = function(p)
@@ -922,7 +927,7 @@ H.plugs_checkout = function(plugs, exec_hooks)
   H.plugs_run_jobs(plugs, prepare)
 
   -- Execute pre hooks
-  if exec_hooks then H.plugs_exec_hooks(plugs, 'post_change') end
+  if exec_hooks then H.plugs_exec_hooks(plugs, 'post_checkout') end
 
   -- (Re)Generate help tags according to the current help files
   for _, p in ipairs(plugs) do

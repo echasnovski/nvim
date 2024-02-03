@@ -14,6 +14,7 @@ local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 
 local test_dir = 'tests/dir-deps'
 local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('(.)/$', '%1')
+local test_opt_dir = test_dir_absolute .. '/pack/deps/opt'
 
 -- Common test helpers
 local log_level = function(level) return child.lua_get('vim.log.levels.' .. level) end
@@ -178,7 +179,7 @@ T['add()'] = new_set({ hooks = { pre_case = mock_test_package } })
 
 T['add()']['works for present plugins'] = new_set({ parametrize = { { 'plugin_1' }, { { name = 'plugin_1' } } } }, {
   test = function(spec)
-    local ref_path = test_dir_absolute .. '/pack/deps/opt/plugin_1'
+    local ref_path = test_opt_dir .. '/plugin_1'
     expect.no_match(child.o.runtimepath, vim.pesc(ref_path))
     eq(get_session(), {})
 
@@ -198,7 +199,7 @@ T['add()']['infers name from source'] = new_set({
   },
 }, {
   test = function(spec)
-    local ref_path = test_dir_absolute .. '/pack/deps/opt/plugin_1'
+    local ref_path = test_opt_dir .. '/plugin_1'
     add(spec)
     expect.match(child.o.runtimepath, vim.pesc(ref_path))
     eq(
@@ -209,20 +210,19 @@ T['add()']['infers name from source'] = new_set({
 })
 
 T['add()']['can update session data'] = function()
-  local opt_dir = test_dir_absolute .. '/pack/deps/opt'
   add('plugin_1')
   add('plugin_2')
   eq(get_session(), {
-    { path = opt_dir .. '/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
-    { path = opt_dir .. '/plugin_2', name = 'plugin_2', depends = {}, hooks = {} },
+    { path = test_opt_dir .. '/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
+    { path = test_opt_dir .. '/plugin_2', name = 'plugin_2', depends = {}, hooks = {} },
   })
 
   add({ source = 'my_source', name = 'plugin_1' })
   add({ name = 'plugin_2', depends = { 'plugin_3' } })
   eq(get_session(), {
-    { path = opt_dir .. '/plugin_1', name = 'plugin_1', source = 'my_source', depends = {}, hooks = {} },
-    { path = opt_dir .. '/plugin_2', name = 'plugin_2', depends = { 'plugin_3' }, hooks = {} },
-    { path = opt_dir .. '/plugin_3', name = 'plugin_3', depends = {}, hooks = {} },
+    { path = test_opt_dir .. '/plugin_1', name = 'plugin_1', source = 'my_source', depends = {}, hooks = {} },
+    { path = test_opt_dir .. '/plugin_2', name = 'plugin_2', depends = { 'plugin_3' }, hooks = {} },
+    { path = test_opt_dir .. '/plugin_3', name = 'plugin_3', depends = {}, hooks = {} },
   })
 
   child.lua([[
@@ -246,15 +246,105 @@ T['add()']['respects plugins from "start" directory'] = function()
   MiniTest.skip('Should test that installation was not done. I.e. mock Git and test that it was not called.')
 end
 
-T['add()']['normalizes specification'] = function() MiniTest.skip() end
+T['add()']['allows nested dependencies'] = function()
+  add({
+    name = 'plugin_1',
+    depends = {
+      { source = 'user/plugin_2', depends = {
+        { name = 'plugin_3', checkout = 'hello' },
+      } },
+    },
+  })
+  eq(get_session(), {
+    { path = test_opt_dir .. '/plugin_3', name = 'plugin_3', checkout = 'hello', depends = {}, hooks = {} },
+    {
+      path = test_opt_dir .. '/plugin_2',
+      name = 'plugin_2',
+      source = 'https://github.com/user/plugin_2',
+      depends = { { checkout = 'hello', name = 'plugin_3' } },
+      hooks = {},
+    },
+    {
+      path = test_opt_dir .. '/plugin_1',
+      name = 'plugin_1',
+      depends = {
+        { source = 'user/plugin_2', depends = {
+          { checkout = 'hello', name = 'plugin_3' },
+        } },
+      },
+      hooks = {},
+    },
+  })
+end
 
-T['add()']['validates_specification'] = function() MiniTest.skip() end
+T['add()']['does not error on cyclic dependencies'] = function()
+  add({ name = 'plugin_1', depends = { 'plugin_1' } })
+  add({ source = 'user/plugin_2', depends = { 'plugin_2' } })
+  add({ source = 'user/plugin_3', depends = { 'new_user/plugin_3' } })
+  eq(get_session(), {
+    { path = test_opt_dir .. '/plugin_1', name = 'plugin_1', depends = { 'plugin_1' }, hooks = {} },
+    {
+      path = test_opt_dir .. '/plugin_2',
+      name = 'plugin_2',
+      source = 'https://github.com/user/plugin_2',
+      depends = { 'plugin_2' },
+      hooks = {},
+    },
+    {
+      path = test_opt_dir .. '/plugin_3',
+      name = 'plugin_3',
+      source = 'https://github.com/user/plugin_3',
+      depends = { 'new_user/plugin_3' },
+      hooks = {},
+    },
+  })
+end
 
-T['add()']['allows nested dependencies'] = function() MiniTest.skip() end
+T['add()']['validates specification'] = function()
+  local validate = function(spec, err_pattern)
+    expect.error(function() add(spec) end, err_pattern)
+  end
+
+  validate('', '`name`.*should not be empty')
+  validate(1, 'table')
+  validate({}, '`source` or `name`')
+  validate({ source = 1 }, '`source` or `name`')
+  validate({ source = 1, name = 'plugin_1' }, '`source`.*string')
+  validate({ name = 1, source = 'user/plugin_1' }, '`name`.*string')
+  validate({ name = 'user/plugin_1' }, '`name`.*not contain "/"')
+  validate({ name = '' }, '`name`.*not be empty')
+  validate({ checkout = 1, name = 'plugin_1' }, '`checkout`.*string')
+  validate({ monitor = 1, name = 'plugin_1' }, '`monitor`.*string')
+  validate({ hooks = 1, name = 'plugin_1' }, '`hooks`.*table')
+  validate({ hooks = { pre_install = '' }, name = 'plugin_1' }, '`hooks%.pre_install`.*callable')
+  validate({ hooks = { post_install = '' }, name = 'plugin_1' }, '`hooks%.post_install`.*callable')
+  validate({ hooks = { pre_checkout = '' }, name = 'plugin_1' }, '`hooks%.pre_checkout`.*callable')
+  validate({ hooks = { post_checkout = '' }, name = 'plugin_1' }, '`hooks%.post_checkout`.*callable')
+  validate({ depends = 1, name = 'plugin_1' }, '`depends`.*array')
+  validate({ depends = { name = 'plugin_2' }, name = 'plugin_1' }, '`depends`.*array')
+
+  -- Should also validate inside dependencies
+  validate({ depends = { {} }, name = 'plugin_1' }, '`source` or `name`')
+  validate({ depends = { { name = 'plugin_2', depends = { {} } } }, name = 'plugin_1' }, '`source` or `name`')
+end
 
 T['add()']['validates `opts`'] = function()
   expect.error(function() add('plugin_1', 'a') end, '`opts`.*table')
   expect.error(function() add('plugin_1', { checkout = 'branch' }) end, '`add%(%)`.*single spec')
+end
+
+T['add()']['does not modify input'] = function()
+  child.lua([[
+    _G.spec = {
+      name = 'plugin_1',
+      hooks = { post_update = function() end },
+      depends = { 'plugin_2' },
+    }
+    _G.spec_ref = vim.deepcopy(_G.spec)
+    MiniDeps.add(_G.spec)
+  ]])
+  eq(child.lua_get('#MiniDeps.get_session()'), 2)
+  eq(child.lua_get('vim.deep_equal(_G.spec, _G.spec_ref)'), true)
 end
 
 T['add()']['Install'] = new_set()
@@ -278,6 +368,8 @@ T['update()'] = new_set()
 local update = forward_lua('MiniDeps.update')
 
 T['update()']['works'] = function() MiniTest.skip() end
+
+T['update()']['properly executes hooks'] = function() MiniTest.skip() end
 
 T['clean()'] = new_set()
 
@@ -312,21 +404,19 @@ T['snap_save()']['works'] = function() MiniTest.skip() end
 T['get_session()'] = new_set({ hooks = { pre_case = mock_test_package } })
 
 T['get_session()']['works'] = function()
-  local opt_dir = test_dir_absolute .. '/pack/deps/opt'
-
   add('plugin_1')
   add({ source = 'https://my_site.com/plugin_2', depends = { 'user/plugin_3' } })
   eq(get_session(), {
-    { path = opt_dir .. '/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
+    { path = test_opt_dir .. '/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
     {
-      path = opt_dir .. '/plugin_3',
+      path = test_opt_dir .. '/plugin_3',
       name = 'plugin_3',
       source = 'https://github.com/user/plugin_3',
       depends = {},
       hooks = {},
     },
     {
-      path = opt_dir .. '/plugin_2',
+      path = test_opt_dir .. '/plugin_2',
       name = 'plugin_2',
       source = 'https://my_site.com/plugin_2',
       depends = { 'user/plugin_3' },
@@ -342,11 +432,10 @@ T['get_session()']['works even after several similar `add()`'] = function()
   add({ name = 'plugin_2', checkout = 'world' })
   add({ source = 'https://my_site.com/plugin_1', depends = { 'plugin_3' } })
 
-  local opt_dir = test_dir_absolute .. '/pack/deps/opt'
   eq(get_session(), {
-    { path = opt_dir .. '/plugin_2', name = 'plugin_2', depends = {}, hooks = {}, checkout = 'world' },
+    { path = test_opt_dir .. '/plugin_2', name = 'plugin_2', depends = {}, hooks = {}, checkout = 'world' },
     {
-      path = opt_dir .. '/plugin_1',
+      path = test_opt_dir .. '/plugin_1',
       name = 'plugin_1',
       source = 'https://my_site.com/plugin_1',
       -- Although both 'plugin_2' and 'plugin_3' are in dependencies,
@@ -356,7 +445,7 @@ T['get_session()']['works even after several similar `add()`'] = function()
       hooks = {},
       checkout = 'hello',
     },
-    { path = opt_dir .. '/plugin_3', name = 'plugin_3', depends = {}, hooks = {} },
+    { path = test_opt_dir .. '/plugin_3', name = 'plugin_3', depends = {}, hooks = {} },
   })
 end
 
@@ -384,7 +473,7 @@ T['get_session()']["respects plugins from 'start' directory which are in 'runtim
 
   eq(get_session(), {
     -- Should add plugins from "start" *after* manually added ones
-    { path = test_dir_absolute .. '/pack/deps/opt/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
+    { path = test_opt_dir .. '/plugin_1', name = 'plugin_1', depends = {}, hooks = {} },
 
     -- Should not affect or duplicate already manually added ones
     { path = start_dir .. '/start_manual_dependency', name = 'start_manual_dependency', depends = {}, hooks = {} },
@@ -399,6 +488,18 @@ T['get_session()']["respects plugins from 'start' directory which are in 'runtim
 
     { path = start_dir .. '/start', name = 'start', depends = {}, hooks = {} },
   })
+end
+
+T['get_session()']['returns copy'] = function()
+  add({ name = 'plugin_1', depends = { 'plugin_2' } })
+  child.lua([[
+    _G.session = MiniDeps.get_session()
+    _G.session[1].name = 'new name'
+    _G.session[2].depends = { 'new dep' }
+  ]])
+  local session = get_session()
+  eq(session[1].name, 'plugin_2')
+  eq(session[2].depends, { 'plugin_2' })
 end
 
 T['now()'] = new_set()
