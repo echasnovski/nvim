@@ -47,6 +47,26 @@ local mock_temp_plugin = function(path)
   child.fn.writefile({ 'return {}' }, lua_dir .. '/module.lua')
 end
 
+local mock_timestamp = function(timestamp)
+  timestamp = timestamp or '20240102030405'
+  local lua_cmd = string.format('vim.fn.strftime = function() return %s end', vim.inspect(timestamp))
+  child.lua(lua_cmd)
+end
+
+local mock_spawn = function()
+  local mock_file = test_dir_absolute .. '/mocks/spawn.lua'
+  local lua_cmd = string.format('dofile(%s)', vim.inspect(mock_file))
+  child.lua(lua_cmd)
+end
+
+local get_spawn_log = function() return child.lua_get('_G.spawn_log') end
+
+local clear_spawn_log = function() child.lua('_G.spawn_log = {}') end
+
+local get_process_log = function() return child.lua_get('_G.process_log') end
+
+local clear_process_log = function() child.lua('_G.process_log = {}') end
+
 -- Work with notifications
 local mock_notify = function()
   child.lua([[
@@ -179,6 +199,7 @@ T['add()'] = new_set({ hooks = { pre_case = mock_test_package } })
 
 T['add()']['works for present plugins'] = new_set({ parametrize = { { 'plugin_1' }, { { name = 'plugin_1' } } } }, {
   test = function(spec)
+    mock_spawn()
     local ref_path = test_opt_dir .. '/plugin_1'
     expect.no_match(child.o.runtimepath, vim.pesc(ref_path))
     eq(get_session(), {})
@@ -187,6 +208,9 @@ T['add()']['works for present plugins'] = new_set({ parametrize = { { 'plugin_1'
 
     expect.match(child.o.runtimepath, vim.pesc(ref_path))
     eq(get_session(), { { name = 'plugin_1', path = ref_path, hooks = {}, depends = {} } })
+
+    -- No CLI process should be run as plugin is already present
+    eq(get_spawn_log(), {})
   end,
 })
 
@@ -238,12 +262,15 @@ T['add()']['respects plugins from "start" directory'] = function()
   MiniTest.finally(function() child.fn.delete(start_dir, 'rf') end)
   mock_test_package(test_dir_absolute)
 
+  mock_spawn()
+
   add('user/plug')
   eq(get_session(), {
     { path = start_dir .. '/plug', name = 'plug', source = 'https://github.com/user/plug', hooks = {}, depends = {} },
   })
 
-  MiniTest.skip('Should test that installation was not done. I.e. mock Git and test that it was not called.')
+  -- No CLI process should be run as plugin is already present
+  eq(get_spawn_log(), {})
 end
 
 T['add()']['allows nested dependencies'] = function()
@@ -347,14 +374,104 @@ T['add()']['does not modify input'] = function()
   eq(child.lua_get('vim.deep_equal(_G.spec, _G.spec_ref)'), true)
 end
 
-T['add()']['Install'] = new_set()
+T['add()']['Install'] = new_set({
+  hooks = {
+    pre_case = function()
+      mock_timestamp()
+      mock_notify()
+      mock_spawn()
+    end,
+  },
+})
 
-T['add()']['Install']['works'] = function() MiniTest.skip() end
+local validate_git_spawn_log = function(ref)
+  local ref_log = {}
+  for i, t in ipairs(ref) do
+    ref_log[i] = { executable = 'git', options = t }
+  end
+  eq(get_spawn_log(), ref_log)
+end
+
+T['add()']['Install']['works'] = function()
+  child.lua([[
+    _G.feed_queue = {
+      nil,           nil, -- Clone
+      'sha1head',    nil, -- Get `HEAD`
+      'origin/main', nil, -- Get default branch
+      'origin/main', nil, -- Check if `main` is origin branch
+      'sha1head',    nil, -- Get commit of `origin/main`
+      nil,           nil, -- Stash changes
+      nil,           nil, -- Checkout changes
+    }
+
+    -- Mock that plugin was created
+    vim.fn.isdirectory = function() return 1 end
+  ]])
+  add('user/new_plugin')
+
+  -- Should result into a proper sequence of CLI runs
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = {
+        '-c', 'gc.auto=0', 'clone', '--quiet', '--filter=blob:none',
+        '--recurse-submodules', '--also-filter-submodules',
+        '--origin', 'origin',
+        'https://github.com/user/new_plugin', test_opt_dir .. '/new_plugin' },
+      cwd = child.fn.getcwd(),
+    },
+    {
+      args = { 'rev-list', '-1', 'HEAD' },
+      cwd = test_opt_dir .. '/new_plugin',
+    },
+    {
+      args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+      cwd = test_opt_dir .. '/new_plugin',
+    },
+    {
+      args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },
+      cwd = test_opt_dir .. '/new_plugin',
+    },
+    {
+      args = { 'rev-list', '-1', 'origin/main' },
+      cwd = test_opt_dir .. '/new_plugin',
+    },
+
+    -- NOTE: Does not actually check out because current commit is mocked the
+    -- same as target
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- All processes and streams should be properly closed
+  --stylua: ignore
+  eq(
+    get_process_log(),
+    {
+      'Stream 1 was closed.', 'Stream 2 was closed.',  'Process Pid_1 was closed.',
+      'Stream 3 was closed.', 'Stream 4 was closed.',  'Process Pid_2 was closed.',
+      'Stream 5 was closed.', 'Stream 6 was closed.',  'Process Pid_3 was closed.',
+      'Stream 7 was closed.', 'Stream 8 was closed.',  'Process Pid_4 was closed.',
+      'Stream 9 was closed.', 'Stream 10 was closed.', 'Process Pid_5 was closed.',
+    }
+  )
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Installing `new_plugin`', log_level('INFO') },
+    { '(mini.deps) (1/1) Installed `new_plugin`', log_level('INFO') },
+  }
+  eq(get_notify_log(), ref_notify_log)
+end
+
+T['add()']['Install']['checks out non-default target'] = function() MiniTest.skip() end
 
 T['add()']['Install']['properly executes hooks'] = function()
   -- Including when installing dependencies
+  -- Should be executed in session order
   MiniTest.skip()
 end
+
+T['add()']['Install']['generates help tags'] = function() MiniTest.skip() end
 
 T['add()']['Install']['works with absent package directory'] = function() MiniTest.skip() end
 
@@ -363,13 +480,20 @@ T['add()']['Install']['does not affect newly added session data'] = function()
   MiniTest.skip()
 end
 
+T['add()']['Install']['respects `config.job.timeout`'] = function() MiniTest.skip() end
+
 T['update()'] = new_set()
 
 local update = forward_lua('MiniDeps.update')
 
 T['update()']['works'] = function() MiniTest.skip() end
 
-T['update()']['properly executes hooks'] = function() MiniTest.skip() end
+T['update()']['properly executes hooks'] = function()
+  -- First all `pre_` (in session order)
+  -- Then update
+  -- Then all `post_` (in session order)
+  MiniTest.skip()
+end
 
 T['clean()'] = new_set()
 

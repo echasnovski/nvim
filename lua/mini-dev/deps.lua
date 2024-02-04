@@ -888,7 +888,7 @@ H.plugs_install = function(plugs)
   H.plugs_checkout(plugs, false)
 
   -- Show errors
-  H.plugs_show_job_errors(plugs, 'installing plugins')
+  H.plugs_show_job_errors(plugs, 'installing plugin')
 end
 
 H.plugs_download_updates = function(plugs)
@@ -926,7 +926,7 @@ H.plugs_checkout = function(plugs, exec_hooks)
   end
   H.plugs_run_jobs(plugs, prepare)
 
-  -- Execute pre hooks
+  -- Execute post hooks
   if exec_hooks then H.plugs_exec_hooks(plugs, 'post_checkout') end
 
   -- (Re)Generate help tags according to the current help files
