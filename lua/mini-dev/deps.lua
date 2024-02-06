@@ -11,6 +11,8 @@
 --   both automated update from some branch and (more importantly) "freezing"
 --   plugin at certain commit/tag while allowing to monitor updates waiting for
 --   the right time to update `checkout`.
+--   In update confirm buffer monitor changes are shown if `checkout` and
+--   `monitor` are different in plugin's spec.
 -- - In update reports note that `>`/`<` means commit will be added/reverted.
 -- - To freeze plugin from updates use `checkout = 'HEAD'`.
 --
@@ -449,8 +451,8 @@ MiniDeps.update = function(names, opts)
   H.plugs_ensure_origin_source(plugs)
 
   -- Preprocess before downloading
-  H.plugs_ensure_target_refs(plugs)
   H.plugs_infer_head(plugs)
+  H.plugs_ensure_target_refs(plugs)
   H.plugs_infer_commit(plugs, 'monitor', 'monitor_from')
 
   -- Download data if asked
@@ -803,6 +805,7 @@ H.git_cmd = {
   -- hash of revision. Those are different for annotated tags.
   get_hash = function(rev) return { 'git', 'rev-list', '-1', rev } end,
   log = function(from, to)
+    if from == nil or to == nil or from == to then return {} end
     -- `--topo-order` makes showing divergent branches nicer
     -- `--decorate-refs` shows only tags near commits (not `origin/main`, etc.)
     --stylua: ignore
@@ -892,11 +895,17 @@ H.plugs_install = function(plugs)
 end
 
 H.plugs_download_updates = function(plugs)
+  -- Show actual target number of plugins attempted to fetch
+  local n_noerror = 0
+  for _, p in ipairs(plugs) do
+    if #p.job.err == 0 then n_noerror = n_noerror + 1 end
+  end
+  H.notify('Downloading ' .. n_noerror .. ' updates')
+
   local prepare = function(p)
     p.job.command = H.git_cmd.fetch
     p.job.exit_msg = string.format('Downloaded updates for `%s`', p.name)
   end
-  H.notify('Downloading ' .. #plugs .. ' updates')
   H.plugs_run_jobs(plugs, prepare)
 end
 
@@ -932,20 +941,22 @@ H.plugs_checkout = function(plugs, exec_hooks)
   -- (Re)Generate help tags according to the current help files
   for _, p in ipairs(plugs) do
     local doc_dir = p.path .. '/doc'
+    -- Completely redo tags
     vim.fn.delete(doc_dir .. '/tags')
     local has_help_files = vim.fn.glob(doc_dir .. '/**') ~= ''
-    if has_help_files then vim.cmd('helptags ' .. vim.fn.fnameescape(doc_dir)) end
-    if not has_help_files then vim.fn.delete(doc_dir, 'rf') end
+    if has_help_files then pcall(vim.cmd, 'helptags ' .. vim.fn.fnameescape(doc_dir)) end
   end
 end
 
 -- Plugin operation helpers ---------------------------------------------------
 H.plugs_from_names = function(names)
-  local session = MiniDeps.get_session()
   if names and not vim.tbl_islist(names) then H.error('`names` should be array.') end
+  for _, name in ipairs(names or {}) do
+    if type(name) ~= 'string' then H.error('`names` should contain only strings.') end
+  end
 
   local res = {}
-  for _, spec in ipairs(session) do
+  for _, spec in ipairs(MiniDeps.get_session()) do
     if names == nil or vim.tbl_contains(names, spec.name) then
       spec.job = H.cli_new_job({}, spec.path)
       table.insert(res, spec)
@@ -993,6 +1004,7 @@ H.plugs_ensure_target_refs = function(plugs)
     local def_branch = H.cli_stream_tostring(p.job.out):gsub('^origin/', '')
     p.checkout = p.checkout or def_branch
     p.monitor = p.monitor or def_branch
+    p.has_monitor = p.checkout ~= p.monitor
   end
   H.plugs_run_jobs(plugs, prepare, process)
 end
@@ -1007,7 +1019,9 @@ H.plugs_infer_commit = function(plugs, field_ref, field_out)
   -- Determine if reference points to an origin branch (to avoid error later)
   local prepare = function(p)
     -- Don't recompute commit if it is already computed
-    p.job.command = p[field_out] == nil and H.git_cmd.is_origin_branch(p[field_ref]) or {}
+    -- Don't compute commit for 'monitor' if it won't be used
+    p.should_infer = p[field_out] == nil and (field_ref ~= 'monitor' or p.has_monitor)
+    p.job.command = p.should_infer and H.git_cmd.is_origin_branch(p[field_ref]) or {}
   end
   local process = function(p) p.is_ref_origin_branch = H.cli_stream_tostring(p.job.out):find('%S') ~= nil end
   H.plugs_run_jobs(plugs, prepare, process)
@@ -1018,11 +1032,11 @@ H.plugs_infer_commit = function(plugs, field_ref, field_out)
     -- updates. This is needed because `origin/HEAD` is also present.
     local is_from_origin = p.is_ref_origin_branch and p[field_ref] ~= 'HEAD'
     local ref = (is_from_origin and 'origin/' or '') .. p[field_ref]
-    p.job.command = p[field_out] == nil and H.git_cmd.get_hash(ref) or {}
+    p.job.command = p.should_infer and H.git_cmd.get_hash(ref) or {}
   end
   process = function(p)
-    p[field_out] = p[field_out] or H.cli_stream_tostring(p.job.out)
-    p.is_ref_origin_branch = nil
+    if p.should_infer then p[field_out] = H.cli_stream_tostring(p.job.out) end
+    p.is_ref_origin_branch, p.should_infer = nil, nil
   end
   H.plugs_run_jobs(plugs, prepare, process)
 end
@@ -1088,7 +1102,7 @@ H.clean_confirm = function(paths)
     if #paths_to_delete == 0 then return H.notify('Nothing to delete.') end
     H.clean_delete(paths_to_delete)
   end
-  H.show_confirm_buf(lines, 'mini.deps confirm clean', finish_clean)
+  H.show_confirm_buf(lines, 'mini-deps://confirm-clean', finish_clean)
 
   -- Define basic highlighting
   vim.cmd('syntax region MiniDepsHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
@@ -1136,7 +1150,7 @@ H.update_compute_feedback_lines = function(plugs)
 end
 
 H.update_compute_report_single = function(p)
-  p.has_error, p.has_updates, p.has_monitor = #p.job.err > 0, p.head ~= p.checkout_to, p.checkout ~= p.monitor
+  p.has_error, p.has_updates = #p.job.err > 0, p.head ~= p.checkout_to
 
   local err = H.cli_stream_tostring(p.job.err)
   if err ~= '' then return string.format('!!! %s !!!\n\n%s', p.name, err) end
@@ -1203,7 +1217,7 @@ H.update_feedback_confirm = function(lines)
     MiniDeps.update(names, { force = true, offline = true })
   end
 
-  H.show_confirm_buf(report, 'mini.deps confirm update', finish_update)
+  H.show_confirm_buf(report, 'mini-deps://confirm-update', finish_update)
 
   -- Define basic highlighting
   vim.cmd('syntax region MiniDepsHint start="^\\%1l" end="\\%' .. n_header .. 'l$"')
@@ -1225,7 +1239,7 @@ H.update_add_syntax = function()
 end
 
 H.update_feedback_log = function(lines)
-  local title = string.format('========== Update %s ==========', vim.fn.strftime('%Y-%m-%d %H:%M:%S'))
+  local title = string.format('========== Update %s ==========', H.get_timestamp())
   table.insert(lines, 1, title)
   table.insert(lines, '')
 
@@ -1266,6 +1280,14 @@ H.cli_run = function(jobs)
   local n_threads = config_job.n_threads or math.floor(0.8 * #vim.loop.cpu_info())
   local timeout = config_job.timeout or 30000
 
+  -- Use only actually runnable jobs
+  local should_run = function(job)
+    -- Run only if there is command to run and previous runs of same reusable
+    -- job did not result into error
+    return type(job.command) == 'table' and #job.command > 0 and #job.err == 0
+  end
+  jobs = vim.tbl_filter(should_run, jobs)
+
   local n_total, id_started, n_finished = #jobs, 0, 0
   if n_total == 0 then return end
   local is_finished = function() return n_total <= n_finished end
@@ -1280,12 +1302,6 @@ H.cli_run = function(jobs)
 
     if vim.fn.isdirectory(cwd) == 0 and #job.err == 0 then job.err = { vim.inspect(cwd) .. ' is not a directory.' } end
 
-    -- Allow reusing job structure. Do nothing if previously there were errors.
-    if not (#job.err == 0 and #command > 0) then
-      n_finished = n_finished + 1
-      return run_next()
-    end
-
     -- Prepare data for `vim.loop.spawn`
     local executable, args = command[1], vim.list_slice(command, 2, #command)
     local process, stdout, stderr = nil, vim.loop.new_pipe(), vim.loop.new_pipe()
@@ -1296,7 +1312,9 @@ H.cli_run = function(jobs)
       if code ~= 0 then table.insert(job.err, 1, 'PROCESS EXITED WITH ERROR CODE ' .. code .. '\n') end
       if not process:is_closing() then process:close() end
       n_finished = n_finished + 1
-      if type(exit_msg) == 'string' then H.notify(string.format('(%d/%d) %s', n_finished, n_total, exit_msg)) end
+      if type(exit_msg) == 'string' and #job.err == 0 then
+        H.notify(string.format('(%d/%d) %s', n_finished, n_total, exit_msg))
+      end
       run_next()
     end
 
@@ -1375,7 +1393,7 @@ H.notify = vim.schedule_wrap(function(msg, level)
   vim.cmd('redraw')
 end)
 
-H.get_timestamp = function() return vim.fn.strftime('%Y%m%d%H%M%S') end
+H.get_timestamp = function() return vim.fn.strftime('%Y-%m-%d %H:%M:%S') end
 
 H.full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('\\', '/'):gsub('/+', '/'):gsub('(.)/$', '%1')) end
 

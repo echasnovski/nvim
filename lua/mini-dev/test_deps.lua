@@ -17,7 +17,31 @@ local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('(.)/$', '%1')
 local test_opt_dir = test_dir_absolute .. '/pack/deps/opt'
 
 -- Common test helpers
-local log_level = function(level) return child.lua_get('vim.log.levels.' .. level) end
+local log_level = function(level)
+  if level == nil then return nil end
+  return child.lua_get('vim.log.levels.' .. level)
+end
+
+local clone_args = function(from, to)
+  --stylua: ignore
+  return {
+    '-c', 'gc.auto=0', 'clone', '--quiet', '--filter=blob:none',
+    '--recurse-submodules', '--also-filter-submodules',
+    '--origin', 'origin', from, to,
+  }
+end
+
+local log_args = function(range)
+  return { 'log', '--pretty=format:%m %h | %ai | %an%d%n  %s%n', '--topo-order', '--decorate-refs=refs/tags', range }
+end
+
+local validate_confirm_buf = function(name)
+  eq(child.api.nvim_buf_get_name(0), name)
+  eq(child.bo.buftype, 'acwrite')
+  eq(child.bo.filetype, 'minideps-confirm')
+  eq(#child.api.nvim_list_tabpages(), 2)
+  eq(#child.api.nvim_tabpage_list_wins(0), 1)
+end
 
 -- Common test wrappers
 local forward_lua = function(fun_str)
@@ -48,7 +72,7 @@ local mock_temp_plugin = function(path)
 end
 
 local mock_timestamp = function(timestamp)
-  timestamp = timestamp or '20240102030405'
+  timestamp = timestamp or '2024-01-02 03:04:05'
   local lua_cmd = string.format('vim.fn.strftime = function() return %s end', vim.inspect(timestamp))
   child.lua(lua_cmd)
 end
@@ -60,6 +84,24 @@ local mock_spawn = function()
 end
 
 local get_spawn_log = function() return child.lua_get('_G.spawn_log') end
+
+local validate_git_spawn_log = function(ref_log)
+  local spawn_log = get_spawn_log()
+
+  local n = math.max(#spawn_log, #ref_log)
+  for i = 1, n do
+    local real, ref = spawn_log[i], ref_log[i]
+    if real == nil then
+      eq('Real spawn log does not have entry for present reference log entry', ref)
+    elseif ref == nil then
+      eq(real, 'Reference does not have entry for present spawn log entry')
+    elseif vim.tbl_islist(ref) then
+      eq(real, { executable = 'git', options = { args = ref, cwd = real.options.cwd } })
+    else
+      eq(real, { executable = 'git', options = ref })
+    end
+  end
+end
 
 local clear_spawn_log = function() child.lua('_G.spawn_log = {}') end
 
@@ -77,12 +119,20 @@ end
 
 local get_notify_log = function() return child.lua_get('_G.notify_log') end
 
-local validate_notifications = function(ref)
-  local log = get_notify_log()
-  eq(#log, #ref)
-  for i = 1, #ref do
-    expect.match(log[i][1], ref[i][1])
-    eq(log[i][2], log_level(ref[i][2]))
+local validate_notifications = function(ref_log, msg_pattern)
+  local notify_log = get_notify_log()
+  local n = math.max(#notify_log, #ref_log)
+  for i = 1, n do
+    local real, ref = notify_log[i], ref_log[i]
+    if real == nil then
+      eq('Real notify log does not have entry for present reference log entry', ref)
+    elseif ref == nil then
+      eq(real, 'Reference does not have entry for present notify log entry')
+    else
+      local expect_msg = msg_pattern and expect.match or eq
+      expect_msg(real[1], ref[1])
+      eq(real[2], log_level(ref[2]))
+    end
   end
 end
 
@@ -357,7 +407,7 @@ end
 
 T['add()']['validates `opts`'] = function()
   expect.error(function() add('plugin_1', 'a') end, '`opts`.*table')
-  expect.error(function() add('plugin_1', { checkout = 'branch' }) end, '`add%(%)`.*single spec')
+  expect.error(function() add('plugin_1', { checkout = 'branch' }) end, '`add%(%)`.*only single spec')
 end
 
 T['add()']['does not modify input'] = function()
@@ -380,32 +430,29 @@ T['add()']['Install'] = new_set({
       mock_timestamp()
       mock_notify()
       mock_spawn()
+      mock_test_package()
+
+      -- Mock `vim.fn.isdirectory` to always say that there is a directory to
+      -- simulate side-effect of `git clone`
+      child.lua('vim.fn.isdirectory = function() return 1 end')
     end,
   },
 })
 
-local validate_git_spawn_log = function(ref)
-  local ref_log = {}
-  for i, t in ipairs(ref) do
-    ref_log[i] = { executable = 'git', options = t }
-  end
-  eq(get_spawn_log(), ref_log)
-end
-
 T['add()']['Install']['works'] = function()
   child.lua([[
-    _G.feed_queue = {
-      nil,           nil, -- Clone
-      'sha1head',    nil, -- Get `HEAD`
-      'origin/main', nil, -- Get default branch
-      'origin/main', nil, -- Check if `main` is origin branch
-      'sha1head',    nil, -- Get commit of `origin/main`
-      nil,           nil, -- Stash changes
-      nil,           nil, -- Checkout changes
+    _G.stdio_queue = {
+      {},                      -- Clone
+      { out = 'sha0head' },    -- Get `HEAD`
+      { out = 'origin/main' }, -- Get default branch
+      { out = 'origin/main' }, -- Check if `main` is origin branch
+      { out = 'sha0head' },    -- Get commit of `origin/main`
+      {},                      -- Stash changes
+      {},                      -- Checkout changes
     }
 
-    -- Mock that plugin was created
-    vim.fn.isdirectory = function() return 1 end
+    -- Mock non-trivial cloning duration
+    _G.process_mock_data = { { duration = 5 } }
   ]])
   add('user/new_plugin')
 
@@ -413,31 +460,18 @@ T['add()']['Install']['works'] = function()
   --stylua: ignore
   local ref_git_spawn_log = {
     {
-      args = {
-        '-c', 'gc.auto=0', 'clone', '--quiet', '--filter=blob:none',
-        '--recurse-submodules', '--also-filter-submodules',
-        '--origin', 'origin',
-        'https://github.com/user/new_plugin', test_opt_dir .. '/new_plugin' },
+      args = clone_args('https://github.com/user/new_plugin', test_opt_dir .. '/new_plugin'),
       cwd = child.fn.getcwd(),
     },
     {
       args = { 'rev-list', '-1', 'HEAD' },
       cwd = test_opt_dir .. '/new_plugin',
     },
-    {
-      args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
-      cwd = test_opt_dir .. '/new_plugin',
-    },
-    {
-      args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },
-      cwd = test_opt_dir .. '/new_plugin',
-    },
-    {
-      args = { 'rev-list', '-1', 'origin/main' },
-      cwd = test_opt_dir .. '/new_plugin',
-    },
+    { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+    { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },
+    { 'rev-list', '-1', 'origin/main' },
 
-    -- NOTE: Does not actually check out because current commit is mocked the
+    -- NOTE: Does not actually checkout because current commit is mocked the
     -- same as target
   }
   validate_git_spawn_log(ref_git_spawn_log)
@@ -447,51 +481,742 @@ T['add()']['Install']['works'] = function()
   eq(
     get_process_log(),
     {
-      'Stream 1 was closed.', 'Stream 2 was closed.',  'Process Pid_1 was closed.',
-      'Stream 3 was closed.', 'Stream 4 was closed.',  'Process Pid_2 was closed.',
-      'Stream 5 was closed.', 'Stream 6 was closed.',  'Process Pid_3 was closed.',
-      'Stream 7 was closed.', 'Stream 8 was closed.',  'Process Pid_4 was closed.',
-      'Stream 9 was closed.', 'Stream 10 was closed.', 'Process Pid_5 was closed.',
+      'Stream out for process 1 was closed.', 'Stream err for process 1 was closed.', 'Process 1 was closed.',
+      'Stream out for process 2 was closed.', 'Stream err for process 2 was closed.', 'Process 2 was closed.',
+      'Stream out for process 3 was closed.', 'Stream err for process 3 was closed.', 'Process 3 was closed.',
+      'Stream out for process 4 was closed.', 'Stream err for process 4 was closed.', 'Process 4 was closed.',
+      'Stream out for process 5 was closed.', 'Stream err for process 5 was closed.', 'Process 5 was closed.',
     }
   )
 
   -- Should produce notifications
   local ref_notify_log = {
-    { '(mini.deps) Installing `new_plugin`', log_level('INFO') },
-    { '(mini.deps) (1/1) Installed `new_plugin`', log_level('INFO') },
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    { '(mini.deps) (1/1) Installed `new_plugin`', 'INFO' },
   }
-  eq(get_notify_log(), ref_notify_log)
+  validate_notifications(ref_notify_log)
 end
 
-T['add()']['Install']['checks out non-default target'] = function() MiniTest.skip() end
+T['add()']['Install']['checks out non-default target'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                       -- Clone
+      { out = 'sha0head' },     -- Get `HEAD`
+      { out = 'origin/main' },  -- Get default branch
+      { out = 'origin/hello' }, -- Check if `hello` is origin branch
+      { out = 'new0hello' },    -- Get commit of `hello`
+      {},                       -- Stash changes
+      {},                       -- Checkout changes
+    }
+
+    -- Mock non-trivial cloning duration
+    _G.process_mock_data = { { duration = 5 } }
+  ]])
+  add({ source = 'user/new_plugin', checkout = 'hello' })
+
+  -- Should result into a proper sequence of CLI runs
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = clone_args('https://github.com/user/new_plugin', test_opt_dir .. '/new_plugin'),
+      cwd = child.fn.getcwd(),
+    },
+    {
+      args = { 'rev-list', '-1', 'HEAD' },
+      cwd = test_opt_dir .. '/new_plugin',
+    },
+    -- NOTE: Default branch is still checked because `monitor` is `nil`
+    { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+    { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/hello' },
+    { 'rev-list', '-1', 'origin/hello' },
+    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout.' },
+    { 'checkout', '--quiet', 'new0hello' },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    { '(mini.deps) (1/1) Installed `new_plugin`', 'INFO' },
+    { '(mini.deps) (1/1) Checked out `hello` in `new_plugin`', 'INFO' },
+  }
+  validate_notifications(ref_notify_log)
+end
+
+T['add()']['Install']['can checkout to a not branch'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                       -- Clone
+      { out = 'sha0head' },     -- Get `HEAD`
+      { out = 'origin/main' },  -- Get default branch
+      { out = '' },             -- Check if `stable_tag` is origin branch (it is not)
+      { out = 'new0hello' },    -- Get commit of `stable_tag`
+      {},                       -- Stash changes
+      {},                       -- Checkout changes
+    }
+  ]])
+  add({ source = 'user/new_plugin', checkout = 'stable_tag' })
+
+  -- Should result into a proper sequence of CLI runs
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = clone_args('https://github.com/user/new_plugin', test_opt_dir .. '/new_plugin'),
+      cwd = child.fn.getcwd(),
+    },
+    {
+      args = { 'rev-list', '-1', 'HEAD' },
+      cwd = test_opt_dir .. '/new_plugin',
+    },
+    -- NOTE: Default branch is still checked because `monitor` is `nil`
+    { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+    { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/stable_tag' },
+    -- Get commit of specifically 'stable_tag' and not 'origin/stable_tag'
+    { 'rev-list', '-1', 'stable_tag' },
+    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout.' },
+    { 'checkout', '--quiet', 'new0hello' },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    { '(mini.deps) (1/1) Installed `new_plugin`', 'INFO' },
+    { '(mini.deps) (1/1) Checked out `stable_tag` in `new_plugin`', 'INFO' },
+  }
+  validate_notifications(ref_notify_log)
+end
+
+T['add()']['Install']['installs dependencies in parallel'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Clone dep_plugin_2
+      {},                        -- Clone dep_plugin_1
+      {},                        -- Clone new_plugin
+      { out = 'sha2head' },      -- Get `HEAD` in dep_plugin_2
+      { out = 'sha1head' },      -- Get `HEAD` in dep_plugin_1
+      { out = 'sha0head' },      -- Get `HEAD` in new_plugin
+      { out = 'origin/trunk' },  -- Get default branch in dep_plugin_2
+      { out = 'origin/master' }, -- Get default branch in dep_plugin_1
+      { out = 'origin/main' },   -- Get default branch in new_plugin
+      { out = 'origin/trunk' },  -- Check if `trunk`  is origin branch in dep_plugin_2
+      { out = 'origin/master' }, -- Check if `master` is origin branch in dep_plugin_1
+      { out = 'origin/main' },   -- Check if `main`   is origin branch in new_plugin
+      { out = 'sha2head' },      -- Get commit of `trunk`  in dep_plugin_2
+      { out = 'new1head' },      -- Get commit of `master` in dep_plugin_1
+      { out = 'sha0head' },      -- Get commit of `main`   in new_plugin
+      {},                        -- Stash changes in dep_plugin_1
+      {},                        -- Checkout changes in dep_plugin_1
+    }
+
+    -- Mock non-trivial cloning duration
+    _G.process_mock_data = { { duration = 50 }, { duration = 30 }, { duration = 40 } }
+  ]])
+  local start_time = child.loop.hrtime()
+  add({
+    source = 'user/new_plugin',
+    depends = { { source = 'user/dep_plugin_1', checkout = 'master', depends = { 'user/dep_plugin_2' } } },
+  })
+  local duration = 0.000001 * (child.loop.hrtime() - start_time)
+  eq(50 <= duration and duration < 120, true)
+
+  -- Should result into a proper sequence of CLI runs
+  local cwd_new_plugin, cwd_dep_plugin_1, cwd_dep_plugin_2 =
+    test_opt_dir .. '/new_plugin', test_opt_dir .. '/dep_plugin_1', test_opt_dir .. '/dep_plugin_2'
+
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = clone_args('https://github.com/user/dep_plugin_2', cwd_dep_plugin_2),
+      cwd = child.fn.getcwd(),
+    },
+    clone_args('https://github.com/user/dep_plugin_1', cwd_dep_plugin_1),
+    clone_args('https://github.com/user/new_plugin', cwd_new_plugin),
+
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = cwd_dep_plugin_2 },
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = cwd_dep_plugin_1 },
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = cwd_new_plugin },
+
+    -- NOTE: Default branch is still checked because `monitor` is `nil`
+    { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_dep_plugin_2 },
+    { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_dep_plugin_1 },
+    { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_new_plugin },
+
+    { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/trunk' }, cwd = cwd_dep_plugin_2 },
+    { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/master' }, cwd = cwd_dep_plugin_1 },
+    { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' }, cwd = cwd_new_plugin },
+
+    { args = { 'rev-list', '-1', 'origin/trunk' }, cwd = cwd_dep_plugin_2 },
+    { args = { 'rev-list', '-1', 'origin/master' }, cwd = cwd_dep_plugin_1 },
+    { args = { 'rev-list', '-1', 'origin/main' }, cwd = cwd_new_plugin },
+
+    { args = { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout.' }, cwd = cwd_dep_plugin_1 },
+
+    { args = { 'checkout', '--quiet', 'new1head' }, cwd = cwd_dep_plugin_1 },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    -- NOTE: Cloning exit notifications are done immediately after job is done,
+    -- not in a session order
+    { '(mini.deps) (1/3) Installed `dep_plugin_1`', 'INFO' },
+    { '(mini.deps) (2/3) Installed `new_plugin`', 'INFO' },
+    { '(mini.deps) (3/3) Installed `dep_plugin_2`', 'INFO' },
+    { '(mini.deps) (1/1) Checked out `master` in `dep_plugin_1`', 'INFO' },
+  }
+  validate_notifications(ref_notify_log)
+end
+
+T['add()']['Install']['can handle both present and not present plugins'] = function()
+  local validate = function(spec, clone_name)
+    -- Make clean mock
+    mock_spawn()
+    child.lua([[
+      _G.stdio_queue = {
+        {},                      -- Clone
+        { out = 'sha0head' },    -- Get `HEAD`
+        { out = 'origin/main' }, -- Get default branch
+        { out = 'origin/main' }, -- Check if `main` is origin branch
+        { out = 'sha0head' },    -- Get commit of `origin/main`
+        {},                      -- Stash changes
+        {},                      -- Checkout changes
+      }
+    ]])
+    add(spec)
+
+    -- Should result into a proper sequence of CLI runs
+    --stylua: ignore
+    local ref_git_spawn_log = {
+      {
+        args = clone_args('https://github.com/user/' .. clone_name, test_opt_dir .. '/' .. clone_name),
+        cwd = child.fn.getcwd(),
+      },
+      {
+        args = { 'rev-list', '-1', 'HEAD' },
+        cwd = test_opt_dir .. '/' .. clone_name,
+      },
+      { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+      { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },
+      { 'rev-list', '-1', 'origin/main' },
+    }
+    validate_git_spawn_log(ref_git_spawn_log)
+  end
+
+  -- Present target, not present dependency
+  validate({ source = 'user/plugin_1', depends = { 'user/new_plugin' } }, 'new_plugin')
+
+  -- Present dependency, not present target
+  validate({ source = 'user/new_plugin', depends = { 'user/plugin_1' } }, 'new_plugin')
+end
 
 T['add()']['Install']['properly executes hooks'] = function()
-  -- Including when installing dependencies
-  -- Should be executed in session order
-  MiniTest.skip()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Clone dep_plugin
+      {},                        -- Clone new_plugin
+      { out = 'sha1head' },      -- Get `HEAD` in dep_plugin
+      { out = 'sha0head' },      -- Get `HEAD` in new_plugin
+      { out = 'origin/master' }, -- Get default branch in dep_plugin
+      { out = 'origin/main' },   -- Get default branch in new_plugin
+      { out = 'origin/master' }, -- Check if `master` is origin branch in dep_plugin
+      { out = 'origin/main' },   -- Check if `main`   is origin branch in new_plugin
+      { out = 'new1head' },      -- Get commit of `master` in dep_plugin
+      { out = 'sha0head' },      -- Get commit of `main`   in new_plugin
+      {},                        -- Stash changes in dep_plugin
+      {},                        -- Checkout changes in dep_plugin
+    }
+
+    -- Mock non-trivial cloning duration to simulate out of order finish
+    _G.process_mock_data = { { duration = 10 }, { duration = 5 } }
+
+    -- Add plugin with dependency and hooks
+    local dep_spec = {
+      source = 'user/dep_plugin',
+      hooks = {
+        pre_install = function() vim.notify('Dependency pre_install') end,
+        post_install = function() vim.notify('Dependency post_install') end,
+      },
+    }
+    local spec = {
+      source = 'user/new_plugin',
+      depends = { dep_spec },
+      hooks = {
+        pre_install = function() vim.notify('Target pre_install') end,
+        post_install = function() vim.notify('Target post_install') end,
+      },
+    }
+
+    MiniDeps.add(spec)
+  ]])
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    -- Hooks are executed in a session order
+    { 'Dependency pre_install' },
+    { 'Target pre_install' },
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    -- Cloning exit notifications are done after job is finished
+    { '(mini.deps) (1/2) Installed `new_plugin`', 'INFO' },
+    { '(mini.deps) (2/2) Installed `dep_plugin`', 'INFO' },
+    { '(mini.deps) (1/1) Checked out `master` in `dep_plugin`', 'INFO' },
+    -- Hooks are executed in a session order
+    { 'Dependency post_install' },
+    { 'Target post_install' },
+  }
+  validate_notifications(ref_notify_log)
 end
 
-T['add()']['Install']['generates help tags'] = function() MiniTest.skip() end
+T['add()']['Install']['generates help tags'] = function()
+  -- Set up clear temporary directory
+  local cur_package_path = test_dir_absolute .. '/temp'
+  local cur_opt_dir = cur_package_path .. '/pack/deps/opt'
 
-T['add()']['Install']['works with absent package directory'] = function() MiniTest.skip() end
+  child.lua('_G.temp_package_path = ' .. vim.inspect(cur_package_path))
+  MiniTest.finally(function() child.lua('vim.fn.delete(_G.temp_package_path, "rf")') end)
+  child.lua('MiniDeps.setup({ path = { package = _G.temp_package_path } })')
+
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Clone dep_plugin_2
+      {},                        -- Clone dep_plugin_1
+      {},                        -- Clone new_plugin
+      { out = 'sha2head' },      -- Get `HEAD` in dep_plugin_2
+      { out = 'sha1head' },      -- Get `HEAD` in dep_plugin_1
+      { out = 'sha0head' },      -- Get `HEAD` in new_plugin
+      { out = 'origin/trunk' },  -- Get default branch in dep_plugin_2
+      { out = 'origin/master' }, -- Get default branch in dep_plugin_1
+      { out = 'origin/main' },   -- Get default branch in new_plugin
+      { out = 'origin/trunk' },  -- Check if `trunk`  is origin branch in dep_plugin_2
+      { out = 'origin/master' }, -- Check if `master` is origin branch in dep_plugin_1
+      { out = 'origin/main' },   -- Check if `main`   is origin branch in new_plugin
+      { out = 'sha2head' },      -- Get commit of `trunk`  in dep_plugin_2
+      { out = 'new1head' },      -- Get commit of `master` in dep_plugin_1
+      { out = 'sha0head' },      -- Get commit of `main`   in new_plugin
+      {},                        -- Stash changes in dep_plugin_1
+      {},                        -- Checkout changes in dep_plugin_1
+    }
+
+    -- Mock action cloning side-effects which creates '/doc' directories
+    local opt_dir = _G.temp_package_path .. '/pack/deps/opt'
+    _G.process_mock_data = {
+      -- 'dep_plugin_2' has '/doc' with already present conflicting '/tag'
+      {
+        action = function()
+          vim.fn.mkdir(opt_dir .. '/dep_plugin_2/doc', 'p')
+          vim.fn.writefile({ 'old_dep_2_tag	dep_2.txt	/*old_dep_2_tag*' }, opt_dir .. '/dep_plugin_2/doc/dep_2.txt')
+          vim.fn.writefile({ '*depstest_dep_2_tag*', 'Help for dep_2.' }, opt_dir .. '/dep_plugin_2/doc/dep_2.txt')
+        end
+      },
+
+      -- 'dep_plugin_1' has '/doc' with help files and has excplicit checkout
+      {
+        action = function()
+          vim.fn.mkdir(opt_dir .. '/dep_plugin_1/doc', 'p')
+          vim.fn.writefile({ '*depstest_dep_1_tag*', 'Help for dep_1.' }, opt_dir .. '/dep_plugin_1/doc/dep_1.txt')
+        end
+      },
+
+      -- 'new_plugin' has '/doc' with help files and has no excplicit checkout
+      {
+        action = function()
+          vim.fn.mkdir(opt_dir .. '/new_plugin/doc', 'p')
+          vim.fn.writefile({ '*depstest_new_tag*', 'Help for new.' }, opt_dir .. '/new_plugin/doc/new.txt')
+        end
+      },
+    }
+  ]])
+  add({
+    source = 'user/new_plugin',
+    depends = { { source = 'user/dep_plugin_1', checkout = 'master', depends = { 'user/dep_plugin_2' } } },
+  })
+
+  local validate_tags = function(plugin_name, content)
+    local lines = child.fn.readfile(cur_opt_dir .. '/' .. plugin_name .. '/doc/tags')
+    eq(lines, content)
+  end
+
+  -- Already present conflicting `tag` file should be overriden
+  validate_tags('dep_plugin_2', { 'depstest_dep_2_tag\tdep_2.txt\t/*depstest_dep_2_tag*' })
+
+  -- With actual checkout
+  validate_tags('dep_plugin_1', { 'depstest_dep_1_tag\tdep_1.txt\t/*depstest_dep_1_tag*' })
+
+  -- Without actual checkout
+  validate_tags('new_plugin', { 'depstest_new_tag\tnew.txt\t/*depstest_new_tag*' })
+
+  -- Help tags are actually reachable
+  local help_tags = child.fn.getcompletion('depstest_', 'help')
+  table.sort(help_tags)
+  eq(help_tags, { 'depstest_dep_1_tag', 'depstest_dep_2_tag', 'depstest_new_tag' })
+end
+
+T['add()']['Install']['handles process errors'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                          -- Clone dep_plugin
+      { err = 'Could not clone' }, -- Clone new_plugin
+      { out = 'sha2head' },        -- Get `HEAD` in dep_plugin
+    }
+
+    -- Mock non-zero exit code in getting dep_plugin's head
+    _G.process_mock_data = { [3] = { exit_code = 128 } }
+  ]])
+
+  add({ source = 'user/new_plugin', depends = { 'user/dep_plugin' } })
+
+  -- If any error (from `stderr` or exit code) is encountered, all CLI jobs for
+  -- that particular plugin should not be done
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = clone_args('https://github.com/user/dep_plugin', test_opt_dir .. '/dep_plugin'),
+      cwd = child.fn.getcwd(),
+    },
+    clone_args('https://github.com/user/new_plugin', test_opt_dir .. '/new_plugin'),
+    {
+      args = { 'rev-list', '-1', 'HEAD' },
+      cwd = test_opt_dir .. '/dep_plugin',
+    },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    { '(mini.deps) (1/2) Installed `dep_plugin`', 'INFO' },
+    {
+      '(mini.deps) Error in `dep_plugin` during installing plugin\nPROCESS EXITED WITH ERROR CODE 128',
+      'ERROR',
+    },
+    { '(mini.deps) Error in `new_plugin` during installing plugin\nCould not clone', 'ERROR' },
+  }
+  validate_notifications(ref_notify_log)
+end
+
+T['add()']['Install']['handles no `source` for absent plugin'] = function()
+  add({ name = 'new_plugin' })
+  local ref_notify_log = {
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    {
+      '(mini.deps) Error in `new_plugin` during installing plugin\nSPECIFICATION HAS NO `source` TO INSTALL PLUGIN.',
+      'ERROR',
+    },
+  }
+  validate_notifications(ref_notify_log)
+end
+
+T['add()']['Install']['respects `config.job.n_threads`'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Clone dep_plugin
+      {},                        -- Clone new_plugin
+      { out = 'sha2head' },      -- Get `HEAD` in dep_plugin
+      { out = 'sha0head' },      -- Get `HEAD` in new_plugin
+      { out = 'origin/trunk' },  -- Get default branch in dep_plugin
+      { out = 'origin/main' },   -- Get default branch in new_plugin
+      { out = 'origin/trunk' },  -- Check if `trunk`  is origin branch in dep_plugin
+      { out = 'origin/main' },   -- Check if `main`   is origin branch in new_plugin
+      { out = 'sha2head' },      -- Get commit of `trunk`  in dep_plugin
+      { out = 'sha0head' },      -- Get commit of `main`   in new_plugin
+    }
+
+    -- Mock non-trivial cloning duration
+    _G.process_mock_data = { { duration = 30 }, { duration = 30 } }
+  ]])
+
+  child.lua('MiniDeps.config.job.n_threads = 1')
+
+  local start_time = child.loop.hrtime()
+  add({ source = 'user/new_plugin', depends = { 'user/dep_plugin' } })
+  local duration = 0.000001 * (child.loop.hrtime() - start_time)
+  eq(40 <= duration, true)
+end
+
+T['add()']['Install']['respects `config.job.timeout`'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                   -- Clone dep_plugin
+      {},                   -- Clone new_plugin
+      { out = 'sha2head' }, -- Get `HEAD` in dep_plugin
+    }
+
+    -- Mock long execution of some jobs
+    _G.process_mock_data = { { duration = 20 }, { duration = 0 }, { duration = 20 } }
+  ]])
+
+  child.lua('MiniDeps.config.job.timeout = 10')
+  add({ source = 'user/new_plugin', depends = { 'user/dep_plugin' } })
+
+  local ref_notify_log = {
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    { '(mini.deps) (1/2) Installed `new_plugin`', 'INFO' },
+    { '(mini.deps) Error in `dep_plugin` during installing plugin\nPROCESS REACHED TIMEOUT.', 'ERROR' },
+    { '(mini.deps) Error in `new_plugin` during installing plugin\nPROCESS REACHED TIMEOUT.', 'ERROR' },
+  }
+  validate_notifications(ref_notify_log)
+end
+
+T['add()']['Install']['respects `config.silent`'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                       -- Clone
+      { out = 'sha0head' },     -- Get `HEAD`
+      { out = 'origin/main' },  -- Get default branch
+      { out = 'origin/hello' }, -- Check if `hello` is origin branch
+      { out = 'new0hello' },    -- Get commit of `hello`
+      {},                       -- Stash changes
+      {},                       -- Checkout changes
+    }
+  ]])
+  child.lua('MiniDeps.config.silent = true')
+  add({ source = 'user/new_plugin', checkout = 'hello' })
+
+  -- Should produce no notifications
+  validate_notifications({})
+end
 
 T['add()']['Install']['does not affect newly added session data'] = function()
-  -- Basically, does not add `job` field
-  MiniTest.skip()
+  add('user/new_plugin')
+  eq(get_session(), {
+    {
+      path = test_opt_dir .. '/new_plugin',
+      name = 'new_plugin',
+      source = 'https://github.com/user/new_plugin',
+      depends = {},
+      hooks = {},
+    },
+  })
 end
 
-T['add()']['Install']['respects `config.job.timeout`'] = function() MiniTest.skip() end
-
-T['update()'] = new_set()
+T['update()'] = new_set({
+  hooks = {
+    pre_case = function()
+      mock_timestamp()
+      mock_notify()
+      mock_spawn()
+      mock_test_package()
+    end,
+  },
+})
 
 local update = forward_lua('MiniDeps.update')
 
-T['update()']['works'] = function() MiniTest.skip() end
+T['update()']['works'] = function()
+  child.set_size(35, 80)
+
+  -- By default should update all plugins in session
+  add('plugin_1')
+  add({ source = 'https://new_source/plugin_2' })
+  add('plugin_3')
+
+  local plugin_2_log = table.concat({
+    '< sha2head | 2024-01-02 01:01:01 +0200 | Neo McVim',
+    '  Removed commit in plugin_2.',
+    '> new2head | 2024-01-02 02:02:02 +0200 | Neo McVim',
+    '  Added commit in plugin_2.',
+  }, '\n')
+  child.lua('_G.plugin_2_log = ' .. vim.inspect(plugin_2_log))
+
+  child.lua([[
+    _G.stdio_queue = {
+      { out = 'https://github.com/user/plugin_1' }, -- Get source from `origin` in plugin_1
+      {},                                           -- Set `origin` to source in plugin_2
+      { err = 'Error computing origin' },           -- Get source from `origin` in plugin_3
+      { out = 'sha1head' },      -- Get `HEAD` in plugin_1
+      { out = 'sha2head' },      -- Get `HEAD` in plugin_2
+      { out = 'origin/main' },   -- Get default branch in plugin_1
+      { out = 'origin/master' }, -- Get default branch in plugin_2
+      {},                        -- Fetch in plugin_1
+      {},                        -- Fetch in plugin_2
+      { out = 'origin/main' },   -- Check if `checkout` is origin branch in plugin_1
+      { out = 'origin/master' }, -- Check if `checkout` is origin branch in plugin_2
+      { out = 'sha1head' },      -- Get commit of `checkout` in plugin_1
+      { out = 'new2head' },      -- Get commit of `checkout` in plugin_2
+      { out = _G.plugin_2_log }, -- Get log of `checkout` changes in plugin_2
+    }
+
+    -- Mock non-trivial fetch duration
+    _G.process_mock_data = { [8] = { duration = 50 }, [9] = { duration = 40 } }
+  ]])
+
+  -- Update should be done in parallel
+  local start_time = child.loop.hrtime()
+  update()
+  local duration = 0.000001 * (child.loop.hrtime() - start_time)
+  eq(50 <= duration and duration < 90, true)
+
+  -- Should result into a proper sequence of CLI runs
+  local cwd_plugin_1, cwd_plugin_2, cwd_plugin_3 =
+    test_opt_dir .. '/plugin_1', test_opt_dir .. '/plugin_2', test_opt_dir .. '/plugin_3'
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    { args = { 'remote', 'get-url', 'origin' },                                cwd = cwd_plugin_1 },
+    { args = { 'remote', 'set-url', 'origin', 'https://new_source/plugin_2' }, cwd = cwd_plugin_2 },
+    { args = { 'remote', 'get-url', 'origin' },                                cwd = cwd_plugin_3 },
+
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = cwd_plugin_1 },
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = cwd_plugin_2 },
+
+    { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_plugin_1 },
+    { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_plugin_2 },
+
+    { args = { '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' }, cwd = cwd_plugin_1 },
+    { args = { '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' }, cwd = cwd_plugin_2 },
+
+    { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },   cwd = cwd_plugin_1 },
+    { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/master' }, cwd = cwd_plugin_2 },
+
+    { args = { 'rev-list', '-1', 'origin/main' },   cwd = cwd_plugin_1 },
+    { args = { 'rev-list', '-1', 'origin/master' }, cwd = cwd_plugin_2 },
+
+    { args = log_args('sha2head...new2head'), cwd = cwd_plugin_2 },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Downloading 2 updates', 'INFO' },
+    { '(mini.deps) (1/2) Downloaded updates for `plugin_2`', 'INFO' },
+    { '(mini.deps) (2/2) Downloaded updates for `plugin_1`', 'INFO' },
+    { '(mini.deps) Error in `plugin_3` during update\nError computing origin', 'ERROR' },
+  }
+  validate_notifications(ref_notify_log)
+
+  -- Should show confirmation buffer. Plugin entries should be in order of
+  -- "error", "has changes", "no changes".
+  child.expect_screenshot()
+  validate_confirm_buf('mini-deps://confirm-update')
+end
+
+T['update()']['can apply changes in confirm buffer'] = function()
+  -- On write should update only actually present plugin titles with changes
+  MiniTest.skip()
+end
+
+T['update()']['can cancel in confirm buffer'] = function() MiniTest.skip() end
+
+T['update()']['can checkout to non-default target'] = function() MiniTest.skip() end
+
+T['update()']['shows monitor log'] = function()
+  -- Should show if `checkout` is different from `monitor` in spec
+  add({ name = 'plugin_1', checkout = 'stable_tag', monitor = 'main' })
+  MiniTest.skip()
+end
+
+T['update()']['can not show log'] = function() MiniTest.skip() end
+
+T['update()']['shows errors in confirmation buffer'] = function() MiniTest.skip() end
 
 T['update()']['properly executes hooks'] = function()
   -- First all `pre_` (in session order)
   -- Then update
   -- Then all `post_` (in session order)
+  MiniTest.skip()
+end
+
+T['update()']['respects `names` argument'] = function()
+  add('plugin_1')
+  add('plugin_2')
+
+  local validate = function(names)
+    clear_notify_log()
+    -- TODO
+  end
+
+  validate({ 'plugin_1' })
+
+  -- Should silently drop names not in session
+  validate({ 'plugin_1', 'plugin_3', 'not_present_even_on_disk' })
+
+  -- Should allow empty array
+  clear_notify_log()
+  update({})
+  validate_notifications({ { '(mini.deps) Nothing to update.', 'INFO' } })
+
+  MiniTest.skip()
+end
+
+T['update()']['valdiates arguments'] = function()
+  expect.error(function() update('plugin_1') end, '`names`.*array')
+  expect.error(function() update({ 'plugin_1', 1, { name = 'plugin_2' } }) end, '`names`.*strings')
+end
+
+T['update()']['respects `opts.force`'] = function() MiniTest.skip() end
+
+T['update()']['respects `opts.offline`'] = function() MiniTest.skip() end
+
+T['update()']['respects `config.job.n_threads`'] = function()
+  -- child.lua([[
+  --   _G.stdio_queue = {
+  --     {},                        -- Clone dep_plugin
+  --     {},                        -- Clone new_plugin
+  --     { out = 'sha2head' },      -- Get `HEAD` in dep_plugin
+  --     { out = 'sha0head' },      -- Get `HEAD` in new_plugin
+  --     { out = 'origin/trunk' },  -- Get default branch in dep_plugin
+  --     { out = 'origin/main' },   -- Get default branch in new_plugin
+  --     { out = 'origin/trunk' },  -- Check if `trunk`  is origin branch in dep_plugin
+  --     { out = 'origin/main' },   -- Check if `main`   is origin branch in new_plugin
+  --     { out = 'sha2head' },      -- Get commit of `trunk`  in dep_plugin
+  --     { out = 'sha0head' },      -- Get commit of `main`   in new_plugin
+  --   }
+  --
+  --   -- Mock non-trivial cloning duration
+  --   _G.process_mock_data = { { duration = 30 }, { duration = 30 } }
+  -- ]])
+  --
+  -- child.lua('MiniDeps.config.job.n_threads = 1')
+  --
+  -- local start_time = child.loop.hrtime()
+  -- add({ source = 'user/new_plugin', depends = { 'user/dep_plugin' } })
+  -- local duration = 0.000001 * (child.loop.hrtime() - start_time)
+  -- eq(40 <= duration, true)
+  MiniTest.skip()
+end
+
+T['update()']['respects `config.job.timeout`'] = function()
+  -- child.lua([[
+  --   _G.stdio_queue = {
+  --     {},                   -- Clone dep_plugin
+  --     {},                   -- Clone new_plugin
+  --     { out = 'sha2head' }, -- Get `HEAD` in dep_plugin
+  --   }
+  --
+  --   -- Mock long execution of some jobs
+  --   _G.process_mock_data = { { duration = 20 }, { duration = 0 }, { duration = 20 } }
+  -- ]])
+  --
+  -- child.lua('MiniDeps.config.job.timeout = 10')
+  -- add({ source = 'user/new_plugin', depends = { 'user/dep_plugin' } })
+  --
+  -- local ref_notify_log = {
+  --   { '(mini.deps) Installing `new_plugin`', 'INFO' },
+  --   { '(mini.deps) (1/2) Installed `new_plugin`', 'INFO' },
+  --   { '(mini.deps) Error in `dep_plugin` during installing plugin\nPROCESS REACHED TIMEOUT.', 'ERROR' },
+  --   { '(mini.deps) Error in `new_plugin` during installing plugin\nPROCESS REACHED TIMEOUT.', 'ERROR' },
+  -- }
+  -- validate_notifications(ref_notify_log)
+  MiniTest.skip()
+end
+
+T['update()']['respects `config.silent`'] = function()
+  -- child.lua([[
+  --   _G.stdio_queue = {
+  --     {},                       -- Clone
+  --     { out = 'sha0head' },     -- Get `HEAD`
+  --     { out = 'origin/main' },  -- Get default branch
+  --     { out = 'origin/hello' }, -- Check if `hello` is origin branch
+  --     { out = 'new0hello' },    -- Get commit of `hello`
+  --     {},                       -- Stash changes
+  --     {},                       -- Checkout changes
+  --   }
+  -- ]])
+  -- child.lua('MiniDeps.config.silent = true')
+  -- add({ source = 'user/new_plugin', checkout = 'hello' })
+  --
+  -- -- Should produce no notifications
+  -- validate_notifications({})
   MiniTest.skip()
 end
 
@@ -652,7 +1377,7 @@ T['now()']['can be called inside other `now()`/`later()` call'] = function()
   ]])
   eq(child.lua_get('_G.log'), { 'now', 'now_now' })
 
-  sleep(10)
+  sleep(20)
   eq(child.lua_get('_G.log'), { 'now', 'now_now', 'later', 'later_now' })
 end
 
@@ -684,11 +1409,11 @@ T['now()']['notifies about errors after everything is executed'] = function()
   ]])
 
   sleep(1)
-  validate_notifications({})
+  validate_notifications({}, true)
 
   sleep(10)
   eq(child.lua_get('_G.log'), { 'later', 'later', 'later', 'later', 'later' })
-  validate_notifications({ { 'errors.*Inside now()', 'ERROR' } })
+  validate_notifications({ { 'errors.*Inside now()', 'ERROR' } }, true)
 end
 
 T['now()']['shows all errors at once'] = function()
@@ -698,7 +1423,7 @@ T['now()']['shows all errors at once'] = function()
     MiniDeps.now(function() error('Inside now() #2') end)
   ]])
   sleep(2)
-  validate_notifications({ { 'errors.*Inside now%(%) #1.*Inside now%(%) #2', 'ERROR' } })
+  validate_notifications({ { 'errors.*Inside now%(%) #1.*Inside now%(%) #2', 'ERROR' } }, true)
 end
 
 T['now()']['does not respect `config.silent`'] = function()
@@ -707,7 +1432,7 @@ T['now()']['does not respect `config.silent`'] = function()
   mock_notify()
   child.lua('MiniDeps.now(function() error("Inside now()") end)')
   sleep(2)
-  validate_notifications({ { 'Inside now%(%)', 'ERROR' } })
+  validate_notifications({ { 'Inside now%(%)', 'ERROR' } }, true)
 end
 
 T['later()'] = new_set()
@@ -775,11 +1500,11 @@ T['later()']['notifies about errors after everything is executed'] = function()
   eq(child.lua_get('_G.log'), {})
 
   sleep(1)
-  validate_notifications({})
+  validate_notifications({}, true)
 
   sleep(10)
   eq(child.lua_get('_G.log'), { 'later', 'later', 'later', 'later', 'later' })
-  validate_notifications({ { 'errors.*Inside later()', 'ERROR' } })
+  validate_notifications({ { 'errors.*Inside later()', 'ERROR' } }, true)
 end
 
 T['later()']['shows all errors at once'] = function()
@@ -789,7 +1514,7 @@ T['later()']['shows all errors at once'] = function()
     MiniDeps.later(function() error('Inside later() #2') end)
   ]])
   sleep(5)
-  validate_notifications({ { 'errors.*Inside later%(%) #1.*Inside later%(%) #2', 'ERROR' } })
+  validate_notifications({ { 'errors.*Inside later%(%) #1.*Inside later%(%) #2', 'ERROR' } }, true)
 end
 
 T['later()']['does not respect `config.silent`'] = function()
@@ -798,7 +1523,7 @@ T['later()']['does not respect `config.silent`'] = function()
   mock_notify()
   child.lua('MiniDeps.later(function() error("Inside later()") end)')
   sleep(2)
-  validate_notifications({ { 'Inside later%(%)', 'ERROR' } })
+  validate_notifications({ { 'Inside later%(%)', 'ERROR' } }, true)
 end
 
 -- Integration tests ----------------------------------------------------------
