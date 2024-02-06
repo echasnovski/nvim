@@ -465,7 +465,7 @@ MiniDeps.update = function(names, opts)
   H.plugs_infer_log(plugs, 'monitor_from', 'monitor_to', 'monitor_log')
 
   -- Checkout if asked (before feedback to include possible checkout errors)
-  if opts.force then H.plugs_checkout(plugs, true) end
+  if opts.force then H.plugs_checkout(plugs) end
 
   -- Make feedback
   local lines = H.update_compute_feedback_lines(plugs)
@@ -544,7 +544,7 @@ MiniDeps.snap_set = function(snap)
   end
 
   -- Checkout
-  H.plugs_checkout(plugs, true)
+  H.plugs_checkout(plugs)
   H.plugs_show_job_errors(plugs, 'applying snapshot')
 end
 
@@ -672,6 +672,9 @@ H.cache = {
   -- Errors during execution of `now()` or `later()`
   exec_errors = {},
 }
+
+-- Buffer name counts
+H.buf_name_counts = {}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -888,7 +891,7 @@ H.plugs_install = function(plugs)
 
   -- Checkout
   vim.tbl_map(function(p) p.job.cwd = p.path end, plugs)
-  H.plugs_checkout(plugs, false)
+  H.plugs_checkout(plugs, { exec_hooks = false, all_helptags = true })
 
   -- Show errors
   H.plugs_show_job_errors(plugs, 'installing plugin')
@@ -900,46 +903,47 @@ H.plugs_download_updates = function(plugs)
   for _, p in ipairs(plugs) do
     if #p.job.err == 0 then n_noerror = n_noerror + 1 end
   end
-  H.notify('Downloading ' .. n_noerror .. ' updates')
+  if n_noerror == 0 then return end
+  H.notify('Downloading ' .. n_noerror .. ' update' .. (n_noerror > 1 and 's' or ''))
 
   local prepare = function(p)
     p.job.command = H.git_cmd.fetch
-    p.job.exit_msg = string.format('Downloaded updates for `%s`', p.name)
+    p.job.exit_msg = string.format('Downloaded update for `%s`', p.name)
   end
   H.plugs_run_jobs(plugs, prepare)
 end
 
-H.plugs_checkout = function(plugs, exec_hooks)
+H.plugs_checkout = function(plugs, opts)
+  opts = vim.tbl_deep_extend('force', { exec_hooks = true, all_helptags = false }, opts or {})
+
   H.plugs_infer_head(plugs)
   H.plugs_ensure_target_refs(plugs)
   H.plugs_infer_commit(plugs, 'checkout', 'checkout_to')
 
+  -- Operate only on plugins that actually need checkout
+  local checkout_plugs = vim.tbl_filter(function(p) return p.head ~= p.checkout_to end, plugs)
+
   -- Stash changes
   local stash_command = H.git_cmd.stash(H.get_timestamp())
-  local prepare = function(p)
-    p.needs_checkout = p.head ~= p.checkout_to
-    p.job.command = p.needs_checkout and stash_command or {}
-  end
-  H.plugs_run_jobs(plugs, prepare)
+  local prepare = function(p) p.job.command = stash_command end
+  H.plugs_run_jobs(checkout_plugs, prepare)
 
   -- Execute pre hooks
-  if exec_hooks then H.plugs_exec_hooks(plugs, 'pre_checkout') end
+  if opts.exec_hooks then H.plugs_exec_hooks(checkout_plugs, 'pre_checkout') end
 
   -- Checkout
   prepare = function(p)
-    p.job.command = {}
-    if p.needs_checkout then
-      p.job.command = H.git_cmd.checkout(p.checkout_to)
-      p.job.exit_msg = string.format('Checked out `%s` in `%s`', p.checkout, p.name)
-    end
+    p.job.command = H.git_cmd.checkout(p.checkout_to)
+    p.job.exit_msg = string.format('Checked out `%s` in `%s`', p.checkout, p.name)
   end
-  H.plugs_run_jobs(plugs, prepare)
+  H.plugs_run_jobs(checkout_plugs, prepare)
 
   -- Execute post hooks
-  if exec_hooks then H.plugs_exec_hooks(plugs, 'post_checkout') end
+  if opts.exec_hooks then H.plugs_exec_hooks(checkout_plugs, 'post_checkout') end
 
   -- (Re)Generate help tags according to the current help files
-  for _, p in ipairs(plugs) do
+  local help_plugs = opts.all_helptags and plugs or checkout_plugs
+  for _, p in ipairs(help_plugs) do
     local doc_dir = p.path .. '/doc'
     -- Completely redo tags
     vim.fn.delete(doc_dir .. '/tags')
@@ -1252,7 +1256,7 @@ end
 H.show_confirm_buf = function(lines, name, exec_on_write)
   -- Show buffer
   local buf_id = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_name(buf_id, name)
+  H.buf_set_name(buf_id, name)
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
   vim.bo[buf_id].buftype, vim.bo[buf_id].filetype, vim.bo[buf_id].modified = 'acwrite', 'minideps-confirm', false
   vim.cmd('tab sbuffer ' .. buf_id)
@@ -1400,6 +1404,13 @@ H.full_path = function(path) return (vim.fn.fnamemodify(path, ':p'):gsub('\\', '
 H.readdir = function(path)
   if vim.fn.isdirectory(path) ~= 1 then return {} end
   return vim.tbl_map(function(x) return path .. '/' .. x end, vim.fn.readdir(path))
+end
+
+H.buf_set_name = function(buf_id, name)
+  local n = (H.buf_name_counts[name] or 0) + 1
+  H.buf_name_counts[name] = n
+  local suffix = n == 1 and '' or ('_' .. n)
+  vim.api.nvim_buf_set_name(buf_id, name .. suffix)
 end
 
 return MiniDeps

@@ -15,6 +15,7 @@ local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 local test_dir = 'tests/dir-deps'
 local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('(.)/$', '%1')
 local test_opt_dir = test_dir_absolute .. '/pack/deps/opt'
+local test_log_path = test_dir_absolute .. '/mini-deps.log'
 
 -- Common test helpers
 local log_level = function(level)
@@ -39,7 +40,7 @@ local validate_confirm_buf = function(name)
   eq(child.api.nvim_buf_get_name(0), name)
   eq(child.bo.buftype, 'acwrite')
   eq(child.bo.filetype, 'minideps-confirm')
-  eq(#child.api.nvim_list_tabpages(), 2)
+  eq(#child.api.nvim_list_tabpages() > 1, true)
   eq(#child.api.nvim_tabpage_list_wins(0), 1)
 end
 
@@ -300,8 +301,8 @@ T['add()']['can update session data'] = function()
   })
 
   child.lua([[
-    MiniDeps.add({ name = 'plugin_3', hooks = { post_update = function() return 'Hello' end } })
-    _G.hello = MiniDeps.get_session()[3].hooks.post_update()
+    MiniDeps.add({ name = 'plugin_3', hooks = { post_checkout = function() return 'Hello' end } })
+    _G.hello = MiniDeps.get_session()[3].hooks.post_checkout()
   ]])
   eq(child.lua_get('_G.hello'), 'Hello')
 end
@@ -711,7 +712,7 @@ T['add()']['Install']['can handle both present and not present plugins'] = funct
   validate({ source = 'user/new_plugin', depends = { 'user/plugin_1' } }, 'new_plugin')
 end
 
-T['add()']['Install']['properly executes hooks'] = function()
+T['add()']['Install']['properly executes `*_install` hooks'] = function()
   child.lua([[
     _G.stdio_queue = {
       {},                        -- Clone dep_plugin
@@ -791,7 +792,7 @@ T['add()']['Install']['generates help tags'] = function()
       { out = 'origin/trunk' },  -- Check if `trunk`  is origin branch in dep_plugin_2
       { out = 'origin/master' }, -- Check if `master` is origin branch in dep_plugin_1
       { out = 'origin/main' },   -- Check if `main`   is origin branch in new_plugin
-      { out = 'sha2head' },      -- Get commit of `trunk`  in dep_plugin_2
+      { out = 'new2head' },      -- Get commit of `trunk`  in dep_plugin_2
       { out = 'new1head' },      -- Get commit of `master` in dep_plugin_1
       { out = 'sha0head' },      -- Get commit of `main`   in new_plugin
       {},                        -- Stash changes in dep_plugin_1
@@ -996,7 +997,13 @@ T['update()'] = new_set({
       mock_timestamp()
       mock_notify()
       mock_spawn()
-      mock_test_package()
+      load_module({ path = { package = test_dir_absolute, log = test_log_path } })
+    end,
+    post_case = function()
+      child.fn.delete(test_log_path)
+      for i = 1, 3 do
+        child.fn.delete(string.format('%s/plugin_%d/doc/tags', test_opt_dir, i))
+      end
     end,
   },
 })
@@ -1078,8 +1085,8 @@ T['update()']['works'] = function()
   -- Should produce notifications
   local ref_notify_log = {
     { '(mini.deps) Downloading 2 updates', 'INFO' },
-    { '(mini.deps) (1/2) Downloaded updates for `plugin_2`', 'INFO' },
-    { '(mini.deps) (2/2) Downloaded updates for `plugin_1`', 'INFO' },
+    { '(mini.deps) (1/2) Downloaded update for `plugin_2`', 'INFO' },
+    { '(mini.deps) (2/2) Downloaded update for `plugin_1`', 'INFO' },
     { '(mini.deps) Error in `plugin_3` during update\nError computing origin', 'ERROR' },
   }
   validate_notifications(ref_notify_log)
@@ -1090,30 +1097,210 @@ T['update()']['works'] = function()
   validate_confirm_buf('mini-deps://confirm-update')
 end
 
-T['update()']['can apply changes in confirm buffer'] = function()
-  -- On write should update only actually present plugin titles with changes
-  MiniTest.skip()
+T['update()']['Confirm buffer'] = new_set({
+  hooks = {
+    pre_case = function()
+      add('plugin_1')
+      add('plugin_2')
+
+      child.lua([[
+        _G.plugin_1_log = '> new1head | 2024-01-02 01:01:01 +0200 | Neo McVim\n  Added commit in plugin_1.'
+        _G.plugin_2_log = '> new2head | 2024-01-02 02:02:02 +0200 | Neo McVim\n  Added commit in plugin_2.'
+        _G.stdio_queue = {
+          { out = 'https://github.com/user/plugin_1' }, -- Get source from `origin` in plugin_1
+          { out = 'https://github.com/user/plugin_2' }, -- Get source from `origin` in plugin_2
+          { out = 'sha1head' },      -- Get `HEAD` in plugin_1
+          { out = 'sha2head' },      -- Get `HEAD` in plugin_2
+          { out = 'origin/main' },   -- Get default branch in plugin_1
+          { out = 'origin/master' }, -- Get default branch in plugin_2
+          {},                        -- Fetch in plugin_1
+          {},                        -- Fetch in plugin_2
+          { out = 'origin/main' },   -- Check if `checkout` is origin branch in plugin_1
+          { out = 'origin/master' }, -- Check if `checkout` is origin branch in plugin_2
+          { out = 'new1head' },      -- Get commit of `checkout` in plugin_1
+          { out = 'new2head' },      -- Get commit of `checkout` in plugin_2
+          { out = _G.plugin_1_log }, -- Get log of `checkout` changes in plugin_1
+          { out = _G.plugin_2_log }, -- Get log of `checkout` changes in plugin_2
+        }
+      ]])
+
+      update()
+      eq(#get_spawn_log(), 14)
+      eq(#get_notify_log(), 3)
+      validate_confirm_buf('mini-deps://confirm-update')
+
+      child.lua([[
+        _G.prev_update = MiniDeps.update
+        MiniDeps.update = function(...)
+          _G.update_args = { ... }
+          prev_update(...)
+        end
+      ]])
+    end,
+  },
+})
+
+T['update()']['Confirm buffer']['can apply changes'] = function()
+  -- Should run `update()` on buffer write with only valid plugin names
+  -- Remove 'plugin_1' from being updated
+  child.cmd('g/^+++ plugin_1/normal! dd/')
+  child.cmd('write')
+
+  -- Should update and close confirmation buffer
+  eq(child.lua_get('_G.update_args'), { { 'plugin_2' }, { force = true, offline = true } })
+  eq(#child.api.nvim_list_tabpages(), 1)
+  eq(child.bo.filetype ~= 'minideps-confirm', true)
 end
 
-T['update()']['can cancel in confirm buffer'] = function() MiniTest.skip() end
-
-T['update()']['can checkout to non-default target'] = function() MiniTest.skip() end
-
-T['update()']['shows monitor log'] = function()
-  -- Should show if `checkout` is different from `monitor` in spec
-  add({ name = 'plugin_1', checkout = 'stable_tag', monitor = 'main' })
-  MiniTest.skip()
+T['update()']['Confirm buffer']['can cancel'] = function()
+  child.cmd('quit')
+  eq(child.lua_get('_G.update_args'), vim.NIL)
+  eq(#child.api.nvim_list_tabpages(), 1)
+  eq(child.bo.filetype ~= 'minideps-confirm', true)
 end
 
-T['update()']['can not show log'] = function() MiniTest.skip() end
+T['update()']['Confirm buffer']['can open several'] = function()
+  child.lua('_G.prev_update()')
+  validate_confirm_buf('mini-deps://confirm-update_2')
+end
 
-T['update()']['shows errors in confirmation buffer'] = function() MiniTest.skip() end
+T['update()']['can work with non-default branch'] = function()
+  child.set_size(30, 80)
 
-T['update()']['properly executes hooks'] = function()
-  -- First all `pre_` (in session order)
-  -- Then update
-  -- Then all `post_` (in session order)
-  MiniTest.skip()
+  add({ source = 'user/plugin_1', checkout = 'hello', monitor = 'world' })
+  child.lua([[
+    _G.checkout_log = '> new1head | 2024-01-02 01:01:01 +0200 | Neo McVim\n  Added commit in checkout.'
+    _G.monitor_log = '> new2head | 2024-01-02 02:02:02 +0200 | Neo McVim\n  Added commit in monitor.'
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source
+      { out = 'sha1head' },      -- Get `HEAD`
+      -- NOTE: Don't get default branch as both every target is explicit
+      { out = 'origin/world' },  -- Check if `monitor` is origin branch
+      { out = 'sha2head' },      -- Get commit of `monitor`
+      {},                        -- Fetch
+      { out = 'origin/hello' },  -- Check if `checkout` is origin branch (it is)
+      { out = 'new1head' },      -- Get commit of `checkout`
+      { out = 'origin/world' },  -- Check if `monitor` is origin branch (it is)
+      { out = 'new2head' },      -- Get commit of `monitor`
+      { out = _G.checkout_log }, -- Get log of `checkout` changes
+      { out = _G.monitor_log },  -- Get log of `monitor` changes
+    }
+  ]])
+  update()
+
+  -- Should result into a proper sequence of CLI runs
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    { args = { 'remote', 'set-url', 'origin', 'https://github.com/user/plugin_1' }, cwd = test_opt_dir .. '/plugin_1' },
+    { 'rev-list', '-1', 'HEAD' },
+    { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/world' },
+    { 'rev-list', '-1', 'origin/world' },
+    { '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
+    { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/hello' },
+    { 'rev-list', '-1', 'origin/hello' },
+    { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/world' },
+    { 'rev-list', '-1', 'origin/world' },
+    log_args('sha1head...new1head'),
+    log_args('sha2head...new2head'),
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  child.expect_screenshot()
+end
+
+T['update()']['properly executes `*_checkout` hooks'] = function()
+  child.lua([[
+    -- Add plugin with dependency and hooks
+    for i = 1, 3 do
+      local name = 'plugin_' .. i
+      MiniDeps.add({
+        source = 'user/' .. name,
+        hooks = {
+          pre_checkout = function() vim.notify(name .. ' pre_checkout') end,
+          post_checkout = function() vim.notify(name .. ' post_checkout') end,
+        },
+      })
+    end
+
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source in plugin_1
+      {},                        -- Set `origin` to source in plugin_2
+      {},                        -- Set `origin` to source in plugin_3
+      { out = 'sha1head' },      -- Get `HEAD` in plugin_1
+      { out = 'sha2head' },      -- Get `HEAD` in plugin_2
+      { out = 'sha3head' },      -- Get `HEAD` in plugin_3
+      { out = 'origin/main' },   -- Get default branch in plugin_1
+      { out = 'origin/master' }, -- Get default branch in plugin_2
+      { out = 'origin/master' }, -- Get default branch in plugin_3
+      {},                        -- Fetch in plugin_1
+      {},                        -- Fetch in plugin_2
+      {},                        -- Fetch in plugin_3
+      { out = 'origin/main' },   -- Check if `checkout` is origin branch in plugin_1
+      { out = 'origin/master' }, -- Check if `checkout` is origin branch in plugin_2
+      { out = 'origin/master' }, -- Check if `checkout` is origin branch in plugin_3
+      { out = 'new1head' },      -- Get commit of `checkout` in plugin_1
+      { out = 'new2head' },      -- Get commit of `checkout` in plugin_2
+      { out = 'sha3head' },      -- Get commit of `checkout` in plugin_3
+      { out = 'Log 1' },         -- Get log of `checkout` changes in plugin_1
+      { out = 'Log 2' },         -- Get log of `checkout` changes in plugin_2
+      {},                        -- Stash in plugin_1
+      {},                        -- Stash in plugin_2
+      {},                        -- Checkout in plugin_1
+      {},                        -- Checkout in plugin_2
+    }
+  ]])
+  child.lua('MiniDeps.update(nil, { force = true })')
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Downloading 3 updates', 'INFO' },
+    { '(mini.deps) (1/3) Downloaded update for `plugin_1`', 'INFO' },
+    { '(mini.deps) (2/3) Downloaded update for `plugin_2`', 'INFO' },
+    { '(mini.deps) (3/3) Downloaded update for `plugin_3`', 'INFO' },
+    { 'plugin_1 pre_checkout' },
+    { 'plugin_2 pre_checkout' },
+    -- No 'plugin_3' hooks should be executed as no checkout was done
+    { '(mini.deps) (1/2) Checked out `main` in `plugin_1`', 'INFO' },
+    { '(mini.deps) (2/2) Checked out `master` in `plugin_2`', 'INFO' },
+    { 'plugin_1 post_checkout' },
+    { 'plugin_2 post_checkout' },
+  }
+  validate_notifications(ref_notify_log)
+end
+
+T['update()']['generates help tags'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source in plugin_1
+      {},                        -- Set `origin` to source in plugin_2
+      { out = 'sha1head' },      -- Get `HEAD` in plugin_1
+      { out = 'sha2head' },      -- Get `HEAD` in plugin_2
+      { out = 'origin/main' },   -- Get default branch in plugin_1
+      { out = 'origin/master' }, -- Get default branch in plugin_2
+      {},                        -- Fetch in plugin_1
+      {},                        -- Fetch in plugin_2
+      { out = 'origin/main' },   -- Check if `checkout` is origin branch in plugin_1
+      { out = 'origin/master' }, -- Check if `checkout` is origin branch in plugin_2
+      { out = 'new1head' },      -- Get commit of `checkout` in plugin_1
+      { out = 'sha2head' },      -- Get commit of `checkout` in plugin_2
+      { out = 'Log 1' },         -- Get log of `checkout` changes in plugin_1
+      {},                        -- Stash in plugin_1
+      {},                        -- Checkout in plugin_1
+    }
+  ]])
+  add('user/plugin_1')
+  add('user/plugin_2')
+
+  child.lua('MiniDeps.update(nil, { force = true })')
+
+  local tags_lines = child.fn.readfile(test_opt_dir .. '/plugin_1/doc/tags')
+  eq(tags_lines, { 'depstest_plugin_1_tag\thelp_1.txt\t/*depstest_plugin_1_tag*' })
+  eq(child.fn.filereadable(test_opt_dir .. '/plugin_2/doc/tags'), 0)
+
+  -- Help tags are actually reachable
+  local help_tags = child.fn.getcompletion('depstest_', 'help')
+  table.sort(help_tags)
+  eq(help_tags, { 'depstest_plugin_1_tag' })
 end
 
 T['update()']['respects `names` argument'] = function()
@@ -1122,7 +1309,11 @@ T['update()']['respects `names` argument'] = function()
 
   local validate = function(names)
     clear_notify_log()
-    -- TODO
+    update(names)
+    validate_notifications({
+      { '(mini.deps) Downloading 1 update', 'INFO' },
+      { '(mini.deps) (1/1) Downloaded update for `plugin_1`', 'INFO' },
+    })
   end
 
   validate({ 'plugin_1' })
@@ -1134,8 +1325,6 @@ T['update()']['respects `names` argument'] = function()
   clear_notify_log()
   update({})
   validate_notifications({ { '(mini.deps) Nothing to update.', 'INFO' } })
-
-  MiniTest.skip()
 end
 
 T['update()']['valdiates arguments'] = function()
@@ -1143,81 +1332,218 @@ T['update()']['valdiates arguments'] = function()
   expect.error(function() update({ 'plugin_1', 1, { name = 'plugin_2' } }) end, '`names`.*strings')
 end
 
-T['update()']['respects `opts.force`'] = function() MiniTest.skip() end
+T['update()']['respects `opts.force`'] = function()
+  add('user/plugin_1')
 
-T['update()']['respects `opts.offline`'] = function() MiniTest.skip() end
+  child.lua([[
+    _G.checkout_log = '> new1head | 2024-01-02 01:01:01 +0200 | Neo McVim\n  Added commit in checkout.'
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source
+      { out = 'sha1head' },      -- Get `HEAD`
+      { out = 'origin/main' },   -- Get default branch
+      {},                        -- Fetch
+      { out = 'origin/main' },   -- Check if `checkout` is origin branch (it is)
+      { out = 'new1head' },      -- Get commit of `checkout`
+      { out = _G.checkout_log }, -- Get log of `checkout` changes
+      {},                        -- Stash
+      {},                        -- Checkout
+    }
+  ]])
+  child.lua('MiniDeps.update(nil, { force = true })')
+
+  -- Should result into a proper sequence of CLI runs
+  local ref_git_spawn_log = {
+    {
+      args = { 'remote', 'set-url', 'origin', 'https://github.com/user/plugin_1' },
+      cwd = test_opt_dir .. '/plugin_1',
+    },
+    { 'rev-list', '-1', 'HEAD' },
+    { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+    { '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
+    { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },
+    { 'rev-list', '-1', 'origin/main' },
+    log_args('sha1head...new1head'),
+    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout.' },
+    { 'checkout', '--quiet', 'new1head' },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Downloading 1 update', 'INFO' },
+    { '(mini.deps) (1/1) Downloaded update for `plugin_1`', 'INFO' },
+    { '(mini.deps) (1/1) Checked out `main` in `plugin_1`', 'INFO' },
+  }
+  validate_notifications(ref_notify_log)
+
+  -- Should do actual checkout right away without confirmation
+  eq(#child.api.nvim_list_tabpages(), 1)
+  eq(child.bo.filetype ~= 'minideps-confirm', true)
+
+  -- Should write to log file
+  local log_lines = {
+    '========== Update 2024-01-02 03:04:05 ==========',
+    '+++ plugin_1 +++',
+    'Source:       https://github.com/user/plugin_1',
+    'State before: sha1head',
+    'State after:  new1head (main)',
+    '',
+    'Pending updates from `main`:',
+    '> new1head | 2024-01-02 01:01:01 +0200 | Neo McVim',
+    '  Added commit in checkout.',
+    '',
+  }
+  local log_path = child.lua_get('MiniDeps.config.path.log')
+  eq(child.fn.readfile(log_path), log_lines)
+end
+
+T['update()']['respects `opts.offline`'] = function()
+  add('user/plugin_1')
+
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source
+      { out = 'sha1head' },      -- Get `HEAD`
+      { out = 'origin/main' },   -- Get default branch
+      -- No fetch with `opts.offline`
+      { out = 'origin/main' },   -- Check if `checkout` is origin branch (it is)
+      { out = 'new1head' },      -- Get commit of `checkout`
+      { out = 'Log 1' },         -- Get log of `checkout` changes
+    }
+  ]])
+  child.lua('MiniDeps.update(nil, { offline = true })')
+
+  -- Should result into a proper sequence of CLI runs
+  local ref_git_spawn_log = {
+    {
+      args = { 'remote', 'set-url', 'origin', 'https://github.com/user/plugin_1' },
+      cwd = test_opt_dir .. '/plugin_1',
+    },
+    { 'rev-list', '-1', 'HEAD' },
+    { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+    -- No fetch with `opts.offline`
+    { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },
+    { 'rev-list', '-1', 'origin/main' },
+    log_args('sha1head...new1head'),
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  validate_notifications({})
+end
 
 T['update()']['respects `config.job.n_threads`'] = function()
-  -- child.lua([[
-  --   _G.stdio_queue = {
-  --     {},                        -- Clone dep_plugin
-  --     {},                        -- Clone new_plugin
-  --     { out = 'sha2head' },      -- Get `HEAD` in dep_plugin
-  --     { out = 'sha0head' },      -- Get `HEAD` in new_plugin
-  --     { out = 'origin/trunk' },  -- Get default branch in dep_plugin
-  --     { out = 'origin/main' },   -- Get default branch in new_plugin
-  --     { out = 'origin/trunk' },  -- Check if `trunk`  is origin branch in dep_plugin
-  --     { out = 'origin/main' },   -- Check if `main`   is origin branch in new_plugin
-  --     { out = 'sha2head' },      -- Get commit of `trunk`  in dep_plugin
-  --     { out = 'sha0head' },      -- Get commit of `main`   in new_plugin
-  --   }
-  --
-  --   -- Mock non-trivial cloning duration
-  --   _G.process_mock_data = { { duration = 30 }, { duration = 30 } }
-  -- ]])
-  --
-  -- child.lua('MiniDeps.config.job.n_threads = 1')
-  --
-  -- local start_time = child.loop.hrtime()
-  -- add({ source = 'user/new_plugin', depends = { 'user/dep_plugin' } })
-  -- local duration = 0.000001 * (child.loop.hrtime() - start_time)
-  -- eq(40 <= duration, true)
-  MiniTest.skip()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source in plugin_1
+      {},                        -- Set `origin` to source in plugin_2
+      { out = 'sha1head' },      -- Get `HEAD` in plugin_1
+      { out = 'sha2head' },      -- Get `HEAD` in plugin_2
+      { out = 'origin/main' },   -- Get default branch in plugin_1
+      { out = 'origin/master' }, -- Get default branch in plugin_2
+      {},                        -- Fetch in plugin_1
+      {},                        -- Fetch in plugin_2
+      { out = 'origin/main' },   -- Check if `checkout` is origin branch in plugin_1
+      { out = 'origin/master' }, -- Check if `checkout` is origin branch in plugin_2
+      { out = 'sha1head' },      -- Get commit of `checkout` in plugin_1
+      { out = 'sha2head' },      -- Get commit of `checkout` in plugin_2
+    }
+
+    -- Mock non-trivial fetch duration
+    _G.process_mock_data = { [7] = { duration = 30 }, [8] = { duration = 30 } }
+  ]])
+  add('user/plugin_1')
+  add('user/plugin_2')
+
+  child.lua('MiniDeps.config.job.n_threads = 1')
+  local start_time = child.loop.hrtime()
+  update()
+  local duration = 0.000001 * (child.loop.hrtime() - start_time)
+  eq(40 <= duration, true)
 end
 
 T['update()']['respects `config.job.timeout`'] = function()
-  -- child.lua([[
-  --   _G.stdio_queue = {
-  --     {},                   -- Clone dep_plugin
-  --     {},                   -- Clone new_plugin
-  --     { out = 'sha2head' }, -- Get `HEAD` in dep_plugin
-  --   }
-  --
-  --   -- Mock long execution of some jobs
-  --   _G.process_mock_data = { { duration = 20 }, { duration = 0 }, { duration = 20 } }
-  -- ]])
-  --
-  -- child.lua('MiniDeps.config.job.timeout = 10')
-  -- add({ source = 'user/new_plugin', depends = { 'user/dep_plugin' } })
-  --
-  -- local ref_notify_log = {
-  --   { '(mini.deps) Installing `new_plugin`', 'INFO' },
-  --   { '(mini.deps) (1/2) Installed `new_plugin`', 'INFO' },
-  --   { '(mini.deps) Error in `dep_plugin` during installing plugin\nPROCESS REACHED TIMEOUT.', 'ERROR' },
-  --   { '(mini.deps) Error in `new_plugin` during installing plugin\nPROCESS REACHED TIMEOUT.', 'ERROR' },
-  -- }
-  -- validate_notifications(ref_notify_log)
-  MiniTest.skip()
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source in plugin_1
+      {},                        -- Set `origin` to source in plugin_2
+      { out = 'sha1head' },      -- Get `HEAD` in plugin_1
+      { out = 'origin/main' },   -- Get default branch in plugin_1
+      {},                        -- Fetch in plugin_1
+    }
+
+    -- Mock non-trivial durations
+    _G.process_mock_data = { [2] = { duration = 20 }, [5] = { duration = 20 } }
+  ]])
+  add('user/plugin_1')
+  add('user/plugin_2')
+
+  child.lua('MiniDeps.config.job.timeout = 10')
+  update()
+
+  local ref_notify_log = {
+    { '(mini.deps) Error in `plugin_1` during update\nPROCESS REACHED TIMEOUT.', 'ERROR' },
+    { '(mini.deps) Error in `plugin_2` during update\nPROCESS REACHED TIMEOUT.', 'ERROR' },
+  }
+  validate_notifications(ref_notify_log)
 end
 
 T['update()']['respects `config.silent`'] = function()
-  -- child.lua([[
-  --   _G.stdio_queue = {
-  --     {},                       -- Clone
-  --     { out = 'sha0head' },     -- Get `HEAD`
-  --     { out = 'origin/main' },  -- Get default branch
-  --     { out = 'origin/hello' }, -- Check if `hello` is origin branch
-  --     { out = 'new0hello' },    -- Get commit of `hello`
-  --     {},                       -- Stash changes
-  --     {},                       -- Checkout changes
-  --   }
-  -- ]])
-  -- child.lua('MiniDeps.config.silent = true')
-  -- add({ source = 'user/new_plugin', checkout = 'hello' })
-  --
-  -- -- Should produce no notifications
-  -- validate_notifications({})
-  MiniTest.skip()
+  add('user/plugin_1')
+
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source
+      { out = 'sha1head' },      -- Get `HEAD`
+      { out = 'origin/main' },   -- Get default branch
+      {},                        -- Fetch
+      { out = 'origin/main' },   -- Check if `checkout` is origin branch (it is)
+      { out = 'new1head' },      -- Get commit of `checkout`
+      { out = 'Log 1' },         -- Get log of `checkout` changes
+      {},                        -- Stash
+      {},                        -- Checkout
+    }
+  ]])
+
+  child.lua('MiniDeps.config.silent = true')
+  child.lua('MiniDeps.update(nil, { force = true })')
+
+  -- Should produce no notifications
+  validate_notifications({})
+end
+
+T['update()']['handles process errors'] = function()
+  add('user/plugin_1')
+  add('user/plugin_2')
+
+  child.lua([[
+    _G.stdio_queue = {
+      {},                      -- Set `origin` to source in plugin_1
+      { err = 'Bad `origin`'}, -- Set `origin` to source in plugin_2
+      { out = 'sha2head' },    -- Get `HEAD` in plugin_1
+    }
+
+    -- Mock non-zero exit code in getting plugin_1's head
+    _G.process_mock_data = { [3] = { exit_code = 128 } }
+  ]])
+
+  update()
+
+  -- If any error (from `stderr` or exit code) is encountered, all CLI jobs for
+  -- that particular plugin should not be done
+  local ref_git_spawn_log = {
+    { args = { 'remote', 'set-url', 'origin', 'https://github.com/user/plugin_1' }, cwd = test_opt_dir .. '/plugin_1' },
+    { args = { 'remote', 'set-url', 'origin', 'https://github.com/user/plugin_2' }, cwd = test_opt_dir .. '/plugin_2' },
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = test_opt_dir .. '/plugin_1' },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) Error in `plugin_1` during update\nPROCESS EXITED WITH ERROR CODE 128', 'ERROR' },
+    { '(mini.deps) Error in `plugin_2` during update\nBad `origin`', 'ERROR' },
+  }
+  validate_notifications(ref_notify_log)
 end
 
 T['clean()'] = new_set()
@@ -1374,20 +1700,22 @@ T['now()']['can be called inside other `now()`/`later()` call'] = function()
       log[#log + 1] = 'later'
       MiniDeps.now(function() log[#log + 1] = 'later_now' end)
     end)
+    _G.immediate_log = vim.deepcopy(_G.log)
   ]])
-  eq(child.lua_get('_G.log'), { 'now', 'now_now' })
+  eq(child.lua_get('_G.immediate_log'), { 'now', 'now_now' })
 
   sleep(20)
   eq(child.lua_get('_G.log'), { 'now', 'now_now', 'later', 'later_now' })
 end
 
-T['now()']['clears queue betwenn different event loops'] = function()
+T['now()']['clears queue between different event loops'] = function()
   child.lua([[
     _G.log = {}
     _G.f = function() log[#log + 1] = 'now' end
     MiniDeps.now(_G.f)
+    _G.immediate_log = vim.deepcopy(_G.log)
   ]])
-  eq(child.lua_get('_G.log'), { 'now' })
+  eq(child.lua_get('_G.immediate_log'), { 'now' })
 
   sleep(2)
   child.lua('MiniDeps.now(_G.f)')
@@ -1462,20 +1790,22 @@ T['later()']['can be called inside other `now()`/`later()` call'] = function()
       log[#log + 1] = 'now'
       MiniDeps.later(function() log[#log + 1] = 'now_later' end)
     end)
+    _G.immediate_log = vim.deepcopy(_G.log)
   ]])
-  eq(child.lua_get('_G.log'), { 'now' })
+  eq(child.lua_get('_G.immediate_log'), { 'now' })
 
   sleep(10)
   eq(child.lua_get('_G.log'), { 'now', 'later', 'now_later', 'later_later' })
 end
 
-T['later()']['clears queue betwenn different event loops'] = function()
+T['later()']['clears queue between different event loops'] = function()
   child.lua([[
     _G.log = {}
     _G.f = function() log[#log + 1] = 'later' end
     MiniDeps.later(_G.f)
+    _G.immediate_log = vim.deepcopy(_G.log)
   ]])
-  eq(child.lua_get('_G.log'), {})
+  eq(child.lua_get('_G.immediate_log'), {})
   sleep(2)
   eq(child.lua_get('_G.log'), { 'later' })
 
@@ -1533,13 +1863,19 @@ T['Commands'][':DepsAdd'] = new_set()
 
 T['Commands'][':DepsAdd']['works'] = function() MiniTest.skip() end
 
+T['Commands'][':DepsAdd']['has proper completion'] = function() MiniTest.skip() end
+
 T['Commands'][':DepsUpdate'] = new_set()
 
 T['Commands'][':DepsUpdate']['works'] = function() MiniTest.skip() end
 
+T['Commands'][':DepsUpdate']['has proper completion'] = function() MiniTest.skip() end
+
 T['Commands'][':DepsUpdateOffline'] = new_set()
 
 T['Commands'][':DepsUpdateOffline']['works'] = function() MiniTest.skip() end
+
+T['Commands'][':DepsUpdateOffline']['has proper completion'] = function() MiniTest.skip() end
 
 T['Commands'][':DepsShowLog'] = new_set()
 
@@ -1553,8 +1889,12 @@ T['Commands'][':DepsSnapSave'] = new_set()
 
 T['Commands'][':DepsSnapSave']['works'] = function() MiniTest.skip() end
 
+T['Commands'][':DepsSnapSave']['has proper completion'] = function() MiniTest.skip() end
+
 T['Commands'][':DepsSnapLoad'] = new_set()
 
 T['Commands'][':DepsSnapLoad']['works'] = function() MiniTest.skip() end
+
+T['Commands'][':DepsSnapLoad']['has proper completion'] = function() MiniTest.skip() end
 
 return T
