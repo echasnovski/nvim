@@ -280,6 +280,9 @@ T['add()']['works for present plugins'] = new_set({ parametrize = { { 'plugin_1'
 
     -- No CLI process should be run as plugin is already present
     eq(get_spawn_log(), {})
+
+    -- Should use `:packadd`, i.e. load 'plugin/', 'ftdetect/', etc.
+    eq(child.lua_get('_G.plugin_1_plugin_dir_was_sourced'), true)
   end,
 })
 
@@ -425,6 +428,11 @@ end
 T['add()']['validates `opts`'] = function()
   expect.error(function() add('plugin_1', 'a') end, '`opts`.*table')
   expect.error(function() add('plugin_1', { checkout = 'branch' }) end, '`add%(%)`.*only single spec')
+end
+
+T['add()']['respects `opts.bang`'] = function()
+  add('plugin_1', { bang = true })
+  eq(child.lua_get('_G.plugin_1_plugin_dir_was_sourced'), vim.NIL)
 end
 
 T['add()']['does not modify input'] = function()

@@ -3,31 +3,11 @@
 -- Code:
 --
 -- Docs:
--- - Actually document two-stage execution. First step - for UI necessary to
---   make initial screen draw, second step - everything else.
--- - Add examples of user commands in |MiniDeps-actions|.
--- - Add examples with `depends`.
--- - Clarify distinction in how to use `checkout` and `monitor`. They allow
---   both automated update from some branch and (more importantly) "freezing"
---   plugin at certain commit/tag while allowing to monitor updates waiting for
---   the right time to update `checkout`.
---   In update confirm buffer monitor changes are shown if `checkout` and
---   `monitor` are different in plugin's spec.
+-- - !!!! Add 'scripts/init-deps-example.lua' with full code !!!!
+--
 -- - In update reports note that `>`/`<` means commit will be added/reverted.
--- - To freeze plugin from updates use `checkout = 'HEAD'`.
 --
 -- Tests:
--- - Session:
---     - `get_session()` should return in order user added them. Plus 'start'
---       plugins which are actually in 'runtimepath' at the end.
---
--- - Update:
---     - Should set `origin` remote branch to be `source` even if `offline = true`.
---     - Hooks should be executed in order defined in current session.
---
--- - Snapshot set:
---     - Should **not** update `checkout` data in session.
---       To update that, remove from session and add with proper `checkout`.
 
 --- *mini.deps* Plugin manager
 --- *MiniDeps*
@@ -40,7 +20,7 @@
 ---
 --- - Manage plugins utilizing Git and built-in |packages| with these actions:
 ---     - Add plugin to current session. See |MiniDeps.add()|.
----     - Update with/without confirm, with/without downloading new data.
+---     - Update with/without confirm, with/without parallel download of new data.
 ---       See |MiniDeps.update()|.
 ---     - Delete unused plugins with/without confirm. See |MiniDeps.clean()|.
 ---     - Get / set / save / load snapshot. See `MiniDeps.snap_*()` functions.
@@ -57,22 +37,22 @@
 ---     - Hooks to call before/after plugin is created/changed/deleted.
 ---
 --- - Helpers to implement two-stage startup: |MiniDeps.now()| and |MiniDeps.later()|.
----   See |MiniDeps-examples| for how to implement basic lazy loading with them.
+---   See |MiniDeps-overview| for how to implement basic lazy loading with them.
 ---
 --- What it doesn't do:
 ---
 --- - Manage plugins which are developed without Git. The suggested approach is
 ---   to create a separate package (see |packages|).
+---
 --- - Provide ways to completely remove or update plugin's functionality in
 ---   current session. Although this is partially doable, it can not be done
 ---   in full (yet) because plugins can have untraceable side effects
 ---   (autocmmands, mappings, etc.).
 ---
 --- Sources with more details:
---- - |MiniDeps-overview|. !!!!!!!!! TODO !!!!!!!!!
---- - |MiniDeps-examples|.
---- - |MiniDeps-plugin-specification|.
---- - |MiniDeps-commands|.
+--- - |MiniDeps-overview|
+--- - |MiniDeps-plugin-specification|
+--- - |MiniDeps-commands|
 ---
 --- # Dependencies ~
 ---
@@ -95,11 +75,18 @@
 --- # Comparisons ~
 ---
 --- - 'folke/lazy.nvim':
+---     - More feature-rich and complex.
+---     - Uses table specification with dedicated functions to add plugins,
+---       while this module uses direct function call approach
+---       (calling |MiniDeps.add()| ensures that plugin is usable).
+---     - Uses version tags by default, while this module more designed towards
+---       tracking branches. Using tags is possible too (see |MiniDeps-overview|).
 ---
 --- - 'savq/paq-nvim':
----     - Main inspiration.
----
---- - 'lewis6991/pckr.nvim' :
+---     - Overall less feature-rich than this module (by design).
+---     - Uses array of plugin specifications inside `setup()` call to define which
+---       plugins should be installed. Requires separate `:PaqInstall` call to
+---       actually install them. This module ensures installation on first load.
 ---
 --- # Highlight groups ~
 ---
@@ -120,33 +107,135 @@
 
 --- # Directory structure ~
 ---
---- Uses |packages| as data sctructure.
+--- This module uses built-in |packages| to make plugins usable in current session.
+--- It works with "pack/deps" package inside `config.path.package` directory.
 ---
---- # Adding plugins ~
+--- By default "opt" subdirectory is used to install optional plugins which are
+--- loaded on demand with |MiniDeps.add()|.
+--- Non-optional plugins in "start" subdirectory are supported but only if moved
+--- there manually after initial install.
 ---
---- # Updating plugins ~
+--- # Add plugin ~
 ---
---- # Removing plugins ~
+--- Use |MiniDeps.add()| to add plugin to current session. Supply plugin's URL
+--- source as a string or |MiniDeps-plugin-specification| in general. If plugin is
+--- not present in "deps" package, it will be created/installed before processing
+--- anything else.
 ---
---- # Working with snapshots ~
+--- The recommended way of adding a plugin is by calling |MiniDeps.add()| in the
+--- |init.lua| file (make sure |MiniDeps.setup()| is called prior): >
 ---
+---   local add = MiniDeps.add
+---
+---   add('nvim-tree/nvim-web-devicons')
+---   require('nvim-web-devicons').setup()
+---
+---   add({
+---     source = 'neovim/nvim-lspconfig',
+---     depends = { 'williamboman/mason.nvim' },
+---   })
+---
+---   local is_010 = vim.fn.has('nvim-0.10') == 1
+---   add(
+---     {
+---       source = 'nvim-treesitter/nvim-treesitter',
+---       checkout = is_010 and 'main' or 'master',
+---       hooks = { post_checkout = function() vim.cmd('TSUpdate') end },
+---     }
+---   )
+--- <
+--- NOTE:
+--- - To increase performance, `add()` only ensures presence on disk and
+---   nothing else. In particular, it doesn't ensure `opts.checkout` state.
+---   Update or modify plugin state explicitly (see later sections).
+---
+--- # Lazy load ~
+---
+--- Any lazy-loading is assumed to be done manually by calling |MiniDeps.add()|
+--- at appropriate time. This module provides helpers implementing special
+--- two-stage loading:
+--- - |MiniDeps.now()| to safely execute code immediately. Use it to load plugins
+---   with UI necessary to make initial screen draw.
+--- - |MiniDeps.later()| to safely execute code later. Use it (with caution) for
+---   everything else. >
+---
+---   local now, later = MiniDeps.now, MiniDeps.later
+---
+---   now(function() vim.cmd('colorscheme randomhue') end)
+---   now(function() require('mini.statusline').setup() end)
+---   now(function() require('mini.tabline').setup() end)
+---
+---   later(function()
+---     require('mini.pick').setup()
+---     vim.ui.select = MiniPick.ui_select
+---   end)
+--- <
+--- # Update ~
+---
+--- To update plugins from current session with new data from their sources,
+--- use |:DepsUpdate|. This will download updates (utilizing multiple cores) and
+--- show confirmation buffer. Follow instructions at its top to finish an update.
+---
+--- NOTE: This updates plugins on disk which most likely won't affect current
+--- session. Restart Nvim to have them properly loaded.
+---
+--- # Modify ~
+---
+--- To change plugin's specification (like set different `checkout`, etc.):
+--- - Update corresponding |MiniDeps.add()| call.
+--- - Run |:DepsUpdateOffline|.
+--- - Review changes and confirm.
+--- - Restart Nvim.
+---
+--- NOTE: if used a single source string, make sure to convert `add()` argument to
+--- `{ source = '...', checkout = '<state>'}`
+---
+--- # Snapshots ~
+---
+--- Use `:DepsSnapSave` to save state of all plugins from current session into
+--- a snapshot file (see `config.path.snapshot`).
+---
+--- Use `:DepsSnapLoad` to load snapshot. This will change (without confirmation)
+--- state on disk. Plugins present in both snapshot file and current session
+--- will be affected. Restart Nvim to see the effect.
+---
+--- NOTE: loading snapshot does not change plugin's specification defined inside
+--- |MiniDeps.add()| call. This means that next update might change plugin's state.
+--- To make it permanent, freeze plugin in target state manually.
+---
+--- # Freeze ~
+---
+--- Modify plugin's specification to have `checkout` pointing to a static
+--- target: tag, state (commit hash), or 'HEAD' (to freeze in current state).
+---
+--- Frozen plugins will not receive updates. You can monitor any new changes from
+--- its source by "subscribing" to `monitor` branch which will be shown inside
+--- confirmation buffer after |:DepsUpdate|.
+---
+--- Example: use `checkout = 'v0.10.0'` to freeze plugin at tag "v0.10.0" while
+--- monitoring new versions in the log from `monitor` (usually default) branch.
+---
+--- # Rollback ~
+---
+--- To roll back after an unfortunate update:
+--- - Get identifier of latest working state:
+---     - Use |:DepsShowLog| to see update log, look for plugin's name, and copy
+---       identifier listed as "State before:".
+---     - See previously saved snapshot file for plugin's name and copy
+---       identifier next to it.
+--- - Freeze plugin at that state while monitoring. Revert to previous state
+---   |MiniDeps.add()| call to resume updating.
+---
+--- # Remove ~
+---
+--- - Make sure that target plugin is not registered in current session.
+---   Usually it means removing corresponding |MiniDeps.add()| call.
+--- - Run |:DepsClean|. This will show confirmation buffer with a list of plugins to
+---   be deleted from disk. Follow instructions at its top to finish an update.
+---
+--- Alternatively, manually delete plugin's directory from "deps" package.
 ---
 ---@tag MiniDeps-overview
-
--- TODO; ?Remove this in favor of linking to |packages| in overview?
---- # Directory structure ~
----
---- All module's data is stored in `config.path.package` directory inside
---- "pack/deps" subdirectory. It itself has the following subdirectories:
----
---- - `opt` with optional plugins (sourced after |:packadd|).
----   Creating inside |MiniDeps.add()| uses this directory.
----
---- - `start` with non-optional plugins (sourced at start unconditionally).
----   All its subdirectories are recognized as plugins by this module.
----   To actually use it, move installed plugin from `opt` directory.
----   HOWEVER, there will be less long-term confusion if only `opt` is used.
----@tag MiniDeps-directory-structure
 
 --- # Plugin specification ~
 ---
@@ -209,7 +298,7 @@
 --- `:DepsUpdate name` updates plugin with name `name`. Any number of names is allowed.
 ---
 --- `:DepsUpdate!` and `:DepsUpdate! name` update without confirmation.
---- You can see what was done in the log file (|DepsShowLog|).
+--- You can see what was done in the log file (|:DepsShowLog|).
 ---
 ---                                                             *:DepsUpdateOffline*
 --- `:DepsUpdateOffline` is same as |:DepsUpdate| but doesn't download new updates
@@ -236,65 +325,6 @@
 --- `:DepsSnapLoad path` loads snapshot file at `path`.
 ---@tag MiniDeps-commands
 
---- # Usage examples ~
----
---- Make sure that `git` CLI tool is installed.
----
---- ## In config (functional style) ~
----
---- Recommended approach to organize config: >
----
----   -- Make sure that code from 'mini.deps' can be executed
----   vim.cmd('packadd mini.nvim') -- or 'packadd mini.deps' if using standalone
----
----   local deps = require('mini.deps')
----   local add, now, later = deps.add, deps.now, deps.later
----
----   -- Tweak setup to your liking
----   deps.setup()
----
----   -- Run code safely with `now()`
----   now(function() vim.cmd('colorscheme randomhue') end)
----   now(function() require('mini.statusline').setup() end)
----   now(function() require('mini.tabline').setup() end)
----
----   -- Delay code execution safely with `later()`
----   later(function()
----     require('mini.pick').setup()
----     vim.ui.select = MiniPick.ui_select
----   end)
----
----   -- Use external plugins
----   now(function()
----     -- If doesn't exist, will create from supplied URI
----     add('nvim-tree/nvim-web-devicons')
----     require('nvim-web-devicons').setup()
----   end)
----
----   later(function()
----     local is_010 = vim.fn.has('nvim-0.10') == 1
----     add(
----       {
----         source = 'nvim-treesitter/nvim-treesitter',
----         checkout = is_010 and 'main' or 'master',
----         hooks = { post_checkout = function() vim.cmd('TSUpdate') end },
----       }
----     )
----
----     -- Run any code related to plugin's config
----     local parsers = { 'bash', 'python', 'r' }
----     if is_010 then
----       require('nvim-treesitter').setup({ ensure_install = parsers })
----     else
----       require('nvim-treesitter.configs').setup({ ensure_installed = parsers })
----     end
----   end)
---- <
----@tag MiniDeps-examples
-
----@alias __deps_source string Plugin's source. See |MiniDeps-plugin-specification|.
----@alias __deps_spec_opts table|nil Optional spec fields. See |MiniDeps-plugin-specification|.
-
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
 ---@diagnostic disable:unused-local
@@ -303,8 +333,8 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
-MiniDeps = {}
-H = {}
+local MiniDeps = {}
+local H = {}
 
 --- Module setup
 ---
@@ -367,22 +397,27 @@ MiniDeps.config = {
 
 --- Add plugin to current session
 ---
---- - Process specification by expanding dependencies into single sepc array.
+--- - Process specification by expanding dependencies into single spec array.
 --- - Ensure plugin is present on disk along with its dependencies by installing
 ---   (in parallel) absent ones:
 ---     - Execute `opts.hooks.pre_install`.
 ---     - Use `git clone` to clone plugin from its source URI into "pack/deps/opt".
----     - Checkout according to `opts.checkout`.
+---     - Set state according to `opts.checkout`.
 ---     - Execute `opts.hooks.post_install`.
----   Note: To increase performance, this step only ensures presence on disk
----   and nothing else. In particular, it does not checkout according
----   to `opts.checkout`. Use |MiniDeps.update()| or |:DepsUpdateOffline| explicitly.
 --- - Register spec(s) in current session.
----   Note: Adding plugin several times updates its session specs.
 --- - Make sure plugin(s) can be used in current session (see |:packadd|).
 ---
+--- Notes:
+--- - Presense of plugin is checked by its name which is the same as the name
+---   of its directory inside "deps" package (see |MiniDeps-overview|).
+--- - To increase performance, this function only ensures presence on disk and
+---   nothing else. In particular, it doesn't ensure `opts.checkout` state.
+---   Use |MiniDeps.update()| or |:DepsUpdateOffline| explicitly.
+--- - Adding plugin several times updates its session specs.
+---
 ---@param spec table|string Plugin specification. See |MiniDeps-plugin-specification|.
----@param opts table|nil Options. Not used at the moment.
+---@param opts table|nil Options. Possible fields:
+---   - <bang> `(boolean)` - whether to use `:packadd!` instead of plain |:packadd|.
 MiniDeps.add = function(spec, opts)
   opts = opts or {}
   if type(opts) ~= 'table' then H.error('`opts` should be table.') end
@@ -413,12 +448,13 @@ MiniDeps.add = function(spec, opts)
   end
 
   -- Add plugins to current session
+  local cmd = 'packadd' .. (opts.bang and '!' or '') .. ' '
   for _, p in ipairs(plugs) do
     -- Register in 'mini.deps' session
     table.insert(H.session, p)
 
     -- Add to 'runtimepath'
-    vim.cmd('packadd ' .. p.name)
+    vim.cmd(cmd .. p.name)
   end
 end
 
