@@ -15,6 +15,7 @@ local sleep = function(ms) vim.loop.sleep(ms); poke_eventloop() end
 local test_dir = 'tests/dir-deps'
 local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('(.)/$', '%1')
 local test_opt_dir = test_dir_absolute .. '/pack/deps/opt'
+local test_snap_path = test_dir_absolute .. '/snapshots/snap'
 local test_log_path = test_dir_absolute .. '/mini-deps.log'
 
 -- Common test helpers
@@ -44,6 +45,11 @@ local validate_confirm_buf = function(name)
   eq(#child.api.nvim_tabpage_list_wins(0), 1)
 end
 
+local validate_not_confirm_buf = function()
+  eq(#child.api.nvim_list_tabpages(), 1)
+  eq(child.bo.filetype ~= 'minideps-confirm', true)
+end
+
 -- Common test wrappers
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
@@ -65,8 +71,7 @@ local mock_test_package = function(path)
   child.lua(lua_cmd)
 end
 
-local mock_temp_plugin = function(path)
-  MiniTest.finally(function() child.fn.delete(path, 'rf') end)
+local mock_plugin = function(path)
   local lua_dir = path .. '/lua'
   child.fn.mkdir(lua_dir, 'p')
   child.fn.writefile({ 'return {}' }, lua_dir .. '/module.lua')
@@ -76,6 +81,12 @@ local mock_timestamp = function(timestamp)
   timestamp = timestamp or '2024-01-02 03:04:05'
   local lua_cmd = string.format('vim.fn.strftime = function() return %s end', vim.inspect(timestamp))
   child.lua(lua_cmd)
+end
+
+local mock_hide_path = function(path)
+  path = path or test_dir_absolute
+  child.cmd(':%s/' .. child.fn.escape(path, ' /') .. '/MOCKDIR/')
+  child.bo.modified = false
 end
 
 local mock_spawn = function()
@@ -149,9 +160,17 @@ local T = new_set({
       load_module()
 
       -- Make more comfortable screenshots
-      child.set_size(7, 45)
       child.o.laststatus = 0
       child.o.ruler = false
+
+      -- Mock `vim.notify()`
+      mock_notify()
+
+      -- Mock `vim.loop.spawn()`
+      mock_spawn()
+
+      -- Mock getting reproducible timestamp
+      mock_timestamp()
     end,
     post_once = child.stop,
   },
@@ -250,7 +269,6 @@ T['add()'] = new_set({ hooks = { pre_case = mock_test_package } })
 
 T['add()']['works for present plugins'] = new_set({ parametrize = { { 'plugin_1' }, { { name = 'plugin_1' } } } }, {
   test = function(spec)
-    mock_spawn()
     local ref_path = test_opt_dir .. '/plugin_1'
     expect.no_match(child.o.runtimepath, vim.pesc(ref_path))
     eq(get_session(), {})
@@ -309,11 +327,9 @@ end
 
 T['add()']['respects plugins from "start" directory'] = function()
   local start_dir = test_dir_absolute .. '/pack/deps/start'
-  mock_temp_plugin(start_dir .. '/plug')
+  mock_plugin(start_dir .. '/plug')
   MiniTest.finally(function() child.fn.delete(start_dir, 'rf') end)
   mock_test_package(test_dir_absolute)
-
-  mock_spawn()
 
   add('user/plug')
   eq(get_session(), {
@@ -428,9 +444,6 @@ end
 T['add()']['Install'] = new_set({
   hooks = {
     pre_case = function()
-      mock_timestamp()
-      mock_notify()
-      mock_spawn()
       mock_test_package()
 
       -- Mock `vim.fn.isdirectory` to always say that there is a directory to
@@ -530,7 +543,7 @@ T['add()']['Install']['checks out non-default target'] = function()
     { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
     { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/hello' },
     { 'rev-list', '-1', 'origin/hello' },
-    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout.' },
+    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout' },
     { 'checkout', '--quiet', 'new0hello' },
   }
   validate_git_spawn_log(ref_git_spawn_log)
@@ -574,7 +587,7 @@ T['add()']['Install']['can checkout to a not branch'] = function()
     { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/stable_tag' },
     -- Get commit of specifically 'stable_tag' and not 'origin/stable_tag'
     { 'rev-list', '-1', 'stable_tag' },
-    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout.' },
+    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout' },
     { 'checkout', '--quiet', 'new0hello' },
   }
   validate_git_spawn_log(ref_git_spawn_log)
@@ -651,7 +664,7 @@ T['add()']['Install']['installs dependencies in parallel'] = function()
     { args = { 'rev-list', '-1', 'origin/master' }, cwd = cwd_dep_plugin_1 },
     { args = { 'rev-list', '-1', 'origin/main' }, cwd = cwd_new_plugin },
 
-    { args = { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout.' }, cwd = cwd_dep_plugin_1 },
+    { args = { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout' }, cwd = cwd_dep_plugin_1 },
 
     { args = { 'checkout', '--quiet', 'new1head' }, cwd = cwd_dep_plugin_1 },
   }
@@ -674,6 +687,7 @@ T['add()']['Install']['can handle both present and not present plugins'] = funct
   local validate = function(spec, clone_name)
     -- Make clean mock
     mock_spawn()
+
     child.lua([[
       _G.stdio_queue = {
         {},                      -- Clone
@@ -993,12 +1007,7 @@ end
 
 T['update()'] = new_set({
   hooks = {
-    pre_case = function()
-      mock_timestamp()
-      mock_notify()
-      mock_spawn()
-      load_module({ path = { package = test_dir_absolute, log = test_log_path } })
-    end,
+    pre_case = function() load_module({ path = { package = test_dir_absolute, log = test_log_path } }) end,
     post_case = function()
       child.fn.delete(test_log_path)
       for i = 1, 3 do
@@ -1093,6 +1102,7 @@ T['update()']['works'] = function()
 
   -- Should show confirmation buffer. Plugin entries should be in order of
   -- "error", "has changes", "no changes".
+  mock_hide_path(test_dir_absolute)
   child.expect_screenshot()
   validate_confirm_buf('mini-deps://confirm-update')
 end
@@ -1148,15 +1158,13 @@ T['update()']['Confirm buffer']['can apply changes'] = function()
 
   -- Should update and close confirmation buffer
   eq(child.lua_get('_G.update_args'), { { 'plugin_2' }, { force = true, offline = true } })
-  eq(#child.api.nvim_list_tabpages(), 1)
-  eq(child.bo.filetype ~= 'minideps-confirm', true)
+  validate_not_confirm_buf()
 end
 
 T['update()']['Confirm buffer']['can cancel'] = function()
-  child.cmd('quit')
+  child.cmd('close')
   eq(child.lua_get('_G.update_args'), vim.NIL)
-  eq(#child.api.nvim_list_tabpages(), 1)
-  eq(child.bo.filetype ~= 'minideps-confirm', true)
+  validate_not_confirm_buf()
 end
 
 T['update()']['Confirm buffer']['can open several'] = function()
@@ -1164,7 +1172,7 @@ T['update()']['Confirm buffer']['can open several'] = function()
   validate_confirm_buf('mini-deps://confirm-update_2')
 end
 
-T['update()']['can work with non-default branch'] = function()
+T['update()']['can work with non-default branches'] = function()
   child.set_size(30, 80)
 
   add({ source = 'user/plugin_1', checkout = 'hello', monitor = 'world' })
@@ -1205,6 +1213,32 @@ T['update()']['can work with non-default branch'] = function()
   }
   validate_git_spawn_log(ref_git_spawn_log)
 
+  -- - Modify absolute paths to be more reproducible
+  mock_hide_path(test_dir_absolute)
+  child.expect_screenshot()
+end
+
+T['update()']['shows empty monitor log'] = function()
+  child.set_size(25, 80)
+
+  add({ source = 'user/plugin_1', checkout = 'hello', monitor = 'world' })
+  child.lua([[
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source
+      { out = 'sha1head' },      -- Get `HEAD`
+      -- NOTE: Don't get default branch as both every target is explicit
+      { out = 'origin/world' },  -- Check if `monitor` is origin branch
+      { out = 'sha2head' },      -- Get commit of `monitor`
+      {},                        -- Fetch
+      { out = 'origin/hello' },  -- Check if `checkout` is origin branch (it is)
+      { out = 'sha1head' },      -- Get commit of `checkout`
+      { out = 'origin/world' },  -- Check if `monitor` is origin branch (it is)
+      { out = 'sha2head' },      -- Get commit of `monitor`
+    }
+  ]])
+  update()
+
+  mock_hide_path(test_dir_absolute)
   child.expect_screenshot()
 end
 
@@ -1324,7 +1358,7 @@ T['update()']['respects `names` argument'] = function()
   -- Should allow empty array
   clear_notify_log()
   update({})
-  validate_notifications({ { '(mini.deps) Nothing to update.', 'INFO' } })
+  validate_notifications({ { '(mini.deps) Nothing to update', 'INFO' } })
 end
 
 T['update()']['valdiates arguments'] = function()
@@ -1363,7 +1397,7 @@ T['update()']['respects `opts.force`'] = function()
     { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },
     { 'rev-list', '-1', 'origin/main' },
     log_args('sha1head...new1head'),
-    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout.' },
+    { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout' },
     { 'checkout', '--quiet', 'new1head' },
   }
   validate_git_spawn_log(ref_git_spawn_log)
@@ -1377,13 +1411,18 @@ T['update()']['respects `opts.force`'] = function()
   validate_notifications(ref_notify_log)
 
   -- Should do actual checkout right away without confirmation
-  eq(#child.api.nvim_list_tabpages(), 1)
-  eq(child.bo.filetype ~= 'minideps-confirm', true)
+  validate_not_confirm_buf()
 
   -- Should write to log file
-  local log_lines = {
+  local log_path = child.lua_get('MiniDeps.config.path.log')
+  local log_lines = child.fn.readfile(log_path)
+  -- - Make test more reproducible
+  log_lines = vim.tbl_map(function(l) return l:gsub(vim.pesc(test_dir_absolute), 'MOCKDIR') end, log_lines)
+
+  local ref_log_lines = {
     '========== Update 2024-01-02 03:04:05 ==========',
     '+++ plugin_1 +++',
+    'Path:         MOCKDIR/pack/deps/opt/plugin_1',
     'Source:       https://github.com/user/plugin_1',
     'State before: sha1head',
     'State after:  new1head (main)',
@@ -1393,8 +1432,7 @@ T['update()']['respects `opts.force`'] = function()
     '  Added commit in checkout.',
     '',
   }
-  local log_path = child.lua_get('MiniDeps.config.path.log')
-  eq(child.fn.readfile(log_path), log_lines)
+  eq(log_lines, ref_log_lines)
 end
 
 T['update()']['respects `opts.offline`'] = function()
@@ -1546,35 +1584,325 @@ T['update()']['handles process errors'] = function()
   validate_notifications(ref_notify_log)
 end
 
-T['clean()'] = new_set()
+T['clean()'] = new_set({
+  hooks = {
+    pre_case = function()
+      local start_dir = test_dir_absolute .. '/pack/deps/start'
+      mock_plugin(start_dir .. '/start_plugin')
+      local not_in_session_1 = test_opt_dir .. '/plugin_not_in_session_1'
+      mock_plugin(not_in_session_1)
+      local not_in_session_2 = test_opt_dir .. '/plugin_not_in_session_2'
+      mock_plugin(not_in_session_2)
+      mock_test_package(test_dir_absolute)
+
+      local lua_cmd = string.format(
+        '_G.info = { start_dir = %s, not_in_session_1 = %s, not_in_session_2 = %s }',
+        vim.inspect(start_dir),
+        vim.inspect(not_in_session_1),
+        vim.inspect(not_in_session_2)
+      )
+      child.lua(lua_cmd)
+
+      add('plugin_1')
+      add('plugin_2')
+      add('plugin_3')
+      eq(#get_session(), 4)
+    end,
+    post_case = function()
+      child.lua([[
+        vim.fn.delete(_G.info.start_dir, 'rf')
+        vim.fn.delete(_G.info.not_in_session_1, 'rf')
+        vim.fn.delete(_G.info.not_in_session_2, 'rf')
+      ]])
+    end,
+  },
+})
 
 local clean = forward_lua('MiniDeps.clean')
 
-T['clean()']['works'] = function() MiniTest.skip() end
+T['clean()']['works'] = function()
+  child.set_size(15, 80)
 
-T['snap_get()'] = new_set()
+  clean()
+
+  -- By default should show confirmation buffer
+  child.set_cursor(1, 0)
+  child.wo.wrap = false
+  child.expect_screenshot()
+  validate_confirm_buf('mini-deps://confirm-clean')
+
+  -- Should reveal concealed full path
+  child.set_cursor(9, 0)
+  -- - Mock absolute path only on current line as path in parenthesis is used
+  --   to determine which path to delete from disk.
+  child.cmd(':s/' .. child.fn.escape(test_dir_absolute, ' /') .. '/MOCKDIR/')
+  child.bo.modified = false
+  child.expect_screenshot()
+
+  -- Should delete from disk on buffer write but only listed plugin names
+  child.cmd('%g/not_in_session_1/normal! dd')
+  child.cmd('write')
+
+  eq(child.lua_get('vim.fn.isdirectory(_G.info.not_in_session_1)'), 1)
+  eq(child.lua_get('vim.fn.isdirectory(_G.info.not_in_session_2)'), 0)
+
+  -- Should produce notifications
+  validate_notifications({ { '(mini.deps) (1/1) Deleted `plugin_not_in_session_2` from disk', 'INFO' } })
+
+  -- Should close confirm buffer
+  validate_not_confirm_buf()
+end
+
+T['clean()']['can cancel confirm'] = function()
+  clean()
+  validate_confirm_buf('mini-deps://confirm-clean')
+  child.cmd('quit')
+  validate_not_confirm_buf()
+
+  -- Should not delete from disk
+  eq(child.lua_get('vim.fn.isdirectory(_G.info.not_in_session_1)'), 1)
+  eq(child.lua_get('vim.fn.isdirectory(_G.info.not_in_session_2)'), 1)
+  validate_notifications({})
+end
+
+T['clean()']['respects `opts.force`'] = function()
+  clean({ force = true })
+
+  -- Should delete from disk without confirmation
+  validate_not_confirm_buf()
+  eq(child.lua_get('vim.fn.isdirectory(_G.info.not_in_session_1)'), 0)
+  eq(child.lua_get('vim.fn.isdirectory(_G.info.not_in_session_2)'), 0)
+
+  validate_notifications({
+    { '(mini.deps) (1/2) Deleted `plugin_not_in_session_1` from disk', 'INFO' },
+    { '(mini.deps) (2/2) Deleted `plugin_not_in_session_2` from disk', 'INFO' },
+  })
+end
+
+T['clean()']['respects `config.silent`'] = function()
+  child.lua('MiniDeps.config.silent = true')
+  clean({ force = true })
+  validate_notifications({})
+end
+
+T['clean()']['shows notification when nothing to clean'] = function()
+  add('plugin_not_in_session_1')
+  add('plugin_not_in_session_2')
+  clean({ force = true })
+  validate_notifications({ { '(mini.deps) Nothing to clean', 'INFO' } })
+end
+
+T['snap_get()'] = new_set({
+  hooks = {
+    pre_case = function()
+      mock_plugin(test_dir_absolute .. '/pack/deps/start/start_plugin')
+      load_module({ path = { package = test_dir_absolute } })
+      add('plugin_1')
+    end,
+    post_case = function() child.fn.delete(test_dir_absolute .. '/pack/deps/start', 'rf') end,
+  },
+})
 
 local snap_get = forward_lua('MiniDeps.snap_get')
 
-T['snap_get()']['works'] = function() MiniTest.skip() end
+T['snap_get()']['works'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      { out = 'sha1head' }, -- Get `HEAD` in plugin_1
+      { out = 'sha2head' }, -- Get `HEAD` in start_plugin
+    }
+  ]])
 
-T['snap_set()'] = new_set()
+  local snap = snap_get()
+
+  -- Should return snapshot
+  eq(snap, { plugin_1 = 'sha1head', start_plugin = 'sha2head' })
+
+  -- Should not produce notifications
+  validate_notifications({})
+end
+
+T['snap_get()']['handles process errors'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      { err = 'Some error' }, -- Get `HEAD` in plugin_1
+      { out = 'sha2head' },   -- Get `HEAD` in start_plugin
+    }
+  ]])
+
+  -- Should still return snapshot but without data for errored plugins
+  local snap = snap_get()
+  eq(snap, { start_plugin = 'sha2head' })
+
+  -- Should show error notifications
+  validate_notifications({ { '(mini.deps) Error in `plugin_1` during computing snapshot\nSome error', 'ERROR' } })
+end
+
+T['snap_set()'] = new_set({
+  hooks = {
+    pre_case = function()
+      mock_plugin(test_dir_absolute .. '/pack/deps/start/start_plugin')
+      load_module({ path = { package = test_dir_absolute } })
+      add({ name = 'plugin_1', checkout = 'hello' })
+      add({ name = 'plugin_2' })
+    end,
+    post_case = function()
+      child.fn.delete(test_dir_absolute .. '/pack/deps/start', 'rf')
+      child.fn.delete(test_opt_dir .. '/plugin_1/doc/tags', 'rf')
+      child.fn.delete(test_opt_dir .. '/plugin_2/doc/tags', 'rf')
+    end,
+  },
+})
 
 local snap_set = forward_lua('MiniDeps.snap_set')
 
-T['snap_set()']['works'] = function() MiniTest.skip() end
+T['snap_set()']['works'] = function()
+  local init_session = get_session()
+  child.lua([[
+    _G.stdio_queue = {
+      { out = 'sha1head' },           -- Get `HEAD` in plugin_1
+      -- Should stop other steps for plugin after first error
+      { err = 'Error getting HEAD' }, -- Get `HEAD` in plugin_2
+      { out = 'shaShead' },           -- Get `HEAD` in start_plugin
+      { out = 'origin/main' },        -- Get default branch in plugin_1
+      { out = 'origin/master' },      -- Get default branch in start_plugin
+      { out = '' },                   -- Check if snap state is origin branch in plugin_1 (it is not)
+      { out = '' },                   -- Check if snap state is origin branch in start_plugin (it is not)
+      { out = 'new1head' },           -- Get commit of `checkout` in plugin_1
+      { out = 'shaShead' },           -- Get commit of `checkout` in start_plugin
+      {},                             -- Stash in start_plugin
+      {},                             -- Checkout in start_plugin
+    }
+  ]])
 
-T['snap_load()'] = new_set()
+  -- Should apply only to plugins inside current session
+  snap_set({ plugin_1 = 'new1head', plugin_2 = 'sha2head', start_plugin = 'shaShead' })
+
+  local cwd_plugin_1, cwd_plugin_2, cwd_start_plugin =
+    test_opt_dir .. '/plugin_1', test_opt_dir .. '/plugin_2', test_dir_absolute .. '/pack/deps/start/start_plugin'
+  local ref_git_spawn_log = {
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = cwd_plugin_1 },
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = cwd_plugin_2 },
+    { args = { 'rev-list', '-1', 'HEAD' }, cwd = cwd_start_plugin },
+
+    { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_plugin_1 },
+    { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_start_plugin },
+
+    { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/new1head' }, cwd = cwd_plugin_1 },
+    { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/shaShead' }, cwd = cwd_start_plugin },
+
+    { args = { 'rev-list', '-1', 'new1head' }, cwd = cwd_plugin_1 },
+    { args = { 'rev-list', '-1', 'shaShead' }, cwd = cwd_start_plugin },
+
+    {
+      args = { 'stash', '--quiet', '--message', '(mini.deps) 2024-01-02 03:04:05 Stash before checkout' },
+      cwd = cwd_plugin_1,
+    },
+    { args = { 'checkout', '--quiet', 'new1head' }, cwd = cwd_plugin_1 },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should produce notifications
+  local ref_notify_log = {
+    { '(mini.deps) (1/1) Checked out `new1head` in `plugin_1`', 'INFO' },
+    { '(mini.deps) Error in `plugin_2` during applying snapshot\nError getting HEAD', 'ERROR' },
+  }
+  validate_notifications(ref_notify_log)
+
+  -- Should generate help tags in actually checked out plugins
+  local tags_lines = child.fn.readfile(test_opt_dir .. '/plugin_1/doc/tags')
+  eq(tags_lines, { 'depstest_plugin_1_tag\thelp_1.txt\t/*depstest_plugin_1_tag*' })
+  eq(child.fn.filereadable(test_opt_dir .. '/plugin_2/doc/tags'), 0)
+
+  -- - Help tags should be actually reachable
+  local help_tags = child.fn.getcompletion('depstest_', 'help')
+  table.sort(help_tags)
+  eq(help_tags, { 'depstest_plugin_1_tag' })
+
+  -- Should not affect current session data
+  eq(get_session(), init_session)
+end
+
+T['snap_set()']['validates arguments'] = function()
+  expect.error(function() snap_set(1) end, 'Snapshot.*table')
+end
+
+T['snap_load()'] = new_set({
+  hooks = {
+    pre_case = function() child.lua('MiniDeps.snap_set = function(...) _G.snap_set_args = { ... } end') end,
+  },
+})
 
 local snap_load = forward_lua('MiniDeps.snap_load')
 
-T['snap_load()']['works'] = function() MiniTest.skip() end
+T['snap_load()']['works'] = function()
+  load_module({ path = { snapshot = test_snap_path } })
+  snap_load()
+  eq(child.lua_get('_G.snap_set_args'), { { plugin_1 = 'sha1head', plugin_2 = 'sha2head' } })
+end
 
-T['snap_save()'] = new_set()
+T['snap_load()']['respects `path`'] = function()
+  local validate = function(path)
+    snap_load(path)
+    eq(child.lua_get('_G.snap_set_args'), { { plugin_1 = 'sha1head', plugin_2 = 'sha2head' } })
+    child.lua('_G.snap_set_args = nil')
+  end
+
+  -- Should work both with absolute and relative paths
+  validate(test_dir_absolute .. '/snapshots/snap')
+  validate(test_dir .. '/snapshots/snap')
+end
+
+T['snap_load()']['validates arguments'] = function()
+  expect.error(function() snap_load(1) end, '`path`.*readable file')
+
+  -- Should validate if file contains proper-ish snapshot
+  local validate = function(path)
+    expect.error(function() snap_load(path) end, '`path`.*not a path to proper snapshot')
+  end
+  validate(test_dir_absolute .. '/snapshots/not-proper-1')
+  validate(test_dir_absolute .. '/snapshots/not-proper-2')
+end
+
+T['snap_save()'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- Use path in non-existing directory to test parent directory creation
+      local snap_path = test_dir_absolute .. '/test-snap-save/snap'
+      load_module({ path = { snapshot = snap_path } })
+      child.lua([[
+        MiniDeps.snap_get = function() return { plugin_1 = 'sha1head', ['bad name'] = 'shaBhead' } end
+      ]])
+    end,
+    post_case = function() child.fn.delete(test_dir_absolute .. '/test-snap-save', 'rf') end,
+  },
+})
 
 local snap_save = forward_lua('MiniDeps.snap_save')
 
-T['snap_save()']['works'] = function() MiniTest.skip() end
+T['snap_save()']['works'] = function()
+  local validate = function(path)
+    eq(child.fn.readfile(path), { 'return {', '  ["bad name"] = "shaBhead",', '  plugin_1 = "sha1head"', '}' })
+  end
+
+  snap_save()
+  local def_path = child.lua_get('MiniDeps.config.path.snapshot')
+  validate(def_path)
+
+  -- Should produce notifications
+  validate_notifications({
+    { '(mini.deps) Created snapshot at ' .. vim.inspect(def_path), 'INFO' },
+  })
+
+  -- Should respect `path`
+  local path = test_dir_absolute .. '/test-snap-save/other-snap'
+  snap_save(path)
+  validate(path)
+end
+
+T['snap_save()']['validates arguments'] = function()
+  expect.error(function() snap_save(1) end, '`path`.*string')
+end
 
 T['get_session()'] = new_set({ hooks = { pre_case = mock_test_package } })
 
@@ -1626,10 +1954,10 @@ end
 
 T['get_session()']["respects plugins from 'start' directory which are in 'runtimepath'"] = function()
   local start_dir = test_dir_absolute .. '/pack/deps/start'
-  mock_temp_plugin(start_dir .. '/start')
-  mock_temp_plugin(start_dir .. '/start_manual')
-  mock_temp_plugin(start_dir .. '/start_manual_dependency')
-  mock_temp_plugin(start_dir .. '/start_not_in_rtp')
+  mock_plugin(start_dir .. '/start')
+  mock_plugin(start_dir .. '/start_manual')
+  mock_plugin(start_dir .. '/start_manual_dependency')
+  mock_plugin(start_dir .. '/start_not_in_rtp')
   MiniTest.finally(function() child.fn.delete(start_dir, 'rf') end)
   mock_test_package(test_dir_absolute)
 
@@ -1724,7 +2052,6 @@ T['now()']['clears queue between different event loops'] = function()
 end
 
 T['now()']['notifies about errors after everything is executed'] = function()
-  mock_notify()
   child.lua([[
     _G.log = {}
     MiniDeps.now(function() error('Inside now()') end)
@@ -1745,7 +2072,6 @@ T['now()']['notifies about errors after everything is executed'] = function()
 end
 
 T['now()']['shows all errors at once'] = function()
-  mock_notify()
   child.lua([[
     MiniDeps.now(function() error('Inside now() #1') end)
     MiniDeps.now(function() error('Inside now() #2') end)
@@ -1757,7 +2083,6 @@ end
 T['now()']['does not respect `config.silent`'] = function()
   -- Should still show errors even if `config.silent = true`
   child.lua('MiniDeps.config.silent = true')
-  mock_notify()
   child.lua('MiniDeps.now(function() error("Inside now()") end)')
   sleep(2)
   validate_notifications({ { 'Inside now%(%)', 'ERROR' } }, true)
@@ -1816,7 +2141,6 @@ T['later()']['clears queue between different event loops'] = function()
 end
 
 T['later()']['notifies about errors after everything is executed'] = function()
-  mock_notify()
   child.lua([[
     _G.log = {}
     MiniDeps.later(function() error('Inside later()') end)
@@ -1838,7 +2162,6 @@ T['later()']['notifies about errors after everything is executed'] = function()
 end
 
 T['later()']['shows all errors at once'] = function()
-  mock_notify()
   child.lua([[
     MiniDeps.later(function() error('Inside later() #1') end)
     MiniDeps.later(function() error('Inside later() #2') end)
@@ -1850,51 +2173,115 @@ end
 T['later()']['does not respect `config.silent`'] = function()
   -- Should still show errors even if `config.silent = true`
   child.lua('MiniDeps.config.silent = true')
-  mock_notify()
   child.lua('MiniDeps.later(function() error("Inside later()") end)')
   sleep(2)
   validate_notifications({ { 'Inside later%(%)', 'ERROR' } }, true)
 end
 
 -- Integration tests ----------------------------------------------------------
-T['Commands'] = new_set()
+T['Commands'] =
+  new_set({ hooks = {
+    pre_case = function()
+      mock_test_package()
+      child.set_size(10, 30)
+    end,
+  } })
 
-T['Commands'][':DepsAdd'] = new_set()
+local validate_cmd = function(cmd, ref_args)
+  child.lua('_G.args = nil')
+  child.cmd(cmd)
+  -- Use `vim.inspect()` because some arguments have troubles going through RPC
+  -- (like {nil, { ... }})
+  eq(child.lua_get('vim.inspect(_G.args)'), vim.inspect(ref_args))
+end
 
-T['Commands'][':DepsAdd']['works'] = function() MiniTest.skip() end
+T['Commands'][':DepsAdd works'] = function()
+  child.lua('MiniDeps.add = function(...) _G.args = { ... } end')
 
-T['Commands'][':DepsAdd']['has proper completion'] = function() MiniTest.skip() end
+  validate_cmd('DepsAdd user/new_plugin nothing_more should_be_added', { 'user/new_plugin' })
 
-T['Commands'][':DepsUpdate'] = new_set()
+  -- Should have proper completion
+  child.type_keys(':DepsAdd ', '<Tab>')
+  child.expect_screenshot()
+end
 
-T['Commands'][':DepsUpdate']['works'] = function() MiniTest.skip() end
+T['Commands'][':DepsUpdate works'] = function()
+  child.lua('MiniDeps.update = function(...) _G.args = { ... } end')
+  add('plugin_1')
+  add('plugin_2')
 
-T['Commands'][':DepsUpdate']['has proper completion'] = function() MiniTest.skip() end
+  validate_cmd('DepsUpdate', { nil, { force = false, offline = false } })
+  validate_cmd(
+    'DepsUpdate plugin_1 plugin_2 plugin_3',
+    { { 'plugin_1', 'plugin_2', 'plugin_3' }, { force = false, offline = false } }
+  )
 
-T['Commands'][':DepsUpdateOffline'] = new_set()
+  -- Should accept bang
+  validate_cmd('DepsUpdate!', { nil, { force = true, offline = false } })
+  validate_cmd(
+    'DepsUpdate! plugin_1 plugin_2 plugin_3',
+    { { 'plugin_1', 'plugin_2', 'plugin_3' }, { force = true, offline = false } }
+  )
 
-T['Commands'][':DepsUpdateOffline']['works'] = function() MiniTest.skip() end
+  -- Should have proper completion
+  child.type_keys(':DepsUpdate ', '<Tab>')
+  child.expect_screenshot()
+end
 
-T['Commands'][':DepsUpdateOffline']['has proper completion'] = function() MiniTest.skip() end
+T['Commands'][':DepsUpdateOffline works'] = function()
+  child.lua('MiniDeps.update = function(...) _G.args = { ... } end')
+  add('plugin_1')
+  add('plugin_2')
 
-T['Commands'][':DepsShowLog'] = new_set()
+  validate_cmd('DepsUpdateOffline', { nil, { force = false, offline = true } })
+  validate_cmd(
+    'DepsUpdateOffline plugin_1 plugin_2 plugin_3',
+    { { 'plugin_1', 'plugin_2', 'plugin_3' }, { force = false, offline = true } }
+  )
 
-T['Commands'][':DepsShowLog']['works'] = function() MiniTest.skip() end
+  -- Should accept bang
+  validate_cmd('DepsUpdateOffline!', { nil, { force = true, offline = true } })
+  validate_cmd(
+    'DepsUpdateOffline! plugin_1 plugin_2 plugin_3',
+    { { 'plugin_1', 'plugin_2', 'plugin_3' }, { force = true, offline = true } }
+  )
 
-T['Commands'][':DepsClean'] = new_set()
+  -- Should have proper completion
+  child.type_keys(':DepsUpdateOffline ', '<Tab>')
+  child.expect_screenshot()
+end
 
-T['Commands'][':DepsClean']['works'] = function() MiniTest.skip() end
+T['Commands'][':DepsShowLog works'] = function()
+  child.set_size(12, 60)
+  load_module({ path = { package = test_opt_dir, log = test_dir_absolute .. '/test-log' } })
+  child.cmd('DepsShowLog')
+  child.expect_screenshot()
+end
 
-T['Commands'][':DepsSnapSave'] = new_set()
+T['Commands'][':DepsClean works'] = function()
+  child.lua('MiniDeps.clean = function(...) _G.args = { ... } end')
+  validate_cmd('DepsClean', { { force = false } })
+  validate_cmd('DepsClean!', { { force = true } })
+end
 
-T['Commands'][':DepsSnapSave']['works'] = function() MiniTest.skip() end
+T['Commands'][':DepsSnapSave works'] = function()
+  child.lua('MiniDeps.snap_save = function(...) _G.args = { ... } end')
 
-T['Commands'][':DepsSnapSave']['has proper completion'] = function() MiniTest.skip() end
+  validate_cmd('DepsSnapSave', {})
+  validate_cmd('DepsSnapSave path/to/file should_not be_used', { 'path/to/file' })
 
-T['Commands'][':DepsSnapLoad'] = new_set()
+  -- Should have proper completion
+  eq(child.api.nvim_get_commands({})['DepsSnapSave'].complete, 'file')
+end
 
-T['Commands'][':DepsSnapLoad']['works'] = function() MiniTest.skip() end
+T['Commands'][':DepsSnapLoad works'] = function()
+  child.lua('MiniDeps.snap_load = function(...) _G.args = { ... } end')
 
-T['Commands'][':DepsSnapLoad']['has proper completion'] = function() MiniTest.skip() end
+  validate_cmd('DepsSnapLoad', {})
+  validate_cmd('DepsSnapLoad path/to/file should_not be_used', { 'path/to/file' })
+
+  -- Should have proper completion
+  eq(child.api.nvim_get_commands({})['DepsSnapLoad'].complete, 'file')
+end
 
 return T

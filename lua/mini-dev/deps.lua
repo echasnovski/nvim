@@ -197,7 +197,7 @@
 ---                                                                       *:DepsAdd*
 --- `:DepsAdd user/repo` makes plugin from https://github.com/user/repo available
 --- in the current session (also creates it, if it is not present).
---- Accepts only single string |MiniDeps-plugin-specification|.
+--- Accepts only single string compatible with |MiniDeps-plugin-specification|.
 --- To add plugin in every session, put |MiniDeps.add()| in |init.lua|.
 ---
 ---                                                                    *:DepsUpdate*
@@ -445,7 +445,7 @@ MiniDeps.update = function(names, opts)
   -- Compute array of plugin data to be reused in update. Each contains a CLI
   -- job "assigned" to plugin's path which stops execution after first error.
   local plugs = H.plugs_from_names(names)
-  if #plugs == 0 then return H.notify('Nothing to update.') end
+  if #plugs == 0 then return H.notify('Nothing to update') end
 
   -- Prepare repositories and specifications
   H.plugs_ensure_origin_source(plugs)
@@ -500,7 +500,7 @@ MiniDeps.clean = function(opts)
   local absent_paths = vim.tbl_filter(is_absent_plugin, H.get_all_plugin_paths())
 
   -- Clean
-  if #absent_paths == 0 then return H.notify('Nothing to clean.') end
+  if #absent_paths == 0 then return H.notify('Nothing to clean') end
   local clean_fun = opts.force and H.clean_delete or H.clean_confirm
   clean_fun(absent_paths)
 end
@@ -566,7 +566,7 @@ MiniDeps.snap_save = function(path)
   vim.fn.mkdir(vim.fn.fnamemodify(path, ':h'), 'p')
   vim.fn.writefile(lines, path)
 
-  H.notify('Created snapshot at ' .. vim.inspect(path) .. '.')
+  H.notify('Created snapshot at ' .. vim.inspect(path))
 end
 
 --- Load snapshot file
@@ -580,7 +580,7 @@ MiniDeps.snap_load = function(path)
   if vim.fn.filereadable(path) ~= 1 then H.error('`path` should be path to a readable file.') end
 
   local ok, snap = pcall(dofile, H.full_path(path))
-  if not (ok and type(snap) == 'table') then H.error(vim.insepct(path) .. ' is not a path to proper snapshot.') end
+  if not (ok and type(snap) == 'table') then H.error('`path` is not a path to proper snapshot.') end
 
   MiniDeps.snap_set(snap)
 end
@@ -748,7 +748,7 @@ H.create_user_commands = function()
   end
 
   local add = function(input) MiniDeps.add(input.fargs[1]) end
-  new_cmd('DepsAdd', add, { nargs = '?', complete = complete_disk_names, desc = 'Add plugin to session' })
+  new_cmd('DepsAdd', add, { nargs = '+', complete = complete_disk_names, desc = 'Add plugin to session' })
 
   local make_update_cmd = function(name, offline, desc)
     local callback = function(input)
@@ -773,10 +773,10 @@ H.create_user_commands = function()
   new_cmd('DepsClean', clean, { bang = true, desc = 'Delete unused plugins' })
 
   local snap_save = function(input) MiniDeps.snap_save(input.fargs[1]) end
-  new_cmd('DepsSnapSave', snap_save, { nargs = '?', complete = 'file', desc = 'Save plugin snapshot' })
+  new_cmd('DepsSnapSave', snap_save, { nargs = '*', complete = 'file', desc = 'Save plugin snapshot' })
 
   local snap_load = function(input) MiniDeps.snap_load(input.fargs[1]) end
-  new_cmd('DepsSnapLoad', snap_load, { nargs = '?', complete = 'file', desc = 'Load plugin snapshot' })
+  new_cmd('DepsSnapLoad', snap_load, { nargs = '*', complete = 'file', desc = 'Load plugin snapshot' })
 end
 
 -- Git commands ---------------------------------------------------------------
@@ -791,7 +791,7 @@ H.git_cmd = {
     }
   end,
   stash = function(timestamp)
-    return { 'git', 'stash', '--quiet', '--message', '(mini.deps) ' .. timestamp .. ' Stash before checkout.' }
+    return { 'git', 'stash', '--quiet', '--message', '(mini.deps) ' .. timestamp .. ' Stash before checkout' }
   end,
   checkout = function(target) return { 'git', 'checkout', '--quiet', target } end,
   -- Using '--tags --force' means conflicting tags will be synced with remote
@@ -1085,8 +1085,8 @@ H.clean_confirm = function(paths)
     'Lines `- <plugin>` show plugins to be deleted from disk.',
     'Remove line to not delete that plugin.',
     '',
-    'To finish clean, save this buffer (for example, with `:write` command).',
-    'To cancel clean, wipe this buffer (for example, with `:quit` command).',
+    'To finish clean, write this buffer (for example, with `:write` command).',
+    'To cancel clean, close this window (for example, with `:close` command).',
     '',
   }
   local n_header = #lines - 1
@@ -1103,7 +1103,7 @@ H.clean_confirm = function(paths)
       if cur_path ~= nil then table.insert(paths_to_delete, cur_path) end
     end
 
-    if #paths_to_delete == 0 then return H.notify('Nothing to delete.') end
+    if #paths_to_delete == 0 then return H.notify('Nothing to delete') end
     H.clean_delete(paths_to_delete)
   end
   H.show_confirm_buf(lines, 'mini-deps://confirm-clean', finish_clean)
@@ -1122,7 +1122,7 @@ H.clean_delete = function(paths)
   local n_to_delete = #paths
   for i, p in ipairs(paths) do
     vim.fn.delete(p, 'rf')
-    local msg = string.format('(%d/%d) Deleted `%s` from disk.', i, n_to_delete, vim.fn.fnamemodify(p, ':t'))
+    local msg = string.format('(%d/%d) Deleted `%s` from disk', i, n_to_delete, vim.fn.fnamemodify(p, ':t'))
     H.notify(msg)
   end
 end
@@ -1164,9 +1164,11 @@ H.update_compute_report_single = function(p)
   local parts = { string.format('%s %s %s\n', surrounding, p.name, surrounding) }
 
   if p.head == p.checkout_to then
+    table.insert(parts, 'Path:   ' .. p.path .. '\n')
     table.insert(parts, 'Source: ' .. (p.source or '<None>') .. '\n')
     table.insert(parts, string.format('State:  %s (%s)', p.checkout_to, p.checkout))
   else
+    table.insert(parts, 'Path:         ' .. p.path .. '\n')
     table.insert(parts, 'Source:       ' .. (p.source or '<None>') .. '\n')
     table.insert(parts, 'State before: ' .. p.head .. '\n')
     table.insert(parts, string.format('State after:  %s (%s)', p.checkout_to, p.checkout))
@@ -1196,13 +1198,13 @@ H.update_feedback_confirm = function(lines)
     'See update details below it.',
     'Remove the line to not update that plugin.',
     '',
+    'Line `--- <plugin_name> ---` means plugin has nothing to update.',
+    '',
     "Line `!!! <plugin_name> !!!` means plugin had an error and won't be updated.",
     'See error details below it.',
     '',
-    'Line `--- <plugin_name> ---` means plugin has nothing to update.',
-    '',
-    'To finish update, save this buffer (for example, with `:write` command).',
-    'To cancel update, wipe this buffer (for example, with `:quit` command).',
+    'To finish update, write this buffer (for example, with `:write` command).',
+    'To cancel update, close this window (for example, with `:close` command).',
     '',
   }
   local n_header = #report - 1
@@ -1233,6 +1235,7 @@ H.update_add_syntax = function()
     syntax match MiniDepsTitleError    "^!!! .\+ !!!$"
     syntax match MiniDepsTitleUpdate   "^+++ .\+ +++$"
     syntax match MiniDepsTitleSame     "^--- .\+ ---$"
+    syntax match MiniDepsInfo          "^Path: \+\zs[^ ]\+"
     syntax match MiniDepsInfo          "^Source: \+\zs[^ ]\+"
     syntax match MiniDepsInfo          "^State[^:]*: \+\zs[^ ]\+\ze"
     syntax match MiniDepsHint          "\(^State.\+\)\@<=(.\+)$"
@@ -1260,22 +1263,29 @@ H.show_confirm_buf = function(lines, name, exec_on_write)
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
   vim.bo[buf_id].buftype, vim.bo[buf_id].filetype, vim.bo[buf_id].modified = 'acwrite', 'minideps-confirm', false
   vim.cmd('tab sbuffer ' .. buf_id)
-  local tabpage_id = vim.api.nvim_get_current_tabpage()
+  local tab_num, win_id = vim.api.nvim_tabpage_get_number(0), vim.api.nvim_get_current_win()
 
-  -- Define buffer autocommands for leave and write
   local delete_buffer = vim.schedule_wrap(function()
-    pcall(function() vim.cmd('tabclose ' .. vim.api.nvim_tabpage_get_number(tabpage_id)) end)
     pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
+    pcall(function() vim.cmd('tabclose ' .. tab_num) end)
   end)
 
+  -- Define action on accepting confirm
   local finish = function()
     exec_on_write(buf_id)
     delete_buffer()
   end
-
   -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
   vim.api.nvim_create_autocmd('BufWriteCmd', { buffer = buf_id, nested = true, callback = finish })
-  vim.api.nvim_create_autocmd('BufWinLeave', { buffer = buf_id, nested = true, callback = delete_buffer })
+
+  -- Define action to cancel confirm
+  local cancel_au_id
+  local on_cancel = function(data)
+    if tonumber(data.match) ~= win_id then return end
+    pcall(vim.api.nvim_del_autocmd, cancel_au_id)
+    delete_buffer()
+  end
+  cancel_au_id = vim.api.nvim_create_autocmd('WinClosed', { nested = true, callback = on_cancel })
 end
 
 -- CLI ------------------------------------------------------------------------
