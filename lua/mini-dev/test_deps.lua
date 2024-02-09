@@ -27,7 +27,7 @@ end
 local clone_args = function(from, to)
   --stylua: ignore
   return {
-    '-c', 'gc.auto=0', 'clone', '--quiet', '--filter=blob:none',
+    'clone', '--quiet', '--filter=blob:none',
     '--recurse-submodules', '--also-filter-submodules',
     '--origin', 'origin', from, to,
   }
@@ -108,9 +108,16 @@ local validate_git_spawn_log = function(ref_log)
     elseif ref == nil then
       eq(real, 'Reference does not have entry for present spawn log entry')
     elseif vim.tbl_islist(ref) then
-      eq(real, { executable = 'git', options = { args = ref, cwd = real.options.cwd } })
+      -- Assume default `git` options
+      local args = { '-c', 'gc.auto=0' }
+      vim.list_extend(args, ref)
+      eq(real, { executable = 'git', options = { args = args, cwd = real.options.cwd } })
     else
-      eq(real, { executable = 'git', options = ref })
+      local opts = vim.deepcopy(ref)
+      -- Assume default `git` options
+      local args = { '-c', 'gc.auto=0' }
+      opts.args = vim.list_extend(args, opts.args)
+      eq(real, { executable = 'git', options = opts })
     end
   end
 end
@@ -198,8 +205,9 @@ T['setup()']['creates side effects'] = function()
   load_module()
   local has_highlight = function(group, value) expect.match(child.cmd_capture('hi ' .. group), value) end
 
-  has_highlight('MiniDepsChangeAdded', 'links to diffAdded')
-  has_highlight('MiniDepsChangeRemoved', 'links to diffRemoved')
+  local is_010 = child.fn.has('nvim-0.10') == 1
+  has_highlight('MiniDepsChangeAdded', 'links to ' .. (is_010 and 'Added' or 'diffAdded'))
+  has_highlight('MiniDepsChangeRemoved', 'links to ' .. (is_010 and 'Removed' or 'diffRemoved'))
   has_highlight('MiniDepsHint', 'links to DiagnosticHint')
   has_highlight('MiniDepsInfo', 'links to DiagnosticInfo')
   has_highlight('MiniDepsPlaceholder', 'links to Comment')
@@ -791,6 +799,21 @@ T['add()']['Install']['properly executes `*_install` hooks'] = function()
   validate_notifications(ref_notify_log)
 end
 
+T['add()']['Install']['handles errors in hooks'] = function()
+  child.lua([[
+    MiniDeps.add({
+      source = 'user/new_plugin',
+      hooks = { pre_install = function() error('Error in `pre_install`') end },
+    })
+  ]])
+  --stylua: ignore
+  validate_notifications({
+    { '(mini.deps) Installing `new_plugin`', 'INFO' },
+    { '(mini.deps) Error executing pre_install hook in `new_plugin`:\n[string "<nvim>"]:3: Error in `pre_install`', 'ERROR' },
+    { '(mini.deps) (1/1) Installed `new_plugin`', 'INFO' },
+  })
+end
+
 T['add()']['Install']['generates help tags'] = function()
   -- Set up clear temporary directory
   local cur_package_path = test_dir_absolute .. '/temp'
@@ -1086,8 +1109,8 @@ T['update()']['works'] = function()
     { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_plugin_1 },
     { args = { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }, cwd = cwd_plugin_2 },
 
-    { args = { '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' }, cwd = cwd_plugin_1 },
-    { args = { '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' }, cwd = cwd_plugin_2 },
+    { args = { 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' }, cwd = cwd_plugin_1 },
+    { args = { 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' }, cwd = cwd_plugin_2 },
 
     { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },   cwd = cwd_plugin_1 },
     { args = { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/master' }, cwd = cwd_plugin_2 },
@@ -1211,7 +1234,7 @@ T['update()']['can work with non-default branches'] = function()
     { 'rev-list', '-1', 'HEAD' },
     { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/world' },
     { 'rev-list', '-1', 'origin/world' },
-    { '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
+    { 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
     { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/hello' },
     { 'rev-list', '-1', 'origin/hello' },
     { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/world' },
@@ -1310,6 +1333,32 @@ T['update()']['properly executes `*_checkout` hooks'] = function()
   validate_notifications(ref_notify_log)
 end
 
+T['update()']['handles errors in hooks'] = function()
+  child.lua([[
+    MiniDeps.add({
+      source = 'user/plugin_1',
+      hooks = { pre_checkout = function() error('Error in `pre_checkout`') end },
+    })
+    _G.stdio_queue = {
+      {},                        -- Set `origin` to source
+      { out = 'sha1head' },      -- Get `HEAD`
+      { out = 'origin/main' },   -- Get default branch
+      {},                        -- Fetch
+      { out = 'origin/main' },   -- Check if `checkout` is origin branch
+      { out = 'new1head' },      -- Get commit of `checkout`
+      { out = 'Log 1' },         -- Get log of `checkout` changes
+      {},                        -- Stash
+      {},                        -- Checkout
+    }
+  ]])
+  child.lua('MiniDeps.update(nil, { force = true, offline = true })')
+  --stylua: ignore
+  validate_notifications({
+    { '(mini.deps) Error executing pre_checkout hook in `plugin_1`:\n[string "<nvim>"]:3: Error in `pre_checkout`', 'ERROR' },
+    { '(mini.deps) (1/1) Checked out `main` in `plugin_1`', 'INFO' }
+  })
+end
+
 T['update()']['generates help tags'] = function()
   child.lua([[
     _G.stdio_queue = {
@@ -1401,7 +1450,7 @@ T['update()']['respects `opts.force`'] = function()
     },
     { 'rev-list', '-1', 'HEAD' },
     { 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
-    { '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
+    { 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
     { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/main' },
     { 'rev-list', '-1', 'origin/main' },
     log_args('sha1head...new1head'),

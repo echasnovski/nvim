@@ -1,14 +1,3 @@
--- TODO:
---
--- Code:
---
--- Docs:
--- - !!!! Add 'scripts/init-deps-example.lua' with full code !!!!
---
--- - In update reports note that `>`/`<` means commit will be added/reverted.
---
--- Tests:
-
 --- *mini.deps* Plugin manager
 --- *MiniDeps*
 ---
@@ -19,24 +8,24 @@
 --- Features:
 ---
 --- - Manage plugins utilizing Git and built-in |packages| with these actions:
----     - Add plugin to current session. See |MiniDeps.add()|.
+---     - Add plugin to current session, download if absent. See |MiniDeps.add()|.
 ---     - Update with/without confirm, with/without parallel download of new data.
 ---       See |MiniDeps.update()|.
 ---     - Delete unused plugins with/without confirm. See |MiniDeps.clean()|.
 ---     - Get / set / save / load snapshot. See `MiniDeps.snap_*()` functions.
 ---
----     All these actions are available both as Lua functions and user commands
+---     All main actions are available both as Lua functions and user commands
 ---     (see |MiniDeps-commands|).
 ---
---- - Minimal yet flexible plugin specification:
+--- - Minimal yet flexible plugin |MiniDeps-plugin-specification|:
 ---     - Plugin source.
 ---     - Name of target plugin directory.
 ---     - Checkout target: branch, commit, tag, etc.
 ---     - Monitor branch to track updates without checking out.
 ---     - Dependencies to be set up prior to the target plugin.
----     - Hooks to call before/after plugin is created/changed/deleted.
+---     - Hooks to call before/after plugin is created/changed.
 ---
---- - Helpers to implement two-stage startup: |MiniDeps.now()| and |MiniDeps.later()|.
+--- - Helpers implementing two-stage startup: |MiniDeps.now()| and |MiniDeps.later()|.
 ---   See |MiniDeps-overview| for how to implement basic lazy loading with them.
 ---
 --- What it doesn't do:
@@ -48,6 +37,7 @@
 ---   current session. Although this is partially doable, it can not be done
 ---   in full (yet) because plugins can have untraceable side effects
 ---   (autocmmands, mappings, etc.).
+---   The suggested approach is to restart Nvim.
 ---
 --- Sources with more details:
 --- - |MiniDeps-overview|
@@ -79,7 +69,7 @@
 ---     - Uses table specification with dedicated functions to add plugins,
 ---       while this module uses direct function call approach
 ---       (calling |MiniDeps.add()| ensures that plugin is usable).
----     - Uses version tags by default, while this module more designed towards
+---     - Uses version tags by default, while this module is more designed towards
 ---       tracking branches. Using tags is possible too (see |MiniDeps-overview|).
 ---
 --- - 'savq/paq-nvim':
@@ -90,8 +80,8 @@
 ---
 --- # Highlight groups ~
 ---
---- Highlight groups are used inside confirmation buffers
---- after |MiniDeps.update()| and |MiniDeps.clean()|.
+--- Highlight groups are used inside confirmation buffers after
+--- default |MiniDeps.update()| and |MiniDeps.clean()|.
 ---
 --- * `MiniDepsChangeAdded`   - added change (commit) during update.
 --- * `MiniDepsChangeRemoved` - removed change (commit) during update.
@@ -119,27 +109,33 @@
 ---
 --- Use |MiniDeps.add()| to add plugin to current session. Supply plugin's URL
 --- source as a string or |MiniDeps-plugin-specification| in general. If plugin is
---- not present in "deps" package, it will be created/installed before processing
---- anything else.
+--- not present in "pack/deps" package, it will be created (a.k.a. installed)
+--- before processing anything else.
 ---
 --- The recommended way of adding a plugin is by calling |MiniDeps.add()| in the
 --- |init.lua| file (make sure |MiniDeps.setup()| is called prior): >
 ---
 ---   local add = MiniDeps.add
 ---
+---   -- Add to current session (install if absent)
 ---   add('nvim-tree/nvim-web-devicons')
 ---   require('nvim-web-devicons').setup()
 ---
+---   -- Supply dependencies near target plugin
 ---   add({
 ---     source = 'neovim/nvim-lspconfig',
 ---     depends = { 'williamboman/mason.nvim' },
 ---   })
 ---
+---   -- Utilize plugin spec to install separate plugins based on Nvim version
 ---   local is_010 = vim.fn.has('nvim-0.10') == 1
+---   local name = is_010 and 'nvim-treesitter-main' or 'nvim-treesitter'
+---   local checkout = is_010 and 'main' or 'master'
 ---   add(
 ---     {
 ---       source = 'nvim-treesitter/nvim-treesitter',
----       checkout = is_010 and 'main' or 'master',
+---       name = name,
+---       checkout = checkout,
 ---       hooks = { post_checkout = function() vim.cmd('TSUpdate') end },
 ---     }
 ---   )
@@ -149,26 +145,24 @@
 ---   nothing else. In particular, it doesn't ensure `opts.checkout` state.
 ---   Update or modify plugin state explicitly (see later sections).
 ---
---- # Lazy load ~
+--- # Lazy loading ~
 ---
 --- Any lazy-loading is assumed to be done manually by calling |MiniDeps.add()|
---- at appropriate time. This module provides helpers implementing special
+--- at appropriate time. This module provides helpers implementing special safe
 --- two-stage loading:
---- - |MiniDeps.now()| to safely execute code immediately. Use it to load plugins
+--- - |MiniDeps.now()| safely executes code immediately. Use it to load plugins
 ---   with UI necessary to make initial screen draw.
---- - |MiniDeps.later()| to safely execute code later. Use it (with caution) for
----   everything else. >
+--- - |MiniDeps.later()| schedules code to be safely executed later, preserving
+---   order. Use it (with caution) for everything else. >
 ---
 ---   local now, later = MiniDeps.now, MiniDeps.later
 ---
+---   -- Safely execute immediately
 ---   now(function() vim.cmd('colorscheme randomhue') end)
 ---   now(function() require('mini.statusline').setup() end)
----   now(function() require('mini.tabline').setup() end)
 ---
----   later(function()
----     require('mini.pick').setup()
----     vim.ui.select = MiniPick.ui_select
----   end)
+---   -- Safely execute later
+---   later(function() require('mini.operators').setup() end)
 --- <
 --- # Update ~
 ---
@@ -183,19 +177,19 @@
 ---
 --- To change plugin's specification (like set different `checkout`, etc.):
 --- - Update corresponding |MiniDeps.add()| call.
---- - Run |:DepsUpdateOffline|.
+--- - Run `:DepsUpdateOffline <plugin_name>`.
 --- - Review changes and confirm.
 --- - Restart Nvim.
 ---
---- NOTE: if used a single source string, make sure to convert `add()` argument to
---- `{ source = '...', checkout = '<state>'}`
+--- NOTE: if `add()` prior used a single source string, make sure to convert
+--- its argument to `{ source = '<previous_argument>', checkout = '<state>'}`
 ---
 --- # Snapshots ~
 ---
---- Use `:DepsSnapSave` to save state of all plugins from current session into
+--- Use |:DepsSnapSave| to save state of all plugins from current session into
 --- a snapshot file (see `config.path.snapshot`).
 ---
---- Use `:DepsSnapLoad` to load snapshot. This will change (without confirmation)
+--- Use |:DepsSnapLoad| to load snapshot. This will change (without confirmation)
 --- state on disk. Plugins present in both snapshot file and current session
 --- will be affected. Restart Nvim to see the effect.
 ---
@@ -223,38 +217,37 @@
 ---       identifier listed as "State before:".
 ---     - See previously saved snapshot file for plugin's name and copy
 ---       identifier next to it.
---- - Freeze plugin at that state while monitoring. Revert to previous state
----   |MiniDeps.add()| call to resume updating.
+--- - Freeze plugin at that state while monitoring appropriate branch.
+---   Revert to previous shape of |MiniDeps.add()| call to resume updating.
 ---
 --- # Remove ~
 ---
 --- - Make sure that target plugin is not registered in current session.
 ---   Usually it means removing corresponding |MiniDeps.add()| call.
 --- - Run |:DepsClean|. This will show confirmation buffer with a list of plugins to
----   be deleted from disk. Follow instructions at its top to finish an update.
+---   be deleted from disk. Follow instructions at its top to finish cleaning.
 ---
---- Alternatively, manually delete plugin's directory from "deps" package.
----
+--- Alternatively, manually delete plugin's directory from "pack/deps" package.
 ---@tag MiniDeps-overview
 
 --- # Plugin specification ~
 ---
 --- Each plugin dependency is managed based on its specification (a.k.a. "spec").
---- See |MiniDeps-examples| for how it is suggested to be used inside user config.
+--- See |MiniDeps-overview| for some examples.
 ---
 --- Specification can be a single string which is inferred as:
 --- - Plugin <name> if it doesn't contain "/".
 --- - Plugin <source> otherwise.
 ---
---- Specification is primarily a table with the following fields:
+--- Primarily, specification is a table with the following fields:
 ---
 --- - <source> `(string|nil)` - field with URI of plugin source used during creation
----   update. Can be anything allowed by `git clone`.
+---   or update. Can be anything allowed by `git clone`.
+---   Default: `nil` to rely on source set up during install.
 ---   Notes:
+---     - It is required for creating plugin, but can be omitted afterwards.
 ---     - As the most common case, URI of the format "user/repo" is transformed
 ---       into "https://github.com/user/repo".
----     - It is required for creating plugin, but can be omitted afterwards.
----   Default: `nil` to rely on source set up during install.
 ---
 --- - <name> `(string|nil)` - directory basename of where to put plugin source.
 ---   It is put in "pack/deps/opt" subdirectory of `config.path.package`.
@@ -269,9 +262,9 @@
 ---   different target than `checkout`. Should be a name of present Git branch.
 ---   Default: `nil` for default branch (usually "main" or "master").
 ---
---- - <depends> `(table|nil)` - array of plugin specifications (strings or
----   tables) to be added prior to the target.
----   Default: `{}`.
+--- - <depends> `(table|nil)` - array of plugin specifications (strings or tables)
+---   to be added prior to the target.
+---   Default: `nil` for no dependencies.
 ---
 --- - <hooks> `(table|nil)` - table with callable hooks to call on certain events.
 ---   Each hook is executed without arguments. Possible hook names:
@@ -279,13 +272,18 @@
 ---     - <post_install>  - after  creating plugin directory.
 ---     - <pre_checkout>  - before making change in plugin directory.
 ---     - <post_checkout> - after  making change in plugin directory.
----   Default: empty table for no hooks.
+---   Default: `nil` for no hooks.
 ---@tag MiniDeps-plugin-specification
 
 --- # User commands ~
+---
+--- Note: Most commands have a Lua function alternative which they rely on.
+--- Like |:DepsAdd| uses |MiniDeps.add()|, etc.
+---
 ---                                                                       *:DepsAdd*
 --- `:DepsAdd user/repo` makes plugin from https://github.com/user/repo available
 --- in the current session (also creates it, if it is not present).
+--- `:DepsAdd name` adds already installed plugin `name` to current session.
 --- Accepts only single string compatible with |MiniDeps-plugin-specification|.
 --- To add plugin in every session, put |MiniDeps.add()| in |init.lua|.
 ---
@@ -295,10 +293,10 @@
 --- a separate |tabpage| with information about an upcoming update to review
 --- and (selectively) apply. See |MiniDeps.update()| for more info.
 ---
---- `:DepsUpdate name` updates plugin with name `name`. Any number of names is allowed.
+--- `:DepsUpdate name` updates plugin `name`. Any number of names is allowed.
 ---
 --- `:DepsUpdate!` and `:DepsUpdate! name` update without confirmation.
---- You can see what was done in the log file (|:DepsShowLog|).
+--- You can see what was done in the log file afterwards (|:DepsShowLog|).
 ---
 ---                                                             *:DepsUpdateOffline*
 --- `:DepsUpdateOffline` is same as |:DepsUpdate| but doesn't download new updates
@@ -338,7 +336,7 @@ local H = {}
 
 --- Module setup
 ---
---- Calling this function creates all user commands described in |MiniDeps-actions|.
+--- Calling this function creates user commands described in |MiniDeps-commands|.
 ---
 ---@param config table|nil Module config table. See |MiniDeps.config|.
 ---
@@ -365,6 +363,37 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # Job ~
+---
+--- `config.job` defines how CLI jobs are run.
+---
+--- `job.n_threads` is a maximum number of parallel jobs used when needed.
+--- Default: 80% of all available.
+---
+--- `job.timeout` is a duration (in ms) from job start until it is forced to stop.
+--- Default: 30000.
+---
+--- # Paths ~
+---
+--- `config.path` defines main paths used in this module.
+---
+--- `path.package` is a string with path inside which "pack/deps" package is stored
+--- (see |MiniDeps-overview|).
+--- Default: "site" subdirectory of "data" standard path (see |stdpath()|).
+---
+--- `path.snapshot` is a string with default path for snapshot.
+--- See |:DepsSnapSave| and |:DepsSnapLoad|.
+--- Default: "mini-deps-snap" file in "config" standard path (see |stdpath()|).
+---
+--- `path.log` is a string with path containing log of operations done by module.
+--- In particular, it contains all changes done after making an update.
+--- Default: "mini-deps.log" file in "log" standard path (see |stdpath()|).
+--- Note: In Neovim<0.8 it is in "data" standard path.
+---
+--- # Silent ~
+---
+--- `config.silent` is a boolean controlling whether to suppress non-error feedback.
+--- Default: `false`.
 MiniDeps.config = {
   -- Parameters of CLI jobs
   job = {
@@ -408,8 +437,8 @@ MiniDeps.config = {
 --- - Make sure plugin(s) can be used in current session (see |:packadd|).
 ---
 --- Notes:
---- - Presense of plugin is checked by its name which is the same as the name
----   of its directory inside "deps" package (see |MiniDeps-overview|).
+--- - Presence of plugin is checked by its name which is the same as the name
+---   of its directory inside "pack/deps" package (see |MiniDeps-overview|).
 --- - To increase performance, this function only ensures presence on disk and
 ---   nothing else. In particular, it doesn't ensure `opts.checkout` state.
 ---   Use |MiniDeps.update()| or |:DepsUpdateOffline| explicitly.
@@ -515,8 +544,8 @@ end
 --- Clean plugins
 ---
 --- - Compute absent plugins: not registered in current session
----   (see |MiniDeps.get_session()|) but present on disk in dedicated "deps" package
----   (inside `config.path.package`).
+---   (see |MiniDeps.get_session()|) but present on disk in dedicated "pack/deps"
+---   package (inside `config.path.package`).
 --- - If cleaning is forced, delete all absent plugins from disk.
 ---   Otherwise show confirmation buffer with instructions on how to proceed.
 ---
@@ -624,7 +653,7 @@ end
 --- Get session
 ---
 --- Plugin is registered in current session if it either:
---- - Was added with |MiniDeps.add()|.
+--- - Was added with |MiniDeps.add()| (preserving order of calls).
 --- - Is a "start" plugin and present in 'runtimpath'.
 ---
 ---@return session table Array with specifications of all plugins registered in
@@ -646,7 +675,9 @@ MiniDeps.get_session = function()
   vim.tbl_map(add_spec, H.session)
   H.session = res
 
-  -- Add 'start/' plugins that are in 'rtp'
+  -- Add 'start/' plugins that are in 'rtp'. NOTE: not whole session concept is
+  -- built around presence in 'rtp' to 100% ensure to preserve the order in
+  -- which user called `add()`.
   local start_path = H.get_package_path() .. '/pack/deps/start'
   local pattern = string.format('^%s/([^/]+)$', vim.pesc(start_path))
   for _, path in ipairs(vim.api.nvim_list_runtime_paths()) do
@@ -665,7 +696,7 @@ end
 --- are executed, thus not blocking execution of next code in file.
 ---
 --- Assumed to be used as a first step during two-stage config execution to
---- load plugins immediately during startup.
+--- load plugins immediately during startup. See |MiniDeps-overview|.
 ---
 ---@param f function Callable to execute.
 MiniDeps.now = function(f)
@@ -682,7 +713,7 @@ end
 --- Errors are shown with |vim.notify()| after all queued functions are executed.
 ---
 --- Assumed to be used as a second step during two-stage config execution to
---- load plugins "lazily" after startup.
+--- load plugins "lazily" after startup. See |MiniDeps-overview|.
 ---
 ---@param f function Callable to execute.
 MiniDeps.later = function(f)
@@ -759,8 +790,9 @@ H.create_default_hl = function()
     vim.api.nvim_set_hl(0, name, opts)
   end
 
-  hi('MiniDepsChangeAdded',   { link = 'diffAdded' })
-  hi('MiniDepsChangeRemoved', { link = 'diffRemoved' })
+  local has_core_diff_hl = vim.fn.has('nvim-0.10') == 1
+  hi('MiniDepsChangeAdded',   { link = has_core_diff_hl and 'Added' or 'diffAdded' })
+  hi('MiniDepsChangeRemoved', { link = has_core_diff_hl and 'Removed' or 'diffRemoved' })
   hi('MiniDepsHint',          { link = 'DiagnosticHint' })
   hi('MiniDepsInfo',          { link = 'DiagnosticInfo' })
   hi('MiniDepsPlaceholder',   { link = 'Comment' })
@@ -816,41 +848,58 @@ H.create_user_commands = function()
 end
 
 -- Git commands ---------------------------------------------------------------
-H.git_cmd = {
+H.git_cmd = function(cmd_name, ...)
+  local args = H.git_args[cmd_name](...)
+  if args == nil then return {} end
+
+  -- Use '-c gc.auto=0' to disable `stderr` "Auto packing..." messages
+  return { 'git', '-c', 'gc.auto=0', unpack(args) }
+end
+
+--stylua: ignore
+H.git_args = {
   clone = function(source, path)
-    --stylua: ignore
     return {
-      'git', '-c', 'gc.auto=0', 'clone',
-      '--quiet', '--filter=blob:none',
+      'clone', '--quiet', '--filter=blob:none',
       '--recurse-submodules', '--also-filter-submodules', '--origin', 'origin',
       source, path,
     }
   end,
   stash = function(timestamp)
-    return { 'git', 'stash', '--quiet', '--message', '(mini.deps) ' .. timestamp .. ' Stash before checkout' }
+    return { 'stash', '--quiet', '--message', '(mini.deps) ' .. timestamp .. ' Stash before checkout' }
   end,
-  checkout = function(target) return { 'git', 'checkout', '--quiet', target } end,
+  checkout = function(target)
+    return { 'checkout', '--quiet', target }
+  end,
   -- Using '--tags --force' means conflicting tags will be synced with remote
-  -- Using '-c gc.auto=0' disables `stderr` "packing" messages
-  fetch = { 'git', '-c', 'gc.auto=0', 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' },
-  set_origin = function(source) return { 'git', 'remote', 'set-url', 'origin', source } end,
-  get_origin = { 'git', 'remote', 'get-url', 'origin' },
-  get_default_origin_branch = { 'git', 'rev-parse', '--abbrev-ref', 'origin/HEAD' },
+  fetch = function()
+    return { 'fetch', '--quiet', '--tags', '--force', '--recurse-submodules=yes', 'origin' }
+  end,
+  set_origin = function(source)
+    return { 'remote', 'set-url', 'origin', source }
+  end,
+  get_origin = function()
+    return { 'remote', 'get-url', 'origin' }
+  end,
+  get_default_origin_branch = function()
+    return { 'rev-parse', '--abbrev-ref', 'origin/HEAD' }
+  end,
   is_origin_branch = function(name)
     -- Returns branch's name if it is present
-    return { 'git', 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/' .. name }
+    return { 'branch', '--list', '--all', '--format=%(refname:short)', 'origin/' .. name }
   end,
   -- Using `rev-list -1` shows a commit of revision, while `rev-parse` shows
   -- hash of revision. Those are different for annotated tags.
-  get_hash = function(rev) return { 'git', 'rev-list', '-1', rev } end,
+  get_hash = function(rev)
+    return { 'rev-list', '-1', rev }
+  end,
   log = function(from, to)
-    if from == nil or to == nil or from == to then return {} end
+    if from == nil or to == nil or from == to then return nil end
     -- `--topo-order` makes showing divergent branches nicer
     -- `--decorate-refs` shows only tags near commits (not `origin/main`, etc.)
     --stylua: ignore
     return {
-      'git', 'log',
-      '--pretty=format:%m %h | %ai | %an%d%n  %s%n', '--topo-order', '--decorate-refs=refs/tags',
+      'log', '--pretty=format:%m %h | %ai | %an%d%n  %s%n', '--topo-order', '--decorate-refs=refs/tags',
       from .. '...' .. to,
     }
   end,
@@ -910,7 +959,7 @@ H.plugs_exec_hooks = function(plugs, name)
       local ok, err = pcall(p.hooks[name])
       if not ok then
         local msg = string.format('Error executing %s hook in `%s`:\n%s', name, p.name, err)
-        H.notify(msg, 'WARN')
+        H.notify(msg, 'ERROR')
       end
     end
   end
@@ -920,7 +969,7 @@ H.plugs_install = function(plugs)
   -- Clone
   local prepare = function(p)
     if p.source == nil and #p.job.err == 0 then p.job.err = { 'SPECIFICATION HAS NO `source` TO INSTALL PLUGIN.' } end
-    p.job.command = H.git_cmd.clone(p.source or '', p.path)
+    p.job.command = H.git_cmd('clone', p.source or '', p.path)
     p.job.exit_msg = string.format('Installed `%s`', p.name)
   end
   H.plugs_run_jobs(plugs, prepare)
@@ -943,7 +992,7 @@ H.plugs_download_updates = function(plugs)
   H.notify('Downloading ' .. n_noerror .. ' update' .. (n_noerror > 1 and 's' or ''))
 
   local prepare = function(p)
-    p.job.command = H.git_cmd.fetch
+    p.job.command = H.git_cmd('fetch')
     p.job.exit_msg = string.format('Downloaded update for `%s`', p.name)
   end
   H.plugs_run_jobs(plugs, prepare)
@@ -960,7 +1009,7 @@ H.plugs_checkout = function(plugs, opts)
   local checkout_plugs = vim.tbl_filter(function(p) return p.head ~= p.checkout_to end, plugs)
 
   -- Stash changes
-  local stash_command = H.git_cmd.stash(H.get_timestamp())
+  local stash_command = H.git_cmd('stash', H.get_timestamp())
   local prepare = function(p) p.job.command = stash_command end
   H.plugs_run_jobs(checkout_plugs, prepare)
 
@@ -969,7 +1018,7 @@ H.plugs_checkout = function(plugs, opts)
 
   -- Checkout
   prepare = function(p)
-    p.job.command = H.git_cmd.checkout(p.checkout_to)
+    p.job.command = H.git_cmd('checkout', p.checkout_to)
     p.job.exit_msg = string.format('Checked out `%s` in `%s`', p.checkout, p.name)
   end
   H.plugs_run_jobs(checkout_plugs, prepare)
@@ -1030,7 +1079,7 @@ H.plugs_show_job_errors = function(plugs, action_name)
 end
 
 H.plugs_ensure_origin_source = function(plugs)
-  local prepare = function(p) p.job.command = p.source and H.git_cmd.set_origin(p.source) or H.git_cmd.get_origin end
+  local prepare = function(p) p.job.command = p.source and H.git_cmd('set_origin', p.source) or H.git_cmd('get_origin') end
   local process = function(p) p.source = p.source or H.cli_stream_tostring(p.job.out) end
   H.plugs_run_jobs(plugs, prepare, process)
 end
@@ -1038,7 +1087,7 @@ end
 H.plugs_ensure_target_refs = function(plugs)
   local prepare = function(p)
     local needs_infer = p.checkout == nil or p.monitor == nil
-    p.job.command = needs_infer and H.git_cmd.get_default_origin_branch or {}
+    p.job.command = needs_infer and H.git_cmd('get_default_origin_branch') or {}
   end
   local process = function(p)
     local def_branch = H.cli_stream_tostring(p.job.out):gsub('^origin/', '')
@@ -1050,7 +1099,7 @@ H.plugs_ensure_target_refs = function(plugs)
 end
 
 H.plugs_infer_head = function(plugs)
-  local prepare = function(p) p.job.command = p.head == nil and H.git_cmd.get_hash('HEAD') or {} end
+  local prepare = function(p) p.job.command = p.head == nil and H.git_cmd('get_hash', 'HEAD') or {} end
   local process = function(p) p.head = p.head or H.cli_stream_tostring(p.job.out) end
   H.plugs_run_jobs(plugs, prepare, process)
 end
@@ -1061,7 +1110,7 @@ H.plugs_infer_commit = function(plugs, field_ref, field_out)
     -- Don't recompute commit if it is already computed
     -- Don't compute commit for 'monitor' if it won't be used
     p.should_infer = p[field_out] == nil and (field_ref ~= 'monitor' or p.has_monitor)
-    p.job.command = p.should_infer and H.git_cmd.is_origin_branch(p[field_ref]) or {}
+    p.job.command = p.should_infer and H.git_cmd('is_origin_branch', p[field_ref]) or {}
   end
   local process = function(p) p.is_ref_origin_branch = H.cli_stream_tostring(p.job.out):find('%S') ~= nil end
   H.plugs_run_jobs(plugs, prepare, process)
@@ -1072,7 +1121,7 @@ H.plugs_infer_commit = function(plugs, field_ref, field_out)
     -- updates. This is needed because `origin/HEAD` is also present.
     local is_from_origin = p.is_ref_origin_branch and p[field_ref] ~= 'HEAD'
     local ref = (is_from_origin and 'origin/' or '') .. p[field_ref]
-    p.job.command = p.should_infer and H.git_cmd.get_hash(ref) or {}
+    p.job.command = p.should_infer and H.git_cmd('get_hash', ref) or {}
   end
   process = function(p)
     if p.should_infer then p[field_out] = H.cli_stream_tostring(p.job.out) end
@@ -1082,7 +1131,7 @@ H.plugs_infer_commit = function(plugs, field_ref, field_out)
 end
 
 H.plugs_infer_log = function(plugs, field_from, field_to, field_out)
-  local prepare = function(p) p.job.command = H.git_cmd.log(p[field_from], p[field_to]) end
+  local prepare = function(p) p.job.command = H.git_cmd('log', p[field_from], p[field_to]) end
   local process = function(p) p[field_out] = H.cli_stream_tostring(p.job.out) end
   H.plugs_run_jobs(plugs, prepare, process)
 end
@@ -1232,6 +1281,7 @@ H.update_feedback_confirm = function(lines)
     '',
     'Line `+++ <plugin_name> +++` means plugin will be updated.',
     'See update details below it.',
+    'Changes starting with ">"/"<" will be added/removed.',
     'Remove the line to not update that plugin.',
     '',
     'Line `--- <plugin_name> ---` means plugin has nothing to update.',
