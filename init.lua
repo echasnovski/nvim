@@ -6,13 +6,12 @@ _G.Config = {
 }
 
 -- Ensure 'mini.nvim' is set up
-local mini_path = Config.path_package .. 'pack/deps/opt/mini.nvim'
+local mini_path = Config.path_package .. 'pack/deps/start/mini.nvim'
 if not vim.loop.fs_stat(mini_path) then
   vim.cmd([[echo "Installing 'mini.nvim'" | redraw]])
   local clone_cmd = { 'git', 'clone', '--filter=blob:none', 'https://github.com/echasnovski/mini.nvim', mini_path }
   vim.fn.system(clone_cmd)
 end
-vim.cmd('packadd mini.nvim')
 require('mini-dev.deps').setup({ path = { package = Config.path_package } })
 
 -- Define helpers
@@ -248,12 +247,12 @@ now(function() add('nvim-tree/nvim-web-devicons') end)
 
 -- Tree-sitter: advanced syntax parsing, highlighting, and text objects
 later(function()
-  add({
+  local ts_spec = {
     source = 'nvim-treesitter/nvim-treesitter',
     checkout = 'master',
-    hooks = { post_change = function() vim.cmd('TSUpdate') end },
-  })
-  add('nvim-treesitter/nvim-treesitter-textobjects')
+    hooks = { post_checkout = function() vim.cmd('TSUpdate') end },
+  }
+  add({ source = 'nvim-treesitter/nvim-treesitter-textobjects', depends = { ts_spec } })
   source('plugins/nvim-treesitter.lua')
 end)
 
@@ -263,10 +262,8 @@ later(function()
   source('plugins/gitsigns.lua')
 end)
 
--- Language server executables
+-- Install LSP/formatting/linter executables
 later(function()
-  -- TODO: Use `depends` to install 'mason-lspconfig' and ensure installed
-  -- `stylua` and `lua-language-server`
   add('williamboman/mason.nvim')
   require('mason').setup()
 end)
@@ -347,7 +344,7 @@ later(function()
     source = 'iamcco/markdown-preview.nvim',
     hooks = {
       post_install = function() later(build) end,
-      post_change = build,
+      post_checkout = build,
     },
   })
 

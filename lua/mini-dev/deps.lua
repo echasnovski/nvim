@@ -78,6 +78,11 @@
 ---       plugins should be installed. Requires separate `:PaqInstall` call to
 ---       actually install them. This module ensures installation on first load.
 ---
+--- - 'junegunn/vim-plug':
+---     - Written in Vimscript, while this module is in Lua.
+---     - Similar approach to defining and installing plugins as 'savq/paq-nvim'.
+---     - Has basic lazy-loading built-in, while this module does not (by design).
+---
 --- # Highlight groups ~
 ---
 --- Highlight groups are used inside confirmation buffers after

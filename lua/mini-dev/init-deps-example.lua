@@ -1,14 +1,11 @@
--- Clone 'mini.nvim' manually in a way that it gets managed with 'mini.deps'
+-- Clone 'mini.nvim' manually in a way that it gets managed by 'mini.deps'
 local path_package = vim.fn.stdpath('data') .. '/site/'
-local mini_path = path_package .. 'pack/deps/opt/mini.nvim'
+local mini_path = path_package .. 'pack/deps/start/mini.nvim'
 if not vim.loop.fs_stat(mini_path) then
   vim.cmd('echo "Installing `mini.nvim`" | redraw')
   local clone_cmd = { 'git', 'clone', '--filter=blob:none', 'https://github.com/echasnovski/mini.nvim', mini_path }
   vim.fn.system(clone_cmd)
 end
-
--- Make 'mini.nvim' reachable in current session
-vim.cmd('packadd mini.nvim')
 
 -- Set up 'mini.deps' (customize to your liking)
 require('mini-dev.deps').setup({ path = { package = path_package } })
@@ -26,10 +23,11 @@ now(function()
   require('mini.notify').setup()
   vim.notify = require('mini.notify').make_notify()
 end)
+now(function() require('mini.tabline').setup() end)
 now(function() require('mini.statusline').setup() end)
 
 -- Safely execute later
-later(function() require('mini.operators').setup() end)
+later(function() require('mini.pick').setup() end)
 
 -- Use external plugins with `add()`
 now(function()

@@ -41,13 +41,13 @@ nmap_leader('bw', '<Cmd>lua MiniBufremove.wipeout()<CR>',        'Wipeout')
 nmap_leader('bW', '<Cmd>lua MiniBufremove.wipeout(0, true)<CR>', 'Wipeout!')
 
 -- e is for 'explore' and 'edit'
-nmap_leader('ec', '<Cmd>lua MiniFiles.open(vim.fn.stdpath("config"))<CR>',                                'Config')
-nmap_leader('ed', '<Cmd>lua MiniFiles.open()<CR>',                                                        'Directory')
-nmap_leader('ef', '<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>',                            'File directory')
-nmap_leader('ei', '<Cmd>edit $MYVIMRC<CR>',                                                               'File directory')
-nmap_leader('em', '<Cmd>lua MiniFiles.open(vim.fn.stdpath("sata").."/site/pack/deps/opt/mini.nvim")<CR>', 'Mini.nvim directory')
-nmap_leader('ep', '<Cmd>lua MiniFiles.open(vim.fn.stdpath("data").."/site/pack/deps/opt")<CR>',           'Plugins directory')
-nmap_leader('eq', '<Cmd>lua Config.toggle_quickfix()<CR>',                                                'Quickfix')
+nmap_leader('ec', '<Cmd>lua MiniFiles.open(vim.fn.stdpath("config"))<CR>',                                  'Config')
+nmap_leader('ed', '<Cmd>lua MiniFiles.open()<CR>',                                                          'Directory')
+nmap_leader('ef', '<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>',                              'File directory')
+nmap_leader('ei', '<Cmd>edit $MYVIMRC<CR>',                                                                 'File directory')
+nmap_leader('em', '<Cmd>lua MiniFiles.open(vim.fn.stdpath("data").."/site/pack/deps/start/mini.nvim")<CR>', 'Mini.nvim directory')
+nmap_leader('ep', '<Cmd>lua MiniFiles.open(vim.fn.stdpath("data").."/site/pack/deps/opt")<CR>',             'Plugins directory')
+nmap_leader('eq', '<Cmd>lua Config.toggle_quickfix()<CR>',                                                  'Quickfix')
 
 -- f is for 'fuzzy find'
 nmap_leader('f/', '<Cmd>Pick history scope="/"<CR>',                 '"/" history')
