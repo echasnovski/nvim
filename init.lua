@@ -12,7 +12,7 @@ if not vim.loop.fs_stat(mini_path) then
   local clone_cmd = { 'git', 'clone', '--filter=blob:none', 'https://github.com/echasnovski/mini.nvim', mini_path }
   vim.fn.system(clone_cmd)
 end
-require('mini-dev.deps').setup({ path = { package = Config.path_package } })
+require('mini.deps').setup({ path = { package = Config.path_package } })
 
 -- Define helpers
 local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
