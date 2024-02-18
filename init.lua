@@ -1,4 +1,6 @@
 -- Initialization =============================================================
+pcall(function() vim.loader.enable() end)
+
 -- Define main config table
 _G.Config = {
   path_package = vim.fn.stdpath('data') .. '/site/',

@@ -10,6 +10,8 @@ vim.o.switchbuf    = 'usetab'       -- Use already opened buffers when switching
 vim.o.writebackup  = false          -- Don't store backup
 vim.o.undofile     = true           -- Enable persistent undo
 
+vim.o.shada        = "'100,<50,s10,:1000,/100,@100,h" -- Limit what is stored in ShaDa file
+
 vim.cmd('filetype plugin indent on') -- Enable all filetype plugins
 
 -- UI =========================================================================
