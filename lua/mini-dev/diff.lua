@@ -2,6 +2,13 @@
 --
 -- Code:
 --
+-- - Improve logic of which lines should be processed when setting extmarks:
+--     - Ones which should be cleared as outdated. It is a problem because due
+--       to batched processing actual line numbers might have moved; see
+--       'mini.move' line *upwards*.
+--     - Ones which should visualize hunks. Specially for `linematch = true`.
+--   The problem is to do that efficiently and assuming buffer can be visible
+--   in several windows. So not just "clear whole buffer; viz all hunks".
 -- - `goto()` with directions "first"/"prev"/"next"/"last"; `wrap` and `n_times`.
 -- - `setqflist()`.
 -- - `apply_hunk()` to apply hunk at cursor.
@@ -122,7 +129,7 @@ MiniDiff.config = {
   -- Delays (in ms) defining asynchronous visualization process
   delay = {
     -- How much to wait for update after every text change
-    text_change = 200,
+    text_change = 100,
 
     -- How much to wait for update after window scroll
     scroll = 50,
@@ -135,6 +142,9 @@ MiniDiff.config = {
 
     -- Whether to use "indent heuristic"
     indent_heuristic = true,
+
+    -- The amount of second-stage diff to align lines (on Neovim>=0.9)
+    linematch = 60,
   },
 }
 --minidoc_afterlines_end
@@ -254,18 +264,7 @@ end
 
 MiniDiff.gen_source.save = function(opts)
   local default_hl_groups = { add = 'MiniDiffAdd', change = 'MiniDiffChange', delete = 'MiniDiffDelete' }
-  -- TODO: Decide on default style
-  opts =
-    vim.tbl_deep_extend('force', { style = 'number', sign_text = '▒', hl_groups = default_hl_groups }, opts or {})
-
-  local style, sign_text = opts.style or 'sign', nil
-  if style == 'sign' then sign_text = opts.sign_text end
-  local field = ({ sign = 'sign_hl_group', number = 'number_hl_group', cursorline = 'cursorline_hl_group' })[style]
-  local extmark_opts = {
-    add = { [field] = opts.hl_groups.add, sign_text = sign_text },
-    change = { [field] = opts.hl_groups.change, sign_text = sign_text },
-    delete = { [field] = opts.hl_groups.delete, sign_text = sign_text },
-  }
+  local extmark_opts = H.source_make_extmark_opts(opts)
 
   local augroups = {}
   local attach = function(buf_id)
@@ -312,7 +311,7 @@ H.cache = {}
 
 -- Permanent `vim.diff()` options
 H.vimdiff_opts = { result_type = 'indices', ctxlen = 0, interhunkctxlen = 0 }
-if vim.fn.has('nvim-0.9') == 1 then H.vimdiff_opts.linematch = true end
+H.vimdiff_supports_linematch = vim.fn.has('nvim-0.9') == 1
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -334,6 +333,7 @@ H.setup_config = function(config)
 
     ['options.algorithm'] = { config.options.algorithm, 'string' },
     ['options.indent_heuristic'] = { config.options.indent_heuristic, 'boolean' },
+    ['options.linematch'] = { config.options.linematch, 'number' },
   })
 
   return config
@@ -438,7 +438,7 @@ H.update_cache = function(buf_id, config)
   buf_cache.delay = buf_config.delay
   buf_cache.options = buf_config.options
 
-  H.cache[buf_id] = buf_cache
+  H.cache[buf_id] = vim.deepcopy(buf_cache)
 end
 
 H.normalize_source = function(source)
@@ -465,10 +465,11 @@ end
 
 -- Processing -----------------------------------------------------------------
 H.process_lines = vim.schedule_wrap(function(buf_id, from_line, to_line, delay_ms)
-  add_to_log('process_liens', { from_line = math.max(from_line - 1, 1), to_line = to_line })
+  -- Try to account for deleting line
+  -- TODO: One possible idea is to use `vim.o.lines` instead of 1
+  from_line, to_line = from_line - 1, to_line + 1
 
-  -- Make sure that that at least one line is processed (important to react
-  -- after deleting line with extmark non-trivial `extmark_opts`)
+  -- Make sure that at least one line is processed
   table.insert(H.change_queue, { buf_id, math.min(from_line, to_line), math.max(from_line, to_line) })
 
   -- Debounce
@@ -521,6 +522,7 @@ H.process_buffer_changes = vim.schedule_wrap(function(buf_id, lines_to_process)
   -- Recompute diff hunks
   H.vimdiff_opts.algorithm = buf_cache.options.algorithm
   H.vimdiff_opts.indent_heuristic = buf_cache.options.indent_heuristic
+  if H.vimdiff_supports_linematch then H.vimdiff_opts.linematch = buf_cache.options.linematch end
   local cur_text = table.concat(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false), '\n')
   local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
 
@@ -552,11 +554,34 @@ H.process_buffer_changes = vim.schedule_wrap(function(buf_id, lines_to_process)
     local from, to = math.max(h.cur_from, 1), h.cur_to
     if h.type == 'delete' then to = from + 1 end
     H.clear_namespace(buf_id, ns, from, to)
+    local ext_opts = extmark_opts[h.type]
     for i = from, to - 1 do
-      H.set_extmark(buf_id, ns, i - 1, 0, extmark_opts[h.type])
+      H.set_extmark(buf_id, ns, i - 1, 0, ext_opts)
     end
   end
 end)
+
+-- Sources ====================================================================
+H.source_make_extmark_opts = function(opts)
+  -- TODO: Decide on default style
+  local default_hl_groups = { add = 'MiniDiffAdd', change = 'MiniDiffChange', delete = 'MiniDiffDelete' }
+  local default_opts = { style = 'number', sign_text = '▒', hl_groups = default_hl_groups, priority = 10 }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
+
+  local style, sign_text = opts.style or 'sign', nil
+  if style == 'sign' then sign_text = opts.sign_text end
+  --stylua: ignore
+  local field = ({
+    sign = 'sign_hl_group', number = 'number_hl_group', cursorline = 'cursorline_hl_group', line = 'line_hl_group',
+  })[style]
+  if field == nil then H.error('`opts.style` should be one of "sign", "number", "line", "cursorline".') end
+
+  return {
+    add = { [field] = opts.hl_groups.add, sign_text = sign_text, priority = opts.priority },
+    change = { [field] = opts.hl_groups.change, sign_text = sign_text, priority = opts.priority },
+    delete = { [field] = opts.hl_groups.delete, sign_text = sign_text, priority = opts.priority },
+  }
+end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.diff) %s', msg), 0) end
