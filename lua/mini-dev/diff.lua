@@ -2,13 +2,8 @@
 --
 -- Code:
 --
--- - Improve logic of which lines should be processed when setting extmarks:
---     - Ones which should be cleared as outdated. It is a problem because due
---       to batched processing actual line numbers might have moved; see
---       'mini.move' line *upwards*.
---     - Ones which should visualize hunks. Specially for `linematch = true`.
---   The problem is to do that efficiently and assuming buffer can be visible
---   in several windows. So not just "clear whole buffer; viz all hunks".
+-- - When moving added line upwards, extmark should not temporarily shift down.
+--
 -- - `goto()` with directions "first"/"prev"/"next"/"last"; `wrap` and `n_times`.
 -- - `setqflist()`.
 -- - `apply_hunk()` to apply hunk at cursor.
@@ -18,6 +13,8 @@
 -- Docs:
 --
 -- Tests:
+-- - Updates if no redraw seemingly is done. Example for `save` source: `yyp` should add green
+--   highlighting and `<C-s>` should remove it.
 
 --- *mini.diff* Work with diff hunks
 --- *MiniDiff*
@@ -129,7 +126,7 @@ MiniDiff.config = {
   -- Delays (in ms) defining asynchronous visualization process
   delay = {
     -- How much to wait for update after every text change
-    text_change = 100,
+    text_change = 200,
 
     -- How much to wait for update after window scroll
     scroll = 50,
@@ -168,9 +165,9 @@ MiniDiff.enable = function(buf_id, config)
     -- Called on every text change (`:h nvim_buf_lines_event`)
     on_lines = function(_, _, _, from_line, _, to_line)
       local buf_cache = H.cache[buf_id]
-      -- Properly detach if highlighting is disabled
+      -- Properly detach if diffing is disabled
       if buf_cache == nil then return true end
-      H.process_lines(buf_id, from_line + 1, to_line, buf_cache.delay.text_change)
+      H.schedule_diff_update(buf_id, buf_cache.delay.text_change)
     end,
 
     -- Called when buffer content is changed outside of current session
@@ -193,14 +190,8 @@ MiniDiff.enable = function(buf_id, config)
   local bufwinenter_opts = { group = augroup, buffer = buf_id, callback = update_buf, desc = 'Update buffer cache' }
   vim.api.nvim_create_autocmd('BufWinEnter', bufwinenter_opts)
 
-  -- TODO: This should (if needed) update only visualization, not recompute diff
-  -- vim.api.nvim_create_autocmd(
-  --   'WinScrolled',
-  --   { group = augroup, buffer = buf_id, callback = H.update_view, desc = 'Update visualization in view' }
-  -- )
-
-  -- Add highlighting to whole buffer
-  H.process_lines(buf_id, 1, vim.api.nvim_buf_line_count(buf_id), 0)
+  -- Immediately process whole buffer
+  H.schedule_diff_update(buf_id, 0)
 end
 
 --- Disable diff tracking in buffer
@@ -234,7 +225,7 @@ end
 MiniDiff.update = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   if not H.is_buf_enabled(buf_id) then H.error(string.format('Buffer %d is not enabled.', buf_id)) end
-  H.process_lines(buf_id, 1, vim.api.nvim_buf_line_count(buf_id), 0)
+  H.schedule_diff_update(buf_id, 0)
 end
 
 MiniDiff.set_ref_text = function(buf_id, text)
@@ -244,7 +235,7 @@ MiniDiff.set_ref_text = function(buf_id, text)
 
   if not H.is_buf_enabled(buf_id) then MiniDiff.enable(buf_id) end
   H.cache[buf_id].ref_text = text
-  H.process_lines(buf_id, 1, vim.api.nvim_buf_line_count(buf_id), 0)
+  H.schedule_diff_update(buf_id, 0)
 end
 
 --- Generate builtin highlighters
@@ -303,8 +294,8 @@ H.ns_id = {
   text = vim.api.nvim_create_namespace('MiniDiffText'),
 }
 
--- Cache of queued changes used for debounced highlighting
-H.change_queue = {}
+-- Cache of buffers waiting for debounced diff update
+H.bufs_to_update = {}
 
 -- Cache per enabled buffer
 H.cache = {}
@@ -339,7 +330,30 @@ H.setup_config = function(config)
   return config
 end
 
-H.apply_config = function(config) MiniDiff.config = config end
+H.apply_config = function(config)
+  MiniDiff.config = config
+
+  -- Register decoration provider which actually makes visualization
+  local ns_id_viz = H.ns_id.viz
+  local on_win = function(_, _, bufnr, top, bottom)
+    local buf_cache = H.cache[bufnr]
+    if buf_cache == nil then return false end
+
+    if buf_cache.needs_clear then
+      H.clear_namespace(bufnr, ns_id_viz, 0, -1)
+      buf_cache.needs_clear = false
+    end
+
+    local redraw_line_data = buf_cache.redraw_line_data
+    for i = top, bottom do
+      if redraw_line_data[i] ~= nil then
+        H.set_extmark(bufnr, ns_id_viz, i - 1, 0, redraw_line_data[i])
+        redraw_line_data[i] = nil
+      end
+    end
+  end
+  vim.api.nvim_set_decoration_provider(ns_id_viz, { on_win = on_win })
+end
 
 H.create_autocommands = function()
   local augroup = vim.api.nvim_create_augroup('MiniDiff', {})
@@ -391,22 +405,6 @@ H.auto_enable = vim.schedule_wrap(function(data)
   if vim.api.nvim_buf_is_valid(data.buf) and vim.bo[data.buf].buftype == '' then MiniDiff.enable(data.buf) end
 end)
 
--- H.update_view = vim.schedule_wrap(function(data)
---   -- Update view only in enabled buffers
---   local buf_cache = H.cache[data.buf]
---   if buf_cache == nil then return end
---
---   -- NOTE: due to scheduling (which is necessary for better performance),
---   -- current buffer can be not the target one. But as there is no proper (easy
---   -- and/or fast) way to get the view of certain buffer (except the current)
---   -- accept this approach. The main problem of current buffer having not
---   -- enabled highlighting is solved during processing buffer highlighters.
---
---   -- Debounce without aggregating redraws (only last view should be updated)
---   H.timer_view:stop()
---   H.timer_view:start(buf_cache.delay.scroll, 0, H.process_view)
--- end)
-
 -- Validators -----------------------------------------------------------------
 H.validate_buf_id = function(x)
   if x == nil or x == 0 then return vim.api.nvim_get_current_buf() end
@@ -430,15 +428,13 @@ H.update_cache = function(buf_id, config)
   local buf_cache = H.cache[buf_id] or {}
   local buf_config = H.get_config(config, buf_id)
   -- TODO: Use `Git` source by default?
-  if buf_config.source == nil then
-    buf_cache.source = MiniDiff.gen_source.save()
-  else
-    buf_config.source = H.normalize_source(buf_cache.source)
-  end
+  buf_cache.source = H.normalize_source(buf_config.source or MiniDiff.gen_source.save())
   buf_cache.delay = buf_config.delay
   buf_cache.options = buf_config.options
 
-  H.cache[buf_id] = vim.deepcopy(buf_cache)
+  buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_data = {}, {}, {}
+
+  H.cache[buf_id] = buf_cache
 end
 
 H.normalize_source = function(source)
@@ -450,7 +446,7 @@ H.normalize_source = function(source)
 
   res.extmark_opts = {}
   for _, v in ipairs({ 'add', 'change', 'delete' }) do
-    res.extmark_opts[v] = source.extmark_opts[v] or {}
+    res.extmark_opts[v] = vim.deepcopy(source.extmark_opts[v]) or {}
     if type(res.extmark_opts[v]) ~= 'table' then H.error('`extmark_opts.' .. v .. '` should be table.') end
   end
 
@@ -464,101 +460,64 @@ H.normalize_source = function(source)
 end
 
 -- Processing -----------------------------------------------------------------
-H.process_lines = vim.schedule_wrap(function(buf_id, from_line, to_line, delay_ms)
-  -- Try to account for deleting line
-  -- TODO: One possible idea is to use `vim.o.lines` instead of 1
-  from_line, to_line = from_line - 1, to_line + 1
-
-  -- Make sure that at least one line is processed
-  table.insert(H.change_queue, { buf_id, math.min(from_line, to_line), math.max(from_line, to_line) })
-
-  -- Debounce
+H.schedule_diff_update = vim.schedule_wrap(function(buf_id, delay_ms)
+  H.bufs_to_update[buf_id] = true
   H.timer_debounce:stop()
-  H.timer_debounce:start(delay_ms, 0, H.process_change_queue)
+  H.timer_debounce:start(delay_ms, 0, H.process_scheduled_buffers)
 end)
 
-H.process_view = vim.schedule_wrap(function()
-  table.insert(H.change_queue, { vim.api.nvim_get_current_buf(), vim.fn.line('w0'), vim.fn.line('w$') })
-
-  -- Process immediately assuming debouncing should be already done
-  H.process_change_queue()
-end)
-
-H.process_change_queue = vim.schedule_wrap(function()
-  local queue = H.normalize_change_queue()
-
-  for buf_id, lines_to_process in pairs(queue) do
-    H.process_buffer_changes(buf_id, lines_to_process)
+H.process_scheduled_buffers = vim.schedule_wrap(function()
+  for buf_id, _ in pairs(H.bufs_to_update) do
+    H.update_buf_diff(buf_id)
   end
-
-  H.change_queue = {}
+  H.bufs_to_update = {}
 end)
 
-H.normalize_change_queue = function()
-  local res = {}
-  for _, change in ipairs(H.change_queue) do
-    -- `change` is { buf_id, from_line, to_line }; lines are already 1-indexed
-    local buf_id = change[1]
-
-    local buf_lines_to_process = res[buf_id] or {}
-    for i = change[2], change[3] do
-      buf_lines_to_process[i] = true
-    end
-
-    res[buf_id] = buf_lines_to_process
-  end
-
-  return res
-end
-
-H.process_buffer_changes = vim.schedule_wrap(function(buf_id, lines_to_process)
-  -- Return early if buffer is not proper.
-  -- Also check if buffer is enabled here mostly for better resilience. It
-  -- might be actually needed due to various `schedule_wrap`s leading to change
-  -- queue entry with not target (and improper) buffer.
+H.update_buf_diff = vim.schedule_wrap(function(buf_id)
+  -- Return early if buffer is not proper
   local buf_cache = H.cache[buf_id]
   if not vim.api.nvim_buf_is_valid(buf_id) or H.is_disabled(buf_id) or buf_cache == nil then return end
 
-  -- Recompute diff hunks
+  -- Recompute diff hunks with summary
   H.vimdiff_opts.algorithm = buf_cache.options.algorithm
   H.vimdiff_opts.indent_heuristic = buf_cache.options.indent_heuristic
   if H.vimdiff_supports_linematch then H.vimdiff_opts.linematch = buf_cache.options.linematch end
   local cur_text = table.concat(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false), '\n')
   local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
 
-  local hunks = {}
-  for i, d in ipairs(diff) do
-    -- [1] - start line of diff in ref text
-    -- [2] - number of deleted (from reference) lines
-    -- [3] - start line of diff in cur text
-    -- [4] - number of added
-    local type = d[2] == 0 and 'add' or (d[4] == 0 and 'delete' or 'change')
-    hunks[i] = { type = type, ref_from = d[1], ref_to = d[1] + d[2], cur_from = d[3], cur_to = d[3] + d[4] }
-  end
-  buf_cache.hunks = hunks
-
-  local ns = H.ns_id.viz
-  -- Clear highlighting in target lines
-  for l_num, _ in pairs(lines_to_process) do
-    H.clear_namespace(buf_id, ns, l_num - 1, l_num)
-  end
-
-  -- Compute hunks which contain at least one `lines_to_process`, as the whole
-  -- hunk should be redrawn (for example, type could have changed)
-  -- TODO
-  local hunks_to_redraw = hunks
-
-  -- Redraw hunks
   local extmark_opts = buf_cache.source.extmark_opts
-  for _, h in ipairs(hunks_to_redraw) do
-    local from, to = math.max(h.cur_from, 1), h.cur_to
-    if h.type == 'delete' then to = from + 1 end
-    H.clear_namespace(buf_id, ns, from, to)
-    local ext_opts = extmark_opts[h.type]
-    for i = from, to - 1 do
-      H.set_extmark(buf_id, ns, i - 1, 0, ext_opts)
+  local hunks, hunk_summary, redraw_line_data = {}, { add = 0, change = 0, delete = 0 }, {}
+  for i, d in ipairs(diff) do
+    local n_ref, n_cur = d[2], d[4]
+    -- Hunk
+    local type = n_ref == 0 and 'add' or (n_cur == 0 and 'delete' or 'change')
+    hunks[i] = { type = type, ref_start = d[1], ref_count = n_ref, cur_start = d[3], cur_count = n_cur }
+
+    -- Summary
+    local n_change = math.min(n_ref, n_cur)
+    hunk_summary.add = hunk_summary.add + n_cur - n_change
+    hunk_summary.change = hunk_summary.change + n_change
+    hunk_summary.delete = hunk_summary.delete + n_ref - n_change
+
+    -- Register lines for redraw. At least one line should visualize hunk.
+    local ext_opts = extmark_opts[type]
+    local from, n = math.max(d[3], 1), math.max(n_cur, 1)
+    for l_num = from, from + n - 1 do
+      -- Prefer "change" hunk type over anything already there (like "delete")
+      if redraw_line_data[l_num] == nil or type == 'change' then redraw_line_data[l_num] = ext_opts end
     end
   end
+  buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_data = hunks, hunk_summary, redraw_line_data
+
+  -- Set buffer-local variable with summary for easier external usage
+  vim.b.minidiff_summary = hunk_summary
+
+  -- Request highlighting clear to be done in decoration provider
+  buf_cache.needs_clear = true
+
+  -- Force redraw. NOTE: Using 'redraw' not always works (`<Cmd>update<CR>`
+  -- from keymap with "save" source will not redraw) and 'redraw!' flickers.
+  vim.api.nvim__buf_redraw_range(buf_id, 0, -1)
 end)
 
 -- Sources ====================================================================
