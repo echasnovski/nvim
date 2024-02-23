@@ -2,6 +2,11 @@
 --
 -- Code:
 --
+-- - Refactor options to have separate `config.view` and `config.source`:
+--     - `view.style = 'sign'`, `view.priority = 10`, and
+--       `view.sign_text = {add = '+', change = '~', delete = '-'}`
+--     - `source.attach`, `source.detach`, `source.apply_hunks()`.
+--
 -- - When moving added line upwards, extmark should not temporarily shift down.
 --
 -- - `goto()` with directions "first"/"prev"/"next"/"last"; `wrap` and `n_times`.
@@ -13,8 +18,10 @@
 -- Docs:
 --
 -- Tests:
--- - Updates if no redraw seemingly is done. Example for `save` source: `yyp` should add green
---   highlighting and `<C-s>` should remove it.
+-- - Updates if no redraw seemingly is done. Example for `save` source: `yyp`
+--   should add green highlighting and `<C-s>` should remove it.
+--
+-- - Deleting last line should be visualized.
 
 --- *mini.diff* Work with diff hunks
 --- *MiniDiff*
@@ -268,7 +275,7 @@ MiniDiff.gen_source.save = function(opts)
     end
 
     local au_opts = { group = augroup, buffer = buf_id, callback = set_ref, desc = 'Set reference text after save' }
-    vim.api.nvim_create_autocmd('BufWritePost', au_opts)
+    vim.api.nvim_create_autocmd({ 'BufWritePost', 'FileChangedShellPost' }, au_opts)
     set_ref()
   end
 
@@ -345,7 +352,7 @@ H.apply_config = function(config)
     end
 
     local redraw_line_data = buf_cache.redraw_line_data
-    for i = top, bottom do
+    for i = top + 1, bottom + 1 do
       if redraw_line_data[i] ~= nil then
         H.set_extmark(bufnr, ns_id_viz, i - 1, 0, redraw_line_data[i])
         redraw_line_data[i] = nil
@@ -477,6 +484,7 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   -- Return early if buffer is not proper
   local buf_cache = H.cache[buf_id]
   if not vim.api.nvim_buf_is_valid(buf_id) or H.is_disabled(buf_id) or buf_cache == nil then return end
+  if type(buf_cache.ref_text) ~= 'string' then return end
 
   -- Recompute diff hunks with summary
   H.vimdiff_opts.algorithm = buf_cache.options.algorithm
