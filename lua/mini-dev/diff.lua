@@ -2,17 +2,21 @@
 --
 -- Code:
 --
--- - Refactor options to have separate `config.view` and `config.source`:
---     - `view.style = 'sign'`, `view.priority = 10`, and
---       `view.sign_text = {add = '+', change = '~', delete = '-'}`
---     - `source.attach`, `source.detach`, `source.apply_hunks()`.
+-- - REALLLY think about renaming to 'mini.hunks'.
 --
 -- - When moving added line upwards, extmark should not temporarily shift down.
 --
+-- - Add `config.mappings` with `gh`/`gH` for apply/undo hunk operators,
+--   `gh` as textobject (think about different name to have work in both Visual
+--   and Opertor-pending modes)?
+--
+-- - `toggle_style()` - set style to target if not equal to current, apply
+--   previous otherwise.
 -- - `goto()` with directions "first"/"prev"/"next"/"last"; `wrap` and `n_times`.
 -- - `setqflist()`.
--- - `apply_hunk()` to apply hunk at cursor.
--- - `apply_range()` to apply hunk constructed from range.
+-- - `apply_range()` to apply hunks constructed from range.
+-- - `undo_range()` to undo hunks constructed from range. NOTE: does not need
+--   source method as it modifies current text based on reference text.
 -- - `textobject` for hunk textobject.
 --
 -- Docs:
@@ -73,12 +77,15 @@
 ---
 --- # Highlight groups ~
 ---
---- * `MiniDiffAdd`        - add hunks.
---- * `MiniDiffChange`     - change hunks.
---- * `MiniDiffDelete`     - delete hunks.
---- * `MiniDiffTextAdd`    - "add" part of hunk in text area.
---- * `MiniDiffTextChange` - "change" part of hunk in text area.
---- * `MiniDiffTextDelete` - "delete" part of hunk in text area.
+--- * `MiniDiffSignAdd`    - add hunks with gutter view.
+--- * `MiniDiffSignChange` - change hunks with gutter view.
+--- * `MiniDiffSignDelete` - delete hunks with gutter view.
+--- * `MiniDiffLineAdd`    - add hunks with line view.
+--- * `MiniDiffLineChange` - change hunks with line view.
+--- * `MiniDiffLineDelete` - delete hunks with line view.
+--- * `MiniDiffWordAdd`    - add hunks with word view.
+--- * `MiniDiffWordChange` - change hunks with word view.
+--- * `MiniDiffWordDelete` - delete hunks with word view.
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 
@@ -127,16 +134,26 @@ end
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniDiff.config = {
-  -- Source for how to reference text is computed/updated/visualized/etc.
+  -- Options for how hunks are visualized
+  view = {
+    -- General visualization style. Available values are:
+    -- 'sign', 'number', 'line', 'word'.
+    style = vim.o.number and 'number' or 'sign',
+
+    -- Signs used for hunks with 'sign' view
+    signs = { add = '▒', change = '▒', delete = '▒' },
+
+    -- Priority of used extmarks
+    priority = 10,
+  },
+
+  -- Source for how to reference text is computed/updated/etc.
   source = nil,
 
   -- Delays (in ms) defining asynchronous visualization process
   delay = {
     -- How much to wait for update after every text change
     text_change = 200,
-
-    -- How much to wait for update after window scroll
-    scroll = 50,
   },
 
   -- Various options
@@ -174,7 +191,7 @@ MiniDiff.enable = function(buf_id, config)
       local buf_cache = H.cache[buf_id]
       -- Properly detach if diffing is disabled
       if buf_cache == nil then return true end
-      H.schedule_diff_update(buf_id, buf_cache.delay.text_change)
+      H.schedule_diff_update(buf_id, buf_cache.config.delay.text_change)
     end,
 
     -- Called when buffer content is changed outside of current session
@@ -235,6 +252,27 @@ MiniDiff.update = function(buf_id)
   H.schedule_diff_update(buf_id, 0)
 end
 
+-- TODO: Or maybe not export this and export `apply_range(buf_id, from, to)` directly?
+MiniDiff.apply_hunks = function(buf_id, hunks)
+  buf_id = H.validate_buf_id(buf_id)
+  hunks = H.validate_hunks(hunks)
+  local buf_cache = H.cache[buf_id]
+  if buf_cache == nil then H.error('Buffer ' .. buf_id .. ' does not have enabled source.') end
+  buf_cache.source.apply_hunks(buf_id, hunks)
+end
+
+MiniDiff.get_buf_data = function(buf_id)
+  buf_id = H.validate_buf_id(buf_id)
+  local buf_cache = H.cache[buf_id]
+  if buf_cache == nil then return nil end
+  return vim.deepcopy({
+    ref_text = buf_cache.ref_text,
+    hunks = buf_cache.hunks,
+    hunk_summary = buf_cache.hunk_summary,
+    config = buf_cache.config,
+  })
+end
+
 MiniDiff.set_ref_text = function(buf_id, text)
   buf_id = H.validate_buf_id(buf_id)
   if type(text) == 'table' then text = table.concat(text, '\n') end
@@ -260,10 +298,7 @@ MiniDiff.gen_source.git = function()
   return { attach = attach, detach = detach, apply_hunks = apply_hunks }
 end
 
-MiniDiff.gen_source.save = function(opts)
-  local default_hl_groups = { add = 'MiniDiffAdd', change = 'MiniDiffChange', delete = 'MiniDiffDelete' }
-  local extmark_opts = H.source_make_extmark_opts(opts)
-
+MiniDiff.gen_source.save = function()
   local augroups = {}
   local attach = function(buf_id)
     local augroup = vim.api.nvim_create_augroup('MiniDiffSourceSaveBuffer' .. buf_id, { clear = true })
@@ -274,6 +309,7 @@ MiniDiff.gen_source.save = function(opts)
       MiniDiff.set_ref_text(buf_id, vim.api.nvim_buf_get_lines(buf_id, 0, -1, false))
     end
 
+    -- Autocommand are more effecient than file watcher as it doesn't read disk
     local au_opts = { group = augroup, buffer = buf_id, callback = set_ref, desc = 'Set reference text after save' }
     vim.api.nvim_create_autocmd({ 'BufWritePost', 'FileChangedShellPost' }, au_opts)
     set_ref()
@@ -281,15 +317,34 @@ MiniDiff.gen_source.save = function(opts)
 
   local detach = function(buf_id) pcall(vim.api.nvim_del_augroup_by_id, augroups[buf_id]) end
 
-  -- TODO
-  local apply_hunks = function(hunks) end
+  local apply_hunks = function(buf_id, hunks)
+    -- Compute new lines after hunks are applied
+    local cur_lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
+    local ref_lines = vim.split(H.cache[buf_id].ref_text, '\n')
+    local new_lines = H.apply_hunks_to_lines(hunks, ref_lines, cur_lines)
 
-  return { extmark_opts = extmark_opts, attach = attach, detach = detach, apply_hunks = apply_hunks }
+    -- Write new lines to a file
+    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, new_lines)
+    vim.cmd('write')
+    vim.cmd('undo' .. (vim.fn.has('nvim-0.8') == 1 and '!' or ''))
+
+    -- Infer if new file state is modified
+    local is_modified = #cur_lines ~= #new_lines
+    for i = 1, math.min(#cur_lines, #new_lines) do
+      if cur_lines[i] ~= new_lines[i] then is_modified = true end
+    end
+    vim.bo[buf_id].modified = is_modified
+  end
+
+  return { attach = attach, detach = detach, apply_hunks = apply_hunks }
 end
 
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniDiff.config
+
+-- TODO: Use `Git` source by default?
+H.default_source = MiniDiff.gen_source.save()
 
 -- Timers
 H.timer_debounce = vim.loop.new_timer()
@@ -307,6 +362,15 @@ H.bufs_to_update = {}
 -- Cache per enabled buffer
 H.cache = {}
 
+-- Common extmark data for supported styles
+--stylua: ignore
+H.style_extmark_data = {
+  sign       = { hl_group_prefix = 'MiniDiffSign', field = 'sign_hl_group' },
+  number     = { hl_group_prefix = 'MiniDiffSign', field = 'number_hl_group' },
+  line       = { hl_group_prefix = 'MiniDiffLine', field = 'line_hl_group' },
+  word       = { hl_group_prefix = 'MiniDiffWord' },
+}
+
 -- Permanent `vim.diff()` options
 H.vimdiff_opts = { result_type = 'indices', ctxlen = 0, interhunkctxlen = 0 }
 H.vimdiff_supports_linematch = vim.fn.has('nvim-0.9') == 1
@@ -320,18 +384,28 @@ H.setup_config = function(config)
   config = vim.tbl_deep_extend('force', vim.deepcopy(H.default_config), config or {})
 
   vim.validate({
+    view = { config.view, 'table' },
     source = { config.source, 'table', true },
     delay = { config.delay, 'table' },
     options = { config.options, 'table' },
   })
 
   vim.validate({
+    ['view.style'] = { config.view.style, 'string' },
+    ['view.signs'] = { config.view.signs, 'table' },
+    ['view.priority'] = { config.view.priority, 'number' },
+
     ['delay.text_change'] = { config.delay.text_change, 'number' },
-    ['delay.scroll'] = { config.delay.scroll, 'number' },
 
     ['options.algorithm'] = { config.options.algorithm, 'string' },
     ['options.indent_heuristic'] = { config.options.indent_heuristic, 'boolean' },
     ['options.linematch'] = { config.options.linematch, 'number' },
+  })
+
+  vim.validate({
+    ['view.signs.add'] = { config.view.signs.add, 'string' },
+    ['view.signs.change'] = { config.view.signs.change, 'string' },
+    ['view.signs.delete'] = { config.view.signs.delete, 'string' },
   })
 
   return config
@@ -380,12 +454,15 @@ H.create_default_hl = function()
   end
 
   local has_core_diff_hl = vim.fn.has('nvim-0.10') == 1
-  hi('MiniDiffAdd',        { link = has_core_diff_hl and 'Added' or 'diffAdded' })
-  hi('MiniDiffChange',     { link = has_core_diff_hl and 'Changed' or 'diffChanged' })
-  hi('MiniDiffDelete',     { link = has_core_diff_hl and 'Removed' or 'diffRemoved'  })
-  hi('MiniDiffTextAdd',    { link = 'MiniDiffAdd' })
-  hi('MiniDiffTextChange', { link = 'MiniDiffChange' })
-  hi('MiniDiffTextDelete', { link = 'MiniDiffDelete'  })
+  hi('MiniDiffSignAdd',    { link = has_core_diff_hl and 'Added' or 'diffAdded' })
+  hi('MiniDiffSignChange', { link = has_core_diff_hl and 'Changed' or 'diffChanged' })
+  hi('MiniDiffSignDelete', { link = has_core_diff_hl and 'Removed' or 'diffRemoved'  })
+  hi('MiniDiffLineAdd',    { link = 'MiniDiffSignAdd' })
+  hi('MiniDiffLineChange', { link = 'MiniDiffSignChange' })
+  hi('MiniDiffLineDelete', { link = 'MiniDiffSignDelete'  })
+  hi('MiniDiffTextAdd',    { link = 'MiniDiffLineAdd' })
+  hi('MiniDiffTextChange', { link = 'MiniDiffLineChange' })
+  hi('MiniDiffTextDelete', { link = 'MiniDiffLineDelete'  })
 end
 
 H.is_disabled = function(buf_id)
@@ -428,16 +505,32 @@ H.validate_config_arg = function(x)
   H.error('`config` should be `nil` or table.')
 end
 
+H.validate_hunks = function(x)
+  if not vim.tbl_islist(x) then H.error('`hunks` should be array.') end
+  for _, h in ipairs(x) do
+    if type(x) ~= 'table' then H.error('`hunks` items should be tables.') end
+    if type(x.cur_start) ~= 'number' then H.error('`hunks` items should contain `cur_start` number field.') end
+    if type(x.cur_count) ~= 'number' then H.error('`hunks` items should contain `cur_count` number field.') end
+    if type(x.ref_start) ~= 'number' then H.error('`hunks` items should contain `ref_start` number field.') end
+    if type(x.ref_count) ~= 'number' then H.error('`hunks` items should contain `ref_count` number field.') end
+  end
+  return x
+end
+
+H.validate_callable = function(x, name)
+  if vim.is_callable(x) then return end
+  H.error('`' .. name .. '` should be callable.')
+end
+
 -- Enabling -------------------------------------------------------------------
 H.is_buf_enabled = function(buf_id) return H.cache[buf_id] ~= nil end
 
 H.update_cache = function(buf_id, config)
   local buf_cache = H.cache[buf_id] or {}
   local buf_config = H.get_config(config, buf_id)
-  -- TODO: Use `Git` source by default?
-  buf_cache.source = H.normalize_source(buf_config.source or MiniDiff.gen_source.save())
-  buf_cache.delay = buf_config.delay
-  buf_cache.options = buf_config.options
+  buf_cache.config = buf_config
+  buf_cache.extmark_opts = H.convert_view_to_extmark_opts(buf_config.view)
+  buf_cache.source = H.normalize_source(buf_config.source or H.default_source)
 
   buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_data = {}, {}, {}
 
@@ -447,23 +540,31 @@ end
 H.normalize_source = function(source)
   if type(source) ~= 'table' then H.error('`source` should be table.') end
 
-  local res = {}
-  res.attach = source.attach
-  if not vim.is_callable(res.attach) then H.error('`source.attach` should be callable.') end
-
-  res.extmark_opts = {}
-  for _, v in ipairs({ 'add', 'change', 'delete' }) do
-    res.extmark_opts[v] = vim.deepcopy(source.extmark_opts[v]) or {}
-    if type(res.extmark_opts[v]) ~= 'table' then H.error('`extmark_opts.' .. v .. '` should be table.') end
-  end
-
+  local res = { attach = source.attach, detach = source.detach, apply_hunks = source.apply_hunks }
   res.detach = source.detach or function(_) end
-  if not vim.is_callable(res.detach) then H.error('`source.detach` should be callable.') end
-
   res.apply_hunks = source.apply_hunks or function(_) end
-  if not vim.is_callable(res.apply_hunks) then H.error('`source.apply_hunks` should be callable.') end
+
+  H.validate_callable(res.attach, 'source.attach')
+  H.validate_callable(res.detach, 'source.detach')
+  H.validate_callable(res.apply_hunks, 'source.apply_hunks')
 
   return res
+end
+
+H.convert_view_to_extmark_opts = function(view)
+  local extmark_data = H.style_extmark_data[view.style]
+  if extmark_data == nil then H.error('`view.style` ' .. vim.inspect(view.style) .. ' is not supported.') end
+
+  -- TODO: Handle "word" style separately
+
+  local signs = {}
+  if view.style == 'sign' then signs = view.signs end
+  local field, hl_group_prefix = extmark_data.field, extmark_data.hl_group_prefix
+  return {
+    add = { [field] = hl_group_prefix .. 'Add', sign_text = signs.add, priority = view.priority },
+    change = { [field] = hl_group_prefix .. 'Change', sign_text = signs.change, priority = view.priority },
+    delete = { [field] = hl_group_prefix .. 'Delete', sign_text = signs.delete, priority = view.priority },
+  }
 end
 
 -- Processing -----------------------------------------------------------------
@@ -484,17 +585,18 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   -- Return early if buffer is not proper
   local buf_cache = H.cache[buf_id]
   if not vim.api.nvim_buf_is_valid(buf_id) or H.is_disabled(buf_id) or buf_cache == nil then return end
-  if type(buf_cache.ref_text) ~= 'string' then return end
 
   -- Recompute diff hunks with summary
-  H.vimdiff_opts.algorithm = buf_cache.options.algorithm
-  H.vimdiff_opts.indent_heuristic = buf_cache.options.indent_heuristic
-  if H.vimdiff_supports_linematch then H.vimdiff_opts.linematch = buf_cache.options.linematch end
+  local options = buf_cache.config.options
+  H.vimdiff_opts.algorithm = options.algorithm
+  H.vimdiff_opts.indent_heuristic = options.indent_heuristic
+  if H.vimdiff_supports_linematch then H.vimdiff_opts.linematch = options.linematch end
   local cur_text = table.concat(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false), '\n')
   local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
 
-  local extmark_opts = buf_cache.source.extmark_opts
-  local hunks, hunk_summary, redraw_line_data = {}, { add = 0, change = 0, delete = 0 }, {}
+  local extmark_opts = buf_cache.extmark_opts
+  local hunks, redraw_line_data = {}, {}
+  local n_add, n_change, n_delete = 0, 0, 0
   for i, d in ipairs(diff) do
     local n_ref, n_cur = d[2], d[4]
     -- Hunk
@@ -502,10 +604,10 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
     hunks[i] = { type = type, ref_start = d[1], ref_count = n_ref, cur_start = d[3], cur_count = n_cur }
 
     -- Summary
-    local n_change = math.min(n_ref, n_cur)
-    hunk_summary.add = hunk_summary.add + n_cur - n_change
-    hunk_summary.change = hunk_summary.change + n_change
-    hunk_summary.delete = hunk_summary.delete + n_ref - n_change
+    local hunk_n_change = math.min(n_ref, n_cur)
+    n_add = n_add + n_cur - hunk_n_change
+    n_change = n_change + hunk_n_change
+    n_delete = n_delete + n_ref - hunk_n_change
 
     -- Register lines for redraw. At least one line should visualize hunk.
     local ext_opts = extmark_opts[type]
@@ -515,10 +617,17 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
       if redraw_line_data[l_num] == nil or type == 'change' then redraw_line_data[l_num] = ext_opts end
     end
   end
+  local hunk_summary = { add = n_add, change = n_change, delete = n_delete }
   buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_data = hunks, hunk_summary, redraw_line_data
 
   -- Set buffer-local variable with summary for easier external usage
   vim.b.minidiff_summary = hunk_summary
+
+  local summary = {}
+  if n_add > 0 then table.insert(summary, '+' .. n_add) end
+  if n_change > 0 then table.insert(summary, '~' .. n_change) end
+  if n_delete > 0 then table.insert(summary, '-' .. n_delete) end
+  vim.b.minidiff_summary_string = table.concat(summary, ' ')
 
   -- Request highlighting clear to be done in decoration provider
   buf_cache.needs_clear = true
@@ -526,27 +635,50 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   -- Force redraw. NOTE: Using 'redraw' not always works (`<Cmd>update<CR>`
   -- from keymap with "save" source will not redraw) and 'redraw!' flickers.
   vim.api.nvim__buf_redraw_range(buf_id, 0, -1)
+
+  -- Redraw statusline to have possible statusline component up to date
+  vim.cmd('redrawstatus')
+
+  -- Trigger event for users to possibly hook into
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniDiffUpdated' })
 end)
 
--- Sources ====================================================================
-H.source_make_extmark_opts = function(opts)
-  -- TODO: Decide on default style
-  local default_hl_groups = { add = 'MiniDiffAdd', change = 'MiniDiffChange', delete = 'MiniDiffDelete' }
-  local default_opts = { style = 'number', sign_text = '▒', hl_groups = default_hl_groups, priority = 10 }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
+-- Hunks ----------------------------------------------------------------------
+H.apply_hunks_to_lines = function(hunks, ref_lines, cur_lines)
+  hunks = vim.deepcopy(hunks)
+  table.sort(hunks, function(a, b) return a.ref_start < b.ref_start end)
 
-  local style, sign_text = opts.style or 'sign', nil
-  if style == 'sign' then sign_text = opts.sign_text end
+  local res, lnum = {}, 0
+  for _, h in ipairs(hunks) do
+    -- "Add" hunks have reference start just above lines to be added
+    local hunk_start = h.ref_start + (h.ref_count == 0 and 0 or -1)
+
+    -- Add lines between hunks (and before first one)
+    for i = lnum + 1, hunk_start do
+      table.insert(res, ref_lines[i])
+    end
+
+    -- Replace deleted lines (maybe zero) with current lines (maybe zero)
+    for j = h.cur_start, h.cur_start + h.cur_count - 1 do
+      table.insert(res, cur_lines[j])
+    end
+    lnum = hunk_start + h.ref_count
+  end
+
+  -- Add lines after last hunk (even if there is no hunks)
+  for i = lnum + 1, #ref_lines do
+    table.insert(res, ref_lines[i])
+  end
+
+  return res
+end
+
+H.invert_hunk = function(hunk)
   --stylua: ignore
-  local field = ({
-    sign = 'sign_hl_group', number = 'number_hl_group', cursorline = 'cursorline_hl_group', line = 'line_hl_group',
-  })[style]
-  if field == nil then H.error('`opts.style` should be one of "sign", "number", "line", "cursorline".') end
-
   return {
-    add = { [field] = opts.hl_groups.add, sign_text = sign_text, priority = opts.priority },
-    change = { [field] = opts.hl_groups.change, sign_text = sign_text, priority = opts.priority },
-    delete = { [field] = opts.hl_groups.delete, sign_text = sign_text, priority = opts.priority },
+    cur_start = hunk.ref_start, cur_count = hunk.ref_count,
+    ref_start = hunk.cur_start, ref_count = hunk.cur_count,
+    type = hunk.cur_count == 0 and 'add' or (hunk.ref_count == 0 and 'delete' or 'change'),
   }
 end
 
