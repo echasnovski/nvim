@@ -33,16 +33,11 @@ local get_snippet_at_cursor = function()
 end
 
 local jump_or_expand = function()
-  if vim.snippet.jumpable(1) then
-    close_pumvisible()
-    vim.schedule(function() vim.snippet.jump(1) end)
-    return
-  end
+  if vim.snippet.jumpable(1) then return vim.snippet.jump(1) end
 
   local snippet, prefix = get_snippet_at_cursor()
   if type(snippet) ~= 'string' then return end
 
-  close_pumvisible()
   vim.schedule(function()
     local lnum, col = unpack(vim.api.nvim_win_get_cursor(0))
     vim.api.nvim_buf_set_text(0, lnum - 1, col - #prefix, lnum - 1, col, {})

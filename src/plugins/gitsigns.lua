@@ -9,6 +9,7 @@ gitsigns.setup({
     untracked = { text = '░' },
   },
   preview_config = { border = 'double' },
+  diff_opts = { linematch = 60 },
 })
 
 vim.keymap.set('n', '[h', gitsigns.prev_hunk, { desc = 'Backward hunk' })
