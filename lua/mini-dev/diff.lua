@@ -182,7 +182,11 @@ MiniDiff.enable = function(buf_id, config)
   H.update_cache(buf_id, config)
 
   -- Attach source
-  H.cache[buf_id].source.attach(buf_id)
+  local attach_output = H.cache[buf_id].source.attach(buf_id)
+  if attach_output == false then
+    H.cache[buf_id] = nil
+    return
+  end
 
   -- Add buffer watchers
   vim.api.nvim_buf_attach(buf_id, false, {
@@ -278,6 +282,9 @@ MiniDiff.set_ref_text = function(buf_id, text)
   if type(text) == 'table' then text = table.concat(text, '\n') end
   if type(text) ~= 'string' then H.error('`text` should be either string or array.') end
 
+  -- Appending '\n' makes more intuitive diffs at end-of-file
+  if string.sub(text, -1) ~= '\n' then text = text .. '\n' end
+
   if not H.is_buf_enabled(buf_id) then MiniDiff.enable(buf_id) end
   H.cache[buf_id].ref_text = text
   H.schedule_diff_update(buf_id, 0)
@@ -289,10 +296,35 @@ end
 MiniDiff.gen_source = {}
 
 MiniDiff.gen_source.git = function()
+  local fs_events = {}
+  local attach = function(buf_id)
+    local path = vim.api.nvim_buf_get_name(buf_id)
+    if path == '' or vim.fn.filereadable(path) ~= 1 then return end
+    local cwd, basename = vim.fn.fnamemodify(path, ':h'), vim.fn.fnamemodify(path, ':t')
+
+    local buf_set_ref_text = vim.schedule_wrap(function() H.git_set_ref_text(buf_id, cwd, basename) end)
+
+    buf_set_ref_text()
+
+    -- Recompute buffer's reference text after any change is done to target Git
+    -- repo (including staging/unstaging). This is done by tracking changes in
+    -- repo's 'index' file.
+    local setup_index_watch = function(index_path)
+      local ok, buf_fs_event = pcall(vim.loop.new_fs_event)
+      if not ok then return end
+      buf_fs_event:start(index_path, {}, buf_set_ref_text)
+      fs_events[buf_id] = buf_fs_event
+    end
+    local disable_buffer = vim.schedule_wrap(function() MiniDiff.disable(buf_id) end)
+    H.git_start_watching_index(cwd, setup_index_watch, disable_buffer)
+  end
+
+  local detach = function(buf_id)
+    if fs_events[buf_id] == nil then return end
+    pcall(vim.loop.fs_event_stop, fs_events[buf_id])
+  end
+
   -- TODO
-  local augroups = {}
-  local attach = function(buf_id) end
-  local detach = function(buf_id) end
   local apply_hunks = function(hunks) end
 
   return { attach = attach, detach = detach, apply_hunks = apply_hunks }
@@ -344,7 +376,8 @@ end
 H.default_config = MiniDiff.config
 
 -- TODO: Use `Git` source by default?
-H.default_source = MiniDiff.gen_source.save()
+-- H.default_source = MiniDiff.gen_source.save()
+H.default_source = MiniDiff.gen_source.git()
 
 -- Timers
 H.timer_debounce = vim.loop.new_timer()
@@ -482,11 +515,9 @@ end
 
 -- Autocommands ---------------------------------------------------------------
 H.auto_enable = vim.schedule_wrap(function(data)
-  if H.is_buf_enabled(data.buf) then return end
-
-  -- Autoenable only in valid normal buffers. This function is scheduled so as
-  -- to have the relevant `buftype`.
-  if vim.api.nvim_buf_is_valid(data.buf) and vim.bo[data.buf].buftype == '' then MiniDiff.enable(data.buf) end
+  if H.is_buf_enabled(data.buf) or H.is_disabled(data.buf) then return end
+  if not vim.api.nvim_buf_is_valid(data.buf) or vim.bo[data.buf].buftype ~= '' then return end
+  MiniDiff.enable(data.buf)
 end)
 
 -- Validators -----------------------------------------------------------------
@@ -542,7 +573,7 @@ H.normalize_source = function(source)
 
   local res = { attach = source.attach, detach = source.detach, apply_hunks = source.apply_hunks }
   res.detach = source.detach or function(_) end
-  res.apply_hunks = source.apply_hunks or function(_) end
+  res.apply_hunks = source.apply_hunks or function(_) H.error('Current source does not support applying hunks.') end
 
   H.validate_callable(res.attach, 'source.attach')
   H.validate_callable(res.detach, 'source.detach')
@@ -582,16 +613,26 @@ H.process_scheduled_buffers = vim.schedule_wrap(function()
 end)
 
 H.update_buf_diff = vim.schedule_wrap(function(buf_id)
-  -- Return early if buffer is not proper
+  -- Make early returns
   local buf_cache = H.cache[buf_id]
-  if not vim.api.nvim_buf_is_valid(buf_id) or H.is_disabled(buf_id) or buf_cache == nil then return end
+  if buf_cache == nil then return end
+  if not vim.api.nvim_buf_is_valid(buf_id) then
+    H.cache[buf_id] = nil
+    return
+  end
+  if type(buf_cache.ref_text) ~= 'string' or H.is_disabled(buf_id) then
+    buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_data = {}, {}, {}
+    vim.b[buf_id].minidiff_summary, vim.b[buf_id].minidiff_summary_string = {}, ''
+    return
+  end
 
   -- Recompute diff hunks with summary
   local options = buf_cache.config.options
   H.vimdiff_opts.algorithm = options.algorithm
   H.vimdiff_opts.indent_heuristic = options.indent_heuristic
   if H.vimdiff_supports_linematch then H.vimdiff_opts.linematch = options.linematch end
-  local cur_text = table.concat(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false), '\n')
+  -- - NOTE: Appending '\n' makes more intuitive diffs at end-of-file
+  local cur_text = table.concat(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false), '\n') .. '\n'
   local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
 
   local extmark_opts = buf_cache.extmark_opts
@@ -621,13 +662,13 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_data = hunks, hunk_summary, redraw_line_data
 
   -- Set buffer-local variable with summary for easier external usage
-  vim.b.minidiff_summary = hunk_summary
+  vim.b[buf_id].minidiff_summary = hunk_summary
 
   local summary = {}
   if n_add > 0 then table.insert(summary, '+' .. n_add) end
   if n_change > 0 then table.insert(summary, '~' .. n_change) end
   if n_delete > 0 then table.insert(summary, '-' .. n_delete) end
-  vim.b.minidiff_summary_string = table.concat(summary, ' ')
+  vim.b[buf_id].minidiff_summary_string = table.concat(summary, ' ')
 
   -- Request highlighting clear to be done in decoration provider
   buf_cache.needs_clear = true
@@ -680,6 +721,66 @@ H.invert_hunk = function(hunk)
     ref_start = hunk.cur_start, ref_count = hunk.cur_count,
     type = hunk.cur_count == 0 and 'add' or (hunk.ref_count == 0 and 'delete' or 'change'),
   }
+end
+
+-- Git ------------------------------------------------------------------------
+H.git_start_watching_index = function(cwd, setup_index_watch, disable_buffer)
+  local stdout, stderr = vim.loop.new_pipe(), vim.loop.new_pipe()
+  local args = { 'rev-parse', '--path-format=absolute', '--git-path', 'index' }
+  local spawn_opts = { args = args, cwd = cwd, stdio = { nil, stdout, stderr } }
+  vim.loop.spawn('git', spawn_opts, function() end)
+
+  local stdout_callback = function(output)
+    if string.sub(output, -1) == '\n' then output = string.sub(output, 1, -2) end
+    -- Disable if index is not found
+    if output == '' then return disable_buffer() end
+    setup_index_watch(output)
+  end
+  H.git_read_stream(stdout, stdout_callback)
+
+  -- Disable buffer on error as it usually means "Not in Git repository"
+  H.git_read_stderr(stderr, disable_buffer)
+end
+
+H.git_set_ref_text = function(buf_id, cwd, basename)
+  -- TODO: Debug why this is not called when hunk is unstaged
+  add_to_log('git_set_ref_text', { cwd = cwd, basename = basename })
+  local stdout, stderr = vim.loop.new_pipe(), vim.loop.new_pipe()
+  local spawn_opts = { args = { 'show', ':0:./' .. basename }, cwd = cwd, stdio = { nil, stdout, stderr } }
+  vim.loop.spawn('git', spawn_opts, function() end)
+
+  local stdout_callback = vim.schedule_wrap(function(output)
+    add_to_log('git_set_ref_text stdout', { output })
+    MiniDiff.set_ref_text(buf_id, output)
+  end)
+  H.git_read_stream(stdout, stdout_callback)
+
+  local raise = function(output)
+    add_to_log('git_set_ref_text stderr', { output })
+    H.error('Error in `git` source:\n' .. output)
+  end
+  H.git_read_stderr(stderr, raise)
+end
+
+H.git_read_stream = function(stream, feed_callback)
+  local feed = {}
+  local callback = function(err, data)
+    if err then H.error('Error in `git` source:\n' .. err) end
+    if data ~= nil then return table.insert(feed, data) end
+    stream:close()
+    local output = table.concat(feed, '')
+    feed_callback(output)
+  end
+  stream:read_start(callback)
+end
+
+H.git_read_stderr = function(stderr, action)
+  local cb = function(output)
+    -- Ignore Git writing not meaningful strings to stderr
+    if string.find(output, '^%s*$') ~= nil then return end
+    action(output)
+  end
+  H.git_read_stream(stderr, cb)
 end
 
 -- Utilities ------------------------------------------------------------------
