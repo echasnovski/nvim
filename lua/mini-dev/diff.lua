@@ -1,6 +1,7 @@
 -- TODO:
 --
 -- Code:
+-- - Manage "not in index" files by not showing diff visualization.
 --
 -- - REALLLY think about renaming to 'mini.hunks'.
 --
@@ -199,7 +200,7 @@ MiniDiff.enable = function(buf_id, config)
     end,
 
     -- Called when buffer content is changed outside of current session
-    on_reload = function() pcall(MiniDiff.update, buf_id) end,
+    on_reload = function() pcall(MiniDiff.refresh, buf_id) end,
 
     -- Called when buffer is unloaded from memory (`:h nvim_buf_detach_event`),
     -- **including** `:edit` command
@@ -249,11 +250,12 @@ MiniDiff.toggle = function(buf_id, config)
   end
 end
 
---- Update diff in buffer
-MiniDiff.update = function(buf_id)
+--- Refresh diff in buffer
+MiniDiff.refresh = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
-  if not H.is_buf_enabled(buf_id) then H.error(string.format('Buffer %d is not enabled.', buf_id)) end
-  H.schedule_diff_update(buf_id, 0)
+  local buf_cache = H.cache[buf_id]
+  if buf_cache == nil then H.error(string.format('Buffer %d is not enabled.', buf_id)) end
+  buf_cache.source.refresh(buf_id)
 end
 
 -- TODO: Or maybe not export this and export `apply_range(buf_id, from, to)` directly?
@@ -265,6 +267,7 @@ MiniDiff.apply_hunks = function(buf_id, hunks)
   buf_cache.source.apply_hunks(buf_id, hunks)
 end
 
+-- `ref_text` can be `nil` indicating that source did not react (yet).
 MiniDiff.get_buf_data = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   local buf_cache = H.cache[buf_id]
@@ -296,38 +299,35 @@ end
 MiniDiff.gen_source = {}
 
 MiniDiff.gen_source.git = function()
-  local fs_events = {}
-  local attach = function(buf_id)
+  local parse_buf_name = function(buf_id)
     local path = vim.api.nvim_buf_get_name(buf_id)
     if path == '' or vim.fn.filereadable(path) ~= 1 then return end
-    local cwd, basename = vim.fn.fnamemodify(path, ':h'), vim.fn.fnamemodify(path, ':t')
+    return vim.fn.fnamemodify(path, ':h'), vim.fn.fnamemodify(path, ':t')
+  end
 
-    local buf_set_ref_text = vim.schedule_wrap(function() H.git_set_ref_text(buf_id, cwd, basename) end)
+  local attach = function(buf_id)
+    local cwd, basename = parse_buf_name(buf_id)
+    if cwd == nil then return end
+    H.git_start_watching_index(buf_id, cwd, basename)
+  end
 
-    buf_set_ref_text()
-
-    -- Recompute buffer's reference text after any change is done to target Git
-    -- repo (including staging/unstaging). This is done by tracking changes in
-    -- repo's 'index' file.
-    local setup_index_watch = function(index_path)
-      local ok, buf_fs_event = pcall(vim.loop.new_fs_event)
-      if not ok then return end
-      buf_fs_event:start(index_path, {}, buf_set_ref_text)
-      fs_events[buf_id] = buf_fs_event
-    end
-    local disable_buffer = vim.schedule_wrap(function() MiniDiff.disable(buf_id) end)
-    H.git_start_watching_index(cwd, setup_index_watch, disable_buffer)
+  local refresh = function(buf_id)
+    if H.git_cache[buf_id] == nil then return end
+    local cwd, basename = parse_buf_name(buf_id)
+    if cwd == nil then return end
+    H.git_set_ref_text(buf_id, cwd, basename)
   end
 
   local detach = function(buf_id)
-    if fs_events[buf_id] == nil then return end
-    pcall(vim.loop.fs_event_stop, fs_events[buf_id])
+    if H.git_cache[buf_id] == nil then return end
+    pcall(vim.loop.fs_event_stop, H.git_cache[buf_id].fs_event)
+    pcall(vim.loop.timer_stop, H.git_cache[buf_id].timer)
   end
 
   -- TODO
   local apply_hunks = function(hunks) end
 
-  return { attach = attach, detach = detach, apply_hunks = apply_hunks }
+  return { attach = attach, refresh = refresh, detach = detach, apply_hunks = apply_hunks }
 end
 
 MiniDiff.gen_source.save = function()
@@ -349,26 +349,7 @@ MiniDiff.gen_source.save = function()
 
   local detach = function(buf_id) pcall(vim.api.nvim_del_augroup_by_id, augroups[buf_id]) end
 
-  local apply_hunks = function(buf_id, hunks)
-    -- Compute new lines after hunks are applied
-    local cur_lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
-    local ref_lines = vim.split(H.cache[buf_id].ref_text, '\n')
-    local new_lines = H.apply_hunks_to_lines(hunks, ref_lines, cur_lines)
-
-    -- Write new lines to a file
-    vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, new_lines)
-    vim.cmd('write')
-    vim.cmd('undo' .. (vim.fn.has('nvim-0.8') == 1 and '!' or ''))
-
-    -- Infer if new file state is modified
-    local is_modified = #cur_lines ~= #new_lines
-    for i = 1, math.min(#cur_lines, #new_lines) do
-      if cur_lines[i] ~= new_lines[i] then is_modified = true end
-    end
-    vim.bo[buf_id].modified = is_modified
-  end
-
-  return { attach = attach, detach = detach, apply_hunks = apply_hunks }
+  return { attach = attach, detach = detach }
 end
 
 -- Helper data ================================================================
@@ -394,6 +375,9 @@ H.bufs_to_update = {}
 
 -- Cache per enabled buffer
 H.cache = {}
+
+-- Cache per buffer for attached `git` source
+H.git_cache = {}
 
 -- Common extmark data for supported styles
 --stylua: ignore
@@ -572,10 +556,12 @@ H.normalize_source = function(source)
   if type(source) ~= 'table' then H.error('`source` should be table.') end
 
   local res = { attach = source.attach, detach = source.detach, apply_hunks = source.apply_hunks }
+  res.refresh = source.refresh or function(buf_id) MiniDiff.set_ref_text(buf_id, H.cache[buf_id].ref_text) end
   res.detach = source.detach or function(_) end
   res.apply_hunks = source.apply_hunks or function(_) H.error('Current source does not support applying hunks.') end
 
   H.validate_callable(res.attach, 'source.attach')
+  H.validate_callable(res.refresh, 'source.refresh')
   H.validate_callable(res.detach, 'source.detach')
   H.validate_callable(res.apply_hunks, 'source.apply_hunks')
 
@@ -674,7 +660,7 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   buf_cache.needs_clear = true
 
   -- Force redraw. NOTE: Using 'redraw' not always works (`<Cmd>update<CR>`
-  -- from keymap with "save" source will not redraw) and 'redraw!' flickers.
+  -- from keymap with "save" source will not redraw) while 'redraw!' flickers.
   vim.api.nvim__buf_redraw_range(buf_id, 0, -1)
 
   -- Redraw statusline to have possible statusline component up to date
@@ -724,17 +710,29 @@ H.invert_hunk = function(hunk)
 end
 
 -- Git ------------------------------------------------------------------------
-H.git_start_watching_index = function(cwd, setup_index_watch, disable_buffer)
+H.git_start_watching_index = function(buf_id, cwd, basename)
+  -- NOTE: Watching single 'index' file is not enough as staging by Git is done
+  -- via "create fresh 'index.lock' file, apply modifications, change file name
+  -- to 'index'". Hence watch the whole '.git' (first level) and react only if
+  -- change was in 'index' file.
   local stdout, stderr = vim.loop.new_pipe(), vim.loop.new_pipe()
-  local args = { 'rev-parse', '--path-format=absolute', '--git-path', 'index' }
+  local args = { 'rev-parse', '--path-format=absolute', '--git-dir' }
   local spawn_opts = { args = args, cwd = cwd, stdio = { nil, stdout, stderr } }
   vim.loop.spawn('git', spawn_opts, function() end)
 
+  local buf_set_ref_text = function() H.git_set_ref_text(buf_id, cwd, basename) end
+  local disable_buffer = vim.schedule_wrap(function() MiniDiff.disable(buf_id) end)
+
   local stdout_callback = function(output)
     if string.sub(output, -1) == '\n' then output = string.sub(output, 1, -2) end
-    -- Disable if index is not found
+    -- Disable if index is not found (either not in repo or there is no `git`)
     if output == '' then return disable_buffer() end
-    setup_index_watch(output)
+
+    -- Set up watching index
+    H.git_setup_index_watch(output, buf_id, buf_set_ref_text)
+
+    -- Set reference text immediately
+    buf_set_ref_text()
   end
   H.git_read_stream(stdout, stdout_callback)
 
@@ -742,24 +740,35 @@ H.git_start_watching_index = function(cwd, setup_index_watch, disable_buffer)
   H.git_read_stderr(stderr, disable_buffer)
 end
 
+H.git_setup_index_watch = function(index_path, buf_id, buf_set_ref_text)
+  local ok, buf_fs_event = pcall(vim.loop.new_fs_event)
+  if not ok then return vim.schedule(function() MiniDiff.disable(buf_id) end) end
+  local timer = vim.loop.new_timer()
+
+  local watch_index = function(_, filename, _)
+    if filename ~= 'index' then return end
+    -- Debounce to not overload during incremental staging (like in script)
+    timer:stop()
+    timer:start(10, 0, buf_set_ref_text)
+  end
+  buf_fs_event:start(index_path, { recursive = false }, watch_index)
+  H.git_cache[buf_id] = { fs_event = buf_fs_event, timer = timer }
+end
+
 H.git_set_ref_text = function(buf_id, cwd, basename)
-  -- TODO: Debug why this is not called when hunk is unstaged
-  add_to_log('git_set_ref_text', { cwd = cwd, basename = basename })
   local stdout, stderr = vim.loop.new_pipe(), vim.loop.new_pipe()
   local spawn_opts = { args = { 'show', ':0:./' .. basename }, cwd = cwd, stdio = { nil, stdout, stderr } }
   vim.loop.spawn('git', spawn_opts, function() end)
 
-  local stdout_callback = vim.schedule_wrap(function(output)
-    add_to_log('git_set_ref_text stdout', { output })
-    MiniDiff.set_ref_text(buf_id, output)
-  end)
+  local stdout_callback = vim.schedule_wrap(function(output) MiniDiff.set_ref_text(buf_id, output) end)
   H.git_read_stream(stdout, stdout_callback)
 
-  local raise = function(output)
-    add_to_log('git_set_ref_text stderr', { output })
+  local possibly_raise = function(output)
+    -- Do nothing if file exists on disk but not in index
+    if string.find(output, 'exists on disk') ~= nil then return end
     H.error('Error in `git` source:\n' .. output)
   end
-  H.git_read_stderr(stderr, raise)
+  H.git_read_stderr(stderr, possibly_raise)
 end
 
 H.git_read_stream = function(stream, feed_callback)
