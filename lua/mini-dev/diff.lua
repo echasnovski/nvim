@@ -343,7 +343,6 @@ MiniDiff.gen_source.git = function()
     H.git_invalidate_cache(cache)
   end
 
-  -- TODO
   local apply_hunks = function(buf_id, hunks)
     add_to_log('`git` apply_hunks', hunks)
 
@@ -353,9 +352,10 @@ MiniDiff.gen_source.git = function()
     local path = vim.api.nvim_buf_get_name(buf_id)
     if path == '' then return nil end
 
-    local cwd, basename = vim.fn.fnamemodify(path, ':h'), vim.fn.fnamemodify(path, ':t')
-    local patch = H.git_format_patch(buf_id, hunks, basename)
-    H.git_apply_patch(cwd, patch)
+    local path_data = H.git_get_path_data(path)
+    if path_data == nil or path_data.rel_path == nil then return end
+    local patch = H.git_format_patch(buf_id, hunks, path_data)
+    H.git_apply_patch(path_data, patch)
   end
 
   -- TODO: Should it detach-attach if buffer is renamed? As it might now have
@@ -855,22 +855,37 @@ H.git_set_ref_text = vim.schedule_wrap(function(buf_id)
   H.git_read_stream(stdout, stdout_feed)
 end)
 
-H.git_format_patch = function(buf_id, hunks, basename)
+H.git_get_path_data = function(path)
+  local cwd, basename = vim.fn.fnamemodify(path, ':h'), vim.fn.fnamemodify(path, ':t')
+  local stdout = vim.loop.new_pipe()
+  local args = { 'ls-files', '--full-name', '--format=%(objectmode) %(path)', '--', basename }
+  local spawn_opts = { args = args, cwd = cwd, stdio = { nil, stdout, nil } }
+
+  local stdout_feed, res, did_exit = {}, { cwd = cwd }, false
+  local on_exit = function(exit_code)
+    did_exit = true
+    if exit_code ~= 0 then return end
+    -- Parse data about path
+    local out = table.concat(stdout_feed, ''):gsub('\n+$', '')
+    res.mode_bits, res.rel_path = string.match(out, '^(%d+) (.*)$')
+  end
+
+  vim.loop.spawn('git', spawn_opts, on_exit)
+  H.git_read_stream(stdout, stdout_feed)
+  vim.wait(1000, function() return did_exit end, 1)
+  return res
+end
+
+H.git_format_patch = function(buf_id, hunks, path_data)
   local cur_lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
   local ref_lines = vim.split(H.cache[buf_id].ref_text, '\n')
-  local res = {
-    -- TODO: Looks using path relative to file's directory does not work (even
-    -- if `cwd` is equal to that directory).
-    -- Using paths relative to git-dir (?or worktree?) should work.
-    string.format('diff --git a/%s b/%s', basename, basename),
-    -- TODO: Probably should first precompute the "mode bits" of particular
-    -- file instead of 100644. It may also be 100755 or 120000.
-    -- See https://git-scm.com/book/en/v2/Git-Internals-Git-Objects
-    'index 000000..000000 100644',
-    '--- a/' .. basename,
-    '+++ b/' .. basename,
-  }
 
+  local res = {
+    string.format('diff --git a/%s b/%s', path_data.rel_path, path_data.rel_path),
+    'index 000000..000000 ' .. path_data.mode_bits,
+    '--- a/' .. path_data.rel_path,
+    '+++ b/' .. path_data.rel_path,
+  }
   for _, h in ipairs(hunks) do
     table.insert(res, string.format('@@ -%d,%d +%d,%d @@', h.ref_start, h.ref_count, h.cur_start, h.cur_count))
     for i = h.ref_start, h.ref_start + h.ref_count - 1 do
@@ -881,33 +896,23 @@ H.git_format_patch = function(buf_id, hunks, basename)
     end
   end
 
-  return table.concat(res, '\n')
+  return res
 end
 
-H.git_apply_patch = function(cwd, patch)
-  -- TODO
-  add_to_log('git_apply_patch', { cwd = cwd, patch = patch })
-
-  local stdin, stdout, stderr = vim.loop.new_pipe(), vim.loop.new_pipe(), vim.loop.new_pipe()
+H.git_apply_patch = function(path_data, patch)
+  local stdin = vim.loop.new_pipe()
   local args = { 'apply', '--whitespace=nowarn', '--cached', '--unidiff-zero', '-' }
-  local spawn_opts = { args = args, cwd = cwd, stdio = { stdin, stdout, stderr } }
+  local spawn_opts = { args = args, cwd = path_data.cwd, stdio = { stdin, nil, nil } }
+  local process = vim.loop.spawn('git', spawn_opts, function() end)
 
-  local stdout_feed, stderr_feed = {}, {}
-  local tmp_on_exit = function(exit_code)
-    local data = { exit_code = exit_code, stdout_feed = stdout_feed, stderr_feed = stderr_feed }
-    add_to_log('git_apply_patch on_exit', data)
-  end
-  local process = vim.loop.spawn('git', spawn_opts, tmp_on_exit)
-  H.git_read_stream(stdout, stdout_feed)
-  H.git_read_stream(stderr, stderr_feed)
   -- Write patch, notify that writing is finished (shutdown), and close
-  stdin:write(patch, function()
-    add_to_log('stdin:write callback')
-    stdin:shutdown(function()
-      add_to_log('stdin:shutdown callback')
-      -- process:close(function() add_to_log('process:close callback') end)
-      process:kill(15)
-    end)
+  for _, l in ipairs(patch) do
+    stdin:write(l)
+    stdin:write('\n')
+  end
+  stdin:shutdown(function()
+    stdin:close()
+    process:close()
   end)
 end
 
