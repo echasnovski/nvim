@@ -3,10 +3,13 @@
 -- Code:
 -- - REALLLY think about renaming to 'mini.hunks'.
 --
+-- - When moving added line upwards, extmark should not temporarily shift down.
+--
+-- - Switch `apply_lines()` / `undo_lines()` to a more generic
+--   `do_in_range(action, buf_id, from, to)`?
+--
 -- - Think if having `vim.b.minidiff_disable` is worth it as there is
 --   `MiniDiff.enable()` and `MiniDiff.disable()`.
---
--- - When moving added line upwards, extmark should not temporarily shift down.
 --
 -- - Add `config.mappings` with `gh`/`gH` for apply/undo hunk operators,
 --   `gh` as textobject (think about different name to have work in both Visual
@@ -16,12 +19,9 @@
 --
 -- - `toggle_style()` - set style to target if not equal to current, apply
 --   previous otherwise.
+-- - `toggle_source()`?
 -- - `goto()` with directions "first"/"prev"/"next"/"last"; `wrap` and `n_times`.
 -- - `setqflist()`.
--- - `apply_range()` to apply hunks constructed from range.
--- - `undo_range()` to undo hunks constructed from range. NOTE: does not need
---   source method as it modifies current text based on reference text.
--- - `textobject` for hunk textobject.
 --
 -- Docs:
 --
@@ -39,6 +39,10 @@
 --       when opening file inside '.git' directory).
 --     - Manage renaming file while having `git` attached, as this might
 --       disable tracking due to "neither in index nor on disk" error.
+--
+-- - Actions:
+--     - Should work for all types of hunks (add, change, delete) in all
+--       relative buffer places (first lines, middle lines, last lines).
 
 --- *mini.diff* Work with diff hunks
 --- *MiniDiff*
@@ -114,6 +118,7 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
+-- TODO: Remove before release
 MiniDiff = {}
 H = {}
 
@@ -167,6 +172,18 @@ MiniDiff.config = {
   delay = {
     -- How much to wait for update after every text change
     text_change = 200,
+  },
+
+  -- Module mappings. Use `''` (empty string) to disable one.
+  mappings = {
+    -- Apply hunks inside a visual/operator region
+    apply = 'gh',
+
+    -- Undo hunks inside a visual/operator region
+    undo = 'gH',
+
+    -- Hunk region textobject
+    textobject = 'gh',
   },
 
   -- Various options
@@ -344,8 +361,6 @@ MiniDiff.gen_source.git = function()
   end
 
   local apply_hunks = function(buf_id, hunks)
-    add_to_log('`git` apply_hunks', hunks)
-
     if H.git_cache[buf_id] == nil then H.error('Buffer is not inside Git repo.') end
     if #hunks == 0 then return H.notify('No hunks to apply.', 'INFO') end
 
@@ -355,8 +370,12 @@ MiniDiff.gen_source.git = function()
     local path_data = H.git_get_path_data(path)
     if path_data == nil or path_data.rel_path == nil then return end
     local patch = H.git_format_patch(buf_id, hunks, path_data)
+    add_to_log('git patch', patch)
     H.git_apply_patch(path_data, patch)
   end
+
+  -- TODO: Think about a possible abstraction that would allow to unstage
+  -- already staged hunks
 
   -- TODO: Should it detach-attach if buffer is renamed? As it might now have
   -- different index to watch.
@@ -386,6 +405,54 @@ MiniDiff.gen_source.save = function()
   return { name = 'save', attach = attach, detach = detach }
 end
 
+--- Perform action over region
+---
+--- Perform action over region defined by marks. Used in default mappings.
+MiniDiff.operator = function(mode)
+  if H.is_disabled(0) then return '' end
+
+  if mode == 'apply' or mode == 'undo' then
+    vim.o.operatorfunc = 'v:lua.MiniDiff.operator'
+    H.operator_cache = { action = mode, buf_id = vim.api.nvim_get_current_buf() }
+    return 'g@'
+  end
+
+  local is_visual = mode == 'visual'
+  local mark_left = is_visual and '.' or "'["
+  local mark_right = is_visual and 'v' or "']"
+  local line_left, line_right = vim.fn.line(mark_left), vim.fn.line(mark_right)
+  local line_from, line_to = math.min(line_left, line_right), math.max(line_left, line_right)
+  add_to_log('operator', { line_left = line_left, line_right = line_right, cache = H.operator_cache })
+
+  local f = H.operator_cache.action == 'apply' and MiniDiff.apply_lines or MiniDiff.undo_lines
+  f(H.operator_cache.buf_id, line_from, line_to)
+  return ''
+end
+
+--- Select hunk region textobject
+---
+--- Selects all lines adjacent to cursor line which are in any (not necessarily
+--- same) hunk (if cursor line itself is in hunk). Used in default mappings.
+MiniDiff.textobject = function()
+  local buf_id = vim.api.nvim_get_current_buf()
+  if H.is_disabled(buf_id) then return end
+  local buf_cache = H.cache[buf_id]
+  if buf_cache == nil then H.error('Current buffer is not enabled.') end
+
+  -- Get hunk region under cursor
+  local cur_line = vim.fn.line('.')
+  local regions, cur_region = H.get_contiguous_hunk_regions(buf_cache.hunks), nil
+  for _, r in ipairs(regions) do
+    if r.from <= cur_line and cur_line <= r.to then cur_region = r end
+  end
+  if cur_region == nil then return H.notify('No hunk region under cursor.', 'INFO') end
+
+  -- Select target region
+  local is_visual = vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode())
+  if is_visual then vim.cmd('normal! \27') end
+  vim.cmd(string.format('normal! %dGV%dG', cur_region.from, cur_region.to))
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniDiff.config
@@ -409,6 +476,9 @@ H.cache = {}
 
 -- Cache per buffer for attached `git` source
 H.git_cache = {}
+
+-- Cache for operator
+H.operator_cache = {}
 
 -- Common extmark data for supported styles
 --stylua: ignore
@@ -435,6 +505,7 @@ H.setup_config = function(config)
     view = { config.view, 'table' },
     source = { config.source, 'table', true },
     delay = { config.delay, 'table' },
+    mappings = { config.mappings, 'table' },
     options = { config.options, 'table' },
   })
 
@@ -444,6 +515,10 @@ H.setup_config = function(config)
     ['view.priority'] = { config.view.priority, 'number' },
 
     ['delay.text_change'] = { config.delay.text_change, 'number' },
+
+    ['mappings.apply'] = { config.mappings.apply, 'string' },
+    ['mappings.undo'] = { config.mappings.undo, 'string' },
+    ['mappings.textobject'] = { config.mappings.textobject, 'string' },
 
     ['options.algorithm'] = { config.options.algorithm, 'string' },
     ['options.indent_heuristic'] = { config.options.indent_heuristic, 'boolean' },
@@ -461,6 +536,13 @@ end
 
 H.apply_config = function(config)
   MiniDiff.config = config
+
+  -- Make mappings
+  local rhs_apply = function() return MiniDiff.operator('apply') end
+  H.map({ 'n', 'x' }, config.mappings.apply, rhs_apply, { expr = true, desc = 'Apply hunks' })
+  local rhs_undo = function() return MiniDiff.operator('undo') end
+  H.map({ 'n', 'x' }, config.mappings.undo, rhs_undo, { expr = true, desc = 'Undo hunks' })
+  H.map('o', config.mappings.textobject, '<Cmd>lua MiniDiff.textobject()<CR>', { desc = 'Hunk region textobject' })
 
   -- Register decoration provider which actually makes visualization
   local ns_id_viz = H.ns_id.viz
@@ -551,18 +633,21 @@ end
 
 H.validate_target_lines = function(buf_id, line_start, line_end)
   local n_lines = vim.api.nvim_buf_line_count(buf_id)
+
+  -- TODO: Maybe make default to infer from marks depending on mode?
+  -- So that `apply_lines` and `undo_lines` can be used directly in mappings?
   line_start, line_end = line_start or 1, line_end or n_lines
 
-  if not (type(line_start) == 'number' or type(line_end)) == 'number' then
-    H.error('`line_start` and `line_end` should be numbers.')
-  end
+  if type(line_start) ~= 'number' then H.error('`line_start` should be number.') end
+  if type(line_end) ~= 'number' then H.error('`line_end` should be number.') end
 
   -- Allow negative lines to count from last line
   line_start = line_start < 0 and (n_lines + line_start + 1) or line_start
   line_end = line_end < 0 and (n_lines + line_end + 1) or line_end
-  if not (1 <= line_start and line_start <= n_lines and 1 <= line_end and line_end <= n_lines) then
-    H.error(string.format('`line_start` and `line_end` should be within range [1; %s].', n_lines))
-  end
+
+  -- Clamp to fit the allowed range
+  line_start = math.min(math.max(line_start, 1), n_lines)
+  line_end = math.min(math.max(line_end, 1), n_lines)
   if not (line_start <= line_end) then H.error('`line_start` should be less than or equal to `line_end`.') end
 
   return line_start, line_end
@@ -713,60 +798,33 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
 end)
 
 -- Hunks ----------------------------------------------------------------------
-H.apply_hunks_to_lines = function(hunks, ref_lines, cur_lines)
-  hunks = vim.deepcopy(hunks)
-  table.sort(hunks, function(a, b) return a.ref_start < b.ref_start end)
-
-  local res, lnum = {}, 0
-  for _, h in ipairs(hunks) do
-    -- "Add" hunks have reference start just above lines to be added
-    local hunk_start = h.ref_start + (h.ref_count == 0 and 0 or -1)
-
-    -- Add lines between hunks (and before first one)
-    for i = lnum + 1, hunk_start do
-      table.insert(res, ref_lines[i])
-    end
-
-    -- Replace deleted lines (maybe zero) with current lines (maybe zero)
-    for j = h.cur_start, h.cur_start + h.cur_count - 1 do
-      table.insert(res, cur_lines[j])
-    end
-    lnum = hunk_start + h.ref_count
-  end
-
-  -- Add lines after last hunk (even if there is no hunks)
-  for i = lnum + 1, #ref_lines do
-    table.insert(res, ref_lines[i])
-  end
-
-  return res
-end
-
-H.invert_hunk = function(hunk)
-  --stylua: ignore
-  return {
-    cur_start = hunk.ref_start, cur_count = hunk.ref_count,
-    ref_start = hunk.cur_start, ref_count = hunk.cur_count,
-    type = hunk.cur_count == 0 and 'add' or (hunk.ref_count == 0 and 'delete' or 'change'),
-  }
+H.get_hunk_range = function(hunk)
+  -- `cur_start` can be 0 for 'delete' hunk, yet range should represent real
+  -- buffer lines
+  local from = math.max(hunk.cur_start, 1)
+  -- Hunks need to be treated based on its type:
+  -- - "Delete" have `cur_count = 0` yet its range is [from, from].
+  -- - "Change" and "Add" have `cur_count > 0` and the range is
+  --   [from, from + cur_count - 1].
+  local count = hunk.cur_count == 0 and 0 or (hunk.cur_count - 1)
+  return from, from + count
 end
 
 H.get_hunks_in_range = function(hunks, from, to)
   local res = {}
   for _, h in ipairs(hunks) do
-    -- Hunks need to be treated based on its type:
-    -- - "Delete" have `cur_count = 0` yet its range is [cur_start, cur_start].
-    -- - "Change" and "Add" have `cur_count > 0` and the range is
-    --   [cur_start, cur_start + cur_count - 1].
-    local is_delete = h.cur_count == 0
-    local h_from, h_to = h.cur_start, h.cur_start + (is_delete and 0 or (h.cur_count - 1))
+    local h_from, h_to = H.get_hunk_range(h)
 
     -- It should be possible to work with only hunk part which is inside target
     -- range. If any `cur` hunk part is selected, its `ref` part is used fully.
     local left, right = math.max(from, h_from), math.min(to, h_to)
     if left <= right then
+      -- Treat "delete" hunks differently as they represent range differently
+      -- and can have `cur_start=0`
+      local is_delete = h.cur_count == 0
+      local new_start = is_delete and h.cur_start or left
       local new_count = is_delete and 0 or (right - left + 1)
-      local new_h = { cur_start = left, cur_count = new_count, ref_start = h.ref_start, ref_count = h.ref_count }
+      local new_h = { cur_start = new_start, cur_count = new_count, ref_start = h.ref_start, ref_count = h.ref_count }
       table.insert(res, new_h)
     end
   end
@@ -774,8 +832,48 @@ H.get_hunks_in_range = function(hunks, from, to)
 end
 
 H.hunks_undo = function(buf_id, hunks)
-  -- TODO: Compute hunks inside target region
-  add_to_log('hunks_undo', hunks)
+  -- Preserve 'modified' buffer option
+  local cur_modified = vim.bo[buf_id].modified
+
+  -- Make sure that hunks are properly ordered. Looks like not needed right now
+  -- (as output of `vim.diff` is already ordered), but there is no quarantee.
+  table.sort(hunks, function(a, b) return a.cur_start < b.cur_start end)
+
+  local ref_lines = vim.split(H.cache[buf_id].ref_text, '\n')
+  local offset = 0
+  for _, h in ipairs(hunks) do
+    -- Replace current hunk lines with corresponding reference
+    local new_lines = vim.list_slice(ref_lines, h.ref_start, h.ref_start + h.ref_count - 1)
+
+    -- Compute current offset from parts: result of previous replaces, "delete"
+    -- hunk offset which starts under the `cur_start`, zero-indexing.
+    local cur_offset = offset + (h.cur_count == 0 and 1 or 0) - 1
+    local from, to = h.cur_start + cur_offset, h.cur_start + h.cur_count + cur_offset
+    vim.api.nvim_buf_set_lines(buf_id, from, to, false, new_lines)
+
+    -- Keep track of current hunk lines shift as a result of previous replaces
+    offset = offset + (h.ref_count - h.cur_count)
+  end
+
+  vim.bo[buf_id].modified = cur_modified
+end
+
+H.get_contiguous_hunk_regions = function(hunks)
+  if #hunks == 0 then return {} end
+  table.sort(hunks, function(a, b) return a.cur_start < b.cur_start end)
+
+  local h1_from, h1_to = H.get_hunk_range(hunks[1])
+  local res = { { from = h1_from, to = h1_to } }
+  for i = 2, #hunks do
+    local h, cur_region = hunks[i], res[#res]
+    local h_from, h_to = H.get_hunk_range(h)
+    if h_from <= cur_region.to + 1 then
+      cur_region.to = math.max(cur_region.to, h_to)
+    else
+      table.insert(res, { from = h_from, to = h_to })
+    end
+  end
+  return res
 end
 
 -- Git ------------------------------------------------------------------------
@@ -886,14 +984,21 @@ H.git_format_patch = function(buf_id, hunks, path_data)
     '--- a/' .. path_data.rel_path,
     '+++ b/' .. path_data.rel_path,
   }
+
+  -- Take into account changing target ref region as a result of previous hunks
+  local offset = 0
   for _, h in ipairs(hunks) do
-    table.insert(res, string.format('@@ -%d,%d +%d,%d @@', h.ref_start, h.ref_count, h.cur_start, h.cur_count))
+    -- "Add" hunks have reference line above target
+    local start = h.ref_start + (h.ref_count == 0 and 1 or 0)
+
+    table.insert(res, string.format('@@ -%d,%d +%d,%d @@', start, h.ref_count, start + offset, h.cur_count))
     for i = h.ref_start, h.ref_start + h.ref_count - 1 do
       table.insert(res, '-' .. ref_lines[i])
     end
     for i = h.cur_start, h.cur_start + h.cur_count - 1 do
       table.insert(res, '+' .. cur_lines[i])
     end
+    offset = offset + (h.cur_count - h.ref_count)
   end
 
   return res
@@ -935,6 +1040,12 @@ end
 H.error = function(msg) error(string.format('(mini.diff) %s', msg), 0) end
 
 H.notify = function(msg, level_name) vim.notify('(mini.diff) ' .. msg, vim.log.levels[level_name]) end
+
+H.map = function(mode, lhs, rhs, opts)
+  if lhs == '' then return end
+  opts = vim.tbl_deep_extend('force', { silent = true }, opts or {})
+  vim.keymap.set(mode, lhs, rhs, opts)
+end
 
 H.set_extmark = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
 
