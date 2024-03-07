@@ -11,7 +11,6 @@
 -- - Consider keeping track of reference text history to allow "rollback"?
 --
 -- - `toggle_source()`?
--- - `goto()` with directions "first"/"prev"/"next"/"last"; `wrap` and `n_times`.
 -- - `setqflist()`.
 --
 -- Docs:
@@ -91,9 +90,9 @@
 --- * `MiniDiffLineAdd`    - add hunks with line view.
 --- * `MiniDiffLineChange` - change hunks with line view.
 --- * `MiniDiffLineDelete` - delete hunks with line view.
---- * `MiniDiffWordAdd`    - add hunks with word view.
---- * `MiniDiffWordChange` - change hunks with word view.
---- * `MiniDiffWordDelete` - delete hunks with word view.
+--- * `MiniDiffOverAdd`    - add hunks with overlay view.
+--- * `MiniDiffOverChange` - change hunks with overlay view.
+--- * `MiniDiffOverDelete` - delete hunks with overlay view.
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 
@@ -132,6 +131,9 @@ MiniDiff.setup = function(config)
 
   -- Define behavior
   H.create_autocommands()
+  for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
+    H.auto_enable({ buf = buf_id })
+  end
 
   -- Create default highlighting
   H.create_default_hl()
@@ -146,7 +148,7 @@ MiniDiff.config = {
   -- Options for how hunks are visualized
   view = {
     -- General visualization style. Available values are:
-    -- 'sign', 'number', 'line', 'word'.
+    -- 'sign', 'number', 'line', 'overlay'.
     style = vim.o.number and 'number' or 'sign',
 
     -- Signs used for hunks with 'sign' view
@@ -173,8 +175,14 @@ MiniDiff.config = {
     -- Reset hunks inside a visual/operator region
     reset = 'gH',
 
-    -- Hunk region textobject
+    -- Hunk range textobject
     textobject = 'gh',
+
+    -- Go to Hunk range in corresponding direction
+    goto_first = '[H',
+    goto_prev = '[h',
+    goto_next = ']h',
+    goto_last = ']H',
   },
 
   -- Various options
@@ -349,8 +357,6 @@ MiniDiff.gen_source.git = function()
 
   local apply_hunks = function(buf_id, hunks)
     if H.git_cache[buf_id] == nil then H.error('Buffer is not inside Git repo.') end
-    if #hunks == 0 then return H.notify('No hunks to apply.', 'INFO') end
-
     local path = vim.api.nvim_buf_get_name(buf_id)
     if path == '' then return nil end
 
@@ -403,32 +409,83 @@ MiniDiff.do_hunks = function(buf_id, action, opts)
   local line_start, line_end = H.validate_target_lines(buf_id, opts.line_start, opts.line_end)
 
   local hunks = H.get_hunks_in_range(buf_cache.hunks, line_start, line_end)
+  if #hunks == 0 then return H.notify('No hunks to ' .. action .. '.', 'INFO') end
   local f = action == 'apply' and buf_cache.source.apply_hunks or H.reset_hunks
   f(buf_id, hunks)
 end
 
+--- Go to hunk range
+---
+---@param direction string One of "first", "prev", "next", "last".
+---@param opts table|nil Options. A table with fields:
+---   - <n_times> `(number)` - Number of times to advance. Default: |v:count1|.
+---   - <line_start> `(number)` - Line number to start from for directions
+---     "prev" and "next". Default: cursor line.
+MiniDiff.goto_hunk = function(direction, opts)
+  local buf_id = vim.api.nvim_get_current_buf()
+  local buf_cache = H.cache[buf_id]
+  if buf_cache == nil then H.error(string.format('Buffer %d is not enabled.', buf_id)) end
+
+  if not vim.tbl_contains({ 'first', 'prev', 'next', 'last' }, direction) then
+    H.error('`direction` should be one of "first", "prev", "next", "last".')
+  end
+
+  opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, line_start = vim.fn.line('.') }, opts or {})
+  if not (type(opts.n_times) == 'number' and opts.n_times >= 1) then
+    H.error('`opts.n_times` should be positive number.')
+  end
+  local line_start = opts.line_start
+  if type(line_start) ~= 'number' then H.error('`opts.line_start` should be number.') end
+
+  -- Prepare ranges to iterate.
+  local ranges = H.get_contiguous_hunk_ranges(buf_cache.hunks)
+  if #ranges == 0 then return H.notify('No hunks to go to.', 'INFO') end
+
+  -- Compute iteration data
+  local iter_dir = (direction == 'first' or direction == 'next') and 'forward' or 'backward'
+  if direction == 'first' then line_start = 0 end
+  if direction == 'last' then line_start = vim.api.nvim_buf_line_count(buf_id) + 1 end
+
+  -- Iterate
+  local res_line = H.iterate_hunk_ranges(ranges, iter_dir, line_start, opts.n_times)
+  if res_line == nil then return H.notify('No new hunk ranges in direction "' .. direction .. '".', 'INFO') end
+
+  -- Add to jumplist
+  vim.cmd([[normal! m']])
+
+  -- Jump
+  local _, col = vim.fn.getline(res_line):find('^%s*')
+  vim.api.nvim_win_set_cursor(0, { res_line, col })
+
+  -- Open just enough folds
+  vim.cmd('normal! zv')
+end
+
 --- Perform action over region
 ---
---- Perform action over region defined by marks. Used in default mappings.
+--- Perform action over region defined by marks. Used in mappings.
+---
+---@param mode string One of "apply", "reset", or the ones used in |g@|.
 MiniDiff.operator = function(mode)
   if H.is_disabled(0) then return '' end
 
   if mode == 'apply' or mode == 'reset' then
-    vim.o.operatorfunc = 'v:lua.MiniDiff.operator'
     H.operator_cache = { action = mode, buf_id = vim.api.nvim_get_current_buf() }
+    vim.o.operatorfunc = 'v:lua.MiniDiff.operator'
     return 'g@'
   end
 
-  local mark_left = mode == 'visual' and '.' or "'["
-  local mark_right = mode == 'visual' and 'v' or "']"
-  local line_left, line_right = vim.fn.line(mark_left), vim.fn.line(mark_right)
-
-  local opts = { line_start = math.min(line_left, line_right), line_end = math.max(line_left, line_right) }
+  -- NOTE: Using `[` / `]` marks also works in Visual mode as because it is
+  -- executed as part of `g@`, which treats visual selection as a result of
+  -- Operator-pending mode mechanics (for which visual selection is allowed to
+  -- define motion/textobject). The downside is that it sets 'operatorfunc',
+  -- but the upside is that it is "dot-repeatable" (for relative selection).
+  local opts = { line_start = vim.fn.line("'["), line_end = vim.fn.line("']") }
   MiniDiff.do_hunks(H.operator_cache.buf_id, H.operator_cache.action, opts)
   return ''
 end
 
---- Select hunk region textobject
+--- Select hunk range textobject
 ---
 --- Selects all lines adjacent to cursor line which are in any (not necessarily
 --- same) hunk (if cursor line itself is in hunk). Used in default mappings.
@@ -438,13 +495,13 @@ MiniDiff.textobject = function()
   local buf_cache = H.cache[buf_id]
   if buf_cache == nil then H.error('Current buffer is not enabled.') end
 
-  -- Get hunk region under cursor
+  -- Get hunk range under cursor
   local cur_line = vim.fn.line('.')
   local regions, cur_region = H.get_contiguous_hunk_ranges(buf_cache.hunks), nil
   for _, r in ipairs(regions) do
     if r.from <= cur_line and cur_line <= r.to then cur_region = r end
   end
-  if cur_region == nil then return H.notify('No hunk region under cursor.', 'INFO') end
+  if cur_region == nil then return H.notify('No hunk range under cursor.', 'INFO') end
 
   -- Select target region
   local is_visual = vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode())
@@ -482,10 +539,10 @@ H.operator_cache = {}
 -- Common extmark data for supported styles
 --stylua: ignore
 H.style_extmark_data = {
-  sign       = { hl_group_prefix = 'MiniDiffSign', field = 'sign_hl_group' },
-  number     = { hl_group_prefix = 'MiniDiffSign', field = 'number_hl_group' },
-  line       = { hl_group_prefix = 'MiniDiffLine', field = 'line_hl_group' },
-  word       = { hl_group_prefix = 'MiniDiffWord' },
+  sign    = { hl_group_prefix = 'MiniDiffSign', field = 'sign_hl_group' },
+  number  = { hl_group_prefix = 'MiniDiffSign', field = 'number_hl_group' },
+  line    = { hl_group_prefix = 'MiniDiffLine', field = 'line_hl_group' },
+  overlay = { hl_group_prefix = 'MiniDiffOver' },
 }
 
 -- Permanent `vim.diff()` options
@@ -518,6 +575,10 @@ H.setup_config = function(config)
     ['mappings.apply'] = { config.mappings.apply, 'string' },
     ['mappings.reset'] = { config.mappings.reset, 'string' },
     ['mappings.textobject'] = { config.mappings.textobject, 'string' },
+    ['mappings.goto_first'] = { config.mappings.goto_first, 'string' },
+    ['mappings.goto_prev'] = { config.mappings.goto_prev, 'string' },
+    ['mappings.goto_next'] = { config.mappings.goto_next, 'string' },
+    ['mappings.goto_last'] = { config.mappings.goto_last, 'string' },
 
     ['options.algorithm'] = { config.options.algorithm, 'string' },
     ['options.indent_heuristic'] = { config.options.indent_heuristic, 'boolean' },
@@ -537,11 +598,25 @@ H.apply_config = function(config)
   MiniDiff.config = config
 
   -- Make mappings
+  local mappings = config.mappings
+
   local rhs_apply = function() return MiniDiff.operator('apply') end
-  H.map({ 'n', 'x' }, config.mappings.apply, rhs_apply, { expr = true, desc = 'Apply hunks' })
+  H.map({ 'n', 'x' }, mappings.apply, rhs_apply, { expr = true, desc = 'Apply hunks' })
   local rhs_reset = function() return MiniDiff.operator('reset') end
-  H.map({ 'n', 'x' }, config.mappings.reset, rhs_reset, { expr = true, desc = 'Reset hunks' })
-  H.map('o', config.mappings.textobject, '<Cmd>lua MiniDiff.textobject()<CR>', { desc = 'Hunk region textobject' })
+  H.map({ 'n', 'x' }, mappings.reset, rhs_reset, { expr = true, desc = 'Reset hunks' })
+
+  H.map('o', mappings.textobject, '<Cmd>lua MiniDiff.textobject()<CR>', { desc = 'Hunk range textobject' })
+
+  --stylua: ignore start
+  H.map({ 'n', 'x' }, mappings.goto_first,  "<Cmd>lua MiniDiff.goto_hunk('first')<CR>", { desc = 'First hunk' })
+  H.map('o',          mappings.goto_first, "V<Cmd>lua MiniDiff.goto_hunk('first')<CR>", { desc = 'First hunk' })
+  H.map({ 'n', 'x' }, mappings.goto_prev,   "<Cmd>lua MiniDiff.goto_hunk('prev')<CR>",  { desc = 'Previous hunk' })
+  H.map('o',          mappings.goto_prev,  "V<Cmd>lua MiniDiff.goto_hunk('prev')<CR>",  { desc = 'Previous hunk' })
+  H.map({ 'n', 'x' }, mappings.goto_next,   "<Cmd>lua MiniDiff.goto_hunk('next')<CR>",  { desc = 'Next hunk' })
+  H.map('o',          mappings.goto_next,  "V<Cmd>lua MiniDiff.goto_hunk('next')<CR>",  { desc = 'Next hunk' })
+  H.map({ 'n', 'x' }, mappings.goto_last,   "<Cmd>lua MiniDiff.goto_hunk('last')<CR>",  { desc = 'Last hunk' })
+  H.map('o',          mappings.goto_last,  "V<Cmd>lua MiniDiff.goto_hunk('last')<CR>",  { desc = 'Last hunk' })
+  --stylua: ignore end
 
   -- Register decoration provider which actually makes visualization
   local ns_id_viz = H.ns_id.viz
@@ -589,9 +664,9 @@ H.create_default_hl = function()
   hi('MiniDiffLineAdd',    { link = 'MiniDiffSignAdd' })
   hi('MiniDiffLineChange', { link = 'MiniDiffSignChange' })
   hi('MiniDiffLineDelete', { link = 'MiniDiffSignDelete'  })
-  hi('MiniDiffTextAdd',    { link = 'MiniDiffLineAdd' })
-  hi('MiniDiffTextChange', { link = 'MiniDiffLineChange' })
-  hi('MiniDiffTextDelete', { link = 'MiniDiffLineDelete'  })
+  hi('MiniDiffOverAdd',    { link = 'MiniDiffOverAdd' })
+  hi('MiniDiffOverChange', { link = 'MiniDiffOverChange' })
+  hi('MiniDiffOverDelete', { link = 'MiniDiffOverDelete'  })
 end
 
 H.is_disabled = function(buf_id)
@@ -690,7 +765,7 @@ H.convert_view_to_extmark_opts = function(view, force_style)
   local extmark_data = H.style_extmark_data[style]
   if extmark_data == nil then H.error('Style ' .. vim.inspect(view.style) .. ' is not supported.') end
 
-  -- TODO: Handle "word" style separately
+  -- TODO: Handle "overlay" style separately
 
   local signs = {}
   if view.style == 'sign' then signs = view.signs end
@@ -826,6 +901,7 @@ H.reset_hunks = function(buf_id, hunks)
 
   -- Make sure that hunks are properly ordered. Looks like not needed right now
   -- (as output of `vim.diff` is already ordered), but there is no quarantee.
+  hunks = vim.deepcopy(hunks)
   table.sort(hunks, function(a, b) return a.cur_start < b.cur_start end)
 
   local ref_lines = vim.split(H.cache[buf_id].ref_text, '\n')
@@ -856,6 +932,7 @@ end
 
 H.get_contiguous_hunk_ranges = function(hunks)
   if #hunks == 0 then return {} end
+  hunks = vim.deepcopy(hunks)
   table.sort(hunks, function(a, b) return a.cur_start < b.cur_start end)
 
   local h1_from, h1_to = H.get_hunk_buf_range(hunks[1])
@@ -869,6 +946,24 @@ H.get_contiguous_hunk_ranges = function(hunks)
       table.insert(res, { from = h_from, to = h_to })
     end
   end
+  return res
+end
+
+H.iterate_hunk_ranges = function(ranges, direction, line_start, n_times)
+  local from, to, by, should_count = 1, #ranges, 1, function(r) return line_start < r.from end
+  if direction == 'backward' then
+    from, to, by, should_count = #ranges, 1, -1, function(r) return r.to < line_start end
+  end
+
+  local res, cur_n = nil, 0
+  for i = from, to, by do
+    local r = ranges[i]
+    if should_count(r) then
+      res, cur_n = r.from, cur_n + 1
+    end
+    if n_times <= cur_n then break end
+  end
+
   return res
 end
 
