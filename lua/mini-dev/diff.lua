@@ -3,6 +3,9 @@
 -- Code:
 -- - REALLLY think about renaming to 'mini.hunks'.
 --
+-- - Implement "overlay" style (or other type of "preview"???).
+--   It should have word (char?) diff highlighting.
+--
 -- - When moving added line upwards, extmark should not temporarily shift down.
 --
 -- - Think if having `vim.b.minidiff_disable` is worth it as there is
@@ -21,6 +24,9 @@
 --
 -- - Deleting last line should be visualized.
 --
+-- - Changing line which is already visualizing deleted (below) line should
+--   result into visualizing line as "change" and not "delete".
+--
 -- - Git source:
 --     - Manage "not in index" files by not showing diff visualization.
 --     - Manage "neither in index nor on disk" (for example, after checking out
@@ -33,6 +39,8 @@
 -- - Actions:
 --     - Should work for all types of hunks (add, change, delete) in all
 --       relative buffer places (first lines, middle lines, last lines).
+--     - Operator's dot-repeat should work in different buffer than was
+--       originally applied.
 
 --- *mini.diff* Work with diff hunks
 --- *MiniDiff*
@@ -448,7 +456,7 @@ MiniDiff.goto_hunk = function(direction, opts)
 
   -- Iterate
   local res_line = H.iterate_hunk_ranges(ranges, iter_dir, line_start, opts.n_times)
-  if res_line == nil then return H.notify('No new hunk ranges in direction "' .. direction .. '".', 'INFO') end
+  if res_line == nil then return H.notify('No hunk ranges in direction "' .. direction .. '".', 'INFO') end
 
   -- Add to jumplist
   vim.cmd([[normal! m']])
@@ -470,7 +478,7 @@ MiniDiff.operator = function(mode)
   if H.is_disabled(0) then return '' end
 
   if mode == 'apply' or mode == 'reset' then
-    H.operator_cache = { action = mode, buf_id = vim.api.nvim_get_current_buf() }
+    H.operator_cache = { action = mode }
     vim.o.operatorfunc = 'v:lua.MiniDiff.operator'
     return 'g@'
   end
@@ -481,7 +489,7 @@ MiniDiff.operator = function(mode)
   -- define motion/textobject). The downside is that it sets 'operatorfunc',
   -- but the upside is that it is "dot-repeatable" (for relative selection).
   local opts = { line_start = vim.fn.line("'["), line_end = vim.fn.line("']") }
-  MiniDiff.do_hunks(H.operator_cache.buf_id, H.operator_cache.action, opts)
+  MiniDiff.do_hunks(vim.api.nvim_get_current_buf(), H.operator_cache.action, opts)
   return ''
 end
 
@@ -629,11 +637,13 @@ H.apply_config = function(config)
       buf_cache.needs_clear = false
     end
 
-    local redraw_line_data = buf_cache.redraw_line_data
+    local redraw_line_extmarks = buf_cache.redraw_line_extmarks
     for i = top + 1, bottom + 1 do
-      if redraw_line_data[i] ~= nil then
-        H.set_extmark(bufnr, ns_id_viz, i - 1, 0, redraw_line_data[i])
-        redraw_line_data[i] = nil
+      if redraw_line_extmarks[i] ~= nil then
+        for _, extmark_opts in ipairs(redraw_line_extmarks[i]) do
+          H.set_extmark(bufnr, ns_id_viz, i - 1, 0, extmark_opts)
+        end
+        redraw_line_extmarks[i] = nil
       end
     end
   end
@@ -688,6 +698,7 @@ end
 H.auto_enable = vim.schedule_wrap(function(data)
   if H.is_buf_enabled(data.buf) or H.is_disabled(data.buf) then return end
   if not vim.api.nvim_buf_is_valid(data.buf) or vim.bo[data.buf].buftype ~= '' then return end
+  if not H.is_buf_text(data.buf) then return end
   MiniDiff.enable(data.buf)
 end)
 
@@ -737,7 +748,7 @@ H.update_cache = function(buf_id)
 
   buf_cache.hunks = buf_cache.hunks or {}
   buf_cache.hunk_summary = buf_cache.hunk_summary or {}
-  buf_cache.redraw_line_data = buf_cache.redraw_line_data or {}
+  buf_cache.redraw_line_extmarks = buf_cache.redraw_line_extmarks or {}
 
   H.cache[buf_id] = buf_cache
 end
@@ -772,7 +783,8 @@ H.convert_view_to_extmark_opts = function(view, force_style)
   local field, hl_group_prefix = extmark_data.field, extmark_data.hl_group_prefix
   return {
     add = { [field] = hl_group_prefix .. 'Add', sign_text = signs.add, priority = view.priority },
-    change = { [field] = hl_group_prefix .. 'Change', sign_text = signs.change, priority = view.priority },
+    -- Prefer showing "change" hunks over others
+    change = { [field] = hl_group_prefix .. 'Change', sign_text = signs.change, priority = view.priority + 1 },
     delete = { [field] = hl_group_prefix .. 'Delete', sign_text = signs.delete, priority = view.priority },
   }
 end
@@ -800,7 +812,7 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
     return
   end
   if type(buf_cache.ref_text) ~= 'string' or H.is_disabled(buf_id) then
-    buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_data = {}, {}, {}
+    buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_extmarks = {}, {}, {}
     vim.b[buf_id].minidiff_summary, vim.b[buf_id].minidiff_summary_string = {}, ''
     return
   end
@@ -810,18 +822,19 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   H.vimdiff_opts.algorithm = options.algorithm
   H.vimdiff_opts.indent_heuristic = options.indent_heuristic
   if H.vimdiff_supports_linematch then H.vimdiff_opts.linematch = options.linematch end
+
   -- - NOTE: Appending '\n' makes more intuitive diffs at end-of-file
   local cur_text = table.concat(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false), '\n') .. '\n'
   local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
 
-  local extmark_opts = buf_cache.extmark_opts
-  local hunks, redraw_line_data = {}, {}
+  local extmark_data = buf_cache.extmark_opts
+  local hunks, redraw_line_extmarks = {}, {}
   local n_add, n_change, n_delete = 0, 0, 0
   for i, d in ipairs(diff) do
-    local n_ref, n_cur = d[2], d[4]
     -- Hunk
-    local type = n_ref == 0 and 'add' or (n_cur == 0 and 'delete' or 'change')
-    hunks[i] = { type = type, ref_start = d[1], ref_count = n_ref, cur_start = d[3], cur_count = n_cur }
+    local n_ref, n_cur = d[2], d[4]
+    local hunk_type = n_ref == 0 and 'add' or (n_cur == 0 and 'delete' or 'change')
+    hunks[i] = { type = hunk_type, ref_start = d[1], ref_count = n_ref, cur_start = d[3], cur_count = n_cur }
 
     -- Summary
     local hunk_n_change = math.min(n_ref, n_cur)
@@ -830,17 +843,19 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
     n_delete = n_delete + n_ref - hunk_n_change
 
     -- Register lines for redraw. At least one line should visualize hunk.
-    local ext_opts = extmark_opts[type]
+    local ext_opts = extmark_data[hunk_type]
     local from, n = math.max(d[3], 1), math.max(n_cur, 1)
     for l_num = from, from + n - 1 do
-      -- Prefer "change" hunk type over anything already there (like "delete")
-      if redraw_line_data[l_num] == nil or type == 'change' then redraw_line_data[l_num] = ext_opts end
+      -- Allow several extmarks to be drawn at the same line (like "delete" and "change")
+      local l_data = redraw_line_extmarks[l_num] or {}
+      table.insert(l_data, ext_opts)
+      redraw_line_extmarks[l_num] = l_data
     end
   end
   local hunk_summary = { add = n_add, change = n_change, delete = n_delete }
-  buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_data = hunks, hunk_summary, redraw_line_data
+  buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_extmarks = hunks, hunk_summary, redraw_line_extmarks
 
-  -- Set buffer-local variable with summary for easier external usage
+  -- Set buffer-local variables with summary for easier external usage
   vim.b[buf_id].minidiff_summary = hunk_summary
 
   local summary = {}
@@ -1147,5 +1162,11 @@ H.get_extmarks = function(...)
 end
 
 H.clear_namespace = function(...) pcall(vim.api.nvim_buf_clear_namespace, ...) end
+
+H.is_buf_text = function(buf_id)
+  local n = vim.api.nvim_buf_call(buf_id, function() return vim.fn.byte2line(1024) end)
+  local lines = vim.api.nvim_buf_get_lines(buf_id, 0, n, false)
+  return table.concat(lines, ''):find('\0') == nil
+end
 
 return MiniDiff
