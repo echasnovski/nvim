@@ -3,8 +3,7 @@
 -- Code:
 -- - REALLLY think about renaming to 'mini.hunks'.
 --
--- - Implement "overlay" style (or other type of "preview"???).
---   It should have word (char?) diff highlighting.
+-- - Update overlay to show word/char diff highlighting for "change" hunk type.
 --
 -- - When moving added line upwards, extmark should not temporarily shift down.
 --
@@ -13,6 +12,7 @@
 --
 -- - Consider keeping track of reference text history to allow "rollback"?
 --
+-- - `gen_source.file` to compare against some fixed file?
 -- - `toggle_source()`?
 -- - `setqflist()`.
 --
@@ -92,21 +92,21 @@
 ---
 --- # Highlight groups ~
 ---
---- * `MiniDiffSignAdd`    - add hunks with gutter view.
---- * `MiniDiffSignChange` - change hunks with gutter view.
---- * `MiniDiffSignDelete` - delete hunks with gutter view.
---- * `MiniDiffLineAdd`    - add hunks with line view.
---- * `MiniDiffLineChange` - change hunks with line view.
---- * `MiniDiffLineDelete` - delete hunks with line view.
---- * `MiniDiffOverAdd`    - add hunks with overlay view.
---- * `MiniDiffOverChange` - change hunks with overlay view.
---- * `MiniDiffOverDelete` - delete hunks with overlay view.
+--- * `MiniDiffSignAdd`     - add hunks with gutter view.
+--- * `MiniDiffSignChange`  - change hunks with gutter view.
+--- * `MiniDiffSignDelete`  - delete hunks with gutter view.
+--- * `MiniDiffOverAdd`     - added text shown in overlay.
+--- * `MiniDiffOverChange`  - changed text shown in overlay.
+--- * `MiniDiffOverContext` - context text shown in overlay.
+--- * `MiniDiffOverDelete`  - deleted text shown in overlay.
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 
 ---@tag MiniDiff-overview
 
 ---@tag MiniDiff-plugin-specification
+
+---@tag MiniDiff-events
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -155,8 +155,7 @@ end
 MiniDiff.config = {
   -- Options for how hunks are visualized
   view = {
-    -- General visualization style. Available values are:
-    -- 'sign', 'number', 'line', 'overlay'.
+    -- Visualization style. Possible values are 'sign' and 'number'.
     style = vim.o.number and 'number' or 'sign',
 
     -- Signs used for hunks with 'sign' view
@@ -272,7 +271,7 @@ MiniDiff.disable = function(buf_id)
   H.cache[buf_id] = nil
 
   pcall(vim.api.nvim_del_augroup_by_id, buf_cache.augroup)
-  H.clear_namespace(buf_id, H.ns_id.viz, 0, -1)
+  H.clear_all_diff(buf_id)
   buf_cache.source.detach(buf_id)
 end
 
@@ -284,15 +283,14 @@ MiniDiff.toggle = function(buf_id)
 end
 
 --- Toggle visualization style in buffer
-MiniDiff.toggle_style = function(buf_id, new_style)
+MiniDiff.toggle_overlay = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   local buf_cache = H.cache[buf_id]
   if buf_cache == nil then H.error(string.format('Buffer %d is not enabled.', buf_id)) end
-  if H.style_extmark_data[new_style] == nil then H.error('`new_style` should be string for supported style.') end
 
-  buf_cache.force_style = new_style ~= buf_cache.force_style and new_style or nil
+  buf_cache.overlay = not buf_cache.overlay
   H.update_cache(buf_id)
-  H.clear_namespace(buf_id, H.ns_id.viz, 0, -1)
+  H.clear_all_diff(buf_id)
   H.schedule_diff_update(buf_id, 0)
 end
 
@@ -332,7 +330,7 @@ MiniDiff.set_ref_text = function(buf_id, text)
   -- Appending '\n' makes more intuitive diffs at end-of-file
   if text ~= nil and string.sub(text, -1) ~= '\n' then text = text .. '\n' end
   if text == nil then
-    H.clear_namespace(buf_id, H.ns_id.viz, 0, -1)
+    H.clear_all_diff(buf_id)
     vim.cmd('redraw')
   end
 
@@ -376,9 +374,6 @@ MiniDiff.gen_source.git = function()
 
   -- TODO: Think about a possible abstraction that would allow to unstage
   -- already staged hunks
-
-  -- TODO: Should it detach-attach if buffer is renamed? As it might now have
-  -- different index to watch.
 
   return { name = 'git', attach = attach, refresh = refresh, detach = detach, apply_hunks = apply_hunks }
 end
@@ -549,9 +544,10 @@ H.operator_cache = {}
 H.style_extmark_data = {
   sign    = { hl_group_prefix = 'MiniDiffSign', field = 'sign_hl_group' },
   number  = { hl_group_prefix = 'MiniDiffSign', field = 'number_hl_group' },
-  line    = { hl_group_prefix = 'MiniDiffLine', field = 'line_hl_group' },
-  overlay = { hl_group_prefix = 'MiniDiffOver' },
 }
+
+-- Suffix for overlay virtual lines to be highlighted as full line
+H.overlay_suffix = string.rep(' ', vim.o.columns)
 
 -- Permanent `vim.diff()` options
 H.vimdiff_opts = { result_type = 'indices', ctxlen = 0, interhunkctxlen = 0 }
@@ -633,17 +629,17 @@ H.apply_config = function(config)
     if buf_cache == nil then return false end
 
     if buf_cache.needs_clear then
-      H.clear_namespace(bufnr, ns_id_viz, 0, -1)
+      H.clear_all_diff(bufnr)
       buf_cache.needs_clear = false
     end
 
-    local redraw_line_extmarks = buf_cache.redraw_line_extmarks
+    local draw_lines = buf_cache.draw_lines
     for i = top + 1, bottom + 1 do
-      if redraw_line_extmarks[i] ~= nil then
-        for _, extmark_opts in ipairs(redraw_line_extmarks[i]) do
+      if draw_lines[i] ~= nil then
+        for _, extmark_opts in ipairs(draw_lines[i]) do
           H.set_extmark(bufnr, ns_id_viz, i - 1, 0, extmark_opts)
         end
-        redraw_line_extmarks[i] = nil
+        draw_lines[i] = nil
       end
     end
   end
@@ -658,6 +654,7 @@ H.create_autocommands = function()
   end
 
   au('BufEnter', '*', H.auto_enable, 'Enable diff')
+  au('VimResized', '*', function() H.overlay_suffix = string.rep(' ', vim.o.columns) end, 'Track Neovim resizing')
 end
 
 --stylua: ignore
@@ -668,15 +665,13 @@ H.create_default_hl = function()
   end
 
   local has_core_diff_hl = vim.fn.has('nvim-0.10') == 1
-  hi('MiniDiffSignAdd',    { link = has_core_diff_hl and 'Added' or 'diffAdded' })
-  hi('MiniDiffSignChange', { link = has_core_diff_hl and 'Changed' or 'diffChanged' })
-  hi('MiniDiffSignDelete', { link = has_core_diff_hl and 'Removed' or 'diffRemoved'  })
-  hi('MiniDiffLineAdd',    { link = 'MiniDiffSignAdd' })
-  hi('MiniDiffLineChange', { link = 'MiniDiffSignChange' })
-  hi('MiniDiffLineDelete', { link = 'MiniDiffSignDelete'  })
-  hi('MiniDiffOverAdd',    { link = 'MiniDiffOverAdd' })
-  hi('MiniDiffOverChange', { link = 'MiniDiffOverChange' })
-  hi('MiniDiffOverDelete', { link = 'MiniDiffOverDelete'  })
+  hi('MiniDiffSignAdd',     { link = has_core_diff_hl and 'Added' or 'diffAdded' })
+  hi('MiniDiffSignChange',  { link = has_core_diff_hl and 'Changed' or 'diffChanged' })
+  hi('MiniDiffSignDelete',  { link = has_core_diff_hl and 'Removed' or 'diffRemoved'  })
+  hi('MiniDiffOverAdd',     { link = 'MiniDiffSignAdd' })
+  hi('MiniDiffOverChange',  { link = 'MiniDiffSignChange' })
+  hi('MiniDiffOverContext', { link = 'NonText' })
+  hi('MiniDiffOverDelete',  { link = 'MiniDiffSignDelete'  })
 end
 
 H.is_disabled = function(buf_id)
@@ -743,12 +738,12 @@ H.update_cache = function(buf_id)
 
   local buf_config = H.get_config({}, buf_id)
   buf_cache.config = buf_config
-  buf_cache.extmark_opts = H.convert_view_to_extmark_opts(buf_config.view, buf_cache.force_style)
+  buf_cache.extmark_data = H.convert_view_to_extmark_opts(buf_config.view)
   buf_cache.source = H.normalize_source(buf_config.source or H.default_source)
 
   buf_cache.hunks = buf_cache.hunks or {}
   buf_cache.hunk_summary = buf_cache.hunk_summary or {}
-  buf_cache.redraw_line_extmarks = buf_cache.redraw_line_extmarks or {}
+  buf_cache.draw_lines = buf_cache.draw_lines or {}
 
   H.cache[buf_id] = buf_cache
 end
@@ -771,15 +766,11 @@ H.normalize_source = function(source)
   return res
 end
 
-H.convert_view_to_extmark_opts = function(view, force_style)
-  local style = force_style or view.style
-  local extmark_data = H.style_extmark_data[style]
+H.convert_view_to_extmark_opts = function(view)
+  local extmark_data = H.style_extmark_data[view.style]
   if extmark_data == nil then H.error('Style ' .. vim.inspect(view.style) .. ' is not supported.') end
 
-  -- TODO: Handle "overlay" style separately
-
-  local signs = {}
-  if view.style == 'sign' then signs = view.signs end
+  local signs = view.style == 'sign' and view.signs or {}
   local field, hl_group_prefix = extmark_data.field, extmark_data.hl_group_prefix
   return {
     add = { [field] = hl_group_prefix .. 'Add', sign_text = signs.add, priority = view.priority },
@@ -812,56 +803,33 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
     return
   end
   if type(buf_cache.ref_text) ~= 'string' or H.is_disabled(buf_id) then
-    buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_extmarks = {}, {}, {}
+    buf_cache.hunks, buf_cache.hunk_summary, buf_cache.draw_lines = {}, {}, {}
     vim.b[buf_id].minidiff_summary, vim.b[buf_id].minidiff_summary_string = {}, ''
     return
   end
 
-  -- Recompute diff hunks with summary
+  -- Compute diff
   local options = buf_cache.config.options
   H.vimdiff_opts.algorithm = options.algorithm
   H.vimdiff_opts.indent_heuristic = options.indent_heuristic
   if H.vimdiff_supports_linematch then H.vimdiff_opts.linematch = options.linematch end
 
   -- - NOTE: Appending '\n' makes more intuitive diffs at end-of-file
-  local cur_text = table.concat(vim.api.nvim_buf_get_lines(buf_id, 0, -1, false), '\n') .. '\n'
+  local cur_lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
+  local cur_text = table.concat(cur_lines, '\n') .. '\n'
   local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
 
-  local extmark_data = buf_cache.extmark_opts
-  local hunks, redraw_line_extmarks = {}, {}
-  local n_add, n_change, n_delete = 0, 0, 0
-  for i, d in ipairs(diff) do
-    -- Hunk
-    local n_ref, n_cur = d[2], d[4]
-    local hunk_type = n_ref == 0 and 'add' or (n_cur == 0 and 'delete' or 'change')
-    hunks[i] = { type = hunk_type, ref_start = d[1], ref_count = n_ref, cur_start = d[3], cur_count = n_cur }
-
-    -- Summary
-    local hunk_n_change = math.min(n_ref, n_cur)
-    n_add = n_add + n_cur - hunk_n_change
-    n_change = n_change + hunk_n_change
-    n_delete = n_delete + n_ref - hunk_n_change
-
-    -- Register lines for redraw. At least one line should visualize hunk.
-    local ext_opts = extmark_data[hunk_type]
-    local from, n = math.max(d[3], 1), math.max(n_cur, 1)
-    for l_num = from, from + n - 1 do
-      -- Allow several extmarks to be drawn at the same line (like "delete" and "change")
-      local l_data = redraw_line_extmarks[l_num] or {}
-      table.insert(l_data, ext_opts)
-      redraw_line_extmarks[l_num] = l_data
-    end
-  end
-  local hunk_summary = { add = n_add, change = n_change, delete = n_delete }
-  buf_cache.hunks, buf_cache.hunk_summary, buf_cache.redraw_line_extmarks = hunks, hunk_summary, redraw_line_extmarks
+  -- Recompute hunks with summary and draw information
+  buf_cache.hunks, buf_cache.draw_lines, buf_cache.hunk_summary = H.compute_hunk_data(diff, buf_cache, cur_lines)
 
   -- Set buffer-local variables with summary for easier external usage
+  local hunk_summary = buf_cache.hunk_summary
   vim.b[buf_id].minidiff_summary = hunk_summary
 
   local summary = {}
-  if n_add > 0 then table.insert(summary, '+' .. n_add) end
-  if n_change > 0 then table.insert(summary, '~' .. n_change) end
-  if n_delete > 0 then table.insert(summary, '-' .. n_delete) end
+  if hunk_summary.add > 0 then table.insert(summary, '+' .. hunk_summary.add) end
+  if hunk_summary.change > 0 then table.insert(summary, '~' .. hunk_summary.change) end
+  if hunk_summary.delete > 0 then table.insert(summary, '-' .. hunk_summary.delete) end
   vim.b[buf_id].minidiff_summary_string = table.concat(summary, ' ')
 
   -- Request highlighting clear to be done in decoration provider
@@ -877,6 +845,84 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   -- Trigger event for users to possibly hook into
   vim.api.nvim_exec_autocmds('User', { pattern = 'MiniDiffUpdated' })
 end)
+
+H.compute_hunk_data = function(diff, buf_cache, cur_lines)
+  local ref_lines = buf_cache.overlay and vim.split(buf_cache.ref_text, '\n') or nil
+
+  local extmark_data = buf_cache.extmark_data
+  local hunks, draw_lines, n_add, n_change, n_delete = {}, {}, 0, 0, 0
+  for i, d in ipairs(diff) do
+    -- Hunk
+    local n_ref, n_cur = d[2], d[4]
+    local hunk_type = n_ref == 0 and 'add' or (n_cur == 0 and 'delete' or 'change')
+    local hunk = { type = hunk_type, ref_start = d[1], ref_count = n_ref, cur_start = d[3], cur_count = n_cur }
+    hunks[i] = hunk
+
+    -- Summary
+    local hunk_n_change = math.min(n_ref, n_cur)
+    n_add = n_add + n_cur - hunk_n_change
+    n_change = n_change + hunk_n_change
+    n_delete = n_delete + n_ref - hunk_n_change
+
+    -- Register lines for draw. At least one line should visualize hunk.
+    local from, n = math.max(d[3], 1), math.max(n_cur, 1)
+    local ext_opts = extmark_data[hunk_type]
+    for l_num = from, from + n - 1 do
+      -- Allow drawing several extmarks on one line (delete, change, overlay)
+      local l_data = draw_lines[l_num] or {}
+      table.insert(l_data, ext_opts)
+      draw_lines[l_num] = l_data
+    end
+
+    -- Add overlay extmark options
+    local overlay_extmarks = H.compute_overlay_extmarks(hunk, ref_lines, cur_lines, buf_cache)
+    for _, overlay_data in ipairs(overlay_extmarks) do
+      table.insert(draw_lines[overlay_data.l_num], overlay_data.opts)
+    end
+  end
+
+  return hunks, draw_lines, { add = n_add, change = n_change, delete = n_delete }
+end
+
+H.compute_overlay_extmarks = function(hunk, ref_lines, cur_lines, buf_cache)
+  -- Use `nil` reference lines as indicator that there is no overlay
+  if ref_lines == nil then return {} end
+
+  local priority, overlay_suffix = buf_cache.config.view.priority, H.overlay_suffix
+  local res = {}
+  if hunk.type == 'add' then
+    local from, to = hunk.cur_start, hunk.cur_start + hunk.cur_count - 1
+    local opts = { end_row = to, end_col = 0, hl_group = 'MiniDiffOverAdd', hl_eol = true }
+    table.insert(res, { l_num = from, opts = opts })
+  end
+
+  if hunk.type == 'delete' then
+    local deleted_lines = {}
+    for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
+      table.insert(deleted_lines, { { ref_lines[i], 'MiniDiffOverDelete' }, { overlay_suffix, 'MiniDiffOverDelete' } })
+    end
+    local l_num, show_above = math.max(hunk.cur_start, 1), hunk.cur_start == 0
+    -- NOTE: virtual lines above line 1 need manual scroll (like with `<C-b>`)
+    -- See https://github.com/neovim/neovim/issues/16166
+    local opts = { virt_lines = deleted_lines, virt_lines_above = show_above, priority = priority }
+    table.insert(res, { l_num = l_num, opts = opts })
+  end
+
+  if hunk.type == 'change' then
+    -- TODO: Show every reference line above current one. Surely if same number
+    -- of lines, possibly even if different (show remainder above first line)
+    local changed_lines = {}
+    for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
+      table.insert(changed_lines, { { ref_lines[i], 'MiniDiffOverChange' }, { overlay_suffix, 'MiniDiffOverChange' } })
+    end
+    local opts = { virt_lines = changed_lines, virt_lines_above = true, priority = priority - 1 }
+    table.insert(res, { l_num = hunk.cur_start, opts = opts })
+  end
+
+  return res
+end
+
+H.clear_all_diff = function(buf_id) H.clear_namespace(buf_id, H.ns_id.viz, 0, -1) end
 
 -- Hunks ----------------------------------------------------------------------
 H.get_hunk_buf_range = function(hunk)
