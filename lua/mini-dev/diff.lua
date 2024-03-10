@@ -161,7 +161,7 @@ MiniDiff.config = {
     -- Signs used for hunks with 'sign' view
     signs = { add = '▒', change = '▒', delete = '▒' },
 
-    -- Priority of used extmarks
+    -- Basic priority of used extmarks
     priority = 10,
   },
 
@@ -668,10 +668,10 @@ H.create_default_hl = function()
   hi('MiniDiffSignAdd',     { link = has_core_diff_hl and 'Added' or 'diffAdded' })
   hi('MiniDiffSignChange',  { link = has_core_diff_hl and 'Changed' or 'diffChanged' })
   hi('MiniDiffSignDelete',  { link = has_core_diff_hl and 'Removed' or 'diffRemoved'  })
-  hi('MiniDiffOverAdd',     { link = 'MiniDiffSignAdd' })
-  hi('MiniDiffOverChange',  { link = 'MiniDiffSignChange' })
-  hi('MiniDiffOverContext', { link = 'NonText' })
-  hi('MiniDiffOverDelete',  { link = 'MiniDiffSignDelete'  })
+  hi('MiniDiffOverAdd',     { link = 'DiffAdd' })
+  hi('MiniDiffOverChange',  { link = 'DiffText' })
+  hi('MiniDiffOverContext', { link = 'DiffChange' })
+  hi('MiniDiffOverDelete',  { link = 'DiffDelete'  })
 end
 
 H.is_disabled = function(buf_id)
@@ -776,7 +776,7 @@ H.convert_view_to_extmark_opts = function(view)
     add = { [field] = hl_group_prefix .. 'Add', sign_text = signs.add, priority = view.priority },
     -- Prefer showing "change" hunks over others
     change = { [field] = hl_group_prefix .. 'Change', sign_text = signs.change, priority = view.priority + 1 },
-    delete = { [field] = hl_group_prefix .. 'Delete', sign_text = signs.delete, priority = view.priority },
+    delete = { [field] = hl_group_prefix .. 'Delete', sign_text = signs.delete, priority = view.priority - 1 },
   }
 end
 
@@ -884,45 +884,65 @@ H.compute_hunk_data = function(diff, buf_cache, cur_lines)
   return hunks, draw_lines, { add = n_add, change = n_change, delete = n_delete }
 end
 
+H.clear_all_diff = function(buf_id) H.clear_namespace(buf_id, H.ns_id.viz, 0, -1) end
+
+-- Overlay --------------------------------------------------------------------
 H.compute_overlay_extmarks = function(hunk, ref_lines, cur_lines, buf_cache)
   -- Use `nil` reference lines as indicator that there is no overlay
   if ref_lines == nil then return {} end
 
-  local priority, overlay_suffix = buf_cache.config.view.priority, H.overlay_suffix
-  local res = {}
-  if hunk.type == 'add' then
-    local from, to = hunk.cur_start, hunk.cur_start + hunk.cur_count - 1
-    local opts = { end_row = to, end_col = 0, hl_group = 'MiniDiffOverAdd', hl_eol = true }
-    table.insert(res, { l_num = from, opts = opts })
-  end
-
-  if hunk.type == 'delete' then
-    local deleted_lines = {}
-    for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
-      table.insert(deleted_lines, { { ref_lines[i], 'MiniDiffOverDelete' }, { overlay_suffix, 'MiniDiffOverDelete' } })
-    end
-    local l_num, show_above = math.max(hunk.cur_start, 1), hunk.cur_start == 0
-    -- NOTE: virtual lines above line 1 need manual scroll (like with `<C-b>`)
-    -- See https://github.com/neovim/neovim/issues/16166
-    local opts = { virt_lines = deleted_lines, virt_lines_above = show_above, priority = priority }
-    table.insert(res, { l_num = l_num, opts = opts })
-  end
-
-  if hunk.type == 'change' then
-    -- TODO: Show every reference line above current one. Surely if same number
-    -- of lines, possibly even if different (show remainder above first line)
-    local changed_lines = {}
-    for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
-      table.insert(changed_lines, { { ref_lines[i], 'MiniDiffOverChange' }, { overlay_suffix, 'MiniDiffOverChange' } })
-    end
-    local opts = { virt_lines = changed_lines, virt_lines_above = true, priority = priority - 1 }
-    table.insert(res, { l_num = hunk.cur_start, opts = opts })
-  end
-
+  local res, priority = {}, buf_cache.config.view.priority
+  if hunk.type == 'add' then H.append_overlay_add(res, hunk, priority) end
+  if hunk.type == 'change' then H.append_overlay_change(res, hunk, ref_lines, cur_lines, priority) end
+  if hunk.type == 'delete' then H.append_overlay_delete(res, hunk, ref_lines, priority) end
   return res
 end
 
-H.clear_all_diff = function(buf_id) H.clear_namespace(buf_id, H.ns_id.viz, 0, -1) end
+H.append_overlay_add = function(target, hunk, priority)
+  local from, to = hunk.cur_start, hunk.cur_start + hunk.cur_count - 1
+  local opts = { end_row = to, end_col = 0, hl_group = 'MiniDiffOverAdd', hl_eol = true, priority = priority }
+  table.insert(target, { l_num = from, opts = opts })
+end
+
+H.append_overlay_change = function(target, hunk, ref_lines, cur_lines, priority)
+  -- For one-to-one change, show lines separately with word diff highlighted
+  if hunk.cur_count == hunk.ref_count then
+    for i = 0, hunk.ref_count - 1 do
+      local ref_l_num, cur_l_num = hunk.ref_start + i, hunk.cur_start + i
+      local ref_l, cur_l = ref_lines[ref_l_num], cur_lines[cur_l_num]
+      H.append_overlay_change_worddiff(target, ref_l, cur_l, cur_l_num, priority)
+    end
+    return
+  end
+
+  -- If not one-to-one change, show reference lines above first real one.
+  -- NOTE: Show above (and not below) to collide less with "delete" overlay.
+  local changed_lines = {}
+  for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
+    local l = { { ref_lines[i], 'MiniDiffOverChange' }, { H.overlay_suffix, 'MiniDiffOverChange' } }
+    table.insert(changed_lines, l)
+  end
+  local opts = { virt_lines = changed_lines, virt_lines_above = true, priority = priority + 1 }
+  table.insert(target, { l_num = hunk.cur_start, opts = opts })
+end
+
+H.append_overlay_change_worddiff = function(target, ref_line, cur_line, cur_l_num, priority)
+  local lines = { { { ref_line, 'MiniDiffOverContext' }, { H.overlay_suffix, 'MiniDiffOverContext' } } }
+  local opts = { virt_lines = lines, virt_lines_above = true, priority = priority + 1 }
+  table.insert(target, { l_num = cur_l_num, opts = opts })
+end
+
+H.append_overlay_delete = function(target, hunk, ref_lines, priority)
+  local deleted_lines = {}
+  for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
+    table.insert(deleted_lines, { { ref_lines[i], 'MiniDiffOverDelete' }, { H.overlay_suffix, 'MiniDiffOverDelete' } })
+  end
+  local l_num, show_above = math.max(hunk.cur_start, 1), hunk.cur_start == 0
+  -- NOTE: virtual lines above line 1 need manual scroll (like with `<C-b>`)
+  -- See https://github.com/neovim/neovim/issues/16166
+  local opts = { virt_lines = deleted_lines, virt_lines_above = show_above, priority = priority - 1 }
+  table.insert(target, { l_num = l_num, opts = opts })
+end
 
 -- Hunks ----------------------------------------------------------------------
 H.get_hunk_buf_range = function(hunk)

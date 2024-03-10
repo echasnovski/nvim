@@ -79,7 +79,11 @@ end)
 
 now(function() require('mini.tabline').setup() end)
 
-now(function() require('mini-dev.diff').setup() end)
+now(function()
+  require('mini-dev.diff').setup()
+  vim.keymap.set('n', 'ghh', 'gh_', { remap = true, desc = 'Apply current line hunk' })
+  vim.keymap.set('n', 'gHH', 'gH_', { remap = true, desc = 'Reset current line hunk' })
+end)
 
 -- Step two
 later(function() require('mini.extra').setup() end)
