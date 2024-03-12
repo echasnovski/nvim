@@ -1,7 +1,8 @@
 -- TODO:
 --
 -- Code:
--- - REALLLY think about renaming to 'mini.hunks'.
+-- - Consider refactoring so that word diff is only done for visible line (i.e.
+--   probably in decoration provider).
 --
 -- - Update overlay to show word/char diff highlighting for "change" hunk type.
 --
@@ -26,6 +27,8 @@
 --
 -- - Changing line which is already visualizing deleted (below) line should
 --   result into visualizing line as "change" and not "delete".
+--
+-- - Word diff should work with multibyte characters.
 --
 -- - Git source:
 --     - Manage "not in index" files by not showing diff visualization.
@@ -162,7 +165,7 @@ MiniDiff.config = {
     signs = { add = '▒', change = '▒', delete = '▒' },
 
     -- Basic priority of used extmarks
-    priority = 10,
+    priority = 300,
   },
 
   -- Source for how to reference text is computed/updated/etc.
@@ -255,8 +258,8 @@ MiniDiff.enable = function(buf_id)
     MiniDiff.disable(buf_id)
     MiniDiff.enable(buf_id)
   end
-  local buffilepost_opts = { group = augroup, buffer = buf_id, callback = reset, desc = 'Reset on rename' }
-  vim.api.nvim_create_autocmd('BufFilePost', buffilepost_opts)
+  local bufnew_opts = { group = augroup, buffer = buf_id, callback = reset, desc = 'Reset on rename' }
+  vim.api.nvim_create_autocmd('BufNew', bufnew_opts)
 
   -- Immediately process whole buffer
   H.schedule_diff_update(buf_id, 0)
@@ -272,7 +275,7 @@ MiniDiff.disable = function(buf_id)
 
   pcall(vim.api.nvim_del_augroup_by_id, buf_cache.augroup)
   H.clear_all_diff(buf_id)
-  buf_cache.source.detach(buf_id)
+  pcall(buf_cache.source.detach, buf_id)
 end
 
 --- Toggle diff tracking in buffer
@@ -519,8 +522,7 @@ H.default_config = MiniDiff.config
 H.default_source = MiniDiff.gen_source.git()
 
 -- Timers
-H.timer_debounce = vim.loop.new_timer()
-H.timer_view = vim.loop.new_timer()
+H.timer_diff_update = vim.loop.new_timer()
 
 -- Namespaces per highlighter name
 H.ns_id = {
@@ -532,6 +534,9 @@ H.bufs_to_update = {}
 
 -- Cache per enabled buffer
 H.cache = {}
+
+-- Table tracking which buffers were already tried to auto enable
+H.bufs_auto_enabled = {}
 
 -- Cache per buffer for attached `git` source
 H.git_cache = {}
@@ -552,6 +557,11 @@ H.overlay_suffix = string.rep(' ', vim.o.columns)
 -- Permanent `vim.diff()` options
 H.vimdiff_opts = { result_type = 'indices', ctxlen = 0, interhunkctxlen = 0 }
 H.vimdiff_supports_linematch = vim.fn.has('nvim-0.9') == 1
+
+-- Options for `vim.diff()` during word diff. Use `interhunkctxlen = 4` to
+-- reduce noisiness (chosen as slightly less than everage English word length)
+H.worddiff_opts = { result_type = 'indices', ctxlen = 0, interhunkctxlen = 4, indent_heuristic = false }
+if H.vimdiff_supports_linematch then H.worddiff_opts.linematch = 0 end
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -636,8 +646,8 @@ H.apply_config = function(config)
     local draw_lines = buf_cache.draw_lines
     for i = top + 1, bottom + 1 do
       if draw_lines[i] ~= nil then
-        for _, extmark_opts in ipairs(draw_lines[i]) do
-          H.set_extmark(bufnr, ns_id_viz, i - 1, 0, extmark_opts)
+        for _, data in ipairs(draw_lines[i]) do
+          H.set_extmark(bufnr, ns_id_viz, i - 1, data.col, data.opts)
         end
         draw_lines[i] = nil
       end
@@ -653,6 +663,9 @@ H.create_autocommands = function()
     vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
   end
 
+  -- NOTE: Try auto enabling buffer only once. This is done in `BufEnter` event
+  -- with additional tracking (and not in `BufNew`) to also work for when
+  -- buffers are opened during startup (and `BufNew` is not triggered).
   au('BufEnter', '*', H.auto_enable, 'Enable diff')
   au('VimResized', '*', function() H.overlay_suffix = string.rep(' ', vim.o.columns) end, 'Track Neovim resizing')
 end
@@ -691,9 +704,10 @@ end
 
 -- Autocommands ---------------------------------------------------------------
 H.auto_enable = vim.schedule_wrap(function(data)
-  if H.is_buf_enabled(data.buf) or H.is_disabled(data.buf) then return end
+  if H.bufs_auto_enabled[data.buf] or H.is_buf_enabled(data.buf) or H.is_disabled(data.buf) then return end
   if not vim.api.nvim_buf_is_valid(data.buf) or vim.bo[data.buf].buftype ~= '' then return end
   if not H.is_buf_text(data.buf) then return end
+  H.bufs_auto_enabled[data.buf] = true
   MiniDiff.enable(data.buf)
 end)
 
@@ -783,8 +797,8 @@ end
 -- Processing -----------------------------------------------------------------
 H.schedule_diff_update = vim.schedule_wrap(function(buf_id, delay_ms)
   H.bufs_to_update[buf_id] = true
-  H.timer_debounce:stop()
-  H.timer_debounce:start(delay_ms, 0, H.process_scheduled_buffers)
+  H.timer_diff_update:stop()
+  H.timer_diff_update:start(delay_ms, 0, H.process_scheduled_buffers)
 end)
 
 H.process_scheduled_buffers = vim.schedule_wrap(function()
@@ -866,18 +880,19 @@ H.compute_hunk_data = function(diff, buf_cache, cur_lines)
 
     -- Register lines for draw. At least one line should visualize hunk.
     local from, n = math.max(d[3], 1), math.max(n_cur, 1)
-    local ext_opts = extmark_data[hunk_type]
+    local draw_data = { col = 0, opts = extmark_data[hunk_type] }
     for l_num = from, from + n - 1 do
       -- Allow drawing several extmarks on one line (delete, change, overlay)
       local l_data = draw_lines[l_num] or {}
-      table.insert(l_data, ext_opts)
+      table.insert(l_data, draw_data)
       draw_lines[l_num] = l_data
     end
 
     -- Add overlay extmark options
+    -- TODO: Possibly refactor to populate `draw_lines` directly
     local overlay_extmarks = H.compute_overlay_extmarks(hunk, ref_lines, cur_lines, buf_cache)
     for _, overlay_data in ipairs(overlay_extmarks) do
-      table.insert(draw_lines[overlay_data.l_num], overlay_data.opts)
+      table.insert(draw_lines[overlay_data.l_num], overlay_data.data)
     end
   end
 
@@ -900,12 +915,13 @@ end
 
 H.append_overlay_add = function(target, hunk, priority)
   local from, to = hunk.cur_start, hunk.cur_start + hunk.cur_count - 1
-  local opts = { end_row = to, end_col = 0, hl_group = 'MiniDiffOverAdd', hl_eol = true, priority = priority }
-  table.insert(target, { l_num = from, opts = opts })
+  local ext_opts = { end_row = to, end_col = 0, hl_group = 'MiniDiffOverAdd', hl_eol = true, priority = priority }
+  table.insert(target, { l_num = from, data = { col = 0, opts = ext_opts } })
 end
 
 H.append_overlay_change = function(target, hunk, ref_lines, cur_lines, priority)
   -- For one-to-one change, show lines separately with word diff highlighted
+  -- This is usually the case when `linematch` is on
   if hunk.cur_count == hunk.ref_count then
     for i = 0, hunk.ref_count - 1 do
       local ref_l_num, cur_l_num = hunk.ref_start + i, hunk.cur_start + i
@@ -915,21 +931,38 @@ H.append_overlay_change = function(target, hunk, ref_lines, cur_lines, priority)
     return
   end
 
-  -- If not one-to-one change, show reference lines above first real one.
-  -- NOTE: Show above (and not below) to collide less with "delete" overlay.
+  -- If not one-to-one change, show reference lines above first real one
   local changed_lines = {}
   for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
     local l = { { ref_lines[i], 'MiniDiffOverChange' }, { H.overlay_suffix, 'MiniDiffOverChange' } }
     table.insert(changed_lines, l)
   end
-  local opts = { virt_lines = changed_lines, virt_lines_above = true, priority = priority + 1 }
-  table.insert(target, { l_num = hunk.cur_start, opts = opts })
+  local ext_opts = { virt_lines = changed_lines, virt_lines_above = true, priority = priority + 1 }
+  table.insert(target, { l_num = hunk.cur_start, data = { col = 0, opts = ext_opts } })
 end
 
 H.append_overlay_change_worddiff = function(target, ref_line, cur_line, cur_l_num, priority)
-  local lines = { { { ref_line, 'MiniDiffOverContext' }, { H.overlay_suffix, 'MiniDiffOverContext' } } }
-  local opts = { virt_lines = lines, virt_lines_above = true, priority = priority + 1 }
-  table.insert(target, { l_num = cur_l_num, opts = opts })
+  local ref_parts, cur_parts = H.compute_worddiff_changed_parts(ref_line, cur_line)
+
+  -- Show changed parts in reference line as virtual line above
+  local virt_line, index = {}, 1
+  for i = 1, #ref_parts do
+    local part = ref_parts[i]
+    if index < part[1] then table.insert(virt_line, { ref_line:sub(index, part[1] - 1), 'MiniDiffOverContext' }) end
+    table.insert(virt_line, { ref_line:sub(part[1], part[2]), 'MiniDiffOverChange' })
+    index = part[2] + 1
+  end
+  if index <= ref_line:len() then table.insert(virt_line, { ref_line:sub(index), 'MiniDiffOverContext' }) end
+  table.insert(virt_line, { H.overlay_suffix, 'MiniDiffOverContext' })
+  local ext_opts = { virt_lines = { virt_line }, virt_lines_above = true, priority = priority + 1 }
+  table.insert(target, { l_num = cur_l_num, data = { col = 0, opts = ext_opts } })
+
+  -- Show changed parts in current line with separate extmarks
+  for i = 1, #cur_parts do
+    local part = cur_parts[i]
+    local o = { end_row = cur_l_num - 1, end_col = part[2], hl_group = 'MiniDiffOverChange', priority = priority + 1 }
+    table.insert(target, { l_num = cur_l_num, data = { col = part[1] - 1, opts = o } })
+  end
 end
 
 H.append_overlay_delete = function(target, hunk, ref_lines, priority)
@@ -940,8 +973,19 @@ H.append_overlay_delete = function(target, hunk, ref_lines, priority)
   local l_num, show_above = math.max(hunk.cur_start, 1), hunk.cur_start == 0
   -- NOTE: virtual lines above line 1 need manual scroll (like with `<C-b>`)
   -- See https://github.com/neovim/neovim/issues/16166
-  local opts = { virt_lines = deleted_lines, virt_lines_above = show_above, priority = priority - 1 }
-  table.insert(target, { l_num = l_num, opts = opts })
+  local ext_opts = { virt_lines = deleted_lines, virt_lines_above = show_above, priority = priority - 1 }
+  table.insert(target, { l_num = l_num, data = { col = 0, opts = ext_opts } })
+end
+
+H.compute_worddiff_changed_parts = function(ref_line, cur_line)
+  local diff = vim.diff(ref_line:gsub('(.)', '%1\n'), cur_line:gsub('(.)', '%1\n'), H.worddiff_opts)
+  local ref_ranges, cur_ranges = {}, {}
+  for i = 1, #diff do
+    local d = diff[i]
+    if d[2] > 0 then table.insert(ref_ranges, { d[1], d[1] + d[2] - 1 }) end
+    if d[4] > 0 then table.insert(cur_ranges, { d[3], d[3] + d[4] - 1 }) end
+  end
+  return ref_ranges, cur_ranges
 end
 
 -- Hunks ----------------------------------------------------------------------
