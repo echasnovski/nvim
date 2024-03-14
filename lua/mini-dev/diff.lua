@@ -1,10 +1,10 @@
 -- TODO:
 --
 -- Code:
--- - Consider refactoring so that word diff is only done for visible line (i.e.
---   probably in decoration provider).
+-- - Consider adding `n_ranges` to `hunk_summary` and use `#xxx` to show in
+--   string summary.
 --
--- - Update overlay to show word/char diff highlighting for "change" hunk type.
+-- - Make word diff work with multibyte characters.
 --
 -- - When moving added line upwards, extmark should not temporarily shift down.
 --
@@ -527,6 +527,7 @@ H.timer_diff_update = vim.loop.new_timer()
 -- Namespaces per highlighter name
 H.ns_id = {
   viz = vim.api.nvim_create_namespace('MiniDiffViz'),
+  overlay = vim.api.nvim_create_namespace('MiniDiffOverlay'),
 }
 
 -- Cache of buffers waiting for debounced diff update
@@ -633,23 +634,25 @@ H.apply_config = function(config)
   --stylua: ignore end
 
   -- Register decoration provider which actually makes visualization
-  local ns_id_viz = H.ns_id.viz
-  local on_win = function(_, _, bufnr, top, bottom)
-    local buf_cache = H.cache[bufnr]
+  local ns_id_viz, ns_id_overlay = H.ns_id.viz, H.ns_id.overlay
+  local on_win = function(_, _, buf_id, top, bottom)
+    local buf_cache = H.cache[buf_id]
     if buf_cache == nil then return false end
 
     if buf_cache.needs_clear then
-      H.clear_all_diff(bufnr)
+      H.clear_all_diff(buf_id)
       buf_cache.needs_clear = false
     end
 
-    local draw_lines = buf_cache.draw_lines
+    local viz_lines, overlay_lines = buf_cache.viz_lines, buf_cache.overlay_lines
     for i = top + 1, bottom + 1 do
-      if draw_lines[i] ~= nil then
-        for _, data in ipairs(draw_lines[i]) do
-          H.set_extmark(bufnr, ns_id_viz, i - 1, data.col, data.opts)
-        end
-        draw_lines[i] = nil
+      if viz_lines[i] ~= nil then
+        H.set_extmark(buf_id, ns_id_viz, i - 1, 0, viz_lines[i])
+        viz_lines[i] = nil
+      end
+      if overlay_lines[i] ~= nil then
+        H.draw_overlay_line(buf_id, ns_id_overlay, i - 1, overlay_lines[i])
+        overlay_lines[i] = nil
       end
     end
   end
@@ -757,7 +760,8 @@ H.update_cache = function(buf_id)
 
   buf_cache.hunks = buf_cache.hunks or {}
   buf_cache.hunk_summary = buf_cache.hunk_summary or {}
-  buf_cache.draw_lines = buf_cache.draw_lines or {}
+  buf_cache.viz_lines = buf_cache.viz_lines or {}
+  buf_cache.overlay_lines = buf_cache.overlay_lines or {}
 
   H.cache[buf_id] = buf_cache
 end
@@ -788,9 +792,8 @@ H.convert_view_to_extmark_opts = function(view)
   local field, hl_group_prefix = extmark_data.field, extmark_data.hl_group_prefix
   return {
     add = { [field] = hl_group_prefix .. 'Add', sign_text = signs.add, priority = view.priority },
-    -- Prefer showing "change" hunks over others
-    change = { [field] = hl_group_prefix .. 'Change', sign_text = signs.change, priority = view.priority + 1 },
-    delete = { [field] = hl_group_prefix .. 'Delete', sign_text = signs.delete, priority = view.priority - 1 },
+    change = { [field] = hl_group_prefix .. 'Change', sign_text = signs.change, priority = view.priority },
+    delete = { [field] = hl_group_prefix .. 'Delete', sign_text = signs.delete, priority = view.priority },
   }
 end
 
@@ -817,7 +820,7 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
     return
   end
   if type(buf_cache.ref_text) ~= 'string' or H.is_disabled(buf_id) then
-    buf_cache.hunks, buf_cache.hunk_summary, buf_cache.draw_lines = {}, {}, {}
+    buf_cache.hunks, buf_cache.viz_lines, buf_cache.overlay_lines, buf_cache.hunk_summary = {}, {}, {}, {}
     vim.b[buf_id].minidiff_summary, vim.b[buf_id].minidiff_summary_string = {}, ''
     return
   end
@@ -834,7 +837,8 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
 
   -- Recompute hunks with summary and draw information
-  buf_cache.hunks, buf_cache.draw_lines, buf_cache.hunk_summary = H.compute_hunk_data(diff, buf_cache, cur_lines)
+  buf_cache.hunks, buf_cache.viz_lines, buf_cache.overlay_lines, buf_cache.hunk_summary =
+    H.compute_hunk_data(diff, buf_cache, cur_lines)
 
   -- Set buffer-local variables with summary for easier external usage
   local hunk_summary = buf_cache.hunk_summary
@@ -861,10 +865,11 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
 end)
 
 H.compute_hunk_data = function(diff, buf_cache, cur_lines)
-  local ref_lines = buf_cache.overlay and vim.split(buf_cache.ref_text, '\n') or nil
+  local do_overlay = buf_cache.overlay
+  local ref_lines = do_overlay and vim.split(buf_cache.ref_text, '\n') or nil
 
-  local extmark_data = buf_cache.extmark_data
-  local hunks, draw_lines, n_add, n_change, n_delete = {}, {}, 0, 0, 0
+  local extmark_data, priority = buf_cache.extmark_data, buf_cache.config.view.priority
+  local hunks, viz_lines, overlay_lines, n_add, n_change, n_delete = {}, {}, {}, 0, 0, 0
   for i, d in ipairs(diff) do
     -- Hunk
     local n_ref, n_cur = d[2], d[4]
@@ -880,53 +885,42 @@ H.compute_hunk_data = function(diff, buf_cache, cur_lines)
 
     -- Register lines for draw. At least one line should visualize hunk.
     local from, n = math.max(d[3], 1), math.max(n_cur, 1)
-    local draw_data = { col = 0, opts = extmark_data[hunk_type] }
+    local viz_ext_opts = extmark_data[hunk_type]
     for l_num = from, from + n - 1 do
-      -- Allow drawing several extmarks on one line (delete, change, overlay)
-      local l_data = draw_lines[l_num] or {}
-      table.insert(l_data, draw_data)
-      draw_lines[l_num] = l_data
+      -- Prefer showing "change" hunk over other types
+      if viz_lines[l_num] == nil or hunk_type == 'change' then viz_lines[l_num] = viz_ext_opts end
     end
 
-    -- Add overlay extmark options
-    -- TODO: Possibly refactor to populate `draw_lines` directly
-    local overlay_extmarks = H.compute_overlay_extmarks(hunk, ref_lines, cur_lines, buf_cache)
-    for _, overlay_data in ipairs(overlay_extmarks) do
-      table.insert(draw_lines[overlay_data.l_num], overlay_data.data)
+    if do_overlay then
+      if hunk_type == 'add' then H.append_overlay_add(overlay_lines, hunk, priority) end
+      if hunk_type == 'change' then H.append_overlay_change(overlay_lines, hunk, ref_lines, cur_lines, priority) end
+      if hunk_type == 'delete' then H.append_overlay_delete(overlay_lines, hunk, ref_lines, priority) end
     end
   end
 
-  return hunks, draw_lines, { add = n_add, change = n_change, delete = n_delete }
+  return hunks, viz_lines, overlay_lines, { add = n_add, change = n_change, delete = n_delete }
 end
 
-H.clear_all_diff = function(buf_id) H.clear_namespace(buf_id, H.ns_id.viz, 0, -1) end
+H.clear_all_diff = function(buf_id)
+  H.clear_namespace(buf_id, H.ns_id.viz, 0, -1)
+  H.clear_namespace(buf_id, H.ns_id.overlay, 0, -1)
+end
 
 -- Overlay --------------------------------------------------------------------
-H.compute_overlay_extmarks = function(hunk, ref_lines, cur_lines, buf_cache)
-  -- Use `nil` reference lines as indicator that there is no overlay
-  if ref_lines == nil then return {} end
-
-  local res, priority = {}, buf_cache.config.view.priority
-  if hunk.type == 'add' then H.append_overlay_add(res, hunk, priority) end
-  if hunk.type == 'change' then H.append_overlay_change(res, hunk, ref_lines, cur_lines, priority) end
-  if hunk.type == 'delete' then H.append_overlay_delete(res, hunk, ref_lines, priority) end
-  return res
+H.append_overlay_add = function(overlay_lines, hunk, priority)
+  overlay_lines[hunk.cur_start] = { type = 'add', to = hunk.cur_start + hunk.cur_count - 1, priority = priority }
 end
 
-H.append_overlay_add = function(target, hunk, priority)
-  local from, to = hunk.cur_start, hunk.cur_start + hunk.cur_count - 1
-  local ext_opts = { end_row = to, end_col = 0, hl_group = 'MiniDiffOverAdd', hl_eol = true, priority = priority }
-  table.insert(target, { l_num = from, data = { col = 0, opts = ext_opts } })
-end
-
-H.append_overlay_change = function(target, hunk, ref_lines, cur_lines, priority)
+H.append_overlay_change = function(overlay_lines, hunk, ref_lines, cur_lines, priority)
   -- For one-to-one change, show lines separately with word diff highlighted
   -- This is usually the case when `linematch` is on
   if hunk.cur_count == hunk.ref_count then
     for i = 0, hunk.ref_count - 1 do
-      local ref_l_num, cur_l_num = hunk.ref_start + i, hunk.cur_start + i
-      local ref_l, cur_l = ref_lines[ref_l_num], cur_lines[cur_l_num]
-      H.append_overlay_change_worddiff(target, ref_l, cur_l, cur_l_num, priority)
+      local ref_n, cur_n = hunk.ref_start + i, hunk.cur_start + i
+      -- Defer actually computing word diff until in decoration provider as it
+      -- will compute only for displayed lines
+      overlay_lines[cur_n] =
+        { type = 'change_worddiff', ref_line = ref_lines[ref_n], cur_line = cur_lines[cur_n], priority = priority }
     end
     return
   end
@@ -937,11 +931,46 @@ H.append_overlay_change = function(target, hunk, ref_lines, cur_lines, priority)
     local l = { { ref_lines[i], 'MiniDiffOverChange' }, { H.overlay_suffix, 'MiniDiffOverChange' } }
     table.insert(changed_lines, l)
   end
-  local ext_opts = { virt_lines = changed_lines, virt_lines_above = true, priority = priority + 1 }
-  table.insert(target, { l_num = hunk.cur_start, data = { col = 0, opts = ext_opts } })
+  overlay_lines[hunk.cur_start] = { type = 'change', lines = changed_lines, priority = priority }
 end
 
-H.append_overlay_change_worddiff = function(target, ref_line, cur_line, cur_l_num, priority)
+H.append_overlay_delete = function(overlay_lines, hunk, ref_lines, priority)
+  local deleted_lines = {}
+  for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
+    table.insert(deleted_lines, { { ref_lines[i], 'MiniDiffOverDelete' }, { H.overlay_suffix, 'MiniDiffOverDelete' } })
+  end
+  local l_num, show_above = math.max(hunk.cur_start, 1), hunk.cur_start == 0
+  overlay_lines[l_num] = { type = 'delete', lines = deleted_lines, show_above = show_above, priority = priority }
+end
+
+H.draw_overlay_line = function(buf_id, ns_id, row, data)
+  -- "Add" hunk: highlight whole buffer range
+  if data.type == 'add' then
+    local opts =
+      { end_row = data.to, end_col = 0, hl_group = 'MiniDiffOverAdd', hl_eol = true, priority = data.priority }
+    return H.set_extmark(buf_id, ns_id, row, 0, opts)
+  end
+
+  -- "Change" hunk: show changed lines above first hunk line
+  if data.type == 'change' then
+    -- NOTE: virtual lines above line 1 need manual scroll (like with `<C-b>`)
+    -- See https://github.com/neovim/neovim/issues/16166
+    local opts = { virt_lines = data.lines, virt_lines_above = true, priority = data.priority }
+    return H.set_extmark(buf_id, ns_id, row, 0, opts)
+  end
+
+  -- "Change worddif" hunk: compute word diff and show it above and over text
+  if data.type == 'change_worddiff' then return H.draw_overlay_line_worddiff(buf_id, ns_id, row, data) end
+
+  -- "Delete" hunk: show deleted lines below buffer line (if possible)
+  if data.type == 'delete' then
+    local opts = { virt_lines = data.lines, virt_lines_above = data.show_above, priority = data.priority }
+    return H.set_extmark(buf_id, ns_id, row, 0, opts)
+  end
+end
+
+H.draw_overlay_line_worddiff = function(buf_id, ns_id, row, data)
+  local ref_line, cur_line = data.ref_line, data.cur_line
   local ref_parts, cur_parts = H.compute_worddiff_changed_parts(ref_line, cur_line)
 
   -- Show changed parts in reference line as virtual line above
@@ -954,27 +983,16 @@ H.append_overlay_change_worddiff = function(target, ref_line, cur_line, cur_l_nu
   end
   if index <= ref_line:len() then table.insert(virt_line, { ref_line:sub(index), 'MiniDiffOverContext' }) end
   table.insert(virt_line, { H.overlay_suffix, 'MiniDiffOverContext' })
-  local ext_opts = { virt_lines = { virt_line }, virt_lines_above = true, priority = priority + 1 }
-  table.insert(target, { l_num = cur_l_num, data = { col = 0, opts = ext_opts } })
+
+  local ref_opts = { virt_lines = { virt_line }, virt_lines_above = true, priority = data.priority }
+  H.set_extmark(buf_id, ns_id, row, 0, ref_opts)
 
   -- Show changed parts in current line with separate extmarks
   for i = 1, #cur_parts do
     local part = cur_parts[i]
-    local o = { end_row = cur_l_num - 1, end_col = part[2], hl_group = 'MiniDiffOverChange', priority = priority + 1 }
-    table.insert(target, { l_num = cur_l_num, data = { col = part[1] - 1, opts = o } })
+    local cur_opts = { end_row = row, end_col = part[2], hl_group = 'MiniDiffOverChange', priority = data.priority }
+    H.set_extmark(buf_id, ns_id, row, part[1] - 1, cur_opts)
   end
-end
-
-H.append_overlay_delete = function(target, hunk, ref_lines, priority)
-  local deleted_lines = {}
-  for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
-    table.insert(deleted_lines, { { ref_lines[i], 'MiniDiffOverDelete' }, { H.overlay_suffix, 'MiniDiffOverDelete' } })
-  end
-  local l_num, show_above = math.max(hunk.cur_start, 1), hunk.cur_start == 0
-  -- NOTE: virtual lines above line 1 need manual scroll (like with `<C-b>`)
-  -- See https://github.com/neovim/neovim/issues/16166
-  local ext_opts = { virt_lines = deleted_lines, virt_lines_above = show_above, priority = priority - 1 }
-  table.insert(target, { l_num = l_num, data = { col = 0, opts = ext_opts } })
 end
 
 H.compute_worddiff_changed_parts = function(ref_line, cur_line)
