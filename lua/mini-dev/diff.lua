@@ -1,8 +1,10 @@
 -- TODO:
 --
 -- Code:
--- - Consider adding `n_ranges` to `hunk_summary` and use `#xxx` to show in
---   string summary.
+-- - Update overlay to be able to show several overlays on single line (like
+--   delete and change).
+--
+-- - Consider renaming `cur_*` to `buf_*`.
 --
 -- - Make word diff work with multibyte characters.
 --
@@ -38,12 +40,19 @@
 --       when opening file inside '.git' directory).
 --     - Manage renaming file while having `git` attached, as this might
 --       disable tracking due to "neither in index nor on disk" error.
+--     - Should (permanently) not try to reattach on `BufEnter` in buffers
+--       which are not in Git repo. If path started being in Git repo, wipeout
+--       buffer and reopen path in new buffer.
 --
 -- - Actions:
 --     - Should work for all types of hunks (add, change, delete) in all
 --       relative buffer places (first lines, middle lines, last lines).
 --     - Operator's dot-repeat should work in different buffer than was
 --       originally applied.
+--
+-- - Overlay:
+--     - Should show both change and delete overlays even if both extmarks are
+--       on same line.
 
 --- *mini.diff* Work with diff hunks
 --- *MiniDiff*
@@ -165,7 +174,7 @@ MiniDiff.config = {
     signs = { add = '▒', change = '▒', delete = '▒' },
 
     -- Basic priority of used extmarks
-    priority = 300,
+    priority = vim.highlight.priorities.user - 1,
   },
 
   -- Source for how to reference text is computed/updated/etc.
@@ -216,13 +225,13 @@ MiniDiff.enable = function(buf_id)
   -- Don't enable more than once
   if H.is_buf_enabled(buf_id) then return end
 
-  -- Register enabled buffer with cached data for performance
-  H.cache[buf_id] = {}
-  H.update_cache(buf_id)
-
-  -- Attach source
-  local attach_output = H.cache[buf_id].source.attach(buf_id)
+  -- Try attaching source
+  local cache = H.compute_new_buf_cache(buf_id)
+  local attach_output = cache.source.attach(buf_id)
   if attach_output == false then return MiniDiff.disable(buf_id) end
+
+  -- Register enabled buffer with cached data for performance
+  H.cache[buf_id] = cache
 
   -- Add buffer watchers
   vim.api.nvim_buf_attach(buf_id, false, {
@@ -246,7 +255,7 @@ MiniDiff.enable = function(buf_id)
   local augroup = vim.api.nvim_create_augroup('MiniDiffBuffer' .. buf_id, { clear = true })
   H.cache[buf_id].augroup = augroup
 
-  local buf_update = vim.schedule_wrap(function() H.update_cache(buf_id) end)
+  local buf_update = vim.schedule_wrap(function() H.cache[buf_id] = H.compute_new_buf_cache(buf_id) end)
   local bufwinenter_opts = { group = augroup, buffer = buf_id, callback = buf_update, desc = 'Update buffer cache' }
   vim.api.nvim_create_autocmd('BufWinEnter', bufwinenter_opts)
 
@@ -292,7 +301,6 @@ MiniDiff.toggle_overlay = function(buf_id)
   if buf_cache == nil then H.error(string.format('Buffer %d is not enabled.', buf_id)) end
 
   buf_cache.overlay = not buf_cache.overlay
-  H.update_cache(buf_id)
   H.clear_all_diff(buf_id)
   H.schedule_diff_update(buf_id, 0)
 end
@@ -348,8 +356,12 @@ MiniDiff.gen_source = {}
 
 MiniDiff.gen_source.git = function()
   local attach = function(buf_id)
+    -- Try attaching only once
+    if H.git_cache[buf_id] ~= nil then return false end
+    H.git_cache[buf_id] = {}
+
     local path = vim.api.nvim_buf_get_name(buf_id)
-    if path == '' or vim.fn.filereadable(path) ~= 1 then return end
+    if path == '' or vim.fn.filereadable(path) ~= 1 then return false end
     H.git_start_watching_index(buf_id, path)
   end
 
@@ -374,9 +386,6 @@ MiniDiff.gen_source.git = function()
     local patch = H.git_format_patch(buf_id, hunks, path_data)
     H.git_apply_patch(path_data, patch)
   end
-
-  -- TODO: Think about a possible abstraction that would allow to unstage
-  -- already staged hunks
 
   return { name = 'git', attach = attach, refresh = refresh, detach = detach, apply_hunks = apply_hunks }
 end
@@ -415,7 +424,7 @@ MiniDiff.do_hunks = function(buf_id, action, opts)
   local line_start, line_end = H.validate_target_lines(buf_id, opts.line_start, opts.line_end)
 
   local hunks = H.get_hunks_in_range(buf_cache.hunks, line_start, line_end)
-  if #hunks == 0 then return H.notify('No hunks to ' .. action .. '.', 'INFO') end
+  if #hunks == 0 then return H.notify('No hunks to ' .. action, 'INFO') end
   local f = action == 'apply' and buf_cache.source.apply_hunks or H.reset_hunks
   f(buf_id, hunks)
 end
@@ -445,7 +454,7 @@ MiniDiff.goto_hunk = function(direction, opts)
 
   -- Prepare ranges to iterate.
   local ranges = H.get_contiguous_hunk_ranges(buf_cache.hunks)
-  if #ranges == 0 then return H.notify('No hunks to go to.', 'INFO') end
+  if #ranges == 0 then return H.notify('No hunks to go to', 'INFO') end
 
   -- Compute iteration data
   local iter_dir = (direction == 'first' or direction == 'next') and 'forward' or 'backward'
@@ -454,7 +463,7 @@ MiniDiff.goto_hunk = function(direction, opts)
 
   -- Iterate
   local res_line = H.iterate_hunk_ranges(ranges, iter_dir, line_start, opts.n_times)
-  if res_line == nil then return H.notify('No hunk ranges in direction "' .. direction .. '".', 'INFO') end
+  if res_line == nil then return H.notify('No hunk ranges in direction ' .. vim.inspect(direction), 'INFO') end
 
   -- Add to jumplist
   vim.cmd([[normal! m']])
@@ -507,7 +516,7 @@ MiniDiff.textobject = function()
   for _, r in ipairs(regions) do
     if r.from <= cur_line and cur_line <= r.to then cur_region = r end
   end
-  if cur_region == nil then return H.notify('No hunk range under cursor.', 'INFO') end
+  if cur_region == nil then return H.notify('No hunk range under cursor', 'INFO') end
 
   -- Select target region
   local is_visual = vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode())
@@ -535,9 +544,6 @@ H.bufs_to_update = {}
 
 -- Cache per enabled buffer
 H.cache = {}
-
--- Table tracking which buffers were already tried to auto enable
-H.bufs_auto_enabled = {}
 
 -- Cache per buffer for attached `git` source
 H.git_cache = {}
@@ -666,9 +672,8 @@ H.create_autocommands = function()
     vim.api.nvim_create_autocmd(event, { group = augroup, pattern = pattern, callback = callback, desc = desc })
   end
 
-  -- NOTE: Try auto enabling buffer only once. This is done in `BufEnter` event
-  -- with additional tracking (and not in `BufNew`) to also work for when
-  -- buffers are opened during startup (and `BufNew` is not triggered).
+  -- NOTE: Try auto enabling buffer on every `BufEnter` to not have `:edit`
+  -- disabling buffer, as it calls `on_detach()` from buffer watcher
   au('BufEnter', '*', H.auto_enable, 'Enable diff')
   au('VimResized', '*', function() H.overlay_suffix = string.rep(' ', vim.o.columns) end, 'Track Neovim resizing')
 end
@@ -707,10 +712,9 @@ end
 
 -- Autocommands ---------------------------------------------------------------
 H.auto_enable = vim.schedule_wrap(function(data)
-  if H.bufs_auto_enabled[data.buf] or H.is_buf_enabled(data.buf) or H.is_disabled(data.buf) then return end
+  if H.is_buf_enabled(data.buf) or H.is_disabled(data.buf) then return end
   if not vim.api.nvim_buf_is_valid(data.buf) or vim.bo[data.buf].buftype ~= '' then return end
   if not H.is_buf_text(data.buf) then return end
-  H.bufs_auto_enabled[data.buf] = true
   MiniDiff.enable(data.buf)
 end)
 
@@ -749,21 +753,20 @@ end
 -- Enabling -------------------------------------------------------------------
 H.is_buf_enabled = function(buf_id) return H.cache[buf_id] ~= nil end
 
-H.update_cache = function(buf_id)
-  local buf_cache = H.cache[buf_id]
-  if buf_cache == nil then return end
+H.compute_new_buf_cache = function(buf_id)
+  local res = H.cache[buf_id] or {}
 
   local buf_config = H.get_config({}, buf_id)
-  buf_cache.config = buf_config
-  buf_cache.extmark_data = H.convert_view_to_extmark_opts(buf_config.view)
-  buf_cache.source = H.normalize_source(buf_config.source or H.default_source)
+  res.config = buf_config
+  res.extmark_data = H.convert_view_to_extmark_opts(buf_config.view)
+  res.source = H.normalize_source(buf_config.source or H.default_source)
 
-  buf_cache.hunks = buf_cache.hunks or {}
-  buf_cache.hunk_summary = buf_cache.hunk_summary or {}
-  buf_cache.viz_lines = buf_cache.viz_lines or {}
-  buf_cache.overlay_lines = buf_cache.overlay_lines or {}
+  res.hunks = res.hunks or {}
+  res.hunk_summary = res.hunk_summary or {}
+  res.viz_lines = res.viz_lines or {}
+  res.overlay_lines = res.overlay_lines or {}
 
-  H.cache[buf_id] = buf_cache
+  return res
 end
 
 H.normalize_source = function(source)
@@ -837,8 +840,7 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
 
   -- Recompute hunks with summary and draw information
-  buf_cache.hunks, buf_cache.viz_lines, buf_cache.overlay_lines, buf_cache.hunk_summary =
-    H.compute_hunk_data(diff, buf_cache, cur_lines)
+  H.update_hunk_data(diff, buf_cache, cur_lines)
 
   -- Set buffer-local variables with summary for easier external usage
   local hunk_summary = buf_cache.hunk_summary
@@ -848,6 +850,7 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   if hunk_summary.add > 0 then table.insert(summary, '+' .. hunk_summary.add) end
   if hunk_summary.change > 0 then table.insert(summary, '~' .. hunk_summary.change) end
   if hunk_summary.delete > 0 then table.insert(summary, '-' .. hunk_summary.delete) end
+  if hunk_summary.n_ranges > 0 then table.insert(summary, '#' .. hunk_summary.n_ranges) end
   vim.b[buf_id].minidiff_summary_string = table.concat(summary, ' ')
 
   -- Request highlighting clear to be done in decoration provider
@@ -864,12 +867,14 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   vim.api.nvim_exec_autocmds('User', { pattern = 'MiniDiffUpdated' })
 end)
 
-H.compute_hunk_data = function(diff, buf_cache, cur_lines)
+H.update_hunk_data = function(diff, buf_cache, cur_lines)
   local do_overlay = buf_cache.overlay
   local ref_lines = do_overlay and vim.split(buf_cache.ref_text, '\n') or nil
 
   local extmark_data, priority = buf_cache.extmark_data, buf_cache.config.view.priority
-  local hunks, viz_lines, overlay_lines, n_add, n_change, n_delete = {}, {}, {}, 0, 0, 0
+  local hunks, viz_lines, overlay_lines = {}, {}, {}
+  local n_add, n_change, n_delete = 0, 0, 0
+  local n_ranges, last_range_to = 0, -math.huge
   for i, d in ipairs(diff) do
     -- Hunk
     local n_ref, n_cur = d[2], d[4]
@@ -877,16 +882,22 @@ H.compute_hunk_data = function(diff, buf_cache, cur_lines)
     local hunk = { type = hunk_type, ref_start = d[1], ref_count = n_ref, cur_start = d[3], cur_count = n_cur }
     hunks[i] = hunk
 
-    -- Summary
+    -- Hunk summary
     local hunk_n_change = math.min(n_ref, n_cur)
     n_add = n_add + n_cur - hunk_n_change
     n_change = n_change + hunk_n_change
     n_delete = n_delete + n_ref - hunk_n_change
 
+    -- Number of contiguous ranges.
+    -- NOTE: this relies on `vim.diff()` output being sorted by `cur_start`.
+    local range_from = math.max(d[3], 1)
+    local range_to = range_from + math.max(n_cur, 1) - 1
+    n_ranges = n_ranges + ((range_from <= last_range_to + 1) and 0 or 1)
+    last_range_to = math.max(last_range_to, range_to)
+
     -- Register lines for draw. At least one line should visualize hunk.
-    local from, n = math.max(d[3], 1), math.max(n_cur, 1)
     local viz_ext_opts = extmark_data[hunk_type]
-    for l_num = from, from + n - 1 do
+    for l_num = range_from, range_to do
       -- Prefer showing "change" hunk over other types
       if viz_lines[l_num] == nil or hunk_type == 'change' then viz_lines[l_num] = viz_ext_opts end
     end
@@ -898,7 +909,8 @@ H.compute_hunk_data = function(diff, buf_cache, cur_lines)
     end
   end
 
-  return hunks, viz_lines, overlay_lines, { add = n_add, change = n_change, delete = n_delete }
+  buf_cache.hunks, buf_cache.viz_lines, buf_cache.overlay_lines = hunks, viz_lines, overlay_lines
+  buf_cache.hunk_summary = { add = n_add, change = n_change, delete = n_delete, n_ranges = n_ranges }
 end
 
 H.clear_all_diff = function(buf_id)
@@ -1120,12 +1132,17 @@ H.git_start_watching_index = function(buf_id, path)
   local args = { 'rev-parse', '--path-format=absolute', '--git-dir' }
   local spawn_opts = { args = args, cwd = vim.fn.fnamemodify(path, ':h'), stdio = { nil, stdout, nil } }
 
-  local disable_buffer = vim.schedule_wrap(function() MiniDiff.disable(buf_id) end)
+  -- If path is not in Git, disable buffer but make sure that it will not try
+  -- to re-attach until buffer is properly disabled
+  local on_not_in_git = vim.schedule_wrap(function()
+    MiniDiff.disable(buf_id)
+    H.git_cache[buf_id] = {}
+  end)
 
   local stdout_feed = {}
   local on_exit = function(exit_code)
     -- Watch index only if there was no error retrieving path to it
-    if exit_code ~= 0 or stdout_feed[1] == nil then return disable_buffer() end
+    if exit_code ~= 0 or stdout_feed[1] == nil then return on_not_in_git() end
 
     -- Set up index watching
     local index_path = table.concat(stdout_feed, ''):gsub('\n+$', '')
