@@ -81,6 +81,7 @@ nmap_leader('fV', '<Cmd>Pick visit_paths<CR>',                       'Visit path
 nmap_leader('gb', '<Cmd>lua require("gitsigns").blame_line()<CR>',          'Blame line')
 nmap_leader('gg', '<Cmd>lua Config.open_lazygit()<CR>',                     'Git tab')
 nmap_leader('gp', '<Cmd>lua require("gitsigns").preview_hunk_inline()<CR>', 'Preview hunk')
+nmap_leader('go', '<Cmd>lua MiniDiff.toggle_overlay()<CR>',                 'Toggle overlay')
 nmap_leader('gq', '<Cmd>lua require("gitsigns").setqflist()<CR>:copen<CR>', 'Quickfix hunks')
 -- nmap_leader('gu', '<Cmd>lua require("gitsigns").undo_stage_hunk()<CR>',     'Undo stage hunk')
 -- nmap_leader('gx', '<Cmd>lua require("gitsigns").reset_hunk()<CR>',          'Discard (reset) hunk')

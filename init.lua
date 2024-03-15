@@ -57,7 +57,8 @@ now(function()
     local mode, mode_hl = statusline.section_mode({ trunc_width = 120 })
     local git           = statusline.section_git({ trunc_width = 75 })
     -- Try out 'mini.diff'
-    local diff          = vim.b.minidiff_summary_string or ''
+    local diff_summary  = vim.b.minidiff_summary_string
+    local diff          = diff_summary ~= nil and string.format(' %s', diff_summary) or ''
     local diagnostics   = statusline.section_diagnostics({ trunc_width = 75 })
     local filename      = statusline.section_filename({ trunc_width = 140 })
     local fileinfo      = statusline.section_fileinfo({ trunc_width = 120 })

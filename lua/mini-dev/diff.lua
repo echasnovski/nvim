@@ -1,8 +1,8 @@
 -- TODO:
 --
 -- Code:
--- - Update overlay to be able to show several overlays on single line (like
---   delete and change).
+-- - Think about if `MiniDiff.refresh()` is needed. Maybe recommending `:edit`
+--   (which does detach-attach) is better?
 --
 -- - Consider renaming `cur_*` to `buf_*`.
 --
@@ -12,8 +12,6 @@
 --
 -- - Think if having `vim.b.minidiff_disable` is worth it as there is
 --   `MiniDiff.enable()` and `MiniDiff.disable()`.
---
--- - Consider keeping track of reference text history to allow "rollback"?
 --
 -- - `gen_source.file` to compare against some fixed file?
 -- - `toggle_source()`?
@@ -206,10 +204,10 @@ MiniDiff.config = {
 
   -- Various options
   options = {
-    -- Diff algorithm
-    algorithm = 'patience',
+    -- Diff algorithm. See `:h vim.diff()`.
+    algorithm = 'histogram',
 
-    -- Whether to use "indent heuristic"
+    -- Whether to use "indent heuristic".  See `:h vim.diff()`.
     indent_heuristic = true,
 
     -- The amount of second-stage diff to align lines (on Neovim>=0.9)
@@ -356,12 +354,12 @@ MiniDiff.gen_source = {}
 
 MiniDiff.gen_source.git = function()
   local attach = function(buf_id)
-    -- Try attaching only once
+    -- Try attaching to a buffer only once
     if H.git_cache[buf_id] ~= nil then return false end
-    H.git_cache[buf_id] = {}
-
     local path = vim.api.nvim_buf_get_name(buf_id)
     if path == '' or vim.fn.filereadable(path) ~= 1 then return false end
+
+    H.git_cache[buf_id] = {}
     H.git_start_watching_index(buf_id, path)
   end
 
@@ -567,7 +565,8 @@ H.vimdiff_supports_linematch = vim.fn.has('nvim-0.9') == 1
 
 -- Options for `vim.diff()` during word diff. Use `interhunkctxlen = 4` to
 -- reduce noisiness (chosen as slightly less than everage English word length)
-H.worddiff_opts = { result_type = 'indices', ctxlen = 0, interhunkctxlen = 4, indent_heuristic = false }
+--stylua: ignore
+H.worddiff_opts = { algorithm = 'minimal', result_type = 'indices', ctxlen = 0, interhunkctxlen = 4, indent_heuristic = false }
 if H.vimdiff_supports_linematch then H.worddiff_opts.linematch = 0 end
 
 -- Helper functionality =======================================================
@@ -657,7 +656,10 @@ H.apply_config = function(config)
         viz_lines[i] = nil
       end
       if overlay_lines[i] ~= nil then
-        H.draw_overlay_line(buf_id, ns_id_overlay, i - 1, overlay_lines[i])
+        -- Allow several overlays at one line (like for "delete" and "change")
+        for j = 1, #overlay_lines[i] do
+          H.draw_overlay_line(buf_id, ns_id_overlay, i - 1, overlay_lines[i][j])
+        end
         overlay_lines[i] = nil
       end
     end
@@ -919,8 +921,15 @@ H.clear_all_diff = function(buf_id)
 end
 
 -- Overlay --------------------------------------------------------------------
+H.append_overlay = function(overlay_lines, l_num, data)
+  local t = overlay_lines[l_num] or {}
+  table.insert(t, data)
+  overlay_lines[l_num] = t
+end
+
 H.append_overlay_add = function(overlay_lines, hunk, priority)
-  overlay_lines[hunk.cur_start] = { type = 'add', to = hunk.cur_start + hunk.cur_count - 1, priority = priority }
+  local data = { type = 'add', to = hunk.cur_start + hunk.cur_count - 1, priority = priority }
+  H.append_overlay(overlay_lines, hunk.cur_start, data)
 end
 
 H.append_overlay_change = function(overlay_lines, hunk, ref_lines, cur_lines, priority)
@@ -931,8 +940,9 @@ H.append_overlay_change = function(overlay_lines, hunk, ref_lines, cur_lines, pr
       local ref_n, cur_n = hunk.ref_start + i, hunk.cur_start + i
       -- Defer actually computing word diff until in decoration provider as it
       -- will compute only for displayed lines
-      overlay_lines[cur_n] =
+      local data =
         { type = 'change_worddiff', ref_line = ref_lines[ref_n], cur_line = cur_lines[cur_n], priority = priority }
+      H.append_overlay(overlay_lines, cur_n, data)
     end
     return
   end
@@ -943,7 +953,7 @@ H.append_overlay_change = function(overlay_lines, hunk, ref_lines, cur_lines, pr
     local l = { { ref_lines[i], 'MiniDiffOverChange' }, { H.overlay_suffix, 'MiniDiffOverChange' } }
     table.insert(changed_lines, l)
   end
-  overlay_lines[hunk.cur_start] = { type = 'change', lines = changed_lines, priority = priority }
+  H.append_overlay(overlay_lines, hunk.cur_start, { type = 'change', lines = changed_lines, priority = priority })
 end
 
 H.append_overlay_delete = function(overlay_lines, hunk, ref_lines, priority)
@@ -952,7 +962,8 @@ H.append_overlay_delete = function(overlay_lines, hunk, ref_lines, priority)
     table.insert(deleted_lines, { { ref_lines[i], 'MiniDiffOverDelete' }, { H.overlay_suffix, 'MiniDiffOverDelete' } })
   end
   local l_num, show_above = math.max(hunk.cur_start, 1), hunk.cur_start == 0
-  overlay_lines[l_num] = { type = 'delete', lines = deleted_lines, show_above = show_above, priority = priority }
+  local data = { type = 'delete', lines = deleted_lines, show_above = show_above, priority = priority }
+  H.append_overlay(overlay_lines, l_num, data)
 end
 
 H.draw_overlay_line = function(buf_id, ns_id, row, data)
