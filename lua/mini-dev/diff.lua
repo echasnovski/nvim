@@ -1,17 +1,9 @@
 -- TODO:
 --
 -- Code:
--- - Think about if `MiniDiff.refresh()` is needed. Maybe recommending `:edit`
---   (which does detach-attach) is better?
---
--- - Consider renaming `cur_*` to `buf_*`.
---
 -- - Make word diff work with multibyte characters.
 --
 -- - When moving added line upwards, extmark should not temporarily shift down.
---
--- - Think if having `vim.b.minidiff_disable` is worth it as there is
---   `MiniDiff.enable()` and `MiniDiff.disable()`.
 --
 -- - `gen_source.file` to compare against some fixed file?
 -- - `toggle_source()`?
@@ -19,7 +11,11 @@
 --
 -- Docs:
 --
+-- - How to make mappings for "apply/reset in current line".
+--
 -- Tests:
+-- - Respects `config.options.algorithm` (with concrete examples).
+--
 -- - Updates if no redraw seemingly is done. Example for `save` source: `yyp`
 --   should add green highlighting and `<C-s>` should remove it.
 --
@@ -223,13 +219,12 @@ MiniDiff.enable = function(buf_id)
   -- Don't enable more than once
   if H.is_buf_enabled(buf_id) then return end
 
-  -- Try attaching source
-  local cache = H.compute_new_buf_cache(buf_id)
-  local attach_output = cache.source.attach(buf_id)
-  if attach_output == false then return MiniDiff.disable(buf_id) end
-
   -- Register enabled buffer with cached data for performance
-  H.cache[buf_id] = cache
+  H.update_buf_cache(buf_id)
+
+  -- Try attaching source
+  local attach_output = H.cache[buf_id].source.attach(buf_id)
+  if attach_output == false then return MiniDiff.disable(buf_id) end
 
   -- Add buffer watchers
   vim.api.nvim_buf_attach(buf_id, false, {
@@ -242,7 +237,7 @@ MiniDiff.enable = function(buf_id)
     end,
 
     -- Called when buffer content is changed outside of current session
-    on_reload = function() pcall(MiniDiff.refresh, buf_id) end,
+    on_reload = function() H.schedule_diff_update(buf_id, 0) end,
 
     -- Called when buffer is unloaded from memory (`:h nvim_buf_detach_event`),
     -- **including** `:edit` command
@@ -253,7 +248,7 @@ MiniDiff.enable = function(buf_id)
   local augroup = vim.api.nvim_create_augroup('MiniDiffBuffer' .. buf_id, { clear = true })
   H.cache[buf_id].augroup = augroup
 
-  local buf_update = vim.schedule_wrap(function() H.cache[buf_id] = H.compute_new_buf_cache(buf_id) end)
+  local buf_update = vim.schedule_wrap(function() H.update_buf_cache(buf_id) end)
   local bufwinenter_opts = { group = augroup, buffer = buf_id, callback = buf_update, desc = 'Update buffer cache' }
   vim.api.nvim_create_autocmd('BufWinEnter', bufwinenter_opts)
 
@@ -301,14 +296,6 @@ MiniDiff.toggle_overlay = function(buf_id)
   buf_cache.overlay = not buf_cache.overlay
   H.clear_all_diff(buf_id)
   H.schedule_diff_update(buf_id, 0)
-end
-
---- Refresh diff content in buffer
-MiniDiff.refresh = function(buf_id)
-  buf_id = H.validate_buf_id(buf_id)
-  local buf_cache = H.cache[buf_id]
-  if buf_cache == nil then H.error(string.format('Buffer %d is not enabled.', buf_id)) end
-  buf_cache.source.refresh(buf_id)
 end
 
 -- `ref_text` can be `nil` indicating that source did not react (yet).
@@ -363,11 +350,6 @@ MiniDiff.gen_source.git = function()
     H.git_start_watching_index(buf_id, path)
   end
 
-  local refresh = function(buf_id)
-    if H.git_cache[buf_id] == nil then return end
-    H.git_set_ref_text(buf_id)
-  end
-
   local detach = function(buf_id)
     local cache = H.git_cache[buf_id]
     H.git_cache[buf_id] = nil
@@ -385,7 +367,7 @@ MiniDiff.gen_source.git = function()
     H.git_apply_patch(path_data, patch)
   end
 
-  return { name = 'git', attach = attach, refresh = refresh, detach = detach, apply_hunks = apply_hunks }
+  return { name = 'git', attach = attach, detach = detach, apply_hunks = apply_hunks }
 end
 
 MiniDiff.gen_source.save = function()
@@ -427,7 +409,7 @@ MiniDiff.do_hunks = function(buf_id, action, opts)
   f(buf_id, hunks)
 end
 
---- Go to hunk range
+--- Go to hunk range in current buffer
 ---
 ---@param direction string One of "first", "prev", "next", "last".
 ---@param opts table|nil Options. A table with fields:
@@ -444,11 +426,12 @@ MiniDiff.goto_hunk = function(direction, opts)
   end
 
   opts = vim.tbl_deep_extend('force', { n_times = vim.v.count1, line_start = vim.fn.line('.') }, opts or {})
-  if not (type(opts.n_times) == 'number' and opts.n_times >= 1) then
-    H.error('`opts.n_times` should be positive number.')
-  end
+  local n_times = opts.n_times
+  if not (type(n_times) == 'number' and n_times >= 1) then H.error('`opts.n_times` should be positive number.') end
   local line_start = opts.line_start
-  if type(line_start) ~= 'number' then H.error('`opts.line_start` should be number.') end
+  if not (type(line_start) == 'number' and line_start >= 1) then
+    H.error('`opts.line_start` should be positive number.')
+  end
 
   -- Prepare ranges to iterate.
   local ranges = H.get_contiguous_hunk_ranges(buf_cache.hunks)
@@ -460,7 +443,7 @@ MiniDiff.goto_hunk = function(direction, opts)
   if direction == 'last' then line_start = vim.api.nvim_buf_line_count(buf_id) + 1 end
 
   -- Iterate
-  local res_line = H.iterate_hunk_ranges(ranges, iter_dir, line_start, opts.n_times)
+  local res_line = H.iterate_hunk_ranges(ranges, iter_dir, line_start, n_times)
   if res_line == nil then return H.notify('No hunk ranges in direction ' .. vim.inspect(direction), 'INFO') end
 
   -- Add to jumplist
@@ -480,10 +463,11 @@ end
 ---
 ---@param mode string One of "apply", "reset", or the ones used in |g@|.
 MiniDiff.operator = function(mode)
-  if H.is_disabled(0) then return '' end
+  local buf_id = vim.api.nvim_get_current_buf()
+  if H.is_disabled(buf_id) then return '' end
 
   if mode == 'apply' or mode == 'reset' then
-    H.operator_cache = { action = mode }
+    H.operator_cache = { action = mode, win_view = vim.fn.winsaveview() }
     vim.o.operatorfunc = 'v:lua.MiniDiff.operator'
     return 'g@'
   end
@@ -494,7 +478,14 @@ MiniDiff.operator = function(mode)
   -- define motion/textobject). The downside is that it sets 'operatorfunc',
   -- but the upside is that it is "dot-repeatable" (for relative selection).
   local opts = { line_start = vim.fn.line("'["), line_end = vim.fn.line("']") }
-  MiniDiff.do_hunks(vim.api.nvim_get_current_buf(), H.operator_cache.action, opts)
+  MiniDiff.do_hunks(buf_id, H.operator_cache.action, opts)
+
+  -- Restore window view for "apply" (as buffer text should not have changed)
+  if H.operator_cache.action == 'apply' and H.operator_cache.win_view ~= nil then
+    vim.fn.winrestview(H.operator_cache.win_view)
+    -- NOTE: Restore only once because during dot-repeat it is not up to date
+    H.operator_cache.win_view = nil
+  end
   return ''
 end
 
@@ -755,20 +746,20 @@ end
 -- Enabling -------------------------------------------------------------------
 H.is_buf_enabled = function(buf_id) return H.cache[buf_id] ~= nil end
 
-H.compute_new_buf_cache = function(buf_id)
-  local res = H.cache[buf_id] or {}
+H.update_buf_cache = function(buf_id)
+  local new_cache = H.cache[buf_id] or {}
 
   local buf_config = H.get_config({}, buf_id)
-  res.config = buf_config
-  res.extmark_data = H.convert_view_to_extmark_opts(buf_config.view)
-  res.source = H.normalize_source(buf_config.source or H.default_source)
+  new_cache.config = buf_config
+  new_cache.extmark_data = H.convert_view_to_extmark_opts(buf_config.view)
+  new_cache.source = H.normalize_source(buf_config.source or H.default_source)
 
-  res.hunks = res.hunks or {}
-  res.hunk_summary = res.hunk_summary or {}
-  res.viz_lines = res.viz_lines or {}
-  res.overlay_lines = res.overlay_lines or {}
+  new_cache.hunks = new_cache.hunks or {}
+  new_cache.hunk_summary = new_cache.hunk_summary or {}
+  new_cache.viz_lines = new_cache.viz_lines or {}
+  new_cache.overlay_lines = new_cache.overlay_lines or {}
 
-  return res
+  H.cache[buf_id] = new_cache
 end
 
 H.normalize_source = function(source)
@@ -776,13 +767,11 @@ H.normalize_source = function(source)
 
   local res = { attach = source.attach }
   res.name = source.name or 'unknown'
-  res.refresh = source.refresh or function(buf_id) MiniDiff.set_ref_text(buf_id, H.cache[buf_id].ref_text) end
   res.detach = source.detach or function(_) end
   res.apply_hunks = source.apply_hunks or function(_) H.error('Current source does not support applying hunks.') end
 
   if type(res.name) ~= 'string' then H.error('`source.name` should be string.') end
   H.validate_callable(res.attach, 'source.attach')
-  H.validate_callable(res.refresh, 'source.refresh')
   H.validate_callable(res.detach, 'source.detach')
   H.validate_callable(res.apply_hunks, 'source.apply_hunks')
 
@@ -837,22 +826,22 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   if H.vimdiff_supports_linematch then H.vimdiff_opts.linematch = options.linematch end
 
   -- - NOTE: Appending '\n' makes more intuitive diffs at end-of-file
-  local cur_lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
-  local cur_text = table.concat(cur_lines, '\n') .. '\n'
-  local diff = vim.diff(buf_cache.ref_text, cur_text, H.vimdiff_opts)
+  local buf_lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
+  local buf_text = table.concat(buf_lines, '\n') .. '\n'
+  local diff = vim.diff(buf_cache.ref_text, buf_text, H.vimdiff_opts)
 
   -- Recompute hunks with summary and draw information
-  H.update_hunk_data(diff, buf_cache, cur_lines)
+  H.update_hunk_data(diff, buf_cache, buf_lines)
 
   -- Set buffer-local variables with summary for easier external usage
   local hunk_summary = buf_cache.hunk_summary
   vim.b[buf_id].minidiff_summary = hunk_summary
 
   local summary = {}
+  if hunk_summary.n_ranges > 0 then table.insert(summary, '#' .. hunk_summary.n_ranges) end
   if hunk_summary.add > 0 then table.insert(summary, '+' .. hunk_summary.add) end
   if hunk_summary.change > 0 then table.insert(summary, '~' .. hunk_summary.change) end
   if hunk_summary.delete > 0 then table.insert(summary, '-' .. hunk_summary.delete) end
-  if hunk_summary.n_ranges > 0 then table.insert(summary, '#' .. hunk_summary.n_ranges) end
   vim.b[buf_id].minidiff_summary_string = table.concat(summary, ' ')
 
   -- Request highlighting clear to be done in decoration provider
@@ -869,7 +858,7 @@ H.update_buf_diff = vim.schedule_wrap(function(buf_id)
   vim.api.nvim_exec_autocmds('User', { pattern = 'MiniDiffUpdated' })
 end)
 
-H.update_hunk_data = function(diff, buf_cache, cur_lines)
+H.update_hunk_data = function(diff, buf_cache, buf_lines)
   local do_overlay = buf_cache.overlay
   local ref_lines = do_overlay and vim.split(buf_cache.ref_text, '\n') or nil
 
@@ -881,7 +870,7 @@ H.update_hunk_data = function(diff, buf_cache, cur_lines)
     -- Hunk
     local n_ref, n_cur = d[2], d[4]
     local hunk_type = n_ref == 0 and 'add' or (n_cur == 0 and 'delete' or 'change')
-    local hunk = { type = hunk_type, ref_start = d[1], ref_count = n_ref, cur_start = d[3], cur_count = n_cur }
+    local hunk = { type = hunk_type, ref_start = d[1], ref_count = n_ref, buf_start = d[3], buf_count = n_cur }
     hunks[i] = hunk
 
     -- Hunk summary
@@ -891,7 +880,7 @@ H.update_hunk_data = function(diff, buf_cache, cur_lines)
     n_delete = n_delete + n_ref - hunk_n_change
 
     -- Number of contiguous ranges.
-    -- NOTE: this relies on `vim.diff()` output being sorted by `cur_start`.
+    -- NOTE: this relies on `vim.diff()` output being sorted by `buf_start`.
     local range_from = math.max(d[3], 1)
     local range_to = range_from + math.max(n_cur, 1) - 1
     n_ranges = n_ranges + ((range_from <= last_range_to + 1) and 0 or 1)
@@ -906,7 +895,7 @@ H.update_hunk_data = function(diff, buf_cache, cur_lines)
 
     if do_overlay then
       if hunk_type == 'add' then H.append_overlay_add(overlay_lines, hunk, priority) end
-      if hunk_type == 'change' then H.append_overlay_change(overlay_lines, hunk, ref_lines, cur_lines, priority) end
+      if hunk_type == 'change' then H.append_overlay_change(overlay_lines, hunk, ref_lines, buf_lines, priority) end
       if hunk_type == 'delete' then H.append_overlay_delete(overlay_lines, hunk, ref_lines, priority) end
     end
   end
@@ -928,21 +917,21 @@ H.append_overlay = function(overlay_lines, l_num, data)
 end
 
 H.append_overlay_add = function(overlay_lines, hunk, priority)
-  local data = { type = 'add', to = hunk.cur_start + hunk.cur_count - 1, priority = priority }
-  H.append_overlay(overlay_lines, hunk.cur_start, data)
+  local data = { type = 'add', to = hunk.buf_start + hunk.buf_count - 1, priority = priority }
+  H.append_overlay(overlay_lines, hunk.buf_start, data)
 end
 
-H.append_overlay_change = function(overlay_lines, hunk, ref_lines, cur_lines, priority)
+H.append_overlay_change = function(overlay_lines, hunk, ref_lines, buf_lines, priority)
   -- For one-to-one change, show lines separately with word diff highlighted
   -- This is usually the case when `linematch` is on
-  if hunk.cur_count == hunk.ref_count then
+  if hunk.buf_count == hunk.ref_count then
     for i = 0, hunk.ref_count - 1 do
-      local ref_n, cur_n = hunk.ref_start + i, hunk.cur_start + i
+      local ref_n, buf_n = hunk.ref_start + i, hunk.buf_start + i
       -- Defer actually computing word diff until in decoration provider as it
       -- will compute only for displayed lines
       local data =
-        { type = 'change_worddiff', ref_line = ref_lines[ref_n], cur_line = cur_lines[cur_n], priority = priority }
-      H.append_overlay(overlay_lines, cur_n, data)
+        { type = 'change_worddiff', ref_line = ref_lines[ref_n], buf_line = buf_lines[buf_n], priority = priority }
+      H.append_overlay(overlay_lines, buf_n, data)
     end
     return
   end
@@ -953,7 +942,7 @@ H.append_overlay_change = function(overlay_lines, hunk, ref_lines, cur_lines, pr
     local l = { { ref_lines[i], 'MiniDiffOverChange' }, { H.overlay_suffix, 'MiniDiffOverChange' } }
     table.insert(changed_lines, l)
   end
-  H.append_overlay(overlay_lines, hunk.cur_start, { type = 'change', lines = changed_lines, priority = priority })
+  H.append_overlay(overlay_lines, hunk.buf_start, { type = 'change', lines = changed_lines, priority = priority })
 end
 
 H.append_overlay_delete = function(overlay_lines, hunk, ref_lines, priority)
@@ -961,7 +950,7 @@ H.append_overlay_delete = function(overlay_lines, hunk, ref_lines, priority)
   for i = hunk.ref_start, hunk.ref_start + hunk.ref_count - 1 do
     table.insert(deleted_lines, { { ref_lines[i], 'MiniDiffOverDelete' }, { H.overlay_suffix, 'MiniDiffOverDelete' } })
   end
-  local l_num, show_above = math.max(hunk.cur_start, 1), hunk.cur_start == 0
+  local l_num, show_above = math.max(hunk.buf_start, 1), hunk.buf_start == 0
   local data = { type = 'delete', lines = deleted_lines, show_above = show_above, priority = priority }
   H.append_overlay(overlay_lines, l_num, data)
 end
@@ -993,8 +982,8 @@ H.draw_overlay_line = function(buf_id, ns_id, row, data)
 end
 
 H.draw_overlay_line_worddiff = function(buf_id, ns_id, row, data)
-  local ref_line, cur_line = data.ref_line, data.cur_line
-  local ref_parts, cur_parts = H.compute_worddiff_changed_parts(ref_line, cur_line)
+  local ref_line, buf_line = data.ref_line, data.buf_line
+  local ref_parts, buf_parts = H.compute_worddiff_changed_parts(ref_line, buf_line)
 
   -- Show changed parts in reference line as virtual line above
   local virt_line, index = {}, 1
@@ -1011,31 +1000,31 @@ H.draw_overlay_line_worddiff = function(buf_id, ns_id, row, data)
   H.set_extmark(buf_id, ns_id, row, 0, ref_opts)
 
   -- Show changed parts in current line with separate extmarks
-  for i = 1, #cur_parts do
-    local part = cur_parts[i]
-    local cur_opts = { end_row = row, end_col = part[2], hl_group = 'MiniDiffOverChange', priority = data.priority }
-    H.set_extmark(buf_id, ns_id, row, part[1] - 1, cur_opts)
+  for i = 1, #buf_parts do
+    local part = buf_parts[i]
+    local buf_opts = { end_row = row, end_col = part[2], hl_group = 'MiniDiffOverChange', priority = data.priority }
+    H.set_extmark(buf_id, ns_id, row, part[1] - 1, buf_opts)
   end
 end
 
-H.compute_worddiff_changed_parts = function(ref_line, cur_line)
-  local diff = vim.diff(ref_line:gsub('(.)', '%1\n'), cur_line:gsub('(.)', '%1\n'), H.worddiff_opts)
-  local ref_ranges, cur_ranges = {}, {}
+H.compute_worddiff_changed_parts = function(ref_line, buf_line)
+  local diff = vim.diff(ref_line:gsub('(.)', '%1\n'), buf_line:gsub('(.)', '%1\n'), H.worddiff_opts)
+  local ref_ranges, buf_ranges = {}, {}
   for i = 1, #diff do
     local d = diff[i]
     if d[2] > 0 then table.insert(ref_ranges, { d[1], d[1] + d[2] - 1 }) end
-    if d[4] > 0 then table.insert(cur_ranges, { d[3], d[3] + d[4] - 1 }) end
+    if d[4] > 0 then table.insert(buf_ranges, { d[3], d[3] + d[4] - 1 }) end
   end
-  return ref_ranges, cur_ranges
+  return ref_ranges, buf_ranges
 end
 
 -- Hunks ----------------------------------------------------------------------
 H.get_hunk_buf_range = function(hunk)
-  -- "Change" and "Add" hunks have the range `[from, from + cur_count - 1]`
-  if hunk.cur_count > 0 then return hunk.cur_start, hunk.cur_start + hunk.cur_count - 1 end
-  -- "Delete" hunks have `cur_count = 0` yet its range is `[from, from]`
-  -- `cur_start` can be 0 for 'delete' hunk, yet range should be real lines
-  local from = math.max(hunk.cur_start, 1)
+  -- "Change" and "Add" hunks have the range `[from, from + buf_count - 1]`
+  if hunk.buf_count > 0 then return hunk.buf_start, hunk.buf_start + hunk.buf_count - 1 end
+  -- "Delete" hunks have `buf_count = 0` yet its range is `[from, from]`
+  -- `buf_start` can be 0 for 'delete' hunk, yet range should be real lines
+  local from = math.max(hunk.buf_start, 1)
   return from, from
 end
 
@@ -1051,9 +1040,9 @@ H.get_hunks_in_range = function(hunks, from, to)
 
       -- It should be possible to work with only hunk part inside target range
       -- Also Treat "delete" hunks differently as they represent range differently
-      -- and can have `cur_start=0`
-      new_h.cur_start = h.cur_count == 0 and h.cur_start or left
-      new_h.cur_count = h.cur_count == 0 and 0 or (right - left + 1)
+      -- and can have `buf_start=0`
+      new_h.buf_start = h.buf_count == 0 and h.buf_start or left
+      new_h.buf_count = h.buf_count == 0 and 0 or (right - left + 1)
 
       table.insert(res, new_h)
     end
@@ -1068,7 +1057,7 @@ H.reset_hunks = function(buf_id, hunks)
   -- Make sure that hunks are properly ordered. Looks like not needed right now
   -- (as output of `vim.diff` is already ordered), but there is no quarantee.
   hunks = vim.deepcopy(hunks)
-  table.sort(hunks, function(a, b) return a.cur_start < b.cur_start end)
+  table.sort(hunks, function(a, b) return a.buf_start < b.buf_start end)
 
   local ref_lines = vim.split(H.cache[buf_id].ref_text, '\n')
   local offset = 0
@@ -1076,20 +1065,20 @@ H.reset_hunks = function(buf_id, hunks)
     -- Replace current hunk lines with corresponding reference
     local new_lines = vim.list_slice(ref_lines, h.ref_start, h.ref_start + h.ref_count - 1)
 
-    -- Compute current offset from parts: result of previous replaces, "delete"
-    -- hunk offset which starts below the `cur_start` line, zero-indexing.
-    local cur_offset = offset + (h.cur_count == 0 and 1 or 0) - 1
-    local from, to = h.cur_start + cur_offset, h.cur_start + h.cur_count + cur_offset
+    -- Compute buffer offset from parts: result of previous replaces, "delete"
+    -- hunk offset which starts below the `buf_start` line, zero-indexing.
+    local buf_offset = offset + (h.buf_count == 0 and 1 or 0) - 1
+    local from, to = h.buf_start + buf_offset, h.buf_start + h.buf_count + buf_offset
     vim.api.nvim_buf_set_lines(buf_id, from, to, false, new_lines)
 
     -- Keep track of current hunk lines shift as a result of previous replaces
-    offset = offset + (h.ref_count - h.cur_count)
+    offset = offset + (h.ref_count - h.buf_count)
   end
 
   -- Restore 'modified' status
   if cur_modified then return end
   if vim.fn.filereadable(vim.api.nvim_buf_get_name(buf_id)) == 1 then
-    -- NOTE: Use `:write` if possible to make more impactful changes
+    -- NOTE: Use `:write` if possible to also trigger dedicated events
     vim.api.nvim_buf_call(buf_id, function() vim.cmd('write') end)
   else
     vim.bo[buf_id].modified = false
@@ -1099,7 +1088,7 @@ end
 H.get_contiguous_hunk_ranges = function(hunks)
   if #hunks == 0 then return {} end
   hunks = vim.deepcopy(hunks)
-  table.sort(hunks, function(a, b) return a.cur_start < b.cur_start end)
+  table.sort(hunks, function(a, b) return a.buf_start < b.buf_start end)
 
   local h1_from, h1_to = H.get_hunk_buf_range(hunks[1])
   local res = { { from = h1_from, to = h1_to } }
@@ -1237,7 +1226,7 @@ H.git_get_path_data = function(path)
 end
 
 H.git_format_patch = function(buf_id, hunks, path_data)
-  local cur_lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
+  local buf_lines = vim.api.nvim_buf_get_lines(buf_id, 0, -1, false)
   local ref_lines = vim.split(H.cache[buf_id].ref_text, '\n')
 
   local res = {
@@ -1253,14 +1242,14 @@ H.git_format_patch = function(buf_id, hunks, path_data)
     -- "Add" hunks have reference line above target
     local start = h.ref_start + (h.ref_count == 0 and 1 or 0)
 
-    table.insert(res, string.format('@@ -%d,%d +%d,%d @@', start, h.ref_count, start + offset, h.cur_count))
+    table.insert(res, string.format('@@ -%d,%d +%d,%d @@', start, h.ref_count, start + offset, h.buf_count))
     for i = h.ref_start, h.ref_start + h.ref_count - 1 do
       table.insert(res, '-' .. ref_lines[i])
     end
-    for i = h.cur_start, h.cur_start + h.cur_count - 1 do
-      table.insert(res, '+' .. cur_lines[i])
+    for i = h.buf_start, h.buf_start + h.buf_count - 1 do
+      table.insert(res, '+' .. buf_lines[i])
     end
-    offset = offset + (h.cur_count - h.ref_count)
+    offset = offset + (h.buf_count - h.ref_count)
   end
 
   return res
@@ -1270,17 +1259,15 @@ H.git_apply_patch = function(path_data, patch)
   local stdin = vim.loop.new_pipe()
   local args = { 'apply', '--whitespace=nowarn', '--cached', '--unidiff-zero', '-' }
   local spawn_opts = { args = args, cwd = path_data.cwd, stdio = { stdin, nil, nil } }
-  local process = vim.loop.spawn('git', spawn_opts, function() end)
+  local process
+  process = vim.loop.spawn('git', spawn_opts, function() process:close() end)
 
   -- Write patch, notify that writing is finished (shutdown), and close
   for _, l in ipairs(patch) do
     stdin:write(l)
     stdin:write('\n')
   end
-  stdin:shutdown(function()
-    stdin:close()
-    process:close()
-  end)
+  stdin:shutdown(function() stdin:close() end)
 end
 
 H.git_read_stream = function(stream, feed)

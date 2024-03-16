@@ -58,7 +58,7 @@ now(function()
     local git           = statusline.section_git({ trunc_width = 75 })
     -- Try out 'mini.diff'
     local diff_summary  = vim.b.minidiff_summary_string
-    local diff          = diff_summary ~= nil and string.format(' %s', diff_summary) or ''
+    local diff          = diff_summary ~= nil and string.format(' %s', diff_summary == '' and '-' or diff_summary) or ''
     local diagnostics   = statusline.section_diagnostics({ trunc_width = 75 })
     local filename      = statusline.section_filename({ trunc_width = 140 })
     local fileinfo      = statusline.section_fileinfo({ trunc_width = 120 })
@@ -93,6 +93,7 @@ later(function()
   local ai = require('mini.ai')
   ai.setup({
     custom_textobjects = {
+      B = MiniExtra.gen_ai_spec.buffer(),
       F = ai.gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
     },
   })
