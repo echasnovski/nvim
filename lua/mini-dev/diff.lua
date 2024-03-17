@@ -495,9 +495,8 @@ end
 --- same) hunk (if cursor line itself is in hunk). Used in default mappings.
 MiniDiff.textobject = function()
   local buf_id = vim.api.nvim_get_current_buf()
-  if H.is_disabled(buf_id) then return end
   local buf_cache = H.cache[buf_id]
-  if buf_cache == nil then H.error('Current buffer is not enabled.') end
+  if buf_cache == nil or H.is_disabled(buf_id) then H.error('Current buffer is not enabled.') end
 
   -- Get hunk range under cursor
   local cur_line = vim.fn.line('.')

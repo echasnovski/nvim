@@ -33,17 +33,27 @@ local get_buf_hunks = function(buf_id)
 end
 
 -- Common mocks
-local setup_with_dummy_source = function()
+local small_time = 5
+
+local setup_with_dummy_source = function(text_change_delay)
+  text_change_delay = text_change_delay or small_time
   child.lua([[
-  _G.dummy_log = {}
-  require('mini-dev.diff').setup({
-    source = {
+    _G.dummy_log = {}
+    _G.dummy_source = {
       name = 'dummy',
       attach = function() end,
       detach = function(...) table.insert(_G.dummy_log, { 'detach', { ... } }) end,
       apply_hunks = function(...) table.insert(_G.dummy_log, { 'apply_hunks', { ... } }) end,
-    },
-  })]])
+    }
+  ]])
+  local lua_cmd = string.format(
+    [[require('mini-dev.diff').setup({
+    delay = { text_change = %d },
+    source = _G.dummy_source,
+  })]],
+    text_change_delay
+  )
+  child.lua(lua_cmd)
 end
 
 local validate_dummy_log = function(ref_log) eq(child.lua_get('_G.dummy_log'), ref_log) end
@@ -96,11 +106,6 @@ local validate_notifications = function(ref_log, msg_pattern)
 end
 
 local clear_notify_log = function() return child.lua('_G.notify_log = {}') end
-
--- Data =======================================================================
-local small_time = 5
-
-local test_ref_lines = { 'aaa', 'bbb', 'ccc', 'ddd', 'eee', 'fff' }
 
 -- Output test set ============================================================
 local T = new_set({
@@ -704,7 +709,7 @@ end
 
 T['do_hunks()']['validates arguments'] = function()
   set_lines({ 'aaa', 'bbb', 'ccc' })
-  set_ref_text(0, test_ref_lines)
+  set_ref_text(0, { 'aaa', 'bbb' })
 
   expect.error(function() do_hunks(-1) end, 'valid buffer')
 
@@ -1035,7 +1040,7 @@ T['Auto enable']['does not enable for not normal buffers'] = function()
   MiniTest.skip()
 end
 
-T['Operator'] = new_set()
+T['Operator'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
 
 T['Operator']['apply'] = new_set()
 
@@ -1058,16 +1063,262 @@ T['Operator']['reset']['allows dot-repeat'] = function() MiniTest.skip() end
 
 T['Operator']['reset']['works with dot-repeat'] = function() MiniTest.skip() end
 
-T['Textobject'] = new_set()
+T['Textobject'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
 
-T['Textobject']['works'] = function() MiniTest.skip() end
+T['Textobject']['works'] = function()
+  set_lines({ 'aaa', 'uuu', 'vvv', 'bbb', 'ccc', 'www' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
 
-T['Textobject']['works with dot-repeat'] = function() MiniTest.skip() end
+  set_cursor(2, 0)
+  type_keys('d', 'gh')
+  eq(get_lines(), { 'aaa', 'bbb', 'ccc', 'www' })
+  eq(get_cursor(), { 2, 0 })
 
-T['Textobject']['correctly computes contiguous ranges'] = function() MiniTest.skip() end
+  -- With dot-repeat
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
 
-T['Goto'] = new_set()
+  set_cursor(4, 0)
+  type_keys('.')
+  eq(get_lines(), { 'aaa', 'bbb', 'ccc' })
+  eq(get_cursor(), { 3, 0 })
+end
 
-T['Goto']['works'] = function() MiniTest.skip() end
+T['Textobject']['does not depend on relative position inside hunk'] = function()
+  set_lines({ 'aaa', 'uuu', 'vvv', 'www', 'bbb' })
+  set_ref_text(0, { 'aaa', 'bbb' })
+
+  set_cursor(3, 0)
+  type_keys('d', 'gh')
+  eq(get_lines(), { 'aaa', 'bbb' })
+end
+
+T['Textobject']['works when not inside hunk range'] = function()
+  set_lines({ 'aaa', 'bbb' })
+  set_ref_text(0, { 'aaa' })
+
+  set_cursor(1, 0)
+  type_keys('d', 'gh')
+  eq(get_lines(), { 'aaa', 'bbb' })
+  validate_notifications({ { '(mini.diff) No hunk range under cursor', 'INFO' } })
+end
+
+T['Textobject']['allows dot-repeat across buffers'] = function()
+  set_lines({ 'aaa', 'uuu' })
+  set_ref_text(0, { 'aaa' })
+  set_cursor(2, 0)
+  type_keys('d', 'gh')
+  eq(get_lines(), { 'aaa' })
+
+  local new_buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(new_buf_id)
+  set_lines({ 'bbb', 'ccc', 'vvv', 'www', 'ddd' })
+  set_ref_text(0, { 'bbb', 'ccc', 'ddd' })
+  set_cursor(3, 0)
+  type_keys('.')
+  eq(get_lines(), { 'bbb', 'ccc', 'ddd' })
+end
+
+T['Textobject']['correctly computes contiguous ranges'] = function()
+  if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('Contiguous regions are relevant with `linematch` option.') end
+
+  local validate = function(init_cursor, direction, opts, ref_cursor)
+    set_cursor(unpack(init_cursor))
+    goto_hunk(direction, opts)
+    eq(get_cursor(), ref_cursor)
+  end
+
+  -- "Change" hunk adjacent to "add" and "delete" hunks
+  set_lines({ 'AAA', 'uuu', 'BbB', 'DDD', 'www', 'EEE' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE' })
+  eq(get_buf_hunks(), {
+    { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0, type = 'add' },
+    { buf_start = 3, buf_count = 1, ref_start = 2, ref_count = 1, type = 'change' },
+    { buf_start = 3, buf_count = 0, ref_start = 3, ref_count = 1, type = 'delete' },
+    { buf_start = 5, buf_count = 1, ref_start = 4, ref_count = 0, type = 'add' },
+  })
+
+  set_cursor(3, 0)
+  type_keys('d', 'gh')
+  eq(get_lines(), { 'AAA', 'DDD', 'www', 'EEE' })
+end
+
+T['Textobject']['works with "delete" hunks on edges as target'] = function()
+  -- First line
+  set_lines({ 'bbb', 'ccc' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
+
+  set_cursor(1, 1)
+  type_keys('d', 'gh')
+  eq(get_lines(), { 'ccc' })
+  eq(get_cursor(), { 1, 1 })
+
+  -- Last line
+  set_lines({ 'aaa', 'bbb' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
+
+  set_cursor(2, 1)
+  type_keys('d', 'gh')
+  eq(get_lines(), { 'aaa' })
+  eq(get_cursor(), { 1, 1 })
+end
+
+T['Textobject']['works with different mapping'] = function()
+  child.lua([[
+    require('mini-dev.diff').setup({
+      source = _G.dummy_source,
+      mappings = { textobject = 'gH' },
+    })
+  ]])
+
+  set_lines({ 'aaa', 'uuu', 'bbb' })
+  set_ref_text(0, { 'aaa', 'bbb' })
+
+  set_cursor(2, 0)
+  type_keys('d', 'gH')
+  eq(get_lines(), { 'aaa', 'bbb' })
+end
+
+T['Textobject']['throws error in not enabled buffer'] = function()
+  child.set_size(30, 80)
+  child.o.cmdheight = 10
+  disable()
+  expect.error(function() type_keys('d', 'gh') end, 'not enabled')
+end
+
+T['Textobject']['respects `vim.{g,b}.minidiff_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child.set_size(30, 80)
+    child.o.cmdheight = 10
+    set_lines({ 'aaa', 'uuu' })
+    set_ref_text(0, { 'aaa' })
+
+    child[var_type].minidiff_disable = true
+    set_cursor(2, 0)
+    expect.error(function() type_keys('d', 'gh') end, 'not enabled')
+  end,
+})
+
+-- More thorough tests are done in "goto_hunk"
+T['Goto'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
+
+T['Goto']['works in Normal mode'] = function()
+  set_lines({ 'uuu', 'aaa', 'vvv', 'bbb', 'www', 'ccc', 'xxx' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
+
+  local validate = function(keys, ref_cursor)
+    set_cursor(4, 0)
+    type_keys(keys)
+    eq(get_cursor(), ref_cursor)
+  end
+
+  validate('[H', { 1, 0 })
+  validate('[h', { 3, 0 })
+  validate(']h', { 5, 0 })
+  validate(']H', { 7, 0 })
+end
+
+T['Goto']['works in Visual mode'] = function()
+  set_lines({ 'uuu', 'aaa', 'vvv', 'bbb', 'www', 'ccc', 'xxx' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
+
+  local validate = function(keys, ref_cursor)
+    child.ensure_normal_mode()
+    set_cursor(4, 0)
+    type_keys('v', keys)
+    eq(get_cursor(), ref_cursor)
+    eq(child.fn.mode(), 'v')
+  end
+
+  validate('[H', { 1, 0 })
+  validate('[h', { 3, 0 })
+  validate(']h', { 5, 0 })
+  validate(']H', { 7, 0 })
+end
+
+T['Goto']['works in Operator-pending mode'] = function()
+  local validate = function(keys, lines_1, cursor_1, lines_2, cursor_2)
+    set_lines({ 'uuu', 'aaa', 'vvv', 'bbb', 'www', 'ccc', 'xxx' })
+    set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
+
+    set_cursor(4, 1)
+
+    -- Should operate linewise
+    type_keys('d', keys)
+    eq(get_lines(), lines_1)
+    eq(get_cursor(), cursor_1)
+
+    -- With dot-repeat
+    type_keys('.')
+    eq(get_lines(), lines_2)
+    eq(get_cursor(), cursor_2)
+  end
+
+  validate('[H', { 'www', 'ccc', 'xxx' }, { 1, 1 }, { 'ccc', 'xxx' }, { 1, 1 })
+  validate('[h', { 'uuu', 'aaa', 'www', 'ccc', 'xxx' }, { 3, 1 }, { 'ccc', 'xxx' }, { 1, 1 })
+  validate(']h', { 'uuu', 'aaa', 'vvv', 'ccc', 'xxx' }, { 4, 1 }, { 'uuu', 'aaa', 'vvv' }, { 3, 1 })
+  validate(']H', { 'uuu', 'aaa', 'vvv' }, { 3, 1 }, { 'uuu', 'aaa' }, { 2, 1 })
+end
+
+T['Goto']['allows dot-repeat across buffers'] = function()
+  set_lines({ 'aaa', 'uuu', 'bbb' })
+  set_ref_text(0, { 'aaa' })
+  set_cursor(1, 0)
+  type_keys('d', ']h')
+  eq(get_lines(), { 'bbb' })
+
+  local new_buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(new_buf_id)
+  set_lines({ 'ccc', 'ddd', 'vvv', 'www', 'eee' })
+  set_ref_text(0, { 'ccc', 'ddd', 'eee' })
+  set_cursor(2, 0)
+  type_keys('.')
+  eq(get_lines(), { 'ccc', 'www', 'eee' })
+end
+
+T['Goto']['respects [count]'] = function()
+  set_lines({ 'uuu', 'aaa', 'vvv', 'bbb', 'www', 'ccc', 'xxx' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
+
+  local validate = function(keys, ref_cursor)
+    set_cursor(4, 0)
+    type_keys('2', keys)
+    eq(get_cursor(), ref_cursor)
+  end
+
+  validate('[H', { 3, 0 })
+  validate('[h', { 1, 0 })
+  validate(']h', { 7, 0 })
+  validate(']H', { 5, 0 })
+end
+
+T['Goto']['works with different mappings'] = function()
+  child.lua([[
+    require('mini-dev.diff').setup({
+      source = _G.dummy_source,
+      mappings = {
+        goto_first = '[G',
+        goto_prev = '[g',
+        goto_next = ']g',
+        goto_last = ']G',
+      }
+    })
+  ]])
+
+  set_lines({ 'uuu', 'aaa', 'vvv', 'bbb', 'www', 'ccc', 'xxx' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
+
+  local validate = function(keys, ref_cursor)
+    set_cursor(4, 0)
+    type_keys(keys)
+    eq(get_cursor(), ref_cursor)
+  end
+
+  validate('[G', { 1, 0 })
+  validate('[g', { 3, 0 })
+  validate(']g', { 5, 0 })
+  validate(']G', { 7, 0 })
+end
 
 return T
