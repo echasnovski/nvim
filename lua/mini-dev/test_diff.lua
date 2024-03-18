@@ -7,6 +7,7 @@ local new_set = MiniTest.new_set
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('diff', config) end
+local unload_module = function(config) child.mini_unload('diff', config) end
 local set_cursor = function(...) return child.set_cursor(...) end
 local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
@@ -23,14 +24,25 @@ end
 
 local set_ref_text = forward_lua([[require('mini-dev.diff').set_ref_text]])
 
-local is_buf_enabled = function(buf_id)
-  return child.lua_get('require("mini-dev.diff").get_buf_data(' .. buf_id .. ') ~= nil')
-end
-
 local get_buf_hunks = function(buf_id)
   buf_id = buf_id or 0
   return child.lua_get('require("mini-dev.diff").get_buf_data(' .. buf_id .. ').hunks')
 end
+
+local get_buf_data = function(buf_id)
+  return child.lua(
+    [[
+      local res = require('mini-dev.diff').get_buf_data(...)
+      if res == nil then return nil end
+      -- Can not return callables from child process
+      res.config.source = nil
+      return res
+    ]],
+    { buf_id }
+  )
+end
+
+local is_buf_enabled = function(buf_id) return get_buf_data(buf_id) ~= vim.NIL end
 
 -- Common mocks
 local small_time = 5
@@ -41,7 +53,7 @@ local setup_with_dummy_source = function(text_change_delay)
     _G.dummy_log = {}
     _G.dummy_source = {
       name = 'dummy',
-      attach = function() end,
+      attach = function(...) table.insert(_G.dummy_log, { 'attach', { ... } }) end,
       detach = function(...) table.insert(_G.dummy_log, { 'detach', { ... } }) end,
       apply_hunks = function(...) table.insert(_G.dummy_log, { 'apply_hunks', { ... } }) end,
     }
@@ -114,6 +126,7 @@ local T = new_set({
       child.setup()
       child.set_size(10, 15)
       mock_notify()
+      setup_with_dummy_source()
     end,
     post_once = child.stop,
   },
@@ -171,6 +184,7 @@ end
 
 T['setup()']["respects 'number' option when setting default `view.style`"] = function()
   child.o.number = true
+  unload_module()
   load_module()
   eq(child.lua_get('MiniDiff.config.view.style'), 'number')
 end
@@ -223,186 +237,99 @@ T['setup()']['auto enables in all existing buffers'] = function()
   child.api.nvim_buf_set_lines(buf_id_bad_2, 0, -1, false, { '\0' })
 
   -- Only normal valid text buffers should be auto enabled
-  setup_with_dummy_source()
   eq(is_buf_enabled(buf_id_normal), true)
   eq(is_buf_enabled(buf_id_bad_1), false)
   eq(is_buf_enabled(buf_id_bad_2), false)
 end
 
-T['enable()'] = new_set()
+T['enable()'] = new_set({
+  hooks = {
+    pre_case = function()
+      local init_buf_id = child.api.nvim_get_current_buf()
+      -- Make tests on not initial (kind of special) buffer
+      child.api.nvim_set_current_buf(child.api.nvim_create_buf(true, false))
+      child.api.nvim_buf_delete(init_buf_id, { force = true })
+      clean_dummy_log()
+    end,
+  },
+})
 
-local enable = forward_lua([[require('mini-dev.diff').enable]])
+local enable = forward_lua('MiniDiff.enable')
 
-T['enable()']['works'] = function() MiniTest.skip() end
-
-T['enable()']['works with defaults'] = function()
-  -- child.b.minihipatterns_config = test_config
-  -- set_lines(test_lines)
-  -- enable()
-  -- child.expect_screenshot()
-  MiniTest.skip()
+T['enable()']['works in not normal buffer'] = function()
+  local buf_id = child.api.nvim_create_buf(false, true)
+  child.api.nvim_set_current_buf(buf_id)
+  clean_dummy_log()
+  enable()
+  validate_dummy_log({ { 'attach', { buf_id } } })
 end
 
-T['enable()']['works in not normal buffer'] = function() MiniTest.skip() end
-
-T['enable()']['works in not current buffer'] = function() MiniTest.skip() end
-
-T['enable()']['reacts to text change'] = function()
-  -- -- Should enable debounced auto highlight on text change
-  -- enable(0, test_config)
-  --
-  -- -- Interactive text change
-  -- type_keys('i', 'abc')
-  -- sleep(test_config.delay.text_change - small_time)
-  -- type_keys('d')
-  --
-  -- -- - No highlights should be shown as delay was smaller than in config
-  -- child.expect_screenshot()
-  --
-  -- -- - Still no highlights should be shown
-  -- sleep(test_config.delay.text_change - small_time)
-  -- child.expect_screenshot()
-  --
-  -- -- - Now there should be highlights
-  -- sleep(2 * small_time)
-  -- child.expect_screenshot()
-  --
-  -- -- Not interactive text change
-  -- set_lines({ 'ABCD', 'abcd' })
-  --
-  -- child.expect_screenshot()
-  -- sleep(test_config.delay.text_change + small_time)
-  -- child.expect_screenshot()
-  MiniTest.skip()
+T['enable()']['works in not current buffer'] = function()
+  clean_dummy_log()
+  local buf_id = child.api.nvim_create_buf(true, false)
+  enable(buf_id)
+  validate_dummy_log({ { 'attach', { buf_id } } })
+  eq(is_buf_enabled(buf_id), true)
 end
 
-T['enable()']['does not flicker during text insert'] = function()
-  -- enable(0, test_config)
-  --
-  -- -- Interactive text change
-  -- type_keys('i', 'abcd')
-  -- sleep(test_config.delay.text_change + small_time)
-  -- child.expect_screenshot()
-  --
-  -- type_keys(' abcd')
-  -- child.expect_screenshot()
-  -- sleep(test_config.delay.text_change + small_time)
-  -- child.expect_screenshot()
-  MiniTest.skip()
+T['enable()']['does not re-enable already enabled buffer'] = function()
+  clean_dummy_log()
+  enable()
+  validate_dummy_log({})
 end
 
-T['enable()']['reacts to buffer enter'] = function()
-  -- local init_buf_id = child.api.nvim_get_current_buf()
-  -- enable(init_buf_id, { highlighters = test_config.highlighters })
-  --
-  -- local other_buf_id = child.api.nvim_create_buf(true, false)
-  -- child.api.nvim_set_current_buf(other_buf_id)
-  --
-  -- -- On buffer enter it should update config and highlighting (after delay)
-  -- local lua_cmd = string.format('vim.b[%d].minihipatterns_config = { delay = { text_change = 10 } }', init_buf_id)
-  -- child.lua(lua_cmd)
-  -- child.api.nvim_buf_set_lines(init_buf_id, 0, -1, false, { 'abcd' })
-  --
-  -- child.api.nvim_set_current_buf(init_buf_id)
-  --
-  -- child.expect_screenshot()
-  -- sleep(10 + small_time)
-  -- child.expect_screenshot()
-  MiniTest.skip()
+T['enable()']['makes buffer update cache on `BufWinEnter`'] = function()
+  eq(get_buf_data().config.delay.text_change, small_time)
+  child.b.minidiff_config = { delay = { text_change = 200 } }
+  child.api.nvim_exec_autocmds('BufWinEnter', { buffer = child.api.nvim_get_current_buf() })
+  eq(get_buf_data().config.delay.text_change, 200)
 end
 
-T['enable()']['reacts to filetype change'] = function()
-  -- child.lua([[_G.hipatterns_config = {
-  --   highlighters = {
-  --     abcd_ft = {
-  --       pattern = function(buf_id)
-  --         if vim.bo[buf_id].filetype == 'aaa' then return nil end
-  --         return 'abcd'
-  --       end,
-  --       group = 'Error'
-  --     },
-  --   },
-  --   delay = { text_change = 20 },
-  -- }]])
-  --
-  -- set_lines({ 'xxabcdxx' })
-  -- child.lua([[require('mini.hipatterns').enable(0, _G.hipatterns_config)]])
-  -- child.expect_screenshot()
-  --
-  -- -- Should update highlighting after delay
-  -- child.cmd('set filetype=aaa')
-  -- child.expect_screenshot()
-  -- sleep(20 + 2)
-  -- child.expect_screenshot()
-  MiniTest.skip()
+T['enable()']['makes buffer disabled when deleted'] = function()
+  local alt_buf_id = child.api.nvim_create_buf(true, false)
+  enable(alt_buf_id)
+  clean_dummy_log()
+
+  local buf_id = child.api.nvim_get_current_buf()
+  child.api.nvim_buf_delete(buf_id, { force = true })
+  validate_dummy_log({ { 'detach', { buf_id } } })
+  eq(is_buf_enabled(buf_id), false)
 end
 
-T['enable()']['reacts to delete of line with match'] = function()
-  -- set_lines({ 'abcd', 'xxx', 'xxx', 'abcd', 'xxx', 'xxx', 'abcd' })
-  --
-  -- local hi_abcd = {
-  --   pattern = 'abcd',
-  --   group = '',
-  --   extmark_opts = { virt_text = { { 'Hello', 'Error' } }, virt_text_pos = 'right_align' },
-  -- }
-  -- local config = { highlighters = { abcd = hi_abcd }, delay = { text_change = 30, scroll = 10 } }
-  -- enable(0, config)
-  --
-  -- sleep(30 + small_time)
-  -- child.expect_screenshot()
-  --
-  -- local validate = function(line_to_delete)
-  --   child.api.nvim_win_set_cursor(0, { line_to_delete, 0 })
-  --   type_keys('dd')
-  --   sleep(30 + small_time)
-  --   child.expect_screenshot()
-  -- end
-  --
-  -- validate(1)
-  -- validate(3)
-  -- validate(5)
-  MiniTest.skip()
+T['enable()']['makes buffer reset on rename'] = function()
+  local buf_id = child.api.nvim_get_current_buf()
+  child.api.nvim_buf_set_name(0, 'hello')
+  validate_dummy_log({ { 'detach', { buf_id } }, { 'attach', { buf_id } } })
 end
 
 T['enable()']['validates arguments'] = function()
-  -- expect.error(function() enable('a', {}) end, '`buf_id`.*valid buffer id')
-  -- expect.error(function() enable(child.api.nvim_get_current_buf(), 'a') end, '`config`.*table')
-  MiniTest.skip()
+  expect.error(function() enable({}) end, '`buf_id`.*valid buffer id')
 end
 
-T['enable()']['respects `vim.{g,b}.minihipatterns_disable`'] = new_set({
+T['enable()']['respects `vim.{g,b}.minidiff_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
-    -- child[var_type].minihipatterns_disable = true
-    --
-    -- set_lines(test_lines)
-    -- enable(0, test_config)
-    -- sleep(test_config.delay.text_change + small_time)
-    -- child.expect_screenshot()
-    MiniTest.skip()
+    local buf_id = child.api.nvim_create_buf(true, false)
+    if var_type == 'b' then child.api.nvim_buf_set_var(buf_id, 'minidiff_disable', true) end
+    if var_type == 'g' then child.api.nvim_set_var('minidiff_disable', true) end
+    clean_dummy_log()
+    enable(buf_id)
+    validate_dummy_log({})
+    eq(is_buf_enabled(buf_id), false)
   end,
 })
 
-T['enable()']['respects `vim.b.minihipatterns_config`'] = function()
-  -- set_lines(test_lines)
-  -- child.b.minihipatterns_config = test_config
-  -- enable(0)
-  --
-  -- child.expect_screenshot()
-  --
-  -- -- Delay should also be respected
-  -- set_lines({ 'abcd' })
-  -- sleep(test_config.delay.text_change - small_time)
-  -- child.expect_screenshot()
-  -- sleep(2 * small_time)
-  -- child.expect_screenshot()
-  MiniTest.skip()
+T['enable()']['respects `vim.b.minidiff_config`'] = function()
+  local buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_var(buf_id, 'minidiff_config', { delay = { text_change = 200 } })
+  enable(buf_id)
+  eq(get_buf_data(buf_id).config.delay.text_change, 200)
 end
 
 T['disable()'] = new_set()
 
-local disable = forward_lua([[require('mini-dev.diff').disable]])
+local disable = forward_lua('MiniDiff.disable')
 
 T['disable()']['works'] = function()
   -- local cur_buf_id = child.api.nvim_get_current_buf()
@@ -447,7 +374,7 @@ end
 
 T['toggle()'] = new_set()
 
-local toggle = forward_lua([[require('mini-dev.diff').toggle]])
+local toggle = forward_lua('MiniDiff.toggle')
 
 T['toggle()']['works'] = function()
   -- local cur_buf_id = child.api.nvim_get_current_buf()
@@ -507,9 +434,20 @@ T['get_buf_data()']['returns copy of underlying data'] = function() MiniTest.ski
 
 T['set_ref_text()'] = new_set()
 
+local set_ref_text = forward_lua('MiniDiff.set_ref_text')
+
 T['set_ref_text()']['works'] = function() MiniTest.skip() end
 
 T['set_ref_text()']['enables not enabled buffer'] = function() MiniTest.skip() end
+
+T['set_ref_text()']['immediately updates diff data'] = function()
+  local buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(buf_id, 0, -1, false, { 'aaa', 'bbb' })
+  set_ref_text(buf_id, { 'aaa' })
+  enable(buf_id)
+  local ref_hunks = { { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0, type = 'add' } }
+  eq(get_buf_hunks(buf_id), ref_hunks)
+end
 
 T['gen_source'] = new_set()
 
@@ -521,13 +459,13 @@ T['gen_source']['save()'] = new_set()
 
 T['gen_source']['save()']['works'] = function() MiniTest.skip() end
 
-T['do_hunks()'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
+T['do_hunks()'] = new_set({ hooks = { pre_case = clean_dummy_log } })
 
 local do_hunks = forward_lua('MiniDiff.do_hunks')
 
 T['do_hunks()']['works'] = function()
-  set_lines({ 'aaa', 'bbb' })
-  set_ref_text(0, { 'axa', 'bbb', 'ccc' })
+  set_lines({ 'aaa', 'BBB' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
 
   -- Apply
   do_hunks(0, 'apply')
@@ -540,7 +478,7 @@ T['do_hunks()']['works'] = function()
 
   -- Reset
   do_hunks(0, 'reset')
-  eq(get_lines(), { 'axa', 'bbb', 'ccc' })
+  eq(get_lines(), { 'AAA', 'BBB', 'CCC' })
 end
 
 T['do_hunks()']['works with no hunks'] = function()
@@ -645,8 +583,8 @@ T['do_hunks()']['works with "delete" hunks on edges as target'] = function()
 end
 
 T['do_hunks()']['respects `opts.line_start`'] = function()
-  set_lines({ 'aaa', 'bbb' })
-  set_ref_text(0, { 'axa', 'bbb', 'ccc' })
+  set_lines({ 'aaa', 'BBB' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
 
   -- Apply
   do_hunks(0, 'apply', { line_start = 2 })
@@ -655,12 +593,12 @@ T['do_hunks()']['respects `opts.line_start`'] = function()
 
   -- Reset
   do_hunks(0, 'reset', { line_start = 2 })
-  eq(get_lines(), { 'aaa', 'bbb', 'ccc' })
+  eq(get_lines(), { 'aaa', 'BBB', 'CCC' })
 end
 
 T['do_hunks()']['respects `opts.line_end`'] = function()
-  set_lines({ 'aaa', 'bbb' })
-  set_ref_text(0, { 'axa', 'bbb', 'ccc' })
+  set_lines({ 'aaa', 'BBB' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
 
   -- Apply
   do_hunks(0, 'apply', { line_end = 1 })
@@ -669,12 +607,12 @@ T['do_hunks()']['respects `opts.line_end`'] = function()
 
   -- Reset
   do_hunks(0, 'reset', { line_end = 1 })
-  eq(get_lines(), { 'axa', 'bbb' })
+  eq(get_lines(), { 'AAA', 'BBB' })
 end
 
 T['do_hunks()']['allows negative target lines'] = function()
-  set_lines({ 'aaa', 'bbb' })
-  set_ref_text(0, { 'axa', 'bbb', 'ccc' })
+  set_lines({ 'aaa', 'BBB' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
 
   -- Apply
   do_hunks(0, 'apply', { line_start = -2, line_end = -1 })
@@ -686,8 +624,10 @@ T['do_hunks()']['allows negative target lines'] = function()
 
   -- Reset
   do_hunks(0, 'reset', { line_start = -2, line_end = -1 })
-  eq(get_lines(), { 'axa', 'bbb', 'ccc' })
+  eq(get_lines(), { 'AAA', 'BBB', 'CCC' })
 end
+
+T['do_hunks()']['allows target range to contain lines between hunks'] = function() MiniTest.skip() end
 
 T['do_hunks()']['can act on hunk part'] = function()
   set_lines({ 'uuu', 'vvv', 'aaa', 'bbb', 'ccc' })
@@ -723,7 +663,7 @@ T['do_hunks()']['validates arguments'] = function()
   expect.error(function() do_hunks(0) end, 'Buffer.*not enabled')
 end
 
-T['goto_hunk()'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
+T['goto_hunk()'] = new_set()
 
 local goto_hunk = forward_lua('MiniDiff.goto_hunk')
 
@@ -972,12 +912,12 @@ T['goto_hunk()']['validates arguments'] = function()
 end
 
 -- More thorough tests are done in "Integration tests"
-T['operator()'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
+T['operator()'] = new_set()
 
 T['operator()']['is present'] = function() eq(child.lua_get('type(MiniDiff.operator)'), 'function') end
 
 -- More thorough tests are done in "Integration tests"
-T['textobject()'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
+T['textobject()'] = new_set()
 
 T['textobject()']['is present'] = function() eq(child.lua_get('type(MiniDiff.textobject)'), 'function') end
 
@@ -1040,30 +980,316 @@ T['Auto enable']['does not enable for not normal buffers'] = function()
   MiniTest.skip()
 end
 
-T['Operator'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
+T['Visualization'] = new_set()
+
+T['Visualization']['works'] = function()
+  -- Should update in debounce fashion
+  MiniTest.skip()
+end
+
+T['Visualization']['works when "change" overlaps with "delete"'] = function()
+  -- Should prefer "change"
+  MiniTest.skip()
+end
+
+T['Visualization']['does not flicker during text insert'] = function() MiniTest.skip() end
+
+T['Visualization']['reacts to text change'] = function()
+  -- -- Should enable debounced auto highlight on text change
+  -- enable(0, test_config)
+  --
+  -- -- Interactive text change
+  -- type_keys('i', 'abc')
+  -- sleep(test_config.delay.text_change - small_time)
+  -- type_keys('d')
+  --
+  -- -- - No highlights should be shown as delay was smaller than in config
+  -- child.expect_screenshot()
+  --
+  -- -- - Still no highlights should be shown
+  -- sleep(test_config.delay.text_change - small_time)
+  -- child.expect_screenshot()
+  --
+  -- -- - Now there should be highlights
+  -- sleep(2 * small_time)
+  -- child.expect_screenshot()
+  --
+  -- -- Not interactive text change
+  -- set_lines({ 'ABCD', 'abcd' })
+  --
+  -- child.expect_screenshot()
+  -- sleep(test_config.delay.text_change + small_time)
+  -- child.expect_screenshot()
+  MiniTest.skip()
+end
+
+T['Visualization']['reacts to buffer enter'] = function()
+  -- local init_buf_id = child.api.nvim_get_current_buf()
+  -- enable(init_buf_id, { highlighters = test_config.highlighters })
+  --
+  -- local other_buf_id = child.api.nvim_create_buf(true, false)
+  -- child.api.nvim_set_current_buf(other_buf_id)
+  --
+  -- -- On buffer enter it should update config and highlighting (after delay)
+  -- local lua_cmd = string.format('vim.b[%d].minihipatterns_config = { delay = { text_change = 10 } }', init_buf_id)
+  -- child.lua(lua_cmd)
+  -- child.api.nvim_buf_set_lines(init_buf_id, 0, -1, false, { 'abcd' })
+  --
+  -- child.api.nvim_set_current_buf(init_buf_id)
+  --
+  -- child.expect_screenshot()
+  -- sleep(10 + small_time)
+  -- child.expect_screenshot()
+  MiniTest.skip()
+end
+
+T['Visualization']['reacts to filetype change'] = function()
+  -- child.lua([[_G.hipatterns_config = {
+  --   highlighters = {
+  --     abcd_ft = {
+  --       pattern = function(buf_id)
+  --         if vim.bo[buf_id].filetype == 'aaa' then return nil end
+  --         return 'abcd'
+  --       end,
+  --       group = 'Error'
+  --     },
+  --   },
+  --   delay = { text_change = 20 },
+  -- }]])
+  --
+  -- set_lines({ 'xxabcdxx' })
+  -- child.lua([[require('mini.hipatterns').enable(0, _G.hipatterns_config)]])
+  -- child.expect_screenshot()
+  --
+  -- -- Should update highlighting after delay
+  -- child.cmd('set filetype=aaa')
+  -- child.expect_screenshot()
+  -- sleep(20 + 2)
+  -- child.expect_screenshot()
+  MiniTest.skip()
+end
+
+T['Visualization']['reacts to delete of line with match'] = function()
+  -- set_lines({ 'abcd', 'xxx', 'xxx', 'abcd', 'xxx', 'xxx', 'abcd' })
+  --
+  -- local hi_abcd = {
+  --   pattern = 'abcd',
+  --   group = '',
+  --   extmark_opts = { virt_text = { { 'Hello', 'Error' } }, virt_text_pos = 'right_align' },
+  -- }
+  -- local config = { highlighters = { abcd = hi_abcd }, delay = { text_change = 30, scroll = 10 } }
+  -- enable(0, config)
+  --
+  -- sleep(30 + small_time)
+  -- child.expect_screenshot()
+  --
+  -- local validate = function(line_to_delete)
+  --   child.api.nvim_win_set_cursor(0, { line_to_delete, 0 })
+  --   type_keys('dd')
+  --   sleep(30 + small_time)
+  --   child.expect_screenshot()
+  -- end
+  --
+  -- validate(1)
+  -- validate(3)
+  -- validate(5)
+  MiniTest.skip()
+end
+
+T['Visualization']['respects `view.style`'] = function() MiniTest.skip() end
+
+T['Visualization']['respects `view.signs`'] = function() MiniTest.skip() end
+
+T['Visualization']['respects `view.priority`'] = function() MiniTest.skip() end
+
+T['Visualization']['respects `vim.b.minidiff_config`'] = function(var_type)
+  child.b.minidiff_config = {}
+  MiniTest.skip()
+end
+
+T['Visualization']['respects `vim.{g,b}.minidiff_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minidiff_disable = true
+    MiniTest.skip()
+  end,
+})
+
+T['Overlay'] = new_set()
+
+T['Overlay']['works'] = function() MiniTest.skip() end
+
+T['Overlay']['works when "change" overlaps with "delete"'] = function() MiniTest.skip() end
+
+T['Overlay']['respects `view.priority`'] = function() MiniTest.skip() end
+
+T['Diff'] = new_set()
+
+T['Diff']['works'] = function() MiniTest.skip() end
+
+T['Diff']['respects `options.algorithm`'] = function() MiniTest.skip() end
+
+T['Diff']['respects `options.indent_heuristic`'] = function() MiniTest.skip() end
+
+T['Diff']['respects `options.linematch`'] = function() MiniTest.skip() end
+
+-- More thorough tests are done in "do_hunks"
+T['Operator'] = new_set({ hooks = { pre_case = clean_dummy_log } })
 
 T['Operator']['apply'] = new_set()
 
-T['Operator']['apply']['works'] = function() MiniTest.skip() end
+T['Operator']['apply']['works in Normal mode'] = function()
+  local ref_hunks
+  set_lines({ 'aaa', 'bbb', 'CCC', 'uuu', 'vvv' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
 
-T['Operator']['apply']['allows dot-repeat'] = function() MiniTest.skip() end
+  set_cursor(1, 0)
+  type_keys('gh', 'j')
+  ref_hunks = { { buf_start = 1, buf_count = 2, ref_start = 1, ref_count = 2 } }
+  validate_dummy_log({ { 'apply_hunks', { child.api.nvim_get_current_buf(), ref_hunks } } })
+  clean_dummy_log()
+
+  -- With dot-repeat
+  set_cursor(4, 0)
+  type_keys('.')
+  ref_hunks = { { buf_start = 4, buf_count = 2, ref_start = 3, ref_count = 0 } }
+  validate_dummy_log({ { 'apply_hunks', { child.api.nvim_get_current_buf(), ref_hunks } } })
+end
+
+T['Operator']['apply']['allows dot-repeat across buffers'] = function()
+  local ref_hunks
+  set_lines({ 'aaa', 'uuu', 'vvv' })
+  set_ref_text(0, { 'aaa' })
+  set_cursor(2, 0)
+  type_keys('gh', '_')
+  ref_hunks = { { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0 } }
+  validate_dummy_log({ { 'apply_hunks', { child.api.nvim_get_current_buf(), ref_hunks } } })
+  clean_dummy_log()
+
+  local new_buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(new_buf_id)
+  set_lines({ 'ccc', 'ddd', 'www', 'xxx', 'eee' })
+  set_ref_text(0, { 'ccc', 'ddd', 'eee' })
+  set_cursor(3, 0)
+  type_keys('.')
+  ref_hunks = { { buf_start = 3, buf_count = 1, ref_start = 2, ref_count = 0 } }
+  validate_dummy_log({ { 'attach', { new_buf_id } }, { 'apply_hunks', { new_buf_id, ref_hunks } } })
+  clean_dummy_log()
+end
+
+T['Operator']['apply']['works in Visual mode'] = function()
+  set_lines({ 'aaa', 'bbb', 'CCC', 'uuu', 'vvv' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
+
+  set_cursor(1, 0)
+  type_keys('vj', 'gh')
+  local ref_hunks = { { buf_start = 1, buf_count = 2, ref_start = 1, ref_count = 2 } }
+  validate_dummy_log({ { 'apply_hunks', { child.api.nvim_get_current_buf(), ref_hunks } } })
+  eq(child.fn.mode(), 'n')
+end
 
 T['Operator']['apply']['restores window view'] = function()
+  child.set_size(7, 15)
+  local ref_hunks
+
   -- Should restore on first application
+  set_lines({ 'ooo', 'ppp', 'qqq', 'rrr', 'aaa', 'sss', 'ttt', 'uuu', 'bbb' })
+
+  set_ref_text(0, { 'aaa', 'bbb' })
+  set_cursor(4, 2)
+  type_keys('zz')
+  eq(child.fn.line('w0'), 2)
+
+  type_keys('gh', 'gg')
+  ref_hunks = { { buf_start = 1, buf_count = 4, ref_start = 0, ref_count = 0 } }
+  validate_dummy_log({ { 'apply_hunks', { child.api.nvim_get_current_buf(), ref_hunks } } })
+  clean_dummy_log()
+
+  eq(get_cursor(), { 4, 2 })
+  eq(child.fn.line('w0'), 2)
 
   -- Should not interfere with dot-repeat
-  MiniTest.skip()
+  set_ref_text(0, { 'ooo', 'ppp', 'qqq', 'rrr', 'aaa', 'bbb' })
+  set_cursor(8, 2)
+  type_keys('zz')
+  eq(child.fn.line('w0'), 6)
+  type_keys('.')
+  ref_hunks = { { buf_start = 6, buf_count = 3, ref_start = 5, ref_count = 0 } }
+  validate_dummy_log({ { 'apply_hunks', { child.api.nvim_get_current_buf(), ref_hunks } } })
+  -- - Places cursor at the start of textobject as all operators do
+  eq(get_cursor(), { 1, 2 })
+  eq(child.fn.line('w0'), 1)
+end
+
+T['Operator']['apply']['works with different mapping'] = function()
+  child.lua([[MiniDiff.setup({ source = _G.dummy_source, mappings = { apply = 'Gh' } })]])
+
+  set_lines({ 'aaa', 'bbb' })
+  set_ref_text(0, { 'aaa' })
+
+  set_cursor(2, 0)
+  type_keys('Gh', '_')
+  local ref_hunks = { { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0 } }
+  validate_dummy_log({ { 'apply_hunks', { child.api.nvim_get_current_buf(), ref_hunks } } })
 end
 
 T['Operator']['reset'] = new_set()
 
-T['Operator']['reset']['works'] = function() MiniTest.skip() end
+T['Operator']['reset']['works in Normal mode'] = function()
+  set_lines({ 'aaa', 'bbb', 'CCC', 'uuu', 'vvv' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
 
-T['Operator']['reset']['allows dot-repeat'] = function() MiniTest.skip() end
+  set_cursor(1, 2)
+  type_keys('gH', 'j')
+  eq(get_lines(), { 'AAA', 'BBB', 'CCC', 'uuu', 'vvv' })
+  eq(get_cursor(), { 1, 2 })
 
-T['Operator']['reset']['works with dot-repeat'] = function() MiniTest.skip() end
+  -- With dot-repeat
+  set_cursor(4, 1)
+  type_keys('.')
+  eq(get_lines(), { 'AAA', 'BBB', 'CCC' })
+  eq(get_cursor(), { 3, 1 })
+end
 
-T['Textobject'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
+T['Operator']['reset']['allows dot-repeat across buffers'] = function()
+  set_lines({ 'aaa', 'uuu', 'vvv' })
+  set_ref_text(0, { 'aaa' })
+  set_cursor(2, 0)
+  type_keys('gH', '_')
+  eq(get_lines(), { 'aaa', 'vvv' })
+
+  local new_buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(new_buf_id)
+  set_lines({ 'ccc', 'ddd', 'www', 'xxx', 'eee' })
+  set_ref_text(0, { 'ccc', 'ddd', 'eee' })
+  set_cursor(3, 0)
+  type_keys('.')
+  eq(get_lines(), { 'ccc', 'ddd', 'xxx', 'eee' })
+end
+
+T['Operator']['reset']['works in Visual mode'] = function()
+  set_lines({ 'aaa', 'bbb', 'CCC', 'uuu', 'vvv' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
+
+  set_cursor(1, 2)
+  type_keys('vj', 'gH')
+  eq(get_lines(), { 'AAA', 'BBB', 'CCC', 'uuu', 'vvv' })
+  eq(get_cursor(), { 1, 2 })
+end
+
+T['Operator']['reset']['works with different mapping'] = function()
+  child.lua([[MiniDiff.setup({ source = _G.dummy_source, mappings = { reset = 'GH' } })]])
+
+  set_lines({ 'aaa', 'bbb' })
+  set_ref_text(0, { 'aaa' })
+
+  set_cursor(2, 0)
+  type_keys('GH', '_')
+  eq(get_lines(), { 'aaa' })
+end
+
+T['Textobject'] = new_set()
 
 T['Textobject']['works'] = function()
   set_lines({ 'aaa', 'uuu', 'vvv', 'bbb', 'ccc', 'www' })
@@ -1121,12 +1347,6 @@ end
 T['Textobject']['correctly computes contiguous ranges'] = function()
   if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('Contiguous regions are relevant with `linematch` option.') end
 
-  local validate = function(init_cursor, direction, opts, ref_cursor)
-    set_cursor(unpack(init_cursor))
-    goto_hunk(direction, opts)
-    eq(get_cursor(), ref_cursor)
-  end
-
   -- "Change" hunk adjacent to "add" and "delete" hunks
   set_lines({ 'AAA', 'uuu', 'BbB', 'DDD', 'www', 'EEE' })
   set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE' })
@@ -1164,17 +1384,14 @@ end
 
 T['Textobject']['works with different mapping'] = function()
   child.lua([[
-    require('mini-dev.diff').setup({
-      source = _G.dummy_source,
-      mappings = { textobject = 'gH' },
-    })
+    MiniDiff.setup({ source = _G.dummy_source, mappings = { textobject = 'Gh' } })
   ]])
 
   set_lines({ 'aaa', 'uuu', 'bbb' })
   set_ref_text(0, { 'aaa', 'bbb' })
 
   set_cursor(2, 0)
-  type_keys('d', 'gH')
+  type_keys('d', 'Gh')
   eq(get_lines(), { 'aaa', 'bbb' })
 end
 
@@ -1201,7 +1418,7 @@ T['Textobject']['respects `vim.{g,b}.minidiff_disable`'] = new_set({
 })
 
 -- More thorough tests are done in "goto_hunk"
-T['Goto'] = new_set({ hooks = { pre_case = setup_with_dummy_source } })
+T['Goto'] = new_set()
 
 T['Goto']['works in Normal mode'] = function()
   set_lines({ 'uuu', 'aaa', 'vvv', 'bbb', 'www', 'ccc', 'xxx' })
@@ -1295,7 +1512,7 @@ end
 
 T['Goto']['works with different mappings'] = function()
   child.lua([[
-    require('mini-dev.diff').setup({
+    MiniDiff.setup({
       source = _G.dummy_source,
       mappings = {
         goto_first = '[G',
