@@ -217,7 +217,7 @@ MiniDiff.enable = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
 
   -- Don't enable more than once
-  if H.is_buf_enabled(buf_id) then return end
+  if H.is_buf_enabled(buf_id) or H.is_disabled(buf_id) then return end
 
   -- Register enabled buffer with cached data for performance
   H.update_buf_cache(buf_id)
@@ -245,26 +245,7 @@ MiniDiff.enable = function(buf_id)
   })
 
   -- Add buffer autocommands
-  local augroup = vim.api.nvim_create_augroup('MiniDiffBuffer' .. buf_id, { clear = true })
-  H.cache[buf_id].augroup = augroup
-
-  local buf_update = vim.schedule_wrap(function() H.update_buf_cache(buf_id) end)
-  local bufwinenter_opts = { group = augroup, buffer = buf_id, callback = buf_update, desc = 'Update buffer cache' }
-  vim.api.nvim_create_autocmd('BufWinEnter', bufwinenter_opts)
-
-  local buf_disable = function() MiniDiff.disable(buf_id) end
-  local bufdelete_opts = { group = augroup, buffer = buf_id, callback = buf_disable, desc = 'Disable on delete' }
-  vim.api.nvim_create_autocmd('BufDelete', bufdelete_opts)
-
-  local reset = function()
-    MiniDiff.disable(buf_id)
-    MiniDiff.enable(buf_id)
-  end
-  local bufnew_opts = { group = augroup, buffer = buf_id, callback = reset, desc = 'Reset on rename' }
-  vim.api.nvim_create_autocmd('BufNew', bufnew_opts)
-
-  -- Immediately process whole buffer
-  H.schedule_diff_update(buf_id, 0)
+  H.setup_buf_autocommands(buf_id)
 end
 
 --- Disable diff tracking in buffer
@@ -300,8 +281,9 @@ end
 
 -- `ref_text` can be `nil` indicating that source did not react (yet).
 MiniDiff.get_buf_data = function(buf_id)
-  buf_id = H.validate_buf_id(buf_id)
-  local buf_cache = H.cache[buf_id]
+  local ok, resolved_buf_id = pcall(H.validate_buf_id, buf_id)
+  if not ok then return nil end
+  local buf_cache = H.cache[resolved_buf_id]
   if buf_cache == nil then return nil end
   return vim.deepcopy({
     ref_text = buf_cache.ref_text,
@@ -330,6 +312,7 @@ MiniDiff.set_ref_text = function(buf_id, text)
     vim.cmd('redraw')
   end
 
+  -- Immediately update diff
   H.cache[buf_id].ref_text = text
   H.schedule_diff_update(buf_id, 0)
 end
@@ -630,31 +613,7 @@ H.apply_config = function(config)
 
   -- Register decoration provider which actually makes visualization
   local ns_id_viz, ns_id_overlay = H.ns_id.viz, H.ns_id.overlay
-  local on_win = function(_, _, buf_id, top, bottom)
-    local buf_cache = H.cache[buf_id]
-    if buf_cache == nil then return false end
-
-    if buf_cache.needs_clear then
-      H.clear_all_diff(buf_id)
-      buf_cache.needs_clear = false
-    end
-
-    local viz_lines, overlay_lines = buf_cache.viz_lines, buf_cache.overlay_lines
-    for i = top + 1, bottom + 1 do
-      if viz_lines[i] ~= nil then
-        H.set_extmark(buf_id, ns_id_viz, i - 1, 0, viz_lines[i])
-        viz_lines[i] = nil
-      end
-      if overlay_lines[i] ~= nil then
-        -- Allow several overlays at one line (like for "delete" and "change")
-        for j = 1, #overlay_lines[i] do
-          H.draw_overlay_line(buf_id, ns_id_overlay, i - 1, overlay_lines[i][j])
-        end
-        overlay_lines[i] = nil
-      end
-    end
-  end
-  vim.api.nvim_set_decoration_provider(ns_id_viz, { on_win = on_win })
+  H.set_decoration_provider(ns_id_viz, ns_id_overlay)
 end
 
 H.create_autocommands = function()
@@ -761,6 +720,28 @@ H.update_buf_cache = function(buf_id)
   H.cache[buf_id] = new_cache
 end
 
+H.setup_buf_autocommands = function(buf_id)
+  local augroup = vim.api.nvim_create_augroup('MiniDiffBuffer' .. buf_id, { clear = true })
+  H.cache[buf_id].augroup = augroup
+
+  local buf_update = vim.schedule_wrap(function() H.update_buf_cache(buf_id) end)
+  local bufwinenter_opts = { group = augroup, buffer = buf_id, callback = buf_update, desc = 'Update buffer cache' }
+  vim.api.nvim_create_autocmd('BufWinEnter', bufwinenter_opts)
+
+  local reset_if_enabled = vim.schedule_wrap(function(data)
+    if not H.is_buf_enabled(data.buf) then return end
+    MiniDiff.disable(data.buf)
+    MiniDiff.enable(data.buf)
+  end)
+  local bufrename_opts = { group = augroup, buffer = buf_id, callback = reset_if_enabled, desc = 'Reset on rename' }
+  -- NOTE: `BufFilePost` does not look like a proper event, but it (yet) works
+  vim.api.nvim_create_autocmd('BufFilePost', bufrename_opts)
+
+  local buf_disable = function() MiniDiff.disable(buf_id) end
+  local bufdelete_opts = { group = augroup, buffer = buf_id, callback = buf_disable, desc = 'Disable on delete' }
+  vim.api.nvim_create_autocmd('BufDelete', bufdelete_opts)
+end
+
 H.normalize_source = function(source)
   if type(source) ~= 'table' then H.error('`source` should be table.') end
 
@@ -791,6 +772,34 @@ H.convert_view_to_extmark_opts = function(view)
 end
 
 -- Processing -----------------------------------------------------------------
+H.set_decoration_provider = function(ns_id_viz, ns_id_overlay)
+  local on_win = function(_, _, buf_id, top, bottom)
+    local buf_cache = H.cache[buf_id]
+    if buf_cache == nil then return false end
+
+    if buf_cache.needs_clear then
+      H.clear_all_diff(buf_id)
+      buf_cache.needs_clear = false
+    end
+
+    local viz_lines, overlay_lines = buf_cache.viz_lines, buf_cache.overlay_lines
+    for i = top + 1, bottom + 1 do
+      if viz_lines[i] ~= nil then
+        H.set_extmark(buf_id, ns_id_viz, i - 1, 0, viz_lines[i])
+        viz_lines[i] = nil
+      end
+      if overlay_lines[i] ~= nil then
+        -- Allow several overlays at one line (like for "delete" and "change")
+        for j = 1, #overlay_lines[i] do
+          H.draw_overlay_line(buf_id, ns_id_overlay, i - 1, overlay_lines[i][j])
+        end
+        overlay_lines[i] = nil
+      end
+    end
+  end
+  vim.api.nvim_set_decoration_provider(ns_id_viz, { on_win = on_win })
+end
+
 H.schedule_diff_update = vim.schedule_wrap(function(buf_id, delay_ms)
   H.bufs_to_update[buf_id] = true
   H.timer_diff_update:stop()
