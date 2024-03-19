@@ -281,9 +281,8 @@ end
 
 -- `ref_text` can be `nil` indicating that source did not react (yet).
 MiniDiff.get_buf_data = function(buf_id)
-  local ok, resolved_buf_id = pcall(H.validate_buf_id, buf_id)
-  if not ok then return nil end
-  local buf_cache = H.cache[resolved_buf_id]
+  buf_id = H.validate_buf_id(buf_id)
+  local buf_cache = H.cache[buf_id]
   if buf_cache == nil then return nil end
   return vim.deepcopy({
     ref_text = buf_cache.ref_text,
@@ -293,10 +292,13 @@ MiniDiff.get_buf_data = function(buf_id)
   })
 end
 
+--- Notes:
+--- - Appends newline character at the end (if it is not there already).
+---
 ---@param buf_id number|nil Buffer identifier. Default: `nil` for current buffer (same as 0).
 ---@param text string|table|nil New reference text. Either a string with `\n` used to
 ---   separate lines or array of lines. Use empty table to unset current
----   reference text results into no hunks shown. Default: `{}`.
+---   reference text (results into no hunks shown). Default: `{}`.
 MiniDiff.set_ref_text = function(buf_id, text)
   buf_id = H.validate_buf_id(buf_id)
   if type(text) == 'table' then text = #text > 0 and table.concat(text, '\n') or nil end
