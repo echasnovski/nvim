@@ -97,7 +97,16 @@ local get_viz_extmarks = function(buf_id)
   return res
 end
 
-local validate_hl_group = function(name, pattern) expect.match(child.cmd_capture('hi ' .. name), pattern) end
+local validate_viz_extmarks = function(buf_id, ref)
+  -- Neovim<0.9 does not return all necessary data
+  if child.fn.has('nvim-0.9') == 0 then ref = vim.tbl_map(function(t) return { line = t.line } end, ref) end
+  eq(get_viz_extmarks(buf_id), ref)
+end
+
+local get_overlay_extmarks = function(buf_id, from_line, to_line)
+  local ns_id = child.api.nvim_get_namespaces().MiniDiffOverlay
+  return child.api.nvim_buf_get_extmarks(buf_id, ns_id, { from_line - 1, 0 }, { to_line - 1, 0 }, { details = true })
+end
 
 -- Work with notifications
 local mock_notify = function()
@@ -158,13 +167,15 @@ T['setup()']['creates side effects'] = function()
   child.cmd('hi clear')
   load_module()
   local is_010 = child.fn.has('nvim-0.10') == 1
-  expect.match(child.cmd_capture('hi MiniDiffSignAdd'), 'links to ' .. (is_010 and 'Added' or 'diffAdded'))
-  expect.match(child.cmd_capture('hi MiniDiffSignChange'), 'links to ' .. (is_010 and 'Changed' or 'diffChanged'))
-  expect.match(child.cmd_capture('hi MiniDiffSignDelete'), 'links to ' .. (is_010 and 'Removed' or 'diffRemoved'))
-  expect.match(child.cmd_capture('hi MiniDiffOverAdd'), 'links to DiffAdd')
-  expect.match(child.cmd_capture('hi MiniDiffOverChange'), 'links to DiffText')
-  expect.match(child.cmd_capture('hi MiniDiffOverContext'), 'links to DiffChange')
-  expect.match(child.cmd_capture('hi MiniDiffOverDelete'), 'links to DiffDelete')
+  local validate_hl_group = function(name, pattern) expect.match(child.cmd_capture('hi ' .. name), pattern) end
+
+  validate_hl_group('MiniDiffSignAdd', 'links to ' .. (is_010 and 'Added' or 'diffAdded'))
+  validate_hl_group('MiniDiffSignChange', 'links to ' .. (is_010 and 'Changed' or 'diffChanged'))
+  validate_hl_group('MiniDiffSignDelete', 'links to ' .. (is_010 and 'Removed' or 'diffRemoved'))
+  validate_hl_group('MiniDiffOverAdd', 'links to DiffAdd')
+  validate_hl_group('MiniDiffOverChange', 'links to DiffText')
+  validate_hl_group('MiniDiffOverContext', 'links to DiffChange')
+  validate_hl_group('MiniDiffOverDelete', 'links to DiffDelete')
 end
 
 T['setup()']['creates `config` field'] = function()
@@ -415,9 +426,42 @@ T['toggle()']['works'] = function()
   eq(child.lua_get('_G.log'), { { 'disabled', { buf_id } }, { 'enabled', { buf_id } } })
 end
 
-T['toggle_overlay()'] = new_set()
+T['toggle_overlay()'] = new_set({ hooks = { pre_case = setup_enabled_buffer } })
 
-T['toggle_overlay()']['works'] = function() MiniTest.skip() end
+local toggle_overlay = forward_lua('MiniDiff.toggle_overlay')
+
+T['toggle_overlay()']['works'] = function()
+  local init_buf_id = child.api.nvim_get_current_buf()
+  set_lines({ 'AAA', 'uuu', 'BBB', 'CcC', 'DDD', 'FFF' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF' })
+
+  -- Should be disabled by default
+  child.expect_screenshot()
+  toggle_overlay(init_buf_id)
+  child.expect_screenshot()
+
+  -- Should work per buffer
+  local buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_set_current_buf(buf_id)
+  set_lines({ 'AAA', 'uuu', 'BBB' })
+  set_ref_text(0, { 'AAA', 'BBB' })
+
+  child.expect_screenshot()
+  toggle_overlay(buf_id)
+  child.expect_screenshot()
+
+  -- Should work in not current buffer
+  toggle_overlay(init_buf_id)
+  child.api.nvim_set_current_buf(init_buf_id)
+  child.expect_screenshot()
+end
+
+T['toggle_overlay()']['validates arguments'] = function()
+  expect.error(function() toggle_overlay('a') end, '`buf_id`.*valid buffer id')
+
+  disable()
+  expect.error(function() toggle_overlay(0) end, 'Buffer.*not enabled')
+end
 
 T['get_buf_data()'] = new_set({ hooks = { pre_case = setup_enabled_buffer } })
 
@@ -1126,7 +1170,9 @@ end
 
 T['Visualization']['works when "change" overlaps with "delete"'] = function()
   -- Should prefer "change"
-  MiniTest.skip()
+  set_lines({ 'AAA', 'BbB', 'DDD' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD' })
+  validate_viz_extmarks(0, { { line = 2, sign_hl_group = 'MiniDiffSignChange', sign_text = '▒ ' } })
 end
 
 T['Visualization']['does not flicker during text insert'] = function() MiniTest.skip() end
@@ -1253,13 +1299,168 @@ T['Visualization']['respects `vim.{g,b}.minidiff_disable`'] = new_set({
   end,
 })
 
-T['Overlay'] = new_set()
+T['Overlay'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.set_size(15, 15)
+      setup_enabled_buffer()
+      toggle_overlay(0)
+    end,
+  },
+})
 
-T['Overlay']['works'] = function() MiniTest.skip() end
+T['Overlay']['works'] = function()
+  set_lines({ 'AAA', 'uuu', 'BBB', 'CcC', 'DDD', 'FFF' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF' })
 
-T['Overlay']['works when "change" overlaps with "delete"'] = function() MiniTest.skip() end
+  child.expect_screenshot()
 
-T['Overlay']['respects `view.priority`'] = function() MiniTest.skip() end
+  -- Should be updated interactively when diff itself is updated
+  set_cursor(5, 0)
+  type_keys('A', '<CR>', 'EeE')
+
+  child.expect_screenshot()
+  sleep(small_time + 5)
+  child.expect_screenshot()
+end
+
+T['Overlay']['works with "add" hunks'] = function()
+  set_lines({ 'aaa', 'uuu', 'vvv', 'bbb', 'www', 'ccc' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc' })
+  child.expect_screenshot()
+end
+
+T['Overlay']['works with "change" hunks'] = function()
+  child.lua('MiniDiff.config.options.linematch = 0')
+
+  -- When number of added and deleted lines are the same, reference lines
+  -- should be shown next to the corresponding buffer lines
+  set_lines({ 'AAA', 'BbB', 'CcC', 'DdD', 'EEE' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE' })
+  child.expect_screenshot()
+
+  -- When number of added and deleted lines are not the same, all reference
+  -- lines should be shown together above hunk's first buffer line
+  set_lines({ 'AAA', 'uuu', 'BbB', 'CcC', 'DdD', 'EEE' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE' })
+  child.expect_screenshot()
+end
+
+T['Overlay']['works with "delete" hunks'] = function()
+  set_lines({ 'aaa', 'ddd', 'fff' })
+  set_ref_text(0, { 'aaa', 'bbb', 'ccc', 'ddd', 'eee', 'fff' })
+  child.expect_screenshot()
+end
+
+T['Overlay']['always highlights whole lines'] = function()
+  child.set_size(10, 15)
+  set_lines({ 'AAA', 'uuu', 'BBB', 'CcC', 'DDD', 'FFF' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF' })
+
+  child.set_size(10, 25)
+  child.expect_screenshot()
+end
+
+T['Overlay']['works at edge lines'] = function()
+  child.set_size(10, 15)
+  -- Virtual lines above first line need scroll to become visible
+  -- See https://github.com/neovim/neovim/issues/16166
+  -- Better with `<C-y>`. See https://github.com/neovim/neovim/issues/27967.
+
+  -- 'Add' hunks
+  set_lines({ 'uuu', 'aaa', 'vvv' })
+  set_ref_text(0, { 'aaa' })
+  child.expect_screenshot()
+
+  -- 'Change' hunks
+  set_lines({ 'AaA', 'BBB', 'CcC' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
+  type_keys('<C-y>')
+  child.expect_screenshot()
+
+  -- 'Delete' hunks
+  set_lines({ 'BBB' })
+  set_ref_text(0, { 'AAA', 'BBB', 'DDD' })
+  type_keys('<C-y>')
+  child.expect_screenshot()
+end
+
+T['Overlay']['works when "change" overlaps with "delete"'] = function()
+  if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('Works only on Neovim>=0.9') end
+  set_lines({ 'AAA', 'BbB', 'DDD' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD' })
+  child.expect_screenshot()
+end
+
+T['Overlay']['should use correct highlight groups'] = function()
+  set_lines({ 'AAA', 'uuu', 'BBB', 'CcC', 'DDD', 'FFF' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF' })
+
+  -- 'Add'
+  local add_extmarks = get_overlay_extmarks(0, 2, 3)
+  eq(add_extmarks[1][4].hl_group, 'MiniDiffOverAdd')
+
+  -- 'Change'
+  local change_extmarks = get_overlay_extmarks(0, 4, 5)
+
+  -- - Reference part of changed line
+  local change_virt_lines = change_extmarks[1][4].virt_lines
+  eq(change_extmarks[1][4].virt_lines_above, true)
+  eq(#change_virt_lines, 1)
+  eq(change_virt_lines[1][1], { 'C', 'MiniDiffOverContext' })
+  eq(change_virt_lines[1][2], { 'C', 'MiniDiffOverChange' })
+  eq(change_virt_lines[1][3], { 'C', 'MiniDiffOverContext' })
+
+  -- - Buffer part of changed line
+  eq(change_extmarks[2][4].hl_group, 'MiniDiffOverChange')
+
+  -- 'Delete'
+  local delete_extmarks = get_overlay_extmarks(0, 5, 6)
+  eq(delete_extmarks[1][4].virt_lines_above, false)
+
+  local delete_virt_lines = delete_extmarks[1][4].virt_lines
+
+  eq(delete_extmarks[1][4].virt_lines_above, false)
+  eq(#delete_virt_lines, 1)
+  eq(delete_virt_lines[1][1], { 'EEE', 'MiniDiffOverDelete' })
+end
+
+T['Overlay']['respects `view.priority`'] = function()
+  child.lua('MiniDiff.config.view.priority = MiniDiff.config.view.priority - 10')
+  local ref_priority = child.lua_get('MiniDiff.config.view.priority')
+
+  set_lines({ 'AAA', 'uuu', 'BBB', 'CcC', 'DDD', 'FFF' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF' })
+  local overlay_extmarks = get_overlay_extmarks(0, 1, 6)
+  local priorities = vim.tbl_map(function(t) return t[4].priority end, overlay_extmarks)
+  eq(priorities, vim.tbl_map(function() return ref_priority end, priorities))
+end
+
+T['Overlay']['word diff'] = new_set()
+
+T['Overlay']['word diff']['works'] = function()
+  set_lines({ 'AAA', 'b_BBB_b', 'CCcccC', 'DDD', 'xxx' })
+  set_ref_text(0, { 'AAA', 'B_BBB_B', 'CCC', 'DDdddD', 'EEE' })
+  child.expect_screenshot()
+end
+
+T['Overlay']['word diff']['has non-zero interhunk context'] = function()
+  -- Changed characters which are near enough should be visualized as the whole
+  -- range between them is also changed. This reduces visual noise.
+  set_lines({ '__34567890', '_2_4567890', '_23_567890', '_234_67890', '_2345_7890', '_23456_890' })
+  set_ref_text(0, { '1234567890', '1234567890', '1234567890', '1234567890', '1234567890', '1234567890' })
+  type_keys('<C-y>')
+  child.expect_screenshot()
+end
+
+T['Overlay']['word diff']['works with multibyte characters'] = function()
+  -- -- Characters 'ы' and 'ф' have same first byte and different second
+  -- set_lines({ 'ы_ы_ы_ы', 'ыфы' })
+  -- set_ref_text(0, { 'Ы_ы_ы_Ы', 'ыыы' })
+  -- type_keys('<C-y>')
+  -- child.expect_screenshot()
+  MiniTest.skip()
+end
 
 T['Diff'] = new_set()
 

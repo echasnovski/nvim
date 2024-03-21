@@ -12,6 +12,10 @@
 -- Docs:
 --
 -- - How to make mappings for "apply/reset in current line".
+-- - Virtual lines above line 1 need manual scroll (with `<C-y>`).
+-- - Word diff has non-zero context. This means that changed characters which
+--   are near enough are visualized as the whole range between them is also
+--   changed. This reduces visual noise.
 --
 -- Tests:
 -- - Respects `config.options.algorithm` (with concrete examples).
@@ -167,7 +171,7 @@ MiniDiff.config = {
     -- Signs used for hunks with 'sign' view
     signs = { add = '▒', change = '▒', delete = '▒' },
 
-    -- Basic priority of used extmarks
+    -- Priority of used extmarks
     priority = vim.highlight.priorities.user - 1,
   },
 
@@ -628,7 +632,7 @@ H.create_autocommands = function()
   -- NOTE: Try auto enabling buffer on every `BufEnter` to not have `:edit`
   -- disabling buffer, as it calls `on_detach()` from buffer watcher
   au('BufEnter', '*', H.auto_enable, 'Enable diff')
-  au('VimResized', '*', function() H.overlay_suffix = string.rep(' ', vim.o.columns) end, 'Track Neovim resizing')
+  au('VimResized', '*', H.on_resize, 'Track Neovim resizing')
 end
 
 --stylua: ignore
@@ -670,6 +674,16 @@ H.auto_enable = vim.schedule_wrap(function(data)
   if not H.is_buf_text(data.buf) then return end
   MiniDiff.enable(data.buf)
 end)
+
+H.on_resize = function()
+  H.overlay_suffix = string.rep(' ', vim.o.columns)
+  for buf_id, _ in pairs(H.cache) do
+    if vim.api.nvim_buf_is_valid(buf_id) then
+      H.clear_all_diff(buf_id)
+      H.schedule_diff_update(buf_id, 0)
+    end
+  end
+end
 
 -- Validators -----------------------------------------------------------------
 H.validate_buf_id = function(x)
@@ -975,7 +989,7 @@ H.draw_overlay_line = function(buf_id, ns_id, row, data)
 
   -- "Change" hunk: show changed lines above first hunk line
   if data.type == 'change' then
-    -- NOTE: virtual lines above line 1 need manual scroll (like with `<C-b>`)
+    -- NOTE: virtual lines above line 1 need manual scroll (with `<C-y>`)
     -- See https://github.com/neovim/neovim/issues/16166
     local opts = { virt_lines = data.lines, virt_lines_above = true, priority = data.priority }
     return H.set_extmark(buf_id, ns_id, row, 0, opts)
