@@ -1444,6 +1444,16 @@ T['Overlay']['word diff']['works'] = function()
   child.expect_screenshot()
 end
 
+T['Overlay']['word diff']['works with one of lines being empty'] = function()
+  child.set_size(7, 15)
+  set_lines({ 'uuu', '', 'vvv' })
+  set_ref_text(0, { 'uuu', 'AAA', 'vvv' })
+  child.expect_screenshot()
+  set_lines({ 'uuu', 'AAA', 'vvv' })
+  set_ref_text(0, { 'uuu', '', 'vvv' })
+  child.expect_screenshot()
+end
+
 T['Overlay']['word diff']['has non-zero interhunk context'] = function()
   -- Changed characters which are near enough should be visualized as the whole
   -- range between them is also changed. This reduces visual noise.
@@ -1454,29 +1464,170 @@ T['Overlay']['word diff']['has non-zero interhunk context'] = function()
 end
 
 T['Overlay']['word diff']['works with multibyte characters'] = function()
-  -- -- Characters 'ы' and 'ф' have same first byte and different second
-  -- set_lines({ 'ы_ы_ы_ы', 'ыфы' })
-  -- set_ref_text(0, { 'Ы_ы_ы_Ы', 'ыыы' })
-  -- type_keys('<C-y>')
-  -- child.expect_screenshot()
-  MiniTest.skip()
+  child.set_size(10, 15)
+
+  local validate = function(buf_lines, ref_lines)
+    set_lines(buf_lines)
+    set_ref_text(0, ref_lines)
+    type_keys('<C-y>')
+    child.expect_screenshot()
+  end
+
+  -- Byte representation of characters (for reference):
+  -- - ы - { '<d1>', '<8b>' }
+  -- - ф - { '<d1>', '<84>' }
+  -- - ▒ - { '<e2>', '<96>', '<92>' }
+  -- - ┃ - { '<e2>', '<94>', '<83>' }
+  validate({ 'фыы', 'ыфы', 'ыыф' }, { 'ыыы', 'ыыы', 'ыыы' })
+  validate({ 'ыыы', 'ыыы', 'ыыы' }, { 'фыы', 'ыфы', 'ыыф' })
+  validate({ 'фыы', 'ыфы', 'ыыф' }, { 'ыы', 'ыы', 'ыы' })
+  validate({ 'ыы', 'ыы', 'ыы' }, { 'фыы', 'ыфы', 'ыыф' })
+
+  validate({ '┃▒▒', '▒┃▒', '▒▒┃' }, { '▒▒▒', '▒▒▒', '▒▒▒' })
+  validate({ '▒▒▒', '▒▒▒', '▒▒▒' }, { '┃▒▒', '▒┃▒', '▒▒┃' })
+  validate({ '┃▒▒', '▒┃▒', '▒▒┃' }, { '▒▒', '▒▒', '▒▒' })
+  validate({ '▒▒', '▒▒', '▒▒' }, { '┃▒▒', '▒┃▒', '▒▒┃' })
+
+  validate({ 'ыxx', 'xыx', 'xxы' }, { 'xxx', 'xxx', 'xxx' })
+  validate({ 'xxx', 'xxx', 'xxx' }, { 'ыxx', 'xыx', 'xxы' })
 end
 
-T['Diff'] = new_set()
+T['Diff'] = new_set({ hooks = { pre_case = setup_enabled_buffer } })
 
-T['Diff']['works'] = function() MiniTest.skip() end
+T['Diff']['works'] = function()
+  set_lines({ 'aaa', 'uuu', 'bbb' })
+  set_ref_text(0, { 'aaa', 'bbb' })
+  local other_buf_id = child.api.nvim_create_buf(true, false)
+  child.api.nvim_buf_set_lines(other_buf_id, 0, -1, false, { 'ccc', 'vvv', 'ddd' })
+  set_ref_text(other_buf_id, { 'ccc', 'ddd' })
 
-T['Diff']['set proper summary buffer-local variables'] = function()
-  -- vim.b.minidiff_summary
-  -- vim.b.minidiff_summary_string
-  MiniTest.skip()
+  local ref_hunks_before = { { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0, type = 'add' } }
+  eq(get_buf_hunks(0), ref_hunks_before)
+  eq(get_buf_hunks(other_buf_id), ref_hunks_before)
+
+  -- Should be updated in debounced fashion across all buffers
+  set_cursor(2, 0)
+  type_keys('o', 'hello', '<Esc>')
+  child.api.nvim_set_current_buf(other_buf_id)
+  set_cursor(2, 0)
+  type_keys('o', 'world', '<Esc>')
+
+  eq(get_buf_hunks(0), ref_hunks_before)
+  eq(get_buf_hunks(other_buf_id), ref_hunks_before)
+
+  sleep(small_time + 5)
+
+  local ref_hunks_after = { { buf_start = 2, buf_count = 2, ref_start = 1, ref_count = 0, type = 'add' } }
+  eq(get_buf_hunks(0), ref_hunks_after)
+  eq(get_buf_hunks(other_buf_id), ref_hunks_after)
 end
 
-T['Diff']['respects `options.algorithm`'] = function() MiniTest.skip() end
+T['Diff']['sets proper summary buffer-local variables'] = function()
+  set_lines({ 'AAA', 'uuu', 'BBB', 'ccc', 'DDD', 'EEE', 'GGG' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF', 'GGG' })
 
-T['Diff']['respects `options.indent_heuristic`'] = function() MiniTest.skip() end
+  eq(child.b.minidiff_summary, { add = 1, change = 1, delete = 1, n_ranges = 3 })
+  eq(child.b.minidiff_summary_string, '#3 +1 ~1 -1')
 
-T['Diff']['respects `options.linematch`'] = function() MiniTest.skip() end
+  -- Summary string should maintain order of "n-add-change-delete"
+  local validate_summary_string = function(buf_lines, ref_lines, ref_summary_string)
+    set_lines(buf_lines)
+    set_ref_text(0, ref_lines)
+    eq(child.b.minidiff_summary_string, ref_summary_string)
+  end
+
+  validate_summary_string({ 'AAA', 'uuu' }, { 'AAA' }, '#1 +1')
+  validate_summary_string({ 'aaa' }, { 'AAA' }, '#1 ~1')
+  validate_summary_string({ 'AAA' }, { 'AAA', 'BBB' }, '#1 -1')
+
+  validate_summary_string({ 'AAA', 'CCC', 'ddd' }, { 'AAA', 'BBB', 'CCC', 'DDD' }, '#2 ~1 -1')
+  validate_summary_string({ 'AAA', 'CCC', 'uuu' }, { 'AAA', 'BBB', 'CCC' }, '#2 +1 -1')
+  validate_summary_string({ 'AAA', 'uuu', 'BBB', 'ccc', 'DDD' }, { 'AAA', 'BBB', 'CCC', 'DDD' }, '#2 +1 ~1')
+end
+
+T['Diff']['respects `options.algorithm`'] = function()
+  child.lua('MiniDiff.config.options.linematch = 0')
+  local ref_lines = { '[', ']', 'AAA', 'CCC', 'BBB', '[', ']' }
+
+  set_lines({ '[', 'AAA', ']', 'CCC', '[', 'BBB', ']' })
+  set_ref_text(0, ref_lines)
+  local histogram_hunks = {
+    { buf_start = 1, buf_count = 0, ref_start = 2, ref_count = 1, type = 'delete' },
+    { buf_start = 3, buf_count = 4, ref_start = 4, ref_count = 3, type = 'change' },
+  }
+  eq(get_buf_hunks(0), histogram_hunks)
+
+  child.lua([[MiniDiff.config.options.algorithm = 'myers']])
+  set_ref_text(0, ref_lines)
+  local myers_hunks = {
+    { buf_start = 1, buf_count = 0, ref_start = 2, ref_count = 1, type = 'delete' },
+    { buf_start = 3, buf_count = 1, ref_start = 3, ref_count = 0, type = 'add' },
+    { buf_start = 4, buf_count = 0, ref_start = 5, ref_count = 1, type = 'delete' },
+    { buf_start = 6, buf_count = 1, ref_start = 6, ref_count = 0, type = 'add' },
+  }
+  eq(get_buf_hunks(0), myers_hunks)
+end
+
+T['Diff']['respects `options.indent_heuristic`'] = function()
+  set_lines({ 'xxx', ' aaa', ' bbb', '', '', ' aaa', 'xxx' })
+  local ref_lines = { 'xxx', ' aaa', 'xxx' }
+
+  set_ref_text(0, ref_lines)
+  eq(get_buf_hunks(0), { { buf_start = 2, buf_count = 4, ref_start = 1, ref_count = 0, type = 'add' } })
+
+  child.lua('MiniDiff.config.options.indent_heuristic = false')
+  set_ref_text(0, ref_lines)
+  eq(get_buf_hunks(0), { { buf_start = 3, buf_count = 4, ref_start = 2, ref_count = 0, type = 'add' } })
+end
+
+T['Diff']['respects `options.linematch`'] = function()
+  if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('`linematch` option is introduced in Neovim 0.9.') end
+
+  set_lines({ 'xxx', 'uuu', 'AaA', 'xxx' })
+  local ref_lines = { 'xxx', 'AAA', 'xxx' }
+
+  set_ref_text(0, ref_lines)
+  local linematch_hunks = {
+    { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0, type = 'add' },
+    { buf_start = 3, buf_count = 1, ref_start = 2, ref_count = 1, type = 'change' },
+  }
+  eq(get_buf_hunks(0), linematch_hunks)
+
+  child.lua('MiniDiff.config.options.linematch = 0')
+  set_ref_text(0, ref_lines)
+  local nolinematch_hunks = {
+    { buf_start = 2, buf_count = 2, ref_start = 2, ref_count = 1, type = 'change' },
+  }
+  eq(get_buf_hunks(0), nolinematch_hunks)
+end
+
+T['Diff']['redraws statusline when diff is updated'] = function()
+  set_lines({ 'aaa', 'uuu' })
+  set_ref_text(0, { 'aaa' })
+
+  child.o.statusline = '%!b:minidiff_summary_string'
+  child.expect_screenshot()
+
+  set_cursor(2, 0)
+  type_keys('o', 'hello')
+  sleep(small_time + 5)
+  child.expect_screenshot()
+end
+
+T['Diff']['triggers dedicated event'] = function()
+  child.cmd('au User MiniDiffUpdated lua _G.n = (_G.n or 0) + 1')
+
+  set_lines({ 'aaa', 'uuu' })
+  set_ref_text(0, { 'aaa' })
+  eq(child.lua_get('_G.n'), 1)
+
+  set_cursor(2, 0)
+  type_keys('o', 'hello')
+
+  eq(child.lua_get('_G.n'), 1)
+  sleep(small_time + 5)
+  eq(child.lua_get('_G.n'), 2)
+end
 
 -- More thorough tests are done in "do_hunks"
 T['Operator'] = new_set({ hooks = { pre_case = clean_dummy_log } })

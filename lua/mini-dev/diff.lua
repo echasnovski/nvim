@@ -1,12 +1,9 @@
 -- TODO:
 --
 -- Code:
--- - Make word diff work with multibyte characters.
---
 -- - When moving added line upwards, extmark should not temporarily shift down.
 --
 -- - `gen_source.file` to compare against some fixed file?
--- - `toggle_source()`?
 -- - `setqflist()`.
 --
 -- Docs:
@@ -27,8 +24,6 @@
 --
 -- - Changing line which is already visualizing deleted (below) line should
 --   result into visualizing line as "change" and not "delete".
---
--- - Word diff should work with multibyte characters.
 --
 -- - Git source:
 --     - Manage "not in index" files by not showing diff visualization.
@@ -1032,14 +1027,41 @@ H.draw_overlay_line_worddiff = function(buf_id, ns_id, row, data)
 end
 
 H.compute_worddiff_changed_parts = function(ref_line, buf_line)
-  local diff = vim.diff(ref_line:gsub('(.)', '%1\n'), buf_line:gsub('(.)', '%1\n'), H.worddiff_opts)
+  local ref_sliced, ref_byte_starts, ref_byte_ends = H.slice_line(ref_line)
+  local buf_sliced, buf_byte_starts, buf_byte_ends = H.slice_line(buf_line)
+  local diff = vim.diff(ref_sliced, buf_sliced, H.worddiff_opts)
   local ref_ranges, buf_ranges = {}, {}
   for i = 1, #diff do
     local d = diff[i]
-    if d[2] > 0 then table.insert(ref_ranges, { d[1], d[1] + d[2] - 1 }) end
-    if d[4] > 0 then table.insert(buf_ranges, { d[3], d[3] + d[4] - 1 }) end
+    if d[2] > 0 then table.insert(ref_ranges, { ref_byte_starts[d[1]], ref_byte_ends[d[1] + d[2] - 1] }) end
+    if d[4] > 0 then table.insert(buf_ranges, { buf_byte_starts[d[3]], buf_byte_ends[d[3] + d[4] - 1] }) end
   end
+
   return ref_ranges, buf_ranges
+end
+
+H.slice_line = function(line)
+  -- Intertwine every proper character with '\n'
+  local line_len = line:len()
+  local sliced, starts, ends
+  -- Make short route for a very common case of no multibyte characters
+  if vim.str_utfindex(line) == line_len then
+    sliced, starts, ends = line:gsub('(.)', '%1\n'), {}, {}
+    for i = 1, string.len(line) do
+      starts[i], ends[i] = i, i
+    end
+  else
+    sliced, starts, ends = {}, vim.str_utf_pos(line), {}
+    for i = 1, #starts - 1 do
+      table.insert(sliced, line:sub(starts[i], starts[i + 1] - 1))
+      table.insert(ends, starts[i + 1] - 1)
+    end
+    table.insert(sliced, line:sub(starts[#starts], line_len))
+    table.insert(ends, line_len)
+    sliced = table.concat(sliced, '\n') .. '\n'
+  end
+
+  return sliced, starts, ends
 end
 
 -- Hunks ----------------------------------------------------------------------
