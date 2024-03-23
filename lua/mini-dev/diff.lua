@@ -4,7 +4,10 @@
 -- - When moving added line upwards, extmark should not temporarily shift down.
 --
 -- - `gen_source.file` to compare against some fixed file?
--- - `setqflist()`.
+--
+-- - `export_hunks(format, opts)` which returns hunks in some format.
+--   For example, as an array for `vim.fn.setqflist()` or as patch lines for
+--   writing to the file.
 --
 -- Docs:
 --
@@ -15,8 +18,6 @@
 --   changed. This reduces visual noise.
 --
 -- Tests:
--- - Respects `config.options.algorithm` (with concrete examples).
---
 -- - Updates if no redraw seemingly is done. Example for `save` source: `yyp`
 --   should add green highlighting and `<C-s>` should remove it.
 --
@@ -36,16 +37,6 @@
 --     - Should (permanently) not try to reattach on `BufEnter` in buffers
 --       which are not in Git repo. If path started being in Git repo, wipeout
 --       buffer and reopen path in new buffer.
---
--- - Actions:
---     - Should work for all types of hunks (add, change, delete) in all
---       relative buffer places (first lines, middle lines, last lines).
---     - Operator's dot-repeat should work in different buffer than was
---       originally applied.
---
--- - Overlay:
---     - Should show both change and delete overlays even if both extmarks are
---       on same line.
 
 --- *mini.diff* Work with diff hunks
 --- *MiniDiff*
@@ -533,6 +524,9 @@ H.style_extmark_data = {
 -- Suffix for overlay virtual lines to be highlighted as full line
 H.overlay_suffix = string.rep(' ', vim.o.columns)
 
+-- Flag of whether Neovim version supports invalidating extmarks
+H.extmark_supports_invalidate = vim.fn.has('nvim-0.10') == 1
+
 -- Permanent `vim.diff()` options
 H.vimdiff_opts = { result_type = 'indices', ctxlen = 0, interhunkctxlen = 0 }
 H.vimdiff_supports_linematch = vim.fn.has('nvim-0.9') == 1
@@ -720,7 +714,7 @@ H.update_buf_cache = function(buf_id)
 
   local buf_config = H.get_config({}, buf_id)
   new_cache.config = buf_config
-  new_cache.extmark_data = H.convert_view_to_extmark_opts(buf_config.view)
+  new_cache.extmark_opts = H.convert_view_to_extmark_opts(buf_config.view)
   new_cache.source = H.normalize_source(buf_config.source or H.default_source)
 
   new_cache.hunks = new_cache.hunks or {}
@@ -775,10 +769,13 @@ H.convert_view_to_extmark_opts = function(view)
 
   local signs = view.style == 'sign' and view.signs or {}
   local field, hl_group_prefix = extmark_data.field, extmark_data.hl_group_prefix
+  local invalidate
+  if H.extmark_supports_invalidate then invalidate = true end
+  --stylua: ignore
   return {
-    add = { [field] = hl_group_prefix .. 'Add', sign_text = signs.add, priority = view.priority },
-    change = { [field] = hl_group_prefix .. 'Change', sign_text = signs.change, priority = view.priority },
-    delete = { [field] = hl_group_prefix .. 'Delete', sign_text = signs.delete, priority = view.priority },
+    add =    { [field] = hl_group_prefix .. 'Add',    sign_text = signs.add,    priority = view.priority, invalidate = invalidate },
+    change = { [field] = hl_group_prefix .. 'Change', sign_text = signs.change, priority = view.priority, invalidate = invalidate },
+    delete = { [field] = hl_group_prefix .. 'Delete', sign_text = signs.delete, priority = view.priority, invalidate = invalidate },
   }
 end
 
@@ -881,32 +878,32 @@ H.update_hunk_data = function(diff, buf_cache, buf_lines)
   local do_overlay = buf_cache.overlay
   local ref_lines = do_overlay and vim.split(buf_cache.ref_text, '\n') or nil
 
-  local extmark_data, priority = buf_cache.extmark_data, buf_cache.config.view.priority
+  local extmark_opts, priority = buf_cache.extmark_opts, buf_cache.config.view.priority
   local hunks, viz_lines, overlay_lines = {}, {}, {}
   local n_add, n_change, n_delete = 0, 0, 0
   local n_ranges, last_range_to = 0, -math.huge
   for i, d in ipairs(diff) do
     -- Hunk
-    local n_ref, n_cur = d[2], d[4]
-    local hunk_type = n_ref == 0 and 'add' or (n_cur == 0 and 'delete' or 'change')
-    local hunk = { type = hunk_type, ref_start = d[1], ref_count = n_ref, buf_start = d[3], buf_count = n_cur }
+    local n_ref, n_buf = d[2], d[4]
+    local hunk_type = n_ref == 0 and 'add' or (n_buf == 0 and 'delete' or 'change')
+    local hunk = { type = hunk_type, ref_start = d[1], ref_count = n_ref, buf_start = d[3], buf_count = n_buf }
     hunks[i] = hunk
 
     -- Hunk summary
-    local hunk_n_change = math.min(n_ref, n_cur)
-    n_add = n_add + n_cur - hunk_n_change
+    local hunk_n_change = math.min(n_ref, n_buf)
+    n_add = n_add + n_buf - hunk_n_change
     n_change = n_change + hunk_n_change
     n_delete = n_delete + n_ref - hunk_n_change
 
     -- Number of contiguous ranges.
     -- NOTE: this relies on `vim.diff()` output being sorted by `buf_start`.
     local range_from = math.max(d[3], 1)
-    local range_to = range_from + math.max(n_cur, 1) - 1
+    local range_to = range_from + math.max(n_buf, 1) - 1
     n_ranges = n_ranges + ((range_from <= last_range_to + 1) and 0 or 1)
     last_range_to = math.max(last_range_to, range_to)
 
     -- Register lines for draw. At least one line should visualize hunk.
-    local viz_ext_opts = extmark_data[hunk_type]
+    local viz_ext_opts = extmark_opts[hunk_type]
     for l_num = range_from, range_to do
       -- Prefer showing "change" hunk over other types
       if viz_lines[l_num] == nil or hunk_type == 'change' then viz_lines[l_num] = viz_ext_opts end
@@ -1083,27 +1080,25 @@ H.get_hunks_in_range = function(hunks, from, to)
     if left <= right then
       -- If any `cur` hunk part is selected, its `ref` part is used fully
       local new_h = { ref_start = h.ref_start, ref_count = h.ref_count }
+      new_h.type = h.ref_count == 0 and 'add' or (h.buf_count == 0 and 'delete' or 'change')
 
       -- It should be possible to work with only hunk part inside target range
       -- Also Treat "delete" hunks differently as they represent range differently
       -- and can have `buf_start=0`
-      new_h.buf_start = h.buf_count == 0 and h.buf_start or left
-      new_h.buf_count = h.buf_count == 0 and 0 or (right - left + 1)
+      new_h.buf_start = new_h.type == 'delete' and h.buf_start or left
+      new_h.buf_count = new_h.type == 'delete' and 0 or (right - left + 1)
 
       table.insert(res, new_h)
     end
   end
+
+  table.sort(res, H.hunk_order)
   return res
 end
 
 H.reset_hunks = function(buf_id, hunks)
   -- Preserve 'modified' buffer option
   local cur_modified = vim.bo[buf_id].modified
-
-  -- Make sure that hunks are properly ordered. Looks like not needed right now
-  -- (as output of `vim.diff` is already ordered), but there is no quarantee.
-  hunks = vim.deepcopy(hunks)
-  table.sort(hunks, function(a, b) return a.buf_start < b.buf_start end)
 
   local ref_lines = vim.split(H.cache[buf_id].ref_text, '\n')
   local offset = 0
@@ -1134,7 +1129,7 @@ end
 H.get_contiguous_hunk_ranges = function(hunks)
   if #hunks == 0 then return {} end
   hunks = vim.deepcopy(hunks)
-  table.sort(hunks, function(a, b) return a.buf_start < b.buf_start end)
+  table.sort(hunks, H.hunk_order)
 
   local h1_from, h1_to = H.get_hunk_buf_range(hunks[1])
   local res = { { from = h1_from, to = h1_to } }
@@ -1166,6 +1161,12 @@ H.iterate_hunk_ranges = function(ranges, direction, line_start, n_times)
   end
 
   return res
+end
+
+H.hunk_order = function(a, b)
+  -- Ensure buffer order and that "change" hunks are listed earlier "delete"
+  -- ones from the same line (important for `reset_hunks()`)
+  return a.buf_start < b.buf_start or (a.buf_start == b.buf_start and a.type == 'change')
 end
 
 -- Git ------------------------------------------------------------------------
