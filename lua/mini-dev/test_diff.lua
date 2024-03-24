@@ -19,10 +19,18 @@ local new_buf = function() return child.api.nvim_create_buf(true, false) end
 local new_scratch_buf = function() return child.api.nvim_create_buf(false, true) end
 local get_buf = function() return child.api.nvim_get_current_buf() end
 local set_buf = function(buf_id) child.api.nvim_set_current_buf(buf_id) end
+local edit = function(path) child.cmd('edit ' .. child.fn.fnameescape(path)) end
 --stylua: ignore end
 
 local test_dir = 'tests/dir-diff'
 local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('(.)/$', '%1')
+local test_file_path = test_dir_absolute .. '/file'
+
+local git_repo_dir = test_dir_absolute .. '/git-repo'
+local git_git_dir = git_repo_dir .. '/.git-dir'
+local git_dir_path = git_repo_dir .. '/dir-in-git'
+local git_file_basename = 'file-in-git'
+local git_file_path = git_repo_dir .. '/dir-in-git/' .. git_file_basename
 
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
@@ -54,6 +62,7 @@ local is_buf_enabled = function(buf_id) return get_buf_data(buf_id) ~= vim.NIL e
 -- Common mocks
 local small_time = 10
 
+-- - Dummy source, which is set by default in most tests
 local setup_with_dummy_source = function(text_change_delay)
   text_change_delay = text_change_delay or small_time
   child.lua([[
@@ -78,6 +87,83 @@ end
 local validate_dummy_log = function(ref_log) eq(child.lua_get('_G.dummy_log'), ref_log) end
 
 local clean_dummy_log = function() child.lua('_G.dummy_log = {}') end
+
+-- - Git mocks
+local mock_count_set_ref_text = function()
+  child.lua([[
+    local set_ref_text_orig = MiniDiff.set_ref_text
+    _G.n_set_ref_text_calls = 0
+    MiniDiff.set_ref_text = function(...)
+      _G.n_set_ref_text_calls = _G.n_set_ref_text_calls + 1
+      set_ref_text_orig(...)
+    end
+  ]])
+end
+
+local mock_change_git_index = function()
+  local index_path = git_git_dir .. '/index'
+  child.fn.writefile({}, index_path .. '.lock')
+  sleep(1)
+  child.fn.delete(index_path)
+  child.loop.fs_rename(index_path .. '.lock', index_path)
+end
+
+local mock_spawn = function()
+  local mock_file = test_dir_absolute .. '/mocks/spawn.lua'
+  local lua_cmd = string.format('dofile(%s)', vim.inspect(mock_file))
+  child.lua(lua_cmd)
+end
+
+local get_spawn_log = function() return child.lua_get('_G.spawn_log') end
+
+local validate_git_spawn_log = function(ref_log)
+  local spawn_log = get_spawn_log()
+
+  local n = math.max(#spawn_log, #ref_log)
+  for i = 1, n do
+    local real, ref = spawn_log[i], ref_log[i]
+    if real == nil then
+      eq('Real spawn log does not have entry for present reference log entry', ref)
+    elseif ref == nil then
+      eq(real, 'Reference does not have entry for present spawn log entry')
+    elseif vim.tbl_islist(ref) then
+      eq(real, { executable = 'git', options = { args = ref, cwd = real.options.cwd } })
+    else
+      eq(real, { executable = 'git', options = ref })
+    end
+  end
+end
+
+local get_process_log = function() return child.lua_get('_G.process_log') end
+
+-- - Notifications
+local mock_notify = function()
+  child.lua([[
+    _G.notify_log = {}
+    vim.notify = function(...) table.insert(_G.notify_log, { ... }) end
+  ]])
+end
+
+local get_notify_log = function() return child.lua_get('_G.notify_log') end
+
+local validate_notifications = function(ref_log, msg_pattern)
+  local notify_log = get_notify_log()
+  local n = math.max(#notify_log, #ref_log)
+  for i = 1, n do
+    local real, ref = notify_log[i], ref_log[i]
+    if real == nil then
+      eq('Real notify log does not have entry for present reference log entry', ref)
+    elseif ref == nil then
+      eq(real, 'Reference does not have entry for present notify log entry')
+    else
+      local expect_msg = msg_pattern and expect.match or eq
+      expect_msg(real[1], ref[1])
+      eq(real[2], child.lua_get('vim.log.levels.' .. ref[2]))
+    end
+  end
+end
+
+local clear_notify_log = function() return child.lua('_G.notify_log = {}') end
 
 -- Module helpers
 local setup_enabled_buffer = function()
@@ -114,35 +200,6 @@ local get_overlay_extmarks = function(buf_id, from_line, to_line)
   local ns_id = child.api.nvim_get_namespaces().MiniDiffOverlay
   return child.api.nvim_buf_get_extmarks(buf_id, ns_id, { from_line - 1, 0 }, { to_line - 1, 0 }, { details = true })
 end
-
--- Work with notifications
-local mock_notify = function()
-  child.lua([[
-    _G.notify_log = {}
-    vim.notify = function(...) table.insert(_G.notify_log, { ... }) end
-  ]])
-end
-
-local get_notify_log = function() return child.lua_get('_G.notify_log') end
-
-local validate_notifications = function(ref_log, msg_pattern)
-  local notify_log = get_notify_log()
-  local n = math.max(#notify_log, #ref_log)
-  for i = 1, n do
-    local real, ref = notify_log[i], ref_log[i]
-    if real == nil then
-      eq('Real notify log does not have entry for present reference log entry', ref)
-    elseif ref == nil then
-      eq(real, 'Reference does not have entry for present notify log entry')
-    else
-      local expect_msg = msg_pattern and expect.match or eq
-      expect_msg(real[1], ref[1])
-      eq(real[2], child.lua_get('vim.log.levels.' .. ref[2]))
-    end
-  end
-end
-
-local clear_notify_log = function() return child.lua('_G.notify_log = {}') end
 
 -- Output test set ============================================================
 local T = new_set({
@@ -470,6 +527,58 @@ T['toggle_overlay()']['validates arguments'] = function()
   expect.error(function() toggle_overlay(0) end, 'Buffer.*not enabled')
 end
 
+T['export()'] = new_set()
+
+local export = forward_lua('MiniDiff.export')
+
+T['export()']['works with "qf" format'] = function()
+  edit(test_file_path)
+  local buf_id_1 = get_buf()
+  set_ref_text(buf_id_1, { 'aaa' })
+
+  local buf_id_2 = new_buf()
+  child.api.nvim_buf_set_lines(buf_id_2, 0, -1, false, { 'AAA', 'uuu', 'BBB', 'CcC', 'DDD', 'FFF' })
+  set_ref_text(buf_id_2, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF' })
+
+  local ref = {
+    { bufnr = buf_id_1, lnum = 2, end_lnum = 2, type = 'A', filename = test_file_path },
+    { bufnr = buf_id_2, lnum = 2, end_lnum = 2, type = 'A', filename = '' },
+    { bufnr = buf_id_2, lnum = 4, end_lnum = 4, type = 'C', filename = '' },
+    { bufnr = buf_id_2, lnum = 5, end_lnum = 5, type = 'D', filename = '' },
+  }
+  eq(export('qf'), ref)
+end
+
+T['export()']['works with multiline hunks'] = function()
+  local buf_id_1 = new_buf()
+  child.api.nvim_buf_set_lines(buf_id_1, 0, -1, false, { 'AAA', 'uuu', 'vvv', 'BBB', 'CcC', 'DdD', 'EEE', 'HHH' })
+  set_ref_text(buf_id_1, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF', 'GGG', 'HHH' })
+  local ref = {
+    { bufnr = buf_id_1, lnum = 2, end_lnum = 3, type = 'A', filename = '' },
+    { bufnr = buf_id_1, lnum = 5, end_lnum = 6, type = 'C', filename = '' },
+    { bufnr = buf_id_1, lnum = 7, end_lnum = 7, type = 'D', filename = '' },
+  }
+  eq(export('qf'), ref)
+end
+
+T['export()']['respects `opts.scope`'] = function()
+  local buf_id_1 = new_buf()
+  child.api.nvim_buf_set_lines(buf_id_1, 0, -1, false, { 'aaa', 'uuu' })
+  set_ref_text(buf_id_1, { 'aaa' })
+  local buf_id_2 = new_buf()
+  child.api.nvim_buf_set_lines(buf_id_2, 0, -1, false, { 'aaa', 'uuu' })
+  set_ref_text(buf_id_2, { 'aaa' })
+
+  eq(export('qf', { scope = 'current' }), {})
+
+  set_buf(buf_id_1)
+  eq(export('qf', { scope = 'current' }), { { bufnr = 2, lnum = 2, end_lnum = 2, type = 'A', filename = '' } })
+end
+
+T['export()']['validates arguments'] = function()
+  expect.error(function() export('aaa') end, 'one of')
+end
+
 T['get_buf_data()'] = new_set({ hooks = { pre_case = setup_enabled_buffer } })
 
 T['get_buf_data()']['works'] = function()
@@ -623,13 +732,350 @@ end
 
 T['gen_source'] = new_set()
 
-T['gen_source']['git()'] = new_set()
+T['gen_source']['git()'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- Although it is the default source, "dummy" source is set in earlier hook
+      child.lua('MiniDiff.config.source = MiniDiff.gen_source.git()')
+      local init_buf_id = get_buf()
+      set_buf(new_buf())
+      child.api.nvim_buf_delete(init_buf_id, { force = true })
 
-T['gen_source']['git()']['works'] = function() MiniTest.skip() end
+      -- Mock
+      mock_spawn()
+
+      -- Set some data in child process
+      child.lua('_G.git_dir = ' .. vim.inspect(git_git_dir))
+    end,
+    post_case = function()
+      -- Ensure no changes in reference git repo
+      local index_path = git_git_dir .. '/index'
+      vim.fn.delete(index_path .. '.lock')
+      if vim.fn.filereadable(index_path) == 0 then vim.fn.writefile({}, index_path) end
+    end,
+  },
+})
+
+T['gen_source']['git()']['works'] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      { { 'out', _G.git_dir } },       -- Get path to repo's Git dir
+      { { 'out', 'Line 1\nLine 2\n' } }, -- Get reference text
+    }
+  ]])
+
+  edit(git_file_path)
+  eq(is_buf_enabled(0), true)
+
+  -- Should set reference text immediately
+  eq(get_buf_data(0).ref_text, 'Line 1\nLine 2\n')
+
+  local ref_git_spawn_log = {
+    { args = { 'rev-parse', '--path-format=absolute', '--git-dir' }, cwd = git_dir_path },
+    { args = { 'show', ':0:./' .. git_file_basename }, cwd = git_dir_path },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  eq(is_buf_enabled(0), true)
+  eq(get_buf_data(0).ref_text, 'Line 1\nLine 2\n')
+
+  -- All processes and streams should be properly closed
+  --stylua: ignore
+  local ref_process_log = {
+    'Stream out for process 1 was closed.', 'Process 1 was closed.',
+    'Stream out for process 2 was closed.', 'Process 2 was closed.',
+  }
+  eq(get_process_log(), ref_process_log)
+end
+
+T['gen_source']['git()']['can apply hunks'] = function()
+  child.lua([[
+    local ref_text = table.concat({ 'Line -1', 'Line 0', 'Line 1', 'Line 22', 'Line 33', 'Line 4' }, '\n')
+    _G.stdio_queue = {
+      { { 'out', _G.git_dir } },           -- Get path to repo's Git dir
+      { { 'out', ref_text } },             -- Get reference text
+      { { 'out', '100644 file-in-git' } }, -- Get path data for the patch
+      { { 'in' } },                        -- Apply patch
+    }
+  ]])
+
+  edit(git_file_path)
+  eq(is_buf_enabled(0), true)
+  eq(get_buf_data(0).ref_text, 'Line -1\nLine 0\nLine 1\nLine 22\nLine 33\nLine 4\n')
+
+  -- Make change
+  type_keys('G', 'cc', 'world')
+  sleep(small_time + 5)
+
+  local ref_hunks = {
+    { buf_start = 0, buf_count = 0, ref_start = 1, ref_count = 2, type = 'delete' },
+    { buf_start = 2, buf_count = 2, ref_start = 4, ref_count = 2, type = 'change' },
+    { buf_start = 5, buf_count = 1, ref_start = 6, ref_count = 0, type = 'add' },
+  }
+  eq(get_buf_hunks(0), ref_hunks)
+
+  child.lua([[MiniDiff.do_hunks(0, 'apply')]])
+
+  local ref_git_spawn_log = {
+    { args = { 'rev-parse', '--path-format=absolute', '--git-dir' }, cwd = git_dir_path },
+    { args = { 'show', ':0:./' .. git_file_basename }, cwd = git_dir_path },
+    {
+      args = { 'ls-files', '--full-name', '--format=%(objectmode) %(path)', '--', git_file_basename },
+      cwd = git_dir_path,
+    },
+    { args = { 'apply', '--whitespace=nowarn', '--cached', '--unidiff-zero', '-' }, cwd = git_dir_path },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- All processes and streams should be properly closed
+  --stylua: ignore
+  local ref_process_log = {
+    'Stream out for process 1 was closed.', 'Process 1 was closed.',
+    'Stream out for process 2 was closed.', 'Process 2 was closed.',
+    'Stream out for process 3 was closed.', 'Process 3 was closed.',
+    -- Proper patch should be written in 'stdin'
+    'Stream in for process 4 wrote: diff --git a/file-in-git b/file-in-git',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: index 000000..000000 100644',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: --- a/file-in-git',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: +++ b/file-in-git',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: @@ -1,2 +1,0 @@',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: -Line -1',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: -Line 0',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: @@ -4,2 +2,2 @@',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: -Line 22',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: -Line 33',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: +Line 2',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: +Line 3',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: @@ -7,0 +5,1 @@',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 wrote: +world',
+    'Stream in for process 4 wrote: \n',
+    'Stream in for process 4 was shut down.', 'Process 4 was closed.',
+  }
+  eq(get_process_log(), ref_process_log)
+end
+
+T['gen_source']['git()']['returns correct structure'] = function()
+  eq(
+    child.lua_get('vim.tbl_map(type, MiniDiff.gen_source.git())'),
+    { apply_hunks = 'function', attach = 'function', detach = 'function', name = 'string' }
+  )
+  eq(child.lua_get('MiniDiff.gen_source.git().name'), 'git')
+end
+
+T['gen_source']['git()']["reacts to change in 'index' Git file"] = function()
+  child.lua([[
+    _G.stdio_queue = {
+      { { 'out', _G.git_dir } },             -- Get path to repo's Git dir
+      { { 'out', 'Line 1\nLine 2\n' } }, -- Get reference text
+      { { 'out', 'Line 1\nLine 22\n' } },  -- Get reference text after 'index' update
+    }
+  ]])
+
+  edit(git_file_path)
+  eq(is_buf_enabled(0), true)
+  eq(get_buf_data(0).ref_text, 'Line 1\nLine 2\n')
+
+  -- Emulate change in 'index' as it is done by Git
+  mock_count_set_ref_text()
+
+  -- Should react to change in 'index' file by reasking reference text
+  -- These reactions should be debounced (currently by 50 ms)
+  mock_change_git_index()
+  sleep(50 - 20)
+  -- - No changes as less than 50 ms has passed
+  eq(get_buf_data(0).ref_text, 'Line 1\nLine 2\n')
+  eq(child.lua_get('_G.n_set_ref_text_calls'), 0)
+
+  mock_change_git_index()
+  sleep(50 - 20)
+  eq(child.lua_get('_G.n_set_ref_text_calls'), 0)
+  sleep(20 + 5)
+  eq(get_buf_data(0).ref_text, 'Line 1\nLine 22\n')
+  eq(child.lua_get('_G.n_set_ref_text_calls'), 1)
+
+  -- Should react __only__ to changes in 'index' file
+  child.fn.writefile({}, git_git_dir .. '/index.lock')
+  sleep(50 + 5)
+  eq(child.lua_get('_G.n_set_ref_text_calls'), 1)
+
+  -- Should stop reacting after detaching
+  disable()
+  mock_change_git_index()
+  sleep(10 + 5)
+  eq(child.lua_get('_G.n_set_ref_text_calls'), 1)
+
+  -- Should make proper process spawns
+  local ref_git_spawn_log = {
+    { args = { 'rev-parse', '--path-format=absolute', '--git-dir' }, cwd = git_dir_path },
+    { args = { 'show', ':0:./' .. git_file_basename }, cwd = git_dir_path },
+    { args = { 'show', ':0:./' .. git_file_basename }, cwd = git_dir_path },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['gen_source']['git()']['attaches only in readable file buffers'] = function()
+  edit('not-real-file')
+  eq(is_buf_enabled(0), false)
+
+  set_buf(new_scratch_buf())
+  eq(is_buf_enabled(0), false)
+
+  child.lua('vim.fn.filereadable = function() return 0 end')
+  edit(test_file_path)
+  eq(is_buf_enabled(0), false)
+
+  -- No spawns should be needed for these early checks
+  validate_git_spawn_log({})
+end
+
+T['gen_source']['git()']['works with errors during attach'] = function()
+  -- Like if file is not in Git repo or there is no `git` executable
+  child.lua([[
+    _G.stdio_queue = {
+      { {} }, -- Get path to repo's Git dir
+    }
+    _G.process_mock_data = { { exit_code = 1 } }
+  ]])
+
+  edit(git_file_path)
+  eq(is_buf_enabled(0), false)
+end
+
+T['gen_source']['git()']['works with errors during getting reference text'] = function()
+  -- Should attach but reset ref text (to react if it *gets* in index)
+  child.lua([[
+    _G.stdio_queue = {
+      { { 'out', _G.git_dir } }, -- Get path to repo's Git dir
+      { {} },                    -- Get reference text
+    }
+    _G.process_mock_data = { [2] = { exit_code = 1 } }
+  ]])
+
+  edit(git_file_path)
+  eq(is_buf_enabled(0), true)
+  eq(get_buf_data(0).ref_text, nil)
+
+  local ref_git_spawn_log = {
+    { args = { 'rev-parse', '--path-format=absolute', '--git-dir' }, cwd = git_dir_path },
+    { args = { 'show', ':0:./' .. git_file_basename }, cwd = git_dir_path },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['gen_source']['git()']['reacts to file rename'] = function()
+  -- Should disable/enable file because it might have changed Git repo
+  child.lua([[
+    _G.stdio_queue = {
+      { { 'out', _G.git_dir } },         -- Get path to repo's Git dir
+      { { 'out', 'Line 1\nLine 2\n' } }, -- Get reference text
+      { { 'out', vim.fn.getcwd() } },    -- Get path to repo's Git dir after rename
+      { { 'out', 'Hello\nWorld\n' } },   -- Get reference text after rename
+    }
+  ]])
+
+  edit(git_file_path)
+  eq(is_buf_enabled(0), true)
+  eq(get_buf_data(0).ref_text, 'Line 1\nLine 2\n')
+
+  child.api.nvim_buf_set_name(0, test_file_path)
+
+  local ref_git_spawn_log = {
+    { args = { 'rev-parse', '--path-format=absolute', '--git-dir' }, cwd = git_dir_path },
+    { args = { 'show', ':0:./' .. 'file-in-git' }, cwd = git_dir_path },
+    { args = { 'rev-parse', '--path-format=absolute', '--git-dir' }, cwd = test_dir_absolute },
+    { args = { 'show', ':0:./' .. 'file' }, cwd = test_dir_absolute },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  eq(is_buf_enabled(0), true)
+  eq(get_buf_data(0).ref_text, 'Hello\nWorld\n')
+end
+
+T['gen_source']['git()']['should try attaching same buffer exactly once'] = function()
+  -- If buffer was not attached on `BufEnter` after it tried, then it should
+  -- stop trying. This is an example of when buffer's file is not in Git repo.
+  -- Should disable/enable file because it might have changed Git repo
+  child.lua([[
+    _G.stdio_queue = {
+      { {} }, -- Get path to repo's Git dir
+    }
+    _G.process_mock_data = { { exit_code = 1 } }
+  ]])
+
+  edit(test_file_path)
+  local init_buf = get_buf()
+  eq(is_buf_enabled(0), false)
+
+  -- Simulate `BufEnter`
+  set_buf(new_scratch_buf())
+  set_buf(init_buf)
+  eq(is_buf_enabled(0), false)
+
+  -- Spawn should be done only once (on the first try)
+  local ref_git_spawn_log = {
+    { args = { 'rev-parse', '--path-format=absolute', '--git-dir' }, cwd = test_dir_absolute },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
 
 T['gen_source']['save()'] = new_set()
 
-T['gen_source']['save()']['works'] = function() MiniTest.skip() end
+T['gen_source']['save()']['works'] = function()
+  child.lua('MiniDiff.config.source = MiniDiff.gen_source.save()')
+  edit(test_file_path)
+  local init_lines = get_lines()
+  MiniTest.finally(function() child.fn.writefile(init_lines, test_file_path) end)
+
+  local validate_ref_text = function(ref) eq(get_buf_data(0).ref_text, ref) end
+
+  -- Should return proper structure
+  eq(
+    child.lua_get('vim.tbl_map(type, MiniDiff.config.source)'),
+    { attach = 'function', detach = 'function', name = 'string' }
+  )
+  eq(child.lua_get('MiniDiff.config.source.name'), 'save')
+
+  -- Should update reference text on save
+  validate_ref_text('aaa\nuuu\n')
+  type_keys('G', 'o', 'vvv', '<Esc>')
+  sleep(small_time + 5)
+  validate_ref_text('aaa\nuuu\n')
+  child.cmd('write')
+  validate_ref_text('aaa\nuuu\nvvv\n')
+
+  -- Should still work after `:edit`
+  child.cmd('edit')
+  validate_ref_text('aaa\nuuu\nvvv\n')
+
+  -- Should update reference text when file change outside buffer
+  child.fn.writefile({ 'bbb', 'xxx' }, test_file_path)
+  local cur_changedtick = child.api.nvim_buf_get_changedtick(0)
+  child.cmd('silent! checktime')
+  -- - Wait for `:checktime` itself to process
+  vim.wait(500, function() return child.api.nvim_buf_get_changedtick(0) ~= cur_changedtick end, 10)
+  validate_ref_text('bbb\nxxx\n')
+
+  -- Should clean up buffer autocommands on detach
+  local has_save_autocommands = function()
+    return #child.api.nvim_get_autocmds({ event = 'BufWritePost', buffer = get_buf() }) > 0
+  end
+  eq(has_save_autocommands(), true)
+  disable()
+  eq(has_save_autocommands(), false)
+end
 
 T['do_hunks()'] = new_set()
 
@@ -637,6 +1083,7 @@ local do_hunks = forward_lua('MiniDiff.do_hunks')
 
 T['do_hunks()']['works'] = function()
   set_lines({ 'aaa', 'BBB' })
+  child.bo.modified = false
   set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
 
   -- Apply
@@ -651,6 +1098,7 @@ T['do_hunks()']['works'] = function()
   -- Reset
   do_hunks(0, 'reset')
   eq(get_lines(), { 'AAA', 'BBB', 'CCC' })
+  eq(child.bo.modified, false)
 end
 
 T['do_hunks()']['works with no hunks'] = function()
@@ -855,6 +1303,34 @@ T['do_hunks()']['can act on hunk part'] = function()
   -- Reset
   do_hunks(0, 'reset', { line_start = 2, line_end = 4 })
   eq(get_lines(), { 'uuu', 'aaa', 'BBB', 'CCC', 'ccc' })
+end
+
+T['do_hunks()']["preserves 'modified' during reset"] = function()
+  set_lines({ 'aaa', 'BBB' })
+  set_ref_text(0, { 'AAA', 'BBB', 'CCC' })
+
+  -- Reset
+  do_hunks(0, 'reset')
+  eq(get_lines(), { 'AAA', 'BBB', 'CCC' })
+  eq(child.bo.modified, true)
+end
+
+T['do_hunks()']["writes non-'modified' file explicitly after reset"] = function()
+  edit(test_file_path)
+  local init_lines = get_lines()
+  MiniTest.finally(function() child.fn.writefile(init_lines, test_file_path) end)
+
+  type_keys('G', 'o', 'vvv', '<Esc>')
+  child.cmd('write')
+  local new_ref_lines = get_lines()
+  eq(child.fn.readfile(test_file_path), new_ref_lines)
+
+  set_ref_text(0, init_lines)
+  do_hunks(0, 'reset')
+  sleep(10)
+  eq(get_lines(), init_lines)
+  eq(child.fn.readfile(test_file_path), init_lines)
+  eq(child.bo.modified, false)
 end
 
 T['do_hunks()']['validates arguments'] = function()
@@ -1174,7 +1650,7 @@ T['Auto enable']['works after `:edit`'] = function()
     MiniDiff.config.source = { attach = function(buf_id) MiniDiff.set_ref_text(buf_id, { 'aaa' }) end }
   ]])
 
-  child.cmd('edit ' .. child.fn.fnameescape(test_dir_absolute .. '/file'))
+  edit(test_file_path)
   eq(is_buf_enabled(0), true)
   local ref_hunks = { { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0, type = 'add' } }
   eq(get_buf_hunks(0), ref_hunks)
@@ -1326,6 +1802,25 @@ T['Visualization']['reacts to hunk lines delete/move'] = function()
     { line = 2, sign_hl_group = 'MiniDiffSignAdd', sign_text = '▒ ' },
     { line = 3, sign_hl_group = 'MiniDiffSignAdd', sign_text = '▒ ' },
   })
+  child.expect_screenshot()
+end
+
+T['Visualization']['forces redraw when it is needed'] = function()
+  child.set_size(10, 15)
+
+  child.api.nvim_set_keymap('n', '<C-y>', '<Cmd>normal! yyp<CR>', {})
+  local ctrls_rhs = '<Cmd>lua MiniDiff.set_ref_text(0, vim.api.nvim_buf_get_lines(0, 0, -1, false))<CR>'
+  child.api.nvim_set_keymap('n', '<C-s>', ctrls_rhs, {})
+
+  set_lines({ 'aaa' })
+  set_ref_text(0, { 'aaa' })
+
+  type_keys('gg', '<C-y>')
+  sleep(small_time + 5)
+  validate_viz_extmarks(0, { { line = 2, sign_hl_group = 'MiniDiffSignAdd', sign_text = '▒ ' } })
+  child.expect_screenshot()
+
+  type_keys('<C-s>')
   child.expect_screenshot()
 end
 

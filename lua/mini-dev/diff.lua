@@ -1,13 +1,6 @@
 -- TODO:
 --
 -- Code:
--- - When moving added line upwards, extmark should not temporarily shift down.
---
--- - `gen_source.file` to compare against some fixed file?
---
--- - `export_hunks(format, opts)` which returns hunks in some format.
---   For example, as an array for `vim.fn.setqflist()` or as patch lines for
---   writing to the file.
 --
 -- Docs:
 --
@@ -18,25 +11,6 @@
 --   changed. This reduces visual noise.
 --
 -- Tests:
--- - Updates if no redraw seemingly is done. Example for `save` source: `yyp`
---   should add green highlighting and `<C-s>` should remove it.
---
--- - Deleting last line should be visualized.
---
--- - Changing line which is already visualizing deleted (below) line should
---   result into visualizing line as "change" and not "delete".
---
--- - Git source:
---     - Manage "not in index" files by not showing diff visualization.
---     - Manage "neither in index nor on disk" (for example, after checking out
---       commit which does not yet have file created).
---     - Manage "relative can not be used outside working tree" (for example,
---       when opening file inside '.git' directory).
---     - Manage renaming file while having `git` attached, as this might
---       disable tracking due to "neither in index nor on disk" error.
---     - Should (permanently) not try to reattach on `BufEnter` in buffers
---       which are not in Git repo. If path started being in Git repo, wipeout
---       buffer and reopen path in new buffer.
 
 --- *mini.diff* Work with diff hunks
 --- *MiniDiff*
@@ -269,6 +243,12 @@ MiniDiff.toggle_overlay = function(buf_id)
   H.schedule_diff_update(buf_id, 0)
 end
 
+MiniDiff.export = function(format, opts)
+  opts = vim.tbl_deep_extend('force', { scope = 'all' }, opts or {})
+  if format == 'qf' then return H.export_qf(opts) end
+  H.error('`format` should be one of "qf".')
+end
+
 -- `ref_text` can be `nil` indicating that source did not react (yet).
 MiniDiff.get_buf_data = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
@@ -332,11 +312,7 @@ MiniDiff.gen_source.git = function()
   end
 
   local apply_hunks = function(buf_id, hunks)
-    if H.git_cache[buf_id] == nil then H.error('Buffer is not inside Git repo.') end
-    local path = vim.api.nvim_buf_get_name(buf_id)
-    if path == '' then return nil end
-
-    local path_data = H.git_get_path_data(path)
+    local path_data = H.git_get_path_data(vim.api.nvim_buf_get_name(buf_id))
     if path_data == nil or path_data.rel_path == nil then return end
     local patch = H.git_format_patch(buf_id, hunks, path_data)
     H.git_apply_patch(path_data, patch)
@@ -1169,6 +1145,24 @@ H.hunk_order = function(a, b)
   return a.buf_start < b.buf_start or (a.buf_start == b.buf_start and a.type == 'change')
 end
 
+-- Export ---------------------------------------------------------------------
+H.export_qf = function(opts)
+  local buffers = opts.scope == 'current' and { vim.api.nvim_get_current_buf() } or vim.tbl_keys(H.cache)
+  buffers = vim.tbl_filter(vim.api.nvim_buf_is_valid, buffers)
+  table.sort(buffers)
+
+  local res = {}
+  for _, buf_id in ipairs(buffers) do
+    local filename = vim.api.nvim_buf_get_name(buf_id)
+    for _, h in ipairs(H.cache[buf_id].hunks) do
+      local entry = { bufnr = buf_id, filename = filename, type = h.type:sub(1, 1):upper() }
+      entry.lnum, entry.end_lnum = H.get_hunk_buf_range(h)
+      table.insert(res, entry)
+    end
+  end
+  return res
+end
+
 -- Git ------------------------------------------------------------------------
 H.git_start_watching_index = function(buf_id, path)
   -- NOTE: Watching single 'index' file is not enough as staging by Git is done
@@ -1186,24 +1180,26 @@ H.git_start_watching_index = function(buf_id, path)
     H.git_cache[buf_id] = {}
   end)
 
-  local stdout_feed = {}
+  local process, stdout_feed = nil, {}
   local on_exit = function(exit_code)
+    process:close()
+
     -- Watch index only if there was no error retrieving path to it
     if exit_code ~= 0 or stdout_feed[1] == nil then return on_not_in_git() end
 
     -- Set up index watching
-    local index_path = table.concat(stdout_feed, ''):gsub('\n+$', '')
-    H.git_setup_index_watch(buf_id, index_path)
+    local git_dir_path = table.concat(stdout_feed, ''):gsub('\n+$', '')
+    H.git_setup_index_watch(buf_id, git_dir_path)
 
     -- Set reference text immediately
     H.git_set_ref_text(buf_id)
   end
 
-  vim.loop.spawn('git', spawn_opts, on_exit)
+  process = vim.loop.spawn('git', spawn_opts, on_exit)
   H.git_read_stream(stdout, stdout_feed)
 end
 
-H.git_setup_index_watch = function(buf_id, index_path)
+H.git_setup_index_watch = function(buf_id, git_dir_path)
   local buf_fs_event, timer = vim.loop.new_fs_event(), vim.loop.new_timer()
   local buf_git_set_ref_text = function() H.git_set_ref_text(buf_id) end
 
@@ -1211,9 +1207,9 @@ H.git_setup_index_watch = function(buf_id, index_path)
     if filename ~= 'index' then return end
     -- Debounce to not overload during incremental staging (like in script)
     timer:stop()
-    timer:start(10, 0, buf_git_set_ref_text)
+    timer:start(50, 0, buf_git_set_ref_text)
   end
-  buf_fs_event:start(index_path, { recursive = false }, watch_index)
+  buf_fs_event:start(git_dir_path, { recursive = false }, watch_index)
 
   H.git_invalidate_cache(H.git_cache[buf_id])
   H.git_cache[buf_id] = { fs_event = buf_fs_event, timer = timer }
@@ -1231,8 +1227,10 @@ H.git_set_ref_text = vim.schedule_wrap(function(buf_id)
   local stdout = vim.loop.new_pipe()
   local spawn_opts = { args = { 'show', ':0:./' .. basename }, cwd = cwd, stdio = { nil, stdout, nil } }
 
-  local stdout_feed = {}
+  local process, stdout_feed = nil, {}
   local on_exit = function(exit_code)
+    process:close()
+
     -- Unset reference text in case of any error. This results into not showing
     -- hunks at all. Possible reasons to do so:
     -- - 'Not in index' files (new, ignored, etc.).
@@ -1247,18 +1245,21 @@ H.git_set_ref_text = vim.schedule_wrap(function(buf_id)
     buf_set_ref_text(text)
   end
 
-  vim.loop.spawn('git', spawn_opts, on_exit)
+  process = vim.loop.spawn('git', spawn_opts, on_exit)
   H.git_read_stream(stdout, stdout_feed)
 end)
 
 H.git_get_path_data = function(path)
+  -- Get path data needed for proper patch header
   local cwd, basename = vim.fn.fnamemodify(path, ':h'), vim.fn.fnamemodify(path, ':t')
   local stdout = vim.loop.new_pipe()
   local args = { 'ls-files', '--full-name', '--format=%(objectmode) %(path)', '--', basename }
   local spawn_opts = { args = args, cwd = cwd, stdio = { nil, stdout, nil } }
 
-  local stdout_feed, res, did_exit = {}, { cwd = cwd }, false
+  local process, stdout_feed, res, did_exit = nil, {}, { cwd = cwd }, false
   local on_exit = function(exit_code)
+    process:close()
+
     did_exit = true
     if exit_code ~= 0 then return end
     -- Parse data about path
@@ -1266,7 +1267,7 @@ H.git_get_path_data = function(path)
     res.mode_bits, res.rel_path = string.match(out, '^(%d+) (.*)$')
   end
 
-  vim.loop.spawn('git', spawn_opts, on_exit)
+  process = vim.loop.spawn('git', spawn_opts, on_exit)
   H.git_read_stream(stdout, stdout_feed)
   vim.wait(1000, function() return did_exit end, 1)
   return res
