@@ -327,6 +327,12 @@ T['setup()']['auto enables in all existing buffers'] = function()
   eq(is_buf_enabled(buf_id_bad_2), false)
 end
 
+T['setup()']['can not create mappings'] = function()
+  child.api.nvim_del_keymap('n', 'gh')
+  load_module({ mappings = { apply = '' } })
+  eq(child.fn.maparg('gh', 'n'), '')
+end
+
 T['enable()'] = new_set({ hooks = { pre_case = setup_enabled_buffer } })
 
 local enable = forward_lua('MiniDiff.enable')

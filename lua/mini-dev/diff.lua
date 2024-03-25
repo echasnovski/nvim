@@ -4,12 +4,6 @@
 --
 -- Docs:
 --
--- - How to make mappings for "apply/reset in current line".
--- - Virtual lines above line 1 need manual scroll (with `<C-y>`).
--- - Word diff has non-zero context. This means that changed characters which
---   are near enough are visualized as the whole range between them is also
---   changed. This reduces visual noise.
---
 -- Tests:
 
 --- *mini.diff* Work with diff hunks
@@ -21,21 +15,30 @@
 ---
 --- Features:
 ---
---- - Show "as you type" 1-way diff by visualizing diff hunks (linewise parts
----   of text that are different between current and reference versions).
----   Visualization can be with colored signs, colored line numbers, etc.
+--- - Visualize difference interactively (updates as you type) between buffer text
+---   and its configurable reference. This is done per line showing whether it
+---   is inside added, changed, or deleted part of difference (called hunk).
+---   Visualization can be with customizable colored signs or line numbers.
 ---
---- - Special toggleable view with detailed hunk information directly in text area.
+--- - Special toggleable overlay view with more hunk details inside text area.
+---   See |MiniDiff.toggle_overlay()|.
 ---
---- - Completely configurable and extensible source of text to compare against:
----   text at latest save, file state from Git, etc.
+--- - Completely configurable per buffer source of reference text used to keep
+---   it up to date and define interactions with it.
+---   See |MiniDiff-source-specification|.
+---   By default uses Git index of buffer file. See |MiniDiff.gen_source|.
 ---
---- - Manage diff hunks: navigate, apply, textobject, and more.
+--- - Configurable mappings to manage diff hunks:
+---     - Apply and reset hunks inside region (selected visually or with
+---       a dot-repeatable operator).
+---     - "Hunk under cursor" textobject which can be used as operator target.
+---     - Navigate to first/previous/next/last hunk. See |MiniDiff.goto_hunk()|.
 ---
 --- What it doesn't do:
 ---
---- - Provide functionality to work directly with Git outside of working with
----   Git-related hunks (see |MiniDiff.gen_source.git()|).
+--- - Provide functionality to work directly with Git outside of visualizing
+---   and staging (applying) hunks; needs (default) Git source. In particular,
+---   unstaging hunks is not supported. See |MiniDiff.gen_source.git()|.
 ---
 --- Sources with more details:
 --- - |MiniDiff-overview|
@@ -44,27 +47,27 @@
 --- # Setup ~
 ---
 --- This module needs a setup with `require('mini.diff').setup({})` (replace
---- `{}` with your `config` table). It will create global Lua table `MiniDeps`
---- which you can use for scripting or manually (with `:lua MiniDeps.*`).
+--- `{}` with your `config` table). It will create global Lua table `MiniDiff`
+--- which you can use for scripting or manually (with `:lua MiniDiff.*`).
 ---
---- See |MiniDeps.config| for `config` structure and default values.
+--- See |MiniDiff.config| for `config` structure and default values.
 ---
 --- You can override runtime config settings locally to buffer inside
 --- `vim.b.minidiff_config` which should have same structure as
---- `MiniDeps.config`. See |mini.nvim-buffer-local-config| for more details.
+--- `MiniDiff.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons ~
 ---
 --- - 'lewis6991/gitsigns.nvim':
----     - Can display only Git diff hunks, while this module has extensible design.
+---     - Can display only Git hunks, while this module has extensible design.
 ---     - Provides more functionality to work with Git outside of hunks.
 ---       This module does not (by design).
 ---
 --- # Highlight groups ~
 ---
---- * `MiniDiffSignAdd`     - add hunks with gutter view.
---- * `MiniDiffSignChange`  - change hunks with gutter view.
---- * `MiniDiffSignDelete`  - delete hunks with gutter view.
+--- * `MiniDiffSignAdd`     - "add" hunks visualization.
+--- * `MiniDiffSignChange`  - "change" hunks visualization.
+--- * `MiniDiffSignDelete`  - "delete" hunks visualization.
 --- * `MiniDiffOverAdd`     - added text shown in overlay.
 --- * `MiniDiffOverChange`  - changed text shown in overlay.
 --- * `MiniDiffOverContext` - context text shown in overlay.
@@ -72,11 +75,51 @@
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 
+--- # Diffs and hunks ~
+---
+--- What is diff?
+---                                                    *MiniDiff-hunk-specification*
+--- What is hunk? What its data structure?
+---
+--- # Life cycle ~
+---
+--- - Tries to enable in text buffers on every enter.
+--- - During enable, tries to attach source to current buffer. Which in turn
+---   computes, sets, and updates reference text when needed.
+--- - On every text change, diff computation is scheduled in debounced fashion
+---   after customizable delay (200 ms by default).
+--- - When diff is computed, visualization is done based on configurable style:
+---   either by placing colored text in sign column or coloring line numbers.
+---
+--- Notes:
+--- - Use |:edit| to reset (disable and reenable) current buffer.
+---
+--- # Overlay ~
+---
+--- What is overlay?
+---
+--- What is word diff for "change" hunks and how it is useful.
+---
+--- - Word diff has non-zero context width. This means if changed characters
+---   are close enough, whole range between them is also colored. This usually
+---   reduces visual noise.
+--- - Virtual lines above line 1 (like deleted or changed lines) need manual
+---   scroll to become visible (with `<C-y>`).
+---
+--- # Mappings ~
+---
+--- Examples:
+--- - `vip` followed by `gh` / `gH` applies/resets hunks inside current paragraph.
+---   Same can be achieved in operator form `ghip` / `gHip`, which has the
+---   advantage of being dot-repeatable (see |single-repeat|).
+--- - `gh_` / `gH_` applies/resets current line (even if it is not a full hunk).
+--- - `ghgh` / `gHgh` applies/resets hunk under cursor.
+--- - `dgh` deletes hunk under cursor.
+---
+--- # Statusline component ~
+---
+--- # User events ~
 ---@tag MiniDiff-overview
-
----@tag MiniDiff-plugin-specification
-
----@tag MiniDiff-events
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -92,9 +135,7 @@ H = {}
 
 --- Module setup
 ---
---- Calling this function creates user commands described in |MiniDeps-commands|.
----
----@param config table|nil Module config table. See |MiniDeps.config|.
+---@param config table|nil Module config table. See |MiniDiff.config|.
 ---
 ---@usage `require('mini.deps').setup({})` (replace `{}` with your `config` table).
 MiniDiff.setup = function(config)
@@ -122,6 +163,111 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # View ~
+---
+--- `config.view` contains settings for how diff hunks are visualized.
+---
+--- `view.style` is a string defining visualization style. Can be one of "sign"
+--- (as a colored sign in a |sign-column|) or "number" (colored line number).
+--- Default: "number" if |number| option is enabled, "sign" otherwise.
+--- Note: with "sign" style it is usually better to have |signcolumn| always shown.
+---
+--- `view.signs` is a table with one or two character strings used as signs for
+--- corresponding ("add", "change", "delete") hunks.
+--- Default: all hunks use "▒" character resulting in a contiguous colored lines.
+---
+--- `view.priority` is a number with priority used for visualization and
+--- overlay |extmarks|.
+--- Default: one less than `user` in |vim.highlight.priorities| (to have higher
+--- priority than automated extmarks but not with user enabled ones).
+---
+---                                                  *MiniDiff-source-specification*
+--- # Source ~
+---
+--- `config.source` is a table defining how reference text is managed in
+--- a particular buffer. It can have the following fields:
+--- - <attach> `(function)` - callable which defines how and when reference
+---   text should be updated inside a particular buffer. It is called
+---   inside |MiniDiff.enable()| with a buffer identifier as a single argument.
+---
+---   Should execute logic which results into |MiniDiff.set_ref_text()| calls
+---   when reference text for buffer needs to be updated. For example, inside
+---   callback for an |autocommand| or file watcher (see |watch-file|).
+---
+---   For example, default Git source watches when ".git/index" file is changed
+---   and computes reference text as the one from Git index for current file.
+---
+---   Can return `false` to force buffer to not be enabled. If this can not be
+---   inferred immediately (for example, due to asynchronous execution), should
+---   call |MiniDiff.disable()| later to disable buffer.
+---
+---   Should be always supplied.
+---
+--- - <name> `(string|nil)` - source name. String "unknown" is used if not supplied.
+---
+--- - <detach> `(function|nil)` - callable which cleanup action to be done when
+---   buffer is disabled. It is called inside |MiniDiff.disable()| with a buffer
+---   identifier as a single argument.
+---
+---   If not supplied, nothing is done during detaching.
+---
+--- - <apply_hunks> `(function|nil)` - callable which defines how hunks are applied.
+---   It is called with buffer identifier as first argument and array of hunks
+---   (see |MiniDiff-hunk-specification|) as second. It should eventually update
+---   reference text: either by explicitly calling |MiniDiff.set_ref_text()| or
+---   performing action triggering its call.
+---
+---   For example, default Git source computes patch based on the hunks and
+---   applies inside file's git repo.
+---
+---   If not supplied, applying hunks throws an error.
+---
+--- Default: |MiniDiff.gen_source.git()|.
+---
+--- # Delay ~
+---
+--- `config.delay` contains settings for delays in asynchronous visualization.
+---
+--- `delay.text_change` is a number (in ms) defining how long to wait after latest
+--- text change (in debounced fashion) before updating diff and visualization.
+--- Default: 200.
+---
+--- # Mappings ~
+---
+--- `config.mappings` contains keys for which mappings are created
+--- during |MiniDiff.setup()|.
+---
+--- `mappings.apply` keys can be used to apply hunks inside visual/operator region.
+--- What exactly "apply hunks" means depends on the source and its `apply_hunks()`.
+--- For example, in default Git source it means stage hunks.
+---
+--- `mappings.reset` keys can be used to reset hunks inside visual/operator region.
+--- Reset means replacing buffer text in region with corresponding reference text.
+---
+--- `mappings.textobject` keys define "hunk range under cursor" textobject
+--- which can be used in Operator-pending mode as target for operator (like
+--- |d|, |y|, apply/reset hunks, etc.). It is "hunk range" in a sense that
+--- contiguous back-to-back hunks are considered as a same hunk range.
+---
+--- `mappings.goto_first` / `mappings.goto_prev` / `mappings.goto_next` /
+--- `mappings.goto_last` keys can be used to navigate to first / previous / next /
+--- last hunk range in the current buffer.
+---
+--- # Options ~
+---
+--- `config.options` contains various customization options.
+---
+--- `options.algorithm` is a string defining which diff algorithm to use.
+--- Default: "historgram". See |vim.diff()| for possible values.
+---
+--- `options.indent_heuristic` is a boolean defining whether to use
+--- indent heuristic for a (possibly) more naturally aligned hunks.
+--- Default: true.
+---
+--- `options.linematch` is a number defining hunk size for which a second
+--- stage diff is executed for a better aligned and more granular hunks.
+--- Note: present only in Neovim>=0.9.
+--- Default: 60. See |vim.diff()| and 'diffopt' for more details.
 MiniDiff.config = {
   -- Options for how hunks are visualized
   view = {
@@ -131,11 +277,12 @@ MiniDiff.config = {
     -- Signs used for hunks with 'sign' view
     signs = { add = '▒', change = '▒', delete = '▒' },
 
-    -- Priority of used extmarks
+    -- Priority of used visualization extmarks
     priority = vim.highlight.priorities.user - 1,
   },
 
-  -- Source for how to reference text is computed/updated/etc.
+  -- Source for how reference text is computed/updated/etc
+  -- Uses Git index by default
   source = nil,
 
   -- Delays (in ms) defining asynchronous visualization process
@@ -152,10 +299,10 @@ MiniDiff.config = {
     -- Reset hunks inside a visual/operator region
     reset = 'gH',
 
-    -- Hunk range textobject
+    -- Hunk range textobject to be used inside operator
     textobject = 'gh',
 
-    -- Go to Hunk range in corresponding direction
+    -- Go to hunk range in corresponding direction
     goto_first = '[H',
     goto_prev = '[h',
     goto_next = ']h',
@@ -167,10 +314,10 @@ MiniDiff.config = {
     -- Diff algorithm. See `:h vim.diff()`.
     algorithm = 'histogram',
 
-    -- Whether to use "indent heuristic".  See `:h vim.diff()`.
+    -- Whether to use "indent heuristic". See `:h vim.diff()`.
     indent_heuristic = true,
 
-    -- The amount of second-stage diff to align lines (on Neovim>=0.9)
+    -- The amount of second-stage diff to align lines (in Neovim>=0.9)
     linematch = 60,
   },
 }
