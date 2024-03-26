@@ -31,7 +31,7 @@
 --- - Configurable mappings to manage diff hunks:
 ---     - Apply and reset hunks inside region (selected visually or with
 ---       a dot-repeatable operator).
----     - "Hunk under cursor" textobject which can be used as operator target.
+---     - "Hunk range under cursor" textobject to be used as operator target.
 ---     - Navigate to first/previous/next/last hunk. See |MiniDiff.goto_hunk()|.
 ---
 --- What it doesn't do:
@@ -77,36 +77,104 @@
 
 --- # Diffs and hunks ~
 ---
---- What is diff?
+--- The "diff" (short for "difference") is a result of computing how two text
+--- strings differ from one another. This is done on per line basis, i.e. the
+--- goal is to compute sequences of lines common to both files, interspersed
+--- with groups of differing lines (called "hunks").
+---
+--- Although computing diff is a general concept (used on its own, in Git,
+--- etc.), this module computes difference between current text in a buffer and
+--- some reference text which is kept up to date specifically for that buffer.
+--- For example, default reference text is computed as file content in Git index.
+--- This can be customized by using source config setting
+--- (see |MiniDiff-source-specification|).
+---
 ---                                                    *MiniDiff-hunk-specification*
---- What is hunk? What its data structure?
+--- Hunk describes two sets (one from buffer text, one - from reference) of
+--- consecutive lines which are different. In this module hunk is stored as
+--- a table with the following fields:
+---
+--- - <buf_start> `(number)` - start of hunk buffer lines. First line is 1, while
+---   value can be 0 in case first reference lines are deleted.
+---
+--- - <buf_count> `(number)` - number of consecutive buffer lines. Can be 0 in
+---   case reference lines are deleted.
+---
+--- - <ref_start> `(number)` - start of hunk reference lines. First line is 1, while
+---   value can be 0 in case lines are added before first reference line.
+---
+--- - <ref_count> `(number)` - number of consecutive reference lines. Can be 0 in
+---   case buffer lines are added.
+---
+--- - <type> `(string)` - hunk type. Can be one of:
+---     - "add" - lines are present in buffer but absent in reference.
+---     - "change" - lines are present in both buffer and reference.
+---     - "delete" - lines are absent in buffer but present in reference.
 ---
 --- # Life cycle ~
 ---
---- - Tries to enable in text buffers on every enter.
---- - During enable, tries to attach source to current buffer. Which in turn
----   computes, sets, and updates reference text when needed.
+--- - When entering proper (not already enabled, valid, showing text) buffer,
+---   it is attempted to be enabled for diff processing.
+--- - During enabling, attempt attaching source. This should set up how reference
+---   text is kept up to date.
 --- - On every text change, diff computation is scheduled in debounced fashion
 ---   after customizable delay (200 ms by default).
---- - When diff is computed, visualization is done based on configurable style:
----   either by placing colored text in sign column or coloring line numbers.
+--- - After the diff is computed, do the following:
+---     - Update basic visualization based on configurable style: either by
+---       placing colored text in sign column or coloring line numbers. Colors
+---       for both styles are defined per hunk type by corresponding `MiniDiffSign*`
+---       highlight group (see |MiniDiff|) and sign text for "sign" style can
+---       be configured in `view.signs` of |MiniDiff.config|.
+---     - Update overlay view.
+---     - Update `vim.b.minidiff_summary` and `vim.b.minidiff_summary_string`
+---       buffer-local variables. These can be used, for example, in statusline.
+---     - Trigger `MiniDiffUpdated` `User` event. It can be utilized like this: >
 ---
+---       local callback = function()
+---         -- Your logic goes here
+---       end
+---       local au_opts = { pattern = 'MiniDiffUpdated', callback = callback }
+---       vim.api.nvim_create_autocmd('User', au_opts)
+--- <
 --- Notes:
 --- - Use |:edit| to reset (disable and reenable) current buffer.
 ---
 --- # Overlay ~
 ---
---- What is overlay?
+--- Along with basic visualization, there is a special view called "overlay".
+--- It is meant for temporary overview of diff details and can be manually toggled
+--- via |MiniDiff.toggle_overlay()|.
 ---
---- What is word diff for "change" hunks and how it is useful.
+--- It shows more diff details inside text area, like:
 ---
+--- - Added buffer lines are highlighted with `MiniDiffOverAdd` highlight group.
+---
+--- - Deleted reference lines are shown as virtual text and highlighted with
+---   `MiniDiffOverDelete` highlight group.
+---
+--- - Changed reference lines are shown as virtual text and highlighted with
+---   `MiniDiffOverChange` highlight group.
+---
+---   "Change" hunks with equal number of buffer and reference lines have special
+---   treatment and show "word diff". Reference line is shown next to its buffer
+---   counterpart and only changed parts of both lines are highlighted with
+---   `MiniDiffOverChange`. The rest of reference line has `MiniDiffOverContext`
+---   highlighting.
+---   This usually is the case when `config.options.linematch` is enabled.
+---
+--- Notes:
 --- - Word diff has non-zero context width. This means if changed characters
 ---   are close enough, whole range between them is also colored. This usually
 ---   reduces visual noise.
 --- - Virtual lines above line 1 (like deleted or changed lines) need manual
----   scroll to become visible (with `<C-y>`).
+---   scroll to become visible (with |CTRL-Y|).
 ---
 --- # Mappings ~
+---
+--- This module provides mappings for common actions with diffs, like:
+--- - Apply and reset hunks.
+--- - "Hunk range under cursor" textobject.
+--- - Go to first/previous/next/last hunk range.
 ---
 --- Examples:
 --- - `vip` followed by `gh` / `gH` applies/resets hunks inside current paragraph.
@@ -115,11 +183,24 @@
 --- - `gh_` / `gH_` applies/resets current line (even if it is not a full hunk).
 --- - `ghgh` / `gHgh` applies/resets hunk under cursor.
 --- - `dgh` deletes hunk under cursor.
+--- - `[H` / `[h` / `]h` / `]H` navigate cursor to the first / previous / next /
+---   last hunk of the current buffer.
 ---
---- # Statusline component ~
----
---- # User events ~
+--- # Buffer-local variables ~
+---                                                          *MiniDiff-hunk-summary*
+--- Each enabled buffer has the following buffer-local variables which can be
+--- used in custom statuslines to show an overview of hunks in current buffer:
+--- - `vim.b.minidiff_summary` is table with the following fields:
+---     - `n_ranges` - number of hunk ranges (contiguous hunks are in one range).
+---     - `add` - number of added lines.
+---     - `change` - number of changed lines.
+---     - `delete` - number of deleted lines.
+--- - `vim.b.minidiff_summary_string` is a string representation of summary
+---   with a fixed format. It is expected to be used as is with alternative
+---   being to construct own from `vim.b.minidiff_summary`.
 ---@tag MiniDiff-overview
+
+---@alias __diff_buf_id number Target buffer identifier. Default: 0 for current buffer.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -129,9 +210,8 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
--- TODO: Remove before release
-MiniDiff = {}
-H = {}
+local MiniDiff = {}
+local H = {}
 
 --- Module setup
 ---
@@ -324,6 +404,8 @@ MiniDiff.config = {
 --minidoc_afterlines_end
 
 --- Enable diff tracking in buffer
+---
+---@param buf_id __diff_buf_id
 MiniDiff.enable = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
 
@@ -360,6 +442,8 @@ MiniDiff.enable = function(buf_id)
 end
 
 --- Disable diff tracking in buffer
+---
+---@param buf_id __diff_buf_id
 MiniDiff.disable = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
 
@@ -373,13 +457,19 @@ MiniDiff.disable = function(buf_id)
 end
 
 --- Toggle diff tracking in buffer
+---
+--- Enable if disabled, disable if enabled.
+---
+---@param buf_id __diff_buf_id
 MiniDiff.toggle = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   if H.is_buf_enabled(buf_id) then return MiniDiff.disable(buf_id) end
   return MiniDiff.enable(buf_id)
 end
 
---- Toggle visualization style in buffer
+--- Toggle overlay view in buffer
+---
+---@param buf_id __diff_buf_id
 MiniDiff.toggle_overlay = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   local buf_cache = H.cache[buf_id]
@@ -390,13 +480,39 @@ MiniDiff.toggle_overlay = function(buf_id)
   H.schedule_diff_update(buf_id, 0)
 end
 
+--- Export hunks
+---
+--- Get and convert hunks from current/all buffers.
+--- Example of use: >
+---
+---   -- Set quickfix list from all available hunks
+---   vim.fn.setqflist(MiniDiff.export('qf'))
+--- <
+---@param format string Output format. Currently only `"qf"` value is supported.
+---@param opts table|nil Options. Possible fields:
+---   - <scope> `(string)` - scope defining from which buffers to use hunks.
+---     One of "all" (all enabled buffers) or "current".
+---
+---@return table Result of export. Depends on the `format`:
+---   - If "qf", an array compatible with |setqflist()| and |setloclist()|.
 MiniDiff.export = function(format, opts)
   opts = vim.tbl_deep_extend('force', { scope = 'all' }, opts or {})
   if format == 'qf' then return H.export_qf(opts) end
   H.error('`format` should be one of "qf".')
 end
 
--- `ref_text` can be `nil` indicating that source did not react (yet).
+--- Get buffer data
+---
+---@param buf_id __diff_buf_id
+---
+---@return table|nil Table with buffer diff data or `nil` if buffer is not enabled.
+---   Table has the following fields:
+---   - <ref_text> `(string|nil)` - current value of reference text. Lines are
+---     separated with newline character (`'\n'`). Can be `nil` indicating that
+---     reference text was not yet set (for example, if source did not yet react).
+---   - <hunks> `(table)` - array of hunks. See |MiniDiff-hunk-specification|.
+---   - <hunk_summary> `(table)` - hunk summary. See |MiniDiff-hunk-summary|.
+---   - <config> `(table)` - config used for this particular buffer.
 MiniDiff.get_buf_data = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   local buf_cache = H.cache[buf_id]
@@ -409,13 +525,14 @@ MiniDiff.get_buf_data = function(buf_id)
   })
 end
 
---- Notes:
---- - Appends newline character at the end (if it is not there already).
----
----@param buf_id number|nil Buffer identifier. Default: `nil` for current buffer (same as 0).
+-- Set reference text for the buffer
+--
+---@param buf_id __diff_buf_id
 ---@param text string|table|nil New reference text. Either a string with `\n` used to
 ---   separate lines or array of lines. Use empty table to unset current
 ---   reference text (results into no hunks shown). Default: `{}`.
+---   Note: newline character is appended at the end (if it is not there already)
+---   for better diffs.
 MiniDiff.set_ref_text = function(buf_id, text)
   buf_id = H.validate_buf_id(buf_id)
   if type(text) == 'table' then text = #text > 0 and table.concat(text, '\n') or nil end
@@ -436,11 +553,22 @@ MiniDiff.set_ref_text = function(buf_id, text)
   H.schedule_diff_update(buf_id, 0)
 end
 
---- Generate builtin highlighters
+--- Generate builtin sources
 ---
 --- This is a table with function elements. Call to actually get highlighter.
 MiniDiff.gen_source = {}
 
+--- Git source
+---
+--- Default source. Uses file text from Git index as reference. This results in:
+--- - "Add" hunks are text present in current buffer, but not in index.
+--- - "Change" hunks are text modifying text already present in index.
+--- - "Delete" hunks are text deleted from index.
+---
+--- Applying hunks means staging, a.k.a adding to index. Note: there is no
+--- capability for unstaging hunks. Use full Git client for that.
+---
+---@return table Source. See |MiniDiff-source-specification|.
 MiniDiff.gen_source.git = function()
   local attach = function(buf_id)
     -- Try attaching to a buffer only once
@@ -468,6 +596,12 @@ MiniDiff.gen_source.git = function()
   return { name = 'git', attach = attach, detach = detach, apply_hunks = apply_hunks }
 end
 
+--- Latest save source
+---
+--- Uses text at latest save as the reference. This results into diff showing
+--- difference after the latest save.
+---
+---@return table Source. See |MiniDiff-source-specification|.
 MiniDiff.gen_source.save = function()
   local augroups = {}
   local attach = function(buf_id)
@@ -490,6 +624,25 @@ MiniDiff.gen_source.save = function()
   return { name = 'save', attach = attach, detach = detach }
 end
 
+--- Perform action on hunks in region
+---
+--- Compute hunks inside a target region (even for hunks only partially is
+--- inside it) and perform apply/reset operation on them.
+---
+--- Notes:
+--- - Whether hunk is inside a region is computed based on position of its
+---   buffer lines.
+--- - If "change" or "delete" is only partially inside a target region, all
+---   reference lines are used in computed "intersection" hunk.
+---
+--- Used directly in `config.mappings.apply` and `config.mappings.reset`.
+--- Usually there is no need to use it manually.
+---
+---@param buf_id __diff_buf_id
+---@param action string One of "apply" or "reset".
+---@param opts table|nil Options. Possible fields:
+---   - <line_start> `(number)` - start line of the region. Default: 1.
+---   - <line_end> `(number)` - start line of the region. Default: last buffer line.
 MiniDiff.do_hunks = function(buf_id, action, opts)
   buf_id = H.validate_buf_id(buf_id)
   local buf_cache = H.cache[buf_id]
