@@ -32,6 +32,10 @@ add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 -- Step one
 now(function() vim.cmd('colorscheme randomhue') end)
+-- Use this color scheme in 'mini.nvim' demos
+-- require('mini.hues').setup({ background = '#10262c', foreground = '#c0c8cb' })
+
+later(function() require('mini-dev.git').setup() end)
 
 now(function()
   local filterout_lua_diagnosing = function(notif_arr)
@@ -55,7 +59,13 @@ now(function()
   --stylua: ignore
   local active = function()
     local mode, mode_hl = statusline.section_mode({ trunc_width = 120 })
-    local git           = statusline.section_git({ trunc_width = 75 })
+    -- Try out 'mini.git'
+    local git_summary  = vim.b.minigit_summary
+    local git_head = ''
+    if vim.b.minigit_summary ~= nil then
+      git_head = git_summary.head == 'HEAD' and git_summary.head_commit:sub(1, 7) or git_summary.head
+      git_head = ' ' .. git_head
+    end
     -- Try out 'mini.diff'
     local diff_summary  = vim.b.minidiff_summary_string
     local diff          = diff_summary ~= nil and string.format(' %s', diff_summary == '' and '-' or diff_summary) or ''
@@ -67,7 +77,7 @@ now(function()
 
     return statusline.combine_groups({
       { hl = mode_hl,                  strings = { mode } },
-      { hl = 'MiniStatuslineDevinfo',  strings = { git, diff, diagnostics } },
+      { hl = 'MiniStatuslineDevinfo',  strings = { git_head, diff, diagnostics } },
       '%<', -- Mark general truncate point
       { hl = 'MiniStatuslineFilename', strings = { filename } },
       '%=', -- End left alignment
