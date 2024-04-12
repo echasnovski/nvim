@@ -1,8 +1,8 @@
 -- TODO:
 --
 -- Code:
--- - Setup git dir tracking more efficiently: one file watcher per git
---   directory (not per buffer).
+-- - Debug why `on_detach` is called without later auto enabling if Git
+--   directory changed outside of current process with later focus on Neovim.
 --
 -- Tests:
 --
@@ -42,10 +42,6 @@
 --- which you can use for scripting or manually (with `:lua MiniGit.*`).
 ---
 --- See |MiniGit.config| for `config` structure and default values.
----
---- You can override runtime config settings locally to buffer inside
---- `vim.b.minigit_config` which should have same structure as
---- `MiniGit.config`. See |mini.nvim-buffer-local-config| for more details.
 ---
 --- # Comparisons ~
 ---
@@ -131,13 +127,9 @@ MiniGit.enable = function(buf_id)
   local path = vim.api.nvim_buf_get_name(buf_id)
   if path == '' or vim.fn.filereadable(path) ~= 1 then return end
 
-  -- Register enabled buffer with cached data for performance
-  H.update_buf_cache(buf_id)
-
-  -- Create buffer autocommands
-  H.setup_buf_autocommands(buf_id)
-
-  -- Start Git tracking
+  -- Start tracking
+  H.cache[buf_id] = {}
+  H.setup_buf_behavior(buf_id)
   H.start_tracking(buf_id, path)
 end
 
@@ -151,9 +143,17 @@ MiniGit.disable = function(buf_id)
   if buf_cache == nil then return end
   H.cache[buf_id] = nil
 
+  -- Cleanup
   pcall(vim.api.nvim_del_augroup_by_id, buf_cache.augroup)
-  pcall(vim.loop.fs_event_stop, buf_cache.fs_event)
-  pcall(vim.loop.timer_stop, buf_cache.timer)
+
+  -- - Unregister buffer from repo watching with possibly more cleanup
+  local repo = buf_cache.repo
+  if H.repos[repo] == nil then return end
+  H.repos[repo].buffers[buf_id] = nil
+  if vim.tbl_count(H.repos[repo].buffers) == 0 then
+    H.teardown_repo_watch(repo)
+    H.repos[repo] = nil
+  end
 end
 
 --- Toggle Git tracking in buffer
@@ -178,11 +178,10 @@ MiniGit.get_buf_data = function(buf_id)
   local buf_cache = H.cache[buf_id]
   if buf_cache == nil then return nil end
   return vim.deepcopy({
-    config = buf_cache.config,
     head = buf_cache.head,
-    head_commit = buf_cache.head_commit,
-    git_dir = buf_cache.git_dir,
-    worktree = buf_cache.worktree,
+    head_name = buf_cache.head_name,
+    repo = buf_cache.repo,
+    root = buf_cache.root,
   })
 end
 
@@ -190,11 +189,19 @@ end
 -- Module default config
 H.default_config = MiniGit.config
 
--- Cache per enabled buffer
+-- Cache per enabled buffer. Values are tables with fields:
+-- - <augroup> - identifier of augroup defining buffer behavior.
+-- - <repo> - path to buffer's repo ('.git' directory).
+-- - <root> - path to worktree root.
+-- - <head> - full commit of `HEAD`.
+-- - <head_name> - short name of `HEAD` (`'HEAD'` for detached head).
 H.cache = {}
 
--- Cache for watching git directories (used as fields)
-H.git_dir_cache = {}
+-- Cache per repo (git directory) path. Values are tables with fields:
+-- - <fs_event> - `vim.loop` event for watching repo dir.
+-- - <timer> - timer to debounce repo changes.
+-- - <buffers> - map of buffers which should are part of repo.
+H.repos = {}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -235,11 +242,6 @@ H.is_disabled = function(buf_id)
   return vim.g.minidiff_disable == true or buf_disable == true
 end
 
-H.get_config = function(config, buf_id)
-  local buf_config = H.get_buf_var(buf_id, 'minidiff_config') or {}
-  return vim.tbl_deep_extend('force', MiniGit.config, buf_config, config or {})
-end
-
 H.get_buf_var = function(buf_id, name)
   if not vim.api.nvim_buf_is_valid(buf_id) then return nil end
   return vim.b[buf_id or 0][name]
@@ -262,25 +264,21 @@ H.validate_buf_id = function(x)
 end
 
 -- Enabling -------------------------------------------------------------------
-H.is_buf_enabled = function(buf_id) return H.cache[buf_id] ~= nil end
+H.is_buf_enabled = function(buf_id) return H.cache[buf_id] ~= nil and vim.api.nvim_buf_is_valid(buf_id) end
 
-H.update_buf_cache = function(buf_id)
-  local new_cache = H.cache[buf_id] or {}
-
-  local buf_config = H.get_config({}, buf_id)
-  new_cache.config = buf_config
-  new_cache.path = vim.api.nvim_buf_get_name(buf_id)
-
-  H.cache[buf_id] = new_cache
-end
-
-H.setup_buf_autocommands = function(buf_id)
+H.setup_buf_behavior = function(buf_id)
   local augroup = vim.api.nvim_create_augroup('MiniGitBuffer' .. buf_id, { clear = true })
   H.cache[buf_id].augroup = augroup
 
-  local buf_update = vim.schedule_wrap(function() H.update_buf_cache(buf_id) end)
-  local bufwinenter_opts = { group = augroup, buffer = buf_id, callback = buf_update, desc = 'Update buffer cache' }
-  vim.api.nvim_create_autocmd('BufWinEnter', bufwinenter_opts)
+  vim.api.nvim_buf_attach(buf_id, false, {
+    -- Called when buffer is unloaded from memory (`:h nvim_buf_detach_event`),
+    -- **including** `:edit` command. Together with auto enabling it makes
+    -- `:edit` command serve as "restart".
+    on_detach = function()
+      add_to_log('on_detach', { buf_id = buf_id })
+      MiniGit.disable(buf_id)
+    end,
+  })
 
   local reset_if_enabled = vim.schedule_wrap(function(data)
     if not H.is_buf_enabled(data.buf) then return end
@@ -298,8 +296,7 @@ end
 
 -- Tracking -------------------------------------------------------------------
 H.start_tracking = function(buf_id, path)
-  local config = H.cache[buf_id].config
-  local command = H.git_cmd({ 'rev-parse', '--path-format=absolute', '--git-dir' }, config)
+  local command = H.git_cmd({ 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' })
 
   -- If path is not in Git, disable buffer but make sure that it will not try
   -- to re-attach until buffer is properly disabled
@@ -313,72 +310,116 @@ H.start_tracking = function(buf_id, path)
     if code ~= 0 then return on_not_in_git() end
 
     -- Update cache
-    H.cache[buf_id].git_dir = out
+    local repo, root = string.match(out, '^(.-)\n(.*)$')
+    if repo == nil or root == nil then return H.notify('No initial data for buffer ' .. buf_id, 'WARN') end
+    H.cache[buf_id].repo, H.cache[buf_id].root = repo, root
 
-    -- Set up git directory watching
-    H.setup_git_dir_watch(buf_id, out)
+    -- Set up repo watching
+    H.setup_repo_watch(buf_id, repo)
 
-    -- Compute tracking data immediately
-    H.update_git_data(buf_id)
+    -- Update buffer tracking data
+    vim.b[buf_id].minigit_summary = { repo = repo, root = root }
+    vim.schedule(function() H.update_git_data(root, { buf_id }) end)
   end
 
-  H.cli_run(command, vim.fn.fnamemodify(path, ':h'), on_done, config)
+  H.cli_run(command, vim.fn.fnamemodify(path, ':h'), on_done)
 end
 
-H.setup_git_dir_watch = function(buf_id, git_dir_path)
-  local buf_fs_event, timer = vim.loop.new_fs_event(), vim.loop.new_timer()
-  local buf_update_git_data = function() H.update_git_data(buf_id) end
+H.setup_repo_watch = function(buf_id, repo)
+  local repo_cache = H.repos[repo] or {}
 
-  local watch_index = function(_, filename, _)
-    if filename ~= 'index' then return end
-    -- Debounce to not overload during incremental staging (like in script)
-    timer:stop()
-    timer:start(50, 0, buf_update_git_data)
+  -- Ensure repo is watched
+  local is_set_up = repo_cache.fs_event ~= nil and repo_cache.fs_event:is_active()
+  if not is_set_up then
+    H.teardown_repo_watch(repo)
+    local fs_event, timer = vim.loop.new_fs_event(), vim.loop.new_timer()
+
+    local on_change = vim.schedule_wrap(function() H.on_repo_change(repo) end)
+    local watch = function()
+      -- Debounce to not overload during incremental staging (like in script)
+      timer:stop()
+      timer:start(50, 0, on_change)
+    end
+    fs_event:start(repo, { recursive = true }, watch)
+
+    repo_cache.fs_event, repo_cache.timer = fs_event, timer
+    H.repos[repo] = repo_cache
   end
-  buf_fs_event:start(git_dir_path, { recursive = true }, watch_index)
 
-  local buf_cache = H.cache[buf_id]
-  pcall(vim.loop.fs_event_stop, buf_cache.fs_event)
-  buf_cache.fs_event = buf_fs_event
-  pcall(vim.loop.timer_stop, buf_cache.timer)
-  buf_cache.timer = timer
+  -- Register buffer to be updated on repo change
+  local repo_buffers = repo_cache.buffers or {}
+  repo_buffers[buf_id] = true
+  repo_cache.buffers = repo_buffers
 end
 
-H.update_git_data = vim.schedule_wrap(function(buf_id)
-  local cache = H.cache[buf_id]
-  local config = cache.config
+H.teardown_repo_watch = function(repo)
+  if H.repos[repo] == nil then return end
+  pcall(vim.loop.fs_event_stop, H.repos[repo].fs_event)
+  pcall(vim.loop.timer_stop, H.repos[repo].timer)
+end
 
-  local args = { 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel', 'HEAD', '--abbrev-ref', 'HEAD' }
-  local command = H.git_cmd(args, config)
+H.on_repo_change = function(repo)
+  if H.repos[repo] == nil then return end
 
-  local on_done = function(code, out, err)
-    if code ~= 0 then return H.notify('Error with exit code ' .. code .. '\n' .. err, 'ERROR') end
+  -- Collect repo's worktrees with their buffers while doing cleanup
+  local repo_bufs, root_bufs = H.repos[repo].buffers, {}
+  for buf_id, _ in pairs(repo_bufs) do
+    if H.is_buf_enabled(buf_id) then
+      local root = H.cache[buf_id].root
+      local bufs = root_bufs[root] or {}
+      table.insert(bufs, buf_id)
+      root_bufs[root] = bufs
+    else
+      repo_bufs[buf_id] = nil
+      MiniGit.disable(buf_id)
+    end
+  end
+
+  -- Update Git data for every worktree
+  for root, bufs in pairs(root_bufs) do
+    H.update_git_data(root, bufs)
+  end
+end
+
+H.update_git_data = function(root, bufs)
+  local command = H.git_cmd({ 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' })
+
+  local on_done = vim.schedule_wrap(function(code, out, err)
+    -- Ensure proper data
+    if code ~= 0 then return H.notify('Could not update data for root ' .. root .. '\n' .. err, 'WARN') end
     if err ~= '' then H.notify(err, 'WARN') end
 
-    add_to_log('update_git_data', { out = out })
-    local git_dir, worktree, head_commit, head = string.match(out, '^(.-)\n(.-)\n(.-)\n(.*)$')
-    local c = H.cache[buf_id]
-    c.git_dir, c.worktree, c.head_commit, c.head = git_dir, worktree, head_commit, head
-    vim.b[buf_id].minigit_summary = { git_dir = git_dir, worktree = worktree, head_commit = head_commit, head = head }
-  end
+    local head, head_name = string.match(out, '^(.-)\n(.*)$')
+    if head == nil or head_name == nil then return H.notify('Could not parse data for root ' .. root, 'WARN') end
 
-  local cwd = cache.worktree or vim.fn.fnamemodify(config.path, ':h')
-  H.cli_run(command, cwd, on_done, config)
-end)
+    -- Update data for all buffers from target `root`
+    for _, buf_id in ipairs(bufs) do
+      H.update_buf_data(buf_id, head, head_name)
+    end
+
+    -- Redraw statusline to have possible statusline component up to date
+    vim.cmd('redrawstatus')
+  end)
+
+  H.cli_run(command, root, on_done)
+end
+
+H.update_buf_data = function(buf_id, head, head_name)
+  if not H.is_buf_enabled(buf_id) then return end
+  H.cache[buf_id].head, H.cache[buf_id].head_name = head, head_name
+
+  local summary = vim.b[buf_id].minigit_summary or {}
+  summary.head, summary.head_name = head, head_name
+  vim.b[buf_id].minigit_summary = summary
+end
 
 -- CLI ------------------------------------------------------------------------
 H.git_cmd = function(args, config)
-  config = config or H.get_config()
-
   -- Use '-c gc.auto=0' to disable `stderr` "Auto packing..." messages
-  return { config.job.executable, '-c', 'gc.auto=0', unpack(args) }
+  return { MiniGit.config.job.executable, '-c', 'gc.auto=0', unpack(args) }
 end
 
-H.cli_run = function(command, cwd, on_done, config)
-  config = config or H.get_config()
-  local timeout = config.job.timeout
-
-  -- Prepare data for `vim.loop.spawn`
+H.cli_run = function(command, cwd, on_done)
   local executable, args = command[1], vim.list_slice(command, 2, #command)
   local process, stdout, stderr = nil, vim.loop.new_pipe(), vim.loop.new_pipe()
   local spawn_opts = { args = args, cwd = cwd, stdio = { nil, stdout, stderr } }
@@ -398,7 +439,7 @@ H.cli_run = function(command, cwd, on_done, config)
     if not process:is_active() then return end
     H.notify('PROCESS REACHED TIMEOUT', 'WARN')
     on_exit(1)
-  end, timeout)
+  end, MiniGit.config.job.timeout)
 end
 
 H.cli_read_stream = function(stream, feed)
