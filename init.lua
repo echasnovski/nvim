@@ -60,11 +60,14 @@ now(function()
   local active = function()
     local mode, mode_hl = statusline.section_mode({ trunc_width = 120 })
     -- Try out 'mini.git'
-    local git_summary  = vim.b.minigit_summary
-    local git_head = ''
-    if vim.b.minigit_summary ~= nil then
-      git_head = git_summary.head == 'HEAD' and git_summary.head_commit:sub(1, 7) or git_summary.head
-      git_head = ' ' .. git_head
+    local git_summary  = vim.b.minigit_summary or {}
+    local git_head = git_summary.head_name or ''
+    if git_head ~= '' then
+      git_head = ' ' .. (git_head == 'HEAD' and git_summary.head:sub(1, 7) or git_head)
+    end
+    local git_status = git_summary.status or ''
+    if git_status ~= '' then
+      git_status = git_status == '  ' and '' or string.format('(%s)', git_status)
     end
     -- Try out 'mini.diff'
     local diff_summary  = vim.b.minidiff_summary_string

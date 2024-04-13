@@ -1,8 +1,10 @@
 -- TODO:
 --
 -- Code:
--- - Debug why `on_detach` is called without later auto enabling if Git
---   directory changed outside of current process with later focus on Neovim.
+-- - Think about directly setting up HEAD data for new buffer if it was already
+--   computed. Probably, requires separate `H.roots` cache.
+--
+-- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
 -- Tests:
 --
@@ -145,6 +147,7 @@ MiniGit.disable = function(buf_id)
 
   -- Cleanup
   pcall(vim.api.nvim_del_augroup_by_id, buf_cache.augroup)
+  vim.b[buf_id].minigit_summary = nil
 
   -- - Unregister buffer from repo watching with possibly more cleanup
   local repo = buf_cache.repo
@@ -271,13 +274,19 @@ H.setup_buf_behavior = function(buf_id)
   H.cache[buf_id].augroup = augroup
 
   vim.api.nvim_buf_attach(buf_id, false, {
+    -- Called when buffer content is changed outside of current session
+    -- Needed as otherwise `on_detach()` is called without later auto enabling
+    on_reload = function()
+      local buf_cache = H.cache[buf_id]
+      if buf_cache == nil or buf_cache.root == nil then return end
+      H.update_git_head(buf_cache.root, { buf_id })
+      H.update_git_status(buf_cache.root, { buf_id })
+    end,
+
     -- Called when buffer is unloaded from memory (`:h nvim_buf_detach_event`),
     -- **including** `:edit` command. Together with auto enabling it makes
     -- `:edit` command serve as "restart".
-    on_detach = function()
-      add_to_log('on_detach', { buf_id = buf_id })
-      MiniGit.disable(buf_id)
-    end,
+    on_detach = function() MiniGit.disable(buf_id) end,
   })
 
   local reset_if_enabled = vim.schedule_wrap(function(data)
@@ -300,27 +309,30 @@ H.start_tracking = function(buf_id, path)
 
   -- If path is not in Git, disable buffer but make sure that it will not try
   -- to re-attach until buffer is properly disabled
-  local on_not_in_git = vim.schedule_wrap(function()
+  local on_not_in_git = function()
     MiniGit.disable(buf_id)
     H.cache[buf_id] = {}
-  end)
+  end
 
-  local on_done = function(code, out, err)
+  local on_done = vim.schedule_wrap(function(code, out, err)
     -- Watch git directory only if there was no error retrieving path to it
     if code ~= 0 then return on_not_in_git() end
 
     -- Update cache
     local repo, root = string.match(out, '^(.-)\n(.*)$')
     if repo == nil or root == nil then return H.notify('No initial data for buffer ' .. buf_id, 'WARN') end
-    H.cache[buf_id].repo, H.cache[buf_id].root = repo, root
+    H.update_buf_data(buf_id, { repo = repo, root = root })
 
-    -- Set up repo watching
+    -- Set up repo watching to react to Git index changes
     H.setup_repo_watch(buf_id, repo)
 
-    -- Update buffer tracking data
-    vim.b[buf_id].minigit_summary = { repo = repo, root = root }
-    vim.schedule(function() H.update_git_data(root, { buf_id }) end)
-  end
+    -- Set up worktree watching to react to file changes
+    H.setup_path_watch(buf_id)
+
+    -- Immediately update buffer tracking data
+    H.update_git_head(root, { buf_id })
+    H.update_git_status(root, { buf_id })
+  end)
 
   H.cli_run(command, vim.fn.fnamemodify(path, ':h'), on_done)
 end
@@ -335,7 +347,10 @@ H.setup_repo_watch = function(buf_id, repo)
     local fs_event, timer = vim.loop.new_fs_event(), vim.loop.new_timer()
 
     local on_change = vim.schedule_wrap(function() H.on_repo_change(repo) end)
-    local watch = function()
+    local watch = function(_, filename, _)
+      -- Ignore temporary changes
+      if vim.endswith(filename, 'lock') then return end
+
       -- Debounce to not overload during incremental staging (like in script)
       timer:stop()
       timer:start(50, 0, on_change)
@@ -358,6 +373,16 @@ H.teardown_repo_watch = function(repo)
   pcall(vim.loop.timer_stop, H.repos[repo].timer)
 end
 
+H.setup_path_watch = function(buf_id, repo)
+  if not H.is_buf_enabled(buf_id) then return end
+
+  local on_file_change = function(data) H.update_git_status(H.cache[buf_id].root, { buf_id }) end
+  vim.api.nvim_create_autocmd(
+    { 'BufWritePost', 'FileChangedShellPost' },
+    { desc = 'Update Git status', group = H.cache[buf_id].augroup, callback = on_file_change }
+  )
+end
+
 H.on_repo_change = function(repo)
   if H.repos[repo] == nil then return end
 
@@ -377,24 +402,26 @@ H.on_repo_change = function(repo)
 
   -- Update Git data for every worktree
   for root, bufs in pairs(root_bufs) do
-    H.update_git_data(root, bufs)
+    H.update_git_head(root, bufs)
+    -- Status could have also changed as it depends on the index
+    H.update_git_status(root, bufs)
   end
 end
 
-H.update_git_data = function(root, bufs)
+H.update_git_head = function(root, bufs)
   local command = H.git_cmd({ 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' })
 
   local on_done = vim.schedule_wrap(function(code, out, err)
     -- Ensure proper data
-    if code ~= 0 then return H.notify('Could not update data for root ' .. root .. '\n' .. err, 'WARN') end
-    if err ~= '' then H.notify(err, 'WARN') end
+    if code ~= 0 then return H.notify('Could not update HEAD data for root ' .. root .. '\n' .. err, 'WARN') end
 
     local head, head_name = string.match(out, '^(.-)\n(.*)$')
     if head == nil or head_name == nil then return H.notify('Could not parse data for root ' .. root, 'WARN') end
 
     -- Update data for all buffers from target `root`
+    local new_data = { head = head, head_name = head_name }
     for _, buf_id in ipairs(bufs) do
-      H.update_buf_data(buf_id, head, head_name)
+      H.update_buf_data(buf_id, new_data)
     end
 
     -- Redraw statusline to have possible statusline component up to date
@@ -404,12 +431,47 @@ H.update_git_data = function(root, bufs)
   H.cli_run(command, root, on_done)
 end
 
-H.update_buf_data = function(buf_id, head, head_name)
+H.update_git_status = function(root, bufs)
+  local command = H.git_cmd({ 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--' })
+  local root_len, path_data = string.len(root), {}
+  for _, buf_id in ipairs(bufs) do
+    -- Use paths relative to the root as in `git status --porcelain` output
+    local rel_path = vim.api.nvim_buf_get_name(buf_id):sub(root_len + 2)
+    table.insert(command, rel_path)
+    -- Completely not modified paths should be the only ones missing in the
+    -- output. Use this status as default.
+    path_data[rel_path] = { status = '  ', buf_id = buf_id }
+  end
+
+  local on_done = vim.schedule_wrap(function(code, out, err)
+    if code ~= 0 then return H.notify('Could not update status data for root ' .. root .. '\n' .. err, 'WARN') end
+
+    -- Parse CLI output, which is separated by `\0` to not escape "bad" paths
+    for _, l in ipairs(vim.split(out, '\0')) do
+      local status, rel_path = string.match(l, '^(..) (.*)$')
+      if path_data[rel_path] ~= nil then path_data[rel_path].status = status end
+    end
+
+    -- Update data for all buffers
+    for path, data in pairs(path_data) do
+      local new_data = { status = data.status }
+      H.update_buf_data(data.buf_id, new_data)
+    end
+
+    -- Redraw statusline to have possible statusline component up to date
+    vim.cmd('redrawstatus')
+  end)
+
+  H.cli_run(command, root, on_done)
+end
+
+H.update_buf_data = function(buf_id, new_data)
   if not H.is_buf_enabled(buf_id) then return end
-  H.cache[buf_id].head, H.cache[buf_id].head_name = head, head_name
 
   local summary = vim.b[buf_id].minigit_summary or {}
-  summary.head, summary.head_name = head, head_name
+  for key, val in pairs(new_data) do
+    H.cache[buf_id][key], summary[key] = val, val
+  end
   vim.b[buf_id].minigit_summary = summary
 end
 
@@ -429,7 +491,10 @@ H.cli_run = function(command, cwd, on_done)
     is_done = true
     if process:is_closing() then return end
     process:close()
-    on_done(code, H.cli_stream_tostring(out), H.cli_stream_tostring(err))
+
+    out, err = H.cli_stream_tostring(out), H.cli_stream_tostring(err)
+    if code == 0 and err ~= '' then H.notify(err, 'WARN') end
+    on_done(code, out, err)
   end
 
   process = vim.loop.spawn(executable, spawn_opts, on_exit)
