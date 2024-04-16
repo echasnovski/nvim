@@ -7,7 +7,12 @@
 -- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
 -- - `:Git` command with as much completion as reasonable:
---     - Set `$GIT_EDITOR` to current instance.
+--     - Normalize progress reports in `stderr`. For example, `stderr` of
+--     `git rebase HEAd~~ --interactive` is something like (with literal `\r`):
+--     `Rebasing (2/3)\rRebasing (3/3)\r\r\27[KSuccessfully rebased and updated
+--     refs/heads/master.`
+--
+--     - Debug why sometimes there is a "process reached timeout" exit.
 --
 --     - Implement completion based on cursor position inside command:
 --         - If `--` is present and cursor is after it - suggest file paths.
@@ -112,7 +117,7 @@ MiniGit.setup = function(config)
   H.apply_config(config)
 
   -- Ensure proper Git executable
-  local exec = config.job.executable
+  local exec = config.job.git_executable
   H.has_git = vim.fn.executable(exec) == 1
   if not H.has_git then H.notify('There is no `' .. exec .. '` executable', 'WARN') end
 
@@ -134,8 +139,8 @@ end
 ---@text !!!!!
 MiniGit.config = {
   job = {
-    executable = 'git',
-    timeout = 10000,
+    git_executable = 'git',
+    timeout = 2000,
   }
 }
 --minidoc_afterlines_end
@@ -212,6 +217,35 @@ MiniGit.get_buf_data = function(buf_id)
   })
 end
 
+MiniGit.edit = function(path, servername)
+  H.skip_timeout = true
+  vim.cmd('tabedit ' .. vim.fn.fnameescape(path))
+
+  local buf_id = vim.api.nvim_get_current_buf()
+  vim.bo[buf_id].swapfile = false
+  local tab_num, win_id = vim.api.nvim_tabpage_get_number(0), vim.api.nvim_get_current_win()
+
+  -- Define action to finish editing Git related file
+  local finish_au_id
+  local finish = function(data)
+    local should_close = data.event == 'VimLeave' or (data.event == 'WinClosed' and tonumber(data.match) == win_id)
+    if not should_close then return end
+
+    -- Clean up Git editor Neovim instance
+    local _, channel = pcall(vim.fn.sockconnect, 'pipe', servername, { rpc = true })
+    pcall(vim.rpcnotify, channel, 'nvim_exec2', 'quitall!', {})
+    H.skip_timeout = false
+
+    -- Clean up current instance
+    pcall(vim.api.nvim_del_autocmd, finish_au_id)
+    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
+    pcall(function() vim.cmd('tabclose ' .. tab_num) end)
+    vim.cmd('redraw')
+  end
+  -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
+  finish_au_id = vim.api.nvim_create_autocmd({ 'VimLeave', 'WinClosed' }, { nested = true, callback = finish })
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniGit.config
@@ -230,6 +264,12 @@ H.cache = {}
 -- - <buffers> - map of buffers which should are part of repo.
 H.repos = {}
 
+-- Termporary file used as config for `GIT_EDITOR`
+H.git_editor_config = nil
+
+-- Whether to temporarily skip job timeout (like when inside `GIT_EDITOR`)
+H.skip_timeout = false
+
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
 H.setup_config = function(config)
@@ -243,7 +283,7 @@ H.setup_config = function(config)
   })
 
   vim.validate({
-    ['job.executable'] = { config.job.executable, 'string' },
+    ['job.git_executable'] = { config.job.git_executable, 'string' },
     ['job.timeout'] = { config.job.timeout, 'number' },
   })
 
@@ -276,18 +316,38 @@ end
 
 H.create_user_commands = function()
   local git_execute = function(input)
+    -- Define Git editor to be used if needed. It is a fresh headless process
+    -- which in turn calls `MiniGit.edit()` in the current instance and does
+    -- not exit until forced (from current instance after window with target
+    -- file is closed).
+    H.ensure_git_editor_config()
+    -- NOTE: use `vim.v.progpath` to have same runtime
+    local editor = vim.v.progpath .. ' --clean --headless -u ' .. H.git_editor_config
+
+    -- Setup all environment variables (`vim.loop.spawn()` by default has none)
+    local environ = vim.loop.os_environ()
+    environ.GIT_EDITOR, environ.GIT_SEQUENCE_EDITOR, environ.GIT_PAGER, environ.NO_COLOR = editor, editor, '', 1
+    local env = {}
+    for k, v in pairs(environ) do
+      table.insert(env, string.format('%s=%s', k, tostring(v)))
+    end
+
+    -- Setup spawn arguments
     local args = vim.tbl_map(H.expandcmd, input.fargs)
-    add_to_log(':Git', { input = input, args = args })
-    local command = { MiniGit.config.job.executable, unpack(args) }
+    local command = { MiniGit.config.job.git_executable, unpack(args) }
 
     local buf_cache = H.cache[vim.api.nvim_get_current_buf()]
     local cwd = buf_cache ~= nil and buf_cache.root or vim.fn.getcwd()
 
+    add_to_log(':Git', { input = input, args = args, editor = editor })
     local on_done = vim.schedule_wrap(function(code, out, err)
       add_to_log(':Git on_done', { code = code, out = vim.split(out, '\n'), err = err })
-      if code ~= 0 and err ~= '' then return H.notify(err, 'ERROR') end
+      if code ~= 0 then return H.notify(err, 'ERROR') end
+      if err ~= '' then H.notify(err, 'WARN') end
+      if out ~= '' then H.notify(out, 'INFO') end
     end)
-    H.cli_run(command, cwd, on_done)
+
+    H.cli_run(command, cwd, on_done, { env = env })
   end
 
   local opts = { nargs = '+', complete = H.command_complete, desc = 'Execute Git command' }
@@ -297,6 +357,23 @@ end
 -- Command --------------------------------------------------------------------
 -- H.command_complete = function(_, line, col)
 H.command_complete = function(...) add_to_log('command_complete', { ... }) end
+
+H.ensure_git_editor_config = function()
+  if H.git_editor_config == nil or not vim.fn.filereadable(H.git_editor_config) == 0 then
+    H.git_editor_config = vim.fn.tempname()
+  end
+  -- Start editing file from first argument (as how `GIT_EDITOR` works) in
+  -- current instance and don't close until explicitly closed later from this
+  -- instance in `MiniGit.edit()`
+  local lines = {
+    'lua << EOF',
+    string.format('local channel = vim.fn.sockconnect("pipe", %s, { rpc = true })', vim.inspect(vim.v.servername)),
+    'local lua_cmd = string.format("MiniGit.edit(%s, %s)", vim.inspect(vim.fn.argv(0)), vim.inspect(vim.v.servername))',
+    'vim.rpcrequest(channel, "nvim_exec_lua", lua_cmd, {})',
+    'EOF',
+  }
+  vim.fn.writefile(lines, H.git_editor_config)
+end
 
 -- TODO: Remove after development is done
 H.create_user_commands()
@@ -368,6 +445,7 @@ H.start_tracking = function(buf_id, path)
   local on_done = vim.schedule_wrap(function(code, out, err)
     -- Watch git directory only if there was no error retrieving path to it
     if code ~= 0 then return on_not_in_git() end
+    if err ~= '' then H.notify(err, 'WARN') end
 
     -- Update cache
     local repo, root = string.match(out, '^(.-)\n(.*)$')
@@ -465,9 +543,12 @@ H.update_git_head = function(root, bufs)
   local on_done = vim.schedule_wrap(function(code, out, err)
     -- Ensure proper data
     if code ~= 0 then return H.notify('Could not update HEAD data for root ' .. root .. '\n' .. err, 'WARN') end
+    if err ~= '' then H.notify(err, 'WARN') end
 
     local head, head_name = string.match(out, '^(.-)\n(.*)$')
-    if head == nil or head_name == nil then return H.notify('Could not parse data for root ' .. root, 'WARN') end
+    if head == nil or head_name == nil then
+      return H.notify('Could not parse HEAD data for root ' .. root .. '\n' .. out, 'WARN')
+    end
 
     -- Update data for all buffers from target `root`
     local new_data = { head = head, head_name = head_name }
@@ -496,6 +577,7 @@ H.update_git_status = function(root, bufs)
 
   local on_done = vim.schedule_wrap(function(code, out, err)
     if code ~= 0 then return H.notify('Could not update status data for root ' .. root .. '\n' .. err, 'WARN') end
+    if err ~= '' then H.notify(err, 'WARN') end
 
     -- Parse CLI output, which is separated by `\0` to not escape "bad" paths
     for _, l in ipairs(vim.split(out, '\0')) do
@@ -529,13 +611,14 @@ end
 -- CLI ------------------------------------------------------------------------
 H.git_cmd = function(args)
   -- Use '-c gc.auto=0' to disable `stderr` "Auto packing..." messages
-  return { MiniGit.config.job.executable, '-c', 'gc.auto=0', unpack(args) }
+  return { MiniGit.config.job.git_executable, '-c', 'gc.auto=0', unpack(args) }
 end
 
-H.cli_run = function(command, cwd, on_done)
+H.cli_run = function(command, cwd, on_done, opts)
+  local spawn_opts = opts or {}
   local executable, args = command[1], vim.list_slice(command, 2, #command)
   local process, stdout, stderr = nil, vim.loop.new_pipe(), vim.loop.new_pipe()
-  local spawn_opts = { args = args, cwd = cwd, stdio = { nil, stdout, stderr } }
+  spawn_opts.args, spawn_opts.cwd, spawn_opts.stdio = args, cwd, { nil, stdout, stderr }
 
   local out, err, is_done = {}, {}, false
   local on_exit = function(code)
@@ -544,9 +627,6 @@ H.cli_run = function(command, cwd, on_done)
     process:close()
 
     out, err = H.cli_stream_tostring(out), H.cli_stream_tostring(err)
-    -- Schedule `H.notify()` as `vim.notify()` implementation can use `vim.fn`
-    -- which is not allowed inside libuv callback
-    if code == 0 and err ~= '' then vim.schedule(function() H.notify(err, 'WARN') end) end
     on_done(code, out, err)
   end
 
@@ -554,10 +634,11 @@ H.cli_run = function(command, cwd, on_done)
   H.cli_read_stream(stdout, out)
   H.cli_read_stream(stderr, err)
   vim.defer_fn(function()
-    if not process:is_active() then return end
+    if H.skip_timeout or not process:is_active() then return end
     H.notify('PROCESS REACHED TIMEOUT', 'WARN')
     on_exit(1)
   end, MiniGit.config.job.timeout)
+  return process
 end
 
 H.cli_read_stream = function(stream, feed)
