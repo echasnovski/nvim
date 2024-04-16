@@ -6,9 +6,30 @@
 --
 -- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
+-- - `:Git` command with as much completion as reasonable:
+--     - Set `$GIT_EDITOR` to current instance.
+--
+--     - Implement completion based on cursor position inside command:
+--         - If `--` is present and cursor is after it - suggest file paths.
+--           Maybe take a look at broader targets (like branch names, etc.).
+--         - Otherwise get completion items via `git help <current-command>`
+--           and parsing its output for subcommands, "-"-options and
+--           "--"-options. Choose which set to use as completion items based
+--           on the currently completed word.
+--
+--     - Ensure resaonable treatment of quote escaping
+--       (like in `git branch --list --format='%(refname:short)'`)
+--
+-- - Blame functionality?
+--
+-- - Exported functionality to get file status/data based on an array of paths
+--   alone? This maybe can be utilized by 'mini.files' to show Git status next
+--   to the file.
+--
 -- Tests:
 --
 -- Docs:
+-- - Use `:Git -C <cwd>` to execute command in current working directory.
 --
 
 --- *mini.git* Git integration
@@ -100,6 +121,9 @@ MiniGit.setup = function(config)
   for _, buf_id in ipairs(vim.api.nvim_list_bufs()) do
     H.auto_enable({ buf = buf_id })
   end
+
+  -- Create user commands
+  H.create_user_commands()
 end
 
 --stylua: ignore
@@ -180,11 +204,11 @@ MiniGit.get_buf_data = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   local buf_cache = H.cache[buf_id]
   if buf_cache == nil then return nil end
+  --stylua: ignore
   return vim.deepcopy({
-    head = buf_cache.head,
-    head_name = buf_cache.head_name,
-    repo = buf_cache.repo,
-    root = buf_cache.root,
+    repo = buf_cache.repo, root = buf_cache.root,
+    head = buf_cache.head, head_name = buf_cache.head_name,
+    status = buf_cache.status,
   })
 end
 
@@ -249,6 +273,33 @@ H.get_buf_var = function(buf_id, name)
   if not vim.api.nvim_buf_is_valid(buf_id) then return nil end
   return vim.b[buf_id or 0][name]
 end
+
+H.create_user_commands = function()
+  local git_execute = function(input)
+    local args = vim.tbl_map(H.expandcmd, input.fargs)
+    add_to_log(':Git', { input = input, args = args })
+    local command = { MiniGit.config.job.executable, unpack(args) }
+
+    local buf_cache = H.cache[vim.api.nvim_get_current_buf()]
+    local cwd = buf_cache ~= nil and buf_cache.root or vim.fn.getcwd()
+
+    local on_done = vim.schedule_wrap(function(code, out, err)
+      add_to_log(':Git on_done', { code = code, out = vim.split(out, '\n'), err = err })
+      if code ~= 0 and err ~= '' then return H.notify(err, 'ERROR') end
+    end)
+    H.cli_run(command, cwd, on_done)
+  end
+
+  local opts = { nargs = '+', complete = H.command_complete, desc = 'Execute Git command' }
+  vim.api.nvim_create_user_command('Git', git_execute, opts)
+end
+
+-- Command --------------------------------------------------------------------
+-- H.command_complete = function(_, line, col)
+H.command_complete = function(...) add_to_log('command_complete', { ... }) end
+
+-- TODO: Remove after development is done
+H.create_user_commands()
 
 -- Autocommands ---------------------------------------------------------------
 H.auto_enable = vim.schedule_wrap(function(data)
@@ -476,7 +527,7 @@ H.update_buf_data = function(buf_id, new_data)
 end
 
 -- CLI ------------------------------------------------------------------------
-H.git_cmd = function(args, config)
+H.git_cmd = function(args)
   -- Use '-c gc.auto=0' to disable `stderr` "Auto packing..." messages
   return { MiniGit.config.job.executable, '-c', 'gc.auto=0', unpack(args) }
 end
@@ -493,7 +544,9 @@ H.cli_run = function(command, cwd, on_done)
     process:close()
 
     out, err = H.cli_stream_tostring(out), H.cli_stream_tostring(err)
-    if code == 0 and err ~= '' then H.notify(err, 'WARN') end
+    -- Schedule `H.notify()` as `vim.notify()` implementation can use `vim.fn`
+    -- which is not allowed inside libuv callback
+    if code == 0 and err ~= '' then vim.schedule(function() H.notify(err, 'WARN') end) end
     on_done(code, out, err)
   end
 
@@ -522,5 +575,11 @@ H.cli_stream_tostring = function(stream) return (table.concat(stream):gsub('\n+$
 H.error = function(msg) error(string.format('(mini.git) %s', msg), 0) end
 
 H.notify = function(msg, level_name) vim.notify('(mini.git) ' .. msg, vim.log.levels[level_name]) end
+
+H.expandcmd = function(x)
+  if x == '<cwd>' then return vim.fn.getcwd() end
+  local ok, res = pcall(vim.fn.expandcmd, x)
+  return ok and res or x
+end
 
 return MiniGit
