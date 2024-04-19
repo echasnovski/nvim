@@ -15,6 +15,8 @@
 --           "--"-options. Choose which set to use as completion items based
 --           on the currently completed word.
 --
+--     - Check that all completion options are parsed for porcelain commands.
+--
 --     - Don't show output in the special buffer for some `git` commands,
 --       use `H.notify(out, 'INFO')` instead. Like:
 --         - `commit` (with its information about what was committed).
@@ -415,12 +417,7 @@ H.command_get_complete_candidates = function(line, col, base)
     end
   end
 
-  -- If no command is yet used, use supported commands as candidates
-  if command == nil then
-    local res = vim.tbl_keys(H.git_completions)
-    table.sort(res)
-    return res
-  end
+  command = command or 'git'
 
   -- Determine command candidates based on the **explicit** "--":
   -- - Command targets (paths, branches, remotes, etc.) if on the right.
@@ -433,7 +430,7 @@ H.ensure_supported_git_commands = function()
   if H.git_completions ~= nil then return end
   local commands = H.cli_run({ 'git', '--list-cmds=main,others,alias,nohelpers' }, vim.fn.getcwd()).out
   if commands == '' then return end
-  local completions = {}
+  local completions = { git = true }
   for _, command in ipairs(vim.split(commands, '\n')) do
     -- Initialize as `false` so that actual candidates are computed lazily
     completions[command] = false
@@ -445,61 +442,81 @@ H.command_get_complete_options = function(command)
   local cached_candidates = H.git_completions[command]
   if type(cached_candidates) == 'table' then return cached_candidates end
 
-  local help_page = H.cli_run({ 'git', 'help', command }, vim.fn.getcwd())
+  local help_page = H.cli_run({ 'git', 'help', '--man', command }, vim.fn.getcwd())
   if help_page.code ~= 0 then return {} end
-  local res, lines = {}, vim.split(help_page.out, '\n')
 
-  -- Find command's flag options. Assumed to be inside "OPTIONS" section of
-  -- help page on separate lines. If a line is an options line is determined
-  -- euristically: it should start with `-`, follow subsection separator
-  -- (blank line or initial "OPTIONS" line), and contain only words starting
-  -- with appropriate characters.
-  local is_in_options_section, is_after_subsection_sep = false, false
+  -- Construct non-duplicating candidates by parsing lines of help page
+  local candidates_map, lines = {}, vim.split(help_page.out, '\n')
+
+  -- Find command's flag options. Assumed to be listed inside "OPTIONS" or "XXX
+  -- OPTIONS" (like "MODE OPTIONS" of `git rebase`) section of help page on
+  -- separate lines. Whether a line contains only options is determined
+  -- euristically: it is assumed to start exactly with "       -" indicating
+  -- proper indent for subsection start.
+  local is_in_options_section = false
   for _, l in ipairs(lines) do
-    local is_options_start = l:find('^%s*OPTIONS:?%s*$') ~= nil
-    if is_in_options_section and l:find('^%s*%u+%s*$') ~= nil then is_in_options_section = false end
-    if not is_in_options_section and is_options_start then is_in_options_section = true end
-
-    if is_in_options_section and is_after_subsection_sep then H.try_parse_append_options(res, l) end
-    is_after_subsection_sep = l:find('^%s*$') ~= nil or is_options_start
+    if is_in_options_section and l:find('^%u[%u ]+$') ~= nil then is_in_options_section = false end
+    if not is_in_options_section and l:find('^%u?[%u ]*OPTIONS$') ~= nil then is_in_options_section = true end
+    if is_in_options_section and l:find('^       %-') ~= nil then H.parse_options(candidates_map, l) end
   end
 
-  -- TODO: parse and append subcommands
+  -- Find command's subcommands. For `git` command it is supported commands.
+  -- Otherwise they are assumed to be listed in "SYNOPSIS" section as the only
+  -- "usual" words differeing from "git" and command name itself.
+  if command == 'git' or command == 'help' then
+    vim.tbl_map(function(cmd) candidates_map[cmd] = true end, vim.tbl_keys(H.git_completions))
+  else
+    local is_in_synopsis_section = false
+    for _, l in ipairs(lines) do
+      if is_in_synopsis_section and l:find('^%u[%u ]+$') ~= nil then is_in_synopsis_section = false end
+      if not is_in_synopsis_section and l:find('^SYNOPSIS$') ~= nil then is_in_synopsis_section = true end
+      if is_in_synopsis_section then H.parse_subcommands(candidates_map, l, command) end
+    end
+  end
 
-  -- Sort by relevance
+  -- Finalize candidates. Should not contain "almost duplicates".
+  -- Should also be sorted by relevance:
   -- Subcommands (no "-" at start) > short options (one "-") > regular options
-  -- Inside groups sort alphabetically
+  -- Inside groups sort alphabetically ignoring case
+  candidates_map['--'] = nil
+  if command == 'git' then candidates_map['git'] = nil end
+  for cmd, _ in pairs(candidates_map) do
+    -- There can be two explicitly documented options "--xxx" and "--xxx=".
+    -- Use only one of them (without "=").
+    if cmd:sub(-1, -1) == '=' and candidates_map[cmd:sub(1, -2)] ~= nil then candidates_map[cmd] = nil end
+  end
+
+  local res = vim.tbl_keys(candidates_map)
   table.sort(res, function(a, b)
     local a1, a2, b1, b2 = a:sub(1, 1) == '-', a:sub(2, 2) == '-', b:sub(1, 1) == '-', b:sub(2, 2) == '-'
     if a1 and not b1 then return false end
     if not a1 and b1 then return true end
     if a2 and not b2 then return false end
     if not a2 and b2 then return true end
-    return a < b
+    local a_low, b_low = a:lower(), b:lower()
+    return a_low < b_low or (a_low == b_low and a < b)
   end)
-
-  add_to_log('command_get_complete_options', { lines = lines, res = res })
 
   -- Cache and return
   H.git_completions[command] = res
   return res
 end
 
-H.try_parse_append_options = function(arr, line)
-  -- Should start with "-" and not contain "bad" words
-  if not (line:find('^%s*%-%S') ~= nil and line:find(' [^-<: ]') == nil) then return end
+H.parse_options = function(map, line)
+  -- Options are standalone words starting as "-xxx" or "--xxx"
+  -- Include possible "=" at the end indicating mandatory value
+  line:gsub('%s(%-[-%w][-%w]*=?)', function(match) map[match] = true end)
 
-  -- Parse line for present options. Assumed to be listed separated by ",".
-  -- As special case, expand "--[no-]xxx" into two: "--xxx" and "--no-xxx".
-  -- NOTE: This will result into present placeholders indicating how the flag
-  -- should be used (like "-b <branch>"), which is arguably a good thing.
-  for _, opt in ipairs(vim.split(line, ', ')) do
-    opt = vim.trim(opt)
-    local opt_nono = opt:gsub('%[no%-%]', '')
-    local opt_no = opt:gsub('%[no%-%]', '')
-    table.insert(arr, opt_nono)
-    if opt_nono ~= opt then table.insert(arr, (opt:gsub('%[no%-%]', 'no-'))) end
-  end
+  -- Make exceptions for commonly documented "--[no-]xxx" two options
+  line:gsub('%s%-%-%[no%-%]([-%w]+=?)', function(match)
+    map['--' .. match], map['--no-' .. match] = true, true
+  end)
+end
+
+H.parse_subcommands = function(map, line, command)
+  line:gsub(' (%w[-%w]*) ', function(match)
+    if match ~= 'git' and match ~= command then map[match] = true end
+  end)
 end
 
 H.command_get_complete_targets = function(command, base)
