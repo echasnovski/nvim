@@ -7,6 +7,8 @@
 -- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
 -- - `:Git` command with as much completion as reasonable:
+--     - TODO: Consider using `git help -a` to get all available commands, as
+--       it doesn't return "man-only" entries like "shell", "remote-ext", etc.
 --     - Implement completion based on cursor position inside command:
 --         - If `--` is present and cursor is after it - suggest file paths.
 --           Maybe take a look at broader targets (like branch names, etc.).
@@ -273,9 +275,32 @@ H.repos = {}
 -- Termporary file used as config for `GIT_EDITOR`
 H.git_editor_config = nil
 
--- Map of completion candidate arrays per supported Git command.
--- Candidates are created lazily (if entry is not a table)
-H.git_completions = nil
+-- Map from supported Git command to string array of options command supports.
+-- Option arrays are computed and cached lazily (if entry is not a table)
+H.git_options = nil
+
+-- Array of git subcommands which have subcommands themselves.
+-- There appears to be no good way to lazily compute them.
+H.git_subcommands = {}
+--stylua: ignore start
+local _add_subcmd = function(prefix, suffixes)
+  for _, suf in ipairs(suffixes) do table.insert(H.git_subcommands, prefix .. ' ' .. suf) end
+end
+_add_subcmd('bundle',          { 'create', 'list-heads', 'unbundle', 'verify' })
+_add_subcmd('commit-graph',    { 'verify', 'write' })
+_add_subcmd('hook',            { 'run' })
+_add_subcmd('maintenance',     { 'run', 'start', 'stop', 'register', 'unregister' })
+_add_subcmd('notes',           { 'add', 'append', 'copy', 'edit', 'get-ref', 'merge', 'prune', 'remove', 'show' })
+_add_subcmd('p4',              { 'clone', 'rebase', 'submit', 'sync' })
+_add_subcmd('reflog',          { 'delete', 'exists', 'expire' })
+_add_subcmd('remote',          { 'add', 'get-url', 'prune', 'remove', 'rename', 'set-branches', 'set-head', 'set-url', 'show', 'update' })
+_add_subcmd('rerere',          { 'clear', 'diff', 'forget', 'gc', 'remaining', 'status' })
+_add_subcmd('sparse-checkout', { 'add', 'check-rules', 'disable', 'init', 'list', 'reapply', 'set' })
+_add_subcmd('stash',           { 'apply', 'branch', 'clear', 'create', 'drop', 'list', 'pop', 'save', 'show', 'store' })
+_add_subcmd('submodule',       { 'absorbgitdirs', 'add', 'deinit', 'foreach', 'init', 'set-branch', 'set-url', 'status', 'summary', 'sync', 'update' })
+_add_subcmd('subtree',         { 'add', 'merge', 'pull', 'push', 'split' })
+_add_subcmd('worktree',        { 'add', 'list', 'lock', 'move', 'prune', 'remove', 'repair', 'unlock' })
+--stylua: ignore end
 
 -- Whether to temporarily skip job timeout (like when inside `GIT_EDITOR`)
 H.skip_timeout = false
@@ -409,37 +434,50 @@ H.command_get_complete_candidates = function(line, col, base)
   H.ensure_supported_git_commands()
 
   -- Determine current Git command as the earliest present supported command
-  local command, command_ind = nil, math.huge
-  for cmd, _ in pairs(H.git_completions) do
-    local ind = line:find(' ' .. cmd .. ' ', 1, true)
-    if ind ~= nil and ind < command_ind then
-      command, command_ind = cmd, ind
+  local command, command_end = nil, math.huge
+  for cmd, _ in pairs(H.git_options) do
+    local _, ind = line:find(' ' .. cmd .. ' ', 1, true)
+    if ind ~= nil and ind < command_end then
+      command, command_end = cmd, ind
     end
   end
 
   command = command or 'git'
 
-  -- Determine command candidates based on the **explicit** "--":
-  -- - Command targets (paths, branches, remotes, etc.) if on the right.
-  -- - Options/subcommands if on the left or not present.
-  if line:sub(1, col):find(' %-%- ') then return H.command_get_complete_targets(command, base) end
-  return H.command_get_complete_options(command)
+  -- Determine command candidates:
+  -- - Commannd options if complete base starts with "-".
+  -- - Git commands if there is none fully formed yet or cursor is at the end
+  --   of the command (to also suggest subcommands).
+  -- - Command targets specific for each command (if present).
+  if vim.startswith(base, '-') then return H.command_get_complete_options(command) end
+  if command_end == math.huge or (command_end - 1) == col then return H.command_get_complete_commands() end
+  return H.command_get_complete_targets(command, base)
 end
 
 H.ensure_supported_git_commands = function()
-  if H.git_completions ~= nil then return end
+  if H.git_options ~= nil then return end
   local commands = H.cli_run({ 'git', '--list-cmds=main,others,alias,nohelpers' }, vim.fn.getcwd()).out
   if commands == '' then return end
-  local completions = { git = true }
+  local options = { git = true }
   for _, command in ipairs(vim.split(commands, '\n')) do
     -- Initialize as `false` so that actual candidates are computed lazily
-    completions[command] = false
+    options[command] = false
   end
-  H.git_completions = completions
+  H.git_options = options
+end
+
+H.command_get_complete_commands = function()
+  local res = {}
+  for cmd, _ in pairs(H.git_options) do
+    if cmd ~= 'git' then table.insert(res, cmd) end
+  end
+  vim.list_extend(res, H.git_subcommands)
+  table.sort(res)
+  return res
 end
 
 H.command_get_complete_options = function(command)
-  local cached_candidates = H.git_completions[command]
+  local cached_candidates = H.git_options[command]
   if type(cached_candidates) == 'table' then return cached_candidates end
 
   local help_page = H.cli_run({ 'git', 'help', '--man', command }, vim.fn.getcwd())
@@ -460,26 +498,11 @@ H.command_get_complete_options = function(command)
     if is_in_options_section and l:find('^       %-') ~= nil then H.parse_options(candidates_map, l) end
   end
 
-  -- Find command's subcommands. For `git` command it is supported commands.
-  -- Otherwise they are assumed to be listed in "SYNOPSIS" section as the only
-  -- "usual" words differeing from "git" and command name itself.
-  if command == 'git' or command == 'help' then
-    vim.tbl_map(function(cmd) candidates_map[cmd] = true end, vim.tbl_keys(H.git_completions))
-  else
-    local is_in_synopsis_section = false
-    for _, l in ipairs(lines) do
-      if is_in_synopsis_section and l:find('^%u[%u ]+$') ~= nil then is_in_synopsis_section = false end
-      if not is_in_synopsis_section and l:find('^SYNOPSIS$') ~= nil then is_in_synopsis_section = true end
-      if is_in_synopsis_section then H.parse_subcommands(candidates_map, l, command) end
-    end
-  end
-
   -- Finalize candidates. Should not contain "almost duplicates".
-  -- Should also be sorted by relevance:
-  -- Subcommands (no "-" at start) > short options (one "-") > regular options
-  -- Inside groups sort alphabetically ignoring case
+  -- Should also be sorted by relevance: short options (start with "-") should
+  -- go before regular options (start with "--"). Inside groups sort
+  -- alphabetically ignoring case.
   candidates_map['--'] = nil
-  if command == 'git' then candidates_map['git'] = nil end
   for cmd, _ in pairs(candidates_map) do
     -- There can be two explicitly documented options "--xxx" and "--xxx=".
     -- Use only one of them (without "=").
@@ -488,9 +511,7 @@ H.command_get_complete_options = function(command)
 
   local res = vim.tbl_keys(candidates_map)
   table.sort(res, function(a, b)
-    local a1, a2, b1, b2 = a:sub(1, 1) == '-', a:sub(2, 2) == '-', b:sub(1, 1) == '-', b:sub(2, 2) == '-'
-    if a1 and not b1 then return false end
-    if not a1 and b1 then return true end
+    local a2, b2 = a:sub(2, 2) == '-', b:sub(2, 2) == '-'
     if a2 and not b2 then return false end
     if not a2 and b2 then return true end
     local a_low, b_low = a:lower(), b:lower()
@@ -498,7 +519,7 @@ H.command_get_complete_options = function(command)
   end)
 
   -- Cache and return
-  H.git_completions[command] = res
+  H.git_options[command] = res
   return res
 end
 
@@ -513,14 +534,14 @@ H.parse_options = function(map, line)
   end)
 end
 
-H.parse_subcommands = function(map, line, command)
-  line:gsub(' (%w[-%w]*) ', function(match)
-    if match ~= 'git' and match ~= command then map[match] = true end
-  end)
-end
-
 H.command_get_complete_targets = function(command, base)
+  if command == 'help' then
+    local res = vim.tbl_keys(H.git_options)
+    table.sort(res)
+    return res
+  end
   -- TODO
+  return { 'target' }
 end
 
 -- Autocommands ---------------------------------------------------------------
@@ -830,7 +851,7 @@ H.cli_out_show = function(out, mods, git_command)
   local filetype = vim.filetype.match({ buf = buf_id })
   if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
   vim.cmd(mods .. ' split ' .. buf_name)
-  vim.bo.buflisted = false
+  vim.bo.buflisted, vim.wo.foldenable = false, false
 end
 
 -- Utilities ------------------------------------------------------------------
