@@ -7,25 +7,15 @@
 -- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
 -- - `:Git` command with as much completion as reasonable:
---     - TODO: Consider using `git help -a` to get all available commands, as
---       it doesn't return "man-only" entries like "shell", "remote-ext", etc.
 --     - Implement completion based on cursor position inside command:
---         - If `--` is present and cursor is after it - suggest file paths.
---           Maybe take a look at broader targets (like branch names, etc.).
---         - Otherwise get completion items via `git help <current-command>`
---           and parsing its output for subcommands, "-"-options and
---           "--"-options. Choose which set to use as completion items based
---           on the currently completed word.
---
---     - Check that all completion options are parsed for porcelain commands.
+--         - Handle command targets: path, revision, ref. See
+--           'command-list.txt' for possible automation which ones should be
+--           used for particular command.
 --
 --     - Don't show output in the special buffer for some `git` commands,
 --       use `H.notify(out, 'INFO')` instead. Like:
 --         - `commit` (with its information about what was committed).
 --         - `stash` (with its feedback).
---
---     - Ensure resaonable treatment of quote escaping
---       (like in `git branch --list --format='%(refname:short)'`)
 --
 -- - Blame functionality?
 --
@@ -34,14 +24,21 @@
 --   to the file.
 --
 -- Tests:
+-- - Command:
+--     - Completions:
+--         - Some options are explicitly documented in both `--xxx` and
+--           `--xxx=` forms:
+--           `--[no-]signed, --signed=(true|false|if-asked)` or
+--           `--[no-]force-with-lease, --force-with-lease=<refname>,
+--           --force-with-lease=<refname>:<expect>` from `git push`.
+--         - Single dash options can have more than one char: `git branch -vv`.
 --
 -- Docs:
--- - Use `:Git -C <cwd>` to execute command in current working directory.
--- - How to read options completions:
---     - `[xxx]` describes optional text which can be omitted.
---       Like `:Giti log --decorate[=short|full|auto|no]`.
---     - `<xxx>` is a placeholder for something mandatory.
---       Like `:Git log --after=<date>`.
+-- - Command:
+--     - Use `:Git -C <cwd>` to execute command in current working directory.
+--     - How completions work: command, options, targets.
+--     - Don't use quotes to make same value. Like `:Git commit -m 'Hello\ world'`
+--       will result into commit message containing quotes.
 --
 
 --- *mini.git* Git integration
@@ -218,9 +215,9 @@ MiniGit.get_buf_data = function(buf_id)
   if buf_cache == nil then return nil end
   --stylua: ignore
   return vim.deepcopy({
-    repo = buf_cache.repo, root = buf_cache.root,
-    head = buf_cache.head, head_name = buf_cache.head_name,
-    status = buf_cache.status,
+    repo   = buf_cache.repo,   root        = buf_cache.root,
+    head   = buf_cache.head,   head_name   = buf_cache.head_name,
+    status = buf_cache.status, in_progress = buf_cache.in_progress,
   })
 end
 
@@ -264,6 +261,8 @@ H.default_config = MiniGit.config
 -- - <root> - path to worktree root.
 -- - <head> - full commit of `HEAD`.
 -- - <head_name> - short name of `HEAD` (`'HEAD'` for detached head).
+-- - <status> - current file status.
+-- - <in_progress> - string name of action in progress (bisect, merge, etc.)
 H.cache = {}
 
 -- Cache per repo (git directory) path. Values are tables with fields:
@@ -275,9 +274,15 @@ H.repos = {}
 -- Termporary file used as config for `GIT_EDITOR`
 H.git_editor_config = nil
 
+-- Array of supported Git commands
+H.git_supported_commands = nil
+
 -- Map from supported Git command to string array of options command supports.
 -- Option arrays are computed and cached lazily (if entry is not a table)
 H.git_options = nil
+
+-- Table with keys being commands which show something to user
+H.git_info_commands = nil
 
 -- Array of git subcommands which have subcommands themselves.
 -- There appears to be no good way to lazily compute them.
@@ -286,20 +291,21 @@ H.git_subcommands = {}
 local _add_subcmd = function(prefix, suffixes)
   for _, suf in ipairs(suffixes) do table.insert(H.git_subcommands, prefix .. ' ' .. suf) end
 end
-_add_subcmd('bundle',          { 'create', 'list-heads', 'unbundle', 'verify' })
-_add_subcmd('commit-graph',    { 'verify', 'write' })
-_add_subcmd('hook',            { 'run' })
-_add_subcmd('maintenance',     { 'run', 'start', 'stop', 'register', 'unregister' })
-_add_subcmd('notes',           { 'add', 'append', 'copy', 'edit', 'get-ref', 'merge', 'prune', 'remove', 'show' })
-_add_subcmd('p4',              { 'clone', 'rebase', 'submit', 'sync' })
-_add_subcmd('reflog',          { 'delete', 'exists', 'expire' })
-_add_subcmd('remote',          { 'add', 'get-url', 'prune', 'remove', 'rename', 'set-branches', 'set-head', 'set-url', 'show', 'update' })
-_add_subcmd('rerere',          { 'clear', 'diff', 'forget', 'gc', 'remaining', 'status' })
-_add_subcmd('sparse-checkout', { 'add', 'check-rules', 'disable', 'init', 'list', 'reapply', 'set' })
-_add_subcmd('stash',           { 'apply', 'branch', 'clear', 'create', 'drop', 'list', 'pop', 'save', 'show', 'store' })
-_add_subcmd('submodule',       { 'absorbgitdirs', 'add', 'deinit', 'foreach', 'init', 'set-branch', 'set-url', 'status', 'summary', 'sync', 'update' })
-_add_subcmd('subtree',         { 'add', 'merge', 'pull', 'push', 'split' })
-_add_subcmd('worktree',        { 'add', 'list', 'lock', 'move', 'prune', 'remove', 'repair', 'unlock' })
+_add_subcmd('bundle',           { 'create', 'list-heads', 'unbundle', 'verify' })
+_add_subcmd('bisect',           { 'bad', 'good', 'log', 'replay', 'reset', 'run', 'skip', 'start', 'terms', 'view', 'visualize' })
+_add_subcmd('commit-graph',     { 'verify', 'write' })
+_add_subcmd('maintenance',      { 'run', 'start', 'stop', 'register', 'unregister' })
+_add_subcmd('multi-pack-index', { 'expire', 'repack', 'verify', 'write' })
+_add_subcmd('notes',            { 'add', 'append', 'copy', 'edit', 'get-ref', 'list', 'merge', 'prune', 'remove', 'show' })
+_add_subcmd('p4',               { 'clone', 'rebase', 'submit', 'sync' })
+_add_subcmd('reflog',           { 'delete', 'exists', 'expire', 'show' })
+_add_subcmd('remote',           { 'add', 'get-url', 'prune', 'remove', 'rename', 'rm', 'set-branches', 'set-head', 'set-url', 'show', 'update' })
+_add_subcmd('rerere',           { 'clear', 'diff', 'forget', 'gc', 'remaining', 'status' })
+_add_subcmd('sparse-checkout',  { 'add', 'check-rules', 'disable', 'init', 'list', 'reapply', 'set' })
+_add_subcmd('stash',            { 'apply', 'branch', 'clear', 'create', 'drop', 'list', 'pop', 'save', 'show', 'store' })
+_add_subcmd('submodule',        { 'absorbgitdirs', 'add', 'deinit', 'foreach', 'init', 'set-branch', 'set-url', 'status', 'summary', 'sync', 'update' })
+_add_subcmd('subtree',          { 'add', 'merge', 'pull', 'push', 'split' })
+_add_subcmd('worktree',         { 'add', 'list', 'lock', 'move', 'prune', 'remove', 'repair', 'unlock' })
 --stylua: ignore end
 
 -- Whether to temporarily skip job timeout (like when inside `GIT_EDITOR`)
@@ -354,6 +360,7 @@ end
 
 H.create_user_commands = function()
   local git_execute = function(input)
+    H.ensure_supported_git_commands()
     -- Define Git editor to be used if needed. The way it works is: execute
     -- command, wait for it to exit, use content of edited file. So to properly
     -- wait for user to finish edit, start fresh headless process which opens
@@ -384,17 +391,19 @@ H.create_user_commands = function()
     add_to_log(':Git', { input = input, args = args, editor = editor })
     local on_done = vim.schedule_wrap(function(code, out, err)
       add_to_log(':Git on_done', { code = code, out = vim.split(out, '\n'), err = err })
-      if H.cli_err_notify(code, out, err) then return end
-      H.cli_out_show(out, input.mods, command)
 
-      -- Ensure that all buffers are up to date (avoids "The file has been
-      -- changed since reading it" warning)
-      vim.tbl_map(function(buf_id) vim.cmd('checktime ' .. buf_id) end, vim.api.nvim_list_bufs())
+      -- Show CLI stderr and stdout
+      if H.cli_err_notify(code, out, err) then return end
+      H.cli_show_output(out, input.mods, command)
 
       -- Ensure that repo data is up to date. This is not always taken care of
       -- by repo watching, like file status after `:Git commit` (probably due
       -- to `git status` still using old repo data).
       H.on_repo_change(repo)
+
+      -- Ensure that all buffers are up to date (avoids "The file has been
+      -- changed since reading it" warning)
+      vim.tbl_map(function(buf_id) vim.cmd('checktime ' .. buf_id) end, vim.api.nvim_list_bufs())
     end)
 
     H.cli_run(command, root, on_done, { env = env })
@@ -435,7 +444,7 @@ H.command_get_complete_candidates = function(line, col, base)
 
   -- Determine current Git command as the earliest present supported command
   local command, command_end = nil, math.huge
-  for cmd, _ in pairs(H.git_options) do
+  for _, cmd in pairs(H.git_supported_commands) do
     local _, ind = line:find(' ' .. cmd .. ' ', 1, true)
     if ind ~= nil and ind < command_end then
       command, command_end = cmd, ind
@@ -450,34 +459,50 @@ H.command_get_complete_candidates = function(line, col, base)
   --   of the command (to also suggest subcommands).
   -- - Command targets specific for each command (if present).
   if vim.startswith(base, '-') then return H.command_get_complete_options(command) end
-  if command_end == math.huge or (command_end - 1) == col then return H.command_get_complete_commands() end
+  if command_end == math.huge or (command_end - 1) == col then return H.git_supported_commands end
   return H.command_get_complete_targets(command, base)
 end
 
 H.ensure_supported_git_commands = function()
-  if H.git_options ~= nil then return end
-  local commands = H.cli_run({ 'git', '--list-cmds=main,others,alias,nohelpers' }, vim.fn.getcwd()).out
-  if commands == '' then return end
-  local options = { git = true }
-  for _, command in ipairs(vim.split(commands, '\n')) do
-    -- Initialize as `false` so that actual candidates are computed lazily
-    options[command] = false
-  end
-  H.git_options = options
-end
+  if H.git_supported_commands ~= nil and H.git_options ~= nil and H.git_info_commands ~= nil then return end
 
-H.command_get_complete_commands = function()
-  local res = {}
-  for cmd, _ in pairs(H.git_options) do
-    if cmd ~= 'git' then table.insert(res, cmd) end
+  -- Compute all supported commands. All 'list-' are taken from Git source
+  -- 'command-list.txt' file. Be so granular and not just `main,nohelpers` in
+  -- order to not include purely man-page worthy items (like "remote-ext").
+  --stylua: ignore
+  local lists_all = {
+    'list-mainporcelain',
+    'list-ancillarymanipulators', 'list-ancillaryinterrogators',
+    'list-foreignscminterface',
+    'list-plumbingmanipulators', 'list-plumbinginterrogators',
+    'others', 'alias',
+  }
+  local all_commands = H.cli_run({ 'git', '--list-cmds=' .. table.concat(lists_all, ',') }, vim.fn.getcwd()).out
+  all_commands = vim.split(all_commands, '\n')
+  table.sort(all_commands)
+  H.git_supported_commands = all_commands
+
+  -- Initialize cache for command options. Initialize with `false` so that
+  -- actual candidates are computed lazily.
+  H.git_options = { git = false }
+  for _, command in ipairs(all_commands) do
+    H.git_options[command] = false
   end
-  vim.list_extend(res, H.git_subcommands)
-  table.sort(res)
-  return res
+
+  -- Compute commands which are meant to show information. These will show CLI
+  -- output in separate buffer opposed to `vim.notify`.
+  local lists_info = 'list-info,list-ancillaryinterrogators,list-plumbinginterrogators'
+  local info_commands = H.cli_run({ 'git', '--list-cmds=' .. lists_info }, vim.fn.getcwd()).out
+  H.git_info_commands = {}
+  for _, cmd in ipairs(vim.split(info_commands, '\n')) do
+    H.git_info_commands[cmd] = true
+  end
+  H.git_info_commands.bisect = nil
 end
 
 H.command_get_complete_options = function(command)
   local cached_candidates = H.git_options[command]
+  if cached_candidates == nil then return {} end
   if type(cached_candidates) == 'table' then return cached_candidates end
 
   local help_page = H.cli_run({ 'git', 'help', '--man', command }, vim.fn.getcwd())
@@ -489,8 +514,11 @@ H.command_get_complete_options = function(command)
   -- Find command's flag options. Assumed to be listed inside "OPTIONS" or "XXX
   -- OPTIONS" (like "MODE OPTIONS" of `git rebase`) section of help page on
   -- separate lines. Whether a line contains only options is determined
-  -- euristically: it is assumed to start exactly with "       -" indicating
+  -- heuristically: it is assumed to start exactly with "       -" indicating
   -- proper indent for subsection start.
+  -- Known not parsable options:
+  -- - `git reset <mode>` (--soft, --hard, etc.): not listed in "OPTIONS".
+  -- - All -<number> options, as they are not really completeable.
   local is_in_options_section = false
   for _, l in ipairs(lines) do
     if is_in_options_section and l:find('^%u[%u ]+$') ~= nil then is_in_options_section = false end
@@ -536,8 +564,8 @@ end
 
 H.command_get_complete_targets = function(command, base)
   if command == 'help' then
-    local res = vim.tbl_keys(H.git_options)
-    table.sort(res)
+    local res = { 'git' }
+    vim.list_extend(res, H.git_supported_commands)
     return res
   end
   -- TODO
@@ -574,6 +602,7 @@ H.setup_buf_behavior = function(buf_id)
       local buf_cache = H.cache[buf_id]
       if buf_cache == nil or buf_cache.root == nil then return end
       H.update_git_head(buf_cache.root, { buf_id })
+      H.update_git_in_progress(buf_cache.repo, { buf_id })
       H.update_git_status(buf_cache.root, { buf_id })
     end,
 
@@ -626,6 +655,7 @@ H.start_tracking = function(buf_id, path)
 
     -- Immediately update buffer tracking data
     H.update_git_head(root, { buf_id })
+    H.update_git_in_progress(repo, { buf_id })
     H.update_git_status(root, { buf_id })
   end)
 
@@ -695,7 +725,8 @@ H.on_repo_change = function(repo)
     end
   end
 
-  -- Update Git data for every worktree
+  -- Update Git data
+  H.update_git_in_progress(repo, vim.tbl_keys(repo_bufs))
   for root, bufs in pairs(root_bufs) do
     H.update_git_head(root, bufs)
     -- Status could have also changed as it depends on the index
@@ -727,6 +758,26 @@ H.update_git_head = function(root, bufs)
   end)
 
   H.cli_run(command, root, on_done)
+end
+
+H.update_git_in_progress = function(repo, bufs)
+  -- Get data about what process is in progress
+  local in_progress = {}
+  if H.is_fs_present(repo .. '/BISECT_LOG') then table.insert(in_progress, 'bisect') end
+  if H.is_fs_present(repo .. '/CHERRY_PICK_HEAD') then table.insert(in_progress, 'cherry-pick') end
+  if H.is_fs_present(repo .. '/MERGE_HEAD') then table.insert(in_progress, 'merge') end
+  if H.is_fs_present(repo .. '/REVERT_HEAD') then table.insert(in_progress, 'revert') end
+  if H.is_fs_present(repo .. '/rebase-apply') then table.insert(in_progress, 'apply') end
+  if H.is_fs_present(repo .. '/rebase-merge') then table.insert(in_progress, 'rebase') end
+
+  -- Update data for all buffers from target `root`
+  local new_data = { in_progress = table.concat(in_progress, ',') }
+  for _, buf_id in ipairs(bufs) do
+    H.update_buf_data(buf_id, new_data)
+  end
+
+  -- Redraw statusline to have possible statusline component up to date
+  vim.cmd('redrawstatus')
 end
 
 H.update_git_status = function(root, bufs)
@@ -836,28 +887,47 @@ H.cli_err_notify = function(code, out, err)
   return should_stop
 end
 
-H.cli_out_show = function(out, mods, git_command)
+H.cli_show_output = function(out, mods, git_command)
   if out == '' or mods:find('silent') ~= nil then return end
+
+  -- Show in a buffer if command is for showing info; else - `vim.notify`
+  local is_info = false
+  for _, cmd in ipairs(git_command) do
+    is_info = is_info or H.git_info_commands[cmd]
+  end
+  if not is_info then return H.notify(out, 'INFO') end
 
   -- Reuse same buffer
   local buf_id = H.output_buf_id
   if buf_id == nil or not vim.api.nvim_buf_is_valid(buf_id) then buf_id = vim.api.nvim_create_buf(false, true) end
   H.output_buf_id = buf_id
 
-  -- Populate special buffer, make up to date, and show in split
+  -- Populate special buffer and make it up to date, and show in split
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, vim.split(out, '\n'))
   local buf_name = 'minigit:///' .. table.concat(git_command, ' ')
   vim.api.nvim_buf_set_name(buf_id, buf_name)
   local filetype = vim.filetype.match({ buf = buf_id })
   if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
-  vim.cmd(mods .. ' split ' .. buf_name)
-  vim.bo.buflisted, vim.wo.foldenable = false, false
+
+  -- Try reusing existing window to not create extra splits; split otherwise
+  local win_id = vim.fn.bufwinid(buf_id)
+  if win_id ~= -1 then
+    vim.api.nvim_win_set_buf(win_id, buf_id)
+  else
+    vim.cmd(mods .. ' split ' .. buf_name)
+    vim.wo.foldlevel = 999
+    -- Set 'nobuflisted' after 'split' as it resets it to 'buflisted'
+    vim.bo[buf_id].buflisted = false
+  end
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
 end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.git) %s', msg), 0) end
 
 H.notify = function(msg, level_name) vim.notify('(mini.git) ' .. msg, vim.log.levels[level_name]) end
+
+H.is_fs_present = function(path) return vim.loop.fs_stat(path) ~= nil end
 
 H.expandcmd = function(x)
   if x == '<cwd>' then return vim.fn.getcwd() end

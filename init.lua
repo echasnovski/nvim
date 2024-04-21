@@ -56,31 +56,47 @@ now(function() require('mini.starter').setup() end)
 
 now(function()
   local statusline = require('mini.statusline')
+  local section_git_head = function()
+    local summary = vim.b.minigit_summary
+    if summary == nil then return '' end
+    local res = summary.head_name
+    if res == nil then return '' end
+
+    res = ' ' .. (res == 'HEAD' and summary.head:sub(1, 7) or res)
+    if not (summary.in_progress == nil or summary.in_progress == '') then res = res .. '|' .. summary.in_progress end
+    return res
+  end
+
+  local section_git_status = function()
+    local summary = vim.b.minigit_summary or {}
+    if summary == nil then return '' end
+    local res = summary.status
+    if res == nil then return '' end
+    return res == '  ' and '' or ('(' .. res .. ')')
+  end
+
+  local section_diff = function()
+    local summary = vim.b.minidiff_summary_string
+    if summary == nil then return '' end
+    return string.format(' %s', summary == '' and '-' or summary)
+  end
+
   --stylua: ignore
   local active = function()
     local mode, mode_hl = statusline.section_mode({ trunc_width = 120 })
     -- Try out 'mini.git'
-    local git_summary  = vim.b.minigit_summary or {}
-    local git_head = git_summary.head_name or ''
-    if git_head ~= '' then
-      git_head = ' ' .. (git_head == 'HEAD' and git_summary.head:sub(1, 7) or git_head)
-    end
-    local git_status = git_summary.status or ''
-    if git_status ~= '' then
-      git_status = git_status == '  ' and '' or string.format('(%s)', git_status)
-    end
-    -- Try out 'mini.diff'
-    local diff_summary  = vim.b.minidiff_summary_string
-    local diff          = diff_summary ~= nil and string.format(' %s', diff_summary == '' and '-' or diff_summary) or ''
-    local diagnostics   = statusline.section_diagnostics({ trunc_width = 75 })
-    local filename      = statusline.section_filename({ trunc_width = 140 })
-    local fileinfo      = statusline.section_fileinfo({ trunc_width = 120 })
-    local location      = statusline.section_location({ trunc_width = 75 })
-    local search        = statusline.section_searchcount({ trunc_width = 75 })
+    local git_head    = section_git_head()
+    local git_status  = section_git_status()
+    local diff        = section_diff()
+    local diagnostics = statusline.section_diagnostics({ trunc_width = 75 })
+    local filename    = statusline.section_filename({ trunc_width = 140 })
+    local fileinfo    = statusline.section_fileinfo({ trunc_width = 120 })
+    local location    = statusline.section_location({ trunc_width = 75 })
+    local search      = statusline.section_searchcount({ trunc_width = 75 })
 
     return statusline.combine_groups({
       { hl = mode_hl,                  strings = { mode } },
-      { hl = 'MiniStatuslineDevinfo',  strings = { git_head, diff, diagnostics } },
+      { hl = 'MiniStatuslineDevinfo',  strings = { git_head, git_status, diff, diagnostics } },
       '%<', -- Mark general truncate point
       { hl = 'MiniStatuslineFilename', strings = { filename } },
       '%=', -- End left alignment
