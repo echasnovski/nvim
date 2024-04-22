@@ -274,39 +274,12 @@ H.repos = {}
 -- Termporary file used as config for `GIT_EDITOR`
 H.git_editor_config = nil
 
--- Array of supported Git commands
-H.git_supported_commands = nil
-
--- Map from supported Git command to string array of options command supports.
--- Option arrays are computed and cached lazily (if entry is not a table)
-H.git_options = nil
-
--- Table with keys being commands which show something to user
-H.git_info_commands = nil
-
--- Array of git subcommands which have subcommands themselves.
--- There appears to be no good way to lazily compute them.
-H.git_subcommands = {}
---stylua: ignore start
-local _add_subcmd = function(prefix, suffixes)
-  for _, suf in ipairs(suffixes) do table.insert(H.git_subcommands, prefix .. ' ' .. suf) end
-end
-_add_subcmd('bundle',           { 'create', 'list-heads', 'unbundle', 'verify' })
-_add_subcmd('bisect',           { 'bad', 'good', 'log', 'replay', 'reset', 'run', 'skip', 'start', 'terms', 'view', 'visualize' })
-_add_subcmd('commit-graph',     { 'verify', 'write' })
-_add_subcmd('maintenance',      { 'run', 'start', 'stop', 'register', 'unregister' })
-_add_subcmd('multi-pack-index', { 'expire', 'repack', 'verify', 'write' })
-_add_subcmd('notes',            { 'add', 'append', 'copy', 'edit', 'get-ref', 'list', 'merge', 'prune', 'remove', 'show' })
-_add_subcmd('p4',               { 'clone', 'rebase', 'submit', 'sync' })
-_add_subcmd('reflog',           { 'delete', 'exists', 'expire', 'show' })
-_add_subcmd('remote',           { 'add', 'get-url', 'prune', 'remove', 'rename', 'rm', 'set-branches', 'set-head', 'set-url', 'show', 'update' })
-_add_subcmd('rerere',           { 'clear', 'diff', 'forget', 'gc', 'remaining', 'status' })
-_add_subcmd('sparse-checkout',  { 'add', 'check-rules', 'disable', 'init', 'list', 'reapply', 'set' })
-_add_subcmd('stash',            { 'apply', 'branch', 'clear', 'create', 'drop', 'list', 'pop', 'save', 'show', 'store' })
-_add_subcmd('submodule',        { 'absorbgitdirs', 'add', 'deinit', 'foreach', 'init', 'set-branch', 'set-url', 'status', 'summary', 'sync', 'update' })
-_add_subcmd('subtree',          { 'add', 'merge', 'pull', 'push', 'split' })
-_add_subcmd('worktree',         { 'add', 'list', 'lock', 'move', 'prune', 'remove', 'repair', 'unlock' })
---stylua: ignore end
+-- Data about supported Git subcommands. Initialized lazily. Fields:
+-- - <supported> - array of supported one word commands.
+-- - <complete> - array of commands to complete directly after `:Git`.
+-- - <info> - map with fields as commands which show something to user.
+-- - <options> - map of cached options per command; initialized lazily.
+H.git_subcommands = nil
 
 -- Whether to temporarily skip job timeout (like when inside `GIT_EDITOR`)
 H.skip_timeout = false
@@ -360,7 +333,7 @@ end
 
 H.create_user_commands = function()
   local git_execute = function(input)
-    H.ensure_supported_git_commands()
+    H.ensure_git_subcommands()
     -- Define Git editor to be used if needed. The way it works is: execute
     -- command, wait for it to exit, use content of edited file. So to properly
     -- wait for user to finish edit, start fresh headless process which opens
@@ -414,6 +387,80 @@ H.create_user_commands = function()
 end
 
 -- Command --------------------------------------------------------------------
+--stylua: ignore
+H.ensure_git_subcommands = function()
+  if H.git_subcommands ~= nil then return end
+  local git_subcommands = {}
+
+  -- Compute all supported commands. All 'list-' are taken from Git source
+  -- 'command-list.txt' file. Be so granular and not just `main,nohelpers` in
+  -- order to not include purely man-page worthy items (like "remote-ext").
+  local lists_all = {
+    'list-mainporcelain',
+    'list-ancillarymanipulators', 'list-ancillaryinterrogators',
+    'list-foreignscminterface',
+    'list-plumbingmanipulators', 'list-plumbinginterrogators',
+    'others', 'alias',
+  }
+  local git_exec = MiniGit.config.job.git_executable
+  local supported = H.cli_run({ git_exec, '--list-cmds=' .. table.concat(lists_all, ',') }, vim.fn.getcwd()).out
+  supported = vim.split(supported, '\n')
+  if supported[1] == '' then
+    -- Fall back only on basics if previous one failed for some reason
+    supported = {
+      'add', 'bisect', 'branch', 'clone', 'commit', 'diff', 'fetch', 'grep', 'init', 'log', 'merge',
+      'mv', 'pull', 'push', 'rebase', 'reset', 'restore', 'rm', 'show', 'status', 'switch', 'tag',
+    }
+  end
+  table.sort(supported)
+  git_subcommands.supported = supported
+
+  -- Compute complete list for commands by enhancing with two word commands.
+  -- Keep those lists manual as there is no good way to compute lazily.
+  local complete = vim.deepcopy(supported)
+  local add_twoword = function(prefix, suffixes)
+    for _, suf in ipairs(suffixes) do table.insert(complete, prefix .. ' ' .. suf) end
+  end
+  add_twoword('bundle',           { 'create', 'list-heads', 'unbundle', 'verify' })
+  add_twoword('bisect',           { 'bad', 'good', 'log', 'replay', 'reset', 'run', 'skip', 'start', 'terms', 'view', 'visualize' })
+  add_twoword('commit-graph',     { 'verify', 'write' })
+  add_twoword('maintenance',      { 'run', 'start', 'stop', 'register', 'unregister' })
+  add_twoword('multi-pack-index', { 'expire', 'repack', 'verify', 'write' })
+  add_twoword('notes',            { 'add', 'append', 'copy', 'edit', 'get-ref', 'list', 'merge', 'prune', 'remove', 'show' })
+  add_twoword('p4',               { 'clone', 'rebase', 'submit', 'sync' })
+  add_twoword('reflog',           { 'delete', 'exists', 'expire', 'show' })
+  add_twoword('remote',           { 'add', 'get-url', 'prune', 'remove', 'rename', 'rm', 'set-branches', 'set-head', 'set-url', 'show', 'update' })
+  add_twoword('rerere',           { 'clear', 'diff', 'forget', 'gc', 'remaining', 'status' })
+  add_twoword('sparse-checkout',  { 'add', 'check-rules', 'disable', 'init', 'list', 'reapply', 'set' })
+  add_twoword('stash',            { 'apply', 'branch', 'clear', 'create', 'drop', 'list', 'pop', 'save', 'show', 'store' })
+  add_twoword('submodule',        { 'absorbgitdirs', 'add', 'deinit', 'foreach', 'init', 'set-branch', 'set-url', 'status', 'summary', 'sync', 'update' })
+  add_twoword('subtree',          { 'add', 'merge', 'pull', 'push', 'split' })
+  add_twoword('worktree',         { 'add', 'list', 'lock', 'move', 'prune', 'remove', 'repair', 'unlock' })
+  git_subcommands.complete = complete
+
+  -- Compute commands which are meant to show information. These will show CLI
+  -- output in separate buffer opposed to `vim.notify`.
+  local lists_info = 'list-info,list-ancillaryinterrogators,list-plumbinginterrogators'
+  local info_commands = H.cli_run({ git_exec, '--list-cmds=' .. lists_info }, vim.fn.getcwd()).out
+  if info_commands == '' then info_commands = 'bisect\ndiff\ngrep\nlog\nshow\nstatus' end
+  local info = {}
+  for _, cmd in ipairs(vim.split(info_commands, '\n')) do
+    info[cmd] = true
+  end
+  git_subcommands.info = info
+
+  -- Initialize cache for command options. Initialize with `false` so that
+  -- actual values are computed lazily when needed for a command.
+  local options = { git = false }
+  for _, command in ipairs(supported) do
+    options[command] = false
+  end
+  git_subcommands.options = options
+
+  -- Cache results
+  H.git_subcommands = git_subcommands
+end
+
 H.ensure_git_editor_config = function(command_mods)
   if H.git_editor_config == nil or not vim.fn.filereadable(H.git_editor_config) == 0 then
     H.git_editor_config = vim.fn.tempname()
@@ -440,11 +487,11 @@ H.command_complete = function(_, line, col)
 end
 
 H.command_get_complete_candidates = function(line, col, base)
-  H.ensure_supported_git_commands()
+  H.ensure_git_subcommands()
 
   -- Determine current Git command as the earliest present supported command
   local command, command_end = nil, math.huge
-  for _, cmd in pairs(H.git_supported_commands) do
+  for _, cmd in pairs(H.git_subcommands.supported) do
     local _, ind = line:find(' ' .. cmd .. ' ', 1, true)
     if ind ~= nil and ind < command_end then
       command, command_end = cmd, ind
@@ -459,53 +506,16 @@ H.command_get_complete_candidates = function(line, col, base)
   --   of the command (to also suggest subcommands).
   -- - Command targets specific for each command (if present).
   if vim.startswith(base, '-') then return H.command_get_complete_options(command) end
-  if command_end == math.huge or (command_end - 1) == col then return H.git_supported_commands end
+  if command_end == math.huge or (command_end - 1) == col then return H.git_subcommands.complete end
   return H.command_get_complete_targets(command, base)
 end
 
-H.ensure_supported_git_commands = function()
-  if H.git_supported_commands ~= nil and H.git_options ~= nil and H.git_info_commands ~= nil then return end
-
-  -- Compute all supported commands. All 'list-' are taken from Git source
-  -- 'command-list.txt' file. Be so granular and not just `main,nohelpers` in
-  -- order to not include purely man-page worthy items (like "remote-ext").
-  --stylua: ignore
-  local lists_all = {
-    'list-mainporcelain',
-    'list-ancillarymanipulators', 'list-ancillaryinterrogators',
-    'list-foreignscminterface',
-    'list-plumbingmanipulators', 'list-plumbinginterrogators',
-    'others', 'alias',
-  }
-  local all_commands = H.cli_run({ 'git', '--list-cmds=' .. table.concat(lists_all, ',') }, vim.fn.getcwd()).out
-  all_commands = vim.split(all_commands, '\n')
-  table.sort(all_commands)
-  H.git_supported_commands = all_commands
-
-  -- Initialize cache for command options. Initialize with `false` so that
-  -- actual candidates are computed lazily.
-  H.git_options = { git = false }
-  for _, command in ipairs(all_commands) do
-    H.git_options[command] = false
-  end
-
-  -- Compute commands which are meant to show information. These will show CLI
-  -- output in separate buffer opposed to `vim.notify`.
-  local lists_info = 'list-info,list-ancillaryinterrogators,list-plumbinginterrogators'
-  local info_commands = H.cli_run({ 'git', '--list-cmds=' .. lists_info }, vim.fn.getcwd()).out
-  H.git_info_commands = {}
-  for _, cmd in ipairs(vim.split(info_commands, '\n')) do
-    H.git_info_commands[cmd] = true
-  end
-  H.git_info_commands.bisect = nil
-end
-
 H.command_get_complete_options = function(command)
-  local cached_candidates = H.git_options[command]
+  local cached_candidates = H.git_subcommands.options[command]
   if cached_candidates == nil then return {} end
   if type(cached_candidates) == 'table' then return cached_candidates end
 
-  local help_page = H.cli_run({ 'git', 'help', '--man', command }, vim.fn.getcwd())
+  local help_page = H.cli_run({ MiniGit.config.job.git_executable, 'help', '--man', command }, vim.fn.getcwd())
   if help_page.code ~= 0 then return {} end
 
   -- Construct non-duplicating candidates by parsing lines of help page
@@ -547,7 +557,7 @@ H.command_get_complete_options = function(command)
   end)
 
   -- Cache and return
-  H.git_options[command] = res
+  H.git_subcommands.options[command] = res
   return res
 end
 
@@ -565,7 +575,7 @@ end
 H.command_get_complete_targets = function(command, base)
   if command == 'help' then
     local res = { 'git' }
-    vim.list_extend(res, H.git_supported_commands)
+    vim.list_extend(res, H.git_subcommands.supported)
     return res
   end
   -- TODO
@@ -893,7 +903,7 @@ H.cli_show_output = function(out, mods, git_command)
   -- Show in a buffer if command is for showing info; else - `vim.notify`
   local is_info = false
   for _, cmd in ipairs(git_command) do
-    is_info = is_info or H.git_info_commands[cmd]
+    is_info = is_info or H.git_subcommands.info[cmd]
   end
   if not is_info then return H.notify(out, 'INFO') end
 
