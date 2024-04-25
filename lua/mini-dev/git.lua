@@ -6,18 +6,7 @@
 --
 -- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
--- - `:Git` command with as much completion as reasonable:
---     - Implement completion based on cursor position inside command:
---         - Handle command targets: path, revision, ref. See
---           'command-list.txt' for possible automation which ones should be
---           used for particular command.
---
---     - Don't show output in the special buffer for some `git` commands,
---       use `H.notify(out, 'INFO')` instead. Like:
---         - `commit` (with its information about what was committed).
---         - `stash` (with its feedback).
---
--- - Blame functionality?
+-- - Blame functionality.
 --
 -- - Exported functionality to get file status/data based on an array of paths
 --   alone? This maybe can be utilized by 'mini.files' to show Git status next
@@ -40,6 +29,8 @@
 --     - How completions work: command, options, targets.
 --     - Don't use quotes to make same value. Like `:Git commit -m 'Hello\ world'`
 --       will result into commit message containing quotes.
+--     - Use |:cabbrev| to set default modifiers. Lik `cabbrev Git vert Git`.
+--     - Triggers `MiniGitCommandDone` `User` event when done.
 --
 
 --- *mini.git* Git integration
@@ -223,33 +214,17 @@ MiniGit.get_buf_data = function(buf_id)
 end
 
 MiniGit._edit = function(path, servername, mods)
-  H.skip_timeout = true
-
-  -- Start file edit but with proper modifiers
-  vim.cmd(mods .. ' split ' .. vim.fn.fnameescape(path))
-
-  local buf_id, win_id = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
-  vim.bo[buf_id].swapfile = false
-
-  -- Define action to finish editing Git related file
-  local finish_au_id
-  local finish = function(data)
-    local should_close = data.buf == buf_id or (data.event == 'WinClosed' and tonumber(data.match) == win_id)
-    if not should_close then return end
-
-    -- Clean up Git editor Neovim instance
+  -- Define editor state before and after editing path
+  H.skip_timeout, H.skip_sync = true, true
+  local cleanup = function()
     local _, channel = pcall(vim.fn.sockconnect, 'pipe', servername, { rpc = true })
     pcall(vim.rpcnotify, channel, 'nvim_exec2', 'quitall!', {})
-    H.skip_timeout = false
-
-    -- Clean up current instance
-    pcall(vim.api.nvim_del_autocmd, finish_au_id)
-    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
-    vim.cmd('redraw')
+    H.skip_timeout, H.skip_sync = false, false
   end
-  -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
-  local events = { 'WinClosed', 'BufDelete', 'BufWipeout', 'VimLeave' }
-  finish_au_id = vim.api.nvim_create_autocmd(events, { nested = true, callback = finish })
+
+  -- Start file edit with proper modifiers in a special window
+  vim.cmd(mods .. ' split ' .. vim.fn.fnameescape(path))
+  H.define_minigit_window(cleanup)
 end
 
 -- Helper data ================================================================
@@ -282,11 +257,9 @@ H.git_editor_config = nil
 -- - <options> - map of cached options per command; initialized lazily.
 H.git_subcommands = nil
 
--- Whether to temporarily skip job timeout (like when inside `GIT_EDITOR`)
+-- Whether to temporarily skip some checks (like when inside `GIT_EDITOR`)
 H.skip_timeout = false
-
--- Buffer to reuse for showing `:Git` output
-H.output_buf_id = nil
+H.skip_sync = false
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -360,13 +333,15 @@ H.create_user_commands = function()
     local command = { MiniGit.config.job.git_executable, unpack(args) }
     local repo, root = H.command_get_cwd_data()
 
-    add_to_log(':Git', { input = input, args = args, editor = editor })
+    local is_done = false
     local on_done = vim.schedule_wrap(function(code, out, err)
-      add_to_log(':Git on_done', { code = code, out = vim.split(out, '\n'), err = err })
+      -- Register that command is done executing
+      is_done = true
+      vim.api.nvim_exec_autocmds('User', { pattern = 'MiniGitCommandDone' })
 
       -- Show CLI stderr and stdout
       if H.cli_err_notify(code, out, err) then return end
-      H.cli_show_output(out, input.mods, command)
+      H.show_git_cli_output(out, input.mods, command)
 
       -- Ensure that repo data is up to date. This is not always taken care of
       -- by repo watching, like file status after `:Git commit` (probably due
@@ -379,9 +354,13 @@ H.create_user_commands = function()
     end)
 
     H.cli_run(command, root, on_done, { env = env })
+
+    -- If needed, synchronously wait for job to finish
+    local sync_check = function() return H.skip_sync or is_done end
+    if not input.bang then vim.wait(MiniGit.config.job.timeout + 10, sync_check, 1) end
   end
 
-  local opts = { nargs = '+', complete = H.command_complete, desc = 'Execute Git command' }
+  local opts = { bang = true, nargs = '+', complete = H.command_complete, desc = 'Execute Git command' }
   vim.api.nvim_create_user_command('Git', git_execute, opts)
 end
 
@@ -635,7 +614,7 @@ H.command_complete_path = function(cwd, base)
   return res, 'path'
 end
 
-H.command_complete_pushpull = function(cwd, _, line)
+H.command_complete_pullpush = function(cwd, _, line)
   -- Suggest remotes at `Git push |` and `Git push or|`, references otherwise
   -- Ignore options when deciding which suggestion to compute
   local _, n_words = line:gsub(' (%-%S+)', ''):gsub('%S+ ', '')
@@ -685,8 +664,8 @@ H.command_complete_subcommand_targets = {
 
   -- Collaborate
   fetch = H.make_git_cli_complete({ 'remote' }, 'remote'),
-  push = H.command_complete_pushpull,
-  pull = H.command_complete_pushpull,
+  push = H.command_complete_pullpush,
+  pull = H.command_complete_pullpush,
 
   -- Miscellaneous
   checkout = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches', '--tags', '--remotes' }, 'checkout'),
@@ -697,6 +676,82 @@ H.command_complete_subcommand_targets = {
     return res, 'help'
   end,
 }
+
+-- Show command output --------------------------------------------------------
+H.show_git_cli_output = function(out, mods, git_command)
+  if out == '' or mods:find('silent') ~= nil then return end
+
+  -- Show in a buffer if command is for showing info; else - `vim.notify`
+  local is_info = false
+  for _, cmd in ipairs(git_command) do
+    is_info = is_info or H.git_subcommands.info[cmd]
+  end
+  if not is_info then return H.notify(out, 'INFO') end
+
+  -- Populate special buffer in a window and make them current
+  local buf_id, win_id = H.make_minigit_bufwin(mods)
+
+  local cur_name = vim.api.nvim_buf_get_name(buf_id)
+  local new_name = 'minigit://' .. buf_id .. '/' .. table.concat(git_command, ' ')
+  vim.api.nvim_buf_set_name(buf_id, new_name)
+  -- - Do not leave unlisted buffers when doing actual rename
+  if cur_name ~= '' and cur_name ~= new_name then pcall(vim.cmd, 'bwipeout ' .. vim.fn.fnameescape(cur_name)) end
+
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, vim.split(out, '\n'))
+  local filetype = vim.filetype.match({ buf = buf_id })
+  if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
+
+  vim.api.nvim_set_current_win(win_id)
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+end
+
+H.make_minigit_bufwin = function(mods)
+  local split = function()
+    local buf_id = vim.api.nvim_create_buf(false, true)
+    vim.cmd(mods .. ' sbuffer ' .. buf_id)
+    local win_id = vim.api.nvim_get_current_win()
+    H.define_minigit_window()
+    return buf_id, win_id
+  end
+
+  -- Force split of there are split command modifiers (intentionally omit rest)
+  local has_split_mods = mods:find('vertical') ~= nil or mods:find('horizontal') ~= nil or mods:find('tab') ~= nil
+  if has_split_mods then return split() end
+
+  -- Try reusing already shown buffer-window pair
+  for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local win_buf_id = vim.api.nvim_win_get_buf(win_id)
+    local win_buf_name = vim.api.nvim_buf_get_name(win_buf_id)
+    local minigit_buf_type = win_buf_name:match('^minigit://%d+/(%S+)')
+    if minigit_buf_type ~= nil and minigit_buf_type ~= 'blame' then return win_buf_id, win_id end
+  end
+
+  return split()
+end
+
+H.define_minigit_window = function(cleanup)
+  local buf_id, win_id = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
+  vim.bo.swapfile, vim.bo.buflisted = false, false
+  vim.wo.foldlevel = 999
+
+  -- Define action to finish editing Git related file
+  local finish_au_id
+  local finish = function(data)
+    local should_close = data.buf == buf_id or (data.event == 'WinClosed' and tonumber(data.match) == win_id)
+    if not should_close then return end
+
+    if vim.is_callable(cleanup) then cleanup() end
+
+    pcall(vim.api.nvim_del_autocmd, finish_au_id)
+    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
+    pcall(vim.api.nvim_win_close, win_id, true)
+    vim.cmd('redraw')
+  end
+  -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
+  local events = { 'WinClosed', 'BufDelete', 'BufWipeout', 'VimLeave' }
+  local opts = { nested = true, callback = finish, desc = 'Cleanup window and buffer' }
+  finish_au_id = vim.api.nvim_create_autocmd(events, opts)
+end
 
 -- Autocommands ---------------------------------------------------------------
 H.auto_enable = vim.schedule_wrap(function(data)
@@ -1011,42 +1066,6 @@ H.cli_err_notify = function(code, out, err)
   if should_stop then H.notify(err .. (out == '' and '' or ('\n' .. out)), 'ERROR') end
   if not should_stop and err ~= '' then H.notify(err, 'WARN') end
   return should_stop
-end
-
-H.cli_show_output = function(out, mods, git_command)
-  if out == '' or mods:find('silent') ~= nil then return end
-
-  -- Show in a buffer if command is for showing info; else - `vim.notify`
-  local is_info = false
-  for _, cmd in ipairs(git_command) do
-    is_info = is_info or H.git_subcommands.info[cmd]
-  end
-  if not is_info then return H.notify(out, 'INFO') end
-
-  -- Reuse same buffer
-  local buf_id = H.output_buf_id
-  if buf_id == nil or not vim.api.nvim_buf_is_valid(buf_id) then buf_id = vim.api.nvim_create_buf(false, true) end
-  H.output_buf_id = buf_id
-
-  -- Populate special buffer and make it up to date, and show in split
-  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, vim.split(out, '\n'))
-  local buf_name = 'minigit:///' .. table.concat(git_command, ' ')
-  vim.api.nvim_buf_set_name(buf_id, buf_name)
-  local filetype = vim.filetype.match({ buf = buf_id })
-  if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
-
-  -- Try reusing existing window to not create extra splits; split otherwise
-  local win_id = vim.fn.bufwinid(buf_id)
-  if win_id ~= -1 then
-    vim.api.nvim_win_set_buf(win_id, buf_id)
-    vim.api.nvim_set_current_win(win_id)
-  else
-    vim.cmd(mods .. ' split ' .. buf_name)
-    vim.wo.foldlevel = 999
-    -- Set 'nobuflisted' after 'split' as it resets it to 'buflisted'
-    vim.bo[buf_id].buflisted = false
-  end
-  vim.api.nvim_win_set_cursor(0, { 1, 0 })
 end
 
 -- Utilities ------------------------------------------------------------------
