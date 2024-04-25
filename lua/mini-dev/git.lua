@@ -32,6 +32,7 @@
 --           `--[no-]force-with-lease, --force-with-lease=<refname>,
 --           --force-with-lease=<refname>:<expect>` from `git push`.
 --         - Single dash options can have more than one char: `git branch -vv`.
+--         - Should respect `\ ` in base.
 --
 -- Docs:
 -- - Command:
@@ -357,9 +358,7 @@ H.create_user_commands = function()
     -- Setup spawn arguments
     local args = vim.tbl_map(H.expandcmd, input.fargs)
     local command = { MiniGit.config.job.git_executable, unpack(args) }
-
-    local buf_cache = H.cache[vim.api.nvim_get_current_buf()] or {}
-    local repo, root = buf_cache.repo or vim.fn.getcwd(), buf_cache.root or vim.fn.getcwd()
+    local repo, root = H.command_get_cwd_data()
 
     add_to_log(':Git', { input = input, args = args, editor = editor })
     local on_done = vim.schedule_wrap(function(code, out, err)
@@ -402,10 +401,8 @@ H.ensure_git_subcommands = function()
     'list-plumbingmanipulators', 'list-plumbinginterrogators',
     'others', 'alias',
   }
-  local git_exec = MiniGit.config.job.git_executable
-  local supported = H.cli_run({ git_exec, '--list-cmds=' .. table.concat(lists_all, ',') }, vim.fn.getcwd()).out
-  supported = vim.split(supported, '\n')
-  if supported[1] == '' then
+  local supported = H.git_cli_output({ '--list-cmds=' .. table.concat(lists_all, ',') })
+  if #supported == 0 then
     -- Fall back only on basics if previous one failed for some reason
     supported = {
       'add', 'bisect', 'branch', 'clone', 'commit', 'diff', 'fetch', 'grep', 'init', 'log', 'merge',
@@ -440,11 +437,11 @@ H.ensure_git_subcommands = function()
 
   -- Compute commands which are meant to show information. These will show CLI
   -- output in separate buffer opposed to `vim.notify`.
-  local lists_info = 'list-info,list-ancillaryinterrogators,list-plumbinginterrogators'
-  local info_commands = H.cli_run({ git_exec, '--list-cmds=' .. lists_info }, vim.fn.getcwd()).out
-  if info_commands == '' then info_commands = 'bisect\ndiff\ngrep\nlog\nshow\nstatus' end
+  local info_args = { '--list-cmds=list-info,list-ancillaryinterrogators,list-plumbinginterrogators' }
+  local info_commands = H.git_cli_output(info_args)
+  if #info_commands == 0 then info_commands = { 'bisect', 'diff', 'grep', 'log', 'show', 'status' } end
   local info = {}
-  for _, cmd in ipairs(vim.split(info_commands, '\n')) do
+  for _, cmd in ipairs(info_commands) do
     info[cmd] = true
   end
   git_subcommands.info = info
@@ -480,10 +477,29 @@ H.ensure_git_editor_config = function(command_mods)
   vim.fn.writefile(lines, H.git_editor_config)
 end
 
+H.command_get_cwd_data = function()
+  local buf_cache = H.cache[vim.api.nvim_get_current_buf()] or {}
+  local repo, root = buf_cache.repo or vim.fn.getcwd(), buf_cache.root or vim.fn.getcwd()
+  return repo, root
+end
+
 H.command_complete = function(_, line, col)
-  local base = line:sub(1, col):match('%S*$')
-  local candidates = H.command_get_complete_candidates(line, col, base)
+  -- Compute completion base manually to be "at cursor" and respect `\ `
+  local base = H.get_complete_base(line:sub(1, col))
+  local candidates, compl_type = H.command_get_complete_candidates(line, col, base)
+  -- Allow several "//" at the end for path completion for easier "chaining"
+  if compl_type == 'path' then base = base:gsub('/+$', '/') end
   return vim.tbl_filter(function(x) return vim.startswith(x, base) end, candidates)
+end
+
+H.get_complete_base = function(line)
+  local from, _, res = line:find('(%S*)$')
+  while from ~= nil do
+    local cur_from, _, cur_res = line:sub(1, from - 1):find('(%S*\\ )$')
+    if cur_res ~= nil then res = cur_res .. res end
+    from = cur_from
+  end
+  return (res:gsub([[\ ]], ' '))
 end
 
 H.command_get_complete_candidates = function(line, col, base)
@@ -499,33 +515,48 @@ H.command_get_complete_candidates = function(line, col, base)
   end
 
   command = command or 'git'
+  local _, cwd = H.command_get_cwd_data()
 
   -- Determine command candidates:
   -- - Commannd options if complete base starts with "-".
   -- - Git commands if there is none fully formed yet or cursor is at the end
   --   of the command (to also suggest subcommands).
   -- - Command targets specific for each command (if present).
-  if vim.startswith(base, '-') then return H.command_get_complete_options(command) end
-  if command_end == math.huge or (command_end - 1) == col then return H.git_subcommands.complete end
-  return H.command_get_complete_targets(command, base)
+  if vim.startswith(base, '-') then return H.command_complete_option(command) end
+  if command_end == math.huge or (command_end - 1) == col then return H.git_subcommands.complete, 'subcommand' end
+  if line:sub(1, col):find(' -- ') ~= nil then return H.command_complete_path(cwd, base) end
+
+  local complete_targets = H.command_complete_subcommand_targets[command]
+  if complete_targets == nil then return {}, nil end
+  return complete_targets(cwd, base, line)
 end
 
-H.command_get_complete_options = function(command)
+H.command_complete_option = function(command)
   local cached_candidates = H.git_subcommands.options[command]
   if cached_candidates == nil then return {} end
   if type(cached_candidates) == 'table' then return cached_candidates end
 
-  local help_page = H.cli_run({ MiniGit.config.job.git_executable, 'help', '--man', command }, vim.fn.getcwd())
-  if help_page.code ~= 0 then return {} end
+  -- Find command's flag options by parsing its help page. Needs a bit
+  -- heuristic approach, but seems to work good enough.
+  -- Alternative is to call command with `--git-completion-helper-all` flag (as
+  -- is done in bash and vim-fugitive completion). This has both pros and cons:
+  -- - Pros: faster; more targeted suggestions (like for two word subcommands);
+  --         presumably more reliable.
+  -- - Cons: works on smaller number of commands (for example, `rev-parse` or
+  --         pure `git` do not work); does not provide single dash suggestions;
+  --         does not work when not inside Git repo; needs recognizing two word
+  --         commands before asking for completion.
+  local lines = H.git_cli_output({ 'help', '--man', command })
+  -- - Exit early before caching to try again later
+  if #lines == 0 then return {} end
 
   -- Construct non-duplicating candidates by parsing lines of help page
-  local candidates_map, lines = {}, vim.split(help_page.out, '\n')
+  local candidates_map = {}
 
-  -- Find command's flag options. Assumed to be listed inside "OPTIONS" or "XXX
-  -- OPTIONS" (like "MODE OPTIONS" of `git rebase`) section of help page on
-  -- separate lines. Whether a line contains only options is determined
-  -- heuristically: it is assumed to start exactly with "       -" indicating
-  -- proper indent for subsection start.
+  -- Options are assumed to be listed inside "OPTIONS" or "XXX OPTIONS" (like
+  -- "MODE OPTIONS" of `git rebase`) section on dedicated lines. Whether a line
+  -- contains only options is determined heuristically: it is assumed to start
+  -- exactly with "       -" indicating proper indent for subsection start.
   -- Known not parsable options:
   -- - `git reset <mode>` (--soft, --hard, etc.): not listed in "OPTIONS".
   -- - All -<number> options, as they are not really completeable.
@@ -558,7 +589,7 @@ H.command_get_complete_options = function(command)
 
   -- Cache and return
   H.git_subcommands.options[command] = res
-  return res
+  return res, 'option'
 end
 
 H.parse_options = function(map, line)
@@ -572,15 +603,100 @@ H.parse_options = function(map, line)
   end)
 end
 
-H.command_get_complete_targets = function(command, base)
-  if command == 'help' then
-    local res = { 'git' }
-    vim.list_extend(res, H.git_subcommands.supported)
-    return res
+H.command_complete_path = function(cwd, base)
+  -- Treat base only as path relative to the command's cwd
+  cwd = cwd:gsub('/+$', '') .. '/'
+  local cwd_len = cwd:len()
+
+  -- List elements from (absolute) target directory
+  local target_dir = vim.fn.fnamemodify(base, ':h')
+  target_dir = (cwd .. target_dir:gsub('^%.$', '')):gsub('/+$', '') .. '/'
+  local ok, fs_entries = pcall(vim.fn.readdir, target_dir)
+  if not ok then return {} end
+
+  -- List directories and files separately
+  local dirs, files = {}, {}
+  for _, entry in ipairs(fs_entries) do
+    local entry_abs = target_dir .. entry
+    local arr = vim.fn.isdirectory(entry_abs) == 1 and dirs or files
+    table.insert(arr, entry_abs)
   end
-  -- TODO
-  return { 'target' }
+  dirs = vim.tbl_map(function(x) return x .. '/' end, dirs)
+
+  -- List ordered directories first followed by ordered files
+  local order_ignore_case = function(a, b) return a:lower() < b:lower() end
+  table.sort(dirs, order_ignore_case)
+  table.sort(files, order_ignore_case)
+
+  -- Return candidates relative to command's cwd
+  local all = dirs
+  vim.list_extend(all, files)
+  local res = vim.tbl_map(function(x) return x:sub(cwd_len + 1) end, all)
+  return res, 'path'
 end
+
+H.command_complete_pushpull = function(cwd, _, line)
+  -- Suggest remotes at `Git push |` and `Git push or|`, references otherwise
+  -- Ignore options when deciding which suggestion to compute
+  local _, n_words = line:gsub(' (%-%S+)', ''):gsub('%S+ ', '')
+  if n_words <= 2 then return H.git_cli_output({ 'remote' }, cwd), 'remote' end
+  return H.git_cli_output({ 'rev-parse', '--symbolic', '--branches', '--tags' }, cwd), 'ref'
+end
+
+H.git_cli_output = function(args, cwd)
+  local command = { MiniGit.config.job.git_executable, unpack(args) }
+  local res = H.cli_run(command, cwd).out
+  if res == '' then return {} end
+  return vim.split(res, '\n')
+end
+
+H.make_git_cli_complete = function(args, complete_type)
+  return function(cwd, _) return H.git_cli_output(args, cwd), complete_type end
+end
+
+-- Cover at least all subcommands listed in `git help`
+--stylua: ignore
+H.command_complete_subcommand_targets = {
+  -- clone - no targets
+  -- init  - no targets
+
+  -- Worktree
+  add     = H.command_complete_path,
+  mv      = H.command_complete_path,
+  restore = H.command_complete_path,
+  rm      = H.command_complete_path,
+
+  -- Examine history
+  -- bisect - no targets
+  diff = H.command_complete_path,
+  grep = H.command_complete_path,
+  log  = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches', '--tags' }, 'ref'),
+  show = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches', '--tags' }, 'ref'),
+  -- status - no targets
+
+  -- Modify history
+  branch = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches' },           'branch'),
+  commit = H.command_complete_path,
+  merge  = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches' },           'branch'),
+  rebase = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches' },           'branch'),
+  reset  = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches', '--tags' }, 'ref'),
+  switch = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches' },           'branch'),
+  tag    = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--tags' },               'tag'),
+
+  -- Collaborate
+  fetch = H.make_git_cli_complete({ 'remote' }, 'remote'),
+  push = H.command_complete_pushpull,
+  pull = H.command_complete_pushpull,
+
+  -- Miscellaneous
+  checkout = H.make_git_cli_complete({ 'rev-parse', '--symbolic', '--branches', '--tags', '--remotes' }, 'checkout'),
+  config = H.make_git_cli_complete({ 'help', '--config-for-completion' }, 'config'),
+  help = function()
+    local res = { 'git', 'everyday' }
+    vim.list_extend(res, H.git_subcommands.supported)
+    return res, 'help'
+  end,
+}
 
 -- Autocommands ---------------------------------------------------------------
 H.auto_enable = vim.schedule_wrap(function(data)
@@ -845,7 +961,7 @@ H.cli_run = function(command, cwd, on_done, opts)
   local spawn_opts = opts or {}
   local executable, args = command[1], vim.list_slice(command, 2, #command)
   local process, stdout, stderr = nil, vim.loop.new_pipe(), vim.loop.new_pipe()
-  spawn_opts.args, spawn_opts.cwd, spawn_opts.stdio = args, cwd, { nil, stdout, stderr }
+  spawn_opts.args, spawn_opts.cwd, spawn_opts.stdio = args, cwd or vim.fn.getcwd(), { nil, stdout, stderr }
 
   -- Allow `on_done = nil` to mean synchronous execution
   local is_sync, res = false, nil
@@ -923,6 +1039,7 @@ H.cli_show_output = function(out, mods, git_command)
   local win_id = vim.fn.bufwinid(buf_id)
   if win_id ~= -1 then
     vim.api.nvim_win_set_buf(win_id, buf_id)
+    vim.api.nvim_set_current_win(win_id)
   else
     vim.cmd(mods .. ' split ' .. buf_name)
     vim.wo.foldlevel = 999
