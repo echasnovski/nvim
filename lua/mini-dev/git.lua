@@ -22,16 +22,24 @@
 --           --force-with-lease=<refname>:<expect>` from `git push`.
 --         - Single dash options can have more than one char: `git branch -vv`.
 --         - Should respect `\ ` in base.
+-- - Diff source:
+--     - Should work for when "before" source is not available (like when file
+--       was just created).
+--     - Should work when cursor is at the first hunk line and it is '-'
+--       (target line should not be zero).
 --
 -- Docs:
--- - Command:
+-- - Useful examples:
 --     - Use `:Git -C <cwd>` to execute command in current working directory.
+--     - Use `:vert Git show <cword>` to show word under cursor in a split
+--       (like commit, branch, etc.).
+--
+-- - Command:
 --     - How completions work: command, options, targets.
 --     - Don't use quotes to make same value. Like `:Git commit -m 'Hello\ world'`
 --       will result into commit message containing quotes.
 --     - Use |:cabbrev| to set default modifiers. Lik `cabbrev Git vert Git`.
 --     - Triggers `MiniGitCommandDone` `User` event when done.
---
 
 --- *mini.git* Git integration
 --- *MiniGit*
@@ -137,9 +145,46 @@ MiniGit.config = {
   job = {
     git_executable = 'git',
     timeout = 30000,
-  }
+  },
+
+  command = {
+    split = 'vertical',
+  },
 }
 --minidoc_afterlines_end
+
+-- NOTEs:
+-- - Relies on `:Git command`.
+-- - Needs a valid Git patch entry with unified diff preceded by commit
+--   information. Like in `:Git log`.
+-- - Needs cwd to be the Git root for relative paths to work.
+MiniGit.show_diff_source = function(opts)
+  opts = vim.tbl_deep_extend('force', { split = 'tab', target = 'after' }, opts or {})
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local lnum = vim.api.nvim_win_get_cursor(0)[1]
+  local src = H.diff_pos_to_source(lines, lnum)
+  if src == nil then
+    return H.notify('Could not find diff source. Ensure that cursor is inside a valid diff hunk of git log.', 'WARN')
+  end
+
+  H.validate_split_value(opts.split, 'opts.split')
+  if not (opts.target == 'before' or opts.target == 'after' or opts.target == 'both') then
+    H.error('`opts.target` should be one of "before", "after", "both".')
+  end
+
+  if opts.target ~= 'after' and src.path_before ~= nil then
+    local before_cmd = string.format('%s Git show %s:%s', opts.split, src.commit_before, src.path_before)
+    vim.cmd(before_cmd)
+    vim.api.nvim_win_set_cursor(0, { src.lnum_before, 0 })
+  end
+
+  if opts.target ~= 'before' then
+    local mods_after = opts.target == 'after' and opts.split or 'belowright vertical'
+    local after_cmd = string.format('%s Git show %s:%s', mods_after, src.commit_after, src.path_after)
+    vim.cmd(after_cmd)
+    vim.api.nvim_win_set_cursor(0, { src.lnum_after, 0 })
+  end
+end
 
 --- Enable Git tracking in buffer
 ---
@@ -223,6 +268,7 @@ MiniGit._edit = function(path, servername, mods)
   end
 
   -- Start file edit with proper modifiers in a special window
+  if not H.mods_is_split(mods) then mods = MiniGit.config.command.split .. ' ' .. mods end
   vim.cmd(mods .. ' split ' .. vim.fn.fnameescape(path))
   H.define_minigit_window(cleanup)
 end
@@ -271,11 +317,13 @@ H.setup_config = function(config)
 
   vim.validate({
     job = { config.job, 'table' },
+    command = { config.command, 'table' },
   })
 
   vim.validate({
     ['job.git_executable'] = { config.job.git_executable, 'string' },
     ['job.timeout'] = { config.job.timeout, 'number' },
+    ['command.split'] = { config.command.split, function(x) return H.validate_split_value(x, 'command.split') end, '' },
   })
 
   return config
@@ -677,6 +725,10 @@ H.command_complete_subcommand_targets = {
   end,
 }
 
+H.mods_is_split = function(mods)
+  return mods:find('vertical') ~= nil or mods:find('horizontal') ~= nil or mods:find('tab') ~= nil
+end
+
 -- Show command output --------------------------------------------------------
 H.show_git_cli_output = function(out, mods, git_command)
   if out == '' or mods:find('silent') ~= nil then return end
@@ -715,8 +767,8 @@ H.make_minigit_bufwin = function(mods)
   end
 
   -- Force split of there are split command modifiers (intentionally omit rest)
-  local has_split_mods = mods:find('vertical') ~= nil or mods:find('horizontal') ~= nil or mods:find('tab') ~= nil
-  if has_split_mods then return split() end
+  if H.mods_is_split(mods) then return split() end
+  mods = MiniGit.config.command.split .. ' ' .. mods
 
   -- Try reusing already shown buffer-window pair
   for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
@@ -767,6 +819,11 @@ H.validate_buf_id = function(x)
     H.error('`buf_id` should be `nil` or valid buffer id.')
   end
   return x
+end
+
+H.validate_split_value = function(x, x_name)
+  if x == 'horizontal' or x == 'vertical' or x == 'tab' then return true end
+  H.error('`' .. x_name .. '` should be one of "horizontal", "vertical", "tab"')
 end
 
 -- Enabling -------------------------------------------------------------------
@@ -1004,6 +1061,55 @@ H.update_buf_data = function(buf_id, new_data)
     H.cache[buf_id][key], summary[key] = val, val
   end
   vim.b[buf_id].minigit_summary = summary
+end
+
+-- History navigation ---------------------------------------------------------
+H.diff_pos_to_source = function(lines, lnum)
+  -- Assuming lines of unified combined diff, compute path and line number of
+  -- both "before" and "after", plus target commit (corresponding to "after")
+  local cur_lnum, offsets = lnum, { [' '] = 0, ['-'] = 0, ['+'] = 0 }
+  while cur_lnum > 0 do
+    local prefix = lines[cur_lnum]:sub(1, 1)
+    if not (prefix == ' ' or prefix == '-' or prefix == '+') then break end
+    offsets[prefix] = offsets[prefix] + 1
+    cur_lnum = cur_lnum - 1
+  end
+  local hunk_start_before, hunk_start_after = string.match(lines[cur_lnum], '^@@ %-(%d+),?%d* %+(%d+),?%d* @@')
+  if hunk_start_before == nil or cur_lnum <= 2 then return nil end
+
+  -- Compute hunk's relative paths
+  local path_after
+  while cur_lnum > 0 do
+    local path = string.match(lines[cur_lnum], '^%+%+%+ b/(.*)$')
+    if path ~= nil then
+      path_after = path
+      break
+    end
+    cur_lnum = cur_lnum - 1
+  end
+  local path_before = string.match(lines[cur_lnum - 1], '^%-%-%- a/(.*)$')
+  if path_after == nil then return nil end
+
+  -- Try computing commit assuming at least `git log --pretty=short`
+  local commit
+  while cur_lnum > 0 do
+    local try_commit = string.match(lines[cur_lnum], '^commit (%x+)$')
+    if try_commit ~= nil then
+      commit = try_commit
+      break
+    end
+    cur_lnum = cur_lnum - 1
+  end
+  if commit == nil then return nil end
+
+  return {
+    lnum_before = math.max(1, tonumber(hunk_start_before) + offsets[' '] + offsets['-'] - 1),
+    path_before = path_before,
+    lnum_after = math.max(1, tonumber(hunk_start_after) + offsets[' '] + offsets['+'] - 1),
+    path_after = path_after,
+    commit_before = commit .. '~',
+    commit_after = commit,
+  }
 end
 
 -- CLI ------------------------------------------------------------------------
