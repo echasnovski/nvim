@@ -4,9 +4,17 @@
 -- - Think about directly setting up HEAD data for new buffer if it was already
 --   computed. Probably, requires separate `H.roots` cache.
 --
--- - `refresh()` / `update()`. Either for buffer, root, or combination?
+-- - Range history:
+--     - Deal with not committed differences in `show_range_history()`.
+--     - Define folding?
 --
--- - Blame functionality.
+-- - Create a one-stop `MiniGit.show()` (as it feels confusing to have use two
+--   mappings for history navigation.):
+--     - Try `:Git show` a word under cursor (or visually selected text).
+--     - Try showing diff source at line start.
+--     - Try showing range history. with fallback on diff source?
+--
+-- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
 -- - Exported functionality to get file status/data based on an array of paths
 --   alone? This maybe can be utilized by 'mini.files' to show Git status next
@@ -22,6 +30,7 @@
 --           --force-with-lease=<refname>:<expect>` from `git push`.
 --         - Single dash options can have more than one char: `git branch -vv`.
 --         - Should respect `\ ` in base.
+--         - Should smartly set filetype.
 -- - Diff source:
 --     - Should work for when "before" source is not available (like when file
 --       was just created).
@@ -39,7 +48,8 @@
 --     - Don't use quotes to make same value. Like `:Git commit -m 'Hello\ world'`
 --       will result into commit message containing quotes.
 --     - Use |:cabbrev| to set default modifiers. Lik `cabbrev Git vert Git`.
---     - Triggers `MiniGitCommandDone` `User` event when done.
+--     - Triggers `MiniGitCommandDone` `User` event on every done and
+--       `MiniGitCommandSplit` `User` event when a new window split is done.
 
 --- *mini.git* Git integration
 --- *MiniGit*
@@ -153,6 +163,32 @@ MiniGit.config = {
 }
 --minidoc_afterlines_end
 
+MiniGit.show_range_history = function(line_start, line_end, opts)
+  if line_start == nil or line_end == nil then
+    local is_visual = vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode())
+    line_start = is_visual and vim.fn.line('.') or 1
+    line_end = is_visual and vim.fn.line('v') or vim.api.nvim_buf_line_count(0)
+    line_start, line_end = math.min(line_start, line_end), math.max(line_start, line_end)
+  end
+  if not (type(line_start) == 'number' and type(line_end) == 'number' and line_start <= line_end) then
+    H.error('`line_start` and `line_end` should be non-decreasing numbers.')
+  end
+  opts = vim.tbl_deep_extend('force', { extra_args = '', split = 'vertical' }, opts or {})
+  if type(opts.extra_args) ~= 'string' then H.error('`opts.extra_args` should be string.') end
+  H.validate_split_value(opts.split, 'opts.split')
+
+  -- Construct `:Git` command
+  local buf_id = vim.api.nvim_get_current_buf()
+  local buf_cache = H.cache[buf_id]
+  if buf_cache == nil then H.error('Current buffer is not part of Git repo.') end
+  local root, path = buf_cache.root, vim.api.nvim_buf_get_name(buf_id)
+  local rel_path = path:gsub(vim.pesc(root) .. '/', '')
+
+  local suffix = opts.extra_args == '' and '' or (' ' .. opts.extra_args)
+  local command = string.format('%s Git log -L%d,%d:%s%s', opts.split, line_start, line_end, rel_path, suffix)
+  vim.cmd(command)
+end
+
 -- NOTEs:
 -- - Relies on `:Git command`.
 -- - Needs a valid Git patch entry with unified diff preceded by commit
@@ -161,7 +197,7 @@ MiniGit.config = {
 MiniGit.show_diff_source = function(opts)
   opts = vim.tbl_deep_extend('force', { split = 'tab', target = 'after' }, opts or {})
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local lnum = vim.api.nvim_win_get_cursor(0)[1]
+  local lnum = vim.fn.line('.')
   local src = H.diff_pos_to_source(lines, lnum)
   if src == nil then
     return H.notify('Could not find diff source. Ensure that cursor is inside a valid diff hunk of git log.', 'WARN')
@@ -258,21 +294,6 @@ MiniGit.get_buf_data = function(buf_id)
   })
 end
 
-MiniGit._edit = function(path, servername, mods)
-  -- Define editor state before and after editing path
-  H.skip_timeout, H.skip_sync = true, true
-  local cleanup = function()
-    local _, channel = pcall(vim.fn.sockconnect, 'pipe', servername, { rpc = true })
-    pcall(vim.rpcnotify, channel, 'nvim_exec2', 'quitall!', {})
-    H.skip_timeout, H.skip_sync = false, false
-  end
-
-  -- Start file edit with proper modifiers in a special window
-  if not H.mods_is_split(mods) then mods = MiniGit.config.command.split .. ' ' .. mods end
-  vim.cmd(mods .. ' split ' .. vim.fn.fnameescape(path))
-  H.define_minigit_window(cleanup)
-end
-
 -- Helper data ================================================================
 -- Module default config
 H.default_config = MiniGit.config
@@ -359,9 +380,9 @@ H.create_user_commands = function()
     -- Define Git editor to be used if needed. The way it works is: execute
     -- command, wait for it to exit, use content of edited file. So to properly
     -- wait for user to finish edit, start fresh headless process which opens
-    -- file in current session/process. It gets an exit after the user is done
-    -- editing (deletes the buffer or closes the window).
-    H.ensure_git_editor_config(input.mods)
+    -- file in current session/process. It exits after the user is done editing
+    -- (deletes the buffer or closes the window).
+    H.ensure_git_editor(input.mods)
     -- NOTE: use `vim.v.progpath` to have same runtime
     local editor = vim.v.progpath .. ' --clean --headless -u ' .. H.git_editor_config
 
@@ -389,7 +410,8 @@ H.create_user_commands = function()
 
       -- Show CLI stderr and stdout
       if H.cli_err_notify(code, out, err) then return end
-      H.show_git_cli_output(out, input.mods, command)
+      local was_split = H.show_git_cli_output(out, input.mods, command)
+      if was_split then vim.api.nvim_exec_autocmds('User', { pattern = 'MiniGitCommandSplit' }) end
 
       -- Ensure that repo data is up to date. This is not always taken care of
       -- by repo watching, like file status after `:Git commit` (probably due
@@ -485,9 +507,26 @@ H.ensure_git_subcommands = function()
   H.git_subcommands = git_subcommands
 end
 
-H.ensure_git_editor_config = function(command_mods)
+H.ensure_git_editor = function(mods)
   if H.git_editor_config == nil or not vim.fn.filereadable(H.git_editor_config) == 0 then
     H.git_editor_config = vim.fn.tempname()
+  end
+
+  -- Create a temporary exported function responsible for editing Git file
+  MiniGit._edit = function(path, servername)
+    -- Define editor state before and after editing path
+    H.skip_timeout, H.skip_sync = true, true
+    local cleanup = function()
+      local _, channel = pcall(vim.fn.sockconnect, 'pipe', servername, { rpc = true })
+      pcall(vim.rpcnotify, channel, 'nvim_exec2', 'quitall!', {})
+      H.skip_timeout, H.skip_sync = false, false
+      MiniGit._edit = nil
+    end
+
+    -- Start file edit with proper modifiers in a special window
+    if not H.mods_is_split(mods) then mods = MiniGit.config.command.split .. ' ' .. mods end
+    vim.cmd(mods .. ' split ' .. vim.fn.fnameescape(path))
+    H.define_minigit_window(cleanup)
   end
 
   -- Start editing file from first argument (as how `GIT_EDITOR` works) in
@@ -496,8 +535,8 @@ H.ensure_git_editor_config = function(command_mods)
   local lines = {
     'lua << EOF',
     string.format('local channel = vim.fn.sockconnect("pipe", %s, { rpc = true })', vim.inspect(vim.v.servername)),
-    'local ins, mods = vim.inspect, ' .. vim.inspect(command_mods),
-    'local lua_cmd = string.format("MiniGit._edit(%s, %s, %s)", ins(vim.fn.argv(0)), ins(vim.v.servername), ins(mods))',
+    'local ins = vim.inspect',
+    'local lua_cmd = string.format("MiniGit._edit(%s, %s)", ins(vim.fn.argv(0)), ins(vim.v.servername))',
     'vim.rpcrequest(channel, "nvim_exec_lua", lua_cmd, {})',
     'EOF',
   }
@@ -734,14 +773,14 @@ H.show_git_cli_output = function(out, mods, git_command)
   if out == '' or mods:find('silent') ~= nil then return end
 
   -- Show in a buffer if command is for showing info; else - `vim.notify`
-  local is_info = false
+  local subcmd
   for _, cmd in ipairs(git_command) do
-    is_info = is_info or H.git_subcommands.info[cmd]
+    if subcmd == nil and vim.tbl_contains(H.git_subcommands.supported, cmd) then subcmd = cmd end
   end
-  if not is_info then return H.notify(out, 'INFO') end
+  if not H.git_subcommands.info[subcmd] then return H.notify(out, 'INFO') end
 
   -- Populate special buffer in a window and make them current
-  local buf_id, win_id = H.make_minigit_bufwin(mods)
+  local buf_id, win_id, was_split = H.make_minigit_bufwin(mods)
 
   local cur_name = vim.api.nvim_buf_get_name(buf_id)
   local new_name = 'minigit://' .. buf_id .. '/' .. table.concat(git_command, ' ')
@@ -750,11 +789,16 @@ H.show_git_cli_output = function(out, mods, git_command)
   if cur_name ~= '' and cur_name ~= new_name then pcall(vim.cmd, 'bwipeout ' .. vim.fn.fnameescape(cur_name)) end
 
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, vim.split(out, '\n'))
-  local filetype = vim.filetype.match({ buf = buf_id })
+
+  local filetype
+  if subcmd == 'diff' then filetype = 'diff' end
+  if subcmd == 'log' then filetype = 'git' end
+  if subcmd == 'show' then filetype = vim.filetype.match({ buf = buf_id }) end
   if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
 
   vim.api.nvim_set_current_win(win_id)
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  return was_split
 end
 
 H.make_minigit_bufwin = function(mods)
@@ -763,7 +807,7 @@ H.make_minigit_bufwin = function(mods)
     vim.cmd(mods .. ' sbuffer ' .. buf_id)
     local win_id = vim.api.nvim_get_current_win()
     H.define_minigit_window()
-    return buf_id, win_id
+    return buf_id, win_id, true
   end
 
   -- Force split of there are split command modifiers (intentionally omit rest)
@@ -775,7 +819,7 @@ H.make_minigit_bufwin = function(mods)
     local win_buf_id = vim.api.nvim_win_get_buf(win_id)
     local win_buf_name = vim.api.nvim_buf_get_name(win_buf_id)
     local minigit_buf_type = win_buf_name:match('^minigit://%d+/(%S+)')
-    if minigit_buf_type ~= nil and minigit_buf_type ~= 'blame' then return win_buf_id, win_id end
+    if minigit_buf_type ~= nil and minigit_buf_type ~= 'blame' then return win_buf_id, win_id, false end
   end
 
   return split()
