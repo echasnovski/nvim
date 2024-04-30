@@ -76,16 +76,11 @@ nmap_leader('fv', '<Cmd>Pick visit_paths cwd=""<CR>',                'Visit path
 nmap_leader('fV', '<Cmd>Pick visit_paths<CR>',                       'Visit paths (cwd)')
 
 -- g is for git
--- nmap_leader('gA', '<Cmd>lua require("gitsigns").stage_buffer()<CR>',        'Add buffer')
--- nmap_leader('ga', '<Cmd>lua require("gitsigns").stage_hunk()<CR>',          'Add (stage) hunk')
-nmap_leader('gb', '<Cmd>lua require("gitsigns").blame_line()<CR>',          'Blame line')
-nmap_leader('gg', '<Cmd>lua Config.open_lazygit()<CR>',                     'Git tab')
-nmap_leader('gp', '<Cmd>lua require("gitsigns").preview_hunk_inline()<CR>', 'Preview hunk')
-nmap_leader('go', '<Cmd>lua MiniDiff.toggle_overlay()<CR>',                 'Toggle overlay')
-nmap_leader('gq', '<Cmd>lua require("gitsigns").setqflist()<CR>:copen<CR>', 'Quickfix hunks')
--- nmap_leader('gu', '<Cmd>lua require("gitsigns").undo_stage_hunk()<CR>',     'Undo stage hunk')
--- nmap_leader('gx', '<Cmd>lua require("gitsigns").reset_hunk()<CR>',          'Discard (reset) hunk')
--- nmap_leader('gX', '<Cmd>lua require("gitsigns").reset_buffer()<CR>',        'Discard (reset) buffer')
+nmap_leader('gg', '<Cmd>lua Config.open_lazygit()<CR>',     'Git tab')
+nmap_leader('go', '<Cmd>lua MiniDiff.toggle_overlay()<CR>', 'Toggle overlay')
+nmap_leader('gs', '<Cmd>lua MiniGit.show_at_cursor()<CR>',  'Show at cursor')
+
+xmap_leader('gs', '<Cmd>lua MiniGit.show_at_cursor()<CR>',  'Show at selection')
 
 -- l is for 'LSP' (Language Server Protocol)
 local formatting_cmd = '<Cmd>lua require("conform").format({ lsp_fallback = true })<CR>'
