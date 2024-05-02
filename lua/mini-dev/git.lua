@@ -9,17 +9,14 @@
 -- - Diff source:
 --
 -- - Range history:
---     - Make it work in the result of `MiniGit.show_diff_source()`. This is handy
---       for traversing range history across non-renamed files (like when text
---       was moved to a new file).
---     - Deal with not committed differences in `show_range_history()`.
+--     - Reconsider allowing uncommitted changes in file. This can be solved by
+--       checking if there is a diff and prompting users to `:Git stash` if
+--       there are changes. Making it work with uncommitted changes leads to
+--       a rather complicated code which requires a lot of testing.
 --     - Define folding?
 --
 -- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
--- - Exported functionality to get file status/data based on an array of paths
---   alone? This maybe can be utilized by 'mini.files' to show Git status next
---   to the file.
 --
 --
 -- Tests:
@@ -49,6 +46,7 @@
 --     - Use `:Git -C <cwd>` to execute command in current working directory.
 --     - Use `:vert Git show <cword>` to show word under cursor in a split
 --       (like commit, branch, etc.).
+--     - How to use exported helpers to navigate Git history.
 --
 -- - Command:
 --     - How completions work: command, options, targets.
@@ -67,11 +65,14 @@
 ---
 --- Features:
 ---
---- - Automated tracking of Git related data.
+--- - Automated tracking of Git related data: root path, status, HEAD, etc.
 ---
 --- - |:Git| command for executing any Git command inside current Neovim instance.
 ---
---- - Blame functionality?
+--- - Helper functions to inspect Git history:
+---     - |MiniGit.show_range_history()| shows how certain line range evolved.
+---     - |MiniGit.show_diff_source()| shows file state as it was at diff entry.
+---     - |MiniGit.show_at_cursor()| as a more universal inspection mapping.
 ---
 --- What it doesn't do:
 ---
@@ -108,6 +109,17 @@
 --- customization intentions, writing exact rules for disabling module's
 --- functionality is left to user.
 --- See |mini.nvim-disabling-recipes| for common recipes.
+
+--- - Use |MiniGit.show_at_cursor()| to search through history.
+---     - Call inside buffer for already committed file shows the evolution of
+---       that particular line through history. This also works inside buffers
+---       resulted from the |MiniGit.show_diff_source()| call and show history
+---       up to its commit.
+---     - To inspect certain commit in full, call the function when cursor is
+---       on the commit hash. This is equivalent to `:Git show <cword>`.
+---     - To inspect certain file in the state how it was at certain change,
+---       call when cursor is inside change hunk or on file names above it.
+---@tag MiniGit-examples
 
 ---@alias __git_buf_id number Target buffer identifier. Default: 0 for current buffer.
 
@@ -183,11 +195,12 @@ MiniGit.show_at_cursor = function(opts)
   end
 
   -- Try showing diff source
-  local src = H.diff_pos_to_source()
-  if src ~= nil then return MiniGit.show_diff_source(opts) end
+  if H.diff_pos_to_source() ~= nil then return MiniGit.show_diff_source(opts) end
 
   -- Try showing range history
-  if H.is_buf_enabled(vim.api.nvim_get_current_buf()) then return MiniGit.show_range_history(opts) end
+  local is_git_enabled = H.is_buf_enabled(vim.api.nvim_get_current_buf())
+  local is_diff_source = H.parse_diff_source_buf_name(vim.api.nvim_buf_get_name(0)) ~= nil
+  if is_git_enabled or is_diff_source then return MiniGit.show_range_history(opts) end
 
   H.notify('Nothing Git-related to show at cursor', 'WARN')
 end
@@ -241,13 +254,27 @@ MiniGit.show_range_history = function(opts)
   if type(opts.log_args) ~= 'string' then H.error('`opts.log_args` should be string.') end
   local split = H.normalize_split_opt(opts.split, 'opts.split')
 
-  -- Construct `:Git` command
+  -- Construct `:Git log` command that works both with regular files and
+  -- buffers from `show_diff_source()`
+  local buf_name = vim.api.nvim_buf_get_name(0)
   local _, root = H.command_get_cwd_data()
-  local path = vim.api.nvim_buf_get_name(0)
-  local rel_path = path:gsub(vim.pesc(root) .. '/', '')
+  local commit, rel_path = H.parse_diff_source_buf_name(buf_name)
+  if commit == nil then
+    commit, rel_path = 'HEAD', buf_name:gsub(vim.pesc(root) .. '/', '')
+  end
+
+  -- Take into account difference between current file state and its commit
+  -- HEAD reference. This is needed to properly compute `-L` arguments.
+  local diff = commit == 'HEAD' and H.git_cli_output({ 'diff', '-U0', 'HEAD', '--', rel_path }, root) or {}
+  local line_map = H.diff_parse_line_map(diff, vim.api.nvim_buf_line_count(0))
+  local range_args = vim.tbl_map(
+    function(r) return string.format('-L%d,%d:%s', r[1], r[2], rel_path) end,
+    H.make_log_ranges(line_map, line_start, line_end)
+  )
+  if #range_args == 0 then return H.notify('Selected range contains only added lines', 'WARN') end
 
   local suffix = opts.log_args == '' and '' or (' ' .. opts.log_args)
-  local command = string.format('%s Git log -L%d,%d:%s%s', split, line_start, line_end, rel_path, suffix)
+  local command = string.format('%s Git log %s %s%s', split, table.concat(range_args, ' '), commit, suffix)
   vim.cmd(command)
 end
 
@@ -1141,6 +1168,69 @@ H.update_buf_data = function(buf_id, new_data)
   vim.b[buf_id].minigit_summary = summary
 end
 
+-- History construction -------------------------------------------------------
+H.diff_parse_line_map = function(diff, n_lines)
+  -- Compute map of buffer line numbers to reference line numbers:
+  -- - Deleted lines increase increase reference line number: if lines 2-3 are
+  --   deleted, then map is 1->1, 2->4, 3->5, etc.
+  -- - Added lines do not correspond to any reference.
+  -- - Changed lines depend on which part prevails.
+  --    - If lines 2-3 are changed with new 3 lines, then the map is
+  --      1->1, 2->2, 3->3, 4->x, 5->4, 6->5, etc.
+  --    - If lines 2-4 are changed with new 2 lines, then the map is
+  --      1->1, 2->2, 3->3, 4->5, 5->6, etc.
+
+  -- Initialize line map with data from hunk headers
+  local res = {}
+  local init_line_map = function(l)
+    local del_start, del_count, add_start, add_count = string.match(l, '^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@')
+    if del_start == nil then return end
+    del_start, del_count, add_start, add_count =
+      tonumber(del_start), tonumber(del_count) or 1, tonumber(add_start), tonumber(add_count) or 1
+    -- Mark purely added lines as not having corresponding line in reference
+    for i = del_count + 1, add_count do
+      res[add_start + i - 1] = false
+    end
+    -- Store new additive offset by which buf numbers differ from reference
+    -- Use `math.max(x, 1)` for pure deletions to be counted under `add_start`
+    res[add_start + math.max(add_count, 1)] = del_count - add_count
+  end
+  vim.tbl_map(init_line_map, diff)
+
+  -- Compute line map of how buffer line numbers correspond to reference
+  local offset = res[0] or 0
+  for i = 1, n_lines do
+    if type(res[i]) == 'number' then offset = offset + res[i] end
+    if res[i] ~= false then res[i] = i + offset end
+  end
+
+  return res
+end
+
+H.make_log_ranges = function(line_map, line_start, line_end)
+  -- Compute all reference lines
+  local all_ref_lnum = {}
+  for i = line_start, line_end do
+    local ref = line_map == nil and i or line_map[i]
+    if type(line_map[i]) == 'number' then table.insert(all_ref_lnum, line_map[i]) end
+  end
+  if #all_ref_lnum == 0 then return {} end
+
+  -- Convert lines to ranges for more compact `git log` call
+  local res, prev_n = { { all_ref_lnum[1] } }, all_ref_lnum[1]
+  for i = 2, #all_ref_lnum do
+    local n = all_ref_lnum[i]
+    if n ~= prev_n + 1 then
+      res[#res][2] = prev_n
+      table.insert(res, { n })
+    end
+    prev_n = n
+  end
+  res[#res][2] = all_ref_lnum[#all_ref_lnum]
+
+  return res
+end
+
 -- History navigation ---------------------------------------------------------
 --- Assuming buffer contains unified combined diff (with "commit" header),
 --- compute path, line number, and commit of both "before" and "after" files.
@@ -1210,6 +1300,8 @@ H.diff_parse_commits = function(out, lines, lnum)
   if out.commit_after ~= nil then out.commit_before = out.commit_after .. '~' end
   return lnum + 1
 end
+
+H.parse_diff_source_buf_name = function(buf_name) return string.match(buf_name, '^minigit://%d+/git show (%x+~?):(.*)$') end
 
 -- CLI ------------------------------------------------------------------------
 H.git_cmd = function(args)
