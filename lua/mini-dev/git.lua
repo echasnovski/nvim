@@ -5,14 +5,8 @@
 --   computed. Probably, requires separate `H.roots` cache.
 --
 -- - Command:
---     - Revisit more carefully how target window is decided, taking into
---       account a new "auto" split direction.
---       Maybe discard "reuse existing" window altogether, which will also
---       mostly remove the need for `MiniGitCommandSplit` event.
 --
 -- - Diff source:
---     - Think about allowing to work at `--- a/xxx` and `+++ b/xxx` lines to
---       show "before" and "after" file respectively.
 --
 -- - Range history:
 --     - Make it work in the result of `MiniGit.show_diff_source()`. This is handy
@@ -20,12 +14,6 @@
 --       was moved to a new file).
 --     - Deal with not committed differences in `show_range_history()`.
 --     - Define folding?
---
--- - Create a one-stop `MiniGit.show()` (as it feels confusing to have use two
---   mappings for history navigation.):
---     - Try `:Git show` a word under cursor (or visually selected text).
---     - Try showing diff source at line start.
---     - Try showing range history. with fallback on diff source?
 --
 -- - `refresh()` / `update()`. Either for buffer, root, or combination?
 --
@@ -36,7 +24,8 @@
 --
 -- Tests:
 -- - Command:
---     - Completions:
+--     - Can work with abbreviated modifiers, like `:hor Git`, etc.
+--     - Completion:
 --         - Some options are explicitly documented in both `--xxx` and
 --           `--xxx=` forms:
 --           `--[no-]signed, --signed=(true|false|if-asked)` or
@@ -45,11 +34,14 @@
 --         - Single dash options can have more than one char: `git branch -vv`.
 --         - Should respect `\ ` in base.
 --         - Should smartly set filetype.
+--
 -- - Diff source:
 --     - Should work for when "before" source is not available (like when file
 --       was just created).
 --     - Should work when cursor is at the first hunk line and it is '-'
 --       (target line should not be zero).
+--     - Should **not** work when cursor is between header (starting from
+--       "comit " line) and first hunk.
 --
 --
 -- Docs:
@@ -182,10 +174,11 @@ MiniGit.show_at_cursor = function(opts)
   local exec = MiniGit.config.job.git_executable
   local _, cwd = H.command_get_cwd_data()
 
-  -- Try showing word under cursor
-  local has_cword = H.cli_run({ exec, 'show', vim.fn.expand('<cword>') }, cwd).code == 0
-  if has_cword then
-    local split = H.validate_split_opt((opts or {}).split or 'auto', 'opts.split')
+  -- Try showing commit at cursor. NOTE: using `:Git show <cword>` equivalent
+  -- does not always work as intended (it works on `@@`, `-` "words", etc.).
+  local cword = vim.fn.expand('<cword>')
+  if cword:find('^%x%x%x%x%x%x') ~= nil then
+    local split = H.normalize_split_opt((opts or {}).split or 'auto', 'opts.split')
     return vim.cmd(split .. ' Git show <cword>')
   end
 
@@ -211,7 +204,7 @@ MiniGit.show_diff_source = function(opts)
     return H.notify('Could not find diff source. Ensure that cursor is inside a valid diff hunk of git log.', 'WARN')
   end
 
-  local split = H.validate_split_opt(opts.split, 'opts.split')
+  local split = H.normalize_split_opt(opts.split, 'opts.split')
   local target = opts.target
   if target == 'auto' then target = src.init_prefix == '-' and 'before' or 'after' end
   if not (target == 'before' or target == 'after' or target == 'both') then
@@ -246,7 +239,7 @@ MiniGit.show_range_history = function(opts)
   end
 
   if type(opts.log_args) ~= 'string' then H.error('`opts.log_args` should be string.') end
-  local split = H.validate_split_opt(opts.split, 'opts.split')
+  local split = H.normalize_split_opt(opts.split, 'opts.split')
 
   -- Construct `:Git` command
   local _, root = H.command_get_cwd_data()
@@ -377,10 +370,11 @@ H.setup_config = function(config)
     command = { config.command, 'table' },
   })
 
+  local is_split = function(x) return pcall(H.normalize_split_opt, x, 'command.split') end
   vim.validate({
     ['job.git_executable'] = { config.job.git_executable, 'string' },
     ['job.timeout'] = { config.job.timeout, 'number' },
-    ['command.split'] = { config.command.split, function(x) return H.validate_split_opt(x, 'command.split') end, '' },
+    ['command.split'] = { config.command.split, is_split },
   })
 
   return config
@@ -559,10 +553,7 @@ H.ensure_git_editor = function(mods)
     end
 
     -- Start file edit with proper modifiers in a special window
-    if not H.mods_is_split(mods) then
-      local split = H.validate_split_opt(MiniGit.config.command.split, '`config.command.split`')
-      mods = split .. ' ' .. mods
-    end
+    mods = H.ensure_mods_is_split(mods)
     vim.cmd(mods .. ' split ' .. vim.fn.fnameescape(path))
     H.define_minigit_window(cleanup)
   end
@@ -802,30 +793,40 @@ H.command_complete_subcommand_targets = {
   end,
 }
 
-H.mods_is_split = function(mods)
-  return mods:find('vertical') ~= nil or mods:find('horizontal') ~= nil or mods:find('tab') ~= nil
+H.ensure_mods_is_split = function(mods)
+  -- NOTE: `mods` is already expanded, so this also covers abbreviated mods
+  local is_split = mods:find('vertical') ~= nil or mods:find('horizontal') ~= nil or mods:find('tab') ~= nil
+  if is_split then return mods end
+  local split_val = H.normalize_split_opt(MiniGit.config.command.split, '`config.command.split`')
+  return split_val .. ' ' .. mods
 end
 
 -- Show command output --------------------------------------------------------
+---@return boolean Whether there was a split done
+---@private
 H.show_git_cli_output = function(out, mods, git_command)
-  if out == '' or mods:find('silent') ~= nil then return end
+  if out == '' or mods:find('silent') ~= nil then return false end
 
   -- Show in a buffer if command is for showing info; else - `vim.notify`
   local subcmd
   for _, cmd in ipairs(git_command) do
     if subcmd == nil and vim.tbl_contains(H.git_subcommands.supported, cmd) then subcmd = cmd end
   end
-  if not H.git_subcommands.info[subcmd] then return H.notify(out, 'INFO') end
+  if not H.git_subcommands.info[subcmd] then
+    H.notify(out, 'INFO')
+    return false
+  end
 
-  -- Populate special buffer in a window and make them current
-  local buf_id, win_id, was_split = H.make_minigit_bufwin(mods)
+  -- Create a target window split with new buffer
+  local buf_id = vim.api.nvim_create_buf(false, true)
+  mods = H.ensure_mods_is_split(mods)
+  vim.cmd(mods .. ' sbuffer ' .. buf_id)
+  local win_id = vim.api.nvim_get_current_win()
+  H.define_minigit_window()
 
-  local cur_name = vim.api.nvim_buf_get_name(buf_id)
-  local new_name = 'minigit://' .. buf_id .. '/' .. table.concat(git_command, ' ')
-  vim.api.nvim_buf_set_name(buf_id, new_name)
-  -- - Do not leave unlisted buffers when doing actual rename
-  if cur_name ~= '' and cur_name ~= new_name then pcall(vim.cmd, 'bwipeout ' .. vim.fn.fnameescape(cur_name)) end
-
+  -- Prepare buffer
+  local name = 'minigit://' .. buf_id .. '/' .. table.concat(git_command, ' ')
+  vim.api.nvim_buf_set_name(buf_id, name)
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, vim.split(out, '\n'))
 
   local filetype
@@ -834,31 +835,7 @@ H.show_git_cli_output = function(out, mods, git_command)
   if subcmd == 'show' then filetype = vim.filetype.match({ buf = buf_id }) end
   if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
 
-  vim.api.nvim_set_current_win(win_id)
-  vim.api.nvim_win_set_cursor(0, { 1, 0 })
-  return was_split
-end
-
-H.make_minigit_bufwin = function(mods)
-  local split = function()
-    local buf_id = vim.api.nvim_create_buf(false, true)
-    vim.cmd(mods .. ' sbuffer ' .. buf_id)
-    local win_id = vim.api.nvim_get_current_win()
-    H.define_minigit_window()
-    return buf_id, win_id, true
-  end
-
-  -- Force split of there are split command modifiers (intentionally omit rest)
-  if H.mods_is_split(mods) then return split() end
-  local split_val = H.validate_split_opt(MiniGit.config.command.split, '`config.command.split`')
-  mods = split_val .. ' ' .. mods
-
-  -- Try reusing already shown buffer-window pair
-  local win_id = H.get_minigit_windows()[1]
-  if win_id ~= nil then return vim.api.nvim_win_get_buf(win_id), win_id, false end
-
-  -- Split if there is no 'mini.git' windows
-  return split()
+  return true
 end
 
 H.get_minigit_windows = function()
@@ -911,15 +888,17 @@ H.validate_buf_id = function(x)
   return x
 end
 
-H.validate_split_opt = function(x, x_name)
+H.normalize_split_opt = function(x, x_name)
   if x == 'auto' then
-    -- Show in same tabpage if it only consists from minigit windows
-    local normal_wins = vim.tbl_filter(
-      function(win_id) return vim.api.nvim_win_get_config(win_id).relative == '' end,
-      vim.api.nvim_tabpage_list_wins(0)
-    )
-    local all_wins_are_minigit = #H.get_minigit_windows() == #normal_wins
-    x = all_wins_are_minigit and 'vertical' or 'tab'
+    -- Show in same tabpage if it has only minigit windows. Otherwise - in new.
+    for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      local win_buf_id = vim.api.nvim_win_get_buf(win_id)
+      local win_buf_name = vim.api.nvim_buf_get_name(win_buf_id)
+      local is_minigit_win = win_buf_name:find('^minigit://%d+/') ~= nil
+      local is_normal_win = vim.api.nvim_win_get_config(win_id).relative == ''
+      if not is_minigit_win and is_normal_win then return 'tab' end
+    end
+    return 'vertical'
   end
   if x == 'horizontal' or x == 'vertical' or x == 'tab' then return x end
   H.error('`' .. x_name .. '` should be one of "auto", "horizontal", "vertical", "tab"')
@@ -1163,58 +1142,73 @@ H.update_buf_data = function(buf_id, new_data)
 end
 
 -- History navigation ---------------------------------------------------------
+--- Assuming buffer contains unified combined diff (with "commit" header),
+--- compute path, line number, and commit of both "before" and "after" files.
+--- Allow cursor to be between "--- a/xxx" line and last line of a hunk.
+---@private
 H.diff_pos_to_source = function()
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local lnum = vim.fn.line('.')
+  local lines, lnum = vim.api.nvim_buf_get_lines(0, 0, -1, false), vim.fn.line('.')
 
-  -- Assuming lines of unified combined diff, compute path and line number of
-  -- both "before" and "after", plus target commit (corresponding to "after")
-  local cur_lnum, offsets = lnum, { [' '] = 0, ['-'] = 0, ['+'] = 0 }
-  local init_prefix
-  while cur_lnum > 0 do
-    local prefix = lines[cur_lnum]:sub(1, 1)
+  local res = { init_prefix = lines[lnum]:sub(1, 1) }
+  local paths_lnum = H.diff_parse_paths(res, lines, lnum)
+  local hunk_lnum = H.diff_parse_hunk(res, lines, lnum)
+  local commit_lnum = H.diff_parse_commits(res, lines, lnum)
+
+  local all_present = res.lnum_after and res.path_after and res.commit_after
+  local is_in_order = commit_lnum <= paths_lnum and paths_lnum <= hunk_lnum
+  if not (all_present and is_in_order) then return nil end
+
+  return res
+end
+
+H.diff_parse_paths = function(out, lines, lnum)
+  local pattern_before, pattern_after = '^%-%-%- a/(.*)$', '^%+%+%+ b/(.*)$'
+
+  -- Allow placing cursor directly on path defining lines
+  local cur_line = lines[lnum]
+  local path_before, path_after = string.match(cur_line, pattern_before), string.match(cur_line, pattern_after)
+  if path_before ~= nil or path_after ~= nil then
+    out.path_before = path_before or string.match(lines[lnum - 1] or '', pattern_before)
+    out.path_after = path_after or string.match(lines[lnum + 1] or '', pattern_after)
+    out.lnum_before, out.lnum_after = 1, 1
+  else
+    -- Iterate lines upward to find path patterns
+    while out.path_after == nil and lnum > 0 do
+      out.path_after = string.match(lines[lnum] or '', pattern_after)
+      lnum = lnum - 1
+    end
+    out.path_before = string.match(lines[lnum] or '', pattern_before)
+  end
+
+  return lnum
+end
+
+H.diff_parse_hunk = function(out, lines, lnum)
+  if out.lnum_after ~= nil then return lnum end
+
+  local offsets = { [' '] = 0, ['-'] = 0, ['+'] = 0 }
+  while lnum > 0 do
+    local prefix = lines[lnum]:sub(1, 1)
     if not (prefix == ' ' or prefix == '-' or prefix == '+') then break end
     offsets[prefix] = offsets[prefix] + 1
-    init_prefix = init_prefix or prefix
-    cur_lnum = cur_lnum - 1
+    lnum = lnum - 1
   end
-  local hunk_start_before, hunk_start_after = string.match(lines[cur_lnum], '^@@ %-(%d+),?%d* %+(%d+),?%d* @@')
-  if hunk_start_before == nil or cur_lnum <= 2 then return nil end
 
-  -- Compute hunk's relative paths
-  local path_after
-  while cur_lnum > 0 do
-    local path = string.match(lines[cur_lnum], '^%+%+%+ b/(.*)$')
-    if path ~= nil then
-      path_after = path
-      break
-    end
-    cur_lnum = cur_lnum - 1
+  local hunk_start_before, hunk_start_after = string.match(lines[lnum], '^@@ %-(%d+),?%d* %+(%d+),?%d* @@')
+  if hunk_start_before ~= nil then
+    out.lnum_before = math.max(1, tonumber(hunk_start_before) + offsets[' '] + offsets['-'] - 1)
+    out.lnum_after = math.max(1, tonumber(hunk_start_after) + offsets[' '] + offsets['+'] - 1)
   end
-  local path_before = string.match(lines[cur_lnum - 1], '^%-%-%- a/(.*)$')
-  if path_after == nil then return nil end
+  return lnum
+end
 
-  -- Try computing commit assuming at least `git log --pretty=short`
-  local commit
-  while cur_lnum > 0 do
-    local try_commit = string.match(lines[cur_lnum], '^commit (%x+)$')
-    if try_commit ~= nil then
-      commit = try_commit
-      break
-    end
-    cur_lnum = cur_lnum - 1
+H.diff_parse_commits = function(out, lines, lnum)
+  while out.commit_after == nil and lnum > 0 do
+    out.commit_after = string.match(lines[lnum], '^commit (%x+)$')
+    lnum = lnum - 1
   end
-  if commit == nil then return nil end
-
-  return {
-    init_prefix = init_prefix,
-    lnum_before = math.max(1, tonumber(hunk_start_before) + offsets[' '] + offsets['-'] - 1),
-    path_before = path_before,
-    lnum_after = math.max(1, tonumber(hunk_start_after) + offsets[' '] + offsets['+'] - 1),
-    path_after = path_after,
-    commit_before = commit .. '~',
-    commit_after = commit,
-  }
+  if out.commit_after ~= nil then out.commit_before = out.commit_after .. '~' end
+  return lnum + 1
 end
 
 -- CLI ------------------------------------------------------------------------
