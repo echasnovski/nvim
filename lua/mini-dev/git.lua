@@ -9,14 +9,6 @@
 -- - Diff source:
 --
 -- - Range history:
---     - Reconsider allowing uncommitted changes in file. This can be solved by
---       checking if there is a diff and prompting users to `:Git stash` if
---       there are changes. Making it work with uncommitted changes leads to
---       a rather complicated code which requires a lot of testing.
---     - Define folding?
---
--- - `refresh()` / `update()`. Either for buffer, root, or combination?
---
 --
 --
 -- Tests:
@@ -191,7 +183,9 @@ MiniGit.show_at_cursor = function(opts)
   local cword = vim.fn.expand('<cword>')
   if cword:find('^%x%x%x%x%x%x') ~= nil then
     local split = H.normalize_split_opt((opts or {}).split or 'auto', 'opts.split')
-    return vim.cmd(split .. ' Git show <cword>')
+    vim.cmd(split .. ' Git show ' .. cword)
+    vim.bo.filetype = 'git'
+    return
   end
 
   -- Try showing diff source
@@ -238,6 +232,9 @@ MiniGit.show_diff_source = function(opts)
   end
 end
 
+--- Show range history
+---
+--- Works well with |MiniGit.log_foldexpr()|.
 MiniGit.show_range_history = function(opts)
   opts = vim.tbl_deep_extend('force', { log_args = '', split = 'auto' }, opts or {})
   local line_start, line_end = opts.line_start, opts.line_end
@@ -263,19 +260,36 @@ MiniGit.show_range_history = function(opts)
     commit, rel_path = 'HEAD', buf_name:gsub(vim.pesc(root) .. '/', '')
   end
 
-  -- Take into account difference between current file state and its commit
-  -- HEAD reference. This is needed to properly compute `-L` arguments.
+  -- Ensure no uncommitted changes as they might result into improper `-L` arg
   local diff = commit == 'HEAD' and H.git_cli_output({ 'diff', '-U0', 'HEAD', '--', rel_path }, root) or {}
-  local line_map = H.diff_parse_line_map(diff, vim.api.nvim_buf_line_count(0))
-  local range_args = vim.tbl_map(
-    function(r) return string.format('-L%d,%d:%s', r[1], r[2], rel_path) end,
-    H.make_log_ranges(line_map, line_start, line_end)
-  )
-  if #range_args == 0 then return H.notify('Selected range contains only added lines', 'WARN') end
+  if #diff ~= 0 then
+    return H.notify('Current file has uncommitted lines. Commit or stash before exploring history.', 'WARN')
+  end
 
   local suffix = opts.log_args == '' and '' or (' ' .. opts.log_args)
-  local command = string.format('%s Git log %s %s%s', split, table.concat(range_args, ' '), commit, suffix)
+  local command = string.format('%s Git log -L%d,%d:%s %s%s', split, line_start, line_end, rel_path, commit, suffix)
   vim.cmd(command)
+end
+
+--- Fold expression for Git logs
+---
+--- Folds contents of separate hunks included in log entries (like after
+--- `:Git log --patch` or `:Git show` for commit).
+--- Works well with |MiniGit.show_range_history()|.
+---
+--- For automated setup, set the following for "git" filetype (either
+--- inside |FileType| autocommand or |ftplugin|): >
+---   setlocal foldmethod=expr foldexpr=v:lua.MiniGit.log_foldexpr(v:lnum)
+--- <
+---@param lnum number Line number for which fold level is computed.
+---
+---@return number|string Line fold level. See |fold-expr|.
+MiniGit.log_foldexpr = function(lnum)
+  if H.is_log_entry_header(lnum + 1) or H.is_log_entry_header(lnum) then return 0 end
+  if H.is_file_entry_header(lnum) then return 0 end
+  if H.is_hunk_header(lnum) then return 0 end
+  if H.is_hunk_header(lnum - 1) then return 1 end
+  return '='
 end
 
 --- Enable Git tracking in buffer
@@ -878,7 +892,6 @@ end
 H.define_minigit_window = function(cleanup)
   local buf_id, win_id = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
   vim.bo.swapfile, vim.bo.buflisted = false, false
-  vim.wo.foldlevel = 999
 
   -- Define action to finish editing Git related file
   local finish_au_id
@@ -886,12 +899,12 @@ H.define_minigit_window = function(cleanup)
     local should_close = data.buf == buf_id or (data.event == 'WinClosed' and tonumber(data.match) == win_id)
     if not should_close then return end
 
-    if vim.is_callable(cleanup) then cleanup() end
-
     pcall(vim.api.nvim_del_autocmd, finish_au_id)
     pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
     pcall(vim.api.nvim_win_close, win_id, true)
     vim.cmd('redraw')
+
+    if vim.is_callable(cleanup) then vim.schedule(cleanup) end
   end
   -- - Use `nested` to allow other events (`WinEnter` for 'mini.statusline')
   local events = { 'WinClosed', 'BufDelete', 'BufWipeout', 'VimLeave' }
@@ -1168,69 +1181,6 @@ H.update_buf_data = function(buf_id, new_data)
   vim.b[buf_id].minigit_summary = summary
 end
 
--- History construction -------------------------------------------------------
-H.diff_parse_line_map = function(diff, n_lines)
-  -- Compute map of buffer line numbers to reference line numbers:
-  -- - Deleted lines increase increase reference line number: if lines 2-3 are
-  --   deleted, then map is 1->1, 2->4, 3->5, etc.
-  -- - Added lines do not correspond to any reference.
-  -- - Changed lines depend on which part prevails.
-  --    - If lines 2-3 are changed with new 3 lines, then the map is
-  --      1->1, 2->2, 3->3, 4->x, 5->4, 6->5, etc.
-  --    - If lines 2-4 are changed with new 2 lines, then the map is
-  --      1->1, 2->2, 3->3, 4->5, 5->6, etc.
-
-  -- Initialize line map with data from hunk headers
-  local res = {}
-  local init_line_map = function(l)
-    local del_start, del_count, add_start, add_count = string.match(l, '^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@')
-    if del_start == nil then return end
-    del_start, del_count, add_start, add_count =
-      tonumber(del_start), tonumber(del_count) or 1, tonumber(add_start), tonumber(add_count) or 1
-    -- Mark purely added lines as not having corresponding line in reference
-    for i = del_count + 1, add_count do
-      res[add_start + i - 1] = false
-    end
-    -- Store new additive offset by which buf numbers differ from reference
-    -- Use `math.max(x, 1)` for pure deletions to be counted under `add_start`
-    res[add_start + math.max(add_count, 1)] = del_count - add_count
-  end
-  vim.tbl_map(init_line_map, diff)
-
-  -- Compute line map of how buffer line numbers correspond to reference
-  local offset = res[0] or 0
-  for i = 1, n_lines do
-    if type(res[i]) == 'number' then offset = offset + res[i] end
-    if res[i] ~= false then res[i] = i + offset end
-  end
-
-  return res
-end
-
-H.make_log_ranges = function(line_map, line_start, line_end)
-  -- Compute all reference lines
-  local all_ref_lnum = {}
-  for i = line_start, line_end do
-    local ref = line_map == nil and i or line_map[i]
-    if type(line_map[i]) == 'number' then table.insert(all_ref_lnum, line_map[i]) end
-  end
-  if #all_ref_lnum == 0 then return {} end
-
-  -- Convert lines to ranges for more compact `git log` call
-  local res, prev_n = { { all_ref_lnum[1] } }, all_ref_lnum[1]
-  for i = 2, #all_ref_lnum do
-    local n = all_ref_lnum[i]
-    if n ~= prev_n + 1 then
-      res[#res][2] = prev_n
-      table.insert(res, { n })
-    end
-    prev_n = n
-  end
-  res[#res][2] = all_ref_lnum[#all_ref_lnum]
-
-  return res
-end
-
 -- History navigation ---------------------------------------------------------
 --- Assuming buffer contains unified combined diff (with "commit" header),
 --- compute path, line number, and commit of both "before" and "after" files.
@@ -1284,7 +1234,7 @@ H.diff_parse_hunk = function(out, lines, lnum)
     lnum = lnum - 1
   end
 
-  local hunk_start_before, hunk_start_after = string.match(lines[lnum], '^@@ %-(%d+),?%d* %+(%d+),?%d* @@')
+  local hunk_start_before, hunk_start_after = string.match(lines[lnum] or '', '^@@ %-(%d+),?%d* %+(%d+),?%d* @@')
   if hunk_start_before ~= nil then
     out.lnum_before = math.max(1, tonumber(hunk_start_before) + offsets[' '] + offsets['-'] - 1)
     out.lnum_after = math.max(1, tonumber(hunk_start_after) + offsets[' '] + offsets['+'] - 1)
@@ -1302,6 +1252,13 @@ H.diff_parse_commits = function(out, lines, lnum)
 end
 
 H.parse_diff_source_buf_name = function(buf_name) return string.match(buf_name, '^minigit://%d+/git show (%x+~?):(.*)$') end
+
+-- Folding --------------------------------------------------------------------
+H.is_hunk_header = function(lnum) return vim.fn.getline(lnum):find('^@@.*@@') ~= nil end
+
+H.is_log_entry_header = function(lnum) return vim.fn.getline(lnum):find('^commit ') ~= nil end
+
+H.is_file_entry_header = function(lnum) return vim.fn.getline(lnum):find('^diff %-%-git') ~= nil end
 
 -- CLI ------------------------------------------------------------------------
 H.git_cmd = function(args)
