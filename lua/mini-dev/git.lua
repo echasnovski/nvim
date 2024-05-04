@@ -14,6 +14,8 @@
 -- Tests:
 -- - Command:
 --     - Can work with abbreviated modifiers, like `:hor Git`, etc.
+--     - Forces split with explicit split modifier.
+--     - Works with simple aliases: provides options and correctly opens split.
 --     - Completion:
 --         - Some options are explicitly documented in both `--xxx` and
 --           `--xxx=` forms:
@@ -123,8 +125,8 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
-MiniGit = {}
-H = {}
+local MiniGit = {}
+local H = {}
 
 --- Module setup
 ---
@@ -392,6 +394,7 @@ H.git_editor_config = nil
 -- - <complete> - array of commands to complete directly after `:Git`.
 -- - <info> - map with fields as commands which show something to user.
 -- - <options> - map of cached options per command; initialized lazily.
+-- - <alias> - map of alias command name to command it implements.
 H.git_subcommands = nil
 
 -- Whether to temporarily skip some checks (like when inside `GIT_EDITOR`)
@@ -436,8 +439,8 @@ H.create_autocommands = function()
 end
 
 H.is_disabled = function(buf_id)
-  local buf_disable = H.get_buf_var(buf_id, 'minidiff_disable')
-  return vim.g.minidiff_disable == true or buf_disable == true
+  local buf_disable = H.get_buf_var(buf_id, 'minigit_disable')
+  return vim.g.minigit_disable == true or buf_disable == true
 end
 
 H.get_buf_var = function(buf_id, name)
@@ -574,6 +577,16 @@ H.ensure_git_subcommands = function()
   end
   git_subcommands.options = options
 
+  -- Compute commands which aliases implement
+  local alias_data = H.git_cli_output({ 'config', '--get-regexp', 'alias.*' })
+  local alias = {}
+  for _, l in ipairs(alias_data) do
+    -- Assume simple alias of the form `alias.xxx subcommand ...`
+    local alias_cmd, cmd = string.match(l, '^alias%.(%S+) (%S+)')
+    if options[cmd] ~= nil then alias[alias_cmd] = cmd end
+  end
+  git_subcommands.alias = alias
+
   -- Cache results
   H.git_subcommands = git_subcommands
 end
@@ -672,6 +685,10 @@ H.command_complete_option = function(command)
   if cached_candidates == nil then return {} end
   if type(cached_candidates) == 'table' then return cached_candidates end
 
+  -- Use alias's command to compute the options but store cache for alias
+  local orig_command = command
+  command = H.git_subcommands.alias[command] or command
+
   -- Find command's flag options by parsing its help page. Needs a bit
   -- heuristic approach, but seems to work good enough.
   -- Alternative is to call command with `--git-completion-helper-all` flag (as
@@ -724,7 +741,7 @@ H.command_complete_option = function(command)
   end)
 
   -- Cache and return
-  H.git_subcommands.options[command] = res
+  H.git_subcommands.options[orig_command] = res
   return res, 'option'
 end
 
@@ -835,11 +852,14 @@ H.command_complete_subcommand_targets = {
 }
 
 H.ensure_mods_is_split = function(mods)
-  -- NOTE: `mods` is already expanded, so this also covers abbreviated mods
-  local is_split = mods:find('vertical') ~= nil or mods:find('horizontal') ~= nil or mods:find('tab') ~= nil
-  if is_split then return mods end
+  if H.mods_is_split(mods) then return mods end
   local split_val = H.normalize_split_opt(MiniGit.config.command.split, '`config.command.split`')
   return split_val .. ' ' .. mods
+end
+
+H.mods_is_split = function(mods)
+  -- NOTE: `mods` is already expanded, so this also covers abbreviated mods
+  return mods:find('vertical') ~= nil or mods:find('horizontal') ~= nil or mods:find('tab') ~= nil
 end
 
 -- Show command output --------------------------------------------------------
@@ -848,12 +868,14 @@ end
 H.show_git_cli_output = function(out, mods, git_command)
   if out == '' or mods:find('silent') ~= nil then return false end
 
-  -- Show in a buffer if command is for showing info; else - `vim.notify`
+  -- Show in a buffer if split is explicitly forced or the command shows info.
+  -- Use `vim.notify` otherwise.
   local subcmd
   for _, cmd in ipairs(git_command) do
     if subcmd == nil and vim.tbl_contains(H.git_subcommands.supported, cmd) then subcmd = cmd end
   end
-  if not H.git_subcommands.info[subcmd] then
+  subcmd = H.git_subcommands.alias[subcmd] or subcmd
+  if not (H.mods_is_split(mods) or H.git_subcommands.info[subcmd]) then
     H.notify(out, 'INFO')
     return false
   end
