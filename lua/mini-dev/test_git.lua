@@ -28,16 +28,28 @@ local islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
 local test_dir = 'tests/dir-git'
 local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('(.)/$', '%1')
 
-local git_repo_dir = test_dir_absolute .. '/git-repo'
-local git_git_dir = git_repo_dir .. '/.git-dir'
-local git_dir_path = git_repo_dir .. '/dir-in-git'
-local git_file_basename = 'file-in-git'
-local git_file_path = git_repo_dir .. '/dir-in-git/' .. git_file_basename
+local git_root_dir = test_dir_absolute .. '/git-repo'
+local git_repo_dir = git_root_dir .. '/.git-dir'
+local git_dir_path = git_root_dir .. '/dir-in-git'
+local git_file_path = git_root_dir .. '/file-in-git'
 
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
   return function(...) return child.lua_get(lua_cmd, { ... }) end
 end
+
+local log_calls = function(fun_name)
+  --stylua: ignore
+  local lua_cmd = string.format(
+    [[local orig = %s
+      _G.call_log = _G.call_log or {}
+      %s = function(...) table.insert(_G.call_log, { %s, ... }); return orig(...) end]],
+    fun_name, fun_name, vim.inspect(fun_name)
+  )
+  child.lua(lua_cmd)
+end
+
+local validate_calls = function(ref) eq(child.lua_get('_G.call_log'), ref) end
 
 local get_buf_data = forward_lua('require("mini-dev.git").get_buf_data')
 
@@ -48,7 +60,7 @@ local small_time = 10
 
 -- - Git mocks
 local mock_change_git_index = function()
-  local index_path = git_git_dir .. '/index'
+  local index_path = git_repo_dir .. '/index'
   child.fn.writefile({}, index_path .. '.lock')
   sleep(1)
   child.fn.delete(index_path)
@@ -59,6 +71,16 @@ local mock_executable = function()
   child.lua([[
     _G.orig_executable = vim.fn.executable
     vim.fn.executable = function(exec) return exec == 'git' and 1 or _G.orig_executable(exec) end
+  ]])
+end
+
+local mock_init_track_stdio_queue = function()
+  child.lua([[
+    _G.init_track_stdio_queue = {
+      { { 'out', _G.rev_parse_track  } }, -- Get path to root and repo
+      { { 'out', 'abc1234\nmain' } },     -- Get HEAD data
+      { { 'out', '?? file-in-git' } },    -- Get file status data
+    }
   ]])
 end
 
@@ -88,7 +110,11 @@ local validate_git_spawn_log = function(ref_log)
   end
 end
 
+local clear_spawn_log = function() child.lua('_G.spawn_log = {}') end
+
 local get_process_log = function() return child.lua_get('_G.process_log') end
+
+local clear_process_log = function() child.lua('_G.process_log = {}') end
 
 -- - Notifications
 local mock_notify = function()
@@ -135,9 +161,13 @@ local T = new_set({
     pre_case = function()
       child.setup()
       child.set_size(10, 15)
+      mock_spawn()
       mock_notify()
       mock_executable()
-      load_module()
+
+      -- Populate child with frequently used paths
+      child.lua('_G.git_root_dir, _G.git_repo_dir = ' .. vim.inspect(git_root_dir) .. ', ' .. vim.inspect(git_repo_dir))
+      child.lua([[_G.rev_parse_track = _G.git_repo_dir .. '\n' .. _G.git_root_dir]])
     end,
     post_once = child.stop,
   },
@@ -197,109 +227,122 @@ T['setup()']['warns about missing executable'] = function()
 end
 
 T['setup()']['auto enables in all existing buffers'] = function()
-  -- local buf_id_normal = new_buf()
-  -- set_buf(buf_id_normal)
-  --
-  -- local buf_id_bad_1 = new_scratch_buf()
-  -- local buf_id_bad_2 = new_buf()
-  -- child.api.nvim_buf_set_lines(buf_id_bad_2, 0, -1, false, { '\0' })
-  --
-  -- -- Only normal valid text buffers should be auto enabled
-  -- eq(is_buf_enabled(buf_id_normal), true)
-  -- eq(is_buf_enabled(buf_id_bad_1), false)
-  -- eq(is_buf_enabled(buf_id_bad_2), false)
-  MiniTest.skip()
+  mock_init_track_stdio_queue()
+  child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+
+  edit(git_file_path)
+  load_module()
+  eq(is_buf_enabled(), true)
 end
 
-T['show_at_cursor()'] = new_set()
+T['show_at_cursor()'] = new_set({ hooks = { pre_case = load_module } })
 
 T['show_at_cursor()']['works'] = function() MiniTest.skip() end
 
-T['show_diff_source()'] = new_set()
+T['show_diff_source()'] = new_set({ hooks = { pre_case = load_module } })
 
 T['show_diff_source()']['works'] = function() MiniTest.skip() end
 
-T['show_range_history()'] = new_set()
+T['show_range_history()'] = new_set({ hooks = { pre_case = load_module } })
 
 T['show_range_history()']['works'] = function() MiniTest.skip() end
 
-T['log_foldexpr()'] = new_set()
+T['diff_foldexpr()'] = new_set({ hooks = { pre_case = load_module } })
 
-T['log_foldexpr()']['works'] = function() MiniTest.skip() end
+T['diff_foldexpr()']['works'] = function() MiniTest.skip() end
 
-T['enable()'] = new_set()
+T['enable()'] = new_set({
+  hooks = {
+    pre_case = function()
+      mock_init_track_stdio_queue()
+      child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+      load_module()
+
+      -- Set up enableable buffer which is not yet enabled
+      child.g.minigit_disable = true
+      edit(git_file_path)
+      child.g.minigit_disable = nil
+    end,
+  },
+})
 
 local enable = forward_lua('MiniGit.enable')
 
+T['enable()']['works'] = function()
+  enable()
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = git_root_dir,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+      cwd = git_root_dir,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'file-in-git' },
+      cwd = git_root_dir,
+    },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  local summary = {
+    head = 'abc1234',
+    head_name = 'main',
+    in_progress = '',
+    repo = git_repo_dir,
+    root = git_root_dir,
+    status = '??',
+  }
+  eq(get_buf_data(), summary)
+  eq(child.b.minigit_summary, summary)
+
+  -- Should not re-enable alreaady enabled buffer
+  enable()
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Makes buffer disabled when deleted
+  log_calls('MiniGit.disable')
+  local buf_id = get_buf()
+  child.api.nvim_buf_delete(buf_id, { force = true })
+  validate_calls({ { 'MiniGit.disable', buf_id } })
+end
+
 T['enable()']['works in not normal buffer'] = function()
-  -- local buf_id = new_scratch_buf()
-  -- set_buf(buf_id)
-  -- enable(buf_id)
-  MiniTest.skip()
+  child.bo.buftype = 'acwrite'
+  enable()
+  eq(is_buf_enabled(), true)
 end
 
 T['enable()']['works in not current buffer'] = function()
-  -- local buf_id = new_buf()
-  -- enable(buf_id)
-  -- eq(is_buf_enabled(buf_id), true)
-  MiniTest.skip()
+  local buf_id = get_buf()
+  set_buf(new_scratch_buf())
+  enable(buf_id)
+  eq(is_buf_enabled(buf_id), true)
+  eq(get_buf() ~= buf_id, true)
+end
+
+T['enable()']['does not work in non-file buffer'] = function()
+  set_buf(new_buf())
+  enable()
+  eq(is_buf_enabled(), false)
+  validate_git_spawn_log({})
 end
 
 T['enable()']['normalizes input buffer'] = function()
-  -- local buf_id = new_scratch_buf()
-  -- set_buf(buf_id)
-  -- clean_dummy_log()
-  -- enable(0)
-  -- eq(is_buf_enabled(buf_id), true)
-  MiniTest.skip()
-end
-
-T['enable()']['does not re-enable already enabled buffer'] = function()
-  -- enable()
-  -- validate_dummy_log({})
-  MiniTest.skip()
-end
-
-T['enable()']['makes sure buffer is loaded'] = function()
-  -- -- Set up not loaded but existing buffer with lines
-  -- local new_buf_id = child.api.nvim_create_buf(true, false)
-  -- child.api.nvim_buf_set_lines(new_buf_id, 0, -1, false, { 'aaa', 'bbb' })
-  -- child.api.nvim_buf_set_option(new_buf_id, 'modified', false)
-  -- child.api.nvim_buf_delete(new_buf_id, { unload = true })
-  -- eq(child.api.nvim_buf_get_lines(new_buf_id, 0, -1, false), {})
-  --
-  -- -- Should also not trigger `*Enter` events
-  -- child.cmd('au BufEnter,BufWinEnter * lua _G.n = (_G.n or 0) + 1')
-  -- enable(new_buf_id)
-  -- eq(child.fn.bufloaded(new_buf_id), 1)
-  -- eq(child.lua_get('_G.n'), vim.NIL)
-  MiniTest.skip()
-end
-
-T['enable()']['makes buffer update cache on `BufWinEnter`'] = function()
-  -- eq(get_buf_data().config.delay.text_change, small_time)
-  -- child.b.minidiff_config = { delay = { text_change = 200 } }
-  -- child.api.nvim_exec_autocmds('BufWinEnter', { buffer = get_buf() })
-  -- eq(get_buf_data().config.delay.text_change, 200)
-  MiniTest.skip()
-end
-
-T['enable()']['makes buffer disabled when deleted'] = function()
-  -- local alt_buf_id = new_buf()
-  -- enable(alt_buf_id)
-  -- clean_dummy_log()
-  --
-  -- local buf_id = get_buf()
-  -- child.api.nvim_buf_delete(buf_id, { force = true })
-  -- validate_dummy_log({ { 'detach', { buf_id } } })
-  MiniTest.skip()
+  enable(0)
+  eq(is_buf_enabled(), true)
 end
 
 T['enable()']['makes buffer reset on rename'] = function()
-  -- local buf_id = get_buf()
-  -- child.api.nvim_buf_set_name(0, 'hello')
-  -- validate_dummy_log({ { 'detach', { buf_id } }, { 'attach', { buf_id } } })
-  MiniTest.skip()
+  enable()
+  local buf_id = get_buf()
+  log_calls('MiniGit.enable')
+  log_calls('MiniGit.disable')
+
+  child.api.nvim_buf_set_name(0, child.fn.fnamemodify(git_file_path, ':h') .. '/new-file')
+  validate_calls({ { 'MiniGit.disable', buf_id }, { 'MiniGit.enable', buf_id } })
 end
 
 T['enable()']['validates arguments'] = function()
@@ -310,285 +353,261 @@ T['enable()']['respects `vim.{g,b}.minigit_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
-    -- local buf_id = new_buf()
-    -- if var_type == 'b' then child.api.nvim_buf_set_var(buf_id, 'minigit_disable', true) end
-    -- if var_type == 'g' then child.api.nvim_set_var('minigit_disable', true) end
-    -- enable(buf_id)
-    -- validate_dummy_log({})
-    -- eq(is_buf_enabled(buf_id), false)
-    MiniTest.skip()
+    local buf_id = new_buf()
+    if var_type == 'b' then child.api.nvim_buf_set_var(buf_id, 'minigit_disable', true) end
+    if var_type == 'g' then child.api.nvim_set_var('minigit_disable', true) end
+    enable(buf_id)
+    eq(is_buf_enabled(buf_id), false)
+    validate_git_spawn_log({})
   end,
 })
 
-T['disable()'] = new_set()
+T['disable()'] = new_set({
+  hooks = {
+    pre_case = function()
+      mock_init_track_stdio_queue()
+      child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+      load_module()
+
+      -- Set up enabled buffer
+      edit(git_file_path)
+      eq(is_buf_enabled(), true)
+    end,
+  },
+})
 
 local disable = forward_lua('MiniGit.disable')
 
 T['disable()']['works'] = function()
-  -- local buf_id = get_buf()
-  -- eq(is_buf_enabled(buf_id), true)
-  -- set_lines({ 'aaa', 'bbb' })
-  -- set_ref_text(0, { 'aaa' })
-  --
-  -- disable(buf_id)
-  -- eq(is_buf_enabled(buf_id), false)
-  --
-  -- -- Should delete buffer autocommands
-  -- eq(child.api.nvim_get_autocmds({ buffer = buf_id }), {})
-  --
-  -- -- Should detach source
-  -- validate_dummy_log({ { 'detach', { buf_id } } })
-  --
-  -- -- Should clear visualization
-  -- child.expect_screenshot()
-  MiniTest.skip()
+  local buf_id = get_buf()
+  clear_spawn_log()
+
+  disable()
+  eq(is_buf_enabled(buf_id), false)
+  validate_git_spawn_log({})
+  eq(child.api.nvim_get_autocmds({ buffer = buf_id }), {})
+  eq(child.b.minigit_summary, vim.NIL)
 end
 
 T['disable()']['works in not current buffer'] = function()
-  -- local buf_id = new_buf()
-  -- enable(buf_id)
-  -- clean_dummy_log()
-  -- set_lines({ 'aaa', 'bbb' })
-  -- set_ref_text(0, { 'aaa' })
-  --
-  -- disable(buf_id)
-  -- eq(is_buf_enabled(buf_id), false)
-  -- validate_dummy_log({ { 'detach', { buf_id } } })
-  MiniTest.skip()
+  local buf_id = get_buf()
+  set_buf(new_scratch_buf())
+  disable(buf_id)
+  eq(is_buf_enabled(buf_id), false)
 end
 
 T['disable()']['works in not enabled buffer'] = function()
-  -- local buf_id = new_buf()
-  -- eq(is_buf_enabled(buf_id), false)
-  -- expect.no_error(function() disable(buf_id) end)
-  MiniTest.skip()
+  set_buf(new_scratch_buf())
+  eq(is_buf_enabled(), false)
+  expect.no_error(disable)
 end
 
 T['disable()']['normalizes input buffer'] = function()
-  -- local buf_id = new_scratch_buf()
-  -- set_buf(buf_id)
-  --
-  -- enable(buf_id)
-  -- eq(is_buf_enabled(buf_id), true)
-  -- disable(0)
-  -- eq(is_buf_enabled(buf_id), false)
-  MiniTest.skip()
+  local buf_id = get_buf()
+  disable(0)
+  eq(is_buf_enabled(buf_id), false)
 end
 
 T['disable()']['validates arguments'] = function()
   expect.error(function() disable('a') end, '`buf_id`.*valid buffer id')
 end
 
-T['toggle()'] = new_set()
+T['toggle()'] = new_set({ hooks = { pre_case = load_module } })
 
 local toggle = forward_lua('MiniGit.toggle')
 
 T['toggle()']['works'] = function()
-  -- child.lua([[
-  --   _G.log = {}
-  --   local cur_enable = MiniGit.enable
-  --   MiniGit.enable = function(...)
-  --     table.insert(_G.log, { 'enabled', { ... } })
-  --     cur_enable(...)
-  --   end
-  --   local cur_disable = MiniGit.disable
-  --   MiniGit.disable = function(...)
-  --     cur_disable(...)
-  --     table.insert(_G.log, { 'disabled', { ... } })
-  --   end
-  -- ]])
-  --
-  -- local buf_id = get_buf()
-  -- eq(is_buf_enabled(buf_id), true)
-  -- toggle(buf_id)
-  -- eq(is_buf_enabled(buf_id), false)
-  -- toggle(buf_id)
-  -- eq(is_buf_enabled(buf_id), true)
-  --
-  -- eq(child.lua_get('_G.log'), { { 'disabled', { buf_id } }, { 'enabled', { buf_id } } })
-  MiniTest.skip()
+  mock_init_track_stdio_queue()
+  child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+  log_calls('MiniGit.enable')
+  log_calls('MiniGit.disable')
+
+  edit(git_file_path)
+  local buf_id = get_buf()
+  eq(is_buf_enabled(buf_id), true)
+  validate_calls({ { 'MiniGit.enable', buf_id } })
+
+  toggle()
+  eq(is_buf_enabled(buf_id), false)
+  validate_calls({ { 'MiniGit.enable', buf_id }, { 'MiniGit.disable', buf_id } })
+
+  toggle(buf_id)
+  eq(is_buf_enabled(buf_id), true)
+  validate_calls({ { 'MiniGit.enable', buf_id }, { 'MiniGit.disable', buf_id }, { 'MiniGit.enable', buf_id } })
 end
 
-T['get_buf_data()'] = new_set({ hooks = { pre_case = setup_enabled_buffer } })
+T['get_buf_data()'] = new_set({
+  hooks = {
+    pre_case = function()
+      mock_init_track_stdio_queue()
+      child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+      load_module()
+
+      -- Set up enabled buffer
+      edit(git_file_path)
+      eq(is_buf_enabled(), true)
+    end,
+  },
+})
 
 T['get_buf_data()']['works'] = function()
-  -- set_lines({ 'aaa', 'bbb' })
-  -- set_ref_text(0, { 'aaa' })
-  --
-  -- child.lua('_G.buf_data = MiniDiff.get_buf_data()')
-  --
-  -- -- Should have proper structure
-  -- local fields = child.lua_get('vim.tbl_keys(_G.buf_data)')
-  -- table.sort(fields)
-  -- eq(fields, { 'config', 'hunks', 'overlay', 'ref_text', 'summary' })
-  --
-  -- eq(child.lua_get('vim.deep_equal(MiniDiff.config, _G.buf_data.config)'), true)
-  -- eq(child.lua_get('_G.buf_data.summary'), { source_name = 'dummy', add = 1, change = 0, delete = 0, n_ranges = 1 })
-  -- eq(
-  --   child.lua_get('_G.buf_data.hunks'),
-  --   { { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0, type = 'add' } }
-  -- )
-  -- eq(child.lua_get('_G.buf_data.ref_text'), 'aaa\n')
-  --
-  -- eq(child.lua_get('_G.buf_data.overlay'), false)
-  -- toggle_overlay()
-  -- eq(child.lua_get('MiniDiff.get_buf_data().overlay'), true)
-  MiniTest.skip()
-end
+  local buf_id = get_buf()
+  local summary = {
+    head = 'abc1234',
+    head_name = 'main',
+    in_progress = '',
+    repo = git_repo_dir,
+    root = git_root_dir,
+    status = '??',
+  }
+  eq(get_buf_data(), summary)
+  eq(get_buf_data(0), summary)
+  eq(get_buf_data(buf_id), summary)
 
-T['get_buf_data()']['works with not set reference text'] = function()
-  -- local buf_data = get_buf_data()
-  -- eq(buf_data.hunks, {})
-  -- eq(buf_data.summary, {})
-  -- eq(buf_data.ref_text, nil)
-  MiniTest.skip()
-end
+  -- Works on not enabled buffer
+  set_buf(new_scratch_buf())
+  eq(is_buf_enabled(), false)
+  eq(get_buf_data(), vim.NIL)
 
-T['get_buf_data()']['works on not enabled buffer'] = function()
-  -- local out = child.lua([[
-  --   local buf_id = vim.api.nvim_create_buf(true, false)
-  --   return MiniDiff.get_buf_data(buf_id) == nil
-  -- ]])
-  -- eq(out, true)
-  MiniTest.skip()
+  -- Works on not current buffer
+  eq(get_buf_data(buf_id), summary)
 end
 
 T['get_buf_data()']['validates arguments'] = function()
-  -- expect.error(function() get_buf_data('a') end, '`buf_id`.*valid buffer id')
-  MiniTest.skip()
+  expect.error(function() get_buf_data('a') end, '`buf_id`.*valid buffer id')
 end
 
 T['get_buf_data()']['returns copy of underlying data'] = function()
-  -- local out = child.lua([[
-  --   local buf_data = MiniDiff.get_buf_data()
-  --   buf_data.hunks = 'aaa'
-  --   return MiniDiff.get_buf_data().hunks ~= 'aaa'
-  -- ]])
-  -- eq(out, true)
-  MiniTest.skip()
-end
-
-T['get_buf_data()']['correctly computes summary numbers'] = function()
-  -- child.lua('MiniDiff.config.options.linematch = 0')
-  -- local buf_id = new_buf()
-  -- set_buf(buf_id)
-  -- enable(buf_id)
-  -- eq(get_buf_data(buf_id).config.options.linematch, 0)
-  --
-  -- local validate = function(ref_summary) eq(get_buf_data(buf_id).summary, ref_summary) end
-  --
-  -- -- Delete lines
-  -- set_lines({ 'BBB', 'DDD' })
-  -- set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD' })
-  -- -- NOTE: Number of ranges is 1 because in buffer two delete hunks start on
-  -- -- consecutive lines
-  -- validate({ source_name = 'dummy', add = 0, change = 0, delete = 2, n_ranges = 1 })
-  --
-  -- -- Add lines
-  -- set_lines({ 'AAA', 'uuu', 'BBB', 'vvv' })
-  -- set_ref_text(0, { 'AAA', 'BBB' })
-  -- validate({ source_name = 'dummy', add = 2, change = 0, delete = 0, n_ranges = 2 })
-  --
-  -- -- Changed lines are computed per hunk as minimum number of added and deleted
-  -- -- lines. Excess is counted as corresponding lines (added/deleted)
-  -- set_lines({ 'aaa', 'CCC', 'ddd', 'eee', 'uuu' })
-  -- set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE' })
-  -- local ref_hunks = {
-  --   { buf_start = 1, buf_count = 1, ref_start = 1, ref_count = 2, type = 'change' },
-  --   { buf_start = 3, buf_count = 3, ref_start = 4, ref_count = 2, type = 'change' },
-  -- }
-  -- eq(get_buf_hunks(buf_id), ref_hunks)
-  -- validate({ source_name = 'dummy', add = 1, change = 3, delete = 1, n_ranges = 2 })
-  MiniTest.skip()
-end
-
-T['get_buf_data()']['uses number of contiguous ranges in summary'] = function()
-  -- if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('Contiguous regions are relevant with `linematch` option.') end
-  --
-  -- set_lines({ 'AAA', 'uuu', 'BbB', 'DDD', 'www', 'EEE' })
-  -- set_ref_text(0, { 'AAA', 'BBB', 'CCC', 'DDD', 'EEE' })
-  -- local buf_data = get_buf_data()
-  -- eq(buf_data.hunks, {
-  --   { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0, type = 'add' },
-  --   { buf_start = 3, buf_count = 1, ref_start = 2, ref_count = 1, type = 'change' },
-  --   { buf_start = 3, buf_count = 0, ref_start = 3, ref_count = 1, type = 'delete' },
-  --   { buf_start = 5, buf_count = 1, ref_start = 4, ref_count = 0, type = 'add' },
-  -- })
-  --
-  -- eq(buf_data.summary.n_ranges, 2)
-  MiniTest.skip()
+  local out = child.lua([[
+    local buf_data = MiniGit.get_buf_data()
+    buf_data.head = 'aaa'
+    return MiniGit.get_buf_data().head ~= 'aaa'
+  ]])
+  eq(out, true)
 end
 
 -- Integration tests ==========================================================
-T['Auto enable'] = new_set()
+T['Auto enable'] = new_set({ hooks = { pre_case = load_module } })
 
 T['Auto enable']['properly enables on `BufEnter`'] = function()
-  -- local buf_id = new_buf()
-  -- set_buf(buf_id)
-  -- eq(is_buf_enabled(buf_id), true)
-  --
-  -- -- Should auto enable even in unlisted buffers
-  -- local buf_id_unlisted = child.api.nvim_create_buf(false, false)
-  -- set_buf(buf_id_unlisted)
-  -- eq(is_buf_enabled(buf_id_unlisted), true)
-  --
-  -- -- Should try auto enable in `BufEnter`
-  -- disable(buf_id)
-  -- eq(is_buf_enabled(buf_id), false)
-  -- set_buf(buf_id)
-  -- eq(is_buf_enabled(buf_id), true)
-  MiniTest.skip()
+  mock_init_track_stdio_queue()
+  child.lua([[_G.stdio_queue = {
+      _G.init_track_stdio_queue[1],
+      _G.init_track_stdio_queue[2],
+      _G.init_track_stdio_queue[3],
+
+      _G.init_track_stdio_queue[1],
+      _G.init_track_stdio_queue[2],
+      _G.init_track_stdio_queue[3],
+
+      _G.init_track_stdio_queue[1],
+      _G.init_track_stdio_queue[2],
+      _G.init_track_stdio_queue[3],
+    }
+  ]])
+
+  edit(git_file_path)
+  local buf_id = get_buf()
+  sleep(small_time)
+  eq(get_buf_data(buf_id).status, '??')
+
+  -- Should try auto enable in `BufEnter`
+  set_buf(new_scratch_buf())
+  disable(buf_id)
+  eq(is_buf_enabled(buf_id), false)
+  set_buf(buf_id)
+  sleep(small_time)
+  eq(get_buf_data(buf_id).status, '??')
+
+  -- Should auto enable even in unlisted buffers
+  set_buf(new_scratch_buf())
+  disable(buf_id)
+  child.api.nvim_buf_set_option(buf_id, 'buflisted', false)
+  set_buf(buf_id)
+  sleep(small_time)
+  eq(get_buf_data(buf_id).status, '??')
 end
 
 T['Auto enable']['does not enable in not proper buffers'] = function()
-  -- -- Has set `vim.b.minidiff_disable`
-  -- local buf_id_disabled = new_buf()
-  -- child.api.nvim_buf_set_var(buf_id_disabled, 'minidiff_disable', true)
-  -- set_buf(buf_id_disabled)
-  -- eq(is_buf_enabled(buf_id_disabled), false)
-  --
-  -- -- Is not normal
-  -- set_buf(new_scratch_buf())
-  -- eq(is_buf_enabled(0), false)
-  --
-  -- -- Is not text buffer
-  -- local buf_id_not_text = new_buf()
-  -- child.api.nvim_buf_set_lines(buf_id_not_text, 0, -1, false, { 'aa', '\0', 'bb' })
-  -- set_buf(buf_id_not_text)
-  -- eq(is_buf_enabled(buf_id_not_text), false)
-  MiniTest.skip()
+  -- Has set `vim.b.minigit_disable`
+  local buf_id_disabled = new_buf()
+  child.api.nvim_buf_set_name(buf_id_disabled, git_file_path)
+  child.api.nvim_buf_set_var(buf_id_disabled, 'minigit_disable', true)
+  set_buf(buf_id_disabled)
+  eq(is_buf_enabled(buf_id_disabled), false)
+
+  -- Is not normal
+  set_buf(new_scratch_buf())
+  eq(is_buf_enabled(), false)
+
+  -- Is not file buffer
+  set_buf(new_buf())
+  eq(is_buf_enabled(), false)
+
+  -- Should infer all above cases without CLI runs
+  validate_git_spawn_log({})
 end
 
 T['Auto enable']['works after `:edit`'] = function()
-  -- child.lua([[
-  --   MiniDiff.config.source = { attach = function(buf_id) MiniDiff.set_ref_text(buf_id, { 'aaa' }) end }
-  -- ]])
-  --
-  -- edit(test_file_path)
-  -- eq(is_buf_enabled(0), true)
-  -- local ref_hunks = { { buf_start = 2, buf_count = 1, ref_start = 1, ref_count = 0, type = 'add' } }
-  -- eq(get_buf_hunks(0), ref_hunks)
-  --
-  -- -- - It should be able to use `:edit` to update buffer config
-  -- child.b.minidiff_config = { options = { algorithm = 'minimal' } }
-  -- eq(get_buf_data(0).config.options.algorithm, 'histogram')
-  --
-  -- child.cmd('edit')
-  -- eq(get_lines(), { 'aaa', 'uuu' })
-  --
-  -- eq(is_buf_enabled(0), true)
-  -- eq(get_buf_hunks(0), ref_hunks)
-  -- eq(get_buf_data(0).config.options.algorithm, 'minimal')
-  -- validate_viz_extmarks(0, { { line = 2, sign_hl_group = 'MiniDiffSignAdd', sign_text = '▒ ' } })
-  MiniTest.skip()
+  mock_init_track_stdio_queue()
+  child.lua([[_G.stdio_queue = {
+      _G.init_track_stdio_queue[1],
+      _G.init_track_stdio_queue[2],
+      _G.init_track_stdio_queue[3],
+
+      _G.init_track_stdio_queue[1],
+      _G.init_track_stdio_queue[2],
+      _G.init_track_stdio_queue[3],
+    }
+  ]])
+
+  edit(git_file_path)
+  local buf_id = get_buf()
+  eq(is_buf_enabled(buf_id), true)
+
+  log_calls('MiniGit.enable')
+  log_calls('MiniGit.disable')
+
+  child.cmd('edit')
+  validate_calls({ { 'MiniGit.disable', buf_id }, { 'MiniGit.enable', buf_id } })
+  eq(get_buf_data(buf_id).root, git_root_dir)
 end
 
-T[':Git'] = new_set()
+T['Tracking'] = new_set()
+
+T['Tracking']['works inside Git repo'] = function() MiniTest.skip() end
+
+T['Tracking']['works outside of Git repo'] = function() MiniTest.skip() end
+
+T['Tracking']['resets at `:edit`'] = function() MiniTest.skip() end
+
+T['Tracking']['updates when content is changed outside of current session'] = function() MiniTest.skip() end
+
+T['Tracking']['tracks change in root/repo'] = function() MiniTest.skip() end
+
+T['Tracking']['tracks change in HEAD'] = function() MiniTest.skip() end
+
+T['Tracking']['tracks change in status'] = function() MiniTest.skip() end
+
+T['Tracking']['tracks change in "in progress" metadata'] = function() MiniTest.skip() end
+
+T[':Git'] = new_set({ hooks = { pre_case = load_module } })
 
 T[':Git']['works'] = function() MiniTest.skip() end
 
 T[':Git']['completion'] = new_set()
 
 T[':Git']['completion']['works'] = function() MiniTest.skip() end
+
+T[':Git']['events'] = new_set()
+
+T[':Git']['events']['`MiniGitCommandDone` works'] = function() MiniTest.skip() end
+
+T[':Git']['events']['`MiniGitCommandSplit` works'] = function() MiniTest.skip() end
+
+T[':Git']['events']['`MiniGitCommandSplit` can be used to tweak window-local options'] = function()
+  -- Like vim.wo.foldlevel
+  MiniTest.skip()
+end
 
 return T

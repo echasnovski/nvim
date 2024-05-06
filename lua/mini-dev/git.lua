@@ -236,7 +236,7 @@ end
 
 --- Show range history
 ---
---- Works well with |MiniGit.log_foldexpr()|.
+--- Works well with |MiniGit.diff_foldexpr()|.
 MiniGit.show_range_history = function(opts)
   opts = vim.tbl_deep_extend('force', { log_args = '', split = 'auto' }, opts or {})
   local line_start, line_end = opts.line_start, opts.line_end
@@ -275,26 +275,27 @@ end
 
 --- Fold expression for Git logs
 ---
---- Folds contents of separate hunks included in log entries (like after
+--- Folds contents of hunks, file patches, and log entries in unified diff.
+--- Useful for filetypes "diff" (like after `:Git diff`) and "git" (like after
 --- `:Git log --patch` or `:Git show` for commit).
 --- Works well with |MiniGit.show_range_history()|.
 ---
 --- For automated setup, set the following for "git" filetype (either
 --- inside |FileType| autocommand or |ftplugin|): >
----   setlocal foldmethod=expr foldexpr=v:lua.MiniGit.log_foldexpr(v:lnum)
+---   setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr(v:lnum)
 --- <
 ---@param lnum number Line number for which fold level is computed.
 ---
 ---@return number|string Line fold level. See |fold-expr|.
-MiniGit.log_foldexpr = function(lnum)
+MiniGit.diff_foldexpr = function(lnum)
   if H.is_log_entry_header(lnum + 1) or H.is_log_entry_header(lnum) then return 0 end
-  if H.is_file_entry_header(lnum) then return 0 end
-  if H.is_hunk_header(lnum) then return 0 end
-  if H.is_hunk_header(lnum - 1) then return 1 end
+  if H.is_file_entry_header(lnum) then return 1 end
+  if H.is_hunk_header(lnum) then return 2 end
+  if H.is_hunk_header(lnum - 1) then return 3 end
   return '='
 end
 
---- Enable Git tracking in buffer
+--- Enable Git tracking in a file buffer
 ---
 ---@param buf_id __git_buf_id
 MiniGit.enable = function(buf_id)
@@ -359,11 +360,11 @@ MiniGit.get_buf_data = function(buf_id)
   local buf_cache = H.cache[buf_id]
   if buf_cache == nil then return nil end
   --stylua: ignore
-  return vim.deepcopy({
+  return {
     repo   = buf_cache.repo,   root        = buf_cache.root,
     head   = buf_cache.head,   head_name   = buf_cache.head_name,
     status = buf_cache.status, in_progress = buf_cache.in_progress,
-  })
+  }
 end
 
 -- Helper data ================================================================
@@ -914,6 +915,7 @@ end
 H.define_minigit_window = function(cleanup)
   local buf_id, win_id = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
   vim.bo.swapfile, vim.bo.buflisted = false, false
+  vim.wo.foldlevel = 999
 
   -- Define action to finish editing Git related file
   local finish_au_id
@@ -936,8 +938,7 @@ end
 
 -- Autocommands ---------------------------------------------------------------
 H.auto_enable = vim.schedule_wrap(function(data)
-  if H.is_buf_enabled(data.buf) or H.is_disabled(data.buf) then return end
-  if not vim.api.nvim_buf_is_valid(data.buf) or vim.bo[data.buf].buftype ~= '' then return end
+  if not (vim.api.nvim_buf_is_valid(data.buf) and vim.bo[data.buf].buftype == '') then return end
   MiniGit.enable(data.buf)
 end)
 
