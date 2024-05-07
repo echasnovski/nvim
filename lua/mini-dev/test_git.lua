@@ -27,6 +27,7 @@ local islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
 
 local test_dir = 'tests/dir-git'
 local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('(.)/$', '%1')
+local test_file_absolute = test_dir_absolute .. '/file'
 
 local git_root_dir = test_dir_absolute .. '/git-repo'
 local git_repo_dir = git_root_dir .. '/.git-dir'
@@ -77,9 +78,9 @@ end
 local mock_init_track_stdio_queue = function()
   child.lua([[
     _G.init_track_stdio_queue = {
-      { { 'out', _G.rev_parse_track  } }, -- Get path to root and repo
-      { { 'out', 'abc1234\nmain' } },     -- Get HEAD data
-      { { 'out', '?? file-in-git' } },    -- Get file status data
+      { { 'out', _G.rev_parse_track } }, -- Get path to root and repo
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data
+      { { 'out', '?? file-in-git' } },   -- Get file status data
     }
   ]])
 end
@@ -249,7 +250,51 @@ T['show_range_history()']['works'] = function() MiniTest.skip() end
 
 T['diff_foldexpr()'] = new_set({ hooks = { pre_case = load_module } })
 
-T['diff_foldexpr()']['works'] = function() MiniTest.skip() end
+T['diff_foldexpr()']['works in `git log` output'] = function()
+  child.set_size(70, 50)
+  child.o.laststatus = 0
+  edit(test_dir_absolute .. '/log-output')
+  child.cmd('setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr(v:lnum)')
+
+  -- Should be one line per patch
+  child.o.foldlevel = 0
+  child.expect_screenshot()
+
+  -- Should be one line per patched file
+  child.o.foldlevel = 1
+  child.expect_screenshot()
+
+  -- Should be one line per hunk
+  child.o.foldlevel = 2
+  child.expect_screenshot()
+
+  -- Should be no folds
+  child.o.foldlevel = 3
+  child.expect_screenshot()
+end
+
+T['diff_foldexpr()']['works in diff patch'] = function()
+  child.set_size(25, 50)
+  child.o.laststatus = 0
+  edit(test_dir_absolute .. '/diff-output')
+  child.cmd('setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr(v:lnum)')
+
+  -- Should be one line per patch
+  child.o.foldlevel = 0
+  child.expect_screenshot()
+
+  -- Should be one line per patched file
+  child.o.foldlevel = 1
+  child.expect_screenshot()
+
+  -- Should be one line per hunk
+  child.o.foldlevel = 2
+  child.expect_screenshot()
+
+  -- Should be no folds
+  child.o.foldlevel = 3
+  child.expect_screenshot()
+end
 
 T['enable()'] = new_set({
   hooks = {
@@ -473,6 +518,13 @@ T['get_buf_data()']['works'] = function()
   eq(get_buf_data(buf_id), summary)
 end
 
+T['get_buf_data()']['works for file not in repo'] = function()
+  mock_spawn()
+  child.lua('_G.process_mock_data = { { exit_code = 1 } }')
+  edit(test_file_absolute)
+  eq(get_buf_data(), {})
+end
+
 T['get_buf_data()']['validates arguments'] = function()
   expect.error(function() get_buf_data('a') end, '`buf_id`.*valid buffer id')
 end
@@ -484,6 +536,21 @@ T['get_buf_data()']['returns copy of underlying data'] = function()
     return MiniGit.get_buf_data().head ~= 'aaa'
   ]])
   eq(out, true)
+end
+
+T['get_buf_data()']['works with several actions in progress'] = function()
+  child.fn.writefile({ '' }, git_repo_dir .. '/MERGE_HEAD')
+  child.fn.writefile({ '' }, git_repo_dir .. '/REVERT_HEAD')
+  MiniTest.finally(function()
+    child.fn.delete(git_repo_dir .. '/MERGE_HEAD')
+    child.fn.delete(git_repo_dir .. '/REVERT_HEAD')
+  end)
+
+  mock_spawn()
+  child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+  child.cmd('edit')
+  sleep(small_time)
+  eq(get_buf_data().in_progress, 'merge,revert')
 end
 
 -- Integration tests ==========================================================
@@ -573,23 +640,337 @@ T['Auto enable']['works after `:edit`'] = function()
   eq(get_buf_data(buf_id).root, git_root_dir)
 end
 
-T['Tracking'] = new_set()
+T['Tracking'] = new_set({ hooks = { pre_case = load_module } })
 
-T['Tracking']['works inside Git repo'] = function() MiniTest.skip() end
+T['Tracking']['works outside of Git repo'] = function()
+  child.lua('_G.process_mock_data = { { exit_code = 1 } }')
+  edit(test_file_absolute)
+  eq(get_buf_data().repo, nil)
+end
 
-T['Tracking']['works outside of Git repo'] = function() MiniTest.skip() end
+T['Tracking']['updates all buffers from same repo on repo change'] = function()
+  child.lua([[_G.stdio_queue = {
+      { { 'out', _G.rev_parse_track } }, -- Get path to root and repo for first file
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data for first file
+      { { 'out', 'MM file-in-git' } },   -- Get file status data for first file
 
-T['Tracking']['resets at `:edit`'] = function() MiniTest.skip() end
+      { { 'out', _G.rev_parse_track } },                 -- Get path to root and repo for second file
+      { { 'out', 'abc1234/main' } },                     -- Get HEAD data for second file
+      { { 'out', '?? dir-in-git/file-in-dir-in-git' } }, -- Get file status data for second file
 
-T['Tracking']['updates when content is changed outside of current session'] = function() MiniTest.skip() end
+      -- Reaction to repo change
+      { { 'out', 'abc1234\nmain' } },
+      { { 'out', 'MM file-in-git\0A  dir-in-git/file-in-dir-in-git' } },
+    }
+  ]])
 
-T['Tracking']['tracks change in root/repo'] = function() MiniTest.skip() end
+  edit(git_file_path)
+  local buf_id_1 = get_buf()
+  sleep(small_time)
 
-T['Tracking']['tracks change in HEAD'] = function() MiniTest.skip() end
+  edit(git_root_dir .. '/dir-in-git/file-in-dir-in-git')
+  local buf_id_2 = get_buf()
+  sleep(small_time)
 
-T['Tracking']['tracks change in status'] = function() MiniTest.skip() end
+  -- Make change in '.git' directory
+  mock_change_git_index()
+  sleep(50 + small_time)
 
-T['Tracking']['tracks change in "in progress" metadata'] = function() MiniTest.skip() end
+  eq(get_buf_data(buf_id_1).status, 'MM')
+  eq(get_buf_data(buf_id_2).status, 'A ')
+
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = git_root_dir,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+      cwd = git_root_dir,
+    },
+    {
+      args = {
+        '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z',
+        '--', 'file-in-git'
+      },
+      cwd = git_root_dir,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = git_root_dir .. '/dir-in-git',
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+      cwd = git_root_dir,
+    },
+    {
+      args = {
+        '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z',
+        '--', 'dir-in-git/file-in-dir-in-git'
+      },
+      cwd = git_root_dir,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+      cwd = git_root_dir,
+    },
+    {
+      args = {
+        '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z',
+        '--', 'file-in-git', 'dir-in-git/file-in-dir-in-git'
+      },
+      cwd = git_root_dir,
+    },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['Tracking']['reacts to content change outside of current session'] = function()
+  child.lua([[_G.stdio_queue = {
+      { { 'out', _G.rev_parse_track } }, -- Get path to root and repo
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data
+      { { 'out', 'M  file-in-git' } },   -- Get file status data
+
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data second time
+      { { 'out', 'MM file-in-git' } },   -- Get file status data second time
+    }
+  ]])
+
+  edit(git_file_path)
+  vim.fn.writefile({ '' }, git_file_path)
+  child.cmd('checktime')
+  sleep(small_time)
+
+  local ref_data =
+    { head = 'abc1234', head_name = 'main', in_progress = '', repo = git_repo_dir, root = git_root_dir, status = 'MM' }
+  eq(get_buf_data(), ref_data)
+
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = git_root_dir,
+    },
+    { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+    { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'file-in-git' },
+    { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+    { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'file-in-git' },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['Tracking']['reacts to buffer rename'] = function()
+  -- This is the chosen way to track change in root/repo.
+  -- Rely on manual `:edit` otherwise.
+  local new_root, new_repo = child.fn.getcwd(), test_dir_absolute
+  local new_rev_parse_track = new_repo .. '\n' .. new_root
+  child.lua('_G.new_rev_parse_track = ' .. vim.inspect(new_rev_parse_track))
+  child.lua([[_G.stdio_queue = {
+      { { 'out', _G.rev_parse_track } }, -- First get path to root and repo
+      { { 'out', 'abc1234\nmain' } },    -- First get HEAD data
+      { { 'out', 'M  file-in-git' } },   -- First get file status data
+
+      { { 'out', _G.new_rev_parse_track } },  -- Second get path to root and repo
+      { { 'out', 'def4321\ntmp' } },          -- Second get HEAD data
+      { { 'out', 'MM tests/dir-git/file' } }, -- Second get file status data
+    }
+  ]])
+
+  edit(git_file_path)
+  sleep(small_time)
+
+  child.api.nvim_buf_set_name(0, test_file_absolute)
+  sleep(small_time)
+
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = git_root_dir,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+      cwd = git_root_dir,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'file-in-git' },
+      cwd = git_root_dir,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = test_dir_absolute,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+      cwd = new_root,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'tests/dir-git/file' },
+      cwd = new_root,
+    },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  eq(get_buf_data(), {
+    head = 'def4321',
+    head_name = 'tmp',
+    in_progress = '',
+    repo = new_repo,
+    root = new_root,
+    status = 'MM',
+  })
+end
+
+T['Tracking']['reacts to moving to not Git repo'] = function()
+  child.lua([[_G.stdio_queue = {
+      { { 'out', _G.rev_parse_track } }, -- Get path to root and repo
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data
+      { { 'out', 'M  file-in-git' } },   -- Get file status data
+    }
+    _G.process_mock_data = { [4] = { exit_code = 1 } }
+  ]])
+
+  edit(git_file_path)
+  eq(is_buf_enabled(), true)
+  child.api.nvim_buf_set_name(0, test_file_absolute)
+  eq(get_buf_data(), {})
+  eq(#get_spawn_log(), 4)
+end
+
+T['Tracking']['reacts to staging'] = function()
+  child.lua([[_G.stdio_queue = {
+      { { 'out', _G.rev_parse_track } }, -- Get path to root and repo
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data
+      { { 'out', 'MM file-in-git' } },   -- Get file status data
+
+      -- Emulate staging file
+      { { 'out', 'abc1234\nmain' } },  -- Get HEAD data
+      { { 'out', 'M  file-in-git' } }, -- Get file status data
+    }
+  ]])
+
+  edit(git_file_path)
+  sleep(small_time)
+
+  -- Should react to change in index
+  eq(get_buf_data().status, 'MM')
+  mock_change_git_index()
+
+  -- - Reaction to change in '.git' directory is debouned with delay of 50 ms
+  sleep(50 - small_time)
+  eq(get_buf_data().status, 'MM')
+  eq(#get_spawn_log(), 3)
+
+  sleep(2 * small_time)
+  eq(get_buf_data().status, 'M ')
+  eq(#get_spawn_log(), 5)
+
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = git_root_dir,
+    },
+    { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+    { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'file-in-git' },
+    { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+    { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'file-in-git' },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['Tracking']['reacts to change in HEAD'] = function()
+  child.lua([[_G.stdio_queue = {
+      { { 'out', _G.rev_parse_track } }, -- Get path to root and repo
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data
+      { { 'out', 'MM file-in-git' } },   -- Get file status data
+
+      -- Emulate changing branch
+      { { 'out', 'def4321\ntmp' } },   -- Get HEAD data
+      { { 'out', '?? file-in-git' } }, -- Get file status data
+    }
+  ]])
+
+  edit(git_file_path)
+  sleep(small_time)
+
+  -- Should react to change of HEAD
+  eq(get_buf_data().head_name, 'main')
+  child.fn.writefile({ 'ref: refs/heads/tmp' }, git_repo_dir .. '/HEAD')
+
+  sleep(50 - small_time)
+  eq(get_buf_data().head_name, 'main')
+  eq(#get_spawn_log(), 3)
+
+  sleep(2 * small_time)
+  eq(get_buf_data().head_name, 'tmp')
+  eq(#get_spawn_log(), 5)
+
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = git_root_dir,
+    },
+    { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+    { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'file-in-git' },
+    { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+    { '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z', '--', 'file-in-git' },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['Tracking']['detects action in progress immediately'] = function()
+  mock_init_track_stdio_queue()
+  child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+
+  child.fn.writefile({ '' }, git_repo_dir .. '/BISECT_LOG')
+  MiniTest.finally(function() child.fn.delete(git_repo_dir .. '/BISECT_LOG') end)
+
+  edit(git_file_path)
+  sleep(small_time)
+  eq(get_buf_data().in_progress, 'bisect')
+end
+
+T['Tracking']['reacts to new action in progress'] = function()
+  mock_init_track_stdio_queue()
+  child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+  edit(git_file_path)
+
+  local action_files = { 'BISECT_LOG', 'CHERRY_PICK_HEAD', 'MERGE_HEAD', 'REVERT_HEAD', 'rebase-apply', 'rebase-merge' }
+  local output_in_progress = {}
+
+  for _, name in ipairs(action_files) do
+    local path = git_repo_dir .. '/' .. name
+    child.fn.writefile({ '' }, path)
+    sleep(50 + small_time)
+    output_in_progress[name] = get_buf_data().in_progress
+    child.fn.delete(path)
+  end
+
+  local ref_in_progress = {
+    BISECT_LOG = 'bisect',
+    CHERRY_PICK_HEAD = 'cherry-pick',
+    MERGE_HEAD = 'merge',
+    REVERT_HEAD = 'revert',
+    ['rebase-apply'] = 'apply',
+    ['rebase-merge'] = 'rebase',
+  }
+  eq(output_in_progress, ref_in_progress)
+end
+
+T['Tracking']['does not react to ".lock" files in repo directory'] = function()
+  mock_init_track_stdio_queue()
+  child.lua('_G.stdio_queue = _G.init_track_stdio_queue')
+  edit(git_file_path)
+  eq(#get_spawn_log(), 3)
+
+  child.fn.writefile({ '' }, git_repo_dir .. '/tmp.lock')
+  MiniTest.finally(function() child.fn.delete(git_repo_dir .. '/tmp.lock') end)
+  sleep(50 + small_time)
+  eq(#get_spawn_log(), 3)
+end
 
 T[':Git'] = new_set({ hooks = { pre_case = load_module } })
 

@@ -354,7 +354,16 @@ end
 ---@param buf_id __git_buf_id
 ---
 ---@return table|nil Table with buffer Git data or `nil` if buffer is not enabled.
+---   If the file is not part of Git repo, table will be empty.
 ---   Table has the following fields:
+---   - <repo> `(string)` - full path to '.git' directory.
+---   - <root> `(string)` - full path to worktree root.
+---   - <head> `(string)` - full commit of current HEAD.
+---   - <head_name> `(string)` - short name of current HEAD (like "master").
+---     For detached HEAD it is "HEAD".
+---   - <status> `(string)` - two character file status as returned by `git status`.
+---   - <in_progress> `(string)` - name of action currently in progress
+---     (bisect, merge, etc.)
 MiniGit.get_buf_data = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   local buf_cache = H.cache[buf_id]
@@ -980,9 +989,10 @@ H.setup_buf_behavior = function(buf_id)
     on_reload = function()
       local buf_cache = H.cache[buf_id]
       if buf_cache == nil or buf_cache.root == nil then return end
+      -- Don't upate repo/root as it is tracked in 'BufFilePost' autocommand
       H.update_git_head(buf_cache.root, { buf_id })
       H.update_git_in_progress(buf_cache.repo, { buf_id })
-      H.update_git_status(buf_cache.root, { buf_id })
+      -- Don't upate status as it is tracked in file watcher
     end,
 
     -- Called when buffer is unloaded from memory (`:h nvim_buf_detach_event`),
@@ -1059,7 +1069,10 @@ H.setup_repo_watch = function(buf_id, repo)
       timer:stop()
       timer:start(50, 0, on_change)
     end
-    fs_event:start(repo, { recursive = true }, watch)
+    -- Watch only '.git' dir (non-recursively), as this seems to be both enough
+    -- and not supported by libuv (`recursive` flag does nothing,
+    -- see https://github.com/libuv/libuv/issues/1778)
+    fs_event:start(repo, {}, watch)
 
     repo_cache.fs_event, repo_cache.timer = fs_event, timer
     H.repos[repo] = repo_cache
