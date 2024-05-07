@@ -3,6 +3,8 @@ local all_snippets = {
   ['ife'] = 'if $1 then\n\t$0\nelse\n\t-- TODO\nend',
   ['then'] = 'then\n\t$0\nend',
   ['eif'] = 'elseif $1 then\n\t$0\nend',
+  -- TODO: Make it work. Probably by allowing custom number of bytes to remove
+  -- when expanding snippet (instead of `#prefix`)
   ['  el'] = 'else\n$0',
   ['fun'] = 'function($1)\n\t$0\nend',
   ['for'] = 'for ${1:i}=${2:first},${3:last}${4:,step} do\n\t$0\nend',
@@ -19,21 +21,17 @@ local all_snippets = {
   ['T'] = "T['$1']['$2'] = function()\n\t$0MiniTest.skip()\nend",
 }
 
-local close_pumvisible = function()
-  if vim.fn.pumvisible() == 0 then return end
-  vim.fn.feedkeys('\25', 'n')
-end
-
 local get_snippet_at_cursor = function()
   local line = vim.api.nvim_get_current_line()
-  local prefix = vim.fn.matchstr(line, '\\w\\+\\%.c')
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  local prefix = line:sub(1, col + 1):match('%S*$')
   local res = all_snippets[prefix]
   if vim.is_callable(res) then return res(), prefix end
   return res, prefix
 end
 
 local jump_or_expand = function()
-  if vim.snippet.jumpable(1) then return vim.snippet.jump(1) end
+  if vim.snippet.active({ direction = 1 }) then return vim.snippet.jump(1) end
 
   local snippet, prefix = get_snippet_at_cursor()
   if type(snippet) ~= 'string' then return end
@@ -49,13 +47,13 @@ end
 local go_right = function() jump_or_expand() end
 
 local go_left = function()
-  if vim.snippet.jumpable(-1) then vim.snippet.jump(-1) end
+  if vim.snippet.active({ direction = -1 }) then vim.snippet.jump(-1) end
 end
 
 vim.keymap.set({ 'i', 's' }, '<C-l>', go_right)
 vim.keymap.set({ 'i', 's' }, '<C-h>', go_left)
 
--- Tweak to stop snippet session when exiting into Normal mode
+-- Tweak to stop snippet session while exiting into Normal mode
 -- -- NOTE: autocommand doesn't work because currently tabstop selection in
 -- -- `vim.snippet` itself exits into Normal mode
 -- -- (see https://github.com/neovim/neovim/issues/26449#issuecomment-1845843529)
@@ -63,13 +61,13 @@ vim.keymap.set({ 'i', 's' }, '<C-h>', go_left)
 -- local opts = {
 --   pattern = '*:n',
 --   group = augroup,
---   callback = function() vim.snippet.exit() end,
---   desc = 'Stop snippet session when exiting to Normal mode',
+--   callback = function() vim.snippet.stop() end,
+--   desc = 'Stop snippet session and exit to Normal mode',
 -- }
 -- vim.api.nvim_create_autocmd('ModeChanged', opts)
 
 vim.keymap.set({ 'i', 's' }, '<C-e>', function()
-  vim.snippet.exit()
+  vim.snippet.stop()
   vim.fn.feedkeys('\27', 'n')
 end, { desc = 'Stop snippet session' })
 
