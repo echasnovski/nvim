@@ -5,11 +5,16 @@
 --   computed. Probably, requires separate `H.roots` cache.
 --
 -- - Command:
+--     - Unify subcommand parsing for `on_done` and completion candidates.
+--     - Consider using `mods` as table: both in code and in user data in event
+--       callback.
 --
 -- - Diff source:
 --
 -- - Range history:
 --
+-- - Show at cursor:
+--     - Stop using `:Git` command in favor of direct `show_in_split()`.
 --
 -- Tests:
 -- - Command:
@@ -178,7 +183,7 @@ MiniGit.config = {
 
 MiniGit.show_at_cursor = function(opts)
   local exec = MiniGit.config.job.git_executable
-  local _, cwd = H.command_get_cwd_data()
+  local cwd = H.get_git_cwd()
 
   -- Try showing commit at cursor. NOTE: using `:Git show <cword>` equivalent
   -- does not always work as intended (it works on `@@`, `-` "words", etc.).
@@ -219,12 +224,12 @@ MiniGit.show_diff_source = function(opts)
   end
   if target == 'auto' then target = src.init_prefix == '-' and 'before' or 'after' end
 
-  local _, root = H.command_get_cwd_data()
+  local cwd = H.get_git_cwd()
   local show = function(commit, path, mods)
     local args = { 'show', commit .. ':' .. path }
-    local lines = H.git_cli_output(args, root)
+    local lines = H.git_cli_output(args, cwd)
     if #lines == 0 then return H.notify('Can not show ' .. path .. 'at commit ' .. commit, 'WARN') end
-    H.show_git_cli_split(mods, lines, 'show', table.concat(args, ' '))
+    H.show_in_split(mods, lines, 'show', table.concat(args, ' '))
   end
 
   if target ~= 'after' and src.path_before ~= nil then
@@ -253,14 +258,14 @@ MiniGit.show_range_history = function(opts)
   -- Construct `:Git log` command that works both with regular files and
   -- buffers from `show_diff_source()`
   local buf_name = vim.api.nvim_buf_get_name(0)
-  local _, root = H.command_get_cwd_data()
+  local cwd = H.get_git_cwd()
   local commit, rel_path = H.parse_diff_source_buf_name(buf_name)
   if commit == nil then
-    commit, rel_path = 'HEAD', buf_name:gsub(vim.pesc(root) .. '/', '')
+    commit, rel_path = 'HEAD', buf_name:gsub(vim.pesc(cwd) .. '/', '')
   end
 
   -- Ensure no uncommitted changes as they might result into improper `-L` arg
-  local diff = commit == 'HEAD' and H.git_cli_output({ 'diff', '-U0', 'HEAD', '--', rel_path }, root) or {}
+  local diff = commit == 'HEAD' and H.git_cli_output({ 'diff', '-U0', 'HEAD', '--', rel_path }, cwd) or {}
   if #diff ~= 0 then
     return H.notify('Current file has uncommitted lines. Commit or stash before exploring history.', 'WARN')
   end
@@ -268,9 +273,9 @@ MiniGit.show_range_history = function(opts)
   -- Show log in split
   local range_flag = string.format('-L%d,%d:%s', line_start, line_end, rel_path)
   local args = { 'log', range_flag, commit, unpack(log_args) }
-  local history = H.git_cli_output(args, root)
+  local history = H.git_cli_output(args, cwd)
   if #history == 0 then return H.notify('Could not get range history') end
-  H.show_git_cli_split(split, history, 'log', table.concat(args, ' '))
+  H.show_in_split(split, history, 'log', table.concat(args, ' '))
 end
 
 --- Fold expression for Git logs
@@ -485,39 +490,28 @@ H.create_user_commands = function()
     -- Setup spawn arguments
     local args = vim.tbl_map(H.expandcmd, input.fargs)
     local command = { MiniGit.config.job.git_executable, unpack(args) }
-    local repo, root = H.command_get_cwd_data()
+    local cwd = H.get_git_cwd()
 
-    local is_done = false
-    local on_done = vim.schedule_wrap(function(code, out, err)
-      -- Register that command is done executing
-      is_done = true
-      vim.api.nvim_exec_autocmds('User', { pattern = 'MiniGitCommandDone' })
+    local cmd_data = { mods = input.mods, command = command, cwd = cwd }
+    local is_done_tracking = { done = false }
+    local on_done = H.command_make_on_done(cmd_data, is_done_tracking)
 
-      -- Show CLI stderr and stdout
-      if H.cli_err_notify(code, out, err) then return end
-      local was_split = H.show_git_cli_output(out, input.mods, command)
-      if was_split then vim.api.nvim_exec_autocmds('User', { pattern = 'MiniGitCommandSplit' }) end
-
-      -- Ensure that repo data is up to date. This is not always taken care of
-      -- by repo watching, like file status after `:Git commit` (probably due
-      -- to `git status` still using old repo data).
-      H.on_repo_change(repo)
-
-      -- Ensure that all buffers are up to date (avoids "The file has been
-      -- changed since reading it" warning)
-      vim.tbl_map(function(buf_id) vim.cmd('checktime ' .. buf_id) end, vim.api.nvim_list_bufs())
-    end)
-
-    H.cli_run(command, root, on_done, { env = env })
+    H.cli_run(command, cwd, on_done, { env = env })
 
     -- If needed, synchronously wait for job to finish
-    local sync_check = function() return H.skip_sync or is_done end
+    local sync_check = function() return H.skip_sync or is_done_tracking.done end
     if not input.bang then vim.wait(MiniGit.config.job.timeout + 10, sync_check, 1) end
   end
 
   local opts = { bang = true, nargs = '+', complete = H.command_complete, desc = 'Execute Git command' }
   vim.api.nvim_create_user_command('Git', git_execute, opts)
 end
+
+-- Autocommands ---------------------------------------------------------------
+H.auto_enable = vim.schedule_wrap(function(data)
+  if not (vim.api.nvim_buf_is_valid(data.buf) and vim.bo[data.buf].buftype == '') then return end
+  MiniGit.enable(data.buf)
+end)
 
 -- Command --------------------------------------------------------------------
 --stylua: ignore
@@ -637,10 +631,55 @@ H.ensure_git_editor = function(mods)
   vim.fn.writefile(lines, H.git_editor_config)
 end
 
-H.command_get_cwd_data = function()
+H.get_git_cwd = function()
   local buf_cache = H.cache[vim.api.nvim_get_current_buf()] or {}
-  local repo, root = buf_cache.repo or vim.fn.getcwd(), buf_cache.root or vim.fn.getcwd()
-  return repo, root
+  return buf_cache.root or vim.fn.getcwd()
+end
+
+H.command_make_on_done = function(cmd_data, is_done_tracking)
+  return vim.schedule_wrap(function(code, out, err)
+    -- Register that command is done executing (to enable sync execution)
+    is_done_tracking.done = true
+
+    -- Trigger "done" event
+    cmd_data.subcommand = H.command_parse_subcommand(cmd_data.command)
+    cmd_data.exit_code, cmd_data.stdout, cmd_data.stderr = code, out, err
+    H.trigger_event('MiniGitCommandDone', cmd_data)
+
+    -- Show stderr and stdout
+    if H.cli_err_notify(code, out, err) then return end
+    H.command_show_stdout(cmd_data)
+
+    -- Ensure that all buffers are up to date (avoids "The file has been
+    -- changed since reading it" warning)
+    vim.tbl_map(function(buf_id) vim.cmd('checktime ' .. buf_id) end, vim.api.nvim_list_bufs())
+  end)
+end
+
+H.command_show_stdout = function(cmd_data)
+  local stdout, mods, subcommand = cmd_data.stdout, cmd_data.mods, cmd_data.subcommand
+  if stdout == '' or mods:find('silent') ~= nil then return end
+
+  -- Show in split if explicitly forced or the command shows info.
+  -- Use `vim.notify` otherwise.
+  local should_split = H.mods_is_split(mods) or H.git_subcommands.info[subcommand]
+  if not should_split then return H.notify(stdout, 'INFO') end
+
+  local lines = vim.split(stdout, '\n')
+  local name = table.concat(cmd_data.command, ' ')
+  cmd_data.win_source, cmd_data.win_stdout = H.show_in_split(mods, lines, subcommand, name)
+
+  -- Trigger separate "split" event
+  H.trigger_event('MiniGitCommandSplit', cmd_data)
+end
+
+H.command_parse_subcommand = function(command)
+  local res
+  for _, cmd in ipairs(command) do
+    if res == nil and vim.tbl_contains(H.git_subcommands.supported, cmd) then res = cmd end
+  end
+  -- Try to respect aliases
+  return H.git_subcommands.alias[res] or res
 end
 
 H.command_complete = function(_, line, col)
@@ -675,7 +714,7 @@ H.command_get_complete_candidates = function(line, col, base)
   end
 
   command = command or 'git'
-  local _, cwd = H.command_get_cwd_data()
+  local cwd = H.get_git_cwd()
 
   -- Determine command candidates:
   -- - Commannd options if complete base starts with "-".
@@ -878,61 +917,30 @@ H.mods_is_split = function(mods)
   return mods:find('vertical') ~= nil or mods:find('horizontal') ~= nil or mods:find('tab') ~= nil
 end
 
--- Show command output --------------------------------------------------------
----@return boolean Whether there was a split done
----@private
-H.show_git_cli_output = function(out, mods, git_command)
-  if out == '' or mods:find('silent') ~= nil then return false end
-
-  -- Show in a buffer if split is explicitly forced or the command shows info.
-  -- Use `vim.notify` otherwise.
-  local subcmd
-  for _, cmd in ipairs(git_command) do
-    if subcmd == nil and vim.tbl_contains(H.git_subcommands.supported, cmd) then subcmd = cmd end
-  end
-  subcmd = H.git_subcommands.alias[subcmd] or subcmd
-
-  if H.mods_is_split(mods) or H.git_subcommands.info[subcmd] then
-    local lines = vim.split(out, '\n')
-    local name = table.concat(git_command, ' ')
-    H.show_git_cli_split(mods, lines, subcmd, name)
-    return true
-  end
-
-  H.notify(out, 'INFO')
-  return false
-end
-
-H.show_git_cli_split = function(mods, lines, subcmd, name)
-  -- Create a target window split with new buffer
-  local buf_id = vim.api.nvim_create_buf(false, true)
-  mods = H.ensure_mods_is_split(mods)
-  vim.cmd(mods .. ' split')
-
-  local win_id = vim.api.nvim_get_current_win()
-  vim.api.nvim_set_current_buf(buf_id)
-  H.define_minigit_window()
-
+-- Show stdout ----------------------------------------------------------------
+H.show_in_split = function(mods, lines, subcmd, name)
   -- Prepare buffer
+  local buf_id = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(buf_id, 'minigit://' .. buf_id .. '/' .. name)
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
 
   local filetype
   if subcmd == 'diff' then filetype = 'diff' end
-  if subcmd == 'log' then filetype = 'git' end
+  if subcmd == 'log' or subcmd == 'blame' then filetype = 'git' end
   -- TODO: Remove after compatibility with Neovim=0.7 is dropped
   if subcmd == 'show' and vim.fn.has('nvim-0.8') == 1 then filetype = vim.filetype.match({ buf = buf_id }) end
   if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
-end
 
-H.get_minigit_windows = function()
-  local res = {}
-  for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    local win_buf_id = vim.api.nvim_win_get_buf(win_id)
-    local win_buf_name = vim.api.nvim_buf_get_name(win_buf_id)
-    if win_buf_name:find('^minigit://%d+/') ~= nil then table.insert(res, win_id) end
-  end
-  return res
+  -- Create a target window split with new buffer
+  mods = H.ensure_mods_is_split(mods)
+  local win_source = vim.api.nvim_get_current_win()
+  vim.cmd(mods .. ' split')
+  local win_stdout = vim.api.nvim_get_current_win()
+
+  vim.api.nvim_set_current_buf(buf_id)
+  H.define_minigit_window()
+
+  return win_source, win_stdout
 end
 
 H.define_minigit_window = function(cleanup)
@@ -957,12 +965,6 @@ H.define_minigit_window = function(cleanup)
   local opts = { nested = true, callback = finish, desc = 'Cleanup window and buffer' }
   finish_au_id = vim.api.nvim_create_autocmd(events, opts)
 end
-
--- Autocommands ---------------------------------------------------------------
-H.auto_enable = vim.schedule_wrap(function(data)
-  if not (vim.api.nvim_buf_is_valid(data.buf) and vim.bo[data.buf].buftype == '') then return end
-  MiniGit.enable(data.buf)
-end)
 
 -- Validators -----------------------------------------------------------------
 H.validate_buf_id = function(x)
@@ -1389,6 +1391,12 @@ end
 H.error = function(msg) error(string.format('(mini.git) %s', msg), 0) end
 
 H.notify = function(msg, level_name) vim.notify('(mini.git) ' .. msg, vim.log.levels[level_name]) end
+
+H.trigger_event = function(event_name, data)
+  -- TODO: Remove after compatibility with Neovim=0.7 is dropped
+  if vim.fn.has('nvim-0.8') == 0 then data = nil end
+  vim.api.nvim_exec_autocmds('User', { pattern = event_name, data = data })
+end
 
 H.is_fs_present = function(path) return vim.loop.fs_stat(path) ~= nil end
 
