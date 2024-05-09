@@ -8,7 +8,7 @@
 07|    Important details about commit.               
 08|    Even more details about commit.               
 09|                                                  
-10|+-- 23 lines: diff --git a/dir/file1 b/dir/file1··
+10|+-- 23 lines: diff --git a/dir/file-before b/dir/f
 11|                                                  
 12|commit 7264474d3bda16d0098a7f89a4143fe4db3d82cf   
 13|Author: Neo McVim <neo.mcvim@gmail.com>           
@@ -16,7 +16,7 @@
 15|                                                  
 16|    Commit 2                                      
 17|                                                  
-18|+-- 23 lines: diff --git a/dir/file1 b/dir/file1··
+18|+-- 21 lines: diff --git a/dir/file1 b/dir/file1··
 19|~                                                 
 20|~                                                 
 21|~                                                 

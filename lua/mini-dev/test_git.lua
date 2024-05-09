@@ -56,6 +56,15 @@ local get_buf_data = forward_lua('require("mini-dev.git").get_buf_data')
 
 local is_buf_enabled = function(buf_id) return get_buf_data(buf_id) ~= vim.NIL end
 
+local make_minigit_name = function(buf_id, name)
+  if buf_id == 0 then buf_id = get_buf() end
+  return 'minigit://' .. buf_id .. '/' .. name
+end
+
+local validate_minigit_name = function(buf_id, ref_name)
+  eq(child.api.nvim_buf_get_name(buf_id), make_minigit_name(buf_id, ref_name))
+end
+
 -- Common mocks
 local small_time = 10
 
@@ -238,15 +247,593 @@ end
 
 T['show_at_cursor()'] = new_set({ hooks = { pre_case = load_module } })
 
+local show_diff_source = forward_lua('MiniGit.show_diff_source')
+
 T['show_at_cursor()']['works'] = function() MiniTest.skip() end
 
-T['show_diff_source()'] = new_set({ hooks = { pre_case = load_module } })
+T['show_diff_source()'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- Show log output
+      local log_output = child.fn.readfile(test_dir_absolute .. '/log-output')
+      set_lines(log_output)
 
-T['show_diff_source()']['works'] = function() MiniTest.skip() end
+      load_module()
+    end,
+  },
+})
 
-T['show_range_history()'] = new_set({ hooks = { pre_case = load_module } })
+T['show_diff_source()']['works'] = function()
+  child.lua([[_G.stdio_queue = {
+    { { 'out', 'Line 1\nCurrent line 2\nLine 3' } }, -- Diff source
+  }]])
 
-T['show_range_history()']['works'] = function() MiniTest.skip() end
+  -- Show diff source
+  set_cursor(17, 0)
+  show_diff_source()
+
+  local ref_git_spawn_log = {
+    {
+      args = { 'show', '5ed8432441b495fa9bd4ad2e4f635bae64e95cc2:dir/file-after' },
+      cwd = child.fn.getcwd(),
+    },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  eq(#child.api.nvim_list_tabpages(), 2)
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+
+  validate_minigit_name(0, 'show 5ed8432441b495fa9bd4ad2e4f635bae64e95cc2:dir/file-after')
+  eq(get_lines(), { 'Line 1', 'Current line 2', 'Line 3' })
+  eq(get_cursor(), { 2, 0 })
+end
+
+T['show_diff_source()']['works in not diff file'] = function()
+  set_lines({ 'Not', 'a', 'patch' })
+  set_cursor(3, 0)
+  expect.no_error(show_diff_source)
+  validate_notifications({
+    { '(mini.git) Could not find diff source. Ensure that cursor is inside a valid diff lines of git log.', 'WARN' },
+  })
+end
+
+T['show_diff_source()']['correctly identifies source'] = function()
+  local log_output = child.fn.readfile(test_dir_absolute .. '/log-output')
+  child.lua([[
+    _G.source_lines = {}
+    for i = 1, 500 do
+      table.insert(_G.source_lines, 'Line ' .. i)
+    end
+    _G.show_out = table.concat(_G.source_lines, '\n')
+  ]])
+  local source_lines = child.lua_get('_G.source_lines')
+
+  local validate_ok = function(lnum, ref_commit, ref_path, ref_lnum)
+    mock_spawn()
+    child.lua([[_G.stdio_queue = { { { 'out', _G.show_out } } }]])
+    set_lines(log_output)
+    set_cursor(lnum, 0)
+
+    show_diff_source()
+    local ref_git_spawn_log = { { args = { 'show', ref_commit .. ':' .. ref_path }, cwd = child.fn.getcwd() } }
+    validate_git_spawn_log(ref_git_spawn_log)
+
+    eq(get_lines(), source_lines)
+    eq(get_cursor(), { ref_lnum, 0 })
+    validate_minigit_name(0, 'show ' .. ref_commit .. ':' .. ref_path)
+
+    -- Clean up
+    child.cmd('%bwipeout!')
+  end
+
+  local validate_no_ok = function(lnum)
+    mock_spawn()
+    set_lines(log_output)
+    set_cursor(lnum, 0)
+
+    expect.no_error(show_diff_source)
+    eq(get_spawn_log(), {})
+    validate_notifications({
+      { '(mini.git) Could not find diff source. Ensure that cursor is inside a valid diff lines of git log.', 'WARN' },
+    })
+    clear_notify_log()
+  end
+
+  local commit_after = '5ed8432441b495fa9bd4ad2e4f635bae64e95cc2'
+  local commit_before = commit_after .. '~'
+
+  -- Cursor should be placed inside valid hunk
+  validate_no_ok(1)
+  validate_no_ok(2)
+  validate_no_ok(3)
+  validate_no_ok(10)
+  validate_no_ok(11)
+
+  -- Should place on the first line for lines showing target files
+  validate_ok(12, commit_before, 'dir/file-before', 1)
+  validate_ok(13, commit_after, 'dir/file-after', 1)
+
+  -- Should work inside hunks and place cursor on the corresponding line.
+  -- Should (with default `target = 'auto'`) pick "before" if on the deleted
+  -- line, "after" otherwise.
+  validate_ok(14, commit_after, 'dir/file-after', 1)
+  validate_ok(15, commit_after, 'dir/file-after', 1)
+  validate_ok(16, commit_before, 'dir/file-before', 2)
+  validate_ok(17, commit_after, 'dir/file-after', 2)
+  validate_ok(18, commit_after, 'dir/file-after', 3)
+
+  validate_ok(19, commit_after, 'dir/file-after', 316)
+  validate_ok(20, commit_after, 'dir/file-after', 317)
+  validate_ok(21, commit_after, 'dir/file-after', 318)
+  validate_ok(22, commit_after, 'dir/file-after', 319)
+  validate_ok(23, commit_after, 'dir/file-after', 320)
+
+  validate_no_ok(24)
+  validate_no_ok(25)
+
+  -- Should get proper (nearest from above) file
+  validate_ok(26, commit_before, 'file', 1)
+  validate_ok(27, commit_after, 'file', 1)
+
+  validate_ok(28, commit_after, 'file', 282)
+  validate_ok(29, commit_after, 'file', 283)
+  validate_ok(30, commit_before, 'file', 284)
+  validate_ok(31, commit_before, 'file', 285)
+  validate_ok(32, commit_after, 'file', 284)
+
+  -- - Between log entries is also not a valid diff line
+  validate_no_ok(33)
+
+  validate_no_ok(34)
+  validate_no_ok(35)
+
+  -- Should get proper (nearest from above) commit
+  local commit_after_2 = '7264474d3bda16d0098a7f89a4143fe4db3d82cf'
+  local commit_before_2 = commit_after_2 .. '~'
+  validate_ok(42, commit_before_2, 'dir/file1', 1)
+  validate_ok(43, commit_after_2, 'dir/file1', 1)
+  validate_ok(44, commit_after_2, 'dir/file1', 246)
+  validate_ok(45, commit_before_2, 'dir/file1', 247)
+  validate_ok(46, commit_after_2, 'dir/file1', 247)
+end
+
+T['show_diff_source()']['does not depend on cursor column'] = function()
+  local buf_id = get_buf()
+  for i = 0, 10 do
+    set_buf(buf_id)
+    set_cursor(17, i)
+    show_diff_source()
+    eq(get_cursor(), { 2, 0 })
+  end
+end
+
+T['show_diff_source()']['tries to infer and set filetype'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('Proper filetype detecttion is present only on Neovim>=0.8.') end
+
+  child.lua([[_G.stdio_queue = { { { 'out', 'local a = 1\n-- This is a Lua comment' } } }]])
+  set_cursor(57, 0)
+  show_diff_source()
+
+  validate_minigit_name(0, 'show 7264474d3bda16d0098a7f89a4143fe4db3d82cf:file.lua')
+  eq(get_lines(), { 'local a = 1', '-- This is a Lua comment' })
+  eq(get_cursor(), { 1, 0 })
+  eq(child.bo.filetype, 'lua')
+end
+
+T['show_diff_source()']['respects `opts.split`'] = new_set(
+  { parametrize = { { 'horizontal' }, { 'vertical' }, { 'tab' } } },
+  {
+    test = function(split)
+      child.lua([[_G.stdio_queue = {
+        { { 'out', 'Line 1\nCurrent line 2\nLine 3' } }, -- Diff source
+      }]])
+      set_cursor(17, 0)
+
+      local init_win_id = child.api.nvim_get_current_win()
+      show_diff_source({ split = split })
+      local cur_win_id = child.api.nvim_get_current_win()
+
+      local ref_git_spawn_log = {
+        {
+          args = { 'show', '5ed8432441b495fa9bd4ad2e4f635bae64e95cc2:dir/file-after' },
+          cwd = child.fn.getcwd(),
+        },
+      }
+      validate_git_spawn_log(ref_git_spawn_log)
+
+      validate_minigit_name(0, 'show 5ed8432441b495fa9bd4ad2e4f635bae64e95cc2:dir/file-after')
+
+      -- Validate proper split
+      eq(#child.api.nvim_list_tabpages(), split == 'tab' and 2 or 1)
+      eq(child.api.nvim_tabpage_get_number(0), split == 'tab' and 2 or 1)
+
+      local ref_layout = ({
+        horizontal = { 'col', { { 'leaf', cur_win_id }, { 'leaf', init_win_id } } },
+        vertical = { 'row', { { 'leaf', cur_win_id }, { 'leaf', init_win_id } } },
+        tab = { 'leaf', cur_win_id },
+      })[split]
+      eq(child.fn.winlayout(), ref_layout)
+    end,
+  }
+)
+
+T['show_diff_source()']['works with `opts.split = "auto"`'] = function()
+  child.lua([[_G.stdio_queue = {
+    { { 'out', 'Line 1\nCurrent line 2\nLine 3' } }, -- Diff source
+    { { 'out', 'Line 4\nCurrent line 5\nLine 6' } }, -- Diff source
+  }]])
+
+  local init_buf_id, init_win_id = get_buf(), child.api.nvim_get_current_win()
+
+  -- Should open in new tabpage if there is a non-minigit buffer visible
+  child.cmd('vertical split')
+  local buf_id = new_scratch_buf()
+  set_buf(buf_id)
+  child.api.nvim_buf_set_name(buf_id, make_minigit_name(buf_id, 'some mini.git buffer'))
+  eq(child.fn.winlayout()[1], 'row')
+
+  child.api.nvim_set_current_win(init_win_id)
+  set_cursor(17, 0)
+  show_diff_source({ split = 'auto' })
+  local win_id_1 = child.api.nvim_get_current_win()
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(child.fn.winlayout(), { 'leaf', win_id_1 })
+
+  -- Should split vertically if there are only minigit buffers visible
+  set_buf(init_buf_id)
+  child.api.nvim_buf_set_name(0, make_minigit_name(0, 'log -L1,1:file'))
+  set_cursor(17, 0)
+  show_diff_source({ split = 'auto' })
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(child.fn.winlayout(), { 'row', { { 'leaf', child.api.nvim_get_current_win() }, { 'leaf', win_id_1 } } })
+end
+
+T['show_diff_source()']['respects `opts.target`'] = function()
+  child.lua([[
+    local item = { { 'out', 'Line 1\nCurrent line 2\nLine 3' } }
+    _G.stdio_queue = {
+      item, -- 'before'
+      item, -- 'before'
+      item, -- 'after'
+      item, -- 'after'
+      item, item, -- 'both'
+      item, item, -- 'both'
+      item, item, -- 'both'
+      item, item, -- 'both'
+    }]])
+
+  local init_lines = get_lines()
+  local commit_after = '5ed8432441b495fa9bd4ad2e4f635bae64e95cc2'
+  local commit_before = commit_after .. '~'
+  local name_after = 'show ' .. commit_after .. ':dir/file-after'
+  local name_before = 'show ' .. commit_before .. ':dir/file-before'
+
+  local validate = function(target, lnum, layout_type, name, cursor)
+    child.cmd('%bwipeout!')
+    set_lines(init_lines)
+
+    set_cursor(lnum, 0)
+    show_diff_source({ target = target, split = 'tab' })
+
+    local layout = child.fn.winlayout()
+    eq(layout[1], layout_type)
+    validate_minigit_name(0, name)
+    eq(get_cursor(), cursor)
+
+    if layout_type == 'row' then
+      -- Current window with "after" file should be on the right
+      local all_wins, cur_win = child.api.nvim_tabpage_list_wins(0), child.api.nvim_get_current_win()
+      local other_win = all_wins[1] == cur_win and all_wins[2] or all_wins[1]
+      eq(layout, { 'row', { { 'leaf', other_win }, { 'leaf', cur_win } } })
+
+      -- Other window should contain "before" file
+      local other_buf = child.api.nvim_win_get_buf(other_win)
+      validate_minigit_name(other_buf, name_before)
+    end
+  end
+
+  -- "Before" should always show "before" file
+  validate('before', 17, 'leaf', name_before, { 2, 0 })
+  -- - Even when cursor is on "+++ b/yyy" line
+  validate('before', 13, 'leaf', name_before, { 1, 0 })
+
+  -- "After" should always show "after" file
+  validate('after', 16, 'leaf', name_after, { 1, 0 })
+  -- - Even when cursor is on "--- a/xxx" line
+  validate('after', 12, 'leaf', name_after, { 1, 0 })
+
+  -- "Both" should always show vertical split with "after" to the right
+  validate('both', 16, 'row', name_after, { 1, 0 })
+  validate('both', 17, 'row', name_after, { 2, 0 })
+  validate('both', 12, 'row', name_after, { 1, 0 })
+  validate('both', 13, 'row', name_after, { 1, 0 })
+end
+
+T['show_diff_source()']['uses correct working directory'] = function()
+  local root, repo = test_dir_absolute, git_repo_dir
+  local rev_parse_track = repo .. '\n' .. root
+  child.lua('_G.rev_parse_track = ' .. vim.inspect(rev_parse_track))
+  child.lua([[_G.stdio_queue = {
+      { { 'out', _G.rev_parse_track } }, -- Get path to root and repo
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data
+      { { 'out', 'A  log-output' } },    -- Get file status data
+
+      { { 'out', 'Line 1\nCurrent line 2\nLine 3' } } -- Show diff source
+    }
+  ]])
+
+  edit(test_dir_absolute .. '/log-output')
+  child.fn.chdir(git_dir_path)
+
+  set_cursor(17, 0)
+  show_diff_source()
+
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = test_dir_absolute,
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+      cwd = root,
+    },
+    {
+      args = {
+        '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z',
+        '--', 'log-output'
+      },
+      cwd = root,
+    },
+    -- Should prefer buffer's Git root over Neovim's cwd. This is relevant if,
+    -- for some reason, log output is tracked in Git repo.
+    {
+      args = { 'show', '5ed8432441b495fa9bd4ad2e4f635bae64e95cc2:dir/file-after' },
+      cwd = root,
+    },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['show_diff_source()']['validates arguments'] = function()
+  local validate = function(opts, error_pattern)
+    expect.error(function() show_diff_source(opts) end, error_pattern)
+  end
+
+  validate({ split = 'a' }, 'opts%.split.*one of')
+  validate({ target = 'a' }, 'opts%.target.*one of')
+end
+
+T['show_range_history()'] = new_set({
+  hooks = {
+    pre_case = function()
+      load_module()
+      set_lines({ 'aaa', 'bbb', 'ccc' })
+      child.fn.chdir(git_root_dir)
+      child.api.nvim_buf_set_name(0, git_root_dir .. '/dir/tmp-file')
+      child.lua([[_G.stdio_queue = {
+        { { 'out', '' } },                           -- No uncommitted changes
+        { { 'out', 'commit abc1234\nLog output' } }, -- Asked logs
+      }]])
+    end,
+  },
+})
+
+local show_range_history = forward_lua('MiniGit.show_range_history')
+
+T['show_range_history()']['works in Normal mode'] = function()
+  show_range_history()
+
+  local ref_git_spawn_log = {
+    { args = { 'diff', '-U0', 'HEAD', '--', 'dir/tmp-file' }, cwd = git_root_dir },
+    { args = { 'log', '-L1,1:dir/tmp-file', 'HEAD' }, cwd = git_root_dir },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  -- Should show in a new tabpage (with default `opts.split`) in proper buffer
+  eq(#child.api.nvim_list_tabpages(), 2)
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+
+  validate_minigit_name(0, 'log -L1,1:dir/tmp-file HEAD')
+  eq(child.bo.filetype, 'git')
+  eq(get_lines(), { 'commit abc1234', 'Log output' })
+end
+
+T['show_range_history()']['works in Visual mode'] = function()
+  set_cursor(2, 0)
+  type_keys('vj')
+
+  show_range_history()
+  local ref_git_spawn_log = {
+    { args = { 'diff', '-U0', 'HEAD', '--', 'dir/tmp-file' }, cwd = git_root_dir },
+    -- Should use lines of Visual selection
+    { args = { 'log', '-L2,3:dir/tmp-file', 'HEAD' }, cwd = git_root_dir },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  validate_minigit_name(0, 'log -L2,3:dir/tmp-file HEAD')
+end
+
+T['show_range_history()']['works in output of `show_diff_source()`'] = function()
+  child.lua([[_G.stdio_queue = {
+    { { 'out', 'Line 1\nCurrent line 2\nLine 3' } }, -- Diff source
+    -- Should not ask for presence of uncommitted changes
+    { { 'out', 'commit abc1234\nLog output' } },    -- Asked logs
+  }]])
+
+  -- Show diff source
+  local log_output = child.fn.readfile(test_dir_absolute .. '/log-output')
+  set_lines(log_output)
+  set_cursor(17, 0)
+
+  show_diff_source()
+  eq(get_lines(), { 'Line 1', 'Current line 2', 'Line 3' })
+  eq(get_cursor(), { 2, 0 })
+
+  -- Should properly parse file name and commit
+  show_range_history()
+
+  local ref_git_spawn_log = {
+    { args = { 'show', '5ed8432441b495fa9bd4ad2e4f635bae64e95cc2:dir/file-after' }, cwd = git_root_dir },
+    { args = { 'log', '-L2,2:dir/file-after', '5ed8432441b495fa9bd4ad2e4f635bae64e95cc2' }, cwd = git_root_dir },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  validate_minigit_name(0, 'log -L2,2:dir/file-after 5ed8432441b495fa9bd4ad2e4f635bae64e95cc2')
+end
+
+T['show_range_history()']['respects `opts.line_start` and `opts.line_end`'] = function()
+  show_range_history({ line_start = 2, line_end = 3 })
+
+  local ref_git_spawn_log = {
+    { args = { 'diff', '-U0', 'HEAD', '--', 'dir/tmp-file' }, cwd = git_root_dir },
+    { args = { 'log', '-L2,3:dir/tmp-file', 'HEAD' }, cwd = git_root_dir },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  validate_minigit_name(0, 'log -L2,3:dir/tmp-file HEAD')
+end
+
+T['show_range_history()']['respects `opts.log_args`'] = function()
+  show_range_history({ log_args = { '--oneline', '--topo-order' } })
+
+  local ref_git_spawn_log = {
+    { args = { 'diff', '-U0', 'HEAD', '--', 'dir/tmp-file' }, cwd = git_root_dir },
+    { args = { 'log', '-L1,1:dir/tmp-file', 'HEAD', '--oneline', '--topo-order' }, cwd = git_root_dir },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  validate_minigit_name(0, 'log -L1,1:dir/tmp-file HEAD --oneline --topo-order')
+end
+
+T['show_range_history()']['respects `opts.split`'] = new_set(
+  { parametrize = { { 'horizontal' }, { 'vertical' }, { 'tab' } } },
+  {
+    test = function(split)
+      local init_win_id = child.api.nvim_get_current_win()
+      show_range_history({ split = split })
+      local cur_win_id = child.api.nvim_get_current_win()
+
+      local ref_git_spawn_log = {
+        { args = { 'diff', '-U0', 'HEAD', '--', 'dir/tmp-file' }, cwd = git_root_dir },
+        { args = { 'log', '-L1,1:dir/tmp-file', 'HEAD' }, cwd = git_root_dir },
+      }
+      validate_git_spawn_log(ref_git_spawn_log)
+
+      validate_minigit_name(0, 'log -L1,1:dir/tmp-file HEAD')
+
+      -- Validate proper split
+      eq(#child.api.nvim_list_tabpages(), split == 'tab' and 2 or 1)
+      eq(child.api.nvim_tabpage_get_number(0), split == 'tab' and 2 or 1)
+
+      local ref_layout = ({
+        horizontal = { 'col', { { 'leaf', cur_win_id }, { 'leaf', init_win_id } } },
+        vertical = { 'row', { { 'leaf', cur_win_id }, { 'leaf', init_win_id } } },
+        tab = { 'leaf', cur_win_id },
+      })[split]
+      eq(child.fn.winlayout(), ref_layout)
+    end,
+  }
+)
+
+T['show_range_history()']['works with `opts.split = "auto"`'] = function()
+  child.lua([[_G.stdio_queue = {
+    { { 'out', '' } },                           -- No uncommitted changes
+    { { 'out', 'commit abc1234\nLog output' } }, -- Asked logs
+    { { 'out', '' } },                           -- No uncommitted changes
+    { { 'out', 'commit def4321\nSomething' } },  -- Asked logs
+  }]])
+
+  -- Should open in new tabpage if there is a non-minigit buffer visible
+  child.cmd('vertical split')
+  local buf_id = new_scratch_buf()
+  set_buf(buf_id)
+  child.api.nvim_buf_set_name(buf_id, make_minigit_name(buf_id, 'some mini.git buffer'))
+  eq(child.fn.winlayout()[1], 'row')
+
+  show_range_history({ split = 'auto' })
+  local win_id_1 = child.api.nvim_get_current_win()
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(child.fn.winlayout(), { 'leaf', win_id_1 })
+
+  -- Should split vertically if there are only minigit buffers visible
+  show_range_history({ split = 'auto' })
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(child.fn.winlayout(), { 'row', { { 'leaf', child.api.nvim_get_current_win() }, { 'leaf', win_id_1 } } })
+end
+
+T['show_range_history()']['does nothing in presence of uncommitted changes'] = function()
+  child.lua([[_G.stdio_queue = {
+    { { 'out', 'diff --git aaa bbb\nSomething' } }, -- There are uncommitted changes
+  }]])
+
+  show_range_history()
+
+  local ref_git_spawn_log = {
+    { args = { 'diff', '-U0', 'HEAD', '--', 'dir/tmp-file' }, cwd = git_root_dir },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  validate_notifications({
+    { '(mini.git) Current file has uncommitted lines. Commit or stash before exploring history.', 'WARN' },
+  })
+end
+
+T['show_range_history()']['uses correct working directory'] = function()
+  mock_init_track_stdio_queue()
+  child.lua([[_G.stdio_queue = {
+    _G.init_track_stdio_queue[1],
+    _G.init_track_stdio_queue[2],
+    _G.init_track_stdio_queue[3],
+
+    { { 'out', '' } },                           -- No uncommitted changes
+    { { 'out', 'commit abc1234\nLog output' } }, -- Asked logs
+  }]])
+
+  edit(git_root_dir .. '/dir-in-git/file-in-dir-in-git')
+  child.fn.chdir(test_dir_absolute)
+
+  show_range_history()
+
+  --stylua: ignore
+  local ref_git_spawn_log = {
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', '--path-format=absolute', '--git-dir', '--show-toplevel' },
+      cwd = git_root_dir .. '/dir-in-git',
+    },
+    {
+      args = { '-c', 'gc.auto=0', 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD' },
+      cwd = git_root_dir,
+    },
+    {
+      args = {
+        '-c', 'gc.auto=0', 'status', '--verbose', '--untracked-files=all', '--ignored', '--porcelain', '-z',
+        '--', 'dir-in-git/file-in-dir-in-git'
+      },
+      cwd = git_root_dir,
+    },
+    -- Should prefer buffer's Git root over Neovim's cwd
+    { args = { 'diff', '-U0', 'HEAD', '--', 'dir-in-git/file-in-dir-in-git' }, cwd = git_root_dir },
+    { args = { 'log', '-L1,1:dir-in-git/file-in-dir-in-git', 'HEAD' }, cwd = git_root_dir },
+  }
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['show_range_history()']['validates arguments'] = function()
+  local validate = function(opts, error_pattern)
+    expect.error(function() show_range_history(opts) end, error_pattern)
+  end
+
+  validate({ line_start = 'a' }, 'line_start.*number')
+  validate({ line_end = 'a' }, 'line_end.*number')
+  -- - Supplying only one line means that the other won't be inferred
+  validate({ line_start = 1 }, 'number')
+  validate({ line_end = 1 }, 'number')
+  validate({ line_start = 2, line_end = 1 }, 'non%-decreasing')
+  validate({ log_args = 1 }, 'log_args.*array')
+  validate({ log_args = { a = 1 } }, 'log_args.*array')
+  validate({ split = 'a' }, 'opts%.split.*one of')
+end
 
 T['diff_foldexpr()'] = new_set({ hooks = { pre_case = load_module } })
 
@@ -254,7 +841,7 @@ T['diff_foldexpr()']['works in `git log` output'] = function()
   child.set_size(70, 50)
   child.o.laststatus = 0
   edit(test_dir_absolute .. '/log-output')
-  child.cmd('setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr(v:lnum)')
+  child.cmd('setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr()')
 
   -- Should be one line per patch
   child.o.foldlevel = 0
@@ -277,7 +864,7 @@ T['diff_foldexpr()']['works in diff patch'] = function()
   child.set_size(25, 50)
   child.o.laststatus = 0
   edit(test_dir_absolute .. '/diff-output')
-  child.cmd('setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr(v:lnum)')
+  child.cmd('setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr()')
 
   -- Should be one line per patch
   child.o.foldlevel = 0
@@ -294,6 +881,12 @@ T['diff_foldexpr()']['works in diff patch'] = function()
   -- Should be no folds
   child.o.foldlevel = 3
   child.expect_screenshot()
+end
+
+T['diff_foldexpr()']['accepts optional line number'] = function()
+  edit(test_dir_absolute .. '/log-output')
+  eq(child.lua_get('MiniGit.diff_foldexpr(1)'), 0)
+  eq(child.lua_get('MiniGit.diff_foldexpr(2)'), '=')
 end
 
 T['enable()'] = new_set({

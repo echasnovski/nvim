@@ -7,11 +7,11 @@ Date:   Sat May 4 16:24:15 2024 +0300
     Important details about commit.
     Even more details about commit.
 
-diff --git a/dir/file1 b/dir/file1
+diff --git a/dir/file-before b/dir/file-after
 index dd2b945..b81ef66 100644
---- a/dir/file1
-+++ b/dir/file1
-@@ -247,3 +247,3 @@ Hunk header 1
+--- a/dir/file-before
++++ b/dir/file-after
+@@ -1,3 +1,3 @@ Hunk header 1
        Line 1
 -      Previous line 2
 +      Current line 2
@@ -41,22 +41,20 @@ diff --git a/dir/file1 b/dir/file1
 index dd2b945..b81ef66 100644
 --- a/dir/file1
 +++ b/dir/file1
-@@ -247,3 +247,3 @@ Hunk header 1
-       Line 1
+@@ -247 +247 @@ Hunk header 1
 -      Previous line 02
 +      Current line 02
-     Line 3
 @@ -317,4 +317,4 @@
  Line 011
 +Added line 012
 +Added line 013
  
-diff --git a/file b/file
+diff --git a/file.lua b/file.lua
 index a0a225b..9f8c05f 100644
---- a/file
-+++ b/file
-@@ -283,4 +283,4 @@
+--- a/file.lua
++++ b/file.lua
+@@ -1,4 +1,4 @@
  +++
--+++ Deleted line 0112
----- Deleted line 0113
+-+++ local a = 'deleted'
+---- local b = 'lines'
  ---

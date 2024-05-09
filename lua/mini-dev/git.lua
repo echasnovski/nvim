@@ -202,34 +202,39 @@ MiniGit.show_at_cursor = function(opts)
 end
 
 -- NOTEs:
--- - Relies on `:Git command`.
 -- - Needs a valid Git patch entry with unified diff preceded by commit
---   information. Like in `:Git log`.
+--   information. Like the result of `:Git log`.
 -- - Needs cwd to be the Git root for relative paths to work.
 MiniGit.show_diff_source = function(opts)
   opts = vim.tbl_deep_extend('force', { split = 'auto', target = 'auto' }, opts or {})
-  local src = H.diff_pos_to_source()
-  if src == nil then
-    return H.notify('Could not find diff source. Ensure that cursor is inside a valid diff hunk of git log.', 'WARN')
-  end
-
   local split = H.normalize_split_opt(opts.split, 'opts.split')
   local target = opts.target
-  if target == 'auto' then target = src.init_prefix == '-' and 'before' or 'after' end
-  if not (target == 'before' or target == 'after' or target == 'both') then
+  if not (target == 'auto' or target == 'before' or target == 'after' or target == 'both') then
     H.error('`opts.target` should be one of "auto", "before", "after", "both".')
   end
 
+  local src = H.diff_pos_to_source()
+  if src == nil then
+    return H.notify('Could not find diff source. Ensure that cursor is inside a valid diff lines of git log.', 'WARN')
+  end
+  if target == 'auto' then target = src.init_prefix == '-' and 'before' or 'after' end
+
+  local _, root = H.command_get_cwd_data()
+  local show = function(commit, path, mods)
+    local args = { 'show', commit .. ':' .. path }
+    local lines = H.git_cli_output(args, root)
+    if #lines == 0 then return H.notify('Can not show ' .. path .. 'at commit ' .. commit, 'WARN') end
+    H.show_git_cli_split(mods, lines, 'show', table.concat(args, ' '))
+  end
+
   if target ~= 'after' and src.path_before ~= nil then
-    local before_cmd = string.format('%s Git show %s:%s', split, src.commit_before, src.path_before)
-    vim.cmd(before_cmd)
+    show(src.commit_before, src.path_before, split)
     vim.api.nvim_win_set_cursor(0, { src.lnum_before, 0 })
   end
 
   if target ~= 'before' then
     local mods_after = target == 'after' and split or 'belowright vertical'
-    local after_cmd = string.format('%s Git show %s:%s', mods_after, src.commit_after, src.path_after)
-    vim.cmd(after_cmd)
+    show(src.commit_after, src.path_after, mods_after)
     vim.api.nvim_win_set_cursor(0, { src.lnum_after, 0 })
   end
 end
@@ -238,19 +243,11 @@ end
 ---
 --- Works well with |MiniGit.diff_foldexpr()|.
 MiniGit.show_range_history = function(opts)
-  opts = vim.tbl_deep_extend('force', { log_args = '', split = 'auto' }, opts or {})
-  local line_start, line_end = opts.line_start, opts.line_end
-  if line_start == nil or line_end == nil then
-    line_start = vim.fn.line('.')
-    local is_visual = vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode())
-    line_end = is_visual and vim.fn.line('v') or vim.fn.line('.')
-    line_start, line_end = math.min(line_start, line_end), math.max(line_start, line_end)
-  end
-  if not (type(line_start) == 'number' and type(line_end) == 'number' and line_start <= line_end) then
-    H.error('`line_start` and `line_end` should be non-decreasing numbers.')
-  end
-
-  if type(opts.log_args) ~= 'string' then H.error('`opts.log_args` should be string.') end
+  local default_opts = { line_start = nil, line_end = nil, log_args = nil, split = 'auto' }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
+  local line_start, line_end = H.normalize_range_lines(opts.line_start, opts.line_end)
+  local log_args = opts.log_args or {}
+  if not H.islist(log_args) then H.error('`opts.log_args` should be an array.') end
   local split = H.normalize_split_opt(opts.split, 'opts.split')
 
   -- Construct `:Git log` command that works both with regular files and
@@ -268,9 +265,12 @@ MiniGit.show_range_history = function(opts)
     return H.notify('Current file has uncommitted lines. Commit or stash before exploring history.', 'WARN')
   end
 
-  local suffix = opts.log_args == '' and '' or (' ' .. opts.log_args)
-  local command = string.format('%s Git log -L%d,%d:%s %s%s', split, line_start, line_end, rel_path, commit, suffix)
-  vim.cmd(command)
+  -- Show log in split
+  local range_flag = string.format('-L%d,%d:%s', line_start, line_end, rel_path)
+  local args = { 'log', range_flag, commit, unpack(log_args) }
+  local history = H.git_cli_output(args, root)
+  if #history == 0 then return H.notify('Could not get range history') end
+  H.show_git_cli_split(split, history, 'log', table.concat(args, ' '))
 end
 
 --- Fold expression for Git logs
@@ -282,12 +282,13 @@ end
 ---
 --- For automated setup, set the following for "git" filetype (either
 --- inside |FileType| autocommand or |ftplugin|): >
----   setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr(v:lnum)
+---   setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr()
 --- <
 ---@param lnum number Line number for which fold level is computed.
 ---
 ---@return number|string Line fold level. See |fold-expr|.
 MiniGit.diff_foldexpr = function(lnum)
+  lnum = lnum or vim.v.lnum
   if H.is_log_entry_header(lnum + 1) or H.is_log_entry_header(lnum) then return 0 end
   if H.is_file_entry_header(lnum) then return 1 end
   if H.is_hunk_header(lnum) then return 2 end
@@ -862,9 +863,14 @@ H.command_complete_subcommand_targets = {
 }
 
 H.ensure_mods_is_split = function(mods)
-  if H.mods_is_split(mods) then return mods end
-  local split_val = H.normalize_split_opt(MiniGit.config.command.split, '`config.command.split`')
-  return split_val .. ' ' .. mods
+  if not H.mods_is_split(mods) then
+    local split_val = H.normalize_split_opt(MiniGit.config.command.split, '`config.command.split`')
+    mods = split_val .. ' ' .. mods
+  end
+  -- Support for `:horizontal` was added in Neovim=0.8
+  -- TODO: Remove after compatibility with Neovim=0.7 is dropped
+  if vim.fn.has('nvim-0.8') == 0 then mods = mods:gsub('horizontal ?', '') end
+  return mods
 end
 
 H.mods_is_split = function(mods)
@@ -885,30 +891,38 @@ H.show_git_cli_output = function(out, mods, git_command)
     if subcmd == nil and vim.tbl_contains(H.git_subcommands.supported, cmd) then subcmd = cmd end
   end
   subcmd = H.git_subcommands.alias[subcmd] or subcmd
-  if not (H.mods_is_split(mods) or H.git_subcommands.info[subcmd]) then
-    H.notify(out, 'INFO')
-    return false
+
+  if H.mods_is_split(mods) or H.git_subcommands.info[subcmd] then
+    local lines = vim.split(out, '\n')
+    local name = table.concat(git_command, ' ')
+    H.show_git_cli_split(mods, lines, subcmd, name)
+    return true
   end
 
+  H.notify(out, 'INFO')
+  return false
+end
+
+H.show_git_cli_split = function(mods, lines, subcmd, name)
   -- Create a target window split with new buffer
   local buf_id = vim.api.nvim_create_buf(false, true)
   mods = H.ensure_mods_is_split(mods)
-  vim.cmd(mods .. ' sbuffer ' .. buf_id)
+  vim.cmd(mods .. ' split')
+
   local win_id = vim.api.nvim_get_current_win()
+  vim.api.nvim_set_current_buf(buf_id)
   H.define_minigit_window()
 
   -- Prepare buffer
-  local name = 'minigit://' .. buf_id .. '/' .. table.concat(git_command, ' ')
-  vim.api.nvim_buf_set_name(buf_id, name)
-  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, vim.split(out, '\n'))
+  vim.api.nvim_buf_set_name(buf_id, 'minigit://' .. buf_id .. '/' .. name)
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
 
   local filetype
   if subcmd == 'diff' then filetype = 'diff' end
   if subcmd == 'log' then filetype = 'git' end
-  if subcmd == 'show' then filetype = vim.filetype.match({ buf = buf_id }) end
+  -- TODO: Remove after compatibility with Neovim=0.7 is dropped
+  if subcmd == 'show' and vim.fn.has('nvim-0.8') == 1 then filetype = vim.filetype.match({ buf = buf_id }) end
   if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
-
-  return true
 end
 
 H.get_minigit_windows = function()
@@ -933,9 +947,8 @@ H.define_minigit_window = function(cleanup)
     if not should_close then return end
 
     pcall(vim.api.nvim_del_autocmd, finish_au_id)
-    pcall(vim.api.nvim_buf_delete, buf_id, { force = true })
     pcall(vim.api.nvim_win_close, win_id, true)
-    vim.cmd('redraw')
+    vim.schedule(function() pcall(vim.api.nvim_buf_delete, buf_id, { force = true }) end)
 
     if vim.is_callable(cleanup) then vim.schedule(cleanup) end
   end
@@ -962,7 +975,7 @@ end
 
 H.normalize_split_opt = function(x, x_name)
   if x == 'auto' then
-    -- Show in same tabpage if it has only minigit windows. Otherwise - in new.
+    -- Show in same tabpage if only minigit buffers visible. Otherwise in new.
     for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
       local win_buf_id = vim.api.nvim_win_get_buf(win_id)
       local win_buf_name = vim.api.nvim_buf_get_name(win_buf_id)
@@ -974,6 +987,20 @@ H.normalize_split_opt = function(x, x_name)
   end
   if x == 'horizontal' or x == 'vertical' or x == 'tab' then return x end
   H.error('`' .. x_name .. '` should be one of "auto", "horizontal", "vertical", "tab"')
+end
+
+H.normalize_range_lines = function(line_start, line_end)
+  if line_start == nil and line_end == nil then
+    line_start = vim.fn.line('.')
+    local is_visual = vim.tbl_contains({ 'v', 'V', '\22' }, vim.fn.mode())
+    line_end = is_visual and vim.fn.line('v') or vim.fn.line('.')
+    line_start, line_end = math.min(line_start, line_end), math.max(line_start, line_end)
+  end
+
+  if not (type(line_start) == 'number' and type(line_end) == 'number' and line_start <= line_end) then
+    H.error('`line_start` and `line_end` should be non-decreasing numbers.')
+  end
+  return line_start, line_end
 end
 
 -- Enabling -------------------------------------------------------------------
@@ -1287,7 +1314,7 @@ H.diff_parse_commits = function(out, lines, lnum)
   return lnum + 1
 end
 
-H.parse_diff_source_buf_name = function(buf_name) return string.match(buf_name, '^minigit://%d+/git show (%x+~?):(.*)$') end
+H.parse_diff_source_buf_name = function(buf_name) return string.match(buf_name, '^minigit://%d+/.*show (%x+~?):(.*)$') end
 
 -- Folding --------------------------------------------------------------------
 H.is_hunk_header = function(lnum) return vim.fn.getline(lnum):find('^@@.*@@') ~= nil end
@@ -1370,5 +1397,8 @@ H.expandcmd = function(x)
   local ok, res = pcall(vim.fn.expandcmd, x)
   return ok and res or x
 end
+
+-- TODO: Remove after compatibility with Neovim=0.9 is dropped
+H.islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
 
 return MiniGit
