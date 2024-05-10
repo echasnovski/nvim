@@ -6,8 +6,6 @@
 --
 -- - Command:
 --     - Unify subcommand parsing for `on_done` and completion candidates.
---     - Consider using `mods` as table: both in code and in user data in event
---       callback.
 --
 -- - Diff source:
 --
@@ -185,12 +183,15 @@ MiniGit.show_at_cursor = function(opts)
   local exec = MiniGit.config.job.git_executable
   local cwd = H.get_git_cwd()
 
-  -- Try showing commit at cursor. NOTE: using `:Git show <cword>` equivalent
-  -- does not always work as intended (it works on `@@`, `-` "words", etc.).
+  -- Try showing commit at cursor
   local cword = vim.fn.expand('<cword>')
-  if cword:find('^%x%x%x%x%x%x') ~= nil then
+  local is_commit = string.find(cword, '^%x%x%x%x%x%x%x') ~= nil and string.lower(cword) == cword
+  if is_commit then
     local split = H.normalize_split_opt((opts or {}).split or 'auto', 'opts.split')
-    vim.cmd(split .. ' Git show ' .. cword)
+    local args = { 'show', cword }
+    local lines = H.git_cli_output(args, cwd)
+    if #lines == 0 then return H.notify('Can not show commit ' .. cword, 'WARN') end
+    H.show_in_split(split, lines, 'show', table.concat(args, ' '))
     vim.bo.filetype = 'git'
     return
   end
@@ -200,8 +201,8 @@ MiniGit.show_at_cursor = function(opts)
 
   -- Try showing range history
   local is_git_enabled = H.is_buf_enabled(vim.api.nvim_get_current_buf())
-  local is_diff_source = H.parse_diff_source_buf_name(vim.api.nvim_buf_get_name(0)) ~= nil
-  if is_git_enabled or is_diff_source then return MiniGit.show_range_history(opts) end
+  local is_diff_source_output = H.parse_diff_source_buf_name(vim.api.nvim_buf_get_name(0)) ~= nil
+  if is_git_enabled or is_diff_source_output then return MiniGit.show_range_history(opts) end
 
   H.notify('Nothing Git-related to show at cursor', 'WARN')
 end
@@ -466,6 +467,10 @@ end
 
 H.create_user_commands = function()
   local git_execute = function(input)
+    if not H.has_git then
+      return H.notify('There is no `' .. MiniGit.config.job.git_executable .. '` executable', 'ERROR')
+    end
+
     H.ensure_git_subcommands()
     -- Define Git editor to be used if needed. The way it works is: execute
     -- command, wait for it to exit, use content of edited file. So to properly
@@ -492,14 +497,14 @@ H.create_user_commands = function()
     local command = { MiniGit.config.job.git_executable, unpack(args) }
     local cwd = H.get_git_cwd()
 
-    local cmd_data = { mods = input.mods, command = command, cwd = cwd }
-    local is_done_tracking = { done = false }
-    local on_done = H.command_make_on_done(cmd_data, is_done_tracking)
+    local cmd_data = { cmd_input = input, git_command = command, cwd = cwd }
+    local is_done_track = { done = false }
+    local on_done = H.command_make_on_done(cmd_data, is_done_track)
 
     H.cli_run(command, cwd, on_done, { env = env })
 
     -- If needed, synchronously wait for job to finish
-    local sync_check = function() return H.skip_sync or is_done_tracking.done end
+    local sync_check = function() return H.skip_sync or is_done_track.done end
     if not input.bang then vim.wait(MiniGit.config.job.timeout + 10, sync_check, 1) end
   end
 
@@ -636,13 +641,13 @@ H.get_git_cwd = function()
   return buf_cache.root or vim.fn.getcwd()
 end
 
-H.command_make_on_done = function(cmd_data, is_done_tracking)
+H.command_make_on_done = function(cmd_data, is_done_track)
   return vim.schedule_wrap(function(code, out, err)
     -- Register that command is done executing (to enable sync execution)
-    is_done_tracking.done = true
+    is_done_track.done = true
 
     -- Trigger "done" event
-    cmd_data.subcommand = H.command_parse_subcommand(cmd_data.command)
+    cmd_data.git_subcommand = H.command_parse_subcommand(cmd_data.git_command)
     cmd_data.exit_code, cmd_data.stdout, cmd_data.stderr = code, out, err
     H.trigger_event('MiniGitCommandDone', cmd_data)
 
@@ -657,7 +662,7 @@ H.command_make_on_done = function(cmd_data, is_done_tracking)
 end
 
 H.command_show_stdout = function(cmd_data)
-  local stdout, mods, subcommand = cmd_data.stdout, cmd_data.mods, cmd_data.subcommand
+  local stdout, mods, subcommand = cmd_data.stdout, cmd_data.cmd_input.mods, cmd_data.git_subcommand
   if stdout == '' or mods:find('silent') ~= nil then return end
 
   -- Show in split if explicitly forced or the command shows info.
@@ -666,7 +671,7 @@ H.command_show_stdout = function(cmd_data)
   if not should_split then return H.notify(stdout, 'INFO') end
 
   local lines = vim.split(stdout, '\n')
-  local name = table.concat(cmd_data.command, ' ')
+  local name = table.concat(cmd_data.git_command, ' ')
   cmd_data.win_source, cmd_data.win_stdout = H.show_in_split(mods, lines, subcommand, name)
 
   -- Trigger separate "split" event
@@ -704,16 +709,16 @@ end
 H.command_get_complete_candidates = function(line, col, base)
   H.ensure_git_subcommands()
 
-  -- Determine current Git command as the earliest present supported command
-  local command, command_end = nil, math.huge
+  -- Determine current Git subcommand as the earliest present supported one
+  local subcmd, subcmd_end = nil, math.huge
   for _, cmd in pairs(H.git_subcommands.supported) do
     local _, ind = line:find(' ' .. cmd .. ' ', 1, true)
-    if ind ~= nil and ind < command_end then
-      command, command_end = cmd, ind
+    if ind ~= nil and ind < subcmd_end then
+      subcmd, subcmd_end = cmd, ind
     end
   end
 
-  command = command or 'git'
+  subcmd = subcmd or 'git'
   local cwd = H.get_git_cwd()
 
   -- Determine command candidates:
@@ -721,11 +726,11 @@ H.command_get_complete_candidates = function(line, col, base)
   -- - Git commands if there is none fully formed yet or cursor is at the end
   --   of the command (to also suggest subcommands).
   -- - Command targets specific for each command (if present).
-  if vim.startswith(base, '-') then return H.command_complete_option(command) end
-  if command_end == math.huge or (command_end - 1) == col then return H.git_subcommands.complete, 'subcommand' end
+  if vim.startswith(base, '-') then return H.command_complete_option(subcmd) end
+  if subcmd_end == math.huge or (subcmd_end - 1) == col then return H.git_subcommands.complete, 'subcommand' end
   if line:sub(1, col):find(' -- ') ~= nil then return H.command_complete_path(cwd, base) end
 
-  local complete_targets = H.command_complete_subcommand_targets[command]
+  local complete_targets = H.command_complete_subcommand_targets[subcmd]
   if complete_targets == nil then return {}, nil end
   return complete_targets(cwd, base, line)
 end

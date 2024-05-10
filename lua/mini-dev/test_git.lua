@@ -247,9 +247,106 @@ end
 
 T['show_at_cursor()'] = new_set({ hooks = { pre_case = load_module } })
 
-local show_diff_source = forward_lua('MiniGit.show_diff_source')
+local show_at_cursor = forward_lua('MiniGit.show_at_cursor')
 
-T['show_at_cursor()']['works'] = function() MiniTest.skip() end
+T['show_at_cursor()']['works on commit'] = function()
+  set_lines({ 'abc1234.def' })
+  set_cursor(1, 0)
+  child.lua([[_G.stdio_queue = { { { 'out', 'commit abc123456\nHello' } } }]])
+
+  show_at_cursor()
+
+  local ref_git_spawn_log = { { args = { 'show', 'abc1234' }, cwd = child.fn.getcwd() } }
+  validate_git_spawn_log(ref_git_spawn_log)
+
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(get_lines(), { 'commit abc123456', 'Hello' })
+  eq(child.o.filetype, 'git')
+
+  -- Should use `<cword>`
+  child.o.iskeyword = child.o.iskeyword .. ',.'
+  show_at_cursor()
+  -- - No extra calls because "abc1234.def" does not match commit pattern
+  validate_git_spawn_log(ref_git_spawn_log)
+end
+
+T['show_at_cursor()']['uses correct pattern to match commit'] = function()
+  log_calls('MiniGit.show_at_cursor')
+
+  set_lines({ 'abc1234', 'abc123', 'abC1234', 'abc123x' })
+
+  local validate = function(line, n_cli_calls)
+    set_cursor(line, 0)
+    show_at_cursor()
+    eq(#get_spawn_log(), n_cli_calls)
+  end
+
+  eq(#get_spawn_log(), 0)
+  validate(1, 1)
+  validate(2, 1)
+  validate(3, 1)
+  validate(4, 1)
+end
+
+T['show_at_cursor()']['uses `opts` on commit'] = function()
+  set_lines({ 'abc1234' })
+  child.lua([[_G.stdio_queue = { { { 'out', 'commit abc123456\nHello' } } }]])
+
+  local init_win_id = child.api.nvim_get_current_win()
+  show_at_cursor({ split = 'vertical' })
+
+  eq(child.api.nvim_tabpage_get_number(0), 1)
+  eq(child.fn.winlayout(), { 'row', { { 'leaf', child.api.nvim_get_current_win() }, { 'leaf', init_win_id } } })
+  eq(get_lines(), { 'commit abc123456', 'Hello' })
+  eq(child.o.filetype, 'git')
+end
+
+T['show_at_cursor()']['works for diff source'] = function()
+  child.lua('MiniGit.show_diff_source = function() end')
+  log_calls('MiniGit.show_diff_source')
+
+  local log_output = child.fn.readfile(test_dir_absolute .. '/log-output')
+  set_lines(log_output)
+  set_cursor(17, 0)
+
+  local opts = { split = 'vertical', target = 'both' }
+  show_at_cursor(opts)
+  validate_calls({ { 'MiniGit.show_diff_source', opts } })
+end
+
+T['show_at_cursor()']['works for range history in tracked file'] = function()
+  child.lua('MiniGit.show_range_history = function() end')
+  log_calls('MiniGit.show_range_history')
+
+  mock_init_track_stdio_queue()
+  child.lua([[_G.stdio_queue = _G.init_track_stdio_queue]])
+  edit(git_file_path)
+  eq(is_buf_enabled(), true)
+
+  local opts = { line_start = 1, line_end = 2, split = 'vertical', log_args = { '--oneline' } }
+  show_at_cursor(opts)
+  validate_calls({ { 'MiniGit.show_range_history', opts } })
+end
+
+T['show_at_cursor()']['works for range history in `show_diff_source()` output'] = function()
+  child.lua('MiniGit.show_range_history = function() end')
+  log_calls('MiniGit.show_range_history')
+
+  child.lua([[_G.stdio_queue = { { { 'out', 'Line 1\nCurrent line 2\nLine 3' } } }]])
+  local log_output = child.fn.readfile(test_dir_absolute .. '/log-output')
+  set_lines(log_output)
+  set_cursor(17, 0)
+  child.lua('MiniGit.show_diff_source()')
+
+  local opts = { line_start = 1, line_end = 2, split = 'vertical', log_args = { '--oneline' } }
+  show_at_cursor(opts)
+  validate_calls({ { 'MiniGit.show_range_history', opts } })
+end
+
+T['show_at_cursor()']['works on nothing'] = function()
+  expect.no_error(show_at_cursor)
+  validate_notifications({ { '(mini.git) Nothing Git-related to show at cursor', 'WARN' } })
+end
 
 T['show_diff_source()'] = new_set({
   hooks = {
@@ -262,6 +359,8 @@ T['show_diff_source()'] = new_set({
     end,
   },
 })
+
+local show_diff_source = forward_lua('MiniGit.show_diff_source')
 
 T['show_diff_source()']['works'] = function()
   child.lua([[_G.stdio_queue = {
@@ -1565,19 +1664,169 @@ T['Tracking']['does not react to ".lock" files in repo directory'] = function()
   eq(#get_spawn_log(), 3)
 end
 
-T[':Git'] = new_set({ hooks = { pre_case = load_module } })
+T[':Git'] = new_set({
+  hooks = {
+    pre_case = function()
+      load_module()
 
-T[':Git']['works'] = function() MiniTest.skip() end
+      -- Mock initial spawns for gathering subcommand data
+      child.lua([[
+        _G.stdio_queue = {
+          -- Get supported subcommands
+          { { 'out', 'add\nblame\ndiff\nlog\npush\npull\nshow\nl' } },
+          -- Get "info showing" subcommands
+          { { 'out', 'diff\nlog\nshow' } },
+          -- Get aliases
+          { { 'out', 'alias.l log -5' } },
+        }
+      ]])
+    end,
+  },
+})
+
+--stylua: ignore
+local validate_command_init_setup = function(init_spawns, executable, cwd)
+  executable = executable or 'git'
+  cwd = cwd or child.fn.getcwd()
+
+  -- Get supported subcommands
+  local supported_lists = table.concat({
+    'list-mainporcelain',
+    'list-ancillarymanipulators', 'list-ancillaryinterrogators',
+    'list-foreignscminterface',
+    'list-plumbingmanipulators', 'list-plumbinginterrogators',
+    'others', 'alias',
+  }, ',')
+  eq(
+    init_spawns[1],
+    { executable = executable, options = {  args = { '--list-cmds=' .. supported_lists }, cwd = cwd } }
+  )
+
+  -- Get "info showing" subcommands
+  local info_lists = table.concat({ 'list-info', 'list-ancillaryinterrogators', 'list-plumbinginterrogators' }, ',')
+  eq(
+    init_spawns[2],
+    { executable = executable, options = { args = { '--list-cmds=' .. info_lists }, cwd = cwd } }
+  )
+
+  -- Get aliases
+  eq(
+    init_spawns[3],
+    { executable = executable, options = { args = { 'config','--get-regexp','alias.*', }, cwd = cwd } }
+  )
+end
+
+local validate_command_call = function(log_entry, args, executable, cwd)
+  executable = executable or 'git'
+  cwd = cwd or child.fn.getcwd()
+
+  eq(log_entry.executable, executable)
+  eq(log_entry.options.args, args)
+  eq(log_entry.options.cwd, cwd)
+
+  -- Should set proper environment variables
+  local env_vars = { GIT_EDITOR = false, GIT_SEQUENCE_EDITOR = false, GIT_PAGER = false, NO_COLOR = false }
+
+  for _, env_pair in ipairs(log_entry.options.env) do
+    for var_name, _ in pairs(env_vars) do
+      if vim.startswith(env_pair, var_name .. '=') then env_vars[var_name] = true end
+    end
+  end
+
+  local ref_env_vars = vim.deepcopy(env_vars)
+  for var_name, _ in pairs(ref_env_vars) do
+    ref_env_vars[var_name] = true
+  end
+  eq(env_vars, ref_env_vars)
+end
+
+T[':Git']['works'] = function()
+  child.lua([[
+    -- Command stdout
+    table.insert(_G.stdio_queue, { { 'out', 'abc1234 Hello\ndef4321 World' } })
+  ]])
+
+  child.cmd('Git log --oneline')
+
+  -- Should properly gather subcommand data
+  local spawn_log = get_spawn_log()
+  validate_command_init_setup(vim.list_slice(spawn_log, 1, 3))
+  validate_command_call(spawn_log[4], { 'log', '--oneline' })
+  eq(#spawn_log, 4)
+end
+
+T[':Git']['works asynchronously with bang modifier'] = function() MiniTest.skip() end
+
+T[':Git']['works with abbreviated command modifiers'] = function()
+  -- :vert sil Git
+  MiniTest.skip()
+end
+
+T[':Git']['works for subcommands which were not recognized as supported'] = function() MiniTest.skip() end
+
+T[':Git']['output'] = new_set()
+
+T[':Git']['output']['in buffer for dedicated subcommands'] = function() MiniTest.skip() end
+
+T[':Git']['output']['in buffer when explicitly asked'] = function() MiniTest.skip() end
+
+T[':Git']['output']['defines proper window/buffer cleanup'] = function() MiniTest.skip() end
+
+T[':Git']['output']['in notifications when there is nothing to show in buffer'] = function() MiniTest.skip() end
+
+T[':Git']['can show process errors'] = function()
+  -- Exit code not zero
+  MiniTest.skip()
+end
+
+T[':Git']['can show process warnings'] = function()
+  -- Nonempty stderr with exit_code=0
+  MiniTest.skip()
+end
+
+T[':Git']['preserves environment variables'] = function() MiniTest.skip() end
+
+T[':Git']['opens `GIT_EDITOR` in current instance'] = function()
+  -- Should also ignore timeout
+  MiniTest.skip()
+end
+
+T[':Git']['uses correct working directory'] = function() MiniTest.skip() end
+
+T[':Git']['caches subcommand data'] = function()
+  -- Should collect helper subcommand data only once
+  MiniTest.skip()
+end
+
+T[':Git']['works with no initial subcommand data'] = function() MiniTest.skip() end
+
+T[':Git']['checks for present executable'] = function() MiniTest.skip() end
+
+T[':Git']['respects `job.git_executable`'] = function() MiniTest.skip() end
+
+T[':Git']['respects `job.timeout`'] = function() MiniTest.skip() end
+
+T[':Git']['respects `command.split`'] = function() MiniTest.skip() end
 
 T[':Git']['completion'] = new_set()
 
 T[':Git']['completion']['works'] = function() MiniTest.skip() end
 
+T[':Git']['completion']['caches subcommand data'] = function() MiniTest.skip() end
+
+T[':Git']['completion']['caches option candidates'] = function() MiniTest.skip() end
+
 T[':Git']['events'] = new_set()
 
-T[':Git']['events']['`MiniGitCommandDone` works'] = function() MiniTest.skip() end
+T[':Git']['events']['`MiniGitCommandDone` works'] = function()
+  -- Supplies proper data table in Neovim>=0.8
+  MiniTest.skip()
+end
 
-T[':Git']['events']['`MiniGitCommandSplit` works'] = function() MiniTest.skip() end
+T[':Git']['events']['`MiniGitCommandSplit` works'] = function()
+  -- Supplies proper data table in Neovim>=0.8
+  MiniTest.skip()
+end
 
 T[':Git']['events']['`MiniGitCommandSplit` can be used to tweak window-local options'] = function()
   -- Like vim.wo.foldlevel
