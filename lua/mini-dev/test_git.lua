@@ -19,6 +19,7 @@ local new_buf = function() return child.api.nvim_create_buf(true, false) end
 local new_scratch_buf = function() return child.api.nvim_create_buf(false, true) end
 local get_buf = function() return child.api.nvim_get_current_buf() end
 local set_buf = function(buf_id) child.api.nvim_set_current_buf(buf_id) end
+local get_win = function() return child.api.nvim_get_current_win() end
 local edit = function(path) child.cmd('edit ' .. child.fn.fnameescape(path)) end
 --stylua: ignore end
 
@@ -292,11 +293,11 @@ T['show_at_cursor()']['uses `opts` on commit'] = function()
   set_lines({ 'abc1234' })
   child.lua([[_G.stdio_queue = { { { 'out', 'commit abc123456\nHello' } } }]])
 
-  local init_win_id = child.api.nvim_get_current_win()
+  local init_win_id = get_win()
   show_at_cursor({ split = 'vertical' })
 
   eq(child.api.nvim_tabpage_get_number(0), 1)
-  eq(child.fn.winlayout(), { 'row', { { 'leaf', child.api.nvim_get_current_win() }, { 'leaf', init_win_id } } })
+  eq(child.fn.winlayout(), { 'row', { { 'leaf', get_win() }, { 'leaf', init_win_id } } })
   eq(get_lines(), { 'commit abc123456', 'Hello' })
   eq(child.o.filetype, 'git')
 end
@@ -528,9 +529,9 @@ T['show_diff_source()']['respects `opts.split`'] = new_set(
       }]])
       set_cursor(17, 0)
 
-      local init_win_id = child.api.nvim_get_current_win()
+      local init_win_id = get_win()
       show_diff_source({ split = split })
-      local cur_win_id = child.api.nvim_get_current_win()
+      local cur_win_id = get_win()
 
       local ref_git_spawn_log = {
         {
@@ -562,7 +563,7 @@ T['show_diff_source()']['works with `opts.split = "auto"`'] = function()
     { { 'out', 'Line 4\nCurrent line 5\nLine 6' } }, -- Diff source
   }]])
 
-  local init_buf_id, init_win_id = get_buf(), child.api.nvim_get_current_win()
+  local init_buf_id, init_win_id = get_buf(), get_win()
 
   -- Should open in new tabpage if there is a non-minigit buffer visible
   child.cmd('vertical split')
@@ -574,7 +575,7 @@ T['show_diff_source()']['works with `opts.split = "auto"`'] = function()
   child.api.nvim_set_current_win(init_win_id)
   set_cursor(17, 0)
   show_diff_source({ split = 'auto' })
-  local win_id_1 = child.api.nvim_get_current_win()
+  local win_id_1 = get_win()
   eq(child.api.nvim_tabpage_get_number(0), 2)
   eq(child.fn.winlayout(), { 'leaf', win_id_1 })
 
@@ -584,7 +585,7 @@ T['show_diff_source()']['works with `opts.split = "auto"`'] = function()
   set_cursor(17, 0)
   show_diff_source({ split = 'auto' })
   eq(child.api.nvim_tabpage_get_number(0), 2)
-  eq(child.fn.winlayout(), { 'row', { { 'leaf', child.api.nvim_get_current_win() }, { 'leaf', win_id_1 } } })
+  eq(child.fn.winlayout(), { 'row', { { 'leaf', get_win() }, { 'leaf', win_id_1 } } })
 end
 
 T['show_diff_source()']['respects `opts.target`'] = function()
@@ -621,7 +622,7 @@ T['show_diff_source()']['respects `opts.target`'] = function()
 
     if layout_type == 'row' then
       -- Current window with "after" file should be on the right
-      local all_wins, cur_win = child.api.nvim_tabpage_list_wins(0), child.api.nvim_get_current_win()
+      local all_wins, cur_win = child.api.nvim_tabpage_list_wins(0), get_win()
       local other_win = all_wins[1] == cur_win and all_wins[2] or all_wins[1]
       eq(layout, { 'row', { { 'leaf', other_win }, { 'leaf', cur_win } } })
 
@@ -809,9 +810,9 @@ T['show_range_history()']['respects `opts.split`'] = new_set(
   { parametrize = { { 'horizontal' }, { 'vertical' }, { 'tab' } } },
   {
     test = function(split)
-      local init_win_id = child.api.nvim_get_current_win()
+      local init_win_id = get_win()
       show_range_history({ split = split })
-      local cur_win_id = child.api.nvim_get_current_win()
+      local cur_win_id = get_win()
 
       local ref_git_spawn_log = {
         { args = { 'diff', '-U0', 'HEAD', '--', 'dir/tmp-file' }, cwd = git_root_dir },
@@ -851,14 +852,14 @@ T['show_range_history()']['works with `opts.split = "auto"`'] = function()
   eq(child.fn.winlayout()[1], 'row')
 
   show_range_history({ split = 'auto' })
-  local win_id_1 = child.api.nvim_get_current_win()
+  local win_id_1 = get_win()
   eq(child.api.nvim_tabpage_get_number(0), 2)
   eq(child.fn.winlayout(), { 'leaf', win_id_1 })
 
   -- Should split vertically if there are only minigit buffers visible
   show_range_history({ split = 'auto' })
   eq(child.api.nvim_tabpage_get_number(0), 2)
-  eq(child.fn.winlayout(), { 'row', { { 'leaf', child.api.nvim_get_current_win() }, { 'leaf', win_id_1 } } })
+  eq(child.fn.winlayout(), { 'row', { { 'leaf', get_win() }, { 'leaf', win_id_1 } } })
 end
 
 T['show_range_history()']['does nothing in presence of uncommitted changes'] = function()
@@ -1675,7 +1676,7 @@ T[':Git'] = new_set({
           -- Get supported subcommands
           { { 'out', 'add\nblame\ndiff\nlog\npush\npull\nshow\nl' } },
           -- Get "info showing" subcommands
-          { { 'out', 'diff\nlog\nshow' } },
+          { { 'out', 'blame\ndiff\nlog\nshow' } },
           -- Get aliases
           { { 'out', 'alias.l log -5' } },
         }
@@ -1685,9 +1686,12 @@ T[':Git'] = new_set({
 })
 
 --stylua: ignore
-local validate_command_init_setup = function(init_spawns, executable, cwd)
+local validate_command_init_setup = function(log_index, executable, cwd)
+  log_index = log_index or 1
   executable = executable or 'git'
   cwd = cwd or child.fn.getcwd()
+
+  local spawn_log = get_spawn_log()
 
   -- Get supported subcommands
   local supported_lists = table.concat({
@@ -1698,27 +1702,29 @@ local validate_command_init_setup = function(init_spawns, executable, cwd)
     'others', 'alias',
   }, ',')
   eq(
-    init_spawns[1],
+    spawn_log[log_index],
     { executable = executable, options = {  args = { '--list-cmds=' .. supported_lists }, cwd = cwd } }
   )
 
   -- Get "info showing" subcommands
   local info_lists = table.concat({ 'list-info', 'list-ancillaryinterrogators', 'list-plumbinginterrogators' }, ',')
   eq(
-    init_spawns[2],
+    spawn_log[log_index + 1],
     { executable = executable, options = { args = { '--list-cmds=' .. info_lists }, cwd = cwd } }
   )
 
   -- Get aliases
   eq(
-    init_spawns[3],
+    spawn_log[log_index + 2],
     { executable = executable, options = { args = { 'config','--get-regexp','alias.*', }, cwd = cwd } }
   )
 end
 
-local validate_command_call = function(log_entry, args, executable, cwd)
+local validate_command_call = function(log_index, args, executable, cwd)
   executable = executable or 'git'
   cwd = cwd or child.fn.getcwd()
+
+  local log_entry = get_spawn_log()[log_index]
 
   eq(log_entry.executable, executable)
   eq(log_entry.options.args, args)
@@ -1744,73 +1750,340 @@ T[':Git']['works'] = function()
   child.lua([[
     -- Command stdout
     table.insert(_G.stdio_queue, { { 'out', 'abc1234 Hello\ndef4321 World' } })
+
+    -- Mock non-trivial command execution time
+    _G.process_mock_data = { [4] = { duration = 50 } }
   ]])
 
+  -- Should execute command synchronously
+  local start_time = vim.loop.hrtime()
   child.cmd('Git log --oneline')
+  local duration = 0.000001 * (vim.loop.hrtime() - start_time)
+  eq(50 <= duration and duration <= 70, true)
 
-  -- Should properly gather subcommand data
+  -- Should properly gather subcommand data before executing command
   local spawn_log = get_spawn_log()
-  validate_command_init_setup(vim.list_slice(spawn_log, 1, 3))
-  validate_command_call(spawn_log[4], { 'log', '--oneline' })
+  validate_command_init_setup()
+  validate_command_call(4, { 'log', '--oneline' })
   eq(#spawn_log, 4)
+
+  -- Should in some way show the output
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(get_lines(), { 'abc1234 Hello', 'def4321 World' })
+  eq(child.bo.filetype, 'git')
+  eq(child.bo.buflisted, false)
+  eq(child.bo.swapfile, false)
+  eq(child.wo.foldlevel, 999)
 end
 
-T[':Git']['works asynchronously with bang modifier'] = function() MiniTest.skip() end
+T[':Git']['works asynchronously with bang modifier'] = function()
+  child.lua([[
+    -- Command stdout
+    table.insert(_G.stdio_queue, { { 'out', 'abc1234 Hello\ndef4321 World' } })
 
-T[':Git']['works with abbreviated command modifiers'] = function()
-  -- :vert sil Git
-  MiniTest.skip()
+    -- Mock non-trivial command execution time
+    _G.process_mock_data = { [4] = { duration = 50 } }
+  ]])
+
+  -- Should execute command asynchronously
+  local start_time = vim.loop.hrtime()
+  child.cmd('Git! log')
+  local duration = 0.000001 * (vim.loop.hrtime() - start_time)
+  eq(duration <= small_time, true)
+
+  -- Should properly gather subcommand data before executing command
+  eq(#get_spawn_log(), 4)
+
+  -- Should in some way show the output when the process is done
+  eq(child.bo.filetype == 'git', false)
+  sleep(50 - small_time)
+  eq(child.bo.filetype == 'git', false)
+  sleep(2 * small_time)
+  eq(child.bo.filetype == 'git', true)
 end
 
-T[':Git']['works for subcommands which were not recognized as supported'] = function() MiniTest.skip() end
+T[':Git']['respects command modifiers'] = function()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'abc1234 Hello\ndef4321 World' } })]])
+  local init_win_id = get_win()
+  -- Should also work with abbreviated versions
+  child.cmd('vertical bel Git log')
+  eq(child.bo.filetype, 'git')
+  eq(child.fn.winlayout(), { 'row', { { 'leaf', init_win_id }, { 'leaf', get_win() } } })
+end
+
+T[':Git']['works for subcommands which were not recognized as supported'] = function()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Success' } })]])
+  child.cmd('Git doesnotexist --hello')
+  validate_command_init_setup()
+  validate_command_call(4, { 'doesnotexist', '--hello' })
+  validate_notifications({ { '(mini.git) Success', 'INFO' } })
+  eq(#child.api.nvim_list_tabpages(), 1)
+end
 
 T[':Git']['output'] = new_set()
 
-T[':Git']['output']['in buffer for dedicated subcommands'] = function() MiniTest.skip() end
+T[':Git']['output']['in buffer when explicitly asked'] = function()
+  local validate = function(modifier)
+    child.cmd('%bwipeout')
+    eq(get_lines(), { '' })
+    local init_buf_id = get_buf()
 
-T[':Git']['output']['in buffer when explicitly asked'] = function() MiniTest.skip() end
+    child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Pushed successfully' } })]])
+    child.cmd(modifier .. ' Git push')
+    eq(get_buf() == init_buf_id, false)
+    eq(get_lines(), { 'Pushed successfully' })
+    validate_notifications({})
+  end
 
-T[':Git']['output']['defines proper window/buffer cleanup'] = function() MiniTest.skip() end
+  validate('tab')
+  validate('vertical')
+  validate('vert')
 
-T[':Git']['output']['in notifications when there is nothing to show in buffer'] = function() MiniTest.skip() end
+  if child.fn.has('nvim-0.8') == 1 then
+    validate('horizontal')
+    validate('hor')
+  end
+end
+
+T[':Git']['output']['in notifications when not in buffer'] = function()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Pushed successfully' } })]])
+  local init_buf_id = get_buf()
+  child.cmd('Git push')
+  eq(get_buf() == init_buf_id, true)
+  eq(get_lines(), { '' })
+  validate_notifications({ { '(mini.git) Pushed successfully', 'INFO' } })
+end
+
+T[':Git']['output']['is omitted if no or empty `stdout` was given'] = function()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', '' } })]])
+  child.cmd('Git log')
+  eq(child.bo.filetype == 'git', false)
+  validate_notifications({})
+end
+
+T[':Git']['output']['respects `:silent` modifier'] = function()
+  local validate = function(command)
+    child.cmd('%bwipeout')
+    child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Hello' } })]])
+    local init_buf_id = get_buf()
+    child.cmd(command)
+    eq(get_buf() == init_buf_id, true)
+    eq(get_lines(), { '' })
+    validate_notifications({})
+  end
+
+  -- Should show nothing in buffer
+  validate('silent Git log')
+
+  -- Should show no notifications
+  validate('silent Git push')
+
+  -- Should prefer `:silent` over explicit split modifiers
+  validate('silent vertical Git log')
+end
+
+T[':Git']['output']['respects `:unsilent` modifier'] = function()
+  local validate = function(command)
+    child.cmd('%bwipeout')
+    child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Hello' } })]])
+    local init_buf_id = get_buf()
+    child.cmd(command)
+    eq(get_buf() == init_buf_id, false)
+    eq(get_lines(), { 'Hello' })
+  end
+
+  -- Should prefer `:unsilent` over `:silent`
+  validate('silent unsilent Git log')
+  if child.fn.has('nvim-0.8') == 1 then validate('unsilent silent Git log') end
+end
+
+T[':Git']['output']['defines proper window/buffer cleanup'] = function()
+  -- Should delete buffer when window is closed
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Hello' } })]])
+  child.cmd('vertical Git log')
+
+  local buf_id_1 = get_buf()
+  eq(child.bo.filetype, 'git')
+  eq(get_lines(), { 'Hello' })
+
+  child.cmd('quit')
+  eq(child.api.nvim_buf_is_valid(buf_id_1), false)
+
+  -- Should close window when buffer is deleted
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'World' } })]])
+  child.cmd('vertical Git log')
+  local buf_id_2, win_id_2 = get_buf(), get_win()
+  set_buf(new_scratch_buf())
+  eq(#child.api.nvim_tabpage_list_wins(0), 2)
+  child.api.nvim_buf_delete(buf_id_2, { force = true })
+  eq(#child.api.nvim_tabpage_list_wins(0), 1)
+  eq(get_win() == win_id_2, false)
+end
 
 T[':Git']['can show process errors'] = function()
-  -- Exit code not zero
-  MiniTest.skip()
+  child.lua([[
+    table.insert(_G.stdio_queue, { { 'out', 'Extra info' }, { 'err', 'Error!' } })
+    _G.process_mock_data = { [4] = { exit_code = 1 } }
+  ]])
+
+  child.cmd('Git log')
+  eq(child.api.nvim_tabpage_get_number(0), 1)
+  eq(child.bo.filetype == 'git', false)
+  eq(get_lines(), { '' })
+
+  validate_notifications({ { '(mini.git) Error!\nExtra info', 'ERROR' } })
 end
 
 T[':Git']['can show process warnings'] = function()
-  -- Nonempty stderr with exit_code=0
-  MiniTest.skip()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Hello' }, { 'err', 'Diagnostic' } })]])
+
+  child.cmd('Git log')
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(child.bo.filetype, 'git')
+  eq(get_lines(), { 'Hello' })
+
+  validate_notifications({ { '(mini.git) Diagnostic', 'WARN' } })
 end
 
-T[':Git']['preserves environment variables'] = function() MiniTest.skip() end
+T[':Git']['preserves environment variables'] = function()
+  child.loop.os_setenv('HELLO', 'WORLD')
+
+  child.cmd('Git log')
+  local environ = get_spawn_log()[4].options.env
+  local has_var = false
+  for _, env_pair in ipairs(environ) do
+    if env_pair == 'HELLO=WORLD' then has_var = true end
+  end
+  eq(has_var, true)
+end
 
 T[':Git']['opens `GIT_EDITOR` in current instance'] = function()
   -- Should also ignore timeout
   MiniTest.skip()
 end
 
-T[':Git']['uses correct working directory'] = function() MiniTest.skip() end
+T[':Git']['uses correct working directory'] = function()
+  local root, repo = test_dir_absolute, git_repo_dir
+  local rev_parse_track = repo .. '\n' .. root
+  child.lua('_G.rev_parse_track = ' .. vim.inspect(rev_parse_track))
+  child.lua([[_G.stdio_queue = {
+      -- File tracking
+      { { 'out', _G.rev_parse_track } }, -- Get path to root and repo
+      { { 'out', 'abc1234\nmain' } },    -- Get HEAD data
+      { { 'out', 'M  file-in-git' } },   -- Get file status data
 
-T[':Git']['caches subcommand data'] = function()
-  -- Should collect helper subcommand data only once
-  MiniTest.skip()
+      -- Command initial setup
+      { { 'out', 'add\nblame\ndiff\nlog\npush\npull\nshow\nl' } }, -- Get supported subcommands
+      { { 'out', 'blame\ndiff\nlog\nshow' } },                     -- Get "info showing" subcommands
+      { { 'out', 'alias.l log -5' } },                             -- Get aliases
+
+      -- Command output
+      { { 'out', 'Comment abc1234\nHello' } }
+    }
+  ]])
+
+  edit(git_file_path)
+  eq(get_buf_data().root, root)
+  child.fn.chdir(git_dir_path)
+
+  child.cmd('Git log')
+
+  -- Actual command should be run in file's Git root
+  validate_command_init_setup(4, 'git', child.fn.getcwd())
+  validate_command_call(7, { 'log' }, 'git', root)
 end
 
-T[':Git']['works with no initial subcommand data'] = function() MiniTest.skip() end
+T[':Git']['caches subcommand data'] = function()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Hello' } })]])
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'World' } })]])
 
-T[':Git']['checks for present executable'] = function() MiniTest.skip() end
+  child.cmd('Git log --one')
+  child.cmd('Git log --two')
+  child.cmd('Git log --three')
 
-T[':Git']['respects `job.git_executable`'] = function() MiniTest.skip() end
+  -- Should collect helper subcommand data only once
+  validate_command_init_setup()
+  validate_command_call(4, { 'log', '--one' })
+  validate_command_call(5, { 'log', '--two' })
+  validate_command_call(6, { 'log', '--three' })
+  eq(#get_spawn_log(), 6)
+end
 
-T[':Git']['respects `job.timeout`'] = function() MiniTest.skip() end
+T[':Git']['works with no initial subcommand data'] = function()
+  child.lua([[_G.stdio_queue = {
+    { { 'out', '' } },                          -- Not successful `--list-cmds` for supported commands
+    { { 'out', ''}, { 'err', 'What\nError' } }, -- Not successful `--list-cmds` for info commands
+    { { 'out', '' }, { 'err', 'Error' } },      -- Not successful alias data gathering
 
-T[':Git']['respects `command.split`'] = function() MiniTest.skip() end
+    { {'out', 'Hello'} } -- Command output
+  }]])
+
+  -- Should use some defaults. Like "log" should still show output in buffer.
+  child.cmd('Git log')
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(child.bo.filetype, 'git')
+end
+
+T[':Git']['checks for present executable'] = function()
+  child.lua('vim.fn.executable = function() return 0 end')
+  load_module()
+  validate_notifications({ { '(mini.git) There is no `git` executable', 'WARN' } })
+  clear_notify_log()
+
+  child.cmd('Git log')
+  eq(#get_spawn_log(), 0)
+  validate_notifications({ { '(mini.git) There is no `git` executable', 'ERROR' } })
+end
+
+T[':Git']['respects `job.git_executable`'] = function()
+  child.lua('vim.fn.executable = function() return 1 end')
+  load_module({ job = { git_executable = 'my_git' } })
+
+  child.cmd('Git log')
+  eq(get_spawn_log()[4].executable, 'my_git')
+end
+
+T[':Git']['respects `job.timeout`'] = function()
+  child.lua([[
+    table.insert(_G.stdio_queue, { { 'out', 'Hello' } })
+
+    _G.process_mock_data = { [4] = { duration = 50 } }
+  ]])
+
+  child.lua('MiniGit.config.job.timeout = 20')
+
+  local start_time = vim.loop.hrtime()
+  child.cmd('Git log')
+  local duration = 0.000001 * (vim.loop.hrtime() - start_time)
+  eq(15 <= duration and duration <= 25, true)
+
+  local ref_notify_log = {
+    { '(mini.git) PROCESS REACHED TIMEOUT', 'WARN' },
+    -- Should still process `stdout`/`stderr` which was already supplied
+    -- Shown as error because timeout is treated same as error
+    { '(mini.git) \nHello', 'ERROR' },
+  }
+  validate_notifications(ref_notify_log)
+end
+
+T[':Git']['respects `command.split`'] = function()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Hello' } })]])
+  child.lua([[MiniGit.config.command.split = 'vertical']])
+
+  local init_win_id = get_win()
+  child.cmd('Git log')
+  eq(child.bo.filetype, 'git')
+  eq(child.fn.winlayout(), { 'row', { { 'leaf', get_win() }, { 'leaf', init_win_id } } })
+end
 
 T[':Git']['completion'] = new_set()
 
 T[':Git']['completion']['works'] = function() MiniTest.skip() end
+
+T[':Git']['completion']['works with not supported command'] = function()
+  -- Should not error
+  MiniTest.skip()
+end
 
 T[':Git']['completion']['caches subcommand data'] = function() MiniTest.skip() end
 

@@ -49,7 +49,9 @@
 --     - How completions work: command, options, targets.
 --     - Don't use quotes to make same value. Like `:Git commit -m 'Hello\ world'`
 --       will result into commit message containing quotes.
---     - Use |:cabbrev| to set default modifiers. Lik `cabbrev Git vert Git`.
+--     - Supports |:command-modifiers| which are propagated to |:split|.
+--       Use split modifiers to force show output in a dedicated split.
+--       Use |:silent| modifier to supporess showing any output.
 --     - Triggers `MiniGitCommandDone` `User` event on every done and
 --       `MiniGitCommandSplit` `User` event when a new window split is done.
 
@@ -466,50 +468,8 @@ H.get_buf_var = function(buf_id, name)
 end
 
 H.create_user_commands = function()
-  local git_execute = function(input)
-    if not H.has_git then
-      return H.notify('There is no `' .. MiniGit.config.job.git_executable .. '` executable', 'ERROR')
-    end
-
-    H.ensure_git_subcommands()
-    -- Define Git editor to be used if needed. The way it works is: execute
-    -- command, wait for it to exit, use content of edited file. So to properly
-    -- wait for user to finish edit, start fresh headless process which opens
-    -- file in current session/process. It exits after the user is done editing
-    -- (deletes the buffer or closes the window).
-    H.ensure_git_editor(input.mods)
-    -- NOTE: use `vim.v.progpath` to have same runtime
-    local editor = vim.v.progpath .. ' --clean --headless -u ' .. H.git_editor_config
-
-    -- Setup all environment variables (`vim.loop.spawn()` by default has none)
-    local environ = vim.loop.os_environ()
-    -- - Use Git related variables to use instance for editing
-    environ.GIT_EDITOR, environ.GIT_SEQUENCE_EDITOR, environ.GIT_PAGER = editor, editor, ''
-    -- - Make output as much machine readable as possible
-    environ.NO_COLOR, environ.TERM = 1, 'dumb'
-    local env = {}
-    for k, v in pairs(environ) do
-      table.insert(env, string.format('%s=%s', k, tostring(v)))
-    end
-
-    -- Setup spawn arguments
-    local args = vim.tbl_map(H.expandcmd, input.fargs)
-    local command = { MiniGit.config.job.git_executable, unpack(args) }
-    local cwd = H.get_git_cwd()
-
-    local cmd_data = { cmd_input = input, git_command = command, cwd = cwd }
-    local is_done_track = { done = false }
-    local on_done = H.command_make_on_done(cmd_data, is_done_track)
-
-    H.cli_run(command, cwd, on_done, { env = env })
-
-    -- If needed, synchronously wait for job to finish
-    local sync_check = function() return H.skip_sync or is_done_track.done end
-    if not input.bang then vim.wait(MiniGit.config.job.timeout + 10, sync_check, 1) end
-  end
-
   local opts = { bang = true, nargs = '+', complete = H.command_complete, desc = 'Execute Git command' }
-  vim.api.nvim_create_user_command('Git', git_execute, opts)
+  vim.api.nvim_create_user_command('Git', H.command_impl, opts)
 end
 
 -- Autocommands ---------------------------------------------------------------
@@ -519,6 +479,49 @@ H.auto_enable = vim.schedule_wrap(function(data)
 end)
 
 -- Command --------------------------------------------------------------------
+H.command_impl = function(input)
+  if not H.has_git then
+    return H.notify('There is no `' .. MiniGit.config.job.git_executable .. '` executable', 'ERROR')
+  end
+
+  H.ensure_git_subcommands()
+
+  -- Define Git editor to be used if needed. The way it works is: execute
+  -- command, wait for it to exit, use content of edited file. So to properly
+  -- wait for user to finish edit, start fresh headless process which opens
+  -- file in current session/process. It exits after the user is done editing
+  -- (deletes the buffer or closes the window).
+  H.ensure_git_editor(input.mods)
+  -- NOTE: use `vim.v.progpath` to have same runtime
+  local editor = vim.v.progpath .. ' --clean --headless -u ' .. H.git_editor_config
+
+  -- Setup all environment variables (`vim.loop.spawn()` by default has none)
+  local environ = vim.loop.os_environ()
+  -- - Use Git related variables to use instance for editing
+  environ.GIT_EDITOR, environ.GIT_SEQUENCE_EDITOR, environ.GIT_PAGER = editor, editor, ''
+  -- - Make output as much machine readable as possible
+  environ.NO_COLOR, environ.TERM = 1, 'dumb'
+  local env = {}
+  for k, v in pairs(environ) do
+    table.insert(env, string.format('%s=%s', k, tostring(v)))
+  end
+
+  -- Setup spawn arguments
+  local args = vim.tbl_map(H.expandcmd, input.fargs)
+  local command = { MiniGit.config.job.git_executable, unpack(args) }
+  local cwd = H.get_git_cwd()
+
+  local cmd_data = { cmd_input = input, git_command = command, cwd = cwd }
+  local is_done_track = { done = false }
+  local on_done = H.command_make_on_done(cmd_data, is_done_track)
+
+  H.cli_run(command, cwd, on_done, { env = env })
+
+  -- If needed, synchronously wait for job to finish
+  local sync_check = function() return H.skip_sync or is_done_track.done end
+  if not input.bang then vim.wait(MiniGit.config.job.timeout + 10, sync_check, 1) end
+end
+
 --stylua: ignore
 H.ensure_git_subcommands = function()
   if H.git_subcommands ~= nil then return end
@@ -579,6 +582,16 @@ H.ensure_git_subcommands = function()
   end
   git_subcommands.info = info
 
+  -- Compute commands which aliases implement
+  local alias_data = H.git_cli_output({ 'config', '--get-regexp', 'alias.*' })
+  local alias = {}
+  for _, l in ipairs(alias_data) do
+    -- Assume simple alias of the form `alias.xxx subcommand ...`
+    local alias_cmd, cmd = string.match(l, '^alias%.(%S+) (%S+)')
+    if vim.tbl_contains(supported, cmd) then alias[alias_cmd] = cmd end
+  end
+  git_subcommands.alias = alias
+
   -- Initialize cache for command options. Initialize with `false` so that
   -- actual values are computed lazily when needed for a command.
   local options = { git = false }
@@ -586,16 +599,6 @@ H.ensure_git_subcommands = function()
     options[command] = false
   end
   git_subcommands.options = options
-
-  -- Compute commands which aliases implement
-  local alias_data = H.git_cli_output({ 'config', '--get-regexp', 'alias.*' })
-  local alias = {}
-  for _, l in ipairs(alias_data) do
-    -- Assume simple alias of the form `alias.xxx subcommand ...`
-    local alias_cmd, cmd = string.match(l, '^alias%.(%S+) (%S+)')
-    if options[cmd] ~= nil then alias[alias_cmd] = cmd end
-  end
-  git_subcommands.alias = alias
 
   -- Cache results
   H.git_subcommands = git_subcommands
@@ -663,7 +666,7 @@ end
 
 H.command_show_stdout = function(cmd_data)
   local stdout, mods, subcommand = cmd_data.stdout, cmd_data.cmd_input.mods, cmd_data.git_subcommand
-  if stdout == '' or mods:find('silent') ~= nil then return end
+  if stdout == '' or (mods:find('silent') ~= nil and mods:find('unsilent') == nil) then return end
 
   -- Show in split if explicitly forced or the command shows info.
   -- Use `vim.notify` otherwise.
@@ -1351,7 +1354,10 @@ H.cli_run = function(command, cwd, on_done, opts)
 
   local out, err, is_done = {}, {}, false
   local on_exit = function(code)
+    -- Ensure calling this only once
+    if is_done then return end
     is_done = true
+
     if process:is_closing() then return end
     process:close()
 
