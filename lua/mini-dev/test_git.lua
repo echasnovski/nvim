@@ -497,6 +497,51 @@ T['show_diff_source()']['correctly identifies source'] = function()
   validate_ok(46, commit_after_2, 'dir/file1', 247)
 end
 
+T['show_diff_source()']['works when there is no "before" file'] = function()
+  child.lua([[_G.stdio_queue = {
+    { { 'out', 'Line 1\nCurrent line 2\nLine 3' } }, -- Diff source
+  }]])
+  set_lines({
+    'commit 5ed8432441b495fa9bd4ad2e4f635bae64e95cc2',
+    'Author: Neo McVim <neo.mcvim@gmail.com>',
+    'Date:   Sat May 4 16:24:15 2024 +0300',
+    '',
+    'Add file.',
+    '',
+    'diff --git a/file b/file',
+    'new file mode 100644',
+    'index 0000000..f9264f7',
+    '--- /dev/null',
+    '+++ b/file',
+    '@@ -0,0 +1,2 @@',
+    '+Hello',
+    '+World',
+  })
+
+  -- Target "before" should do nothing while showing notification
+  local init_buf_id = get_buf()
+  set_cursor(13, 0)
+
+  show_diff_source({ target = 'before' })
+  eq(get_buf(), init_buf_id)
+  eq(child.api.nvim_buf_get_name(0), '')
+
+  validate_git_spawn_log({})
+  clear_spawn_log()
+  validate_notifications({ { '(mini.git) Could not find "before" file', 'WARN' } })
+  clear_notify_log()
+
+  -- Target "both" should show only "after" in a specified split
+  set_cursor(13, 0)
+  show_diff_source({ target = 'both' })
+
+  eq(child.api.nvim_tabpage_get_number(0), 2)
+  eq(#child.api.nvim_tabpage_list_wins(0), 1)
+  validate_minigit_name(0, 'show 5ed8432441b495fa9bd4ad2e4f635bae64e95cc2:file')
+
+  validate_notifications({ { '(mini.git) Could not find "before" file', 'WARN' } })
+end
+
 T['show_diff_source()']['does not depend on cursor column'] = function()
   local buf_id = get_buf()
   for i = 0, 10 do
@@ -780,6 +825,13 @@ T['show_range_history()']['works in output of `show_diff_source()`'] = function(
   validate_git_spawn_log(ref_git_spawn_log)
 
   validate_minigit_name(0, 'log -L2,2:dir/file-after 5ed8432441b495fa9bd4ad2e4f635bae64e95cc2')
+end
+
+T['show_range_history()']['works with `diff_foldexpr`'] = function()
+  child.cmd('au FileType git setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr()')
+  show_range_history()
+  eq(child.wo.foldmethod, 'expr')
+  eq(child.wo.foldexpr, 'v:lua.MiniGit.diff_foldexpr()')
 end
 
 T['show_range_history()']['respects `opts.line_start` and `opts.line_end`'] = function()
@@ -1920,6 +1972,15 @@ T[':Git']['output']['defines proper window/buffer cleanup'] = function()
   eq(get_win() == win_id_2, false)
 end
 
+T[':Git']['output']['respects aliases'] = function()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'Commit abc12345\nHello' } })]])
+  -- The `l` is a an alias for `log -5` according to initial command setup
+  -- Thus should show output in a split (because 'log' does)
+  child.cmd('Git l')
+  eq(get_lines(), { 'Commit abc12345', 'Hello' })
+  eq(child.bo.filetype, 'git')
+end
+
 T[':Git']['can show process errors'] = function()
   child.lua([[
     table.insert(_G.stdio_queue, { { 'out', 'Extra info' }, { 'err', 'Error!' } })
@@ -2076,18 +2137,44 @@ T[':Git']['respects `command.split`'] = function()
   eq(child.fn.winlayout(), { 'row', { { 'leaf', get_win() }, { 'leaf', init_win_id } } })
 end
 
-T[':Git']['completion'] = new_set()
+T[':Git']['completion'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.fn.chdir(test_dir_absolute)
+      child.lua([[_G.help_lines = vim.fn.readfile('help-output')]])
+      child.lua([[_G.help_output = { { 'out', table.concat(_G.help_lines, '\n') } }]])
 
-T[':Git']['completion']['works'] = function() MiniTest.skip() end
+      child.set_size(15, 30)
+      child.o.cmdheight = 3
+    end,
+  },
+})
 
-T[':Git']['completion']['works with not supported command'] = function()
-  -- Should not error
-  MiniTest.skip()
-end
+T[':Git']['completion']['works with subcommands'] = function() MiniTest.skip() end
 
 T[':Git']['completion']['caches subcommand data'] = function() MiniTest.skip() end
 
+T[':Git']['completion']['works with options'] = function() MiniTest.skip() end
+
 T[':Git']['completion']['caches option candidates'] = function() MiniTest.skip() end
+
+T[':Git']['completion']['works with subcommand targets'] = function() MiniTest.skip() end
+
+T[':Git']['completion']['works with explicit paths'] = function()
+  -- Should "incrementally" suggest paths if after explicit " -- "
+  MiniTest.skip()
+end
+
+T[':Git']['completion']['works with not supported command'] = function()
+  -- -- Should not error neither for option nor for target
+  -- type_keys(':Git doesnotexist ', '<Tab>')
+  -- child.expect_screenshot()
+  -- type_keys('-', '<Tab>')
+  -- child.expect_screenshot()
+  -- type_keys('- ', '<Tab>')
+  -- child.expect_screenshot()
+  MiniTest.skip()
+end
 
 T[':Git']['events'] = new_set()
 

@@ -12,13 +12,9 @@
 -- - Range history:
 --
 -- - Show at cursor:
---     - Stop using `:Git` command in favor of direct `show_in_split()`.
 --
 -- Tests:
 -- - Command:
---     - Can work with abbreviated modifiers, like `:hor Git`, etc.
---     - Forces split with explicit split modifier.
---     - Works with simple aliases: provides options and correctly opens split.
 --     - Completion:
 --         - Some options are explicitly documented in both `--xxx` and
 --           `--xxx=` forms:
@@ -28,14 +24,6 @@
 --         - Single dash options can have more than one char: `git branch -vv`.
 --         - Should respect `\ ` in base.
 --         - Should smartly set filetype.
---
--- - Diff source:
---     - Should work for when "before" source is not available (like when file
---       was just created).
---     - Should work when cursor is at the first hunk line and it is '-'
---       (target line should not be zero).
---     - Should **not** work when cursor is between header (starting from
---       "comit " line) and first hunk.
 --
 --
 -- Docs:
@@ -235,13 +223,20 @@ MiniGit.show_diff_source = function(opts)
     H.show_in_split(mods, lines, 'show', table.concat(args, ' '))
   end
 
-  if target ~= 'after' and src.path_before ~= nil then
-    show(src.commit_before, src.path_before, split)
-    vim.api.nvim_win_set_cursor(0, { src.lnum_before, 0 })
+  local has_before_shown = false
+  if target ~= 'after' then
+    -- "Before" file can be absend if hunk is from newly added file
+    if src.path_before == nil then
+      H.notify('Could not find "before" file', 'WARN')
+    else
+      show(src.commit_before, src.path_before, split)
+      vim.api.nvim_win_set_cursor(0, { src.lnum_before, 0 })
+      has_before_shown = true
+    end
   end
 
   if target ~= 'before' then
-    local mods_after = target == 'after' and split or 'belowright vertical'
+    local mods_after = has_before_shown and 'belowright vertical' or split
     show(src.commit_after, src.path_after, mods_after)
     vim.api.nvim_win_set_cursor(0, { src.lnum_after, 0 })
   end
@@ -927,26 +922,28 @@ end
 
 -- Show stdout ----------------------------------------------------------------
 H.show_in_split = function(mods, lines, subcmd, name)
+  -- Create a target window split
+  mods = H.ensure_mods_is_split(mods)
+  local win_source = vim.api.nvim_get_current_win()
+  vim.cmd(mods .. ' split')
+  local win_stdout = vim.api.nvim_get_current_win()
+
   -- Prepare buffer
   local buf_id = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(buf_id, 'minigit://' .. buf_id .. '/' .. name)
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
 
+  vim.api.nvim_set_current_buf(buf_id)
+  H.define_minigit_window()
+
+  -- NOTE: set filetype when buffer is in window to allow setting window-local
+  -- options in autocommands for `FileType` events
   local filetype
   if subcmd == 'diff' then filetype = 'diff' end
   if subcmd == 'log' or subcmd == 'blame' then filetype = 'git' end
   -- TODO: Remove after compatibility with Neovim=0.7 is dropped
   if subcmd == 'show' and vim.fn.has('nvim-0.8') == 1 then filetype = vim.filetype.match({ buf = buf_id }) end
   if filetype ~= nil then vim.bo[buf_id].filetype = filetype end
-
-  -- Create a target window split with new buffer
-  mods = H.ensure_mods_is_split(mods)
-  local win_source = vim.api.nvim_get_current_win()
-  vim.cmd(mods .. ' split')
-  local win_stdout = vim.api.nvim_get_current_win()
-
-  vim.api.nvim_set_current_buf(buf_id)
-  H.define_minigit_window()
 
   return win_source, win_stdout
 end
