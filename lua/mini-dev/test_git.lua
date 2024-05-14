@@ -1726,7 +1726,7 @@ T[':Git'] = new_set({
       child.lua([[
         _G.stdio_queue = {
           -- Get supported subcommands
-          { { 'out', 'add\nblame\ndiff\nlog\npush\npull\nshow\nl' } },
+          { { 'out', 'add\nblame\ndiff\nlog\npush\npull\nshow\nreflog\nl' } },
           -- Get "info showing" subcommands
           { { 'out', 'blame\ndiff\nlog\nshow' } },
           -- Get aliases
@@ -2144,53 +2144,336 @@ T[':Git']['completion'] = new_set({
       child.lua([[_G.help_lines = vim.fn.readfile('help-output')]])
       child.lua([[_G.help_output = { { 'out', table.concat(_G.help_lines, '\n') } }]])
 
-      child.set_size(15, 30)
-      child.o.cmdheight = 3
+      child.set_size(16, 32)
+      child.o.cmdheight = 2
+      child.o.laststatus = 0
     end,
   },
 })
 
-T[':Git']['completion']['works with subcommands'] = function() MiniTest.skip() end
+local validate_command_completion = function(line, col)
+  local line_len = vim.api.nvim_strwidth(line)
+  col = col or (line_len + 1)
+  if col < 0 then col = line_len + 1 + col end
 
-T[':Git']['completion']['caches subcommand data'] = function() MiniTest.skip() end
+  type_keys('<C-c>', line)
+  for _ = line_len, col, -1 do
+    type_keys('<Left>')
+  end
+  type_keys('<Tab>')
+  child.expect_screenshot()
+end
 
-T[':Git']['completion']['works with options'] = function() MiniTest.skip() end
+T[':Git']['completion']['works with subcommands'] = function()
+  validate_command_completion(':Git ')
+  validate_command_completion(':Git l')
 
-T[':Git']['completion']['caches option candidates'] = function() MiniTest.skip() end
+  -- Should work if there is text afterwards
+  validate_command_completion(':Git  -v', -3)
 
-T[':Git']['completion']['works with subcommand targets'] = function() MiniTest.skip() end
+  -- Should also work with two word subcommands
+  validate_command_completion(':Git reflog')
+  validate_command_completion(':Git reflog -v', -3)
+end
+
+T[':Git']['collects data about available subcommands'] = function()
+  type_keys(':Git ', '<Tab>')
+  validate_command_init_setup()
+
+  -- Should cache result and do this only once
+  type_keys('<C-c>', ':Git ', '<Tab>')
+  eq(#get_spawn_log(), 3)
+end
+
+T[':Git']['completion']['works with options'] = function()
+  child.set_size(20, 32)
+  child.lua('table.insert(_G.stdio_queue, _G.help_output)')
+
+  -- Should get output by making CLI call
+  validate_command_completion(':Git push -')
+
+  local spawn_log = get_spawn_log()
+  eq(#spawn_log, 4)
+  eq(spawn_log[4].options, { args = { 'help', '--man', 'push' }, cwd = child.fn.getcwd() })
+
+  -- Should work several times
+  type_keys(' --', '<Tab>')
+  child.expect_screenshot()
+
+  -- Should pre-filter candidates
+  validate_command_completion(':Git push --')
+  validate_command_completion(':Git push --no')
+
+  -- Should work when there is text afterwards
+  validate_command_completion(':Git push -- origin', -7)
+
+  -- Should cache option candidates for particular subcommand
+  eq(get_spawn_log(), spawn_log)
+
+  -- Works with aliases
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', '' } })]])
+  validate_command_completion(':Git l -')
+
+  spawn_log = get_spawn_log()
+  eq(#spawn_log, 5)
+  -- - Should try to parse help page for the command it is aliased to
+  eq(spawn_log[5].options, { args = { 'help', '--man', 'log' }, cwd = child.fn.getcwd() })
+end
 
 T[':Git']['completion']['works with explicit paths'] = function()
-  -- Should "incrementally" suggest paths if after explicit " -- "
-  MiniTest.skip()
+  child.set_size(15, 40)
+
+  -- Should incrementally suggest paths relative to root after explicit " -- "
+  type_keys(':Git add -- ', '<Tab>')
+  child.expect_screenshot()
+
+  -- Should allow pressing "/" to continue completion immediately
+  type_keys('/', '<Tab>')
+  child.expect_screenshot()
+
+  -- Should not error if there is no present paths to complete from
+  type_keys('aa', '<Tab>')
+  child.expect_screenshot()
+
+  -- Should work multiple times
+  type_keys(' f', '<Tab>')
+  child.expect_screenshot()
+end
+
+T[':Git']['completion']['uses correct working directory for paths'] = function()
+  mock_init_track_stdio_queue()
+  child.lua([[_G.stdio_queue = {
+    _G.init_track_stdio_queue[1],
+    _G.init_track_stdio_queue[2],
+    _G.init_track_stdio_queue[3],
+
+    -- Get initial data about subcommands
+    { { 'out', 'add\nblame\ndiff\nlog\npush\npull\nshow\nreflog\nl' } },
+    { { 'out', 'blame\ndiff\nlog\nshow' } },
+    { { 'out', 'alias.l log -5' } },
+  }]])
+
+  child.fn.chdir(test_dir_absolute)
+  edit(git_file_path)
+  validate_command_completion(':Git add -- ')
+end
+
+--stylua: ignore
+T[':Git']['completion']['works with subcommand targets'] = function()
+  child.set_size(15, 20)
+  child.lua([[
+    _G.subcommands_with_special_targets = {
+      'add', 'mv', 'restore', 'rm',
+      'diff', 'grep', 'log', 'show',
+      'branch', 'commit', 'merge', 'rebase', 'reset', 'switch', 'tag',
+      'fetch', 'push', 'pull',
+      'checkout', 'config', 'help'
+    }
+    _G.supported = table.concat(_G.subcommands_with_special_targets, '\n')
+
+    _G.stdio_queue = {
+      -- Get initial data about subcommands
+      { { 'out', _G.supported .. '\nl' } },
+      { { 'out', 'blame\ndiff\nlog\nshow' } },
+      { { 'out', 'alias.l log -5' } },
+
+      -- Mock calls for getting completion candidates
+      { {'out', 'main\nv0.1.0'} },              -- log
+      { {'out', 'main\nv0.2.0'} },              -- show
+      { {'out', 'main\ntmp'} },                 -- branch
+      { {'out', 'main\ntmp2'} },                -- merge
+      { {'out', 'main\ntmp3'} },                -- rebase
+      { {'out', 'main\nv0.3.0'} },              -- reset
+      { {'out', 'main\ntmp4'} },                -- switch
+      { {'out', 'v0.1.0\nv0.2.0'} },            -- tag
+      { {'out', 'origin\nupstream'} },          -- remote
+      { {'out', 'origin\nupstream2'} },         -- push
+      { {'out', 'origin\norigin2'} },           -- push 2
+      { {'out', 'main\nv0.4.0'} },              -- push 3
+      { {'out', 'main\nv0.4.0'} },              -- push 4
+      { {'out', 'main\nv0.4.0'} },              -- push 5
+      { {'out', 'origin\nupstream3'} },         -- pull
+      { {'out', 'origin\norigin3'} },           -- pull 2
+      { {'out', 'main\nv0.5.0'} },              -- pull 3
+      { {'out', 'main\nv0.5.0'} },              -- pull 4
+      { {'out', 'main\nv0.5.0'} },              -- pull 5
+      { {'out', 'main\nv0.6.0'} },              -- checkout
+      { {'out', 'author.email\nauthor.name'} }, -- config
+      { {'out', 'main\nv0.1.0'} },              -- l (`log` alias)
+    }]])
+
+  local validate_latest_spawn_args = function(ref_args)
+    local spawn_log = get_spawn_log()
+    eq(spawn_log[#spawn_log].options.args, ref_args)
+  end
+
+  validate_command_completion(':Git add ')     -- path
+  validate_command_completion(':Git mv ')      -- path
+  validate_command_completion(':Git restore ') -- path
+  validate_command_completion(':Git rm ')      -- path
+  validate_command_completion(':Git diff ')    -- path
+  validate_command_completion(':Git grep ')    -- path
+
+  validate_command_completion(':Git log ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+
+  validate_command_completion(':Git show ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+
+  validate_command_completion(':Git branch ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches' })
+
+  validate_command_completion(':Git commit ') -- path
+
+  validate_command_completion(':Git merge ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches' })
+
+  validate_command_completion(':Git rebase ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches' })
+
+  validate_command_completion(':Git reset ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+
+  validate_command_completion(':Git switch ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches' })
+
+  validate_command_completion(':Git tag ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--tags' })
+
+  validate_command_completion(':Git fetch ') -- CLI
+  validate_latest_spawn_args({ 'remote' })
+
+  validate_command_completion(':Git push ') -- CLI
+  validate_latest_spawn_args({ 'remote' })
+  validate_command_completion(':Git push origin')
+  validate_latest_spawn_args({ 'remote' })
+  validate_command_completion(':Git push origin ')
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+  validate_command_completion(':Git push origin v')
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+  validate_command_completion(':Git push origin main ')
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+
+  validate_command_completion(':Git pull ') -- CLI
+  validate_latest_spawn_args({ 'remote' })
+  validate_command_completion(':Git pull origin')
+  validate_latest_spawn_args({ 'remote' })
+  validate_command_completion(':Git pull origin ')
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+  validate_command_completion(':Git pull origin v')
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+  validate_command_completion(':Git pull origin main ')
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
+
+  validate_command_completion(':Git checkout ') -- CLI
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags', '--remotes' })
+
+  validate_command_completion(':Git config ') -- CLI
+  validate_latest_spawn_args({ 'help', '--config-for-completion' })
+
+  validate_command_completion(':Git help ') -- Supported commands plus a bit
+
+  -- Should also work with aliases
+  validate_command_completion(':Git l ') -- CLI, same as log
+  validate_latest_spawn_args({ 'rev-parse', '--symbolic', '--branches', '--tags' })
 end
 
 T[':Git']['completion']['works with not supported command'] = function()
-  -- -- Should not error neither for option nor for target
-  -- type_keys(':Git doesnotexist ', '<Tab>')
-  -- child.expect_screenshot()
-  -- type_keys('-', '<Tab>')
-  -- child.expect_screenshot()
-  -- type_keys('- ', '<Tab>')
-  -- child.expect_screenshot()
-  MiniTest.skip()
+  -- Should suggest commands
+  type_keys(':Git doesnotexist ', '<Tab>')
+  child.expect_screenshot()
+
+  -- Should suggest nothing
+  type_keys('<C-w>', '-', '<Tab>')
+  child.expect_screenshot()
+
+  -- Should suggest paths
+  type_keys('- ', '<Tab>')
+  child.expect_screenshot()
 end
 
-T[':Git']['events'] = new_set()
+T[':Git']['completion']['works with present command modifiers'] = function()
+  type_keys(':vert silent Git ', '<Tab>')
+  child.expect_screenshot()
+end
 
-T[':Git']['events']['`MiniGitCommandDone` works'] = function()
+T[':Git']['events are triggered'] = function()
+  child.lua([[
+    -- Command stdout
+    table.insert(_G.stdio_queue, { { 'out', 'abc1234 Hello\ndef4321 World' } })
+    table.insert(_G.stdio_queue, { { 'out', '' }, { 'err', 'There was error' } })
+
+    _G.process_mock_data = { [#_G.stdio_queue] = { exit_code = 1 }}
+  ]])
+
+  child.lua([[
+    _G.au_log = {}
+    local track = function(data) table.insert(_G.au_log, data) end
+    local opts = { pattern = { 'MiniGitCommandDone', 'MiniGitCommandSplit' }, callback = track }
+    vim.api.nvim_create_autocmd('User', opts)
+  ]])
+
+  local init_win_id = get_win()
+  child.cmd(':vertical Git log')
+  child.cmd(':Git push origin main')
+
+  local au_log = child.lua_get('_G.au_log')
+  local events = vim.tbl_map(function(t) return t.match end, au_log)
+  eq(events, { 'MiniGitCommandDone', 'MiniGitCommandSplit', 'MiniGitCommandDone' })
+
   -- Supplies proper data table in Neovim>=0.8
-  MiniTest.skip()
+  if child.fn.has('nvim-0.8') == 0 then return end
+
+  local log_done = au_log[1].data
+  eq(type(log_done.cmd_input), 'table')
+  eq(log_done.cmd_input.fargs, { 'log' })
+  log_done.cmd_input = nil
+  eq(log_done, {
+    cwd = child.fn.getcwd(),
+    exit_code = 0,
+    git_command = { 'git', 'log' },
+    git_subcommand = 'log',
+    stderr = '',
+    stdout = 'abc1234 Hello\ndef4321 World',
+  })
+
+  local log_split = au_log[2].data
+  eq(log_split.git_command, { 'git', 'log' })
+  eq(log_split.win_source, init_win_id)
+  eq(log_split.win_stdout, get_win())
+
+  local push_err = au_log[3].data
+  push_err.cmd_input = nil
+  eq(push_err, {
+    cwd = child.fn.getcwd(),
+    exit_code = 1,
+    git_command = { 'git', 'push', 'origin', 'main' },
+    git_subcommand = 'push',
+    stderr = 'There was error',
+    stdout = '',
+  })
 end
 
-T[':Git']['events']['`MiniGitCommandSplit` works'] = function()
-  -- Supplies proper data table in Neovim>=0.8
-  MiniTest.skip()
-end
+T[':Git']['event `MiniGitCommandSplit` can be used to tweak window-local options'] = function()
+  if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('Requires `data` field supplied to autocommand callback.') end
 
-T[':Git']['events']['`MiniGitCommandSplit` can be used to tweak window-local options'] = function()
-  -- Like vim.wo.foldlevel
-  MiniTest.skip()
+  child.lua([[table.insert(_G.stdio_queue, { { 'out', 'abc1234 Hello\ndef4321 World' } })]])
+  child.lua([[
+    local modify_win_opts = function(data)
+      local win_source, win_stdout = data.data.win_source, data.data.win_stdout
+      vim.wo[win_source].scrollbind = true
+      vim.wo[win_stdout].scrollbind = true
+      vim.wo[win_stdout].foldlevel = 0
+    end
+    local opts = { pattern = 'MiniGitCommandSplit', callback = modify_win_opts }
+    vim.api.nvim_create_autocmd('User', opts)
+  ]])
+
+  local init_win_id = get_win()
+  child.cmd(':Git log')
+  eq(child.api.nvim_win_get_option(init_win_id, 'scrollbind'), true)
+  eq(child.api.nvim_win_get_option(0, 'scrollbind'), true)
+  eq(child.api.nvim_win_get_option(0, 'foldlevel'), 0)
 end
 
 return T

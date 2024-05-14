@@ -39,6 +39,7 @@ OPTIONS
 
        --[no-]signed, --signed=(true|false|if-asked)
            This is some hard to parse options.
+           Should prefer '--signed' over '--signed='.
 
        --receive-pack=<git-receive-pack>, --exec=<git-receive-pack>
            Another hard to parse.

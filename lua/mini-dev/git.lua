@@ -547,6 +547,7 @@ H.ensure_git_subcommands = function()
   -- Keep those lists manual as there is no good way to compute lazily.
   local complete = vim.deepcopy(supported)
   local add_twoword = function(prefix, suffixes)
+    if not vim.tbl_contains(supported, prefix) then return end
     for _, suf in ipairs(suffixes) do table.insert(complete, prefix .. ' ' .. suf) end
   end
   add_twoword('bundle',           { 'create', 'list-heads', 'unbundle', 'verify' })
@@ -721,13 +722,15 @@ H.command_get_complete_candidates = function(line, col, base)
 
   -- Determine command candidates:
   -- - Commannd options if complete base starts with "-".
+  -- - Paths if after explicit "--".
   -- - Git commands if there is none fully formed yet or cursor is at the end
   --   of the command (to also suggest subcommands).
   -- - Command targets specific for each command (if present).
   if vim.startswith(base, '-') then return H.command_complete_option(subcmd) end
-  if subcmd_end == math.huge or (subcmd_end - 1) == col then return H.git_subcommands.complete, 'subcommand' end
   if line:sub(1, col):find(' -- ') ~= nil then return H.command_complete_path(cwd, base) end
+  if subcmd_end == math.huge or (subcmd_end - 1) == col then return H.git_subcommands.complete, 'subcommand' end
 
+  subcmd = H.git_subcommands.alias[subcmd] or subcmd
   local complete_targets = H.command_complete_subcommand_targets[subcmd]
   if complete_targets == nil then return {}, nil end
   return complete_targets(cwd, base, line)
@@ -849,13 +852,6 @@ H.command_complete_pullpush = function(cwd, _, line)
   return H.git_cli_output({ 'rev-parse', '--symbolic', '--branches', '--tags' }, cwd), 'ref'
 end
 
-H.git_cli_output = function(args, cwd)
-  local command = { MiniGit.config.job.git_executable, unpack(args) }
-  local res = H.cli_run(command, cwd).out
-  if res == '' then return {} end
-  return vim.split(res, '\n')
-end
-
 H.make_git_cli_complete = function(args, complete_type)
   return function(cwd, _) return H.git_cli_output(args, cwd), complete_type end
 end
@@ -969,6 +965,13 @@ H.define_minigit_window = function(cleanup)
   local events = { 'WinClosed', 'BufDelete', 'BufWipeout', 'VimLeave' }
   local opts = { nested = true, callback = finish, desc = 'Cleanup window and buffer' }
   finish_au_id = vim.api.nvim_create_autocmd(events, opts)
+end
+
+H.git_cli_output = function(args, cwd)
+  local command = { MiniGit.config.job.git_executable, unpack(args) }
+  local res = H.cli_run(command, cwd).out
+  if res == '' then return {} end
+  return vim.split(res, '\n')
 end
 
 -- Validators -----------------------------------------------------------------
@@ -1252,10 +1255,9 @@ H.update_buf_data = function(buf_id, new_data)
 end
 
 -- History navigation ---------------------------------------------------------
---- Assuming buffer contains unified combined diff (with "commit" header),
---- compute path, line number, and commit of both "before" and "after" files.
---- Allow cursor to be between "--- a/xxx" line and last line of a hunk.
----@private
+-- Assuming buffer contains unified combined diff (with "commit" header),
+-- compute path, line number, and commit of both "before" and "after" files.
+-- Allow cursor to be between "--- a/xxx" line and last line of a hunk.
 H.diff_pos_to_source = function()
   local lines, lnum = vim.api.nvim_buf_get_lines(0, 0, -1, false), vim.fn.line('.')
 
