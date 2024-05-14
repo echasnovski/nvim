@@ -1,47 +1,10 @@
 -- TODO:
 --
 -- Code:
--- - Think about directly setting up HEAD data for new buffer if it was already
---   computed. Probably, requires separate `H.roots` cache.
---
--- - Command:
---     - Unify subcommand parsing for `on_done` and completion candidates.
---
--- - Diff source:
---
--- - Range history:
---
--- - Show at cursor:
 --
 -- Tests:
--- - Command:
---     - Completion:
---         - Some options are explicitly documented in both `--xxx` and
---           `--xxx=` forms:
---           `--[no-]signed, --signed=(true|false|if-asked)` or
---           `--[no-]force-with-lease, --force-with-lease=<refname>,
---           --force-with-lease=<refname>:<expect>` from `git push`.
---         - Single dash options can have more than one char: `git branch -vv`.
---         - Should respect `\ ` in base.
---         - Should smartly set filetype.
---
 --
 -- Docs:
--- - Useful examples:
---     - Use `:Git -C <cwd>` to execute command in current working directory.
---     - Use `:vert Git show <cword>` to show word under cursor in a split
---       (like commit, branch, etc.).
---     - How to use exported helpers to navigate Git history.
---
--- - Command:
---     - How completions work: command, options, targets.
---     - Don't use quotes to make same value. Like `:Git commit -m 'Hello\ world'`
---       will result into commit message containing quotes.
---     - Supports |:command-modifiers| which are propagated to |:split|.
---       Use split modifiers to force show output in a dedicated split.
---       Use |:silent| modifier to supporess showing any output.
---     - Triggers `MiniGitCommandDone` `User` event on every done and
---       `MiniGitCommandSplit` `User` event when a new window split is done.
 
 --- *mini.git* Git integration
 --- *MiniGit*
@@ -53,8 +16,10 @@
 --- Features:
 ---
 --- - Automated tracking of Git related data: root path, status, HEAD, etc.
+---   See |MiniGit.enable()| and |MiniGit.get_buf_data()| for more information.
 ---
---- - |:Git| command for executing any Git command inside current Neovim instance.
+--- - |:Git| command for executing any Git command inside file's repository root
+---   and showing its output in current Neovim instance.
 ---
 --- - Helper functions to inspect Git history:
 ---     - |MiniGit.show_range_history()| shows how certain line range evolved.
@@ -63,14 +28,16 @@
 ---
 --- What it doesn't do:
 ---
---- - Provide functionality to work Git outside of integration with current
----   Neovim instance. General rule: if something does not rely on a particular
----   state of current Neovim (opened buffers, etc.), it is out of scope.
----   For more functionality, use fully featured Git client.
+--- - Provide functionality to work with Git outside of already present current
+---   Neovim instance integration. General rule: if functionality does not rely on
+---   a state of current Neovim (opened buffers, etc.), it is out of scope.
+---   For more functionality, use either |MiniDiff| or fully featured Git client.
 ---
 --- Sources with more details:
---- - |MiniGit-overview|
 --- - |:Git|
+--- - |MiniGit-examples|
+--- - |MiniGit.enable()|
+--- - |MiniGit.get_buf_data()|
 ---
 --- # Setup ~
 ---
@@ -83,32 +50,175 @@
 --- # Comparisons ~
 ---
 --- - 'tpope/vim-fugitive':
----     - Has more functionality as a dedicated Git client.
----     - Does not provide buffer-local data related to Git.
+---     - Mostly a dedicated Git client, while this module is not (by design).
+---     - Provides buffer-local Git data only through fixed statusline component,
+---       while this module richer data in the form of a general table.
+---     - Both provide |:Git| command with 'vim-fugitive' treating some cases
+---       extra specially (like `:Git blame`, etc.), while this module mostly
+---       treats all cases the same. See |MiniGit-examples| for how they can be
+---       manually customized.
+---       Also this module provides slightly different (usually richer)
+---       completion suggestions.
+---
 --- - 'NeogitOrg/neogit':
----     - Has more functionality as a dedicated Git client.
+---     - Similar to 'tpope/vim-fugitive', but without `:Git` command.
+---
+--- - 'lewis6991/gitsigns.nvim':
+---     - Provides buffer-local Git data with emphasis on granular diff status,
+---       while this module also has some extra data (file status, etc.).
+---     - No other functionality overlap.
 ---
 --- # Disabling ~
 ---
---- To temporarily disable features without relying on |MiniGit.disable()|,
---- set `vim.g.minigit_disable` (globally) or `vim.b.minigit_disable` (for
---- a buffer) to `true`. Considering high number of different scenarios and
---- customization intentions, writing exact rules for disabling module's
---- functionality is left to user.
+--- To prevent buffer(s) from being tracked, set `vim.g.minigit_disable`
+--- (globally) or `vim.b.minigit_disable` (for a buffer) to `true`.
+--- Considering high number of different scenarios and customization intentions,
+--- writing exact rules for disabling module's functionality is left to user.
 --- See |mini.nvim-disabling-recipes| for common recipes.
 
---- - Use |MiniGit.show_at_cursor()| to search through history.
----     - Call inside buffer for already committed file shows the evolution of
----       that particular line through history. This also works inside buffers
----       resulted from the |MiniGit.show_diff_source()| call and show history
----       up to its commit.
----     - To inspect certain commit in full, call the function when cursor is
----       on the commit hash. This is equivalent to `:Git show <cword>`.
----     - To inspect certain file in the state how it was at certain change,
----       call when cursor is inside change hunk or on file names above it.
+--- # Statusline components ~
+---
+--- Tracked buffer data can be used to create custom statusline components: >
+---
+---   local section_git_head = function()
+---     local summary = vim.b.minigit_summary or {}
+---     local res = summary.head_name
+---     if res == nil then return '' end
+---
+---     res = ' ' .. (res == 'HEAD' and summary.head:sub(1, 7) or res)
+---     local in_progress = summary.in_progress
+---     if in_progress == nil or in_progress == '' then return res end
+---     return res .. '|' .. in_progress
+---   end
+---
+---   local section_git_status = function()
+---     local res = (vim.b.minigit_summary or {}).status
+---     if res == nil then return '' end
+---     return res == '  ' and '' or ('(' .. res .. ')')
+---   end
+--- <
+--- # Tweaking command output ~
+---
+--- Buffer output of |:Git| command can be tweaked for better experience inside
+--- autocommand for `MiniGitCommandSplit` `User` event (see |MiniGit-command-events|).
+--- For example, to make `:vertical Git blame -- %` align blame output with
+--- the current window state, use the following code: >
+---
+---   local better_blame = function(au_data)
+---     if au_data.data.git_subcommand ~= 'blame' then return end
+---
+---     -- Align blame window with blamed one
+---     local win_src = au_data.data.win_source
+---     vim.fn.winrestview({ topline = vim.fn.line('w0', win_src) })
+---     vim.api.nvim_win_set_cursor(0, { vim.fn.line('.', win_src), 0 })
+---     vim.wo.wrap = false
+---
+---     -- Bind both windows so that they scrolled together
+---     vim.wo[win_src].scrollbind, vim.wo.scrollbind = true, true
+---   end
+---
+---   local au_opts = { pattern = 'MiniGitCommandSplit', callback = better_blame }
+---   vim.api.nvim_create_autocmd('User', au_opts)
+--- <
+--- # History navigation ~
+---
+--- Function |MiniGit.show_at_cursor()| is specifically exported to make Git
+--- history navigation easier. Here are some different ways it can be used:
+---
+--- - Call inside buffer for already committed file to show the evolution of
+---   that particular line (or visually selected range) through history.
+---   It is essentially a `:Git log HEAD` with proper `-L` flag.
+---   This also works inside output of |MiniGit.show_diff_source()|.
+---
+--- - Call with cursor on commit hash to inspect that commit in full.
+---   This is usually helpful in the output of `:Git log`.
+---
+--- - Call with cursor inside diff entry to inspect its file in the state
+---   how it was at certain change. By default it shows state after the change,
+---   unless cursor is on the "deleted" line (i.e. line starting with "-") in
+---   which case state before change is shown.
+---
+--- This workflow can be made more interactive when used in mapping, like this: >
+---
+---   local rhs = '<Cmd>lua MiniGit.show_at_cursor()<CR>'
+---   vim.keymap.set({ 'n', 'x' }, '<Leader>gs', rhs, { desc = 'Show at cursor' })
 ---@tag MiniGit-examples
 
+--- The `:Git` user command runs `git` CLI command with extra integration for
+--- currently opened Neovim process:
+--- - Command is exececuted inside repository root of the curently active file
+---   (or |current-directory| if file is not tracked by this module).
+---
+--- - Command output is shown either in dedicated buffer in window split or as
+---   notification via |vim.notify()|. Which method is used depends on whether
+---   particular Git subcommand is supposed to show data for user to study
+---   (like `log`, `status`, etc.) or not (like `commit`, `push`, etc.), which
+---   is determined automatically.
+---
+---   Use split-related |command-modifiers| (|:vertical|, |:horizontal|, or |:tab|)
+---   to force output in a particular type of split. Default split direction is
+---   controlled by `command.split` in |MiniGit.config|.
+---
+---   Use |:silent| command modifier to not show any output.
+---
+---   Errors and warnings are always shown as notifications.
+---
+---   See |MiniGit-examples| for the example of tweaking command output.
+---
+--- - Editor for tasks that requires interactive user input (like `:Git commit` or
+---   `:Git rebase origin/main --interactive`) is opened inside current session
+---   in a separate split. Make modifications as in regular buffer, |:write| changes
+---   and |:close| / |:quit| the window for command to resume.
+---
+--- Examples of usage:
+--- - `:Git log --oneline -- %` - show compact log with changes in current file.
+--- - `:Git -C <cwd> status` - execute `git status` inside |current-directory|.
+--- - `:vert Git show <cword>` - show word under cursor in vertical split.
+--- - `:Git help rebase` - show help page for `rebase` subcommand.
+---
+--- There is also context aware completion which can be invoked with `<Tab>`:
+--- - If completed word starts with "-", options for the current Git subcommand
+---   is shown. Like completion at `:Git log -` will suggest `-L`, `--oneline`, etc.
+--- - If there is an explicit " -- " to the cursor's left, incremental path
+---   suggestions will be shown.
+--- - If there is no recognized command yet, list of subcommands will be shown.
+---   Otherwise for some common commands list of its targets will be suggested:
+---   like for `:Git branch ` it will be list of branches, etc.
+---
+--- Notes:
+--- - Paths are always treated as relative to command's execution directory
+---   (file's repository root or |current-directory| if absend).
+--- - Don't use quotes for entries containing space, escape it with `\` directly.
+---   Like `:Git commit -m Hello\ world` and not `:Git commit -m 'Hello\ world'`
+---   (will result into commit message containing quotes).
+---
+---                                                         *MiniGit-command-events*
+--- There are several `User` events triggered during command execution:
+---
+--- - `MiniGitCommandDone` - after command is done executing. For Lua callbacks it
+---   provides a special `data` table with the following fields:
+---     - <cmd_input> `(table)` - structured data about executed command.
+---       Has same structure as Lua function input in |nvim_create_user_command()|.
+---     - <cwd> `(string)` - directory path inside which Git command was executed.
+---     - `<exit_code>` `(number)` - exit code of CLI process.
+---     - `<git_command>` `(table)` - array with arguments of full executed command.
+---     - `<git_subcommand>` `(string)` - detected Git subcommand (like "log", etc.).
+---     - `<stderr>` `(string)` - `stderr` process output.
+---     - `<stdout>` `(string)` - `stdout` process output.
+---
+--- - `MiniGitCommandSplit` - after command showed its output in a split. Triggered
+---   after `MiniGitCommandDone` and provides similar `data` table with new fields:
+---     - `<win_source>` `(number)` - window identifier of "source" window
+---       (current at the moment before command execution).
+---     - `<win_stdout>` `(number)` - window identifier of command output
+---       (usually same as current window).
+---@tag MiniGit-command
+---@tag :Git
+
 ---@alias __git_buf_id number Target buffer identifier. Default: 0 for current buffer.
+---@alias __git_split_field <split> `(string)` - split direction. One of "horizontal", "vertical",
+---     "tab", "auto" (default). Value "auto" uses |:vertical| if only
+---     'mini.git' buffers are shown in tabpage and |:tab| otherwise.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -122,6 +232,10 @@ local MiniGit = {}
 local H = {}
 
 --- Module setup
+---
+--- Besides general side effects (see |mini.nvim|), it also:
+--- - Sets up auto enabling in every normal buffer for an actual file on disk.
+--- - Creates |:Git| command.
 ---
 ---@param config table|nil Module config table. See |MiniGit.config|.
 ---
@@ -156,19 +270,53 @@ end
 ---
 --- Default values:
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text !!!!!
+---@text # Job ~
+---
+--- `config.job` contains options for customizing CLI executions.
+---
+--- `job.git_executable` defines a full path to Git executable.
+--- Default: "git".
+---
+--- `job.timeout` is a duration (in ms) from job start until it is forced to stop.
+--- Default: 30000.
+---
+--- # Command ~
+---
+--- `config.command` contains options for customizing |:Git| command.
+---
+--- `command.split` defines default split direction for |:Git| command output.
+--- Can be one of "horizontal", "vertical", "tab", or "auto". Value "auto" uses
+--- |:vertical| if only 'mini.git' buffers are shown in tabpage and |:tab| otherwise.
+--- Default: "auto".
 MiniGit.config = {
+  -- General CLI execution
   job = {
+    -- Path to Git executable
     git_executable = 'git',
+
+    -- Timeout (in ms) for each job before force quit
     timeout = 30000,
   },
 
+  -- Options for `:Git` command
   command = {
+    -- Default split direction
     split = 'auto',
   },
 }
 --minidoc_afterlines_end
 
+--- Show Git related data at cursor
+---
+--- - If there is a commit-like |<cword>| under cursor, show its details with,
+---   essentially, `git show <cword>`.
+--- - If possible, show diff source via |MiniGit.show_diff_source()|.
+--- - If possible, show range history via |MiniGit.show_range_history()|.
+--- - Otherwise throw an error.
+---
+---@param opts table|nil Options. Possible values:
+---   - __git_split_field
+---   - Other fields appropriate for forwarding to other functions.
 MiniGit.show_at_cursor = function(opts)
   local exec = MiniGit.config.job.git_executable
   local cwd = H.get_git_cwd()
@@ -197,10 +345,22 @@ MiniGit.show_at_cursor = function(opts)
   H.notify('Nothing Git-related to show at cursor', 'WARN')
 end
 
--- NOTEs:
--- - Needs a valid Git patch entry with unified diff preceded by commit
---   information. Like the result of `:Git log`.
--- - Needs cwd to be the Git root for relative paths to work.
+--- Show diff source
+---
+--- When buffer contains text formatted as unified patch with available commit
+--- information (like after `:Git log --patch` or |MiniGit.show_range_history()|),
+--- show state of the file at the particular commit.
+--- Specific commit, path, and line number are deduced from cursor position.
+---
+--- Notes:
+--- - Needs |current-directory| to be the Git root for relative paths to work.
+--- - Needs cursor to be inside hunk lines or or "---" / "+++" lines with paths.
+---
+---@param opts table|nil Options. Possible values:
+---   - __git_split_field
+---   - <target> `(string)` - which file state to show. One of "before", "after",
+---     "both" (both states in vertical split), "auto" (default). Value "auto"
+---     shows "before" state if cursor line starts with "-", otherwise - "after".
 MiniGit.show_diff_source = function(opts)
   opts = vim.tbl_deep_extend('force', { split = 'auto', target = 'auto' }, opts or {})
   local split = H.normalize_split_opt(opts.split, 'opts.split')
@@ -244,7 +404,21 @@ end
 
 --- Show range history
 ---
---- Works well with |MiniGit.diff_foldexpr()|.
+--- Compute and show in split data about how particular line range in current
+--- buffer evolved through Git history. Essentially a `git log` with `-L` flag.
+---
+--- Notes:
+--- - Works well with |MiniGit.diff_foldexpr()|.
+--- - Does not work in presence of uncommited changes, as there is no easy way
+--- to compute effective range line numbers.
+---
+---@param opts table|nil Options. Possible fields:
+---   - <line_start> `(number)` - start line of range.
+---   - <line_end> `(number)` - end line of range.
+---     If both <line_start> and <line_end> are not supplied, they default to
+---     current line in Normal mode and visual selection in Visual mode.
+---   - <log_args> `(table)` - array of options to append to `git log` call.
+---   - __git_split_field
 MiniGit.show_range_history = function(opts)
   local default_opts = { line_start = nil, line_end = nil, log_args = nil, split = 'auto' }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
@@ -283,6 +457,12 @@ end
 --- `:Git log --patch` or `:Git show` for commit).
 --- Works well with |MiniGit.show_range_history()|.
 ---
+--- General idea of folding levels (use |zr| and |zm| to adjust interactvely):
+--- - At level 0 there is one line per whole patch or log entry.
+--- - At level 1 there is one line per patched file.
+--- - At level 2 there is one line per hunk.
+--- - At level 3 there is no folds.
+---
 --- For automated setup, set the following for "git" filetype (either
 --- inside |FileType| autocommand or |ftplugin|): >
 ---   setlocal foldmethod=expr foldexpr=v:lua.MiniGit.diff_foldexpr()
@@ -300,6 +480,12 @@ MiniGit.diff_foldexpr = function(lnum)
 end
 
 --- Enable Git tracking in a file buffer
+---
+--- Tracking is done by reacting to changes in file content or file's repository,
+--- in the form of keeping buffer data up to date. The data can be used via:
+--- - |MiniGit.get_buf_data()|. See it also for a list of actually tracked data.
+--- - `vim.b.minigit_summary` buffer-local variable (more suitable for statusline).
+---   See |MiniGit-examples| for how it can be used in statusline.
 ---
 ---@param buf_id __git_buf_id
 MiniGit.enable = function(buf_id)
@@ -366,8 +552,8 @@ end
 ---   - <head_name> `(string)` - short name of current HEAD (like "master").
 ---     For detached HEAD it is "HEAD".
 ---   - <status> `(string)` - two character file status as returned by `git status`.
----   - <in_progress> `(string)` - name of action currently in progress
----     (bisect, merge, etc.)
+---   - <in_progress> `(string)` - name of action(s) currently in progress
+---     (bisect, merge, etc.). Can be a combination of those separated by ",".
 MiniGit.get_buf_data = function(buf_id)
   buf_id = H.validate_buf_id(buf_id)
   local buf_cache = H.cache[buf_id]
@@ -611,7 +797,9 @@ H.ensure_git_editor = function(mods)
     H.skip_timeout, H.skip_sync = true, true
     local cleanup = function()
       local _, channel = pcall(vim.fn.sockconnect, 'pipe', servername, { rpc = true })
-      pcall(vim.rpcnotify, channel, 'nvim_exec2', 'quitall!', {})
+      local has_exec2 = vim.fn.has('nvim-0.9') == 1
+      local method, opts = has_exec2 and 'nvim_exec2' or 'nvim_exec', has_exec2 and {} or false
+      pcall(vim.rpcnotify, channel, method, 'quitall!', opts)
       H.skip_timeout, H.skip_sync = false, false
     end
 

@@ -67,7 +67,7 @@ vim.loop.spawn = function(path, options, on_exit)
   process_id = process_id + 1
 
   local mock_data = _G.process_mock_data[pid] or {}
-  if vim.is_callable(mock_data.action) then mock_data.action() end
+  if vim.is_callable(mock_data.action) then mock_data.action(path, options) end
   vim.defer_fn(function() on_exit(mock_data.exit_code or 0) end, mock_data.duration or 0)
 
   return new_process(pid), pid

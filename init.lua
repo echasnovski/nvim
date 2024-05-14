@@ -57,20 +57,18 @@ now(function() require('mini.starter').setup() end)
 now(function()
   local statusline = require('mini.statusline')
   local section_git_head = function()
-    local summary = vim.b.minigit_summary
-    if summary == nil then return '' end
+    local summary = vim.b.minigit_summary or {}
     local res = summary.head_name
     if res == nil then return '' end
 
     res = ' ' .. (res == 'HEAD' and summary.head:sub(1, 7) or res)
-    if not (summary.in_progress == nil or summary.in_progress == '') then res = res .. '|' .. summary.in_progress end
-    return res
+    local in_progress = summary.in_progress
+    if in_progress == nil or in_progress == '' then return res end
+    return res .. '|' .. in_progress
   end
 
   local section_git_status = function()
-    local summary = vim.b.minigit_summary or {}
-    if summary == nil then return '' end
-    local res = summary.status
+    local res = (vim.b.minigit_summary or {}).status
     if res == nil then return '' end
     return res == '  ' and '' or ('(' .. res .. ')')
   end

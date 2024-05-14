@@ -7,7 +7,6 @@ local new_set = MiniTest.new_set
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('git', config) end
-local unload_module = function(config) child.mini_unload('git', config) end
 local set_cursor = function(...) return child.set_cursor(...) end
 local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
@@ -123,10 +122,6 @@ end
 
 local clear_spawn_log = function() child.lua('_G.spawn_log = {}') end
 
-local get_process_log = function() return child.lua_get('_G.process_log') end
-
-local clear_process_log = function() child.lua('_G.process_log = {}') end
-
 -- - Notifications
 local mock_notify = function()
   child.lua([[
@@ -155,16 +150,6 @@ local validate_notifications = function(ref_log, msg_pattern)
 end
 
 local clear_notify_log = function() return child.lua('_G.notify_log = {}') end
-
--- Module helpers
-local setup_enabled_buffer = function()
-  -- Usually used to make tests on not initial (kind of special) buffer
-  local init_buf_id = get_buf()
-  set_buf(new_buf())
-  -- TODO: Needs mocked spawn
-  child.lua('require("mini-dev.git").enable(0)')
-  child.api.nvim_buf_delete(init_buf_id, { force = true })
-end
 
 -- Output test set ============================================================
 local T = new_set({
@@ -1913,6 +1898,29 @@ T[':Git']['output']['is omitted if no or empty `stdout` was given'] = function()
   validate_notifications({})
 end
 
+T[':Git']['output']['sets filetype for common subcommands'] = function()
+  child.lua([[
+    table.insert(_G.stdio_queue, { { 'out', 'abc1234 Neo McVim' } })     -- blame
+    table.insert(_G.stdio_queue, { { 'out', 'commit abcd1234' } })       -- diff
+    table.insert(_G.stdio_queue, { { 'out', 'commit abc1234\nHello' } }) -- log
+    table.insert(_G.stdio_queue, { { 'out', 'Hello' } })                 -- show
+  ]])
+
+  local validate = function(command, filetype)
+    local cur_buf_id = get_buf()
+    child.cmd(command)
+    eq(cur_buf_id == get_buf(), false)
+    eq(child.bo.filetype, filetype)
+  end
+
+  validate(':Git blame -- %', 'git')
+  validate(':Git diff', 'diff')
+  validate(':Git log', 'git')
+
+  if child.fn.has('nvim-0.8') == 0 then return end
+  validate(':Git show HEAD:file.lua', 'lua')
+end
+
 T[':Git']['output']['respects `:silent` modifier'] = function()
   local validate = function(command)
     child.cmd('%bwipeout')
@@ -2018,10 +2026,83 @@ T[':Git']['preserves environment variables'] = function()
   eq(has_var, true)
 end
 
-T[':Git']['opens `GIT_EDITOR` in current instance'] = function()
-  -- Should also ignore timeout
-  MiniTest.skip()
-end
+T[':Git']['opens Git editor in current instance'] = new_set(
+  { parametrize = { { 'GIT_EDITOR' }, { 'GIT_SEQUENCE_EDITOR' } } },
+  {
+    test = function(env_var)
+      child.lua('_G.target_env_var = ' .. vim.inspect(env_var))
+
+      -- Should ignore timeout
+      child.lua('MiniGit.config.job.timeout = 5')
+
+      -- Set up content of edit message file
+      local editmsg_path = git_repo_dir .. '/COMMIT_EDITMSG'
+      child.lua('_G.editmsg_path = ' .. vim.inspect(editmsg_path))
+      local cur_lines = vim.fn.readfile(editmsg_path)
+      MiniTest.finally(function() vim.fn.writefile(cur_lines, editmsg_path) end)
+
+      -- Mock Git calling its editor
+      child.lua([[
+        table.insert(_G.stdio_queue, { { 'out', '' } }) -- `commit` output
+        table.insert(_G.stdio_queue, { { 'out', '' } }) -- tracking for editor buffer
+
+        local mock_git_editor = function(_, options)
+          -- Find value of target environment variable
+          local git_editor
+          local pattern = string.format('^%s=(.*)$', _G.target_env_var)
+          for _, env_pair in ipairs(options.env) do
+            git_editor = string.match(env_pair, pattern)
+            if git_editor ~= nil then break end
+          end
+
+          -- Mock Git calling its editor and waiting for editing being done in
+          -- the current process
+          local command = git_editor .. ' -- ' .. _G.editmsg_path
+          local on_exit = function()
+            _G.editmsg_lines = vim.fn.readfile(_G.editmsg_path)
+          end
+          _G.channel = vim.fn.jobstart(command, { on_exit = on_exit })
+        end
+        _G.process_mock_data = {
+          [4] = { action = mock_git_editor },
+          [5] = { exit_code = 1 }, -- tracking for editor buffer
+        }
+      ]])
+
+      local init_win_id = get_win()
+      child.cmd(':belowright vert Git commit --amend')
+
+      sleep(small_time)
+      eq(child.api.nvim_buf_get_name(0), editmsg_path)
+      eq(get_lines(), { '', '# This is a mock of Git template for its `GIT_EDITOR`' })
+      eq(child.fn.winlayout(), { 'row', { { 'leaf', init_win_id }, { 'leaf', get_win() } } })
+      eq(child.bo.filetype, 'gitcommit')
+      eq(child.fn.mode(), 'n')
+
+      -- Should not stop due to timeout
+      local is_job_active = function() return child.lua_get('pcall(vim.fn.jobpid, _G.channel)') end
+      eq(is_job_active(), true)
+      sleep(50)
+      eq(is_job_active(), true)
+
+      -- Should wait until editing is done (window is closed)
+      eq(child.lua_get('_G.editmsg_lines'), vim.NIL)
+      type_keys('i', 'My important text', '<Esc>')
+      child.cmd('write')
+      child.cmd('close')
+
+      sleep(small_time)
+      eq(is_job_active(), false)
+      eq(
+        child.lua_get('_G.editmsg_lines'),
+        { 'My important text', '# This is a mock of Git template for its `GIT_EDITOR`' }
+      )
+
+      -- Should produce no notifications
+      validate_notifications({})
+    end,
+  }
+)
 
 T[':Git']['uses correct working directory'] = function()
   local root, repo = test_dir_absolute, git_repo_dir
@@ -2039,19 +2120,24 @@ T[':Git']['uses correct working directory'] = function()
       { { 'out', 'alias.l log -5' } },                             -- Get aliases
 
       -- Command output
-      { { 'out', 'Comment abc1234\nHello' } }
+      { { 'out', 'commit abc1234\nHello' } },
+      { { 'out', 'commit def4321\nWorld' } },
     }
   ]])
 
   edit(git_file_path)
   eq(get_buf_data().root, root)
-  child.fn.chdir(git_dir_path)
-
-  child.cmd('Git log')
+  local cwd = git_dir_path
+  child.fn.chdir(cwd)
 
   -- Actual command should be run in file's Git root
-  validate_command_init_setup(4, 'git', child.fn.getcwd())
+  child.cmd('Git log')
+  validate_command_init_setup(4, 'git', cwd)
   validate_command_call(7, { 'log' }, 'git', root)
+
+  -- Should recognize `<cwd>` as current working directory
+  child.cmd('Git -C <cwd> log')
+  validate_command_call(8, { '-C', cwd, 'log' }, 'git', cwd)
 end
 
 T[':Git']['caches subcommand data'] = function()
@@ -2174,6 +2260,7 @@ T[':Git']['completion']['works with subcommands'] = function()
   -- Should also work with two word subcommands
   validate_command_completion(':Git reflog')
   validate_command_completion(':Git reflog -v', -3)
+  validate_command_completion(':Git reflog\\ ')
 end
 
 T[':Git']['collects data about available subcommands'] = function()
@@ -2238,6 +2325,9 @@ T[':Git']['completion']['works with explicit paths'] = function()
   -- Should work multiple times
   type_keys(' f', '<Tab>')
   child.expect_screenshot()
+
+  -- Should respect explicit '\ ' and treat it as part of completion base
+  validate_command_completion(':Git add -- git-repo/\\ ')
 end
 
 T[':Git']['completion']['uses correct working directory for paths'] = function()

@@ -37,6 +37,9 @@ OPTIONS
        -n, --dry-run
            Do everything except actually send the updates.
 
+       -vv
+           A single dash flag but with two letters afterwards.
+
        --[no-]signed, --signed=(true|false|if-asked)
            This is some hard to parse options.
            Should prefer '--signed' over '--signed='.
