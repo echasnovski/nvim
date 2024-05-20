@@ -23,8 +23,11 @@ local all_snippets = {
 
 local get_snippet_at_cursor = function()
   local line = vim.api.nvim_get_current_line()
-  local col = vim.api.nvim_win_get_cursor(0)[2]
-  local prefix = line:sub(1, col + 1):match('%S*$')
+  local offset = vim.fn.mode() == 'i' and 0 or 1
+  local col = vim.api.nvim_win_get_cursor(0)[2] + offset
+
+  -- TODO: Probably make matching character configurable
+  local prefix = line:sub(1, col):match('[%w_-.]*$')
   local res = all_snippets[prefix]
   if vim.is_callable(res) then return res(), prefix end
   return res, prefix

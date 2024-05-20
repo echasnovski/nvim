@@ -76,9 +76,13 @@ nmap_leader('fv', '<Cmd>Pick visit_paths cwd=""<CR>',                'Visit path
 nmap_leader('fV', '<Cmd>Pick visit_paths<CR>',                       'Visit paths (cwd)')
 
 -- g is for git
-nmap_leader('gg', '<Cmd>lua Config.open_lazygit()<CR>',     'Git tab')
-nmap_leader('go', '<Cmd>lua MiniDiff.toggle_overlay()<CR>', 'Toggle overlay')
-nmap_leader('gs', '<Cmd>lua MiniGit.show_at_cursor()<CR>',  'Show at cursor')
+nmap_leader('gc', '<Cmd>Git commit<CR>',                      'Commit')
+nmap_leader('gC', '<Cmd>Git commit --amend<CR>',              'Commit amend')
+nmap_leader('gg', '<Cmd>lua Config.open_lazygit()<CR>',       'Git tab')
+nmap_leader('gl', '<Cmd>Git log --oneline<CR>',               'Log')
+nmap_leader('gL', '<Cmd>Git log --oneline --follow -- %<CR>', 'Log buffer')
+nmap_leader('go', '<Cmd>lua MiniDiff.toggle_overlay()<CR>',   'Toggle overlay')
+nmap_leader('gs', '<Cmd>lua MiniGit.show_at_cursor()<CR>',    'Show at cursor')
 
 xmap_leader('gs', '<Cmd>lua MiniGit.show_at_cursor()<CR>',  'Show at selection')
 
