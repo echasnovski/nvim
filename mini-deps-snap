@@ -1,7 +1,6 @@
 return {
   LuaSnip = "de1a287c9cb525ae52bc846e8f6207e5ef1da5ac",
   ["conform.nvim"] = "00f9d91391b04b1935e2f15948bd96cc111e7d3a",
-  ["gitsigns.nvim"] = "805610a9393fa231f2c2b49cb521bfa413fadb3d",
   ["markdown-preview.nvim"] = "a923f5fc5ba36a3b17e289dc35dc17f66d0548ee",
   ["mason.nvim"] = "49ff59aded1047a773670651cfa40e76e63c6377",
   ["mini.nvim"] = "2833045cbbe6df8cc3affd6767e211b78b6085bd",

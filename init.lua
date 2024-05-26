@@ -203,8 +203,7 @@ later(function()
   if vim.startswith(vim.fn.getenv('TERM'), 'st') then encode_symbols = map.gen_encode_symbols.dot('4x2') end
   map.setup({
     symbols = { encode = encode_symbols },
-    -- integrations = { gen_integr.builtin_search(), gen_integr.gitsigns(), gen_integr.diagnostic() },
-    integrations = { gen_integr.builtin_search(), gen_integr.diagnostic() },
+    integrations = { gen_integr.builtin_search(), gen_integr.diff(), gen_integr.diagnostic() },
   })
   for _, key in ipairs({ 'n', 'N', '*' }) do
     vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
@@ -265,12 +264,6 @@ later(function()
   add({ source = 'nvim-treesitter/nvim-treesitter-textobjects', depends = { ts_spec } })
   source('plugins/nvim-treesitter.lua')
 end)
-
--- -- Interact with Git hunks
--- later(function()
---   add('lewis6991/gitsigns.nvim')
---   source('plugins/gitsigns.lua')
--- end)
 
 -- Install LSP/formatting/linter executables
 later(function()
