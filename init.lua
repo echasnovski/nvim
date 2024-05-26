@@ -35,8 +35,6 @@ now(function() vim.cmd('colorscheme randomhue') end)
 -- Use this color scheme in 'mini.nvim' demos
 -- require('mini.hues').setup({ background = '#10262c', foreground = '#c0c8cb' })
 
-later(function() require('mini-dev.git').setup() end)
-
 now(function()
   local filterout_lua_diagnosing = function(notif_arr)
     local not_diagnosing = function(notif) return not vim.startswith(notif.msg, 'lua_ls: Diagnosing') end
@@ -54,56 +52,7 @@ now(function() require('mini.sessions').setup() end)
 
 now(function() require('mini.starter').setup() end)
 
-now(function()
-  local statusline = require('mini.statusline')
-  local section_git_head = function()
-    local summary = vim.b.minigit_summary or {}
-    local res = summary.head_name
-    if res == nil then return '' end
-
-    res = ' ' .. (res == 'HEAD' and summary.head:sub(1, 7) or res)
-    local in_progress = summary.in_progress
-    if in_progress == nil or in_progress == '' then return res end
-    return res .. '|' .. in_progress
-  end
-
-  local section_git_status = function()
-    local res = (vim.b.minigit_summary or {}).status
-    if res == nil then return '' end
-    return res == '  ' and '' or ('(' .. res .. ')')
-  end
-
-  local section_diff = function()
-    local summary = vim.b.minidiff_summary_string
-    if summary == nil then return '' end
-    return string.format(' %s', summary == '' and '-' or summary)
-  end
-
-  --stylua: ignore
-  local active = function()
-    local mode, mode_hl = statusline.section_mode({ trunc_width = 120 })
-    -- Try out 'mini.git'
-    local git_head    = section_git_head()
-    local git_status  = section_git_status()
-    local diff        = section_diff()
-    local diagnostics = statusline.section_diagnostics({ trunc_width = 75 })
-    local filename    = statusline.section_filename({ trunc_width = 140 })
-    local fileinfo    = statusline.section_fileinfo({ trunc_width = 120 })
-    local location    = statusline.section_location({ trunc_width = 75 })
-    local search      = statusline.section_searchcount({ trunc_width = 75 })
-
-    return statusline.combine_groups({
-      { hl = mode_hl,                  strings = { mode } },
-      { hl = 'MiniStatuslineDevinfo',  strings = { git_head, git_status, diff, diagnostics } },
-      '%<', -- Mark general truncate point
-      { hl = 'MiniStatuslineFilename', strings = { filename } },
-      '%=', -- End left alignment
-      { hl = 'MiniStatuslineFileinfo', strings = { fileinfo } },
-      { hl = mode_hl,                  strings = { search, location } },
-    })
-  end
-  statusline.setup({ content = { active = active } })
-end)
+now(function() require('mini.statusline').setup() end)
 
 now(function() require('mini.tabline').setup() end)
 
@@ -222,6 +171,8 @@ later(function()
     callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
   })
 end)
+
+later(function() require('mini.git').setup() end)
 
 later(function()
   local hipatterns = require('mini.hipatterns')
