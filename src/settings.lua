@@ -40,6 +40,7 @@ vim.o.fillchars = table.concat(
   ','
 )
 vim.o.listchars = table.concat({ 'extends:…', 'nbsp:␣', 'precedes:…', 'tab:> ' }, ',')
+vim.o.cursorlineopt = 'screenline,number' -- Show cursor line only screen line when wrapped
 
 if vim.fn.has('nvim-0.9') == 1 then
   vim.opt.shortmess:append('C') -- Don't show "Scanning..." messages

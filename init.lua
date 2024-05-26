@@ -158,7 +158,11 @@ end)
 
 later(function() require('mini.cursorword').setup() end)
 
-later(function() require('mini.diff').setup() end)
+now(function()
+  require('mini.diff').setup()
+  local rhs = function() return MiniDiff.operator('yank') .. 'gh' end
+  vim.keymap.set('n', 'ghy', rhs, { expr = true, remap = true, desc = "Copy hunk's reference lines" })
+end)
 
 later(function() require('mini.doc').setup() end)
 
@@ -205,6 +209,7 @@ later(function()
     symbols = { encode = encode_symbols },
     integrations = { gen_integr.builtin_search(), gen_integr.diff(), gen_integr.diagnostic() },
   })
+  vim.keymap.set('n', [[\h]], ':let v:hlsearch = 1 - v:hlsearch<CR>', { desc = 'Toggle hlsearch' })
   for _, key in ipairs({ 'n', 'N', '*' }) do
     vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
   end
