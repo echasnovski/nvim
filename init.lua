@@ -56,6 +56,8 @@ now(function() require('mini.statusline').setup() end)
 
 now(function() require('mini.tabline').setup() end)
 
+now(function() require('mini-dev.icons').setup() end)
+
 -- Step two
 later(function() require('mini.extra').setup() end)
 
