@@ -2,6 +2,13 @@
 --- - Code:
 ---     - Add main table for filetypes.
 ---
+---     - Think about the interface for default icons.
+---
+---     - Check how default highlight groups look in popular color schemes.
+---
+---     - Add some popular plugin filetypes: from 'mini.nvim', from
+---       'lazy.nvim', etc.
+---
 ---     - Think about whether file/directory distinction is necessary.
 ---       Maybe instead have single "path" category?
 ---
@@ -53,13 +60,18 @@
 ---
 --- # Highlight groups ~
 ---
---- * `MiniIconsBlue`    - blue color.
---- * `MiniIconsCyan`    - cyan color.
---- * `MiniIconsGreen`   - green color.
---- * `MiniIconsGrey`    - grey color.
---- * `MiniIconsMagenta` - magenta/purple color.
---- * `MiniIconsRed`     - red color.
---- * `MiniIconsYellow`  - yellow color.
+--- Only the following set of highlight groups is used as icon highlight.
+--- It is recommended that they all only define colored foreground:
+---
+--- * `MiniIconsAzure`  - azure.
+--- * `MiniIconsBlue`   - blue.
+--- * `MiniIconsCyan`   - cyan.
+--- * `MiniIconsGreen`  - green.
+--- * `MiniIconsGrey`   - grey.
+--- * `MiniIconsOrange` - orange.
+--- * `MiniIconsPurple` - purple.
+--- * `MiniIconsRed`    - red.
+--- * `MiniIconsYellow` - yellow.
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 
@@ -91,6 +103,9 @@ MiniIcons.setup = function(config)
 
   -- Create default highlighting
   H.create_default_hl()
+
+  -- Clear cache
+  H.cache = { extension = {}, filetype = {}, path = {}, os = {} }
 end
 
 --stylua: ignore
@@ -105,13 +120,23 @@ MiniIcons.config = {
 
   -- Callable to provide custom output instead of built-in provider
   custom = nil,
-
-  -- Whether to mock methods from 'nvim-tree/nvim-web-devicons'
-  mock_nvim_web_devicons = true,
 }
 --minidoc_afterlines_end
 
-MiniIcons.get = function(category, id)
+MiniIcons.get = function(category, name)
+  local cached = H.cache[category][name]
+  if cached ~= nil then return cached[1], cached[2] end
+
+  -- TODO: Incorporate custom icons
+
+  local getter = H.get_impl[category]
+  if getter == nil then H.error('Category ' .. vim.inspect(category) .. ' is not supported.') end
+  local icon, hl = getter(name)
+  if icon ~= nil and hl ~= nil then H.cache[category][name] = { icon, hl } end
+  return icon, hl
+end
+
+MiniIcons.mock_nvim_web_devicons = function()
   -- TODO
 end
 
@@ -120,17 +145,13 @@ end
 H.default_config = MiniIcons.config
 
 -- Cache for `get()` output per category
-H.cache = {
-  filetype = {},
-  extension = {},
-  path = {},
-  os = {},
-}
+H.cache = { extension = {}, filetype = {}, path = {}, os = {} }
 
 -- Filetype icons. Keys are at least filetypes explicitly supported by Neovim
 -- (i.e. which have 'runtime/ftplugin' file in its source).
 --stylua: ignore
 H.filetype_icons = {
+  -- Neovim filetype plugins
   ['8th']         = { glyph = '', hl = '' },
   a2ps            = { glyph = '', hl = '' },
   aap             = { glyph = '', hl = '' },
@@ -290,7 +311,7 @@ H.filetype_icons = {
   logindefs       = { glyph = '', hl = '' },
   logtalk         = { glyph = '', hl = '' },
   lprolog         = { glyph = '', hl = '' },
-  lua             = { glyph = '', hl = '' },
+  lua             = { glyph = '', hl = 'MiniIconsBlue' },
   luau            = { glyph = '', hl = '' },
   lynx            = { glyph = '', hl = '' },
   m3build         = { glyph = '', hl = '' },
@@ -469,19 +490,32 @@ H.filetype_icons = {
   zig             = { glyph = '', hl = '' },
   zimbu           = { glyph = '', hl = '' },
   zsh             = { glyph = '', hl = '' },
+
+  -- 'mini.nvim'
+  minifiles              = { glyph = '󰒲', hl = 'MiniIconsGreen' },
+  ['minifiles-help']     = { glyph = '󰒲', hl = 'MiniIconsGreen' },
+  mininotify             = { glyph = '󰒲', hl = 'MiniIconsBlue' },
+  ['mininotify-history'] = { glyph = '󰒲', hl = 'MiniIconsBlue' },
+  minipick               = { glyph = '󰒲', hl = 'MiniIconsCyan' },
+  starter                = { glyph = '󰒲', hl = 'MiniIconsYellow' },
+
+  -- Lua plugins
+  lazy = { glyph = '󰒲', hl = 'MiniIconsBlue' },
 }
 
--- Extension icons. Keys are mostly for extensions which don't have good
--- support in `vim.filetype.match()`.
+-- Extension icons. Keys are mostly for extensions which are either popular or
+-- don't have good support in `vim.filetype.match()` (usually failing to
+-- recognize filetype by filename and content only).
 --stylua: ignore
 H.extension_icons = {
-  ts = { glyph = '', hl = '' },
+  ts = { glyph = '', hl = 'MiniIconsBlue' },
 }
 
--- Path icons. Keys are mostly some popular file/directory names.
+-- Path icons. Keys are mostly some popular file/directory basenames and the
+-- ones which can conflict with icon detection through extension.
 --stylua: ignore
 H.path_icons = {
-  Makefile = { glyph = '', hl = '' }
+  Makefile = { glyph = '', hl = 'MiniIconsGrey' },
 }
 
 -- OS icons. Keys are at least for all icons from Nerd fonts (`nf-linux-*`).
@@ -557,7 +591,6 @@ H.setup_config = function(config)
   vim.validate({
     style = { config.style, 'string' },
     override = { config.override, 'function', true },
-    mock_nvim_web_devicons = { config.mock_nvim_web_devicons, 'boolean' },
   })
 
   return config
@@ -572,18 +605,87 @@ H.create_default_hl = function()
     vim.api.nvim_set_hl(0, name, opts)
   end
 
+  hi('MiniIconsAzure', { link = 'Function' })
   hi('MiniIconsBlue', { link = 'DiagnosticInfo' })
   hi('MiniIconsCyan', { link = 'DiagnosticHint' })
   hi('MiniIconsGreen', { link = 'DiagnosticOk' })
   hi('MiniIconsGrey', {})
-  hi('MiniIconsMagenta', { link = 'Constant' })
+  hi('MiniIconsOrange', { link = 'DiagnosticWarn' })
+  hi('MiniIconsPurple', { link = 'Constant' })
   hi('MiniIconsRed', { link = 'DiagnosticError' })
   hi('MiniIconsYellow', { link = 'DiagnosticWarn' })
+end
+
+-- Getters --------------------------------------------------------------------
+H.get_impl = {
+  extension = function(name)
+    if type(name) ~= 'string' then H.error('Extension name should be string.') end
+    -- Also try for somewhat common cases of extension equal to filetype. All
+    -- cases breaking this assumptions should be added to `extension_icons`.
+    local icon_data = H.extension_icons[name] or H.filetype_icons[name]
+    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+
+    -- Fall back to built-in matching
+    local ft = vim.filetype.match({ filename = 'aaa.' .. name, contents = { '' } })
+    if ft ~= nil then return MiniIcons.get('filetype', ft) end
+  end,
+
+  filetype = function(name)
+    if type(name) ~= 'string' then H.error('Filetype name should be string.') end
+    local icon_data = H.filetype_icons[name]
+    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+  end,
+
+  path = function(name)
+    if type(name) ~= 'string' then H.error('Path should be string.') end
+    local basename = vim.fn.fnamemodify(name, ':t'):lower()
+    local icon_data = H.path_icons[basename]
+    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+
+    -- Try raw extension first for better speed (as `vim.filetype.match()` is
+    -- relatively slow to be called many times; like 0.1 ms)
+    local ext = string.match(name, '%.([^%.]+)$')
+    icon_data = H.extension_icons[ext] or H.filetype_icons[ext]
+    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+
+    -- Fall back to built-in matching
+    local ft = vim.filetype.match({ filename = basename, contents = { '' } })
+    if ft ~= nil then return MiniIcons.get('filetype', ft) end
+  end,
+
+  os = function(name)
+    if type(name) ~= 'string' then H.error('Operating system name should be string.') end
+    local icon_data = H.os_icons[name]
+    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+  end,
+}
+
+-- Styles ---------------------------------------------------------------------
+H.finalize_icon = function(icon_data, name)
+  local style = MiniIcons.config.style
+  return style == 'glyph' and icon_data.glyph or (style == 'ascii' and name:sub(1, 1):upper() or '???')
 end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.icons) %s', msg), 0) end
 
 H.notify = function(msg, level_name) vim.notify('(mini.icons) ' .. msg, vim.log.levels[level_name]) end
+
+-- local n = 1000
+-- H.bench_icons = function()
+--   local start_time = vim.loop.hrtime()
+--   for i = 1, n do
+--     MiniIcons.get('path', 'aaa_' .. i .. '.lua')
+--   end
+--   return 0.000001 * (vim.loop.hrtime() - start_time) / n
+-- end
+-- H.bench_devicons = function()
+--   local get_icon = require('nvim-web-devicons').get_icon
+--   local start_time = vim.loop.hrtime()
+--   for i = 1, n do
+--     get_icon('aaa_' .. i .. '.lua', nil, { default = false })
+--   end
+--   return 0.000001 * (vim.loop.hrtime() - start_time) / n
+-- end
 
 return MiniIcons
