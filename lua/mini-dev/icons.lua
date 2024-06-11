@@ -1,6 +1,7 @@
 --- TODO:
 --- - Code:
----     - Add main table for filetypes.
+---     - Check why 'png' and some archives are not highlighted in 'mini.pick'
+---       and 'mini.files'.
 ---
 ---     - Think about the interface for default icons.
 ---
@@ -23,6 +24,7 @@
 ---     - Suggest using Nerd Font at least version 3.0.0.
 ---
 --- - Tests:
+---     - Works for 'Cargo.lock' (uses exact case and not lower case).
 ---
 
 --- *mini.icons* Icon provider
@@ -351,7 +353,7 @@ H.filetype_icons = {
   docbksgml          = { glyph = '󰫱', hl = 'MiniIconsGrey'   },
   docbkxml           = { glyph = '󰫱', hl = 'MiniIconsGrey'   },
   dockerfile         = { glyph = '󰡨', hl = 'MiniIconsBlue'   },
-  dosbatch           = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  dosbatch           = { glyph = '󰯂', hl = 'MiniIconsGreen'  },
   dosini             = { glyph = '󰯂', hl = 'MiniIconsAzure'  },
   dot                = { glyph = '󱁉', hl = 'MiniIconsAzure'  },
   doxygen            = { glyph = '󰋘', hl = 'MiniIconsBlue'   },
@@ -952,24 +954,153 @@ H.filetype_icons = {
   lazy = { glyph = '󰒲', hl = 'MiniIconsBlue' },
 }
 
--- Extension icons. Keys are mostly for extensions which are either:
--- - Popular (to improve performance).
--- - Don't have good support in `vim.filetype.match()`:
---     - Isn't associated with (text) filetype: docx, gif, etc.
---     - Fails to recognize filetype by filename and content only (like '.ts').
+-- Extension icons
 --stylua: ignore
 H.extension_icons = {
-  -- Popular and associated with filetype (for performance)
-  -- TODO: Add for "popular" languages (decide via proxy: whether there is an
-  -- 'nf-md' icon for it)
-  fs   = H.filetype_icons.fsharp,
-  lock = { glyph = '󰌾', hl = 'MiniIconsRed'   },
-  log  = { glyph = '', hl = 'MiniIconsAzure' },
-  r    = H.filetype_icons.r,
-  ts   = H.filetype_icons.typescript,
+  -- Popular extensions associated with supported filetype. Present to not have
+  -- to rely on `vim.filetype.match()` in some cases (for performance or if it
+  -- fails to recognize filetype by filename and content only, like '.ts').
+  -- Present only those which can be unambiguously detected from the extension.
+  -- Value is string with filetype's name to inherit from its icon data
+  asm   = 'asm',
+  bib   = 'bib',
+  bzl   = 'bzl',
+  c     = 'c',
+  cbl   = 'cobol',
+  clj   = 'clojure',
+  cpp   = 'cpp',
+  cs    = 'cs',
+  css   = 'css',
+  csv   = 'csv',
+  cu    = 'cuda',
+  dart  = 'dart',
+  diff  = 'diff',
+  el    = 'lisp',
+  elm   = 'elm',
+  erl   = 'erlang',
+  exs   = 'elixir',
+  f90   = 'fortran',
+  fish  = 'fish',
+  fnl   = 'fennel',
+  go    = 'go',
+  hs    = 'haskell',
+  htm   = 'html',
+  html  = 'html',
+  jav   = 'java',
+  java  = 'java',
+  jl    = 'julia',
+  js    = 'javascript',
+  json  = 'json',
+  json5 = 'json5',
+  kt    = 'kotlin',
+  latex = 'tex',
+  lua   = 'lua',
+  md    = 'markdown',
+  ml    = 'ocaml',
+  mojo  = 'mojo',
+  nim   = 'nim',
+  nix   = 'nix',
+  pdb   = 'prolog',
+  pdf   = 'pdf',
+  php   = 'php',
+  purs  = 'purescript',
+  py    = 'python',
+  qmd   = 'quarto',
+  r     = 'r',
+  raku  = 'raku',
+  rb    = 'ruby',
+  rmd   = 'rmd',
+  roc   = 'roc',
+  rs    = 'rust',
+  rst   = 'rst',
+  scala = 'scala',
+  sol   = 'solidity',
+  srt   = 'srt',
+  ss    = 'scheme',
+  ssa   = 'ssa',
+  svg   = 'svg',
+  swift = 'swift',
+  toml  = 'toml',
+  ts    = 'typescript',
+  tsv   = 'tsv',
+  vim   = 'vim',
+  vue   = 'vue',
+  yaml  = 'yaml',
+  yml   = 'yaml',
+  zig   = 'zig',
+  zsh   = 'zsh',
 
-  -- TODO:
-  -- Not associated with filetype (not text file)
+  -- Video
+  ['3gp'] = { glyph = '󰈫', hl = 'MiniIconYellow' },
+  avi     = { glyph = '󰈫', hl = 'MiniIconGrey'   },
+  cast    = { glyph = '󰈫', hl = 'MiniIconRed'    },
+  m4v     = { glyph = '󰈫', hl = 'MiniIconOrange' },
+  mkv     = { glyph = '󰈫', hl = 'MiniIconGreen'  },
+  mov     = { glyph = '󰈫', hl = 'MiniIconCyan'   },
+  mp4     = { glyph = '󰈫', hl = 'MiniIconAzure'  },
+  mpeg    = { glyph = '󰈫', hl = 'MiniIconPurple' },
+  mpg     = { glyph = '󰈫', hl = 'MiniIconPurple' },
+  webm    = { glyph = '󰈫', hl = 'MiniIconGrey'   },
+  wmv     = { glyph = '󰈫', hl = 'MiniIconBlue'   },
+
+  -- Audio
+  aac  = { glyph = '󰈣', hl = 'MiniIconYellow' },
+  aif  = { glyph = '󰈣', hl = 'MiniIconCyan'   },
+  flac = { glyph = '󰈣', hl = 'MiniIconOrange' },
+  m4a  = { glyph = '󰈣', hl = 'MiniIconPurple' },
+  mp3  = { glyph = '󰈣', hl = 'MiniIconAzure'  },
+  ogg  = { glyph = '󰈣', hl = 'MiniIconGrey'   },
+  snd  = { glyph = '󰈣', hl = 'MiniIconRed'    },
+  wav  = { glyph = '󰈣', hl = 'MiniIconGreen'  },
+  wma  = { glyph = '󰈣', hl = 'MiniIconBlue'   },
+
+  -- Image
+  bmp  = { glyph = '󰈟', hl = 'MiniIconPurple'  },
+  eps  = { glyph = '', hl = 'MiniIconRed'    },
+  gif  = { glyph = '󰵸', hl = 'MiniIconAzure'  },
+  jpeg = { glyph = '󰈥', hl = 'MiniIconOrange' },
+  jpg  = { glyph = '󰈥', hl = 'MiniIconOrange' },
+  png  = { glyph = '󰸭', hl = 'MiniIconGreen'  },
+  tif  = { glyph = '󰈟', hl = 'MiniIconYellow' },
+  tiff = { glyph = '󰈟', hl = 'MiniIconYellow' },
+  webp = { glyph = '󰈟', hl = 'MiniIconBlue'   },
+
+  -- Archives
+  ["7z"] = { glyph = '󰗄', hl = 'MiniIconBlue'   },
+  bz     = { glyph = '󰗄', hl = 'MiniIconOrange' },
+  bz2    = { glyph = '󰗄', hl = 'MiniIconOrange' },
+  bz3    = { glyph = '󰗄', hl = 'MiniIconOrange' },
+  gz     = { glyph = '󰗄', hl = 'MiniIconGrey'   },
+  rar    = { glyph = '󰗄', hl = 'MiniIconGreen'  },
+  rpm    = { glyph = '󰗄', hl = 'MiniIconRed'    },
+  sit    = { glyph = '󰗄', hl = 'MiniIconRed'    },
+  tar    = { glyph = '󰗄', hl = 'MiniIconCyan'   },
+  tgz    = { glyph = '󰗄', hl = 'MiniIconGrey'   },
+  txz    = { glyph = '󰗄', hl = 'MiniIconPurple' },
+  xz     = { glyph = '󰗄', hl = 'MiniIconGreen'  },
+  z      = { glyph = '󰗄', hl = 'MiniIconGrey'   },
+  zip    = { glyph = '󰗄', hl = 'MiniIconAzure'  },
+  zst    = { glyph = '󰗄', hl = 'MiniIconYellow' },
+
+  -- Software
+  doc  = { glyph = '󰈭', hl = 'MiniIconAzure' },
+  docm = { glyph = '󰈭', hl = 'MiniIconAzure' },
+  docx = { glyph = '󰈭', hl = 'MiniIconAzure' },
+  dot  = { glyph = '󰈭', hl = 'MiniIconAzure' },
+  dotx = { glyph = '󰈭', hl = 'MiniIconAzure' },
+  exe  = { glyph = '󰒔', hl = 'MiniIconGrey'  },
+  pps  = { glyph = '󰈨', hl = 'MiniIconRed'   },
+  ppsm = { glyph = '󰈨', hl = 'MiniIconRed'   },
+  ppsx = { glyph = '󰈨', hl = 'MiniIconRed'   },
+  ppt  = { glyph = '󰈨', hl = 'MiniIconRed'   },
+  pptm = { glyph = '󰈨', hl = 'MiniIconRed'   },
+  pptx = { glyph = '󰈨', hl = 'MiniIconRed'   },
+  xls  = { glyph = '󰈜', hl = 'MiniIconGreen' },
+  xlsm = { glyph = '󰈜', hl = 'MiniIconGreen' },
+  xlsx = { glyph = '󰈜', hl = 'MiniIconGreen' },
+  xlt  = { glyph = '󰈜', hl = 'MiniIconGreen' },
+  xltm = { glyph = '󰈜', hl = 'MiniIconGreen' },
+  xltx = { glyph = '󰈜', hl = 'MiniIconGreen' },
 }
 
 -- Path icons. Keys are mostly some popular file/directory basenames and the
@@ -978,8 +1109,7 @@ H.extension_icons = {
 H.path_icons = {
   -- TODO: Add
   ['init.lua'] = { glyph = '', hl = 'MiniIconsGreen'  },
-  makefile     = H.filetype_icons.make,
-  license      = { glyph = '', hl = 'MiniIconsYellow' },
+  LICENSE      = { glyph = '', hl = 'MiniIconsYellow' },
 }
 
 -- OS icons. Keys are at least for all icons from Nerd fonts (`nf-linux-*`).
@@ -1086,6 +1216,7 @@ H.get_impl = {
   extension = function(name)
     if type(name) ~= 'string' then H.error('Extension name should be string.') end
     local icon_data = H.extension_icons[name]
+    if type(icon_data) == 'string' then icon_data = H.cache.filetype[icon_data] or H.filetype_icons[icon_data] end
     if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
 
     -- Fall back to built-in matching
@@ -1102,16 +1233,17 @@ H.get_impl = {
   path = function(name)
     if type(name) ~= 'string' then H.error('Path should be string.') end
     -- TODO: Optimize
-    local basename = vim.fn.fnamemodify(name, ':t'):lower()
+    local basename = vim.fn.fnamemodify(name, ':t')
     local icon_data = H.path_icons[basename]
     if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
 
     -- Try raw extension first for better speed (as `vim.filetype.match()` is
     -- relatively slow to be called many times; like 0.1 ms)
     -- TODO: Optimize and allow extensions with dots
-    local ext = (string.match(name, '%.([^%.]+)$') or ''):lower()
+    local ext = (string.match(basename, '%.([^%.]+)$') or ''):lower()
     icon_data = H.extension_icons[ext]
-    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+    if type(icon_data) == 'string' then icon_data = H.cache.filetype[icon_data] or H.filetype_icons[icon_data] end
+    if icon_data ~= nil then return H.finalize_icon(icon_data, basename), icon_data.hl end
 
     -- Fall back to built-in matching
     local ft = vim.filetype.match({ filename = basename, contents = { '' } })
