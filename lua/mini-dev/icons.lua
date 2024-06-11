@@ -1,13 +1,18 @@
 --- TODO:
 --- - Code:
----     - Check why 'png' and some archives are not highlighted in 'mini.pick'
----       and 'mini.files'.
----
 ---     - Think about the interface for default icons.
+---       Maybe a separate "core" category with "default" icon?
+---       Will also allow configuring something like "file", "directory", etc.
+---
+---     - Think about adding 'git_status' (for `git status` two character
+---       outputs) category.
 ---
 ---     - Verify how icons look in popular terminal emulators.
 ---
 ---     - Check how default highlight groups look in popular color schemes.
+---
+---     - Think about adding `MiniIcons.list(category)` to list all explicitly
+---       available icons.
 ---
 ---     - Add some popular plugin filetypes: from 'mini.nvim', from
 ---       'lazy.nvim', etc.
@@ -25,6 +30,7 @@
 ---
 --- - Tests:
 ---     - Works for 'Cargo.lock' (uses exact case and not lower case).
+---     - Works with files with no extension ('big-file')
 ---
 
 --- *mini.icons* Icon provider
@@ -38,7 +44,7 @@
 ---
 --- - Provide icons with their highlighting via a single |MiniIcons.get()| for
 ---   various categories: filetype, file name, directory name, extension,
----   operating system. Icons can be overridden.
+---   operating system, LSP kind. Icons can be overridden.
 ---
 --- - Configurable styles (glyph, ascii, box/circle filled/outlined).
 ---
@@ -130,6 +136,11 @@ MiniIcons.config = {
 --minidoc_afterlines_end
 
 MiniIcons.get = function(category, name)
+  if not (type(category) == 'string' and type(name) == 'string') then
+    H.error('Both `category` and `name` should be string.')
+  end
+
+  name = category == 'path' and H.fs_basename(name) or name
   local cached = H.cache[category][name]
   if cached ~= nil then return cached[1], cached[2] end
 
@@ -163,7 +174,7 @@ end
 H.default_config = MiniIcons.config
 
 -- Cache for `get()` output per category
-H.cache = { extension = {}, filetype = {}, path = {}, os = {} }
+H.cache = { extension = {}, filetype = {}, lsp_kind = {}, path = {}, os = {} }
 
 -- Filetype icons. Keys are filetypes explicitly supported by Neovim
 -- (i.e. present in `getcompletion('', 'filetype')` except technical ones).
@@ -959,7 +970,7 @@ H.filetype_icons = {
 H.extension_icons = {
   -- Popular extensions associated with supported filetype. Present to not have
   -- to rely on `vim.filetype.match()` in some cases (for performance or if it
-  -- fails to recognize filetype by filename and content only, like '.ts').
+  -- fails to compute filetype by filename and content only, like '.ts', '.h').
   -- Present only those which can be unambiguously detected from the extension.
   -- Value is string with filetype's name to inherit from its icon data
   asm   = 'asm',
@@ -983,6 +994,7 @@ H.extension_icons = {
   fish  = 'fish',
   fnl   = 'fennel',
   go    = 'go',
+  h     = { glyph = '󰫵', hl = 'MiniIconsPurple' },
   hs    = 'haskell',
   htm   = 'html',
   html  = 'html',
@@ -1014,6 +1026,7 @@ H.extension_icons = {
   rs    = 'rust',
   rst   = 'rst',
   scala = 'scala',
+  sh    = 'bash',
   sol   = 'solidity',
   srt   = 'srt',
   ss    = 'scheme',
@@ -1023,6 +1036,9 @@ H.extension_icons = {
   toml  = 'toml',
   ts    = 'typescript',
   tsv   = 'tsv',
+  -- Although there are some exact basename matches in `vim.filetype.match()`,
+  -- it does not detect 'txt' extension as "text" in most cases.
+  txt   = 'text',
   vim   = 'vim',
   vue   = 'vue',
   yaml  = 'yaml',
@@ -1031,83 +1047,124 @@ H.extension_icons = {
   zsh   = 'zsh',
 
   -- Video
-  ['3gp'] = { glyph = '󰈫', hl = 'MiniIconYellow' },
-  avi     = { glyph = '󰈫', hl = 'MiniIconGrey'   },
-  cast    = { glyph = '󰈫', hl = 'MiniIconRed'    },
-  m4v     = { glyph = '󰈫', hl = 'MiniIconOrange' },
-  mkv     = { glyph = '󰈫', hl = 'MiniIconGreen'  },
-  mov     = { glyph = '󰈫', hl = 'MiniIconCyan'   },
-  mp4     = { glyph = '󰈫', hl = 'MiniIconAzure'  },
-  mpeg    = { glyph = '󰈫', hl = 'MiniIconPurple' },
-  mpg     = { glyph = '󰈫', hl = 'MiniIconPurple' },
-  webm    = { glyph = '󰈫', hl = 'MiniIconGrey'   },
-  wmv     = { glyph = '󰈫', hl = 'MiniIconBlue'   },
+  ['3gp'] = { glyph = '󰈫', hl = 'MiniIconsYellow' },
+  avi     = { glyph = '󰈫', hl = 'MiniIconsGrey'   },
+  cast    = { glyph = '󰈫', hl = 'MiniIconsRed'    },
+  m4v     = { glyph = '󰈫', hl = 'MiniIconsOrange' },
+  mkv     = { glyph = '󰈫', hl = 'MiniIconsGreen'  },
+  mov     = { glyph = '󰈫', hl = 'MiniIconsCyan'   },
+  mp4     = { glyph = '󰈫', hl = 'MiniIconsAzure'  },
+  mpeg    = { glyph = '󰈫', hl = 'MiniIconsPurple' },
+  mpg     = { glyph = '󰈫', hl = 'MiniIconsPurple' },
+  webm    = { glyph = '󰈫', hl = 'MiniIconsGrey'   },
+  wmv     = { glyph = '󰈫', hl = 'MiniIconsBlue'   },
 
   -- Audio
-  aac  = { glyph = '󰈣', hl = 'MiniIconYellow' },
-  aif  = { glyph = '󰈣', hl = 'MiniIconCyan'   },
-  flac = { glyph = '󰈣', hl = 'MiniIconOrange' },
-  m4a  = { glyph = '󰈣', hl = 'MiniIconPurple' },
-  mp3  = { glyph = '󰈣', hl = 'MiniIconAzure'  },
-  ogg  = { glyph = '󰈣', hl = 'MiniIconGrey'   },
-  snd  = { glyph = '󰈣', hl = 'MiniIconRed'    },
-  wav  = { glyph = '󰈣', hl = 'MiniIconGreen'  },
-  wma  = { glyph = '󰈣', hl = 'MiniIconBlue'   },
+  aac  = { glyph = '󰈣', hl = 'MiniIconsYellow' },
+  aif  = { glyph = '󰈣', hl = 'MiniIconsCyan'   },
+  flac = { glyph = '󰈣', hl = 'MiniIconsOrange' },
+  m4a  = { glyph = '󰈣', hl = 'MiniIconsPurple' },
+  mp3  = { glyph = '󰈣', hl = 'MiniIconsAzure'  },
+  ogg  = { glyph = '󰈣', hl = 'MiniIconsGrey'   },
+  snd  = { glyph = '󰈣', hl = 'MiniIconsRed'    },
+  wav  = { glyph = '󰈣', hl = 'MiniIconsGreen'  },
+  wma  = { glyph = '󰈣', hl = 'MiniIconsBlue'   },
 
   -- Image
-  bmp  = { glyph = '󰈟', hl = 'MiniIconPurple'  },
-  eps  = { glyph = '', hl = 'MiniIconRed'    },
-  gif  = { glyph = '󰵸', hl = 'MiniIconAzure'  },
-  jpeg = { glyph = '󰈥', hl = 'MiniIconOrange' },
-  jpg  = { glyph = '󰈥', hl = 'MiniIconOrange' },
-  png  = { glyph = '󰸭', hl = 'MiniIconGreen'  },
-  tif  = { glyph = '󰈟', hl = 'MiniIconYellow' },
-  tiff = { glyph = '󰈟', hl = 'MiniIconYellow' },
-  webp = { glyph = '󰈟', hl = 'MiniIconBlue'   },
+  bmp  = { glyph = '󰈟', hl = 'MiniIconsGreen'  },
+  eps  = { glyph = '', hl = 'MiniIconsRed'    },
+  gif  = { glyph = '󰵸', hl = 'MiniIconsAzure'  },
+  jpeg = { glyph = '󰈥', hl = 'MiniIconsOrange' },
+  jpg  = { glyph = '󰈥', hl = 'MiniIconsOrange' },
+  png  = { glyph = '󰸭', hl = 'MiniIconsPurple' },
+  tif  = { glyph = '󰈟', hl = 'MiniIconsYellow' },
+  tiff = { glyph = '󰈟', hl = 'MiniIconsYellow' },
+  webp = { glyph = '󰈟', hl = 'MiniIconsBlue'   },
 
   -- Archives
-  ["7z"] = { glyph = '󰗄', hl = 'MiniIconBlue'   },
-  bz     = { glyph = '󰗄', hl = 'MiniIconOrange' },
-  bz2    = { glyph = '󰗄', hl = 'MiniIconOrange' },
-  bz3    = { glyph = '󰗄', hl = 'MiniIconOrange' },
-  gz     = { glyph = '󰗄', hl = 'MiniIconGrey'   },
-  rar    = { glyph = '󰗄', hl = 'MiniIconGreen'  },
-  rpm    = { glyph = '󰗄', hl = 'MiniIconRed'    },
-  sit    = { glyph = '󰗄', hl = 'MiniIconRed'    },
-  tar    = { glyph = '󰗄', hl = 'MiniIconCyan'   },
-  tgz    = { glyph = '󰗄', hl = 'MiniIconGrey'   },
-  txz    = { glyph = '󰗄', hl = 'MiniIconPurple' },
-  xz     = { glyph = '󰗄', hl = 'MiniIconGreen'  },
-  z      = { glyph = '󰗄', hl = 'MiniIconGrey'   },
-  zip    = { glyph = '󰗄', hl = 'MiniIconAzure'  },
-  zst    = { glyph = '󰗄', hl = 'MiniIconYellow' },
+  ["7z"] = { glyph = '󰗄', hl = 'MiniIconsBlue'   },
+  bz     = { glyph = '󰗄', hl = 'MiniIconsOrange' },
+  bz2    = { glyph = '󰗄', hl = 'MiniIconsOrange' },
+  bz3    = { glyph = '󰗄', hl = 'MiniIconsOrange' },
+  gz     = { glyph = '󰗄', hl = 'MiniIconsGrey'   },
+  rar    = { glyph = '󰗄', hl = 'MiniIconsGreen'  },
+  rpm    = { glyph = '󰗄', hl = 'MiniIconsRed'    },
+  sit    = { glyph = '󰗄', hl = 'MiniIconsRed'    },
+  tar    = { glyph = '󰗄', hl = 'MiniIconsCyan'   },
+  tgz    = { glyph = '󰗄', hl = 'MiniIconsGrey'   },
+  txz    = { glyph = '󰗄', hl = 'MiniIconsPurple' },
+  xz     = { glyph = '󰗄', hl = 'MiniIconsGreen'  },
+  z      = { glyph = '󰗄', hl = 'MiniIconsGrey'   },
+  zip    = { glyph = '󰗄', hl = 'MiniIconsAzure'  },
+  zst    = { glyph = '󰗄', hl = 'MiniIconsYellow' },
 
   -- Software
-  doc  = { glyph = '󰈭', hl = 'MiniIconAzure' },
-  docm = { glyph = '󰈭', hl = 'MiniIconAzure' },
-  docx = { glyph = '󰈭', hl = 'MiniIconAzure' },
-  dot  = { glyph = '󰈭', hl = 'MiniIconAzure' },
-  dotx = { glyph = '󰈭', hl = 'MiniIconAzure' },
-  exe  = { glyph = '󰒔', hl = 'MiniIconGrey'  },
-  pps  = { glyph = '󰈨', hl = 'MiniIconRed'   },
-  ppsm = { glyph = '󰈨', hl = 'MiniIconRed'   },
-  ppsx = { glyph = '󰈨', hl = 'MiniIconRed'   },
-  ppt  = { glyph = '󰈨', hl = 'MiniIconRed'   },
-  pptm = { glyph = '󰈨', hl = 'MiniIconRed'   },
-  pptx = { glyph = '󰈨', hl = 'MiniIconRed'   },
-  xls  = { glyph = '󰈜', hl = 'MiniIconGreen' },
-  xlsm = { glyph = '󰈜', hl = 'MiniIconGreen' },
-  xlsx = { glyph = '󰈜', hl = 'MiniIconGreen' },
-  xlt  = { glyph = '󰈜', hl = 'MiniIconGreen' },
-  xltm = { glyph = '󰈜', hl = 'MiniIconGreen' },
-  xltx = { glyph = '󰈜', hl = 'MiniIconGreen' },
+  doc  = { glyph = '󰈭', hl = 'MiniIconsAzure' },
+  docm = { glyph = '󰈭', hl = 'MiniIconsAzure' },
+  docx = { glyph = '󰈭', hl = 'MiniIconsAzure' },
+  dot  = { glyph = '󰈭', hl = 'MiniIconsAzure' },
+  dotx = { glyph = '󰈭', hl = 'MiniIconsAzure' },
+  exe  = { glyph = '󰒔', hl = 'MiniIconsGrey'  },
+  pps  = { glyph = '󰈨', hl = 'MiniIconsRed'   },
+  ppsm = { glyph = '󰈨', hl = 'MiniIconsRed'   },
+  ppsx = { glyph = '󰈨', hl = 'MiniIconsRed'   },
+  ppt  = { glyph = '󰈨', hl = 'MiniIconsRed'   },
+  pptm = { glyph = '󰈨', hl = 'MiniIconsRed'   },
+  pptx = { glyph = '󰈨', hl = 'MiniIconsRed'   },
+  xls  = { glyph = '󰈜', hl = 'MiniIconsGreen' },
+  xlsm = { glyph = '󰈜', hl = 'MiniIconsGreen' },
+  xlsx = { glyph = '󰈜', hl = 'MiniIconsGreen' },
+  xlt  = { glyph = '󰈜', hl = 'MiniIconsGreen' },
+  xltm = { glyph = '󰈜', hl = 'MiniIconsGreen' },
+  xltx = { glyph = '󰈜', hl = 'MiniIconsGreen' },
+}
+
+-- LSP kind values (completion item, symbol, etc.) icons.
+-- Use only `nf-cod-*` classes with "outline" look. Balance colors.
+--stylua: ignore
+H.lsp_kind_icons = {
+  array         = { glyph = '', hl = 'MiniIconsOrange' },
+  boolean       = { glyph = '', hl = 'MiniIconsOrange' },
+  class         = { glyph = '', hl = 'MiniIconsPurple' },
+  color         = { glyph = '', hl = 'MiniIconsRed'    },
+  constant      = { glyph = '', hl = 'MiniIconsOrange' },
+  constructor   = { glyph = '', hl = 'MiniIconsAzure'  },
+  enum          = { glyph = '', hl = 'MiniIconsPurple' },
+  enumMember    = { glyph = '', hl = 'MiniIconsYellow' },
+  event         = { glyph = '', hl = 'MiniIconsRed'    },
+  field         = { glyph = '', hl = 'MiniIconsYellow' },
+  file          = { glyph = '', hl = 'MiniIconsBlue'   },
+  folder        = { glyph = '', hl = 'MiniIconsBlue'   },
+  ['function']  = { glyph = '', hl = 'MiniIconsAzure'  },
+  interface     = { glyph = '', hl = 'MiniIconsPurple' },
+  key           = { glyph = '', hl = 'MiniIconsYellow' },
+  keyword       = { glyph = '', hl = 'MiniIconsCyan'   },
+  method        = { glyph = '', hl = 'MiniIconsAzure'  },
+  module        = { glyph = '', hl = 'MiniIconsPurple' },
+  namespace     = { glyph = '', hl = 'MiniIconsRed'    },
+  null          = { glyph = '', hl = 'MiniIconsGrey'   },
+  number        = { glyph = '', hl = 'MiniIconsOrange' },
+  object        = { glyph = '', hl = 'MiniIconsGrey'   },
+  operator      = { glyph = '', hl = 'MiniIconsCyan'   },
+  package       = { glyph = '', hl = 'MiniIconsPurple' },
+  property      = { glyph = '', hl = 'MiniIconsYellow' },
+  reference     = { glyph = '', hl = 'MiniIconsCyan'   },
+  snippet       = { glyph = '', hl = 'MiniIconsGreen'  },
+  string        = { glyph = '', hl = 'MiniIconsGreen'  },
+  struct        = { glyph = '', hl = 'MiniIconsPurple' },
+  text          = { glyph = '', hl = 'MiniIconsGreen'  },
+  typeParameter = { glyph = '', hl = 'MiniIconsCyan'   },
+  unit          = { glyph = '', hl = 'MiniIconsCyan'   },
+  unknown       = { glyph = '', hl = 'MiniIconsGrey'   },
+  value         = { glyph = '', hl = 'MiniIconsBlue'   },
+  variable      = { glyph = '', hl = 'MiniIconsCyan'   },
 }
 
 -- Path icons. Keys are mostly some popular file/directory basenames and the
 -- ones which can conflict with icon detection through extension.
 --stylua: ignore
 H.path_icons = {
-  -- TODO: Add
+  -- TODO: Add more
   ['init.lua'] = { glyph = '', hl = 'MiniIconsGreen'  },
   LICENSE      = { glyph = '', hl = 'MiniIconsYellow' },
 }
@@ -1212,48 +1269,62 @@ H.create_default_hl = function()
 end
 
 -- Getters --------------------------------------------------------------------
+H.get_from_extension = function(ext, full_basename)
+  local icon_data = H.extension_icons[ext]
+  if type(icon_data) == 'string' then return MiniIcons.get('filetype', icon_data) end
+  if icon_data ~= nil then return H.finalize_icon(icon_data, ext), icon_data.hl end
+end
+
 H.get_impl = {
   extension = function(name)
-    if type(name) ~= 'string' then H.error('Extension name should be string.') end
-    local icon_data = H.extension_icons[name]
-    if type(icon_data) == 'string' then icon_data = H.cache.filetype[icon_data] or H.filetype_icons[icon_data] end
-    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+    local icon, hl = H.get_from_extension(name)
+    if icon ~= nil then return icon, hl end
 
-    -- Fall back to built-in matching
+    -- Fall back to built-in filetype matching using generic filename
     local ft = vim.filetype.match({ filename = 'aaa.' .. name, contents = { '' } })
     if ft ~= nil then return MiniIcons.get('filetype', ft) end
   end,
 
   filetype = function(name)
-    if type(name) ~= 'string' then H.error('Filetype name should be string.') end
     local icon_data = H.filetype_icons[name]
     if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
   end,
 
-  path = function(name)
-    if type(name) ~= 'string' then H.error('Path should be string.') end
-    -- TODO: Optimize
-    local basename = vim.fn.fnamemodify(name, ':t')
-    local icon_data = H.path_icons[basename]
+  lsp_kind = function(name)
+    local icon_data = H.lsp_kind_icons[name]
     if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
-
-    -- Try raw extension first for better speed (as `vim.filetype.match()` is
-    -- relatively slow to be called many times; like 0.1 ms)
-    -- TODO: Optimize and allow extensions with dots
-    local ext = (string.match(basename, '%.([^%.]+)$') or ''):lower()
-    icon_data = H.extension_icons[ext]
-    if type(icon_data) == 'string' then icon_data = H.cache.filetype[icon_data] or H.filetype_icons[icon_data] end
-    if icon_data ~= nil then return H.finalize_icon(icon_data, basename), icon_data.hl end
-
-    -- Fall back to built-in matching
-    local ft = vim.filetype.match({ filename = basename, contents = { '' } })
-    if ft ~= nil then return MiniIcons.get('filetype', ft) end
   end,
 
   os = function(name)
-    if type(name) ~= 'string' then H.error('Operating system name should be string.') end
     local icon_data = H.os_icons[name]
     if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+  end,
+
+  path = function(name)
+    local icon_data = H.path_icons[name]
+    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+
+    -- Try using custom extensions first before for better speed (as
+    -- `vim.filetype.match()` is relatively slow to be called many times; like 0.1 ms)
+    local dot = string.find(name, '%..', 2)
+    if dot == nil then return end
+    while dot ~= nil do
+      local ext = name:sub(dot + 1):lower()
+
+      local cached = H.cache.extension[ext]
+      if cached ~= nil then return cached[1], cached[2] end
+
+      local icon, hl = H.get_from_extension(ext, name)
+      -- NOTE: don't set cache for found extension because it might be a result
+      -- of an exact basename match and not proper icon for extension as whole
+      if icon ~= nil then return icon, hl end
+
+      dot = string.find(name, '%..', dot + 1)
+    end
+
+    -- Fall back to built-in filetype matching using generic filename
+    local ft = vim.filetype.match({ filename = name, contents = { '' } })
+    if ft ~= nil then return MiniIcons.get('filetype', ft) end
   end,
 }
 
@@ -1267,6 +1338,14 @@ end
 H.error = function(msg) error(string.format('(mini.icons) %s', msg), 0) end
 
 H.notify = function(msg, level_name) vim.notify('(mini.icons) ' .. msg, vim.log.levels[level_name]) end
+
+H.fs_basename = function(x) return vim.fn.fnamemodify(x:sub(-1, -1) == '/' and x:sub(1, -2) or x, ':t') end
+if vim.loop.os_uname().sysname == 'Windows_NT' then
+  H.fs_basename = function(x)
+    local last = x:sub(-1, -1)
+    return vim.fn.fnamemodify((last == '/' or last == '\\') and x:sub(1, -2) or x, ':t')
+  end
+end
 
 -- local n = 1000
 -- H.bench_icons = function()
