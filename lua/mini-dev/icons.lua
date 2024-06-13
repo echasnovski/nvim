@@ -17,11 +17,6 @@
 ---     - Add some popular plugin filetypes: from 'mini.nvim', from
 ---       'lazy.nvim', etc.
 ---
----     - Think about whether file/directory distinction is necessary.
----       Maybe instead have single "path" category?
----
----     - Go through "Features" list.
----
 ---     - Write 'nvim-tree/nvim-web-devicons' mocks.
 ---
 --- - Docs:
@@ -30,7 +25,8 @@
 ---
 --- - Tests:
 ---     - Works for 'Cargo.lock' (uses exact case and not lower case).
----     - Works with files with no extension ('big-file')
+---     - Works with files with no extension ('big-file').
+---     - Custom and default icons are stylezed according to `config.style`.
 ---
 
 --- *mini.icons* Icon provider
@@ -43,10 +39,10 @@
 --- Features:
 ---
 --- - Provide icons with their highlighting via a single |MiniIcons.get()| for
----   various categories: filetype, file name, directory name, extension,
----   operating system, LSP kind. Icons can be overridden.
+---   various categories: filetype, file/directory path, extension, operating
+---   system, LSP kind. Icons and category defaults can be overridden.
 ---
---- - Configurable styles (glyph, ascii, box/circle filled/outlined).
+--- - Configurable styles: "glyph" (icon glyphs) or "ascii" (non-glyph fallback).
 ---
 --- - Fixed set of highlight groups allowing to use colors from color scheme.
 ---
@@ -115,9 +111,6 @@ MiniIcons.setup = function(config)
 
   -- Create default highlighting
   H.create_default_hl()
-
-  -- Clear cache
-  H.cache = { extension = {}, filetype = {}, path = {}, os = {} }
 end
 
 --stylua: ignore
@@ -127,11 +120,19 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Style ~
 MiniIcons.config = {
-  -- Icon style: 'glyph', 'ascii', 'box', 'circle', 'box-fill', 'circle-fill'
+  -- Icon style: 'glyph' or 'ascii'
   style = 'glyph',
 
-  -- Callable to provide custom output instead of built-in provider
-  custom = nil,
+  -- Custom icons per category. See `:h MiniIcons.config` for details.
+  custom_icons = {
+    default   = {},
+    directory = {},
+    extension = {},
+    file      = {},
+    filetype  = {},
+    lsp_kind  = {},
+    os        = {},
+  },
 }
 --minidoc_afterlines_end
 
@@ -140,16 +141,23 @@ MiniIcons.get = function(category, name)
     H.error('Both `category` and `name` should be string.')
   end
 
-  name = category == 'path' and H.fs_basename(name) or name
+  name = (category == 'file' or category == 'directory') and H.fs_basename(name) or name
   local cached = H.cache[category][name]
   if cached ~= nil then return cached[1], cached[2] end
 
-  -- TODO: Incorporate custom icons
-
   local getter = H.get_impl[category]
-  if getter == nil then H.error('Category ' .. vim.inspect(category) .. ' is not supported.') end
+  if getter == nil then H.error(vim.inspect(category) .. ' is not a supported category.') end
   local icon, hl = getter(name)
-  if icon ~= nil and hl ~= nil then H.cache[category][name] = { icon, hl } end
+
+  if icon == nil then
+    local default = H.cache.default[category]
+    icon, hl = default[1], default[2]
+  end
+  if hl == nil then
+    icon, hl = H.style_icon(icon.glyph, name), icon.hl
+  end
+
+  H.cache[category][name] = { icon, hl }
   return icon, hl
 end
 
@@ -159,7 +167,7 @@ MiniIcons.mock_nvim_web_devicons = function()
   module.get_icon = function(name, ext, opts)
     local icon, hl
     if type(name) == 'string' then
-      icon, hl = MiniIcons.get('path', name)
+      icon, hl = MiniIcons.get('file', name)
     end
     if type(ext) == 'string' then
       icon, hl = MiniIcons.get('extension', ext)
@@ -173,45 +181,57 @@ end
 -- Module default config
 H.default_config = MiniIcons.config
 
--- Cache for `get()` output per category
-H.cache = { extension = {}, filetype = {}, lsp_kind = {}, path = {}, os = {} }
+-- Default icons per supported category
+--stylua: ignore
+H.default_icons = {
+  default   = { glyph = '󰝤', hl = 'MiniIconsGrey'  },
+  directory = { glyph = '󰉋', hl = 'MiniIconsAzure' },
+  extension = { glyph = '󰈔', hl = 'MiniIconsGrey'  },
+  file      = { glyph = '󰈔', hl = 'MiniIconsGrey'  },
+  filetype  = { glyph = '󰈔', hl = 'MiniIconsGrey'  },
+  lsp_kind  = { glyph = '󰞋', hl = 'MiniIconsRed'   },
+  os        = { glyph = '󰞋', hl = 'MiniIconsRed'   },
+}
 
--- Filetype icons. Keys are filetypes explicitly supported by Neovim
--- (i.e. present in `getcompletion('', 'filetype')` except technical ones).
+-- Directory icons. Keys are some popular directory basenames.
+--stylua: ignore
+H.directory_icons = {
+  -- TODO: add more
+  ['.git']     = { glyph = '', hl = 'MiniIconsOrange' },
+  ['.github']  = { glyph = '', hl = 'MiniIconsBlue'   },
+  home         = { glyph = '󱂵', hl = 'MiniIconsAzure'  },
+  node_modules = { glyph = '', hl = 'MiniIconsRed'    },
+}
+
+-- Filetype icons. Keys are filetypes explicitly supported by Neovim core
+-- (i.e. present in `getcompletion('', 'filetype')` except technical ones)
+-- and filetypes from some popular plugins.
 -- Rough process of how glyphs and icons are chosen:
 -- - Try to balance usage of highlight groups.
--- - Prefer using icons with from the following classes (in decreasing order of
---   preference):
---     - `nf-md-*` (their UTF codes seem to be more thought through). It is
---       also correctly has double width in Kitty.
+-- - Prefer using the following Nerd Fonts classes (from best to worst):
+--     - `nf-md-*` (UTF codes seem to be more thought through). It is also
+--       correctly has double width in Kitty.
 --     - `nf-dev-*` (more supported devicons).
 --     - `nf-seti-*` (more up to date extensions).
--- - If it is present in 'nvim-web-devicons', use its highlight group inferred
---   to have most similar hue (based on OKLCH color space with equally spaced
---   grid as in 'mini.hues' and chroma=3 for grey cutoff; with some manual
---   interventions).
+-- - If filetype is present in 'nvim-web-devicons', use highlight group with
+--   most similar hue (based on OKLCH color space with equally spaced grid as
+--   in 'mini.hues' and chroma=3 for grey cutoff; adjust manually if needed).
 -- - Sets that have same/close glyphs but maybe different highlights:
 --     - Generic configuration filetypes (".*conf.*", ".*rc", if stated in
 --       filetype file description, etc.) have same glyph.
---     - Assembly ("asm").
---     - SQL.
+--     - Similar language: assembly ("asm"), SQL, Perl, HTML, CSV, shell.
 --     - Log files.
---     - Perl.
---     - HTML.
---     - CSV.
---     - Shell.
 --     - Make / build system.
 --     - Related to Internet/Web.
--- - For newly assigned icons prefer semantically close (first by filetype
---   origin, then by name) abstract icons with `nf-md-*` Nerd Font class.
+-- - For newly assigned icons use semantically close (first by filetype origin,
+--   then by name) abstract icons with `nf-md-*` Nerd Fonts class.
 -- - If no semantically close abstract icon present, use plain letter/digit
---   icon (based on the first character) with highlight groups picked randomly
---   to achieve overall balance (also try to minimize maximum number of
+--   icon (based on the first filetype character) with highlight groups picked
+--   randomly to achieve overall balance (trying to minimize maximum number of
 --   glyph-hl duplicates).
-
--- Neovim filetype plugins
 --stylua: ignore
 H.filetype_icons = {
+  -- Neovim filetype plugins
   ['8th']            = { glyph = '󰭁', hl = 'MiniIconsYellow' },
   a2ps               = { glyph = '󰒓', hl = 'MiniIconsCyan'   },
   a65                = { glyph = '', hl = 'MiniIconsRed'    },
@@ -353,7 +373,7 @@ H.filetype_icons = {
   desktop            = { glyph = '󰍹', hl = 'MiniIconsPurple' },
   dictconf           = { glyph = '󰒓', hl = 'MiniIconsOrange' },
   dictdconf          = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
-  diff               = { glyph = '󰦓', hl = 'MiniIconsAzure'  },
+  diff               = { glyph = '󰦓', hl = 'MiniIconsRed'    },
   dircolors          = { glyph = '󰫱', hl = 'MiniIconsRed'    },
   dirpager           = { glyph = '󰙅', hl = 'MiniIconsYellow' },
   diva               = { glyph = '󰫱', hl = 'MiniIconsRed'    },
@@ -1155,80 +1175,81 @@ H.lsp_kind_icons = {
   text          = { glyph = '', hl = 'MiniIconsGreen'  },
   typeParameter = { glyph = '', hl = 'MiniIconsCyan'   },
   unit          = { glyph = '', hl = 'MiniIconsCyan'   },
-  unknown       = { glyph = '', hl = 'MiniIconsGrey'   },
   value         = { glyph = '', hl = 'MiniIconsBlue'   },
   variable      = { glyph = '', hl = 'MiniIconsCyan'   },
 }
 
--- Path icons. Keys are mostly some popular file/directory basenames and the
--- ones which can conflict with icon detection through extension.
+-- File icons. Keys are mostly some popular file basenames and the ones which
+-- can conflict with icon detection based on extension.
 --stylua: ignore
-H.path_icons = {
+H.file_icons = {
   -- TODO: Add more
   ['init.lua'] = { glyph = '', hl = 'MiniIconsGreen'  },
   LICENSE      = { glyph = '', hl = 'MiniIconsYellow' },
 }
 
--- OS icons. Keys are at least for all icons from Nerd fonts (`nf-linux-*`).
--- Highlight groups are inferred to be aligned with 'nvim-web-devicons'.
+-- OS icons. Keys are at least for all OS icons from Nerd fonts (`nf-linux-*`),
+-- but still prefer `nf-md-*` classes.
 --stylua: ignore
 H.os_icons = {
-  alma         = { glyph = '', hl = 'MiniIconsRed'    },
+  almalinux    = { glyph = '', hl = 'MiniIconsRed'    },
   alpine       = { glyph = '', hl = 'MiniIconsAzure'  },
   aosc         = { glyph = '', hl = 'MiniIconsRed'    },
-  apple        = { glyph = '', hl = 'MiniIconsGrey'   },
+  apple        = { glyph = '󰀵', hl = 'MiniIconsGrey'   },
   arch         = { glyph = '󰣇', hl = 'MiniIconsAzure'  },
-  archcraft    = { glyph = '', hl = 'MiniIconsCyan'   },
+  archcraft    = { glyph = '', hl = 'MiniIconsGreen'  },
   archlabs     = { glyph = '', hl = 'MiniIconsGrey'   },
   arcolinux    = { glyph = '', hl = 'MiniIconsBlue'   },
-  artix        = { glyph = '', hl = 'MiniIconsAzure'  },
+  artix        = { glyph = '', hl = 'MiniIconsCyan'   },
   biglinux     = { glyph = '', hl = 'MiniIconsAzure'  },
-  centos       = { glyph = '', hl = 'MiniIconsRed'    },
+  budgie       = { glyph = '', hl = 'MiniIconsGrey'   },
+  centos       = { glyph = '󱄚', hl = 'MiniIconsRed'    },
   crystallinux = { glyph = '', hl = 'MiniIconsPurple' },
-  debian       = { glyph = '', hl = 'MiniIconsRed'    },
+  coreos       = { glyph = '', hl = 'MiniIconsBlue'    },
+  debian       = { glyph = '󰣚', hl = 'MiniIconsRed'    },
   deepin       = { glyph = '', hl = 'MiniIconsAzure'  },
   devuan       = { glyph = '', hl = 'MiniIconsGrey'   },
   elementary   = { glyph = '', hl = 'MiniIconsAzure'  },
   endeavour    = { glyph = '', hl = 'MiniIconsPurple' },
-  fedora       = { glyph = '', hl = 'MiniIconsBlue'   },
-  freebsd      = { glyph = '', hl = 'MiniIconsRed'    },
+  fedora       = { glyph = '󰣛', hl = 'MiniIconsBlue'   },
+  freebsd      = { glyph = '󰣠', hl = 'MiniIconsRed'    },
   garuda       = { glyph = '', hl = 'MiniIconsBlue'   },
   gentoo       = { glyph = '󰣨', hl = 'MiniIconsPurple' },
   guix         = { glyph = '', hl = 'MiniIconsYellow' },
   hyperbola    = { glyph = '', hl = 'MiniIconsGrey'   },
-  illumos      = { glyph = '', hl = 'MiniIconsRed'    },
+  illumos      = { glyph = '', hl = 'MiniIconsOrange' },
   kali         = { glyph = '', hl = 'MiniIconsBlue'   },
-  kdeneon      = { glyph = '', hl = 'MiniIconsCyan'   },
-  kubuntu      = { glyph = '', hl = 'MiniIconsAzure'  },
-  linux        = { glyph = '', hl = 'MiniIconsGrey'   },
+  kubuntu      = { glyph = '', hl = 'MiniIconsAzure'  },
+  linux        = { glyph = '󰌽', hl = 'MiniIconsGrey'   },
   locos        = { glyph = '', hl = 'MiniIconsYellow' },
   lxle         = { glyph = '', hl = 'MiniIconsGrey'   },
-  mageia       = { glyph = '', hl = 'MiniIconsAzure'  },
-  manjaro      = { glyph = '', hl = 'MiniIconsGreen'  },
+  mageia       = { glyph = '', hl = 'MiniIconsBlue'   },
+  mandriva     = { glyph = '', hl = 'MiniIconsYellow' },
+  manjaro      = { glyph = '󱘊', hl = 'MiniIconsGreen'  },
   mint         = { glyph = '󰣭', hl = 'MiniIconsGreen'  },
   mxlinux      = { glyph = '', hl = 'MiniIconsGrey'   },
-  nixos        = { glyph = '', hl = 'MiniIconsAzure'  },
+  nixos        = { glyph = '󱄅', hl = 'MiniIconsAzure'  },
   openbsd      = { glyph = '', hl = 'MiniIconsYellow' },
   opensuse     = { glyph = '', hl = 'MiniIconsGreen'  },
-  parabola     = { glyph = '', hl = 'MiniIconsBlue'   },
-  parrot       = { glyph = '', hl = 'MiniIconsAzure'  },
-  pop_os       = { glyph = '', hl = 'MiniIconsAzure'  },
+  parabola     = { glyph = '', hl = 'MiniIconsPurple' },
+  parrot       = { glyph = '', hl = 'MiniIconsCyan'   },
+  popos        = { glyph = '', hl = 'MiniIconsAzure'  },
   postmarketos = { glyph = '', hl = 'MiniIconsGreen'  },
   puppylinux   = { glyph = '', hl = 'MiniIconsGrey'   },
   qubesos      = { glyph = '', hl = 'MiniIconsBlue'   },
-  raspberry_pi = { glyph = '', hl = 'MiniIconsRed'    },
-  redhat       = { glyph = '󱄛', hl = 'MiniIconsOrange' },
+  raspberry_pi = { glyph = '󰐿', hl = 'MiniIconsRed'    },
+  redhat       = { glyph = '󱄛', hl = 'MiniIconsRed'    },
   rocky        = { glyph = '', hl = 'MiniIconsCyan'   },
   sabayon      = { glyph = '', hl = 'MiniIconsGrey'   },
   slackware    = { glyph = '', hl = 'MiniIconsBlue'   },
   solus        = { glyph = '', hl = 'MiniIconsBlue'   },
   tails        = { glyph = '', hl = 'MiniIconsPurple' },
   trisquel     = { glyph = '', hl = 'MiniIconsBlue'   },
-  ubuntu       = { glyph = '', hl = 'MiniIconsOrange' },
-  vanillaos    = { glyph = '', hl = 'MiniIconsYellow' },
+  ubuntu       = { glyph = '󰕈', hl = 'MiniIconsOrange' },
+  vanilla      = { glyph = '', hl = 'MiniIconsYellow' },
   void         = { glyph = '', hl = 'MiniIconsCyan'   },
-  windows      = { glyph = '', hl = 'MiniIconsAzure'  },
-  xerolinux    = { glyph = '', hl = 'MiniIconsBlue'   },
+  windows      = { glyph = '󰖳', hl = 'MiniIconsAzure'  },
+  xerolinux    = { glyph = '', hl = 'MiniIconsGrey'   },
   zorin        = { glyph = '', hl = 'MiniIconsAzure'  }
 }
 
@@ -1242,13 +1263,28 @@ H.setup_config = function(config)
 
   vim.validate({
     style = { config.style, 'string' },
-    override = { config.override, 'function', true },
+    custom_icons = { config.custom_icons, 'table' },
+  })
+
+  vim.validate({
+    ['custom_icons.default'] = { config.custom_icons.default, 'table' },
+    ['custom_icons.directory'] = { config.custom_icons.directory, 'table' },
+    ['custom_icons.extension'] = { config.custom_icons.extension, 'table' },
+    ['custom_icons.file'] = { config.custom_icons.file, 'table' },
+    ['custom_icons.filetype'] = { config.custom_icons.filetype, 'table' },
+    ['custom_icons.lsp_kind'] = { config.custom_icons.lsp_kind, 'table' },
+    ['custom_icons.os'] = { config.custom_icons.os, 'table' },
   })
 
   return config
 end
 
-H.apply_config = function(config) MiniIcons.config = config end
+H.apply_config = function(config)
+  MiniIcons.config = config
+
+  -- Initialize cache for quicker `get()`
+  H.init_cache(config.custom_icons)
+end
 
 --stylua: ignore
 H.create_default_hl = function()
@@ -1268,14 +1304,35 @@ H.create_default_hl = function()
   hi('MiniIconsYellow', { link = 'DiagnosticWarn' })
 end
 
--- Getters --------------------------------------------------------------------
-H.get_from_extension = function(ext, full_basename)
-  local icon_data = H.extension_icons[ext]
-  if type(icon_data) == 'string' then return MiniIcons.get('filetype', icon_data) end
-  if icon_data ~= nil then return H.finalize_icon(icon_data, ext), icon_data.hl end
+H.init_cache = function(custom_icons)
+  local categories = { 'directory', 'extension', 'file', 'filetype', 'lsp_kind', 'os' }
+
+  -- Cache is structured same as `custom_icons`, but for smaller size (by about
+  -- 10%) uses 1 and 2 as indexes instead of `glyph` and `hl`.
+  local cache = { default = { H.style_icon(H.default_icons.default.glyph, 'default'), H.default_icons.default.hl } }
+  local is_icon_data = function(x) return type(x) == 'table' and type(x.glyph) == 'string' and type(x.hl) == 'string' end
+  for _, cat in ipairs(categories) do
+    -- Set default
+    local builtin, custom = H.default_icons[cat], custom_icons.default[cat]
+    cache.default[cat] = is_icon_data(custom) and { H.style_icon(custom.glyph, cat), custom.hl }
+      or { H.style_icon(builtin.glyph, cat), builtin.hl }
+
+    -- Set custom
+    cache[cat] = {}
+    for name, icon_data in pairs(custom_icons[cat]) do
+      if is_icon_data(icon_data) then cache[cat][name] = { H.style_icon(icon_data.glyph, cat), icon_data.hl } end
+    end
+  end
+
+  H.cache = cache
 end
 
+-- Getters --------------------------------------------------------------------
 H.get_impl = {
+  default = function(name) H.error(vim.inspect(name) .. ' is not a supported category.') end,
+
+  directory = function(name) return H.directory_icons[name] end,
+
   extension = function(name)
     local icon, hl = H.get_from_extension(name)
     if icon ~= nil then return icon, hl end
@@ -1285,39 +1342,24 @@ H.get_impl = {
     if ft ~= nil then return MiniIcons.get('filetype', ft) end
   end,
 
-  filetype = function(name)
-    local icon_data = H.filetype_icons[name]
-    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
-  end,
-
-  lsp_kind = function(name)
-    local icon_data = H.lsp_kind_icons[name]
-    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
-  end,
-
-  os = function(name)
-    local icon_data = H.os_icons[name]
-    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
-  end,
-
-  path = function(name)
-    local icon_data = H.path_icons[name]
-    if icon_data ~= nil then return H.finalize_icon(icon_data, name), icon_data.hl end
+  file = function(name)
+    local icon_data = H.file_icons[name]
+    if icon_data ~= nil then return icon_data end
 
     -- Try using custom extensions first before for better speed (as
-    -- `vim.filetype.match()` is relatively slow to be called many times; like 0.1 ms)
+    -- `vim.filetype.match()` is slow-ish to be called many times; like 0.1 ms)
     local dot = string.find(name, '%..', 2)
-    if dot == nil then return end
     while dot ~= nil do
       local ext = name:sub(dot + 1):lower()
 
       local cached = H.cache.extension[ext]
       if cached ~= nil then return cached[1], cached[2] end
 
-      local icon, hl = H.get_from_extension(ext, name)
-      -- NOTE: don't set cache for found extension because it might be a result
-      -- of an exact basename match and not proper icon for extension as whole
-      if icon ~= nil then return icon, hl end
+      local icon, hl = H.get_from_extension(ext)
+      if icon ~= nil then
+        H.cache.extension[ext] = { icon, hl }
+        return icon, hl
+      end
 
       dot = string.find(name, '%..', dot + 1)
     end
@@ -1326,13 +1368,21 @@ H.get_impl = {
     local ft = vim.filetype.match({ filename = name, contents = { '' } })
     if ft ~= nil then return MiniIcons.get('filetype', ft) end
   end,
+
+  filetype = function(name) return H.filetype_icons[name] end,
+
+  lsp_kind = function(name) return H.lsp_kind_icons[name] end,
+
+  os = function(name) return H.os_icons[name] end,
 }
 
--- Styles ---------------------------------------------------------------------
-H.finalize_icon = function(icon_data, name)
-  local style = MiniIcons.config.style
-  return style == 'glyph' and icon_data.glyph or (style == 'ascii' and name:sub(1, 1):upper() or '???')
+H.get_from_extension = function(ext)
+  local icon_data = H.extension_icons[ext]
+  if type(icon_data) == 'string' then return MiniIcons.get('filetype', icon_data) end
+  if icon_data ~= nil then return H.style_icon(icon_data.glyph, ext), icon_data.hl end
 end
+
+H.style_icon = function(glyph, name) return MiniIcons.config.style == 'ascii' and name:sub(1, 1):upper() or glyph end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error(string.format('(mini.icons) %s', msg), 0) end
@@ -1346,23 +1396,6 @@ if vim.loop.os_uname().sysname == 'Windows_NT' then
     return vim.fn.fnamemodify((last == '/' or last == '\\') and x:sub(1, -2) or x, ':t')
   end
 end
-
--- local n = 1000
--- H.bench_icons = function()
---   local start_time = vim.loop.hrtime()
---   for i = 1, n do
---     MiniIcons.get('path', 'aaa_' .. i .. '.lua')
---   end
---   return 0.000001 * (vim.loop.hrtime() - start_time) / n
--- end
--- H.bench_devicons = function()
---   local get_icon = require('nvim-web-devicons').get_icon
---   local start_time = vim.loop.hrtime()
---   for i = 1, n do
---     get_icon('aaa_' .. i .. '.lua', nil, { default = false })
---   end
---   return 0.000001 * (vim.loop.hrtime() - start_time) / n
--- end
 
 _G.count_ft_hl = function()
   local res = { total = 0 }
@@ -1389,5 +1422,8 @@ end
 --   vim.fn.setreg('z', new_val)
 --   vim.cmd('normal ' .. n .. 'nvgn"zP')
 -- end
+
+-- Initialize cache right away to allow using `get()` without `setup()`
+H.init_cache(MiniIcons.config.custom_icons)
 
 return MiniIcons
