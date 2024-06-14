@@ -1,10 +1,10 @@
 --- TODO:
 --- - Code:
+---     - !!! Rething again about not using `custom_icons` in favor of allowing
+---       categories be top level. This reduces one level of nesting.
+---
 ---     - Think about adding 'git_status' (for `git status` two character
 ---       outputs) category.
----
----     - Think about replacing "os" with a richer "linux" which is more
----       aligned to Nerd Fonts class.
 ---
 ---     - Verify how icons look in popular terminal emulators.
 ---
@@ -62,6 +62,10 @@
 ---
 --- - 'nvim-tree/nvim-web-devicons':
 ---     - ...
+---     - Main `get_icon` function can return `nil` if no icon is supported,
+---       while this module always returns an icon possibly falling back to
+---       configurable default. This is more aligned with the most common use case
+---       of showing an icon with or beside some data.
 ---
 --- # Highlight groups ~
 ---
@@ -168,23 +172,27 @@ MiniIcons.list = function(category)
   local category_icons = H[category .. '_icons']
   if category_icons == nil then H.error(vim.inspect(category) .. ' is not a supported category.') end
 
-  local res = vim.tbl_keys(category_icons)
+  -- Output is a union of explicit built-in and custom icons
+  local res_map = {}
+  for k, _ in pairs(category_icons) do
+    res_map[k] = true
+  end
+  for k, _ in pairs(MiniIcons.config.custom_icons[category]) do
+    res_map[k] = true
+  end
+
+  local res = vim.tbl_keys(res_map)
   table.sort(res)
   return res
 end
 
 MiniIcons.mock_nvim_web_devicons = function()
   local module = package.loaded['nvim-web-devicons'] or {}
-  -- TODO
+  -- TODO: add more
   module.get_icon = function(name, ext, opts)
-    local icon, hl
-    if type(name) == 'string' then
-      icon, hl = MiniIcons.get('file', name)
-    end
-    if type(ext) == 'string' then
-      icon, hl = MiniIcons.get('extension', ext)
-    end
-    return icon or '', hl or 'MiniIconsGrey'
+    if type(name) == 'string' then return MiniIcons.get('file', name) end
+    if type(ext) == 'string' then return MiniIcons.get('extension', ext) end
+    H.error('In `require("nvim-web-devicons").get_icon()` either `name` or `ext` should be string.')
   end
   package.loaded['nvim-web-devicons'] = module
 end
@@ -196,13 +204,13 @@ H.default_config = MiniIcons.config
 -- Default icons per supported category
 --stylua: ignore
 H.default_icons = {
-  default   = { glyph = '󰝤', hl = 'MiniIconsGrey'  },
-  directory = { glyph = '󰉋', hl = 'MiniIconsAzure' },
-  extension = { glyph = '󰈔', hl = 'MiniIconsGrey'  },
-  file      = { glyph = '󰈔', hl = 'MiniIconsGrey'  },
-  filetype  = { glyph = '󰈔', hl = 'MiniIconsGrey'  },
-  lsp_kind  = { glyph = '󰞋', hl = 'MiniIconsRed'   },
-  os        = { glyph = '󰞋', hl = 'MiniIconsRed'   },
+  default   = { glyph = '󰝤', hl = 'MiniIconsGrey'   },
+  directory = { glyph = '󰉋', hl = 'MiniIconsAzure'  },
+  extension = { glyph = '󰈔', hl = 'MiniIconsGrey'   },
+  file      = { glyph = '󰈔', hl = 'MiniIconsGrey'   },
+  filetype  = { glyph = '󰈔', hl = 'MiniIconsGrey'   },
+  lsp_kind  = { glyph = '󰞋', hl = 'MiniIconsRed'    },
+  os        = { glyph = '󰟀', hl = 'MiniIconsPurple' },
 }
 
 -- Directory icons. Keys are some popular directory basenames.
@@ -211,6 +219,11 @@ H.directory_icons = {
   -- TODO: add more
   ['.git']     = { glyph = '', hl = 'MiniIconsOrange' },
   ['.github']  = { glyph = '', hl = 'MiniIconsBlue'   },
+  ['.cache']   = { glyph = '󰪺', hl = 'MiniIconsCyan'   },
+  ['.config']  = { glyph = '󱁿', hl = 'MiniIconsCyan'   },
+  ['.local']   = { glyph = '󰉌', hl = 'MiniIconsCyan'   },
+  ['.vim']     = { glyph = '󰉋', hl = 'MiniIconsGreen'  },
+  AppData      = { glyph = '󰉌', hl = 'MiniIconsCyan'   },
   home         = { glyph = '󱂵', hl = 'MiniIconsAzure'  },
   node_modules = { glyph = '', hl = 'MiniIconsRed'    },
 }
@@ -404,7 +417,7 @@ H.filetype_icons = {
   aap                = { glyph = '󰫮', hl = 'MiniIconsOrange' },
   abap               = { glyph = '󰫮', hl = 'MiniIconsGreen'  },
   abaqus             = { glyph = '󰫮', hl = 'MiniIconsGreen'  },
-  abc                = { glyph = '󰝚', hl = 'MiniIconsYellow' },
+  abc                = { glyph = '󰝚', hl = 'MiniIconsAzure'  },
   abel               = { glyph = '󰫮', hl = 'MiniIconsAzure'  },
   acedb              = { glyph = '󰆼', hl = 'MiniIconsGrey'   },
   ada                = { glyph = '󱁷', hl = 'MiniIconsAzure'  },
@@ -473,7 +486,7 @@ H.filetype_icons = {
   ch                 = { glyph = '󰫰', hl = 'MiniIconsCyan'   },
   chaiscript         = { glyph = '󰶞', hl = 'MiniIconsOrange' },
   change             = { glyph = '󰹳', hl = 'MiniIconsYellow'},
-  changelog          = { glyph = '', hl = 'MiniIconsBlue'   },
+  changelog          = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   chaskell           = { glyph = '󰲒', hl = 'MiniIconsGreen'  },
   chatito            = { glyph = '󰫰', hl = 'MiniIconsCyan'   },
   checkhealth        = { glyph = '󰓙', hl = 'MiniIconsBlue'   },
@@ -528,7 +541,7 @@ H.filetype_icons = {
   dcd                = { glyph = '󰫱', hl = 'MiniIconsCyan'   },
   dcl                = { glyph = '󰫱', hl = 'MiniIconsAzure'  },
   deb822sources      = { glyph = '󰫱', hl = 'MiniIconsCyan'   },
-  debchangelog       = { glyph = '', hl = 'MiniIconsBlue'   },
+  debchangelog       = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   debcontrol         = { glyph = '󰫱', hl = 'MiniIconsOrange' },
   debcopyright       = { glyph = '', hl = 'MiniIconsRed'    },
   debsources         = { glyph = '󰫱', hl = 'MiniIconsYellow' },
@@ -577,7 +590,7 @@ H.filetype_icons = {
   eruby              = { glyph = '󰴭', hl = 'MiniIconsOrange' },
   esmtprc            = { glyph = '󰒓', hl = 'MiniIconsYellow' },
   esqlc              = { glyph = '󰆼', hl = 'MiniIconsGrey'   },
-  esterel            = { glyph = '󰫲', hl = 'MiniIconsYellow' },
+  esterel            = { glyph = '󰫲', hl = 'MiniIconsAzure'  },
   eterm              = { glyph = '󰒓', hl = 'MiniIconsCyan'   },
   euphoria3          = { glyph = '󰫲', hl = 'MiniIconsRed'    },
   euphoria4          = { glyph = '󰫲', hl = 'MiniIconsYellow' },
@@ -594,7 +607,7 @@ H.filetype_icons = {
   fgl                = { glyph = '󰫳', hl = 'MiniIconsCyan'   },
   fish               = { glyph = '', hl = 'MiniIconsGrey'   },
   flexwiki           = { glyph = '󰖬', hl = 'MiniIconsPurple' },
-  focexec            = { glyph = '󰫳', hl = 'MiniIconsOrange' },
+  focexec            = { glyph = '󰫳', hl = 'MiniIconsPurple' },
   form               = { glyph = '󰫳', hl = 'MiniIconsCyan'   },
   forth              = { glyph = '󰬽', hl = 'MiniIconsRed'    },
   fortran            = { glyph = '󱈚', hl = 'MiniIconsPurple' },
@@ -672,7 +685,7 @@ H.filetype_icons = {
   icemenu            = { glyph = '󰒓', hl = 'MiniIconsPurple' },
   icon               = { glyph = '󰫶', hl = 'MiniIconsGreen'  },
   idl                = { glyph = '󰫶', hl = 'MiniIconsRed'    },
-  idlang             = { glyph = '󱗿', hl = 'MiniIconsYellow' },
+  idlang             = { glyph = '󱗿', hl = 'MiniIconsAzure'  },
   inform             = { glyph = '󰫶', hl = 'MiniIconsOrange' },
   initex             = { glyph = '', hl = 'MiniIconsGreen'  },
   initng             = { glyph = '󰫶', hl = 'MiniIconsAzure'  },
@@ -728,7 +741,7 @@ H.filetype_icons = {
   lite               = { glyph = '󰫹', hl = 'MiniIconsCyan'   },
   litestep           = { glyph = '󰒓', hl = 'MiniIconsYellow' },
   livebook           = { glyph = '󰂾', hl = 'MiniIconsGreen'  },
-  logcheck           = { glyph = '', hl = 'MiniIconsBlue'   },
+  logcheck           = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   loginaccess        = { glyph = '󰒓', hl = 'MiniIconsPurple' },
   logindefs          = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
   logtalk            = { glyph = '󰫹', hl = 'MiniIconsOrange' },
@@ -827,14 +840,14 @@ H.filetype_icons = {
   openvpn            = { glyph = '󰖂', hl = 'MiniIconsPurple' },
   opl                = { glyph = '󰫼', hl = 'MiniIconsPurple' },
   ora                = { glyph = '󰒓', hl = 'MiniIconsYellow' },
-  pacmanlog          = { glyph = '', hl = 'MiniIconsBlue'   },
+  pacmanlog          = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   pamconf            = { glyph = '󰒓', hl = 'MiniIconsCyan'   },
   pamenv             = { glyph = '󰒓', hl = 'MiniIconsYellow' },
   pandoc             = { glyph = '󰍔', hl = 'MiniIconsYellow' },
   papp               = { glyph = '', hl = 'MiniIconsAzure'  },
   pascal             = { glyph = '󱤊', hl = 'MiniIconsRed'    },
   passwd             = { glyph = '󰟵', hl = 'MiniIconsGrey'   },
-  pbtxt              = { glyph = '󰦨', hl = 'MiniIconsAzure'  },
+  pbtxt              = { glyph = '󰈚', hl = 'MiniIconsRed'    },
   pcap               = { glyph = '󰐪', hl = 'MiniIconsRed'    },
   pccts              = { glyph = '󰫽', hl = 'MiniIconsRed'    },
   pdf                = { glyph = '󰈦', hl = 'MiniIconsRed'    },
@@ -877,7 +890,7 @@ H.filetype_icons = {
   psl                = { glyph = '󰫽', hl = 'MiniIconsAzure'  },
   ptcap              = { glyph = '󰐪', hl = 'MiniIconsRed'    },
   purescript         = { glyph = '', hl = 'MiniIconsGrey'   },
-  purifylog          = { glyph = '', hl = 'MiniIconsBlue'   },
+  purifylog          = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   pymanifest         = { glyph = '󰌠', hl = 'MiniIconsAzure'  },
   pyrex              = { glyph = '󰫽', hl = 'MiniIconsYellow' },
   python             = { glyph = '󰌠', hl = 'MiniIconsYellow' },
@@ -899,7 +912,7 @@ H.filetype_icons = {
   ratpoison          = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
   rc                 = { glyph = '󰒓', hl = 'MiniIconsCyan'   },
   rcs                = { glyph = '󰫿', hl = 'MiniIconsYellow' },
-  rcslog             = { glyph = '', hl = 'MiniIconsBlue'   },
+  rcslog             = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   readline           = { glyph = '󰒓', hl = 'MiniIconsGrey'   },
   rebol              = { glyph = '󰫿', hl = 'MiniIconsBlue'   },
   redif              = { glyph = '󰫿', hl = 'MiniIconsOrange' },
@@ -1040,7 +1053,7 @@ H.filetype_icons = {
   tex                = { glyph = '', hl = 'MiniIconsGreen'  },
   texinfo            = { glyph = '', hl = 'MiniIconsAzure'  },
   texmf              = { glyph = '󰒓', hl = 'MiniIconsPurple' },
-  text               = { glyph = '󰦨', hl = 'MiniIconsAzure'  },
+  text               = { glyph = '󰦪', hl = 'MiniIconsYellow'  },
   tf                 = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
   tidy               = { glyph = '󰌝', hl = 'MiniIconsBlue'   },
   tilde              = { glyph = '󰜥', hl = 'MiniIconsRed'    },
@@ -1073,13 +1086,13 @@ H.filetype_icons = {
   updatedb           = { glyph = '󰒓', hl = 'MiniIconsGrey'   },
   upstart            = { glyph = '󰬂', hl = 'MiniIconsCyan'   },
   upstreamdat        = { glyph = '󰬂', hl = 'MiniIconsGreen'  },
-  upstreaminstalllog = { glyph = '', hl = 'MiniIconsBlue'   },
-  upstreamlog        = { glyph = '', hl = 'MiniIconsBlue'   },
+  upstreaminstalllog = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
+  upstreamlog        = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   upstreamrpt        = { glyph = '󰬂', hl = 'MiniIconsYellow' },
   urlshortcut        = { glyph = '󰌷', hl = 'MiniIconsPurple' },
   usd                = { glyph = '󰻇', hl = 'MiniIconsAzure'  },
-  usserverlog        = { glyph = '', hl = 'MiniIconsBlue'   },
-  usw2kagtlog        = { glyph = '', hl = 'MiniIconsBlue'   },
+  usserverlog        = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
+  usw2kagtlog        = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   v                  = { glyph = '󰬃', hl = 'MiniIconsBlue'   },
   valgrind           = { glyph = '󰍛', hl = 'MiniIconsGrey'   },
   vb                 = { glyph = '󰛤', hl = 'MiniIconsPurple' },
@@ -1102,7 +1115,7 @@ H.filetype_icons = {
   wdiff              = { glyph = '󰦓', hl = 'MiniIconsBlue'   },
   wdl                = { glyph = '󰬄', hl = 'MiniIconsGrey'   },
   web                = { glyph = '󰯊', hl = 'MiniIconsGrey'   },
-  webmacro           = { glyph = '󰬄', hl = 'MiniIconsGreen'  },
+  webmacro           = { glyph = '󰬄', hl = 'MiniIconsCyan'  },
   wget               = { glyph = '󰒓', hl = 'MiniIconsYellow' },
   wget2              = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
   winbatch           = { glyph = '󰯂', hl = 'MiniIconsBlue'   },
@@ -1159,19 +1172,28 @@ H.filetype_icons = {
 -- can conflict with icon detection based on extension.
 --stylua: ignore
 H.file_icons = {
-  ['.DS_Store']     = { glyph = '󰒓', hl = 'MiniIconsRed'    },
-  ['.bash_profile'] = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
-  ['.bashrc']       = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
-  ['.dockerignore'] = { glyph = '󰡨', hl = 'MiniIconsGrey'   },
-  ['.mailmap']      = { glyph = '󰊢', hl = 'MiniIconsCyan'   },
-  ['.npmignore']    = { glyph = '󰒓', hl = 'MiniIconsGrey'   },
-  ['.nvmrc']        = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
-  ['.xinitrc']      = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
-  ['.zshrc']        = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
-  LICENSE           = { glyph = '', hl = 'MiniIconsYellow' },
-  PKGBUILD          = { glyph = '󱁤', hl = 'MiniIconsPurple' },
-  README            = { glyph = '', hl = 'MiniIconsYellow' },
-  ['init.lua']      = { glyph = '', hl = 'MiniIconsGreen'  },
+  ['.DS_Store']          = { glyph = '󰒓', hl = 'MiniIconsRed'    },
+  ['.bash_profile']      = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  ['.bashrc']            = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  ['.dockerignore']      = { glyph = '󰡨', hl = 'MiniIconsGrey'   },
+  ['.mailmap']           = { glyph = '󰊢', hl = 'MiniIconsCyan'   },
+  ['.npmignore']         = { glyph = '󰒓', hl = 'MiniIconsGrey'   },
+  ['.nvmrc']             = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  ['.xinitrc']           = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
+  ['.zshrc']             = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  CHANGELOG              = { glyph = '󰉻', hl = 'MiniIconsBlue'   },
+  ['CHANGELOG.md']       = { glyph = '󰉻', hl = 'MiniIconsBlue'   },
+  CODE_OF_CONDUCT        = { glyph = '󱃱', hl = 'MiniIconsRed'    },
+  ['CODE_OF_CONDUCT.md'] = { glyph = '󱃱', hl = 'MiniIconsRed'    },
+  CONTRIBUTING           = { glyph = '󰺾', hl = 'MiniIconsAzure'  },
+  ['CONTRIBUTING.md']    = { glyph = '󰺾', hl = 'MiniIconsAzure'  },
+  ['FUNDING.yml']        = { glyph = '󰇁', hl = 'MiniIconsGreen'  },
+  LICENSE                = { glyph = '', hl = 'MiniIconsCyan'   },
+  ['LICENSE.md']         = { glyph = '', hl = 'MiniIconsCyan'   },
+  PKGBUILD               = { glyph = '󱁤', hl = 'MiniIconsPurple' },
+  README                 = { glyph = '', hl = 'MiniIconsYellow' },
+  ['README.md']          = { glyph = '', hl = 'MiniIconsYellow' },
+  ['init.lua']           = { glyph = '', hl = 'MiniIconsGreen'  },
 }
 
 -- LSP kind values (completion item, symbol, etc.) icons.
@@ -1214,69 +1236,26 @@ H.lsp_kind_icons = {
   variable      = { glyph = '', hl = 'MiniIconsCyan'   },
 }
 
--- OS icons. Keys are at least for all OS icons from Nerd fonts (`nf-linux-*`),
--- but still prefer `nf-md-*` classes.
+-- OS icons. Keys are for operating systems present as `md-*` class icons, as
+-- this feels representative of "popular" operating systems.
 --stylua: ignore
 H.os_icons = {
-  almalinux    = { glyph = '', hl = 'MiniIconsRed'    },
-  alpine       = { glyph = '', hl = 'MiniIconsAzure'  },
-  aosc         = { glyph = '', hl = 'MiniIconsRed'    },
+  android      = { glyph = '󰀲', hl = 'MiniIconsGreen'  },
   apple        = { glyph = '󰀵', hl = 'MiniIconsGrey'   },
   arch         = { glyph = '󰣇', hl = 'MiniIconsAzure'  },
-  archcraft    = { glyph = '', hl = 'MiniIconsGreen'  },
-  archlabs     = { glyph = '', hl = 'MiniIconsGrey'   },
-  arcolinux    = { glyph = '', hl = 'MiniIconsBlue'   },
-  artix        = { glyph = '', hl = 'MiniIconsCyan'   },
-  biglinux     = { glyph = '', hl = 'MiniIconsAzure'  },
-  budgie       = { glyph = '', hl = 'MiniIconsGrey'   },
   centos       = { glyph = '󱄚', hl = 'MiniIconsRed'    },
-  crystallinux = { glyph = '', hl = 'MiniIconsPurple' },
-  coreos       = { glyph = '', hl = 'MiniIconsBlue'    },
   debian       = { glyph = '󰣚', hl = 'MiniIconsRed'    },
-  deepin       = { glyph = '', hl = 'MiniIconsAzure'  },
-  devuan       = { glyph = '', hl = 'MiniIconsGrey'   },
-  elementary   = { glyph = '', hl = 'MiniIconsAzure'  },
-  endeavour    = { glyph = '', hl = 'MiniIconsPurple' },
   fedora       = { glyph = '󰣛', hl = 'MiniIconsBlue'   },
   freebsd      = { glyph = '󰣠', hl = 'MiniIconsRed'    },
-  garuda       = { glyph = '', hl = 'MiniIconsBlue'   },
   gentoo       = { glyph = '󰣨', hl = 'MiniIconsPurple' },
-  guix         = { glyph = '', hl = 'MiniIconsYellow' },
-  hyperbola    = { glyph = '', hl = 'MiniIconsGrey'   },
-  illumos      = { glyph = '', hl = 'MiniIconsOrange' },
-  kali         = { glyph = '', hl = 'MiniIconsBlue'   },
-  kubuntu      = { glyph = '', hl = 'MiniIconsAzure'  },
   linux        = { glyph = '󰌽', hl = 'MiniIconsGrey'   },
-  locos        = { glyph = '', hl = 'MiniIconsYellow' },
-  lxle         = { glyph = '', hl = 'MiniIconsGrey'   },
-  mageia       = { glyph = '', hl = 'MiniIconsBlue'   },
-  mandriva     = { glyph = '', hl = 'MiniIconsYellow' },
   manjaro      = { glyph = '󱘊', hl = 'MiniIconsGreen'  },
   mint         = { glyph = '󰣭', hl = 'MiniIconsGreen'  },
-  mxlinux      = { glyph = '', hl = 'MiniIconsGrey'   },
   nixos        = { glyph = '󱄅', hl = 'MiniIconsAzure'  },
-  openbsd      = { glyph = '', hl = 'MiniIconsYellow' },
-  opensuse     = { glyph = '', hl = 'MiniIconsGreen'  },
-  parabola     = { glyph = '', hl = 'MiniIconsPurple' },
-  parrot       = { glyph = '', hl = 'MiniIconsCyan'   },
-  popos        = { glyph = '', hl = 'MiniIconsAzure'  },
-  postmarketos = { glyph = '', hl = 'MiniIconsGreen'  },
-  puppylinux   = { glyph = '', hl = 'MiniIconsGrey'   },
-  qubesos      = { glyph = '', hl = 'MiniIconsBlue'   },
   raspberry_pi = { glyph = '󰐿', hl = 'MiniIconsRed'    },
   redhat       = { glyph = '󱄛', hl = 'MiniIconsRed'    },
-  rocky        = { glyph = '', hl = 'MiniIconsCyan'   },
-  sabayon      = { glyph = '', hl = 'MiniIconsGrey'   },
-  slackware    = { glyph = '', hl = 'MiniIconsBlue'   },
-  solus        = { glyph = '', hl = 'MiniIconsBlue'   },
-  tails        = { glyph = '', hl = 'MiniIconsPurple' },
-  trisquel     = { glyph = '', hl = 'MiniIconsBlue'   },
   ubuntu       = { glyph = '󰕈', hl = 'MiniIconsOrange' },
-  vanilla      = { glyph = '', hl = 'MiniIconsYellow' },
-  void         = { glyph = '', hl = 'MiniIconsCyan'   },
   windows      = { glyph = '󰖳', hl = 'MiniIconsAzure'  },
-  xerolinux    = { glyph = '', hl = 'MiniIconsGrey'   },
-  zorin        = { glyph = '', hl = 'MiniIconsAzure'  }
 }
 
 -- Helper functionality =======================================================
