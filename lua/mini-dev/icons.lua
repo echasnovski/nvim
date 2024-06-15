@@ -1,17 +1,11 @@
 --- TODO:
 --- - Code:
----     - !!! Rething again about not using `custom_icons` in favor of allowing
----       categories be top level. This reduces one level of nesting.
----
----     - Think about adding 'git_status' (for `git status` two character
----       outputs) category.
+---     - Add some popular plugin filetypes: from 'mini.nvim', from
+---       'lazy.nvim', etc.
 ---
 ---     - Verify how icons look in popular terminal emulators.
 ---
 ---     - Check how default highlight groups look in popular color schemes.
----
----     - Add some popular plugin filetypes: from 'mini.nvim', from
----       'lazy.nvim', etc.
 ---
 ---     - Write 'nvim-tree/nvim-web-devicons' mocks.
 ---
@@ -124,16 +118,14 @@ MiniIcons.config = {
   -- Icon style: 'glyph' or 'ascii'
   style = 'glyph',
 
-  -- Custom icons per category. See `:h MiniIcons.config` for details.
-  custom_icons = {
-    default   = {},
-    directory = {},
-    extension = {},
-    file      = {},
-    filetype  = {},
-    lsp_kind  = {},
-    os        = {},
-  },
+  -- Customize per category. See `:h MiniIcons.config` for details.
+  default   = {},
+  directory = {},
+  extension = {},
+  file      = {},
+  filetype  = {},
+  lsp       = {},
+  os        = {},
 }
 --minidoc_afterlines_end
 
@@ -177,7 +169,7 @@ MiniIcons.list = function(category)
   for k, _ in pairs(category_icons) do
     res_map[k] = true
   end
-  for k, _ in pairs(MiniIcons.config.custom_icons[category]) do
+  for k, _ in pairs(MiniIcons.config[category]) do
     res_map[k] = true
   end
 
@@ -204,28 +196,51 @@ H.default_config = MiniIcons.config
 -- Default icons per supported category
 --stylua: ignore
 H.default_icons = {
-  default   = { glyph = '󰝤', hl = 'MiniIconsGrey'   },
+  default   = { glyph = '󰟢', hl = 'MiniIconsGrey'   },
   directory = { glyph = '󰉋', hl = 'MiniIconsAzure'  },
   extension = { glyph = '󰈔', hl = 'MiniIconsGrey'   },
   file      = { glyph = '󰈔', hl = 'MiniIconsGrey'   },
   filetype  = { glyph = '󰈔', hl = 'MiniIconsGrey'   },
-  lsp_kind  = { glyph = '󰞋', hl = 'MiniIconsRed'    },
+  lsp       = { glyph = '󰞋', hl = 'MiniIconsRed'    },
   os        = { glyph = '󰟀', hl = 'MiniIconsPurple' },
 }
 
--- Directory icons. Keys are some popular directory basenames.
+-- Directory icons. Keys are some popular *language-agnostic* directory
+-- basenames. Use only "folder-shaped" glyphs while prefering `nf-md-folder-*`
+-- classes (unless glyph is designed specifically for the directory name)
 --stylua: ignore
 H.directory_icons = {
-  -- TODO: add more
-  ['.git']     = { glyph = '', hl = 'MiniIconsOrange' },
-  ['.github']  = { glyph = '', hl = 'MiniIconsBlue'   },
-  ['.cache']   = { glyph = '󰪺', hl = 'MiniIconsCyan'   },
-  ['.config']  = { glyph = '󱁿', hl = 'MiniIconsCyan'   },
-  ['.local']   = { glyph = '󰉌', hl = 'MiniIconsCyan'   },
-  ['.vim']     = { glyph = '󰉋', hl = 'MiniIconsGreen'  },
-  AppData      = { glyph = '󰉌', hl = 'MiniIconsCyan'   },
-  home         = { glyph = '󱂵', hl = 'MiniIconsAzure'  },
-  node_modules = { glyph = '', hl = 'MiniIconsRed'    },
+  ['.cache']    = { glyph = '󰪺', hl = 'MiniIconsCyan'   },
+  ['.config']   = { glyph = '󱁿', hl = 'MiniIconsCyan'   },
+  ['.git']      = { glyph = '', hl = 'MiniIconsOrange' },
+  ['.github']   = { glyph = '', hl = 'MiniIconsBlue'   },
+  ['.local']    = { glyph = '󰉌', hl = 'MiniIconsCyan'   },
+  ['.vim']      = { glyph = '󰉋', hl = 'MiniIconsGreen'  },
+  AppData       = { glyph = '󰉌', hl = 'MiniIconsCyan'   },
+  bin           = { glyph = '󱧺', hl = 'MiniIconsYellow' },
+  build         = { glyph = '󱧼', hl = 'MiniIconsBlue'   },
+  boot          = { glyph = '󰴋', hl = 'MiniIconsYellow' },
+  dev           = { glyph = '󱧼', hl = 'MiniIconsYellow' },
+  doc           = { glyph = '󱧶', hl = 'MiniIconsPurple' },
+  docs          = { glyph = '󱧶', hl = 'MiniIconsPurple' },
+  etc           = { glyph = '󱁿', hl = 'MiniIconsYellow' },
+  home          = { glyph = '󱂵', hl = 'MiniIconsYellow' },
+  lib           = { glyph = '󰲂', hl = 'MiniIconsYellow' },
+  media         = { glyph = '󱂷', hl = 'MiniIconsYellow' },
+  mnt           = { glyph = '󱂷', hl = 'MiniIconsYellow' },
+  ['mini.nvim'] = { glyph = '󰚝', hl = 'MiniIconsRed'    },
+  node_modules  = { glyph = '', hl = 'MiniIconsGreen'  },
+  opt           = { glyph = '󰉗', hl = 'MiniIconsYellow' },
+  proc          = { glyph = '󰢬', hl = 'MiniIconsYellow' },
+  root          = { glyph = '󱞊', hl = 'MiniIconsYellow' },
+  sbin          = { glyph = '󱧺', hl = 'MiniIconsYellow' },
+  src           = { glyph = '󰴉', hl = 'MiniIconsPurple' },
+  srv           = { glyph = '󱋣', hl = 'MiniIconsYellow' },
+  tmp           = { glyph = '󰪺', hl = 'MiniIconsYellow' },
+  test          = { glyph = '󱞊', hl = 'MiniIconsBlue'   },
+  tests         = { glyph = '󱞊', hl = 'MiniIconsBlue'   },
+  usr           = { glyph = '󰉌', hl = 'MiniIconsYellow' },
+  var           = { glyph = '󱋣', hl = 'MiniIconsYellow' },
 }
 
 -- Extension icons
@@ -380,6 +395,35 @@ H.extension_icons = {
   xlt  = { glyph = '󰈜', hl = 'MiniIconsGreen' },
   xltm = { glyph = '󰈜', hl = 'MiniIconsGreen' },
   xltx = { glyph = '󰈜', hl = 'MiniIconsGreen' },
+}
+
+-- File icons. Keys are mostly some popular *language-agnostic* file basenames
+-- and the ones which can conflict with icon detection based on extension.
+--stylua: ignore
+H.file_icons = {
+  ['.DS_Store']          = { glyph = '󰒓', hl = 'MiniIconsRed'    },
+  ['.bash_profile']      = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  ['.bashrc']            = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  ['.dockerignore']      = { glyph = '󰡨', hl = 'MiniIconsGrey'   },
+  ['.git']               = { glyph = '󰊢', hl = 'MiniIconsOrange' },
+  ['.mailmap']           = { glyph = '󰊢', hl = 'MiniIconsCyan'   },
+  ['.npmignore']         = { glyph = '󰒓', hl = 'MiniIconsGrey'   },
+  ['.nvmrc']             = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  ['.xinitrc']           = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
+  ['.zshrc']             = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
+  CHANGELOG              = { glyph = '󰉻', hl = 'MiniIconsBlue'   },
+  ['CHANGELOG.md']       = { glyph = '󰉻', hl = 'MiniIconsBlue'   },
+  CODE_OF_CONDUCT        = { glyph = '󱃱', hl = 'MiniIconsRed'    },
+  ['CODE_OF_CONDUCT.md'] = { glyph = '󱃱', hl = 'MiniIconsRed'    },
+  CONTRIBUTING           = { glyph = '󰺾', hl = 'MiniIconsAzure'  },
+  ['CONTRIBUTING.md']    = { glyph = '󰺾', hl = 'MiniIconsAzure'  },
+  ['FUNDING.yml']        = { glyph = '󰇁', hl = 'MiniIconsGreen'  },
+  LICENSE                = { glyph = '', hl = 'MiniIconsCyan'   },
+  ['LICENSE.md']         = { glyph = '', hl = 'MiniIconsCyan'   },
+  PKGBUILD               = { glyph = '󱁤', hl = 'MiniIconsPurple' },
+  README                 = { glyph = '', hl = 'MiniIconsYellow' },
+  ['README.md']          = { glyph = '', hl = 'MiniIconsYellow' },
+  ['init.lua']           = { glyph = '', hl = 'MiniIconsGreen'  },
 }
 
 -- Filetype icons. Keys are filetypes explicitly supported by Neovim core
@@ -1168,34 +1212,6 @@ H.filetype_icons = {
   NvimTree           = { glyph = '󰙅', hl = 'MiniIconsGreen'  },
 }
 
--- File icons. Keys are mostly some popular file basenames and the ones which
--- can conflict with icon detection based on extension.
---stylua: ignore
-H.file_icons = {
-  ['.DS_Store']          = { glyph = '󰒓', hl = 'MiniIconsRed'    },
-  ['.bash_profile']      = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
-  ['.bashrc']            = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
-  ['.dockerignore']      = { glyph = '󰡨', hl = 'MiniIconsGrey'   },
-  ['.mailmap']           = { glyph = '󰊢', hl = 'MiniIconsCyan'   },
-  ['.npmignore']         = { glyph = '󰒓', hl = 'MiniIconsGrey'   },
-  ['.nvmrc']             = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
-  ['.xinitrc']           = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
-  ['.zshrc']             = { glyph = '󰒓', hl = 'MiniIconsGreen'  },
-  CHANGELOG              = { glyph = '󰉻', hl = 'MiniIconsBlue'   },
-  ['CHANGELOG.md']       = { glyph = '󰉻', hl = 'MiniIconsBlue'   },
-  CODE_OF_CONDUCT        = { glyph = '󱃱', hl = 'MiniIconsRed'    },
-  ['CODE_OF_CONDUCT.md'] = { glyph = '󱃱', hl = 'MiniIconsRed'    },
-  CONTRIBUTING           = { glyph = '󰺾', hl = 'MiniIconsAzure'  },
-  ['CONTRIBUTING.md']    = { glyph = '󰺾', hl = 'MiniIconsAzure'  },
-  ['FUNDING.yml']        = { glyph = '󰇁', hl = 'MiniIconsGreen'  },
-  LICENSE                = { glyph = '', hl = 'MiniIconsCyan'   },
-  ['LICENSE.md']         = { glyph = '', hl = 'MiniIconsCyan'   },
-  PKGBUILD               = { glyph = '󱁤', hl = 'MiniIconsPurple' },
-  README                 = { glyph = '', hl = 'MiniIconsYellow' },
-  ['README.md']          = { glyph = '', hl = 'MiniIconsYellow' },
-  ['init.lua']           = { glyph = '', hl = 'MiniIconsGreen'  },
-}
-
 -- LSP kind values (completion item, symbol, etc.) icons.
 -- Use only `nf-cod-*` classes with "outline" look. Balance colors.
 --stylua: ignore
@@ -1268,17 +1284,13 @@ H.setup_config = function(config)
 
   vim.validate({
     style = { config.style, 'string' },
-    custom_icons = { config.custom_icons, 'table' },
-  })
-
-  vim.validate({
-    ['custom_icons.default'] = { config.custom_icons.default, 'table' },
-    ['custom_icons.directory'] = { config.custom_icons.directory, 'table' },
-    ['custom_icons.extension'] = { config.custom_icons.extension, 'table' },
-    ['custom_icons.file'] = { config.custom_icons.file, 'table' },
-    ['custom_icons.filetype'] = { config.custom_icons.filetype, 'table' },
-    ['custom_icons.lsp_kind'] = { config.custom_icons.lsp_kind, 'table' },
-    ['custom_icons.os'] = { config.custom_icons.os, 'table' },
+    default = { config.default, 'table' },
+    directory = { config.directory, 'table' },
+    extension = { config.extension, 'table' },
+    file = { config.file, 'table' },
+    filetype = { config.filetype, 'table' },
+    lsp = { config.lsp, 'table' },
+    os = { config.os, 'table' },
   })
 
   return config
@@ -1288,7 +1300,7 @@ H.apply_config = function(config)
   MiniIcons.config = config
 
   -- Initialize cache for quicker `get()`
-  H.init_cache(config.custom_icons)
+  H.init_cache(config)
 end
 
 --stylua: ignore
@@ -1309,22 +1321,22 @@ H.create_default_hl = function()
   hi('MiniIconsYellow', { link = 'DiagnosticWarn' })
 end
 
-H.init_cache = function(custom_icons)
-  local categories = { 'directory', 'extension', 'file', 'filetype', 'lsp_kind', 'os' }
+H.init_cache = function(config)
+  local categories = { 'directory', 'extension', 'file', 'filetype', 'lsp', 'os' }
 
-  -- Cache is structured same as `custom_icons`, but for smaller size (by about
-  -- 10%) uses 1 and 2 as indexes instead of `glyph` and `hl`.
+  -- Cache is structured same customization tables in `config`, but for smaller
+  -- size (by about 10%) uses 1 and 2 as indexes instead of `glyph` and `hl`.
   local cache = { default = {} }
   local is_icon_data = function(x) return type(x) == 'table' and type(x.glyph) == 'string' and type(x.hl) == 'string' end
   for _, cat in ipairs(categories) do
     -- Set default
-    local builtin, custom = H.default_icons[cat], custom_icons.default[cat]
+    local builtin, custom = H.default_icons[cat], config.default[cat]
     cache.default[cat] = is_icon_data(custom) and { H.style_icon(custom.glyph, cat), custom.hl }
       or { H.style_icon(builtin.glyph, cat), builtin.hl }
 
     -- Set custom
     cache[cat] = {}
-    for name, icon_data in pairs(custom_icons[cat]) do
+    for name, icon_data in pairs(config[cat]) do
       if is_icon_data(icon_data) then cache[cat][name] = { H.style_icon(icon_data.glyph, cat), icon_data.hl } end
     end
   end
@@ -1372,7 +1384,7 @@ H.get_impl = {
     if ft ~= nil then return MiniIcons.get('filetype', ft) end
   end,
   filetype = function(name) return H.filetype_icons[name] end,
-  lsp_kind = function(name) return H.lsp_kind_icons[name] end,
+  lsp = function(name) return H.lsp_kind_icons[name] end,
   os = function(name) return H.os_icons[name] end,
 }
 
@@ -1424,6 +1436,6 @@ end
 -- end
 
 -- Initialize cache right away to allow using `get()` without `setup()`
-H.init_cache(MiniIcons.config.custom_icons)
+H.init_cache(MiniIcons.config)
 
 return MiniIcons
