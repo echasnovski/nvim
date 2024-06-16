@@ -1,13 +1,6 @@
 --- TODO:
 --- - Code:
----     - Add some popular plugin filetypes: from 'mini.nvim', from
----       'lazy.nvim', etc.
----
----     - Verify how icons look in popular terminal emulators.
----
 ---     - Check how default highlight groups look in popular color schemes.
----
----     - Write 'nvim-tree/nvim-web-devicons' mocks.
 ---
 --- - Docs:
 ---     - Require using Nerd Font at least version 3.0.0.
@@ -60,6 +53,16 @@
 ---       while this module always returns an icon possibly falling back to
 ---       configurable default. This is more aligned with the most common use case
 ---       of showing an icon with or beside some data.
+---     - This module caches all |MiniIcons.get()| return values resulting in really
+---       fast next similar calls, while 'nvim-web-devicons' does not do that.
+---     - Completely relies on the manually maintained tables of supported
+---       extensions and filenames, while this module uses |vim.filetype.match()|
+---       as a fallback resulting in a wider support and deeper integration
+---       with Neovim's filetype detection.
+---       This sometimes results into slightly slower first |MiniIcons.get()| call
+---       compared to `require('nvim-web-devicons').get_icon()`. The difference
+---       is reduced as much as reasonable by also having some manually tracked
+---       data tables for common cases.
 ---
 --- # Highlight groups ~
 ---
@@ -86,6 +89,7 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
+-- TODO: Make local prior to release
 MiniIcons = {}
 H = {}
 
@@ -179,14 +183,58 @@ MiniIcons.list = function(category)
 end
 
 MiniIcons.mock_nvim_web_devicons = function()
-  local module = package.loaded['nvim-web-devicons'] or {}
-  -- TODO: add more
-  module.get_icon = function(name, ext, opts)
+  local M = package.loaded['nvim-web-devicons'] or {}
+
+  -- Main functions which get icon and highlight group
+  M.get_icon = function(name, ext, opts)
     if type(name) == 'string' then return MiniIcons.get('file', name) end
     if type(ext) == 'string' then return MiniIcons.get('extension', ext) end
     H.error('In `require("nvim-web-devicons").get_icon()` either `name` or `ext` should be string.')
   end
-  package.loaded['nvim-web-devicons'] = module
+
+  M.get_icon_by_filetype = function(ft, opts) return MiniIcons.get('filetype', ft) end
+
+  -- Use default colors of default icon (#6d8086 and 66) by default
+  local get_hl_data = function(...) return vim.api.nvim_get_hl_by_name(...) end
+  local get_hex = function(hl) return string.format('#%06x', get_hl_data(hl, true).foreground or 7176326) end
+  local get_cterm = function(hl) return get_hl_data(hl, false).foreground or 66 end
+  local with_hex = function(icon, hl) return icon, get_hex(hl) end
+  local with_cterm = function(icon, hl) return icon, get_cterm(hl) end
+  local with_hex_cterm = function(icon, hl) return icon, get_hex(hl), get_cterm(hl) end
+
+  M.get_default_icon = function()
+    local icon, hl = MiniIcons.get('default', 'file')
+    return { icon = icon, color = get_hex(hl), cterm_color = tostring(get_cterm(hl)), name = 'Default' }
+  end
+
+  M.get_icon_color = function(...) return with_hex(M.get_icon(...)) end
+  M.get_icon_cterm_color = function(...) return with_cterm(M.get_icon(...)) end
+  M.get_icon_colors = function(...) return with_hex_cterm(M.get_icon(...)) end
+
+  M.get_icon_color_by_filetype = function(...) return with_hex(M.get_icon_by_filetype(...)) end
+  M.get_icon_cterm_color_by_filetype = function(...) return with_cterm(M.get_icon_by_filetype(...)) end
+  M.get_icon_colors_by_filetype = function(...) return with_hex_cterm(M.get_icon_by_filetype(...)) end
+
+  M.get_icon_name_by_filetype = function(ft) return ft end
+
+  -- Have only partial support for these. Consider adding more if needed.
+  M.get_icons = function() return {} end
+  M.get_icons_by_desktop_environment = function() return {} end
+  M.get_icons_by_extension = function() return {} end
+  M.get_icons_by_filename = function() return {} end
+  M.get_icons_by_operating_system = function() return {} end
+  M.get_icons_by_window_manager = function() return {} end
+
+  -- Should be no need in the these. Suggest using `MiniIcons.setup()`.
+  M.has_loaded = function() return true end
+  M.refresh = function() end
+  M.set_default_icon = function() end
+  M.set_icon = function() end
+  M.set_icon_by_filetype = function() end
+  M.set_up_highlights = function() end
+  M.setup = function() end
+
+  package.loaded['nvim-web-devicons'] = M
 end
 
 -- Helper data ================================================================
@@ -230,6 +278,7 @@ H.directory_icons = {
   mnt           = { glyph = '󱂷', hl = 'MiniIconsYellow' },
   ['mini.nvim'] = { glyph = '󰚝', hl = 'MiniIconsRed'    },
   node_modules  = { glyph = '', hl = 'MiniIconsGreen'  },
+  nvim          = { glyph = '󰉋', hl = 'MiniIconsGreen'  },
   opt           = { glyph = '󰉗', hl = 'MiniIconsYellow' },
   proc          = { glyph = '󰢬', hl = 'MiniIconsYellow' },
   root          = { glyph = '󱞊', hl = 'MiniIconsYellow' },
@@ -377,24 +426,24 @@ H.extension_icons = {
   zst    = { glyph = '󰗄', hl = 'MiniIconsYellow' },
 
   -- Software
-  doc  = { glyph = '󰈭', hl = 'MiniIconsAzure' },
-  docm = { glyph = '󰈭', hl = 'MiniIconsAzure' },
-  docx = { glyph = '󰈭', hl = 'MiniIconsAzure' },
-  dot  = { glyph = '󰈭', hl = 'MiniIconsAzure' },
-  dotx = { glyph = '󰈭', hl = 'MiniIconsAzure' },
+  doc  = { glyph = '󱎒', hl = 'MiniIconsAzure' },
+  docm = { glyph = '󱎒', hl = 'MiniIconsAzure' },
+  docx = { glyph = '󱎒', hl = 'MiniIconsAzure' },
+  dot  = { glyph = '󱎒', hl = 'MiniIconsAzure' },
+  dotx = { glyph = '󱎒', hl = 'MiniIconsAzure' },
   exe  = { glyph = '󰒔', hl = 'MiniIconsGrey'  },
-  pps  = { glyph = '󰈨', hl = 'MiniIconsRed'   },
-  ppsm = { glyph = '󰈨', hl = 'MiniIconsRed'   },
-  ppsx = { glyph = '󰈨', hl = 'MiniIconsRed'   },
-  ppt  = { glyph = '󰈨', hl = 'MiniIconsRed'   },
-  pptm = { glyph = '󰈨', hl = 'MiniIconsRed'   },
-  pptx = { glyph = '󰈨', hl = 'MiniIconsRed'   },
-  xls  = { glyph = '󰈜', hl = 'MiniIconsGreen' },
-  xlsm = { glyph = '󰈜', hl = 'MiniIconsGreen' },
-  xlsx = { glyph = '󰈜', hl = 'MiniIconsGreen' },
-  xlt  = { glyph = '󰈜', hl = 'MiniIconsGreen' },
-  xltm = { glyph = '󰈜', hl = 'MiniIconsGreen' },
-  xltx = { glyph = '󰈜', hl = 'MiniIconsGreen' },
+  pps  = { glyph = '󱎐', hl = 'MiniIconsRed'   },
+  ppsm = { glyph = '󱎐', hl = 'MiniIconsRed'   },
+  ppsx = { glyph = '󱎐', hl = 'MiniIconsRed'   },
+  ppt  = { glyph = '󱎐', hl = 'MiniIconsRed'   },
+  pptm = { glyph = '󱎐', hl = 'MiniIconsRed'   },
+  pptx = { glyph = '󱎐', hl = 'MiniIconsRed'   },
+  xls  = { glyph = '󱎏', hl = 'MiniIconsGreen' },
+  xlsm = { glyph = '󱎏', hl = 'MiniIconsGreen' },
+  xlsx = { glyph = '󱎏', hl = 'MiniIconsGreen' },
+  xlt  = { glyph = '󱎏', hl = 'MiniIconsGreen' },
+  xltm = { glyph = '󱎏', hl = 'MiniIconsGreen' },
+  xltx = { glyph = '󱎏', hl = 'MiniIconsGreen' },
 }
 
 -- File icons. Keys are mostly some popular *language-agnostic* file basenames
@@ -1203,13 +1252,15 @@ H.filetype_icons = {
   minipick               = { glyph = '', hl = 'MiniIconsCyan' },
   starter                = { glyph = '', hl = 'MiniIconsAzure' },
 
-  -- TODO: add more
-  -- Lua plugins
+  -- Popular Lua plugins which have a dedicated window workflow (i.e. when
+  -- displaying filetype might make sense)
+  harpoon            = { glyph = '󱡀', hl = 'MiniIconsOrange' },
   lazy               = { glyph = '󰒲', hl = 'MiniIconsBlue'   },
   mason              = { glyph = '󱌢', hl = 'MiniIconsGrey'   },
   ['neo-tree']       = { glyph = '󰙅', hl = 'MiniIconsYellow' },
   ['neo-tree-popup'] = { glyph = '󰙅', hl = 'MiniIconsYellow' },
   NvimTree           = { glyph = '󰙅', hl = 'MiniIconsGreen'  },
+  oil                = { glyph = '󰙅', hl = 'MiniIconsPurple' },
 }
 
 -- LSP kind values (completion item, symbol, etc.) icons.
@@ -1264,6 +1315,7 @@ H.os_icons = {
   fedora       = { glyph = '󰣛', hl = 'MiniIconsBlue'   },
   freebsd      = { glyph = '󰣠', hl = 'MiniIconsRed'    },
   gentoo       = { glyph = '󰣨', hl = 'MiniIconsPurple' },
+  ios          = { glyph = '󰀷', hl = 'MiniIconsAzure'  },
   linux        = { glyph = '󰌽', hl = 'MiniIconsGrey'   },
   manjaro      = { glyph = '󱘊', hl = 'MiniIconsGreen'  },
   mint         = { glyph = '󰣭', hl = 'MiniIconsGreen'  },
