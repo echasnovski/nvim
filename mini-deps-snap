@@ -1,13 +1,13 @@
 return {
   LuaSnip = "50fcf17db7c75af80e6b6109acfbfb4504768780",
-  ["conform.nvim"] = "5541c54cf2ab078a537838e1fb9d96ae47f71255",
+  ["conform.nvim"] = "6e5d476e97dbd251cc2233d42fd238c810404701",
   ["markdown-preview.nvim"] = "a923f5fc5ba36a3b17e289dc35dc17f66d0548ee",
   ["mason.nvim"] = "0950b15060067f752fde13a779a994f59516ce3d",
-  ["mini.nvim"] = "1d4772e9f4f3ddc125a5ec1386fd4f85c7e3bb18",
+  ["mini.nvim"] = "ebc8cb0c1f73ee6c53e0560957a37a2307a70f98",
   neogen = "6de0add4805165317ab7d3d36b5cef48b1b865f3",
   neoterm = "eca22dc90a9db5e52d8baf91f31991ad540ffe36",
-  ["nvim-lspconfig"] = "92166b89ab4b3d60f24e58170cac53b7141fd032",
-  ["nvim-treesitter"] = "9ebc589329083522f9594f408fc2652090b41139",
+  ["nvim-lspconfig"] = "bd7c76375a511994c9ca8d69441f134dc10ae3bd",
+  ["nvim-treesitter"] = "4d112977c706034370a7fed65f7c957ec268eaa2",
   ["nvim-treesitter-textobjects"] = "34867c69838078df7d6919b130c0541c0b400c47",
   ["nvim-web-devicons"] = "c0cfc1738361b5da1cd0a962dd6f774cc444f856",
   rainbow_csv = "bb2f154fd9c2bedb6513aa533baa7769e57874f2",
@@ -15,5 +15,5 @@ return {
   ["vim-pandoc"] = "fae27ec62606b6b914de5270985a69d1b5da1287",
   ["vim-pandoc-syntax"] = "16939cda184ff555938cc895cc62477c172997f9",
   ["vim-rmarkdown"] = "a1787cb55e45b8778eaed7b392648deb4706cd0b",
-  ["vim-test"] = "6acc7d96487abaaa57a19b0d43efaea6633d6bb7"
+  ["vim-test"] = "79c14672b0bfec6f92c626dc331326fdbed62b4f"
 }
