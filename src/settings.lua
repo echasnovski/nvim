@@ -41,6 +41,7 @@ vim.o.fillchars = table.concat(
 )
 vim.o.listchars = table.concat({ 'extends:…', 'nbsp:␣', 'precedes:…', 'tab:> ' }, ',')
 vim.o.cursorlineopt = 'screenline,number' -- Show cursor line only screen line when wrapped
+vim.o.breakindentopt = 'list:-1' -- Add padding for lists when 'wrap' is on
 
 if vim.fn.has('nvim-0.9') == 1 then
   vim.opt.shortmess:append('C') -- Don't show "Scanning..." messages
@@ -90,6 +91,10 @@ vim.g.markdown_folding = 1   -- Use folding by heading in markdown files
 
 if vim.fn.has('nvim-0.10') == 1 then
   vim.o.foldtext = ''        -- Use underlying text with its highlighting
+end
+
+if vim.fn.has('nvim-0.11') == 1 then
+  vim.opt.completeopt:append('fuzzy') -- Use fuzzy matching for built-in completion
 end
 
 -- Custom autocommands ========================================================
