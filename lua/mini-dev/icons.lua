@@ -67,38 +67,53 @@
 ---
 --- # Comparisons ~
 ---
---- - 'nvim-tree/nvim-web-devicons':
+--- - 'nvim-tree/nvim-web-devicons' (for users):
 ---     - Sets individual colors to each icon with separate specific highlight
 ---       groups, while this modules uses fixed set of highlight groups making
 ---       it easy to customize and blend better with any color scheme.
+---
+---     - This module prefers richer set of `nf-md-*` (from "Material design"
+---       set) Nerd Fonts icons while 'nvim-web-devicons' mostly prefers `nf-dev-*`
+---       (from "devicons" set).
+---
+---     - Both support customization of any icon.
+---
+---     - Supported categories are slightly different (with much overlap).
+---
+--- - 'nvim-tree/nvim-web-devicons' (for plugin developers):
+---     - Both have main "get icon" type of function:
+---         - Both return tuple of icon and highlight group strings.
+---
+---         - This module always returns icon data possibly falling back to
+---           user's configured default, while 'nvim-web-devicons' is able to
+---           return `nil`. This module's approach is more aligned with the most
+---           common use case of showing an icon instead or near some data.
+---
+---         - This module uses |vim.filetype.match()| as a fallback for "file"
+---           and "extension" categories, while 'nvim-web-devicons' completely
+---           relies on the manually maintained tables of supported filenames
+---           and extensions.
+---           Using fallback results in a wider support and deeper integration with
+---           Neovim's filetype detection at the cost of occasional slower first
+---           call. The difference is reduced as much as is reasonable by also
+---           having some manually tracked data tables for common cases.
+---
+---         - This module caches all its return values resulting in really fast
+---           next same argument calls, while 'nvim-web-devicons' doesn't do that.
+---
+---         - This module works with full file/directory paths as input.
+---
 ---     - Different sets of supported categories (see |MiniIcons.config|):
 ---         - Both support "file", "extension", "filetype", "operating system".
 ---           Albeit in different volumes: 'nvim-web-devicons' covers more
 ---           cases for "operating system", while this module has better eventual
 ---           coverage for other cases.
+---
 ---         - This module supports "directory" and "lsp" categories.
+---
 ---         - 'nvim-web-devicons' covers "desktop environment" and "window
 ---           management" categories. This modules does not include them due to
----           relatively low demand
----     - This module prefers richer set of `nf-md-*` (from "Material design"
----       set) Nerd Fonts icons while 'nvim-web-devicons' mostly prefers `nf-dev-*`
----       (from "devicons" set).
----     - Both have main "get icon" type of function:
----         - Both return tuple of icon and highlight group strings.
----         - This module always returns icon data possibly falling back to
----           configurable default, while 'nvim-web-devicons' one is able to
----           return `nil`. This is more aligned with the most common use case
----           of showing an icon with or beside some data.
----         - This module uses |vim.filetype.match()| as a fallback, while
----           'nvim-web-devicons' completely relies on the manually maintained
----           tables of supported extensions and filenames.
----           This results in a wider support and deeper integration with
----           Neovim's filetype detection at the cost of occasional slower first
----           call. The difference is reduced as much as is reasonable by also
----           having some manually tracked data tables for common cases.
----         - This module caches all its return values resulting in really fast
----           next same argument calls, while 'nvim-web-devicons' doesn't do that.
----         - This module works with full file/directory paths as input.
+---           relatively low demand.
 ---
 --- # Highlight groups ~
 ---
@@ -177,7 +192,9 @@ end
 --- - `config.os`
 ---
 --- Customization should be done by supplying a table with both <glyph> and <hl>
---- string fields as a value for an icon name entry. Example: >
+--- string fields as a value for an icon name entry. To customize either glyph or
+--- highlight group, use |MiniIcons.get()| to know and re-set the other field.
+--- Example: >lua
 ---
 ---   require('mini-dev.icons').setup({
 ---     default = {
@@ -190,8 +207,8 @@ end
 ---       lua = { glyph = '󰢱', hl = 'Special' },
 ---
 ---       -- Add icons for custom extension. This will also be used in
----       -- 'file' category for input like 'file.myext'.
----       myext = { glyph = '󰻲', hl = 'MiniIconsRed' },
+---       -- 'file' category for input like 'file.my.ext'.
+---       ['my.ext'] = { glyph = '󰻲', hl = 'MiniIconsRed' },
 ---     },
 ---   })
 ---
@@ -1086,7 +1103,6 @@ H.filetype_icons = {
   maple              = { glyph = '󰲓', hl = 'MiniIconsRed'    },
   markdown           = { glyph = '󰍔', hl = 'MiniIconsGrey'   },
   masm               = { glyph = '', hl = 'MiniIconsPurple' },
-  mason              = { glyph = '󰫺', hl = 'MiniIconsCyan'   },
   master             = { glyph = '󰫺', hl = 'MiniIconsOrange' },
   matlab             = { glyph = '󰿈', hl = 'MiniIconsOrange' },
   maxima             = { glyph = '󰫺', hl = 'MiniIconsGrey'   },
@@ -1473,7 +1489,7 @@ H.filetype_icons = {
   mininotify             = { glyph = '', hl = 'MiniIconsYellow' },
   ['mininotify-history'] = { glyph = '', hl = 'MiniIconsYellow' },
   minipick               = { glyph = '', hl = 'MiniIconsCyan' },
-  starter                = { glyph = '', hl = 'MiniIconsAzure' },
+  ministarter            = { glyph = '', hl = 'MiniIconsAzure' },
 
   -- Popular Lua plugins which have a dedicated "current window" workflow (i.e.
   -- when displaying filetype might make sense, especially with 'laststatus=3')
