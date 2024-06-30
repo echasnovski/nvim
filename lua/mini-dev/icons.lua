@@ -26,7 +26,8 @@
 ---
 --- - Configurable styles: "glyph" (icon glyphs) or "ascii" (non-glyph fallback).
 ---
---- - Fixed set of highlight groups for better blend with color scheme.
+--- - Fixed set of highlight groups (linked to built-in groups by default) for
+---   better blend with color scheme.
 ---
 --- - Caching for maximum performance.
 ---
@@ -40,12 +41,12 @@
 --- Suggested dependencies:
 ---
 --- - Terminal emulator that supports showing special utf8 glyphs, possibly with
----   "overflow" view (displaing is done not in one but two visual cells).
----   Most modern fature-rich terminal emulators support this out of the box:
+---   "overflow" view (displaying is done not in one but two visual cells).
+---   Most modern feature-rich terminal emulators support this out of the box:
 ---   WezTerm, Kitty, Alacritty, iTerm2, Ghostty.
 ---   Not having "overflow" feature only results into smaller icons.
 ---   Not having support for special utf8 glyphs will result into seemingly
----   random symbols (or question mark square) appearing instead of an icon glyph.
+---   random symbols (or question mark squares) instead of icon glyphs.
 ---
 --- - Font that supports Nerd Fonts (https://www.nerdfonts.com) icons from
 ---   version 3.0.0+ (in particular `nf-md-*` class).
@@ -53,7 +54,7 @@
 ---   patched with Nerd Fonts icons or using `NerdFontsSymbolsOnly` font as
 ---   a fallback for glyphs that are not supported in main font.
 ---
---- If using terminal emulator and font with icon support is impossible, use
+--- If using terminal emulator and/or font with icon support is impossible, use
 --- `config.style = 'ascii'`. It will use a (less visually appealing) set of
 --- non-glyph icons.
 ---
@@ -69,16 +70,30 @@
 ---
 --- - 'nvim-tree/nvim-web-devicons' (for users):
 ---     - Sets individual colors to each icon with separate specific highlight
----       groups, while this modules uses fixed set of highlight groups making
----       it easy to customize and blend better with any color scheme.
+---       groups, while this modules uses fixed set of highlight groups.
+---       This makes it easier to customize in bulk and actually blend with any
+---       color scheme.
 ---
----     - This module prefers richer set of `nf-md-*` (from "Material design"
----       set) Nerd Fonts icons while 'nvim-web-devicons' mostly prefers `nf-dev-*`
+---     - This module prefers richer set of `nf-md-*` (from "Material design" set)
+---       Nerd Fonts icons while 'nvim-web-devicons' mostly prefers `nf-dev-*`
 ---       (from "devicons" set).
 ---
----     - Both support customization of any icon.
----
 ---     - Supported categories are slightly different (with much overlap).
+---
+---     - Both support customization of any icon. Only this module supports
+---       customization of default ones per supported category.
+---
+---     - Using this module can occasionally result in small delays when used
+---       synchronously for many times to get icons for not typical files (like
+---       in |mini.files|). This is due to using |vim.filetype.match()| fallback and
+---       is present only during first call, as value is cached for later uses.
+---
+---     - This module supports different icon styles (like "ascii" for when using
+---       glyphs is not possible), while 'nvim-web-devicons' does not.
+---
+---     - This module provides |MiniIcons.mock_nvim_web_devicons()| function which
+---       when called imitates installed 'nvim-web-devicons' plugin to support
+---       other plugins which do not provide 'mini.icons' yet.
 ---
 --- - 'nvim-tree/nvim-web-devicons' (for plugin developers):
 ---     - Both have main "get icon" type of function:
@@ -87,16 +102,16 @@
 ---         - This module always returns icon data possibly falling back to
 ---           user's configured default, while 'nvim-web-devicons' is able to
 ---           return `nil`. This module's approach is more aligned with the most
----           common use case of showing an icon instead or near some data.
+---           common use case of always showing an icon instead or near some data.
 ---
 ---         - This module uses |vim.filetype.match()| as a fallback for "file"
 ---           and "extension" categories, while 'nvim-web-devicons' completely
 ---           relies on the manually maintained tables of supported filenames
 ---           and extensions.
----           Using fallback results in a wider support and deeper integration with
----           Neovim's filetype detection at the cost of occasional slower first
----           call. The difference is reduced as much as is reasonable by also
----           having some manually tracked data tables for common cases.
+---           Using fallback results in a wider support and deeper integration
+---           with Neovim's filetype detection at the cost of occasional slower
+---           first call. The difference is reduced as much as is reasonable by
+---           also having some manually tracked data tables for common cases.
 ---
 ---         - This module caches all its return values resulting in really fast
 ---           next same argument calls, while 'nvim-web-devicons' doesn't do that.
@@ -108,6 +123,7 @@
 ---           Albeit in different volumes: 'nvim-web-devicons' covers more
 ---           cases for "operating system", while this module has better eventual
 ---           coverage for other cases.
+---
 ---
 ---         - This module supports "directory" and "lsp" categories.
 ---
@@ -148,7 +164,11 @@ H = {}
 ---
 ---@param config table|nil Module config table. See |MiniIcons.config|.
 ---
----@usage `require('mini.icons').setup({})` (replace `{}` with your `config` table).
+---@usage >lua
+---   require('mini.icons').setup() -- use default config
+---   -- OR
+---   require('mini.icons').setup({}) -- replace {} with your config table
+--- <
 MiniIcons.setup = function(config)
   -- Export module
   _G.MiniIcons = MiniIcons
@@ -174,12 +194,13 @@ end
 --- - `'glyph'` (default) - use glyph icons (like 󰈔 and 󰉋 ).
 --- - `'ascii'` - use fallback ASCII-compatible icons. Those are computed as
 ---   an upper first character of the icon's resolved name inside its category.
----   Examples:
----     - `get('file', 'Makefile')` has `'M'` as icon.
----     - `get('extension', 'lua')` has `'L'` as icon.
----     - `get('file', 'file.lua')` has `'L'` as icon, as icon name is resolved
----       to be a 'lua' from 'extension' category.
+---   Examples: >lua
 ---
+---     MiniIcons.get('file', 'Makefile') -- Has `'M'` as icon
+---     MiniIcons.get('extension', 'lua') -- Has `'L'` as icon
+---     MiniIcons.get('file', 'file.lua') -- Has `'L'` as icon; it is resolved to
+---                                       -- come from 'lua' 'extension' category
+--- <
 --- # Customization per category ~
 ---
 --- The following entries can be used to customize icons for supported categories:
@@ -191,29 +212,27 @@ end
 --- - `config.lsp`
 --- - `config.os`
 ---
---- Customization should be done by supplying a table with both <glyph> and <hl>
---- string fields as a value for an icon name entry. To customize either glyph or
---- highlight group, use |MiniIcons.get()| to know and re-set the other field.
---- Example: >lua
+--- Customization should be done by supplying a table with <glyph> (icon glyph)
+--- and/or <hl> (name of highlight group) string fields as a value for an icon
+--- name entry. Example: >lua
 ---
----   require('mini-dev.icons').setup({
+---   require('mini.icons').setup({
 ---     default = {
----       -- Override default glyph for "file" category
----       -- NOTE: using `{ glyph = '󰈤' }` will not work
----       file = { glyph = '󰈤', hl = 'MiniIconsGrey' },
+---       -- Override default glyph for "file" category (reuse highlight group)
+---       file = { glyph = '󰈤' },
 ---     },
 ---     extension = {
 ---       -- Override highlight group (not necessary from 'mini.icons')
----       lua = { glyph = '󰢱', hl = 'Special' },
+---       lua = { hl = 'Special' },
 ---
 ---       -- Add icons for custom extension. This will also be used in
 ---       -- 'file' category for input like 'file.my.ext'.
 ---       ['my.ext'] = { glyph = '󰻲', hl = 'MiniIconsRed' },
 ---     },
 ---   })
----
+--- <
 --- Notes:
---- - These customization will only take effect inside |MiniIcons.setup()| call.
+--- - These customizations only take effect inside |MiniIcons.setup()| call.
 ---   Changing interactively via `:lua MiniIcons.config.xxx = { ... }` does not work
 ---   for performance reasons.
 MiniIcons.config = {
@@ -233,17 +252,17 @@ MiniIcons.config = {
 
 --- Get icon data
 ---
---- Usage example: >
+--- Usage example: >lua
 ---
 ---   -- Results into `icon` be '󰢱' and `hl` be 'MiniIconsAzure'
 ---   local icon, hl = MiniIcons.get('file', 'file.lua')
----
+--- <
 --- Notes:
 --- - Always returns some data, even if icon name is not explicitly supported
 ---   within target category. Category "default" is used as a fallback.
 ---
 --- - Glyphs are explicitly preferred (when reasonable) from a richer set of
----   `nf-md-*`class  ("Material design" set) of Nerd Fonts icons.
+---   `nf-md-*` class  ("Material design" set) of Nerd Fonts icons.
 ---
 --- - Output is cached after the first call to increase performance of next calls
 ---   with same arguments. To reset cache, call |MiniIcons.setup()|.
@@ -255,7 +274,7 @@ MiniIcons.config = {
 ---   - `'default'` - icon data used as fallback for any category.
 ---     Supported icon names: any supported category name.
 ---
----     Examples: >
+---     Examples: >lua
 ---
 ---       MiniIcons.get('default', 'file')
 --- <
@@ -263,7 +282,7 @@ MiniIcons.config = {
 ---     Supported icon names: any string, but only basename will be used.
 ---     Can be used for not existing paths (no check is done).
 ---
----     Examples: >
+---     Examples: >lua
 ---
 ---       -- All of these will result in the same output
 ---       MiniIcons.get('directory', '.config')
@@ -276,11 +295,12 @@ MiniIcons.config = {
 ---   - `'extension'` - icon data for extension.
 ---     Supported icon names: any string (without extra dot prefix).
 ---     Icon data is attempted to be resolved in the following order:
----       - List of manually tracked extension(s) (for better performance).
+---       - List of manually tracked extensions (for better performance).
 ---       - Filetype as a result of |vim.filetype.match()| with placeholder
----         file basename. Output of "filetype" category is used.
+---         file basename. Use output of corresponding "filetype" category.
 ---
----     Examples: >
+---     Examples: >lua
+---
 ---       -- All of these will result in the same output
 ---       MiniIcons.get('extension', 'lua')
 ---       MiniIcons.get('extension', 'LUA')
@@ -289,40 +309,41 @@ MiniIcons.config = {
 ---     Supported icon names: any string, but only basename will be used.
 ---     Can be used for not existing paths (no check is done).
 ---     Icon data is attempted to be resolved in the following order:
----       - Exact file basename.
----       - List of manually tracked extension(s) (for better performance).
----         Output of "extension" category is used.
+---       - List of manually tracked file basenames (should match exactly).
+---       - List of manually tracked extensions.  Use output of corresponding
+---         "extension" category.
 ---       - Filetype as a result of |vim.filetype.match()|.
----         Output of "filetype" category is used.
+---          Use output of corresponding "filetype" category.
 ---
----     Examples: >
+---     Examples: >lua
 ---
 ---       -- All of these will result in the same output
 ---       MiniIcons.get('file', 'init.lua')
 ---       MiniIcons.get('file', '~/.config/nvim/init.lua')
 ---       MiniIcons.get('file', '/home/user/.config/nvim/init.lua')
----       MiniIcons.get('file', 'init.LUA')
 ---
 ---       -- Results in different output
----       MiniIcons.get('directory', 'Init.lua')
+---       MiniIcons.get('file', 'Init.lua')
+---       MiniIcons.get('file', 'init.LUA')
 --- <
 ---   - `'filetype'` - icon data for 'filetype' values.
 ---     Supported icon names: any string.
----     Examples: >
+---     Examples: >lua
 ---
 ---       MiniIcons.get('filetype', 'lua')
+---       MiniIcons.get('filetype', 'help')
 ---       MiniIcons.get('filetype', 'minifiles')
 --- <
 ---   - `'lsp'` - icon data for various "LSP kind" values.
 ---     Supported icon names: any string.
----     Examples: >
+---     Examples: >lua
 ---
 ---       MiniIcons.get('lsp', 'array')
 ---       MiniIcons.get('lsp', 'keyword')
 --- <
 ---   - `'os'` - icon data for popular operating systems.
 ---     Supported icon names: any string.
----     Examples: >
+---     Examples: >lua
 ---
 ---       MiniIcons.get('os', 'linux')
 ---       MiniIcons.get('os', 'arch')
@@ -332,9 +353,11 @@ MiniIcons.config = {
 ---   names which are explicitly supported for specific category.
 ---
 ---@return [string,string] Tuple of icon string and a highlight group name it is
----   suggested to be highlighted with. Example:
----   `local icon, hl = MiniIcons.get('filetype', 'lua')` results in `icon` being `'󰢱'
----   and `hl` being `'MiniIconsAzure'`.
+---   suggested to be highlighted with. Example: >lua
+---
+---   -- Results into `icon` be '󰢱' and `hl` be 'MiniIconsAzure'
+---   local icon, hl = MiniIcons.get('file', 'file.lua')
+--- <
 MiniIcons.get = function(category, name)
   if not (type(category) == 'string' and type(name) == 'string') then
     H.error('Both `category` and `name` should be string.')
@@ -393,17 +416,18 @@ end
 --- Mock 'nvim-web-devicons' module
 ---
 --- Call this function to mock exported functions of 'nvim-tree/nvim-web-devicons'
---- plugin. It will mock all its function which return icon data by
+--- plugin. It will mock all its functions which return icon data by
 --- using |MiniIcons.get()| equivalent.
+---
 --- This function is useful until all relevant to you plugins depend solely on
 --- 'nvim-web-devicons' and have not yet added an integration with 'mini.icons'.
 ---
---- Full example of usage: >
+--- Full example of usage: >lua
 ---
 ---   require('mini.icons').setup()
 ---   MiniIcons.mock_nvim_web_devicons()
----
---- Works without installed 'nvim-web-devicons' or even with it installed (needs
+--- <
+--- Works without installed 'nvim-web-devicons' and even with it installed (needs
 --- to be called after 'nvim-web-devicons' is set up).
 MiniIcons.mock_nvim_web_devicons = function()
   local M = package.loaded['nvim-web-devicons'] or {}
@@ -817,7 +841,7 @@ H.filetype_icons = {
   cgdbrc             = { glyph = '󰒓', hl = 'MiniIconsRed'    },
   ch                 = { glyph = '󰫰', hl = 'MiniIconsCyan'   },
   chaiscript         = { glyph = '󰶞', hl = 'MiniIconsOrange' },
-  change             = { glyph = '󰹳', hl = 'MiniIconsYellow'},
+  change             = { glyph = '󰹳', hl = 'MiniIconsYellow' },
   changelog          = { glyph = '󰷐', hl = 'MiniIconsBlue'   },
   chaskell           = { glyph = '󰲒', hl = 'MiniIconsGreen'  },
   chatito            = { glyph = '󰫰', hl = 'MiniIconsCyan'   },
@@ -1357,6 +1381,7 @@ H.filetype_icons = {
   structurizr        = { glyph = '󰬀', hl = 'MiniIconsBlue'   },
   stylus             = { glyph = '󰴒', hl = 'MiniIconsGrey'   },
   sudoers            = { glyph = '󰒓', hl = 'MiniIconsGrey'   },
+  svelte             = { glyph = '', hl = 'MiniIconsOrange' },
   svg                = { glyph = '󰜡', hl = 'MiniIconsYellow' },
   svn                = { glyph = '󰜘', hl = 'MiniIconsOrange' },
   swayconfig         = { glyph = '󰒓', hl = 'MiniIconsPurple' },
@@ -1384,7 +1409,7 @@ H.filetype_icons = {
   tex                = { glyph = '', hl = 'MiniIconsGreen'  },
   texinfo            = { glyph = '', hl = 'MiniIconsAzure'  },
   texmf              = { glyph = '󰒓', hl = 'MiniIconsPurple' },
-  text               = { glyph = '󰦪', hl = 'MiniIconsYellow'  },
+  text               = { glyph = '󰦪', hl = 'MiniIconsYellow' },
   tf                 = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
   tidy               = { glyph = '󰌝', hl = 'MiniIconsBlue'   },
   tilde              = { glyph = '󰜥', hl = 'MiniIconsRed'    },
@@ -1446,7 +1471,7 @@ H.filetype_icons = {
   wdiff              = { glyph = '󰦓', hl = 'MiniIconsBlue'   },
   wdl                = { glyph = '󰬄', hl = 'MiniIconsGrey'   },
   web                = { glyph = '󰯊', hl = 'MiniIconsGrey'   },
-  webmacro           = { glyph = '󰬄', hl = 'MiniIconsCyan'  },
+  webmacro           = { glyph = '󰬄', hl = 'MiniIconsCyan'   },
   wget               = { glyph = '󰒓', hl = 'MiniIconsYellow' },
   wget2              = { glyph = '󰒓', hl = 'MiniIconsBlue'   },
   winbatch           = { glyph = '󰯂', hl = 'MiniIconsBlue'   },
@@ -1484,12 +1509,12 @@ H.filetype_icons = {
 
   -- 'mini.nvim'
   ['minideps-confirm']   = { glyph = '', hl = 'MiniIconsOrange' },
-  minifiles              = { glyph = '', hl = 'MiniIconsGreen' },
-  ['minifiles-help']     = { glyph = '', hl = 'MiniIconsGreen' },
+  minifiles              = { glyph = '', hl = 'MiniIconsGreen'  },
+  ['minifiles-help']     = { glyph = '', hl = 'MiniIconsGreen'  },
   mininotify             = { glyph = '', hl = 'MiniIconsYellow' },
   ['mininotify-history'] = { glyph = '', hl = 'MiniIconsYellow' },
-  minipick               = { glyph = '', hl = 'MiniIconsCyan' },
-  ministarter            = { glyph = '', hl = 'MiniIconsAzure' },
+  minipick               = { glyph = '', hl = 'MiniIconsCyan'   },
+  ministarter            = { glyph = '', hl = 'MiniIconsAzure'  },
 
   -- Popular Lua plugins which have a dedicated "current window" workflow (i.e.
   -- when displaying filetype might make sense, especially with 'laststatus=3')
@@ -1645,22 +1670,41 @@ H.init_cache = function(config)
   -- Cache is structured same customization tables in `config`, but for smaller
   -- size (by about 10%) uses 1 and 2 as indexes instead of `glyph` and `hl`.
   local cache = { default = {} }
-  local is_icon_data = function(x) return type(x) == 'table' and type(x.glyph) == 'string' and type(x.hl) == 'string' end
   for _, cat in ipairs(categories) do
     -- Set default
-    local builtin, custom = H.default_icons[cat], config.default[cat]
-    cache.default[cat] = is_icon_data(custom) and { H.style_icon(custom.glyph, cat), custom.hl }
-      or { H.style_icon(builtin.glyph, cat), builtin.hl }
+    cache.default[cat] = H.compute_cache_entry('default', cat, config.default[cat])
 
     -- Set custom
     cache[cat] = {}
     for name, icon_data in pairs(config[cat]) do
-      if is_icon_data(icon_data) then cache[cat][name] = { H.style_icon(icon_data.glyph, cat), icon_data.hl } end
+      cache[cat][name] = H.compute_cache_entry(cat, name, icon_data)
     end
   end
-  cache.default.default = { H.style_icon(H.default_icons.default.glyph, 'default'), H.default_icons.default.hl }
+  cache.default.default = H.compute_cache_entry('default', 'default', config.default.default)
 
   H.cache = cache
+end
+
+H.compute_cache_entry = function(category, name, icon_data)
+  if type(name) ~= 'string' then return nil end
+
+  icon_data = type(icon_data) == 'table' and icon_data or {}
+  local glyph, hl = icon_data.glyph, icon_data.hl
+
+  -- Allow customizing only one characteristic with proper fallback
+  local has_glyph, has_hl = type(glyph) == 'string', type(hl) == 'string'
+  local builtin_glyph, builtin_hl = '', ''
+  if not (has_glyph and has_hl) then
+    if category == 'default' then
+      builtin_glyph, builtin_hl = H.default_icons[name].glyph, H.default_icons[name].hl
+    else
+      builtin_glyph, builtin_hl = MiniIcons.get(category, name)
+    end
+  end
+  return {
+    H.style_icon(has_glyph and glyph or builtin_glyph, name),
+    has_hl and hl or builtin_hl,
+  }
 end
 
 -- Getters --------------------------------------------------------------------
