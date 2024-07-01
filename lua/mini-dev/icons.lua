@@ -1,16 +1,3 @@
--- TODO:
--- - Code:
---
--- - Docs:
---
--- - Tests:
---     - Works for 'Cargo.lock' (uses exact case for files).
---     - Ignores case for extension.
---     - Works with files with no extension ('big-file').
---     - Custom and default icons are stylezed according to `config.style`.
---     - Matching file name is done case sensitively, extension - not.
---
-
 --- *mini.icons* Icon provider
 --- *MiniIcons*
 ---
@@ -156,9 +143,8 @@
 ---@diagnostic disable:luadoc-miss-type-name
 
 -- Module definition ==========================================================
--- TODO: Make local prior to release
-MiniIcons = {}
-H = {}
+local MiniIcons = {}
+local H = {}
 
 --- Module setup
 ---
@@ -200,6 +186,8 @@ end
 ---     MiniIcons.get('extension', 'lua') -- Has `'L'` as icon
 ---     MiniIcons.get('file', 'file.lua') -- Has `'L'` as icon; it is resolved to
 ---                                       -- come from 'lua' 'extension' category
+---     MiniIcons.get('file', 'myfile')   -- Has `'F'` as icon; it is resolved to
+---                                       -- come from 'file' 'default' category
 --- <
 --- # Customization per category ~
 ---
@@ -297,7 +285,7 @@ MiniIcons.config = {
 ---     Icon data is attempted to be resolved in the following order:
 ---       - List of manually tracked extensions (for better performance).
 ---       - Filetype as a result of |vim.filetype.match()| with placeholder
----         file basename. Use output of corresponding "filetype" category.
+---         file basename. Uses output of corresponding "filetype" category.
 ---
 ---     Examples: >lua
 ---
@@ -310,10 +298,10 @@ MiniIcons.config = {
 ---     Can be used for not existing paths (no check is done).
 ---     Icon data is attempted to be resolved in the following order:
 ---       - List of manually tracked file basenames (should match exactly).
----       - List of manually tracked extensions.  Use output of corresponding
----         "extension" category.
+---       - List of manually tracked extensions.
+---         Uses output of corresponding "extension" category.
 ---       - Filetype as a result of |vim.filetype.match()|.
----          Use output of corresponding "filetype" category.
+---          Uses output of corresponding "filetype" category.
 ---
 ---     Examples: >lua
 ---
@@ -368,7 +356,8 @@ MiniIcons.get = function(category, name)
   if getter == nil then H.error(vim.inspect(category) .. ' is not a supported category.') end
 
   -- Try cache first
-  name = (category == 'file' or category == 'directory') and H.fs_basename(name) or name
+  name = (category == 'file' or category == 'directory') and H.fs_basename(name)
+    or (category == 'extension' and name:lower() or name)
   local cached = H.cache[category][name]
   if cached ~= nil then return cached[1], cached[2] end
 
@@ -434,8 +423,8 @@ MiniIcons.mock_nvim_web_devicons = function()
 
   -- Main functions which get icon and highlight group
   M.get_icon = function(name, ext, opts)
-    if type(name) == 'string' then return MiniIcons.get('file', name) end
     if type(ext) == 'string' then return MiniIcons.get('extension', ext) end
+    if type(name) == 'string' then return MiniIcons.get('file', name) end
     H.error('In `require("nvim-web-devicons").get_icon()` either `name` or `ext` should be string.')
   end
 
@@ -1557,7 +1546,7 @@ H.filetype_icons = {
 -- LSP kind values (completion item, symbol, etc.) icons.
 -- Use only `nf-cod-*` classes with "outline" look. Balance colors.
 --stylua: ignore
-H.lsp_kind_icons = {
+H.lsp_icons = {
   array         = { glyph = '', hl = 'MiniIconsOrange' },
   boolean       = { glyph = '', hl = 'MiniIconsOrange' },
   class         = { glyph = '', hl = 'MiniIconsPurple' },
@@ -1665,24 +1654,24 @@ H.create_default_hl = function()
 end
 
 H.init_cache = function(config)
-  local categories = { 'directory', 'extension', 'file', 'filetype', 'lsp', 'os' }
+  -- NOTE: process 'filetype' - 'extension' - 'file' order because previous
+  -- might be used to infer missing data in the next
+  local categories = { 'directory', 'filetype', 'extension', 'file', 'lsp', 'os' }
 
   -- Cache is structured same customization tables in `config`, but for smaller
   -- size (by about 10%) uses 1 and 2 as indexes instead of `glyph` and `hl`.
-  local cache = { default = {} }
+  H.cache = { default = {} }
   for _, cat in ipairs(categories) do
     -- Set default
-    cache.default[cat] = H.compute_cache_entry('default', cat, config.default[cat])
+    H.cache.default[cat] = H.compute_cache_entry('default', cat, config.default[cat])
 
     -- Set custom
-    cache[cat] = {}
+    H.cache[cat] = {}
     for name, icon_data in pairs(config[cat]) do
-      cache[cat][name] = H.compute_cache_entry(cat, name, icon_data)
+      H.cache[cat][name] = H.compute_cache_entry(cat, name, icon_data)
     end
   end
-  cache.default.default = H.compute_cache_entry('default', 'default', config.default.default)
-
-  H.cache = cache
+  H.cache.default.default = H.compute_cache_entry('default', 'default', config.default.default)
 end
 
 H.compute_cache_entry = function(category, name, icon_data)
@@ -1746,7 +1735,7 @@ H.get_impl = {
     if ft ~= nil then return MiniIcons.get('filetype', ft) end
   end,
   filetype = function(name) return H.filetype_icons[name] end,
-  lsp = function(name) return H.lsp_kind_icons[name] end,
+  lsp = function(name) return H.lsp_icons[name] end,
   os = function(name) return H.os_icons[name] end,
 }
 
