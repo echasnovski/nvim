@@ -56,7 +56,10 @@ now(function() require('mini.statusline').setup() end)
 
 now(function() require('mini.tabline').setup() end)
 
-now(function() require('mini-dev.icons').setup() end)
+now(function()
+  require('mini.icons').setup()
+  MiniIcons.mock_nvim_web_devicons()
+end)
 
 -- Step two
 later(function() require('mini.extra').setup() end)
@@ -89,6 +92,10 @@ later(function()
       relnum_in_visual_mode = true,
     },
   })
+  -- Have no transparency to always have "overflow" icons (otherwise there can
+  -- be a symbol visible from underneath blocking "overflow if next to space"
+  -- approach from terminal emulator)
+  vim.o.winblend = 0
 end)
 
 later(function() require('mini.bracketed').setup() end)
