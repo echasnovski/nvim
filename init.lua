@@ -265,9 +265,6 @@ later(function() require('mini.trailspace').setup() end)
 later(function() require('mini.visits').setup() end)
 
 -- Dependencies ===============================================================
--- Colorful icons
-now(function() add('nvim-tree/nvim-web-devicons') end)
-
 -- Tree-sitter: advanced syntax parsing, highlighting, and text objects
 later(function()
   local ts_spec = {
