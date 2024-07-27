@@ -31,9 +31,28 @@ if vim.g.vscode ~= nil then now(function() source('vscode.lua') end) end
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 -- Step one
-now(function() vim.cmd('colorscheme randomhue') end)
+now(function()
+  if vim.startswith(vim.env.TERM, 'st') then return end
+
+  local modified = false
+  local sync = function()
+    local normal = vim.api.nvim_get_hl_by_name('Normal', true)
+    if normal.background == nil then return end
+    io.write(string.format('\027]11;#%06x\027\\', normal.background))
+  end
+  local unsync = function() io.write('\027]111\027\\') end
+  vim.api.nvim_create_autocmd({ 'VimEnter', 'UIEnter', 'ColorScheme' }, { callback = sync })
+  vim.api.nvim_create_autocmd({ 'UILeave', 'VimLeave' }, { callback = unsync })
+end)
+
+now(function()
+  vim.cmd('colorscheme randomhue')
+  vim.cmd('hi PmenuMatch gui=bold')
+  vim.cmd('hi PmenuMatchSel gui=bold')
+  vim.cmd('hi! link @string.special.vimdoc Constant')
+end)
 -- Use this color scheme in 'mini.nvim' demos
--- require('mini.hues').setup({ background = '#10262c', foreground = '#c0c8cb' })
+-- require('mini.hues').setup({ background = '#11262d', foreground = '#c0c8cb' })
 
 now(function()
   local filterout_lua_diagnosing = function(notif_arr)
@@ -167,7 +186,7 @@ end)
 
 later(function() require('mini.cursorword').setup() end)
 
-now(function()
+later(function()
   require('mini.diff').setup()
   local rhs = function() return MiniDiff.operator('yank') .. 'gh' end
   vim.keymap.set('n', 'ghy', rhs, { expr = true, remap = true, desc = "Copy hunk's reference lines" })
@@ -353,7 +372,7 @@ later(function()
 end)
 
 later(function()
-  local build = function() vim.cmd('call mkdp#util#install()') end
+  local build = function() vim.fn['mkdp#util#install']() end
   add({
     source = 'iamcco/markdown-preview.nvim',
     hooks = {
