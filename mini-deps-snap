@@ -1,18 +1,18 @@
 return {
-  LuaSnip = "7ad2eaeaca56d6ed63acacbfc114b99f1f67b982",
-  ["conform.nvim"] = "62eba813b7501b39612146cbf29cd07f1d4ac29c",
+  LuaSnip = "45db5addf8d0a201e1cf247cae4cdce605ad3768",
+  ["conform.nvim"] = "0ebe875d9c306f5fc829db38492ffff2a70d8e9d",
   ["markdown-preview.nvim"] = "a923f5fc5ba36a3b17e289dc35dc17f66d0548ee",
   ["mason.nvim"] = "e2f7f9044ec30067bc11800a9e266664b88cda22",
-  ["mini.nvim"] = "3cf9265bbde75d1358d126701eb6055034491df6",
+  ["mini.nvim"] = "73f2e7a596bbb4e6ae6728d3a4426221ffc9512d",
   neogen = "e932ba918b56723436b77aa3efb844a11b2851ab",
   neoterm = "eca22dc90a9db5e52d8baf91f31991ad540ffe36",
-  ["nvim-lspconfig"] = "911167921d49cd5c1c9b2436031d0da3945e787f",
-  ["nvim-treesitter"] = "bef7ec6f7a01ba0717da73082e33c224bdc2ddcc",
-  ["nvim-treesitter-textobjects"] = "41e3abf6bfd9a9a681eb1f788bdeba91c9004b2b",
+  ["nvim-lspconfig"] = "3ad562700d0615818bf358268ac8914f6ce2b079",
+  ["nvim-treesitter"] = "aa339f6ab611da07183a7fe44daa482605392502",
+  ["nvim-treesitter-textobjects"] = "3a3c6244553f13fdd92d312c82722b57ce6c4bec",
   rainbow_csv = "3dbbfd7d17536aebfb80f571255548495574c32b",
   ["vim-dispatch"] = "4c695bc052cad2ae6b980aebbe48d046466e27ae",
   ["vim-pandoc"] = "bd11902651edc18076f90ed291581d785be52311",
   ["vim-pandoc-syntax"] = "16939cda184ff555938cc895cc62477c172997f9",
   ["vim-rmarkdown"] = "a1787cb55e45b8778eaed7b392648deb4706cd0b",
-  ["vim-test"] = "ffbcfc4fa3ac765af2e353e7c3aac7d803592695"
+  ["vim-test"] = "2c9cef3f7605fc1b272b23765c5872607c1b6183"
 }
