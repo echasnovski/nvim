@@ -1,0 +1,64 @@
+name: Test with many flaky tests
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim_version: ['v0.9.5', 'v0.10.1']
+
+    name: Test (${{ matrix.neovim_version }})
+
+    steps:
+      - name: Get Previous Run Status
+        id: prev_attempt_is_fail
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            var attempt_number = ${{ github.run_attempt }} - 1;
+            if (attempt_number < 1) return;
+
+            const { data: prev_jobs } = await github.rest.actions.listJobsForWorkflowRunAttempt({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              attempt_number: attempt_number,
+            });
+
+            var cur_job_name = 'Test (${{ matrix.neovim_version }})'
+            for (var j of prev_jobs.jobs) {
+              if (j.name === cur_job_name) {
+                for (var s of j.steps) {
+                  var is_fail = !(s.conclusion === 'success' || s.conclusion === 'skipped');
+                  core.setOutput(s.name, is_fail);
+                }
+              }
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+
+      - name: Setup neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim_version }}
+
+      - name: aaa
+        if: always() && (github.run_attempt == '1' || steps.prev_attempt_is_fail.outputs.aaa == 'true')
+        env:
+          FILE: lua/mini-dev/test.lua
+        run: make test_file
+
+      - name: bbb
+        if: always() && (github.run_attempt == '1' || steps.prev_attempt_is_fail.outputs.bbb == 'true')
+        env:
+          FILE: lua/mini-dev/test.lua
+        run: make test_file
