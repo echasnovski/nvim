@@ -2,7 +2,11 @@
 --
 -- Code:
 -- - A system to load and manage custom snippets:
---     -  Decide whether to allow "scope" when reading snippets.
+--     - Find the most reasonable way to reset buffer cache.
+--       Maybe, after `:edit`? But ideally as clearing buffer cache in a single
+--       autocommand set up in `create_autocommands`.
+--     - Make sure that if `gen_loader.from_filetype` is used (i.e. called),
+--       buffer snippets will change if filetype is changed.
 --
 -- - A system to match snippet based on prefix:
 --
@@ -11,7 +15,13 @@
 -- Docs:
 --
 -- Tests:
---
+-- - Management:
+--     - `cache = false` should not write to cache (to possibly save memory).
+--     - `gen_loader.from_filetype()` results in preferring snippets:
+--         - From exact file over ancestor.
+--         - From .lua over .json.
+--     - `gen_loader.from_filetype()` processes pattern array in order.
+--       Resulting in preferring later ones over earlier.
 
 --- *mini.snippets* Manage and expand snippets
 --- *MiniSnippets*
@@ -26,8 +36,8 @@
 --- The template usually contains both pre-defined text and places (called
 --- "tabstops") for user to interactively add text during snippet session.
 ---
---- This module supports (only) snippet format defined in LSP specification.
---- See |MiniSnippets-specification|.
+--- This module supports (only) snippet syntax defined in LSP specification.
+--- See |MiniSnippets-syntax-specification|.
 ---
 --- Features:
 --- - Manage snippet collection with a flexible system of built-in loaders.
@@ -64,12 +74,12 @@
 ---
 --- - Built-in |vim.snippet| (on Neovim>=0.10):
 ---     - Both contain expand functionality based on LSP snippet format.
----     - Does not contain any functionality to load or match snippets (by design),
+---     - Does not contain functionality to load or match snippets (by design),
 ---       while this module does.
 ---
 --- - 'rafamadriz/friendly-snippets':
 ---     - A snippet collection plugin without functionality to manage them.
----       This module is designed to be compatible 'friendly-snippets'.
+---       This module is designed with 'friendly-snippets' compatibility in mind.
 ---
 --- # Highlight groups ~
 ---
@@ -87,13 +97,35 @@
 --- for disabling module's functionality is left to user. See
 --- |mini.nvim-disabling-recipes| for common recipes.
 
---- # Snippet format specification ~
----@tag MiniSnippets-specification
+--- # Snippet files specifications ~
+---
+--- One of the following:
+--- - File with .lua extension with code that returns a table of snippet data.
+--- - File with .json extension which contains an object with snippet data as
+---   values. This is compatible with 'rafamadriz/friendly-snippets'.
+---
+--- Suggested location is in "snippets" subdirectory of any path in 'runtimepath'.
+--- This is compatible with |MiniSnippets.gen_loader.from_runtime()|.
+---
+--- For format of supported snippet data see "Loaded snippets" |MiniSnippets.config|.
+---@tag MiniSnippets-files-specification
+
+--- # Snippet syntax specification ~
+---@tag MiniSnippets-syntax-specification
 
 --- # Common configuration examples ~
+---
+--- - Project-local snippets. Use |MiniSnippets.gen_loader.from_file()| with
+---   relative path.
+--- - Override certain files. Create `vim.b.minisnippets_config` with
+---   `snippets = { MiniSnippets.gen_loader.from_file('path/to/file') }`.
+--- - How to imitate <scope> field in snippet data. Put snippet separately in
+---   different dedicated files and use |MiniSnippets.gen_loader.from_filetype()|.
 ---@tag MiniSnippets-examples
 
 ---@alias __minisnippets_cache_opt <cache> `(boolean)` - whether to use cached output. Default: `true`.
+---@alias __minisnippets_silent_opt <silent> `(boolean)` - whether suppress non-error feedback. Default: `false`.
+---@alias __minisnippets_loader_return function Snippet loader.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -135,6 +167,35 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Loaded snippets ~
 ---
+--- `config.snippets` is a (nested) array containing snippet data and loaders.
+--- It is normalized for each buffer separately.
+---
+--- Snippet data is a table with the following fields:
+---
+--- - <prefix> `(string|table)` - string used to match against user typed base.
+---    If array, all strings are used during match. Should always be present.
+---
+--- - <body> `(string|table|nil)` - content of a snippet which follows
+---    the |MiniSnippets-syntax-specification|. Array is concatenated with "\n".
+---    If absent / `nil`, removes prefix from normalized buffer snippets.
+---
+--- - <desc> `(string|table|nil)` - description of snippet. Can be used to display
+---   snippets in a more human readable form. Array is concatenated with "\n".
+---   If absent / `nil`, <prefix> is used.
+---   For compatibility with popular snippet databases, field `<description>`
+---   is used as a fallback.
+---
+--- Notes:
+--- - All snippets in `config.snippets` are used in buffer after normalization.
+---   Scoping via <scope> field is not supported. See |MiniSnippets-examples|.
+---
+--- Order in array is important: later ones will override earlier (similar to
+--- how |ftplugin| behaves).
+---
+--- # Match ~
+---
+--- # Expand ~
+---
 --- # Mappings ~
 MiniSnippets.config = {
   snippets = {},
@@ -150,102 +211,137 @@ MiniSnippets.config = {
 
 --- Generate snippet loader
 ---
---- Designed to be compatible with 'rafamadriz/friendly-snippets'.
+--- This is a table with function elements. Call to actually get a loader.
+---
+--- Common features for all produced loaders:
+--- - Designed to work with |MiniSnippets-files-specification|.
+--- - Caches output by default, i.e. second and later calls with same input value
+---   don't read files from disk. Disable by setting `opts.cache` to `false`.
+---   To reset cache, call |MiniSnippets.setup()|.
+--- - Use |vim.notify()| to show problems during loading while trying to load
+---   as much correctly defined snippet data as possible.
+---   Disable by setting `opts.silent` to `true`.
 MiniSnippets.gen_loader = {}
 
 ---@param opts table|nil Options. Possible values:
----   - <ft_patterns> `(table)` - map from filetype to runtime patterns used to
----     find snippet files. If non-empty filetype is absent, the default one is
----     constructed: searches for "json" and "lua" files named as filetype or have
----     ancestor directory named as filetype.
----     Example for "lua" filetype: `{ 'lua.{json,lua}', 'lua/**.{json,lua}' }`.
+---   - <ft_patterns> `(table)` - map from filetype to array of runtime patterns
+---     used to find snippet files. Patterns will be processed in order, so
+---     snippets from reading later patterns will override earlier ones.
+---     If non-empty filetype is absent, the default one is constructed:
+---     searches for "json" and "lua" files that are inside directory named as
+---     filetype (however deep) or are named as filetype.
+---     Example for "lua" filetype: `{ 'lua/**.{json,lua}', 'lua.{json,lua}' }`.
 ---   - __minisnippets_cache_opt
+---   - __minisnippets_silent_opt
+---
+---@return __minisnippets_loader_return
 MiniSnippets.gen_loader.from_filetype = function(opts)
-  opts = vim.tbl_extend('force', { ft_patterns = {}, cache = true }, opts or {})
+  opts = vim.tbl_extend('force', { ft_patterns = {}, cache = true, silent = false }, opts or {})
   for ft, tbl in pairs(opts.ft_patterns) do
     if type(ft) ~= 'string' then H.error('Keys of `opts.ft_patterns` should be string filetype names') end
     if not H.is_array_of(tbl, H.is_string) then H.error('Keys of `opts.ft_patterns` should be string arrays') end
   end
 
-  local cache, read_opts = opts.cache, { cache = opts.cache }
-  local read = function() return MiniSnippets.read_file(path, read_opts) end
+  local cache, read_opts = opts.cache, { cache = opts.cache, silent = opts.silent }
+  local read = function(p) return MiniSnippets.read_file(p, read_opts) end
   return function()
     local ft = vim.bo.filetype
-    if cache then
-      local res = H.cache_loaders.filetype[ft]
-      if res ~= nil then return res end
-    end
+    if cache and H.cache.filetype[ft] ~= nil then return vim.deepcopy(H.cache.filetype[ft]) end
 
     local patterns = opts.ft_patterns[ft]
     if patterns == nil and ft == '' then return end
-    patterns = patterns or { ft .. '.{json,lua}', ft .. '/**.{json,lua}' }
+    patterns = patterns or { ft .. '/**.{json,lua}', ft .. '.{json,lua}' }
     patterns = vim.tbl_map(function(p) return 'snippets/' .. p end, patterns)
 
-    local res = vim.tbl_map(read, vim.api.nvim_get_runtime_file(pattern, true))
-    H.cache_loaders.filetype[ft] = res
+    local res = {}
+    for _, pattern in ipairs(patterns) do
+      table.insert(res, vim.tbl_map(read, vim.api.nvim_get_runtime_file(pattern, true)))
+    end
+    if cache then H.cache.filetype[ft] = vim.deepcopy(res) end
     return res
   end
 end
 
----@param pattern string Pattern of files to read which will be searched in "snippets"
+---@param pattern string Pattern of files to read. Will be searched in "snippets"
 ---   subdirectory inside 'runtimepath' paths. Can contain wildcards as described
 ---   in |nvim_get_runtime_file()|.
 ---@param opts table|nil Options. Possible fields:
 ---   - <all> `(boolean)` - whether to load from all matching runtime files or
 ---     only the first one. Default: `true`.
 ---   - __minisnippets_cache_opt
+---   - __minisnippets_silent_opt
+---
+---@return __minisnippets_loader_return
 MiniSnippets.gen_loader.from_runtime = function(pattern, opts)
   if type(pattern) ~= 'string' then H.error('`pattern` should be string') end
-  opts = vim.tbl_extend('force', { all = true, cache = true }, opts or {})
+  opts = vim.tbl_extend('force', { all = true, cache = true, silent = false }, opts or {})
 
   pattern = 'snippets/' .. pattern
-  local cache, read_opts = opts.cache, { cache = opts.cache }
-  local read = function() return MiniSnippets.read_file(path, read_opts) end
+  local cache, read_opts = opts.cache, { cache = opts.cache, silent = opts.silent }
+  local read = function(p) return MiniSnippets.read_file(p, read_opts) end
   return function()
-    if cache then
-      local res = H.cache_loaders.runtime[pattern]
-      if res ~= nil then return res end
-    end
+    if cache and H.cache.runtime[pattern] ~= nil then return vim.deepcopy(H.cache.runtime[pattern]) end
 
     local res = vim.tbl_map(read, vim.api.nvim_get_runtime_file(pattern, opts.all))
-    H.cache_loaders.filetype[ft] = res
+    if cache then H.cache.filetype[ft] = vim.deepcopy(res) end
     return res
   end
 end
 
----@param path string Path for file to load. Allowed extensions: "json", "lua".
----   Relative paths are resolved against |current-directory|.
+---@param path string Same as in |MiniSnippets.read_file()|.
+---@param opts table|nil Same as in |MiniSnippets.read_file()|.
+---
+---@return __minisnippets_loader_return
 MiniSnippets.gen_loader.from_file = function(path, opts)
   if type(path) ~= 'string' then H.error('`path` should be string') end
-  local read_opts = { cache = opts.cache }
-  return function() return MiniSnippets.read_file(path, read_opts) end
+  opts = vim.tbl_extend('force', { cache = true, silent = false }, opts or {})
+
+  return function()
+    -- Always be silent about absent path to allow using with relative (project
+    -- local) paths (not every cwd needs to have relative path with snippets).
+    if vim.loop.fs_stat(vim.fn.fnamemodify(path, ':p')) == nil then return end
+    return MiniSnippets.read_file(path, opts)
+  end
 end
 
----@param path string Path with snippets to read. Supported extensions:
----   - "json" - should have same format as in 'friendly-snippets'.
----   - "lua" - should return array of snippets. See |MiniSnippets-specification|.
+---@param path string Path with snippets read. See |MiniSnippets-files-specification|.
 ---@param opts table|nil Options. Possible fields:
 ---   - __minisnippets_cache_opt
+---   - __minisnippets_silent_opt
+---
+---@return table|nil Array of snippets or `nil` if reading failed.
 MiniSnippets.read_file = function(path, opts)
-  opts = vim.tbl_extend('force', { cache = true }, opts or {})
+  if type(path) ~= 'string' then H.error('`path` should be string') end
+  opts = vim.tbl_extend('force', { cache = true, silent = false }, opts or {})
 
-  local full_path = vim.fn.fnamemodify(path, ':p')
-  if opts.cache then
-    local res = H.cache_loaders.file[full_path]
-    if res ~= nil then return res end
-  end
+  path = vim.fn.fnamemodify(path, ':p')
+  if opts.cache and H.cache.file[path] ~= nil then return vim.deepcopy(H.cache.file[path]) end
 
-  if (vim.loop.fs_stat(full_path) or {}).type ~= 'file' then
-    H.error('Path ' .. full_path .. ' is not a readable file on disk.')
+  if (vim.loop.fs_stat(path) or {}).type ~= 'file' then
+    return H.notify('Path ' .. path .. ' is not a readable file on disk.', 'WARN', opts.silent)
   end
-  local ext = full_path:match('%.([^%.]+)$')
+  local ext = path:match('%.([^%.]+)$')
   if ext == nil or not (ext == 'lua' or ext == 'json') then
-    H.error('Path ' .. full_path .. ' is neither .lua nor .json')
+    return H.notify('Path ' .. path .. ' is neither .lua nor .json', 'WARN', opts.silent)
   end
 
-  local res = ext == 'lua' and H.read_file_lua(full_path) or H.read_file_json(full_path)
-  H.cache_loaders.file[full_path] = res
-  return res
+  local res = H.file_readers[ext](path, opts.silent)
+  if res == nil then return nil end
+
+  -- Notify about problems but still cache and return read snippets
+  local prob = table.concat(res.problems, '\n')
+  if prob ~= '' then H.notify('There were problems reading file ' .. path .. ':\n' .. prob, 'WARN', opts.silent) end
+
+  if opts.cache then H.cache.file[path] = vim.deepcopy(res.snippets) end
+  return res.snippets
+end
+
+MiniSnippets.get_buf_data = function(buf_id)
+  buf_id = buf_id or vim.api.nvim_get_current_buf()
+  if not (type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id)) then
+    H.error('`buf_id` is not a valid buffer identifier.')
+  end
+  return { snippets = vim.deepcopy(H.get_buf_snippets(buf_id)) }
 end
 
 -- Helper data ================================================================
@@ -255,8 +351,15 @@ H.default_config = vim.deepcopy(MiniSnippets.config)
 -- Namespaces for extmarks
 H.ns_id = {}
 
--- Cache for various uses
-H.cache_loaders = { filetype = {}, runtime = {}, file = {} }
+-- Various cache
+H.cache = {
+  -- Loaders output
+  filetype = {},
+  runtime = {},
+  file = {},
+  -- Buffer snippets
+  buf = {},
+}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -286,7 +389,7 @@ H.apply_config = function(config)
   MiniSnippets.config = config
 
   -- Reset loader cache
-  H.cache_loaders = { filetype = {}, runtime = {}, file = {} }
+  H.cache = { buf = {}, filetype = {}, runtime = {}, file = {} }
 end
 
 H.create_autocommands = function()
@@ -308,42 +411,43 @@ end
 
 H.is_disabled = function(buf_id) return vim.g.minisnippets_disable == true or vim.b.minisnippets_disable == true end
 
-H.get_config = function(config)
-  return vim.tbl_deep_extend('force', MiniSnippets.config, vim.b.minisnippets_config or {}, config or {})
-end
+H.get_config = function() return vim.tbl_deep_extend('force', MiniSnippets.config, vim.b.minisnippets_config or {}) end
 
 -- Read -----------------------------------------------------------------------
-H.read_file_lua = function(path)
-  local ok, res = pcall(dofile, path)
-  if not ok then H.error('Could not execute Lua file: ' .. path) end
-  if not H.islist(res) then H.error('Lua snippet file ' .. path .. ' should return array') end
-  for _, v in ipairs(res) do
-    if not H.is_snippet(v) then
-      H.error('Lua snippet file ' .. path .. ' contains a not snippet item:\n' .. vim.inspect(v))
-    end
-  end
-  return res
+H.file_readers = {}
+
+H.file_readers.lua = function(path, silent)
+  local ok, contents = pcall(dofile, path)
+  if not ok then return H.notify('Could not execute Lua file: ' .. path, 'WARN', silent) end
+  if type(contents) ~= 'table' then return H.notify('File ' .. path .. ' should return table', 'WARN', silent) end
+  return H.read_snippet_array(contents)
 end
 
-H.read_file_json = function(path)
+H.file_readers.json = function(path, silent)
   local file = io.open(path)
-  if file == nil then H.error('Could not open file: ' .. path) end
+  if file == nil then return H.notify('Could not open file: ' .. path, 'WARN', silent) end
   local raw = file:read('*all')
   file:close()
 
   local ok, contents = pcall(vim.json.decode, raw)
-  if not (ok and type(contents) == 'table') then H.error('File does not contain a valid JSON object: ' .. path) end
-
-  local res = {}
-  for name, t in pairs(contents) do
-    if not H.is_snippet(t) then
-      H.error('In file ' .. path .. ' value of key ' .. vim.inspect(name) .. ' is not a snippet')
-    end
-    t.description = t.description or name
-    table.insert(res, t)
+  if not (ok and type(contents) == 'table') then
+    return H.notify('File does not contain a valid JSON object: ' .. path, 'WARN', silent)
   end
 
-  return res
+  return H.read_snippet_array(contents)
+end
+
+H.read_snippet_array = function(contents)
+  local res, problems = {}, {}
+  for name, t in pairs(contents) do
+    if H.is_snippet(t) then
+      t.desc = t.desc or t.description or (type(name) == 'string' and name or nil)
+      table.insert(res, t)
+    else
+      table.insert(problems, 'The following is not a valid snippet data:\n' .. vim.inspect(t))
+    end
+  end
+  return { snippets = res, problems = problems }
 end
 
 -- -- Validate that all snippets from 'friendly-snippets' are readable
@@ -358,6 +462,50 @@ end
 --   end
 -- end
 
+-- Buffer snippets ------------------------------------------------------------
+H.get_buf_snippets = function(buf_id)
+  if H.cache.buf[buf_id] ~= nil then return H.cache.buf[buf_id] end
+
+  local res, config_snippets = {}, H.get_config().snippets
+  if buf_id == vim.api.nvim_get_current_buf() then
+    H.traverse_config_snippets(config_snippets, res)
+  else
+    vim.api.nvim_buf_call(buf_id, function() H.traverse_config_snippets(config_snippets, res) end)
+  end
+
+  H.cache.buf[buf_id] = res
+  return res
+end
+
+H.traverse_config_snippets = function(x, target)
+  if H.is_snippet(x) then
+    local prefix = type(x.prefix) == 'string' and { x.prefix } or x.prefix
+
+    -- Allow absent `body` to result in completely removing prefix(es)
+    if x.body == nil then
+      for _, pr in ipairs(prefix) do
+        target[pr] = nil
+      end
+      return
+    end
+
+    local body = type(x.body) == 'string' and x.body or table.concat(x.body, '\n')
+    for _, pr in ipairs(prefix) do
+      local desc = x.desc or x.description or pr
+      desc = type(desc) == 'string' and desc or table.concat(desc, '\n')
+      target[pr] = { body = body, desc = desc }
+    end
+  end
+
+  if H.islist(x) then
+    for _, v in ipairs(x) do
+      H.traverse_config_snippets(v, target)
+    end
+  end
+
+  if vim.is_callable(x) then H.traverse_config_snippets(x(), target) end
+end
+
 -- Validators -----------------------------------------------------------------
 H.is_string = function(x) return type(x) == 'string' end
 
@@ -365,17 +513,20 @@ H.is_maybe_string_or_arr = function(x) return x == nil or H.is_string(x) or H.is
 
 H.is_snippet = function(x)
   return type(x) == 'table'
-    -- Allow nil `prefix` for "wrapping" snippets (utilizing TM_SELECTED_TEXT)
-    -- Such snippet will be omitted during normalization
-    and H.is_maybe_string_or_arr(x.prefix)
+    and (H.is_string(x.prefix) or H.is_array_of(x.prefix, H.is_string))
     -- Allow nil `body` to remove snippet with `prefix`
     and H.is_maybe_string_or_arr(x.body)
-    -- Allow nil `description`, in which case "prefix" is used
+    -- Allow nil `desc` / `description`, in which case "prefix" is used
+    and H.is_maybe_string_or_arr(x.desc)
     and H.is_maybe_string_or_arr(x.description)
 end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error('(mini.snippets) ' .. msg, 0) end
+
+H.notify = function(msg, level_name, silent)
+  if not silent then vim.notify('(mini.snippets) ' .. msg, vim.log.levels[level_name]) end
+end
 
 H.is_array_of = function(x, predicate)
   if not H.islist(x) then return false end
