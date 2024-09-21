@@ -2,17 +2,16 @@
 --
 -- Code:
 -- - A system to load and manage custom snippets:
---     - Find the most reasonable way to reset buffer cache.
---       Maybe, after `:edit`? But ideally as clearing buffer cache in a single
---       autocommand set up in `create_autocommands`.
---     - Make sure that if `gen_loader.from_filetype` is used (i.e. called),
---       buffer snippets will change if filetype is changed.
 --
 -- - A system to match snippet based on prefix:
+--     - Think about better name than `get_ref`. Candidates: `base_regions`,
+--       `ref`, `needle`, `against`.
 --
 -- - A system to expand, navigate, and edit snippet:
 --
 -- Docs:
+-- - Normalized snippets for buffer are cached. Execute `:edit` to clear
+--   current buffer cache.
 --
 -- Tests:
 -- - Management:
@@ -199,7 +198,12 @@ end
 --- # Mappings ~
 MiniSnippets.config = {
   snippets = {},
-  match = {},
+  match = {
+    -- Function to compute reference region containing base for matching
+    get_ref = nil,
+    -- How to match: "exact", "substring", "fuzzy"
+    rule = 'exact',
+  },
   mappings = {
     expand = '<C-l>',
     jump_next = '<C-l>',
@@ -304,6 +308,21 @@ MiniSnippets.gen_loader.from_file = function(path, opts)
   end
 end
 
+MiniSnippets.default_get_ref = function(opts)
+  opts = opts or {}
+  local patterns = opts.patterns or { '%S+' }
+  if not H.is_array_of(patterns, H.is_string) then H.error('`opts.patterns` should be array of strings') end
+
+  -- In Insert mode match against what is strictly to cursor's left
+  local to = vim.fn.col('.') + 1 - (vim.fn.mode() == 'i' and 1 or 0)
+  local line_till_cursor, lnum, res = vim.api.nvim_get_current_line():sub(1, to), vim.fn.line('.'), {}
+  for _, p in ipairs(patterns) do
+    local from = line_till_cursor:find(p .. '$')
+    if from ~= nil then table.insert(res, { from = { line = lnum, col = from }, to = { line = lnum, col = to } }) end
+  end
+  return res
+end
+
 ---@param path string Path with snippets read. See |MiniSnippets-files-specification|.
 ---@param opts table|nil Options. Possible fields:
 ---   - __minisnippets_cache_opt
@@ -336,12 +355,35 @@ MiniSnippets.read_file = function(path, opts)
   return res.snippets
 end
 
-MiniSnippets.get_buf_data = function(buf_id)
-  buf_id = buf_id or vim.api.nvim_get_current_buf()
-  if not (type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id)) then
-    H.error('`buf_id` is not a valid buffer identifier.')
+MiniSnippets.get_matches = function(base, opts)
+  opts = vim.tbl_extend('force', MiniSnippets.config.match, opts or {})
+  if base == nil then
+    local ref_regions = H.get_ref_regions(opts)
+    base = (ref_regions[1] or {}).base or ''
   end
-  return { snippets = vim.deepcopy(H.get_buf_snippets(buf_id)) }
+
+  local matcher = H.matchers[opts.rule]
+  if matcher == nil then H.error('`opts.rule` should be one of "exact", "substring", "fuzzy"') end
+  return matcher(base, H.get_buf_snippets())
+end
+
+MiniSnippets.select = function(base, opts)
+  local matches = MiniSnippets.get_matches(base, opts)
+
+  local prefix_width = 0
+  for _, s in ipairs(matches) do
+    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(s.prefix))
+  end
+  local format_item = function(s)
+    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(s.prefix))
+    return s.prefix .. pad .. ' │ ' .. s.desc
+  end
+
+  local on_choice = function()
+    -- TODO. Should expand. **But** it needs regions, so `base` does not
+    -- contain enough information.
+  end
+  vim.ui.select(matches, { prompt = 'Snippets', format_item = format_item }, on_choice)
 end
 
 -- Helper data ================================================================
@@ -377,6 +419,8 @@ H.setup_config = function(config)
   })
 
   vim.validate({
+    ['match.get_ref'] = { config.match.get_ref, 'function', true },
+    ['match.rule'] = { config.match.rule, 'string' },
     ['mappings.expand'] = { config.mappings.expand, 'string' },
     ['mappings.jump_next'] = { config.mappings.jump_next, 'string' },
     ['mappings.jump_prev'] = { config.mappings.jump_prev, 'string' },
@@ -400,6 +444,9 @@ H.create_autocommands = function()
   end
 
   au('ColorScheme', '*', H.create_default_hl, 'Ensure colors')
+  -- Clear buffer cache: after `:edit` ('BufUnload') or after filetype has
+  -- changed ('FileType', useful with `gen_loader.from_filetype`)
+  au({ 'BufUnload', 'FileType' }, '*', function(args) H.cache.buf[args.buf] = nil end, 'Clear buffer cache')
 end
 
 --stylua: ignore
@@ -463,16 +510,13 @@ end
 -- end
 
 -- Buffer snippets ------------------------------------------------------------
-H.get_buf_snippets = function(buf_id)
+H.get_buf_snippets = function()
+  local buf_id = vim.api.nvim_get_current_buf()
   if H.cache.buf[buf_id] ~= nil then return H.cache.buf[buf_id] end
 
   local res, config_snippets = {}, H.get_config().snippets
-  if buf_id == vim.api.nvim_get_current_buf() then
-    H.traverse_config_snippets(config_snippets, res)
-  else
-    vim.api.nvim_buf_call(buf_id, function() H.traverse_config_snippets(config_snippets, res) end)
-  end
-
+  H.traverse_config_snippets(config_snippets, res)
+  res = vim.tbl_values(res)
   H.cache.buf[buf_id] = res
   return res
 end
@@ -481,19 +525,14 @@ H.traverse_config_snippets = function(x, target)
   if H.is_snippet(x) then
     local prefix = type(x.prefix) == 'string' and { x.prefix } or x.prefix
 
-    -- Allow absent `body` to result in completely removing prefix(es)
-    if x.body == nil then
-      for _, pr in ipairs(prefix) do
-        target[pr] = nil
-      end
-      return
-    end
+    local body
+    if x.body ~= nil then body = type(x.body) == 'string' and x.body or table.concat(x.body, '\n') end
+    local desc = x.desc or x.description
+    if desc ~= nil then desc = type(desc) == 'string' and desc or table.concat(desc, '\n') end
 
-    local body = type(x.body) == 'string' and x.body or table.concat(x.body, '\n')
     for _, pr in ipairs(prefix) do
-      local desc = x.desc or x.description or pr
-      desc = type(desc) == 'string' and desc or table.concat(desc, '\n')
-      target[pr] = { body = body, desc = desc }
+      -- Allow absent `body` to result in completely removing prefix(es)
+      target[pr] = body ~= nil and { prefix = pr, body = body, desc = desc or pr } or nil
     end
   end
 
@@ -504,6 +543,51 @@ H.traverse_config_snippets = function(x, target)
   end
 
   if vim.is_callable(x) then H.traverse_config_snippets(x(), target) end
+end
+
+-- Matching -------------------------------------------------------------------
+H.get_ref_regions = function(opts)
+  local get_ref = opts.get_ref or H.get_config().match.get_ref or MiniSnippets.default_get_ref
+  local regions = get_ref()
+  if regions == nil then return end
+  if H.is_region(regions) then regions = { regions } end
+  if not H.is_array_of(regions, H.is_region) then H.error('Output of `match.get_ref` should be region(s)') end
+
+  local res = {}
+  for i, reg in ipairs(regions) do
+    local text = vim.api.nvim_buf_get_text(0, reg.from.line - 1, reg.from.col - 1, reg.to.line - 1, reg.to.col, {})
+    res[i] = { base = table.concat(text, '\n'), from = reg.from, to = reg.to }
+  end
+  return res
+end
+
+H.matchers = {}
+
+H.matchers.exact = function(base, snippets)
+  if base == '' then return snippets end
+  local res = {}
+  for _, s in ipairs(snippets) do
+    if base == s.prefix then return { s } end
+  end
+  return res
+end
+
+H.matchers.substring = function(base, snippets)
+  local res = {}
+  for _, s in ipairs(snippets) do
+    if string.find(s.prefix, base, 1, true) then table.insert(res, s) end
+  end
+  return res
+end
+
+H.matchers.fuzzy = function(base, snippets)
+  if base == '' then return snippets end
+  local snippets_ext = {}
+  for i, s in ipairs(snippets) do
+    snippets_ext[i] = { prefix = s.prefix, snip = s }
+  end
+  local res_raw = vim.fn.matchfuzzy(snippets_ext, base, { key = 'prefix' })
+  return vim.tbl_map(function(x) return x.snip end, res_raw)
 end
 
 -- Validators -----------------------------------------------------------------
@@ -519,6 +603,13 @@ H.is_snippet = function(x)
     -- Allow nil `desc` / `description`, in which case "prefix" is used
     and H.is_maybe_string_or_arr(x.desc)
     and H.is_maybe_string_or_arr(x.description)
+end
+
+--stylua: ignore
+H.is_region = function(x)
+  return type(x) == 'table'
+    and type(x.from) == 'table' and type(x.from.line) == 'number' and type(x.from.col) == 'number'
+    and type(x.to) == 'table' and type(x.to.line) == 'number' and type(x.to.col) == 'number'
 end
 
 -- Utilities ------------------------------------------------------------------
