@@ -4,8 +4,6 @@
 -- - A system to load and manage custom snippets:
 --
 -- - A system to match snippet based on prefix:
---     - Think about better name than `get_ref`. Candidates: `base_regions`,
---       `ref`, `needle`, `against`.
 --
 -- - A system to expand, navigate, and edit snippet:
 --
@@ -200,9 +198,9 @@ MiniSnippets.config = {
   snippets = {},
   match = {
     -- Function to compute reference region containing base for matching
-    get_ref = nil,
+    find_region = nil,
     -- How to match: "exact", "substring", "fuzzy"
-    rule = 'exact',
+    method = 'exact',
   },
   mappings = {
     expand = '<C-l>',
@@ -308,7 +306,17 @@ MiniSnippets.gen_loader.from_file = function(path, opts)
   end
 end
 
-MiniSnippets.default_get_ref = function(opts)
+--- Default match region find
+---
+--- Examples: >lua
+---
+---   -- Match all non-whitespace with fallback on alphanumeric
+---   MiniSnippets.default_find_region({ patterns = { '%S+', '%w+' } })
+---
+---   -- Match including preceding space with fallback on non-whitespace
+---   MiniSnippets.default_find_region({ patterns = { '%s*%S+', '%S+' } })
+--- <
+MiniSnippets.default_find_region = function(opts)
   opts = opts or {}
   local patterns = opts.patterns or { '%S+' }
   if not H.is_array_of(patterns, H.is_string) then H.error('`opts.patterns` should be array of strings') end
@@ -355,35 +363,41 @@ MiniSnippets.read_file = function(path, opts)
   return res.snippets
 end
 
-MiniSnippets.get_matches = function(base, opts)
-  opts = vim.tbl_extend('force', MiniSnippets.config.match, opts or {})
-  if base == nil then
-    local ref_regions = H.get_ref_regions(opts)
-    base = (ref_regions[1] or {}).base or ''
-  end
+MiniSnippets.select = function()
+  local match_config = H.get_config().match
+  local matcher = H.matchers[match_config.method]
+  if matcher == nil then H.error('`match.method` should be one of "exact", "substring", "fuzzy"') end
 
-  local matcher = H.matchers[opts.rule]
-  if matcher == nil then H.error('`opts.rule` should be one of "exact", "substring", "fuzzy"') end
-  return matcher(base, H.get_buf_snippets())
-end
-
-MiniSnippets.select = function(base, opts)
-  local matches = MiniSnippets.get_matches(base, opts)
+  local find_region = match_config.find_region or MiniSnippets.default_find_region
+  local regions = H.find_match_regions(find_region)
+  local matches = H.match_snippets(regions, H.get_buf_snippets(), matcher)
 
   local prefix_width = 0
-  for _, s in ipairs(matches) do
-    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(s.prefix))
+  for _, m in ipairs(matches) do
+    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(m.snippet.prefix))
   end
-  local format_item = function(s)
-    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(s.prefix))
-    return s.prefix .. pad .. ' │ ' .. s.desc
+  local format_item = function(m)
+    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(m.snippet.prefix))
+    return m.snippet.prefix .. pad .. ' │ ' .. m.snippet.desc
   end
 
-  local on_choice = function()
-    -- TODO. Should expand. **But** it needs regions, so `base` does not
-    -- contain enough information.
+  local on_choice = function(m)
+    -- TODO. Should delete `m.region` and start session with `m.snippet.body`.
   end
   vim.ui.select(matches, { prompt = 'Snippets', format_item = format_item }, on_choice)
+end
+
+MiniSnippets.get_matches = function(base, method)
+  if type(base) == 'string' then base = { base } end
+  if not H.is_array_of(base, H.is_string) then H.error('`base` should be string(s)') end
+
+  method = method or H.get_config().match.method
+  local matcher = H.matchers[method]
+  if matcher == nil then H.error('`method` should be one of "exact", "substring", "fuzzy"') end
+
+  local regions = vim.tbl_map(function(b) return { base = b } end, base)
+  local matches = H.match_snippets(regions, H.get_buf_snippets(), matcher)
+  return vim.tbl_map(function(t) return t.snippet end, matches)
 end
 
 -- Helper data ================================================================
@@ -419,8 +433,8 @@ H.setup_config = function(config)
   })
 
   vim.validate({
-    ['match.get_ref'] = { config.match.get_ref, 'function', true },
-    ['match.rule'] = { config.match.rule, 'string' },
+    ['match.find_region'] = { config.match.find_region, 'function', true },
+    ['match.method'] = { config.match.method, 'string' },
     ['mappings.expand'] = { config.mappings.expand, 'string' },
     ['mappings.jump_next'] = { config.mappings.jump_next, 'string' },
     ['mappings.jump_prev'] = { config.mappings.jump_prev, 'string' },
@@ -517,6 +531,7 @@ H.get_buf_snippets = function()
   local res, config_snippets = {}, H.get_config().snippets
   H.traverse_config_snippets(config_snippets, res)
   res = vim.tbl_values(res)
+  table.sort(res, function(a, b) return a.prefix < b.prefix end)
   H.cache.buf[buf_id] = res
   return res
 end
@@ -546,17 +561,30 @@ H.traverse_config_snippets = function(x, target)
 end
 
 -- Matching -------------------------------------------------------------------
-H.get_ref_regions = function(opts)
-  local get_ref = opts.get_ref or H.get_config().match.get_ref or MiniSnippets.default_get_ref
-  local regions = get_ref()
-  if regions == nil then return end
+H.find_match_regions = function(find_region)
+  local regions = find_region()
+  if regions == nil then return {} end
   if H.is_region(regions) then regions = { regions } end
-  if not H.is_array_of(regions, H.is_region) then H.error('Output of `match.get_ref` should be region(s)') end
+  if not H.is_array_of(regions, H.is_region) then H.error('Output of `match.find_region` should be region(s)') end
 
   local res = {}
   for i, reg in ipairs(regions) do
     local text = vim.api.nvim_buf_get_text(0, reg.from.line - 1, reg.from.col - 1, reg.to.line - 1, reg.to.col, {})
     res[i] = { base = table.concat(text, '\n'), from = reg.from, to = reg.to }
+  end
+  return res
+end
+
+H.match_snippets = function(regions, snippets, matcher)
+  local res, is_matched = {}, {}
+  -- Match bases: match all and merge in order without duplicating prefixes
+  for _, r in ipairs(regions) do
+    for _, s in ipairs(matcher(r.base, snippets)) do
+      if not is_matched[s.prefix] then
+        table.insert(res, { region = r, snippet = s })
+        is_matched[s.prefix] = true
+      end
+    end
   end
   return res
 end
@@ -573,21 +601,19 @@ H.matchers.exact = function(base, snippets)
 end
 
 H.matchers.substring = function(base, snippets)
+  if base == '' then return snippets end
   local res = {}
   for _, s in ipairs(snippets) do
-    if string.find(s.prefix, base, 1, true) then table.insert(res, s) end
+    local from = string.find(s.prefix, base, 1, true)
+    if from ~= nil then table.insert(res, { from, s }) end
   end
-  return res
+  table.sort(res, function(a, b) return a[1] < b[1] or (a[1] == b[1] and a[2].prefix < b[2].prefix) end)
+  return vim.tbl_map(function(x) return x[2] end, res)
 end
 
 H.matchers.fuzzy = function(base, snippets)
   if base == '' then return snippets end
-  local snippets_ext = {}
-  for i, s in ipairs(snippets) do
-    snippets_ext[i] = { prefix = s.prefix, snip = s }
-  end
-  local res_raw = vim.fn.matchfuzzy(snippets_ext, base, { key = 'prefix' })
-  return vim.tbl_map(function(x) return x.snip end, res_raw)
+  return vim.fn.matchfuzzy(snippets, base, { key = 'prefix' })
 end
 
 -- Validators -----------------------------------------------------------------
