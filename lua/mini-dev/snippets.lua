@@ -4,16 +4,20 @@
 -- - A system to load and manage custom snippets:
 --
 -- - A system to match snippet based on prefix:
---     - Think about the best way to resolve the "match with whitespace" issue
---       as it matches *all* prior whitespace which results into removing it.
---       For example, it removes all indentation before expanding.
---       The fact that `vim.fn.matchfuzzy()` doesn't account for whitespace
---       (i.e. '   el' base is matches '  el' candidate) makes it worth.
+--     - Think about the issue that `@rel` will match `l` exactly although it
+--       is probably more reasonable to say there are no exact matches.
+--       Maybe accept exact match if it is preceded by whitespace?
 --
---     - Is it reasonable to make "substring" and/or "fuzzy" to match if base
---       matches prefix *or* prefix matches base? Probably not, but still.
+--       Or more generally allow `opts.boundary` for `default_find()` which
+--       should match the character *before* the exact match? The problem with
+--       it seems to be the lack of a robust default: `%s` will not expand in
+--       cases like `aaa(f`, while `[^%w_-]` seems too arbitrary.
+--
+--     - Think about non-verb and concise name for `match.ask`.
 --
 -- - A system to expand, navigate, and edit snippet:
+--     - Make indent be computed as in 'mini.splitjoin', so that multiline
+--       snippets in comments works.
 --
 -- Docs:
 -- - Normalized snippets for buffer are cached. Execute `:edit` to clear
@@ -183,16 +187,17 @@ end
 ---
 --- Snippet data is a table with the following fields:
 ---
---- - <prefix> `(string|table)` - string used to match against user typed base.
----    If array, all strings are used during match. Should always be present.
+--- - <prefix> `(string|table|nil)` - string used to match against user typed base.
+---    If array, all strings are used as separate prefixes.
+---    If absent / `nil`, inferred as empty string.
 ---
 --- - <body> `(string|table|nil)` - content of a snippet which follows
 ---    the |MiniSnippets-syntax-specification|. Array is concatenated with "\n".
----    If absent / `nil`, removes prefix from normalized buffer snippets.
+---    If absent / `nil`, removes <prefix> from normalized buffer snippets.
 ---
 --- - <desc> `(string|table|nil)` - description of snippet. Can be used to display
 ---   snippets in a more human readable form. Array is concatenated with "\n".
----   If absent / `nil`, <prefix> is used.
+---   If absent / `nil`, <prefix> or <body> is used.
 ---   For compatibility with popular snippet databases, field `<description>`
 ---   is used as a fallback.
 ---
@@ -213,10 +218,8 @@ MiniSnippets.config = {
   -- Nothing is defined by default. Add manually to have snippets to match.
   snippets = {},
   match = {
-    -- Function to compute reference region containing base for matching
-    find_region = nil,
-    -- How to match: "exact", "substring", "fuzzy"
-    method = 'exact',
+    -- Function to compute matching snippets
+    find = nil,
     -- Whether to ask via `vim.ui.select` which matched snippet to expand.
     -- One of 'never', 'if_many', 'always'.
     ask = 'never',
@@ -230,41 +233,33 @@ MiniSnippets.config = {
 ---
 ---@param opts table|nil Options. Same structure as `match` in |MiniSnippets.config|
 ---   and uses its values as default. There are differences in allowed values:
----   - Use `find_region = false` to have all buffer snippets as matches.
----     Useful together with `ask = 'always'` to select among all snippets.
+---   - Use `find = false` to have all buffer snippets as matches. Useful
+---     together with `ask = 'always'` to select among all snippets.
 ---   - Use `expand = false` to return all matches.
 ---
----@return table|nil If `expand` is `false`, an array of match data. Otherwise `nil`.
----   Each element of returned array has the following fields:
----   - <region> `(table|nil)` - single region table (as in `match.find_region`
----     of |MiniSnippets.config|) or `nil` if `opts.find_region = false`.
----   - <snippet> `(table)` - snippet data. See |MiniSnippets-files-specification|.
+---@return table|nil If `expand` is `false`, an array of matched snippets as
+---   was an output of `match.find`. Otherwise `nil`.
 ---
 ---@usage >lua
 ---   -- Match and expand the best match (if any)
 ---   MiniSnippets.match({ ask = 'never' })
 ---
 ---   -- Show all buffer snippets and choose one to expand
----   MiniSnippets.match({ find_region = false, ask = 'always' })
+---   MiniSnippets.match({ find = false, ask = 'always' })
 ---
 ---   -- Get all matched snippets
 ---   local matches = MiniSnippets.match({ expand = false })
 ---
 ---   -- Get all buffer snippets
----   local all = MiniSnippets.match({ find_region = false, expand = false })
+---   local all = MiniSnippets.match({ find = false, expand = false })
 --- <
 MiniSnippets.match = function(opts)
   opts = vim.tbl_extend('force', H.get_config().match, opts or {})
 
   -- Validate
-  local find_region = false
-  if opts.find_region ~= false then find_region = opts.find_region or MiniSnippets.default_find_region end
-  if not (find_region == false or vim.is_callable(find_region)) then
-    H.error('`opts.find_region` should be `false` or callable')
-  end
-
-  local matcher = H.matchers[opts.method]
-  if matcher == nil then H.error('`opts.method` should be one of "exact", "substring", "fuzzy"') end
+  local find = false
+  if opts.find ~= false then find = opts.find or MiniSnippets.default_find end
+  if not (find == false or vim.is_callable(find)) then H.error('`opts.find` should be `false` or callable') end
 
   if not (opts.ask == 'never' or opts.ask == 'if_many' or opts.ask == 'always') then
     H.error('`opts.ask` should be one of "never", "if_many", "always"')
@@ -275,9 +270,9 @@ MiniSnippets.match = function(opts)
   if not (expand == false or vim.is_callable(expand)) then H.error('`opts.expand` should be `false` or callable') end
 
   -- Match
-  local all_snippets, matches = vim.deepcopy(H.get_buf_snippets()), nil
-  if find_region == false then matches = vim.tbl_map(function(s) return { snippet = s } end, all_snippets) end
-  if find_region ~= false then matches = H.match_snippets(H.find_match_regions(find_region), all_snippets, matcher) end
+  local all_snippets = vim.deepcopy(H.get_buf_snippets())
+  local matches = find == false and all_snippets or find(all_snippets)
+  if not H.is_array_of(matches, H.is_snippet) then H.error('`find` returned not an array of snippets') end
 
   -- Act
   if expand == false then return matches end
@@ -415,38 +410,66 @@ MiniSnippets.read_file = function(path, opts)
   return res.snippets
 end
 
---- Default match region find
+--- Default match find
 ---
---- Examples: >lua
+--- Match snippets based on the current line text before the cursor.
+--- Tries two matching approaches consecutively:
+--- - Find exact snippet prefix match to the left of cursor.
+---   In case of any match, return the one with the longest prefix.
+--- - Find fuzzy matches for base text extracted via `opts.pattern` to the left
+---   of cursor. Fuzzy matching is done via |matchfuzzy()|.
+---   All fuzzy matches are returned.
 ---
----   -- Match all non-whitespace with fallback on alphanumeric
----   MiniSnippets.default_find_region({ patterns = { '%S+', '%w+' } })
+---@param snippets table Array of snippets which can be matched.
+---@param opts table|nil Options. Possible fields:
+---   - <pattern> `(string)` - Lua pattern to match just before the cursor.
+---     Supply empty string to not do fuzzy match.
+---     Default: `'%S+'` (as many as possible non-whitespace characters).
 ---
----   -- Match including preceding space with fallback on non-whitespace
----   MiniSnippets.default_find_region({ patterns = { '%s*%S+', '%S+' } })
+---@return table Array of snippets with added <region> field. Ordered from most to
+---   least fit match.
+---
+---@usage >lua
+---   -- Perform fuzzy match based only on alphanumeric characters
+---   MiniSnippets.default_find(snippets, { pattern = '%w+' })
 --- <
-MiniSnippets.default_find_region = function(opts)
-  opts = opts or {}
-  local patterns = opts.patterns or { '%S+' }
-  if not H.is_array_of(patterns, H.is_string) then H.error('`opts.patterns` should be array of strings') end
+MiniSnippets.default_find = function(snippets, opts)
+  -- Compute line before cursor. Treat Insert mode as exclusive for right edge.
+  local to = vim.fn.col('.') - (vim.fn.mode() == 'i' and 1 or 0)
+  local line_till_cursor, lnum = vim.api.nvim_get_current_line():sub(1, to), vim.fn.line('.')
 
-  -- Treat visual selection as an explicit single region
-  local mode = vim.fn.mode()
-  if mode == 'v' or mode == 'V' or mode == '\22' then return H.get_visual_region() end
-
-  -- Treat Insert mode as exclusive for right edge
-  local to = vim.fn.col('.') - (mode == 'i' and 1 or 0)
-  local line_till_cursor, lnum, res = vim.api.nvim_get_current_line():sub(1, to), vim.fn.line('.'), {}
-  for _, p in ipairs(patterns) do
-    local from = line_till_cursor:find(p .. '$')
-    if from ~= nil then table.insert(res, { from = { line = lnum, col = from }, to = { line = lnum, col = to } }) end
+  -- Exact. Use 0 as initial best match width to not match empty prefixes.
+  local best_match, best_match_width = nil, 0
+  for _, s in pairs(snippets) do
+    if vim.endswith(line_till_cursor, s.prefix) and best_match_width < s.prefix:len() then
+      s.region = { from = { line = lnum, col = to - s.prefix:len() + 1 }, to = { line = lnum, col = to } }
+      best_match, best_match_width = s, s.prefix:len()
+    end
   end
-  return res
+  if best_match ~= nil then return { best_match } end
+
+  -- Fuzzy
+  opts = opts or {}
+  local pattern = opts.pattern or '%S+'
+  if not H.is_string(pattern) then H.error('`opts.pattern` should be string') end
+  if pattern == '' then return {} end
+
+  local base = string.match(line_till_cursor, pattern .. '$')
+  if base == nil then return {} end
+
+  local snippets_with_prefix = vim.tbl_filter(function(s) return s.prefix ~= nil end, snippets)
+  local fuzzy_matches = vim.fn.matchfuzzy(snippets_with_prefix, base, { key = 'prefix' })
+  local from_col = to - base:len() + 1
+  for _, s in ipairs(fuzzy_matches) do
+    s.region = { from = { line = lnum, col = from_col }, to = { line = lnum, col = to } }
+  end
+
+  return fuzzy_matches
 end
 
-MiniSnippets.default_expand = function(body, opts)
+MiniSnippets.default_expand = function(snippet, opts)
   -- TODO
-  return vim.snippet.expand(body)
+  return vim.snippet.expand(snippet.body)
 end
 
 -- Helper data ================================================================
@@ -480,8 +503,7 @@ H.setup_config = function(config)
   })
 
   vim.validate({
-    ['match.find_region'] = { config.match.find_region, 'function', true },
-    ['match.method'] = { config.match.method, 'string' },
+    ['match.find'] = { config.match.find, 'function', true },
     ['match.expand'] = { config.match.expand, 'function', true },
     ['match.ask'] = { config.match.ask, 'string' },
   })
@@ -584,16 +606,20 @@ end
 
 H.traverse_config_snippets = function(x, target)
   if H.is_snippet(x) then
-    local prefix = type(x.prefix) == 'string' and { x.prefix } or x.prefix
+    local prefix = x.prefix or ''
+    prefix = type(prefix) == 'string' and { prefix } or prefix
 
     local body
     if x.body ~= nil then body = type(x.body) == 'string' and x.body or table.concat(x.body, '\n') end
+
     local desc = x.desc or x.description
     if desc ~= nil then desc = type(desc) == 'string' and desc or table.concat(desc, '\n') end
 
     for _, pr in ipairs(prefix) do
+      -- Add all snippets with empty prefixes separately
+      local index = pr == '' and (#target + 1) or pr
       -- Allow absent `body` to result in completely removing prefix(es)
-      target[pr] = body ~= nil and { prefix = pr, body = body, desc = desc or pr } or nil
+      target[index] = body ~= nil and { prefix = pr, body = body, desc = desc or (pr ~= '' and pr or body) } or nil
     end
   end
 
@@ -607,88 +633,32 @@ H.traverse_config_snippets = function(x, target)
 end
 
 -- Matching -------------------------------------------------------------------
-H.find_match_regions = function(find_region)
-  local regions = find_region()
-  if regions == nil then return {} end
-  if H.is_region(regions) then regions = { regions } end
-  if not H.is_array_of(regions, H.is_region) then H.error('Output of `opts.find_region` should be region(s)') end
-
-  local res = {}
-  for i, reg in ipairs(regions) do
-    local text = vim.api.nvim_buf_get_text(0, reg.from.line - 1, reg.from.col - 1, reg.to.line - 1, reg.to.col, {})
-    res[i] = { text = table.concat(text, '\n'), from = reg.from, to = reg.to }
-  end
-  return res
-end
-
-H.match_snippets = function(regions, snippets, matcher)
-  local res, is_matched = {}, {}
-  -- Match text base: match all and merge in order without duplicating prefixes
-  for _, r in ipairs(regions) do
-    for _, s in ipairs(matcher(r.text, snippets)) do
-      if not is_matched[s.prefix] then
-        table.insert(res, { region = r, snippet = s })
-        is_matched[s.prefix] = true
-      end
-    end
-  end
-  return res
-end
-
-H.matchers = {}
-
-H.matchers.exact = function(base, snippets)
-  if base == '' then return snippets end
-  local res = {}
-  for _, s in ipairs(snippets) do
-    if base == s.prefix then return { s } end
-  end
-  return res
-end
-
-H.matchers.substring = function(base, snippets)
-  if base == '' then return snippets end
-  local res = {}
-  for _, s in ipairs(snippets) do
-    local from = string.find(s.prefix, base, 1, true)
-    if from ~= nil then table.insert(res, { from, s }) end
-  end
-  table.sort(res, function(a, b) return a[1] < b[1] or (a[1] == b[1] and a[2].prefix < b[2].prefix) end)
-  return vim.tbl_map(function(x) return x[2] end, res)
-end
-
-H.matchers.fuzzy = function(base, snippets)
-  if base == '' then return snippets end
-  return vim.fn.matchfuzzy(snippets, base, { key = 'prefix' })
-end
-
 H.match_ask = function(matches, expand)
   local prefix_width = 0
   for _, m in ipairs(matches) do
-    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(m.snippet.prefix))
+    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(m.prefix))
   end
   local format_item = function(m)
-    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(m.snippet.prefix))
-    return m.snippet.prefix .. pad .. ' │ ' .. m.snippet.desc
+    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(m.prefix))
+    return m.prefix .. pad .. ' │ ' .. m.desc
   end
 
-  local on_choice = function(m)
-    if m == nil then return end
-    H.match_expand(m, expand)
-  end
+  local on_choice = function(m) H.match_expand(m, expand) end
   vim.ui.select(matches, { prompt = 'Snippets', format_item = format_item }, on_choice)
 end
 
-H.match_expand = vim.schedule_wrap(function(match, expand)
+H.match_expand = function(match, expand)
+  if match == nil then return end
   local r = match.region
-  if r ~= nil then
+  if H.is_region(r) then
     -- Set cursor before deleting text to ensure working at end of line
     vim.api.nvim_win_set_cursor(0, { r.from.line, r.from.col - 1 })
     vim.api.nvim_buf_set_text(0, r.from.line - 1, r.from.col - 1, r.to.line - 1, r.to.col, {})
   end
   if vim.fn.mode() ~= 'i' then vim.cmd('exec "normal! \28\14" | startinsert') end
-  expand(match.snippet.body)
-end)
+
+  expand(match)
+end
 
 -- Validators -----------------------------------------------------------------
 H.is_string = function(x) return type(x) == 'string' end
@@ -697,7 +667,8 @@ H.is_maybe_string_or_arr = function(x) return x == nil or H.is_string(x) or H.is
 
 H.is_snippet = function(x)
   return type(x) == 'table'
-    and (H.is_string(x.prefix) or H.is_array_of(x.prefix, H.is_string))
+    -- Allow nil `prefix`: inferred as empty string
+    and H.is_maybe_string_or_arr(x.prefix)
     -- Allow nil `body` to remove snippet with `prefix`
     and H.is_maybe_string_or_arr(x.body)
     -- Allow nil `desc` / `description`, in which case "prefix" is used

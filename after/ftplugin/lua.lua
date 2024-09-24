@@ -35,3 +35,8 @@ vim.b.minisurround_config = {
     s = { input = { '%[%[().-()%]%]' }, output = { left = '[[', right = ']]' } },
   },
 }
+
+if MiniSnippets ~= nil then
+  local find = function(snippets) return MiniSnippets.default_find(snippets, { pattern = '[%w@_]+' }) end
+  vim.b.minisnippets_config = { match = { find = find } }
+end

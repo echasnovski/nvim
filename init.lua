@@ -30,6 +30,28 @@ if vim.g.vscode ~= nil then now(function() source('vscode.lua') end) end
 -- Mini.nvim ==================================================================
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
+later(function()
+  local snippets = require('mini-dev.snippets')
+  snippets.setup({
+    snippets = {
+      snippets.gen_loader.from_filetype(),
+    },
+    match = { ask = 'if_many' },
+  })
+
+  -- Temporarily use `vim.snippet` as expansion engine
+  local match_or_jump_next = function()
+    if vim.snippet.active({ direction = 1 }) then return vim.snippet.jump(1) end
+    MiniSnippets.match()
+  end
+  local jump_prev = function()
+    if vim.snippet.active({ direction = -1 }) then vim.snippet.jump(-1) end
+  end
+  vim.keymap.set({ 'i', 's', 'x' }, '<C-l>', match_or_jump_next)
+  vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
+  vim.keymap.set('i', '<C-/>', '<Cmd>lua MiniSnippets.match({ find = false, ask = "always" })<CR>')
+end)
+
 -- Step one
 now(function()
   if vim.startswith(vim.env.TERM, 'st') then return end
