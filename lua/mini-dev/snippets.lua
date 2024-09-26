@@ -13,15 +13,21 @@
 --       it seems to be the lack of a robust default: `%s` will not expand in
 --       cases like `aaa(f`, while `[^%w_-]` seems too arbitrary.
 --
---     - Think about non-verb and concise name for `match.ask`.
---
 -- - A system to expand, navigate, and edit snippet:
 --     - Make indent be computed as in 'mini.splitjoin', so that multiline
 --       snippets in comments works.
+--     - Make sure that linked tabstops are updated not only when typing text,
+--       but also on `<BS>`.
 --
 -- Docs:
--- - Normalized snippets for buffer are cached. Execute `:edit` to clear
---   current buffer cache.
+-- - Manage:
+--     - Normalized snippets for buffer are cached. Execute `:edit` to clear
+--       current buffer cache.
+--
+-- - Match:
+--     - Calling `match.expand`:
+--         - Preserves Insert mode and ensures Normal mode.
+--         - Places cursor at the start of removed region (if there is one).
 --
 -- Tests:
 -- - Management:
@@ -31,6 +37,11 @@
 --         - From .lua over .json.
 --     - `gen_loader.from_filetype()` processes pattern array in order.
 --       Resulting in preferring later ones over earlier.
+--
+-- - Match:
+--     - `match.expand` is called with proper active mode and cursor.
+--       Test edge cases when region/cursor is in start/middle/end of line
+--       and in both supported modes.
 
 --- *mini.snippets* Manage and expand snippets
 --- *MiniSnippets*
@@ -80,6 +91,9 @@
 ---
 --- - 'L3MON4D3/LuaSnip':
 ---     - ...
+---
+--- - 'dcampos/nvim-snippy':
+---     - ???
 ---
 --- - Built-in |vim.snippet| (on Neovim>=0.10):
 ---     - Both contain expand functionality based on LSP snippet format.
@@ -220,9 +234,8 @@ MiniSnippets.config = {
   match = {
     -- Function to compute matching snippets
     find = nil,
-    -- Whether to ask via `vim.ui.select` which matched snippet to expand.
-    -- One of 'never', 'if_many', 'always'.
-    ask = 'never',
+    -- Function which interactively selects match to expand
+    select = nil,
     -- Function which starts snippet expansion session
     expand = nil,
   },
@@ -233,19 +246,19 @@ MiniSnippets.config = {
 ---
 ---@param opts table|nil Options. Same structure as `match` in |MiniSnippets.config|
 ---   and uses its values as default. There are differences in allowed values:
----   - Use `find = false` to have all buffer snippets as matches. Useful
----     together with `ask = 'always'` to select among all snippets.
----   - Use `expand = false` to return all matches.
+---   - Use `find = false` to have all buffer snippets as matches.
+---   - Use `select = false` to always expand the best match (if any).
+---   - Use `expand = false` to return all matches without expanding.
 ---
 ---@return table|nil If `expand` is `false`, an array of matched snippets as
 ---   was an output of `match.find`. Otherwise `nil`.
 ---
 ---@usage >lua
----   -- Match and expand the best match (if any)
----   MiniSnippets.match({ ask = 'never' })
+---   -- Find and expand the best match (if any)
+---   MiniSnippets.match({ select = false })
 ---
----   -- Show all buffer snippets and choose one to expand
----   MiniSnippets.match({ find = false, ask = 'always' })
+---   -- Show all buffer snippets and select one to expand
+---   MiniSnippets.match({ find = false })
 ---
 ---   -- Get all matched snippets
 ---   local matches = MiniSnippets.match({ expand = false })
@@ -261,9 +274,9 @@ MiniSnippets.match = function(opts)
   if opts.find ~= false then find = opts.find or MiniSnippets.default_find end
   if not (find == false or vim.is_callable(find)) then H.error('`opts.find` should be `false` or callable') end
 
-  if not (opts.ask == 'never' or opts.ask == 'if_many' or opts.ask == 'always') then
-    H.error('`opts.ask` should be one of "never", "if_many", "always"')
-  end
+  local select = false
+  if opts.select ~= false then select = opts.select or MiniSnippets.default_select end
+  if not (select == false or vim.is_callable(select)) then H.error('`opts.select` should be `false` or callable') end
 
   local expand = false
   if opts.expand ~= false then expand = opts.expand or MiniSnippets.default_expand end
@@ -276,11 +289,14 @@ MiniSnippets.match = function(opts)
 
   -- Act
   if expand == false then return matches end
+  if #all_snippets == 0 then return H.notify('There are no buffer snippets', 'WARN') end
   if #matches == 0 then return H.notify('There are no matches', 'WARN') end
 
-  local should_ask = opts.ask == 'always' or (opts.ask == 'if_many' and #matches > 1)
-  if should_ask then return H.match_ask(matches, expand) end
-  H.match_expand(matches[1], expand)
+  local expand_ext = H.make_extended_expand(expand)
+
+  if select == false then return expand_ext(matches[1]) end
+  local best_match = select(matches, expand_ext)
+  if H.is_snippet(best_match) then expand_ext(best_match) end
 end
 
 --- Generate snippet loader
@@ -467,6 +483,39 @@ MiniSnippets.default_find = function(snippets, opts)
   return fuzzy_matches
 end
 
+--- Default select best match
+---
+--- Show matched snippets as entries via |vim.ui.select()| and expand chosen one.
+---
+---@param snippets table Array of matched snippets; an output of `config.match`.
+---@param expand function Function which expands matched snippet (along with
+---   removing matched region, if present).
+---@param opts table|nil Options. Possible fields:
+---   - <expand_single> `(boolean)` - whether to skip |vim.ui.select()| for
+---     single matched snippet. Default: `true`.
+MiniSnippets.default_select = function(snippets, expand, opts)
+  opts = opts or {}
+
+  if #snippets == 1 and (opts.expand_single == nil or opts.expand_single == true) then
+    expand(snippets[1])
+    return
+  end
+
+  -- Format
+  local prefix_width = 0
+  for _, s in ipairs(snippets) do
+    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(s.prefix))
+  end
+  local format_item = function(s)
+    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(s.prefix))
+    return s.prefix .. pad .. ' │ ' .. s.desc
+  end
+
+  -- Schedule expand to allow `vim.ui.select` override to restore window/cursor
+  local on_choice = vim.schedule_wrap(expand)
+  vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
+end
+
 MiniSnippets.default_expand = function(snippet, opts)
   -- TODO
   return vim.snippet.expand(snippet.body)
@@ -504,8 +553,8 @@ H.setup_config = function(config)
 
   vim.validate({
     ['match.find'] = { config.match.find, 'function', true },
+    ['match.select'] = { config.match.select, 'function', true },
     ['match.expand'] = { config.match.expand, 'function', true },
-    ['match.ask'] = { config.match.ask, 'string' },
   })
 
   return config
@@ -633,31 +682,41 @@ H.traverse_config_snippets = function(x, target)
 end
 
 -- Matching -------------------------------------------------------------------
-H.match_ask = function(matches, expand)
-  local prefix_width = 0
-  for _, m in ipairs(matches) do
-    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(m.prefix))
-  end
-  local format_item = function(m)
-    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(m.prefix))
-    return m.prefix .. pad .. ' │ ' .. m.desc
-  end
+H.make_extended_expand = function(expand)
+  return function(match)
+    if match == nil then return end
 
-  local on_choice = function(m) H.match_expand(m, expand) end
-  vim.ui.select(matches, { prompt = 'Snippets', format_item = format_item }, on_choice)
-end
+    -- Ensure proper mode
+    local mode = vim.fn.mode()
+    if not (mode == 'i' or mode == 'n') then
+      -- This is seemingly the only "good" way to ensure Normal mode.
+      -- This also works with `vim.snippet.expand()` as its implementation uses
+      -- `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
+      vim.api.nvim_feedkeys('\28\14', 'n', false)
+      -- NOTE: Normal mode is chosen because ensuring Insert is troublesome.
+      -- Any reasonable approach (`:normal! \28\14a`, `:startinsert`,
+      -- `vim.fn.feedkeys('\28\14a', 'n')`) does not immediately start Insert
+      -- mode, only "after function or script is finished".
+    end
 
-H.match_expand = function(match, expand)
-  if match == nil then return end
-  local r = match.region
-  if H.is_region(r) then
-    -- Set cursor before deleting text to ensure working at end of line
-    vim.api.nvim_win_set_cursor(0, { r.from.line, r.from.col - 1 })
-    vim.api.nvim_buf_set_text(0, r.from.line - 1, r.from.col - 1, r.to.line - 1, r.to.col, {})
+    -- Remove matched region
+    local r = match.region
+    if H.is_region(r) then
+      if mode ~= 'i' then
+        -- Make position cursor after line end possible
+        local cache_virtualedit = vim.wo.virtualedit
+        vim.wo.virtualedit = 'onemore'
+        vim.schedule(function() vim.wo.virtualedit = cache_virtualedit end)
+      end
+
+      -- Set cursor before deleting text to ensure working at end of line
+      vim.api.nvim_win_set_cursor(0, { r.from.line, r.from.col - 1 })
+      vim.api.nvim_buf_set_text(0, r.from.line - 1, r.from.col - 1, r.to.line - 1, r.to.col, {})
+    end
+
+    -- Expand
+    expand(match)
   end
-  if vim.fn.mode() ~= 'i' then vim.cmd('exec "normal! \28\14" | startinsert') end
-
-  expand(match)
 end
 
 -- Validators -----------------------------------------------------------------

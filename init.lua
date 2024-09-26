@@ -36,7 +36,6 @@ later(function()
     snippets = {
       snippets.gen_loader.from_filetype(),
     },
-    match = { ask = 'if_many' },
   })
 
   -- Temporarily use `vim.snippet` as expansion engine
