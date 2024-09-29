@@ -23,9 +23,130 @@
 -- if          ::= ([^:\] | '\:' | '\\')*
 -- else        ::= text
 
--- TODO:
--- - Parsing should ensure presence of the final tabstop (`$0`). Append at the
---   end if missing.
+_G.parse = function(snippet)
+  local node_arr = {}
+  node_arr[1] = { text = { '' }, parent = node_arr }
+  local state = { arr = node_arr, name = 'text' }
+
+  for i = 0, vim.fn.strchars(snippet) - 1 do
+    local processor, node = H.processors[state.name], state.arr[#state.arr]
+    processor(vim.fn.strcharpart(snippet, i, 1), state, node)
+  end
+
+  return H.post_process(state.arr)
+end
+
+H = {}
+
+H.post_process = function(node_arr)
+  local traverse
+  traverse = function(arr)
+    for _, node in ipairs(arr) do
+      if node.escaped and node.text ~= nil then table.insert(node.text, '\\') end
+
+      node.parent, node.escaped = nil, nil
+
+      if node.text then node.text = table.concat(node.text, '') end
+      if node.tabstop then node.tabstop = table.concat(node.tabstop, '') end
+      if node.var then node.var = table.concat(node.var, '') end
+
+      if node.placeholder ~= nil then node.placeholder = traverse(node.placeholder) end
+    end
+    arr = vim.tbl_filter(function(n) return n.text == nil or (n.text ~= nil and n.text:len() > 0) end, arr)
+    return arr
+  end
+
+  -- TODO:
+  -- - Should ensure presence of final tabstop (`$0`). Append at end if none.
+
+  return traverse(node_arr)
+end
+
+-- Each entry processes single character based on the character (`c`),
+-- state (`s`), and current node (`n`).
+H.processors = {}
+
+--stylua: ignore
+H.processors.text = function(c, s, n)
+  if n.escaped then
+    -- Escape `$}\` and allow unescaped '\\' to preceed any character
+    if not (c == '$' or c == '}' or c == '\\') then table.insert(n.text, '\\') end
+    n.text[#n.text + 1], n.escaped = c, false
+    return
+  end
+  if c == '\\' then n.escaped = true; return end
+  if c == '$' then s.name = 'dollar'; return end
+  table.insert(n.text, c)
+end
+
+--stylua: ignore
+H.processors.dollar = function(c, s, n)
+  -- Detect `$1` and `$var` as a new node
+  local no_brace_node = c:find('^[0-9]$') and 'tabstop' or (c:find('^[_a-zA-Z]$') and 'var' or '')
+  if no_brace_node ~= '' then
+    local new_node = { [no_brace_node] = { c }, parent = s.arr }
+    s.arr[#s.arr + 1], s.name = new_node, 'dollar_' .. no_brace_node
+    return
+  end
+  if c == '{' then s.name = 'dollar_lbrace'; return end
+  -- Allow unescaped `$`
+  n.text[#n.text + 1], n.text[#n.text + 2], s.name = '$', c, 'text'
+end
+
+--stylua: ignore
+H.processors.dollar_tabstop = function(c, s, n)
+  if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
+  s.arr[#s.arr + 1] = { text = {}, parent = s.arr }
+  if c == '$' then s.name = 'dollar'; return end
+  s.arr[#s.arr].text[1], s.name = c, 'text'
+end
+
+--stylua: ignore
+H.processors.dollar_var = function(c, s, n)
+  if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
+  s.arr[#s.arr + 1] = { text = {}, parent = s.arr }
+  if c == '$' then s.name = 'dollar'; return end
+  s.arr[#s.arr].text[1], s.name = c, 'text'
+end
+
+--stylua: ignore
+H.processors.dollar_lbrace = function(c, s, n)
+  if n.tabstop == nil and n.var == nil then
+    if c:find('^[0-9]$') then s.arr[#s.arr + 1] = { tabstop = { c }, parent = s.arr }; return end
+    if c:find('^[_a-zA-Z]$') then s.arr[#s.arr + 1] = { var = { c }, parent = s.arr }; return end
+    H.error('`${` should be followed by digit (for tabstop) or letter/underscore (for variable), not ' .. vim.inspect(c))
+  end
+  if c == '}' then s.arr[#s.arr + 1] = { text = {}, parent = s.arr }; s.name = 'text' return end
+  if c == ':' then return end -- TODO: placeholder
+  if n.tabstop ~= nil then
+    if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
+    if c == '|' then s.name = 'choice'; return end
+    H.error('Tabstop id should be followed by, "}", ":" or "|", not ' .. vim.inspect(c))
+  end
+  if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
+  if c == '/' then s.name = 'var_transform'; return end
+  H.error('Variable name should be followed by "}", ":" or "/", not ' .. vim.inspect(c))
+end
+
+H.processors.choice = function(c, s, n)
+  -- TODO
+end
+
+H.processors.var_transform = function(c, s, n)
+  -- TODO
+end
+
+H.error = function(msg) error('(mini.snippets) ' .. msg, 0) end
+
+-- Tests ======================================================================
+vim.keymap.set('n', '<Leader>ps', function()
+  local line = vim.api.nvim_get_current_line():gsub('%-%-.*$', '')
+  local indent, snippet = line:match('^%s*'), line:match('^%s*(.*),%s*$')
+  local code = 'local ok, res = pcall(_G.parse, ' .. snippet .. '); return res'
+  local parsed_snippet = loadstring(code)()
+  local lines = vim.split(vim.inspect(parsed_snippet, { newline = ' ', indent = '' }), '\n')
+  vim.fn.append('.', vim.tbl_map(function(l) return indent .. l end, lines))
+end, { desc = 'Parse current line snippet test case' })
 
 -- Many examples of passing and failing snippet bodies are taken from VS Code
 -- tests. NOTE: not all handling there is according to LSP spec; prefer spec.
@@ -48,12 +169,16 @@ _G.corpus_pass = {
     [[aa \\\$]], -- [[I need \$]]
     [[\${1|aa,bb|}]], -- a text '${1|aa,bb|}'
 
-    -- Not spec, but seems reasonable to allow unescaped backslash
+    -- Not spec: allow unescaped backslash
     [[aa\bb]],
 
-    -- Not spec, but seems reasonable to allow unescaped `}` in top-level text
+    -- Not spec: allow unescaped $ when can not be mistaken for tabstop or var
+    'aa$ bb',
+    'aa$$bb',
+
+    -- Not spec: allow unescaped `}` in top-level text
     '{ aa }',
-    [[{\n\taa\n}]],
+    '{\n\taa\n}',
     'aa{1}',
     'aa{1:bb}',
     'aa{1:{2:cc}}',
@@ -62,18 +187,21 @@ _G.corpus_pass = {
 
   tabstop = {
     -- Common
-    'hello $1',
-    'hello $1 world',
-    'hello_$1_world',
+    'aa $1',
+    'aa $1 bb',
+    'aa$1bb',
+    'hello_$1_bb',
     'ыыы $1 ффф',
 
-    'hello ${1}',
-    'hello ${1} world',
-    'hello_${1}_world',
+    'aa ${1}',
+    'aa${1}bb',
+    'hello_${1}_bb',
     'ыыы ${1} ффф',
 
-    'hello $0',
-    'hello $1 $0',
+    'aa $0',
+    'aa $1 $0',
+
+    [[aa\\$bb]], -- `$bb` should be variable
 
     -- Only tabstop(s)
     '$1',
@@ -111,7 +239,7 @@ _G.corpus_pass = {
     [[xx ${1:aa\$}]],
     '${1:aa:bb}', -- should allow unescaped `:`
 
-    -- Not spec, but seems reasonable to allow unescaped backslash
+    -- Not spec: allow unescaped backslash
     [[xx ${1:aa\bb}]],
 
     -- Different placeholders (should be later resolved somehow)
@@ -142,12 +270,14 @@ _G.corpus_pass = {
     -- - Variable
     '${1:$var}',
     '${1:${var}}',
-    --
-    -- TODO
+    '${1:${var:aa}}',
+    '${1:${var:$2}}',
+    '${1:${var:aa$2bb}}',
 
     -- Combined
     '${1:aa${2:bb}cc}', -- should resolve to 'aabbcc'
     '${1:aa $var bb}', -- should resolve to 'aa ! bb' (if `var` is set to "!")
+    '${1:aa${var:xx}bb}', -- should resolve to 'aaxxbb' (if `var` is not set)
   },
 
   choice = {
@@ -166,7 +296,7 @@ _G.corpus_pass = {
     'xx {1|aa,,bb|}',
     'xx {1|aa,,,bb|}', -- two empty strings as choices should be allowed
 
-    -- Not spec, but seems reasonable to allow unescaped backslash
+    -- Not spec: allow unescaped backslash
     [[xx ${1|aa\bb|}]],
 
     -- Should be ignored in `$0`
@@ -183,6 +313,8 @@ _G.corpus_pass = {
     '${a_b}',
     '${_a}',
     '${a1}',
+
+    [[aa\\$bb]], -- `$bb` should be variable
 
     -- Should recognize only [_a-zA-Z] [_a-zA-Z0-9]*
     '$aa-bb', -- `$aa` variable and `-bb` text
@@ -250,9 +382,12 @@ _G.corpus_fail = {
   tabstop = {
     -- Should be closed with `}`
     '${1:',
-    '${1 ',
     '${1',
-    'aa ${1 bb',
+
+    -- Should be followed by either `:` or `}`
+    '${1 }',
+    '${1?}',
+    '${1 |}',
   },
   placeholder = {
     -- Should be closed with `}`
@@ -277,10 +412,22 @@ _G.corpus_fail = {
   },
   var = {
     '${aa }', -- should contain only allowed characters
-    '${1a }', -- can not start with digit
+    -- Can not start with digit
+    '${1a}',
+
+    -- Should be followed by either `:`, `/`, or `}`
+    '${a }',
+    '${a?}',
+    '${a :}',
+    '${a?:}',
 
     -- Format
     [[${var/regex/format}]], -- not enough `/`
     [[${var/regex\/format/options}]], -- not enough `/`
+  },
+  other = {
+    -- Should start with [_0-9a-zA-Z]
+    '${-',
+    '${ ',
   },
 }
