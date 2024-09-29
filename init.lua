@@ -51,6 +51,8 @@ later(function()
   vim.keymap.set('i', '<C-/>', '<Cmd>lua MiniSnippets.match({ find = false, ask = "always" })<CR>')
 end)
 
+later(function() add('rafamadriz/friendly-snippets') end)
+
 -- Step one
 now(function()
   if vim.startswith(vim.env.TERM, 'st') then return end
