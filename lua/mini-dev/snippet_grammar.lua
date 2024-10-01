@@ -26,30 +26,51 @@
 _G.parse = function(snippet)
   local node_arr = {}
   node_arr[1] = { text = { '' }, parent = node_arr }
-  local state = { arr = node_arr, name = 'text' }
+  local state = { level = 1, arr = node_arr, name = 'text' }
 
   for i = 0, vim.fn.strchars(snippet) - 1 do
     local processor, node = H.processors[state.name], state.arr[#state.arr]
     processor(vim.fn.strcharpart(snippet, i, 1), state, node)
   end
 
+  -- TODO: Verify correct structure
+  H.verify(state)
+
   return H.post_process(state.arr)
 end
 
 H = {}
 
+H.verify = function(state)
+  if state.name == 'dollar' then H.error('"$" should be followed by tabstop id or variable name') end
+  if state.name == 'dollar_lbrace' then H.error('"${" should be closed with "}"') end
+  if state.name == 'choice' then H.error('Tabstop with choices should be closed with "|}"') end
+  if vim.startswith(state.name, 'transform_') then
+    H.error('Variable transform should contain 3 "/" outside of `${...}` and be closed with "}"')
+  end
+  -- TODO
+end
+
 H.post_process = function(node_arr)
   local traverse
   traverse = function(arr)
     for _, node in ipairs(arr) do
-      if node.escaped and node.text ~= nil then table.insert(node.text, '\\') end
+      -- Clean up trailing `\`
+      if node.after_slash and node.text ~= nil then table.insert(node.text, '\\') end
 
-      node.parent, node.escaped = nil, nil
+      -- Remove helper fields
+      node.parent, node.after_slash = nil, nil
 
+      -- Convert arrays to strings
       if node.text then node.text = table.concat(node.text, '') end
       if node.tabstop then node.tabstop = table.concat(node.tabstop, '') end
+      if node.choices then node.choices = vim.tbl_map(table.concat, node.choices) end
       if node.var then node.var = table.concat(node.var, '') end
 
+      -- Ignore choices in `0` tabstop
+      if node.tabstop == '0' then node.choices = nil end
+
+      -- Recursively post-process placeholders
       if node.placeholder ~= nil then node.placeholder = traverse(node.placeholder) end
     end
     arr = vim.tbl_filter(function(n) return n.text == nil or (n.text ~= nil and n.text:len() > 0) end, arr)
@@ -68,13 +89,13 @@ H.processors = {}
 
 --stylua: ignore
 H.processors.text = function(c, s, n)
-  if n.escaped then
+  if n.after_slash then
     -- Escape `$}\` and allow unescaped '\\' to preceed any character
     if not (c == '$' or c == '}' or c == '\\') then table.insert(n.text, '\\') end
-    n.text[#n.text + 1], n.escaped = c, false
+    n.text[#n.text + 1], n.after_slash = c, nil
     return
   end
-  if c == '\\' then n.escaped = true; return end
+  if c == '\\' then n.after_slash = true; return end
   if c == '$' then s.name = 'dollar'; return end
   table.insert(n.text, c)
 end
@@ -116,24 +137,71 @@ H.processors.dollar_lbrace = function(c, s, n)
     if c:find('^[_a-zA-Z]$') then s.arr[#s.arr + 1] = { var = { c }, parent = s.arr }; return end
     H.error('`${` should be followed by digit (for tabstop) or letter/underscore (for variable), not ' .. vim.inspect(c))
   end
-  if c == '}' then s.arr[#s.arr + 1] = { text = {}, parent = s.arr }; s.name = 'text' return end
+  if c == '}' then s.arr[#s.arr + 1] = { text = {}, parent = s.arr }; s.name = 'text'; return end
   if c == ':' then return end -- TODO: placeholder
   if n.tabstop ~= nil then
     if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
-    if c == '|' then s.name = 'choice'; return end
-    H.error('Tabstop id should be followed by, "}", ":" or "|", not ' .. vim.inspect(c))
+    if c == '|' then n.choices = { {} }; s.name = 'choice'; return end
+    H.error('Tabstop id should be followed by "}", ":" or "|", not ' .. vim.inspect(c))
   end
   if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
-  if c == '/' then s.name = 'var_transform'; return end
+  if c == '/' then s.name = 'transform_regex'; return end
   H.error('Variable name should be followed by "}", ":" or "/", not ' .. vim.inspect(c))
 end
 
+--stylua: ignore
 H.processors.choice = function(c, s, n)
-  -- TODO
+  if n.wait_rbrace then
+    if c ~= '}' then H.error('Choice node should be closed with `|}`') end
+    n.wait_rbrace = nil;
+    s.arr[#s.arr + 1] = { text = {}, parent = s.arr }; s.name = 'text'
+    return
+  end
+
+  local cur = n.choices[#n.choices]
+  if n.after_slash then
+    -- Escape `$}\` and allow unescaped '\\' to preceed any character
+    if not (c == ',' or c == '|' or c == '\\') then table.insert(cur, '\\') end
+    cur[#cur + 1], n.after_slash = c, nil
+    return
+  end
+  if c == '\\' then n.after_slash = true; return end
+  if c == ',' then table.insert(n.choices, {}); return end
+  if c == '|' then n.wait_rbrace = true; return end
+  table.insert(cur, c)
 end
 
-H.processors.var_transform = function(c, s, n)
-  -- TODO
+-- Ignore all the transform data and wait until proper `}`
+--stylua: ignore
+H.processors.transform_regex = function(c, s, n)
+  if n.after_slash then n.after_slash = nil; return end
+  if c == '\\' then n.after_slash = true; return end
+  if c == '/' then s.name = 'transform_format'; return end
+end
+
+--stylua: ignore
+H.processors.transform_format = function(c, s, n)
+  if n.after_slash then n.after_slash = nil; return end
+  if n.after_dollar then
+    n.after_dollar = nil
+    if c == '{' and not n.inside_braces then n.inside_braces = true; return end
+  end
+  if c == '\\' then n.after_slash = true; return end
+  if c == '$' then n.after_dollar = true; return end
+
+  -- If inside `${}`, wait until the first (unescaped) `}`. Techincally, this
+  -- breaks LSP spec in `${1:?if:else}` (`if` doesn't have to escape `}`).
+  -- Accept this as known limitation and ask to escape `}` in such cases.
+  if c == '}' and n.inside_braces then n.inside_braces = nil; return end
+
+  if c == '/' and not n.inside_braces then s.name = 'transform_options'; return end
+end
+
+--stylua: ignore
+H.processors.transform_options = function(c, s, n)
+  if n.after_slash then n.after_slash = nil; return end
+  if c == '\\' then n.after_slash = true; return end
+  if c == '}' then s.arr[#s.arr + 1] = { text = {}, parent = s.arr }; s.name = 'text'; return end
 end
 
 H.error = function(msg) error('(mini.snippets) ' .. msg, 0) end
@@ -287,14 +355,14 @@ _G.corpus_pass = {
 
     -- Escape (should ignore `\` before `,|\` and treat as text)
     [[${1|\,,},$,\|,\\|}]], -- choices are `,`, `}`, `$`, `|`, `\`
-    [[xx {1|aa\,bb|}]], -- single choice is `aa,bb`
+    [[xx ${1|aa\,bb|}]], -- single choice is `aa,bb`
 
     -- Empty choices
     'xx ${1|,|}',
     'xx ${1|aa,|}',
     'xx ${1|,aa|}',
-    'xx {1|aa,,bb|}',
-    'xx {1|aa,,,bb|}', -- two empty strings as choices should be allowed
+    'xx ${1|aa,,bb|}',
+    'xx ${1|aa,,,bb|}', -- two empty strings as choices should be allowed
 
     -- Not spec: allow unescaped backslash
     [[xx ${1|aa\bb|}]],
@@ -332,10 +400,12 @@ _G.corpus_pass = {
     '${var:${1|aa|}}',
     '${var:${var2:aa}}',
 
-    -- Regex
+    -- Transform (should ignore all data and just register variable name)
     '${var/.*/${0:aaa}/i}',
     '${var/.*/${1}/i}',
     '${var/.*/$1/i}',
+    '${var/.*/$1/}',
+    '${var/.*//}',
     '${var/.*/This-$1-encloses/i}',
     '${var/.*/complex${1:else}/i}',
     '${var/.*/complex${1:-else}/i}',
@@ -343,16 +413,28 @@ _G.corpus_pass = {
     '${var/.*/complex${1:?if:else}/i}',
     '${var/.*/complex${1:/upcase}/i}',
 
+    -- - Tricky transform strings
+    '${var///}',
+    [[${var/.*/$\//i}]],
+    '${var/.*/$${}/i}', -- `${}` directly after `$`
+    '${var/.*/${a/}/i}', -- `/` inside a proper `${...}`
+    [[${var/.*/$\x/i}]], -- `/` after both dollar and slash
+    [[${var/.*/\$x/i}]], -- `/` after both dollar and slash
+    [[${var/.*/\${x/i}]], -- `/` after not proper `${`
+    [[${var/.*/$\{x/i}]], -- `/` after not proper `${`
+    '${var/.*/a$/i}', -- `/` directlyafter dollar
+    '${var/.*/${1:?${}:aa}/i}', -- `}` inside `format`
+
     -- Escaped (should ignore `\` before `$/\` and treat as text)
-    [[${var/regex/\/aa/g}]],
-    [[${var/regex/a\/a/g}]],
-    [[${var/regex/aa\//g}]],
+    [[${var/regex/\/a\/a\//g}]],
+
+    -- - Known limitation of needing to escape `}` in `if` of `${1:?if:else}`
+    [[${var/regex/${1:?\}:else}/options}]],
 
     [[${var/regex/\\aa/g}]],
     [[${var/regex/\$1aa/g}]],
 
-    [[${var/reg\/ex/aa/}]], -- should handle escaped `/` in regex
-    [[${var/regex\//aa/}]],
+    [[${var/\/re\/gex\//aa/}]], -- should handle escaped `/` in regex
   },
 
   combined = {
@@ -404,6 +486,7 @@ _G.corpus_fail = {
     '${1|a',
     '${1|a|',
     '${1|a}',
+    [[${1|a\|}]],
     '${1|a,b',
     '${1|a,b}',
     '${1|a,b|',
@@ -411,7 +494,6 @@ _G.corpus_fail = {
     '${1|a,b|,c}', -- should escape `|`
   },
   var = {
-    '${aa }', -- should contain only allowed characters
     -- Can not start with digit
     '${1a}',
 
@@ -421,13 +503,19 @@ _G.corpus_fail = {
     '${a :}',
     '${a?:}',
 
-    -- Format
+    -- Transform
     [[${var/regex/format}]], -- not enough `/`
-    [[${var/regex\/format/options}]], -- not enough `/`
+    [[${var/regex\/format/options}]],
+    [[${var/.*/$\/i}]],
+    '${var/regex/${/}options}', -- not enough `/` outside of `${...}`
+
+    -- - Known limitation of unescaped `}` in `if` of `${1:?if:else}`
+    '${var/regex/${1:?if}:else/i}/options}',
   },
   other = {
     -- Should start with [_0-9a-zA-Z]
     '${-',
     '${ ',
+    'aa$',
   },
 }
