@@ -24,19 +24,20 @@
 -- else        ::= text
 
 _G.parse = function(snippet)
-  local node_arr = {}
-  node_arr[1] = { text = { '' }, parent = node_arr }
-  local state = { level = 1, arr = node_arr, name = 'text' }
+  -- State tracking table: `name` - state name, `depth_arrays` - node array for
+  -- each depth of nested placeholders.
+  local state = { name = 'text', depth_arrays = { { { text = { '' } } } } }
 
   for i = 0, vim.fn.strchars(snippet) - 1 do
+    -- Infer helperd data
+    state.depth = #state.depth_arrays
+    state.arr = state.depth_arrays[state.depth]
     local processor, node = H.processors[state.name], state.arr[#state.arr]
     processor(vim.fn.strcharpart(snippet, i, 1), state, node)
   end
 
-  -- TODO: Verify correct structure
   H.verify(state)
-
-  return H.post_process(state.arr)
+  return H.post_process(state.depth_arrays[1])
 end
 
 H = {}
@@ -48,7 +49,7 @@ H.verify = function(state)
   if vim.startswith(state.name, 'transform_') then
     H.error('Variable transform should contain 3 "/" outside of `${...}` and be closed with "}"')
   end
-  -- TODO
+  if #state.depth_arrays > 1 then H.error('Placeholder should be closed with "}"') end
 end
 
 H.post_process = function(node_arr)
@@ -57,15 +58,14 @@ H.post_process = function(node_arr)
     for _, node in ipairs(arr) do
       -- Clean up trailing `\`
       if node.after_slash and node.text ~= nil then table.insert(node.text, '\\') end
-
-      -- Remove helper fields
-      node.parent, node.after_slash = nil, nil
+      node.after_slash = nil
 
       -- Convert arrays to strings
       if node.text then node.text = table.concat(node.text, '') end
       if node.tabstop then node.tabstop = table.concat(node.tabstop, '') end
       if node.choices then node.choices = vim.tbl_map(table.concat, node.choices) end
       if node.var then node.var = table.concat(node.var, '') end
+      if node.transform then node.transform = table.concat(node.transform, '') end
 
       -- Ignore choices in `0` tabstop
       if node.tabstop == '0' then node.choices = nil end
@@ -74,6 +74,7 @@ H.post_process = function(node_arr)
       if node.placeholder ~= nil then node.placeholder = traverse(node.placeholder) end
     end
     arr = vim.tbl_filter(function(n) return n.text == nil or (n.text ~= nil and n.text:len() > 0) end, arr)
+    if #arr == 0 then return { { text = '' } } end
     return arr
   end
 
@@ -81,6 +82,16 @@ H.post_process = function(node_arr)
   -- - Should ensure presence of final tabstop (`$0`). Append at end if none.
 
   return traverse(node_arr)
+end
+
+H.rise_depth = function(state)
+  -- Set the deepest array as a placeholder of the last node of previous layer.
+  -- This can happen only after `}` which does not close current node.
+  local depth = #state.depth_arrays
+  local cur_layer, prev_layer = state.depth_arrays[depth], state.depth_arrays[depth - 1]
+  prev_layer[#prev_layer].placeholder = vim.deepcopy(cur_layer)
+  table.insert(prev_layer, { text = {} })
+  state.depth_arrays[state.depth] = nil
 end
 
 -- Each entry processes single character based on the character (`c`),
@@ -95,6 +106,7 @@ H.processors.text = function(c, s, n)
     n.text[#n.text + 1], n.after_slash = c, nil
     return
   end
+  if c == '}' and s.depth > 1 then H.rise_depth(s); return end
   if c == '\\' then n.after_slash = true; return end
   if c == '$' then s.name = 'dollar'; return end
   table.insert(n.text, c)
@@ -102,11 +114,12 @@ end
 
 --stylua: ignore
 H.processors.dollar = function(c, s, n)
+  if c == '}' and s.depth > 1 then H.rise_depth(s); return end
   -- Detect `$1` and `$var` as a new node
   local no_brace_node = c:find('^[0-9]$') and 'tabstop' or (c:find('^[_a-zA-Z]$') and 'var' or '')
   if no_brace_node ~= '' then
-    local new_node = { [no_brace_node] = { c }, parent = s.arr }
-    s.arr[#s.arr + 1], s.name = new_node, 'dollar_' .. no_brace_node
+    table.insert(s.arr, { [no_brace_node] = { c } })
+    s.name = 'dollar_' .. no_brace_node
     return
   end
   if c == '{' then s.name = 'dollar_lbrace'; return end
@@ -116,16 +129,18 @@ end
 
 --stylua: ignore
 H.processors.dollar_tabstop = function(c, s, n)
+  if c == '}' and s.depth > 1 then H.rise_depth(s); return end
   if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
-  s.arr[#s.arr + 1] = { text = {}, parent = s.arr }
+  table.insert(s.arr, { text = {} })
   if c == '$' then s.name = 'dollar'; return end
   s.arr[#s.arr].text[1], s.name = c, 'text'
 end
 
 --stylua: ignore
 H.processors.dollar_var = function(c, s, n)
+  if c == '}' and s.depth > 1 then H.rise_depth(s); return end
   if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
-  s.arr[#s.arr + 1] = { text = {}, parent = s.arr }
+  table.insert(s.arr, { text = {} })
   if c == '$' then s.name = 'dollar'; return end
   s.arr[#s.arr].text[1], s.name = c, 'text'
 end
@@ -133,19 +148,19 @@ end
 --stylua: ignore
 H.processors.dollar_lbrace = function(c, s, n)
   if n.tabstop == nil and n.var == nil then
-    if c:find('^[0-9]$') then s.arr[#s.arr + 1] = { tabstop = { c }, parent = s.arr }; return end
-    if c:find('^[_a-zA-Z]$') then s.arr[#s.arr + 1] = { var = { c }, parent = s.arr }; return end
+    if c:find('^[0-9]$') then table.insert(s.arr, { tabstop = { c } }) return end
+    if c:find('^[_a-zA-Z]$') then table.insert(s.arr, { var = { c } }); return end
     H.error('`${` should be followed by digit (for tabstop) or letter/underscore (for variable), not ' .. vim.inspect(c))
   end
-  if c == '}' then s.arr[#s.arr + 1] = { text = {}, parent = s.arr }; s.name = 'text'; return end
-  if c == ':' then return end -- TODO: placeholder
+  if c == '}' then table.insert(s.arr, { text = {} }); s.name = 'text'; return end
+  if c == ':' then table.insert(s.depth_arrays, { { text = { '' } } }); s.name = 'text'; return end
   if n.tabstop ~= nil then
     if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
     if c == '|' then n.choices = { {} }; s.name = 'choice'; return end
     H.error('Tabstop id should be followed by "}", ":" or "|", not ' .. vim.inspect(c))
   end
   if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
-  if c == '/' then s.name = 'transform_regex'; return end
+  if c == '/' then n.transform = {}; s.name = 'transform_regex'; return end
   H.error('Variable name should be followed by "}", ":" or "/", not ' .. vim.inspect(c))
 end
 
@@ -154,7 +169,8 @@ H.processors.choice = function(c, s, n)
   if n.wait_rbrace then
     if c ~= '}' then H.error('Choice node should be closed with `|}`') end
     n.wait_rbrace = nil;
-    s.arr[#s.arr + 1] = { text = {}, parent = s.arr }; s.name = 'text'
+    table.insert(s.arr, { text = {} })
+    s.name = 'text'
     return
   end
 
@@ -174,6 +190,7 @@ end
 -- Ignore all the transform data and wait until proper `}`
 --stylua: ignore
 H.processors.transform_regex = function(c, s, n)
+  table.insert(n.transform, c)
   if n.after_slash then n.after_slash = nil; return end
   if c == '\\' then n.after_slash = true; return end
   if c == '/' then s.name = 'transform_format'; return end
@@ -181,6 +198,7 @@ end
 
 --stylua: ignore
 H.processors.transform_format = function(c, s, n)
+  table.insert(n.transform, c)
   if n.after_slash then n.after_slash = nil; return end
   if n.after_dollar then
     n.after_dollar = nil
@@ -199,9 +217,12 @@ end
 
 --stylua: ignore
 H.processors.transform_options = function(c, s, n)
+  table.insert(n.transform, c)
   if n.after_slash then n.after_slash = nil; return end
   if c == '\\' then n.after_slash = true; return end
-  if c == '}' then s.arr[#s.arr + 1] = { text = {}, parent = s.arr }; s.name = 'text'; return end
+  if c == '}' then
+    n.transform[#n.transform] = nil; table.insert(s.arr, { text = {} }); s.name = 'text'; return
+  end
 end
 
 H.error = function(msg) error('(mini.snippets) ' .. msg, 0) end
@@ -287,6 +308,10 @@ _G.corpus_pass = {
     'aa $2',
     'aa $3 $10',
     'aa $3 $2 $0',
+
+    -- Tricky
+    '$1$a',
+    '$1$-',
   },
 
   placeholder = {
@@ -296,6 +321,8 @@ _G.corpus_pass = {
     'aa ${1:ыыы}',
     '${1:}',
 
+    '${1:aa} ${2:bb}',
+
     'aa ${0:b}',
     'aa ${0:}',
     'aa ${0:ыыы}',
@@ -304,7 +331,7 @@ _G.corpus_pass = {
     -- Escaped (should ignore `\` before `$}\` and treat as text)
     [[xx ${1:aa\$bb\}cc\\dd}]],
     [[xx ${1:aa\$}]],
-    [[xx ${1:aa\$}]],
+    [[xx ${1:aa\\}]],
     '${1:aa:bb}', -- should allow unescaped `:`
 
     -- Not spec: allow unescaped backslash
@@ -312,10 +339,12 @@ _G.corpus_pass = {
 
     -- Different placeholders (should be later resolved somehow)
     'aa${1:xx}_${1:yy}',
+    'aa${1:}_$1_${1:yy}', -- should allow empty string as placeholder
 
     -- Nested
     -- - Tabstop
     'xx ${1:$2}',
+    'xx ${1:$2} yy',
     'xx ${1:${2}}',
     'xx ${1:${3}}',
 
@@ -337,10 +366,24 @@ _G.corpus_pass = {
 
     -- - Variable
     '${1:$var}',
+    '${1:$var} xx',
     '${1:${var}}',
     '${1:${var:aa}}',
     '${1:${var:$2}}',
     '${1:${var:aa$2bb}}',
+    '${1:${var/.*/val/i}}',
+    '${1:${var/.*/${1}/i}}',
+    '${1:${var/.*/${1:/upcase}/i}}',
+    '${1:${var/.*/${1:/upcase}/i}}',
+
+    '${1:${var/.*/aa${1:else}/i}}',
+    '${1:${var/.*/aa${1:-else}/i}}',
+    '${1:${var/.*/aa${1:+if}/i}}',
+    '${1:${var/.*/aa${1:?if:else}/i}}',
+    '${1:${var/.*/aa${1:/upcase}/i}}',
+
+    '${1:${var/.*/${1:?${}:aa}/i}}',
+    [[${1:${var/regex/${1:?if\}:else/i}/options}}]], -- known limitation of needing to escape `}` in `if`
 
     -- Combined
     '${1:aa${2:bb}cc}', -- should resolve to 'aabbcc'
@@ -407,11 +450,11 @@ _G.corpus_pass = {
     '${var/.*/$1/}',
     '${var/.*//}',
     '${var/.*/This-$1-encloses/i}',
-    '${var/.*/complex${1:else}/i}',
-    '${var/.*/complex${1:-else}/i}',
-    '${var/.*/complex${1:+if}/i}',
-    '${var/.*/complex${1:?if:else}/i}',
-    '${var/.*/complex${1:/upcase}/i}',
+    '${var/.*/aa${1:else}/i}',
+    '${var/.*/aa${1:-else}/i}',
+    '${var/.*/aa${1:+if}/i}',
+    '${var/.*/aa${1:?if:else}/i}',
+    '${var/.*/aa${1:/upcase}/i}',
 
     -- - Tricky transform strings
     '${var///}',
@@ -429,7 +472,7 @@ _G.corpus_pass = {
     [[${var/regex/\/a\/a\//g}]],
 
     -- - Known limitation of needing to escape `}` in `if` of `${1:?if:else}`
-    [[${var/regex/${1:?\}:else}/options}]],
+    [[${var/regex/${1:?if\}:else/i}/options}]],
 
     [[${var/regex/\\aa/g}]],
     [[${var/regex/\$1aa/g}]],
@@ -451,7 +494,7 @@ _G.corpus_pass = {
     '${1:${aa:${1}}}',
     '${1:${aa:bb$1cc}}',
     '${TM_DIRECTORY/.*src[\\/](.*)/$1/}',
-    '${1/(void$)|(.+)/${1:?-\treturn nil;}/}',
+    '${aa/(void$)|(.+)/${1:?-\treturn nil;}/}',
     '${3:nest1 ${1:nest2 ${2:nest3}}} $3',
     '${1:prog}: ${2:$1.cc} - $2', -- 'prog: prog.cc - prog.cc'
     '${1:prog}: ${3:${2:$1.cc}.33} - $2 $3', -- 'prog: prog.cc.33 - prog.cc prog.cc.33'
@@ -474,12 +517,15 @@ _G.corpus_fail = {
   placeholder = {
     -- Should be closed with `}`
     '${1:a',
-    'xx ${1:a bb',
+    '${1:a bb',
+    '${1:${2:a',
 
-    -- Nested placeholders should error according to their parsing rules
-    'xx ${1:${2:a',
-    'xx ${1:${2:a$b}}',
-    'xx ${1:${2:a$b}}',
+    -- Nested nodes should error according to their rules
+    '${1:${2?}}',
+    '${1:${2?',
+    '${1:${2|a}}',
+    '${1:${a }}',
+    '${1:${-}}',
   },
   choice = {
     -- Should be closed with `|}`
