@@ -31,10 +31,14 @@ if vim.g.vscode ~= nil then now(function() source('vscode.lua') end) end
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 later(function()
+  local ft_patterns = {
+    tex = { 'latex.json' },
+    plaintex = { 'latex.json' },
+  }
   local snippets = require('mini-dev.snippets')
   snippets.setup({
     snippets = {
-      snippets.gen_loader.from_filetype(),
+      snippets.gen_loader.from_filetype({ ft_patterns = ft_patterns }),
     },
   })
 
@@ -48,34 +52,17 @@ later(function()
   end
   vim.keymap.set({ 'i', 's', 'x' }, '<C-l>', match_or_jump_next)
   vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
-  vim.keymap.set('i', '<C-/>', '<Cmd>lua MiniSnippets.match({ find = false, ask = "always" })<CR>')
+  vim.keymap.set('i', '<C-g><C-l>', '<Cmd>lua MiniSnippets.match({ find = false, ask = "always" })<CR>')
 end)
 
 later(function() add('rafamadriz/friendly-snippets') end)
 
 -- Step one
 now(function()
-  if vim.startswith(vim.env.TERM, 'st') then return end
-
-  local modified = false
-  local sync = function()
-    local normal = vim.api.nvim_get_hl_by_name('Normal', true)
-    if normal.background == nil then return end
-    io.write(string.format('\027]11;#%06x\027\\', normal.background))
-  end
-  local unsync = function() io.write('\027]111\027\\') end
-  vim.api.nvim_create_autocmd({ 'VimEnter', 'UIEnter', 'ColorScheme' }, { callback = sync })
-  vim.api.nvim_create_autocmd({ 'UILeave', 'VimLeave' }, { callback = unsync })
-end)
-
-now(function()
+  -- Use this color scheme in 'mini.nvim' demos:
+  -- require('mini.hues').setup({ background = '#11262d', foreground = '#c0c8cb' })
   vim.cmd('colorscheme randomhue')
-  vim.cmd('hi PmenuMatch gui=bold')
-  vim.cmd('hi PmenuMatchSel gui=bold')
-  vim.cmd('hi! link @string.special.vimdoc Constant')
 end)
--- Use this color scheme in 'mini.nvim' demos
--- require('mini.hues').setup({ background = '#11262d', foreground = '#c0c8cb' })
 
 now(function()
   local filterout_lua_diagnosing = function(notif_arr)
@@ -99,8 +86,14 @@ now(function() require('mini.statusline').setup() end)
 now(function() require('mini.tabline').setup() end)
 
 now(function()
-  require('mini.icons').setup()
+  require('mini.icons').setup({
+    use_file_extension = function(ext, _)
+      local suf3, suf4 = ext:sub(-3), ext:sub(-4)
+      return suf3 ~= 'scm' and suf3 ~= 'txt' and suf3 ~= 'yml' and suf4 ~= 'json' and suf4 ~= 'yaml'
+    end,
+  })
   MiniIcons.mock_nvim_web_devicons()
+  later(MiniIcons.tweak_lsp_kind)
 end)
 
 -- Step two
@@ -137,6 +130,7 @@ later(function()
   -- Have no transparency to always have "overflow" icons (otherwise there can
   -- be a symbol visible from underneath blocking "overflow if next to space"
   -- approach from terminal emulator)
+  vim.o.pumblend = 0
   vim.o.winblend = 0
 end)
 
@@ -205,6 +199,9 @@ later(function()
       signature = { border = 'double' },
     },
   })
+  if vim.fn.has('nvim-0.11') == 1 then
+    vim.opt.completeopt:append('fuzzy') -- Use fuzzy matching for built-in completion
+  end
 end)
 
 later(function() require('mini.cursorword').setup() end)
@@ -224,6 +221,16 @@ later(function()
     group = minifiles_augroup,
     pattern = 'MiniFilesWindowOpen',
     callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
+  })
+  vim.api.nvim_create_autocmd('User', {
+    group = minifiles_augroup,
+    pattern = 'MiniFilesExplorerOpen',
+    callback = function()
+      MiniFiles.set_bookmark('c', vim.fn.stdpath('config'), { desc = 'Config' })
+      MiniFiles.set_bookmark('m', vim.fn.stdpath('data') .. '/site/pack/deps/start/mini.nvim', { desc = 'mini.nvim' })
+      MiniFiles.set_bookmark('p', vim.fn.stdpath('data') .. '/site/pack/deps/opt', { desc = 'Plugins' })
+      MiniFiles.set_bookmark('w', vim.fn.getcwd, { desc = 'Working directory' })
+    end,
   })
 end)
 
@@ -248,7 +255,13 @@ later(function() require('mini.indentscope').setup() end)
 
 later(function() require('mini.jump').setup() end)
 
-later(function() require('mini.jump2d').setup({ view = { dim = true } }) end)
+later(function()
+  local jump2d = require('mini.jump2d')
+  jump2d.setup({
+    spotter = jump2d.gen_pattern_spotter('[^%s%p]+'),
+    view = { dim = true, n_steps_ahead = 2 },
+  })
+end)
 
 later(function()
   local map = require('mini.map')
@@ -269,11 +282,23 @@ end)
 later(function()
   require('mini.misc').setup({ make_global = { 'put', 'put_text', 'stat_summary', 'bench_time' } })
   MiniMisc.setup_auto_root()
+  MiniMisc.setup_termbg_sync()
 end)
 
 later(function() require('mini.move').setup({ options = { reindent_linewise = false } }) end)
 
-later(function() require('mini.operators').setup() end)
+later(function()
+  local remap = function(mode, lhs_from, lhs_to)
+    local keymap = vim.fn.maparg(lhs_from, mode, false, true)
+    local rhs = keymap.callback or keymap.rhs
+    if rhs == nil then error('Could not remap from ' .. lhs_from .. ' to ' .. lhs_to) end
+    vim.keymap.set(mode, lhs_to, rhs, { desc = keymap.desc })
+  end
+  remap('n', 'gx', '<Leader>ox')
+  remap('x', 'gx', '<Leader>ox')
+
+  require('mini.operators').setup()
+end)
 
 later(function()
   require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
@@ -283,7 +308,15 @@ end)
 later(function()
   require('mini.pick').setup({ window = { config = { border = 'double' } } })
   vim.ui.select = MiniPick.ui_select
-  vim.keymap.set('n', ',', [[<Cmd>Pick buf_lines scope='current'<CR>]], { nowait = true })
+  vim.keymap.set('n', ',', [[<Cmd>Pick buf_lines scope='current' preserve_order=true<CR>]], { nowait = true })
+
+  MiniPick.registry.projects = function()
+    local cwd = vim.fn.expand('~/repos')
+    local choose = function(item)
+      vim.schedule(function() MiniPick.builtin.files(nil, { source = { cwd = item.path } }) end)
+    end
+    return MiniExtra.pickers.explorer({ cwd = cwd }, { source = { choose = choose } })
+  end
 end)
 
 later(function() require('mini.splitjoin').setup() end)
@@ -342,12 +375,12 @@ later(function()
   source('plugins/neoterm.lua')
 end)
 
--- Snippets
-later(function()
-  add('L3MON4D3/LuaSnip')
-  local src_file = vim.fn.has('nvim-0.10') == 1 and 'my_snippets.lua' or 'plugins/luasnip.lua'
-  source(src_file)
-end)
+-- -- Snippets
+-- later(function()
+--   add('L3MON4D3/LuaSnip')
+--   local src_file = vim.fn.has('nvim-0.10') == 1 and 'my_snippets.lua' or 'plugins/luasnip.lua'
+--   source(src_file)
+-- end)
 
 -- Documentation generator
 later(function()
