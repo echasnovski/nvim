@@ -37,13 +37,12 @@ _G.parse = function(snippet)
   end
 
   H.verify(state)
-  return H.post_process(state.depth_arrays[1])
+  return H.post_process(state.depth_arrays[1], state.name)
 end
 
-H = {}
+local H = {}
 
 H.verify = function(state)
-  if state.name == 'dollar' then H.error('"$" should be followed by tabstop id or variable name') end
   if state.name == 'dollar_lbrace' then H.error('"${" should be closed with "}"') end
   if state.name == 'choice' then H.error('Tabstop with choices should be closed with "|}"') end
   if vim.startswith(state.name, 'transform_') then
@@ -52,7 +51,11 @@ H.verify = function(state)
   if #state.depth_arrays > 1 then H.error('Placeholder should be closed with "}"') end
 end
 
-H.post_process = function(node_arr)
+H.post_process = function(node_arr, state_name)
+  -- Allow "$" at the end of the snippet
+  if state_name == 'dollar' then table.insert(node_arr, { text = { '$' } }) end
+
+  -- Process
   local traverse
   traverse = function(arr)
     for _, node in ipairs(arr) do
@@ -114,7 +117,13 @@ end
 
 --stylua: ignore
 H.processors.dollar = function(c, s, n)
-  if c == '}' and s.depth > 1 then H.rise_depth(s); return end
+  if c == '}' and s.depth > 1 then
+    if n.text ~= nil then table.insert(n.text, '$') end
+    if n.text == nil then table.insert(s.arr, { text = { '$' } }) end
+    s.name = 'text'
+    H.rise_depth(s)
+    return
+  end
   -- Detect `$1` and `$var` as a new node
   local no_brace_node = c:find('^[0-9]$') and 'tabstop' or (c:find('^[_a-zA-Z]$') and 'var' or '')
   if no_brace_node ~= '' then
@@ -124,7 +133,10 @@ H.processors.dollar = function(c, s, n)
   end
   if c == '{' then s.name = 'dollar_lbrace'; return end
   -- Allow unescaped `$`
-  n.text[#n.text + 1], n.text[#n.text + 2], s.name = '$', c, 'text'
+  table.insert(n.text, '$')
+  -- Allow `$$1` and `$${1}`
+  if c == '$' then return end
+  table.insert(n.text, c); s.name = 'text'
 end
 
 --stylua: ignore
@@ -154,14 +166,16 @@ H.processors.dollar_lbrace = function(c, s, n)
   end
   if c == '}' then table.insert(s.arr, { text = {} }); s.name = 'text'; return end
   if c == ':' then table.insert(s.depth_arrays, { { text = { '' } } }); s.name = 'text'; return end
-  if n.tabstop ~= nil then
-    if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
-    if c == '|' then n.choices = { {} }; s.name = 'choice'; return end
-    H.error('Tabstop id should be followed by "}", ":" or "|", not ' .. vim.inspect(c))
+  if n.var ~= nil then
+    if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
+    if c == '/' then n.transform = {}; s.name = 'transform_regex'; return end
+    H.error('Variable name should be followed by "}", ":" or "/", not ' .. vim.inspect(c))
   end
-  if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
+  if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
+  if c == '|' then n.choices = { {} }; s.name = 'choice'; return end
+  -- Not spec, but is common case in snippets from VS Code
   if c == '/' then n.transform = {}; s.name = 'transform_regex'; return end
-  H.error('Variable name should be followed by "}", ":" or "/", not ' .. vim.inspect(c))
+  H.error('Tabstop id should be followed by "}", ":", "|", or "/" not ' .. vim.inspect(c))
 end
 
 --stylua: ignore
@@ -263,7 +277,9 @@ _G.corpus_pass = {
 
     -- Not spec: allow unescaped $ when can not be mistaken for tabstop or var
     'aa$ bb',
-    'aa$$bb',
+
+    -- Allow "$" at the end of the snippet
+    'aa$',
 
     -- Not spec: allow unescaped `}` in top-level text
     '{ aa }',
@@ -312,6 +328,23 @@ _G.corpus_pass = {
     -- Tricky
     '$1$a',
     '$1$-',
+    '$a$1',
+    '$-$1',
+    '$$1',
+    '$1$',
+
+    -- Transform (more tests in variable transform)
+    '${1/.*/${0:aaa}/i} xx',
+    '${1/.*/${1}/i}',
+    '${1/.*/$1/i}',
+    '${1/.*/$1/}',
+    '${1/.*//}',
+    '${1/.*/This-$1-encloses/i}',
+    '${1/.*/aa${1:else}/i}',
+    '${1/.*/aa${1:-else}/i}',
+    '${1/.*/aa${1:+if}/i}',
+    '${1/.*/aa${1:?if:else}/i}',
+    '${1/.*/aa${1:/upcase}/i}',
   },
 
   placeholder = {
@@ -329,13 +362,20 @@ _G.corpus_pass = {
     '${0:}',
 
     -- Escaped (should ignore `\` before `$}\` and treat as text)
-    [[xx ${1:aa\$bb\}cc\\dd}]],
-    [[xx ${1:aa\$}]],
-    [[xx ${1:aa\\}]],
+    [[${1:aa\$bb\}cc\\dd}]],
+    [[${1:aa\$}]],
+    [[${1:aa\\}]],
     '${1:aa:bb}', -- should allow unescaped `:`
 
     -- Not spec: allow unescaped backslash
     [[xx ${1:aa\bb}]],
+
+    -- Not spec: allow unescaped dollar
+    [[${1:aa$-}]],
+    [[${1:aa$}]],
+    [[${1:$2$}]],
+    [[${1:$2}$]],
+    [[${1:aa$}$2]],
 
     -- Different placeholders (should be later resolved somehow)
     'aa${1:xx}_${1:yy}',
@@ -397,7 +437,7 @@ _G.corpus_pass = {
     'xx ${1|aa,bb|}',
 
     -- Escape (should ignore `\` before `,|\` and treat as text)
-    [[${1|\,,},$,\|,\\|}]], -- choices are `,`, `}`, `$`, `|`, `\`
+    [[${1|},$,\,,\|,\\|}]], -- choices are `}`, `$` (both don't need escaping), `,`, `|`, `\`
     [[xx ${1|aa\,bb|}]], -- single choice is `aa,bb`
 
     -- Empty choices
@@ -410,7 +450,7 @@ _G.corpus_pass = {
     -- Not spec: allow unescaped backslash
     [[xx ${1|aa\bb|}]],
 
-    -- Should be ignored in `$0`
+    -- Should NOT be ignored in `$0`
     '${0|aa|}',
     '${0|aa,bb|}',
   },
@@ -426,6 +466,9 @@ _G.corpus_pass = {
     '${a1}',
 
     [[aa\\$bb]], -- `$bb` should be variable
+
+    '$$aa',
+    '$aa$',
 
     -- Should recognize only [_a-zA-Z] [_a-zA-Z0-9]*
     '$aa-bb', -- `$aa` variable and `-bb` text
@@ -465,7 +508,7 @@ _G.corpus_pass = {
     [[${var/.*/\$x/i}]], -- `/` after both dollar and slash
     [[${var/.*/\${x/i}]], -- `/` after not proper `${`
     [[${var/.*/$\{x/i}]], -- `/` after not proper `${`
-    '${var/.*/a$/i}', -- `/` directlyafter dollar
+    '${var/.*/a$/i}', -- `/` directly after dollar
     '${var/.*/${1:?${}:aa}/i}', -- `}` inside `format`
 
     -- Escaped (should ignore `\` before `$/\` and treat as text)
@@ -478,16 +521,6 @@ _G.corpus_pass = {
     [[${var/regex/\$1aa/g}]],
 
     [[${var/\/re\/gex\//aa/}]], -- should handle escaped `/` in regex
-  },
-
-  combined = {
-    'aa_${bb}_cc_$0',
-
-    -- Different pure tabstop and with placeholder
-    'aa${1:xx}_$1',
-    'aa${1:xx}_${1}',
-    'aa$1_${1:xx}',
-    'aa${1}_${1:xx}',
   },
 
   tricky = {
@@ -562,6 +595,24 @@ _G.corpus_fail = {
     -- Should start with [_0-9a-zA-Z]
     '${-',
     '${ ',
-    'aa$',
   },
 }
+
+_G.pass = vim.deepcopy(_G.corpus_pass)
+for _, t in pairs(pass) do
+  for i, body in ipairs(t) do
+    local nodes = MiniSnippets._parse(body)
+    local eq_line =
+      string.format('eq(parse(%s), %s)', vim.inspect(body), vim.inspect(nodes, { newline = ' ', indent = '' }))
+    t[i] = eq_line
+  end
+end
+
+local groups = { 'text', 'tabstop', 'choice', 'var', 'placeholder', 'combined', 'tricky' }
+_G.pass_lines = {}
+for _, gr in pairs(groups) do
+  table.insert(_G.pass_lines, '')
+  table.insert(_G.pass_lines, "T['Parsing']['" .. gr .. "'] = function()")
+  vim.list_extend(_G.pass_lines, pass[gr])
+  table.insert(_G.pass_lines, 'end')
+end
