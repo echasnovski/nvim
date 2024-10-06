@@ -19,6 +19,11 @@
 --     - Make sure that linked tabstops are updated not only when typing text,
 --       but also on `<BS>`.
 --     - Should ensure presence of final tabstop (`$0`). Append at end if none.
+--     - Placeholders of tabstops and variables should be independent / "local
+--       only to node". This resolves cyclic cases like `${1:$2} ${2:$1}` in
+--       a single pass. This still should update the "dependent" nodes during
+--       typing: start as ` `; become `x x` after typing `x` on either tabstop,
+--       allow becomeing `x y` or `y x` after the jump and typing.
 --
 -- Docs:
 -- - Manage:
@@ -545,7 +550,7 @@ end
 MiniSnippets._parse = function(snippet_body)
   -- TODO: Properly export after a long enough period of public testing
   if H.is_array_of(snippet_body, H.is_string) then snippet_body = table.concat(snippet_body, '\n') end
-  if type(snippet_body) ~= 'string' then H.error('`snippet_body` should be string or array or strings') end
+  if type(snippet_body) ~= 'string' then H.error('`snippet_body` should be string or array of strings') end
 
   -- Overall idea: implement a state machine which updates on every character.
   -- This leads to a bit spaghetti code, but doesn't require `vim.lpeg` DSL
@@ -773,7 +778,7 @@ H.parse_verify = function(state)
   if state.name == 'dollar_lbrace' then H.error('"${" should be closed with "}"') end
   if state.name == 'choice' then H.error('Tabstop with choices should be closed with "|}"') end
   if vim.startswith(state.name, 'transform_') then
-    H.error('Variable transform should contain 3 "/" outside of `${...}` and be closed with "}"')
+    H.error('Transform should contain 3 "/" outside of `${...}` and be closed with "}"')
   end
   if #state.depth_arrays > 1 then H.error('Placeholder should be closed with "}"') end
 end
@@ -891,7 +896,7 @@ end
 
 H.parse_processors.choice = function(c, s, n)
   if n.after_bar then
-    if c ~= '}' then H.error('Choice node should be closed with `|}`') end
+    if c ~= '}' then H.error('Tabstop with choices should be closed with "|}"') end
     n.after_bar = nil;
     table.insert(s.arr, { text = {} })
     s.name = 'text'
