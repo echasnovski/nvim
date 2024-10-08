@@ -452,8 +452,8 @@ T['_parse()']['throws informative errors'] = function()
   end
 
   -- Parsing
-  validate('${-', '${` should be followed by digit %(for tabstop%) or letter/underscore %(for variable%), not "%-"')
-  validate('${ ', '${` should be followed by digit %(for tabstop%) or letter/underscore %(for variable%), not " "')
+  validate('${-', '${` should be followed by digit %(in tabstop%) or letter/underscore %(in variable%), not "%-"')
+  validate('${ ', '${` should be followed by digit %(in tabstop%) or letter/underscore %(in variable%), not " "')
 
   -- Tabstop
   -- Should be closed with `}`
@@ -494,10 +494,7 @@ T['_parse()']['throws informative errors'] = function()
   validate('${1:${2?', 'Tabstop id should be followed by "}", ":", "|", or "/" not "?"')
   validate('${1:${2|a}}', 'Tabstop with choices should be closed with "|}"')
   validate('${1:${a }}', 'Variable name should be followed by "}", ":" or "/", not " "')
-  validate(
-    '${1:${-}}',
-    '${` should be followed by digit %(for tabstop%) or letter/underscore %(for variable%), not "%-"'
-  )
+  validate('${1:${-}}', '${` should be followed by digit %(in tabstop%) or letter/underscore %(in variable%), not "%-"')
 
   -- Transform
   validate([[${var/regex/format}]], 'Transform should contain 3 "/" outside of `${...}` and be closed with "}"')

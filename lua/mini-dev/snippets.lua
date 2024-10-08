@@ -558,16 +558,23 @@ MiniSnippets._parse = function(snippet_body)
   -- Output is array of nodes representing the snippet body.
   -- Format is mostly based on grammar in LSP spec 3.18 with small differences.
 
-  -- State tracking table: `name` - state name, `depth_arrays` - node array for
-  -- depths of currently processed nested placeholders. Depth 1 is the original
-  -- snippet. Each future string is tracked as array and is concatenated later.
-  local state = { name = 'text', depth_arrays = { { { text = { '' } } } } }
+  -- State table. Each future string is tracked as array and merged later.
+  --stylua: ignore
+  local state = {
+    name = 'text',
+    -- Node array for depths of currently processed nested placeholders.
+    -- Depth 1 is the original snippet.
+    depth_arrays = { { { text = {} } } },
+    set_name = function(self, name) self.name = name; return self end,
+    add_node = function(self, node) table.insert(self.depth_arrays[#self.depth_arrays], node); return self end,
+    is_not_top_level = function(self) return #self.depth_arrays > 1 end,
+  }
 
   for i = 0, vim.fn.strchars(snippet_body) - 1 do
     -- Infer helper data (for more concise manipulations inside processor)
-    state.depth = #state.depth_arrays
-    state.arr = state.depth_arrays[state.depth]
-    local processor, node = H.parse_processors[state.name], state.arr[#state.arr]
+    local depth = #state.depth_arrays
+    local arr = state.depth_arrays[depth]
+    local processor, node = H.parse_processors[state.name], arr[#arr]
     processor(vim.fn.strcharpart(snippet_body, i, 1), state, node)
   end
 
@@ -773,7 +780,7 @@ H.make_extended_expand = function(expand)
   end
 end
 
--- Grammar --------------------------------------------------------------------
+-- Parse ----------------------------------------------------------------------
 H.parse_verify = function(state)
   if state.name == 'dollar_lbrace' then H.error('"${" should be closed with "}"') end
   if state.name == 'choice' then H.error('Tabstop with choices should be closed with "|}"') end
@@ -820,10 +827,9 @@ H.parse_rise_depth = function(state)
   local cur_layer, prev_layer = state.depth_arrays[depth], state.depth_arrays[depth - 1]
   prev_layer[#prev_layer].placeholder = vim.deepcopy(cur_layer)
   table.insert(prev_layer, { text = {} })
-  state.depth_arrays[state.depth] = nil
+  state.depth_arrays[depth] = nil
 end
 
---stylua: ignore start
 -- Each method processes single character based on the character (`c`),
 -- state (`s`), and current node (`n`).
 H.parse_processors = {}
@@ -835,72 +841,78 @@ H.parse_processors.text = function(c, s, n)
     n.text[#n.text + 1], n.after_slash = c, nil
     return
   end
-  if c == '}' and s.depth > 1 then H.parse_rise_depth(s); return end
-  if c == '\\' then n.after_slash = true; return end
-  if c == '$' then s.name = 'dollar'; return end
+  if c == '}' and s:is_not_top_level() then return H.parse_rise_depth(s) end
+  if c == '\\' then return H.set_in(n, 'after_slash', true) end
+  if c == '$' then return s:set_name('dollar') end
   table.insert(n.text, c)
 end
 
 H.parse_processors.dollar = function(c, s, n)
-  if c == '}' and s.depth > 1 then
+  if c == '}' and s:is_not_top_level() then
     if n.text ~= nil then table.insert(n.text, '$') end
-    if n.text == nil then table.insert(s.arr, { text = { '$' } }) end
-    s.name = 'text'
+    if n.text == nil then s:add_node({ text = { '$' } }) end
+    s:set_name('text')
     H.parse_rise_depth(s)
     return
   end
 
-  if c:find('^[0-9]$') then table.insert(s.arr, { tabstop = { c } }); s.name = 'dollar_tabstop'; return end -- Tabstops
-  if c:find('^[_a-zA-Z]$') then table.insert(s.arr, { var = { c } }); s.name = 'dollar_var'; return end -- Variables
-  if c == '{' then s.name = 'dollar_lbrace'; return end -- Cases of `${...}`
+  if c:find('^[0-9]$') then return s:add_node({ tabstop = { c } }):set_name('dollar_tabstop') end -- Tabstops
+  if c:find('^[_a-zA-Z]$') then return s:add_node({ var = { c } }):set_name('dollar_var') end -- Variables
+  if c == '{' then return s:set_name('dollar_lbrace') end -- Cases of `${...}`
   table.insert(n.text, '$') -- Case of unescaped `$`
   if c == '$' then return end -- Case of `$$1` and `$${1}`
-  table.insert(n.text, c); s.name = 'text'
+  table.insert(n.text, c)
+  s:set_name('text')
 end
 
 H.parse_processors.dollar_tabstop = function(c, s, n)
-  if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
-  if c == '}' and s.depth > 1 then H.parse_rise_depth(s); return end
-  table.insert(s.arr, { text = {} })
-  if c == '$' then s.name = 'dollar'; return end -- Case of `$1$2` and `$1$a`
-  s.arr[#s.arr].text[1], s.name = c, 'text' -- Case of `$1a`
+  if c:find('^[0-9]$') then return table.insert(n.tabstop, c) end
+  if c == '}' and s:is_not_top_level() then return H.parse_rise_depth(s) end
+  local new_node = { text = {} }
+  s:add_node(new_node)
+  if c == '$' then return s:set_name('dollar') end -- Case of `$1$2` and `$1$a`
+  table.insert(new_node.text, c) -- Case of `$1a`
+  s:set_name('text')
 end
 
 H.parse_processors.dollar_var = function(c, s, n)
-  if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
-  if c == '}' and s.depth > 1 then H.parse_rise_depth(s); return end
-  table.insert(s.arr, { text = {} })
-  if c == '$' then s.name = 'dollar'; return end -- Case of `$a$b` and `$a$1`
-  s.arr[#s.arr].text[1], s.name = c, 'text' -- Case of `$a-`
+  if c:find('^[_a-zA-Z0-9]$') then return table.insert(n.var, c) end
+  if c == '}' and s:is_not_top_level() then return H.parse_rise_depth(s) end
+  local new_node = { text = {} }
+  s:add_node(new_node)
+  if c == '$' then return s:set_name('dollar') end -- Case of `$a$b` and `$a$1`
+  table.insert(new_node.text, c) -- Case of `$a-`
+  s:set_name('text')
 end
 
 H.parse_processors.dollar_lbrace = function(c, s, n)
   if n.tabstop == nil and n.var == nil then -- Detect the type of `${...}`
-    if c:find('^[0-9]$') then table.insert(s.arr, { tabstop = { c } }) return end
-    if c:find('^[_a-zA-Z]$') then table.insert(s.arr, { var = { c } }); return end
-    H.error('`${` should be followed by digit (for tabstop) or letter/underscore (for variable), not ' .. vim.inspect(c))
+    if c:find('^[0-9]$') then return s:add_node({ tabstop = { c } }) end
+    if c:find('^[_a-zA-Z]$') then return s:add_node({ var = { c } }) end
+    H.error('`${` should be followed by digit (in tabstop) or letter/underscore (in variable), not ' .. vim.inspect(c))
   end
-  if c == '}' then table.insert(s.arr, { text = {} }); s.name = 'text'; return end -- Cases of `${1}` and `${a}`
-  if c == ':' then table.insert(s.depth_arrays, { { text = { '' } } }); s.name = 'text'; return end -- Placeholder
-  if n.var ~= nil then
-    if c:find('^[_a-zA-Z0-9]$') then table.insert(n.var, c); return end
-    if c == '/' then n.transform = {}; s.name = 'transform_regex'; return end
+  if c == '}' then return s:add_node({ text = {} }):set_name('text') end -- Cases of `${1}` and `${a}`
+  if c == ':' then -- Placeholder
+    table.insert(s.depth_arrays, { { text = {} } })
+    return s:set_name('text')
+  end
+  if c == '/' then return s:set_name('transform_regex') end -- Transform
+  if n.var ~= nil then -- Variable
+    if c:find('^[_a-zA-Z0-9]$') then return table.insert(n.var, c) end
     H.error('Variable name should be followed by "}", ":" or "/", not ' .. vim.inspect(c))
+  else -- Tabstop
+    if c:find('^[0-9]$') then return table.insert(n.tabstop, c) end
+    if c == '|' then return s:set_name('choice') end
+    H.error('Tabstop id should be followed by "}", ":", "|", or "/" not ' .. vim.inspect(c))
   end
-  if c:find('^[0-9]$') then table.insert(n.tabstop, c); return end
-  if c == '|' then n.choices = { {} }; s.name = 'choice'; return end
-  -- "Placeholder-Transform": not spec, but are allowed in VS Code snippets
-  if c == '/' then n.transform = {}; s.name = 'transform_regex'; return end
-  H.error('Tabstop id should be followed by "}", ":", "|", or "/" not ' .. vim.inspect(c))
 end
 
 H.parse_processors.choice = function(c, s, n)
+  n.choices = n.choices or { {} }
   if n.after_bar then
     if c ~= '}' then H.error('Tabstop with choices should be closed with "|}"') end
-    n.after_bar = nil;
-    table.insert(s.arr, { text = {} })
-    s.name = 'text'
-    return
+    H.set_in(n, 'after_bar', nil)
+    return s:add_node({ text = {} }):set_name('text')
   end
 
   local cur = n.choices[#n.choices]
@@ -910,47 +922,46 @@ H.parse_processors.choice = function(c, s, n)
     cur[#cur + 1], n.after_slash = c, nil
     return
   end
-  if c == ',' then table.insert(n.choices, {}); return end
-  if c == '\\' then n.after_slash = true; return end
-  if c == '|' then n.after_bar = true; return end
+  if c == ',' then return table.insert(n.choices, {}) end
+  if c == '\\' then return H.set_in(n, 'after_slash', true) end
+  if c == '|' then return H.set_in(n, 'after_bar', true) end
   table.insert(cur, c)
 end
 
 -- Silently gather all the transform data and wait until proper `}`
 H.parse_processors.transform_regex = function(c, s, n)
+  n.transform = n.transform or {}
   table.insert(n.transform, c)
-  if n.after_slash then n.after_slash = nil; return end
-  if c == '\\' then n.after_slash = true; return end
-  if c == '/' then s.name = 'transform_format'; return end -- Assumes any `/` is escaped in regex
+  if n.after_slash then return H.set_in(n, 'after_slash', nil) end
+  if c == '\\' then return H.set_in(n, 'after_slash', true) end
+  if c == '/' then return s:set_name('transform_format') end -- Assumes any `/` is escaped in regex
 end
 
 H.parse_processors.transform_format = function(c, s, n)
   table.insert(n.transform, c)
-  if n.after_slash then n.after_slash = nil; return end
+  if n.after_slash then return H.set_in(n, 'after_slash', nil) end
   if n.after_dollar then
     n.after_dollar = nil
     -- Inside `${}` wait until the first (unescaped) `}`. Techincally, this
     -- breaks LSP spec in `${1:?if:else}` (`if` doesn't have to escape `}`).
     -- Accept this as known limitation and ask to escape `}` in such cases.
-    if c == '{' and not n.inside_braces then n.inside_braces = true; return end
+    if c == '{' and not n.inside_braces then return H.set_in(n, 'inside_braces', true) end
   end
-  if c == '\\' then n.after_slash = true; return end
-  if c == '$' then n.after_dollar = true; return end
-  if c == '}' and n.inside_braces then n.inside_braces = nil; return end
-  if c == '/' and not n.inside_braces then s.name = 'transform_options'; return end
+  if c == '\\' then return H.set_in(n, 'after_slash', true) end
+  if c == '$' then return H.set_in(n, 'after_dollar', true) end
+  if c == '}' and n.inside_braces then return H.set_in(n, 'inside_braces', nil) end
+  if c == '/' and not n.inside_braces then return s:set_name('transform_options') end
 end
 
 H.parse_processors.transform_options = function(c, s, n)
   table.insert(n.transform, c)
-  if n.after_slash then n.after_slash = nil; return end
-  if c == '\\' then n.after_slash = true; return end
+  if n.after_slash then return H.set_in(n, 'after_slash', nil) end
+  if c == '\\' then return H.set_in(n, 'after_slash', true) end
   if c == '}' then
     n.transform[#n.transform] = nil -- Remove previously added "}"
-    table.insert(s.arr, { text = {} }); s.name = 'text'
-    return
+    return s:add_node({ text = {} }):set_name('text')
   end
 end
---stylua: ignore end
 
 -- Validators -----------------------------------------------------------------
 H.is_string = function(x) return type(x) == 'string' end
@@ -989,6 +1000,8 @@ H.is_array_of = function(x, predicate)
   end
   return true
 end
+
+H.set_in = function(t, field, value) t[field] = value end
 
 H.get_visual_region = function()
   local left, right = vim.fn.getpos('v'), vim.fn.getpos('.')
