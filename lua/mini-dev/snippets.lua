@@ -51,6 +51,10 @@
 --     - `match.expand` is called with proper active mode and cursor.
 --       Test edge cases when region/cursor is in start/middle/end of line
 --       and in both supported modes.
+--
+-- - Expansion:
+--     - Variables are evalueted exactly once.
+--     - Treats '1' and '01' as different tabstops.
 
 --- *mini.snippets* Manage and expand snippets
 --- *MiniSnippets*
@@ -173,6 +177,10 @@
 -- TODO: make local before release
 MiniSnippets = {}
 H = {}
+
+-- Set useful snippets for easier local development
+-- TODO: remove when not needed
+-- vim.schedule(function() MiniSnippets.config.snippets = { MiniSnippets.gen_loader.from_filetype() } end)
 
 --- Module setup
 ---
@@ -550,7 +558,7 @@ end
 MiniSnippets._parse = function(snippet_body)
   -- TODO: Properly export after a long enough period of public testing
   if H.is_array_of(snippet_body, H.is_string) then snippet_body = table.concat(snippet_body, '\n') end
-  if type(snippet_body) ~= 'string' then H.error('`snippet_body` should be string or array of strings') end
+  if type(snippet_body) ~= 'string' then H.error('Snippet body should be string or array of strings') end
 
   -- Overall idea: implement a state machine which updates on every character.
   -- This leads to a bit spaghetti code, but doesn't require `vim.lpeg` DSL
@@ -689,18 +697,6 @@ H.read_snippet_array = function(contents)
   return { snippets = res, problems = problems }
 end
 
--- -- Validate that all snippets from 'friendly-snippets' are readable
--- local dir = '~/.local/share/nvim/site/pack/deps/opt/friendly-snippets/snippets/'
--- _G.all_snippets = {}
--- for p, p_type in vim.fs.dir(dir, { depth = math.huge }) do
---   if p_type == 'file' then
---     local start_time = vim.loop.hrtime()
---     _G.all_snippets[p] = MiniSnippets.read_file(dir .. p)
---     -- _G.all_snippets[p] = H.read_file_json(dir .. p)
---     add_to_log({ path = p, duration = 0.000001 * (vim.loop.hrtime() - start_time) })
---   end
--- end
-
 -- Buffer snippets ------------------------------------------------------------
 H.get_buf_snippets = function()
   local buf_id = vim.api.nvim_get_current_buf()
@@ -826,8 +822,8 @@ H.parse_rise_depth = function(state)
   local depth = #state.depth_arrays
   local cur_layer, prev_layer = state.depth_arrays[depth], state.depth_arrays[depth - 1]
   prev_layer[#prev_layer].placeholder = vim.deepcopy(cur_layer)
-  table.insert(prev_layer, { text = {} })
   state.depth_arrays[depth] = nil
+  state:add_node({ text = {} }):set_name('text')
 end
 
 -- Each method processes single character based on the character (`c`),
@@ -961,6 +957,76 @@ H.parse_processors.transform_options = function(c, s, n)
     n.transform[#n.transform] = nil -- Remove previously added "}"
     return s:add_node({ text = {} }):set_name('text')
   end
+end
+
+-- Expand ---------------------------------------------------------------------
+H.expand = function(snippet, opts)
+  -- Future `default_expand()`
+  if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
+
+  local default_mappings = { jump_next = '<C-l>', jump_prev = '<C-h>', stop = '<C-e>' }
+  opts = vim.tbl_extend('force', { mappings = default_mappings }, opts or {})
+
+  local nodes = MiniSnippets._parse(snippet.body)
+  local tabstops, vars = {}, {}
+  nodes = H.session_traverse_nodes(nodes, tabstops, vars)
+  local session = H.session_new(nodes, tabstops)
+  return session -- Temporary for testing
+end
+
+H.session_traverse_nodes = function(nodes, tabstops, vars)
+  -- Collect data and (recursively) prepare nodes
+  for _, node in ipairs(nodes) do
+    if node.tabstop ~= nil then tabstops[node.tabstop] = true end
+    if node.var ~= nil then vars[node.var] = vars[node.var] or H.eval_var(node.var) end
+    if node.placeholder then node.placeholder = H.session_traverse_nodes(node.placeholder, tabstops, vars) end
+  end
+
+  -- Construct new node array without variable nodes
+  local new_nodes = {}
+  for _, node in ipairs(nodes) do
+    local new = node.var == nil and node or (vars[node.var] ~= '' and { text = vars[node.var] } or node.placeholder)
+    if H.islist(new) then vim.list_extend(new_nodes, new) end
+    -- This may not add node if var is empty and has no placeholder
+    if not H.islist(new) then table.insert(new_nodes, new) end
+  end
+  return new_nodes
+end
+
+H.session_new = function(nodes, tabstops)
+  -- Order by numerical form of tabstop id while allowing leading zeros
+  local tabstop_sorted = vim.tbl_map(function(x) return { tonumber(x), x } end, vim.tbl_keys(tabstops))
+  table.sort(tabstop_sorted, function(a, b) return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2]) end)
+  tabstop_sorted = vim.tbl_map(function(x) return x[2] end, tabstop_sorted)
+  return tabstop_sorted
+
+  -- -- TODO:
+  -- -- - General session object structure.
+  -- -- - How to find special tabstop '0'.
+  --
+  -- local session = {}
+  -- session.jump_next = function()
+  --   -- Find next tabstop. Should account for only visible tabstops, not the
+  --      ones that are inside of placeholder that are not already shown.
+  -- end
+end
+
+H.eval_var = function(var)
+  -- NOTE: purposefully ignore transformations
+  if var == 'TM_SELECTED_TEXT' then
+    local from, to = vim.api.nvim_buf_get_mark(0, '<'), vim.api.nvim_buf_get_mark(0, '>')
+    local text = vim.api.nvim_buf_get_text(0, from[1] - 1, from[2], to[1] - 1, to[2] + 1, {})
+    return table.concat(text, '\n')
+  end
+  if var == 'TM_CURRENT_LINE' then return vim.api.nvim_get_current_line() end
+  if var == 'TM_CURRENT_WORD' then return vim.fn.expand('<cword>') end
+  if var == 'TM_LINE_INDEX' then return vim.fn.line('.') - 1 end
+  if var == 'TM_LINE_NUMBER' then return vim.fn.line('.') end
+  if var == 'TM_FILENAME' then return vim.fn.expand('%:t') end
+  if var == 'TM_FILENAME_BASE' then return vim.fn.expand('%:t:r') end
+  if var == 'TM_DIRECTORY' then return vim.fn.expand('%:p:h') end
+  if var == 'TM_FILEPATH' then return vim.fn.expand('%:p') end
+  return vim.loop.os_getenv(var) or ''
 end
 
 -- Validators -----------------------------------------------------------------

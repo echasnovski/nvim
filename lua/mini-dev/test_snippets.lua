@@ -321,6 +321,8 @@ T['_parse()']['placeholder'] = function()
   eq(parse('${1:aa${2:bb}cc}'),  { { tabstop = '1', placeholder = { { text = 'aa' },  { tabstop = '2', placeholder = { { text = 'bb' } } }, { text = 'cc' } } } })
   eq(parse('${1:aa $aa bb}'),    { { tabstop = '1', placeholder = { { text = 'aa ' }, { var = 'aa' }, { text = ' bb' } } } })
   eq(parse('${1:aa${aa:xx}bb}'), { { tabstop = '1', placeholder = { { text = 'aa' },  { var = 'aa', placeholder = { { text = 'xx' } } }, { text = 'bb' } } } })
+  eq(parse('${1:xx$bb}yy'),      { { tabstop = '1', placeholder = { { text = 'xx' }, { var = 'bb' } } }, { text = 'yy'} })
+  eq(parse('${aa:xx$bb}yy'),     { { var = 'aa', placeholder = { { text = 'xx' }, { var = 'bb' } } }, { text = 'yy'} })
 
   -- Different placeholders for same id/name
   eq(
@@ -509,7 +511,7 @@ T['_parse()']['throws informative errors'] = function()
 end
 
 T['_parse()']['validates input'] = function()
-  expect.error(function() parse(1) end, '`snippet_body`.*string or array of strings')
+  expect.error(function() parse(1) end, 'Snippet body.*string or array of strings')
 end
 
 return T
