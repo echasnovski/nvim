@@ -40,7 +40,6 @@ Helpers.new_child_neovim = function()
   local child = MiniTest.new_child_neovim()
 
   local prevent_hanging = function(method)
-    -- stylua: ignore
     if not child.is_blocked() then return end
 
     local msg = string.format('Can not use `child.%s` because child process is blocked.', method)
@@ -147,34 +146,70 @@ Helpers.new_child_neovim = function()
     child.lua(('_G[%s] = nil'):format(tbl_name))
 
     -- Remove autocmd group
-    if child.fn.exists('#' .. tbl_name) == 1 then
-      -- NOTE: having this in one line as `'augroup %s | au! | augroup END'`
-      -- for some reason seemed to sometimes not execute `augroup END` part.
-      -- That lead to a subsequent bare `au ...` calls to be inside `tbl_name`
-      -- group, which gets empty after every `require(<module_name>)` call.
-      child.cmd(('augroup %s'):format(tbl_name))
-      child.cmd('au!')
-      child.cmd('augroup END')
-    end
+    if child.fn.exists('#' .. tbl_name) == 1 then child.api.nvim_del_augroup_by_name(tbl_name) end
   end
 
-  child.expect_screenshot = function(opts, path, screenshot_opts)
-    if child.fn.has('nvim-0.8') == 0 then MiniTest.skip('Screenshots are tested for Neovim>=0.8 (for simplicity).') end
-
+  child.expect_screenshot = function(opts, path)
+    opts = opts or {}
+    local screenshot_opts = { redraw = opts.redraw }
+    opts.redraw = nil
     MiniTest.expect.reference_screenshot(child.get_screenshot(screenshot_opts), path, opts)
   end
+
+  -- Poke child's event loop to make it up to date
+  child.poke_eventloop = function() child.api.nvim_eval('1') end
 
   return child
 end
 
--- Mark test failure as "flaky"
-Helpers.mark_flaky = function()
-  MiniTest.finally(function()
-    if #MiniTest.current.case.exec.fails > 0 then MiniTest.add_note('This test is flaky.') end
-  end)
+-- Detect CI
+Helpers.is_ci = function() return os.getenv('CI') ~= nil end
+Helpers.skip_in_ci = function(msg)
+  if Helpers.is_ci() then MiniTest.skip(msg or 'Does not test properly in CI') end
 end
 
--- Test if running in CI. Should be used to condition as a very last resort.
-Helpers.is_ci = function() return os.getenv('IS_CI') ~= nil end
+-- Detect OS
+Helpers.is_windows = function() return vim.fn.has('win32') == 1 end
+Helpers.skip_on_windows = function(msg)
+  if Helpers.is_windows() then MiniTest.skip(msg or 'Does not test properly on Windows') end
+end
+
+Helpers.is_macos = function() return vim.fn.has('mac') == 1 end
+Helpers.skip_on_macos = function(msg)
+  if Helpers.is_macos() then MiniTest.skip(msg or 'Does not test properly on MacOS') end
+end
+
+-- Standardized way of dealing with time
+Helpers.is_slow = function() return Helpers.is_ci() and (Helpers.is_windows() or Helpers.is_macos()) end
+Helpers.skip_if_slow = function(msg)
+  if Helpers.is_slow() then MiniTest.skip(msg or 'Does not test properly in slow context') end
+end
+
+Helpers.get_time_const = function(delay)
+  local coef = 1
+  if Helpers.is_ci() then
+    if Helpers.is_windows() then coef = 5 end
+    if Helpers.is_macos() then coef = 15 end
+  end
+  return coef * delay
+end
+
+Helpers.sleep = function(ms, child, skip_slow)
+  if skip_slow then
+    Helpers.skip_if_slow('Skip because state checks after sleep are hard to make robust in slow context')
+  end
+  vim.loop.sleep(math.max(ms, 1))
+  if child ~= nil then child.poke_eventloop() end
+end
+
+-- Standardized way of setting number of retries
+Helpers.get_n_retry = function(n)
+  local coef = 1
+  if Helpers.is_ci() then
+    if Helpers.is_windows() then coef = 2 end
+    if Helpers.is_macos() then coef = 4 end
+  end
+  return coef * n
+end
 
 return Helpers
