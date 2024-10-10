@@ -541,6 +541,13 @@ end
 --- Parse snippet
 ---
 ---@param snippet_body string|table Snippet body as string or array of strings.
+---@param opts table|nil Options. Possible fields:
+---   - <resolve_vars> `(boolean|table)` - whether to resolve variable nodes:
+---     evaluate variable and use its value as text node. If no variable defined,
+---     fall back to placeholder (empty string text node if none).
+---     If table, used as variable value lookup.
+---     Default: `false`.
+---     See |MiniSnippets-syntax-specification| for more info about variables.
 ---
 ---@return table Array of nodes: tables with fields depending on node type:
 ---   - Text node:
@@ -550,15 +557,17 @@ end
 ---     - <placeholder> `(table|nil)` - array of nodes to be used as placeholder.
 ---     - <choices> `(table|nil)` - array of string choices.
 ---     - <transform> `(string|nil)` - transformation string.
----   - Variable node:
+---   - Variable node (can be present if `opts.resolve_vars` is not set):
 ---     - <var> `(string)` - name of a variable in variable node.
 ---     - <placeholder> `(table|nil)` - array of nodes to be used as placeholder.
 ---     - <transform> `(string|nil)` - transformation string.
 ---@private
-MiniSnippets._parse = function(snippet_body)
+MiniSnippets._parse = function(snippet_body, opts)
   -- TODO: Properly export after a long enough period of public testing
   if H.is_array_of(snippet_body, H.is_string) then snippet_body = table.concat(snippet_body, '\n') end
   if type(snippet_body) ~= 'string' then H.error('Snippet body should be string or array of strings') end
+
+  opts = vim.tbl_extend('force', { resolve_vars = false }, opts or {})
 
   -- Overall idea: implement a state machine which updates on every character.
   -- This leads to a bit spaghetti code, but doesn't require `vim.lpeg` DSL
@@ -587,7 +596,18 @@ MiniSnippets._parse = function(snippet_body)
   end
 
   H.parse_verify(state)
-  return H.parse_post_process(state.depth_arrays[1], state.name)
+  local nodes = H.parse_post_process(state.depth_arrays[1], state.name)
+
+  if opts.resolve_vars then
+    local lookup = type(opts.resolve_vars) == 'table' and vim.deepcopy(opts.resolve_vars) or {}
+    for k, v in pairs(lookup) do
+      lookup[k] = tostring(v)
+    end
+    math.randomseed(vim.loop.hrtime())
+    nodes = H.parse_resolve_vars(nodes, lookup)
+  end
+
+  return nodes
 end
 
 -- Helper data ================================================================
@@ -959,38 +979,112 @@ H.parse_processors.transform_options = function(c, s, n)
   end
 end
 
+H.parse_resolve_vars = function(nodes, lookup)
+  -- Construct new node array without variable nodes
+  local new_nodes = {}
+  for _, node in ipairs(nodes) do
+    -- Prepare (recursively) placeholders first to have proper array to inject
+    if node.placeholder then node.placeholder = H.parse_resolve_vars(node.placeholder, lookup) end
+
+    -- Construct
+    local new = node
+    if node.var ~= nil then
+      -- NOTE: purposefully ignore transformations
+      local var_value = H.parse_eval_var(node.var, lookup)
+      new = var_value ~= true and { text = var_value } or (node.placeholder or { text = '' })
+    end
+    if H.islist(new) then vim.list_extend(new_nodes, new) end
+    if not H.islist(new) then table.insert(new_nodes, new) end
+  end
+  return new_nodes
+end
+
+--stylua: ignore
+H.parse_eval_var = function(var, lookup)
+  -- Always prefer using lookup
+  if lookup[var] ~= nil then return lookup[var] end
+
+  -- Evaluate variable
+  local value
+  if H.var_evaluators[var] ~= nil then value = H.var_evaluators[var]() end
+  -- - Fall back to environment variable or `true` to not evaluate twice
+  if value == nil then value = vim.loop.os_getenv(var) or true end
+
+  -- Skip caching random variables (to allow several different in one snippet)
+  if not (var == 'RANDOM' or var == 'RANDOM_HEX' or var == 'UUID') then lookup[var] = value end
+  return value
+end
+
+--stylua: ignore
+H.var_evaluators = {
+  -- LSP
+  TM_SELECTED_TEXT = function()
+    local from, to = vim.api.nvim_buf_get_mark(0, '<'), vim.api.nvim_buf_get_mark(0, '>')
+    local text = vim.api.nvim_buf_get_text(0, from[1] - 1, from[2], to[1] - 1, to[2] + 1, {})
+    return table.concat(text, '\n')
+  end,
+
+  TM_CURRENT_LINE  = function() return vim.api.nvim_get_current_line() end,
+  TM_CURRENT_WORD  = function() return vim.fn.expand('<cword>') end,
+  TM_LINE_INDEX    = function() return tostring(vim.fn.line('.') - 1) end,
+  TM_LINE_NUMBER   = function() return tostring(vim.fn.line('.')) end,
+  TM_FILENAME      = function() return vim.fn.expand('%:t') end,
+  TM_FILENAME_BASE = function() return vim.fn.expand('%:t:r') end,
+  TM_DIRECTORY     = function() return vim.fn.expand('%:p:h') end,
+  TM_FILEPATH      = function() return vim.fn.expand('%:p') end,
+
+  -- VS Code
+  CLIPBOARD         = function() return vim.fn.getreg('+') end,
+  CURSOR_INDEX      = function() return tostring(vim.fn.col('.') - 1) end,
+  CURSOR_NUMBER     = function() return tostring(vim.fn.col('.')) end,
+  RELATIVE_FILEPATH = function() return vim.fn.expand('%:.') end,
+  WORKSPACE_FOLDER  = function() return vim.fn.getcwd() end,
+
+  LINE_COMMENT      = function() return vim.bo.commentstring:gsub('%s*%%s.*$', '') end,
+  -- No BLOCK_COMMENT_{START,END} as there is no built-in way to get them
+
+  CURRENT_YEAR             = function() return vim.fn.strftime('%Y') end,
+  CURRENT_YEAR_SHORT       = function() return vim.fn.strftime('%y') end,
+  CURRENT_MONTH            = function() return vim.fn.strftime('%m') end,
+  CURRENT_MONTH_NAME       = function() return vim.fn.strftime('%B') end,
+  CURRENT_MONTH_NAME_SHORT = function() return vim.fn.strftime('%b') end,
+  CURRENT_DATE             = function() return vim.fn.strftime('%d') end,
+  CURRENT_DAY_NAME         = function() return vim.fn.strftime('%A') end,
+  CURRENT_DAY_NAME_SHORT   = function() return vim.fn.strftime('%a') end,
+  CURRENT_HOUR             = function() return vim.fn.strftime('%H') end,
+  CURRENT_MINUTE           = function() return vim.fn.strftime('%M') end,
+  CURRENT_SECOND           = function() return vim.fn.strftime('%S') end,
+  CURRENT_TIMEZONE_OFFSET  = function() return vim.fn.strftime('%z') end,
+
+  CURRENT_SECONDS_UNIX = function() return tostring(os.time()) end,
+
+  -- Random
+  RANDOM     = function() return string.format('%06d', math.random(0, 999999)) end,
+  RANDOM_HEX = function() return string.format('%06x', math.random(0, 16777216 - 1)) end,
+  UUID       = function()
+    -- Source: https://gist.github.com/jrus/3197011
+    local template ='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
+    return string.gsub(template, '[xy]', function (c)
+      local v = c == 'x' and math.random(0, 0xf) or math.random(8, 0xb)
+      return string.format('%x', v)
+    end)
+  end
+}
+
 -- Expand ---------------------------------------------------------------------
 H.expand = function(snippet, opts)
   -- Future `default_expand()`
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
   local default_mappings = { jump_next = '<C-l>', jump_prev = '<C-h>', stop = '<C-e>' }
-  opts = vim.tbl_extend('force', { mappings = default_mappings }, opts or {})
+  opts = vim.tbl_extend('force', { mappings = default_mappings, resolve_vars = true }, opts or {})
+  if not opts.resolve_vars then opts.resolve_vars = {} end
 
-  local nodes = MiniSnippets._parse(snippet.body)
-  local tabstops, vars = {}, {}
-  nodes = H.session_traverse_nodes(nodes, tabstops, vars)
+  -- Force resolving variables
+  local parse_opts = { resolve_vars = opts.resolve_vars and opts.resolve_vars or {} }
+  local nodes = MiniSnippets._parse(snippet.body, parse_opts)
   local session = H.session_new(nodes, tabstops)
   return session -- Temporary for testing
-end
-
-H.session_traverse_nodes = function(nodes, tabstops, vars)
-  -- Collect data and (recursively) prepare nodes
-  for _, node in ipairs(nodes) do
-    if node.tabstop ~= nil then tabstops[node.tabstop] = true end
-    if node.var ~= nil then vars[node.var] = vars[node.var] or H.eval_var(node.var) end
-    if node.placeholder then node.placeholder = H.session_traverse_nodes(node.placeholder, tabstops, vars) end
-  end
-
-  -- Construct new node array without variable nodes
-  local new_nodes = {}
-  for _, node in ipairs(nodes) do
-    local new = node.var == nil and node or (vars[node.var] ~= '' and { text = vars[node.var] } or node.placeholder)
-    if H.islist(new) then vim.list_extend(new_nodes, new) end
-    -- This may not add node if var is empty and has no placeholder
-    if not H.islist(new) then table.insert(new_nodes, new) end
-  end
-  return new_nodes
 end
 
 H.session_new = function(nodes, tabstops)
@@ -1009,24 +1103,6 @@ H.session_new = function(nodes, tabstops)
   --   -- Find next tabstop. Should account for only visible tabstops, not the
   --      ones that are inside of placeholder that are not already shown.
   -- end
-end
-
-H.eval_var = function(var)
-  -- NOTE: purposefully ignore transformations
-  if var == 'TM_SELECTED_TEXT' then
-    local from, to = vim.api.nvim_buf_get_mark(0, '<'), vim.api.nvim_buf_get_mark(0, '>')
-    local text = vim.api.nvim_buf_get_text(0, from[1] - 1, from[2], to[1] - 1, to[2] + 1, {})
-    return table.concat(text, '\n')
-  end
-  if var == 'TM_CURRENT_LINE' then return vim.api.nvim_get_current_line() end
-  if var == 'TM_CURRENT_WORD' then return vim.fn.expand('<cword>') end
-  if var == 'TM_LINE_INDEX' then return vim.fn.line('.') - 1 end
-  if var == 'TM_LINE_NUMBER' then return vim.fn.line('.') end
-  if var == 'TM_FILENAME' then return vim.fn.expand('%:t') end
-  if var == 'TM_FILENAME_BASE' then return vim.fn.expand('%:t:r') end
-  if var == 'TM_DIRECTORY' then return vim.fn.expand('%:p:h') end
-  if var == 'TM_FILEPATH' then return vim.fn.expand('%:p') end
-  return vim.loop.os_getenv(var) or ''
 end
 
 -- Validators -----------------------------------------------------------------

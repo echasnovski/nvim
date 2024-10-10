@@ -8,7 +8,15 @@ local new_set = MiniTest.new_set
 --stylua: ignore start
 local load_module = function(config) child.mini_load('snippets', config) end
 local unload_module = function() child.mini_unload('snippets') end
+local set_cursor = function(...) return child.set_cursor(...) end
+local get_cursor = function(...) return child.get_cursor(...) end
+local set_lines = function(...) return child.set_lines(...) end
+local get_lines = function(...) return child.get_lines(...) end
+local type_keys = function(...) return child.type_keys(...) end
 --stylua: ignore end
+
+local test_dir = 'tests/dir-snippets'
+local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('\\', '/'):gsub('(.)/$', '%1')
 
 -- Common test wrappers
 local forward_lua = function(fun_str)
@@ -24,6 +32,7 @@ local T = new_set({
       load_module()
     end,
     post_once = child.stop,
+    n_retry = helpers.get_n_retry(2),
   },
 })
 
@@ -446,6 +455,179 @@ T['_parse()']['tricky'] = function()
       { tabstop = '2', placeholder = { { tabstop = '1' }, { text = '.two' } } },
     }
   )
+end
+
+T['_parse()']['respects `opts.resolve_vars`'] = function()
+  local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { resolve_vars = true }), ref_nodes) end
+  local is_win = helpers.is_windows()
+
+  child.fn.setenv('AA', 'my-aa')
+  child.fn.setenv('XX', 'my-xx')
+  -- NOTE: on Windows setting environment variable to empty string is the same
+  -- as deleting it (at least until 2024-07-11 change which enables it)
+  child.fn.setenv('EMPTY', '')
+
+  -- Resolve variables if `resolve_vars` is true-ish
+  validate('$AA', { { text = 'my-aa' } })
+  validate('${AA}', { { text = 'my-aa' } })
+  validate('$EMPTY', { { text = '' } })
+
+  -- Falls back to placeholder
+  validate('${BB:fallback}', { { text = 'fallback' } })
+  validate('aa${BB:_$1!}bb', { { text = 'aa' }, { text = '_' }, { tabstop = '1' }, { text = '!' }, { text = 'bb' } })
+  validate('$1${BB:xx}${2|uu,vv|}', { { tabstop = '1' }, { text = 'xx' }, { tabstop = '2', choices = { 'uu', 'vv' } } })
+
+  -- Should not use placeholder if variable is set
+  if not is_win then validate('${EMPTY:fallback}', { { text = '' } }) end
+
+  -- Preserves node if evaluation failed and no placeholder
+  validate('$BB', { { text = '' } })
+  validate('${BB}', { { text = '' } })
+  validate('aa${BB}bb', { { text = 'aa' }, { text = '' }, { text = 'bb' } })
+  validate('aa${BB}', { { text = 'aa' }, { text = '' } })
+  validate('${BB}bb', { { text = '' }, { text = 'bb' } })
+  validate('$1$BB${2|uu,vv|}', { { tabstop = '1' }, { text = '' }, { tabstop = '2', choices = { 'uu', 'vv' } } })
+
+  -- Resolves all variables (however deep)
+  validate('${XX}$AA$BB', { { text = 'my-xx' }, { text = 'my-aa' }, { text = '' } })
+
+  validate('${BB:$AA}', { { text = 'my-aa' } })
+  validate('${BB:${CC:$AA}}', { { text = 'my-aa' } })
+
+  validate('${BB:xx${AA}yy}', { { text = 'xx' }, { text = 'my-aa' }, { text = 'yy' } })
+  validate('${BB:xx${CC:yy$AA}}', { { text = 'xx' }, { text = 'yy' }, { text = 'my-aa' } })
+
+  -- Can resolve variables from user lookup
+  eq(parse('$BB', { resolve_vars = { BB = 'hello' } }), { { text = 'hello' } })
+  eq(parse('$BB', { resolve_vars = { BB = 1 } }), { { text = '1' } })
+
+  -- - Should prefer user lookup
+  eq(parse('$AA', { resolve_vars = { AA = 'other' } }), { { text = 'other' } })
+  eq(parse('$AA', { resolve_vars = { AA = '' } }), { { text = '' } })
+  eq(parse('$EMPTY', { resolve_vars = { EMPTY = 'not empty' } }), { { text = 'not empty' } })
+
+  eq(parse('$AA$XX', { resolve_vars = { AA = '!', XX = '?' } }), { { text = '!' }, { text = '?' } })
+
+  -- Evaluates variable only once
+  child.lua([[
+    _G.log = {}
+    local os_getenv_orig = vim.loop.os_getenv
+    vim.loop.os_getenv = function(...)
+      table.insert(_G.log, { ... })
+      return os_getenv_orig(...)
+    end
+  ]])
+  validate('${AA}${AA}${BB}${BB}', { { text = 'my-aa' }, { text = 'my-aa' }, { text = '' }, { text = '' } })
+  eq(child.lua_get('_G.log'), { { 'AA' }, { 'BB' } })
+
+  -- - But not persistently
+  child.fn.setenv('AA', '!')
+  child.fn.setenv('BB', '?')
+  validate('${AA}${BB}', { { text = '!' }, { text = '?' } })
+end
+
+--stylua: ignore
+T['_parse()']['can resolve special variables'] = function()
+  local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { resolve_vars = true }), ref_nodes) end
+
+  local path = test_dir_absolute .. '/snippets/lua.json'
+  child.cmd('edit ' .. child.fn.fnameescape(path))
+  set_lines({ 'abc def', 'ghi' })
+  set_cursor(1, 1)
+  type_keys('vj', '<Esc>')
+  set_cursor(1, 2)
+
+  -- Mock constant clipboard for better reproducibility of system registers
+  -- (mostly on CI). As `setreg('+', 'clip')` is not guaranteed to be working
+  -- for system clipboard, use `g:clipboard` which copies/pastes directly.
+  child.lua([[
+    local clip = function() return { { 'clip' }, 'v' } end
+    local board = function() return { { 'board' }, 'v' } end
+    vim.g.clipboard = {
+      name  = 'myClipboard',
+      copy  = { ['+'] = clip, ['*'] = board },
+      paste = { ['+'] = clip, ['*'] = board },
+    }
+  ]])
+  child.bo.commentstring = '/* %s */'
+
+  -- LSP
+  validate('$TM_SELECTED_TEXT', { { text = 'bc def\ngh' } })
+  validate('$TM_CURRENT_LINE',  { { text = 'abc def' } })
+  validate('$TM_CURRENT_WORD',  { { text = 'abc' } })
+  validate('$TM_LINE_INDEX',    { { text = '0' } })
+  validate('$TM_LINE_NUMBER',   { { text = '1' } })
+
+  local validate_path = function(snippet_body, ref_text)
+    local nodes = parse(snippet_body, { resolve_vars = true })
+    nodes[1].text = nodes[1].text:gsub('\\',  '/')
+    eq(nodes, { { text = ref_text } })
+  end
+  validate_path('$TM_FILENAME',      'lua.json')
+  validate_path('$TM_FILENAME_BASE', 'lua')
+  validate_path('$TM_DIRECTORY',     test_dir_absolute .. '/snippets')
+  validate_path('$TM_FILEPATH',      path)
+
+  -- VS Code
+  validate_path('$RELATIVE_FILEPATH', test_dir .. '/snippets/lua.json')
+  validate_path('$WORKSPACE_FOLDER',  child.fn.getcwd():gsub('\\', '/'))
+  validate('$CLIPBOARD',         { { text = 'clip' } })
+  validate('$CURSOR_INDEX',      { { text = '2' } })
+  validate('$CURSOR_NUMBER',     { { text = '3' } })
+  validate('$LINE_COMMENT',      { { text = '/*' } })
+
+  -- - Date/time
+  child.lua([[
+    _G.args_log = {}
+    vim.fn.strftime = function(...)
+      table.insert(_G.args_log, { ... })
+      return 'datetime'
+    end
+  ]])
+  local validate_datetime = function(snippet_body, ref_strftime_format)
+    child.lua('_G.args_log = {}')
+    validate(snippet_body, { { text = 'datetime' } })
+    eq(child.lua_get('_G.args_log'), { { ref_strftime_format } })
+  end
+
+  validate_datetime('$CURRENT_YEAR',             '%Y')
+  validate_datetime('$CURRENT_YEAR_SHORT',       '%y')
+  validate_datetime('$CURRENT_MONTH',            '%m')
+  validate_datetime('$CURRENT_MONTH_NAME',       '%B')
+  validate_datetime('$CURRENT_MONTH_NAME_SHORT', '%b')
+  validate_datetime('$CURRENT_DATE',             '%d')
+  validate_datetime('$CURRENT_DAY_NAME',         '%A')
+  validate_datetime('$CURRENT_DAY_NAME_SHORT',   '%a')
+  validate_datetime('$CURRENT_HOUR',             '%H')
+  validate_datetime('$CURRENT_MINUTE',           '%M')
+  validate_datetime('$CURRENT_SECOND',           '%S')
+  validate_datetime('$CURRENT_TIMEZONE_OFFSET',  '%z')
+
+  validate('$CURRENT_SECONDS_UNIX', { { text = tostring(child.lua_get('os.time()')) } })
+
+  -- Random values
+  child.lua('vim.loop.hrtime = function() return 101 end') -- mock reproducible `math.randomseed`
+  child.lua('math.randomseed(101)')
+  local ref_random = {
+    { text = '491985' }, { text = '873024' },
+    { text = '10347d' }, { text = 'df5ed0' },
+    { text = '13d0871f-61d3-464a-b774-28645dca9e3a' }, { text = '7bac0382-1057-48d1-9f3b-9b45dbf681e8' },
+  }
+  validate( '${RANDOM}${RANDOM}${RANDOM_HEX}${RANDOM_HEX}${UUID}${UUID}', ref_random)
+
+  -- - Should prefer user lookup
+  eq(parse('$TM_SELECTED_TEXT', { resolve_vars = { TM_SELECTED_TEXT = 'xxx' } }), { { text = 'xxx' } })
+  local random_opts = { resolve_vars = { RANDOM = 'a', RANDOM_HEX = 'b', UUID = 'c' } }
+  local random_nodes = { { text = 'a' }, { text = 'a' }, { text = 'b' }, { text = 'b' }, { text = 'c' }, { text = 'c' } }
+  eq(parse('${RANDOM}${RANDOM}${RANDOM_HEX}${RANDOM_HEX}${UUID}${UUID}', random_opts), random_nodes)
+
+  -- Should evaluate variable only once
+  child.lua('_G.args_log = {}')
+  eq(
+    parse('${CURRENT_YEAR}${CURRENT_YEAR}${CURRENT_MONTH}${CURRENT_MONTH}', { resolve_vars = true }),
+    { { text = 'datetime' }, { text = 'datetime' }, { text = 'datetime' }, { text = 'datetime'} }
+  )
+  eq(child.lua_get('_G.args_log'), { { '%Y' }, { '%m' } })
 end
 
 T['_parse()']['throws informative errors'] = function()
