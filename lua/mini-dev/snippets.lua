@@ -24,6 +24,7 @@
 --       a single pass. This still should update the "dependent" nodes during
 --       typing: start as ` `; become `x x` after typing `x` on either tabstop,
 --       allow becomeing `x y` or `y x` after the jump and typing.
+--     - Think whether wrapping tabstops should be configurable.
 --
 -- Docs:
 -- - Manage:
@@ -78,7 +79,8 @@
 ---
 --- - Match which snippet to expand based on the currently typed text.
 ---
---- - Expand, navigate, and edit snippet in a configurable manner.
+--- - Expand, navigate, and edit snippet in a configurable manner:
+---     - Works inside comments by preserving comment leader on new lines.
 ---
 --- See |MiniSnippets-examples| for common configuration examples.
 ---
@@ -538,6 +540,30 @@ MiniSnippets.default_expand = function(snippet, opts)
   return vim.snippet.expand(snippet.body)
 end
 
+--- Work with snippet session from |MiniSnippets.default_expand()|
+MiniSnippets.session = {}
+
+MiniSnippets.session.get = function()
+  if H.current_session == nil then return end
+  return {
+    buf_id = H.current_session.buf_id,
+    expand_opts = vim.deepcopy(H.current_session.expand_opts),
+    nodes = vim.deepcopy(H.current_session.nodes),
+    snippet = vim.deepcopy(H.current_session.snippet),
+  }
+end
+
+MiniSnippets.session.jump = function(direction)
+  if H.current_session == nil then return end
+  if not (direction == 'prev' or direction == 'next') then H.error('`direction` should be one of "prev", "next"') end
+  H.session_jump(H.current_session, direction)
+end
+
+MiniSnippets.session.stop = function()
+  if H.current_session == nil then return end
+  H.session_stop(H.current_session)
+end
+
 --- Parse snippet
 ---
 ---@param snippet_body string|table Snippet body as string or array of strings.
@@ -615,7 +641,12 @@ end
 H.default_config = vim.deepcopy(MiniSnippets.config)
 
 -- Namespaces for extmarks
-H.ns_id = {}
+H.ns_id = {
+  tabstops = vim.api.nvim_create_namespace('MiniSnippetsTabstops'),
+}
+
+-- Current snippet session from `default_expand`
+H.current_session = nil
 
 -- Various cache
 H.cache = {
@@ -1077,32 +1108,147 @@ H.expand = function(snippet, opts)
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
   local default_mappings = { jump_next = '<C-l>', jump_prev = '<C-h>', stop = '<C-e>' }
-  opts = vim.tbl_extend('force', { mappings = default_mappings, resolve_vars = true }, opts or {})
-  if not opts.resolve_vars then opts.resolve_vars = {} end
+  opts = vim.tbl_deep_extend('force', { mappings = default_mappings, vars_lookup = {} }, opts or {})
+  if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
 
-  -- Force resolving variables
-  local parse_opts = { resolve_vars = opts.resolve_vars and opts.resolve_vars or {} }
-  local nodes = MiniSnippets._parse(snippet.body, parse_opts)
-  local session = H.session_new(nodes, tabstops)
+  if H.current_session ~= nil then
+    -- TODO: Decide what to do if there is an active current session
+    -- H.current_session.stop()
+    -- or maybe nest?
+  end
+
+  local session = H.session_new(snippet, opts)
+  H.session_init(session)
   return session -- Temporary for testing
 end
 
-H.session_new = function(nodes, tabstops)
-  -- Order by numerical form of tabstop id while allowing leading zeros
-  local tabstop_sorted = vim.tbl_map(function(x) return { tonumber(x), x } end, vim.tbl_keys(tabstops))
-  table.sort(tabstop_sorted, function(a, b) return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2]) end)
-  tabstop_sorted = vim.tbl_map(function(x) return x[2] end, tabstop_sorted)
-  return tabstop_sorted
+H.session_new = function(nodes, opts)
+  local nodes = MiniSnippets._parse(snippet.body, { resolve_vars = opts.vars_lookup })
 
-  -- -- TODO:
-  -- -- - General session object structure.
-  -- -- - How to find special tabstop '0'.
-  --
-  -- local session = {}
-  -- session.jump_next = function()
-  --   -- Find next tabstop. Should account for only visible tabstops, not the
-  --      ones that are inside of placeholder that are not already shown.
-  -- end
+  -- Compute all present tabstops in session traverse order and index reverse
+  local taborder = H.compute_tabstop_order(nodes)
+  local tabstops = {}
+  for i, id in ipairs(tabstops) do
+    tabstops[id] = { prev = taborder[i - 1] or taborder[#taborder], next = taborder[i + 1] or taborder[1] }
+  end
+
+  return {
+    buf_id = vim.api.nvim_get_current_buf(),
+    tabstops = tabstops,
+    nodes = nodes,
+    snippet = vim.deepcopy(snippet),
+    expand_opts = vim.deepcopy(opts),
+  }
+end
+
+H.session_init = function(session, pos)
+  local indent = H.get_indent(pos[1])
+
+  -- TODO: Place all text starting at position `pos` and respecting indent
+
+  -- TODO: Add extmarks for tabstops
+
+  -- Start session only if there are tabstops
+  if #taborder == 0 then return end
+
+  -- TODO: Set tracking autocommands:
+  -- - Update linked tabstops.
+  -- - Automatically stop session: `ModeChanged *:n` and if typing something
+  --   with `$0` being current node.
+
+  H.session_focus_tabstop(session, taborder[1])
+  H.current_session = session
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniSnippetsSessionStart' })
+end
+
+H.session_focus_tabstop = function(session, id)
+  if session.current_tabstop ~= nil then
+    -- TODO: Change highlighting of nodes for current tabstop from
+    -- 'MiniSnippetsCurrent' to 'MiniSnippetsVisited'
+  end
+
+  session.current_tabstop = id
+
+  -- TODO: Change highlighting of nodes for new tabstop from
+  -- 'MiniSnippetsPlaceholder' to 'MiniSnippetsCurrent'
+
+  -- TODO: Focus cursor on the first node of the new tabstop (probably,
+  -- position of node's extmark)
+
+  -- TODO: Probably change `right_gravity` and `end_right_gravity` for all extmarks:
+  -- - Make them expanding for new tabstop.
+  -- - Make them move to the left if they are to the left of cursor (???).
+  -- - Make them move to the right if they are to the right of cursor (???).
+  -- Account for something like `$1$2$1`.
+end
+
+H.session_jump = function(session, direction)
+  local new_tabstop = tabstops[session.current_tabstop][direction]
+  if session.current_tabstop == new_tabstop then return end
+  session.focus_tabstop(new_tabstop)
+end
+
+H.session_stop = function(session)
+  -- TODO: Decide whether to allow nested sessions?
+  vim.api.nvim_buf_clear_namespace(session.buf_id, H.ns_id.tabstops, 0, -1)
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniSnippetsSessionStop' })
+  H.current_session = nil
+end
+
+H.compute_tabstop_order = function(nodes)
+  local tabstops_map, traverse_tabstops = {}, nil
+  traverse_tabstops = function(node_arr)
+    for _, n in ipairs(node_arr) do
+      if n.tabstop ~= nil then tabstops_map[n.tabstop] = true end
+      if n.placeholder ~= nil then traverse_tabstops(n.placeholder) end
+    end
+  end
+  traverse_tabstops(nodes)
+
+  -- - Order as numbers while allowing leading zeros. Put special `$0` last.
+  local tabstops = vim.tbl_map(function(x) return { tonumber(x), x } end, vim.tbl_keys(tabstops_map))
+  table.sort(tabstops, function(a, b)
+    if a[2] == '0' then return false end
+    if b[2] == '0' then return true end
+    return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
+  end)
+  return vim.tbl_map(function(x) return x[2] end, tabstops)
+end
+
+-- Indent ---------------------------------------------------------------------
+H.get_indent = function(lnum)
+  local line, comment_indent = vim.fn.getline(lnum), ''
+  for _, leader in ipairs(H.get_comment_leaders()) do
+    local cur_match = line:match('^%s*' .. vim.pesc(leader) .. '%s*')
+    -- Use biggest match in case of several matches. Allows respecting "nested"
+    -- comment leaders like "---" and "--".
+    if type(cur_match) == 'string' and comment_indent:len() < cur_match:len() then comment_indent = cur_match end
+  end
+  return comment_indent ~= '' and comment_indent or line:match('^%s*')
+end
+
+H.get_comment_leaders = function()
+  local res = {}
+
+  -- From 'commentstring'
+  local main_leader = vim.split(vim.bo.commentstring, '%%s')[1]
+  table.insert(res, vim.trim(main_leader))
+
+  -- From 'comments'
+  for _, comment_part in ipairs(vim.opt_local.comments:get()) do
+    local prefix, suffix = comment_part:match('^(.*):(.*)$')
+    suffix = vim.trim(suffix)
+    if prefix:find('b') then
+      -- Respect `b` flag (for blank) requiring space, tab or EOL after it
+      table.insert(res, suffix .. ' ')
+      table.insert(res, suffix .. '\t')
+    elseif prefix:find('f') == nil then
+      -- Add otherwise ignoring `f` flag (only first line should have it)
+      table.insert(res, suffix)
+    end
+  end
+
+  return res
 end
 
 -- Validators -----------------------------------------------------------------
@@ -1158,15 +1304,13 @@ H.get_line = function(buf_id, line_num)
   return vim.api.nvim_buf_get_lines(buf_id, line_num - 1, line_num, false)[1] or ''
 end
 
-H.set_extmark = function(...) pcall(vim.api.nvim_buf_set_extmark, ...) end
+H.set_extmark = function(...) return vim.api.nvim_buf_set_extmark(...) end
 
 H.get_extmarks = function(...)
   local ok, res = pcall(vim.api.nvim_buf_get_extmarks, ...)
   if not ok then return {} end
   return res
 end
-
-H.clear_namespace = function(...) pcall(vim.api.nvim_buf_clear_namespace, ...) end
 
 -- TODO: Remove after compatibility with Neovim=0.9 is dropped
 H.islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
