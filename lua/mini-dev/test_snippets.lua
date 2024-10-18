@@ -534,7 +534,7 @@ T['_parse()']['can resolve special variables'] = function()
   child.cmd('edit ' .. child.fn.fnameescape(path))
   set_lines({ 'abc def', 'ghi' })
   set_cursor(1, 1)
-  type_keys('vj', '<Esc>')
+  type_keys('yvj', '<Esc>')
   set_cursor(1, 2)
 
   -- Mock constant clipboard for better reproducibility of system registers
@@ -552,7 +552,7 @@ T['_parse()']['can resolve special variables'] = function()
   child.bo.commentstring = '/* %s */'
 
   -- LSP
-  validate('$TM_SELECTED_TEXT', { { text = 'bc def\ngh' } })
+  validate('$TM_SELECTED_TEXT', { { text = 'bc def\ng' } })
   validate('$TM_CURRENT_LINE',  { { text = 'abc def' } })
   validate('$TM_CURRENT_WORD',  { { text = 'abc' } })
   validate('$TM_LINE_INDEX',    { { text = '0' } })
