@@ -38,6 +38,11 @@
 --
 -- - Syntax:
 --     - Escape `}` inside `if` of `${1:?if:else}`.
+--     - Variable `TM_SELECTED_TEXT` is resolved as contents of |quote_quote|
+--       register. It assumes that text is put there prior to expanding:
+--       visually select and |c|; yank, etc.
+--
+-- - Expand:
 --
 -- Tests:
 -- - Management:
@@ -134,6 +139,13 @@
 --- of different scenarios and customization intentions, writing exact rules
 --- for disabling module's functionality is left to user. See
 --- |mini.nvim-disabling-recipes| for common recipes.
+
+--- POSITION Table representing position in a buffer. Fields:
+---          - <line> `(number)` - line number (starts at 1).
+---          - <col> `(number)` - column number (starts at 1).
+--- REGION   Table representing region in a buffer. Fields: <from> and <to> for
+---          inclusive start and end POSITIONs.
+---@tag MiniSnippets-glossary
 
 --- # Snippet files specifications ~
 ---
@@ -269,6 +281,10 @@ MiniSnippets.config = {
 ---   - Use `select = false` to always expand the best match (if any).
 ---   - Use `expand = false` to return all matches without expanding.
 ---
+---   Extra allowed fields:
+---   - <pos> `(table)` - position (see |MiniSnippets-glossary) at which to
+---     find snippets. Default: cursor position.
+---
 ---@return table|nil If `expand` is `false`, an array of matched snippets as
 ---   was an output of `match.find`. Otherwise `nil`.
 ---
@@ -301,9 +317,13 @@ MiniSnippets.match = function(opts)
   if opts.expand ~= false then expand = opts.expand or MiniSnippets.default_expand end
   if not (expand == false or vim.is_callable(expand)) then H.error('`opts.expand` should be `false` or callable') end
 
+  local pos = opts.pos
+  if pos == nil then pos = { line = vim.fn.line('.'), col = vim.fn.col('.') } end
+  if not H.is_position(pos) then H.error('`opts.pos` should be table with numeric `line` and `col` fields') end
+
   -- Match
   local all_snippets = vim.deepcopy(H.get_buf_snippets())
-  local matches = find == false and all_snippets or find(all_snippets)
+  local matches = find == false and all_snippets or find(all_snippets, pos)
   if not H.is_array_of(matches, H.is_snippet) then H.error('`find` returned not an array of snippets') end
 
   -- Act
@@ -392,7 +412,7 @@ MiniSnippets.gen_loader.from_runtime = function(pattern, opts)
     if cache and H.cache.runtime[pattern] ~= nil then return vim.deepcopy(H.cache.runtime[pattern]) end
 
     local res = vim.tbl_map(read, vim.api.nvim_get_runtime_file(pattern, opts.all))
-    if cache then H.cache.filetype[ft] = vim.deepcopy(res) end
+    if cache then H.cache.runtime[pattern] = vim.deepcopy(res) end
     return res
   end
 end
@@ -456,6 +476,7 @@ end
 ---   All fuzzy matches are returned.
 ---
 ---@param snippets table Array of snippets which can be matched.
+---@param pos table|nil Position at which match snippets. Default: cursor position.
 ---@param opts table|nil Options. Possible fields:
 ---   - <pattern> `(string)` - Lua pattern to match just before the cursor.
 ---     Supply empty string to not do fuzzy match.
@@ -468,10 +489,13 @@ end
 ---   -- Perform fuzzy match based only on alphanumeric characters
 ---   MiniSnippets.default_find(snippets, { pattern = '%w+' })
 --- <
-MiniSnippets.default_find = function(snippets, opts)
+MiniSnippets.default_find = function(snippets, pos, opts)
+  if pos == nil then pos = { line = vim.fn.line('.'), col = vim.fn.col('.') } end
+  if not H.is_position(pos) then H.error('`pos` should be table with numeric `line` and `col` fields') end
+
   -- Compute line before cursor. Treat Insert mode as exclusive for right edge.
-  local to = vim.fn.col('.') - (vim.fn.mode() == 'i' and 1 or 0)
-  local line_till_cursor, lnum = vim.api.nvim_get_current_line():sub(1, to), vim.fn.line('.')
+  local to = pos.col - (vim.fn.mode() == 'i' and 1 or 0)
+  local line_till_cursor, lnum = vim.fn.getline(pos.line):sub(1, to), pos.line
 
   -- Exact. Use 0 as initial best match width to not match empty prefixes.
   local best_match, best_match_width = nil, 0
@@ -610,6 +634,7 @@ MiniSnippets._parse = function(snippet_body, opts)
     depth_arrays = { { { text = {} } } },
     set_name = function(self, name) self.name = name; return self end,
     add_node = function(self, node) table.insert(self.depth_arrays[#self.depth_arrays], node); return self end,
+    set_in = function(self, node, field, value) node[field] = value; return self end,
     is_not_top_level = function(self) return #self.depth_arrays > 1 end,
   }
 
@@ -634,6 +659,11 @@ MiniSnippets._parse = function(snippet_body, opts)
   end
 
   return nodes
+end
+
+--- Mock an LSP server for completion
+MiniSnippets.mock_lsp_server = function()
+  -- TODO: start an LSP server capable of "textDocument/completion" response
 end
 
 -- Helper data ================================================================
@@ -889,7 +919,7 @@ H.parse_processors.text = function(c, s, n)
     return
   end
   if c == '}' and s:is_not_top_level() then return H.parse_rise_depth(s) end
-  if c == '\\' then return H.set_in(n, 'after_slash', true) end
+  if c == '\\' then return s:set_in(n, 'after_slash', true) end
   if c == '$' then return s:set_name('dollar') end
   table.insert(n.text, c)
 end
@@ -958,8 +988,7 @@ H.parse_processors.choice = function(c, s, n)
   n.choices = n.choices or { {} }
   if n.after_bar then
     if c ~= '}' then H.error('Tabstop with choices should be closed with "|}"') end
-    H.set_in(n, 'after_bar', nil)
-    return s:add_node({ text = {} }):set_name('text')
+    return s:set_in(n, 'after_bar', nil):add_node({ text = {} }):set_name('text')
   end
 
   local cur = n.choices[#n.choices]
@@ -970,8 +999,8 @@ H.parse_processors.choice = function(c, s, n)
     return
   end
   if c == ',' then return table.insert(n.choices, {}) end
-  if c == '\\' then return H.set_in(n, 'after_slash', true) end
-  if c == '|' then return H.set_in(n, 'after_bar', true) end
+  if c == '\\' then return s:set_in(n, 'after_slash', true) end
+  if c == '|' then return s:set_in(n, 'after_bar', true) end
   table.insert(cur, c)
 end
 
@@ -979,31 +1008,31 @@ end
 H.parse_processors.transform_regex = function(c, s, n)
   n.transform = n.transform or {}
   table.insert(n.transform, c)
-  if n.after_slash then return H.set_in(n, 'after_slash', nil) end
-  if c == '\\' then return H.set_in(n, 'after_slash', true) end
+  if n.after_slash then return s:set_in(n, 'after_slash', nil) end
+  if c == '\\' then return s:set_in(n, 'after_slash', true) end
   if c == '/' then return s:set_name('transform_format') end -- Assumes any `/` is escaped in regex
 end
 
 H.parse_processors.transform_format = function(c, s, n)
   table.insert(n.transform, c)
-  if n.after_slash then return H.set_in(n, 'after_slash', nil) end
+  if n.after_slash then return s:set_in(n, 'after_slash', nil) end
   if n.after_dollar then
     n.after_dollar = nil
     -- Inside `${}` wait until the first (unescaped) `}`. Techincally, this
     -- breaks LSP spec in `${1:?if:else}` (`if` doesn't have to escape `}`).
     -- Accept this as known limitation and ask to escape `}` in such cases.
-    if c == '{' and not n.inside_braces then return H.set_in(n, 'inside_braces', true) end
+    if c == '{' and not n.inside_braces then return s:set_in(n, 'inside_braces', true) end
   end
-  if c == '\\' then return H.set_in(n, 'after_slash', true) end
-  if c == '$' then return H.set_in(n, 'after_dollar', true) end
-  if c == '}' and n.inside_braces then return H.set_in(n, 'inside_braces', nil) end
+  if c == '\\' then return s:set_in(n, 'after_slash', true) end
+  if c == '$' then return s:set_in(n, 'after_dollar', true) end
+  if c == '}' and n.inside_braces then return s:set_in(n, 'inside_braces', nil) end
   if c == '/' and not n.inside_braces then return s:set_name('transform_options') end
 end
 
 H.parse_processors.transform_options = function(c, s, n)
   table.insert(n.transform, c)
-  if n.after_slash then return H.set_in(n, 'after_slash', nil) end
-  if c == '\\' then return H.set_in(n, 'after_slash', true) end
+  if n.after_slash then return s:set_in(n, 'after_slash', nil) end
+  if c == '\\' then return s:set_in(n, 'after_slash', true) end
   if c == '}' then
     n.transform[#n.transform] = nil -- Remove previously added "}"
     return s:add_node({ text = {} }):set_name('text')
@@ -1049,12 +1078,7 @@ end
 --stylua: ignore
 H.var_evaluators = {
   -- LSP
-  TM_SELECTED_TEXT = function()
-    local from, to = vim.api.nvim_buf_get_mark(0, '<'), vim.api.nvim_buf_get_mark(0, '>')
-    local text = vim.api.nvim_buf_get_text(0, from[1] - 1, from[2], to[1] - 1, to[2] + 1, {})
-    return table.concat(text, '\n')
-  end,
-
+  TM_SELECTED_TEXT = function() return vim.fn.getreg('"') end,
   TM_CURRENT_LINE  = function() return vim.api.nvim_get_current_line() end,
   TM_CURRENT_WORD  = function() return vim.fn.expand('<cword>') end,
   TM_LINE_INDEX    = function() return tostring(vim.fn.line('.') - 1) end,
@@ -1108,7 +1132,9 @@ H.expand = function(snippet, opts)
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
   local default_mappings = { jump_next = '<C-l>', jump_prev = '<C-h>', stop = '<C-e>' }
-  opts = vim.tbl_deep_extend('force', { mappings = default_mappings, vars_lookup = {} }, opts or {})
+  local default_empty_symbols = { tabstop = '@', tabstop_final = '!' }
+  local default_opts = { mappings = default_mappings, empty_symbols = default_empty_symbols, vars_lookup = {} }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
   if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
 
   if H.current_session ~= nil then
@@ -1122,7 +1148,7 @@ H.expand = function(snippet, opts)
   return session -- Temporary for testing
 end
 
-H.session_new = function(nodes, opts)
+H.session_new = function(snippet, opts)
   local nodes = MiniSnippets._parse(snippet.body, { resolve_vars = opts.vars_lookup })
 
   -- Compute all present tabstops in session traverse order and index reverse
@@ -1134,6 +1160,7 @@ H.session_new = function(nodes, opts)
 
   return {
     buf_id = vim.api.nvim_get_current_buf(),
+    current_tabstop = taborder[1],
     tabstops = tabstops,
     nodes = nodes,
     snippet = vim.deepcopy(snippet),
@@ -1149,14 +1176,14 @@ H.session_init = function(session, pos)
   -- TODO: Add extmarks for tabstops
 
   -- Start session only if there are tabstops
-  if #taborder == 0 then return end
+  if session.current_tabstop == nil then return end
 
   -- TODO: Set tracking autocommands:
   -- - Update linked tabstops.
   -- - Automatically stop session: `ModeChanged *:n` and if typing something
   --   with `$0` being current node.
 
-  H.session_focus_tabstop(session, taborder[1])
+  H.session_focus_tabstop(session, session.current_tabstop)
   H.current_session = session
   vim.api.nvim_exec_autocmds('User', { pattern = 'MiniSnippetsSessionStart' })
 end
@@ -1183,7 +1210,7 @@ H.session_focus_tabstop = function(session, id)
 end
 
 H.session_jump = function(session, direction)
-  local new_tabstop = tabstops[session.current_tabstop][direction]
+  local new_tabstop = session.tabstops[session.current_tabstop][direction]
   if session.current_tabstop == new_tabstop then return end
   session.focus_tabstop(new_tabstop)
 end
@@ -1213,6 +1240,32 @@ H.compute_tabstop_order = function(nodes)
     return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
   end)
   return vim.tbl_map(function(x) return x[2] end, tabstops)
+end
+
+-- Extmarks -------------------------------------------------------------------
+H.extmark_get = function(ext_id)
+  local data = vim.api.nvim_buf_get_extmark_by_id(0, H.ns_id.tabstops, ext_id, { details = true })
+  data[3].id, data[3].ns_id = ext_id, nil
+  return data[1], data[2], data[3]
+end
+
+H.extmark_set_gravity = function(ext_id, gravity)
+  local line, col, opts = H.extmark_get(ext_id)
+  opts.right_gravity, opts.end_right_gravity = gravity == 'right', gravity ~= 'left'
+  vim.api.nvim_buf_set_extmark(0, H.ns_id.tabstops, line, col, opts)
+end
+
+--stlua: ignore
+H.extmark_set_text = function(ext_id, side, text)
+  local start_row, start_col, opts = H.extmark_get(ext_id)
+  local end_row, end_col = opts.end_row, opts.end_col
+  if side == 'left' then
+    end_row, end_col = start_row, start_col
+  end
+  if side == 'right' then
+    start_row, start_col = end_row, end_col
+  end
+  vim.api.nvim_buf_set_text(0, start_row, start_col, end_row, end_col, text)
 end
 
 -- Indent ---------------------------------------------------------------------
@@ -1267,12 +1320,9 @@ H.is_snippet = function(x)
     and H.is_maybe_string_or_arr(x.description)
 end
 
---stylua: ignore
-H.is_region = function(x)
-  return type(x) == 'table'
-    and type(x.from) == 'table' and type(x.from.line) == 'number' and type(x.from.col) == 'number'
-    and type(x.to) == 'table' and type(x.to.line) == 'number' and type(x.to.col) == 'number'
-end
+H.is_position = function(x) return type(x) == 'table' and type(x.line) == 'number' and type(x.col) == 'number' end
+
+H.is_region = function(x) return type(x) == 'table' and H.is_position(x.from) and H.is_position(x.to) end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error('(mini.snippets) ' .. msg, 0) end
@@ -1287,21 +1337,6 @@ H.is_array_of = function(x, predicate)
     if not predicate(x[i]) then return false end
   end
   return true
-end
-
-H.set_in = function(t, field, value) t[field] = value end
-
-H.get_visual_region = function()
-  local left, right = vim.fn.getpos('v'), vim.fn.getpos('.')
-  if right[2] < left[2] or (right[2] == left[2] and right[3] < left[3]) then
-    left, right = right, left
-  end
-  local to_col_offset = vim.o.selection == 'exclusive' and 1 or 0
-  return { from = { line = left[2], col = left[3] }, to = { line = right[2], col = right[3] - to_col_offset } }
-end
-
-H.get_line = function(buf_id, line_num)
-  return vim.api.nvim_buf_get_lines(buf_id, line_num - 1, line_num, false)[1] or ''
 end
 
 H.set_extmark = function(...) return vim.api.nvim_buf_set_extmark(...) end

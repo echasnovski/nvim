@@ -37,6 +37,6 @@ vim.b.minisurround_config = {
 }
 
 if MiniSnippets ~= nil then
-  local find = function(snippets) return MiniSnippets.default_find(snippets, { pattern = '[%w@_]+' }) end
+  local find = function(snippets, pos) return MiniSnippets.default_find(snippets, pos, { pattern = '[%w@_]+' }) end
   vim.b.minisnippets_config = { match = { find = find } }
 end
