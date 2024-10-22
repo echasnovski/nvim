@@ -58,21 +58,54 @@ if vim.fn.isdirectory(luals_root) == 1 then
   -- if false then
   local sumneko_binary = luals_root .. '/bin/lua-language-server'
 
+  -- Deal with the fact that LuaLS in case of `local a = function()` style
+  -- treats both `a` and `function()` as definitions of `a`.
+  local filter_line_locations = function(locations)
+    add_to_log(locations)
+    local present, res = {}, {}
+    for _, l in ipairs(locations) do
+      local t = present[l.filename] or {}
+      if not t[l.lnum] then
+        table.insert(res, l)
+        t[l.lnum] = true
+      end
+      present[l.filename] = t
+    end
+    return res
+  end
+
+  local show_location = function(location)
+    local buf_id = location.bufnr or vim.fn.bufadd(location.filename)
+    vim.bo[buf_id].buflisted = true
+    vim.api.nvim_win_set_buf(0, buf_id)
+    vim.api.nvim_win_set_cursor(0, { location.lnum, location.col - 1 })
+    vim.cmd('normal! zv')
+  end
+
   lspconfig.lua_ls.setup({
-    handlers = {
-      -- Show only one definition to be usable with `a = function()` style.
-      -- Because LuaLS treats both `a` and `function()` as definitions of `a`.
-      ['textDocument/definition'] = function(err, result, ctx, config)
-        if type(result) == 'table' then result = { result[1] } end
-        vim.lsp.handlers['textDocument/definition'](err, result, ctx, config)
-      end,
-    },
     cmd = { sumneko_binary },
     on_attach = function(client, bufnr)
       on_attach_custom(client, bufnr)
+
       -- Reduce unnecessarily long list of completion triggers for better
       -- `MiniCompletion` experience
       client.server_capabilities.completionProvider.triggerCharacters = { '.', ':' }
+
+      -- Tweak mapping for `vim.lsp.buf_definition` as client-local handlers
+      -- are ignored after https://github.com/neovim/neovim/pull/30877
+      local unique_definition = function()
+        local on_list = function(args)
+          local items = filter_line_locations(args.items)
+          if #items > 1 then
+            vim.fn.setqflist({}, ' ', { title = 'LSP locations', items = items })
+            vim.cmd('botright copen')
+            return
+          end
+          show_location(items[1])
+        end
+        vim.lsp.buf.definition({ on_list = on_list })
+      end
+      vim.keymap.set('n', '<Leader>ls', unique_definition, { buffer = bufnr, desc = 'Lua source definition' })
     end,
     root_dir = function(fname) return lspconfig.util.root_pattern('.git')(fname) or lspconfig.util.path.dirname(fname) end,
     settings = {
