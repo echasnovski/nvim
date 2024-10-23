@@ -606,11 +606,11 @@ end
 ---     - <tabstop> `(string)` - tabstop identifier.
 ---     - <placeholder> `(table|nil)` - array of nodes to be used as placeholder.
 ---     - <choices> `(table|nil)` - array of string choices.
----     - <transform> `(string|nil)` - transformation string.
+---     - <transform> `(table|nil)` - array of transformation string parts.
 ---   - Variable node (can be present if `opts.resolve_vars` is not set):
 ---     - <var> `(string)` - name of a variable in variable node.
 ---     - <placeholder> `(table|nil)` - array of nodes to be used as placeholder.
----     - <transform> `(string|nil)` - transformation string.
+---     - <transform> `(table|nil)` - array of transformation string parts.
 ---@private
 MiniSnippets._parse = function(snippet_body, opts)
   -- TODO: Properly export after a long enough period of public testing
@@ -654,6 +654,7 @@ MiniSnippets._parse = function(snippet_body, opts)
     for k, v in pairs(lookup) do
       lookup[k] = tostring(v)
     end
+    -- Ensure proper random random variables
     math.randomseed(vim.loop.hrtime())
     nodes = H.parse_resolve_vars(nodes, lookup)
   end
@@ -880,11 +881,11 @@ H.parse_post_process = function(node_arr, state_name)
       node.after_slash = nil
 
       -- Convert arrays to strings
-      if node.text then node.text = table.concat(node.text, '') end
-      if node.tabstop then node.tabstop = table.concat(node.tabstop, '') end
+      if node.text then node.text = table.concat(node.text) end
+      if node.tabstop then node.tabstop = table.concat(node.tabstop) end
       if node.choices then node.choices = vim.tbl_map(table.concat, node.choices) end
-      if node.var then node.var = table.concat(node.var, '') end
-      if node.transform then node.transform = table.concat(node.transform, '') end
+      if node.var then node.var = table.concat(node.var) end
+      if node.transform then node.transform = vim.tbl_map(table.concat, node.transform) end
 
       -- Recursively post-process placeholders
       if node.placeholder ~= nil then node.placeholder = traverse(node.placeholder) end
@@ -973,7 +974,7 @@ H.parse_processors.dollar_lbrace = function(c, s, n)
     table.insert(s.depth_arrays, { { text = {} } })
     return s:set_name('text')
   end
-  if c == '/' then return s:set_name('transform_regex') end -- Transform
+  if c == '/' then return s:set_in(n, 'transform', { {}, {}, {} }):set_name('transform_regex') end -- Transform
   if n.var ~= nil then -- Variable
     if c:find('^[_a-zA-Z0-9]$') then return table.insert(n.var, c) end
     H.error('Variable name should be followed by "}", ":" or "/", not ' .. vim.inspect(c))
@@ -1006,15 +1007,14 @@ end
 
 -- Silently gather all the transform data and wait until proper `}`
 H.parse_processors.transform_regex = function(c, s, n)
-  n.transform = n.transform or {}
-  table.insert(n.transform, c)
+  table.insert(n.transform[1], c)
   if n.after_slash then return s:set_in(n, 'after_slash', nil) end
   if c == '\\' then return s:set_in(n, 'after_slash', true) end
-  if c == '/' then return s:set_name('transform_format') end -- Assumes any `/` is escaped in regex
+  if c == '/' then return s:set_in(n.transform[1], #n.transform[1], nil):set_name('transform_format') end -- Assumes any `/` is escaped in regex
 end
 
 H.parse_processors.transform_format = function(c, s, n)
-  table.insert(n.transform, c)
+  table.insert(n.transform[2], c)
   if n.after_slash then return s:set_in(n, 'after_slash', nil) end
   if n.after_dollar then
     n.after_dollar = nil
@@ -1026,17 +1026,16 @@ H.parse_processors.transform_format = function(c, s, n)
   if c == '\\' then return s:set_in(n, 'after_slash', true) end
   if c == '$' then return s:set_in(n, 'after_dollar', true) end
   if c == '}' and n.inside_braces then return s:set_in(n, 'inside_braces', nil) end
-  if c == '/' and not n.inside_braces then return s:set_name('transform_options') end
+  if c == '/' and not n.inside_braces then
+    return s:set_in(n.transform[2], #n.transform[2], nil):set_name('transform_options')
+  end
 end
 
 H.parse_processors.transform_options = function(c, s, n)
-  table.insert(n.transform, c)
+  table.insert(n.transform[3], c)
   if n.after_slash then return s:set_in(n, 'after_slash', nil) end
   if c == '\\' then return s:set_in(n, 'after_slash', true) end
-  if c == '}' then
-    n.transform[#n.transform] = nil -- Remove previously added "}"
-    return s:add_node({ text = {} }):set_name('text')
-  end
+  if c == '}' then return s:set_in(n.transform[3], #n.transform[3], nil):add_node({ text = {} }):set_name('text') end
 end
 
 H.parse_resolve_vars = function(nodes, lookup)
@@ -1047,14 +1046,13 @@ H.parse_resolve_vars = function(nodes, lookup)
     if node.placeholder then node.placeholder = H.parse_resolve_vars(node.placeholder, lookup) end
 
     -- Construct
-    local new = node
+    local new = { node }
     if node.var ~= nil then
       -- NOTE: purposefully ignore transformations
       local var_value = H.parse_eval_var(node.var, lookup)
-      new = var_value ~= true and { text = var_value } or (node.placeholder or { text = '' })
+      new = var_value ~= true and { { text = var_value } } or (node.placeholder or { { text = '' } })
     end
-    if H.islist(new) then vim.list_extend(new_nodes, new) end
-    if not H.islist(new) then table.insert(new_nodes, new) end
+    vim.list_extend(new_nodes, new)
   end
   return new_nodes
 end

@@ -309,22 +309,22 @@ T['_parse()']['placeholder'] = function()
   eq(parse('${1:${aa:bb}}'),                { { tabstop = '1', placeholder = { { var = 'aa', placeholder = { { text = 'bb' } } } } } })
   eq(parse('${1:${aa:$2}}'),                { { tabstop = '1', placeholder = { { var = 'aa', placeholder = { { tabstop = '2' } } } } } })
   eq(parse('${1:${aa:bb$2cc}}'),            { { tabstop = '1', placeholder = { { var = 'aa', placeholder = { { text = 'bb' }, { tabstop = '2' }, { text = 'cc' } } } } } })
-  eq(parse('${1:${aa/.*/val/i}}'),          { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/val/i' } } } })
-  eq(parse('${1:${aa/.*/${1}/i}}'),         { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/${1}/i' } } } })
-  eq(parse('${1:${aa/.*/${1:/upcase}/i}}'), { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/${1:/upcase}/i' } } } })
-  eq(parse('${1:${aa/.*/${1:/upcase}/i}}'), { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/${1:/upcase}/i' } } } })
+  eq(parse('${1:${aa/.*/val/i}}'),          { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', 'val',          'i' } } } } })
+  eq(parse('${1:${aa/.*/${1}/i}}'),         { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', '${1}',         'i' } } } } })
+  eq(parse('${1:${aa/.*/${1:/upcase}/i}}'), { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', '${1:/upcase}', 'i' } } } } })
+  eq(parse('${1:${aa/.*/${1:/upcase}/i}}'), { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', '${1:/upcase}', 'i' } } } } })
 
-  eq(parse('${1:${aa/.*/xx${1:else}/i}}'),     { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/xx${1:else}/i' } } } })
-  eq(parse('${1:${aa/.*/xx${1:-else}/i}}'),    { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/xx${1:-else}/i' } } } })
-  eq(parse('${1:${aa/.*/xx${1:+if}/i}}'),      { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/xx${1:+if}/i' } } } })
-  eq(parse('${1:${aa/.*/xx${1:?if:else}/i}}'), { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/xx${1:?if:else}/i' } } } })
-  eq(parse('${1:${aa/.*/xx${1:/upcase}/i}}'),  { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/xx${1:/upcase}/i' } } } })
+  eq(parse('${1:${aa/.*/xx${1:else}/i}}'),     { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', 'xx${1:else}',     'i' } } } } })
+  eq(parse('${1:${aa/.*/xx${1:-else}/i}}'),    { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', 'xx${1:-else}',    'i' } } } } })
+  eq(parse('${1:${aa/.*/xx${1:+if}/i}}'),      { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', 'xx${1:+if}',      'i' } } } } })
+  eq(parse('${1:${aa/.*/xx${1:?if:else}/i}}'), { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', 'xx${1:?if:else}', 'i' } } } } })
+  eq(parse('${1:${aa/.*/xx${1:/upcase}/i}}'),  { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', 'xx${1:/upcase}',  'i' } } } } })
 
-  eq(parse('${1:${aa/.*/${1:?${}:xx}/i}}'),                 { { tabstop = '1', placeholder = { { var = 'aa', transform = '.*/${1:?${}:xx}/i' } } } })
+  eq(parse('${1:${aa/.*/${1:?${}:xx}/i}}'),                 { { tabstop = '1', placeholder = { { var = 'aa', transform = { '.*', '${1:?${}:xx}', 'i' } } } } })
 
   -- - Known limitation of needing to escape `}` in `if`
-  eq(parse([[${1:${aa/regex/${1:?if\}:else/i}/options}}]]),                { { tabstop = '1', placeholder = { { var = 'aa', transform = [[regex/${1:?if\}:else/i}/options]] } } } })
-  expect.no_equality(parse([[${1:${aa/regex/${1:?if}:else/i}/options}}]]), { { tabstop = '1', placeholder = { { var = 'aa', transform = [[regex/${1:?if}:else/i}/options]] } } } }) -- this is bad
+  eq(parse([[${1:${aa/regex/${1:?if\}:else/i}/options}}]]),                { { tabstop = '1', placeholder = { { var = 'aa', transform = { 'regex', [[${1:?if\}:else/i}]], 'options' } } } } })
+  expect.no_equality(parse([[${1:${aa/regex/${1:?if}:else/i}/options}}]]), { { tabstop = '1', placeholder = { { var = 'aa', transform = { 'regex', '${1:?if}:else/i}',    'options' } } } } }) -- this is bad
 
   -- Combined
   eq(parse('${1:aa${2:bb}cc}'),  { { tabstop = '1', placeholder = { { text = 'aa' },  { tabstop = '2', placeholder = { { text = 'bb' } } }, { text = 'cc' } } } })
@@ -358,63 +358,65 @@ T['_parse()']['transform'] = function()
   -- All transform string should be parsed as is
 
   -- Should be allowed in variable nodes
-  eq(parse('${var/xx(yy)/${0:aaa}/i}'),     { { var = 'var', transform = 'xx(yy)/${0:aaa}/i' } })
-  eq(parse('${var/.*/${1}/i}'),             { { var = 'var', transform = '.*/${1}/i' } })
-  eq(parse('${var/.*/$1/i}'),               { { var = 'var', transform = '.*/$1/i' } })
-  eq(parse('${var/.*/$1/}'),                { { var = 'var', transform = '.*/$1/' } })
-  eq(parse('${var/.*//}'),                  { { var = 'var', transform = '.*//' } })
-  eq(parse('${var/.*/This-$1-encloses/i}'), { { var = 'var', transform = '.*/This-$1-encloses/i' } })
-  eq(parse('${var/.*/aa${1:else}/i}'),      { { var = 'var', transform = '.*/aa${1:else}/i' } })
-  eq(parse('${var/.*/aa${1:-else}/i}'),     { { var = 'var', transform = '.*/aa${1:-else}/i' } })
-  eq(parse('${var/.*/aa${1:+if}/i}'),       { { var = 'var', transform = '.*/aa${1:+if}/i' } })
-  eq(parse('${var/.*/aa${1:?if:else}/i}'),  { { var = 'var', transform = '.*/aa${1:?if:else}/i' } })
-  eq(parse('${var/.*/aa${1:/upcase}/i}'),   { { var = 'var', transform = '.*/aa${1:/upcase}/i' } })
+  eq(parse('${var/xx(yy)/${0:aaa}/i}'),     { { var = 'var', transform = { 'xx(yy)', '${0:aaa}', 'i' } } })
+
+  eq(parse('${var/.*/${1}/i}'),             { { var = 'var', transform = { '.*', '${1}',             'i' } } })
+  eq(parse('${var/.*/$1/i}'),               { { var = 'var', transform = { '.*', '$1',               'i' } } })
+  eq(parse('${var/.*/$1/}'),                { { var = 'var', transform = { '.*', '$1',               ''  } } })
+  eq(parse('${var/.*//}'),                  { { var = 'var', transform = { '.*', '',                 ''  } } })
+  eq(parse('${var/.*/This-$1-encloses/i}'), { { var = 'var', transform = { '.*', 'This-$1-encloses', 'i' } } })
+  eq(parse('${var/.*/aa${1:else}/i}'),      { { var = 'var', transform = { '.*', 'aa${1:else}',      'i' } } })
+  eq(parse('${var/.*/aa${1:-else}/i}'),     { { var = 'var', transform = { '.*', 'aa${1:-else}',     'i' } } })
+  eq(parse('${var/.*/aa${1:+if}/i}'),       { { var = 'var', transform = { '.*', 'aa${1:+if}',       'i' } } })
+  eq(parse('${var/.*/aa${1:?if:else}/i}'),  { { var = 'var', transform = { '.*', 'aa${1:?if:else}',  'i' } } })
+  eq(parse('${var/.*/aa${1:/upcase}/i}'),   { { var = 'var', transform = { '.*', 'aa${1:/upcase}',   'i' } } })
 
   -- Tricky transform strings
-  eq(parse('${var///}'),                { { var = 'var', transform = '//' } })
-  eq(parse([[${var/.*/$\//i}]]),        { { var = 'var', transform = [[.*/$\//i]] } })
-  eq(parse('${var/.*/$${}/i}'),         { { var = 'var', transform = '.*/$${}/i' } }) -- `${}` directly after `$`
-  eq(parse('${var/.*/${a/}/i}'),        { { var = 'var', transform = '.*/${a/}/i' } }) -- `/` inside a proper `${...}`
-  eq(parse([[${var/.*/$\x/i}]]),        { { var = 'var', transform = [[.*/$\x/i]] } }) -- `/` after both dollar and backslash
-  eq(parse([[${var/.*/\$x/i}]]),        { { var = 'var', transform = [[.*/\$x/i]] } }) -- `/` after both dollar and backslash
-  eq(parse([[${var/.*/\${x/i}]]),       { { var = 'var', transform = [[.*/\${x/i]] } }) -- `/` after not proper `${`
-  eq(parse([[${var/.*/$\{x/i}]]),       { { var = 'var', transform = [[.*/$\{x/i]] } }) -- `/` after not proper `${`
-  eq(parse('${var/.*/a$/i}'),           { { var = 'var', transform = '.*/a$/i' } }) -- `/` directly after dollar
-  eq(parse('${var/.*/${1:?${}:aa}/i}'), { { var = 'var', transform = '.*/${1:?${}:aa}/i' } }) -- `}` inside `format`
+  eq(parse('${var///}'),                { { var = 'var', transform = { '', '', '' } } })
+
+  eq(parse([[${var/.*/$\//i}]]),        { { var = 'var', transform = { '.*', [[$\/]],        'i' } } })
+  eq(parse('${var/.*/$${}/i}'),         { { var = 'var', transform = { '.*', '$${}',         'i' } } }) -- `${}` directly after `$`
+  eq(parse('${var/.*/${a/}/i}'),        { { var = 'var', transform = { '.*', '${a/}',        'i' } } }) -- `/` inside a proper `${...}`
+  eq(parse([[${var/.*/$\x/i}]]),        { { var = 'var', transform = { '.*', [[$\x]],        'i' } } }) -- `/` after both dollar and backslash
+  eq(parse([[${var/.*/\$x/i}]]),        { { var = 'var', transform = { '.*', [[\$x]],        'i' } } }) -- `/` after both dollar and backslash
+  eq(parse([[${var/.*/\${x/i}]]),       { { var = 'var', transform = { '.*', [[\${x]],       'i' } } }) -- `/` after not proper `${`
+  eq(parse([[${var/.*/$\{x/i}]]),       { { var = 'var', transform = { '.*', [[$\{x]],       'i' } } }) -- `/` after not proper `${`
+  eq(parse('${var/.*/a$/i}'),           { { var = 'var', transform = { '.*', 'a$',           'i' } } }) -- `/` directly after dollar
+  eq(parse('${var/.*/${1:?${}:aa}/i}'), { { var = 'var', transform = { '.*', '${1:?${}:aa}', 'i' } } }) -- `}` inside `format`
 
   -- Escaped (should ignore `\` before `$/\` and treat as text)
-  eq(parse([[${var/.*/\/a\/a\//g}]]),                { { var = 'var', transform = [[.*/\/a\/a\//g]] } })
+  eq(parse([[${var/.*/\/a\/a\//g}]]),                { { var = 'var', transform = { '.*', [[\/a\/a\/]], 'g' } } })
 
   -- - Known limitation of needing to escape `}` in `if` of `${1:?if:else}`
-  eq(parse([[${var/.*/${1:?if\}:else/i}/options}]]),                { { var = 'var', transform = [[.*/${1:?if\}:else/i}/options]] } })
-  expect.no_equality(parse([[${var/.*/${1:?if}:else/i}/options}]]), { { var = 'var', transform = [[.*/${1:?if}:else/i}/options]] } }) -- this is bad
+  eq(parse([[${var/.*/${1:?if\}:else/i}/options}]]),                { { var = 'var', transform = { '.*', [[${1:?if\}:else/i}]], 'options' } } })
+  expect.no_equality(parse([[${var/.*/${1:?if}:else/i}/options}]]), { { var = 'var', transform = { '.*', [[${1:?if}:else/i}]],  'options' } } }) -- this is bad
 
-  eq(parse([[${var/.*/\\aa/g}]]),  { { var = 'var', transform = [[.*/\\aa/g]] } })
-  eq(parse([[${var/.*/\$1aa/g}]]), { { var = 'var', transform = [[.*/\$1aa/g]] } })
+  eq(parse([[${var/.*/\\aa/g}]]),  { { var = 'var', transform = { '.*', [[\\aa]],  'g' } } })
+  eq(parse([[${var/.*/\$1aa/g}]]), { { var = 'var', transform = { '.*', [[\$1aa]], 'g' } } })
 
   -- - Should handle escaped `/` in regex
-  eq(parse([[${var/\/re\/gex\//aa/}]]), { { var = 'var', transform = [[\/re\/gex\//aa/]] } })
+  eq(parse([[${var/\/re\/gex\//aa/}]]), { { var = 'var', transform = { [[\/re\/gex\/]], 'aa', '' } } })
 
   -- Should be allowed in tabstop nodes
-  eq(parse('${1/.*/${0:aaa}/i} xx'),      { { tabstop = '1', transform = '.*/${0:aaa}/i' }, { text = ' xx' } })
-  eq(parse('${1/.*/${1}/i}'),             { { tabstop = '1', transform = '.*/${1}/i' } })
-  eq(parse('${1/.*/$1/i}'),               { { tabstop = '1', transform = '.*/$1/i' } })
-  eq(parse('${1/.*/$1/}'),                { { tabstop = '1', transform = '.*/$1/' } })
-  eq(parse('${1/.*//}'),                  { { tabstop = '1', transform = '.*//' } })
-  eq(parse('${1/.*/This-$1-encloses/i}'), { { tabstop = '1', transform = '.*/This-$1-encloses/i' } })
-  eq(parse('${1/.*/aa${1:else}/i}'),      { { tabstop = '1', transform = '.*/aa${1:else}/i' } })
-  eq(parse('${1/.*/aa${1:-else}/i}'),     { { tabstop = '1', transform = '.*/aa${1:-else}/i' } })
-  eq(parse('${1/.*/aa${1:+if}/i}'),       { { tabstop = '1', transform = '.*/aa${1:+if}/i' } })
-  eq(parse('${1/.*/aa${1:?if:else}/i}'),  { { tabstop = '1', transform = '.*/aa${1:?if:else}/i' } })
-  eq(parse('${1/.*/aa${1:/upcase}/i}'),   { { tabstop = '1', transform = '.*/aa${1:/upcase}/i' } })
+  eq(parse('${1/.*/${0:aaa}/i} xx'),      { { tabstop = '1', transform = { '.*', '${0:aaa}', 'i' } }, { text = ' xx' } })
+  eq(parse('${1/.*/${1}/i}'),             { { tabstop = '1', transform = { '.*', '${1}', 'i' } } })
+  eq(parse('${1/.*/$1/i}'),               { { tabstop = '1', transform = { '.*', '$1', 'i' } } })
+  eq(parse('${1/.*/$1/}'),                { { tabstop = '1', transform = { '.*', '$1', '' } } })
+  eq(parse('${1/.*//}'),                  { { tabstop = '1', transform = { '.*', '', '' } } })
+  eq(parse('${1/.*/This-$1-encloses/i}'), { { tabstop = '1', transform = { '.*', 'This-$1-encloses', 'i' } } })
+  eq(parse('${1/.*/aa${1:else}/i}'),      { { tabstop = '1', transform = { '.*', 'aa${1:else}', 'i' } } })
+  eq(parse('${1/.*/aa${1:-else}/i}'),     { { tabstop = '1', transform = { '.*', 'aa${1:-else}', 'i' } } })
+  eq(parse('${1/.*/aa${1:+if}/i}'),       { { tabstop = '1', transform = { '.*', 'aa${1:+if}', 'i' } } })
+  eq(parse('${1/.*/aa${1:?if:else}/i}'),  { { tabstop = '1', transform = { '.*', 'aa${1:?if:else}', 'i' } } })
+  eq(parse('${1/.*/aa${1:/upcase}/i}'),   { { tabstop = '1', transform = { '.*', 'aa${1:/upcase}', 'i' } } })
 end
 
 --stylua: ignore
 T['_parse()']['tricky'] = function()
   eq(parse('${1:${aa:${1}}}'),                          { { tabstop = '1', placeholder = { { var = 'aa', placeholder = { { tabstop = '1' } } } } } })
   eq(parse('${1:${aa:bb$1cc}}'),                        { { tabstop = '1', placeholder = { { var = 'aa', placeholder = { { text = 'bb' }, { tabstop = '1' }, { text = 'cc' } } } } } })
-  eq(parse([[${TM_DIRECTORY/.*src[\/](.*)/$1/}]]),      { { var = 'TM_DIRECTORY', transform = [[.*src[\/](.*)/$1/]] } })
-  eq(parse('${aa/(void$)|(.+)/${1:?-\treturn nil;}/}'), { { var = 'aa', transform = '(void$)|(.+)/${1:?-\treturn nil;}/' } })
+  eq(parse([[${TM_DIRECTORY/.*src[\/](.*)/$1/}]]),      { { var = 'TM_DIRECTORY', transform = { [[.*src[\/](.*)]], '$1', '' } } })
+  eq(parse('${aa/(void$)|(.+)/${1:?-\treturn nil;}/}'), { { var = 'aa', transform = { '(void$)|(.+)', '${1:?-\treturn nil;}', '' } } })
 
   eq(
     parse('${3:nest1 ${1:nest2 ${2:nest3}}} $3'),
