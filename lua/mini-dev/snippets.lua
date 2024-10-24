@@ -86,6 +86,7 @@
 ---
 --- - Expand, navigate, and edit snippet in a configurable manner:
 ---     - Works inside comments by preserving comment leader on new lines.
+---     - Allows nested sessions (expand another snippet when there is one active).
 ---
 --- See |MiniSnippets-examples| for common configuration examples.
 ---
@@ -162,6 +163,14 @@
 
 --- # Snippet syntax specification ~
 ---@tag MiniSnippets-syntax-specification
+
+--- # Events ~
+---
+--- - `MiniSnippetsSessionStart`.
+--- - `MiniSnippetsSessionStop`.
+--- - `MiniSnippetsSessionSuspend`.
+--- - `MiniSnippetsSessionResume`.
+---@tag MiniSnippets-events
 
 --- # Mappings ~
 ---
@@ -562,30 +571,43 @@ end
 MiniSnippets.default_expand = function(snippet, opts)
   -- TODO
   return vim.snippet.expand(snippet.body)
+
+  -- H.expand(snippet, opts)
 end
 
 --- Work with snippet session from |MiniSnippets.default_expand()|
 MiniSnippets.session = {}
 
 MiniSnippets.session.get = function()
-  if H.current_session == nil then return end
+  local session = H.get_current_session()
+  if session == nil then return end
   return {
-    buf_id = H.current_session.buf_id,
-    expand_opts = vim.deepcopy(H.current_session.expand_opts),
-    nodes = vim.deepcopy(H.current_session.nodes),
-    snippet = vim.deepcopy(H.current_session.snippet),
+    buf_id = session.buf_id,
+    expand_opts = vim.deepcopy(session.expand_opts),
+    nodes = vim.deepcopy(session.nodes),
+    ns_id = H.ns_id.tabstops,
+    extmark_id = session.extmark_id,
+    snippet = vim.deepcopy(session.snippet),
   }
 end
 
 MiniSnippets.session.jump = function(direction)
-  if H.current_session == nil then return end
   if not (direction == 'prev' or direction == 'next') then H.error('`direction` should be one of "prev", "next"') end
-  H.session_jump(H.current_session, direction)
+  H.session_jump(H.get_current_session(), direction)
 end
 
-MiniSnippets.session.stop = function()
-  if H.current_session == nil then return end
-  H.session_stop(H.current_session)
+---@param opts table|nil Options. Possible fields:
+---   - <all> `(boolean)` - whether to stop all nested sessions. Default: `false`.
+MiniSnippets.session.stop = function(opts)
+  H.session_deinit(H.get_current_session(), true)
+  H.sessions[#H.sessions] = nil
+
+  -- Either resume previous session or stop all suspended
+  if not (opts or {}).all then return H.session_init(H.get_current_session(), false) end
+  for i, session in ipairs(H.sessions) do
+    H.session_deinit(session, true)
+  end
+  H.sessions = {}
 end
 
 --- Parse snippet
@@ -676,8 +698,8 @@ H.ns_id = {
   tabstops = vim.api.nvim_create_namespace('MiniSnippetsTabstops'),
 }
 
--- Current snippet session from `default_expand`
-H.current_session = nil
+-- Array of current (nested) snippet sessions from `default_expand`
+H.sessions = nil
 
 -- Various cache
 H.cache = {
@@ -842,7 +864,7 @@ H.make_extended_expand = function(expand)
     local r = match.region
     if H.is_region(r) then
       if mode ~= 'i' then
-        -- Make position cursor after line end possible
+        -- Make possible positioning cursor after line end
         local cache_virtualedit = vim.wo.virtualedit
         vim.wo.virtualedit = 'onemore'
         vim.schedule(function() vim.wo.virtualedit = cache_virtualedit end)
@@ -1129,22 +1151,18 @@ H.expand = function(snippet, opts)
   -- Future `default_expand()`
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
-  local default_mappings = { jump_next = '<C-l>', jump_prev = '<C-h>', stop = '<C-e>' }
   local default_empty_symbols = { tabstop = '@', tabstop_final = '!' }
-  local default_opts = { mappings = default_mappings, empty_symbols = default_empty_symbols, vars_lookup = {} }
+  local default_opts = { empty_symbols = default_empty_symbols, vars_lookup = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
   if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
 
-  if H.current_session ~= nil then
-    -- TODO: Decide what to do if there is an active current session
-    -- H.current_session.stop()
-    -- or maybe nest?
-  end
-
+  -- Create and initialize session
   local session = H.session_new(snippet, opts)
-  H.session_init(session)
+  H.session_init(session, true)
   return session -- Temporary for testing
 end
+
+H.get_current_session = function() return H.sessions[#H.sessions] end
 
 H.session_new = function(snippet, opts)
   local nodes = MiniSnippets._parse(snippet.body, { resolve_vars = opts.vars_lookup })
@@ -1166,36 +1184,44 @@ H.session_new = function(snippet, opts)
   }
 end
 
-H.session_init = function(session, pos)
-  local indent = H.get_indent(pos[1])
+H.session_init = function(session, full)
+  if session == nil then return end
 
-  -- TODO: Place all text starting at position `pos` and respecting indent
-
-  -- TODO: Add extmarks for tabstops
+  -- Set text for first-time-initialized session (i.e. not if resuming)
+  if full then
+    local pos = { vim.fn.line('.'), vim.fn.col('.') }
+    local indent = H.get_indent(pos[1])
+    session.extmark_id = H.set_nodes_text(session.nodes, pos, indent)
+  end
 
   -- Start session only if there are tabstops
   if session.current_tabstop == nil then return end
 
-  -- TODO: Set tracking autocommands:
+  if full then
+    H.session_deinit(H.get_current_session(), false)
+    table.insert(H.sessions, session)
+  end
+
+  -- TODO: Set tracking behavior:
+  session.augroup_id = vim.api.nvim_create_augroup('MiniSnippetsSession' .. #H.sessions, { clear = true })
   -- - Update linked tabstops.
-  -- - Automatically stop session: `ModeChanged *:n` and if typing something
+  -- - Automatically stop session: typing something or exiting in Normal mode
   --   with `$0` being current node.
 
+  -- Set focus on current tabstop
   H.session_focus_tabstop(session, session.current_tabstop)
-  H.current_session = session
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniSnippetsSessionStart' })
+
+  -- Trigger proper event
+  local pattern = 'MiniSnippetsSession' .. (full and 'Start' or 'Resume')
+  vim.api.nvim_exec_autocmds('User', { pattern = pattern })
 end
 
 H.session_focus_tabstop = function(session, id)
-  if session.current_tabstop ~= nil then
-    -- TODO: Change highlighting of nodes for current tabstop from
-    -- 'MiniSnippetsCurrent' to 'MiniSnippetsVisited'
-  end
+  -- TODO: Highlight nodes for current tabstop with 'MiniSnippetsVisited'
 
   session.current_tabstop = id
 
-  -- TODO: Change highlighting of nodes for new tabstop from
-  -- 'MiniSnippetsPlaceholder' to 'MiniSnippetsCurrent'
+  -- TODO: Highlight nodes for current tabstop with 'MiniSnippetsCurrent'
 
   -- TODO: Focus cursor on the first node of the new tabstop (probably,
   -- position of node's extmark)
@@ -1208,16 +1234,30 @@ H.session_focus_tabstop = function(session, id)
 end
 
 H.session_jump = function(session, direction)
+  if session == nil then return end
   local new_tabstop = session.tabstops[session.current_tabstop][direction]
   if session.current_tabstop == new_tabstop then return end
   session.focus_tabstop(new_tabstop)
 end
 
-H.session_stop = function(session)
-  -- TODO: Decide whether to allow nested sessions?
-  vim.api.nvim_buf_clear_namespace(session.buf_id, H.ns_id.tabstops, 0, -1)
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniSnippetsSessionStop' })
-  H.current_session = nil
+H.session_deinit = function(session, full)
+  if session == nil then return end
+
+  -- Stop current session tracking
+  vim.api.nvim_del_augroup_by_id(session.augroup_id)
+
+  -- TODO: for all extmarks in session nodes:
+  -- - Delete it if full deinit.
+  -- - Stop its highlighting (set `hl_group = nil`) otherwise.
+
+  -- Trigger proper event
+  local pattern = 'MiniSnippetsSession' .. (full and 'Stop' or 'Suspend')
+  vim.api.nvim_exec_autocmds('User', { pattern = pattern })
+end
+
+H.set_nodes_text = function(nodes, pos, indent)
+  -- TODO: Place all text starting at position `pos` and respecting indent
+  -- In caseof placeholders recurse into them.
 end
 
 H.compute_tabstop_order = function(nodes)
@@ -1241,21 +1281,21 @@ H.compute_tabstop_order = function(nodes)
 end
 
 -- Extmarks -------------------------------------------------------------------
-H.extmark_get = function(ext_id)
-  local data = vim.api.nvim_buf_get_extmark_by_id(0, H.ns_id.tabstops, ext_id, { details = true })
+H.extmark_get = function(ns_id, ext_id)
+  local data = vim.api.nvim_buf_get_extmark_by_id(0, ns_id, ext_id, { details = true })
   data[3].id, data[3].ns_id = ext_id, nil
   return data[1], data[2], data[3]
 end
 
-H.extmark_set_gravity = function(ext_id, gravity)
-  local line, col, opts = H.extmark_get(ext_id)
+H.extmark_set_gravity = function(ns_id, ext_id, gravity)
+  local line, col, opts = H.extmark_get(ns_id, ext_id)
   opts.right_gravity, opts.end_right_gravity = gravity == 'right', gravity ~= 'left'
-  vim.api.nvim_buf_set_extmark(0, H.ns_id.tabstops, line, col, opts)
+  vim.api.nvim_buf_set_extmark(0, ns_id, line, col, opts)
 end
 
 --stlua: ignore
-H.extmark_set_text = function(ext_id, side, text)
-  local start_row, start_col, opts = H.extmark_get(ext_id)
+H.extmark_set_text = function(ns_id, ext_id, side, text)
+  local start_row, start_col, opts = H.extmark_get(ns_id, ext_id)
   local end_row, end_col = opts.end_row, opts.end_col
   if side == 'left' then
     end_row, end_col = start_row, start_col
