@@ -43,16 +43,16 @@ later(function()
   })
 
   -- Temporarily use `vim.snippet` as expansion engine
-  local match_or_jump_next = function()
+  local jump_next = function()
     if vim.snippet.active({ direction = 1 }) then return vim.snippet.jump(1) end
-    MiniSnippets.match()
   end
   local jump_prev = function()
     if vim.snippet.active({ direction = -1 }) then vim.snippet.jump(-1) end
   end
-  vim.keymap.set({ 'i', 's', 'x' }, '<C-l>', match_or_jump_next)
+  vim.keymap.set('i', '<C-j>', '<Cmd>lua MiniSnippets.match()<CR>')
+  vim.keymap.set('i', '<C-g><C-j>', '<Cmd>lua MiniSnippets.match({ find = false, ask = "always" })<CR>')
+  vim.keymap.set({ 'i', 's' }, '<C-l>', jump_next)
   vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
-  vim.keymap.set('i', '<C-g><C-l>', '<Cmd>lua MiniSnippets.match({ find = false, ask = "always" })<CR>')
 end)
 
 later(function() add('rafamadriz/friendly-snippets') end)
