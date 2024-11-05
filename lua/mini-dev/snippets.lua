@@ -47,10 +47,10 @@
 -- Tests:
 -- - Management:
 --     - `cache = false` should not write to cache (to possibly save memory).
---     - `gen_loader.from_filetype()` results in preferring snippets:
+--     - `gen_loader.from_lang()` results in preferring snippets:
 --         - From exact file over ancestor.
 --         - From .lua over .json.
---     - `gen_loader.from_filetype()` processes pattern array in order.
+--     - `gen_loader.from_lang()` processes `lang_patterns` array in order.
 --       Resulting in preferring later ones over earlier.
 --
 -- - Match:
@@ -83,6 +83,7 @@
 ---   See |MiniSnippets.gen_loader|.
 ---
 --- - Match which snippet to expand based on the currently typed text.
+---   Supports matches depending on tree-sitter local languages.
 ---
 --- - Expand, navigate, and edit snippet in a configurable manner:
 ---     - Works inside comments by preserving comment leader on new lines.
@@ -185,7 +186,7 @@
 --- - Override certain files. Create `vim.b.minisnippets_config` with
 ---   `snippets = { MiniSnippets.gen_loader.from_file('path/to/file') }`.
 --- - How to imitate <scope> field in snippet data. Put snippet separately in
----   different dedicated files and use |MiniSnippets.gen_loader.from_filetype()|.
+---   different dedicated files and use |MiniSnippets.gen_loader.from_lang()|.
 ---@tag MiniSnippets-examples
 
 ---@alias __minisnippets_cache_opt <cache> `(boolean)` - whether to use cached output. Default: `true`.
@@ -331,13 +332,13 @@ MiniSnippets.match = function(opts)
   if not H.is_position(pos) then H.error('`opts.pos` should be table with numeric `line` and `col` fields') end
 
   -- Match
-  local all_snippets = vim.deepcopy(H.get_buf_snippets())
+  local all_snippets = vim.deepcopy(H.get_context_snippets(pos))
   local matches = find == false and all_snippets or find(all_snippets, pos)
   if not H.is_array_of(matches, H.is_snippet) then H.error('`find` returned not an array of snippets') end
 
   -- Act
   if expand == false then return matches end
-  if #all_snippets == 0 then return H.notify('There are no buffer snippets', 'WARN') end
+  if #all_snippets == 0 then return H.notify('There are no snippets in given context', 'WARN') end
   if #matches == 0 then return H.notify('There are no matches', 'WARN') end
 
   local expand_ext = H.make_extended_expand(expand)
@@ -362,40 +363,40 @@ end
 MiniSnippets.gen_loader = {}
 
 ---@param opts table|nil Options. Possible values:
----   - <ft_patterns> `(table)` - map from filetype to array of runtime patterns
+---   - <lang_patterns> `(table)` - map from language to array of runtime patterns
 ---     used to find snippet files. Patterns will be processed in order, so
 ---     snippets from reading later patterns will override earlier ones.
----     If non-empty filetype is absent, the default one is constructed:
----     searches for "json" and "lua" files that are inside directory named as
----     filetype (however deep) or are named as filetype.
----     Example for "lua" filetype: `{ 'lua/**.{json,lua}', 'lua.{json,lua}' }`.
+---     The default pattern array (for non-empty language) is constructed as
+---     to: search for "json" and "lua" files that are inside directory named
+---     as language (however deep) or are named as language.
+---     Example for "lua" language: `{ 'lua/**.{json,lua}', 'lua.{json,lua}' }`.
 ---   - __minisnippets_cache_opt
 ---   - __minisnippets_silent_opt
 ---
 ---@return __minisnippets_loader_return
-MiniSnippets.gen_loader.from_filetype = function(opts)
-  opts = vim.tbl_extend('force', { ft_patterns = {}, cache = true, silent = false }, opts or {})
-  for ft, tbl in pairs(opts.ft_patterns) do
-    if type(ft) ~= 'string' then H.error('Keys of `opts.ft_patterns` should be string filetype names') end
-    if not H.is_array_of(tbl, H.is_string) then H.error('Keys of `opts.ft_patterns` should be string arrays') end
+MiniSnippets.gen_loader.from_lang = function(opts)
+  opts = vim.tbl_extend('force', { lang_patterns = {}, cache = true, silent = false }, opts or {})
+  for lang, tbl in pairs(opts.lang_patterns) do
+    if type(lang) ~= 'string' then H.error('Keys of `opts.lang_patterns` should be string language names') end
+    if not H.is_array_of(tbl, H.is_string) then H.error('Keys of `opts.lang_patterns` should be string arrays') end
   end
 
   local cache, read_opts = opts.cache, { cache = opts.cache, silent = opts.silent }
   local read = function(p) return MiniSnippets.read_file(p, read_opts) end
-  return function()
-    local ft = vim.bo.filetype
-    if cache and H.cache.filetype[ft] ~= nil then return vim.deepcopy(H.cache.filetype[ft]) end
+  return function(context)
+    local lang = context.lang
+    if cache and H.cache.lang[lang] ~= nil then return vim.deepcopy(H.cache.lang[lang]) end
 
-    local patterns = opts.ft_patterns[ft]
-    if patterns == nil and ft == '' then return end
-    patterns = patterns or { ft .. '/**.{json,lua}', ft .. '.{json,lua}' }
+    local patterns = opts.lang_patterns[lang]
+    if patterns == nil and lang == '' then return end
+    patterns = patterns or { lang .. '/**.{json,lua}', lang .. '.{json,lua}' }
     patterns = vim.tbl_map(function(p) return 'snippets/' .. p end, patterns)
 
     local res = {}
     for _, pattern in ipairs(patterns) do
       table.insert(res, vim.tbl_map(read, vim.api.nvim_get_runtime_file(pattern, true)))
     end
-    if cache then H.cache.filetype[ft] = vim.deepcopy(res) end
+    if cache then H.cache.lang[lang] = vim.deepcopy(res) end
     return res
   end
 end
@@ -568,6 +569,7 @@ MiniSnippets.default_select = function(snippets, expand, opts)
   vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
 end
 
+--- Press `<C-c>` in Insert mode to stop active session (and stay in Insert mode).
 MiniSnippets.default_expand = function(snippet, opts)
   -- TODO
   return vim.snippet.expand(snippet.body)
@@ -579,7 +581,7 @@ end
 MiniSnippets.session = {}
 
 MiniSnippets.session.get = function()
-  local session = H.get_current_session()
+  local session = H.get_active_session()
   if session == nil then return end
   return {
     buf_id = session.buf_id,
@@ -593,21 +595,21 @@ end
 
 MiniSnippets.session.jump = function(direction)
   if not (direction == 'prev' or direction == 'next') then H.error('`direction` should be one of "prev", "next"') end
-  H.session_jump(H.get_current_session(), direction)
+  H.session_jump(H.get_active_session(), direction)
 end
 
----@param opts table|nil Options. Possible fields:
----   - <all> `(boolean)` - whether to stop all nested sessions. Default: `false`.
-MiniSnippets.session.stop = function(opts)
-  H.session_deinit(H.get_current_session(), true)
+--- Stop active session
+---
+--- To ensure that all nested sessions are stopped, use this: >lua
+---
+---   while MiniSnippets.get_active_session() do
+---     MiniSnippets.stop()
+---   end
+--- <
+MiniSnippets.session.stop = function()
+  H.session_deinit(H.get_active_session(), true)
   H.sessions[#H.sessions] = nil
-
-  -- Either resume previous session or stop all suspended
-  if not (opts or {}).all then return H.session_init(H.get_current_session(), false) end
-  for i, session in ipairs(H.sessions) do
-    H.session_deinit(session, true)
-  end
-  H.sessions = {}
+  H.session_init(H.get_active_session(), false)
 end
 
 --- Parse snippet
@@ -704,11 +706,11 @@ H.sessions = nil
 -- Various cache
 H.cache = {
   -- Loaders output
-  filetype = {},
+  lang = {},
   runtime = {},
   file = {},
-  -- Buffer snippets
-  buf = {},
+  -- Snippets per context
+  context = {},
 }
 
 -- Helper functionality =======================================================
@@ -737,7 +739,7 @@ H.apply_config = function(config)
   MiniSnippets.config = config
 
   -- Reset loader cache
-  H.cache = { buf = {}, filetype = {}, runtime = {}, file = {} }
+  H.cache = { context = {}, lang = {}, runtime = {}, file = {} }
 end
 
 H.create_autocommands = function()
@@ -749,8 +751,8 @@ H.create_autocommands = function()
 
   au('ColorScheme', '*', H.create_default_hl, 'Ensure colors')
   -- Clear buffer cache: after `:edit` ('BufUnload') or after filetype has
-  -- changed ('FileType', useful with `gen_loader.from_filetype`)
-  au({ 'BufUnload', 'FileType' }, '*', function(args) H.cache.buf[args.buf] = nil end, 'Clear buffer cache')
+  -- changed ('FileType', useful with `gen_loader.from_lang`)
+  au({ 'BufUnload', 'FileType' }, '*', function(args) H.cache.context[args.buf] = nil end, 'Clear buffer cache')
 end
 
 --stylua: ignore
@@ -801,20 +803,46 @@ H.read_snippet_array = function(contents)
   return { snippets = res, problems = problems }
 end
 
--- Buffer snippets ------------------------------------------------------------
-H.get_buf_snippets = function()
-  local buf_id = vim.api.nvim_get_current_buf()
-  if H.cache.buf[buf_id] ~= nil then return H.cache.buf[buf_id] end
+-- Context snippets -----------------------------------------------------------
+H.get_context_snippets = function(pos)
+  local context = H.compute_context(pos)
+  local buf_cache = H.cache.context[context.buf_id] or {}
+  if buf_cache[context.lang] ~= nil then return buf_cache[context.lang] end
 
   local res, config_snippets = {}, H.get_config().snippets
-  H.traverse_config_snippets(config_snippets, res)
+  H.traverse_config_snippets(config_snippets, res, context)
   res = vim.tbl_values(res)
   table.sort(res, function(a, b) return a.prefix < b.prefix end)
-  H.cache.buf[buf_id] = res
+
+  buf_cache[context.lang] = res
+  H.cache.context[context.buf_id] = buf_cache
+
   return res
 end
 
-H.traverse_config_snippets = function(x, target)
+H.compute_context = function(pos)
+  local buf_id = vim.api.nvim_get_current_buf()
+  local lang = vim.bo[buf_id].filetype
+
+  -- TODO: Remove `opts.error` after compatibility with Neovim=0.11 is dropped
+  local has_parser, parser = pcall(vim.treesitter.get_parser, buf_id, nil, { error = false })
+  if not has_parser or parser == nil then return { buf_id = buf_id, lang = lang } end
+
+  -- Compute local TS language from the deepest parser covering position
+  local ref_range, res_level = { pos.line - 1, pos.col - 1, pos.line - 1, pos.col }, 0
+  local traverse
+  traverse = function(lang_tree, level)
+    if lang_tree:contains(ref_range) and level > res_level then lang = lang_tree:lang() or lang end
+    for _, child_lang_tree in pairs(lang_tree:children()) do
+      traverse(child_lang_tree, level + 1)
+    end
+  end
+  traverse(parser, 1)
+
+  return { buf_id = buf_id, lang = lang }
+end
+
+H.traverse_config_snippets = function(x, target, context)
   if H.is_snippet(x) then
     local prefix = x.prefix or ''
     prefix = type(prefix) == 'string' and { prefix } or prefix
@@ -835,11 +863,11 @@ H.traverse_config_snippets = function(x, target)
 
   if H.islist(x) then
     for _, v in ipairs(x) do
-      H.traverse_config_snippets(v, target)
+      H.traverse_config_snippets(v, target, context)
     end
   end
 
-  if vim.is_callable(x) then H.traverse_config_snippets(x(), target) end
+  if vim.is_callable(x) then H.traverse_config_snippets(x(context), target, context) end
 end
 
 -- Matching -------------------------------------------------------------------
@@ -1162,7 +1190,7 @@ H.expand = function(snippet, opts)
   return session -- Temporary for testing
 end
 
-H.get_current_session = function() return H.sessions[#H.sessions] end
+H.get_active_session = function() return H.sessions[#H.sessions] end
 
 H.session_new = function(snippet, opts)
   local nodes = MiniSnippets._parse(snippet.body, { resolve_vars = opts.vars_lookup })
@@ -1198,15 +1226,16 @@ H.session_init = function(session, full)
   if session.current_tabstop == nil then return end
 
   if full then
-    H.session_deinit(H.get_current_session(), false)
+    H.session_deinit(H.get_active_session(), false)
     table.insert(H.sessions, session)
   end
 
   -- TODO: Set tracking behavior:
   session.augroup_id = vim.api.nvim_create_augroup('MiniSnippetsSession' .. #H.sessions, { clear = true })
   -- - Update linked tabstops.
-  -- - Automatically stop session: typing something or exiting in Normal mode
-  --   with `$0` being current node.
+  -- - Automatically stop session after:
+  --   - Exit to Normal mode if $0 is current or all present nodes are visited.
+  --   - Typing something with $0 being current node.
 
   -- Set focus on current tabstop
   H.session_focus_tabstop(session, session.current_tabstop)
