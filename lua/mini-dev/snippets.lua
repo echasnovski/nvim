@@ -49,7 +49,7 @@
 --     - `cache = false` should not write to cache (to possibly save memory).
 --     - `gen_loader.from_lang()` results in preferring snippets:
 --         - From exact file over ancestor.
---         - From .lua over .json.
+--         - From .lua over .{json,code-snippets}.
 --     - `gen_loader.from_lang()` processes `lang_patterns` array in order.
 --       Resulting in preferring later ones over earlier.
 --
@@ -152,9 +152,9 @@
 --- # Snippet files specifications ~
 ---
 --- One of the following:
---- - File with .lua extension with code that returns a table of snippet data.
---- - File with .json extension which contains an object with snippet data as
----   values. This is compatible with 'rafamadriz/friendly-snippets'.
+--- - File with `lua` extension with code that returns a table of snippet data.
+--- - File with `json` or `code-snippets` extension which contains a JSON object with
+---   snippet data as values. This is 'rafamadriz/friendly-snippets' compatible.
 ---
 --- Suggested location is in "snippets" subdirectory of any path in 'runtimepath'.
 --- This is compatible with |MiniSnippets.gen_loader.from_runtime()|.
@@ -202,9 +202,15 @@
 MiniSnippets = {}
 H = {}
 
--- Set useful snippets for easier local development
--- TODO: remove when not needed
--- vim.schedule(function() MiniSnippets.config.snippets = { MiniSnippets.gen_loader.from_filetype() } end)
+-- -- Set useful snippets for easier local development
+-- -- TODO: remove when not needed
+-- vim.schedule(function()
+--   local lang_patterns = { tex = { 'latex.json' }, plaintex = { 'latex.json' } }
+--   MiniSnippets.config.snippets = {
+--     MiniSnippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
+--     MiniSnippets.gen_loader.from_file('~/.config/nvim/snippets/global.code-snippets'),
+--   }
+-- end)
 
 --- Module setup
 ---
@@ -299,7 +305,7 @@ MiniSnippets.config = {
 ---   was an output of `match.find`. Otherwise `nil`.
 ---
 ---@usage >lua
----   -- Find and expand the best match (if any)
+---   -- Find and force expand the best match (if any)
 ---   MiniSnippets.match({ select = false })
 ---
 ---   -- Show all buffer snippets and select one to expand
@@ -460,8 +466,8 @@ MiniSnippets.read_file = function(path, opts)
     return H.notify('Path ' .. path .. ' is not a readable file on disk.', 'WARN', opts.silent)
   end
   local ext = path:match('%.([^%.]+)$')
-  if ext == nil or not (ext == 'lua' or ext == 'json') then
-    return H.notify('Path ' .. path .. ' is neither .lua nor .json', 'WARN', opts.silent)
+  if ext == nil or not (ext == 'lua' or ext == 'json' or ext == 'code-snippets') then
+    return H.notify('File does not contain a supported extension: ' .. path, 'WARN', opts.silent)
   end
 
   local res = H.file_readers[ext](path, opts.silent)
@@ -587,7 +593,7 @@ MiniSnippets.session.get = function()
     buf_id = session.buf_id,
     expand_opts = vim.deepcopy(session.expand_opts),
     nodes = vim.deepcopy(session.nodes),
-    ns_id = H.ns_id.tabstops,
+    ns_id = session.ns_id,
     extmark_id = session.extmark_id,
     snippet = vim.deepcopy(session.snippet),
   }
@@ -697,7 +703,7 @@ H.default_config = vim.deepcopy(MiniSnippets.config)
 
 -- Namespaces for extmarks
 H.ns_id = {
-  tabstops = vim.api.nvim_create_namespace('MiniSnippetsTabstops'),
+  nodes = vim.api.nvim_create_namespace('MiniSnippetsNodes'),
 }
 
 -- Array of current (nested) snippet sessions from `default_expand`
@@ -790,11 +796,14 @@ H.file_readers.json = function(path, silent)
   return H.read_snippet_array(contents)
 end
 
+H.file_readers['code-snippets'] = H.file_readers.json
+
 H.read_snippet_array = function(contents)
   local res, problems = {}, {}
   for name, t in pairs(contents) do
     if H.is_snippet(t) then
       t.desc = t.desc or t.description or (type(name) == 'string' and name or nil)
+      t.description = nil
       table.insert(res, t)
     else
       table.insert(problems, 'The following is not a valid snippet data:\n' .. vim.inspect(t))
@@ -1100,7 +1109,7 @@ H.parse_resolve_vars = function(nodes, lookup)
     if node.var ~= nil then
       -- NOTE: purposefully ignore transformations
       local var_value = H.parse_eval_var(node.var, lookup)
-      new = var_value ~= true and { { text = var_value } } or (node.placeholder or { { text = '' } })
+      new = var_value == -1 and (node.placeholder or { { text = '' } }) or { { text = var_value } }
     end
     vim.list_extend(new_nodes, new)
   end
@@ -1115,8 +1124,8 @@ H.parse_eval_var = function(var, lookup)
   -- Evaluate variable
   local value
   if H.var_evaluators[var] ~= nil then value = H.var_evaluators[var]() end
-  -- - Fall back to environment variable or `true` to not evaluate twice
-  if value == nil then value = vim.loop.os_getenv(var) or true end
+  -- - Fall back to environment variable or `-1` to not evaluate twice
+  if value == nil then value = vim.loop.os_getenv(var) or -1 end
 
   -- Skip caching random variables (to allow several different in one snippet)
   if not (var == 'RANDOM' or var == 'RANDOM_HEX' or var == 'UUID') then lookup[var] = value end
@@ -1176,7 +1185,6 @@ H.var_evaluators = {
 
 -- Expand ---------------------------------------------------------------------
 H.expand = function(snippet, opts)
-  -- Future `default_expand()`
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
   local default_empty_symbols = { tabstop = '@', tabstop_final = '!' }
@@ -1195,7 +1203,7 @@ H.get_active_session = function() return H.sessions[#H.sessions] end
 H.session_new = function(snippet, opts)
   local nodes = MiniSnippets._parse(snippet.body, { resolve_vars = opts.vars_lookup })
 
-  -- Compute all present tabstops in session traverse order and index reverse
+  -- Compute all present tabstops in session traverse order
   local taborder = H.compute_tabstop_order(nodes)
   local tabstops = {}
   for i, id in ipairs(tabstops) do
@@ -1219,12 +1227,12 @@ H.session_init = function(session, full)
   if full then
     local pos = { vim.fn.line('.'), vim.fn.col('.') }
     local indent = H.get_indent(pos[1])
+    session.ns_id = H.ns_id.nodes
     session.extmark_id = H.set_nodes_text(session.nodes, pos, indent)
   end
 
-  -- Start session only if there are tabstops
-  if session.current_tabstop == nil then return end
-
+  -- Start new registered session (only if there are tabstops)
+  if session.current_tabstop == nil then return H.session_del_extmarks(session) end
   if full then
     H.session_deinit(H.get_active_session(), false)
     table.insert(H.sessions, session)
@@ -1275,9 +1283,11 @@ H.session_deinit = function(session, full)
   -- Stop current session tracking
   vim.api.nvim_del_augroup_by_id(session.augroup_id)
 
-  -- TODO: for all extmarks in session nodes:
-  -- - Delete it if full deinit.
-  -- - Stop its highlighting (set `hl_group = nil`) otherwise.
+  -- Delete or hide (make invisible) extmarks
+  local extmark_fun = full and H.extmark_del or H.extmark_hide
+  local buf_id, ns_id = session.buf_id, session.ns_id
+  extmark_fun(buf_id, ns_id, session.extmark_id)
+  H.traverse_nodes(session.nodes, function(n) extmark_fun(buf_id, ns_id, n.extmark_id) end)
 
   -- Trigger proper event
   local pattern = 'MiniSnippetsSession' .. (full and 'Stop' or 'Suspend')
@@ -1291,15 +1301,10 @@ end
 
 H.compute_tabstop_order = function(nodes)
   local tabstops_map, traverse_tabstops = {}, nil
-  traverse_tabstops = function(node_arr)
-    for _, n in ipairs(node_arr) do
-      if n.tabstop ~= nil then tabstops_map[n.tabstop] = true end
-      if n.placeholder ~= nil then traverse_tabstops(n.placeholder) end
-    end
-  end
-  traverse_tabstops(nodes)
+  H.traverse_nodes(nodes, function(n) tabstops_map[n.tabstop or true] = true end)
+  tabstops_map[true] = nil
 
-  -- - Order as numbers while allowing leading zeros. Put special `$0` last.
+  -- Order as numbers while allowing leading zeros. Put special `$0` last.
   local tabstops = vim.tbl_map(function(x) return { tonumber(x), x } end, vim.tbl_keys(tabstops_map))
   table.sort(tabstops, function(a, b)
     if a[2] == '0' then return false end
@@ -1309,22 +1314,42 @@ H.compute_tabstop_order = function(nodes)
   return vim.tbl_map(function(x) return x[2] end, tabstops)
 end
 
+H.traverse_nodes = function(nodes, f)
+  for i, n in ipairs(nodes) do
+    if n.placeholder ~= nil then n.placeholder = H.traverse_nodes(n.placeholder, f) end
+    local out = f(n)
+    if out ~= nil then nodes[i] = out end
+  end
+  return nodes
+end
+
 -- Extmarks -------------------------------------------------------------------
-H.extmark_get = function(ns_id, ext_id)
-  local data = vim.api.nvim_buf_get_extmark_by_id(0, ns_id, ext_id, { details = true })
+H.extmark_get = function(buf_id, ns_id, ext_id)
+  local data = vim.api.nvim_buf_get_extmark_by_id(buf_id, ns_id, ext_id, { details = true })
   data[3].id, data[3].ns_id = ext_id, nil
   return data[1], data[2], data[3]
 end
 
-H.extmark_set_gravity = function(ns_id, ext_id, gravity)
-  local line, col, opts = H.extmark_get(ns_id, ext_id)
+H.extmark_set = function(...) return vim.api.nvim_buf_set_extmark(...) end
+
+H.extmark_del = function(buf_id, ns_id, ext_id) vim.api.nvim_buf_del_extmark(buf_id, ns_id, ext_id or -1) end
+
+H.extmark_hide = function(buf_id, ns_id, ext_id)
+  if ext_id == nil then return end
+  local line, col, opts = H.extmark_get(buf_id, ns_id, ext_id)
+  opts.hl_group, opts.virt_text = nil, nil
+  H.extmark_set(buf_id, ns_id, line, col, opts)
+end
+
+H.extmark_set_gravity = function(buf_id, ns_id, ext_id, gravity)
+  local line, col, opts = H.extmark_get(buf_id, ns_id, ext_id)
   opts.right_gravity, opts.end_right_gravity = gravity == 'right', gravity ~= 'left'
-  vim.api.nvim_buf_set_extmark(0, ns_id, line, col, opts)
+  H.extmark_set(buf_id, ns_id, line, col, opts)
 end
 
 --stlua: ignore
-H.extmark_set_text = function(ns_id, ext_id, side, text)
-  local start_row, start_col, opts = H.extmark_get(ns_id, ext_id)
+H.extmark_set_text = function(buf_id, ns_id, ext_id, side, text)
+  local start_row, start_col, opts = H.extmark_get(buf_id, ns_id, ext_id)
   local end_row, end_col = opts.end_row, opts.end_col
   if side == 'left' then
     end_row, end_col = start_row, start_col
@@ -1332,7 +1357,7 @@ H.extmark_set_text = function(ns_id, ext_id, side, text)
   if side == 'right' then
     start_row, start_col = end_row, end_col
   end
-  vim.api.nvim_buf_set_text(0, start_row, start_col, end_row, end_col, text)
+  vim.api.nvim_buf_set_text(buf_id, start_row, start_col, end_row, end_col, text)
 end
 
 -- Indent ---------------------------------------------------------------------
@@ -1404,14 +1429,6 @@ H.is_array_of = function(x, predicate)
     if not predicate(x[i]) then return false end
   end
   return true
-end
-
-H.set_extmark = function(...) return vim.api.nvim_buf_set_extmark(...) end
-
-H.get_extmarks = function(...)
-  local ok, res = pcall(vim.api.nvim_buf_get_extmarks, ...)
-  if not ok then return {} end
-  return res
 end
 
 -- TODO: Remove after compatibility with Neovim=0.9 is dropped
