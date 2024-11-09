@@ -622,12 +622,18 @@ end
 ---
 ---@param snippet_body string|table Snippet body as string or array of strings.
 ---@param opts table|nil Options. Possible fields:
----   - <resolve_vars> `(boolean|table)` - whether to resolve variable nodes:
----     evaluate variable and use its value as text node. If no variable defined,
----     fall back to placeholder (empty string text node if none).
----     If table, used as variable value lookup.
+---   - <normalize> `(boolean)` - whether to normalize nodes:
+---     - Evaluate variable nodes and add output as a `text` field.
+---       If variable is not set, `text` field is `nil`.
+---       Values from `opts.lookup` are preferred over evaluation output.
+---       See |MiniSnippets-syntax-specification| for more info about variables.
+---     - Add `text` field for tabstops if it is present in `opts.lookup`.
+---     - Ensure every node contains exactly one of `text` or `placeholder` fields.
+---       If there are none, add default `placeholder` (one empty string text node).
+---       If there are both, remove `placeholder` field.
 ---     Default: `false`.
----     See |MiniSnippets-syntax-specification| for more info about variables.
+---   - <lookup> `(table)` - map from variable/tabstop (string) name to its value.
+---     Default: `{}`.
 ---
 ---@return table Array of nodes: tables with fields depending on node type:
 ---   - Text node:
@@ -637,17 +643,20 @@ end
 ---     - <placeholder> `(table|nil)` - array of nodes to be used as placeholder.
 ---     - <choices> `(table|nil)` - array of string choices.
 ---     - <transform> `(table|nil)` - array of transformation string parts.
----   - Variable node (can be present if `opts.resolve_vars` is not set):
----     - <var> `(string)` - name of a variable in variable node.
+---   - Variable node:
+---     - <var> `(string)` - variable name.
+---     - <text> `(string|nil)` - variable value.
 ---     - <placeholder> `(table|nil)` - array of nodes to be used as placeholder.
 ---     - <transform> `(table|nil)` - array of transformation string parts.
+---
+---@usage -- TODO
 ---@private
 MiniSnippets._parse = function(snippet_body, opts)
   -- TODO: Properly export after a long enough period of public testing
   if H.is_array_of(snippet_body, H.is_string) then snippet_body = table.concat(snippet_body, '\n') end
   if type(snippet_body) ~= 'string' then H.error('Snippet body should be string or array of strings') end
 
-  opts = vim.tbl_extend('force', { resolve_vars = false }, opts or {})
+  opts = vim.tbl_extend('force', { normalize = false, lookup = {} }, opts or {})
 
   -- Overall idea: implement a state machine which updates on every character.
   -- This leads to a bit spaghetti code, but doesn't require `vim.lpeg` DSL
@@ -676,20 +685,34 @@ MiniSnippets._parse = function(snippet_body, opts)
     processor(vim.fn.strcharpart(snippet_body, i, 1), state, node)
   end
 
+  -- Verify and post-process
   H.parse_verify(state)
   local nodes = H.parse_post_process(state.depth_arrays[1], state.name)
 
-  if opts.resolve_vars then
-    local lookup = type(opts.resolve_vars) == 'table' and vim.deepcopy(opts.resolve_vars) or {}
-    for k, v in pairs(lookup) do
-      lookup[k] = tostring(v)
-    end
-    -- Ensure proper random random variables
-    math.randomseed(vim.loop.hrtime())
-    nodes = H.parse_resolve_vars(nodes, lookup)
+  if not opts.normalize then return nodes end
+
+  -- Normalize
+  local lookup = {}
+  for key, val in pairs(opts.lookup) do
+    if type(key) == 'string' then lookup[key] = tostring(val) end
   end
 
-  return nodes
+  local normalize = function(n)
+    -- Evaluate variable
+    local var_value
+    if n.var ~= nil then var_value = H.parse_eval_var(n.var, lookup) end
+    if type(var_value) == 'string' then n.text = var_value end
+
+    -- Look up tabstop
+    if n.tabstop ~= nil then n.text = lookup[n.tabstop] end
+
+    -- Ensure text-or-placeholder
+    if n.text == nil and n.placeholder == nil then n.placeholder = { { text = '' } } end
+    if n.text ~= nil and n.placeholder ~= nil then n.placeholder = nil end
+  end
+  -- - Ensure proper random random variables
+  math.randomseed(vim.loop.hrtime())
+  return H.traverse_nodes(nodes, normalize)
 end
 
 --- Mock an LSP server for completion
@@ -1097,25 +1120,6 @@ H.parse_processors.transform_options = function(c, s, n)
   if c == '}' then return s:set_in(n.transform[3], #n.transform[3], nil):add_node({ text = {} }):set_name('text') end
 end
 
-H.parse_resolve_vars = function(nodes, lookup)
-  -- Construct new node array without variable nodes
-  local new_nodes = {}
-  for _, node in ipairs(nodes) do
-    -- Prepare (recursively) placeholders first to have proper array to inject
-    if node.placeholder then node.placeholder = H.parse_resolve_vars(node.placeholder, lookup) end
-
-    -- Construct
-    local new = { node }
-    if node.var ~= nil then
-      -- NOTE: purposefully ignore transformations
-      local var_value = H.parse_eval_var(node.var, lookup)
-      new = var_value == -1 and (node.placeholder or { { text = '' } }) or { { text = var_value } }
-    end
-    vim.list_extend(new_nodes, new)
-  end
-  return new_nodes
-end
-
 --stylua: ignore
 H.parse_eval_var = function(var, lookup)
   -- Always prefer using lookup
@@ -1201,7 +1205,7 @@ end
 H.get_active_session = function() return H.sessions[#H.sessions] end
 
 H.session_new = function(snippet, opts)
-  local nodes = MiniSnippets._parse(snippet.body, { resolve_vars = opts.vars_lookup })
+  local nodes = MiniSnippets._parse(snippet.body, { normalize = true, vars_lookup = opts.vars_lookup })
 
   -- Compute all present tabstops in session traverse order
   local taborder = H.compute_tabstop_order(nodes)

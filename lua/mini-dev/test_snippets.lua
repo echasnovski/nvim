@@ -459,9 +459,9 @@ T['_parse()']['tricky'] = function()
   )
 end
 
-T['_parse()']['respects `opts.resolve_vars`'] = function()
-  local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { resolve_vars = true }), ref_nodes) end
-  local is_win = helpers.is_windows()
+--stylua: ignore
+T['_parse()']['respects `opts.normalize`'] = function()
+  local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { normalize = true }), ref_nodes) end
 
   child.fn.setenv('AA', 'my-aa')
   child.fn.setenv('XX', 'my-xx')
@@ -469,46 +469,41 @@ T['_parse()']['respects `opts.resolve_vars`'] = function()
   -- as deleting it (at least until 2024-07-11 change which enables it)
   child.fn.setenv('EMPTY', '')
 
-  -- Resolve variables if `resolve_vars` is true-ish
-  validate('$AA', { { text = 'my-aa' } })
-  validate('${AA}', { { text = 'my-aa' } })
-  validate('$EMPTY', { { text = '' } })
+  -- Resolves variables
+  validate('$AA',   { { var = 'AA', text = 'my-aa' } })
+  validate('${AA}', { { var = 'AA', text = 'my-aa' } })
+  if not helpers.is_windows() then
+    validate('$EMPTY',            { { var = 'EMPTY', text = '' } })
+    validate('${EMPTY:fallback}', { { var = 'EMPTY', text = '' } })
+  end
 
-  -- Falls back to placeholder
-  validate('${BB:fallback}', { { text = 'fallback' } })
-  validate('aa${BB:_$1!}bb', { { text = 'aa' }, { text = '_' }, { tabstop = '1' }, { text = '!' }, { text = 'bb' } })
-  validate('$1${BB:xx}${2|uu,vv|}', { { tabstop = '1' }, { text = 'xx' }, { tabstop = '2', choices = { 'uu', 'vv' } } })
+  -- Ensures text-or-placeholder
+  validate('$1',         { { tabstop = '1', placeholder = { { text = '' } } } })
+  validate('${1}',       { { tabstop = '1', placeholder = { { text = '' } } } })
+  validate('${1:val}',   { { tabstop = '1', placeholder = { { text = 'val' } } } })
+  validate('${1/a/b/c}', { { tabstop = '1', placeholder = { { text = '' } }, transform = { 'a', 'b', 'c' } } })
+  validate('${1|u,v|}',  { { tabstop = '1', placeholder = { { text = '' } }, choices = { 'u', 'v' } } })
 
-  -- Should not use placeholder if variable is set
-  if not is_win then validate('${EMPTY:fallback}', { { text = '' } }) end
+  validate('$BB',         { { var = 'BB', placeholder = { { text = '' } } } })
+  validate('${BB}',       { { var = 'BB', placeholder = { { text = '' } } } })
+  validate('${BB:var}',   { { var = 'BB', placeholder = { { text = 'var' } } } })
+  validate('${BB/a/b/c}', { { var = 'BB', placeholder = { { text = '' } }, transform = { 'a', 'b', 'c' } } })
 
-  -- Preserves node if evaluation failed and no placeholder
-  validate('$BB', { { text = '' } })
-  validate('${BB}', { { text = '' } })
-  validate('aa${BB}bb', { { text = 'aa' }, { text = '' }, { text = 'bb' } })
-  validate('aa${BB}', { { text = 'aa' }, { text = '' } })
-  validate('${BB}bb', { { text = '' }, { text = 'bb' } })
-  validate('$1$BB${2|uu,vv|}', { { tabstop = '1' }, { text = '' }, { tabstop = '2', choices = { 'uu', 'vv' } } })
+  -- - Should be exclusive OR
+  validate('${AA:var}',       { { var = 'AA', text = 'my-aa' } })
+  validate('${AA:$1}',        { { var = 'AA', text = 'my-aa' } })
+  validate('${AA:$XX}',       { { var = 'AA', text = 'my-aa' } })
+  validate('${AA:${XX:var}}', { { var = 'AA', text = 'my-aa' } })
 
-  -- Resolves all variables (however deep)
-  validate('${XX}$AA$BB', { { text = 'my-xx' }, { text = 'my-aa' }, { text = '' } })
+  validate('aa', { { text = 'aa' } })
 
-  validate('${BB:$AA}', { { text = 'my-aa' } })
-  validate('${BB:${CC:$AA}}', { { text = 'my-aa' } })
+  -- Should normalize however deep
+  validate('${BB:$1}',       { { var = 'BB',    placeholder = { { tabstop = '1', placeholder = { { text = '' } } } } } })
+  validate('${BB:${1:$CC}}', { { var = 'BB',    placeholder = { { tabstop = '1', placeholder = { { var = 'CC', placeholder = { { text = '' } } } } } } } })
+  validate('${1:${BB:$CC}}', { { tabstop = '1', placeholder = { { var = 'BB',    placeholder = { { var = 'CC', placeholder = { { text = '' } } } } } } } })
 
-  validate('${BB:xx${AA}yy}', { { text = 'xx' }, { text = 'my-aa' }, { text = 'yy' } })
-  validate('${BB:xx${CC:yy$AA}}', { { text = 'xx' }, { text = 'yy' }, { text = 'my-aa' } })
-
-  -- Can resolve variables from user lookup
-  eq(parse('$BB', { resolve_vars = { BB = 'hello' } }), { { text = 'hello' } })
-  eq(parse('$BB', { resolve_vars = { BB = 1 } }), { { text = '1' } })
-
-  -- - Should prefer user lookup
-  eq(parse('$AA', { resolve_vars = { AA = 'other' } }), { { text = 'other' } })
-  eq(parse('$AA', { resolve_vars = { AA = '' } }), { { text = '' } })
-  eq(parse('$EMPTY', { resolve_vars = { EMPTY = 'not empty' } }), { { text = 'not empty' } })
-
-  eq(parse('$AA$XX', { resolve_vars = { AA = '!', XX = '?' } }), { { text = '!' }, { text = '?' } })
+  validate('${1:${AA:$XX}}', { { tabstop = '1', placeholder = { { var = 'AA',    text = 'my-aa' } } } })
+  validate('${1:${2:$AA}}',  { { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { var = 'AA', text = 'my-aa' } } } } } })
 
   -- Evaluates variable only once
   child.lua([[
@@ -519,18 +514,82 @@ T['_parse()']['respects `opts.resolve_vars`'] = function()
       return os_getenv_orig(...)
     end
   ]])
-  validate('${AA}${AA}${BB}${BB}', { { text = 'my-aa' }, { text = 'my-aa' }, { text = '' }, { text = '' } })
+  validate(
+    '${AA}${AA}${BB}${BB}',
+    {
+      { var = 'AA', text = 'my-aa' }, { var = 'AA', text = 'my-aa' },
+      { var = 'BB', placeholder = { { text = '' } } }, { var = 'BB', placeholder = { { text = '' } } },
+    }
+  )
   eq(child.lua_get('_G.log'), { { 'AA' }, { 'BB' } })
 
   -- - But not persistently
   child.fn.setenv('AA', '!')
   child.fn.setenv('BB', '?')
-  validate('${AA}${BB}', { { text = '!' }, { text = '?' } })
+  validate('${AA}${BB}', { { var = 'AA', text = '!' }, { var = 'BB', text = '?' } })
+end
+
+--stylua: ignore
+T['_parse()']['respects `opts.lookup`'] = function()
+  local validate = function(snippet_body, lookup, ref_nodes)
+    eq(parse(snippet_body, { normalize = true, lookup = lookup }), ref_nodes)
+  end
+
+  -- Can resolve variables from user lookup
+  validate('$BB', { BB = 'hello' }, { { var = 'BB', text = 'hello' } })
+  validate('$BB', { BB = 1 },       { { var = 'BB', text = '1' } })
+
+  -- Should use only string fields
+  eq(
+    child.lua_get('MiniSnippets._parse("$true", { normalize = true, lookup = { [true] = "x" } })'),
+    { { var = 'true', placeholder = { { text = '' } } } }
+  )
+  validate('$1', { [1] = 'x' }, { { tabstop = '1', placeholder = { { text = '' } } } })
+
+  -- - Should prefer user lookup
+  child.fn.setenv('AA', 'my-aa')
+  child.fn.setenv('XX', 'my-xx')
+  child.fn.setenv('EMPTY', '')
+
+  validate('$AA',    { AA = 'other' },        { { var = 'AA',    text = 'other' } })
+  validate('$AA',    { AA = '' },             { { var = 'AA',    text = '' } })
+  validate('$EMPTY', { EMPTY = 'not empty' }, { { var = 'EMPTY', text = 'not empty' } })
+
+  validate('$AA$XX', { AA = '!', XX = '?' }, { { var = 'AA', text = '!' }, { var = 'XX', text = '?' } })
+
+  -- Can resolve tabstops from user lookup
+  validate('$1',       { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' } })
+  validate('${1}',     { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' } })
+  validate('${1:var}', { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' } })
+
+  -- - Should resolve all tabstop entries
+  validate(
+    '$1$2$1',
+    { ['1'] = 'hello' },
+    {
+      { tabstop = '1', text = 'hello' },
+      { tabstop = '2', placeholder = { { text = '' } } },
+      { tabstop = '1', text = 'hello' },
+    }
+  )
+
+  validate('$0', { ['0'] = 'world' }, { { tabstop = '0', text = 'world' } })
+
+  -- - Should use tabstop as is
+  local lookup = { ['1'] = 'hello' }
+  local ref_nodes = { { tabstop = '01', placeholder = { { text = '' } } }, { tabstop = '1', text = 'hello' } }
+  validate('${01}${1}', lookup, ref_nodes)
+
+  -- - Should resolve on any depth
+  validate('${1:$2}',      { ['2'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } } })
+  validate('${1:${2:$3}}', { ['2'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } } })
+  validate('${1:${2:$3}}', { ['3'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { tabstop = '3', text = 'xx' } } } } } })
+  validate('${1:${2:$3}}', { ['2'] = 'xx', ['3'] = 'yy' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } } })
 end
 
 --stylua: ignore
 T['_parse()']['can resolve special variables'] = function()
-  local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { resolve_vars = true }), ref_nodes) end
+  local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { normalize = true }), ref_nodes) end
 
   local path = test_dir_absolute .. '/snippets/lua.json'
   child.cmd('edit ' .. child.fn.fnameescape(path))
@@ -554,16 +613,16 @@ T['_parse()']['can resolve special variables'] = function()
   child.bo.commentstring = '/* %s */'
 
   -- LSP
-  validate('$TM_SELECTED_TEXT', { { text = 'bc def\ng' } })
-  validate('$TM_CURRENT_LINE',  { { text = 'abc def' } })
-  validate('$TM_CURRENT_WORD',  { { text = 'abc' } })
-  validate('$TM_LINE_INDEX',    { { text = '0' } })
-  validate('$TM_LINE_NUMBER',   { { text = '1' } })
+  validate('$TM_SELECTED_TEXT', { { var = 'TM_SELECTED_TEXT', text = 'bc def\ng' } })
+  validate('$TM_CURRENT_LINE',  { { var = 'TM_CURRENT_LINE', text = 'abc def' } })
+  validate('$TM_CURRENT_WORD',  { { var = 'TM_CURRENT_WORD', text = 'abc' } })
+  validate('$TM_LINE_INDEX',    { { var = 'TM_LINE_INDEX', text = '0' } })
+  validate('$TM_LINE_NUMBER',   { { var = 'TM_LINE_NUMBER', text = '1' } })
 
-  local validate_path = function(snippet_body, ref_text)
-    local nodes = parse(snippet_body, { resolve_vars = true })
+  local validate_path = function(var, ref_text)
+    local nodes = parse(var, { normalize = true })
     nodes[1].text = nodes[1].text:gsub('\\',  '/')
-    eq(nodes, { { text = ref_text } })
+    eq(nodes, { { var = var:sub(2), text = ref_text } })
   end
   validate_path('$TM_FILENAME',      'lua.json')
   validate_path('$TM_FILENAME_BASE', 'lua')
@@ -573,10 +632,10 @@ T['_parse()']['can resolve special variables'] = function()
   -- VS Code
   validate_path('$RELATIVE_FILEPATH', test_dir .. '/snippets/lua.json')
   validate_path('$WORKSPACE_FOLDER',  child.fn.getcwd():gsub('\\', '/'))
-  validate('$CLIPBOARD',         { { text = 'clip' } })
-  validate('$CURSOR_INDEX',      { { text = '2' } })
-  validate('$CURSOR_NUMBER',     { { text = '3' } })
-  validate('$LINE_COMMENT',      { { text = '/*' } })
+  validate('$CLIPBOARD',         { { var = 'CLIPBOARD', text = 'clip' } })
+  validate('$CURSOR_INDEX',      { { var = 'CURSOR_INDEX', text = '2' } })
+  validate('$CURSOR_NUMBER',     { { var = 'CURSOR_NUMBER', text = '3' } })
+  validate('$LINE_COMMENT',      { { var = 'LINE_COMMENT', text = '/*' } })
 
   -- - Date/time
   child.lua([[
@@ -586,9 +645,9 @@ T['_parse()']['can resolve special variables'] = function()
       return 'datetime'
     end
   ]])
-  local validate_datetime = function(snippet_body, ref_strftime_format)
+  local validate_datetime = function(var, ref_strftime_format)
     child.lua('_G.args_log = {}')
-    validate(snippet_body, { { text = 'datetime' } })
+    validate(var, { { var = var:sub(2), text = 'datetime' } })
     eq(child.lua_get('_G.args_log'), { { ref_strftime_format } })
   end
 
@@ -605,29 +664,38 @@ T['_parse()']['can resolve special variables'] = function()
   validate_datetime('$CURRENT_SECOND',           '%S')
   validate_datetime('$CURRENT_TIMEZONE_OFFSET',  '%z')
 
-  validate('$CURRENT_SECONDS_UNIX', { { text = tostring(child.lua_get('os.time()')) } })
+  validate('$CURRENT_SECONDS_UNIX', { { var = 'CURRENT_SECONDS_UNIX', text = tostring(child.lua_get('os.time()')) } })
 
   -- Random values
   child.lua('vim.loop.hrtime = function() return 101 end') -- mock reproducible `math.randomseed`
-  child.lua('math.randomseed(101)')
   local ref_random = {
-    { text = '491985' }, { text = '873024' },
-    { text = '10347d' }, { text = 'df5ed0' },
-    { text = '13d0871f-61d3-464a-b774-28645dca9e3a' }, { text = '7bac0382-1057-48d1-9f3b-9b45dbf681e8' },
+    { var = 'RANDOM', text = '491985' }, { var = 'RANDOM', text = '873024' },
+    { var = 'RANDOM_HEX', text = '10347d' }, { var = 'RANDOM_HEX', text = 'df5ed0' },
+    { var = 'UUID', text = '13d0871f-61d3-464a-b774-28645dca9e3a' }, { var = 'UUID', text = '7bac0382-1057-48d1-9f3b-9b45dbf681e8' },
   }
   validate( '${RANDOM}${RANDOM}${RANDOM_HEX}${RANDOM_HEX}${UUID}${UUID}', ref_random)
 
   -- - Should prefer user lookup
-  eq(parse('$TM_SELECTED_TEXT', { resolve_vars = { TM_SELECTED_TEXT = 'xxx' } }), { { text = 'xxx' } })
-  local random_opts = { resolve_vars = { RANDOM = 'a', RANDOM_HEX = 'b', UUID = 'c' } }
-  local random_nodes = { { text = 'a' }, { text = 'a' }, { text = 'b' }, { text = 'b' }, { text = 'c' }, { text = 'c' } }
+  eq(
+    parse('$TM_SELECTED_TEXT', { normalize = true, lookup = { TM_SELECTED_TEXT = 'xxx' } }),
+    { { var = 'TM_SELECTED_TEXT', text = 'xxx' } }
+  )
+  local random_opts = { normalize = true, lookup = { RANDOM = 'a', RANDOM_HEX = 'b', UUID = 'c' } }
+  local random_nodes = {
+    { var = 'RANDOM',     text = 'a' }, { var = 'RANDOM',     text = 'a' },
+    { var = 'RANDOM_HEX', text = 'b' }, { var = 'RANDOM_HEX', text = 'b' },
+    { var = 'UUID',       text = 'c' }, { var = 'UUID',       text = 'c' },
+  }
   eq(parse('${RANDOM}${RANDOM}${RANDOM_HEX}${RANDOM_HEX}${UUID}${UUID}', random_opts), random_nodes)
 
   -- Should evaluate variable only once
   child.lua('_G.args_log = {}')
   eq(
-    parse('${CURRENT_YEAR}${CURRENT_YEAR}${CURRENT_MONTH}${CURRENT_MONTH}', { resolve_vars = true }),
-    { { text = 'datetime' }, { text = 'datetime' }, { text = 'datetime' }, { text = 'datetime'} }
+    parse('${CURRENT_YEAR}${CURRENT_YEAR}${CURRENT_MONTH}${CURRENT_MONTH}', { normalize = true }),
+    {
+      { var = 'CURRENT_YEAR',  text = 'datetime' }, { var = 'CURRENT_YEAR',  text = 'datetime' },
+      { var = 'CURRENT_MONTH', text = 'datetime' }, { var = 'CURRENT_MONTH', text = 'datetime' },
+    }
   )
   eq(child.lua_get('_G.args_log'), { { '%Y' }, { '%m' } })
 end
