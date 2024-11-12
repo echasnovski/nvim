@@ -48,9 +48,10 @@ T['setup()']['creates side effects'] = function()
   load_module()
   local has_highlight = function(group, value) expect.match(child.cmd_capture('hi ' .. group), value) end
 
-  has_highlight('MiniSnippetsCurrent', 'links to DiffText')
-  has_highlight('MiniSnippetsPlaceholder', 'links to DiffAdd')
-  has_highlight('MiniSnippetsVisited', 'links to DiffChange')
+  has_highlight('MiniSnippetsCurrent', 'links to SpellBad')
+  has_highlight('MiniSnippetsFinal', 'links to SpellCap')
+  has_highlight('MiniSnippetsUnvisited', 'links to SpellLocal')
+  has_highlight('MiniSnippetsVisited', 'links to SpellRare')
 end
 
 T['setup()']['creates `config` field'] = function()

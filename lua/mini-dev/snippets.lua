@@ -129,8 +129,9 @@
 --- # Highlight groups ~
 ---
 --- * `MiniSnippetsCurrent` - current tabstop.
---- * `MiniSnippetsPlaceholder` - placeholder of not yet visited tabstop.
---- * `MiniSnippetsVisited` - text of visited tabstop.
+--- * `MiniSnippetsFinal` - special `$0` tabstop.
+--- * `MiniSnippetsUnvisited` - not yet visited tabstop(s).
+--- * `MiniSnippetsVisited` - visited tabstop(s).
 ---
 --- To change any highlight group, modify it directly with |:highlight|.
 ---
@@ -208,7 +209,7 @@ H = {}
 --   local lang_patterns = { tex = { 'latex.json' }, plaintex = { 'latex.json' } }
 --   MiniSnippets.config.snippets = {
 --     MiniSnippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
---     MiniSnippets.gen_loader.from_file('~/.config/nvim/snippets/global.code-snippets'),
+--     MiniSnippets.gen_loader.from_file('~/.config/nvim/snippets/test.code-snippets'),
 --   }
 -- end)
 
@@ -591,11 +592,11 @@ MiniSnippets.session.get = function()
   if session == nil then return end
   return {
     buf_id = session.buf_id,
-    expand_opts = vim.deepcopy(session.expand_opts),
     nodes = vim.deepcopy(session.nodes),
     ns_id = session.ns_id,
     extmark_id = session.extmark_id,
     snippet = vim.deepcopy(session.snippet),
+    expand_opts = vim.deepcopy(session.expand_opts),
   }
 end
 
@@ -786,9 +787,10 @@ end
 
 --stylua: ignore
 H.create_default_hl = function()
-  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrent', { default = true, link = 'DiffText' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsPlaceholder', { default = true, link = 'DiffAdd' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsVisited', { default = true, link = 'DiffChange' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrent', { default = true, link = 'SpellBad' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsFinal', { default = true, link = 'SpellCap' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsUnvisited', { default = true, link = 'SpellLocal' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsVisited', { default = true, link = 'SpellRare' })
 end
 
 H.is_disabled = function(buf_id) return vim.g.minisnippets_disable == true or vim.b.minisnippets_disable == true end
@@ -813,7 +815,8 @@ H.file_readers.json = function(path, silent)
 
   local ok, contents = pcall(vim.json.decode, raw)
   if not (ok and type(contents) == 'table') then
-    return H.notify('File does not contain a valid JSON object: ' .. path, 'WARN', silent)
+    local msg = ok and 'Object is not a dictionary' or contents
+    return H.notify('File does not contain a valid JSON object: ' .. path .. '\nReason: ' .. msg, 'WARN', silent)
   end
 
   return H.read_snippet_array(contents)
@@ -1191,8 +1194,7 @@ H.var_evaluators = {
 H.expand = function(snippet, opts)
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
-  local default_empty_symbols = { tabstop = '@', tabstop_final = '!' }
-  local default_opts = { empty_symbols = default_empty_symbols, vars_lookup = {} }
+  local default_opts = { empty_tabstop = '$', vars_lookup = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
   if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
 
@@ -1216,11 +1218,12 @@ H.session_new = function(snippet, opts)
 
   return {
     buf_id = vim.api.nvim_get_current_buf(),
-    current_tabstop = taborder[1],
-    tabstops = tabstops,
     nodes = nodes,
     snippet = vim.deepcopy(snippet),
     expand_opts = vim.deepcopy(opts),
+
+    current_tabstop = taborder[1],
+    tabstops = tabstops,
   }
 end
 
@@ -1235,12 +1238,20 @@ H.session_init = function(session, full)
     session.extmark_id = H.set_nodes_text(session.nodes, pos, indent)
   end
 
-  -- Start new registered session (only if there are tabstops)
-  if session.current_tabstop == nil then return H.session_del_extmarks(session) end
+  -- Don't start new session if there is no tabstops
+  if session.current_tabstop == nil then
+    H.extmark_set_cursor(session.buf_id, session.ns_id, session.extmark_id, 'right')
+    return H.session_del_extmarks(session)
+  end
+
+  -- Register new session
   if full then
     H.session_deinit(H.get_active_session(), false)
     table.insert(H.sessions, session)
   end
+
+  -- Set focus on current tabstop
+  H.session_focus_tabstop(session, session.current_tabstop)
 
   -- TODO: Set tracking behavior:
   session.augroup_id = vim.api.nvim_create_augroup('MiniSnippetsSession' .. #H.sessions, { clear = true })
@@ -1248,9 +1259,6 @@ H.session_init = function(session, full)
   -- - Automatically stop session after:
   --   - Exit to Normal mode if $0 is current or all present nodes are visited.
   --   - Typing something with $0 being current node.
-
-  -- Set focus on current tabstop
-  H.session_focus_tabstop(session, session.current_tabstop)
 
   -- Trigger proper event
   local pattern = 'MiniSnippetsSession' .. (full and 'Start' or 'Resume')
@@ -1300,7 +1308,7 @@ end
 
 H.set_nodes_text = function(nodes, pos, indent)
   -- TODO: Place all text starting at position `pos` and respecting indent
-  -- In caseof placeholders recurse into them.
+  -- In case of placeholders recurse into them.
 end
 
 H.compute_tabstop_order = function(nodes)
@@ -1351,7 +1359,6 @@ H.extmark_set_gravity = function(buf_id, ns_id, ext_id, gravity)
   H.extmark_set(buf_id, ns_id, line, col, opts)
 end
 
---stlua: ignore
 H.extmark_set_text = function(buf_id, ns_id, ext_id, side, text)
   local start_row, start_col, opts = H.extmark_get(buf_id, ns_id, ext_id)
   local end_row, end_col = opts.end_row, opts.end_col
@@ -1362,6 +1369,14 @@ H.extmark_set_text = function(buf_id, ns_id, ext_id, side, text)
     start_row, start_col = end_row, end_col
   end
   vim.api.nvim_buf_set_text(buf_id, start_row, start_col, end_row, end_col, text)
+end
+
+H.extmark_set_cursor = function(buf_id, ns_id, ext_id, side)
+  if buf_id ~= vim.api.nvim_get_current_win() then H.error('Moving cursor is supported only in current window') end
+  local start_row, start_col, opts = H.extmark_get(buf_id, ns_id, ext_id)
+  local row = side == 'left' and start_row or opts.end_row
+  local col = side == 'left' and start_col or opts.end_col
+  vim.api.nvim_win_set_cursor(0, { row, col })
 end
 
 -- Indent ---------------------------------------------------------------------
