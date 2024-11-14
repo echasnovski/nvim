@@ -48,18 +48,18 @@
   },
   "tabstop_2_1": {
     "prefix": "t_2_1",
-    "body": "Hello ${1:multie\n\tline\nplacholder} world",
+    "body": "Hello ${1:multi\n\tline\nplacholder} world",
     "description": "Tabstop with multiline placeholder"
   },
   "tabstop_3": {
     "prefix": "t_3",
     "body": "Hello $1 world$0",
-    "description": "Empty tabstop with final tabstop"
+    "description": "Empty tabstop and final tabstop"
   },
   "tabstop_4": {
     "prefix": "t_4",
     "body": "Hello ${1:placeholder} world${0:final placeholder}",
-    "description": "Empty tabstop with final tabstop"
+    "description": "Tabstop and final tabstop with placeholders"
   },
   "tabstop_5": {
     "prefix": "t_5",
@@ -72,7 +72,7 @@
     "description": "Many tabstops"
   },
   "tabstop_6_1": {
-    "prefix": "t_7",
+    "prefix": "t_6_1",
     "body": "$0aa$5bb$2cc${4:XX}dd$1ee$3",
     "description": "Many tabstops not in natural order"
   },
@@ -101,6 +101,21 @@
     "body": "${1:nested${2:final$0}} also $0",
     "description": "Final tabstop is nested"
   },
+  "tabstop_10": {
+    "prefix": "t_10",
+    "body": "$1$2$0",
+    "description": "Directly adjacent tabstops"
+  },
+  "tabstop_10_1": {
+    "prefix": "t_10_1",
+    "body": "${1:hello}$0",
+    "description": "Directly adjacent tabstops #2"
+  },
+  "tabstop_10_2": {
+    "prefix": "t_10_2",
+    "body": "$2${1:hello}$0",
+    "description": "Directly adjacent tabstops #3"
+  },
 
   "choice_1": {
     "prefix": "c_1",
@@ -119,12 +134,12 @@
     "description": "Tabstop with no choices"
   },
   "edge_3": {
-    "prefix": "e_2",
+    "prefix": "e_3",
     "body": "${1|a,a|}",
     "description": "Tabstop with repeated choices"
   },
   "edge_4": {
-    "prefix": "e_3",
+    "prefix": "e_4",
     "body": "${1|,|}",
     "description": "Tabstop with repeated empty choices"
   }

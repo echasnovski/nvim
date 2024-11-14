@@ -61,6 +61,13 @@
 -- - Expansion:
 --     - Variables are evalueted exactly once.
 --     - Treats '1' and '01' as different tabstops.
+--     - Take special care for how session extmarks track snippet's range:
+--         - What happens when initial expansion is done at the first column
+--           and/or at the first row while text is later typed at the snippet's
+--           first column. Is it reasonable to expect that session is expanding
+--           or moving to the right (even if first node is plain text)?
+--         - Same scenario but for the right side and expanding at last column.
+--         - Should expand when typing text strictly inside snippet range.
 
 --- *mini.snippets* Manage and expand snippets
 --- *MiniSnippets*
@@ -587,18 +594,7 @@ end
 --- Work with snippet session from |MiniSnippets.default_expand()|
 MiniSnippets.session = {}
 
-MiniSnippets.session.get = function()
-  local session = H.get_active_session()
-  if session == nil then return end
-  return {
-    buf_id = session.buf_id,
-    nodes = vim.deepcopy(session.nodes),
-    ns_id = session.ns_id,
-    extmark_id = session.extmark_id,
-    snippet = vim.deepcopy(session.snippet),
-    expand_opts = vim.deepcopy(session.expand_opts),
-  }
-end
+MiniSnippets.session.get = function() return vim.deepcopy(H.get_active_session()) end
 
 MiniSnippets.session.jump = function(direction)
   if not (direction == 'prev' or direction == 'next') then H.error('`direction` should be one of "prev", "next"') end
@@ -731,7 +727,7 @@ H.ns_id = {
 }
 
 -- Array of current (nested) snippet sessions from `default_expand`
-H.sessions = nil
+H.sessions = {}
 
 -- Various cache
 H.cache = {
@@ -793,7 +789,7 @@ H.create_default_hl = function()
   vim.api.nvim_set_hl(0, 'MiniSnippetsVisited', { default = true, link = 'SpellRare' })
 end
 
-H.is_disabled = function(buf_id) return vim.g.minisnippets_disable == true or vim.b.minisnippets_disable == true end
+H.is_disabled = function() return vim.g.minisnippets_disable == true or vim.b.minisnippets_disable == true end
 
 H.get_config = function() return vim.tbl_deep_extend('force', MiniSnippets.config, vim.b.minisnippets_config or {}) end
 
@@ -1218,11 +1214,11 @@ H.session_new = function(snippet, opts)
 
   return {
     buf_id = vim.api.nvim_get_current_buf(),
-    nodes = nodes,
-    snippet = vim.deepcopy(snippet),
-    expand_opts = vim.deepcopy(opts),
-
     current_tabstop = taborder[1],
+    expand_args = vim.deepcopy({ snippet = snippet, opts = opts }),
+    extmark_id = H.extmark_new(vim.fn.line('.') - 1, vim.fn.col('.') - 1),
+    nodes = nodes,
+    ns_id = H.ns_id.nodes,
     tabstops = tabstops,
   }
 end
@@ -1232,16 +1228,33 @@ H.session_init = function(session, full)
 
   -- Set text for first-time-initialized session (i.e. not if resuming)
   if full then
-    local pos = { vim.fn.line('.'), vim.fn.col('.') }
-    local indent = H.get_indent(pos[1])
-    session.ns_id = H.ns_id.nodes
-    session.extmark_id = H.set_nodes_text(session.nodes, pos, indent)
+    -- Create tracking extmark for whole snippet which expands when adding text
+    H.set_nodes_text(session.nodes, session.extmark_id, H.get_indent())
+    H.extmark_set_gravity(session.extmark_id, 'right')
+  else
+    -- TODO: Maybe set current buffer/window to the session's buffer
+    -- This will allow a workflow like:
+    -- - Start session in current buffer.
+    -- - Exit in Normal mode and leave to another buffer.
+    -- - Start another session in that different buffer.
+    -- - When that session is ended, focus on previous session in initial
+    --   buffer.
+    --
+    -- This *might* be troublesome (like if session is ended via typing in
+    -- final tabstop) as it will force buffer change.
+    --
+    -- A much cleaner alternative is to only allow sessions in the current
+    -- buffer. That is, `BufLeave` event should stop all sessions.
+    -- This will also reduce the need to constant pass `buf_id` (and also is
+    -- reasonble to drop `ns_id` argument also).
   end
 
   -- Don't start new session if there is no tabstops
   if session.current_tabstop == nil then
-    H.extmark_set_cursor(session.buf_id, session.ns_id, session.extmark_id, 'right')
-    return H.session_del_extmarks(session)
+    H.extmark_set_cursor(session.extmark_id, 'right')
+    -- Clean up
+    H.traverse_nodes(session.nodes, function(n) H.extmark_del(n.extmark_id) end)
+    return H.extmark_del(session.extmark_id)
   end
 
   -- Register new session
@@ -1251,12 +1264,13 @@ H.session_init = function(session, full)
   end
 
   -- Set focus on current tabstop
-  H.session_focus_tabstop(session, session.current_tabstop)
+  H.session_tabstop_focus(session, session.current_tabstop)
 
   -- TODO: Set tracking behavior:
   session.augroup_id = vim.api.nvim_create_augroup('MiniSnippetsSession' .. #H.sessions, { clear = true })
   -- - Update linked tabstops.
   -- - Automatically stop session after:
+  --   - On `BufUnload` and `BufLeave`.
   --   - Exit to Normal mode if $0 is current or all present nodes are visited.
   --   - Typing something with $0 being current node.
 
@@ -1265,7 +1279,7 @@ H.session_init = function(session, full)
   vim.api.nvim_exec_autocmds('User', { pattern = pattern })
 end
 
-H.session_focus_tabstop = function(session, id)
+H.session_tabstop_focus = function(session, id)
   -- TODO: Highlight nodes for current tabstop with 'MiniSnippetsVisited'
 
   session.current_tabstop = id
@@ -1282,6 +1296,17 @@ H.session_focus_tabstop = function(session, id)
   -- Account for something like `$1$2$1`.
 end
 
+H.session_tabstop_set_text = function(session, id, text)
+  -- TODO. Make sure to adjust gravity of all extmarks:
+  -- - Whole session should be expanding.
+  -- - All nodes should have initially right gravity (to move to the right when
+  --   text is set). Target tabstop nodes should have expanding extmark during
+  --   setting text. Visited during traversal nodes should become 'left'
+  --   gravity (to *not* move when setting text to later nodes).
+
+  H.extmark_set_gravity(session.extmark_id, 'right')
+end
+
 H.session_jump = function(session, direction)
   if session == nil then return end
   local new_tabstop = session.tabstops[session.current_tabstop][direction]
@@ -1293,22 +1318,42 @@ H.session_deinit = function(session, full)
   if session == nil then return end
 
   -- Stop current session tracking
-  vim.api.nvim_del_augroup_by_id(session.augroup_id)
+  pcall(vim.api.nvim_del_augroup_by_id, session.augroup_id)
 
   -- Delete or hide (make invisible) extmarks
   local extmark_fun = full and H.extmark_del or H.extmark_hide
-  local buf_id, ns_id = session.buf_id, session.ns_id
-  extmark_fun(buf_id, ns_id, session.extmark_id)
-  H.traverse_nodes(session.nodes, function(n) extmark_fun(buf_id, ns_id, n.extmark_id) end)
+  extmark_fun(session.extmark_id)
+  H.traverse_nodes(session.nodes, function(n) extmark_fun(n.extmark_id) end)
 
   -- Trigger proper event
   local pattern = 'MiniSnippetsSession' .. (full and 'Stop' or 'Suspend')
   vim.api.nvim_exec_autocmds('User', { pattern = pattern })
 end
 
-H.set_nodes_text = function(nodes, pos, indent)
-  -- TODO: Place all text starting at position `pos` and respecting indent
-  -- In case of placeholders recurse into them.
+H.set_nodes_text = function(nodes, tracking_extmark_id, indent)
+  for _, n in ipairs(nodes) do
+    -- Add tracking extmark to tabstop nodes
+    if n.tabstop ~= nil then
+      local row, col = H.extmark_get_side(tracking_extmark_id, 'right')
+      n.extmark_id = H.extmark_new(row, col)
+    end
+
+    -- Adjust node's text and append it to currently set text
+    if n.text ~= nil then
+      local new_text = n.text:gsub('\n', '\n' .. indent)
+      if vim.bo.expandtab then
+        local sw = vim.bo.shiftwidth
+        new_text = new_text:gsub('\t', string.rep(' ', sw == 0 and vim.bo.tabstop or sw))
+      end
+      H.extmark_set_text(tracking_extmark_id, 'right', new_text)
+    end
+
+    -- Process (possibly nested) placeholder nodes
+    if n.placeholder ~= nil then H.set_nodes_text(n.placeholder, tracking_extmark_id, indent) end
+
+    -- Make sure that node's extmark doesn't expand when adding next node text
+    H.extmark_set_gravity(n.extmark_id, 'left')
+  end
 end
 
 H.compute_tabstop_order = function(nodes)
@@ -1336,31 +1381,46 @@ H.traverse_nodes = function(nodes, f)
 end
 
 -- Extmarks -------------------------------------------------------------------
-H.extmark_get = function(buf_id, ns_id, ext_id)
-  local data = vim.api.nvim_buf_get_extmark_by_id(buf_id, ns_id, ext_id, { details = true })
+-- All extmark functions work in current buffer with same global namespace.
+-- This is because interaction with snippets eventually requires buffer to be
+-- current, so instead rely on it becoming such as soon as possible.
+H.extmark_new = function(row, col)
+  -- Create expanding extmark by default
+  local opts = { end_row = row, end_col = col, right_gravity = false, end_right_gravity = true }
+  return vim.api.nvim_buf_set_extmark(0, H.ns_id.nodes, row, col, opts)
+end
+
+H.extmark_get = function(ext_id)
+  local data = vim.api.nvim_buf_get_extmark_by_id(0, H.ns_id.nodes, ext_id, { details = true })
   data[3].id, data[3].ns_id = ext_id, nil
   return data[1], data[2], data[3]
 end
 
-H.extmark_set = function(...) return vim.api.nvim_buf_set_extmark(...) end
+H.extmark_get_side = function(ext_id, side)
+  local data = vim.api.nvim_buf_get_extmark_by_id(0, H.ns_id.nodes, ext_id, { details = true })
+  if side == 'left' then return data[1], data[2] end
+  return data[3].end_row, data[3].end_col
+end
 
-H.extmark_del = function(buf_id, ns_id, ext_id) vim.api.nvim_buf_del_extmark(buf_id, ns_id, ext_id or -1) end
+H.extmark_del = function(ext_id) vim.api.nvim_buf_del_extmark(0, H.ns_id.nodes, ext_id or -1) end
 
-H.extmark_hide = function(buf_id, ns_id, ext_id)
+H.extmark_hide = function(ext_id)
   if ext_id == nil then return end
-  local line, col, opts = H.extmark_get(buf_id, ns_id, ext_id)
+  local row, col, opts = H.extmark_get(ext_id)
   opts.hl_group, opts.virt_text = nil, nil
-  H.extmark_set(buf_id, ns_id, line, col, opts)
+  vim.api.nvim_buf_set_extmark(0, H.ns_id.nodes, row, col, opts)
 end
 
-H.extmark_set_gravity = function(buf_id, ns_id, ext_id, gravity)
-  local line, col, opts = H.extmark_get(buf_id, ns_id, ext_id)
+H.extmark_set_gravity = function(ext_id, gravity)
+  if ext_id == nil then return end
+  local row, col, opts = H.extmark_get(ext_id)
   opts.right_gravity, opts.end_right_gravity = gravity == 'right', gravity ~= 'left'
-  H.extmark_set(buf_id, ns_id, line, col, opts)
+  vim.api.nvim_buf_set_extmark(0, H.ns_id.nodes, row, col, opts)
 end
 
-H.extmark_set_text = function(buf_id, ns_id, ext_id, side, text)
-  local start_row, start_col, opts = H.extmark_get(buf_id, ns_id, ext_id)
+H.extmark_set_text = function(ext_id, side, text)
+  if ext_id == nil then return end
+  local start_row, start_col, opts = H.extmark_get(ext_id)
   local end_row, end_col = opts.end_row, opts.end_col
   if side == 'left' then
     end_row, end_col = start_row, start_col
@@ -1368,20 +1428,19 @@ H.extmark_set_text = function(buf_id, ns_id, ext_id, side, text)
   if side == 'right' then
     start_row, start_col = end_row, end_col
   end
-  vim.api.nvim_buf_set_text(buf_id, start_row, start_col, end_row, end_col, text)
+  text = type(text) == 'string' and vim.split(text, '\n') or text
+  vim.api.nvim_buf_set_text(0, start_row, start_col, end_row, end_col, text)
 end
 
-H.extmark_set_cursor = function(buf_id, ns_id, ext_id, side)
-  if buf_id ~= vim.api.nvim_get_current_win() then H.error('Moving cursor is supported only in current window') end
-  local start_row, start_col, opts = H.extmark_get(buf_id, ns_id, ext_id)
-  local row = side == 'left' and start_row or opts.end_row
-  local col = side == 'left' and start_col or opts.end_col
-  vim.api.nvim_win_set_cursor(0, { row, col })
+H.extmark_set_cursor = function(ext_id, side)
+  if ext_id == nil then return end
+  local row, col = H.extmark_get_side(ext_id, side)
+  vim.api.nvim_win_set_cursor(0, { row + 1, col })
 end
 
 -- Indent ---------------------------------------------------------------------
 H.get_indent = function(lnum)
-  local line, comment_indent = vim.fn.getline(lnum), ''
+  local line, comment_indent = vim.fn.getline(lnum or '.'), ''
   for _, leader in ipairs(H.get_comment_leaders()) do
     local cur_match = line:match('^%s*' .. vim.pesc(leader) .. '%s*')
     -- Use biggest match in case of several matches. Allows respecting "nested"
@@ -1449,6 +1508,8 @@ H.is_array_of = function(x, predicate)
   end
   return true
 end
+
+H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
 
 -- TODO: Remove after compatibility with Neovim=0.9 is dropped
 H.islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
