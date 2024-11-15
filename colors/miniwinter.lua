@@ -1,4 +1,4 @@
--- "Dark, cold, and gloomy" vibe
+-- "Dark, cold, and gloomy winter" vibe
 -- Reference hue is 265 for "cold blue" and not 270 for proper cyan in diff
 -- Chroma levels are 3 for bg and 1 for fg
 -- Lightness levels are 10+80 for 'dark' and 85+15 for 'light'

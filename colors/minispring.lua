@@ -1,4 +1,4 @@
--- "Cold green scenery with blossoming" vibe
+-- "Warming spring with green blossoming" vibe
 -- Reference hue is 175 for "cold green" and not 180 for proper cyan diff
 -- Chroma levels are 3 for bg and 1 for fg
 -- Lightness levels are 15+85 for 'dark' and 90+20 for 'light'
