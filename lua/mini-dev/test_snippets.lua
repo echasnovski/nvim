@@ -61,7 +61,11 @@ T['setup()']['creates `config` field'] = function()
   local expect_config = function(field, value) eq(child.lua_get('MiniSnippets.config.' .. field), value) end
 
   expect_config('snippets', {})
-  expect_config('match', { find = nil, select = nil, expand = nil })
+  expect_config('mappings.expand', '<C-j>')
+  expect_config('mappings.expand_all', '<C-g><C-j>')
+  expect_config('mappings.jump_next', '<C-l>')
+  expect_config('mappings.jump_prev', '<C-h>')
+  expect_config('expand', { match = nil, select = nil, insert = nil })
 end
 
 T['setup()']['respects `config` argument'] = function()
@@ -79,10 +83,15 @@ T['setup()']['validates `config` argument'] = function()
 
   expect_config_error('a', 'config', 'table')
   expect_config_error({ snippets = 1 }, 'snippets', 'table')
-  expect_config_error({ match = 1 }, 'match', 'table')
-  expect_config_error({ match = { find = 1 } }, 'match.find', 'function')
-  expect_config_error({ match = { select = 1 } }, 'match.select', 'function')
-  expect_config_error({ match = { expand = 1 } }, 'match.expand', 'function')
+  expect_config_error({ mappings = 1 }, 'mappings', 'table')
+  expect_config_error({ mappings = { expand = 1 } }, 'mappings.expand', 'string')
+  expect_config_error({ mappings = { expand_all = 1 } }, 'mappings.expand_all', 'string')
+  expect_config_error({ mappings = { jump_next = 1 } }, 'mappings.jump_next', 'string')
+  expect_config_error({ mappings = { jump_prev = 1 } }, 'mappings.jump_prev', 'string')
+  expect_config_error({ expand = 1 }, 'expand', 'table')
+  expect_config_error({ expand = { match = 1 } }, 'expand.match', 'function')
+  expect_config_error({ expand = { select = 1 } }, 'expand.select', 'function')
+  expect_config_error({ expand = { insert = 1 } }, 'expand.insert', 'function')
 end
 
 T['_parse()'] = new_set()

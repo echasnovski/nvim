@@ -8,7 +8,7 @@
 --       is probably more reasonable to say there are no exact matches.
 --       Maybe accept exact match if it is preceded by whitespace?
 --
---       Or more generally allow `opts.boundary` for `default_find()` which
+--       Or more generally allow `opts.boundary` for `default_match()` which
 --       should match the character *before* the exact match? The problem with
 --       it seems to be the lack of a robust default: `%s` will not expand in
 --       cases like `aaa(f`, while `[^%w_-]` seems too arbitrary.
@@ -31,8 +31,8 @@
 --     - Normalized snippets for buffer are cached. Execute `:edit` to clear
 --       current buffer cache.
 --
--- - Match:
---     - Calling `match.expand`:
+-- - Expand:
+--     - Calling `expand.insert`:
 --         - Preserves Insert mode and ensures Normal mode.
 --         - Places cursor at the start of removed region (if there is one).
 --
@@ -42,7 +42,7 @@
 --       register. It assumes that text is put there prior to expanding:
 --       visually select and |c|; yank, etc.
 --
--- - Expand:
+-- - `default_insert`:
 --
 -- Tests:
 -- - Management:
@@ -53,12 +53,12 @@
 --     - `gen_loader.from_lang()` processes `lang_patterns` array in order.
 --       Resulting in preferring later ones over earlier.
 --
--- - Match:
---     - `match.expand` is called with proper active mode and cursor.
+-- - Expand:
+--     - `expand.insert` is called with proper active mode and cursor.
 --       Test edge cases when region/cursor is in start/middle/end of line
 --       and in both supported modes.
 --
--- - Expansion:
+-- - `default_insert`:
 --     - Variables are evalueted exactly once.
 --     - Treats '1' and '01' as different tabstops.
 --     - Take special care for how session extmarks track snippet's range:
@@ -89,8 +89,8 @@
 --- - Manage snippet collection with a flexible system of built-in loaders.
 ---   See |MiniSnippets.gen_loader|.
 ---
---- - Match which snippet to expand based on the currently typed text.
----   Supports matches depending on tree-sitter local languages.
+--- - Match which snippet to insert based on the currently typed text.
+---   Supports matching depending on tree-sitter local languages.
 ---
 --- - Expand, navigate, and edit snippet in a configurable manner:
 ---     - Works inside comments by preserving comment leader on new lines.
@@ -277,69 +277,81 @@ end
 --- Order in array is important: later ones will override earlier (similar to
 --- how |ftplugin| behaves).
 ---
---- # Match ~
+--- # Mappings ~
 ---
 --- # Expand ~
----
---- # Mappings ~
 MiniSnippets.config = {
   -- Array of snippets and loaders (see |MiniSnippets.config| for details).
   -- Nothing is defined by default. Add manually to have snippets to match.
   snippets = {},
-  match = {
-    -- Function to compute matching snippets
-    find = nil,
-    -- Function which interactively selects match to expand
+
+  -- Module mappings. Use `''` (empty string) to disable one.
+  -- Created globally in Insert mode
+  mappings = {
+    -- Ways to expand snippets
+    expand = '<C-j>',
+    expand_all = '<C-g><C-j>',
+
+    -- Jump to next/previous tabstop (when using default `expand.insert`)
+    jump_next = '<C-l>',
+    jump_prev = '<C-h>',
+  },
+
+  -- Functions describing snippet expansion
+  expand = {
+    -- Match snippets at text position
+    match = nil,
+    -- Interactively select snippet to expand
     select = nil,
-    -- Function which starts snippet expansion session
-    expand = nil,
+    -- Insert snippet
+    insert = nil,
   },
 }
 --minidoc_afterlines_end
 
---- Match snippets and act
+--- Expand snippet
 ---
----@param opts table|nil Options. Same structure as `match` in |MiniSnippets.config|
+---@param opts table|nil Options. Same structure as `expand` in |MiniSnippets.config|
 ---   and uses its values as default. There are differences in allowed values:
----   - Use `find = false` to have all buffer snippets as matches.
+---   - Use `match = false` to have all buffer snippets as matches.
 ---   - Use `select = false` to always expand the best match (if any).
----   - Use `expand = false` to return all matches without expanding.
+---   - Use `insert = false` to return all matches without inserting.
 ---
 ---   Extra allowed fields:
 ---   - <pos> `(table)` - position (see |MiniSnippets-glossary) at which to
 ---     find snippets. Default: cursor position.
 ---
----@return table|nil If `expand` is `false`, an array of matched snippets as
----   was an output of `match.find`. Otherwise `nil`.
+---@return table|nil If `insert` is `false`, an array of matched snippets as
+---   was an output of `expand.match`. Otherwise `nil`.
 ---
 ---@usage >lua
----   -- Find and force expand the best match (if any)
----   MiniSnippets.match({ select = false })
+---   -- Match and force expand the best match (if any)
+---   MiniSnippets.expand({ select = false })
 ---
----   -- Show all buffer snippets and select one to expand
----   MiniSnippets.match({ find = false })
+---   -- Use all buffer snippets and select one to insert
+---   MiniSnippets.expand({ match = false })
 ---
 ---   -- Get all matched snippets
----   local matches = MiniSnippets.match({ expand = false })
+---   local matches = MiniSnippets.expand({ insert = false })
 ---
----   -- Get all buffer snippets
----   local all = MiniSnippets.match({ find = false, expand = false })
+---   -- Get all snippets of current context (buffer + language)
+---   local all = MiniSnippets.expand({ match = false, insert = false })
 --- <
-MiniSnippets.match = function(opts)
-  opts = vim.tbl_extend('force', H.get_config().match, opts or {})
+MiniSnippets.expand = function(opts)
+  opts = vim.tbl_extend('force', H.get_config().expand, opts or {})
 
   -- Validate
-  local find = false
-  if opts.find ~= false then find = opts.find or MiniSnippets.default_find end
-  if not (find == false or vim.is_callable(find)) then H.error('`opts.find` should be `false` or callable') end
+  local match = false
+  if opts.match ~= false then match = opts.match or MiniSnippets.default_match end
+  if not (match == false or vim.is_callable(match)) then H.error('`opts.match` should be `false` or callable') end
 
   local select = false
   if opts.select ~= false then select = opts.select or MiniSnippets.default_select end
   if not (select == false or vim.is_callable(select)) then H.error('`opts.select` should be `false` or callable') end
 
-  local expand = false
-  if opts.expand ~= false then expand = opts.expand or MiniSnippets.default_expand end
-  if not (expand == false or vim.is_callable(expand)) then H.error('`opts.expand` should be `false` or callable') end
+  local insert = false
+  if opts.insert ~= false then insert = opts.insert or MiniSnippets.default_insert end
+  if not (insert == false or vim.is_callable(insert)) then H.error('`opts.insert` should be `false` or callable') end
 
   local pos = opts.pos
   if pos == nil then pos = { line = vim.fn.line('.'), col = vim.fn.col('.') } end
@@ -347,19 +359,19 @@ MiniSnippets.match = function(opts)
 
   -- Match
   local all_snippets = vim.deepcopy(H.get_context_snippets(pos))
-  local matches = find == false and all_snippets or find(all_snippets, pos)
-  if not H.is_array_of(matches, H.is_snippet) then H.error('`find` returned not an array of snippets') end
+  local matches = match == false and all_snippets or match(all_snippets, pos)
+  if not H.is_array_of(matches, H.is_snippet) then H.error('`match` returned not an array of snippets') end
 
   -- Act
-  if expand == false then return matches end
+  if insert == false then return matches end
   if #all_snippets == 0 then return H.notify('There are no snippets in given context', 'WARN') end
-  if #matches == 0 then return H.notify('There are no matches', 'WARN') end
+  if #matches == 0 then return H.notify('There are no matches at position', 'WARN') end
 
-  local expand_ext = H.make_extended_expand(expand)
+  local insert_ext = H.make_extended_insert(insert)
 
-  if select == false then return expand_ext(matches[1]) end
-  local best_match = select(matches, expand_ext)
-  if H.is_snippet(best_match) then expand_ext(best_match) end
+  if select == false then return insert_ext(matches[1]) end
+  local best_match = select(matches, insert_ext)
+  if H.is_snippet(best_match) then insert_ext(best_match) end
 end
 
 --- Generate snippet loader
@@ -489,31 +501,29 @@ MiniSnippets.read_file = function(path, opts)
   return res.snippets
 end
 
---- Default match find
+--- Default match
 ---
 --- Match snippets based on the current line text before the cursor.
 --- Tries two matching approaches consecutively:
 --- - Find exact snippet prefix match to the left of cursor.
 ---   In case of any match, return the one with the longest prefix.
---- - Find fuzzy matches for base text extracted via `opts.pattern` to the left
----   of cursor. Fuzzy matching is done via |matchfuzzy()|.
----   All fuzzy matches are returned.
+--- - Fuzzy match base text to the left of cursor (extracted via `opts.pattern`).
+---   Matching is done via |matchfuzzy()|. All fuzzy matches are returned.
 ---
 ---@param snippets table Array of snippets which can be matched.
----@param pos table|nil Position at which match snippets. Default: cursor position.
+---@param pos table|nil Position at which to match snippets. Default: cursor position.
 ---@param opts table|nil Options. Possible fields:
----   - <pattern> `(string)` - Lua pattern to match just before the cursor.
----     Supply empty string to not do fuzzy match.
+---   - <pattern> `(string)` - Lua pattern to extract base to the left of cursor.
+---     Supply empty string to not do fuzzy matching.
 ---     Default: `'%S+'` (as many as possible non-whitespace characters).
 ---
----@return table Array of snippets with added <region> field. Ordered from most to
----   least fit match.
+---@return table Array of snippets with <region> field. Ordered from best to worst match.
 ---
 ---@usage >lua
 ---   -- Perform fuzzy match based only on alphanumeric characters
----   MiniSnippets.default_find(snippets, { pattern = '%w+' })
+---   MiniSnippets.default_match(snippets, { pattern = '%w+' })
 --- <
-MiniSnippets.default_find = function(snippets, pos, opts)
+MiniSnippets.default_match = function(snippets, pos, opts)
   if pos == nil then pos = { line = vim.fn.line('.'), col = vim.fn.col('.') } end
   if not H.is_position(pos) then H.error('`pos` should be table with numeric `line` and `col` fields') end
 
@@ -550,21 +560,23 @@ MiniSnippets.default_find = function(snippets, pos, opts)
   return fuzzy_matches
 end
 
---- Default select best match
+--- Default select
 ---
---- Show matched snippets as entries via |vim.ui.select()| and expand chosen one.
+--- Show snippets as entries via |vim.ui.select()| and insert the chosen one.
 ---
----@param snippets table Array of matched snippets; an output of `config.match`.
----@param expand function Function which expands matched snippet (along with
----   removing matched region, if present).
+---@param snippets table Array of snippets (as an output of `config.expand.match`).
+---@param insert function Function to insert chosen snippet. Should also remove
+---   snippet's matched region (if present as a field).
 ---@param opts table|nil Options. Possible fields:
 ---   - <expand_single> `(boolean)` - whether to skip |vim.ui.select()| for
----     single matched snippet. Default: `true`.
-MiniSnippets.default_select = function(snippets, expand, opts)
+---     `snippets` with single entry. Default: `true`.
+---
+---@return ... The result of calling `vim.ui.select()`. Usually `nil`.
+MiniSnippets.default_select = function(snippets, insert, opts)
   opts = opts or {}
 
   if #snippets == 1 and (opts.expand_single == nil or opts.expand_single == true) then
-    expand(snippets[1])
+    insert(snippets[1])
     return
   end
 
@@ -578,20 +590,20 @@ MiniSnippets.default_select = function(snippets, expand, opts)
     return s.prefix .. pad .. ' │ ' .. s.desc
   end
 
-  -- Schedule expand to allow `vim.ui.select` override to restore window/cursor
-  local on_choice = vim.schedule_wrap(expand)
-  vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
+  -- Schedule insert to allow `vim.ui.select` override to restore window/cursor
+  local on_choice = vim.schedule_wrap(insert)
+  return vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
 end
 
 --- Press `<C-c>` in Insert mode to stop active session (and stay in Insert mode).
-MiniSnippets.default_expand = function(snippet, opts)
+MiniSnippets.default_insert = function(snippet, opts)
   -- TODO
   return vim.snippet.expand(snippet.body)
 
   -- H.expand(snippet, opts)
 end
 
---- Work with snippet session from |MiniSnippets.default_expand()|
+--- Work with snippet session from |MiniSnippets.default_insert()|
 MiniSnippets.session = {}
 
 MiniSnippets.session.get = function() return vim.deepcopy(H.get_active_session()) end
@@ -726,7 +738,10 @@ H.ns_id = {
   nodes = vim.api.nvim_create_namespace('MiniSnippetsNodes'),
 }
 
--- Array of current (nested) snippet sessions from `default_expand`
+-- TODO: instead of separate sessions, *inject* new session into current
+-- This also removes the need for "suspend" and "resume" events, and all the
+-- machienery and future assumptions around multiple active sessions.
+-- Array of current (nested) snippet sessions from `default_insert`
 H.sessions = {}
 
 -- Various cache
@@ -749,13 +764,18 @@ H.setup_config = function(config)
 
   vim.validate({
     snippets = { config.snippets, 'table' },
-    match = { config.match, 'table' },
+    expand = { config.expand, 'table' },
+    mappings = { config.mappings, 'table' },
   })
 
   vim.validate({
-    ['match.find'] = { config.match.find, 'function', true },
-    ['match.select'] = { config.match.select, 'function', true },
-    ['match.expand'] = { config.match.expand, 'function', true },
+    ['mappings.expand'] = { config.mappings.expand, 'string' },
+    ['mappings.expand_all'] = { config.mappings.expand_all, 'string' },
+    ['mappings.jump_next'] = { config.mappings.jump_next, 'string' },
+    ['mappings.jump_prev'] = { config.mappings.jump_prev, 'string' },
+    ['expand.match'] = { config.expand.match, 'function', true },
+    ['expand.select'] = { config.expand.select, 'function', true },
+    ['expand.insert'] = { config.expand.insert, 'function', true },
   })
 
   return config
@@ -766,6 +786,18 @@ H.apply_config = function(config)
 
   -- Reset loader cache
   H.cache = { context = {}, lang = {}, runtime = {}, file = {} }
+
+  -- Make mappings
+  local mappings = config.mappings
+  local map = function(lhs, rhs, desc)
+    if lhs == '' then return end
+    vim.keymap.set('i', lhs, rhs, { desc = desc })
+  end
+  map(mappings.expand, '<Cmd>lua MiniSnippets.expand()<CR>', 'Expand snippet')
+  map(mappings.expand_all, '<Cmd>lua MiniSnippets.expand({ match = false })<CR>', 'Expand without matching')
+
+  map(mappings.jump_next, "<Cmd>lua MiniSnippets.session.jump('next')<CR>", 'Jump to next snippet tabstop')
+  map(mappings.jump_prev, "<Cmd>lua MiniSnippets.session.jump('prev')<CR>", 'Jump to previous snippet tabstop')
 end
 
 H.create_autocommands = function()
@@ -901,10 +933,10 @@ H.traverse_config_snippets = function(x, target, context)
   if vim.is_callable(x) then H.traverse_config_snippets(x(context), target, context) end
 end
 
--- Matching -------------------------------------------------------------------
-H.make_extended_expand = function(expand)
-  return function(match)
-    if match == nil then return end
+-- Expand ---------------------------------------------------------------------
+H.make_extended_insert = function(insert)
+  return function(snippet)
+    if snippet == nil then return end
 
     -- Ensure proper mode
     local mode = vim.fn.mode()
@@ -919,8 +951,8 @@ H.make_extended_expand = function(expand)
       -- mode, only "after function or script is finished".
     end
 
-    -- Remove matched region
-    local r = match.region
+    -- Remove snippet's region
+    local r = snippet.region
     if H.is_region(r) then
       if mode ~= 'i' then
         -- Make possible positioning cursor after line end
@@ -934,8 +966,8 @@ H.make_extended_expand = function(expand)
       vim.api.nvim_buf_set_text(0, r.from.line - 1, r.from.col - 1, r.to.line - 1, r.to.col, {})
     end
 
-    -- Expand
-    expand(match)
+    -- Insert at cursor
+    insert(snippet)
   end
 end
 
@@ -1186,8 +1218,8 @@ H.var_evaluators = {
   end
 }
 
--- Expand ---------------------------------------------------------------------
-H.expand = function(snippet, opts)
+-- Insert ---------------------------------------------------------------------
+H.insert = function(snippet, opts)
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
   local default_opts = { empty_tabstop = '$', vars_lookup = {} }

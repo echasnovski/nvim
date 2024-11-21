@@ -31,14 +31,15 @@ if vim.g.vscode ~= nil then now(function() source('vscode.lua') end) end
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 later(function()
-  local ft_patterns = {
+  local lang_patterns = {
     tex = { 'latex.json' },
     plaintex = { 'latex.json' },
   }
   local snippets = require('mini-dev.snippets')
   snippets.setup({
     snippets = {
-      snippets.gen_loader.from_filetype({ ft_patterns = ft_patterns }),
+      snippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
+      snippets.gen_loader.from_file('~/.config/nvim/snippets/test.code-snippets'),
     },
   })
 
@@ -49,10 +50,21 @@ later(function()
   local jump_prev = function()
     if vim.snippet.active({ direction = -1 }) then vim.snippet.jump(-1) end
   end
-  vim.keymap.set('i', '<C-j>', '<Cmd>lua MiniSnippets.match()<CR>')
-  vim.keymap.set('i', '<C-g><C-j>', '<Cmd>lua MiniSnippets.match({ find = false, ask = "always" })<CR>')
   vim.keymap.set({ 'i', 's' }, '<C-l>', jump_next)
   vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
+
+  -- Temporary testing
+  vim.keymap.set('i', '<C-k>', '<Cmd>lua MiniSnippets.expand({ insert = H.insert })<CR>')
+  vim.keymap.set('i', '<C-g><C-k>', '<Cmd>lua MiniSnippets.expand({ match = false, insert = H.insert })<CR>')
+  vim.keymap.set({ 'n', 'i' }, '<C-g><C-e>', '<Cmd>lua MiniSnippets.session.stop()<CR>')
+
+  local augroup = vim.api.nvim_create_augroup('test-snippet-events', { clear = true })
+  local events =
+    { 'MiniSnippetsSessionStart', 'MiniSnippetsSessionSuspend', 'MiniSnippetsSessionResume', 'MiniSnippetsSessionStop' }
+  local register_event = function(args) add_to_log({ event = args.event, session = MiniSnippets.session.get() }) end
+  vim.api.nvim_create_autocmd('User', { pattern = events, callback = register_event, group = augroup })
+
+  vim.filetype.add({ extension = { ['code-snippets'] = 'json' } })
 end)
 
 later(function() add('rafamadriz/friendly-snippets') end)
