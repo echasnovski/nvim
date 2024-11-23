@@ -94,11 +94,11 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ expand = { insert = 1 } }, 'expand.insert', 'function')
 end
 
-T['_parse()'] = new_set()
+T['parse()'] = new_set()
 
-local parse = forward_lua('MiniSnippets._parse')
+local parse = forward_lua('MiniSnippets.parse')
 
-T['_parse()']['works'] = function()
+T['parse()']['works'] = function()
   --stylua: ignore
   eq(
     parse('hello ${1:xx} $var world$0'),
@@ -111,7 +111,7 @@ T['_parse()']['works'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['text'] = function()
+T['parse()']['text'] = function()
   -- Common
   eq(parse('aa'),      { { text = 'aa' } })
   eq(parse('ыыы ффф'), { { text = 'ыыы ффф' } })
@@ -150,7 +150,7 @@ T['_parse()']['text'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['tabstop'] = function()
+T['parse()']['tabstop'] = function()
   -- Common
   eq(parse('$1'),          { { tabstop = '1' } })
   eq(parse('aa $1'),       { { text = 'aa ' },    { tabstop = '1' } })
@@ -196,7 +196,7 @@ T['_parse()']['tabstop'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['choice'] = function()
+T['parse()']['choice'] = function()
   -- Common
   eq(parse('${1|aa|}'),    { { tabstop = '1', choices = { 'aa' } } })
   eq(parse('${2|aa|}'),    { { tabstop = '2', choices = { 'aa' } } })
@@ -222,7 +222,7 @@ T['_parse()']['choice'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['var'] = function()
+T['parse()']['var'] = function()
   -- Common
   eq(parse('$aa'),    { { var = 'aa' } })
   eq(parse('$a_b'),   { { var = 'a_b' } })
@@ -245,7 +245,7 @@ T['_parse()']['var'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['placeholder'] = function()
+T['parse()']['placeholder'] = function()
   -- Common
   eq(parse('aa ${1:b}'), { { text = 'aa ' }, { tabstop = '1', placeholder = { { text = 'b' } } } })
   eq(parse('${1:b}'),    { { tabstop = '1', placeholder = { { text = 'b' } } } })
@@ -364,7 +364,7 @@ T['_parse()']['placeholder'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['transform'] = function()
+T['parse()']['transform'] = function()
   -- All transform string should be parsed as is
 
   -- Should be allowed in variable nodes
@@ -422,7 +422,7 @@ T['_parse()']['transform'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['tricky'] = function()
+T['parse()']['tricky'] = function()
   eq(parse('${1:${aa:${1}}}'),                          { { tabstop = '1', placeholder = { { var = 'aa', placeholder = { { tabstop = '1' } } } } } })
   eq(parse('${1:${aa:bb$1cc}}'),                        { { tabstop = '1', placeholder = { { var = 'aa', placeholder = { { text = 'bb' }, { tabstop = '1' }, { text = 'cc' } } } } } })
   eq(parse([[${TM_DIRECTORY/.*src[\/](.*)/$1/}]]),      { { var = 'TM_DIRECTORY', transform = { [[.*src[\/](.*)]], '$1', '' } } })
@@ -470,7 +470,7 @@ T['_parse()']['tricky'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['respects `opts.normalize`'] = function()
+T['parse()']['respects `opts.normalize`'] = function()
   local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { normalize = true }), ref_nodes) end
 
   child.fn.setenv('AA', 'my-aa')
@@ -540,7 +540,7 @@ T['_parse()']['respects `opts.normalize`'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['respects `opts.lookup`'] = function()
+T['parse()']['respects `opts.lookup`'] = function()
   local validate = function(snippet_body, lookup, ref_nodes)
     eq(parse(snippet_body, { normalize = true, lookup = lookup }), ref_nodes)
   end
@@ -551,7 +551,7 @@ T['_parse()']['respects `opts.lookup`'] = function()
 
   -- Should use only string fields
   eq(
-    child.lua_get('MiniSnippets._parse("$true", { normalize = true, lookup = { [true] = "x" } })'),
+    child.lua_get('MiniSnippets.parse("$true", { normalize = true, lookup = { [true] = "x" } })'),
     { { var = 'true', placeholder = { { text = '' } } } }
   )
   validate('$1', { [1] = 'x' }, { { tabstop = '1', placeholder = { { text = '' } } } })
@@ -598,7 +598,7 @@ T['_parse()']['respects `opts.lookup`'] = function()
 end
 
 --stylua: ignore
-T['_parse()']['can resolve special variables'] = function()
+T['parse()']['can resolve special variables'] = function()
   local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { normalize = true }), ref_nodes) end
 
   local path = test_dir_absolute .. '/snippets/lua.json'
@@ -710,7 +710,7 @@ T['_parse()']['can resolve special variables'] = function()
   eq(child.lua_get('_G.args_log'), { { '%Y' }, { '%m' } })
 end
 
-T['_parse()']['throws informative errors'] = function()
+T['parse()']['throws informative errors'] = function()
   local validate = function(body, error_pattern)
     expect.error(function() parse(body) end, error_pattern)
   end
@@ -772,7 +772,7 @@ T['_parse()']['throws informative errors'] = function()
   validate([[${1/regex/format}]], 'Transform should contain 3 "/" outside of `${...}` and be closed with "}"')
 end
 
-T['_parse()']['validates input'] = function()
+T['parse()']['validates input'] = function()
   expect.error(function() parse(1) end, 'Snippet body.*string or array of strings')
 end
 

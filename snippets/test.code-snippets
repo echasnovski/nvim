@@ -63,7 +63,7 @@
   },
   "tabstop_5": {
     "prefix": "t_5",
-    "body": "Hello $1 world $2 another $1 tabstop",
+    "body": "Hello $1 world $2 another ${1:xxx} tabstop",
     "description": "Multiple connected tabstops (should work when inputting multiline text)"
   },
   "tabstop_6": {

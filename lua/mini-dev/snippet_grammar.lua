@@ -601,7 +601,7 @@ _G.corpus_fail = {
 _G.pass = vim.deepcopy(_G.corpus_pass)
 for _, t in pairs(pass) do
   for i, body in ipairs(t) do
-    local nodes = MiniSnippets._parse(body)
+    local nodes = MiniSnippets.parse(body)
     local eq_line =
       string.format('eq(parse(%s), %s)', vim.inspect(body), vim.inspect(nodes, { newline = ' ', indent = '' }))
     t[i] = eq_line
