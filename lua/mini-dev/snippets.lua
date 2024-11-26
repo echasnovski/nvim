@@ -64,6 +64,10 @@
 --           Most importantly this allows typing when $0 is current without
 --           disrupting the typing flow.
 --
+-- - Examples:
+--     - Autocommand for stopping active session on `ModeChange *:n` when there
+--       are no unvisited tabstops.
+--
 -- Tests:
 -- - Management:
 --     - `cache = false` should not write to cache (to possibly save memory).
@@ -156,7 +160,7 @@
 --- # Highlight groups ~
 ---
 --- * `MiniSnippetsCurrent` - current tabstop.
---- * `MiniSnippetsCurrentReplace` - current tabstop if to be replaced on next edit.
+--- * `MiniSnippetsCurrentReplace` - current tabstop to be replaced on valid edit.
 --- * `MiniSnippetsFinal` - special `$0` tabstop.
 --- * `MiniSnippetsUnvisited` - not yet visited tabstop(s).
 --- * `MiniSnippetsVisited` - visited tabstop(s).
@@ -618,10 +622,13 @@ end
 
 --- Press `<C-c>` in Insert mode to stop active session (and stay in Insert mode).
 MiniSnippets.default_insert = function(snippet, opts)
-  -- TODO
-  return vim.snippet.expand(snippet.body)
+  if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
-  -- H.expand(snippet, opts)
+  local default_opts = { empty_tabstop = '↓', empty_tabstop_final = '↻', vars_lookup = {} }
+  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
+  if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
+
+  H.call_without_pum(function() H.session_init(H.session_new(snippet, opts), true) end)
 end
 
 --- Work with snippet session from |MiniSnippets.default_insert()|
@@ -631,11 +638,7 @@ MiniSnippets.session.get = function(all) return vim.deepcopy(all and H.sessions 
 
 MiniSnippets.session.jump = function(direction)
   if not (direction == 'prev' or direction == 'next') then H.error('`direction` should be one of "prev", "next"') end
-
-  -- Close possibly visible completion popup
-  if vim.fn.pumvisible() == 1 then vim.fn.feedkeys('\25', 'n') end
-
-  H.session_jump(H.get_active_session(), direction)
+  H.call_without_pum(function() H.session_jump(H.get_active_session(), direction) end)
 end
 
 --- Stop active session
@@ -649,6 +652,10 @@ end
 MiniSnippets.session.stop = function()
   H.session_deinit(H.get_active_session(), true)
   H.sessions[#H.sessions] = nil
+  if #H.sessions == 0 then
+    vim.api.nvim_del_augroup_by_name('MiniSnippetsTrack')
+    H.unmap_in_sessions()
+  end
   H.session_init(H.get_active_session(), false)
 end
 
@@ -661,10 +668,11 @@ end
 ---       If variable is not set, `text` field is `nil`.
 ---       Values from `opts.lookup` are preferred over evaluation output.
 ---       See |MiniSnippets-syntax-specification| for more info about variables.
----     - Add `text` field for tabstops if it is present in `opts.lookup`.
+---     - Add `text` field for tabstops present in `opts.lookup`.
 ---     - Ensure every node contains exactly one of `text` or `placeholder` fields.
 ---       If there are none, add default `placeholder` (one empty string text node).
 ---       If there are both, remove `placeholder` field.
+---     - Ensure present final tabstop: append to end if absent.
 ---     Default: `false`.
 ---   - <lookup> `(table)` - map from variable/tabstop (string) name to its value.
 ---     Default: `{}`.
@@ -718,34 +726,10 @@ MiniSnippets.parse = function(snippet_body, opts)
     processor(vim.fn.strcharpart(snippet_body, i, 1), state, node)
   end
 
-  -- Verify and post-process
+  -- Verify, post-process, normalize
   H.parse_verify(state)
   local nodes = H.parse_post_process(state.depth_arrays[1], state.name)
-
-  if not opts.normalize then return nodes end
-
-  -- Normalize
-  local lookup = {}
-  for key, val in pairs(opts.lookup) do
-    if type(key) == 'string' then lookup[key] = tostring(val) end
-  end
-
-  local normalize = function(n)
-    -- Evaluate variable
-    local var_value
-    if n.var ~= nil then var_value = H.parse_eval_var(n.var, lookup) end
-    if type(var_value) == 'string' then n.text = var_value end
-
-    -- Look up tabstop
-    if n.tabstop ~= nil then n.text = lookup[n.tabstop] end
-
-    -- Ensure text-or-placeholder
-    if n.text == nil and n.placeholder == nil then n.placeholder = { { text = '' } } end
-    if n.text ~= nil and n.placeholder ~= nil then n.placeholder = nil end
-  end
-  -- - Ensure proper random random variables
-  math.randomseed(vim.loop.hrtime())
-  return H.nodes_traverse(nodes, normalize)
+  return opts.normalize and H.parse_normalize(nodes, opts) or nodes
 end
 
 --- Mock an LSP server for completion
@@ -764,9 +748,6 @@ H.ns_id = {
 
 -- Array of current (nested) snippet sessions from `default_insert`
 H.sessions = {}
-
--- Globally tracked session id/counter
-H.session_id = 0
 
 -- Various cache
 H.cache = {
@@ -822,6 +803,9 @@ H.apply_config = function(config)
 
   map(mappings.jump_next, "<Cmd>lua MiniSnippets.session.jump('next')<CR>", 'Jump to next snippet tabstop')
   map(mappings.jump_prev, "<Cmd>lua MiniSnippets.session.jump('prev')<CR>", 'Jump to previous snippet tabstop')
+
+  -- Register 'code-snippets' extension as JSON (helps with highlighting)
+  vim.schedule(function() vim.filetype.add({ extension = { ['code-snippets'] = 'json' } }) end)
 end
 
 H.create_autocommands = function()
@@ -841,10 +825,10 @@ end
 
 --stylua: ignore
 H.create_default_hl = function()
-  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrent', { default = true, link = 'SpellBad' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrentReplace', { default = true, link = 'MiniSnippetsCurrent' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsFinal', { default = true, link = 'SpellCap' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsUnvisited', { default = true, link = 'SpellLocal' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrent', { default = true, link = 'SpellLocal' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrentReplace', { default = true, link = 'SpellBad' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsFinal', { default = true, link = 'MiniSnippetsUnvisited' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsUnvisited', { default = true, link = 'SpellCap' })
   vim.api.nvim_set_hl(0, 'MiniSnippetsVisited', { default = true, link = 'SpellRare' })
 end
 
@@ -1031,6 +1015,39 @@ H.parse_post_process = function(node_arr, state_name)
   end
 
   return traverse(node_arr)
+end
+
+H.parse_normalize = function(node_arr, opts)
+  local lookup = {}
+  for key, val in pairs(opts.lookup) do
+    if type(key) == 'string' then lookup[key] = tostring(val) end
+  end
+
+  local has_final_tabstop = false
+  local normalize = function(n)
+    -- Evaluate variable
+    local var_value
+    if n.var ~= nil then var_value = H.parse_eval_var(n.var, lookup) end
+    if type(var_value) == 'string' then n.text = var_value end
+
+    -- Look up tabstop
+    if n.tabstop ~= nil then n.text = lookup[n.tabstop] end
+
+    -- Ensure text-or-placeholder
+    if n.text == nil and n.placeholder == nil then n.placeholder = { { text = '' } } end
+    if n.text ~= nil and n.placeholder ~= nil then n.placeholder = nil end
+
+    -- Track presence of final tabstop
+    has_final_tabstop = has_final_tabstop or n.tabstop == '0'
+  end
+  -- - Ensure proper random random variables
+  math.randomseed(vim.loop.hrtime())
+  local res = H.nodes_traverse(node_arr, normalize)
+
+  -- Possibly append final tabstop
+  if not has_final_tabstop then table.insert(node_arr, { tabstop = '0', text = '' }) end
+
+  return node_arr
 end
 
 H.parse_rise_depth = function(state)
@@ -1241,18 +1258,6 @@ H.var_evaluators = {
 }
 
 -- Session --------------------------------------------------------------------
-H.insert = function(snippet, opts)
-  if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
-
-  local default_opts = { empty_tabstop = '$', vars_lookup = {} }
-  opts = vim.tbl_deep_extend('force', default_opts, opts or {})
-  if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
-
-  -- Create and initialize session
-  local session = H.session_new(snippet, opts)
-  H.session_init(session, true)
-end
-
 H.get_active_session = function() return H.sessions[#H.sessions] end
 
 H.session_new = function(snippet, opts)
@@ -1269,8 +1274,8 @@ H.session_new = function(snippet, opts)
   return {
     buf_id = vim.api.nvim_get_current_buf(),
     cur_tabstop = taborder[1],
-    expand_args = vim.deepcopy({ snippet = snippet, opts = opts }),
-    extmark_id = H.extmark_new(vim.fn.line('.') - 1, vim.fn.col('.') - 1),
+    extmark_id = H.extmark_new(0, vim.fn.line('.') - 1, vim.fn.col('.') - 1),
+    insert_args = vim.deepcopy({ snippet = snippet, opts = opts }),
     nodes = nodes,
     ns_id = H.ns_id.nodes,
     tabstops = tabstops,
@@ -1279,30 +1284,33 @@ end
 
 H.session_init = function(session, full)
   if session == nil then return end
+  local buf_id = session.buf_id
 
   -- Prepare
   if full then
     -- Set buffer text
-    H.nodes_set_text(session.nodes, session.extmark_id, H.get_indent())
+    H.nodes_set_text(buf_id, session.nodes, session.extmark_id, H.get_indent())
 
     -- Actually start session only if there are tabstops
     if session.cur_tabstop == nil then
-      H.extmark_set_cursor(session.extmark_id, 'right')
+      H.extmark_set_cursor(buf_id, session.extmark_id, 'right')
       -- Clean up
-      H.nodes_traverse(session.nodes, function(n) H.extmark_del(n.extmark_id) end)
-      return H.extmark_del(session.extmark_id)
+      H.nodes_traverse(session.nodes, function(n) H.extmark_del(buf_id, n.extmark_id) end)
+      return H.extmark_del(buf_id, session.extmark_id)
     end
 
     -- Register new session
-    H.session_id = H.session_id + 1
-    session.id = H.session_id
     H.session_deinit(H.get_active_session(), false)
     table.insert(H.sessions, session)
 
     -- Focus on the current tabstop
     H.session_tabstop_focus(session, session.cur_tabstop)
 
-    -- TODO: Make `<C-c>` Insert mode mapping to stop session
+    -- Set tracking behavior
+    H.track_sessions()
+
+    -- Make mappings for all sessions
+    H.map_in_sessions()
   else
     -- Sync current tabstop for resumed session. This is useful when nested
     -- session was done inside reference tabstop node (most common case).
@@ -1313,29 +1321,52 @@ H.session_init = function(session, full)
   -- Ensure Insert mode
   if vim.fn.mode() ~= 'i' then H.set_mode('i') end
 
-  -- Set tracking behavior:
-  H.session_create_autocommands(session)
-
   -- Trigger proper event
   H.trigger_event('MiniSnippetsSession' .. (full and 'Start' or 'Resume'))
 end
 
-H.session_create_autocommands = function(session)
-  local gr = vim.api.nvim_create_augroup('MiniSnippetsSession' .. session.id, { clear = true })
-  session.augroup_id = gr
+H.track_sessions = function()
+  -- Create tracking autocommands only once for all nested sessions
+  if #H.sessions > 1 then return end
+  local gr = vim.api.nvim_create_augroup('MiniSnippetsTrack', { clear = true })
 
-  local au = function(event, pattern, callback, desc)
-    vim.api.nvim_create_autocmd(event, { group = gr, pattern = pattern, callback = callback, desc = desc })
+  -- React to text changes
+  local latest_changedticks = {}
+  local on_textchanged = function(args)
+    local session, buf_id = H.get_active_session(), args.buf
+    -- React only to text changes in session's buffer for performance
+    if session.buf_id ~= buf_id or latest_changedticks[buf_id] == vim.b[buf_id].changedtick then return end
+    latest_changedticks[buf_id] = vim.b[buf_id].changedtick
+    -- Sync before maybe stopping to maybe replace placeholder in final tabstop
+    H.session_sync_current_tabstop(session)
+    if session.cur_tabstop == '0' then return MiniSnippets.session.stop() end
   end
+  local text_events = { 'TextChanged', 'TextChangedI', 'TextChangedP' }
+  vim.api.nvim_create_autocmd(text_events, { group = gr, callback = on_textchanged, desc = 'React to text change' })
 
-  local on_textchanged = function() H.session_sync_current_tabstop(session) end
-  au({ 'TextChanged', 'TextChangedI', 'TextChangedP' }, '*', on_textchanged, 'React to text change')
+  -- Stop on exit to (regular) Normal with final tabstop being current
+  local stop_modechanged = function(args)
+    local session, buf_id = H.get_active_session(), args.buf
+    if not (session.buf_id == buf_id and session.cur_tabstop == '0') then return end
+    MiniSnippets.session.stop()
+  end
+  local modechanged_opts = { group = gr, pattern = '*:n', callback = stop_modechanged, desc = 'Stop on final tabstop' }
+  vim.api.nvim_create_autocmd('ModeChanged', modechanged_opts)
+end
 
-  -- TODO:
-  -- - Automatically stop session:
-  --   - On `BufUnload`.
-  --   - On Normal mode exit if $0 is current or there is no unvisited nodes.
-  --   - After typing something with $0 being current node.
+H.map_in_sessions = function()
+  -- Create mapping only once for all nested sessions
+  if #H.sessions > 1 then return end
+  local lhs = '<C-c>'
+  H.cache.ctrl_c_map_data = vim.fn.maparg(lhs, 'i', false, true)
+  vim.keymap.set('i', lhs, function() MiniSnippets.session.stop() end, { desc = 'Stop active session' })
+end
+
+H.unmap_in_sessions = function()
+  local map_data = H.cache.ctrl_c_map_data
+  if map_data == nil then return end
+  if vim.tbl_count(map_data) > 0 then return vim.fn.mapset('i', false, map_data) end
+  vim.keymap.del('i', map_data.lhs or '<C-c>')
 end
 
 H.session_tabstop_focus = function(session, tabstop_id)
@@ -1347,9 +1378,9 @@ H.session_tabstop_focus = function(session, tabstop_id)
 
   -- Focus cursor on the reference node in proper side: left side if it has
   -- placeholder (and will be replaced), right side otherwise (to append).
-  local ref_node = H.session_get_ref_node(session, tabstop_id)
+  local ref_node = H.session_get_ref_node(session)
   local side = ref_node.placeholder ~= nil and 'left' or 'right'
-  H.extmark_set_cursor(ref_node.extmark_id, side)
+  H.extmark_set_cursor(session.buf_id, ref_node.extmark_id, side)
 
   -- Ensure proper gravity as reference node has changed
   H.session_ensure_gravity(session)
@@ -1361,10 +1392,10 @@ H.session_ensure_gravity = function(session)
   -- Ensure proper gravity relative to reference node (first node with current
   -- tabstop): "left" before, "expand" at, "right" after. This should account
   -- for typing in snippets like `$1$2$1$2$1` (in both 1 and 2).
-  local cur_tabstop, base_gravity = session.cur_tabstop, 'left'
+  local buf_id, cur_tabstop, base_gravity = session.buf_id, session.cur_tabstop, 'left'
   local ensure = function(n)
     local is_ref_node = n.tabstop == cur_tabstop and base_gravity == 'left'
-    H.extmark_set_gravity(n.extmark_id, is_ref_node and 'expand' or base_gravity)
+    H.extmark_set_gravity(buf_id, n.extmark_id, is_ref_node and 'expand' or base_gravity)
     base_gravity = (is_ref_node or base_gravity == 'right') and 'right' or 'left'
   end
   -- NOTE: This relies on `H.nodes_traverse` to first apply to the node and
@@ -1374,31 +1405,33 @@ H.session_ensure_gravity = function(session)
   H.nodes_traverse(session.nodes, ensure)
 end
 
-H.session_get_ref_node = function(session, tabstop_id)
-  local res
-  local find = function(n) res = res or (n.tabstop == tabstop_id and n or nil) end
+H.session_get_ref_node = function(session)
+  local res, cur_tabstop = nil, session.cur_tabstop
+  local find = function(n) res = res or (n.tabstop == cur_tabstop and n or nil) end
   H.nodes_traverse(session.nodes, find)
   return res
 end
 
 H.session_sync_current_tabstop = function(session)
-  local ref_node = H.session_get_ref_node(session, session.cur_tabstop)
+  if session._no_sync then return end
+
+  local buf_id, ref_node = session.buf_id, H.session_get_ref_node(session)
   local ref_extmark_id = ref_node.extmark_id
 
   -- With present placeholder, decide whether there was a valid change (then
   -- remove it) or not (then no sync)
   if ref_node.placeholder ~= nil then
-    local ref_row, ref_col = H.extmark_get_range(ref_extmark_id)
-    local phd_row, phd_col = H.extmark_get_range(ref_node.placeholder[1].extmark_id)
+    local ref_row, ref_col = H.extmark_get_range(buf_id, ref_extmark_id)
+    local phd_row, phd_col = H.extmark_get_range(buf_id, ref_node.placeholder[1].extmark_id)
     if ref_row == phd_row and ref_col == phd_col then return end
 
     -- Remove placeholder to get extmark representing newly added text
-    H.nodes_del(ref_node.placeholder)
+    H.nodes_del(buf_id, ref_node.placeholder)
     ref_node.placeholder = nil
   end
 
   -- Compute target text
-  local row, col, end_row, end_col = H.extmark_get_range(ref_extmark_id)
+  local row, col, end_row, end_col = H.extmark_get_range(buf_id, ref_extmark_id)
   local cur_text = vim.api.nvim_buf_get_text(0, row, col, end_row, end_col, {})
   cur_text = table.concat(cur_text, '\n')
 
@@ -1406,15 +1439,18 @@ H.session_sync_current_tabstop = function(session)
   local cur_tabstop = session.cur_tabstop
   local sync = function(n)
     if n.tabstop == cur_tabstop then
-      if n.placeholder ~= nil then H.nodes_del(n.placeholder) end
-      H.extmark_set_gravity(n.extmark_id, 'expand')
-      if n.extmark_id ~= ref_extmark_id then H.extmark_set_text(n.extmark_id, 'inside', cur_text) end
+      if n.placeholder ~= nil then H.nodes_del(buf_id, n.placeholder) end
+      H.extmark_set_gravity(buf_id, n.extmark_id, 'expand')
+      if n.extmark_id ~= ref_extmark_id then H.extmark_set_text(buf_id, n.extmark_id, 'inside', cur_text) end
       n.placeholder, n.text = nil, cur_text
     end
     -- Make sure node's extmark doesn't move when setting later text
-    H.extmark_set_gravity(n.extmark_id, 'left')
+    H.extmark_set_gravity(buf_id, n.extmark_id, 'left')
   end
+  -- - Temporarily disable running this function (as autocommands will trigger)
+  session._no_sync = true
   H.nodes_traverse(session.nodes, sync)
+  session._no_sync = nil
   H.session_ensure_gravity(session)
 
   -- Make highlighting up to date
@@ -1431,35 +1467,50 @@ H.session_jump = vim.schedule_wrap(function(session, direction)
 
   local event_data = { tabstop_from = cur_tabstop, tabstop_to = new_tabstop }
   H.trigger_event('MiniSnippetsSessionJumpPre', event_data)
-  -- TODO: Ensure that session's buffer is current. Use `vim.fn.bufwinid()`.
   H.session_tabstop_focus(session, new_tabstop)
   H.trigger_event('MiniSnippetsSessionJump', event_data)
 end)
 
 H.session_update_hl = function(session)
-  -- TODO: Add proper highlighting based on "is current / replaced" > `$0` > `is_visited`.
+  local buf_id, insert_opts = session.buf_id, session.insert_args.opts
+  local empty_tabstop, empty_tabstop_final = insert_opts.empty_tabstop, insert_opts.empty_tabstop_final
+  local cur_tabstop, tabstops = session.cur_tabstop, session.tabstops
+  local is_replace = H.session_get_ref_node(session).placeholder ~= nil
+  local current_hl = 'MiniSnippetsCurrent' .. (is_replace and 'Replace' or '')
+  local update_hl = function(n)
+    if n.tabstop == nil then return end
+    local is_final, is_visited = n.tabstop == '0', tabstops[n.tabstop].is_visited
+    local hl_group = n.tabstop == cur_tabstop and current_hl
+      or (is_final and 'MiniSnippetsFinal' or (is_visited and 'MiniSnippetsVisited' or 'MiniSnippetsUnvisited'))
+
+    local row, col, opts = H.extmark_get(buf_id, n.extmark_id)
+    opts.hl_group, opts.virt_text, opts.virt_text_pos = hl_group, nil, nil
+    if row == opts.end_row and col == opts.end_col and vim.fn.has('nvim-0.10') == 1 then
+      opts.virt_text_pos = 'inline'
+      opts.virt_text = { { is_final and empty_tabstop_final or empty_tabstop, hl_group } }
+    end
+    vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.nodes, row, col, opts)
+  end
+  H.nodes_traverse(session.nodes, update_hl)
 end
 
 H.session_deinit = function(session, full)
   if session == nil then return end
 
-  -- Stop current session tracking
-  pcall(vim.api.nvim_del_augroup_by_id, session.augroup_id)
-
   -- Delete or hide (make invisible) extmarks
   local extmark_fun = full and H.extmark_del or H.extmark_hide
-  extmark_fun(session.extmark_id)
-  H.nodes_traverse(session.nodes, function(n) extmark_fun(n.extmark_id) end)
+  extmark_fun(session.buf_id, session.extmark_id)
+  H.nodes_traverse(session.nodes, function(n) extmark_fun(session.buf_id, n.extmark_id) end)
 
   -- Trigger proper event
   H.trigger_event('MiniSnippetsSession' .. (full and 'Stop' or 'Suspend'))
 end
 
-H.nodes_set_text = function(nodes, tracking_extmark_id, indent)
+H.nodes_set_text = function(buf_id, nodes, tracking_extmark_id, indent)
   for _, n in ipairs(nodes) do
     -- Add tracking extmark
-    local _, _, row, col = H.extmark_get_range(tracking_extmark_id)
-    n.extmark_id = H.extmark_new(row, col)
+    local _, _, row, col = H.extmark_get_range(buf_id, tracking_extmark_id)
+    n.extmark_id = H.extmark_new(buf_id, row, col)
 
     -- Adjust node's text and append it to currently set text
     if n.text ~= nil then
@@ -1468,21 +1519,21 @@ H.nodes_set_text = function(nodes, tracking_extmark_id, indent)
         local sw = vim.bo.shiftwidth
         new_text = new_text:gsub('\t', string.rep(' ', sw == 0 and vim.bo.tabstop or sw))
       end
-      H.extmark_set_text(tracking_extmark_id, 'right', new_text)
+      H.extmark_set_text(buf_id, tracking_extmark_id, 'right', new_text)
     end
 
     -- Process (possibly nested) placeholder nodes
-    if n.placeholder ~= nil then H.nodes_set_text(n.placeholder, tracking_extmark_id, indent) end
+    if n.placeholder ~= nil then H.nodes_set_text(buf_id, n.placeholder, tracking_extmark_id, indent) end
 
     -- Make sure that node's extmark doesn't move when adding next node text
-    H.extmark_set_gravity(n.extmark_id, 'left')
+    H.extmark_set_gravity(buf_id, n.extmark_id, 'left')
   end
 end
 
-H.nodes_del = function(nodes)
+H.nodes_del = function(buf_id, nodes)
   local del = function(n)
-    H.extmark_set_text(n.extmark_id, 'inside', {})
-    H.extmark_del(n.extmark_id)
+    H.extmark_set_text(buf_id, n.extmark_id, 'inside', {})
+    H.extmark_del(buf_id, n.extmark_id)
   end
   H.nodes_traverse(nodes, del)
 end
@@ -1518,52 +1569,49 @@ end
 -- All extmark functions work in current buffer with same global namespace.
 -- This is because interaction with snippets eventually requires buffer to be
 -- current, so instead rely on it becoming such as soon as possible.
-H.extmark_new = function(row, col)
+H.extmark_new = function(buf_id, row, col)
   -- Create expanding extmark by default
   local opts = { end_row = row, end_col = col, right_gravity = false, end_right_gravity = true }
-  return vim.api.nvim_buf_set_extmark(0, H.ns_id.nodes, row, col, opts)
+  return vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.nodes, row, col, opts)
 end
 
-H.extmark_get = function(ext_id)
-  local data = vim.api.nvim_buf_get_extmark_by_id(0, H.ns_id.nodes, ext_id, { details = true })
+H.extmark_get = function(buf_id, ext_id)
+  local data = vim.api.nvim_buf_get_extmark_by_id(buf_id, H.ns_id.nodes, ext_id, { details = true })
   data[3].id, data[3].ns_id = ext_id, nil
   return data[1], data[2], data[3]
 end
 
-H.extmark_get_range = function(ext_id)
-  local row, col, opts = H.extmark_get(ext_id)
+H.extmark_get_range = function(buf_id, ext_id)
+  local row, col, opts = H.extmark_get(buf_id, ext_id)
   return row, col, opts.end_row, opts.end_col
 end
 
-H.extmark_del = function(ext_id) vim.api.nvim_buf_del_extmark(0, H.ns_id.nodes, ext_id or -1) end
+H.extmark_del = function(buf_id, ext_id) vim.api.nvim_buf_del_extmark(buf_id, H.ns_id.nodes, ext_id or -1) end
 
-H.extmark_hide = function(ext_id)
-  if ext_id == nil then return end
-  local row, col, opts = H.extmark_get(ext_id)
-  opts.hl_group, opts.virt_text = nil, nil
-  vim.api.nvim_buf_set_extmark(0, H.ns_id.nodes, row, col, opts)
+H.extmark_hide = function(buf_id, ext_id)
+  local row, col, opts = H.extmark_get(buf_id, ext_id)
+  opts.hl_group, opts.virt_text, opts.virt_text_pos = nil, nil, nil
+  vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.nodes, row, col, opts)
 end
 
-H.extmark_set_gravity = function(ext_id, gravity)
-  if ext_id == nil then return end
-  local row, col, opts = H.extmark_get(ext_id)
+H.extmark_set_gravity = function(buf_id, ext_id, gravity)
+  local row, col, opts = H.extmark_get(buf_id, ext_id)
   opts.right_gravity, opts.end_right_gravity = gravity == 'right', gravity ~= 'left'
-  vim.api.nvim_buf_set_extmark(0, H.ns_id.nodes, row, col, opts)
+  vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.nodes, row, col, opts)
 end
 
 --stylua: ignore
-H.extmark_set_text = function(ext_id, side, text)
-  if ext_id == nil then return end
-  local row, col, end_row, end_col = H.extmark_get_range(ext_id)
+H.extmark_set_text = function(buf_id, ext_id, side, text)
+  local row, col, end_row, end_col = H.extmark_get_range(buf_id, ext_id)
   if side == 'left'  then end_row, end_col = row,     col     end
   if side == 'right' then row,     col     = end_row, end_col end
   text = type(text) == 'string' and vim.split(text, '\n') or text
-  vim.api.nvim_buf_set_text(0, row, col, end_row, end_col, text)
+  vim.api.nvim_buf_set_text(buf_id, row, col, end_row, end_col, text)
 end
 
-H.extmark_set_cursor = function(ext_id, side)
-  if ext_id == nil then return end
-  local row, col, end_row, end_col = H.extmark_get_range(ext_id)
+H.extmark_set_cursor = function(buf_id, ext_id, side)
+  H.ensure_cur_buf(buf_id)
+  local row, col, end_row, end_col = H.extmark_get_range(buf_id, ext_id)
   if side == 'left' then return vim.api.nvim_win_set_cursor(0, { row + 1, col }) end
   vim.api.nvim_win_set_cursor(0, { end_row + 1, end_col })
 end
@@ -1642,6 +1690,18 @@ H.is_array_of = function(x, predicate)
 end
 
 H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
+
+H.ensure_cur_buf = function(buf_id)
+  if buf_id == 0 or buf_id == vim.api.nvim_get_current_buf() or not H.is_valid_buf(buf_id) then return end
+  local win_id = vim.fn.win_findbuf(buf_id)[1]
+  if win_id == nil then return vim.api.nvim_win_set_buf(0, buf_id) end
+  vim.api.nvim_set_current_win(win_id)
+end
+
+H.call_without_pum = function(f)
+  if vim.fn.pumvisible() == 1 then vim.fn.feedkeys('\25', 'n') end
+  vim.schedule(f)
+end
 
 H.set_mode = function(mode)
   -- This is seemingly the only "good" way to ensure Normal mode.

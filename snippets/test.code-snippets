@@ -63,7 +63,7 @@
   },
   "tabstop_5": {
     "prefix": "t_5",
-    "body": "Tabstop #1: $1\nTabstop #2: ${2:aaa}\nTabstop #1: ${1:bbb}\nTabstop #2: ${2:ccc}",
+    "body": "Tabstop #1: $1\nTabstop #2: ${2:aaa}\nTabstop #1: ${1:bbb}\nTabstop #2: ${2:ccc}\nFinal: $0",
     "description": "Multiple connected tabstops (should work when inputting multiline text)"
   },
   "tabstop_6": {

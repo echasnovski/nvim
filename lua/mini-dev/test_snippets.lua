@@ -48,10 +48,10 @@ T['setup()']['creates side effects'] = function()
   load_module()
   local has_highlight = function(group, value) expect.match(child.cmd_capture('hi ' .. group), value) end
 
-  has_highlight('MiniSnippetsCurrent', 'links to SpellBad')
-  has_highlight('MiniSnippetsCurrentReplace', 'links to MiniSnippetsCurrent')
-  has_highlight('MiniSnippetsFinal', 'links to SpellCap')
-  has_highlight('MiniSnippetsUnvisited', 'links to SpellLocal')
+  has_highlight('MiniSnippetsCurrent', 'links to SpellLocal')
+  has_highlight('MiniSnippetsCurrentReplace', 'links to SpellBad')
+  has_highlight('MiniSnippetsFinal', 'links to MiniSnippetsUnvisited')
+  has_highlight('MiniSnippetsUnvisited', 'links to SpellCap')
   has_highlight('MiniSnippetsVisited', 'links to SpellRare')
 end
 
@@ -473,6 +473,7 @@ end
 --stylua: ignore
 T['parse()']['respects `opts.normalize`'] = function()
   local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { normalize = true }), ref_nodes) end
+  local final_tabstop = { tabstop = '0', text = '' }
 
   child.fn.setenv('AA', 'my-aa')
   child.fn.setenv('XX', 'my-xx')
@@ -481,40 +482,50 @@ T['parse()']['respects `opts.normalize`'] = function()
   child.fn.setenv('EMPTY', '')
 
   -- Resolves variables
-  validate('$AA',   { { var = 'AA', text = 'my-aa' } })
-  validate('${AA}', { { var = 'AA', text = 'my-aa' } })
+  validate('$AA',   { { var = 'AA', text = 'my-aa' }, final_tabstop })
+  validate('${AA}', { { var = 'AA', text = 'my-aa' }, final_tabstop })
   if not helpers.is_windows() then
-    validate('$EMPTY',            { { var = 'EMPTY', text = '' } })
-    validate('${EMPTY:fallback}', { { var = 'EMPTY', text = '' } })
+    validate('$EMPTY',            { { var = 'EMPTY', text = '' }, final_tabstop })
+    validate('${EMPTY:fallback}', { { var = 'EMPTY', text = '' }, final_tabstop })
   end
 
   -- Ensures text-or-placeholder
-  validate('$1',         { { tabstop = '1', placeholder = { { text = '' } } } })
-  validate('${1}',       { { tabstop = '1', placeholder = { { text = '' } } } })
-  validate('${1:val}',   { { tabstop = '1', placeholder = { { text = 'val' } } } })
-  validate('${1/a/b/c}', { { tabstop = '1', placeholder = { { text = '' } }, transform = { 'a', 'b', 'c' } } })
-  validate('${1|u,v|}',  { { tabstop = '1', placeholder = { { text = '' } }, choices = { 'u', 'v' } } })
+  validate('$1',         { { tabstop = '1', placeholder = { { text = '' } } },                                 final_tabstop })
+  validate('${1}',       { { tabstop = '1', placeholder = { { text = '' } } } ,                                final_tabstop })
+  validate('${1:val}',   { { tabstop = '1', placeholder = { { text = 'val' } } },                              final_tabstop })
+  validate('${1/a/b/c}', { { tabstop = '1', placeholder = { { text = '' } }, transform = { 'a', 'b', 'c' } } , final_tabstop })
+  validate('${1|u,v|}',  { { tabstop = '1', placeholder = { { text = '' } }, choices = { 'u', 'v' } } ,        final_tabstop })
 
-  validate('$BB',         { { var = 'BB', placeholder = { { text = '' } } } })
-  validate('${BB}',       { { var = 'BB', placeholder = { { text = '' } } } })
-  validate('${BB:var}',   { { var = 'BB', placeholder = { { text = 'var' } } } })
-  validate('${BB/a/b/c}', { { var = 'BB', placeholder = { { text = '' } }, transform = { 'a', 'b', 'c' } } })
+  validate('$BB',         { { var = 'BB', placeholder = { { text = '' } } },                                final_tabstop })
+  validate('${BB}',       { { var = 'BB', placeholder = { { text = '' } } },                                final_tabstop })
+  validate('${BB:var}',   { { var = 'BB', placeholder = { { text = 'var' } } },                             final_tabstop })
+  validate('${BB/a/b/c}', { { var = 'BB', placeholder = { { text = '' } }, transform = { 'a', 'b', 'c' } }, final_tabstop })
 
   -- - Should be exclusive OR
-  validate('${AA:var}',       { { var = 'AA', text = 'my-aa' } })
-  validate('${AA:$1}',        { { var = 'AA', text = 'my-aa' } })
-  validate('${AA:$XX}',       { { var = 'AA', text = 'my-aa' } })
-  validate('${AA:${XX:var}}', { { var = 'AA', text = 'my-aa' } })
+  validate('${AA:var}',       { { var = 'AA', text = 'my-aa' }, final_tabstop })
+  validate('${AA:$1}',        { { var = 'AA', text = 'my-aa' }, final_tabstop })
+  validate('${AA:$XX}',       { { var = 'AA', text = 'my-aa' }, final_tabstop })
+  validate('${AA:${XX:var}}', { { var = 'AA', text = 'my-aa' }, final_tabstop })
 
-  validate('aa', { { text = 'aa' } })
+  validate('aa', { { text = 'aa' }, final_tabstop })
+
+  -- Should not append final tabstop if there is already one present (however deep)
+  validate('$0',          { { tabstop = '0', placeholder = { { text = '' } } } })
+  validate('${0:text}',   { { tabstop = '0', placeholder = { { text = 'text' } } } })
+  validate('$0$1',        { { tabstop = '0', placeholder = { { text = '' } } },     { tabstop = '1', placeholder = { { text = '' } } } })
+  validate('${0:text}$1', { { tabstop = '0', placeholder = { { text = 'text' } } }, { tabstop = '1', placeholder = { { text = '' } } } })
+  validate('$0text',      { { tabstop = '0', placeholder = { { text = '' } } },     { text = 'text' } })
 
   -- Should normalize however deep
-  validate('${BB:$1}',       { { var = 'BB',    placeholder = { { tabstop = '1', placeholder = { { text = '' } } } } } })
-  validate('${BB:${1:$CC}}', { { var = 'BB',    placeholder = { { tabstop = '1', placeholder = { { var = 'CC', placeholder = { { text = '' } } } } } } } })
-  validate('${1:${BB:$CC}}', { { tabstop = '1', placeholder = { { var = 'BB',    placeholder = { { var = 'CC', placeholder = { { text = '' } } } } } } } })
+  validate('${BB:$1}',       { { var = 'BB',    placeholder = { { tabstop = '1', placeholder = { { text = '' } } } } },                                   final_tabstop })
+  validate('${BB:${1:$CC}}', { { var = 'BB',    placeholder = { { tabstop = '1', placeholder = { { var = 'CC', placeholder = { { text = '' } } } } } } }, final_tabstop })
+  validate('${1:${BB:$CC}}', { { tabstop = '1', placeholder = { { var = 'BB',    placeholder = { { var = 'CC', placeholder = { { text = '' } } } } } } }, final_tabstop })
 
-  validate('${1:${AA:$XX}}', { { tabstop = '1', placeholder = { { var = 'AA',    text = 'my-aa' } } } })
-  validate('${1:${2:$AA}}',  { { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { var = 'AA', text = 'my-aa' } } } } } })
+  validate('${1:${AA:$XX}}', { { tabstop = '1', placeholder = { { var = 'AA',    text = 'my-aa' } } },                                   final_tabstop })
+  validate('${1:${2:$AA}}',  { { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { var = 'AA', text = 'my-aa' } } } } }, final_tabstop })
+
+  validate('${1:$0}',        { { tabstop = '1', placeholder = { { tabstop = '0', placeholder = { { text = '' } } } } }     })
+  validate('${1:${0:text}}', { { tabstop = '1', placeholder = { { tabstop = '0', placeholder = { { text = 'text' } } } } } })
 
   -- Evaluates variable only once
   child.lua([[
@@ -530,6 +541,7 @@ T['parse()']['respects `opts.normalize`'] = function()
     {
       { var = 'AA', text = 'my-aa' }, { var = 'AA', text = 'my-aa' },
       { var = 'BB', placeholder = { { text = '' } } }, { var = 'BB', placeholder = { { text = '' } } },
+      final_tabstop,
     }
   )
   eq(child.lua_get('_G.log'), { { 'AA' }, { 'BB' } })
@@ -537,7 +549,7 @@ T['parse()']['respects `opts.normalize`'] = function()
   -- - But not persistently
   child.fn.setenv('AA', '!')
   child.fn.setenv('BB', '?')
-  validate('${AA}${BB}', { { var = 'AA', text = '!' }, { var = 'BB', text = '?' } })
+  validate('${AA}${BB}', { { var = 'AA', text = '!' }, { var = 'BB', text = '?' }, final_tabstop })
 end
 
 --stylua: ignore
@@ -545,33 +557,34 @@ T['parse()']['respects `opts.lookup`'] = function()
   local validate = function(snippet_body, lookup, ref_nodes)
     eq(parse(snippet_body, { normalize = true, lookup = lookup }), ref_nodes)
   end
+  local final_tabstop = { tabstop = '0', text = '' }
 
   -- Can resolve variables from user lookup
-  validate('$BB', { BB = 'hello' }, { { var = 'BB', text = 'hello' } })
-  validate('$BB', { BB = 1 },       { { var = 'BB', text = '1' } })
+  validate('$BB', { BB = 'hello' }, { { var = 'BB', text = 'hello' }, final_tabstop })
+  validate('$BB', { BB = 1 },       { { var = 'BB', text = '1' },     final_tabstop })
 
   -- Should use only string fields
   eq(
     child.lua_get('MiniSnippets.parse("$true", { normalize = true, lookup = { [true] = "x" } })'),
-    { { var = 'true', placeholder = { { text = '' } } } }
+    { { var = 'true', placeholder = { { text = '' } } }, final_tabstop }
   )
-  validate('$1', { [1] = 'x' }, { { tabstop = '1', placeholder = { { text = '' } } } })
+  validate('$1', { [1] = 'x' }, { { tabstop = '1', placeholder = { { text = '' } } }, final_tabstop })
 
   -- - Should prefer user lookup
   child.fn.setenv('AA', 'my-aa')
   child.fn.setenv('XX', 'my-xx')
   child.fn.setenv('EMPTY', '')
 
-  validate('$AA',    { AA = 'other' },        { { var = 'AA',    text = 'other' } })
-  validate('$AA',    { AA = '' },             { { var = 'AA',    text = '' } })
-  validate('$EMPTY', { EMPTY = 'not empty' }, { { var = 'EMPTY', text = 'not empty' } })
+  validate('$AA',    { AA = 'other' },        { { var = 'AA',    text = 'other' },     final_tabstop })
+  validate('$AA',    { AA = '' },             { { var = 'AA',    text = '' },          final_tabstop })
+  validate('$EMPTY', { EMPTY = 'not empty' }, { { var = 'EMPTY', text = 'not empty' }, final_tabstop })
 
-  validate('$AA$XX', { AA = '!', XX = '?' }, { { var = 'AA', text = '!' }, { var = 'XX', text = '?' } })
+  validate('$AA$XX', { AA = '!', XX = '?' }, { { var = 'AA', text = '!' }, { var = 'XX', text = '?' }, final_tabstop })
 
   -- Can resolve tabstops from user lookup
-  validate('$1',       { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' } })
-  validate('${1}',     { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' } })
-  validate('${1:var}', { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' } })
+  validate('$1',       { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' }, final_tabstop })
+  validate('${1}',     { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' }, final_tabstop })
+  validate('${1:var}', { ['1'] = 'hello' }, { { tabstop = '1', text = 'hello' }, final_tabstop })
 
   -- - Should resolve all tabstop entries
   validate(
@@ -581,6 +594,7 @@ T['parse()']['respects `opts.lookup`'] = function()
       { tabstop = '1', text = 'hello' },
       { tabstop = '2', placeholder = { { text = '' } } },
       { tabstop = '1', text = 'hello' },
+      final_tabstop,
     }
   )
 
@@ -588,19 +602,20 @@ T['parse()']['respects `opts.lookup`'] = function()
 
   -- - Should use tabstop as is
   local lookup = { ['1'] = 'hello' }
-  local ref_nodes = { { tabstop = '01', placeholder = { { text = '' } } }, { tabstop = '1', text = 'hello' } }
+  local ref_nodes = { { tabstop = '01', placeholder = { { text = '' } } }, { tabstop = '1', text = 'hello' }, final_tabstop }
   validate('${01}${1}', lookup, ref_nodes)
 
   -- - Should resolve on any depth
-  validate('${1:$2}',      { ['2'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } } })
-  validate('${1:${2:$3}}', { ['2'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } } })
-  validate('${1:${2:$3}}', { ['3'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { tabstop = '3', text = 'xx' } } } } } })
-  validate('${1:${2:$3}}', { ['2'] = 'xx', ['3'] = 'yy' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } } })
+  validate('${1:$2}',      { ['2'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } }, final_tabstop })
+  validate('${1:${2:$3}}', { ['2'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } }, final_tabstop })
+  validate('${1:${2:$3}}', { ['3'] = 'xx' }, { { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { tabstop = '3', text = 'xx' } } } } }, final_tabstop })
+  validate('${1:${2:$3}}', { ['2'] = 'xx', ['3'] = 'yy' }, { { tabstop = '1', placeholder = { { tabstop = '2', text = 'xx' } } }, final_tabstop })
 end
 
 --stylua: ignore
 T['parse()']['can resolve special variables'] = function()
   local validate = function(snippet_body, ref_nodes) eq(parse(snippet_body, { normalize = true }), ref_nodes) end
+  local final_tabstop = { tabstop = '0', text = '' }
 
   local path = test_dir_absolute .. '/snippets/lua.json'
   child.cmd('edit ' .. child.fn.fnameescape(path))
@@ -624,16 +639,16 @@ T['parse()']['can resolve special variables'] = function()
   child.bo.commentstring = '/* %s */'
 
   -- LSP
-  validate('$TM_SELECTED_TEXT', { { var = 'TM_SELECTED_TEXT', text = 'bc def\ng' } })
-  validate('$TM_CURRENT_LINE',  { { var = 'TM_CURRENT_LINE', text = 'abc def' } })
-  validate('$TM_CURRENT_WORD',  { { var = 'TM_CURRENT_WORD', text = 'abc' } })
-  validate('$TM_LINE_INDEX',    { { var = 'TM_LINE_INDEX', text = '0' } })
-  validate('$TM_LINE_NUMBER',   { { var = 'TM_LINE_NUMBER', text = '1' } })
+  validate('$TM_SELECTED_TEXT', { { var = 'TM_SELECTED_TEXT', text = 'bc def\ng' }, final_tabstop })
+  validate('$TM_CURRENT_LINE',  { { var = 'TM_CURRENT_LINE',  text = 'abc def' },   final_tabstop })
+  validate('$TM_CURRENT_WORD',  { { var = 'TM_CURRENT_WORD',  text = 'abc' },       final_tabstop })
+  validate('$TM_LINE_INDEX',    { { var = 'TM_LINE_INDEX',    text = '0' },         final_tabstop })
+  validate('$TM_LINE_NUMBER',   { { var = 'TM_LINE_NUMBER',   text = '1' },         final_tabstop })
 
   local validate_path = function(var, ref_text)
     local nodes = parse(var, { normalize = true })
     nodes[1].text = nodes[1].text:gsub('\\',  '/')
-    eq(nodes, { { var = var:sub(2), text = ref_text } })
+    eq(nodes, { { var = var:sub(2), text = ref_text }, final_tabstop })
   end
   validate_path('$TM_FILENAME',      'lua.json')
   validate_path('$TM_FILENAME_BASE', 'lua')
@@ -643,10 +658,10 @@ T['parse()']['can resolve special variables'] = function()
   -- VS Code
   validate_path('$RELATIVE_FILEPATH', test_dir .. '/snippets/lua.json')
   validate_path('$WORKSPACE_FOLDER',  child.fn.getcwd():gsub('\\', '/'))
-  validate('$CLIPBOARD',         { { var = 'CLIPBOARD', text = 'clip' } })
-  validate('$CURSOR_INDEX',      { { var = 'CURSOR_INDEX', text = '2' } })
-  validate('$CURSOR_NUMBER',     { { var = 'CURSOR_NUMBER', text = '3' } })
-  validate('$LINE_COMMENT',      { { var = 'LINE_COMMENT', text = '/*' } })
+  validate('$CLIPBOARD',         { { var = 'CLIPBOARD', text = 'clip' },  final_tabstop })
+  validate('$CURSOR_INDEX',      { { var = 'CURSOR_INDEX', text = '2' },  final_tabstop })
+  validate('$CURSOR_NUMBER',     { { var = 'CURSOR_NUMBER', text = '3' }, final_tabstop })
+  validate('$LINE_COMMENT',      { { var = 'LINE_COMMENT', text = '/*' }, final_tabstop })
 
   -- - Date/time
   child.lua([[
@@ -658,7 +673,7 @@ T['parse()']['can resolve special variables'] = function()
   ]])
   local validate_datetime = function(var, ref_strftime_format)
     child.lua('_G.args_log = {}')
-    validate(var, { { var = var:sub(2), text = 'datetime' } })
+    validate(var, { { var = var:sub(2), text = 'datetime' }, final_tabstop })
     eq(child.lua_get('_G.args_log'), { { ref_strftime_format } })
   end
 
@@ -675,7 +690,7 @@ T['parse()']['can resolve special variables'] = function()
   validate_datetime('$CURRENT_SECOND',           '%S')
   validate_datetime('$CURRENT_TIMEZONE_OFFSET',  '%z')
 
-  validate('$CURRENT_SECONDS_UNIX', { { var = 'CURRENT_SECONDS_UNIX', text = tostring(child.lua_get('os.time()')) } })
+  validate('$CURRENT_SECONDS_UNIX', { { var = 'CURRENT_SECONDS_UNIX', text = tostring(child.lua_get('os.time()')) }, final_tabstop })
 
   -- Random values
   child.lua('vim.loop.hrtime = function() return 101 end') -- mock reproducible `math.randomseed`
@@ -683,19 +698,21 @@ T['parse()']['can resolve special variables'] = function()
     { var = 'RANDOM', text = '491985' }, { var = 'RANDOM', text = '873024' },
     { var = 'RANDOM_HEX', text = '10347d' }, { var = 'RANDOM_HEX', text = 'df5ed0' },
     { var = 'UUID', text = '13d0871f-61d3-464a-b774-28645dca9e3a' }, { var = 'UUID', text = '7bac0382-1057-48d1-9f3b-9b45dbf681e8' },
+    final_tabstop,
   }
   validate( '${RANDOM}${RANDOM}${RANDOM_HEX}${RANDOM_HEX}${UUID}${UUID}', ref_random)
 
   -- - Should prefer user lookup
   eq(
     parse('$TM_SELECTED_TEXT', { normalize = true, lookup = { TM_SELECTED_TEXT = 'xxx' } }),
-    { { var = 'TM_SELECTED_TEXT', text = 'xxx' } }
+    { { var = 'TM_SELECTED_TEXT', text = 'xxx' }, final_tabstop }
   )
   local random_opts = { normalize = true, lookup = { RANDOM = 'a', RANDOM_HEX = 'b', UUID = 'c' } }
   local random_nodes = {
     { var = 'RANDOM',     text = 'a' }, { var = 'RANDOM',     text = 'a' },
     { var = 'RANDOM_HEX', text = 'b' }, { var = 'RANDOM_HEX', text = 'b' },
     { var = 'UUID',       text = 'c' }, { var = 'UUID',       text = 'c' },
+    final_tabstop,
   }
   eq(parse('${RANDOM}${RANDOM}${RANDOM_HEX}${RANDOM_HEX}${UUID}${UUID}', random_opts), random_nodes)
 
@@ -706,6 +723,7 @@ T['parse()']['can resolve special variables'] = function()
     {
       { var = 'CURRENT_YEAR',  text = 'datetime' }, { var = 'CURRENT_YEAR',  text = 'datetime' },
       { var = 'CURRENT_MONTH', text = 'datetime' }, { var = 'CURRENT_MONTH', text = 'datetime' },
+      final_tabstop,
     }
   )
   eq(child.lua_get('_G.args_log'), { { '%Y' }, { '%m' } })

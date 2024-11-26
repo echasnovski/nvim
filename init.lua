@@ -41,32 +41,21 @@ later(function()
       snippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
       snippets.gen_loader.from_file('~/.config/nvim/snippets/test.code-snippets'),
     },
+    -- For `vim.snippet`
+    -- expand = {
+    --   insert = function(snippet, _) vim.snippet.expand(snippet.body) end
+    -- },
   })
 
-  -- Temporarily use `vim.snippet` as expansion engine
-  local jump_next = function()
-    if vim.snippet.active({ direction = 1 }) then return vim.snippet.jump(1) end
-  end
-  local jump_prev = function()
-    if vim.snippet.active({ direction = -1 }) then vim.snippet.jump(-1) end
-  end
-  vim.keymap.set({ 'i', 's' }, '<C-l>', jump_next)
-  vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
-
-  -- Temporary testing
-  vim.keymap.set('i', '<C-k><C-k>', '<Cmd>lua MiniSnippets.expand({ insert = H.insert })<CR>')
-  vim.keymap.set('i', '<C-g><C-k>', '<Cmd>lua MiniSnippets.expand({ match = false, insert = H.insert })<CR>')
-  vim.keymap.set({ 'i', 's' }, '<C-k><C-l>', "<Cmd>lua MiniSnippets.session.jump('next')<CR>")
-  vim.keymap.set({ 'i', 's' }, '<C-k><C-h>', "<Cmd>lua MiniSnippets.session.jump('prev')<CR>")
-  vim.keymap.set({ 'n', 'i' }, '<C-g><C-e>', '<Cmd>lua MiniSnippets.session.stop()<CR>')
-
-  -- local augroup = vim.api.nvim_create_augroup('test-snippet-events', { clear = true })
-  -- local events =
-  --   { 'MiniSnippetsSessionStart', 'MiniSnippetsSessionSuspend', 'MiniSnippetsSessionResume', 'MiniSnippetsSessionStop' }
-  -- local register_event = function(args) add_to_log({ event = args.event, session = MiniSnippets.session.get() }) end
-  -- vim.api.nvim_create_autocmd('User', { pattern = events, callback = register_event, group = augroup })
-
-  vim.filetype.add({ extension = { ['code-snippets'] = 'json' } })
+  -- -- For `vim.snippet`
+  -- local jump_next = function()
+  --   if vim.snippet.active({ direction = 1 }) then return vim.snippet.jump(1) end
+  -- end
+  -- local jump_prev = function()
+  --   if vim.snippet.active({ direction = -1 }) then vim.snippet.jump(-1) end
+  -- end
+  -- vim.keymap.set({ 'i', 's' }, '<C-l>', jump_next)
+  -- vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
 end)
 
 later(function() add('rafamadriz/friendly-snippets') end)
