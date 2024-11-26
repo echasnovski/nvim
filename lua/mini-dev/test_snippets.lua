@@ -48,11 +48,11 @@ T['setup()']['creates side effects'] = function()
   load_module()
   local has_highlight = function(group, value) expect.match(child.cmd_capture('hi ' .. group), value) end
 
-  has_highlight('MiniSnippetsCurrent', 'links to SpellLocal')
-  has_highlight('MiniSnippetsCurrentReplace', 'links to SpellBad')
+  has_highlight('MiniSnippetsCurrent', 'links to DiffText')
+  has_highlight('MiniSnippetsCurrentReplace', 'links to DiffDelete')
   has_highlight('MiniSnippetsFinal', 'links to MiniSnippetsUnvisited')
-  has_highlight('MiniSnippetsUnvisited', 'links to SpellCap')
-  has_highlight('MiniSnippetsVisited', 'links to SpellRare')
+  has_highlight('MiniSnippetsUnvisited', 'links to DiffAdd')
+  has_highlight('MiniSnippetsVisited', 'links to DiffChange')
 end
 
 T['setup()']['creates `config` field'] = function()
@@ -66,6 +66,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('mappings.expand_all', '<C-g><C-j>')
   expect_config('mappings.jump_next', '<C-l>')
   expect_config('mappings.jump_prev', '<C-h>')
+  expect_config('mappings.stop', '<C-c>')
   expect_config('expand', { match = nil, select = nil, insert = nil })
 end
 
@@ -89,6 +90,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ mappings = { expand_all = 1 } }, 'mappings.expand_all', 'string')
   expect_config_error({ mappings = { jump_next = 1 } }, 'mappings.jump_next', 'string')
   expect_config_error({ mappings = { jump_prev = 1 } }, 'mappings.jump_prev', 'string')
+  expect_config_error({ mappings = { stop = 1 } }, 'mappings.stop', 'string')
   expect_config_error({ expand = 1 }, 'expand', 'table')
   expect_config_error({ expand = { match = 1 } }, 'expand.match', 'function')
   expect_config_error({ expand = { select = 1 } }, 'expand.select', 'function')

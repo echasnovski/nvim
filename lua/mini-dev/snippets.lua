@@ -317,9 +317,10 @@ MiniSnippets.config = {
     expand = '<C-j>',
     expand_all = '<C-g><C-j>',
 
-    -- Jump to next/previous tabstop (when using default `expand.insert`)
+    -- Interact with default `expand.insert` session
     jump_next = '<C-l>',
     jump_prev = '<C-h>',
+    stop = '<C-c>',
   },
 
   -- Functions describing snippet expansion
@@ -620,11 +621,10 @@ MiniSnippets.default_select = function(snippets, insert, opts)
   return vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
 end
 
---- Press `<C-c>` in Insert mode to stop active session (and stay in Insert mode).
 MiniSnippets.default_insert = function(snippet, opts)
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
-  local default_opts = { empty_tabstop = '↓', empty_tabstop_final = '↻', vars_lookup = {} }
+  local default_opts = { empty_tabstop = '•', empty_tabstop_final = '∎', vars_lookup = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
   if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
 
@@ -757,7 +757,12 @@ H.cache = {
   file = {},
   -- Snippets per context
   context = {},
+  -- Data for possibly overridden session mappings
+  mappings = {},
 }
+
+-- Whether current Neovim version supports inline extmarks
+H.has_inline_extmark_support = vim.fn.has('nvim-0.10') == 1
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -778,6 +783,7 @@ H.setup_config = function(config)
     ['mappings.expand_all'] = { config.mappings.expand_all, 'string' },
     ['mappings.jump_next'] = { config.mappings.jump_next, 'string' },
     ['mappings.jump_prev'] = { config.mappings.jump_prev, 'string' },
+    ['mappings.stop'] = { config.mappings.stop, 'string' },
     ['expand.match'] = { config.expand.match, 'function', true },
     ['expand.select'] = { config.expand.select, 'function', true },
     ['expand.insert'] = { config.expand.insert, 'function', true },
@@ -790,7 +796,7 @@ H.apply_config = function(config)
   MiniSnippets.config = config
 
   -- Reset loader cache
-  H.cache = { context = {}, lang = {}, runtime = {}, file = {} }
+  H.cache = { context = {}, lang = {}, runtime = {}, file = {}, mappings = {} }
 
   -- Make mappings
   local mappings = config.mappings
@@ -800,9 +806,6 @@ H.apply_config = function(config)
   end
   map(mappings.expand, '<Cmd>lua MiniSnippets.expand()<CR>', 'Expand snippet')
   map(mappings.expand_all, '<Cmd>lua MiniSnippets.expand({ match = false })<CR>', 'Expand without matching')
-
-  map(mappings.jump_next, "<Cmd>lua MiniSnippets.session.jump('next')<CR>", 'Jump to next snippet tabstop')
-  map(mappings.jump_prev, "<Cmd>lua MiniSnippets.session.jump('prev')<CR>", 'Jump to previous snippet tabstop')
 
   -- Register 'code-snippets' extension as JSON (helps with highlighting)
   vim.schedule(function() vim.filetype.add({ extension = { ['code-snippets'] = 'json' } }) end)
@@ -825,11 +828,11 @@ end
 
 --stylua: ignore
 H.create_default_hl = function()
-  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrent', { default = true, link = 'SpellLocal' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrentReplace', { default = true, link = 'SpellBad' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrent', { default = true, link = 'DiffText' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrentReplace', { default = true, link = 'DiffDelete' })
   vim.api.nvim_set_hl(0, 'MiniSnippetsFinal', { default = true, link = 'MiniSnippetsUnvisited' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsUnvisited', { default = true, link = 'SpellCap' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsVisited', { default = true, link = 'SpellRare' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsUnvisited', { default = true, link = 'DiffAdd' })
+  vim.api.nvim_set_hl(0, 'MiniSnippetsVisited', { default = true, link = 'DiffChange' })
 end
 
 H.is_disabled = function() return vim.g.minisnippets_disable == true or vim.b.minisnippets_disable == true end
@@ -1357,16 +1360,25 @@ end
 H.map_in_sessions = function()
   -- Create mapping only once for all nested sessions
   if #H.sessions > 1 then return end
-  local lhs = '<C-c>'
-  H.cache.ctrl_c_map_data = vim.fn.maparg(lhs, 'i', false, true)
-  vim.keymap.set('i', lhs, function() MiniSnippets.session.stop() end, { desc = 'Stop active session' })
+  local mappings = H.get_config().mappings
+  local map_with_cache = function(lhs, call, desc)
+    if lhs == '' then return end
+    H.cache.mappings[lhs] = vim.fn.maparg(lhs, 'i', false, true)
+    -- NOTE: Map globally to work in nested sessions in different buffers
+    vim.keymap.set('i', lhs, '<Cmd>lua MiniSnippets.session.' .. call .. '<CR>', { desc = desc })
+  end
+  map_with_cache(mappings.jump_next, 'jump("next")', 'Jump to next snippet tabstop')
+  map_with_cache(mappings.jump_prev, 'jump("prev")', 'Jump to previous snippet tabstop')
+  map_with_cache(mappings.stop, 'stop()', 'Stop active snippet session')
 end
 
 H.unmap_in_sessions = function()
-  local map_data = H.cache.ctrl_c_map_data
-  if map_data == nil then return end
-  if vim.tbl_count(map_data) > 0 then return vim.fn.mapset('i', false, map_data) end
-  vim.keymap.del('i', map_data.lhs or '<C-c>')
+  for lhs, data in pairs(H.cache.mappings) do
+    local needs_restore = vim.tbl_count(data) > 0
+    if needs_restore then vim.fn.mapset('i', false, data) end
+    if not needs_restore then vim.keymap.del('i', lhs) end
+  end
+  H.cache.mappings = {}
 end
 
 H.session_tabstop_focus = function(session, tabstop_id)
@@ -1477,6 +1489,8 @@ H.session_update_hl = function(session)
   local cur_tabstop, tabstops = session.cur_tabstop, session.tabstops
   local is_replace = H.session_get_ref_node(session).placeholder ~= nil
   local current_hl = 'MiniSnippetsCurrent' .. (is_replace and 'Replace' or '')
+  local priority = 101
+
   local update_hl = function(n)
     if n.tabstop == nil then return end
     local is_final, is_visited = n.tabstop == '0', tabstops[n.tabstop].is_visited
@@ -1485,9 +1499,12 @@ H.session_update_hl = function(session)
 
     local row, col, opts = H.extmark_get(buf_id, n.extmark_id)
     opts.hl_group, opts.virt_text, opts.virt_text_pos = hl_group, nil, nil
-    if row == opts.end_row and col == opts.end_col and vim.fn.has('nvim-0.10') == 1 then
+    if H.has_inline_extmark_support and row == opts.end_row and col == opts.end_col then
       opts.virt_text_pos = 'inline'
       opts.virt_text = { { is_final and empty_tabstop_final or empty_tabstop, hl_group } }
+      -- Make inline extmarks preserve order if placed at same position
+      priority = priority + 1
+      opts.priority = priority
     end
     vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.nodes, row, col, opts)
   end
