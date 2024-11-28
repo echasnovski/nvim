@@ -1,10 +1,10 @@
--- "Warming spring with green blossoming" vibe
--- Reference hue is 175 for "cold green" and not 180 for proper cyan diff
--- Chroma levels are 3 for bg and 1 for fg
--- Lightness levels are 15+85 for 'dark' and 90+20 for 'light'
+-- "Warming green spring" vibe
+-- Dark  (OKLch): bg=15-3-135 and fg=85-2-178
+-- Light (OKLch): bg=90-2-135 and fg=20-2-178
+-- Foreground hues are picked to maximize palette's bg colors visibility
 local is_dark = vim.o.background == 'dark'
-local bg = is_dark and '#122722' or '#cfeae1'
-local fg = is_dark and '#ced7d4' or '#29302e'
+local bg = is_dark and '#1c2617' or '#dde6d9'
+local fg = is_dark and '#c8d9d4' or '#23322e'
 
 require('mini.hues').setup({
   background = bg,

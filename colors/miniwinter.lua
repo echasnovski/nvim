@@ -1,16 +1,15 @@
--- "Dark, cold, and gloomy winter" vibe
--- Reference hue is 265 for "cold blue" and not 270 for proper cyan in diff
--- Chroma levels are 3 for bg and 1 for fg
--- Lightness levels are 10+80 for 'dark' and 85+15 for 'light'
+-- "Cold dark winter" vibe
+-- Dark  (OKLch): bg=10-3-225 and fg=80-2-269
+-- Light (OKLch): bg=85-2-225 and fg=15-2-269
+-- Foreground hue is hand picked for good bg colors
 local is_dark = vim.o.background == 'dark'
-local bg = is_dark and '#101624' or '#cbd5e9'
-local fg = is_dark and '#c3c7ce' or '#202227'
+local bg = is_dark and '#051920' or '#c7d8df'
+local fg = is_dark and '#c1c6d4' or '#1e222c'
 
 require('mini.hues').setup({
   background = bg,
   foreground = fg,
-  -- Make it "gloomy"
-  saturation = is_dark and 'lowmedium' or 'mediumhigh',
+  saturation = is_dark and 'medium' or 'high',
   accent = 'azure',
 })
 

@@ -1,16 +1,16 @@
--- "Cold autumn with red leaves" vibe
--- Reference hue is 355 for "vibrant red" and not 0 for proper cyan diff
--- Chroma levels are 3 for bg and 1 for fg
--- Lightness levels are 10+80 for 'dark' and 90+20 for 'light'
+-- "Cooling red autumn" vibe
+-- Dark  (OKLch): bg=10-2-315 and fg=80-2-0
+-- Light (OKLch): bg=85-2-315 and fg=15-2-0
+-- Foreground hues are picked to maximize palette's bg colors visibility
 local is_dark = vim.o.background == 'dark'
-local bg = is_dark and '#211017' or '#f4dbe4'
-local fg = is_dark and '#ccc4c7' or '#332c2e'
+local bg = is_dark and '#1a141d' or '#dad1de'
+local fg = is_dark and '#d3c2c6' or '#2b1e22'
 
 require('mini.hues').setup({
   background = bg,
   foreground = fg,
   saturation = is_dark and 'medium' or 'high',
-  accent = 'purple',
+  accent = 'red',
 })
 
 vim.g.colors_name = 'miniautumn'
