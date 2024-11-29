@@ -18,17 +18,31 @@ local type_keys = function(...) return child.type_keys(...) end
 local test_dir = 'tests/dir-snippets'
 local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('\\', '/'):gsub('(.)/$', '%1')
 
+-- Tweak `expect_screenshot()` to test only on Neovim>=0.10 (as it has inline
+-- extmarks support). Use `child.expect_screenshot_orig()` for original testing.
+child.expect_screenshot_orig = child.expect_screenshot
+child.expect_screenshot = function(opts)
+  if child.fn.has('nvim-0.10') == 0 then return end
+  child.expect_screenshot_orig(opts)
+end
+
 -- Common test wrappers
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
   return function(...) return child.lua_get(lua_cmd, { ... }) end
 end
 
+local validate_active_session = function() eq(child.lua_get('MiniSnippets.session.get() ~= nil'), true) end
+local validate_no_active_session = function() eq(child.lua_get('MiniSnippets.session.get() ~= nil'), false) end
+
 -- Output test set ============================================================
 local T = new_set({
   hooks = {
     pre_case = function()
       child.setup()
+      child.set_size(8, 40)
+      child.api.nvim_set_current_buf(child.api.nvim_create_buf(true, false))
+
       load_module()
     end,
     post_once = child.stop,
@@ -45,14 +59,19 @@ T['setup()']['creates side effects'] = function()
 
   -- Highlight groups
   child.cmd('hi clear')
+  child.cmd('hi DiagnosticUnderlineError guisp=#ff0000 gui=underline cterm=underline')
+  child.cmd('hi DiagnosticUnderlineWarn guisp=#ffff00 gui=undercurl cterm=undercurl')
+  child.cmd('hi DiagnosticUnderlineInfo guisp=#0000ff gui=underdotted cterm=underline')
+  child.cmd('hi DiagnosticUnderlineHint guisp=#00ffff gui=underdashed cterm=underdashed')
+  child.cmd('hi DiagnosticUnderlineOk guifg=#00ff00 guibg=#000000')
   load_module()
   local has_highlight = function(group, value) expect.match(child.cmd_capture('hi ' .. group), value) end
 
-  has_highlight('MiniSnippetsCurrent', 'links to DiffText')
-  has_highlight('MiniSnippetsCurrentReplace', 'links to DiffDelete')
-  has_highlight('MiniSnippetsFinal', 'links to MiniSnippetsUnvisited')
-  has_highlight('MiniSnippetsUnvisited', 'links to DiffAdd')
-  has_highlight('MiniSnippetsVisited', 'links to DiffChange')
+  has_highlight('MiniSnippetsCurrent', 'gui=underdouble guisp=#ffff00')
+  has_highlight('MiniSnippetsCurrentReplace', 'gui=underdouble guisp=#ff0000')
+  has_highlight('MiniSnippetsFinal', 'gui=underdouble')
+  has_highlight('MiniSnippetsUnvisited', 'gui=underdouble guisp=#00ffff')
+  has_highlight('MiniSnippetsVisited', 'gui=underdouble guisp=#0000ff')
 end
 
 T['setup()']['creates `config` field'] = function()
@@ -795,6 +814,85 @@ end
 
 T['parse()']['validates input'] = function()
   expect.error(function() parse(1) end, 'Snippet body.*string or array of strings')
+end
+
+T['default_insert()'] = new_set()
+
+local default_insert = forward_lua('MiniSnippets.default_insert')
+local stop = forward_lua('MiniSnippets.session.stop')
+
+local validate_pumvisible = function() eq(child.fn.pumvisible(), 1) end
+local validate_no_pumvisible = function() eq(child.fn.pumvisible(), 0) end
+
+T['default_insert()']['edge cases with snippet structure'] = new_set()
+
+T['default_insert()']['interaction with built-in completion'] =
+  new_set({ hooks = { pre_case = function() child.o.completeopt = 'menuone,noinsert,noselect' end } })
+
+T['default_insert()']['interaction with built-in completion']['popup removal'] = function()
+  set_lines({ 'abc', '' })
+  set_cursor(2, 0)
+
+  type_keys('i', '<C-n>')
+  validate_pumvisible()
+  default_insert({ body = 'no tabstops' })
+  validate_no_pumvisible()
+  validate_no_active_session()
+
+  type_keys('<CR>', '<C-n>')
+  validate_pumvisible()
+  default_insert({ body = 'yes tabstops: $1' })
+  validate_no_pumvisible()
+  validate_active_session()
+end
+
+T['default_insert()']['interaction with built-in completion']['squeezed tabstops'] = function()
+  default_insert({ body = '$1$2$1$2$1' })
+  type_keys('abc', '<C-l>', 'x')
+  type_keys('<C-n>')
+  child.expect_screenshot()
+  type_keys('y')
+  -- NOTE: Currently doesn't work as extmarks are affected when they shouldn't
+  -- See https://github.com/neovim/neovim/issues/31384
+  -- child.expect_screenshot()
+end
+
+T['session.jump()'] = new_set()
+
+local jump = forward_lua('MiniSnippets.session.jump')
+
+T['session.jump()']['interaction with built-in completion'] =
+  new_set({ hooks = { pre_case = function() child.o.completeopt = 'menuone,noinsert,noselect' end } })
+
+T['session.jump()']['interaction with built-in completion']['popup removal'] = function()
+  default_insert({ body = 'abc $1 $2' })
+  type_keys('a', '<C-n>')
+  validate_pumvisible()
+  jump('next')
+  validate_no_pumvisible()
+
+  type_keys('a', '<C-n>')
+  validate_pumvisible()
+  jump('prev')
+  validate_no_pumvisible()
+end
+
+T['session.jump()']['interaction with built-in completion']['no affect of "exausted" popup'] = function()
+  default_insert({ body = 'abc $1 $2' })
+  type_keys('a', '<C-n>', 'x')
+  validate_no_pumvisible()
+  jump('next')
+
+  type_keys('x')
+  child.expect_screenshot()
+end
+
+T['session.jump()']['interaction with built-in completion']['no wrong automatic session stop'] = function()
+  default_insert({ body = 'ab $1\n$1\n$0' })
+  type_keys('a', '<C-n>')
+  validate_pumvisible()
+  jump('next')
+  validate_active_session()
 end
 
 return T

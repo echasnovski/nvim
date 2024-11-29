@@ -65,8 +65,9 @@
 --           disrupting the typing flow.
 --
 -- - Examples:
---     - Autocommand for stopping active session on `ModeChange *:n` when there
+--     - Autocommand for stopping active session on `ModeChanged *:n` when there
 --       are no unvisited tabstops.
+--     - How to setup "expand or jump" type of mapping.
 --
 -- Tests:
 -- - Management:
@@ -204,6 +205,8 @@
 --- - `MiniSnippetsSessionStop`.
 --- - `MiniSnippetsSessionSuspend`.
 --- - `MiniSnippetsSessionResume`.
+--- - `MiniSnippetsSessionJumpPre`.
+--- - `MiniSnippetsSessionJump`.
 ---@tag MiniSnippets-events
 
 --- # Mappings ~
@@ -628,7 +631,7 @@ MiniSnippets.default_insert = function(snippet, opts)
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
   if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
 
-  H.call_without_pum(function() H.session_init(H.session_new(snippet, opts), true) end)
+  H.session_init(H.session_new(snippet, opts), true)
 end
 
 --- Work with snippet session from |MiniSnippets.default_insert()|
@@ -638,7 +641,7 @@ MiniSnippets.session.get = function(all) return vim.deepcopy(all and H.sessions 
 
 MiniSnippets.session.jump = function(direction)
   if not (direction == 'prev' or direction == 'next') then H.error('`direction` should be one of "prev", "next"') end
-  H.call_without_pum(function() H.session_jump(H.get_active_session(), direction) end)
+  H.session_jump(H.get_active_session(), direction)
 end
 
 --- Stop active session
@@ -826,13 +829,24 @@ H.create_autocommands = function()
   -- TODO: Clean up `H.sessions` on `BufUnload` from outdated sessions
 end
 
---stylua: ignore
 H.create_default_hl = function()
-  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrent', { default = true, link = 'DiffText' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsCurrentReplace', { default = true, link = 'DiffDelete' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsFinal', { default = true, link = 'MiniSnippetsUnvisited' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsUnvisited', { default = true, link = 'DiffAdd' })
-  vim.api.nvim_set_hl(0, 'MiniSnippetsVisited', { default = true, link = 'DiffChange' })
+  local get_hl_data = vim.fn.has('nvim-0.9') == 1
+      and function(x) return vim.api.nvim_get_hl(0, { name = x, link = false }) end
+    or function(x) return vim.api.nvim_get_hl_by_name(x, true) end
+  local hi_link_underdouble = function(to, from)
+    local data = get_hl_data(from)
+    data.default = true
+    data.underdouble, data.underline, data.undercurl, data.underdotted, data.underdashed =
+      true, false, false, false, false
+    data.cterm = { underdouble = true }
+    data.fg, data.bg, data.ctermfg, data.ctermbg = 'NONE', 'NONE', 'NONE', 'NONE'
+    vim.api.nvim_set_hl(0, to, data)
+  end
+  hi_link_underdouble('MiniSnippetsCurrent', 'DiagnosticUnderlineWarn')
+  hi_link_underdouble('MiniSnippetsCurrentReplace', 'DiagnosticUnderlineError')
+  hi_link_underdouble('MiniSnippetsUnvisited', 'DiagnosticUnderlineHint')
+  hi_link_underdouble('MiniSnippetsVisited', 'DiagnosticUnderlineInfo')
+  hi_link_underdouble('MiniSnippetsFinal', 'DiagnosticUnderline' .. (vim.fn.has('nvim-0.9') == 1 and 'Ok' or 'Hint'))
 end
 
 H.is_disabled = function() return vim.g.minisnippets_disable == true or vim.b.minisnippets_disable == true end
@@ -963,15 +977,8 @@ H.make_extended_insert = function(insert)
     -- Remove snippet's region
     local r = snippet.region
     if H.is_region(r) then
-      if mode ~= 'i' then
-        -- Make possible positioning cursor after line end
-        local cache_virtualedit = vim.wo.virtualedit
-        vim.wo.virtualedit = 'onemore'
-        vim.schedule(function() vim.wo.virtualedit = cache_virtualedit end)
-      end
-
       -- Set cursor before deleting text to ensure working at end of line
-      vim.api.nvim_win_set_cursor(0, { r.from.line, r.from.col - 1 })
+      H.set_cursor({ r.from.line, r.from.col - 1 })
       vim.api.nvim_buf_set_text(0, r.from.line - 1, r.from.col - 1, r.to.line - 1, r.to.col, {})
     end
 
@@ -1294,12 +1301,17 @@ H.session_init = function(session, full)
     -- Set buffer text
     H.nodes_set_text(buf_id, session.nodes, session.extmark_id, H.get_indent())
 
-    -- Actually start session only if there are tabstops
-    if session.cur_tabstop == nil then
-      H.extmark_set_cursor(buf_id, session.extmark_id, 'right')
-      -- Clean up
-      H.nodes_traverse(session.nodes, function(n) H.extmark_del(buf_id, n.extmark_id) end)
-      return H.extmark_del(buf_id, session.extmark_id)
+    -- No session if no input needed: single final tabstop without placeholder
+    if session.cur_tabstop == '0' then
+      local ref_node = H.session_get_ref_node(session)
+      local row, col, opts = H.extmark_get(buf_id, ref_node.extmark_id)
+      local is_empty = row == opts.end_row and col == opts.end_col
+      if is_empty then
+        H.extmark_set_cursor(buf_id, ref_node.extmark_id, 'left')
+        -- Clean up
+        H.nodes_traverse(session.nodes, function(n) H.extmark_del(buf_id, n.extmark_id) end)
+        return H.extmark_del(buf_id, session.extmark_id)
+      end
     end
 
     -- Register new session
@@ -1321,7 +1333,7 @@ H.session_init = function(session, full)
     H.session_sync_current_tabstop(session)
   end
 
-  -- Ensure Insert mode
+  -- Ensure Insert mode. NOTE: it does not have immediate effect.
   if vim.fn.mode() ~= 'i' then H.set_mode('i') end
 
   -- Trigger proper event
@@ -1340,21 +1352,23 @@ H.track_sessions = function()
     -- React only to text changes in session's buffer for performance
     if session.buf_id ~= buf_id or latest_changedticks[buf_id] == vim.b[buf_id].changedtick then return end
     latest_changedticks[buf_id] = vim.b[buf_id].changedtick
-    -- Sync before maybe stopping to maybe replace placeholder in final tabstop
     H.session_sync_current_tabstop(session)
-    if session.cur_tabstop == '0' then return MiniSnippets.session.stop() end
   end
   local text_events = { 'TextChanged', 'TextChangedI', 'TextChangedP' }
   vim.api.nvim_create_autocmd(text_events, { group = gr, callback = on_textchanged, desc = 'React to text change' })
 
-  -- Stop on exit to (regular) Normal with final tabstop being current
-  local stop_modechanged = function(args)
+  -- Stop if final tabstop is current: exit to Normal mode or *any* user typing
+  -- NOTE: Use `schedule_wrap` to possibly replace placeholder in final tabstop
+  local stop_if_final = vim.schedule_wrap(function(args)
     local session, buf_id = H.get_active_session(), args.buf
     if not (session.buf_id == buf_id and session.cur_tabstop == '0') then return end
     MiniSnippets.session.stop()
-  end
-  local modechanged_opts = { group = gr, pattern = '*:n', callback = stop_modechanged, desc = 'Stop on final tabstop' }
+  end)
+  local modechanged_opts = { group = gr, pattern = '*:n', callback = stop_if_final, desc = 'Stop on final tabstop' }
   vim.api.nvim_create_autocmd('ModeChanged', modechanged_opts)
+  -- NOTE: Don't use `TextChanged*` as they may unexpectedly trigger with
+  -- built-in completion (as it might "delete and add" text when not needed)
+  vim.api.nvim_create_autocmd('InsertCharPre', { group = gr, callback = stop_if_final, desc = 'Stop on final tabstop' })
 end
 
 H.map_in_sessions = function()
@@ -1425,6 +1439,8 @@ H.session_get_ref_node = function(session)
 end
 
 H.session_sync_current_tabstop = function(session)
+  -- TODO: Figure out why it is called twice as much.
+  -- Is it indeed because of 'mini.completion' and popups?
   if session._no_sync then return end
 
   local buf_id, ref_node = session.buf_id, H.session_get_ref_node(session)
@@ -1629,8 +1645,8 @@ end
 H.extmark_set_cursor = function(buf_id, ext_id, side)
   H.ensure_cur_buf(buf_id)
   local row, col, end_row, end_col = H.extmark_get_range(buf_id, ext_id)
-  if side == 'left' then return vim.api.nvim_win_set_cursor(0, { row + 1, col }) end
-  vim.api.nvim_win_set_cursor(0, { end_row + 1, end_col })
+  local pos = side == 'left' and { row + 1, col } or { end_row + 1, end_col }
+  H.set_cursor(pos)
 end
 
 -- Indent ---------------------------------------------------------------------
@@ -1715,17 +1731,31 @@ H.ensure_cur_buf = function(buf_id)
   vim.api.nvim_set_current_win(win_id)
 end
 
-H.call_without_pum = function(f)
-  if vim.fn.pumvisible() == 1 then vim.fn.feedkeys('\25', 'n') end
-  vim.schedule(f)
+H.set_cursor = function(pos)
+  -- Ensure no built-in completion window
+  -- NOTE: `complete()` instead of emulating `<C-y>` has immeiate result
+  -- (without the need to `vim.schedule()`).
+  -- HACK: Always clearing (and not *only* when pumvisible) accounts for weird
+  -- edge case when it is not visible (i.e. candidates *just* got exhausted)
+  -- but will still "clear and restore" text leading to squashing of extmarks.
+  if vim.fn.mode() == 'i' then vim.cmd('noautocmd call complete(col("."), [])') end
+
+  -- Make possible positioning cursor after line end
+  if vim.fn.mode() ~= 'i' then
+    local cache_virtualedit = vim.wo.virtualedit
+    vim.wo.virtualedit = 'onemore'
+    vim.schedule(function() vim.wo.virtualedit = cache_virtualedit end)
+  end
+
+  vim.api.nvim_win_set_cursor(0, pos)
 end
 
-H.set_mode = function(mode)
+H.set_mode = function(target_mode)
   -- This is seemingly the only "good" way to ensure Normal mode.
   -- This also works with `vim.snippet.expand()` as its implementation uses
   -- `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
-  vim.api.nvim_feedkeys('\28\14', 'n', false)
-  if mode == 'i' then vim.cmd('startinsert') end
+  local keys = '\28\14' .. (target_mode == 'i' and 'i' or '')
+  vim.api.nvim_feedkeys(keys, 'n', false)
 end
 
 -- TODO: Remove after compatibility with Neovim=0.9 is dropped

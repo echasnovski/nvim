@@ -15,3 +15,9 @@ if #vim.api.nvim_list_uis() == 0 then
   -- Set up 'mini.test'
   require('mini.test').setup()
 end
+
+-- - Make screenshot tests more robust across Neovim versions
+if vim.fn.has('nvim-0.11') == 1 then
+  vim.api.nvim_set_hl(0, 'PmenuMatch', { link = 'Pmenu' })
+  vim.api.nvim_set_hl(0, 'PmenuMatchSel', { link = 'PmenuSel' })
+end

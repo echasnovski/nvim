@@ -56,10 +56,20 @@
     "body": "Hello $1 world$0",
     "description": "Empty tabstop and final tabstop"
   },
+  "tabstop_3_1": {
+    "prefix": "t_3_1",
+    "body": "Hello $0 world",
+    "description": "Single final tabstop in the middle"
+  },
   "tabstop_4": {
     "prefix": "t_4",
     "body": "Hello ${1:placeholder} world${0:final placeholder}",
     "description": "Tabstop and final tabstop with placeholders"
+  },
+  "tabstop_4_1": {
+    "prefix": "t_4_1",
+    "body": "Hello ${0:final placeholder}",
+    "description": "Single final tabstop with placeholder (should start session)"
   },
   "tabstop_5": {
     "prefix": "t_5",
