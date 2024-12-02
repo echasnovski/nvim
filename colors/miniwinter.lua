@@ -1,15 +1,15 @@
--- "Cold dark winter" vibe
--- Dark  (OKLch): bg=10-3-225 and fg=80-2-269
--- Light (OKLch): bg=85-2-225 and fg=15-2-269
+-- "Gloomy blue winter" vibe
+-- Dark  (OKLch): bg=15-3-225 and fg=85-2-270
+-- Light (OKLch): bg=90-2-225 and fg=20-2-270
 -- Foreground hue is hand picked for good bg colors
 local is_dark = vim.o.background == 'dark'
-local bg = is_dark and '#051920' or '#c7d8df'
-local fg = is_dark and '#c1c6d4' or '#1e222c'
+local bg = is_dark and '#11262d' or '#d5e6ed'
+local fg = is_dark and '#cfd4e2' or '#2a2e39'
 
 require('mini.hues').setup({
   background = bg,
   foreground = fg,
-  saturation = is_dark and 'medium' or 'high',
+  saturation = is_dark and 'lowmedium' or 'mediumhigh',
   accent = 'azure',
 })
 

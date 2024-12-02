@@ -1,10 +1,12 @@
 local minicolors = require('mini.colors')
 local minihues = require('mini.hues')
 
-_G.showcase_fg = function(bg, fg_l, fg_hue, accent)
+_G.showcase_fg = function(bg, fg_l, fg_hue, accent, saturation)
   local fg = minicolors.convert({ l = fg_l, c = 2, h = fg_hue }, 'hex')
-  local palette = minihues.make_palette({ background = bg, foreground = fg, saturation = 'medium', accent = accent })
+  local palette = minihues.make_palette({ background = bg, foreground = fg, accent = accent, saturation = saturation })
+  vim.cmd('doautocmd ColorSchemePre')
   minihues.apply_palette(palette)
+  vim.cmd('doautocmd ColorScheme')
 
   -- Create highlight groups for demo
   local hi = function(name, bg_color) vim.api.nvim_set_hl(0, name, { bg = palette[bg_color] }) end
@@ -22,7 +24,7 @@ _G.showcase_fg = function(bg, fg_l, fg_hue, accent)
     vim.cmd('redraw!')
     local ok, char = pcall(vim.fn.getcharstr)
     if not ok or char == '\27' then return end
-    showcase_fg(bg, fg_l, fg_hue + (char == vim.keycode('<Left>') and -1 or 1), accent)
+    showcase_fg(bg, fg_l, fg_hue + (char == vim.keycode('<Left>') and -1 or 1), accent, saturation)
   end, 1)
 end
 
@@ -54,7 +56,7 @@ _G.make_demo_buf = function()
   end
 end
 
--- showcase_fg('#051920', 80, 225, 'azure')  -- miniwinter
--- showcase_fg('#1c2617', 85, 135, 'green')  -- minispring
--- showcase_fg('#2b1f1a', 85, 45,  'yellow') -- minisummer
--- showcase_fg('#1a141d', 80, 315, 'red')    -- miniautumn
+-- showcase_fg('#11262d', 85, 225, 'azure', 'medium')  -- miniwinter
+-- showcase_fg('#1c2617', 85, 135, 'green', 'medium')  -- minispring
+-- showcase_fg('#2b201a', 85, 45,  'yellow', 'medium') -- minisummer
+-- showcase_fg('#262029', 85, 315, 'red', 'lowmedium') -- miniautumn
