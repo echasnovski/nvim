@@ -129,8 +129,23 @@
 
   "choice_1": {
     "prefix": "c_1",
-    "body": "${1|aa,bb,cc|}",
+    "body": "${1|aa,bb|}",
     "description": "Single tabstop with choices"
+  },
+  "choice_2": {
+    "prefix": "c_2",
+    "body": "${1|aa,bb|} ${2|dd,ee|}",
+    "description": "Many tabstops with choices"
+  },
+  "choice_3": {
+    "prefix": "c_3",
+    "body": "${1|aa,bb|}  $1",
+    "description": "Linked tabstops with one with choices"
+  },
+  "choice_4": {
+    "prefix": "c_4",
+    "body": "${1|aa,bb|}  ${1|dd,ee|}",
+    "description": "Linked tabstops with different choices"
   },
 
   "edge_1": {
@@ -152,5 +167,10 @@
     "prefix": "e_4",
     "body": "${1|,|}",
     "description": "Tabstop with repeated empty choices"
+  },
+  "edge_5": {
+    "prefix": "e_5",
+    "body": "${1|aa,bb|}${2|cc,dd|}${1|uu,vv|}${2|ww,xx|}",
+    "description": "Squashed tabstops with choices"
   }
 }

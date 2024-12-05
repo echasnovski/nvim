@@ -14,17 +14,6 @@
 --       cases like `aaa(f`, while `[^%w_-]` seems too arbitrary.
 --
 -- - A system to expand, navigate, and edit snippet:
---     - Make indent be computed as in 'mini.splitjoin', so that multiline
---       snippets in comments works.
---     - Make sure that linked tabstops are updated not only when typing text,
---       but also on `<BS>`.
---     - Should ensure presence of final tabstop (`$0`). Append at end if none.
---     - Placeholders of tabstops and variables should be independent / "local
---       only to node". This resolves cyclic cases like `${1:$2} ${2:$1}` in
---       a single pass. This still should update the "dependent" nodes during
---       typing: start as ` `; become `x x` after typing `x` on either tabstop,
---       allow becomeing `x y` or `y x` after the jump and typing.
---     - Think whether wrapping tabstops should be configurable.
 --
 -- Docs:
 -- - Manage:
@@ -63,6 +52,11 @@
 --         - Resuming session shouldn't change neither cursor nor buffer.
 --           Most importantly this allows typing when $0 is current without
 --           disrupting the typing flow.
+--     - Choice nodes work better with 'completeopt=menuone,noselect'.
+--     - Modifying text outside of tabstop navigation is possible. All tabstop
+--       ranges should adjust (as the use |extmarks|) but it is up to the user
+--       to make sure that they are valid. In general anything but deleting
+--       tabstop range should be OK.
 --
 -- - Examples:
 --     - Autocommand for stopping active session on `ModeChanged *:n` when there
@@ -93,6 +87,35 @@
 --           or moving to the right (even if first node is plain text)?
 --         - Same scenario but for the right side and expanding at last column.
 --         - Should expand when typing text strictly inside snippet range.
+--     - Indent is computed as in 'mini.splitjoin', so that multiline snippets
+--       in comments works.
+--     - Linked tabstops are updated not only on typing text, but also on <BS>.
+--     - Ensures presence of final tabstop (`$0`). Append at end if none.
+--     - Placeholders of tabstops and variables should be independent / "local
+--       only to node". This resolves cyclic cases like `${1:$2} ${2:$1}` in
+--       a single pass. This still should update the "dependent" nodes during
+--       typing: start as ` `; become `x x` after typing `x` on either tabstop,
+--       allow becomeing `x y` or `y x` after the jump and typing.
+--     - Choices are shown when needed (before replace or empty tabstop).
+--       Even if empty tabstop is achieved after deleting.
+--     - Preserves completion popup if session is stopped automatically.
+--     - Correctly computes indent:
+--         - Can work with comment leaders.
+--         - Does not use full indent if cursor is to the left of indent's end.
+--         - Respects whitespace *after* completion leader.
+--     - Should work with sessions in different buffers:
+--         - Stopping active and resuming previous session should work even if
+--           it is not in current buffer.
+--         - No cursor change or tabstop focus setting should occure. This is
+--           to allow more streamlined typing past final tabstop inside nested
+--           session.
+--         - Escaping in Normal mode with final tabstop and present parent
+--           session in different buffer should not start Insert mode.
+--     - Nested sessions (however deep) should be cleaned properly if they no
+--       longer can not be made active (i.e. if buffer is completely unloaded):
+--         - Should not clean if `:edit` is done in current buffer.
+-- - Jump:
+--     - Should ensure that session's buffer is current.
 
 --- *mini.snippets* Manage and expand snippets
 --- *MiniSnippets*
@@ -201,10 +224,10 @@
 
 --- # Events ~
 ---
---- - `MiniSnippetsSessionStart`.
---- - `MiniSnippetsSessionStop`.
---- - `MiniSnippetsSessionSuspend`.
---- - `MiniSnippetsSessionResume`.
+--- - `MiniSnippetsSessionStart` - after a session is started.
+--- - `MiniSnippetsSessionStop` - before a session is stopped.
+--- - `MiniSnippetsSessionSuspend` - before a session is suspended.
+--- - `MiniSnippetsSessionResume` - after a session is resumed.
 --- - `MiniSnippetsSessionJumpPre`.
 --- - `MiniSnippetsSessionJump`.
 ---@tag MiniSnippets-events
@@ -237,16 +260,6 @@
 -- TODO: make local before release
 MiniSnippets = {}
 H = {}
-
--- -- Set useful snippets for easier local development
--- -- TODO: remove when not needed
--- vim.schedule(function()
---   local lang_patterns = { tex = { 'latex.json' }, plaintex = { 'latex.json' } }
---   MiniSnippets.config.snippets = {
---     MiniSnippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
---     MiniSnippets.gen_loader.from_file('~/.config/nvim/snippets/test.code-snippets'),
---   }
--- end)
 
 --- Module setup
 ---
@@ -764,8 +777,8 @@ H.cache = {
   mappings = {},
 }
 
--- Whether current Neovim version supports inline extmarks
-H.has_inline_extmark_support = vim.fn.has('nvim-0.10') == 1
+-- Capabilties of current Neovim version
+H.nvim_supports_inline_extmarks = vim.fn.has('nvim-0.10') == 1
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -826,15 +839,24 @@ H.create_autocommands = function()
   -- changed ('FileType', useful with `gen_loader.from_lang`)
   au({ 'BufUnload', 'FileType' }, '*', function(args) H.cache.context[args.buf] = nil end, 'Clear buffer cache')
 
-  -- TODO: Clean up `H.sessions` on `BufUnload` from outdated sessions
+  -- Clean up invalid sessions (i.e. which have outdated or corrupted data)
+  local clean_sessions = function()
+    for i = #H.sessions - 1, 1, -1 do
+      if not H.session_is_valid(H.sessions[i]) then
+        H.session_deinit(H.sessions[i], true)
+        table.remove(H.sessions, i)
+      end
+    end
+    if #H.sessions > 0 and not H.session_is_valid(H.get_active_session()) then MiniSnippets.session.stop() end
+  end
+  -- - Use `vim.schedule_wrap` to make it work with `:edit` command
+  au('BufUnload', '*', vim.schedule_wrap(clean_sessions), 'Clean sessions stack')
 end
 
 H.create_default_hl = function()
-  local get_hl_data = vim.fn.has('nvim-0.9') == 1
-      and function(x) return vim.api.nvim_get_hl(0, { name = x, link = false }) end
-    or function(x) return vim.api.nvim_get_hl_by_name(x, true) end
   local hi_link_underdouble = function(to, from)
-    local data = get_hl_data(from)
+    local data = vim.fn.has('nvim-0.9') == 1 and vim.api.nvim_get_hl(0, { name = from, link = false })
+      or vim.api.nvim_get_hl_by_name(from, true)
     data.default = true
     data.underdouble, data.underline, data.undercurl, data.underdotted, data.underdashed =
       true, false, false, false, false
@@ -1321,23 +1343,23 @@ H.session_init = function(session, full)
     -- Focus on the current tabstop
     H.session_tabstop_focus(session, session.cur_tabstop)
 
-    -- Set tracking behavior
+    -- Possibly set behavior for all sessions
     H.track_sessions()
-
-    -- Make mappings for all sessions
     H.map_in_sessions()
   else
     -- Sync current tabstop for resumed session. This is useful when nested
     -- session was done inside reference tabstop node (most common case).
     -- On purpose don't change cursor/buffer/focus to allow smoother typing.
     H.session_sync_current_tabstop(session)
+    H.session_update_hl(session)
+    H.session_ensure_gravity(session)
   end
 
-  -- Ensure Insert mode. NOTE: it does not have immediate effect.
-  if vim.fn.mode() ~= 'i' then H.set_mode('i') end
+  -- Ensure Insert mode if appropriate. NOTE: it does not have immediate effect.
+  if vim.fn.mode() ~= 'i' and vim.api.nvim_get_current_buf() == buf_id then H.set_mode('i') end
 
   -- Trigger proper event
-  H.trigger_event('MiniSnippetsSession' .. (full and 'Start' or 'Resume'))
+  H.trigger_event('MiniSnippetsSession' .. (full and 'Start' or 'Resume'), { session = vim.deepcopy(session) })
 end
 
 H.track_sessions = function()
@@ -1352,8 +1374,16 @@ H.track_sessions = function()
     -- React only to text changes in session's buffer for performance
     if session.buf_id ~= buf_id or latest_changedticks[buf_id] == vim.b[buf_id].changedtick then return end
     latest_changedticks[buf_id] = vim.b[buf_id].changedtick
+    -- Ensure that session is valid, like no extmarks got corrupted
+    if not H.session_is_valid(session) then
+      H.notify('Session contains invalid data (deleted or out of range extmarks). It is stopped.', 'WARN')
+      return MiniSnippets.session.stop()
+    end
     H.session_sync_current_tabstop(session)
   end
+  -- NOTE: Use 'TextChangedP' to update linked tabstops with visible popup.
+  -- The downside is a removed placeholder after selecting first choice.
+  -- Together with showing choices in empty tabstops, it is a good compromise.
   local text_events = { 'TextChanged', 'TextChangedI', 'TextChangedP' }
   vim.api.nvim_create_autocmd(text_events, { group = gr, callback = on_textchanged, desc = 'React to text change' })
 
@@ -1361,14 +1391,18 @@ H.track_sessions = function()
   -- NOTE: Use `schedule_wrap` to possibly replace placeholder in final tabstop
   local stop_if_final = vim.schedule_wrap(function(args)
     local session, buf_id = H.get_active_session(), args.buf
-    if not (session.buf_id == buf_id and session.cur_tabstop == '0') then return end
+    if session == nil or not (session.buf_id == buf_id and session.cur_tabstop == '0') then return end
+    H.cache.stop_is_auto = true
     MiniSnippets.session.stop()
+    H.cache.stop_is_auto = nil
   end)
   local modechanged_opts = { group = gr, pattern = '*:n', callback = stop_if_final, desc = 'Stop on final tabstop' }
   vim.api.nvim_create_autocmd('ModeChanged', modechanged_opts)
   -- NOTE: Don't use `TextChanged*` as they may unexpectedly trigger with
   -- built-in completion (as it might "delete and add" text when not needed)
   vim.api.nvim_create_autocmd('InsertCharPre', { group = gr, callback = stop_if_final, desc = 'Stop on final tabstop' })
+
+  -- TODO: React to changes within snippet range (like delete line, etc.)
 end
 
 H.map_in_sessions = function()
@@ -1411,7 +1445,8 @@ H.session_tabstop_focus = function(session, tabstop_id)
   -- Ensure proper gravity as reference node has changed
   H.session_ensure_gravity(session)
 
-  -- TODO: Show choices if reference node has choices
+  -- Maybe show choices when needed (before replace or on empty tabstop)
+  if ref_node.placeholder or ref_node.text == '' then H.show_completion(ref_node.choices) end
 end
 
 H.session_ensure_gravity = function(session)
@@ -1438,6 +1473,22 @@ H.session_get_ref_node = function(session)
   return res
 end
 
+H.session_is_valid = function(session)
+  local buf_id = session.buf_id
+  if not H.is_loaded_buf(buf_id) then return false end
+  local res, f, n_lines = true, nil, vim.api.nvim_buf_line_count(buf_id)
+  f = function(n)
+    -- NOTE: Invalid extmark tracking (via `invalidate=true`) should be doable,
+    -- but comes with constraints: manually making tabstop empty should be
+    -- allowed; deleting placeholder also deletes extmark's range. Both make
+    -- extmark invalid, so deligate to users to see that extmarks are broken.
+    local ok, row, _, _ = pcall(H.extmark_get, buf_id, n.extmark_id)
+    res = res and (ok and row < n_lines)
+  end
+  H.nodes_traverse(session.nodes, f)
+  return res
+end
+
 H.session_sync_current_tabstop = function(session)
   -- TODO: Figure out why it is called twice as much.
   -- Is it indeed because of 'mini.completion' and popups?
@@ -1447,7 +1498,7 @@ H.session_sync_current_tabstop = function(session)
   local ref_extmark_id = ref_node.extmark_id
 
   -- With present placeholder, decide whether there was a valid change (then
-  -- remove it) or not (then no sync)
+  -- remove placeholder) or not (then no sync)
   if ref_node.placeholder ~= nil then
     local ref_row, ref_col = H.extmark_get_range(buf_id, ref_extmark_id)
     local phd_row, phd_col = H.extmark_get_range(buf_id, ref_node.placeholder[1].extmark_id)
@@ -1480,6 +1531,9 @@ H.session_sync_current_tabstop = function(session)
   H.nodes_traverse(session.nodes, sync)
   session._no_sync = nil
   H.session_ensure_gravity(session)
+
+  -- Maybe show choices
+  if cur_text == '' then H.show_completion(ref_node.choices) end
 
   -- Make highlighting up to date
   H.session_update_hl(session)
@@ -1515,12 +1569,12 @@ H.session_update_hl = function(session)
 
     local row, col, opts = H.extmark_get(buf_id, n.extmark_id)
     opts.hl_group, opts.virt_text, opts.virt_text_pos = hl_group, nil, nil
-    if H.has_inline_extmark_support and row == opts.end_row and col == opts.end_col then
+    -- Make inline extmarks preserve order if placed at same position
+    priority = priority + 1
+    opts.priority = priority
+    if H.nvim_supports_inline_extmarks and row == opts.end_row and col == opts.end_col then
       opts.virt_text_pos = 'inline'
       opts.virt_text = { { is_final and empty_tabstop_final or empty_tabstop, hl_group } }
-      -- Make inline extmarks preserve order if placed at same position
-      priority = priority + 1
-      opts.priority = priority
     end
     vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.nodes, row, col, opts)
   end
@@ -1530,13 +1584,17 @@ end
 H.session_deinit = function(session, full)
   if session == nil then return end
 
+  -- Trigger proper event
+  H.trigger_event('MiniSnippetsSession' .. (full and 'Stop' or 'Suspend'), { session = vim.deepcopy(session) })
+  if not H.is_loaded_buf(session.buf_id) then return end
+
   -- Delete or hide (make invisible) extmarks
   local extmark_fun = full and H.extmark_del or H.extmark_hide
   extmark_fun(session.buf_id, session.extmark_id)
   H.nodes_traverse(session.nodes, function(n) extmark_fun(session.buf_id, n.extmark_id) end)
 
-  -- Trigger proper event
-  H.trigger_event('MiniSnippetsSession' .. (full and 'Stop' or 'Suspend'))
+  -- Hide completion if stopping was done manually
+  if not H.cache.stop_is_auto then H.hide_completion() end
 end
 
 H.nodes_set_text = function(buf_id, nodes, tracking_extmark_id, indent)
@@ -1658,7 +1716,10 @@ H.get_indent = function(lnum)
     -- comment leaders like "---" and "--".
     if type(cur_match) == 'string' and comment_indent:len() < cur_match:len() then comment_indent = cur_match end
   end
-  return comment_indent ~= '' and comment_indent or line:match('^%s*')
+  local res = comment_indent ~= '' and comment_indent or line:match('^%s*')
+  -- Don't use whole indent if cursor is strictly inside it
+  local trunc_col = (lnum == nil or lnum == '.') and (vim.fn.col('.') - 1) or res:len()
+  return res:sub(1, trunc_col)
 end
 
 H.get_comment_leaders = function()
@@ -1722,10 +1783,10 @@ H.is_array_of = function(x, predicate)
   return true
 end
 
-H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
+H.is_loaded_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_loaded(buf_id) end
 
 H.ensure_cur_buf = function(buf_id)
-  if buf_id == 0 or buf_id == vim.api.nvim_get_current_buf() or not H.is_valid_buf(buf_id) then return end
+  if buf_id == 0 or buf_id == vim.api.nvim_get_current_buf() or not H.is_loaded_buf(buf_id) then return end
   local win_id = vim.fn.win_findbuf(buf_id)[1]
   if win_id == nil then return vim.api.nvim_win_set_buf(0, buf_id) end
   vim.api.nvim_set_current_win(win_id)
@@ -1733,12 +1794,10 @@ end
 
 H.set_cursor = function(pos)
   -- Ensure no built-in completion window
-  -- NOTE: `complete()` instead of emulating `<C-y>` has immeiate result
-  -- (without the need to `vim.schedule()`).
   -- HACK: Always clearing (and not *only* when pumvisible) accounts for weird
   -- edge case when it is not visible (i.e. candidates *just* got exhausted)
   -- but will still "clear and restore" text leading to squashing of extmarks.
-  if vim.fn.mode() == 'i' then vim.cmd('noautocmd call complete(col("."), [])') end
+  H.hide_completion()
 
   -- Make possible positioning cursor after line end
   if vim.fn.mode() ~= 'i' then
@@ -1756,6 +1815,16 @@ H.set_mode = function(target_mode)
   -- `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
   local keys = '\28\14' .. (target_mode == 'i' and 'i' or '')
   vim.api.nvim_feedkeys(keys, 'n', false)
+end
+
+H.show_completion = function(items)
+  if items ~= nil and vim.fn.mode() == 'i' then vim.fn.complete(vim.fn.col('.'), items) end
+end
+
+H.hide_completion = function()
+  -- NOTE: `complete()` instead of emulating `<C-y>` has immeiate result
+  -- (without the need to `vim.schedule()`).
+  if vim.fn.mode() == 'i' then vim.cmd('noautocmd call complete(col("."), [])') end
 end
 
 -- TODO: Remove after compatibility with Neovim=0.9 is dropped
