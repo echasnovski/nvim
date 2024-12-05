@@ -852,9 +852,9 @@ T['default_insert()']['interaction with built-in completion']['squeezed tabstops
   type_keys('<C-n>')
   child.expect_screenshot()
   type_keys('y')
-  -- NOTE: Currently doesn't work as extmarks are affected when they shouldn't
+  -- NOTE: Requires fixing that as extmarks are affected when they shouldn't
   -- See https://github.com/neovim/neovim/issues/31384
-  -- child.expect_screenshot()
+  if child.fn.has('nvim-0.11') == 1 then child.expect_screenshot() end
 end
 
 T['session.jump()'] = new_set()

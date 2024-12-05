@@ -1376,7 +1376,7 @@ H.track_sessions = function()
     latest_changedticks[buf_id] = vim.b[buf_id].changedtick
     -- Ensure that session is valid, like no extmarks got corrupted
     if not H.session_is_valid(session) then
-      H.notify('Session contains invalid data (deleted or out of range extmarks). It is stopped.', 'WARN')
+      H.notify('Session contains corrupted data (deleted or out of range extmarks). It is stopped.', 'WARN')
       return MiniSnippets.session.stop()
     end
     H.session_sync_current_tabstop(session)
@@ -1401,8 +1401,6 @@ H.track_sessions = function()
   -- NOTE: Don't use `TextChanged*` as they may unexpectedly trigger with
   -- built-in completion (as it might "delete and add" text when not needed)
   vim.api.nvim_create_autocmd('InsertCharPre', { group = gr, callback = stop_if_final, desc = 'Stop on final tabstop' })
-
-  -- TODO: React to changes within snippet range (like delete line, etc.)
 end
 
 H.map_in_sessions = function()
@@ -1541,11 +1539,18 @@ end
 
 H.session_jump = vim.schedule_wrap(function(session, direction)
   if session == nil then return end
-  local cur_tabstop = session.cur_tabstop
-  -- TODO: Make sure that `new_tabstop` is an actually present tabstop
-  -- Example why needed: `${1:$2}$3`, setting text in $1 removes $2 tabstop.
-  local new_tabstop = session.tabstops[cur_tabstop][direction]
-  if new_tabstop == cur_tabstop then return end
+
+  -- Compute target tabstop accounting for possibly missing ones.
+  -- Example why needed: `${1:$2}$3`, setting text in $1 removes $2 tabstop
+  -- and jumping should be done from 1 to 3.
+  local present_tabstops, all_tabstops = {}, session.tabstops
+  H.nodes_traverse(session.nodes, function(n) present_tabstops[n.tabstop or true] = true end)
+  local cur_tabstop, new_tabstop = session.cur_tabstop, nil
+  -- - NOTE: This can't be infinite as `prev`/`next` traverse all tabstops
+  if not present_tabstops[cur_tabstop] then return end
+  while not present_tabstops[new_tabstop] do
+    new_tabstop = all_tabstops[new_tabstop or cur_tabstop][direction]
+  end
 
   local event_data = { tabstop_from = cur_tabstop, tabstop_to = new_tabstop }
   H.trigger_event('MiniSnippetsSessionJumpPre', event_data)
@@ -1561,10 +1566,10 @@ H.session_update_hl = function(session)
   local current_hl = 'MiniSnippetsCurrent' .. (is_replace and 'Replace' or '')
   local priority = 101
 
-  local update_hl = function(n)
+  local update_hl = function(n, is_in_cur_tabstop)
     if n.tabstop == nil then return end
     local is_final, is_visited = n.tabstop == '0', tabstops[n.tabstop].is_visited
-    local hl_group = n.tabstop == cur_tabstop and current_hl
+    local hl_group = (n.tabstop == cur_tabstop or is_in_cur_tabstop) and current_hl
       or (is_final and 'MiniSnippetsFinal' or (is_visited and 'MiniSnippetsVisited' or 'MiniSnippetsUnvisited'))
 
     local row, col, opts = H.extmark_get(buf_id, n.extmark_id)
@@ -1578,7 +1583,17 @@ H.session_update_hl = function(session)
     end
     vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.nodes, row, col, opts)
   end
-  H.nodes_traverse(session.nodes, update_hl)
+
+  -- Use custom traversing to ensure that nested tabstops inside current
+  -- tabstop's placeholder are highlighted the same, even inline virtual text.
+  local update_hl_in_nodes
+  update_hl_in_nodes = function(nodes, is_in_cur_tabstop)
+    for _, n in ipairs(nodes) do
+      update_hl(n, is_in_cur_tabstop)
+      if n.placeholder ~= nil then update_hl_in_nodes(n.placeholder, is_in_cur_tabstop or n.tabstop == cur_tabstop) end
+    end
+  end
+  update_hl_in_nodes(session.nodes, false)
 end
 
 H.session_deinit = function(session, full)
@@ -1642,7 +1657,7 @@ H.nodes_traverse = function(nodes, f)
 end
 
 H.compute_tabstop_order = function(nodes)
-  local tabstops_map, traverse_tabstops = {}, nil
+  local tabstops_map = {}
   H.nodes_traverse(nodes, function(n) tabstops_map[n.tabstop or true] = true end)
   tabstops_map[true] = nil
 
