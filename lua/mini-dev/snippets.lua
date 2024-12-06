@@ -4,14 +4,6 @@
 -- - A system to load and manage custom snippets:
 --
 -- - A system to match snippet based on prefix:
---     - Think about the issue that `@rel` will match `l` exactly although it
---       is probably more reasonable to say there are no exact matches.
---       Maybe accept exact match if it is preceded by whitespace?
---
---       Or more generally allow `opts.boundary` for `default_match()` which
---       should match the character *before* the exact match? The problem with
---       it seems to be the lack of a robust default: `%s` will not expand in
---       cases like `aaa(f`, while `[^%w_-]` seems too arbitrary.
 --
 -- - A system to expand, navigate, and edit snippet:
 --
@@ -24,6 +16,7 @@
 --     - Calling `expand.insert`:
 --         - Preserves Insert mode and ensures Normal mode.
 --         - Places cursor at the start of removed region (if there is one).
+--           Also removes `region` field as it is outdated an no longer needed.
 --
 -- - Syntax:
 --     - Escape `}` inside `if` of `${1:?if:else}`.
@@ -58,10 +51,18 @@
 --       to make sure that they are valid. In general anything but deleting
 --       tabstop range should be OK.
 --
--- - Examples:
---     - Autocommand for stopping active session on `ModeChanged *:n` when there
---       are no unvisited tabstops.
---     - How to setup "expand or jump" type of mapping.
+-- - Misc:
+--     - Plugins which want to start 'mini.snippets' session given a snippet
+--       body (similar to |vim.snippet.expand()|) are recommended to use the
+--       following approach: >lua
+--         -- Check `MiniSnippets` is set up by the user
+--         if MiniSnippets ~= nil then
+--           -- User configured `insert` method and back to default
+--           local insert = MiniSnippets.config.expand.insert
+--             or MiniSnippets.default_insert
+--           insert({ body = snippet })
+--         end
+--       <
 --
 -- Tests:
 -- - Management:
@@ -232,12 +233,6 @@
 --- - `MiniSnippetsSessionJump`.
 ---@tag MiniSnippets-events
 
---- # Mappings ~
----
---- This module doesn't define any mappings. Here are examples for common setups:
----
---- - ...
----
 --- # Common snippets configuration ~
 ---
 --- - Project-local snippets. Use |MiniSnippets.gen_loader.from_file()| with
@@ -246,6 +241,34 @@
 ---   `snippets = { MiniSnippets.gen_loader.from_file('path/to/file') }`.
 --- - How to imitate <scope> field in snippet data. Put snippet separately in
 ---   different dedicated files and use |MiniSnippets.gen_loader.from_lang()|.
+---
+--- # <Tab> / <S-Tab> mappings ~
+---
+--- This module intentionally by default uses separate keys to expand and jump as
+--- it enables cleaner use of nested sessions. Here is an example of setting up
+--- custom <Tab> to "expand or jump" and <S-Tab> to "jump to previous": >lua
+---
+---   require('mini.snippets').setup({
+---     -- ...
+---     mappings = { expand = '', expand_all = '<C-g><Tab>', jump_next = '' },
+---   })
+---   local expand_or_jump = function()
+---     local can_expand = #MiniSnippets.expand({ insert = false }) > 0
+---     if can_expand then return MiniSnippets.expand() end
+---     MiniSnippets.session.jump('next')
+---   end
+---   local jump_prev = function() MiniSnippets.session.jump('prev') end
+---   vim.keymap.set('i', '<Tab>', expand_or_jump, { desc = 'Expand or jump' })
+---   vim.keymap.set('i', '<S-Tab>', jump_prev, { desc = 'Jump prev' })
+--- <
+--- # Stop session immediately after jumping to final tabstop ~
+--- >lua
+---   local fin_stop = function(args)
+---     if args.data.tabstop_to == '0' then MiniSnippets.session.stop() end
+---   end
+---   local au_opts = { pattern = 'MiniSnippetsSessionJump', callback = fin_stop }
+---   vim.api.nvim_create_autocmd('User', au_opts)
+--- <
 ---@tag MiniSnippets-examples
 
 ---@alias __minisnippets_cache_opt <cache> `(boolean)` - whether to use cached output. Default: `true`.
@@ -576,6 +599,11 @@ MiniSnippets.default_match = function(snippets, pos, opts)
   -- Exact. Use 0 as initial best match width to not match empty prefixes.
   local best_match, best_match_width = nil, 0
   for _, s in pairs(snippets) do
+    -- NOTE: This doesn't account for boundary at which prefix is matched.
+    -- Like for `@rel` line the `l` prefix will match. This might be fixed by
+    -- something like `opts.boundary_pattern`, but the problem with it seems to
+    -- be the lack of a robust default: '%s?' will not expand in cases like
+    -- `aaa(l`, while '[^%w_-]?' seems too arbitrary.
     if vim.endswith(line_till_cursor, s.prefix) and best_match_width < s.prefix:len() then
       s.region = { from = { line = lnum, col = to - s.prefix:len() + 1 }, to = { line = lnum, col = to } }
       best_match, best_match_width = s, s.prefix:len()
@@ -637,13 +665,18 @@ MiniSnippets.default_select = function(snippets, insert, opts)
   return vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
 end
 
+---@usage >lua
+--- <
 MiniSnippets.default_insert = function(snippet, opts)
   if not H.is_snippet(snippet) then H.error('`snippet` should be a snippet table') end
 
-  local default_opts = { empty_tabstop = '•', empty_tabstop_final = '∎', vars_lookup = {} }
+  local default_opts = { empty_tabstop = '•', empty_tabstop_final = '∎', lookup = {} }
   opts = vim.tbl_deep_extend('force', default_opts, opts or {})
-  if type(opts.vars_lookup) ~= 'table' then H.error('`opts.vars_lookup` should be table') end
+  if not H.is_string(opts.empty_tabstop) then H.error('`empty_tabstop` should be string') end
+  if not H.is_string(opts.empty_tabstop_final) then H.error('`empty_tabstop_final` should be string') end
+  if type(opts.lookup) ~= 'table' then H.error('`lookup` should be table') end
 
+  H.delete_region(snippet.region)
   H.session_init(H.session_new(snippet, opts), true)
 end
 
@@ -661,15 +694,18 @@ end
 ---
 --- To ensure that all nested sessions are stopped, use this: >lua
 ---
----   while MiniSnippets.get_active_session() do
----     MiniSnippets.stop()
+---   while MiniSnippets.session.get() do
+---     MiniSnippets.session.stop()
 ---   end
 --- <
 MiniSnippets.session.stop = function()
-  H.session_deinit(H.get_active_session(), true)
+  local cur_session = H.get_active_session()
+  if cur_session == nil then return end
+  H.session_deinit(cur_session, true)
   H.sessions[#H.sessions] = nil
   if #H.sessions == 0 then
     vim.api.nvim_del_augroup_by_name('MiniSnippetsTrack')
+    vim.on_key(nil, H.ns_id.on_key)
     H.unmap_in_sessions()
   end
   H.session_init(H.get_active_session(), false)
@@ -748,10 +784,8 @@ MiniSnippets.parse = function(snippet_body, opts)
   return opts.normalize and H.parse_normalize(nodes, opts) or nodes
 end
 
---- Mock an LSP server for completion
-MiniSnippets.mock_lsp_server = function()
-  -- TODO: start an LSP server capable of "textDocument/completion" response
-end
+-- TODO: Implement this when adding snippet support in 'mini.completion'
+-- MiniSnippets.mock_lsp_server = function() end
 
 -- Helper data ================================================================
 -- Module default config
@@ -760,6 +794,7 @@ H.default_config = vim.deepcopy(MiniSnippets.config)
 -- Namespaces for extmarks
 H.ns_id = {
   nodes = vim.api.nvim_create_namespace('MiniSnippetsNodes'),
+  on_key = vim.api.nvim_create_namespace('MiniSnippetsOnKey'),
 }
 
 -- Array of current (nested) snippet sessions from `default_insert`
@@ -996,13 +1031,11 @@ H.make_extended_insert = function(insert)
     local mode = vim.fn.mode()
     if not (mode == 'i' or mode == 'n') then H.set_mode('n') end
 
-    -- Remove snippet's region
-    local r = snippet.region
-    if H.is_region(r) then
-      -- Set cursor before deleting text to ensure working at end of line
-      H.set_cursor({ r.from.line, r.from.col - 1 })
-      vim.api.nvim_buf_set_text(0, r.from.line - 1, r.from.col - 1, r.to.line - 1, r.to.col, {})
-    end
+    -- Delete snippet's region and remove the data from the snippet (as it
+    -- wouldn't need to be removed and will represent outdated information)
+    H.delete_region(snippet.region)
+    snippet = vim.deepcopy(snippet)
+    snippet.region = nil
 
     -- Insert at cursor
     insert(snippet)
@@ -1293,7 +1326,7 @@ H.var_evaluators = {
 H.get_active_session = function() return H.sessions[#H.sessions] end
 
 H.session_new = function(snippet, opts)
-  local nodes = MiniSnippets.parse(snippet.body, { normalize = true, vars_lookup = opts.vars_lookup })
+  local nodes = MiniSnippets.parse(snippet.body, { normalize = true, lookup = opts.lookup })
 
   -- Compute all present tabstops in session traverse order
   local taborder = H.compute_tabstop_order(nodes)
@@ -1317,6 +1350,9 @@ end
 H.session_init = function(session, full)
   if session == nil then return end
   local buf_id = session.buf_id
+
+  -- Ensure Insert mode if appropriate. NOTE: it does not have immediate effect.
+  if vim.fn.mode() ~= 'i' and vim.api.nvim_get_current_buf() == buf_id then H.set_mode('i') end
 
   -- Prepare
   if full then
@@ -1355,9 +1391,6 @@ H.session_init = function(session, full)
     H.session_ensure_gravity(session)
   end
 
-  -- Ensure Insert mode if appropriate. NOTE: it does not have immediate effect.
-  if vim.fn.mode() ~= 'i' and vim.api.nvim_get_current_buf() == buf_id then H.set_mode('i') end
-
   -- Trigger proper event
   H.trigger_event('MiniSnippetsSession' .. (full and 'Start' or 'Resume'), { session = vim.deepcopy(session) })
 end
@@ -1367,13 +1400,17 @@ H.track_sessions = function()
   if #H.sessions > 1 then return end
   local gr = vim.api.nvim_create_augroup('MiniSnippetsTrack', { clear = true })
 
-  -- React to text changes
-  local latest_changedticks = {}
+  -- React to text changes. NOTE: Use 'TextChangedP' to update linked tabstops
+  -- with visible popup. It has downsides though:
+  -- - Placeholder is removed after selecting first choice. Together with
+  --   showing choices in empty tabstops, feels like a good compromise.
+  -- - Tabstop sync runs more frequently (especially with 'mini.completion'),
+  --   because of how built-in completion constantly 'delete-add' completion
+  --   leader text (which is treated as text change).
   local on_textchanged = function(args)
     local session, buf_id = H.get_active_session(), args.buf
     -- React only to text changes in session's buffer for performance
-    if session.buf_id ~= buf_id or latest_changedticks[buf_id] == vim.b[buf_id].changedtick then return end
-    latest_changedticks[buf_id] = vim.b[buf_id].changedtick
+    if session.buf_id ~= buf_id then return end
     -- Ensure that session is valid, like no extmarks got corrupted
     if not H.session_is_valid(session) then
       H.notify('Session contains corrupted data (deleted or out of range extmarks). It is stopped.', 'WARN')
@@ -1381,14 +1418,15 @@ H.track_sessions = function()
     end
     H.session_sync_current_tabstop(session)
   end
-  -- NOTE: Use 'TextChangedP' to update linked tabstops with visible popup.
-  -- The downside is a removed placeholder after selecting first choice.
-  -- Together with showing choices in empty tabstops, it is a good compromise.
   local text_events = { 'TextChanged', 'TextChangedI', 'TextChangedP' }
   vim.api.nvim_create_autocmd(text_events, { group = gr, callback = on_textchanged, desc = 'React to text change' })
 
   -- Stop if final tabstop is current: exit to Normal mode or *any* user typing
-  -- NOTE: Use `schedule_wrap` to possibly replace placeholder in final tabstop
+  -- Notes:
+  -- - Use `schedule_wrap` to possibly replace placeholder in final tabstop.
+  -- - Use `InsertCharPre` and not `TextChanged*` as they unexpectedly trigger
+  --   with built-in completion (as it does "delete-add" text when not needed).
+  --   It has a downside of not triggering after `<CR>`. Use `on_key` for that.
   local stop_if_final = vim.schedule_wrap(function(args)
     local session, buf_id = H.get_active_session(), args.buf
     if session == nil or not (session.buf_id == buf_id and session.cur_tabstop == '0') then return end
@@ -1398,9 +1436,13 @@ H.track_sessions = function()
   end)
   local modechanged_opts = { group = gr, pattern = '*:n', callback = stop_if_final, desc = 'Stop on final tabstop' }
   vim.api.nvim_create_autocmd('ModeChanged', modechanged_opts)
-  -- NOTE: Don't use `TextChanged*` as they may unexpectedly trigger with
-  -- built-in completion (as it might "delete and add" text when not needed)
   vim.api.nvim_create_autocmd('InsertCharPre', { group = gr, callback = stop_if_final, desc = 'Stop on final tabstop' })
+  local stop_on_key = function(key)
+    local mode = vim.fn.mode()
+    local is_add_text = (mode == 'i' and key == '\r') or (mode == 'n' and (key == 'o' or key == 'O'))
+    if is_add_text then stop_if_final({ buf = vim.api.nvim_get_current_buf() }) end
+  end
+  vim.on_key(stop_on_key, H.ns_id.on_key)
 end
 
 H.map_in_sessions = function()
@@ -1488,8 +1530,6 @@ H.session_is_valid = function(session)
 end
 
 H.session_sync_current_tabstop = function(session)
-  -- TODO: Figure out why it is called twice as much.
-  -- Is it indeed because of 'mini.completion' and popups?
   if session._no_sync then return end
 
   local buf_id, ref_node = session.buf_id, H.session_get_ref_node(session)
@@ -1775,6 +1815,8 @@ H.is_snippet = function(x)
     -- Allow nil `desc` / `description`, in which case "prefix" is used
     and H.is_maybe_string_or_arr(x.desc)
     and H.is_maybe_string_or_arr(x.description)
+    -- Allow nil `region` because it is not mandatory
+    and (x.region == nil or H.is_region(x.region))
 end
 
 H.is_position = function(x) return type(x) == 'table' and type(x.line) == 'number' and type(x.col) == 'number' end
@@ -1832,13 +1874,22 @@ H.set_mode = function(target_mode)
   vim.api.nvim_feedkeys(keys, 'n', false)
 end
 
+H.delete_region = function(region)
+  if not H.is_region(region) then return end
+  -- Set cursor before deleting text to ensure working at end of line
+  H.set_cursor({ region.from.line, region.from.col - 1 })
+  vim.api.nvim_buf_set_text(0, region.from.line - 1, region.from.col - 1, region.to.line - 1, region.to.col, {})
+end
+
 H.show_completion = function(items)
   if items ~= nil and vim.fn.mode() == 'i' then vim.fn.complete(vim.fn.col('.'), items) end
 end
 
 H.hide_completion = function()
-  -- NOTE: `complete()` instead of emulating `<C-y>` has immeiate result
-  -- (without the need to `vim.schedule()`).
+  -- NOTE: `complete()` instead of emulating `<C-y>` has immediate effect
+  -- (without the need to `vim.schedule()`). The downside is that `fn.mode(1)`
+  -- returns 'ic' (i.e. not "i" for clean Insert mode). Appending
+  -- ` | call feedkeys("\\<C-y>", "n")` seems to help, but wait till necessary.
   if vim.fn.mode() == 'i' then vim.cmd('noautocmd call complete(col("."), [])') end
 end
 

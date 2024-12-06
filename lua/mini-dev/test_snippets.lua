@@ -13,6 +13,8 @@ local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
 local get_lines = function(...) return child.get_lines(...) end
 local type_keys = function(...) return child.type_keys(...) end
+local poke_eventloop = function(...) return child.poke_eventloop(...) end
+local sleep = function(ms) helpers.sleep(ms, child) end
 --stylua: ignore end
 
 local test_dir = 'tests/dir-snippets'
@@ -32,8 +34,31 @@ local forward_lua = function(fun_str)
   return function(...) return child.lua_get(lua_cmd, { ... }) end
 end
 
+local get = forward_lua('MiniSnippets.session.get')
+local jump = forward_lua('MiniSnippets.session.jump')
+local stop = forward_lua('MiniSnippets.session.stop')
+
+-- Common helpers
+local get_cur_tabstop = function() return (get() or {}).cur_tabstop end
+
 local validate_active_session = function() eq(child.lua_get('MiniSnippets.session.get() ~= nil'), true) end
 local validate_no_active_session = function() eq(child.lua_get('MiniSnippets.session.get() ~= nil'), false) end
+
+local validate_pumvisible = function() eq(child.fn.pumvisible(), 1) end
+local validate_no_pumvisible = function() eq(child.fn.pumvisible(), 0) end
+
+local validate_state = function(mode, lines, cursor)
+  if mode ~= nil then eq(child.fn.mode(), mode) end
+  if lines ~= nil then eq(get_lines(), lines) end
+  if cursor ~= nil then eq(get_cursor(), cursor) end
+end
+
+local ensure_clean_state = function()
+  child.lua([[while MiniSnippets.session.get() do MiniSnippets.session.stop() end]])
+  -- while get() do stop() end
+  child.ensure_normal_mode()
+  set_lines({})
+end
 
 -- Output test set ============================================================
 local T = new_set({
@@ -819,17 +844,131 @@ end
 T['default_insert()'] = new_set()
 
 local default_insert = forward_lua('MiniSnippets.default_insert')
-local stop = forward_lua('MiniSnippets.session.stop')
 
-local validate_pumvisible = function() eq(child.fn.pumvisible(), 1) end
-local validate_no_pumvisible = function() eq(child.fn.pumvisible(), 0) end
+T['default_insert()']['works'] = function()
+  child.cmd('startinsert')
 
-T['default_insert()']['edge cases with snippet structure'] = new_set()
+  -- Just text
+  default_insert({ body = 'Text' })
+  validate_state('i', { 'Text' }, { 1, 4 })
+  validate_no_active_session()
+  ensure_clean_state()
 
-T['default_insert()']['interaction with built-in completion'] =
-  new_set({ hooks = { pre_case = function() child.o.completeopt = 'menuone,noinsert,noselect' end } })
+  -- Active session
+  default_insert({ body = 'T1=$1 T2=$2' })
+  validate_state('i', { 'T1= T2=' }, { 1, 3 })
+  validate_active_session()
+  jump('next')
+  validate_state('i', { 'T1= T2=' }, { 1, 7 })
+end
 
-T['default_insert()']['interaction with built-in completion']['popup removal'] = function()
+T['default_insert()']['ensures Insert mode in current buffer'] = function()
+  -- Normal mode
+  default_insert({ body = 'Text' })
+  validate_state('i', { 'Text' }, { 1, 4 })
+  ensure_clean_state()
+
+  default_insert({ body = 'T1=$1' })
+  validate_state('i', { 'T1=' }, { 1, 3 })
+  validate_active_session()
+  ensure_clean_state()
+
+  -- Visual mode
+  type_keys('v')
+  eq(child.fn.mode(), 'v')
+  default_insert({ body = 'T1=$1 T2=$2' })
+  validate_state('i', { 'T1= T2=' }, { 1, 3 })
+  ensure_clean_state()
+
+  -- Command-line mode
+  type_keys(':')
+  eq(child.fn.mode(), 'c')
+  default_insert({ body = 'T1=$1' })
+  validate_state('i', { 'T1=' }, { 1, 3 })
+end
+
+T['default_insert()']['deletes snippet region'] = function()
+  set_lines({ 'abcd' })
+  local region = { from = { line = 1, col = 2 }, to = { line = 1, col = 3 } }
+  default_insert({ body = 'T1=$1', region = region })
+  validate_state('i', { 'aT1=d' }, { 1, 4 })
+end
+
+T['default_insert()']['can be used to create nested session'] = function()
+  default_insert({ body = 'T1=$1' })
+  eq(#get(true), 1)
+  validate_state('i', { 'T1=' }, { 1, 3 })
+
+  default_insert({ body = 'T2=$2' })
+  eq(#get(true), 2)
+  validate_state('i', { 'T1=T2=' }, { 1, 6 })
+end
+
+T['default_insert()']['respects `opts.empty_tabstop` and `opts.empty_tabstop_final`'] = function()
+  default_insert({ body = 'T1=$1 T2=$2 T0=$0' }, { empty_tabstop = '!', empty_tabstop_final = '?' })
+  child.expect_screenshot()
+end
+
+T['default_insert()']['respects `opts.lookup`'] = function()
+  local lookup = { AAA = 'aaa', TM_SELECTED_TEXT = 'xxx', ['1'] = 'tabstop' }
+  default_insert({ body = '$AAA $TM_SELECTED_TEXT $1 $1 $2' }, { lookup = lookup })
+  child.expect_screenshot()
+  -- Should set tabstop value as if user typed text and remove placeholder
+  eq(get().nodes[5].text, 'tabstop')
+end
+
+T['default_insert()']['validates input'] = function()
+  expect.error(function() default_insert('Text') end, '`snippet`.*snippet table')
+  expect.error(function() default_insert({ body = 'Text' }, { empty_tabstop = 1 }) end, '`empty_tabstop`.*string')
+  expect.error(
+    function() default_insert({ body = 'Text' }, { empty_tabstop_final = 1 }) end,
+    '`empty_tabstop_final`.*string'
+  )
+  expect.error(function() default_insert({ body = 'Text' }, { lookup = 1 }) end, '`lookup`.*table')
+end
+
+T['session.get()'] = new_set()
+
+T['session.jump()'] = new_set()
+
+T['session.stop()'] = new_set()
+
+-- Integration tests ==========================================================
+T['Session'] = new_set()
+
+local start_session = function(snippet) default_insert({ body = snippet }) end
+
+T['Session']['autostop'] = new_set()
+
+T['Session']['autostops when text is typed in final tabstop'] = function()
+  local validate = function(key)
+    start_session('T1=$1;T0=$0')
+    validate_active_session()
+    jump('next')
+    type_keys(key)
+    validate_no_active_session()
+    ensure_clean_state()
+  end
+
+  -- Adding visible character
+  validate('x')
+  validate(' ')
+  validate('\t')
+
+  -- Adding "invisible" character (matters as `InsertCharPre` is not triggered)
+  validate('<CR>')
+  validate('<C-o>o')
+  validate('<C-o>O')
+end
+
+T['Session']['autostops when exiting to Normal mode in final tabstop'] = function() MiniTest.skip() end
+
+T['Edge cases'] = new_set()
+
+T['Edge cases']['interaction with built-in completion'] =
+  new_set({ hooks = { pre_case = function() child.o.completeopt = 'menuone,noselect' end } })
+
+T['Edge cases']['interaction with built-in completion']['popup removal during insert'] = function()
   set_lines({ 'abc', '' })
   set_cursor(2, 0)
 
@@ -846,25 +985,7 @@ T['default_insert()']['interaction with built-in completion']['popup removal'] =
   validate_active_session()
 end
 
-T['default_insert()']['interaction with built-in completion']['squeezed tabstops'] = function()
-  default_insert({ body = '$1$2$1$2$1' })
-  type_keys('abc', '<C-l>', 'x')
-  type_keys('<C-n>')
-  child.expect_screenshot()
-  type_keys('y')
-  -- NOTE: Requires fixing that as extmarks are affected when they shouldn't
-  -- See https://github.com/neovim/neovim/issues/31384
-  if child.fn.has('nvim-0.11') == 1 then child.expect_screenshot() end
-end
-
-T['session.jump()'] = new_set()
-
-local jump = forward_lua('MiniSnippets.session.jump')
-
-T['session.jump()']['interaction with built-in completion'] =
-  new_set({ hooks = { pre_case = function() child.o.completeopt = 'menuone,noinsert,noselect' end } })
-
-T['session.jump()']['interaction with built-in completion']['popup removal'] = function()
+T['Edge cases']['interaction with built-in completion']['popup removal during jump'] = function()
   default_insert({ body = 'abc $1 $2' })
   type_keys('a', '<C-n>')
   validate_pumvisible()
@@ -877,7 +998,7 @@ T['session.jump()']['interaction with built-in completion']['popup removal'] = f
   validate_no_pumvisible()
 end
 
-T['session.jump()']['interaction with built-in completion']['no affect of "exausted" popup'] = function()
+T['Edge cases']['interaction with built-in completion']['no affect of "exausted" popup during jump'] = function()
   default_insert({ body = 'abc $1 $2' })
   type_keys('a', '<C-n>', 'x')
   validate_no_pumvisible()
@@ -887,12 +1008,77 @@ T['session.jump()']['interaction with built-in completion']['no affect of "exaus
   child.expect_screenshot()
 end
 
-T['session.jump()']['interaction with built-in completion']['no wrong automatic session stop'] = function()
+T['Edge cases']['interaction with built-in completion']['no wrong automatic session stop during jump'] = function()
   default_insert({ body = 'ab $1\n$1\n$0' })
   type_keys('a', '<C-n>')
   validate_pumvisible()
   jump('next')
   validate_active_session()
+end
+
+T['Edge cases']['interaction with built-in completion']['squeezed tabstops'] = function()
+  default_insert({ body = '$1$2$1$2$1' })
+  type_keys('abc', '<C-l>', 'x')
+  type_keys('<C-n>')
+  child.expect_screenshot()
+  type_keys('y')
+  -- NOTE: Requires fixing that as extmarks are affected when they shouldn't
+  -- See https://github.com/neovim/neovim/issues/31384
+  if child.fn.has('nvim-0.10.3') == 1 then child.expect_screenshot() end
+end
+
+T['Edge cases']['tricky snippets'] = new_set()
+
+T['Examples'] = new_set()
+
+T['Examples']['stop session after jump to final tabstop'] = function()
+  child.lua([[
+    local fin_stop = function(args) if args.data.tabstop_to == '0' then MiniSnippets.session.stop() end end
+    vim.api.nvim_create_autocmd('User', { pattern = 'MiniSnippetsSessionJump', callback = fin_stop })
+  ]])
+  start_session('T1=$1; T0=$0')
+  validate_active_session()
+  jump('next')
+  validate_no_active_session()
+end
+
+T['Examples']['stop session on Normal mode exit with no unvisited tabstops'] = function() MiniTest.skip() end
+
+T['Examples']['<Tab>/<S-Tab> mappings'] = function()
+  child.setup()
+  load_module({
+    snippets = { { prefix = 'l', body = 'T1=$1 T0=0' } },
+    mappings = { expand = '', expand_all = '<C-g><Tab>', jump_next = '' },
+  })
+  child.lua([[
+    local expand_or_jump = function()
+      local can_expand = #MiniSnippets.expand({ insert = false }) > 0
+      if can_expand then return MiniSnippets.expand() end
+      MiniSnippets.session.jump('next')
+    end
+    local jump_prev = function() MiniSnippets.session.jump('prev') end
+    vim.keymap.set('i', '<Tab>', expand_or_jump, { desc = 'Expand or jump' })
+    vim.keymap.set('i', '<S-Tab>', jump_prev, { desc = 'Jump prev' })
+  ]])
+
+  type_keys('i', 'l', '<Tab>')
+  validate_active_session()
+  eq(get_cur_tabstop(), '1')
+
+  type_keys('l', '<Tab>')
+  eq(#get(true), 2)
+  eq(get_cur_tabstop(), '1')
+
+  type_keys('<Tab>')
+  eq(#get(true), 2)
+  eq(get_cur_tabstop(), '0')
+
+  type_keys('<S-Tab>')
+  eq(#get(true), 2)
+  eq(get_cur_tabstop(), '1')
+
+  stop()
+  MiniTest.skip('Consider also testing `<C-g><Tab>` after there is convenient tooling around testing `select`')
 end
 
 return T
