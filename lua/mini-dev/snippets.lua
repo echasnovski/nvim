@@ -25,8 +25,8 @@
 --       visually select and |c|; yank, etc.
 --
 -- - `default_insert`:
---     - Having independent nested sessions instead of merging sessions into
---       one has several benefits:
+--     - Nesting creates stack of independent sessions. This is better than
+--       merging sessions into one for these reasons:
 --         - Does not overload with highlighting: expanding "child" session in
 --           current node will lead to current node's `MiniSnippetsVisited`
 --           span across the whole "child" snippet session range.
@@ -50,6 +50,8 @@
 --       ranges should adjust (as the use |extmarks|) but it is up to the user
 --       to make sure that they are valid. In general anything but deleting
 --       tabstop range should be OK.
+--     - Respects indent (at cursor) and comments (from 'commentstring' and
+--       'comments').
 --
 -- - Misc:
 --     - Plugins which want to start 'mini.snippets' session given a snippet
@@ -88,8 +90,6 @@
 --           or moving to the right (even if first node is plain text)?
 --         - Same scenario but for the right side and expanding at last column.
 --         - Should expand when typing text strictly inside snippet range.
---     - Indent is computed as in 'mini.splitjoin', so that multiline snippets
---       in comments works.
 --     - Linked tabstops are updated not only on typing text, but also on <BS>.
 --     - Ensures presence of final tabstop (`$0`). Append at end if none.
 --     - Placeholders of tabstops and variables should be independent / "local
@@ -100,10 +100,6 @@
 --     - Choices are shown when needed (before replace or empty tabstop).
 --       Even if empty tabstop is achieved after deleting.
 --     - Preserves completion popup if session is stopped automatically.
---     - Correctly computes indent:
---         - Can work with comment leaders.
---         - Does not use full indent if cursor is to the left of indent's end.
---         - Respects whitespace *after* completion leader.
 --     - Should work with sessions in different buffers:
 --         - Stopping active and resuming previous session should work even if
 --           it is not in current buffer.
@@ -249,17 +245,19 @@
 --- custom <Tab> to "expand or jump" and <S-Tab> to "jump to previous": >lua
 ---
 ---   require('mini.snippets').setup({
----     -- ...
+---     -- ... Set up snippets ...
 ---     mappings = { expand = '', expand_all = '<C-g><Tab>', jump_next = '' },
 ---   })
 ---   local expand_or_jump = function()
 ---     local can_expand = #MiniSnippets.expand({ insert = false }) > 0
----     if can_expand then return MiniSnippets.expand() end
----     MiniSnippets.session.jump('next')
+---     if can_expand then vim.schedule(MiniSnippets.expand); return '' end
+---     local is_active = MiniSnippets.session.get() ~= nil
+---     if is_active then MiniSnippets.session.jump('next'); return '' end
+---     return '\t'
 ---   end
 ---   local jump_prev = function() MiniSnippets.session.jump('prev') end
----   vim.keymap.set('i', '<Tab>', expand_or_jump, { desc = 'Expand or jump' })
----   vim.keymap.set('i', '<S-Tab>', jump_prev, { desc = 'Jump prev' })
+---   vim.keymap.set('i', '<Tab>', expand_or_jump, { expr = true })
+---   vim.keymap.set('i', '<S-Tab>', jump_prev)
 --- <
 --- # Stop session immediately after jumping to final tabstop ~
 --- >lua
@@ -268,6 +266,24 @@
 ---   end
 ---   local au_opts = { pattern = 'MiniSnippetsSessionJump', callback = fin_stop }
 ---   vim.api.nvim_create_autocmd('User', au_opts)
+--- <
+--- # Using |vim.snippet.expand()| to insert a snippet ~
+--- >lua
+---   require('mini.snippets').setup({
+---     -- ... Set up snippets ...
+---     expand = {
+---       insert = function(snippet, _) vim.snippet.expand(snippet.body) end
+---     }
+---   })
+---   -- Make jump mappings or skip to use built-in <Tab>/<S-Tab> in Neovim>=0.11
+---   local jump_next = function()
+---     if vim.snippet.active({direction = 1}) then return vim.snippet.jump(1) end
+---   end
+---   local jump_prev = function()
+---     if vim.snippet.active({direction = -1}) then vim.snippet.jump(-1) end
+---   end
+---   vim.keymap.set({ 'i', 's' }, '<C-l>', jump_next)
+---   vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
 --- <
 ---@tag MiniSnippets-examples
 
@@ -578,46 +594,53 @@ end
 ---@param snippets table Array of snippets which can be matched.
 ---@param pos table|nil Position at which to match snippets. Default: cursor position.
 ---@param opts table|nil Options. Possible fields:
----   - <pattern> `(string)` - Lua pattern to extract base to the left of cursor.
----     Supply empty string to not do fuzzy matching.
+---   - <pattern_exact_boundary> `(string)` - Lua pattern that should match a single
+---     byte to the left of exact match to accept it. At line start matching is
+---     done against empty string; use `?` quantifier to allow it as boundary.
+---     Default: `[%s%p]?` (accept only whitespace and punctuation as boundary,
+---     allow match at line start).
+---     Example: prefix "l" matches in lines "l", "_l", " l"; but not "1l", "ll".
+---   - <pattern_fuzzy> `(string)` - Lua pattern to extract base to the left of
+---     cursor for fuzzy matching. Supply empty string skip this step.
 ---     Default: `'%S+'` (as many as possible non-whitespace characters).
 ---
 ---@return table Array of snippets with <region> field. Ordered from best to worst match.
 ---
 ---@usage >lua
+---   -- Accept anything accept alphanumeric and `_` as exact boundary
+---   MiniSnippets.default_match(snippets, { pattern_exact_boundary = '[^%w_]?' })
+---
 ---   -- Perform fuzzy match based only on alphanumeric characters
----   MiniSnippets.default_match(snippets, { pattern = '%w+' })
+---   MiniSnippets.default_match(snippets, { pattern_fuzzy = '%w+' })
 --- <
 MiniSnippets.default_match = function(snippets, pos, opts)
   if pos == nil then pos = { line = vim.fn.line('.'), col = vim.fn.col('.') } end
   if not H.is_position(pos) then H.error('`pos` should be table with numeric `line` and `col` fields') end
 
+  opts = vim.tbl_extend('force', { pattern_exact_boundary = '[%s%p]?', pattern_fuzzy = '%S+' }, opts or {})
+  if not H.is_string(opts.pattern_exact_boundary) then H.error('`opts.pattern_exact_boundary` should be string') end
+
   -- Compute line before cursor. Treat Insert mode as exclusive for right edge.
   local to = pos.col - (vim.fn.mode() == 'i' and 1 or 0)
-  local line_till_cursor, lnum = vim.fn.getline(pos.line):sub(1, to), pos.line
+  local line, lnum = vim.fn.getline(pos.line):sub(1, to), pos.line
 
   -- Exact. Use 0 as initial best match width to not match empty prefixes.
   local best_match, best_match_width = nil, 0
+  local pattern_boundary = '^' .. opts.pattern_exact_boundary .. '$'
   for _, s in pairs(snippets) do
-    -- NOTE: This doesn't account for boundary at which prefix is matched.
-    -- Like for `@rel` line the `l` prefix will match. This might be fixed by
-    -- something like `opts.boundary_pattern`, but the problem with it seems to
-    -- be the lack of a robust default: '%s?' will not expand in cases like
-    -- `aaa(l`, while '[^%w_-]?' seems too arbitrary.
-    if vim.endswith(line_till_cursor, s.prefix) and best_match_width < s.prefix:len() then
-      s.region = { from = { line = lnum, col = to - s.prefix:len() + 1 }, to = { line = lnum, col = to } }
-      best_match, best_match_width = s, s.prefix:len()
+    local w = s.prefix:len()
+    if best_match_width < w and line:sub(-w) == s.prefix and line:sub(-w - 1, -w - 1):find(pattern_boundary) then
+      s.region = { from = { line = lnum, col = to - w + 1 }, to = { line = lnum, col = to } }
+      best_match, best_match_width = s, w
     end
   end
   if best_match ~= nil then return { best_match } end
 
   -- Fuzzy
-  opts = opts or {}
-  local pattern = opts.pattern or '%S+'
-  if not H.is_string(pattern) then H.error('`opts.pattern` should be string') end
-  if pattern == '' then return {} end
+  if not H.is_string(opts.pattern_fuzzy) then H.error('`opts.pattern_fuzzy` should be string') end
+  if opts.pattern_fuzzy == '' then return {} end
 
-  local base = string.match(line_till_cursor, pattern .. '$')
+  local base = string.match(line, opts.pattern_fuzzy .. '$')
   if base == nil then return {} end
 
   local snippets_with_prefix = vim.tbl_filter(function(s) return s.prefix ~= nil end, snippets)
@@ -1765,16 +1788,17 @@ end
 -- Indent ---------------------------------------------------------------------
 H.get_indent = function(lnum)
   local line, comment_indent = vim.fn.getline(lnum or '.'), ''
+  -- Compute "indent at cursor"
+  local trunc_col = (lnum == nil or lnum == '.') and (vim.fn.col('.') - 1) or line:len()
+  line = line:sub(1, trunc_col)
+  -- Treat comment leaders as part of indent
   for _, leader in ipairs(H.get_comment_leaders()) do
     local cur_match = line:match('^%s*' .. vim.pesc(leader) .. '%s*')
     -- Use biggest match in case of several matches. Allows respecting "nested"
     -- comment leaders like "---" and "--".
     if type(cur_match) == 'string' and comment_indent:len() < cur_match:len() then comment_indent = cur_match end
   end
-  local res = comment_indent ~= '' and comment_indent or line:match('^%s*')
-  -- Don't use whole indent if cursor is strictly inside it
-  local trunc_col = (lnum == nil or lnum == '.') and (vim.fn.col('.') - 1) or res:len()
-  return res:sub(1, trunc_col)
+  return comment_indent ~= '' and comment_indent or line:match('^%s*')
 end
 
 H.get_comment_leaders = function()
@@ -1889,7 +1913,8 @@ H.hide_completion = function()
   -- NOTE: `complete()` instead of emulating `<C-y>` has immediate effect
   -- (without the need to `vim.schedule()`). The downside is that `fn.mode(1)`
   -- returns 'ic' (i.e. not "i" for clean Insert mode). Appending
-  -- ` | call feedkeys("\\<C-y>", "n")` seems to help, but wait till necessary.
+  -- ` | call feedkeys("\\<C-y>", "n")` removes that, but still would require
+  -- workarounds to work in edge cases.
   if vim.fn.mode() == 'i' then vim.cmd('noautocmd call complete(col("."), [])') end
 end
 

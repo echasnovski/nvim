@@ -60,6 +60,9 @@ local ensure_clean_state = function()
   set_lines({})
 end
 
+-- Time constants
+local small_time = helpers.get_time_const(10)
+
 -- Output test set ============================================================
 local T = new_set({
   hooks = {
@@ -154,6 +157,7 @@ T['parse()']['works'] = function()
       { var = 'var' }, { text = ' world' }, { tabstop = '0' },
     }
   )
+  -- Should allow array of strings
   eq(parse({ 'aa', '$1', '$var' }), { { text = 'aa\n' }, { tabstop = '1' }, { text = '\n' }, { var = 'var' } })
 end
 
@@ -846,20 +850,26 @@ T['default_insert()'] = new_set()
 local default_insert = forward_lua('MiniSnippets.default_insert')
 
 T['default_insert()']['works'] = function()
-  child.cmd('startinsert')
-
   -- Just text
+  child.cmd('startinsert')
   default_insert({ body = 'Text' })
   validate_state('i', { 'Text' }, { 1, 4 })
   validate_no_active_session()
   ensure_clean_state()
 
-  -- Active session
+  -- With tabstops (should start active session)
+  child.cmd('startinsert')
   default_insert({ body = 'T1=$1 T2=$2' })
   validate_state('i', { 'T1= T2=' }, { 1, 3 })
   validate_active_session()
   jump('next')
   validate_state('i', { 'T1= T2=' }, { 1, 7 })
+  ensure_clean_state()
+
+  -- Should allow array of strings as body
+  child.cmd('startinsert')
+  default_insert({ body = { 'T1=$1', 'T0=$0' } })
+  validate_state('i', { 'T1=', 'T0=' }, { 1, 3 })
 end
 
 T['default_insert()']['ensures Insert mode in current buffer'] = function()
@@ -904,6 +914,136 @@ T['default_insert()']['can be used to create nested session'] = function()
   validate_state('i', { 'T1=T2=' }, { 1, 6 })
 end
 
+T['default_insert()']['indent'] = new_set()
+
+T['default_insert()']['indent']['is added on every new line'] = function()
+  type_keys('i', ' \t')
+  default_insert({ body = 'multi\n  line\n\ttext\n' })
+  validate_state('i', { ' \tmulti', ' \t  line', ' \t\ttext', ' \t' }, { 4, 2 })
+  ensure_clean_state()
+
+  type_keys('i', ' ')
+  default_insert({ body = 'T1=$1\nT0=$0' })
+  validate_state('i', { ' T1=', ' T0=' }, { 1, 4 })
+  ensure_clean_state()
+
+  -- Should use line's indent (even if inserted not next to whitespace)
+  type_keys('i', ' \txxx \t')
+  default_insert({ body = 'multi\nline\n' })
+  validate_state('i', { ' \txxx \tmulti', ' \tline', ' \t' }, { 3, 2 })
+  ensure_clean_state()
+
+  -- Inserting in Normal mode is the same as pressing `i` beforehand
+  type_keys('i', '   ', '<Esc>')
+  default_insert({ body = 'multi\nline' })
+  validate_state('i', { '  multi', '  line ' }, { 2, 6 })
+end
+
+--stylua: ignore
+T['default_insert()']['indent']['works inside comments'] = function()
+  local validate = function(cur_line, lines_after)
+    set_lines({ cur_line })
+    type_keys('A')
+    default_insert({ body = 'multi\nline\n text\n' })
+    eq(get_lines(), lines_after)
+    ensure_clean_state()
+  end
+
+  -- Indent with comment under 'commentstring'
+  child.o.commentstring = '# %s'
+
+  validate('#',     { '#multi',     '#line',     '# text',     '#' })
+  validate('# ',    { '# multi',    '# line',    '#  text',    '# ' })
+  validate('#\t',   { '#\tmulti',   '#\tline',   '#\t text',   '#\t' })
+  validate(' # ',   { ' # multi',   ' # line',   ' #  text',   ' # ' })
+  validate('\t# ',  { '\t# multi',  '\t# line',  '\t#  text',  '\t# ' })
+  validate('\t#\t', { '\t#\tmulti', '\t#\tline', '\t#\t text', '\t#\t' })
+
+  validate('#xx',      { '#xxmulti',      '#line',     '# text',     '#' })
+  validate(' # xx ',   { ' # xx multi',   ' # line',   ' #  text',   ' # ' })
+  validate('\t#\txx ', { '\t#\txx multi', '\t#\tline', '\t#\t text', '\t#\t' })
+
+  -- Indent with comment under 'comments' parts
+  child.bo.comments = ':---,:--'
+
+  validate('--',     { '--multi',     '--line',     '-- text',     '--' })
+  validate('-- ',    { '-- multi',    '-- line',    '--  text',    '-- ' })
+  validate('--\t',   { '--\tmulti',   '--\tline',   '--\t text',   '--\t' })
+  validate(' -- ',   { ' -- multi',   ' -- line',   ' --  text',   ' -- ' })
+  validate('\t-- ',  { '\t-- multi',  '\t-- line',  '\t--  text',  '\t-- ' })
+  validate('\t--\t', { '\t--\tmulti', '\t--\tline', '\t--\t text', '\t--\t' })
+
+  validate('--xx',     { '--xxmulti',     '--line',     '-- text',     '--' })
+  validate(' -- xx',   { ' -- xxmulti',   ' -- line',   ' --  text',   ' -- ' })
+  validate('\t--\txx', { '\t--\txxmulti', '\t--\tline', '\t--\t text', '\t--\t' })
+
+  -- Should respect `b` flag (leader should be followed by space/tab/EOL)
+  child.bo.comments = 'b:*'
+  validate('*',   { '*multi',   'line',   ' text',   '' })
+  validate(' *',  { ' *multi',  ' line',  '  text',  ' ' })
+  validate('\t*', { '\t*multi', '\tline', '\t text', '\t' })
+
+  validate('* ',    { '* multi',    '* line',    '*  text',    '* ' })
+  validate('*\t',   { '*\tmulti',   '*\tline',   '*\t text',   '*\t' })
+  validate(' * ',   { ' * multi',   ' * line',   ' *  text',   ' * ' })
+  validate('\t*\t', { '\t*\tmulti', '\t*\tline', '\t*\t text', '\t*\t' })
+
+  validate('* xx',  { '* xxmulti',  '* line',  '*  text',  '* ' })
+  validate('*\txx', { '*\txxmulti', '*\tline', '*\t text', '*\t' })
+
+  -- Should respect `f` flag (only first line should have it)
+  child.bo.comments = 'f:-'
+  validate('-',   { '-multi',   'line',   ' text',   '' })
+  validate(' -',  { ' -multi',  ' line',  '  text',  ' ' })
+  validate('\t-', { '\t-multi', '\tline', '\t text', '\t' })
+
+  validate(' - ',   { ' - multi',   ' line',  '  text',  ' ' })
+  validate('\t-\t', { '\t-\tmulti', '\tline', '\t text', '\t' })
+end
+
+T['default_insert()']['indent']['computes "indent at cursor"'] = function()
+  type_keys('i', '   ', '<Left>')
+  eq(get_cursor(), { 1, 2 })
+  default_insert({ body = 'multi\nline' })
+  validate_state('i', { '  multi', '  line ' }, { 2, 6 })
+  ensure_clean_state()
+
+  child.o.commentstring = '--%s'
+  type_keys('i', ' --', '<Left>')
+  eq(get_cursor(), { 1, 2 })
+  default_insert({ body = 'multi\nline' })
+  -- `--` is not treated as part of indent because cursor is inside of it
+  validate_state('i', { ' -multi', ' line-' }, { 2, 5 })
+end
+
+T['default_insert()']['indent']['respects manual lookup entries'] = function()
+  type_keys('i', ' \t')
+  local lookup = { ['1'] = 'tab\nstop', AAA = 'aaa\nbbb' }
+  default_insert({ body = 'T1=$1\nAAA=$AAA' }, { lookup = lookup })
+  validate_state('i', { ' \tT1=tab', ' \tstop', ' \tAAA=aaa', ' \tbbb' }, { 2, 6 })
+end
+
+T['default_insert()']['respects tab-related options'] = function()
+  child.bo.expandtab = true
+  child.bo.shiftwidth = 3
+  default_insert({ body = '\tT1=$1\n\t\tT0=$0' })
+  validate_state('i', { '   T1=', '      T0=' }, { 1, 6 })
+  ensure_clean_state()
+
+  child.bo.shiftwidth, child.bo.tabstop = 0, 2
+  default_insert({ body = '\ttext\t\t' })
+  validate_state('i', { '  text    ' }, { 1, 10 })
+  ensure_clean_state()
+
+  child.bo.expandtab = false
+  default_insert({ body = '\tT1=$1\n\t\tT0=$0' })
+  validate_state('i', { '\tT1=', '\t\tT0=' }, { 1, 4 })
+  ensure_clean_state()
+
+  default_insert({ body = '\ttext\t\t' })
+  validate_state('i', { '\ttext\t\t' }, { 1, 7 })
+end
+
 T['default_insert()']['respects `opts.empty_tabstop` and `opts.empty_tabstop_final`'] = function()
   default_insert({ body = 'T1=$1 T2=$2 T0=$0' }, { empty_tabstop = '!', empty_tabstop_final = '?' })
   child.expect_screenshot()
@@ -913,7 +1053,9 @@ T['default_insert()']['respects `opts.lookup`'] = function()
   local lookup = { AAA = 'aaa', TM_SELECTED_TEXT = 'xxx', ['1'] = 'tabstop' }
   default_insert({ body = '$AAA $TM_SELECTED_TEXT $1 $1 $2' }, { lookup = lookup })
   child.expect_screenshot()
-  -- Should set tabstop value as if user typed text and remove placeholder
+  -- Looked up tabstop text should be treated as if user typed it (i.e. proper
+  -- cursor position and no placeholder)
+  eq(get_cursor(), { 1, 15 })
   eq(get().nodes[5].text, 'tabstop')
 end
 
@@ -938,11 +1080,9 @@ T['Session'] = new_set()
 
 local start_session = function(snippet) default_insert({ body = snippet }) end
 
-T['Session']['autostop'] = new_set()
-
 T['Session']['autostops when text is typed in final tabstop'] = function()
   local validate = function(key)
-    start_session('T1=$1;T0=$0')
+    start_session('T1=$1 T0=$0')
     validate_active_session()
     jump('next')
     type_keys(key)
@@ -961,7 +1101,28 @@ T['Session']['autostops when text is typed in final tabstop'] = function()
   validate('<C-o>O')
 end
 
-T['Session']['autostops when exiting to Normal mode in final tabstop'] = function() MiniTest.skip() end
+T['Session']['autostops when exiting to Normal mode in final tabstop'] = function()
+  start_session('T1=$1 T0=$0')
+  validate_active_session()
+  jump('next')
+  type_keys('<Esc>')
+  validate_no_active_session()
+  ensure_clean_state()
+
+  -- Should stop only when exiting in full Normal mode
+  start_session('T1=$1 T0=$0')
+  jump('next')
+  type_keys('<C-o><Esc>')
+  validate_active_session()
+end
+
+T['Session']['nesting'] = new_set()
+
+T['Session']['nesting']['works'] = function() MiniTest.skip() end
+
+T['Session']['nesting']['can be done in different buffers'] = function() MiniTest.skip() end
+
+T['Session']['nesting']['session stack is properly cleaned when buffer is unloaded'] = function() MiniTest.skip() end
 
 T['Edge cases'] = new_set()
 
@@ -1013,6 +1174,7 @@ T['Edge cases']['interaction with built-in completion']['no wrong automatic sess
   type_keys('a', '<C-n>')
   validate_pumvisible()
   jump('next')
+  sleep(small_time)
   validate_active_session()
 end
 
@@ -1022,9 +1184,24 @@ T['Edge cases']['interaction with built-in completion']['squeezed tabstops'] = f
   type_keys('<C-n>')
   child.expect_screenshot()
   type_keys('y')
-  -- NOTE: Requires fixing that as extmarks are affected when they shouldn't
+  -- NOTE: Requires the fix for extmarks to not be affected
   -- See https://github.com/neovim/neovim/issues/31384
   if child.fn.has('nvim-0.10.3') == 1 then child.expect_screenshot() end
+end
+
+T['Edge cases']['interaction with built-in completion']['cycling through candidates'] = function()
+  set_lines({ 'aa bb', '' })
+  set_cursor(2, 0)
+  default_insert({ body = '$1$1' })
+  type_keys('<C-n>', '<C-n>')
+  validate_state('i', { 'aa bb', 'aaaa' }, { 2, 2 })
+  validate_pumvisible()
+
+  type_keys('<C-p>')
+  -- NOTE: Requires the fix for extmarks to not be affected
+  -- See https://github.com/neovim/neovim/pull/31475
+  if child.fn.has('nvim-0.10.3') == 1 then validate_state('i', { 'aa bb', '' }, { 2, 0 }) end
+  validate_pumvisible()
 end
 
 T['Edge cases']['tricky snippets'] = new_set()
@@ -1042,8 +1219,6 @@ T['Examples']['stop session after jump to final tabstop'] = function()
   validate_no_active_session()
 end
 
-T['Examples']['stop session on Normal mode exit with no unvisited tabstops'] = function() MiniTest.skip() end
-
 T['Examples']['<Tab>/<S-Tab> mappings'] = function()
   child.setup()
   load_module({
@@ -1053,15 +1228,20 @@ T['Examples']['<Tab>/<S-Tab> mappings'] = function()
   child.lua([[
     local expand_or_jump = function()
       local can_expand = #MiniSnippets.expand({ insert = false }) > 0
-      if can_expand then return MiniSnippets.expand() end
-      MiniSnippets.session.jump('next')
+      if can_expand then vim.schedule(MiniSnippets.expand); return '' end
+      local is_active = MiniSnippets.session.get() ~= nil
+      if is_active then MiniSnippets.session.jump('next'); return '' end
+      return '\t'
     end
     local jump_prev = function() MiniSnippets.session.jump('prev') end
-    vim.keymap.set('i', '<Tab>', expand_or_jump, { desc = 'Expand or jump' })
-    vim.keymap.set('i', '<S-Tab>', jump_prev, { desc = 'Jump prev' })
+    vim.keymap.set('i', '<Tab>', expand_or_jump, { expr = true })
+    vim.keymap.set('i', '<S-Tab>', jump_prev)
   ]])
 
-  type_keys('i', 'l', '<Tab>')
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+
+  type_keys('l', '<Tab>')
   validate_active_session()
   eq(get_cur_tabstop(), '1')
 
@@ -1079,6 +1259,39 @@ T['Examples']['<Tab>/<S-Tab> mappings'] = function()
 
   stop()
   MiniTest.skip('Consider also testing `<C-g><Tab>` after there is convenient tooling around testing `select`')
+end
+
+T['Examples']['using `vim.snippet.expand()`'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('`vim.snippet` is present only in Neovim>=0.10') end
+  child.lua([[
+    require('mini-dev.snippets').setup({
+      snippets = { { prefix = 't', body = 'T1=$1 T2=${2:<two>}' } },
+      expand = {
+        insert = function(snippet, _) vim.snippet.expand(snippet.body) end
+      }
+    })
+    local jump_next = function()
+      if vim.snippet.active({direction = 1}) then return vim.snippet.jump(1) end
+    end
+    local jump_prev = function()
+      if vim.snippet.active({direction = -1}) then vim.snippet.jump(-1) end
+    end
+    vim.keymap.set({ 'i', 's' }, '<C-l>', jump_next)
+    vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
+  ]])
+
+  type_keys('i', 't', '<C-j>')
+  -- SHould not have active session from `default_insert()`
+  validate_no_active_session()
+  validate_state('i', { 'T1= T2=<two>' }, { 1, 3 })
+  type_keys('t1')
+  validate_state('i', { 'T1=t1 T2=<two>' }, { 1, 5 })
+  type_keys('<C-l>')
+  validate_state('s', { 'T1=t1 T2=<two>' }, { 1, 9 })
+  type_keys('t2')
+  validate_state('i', { 'T1=t1 T2=t2' }, { 1, 11 })
+  type_keys('<C-h>')
+  validate_state('s', { 'T1=t1 T2=t2' }, { 1, 3 })
 end
 
 return T

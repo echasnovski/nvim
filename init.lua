@@ -31,31 +31,14 @@ if vim.g.vscode ~= nil then now(function() source('vscode.lua') end) end
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 later(function()
-  local lang_patterns = {
-    tex = { 'latex.json' },
-    plaintex = { 'latex.json' },
-  }
+  local lang_patterns = { tex = { 'latex.json' }, plaintex = { 'latex.json' } }
   local snippets = require('mini-dev.snippets')
   snippets.setup({
     snippets = {
       snippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
       snippets.gen_loader.from_file('~/.config/nvim/snippets/test.code-snippets'),
     },
-    -- For `vim.snippet`
-    -- expand = {
-    --   insert = function(snippet, _) vim.snippet.expand(snippet.body) end
-    -- },
   })
-
-  -- -- For `vim.snippet`
-  -- local jump_next = function()
-  --   if vim.snippet.active({ direction = 1 }) then return vim.snippet.jump(1) end
-  -- end
-  -- local jump_prev = function()
-  --   if vim.snippet.active({ direction = -1 }) then vim.snippet.jump(-1) end
-  -- end
-  -- vim.keymap.set({ 'i', 's' }, '<C-l>', jump_next)
-  -- vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
 end)
 
 later(function() add('rafamadriz/friendly-snippets') end)
