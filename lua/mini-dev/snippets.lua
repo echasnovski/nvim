@@ -13,6 +13,7 @@
 --       current buffer cache.
 --
 -- - Expand:
+--     - Find a shorter name for "snippet with <region> field".
 --     - Calling `expand.insert`:
 --         - Preserves Insert mode and ensures Normal mode.
 --         - Places cursor at the start of removed region (if there is one).
@@ -113,6 +114,9 @@
 --         - Should not clean if `:edit` is done in current buffer.
 -- - Jump:
 --     - Should ensure that session's buffer is current.
+--
+-- Outer:
+-- - Make PR to 'danymat/neogen'.
 
 --- *mini.snippets* Manage and expand snippets
 --- *MiniSnippets*
@@ -221,15 +225,23 @@
 
 --- # Events ~
 ---
+--- General session activity (autocommand data contains <session> field):
 --- - `MiniSnippetsSessionStart` - after a session is started.
 --- - `MiniSnippetsSessionStop` - before a session is stopped.
+---
+--- Nesting session activity (autocommand data contains <session> field):
 --- - `MiniSnippetsSessionSuspend` - before a session is suspended.
 --- - `MiniSnippetsSessionResume` - after a session is resumed.
---- - `MiniSnippetsSessionJumpPre`.
---- - `MiniSnippetsSessionJump`.
+---
+--- Jumping between tabstops (autocommand data contains <tabstop_from> and
+--- <tabstop_new> fields):
+--- - `MiniSnippetsSessionJumpPre` - before jumping to a new tabstop.
+--- - `MiniSnippetsSessionJump` - after jumping to a new tabstop.
 ---@tag MiniSnippets-events
 
 --- # Common snippets configuration ~
+---
+--- TODO:
 ---
 --- - Project-local snippets. Use |MiniSnippets.gen_loader.from_file()| with
 ---   relative path.
@@ -260,7 +272,9 @@
 ---   vim.keymap.set('i', '<S-Tab>', jump_prev)
 --- <
 --- # Stop session immediately after jumping to final tabstop ~
---- >lua
+---
+--- Utilize a dedicated |MiniSnippets-events|: >lua
+---
 ---   local fin_stop = function(args)
 ---     if args.data.tabstop_to == '0' then MiniSnippets.session.stop() end
 ---   end
@@ -268,7 +282,9 @@
 ---   vim.api.nvim_create_autocmd('User', au_opts)
 --- <
 --- # Using |vim.snippet.expand()| to insert a snippet ~
---- >lua
+---
+--- Define custom `expand.insert` in |MiniSnippets.config| and mappings: >lua
+---
 ---   require('mini.snippets').setup({
 ---     -- ... Set up snippets ...
 ---     expand = {
@@ -360,6 +376,25 @@ end
 --- # Mappings ~
 ---
 --- # Expand ~
+---
+--- Customization example: >lua
+---
+---   -- Perform fuzzy match based only on alphanumeric characters
+---   local my_match = function(snippets, pos)
+---     return MiniSnippets.default_match(snippets, pos, {pattern_fuzzy = '%w+'})
+---   end
+---   -- Always insert the best matched snippet
+---   local my_select = function(snippets, insert) return insert(snippets[1]) end
+---   -- Use different string to show empty tabstop
+---   local my_insert = function(snippet)
+---     return MiniSnippets.default_insert(snippet, { empty_tabstop = '$' })
+---   end
+---
+---   require('mini-dev.snippets').setup({
+---     -- ... Set up snippets ...
+---     expand = { match = my_match, select = my_select, insert = my_insert }
+---   })
+--- <
 MiniSnippets.config = {
   -- Array of snippets and loaders (see |MiniSnippets.config| for details).
   -- Nothing is defined by default. Add manually to have snippets to match.
@@ -592,7 +627,7 @@ end
 ---   Matching is done via |matchfuzzy()|. All fuzzy matches are returned.
 ---
 ---@param snippets table Array of snippets which can be matched.
----@param pos table|nil Position at which to match snippets. Default: cursor position.
+---@param pos table|nil Position at which to match snippets. Default: at cursor.
 ---@param opts table|nil Options. Possible fields:
 ---   - <pattern_exact_boundary> `(string)` - Lua pattern that should match a single
 ---     byte to the left of exact match to accept it. At line start matching is
@@ -607,11 +642,11 @@ end
 ---@return table Array of snippets with <region> field. Ordered from best to worst match.
 ---
 ---@usage >lua
----   -- Accept anything accept alphanumeric and `_` as exact boundary
----   MiniSnippets.default_match(snippets, { pattern_exact_boundary = '[^%w_]?' })
+---   -- Accept any exact match
+---   MiniSnippets.default_match(snippets, pos, { pattern_exact_boundary = '.?' })
 ---
 ---   -- Perform fuzzy match based only on alphanumeric characters
----   MiniSnippets.default_match(snippets, { pattern_fuzzy = '%w+' })
+---   MiniSnippets.default_match(snippets, pos, { pattern_fuzzy = '%w+' })
 --- <
 MiniSnippets.default_match = function(snippets, pos, opts)
   if pos == nil then pos = { line = vim.fn.line('.'), col = vim.fn.col('.') } end

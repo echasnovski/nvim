@@ -2,6 +2,7 @@ local helpers = dofile('lua/mini-dev/helpers.lua')
 
 local child = helpers.new_child_neovim()
 local expect, eq, no_eq = helpers.expect, helpers.expect.equality, helpers.expect.no_equality
+local eq_partial_tbl = helpers.expect.equality_partial_tbl
 local new_set = MiniTest.new_set
 
 -- Helpers with child processes
@@ -13,12 +14,18 @@ local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
 local get_lines = function(...) return child.get_lines(...) end
 local type_keys = function(...) return child.type_keys(...) end
-local poke_eventloop = function(...) return child.poke_eventloop(...) end
 local sleep = function(ms) helpers.sleep(ms, child) end
+local new_buf = function() return child.api.nvim_create_buf(true, false) end
+local new_scratch_buf = function() return child.api.nvim_create_buf(false, true) end
+local get_buf = function() return child.api.nvim_get_current_buf() end
+local set_buf = function(buf_id) child.api.nvim_set_current_buf(buf_id) end
 --stylua: ignore end
 
 local test_dir = 'tests/dir-snippets'
 local test_dir_absolute = vim.fn.fnamemodify(test_dir, ':p'):gsub('\\', '/'):gsub('(.)/$', '%1')
+
+-- Time constants
+local small_time = helpers.get_time_const(10)
 
 -- Tweak `expect_screenshot()` to test only on Neovim>=0.10 (as it has inline
 -- extmarks support). Use `child.expect_screenshot_orig()` for original testing.
@@ -35,6 +42,7 @@ local forward_lua = function(fun_str)
 end
 
 local get = forward_lua('MiniSnippets.session.get')
+local get_all = function() return get(true) end
 local jump = forward_lua('MiniSnippets.session.jump')
 local stop = forward_lua('MiniSnippets.session.stop')
 
@@ -43,6 +51,7 @@ local get_cur_tabstop = function() return (get() or {}).cur_tabstop end
 
 local validate_active_session = function() eq(child.lua_get('MiniSnippets.session.get() ~= nil'), true) end
 local validate_no_active_session = function() eq(child.lua_get('MiniSnippets.session.get() ~= nil'), false) end
+local validate_n_sessions = function(n) eq(child.lua_get('#MiniSnippets.session.get(true)'), n) end
 
 local validate_pumvisible = function() eq(child.fn.pumvisible(), 1) end
 local validate_no_pumvisible = function() eq(child.fn.pumvisible(), 0) end
@@ -53,15 +62,38 @@ local validate_state = function(mode, lines, cursor)
   if cursor ~= nil then eq(get_cursor(), cursor) end
 end
 
+local setup_event_log = function()
+  child.lua([[
+    local suffixes = { 'Start', 'Stop', 'Suspend', 'Resume', 'JumpPre', 'Jump' }
+    local au_events = vim.tbl_map(function(s) return 'MiniSnippetsSession' .. s end, suffixes)
+    _G.au_log = {}
+    local log_event = function(args)
+      table.insert(au_log, { buf_id = args.buf, event = args.match, data = args.data })
+    end
+    vim.api.nvim_create_autocmd('User', { pattern = au_events, callback = log_event })
+  ]])
+end
+
+local get_au_log = function() return child.lua_get('_G.au_log') end
+
+local clean_au_log = function() return child.lua('_G.au_log = {}') end
+
+local get_snippet_body = function(session) return session.insert_args.snippet.body end
+local make_snippet_body = function(body) return { insert_args = { snippet = body } } end
+
 local ensure_clean_state = function()
   child.lua([[while MiniSnippets.session.get() do MiniSnippets.session.stop() end]])
   -- while get() do stop() end
   child.ensure_normal_mode()
   set_lines({})
+  clean_au_log()
 end
 
--- Time constants
-local small_time = helpers.get_time_const(10)
+local edit = function(path)
+  child.cmd('edit ' .. child.fn.fnameescape(path))
+  -- Slow context needs a small delay to get things up to date
+  if helpers.is_slow() then sleep(small_time) end
+end
 
 -- Output test set ============================================================
 local T = new_set({
@@ -69,7 +101,7 @@ local T = new_set({
     pre_case = function()
       child.setup()
       child.set_size(8, 40)
-      child.api.nvim_set_current_buf(child.api.nvim_create_buf(true, false))
+      set_buf(new_buf())
 
       load_module()
     end,
@@ -906,11 +938,11 @@ end
 
 T['default_insert()']['can be used to create nested session'] = function()
   default_insert({ body = 'T1=$1' })
-  eq(#get(true), 1)
+  validate_n_sessions(1)
   validate_state('i', { 'T1=' }, { 1, 3 })
 
   default_insert({ body = 'T2=$2' })
-  eq(#get(true), 2)
+  validate_n_sessions(2)
   validate_state('i', { 'T1=T2=' }, { 1, 6 })
 end
 
@@ -1023,6 +1055,21 @@ T['default_insert()']['indent']['respects manual lookup entries'] = function()
   validate_state('i', { ' \tT1=tab', ' \tstop', ' \tAAA=aaa', ' \tbbb' }, { 2, 6 })
 end
 
+T['default_insert()']['triggers start/stop events'] = function()
+  local make_ref_data = function(snippet_body)
+    return { session = { insert_args = { snippet = { body = snippet_body } } } }
+  end
+  setup_event_log()
+  local body, cur_buf = 'T1=$1 T0=0', get_buf()
+
+  default_insert({ body = body })
+  eq_partial_tbl(get_au_log(), { { event = 'MiniSnippetsSessionStart', data = make_ref_data(body), buf_id = cur_buf } })
+  clean_au_log()
+
+  stop()
+  eq_partial_tbl(get_au_log(), { { event = 'MiniSnippetsSessionStop', data = make_ref_data(body), buf_id = cur_buf } })
+end
+
 T['default_insert()']['respects tab-related options'] = function()
   child.bo.expandtab = true
   child.bo.shiftwidth = 3
@@ -1073,12 +1120,38 @@ T['session.get()'] = new_set()
 
 T['session.jump()'] = new_set()
 
+T['session.jump()']['works'] = function() MiniTest.skip() end
+
+T['session.jump()']['ensures session buffer is current'] = function()
+  -- Should reuse window if visible. Otherwise set buffer in current buffer.
+  MiniTest.skip()
+end
+
 T['session.stop()'] = new_set()
 
 -- Integration tests ==========================================================
 T['Session'] = new_set()
 
 local start_session = function(snippet) default_insert({ body = snippet }) end
+
+T['Session']['persists after `:edit`'] = function()
+  local path = test_dir_absolute .. '/tmp'
+  child.fn.writefile({}, path)
+  MiniTest.finally(function() child.fn.delete(path) end)
+  edit(path)
+
+  start_session('T1=$1 T0=$0')
+  validate_active_session()
+
+  -- NOTE: Write changes as making `:edit!` work is unreasonable
+  child.cmd('write')
+  child.cmd('edit')
+  sleep(small_time)
+
+  -- Should preserve both highlighting and data
+  validate_active_session()
+  child.expect_screenshot()
+end
 
 T['Session']['autostops when text is typed in final tabstop'] = function()
   local validate = function(key)
@@ -1116,13 +1189,163 @@ T['Session']['autostops when exiting to Normal mode in final tabstop'] = functio
   validate_active_session()
 end
 
-T['Session']['nesting'] = new_set()
+T['Session']['nesting'] = new_set({ hooks = { pre_case = setup_event_log } })
 
-T['Session']['nesting']['works'] = function() MiniTest.skip() end
+T['Session']['nesting']['works and triggers events'] = function()
+  local body_1, body_2, body_3 = 'T1=$1 T0=$0', 'U1=$1 U0=$0', 'V1=$1 V0=$0'
 
-T['Session']['nesting']['can be done in different buffers'] = function() MiniTest.skip() end
+  start_session(body_1)
+  validate_n_sessions(1)
+  eq(get_snippet_body(get()), body_1)
+  child.expect_screenshot()
 
-T['Session']['nesting']['session stack is properly cleaned when buffer is unloaded'] = function() MiniTest.skip() end
+  start_session(body_2)
+  eq(get_snippet_body(get()), body_2)
+  validate_n_sessions(2)
+  -- Highlighting of previous session should stop, but should still track
+  child.expect_screenshot()
+
+  start_session(body_3)
+  -- Any user typing in nested session should be tracked in all other sessions
+  type_keys('vvv')
+  eq(get_snippet_body(get()), body_3)
+  validate_n_sessions(3)
+  child.expect_screenshot()
+
+  -- Jumping inside nested session should be done only within its tabstops
+  jump('next')
+  eq(get_cursor(), { 1, 16 })
+  -- - Along with wrapping
+  jump('next')
+  eq(get_cursor(), { 1, 12 })
+
+  stop()
+  eq(get_snippet_body(get()), body_2)
+  validate_n_sessions(2)
+  -- Tabstop range of previous session should track changes in nested ones
+  child.expect_screenshot()
+
+  stop()
+  validate_n_sessions(1)
+  eq(get_snippet_body(get()), body_1)
+  child.expect_screenshot()
+
+  stop()
+
+  -- Should trigger proper events in proper order
+  local make_ref_data = function(snippet_body)
+    return { session = { insert_args = { snippet = { body = snippet_body } } } }
+  end
+  local cur_buf_id = get_buf()
+  --stylua: ignore
+  local ref_au_log_partial = {
+    { event = 'MiniSnippetsSessionStart',   data = make_ref_data(body_1), buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionSuspend', data = make_ref_data(body_1), buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionStart',   data = make_ref_data(body_2), buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionSuspend', data = make_ref_data(body_2), buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionStart',   data = make_ref_data(body_3), buf_id = cur_buf_id },
+
+    { event = 'MiniSnippetsSessionJumpPre', data = { tabstop_from = '1', tabstop_to = '0' }, buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionJump',    data = { tabstop_from = '1', tabstop_to = '0' }, buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionJumpPre', data = { tabstop_from = '0', tabstop_to = '1' }, buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionJump',    data = { tabstop_from = '0', tabstop_to = '1' }, buf_id = cur_buf_id },
+
+    { event = 'MiniSnippetsSessionStop',   data = make_ref_data(body_3), buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionResume', data = make_ref_data(body_2), buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionStop',   data = make_ref_data(body_2), buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionResume', data = make_ref_data(body_1), buf_id = cur_buf_id },
+    { event = 'MiniSnippetsSessionStop',   data = make_ref_data(body_1), buf_id = cur_buf_id },
+  }
+  eq_partial_tbl(get_au_log(), ref_au_log_partial)
+end
+
+T['Session']['nesting']['does not nest if no tabstops in new session'] = function()
+  start_session('T1=$1 T0=$0')
+  start_session('just text')
+  validate_n_sessions(1)
+  child.expect_screenshot()
+end
+
+T['Session']['nesting']['can be done outside of current session region'] = function()
+  start_session('T1=$1 T0=$0')
+  type_keys('<Esc>', 'o', '<CR>')
+  start_session('U1=$1 U0=$0')
+  validate_n_sessions(2)
+  child.expect_screenshot()
+end
+
+T['Session']['nesting']['can be done in different buffer'] = function()
+  start_session('T1=$1 T0=$0')
+  child.ensure_normal_mode()
+  local prev_buf_id, new_buf_id = get_buf(), new_buf()
+  set_buf(new_buf_id)
+  start_session('U1=$1 U0=$0')
+
+  validate_n_sessions(2)
+  eq(get_buf(), new_buf_id)
+  eq_partial_tbl(get(), { buf_id = new_buf_id, insert_args = { snippet = { body = 'U1=$1 U0=$0' } } })
+  jump('next')
+  type_keys('x')
+  eq_partial_tbl(get(), { buf_id = prev_buf_id, insert_args = { snippet = { body = 'T1=$1 T0=$0' } } })
+
+  -- Autostop should not change buffer or do the jump for smoother typing
+  eq(get_buf(), new_buf_id)
+  validate_state('i', { 'U1= U0=x' }, { 1, 8 })
+end
+
+T['Session']['nesting']['session stack is properly cleaned when buffer is unloaded'] = function()
+  local buf_id_1, buf_id_2, buf_id_3 = new_buf(), new_buf(), new_buf()
+  local body_1, body_2, body_3, body_4 = 'T1=$1 T0=$0', 'U1=$1 U0=$0', 'V1=$1 V0=$0', 'W1=$1 W0=$0'
+  set_buf(buf_id_1)
+  start_session(body_1)
+  set_buf(buf_id_2)
+  start_session(body_2)
+  set_buf(buf_id_3)
+  start_session(body_3)
+  start_session(body_4)
+
+  local ref_sessions = {
+    { buf_id = buf_id_1, insert_args = { snippet = { body = body_1 } } },
+    { buf_id = buf_id_2, insert_args = { snippet = { body = body_2 } } },
+    { buf_id = buf_id_3, insert_args = { snippet = { body = body_3 } } },
+    { buf_id = buf_id_3, insert_args = { snippet = { body = body_4 } } },
+  }
+  eq_partial_tbl(get_all(), ref_sessions)
+
+  clean_au_log()
+
+  -- Deleting session in the middle of stack should work
+  child.api.nvim_buf_delete(buf_id_2, { force = true, unload = true })
+  eq_partial_tbl(get_all(), { ref_sessions[1], ref_sessions[3], ref_sessions[4] })
+
+  -- Deleting current session should make the nearest one active
+  child.api.nvim_buf_delete(buf_id_3, { force = true, unload = true })
+  eq_partial_tbl(get_all(), { ref_sessions[1] })
+
+  -- Deleting the last active session should also work
+  eq(get_buf(), buf_id_1)
+  child.api.nvim_buf_delete(buf_id_1, { force = true, unload = false })
+  validate_n_sessions(0)
+
+  -- Proper events should still be triggered during session clean
+  local make_ref_data = function(buf_id, snippet_body)
+    return { session = { buf_id = buf_id, insert_args = { snippet = { body = snippet_body } } } }
+  end
+  --stylua: ignore
+  local ref_au_log_partial = {
+    -- Event can be triggered with other buffer being current (due to
+    -- `vim.schedule_wrap()` needed to make `:edit` work)
+    { event = 'MiniSnippetsSessionStop',   data = make_ref_data(buf_id_2, body_2), buf_id = buf_id_3 },
+    -- No 'Resume' of already active session
+    -- Unloading current buffer should also be possible
+    { event = 'MiniSnippetsSessionStop',   data = make_ref_data(buf_id_3, body_3), buf_id = buf_id_1 },
+    { event = 'MiniSnippetsSessionStop',   data = make_ref_data(buf_id_3, body_4), buf_id = buf_id_1 },
+    -- Deleting active session resumes the next available
+    { event = 'MiniSnippetsSessionResume', data = make_ref_data(buf_id_1, body_1), buf_id = buf_id_1 },
+    { event = 'MiniSnippetsSessionStop',   data = make_ref_data(buf_id_1, body_1), buf_id = get_buf() },
+  }
+  eq_partial_tbl(get_au_log(), ref_au_log_partial)
+end
 
 T['Edge cases'] = new_set()
 
@@ -1246,15 +1469,15 @@ T['Examples']['<Tab>/<S-Tab> mappings'] = function()
   eq(get_cur_tabstop(), '1')
 
   type_keys('l', '<Tab>')
-  eq(#get(true), 2)
+  validate_n_sessions(2)
   eq(get_cur_tabstop(), '1')
 
   type_keys('<Tab>')
-  eq(#get(true), 2)
+  validate_n_sessions(2)
   eq(get_cur_tabstop(), '0')
 
   type_keys('<S-Tab>')
-  eq(#get(true), 2)
+  validate_n_sessions(2)
   eq(get_cur_tabstop(), '1')
 
   stop()
