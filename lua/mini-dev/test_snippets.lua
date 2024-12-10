@@ -84,6 +84,32 @@ local clean_au_log = function() return child.lua('_G.au_log = {}') end
 local get_snippet_body = function(session) return (session or get()).insert_args.snippet.body end
 local make_snippet_body = function(body) return { insert_args = { snippet = body } } end
 
+local make_get_extmark = function(session)
+  local buf_id, ns_id = session.buf_id, session.ns_id
+  return function(extmark_id)
+    local data = child.api.nvim_buf_get_extmark_by_id(buf_id, ns_id, extmark_id, { details = true })
+    data[3].row, data[3].col = data[1], data[2]
+    return data[3]
+  end
+end
+
+local validate_session_nodes_partial = function(session, ref_nodes)
+  local get_extmark = make_get_extmark(session)
+  local nodes = vim.deepcopy(session.nodes)
+  -- Replace `extmark_id` (should be present in every node) with extmark data
+  local replace_extmarks
+  replace_extmarks = function(n_arr)
+    for _, n in ipairs(n_arr) do
+      n.extmark = get_extmark(n.extmark_id)
+      n.extmark_id = nil
+      if n.placeholder ~= nil then replace_extmarks(n.placeholder) end
+    end
+  end
+  replace_extmarks(nodes)
+
+  eq_partial_tbl(nodes, ref_nodes)
+end
+
 local ensure_clean_state = function()
   child.lua([[while MiniSnippets.session.get() do MiniSnippets.session.stop() end]])
   -- while get() do stop() end
@@ -145,7 +171,6 @@ T['setup()']['creates `config` field'] = function()
 
   expect_config('snippets', {})
   expect_config('mappings.expand', '<C-j>')
-  expect_config('mappings.expand_all', '<C-g><C-j>')
   expect_config('mappings.jump_next', '<C-l>')
   expect_config('mappings.jump_prev', '<C-h>')
   expect_config('mappings.stop', '<C-c>')
@@ -169,7 +194,6 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ snippets = 1 }, 'snippets', 'table')
   expect_config_error({ mappings = 1 }, 'mappings', 'table')
   expect_config_error({ mappings = { expand = 1 } }, 'mappings.expand', 'string')
-  expect_config_error({ mappings = { expand_all = 1 } }, 'mappings.expand_all', 'string')
   expect_config_error({ mappings = { jump_next = 1 } }, 'mappings.jump_next', 'string')
   expect_config_error({ mappings = { jump_prev = 1 } }, 'mappings.jump_prev', 'string')
   expect_config_error({ mappings = { stop = 1 } }, 'mappings.stop', 'string')
@@ -443,6 +467,14 @@ T['default_insert()']['shows tabstop choices after start'] = function()
   eq(child.cmd_capture('au ModeChanged'):find('Show popup') == nil, true)
 end
 
+T['default_insert()']['direct call removes placeholder'] = function()
+  default_insert({ body = 'T1=${1:<xxx>}' })
+  -- This can happen if `<C-g><C-j>` (i.e. insert snippet without typing prefix
+  -- to match) after jumping to tabstop with placeholder
+  default_insert({ body = 'U1=$1' })
+  validate_state('i', { 'T1=U1=' }, { 1, 6 })
+end
+
 T['default_insert()']['respects `opts.empty_tabstop` and `opts.empty_tabstop_final`'] = function()
   default_insert({ body = 'T1=$1 T2=$2 T0=$0' }, { empty_tabstop = '!', empty_tabstop_final = '?' })
   child.expect_screenshot()
@@ -470,9 +502,145 @@ end
 
 T['session.get()'] = new_set()
 
-T['session.get()']['works'] = function() MiniTest.skip() end
+T['session.get()']['works'] = function()
+  -- Should work without active session
+  eq(get(), vim.NIL)
 
-T['session.get()']['respects `all` argument'] = function() MiniTest.skip() end
+  default_insert({ body = 'T1=${1:<$2>}' }, { empty_tabstop = '$' })
+  local session = get()
+
+  -- Should return correct data structure
+  local fields = vim.tbl_keys(session)
+  table.sort(fields)
+  eq(fields, { 'buf_id', 'cur_tabstop', 'extmark_id', 'insert_args', 'nodes', 'ns_id', 'tabstops' })
+
+  local cur_buf = get_buf()
+  local ref_partial_session = {
+    buf_id = cur_buf,
+    cur_tabstop = '1',
+    insert_args = {
+      snippet = { body = 'T1=${1:<$2>}' },
+      opts = { empty_tabstop = '$', empty_tabstop_final = '∎', lookup = {} },
+    },
+    tabstops = {
+      ['0'] = { is_visited = false, prev = '2', next = '1' },
+      ['1'] = { is_visited = true, prev = '0', next = '2' },
+      ['2'] = { is_visited = false, prev = '1', next = '0' },
+    },
+  }
+  eq_partial_tbl(session, ref_partial_session)
+
+  -- Should return valid namespace for present extmarks
+  local ns_id, is_valid_ns_id = session.ns_id, false
+  for _, id in pairs(child.api.nvim_get_namespaces()) do
+    is_valid_ns_id = is_valid_ns_id or id == ns_id
+  end
+  eq(is_valid_ns_id, true)
+
+  -- Should have correct session extmark
+  local get_extmark = make_get_extmark(session)
+  local ref_extmark = { row = 0, col = 0, end_row = 0, end_col = 5, right_gravity = false, end_right_gravity = true }
+  eq_partial_tbl(get_extmark(session.extmark_id), ref_extmark)
+
+  -- Should have proper node structure with correct extmarks attached to nodes
+  local has_inline_extmarks = child.fn.has('nvim-0.10') == 1
+  --stylua: ignore
+  local ref_nodes = {
+    { text = 'T1=', extmark = { row = 0, col = 0, end_row = 0, end_col = 3 } },
+    {
+      tabstop = '1',
+      extmark = { row = 0, col = 3, end_row = 0, end_col = 5, right_gravity = false, end_right_gravity = true },
+      placeholder = {
+        { text = '<', extmark = { row = 0, col = 3, end_row = 0, end_col = 4 } },
+        {
+          tabstop = '2',
+          extmark = {
+            row = 0, col = 4, end_row = 0, end_col = 4,
+            virt_text = has_inline_extmarks and { { '$', 'MiniSnippetsCurrentReplace' } } or nil,
+            virt_text_pos = has_inline_extmarks and 'inline' or nil,
+          },
+          placeholder = {
+            { text = '', extmark = { row = 0, col = 4, end_row = 0, end_col = 4 } }
+          },
+        },
+        { text = '>', extmark = { row = 0, col = 4, end_row = 0, end_col = 5 } },
+      }
+    },
+    {
+      tabstop = '0',
+      text = '',
+      extmark = {
+        row = 0, col = 5, end_row = 0, end_col = 5,
+        virt_text = has_inline_extmarks and { { '∎', 'MiniSnippetsFinal' } } or nil,
+        virt_text_pos = has_inline_extmarks and 'inline' or nil,
+      }
+    }
+  }
+  validate_session_nodes_partial(session, ref_nodes)
+
+  -- Should update nodes immediately if they are removed
+  type_keys('x')
+  session = get()
+  ref_nodes = {
+    { text = 'T1=', extmark = { row = 0, col = 0, end_row = 0, end_col = 3 } },
+    { tabstop = '1', text = 'x', extmark = { row = 0, col = 3, end_row = 0, end_col = 4 } },
+    { tabstop = '0', text = '', extmark = { row = 0, col = 4, end_row = 0, end_col = 4 } },
+  }
+  validate_session_nodes_partial(session, ref_nodes)
+
+  -- Session's tabstop can be used to track session's total region
+  get_extmark = make_get_extmark(session)
+  eq_partial_tbl(get_extmark(session.extmark_id), { row = 0, col = 0, end_row = 0, end_col = 4 })
+
+  -- Should return copy of the session data
+  local is_copy = child.lua([[
+    local session = MiniSnippets.session.get()
+    local ref_cur_tabstop = session.cur_tabstop
+    session.cur_tabstop = -1
+    return MiniSnippets.session.get().cur_tabstop == ref_cur_tabstop
+  ]])
+  eq(is_copy, true)
+end
+
+T['session.get()']['reflects up to date tabstop data after jumps'] = function()
+  local validate_tabstops = function(ref_cur_tabstop, ref_visited)
+    local session = get()
+    eq(session.cur_tabstop, ref_cur_tabstop)
+    local out_visited = {}
+    for id, data in pairs(get().tabstops) do
+      out_visited[id] = data.is_visited
+    end
+    eq(out_visited, ref_visited)
+  end
+
+  default_insert({ body = 'T1=$1 T2=$2 T0=$0' })
+  validate_tabstops('1', { ['1'] = true, ['2'] = false, ['0'] = false })
+  jump('next')
+  validate_tabstops('2', { ['1'] = true, ['2'] = true, ['0'] = false })
+  -- Already visited should keep returning `true`
+  jump('prev')
+  validate_tabstops('1', { ['1'] = true, ['2'] = true, ['0'] = false })
+  jump('prev')
+  validate_tabstops('0', { ['1'] = true, ['2'] = true, ['0'] = true })
+end
+
+T['session.get()']['respects `all` argument'] = function()
+  default_insert({ body = 'T1=$1 T0=$0' })
+  default_insert({ body = 'U1=$1 U0=$0' })
+  local sessions = get(true)
+  eq(#sessions, 2)
+
+  local cur_buf = get_buf()
+  eq_partial_tbl(sessions, {
+    { buf_id = cur_buf, cur_tabstop = '1', insert_args = { snippet = { body = 'T1=$1 T0=$0' } } },
+    { buf_id = cur_buf, cur_tabstop = '1', insert_args = { snippet = { body = 'U1=$1 U0=$0' } } },
+  })
+
+  -- Previous session's extmarks should still be tracking
+  eq_partial_tbl(make_get_extmark(sessions[1])(sessions[1].extmark_id), { row = 0, col = 0, end_row = 0, end_col = 14 })
+  type_keys('x')
+  eq_partial_tbl(make_get_extmark(sessions[1])(sessions[1].extmark_id), { row = 0, col = 0, end_row = 0, end_col = 15 })
+end
 
 T['session.jump()'] = new_set()
 
@@ -645,9 +813,42 @@ end
 
 T['session.stop()'] = new_set()
 
-T['session.stop()']['works'] = function() MiniTest.skip() end
+T['session.stop()']['works'] = function()
+  -- Should work without active session
+  expect.no_error(stop)
 
-T['session.stop()']['hides completion popup'] = function() MiniTest.skip() end
+  default_insert({ body = 'T1=$1 T0=$0' })
+  default_insert({ body = 'U1=$1 U0=$0' })
+  validate_state('i', { 'T1=U1= U0= T0=' }, { 1, 6 })
+  validate_n_sessions(2)
+  child.expect_screenshot()
+
+  -- Should stop active session (no change mode/cursor) and resume previous
+  stop()
+  validate_state('i', { 'T1=U1= U0= T0=' }, { 1, 6 })
+  validate_n_sessions(1)
+  child.expect_screenshot()
+
+  stop()
+  validate_state('i', { 'T1=U1= U0= T0=' }, { 1, 6 })
+  validate_n_sessions(0)
+  child.expect_screenshot()
+
+  -- Should clean all side effects
+  expect.error(function() child.cmd('au MiniSnippetsTrack') end, 'No such group')
+  expect.match(child.cmd_capture('imap <C-h>'), 'No mapping')
+  expect.match(child.cmd_capture('imap <C-l>'), 'No mapping')
+  expect.match(child.cmd_capture('imap <C-c>'), 'No mapping')
+end
+
+T['session.stop()']['hides completion popup'] = function()
+  default_insert({ body = 'T1=$1 T0=$0' })
+  type_keys('<C-n>')
+  validate_pumvisible()
+  stop()
+  validate_no_pumvisible()
+  eq(child.fn.mode(), 'i')
+end
 
 T['parse()'] = new_set()
 
@@ -1360,6 +1561,31 @@ T['Session']['properly adjusts highlighting'] = function()
   MiniTest.skip()
 end
 
+T['Session']['cleans extmarks when they are not needed'] = function()
+  local ns_id
+  local validate_n_extmarks = function(ref_n)
+    local session = get()
+    if session ~= vim.NIL then ns_id = session.ns_id end
+    local all_extmarks = child.api.nvim_buf_get_extmarks(0, ns_id, 0, -1, {})
+    eq(#all_extmarks, ref_n)
+  end
+
+  start_session('T1=${1:<$2>}')
+  validate_n_extmarks(8)
+
+  type_keys('x')
+  validate_state('i', { 'T1=x' }, { 1, 4 })
+  validate_n_extmarks(4)
+
+  start_session('U1=$1')
+  validate_n_extmarks(9)
+
+  stop()
+  validate_n_extmarks(4)
+  stop()
+  validate_n_extmarks(0)
+end
+
 T['Session']['persists after `:edit`'] = function()
   local path = test_dir_absolute .. '/tmp'
   child.fn.writefile({}, path)
@@ -1696,7 +1922,9 @@ T['Interaction with built-in completion']['cycling through candidates'] = functi
   validate_pumvisible()
 end
 
-T['Snippet collection'] = new_set()
+T['Various snippets'] = new_set()
+
+T['Various snippets']['just text'] = function() MiniTest.skip() end
 
 T['Tricky snippets'] = new_set()
 
@@ -1704,7 +1932,10 @@ T['Tricky snippets']['squashed and linked'] = function() MiniTest.skip() end
 
 T['Mappings'] = new_set()
 
-T['Mappings']['works'] = function() MiniTest.skip() end
+T['Mappings']['works'] = function()
+  -- Should copy and restore possibly conflicting mappings
+  MiniTest.skip()
+end
 
 T['Examples'] = new_set()
 
@@ -1723,9 +1954,18 @@ T['Examples']['<Tab>/<S-Tab> mappings'] = function()
   child.setup()
   load_module({
     snippets = { { prefix = 'l', body = 'T1=$1 T0=0' } },
-    mappings = { expand = '', expand_all = '<C-g><Tab>', jump_next = '' },
+    mappings = { expand = '', jump_next = '' },
   })
   child.lua([[
+    local minisnippets = require('mini-dev.snippets')
+    local match_strict = function(snippets, pos)
+      return minisnippets.default_match(snippets, pos, { pattern_fuzzy='%S+' })
+    end
+    minisnippets.setup({
+      snippets = { { prefix = 'l', body = 'T1=$1 T0=0' } },
+      mappings = { expand = '', jump_next = '' },
+      expand = { match = match_strict },
+    })
     local expand_or_jump = function()
       local can_expand = #MiniSnippets.expand({ insert = false }) > 0
       if can_expand then vim.schedule(MiniSnippets.expand); return '' end
@@ -1756,9 +1996,6 @@ T['Examples']['<Tab>/<S-Tab> mappings'] = function()
   type_keys('<S-Tab>')
   validate_n_sessions(2)
   eq(get_cur_tabstop(), '1')
-
-  stop()
-  MiniTest.skip('Consider also testing `<C-g><Tab>` after there is convenient tooling around testing `select`')
 end
 
 T['Examples']['using `vim.snippet.expand()`'] = function()

@@ -19,6 +19,10 @@
 --         - Preserves Insert mode and ensures Normal mode.
 --         - Places cursor at the start of removed region (if there is one).
 --           Also removes `region` field as it is outdated an no longer needed.
+--     - Explore currently available snippets by expanding at line start.
+--       Assumes matching is done with |MiniSnippets.default_match()|.
+--       To always be able to interactively select snippet to insert, make
+--       a |MiniSnippets.expand()| mapping with `{ match = false }`.
 --
 -- - Syntax:
 --     - Escape `}` inside `if` of `${1:?if:else}`.
@@ -245,9 +249,15 @@
 --- it enables cleaner use of nested sessions. Here is an example of setting up
 --- custom <Tab> to "expand or jump" and <S-Tab> to "jump to previous": >lua
 ---
----   require('mini.snippets').setup({
+---   local snippets = require('mini.snippets')
+---   local match_strict = function(snippets, pos)
+---     -- Do not match with whitespace to cursor's left
+---     return snippets.default_match(snippets, pos, { pattern_fuzzy = '%S+' })
+---   end
+---   snippets.setup({
 ---     -- ... Set up snippets ...
----     mappings = { expand = '', expand_all = '<C-g><Tab>', jump_next = '' },
+---     mappings = { expand = '', jump_next = '' },
+---     expand   = { match = match_strict },
 ---   })
 ---   local expand_or_jump = function()
 ---     local can_expand = #MiniSnippets.expand({ insert = false }) > 0
@@ -370,7 +380,7 @@ end
 ---
 ---   -- Perform fuzzy match based only on alphanumeric characters
 ---   local my_match = function(snippets, pos)
----     return MiniSnippets.default_match(snippets, pos, {pattern_fuzzy = '%w+'})
+---     return MiniSnippets.default_match(snippets, pos, {pattern_fuzzy = '%w*'})
 ---   end
 ---   -- Always insert the best matched snippet
 ---   local my_select = function(snippets, insert) return insert(snippets[1]) end
@@ -392,9 +402,8 @@ MiniSnippets.config = {
   -- Module mappings. Use `''` (empty string) to disable one.
   -- Created globally in Insert mode
   mappings = {
-    -- Ways to expand snippets
+    -- Expand snippet at cursor position
     expand = '<C-j>',
-    expand_all = '<C-g><C-j>',
 
     -- Interact with default `expand.insert` session
     jump_next = '<C-l>',
@@ -463,14 +472,15 @@ MiniSnippets.expand = function(opts)
   if not H.is_position(pos) then H.error('`opts.pos` should be table with numeric `line` and `col` fields') end
 
   -- Match
-  local all_snippets = vim.deepcopy(H.get_context_snippets(pos))
+  local context = H.context_compute(pos)
+  local all_snippets = vim.deepcopy(H.context_get_snippets(context))
   local matches = match == false and all_snippets or match(all_snippets, pos)
   if not H.is_array_of(matches, H.is_snippet) then H.error('`match` returned not an array of snippets') end
 
   -- Act
   if insert == false then return matches end
-  if #all_snippets == 0 then return H.notify('There are no snippets in given context', 'WARN') end
-  if #matches == 0 then return H.notify('There are no matches at position', 'WARN') end
+  if #all_snippets == 0 then return H.notify('No snippets in context: ' .. H.context_tostring(context), 'WARN') end
+  if #matches == 0 then return H.notify('No matches in context: ' .. H.context_tostring(context), 'WARN') end
 
   local insert_ext = H.make_extended_insert(insert)
 
@@ -610,23 +620,25 @@ end
 ---
 --- Match snippets based on the current line text before the cursor.
 --- Tries two matching approaches consecutively:
---- - Find exact snippet prefix match to the left of cursor.
----   In case of any match, return the one with the longest prefix.
---- - Fuzzy match base text to the left of cursor (extracted via `opts.pattern`).
----   Matching is done via |matchfuzzy()|. All fuzzy matches are returned.
+--- - Find exact snippet prefix to the left of cursor which is also preceeded by
+---   a byte matching `pattern_exact_boundary`. In case of any match, return
+---   the one with the longest prefix.
+--- - Match fuzzily snippet prefixes against the base (text to the left of cursor
+---   extracted via `opts.pattern_fuzzy`). Matching is done via |matchfuzzy()| but
+---   empty base results in all snippets being matched. Return all fuzzy matches.
 ---
 ---@param snippets table Array of snippets which can be matched.
 ---@param pos table|nil Position at which to match snippets. Default: at cursor.
 ---@param opts table|nil Options. Possible fields:
 ---   - <pattern_exact_boundary> `(string)` - Lua pattern that should match a single
----     byte to the left of exact match to accept it. At line start matching is
----     done against empty string; use `?` quantifier to allow it as boundary.
+---     byte to the left of exact match to accept it. Line start is matched against
+---     empty string; use `?` quantifier to allow it as boundary.
 ---     Default: `[%s%p]?` (accept only whitespace and punctuation as boundary,
 ---     allow match at line start).
 ---     Example: prefix "l" matches in lines "l", "_l", " l"; but not "1l", "ll".
 ---   - <pattern_fuzzy> `(string)` - Lua pattern to extract base to the left of
 ---     cursor for fuzzy matching. Supply empty string skip this step.
----     Default: `'%S+'` (as many as possible non-whitespace characters).
+---     Default: `'%S*'` (as many as possible non-whitespace; allow empty string).
 ---
 ---@return table Array of snippets with <region> field. Ordered from best to worst match.
 ---
@@ -635,13 +647,13 @@ end
 ---   MiniSnippets.default_match(snippets, pos, { pattern_exact_boundary = '.?' })
 ---
 ---   -- Perform fuzzy match based only on alphanumeric characters
----   MiniSnippets.default_match(snippets, pos, { pattern_fuzzy = '%w+' })
+---   MiniSnippets.default_match(snippets, pos, { pattern_fuzzy = '%w*' })
 --- <
 MiniSnippets.default_match = function(snippets, pos, opts)
   if pos == nil then pos = { line = vim.fn.line('.'), col = vim.fn.col('.') } end
   if not H.is_position(pos) then H.error('`pos` should be table with numeric `line` and `col` fields') end
 
-  opts = vim.tbl_extend('force', { pattern_exact_boundary = '[%s%p]?', pattern_fuzzy = '%S+' }, opts or {})
+  opts = vim.tbl_extend('force', { pattern_exact_boundary = '[%s%p]?', pattern_fuzzy = '%S*' }, opts or {})
   if not H.is_string(opts.pattern_exact_boundary) then H.error('`opts.pattern_exact_boundary` should be string') end
 
   -- Compute line before cursor. Treat Insert mode as exclusive for right edge.
@@ -666,6 +678,7 @@ MiniSnippets.default_match = function(snippets, pos, opts)
 
   local base = string.match(line, opts.pattern_fuzzy .. '$')
   if base == nil then return {} end
+  if base == '' then return vim.deepcopy(snippets) end
 
   local snippets_with_prefix = vim.tbl_filter(function(s) return s.prefix ~= nil end, snippets)
   local fuzzy_matches = vim.fn.matchfuzzy(snippets_with_prefix, base, { key = 'prefix' })
@@ -878,7 +891,6 @@ H.setup_config = function(config)
 
   vim.validate({
     ['mappings.expand'] = { config.mappings.expand, 'string' },
-    ['mappings.expand_all'] = { config.mappings.expand_all, 'string' },
     ['mappings.jump_next'] = { config.mappings.jump_next, 'string' },
     ['mappings.jump_prev'] = { config.mappings.jump_prev, 'string' },
     ['mappings.stop'] = { config.mappings.stop, 'string' },
@@ -903,7 +915,6 @@ H.apply_config = function(config)
     vim.keymap.set('i', lhs, rhs, { desc = desc })
   end
   map(mappings.expand, '<Cmd>lua MiniSnippets.expand()<CR>', 'Expand snippet')
-  map(mappings.expand_all, '<Cmd>lua MiniSnippets.expand({ match = false })<CR>', 'Expand without matching')
 
   -- Register 'code-snippets' extension as JSON (helps with highlighting)
   vim.schedule(function() vim.filetype.add({ extension = { ['code-snippets'] = 'json' } }) end)
@@ -999,8 +1010,7 @@ H.read_snippet_array = function(contents)
 end
 
 -- Context snippets -----------------------------------------------------------
-H.get_context_snippets = function(pos)
-  local context = H.compute_context(pos)
+H.context_get_snippets = function(context)
   local buf_cache = H.cache.context[context.buf_id] or {}
   if buf_cache[context.lang] ~= nil then return buf_cache[context.lang] end
 
@@ -1015,7 +1025,7 @@ H.get_context_snippets = function(pos)
   return res
 end
 
-H.compute_context = function(pos)
+H.context_compute = function(pos)
   local buf_id = vim.api.nvim_get_current_buf()
   local lang = vim.bo[buf_id].filetype
 
@@ -1036,6 +1046,8 @@ H.compute_context = function(pos)
 
   return { buf_id = buf_id, lang = lang }
 end
+
+H.context_tostring = function(context) return 'buf_id=' .. context.buf_id .. ', lang=' .. vim.inspect(context.lang) end
 
 H.traverse_config_snippets = function(x, target, context)
   if H.is_snippet(x) then
@@ -1413,7 +1425,11 @@ H.session_init = function(session, full)
     end
 
     -- Register new session
-    H.session_deinit(H.get_active_session(), false)
+    local cur_session = H.get_active_session()
+    if cur_session ~= nil then
+      H.session_sync_current_tabstop(cur_session)
+      H.session_deinit(cur_session, false)
+    end
     table.insert(H.sessions, session)
 
     -- Focus on the current tabstop
