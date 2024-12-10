@@ -6,6 +6,7 @@
 -- - A system to match snippet based on prefix:
 --
 -- - A system to expand, navigate, and edit snippet:
+--     - Should autohide signature help from 'mini.completion' when jumping.
 --
 -- Docs:
 -- - Manage:
@@ -100,18 +101,6 @@
 --       allow becomeing `x y` or `y x` after the jump and typing.
 --     - Choices are shown when needed (before replace or empty tabstop).
 --       Even if empty tabstop is achieved after deleting.
---     - Preserves completion popup if session is stopped automatically.
---     - Should work with sessions in different buffers:
---         - Stopping active and resuming previous session should work even if
---           it is not in current buffer.
---         - No cursor change or tabstop focus setting should occure. This is
---           to allow more streamlined typing past final tabstop inside nested
---           session.
---         - Escaping in Normal mode with final tabstop and present parent
---           session in different buffer should not start Insert mode.
---     - Nested sessions (however deep) should be cleaned properly if they no
---       longer can not be made active (i.e. if buffer is completely unloaded):
---         - Should not clean if `:edit` is done in current buffer.
 -- - Jump:
 --     - Should ensure that session's buffer is current.
 --
@@ -1081,13 +1070,8 @@ H.make_extended_insert = function(insert)
   return function(snippet)
     if snippet == nil then return end
 
-    -- Ensure proper mode: Insert if Insert, Normal otherwise
-    -- NOTE: Normal mode is chosen because ensuring Insert is troublesome.
-    -- Any reasonable approach (`:normal! \28\14a`, `:startinsert`,
-    -- `vim.fn.feedkeys('\28\14a', 'n')`) does not immediately start Insert
-    -- mode, only "after function or script is finished".
-    local mode = vim.fn.mode()
-    if not (mode == 'i' or mode == 'n') then H.set_mode('n') end
+    -- Ensure Insert mode
+    H.ensure_insert_mode()
 
     -- Delete snippet's region and remove the data from the snippet (as it
     -- wouldn't need to be removed and will represent outdated information)
@@ -1095,8 +1079,8 @@ H.make_extended_insert = function(insert)
     snippet = vim.deepcopy(snippet)
     snippet.region = nil
 
-    -- Insert at cursor
-    insert(snippet)
+    -- Insert at cursor. Schedule because ensuring Insert mode isn't immediate.
+    vim.schedule(function() insert(snippet) end)
   end
 end
 
@@ -1409,9 +1393,6 @@ H.session_init = function(session, full)
   if session == nil then return end
   local buf_id = session.buf_id
 
-  -- Ensure Insert mode if appropriate. NOTE: it does not have immediate effect.
-  if vim.fn.mode() ~= 'i' and vim.api.nvim_get_current_buf() == buf_id then H.set_mode('i') end
-
   -- Prepare
   if full then
     -- Set buffer text
@@ -1423,6 +1404,7 @@ H.session_init = function(session, full)
       local row, col, opts = H.extmark_get(buf_id, ref_node.extmark_id)
       local is_empty = row == opts.end_row and col == opts.end_col
       if is_empty then
+        H.ensure_insert_mode()
         H.extmark_set_cursor(buf_id, ref_node.extmark_id, 'left')
         -- Clean up
         H.nodes_traverse(session.nodes, function(n) H.extmark_del(buf_id, n.extmark_id) end)
@@ -1543,6 +1525,9 @@ H.session_tabstop_focus = function(session, tabstop_id)
   -- Ensure proper gravity as reference node has changed
   H.session_ensure_gravity(session)
 
+  -- Ensure Insert mode
+  H.ensure_insert_mode()
+
   -- Maybe show choices when needed (before replace or on empty tabstop)
   if ref_node.placeholder or ref_node.text == '' then H.show_completion(ref_node.choices) end
 end
@@ -1636,6 +1621,8 @@ H.session_sync_current_tabstop = function(session)
 end
 
 H.session_jump = vim.schedule_wrap(function(session, direction)
+  -- NOTE: Use `schedule_wrap` to workaround some edge cases when used inside
+  -- expression mapping (as recommended for `<Tab>`)
   if session == nil then return end
 
   -- Compute target tabstop accounting for possibly missing ones.
@@ -1927,10 +1914,19 @@ end
 
 H.set_mode = function(target_mode)
   -- This is seemingly the only "good" way to ensure Normal mode.
-  -- This also works with `vim.snippet.expand()` as its implementation uses
-  -- `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
+  -- Mostly because it works with `vim.snippet.expand()` as its implementation
+  -- uses `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
   local keys = '\28\14' .. (target_mode == 'i' and 'i' or '')
   vim.api.nvim_feedkeys(keys, 'n', false)
+end
+
+H.ensure_insert_mode = function()
+  if vim.fn.mode() == 'i' then return end
+  -- This is seemingly the only "good" way to ensure Insert mode.
+  -- Mostly because it works with `vim.snippet.expand()` as its implementation
+  -- uses `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
+  -- NOTE: mode changing is not immediate, only on some next tick.
+  vim.api.nvim_feedkeys('\28\14i', 'n', false)
 end
 
 H.delete_region = function(region)
@@ -1941,7 +1937,11 @@ H.delete_region = function(region)
 end
 
 H.show_completion = function(items)
-  if items ~= nil and vim.fn.mode() == 'i' then vim.fn.complete(vim.fn.col('.'), items) end
+  if items == nil then return end
+  if vim.fn.mode() == 'i' then return vim.fn.complete(vim.fn.col('.'), items) end
+  -- Show popup if inserting in not Insert mode as ensuring it is not immediate
+  local show = function() vim.fn.complete(vim.fn.col('.'), items) end
+  vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:i*', once = true, callback = show, desc = 'Show popup' })
 end
 
 H.hide_completion = function()
