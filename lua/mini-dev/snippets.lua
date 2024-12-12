@@ -2,6 +2,7 @@
 --
 -- Code:
 -- - A system to load and manage custom snippets:
+--     - Should `\t` in snippet prefix be transformed according to 'expandtab'?
 --
 -- - A system to match snippet based on prefix:
 --
@@ -695,34 +696,39 @@ end
 --- Show snippets as entries via |vim.ui.select()| and insert the chosen one.
 ---
 ---@param snippets table Array of snippets (as an output of `config.expand.match`).
----@param insert function Function to insert chosen snippet. Should also remove
----   snippet's matched region (if present as a field).
+---@param insert function|nil Function to insert chosen snippet (passed as the only
+---   argument). Should remove snippet's matched region (if present as a field).
+---   Default: |MiniSnippets.default_insert()|.
 ---@param opts table|nil Options. Possible fields:
----   - <expand_single> `(boolean)` - whether to skip |vim.ui.select()| for
----     `snippets` with single entry. Default: `true`.
----
----@return ... The result of calling `vim.ui.select()`. Usually `nil`.
+---   - <insert_single> `(boolean)` - whether to skip |vim.ui.select()| for
+---     `snippets` with single entry and insert it directly. Default: `true`.
 MiniSnippets.default_select = function(snippets, insert, opts)
+  if not H.is_array_of(snippets, H.is_snippet) then H.error('`snippets` should be an array of snippets') end
+  if #snippets == 0 then return H.notify('No snippets to select from', 'WARN') end
+  insert = insert or MiniSnippets.default_insert
+  if not vim.is_callable(insert) then H.error('`insert` should be callable') end
   opts = opts or {}
 
-  if #snippets == 1 and (opts.expand_single == nil or opts.expand_single == true) then
+  if #snippets == 1 and (opts.insert_single == nil or opts.insert_single == true) then
     insert(snippets[1])
     return
   end
 
   -- Format
   local prefix_width = 0
-  for _, s in ipairs(snippets) do
-    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(s.prefix))
+  for i, s in ipairs(snippets) do
+    local prefix = s.prefix or '<No prefix>'
+    prefix_width = math.max(prefix_width, vim.fn.strdisplaywidth(prefix))
   end
   local format_item = function(s)
-    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(s.prefix))
-    return s.prefix .. pad .. ' │ ' .. s.desc
+    local prefix, desc = s.prefix or '<No prefix>', s.desc or s.description or '<No description>'
+    local pad = string.rep(' ', prefix_width - vim.fn.strdisplaywidth(prefix))
+    return prefix .. pad .. ' │ ' .. desc
   end
 
   -- Schedule insert to allow `vim.ui.select` override to restore window/cursor
-  local on_choice = vim.schedule_wrap(insert)
-  return vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
+  local on_choice = vim.schedule_wrap(function(item, _) insert(item) end)
+  vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
 end
 
 ---@usage >lua
@@ -765,7 +771,6 @@ MiniSnippets.session.stop = function()
   H.sessions[#H.sessions] = nil
   if #H.sessions == 0 then
     vim.api.nvim_del_augroup_by_name('MiniSnippetsTrack')
-    vim.on_key(nil, H.ns_id.on_key)
     H.unmap_in_sessions()
   end
   H.session_init(H.get_active_session(), false)
@@ -854,7 +859,6 @@ H.default_config = vim.deepcopy(MiniSnippets.config)
 -- Namespaces for extmarks
 H.ns_id = {
   nodes = vim.api.nvim_create_namespace('MiniSnippetsNodes'),
-  on_key = vim.api.nvim_create_namespace('MiniSnippetsOnKey'),
 }
 
 -- Array of current (nested) snippet sessions from `default_insert`
@@ -1477,28 +1481,24 @@ H.track_sessions = function()
   local text_events = { 'TextChanged', 'TextChangedI', 'TextChangedP' }
   vim.api.nvim_create_autocmd(text_events, { group = gr, callback = on_textchanged, desc = 'React to text change' })
 
-  -- Stop if final tabstop is current: exit to Normal mode or *any* user typing
-  -- Notes:
-  -- - Use `schedule_wrap` to possibly replace placeholder in final tabstop.
-  -- - Use `InsertCharPre` and not `TextChanged*` as they unexpectedly trigger
-  --   with built-in completion (as it does "delete-add" text when not needed).
-  --   It has a downside of not triggering after `<CR>`. Use `on_key` for that.
-  local stop_if_final = vim.schedule_wrap(function(args)
+  -- Stop if final tabstop is current: exit to Normal mode or *any* text change
+  local latest_changedtick = vim.b.changedtick
+  local stop_if_final = function(args)
+    -- *Actual* text change check is a workaround for `TextChangedI` sometimes
+    -- getting triggered unnecessarily and too late with built-in completion
+    if vim.b.changedtick == latest_changedtick and args.event ~= 'ModeChanged' then return end
+    latest_changedtick = vim.b.changedtick
+    -- React only on text changes in session's buffer
     local session, buf_id = H.get_active_session(), args.buf
-    if session == nil or not (session.buf_id == buf_id and session.cur_tabstop == '0') then return end
+    if not (session.buf_id == buf_id and session.cur_tabstop == '0') then return end
+    -- Stop without forcing to hide completion
     H.cache.stop_is_auto = true
     MiniSnippets.session.stop()
     H.cache.stop_is_auto = nil
-  end)
+  end
   local modechanged_opts = { group = gr, pattern = '*:n', callback = stop_if_final, desc = 'Stop on final tabstop' }
   vim.api.nvim_create_autocmd('ModeChanged', modechanged_opts)
-  vim.api.nvim_create_autocmd('InsertCharPre', { group = gr, callback = stop_if_final, desc = 'Stop on final tabstop' })
-  local stop_on_key = function(key)
-    local mode = vim.fn.mode()
-    local is_add_text = (mode == 'i' and key == '\r') or (mode == 'n' and (key == 'o' or key == 'O'))
-    if is_add_text then stop_if_final({ buf = vim.api.nvim_get_current_buf() }) end
-  end
-  vim.on_key(stop_on_key, H.ns_id.on_key)
+  vim.api.nvim_create_autocmd(text_events, { group = gr, callback = stop_if_final, desc = 'Stop on final tabstop' })
 end
 
 H.map_in_sessions = function()

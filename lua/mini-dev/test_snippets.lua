@@ -65,6 +65,22 @@ local validate_state = function(mode, lines, cursor)
   if cursor ~= nil then eq(get_cursor(), cursor) end
 end
 
+local mock_select = function(user_chosen_id)
+  child.lua('_G.user_chosen_id = ' .. user_chosen_id)
+  child.lua([[
+    vim.ui.select = function(items, opts, on_choice)
+      local format_item = opts.format_item or function(x) return tostring(x) end
+      _G.select_args = {
+        items = items,
+        items_formatted = vim.tbl_map(format_item, items),
+        prompt = opts.prompt,
+        kind = opts.kind
+      }
+      on_choice(items[_G.user_chosen_id], _G.user_chosen_id)
+    end
+  ]])
+end
+
 local setup_event_log = function()
   child.lua([[
     local suffixes = { 'Start', 'Stop', 'Suspend', 'Resume', 'JumpPre', 'Jump' }
@@ -131,6 +147,18 @@ local T = new_set({
       child.setup()
       child.set_size(8, 40)
       set_buf(new_buf())
+
+      -- Mock `vim.notify()`
+      child.lua([[
+        _G.notify_log = {}
+        local inverse_levels = {}
+        for k, v in pairs(vim.log.levels) do
+          inverse_levels[v] = k
+        end
+        vim.notify = function(msg, lvl, opts)
+          table.insert(_G.notify_log, { msg, inverse_levels[lvl], opts })
+        end
+      ]])
 
       load_module()
     end,
@@ -237,7 +265,75 @@ T['default_select()'] = new_set()
 
 local default_select = forward_lua('MiniSnippets.default_select')
 
-T['default_select()']['works'] = function() MiniTest.skip() end
+T['default_select()']['works'] = function()
+  -- Should stop early for empty array of snippets
+  default_select({})
+  eq(child.lua_get('_G.notify_log'), { { '(mini.snippets) No snippets to select from', 'WARN' } })
+
+  -- By default should insert a single snippet
+  default_select({ { body = 'T1=$1 T0=$0' } })
+  validate_state('i', { 'T1= T0=' }, { 1, 3 })
+  validate_active_session()
+  ensure_clean_state()
+
+  -- Should call `vim.ui.select` for more than one snippets
+  set_lines({ 'abc' })
+  local region = { from = { line = 1, col = 1 }, to = { line = 1, col = 3 } }
+  mock_select(2)
+  local snippets = {
+    { prefix = 'T', body = 'T1=$1 T0=$0' },
+    { body = 'U1=$1 U0=$0', desc = 'U snippet', region = region },
+    { prefix = 'xxx', body = 'X1=$1 X0=$0', description = 'X snippet' },
+  }
+  default_select(snippets)
+  validate_state('i', { 'U1= U0=' }, { 1, 3 })
+  validate_active_session()
+  eq(child.lua_get('_G.select_args'), {
+    items = snippets,
+    items_formatted = {
+      'T           │ <No description>',
+      '<No prefix> │ U snippet',
+      'xxx         │ X snippet',
+    },
+    prompt = 'Snippets',
+  })
+end
+
+T['default_select()']['respects multibyte characters during formatted'] = function()
+  mock_select(2)
+  default_select({
+    { prefix = 'ыыы', body = 'Ы1=$1 Ы0=$0', desc = 'Ы snippet' },
+    { prefix = 'uuu', body = 'U1=$1 U0=$0', desc = 'U snippet' },
+  })
+  eq(child.lua_get('_G.select_args.items_formatted'), { 'ыыы │ Ы snippet', 'uuu │ U snippet' })
+end
+
+T['default_select()']['respects `insert`'] = function()
+  mock_select(2)
+  child.lua([[
+    _G.my_insert = function(...) _G.args = { ... } end
+    local snippets = { { body = 'T1=$1 T0=$0' }, { body = 'T1=$1 T0=$0' } }
+    MiniSnippets.default_select(snippets, my_insert)
+  ]])
+  eq(child.lua_get('_G.args'), { { body = 'T1=$1 T0=$0' } })
+end
+
+T['default_select()']['respects `opts.insert_single`'] = function()
+  child.lua('vim.ui.select = function(items) _G.items = items end')
+  child.lua([[MiniSnippets.default_select({ { body = 'T1=$1 T0=$0' } }, nil, { insert_single = false })]])
+  -- Should still call `vim.ui.select()` even with single item array input
+  eq(child.lua_get('_G.items'), { { body = 'T1=$1 T0=$0' } })
+end
+
+T['default_select()']['validates input'] = function()
+  expect.error(function() default_select(1) end, '`snippets`.*array')
+  expect.error(function() default_select({ 1 }) end, '`snippets`.*snippets')
+  expect.error(function() default_select({ { body = 1 } }) end, '`snippets`.*snippets')
+  expect.error(function() default_select({ { body = 'T1=$1 T0=$0', prefix = 1 } }) end, '`snippets`.*snippets')
+  expect.error(function() default_select({ { body = 'T1=$1 T0=$0', desc = 1 } }) end, '`snippets`.*snippets')
+  expect.error(function() default_select({ { body = 'T1=$1 T0=$0', region = 1 } }) end, '`snippets`.*snippets')
+  expect.error(function() default_select({ { body = 'T1=$1 T0=$0' } }, 1) end, '`insert`.*callable')
+end
 
 T['default_insert()'] = new_set()
 
@@ -1620,10 +1716,16 @@ T['Session']['autostops when text is typed in final tabstop'] = function()
   validate(' ')
   validate('\t')
 
-  -- Adding "invisible" character (matters as `InsertCharPre` is not triggered)
+  -- Adding invisible character
   validate('<CR>')
+
+  -- Deleting
+  validate('<BS>')
+  validate('<C-u>')
+
+  -- Making text not in pure Insert mode
   validate('<C-o>o')
-  validate('<C-o>O')
+  validate('<C-o>guu')
 end
 
 T['Session']['autostops when exiting to Normal mode in final tabstop'] = function()
@@ -1926,6 +2028,18 @@ T['Various snippets'] = new_set()
 
 T['Various snippets']['just text'] = function() MiniTest.skip() end
 
+T['Various snippets']['placeholders'] = function()
+  start_session('T1=${1:<aaa>} T0=${0:<bbb>}')
+  child.expect_screenshot()
+  type_keys('x')
+  child.expect_screenshot()
+  jump('next')
+  child.expect_screenshot()
+  type_keys('y')
+  -- Should also remove final tabstop's placeholder
+  child.expect_screenshot()
+end
+
 T['Tricky snippets'] = new_set()
 
 T['Tricky snippets']['squashed and linked'] = function() MiniTest.skip() end
@@ -2029,6 +2143,19 @@ T['Examples']['using `vim.snippet.expand()`'] = function()
   validate_state('i', { 'T1=t1 T2=t2' }, { 1, 11 })
   type_keys('<C-h>')
   validate_state('s', { 'T1=t1 T2=t2' }, { 1, 3 })
+end
+
+T['Integrations'] = new_set()
+
+T['Integrations']['mini.pick'] = function()
+  -- Should work with `MiniPick.ui_select()`
+  MiniTest.skip()
+end
+
+T['Integrations']['mini.completion'] = function()
+  -- Should work with autocompletion from 'mini.completion' (especially
+  -- signature window)
+  MiniTest.skip()
 end
 
 return T
