@@ -202,7 +202,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('mappings.jump_next', '<C-l>')
   expect_config('mappings.jump_prev', '<C-h>')
   expect_config('mappings.stop', '<C-c>')
-  expect_config('expand', { match = nil, select = nil, insert = nil })
+  expect_config('expand', { locate = nil, resolve = nil, match = nil, select = nil, insert = nil })
 end
 
 T['setup()']['respects `config` argument'] = function()
@@ -226,6 +226,8 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ mappings = { jump_prev = 1 } }, 'mappings.jump_prev', 'string')
   expect_config_error({ mappings = { stop = 1 } }, 'mappings.stop', 'string')
   expect_config_error({ expand = 1 }, 'expand', 'table')
+  expect_config_error({ expand = { locate = 1 } }, 'expand.locate', 'function')
+  expect_config_error({ expand = { resolve = 1 } }, 'expand.resolve', 'function')
   expect_config_error({ expand = { match = 1 } }, 'expand.match', 'function')
   expect_config_error({ expand = { select = 1 } }, 'expand.select', 'function')
   expect_config_error({ expand = { insert = 1 } }, 'expand.insert', 'function')
@@ -259,7 +261,162 @@ T['default_match()'] = new_set()
 
 local default_match = forward_lua('MiniSnippets.default_match')
 
-T['default_match()']['works'] = function() MiniTest.skip() end
+--stylua: ignore
+T['default_match()']['works with exact match'] = function()
+  local snippets = {
+    { prefix = 'a', body = 'a1=$1' },
+    { prefix = 'aa', body = 'A1=$1', desc = 'Ends as other prefix' },
+    { prefix = '_t', body = '_1=$1' },
+    { prefix = ' t', body = ' 1=$1' },
+    { prefix = 't_', body = 'T1=$1' },
+    { prefix = 't ', body = 't1=$1' },
+    -- Should ignore empty and absent prefixes
+    { prefix = '', body = '$1', desc = 'Empty prefix' },
+    { body = '$1$2', desc = 'No prefix' },
+  }
+
+  local validate = function(keys, snip_id, ref_region)
+    type_keys(keys)
+    local ref = vim.deepcopy(snippets[snip_id])
+    if ref ~= nil then ref.region = ref_region end
+    eq(default_match(snippets), { ref })
+    ensure_clean_state()
+  end
+
+  validate({ 'i', 'a' }, 1, { from = { line = 1, col = 1 }, to = { line = 1, col = 1 } })
+
+  -- In different line positions
+  validate({ 'i', 'xx a x', '<Left><Left>' }, 1, { from = { line = 1, col = 4 }, to = { line = 1, col = 4 } })
+  validate({ 'i', 'a x',    '<Left><Left>' }, 1, { from = { line = 1, col = 1 }, to = { line = 1, col = 1 } })
+
+  -- Not in first line
+  validate({ 'i', 'x<CR>a' },          1, { from = { line = 2, col = 1 }, to = { line = 2, col = 1 } })
+  validate({ 'i', 'x<CR>a<CR>x<Up>' }, 1, { from = { line = 2, col = 1 }, to = { line = 2, col = 1 } })
+
+  -- Should match the widest exact match
+  validate({ 'i', 'aa' },  2, { from = { line = 1, col = 1 }, to = { line = 1, col = 2 } })
+  validate({ 'i', ' aa' }, 2, { from = { line = 1, col = 2 }, to = { line = 1, col = 3 } })
+
+  -- Should only use part to the left of cursor
+  validate({ 'i', 'aa', '<Left>' }, 1, { from = { line = 1, col = 1 }, to = { line = 1, col = 1 } })
+
+  -- Should ignore exact match if it is not after whitespace or punctuation
+  validate({ 'i', 'ba' }, nil)
+  validate({ 'i', 'baa' }, nil)
+
+  -- Should match regardless of prefix (even if starts/ends with space/punct)
+  validate({ 'i', '_t' }, 3, { from = { line = 1, col = 1 }, to = { line = 1, col = 2 } })
+  validate({ 'i', ' t' }, 4, { from = { line = 1, col = 1 }, to = { line = 1, col = 2 } })
+  validate({ 'i', 't_' }, 5, { from = { line = 1, col = 1 }, to = { line = 1, col = 2 } })
+  validate({ 'i', 't ' }, 6, { from = { line = 1, col = 1 }, to = { line = 1, col = 2 } })
+
+  validate({ 'i', ' _t' }, 3, { from = { line = 1, col = 2 }, to = { line = 1, col = 3 } })
+  validate({ 'i', '  t' }, 4, { from = { line = 1, col = 2 }, to = { line = 1, col = 3 } })
+
+  -- Should work in Normal mode and include character under cursor
+  validate({'i', 'aa', '<Esc>', '$'}, 2, { from = { line = 1, col = 1 }, to = { line = 1, col = 2 } })
+end
+
+T['default_match()']['works with fuzzy match'] = function()
+  local snippets = {
+    { prefix = 'a_bc', body = 'a_bc=$1', desc = 'Should preserve' },
+    { prefix = 'axbc', body = 'axbc=$1' },
+    { prefix = 'xabc', body = 'xabc=$1' },
+    -- Should ignore empty and absent prefixes
+    { prefix = '', body = '$1', desc = 'Empty prefix' },
+    { body = '$1$2', desc = 'No prefix' },
+  }
+
+  local validate = function(keys, snip_ids, ref_region)
+    type_keys(keys)
+    local ref_arr = vim.tbl_map(function(id)
+      local res = vim.deepcopy(snippets[id])
+      res.region = ref_region
+      return res
+    end, snip_ids)
+    eq(default_match(snippets), ref_arr)
+    ensure_clean_state()
+  end
+
+  -- Should return from best to worst fuzzy matches
+  local ref_region = { from = { line = 1, col = 1 }, to = { line = 1, col = 1 } }
+  validate({ 'i', 'x' }, { 3, 2 }, ref_region)
+
+  ref_region = { from = { line = 1, col = 1 }, to = { line = 1, col = 2 } }
+  validate({ 'i', 'xb' }, { 2, 3 }, ref_region)
+
+  -- Should only use part to the left of cursor
+  ref_region = { from = { line = 1, col = 1 }, to = { line = 1, col = 1 } }
+  validate({ 'i', 'xb', '<Left>' }, { 3, 2 }, ref_region)
+
+  -- Should compute base as widest non-whitespace characters
+  ref_region = { from = { line = 1, col = 2 }, to = { line = 1, col = 3 } }
+  validate({ 'i', ' xb' }, { 2, 3 }, ref_region)
+  validate({ 'i', '\txb' }, { 2, 3 }, ref_region)
+
+  validate({ 'i', 'xxb' }, {}, nil)
+  validate({ 'i', 'b_' }, {}, nil)
+
+  -- Should not return "connected" regions (to not be modifiable in place)
+  type_keys('i', 'ab')
+  local res = child.lua([[
+    local snippets = { { prefix = 'axb', body = 'axb=$1' }, { prefix = 'axxb', body = 'axxb=$1' } }
+    local matches = MiniSnippets.default_match(snippets)
+    matches[1].region.from.line = matches[1].region.from.line + 1
+    return matches[1].region.from.line ~= matches[2].region.from.line
+  ]])
+  eq(res, true)
+  ensure_clean_state()
+end
+
+T['default_match()']['works in special cases'] = function()
+  local snippets = { { prefix = 'ab', body = 'ab=$1' }, { prefix = 'axb', body = 'axb=$1' } }
+
+  -- Should return all input snippets if no exact and empty base
+  type_keys('i')
+  eq(default_match(snippets), snippets)
+  type_keys(' ')
+  eq(default_match(snippets), snippets)
+  type_keys('\t')
+  eq(default_match(snippets), snippets)
+
+  -- Should work with empty array
+  eq(default_match({}), {})
+end
+
+T['default_match()']['does not return fuzzy matches if there is exact match'] = function()
+  local snippets = { { prefix = 'ab', body = 'ab=$1' }, { prefix = 'axb', body = 'axb=$1' } }
+  type_keys('i', 'ab')
+  eq(
+    default_match(snippets),
+    { { prefix = 'ab', body = 'ab=$1', region = { from = { col = 1, line = 1 }, to = { col = 2, line = 1 } } } }
+  )
+end
+
+T['default_match()']['does not modify input snippets'] = function()
+  type_keys('i', 'ab')
+  local res_exact = child.lua([[
+    local snippets = { { prefix = 'ab', body = 'ab=$1' } }
+    local matches = MiniSnippets.default_match(snippets)
+    return { matches_have_region = matches[1].region ~= nil, orig_no_region = snippets[1].region == nil }
+  ]])
+  eq(res_exact, { matches_have_region = true, orig_no_region = true })
+  ensure_clean_state()
+
+  type_keys('i', 'ab')
+  local res_fuzzy = child.lua([[
+    local snippets = { { prefix = 'axb', body = 'axb=$1' } }
+    local matches = MiniSnippets.default_match(snippets)
+    return { matches_have_region = matches[1].region ~= nil, orig_no_region = snippets[1].region == nil }
+  ]])
+  eq(res_fuzzy, { matches_have_region = true, orig_no_region = true })
+end
+
+T['default_match()']['respects `opts.pattern_exact_boundary`'] = function() MiniTest.skip() end
+
+T['default_match()']['respects `opts.pattern_fuzzy`'] = function() MiniTest.skip() end
+
+T['default_match()']['validates input'] = function() MiniTest.skip() end
 
 T['default_select()'] = new_set()
 
@@ -2072,8 +2229,8 @@ T['Examples']['<Tab>/<S-Tab> mappings'] = function()
   })
   child.lua([[
     local minisnippets = require('mini-dev.snippets')
-    local match_strict = function(snippets, pos)
-      return minisnippets.default_match(snippets, pos, { pattern_fuzzy='%S+' })
+    local match_strict = function(snippets)
+      return minisnippets.default_match(snippets, { pattern_fuzzy='%S+' })
     end
     minisnippets.setup({
       snippets = { { prefix = 'l', body = 'T1=$1 T0=0' } },

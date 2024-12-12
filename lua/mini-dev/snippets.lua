@@ -251,9 +251,9 @@
 --- custom <Tab> to "expand or jump" and <S-Tab> to "jump to previous": >lua
 ---
 ---   local snippets = require('mini.snippets')
----   local match_strict = function(snippets, pos)
+---   local match_strict = function(snippets)
 ---     -- Do not match with whitespace to cursor's left
----     return snippets.default_match(snippets, pos, { pattern_fuzzy = '%S+' })
+---     return snippets.default_match(snippets, { pattern_fuzzy = '%S+' })
 ---   end
 ---   snippets.setup({
 ---     -- ... Set up snippets ...
@@ -412,29 +412,32 @@ MiniSnippets.config = {
     stop = '<C-c>',
   },
 
-  -- Functions describing snippet expansion
+  -- Functions describing snippet expansion. If `nil`, default values
+  -- are `MiniSnippets.default_<field>()`.
   expand = {
-    -- Match snippets at text position
+    -- Compute context
+    locate = nil,
+    -- TODO: Maybe no resolve? It is basically useful only to "step to modify
+    -- which snippets are matched". This can be done by modifying `match`.
+    -- Resolve config snippets in context
+    resolve = nil,
+    -- Match resolved snippets at cursor position
     match = nil,
-    -- Interactively select snippet to expand
+    -- Choose among matched snippets
     select = nil,
-    -- Insert snippet
+    -- Insert selected snippet
     insert = nil,
   },
 }
 --minidoc_afterlines_end
 
---- Expand snippet
+--- Expand snippet at cursor position
 ---
 ---@param opts table|nil Options. Same structure as `expand` in |MiniSnippets.config|
 ---   and uses its values as default. There are differences in allowed values:
 ---   - Use `match = false` to have all buffer snippets as matches.
 ---   - Use `select = false` to always expand the best match (if any).
 ---   - Use `insert = false` to return all matches without inserting.
----
----   Extra allowed fields:
----   - <pos> `(table)` - position (see |MiniSnippets-glossary) at which to
----     find snippets. Default: cursor position.
 ---
 ---@return table|nil If `insert` is `false`, an array of matched snippets as
 ---   was an output of `expand.match`. Otherwise `nil`.
@@ -456,6 +459,12 @@ MiniSnippets.expand = function(opts)
   opts = vim.tbl_extend('force', H.get_config().expand, opts or {})
 
   -- Validate
+  local locate = opts.locate or MiniSnippets.default_locate
+  if not vim.is_callable(locate) then H.error('`opts.locate` should be callable') end
+
+  local resolve = opts.resolve or MiniSnippets.default_resolve
+  if not vim.is_callable(resolve) then H.error('`opts.resolve` should be callable') end
+
   local match = false
   if opts.match ~= false then match = opts.match or MiniSnippets.default_match end
   if not (match == false or vim.is_callable(match)) then H.error('`opts.match` should be `false` or callable') end
@@ -473,10 +482,11 @@ MiniSnippets.expand = function(opts)
   if not H.is_position(pos) then H.error('`opts.pos` should be table with numeric `line` and `col` fields') end
 
   -- Match
-  local context = H.context_compute(pos)
-  local all_snippets = vim.deepcopy(H.context_get_snippets(context))
-  local matches = match == false and all_snippets or match(all_snippets, pos)
-  if not H.is_array_of(matches, H.is_snippet) then H.error('`match` returned not an array of snippets') end
+  local context = locate()
+  local all_snippets = resolve(context)
+  if not H.is_array_of(all_snippets, H.is_snippet) then H.error('`resolve` should return array of snippets') end
+  local matches = match == false and all_snippets or match(all_snippets)
+  if not H.is_array_of(matches, H.is_snippet) then H.error('`match` should return array of snippets') end
 
   -- Act
   if insert == false then return matches end
@@ -617,19 +627,77 @@ MiniSnippets.read_file = function(path, opts)
   return res.snippets
 end
 
+--- Default context computation
+---
+---@return table Context table with the following fields:
+---   - <buf_id> `(number)` - current buffer identifier.
+---   - <lang> `(string)` - language at cursor: language of tree-sitter parser
+---     active at cursor; buffer's 'filetype' otherwise.
+MiniSnippets.default_locate = function()
+  local buf_id = vim.api.nvim_get_current_buf()
+  local lang = vim.bo[buf_id].filetype
+
+  -- TODO: Remove `opts.error` after compatibility with Neovim=0.11 is dropped
+  local has_parser, parser = pcall(vim.treesitter.get_parser, buf_id, nil, { error = false })
+  if not has_parser or parser == nil then return { buf_id = buf_id, lang = lang } end
+
+  -- Compute local TS language from the deepest parser covering position
+  local lnum, col = vim.fn.line('.'), vim.fn.col('.')
+  local ref_range, res_level = { lnum - 1, col - 1, lnum - 1, col }, 0
+  local traverse
+  traverse = function(lang_tree, level)
+    if lang_tree:contains(ref_range) and level > res_level then lang = lang_tree:lang() or lang end
+    for _, child_lang_tree in pairs(lang_tree:children()) do
+      traverse(child_lang_tree, level + 1)
+    end
+  end
+  traverse(parser, 1)
+
+  return { buf_id = buf_id, lang = lang }
+end
+
+--- Default resolve
+---
+--- Normalize `snippets` from |MiniSnippets.config| based on supplied context.
+--- Output is cached per unique value combination in `context`. Be careful of using
+--- too narrow context (like cursor position) as it will lead to big memory usage.
+---
+---@param context table|nil Context used as an argument for callable `config.snippets`.
+---   Only string fields and string/number values are allowed.
+---   Default: output of |MiniSnippets.default_locate()|.
+---
+---@return table Array of snippets.
+MiniSnippets.default_resolve = function(context)
+  context = context or MiniSnippets.default_locate()
+  if type(context) ~= 'table' then H.error('`context` should be table') end
+
+  -- TODO: Cache per any `context`
+  local buf_cache = H.cache.context[context.buf_id] or {}
+  if buf_cache[context.lang] ~= nil then return vim.deepcopy(buf_cache[context.lang]) end
+
+  local res, config_snippets = {}, H.get_config().snippets
+  H.traverse_config_snippets(config_snippets, res, context)
+  res = vim.tbl_values(res)
+  table.sort(res, function(a, b) return a.prefix < b.prefix end)
+
+  buf_cache[context.lang] = res
+  H.cache.context[context.buf_id] = buf_cache
+
+  return vim.deepcopy(res)
+end
+
 --- Default match
 ---
---- Match snippets based on the current line text before the cursor.
+--- Match snippets based on the line before cursor.
 --- Tries two matching approaches consecutively:
---- - Find exact snippet prefix to the left of cursor which is also preceeded by
----   a byte matching `pattern_exact_boundary`. In case of any match, return
----   the one with the longest prefix.
+--- - Find exact snippet prefix (if present and non-empty) to the left of cursor
+---   which is also preceeded by a byte matching `pattern_exact_boundary`.
+---   In case of any match, return the one with the longest prefix.
 --- - Match fuzzily snippet prefixes against the base (text to the left of cursor
 ---   extracted via `opts.pattern_fuzzy`). Matching is done via |matchfuzzy()| but
 ---   empty base results in all snippets being matched. Return all fuzzy matches.
 ---
 ---@param snippets table Array of snippets which can be matched.
----@param pos table|nil Position at which to match snippets. Default: at cursor.
 ---@param opts table|nil Options. Possible fields:
 ---   - <pattern_exact_boundary> `(string)` - Lua pattern that should match a single
 ---     byte to the left of exact match to accept it. Line start is matched against
@@ -645,33 +713,35 @@ end
 ---
 ---@usage >lua
 ---   -- Accept any exact match
----   MiniSnippets.default_match(snippets, pos, { pattern_exact_boundary = '.?' })
+---   MiniSnippets.default_match(snippets, { pattern_exact_boundary = '.?' })
 ---
 ---   -- Perform fuzzy match based only on alphanumeric characters
----   MiniSnippets.default_match(snippets, pos, { pattern_fuzzy = '%w*' })
+---   MiniSnippets.default_match(snippets, { pattern_fuzzy = '%w*' })
 --- <
-MiniSnippets.default_match = function(snippets, pos, opts)
-  if pos == nil then pos = { line = vim.fn.line('.'), col = vim.fn.col('.') } end
-  if not H.is_position(pos) then H.error('`pos` should be table with numeric `line` and `col` fields') end
-
+MiniSnippets.default_match = function(snippets, opts)
+  if not H.is_array_of(snippets, H.is_snippet) then H.error('`snippets` should be array of snippets') end
   opts = vim.tbl_extend('force', { pattern_exact_boundary = '[%s%p]?', pattern_fuzzy = '%S*' }, opts or {})
   if not H.is_string(opts.pattern_exact_boundary) then H.error('`opts.pattern_exact_boundary` should be string') end
 
   -- Compute line before cursor. Treat Insert mode as exclusive for right edge.
-  local to = pos.col - (vim.fn.mode() == 'i' and 1 or 0)
-  local line, lnum = vim.fn.getline(pos.line):sub(1, to), pos.line
+  local lnum, col = vim.fn.line('.'), vim.fn.col('.')
+  local to = col - (vim.fn.mode() == 'i' and 1 or 0)
+  local line = vim.fn.getline(lnum):sub(1, to)
 
   -- Exact. Use 0 as initial best match width to not match empty prefixes.
-  local best_match, best_match_width = nil, 0
+  local best_id, best_match_width = nil, 0
   local pattern_boundary = '^' .. opts.pattern_exact_boundary .. '$'
-  for _, s in pairs(snippets) do
-    local w = s.prefix:len()
+  for i, s in pairs(snippets) do
+    local w = (s.prefix or ''):len()
     if best_match_width < w and line:sub(-w) == s.prefix and line:sub(-w - 1, -w - 1):find(pattern_boundary) then
-      s.region = { from = { line = lnum, col = to - w + 1 }, to = { line = lnum, col = to } }
-      best_match, best_match_width = s, w
+      best_id, best_match_width = i, w
     end
   end
-  if best_match ~= nil then return { best_match } end
+  if best_id ~= nil then
+    local res = vim.deepcopy(snippets[best_id])
+    res.region = { from = { line = lnum, col = to - best_match_width + 1 }, to = { line = lnum, col = to } }
+    return { res }
+  end
 
   -- Fuzzy
   if not H.is_string(opts.pattern_fuzzy) then H.error('`opts.pattern_fuzzy` should be string') end
@@ -898,6 +968,8 @@ H.setup_config = function(config)
     ['mappings.jump_next'] = { config.mappings.jump_next, 'string' },
     ['mappings.jump_prev'] = { config.mappings.jump_prev, 'string' },
     ['mappings.stop'] = { config.mappings.stop, 'string' },
+    ['expand.locate'] = { config.expand.locate, 'function', true },
+    ['expand.resolve'] = { config.expand.resolve, 'function', true },
     ['expand.match'] = { config.expand.match, 'function', true },
     ['expand.select'] = { config.expand.select, 'function', true },
     ['expand.insert'] = { config.expand.insert, 'function', true },
@@ -1014,44 +1086,15 @@ H.read_snippet_array = function(contents)
 end
 
 -- Context snippets -----------------------------------------------------------
-H.context_get_snippets = function(context)
-  local buf_cache = H.cache.context[context.buf_id] or {}
-  if buf_cache[context.lang] ~= nil then return buf_cache[context.lang] end
-
-  local res, config_snippets = {}, H.get_config().snippets
-  H.traverse_config_snippets(config_snippets, res, context)
-  res = vim.tbl_values(res)
-  table.sort(res, function(a, b) return a.prefix < b.prefix end)
-
-  buf_cache[context.lang] = res
-  H.cache.context[context.buf_id] = buf_cache
-
-  return res
-end
-
-H.context_compute = function(pos)
-  local buf_id = vim.api.nvim_get_current_buf()
-  local lang = vim.bo[buf_id].filetype
-
-  -- TODO: Remove `opts.error` after compatibility with Neovim=0.11 is dropped
-  local has_parser, parser = pcall(vim.treesitter.get_parser, buf_id, nil, { error = false })
-  if not has_parser or parser == nil then return { buf_id = buf_id, lang = lang } end
-
-  -- Compute local TS language from the deepest parser covering position
-  local ref_range, res_level = { pos.line - 1, pos.col - 1, pos.line - 1, pos.col }, 0
-  local traverse
-  traverse = function(lang_tree, level)
-    if lang_tree:contains(ref_range) and level > res_level then lang = lang_tree:lang() or lang end
-    for _, child_lang_tree in pairs(lang_tree:children()) do
-      traverse(child_lang_tree, level + 1)
-    end
+H.context_tostring = function(context)
+  if type(context) ~= 'table' then return tostring(context) end
+  local keys = {}
+  for k, v in pairs(context) do
+    if type(k) == 'string' and (type(v) == 'string' or type(v) == 'number') then table.insert(keys, k) end
   end
-  traverse(parser, 1)
-
-  return { buf_id = buf_id, lang = lang }
+  table.sort(keys)
+  return table.concat(vim.tbl_map(function(k) return k .. '=' .. context[k] end, keys), ', ')
 end
-
-H.context_tostring = function(context) return 'buf_id=' .. context.buf_id .. ', lang=' .. vim.inspect(context.lang) end
 
 H.traverse_config_snippets = function(x, target, context)
   if H.is_snippet(x) then
