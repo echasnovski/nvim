@@ -202,7 +202,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('mappings.jump_next', '<C-l>')
   expect_config('mappings.jump_prev', '<C-h>')
   expect_config('mappings.stop', '<C-c>')
-  expect_config('expand', { locate = nil, resolve = nil, match = nil, select = nil, insert = nil })
+  expect_config('expand', { prepare = nil, match = nil, select = nil, insert = nil })
 end
 
 T['setup()']['respects `config` argument'] = function()
@@ -226,8 +226,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ mappings = { jump_prev = 1 } }, 'mappings.jump_prev', 'string')
   expect_config_error({ mappings = { stop = 1 } }, 'mappings.stop', 'string')
   expect_config_error({ expand = 1 }, 'expand', 'table')
-  expect_config_error({ expand = { locate = 1 } }, 'expand.locate', 'function')
-  expect_config_error({ expand = { resolve = 1 } }, 'expand.resolve', 'function')
+  expect_config_error({ expand = { prepare = 1 } }, 'expand.prepare', 'function')
   expect_config_error({ expand = { match = 1 } }, 'expand.match', 'function')
   expect_config_error({ expand = { select = 1 } }, 'expand.select', 'function')
   expect_config_error({ expand = { insert = 1 } }, 'expand.insert', 'function')
@@ -256,6 +255,109 @@ T['read_file()'] = new_set()
 local read_file = forward_lua('MiniSnippets.read_file')
 
 T['read_file()']['works'] = function() MiniTest.skip() end
+
+T['default_prepare()'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua([[
+        _G.loader_log = {}
+        _G.loader_1 = function(context)
+          table.insert(_G.loader_log, { 'loader_1', vim.deepcopy(context) })
+          return { prefix = 'l1', body = 'L1=$1' }
+        end
+        _G.loader_2 = function(context)
+          table.insert(_G.loader_log, { 'loader_2', vim.deepcopy(context) })
+          return { { prefix = 'l2_1', body = 'L2_1=$1' }, { prefix = 'l2_2', body = 'L2_2=$1' } }
+        end
+      ]])
+      child.bo.filetype = 'myft'
+    end,
+  },
+})
+
+local default_prepare = forward_lua('MiniSnippets.default_prepare')
+
+T['default_prepare()']['works'] = function()
+  local out = child.lua([[
+    local raw_snippets = {
+      { prefix = 'a', body = 'A=$1' },
+      { { prefix = 'aa', body = 'AA=$1' } },
+      { { { prefix = 'bbb', body = 'BBB=$1' }, { prefix = 'cCc', body = 'CCC=$1' } } },
+      { _G.loader_1 },
+      _G.loader_2,
+    }
+    return MiniSnippets.default_prepare(raw_snippets)
+  ]])
+
+  -- Should be ordered by prefix
+  --stylua: ignore
+  local ref = {
+    { prefix = 'a',    body = 'A=$1',    desc = 'A=$1' },
+    { prefix = 'aa',   body = 'AA=$1',   desc = 'AA=$1' },
+    { prefix = 'bbb',  body = 'BBB=$1',  desc = 'BBB=$1' },
+    { prefix = 'cCc',  body = 'CCC=$1',  desc = 'CCC=$1' },
+    { prefix = 'l1',   body = 'L1=$1',   desc = 'L1=$1' },
+    { prefix = 'l2_1', desc = 'L2_1=$1', body = 'L2_1=$1' },
+    { prefix = 'l2_2', body = 'L2_2=$1', desc = 'L2_2=$1' },
+  }
+  eq(out, ref)
+
+  -- Should call each loader once
+  local cur_buf = get_buf()
+  local ref_loader_log = {
+    { 'loader_1', { buf_id = cur_buf, lang = 'myft' } },
+    { 'loader_2', { buf_id = cur_buf, lang = 'myft' } },
+  }
+  eq(child.lua_get('_G.loader_log'), ref_loader_log)
+
+  -- By default caches output per context
+  MiniTest.skip()
+end
+
+T['default_prepare()']['works with tricky loaders'] = function()
+  local out = child.lua([[
+    _G.loader_nested = function(context)
+      table.insert(_G.loader_log, { 'loader_nested', vim.deepcopy(context) })
+      return { { _G.loader_1 }, _G.loader_2 }
+    end
+    return MiniSnippets.default_prepare({ _G.loader_nested })
+  ]])
+  --stylua: ignore
+  local ref = {
+    { prefix = 'l1',   body = 'L1=$1',   desc = 'L1=$1' },
+    { prefix = 'l2_1', desc = 'L2_1=$1', body = 'L2_1=$1' },
+    { prefix = 'l2_2', body = 'L2_2=$1', desc = 'L2_2=$1' },
+  }
+  eq(out, ref)
+
+  local cur_buf = get_buf()
+  local ref_loader_log = {
+    { 'loader_nested', { buf_id = cur_buf, lang = 'myft' } },
+    { 'loader_1', { buf_id = cur_buf, lang = 'myft' } },
+    { 'loader_2', { buf_id = cur_buf, lang = 'myft' } },
+  }
+  eq(child.lua_get('_G.loader_log'), ref_loader_log)
+end
+
+T['default_prepare()']['properly normalizes snippets'] = function()
+  -- Nil value of prefix/body/desc
+  --
+  -- <desc>/<description>/<body> description
+  --
+  -- Converts array prefix/body/desc to strings
+  MiniTest.skip()
+end
+
+T['default_prepare()']['uses proper default context'] = function()
+  -- Should use tree-sitter to compute local language
+  MiniTest.skip()
+end
+
+T['default_prepare()']['respects `opts.context`'] = function() MiniTest.skip() end
+
+T['default_prepare()']['respects `opts.cache`'] = function() MiniTest.skip() end
+
+T['default_prepare()']['validates input'] = function() MiniTest.skip() end
 
 T['default_match()'] = new_set()
 
@@ -412,11 +514,55 @@ T['default_match()']['does not modify input snippets'] = function()
   eq(res_fuzzy, { matches_have_region = true, orig_no_region = true })
 end
 
-T['default_match()']['respects `opts.pattern_exact_boundary`'] = function() MiniTest.skip() end
+T['default_match()']['respects `opts.pattern_exact_boundary`'] = function()
+  local snippets = { { prefix = 'a', body = 'a=$1' }, { prefix = 'ab', body = 'ab=$1' } }
 
-T['default_match()']['respects `opts.pattern_fuzzy`'] = function() MiniTest.skip() end
+  type_keys('i', '_a')
+  -- - No matches as '_' is not whitespace and '_a' is used as fuzzy match base
+  eq(#default_match(snippets, { pattern_exact_boundary = '%s?' }), 0)
+  ensure_clean_state()
 
-T['default_match()']['validates input'] = function() MiniTest.skip() end
+  -- Should match pattern against empty string at line start
+  type_keys('i', 'a')
+  -- - There are two matches because they both are fuzzy, i.e. no exact match
+  eq(#default_match(snippets, { pattern_exact_boundary = '%s' }), 2)
+end
+
+T['default_match()']['respects `opts.pattern_fuzzy`'] = function()
+  local snippets = { { prefix = 'ab', body = 'ab=$1' }, { prefix = 'xx', body = 'xx=$1' } }
+
+  type_keys('i', '_a')
+  eq(#default_match(snippets), 0)
+  eq(#default_match(snippets, { pattern_fuzzy = '%w*' }), 1)
+  ensure_clean_state()
+
+  -- Fuzzy matching empty string should return all snippets
+  type_keys('i', 'a')
+  eq(#default_match(snippets), 1)
+  eq(#default_match(snippets, { pattern_fuzzy = '[^a]*' }), 2)
+  ensure_clean_state()
+
+  -- Empty string can be used to not do fuzzy matching
+  type_keys('i', 'a')
+  eq(#default_match(snippets), 1)
+  eq(#default_match(snippets, { pattern_fuzzy = '' }), 0)
+end
+
+T['default_match()']['validates input'] = function()
+  local validate = function(err_pattern, ...)
+    local args = { ... }
+    expect.error(function() default_match(unpack(args)) end, err_pattern)
+  end
+  validate('`snippets`.*array', 1)
+  validate('`snippets`.*snippets', { 1 })
+  validate('`snippets`.*snippets', { { body = 1 } })
+  validate('`snippets`.*snippets', { { body = 'T1=$1', prefix = 1 } })
+  validate('`snippets`.*snippets', { { body = 'T1=$1', desc = 1 } })
+  validate('`snippets`.*snippets', { { body = 'T1=$1', region = 1 } })
+
+  validate('`opts.pattern_exact_boundary`.*string', { { body = 'T1=$1' } }, { pattern_exact_boundary = 1 })
+  validate('`opts.pattern_fuzzy`.*string', { { body = 'T1=$1' } }, { pattern_fuzzy = 1 })
+end
 
 T['default_select()'] = new_set()
 

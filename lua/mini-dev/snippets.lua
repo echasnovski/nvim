@@ -81,6 +81,7 @@
 --         - From .lua over .{json,code-snippets}.
 --     - `gen_loader.from_lang()` processes `lang_patterns` array in order.
 --       Resulting in preferring later ones over earlier.
+--     - Make sure that all files are read with target buffer being current.
 --
 -- - Expand:
 --     - `expand.insert` is called with proper active mode and cursor.
@@ -415,12 +416,8 @@ MiniSnippets.config = {
   -- Functions describing snippet expansion. If `nil`, default values
   -- are `MiniSnippets.default_<field>()`.
   expand = {
-    -- Compute context
-    locate = nil,
-    -- TODO: Maybe no resolve? It is basically useful only to "step to modify
-    -- which snippets are matched". This can be done by modifying `match`.
-    -- Resolve config snippets in context
-    resolve = nil,
+    -- Resolve raw config snippets at context
+    prepare = nil,
     -- Match resolved snippets at cursor position
     match = nil,
     -- Choose among matched snippets
@@ -459,11 +456,8 @@ MiniSnippets.expand = function(opts)
   opts = vim.tbl_extend('force', H.get_config().expand, opts or {})
 
   -- Validate
-  local locate = opts.locate or MiniSnippets.default_locate
-  if not vim.is_callable(locate) then H.error('`opts.locate` should be callable') end
-
-  local resolve = opts.resolve or MiniSnippets.default_resolve
-  if not vim.is_callable(resolve) then H.error('`opts.resolve` should be callable') end
+  local prepare = opts.prepare or MiniSnippets.default_prepare
+  if not vim.is_callable(prepare) then H.error('`opts.prepare` should be callable') end
 
   local match = false
   if opts.match ~= false then match = opts.match or MiniSnippets.default_match end
@@ -482,9 +476,9 @@ MiniSnippets.expand = function(opts)
   if not H.is_position(pos) then H.error('`opts.pos` should be table with numeric `line` and `col` fields') end
 
   -- Match
-  local context = locate()
-  local all_snippets = resolve(context)
-  if not H.is_array_of(all_snippets, H.is_snippet) then H.error('`resolve` should return array of snippets') end
+  local raw_snippets = H.get_config().snippets
+  local all_snippets, context = prepare(raw_snippets)
+  if not H.is_array_of(all_snippets, H.is_snippet) then H.error('`prepare` should return array of snippets') end
   local matches = match == false and all_snippets or match(all_snippets)
   if not H.is_array_of(matches, H.is_snippet) then H.error('`match` should return array of snippets') end
 
@@ -508,7 +502,8 @@ end
 --- - Designed to work with |MiniSnippets-files-specification|.
 --- - Caches output by default, i.e. second and later calls with same input value
 ---   don't read files from disk. Disable by setting `opts.cache` to `false`.
----   To reset cache, call |MiniSnippets.setup()|.
+---   To reset cache, call |MiniSnippets.setup()|. For example:
+---   `MiniSnippets.setup(MiniSnippets.config)`
 --- - Use |vim.notify()| to show problems during loading while trying to load
 ---   as much correctly defined snippet data as possible.
 ---   Disable by setting `opts.silent` to `true`.
@@ -627,63 +622,66 @@ MiniSnippets.read_file = function(path, opts)
   return res.snippets
 end
 
---- Default context computation
+--- Default prepare
 ---
----@return table Context table with the following fields:
----   - <buf_id> `(number)` - current buffer identifier.
----   - <lang> `(string)` - language at cursor: language of tree-sitter parser
----     active at cursor; buffer's 'filetype' otherwise.
-MiniSnippets.default_locate = function()
-  local buf_id = vim.api.nvim_get_current_buf()
-  local lang = vim.bo[buf_id].filetype
+--- Normalize raw snippets (as in `snippets` from |MiniSnippets.config|) based on
+--- supplied context:
+--- - TODO: describe steps and details about `nil` prefix/body/desc.
+---
+---@param raw_snippets table Array of snippet data as described in |MiniSnippets.config|.
+---@param opts table|nil Options. Possible fields:
+---   - __minisnippets_cache_opt
+---   - <context> `(any)` - Context used as an argument for callable snippet data.
+---     Caching is done per unique value of context. Make sure to not cache output
+---     in order to use not stable context (like cursor position).
+---     Default: table with <buf_id> (current buffer identifier) and <lang> (local
+---     language) fields. Language is computed based on tree-sitter parser active
+---     at cursor (to allow different snippets in injected languages),
+---     buffer's filetype' otherwise.
+---
+---@return ... Array of snippets and input context.
+---
+---@usage >lua
+---   -- Get default context
+---   local _, context = MiniSnippets.default_prepare({})
+MiniSnippets.default_prepare = function(raw_snippets, opts)
+  if not H.islist(raw_snippets) then H.error('`raw_snippets` should be  array') end
+  opts = vim.tbl_extend('force', { context = nil, cache = true }, opts or {})
+  local context = opts.context
+  if context == nil then context = H.get_default_context() end
 
-  -- TODO: Remove `opts.error` after compatibility with Neovim=0.11 is dropped
-  local has_parser, parser = pcall(vim.treesitter.get_parser, buf_id, nil, { error = false })
-  if not has_parser or parser == nil then return { buf_id = buf_id, lang = lang } end
-
-  -- Compute local TS language from the deepest parser covering position
-  local lnum, col = vim.fn.line('.'), vim.fn.col('.')
-  local ref_range, res_level = { lnum - 1, col - 1, lnum - 1, col }, 0
-  local traverse
-  traverse = function(lang_tree, level)
-    if lang_tree:contains(ref_range) and level > res_level then lang = lang_tree:lang() or lang end
-    for _, child_lang_tree in pairs(lang_tree:children()) do
-      traverse(child_lang_tree, level + 1)
-    end
+  -- TODO: Caching is problematic in this design, as it implies that
+  -- `raw_snippets` are the same for same context. Which is usually true, but
+  -- it is not necessary. Alternatives:
+  -- - Do not cache:
+  --     - Resolving seems to be fast enough, as `gen_loader` entries already
+  --       cache their results.
+  --       Common case of ~100 snippets: ~0.6ms no cache; ~0.19 with cache.
+  --       Huge case of all 'friendly-snippets' with 4828 final snippets
+  --       (processed 6260): ~17.7ms no cache; ~3.6 with cache.
+  --     - It also allows users to change `MiniSnippets.config.snippets` on the
+  --       fly which is more in line how `config` is treated in all 'mini.nvim'.
+  --     - Does not store duplicating data for every buffer-lang (as most of
+  --       them is already stored in `gen_loader` caches).
+  --   Maybe suggesting manually caching per context (with entry in
+  --   |MiniSnippets-examples|?) is a good alternative?
+  -- - Cache in `expand()` but not here?
+  local context_str = H.context_tostring(context)
+  if opts.cache and H.cache.context[context_str] ~= nil then
+    return unpack(vim.deepcopy(H.cache.context[context_str]))
   end
-  traverse(parser, 1)
 
-  return { buf_id = buf_id, lang = lang }
-end
+  -- Traverse snippets to have unique non-empty prefixes
+  local res = {}
+  H.traverse_raw_snippets(raw_snippets, res, context)
 
---- Default resolve
----
---- Normalize `snippets` from |MiniSnippets.config| based on supplied context.
---- Output is cached per unique value combination in `context`. Be careful of using
---- too narrow context (like cursor position) as it will lead to big memory usage.
----
----@param context table|nil Context used as an argument for callable `config.snippets`.
----   Only string fields and string/number values are allowed.
----   Default: output of |MiniSnippets.default_locate()|.
----
----@return table Array of snippets.
-MiniSnippets.default_resolve = function(context)
-  context = context or MiniSnippets.default_locate()
-  if type(context) ~= 'table' then H.error('`context` should be table') end
-
-  -- TODO: Cache per any `context`
-  local buf_cache = H.cache.context[context.buf_id] or {}
-  if buf_cache[context.lang] ~= nil then return vim.deepcopy(buf_cache[context.lang]) end
-
-  local res, config_snippets = {}, H.get_config().snippets
-  H.traverse_config_snippets(config_snippets, res, context)
+  -- Convert to array ordered by prefix
   res = vim.tbl_values(res)
   table.sort(res, function(a, b) return a.prefix < b.prefix end)
 
-  buf_cache[context.lang] = res
-  H.cache.context[context.buf_id] = buf_cache
-
-  return vim.deepcopy(res)
+  context = vim.deepcopy(context)
+  if opts.cache then H.cache.context[context_str] = { res, context } end
+  return vim.deepcopy(res), context
 end
 
 --- Default match
@@ -968,8 +966,7 @@ H.setup_config = function(config)
     ['mappings.jump_next'] = { config.mappings.jump_next, 'string' },
     ['mappings.jump_prev'] = { config.mappings.jump_prev, 'string' },
     ['mappings.stop'] = { config.mappings.stop, 'string' },
-    ['expand.locate'] = { config.expand.locate, 'function', true },
-    ['expand.resolve'] = { config.expand.resolve, 'function', true },
+    ['expand.prepare'] = { config.expand.prepare, 'function', true },
     ['expand.match'] = { config.expand.match, 'function', true },
     ['expand.select'] = { config.expand.select, 'function', true },
     ['expand.insert'] = { config.expand.insert, 'function', true },
@@ -1004,9 +1001,10 @@ H.create_autocommands = function()
   end
 
   au('ColorScheme', '*', H.create_default_hl, 'Ensure colors')
-  -- Clear buffer cache: after `:edit` ('BufUnload') or after filetype has
-  -- changed ('FileType', useful with `gen_loader.from_lang`)
-  au({ 'BufUnload', 'FileType' }, '*', function(args) H.cache.context[args.buf] = nil end, 'Clear buffer cache')
+  -- TODO: remove this if caching in `default_prepare` is not done
+  -- -- Clear buffer cache: after `:edit` ('BufUnload') or after filetype has
+  -- -- changed ('FileType', useful with `gen_loader.from_lang`)
+  -- au({ 'BufUnload', 'FileType' }, '*', function(args) H.cache.context[args.buf] = nil end, 'Clear buffer cache')
 
   -- Clean up invalid sessions (i.e. which have outdated or corrupted data)
   local clean_sessions = function()
@@ -1042,7 +1040,15 @@ end
 
 H.is_disabled = function() return vim.g.minisnippets_disable == true or vim.b.minisnippets_disable == true end
 
-H.get_config = function() return vim.tbl_deep_extend('force', MiniSnippets.config, vim.b.minisnippets_config or {}) end
+H.get_config = function()
+  -- Manually reconstruct to allow snippet array to be concatenated
+  local global, buf = MiniSnippets.config, vim.b.minisnippets_config or {}
+  return {
+    snippets = vim.list_extend(vim.deepcopy(global.snippets), buf.snippets or {}),
+    mappings = vim.tbl_extend('force', global.mappings, buf.mappings or {}),
+    expand = vim.tbl_extend('force', global.expand, buf.expand or {}),
+  }
+end
 
 -- Read -----------------------------------------------------------------------
 H.file_readers = {}
@@ -1086,6 +1092,29 @@ H.read_snippet_array = function(contents)
 end
 
 -- Context snippets -----------------------------------------------------------
+H.get_default_context = function()
+  local buf_id = vim.api.nvim_get_current_buf()
+  local lang = vim.bo[buf_id].filetype
+
+  -- TODO: Remove `opts.error` after compatibility with Neovim=0.11 is dropped
+  local has_parser, parser = pcall(vim.treesitter.get_parser, buf_id, nil, { error = false })
+  if not has_parser or parser == nil then return { buf_id = buf_id, lang = lang } end
+
+  -- Compute local TS language from the deepest parser covering position
+  local lnum, col = vim.fn.line('.'), vim.fn.col('.')
+  local ref_range, res_level = { lnum - 1, col - 1, lnum - 1, col }, 0
+  local traverse
+  traverse = function(lang_tree, level)
+    if lang_tree:contains(ref_range) and level > res_level then lang = lang_tree:lang() or lang end
+    for _, child_lang_tree in pairs(lang_tree:children()) do
+      traverse(child_lang_tree, level + 1)
+    end
+  end
+  traverse(parser, 1)
+
+  return { buf_id = buf_id, lang = lang }
+end
+
 H.context_tostring = function(context)
   if type(context) ~= 'table' then return tostring(context) end
   local keys = {}
@@ -1096,32 +1125,32 @@ H.context_tostring = function(context)
   return table.concat(vim.tbl_map(function(k) return k .. '=' .. context[k] end, keys), ', ')
 end
 
-H.traverse_config_snippets = function(x, target, context)
+H.traverse_raw_snippets = function(x, target, context)
   if H.is_snippet(x) then
-    local prefix = x.prefix or ''
-    prefix = type(prefix) == 'string' and { prefix } or prefix
-
     local body
     if x.body ~= nil then body = type(x.body) == 'string' and x.body or table.concat(x.body, '\n') end
 
-    local desc = x.desc or x.description
+    local desc = x.desc or x.description or body
     if desc ~= nil then desc = type(desc) == 'string' and desc or table.concat(desc, '\n') end
 
+    local prefix = x.prefix or ''
+    prefix = type(prefix) == 'string' and { prefix } or prefix
+
     for _, pr in ipairs(prefix) do
-      -- Add all snippets with empty prefixes separately
+      -- Add snippets with empty prefixes separately
       local index = pr == '' and (#target + 1) or pr
       -- Allow absent `body` to result in completely removing prefix(es)
-      target[index] = body ~= nil and { prefix = pr, body = body, desc = desc or (pr ~= '' and pr or body) } or nil
+      target[index] = body ~= nil and { prefix = pr, body = body, desc = desc } or nil
     end
   end
 
   if H.islist(x) then
     for _, v in ipairs(x) do
-      H.traverse_config_snippets(v, target, context)
+      H.traverse_raw_snippets(v, target, context)
     end
   end
 
-  if vim.is_callable(x) then H.traverse_config_snippets(x(context), target, context) end
+  if vim.is_callable(x) then H.traverse_raw_snippets(x(context), target, context) end
 end
 
 -- Expand ---------------------------------------------------------------------

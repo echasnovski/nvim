@@ -31,12 +31,20 @@ if vim.g.vscode ~= nil then now(function() source('vscode.lua') end) end
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 later(function()
+  local snippets, config_path = require('mini-dev.snippets'), vim.fn.stdpath('config')
+  local load_if_minitest_buf = function(context)
+    local buf_name = vim.api.nvim_buf_get_name(context.buf_id)
+    local is_test_buf = vim.fn.fnamemodify(buf_name, ':t'):find('^test_.+%.lua$') ~= nil
+    if not is_test_buf then return {} end
+    return MiniSnippets.read_file(config_path .. '/snippets/mini-test.json')
+  end
+
   local lang_patterns = { tex = { 'latex.json' }, plaintex = { 'latex.json' } }
-  local snippets = require('mini-dev.snippets')
   snippets.setup({
     snippets = {
       snippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
-      snippets.gen_loader.from_file('~/.config/nvim/snippets/test.code-snippets'),
+      load_if_minitest_buf,
+      snippets.gen_loader.from_file(config_path .. '/snippets/test.code-snippets'),
     },
   })
 end)
