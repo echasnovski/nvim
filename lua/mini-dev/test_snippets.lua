@@ -16,7 +16,6 @@ local get_lines = function(...) return child.get_lines(...) end
 local type_keys = function(...) return child.type_keys(...) end
 local sleep = function(ms) helpers.sleep(ms, child) end
 local new_buf = function() return child.api.nvim_create_buf(true, false) end
-local new_scratch_buf = function() return child.api.nvim_create_buf(false, true) end
 local get_buf = function() return child.api.nvim_get_current_buf() end
 local set_buf = function(buf_id) child.api.nvim_set_current_buf(buf_id) end
 --stylua: ignore end
@@ -238,23 +237,334 @@ local expand = forward_lua('MiniSnippets.expand')
 
 T['expand()']['works'] = function() MiniTest.skip() end
 
-T['gen_loader.from_lang()'] = new_set()
+T['gen_loader'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- Monkey-patch `read_file()` to test caching
+      child.lua([[
+        local read_file_orig = MiniSnippets.read_file
+        _G.read_args_log = {}
+        MiniSnippets.read_file = function(...)
+          table.insert(_G.read_args_log, { ... })
+          return read_file_orig(...)
+        end
+      ]])
+    end,
+  },
+})
 
-T['gen_loader.from_lang()']['works'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()'] = new_set()
 
-T['gen_loader.from_runtime()'] = new_set()
+T['gen_loader']['from_lang()']['works'] = function() MiniTest.skip() end
 
-T['gen_loader.from_runtime()']['works'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()']['respects `opts.lang_patterns`'] = function() MiniTest.skip() end
 
-T['gen_loader.from_file()'] = new_set()
+T['gen_loader']['from_lang()']['can be made work with empty string `lang`'] = function() MiniTest.skip() end
 
-T['gen_loader.from_file()']['works'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()']['respects `opts.cache`'] = function() MiniTest.skip() end
+
+T['gen_loader']['from_lang()']['clears cache after `setup()`'] = function() MiniTest.skip() end
+
+T['gen_loader']['from_lang()']['forwards `opts.cache` and `opts.silent` to `read_file()`'] = function() MiniTest.skip() end
+
+T['gen_loader']['from_lang()']['validates input'] = function() MiniTest.skip() end
+
+T['gen_loader']['from_runtime()'] = new_set()
+
+T['gen_loader']['from_runtime()']['works'] = function()
+  child.o.runtimepath = test_dir_absolute
+  -- NOTE: both `{json,lua}` and `{lua,json}` result in same file order,
+  -- presumably. It is both true for `nvim_get_runtime_file` and `:runtime!`.
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.{json,lua}')]])
+  local ref_snippets = {
+    { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } },
+    { { prefix = 'b', body = 'B=$1', desc = 'snippets/lua.lua' } },
+  }
+  eq(child.lua_get('_G.loader()'), ref_snippets)
+  local read_args_log = child.lua_get('_G.read_args_log')
+
+  -- Should cache output per pattern and thus not call `read_file` again
+  eq(child.lua_get('_G.loader()'), ref_snippets)
+  eq(child.lua_get('_G.read_args_log'), read_args_log)
+
+  child.lua([[_G.loader_2 = MiniSnippets.gen_loader.from_runtime('lua.lua')]])
+  eq(child.lua_get('_G.loader_2()'), { { { prefix = 'b', body = 'B=$1', desc = 'snippets/lua.lua' } } })
+  eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
+
+  -- Should read all matching files (not just first)
+  child.o.runtimepath = (test_dir_absolute .. '/subdir') .. ',' .. test_dir_absolute
+  child.lua([[_G.loader_all = MiniSnippets.gen_loader.from_runtime('lua.json')]])
+  local ref_snippets_all = {
+    { { prefix = 'c', body = 'C=$1', desc = 'subdir/snippets/lua.json' } },
+    { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } },
+  }
+  eq(child.lua_get('_G.loader_all()'), ref_snippets_all)
+end
+
+T['gen_loader']['from_runtime()']['respects `opts.cache`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.{json,lua}', { cache = false })]])
+
+  child.lua('_G.loader()')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  -- Should use `read_file()` again as no caching is done
+  child.lua('_G.loader()')
+  eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
+end
+
+T['gen_loader']['from_runtime()']['forwards `opts.cache` and `opts.silent` to `read_file()`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.{json,lua}', { cache = false, silent = true })]])
+  child.lua('_G.loader()')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  eq(read_args_log[1][2], { cache = false, silent = true })
+  eq(read_args_log[2][2], { cache = false, silent = true })
+end
+
+T['gen_loader']['from_runtime()']['respects `opts.all`'] = function()
+  child.o.runtimepath = (test_dir_absolute .. '/subdir') .. ',' .. test_dir_absolute
+  child.lua([[_G.loader_first = MiniSnippets.gen_loader.from_runtime('lua.json', { all = false })]])
+  local ref_snippets_first = { { { prefix = 'c', body = 'C=$1', desc = 'subdir/snippets/lua.json' } } }
+  eq(child.lua_get('_G.loader_first()'), ref_snippets_first)
+end
+
+T['gen_loader']['from_runtime()']['clears cache after `setup()`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.lua')]])
+
+  child.lua('_G.loader()')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua('MiniSnippets.setup()')
+  child.lua('_G.loader()')
+  eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
+end
+
+T['gen_loader']['from_runtime()']['validates input'] = function()
+  expect.error(function() child.lua('MiniSnippets.gen_loader.from_runtime(1)') end, '`pattern`.*string')
+end
+
+T['gen_loader']['from_file()'] = new_set()
+
+T['gen_loader']['from_file()']['works'] = function()
+  -- Should be able to work with relative paths
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_file("file-array.lua")]])
+
+  -- Should silently return `nil` if file is absent
+  eq(child.lua_get('_G.loader()'), vim.NIL)
+  eq(child.lua_get('_G.notify_log'), {})
+
+  -- Should load file if present and show warnings
+  child.fn.chdir(test_dir_absolute)
+  local out = child.lua_get('_G.loader()')
+  eq(#out, 5)
+  eq(out[1], { prefix = 'lua_a', body = 'LUA_A=$1', desc = 'Desc LUA_A' })
+  expect.match(child.lua_get('_G.notify_log')[1][1], 'There were problems')
+end
+
+T['gen_loader']['from_file()']['forwards `opts` to `read_file()`'] = function()
+  child.fn.chdir(test_dir_absolute)
+  child.lua([[
+    local loader = MiniSnippets.gen_loader.from_file('file-array.lua', { cache = false, silent = true })
+    loader()
+  ]])
+
+  local full_path = child.fn.fnamemodify('file-array.lua', ':p')
+  eq(child.lua_get('_G.read_args_log'), { { full_path, { cache = false, silent = true } } })
+end
+
+T['gen_loader']['from_file()']['clears cache after `setup()`'] = function()
+  child.fn.chdir(test_dir_absolute)
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_file('file-array.lua')]])
+
+  child.lua('_G.loader()')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua('MiniSnippets.setup()')
+  child.lua('_G.loader()')
+  eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
+end
+
+T['gen_loader']['from_file()']['validates input'] = function()
+  expect.error(function() child.lua('MiniSnippets.gen_loader.from_file(1)') end, '`path`.*string')
+end
 
 T['read_file()'] = new_set()
 
 local read_file = forward_lua('MiniSnippets.read_file')
 
-T['read_file()']['works'] = function() MiniTest.skip() end
+local validate_problems = function(path_pattern, problem_pattern, clean)
+  local log = child.lua_get('_G.notify_log')
+  eq(#log, 1)
+  local pattern = '%(mini%.snippets%) There were problems reading file.*'
+    .. path_pattern
+    .. '.*:\n.*'
+    .. problem_pattern
+  expect.match(log[1][1], pattern)
+  expect.match(log[1][2], 'WARN')
+  if clean == nil or clean then child.lua('_G.notify_log = {}') end
+end
+
+T['read_file()']['works with dict-like content'] = function()
+  local validate = function(filename)
+    local ref = {
+      { prefix = 'lua_a', body = 'LUA_A=$1', desc = 'Desc LUA_A' },
+      { prefix = 'lua_b', body = 'LUA_B=$1', description = 'Desc LUA_B' },
+      -- Should try to use table fields as description
+      { prefix = nil, body = 'LUA_C=$1', desc = 'name_c' },
+      -- Should still return non-unique prefixes
+      { prefix = 'd', body = 'D1=$1', desc = 'dupl1' },
+      { prefix = 'd', body = nil, desc = 'Dupl2' },
+    }
+    local out = read_file(test_dir_absolute .. '/' .. filename)
+    eq(type(out), 'table')
+
+    -- - Order is not guaranteed (but usually it is alphabetical by fields)
+    local compare = function(a, b) return (a.desc or a.description or '') < (b.desc or b.description or '') end
+    table.sort(out, compare)
+    table.sort(ref, compare)
+    eq(out, ref)
+
+    -- - Order of problems is also not guaranteed
+    validate_problems(vim.pesc(filename), 'not a valid snippet data.*prefix = 1', false)
+    validate_problems(vim.pesc(filename), 'not a valid snippet data.*2')
+  end
+
+  validate('file-dict.lua')
+  validate('file-dict.json')
+  validate('file-dict.code-snippets')
+end
+
+T['read_file()']['works with array-like content'] = function()
+  local validate = function(filename)
+    local ref = {
+      { prefix = 'lua_a', body = 'LUA_A=$1', desc = 'Desc LUA_A' },
+      -- Should not infer desc-like fields as there is no dict name to infer from
+      { prefix = 'lua_b', body = 'LUA_B=$1', description = 'Desc LUA_B' },
+      { prefix = nil, body = 'LUA_C=$1' },
+      -- Should still return non-unique prefixes
+      { prefix = 'd', body = 'D1=$1' },
+      { prefix = 'd', body = nil, desc = 'Dupl2' },
+    }
+    -- Order of valid entries should be preserved
+    eq(read_file(test_dir_absolute .. '/' .. filename), ref)
+    validate_problems(vim.pesc(filename), 'not a valid snippet data.*prefix = 1.*not a valid snippet data.*2')
+  end
+
+  validate('file-array.lua')
+  validate('file-array.json')
+  validate('file-array.code-snippets')
+end
+
+T['read_file()']['correctly computes extension'] = function()
+  eq(read_file(test_dir_absolute .. '/file.many.dots.lua'), { { body = 'A=$1', prefix = 'a' } })
+end
+
+T['read_file()']['warns about problems during reading'] = function()
+  local validate = function(filename, problem_pattern)
+    read_file(test_dir_absolute .. '/' .. filename)
+    validate_problems(vim.pesc(filename), problem_pattern)
+  end
+
+  validate('not-present', 'File is not on disk')
+  validate('file.notsupported', 'Extension is not supported')
+  validate('bad-file-cant-execute.lua', 'Could not execute Lua file')
+  validate('bad-file-not-table-return.lua', 'Returned object is not a table')
+  validate('bad-file-cant-decode.json', 'valid JSON.*invalid token')
+  validate('bad-file-not-dict-object.json', 'not a dictionary or array')
+end
+
+T['read_file()']['caches output'] = function()
+  child.lua([[
+    local dofile_orig, vim_json_decode_orig = dofile, vim.json.decode
+    _G.n = 0
+    _G.dofile = function(...) _G.n = _G.n + 1; return dofile_orig(...) end
+    vim.json.decode = function(...) _G.n = _G.n + 1; return vim_json_decode_orig(...) end
+  ]])
+
+  -- Use OS specific data for more robust testing
+  local test_dir_absolute_os = child.fn.fnamemodify(test_dir, ':p'):gsub('(.)[\\/]$', '%1')
+  local path_sep = helpers.is_windows() and '\\' or '/'
+
+  local results = {}
+  local validate = function(filename, ref_n)
+    local out = read_file(test_dir_absolute_os .. path_sep .. filename)
+    eq(child.lua_get('_G.n'), ref_n)
+    if results[filename] ~= nil then eq(results[filename], out) end
+    results[filename] = out
+  end
+
+  validate('file-dict.lua', 1)
+  validate('file-dict.lua', 1)
+  validate('file-dict.json', 2)
+  validate('file-dict.json', 2)
+  validate('file-dict.code-snippets', 3)
+  validate('file-dict.code-snippets', 3)
+  validate('file-array.lua', 4)
+  validate('file-array.lua', 4)
+  validate('file-array.json', 5)
+  validate('file-array.json', 5)
+  validate('file-array.code-snippets', 6)
+  validate('file-array.code-snippets', 6)
+
+  -- Should use full path as cache id
+  child.fn.chdir(test_dir_absolute_os)
+  eq(read_file('file-array.lua'), results['file-array.lua'])
+  eq(child.lua_get('_G.n'), 6)
+
+  -- Should return copy of cache entry
+  local res = child.lua([[
+    local out = MiniSnippets.read_file("file-array.lua")
+    out[1].prefix = 'something else'
+    return MiniSnippets.read_file("file-array.lua")[1].prefix ~= 'something else'
+  ]])
+  eq(res, true)
+end
+
+T['read_file()']['respects `opts.cache`'] = function()
+  child.lua([[
+    local dofile_orig, vim_json_decode_orig = dofile, vim.json.decode
+    _G.n = 0
+    _G.dofile = function(...) _G.n = _G.n + 1; return dofile_orig(...) end
+    vim.json.decode = function(...) _G.n = _G.n + 1; return vim_json_decode_orig(...) end
+  ]])
+
+  local validate = function(filename, ref_n)
+    read_file(test_dir_absolute .. '/' .. filename, { cache = false })
+    eq(child.lua_get('_G.n'), ref_n)
+  end
+
+  validate('file-dict.lua', 1)
+  validate('file-dict.lua', 2)
+  validate('file-dict.json', 3)
+  validate('file-dict.json', 4)
+  validate('file-dict.code-snippets', 5)
+  validate('file-dict.code-snippets', 6)
+  validate('file-array.lua', 7)
+  validate('file-array.lua', 8)
+  validate('file-array.json', 9)
+  validate('file-array.json', 10)
+  validate('file-array.code-snippets', 11)
+  validate('file-array.code-snippets', 12)
+end
+
+T['read_file()']['respects `opts.silent`'] = function()
+  -- Should not warn about any problems during reading
+  local read = function(filename) read_file(test_dir_absolute .. '/' .. filename, { silent = true }) end
+  read('file-array.lua')
+  read('not-present')
+  read('file.notsupported')
+  read('not-present')
+  read('file.notsupported')
+  read('bad-file-cant-execute.lua')
+  read('bad-file-not-table-return.lua')
+  read('bad-file-cant-decode.json')
+  read('bad-file-not-dict-object.json')
+
+  eq(child.lua_get('_G.notify_log'), {})
+end
+
+T['read_file()']['validates input'] = function()
+  expect.error(function() read_file(1) end, '`path`.*string')
+end
 
 T['default_prepare()'] = new_set({
   hooks = {
@@ -309,9 +619,6 @@ T['default_prepare()']['works'] = function()
     { 'loader_2', { buf_id = cur_buf, lang = 'myft' } },
   }
   eq(child.lua_get('_G.loader_log'), ref_loader_log)
-
-  -- By default caches output per context
-  MiniTest.skip()
 end
 
 T['default_prepare()']['works with tricky loaders'] = function()
@@ -339,25 +646,120 @@ T['default_prepare()']['works with tricky loaders'] = function()
   eq(child.lua_get('_G.loader_log'), ref_loader_log)
 end
 
+T['default_prepare()']['silently ignores bad entries'] = function()
+  local out = default_prepare({ {}, { prefix = 'a', body = 'a=$1' }, 1, { true } })
+  eq(out, { { prefix = 'a', body = 'a=$1', desc = 'a=$1' } })
+end
+
 T['default_prepare()']['properly normalizes snippets'] = function()
-  -- Nil value of prefix/body/desc
-  --
-  -- <desc>/<description>/<body> description
-  --
-  -- Converts array prefix/body/desc to strings
-  MiniTest.skip()
+  -- Only unique non-empty prefixes should be present and resolved in order
+  -- they are traversed (latest wins in full, not by parts)
+  local out = child.lua_get([[
+    MiniSnippets.default_prepare({
+      { prefix = 'a', body = 'a1=$1', desc = 'Desc a1' },
+      { prefix = 'b', body = 'b1=$1', desc = 'Desc b1' },
+      function() return { prefix = 'a', body = 'a2=$1', desc = 'Desc a2' } end,
+      { { prefix = 'b', body = 'b2=$1' } },
+    })
+  ]])
+  eq(out, { { prefix = 'a', body = 'a2=$1', desc = 'Desc a2' }, { prefix = 'b', body = 'b2=$1', desc = 'b2=$1' } })
+
+  -- Ensures prefix/body/desc strings: array prefix adds snippet for every
+  -- prefix, array body and desc get concatenated with "\n"
+  local raw_snippets = {
+    { prefix = { 'd', 'c' }, body = { 'multi', 'line' }, desc = { 'also', 'multi', 'line' } },
+    { prefix = { 'a', 'b' }, body = { 'single line' }, description = { 'also single line' } },
+    { prefix = 'x', body = { 'aaaaa', 'bbbb' } },
+  }
+  eq(default_prepare(raw_snippets), {
+    { prefix = 'a', body = 'single line', desc = 'also single line' },
+    { prefix = 'b', body = 'single line', desc = 'also single line' },
+    { prefix = 'c', body = 'multi\nline', desc = 'also\nmulti\nline' },
+    { prefix = 'd', body = 'multi\nline', desc = 'also\nmulti\nline' },
+    { prefix = 'x', body = 'aaaaa\nbbbb', desc = 'aaaaa\nbbbb' },
+  })
+
+  -- Absent prefix/body/desc: prefix should be inferred as empty and all added,
+  -- absent body should remove snippet with its prefix, absent desc should be
+  -- inferred as body.
+  raw_snippets = {
+    -- Absent prefix should be inferred as empty and every added
+    { prefix = nil, body = 'a2=$1', desc = 'Desc a2' },
+    { prefix = nil, body = 'a3=$1', desc = 'Desc a3' },
+    { prefix = nil, body = 'a1=$1', desc = 'Desc a1' },
+    -- Absent body should remove snippet with its prefix
+    { prefix = 'b', body = 'b=$1', desc = 'Desc b' },
+    { prefix = 'b', body = nil, desc = 'Desc no matter' },
+    -- Absent desc should be inferred desc>description>body
+    { prefix = 'c1', body = 'c1=$1', description = 'Description' },
+    { prefix = 'c2', body = 'c2=$1' },
+    -- Absent prefix and body should not matter
+    { prefix = nil, body = nil, desc = 'No matter' },
+  }
+  eq(default_prepare(raw_snippets), {
+    { prefix = '', body = 'a2=$1', desc = 'Desc a2' },
+    { prefix = '', body = 'a3=$1', desc = 'Desc a3' },
+    { prefix = '', body = 'a1=$1', desc = 'Desc a1' },
+    -- No 'b' prefix, as it was removed
+    { prefix = 'c1', body = 'c1=$1', desc = 'Description' },
+    { prefix = 'c2', body = 'c2=$1', desc = 'c2=$1' },
+  })
 end
 
 T['default_prepare()']['uses proper default context'] = function()
-  -- Should use tree-sitter to compute local language
-  MiniTest.skip()
+  local validate_context = function(ref_context)
+    local out = child.lua_get('select(2, MiniSnippets.default_prepare({}))')
+    eq(out, ref_context)
+  end
+
+  local cur_buf = get_buf()
+
+  -- By default should use buffer's filetype
+  child.bo.filetype = 'myft'
+  validate_context({ buf_id = cur_buf, lang = 'myft' })
+
+  -- With present tree-sitter should use local parser lanuage
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Testing on Neovim>=0.10 is easier with built-in parsers') end
+
+  child.bo.filetype = 'vim'
+  child.lua('vim.treesitter.start()')
+  set_lines({
+    'set background=dark',
+    'lua << EOF',
+    'print(1)',
+    'vim.api.nvim_exec2([[',
+    '    set background=light',
+    ']])',
+    'EOF',
+  })
+  child.cmd('startinsert')
+  set_cursor(1, 0)
+  validate_context({ buf_id = cur_buf, lang = 'vim' })
+  set_cursor(3, 0)
+  validate_context({ buf_id = cur_buf, lang = 'lua' })
+  set_cursor(5, 0)
+  validate_context({ buf_id = cur_buf, lang = 'vim' })
 end
 
-T['default_prepare()']['respects `opts.context`'] = function() MiniTest.skip() end
+T['default_prepare()']['respects `opts.context`'] = function()
+  local validate = function(context)
+    child.lua('_G.context = ' .. vim.inspect(context))
+    child.lua([[
+      MiniSnippets.default_prepare({ _G.loader_1, _G.loader_2 }, { context = _G.context })
+    ]])
+    eq(child.lua_get('_G.loader_log'), { { 'loader_1', context }, { 'loader_2', context } })
+    child.lua('_G.loader_log = {}')
+  end
 
-T['default_prepare()']['respects `opts.cache`'] = function() MiniTest.skip() end
+  validate({ buf_id = get_buf() })
+  validate({})
+  validate(1)
+  validate(true)
+end
 
-T['default_prepare()']['validates input'] = function() MiniTest.skip() end
+T['default_prepare()']['validates input'] = function()
+  expect.error(function() default_prepare(1) end, '`raw_snippets`.*array')
+end
 
 T['default_match()'] = new_set()
 
@@ -2446,6 +2848,38 @@ T['Examples']['using `vim.snippet.expand()`'] = function()
   validate_state('i', { 'T1=t1 T2=t2' }, { 1, 11 })
   type_keys('<C-h>')
   validate_state('s', { 'T1=t1 T2=t2' }, { 1, 3 })
+end
+
+T['Examples']['`default_prepare` with cache'] = function()
+  child.lua([[
+    _G.log = {}
+    local prepare_orig = MiniSnippets.default_prepare
+    MiniSnippets.default_prepare = function(...)
+      table.insert(_G.log, { ... })
+      return prepare_orig(...)
+    end
+
+    local cache = {}
+    _G.prepare_cached = function(raw_snippets)
+      local _, cont = MiniSnippets.default_prepare({})
+      local id = 'buf=' .. cont.buf_id .. ',lang=' .. cont.lang
+      if cache[id] then return unpack(vim.deepcopy(cache[id])) end
+      local snippets = MiniSnippets.default_prepare(raw_snippets)
+      cache[id] = vim.deepcopy({ snippets, cont })
+      return snippets, cont
+    end
+  ]])
+
+  child.bo.filetype = 'myft'
+  child.lua([[_G.prepare_cached({ { prefix = 'a', body = 'a=$1' } })]])
+  eq(child.lua_get('#_G.log'), 2)
+  local out = child.lua_get([[_G.prepare_cached({ { prefix = 'x', body = 'x=$1' } })]])
+  eq(out, { { prefix = 'a', body = 'a=$1', desc = 'a=$1' } })
+  eq(child.lua_get('#_G.log'), 3)
+
+  child.bo.filetype = 'myft2'
+  child.lua([[_G.prepare_cached({ { prefix = 'a', body = 'a=$1' } })]])
+  eq(child.lua_get('#_G.log'), 5)
 end
 
 T['Integrations'] = new_set()

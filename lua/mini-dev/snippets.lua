@@ -1,5 +1,8 @@
 -- TODO:
 --
+-- -- Do not forget to update all StyLua entries when moving to 'mini.nvim':
+--    '.github/' and '.pre-commit-hooks'
+--
 -- Code:
 -- - A system to load and manage custom snippets:
 --     - Should `\t` in snippet prefix be transformed according to 'expandtab'?
@@ -386,7 +389,7 @@ end
 ---   end
 ---   -- Always insert the best matched snippet
 ---   local my_select = function(snippets, insert) return insert(snippets[1]) end
----   -- Use different string to show empty tabstop
+---   -- Use different string to show empty tabstop as inline virtual text
 ---   local my_insert = function(snippet)
 ---     return MiniSnippets.default_insert(snippet, { empty_tabstop = '$' })
 ---   end
@@ -453,7 +456,8 @@ MiniSnippets.config = {
 ---   local all = MiniSnippets.expand({ match = false, insert = false })
 --- <
 MiniSnippets.expand = function(opts)
-  opts = vim.tbl_extend('force', H.get_config().expand, opts or {})
+  local config = H.get_config()
+  opts = vim.tbl_extend('force', config.expand, opts or {})
 
   -- Validate
   local prepare = opts.prepare or MiniSnippets.default_prepare
@@ -476,16 +480,15 @@ MiniSnippets.expand = function(opts)
   if not H.is_position(pos) then H.error('`opts.pos` should be table with numeric `line` and `col` fields') end
 
   -- Match
-  local raw_snippets = H.get_config().snippets
-  local all_snippets, context = prepare(raw_snippets)
+  local all_snippets, context = prepare(config.snippets)
   if not H.is_array_of(all_snippets, H.is_snippet) then H.error('`prepare` should return array of snippets') end
   local matches = match == false and all_snippets or match(all_snippets)
   if not H.is_array_of(matches, H.is_snippet) then H.error('`match` should return array of snippets') end
 
   -- Act
   if insert == false then return matches end
-  if #all_snippets == 0 then return H.notify('No snippets in context: ' .. H.context_tostring(context), 'WARN') end
-  if #matches == 0 then return H.notify('No matches in context: ' .. H.context_tostring(context), 'WARN') end
+  if #all_snippets == 0 then return H.notify('No snippets in context:\n' .. vim.inspect(context), 'WARN') end
+  if #matches == 0 then return H.notify('No matches in context:\n' .. vim.inspect(context), 'WARN') end
 
   local insert_ext = H.make_extended_insert(insert)
 
@@ -509,6 +512,8 @@ end
 ---   Disable by setting `opts.silent` to `true`.
 MiniSnippets.gen_loader = {}
 
+-- Generate language loader
+--
 ---@param opts table|nil Options. Possible values:
 ---   - <lang_patterns> `(table)` - map from language to array of runtime patterns
 ---     used to find snippet files. Patterns will be processed in order, so
@@ -517,6 +522,8 @@ MiniSnippets.gen_loader = {}
 ---     to: search for "json" and "lua" files that are inside directory named
 ---     as language (however deep) or are named as language.
 ---     Example for "lua" language: `{ 'lua/**.{json,lua}', 'lua.{json,lua}' }`.
+---     Add entry for `""` (empty string) as language to be sourced when `lang`
+---     context is empty string (which is mostly temporary scratch buffers).
 ---   - __minisnippets_cache_opt
 ---   - __minisnippets_silent_opt
 ---
@@ -535,7 +542,7 @@ MiniSnippets.gen_loader.from_lang = function(opts)
     if cache and H.cache.lang[lang] ~= nil then return vim.deepcopy(H.cache.lang[lang]) end
 
     local patterns = opts.lang_patterns[lang]
-    if patterns == nil and lang == '' then return end
+    if patterns == nil and lang == '' then return {} end
     patterns = patterns or { lang .. '/**.{json,lua}', lang .. '.{json,lua}' }
     patterns = vim.tbl_map(function(p) return 'snippets/' .. p end, patterns)
 
@@ -548,9 +555,22 @@ MiniSnippets.gen_loader.from_lang = function(opts)
   end
 end
 
----@param pattern string Pattern of files to read. Will be searched in "snippets"
----   subdirectory inside 'runtimepath' paths. Can contain wildcards as described
----   in |nvim_get_runtime_file()|.
+--- Generate runtime loader
+---
+--- Output loads files which match `pattern` inside "snippets/" directories from
+--- 'runtime'. This is useful to simulteniously read several similarly named files
+--- which come from different sources. Order is preserved from 'runtimepath'.
+---
+--- Typical case is loading snippets for a language from files named 'lua.json'
+--- but located in different "snippets/" directories inside 'runtimepath'.
+--- - "$XDG_CONFIG_HOME/snippets/lua.json" - manually curated snippets in config.
+--- - "installed/plugin/path/snippets/lua.json" - snippets from installed plugin.
+--- - "$XDG_CONFIG_HOME/after/snippets/lua.json" - snippets to adjust plugin's.
+---   For example, remove some snippets by using prefixes and no body.
+---
+---@param pattern string Pattern of files to read. Can contain wildcards as seen
+---   in |nvim_get_runtime_file()|. Note: caching is done per `pattern` value.
+---   Example for "lua" language: `'lua.{json,lua}'`.
 ---@param opts table|nil Options. Possible fields:
 ---   - <all> `(boolean)` - whether to load from all matching runtime files or
 ---     only the first one. Default: `true`.
@@ -574,8 +594,18 @@ MiniSnippets.gen_loader.from_runtime = function(pattern, opts)
   end
 end
 
+--- Generate single file loader
+---
+--- Output is a thin wrapper around |MiniSnippets.read_file()| which can be used:
+--- - With relative paths for to load project-local snippets.
+--- - To skip warning if file is absent. Other feedback is shown.
+---
+--- Example: >lua
+---   MiniSnippets.gen_loader.from_file('.vscode/local.code-snippets')
+--- <
 ---@param path string Same as in |MiniSnippets.read_file()|.
----@param opts table|nil Same as in |MiniSnippets.read_file()|.
+---@param opts table|nil Same as in |MiniSnippets.read_file()|. Caching is done per
+---   full file path.
 ---
 ---@return __minisnippets_loader_return
 MiniSnippets.gen_loader.from_file = function(path, opts)
@@ -583,41 +613,57 @@ MiniSnippets.gen_loader.from_file = function(path, opts)
   opts = vim.tbl_extend('force', { cache = true, silent = false }, opts or {})
 
   return function()
-    -- Always be silent about absent path to allow using with relative (project
-    -- local) paths (not every cwd needs to have relative path with snippets).
-    if vim.loop.fs_stat(vim.fn.fnamemodify(path, ':p')) == nil then return end
-    return MiniSnippets.read_file(path, opts)
+    local full_path = vim.fn.fnamemodify(path, ':p')
+    if (vim.loop.fs_stat(path) or {}).type ~= 'file' then return end
+    return MiniSnippets.read_file(full_path, opts)
   end
 end
 
+--- Read file with snippet data
+---
+--- Supported files:
+--- - Extensions:
+---     - Executed as Lua file (|dofile()|) and uses returned value: `*.lua`
+---     - Read/decoded as JSON object (|vim.json.decode()|): `*.json`, `*.code-snippets`
+--- - Content:
+---     - Dict-like: returned table in Lua; object in JSON; no order guarantees.
+---     - Array-like: returned array table in Lua; array in JSON; preserves order.
+---
+--- Example of file content:
+--- - Lua dict-like:   `return { name = { prefix = 'l', body = 'local $1 = $0' } }`
+--- - Lua array-like:  `return { { prefix = 'l', body = 'local $1 = $0' } }`
+--- - JSON dict-like:  `{ "name": { "prefix": "l", "body": "local $1 = $0" } }`
+--- - JSON array-like: `[ { "prefix": "l", "body": "local $1 = $0" } ]`
+---
 ---@param path string Path with snippets read. See |MiniSnippets-files-specification|.
 ---@param opts table|nil Options. Possible fields:
 ---   - __minisnippets_cache_opt
 ---   - __minisnippets_silent_opt
 ---
----@return table|nil Array of snippets or `nil` if reading failed.
+---@return table|nil Array of snippets or `nil` if failed (and warn about reason).
 MiniSnippets.read_file = function(path, opts)
   if type(path) ~= 'string' then H.error('`path` should be string') end
   opts = vim.tbl_extend('force', { cache = true, silent = false }, opts or {})
 
   path = vim.fn.fnamemodify(path, ':p')
+  local problem_prefix = 'There were problems reading file ' .. path .. ':\n'
   if opts.cache and H.cache.file[path] ~= nil then return vim.deepcopy(H.cache.file[path]) end
 
   if (vim.loop.fs_stat(path) or {}).type ~= 'file' then
-    return H.notify('Path ' .. path .. ' is not a readable file on disk.', 'WARN', opts.silent)
+    return H.notify(problem_prefix .. 'File is not on disk.', 'WARN', opts.silent)
   end
   local ext = path:match('%.([^%.]+)$')
   if ext == nil or not (ext == 'lua' or ext == 'json' or ext == 'code-snippets') then
-    return H.notify('File does not contain a supported extension: ' .. path, 'WARN', opts.silent)
+    return H.notify(problem_prefix .. 'Extension is not supported', 'WARN', opts.silent)
   end
 
   local res = H.file_readers[ext](path, opts.silent)
-  if res == nil then return nil end
 
-  -- Notify about problems but still cache and return read snippets
+  -- Notify about problems but still cache if there are read snippets
   local prob = table.concat(res.problems, '\n')
-  if prob ~= '' then H.notify('There were problems reading file ' .. path .. ':\n' .. prob, 'WARN', opts.silent) end
+  if prob ~= '' then H.notify(problem_prefix .. prob, 'WARN', opts.silent) end
 
+  if res.snippets == nil then return nil end
   if opts.cache then H.cache.file[path] = vim.deepcopy(res.snippets) end
   return res.snippets
 end
@@ -628,48 +674,35 @@ end
 --- supplied context:
 --- - TODO: describe steps and details about `nil` prefix/body/desc.
 ---
----@param raw_snippets table Array of snippet data as described in |MiniSnippets.config|.
+--- Unlike |MiniSnippets.gen_loader| entries, there is no output caching as to reduce
+--- memory usage (avoids duplicating data from `gen_loader` cache). This also means
+--- that every |MiniSnippets.expand()| call performs snippet normalization. Usually
+--- it is fast enough, but if not then consider manual caching: >lua
+---
+---   local cache = {}
+---   local prepare_cached = function(raw_snippets)
+---     local _, cont = MiniSnippets.default_prepare({})
+---     local id = 'buf=' .. cont.buf_id .. ',lang=' .. cont.lang
+---     if cache[id] then return unpack(vim.deepcopy(cache[id])) end
+---     local snippets = MiniSnippets.default_prepare(raw_snippets)
+---     cache[id] = vim.deepcopy({ snippets, cont })
+---     return snippets, cont
+---   end
+--- <
+---@param raw_snippets table Array of snippet data as from |MiniSnippets.config|.
 ---@param opts table|nil Options. Possible fields:
----   - __minisnippets_cache_opt
 ---   - <context> `(any)` - Context used as an argument for callable snippet data.
----     Caching is done per unique value of context. Make sure to not cache output
----     in order to use not stable context (like cursor position).
 ---     Default: table with <buf_id> (current buffer identifier) and <lang> (local
 ---     language) fields. Language is computed based on tree-sitter parser active
 ---     at cursor (to allow different snippets in injected languages),
 ---     buffer's filetype' otherwise.
 ---
----@return ... Array of snippets and input context.
----
----@usage >lua
----   -- Get default context
----   local _, context = MiniSnippets.default_prepare({})
+---@return ... Array of snippets and supplied context (default if none was supplied).
 MiniSnippets.default_prepare = function(raw_snippets, opts)
-  if not H.islist(raw_snippets) then H.error('`raw_snippets` should be  array') end
-  opts = vim.tbl_extend('force', { context = nil, cache = true }, opts or {})
+  if not H.islist(raw_snippets) then H.error('`raw_snippets` should be array') end
+  opts = vim.tbl_extend('force', { context = nil }, opts or {})
   local context = opts.context
   if context == nil then context = H.get_default_context() end
-
-  -- TODO: Caching is problematic in this design, as it implies that
-  -- `raw_snippets` are the same for same context. Which is usually true, but
-  -- it is not necessary. Alternatives:
-  -- - Do not cache:
-  --     - Resolving seems to be fast enough, as `gen_loader` entries already
-  --       cache their results.
-  --       Common case of ~100 snippets: ~0.6ms no cache; ~0.19 with cache.
-  --       Huge case of all 'friendly-snippets' with 4828 final snippets
-  --       (processed 6260): ~17.7ms no cache; ~3.6 with cache.
-  --     - It also allows users to change `MiniSnippets.config.snippets` on the
-  --       fly which is more in line how `config` is treated in all 'mini.nvim'.
-  --     - Does not store duplicating data for every buffer-lang (as most of
-  --       them is already stored in `gen_loader` caches).
-  --   Maybe suggesting manually caching per context (with entry in
-  --   |MiniSnippets-examples|?) is a good alternative?
-  -- - Cache in `expand()` but not here?
-  local context_str = H.context_tostring(context)
-  if opts.cache and H.cache.context[context_str] ~= nil then
-    return unpack(vim.deepcopy(H.cache.context[context_str]))
-  end
 
   -- Traverse snippets to have unique non-empty prefixes
   local res = {}
@@ -678,10 +711,7 @@ MiniSnippets.default_prepare = function(raw_snippets, opts)
   -- Convert to array ordered by prefix
   res = vim.tbl_values(res)
   table.sort(res, function(a, b) return a.prefix < b.prefix end)
-
-  context = vim.deepcopy(context)
-  if opts.cache then H.cache.context[context_str] = { res, context } end
-  return vim.deepcopy(res), context
+  return res, context
 end
 
 --- Default match
@@ -938,8 +968,6 @@ H.cache = {
   lang = {},
   runtime = {},
   file = {},
-  -- Snippets per context
-  context = {},
   -- Data for possibly overridden session mappings
   mappings = {},
 }
@@ -979,7 +1007,7 @@ H.apply_config = function(config)
   MiniSnippets.config = config
 
   -- Reset loader cache
-  H.cache = { context = {}, lang = {}, runtime = {}, file = {}, mappings = {} }
+  H.cache = { lang = {}, runtime = {}, file = {}, mappings = {} }
 
   -- Make mappings
   local mappings = config.mappings
@@ -1001,10 +1029,6 @@ H.create_autocommands = function()
   end
 
   au('ColorScheme', '*', H.create_default_hl, 'Ensure colors')
-  -- TODO: remove this if caching in `default_prepare` is not done
-  -- -- Clear buffer cache: after `:edit` ('BufUnload') or after filetype has
-  -- -- changed ('FileType', useful with `gen_loader.from_lang`)
-  -- au({ 'BufUnload', 'FileType' }, '*', function(args) H.cache.context[args.buf] = nil end, 'Clear buffer cache')
 
   -- Clean up invalid sessions (i.e. which have outdated or corrupted data)
   local clean_sessions = function()
@@ -1041,8 +1065,11 @@ end
 H.is_disabled = function() return vim.g.minisnippets_disable == true or vim.b.minisnippets_disable == true end
 
 H.get_config = function()
+  local global, buf = MiniSnippets.config, vim.b.minisnippets_config
+  -- Fast path for most common case
+  if buf == nil then return vim.deepcopy(global) end
   -- Manually reconstruct to allow snippet array to be concatenated
-  local global, buf = MiniSnippets.config, vim.b.minisnippets_config or {}
+  buf = buf or {}
   return {
     snippets = vim.list_extend(vim.deepcopy(global.snippets), buf.snippets or {}),
     mappings = vim.tbl_extend('force', global.mappings, buf.mappings or {}),
@@ -1055,34 +1082,34 @@ H.file_readers = {}
 
 H.file_readers.lua = function(path, silent)
   local ok, contents = pcall(dofile, path)
-  if not ok then return H.notify('Could not execute Lua file: ' .. path, 'WARN', silent) end
-  if type(contents) ~= 'table' then return H.notify('File ' .. path .. ' should return table', 'WARN', silent) end
-  return H.read_snippet_array(contents)
+  if not ok then return { problems = { 'Could not execute Lua file' } } end
+  if type(contents) ~= 'table' then return { problems = { 'Returned object is not a table' } } end
+  return H.read_snippet_dict(contents)
 end
 
 H.file_readers.json = function(path, silent)
   local file = io.open(path)
-  if file == nil then return H.notify('Could not open file: ' .. path, 'WARN', silent) end
+  if file == nil then return { problems = { 'Could not open file' } } end
   local raw = file:read('*all')
   file:close()
 
   local ok, contents = pcall(vim.json.decode, raw)
   if not (ok and type(contents) == 'table') then
-    local msg = ok and 'Object is not a dictionary' or contents
-    return H.notify('File does not contain a valid JSON object: ' .. path .. '\nReason: ' .. msg, 'WARN', silent)
+    local msg = ok and 'Object is not a dictionary or array' or contents
+    return { problems = { 'File does not contain a valid JSON object. Reason: ' .. msg } }
   end
 
-  return H.read_snippet_array(contents)
+  return H.read_snippet_dict(contents)
 end
 
 H.file_readers['code-snippets'] = H.file_readers.json
 
-H.read_snippet_array = function(contents)
+H.read_snippet_dict = function(contents)
   local res, problems = {}, {}
   for name, t in pairs(contents) do
     if H.is_snippet(t) then
-      t.desc = t.desc or t.description or (type(name) == 'string' and name or nil)
-      t.description = nil
+      -- Try inferring description from dict's field (if appropriate)
+      if type(name) == 'string' and (t.desc == nil and t.description == nil) then t.desc = name end
       table.insert(res, t)
     else
       table.insert(problems, 'The following is not a valid snippet data:\n' .. vim.inspect(t))
@@ -1113,16 +1140,6 @@ H.get_default_context = function()
   traverse(parser, 1)
 
   return { buf_id = buf_id, lang = lang }
-end
-
-H.context_tostring = function(context)
-  if type(context) ~= 'table' then return tostring(context) end
-  local keys = {}
-  for k, v in pairs(context) do
-    if type(k) == 'string' and (type(v) == 'string' or type(v) == 'number') then table.insert(keys, k) end
-  end
-  table.sort(keys)
-  return table.concat(vim.tbl_map(function(k) return k .. '=' .. context[k] end, keys), ', ')
 end
 
 H.traverse_raw_snippets = function(x, target, context)
