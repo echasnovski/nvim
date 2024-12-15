@@ -159,6 +159,21 @@ local T = new_set({
         end
       ]])
 
+      -- Add helper for easier RPC communication
+      child.lua([[
+        _G.sanitize_object = function(x)
+          if type(x) == 'function' then return 'function' end
+          if type(x) == 'table' then
+            local res = {}
+            for k, v in pairs(x) do
+              res[k] = _G.sanitize_object(v)
+            end
+            return res
+          end
+          return x
+        end
+      ]])
+
       load_module()
     end,
     post_once = child.stop,
@@ -231,11 +246,312 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ expand = { insert = 1 } }, 'expand.insert', 'function')
 end
 
-T['expand()'] = new_set()
+-- Test are high-level. Granular testing is done in tests for `default_*()`.
+T['expand()'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua([[
+        _G.context_log = {}
+        MiniSnippets.config.snippets = {
+          function(context)
+            table.insert(_G.context_log, context)
+            return { { prefix = 'ba', body = 'BA=$1 T0=$0' } }
+          end,
+          { { prefix = 'aa', body = 'AA=$1 T0=$0' } },
+          { prefix = 'xx', body = 'XX=$1 T0=$0' },
+        }]])
+
+      child.bo.filetype = 'myft'
+    end,
+  },
+})
 
 local expand = forward_lua('MiniSnippets.expand')
 
-T['expand()']['works'] = function() MiniTest.skip() end
+T['expand()']['works with defaults'] = function()
+  local validate = function()
+    -- Should expand snippet with 'ba' prefix, because `default_prepare` sorts
+    -- resolved snippets in prefix's alphabetical order.
+    mock_select(2)
+    expand()
+    eq(child.lua_get('_G.context_log'), { { buf_id = 2, lang = 'myft' } })
+    eq(child.lua_get('_G.select_args.items_formatted'), { 'aa │ AA=$1 T0=$0', 'ba │ BA=$1 T0=$0' })
+    validate_active_session()
+    validate_state('i', { 'BA= T0=' }, { 1, 3 })
+
+    child.lua('_G.context_log, _G.select_args = {}, nil')
+  end
+
+  -- Insert mode
+  type_keys('i', 'a')
+  validate()
+  ensure_clean_state()
+
+  -- Normal mode
+  type_keys('i', 'a', '<Esc>')
+  validate()
+end
+
+T['expand()']['implements proper order of steps'] = function()
+  type_keys('i', 'a')
+  mock_select(2)
+  child.lua([[
+    _G.steps_log = {}
+    local wrap_with_log = function(step_name, f)
+      return function(...)
+        table.insert(_G.steps_log, { step = step_name, args = { ... } })
+        return f(...)
+      end
+    end
+    local opts = {
+      prepare = wrap_with_log('prepare', MiniSnippets.default_prepare),
+      match = wrap_with_log('match', MiniSnippets.default_match),
+      select = wrap_with_log('select', MiniSnippets.default_select),
+      insert = wrap_with_log('insert', MiniSnippets.default_insert),
+    }
+    MiniSnippets.expand(opts)
+  ]])
+
+  local ref_region = { from = { col = 1, line = 1 }, to = { col = 1, line = 1 } }
+  local ref_steps_log = {
+    {
+      -- Should be called with raw config snippets
+      step = 'prepare',
+      args = {
+        {
+          'function',
+          { { prefix = 'aa', body = 'AA=$1 T0=$0' } },
+          { prefix = 'xx', body = 'XX=$1 T0=$0' },
+        },
+      },
+    },
+    {
+      -- Should be called with normalized snippet array
+      step = 'match',
+      args = {
+        {
+          { prefix = 'aa', body = 'AA=$1 T0=$0', desc = 'AA=$1 T0=$0' },
+          { prefix = 'ba', body = 'BA=$1 T0=$0', desc = 'BA=$1 T0=$0' },
+          { prefix = 'xx', body = 'XX=$1 T0=$0', desc = 'XX=$1 T0=$0' },
+        },
+      },
+    },
+    {
+      -- Should be called with matched snippet array and `insert` function
+      step = 'select',
+      args = {
+        {
+          { prefix = 'aa', body = 'AA=$1 T0=$0', desc = 'AA=$1 T0=$0', region = ref_region },
+          { prefix = 'ba', body = 'BA=$1 T0=$0', desc = 'BA=$1 T0=$0', region = ref_region },
+        },
+        'function',
+      },
+    },
+    {
+      -- Should be called with selected snippet, `region` should be removed
+      step = 'insert',
+      args = { { prefix = 'ba', body = 'BA=$1 T0=$0', desc = 'BA=$1 T0=$0' } },
+    },
+  }
+  eq(child.lua_get('_G.sanitize_object(_G.steps_log)'), ref_steps_log)
+end
+
+T['expand()']['uses config as default for steps'] = function()
+  child.lua([[
+    _G.log = {}
+    MiniSnippets.config.expand = {
+      prepare = function(...)
+        table.insert(_G.log, 'global prepare')
+        return MiniSnippets.default_prepare(...)
+      end,
+      match = function(...)
+        table.insert(_G.log, 'global match')
+        return MiniSnippets.default_match(...)
+      end,
+    }
+
+    vim.b.minisnippets_config = { expand = {
+      match = function(...)
+        table.insert(_G.log, 'buffer-local match')
+        return MiniSnippets.default_match(...)
+      end,
+    }}
+  ]])
+
+  mock_select(2)
+  expand()
+  -- Should prefer buffer-local over global config
+  eq(child.lua_get('_G.log'), { 'global prepare', 'buffer-local match' })
+end
+
+T['expand()']['prepares for `isnert` to be executed at cursor in Insert mode'] = function()
+  child.lua([[
+    _G.log = {}
+    MiniSnippets.config.expand.insert = function(...)
+      local state = {
+        mode = vim.fn.mode(),
+        line = vim.api.nvim_get_current_line(),
+        cursor = vim.api.nvim_win_get_cursor(0),
+      }
+      table.insert(_G.log, state)
+    end]])
+
+  local validate = function()
+    expand()
+    -- Should ensure Insert mode, remove matched region, ensure cursor
+    eq(child.lua_get('_G.log'), { { mode = 'i', line = 'hello  xx', cursor = { 1, 6 } } })
+    child.lua('_G.log = {}')
+  end
+
+  -- Insert mode
+  type_keys('i', 'hello ba xx', '<Left><Left><Left>')
+  validate()
+  ensure_clean_state()
+
+  -- Normal mode
+  type_keys('i', 'hello ba xx', '<Left><Left><Left>', '<Esc>')
+  validate()
+end
+
+T['expand()']['accepts `false` for some steps'] = function()
+  -- Use all snippets if `match = false`
+  type_keys('i', 'a')
+  -- - Select snippet that is clearly not matched
+  mock_select(3)
+  expand({ match = false })
+  validate_active_session()
+  -- - No region is removed because there was no match
+  validate_state('i', { 'aXX= T0=' }, { 1, 4 })
+  ensure_clean_state()
+
+  -- Force best (first) match insert with `select = false`
+  type_keys('i', 'a')
+  expand({ select = false })
+  validate_active_session()
+  validate_state('i', { 'AA= T0=' }, { 1, 3 })
+  ensure_clean_state()
+
+  -- Return snippets with `insert = false`
+  type_keys('i', 'a')
+
+  -- - Matched snippets by default
+  local ref_region = { from = { col = 1, line = 1 }, to = { col = 1, line = 1 } }
+  local ref_matched_snippets = {
+    { prefix = 'aa', body = 'AA=$1 T0=$0', desc = 'AA=$1 T0=$0', region = ref_region },
+    { prefix = 'ba', body = 'BA=$1 T0=$0', desc = 'BA=$1 T0=$0', region = ref_region },
+  }
+  eq(expand({ insert = false }), ref_matched_snippets)
+  validate_no_active_session()
+  validate_state('i', { 'a' }, { 1, 1 })
+
+  -- - All snippets if `match = false`
+  local ref_all_snippets = {
+    { prefix = 'aa', body = 'AA=$1 T0=$0', desc = 'AA=$1 T0=$0' },
+    { prefix = 'ba', body = 'BA=$1 T0=$0', desc = 'BA=$1 T0=$0' },
+    { prefix = 'xx', body = 'XX=$1 T0=$0', desc = 'XX=$1 T0=$0' },
+  }
+  eq(expand({ match = false, insert = false }), ref_all_snippets)
+  validate_no_active_session()
+  validate_state('i', { 'a' }, { 1, 1 })
+end
+
+T['expand()']['does not warn about no matches if `insert = false`'] = function()
+  -- No matches
+  type_keys('i', 't')
+  eq(expand({ insert = false }), {})
+
+  -- No snippets at all
+  child.lua('MiniSnippets.config.snippets = {}')
+  eq(expand({ match = false, insert = false }), {})
+
+  -- In both cases output should be done silently
+  eq(child.lua_get('_G.notify_log'), {})
+end
+
+T['expand()']['validates correct step output'] = function()
+  local validate_bad_out = function(step_name, bad_output)
+    child.lua('_G.step_name, _G.bad_output = ' .. vim.inspect(step_name) .. ', ' .. vim.inspect(bad_output))
+    child.lua('_G.bad_step = function() return _G.bad_output end')
+    local err_pattern = '`' .. step_name .. '`.*array of snippets'
+    expect.error(function() child.lua('MiniSnippets.expand({ [_G.step_name] = _G.bad_step })') end, err_pattern)
+  end
+
+  -- Should error about not proper `prepare` output
+  validate_bad_out('prepare', 1)
+  validate_bad_out('prepare', { 1 })
+  validate_bad_out('prepare', { 1 })
+  validate_bad_out('prepare', { { body = 1 } })
+  validate_bad_out('prepare', { { body = 'T1=$1', prefix = 1 } })
+  validate_bad_out('prepare', { { body = 'T1=$1', desc = 1 } })
+  validate_bad_out('prepare', { { body = 'T1=$1', region = 1 } })
+
+  -- Should error about not proper `match` output
+  validate_bad_out('match', 1)
+  validate_bad_out('match', { 1 })
+  validate_bad_out('match', { 1 })
+  validate_bad_out('match', { { body = 1 } })
+  validate_bad_out('match', { { body = 'T1=$1', prefix = 1 } })
+  validate_bad_out('match', { { body = 'T1=$1', desc = 1 } })
+  validate_bad_out('match', { { body = 'T1=$1', region = 1 } })
+
+  -- Should warn about no matches and use `context` returned from `prepare` step
+  child.lua([[
+    MiniSnippets.config.expand.prepare = function(...)
+      return _G.prepare_res or MiniSnippets.default_prepare(...), { data = 'my context' }
+    end
+  ]])
+
+  -- - Should warn about no matches
+  type_keys('i', 't')
+  expand()
+  validate_state('i', { 't' }, { 1, 1 })
+  local ref_log = { { '(mini.snippets) No matches in context:\n{\n  data = "my context"\n}', 'WARN' } }
+  eq(child.lua_get('_G.notify_log'), ref_log)
+  child.lua('_G.notify_log = {}')
+  ensure_clean_state()
+
+  -- Should warn about no snippets (as returned by prepare step) at all
+  child.lua('_G.prepare_res = {}')
+  type_keys('i', 'a')
+  expand()
+  validate_state('i', { 'a' }, { 1, 1 })
+  ref_log = { { '(mini.snippets) No snippets in context:\n{\n  data = "my context"\n}', 'WARN' } }
+  eq(child.lua_get('_G.notify_log'), ref_log)
+  child.lua('_G.notify_log = {}')
+  ensure_clean_state()
+end
+
+T['expand()']['validates input'] = function()
+  expect.error(function() expand({ prepare = 1 }) end, '`opts%.prepare`.*callable')
+  expect.error(function() expand({ match = 1 }) end, '`opts%.match`.*`false` or callable')
+  expect.error(function() expand({ select = 1 }) end, '`opts%.select`.*`false` or callable')
+  expect.error(function() expand({ insert = 1 }) end, '`opts%.insert`.*`false` or callable')
+end
+
+T['expand()']['respects `vim.b.minisnippets_config`'] = function()
+  -- Should process buffer-local config after global config and in this case
+  -- remove snippets with these prefixes (as body is `nil`)
+  child.b.minisnippets_config = { snippets = { { prefix = 'aa' }, { prefix = 'ba' } } }
+  eq(expand({ insert = false, match = false }), { { prefix = 'xx', body = 'XX=$1 T0=$0', desc = 'XX=$1 T0=$0' } })
+end
+
+T['expand()']['respects `vim.{g,b}.minidiff_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minisnippets_disable = true
+    mock_select(2)
+    expand()
+    validate_no_active_session()
+    validate_state('n', { '' }, { 1, 0 })
+
+    child[var_type].minisnippets_disable = false
+    mock_select(2)
+    expand()
+    validate_active_session()
+    validate_state('i', { 'BA= T0=' }, { 1, 3 })
+  end,
+})
 
 T['gen_loader'] = new_set({
   hooks = {
@@ -255,30 +571,147 @@ T['gen_loader'] = new_set({
 
 T['gen_loader']['from_lang()'] = new_set()
 
-T['gen_loader']['from_lang()']['works'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()']['works'] = function()
+  child.o.runtimepath = test_dir_absolute .. '/subdir,' .. test_dir_absolute
+  child.lua('_G.loader = MiniSnippets.gen_loader.from_lang()')
+  local ref_snippet_data = {
+    -- Should first read runtime files (however nested) from "lua" directory
+    {
+      { { prefix = 'f', body = 'F=$1', desc = 'subdir/snippets/lua/deeper/another.json' } },
+      { { prefix = 'e', body = 'E=$1', desc = 'subdir/snippets/lua/file.json' } },
+    },
+    {
+      { { prefix = 'd', body = 'D=$1', desc = 'subdir/snippets/lua/snips.lua' } },
+    },
+    -- And only then from exactly named file
+    {
+      -- Should read in order of 'runtimepath'
+      { { prefix = 'c', body = 'C=$1', desc = 'subdir/snippets/lua.json' } },
+      { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } },
+    },
+    {
+      { { prefix = 'b', body = 'B=$1', desc = 'snippets/lua.lua' } },
+    },
+  }
+  eq(child.lua_get('_G.loader({ lang = "lua" })'), ref_snippet_data)
 
-T['gen_loader']['from_lang()']['respects `opts.lang_patterns`'] = function() MiniTest.skip() end
+  -- Should cache output per lang context and thus not call `read_file` again
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua('_G.loader({ lang = "lua" })')
+  eq(child.lua_get('_G.read_args_log'), read_args_log)
+end
 
-T['gen_loader']['from_lang()']['can be made work with empty string `lang`'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()']['respects `opts.lang_patterns`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua('_G.loader = MiniSnippets.gen_loader.from_lang({ lang_patterns = { lua = { "lua.lua" } } })')
+  local ref_snippet_data = { { { { prefix = 'b', body = 'B=$1', desc = 'snippets/lua.lua' } } } }
+  eq(child.lua_get('_G.loader({ lang = "lua" })'), ref_snippet_data)
+end
 
-T['gen_loader']['from_lang()']['respects `opts.cache`'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()']['works with not typical `lang` context'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_lang() ]])
 
-T['gen_loader']['from_lang()']['clears cache after `setup()`'] = function() MiniTest.skip() end
+  -- Not string should be silently ignored
+  eq(child.lua_get('_G.loader({ lang = 1 })'), {})
+  eq(child.lua_get('_G.loader({ lang = nil })'), {})
+  eq(child.lua_get('_G.notify_log'), {})
 
-T['gen_loader']['from_lang()']['forwards `opts.cache` and `opts.silent` to `read_file()`'] = function() MiniTest.skip() end
+  -- Empty string
+  eq(child.lua_get('_G.loader({ lang = "" })'), {})
 
-T['gen_loader']['from_lang()']['validates input'] = function() MiniTest.skip() end
+  -- - Can be made working by explicitly adding language pattern
+  child.lua([[
+    local lang_patterns = { [''] = { 'lua.json' } }
+    _G.loader_2 = MiniSnippets.gen_loader.from_lang({ lang_patterns = lang_patterns })
+  ]])
+  eq(
+    child.lua_get('_G.loader_2({ lang = "" })'),
+    { { { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } } } }
+  )
+end
+
+T['gen_loader']['from_lang()']['outputs share cache per pattern'] = function()
+  child.o.runtimepath = test_dir_absolute .. '/subdir,' .. test_dir_absolute
+  child.lua([[
+    local opts_1 = { lang_patterns = { lua = { 'lua.json', 'lua.lua' } } }
+    _G.loader_1 = MiniSnippets.gen_loader.from_lang(opts_1)
+    local opts_2 = { lang_patterns = { lua = { 'lua.json', 'lua.code-snippets' } } }
+    _G.loader_2 = MiniSnippets.gen_loader.from_lang(opts_2)
+  ]])
+
+  child.lua_get('_G.loader_1({ lang = "lua" })')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua_get('_G.loader_2({ lang = "lua" })')
+  -- It should have read one extra 'subdir/snippets/lua.code-snippets', while
+  -- using cache for all 'lua.json' files
+  eq(#child.lua_get('_G.read_args_log'), #read_args_log + 1)
+end
+
+T['gen_loader']['from_lang()']['respects `opts.cache`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua('_G.loader = MiniSnippets.gen_loader.from_lang({ cache = false })')
+
+  child.lua('_G.loader({ lang = "lua" })')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  eq(#read_args_log > 0, true)
+  child.lua('_G.loader({ lang = "lua" })')
+  eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
+end
+
+T['gen_loader']['from_lang()']['clears cache after `setup()`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua('_G.loader = MiniSnippets.gen_loader.from_lang()')
+
+  child.lua('_G.loader({ lang = "lua" })')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua('MiniSnippets.setup()')
+  child.lua('_G.loader({ lang = "lua" })')
+  eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
+end
+
+T['gen_loader']['from_lang()']['forwards `opts.cache` and `opts.silent` to `from_runtime()`'] = function()
+  child.lua([[
+    local from_runtime_orig = MiniSnippets.gen_loader.from_runtime
+    _G.from_runtime_args_log = {}
+    MiniSnippets.gen_loader.from_runtime = function(...)
+      table.insert(_G.from_runtime_args_log, { ... })
+      return from_runtime_orig(...)
+    end
+  ]])
+
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_lang({ cache = false, silent = true })]])
+  child.lua('_G.loader({ lang = "lua" })')
+  local from_runtime_args_log = child.lua_get('_G.from_runtime_args_log')
+  eq(from_runtime_args_log[1][2], { cache = false, silent = true })
+  eq(from_runtime_args_log[2][2], { cache = false, silent = true })
+
+  -- Should not reuse generate `from_runtime()` loaders
+  child.lua('_G.loader({ lang = "lua" })')
+  eq(child.lua_get('_G.from_runtime_args_log'), from_runtime_args_log)
+end
+
+T['gen_loader']['from_lang()']['validates input'] = function()
+  local validate_lang_patterns_error = function(lang_patterns, err_pattern)
+    child.lua('_G.lang_patterns = ' .. vim.inspect(lang_patterns))
+    local lua_cmd = 'MiniSnippets.gen_loader.from_lang({ lang_patterns = _G.lang_patterns })'
+    expect.error(function() child.lua(lua_cmd) end, err_pattern)
+  end
+
+  validate_lang_patterns_error({ 'lua' }, 'Keys of `opts.lang_patterns`.*string')
+  validate_lang_patterns_error({ lua = 'lua.lua' }, 'Values of `opts.lang_patterns`.*arrays')
+  validate_lang_patterns_error({ lua = { 1 } }, 'Values of `opts.lang_patterns`.*string')
+end
 
 T['gen_loader']['from_runtime()'] = new_set()
 
 T['gen_loader']['from_runtime()']['works'] = function()
-  child.o.runtimepath = test_dir_absolute
-  -- NOTE: both `{json,lua}` and `{lua,json}` result in same file order,
-  -- presumably. It is both true for `nvim_get_runtime_file` and `:runtime!`.
-  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.{json,lua}')]])
+  child.o.runtimepath = test_dir_absolute .. '/subdir'
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua/**/*.json')]])
   local ref_snippets = {
-    { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } },
-    { { prefix = 'b', body = 'B=$1', desc = 'snippets/lua.lua' } },
+    { { prefix = 'f', body = 'F=$1', desc = 'subdir/snippets/lua/deeper/another.json' } },
+    { { prefix = 'e', body = 'E=$1', desc = 'subdir/snippets/lua/file.json' } },
   }
   eq(child.lua_get('_G.loader()'), ref_snippets)
   local read_args_log = child.lua_get('_G.read_args_log')
@@ -287,8 +720,8 @@ T['gen_loader']['from_runtime()']['works'] = function()
   eq(child.lua_get('_G.loader()'), ref_snippets)
   eq(child.lua_get('_G.read_args_log'), read_args_log)
 
-  child.lua([[_G.loader_2 = MiniSnippets.gen_loader.from_runtime('lua.lua')]])
-  eq(child.lua_get('_G.loader_2()'), { { { prefix = 'b', body = 'B=$1', desc = 'snippets/lua.lua' } } })
+  child.lua([[_G.loader_2 = MiniSnippets.gen_loader.from_runtime('lua/**/snips.lua')]])
+  eq(child.lua_get('_G.loader_2()'), { { { prefix = 'd', body = 'D=$1', desc = 'subdir/snippets/lua/snips.lua' } } })
   eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
 
   -- Should read all matching files (not just first)
@@ -301,9 +734,23 @@ T['gen_loader']['from_runtime()']['works'] = function()
   eq(child.lua_get('_G.loader_all()'), ref_snippets_all)
 end
 
+T['gen_loader']['from_runtime()']['outputs share cache'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[
+    _G.loader_1 = MiniSnippets.gen_loader.from_runtime('lua.json')
+    _G.loader_2 = MiniSnippets.gen_loader.from_runtime('lua.json')
+  ]])
+
+  child.lua_get('_G.loader_1()')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  eq(#read_args_log > 0, true)
+  child.lua_get('_G.loader_2()')
+  eq(child.lua_get('_G.read_args_log'), read_args_log)
+end
+
 T['gen_loader']['from_runtime()']['respects `opts.cache`'] = function()
   child.o.runtimepath = test_dir_absolute
-  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.{json,lua}', { cache = false })]])
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.json', { cache = false })]])
 
   child.lua('_G.loader()')
   local read_args_log = child.lua_get('_G.read_args_log')
@@ -314,11 +761,10 @@ end
 
 T['gen_loader']['from_runtime()']['forwards `opts.cache` and `opts.silent` to `read_file()`'] = function()
   child.o.runtimepath = test_dir_absolute
-  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.{json,lua}', { cache = false, silent = true })]])
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_runtime('lua.json', { cache = false, silent = true })]])
   child.lua('_G.loader()')
   local read_args_log = child.lua_get('_G.read_args_log')
   eq(read_args_log[1][2], { cache = false, silent = true })
-  eq(read_args_log[2][2], { cache = false, silent = true })
 end
 
 T['gen_loader']['from_runtime()']['respects `opts.all`'] = function()
@@ -349,8 +795,8 @@ T['gen_loader']['from_file()']['works'] = function()
   -- Should be able to work with relative paths
   child.lua([[_G.loader = MiniSnippets.gen_loader.from_file("file-array.lua")]])
 
-  -- Should silently return `nil` if file is absent
-  eq(child.lua_get('_G.loader()'), vim.NIL)
+  -- Should silently return `{}` if file is absent
+  eq(child.lua_get('_G.loader()'), {})
   eq(child.lua_get('_G.notify_log'), {})
 
   -- Should load file if present and show warnings
@@ -454,22 +900,43 @@ T['read_file()']['works with array-like content'] = function()
   validate('file-array.code-snippets')
 end
 
+T['read_file()']['works with relative paths'] = function()
+  child.fn.chdir(test_dir_absolute)
+  eq(read_file('snippets/lua.json'), { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } })
+
+  -- Should cache per full path
+  child.fn.chdir('subdir')
+  eq(read_file('snippets/lua.json'), { { prefix = 'c', body = 'C=$1', desc = 'subdir/snippets/lua.json' } })
+end
+
 T['read_file()']['correctly computes extension'] = function()
   eq(read_file(test_dir_absolute .. '/file.many.dots.lua'), { { body = 'A=$1', prefix = 'a' } })
 end
 
 T['read_file()']['warns about problems during reading'] = function()
   local validate = function(filename, problem_pattern)
-    read_file(test_dir_absolute .. '/' .. filename)
+    -- Should return `nil` if there was a problem with reading
+    eq(read_file(test_dir_absolute .. '/' .. filename), vim.NIL)
     validate_problems(vim.pesc(filename), problem_pattern)
   end
 
-  validate('not-present', 'File is not on disk')
+  validate('not-present', 'File is absent or not readable')
   validate('file.notsupported', 'Extension is not supported')
   validate('bad-file-cant-execute.lua', 'Could not execute Lua file')
   validate('bad-file-not-table-return.lua', 'Returned object is not a table')
   validate('bad-file-cant-decode.json', 'valid JSON.*invalid token')
   validate('bad-file-not-dict-object.json', 'not a dictionary or array')
+end
+
+T['read_file()']['should not cache if there were reading problems'] = function()
+  local temp_file = child.fn.tempname() .. '.lua'
+  MiniTest.finally(function() child.fn.delete(temp_file) end)
+
+  child.fn.writefile({ 'return 1' }, temp_file)
+  eq(read_file(temp_file), vim.NIL)
+
+  child.fn.writefile({ 'return { { prefix = "a", body = "A=$1" } }' }, temp_file)
+  eq(read_file(temp_file), { { prefix = 'a', body = 'A=$1' } })
 end
 
 T['read_file()']['caches output'] = function()
