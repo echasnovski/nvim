@@ -385,6 +385,19 @@ end
 
 T['gen_loader']['from_runtime()'] = new_set()
 
+T['gen_loader']['from_runtime()']['CI debug'] = function()
+  child.o.runtimepath = test_dir_absolute
+  local rtp_paths = child.lua_get([[vim.api.nvim_get_runtime_file('snippets/lua.{json,lua}', true)]])
+  local expanded_str = vim.fn.expand('snippets/lua.{json,lua}', true, true)
+  local read = forward_lua('MiniSnippets.read_file')
+  eq({
+    expanded_str = expanded_str,
+    rtp = child.o.runtimepath,
+    rtp_paths = rtp_paths,
+    read_files = vim.tbl_map(read, rtp_paths),
+  })
+end
+
 T['gen_loader']['from_runtime()']['works'] = function()
   child.o.runtimepath = test_dir_absolute
   -- NOTE: both `{json,lua}` and `{lua,json}` result in same file order,
