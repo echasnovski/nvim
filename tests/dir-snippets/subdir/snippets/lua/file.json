@@ -1,1 +1,1 @@
-return { ['subdir/snippets/lua/snips.lua'] = { prefix = 'd', body = 'D=$1' } }
+{ "subdir/snippets/lua/file.json": { "prefix": "e", "body": "E=$1" } }

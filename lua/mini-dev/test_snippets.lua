@@ -255,19 +255,133 @@ T['gen_loader'] = new_set({
 
 T['gen_loader']['from_lang()'] = new_set()
 
-T['gen_loader']['from_lang()']['works'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()']['works'] = function()
+  child.o.runtimepath = test_dir_absolute .. '/subdir,' .. test_dir_absolute
+  child.lua('_G.loader = MiniSnippets.gen_loader.from_lang()')
+  local ref_snippet_data = {
+    -- Should first read runtime files (however nested) from "lua" directory
+    {
+      { { prefix = 'f', body = 'F=$1', desc = 'subdir/snippets/lua/deeper/another.json' } },
+      { { prefix = 'e', body = 'E=$1', desc = 'subdir/snippets/lua/file.json' } },
+      { { prefix = 'd', body = 'D=$1', desc = 'subdir/snippets/lua/snips.lua' } },
+    },
+    -- And only then from exactly named file
+    {
+      -- Should read in order of 'runtimepath'
+      { { prefix = 'c', body = 'C=$1', desc = 'subdir/snippets/lua.json' } },
+      { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } },
+      { { prefix = 'b', body = 'B=$1', desc = 'snippets/lua.lua' } },
+    },
+  }
+  eq(child.lua_get('_G.loader({ lang = "lua" })'), ref_snippet_data)
 
-T['gen_loader']['from_lang()']['respects `opts.lang_patterns`'] = function() MiniTest.skip() end
+  -- Should cache output per lang context and thus not call `read_file` again
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua('_G.loader({ lang = "lua" })')
+  eq(child.lua_get('_G.read_args_log'), read_args_log)
+end
 
-T['gen_loader']['from_lang()']['can be made work with empty string `lang`'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()']['respects `opts.lang_patterns`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua('_G.loader = MiniSnippets.gen_loader.from_lang({ lang_patterns = { lua = { "lua.lua" } } })')
+  local ref_snippet_data = { { { { prefix = 'b', body = 'B=$1', desc = 'snippets/lua.lua' } } } }
+  eq(child.lua_get('_G.loader({ lang = "lua" })'), ref_snippet_data)
+end
 
-T['gen_loader']['from_lang()']['respects `opts.cache`'] = function() MiniTest.skip() end
+T['gen_loader']['from_lang()']['works with not typical `lang` context'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_lang() ]])
 
-T['gen_loader']['from_lang()']['clears cache after `setup()`'] = function() MiniTest.skip() end
+  -- Not string should be silently ignored
+  eq(child.lua_get('_G.loader({ lang = 1 })'), {})
+  eq(child.lua_get('_G.loader({ lang = nil })'), {})
+  eq(child.lua_get('_G.notify_log'), {})
 
-T['gen_loader']['from_lang()']['forwards `opts.cache` and `opts.silent` to `read_file()`'] = function() MiniTest.skip() end
+  -- Empty string
+  eq(child.lua_get('_G.loader({ lang = "" })'), {})
 
-T['gen_loader']['from_lang()']['validates input'] = function() MiniTest.skip() end
+  -- - Can be made working by explicitly adding language pattern
+  child.lua([[
+    local lang_patterns = { [''] = { 'lua.json' } }
+    _G.loader_2 = MiniSnippets.gen_loader.from_lang({ lang_patterns = lang_patterns })
+  ]])
+  eq(
+    child.lua_get('_G.loader_2({ lang = "" })'),
+    { { { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } } } }
+  )
+end
+
+T['gen_loader']['from_lang()']['outputs share cache per pattern'] = function()
+  child.o.runtimepath = test_dir_absolute .. '/subdir,' .. test_dir_absolute
+  child.lua([[
+    local opts_1 = { lang_patterns = { lua = { 'lua.json', 'lua.lua' } } }
+    _G.loader_1 = MiniSnippets.gen_loader.from_lang(opts_1)
+    local opts_2 = { lang_patterns = { lua = { 'lua.json', 'lua.code-snippets' } } }
+    _G.loader_2 = MiniSnippets.gen_loader.from_lang(opts_2)
+  ]])
+
+  child.lua_get('_G.loader_1({ lang = "lua" })')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua_get('_G.loader_2({ lang = "lua" })')
+  -- It should have read one extra 'subdir/snippets/lua.code-snippets', while
+  -- using cache for all 'lua.json' files
+  eq(#child.lua_get('_G.read_args_log'), #read_args_log + 1)
+end
+
+T['gen_loader']['from_lang()']['respects `opts.cache`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua('_G.loader = MiniSnippets.gen_loader.from_lang({ cache = false })')
+
+  child.lua('_G.loader({ lang = "lua" })')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua('_G.loader({ lang = "lua" })')
+  eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
+end
+
+T['gen_loader']['from_lang()']['clears cache after `setup()`'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua('_G.loader = MiniSnippets.gen_loader.from_lang()')
+
+  child.lua('_G.loader({ lang = "lua" })')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua('MiniSnippets.setup()')
+  child.lua('_G.loader({ lang = "lua" })')
+  eq(#child.lua_get('_G.read_args_log') > #read_args_log, true)
+end
+
+T['gen_loader']['from_lang()']['forwards `opts.cache` and `opts.silent` to `from_runtime()`'] = function()
+  child.lua([[
+    local from_runtime_orig = MiniSnippets.gen_loader.from_runtime
+    _G.from_runtime_args_log = {}
+    MiniSnippets.gen_loader.from_runtime = function(...)
+      table.insert(_G.from_runtime_args_log, { ... })
+      return from_runtime_orig(...)
+    end
+  ]])
+
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[_G.loader = MiniSnippets.gen_loader.from_lang({ cache = false, silent = true })]])
+  child.lua('_G.loader({ lang = "lua" })')
+  local from_runtime_args_log = child.lua_get('_G.from_runtime_args_log')
+  eq(from_runtime_args_log[1][2], { cache = false, silent = true })
+  eq(from_runtime_args_log[2][2], { cache = false, silent = true })
+
+  -- Should not reuse generate `from_runtime()` loaders
+  child.lua('_G.loader({ lang = "lua" })')
+  eq(child.lua_get('_G.from_runtime_args_log'), from_runtime_args_log)
+end
+
+T['gen_loader']['from_lang()']['validates input'] = function()
+  local validate_lang_patterns_error = function(lang_patterns, err_pattern)
+    child.lua('_G.lang_patterns = ' .. vim.inspect(lang_patterns))
+    local lua_cmd = 'MiniSnippets.gen_loader.from_lang({ lang_patterns = _G.lang_patterns })'
+    expect.error(function() child.lua(lua_cmd) end, err_pattern)
+  end
+
+  validate_lang_patterns_error({ 'lua' }, 'Keys of `opts.lang_patterns`.*string')
+  validate_lang_patterns_error({ lua = 'lua.lua' }, 'Values of `opts.lang_patterns`.*arrays')
+  validate_lang_patterns_error({ lua = { 1 } }, 'Values of `opts.lang_patterns`.*string')
+end
 
 T['gen_loader']['from_runtime()'] = new_set()
 
@@ -299,6 +413,19 @@ T['gen_loader']['from_runtime()']['works'] = function()
     { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } },
   }
   eq(child.lua_get('_G.loader_all()'), ref_snippets_all)
+end
+
+T['gen_loader']['from_runtime()']['outputs share cache'] = function()
+  child.o.runtimepath = test_dir_absolute
+  child.lua([[
+    _G.loader_1 = MiniSnippets.gen_loader.from_runtime('lua.{json,lua}')
+    _G.loader_2 = MiniSnippets.gen_loader.from_runtime('lua.{json,lua}')
+  ]])
+
+  child.lua_get('_G.loader_1()')
+  local read_args_log = child.lua_get('_G.read_args_log')
+  child.lua_get('_G.loader_2()')
+  eq(child.lua_get('_G.read_args_log'), read_args_log)
 end
 
 T['gen_loader']['from_runtime()']['respects `opts.cache`'] = function()
@@ -349,8 +476,8 @@ T['gen_loader']['from_file()']['works'] = function()
   -- Should be able to work with relative paths
   child.lua([[_G.loader = MiniSnippets.gen_loader.from_file("file-array.lua")]])
 
-  -- Should silently return `nil` if file is absent
-  eq(child.lua_get('_G.loader()'), vim.NIL)
+  -- Should silently return `{}` if file is absent
+  eq(child.lua_get('_G.loader()'), {})
   eq(child.lua_get('_G.notify_log'), {})
 
   -- Should load file if present and show warnings
@@ -454,22 +581,43 @@ T['read_file()']['works with array-like content'] = function()
   validate('file-array.code-snippets')
 end
 
+T['read_file()']['works with relative paths'] = function()
+  child.fn.chdir(test_dir_absolute)
+  eq(read_file('snippets/lua.json'), { { prefix = 'a', body = 'A=$1', desc = 'snippets/lua.json' } })
+
+  -- Should cache per full path
+  child.fn.chdir('subdir')
+  eq(read_file('snippets/lua.json'), { { prefix = 'c', body = 'C=$1', desc = 'subdir/snippets/lua.json' } })
+end
+
 T['read_file()']['correctly computes extension'] = function()
   eq(read_file(test_dir_absolute .. '/file.many.dots.lua'), { { body = 'A=$1', prefix = 'a' } })
 end
 
 T['read_file()']['warns about problems during reading'] = function()
   local validate = function(filename, problem_pattern)
-    read_file(test_dir_absolute .. '/' .. filename)
+    -- Should return `nil` if there was a problem with reading
+    eq(read_file(test_dir_absolute .. '/' .. filename), vim.NIL)
     validate_problems(vim.pesc(filename), problem_pattern)
   end
 
-  validate('not-present', 'File is not on disk')
+  validate('not-present', 'File is absent or not readable')
   validate('file.notsupported', 'Extension is not supported')
   validate('bad-file-cant-execute.lua', 'Could not execute Lua file')
   validate('bad-file-not-table-return.lua', 'Returned object is not a table')
   validate('bad-file-cant-decode.json', 'valid JSON.*invalid token')
   validate('bad-file-not-dict-object.json', 'not a dictionary or array')
+end
+
+T['read_file()']['should not cache if there were reading problems'] = function()
+  local temp_file = child.fn.tempname() .. '.lua'
+  MiniTest.finally(function() child.fn.delete(temp_file) end)
+
+  child.fn.writefile({ 'return 1' }, temp_file)
+  eq(read_file(temp_file), vim.NIL)
+
+  child.fn.writefile({ 'return { { prefix = "a", body = "A=$1" } }' }, temp_file)
+  eq(read_file(temp_file), { { prefix = 'a', body = 'A=$1' } })
 end
 
 T['read_file()']['caches output'] = function()
