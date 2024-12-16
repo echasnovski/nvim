@@ -55,6 +55,8 @@ local validate_n_sessions = function(n) eq(child.lua_get('#MiniSnippets.session.
 local validate_pumvisible = function() eq(child.fn.pumvisible(), 1) end
 local validate_no_pumvisible = function() eq(child.fn.pumvisible(), 0) end
 local validate_pumitems = function(ref)
+  if #ref == 0 then validate_no_pumvisible() end
+  if #ref > 0 then validate_pumvisible() end
   eq(vim.tbl_map(function(t) return t.word end, child.fn.complete_info().items), ref)
 end
 
@@ -173,6 +175,9 @@ local T = new_set({
           return x
         end
       ]])
+
+      -- Better interaction with built-in completion
+      child.o.completeopt = 'menuone,noselect'
 
       load_module()
     end,
@@ -384,7 +389,7 @@ T['expand()']['uses config as default for steps'] = function()
   eq(child.lua_get('_G.log'), { 'global prepare', 'buffer-local match' })
 end
 
-T['expand()']['prepares for `isnert` to be executed at cursor in Insert mode'] = function()
+T['expand()']['prepares for `insert` to be executed at cursor in Insert mode'] = function()
   child.lua([[
     _G.log = {}
     MiniSnippets.config.expand.insert = function(...)
@@ -396,21 +401,63 @@ T['expand()']['prepares for `isnert` to be executed at cursor in Insert mode'] =
       table.insert(_G.log, state)
     end]])
 
-  local validate = function()
+  local validate = function(keys, ref_line, ref_cursor)
+    type_keys(1, 'i', keys)
+    mock_select(1)
     expand()
     -- Should ensure Insert mode, remove matched region, ensure cursor
-    eq(child.lua_get('_G.log'), { { mode = 'i', line = 'hello  xx', cursor = { 1, 6 } } })
+    eq(child.lua_get('_G.log'), { { mode = 'i', line = ref_line, cursor = ref_cursor } })
     child.lua('_G.log = {}')
+    ensure_clean_state()
   end
 
-  -- Insert mode
-  type_keys('i', 'hello ba xx', '<Left><Left><Left>')
-  validate()
-  ensure_clean_state()
+  -- Insert mode (in different line positions)
+  -- - Should remove matched region
+  validate({ 'a line start', '<Esc>', '0', 'a' }, ' line start', { 1, 0 })
+  validate({ 'line a middle', '<Esc>', 'b<Left>', 'i' }, 'line  middle', { 1, 5 })
+  validate({ 'line end a' }, 'line end ', { 1, 9 })
+
+  -- - Empty base for matching (no region to remove)
+  validate({ 'line start', '<Esc>', '0', 'i' }, 'line start', { 1, 0 })
+  validate({ 'line middle', '<Esc>', 'b', 'i' }, 'line middle', { 1, 5 })
+  validate({ 'line end ' }, 'line end ', { 1, 9 })
 
   -- Normal mode
-  type_keys('i', 'hello ba xx', '<Left><Left><Left>', '<Esc>')
-  validate()
+  validate({ 'a line start', '<Esc>', '0' }, ' line start', { 1, 0 })
+  validate({ 'line a middle', '<Esc>', 'b<Left><Left>' }, 'line  middle', { 1, 5 })
+  validate({ 'line end a', '<Esc>' }, 'line end ', { 1, 9 })
+
+  validate({ ' line start', '<Esc>', '0' }, ' line start', { 1, 0 })
+  validate({ 'line middle', '<Esc>', 'b', '<Left>' }, 'line middle', { 1, 4 })
+  validate({ 'line end ', '<Esc>' }, 'line end ', { 1, 8 })
+end
+
+T['expand()']['works with `vim.ui.select` which does not restore Insert mode'] = function()
+  child.lua([[
+    vim.ui.select = function(items, opts, on_choice)
+      vim.api.nvim_feedkeys('\27', 'nx', false)
+      vim.schedule(function() on_choice(items[1]) end)
+    end
+    _G.log = {}
+    MiniSnippets.config.expand.insert = function(...)
+      local t = { mode = vim.fn.mode(), line = vim.api.nvim_get_current_line(), cursor = vim.api.nvim_win_get_cursor(0)}
+      table.insert(_G.log, t)
+    end
+  ]])
+
+  -- -- With removing region
+  -- type_keys('i', 'xx a')
+  -- expand()
+  -- eq(child.lua_get('_G.log'), { { mode = 'i', line = 'xx ', cursor = { 1, 3 } } })
+  -- ensure_clean_state()
+  -- child.lua('_G.log = {}')
+
+  -- -- Without removing region
+  -- type_keys('i', 'xx ')
+  -- expand()
+  -- eq(child.lua_get('_G.log'), { { mode = 'i', cursor = { 1, 3 }, line = 'xx ' } })
+
+  MiniTest.skip('This should work with at least "removing region" case')
 end
 
 T['expand()']['accepts `false` for some steps'] = function()
@@ -1471,7 +1518,7 @@ T['default_select()']['works'] = function()
   })
 end
 
-T['default_select()']['respects multibyte characters during formatted'] = function()
+T['default_select()']['respects multibyte characters during formatting'] = function()
   mock_select(2)
   default_select({
     { prefix = 'ыыы', body = 'Ы1=$1 Ы0=$0', desc = 'Ы snippet' },
@@ -1560,10 +1607,32 @@ T['default_insert()']['ensures Insert mode in current buffer'] = function()
 end
 
 T['default_insert()']['deletes snippet region'] = function()
-  set_lines({ 'abcd' })
-  local region = { from = { line = 1, col = 2 }, to = { line = 1, col = 3 } }
-  default_insert({ body = 'T1=$1', region = region })
-  validate_state('i', { 'aT1=d' }, { 1, 4 })
+  child.o.virtualedit = 'block'
+  local validate = function(mode, col_from, col_to, ref_line, ref_cursor)
+    if mode == 'i' then type_keys('i') end
+    set_lines({ 'abcd' })
+    local region = { from = { line = 1, col = col_from }, to = { line = 1, col = col_to } }
+    default_insert({ body = 'T1=$1', region = region })
+    validate_state('i', { ref_line }, ref_cursor)
+    -- Should not have side effects
+    eq(child.o.virtualedit, 'block')
+
+    ensure_clean_state()
+  end
+
+  validate('i', 1, 1, 'T1=bcd', { 1, 3 })
+  validate('i', 1, 2, 'T1=cd', { 1, 3 })
+  validate('i', 2, 2, 'aT1=cd', { 1, 4 })
+  validate('i', 2, 3, 'aT1=d', { 1, 4 })
+  validate('i', 3, 3, 'abT1=d', { 1, 5 })
+  validate('i', 3, 4, 'abT1=', { 1, 5 })
+
+  validate('n', 1, 1, 'T1=bcd', { 1, 3 })
+  validate('n', 1, 2, 'T1=cd', { 1, 3 })
+  validate('n', 2, 2, 'aT1=cd', { 1, 4 })
+  validate('n', 2, 3, 'aT1=d', { 1, 4 })
+  validate('n', 3, 3, 'abT1=d', { 1, 5 })
+  validate('n', 3, 4, 'abT1=', { 1, 5 })
 end
 
 T['default_insert()']['can be used to create nested session'] = function()
@@ -1731,16 +1800,33 @@ T['default_insert()']['shows tabstop choices after start'] = function()
   -- Called in Normal mode
   default_insert({ body = 'T1=${1|aa,bb|}' })
   validate_pumitems({ 'aa', 'bb' })
-  -- - Should not be side effects
-  eq(child.cmd_capture('au ModeChanged'):find('Show popup') == nil, true)
+  -- - Should not have side effects
+  eq(child.cmd_capture('au ModeChanged'):find('Insert') == nil, true)
 end
 
 T['default_insert()']['direct call removes placeholder'] = function()
   default_insert({ body = 'T1=${1:<xxx>}' })
-  -- This can happen if `<C-g><C-j>` (i.e. insert snippet without typing prefix
-  -- to match) after jumping to tabstop with placeholder
+  -- This can happen if inserting snippet without typing prefix to match) after
+  -- jumping to tabstop with placeholder
   default_insert({ body = 'U1=$1' })
   validate_state('i', { 'T1=U1=' }, { 1, 6 })
+end
+
+T['default_insert()']['treats any digit sequence as unique tabstop'] = function()
+  default_insert({ body = '$1 $2 $01 $11 $02 $00' })
+  validate_active_session()
+  -- Should treat as separate tabstops and order as numbers and then as strings
+  local ref_tabstops_partial = {
+    ['00'] = { next = '01', prev = '0' },
+    ['01'] = { next = '1', prev = '00' },
+    ['1'] = { next = '02', prev = '01' },
+    ['02'] = { next = '2', prev = '1' },
+    ['2'] = { next = '11', prev = '02' },
+    ['11'] = { next = '0', prev = '2' },
+    -- Exactly '0' is a final tabstop
+    ['0'] = { next = '00', prev = '11' },
+  }
+  eq_partial_tbl(get().tabstops, ref_tabstops_partial)
 end
 
 T['default_insert()']['respects `opts.empty_tabstop` and `opts.empty_tabstop_final`'] = function()
@@ -2003,11 +2089,10 @@ T['session.jump()']['ensures session buffer is current'] = function()
 end
 
 T['session.jump()']['shows completion for tabstop with choices'] = function()
-  child.o.completeopt = 'menuone,noselect'
-  default_insert({ body = 'T1=${1|aa,bb|} T2=${2|cc,dd|}' })
+  default_insert({ body = 'T1=${1|aa,bb|} T2=${2|dd,cc|}' })
   validate_pumitems({ 'aa', 'bb' })
   jump('next')
-  validate_pumitems({ 'cc', 'dd' })
+  validate_pumitems({ 'dd', 'cc' })
   jump('prev')
   validate_pumitems({ 'aa', 'bb' })
 end
@@ -2492,6 +2577,17 @@ T['parse()']['tricky'] = function()
       { tabstop = '2', placeholder = { { tabstop = '1' }, { text = '.two' } } },
     }
   )
+
+  eq(
+    parse('$1 ${1:aaa} ${1|aa,bb|}'),
+    {
+      { tabstop = "1" },
+      { text = " " },
+      { tabstop = "1", placeholder = { { text = "aaa" } } },
+      { text = " " },
+      { tabstop = "1", choices = { "aa", "bb" } },
+    }
+  )
 end
 
 --stylua: ignore
@@ -2518,7 +2614,8 @@ T['parse()']['respects `opts.normalize`'] = function()
   validate('${1}',       { { tabstop = '1', placeholder = { { text = '' } } } ,                                final_tabstop })
   validate('${1:val}',   { { tabstop = '1', placeholder = { { text = 'val' } } },                              final_tabstop })
   validate('${1/a/b/c}', { { tabstop = '1', placeholder = { { text = '' } }, transform = { 'a', 'b', 'c' } } , final_tabstop })
-  validate('${1|u,v|}',  { { tabstop = '1', placeholder = { { text = '' } }, choices = { 'u', 'v' } } ,        final_tabstop })
+  -- - Should use first choice as placeholder
+  validate('${1|u,v|}',  { { tabstop = '1', placeholder = { { text = 'u' } }, choices = { 'u', 'v' } } ,       final_tabstop })
 
   validate('$BB',         { { var = 'BB', placeholder = { { text = '' } } },                                final_tabstop })
   validate('${BB}',       { { var = 'BB', placeholder = { { text = '' } } },                                final_tabstop })
@@ -2539,6 +2636,9 @@ T['parse()']['respects `opts.normalize`'] = function()
   validate('$0$1',        { { tabstop = '0', placeholder = { { text = '' } } },     { tabstop = '1', placeholder = { { text = '' } } } })
   validate('${0:text}$1', { { tabstop = '0', placeholder = { { text = 'text' } } }, { tabstop = '1', placeholder = { { text = '' } } } })
   validate('$0text',      { { tabstop = '0', placeholder = { { text = '' } } },     { text = 'text' } })
+
+  -- - But only *exactly* '0' should be treated as final tabstop
+  validate('$00',         { { tabstop = '00', placeholder = { { text = '' } } }, final_tabstop })
 
   -- Should normalize however deep
   validate('${BB:$1}',       { { var = 'BB',    placeholder = { { tabstop = '1', placeholder = { { text = '' } } } } },                                   final_tabstop })
@@ -2829,6 +2929,210 @@ T['Session']['properly adjusts highlighting'] = function()
   MiniTest.skip()
 end
 
+T['Session']['choices'] = new_set()
+
+T['Session']['choices']['works'] = function()
+  start_session('T1=${1|aa,bb|} T2=${2|dd,cc|}')
+  child.expect_screenshot()
+
+  -- Should show first choice as placeholder (not as text)
+  eq_partial_tbl(get().nodes[2], { tabstop = '1', placeholder = { { text = 'aa' } }, choices = { 'aa', 'bb' } })
+  eq_partial_tbl(get().nodes[4], { tabstop = '2', placeholder = { { text = 'dd' } }, choices = { 'dd', 'cc' } })
+
+  -- Should show choices initially
+  validate_pumitems({ 'aa', 'bb' })
+
+  -- Initial select should replace placeholder with first choice
+  validate_state('i', { 'T1=aa T2=dd' }, { 1, 3 })
+  type_keys('<C-n>')
+  eq_partial_tbl(get().nodes[2], { tabstop = '1', text = 'aa', choices = { 'aa', 'bb' } })
+  eq(get().nodes[2].placeholder, nil)
+  validate_state('i', { 'T1=aa T2=dd' }, { 1, 5 })
+
+  -- Removing text back to empty text should reshow all choices
+  type_keys('<BS>', '<C-y>')
+  validate_no_pumvisible()
+  type_keys('<BS>')
+  validate_pumitems({ 'aa', 'bb' })
+  -- - Should still show inline virtual text
+  child.expect_screenshot()
+end
+
+T['Session']['choices']['are shown only when needed'] = function()
+  start_session('T1=${1|aa,bb|} T2=${2|dd,cc|}')
+
+  -- Initially
+  validate_pumitems({ 'aa', 'bb' })
+
+  -- After jumps
+  jump('next')
+  validate_pumitems({ 'dd', 'cc' })
+
+  -- Not when editing non-empty text (to not conflict with autocompletion)
+  type_keys('d', 'x')
+  validate_no_pumvisible()
+  type_keys('<BS>')
+  validate_no_pumvisible()
+end
+
+T['Session']['choices']['are relevant to text'] = function()
+  default_insert({ body = 'T1=${1|aa,bb|} T2=${2|dd,cc|}' }, { lookup = { ['2'] = 'd' } })
+  validate_state('i', { 'T1=aa T2=d' }, { 1, 3 })
+
+  -- Reference node has placeholder -> all choices
+  -- - Even immediately after start
+  validate_pumitems({ 'aa', 'bb' })
+  jump('next')
+  jump('prev')
+  validate_pumitems({ 'aa', 'bb' })
+
+  -- Reference node has text -> choices matching text
+  -- - Even if text is "forced" via lookup
+  jump('next')
+  validate_pumitems({ 'dd' })
+  child.expect_screenshot()
+
+  type_keys('<BS>', 'c')
+  jump('prev')
+  jump('next')
+  validate_pumitems({ 'cc' })
+  child.expect_screenshot()
+end
+
+T['Session']['choices']["respects 'completeopt' when computing choices"] = function()
+  start_session('T1=${1|ba,aa,xx|}')
+  type_keys('a')
+  jump('next')
+
+  -- With no 'fuzzy' should match by prefix start
+  child.go.completeopt = 'menuone,noselect'
+  jump('prev')
+  validate_pumitems({ 'aa' })
+
+  -- With 'fuzzy' should match fuzzy. Should also prefer buffer-local value.
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Fuzzy matching is available only on Neovim>=0.11') end
+  jump('next')
+  child.bo.completeopt = 'menuone,noselect,fuzzy'
+  jump('prev')
+  validate_pumitems({ 'aa', 'ba' })
+
+  -- - Should match all items with empty text
+  type_keys('<BS>')
+  validate_pumitems({ 'ba', 'aa', 'xx' })
+
+  jump('next')
+  jump('prev')
+  validate_pumitems({ 'ba', 'aa', 'xx' })
+end
+
+T['Session']['choices']["work with default 'completeopt'"] = function()
+  child.o.completeopt = 'menu,preview'
+  start_session('T1=${1|aa,bb|} T2=${2|dd,cc|}')
+  child.expect_screenshot()
+
+  -- As there is no 'noselect', first choice is selected immediately
+  -- and thus replaces placeholder
+  eq_partial_tbl(get().nodes[2], { tabstop = '1', text = 'aa', choices = { 'aa', 'bb' } })
+
+  -- Showing choices at empty text automatically selects first item
+  type_keys('<BS>')
+  type_keys('<BS>')
+  child.expect_screenshot()
+end
+
+T['Session']['choices']['selecting completion item properly replaces current text'] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Fuzzy matching is available only on Neovim>=0.11') end
+  child.o.completeopt = 'menuone,noselect,fuzzy'
+  start_session('T1=${1|axax,yy|}')
+  type_keys('xx')
+  jump('next')
+  jump('prev')
+
+  validate_pumitems({ 'axax' })
+  type_keys('<C-n>')
+  validate_state('i', { 'T1=axax' }, { 1, 7 })
+end
+
+T['Session']['linked tabstops'] = new_set()
+
+T['Session']['linked tabstops']['are updated immediately when typing'] = function()
+  start_session('T1=$1_T1=$1')
+  type_keys('a')
+  validate_state('i', { 'T1=a_T1=a' }, { 1, 4 })
+
+  -- Even after jumping back
+  jump('next')
+  jump('prev')
+  type_keys('b')
+  validate_state('i', { 'T1=ab_T1=ab' }, { 1, 5 })
+  child.expect_screenshot()
+
+  -- Even multiline
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Multiline text sync has issues with cursor on Neovim<0.10') end
+  type_keys('<CR>')
+  validate_state('i', { 'T1=ab', '_T1=ab', '' }, { 2, 0 })
+  child.expect_screenshot()
+  type_keys('c')
+  validate_state('i', { 'T1=ab', 'c_T1=ab', 'c' }, { 2, 1 })
+  child.expect_screenshot()
+end
+
+T['Session']['linked tabstops']['are not updated during typing in nested session'] = function()
+  start_session('T1=${1:aa} T1=$1')
+  validate_state('i', { 'T1=aa T1=' }, { 1, 3 })
+
+  start_session('U1=$1 U1=$1')
+  -- Update right after start to remove placeholder from current session
+  validate_state('i', { 'T1=U1= U1= T1=U1= U1=' }, { 1, 6 })
+
+  -- No update on second `$1` from previous session
+  validate_state('i', { 'T1=U1= U1= T1=U1= U1=' }, { 1, 6 })
+
+  -- Should work with deeper nesting
+  start_session('$1')
+  type_keys('x')
+  validate_state('i', { 'T1=U1=x U1= T1=U1= U1=' }, { 1, 7 })
+
+  -- Should linked tabstops in previous after stopping current
+  stop()
+  validate_state('i', { 'T1=U1=x U1=x T1=U1= U1=' }, { 1, 7 })
+
+  stop()
+  validate_state('i', { 'T1=U1=x U1=x T1=U1=x U1=x' }, { 1, 7 })
+end
+
+T['Session']['linked tabstops']['jumps to the first node'] = function()
+  start_session('T1=${1:<T2=$2>} T2=$2 T1=$1')
+  validate_state('i', { 'T1=<T2=> T2= T1=' }, { 1, 3 })
+  child.expect_screenshot()
+
+  jump('next')
+  validate_state('i', { 'T1=<T2=> T2= T1=' }, { 1, 7 })
+  child.expect_screenshot()
+
+  -- Even if first node for linked tabstops is changed
+  jump('prev')
+  type_keys('x')
+  validate_state('i', { 'T1=x T2= T1=x' }, { 1, 4 })
+  jump('next')
+  validate_state('i', { 'T1=x T2= T1=x' }, { 1, 8 })
+  child.expect_screenshot()
+end
+
+T['Session']['linked tabstops']['works for tabstops with different placeholders'] = function()
+  start_session('T1=${1:aa} T1=${1:bb} T1=$1')
+  validate_state('i', { 'T1=aa T1=bb T1=' }, { 1, 3 })
+  type_keys('x')
+  validate_state('i', { 'T1=x T1=x T1=x' }, { 1, 4 })
+  ensure_clean_state()
+
+  -- Even if have different initial types
+  start_session('T1=$1 T1=${1:aa} T1=${1|bb,cc|}')
+  validate_state('i', { 'T1= T1=aa T1=bb' }, { 1, 3 })
+  type_keys('x')
+  validate_state('i', { 'T1=x T1=x T1=x' }, { 1, 4 })
+end
+
 T['Session']['cleans extmarks when they are not needed'] = function()
   local ns_id
   local validate_n_extmarks = function(ref_n)
@@ -3105,9 +3409,6 @@ T['Session']['nesting']['session stack is properly cleaned when buffer is unload
 end
 
 T['Interaction with built-in completion'] = new_set()
-
-T['Interaction with built-in completion'] =
-  new_set({ hooks = { pre_case = function() child.o.completeopt = 'menuone,noselect' end } })
 
 T['Interaction with built-in completion']['popup removal during insert'] = function()
   set_lines({ 'abc', '' })

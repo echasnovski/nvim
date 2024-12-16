@@ -5,22 +5,23 @@
 --
 -- Code:
 -- - A system to load and manage custom snippets:
---     - Should `\t` in snippet prefix be transformed according to 'expandtab'?
 --
 -- - A system to match snippet based on prefix:
 --
 -- - A system to expand, navigate, and edit snippet:
---     - Should autohide signature help from 'mini.completion' when jumping.
 --
 -- Docs:
 -- - Manage:
---     - Normalized snippets for buffer are cached. Execute `:edit` to clear
---       current buffer cache.
+--     - Snippets are prepared/normalized on every |MiniSnippets.expand()| call,
+--       which allows dynamically change them in the same session in any buffer.
+--       Instead, |MiniSnippets.gen_loader| entries and |MiniSnippets.read_file()|
+--       cache their output so as to not perform reading from disk more than once.
+--       See |MiniSnippets.default_prepare()| for an example of additional caching.
 --
 -- - Expand:
 --     - Find a shorter name for "snippet with <region> field".
 --     - Calling `expand.insert`:
---         - Preserves Insert mode and ensures Normal mode.
+--         - Ensures Insert mode.
 --         - Places cursor at the start of removed region (if there is one).
 --           Also removes `region` field as it is outdated an no longer needed.
 --     - Explore currently available snippets by expanding at line start.
@@ -55,7 +56,8 @@
 --         - Resuming session shouldn't change neither cursor nor buffer.
 --           Most importantly this allows typing when $0 is current without
 --           disrupting the typing flow.
---     - Choice nodes work better with 'completeopt=menuone,noselect'.
+--     - Choice nodes work better with 'completeopt=menuone,noselect' or
+--       'copleteopt=menuone,noselect,fuzzy'.
 --     - Modifying text outside of tabstop navigation is possible. All tabstop
 --       ranges should adjust (as the use |extmarks|) but it is up to the user
 --       to make sure that they are valid. In general anything but deleting
@@ -78,22 +80,10 @@
 --
 -- Tests:
 -- - Management:
---     - `cache = false` should not write to cache (to possibly save memory).
---     - `gen_loader.from_lang()` results in preferring snippets:
---         - From exact file over ancestor.
---         - From .lua over .{json,code-snippets}.
---     - `gen_loader.from_lang()` processes `lang_patterns` array in order.
---       Resulting in preferring later ones over earlier.
---     - Make sure that all files are read with target buffer being current.
 --
 -- - Expand:
---     - `expand.insert` is called with proper active mode and cursor.
---       Test edge cases when region/cursor is in start/middle/end of line
---       and in both supported modes.
 --
 -- - `default_insert`:
---     - Variables are evalueted exactly once.
---     - Treats '1' and '01' as different tabstops.
 --     - Take special care for how session extmarks track snippet's range:
 --         - What happens when initial expansion is done at the first column
 --           and/or at the first row while text is later typed at the snippet's
@@ -102,16 +92,11 @@
 --         - Same scenario but for the right side and expanding at last column.
 --         - Should expand when typing text strictly inside snippet range.
 --     - Linked tabstops are updated not only on typing text, but also on <BS>.
---     - Ensures presence of final tabstop (`$0`). Append at end if none.
 --     - Placeholders of tabstops and variables should be independent / "local
 --       only to node". This resolves cyclic cases like `${1:$2} ${2:$1}` in
 --       a single pass. This still should update the "dependent" nodes during
 --       typing: start as ` `; become `x x` after typing `x` on either tabstop,
 --       allow becomeing `x y` or `y x` after the jump and typing.
---     - Choices are shown when needed (before replace or empty tabstop).
---       Even if empty tabstop is achieved after deleting.
--- - Jump:
---     - Should ensure that session's buffer is current.
 --
 -- Outer:
 -- - Make PR to 'danymat/neogen'.
@@ -150,6 +135,9 @@
 ---   have snippets to choose from.
 --- - It does not come with a built-in snippet collection. It is expected from
 ---   users to add their own snippets, manually or with a dedicated plugin(s).
+--- - It does not support variable/tabstop transformations in default snippet
+---   session. This requires ECMAScript Regular Expression parser which can not
+---   be implemented concisely.
 ---
 --- # Setup ~
 ---
@@ -197,6 +185,9 @@
 --- of different scenarios and customization intentions, writing exact rules
 --- for disabling module's functionality is left to user. See
 --- |mini.nvim-disabling-recipes| for common recipes.
+
+---
+---@tag MiniSnippets-overview
 
 --- POSITION Table representing position in a buffer. Fields:
 ---          - <line> `(number)` - line number (starts at 1).
@@ -409,7 +400,8 @@ end
 ---
 --- `expand.insert` is a function that inserts snippet at cursor position.
 --- If called inside |MiniSnippets.expand()| (which is a usual interactive case),
---- it doesn't have to be able to remove matched region from `match` step.
+--- it doesn't have to remove matched region from `match` step: it will already be
+--- removed. Insert mode will also be ensured.
 ---
 --- Customization example: >lua
 ---
@@ -838,6 +830,9 @@ end
 --- Default select
 ---
 --- Show snippets as entries via |vim.ui.select()| and insert the chosen one.
+--- For best interactive experience requires `vim.ui.select()` to work from Insert
+--- mode (be called and properly restore Insert mode after choice).
+--- This is true for at least |MiniPick.vim_ui_select()| and Neovim's default.
 ---
 ---@param snippets table Array of snippets (as an output of `config.expand.match`).
 ---@param insert function|nil Function to insert chosen snippet (passed as the only
@@ -875,6 +870,8 @@ MiniSnippets.default_select = function(snippets, insert, opts)
   vim.ui.select(snippets, { prompt = 'Snippets', format_item = format_item }, on_choice)
 end
 
+--- - Uses normalized version of snippet (see |MiniSnippets.parse()|).
+--- - Shows relevant choices at start and after every jump.
 ---@usage >lua
 --- <
 MiniSnippets.default_insert = function(snippet, opts)
@@ -1011,7 +1008,6 @@ H.sessions = {}
 -- Various cache
 H.cache = {
   -- Loaders output
-  lang = {},
   runtime = {},
   file = {},
   -- Data for possibly overridden session mappings
@@ -1053,7 +1049,7 @@ H.apply_config = function(config)
   MiniSnippets.config = config
 
   -- Reset loader cache
-  H.cache = { lang = {}, runtime = {}, file = {}, mappings = {} }
+  H.cache = { runtime = {}, file = {}, mappings = {} }
 
   -- Make mappings
   local mappings = config.mappings
@@ -1221,20 +1217,17 @@ H.make_extended_insert = function(insert)
   return function(snippet)
     if snippet == nil then return end
 
-    -- Ensure Insert mode
-    H.ensure_insert_mode()
-
     -- Delete snippet's region and remove the data from the snippet (as it
     -- wouldn't need to be removed and will represent outdated information)
     H.delete_region(snippet.region)
     snippet = vim.deepcopy(snippet)
     snippet.region = nil
 
+    -- Ensure Insert mode
+    H.ensure_insert_mode()
+
     -- Insert at cursor in Insert mode
-    if vim.fn.mode() == 'i' then return insert(snippet) end
-    -- - Delay as starting Insert mode is not immediate
-    local f = function() insert(snippet) end
-    vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:i*', once = true, callback = f })
+    H.call_in_insert_mode(function() insert(snippet) end)
   end
 end
 
@@ -1294,8 +1287,8 @@ H.parse_normalize = function(node_arr, opts)
     -- Look up tabstop
     if n.tabstop ~= nil then n.text = lookup[n.tabstop] end
 
-    -- Ensure text-or-placeholder
-    if n.text == nil and n.placeholder == nil then n.placeholder = { { text = '' } } end
+    -- Ensure text-or-placeholder (use first choice for choice node)
+    if n.text == nil and n.placeholder == nil then n.placeholder = { { text = (n.choices or {})[1] or '' } } end
     if n.text ~= nil and n.placeholder ~= nil then n.placeholder = nil end
 
     -- Track presence of final tabstop
@@ -1569,6 +1562,7 @@ H.session_init = function(session, full)
     -- Register new session
     local cur_session = H.get_active_session()
     if cur_session ~= nil then
+      -- Sync before deinit to allow removing current placeholder
       H.session_sync_current_tabstop(cur_session)
       H.session_deinit(cur_session, false)
     end
@@ -1682,8 +1676,12 @@ H.session_tabstop_focus = function(session, tabstop_id)
   -- Ensure Insert mode
   H.ensure_insert_mode()
 
-  -- Maybe show choices when needed (before replace or on empty tabstop)
-  if ref_node.placeholder or ref_node.text == '' then H.show_completion(ref_node.choices) end
+  -- Show choices: if present and match node text (or all if still placeholder)
+  local matched_choices = H.session_match_choices(ref_node.choices, ref_node.text or '')
+  if #matched_choices > 0 then
+    local _, col, _, _ = H.extmark_get_range(session.buf_id, ref_node.extmark_id)
+    H.show_completion(matched_choices, col + 1)
+  end
 end
 
 H.session_ensure_gravity = function(session)
@@ -1708,6 +1706,13 @@ H.session_get_ref_node = function(session)
   local find = function(n) res = res or (n.tabstop == cur_tabstop and n or nil) end
   H.nodes_traverse(session.nodes, find)
   return res
+end
+
+H.session_match_choices = function(choices, prefix)
+  if choices == nil then return {} end
+  if prefix == '' then return choices end
+  if vim.o.completeopt:find('fuzzy') ~= nil then return vim.fn.matchfuzzy(choices, prefix) end
+  return vim.tbl_filter(function(c) return vim.startswith(c, prefix) end, choices)
 end
 
 H.session_is_valid = function(session)
@@ -2058,20 +2063,18 @@ H.set_cursor = function(pos)
 
   -- Make possible positioning cursor after line end
   if vim.fn.mode() ~= 'i' then
-    local cache_virtualedit = vim.wo.virtualedit
+    -- Cache only once (matters if there are several consecutive `set_cursor`)
+    H.cache.virtualedit = H.cache.virtualedit or vim.wo.virtualedit
     vim.wo.virtualedit = 'onemore'
-    vim.schedule(function() vim.wo.virtualedit = cache_virtualedit end)
+    -- NOTE: Assume any cursor change will (eventually) end in Insert mode
+    H.call_in_insert_mode(vim.schedule_wrap(function()
+      -- Restore only once as late as possible (with `schedule_wrap()`)
+      vim.wo.virtualedit = H.cache.virtualedit or vim.wo.virtualedit
+      H.cache.virtualedit = nil
+    end))
   end
 
   vim.api.nvim_win_set_cursor(0, pos)
-end
-
-H.set_mode = function(target_mode)
-  -- This is seemingly the only "good" way to ensure Normal mode.
-  -- Mostly because it works with `vim.snippet.expand()` as its implementation
-  -- uses `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
-  local keys = '\28\14' .. (target_mode == 'i' and 'i' or '')
-  vim.api.nvim_feedkeys(keys, 'n', false)
 end
 
 H.ensure_insert_mode = function()
@@ -2083,19 +2086,24 @@ H.ensure_insert_mode = function()
   vim.api.nvim_feedkeys('\28\14i', 'n', false)
 end
 
-H.delete_region = function(region)
-  if not H.is_region(region) then return end
-  -- Set cursor before deleting text to ensure working at end of line
-  H.set_cursor({ region.from.line, region.from.col - 1 })
-  vim.api.nvim_buf_set_text(0, region.from.line - 1, region.from.col - 1, region.to.line - 1, region.to.col, {})
+H.call_in_insert_mode = function(f)
+  if vim.fn.mode() == 'i' then return f() end
+  local cb = function() f() end
+  -- NOTE: Assume that change to Insert mode is already asked, but as it is not
+  -- immediate, wait until it actually happens
+  vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:i*', once = true, callback = cb, desc = 'Call in Insert' })
 end
 
-H.show_completion = function(items)
+H.delete_region = function(region)
+  if not H.is_region(region) then return end
+  vim.api.nvim_buf_set_text(0, region.from.line - 1, region.from.col - 1, region.to.line - 1, region.to.col, {})
+  H.set_cursor({ region.from.line, region.from.col - 1 })
+end
+
+H.show_completion = function(items, startcol)
   if items == nil then return end
-  if vim.fn.mode() == 'i' then return vim.fn.complete(vim.fn.col('.'), items) end
-  -- Show popup if inserting in not Insert mode as ensuring it is not immediate
-  local show = function() vim.fn.complete(vim.fn.col('.'), items) end
-  vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:i*', once = true, callback = show, desc = 'Show popup' })
+  startcol = startcol or vim.fn.col('.')
+  H.call_in_insert_mode(function() vim.fn.complete(startcol, items) end)
 end
 
 H.hide_completion = function()
