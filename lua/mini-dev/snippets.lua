@@ -91,7 +91,6 @@
 --           or moving to the right (even if first node is plain text)?
 --         - Same scenario but for the right side and expanding at last column.
 --         - Should expand when typing text strictly inside snippet range.
---     - Linked tabstops are updated not only on typing text, but also on <BS>.
 --     - Placeholders of tabstops and variables should be independent / "local
 --       only to node". This resolves cyclic cases like `${1:$2} ${2:$1}` in
 --       a single pass. This still should update the "dependent" nodes during
@@ -872,6 +871,16 @@ end
 
 --- - Uses normalized version of snippet (see |MiniSnippets.parse()|).
 --- - Shows relevant choices at start and after every jump.
+--- - Placeholder is replaced after text is added at its start (like with usual
+---   typing).
+--- - Linked tabstops:
+---   - There can be several nodes with the same tabstop. Initially they can
+---     have different placeholders. Among those the first one (when traversing
+---     from left to right) is named "reference node".
+---   - First text addition at the start/left of reference node removes
+---     placeholder from all nodes with same placeholder and makes them linked.
+---     All linked tabstops are forced to have the same text as reference node.
+---   - Cursor is placed in reference node.
 ---@usage >lua
 --- <
 MiniSnippets.default_insert = function(snippet, opts)
@@ -883,8 +892,11 @@ MiniSnippets.default_insert = function(snippet, opts)
   if not H.is_string(opts.empty_tabstop_final) then H.error('`empty_tabstop_final` should be string') end
   if type(opts.lookup) ~= 'table' then H.error('`lookup` should be table') end
 
-  H.delete_region(snippet.region)
-  H.session_init(H.session_new(snippet, opts), true)
+  -- Ensure insert in Insert mode (for proper cursor positioning at EOL)
+  H.call_in_insert_mode(function()
+    H.delete_region(snippet.region)
+    H.session_init(H.session_new(snippet, opts), true)
+  end)
 end
 
 --- Work with snippet session from |MiniSnippets.default_insert()|
@@ -894,7 +906,7 @@ MiniSnippets.session.get = function(all) return vim.deepcopy(all and H.sessions 
 
 MiniSnippets.session.jump = function(direction)
   if not (direction == 'prev' or direction == 'next') then H.error('`direction` should be one of "prev", "next"') end
-  H.session_jump(H.get_active_session(), direction)
+  H.call_in_insert_mode(function() H.session_jump(H.get_active_session(), direction) end)
 end
 
 --- Stop active session
@@ -1217,17 +1229,17 @@ H.make_extended_insert = function(insert)
   return function(snippet)
     if snippet == nil then return end
 
-    -- Delete snippet's region and remove the data from the snippet (as it
-    -- wouldn't need to be removed and will represent outdated information)
-    H.delete_region(snippet.region)
-    snippet = vim.deepcopy(snippet)
-    snippet.region = nil
+    -- Ensure Insert mode. This helps to properly position cursor at EOL.
+    H.call_in_insert_mode(function()
+      -- Delete snippet's region and remove the data from the snippet (as it
+      -- wouldn't need to be removed and will represent outdated information)
+      H.delete_region(snippet.region)
+      snippet = vim.deepcopy(snippet)
+      snippet.region = nil
 
-    -- Ensure Insert mode
-    H.ensure_insert_mode()
-
-    -- Insert at cursor in Insert mode
-    H.call_in_insert_mode(function() insert(snippet) end)
+      -- Insert snippet at cursor
+      insert(snippet)
+    end)
   end
 end
 
@@ -1298,8 +1310,8 @@ H.parse_normalize = function(node_arr, opts)
   math.randomseed(vim.loop.hrtime())
   local res = H.nodes_traverse(node_arr, normalize)
 
-  -- Possibly append final tabstop
-  if not has_final_tabstop then table.insert(node_arr, { tabstop = '0', text = '' }) end
+  -- Possibly append final tabstop as a regular normalized tabstop
+  if not has_final_tabstop then table.insert(node_arr, { tabstop = '0', placeholder = { { text = '' } } }) end
 
   return node_arr
 end
@@ -1551,11 +1563,10 @@ H.session_init = function(session, full)
       local row, col, opts = H.extmark_get(buf_id, ref_node.extmark_id)
       local is_empty = row == opts.end_row and col == opts.end_col
       if is_empty then
-        H.ensure_insert_mode()
-        H.extmark_set_cursor(buf_id, ref_node.extmark_id, 'left')
         -- Clean up
         H.nodes_traverse(session.nodes, function(n) H.extmark_del(buf_id, n.extmark_id) end)
-        return H.extmark_del(buf_id, session.extmark_id)
+        H.extmark_del(buf_id, session.extmark_id)
+        return H.set_cursor({ row + 1, col })
       end
     end
 
@@ -1622,7 +1633,7 @@ H.track_sessions = function()
     latest_changedtick = vim.b.changedtick
     -- React only on text changes in session's buffer
     local session, buf_id = H.get_active_session(), args.buf
-    if not (session.buf_id == buf_id and session.cur_tabstop == '0') then return end
+    if not ((session or {}).buf_id == buf_id and session.cur_tabstop == '0') then return end
     -- Stop without forcing to hide completion
     H.cache.stop_is_auto = true
     MiniSnippets.session.stop()
@@ -1661,27 +1672,25 @@ H.session_tabstop_focus = function(session, tabstop_id)
   session.cur_tabstop = tabstop_id
   session.tabstops[tabstop_id].is_visited = true
 
+  -- Ensure target buffer is current
+  H.ensure_cur_buf(session.buf_id)
+
   -- Update highlighting
   H.session_update_hl(session)
-
-  -- Focus cursor on the reference node in proper side: left side if it has
-  -- placeholder (and will be replaced), right side otherwise (to append).
-  local ref_node = H.session_get_ref_node(session)
-  local side = ref_node.placeholder ~= nil and 'left' or 'right'
-  H.extmark_set_cursor(session.buf_id, ref_node.extmark_id, side)
 
   -- Ensure proper gravity as reference node has changed
   H.session_ensure_gravity(session)
 
-  -- Ensure Insert mode
-  H.ensure_insert_mode()
+  -- Set cursor based on reference node: left side if there is placeholder (and
+  -- will be replaced), right side otherwise (to append).
+  local ref_node = H.session_get_ref_node(session)
+  local row, col, end_row, end_col = H.extmark_get_range(session.buf_id, ref_node.extmark_id)
+  local pos = ref_node.placeholder ~= nil and { row + 1, col } or { end_row + 1, end_col }
+  H.set_cursor(pos)
 
   -- Show choices: if present and match node text (or all if still placeholder)
   local matched_choices = H.session_match_choices(ref_node.choices, ref_node.text or '')
-  if #matched_choices > 0 then
-    local _, col, _, _ = H.extmark_get_range(session.buf_id, ref_node.extmark_id)
-    H.show_completion(matched_choices, col + 1)
-  end
+  H.show_completion(matched_choices, col + 1)
 end
 
 H.session_ensure_gravity = function(session)
@@ -1812,19 +1821,32 @@ H.session_update_hl = function(session)
 
   local update_hl = function(n, is_in_cur_tabstop)
     if n.tabstop == nil then return end
-    local is_final, is_visited = n.tabstop == '0', tabstops[n.tabstop].is_visited
+
+    -- Compute tabstop's features
+    local row, col, opts = H.extmark_get(buf_id, n.extmark_id)
+    local is_empty = row == opts.end_row and col == opts.end_col
+    local is_final = n.tabstop == '0'
+    local is_visited = tabstops[n.tabstop].is_visited
     local hl_group = (n.tabstop == cur_tabstop or is_in_cur_tabstop) and current_hl
       or (is_final and 'MiniSnippetsFinal' or (is_visited and 'MiniSnippetsVisited' or 'MiniSnippetsUnvisited'))
 
-    local row, col, opts = H.extmark_get(buf_id, n.extmark_id)
-    opts.hl_group, opts.virt_text, opts.virt_text_pos = hl_group, nil, nil
+    -- Ensure up to date highlighting
+    opts.hl_group, opts.virt_text_pos, opts.virt_text = nil, nil, nil
+
+    if is_empty then
+      if H.nvim_supports_inline_extmarks then
+        opts.virt_text_pos = 'inline'
+        opts.virt_text = { { is_final and empty_tabstop_final or empty_tabstop, hl_group } }
+      end
+    else
+      opts.hl_group = hl_group
+    end
+
     -- Make inline extmarks preserve order if placed at same position
     priority = priority + 1
     opts.priority = priority
-    if H.nvim_supports_inline_extmarks and row == opts.end_row and col == opts.end_col then
-      opts.virt_text_pos = 'inline'
-      opts.virt_text = { { is_final and empty_tabstop_final or empty_tabstop, hl_group } }
-    end
+
+    -- Update extmark
     vim.api.nvim_buf_set_extmark(buf_id, H.ns_id.nodes, row, col, opts)
   end
 
@@ -1959,13 +1981,6 @@ H.extmark_set_text = function(buf_id, ext_id, side, text)
   vim.api.nvim_buf_set_text(buf_id, row, col, end_row, end_col, text)
 end
 
-H.extmark_set_cursor = function(buf_id, ext_id, side)
-  H.ensure_cur_buf(buf_id)
-  local row, col, end_row, end_col = H.extmark_get_range(buf_id, ext_id)
-  local pos = side == 'left' and { row + 1, col } or { end_row + 1, end_col }
-  H.set_cursor(pos)
-end
-
 -- Indent ---------------------------------------------------------------------
 H.get_indent = function(lnum)
   local line, comment_indent = vim.fn.getline(lnum or '.'), ''
@@ -2061,36 +2076,22 @@ H.set_cursor = function(pos)
   -- but will still "clear and restore" text leading to squashing of extmarks.
   H.hide_completion()
 
-  -- Make possible positioning cursor after line end
-  if vim.fn.mode() ~= 'i' then
-    -- Cache only once (matters if there are several consecutive `set_cursor`)
-    H.cache.virtualedit = H.cache.virtualedit or vim.wo.virtualedit
-    vim.wo.virtualedit = 'onemore'
-    -- NOTE: Assume any cursor change will (eventually) end in Insert mode
-    H.call_in_insert_mode(vim.schedule_wrap(function()
-      -- Restore only once as late as possible (with `schedule_wrap()`)
-      vim.wo.virtualedit = H.cache.virtualedit or vim.wo.virtualedit
-      H.cache.virtualedit = nil
-    end))
-  end
-
+  -- NOTE: This won't put cursor past enf of line (for cursor in Insert mode to
+  -- append text to the line). Ensure that Insert mode is active prior.
   vim.api.nvim_win_set_cursor(0, pos)
-end
-
-H.ensure_insert_mode = function()
-  if vim.fn.mode() == 'i' then return end
-  -- This is seemingly the only "good" way to ensure Insert mode.
-  -- Mostly because it works with `vim.snippet.expand()` as its implementation
-  -- uses `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
-  -- NOTE: mode changing is not immediate, only on some next tick.
-  vim.api.nvim_feedkeys('\28\14i', 'n', false)
 end
 
 H.call_in_insert_mode = function(f)
   if vim.fn.mode() == 'i' then return f() end
+
+  -- This is seemingly the only "good" way to ensure Insert mode.
+  -- Mostly because it works with `vim.snippet.expand()` as its implementation
+  -- uses `vim.api.nvim_feedkeys(k, 'n', true)` to select text in Select mode.
+  vim.api.nvim_feedkeys('\28\14i', 'n', false)
+
+  -- NOTE: mode changing is not immediate, only on some next tick. So schedule
+  -- to execute `f` precisely when Insert mode is active.
   local cb = function() f() end
-  -- NOTE: Assume that change to Insert mode is already asked, but as it is not
-  -- immediate, wait until it actually happens
   vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:i*', once = true, callback = cb, desc = 'Call in Insert' })
 end
 
@@ -2101,9 +2102,8 @@ H.delete_region = function(region)
 end
 
 H.show_completion = function(items, startcol)
-  if items == nil then return end
-  startcol = startcol or vim.fn.col('.')
-  H.call_in_insert_mode(function() vim.fn.complete(startcol, items) end)
+  if items == nil or #items == 0 or vim.fn.mode() ~= 'i' then return end
+  vim.fn.complete(startcol or vim.fn.col('.'), items)
 end
 
 H.hide_completion = function()
