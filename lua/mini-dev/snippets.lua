@@ -12,14 +12,8 @@
 --
 -- Docs:
 -- - Manage:
---     - Snippets are prepared/normalized on every |MiniSnippets.expand()| call,
---       which allows dynamically change them in the same session in any buffer.
---       Instead, |MiniSnippets.gen_loader| entries and |MiniSnippets.read_file()|
---       cache their output so as to not perform reading from disk more than once.
---       See |MiniSnippets.default_prepare()| for an example of additional caching.
 --
 -- - Expand:
---     - Find a shorter name for "snippet with <region> field".
 --     - Calling `expand.insert`:
 --         - Ensures Insert mode.
 --         - Places cursor at the start of removed region (if there is one).
@@ -84,18 +78,6 @@
 -- - Expand:
 --
 -- - `default_insert`:
---     - Take special care for how session extmarks track snippet's range:
---         - What happens when initial expansion is done at the first column
---           and/or at the first row while text is later typed at the snippet's
---           first column. Is it reasonable to expect that session is expanding
---           or moving to the right (even if first node is plain text)?
---         - Same scenario but for the right side and expanding at last column.
---         - Should expand when typing text strictly inside snippet range.
---     - Placeholders of tabstops and variables should be independent / "local
---       only to node". This resolves cyclic cases like `${1:$2} ${2:$1}` in
---       a single pass. This still should update the "dependent" nodes during
---       typing: start as ` `; become `x x` after typing `x` on either tabstop,
---       allow becomeing `x y` or `y x` after the jump and typing.
 --
 -- Outer:
 -- - Make PR to 'danymat/neogen'.
@@ -111,32 +93,49 @@
 --- snippet's (configurable) prefix and expand it into a snippet session.
 ---
 --- The template usually contains both pre-defined text and places (called
---- "tabstops") for user to interactively add text during snippet session.
+--- "tabstops") for user to interactively change/add text.
 ---
 --- This module supports (only) snippet syntax defined in LSP specification.
 --- See |MiniSnippets-syntax-specification|.
 ---
 --- Features:
---- - Manage snippet collection with a flexible system of built-in loaders.
----   See |MiniSnippets.gen_loader|.
+--- - Manage snippet collection by adding it explicitly or with a flexible set of
+---   performant built-in loaders. See |MiniSnippets.gen_loader|.
+---
+--- - Configured snippets are efficiently prepared before every expand based on
+---   current local context. See |MiniSnippets.default_prepare()|.
 ---
 --- - Match which snippet to insert based on the currently typed text.
----   Supports matching depending on tree-sitter local languages.
+---   Supports both exact and fuzzy matching. See |MiniSnippets.default_match()|.
 ---
---- - Expand, navigate, and edit snippet in a configurable manner:
+--- - Select from several matched snippets via `vim.ui.select()`.
+---   See |MiniSnippets.default_select()|.
+---
+--- - Insert and navigate/edit during snippet session in a configurable manner:
+---     - Dynamic tabstop state visualization (current/visited/unvisited, etc.)
+---     - Inline visualization of empty tabstops (requires Neovim>=0.10).
 ---     - Works inside comments by preserving comment leader on new lines.
----     - Allows nested sessions (expand another snippet when there is one active).
+---     - Supports nested sessions (expand snippet while there is an one active).
+---     - Easy to reason rules for when session automatically stops.
+---     - Configurable mappings for jumping and stopping.
+---   See |MiniSnippets.default_insert()|.
 ---
---- See |MiniSnippets-examples| for common configuration examples.
+--- - Exported function to parse snippet body into easy-to-reason data structure.
+---   See |MiniSnippets.parse()|.
 ---
 --- Notes:
---- - It does not load any snippets by default. Add to `config.snippets` to
----   have snippets to choose from.
+--- - It does not set up any snippets by default. Explicitly populate
+---   `config.snippets` to have snippets to match from.
 --- - It does not come with a built-in snippet collection. It is expected from
 ---   users to add their own snippets, manually or with a dedicated plugin(s).
 --- - It does not support variable/tabstop transformations in default snippet
 ---   session. This requires ECMAScript Regular Expression parser which can not
 ---   be implemented concisely.
+---
+--- Sources with more details:
+--- - |MiniSnippets-overview|
+--- - |MiniSnippets-examples|
+--- - |MiniSnippets-glossary|
 ---
 --- # Setup ~
 ---
@@ -153,18 +152,32 @@
 --- # Comparisons ~
 ---
 --- - 'L3MON4D3/LuaSnip':
----     - ...
----
---- - 'dcampos/nvim-snippy':
----     - ???
+---     - Both contain functionality to load snippets from file system.
+---       This module provides several common loader generators while
+---       'LuaSnip' contains a more elaborate loading options.
+---       Also both require explicit opt-in for which snippets to load.
+---     - Both support LSP snippet format. 'LuaSnip' also provides own more
+---       elaborate snippet format which is out of scope for this module.
+---     - Both contain snippet expand functionality which differs in some aspects:
+---         - 'LuaSnip' has an elaborate dynamic tabstop visualization config.
+---           This module provides a handful of dedicated highlight groups.
+---         - This module provides configurable visualization of empty tabstops.
+---         - 'LusSnip' implements nested sessions by essentially merging them
+---           into one. This module treats each nested session separately (to not
+---           visually overload) while storing them in stack (first in last out).
+---         - 'LuaSnip' uses |Select-mode| to power replacing current tabstop,
+---           while this module always stays in |Insert-mode|. This allows an easier
+---           mapping understanding and more targeted highlighting.
 ---
 --- - Built-in |vim.snippet| (on Neovim>=0.10):
----     - Both contain expand functionality based on LSP snippet format.
 ---     - Does not contain functionality to load or match snippets (by design),
 ---       while this module does.
+---     - Both contain expand functionality based on LSP snippet format.
+---       Differences in how snippet sessions are handled are similar to
+---       comparison with 'LuaSnip'.
 ---
 --- - 'rafamadriz/friendly-snippets':
----     - A snippet collection plugin without functionality to manage them.
+---     - A snippet collection plugin without features to manage or expand them.
 ---       This module is designed with 'friendly-snippets' compatibility in mind.
 ---
 --- # Highlight groups ~
@@ -185,30 +198,65 @@
 --- for disabling module's functionality is left to user. See
 --- |mini.nvim-disabling-recipes| for common recipes.
 
+--- `POSITION`        Table representing position in a buffer. Fields:
+---                 - <line> `(number)` - line number (starts at 1).
+---                 - <col> `(number)` - column number (starts at 1).
 ---
----@tag MiniSnippets-overview
-
---- POSITION Table representing position in a buffer. Fields:
----          - <line> `(number)` - line number (starts at 1).
----          - <col> `(number)` - column number (starts at 1).
---- REGION   Table representing region in a buffer. Fields: <from> and <to> for
----          inclusive start and end POSITIONs.
+--- `REGION`          Table representing region in a buffer.
+---                   Fields: <from> and <to> for inclusive start/end POSITIONs.
+---
+--- `SNIPPET`         Data about template to insert. Can contain fields:
+---                 - <prefix> - string used to match against current text.
+---                 - <body> - content of a snippet with appropriate syntax.
+---                 - <desc> - description of a syntax in human readable form.
+---                 Can also be used to mean snippet body if distinction is clear.
+---
+--- `SNIPPET SESSION` Interactive state for user to adjust inserted snippet.
+---
+--- `MATCHED SNIPPET` SNIPPET which contains <region> field with REGION that
+---                 matched it. Usually region needs to be removed.
+---
+--- `SNIPPET NODE`    Unit of parsed SNIPPET body. See |MiniSnippets.parse()|.
+---
+--- `TABSTOP`         Dedicated places in SNIPPET body for users to interactively
+---                 adjust. Specified with `$` followed by digit(s).
+---
+--- `LINKED TABSTOPS` Different nodes assigned the same tabstop.
+---                 Are updated in sync when user types.
+---
+--- `REFERENCE NODE`  First (from left to right) node of linked tabstops.
+---                 Used to determine synced text and cursor placement after jump.
+---
+--- `EXPAND`          Action to start snippet session based on currently typed text.
+---                 Always done in current buffer at cursor. Executed steps:
+---                 - `PREPARE` - resolve raw config snippets at context.
+---                 - `MATCH` - match resolved snippets at cursor position.
+---                 - `SELECT` - possibly choose among matched snippets.
+---                 - `INSERT` - insert select snippet and start snippet session.
 ---@tag MiniSnippets-glossary
 
---- # Snippet syntax specification ~
----@tag MiniSnippets-syntax-specification
-
---- # Snippet file specifications ~
+--- # Overview ~
 ---
---- Supported files:
+--- ## Snippet expansion lifecycle ~
+---
+--- ## Snippet management ~
+---
+--- TODO
+---
+---                                                *MiniSnippets-file-specification*
+--- General idea of supported files is to have at least out of the box experience
+--- with common snippet collections. Namely "rafamadriz/friendly-snippets" and
+--- VSCode language plugins. The following files are supported:
+---
 --- - Extensions:
 ---     - Read/decoded as JSON object (|vim.json.decode()|): `*.json`, `*.code-snippets`
 ---     - Executed as Lua file (|dofile()|) and uses returned value: `*.lua`
+---
 --- - Content:
 ---     - Dict-like: object in JSON; returned table in Lua; no order guarantees.
 ---     - Array-like: array in JSON; returned array table in Lua; preserves order.
 ---
---- Example of file content:
+--- Example of file content with a single snippet:
 --- - Lua dict-like:   `return { name = { prefix = 'l', body = 'local $1 = $0' } }`
 --- - Lua array-like:  `return { { prefix = 'l', body = 'local $1 = $0' } }`
 --- - JSON dict-like:  `{ "name": { "prefix": "l", "body": "local $1 = $0" } }`
@@ -222,7 +270,10 @@
 ---   setup. Otherwise use `*.lua` files with array-like content.
 ---
 --- For supported snippet syntax see |MiniSnippets-syntax-specification|.
----@tag MiniSnippets-file-specification
+---                                              *MiniSnippets-syntax-specification*
+--- ## Snippet syntax specification ~
+---
+---@tag MiniSnippets-overview
 
 --- # Events ~
 ---
@@ -252,7 +303,7 @@
 ---   different dedicated files and use |MiniSnippets.gen_loader.from_lang()|.
 --- - How to adjust `from_lang()` language patterns.
 ---
---- # <Tab> / <S-Tab> mappings ~
+--- # "Supertab"-like <Tab> / <S-Tab> mappings ~
 ---
 --- This module intentionally by default uses separate keys to expand and jump as
 --- it enables cleaner use of nested sessions. Here is an example of setting up
@@ -289,7 +340,7 @@
 ---   local au_opts = { pattern = 'MiniSnippetsSessionJump', callback = fin_stop }
 ---   vim.api.nvim_create_autocmd('User', au_opts)
 --- <
---- # Using |vim.snippet.expand()| to insert a snippet ~
+--- # Using Neovim's built-ins to insert snippet ~
 ---
 --- Define custom `expand.insert` in |MiniSnippets.config| and mappings: >lua
 ---
@@ -360,7 +411,7 @@ end
 ---
 --- Snippet data is a table with the following fields:
 ---
---- - <prefix> `(string|table|nil)` - string used to match against user typed base.
+--- - <prefix> `(string|table|nil)` - string used to match against current text.
 ---    If array, all strings are used as separate prefixes.
 ---    If absent / `nil`, inferred as empty string.
 ---
@@ -370,25 +421,33 @@ end
 ---
 --- - <desc> `(string|table|nil)` - description of snippet. Can be used to display
 ---   snippets in a more human readable form. Array is concatenated with "\n".
----   If absent / `nil`, <prefix> or <body> is used.
----   For compatibility with popular snippet databases, field `<description>`
----   is used as a fallback.
+---   If absent / `nil`, <body> is used. For compatibility with popular snippet
+---   databases, field `<description>` is tried as a first fallback.
 ---
 --- Notes:
---- - All snippets in `config.snippets` are used in buffer after normalization.
+--- - Rules and fallbacks are described if |MiniSnippets.default_prepare()| is
+---   used for snippet preparation. It can be adjusted in `config.expand.prepare`.
+--- - All snippets in `config.snippets` are used after preparation.
 ---   Scoping via <scope> field is not supported. See |MiniSnippets-examples|.
 ---
---- Order in array is important: later ones will override earlier (similar to
---- how |ftplugin| behaves).
+--- Order in array is important: later ones will override earlier ones with the
+--- same prefix (similar to how |ftplugin| behaves).
 ---
 --- # Mappings ~
+---
+--- - `default_insert()` mappings are present as long as there is active session(s).
+---   They can be udpated interactively and/or set in buffer-local config.
 ---
 --- # Expand ~
 ---
 --- `config.expand` defines expand steps (either after pressing `mappings.expand`
 --- or manually via |MiniSnippets.expand()|)
 ---
---- `expand.prepare`
+--- `expand.prepare`:
+--- - Snippets are prepared on every |MiniSnippets.expand()| call, which allows
+---   dynamically change them in the same session in any buffer.
+---   Instead, |MiniSnippets.gen_loader| entries and |MiniSnippets.read_file()|
+---   cache their output so as to not perform reading from disk more than once.
 ---
 --- `expand.match`
 --- Should add `region` field in order to have matched characters removed
@@ -450,7 +509,7 @@ MiniSnippets.config = {
     prepare = nil,
     -- Match resolved snippets at cursor position
     match = nil,
-    -- Choose among matched snippets
+    -- Possibly choose among matched snippets
     select = nil,
     -- Insert selected snippet
     insert = nil,
@@ -754,6 +813,7 @@ end
 --- Default match
 ---
 --- Match snippets based on the line before cursor.
+---
 --- Tries two matching approaches consecutively:
 --- - Find exact snippet prefix (if present and non-empty) to the left of cursor
 ---   which is also preceeded by a byte matching `pattern_exact_boundary`.
@@ -774,7 +834,8 @@ end
 ---     cursor for fuzzy matching. Supply empty string skip this step.
 ---     Default: `'%S*'` (as many as possible non-whitespace; allow empty string).
 ---
----@return table Array of snippets with <region> field. Ordered from best to worst match.
+---@return table Array of matched snippets (i.e. with <region> field).
+---   Ordered from best to worst match.
 ---
 ---@usage >lua
 ---   -- Accept any exact match
@@ -881,6 +942,13 @@ end
 ---     placeholder from all nodes with same placeholder and makes them linked.
 ---     All linked tabstops are forced to have the same text as reference node.
 ---   - Cursor is placed in reference node.
+--- - Variables are as from VSCode with fallback to environment variables.
+---   Tweak with custom `config.expand.insert()` which sets custom `opts.lookup`
+---   in |MiniSnippets.default_insert()|.
+--- - Typing outside of suggested snippet session lifecycle is allowed and mostly
+---   behaves as expected (by moving and adjusting tabstop visualization), but it
+---   is not the goal to support this fully.
+---
 ---@usage >lua
 --- <
 MiniSnippets.default_insert = function(snippet, opts)
@@ -902,8 +970,10 @@ end
 --- Work with snippet session from |MiniSnippets.default_insert()|
 MiniSnippets.session = {}
 
+--- TODO
 MiniSnippets.session.get = function(all) return vim.deepcopy(all and H.sessions or H.get_active_session()) end
 
+--- TODO
 MiniSnippets.session.jump = function(direction)
   if not (direction == 'prev' or direction == 'next') then H.error('`direction` should be one of "prev", "next"') end
   H.call_in_insert_mode(function() H.session_jump(H.get_active_session(), direction) end)
@@ -911,8 +981,8 @@ end
 
 --- Stop active session
 ---
---- To ensure that all nested sessions are stopped, use this: >lua
----
+---@usage >lua
+---   -- Ensure that all nested sessions are stopped
 ---   while MiniSnippets.session.get() do
 ---     MiniSnippets.session.stop()
 ---   end
@@ -960,9 +1030,6 @@ end
 ---     - <text> `(string|nil)` - variable value.
 ---     - <placeholder> `(table|nil)` - array of nodes to be used as placeholder.
 ---     - <transform> `(table|nil)` - array of transformation string parts.
----
----@usage -- TODO
----@private
 MiniSnippets.parse = function(snippet_body, opts)
   if H.is_array_of(snippet_body, H.is_string) then snippet_body = table.concat(snippet_body, '\n') end
   if type(snippet_body) ~= 'string' then H.error('Snippet body should be string or array of strings') end

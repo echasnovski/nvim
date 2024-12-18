@@ -1,196 +1,23 @@
 {
-  "text_1": {
-    "prefix": "te_1",
-    "body": "Hello world",
-    "description": "Only single line text"
+  "demo": {
+    "prefix": "demo",
+    "body": "Tabstop #1: $1\nTabstop #2: ${2:aaa}\nTabstop #1: ${1:bbb}\nTabstop #2: ${2:ccc}\nFinal: $0",
+    "description": "Multiple connected tabstops (should work when inputting multiline text)"
   },
-  "text_2": {
-    "prefix": "te_2",
-    "body": "Hello\n\tworld\n  another\n",
-    "description": "Only multiline text"
+  "viz_test": {
+    "prefix": "viz_1",
+    "body": "T1=${1:aaa}\nT2=${2:bbb}\nT3=${3:ccc}\nT4=${4:ddd}\nT2=$2",
+    "description": "Visual test"
   },
-
-  "var_1": {
-    "prefix": "v_1",
-    "body": "$RANDOM",
-    "description": "Variable with value"
-  },
-  "var_2": {
-    "prefix": "v_2",
-    "body": "Hello ${VIMRUNTIME:placeholder} world",
-    "description": "Variable with value and placeholder"
-  },
-  "var_3": {
-    "prefix": "v_3",
-    "body": "Hello $NOVALUE world",
-    "description": "Variable with no value"
-  },
-  "var_4": {
-    "prefix": "v_4",
-    "body": "Hello ${NOVALUE:placeholder} world",
-    "description": "Variable with no value and placeholder"
-  },
-  "var_5": {
-    "prefix": "v_5",
-    "body": "Hello ${NOVALUE:${OTHERNOVALUE:placeholder}} world",
-    "description": "Variable with no value and similar nested placeholder"
+  "lua for": {
+    "prefix": "luafor",
+    "body": "for $1, $2 in ipairs(${3:table})\n\tlocal a = 1\nend",
+    "description": "Lua for"
   },
 
-  "tabstop_1": {
-    "prefix": "t_1",
-    "body": "$1",
-    "description": "Single empty tabstop"
-  },
-  "tabstop_2": {
-    "prefix": "t_2",
-    "body": "${1:placholder}",
-    "description": "Single tabstop with placeholder"
-  },
-  "tabstop_2_1": {
-    "prefix": "t_2_1",
-    "body": "Hello ${1:multi\n\tline\nplacholder} world",
-    "description": "Tabstop with multiline placeholder"
-  },
-  "tabstop_3": {
-    "prefix": "t_3",
-    "body": "Hello $1 world$0",
-    "description": "Empty tabstop and final tabstop"
-  },
-  "tabstop_3_1": {
-    "prefix": "t_3_1",
-    "body": "Hello $0 world",
-    "description": "Single final tabstop in the middle"
-  },
-  "tabstop_4": {
-    "prefix": "t_4",
-    "body": "Hello ${1:placeholder} world${0:final placeholder}",
-    "description": "Tabstop and final tabstop with placeholders"
-  },
-  "tabstop_4_1": {
-    "prefix": "t_4_1",
-    "body": "Hello ${0:final placeholder}",
-    "description": "Single final tabstop with placeholder (should start session)"
-  },
   "tabstop_5": {
     "prefix": "t_5",
     "body": "Tabstop #1: $1\nTabstop #2: ${2:aaa}\nTabstop #1: ${1:bbb}\nTabstop #2: ${2:ccc}\nFinal: $0",
     "description": "Multiple connected tabstops (should work when inputting multiline text)"
-  },
-  "tabstop_6": {
-    "prefix": "t_6",
-    "body": "aa$1bb$2cc${3:XX}dd$4ee$5",
-    "description": "Many tabstops"
-  },
-  "tabstop_6_1": {
-    "prefix": "t_6_1",
-    "body": "$0aa$5bb$2cc${4:XX}dd$1ee$3",
-    "description": "Many tabstops not in natural order"
-  },
-  "tabstop_7": {
-    "prefix": "t_7",
-    "body": "multi$1line\n\ttext\n  with indents\n",
-    "description": "Many tabstops not in natural order"
-  },
-  "tabstop_8": {
-    "prefix": "t_8",
-    "body": "Variable $TM_FILENAME and ${1:tabstop}",
-    "description": "Variable and tabstop"
-  },
-  "tabstop_9": {
-    "prefix": "t_9",
-    "body": "T1=${1:<T2=${2:<T3=${3:<T4=$4>}>}>}",
-    "description": "Nested tabstops which only present inside placeholder; should highlight properly"
-  },
-  "tabstop_9_1": {
-    "prefix": "t_9_1",
-    "body": "T1=${1:<T2=${2:<T3=$3>}>} also T2=$2",
-    "description": "Nested tabstops which also present outside placeholders"
-  },
-  "tabstop_9_2": {
-    "prefix": "t_9_2",
-    "body": "T1=${1:<T2=${2:<T0=$0>}>}",
-    "description": "Final tabstop is only nested"
-  },
-  "tabstop_9_3": {
-    "prefix": "t_9_3",
-    "body": "T1=${1:<T2=${2:<T0=$0>}>} also T0=$0",
-    "description": "Final tabstop is nested and present outside"
-  },
-  "tabstop_10": {
-    "prefix": "t_10",
-    "body": "$1$2$0",
-    "description": "Directly adjacent tabstops"
-  },
-  "tabstop_10_1": {
-    "prefix": "t_10_1",
-    "body": "${1:hello}$0",
-    "description": "Directly adjacent tabstops #2"
-  },
-  "tabstop_10_2": {
-    "prefix": "t_10_2",
-    "body": "$2${1:hello}$0",
-    "description": "Directly adjacent tabstops #3"
-  },
-
-  "choice_1": {
-    "prefix": "c_1",
-    "body": "${1|aa,bb|}",
-    "description": "Single tabstop with choices"
-  },
-  "choice_2": {
-    "prefix": "c_2",
-    "body": "${1|aa,bb|} ${2|dd,ee|}",
-    "description": "Many tabstops with choices"
-  },
-  "choice_3": {
-    "prefix": "c_3",
-    "body": "${1|aa,bb|}  $1",
-    "description": "Linked tabstops with one with choices"
-  },
-  "choice_4": {
-    "prefix": "c_4",
-    "body": "${1|aa,bb|}  ${1|dd,ee|}",
-    "description": "Linked tabstops with different choices"
-  },
-
-  "edge_1": {
-    "prefix": "e_1",
-    "body": "$1$2$1$2$1",
-    "description": "Squeezed repeated tabstops"
-  },
-  "edge_2": {
-    "prefix": "e_2",
-    "body": "${1||}",
-    "description": "Tabstop with no choices"
-  },
-  "edge_3": {
-    "prefix": "e_3",
-    "body": "${1|a,a|}",
-    "description": "Tabstop with repeated choices"
-  },
-  "edge_4": {
-    "prefix": "e_4",
-    "body": "${1|,|}",
-    "description": "Tabstop with repeated empty choices"
-  },
-  "edge_5": {
-    "prefix": "e_5",
-    "body": "${1|aa,bb|}${1|uu,vv|}",
-    "description": "Squashed tabstops with choices"
-  },
-  "edge_5_1": {
-    "prefix": "e_5_1",
-    "body": "$1$1",
-    "description": "Squashed tabstops"
-  },
-  "edge_6": {
-    "prefix": "e_6",
-    "body": "T1=${1:<T1=$1>}",
-    "description": "Tabstop nested inside same tabstop"
-  },
-  "edge_7": {
-    "prefix": "e_7",
-    "body": "T1=${1:<T2=$2>} and T2=${2:<T1=$1>}",
-    "description": "Intertwined nested tabstops"
   }
 }
