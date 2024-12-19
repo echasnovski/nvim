@@ -872,6 +872,21 @@ T['gen_loader']['from_file()']['works'] = function()
   expect.match(child.lua_get('_G.notify_log')[1][1], 'There were problems')
 end
 
+T['gen_loader']['from_file()']['does not cache if there were reading problems'] = function()
+  local temp_file = child.lua([[
+    local temp_file = vim.fn.tempname() .. '.lua'
+    _G.loader = MiniSnippets.gen_loader.from_file(temp_file)
+    return temp_file
+  ]])
+  MiniTest.finally(function() child.fn.delete(temp_file) end)
+
+  child.fn.writefile({ 'return 1' }, temp_file)
+  eq(child.lua_get('_G.loader()'), {})
+
+  child.fn.writefile({ 'return { { prefix = "a", body = "A=$1" } }' }, temp_file)
+  eq(child.lua_get('_G.loader()'), { { prefix = 'a', body = 'A=$1' } })
+end
+
 T['gen_loader']['from_file()']['forwards `opts` to `read_file()`'] = function()
   child.fn.chdir(test_dir_absolute)
   child.lua([[
@@ -993,7 +1008,7 @@ T['read_file()']['warns about problems during reading'] = function()
   validate('bad-file-not-dict-object.json', 'not a dictionary or array')
 end
 
-T['read_file()']['should not cache if there were reading problems'] = function()
+T['read_file()']['does not cache if there were reading problems'] = function()
   local temp_file = child.fn.tempname() .. '.lua'
   MiniTest.finally(function() child.fn.delete(temp_file) end)
 
@@ -4534,6 +4549,23 @@ T['Examples']['stop session after jump to final tabstop'] = function()
   validate_active_session()
   jump('next')
   validate_no_active_session()
+end
+
+T['Examples']['select from all'] = function()
+  child.lua([[
+    local rhs = function() MiniSnippets.expand({ match = false }) end
+    vim.keymap.set('i', '<C-g><C-j>', rhs, { desc = 'Expand all' })
+
+    MiniSnippets.config.snippets = {
+      { prefix = 'aa', body = 'AA=$1' },
+      { prefix = 'ab', body = 'AB=$1' },
+      { prefix = 'xx', body = 'XX=$1' },
+    }
+  ]])
+
+  mock_select(3)
+  type_keys('i', 'a', '<C-g><C-j>')
+  validate_state('i', { 'aXX=' }, { 1, 4 })
 end
 
 T['Examples']['<Tab>/<S-Tab> mappings'] = function()
