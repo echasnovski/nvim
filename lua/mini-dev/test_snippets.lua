@@ -4536,6 +4536,23 @@ T['Examples']['stop session after jump to final tabstop'] = function()
   validate_no_active_session()
 end
 
+T['Examples']['select from all'] = function()
+  child.lua([[
+    local rhs = function() MiniSnippets.expand({ match = false }) end
+    vim.keymap.set('i', '<C-g><C-j>', rhs, { desc = 'Expand all' })
+
+    MiniSnippets.config.snippets = {
+      { prefix = 'aa', body = 'AA=$1' },
+      { prefix = 'ab', body = 'AB=$1' },
+      { prefix = 'xx', body = 'XX=$1' },
+    }
+  ]])
+
+  mock_select(3)
+  type_keys('i', 'a', '<C-g><C-j>')
+  validate_state('i', { 'aXX=' }, { 1, 4 })
+end
+
 T['Examples']['<Tab>/<S-Tab> mappings'] = function()
   child.setup()
   load_module({

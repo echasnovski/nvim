@@ -14,63 +14,12 @@
 -- - Manage:
 --
 -- - Expand:
---     - Calling `expand.insert`:
---         - Ensures Insert mode.
---         - Places cursor at the start of removed region (if there is one).
---           Also removes `region` field as it is outdated an no longer needed.
---     - Explore currently available snippets by expanding at line start.
---       Assumes matching is done with |MiniSnippets.default_match()|.
---       To always be able to interactively select snippet to insert, make
---       a |MiniSnippets.expand()| mapping with `{ match = false }`.
 --
 -- - Syntax:
---     - Escape `}` inside `if` of `${1:?if:else}`.
---     - Variable `TM_SELECTED_TEXT` is resolved as contents of |quote_quote|
---       register. It assumes that text is put there prior to expanding:
---       visually select and |c|; yank, etc.
 --
 -- - `default_insert`:
---     - Nesting creates stack of independent sessions. This is better than
---       merging sessions into one for these reasons:
---         - Does not overload with highlighting: expanding "child" session in
---           current node will lead to current node's `MiniSnippetsVisited`
---           span across the whole "child" snippet session range.
---         - Allows nested sessions in different buffers.
---         - Doesn't need a complex logic of inserting one session into another
---           session. It is complex, as it requires careful node splicing, more
---           complex data structures for nodes (having "text-or-placeholder"
---           logic doesn't really apply here, as it will introduce problems
---           when trying to sync tabstops when "child" session is expanded
---           inside current node of "parent" session).
---       Instead realy on the following logic of independent nested sessions:
---         - Resuming session should sync its current tabstop. This leads to
---           the experience similar to editing in blockwise Visual mode: type
---           text in current session which will then be synced to relevant
---           nodes of "parent" session once "child" session is finished.
---         - Resuming session shouldn't change neither cursor nor buffer.
---           Most importantly this allows typing when $0 is current without
---           disrupting the typing flow.
---     - Choice nodes work better with 'completeopt=menuone,noselect' or
---       'copleteopt=menuone,noselect,fuzzy'.
---     - Modifying text outside of tabstop navigation is possible. All tabstop
---       ranges should adjust (as the use |extmarks|) but it is up to the user
---       to make sure that they are valid. In general anything but deleting
---       tabstop range should be OK.
---     - Respects indent (at cursor) and comments (from 'commentstring' and
---       'comments').
 --
 -- - Misc:
---     - Plugins which want to start 'mini.snippets' session given a snippet
---       body (similar to |vim.snippet.expand()|) are recommended to use the
---       following approach: >lua
---         -- Check `MiniSnippets` is set up by the user
---         if MiniSnippets ~= nil then
---           -- User configured `insert` method and back to default
---           local insert = MiniSnippets.config.expand.insert
---             or MiniSnippets.default_insert
---           insert({ body = snippet })
---         end
---       <
 --
 -- Tests:
 -- - Management:
@@ -93,17 +42,19 @@
 --- snippet's (configurable) prefix and expand it into a snippet session.
 ---
 --- The template usually contains both pre-defined text and places (called
---- "tabstops") for user to interactively change/add text.
+--- "tabstops") for user to interactively change/add text during snippet session.
 ---
---- This module supports (only) snippet syntax defined in LSP specification.
---- See |MiniSnippets-syntax-specification|.
+--- This module supports (only) snippet syntax defined in LSP specification (with
+--- small deviations). See |MiniSnippets-syntax-specification|.
 ---
 --- Features:
 --- - Manage snippet collection by adding it explicitly or with a flexible set of
 ---   performant built-in loaders. See |MiniSnippets.gen_loader|.
 ---
---- - Configured snippets are efficiently prepared before every expand based on
----   current local context. See |MiniSnippets.default_prepare()|.
+--- - Configured snippets are efficiently resolved before every expand based on
+---   current local context. This, for example, allows using different snippets
+---   in different local tree-sitter languages (like in markdown code blocks).
+---   See |MiniSnippets.default_prepare()|.
 ---
 --- - Match which snippet to insert based on the currently typed text.
 ---   Supports both exact and fuzzy matching. See |MiniSnippets.default_match()|.
@@ -111,20 +62,22 @@
 --- - Select from several matched snippets via `vim.ui.select()`.
 ---   See |MiniSnippets.default_select()|.
 ---
---- - Insert and navigate/edit during snippet session in a configurable manner:
+--- - Insert, jump, and edit during snippet session in a configurable manner:
+---     - Configurable mappings for jumping and stopping.
+---     - Jumping wraps around the tabstops for easier navigation.
+---     - Easy to reason rules for when session automatically stops.
+---     - Text synchronization of linked tabstops.
 ---     - Dynamic tabstop state visualization (current/visited/unvisited, etc.)
 ---     - Inline visualization of empty tabstops (requires Neovim>=0.10).
 ---     - Works inside comments by preserving comment leader on new lines.
 ---     - Supports nested sessions (expand snippet while there is an one active).
----     - Easy to reason rules for when session automatically stops.
----     - Configurable mappings for jumping and stopping.
 ---   See |MiniSnippets.default_insert()|.
 ---
 --- - Exported function to parse snippet body into easy-to-reason data structure.
 ---   See |MiniSnippets.parse()|.
 ---
 --- Notes:
---- - It does not set up any snippets by default. Explicitly populate
+--- - It does not set up any snippet collection by default. Explicitly populate
 ---   `config.snippets` to have snippets to match from.
 --- - It does not come with a built-in snippet collection. It is expected from
 ---   users to add their own snippets, manually or with a dedicated plugin(s).
@@ -153,8 +106,8 @@
 ---
 --- - 'L3MON4D3/LuaSnip':
 ---     - Both contain functionality to load snippets from file system.
----       This module provides several common loader generators while
----       'LuaSnip' contains a more elaborate loading options.
+---       This module provides several common loader generators while 'LuaSnip'
+---       contains a more elaborate loading setup.
 ---       Also both require explicit opt-in for which snippets to load.
 ---     - Both support LSP snippet format. 'LuaSnip' also provides own more
 ---       elaborate snippet format which is out of scope for this module.
@@ -166,7 +119,7 @@
 ---           into one. This module treats each nested session separately (to not
 ---           visually overload) while storing them in stack (first in last out).
 ---         - 'LuaSnip' uses |Select-mode| to power replacing current tabstop,
----           while this module always stays in |Insert-mode|. This allows an easier
+---           while this module always stays in |Insert-mode|. This enables easier
 ---           mapping understanding and more targeted highlighting.
 ---         - This module implements jumping which wraps after final tabstop
 ---           for more flexible navigation (enhanced with by a more flexible
@@ -207,7 +160,7 @@
 ---                 - <col> `(number)` - column number (starts at 1).
 ---
 --- `REGION`          Table representing region in a buffer.
----                   Fields: <from> and <to> for inclusive start/end POSITIONs.
+---                 Fields: <from> and <to> for inclusive start/end POSITIONs.
 ---
 --- `SNIPPET`         Data about template to insert. Can contain fields:
 ---                 - <prefix> - string used to match against current text.
@@ -223,10 +176,9 @@
 --- `SNIPPET NODE`    Unit of parsed SNIPPET body. See |MiniSnippets.parse()|.
 ---
 --- `TABSTOP`         Dedicated places in SNIPPET body for users to interactively
----                 adjust. Specified with `$` followed by digit(s).
+---                 adjust. Specified in snippet body with `$` followed by digit(s).
 ---
---- `LINKED TABSTOPS` Different nodes assigned the same tabstop.
----                 Are updated in sync when user types.
+--- `LINKED TABSTOPS` Different nodes assigned the same tabstop. Updated in sync.
 ---
 --- `REFERENCE NODE`  First (from left to right) node of linked tabstops.
 ---                 Used to determine synced text and cursor placement after jump.
@@ -282,6 +234,12 @@
 ---                                              *MiniSnippets-syntax-specification*
 --- ## Snippet syntax specification ~
 ---
+--- https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/#snippet_syntax
+---
+--- - Escape `}` inside `if` of `${1:?if:else}`.
+--- - Variable `TM_SELECTED_TEXT` is resolved as contents of |quote_quote|
+---   register. It assumes that text is put there prior to expanding:
+---   visually select and |c|; yank, etc.
 --- - Linked tabstops are allowed to have different placeholders. They will be
 ---   normalized into all but reference node have the same text.
 ---
@@ -305,35 +263,38 @@
 
 --- # Common snippets configuration ~
 ---
---- Example of common snippet management tasks (remove ones you don't need): >lua
----
----   -- Preparation for some examples. Remove if not needed.
----   local lang_patterns = { tex = {'latex.json'}, plaintex = {'latex.json'} }
+--- Example of snippet management setup that should cover most cases: >lua
 ---
 ---   -- Setup
 ---   local gen_loader = require('mini.snippets').gen_loader
 ---   require('mini.snippets').setup({
 ---     snippets = {
----       -- Load custom file with global snippets first (order matters)
----       gen_loader.from_file('~/.config/nvim/snippets/global.json')
----
----       -- Or add them here explicitly
----       { prefix='cdate', body='$CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE' },
+---       -- Load custom file with global snippets first
+---       gen_loader.from_file('~/.config/nvim/snippets/global.json'),
 ---
 ---       -- Load snippets based on current language by reading files from
 ---       -- "snippets/" subdirectories from 'runtimepath' directories.
----       -- Adjust which files are read with `lang_patterns` option.
----       gen_loader.from_lang({ lang_patterns = lang_patterns }),
----
----       -- Load project-local snippets with `gen_loader.from_file()`
----       -- and relative path
----       gen_loader.from_file('.vscode/project.code-snippets')
+---       gen_loader.from_lang(),
 ---     }
 ---   })
+--- <
+--- This setup allows having single file with custom "global" snippets (will be
+--- present in every buffer) and snippets which will be loaded based on the local
+--- language (see |MiniSnippets.gen_loader.from_lang()|).
 ---
---- Each mentioned file should follow |MiniSnippets-file-specification|.
---- One global file and `from_lang()` loaders should cover most use cases.
+--- Create language snippets manually (by creating and populating
+--- '$XDG_CONFIG_HOME/nvim/snippets/lua.json' file) or by installing dedicated
+--- snippet collection plugin (like 'rafamadriz/friendly-snippets').
 ---
+--- # Select from all available snippets in current context ~
+---
+--- With |MiniSnippets.default_match()|, expand snippets (`<C-j>` by default) at line
+--- start or after whitespace. To be able to always select from all current
+--- context snippets, make the similar to the following mapping: >lua
+---
+---   local rhs = function() MiniSnippets.expand({ match = false }) end
+---   vim.keymap.set('i', '<C-g><C-j>', rhs, { desc = 'Expand all' })
+--- <
 --- # "Supertab"-like <Tab> / <S-Tab> mappings ~
 ---
 --- This module intentionally by default uses separate keys to expand and jump as
@@ -391,6 +352,19 @@
 ---   vim.keymap.set({ 'i', 's' }, '<C-l>', jump_next)
 ---   vim.keymap.set({ 'i', 's' }, '<C-h>', jump_prev)
 --- <
+--- # Using 'mini.snippets' in other plugins ~
+---
+---  Plugins which want to start 'mini.snippets' session given a snippet body
+---  (similar to |vim.snippet.expand()|) are recommended to use the following: >lua
+---    -- Check `MiniSnippets` is set up by the user
+---    if MiniSnippets ~= nil then
+---      -- Use configured `insert` method and fall back to default
+---      local insert = MiniSnippets.config.expand.insert
+---        or MiniSnippets.default_insert
+---      -- Insert at cursor
+---      insert({ body = snippet })
+---    end
+---  <
 ---@tag MiniSnippets-examples
 
 ---@alias __minisnippets_cache_opt <cache> `(boolean)` - whether to use cached output. Default: `true`.
@@ -464,6 +438,34 @@ end
 --- Order in array is important: later ones will override earlier ones with the
 --- same prefix (similar to how |ftplugin| behaves).
 ---
+--- Illustration of `config.snippets` customization: >lua
+---
+---   local gen_loader = require('mini-dev.snippets').gen_loader
+---   require('mini-dev.snippets').setup({
+---     snippets = {
+---       -- Load custom file with global snippets first (order matters)
+---       gen_loader.from_file('~/.config/nvim/snippets/global.json'),
+---
+---       -- Or add them here explicitly
+---       { prefix='cdate', body='$CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE' },
+---
+---       -- Load snippets based on current language by reading files from
+---       -- "snippets/" subdirectories from 'runtimepath' directories.
+---       gen_loader.from_lang(),
+---
+---       -- Load project-local snippets with `gen_loader.from_file()`
+---       -- and relative path (file doesn't have to be present)
+---       gen_loader.from_file('.vscode/project.code-snippets'),
+---
+---       -- Custom loader for language-specific project-local snippets
+---       function(context)
+---         local rel_path = '.vscode/' .. context.lang .. '.code-snippets'
+---         if vim.fn.filereadable(rel_path) == 0 then return end
+---         return MiniSnippets.read_file(rel_path)
+---       end,
+---     }
+---   })
+--- <
 --- # Mappings ~
 ---
 --- - `default_insert()` mappings are present as long as there is active session(s).
@@ -484,15 +486,17 @@ end
 --- Should add `region` field in order to have matched characters removed
 --- before inserting snippet.
 --- Should sort matches in output from best to worst.
+--- Default: |MiniSnippets.default_match()|
 ---
 --- `expand.select`
 ---
 --- `expand.insert` is a function that inserts snippet at cursor position.
 --- If called inside |MiniSnippets.expand()| (which is a usual interactive case),
---- it doesn't have to remove matched region from `match` step: it will already be
---- removed. Insert mode will also be ensured.
+--- all it has to do is insert snippet at cursor position. Active Insert mode and
+--- removing matched snippet region is done beforehand.
+--- Default: |MiniSnippets.default_insert()|
 ---
---- Customization example: >lua
+--- Illustration of `config.expand` customization: >lua
 ---
 ---   -- Supply extra data as `prepare` context
 ---   local my_p = function(raw_snippets)
@@ -984,6 +988,34 @@ end
 ---   behaves as expected (by moving and adjusting tabstop visualization), but it
 ---   is not the goal to support this fully.
 ---
+--- - Nesting creates stack of independent sessions. This is better than
+---   merging sessions into one for these reasons:
+---     - Does not overload with highlighting: expanding "child" session in
+---       current node will lead to current node's `MiniSnippetsVisited`
+---       span across the whole "child" snippet session range.
+---     - Allows nested sessions in different buffers.
+---     - Doesn't need a complex logic of inserting one session into another
+---       session. It is complex, as it requires careful node splicing, more
+---       complex data structures for nodes (having "text-or-placeholder"
+---       logic doesn't really apply here, as it will introduce problems
+---       when trying to sync tabstops when "child" session is expanded
+---       inside current node of "parent" session).
+---   Instead realy on the following logic of independent nested sessions:
+---     - Resuming session should sync its current tabstop. This leads to
+---       the experience similar to editing in blockwise Visual mode: type
+---       text in current session which will then be synced to relevant
+---       nodes of "parent" session once "child" session is finished.
+---     - Resuming session shouldn't change neither cursor nor buffer.
+---       Most importantly this allows typing when $0 is current without
+---       disrupting the typing flow.
+--- - Choice nodes work better with 'completeopt=menuone,noselect' or
+---   'copleteopt=menuone,noselect,fuzzy'.
+--- - Modifying text outside of tabstop navigation is possible. All tabstop
+---   ranges should adjust (as the use |extmarks|) but it is up to the user
+---   to make sure that they are valid. In general anything but deleting
+---   tabstop range should be OK.
+--- - Respects indent (at cursor) and comments (from 'commentstring' and
+---   'comments').
 ---@usage >lua
 --- <
 MiniSnippets.default_insert = function(snippet, opts)
