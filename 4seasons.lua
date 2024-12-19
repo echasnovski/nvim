@@ -56,7 +56,7 @@ _G.make_demo_buf = function()
   end
 end
 
--- showcase_fg('#11262d', 85, 225, 'azure', 'medium')  -- miniwinter
--- showcase_fg('#1c2617', 85, 135, 'green', 'medium')  -- minispring
--- showcase_fg('#2b201a', 85, 45,  'yellow', 'medium') -- minisummer
--- showcase_fg('#262029', 85, 315, 'red', 'lowmedium') -- miniautumn
+-- showcase_fg('#11262d', 85, 270, 'azure', 'lowmedium') -- miniwinter
+-- showcase_fg('#1c2617', 85, 180, 'green', 'medium')    -- minispring
+-- showcase_fg('#27211e', 85, 90,  'yellow', 'medium')   -- minisummer
+-- showcase_fg('#262029', 85, 360, 'red', 'lowmedium')   -- miniautumn
