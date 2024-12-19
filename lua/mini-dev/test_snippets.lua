@@ -251,6 +251,15 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ expand = { insert = 1 } }, 'expand.insert', 'function')
 end
 
+T['setup()']['ensures colors'] = function()
+  child.cmd('colorscheme default')
+  expect.match(child.cmd_capture('hi MiniSnippetsCurrent'), 'gui=underdouble guisp=#')
+end
+
+T['setup()']['adds "code-snippets" filetype detection'] = function()
+  eq(child.lua_get('vim.filetype.match({ filename = "aaa.code-snippets" })'), 'json')
+end
+
 -- Test are high-level. Granular testing is done in tests for `default_*()`.
 T['expand()'] = new_set({
   hooks = {
@@ -1819,7 +1828,7 @@ T['default_insert()']['direct call removes placeholder'] = function()
 end
 
 T['default_insert()']['treats any digit sequence as unique tabstop'] = function()
-  default_insert({ body = '$1 $2 $01 $11 $02 $00' })
+  default_insert({ body = '$1 $2 $01 $11 $02 $00 $9' })
   validate_active_session()
   -- Should treat as separate tabstops and order as numbers and then as strings
   local ref_tabstops_partial = {
@@ -1827,8 +1836,9 @@ T['default_insert()']['treats any digit sequence as unique tabstop'] = function(
     ['01'] = { next = '1', prev = '00' },
     ['1'] = { next = '02', prev = '01' },
     ['02'] = { next = '2', prev = '1' },
-    ['2'] = { next = '11', prev = '02' },
-    ['11'] = { next = '0', prev = '2' },
+    ['2'] = { next = '9', prev = '02' },
+    ['9'] = { next = '11', prev = '2' },
+    ['11'] = { next = '0', prev = '9' },
     -- Exactly '0' is a final tabstop
     ['0'] = { next = '00', prev = '11' },
   }
@@ -2068,18 +2078,18 @@ end
 
 T['session.jump()']['jumps in proper order'] = function()
   default_insert({ body = 'T2=$2 T0=$0 T1=$1' })
+  validate_state('i', { 'T2= T0= T1=' }, { 1, 11 })
   validate_jumps({ { 'next', '2', { 1, 3 } }, { 'next', '0', { 1, 7 } }, { 'next', '1', { 1, 11 } } })
   validate_jumps({ { 'prev', '0', { 1, 7 } }, { 'prev', '2', { 1, 3 } }, { 'prev', '1', { 1, 11 } } })
 end
 
 T['session.jump()']['works with tabstop with transform'] = function()
-  -- Should ignore present transform and treat as regular tabstop
+  -- Should ignore present transform (for now) and treat as regular tabstop
   default_insert({ body = '$1 ${2/.*/upcase/} $0' })
   validate_jumps({ { 'next', '2', { 1, 1 } }, { 'next', '0', { 1, 2 } } })
 end
 
 T['session.jump()']['ignores variable nodes'] = function()
-  -- Should ignore present transform and treat as regular tabstop
   default_insert({ body = 'T1=$1 $AAA T2=$2 $BBB' }, { lookup = { AAA = 'aaa' } })
   validate_state('i', { 'T1= aaa T2= ' }, { 1, 3 })
   validate_jumps({ { 'next', '2', { 1, 11 } }, { 'next', '0', { 1, 12 } }, { 'next', '1', { 1, 3 } } })
@@ -2669,7 +2679,78 @@ T['parse()']['respects `opts.normalize`'] = function()
   validate('$0text',      { { tabstop = '0', placeholder = { { text = '' } } },     { text = 'text' } })
 
   -- - But only *exactly* '0' should be treated as final tabstop
-  validate('$00',         { { tabstop = '00', placeholder = { { text = '' } } }, final_tabstop })
+  validate('$00', { { tabstop = '00', placeholder = { { text = '' } } }, final_tabstop })
+
+  -- Should ensure same text in linked tabstops
+  validate('${1:aa}$1',           { { tabstop = '1', placeholder = { { text = 'aa' } } }, { tabstop = '1', placeholder = { { text = 'aa' } } }, final_tabstop })
+  validate('${1:aa}${1:bb}',      { { tabstop = '1', placeholder = { { text = 'aa' } } }, { tabstop = '1', placeholder = { { text = 'aa' } } }, final_tabstop })
+  validate('${1:aa}${1:$2}',      { { tabstop = '1', placeholder = { { text = 'aa' } } }, { tabstop = '1', placeholder = { { text = 'aa' } } }, final_tabstop })
+  validate('${1:aa}${1:${2:bb}}', { { tabstop = '1', placeholder = { { text = 'aa' } } }, { tabstop = '1', placeholder = { { text = 'aa' } } }, final_tabstop })
+  validate('$1${1:aa}',           { { tabstop = '1', placeholder = { { text = '' } } },   { tabstop = '1', placeholder = { { text = '' } } },   final_tabstop })
+  validate('${1}${1:aa}',         { { tabstop = '1', placeholder = { { text = '' } } },   { tabstop = '1', placeholder = { { text = '' } } },   final_tabstop })
+
+  validate('${1:aa}${1:$2}', { { tabstop = '1', placeholder = { { text = 'aa' } } }, { tabstop = '1', placeholder = { { text = 'aa' } } }, final_tabstop })
+  validate('${1:${2:aa}}$1', {
+    { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } } } },
+    { tabstop = '1', placeholder = { { text = 'aa' } } },
+    final_tabstop,
+  })
+  validate('${1:${2:aa}}${2:x$1x}', {
+    { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } } } },
+    { tabstop = '2', placeholder = { { text = 'aa' } } },
+    final_tabstop,
+  })
+
+  validate('${1:$AA}${1:aa}', { { tabstop = '1', placeholder = { { var = 'AA', text = 'my-aa' } } }, { tabstop = '1', placeholder = { { text = 'my-aa' } } }, final_tabstop })
+
+  validate('${1:aa}$2${2:bb}$1', {
+    { tabstop = '1', placeholder = { { text = 'aa' } } },
+    { tabstop = '2', placeholder = { { text = '' } } },
+    { tabstop = '2', placeholder = { { text = '' } } },
+    { tabstop = '1', placeholder = { { text = 'aa' } } },
+    final_tabstop,
+  })
+  validate('${1:${2:aa}bb}$2${2:bb}$1', {
+    { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } }, { text = 'bb' } } },
+    { tabstop = '2', placeholder = { { text = 'aa' } } },
+    { tabstop = '2', placeholder = { { text = 'aa' } } },
+    { tabstop = '1', placeholder = { { text = 'aabb' } } },
+    final_tabstop,
+  })
+
+  validate('${1:aa${2:bb}cc$AA}$1', {
+    { tabstop = '1', placeholder = { { text = 'aa' }, { tabstop = '2', placeholder = { { text = 'bb' } } }, { text = 'cc' }, { var = 'AA', text = 'my-aa' } } },
+    { tabstop = '1', placeholder = { { text = 'aabbccmy-aa' } } },
+    final_tabstop,
+  })
+
+  -- - Second nested $1 has forced placeholder thus removing other nested ones
+  validate('${1:${1:${1:${1:xx}}}}${1:aa}', {
+    { tabstop = '1', placeholder = { { tabstop = '1', placeholder = { { text = 'xx' } } } } },
+    { tabstop = '1', placeholder = { { text = 'xx' } } },
+    final_tabstop,
+  })
+
+  -- - Should sync `choice` but preserve `transform` (for future)
+  validate('$1${1/.*//}${1|a,b|}', {
+    { tabstop = '1', placeholder = { { text = '' } } },
+    { tabstop = '1', placeholder = { { text = '' } }, transform = { '.*', '', '' } },
+    { tabstop = '1', placeholder = { { text = '' } } },
+    final_tabstop,
+  })
+  validate('${1|a,b|}${1/.*//}$1${1|c,d|}', {
+  { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
+  { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' }, transform = { '.*', '', '' } },
+  { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
+  { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
+  final_tabstop,
+})
+
+  -- - Should account for `lookup` resolution
+  eq(
+    parse('${1:aa}$1', { normalize = true, lookup = {['1'] = 'bb'} }),
+    { { tabstop = '1', text = 'bb' }, { tabstop = '1', text = 'bb' }, final_tabstop }
+  )
 
   -- Should normalize however deep
   validate('${BB:$1}',       { { var = 'BB',    placeholder = { { tabstop = '1', placeholder = { { text = '' } } } } },                                   final_tabstop })
@@ -2999,68 +3080,6 @@ T['Session']['persists after `:edit`'] = function()
   child.expect_screenshot()
 end
 
-T['Session']['autostops when text is typed in final tabstop'] = function()
-  local validate = function(key)
-    start_session('T1=$1 T0=$0')
-    validate_active_session()
-    jump('next')
-    type_keys(key)
-    validate_no_active_session()
-    ensure_clean_state()
-  end
-
-  -- Adding visible character
-  validate('x')
-  validate(' ')
-  validate('\t')
-
-  -- Adding invisible character
-  validate('<CR>')
-
-  -- Deleting
-  validate('<BS>')
-  validate('<C-u>')
-
-  -- Making text not in pure Insert mode
-  validate('<C-o>o')
-  validate('<C-o>guu')
-end
-
-T['Session']['autostops when exiting to Normal mode in final tabstop'] = function()
-  start_session('T1=$1 T0=$0')
-  validate_active_session()
-  jump('next')
-  type_keys('<Esc>')
-  validate_no_active_session()
-  ensure_clean_state()
-
-  -- Should stop only when exiting in full Normal mode
-  start_session('T1=$1 T0=$0')
-  jump('next')
-  type_keys('<C-o><Esc>')
-  validate_active_session()
-end
-
-T['Session']['autostop works when final tabstop has explicit placeholder'] = function()
-  -- Typing should remove placeholder and keep Insert mode
-  start_session('T1=$1 T0=${0:aaa}')
-  jump('next')
-  validate_state('i', { 'T1= T0=aaa' }, { 1, 7 })
-
-  type_keys('x')
-  validate_no_active_session()
-  validate_state('i', { 'T1= T0=x' }, { 1, 8 })
-
-  ensure_clean_state()
-
-  -- Exiting in Normal mode should preserve placeholder
-  start_session('T1=$1 T0=${0:aaa}')
-  jump('next')
-  type_keys('<Esc>')
-  validate_no_active_session()
-  validate_state('n', { 'T1= T0=aaa' }, { 1, 6 })
-end
-
 T['Session']['should replace placeholder on added text at its start'] = function()
   start_session('T1=${1:aaa} T0=$0')
   type_keys('x')
@@ -3104,6 +3123,129 @@ T['Session']['preserves order of "squashed" empty tabstops'] = function()
   child.expect_screenshot()
   jump('next')
   child.expect_screenshot()
+end
+
+T['Session']['whole session tracking'] = function()
+  local validate_session_range = function(ref_from, ref_to)
+    local session = get()
+    local data =
+      child.api.nvim_buf_get_extmark_by_id(session.buf_id, session.ns_id, session.extmark_id, { details = true })
+    eq({ data[1], data[2], data[3].end_row, data[3].end_col }, { ref_from[1], ref_from[2], ref_to[1], ref_to[2] })
+  end
+
+  type_keys('i', '----', '<Left><Left>')
+  start_session('T1=${1:aa}_T0=$0')
+  validate_session_range({ 0, 2 }, { 0, 11 })
+
+  -- Typing text inside tabstop should be tracked
+  type_keys('x')
+  validate_session_range({ 0, 2 }, { 0, 10 })
+  type_keys('<CR>')
+  validate_session_range({ 0, 2 }, { 1, 4 })
+
+  -- Modifying text outside of intended snippet session should also be tracked
+  -- with "expanding" extmark (right_gravity=false end_right_gravity=true)
+  type_keys('<Esc>')
+  -- - Adding text strictly to the left should move session range
+  type_keys('gg0', 'i', 'new')
+  validate_state('i', { 'new--T1=x', '_T0=--' }, { 1, 3 })
+  validate_session_range({ 0, 5 }, { 1, 4 })
+  -- - Adding text at left edge should count as "in session range"
+  type_keys('<Right><Right>', 'wow')
+  validate_state('i', { 'new--wowT1=x', '_T0=--' }, { 1, 8 })
+  validate_session_range({ 0, 5 }, { 1, 4 })
+  -- - Adding text at right edge should count as "in session range"
+  --   NOTE: typing text at $0 doesn't stop session as $0 is not current
+  type_keys('<Down><Left><Left>', 'huh')
+  validate_state('i', { 'new--wowT1=x', '_T0=huh--' }, { 2, 7 })
+  validate_session_range({ 0, 5 }, { 1, 7 })
+  -- - Adding text past right edge should not touch session
+  type_keys('<Right>', 'no')
+  validate_state('i', { 'new--wowT1=x', '_T0=huh-no-' }, { 2, 10 })
+  validate_session_range({ 0, 5 }, { 1, 7 })
+end
+
+T['Session']['autostop'] = new_set()
+
+T['Session']['autostop']['works when text is typed with final tabstop being current'] = function()
+  local validate = function(key)
+    start_session('T1=$1 T0=$0')
+    validate_active_session()
+    jump('next')
+    type_keys(key)
+    validate_no_active_session()
+    ensure_clean_state()
+  end
+
+  -- Adding visible character
+  validate('x')
+  validate(' ')
+  validate('\t')
+
+  -- Adding invisible character
+  validate('<CR>')
+
+  -- Deleting
+  validate('<BS>')
+  validate('<C-u>')
+
+  -- Making text not in pure Insert mode
+  validate('<C-o>o')
+  validate('<C-o>guu')
+end
+
+T['Session']['autostop']['works when exiting to Normal mode in final tabstop'] = function()
+  start_session('T1=$1 T0=$0')
+  validate_active_session()
+  jump('next')
+  type_keys('<Esc>')
+  validate_no_active_session()
+  ensure_clean_state()
+
+  -- Should stop only when exiting in full Normal mode
+  start_session('T1=$1 T0=$0')
+  jump('next')
+  type_keys('<C-o><Esc>')
+  validate_active_session()
+end
+
+T['Session']['autostop']['works when final tabstop has explicit placeholder'] = function()
+  -- Typing should remove placeholder and keep Insert mode
+  start_session('T1=$1 T0=${0:aaa}')
+  jump('next')
+  validate_state('i', { 'T1= T0=aaa' }, { 1, 7 })
+
+  type_keys('x')
+  validate_no_active_session()
+  validate_state('i', { 'T1= T0=x' }, { 1, 8 })
+
+  ensure_clean_state()
+
+  -- Exiting in Normal mode should preserve placeholder
+  start_session('T1=$1 T0=${0:aaa}')
+  jump('next')
+  type_keys('<Esc>')
+  validate_no_active_session()
+  validate_state('n', { 'T1= T0=aaa' }, { 1, 6 })
+end
+
+T['Session']['autostop']['is not triggered if final tabstop is not current'] = function()
+  start_session('T1=$1 T0=$0')
+  validate_active_session()
+
+  -- Exiting into Normal mode should still keep session active
+  type_keys('<Esc>')
+  validate_active_session()
+
+  -- Typing at final tabstop should not autostop because it is not current
+  type_keys('A', 'new')
+  validate_active_session()
+  child.expect_screenshot()
+
+  -- Should still be possible to autostop even though final tabstop is moved
+  jump('next')
+  type_keys('x')
+  validate_no_active_session()
 end
 
 T['Session']['highlighting'] = new_set()
@@ -3191,7 +3333,7 @@ T['Session']['highlighting']['updates after replacing placeholder'] = function()
   start_session('T1=$1 T1=${1:aa}')
   local ref_extmark_data = {
     { tabstop = '1', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '1', hl_group = 'MiniSnippetsCurrentReplace' },
+    { tabstop = '1', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
   }
   validate_tabstop_hl(ref_extmark_data)
@@ -3221,10 +3363,11 @@ T['Session']['highlighting']['uses same highlight groups for linked tabstops'] =
   start_session('T1=$1 T1=${1:aa} T1=${1|bb,cc|} T2=$2 T2=${2:dd}')
   local ref_extmark_data = {
     { tabstop = '1', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '1', hl_group = 'MiniSnippetsCurrentReplace' },
-    { tabstop = '1', hl_group = 'MiniSnippetsCurrentReplace' },
+    -- All are empty as they are normalized to the same placeholder/text
+    { tabstop = '1', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
+    { tabstop = '1', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
-    { tabstop = '2', hl_group = 'MiniSnippetsUnvisited' },
+    { tabstop = '2', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
   }
   validate_tabstop_hl(ref_extmark_data)
@@ -3232,10 +3375,10 @@ T['Session']['highlighting']['uses same highlight groups for linked tabstops'] =
   jump('next')
   ref_extmark_data = {
     { tabstop = '1', virt_text = { { '•', 'MiniSnippetsVisited' } }, virt_text_pos = 'inline' },
-    { tabstop = '1', hl_group = 'MiniSnippetsVisited' },
-    { tabstop = '1', hl_group = 'MiniSnippetsVisited' },
+    { tabstop = '1', virt_text = { { '•', 'MiniSnippetsVisited' } }, virt_text_pos = 'inline' },
+    { tabstop = '1', virt_text = { { '•', 'MiniSnippetsVisited' } }, virt_text_pos = 'inline' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '2', hl_group = 'MiniSnippetsCurrentReplace' },
+    { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
   }
   validate_tabstop_hl(ref_extmark_data)
@@ -3301,16 +3444,12 @@ T['Session']['highlighting']['properly highlights final tabstop'] = function()
 end
 
 T['Session']['highlighting']['uses same highlighting for whole placeholder for current tabstop'] = function()
-  start_session('T1=${1:<T2=${2:$3}>} T1=${1:<T2=${2:$3}>} T2=${2:$3} $0 $3')
+  start_session('T1=${1:<T2=${2:$3}>} $2 $0 $3')
   local ref_extmark_data = {
     { tabstop = '1', hl_group = 'MiniSnippetsCurrentReplace' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '1', hl_group = 'MiniSnippetsCurrentReplace' },
-    { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
-    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
   }
@@ -3322,11 +3461,7 @@ T['Session']['highlighting']['uses same highlighting for whole placeholder for c
     { tabstop = '1', hl_group = 'MiniSnippetsVisited' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '1', hl_group = 'MiniSnippetsVisited' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
   }
@@ -3338,11 +3473,7 @@ T['Session']['highlighting']['uses same highlighting for whole placeholder for c
     { tabstop = '1', hl_group = 'MiniSnippetsVisited' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsVisited' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '1', hl_group = 'MiniSnippetsVisited' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsVisited' } }, virt_text_pos = 'inline' },
-    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
-    { tabstop = '2', virt_text = { { '•', 'MiniSnippetsVisited' } }, virt_text_pos = 'inline' },
-    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
   }
@@ -3505,6 +3636,18 @@ T['Session']['choices']['selecting completion item properly replaces current tex
   validate_state('i', { 'T1=axax' }, { 1, 7 })
 end
 
+T['Session']['choices']['handles linked tabstops with different choices'] = function()
+  -- Should resolve all initial text to be the same while removing choices from
+  -- the repeated nodes (as redundant)
+  start_session('T1=${1|aa,bb|} T1=${1|uu,vv|}')
+  validate_active_session()
+  validate_state('i', { 'T1=aa T1=aa' }, { 1, 3 })
+  -- Should only use choices from reference node
+  validate_pumitems({ 'aa', 'bb' })
+  jump('next')
+  eq(get_cur_tabstop(), '0')
+end
+
 T['Session']['linked tabstops'] = new_set()
 
 T['Session']['linked tabstops']['are updated immediately when typing'] = function()
@@ -3570,8 +3713,8 @@ T['Session']['linked tabstops']['are updated when completion popup is visible'] 
 end
 
 T['Session']['linked tabstops']['delay updating in nested session until stop'] = function()
-  start_session('T1=${1:aa} T1=$1')
-  validate_state('i', { 'T1=aa T1=' }, { 1, 3 })
+  start_session('T1=$1 T1=$1')
+  validate_state('i', { 'T1= T1=' }, { 1, 3 })
 
   start_session('U1=$1 U1=$1')
   -- Update right after start to remove placeholder from current session
@@ -3593,13 +3736,28 @@ T['Session']['linked tabstops']['delay updating in nested session until stop'] =
   validate_state('i', { 'T1=U1=x U1=x T1=U1=x U1=x' }, { 1, 7 })
 end
 
+T['Session']['linked tabstops']['works for tabstops with different placeholders'] = function()
+  -- Should be resolved to have same placeholder during `parse()`
+  start_session('T1=${1:aa} T1=${1:bb} T1=$1')
+  validate_state('i', { 'T1=aa T1=aa T1=aa' }, { 1, 3 })
+  type_keys('x')
+  validate_state('i', { 'T1=x T1=x T1=x' }, { 1, 4 })
+  ensure_clean_state()
+
+  -- Even if have different initial types
+  start_session('T1=$1 T1=${1:aa} T1=${1|bb,cc|}')
+  validate_state('i', { 'T1= T1= T1=' }, { 1, 3 })
+  type_keys('x')
+  validate_state('i', { 'T1=x T1=x T1=x' }, { 1, 4 })
+end
+
 T['Session']['linked tabstops']['jumps to the first node'] = function()
   start_session('T1=${1:<T2=$2>} T2=$2 T1=$1')
-  validate_state('i', { 'T1=<T2=> T2= T1=' }, { 1, 3 })
+  validate_state('i', { 'T1=<T2=> T2= T1=<T2=>' }, { 1, 3 })
   child.expect_screenshot()
 
   jump('next')
-  validate_state('i', { 'T1=<T2=> T2= T1=' }, { 1, 7 })
+  validate_state('i', { 'T1=<T2=> T2= T1=<T2=>' }, { 1, 7 })
   child.expect_screenshot()
 
   -- Even if first node for linked tabstops is changed
@@ -3609,20 +3767,6 @@ T['Session']['linked tabstops']['jumps to the first node'] = function()
   jump('next')
   validate_state('i', { 'T1=x T2= T1=x' }, { 1, 8 })
   child.expect_screenshot()
-end
-
-T['Session']['linked tabstops']['works for tabstops with different placeholders'] = function()
-  start_session('T1=${1:aa} T1=${1:bb} T1=$1')
-  validate_state('i', { 'T1=aa T1=bb T1=' }, { 1, 3 })
-  type_keys('x')
-  validate_state('i', { 'T1=x T1=x T1=x' }, { 1, 4 })
-  ensure_clean_state()
-
-  -- Even if have different initial types
-  start_session('T1=$1 T1=${1:aa} T1=${1|bb,cc|}')
-  validate_state('i', { 'T1= T1=aa T1=bb' }, { 1, 3 })
-  type_keys('x')
-  validate_state('i', { 'T1=x T1=x T1=x' }, { 1, 4 })
 end
 
 T['Session']['linked tabstops']['validates that session data is valid'] = function()
@@ -3650,13 +3794,13 @@ T['Session']['linked tabstops']['validates that session data is valid'] = functi
 end
 
 T['Session']['linked tabstops']['handle text change in not reference node'] = function()
-  start_session('T1=$1 T1=${1:aa} T1=$1')
-  validate_state('i', { 'T1= T1=aa T1=' }, { 1, 3 })
+  start_session('T1=${1:aa} T1=${1:aa} T1=${1:aa}')
+  validate_state('i', { 'T1=aa T1=aa T1=aa' }, { 1, 3 })
 
   -- Any text change is allowed if tabstops are still in "replace" stage
-  set_cursor(1, 8)
+  set_cursor(1, 10)
   type_keys('x')
-  validate_state('i', { 'T1= T1=axa T1=' }, { 1, 9 })
+  validate_state('i', { 'T1=aa T1=axa T1=aa' }, { 1, 11 })
 
   -- Should still track changes and replace appropriately
   jump('next')
@@ -3664,8 +3808,8 @@ T['Session']['linked tabstops']['handle text change in not reference node'] = fu
   type_keys('yy')
   validate_state('i', { 'T1=yy T1=yy T1=yy' }, { 1, 5 })
 
-  -- After placeholder is replaced, all linked tabstops should have same text
-  -- as the first (reference) node
+  -- After placeholder is replaced, all linked tabstops should be forced to
+  -- have same text as the first (reference) node
   set_cursor(1, 10)
   type_keys('A')
   validate_state('i', { 'T1=yy T1=yy T1=yy' }, { 1, 11 })
@@ -3955,9 +4099,93 @@ end
 
 T['Various snippets'] = new_set()
 
-T['Various snippets']['just text'] = function() MiniTest.skip() end
+T['Various snippets']['text'] = function()
+  local validate = function(snippet_body, ref_lines, ref_cursor)
+    start_session(snippet_body)
+    validate_no_active_session()
+    validate_state('i', ref_lines, ref_cursor)
+    ensure_clean_state()
+  end
+
+  -- Basic cases
+  validate('Hello world', { 'Hello world' }, { 1, 11 })
+  validate('Hello\nmultiline \nworld', { 'Hello', 'multiline ', 'world' }, { 3, 5 })
+
+  type_keys('i', ' \t')
+  validate('Hello\nmultiline \nworld', { ' \tHello', ' \tmultiline ', ' \tworld' }, { 3, 7 })
+
+  -- Single present `$0` should be treated as "just text"
+  validate('Hello world$0', { 'Hello world' }, { 1, 11 })
+  validate('Hello $0 world', { 'Hello  world' }, { 1, 6 })
+  validate('Hello\n  $0\nworld', { 'Hello', '  ', 'world' }, { 2, 2 })
+end
+
+T['Various snippets']['var'] = function()
+  local validate = function(snippet_body, ref_lines, ref_cursor)
+    start_session(snippet_body)
+    validate_no_active_session()
+    validate_state('i', ref_lines, ref_cursor)
+    ensure_clean_state()
+  end
+
+  -- Basic cases
+  child.lua('vim.loop.hrtime = function() return 101 end') -- mock reproducible `math.randomseed`
+  validate('$RANDOM ${RANDOM}', { '491985 873024' }, { 1, 13 })
+
+  child.fn.setreg('"', 'abc\n')
+  validate('<tag>\n\t$TM_SELECTED_TEXT\n</tag>', { '<tag>', '\tabc', '', '</tag>' }, { 4, 6 })
+
+  -- Placeholders
+  validate('var=$AAA', { 'var=' }, { 1, 4 })
+  validate('var=${AAA}', { 'var=' }, { 1, 4 })
+  validate('var=${AAA:placeholder}', { 'var=placeholder' }, { 1, 15 })
+  validate('var=${BBB:${AAA:placeholder}}', { 'var=placeholder' }, { 1, 15 })
+
+  child.fn.setenv('AAA', 'aaa')
+  validate('var=$AAA', { 'var=aaa' }, { 1, 7 })
+  validate('var=${AAA}', { 'var=aaa' }, { 1, 7 })
+  validate('var=${AAA:placeholder}', { 'var=aaa' }, { 1, 7 })
+  validate('var=${BBB:${AAA:placeholder}}', { 'var=aaa' }, { 1, 7 })
+end
+
+T['Various snippets']['tabstop'] = function()
+  local validate = function(snippet_body)
+    start_session(snippet_body)
+    validate_active_session()
+    child.expect_screenshot()
+    ensure_clean_state()
+  end
+
+  -- Only tabstops
+  validate('$1')
+  validate('$1$0')
+
+  -- Other special tabstop cases are scattered across narrower test cases
+end
+
+T['Various snippets']['choice'] = function()
+  -- Basic case. More tests are in 'Session'-'choices'
+  start_session('${1|bb,aa|}')
+  validate_active_session()
+  validate_pumitems({ 'bb', 'aa' })
+  -- Should insert first choice
+  validate_state('i', { 'bb' }, { 1, 0 })
+end
+
+T['Various snippets']['transform'] = function()
+  -- Should ignore present transform (for now) in both variables and tabstops
+  child.fn.setreg('"', 'abc\n')
+  start_session('Upcase=${TM_SELECTED_TEXT/.*/upcase/}')
+  validate_state('i', { 'Upcase=abc', '' }, { 2, 0 })
+  ensure_clean_state()
+
+  start_session('Upcase=${1/.*/upcase/};')
+  validate_active_session()
+  validate_state('i', { 'Upcase=;' }, { 1, 7 })
+end
 
 T['Various snippets']['placeholders'] = function()
+  -- Placeholders should be removed during typing
   start_session('T1=${1:<aaa>} T0=${0:<bbb>}')
   child.expect_screenshot()
   type_keys('x')
@@ -3965,19 +4193,334 @@ T['Various snippets']['placeholders'] = function()
   jump('next')
   child.expect_screenshot()
   type_keys('y')
-  -- Should also remove final tabstop's placeholder
+  -- - Should also remove final tabstop's placeholder
   child.expect_screenshot()
+  ensure_clean_state()
+
+  -- Multiline placeholder
+  start_session('T1=${1:aa\nbb\n} T0=$0')
+  child.expect_screenshot()
+  type_keys('x')
+  child.expect_screenshot()
+  ensure_clean_state()
+
+  -- Placeholder in single final tabstop should result in active session
+  start_session('Text ${0:placeholder}')
+  validate_active_session()
+  child.expect_screenshot()
+  type_keys('x')
+  validate_no_active_session()
 end
 
 T['Tricky snippets'] = new_set()
 
-T['Tricky snippets']['squashed and linked'] = function() MiniTest.skip() end
+T['Tricky snippets']['nested empty tabstops'] = function()
+  -- This should normalize into '${1:${2:$3}} $2 $3'
+  start_session('${1:${2:$3}} ${2:$3} $3')
+  -- Should show every tabstop with inline text
+  child.expect_screenshot()
+  jump('next')
+  child.expect_screenshot()
+  jump('next')
+  child.expect_screenshot()
 
-T['Mappings'] = new_set()
+  type_keys('a')
+  child.expect_screenshot()
+
+  -- Should remove text from $3 from placeholder
+  jump('prev')
+  type_keys('b')
+  child.expect_screenshot()
+
+  -- Should remove text from $2 as placeholder
+  jump('prev')
+  type_keys('c')
+  child.expect_screenshot()
+end
+
+T['Tricky snippets']['squashed linked empty interleaving tabstops'] = function()
+  start_session('$1$2$1$2$1')
+  child.expect_screenshot()
+  type_keys('a')
+  child.expect_screenshot()
+
+  jump('next')
+  type_keys('b')
+  child.expect_screenshot()
+
+  type_keys('<BS>')
+  child.expect_screenshot()
+
+  jump('prev')
+  type_keys('<BS>')
+  child.expect_screenshot()
+end
+
+T['Tricky snippets']['squashed linked empty consecutive tabstops'] = function()
+  start_session('$1$1$1$2$2')
+  child.expect_screenshot()
+  type_keys('a')
+  child.expect_screenshot()
+
+  jump('next')
+  type_keys('b')
+  child.expect_screenshot()
+
+  type_keys('<BS>')
+  child.expect_screenshot()
+
+  jump('prev')
+  type_keys('<BS>')
+  child.expect_screenshot()
+end
+
+T['Tricky snippets']['squashed linked tabstops with placeholders'] = function()
+  start_session('$1${2:aa}$1${2:aa}$1')
+  child.expect_screenshot()
+  type_keys('x')
+  child.expect_screenshot()
+
+  jump('next')
+  type_keys('y')
+  child.expect_screenshot()
+end
+
+T['Tricky snippets']['final tabstop is nested'] = function()
+  -- Only nested
+  start_session('T1=${1:<T2=${2:<T0=$0>}>}')
+  jump('next')
+  eq(get_cur_tabstop(), '2')
+  type_keys('x')
+  validate_state('i', { 'T1=<T2=x>' }, { 1, 8 })
+  jump('next')
+  eq(get_cur_tabstop(), '1')
+  ensure_clean_state()
+
+  -- Nested and outside
+  start_session('T1=${1:$0} T0=$0')
+  type_keys('x')
+  validate_state('i', { 'T1=x T0=' }, { 1, 4 })
+  jump('next')
+  eq(get_cur_tabstop(), '0')
+end
+
+T['Tricky snippets']['tricky choices'] = function()
+  -- Should not show popup if there are no choices
+  start_session('No choice ${1||}')
+  validate_active_session()
+  validate_no_pumvisible()
+  ensure_clean_state()
+
+  -- Same ignore repeated choices
+  start_session('Same choices ${1|b,a,b,a,c|}')
+  validate_active_session()
+  validate_pumitems({ 'b', 'a', 'c' })
+  ensure_clean_state()
+
+  -- Should ignore empty choices
+  start_session('Empty choices ${1|b,,a,,|}')
+  validate_active_session()
+  validate_pumitems({ 'b', 'a' })
+  ensure_clean_state()
+end
+
+T['Tricky snippets']['tabstop nested inside itself'] = function()
+  -- Should be normalized into 'T1=${1:<T1=${1:<T1=>}>}' during `parse()`
+  start_session('T1=${1:<T1=${1:$1}>}')
+  child.expect_screenshot()
+  type_keys('x')
+  child.expect_screenshot()
+end
+
+T['Tricky snippets']['intertwined nested tabstops'] = function()
+  -- Should be normalized into 'T1=${1:<T2=$2>} and T2=$2' during `parse()`
+  start_session('T1=${1:<T2=$2>} and T2=${2:<T1=$1>}')
+  child.expect_screenshot()
+  type_keys('x')
+  child.expect_screenshot()
+  jump('next')
+  type_keys('y')
+  child.expect_screenshot()
+  ensure_clean_state()
+
+  -- Order matters
+  start_session('T1=${1:<T2=$2>} and T2=${2:<T1=$1>}')
+  jump('next')
+  child.expect_screenshot()
+  type_keys('x')
+  child.expect_screenshot()
+  jump('prev')
+  type_keys('y')
+  child.expect_screenshot()
+end
+
+T['Mappings'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua([[MiniSnippets.config.snippets = {
+      { prefix = "tt", body = "T1=$1 T0=$0" },
+      { prefix = "uu", body = "U1=$1 U0=$0" },
+    }]])
+    end,
+  },
+})
+
+local has_mapping = function(lhs) return child.cmd_capture('imap ' .. lhs):find('No mapping') == nil end
 
 T['Mappings']['works'] = function()
-  -- Should copy and restore possibly conflicting mappings
-  MiniTest.skip()
+  -- `default_insert()` mappings should be present only for active session(s)
+  eq(has_mapping('<C-j>'), true)
+  eq(has_mapping('<C-l>'), false)
+  eq(has_mapping('<C-h>'), false)
+  eq(has_mapping('<C-c>'), false)
+
+  type_keys('i', 'tt', '<C-j>')
+  validate_active_session()
+  validate_state('i', { 'T1= T0=' }, { 1, 3 })
+
+  type_keys('<C-l>')
+  eq(get_cur_tabstop(), '0')
+  validate_state('i', { 'T1= T0=' }, { 1, 7 })
+
+  type_keys('<C-h>')
+  eq(get_cur_tabstop(), '1')
+  validate_state('i', { 'T1= T0=' }, { 1, 3 })
+
+  validate_active_session()
+  type_keys('<C-c>')
+  validate_no_active_session()
+
+  eq(has_mapping('<C-j>'), true)
+  eq(has_mapping('<C-l>'), false)
+  eq(has_mapping('<C-h>'), false)
+  eq(has_mapping('<C-c>'), false)
+
+  -- Should work even if using `default_insert()` directly
+  default_insert({ body = 'U1=$1' })
+  type_keys('<C-l>')
+  eq(get_cur_tabstop(), '0')
+  type_keys('<C-h>')
+  eq(get_cur_tabstop(), '1')
+  type_keys('<C-c>')
+  validate_no_active_session()
+end
+
+T['Mappings']['works with different keys'] = function()
+  child.restart()
+  load_module({
+    snippets = { { prefix = 'tt', body = 'T1=$1 T0=$0' } },
+    mappings = { expand = '<C-]>', jump_next = '<C-j>', jump_prev = '<C-k>', stop = '<C-z>' },
+  })
+
+  type_keys('i', 'tt', '<C-]>')
+  validate_active_session()
+  validate_state('i', { 'T1= T0=' }, { 1, 3 })
+
+  type_keys('<C-j>')
+  eq(get_cur_tabstop(), '0')
+  validate_state('i', { 'T1= T0=' }, { 1, 7 })
+
+  type_keys('<C-k>')
+  eq(get_cur_tabstop(), '1')
+  validate_state('i', { 'T1= T0=' }, { 1, 3 })
+
+  validate_active_session()
+  type_keys('<C-z>')
+  validate_no_active_session()
+
+  -- Should work even if using `default_insert()` directly
+  default_insert({ body = 'U1=$1' })
+  type_keys('<C-j>')
+  eq(get_cur_tabstop(), '0')
+  type_keys('<C-k>')
+  eq(get_cur_tabstop(), '1')
+  type_keys('<C-z>')
+  validate_no_active_session()
+end
+
+T['Mappings']['work across buffers'] = function()
+  local init_buf, other_buf = get_buf(), new_buf()
+  type_keys('i', 'tt', '<C-j>')
+  validate_state('i', { 'T1= T0=' }, { 1, 3 })
+  eq(get_cur_tabstop(), '1')
+
+  set_buf(other_buf)
+  type_keys('<C-l>')
+  eq(get_buf(), init_buf)
+  eq(get_cur_tabstop(), '0')
+
+  set_buf(other_buf)
+  type_keys('<C-h>')
+  eq(get_buf(), init_buf)
+  eq(get_cur_tabstop(), '1')
+
+  set_buf(other_buf)
+  validate_active_session()
+  type_keys('<C-c>')
+  validate_no_active_session()
+end
+
+T['Mappings']['`default_insert` mappings respect buffer-local config'] = function()
+  child.b.minisnippets_config = { mappings = { stop = '<C-z>' } }
+
+  eq(has_mapping('<C-c>'), false)
+  eq(has_mapping('<C-z>'), false)
+  type_keys('i', 'tt', '<C-j>')
+  eq(has_mapping('<C-c>'), false)
+  eq(has_mapping('<C-z>'), true)
+end
+
+T['Mappings']['`default_insert` mappings are present for all nested sessions'] = function()
+  type_keys('i', 'tt', '<C-j>')
+  type_keys('uu', '<C-j>')
+  validate_n_sessions(2)
+
+  validate_state('i', { 'T1=U1= U0= T0=' }, { 1, 6 })
+  type_keys('<C-l>')
+  validate_state('i', { 'T1=U1= U0= T0=' }, { 1, 10 })
+  type_keys('<C-h>')
+  validate_state('i', { 'T1=U1= U0= T0=' }, { 1, 6 })
+  type_keys('<C-c>')
+  validate_state('i', { 'T1=U1= U0= T0=' }, { 1, 6 })
+  validate_n_sessions(1)
+end
+
+T['Mappings']['`default_insert` mappings cache and restore global conflicting mappings'] = function()
+  child.api.nvim_set_keymap('i', '<C-l>', '<Cmd>lua print(1)<CR>', {})
+  child.api.nvim_set_keymap('i', '<C-h>', '<Cmd>lua print(2)<CR>', {})
+  child.api.nvim_set_keymap('i', '<C-c>', '<Cmd>lua print(3)<CR>', {})
+
+  local get_map_rhs = function(lhs) return child.fn.maparg(lhs, 'i', false, true).rhs end
+
+  -- Should cache and restore only after there is no active session
+  type_keys('i', 'tt', '<C-j>')
+  no_eq(get_map_rhs('<C-l>'), '<Cmd>lua print(1)<CR>')
+  no_eq(get_map_rhs('<C-h>'), '<Cmd>lua print(2)<CR>')
+  no_eq(get_map_rhs('<C-c>'), '<Cmd>lua print(3)<CR>')
+
+  type_keys('uu', '<C-j>')
+  no_eq(get_map_rhs('<C-l>'), '<Cmd>lua print(1)<CR>')
+  no_eq(get_map_rhs('<C-h>'), '<Cmd>lua print(2)<CR>')
+  no_eq(get_map_rhs('<C-c>'), '<Cmd>lua print(3)<CR>')
+
+  type_keys('<C-c>')
+  no_eq(get_map_rhs('<C-l>'), '<Cmd>lua print(1)<CR>')
+  no_eq(get_map_rhs('<C-h>'), '<Cmd>lua print(2)<CR>')
+  no_eq(get_map_rhs('<C-c>'), '<Cmd>lua print(3)<CR>')
+
+  type_keys('<C-c>')
+  eq(get_map_rhs('<C-l>'), '<Cmd>lua print(1)<CR>')
+  eq(get_map_rhs('<C-h>'), '<Cmd>lua print(2)<CR>')
+  eq(get_map_rhs('<C-c>'), '<Cmd>lua print(3)<CR>')
+
+  ensure_clean_state()
+
+  -- Should always cache map data just before first active session
+  child.api.nvim_set_keymap('i', '<C-l>', '<Cmd>lua print(111)<CR>', {})
+  type_keys('i', 'tt', '<C-j>')
+  no_eq(get_map_rhs('<C-l>'), '<Cmd>lua print(111)<CR>')
+  type_keys('<C-c>')
+  eq(get_map_rhs('<C-l>'), '<Cmd>lua print(111)<CR>')
 end
 
 T['Examples'] = new_set()
@@ -4104,19 +4647,6 @@ T['Examples']['`default_prepare` with cache'] = function()
   child.bo.filetype = 'myft2'
   child.lua([[_G.prepare_cached({ { prefix = 'a', body = 'a=$1' } })]])
   eq(child.lua_get('#_G.log'), 5)
-end
-
-T['Integrations'] = new_set()
-
-T['Integrations']['mini.pick'] = function()
-  -- Should work with `MiniPick.ui_select()`
-  MiniTest.skip()
-end
-
-T['Integrations']['mini.completion'] = function()
-  -- Should work with autocompletion from 'mini.completion' (especially
-  -- signature window)
-  MiniTest.skip()
 end
 
 return T

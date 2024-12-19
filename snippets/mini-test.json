@@ -1,0 +1,21 @@
+{
+  "Test set": {
+    "prefix": "TS",
+    "body": "T['$1'] = new_set()$0",
+    "description": "Text set"
+  },
+  "Test case": {
+    "prefix": "T",
+    "body": "T['$1']['$2'] = function()\n\t$0MiniTest.skip()\nend",
+    "description": "Test case"
+  },
+  "api": {
+    "prefix": "api",
+    "body": "child.api.nvim_"
+  },
+  "Screenshot": {
+    "prefix": "screen",
+    "body": "child.expect_screenshot()"
+  }
+}
+

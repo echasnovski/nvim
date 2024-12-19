@@ -15,8 +15,9 @@ return {
   { prefix = 'then',   body = 'then\n\t$0\nend' },
   { prefix = 'while',  body = 'while $1 do\n\t$0\nend' },
 
-  { prefix = 'api', body = 'vim.api.nvim_' },
-  { prefix = 'map', body = 'vim.tbl_map($2, $1)' },
+  { prefix = 'api',   body = 'vim.api.nvim_' },
+  { prefix = 'map',   body = 'vim.tbl_map($2, $1)' },
+  { prefix = 'bench', body = 'local $1 = vim.loop.hrtime()\ntable.insert($2, 0.000001 * (vim.loop.hrtime() - $1))' },
 
   { prefix = 'desc',   body = "describe('$1',function()\n\t$0\nend)" },
   { prefix = 'it',     body = "it('$1',function()\n\t$0\nend)" },
