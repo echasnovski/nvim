@@ -1892,6 +1892,8 @@ T['default_insert()']['validates input'] = function()
     '`empty_tabstop_final`.*string'
   )
   expect.error(function() default_insert({ body = 'Text' }, { lookup = 1 }) end, '`lookup`.*table')
+
+  expect.error(function() default_insert({ body = '${1|}' }) end, 'Tabstop with choices')
 end
 
 T['session.get()'] = new_set()
@@ -2704,10 +2706,27 @@ T['parse()']['respects `opts.normalize`'] = function()
   validate('$1${1:aa}',           { { tabstop = '1', placeholder = { { text = '' } } },   { tabstop = '1', placeholder = { { text = '' } } },   final_tabstop })
   validate('${1}${1:aa}',         { { tabstop = '1', placeholder = { { text = '' } } },   { tabstop = '1', placeholder = { { text = '' } } },   final_tabstop })
 
+  validate('${1:${2:aa}}${2:$1}', {
+    {
+      tabstop = '1',
+      placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } } },
+    },
+    { tabstop = '2', placeholder = { { text = 'aa' } } },
+    final_tabstop,
+  })
+  validate('${2:${1:aa}}${1:$2}', {
+    {
+      tabstop = '2',
+      placeholder = { { tabstop = '1', placeholder = { { text = 'aa' } } } },
+    },
+    { tabstop = '1', placeholder = { { text = 'aa' } } },
+    final_tabstop,
+  })
+
   validate('${1:aa}${1:$2}', { { tabstop = '1', placeholder = { { text = 'aa' } } }, { tabstop = '1', placeholder = { { text = 'aa' } } }, final_tabstop })
   validate('${1:${2:aa}}$1', {
     { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } } } },
-    { tabstop = '1', placeholder = { { text = 'aa' } } },
+    { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } } } },
     final_tabstop,
   })
   validate('${1:${2:aa}}${2:x$1x}', {
@@ -2716,7 +2735,11 @@ T['parse()']['respects `opts.normalize`'] = function()
     final_tabstop,
   })
 
-  validate('${1:$AA}${1:aa}', { { tabstop = '1', placeholder = { { var = 'AA', text = 'my-aa' } } }, { tabstop = '1', placeholder = { { text = 'my-aa' } } }, final_tabstop })
+  validate('${1:$AA}${1:aa}', {
+    { tabstop = '1', placeholder = { { text = 'my-aa', var = 'AA' } } },
+    { tabstop = '1', placeholder = { { text = 'my-aa', var = 'AA' } } },
+    final_tabstop,
+  })
 
   validate('${1:aa}$2${2:bb}$1', {
     { tabstop = '1', placeholder = { { text = 'aa' } } },
@@ -2726,25 +2749,46 @@ T['parse()']['respects `opts.normalize`'] = function()
     final_tabstop,
   })
   validate('${1:${2:aa}bb}$2${2:bb}$1', {
-    { tabstop = '1', placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } }, { text = 'bb' } } },
+    {
+      tabstop = '1',
+      placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } }, { text = 'bb' } },
+    },
     { tabstop = '2', placeholder = { { text = 'aa' } } },
     { tabstop = '2', placeholder = { { text = 'aa' } } },
-    { tabstop = '1', placeholder = { { text = 'aabb' } } },
+    {
+      tabstop = '1',
+      placeholder = { { tabstop = '2', placeholder = { { text = 'aa' } } }, { text = 'bb' } },
+    },
+    final_tabstop,
+  })
+  validate('${1:$AA}${2:$1}$1$2', {
+    { tabstop = '1', placeholder = { { text = 'my-aa', var = 'AA' } } },
+    {
+      tabstop = '2',
+      placeholder = { { tabstop = '1', placeholder = { { text = 'my-aa', var = 'AA' } } } },
+    },
+    { tabstop = '1', placeholder = { { text = 'my-aa', var = 'AA' } } },
+    {
+      tabstop = '2',
+      placeholder = { { tabstop = '1', placeholder = { { text = 'my-aa', var = 'AA' } } } },
+    },
     final_tabstop,
   })
 
   validate('${1:aa${2:bb}cc$AA}$1', {
-    { tabstop = '1', placeholder = { { text = 'aa' }, { tabstop = '2', placeholder = { { text = 'bb' } } }, { text = 'cc' }, { var = 'AA', text = 'my-aa' } } },
-    { tabstop = '1', placeholder = { { text = 'aabbccmy-aa' } } },
+    {
+      tabstop = '1',
+      placeholder = { { text = 'aa' }, { tabstop = '2', placeholder = { { text = 'bb' } } }, { text = 'cc' }, { text = 'my-aa', var = 'AA' } },
+    },
+    {
+      tabstop = '1',
+      placeholder = { { text = 'aa' }, { tabstop = '2', placeholder = { { text = 'bb' } } }, { text = 'cc' }, { text = 'my-aa', var = 'AA' } },
+    },
     final_tabstop,
   })
 
-  -- - Second nested $1 has forced placeholder thus removing other nested ones
-  validate('${1:${1:${1:${1:xx}}}}${1:aa}', {
-    { tabstop = '1', placeholder = { { tabstop = '1', placeholder = { { text = 'xx' } } } } },
-    { tabstop = '1', placeholder = { { text = 'xx' } } },
-    final_tabstop,
-  })
+  -- - Nesting same tabstop in placeholder is not allowed
+  expect.error(function() validate('${1:$1}') end, 'Placeholder can not contain its tabstop')
 
   -- - Should sync `choice` but preserve `transform` (for future)
   validate('$1${1/.*//}${1|a,b|}', {
@@ -2754,12 +2798,12 @@ T['parse()']['respects `opts.normalize`'] = function()
     final_tabstop,
   })
   validate('${1|a,b|}${1/.*//}$1${1|c,d|}', {
-  { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
-  { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' }, transform = { '.*', '', '' } },
-  { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
-  { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
-  final_tabstop,
-})
+    { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
+    { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' }, transform = { '.*', '', '' } },
+    { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
+    { tabstop = '1', placeholder = { { text = 'a' } }, choices = { 'a', 'b' } },
+    final_tabstop,
+  })
 
   -- - Should account for `lookup` resolution
   eq(
@@ -2941,7 +2985,8 @@ T['parse()']['can resolve special variables'] = function()
   validate_datetime('$CURRENT_SECOND',           '%S')
   validate_datetime('$CURRENT_TIMEZONE_OFFSET',  '%z')
 
-  validate('$CURRENT_SECONDS_UNIX', { { var = 'CURRENT_SECONDS_UNIX', text = tostring(child.lua_get('os.time()')) }, final_tabstop })
+  child.lua('os.time = function() return 111 end') -- mock for more robust testing
+  validate('$CURRENT_SECONDS_UNIX', { { var = 'CURRENT_SECONDS_UNIX', text = '111' }, final_tabstop })
 
   -- Random values
   child.lua('vim.loop.hrtime = function() return 101 end') -- mock reproducible `math.randomseed`
@@ -3465,6 +3510,7 @@ T['Session']['highlighting']['uses same highlighting for whole placeholder for c
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
+    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
   }
@@ -3477,6 +3523,7 @@ T['Session']['highlighting']['uses same highlighting for whole placeholder for c
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
+    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsUnvisited' } }, virt_text_pos = 'inline' },
   }
@@ -3489,6 +3536,7 @@ T['Session']['highlighting']['uses same highlighting for whole placeholder for c
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsVisited' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '2', virt_text = { { '•', 'MiniSnippetsVisited' } }, virt_text_pos = 'inline' },
+    { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
     { tabstop = '0', virt_text = { { '∎', 'MiniSnippetsFinal' } }, virt_text_pos = 'inline' },
     { tabstop = '3', virt_text = { { '•', 'MiniSnippetsCurrentReplace' } }, virt_text_pos = 'inline' },
   }
@@ -4340,11 +4388,8 @@ T['Tricky snippets']['tricky choices'] = function()
 end
 
 T['Tricky snippets']['tabstop nested inside itself'] = function()
-  -- Should be normalized into 'T1=${1:<T1=${1:<T1=>}>}' during `parse()`
-  start_session('T1=${1:<T1=${1:$1}>}')
-  child.expect_screenshot()
-  type_keys('x')
-  child.expect_screenshot()
+  -- Should not be allowed
+  expect.error(function() start_session('${1:$1}') end, 'Placeholder can not contain its tabstop')
 end
 
 T['Tricky snippets']['intertwined nested tabstops'] = function()
@@ -4572,7 +4617,7 @@ T['Examples']['<Tab>/<S-Tab> mappings'] = function()
   child.setup()
   load_module({
     snippets = { { prefix = 'l', body = 'T1=$1 T0=0' } },
-    mappings = { expand = '', jump_next = '' },
+    mappings = { expand = '', jump_next = '', jump_prev = '' },
   })
   child.lua([[
     local minisnippets = require('mini-dev.snippets')
