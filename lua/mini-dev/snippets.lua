@@ -1,36 +1,3 @@
--- TODO:
---
--- -- Do not forget to update all StyLua entries when moving to 'mini.nvim':
---    '.github/' and '.pre-commit-hooks'
---
--- Code:
--- - A system to load and manage custom snippets:
---
--- - A system to match snippet based on prefix:
---
--- - A system to expand, navigate, and edit snippet:
---
--- Docs:
--- - Manage:
---
--- - Expand:
---
--- - Syntax:
---
--- - `default_insert`:
---
--- - Misc:
---
--- Tests:
--- - Management:
---
--- - Expand:
---
--- - `default_insert`:
---
--- Outer:
--- - Make PR to 'danymat/neogen'.
-
 --- *mini.snippets* Manage and expand snippets
 --- *MiniSnippets*
 ---
@@ -163,7 +130,7 @@
 ---                 Fields: <from> and <to> for inclusive start/end POSITIONs.
 ---
 --- `SNIPPET`         Data about template to insert. Should contain fields:
----                 - <prefix> - string used to match against current text.
+---                 - <prefix> - string snippet identifier.
 ---                 - <body> - string snippet content with appropriate syntax.
 ---                 - <desc> - string snippet description in human readable form.
 ---                 Can also be used to mean snippet body if distinction is clear.
@@ -196,13 +163,14 @@
 --- pre-defined text and allow user to interactively change/add at certain places.
 ---
 --- This overview assumes default config for mappings and expand.
+--- See |MiniSnippets.config| and |MiniSnippets-examples| for more details.
 ---
 --- # Snippet structure ~
 ---
 --- Snippet consists from three parts:
---- - `Prefix` - string used to match against current text.
---- - `Body` - snippet content with appropriate syntax.
---- - `Desc` - snippet description in human readable form.
+--- - `Prefix` - identifier used to match against current text.
+--- - `Body` - actually inserted content with appropriate syntax.
+--- - `Desc` - description in human readable form.
 ---
 --- Example: `{ prefix = 'tis', body = 'This is snippet', desc = 'Snip' }`
 --- Typing `tis` and pressing "expand" mapping (<C-j> by default) will remove "tis",
@@ -212,56 +180,61 @@
 --- # Syntax ~
 ---
 --- Inserting just text after typing smaller prefix is already powerful enough.
---- For more flexibility, snippet body can be formatted in a special way to deliver
---- extra features byfollowing small set of basic rules. This module implements
---- support for syntax defined in LSP specification, with small deviations.
---- See this link for reference:
+--- For more flexibility, snippet body can be formatted in a special way to
+--- provide extra features. This module implements support for syntax defined
+--- in LSP specification (with small deviations). See this link for reference:
 --- https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/#snippet_syntax
 ---
 --- A quick overview of basic syntax features:
 ---
---- - Tabstops are parts of snippet meant for interactive tweaking by adding text
----   at their location. They are denoted as `$1`, `$2`, etc.
+--- - Tabstops are snippet parts meant for interactive editing at their location.
+---   They are denoted as `$1`, `$2`, etc.
 ---   Navigating between them is called "jumping" and is done in numerical order
----   of tabstop identifiers by pressing special keys: <C-l> and <C-h> by default.
+---   of tabstop identifiers by pressing special keys: <C-l> and <C-h> to jump
+---   to next and previous tabstop respectively.
 ---   Special tabstop `$0` is called "final tabstop": it is used to decide when
 ---   snippet session is automatically stopped and is visited last during jumping.
 ---
 ---   Example: `T1=$1 T2=$2 T0=$0` is expanded as `T1= T2= T0=` with three tabstops.
 ---
 --- - Tabstop can have placeholder: a text used if tabstop is not yet edited.
----   It follows this same syntax, which means it can itself contain tabstops
----   with placeholders (i.e. be nested).
----   They are denoted as `${1:placeholder}` (`$1` is equivalent to `${1:}`).
+---   Text is preserved if no editing is done. It follows this same syntax, which
+---   means it can itself contain tabstops with placeholders (i.e. be nested).
+---   Tabstop with placeholder is denoted as `${1:placeholder}` (`$1` is `${1:}`).
+---
 ---   Example: `T1=${1:text} T2=${2:<$1>}` is expanded as `T1=text T2=<text>`;
 ---            typing `x` at first placeholder results in `T1=x T2=<x>`;
 ---            jumping once and typing `y` results in `T1=x T2=y`.
 ---
+--- - There can be several tabstops with same identifier. They are linked and
+---   updated in sync during text editing. Can also have different placeholders;
+---   they are forced to be the same as in the first (from left to right) tabstop.
+---
+---   Example: `T1=${1:text} T1=$1` is expanded as `T1=text T1=text`;
+---            typing `x` at first placeholder results in `T1=x T1=x`.
+---
 --- - Tabstop can also have choices: suggestions about tabstop text. It is denoted
 ---   as `${1|a,b,c|}`. Choices are shown (with |ins-completion| like interface)
 ---   after jumping to tabstop. First choice is used as placeholder.
----   Example: `T1=${1|left,right|}` is expanded as `T1=left`.
 ---
---- - There can be several tabstops with same identifier. They are linked and
----   updated in sync during text editing. Can have different placeholders which
----   are forced to be the same as in the first tabstop (from left to right).
----   Example: `T1=${1:text} T1=$1` is expanded as `T1=text T1=text`;
----            typing `x` at first placeholder results in `T1=x T1=x`.
+---   Example: `T1=${1|left,right|}` is expanded as `T1=left`.
 ---
 --- - Variables can be used to automatically insert text without user interaction.
 ---   Same as tabstops, each one can have a placeholder which is used if variable
 ---   is not defined. There is a special set of variables describing editor state.
----   Example: `T1=$TM_FILENAME` is expanded as `T1=current-file-basename`.
+---
+---   Example: `V1=$TM_FILENAME V2=${NOTDEFINED:placeholder}` is expanded as
+---            `V1=current-file-basename V2=placeholder`.
 ---
 --- What's different from LSP specification:
 --- - Special set of variables is wider and is taken from VSCode specification:
 ---   https://code.visualstudio.com/docs/editor/userdefinedsnippets#_variables
----   Exceptions are `BLOCK_COMMENT_START` and `BLOCK_COMMENT_END` as Neovim
----   doesn't provide this information.
+---   Exceptions are `BLOCK_COMMENT_START` and `BLOCK_COMMENT_END` as Neovim doesn't
+---   provide this information.
 --- - Variable `TM_SELECTED_TEXT` is resolved as contents of |quote_quote| register.
 ---   It assumes that text is put there prior to expanding. For example, visually
 ---   select, press |c|, type prefix, and expand.
---- - Environment variables are recognized and supported: `T1=$VIMRUNTIME` will
+--- - Environment variables are recognized and supported: `V1=$VIMRUNTIME` will
 ---   use an actual value of |$VIMRUNTIME|.
 --- - Variable transformations are not supported during snippet session. It would
 ---   require interacting with ECMAScript-like regular expressions for which there
@@ -272,22 +245,52 @@
 --- There is a |MiniSnippets.parse()| function for programmatically parsing
 --- snippet body into a comprehensible data structure.
 ---
---- # Expanding ~
+--- # Expand ~
 ---
---- Expanding is done in several consecutive steps, see |MiniSnippets-glossary|.
+--- Using snippets is done via what is called "expanding". It goes like this:
+--- - Type snippet prefix or its recognizable part.
+--- - Press `<C-j>` to expand. It will perform the following steps:
+---     - Prepare available snippets in current context (buffer + local language).
+---       This allows having general function loaders in snippet setup.
+---     - Match text to the left of cursor with available prefixes. It first tries
+---       to do exact match and falls back to fuzzy matching.
+---     - If there are several matches, use `vim.ui.select()` to choose one.
+---     - Insert single matching snippet. If snippet contains tabstops, start
+---       snippet session.
 ---
---- (empty
----   tabstops are visualized with special inline virtual text like `•` and `∎` for
----   regular and final tabstops). Typing `text` and pressing `<C-l>` will lead to
----   `T1=text T2= T0=` and cursor after `T2=`.
---- TODO: short description of default session life cycle.
+--- For more details about each step see:
+--- - |MiniSnippets.default_prepare()|
+--- - |MiniSnippets.default_match()|
+--- - |MiniSnippets.default_select()|
+--- - |MiniSnippets.default_insert()|
 ---
---- For more details see |MiniSnippets-session|.
+--- Snippet session allows interactive editing at tabstop locations:
+---
+--- - All tabstop locations are visualized depending on tabstop "state" (whether
+---   it is current/visited/unvisited/final and whether it was already edited).
+---   Empty tabstops are visualized with inline virtual text ("•"/"∎" for
+---   regular/final tabstops). It is removed after session is stopped.
+---
+--- - Start session at first tabstop. Type text to replace placeholder.
+---   When finished with current tabstop, jump to next with `<C-l>`. Repeat.
+---   If changed mind about some previous tabstop, jump back with `<C-h>`.
+---   Jumping also wraps around the edge (first tabstop is next after final).
+---
+--- - Starting another snippet session while there is one active is allowed.
+---   This creates nested sessions: current is suspended, new one is started.
+---   After newly created is stopped, the suspended one is resumed.
+---
+--- - Stop session manually by pressing `<C-c>` or it will be done automatically:
+---   either by making text edit or exiting in Normal mode when final tabstop is
+---   current. If snippet doesn't explicitly define final tabstop, it is added at
+---   the end of the snippet.
+---
+--- For more details about snippet session see |MiniSnippets-session|.
 ---
 --- # Management ~
 ---
----
---- TODO
+--- Out of the box 'mini.snippets' doesn't load any snippets, it should be done
+--- explicitly inside |MiniSnippets.setup()| following |MiniSnippets.config|.
 ---
 --- The suggested approach to snippet management is to create dedicated files with
 --- snippet data and load them through function loaders in `config.snippets`.
@@ -295,8 +298,8 @@
 ---
 ---                                                *MiniSnippets-file-specification*
 --- General idea of supported files is to have at least out of the box experience
---- with common snippet collections. Namely "rafamadriz/friendly-snippets" and
---- VSCode language plugins. The following files are supported:
+--- with common snippet collections. Namely "rafamadriz/friendly-snippets".
+--- The following files are supported:
 ---
 --- - Extensions:
 ---     - Read/decoded as JSON object (|vim.json.decode()|): `*.json`, `*.code-snippets`
@@ -333,21 +336,21 @@
 --- work is to try them out yourself. Here are steps for a basic demo:
 --- - Create 'snippets/global.json' file in the config directory with the content: >
 ---
----   [
----     { "prefix": "ba", "body": "T1=$1 T2=$2 T0=$0",         "desc": "Basic" },
----     { "prefix": "pl", "body": "T1=${1:text} T2=${2:<$1>}", "desc": "Placeholders" },
----     { "prefix": "ch", "body": "T1=${1|aa,bb|} T1=$1",      "desc": "Linked and choices" },
----     { "prefix": "va", "body": "Runtime: $VIMRUNTIME",      "desc": "Variables" },
----     {
+---   {
+---     "Basic":        { "prefix": "ba", "body": "T1=$1 T2=$2 T0=$0"         },
+---     "Placeholders": { "prefix": "pl", "body": "T1=${1:aa}\nT2=${2:<$1>}"  },
+---     "Choices":      { "prefix": "ch", "body": "T1=${1|a,b|} T2=${2|c,d|}" },
+---     "Linked":       { "prefix": "ln", "body": "T1=$1\nT1=$1"              },
+---     "Variables":    { "prefix": "va", "body": "Runtime: $VIMRUNTIME\n"    },
+---     "Complex":      {
 ---       "prefix": "co",
----       "body": "T1=${1:$RANDOM}\nT2=${2:<$1>}\nT1=$1\nT2=$2\nT0=$0",
----       "desc": "Combined",
----     },
----   ]
+---       "body": [ "T2=${2:$RANDOM}", "T1=${1:<$2>}", "T2=$2", "T1=$1" ]
+---     }
+---   }
 --- <
 --- - Set up 'mini.snippets' as recommended in |MiniSnippets-examples|.
---- - Open Neovim and for each snippet, type its prefix and press `<C-j>`.
----   Explore from there.
+--- - Open Neovim. Type each snippet prefix and press `<C-j>` (even if there is
+---   still active session). Explore from there.
 ---
 ---@tag MiniSnippets-overview
 
@@ -455,7 +458,7 @@
 ---      -- Insert at cursor
 ---      insert({ body = snippet })
 ---    end
----  <
+--- <
 ---@tag MiniSnippets-examples
 
 ---@alias __minisnippets_cache_opt <cache> `(boolean)` - whether to use cached output. Default: `true`.
@@ -467,9 +470,8 @@
 ---@diagnostic disable:unused-local
 
 -- Module definition ==========================================================
--- TODO: make local before release
-MiniSnippets = {}
-H = {}
+local MiniSnippets = {}
+local H = {}
 
 --- Module setup
 ---
@@ -521,7 +523,8 @@ end
 --- `config.snippets` is resolved with `config.prepare` on every expand.
 --- See |MiniSnippets.default_prepare()| for how it is done by default.
 ---
---- Illustration of `config.snippets` customization: >lua
+--- For a practical example see |MiniSnippets-examples|.
+--- Here is an illustration of `config.snippets` customization capabilities: >lua
 ---
 ---   local gen_loader = require('mini.snippets').gen_loader
 ---   require('mini.snippets').setup({
@@ -1115,8 +1118,13 @@ end
 ---                                                           *MiniSnippets-session*
 --- # Session life cycle ~
 ---
---- - Start with cursor at first tabstop. If there are linked tabstops, cursor is
----   placed at start of reference node (see |MiniSnippets-glossary|).
+--- - Start with cursor at first tabstop. If there are linked tabstops, cursor
+---   is placed at start of reference node (see |MiniSnippets-glossary|).
+---   All tabstops are visualized with dedicated highlight groups (see "Highlight
+---   groups" section in |MiniSnippets|).
+---   Empty tabstops are visualized with inline virtual text ("•"/"∎" for
+---   regular/final tabstops) meaning that it is not an actual text in the
+---   buffer and will be removed after session is stopped.
 ---
 --- - Decide whether you want to replace the placeholder. If not, jump to next or
 ---   previous tabstop. If yes, edit it: add new and/or delete already added text.
@@ -1158,7 +1166,7 @@ end
 ---     - Manually by pressing `<C-c>` or calling |MiniSnippets.session.stop()|.
 ---       Exact key can be adjusted in |MiniSnippets.config| `mappings`.
 ---     - Automatically: any text edit or switching to Normal mode stops session
----       if final tabstop (`$0`) is current.
+---       if final tabstop (`$0`) is current. Its presence is ensured after insert.
 ---       Not stopping session right away after jumping to final mode (as most
 ---       other snippet plugins do) allows going back to other tabstops in case
 ---       of a late missed typo. Wrapping around the edge during jumping also
