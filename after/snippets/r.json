@@ -1,0 +1,12 @@
+{
+  "else":     { "prefix": "el",     "body": "else {\n\t$0\n}" },
+  "else-if":  { "prefix": "eif",    "body": "else if ($1) {\n\t$0\n}" },
+  "for":      { "prefix": "for",    "body": "for ($1 in $2) {\n\t$0\n}" },
+  "function": { "prefix": "fun",    "body": "function($1) {\n\t$0\n}" },
+  "ggplot":   { "prefix": "ggplot", "body": "ggplot($1, aes($2)) +\ngeom_$0" },
+  "if":       { "prefix": "if",     "body": "if ($1) {\n\t$0\n}" },
+  "if-else":  { "prefix": "ife",    "body": "if ($1) {\n\t$0\n} else {\n\t\n}" },
+  "return":   { "prefix": "ret",    "body": "return($0)" },
+  "testthat": { "prefix": "test_",  "body": "test_that(\"$1\", {\n\t$0\n})" },
+  "while":    { "prefix": "wh",     "body": "while ($1) {\n\t$0\n}" }
+}

@@ -1,0 +1,13 @@
+{
+  "Bold italic":   { "prefix": "bi",      "body": "***$1***$0", },
+  "Bold":          { "prefix": "b",       "body": "**$1**$0", },
+  "Code block":    { "prefix": "cbl",     "body": "```$1\n\t$0\n```", },
+  "Image":         { "prefix": "img",     "body": "![$1]($2)$0", },
+  "Italic":        { "prefix": "i",       "body": "*$1*$0", },
+  "Link":          { "prefix": "link",    "body": "[$1]($2)$0", },
+  "Quote":         { "prefix": "quote",   "body": "> $0", },
+  "Section":       { "prefix": "section", "body": "----------\n", },
+  "Spoiler":       { "prefix": "spoiler", "body": "<details>\n\t<summary>$1</summary>\n\t$0\n</details>", },
+  "Strikethrough": { "prefix": "strike",  "body": "~~$1~~$0", },
+  "URL":           { "prefix": "url",     "body": "<$1>$0", }
+}
