@@ -371,13 +371,6 @@ end)
 -- Snippet collection
 later(function() add('rafamadriz/friendly-snippets') end)
 
--- -- Snippets
--- later(function()
---   add('L3MON4D3/LuaSnip')
---   local src_file = vim.fn.has('nvim-0.10') == 1 and 'my_snippets.lua' or 'plugins/luasnip.lua'
---   source(src_file)
--- end)
-
 -- Documentation generator
 later(function()
   add('danymat/neogen')

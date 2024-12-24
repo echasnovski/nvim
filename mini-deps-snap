@@ -1,5 +1,4 @@
 return {
-  LuaSnip = "33b06d72d220aa56a7ce80a0dd6f06c70cd82b9d",
   ["conform.nvim"] = "339b3e4519ec49312d34fcfa275aa15bfaa67025",
   ["friendly-snippets"] = "efff286dd74c22f731cdec26a70b46e5b203c619",
   ["markdown-preview.nvim"] = "a923f5fc5ba36a3b17e289dc35dc17f66d0548ee",
