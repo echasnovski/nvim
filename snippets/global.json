@@ -13,5 +13,8 @@
     "prefix": "ctime",
     "body": "$CURRENT_HOUR:$CURRENT_MINUTE:$CURRENT_SECOND",
     "description": "Insert current time (HH:MM:SS)"
-  }
+  },
+
+  "tmp": { "prefix": "tmp", "body": "${1:${2:$3}} ${2:$3} $3" },
+  "tmp2": { "prefix": "tmp2", "body": "$1 ${2:$1} ${3:${2:$1}}" }
 }

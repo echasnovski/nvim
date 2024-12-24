@@ -30,27 +30,6 @@ if vim.g.vscode ~= nil then now(function() source('vscode.lua') end) end
 -- Mini.nvim ==================================================================
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
-later(function()
-  local snippets, config_path = require('mini-dev.snippets'), vim.fn.stdpath('config')
-  local load_if_minitest_buf = function(context)
-    local buf_name = vim.api.nvim_buf_get_name(context.buf_id)
-    local is_test_buf = vim.fn.fnamemodify(buf_name, ':t'):find('^test_.+%.lua$') ~= nil
-    if not is_test_buf then return {} end
-    return MiniSnippets.read_file(config_path .. '/snippets/mini-test.json')
-  end
-
-  local lang_patterns = { tex = { 'latex.json' }, plaintex = { 'latex.json' } }
-  snippets.setup({
-    snippets = {
-      snippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
-      load_if_minitest_buf,
-      snippets.gen_loader.from_file(config_path .. '/snippets/test.code-snippets'),
-    },
-  })
-end)
-
-later(function() add('rafamadriz/friendly-snippets') end)
-
 -- Step one
 now(function()
   -- Use this color scheme in 'mini.nvim' demos:
@@ -313,6 +292,26 @@ later(function()
   end
 end)
 
+later(function()
+  local snippets, config_path = require('mini.snippets'), vim.fn.stdpath('config')
+
+  local lang_patterns = { tex = { 'latex.json' }, plaintex = { 'latex.json' } }
+  local load_if_minitest_buf = function(context)
+    local buf_name = vim.api.nvim_buf_get_name(context.buf_id)
+    local is_test_buf = vim.fn.fnamemodify(buf_name, ':t'):find('^test_.+%.lua$') ~= nil
+    if not is_test_buf then return {} end
+    return MiniSnippets.read_file(config_path .. '/snippets/mini-test.json')
+  end
+
+  snippets.setup({
+    snippets = {
+      snippets.gen_loader.from_file(config_path .. '/snippets/global.json'),
+      snippets.gen_loader.from_lang({ lang_patterns = lang_patterns }),
+      load_if_minitest_buf,
+    },
+  })
+end)
+
 later(function() require('mini.splitjoin').setup() end)
 
 later(function()
@@ -368,6 +367,9 @@ later(function()
   add('kassio/neoterm')
   source('plugins/neoterm.lua')
 end)
+
+-- Snippet collection
+later(function() add('rafamadriz/friendly-snippets') end)
 
 -- -- Snippets
 -- later(function()
