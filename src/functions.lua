@@ -41,11 +41,10 @@ Config.print_active_neoterm = function()
   print(msg)
 end
 
--- Create scratch buffer and focus on it
-Config.new_scratch_buffer = function()
-  local buf_id = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_win_set_buf(0, buf_id)
-  return buf_id
+-- Create listed scratch buffer and focus on it
+Config.new_scratch_buffer = function(split_direction)
+  if split_direction ~= nil then vim.cmd(split_direction .. ' split') end
+  vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(true, true))
 end
 
 -- Make action for `<CR>` which respects completion and autopairs
@@ -69,7 +68,7 @@ end
 Config.cr_action = function()
   if vim.fn.pumvisible() ~= 0 then
     local item_selected = vim.fn.complete_info()['selected'] ~= -1
-    return item_selected and H.keys['ctrl-y'] or H.keys['ctrl-y_cr']
+    return item_selected and '\25' or '\25\r'
   else
     return require('mini.pairs').cr()
   end
@@ -120,13 +119,11 @@ end
 
 -- Toggle quickfix window
 Config.toggle_quickfix = function()
-  local quickfix_wins = vim.tbl_filter(
-    function(win_id) return vim.fn.getwininfo(win_id)[1].quickfix == 1 end,
-    vim.api.nvim_tabpage_list_wins(0)
-  )
-
-  local command = #quickfix_wins == 0 and 'copen' or 'cclose'
-  vim.cmd(command)
+  local cur_tabnr = vim.fn.tabpagenr()
+  for _, wininfo in ipairs(vim.fn.getwininfo()) do
+    if wininfo.quickfix == 1 and wininfo.tabnr == cur_tabnr then return vim.cmd('cclose') end
+  end
+  vim.cmd('copen')
 end
 
 -- Custom 'statuscolumn' for Neovim>=0.9
@@ -318,10 +315,39 @@ S.delete_current = function()
   print('Deleted file ' .. vim.inspect(path))
 end
 
--- Helper data ================================================================
--- Commonly used keys
-H.keys = {
-  ['cr'] = vim.api.nvim_replace_termcodes('<CR>', true, true, true),
-  ['ctrl-y'] = vim.api.nvim_replace_termcodes('<C-y>', true, true, true),
-  ['ctrl-y_cr'] = vim.api.nvim_replace_termcodes('<C-y><CR>', true, true, true),
-}
+-- LuaLS "Go to source" =======================================================
+-- Deal with the fact that LuaLS in case of `local a = function()` style
+-- treats both `a` and `function()` as definitions of `a`.
+-- Do this by tweaking `vim.lsp.buf_definition` mapping as client-local
+-- handlers are ignored after https://github.com/neovim/neovim/pull/30877
+local filter_line_locations = function(locations)
+  local present, res = {}, {}
+  for _, l in ipairs(locations) do
+    local t = present[l.filename] or {}
+    if not t[l.lnum] then
+      table.insert(res, l)
+      t[l.lnum] = true
+    end
+    present[l.filename] = t
+  end
+  return res
+end
+
+local show_location = function(location)
+  local buf_id = location.bufnr or vim.fn.bufadd(location.filename)
+  vim.bo[buf_id].buflisted = true
+  vim.api.nvim_win_set_buf(0, buf_id)
+  vim.api.nvim_win_set_cursor(0, { location.lnum, location.col - 1 })
+  vim.cmd('normal! zv')
+end
+
+local on_list = function(args)
+  local items = filter_line_locations(args.items)
+  if #items > 1 then
+    vim.fn.setqflist({}, ' ', { title = 'LSP locations', items = items })
+    return vim.cmd('botright copen')
+  end
+  show_location(items[1])
+end
+
+Config.luals_unique_definition = function() return vim.lsp.buf.definition({ on_list = on_list }) end

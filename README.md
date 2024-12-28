@@ -5,14 +5,15 @@ This is a setup for Neovim>=0.8. Current structure (might be a bit outdated):
 ```
 after/                # Everything that will be sourced last (`:h after-directory`)
 │ ftplugin/           # Configurations for filetypes
-└ queries/            # Queries for treesitter
+│ queries/            # Queries for treesitter
+└ snippets/           # Local snippets (override installed collection)
 lua/                  # Lua code used in configuration
 └ mini-dev/           # Development code for 'mini.nvim'
 misc/                 # Everything not directly related to Neovim startup
 │ dict/               # Dictionary files
 │ mini_vimscript/     # Vimscript (re)implementation of some 'mini' modules
-│ scripts/            # Scripts for miscellaneous usage
-└ snippets/           # Snippets for snippets engine
+└ scripts/            # Scripts for miscellaneous usage
+snippets/             # Global snippets
 spell/                # Files for spelling
 src/                  # Custom 'plugin namespace'
 │ plugins/            # Configurations for plugins
@@ -48,7 +49,13 @@ Important system dependencies:
 - **Tools for finding stuff**:
     - [ripgrep](https://github.com/BurntSushi/ripgrep#installation)
 
+- **Spelling dictionaries**:
+    - Create '~/.nvim/spell' directory.
+    - Put there English,Russian dictionaries (download from ftp://ftp.vim.org/pub/vim/runtime/spell/).
+
 - **Clipboard support**. One of 'xsel' (preferred) or 'xclip'.
+
+- **Language Servers**. These should be handled manually. For a list of needed LSP providers look at settings for 'nvim-lspconfig'.
 
 - **Pre-commit hooks** (not strictly necessary but "good to have"). This repository uses pre-commit hooks to verify integrity of code. Preferred way of setting this up:
     - Install `pre-commit`. Preferred way is to use [pipx](https://github.com/pypa/pipx) with `pipx install pre-commit`. There also [other options](https://pre-commit.com/#install).

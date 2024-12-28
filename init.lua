@@ -21,27 +21,30 @@ local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
 local source = function(path) dofile(Config.path_source .. path) end
 
 -- Settings and mappings ======================================================
-now(function() source('settings.lua') end)
+now(function() source('options.lua') end)
 now(function() source('functions.lua') end)
 now(function() source('mappings.lua') end)
-now(function() source('mappings-leader.lua') end)
 if vim.g.vscode ~= nil then now(function() source('vscode.lua') end) end
 
 -- Mini.nvim ==================================================================
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 -- Step one
+now(function() vim.cmd('colorscheme miniwinter') end)
+
 now(function()
-  -- Use this color scheme in 'mini.nvim' demos:
-  -- require('mini.hues').setup({ background = '#11262d', foreground = '#c0c8cb' })
-  vim.cmd('colorscheme randomhue')
+  require('mini.basics').setup({
+    -- Manage options manually in a spirit of transparency
+    options = { basic = false },
+    mappings = { windows = true, move_with_alt = true },
+    autocommands = { relnum_in_visual_mode = true },
+  })
 end)
 
 now(function()
+  local not_lua_diagnosing = function(notif) return not vim.startswith(notif.msg, 'lua_ls: Diagnosing') end
   local filterout_lua_diagnosing = function(notif_arr)
-    local not_diagnosing = function(notif) return not vim.startswith(notif.msg, 'lua_ls: Diagnosing') end
-    notif_arr = vim.tbl_filter(not_diagnosing, notif_arr)
-    return MiniNotify.default_sort(notif_arr)
+    return MiniNotify.default_sort(vim.tbl_filter(not_lua_diagnosing, notif_arr))
   end
   require('mini.notify').setup({
     content = { sort = filterout_lua_diagnosing },
@@ -85,27 +88,6 @@ end)
 later(function() require('mini.align').setup() end)
 
 later(function() require('mini.animate').setup({ scroll = { enable = false } }) end)
-
-later(function()
-  require('mini.basics').setup({
-    options = {
-      -- Manage options manually
-      basic = false,
-    },
-    mappings = {
-      windows = true,
-      move_with_alt = true,
-    },
-    autocommands = {
-      relnum_in_visual_mode = true,
-    },
-  })
-  -- Have no transparency to always have "overflow" icons (otherwise there can
-  -- be a symbol visible from underneath blocking "overflow if next to space"
-  -- approach from terminal emulator)
-  vim.o.pumblend = 0
-  vim.o.winblend = 0
-end)
 
 later(function() require('mini.bracketed').setup() end)
 
@@ -189,6 +171,7 @@ later(function() require('mini.doc').setup() end)
 
 later(function()
   require('mini.files').setup({ windows = { preview = true } })
+
   local minifiles_augroup = vim.api.nvim_create_augroup('ec-mini-files', {})
   vim.api.nvim_create_autocmd('User', {
     group = minifiles_augroup,
@@ -239,11 +222,8 @@ end)
 later(function()
   local map = require('mini.map')
   local gen_integr = map.gen_integration
-  local encode_symbols = map.gen_encode_symbols.block('3x2')
-  -- Use dots in `st` terminal because it can render them as blocks
-  if vim.startswith(vim.fn.getenv('TERM'), 'st') then encode_symbols = map.gen_encode_symbols.dot('4x2') end
   map.setup({
-    symbols = { encode = encode_symbols },
+    symbols = { encode = map.gen_encode_symbols.dot('4x2') },
     integrations = { gen_integr.builtin_search(), gen_integr.diff(), gen_integr.diagnostic() },
   })
   vim.keymap.set('n', [[\h]], ':let v:hlsearch = 1 - v:hlsearch<CR>', { desc = 'Toggle hlsearch' })
@@ -288,7 +268,7 @@ later(function()
     local choose = function(item)
       vim.schedule(function() MiniPick.builtin.files(nil, { source = { cwd = item.path } }) end)
     end
-    return MiniExtra.pickers.explorer({ cwd = cwd }, { source = { choose = choose } })
+    return MiniPick.builtin.files({ cwd = cwd }, { source = { choose = choose } })
   end
 end)
 
@@ -375,6 +355,7 @@ later(function() add('rafamadriz/friendly-snippets') end)
 later(function()
   add('danymat/neogen')
   require('neogen').setup({
+    snippet_engine = 'mini',
     languages = {
       lua = { template = { annotation_convention = 'emmylua' } },
       python = { template = { annotation_convention = 'numpydoc' } },
