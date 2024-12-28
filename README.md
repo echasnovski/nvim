@@ -7,27 +7,31 @@ after/                # Everything that will be sourced last (`:h after-director
 │ ftplugin/           # Configurations for filetypes
 │ queries/            # Queries for treesitter
 └ snippets/           # Local snippets (override installed collection)
+colors/               # Personal color schemes
 lua/                  # Lua code used in configuration
 └ mini-dev/           # Development code for 'mini.nvim'
 misc/                 # Everything not directly related to Neovim startup
 │ dict/               # Dictionary files
 │ mini_vimscript/     # Vimscript (re)implementation of some 'mini' modules
 └ scripts/            # Scripts for miscellaneous usage
+plugin/               # Modularized config files sourced during startup
+│ 10_options.lua      # Built-in options/settings
+│ 11_mappings.lua     # Personal mappings
+│ 12_functions.lua    # Personal functions
+│ 13_vscode.lua       # VSCode related configuration
+│ 20_mini.lua         # Configuration of 'mini.nvim'
+└ 21_plugins.lua      # Configuration of other plugins
 snippets/             # Global snippets
-spell/                # Files for spelling
-src/                  # Custom 'plugin namespace'
-│ plugins/            # Configurations for plugins
-│ functions.lua       # Custom functions
-│ mappings-leader.lua # Mappings for `<Leader>` key
-│ mappings.lua        # General mappings
-│ settings.lua        # General settings
-└ vscode.lua          # VS Code related configuration
+spell/                # Spelling files
 ```
 
 NOTEs:
-- Code is modularized with parts put into 'src/' directory which are sourced using `dofile()`. Currently general approach is to use 'lua/', but it has some downsides:
-    - All modules inside of it are shared across installed plugins. This might lead to naming conflicts. It can be avoided by creating "personalized" directory module (like 'lua/ec/'), but with `src/` it is not necessary.
-    - Using `require()` to source those modules is not easily reloadable, as `require()` caches its outputs (stored inside `package.loaded` table). With `dofile()` it is not a problem.
+- Code is modularized with parts put into 'plugin/' directory which is sourced automatically during Neovim startup. Files have numeric prefix to ensure that they are loaded in particular order (matters as some files depend on previous ones; like some plugin setup can depend on set options, etc.).
+
+  Currently general approach is to use 'lua/', but it has some downsides:
+    - All modules inside of it are shared across installed plugins. This might lead to naming conflicts. It can be avoided by creating "personalized" directory module (like 'lua/ec/'), but with `plugin/` it is not necessary.
+    - Using `require()` to source those modules is not easily reloadable, as `require()` caches its outputs (stored inside `package.loaded` table).
+      Having config in 'plugin' doesn't solve this directly, but files are more suited to be called with `:source`.
 
 ## Installation
 

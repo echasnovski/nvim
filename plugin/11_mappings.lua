@@ -57,9 +57,14 @@ nmap_leader('bw', '<Cmd>lua MiniBufremove.wipeout()<CR>',           'Wipeout')
 nmap_leader('bW', '<Cmd>lua MiniBufremove.wipeout(0, true)<CR>',    'Wipeout!')
 
 -- e is for 'explore' and 'edit'
+local edit_config_file = function(filename)
+  return '<Cmd>edit ' .. vim.fn.stdpath('config') .. '/plugin/' .. filename .. '<CR>'
+end
 nmap_leader('ed', '<Cmd>lua MiniFiles.open()<CR>',                             'Directory')
 nmap_leader('ef', '<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>', 'File directory')
-nmap_leader('ei', '<Cmd>edit $MYVIMRC<CR>',                                    'File directory')
+nmap_leader('em', edit_config_file('20_mini.lua'),                             'Mini.nvim config')
+nmap_leader('eo', edit_config_file('10_options.lua'),                          'Options config')
+nmap_leader('ep', edit_config_file('21_plugins.lua'),                          'Plugins config')
 nmap_leader('eq', '<Cmd>lua Config.toggle_quickfix()<CR>',                     'Quickfix')
 
 -- f is for 'fuzzy find'

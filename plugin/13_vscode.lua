@@ -1,3 +1,5 @@
+if vim.g.vscode == nil then return end
+
 -- Mappings for code commenting
 vim.keymap.set('x', 'gc', '<Plug>VSCodeCommentary')
 vim.keymap.set('n', 'gc', '<Plug>VSCodeCommentary')
