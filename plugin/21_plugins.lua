@@ -1,7 +1,8 @@
-local add, later = MiniDeps.add, MiniDeps.later
+local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
+local now_if_args = vim.fn.argc(-1) > 0 and now or later
 
 -- Tree-sitter (advanced syntax parsing, highlighting, textobjects) ===========
-later(function()
+now_if_args(function()
   add({
     source = 'nvim-treesitter/nvim-treesitter',
     checkout = 'master',
@@ -63,7 +64,7 @@ later(function()
 end)
 
 -- Language server configurations =============================================
-later(function()
+now_if_args(function()
   add('neovim/nvim-lspconfig')
 
   local custom_on_attach = function(client, buf_id)

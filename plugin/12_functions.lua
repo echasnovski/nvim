@@ -42,10 +42,7 @@ Config.print_active_neoterm = function()
 end
 
 -- Create listed scratch buffer and focus on it
-Config.new_scratch_buffer = function(split_direction)
-  if split_direction ~= nil then vim.cmd(split_direction .. ' split') end
-  vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(true, true))
-end
+Config.new_scratch_buffer = function() vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(true, true)) end
 
 -- Make action for `<CR>` which respects completion and autopairs
 --

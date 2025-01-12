@@ -201,7 +201,7 @@ later(function()
     symbols = { encode = map.gen_encode_symbols.dot('4x2') },
     integrations = { gen_integr.builtin_search(), gen_integr.diff(), gen_integr.diagnostic() },
   })
-  vim.keymap.set('n', [[\h]], ':let v:hlsearch = 1 - v:hlsearch<CR>', { desc = 'Toggle hlsearch' })
+  vim.keymap.set('n', [[\h]], ':let v:hlsearch = 1 - v:hlsearch<CR>', { desc = 'Toggle hlsearch', silent = true })
   for _, key in ipairs({ 'n', 'N', '*' }) do
     vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
   end
@@ -243,7 +243,7 @@ later(function()
     local choose = function(item)
       vim.schedule(function() MiniPick.builtin.files(nil, { source = { cwd = item.path } }) end)
     end
-    return MiniPick.builtin.files({ cwd = cwd }, { source = { choose = choose } })
+    return MiniExtra.pickers.explorer({ cwd = cwd }, { source = { choose = choose } })
   end
 end)
 

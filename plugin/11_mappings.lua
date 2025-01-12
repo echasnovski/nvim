@@ -48,13 +48,12 @@ local xmap_leader = function(suffix, rhs, desc, opts)
 end
 
 -- b is for 'buffer'
-nmap_leader('ba', '<Cmd>b#<CR>',                                    'Alternate')
-nmap_leader('bd', '<Cmd>lua MiniBufremove.delete()<CR>',            'Delete')
-nmap_leader('bD', '<Cmd>lua MiniBufremove.delete(0, true)<CR>',     'Delete!')
-nmap_leader('bs', '<Cmd>lua Config.new_scratch_buffer("vert")<CR>', 'Scratch')
-nmap_leader('bS', '<Cmd>lua Config.new_scratch_buffer("")<CR>',     'Scratch')
-nmap_leader('bw', '<Cmd>lua MiniBufremove.wipeout()<CR>',           'Wipeout')
-nmap_leader('bW', '<Cmd>lua MiniBufremove.wipeout(0, true)<CR>',    'Wipeout!')
+nmap_leader('ba', '<Cmd>b#<CR>',                                 'Alternate')
+nmap_leader('bd', '<Cmd>lua MiniBufremove.delete()<CR>',         'Delete')
+nmap_leader('bD', '<Cmd>lua MiniBufremove.delete(0, true)<CR>',  'Delete!')
+nmap_leader('bs', '<Cmd>lua Config.new_scratch_buffer()<CR>',    'Scratch')
+nmap_leader('bw', '<Cmd>lua MiniBufremove.wipeout()<CR>',        'Wipeout')
+nmap_leader('bW', '<Cmd>lua MiniBufremove.wipeout(0, true)<CR>', 'Wipeout!')
 
 -- e is for 'explore' and 'edit'
 local edit_config_file = function(filename)
@@ -112,17 +111,17 @@ xmap_leader('gs', '<Cmd>lua MiniGit.show_at_cursor()<CR>',  'Show at selection')
 
 -- l is for 'LSP' (Language Server Protocol)
 local formatting_cmd = '<Cmd>lua require("conform").format({ lsp_fallback = true })<CR>'
-nmap_leader('la', '<Cmd>lua vim.lsp.buf.signature_help()<CR>', 'Arguments popup')
-nmap_leader('ld', '<Cmd>lua vim.diagnostic.open_float()<CR>',  'Diagnostics popup')
-nmap_leader('lf', formatting_cmd,                              'Format')
-nmap_leader('li', '<Cmd>lua vim.lsp.buf.hover()<CR>',          'Information')
-nmap_leader('lj', '<Cmd>lua vim.diagnostic.goto_next()<CR>',   'Next diagnostic')
-nmap_leader('lk', '<Cmd>lua vim.diagnostic.goto_prev()<CR>',   'Prev diagnostic')
-nmap_leader('lR', '<Cmd>lua vim.lsp.buf.references()<CR>',     'References')
-nmap_leader('lr', '<Cmd>lua vim.lsp.buf.rename()<CR>',         'Rename')
-nmap_leader('ls', '<Cmd>lua vim.lsp.buf.definition()<CR>',     'Source definition')
+nmap_leader('la', '<Cmd>lua vim.lsp.buf.code_action()<CR>',   'Actions')
+nmap_leader('ld', '<Cmd>lua vim.diagnostic.open_float()<CR>', 'Diagnostics popup')
+nmap_leader('lf', formatting_cmd,                             'Format')
+nmap_leader('li', '<Cmd>lua vim.lsp.buf.hover()<CR>',         'Information')
+nmap_leader('lj', '<Cmd>lua vim.diagnostic.goto_next()<CR>',  'Next diagnostic')
+nmap_leader('lk', '<Cmd>lua vim.diagnostic.goto_prev()<CR>',  'Prev diagnostic')
+nmap_leader('lR', '<Cmd>lua vim.lsp.buf.references()<CR>',    'References')
+nmap_leader('lr', '<Cmd>lua vim.lsp.buf.rename()<CR>',        'Rename')
+nmap_leader('ls', '<Cmd>lua vim.lsp.buf.definition()<CR>',    'Source definition')
 
-xmap_leader('lf', formatting_cmd,                              'Format selection')
+xmap_leader('lf', formatting_cmd,                             'Format selection')
 
 -- L is for 'Lua'
 nmap_leader('Lc', '<Cmd>lua Config.log_clear()<CR>',               'Clear log')
