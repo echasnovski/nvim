@@ -34,6 +34,43 @@ now(function() require('mini.starter').setup() end)
 
 now(function() require('mini.statusline').setup() end)
 
+-- Future 'mini.statuscolumn'
+now(function()
+  if vim.fn.has('nvim-0.9') == 1 then
+    local n_wraps = function(row)
+      -- TODO: Use it for better cursor animation with 'wrap' enabled?
+      -- NOTE: Include `start_vcol = 0` to not count virtual text above
+      return vim.api.nvim_win_text_height(0, { start_row = row, start_vcol = 0, end_row = row }).all - 1
+    end
+
+    vim.api.nvim_set_hl(0, 'MiniStatuscolumnBorder', { link = 'LineNr' })
+    vim.cmd('au ColorScheme * hi! link MiniStatuscolumnBorder LineNr')
+
+    _G.statuscolumn = function()
+      -- add_to_log({ 'statuscolumn', actual = vim.g.actual_curwin, cur = vim.api.nvim_get_current_win() })
+
+      -- TODO: address `signcolumn=auto` and `foldcolumn=auto`
+      if not vim.wo.number and vim.wo.signcolumn == 'no' and vim.wo.foldcolumn == '0' then return '' end
+
+      -- TODO: Take a look at why `CursorLineNr` is not combined with extmark
+      -- highligting from 'mini.diff'
+      -- local is_cur = vim.v.relnum == 0
+      -- local line_nr_hl = '%#' .. (is_cur and 'Cursor' or '') .. 'LineNr#'
+      local line_nr_hl = ''
+
+      local lnum = vim.v.virtnum == 0 and '%l'
+        -- or (vim.v.virtnum < 0 and '•' or (vim.v.virtnum == n_wraps(vim.v.lnum - 1) and '└' or '├'))
+        -- or (vim.v.virtnum < 0 and '•' or '↯')
+        or (vim.v.virtnum < 0 and '•' or '↳')
+
+      -- Deal with sign widths
+
+      return '%C%s%=' .. line_nr_hl .. lnum .. '%#LineNr#│'
+    end
+    vim.o.statuscolumn = '%{%v:lua.statuscolumn()%}'
+  end
+end)
+
 now(function() require('mini.tabline').setup() end)
 
 now(function()
@@ -46,6 +83,21 @@ now(function()
   MiniIcons.mock_nvim_web_devicons()
   later(MiniIcons.tweak_lsp_kind)
 end)
+
+-- Future part of 'mini.detect'
+-- TODO: Needs some condition to stop the comb.
+_G.detect_bigline = function(threshold)
+  threshold = threshold or 1000
+  local step = math.floor(0.5 * threshold)
+  local cur_line, cur_byte = 1, step
+  local byte2line = vim.fn.byte2line
+  while cur_line > 0 do
+    local test_line = byte2line(cur_byte)
+    if test_line == cur_line and #vim.fn.getline(test_line) >= threshold then return cur_line end
+    cur_line, cur_byte = test_line, cur_byte + step
+  end
+  return -1
+end
 
 -- Step two ===================================================================
 later(function() require('mini.extra').setup() end)
