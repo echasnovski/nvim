@@ -64,6 +64,7 @@ nmap_leader('ef', '<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>', '
 nmap_leader('em', edit_config_file('20_mini.lua'),                             'Mini.nvim config')
 nmap_leader('eo', edit_config_file('10_options.lua'),                          'Options config')
 nmap_leader('ep', edit_config_file('21_plugins.lua'),                          'Plugins config')
+nmap_leader('es', '<Cmd>lua MiniSessions.select()<CR>',                        'Sessions')
 nmap_leader('eq', '<Cmd>lua Config.toggle_quickfix()<CR>',                     'Quickfix')
 
 -- f is for 'fuzzy find'
@@ -139,6 +140,7 @@ nmap_leader('mt', '<Cmd>lua MiniMap.toggle()<CR>',       'Toggle')
 
 -- o is for 'other'
 local trailspace_toggle_command = '<Cmd>lua vim.b.minitrailspace_disable = not vim.b.minitrailspace_disable<CR>'
+local zoom_command = '<Cmd>lua MiniMisc.zoom(0, { title="Zoom", border="double" })<CR>'
 nmap_leader('oC', '<Cmd>lua MiniCursorword.toggle()<CR>',  'Cursor word hl toggle')
 nmap_leader('od', '<Cmd>Neogen<CR>',                       'Document')
 nmap_leader('oh', '<Cmd>normal gxiagxila<CR>',             'Move arg left')
@@ -146,11 +148,10 @@ nmap_leader('oH', '<Cmd>TSBufToggle highlight<CR>',        'Highlight toggle')
 nmap_leader('og', '<Cmd>lua MiniDoc.generate()<CR>',       'Generate plugin doc')
 nmap_leader('ol', '<Cmd>normal gxiagxina<CR>',             'Move arg right')
 nmap_leader('or', '<Cmd>lua MiniMisc.resize_window()<CR>', 'Resize to default width')
-nmap_leader('os', '<Cmd>lua MiniSessions.select()<CR>',    'Session select')
 nmap_leader('oS', '<Cmd>lua Config.insert_section()<CR>',  'Section insert')
 nmap_leader('ot', '<Cmd>lua MiniTrailspace.trim()<CR>',    'Trim trailspace')
 nmap_leader('oT', trailspace_toggle_command,               'Trailspace hl toggle')
-nmap_leader('oz', '<Cmd>lua MiniMisc.zoom()<CR>',          'Zoom toggle')
+nmap_leader('oz', zoom_command,                            'Zoom toggle')
 
 -- r is for 'R'
 -- - Mappings starting with `T` send commands to current neoterm buffer, so

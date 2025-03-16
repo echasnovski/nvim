@@ -1,7 +1,8 @@
 local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
 
--- Make 'mini.nvim' part of the 'mini-deps-snap'
 -- Use 'HEAD' because I personally update it and don't want to follow `main`
+-- This means that 'start/mini.nvim' will usually be present twice in
+-- 'runtimepath' as there is a '.../pack/*/start/*' entry there.
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 -- Step one ===================================================================
@@ -17,12 +18,15 @@ now(function()
 end)
 
 now(function()
-  local not_lua_diagnosing = function(notif) return not vim.startswith(notif.msg, 'lua_ls: Diagnosing') end
-  local filterout_lua_diagnosing = function(notif_arr)
-    return MiniNotify.default_sort(vim.tbl_filter(not_lua_diagnosing, notif_arr))
+  local predicate = function(notif)
+    if not (notif.data.source == 'lsp_progress' and notif.data.client_name == 'lua_ls') then return true end
+    -- Filter out some LSP progress notifications from 'lua_ls'
+    return notif.msg:find('Diagnosing') == nil and notif.msg:find('semantic tokens') == nil
   end
+  local custom_sort = function(notif_arr) return MiniNotify.default_sort(vim.tbl_filter(predicate, notif_arr)) end
+
   require('mini.notify').setup({
-    content = { sort = filterout_lua_diagnosing },
+    content = { sort = custom_sort },
     window = { config = { border = 'double' } },
   })
   vim.notify = MiniNotify.make_notify()
@@ -99,6 +103,117 @@ _G.detect_bigline = function(threshold)
   return -1
 end
 
+-- Unfortunately, `_lines` is ~3x faster
+_G.get_all_indent_lines = function()
+  local res, lines = {}, vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  for i = 1, #lines do
+    local indent = lines[i]:match('^%s+')
+    if indent ~= nil then table.insert(res, indent) end
+  end
+  return res
+end
+
+_G.get_all_indent_text = function()
+  local res, n = {}, vim.api.nvim_buf_line_count(0)
+  local get_text = vim.api.nvim_buf_get_text
+  for i = 1, n do
+    local first_byte = get_text(0, i - 1, 0, i - 1, 1, {})[1]
+    if first_byte == '\t' or first_byte == ' ' then table.insert(res, vim.fn.getline(i):match('^%s+')) end
+  end
+  return res
+end
+
+-- Unfortunately, `_lines` is 10x faster
+_G.get_maxwidth_lines = function()
+  local res, lines = 0, vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  for i = 1, #lines do
+    res = res < lines[i]:len() and lines[i]:len() or res
+  end
+  return res
+end
+
+_G.get_maxwidth_bytes = function()
+  local res, n = 0, vim.api.nvim_buf_line_count(0)
+  local cur_byte, line2byte = 1, vim.fn.line2byte
+  for i = 2, n + 1 do
+    local new_byte = line2byte(i)
+    res = math.max(res, new_byte - cur_byte)
+    cur_byte = new_byte
+  end
+  return res - 1
+end
+
+-- Future 'mini.keymap'
+local n_combo = 0
+local cur_mode = 'n'
+local track_mode = function()
+  cur_mode = vim.fn.mode()
+  cur_mode = (cur_mode == 'V' or cur_mode == '\22') and 'v' or cur_mode
+end
+vim.api.nvim_create_autocmd('ModeChanged', { callback = track_mode })
+
+local hrtime = vim.loop.hrtime
+local get_key = vim.fn.has('nvim-0.11') == 1 and function(_, typed) return typed end or function(key) return key end
+
+_G.map_as_combo = function(mode, seq, action, opts)
+  mode = mode == 'x' and 'v' or mode
+
+  opts = opts or {}
+  local delay = opts.delay or 100
+  local delay_ns = 1000000 * delay
+  local i, last_time, n_seq, ignore = 0, hrtime(), #seq, false
+
+  local act = vim.schedule_wrap(function()
+    -- Explicitly ignore keys from action. Otherwise they will be processed
+    -- because `nvim_input` mocks "as if typed" approach.
+    ignore = true
+    vim.api.nvim_input(action)
+    ignore = false
+  end)
+
+  local watcher = function(key, typed)
+    -- Use only keys "as if typed" and in proper mode
+    key = get_key(key, typed)
+    if key == '' or (i == 0 and cur_mode ~= mode) or ignore then return end
+
+    -- Advance tracking and reset if not in sequence
+    i = i + 1
+    if seq[i] ~= key then
+      -- Allow latest key to start new combo (like during typing 'jjk')
+      i = seq[1] == key and 1 or 0
+      last_time = i == 0 and last_time or hrtime()
+      return
+    end
+
+    -- Reset if time between key presses is too big
+    local cur_time = hrtime()
+    if (cur_time - last_time) > delay_ns and i > 1 then
+      i = 0
+      return
+    end
+    last_time = cur_time
+
+    -- Wait for more info if sequence is not exhausted, act otherwise
+    if i < n_seq then return end
+    i = 0
+    act()
+  end
+
+  n_combo = n_combo + 1
+  local ns_id = vim.api.nvim_create_namespace('MiniKeymap-combo-' .. n_combo)
+  return vim.on_key(watcher, ns_id)
+end
+
+-- Notes:
+-- - Should work when fast typing 'j'-'j'-'k'.
+_G.map_as_combo('i', { 'j', 'k' }, '<BS><BS><Esc>', {})
+_G.map_as_combo('c', { 'j', 'k' }, '<BS><BS><Esc>', {})
+
+-- This has problems with `xnoremap j gj` and `xnoremap k gk`
+-- On Neovim<0.11 the fix would be to use `{'g', 'j', 'g', 'k'}` sequence.
+-- On Neovim>=0.11 it needs to ignore empty `''` or use `key`.
+_G.map_as_combo('x', { 'j', 'k' }, '<Esc>', {})
+
 -- Step two ===================================================================
 later(function() require('mini.extra').setup() end)
 
@@ -166,15 +281,16 @@ end)
 later(function() require('mini.comment').setup() end)
 
 later(function()
+  local process_items = function(items, base)
+    -- Don't show 'Text' suggestions
+    items = vim.tbl_filter(function(x) return x.kind ~= 1 end, items)
+    return MiniCompletion.default_process_items(items, base)
+  end
   require('mini.completion').setup({
     lsp_completion = {
       source_func = 'omnifunc',
       auto_setup = false,
-      process_items = function(items, base)
-        -- Don't show 'Text' and 'Snippet' suggestions
-        items = vim.tbl_filter(function(x) return x.kind ~= 1 and x.kind ~= 15 end, items)
-        return MiniCompletion.default_process_items(items, base)
-      end,
+      process_items = process_items,
     },
     window = {
       info = { border = 'double' },
@@ -274,8 +390,8 @@ later(function()
     if rhs == nil then error('Could not remap from ' .. lhs_from .. ' to ' .. lhs_to) end
     vim.keymap.set(mode, lhs_to, rhs, { desc = keymap.desc })
   end
-  remap('n', 'gx', '<Leader>ox')
-  remap('x', 'gx', '<Leader>ox')
+  remap('n', 'gx', 'gX')
+  remap('x', 'gx', 'gX')
 
   require('mini.operators').setup()
 end)

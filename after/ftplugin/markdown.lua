@@ -31,3 +31,7 @@ if has_mini_surround then
     },
   }
 end
+
+-- Disable "show table of contents" built-in mapping (on Neovim>=0.11) in favor
+-- of `gO` from 'mini.basics'
+pcall(vim.keymap.del, 'n', 'gO', { buffer = 0 })

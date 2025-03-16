@@ -79,7 +79,7 @@ vim.o.completeopt = 'menuone,noselect' -- Show popup even with one item and don'
 if vim.fn.has('nvim-0.11') == 1 then
   vim.o.completeopt = 'menuone,noselect,fuzzy' -- Use fuzzy matching for built-in completion
 end
-vim.o.complete     = '.,b,kspell' -- Use spell check and don't use tags for completion
+vim.o.complete     = '.,w,b,kspell' -- Use spell check and don't use tags for completion
 
 -- Spelling ===================================================================
 vim.o.spelllang    = 'en,ru,uk'       -- Define spelling dictionaries

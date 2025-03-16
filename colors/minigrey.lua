@@ -39,3 +39,4 @@ hi('MiniIconsOrange', { fg = less_p.yellow })
 
 hi('@keyword.return', { fg = less_p.accent, bold = true })
 hi('Delimiter', { fg = less_p.fg_edge2 })
+hi('@markup.heading.1', { fg = less_p.accent, bold = true })
