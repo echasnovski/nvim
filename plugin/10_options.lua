@@ -48,6 +48,16 @@ if vim.fn.has('nvim-0.10') == 0 then
   vim.o.termguicolors = true -- Enable gui colors (Neovim>=0.10 does this automatically)
 end
 
+if vim.fn.has('nvim-0.11') == 1 then
+  vim.o.completeopt = 'menuone,noselect,fuzzy' -- Use fuzzy matching for built-in completion
+  vim.o.winborder = 'double'                   -- Use double-line as default border
+end
+
+if vim.fn.has('nvim-0.12') == 1 then
+  vim.o.pummaxwidth = 100 -- Limit maximum width of popup menu
+  vim.o.completefuzzycollect = 'keyword,files,whole_line' -- Use fuzzy matching when collecting candidates
+end
+
 -- Colors =====================================================================
 -- Enable syntax highlighing if it wasn't already (as it is time consuming)
 -- Don't use defer it because it affects start screen appearance
@@ -123,19 +133,16 @@ vim.api.nvim_create_autocmd('FileType', {
 
 -- Diagnostics ================================================================
 local diagnostic_opts = {
-  float = { border = 'double' },
-  -- Show gutter sings
-  signs = {
-    -- With highest priority
-    priority = 9999,
-    -- Only for warnings and errors
-    severity = { min = 'WARN', max = 'ERROR' },
-  },
-  -- Show virtual text only for errors
-  virtual_text = { severity = { min = 'ERROR', max = 'ERROR' } },
+  -- Define how diagnostic entries should be shown
+  signs = { priority = 9999, severity = { min = 'WARN', max = 'ERROR' } },
+  underline = { severity = { min = 'HINT', max = 'ERROR' } },
+  virtual_lines = false,
+  virtual_text = { current_line = true, severity = { min = 'ERROR', max = 'ERROR' } },
+
   -- Don't update diagnostics when typing
   update_in_insert = false,
 }
 
-vim.diagnostic.config(diagnostic_opts)
+-- Use `later()` to avoid sourcing `vim.diagnostic` on startup
+MiniDeps.later(function() vim.diagnostic.config(diagnostic_opts) end)
 --stylua: ignore end

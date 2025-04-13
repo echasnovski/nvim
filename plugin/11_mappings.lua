@@ -9,8 +9,9 @@ vim.keymap.set('i', '<Tab>', [[pumvisible() ? "\<C-n>" : "\<Tab>"]], { expr = tr
 vim.keymap.set('i', '<S-Tab>', [[pumvisible() ? "\<C-p>" : "\<S-Tab>"]], { expr = true })
 
 -- Paste before/after linewise
-vim.keymap.set({ 'n', 'x' }, '[p', '<Cmd>exe "put! " . v:register<CR>', { desc = 'Paste Above' })
-vim.keymap.set({ 'n', 'x' }, ']p', '<Cmd>exe "put "  . v:register<CR>', { desc = 'Paste Below' })
+local cmd = vim.fn.has('nvim-0.12') == 1 and 'iput' or 'put'
+vim.keymap.set({ 'n', 'x' }, '[p', '<Cmd>exe "' .. cmd .. '! " . v:register<CR>', { desc = 'Paste Above' })
+vim.keymap.set({ 'n', 'x' }, ']p', '<Cmd>exe "' .. cmd .. ' "  . v:register<CR>', { desc = 'Paste Below' })
 
 -- Leader mappings ============================================================
 -- stylua: ignore start
@@ -140,7 +141,6 @@ nmap_leader('mt', '<Cmd>lua MiniMap.toggle()<CR>',       'Toggle')
 
 -- o is for 'other'
 local trailspace_toggle_command = '<Cmd>lua vim.b.minitrailspace_disable = not vim.b.minitrailspace_disable<CR>'
-local zoom_command = '<Cmd>lua MiniMisc.zoom(0, { title="Zoom", border="double" })<CR>'
 nmap_leader('oC', '<Cmd>lua MiniCursorword.toggle()<CR>',  'Cursor word hl toggle')
 nmap_leader('od', '<Cmd>Neogen<CR>',                       'Document')
 nmap_leader('oh', '<Cmd>normal gxiagxila<CR>',             'Move arg left')
@@ -151,7 +151,7 @@ nmap_leader('or', '<Cmd>lua MiniMisc.resize_window()<CR>', 'Resize to default wi
 nmap_leader('oS', '<Cmd>lua Config.insert_section()<CR>',  'Section insert')
 nmap_leader('ot', '<Cmd>lua MiniTrailspace.trim()<CR>',    'Trim trailspace')
 nmap_leader('oT', trailspace_toggle_command,               'Trailspace hl toggle')
-nmap_leader('oz', zoom_command,                            'Zoom toggle')
+nmap_leader('oz', '<Cmd>lua MiniMisc.zoom()<CR>',          'Zoom toggle')
 
 -- r is for 'R'
 -- - Mappings starting with `T` send commands to current neoterm buffer, so

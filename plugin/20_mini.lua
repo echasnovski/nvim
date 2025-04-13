@@ -6,7 +6,11 @@ local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 -- Step one ===================================================================
-now(function() vim.cmd('colorscheme miniwinter') end)
+-- now(function() vim.cmd('colorscheme miniwinter') end)
+now(function() vim.cmd('colorscheme minispring') end)
+-- now(function() vim.cmd('colorscheme minisummer') end)
+-- now(function() vim.cmd('colorscheme miniautumn') end)
+-- now(function() vim.cmd('colorscheme minicyan') end)
 
 now(function()
   require('mini.basics').setup({
@@ -18,6 +22,17 @@ now(function()
 end)
 
 now(function()
+  require('mini.icons').setup({
+    use_file_extension = function(ext, _)
+      local suf3, suf4 = ext:sub(-3), ext:sub(-4)
+      return suf3 ~= 'scm' and suf3 ~= 'txt' and suf3 ~= 'yml' and suf4 ~= 'json' and suf4 ~= 'yaml'
+    end,
+  })
+  later(MiniIcons.mock_nvim_web_devicons)
+  later(MiniIcons.tweak_lsp_kind)
+end)
+
+now(function()
   local predicate = function(notif)
     if not (notif.data.source == 'lsp_progress' and notif.data.client_name == 'lua_ls') then return true end
     -- Filter out some LSP progress notifications from 'lua_ls'
@@ -25,10 +40,7 @@ now(function()
   end
   local custom_sort = function(notif_arr) return MiniNotify.default_sort(vim.tbl_filter(predicate, notif_arr)) end
 
-  require('mini.notify').setup({
-    content = { sort = custom_sort },
-    window = { config = { border = 'double' } },
-  })
+  require('mini.notify').setup({ content = { sort = custom_sort } })
   vim.notify = MiniNotify.make_notify()
 end)
 
@@ -41,6 +53,12 @@ now(function() require('mini.statusline').setup() end)
 -- Future 'mini.statuscolumn'
 now(function()
   if vim.fn.has('nvim-0.9') == 1 then
+    -- TODO: Add "scrollbar" section:
+    -- - Treat whole window height as representation of buffer height.
+    -- - Show a bar for window lines that span from top to bottom visible
+    --   buffer lines. At least a single line should be covered.
+    -- - Maybe point in a middle with where the cursor is (like in 'mini.map').
+    -- - Maybe combine it with │ rightmost delimiter (╏ is good for scrollbar).
     local n_wraps = function(row)
       -- TODO: Use it for better cursor animation with 'wrap' enabled?
       -- NOTE: Include `start_vcol = 0` to not count virtual text above
@@ -76,17 +94,6 @@ now(function()
 end)
 
 now(function() require('mini.tabline').setup() end)
-
-now(function()
-  require('mini.icons').setup({
-    use_file_extension = function(ext, _)
-      local suf3, suf4 = ext:sub(-3), ext:sub(-4)
-      return suf3 ~= 'scm' and suf3 ~= 'txt' and suf3 ~= 'yml' and suf4 ~= 'json' and suf4 ~= 'yaml'
-    end,
-  })
-  MiniIcons.mock_nvim_web_devicons()
-  later(MiniIcons.tweak_lsp_kind)
-end)
 
 -- Future part of 'mini.detect'
 -- TODO: Needs some condition to stop the comb.
@@ -156,7 +163,17 @@ local hrtime = vim.loop.hrtime
 local get_key = vim.fn.has('nvim-0.11') == 1 and function(_, typed) return typed end or function(key) return key end
 
 _G.map_as_combo = function(mode, seq, action, opts)
-  mode = mode == 'x' and 'v' or mode
+  if type(mode) == 'string' then mode = { mode } end
+  local mode_tbl = {}
+  for _, m in ipairs(mode) do
+    if m == 'x' then
+      mode_tbl.v, mode_tbl.V, mode_tbl['\22'] = true, true, true
+    elseif m == 'v' then
+      mode_tbl.s, mode_tbl.v, mode_tbl.V, mode_tbl['\22'] = true, true, true, true
+    else
+      mode_tbl[m] = true
+    end
+  end
 
   opts = opts or {}
   local delay = opts.delay or 100
@@ -174,7 +191,7 @@ _G.map_as_combo = function(mode, seq, action, opts)
   local watcher = function(key, typed)
     -- Use only keys "as if typed" and in proper mode
     key = get_key(key, typed)
-    if key == '' or (i == 0 and cur_mode ~= mode) or ignore then return end
+    if key == '' or (i == 0 and not mode_tbl[cur_mode]) or ignore then return end
 
     -- Advance tracking and reset if not in sequence
     i = i + 1
@@ -200,19 +217,21 @@ _G.map_as_combo = function(mode, seq, action, opts)
   end
 
   n_combo = n_combo + 1
-  local ns_id = vim.api.nvim_create_namespace('MiniKeymap-combo-' .. n_combo)
+  local ns_id = vim.api.nvim_create_namespace('MiniKeymap-combo_' .. n_combo)
   return vim.on_key(watcher, ns_id)
 end
 
 -- Notes:
 -- - Should work when fast typing 'j'-'j'-'k'.
-_G.map_as_combo('i', { 'j', 'k' }, '<BS><BS><Esc>', {})
-_G.map_as_combo('c', { 'j', 'k' }, '<BS><BS><Esc>', {})
+-- - For a "normal, real world" coding session it took extra ~2 microsecnds per
+--   each key stroke. With a total of ~15000 keystrokes it resulted in extra
+--   ~30ms of overhead. Seems reasonable for one such "better escape" mapping;
+--   needs extra personal consideration for more such mappings.
+_G.map_as_combo({ 'i', 'c', 's', 't' }, { 'j', 'k' }, '<BS><BS><Esc>', {})
 
--- This has problems with `xnoremap j gj` and `xnoremap k gk`
--- On Neovim<0.11 the fix would be to use `{'g', 'j', 'g', 'k'}` sequence.
--- On Neovim>=0.11 it needs to ignore empty `''` or use `key`.
-_G.map_as_combo('x', { 'j', 'k' }, '<Esc>', {})
+-- -- This has problems with `xnoremap j gj` and `xnoremap k gk`
+-- -- On Neovim<0.11 the fix would be to use `{'g', 'j', 'g', 'k'}` sequence.
+-- _G.map_as_combo('x', { 'j', 'k' }, '<Esc>', {})
 
 -- Step two ===================================================================
 later(function() require('mini.extra').setup() end)
@@ -271,7 +290,6 @@ later(function()
       { mode = 'n', keys = 'z' },        -- `z` key
       { mode = 'x', keys = 'z' },
     },
-    window = { config = { border = 'double' } },
   })
 end)
 
@@ -287,19 +305,13 @@ later(function()
     return MiniCompletion.default_process_items(items, base)
   end
   require('mini.completion').setup({
-    lsp_completion = {
-      source_func = 'omnifunc',
-      auto_setup = false,
-      process_items = process_items,
-    },
-    window = {
-      info = { border = 'double' },
-      signature = { border = 'double' },
-    },
+    lsp_completion = { source_func = 'omnifunc', auto_setup = false, process_items = process_items },
   })
-  if vim.fn.has('nvim-0.11') == 1 then
-    vim.opt.completeopt:append('fuzzy') -- Use fuzzy matching for built-in completion
-  end
+
+  -- Set up LSP part of completion
+  local on_attach = function(args) vim.bo[args.buf].omnifunc = 'v:lua.MiniCompletion.completefunc_lsp' end
+  vim.api.nvim_create_autocmd('LspAttach', { callback = on_attach })
+  if vim.fn.has('nvim-0.11') == 1 then vim.lsp.config('*', { capabilities = MiniCompletion.get_lsp_capabilities() }) end
 end)
 
 later(function() require('mini.cursorword').setup() end)
@@ -316,11 +328,6 @@ later(function()
   require('mini.files').setup({ windows = { preview = true } })
 
   local minifiles_augroup = vim.api.nvim_create_augroup('ec-mini-files', {})
-  vim.api.nvim_create_autocmd('User', {
-    group = minifiles_augroup,
-    pattern = 'MiniFilesWindowOpen',
-    callback = function(args) vim.api.nvim_win_set_config(args.data.win_id, { border = 'double' }) end,
-  })
   vim.api.nvim_create_autocmd('User', {
     group = minifiles_augroup,
     pattern = 'MiniFilesExplorerOpen',
@@ -402,7 +409,7 @@ later(function()
 end)
 
 later(function()
-  require('mini.pick').setup({ window = { config = { border = 'double' } } })
+  require('mini.pick').setup()
   vim.ui.select = MiniPick.ui_select
   vim.keymap.set('n', ',', [[<Cmd>Pick buf_lines scope='current' preserve_order=true<CR>]], { nowait = true })
 
@@ -438,18 +445,12 @@ end)
 later(function() require('mini.splitjoin').setup() end)
 
 later(function()
-  require('mini.surround').setup({ search_method = 'cover_or_next' })
+  require('mini.surround').setup()
   -- Disable `s` shortcut (use `cl` instead) for safer usage of 'mini.surround'
   vim.keymap.set({ 'n', 'x' }, 's', '<Nop>')
 end)
 
-later(function()
-  local test = require('mini.test')
-  local reporter = test.gen_reporter.buffer({ window = { border = 'double' } })
-  test.setup({
-    execute = { reporter = reporter },
-  })
-end)
+later(function() require('mini.test').setup() end)
 
 later(function() require('mini.trailspace').setup() end)
 

@@ -6,11 +6,16 @@ local is_dark = vim.o.background == 'dark'
 local bg = is_dark and '#262029' or '#e5e1e7'
 local fg = is_dark and '#ded0da' or '#352a32'
 
-require('mini.hues').setup({
+-- Use background shade of red as foreground accent for better usability with
+-- diff colors (for example, "MiniDiffSignDelete" uses red).
+local hues = require('mini.hues')
+local p = hues.make_palette({
   background = bg,
   foreground = fg,
   saturation = is_dark and 'lowmedium' or 'mediumhigh',
-  accent = 'red',
+  accent = 'bg',
 })
+p.accent_bg = p.red_bg
+hues.apply_palette(p)
 
 vim.g.colors_name = 'miniautumn'
