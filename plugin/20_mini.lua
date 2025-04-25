@@ -95,6 +95,18 @@ end)
 
 now(function() require('mini.tabline').setup() end)
 
+now(function()
+  local mode = { 'i', 'c', 'x', 's' }
+  require('mini-dev.keymap').map_as_combo(mode, 'jk', '<BS><BS><Esc>')
+  require('mini-dev.keymap').map_as_combo(mode, 'kj', '<BS><BS><Esc>')
+
+  local keymap = require('mini-dev.keymap')
+  keymap.map_multi_tab({ 'pmenu_next' })
+  keymap.map_multi_shifttab({ 'pmenu_prev' })
+  keymap.map_multi_cr({ 'pmenu_accept_or_cr', 'minipairs_cr' })
+  keymap.map_multi_bs({ 'minipairs_bs' })
+end)
+
 -- Future part of 'mini.detect'
 -- TODO: Needs some condition to stop the comb.
 _G.detect_bigline = function(threshold)
@@ -149,89 +161,6 @@ _G.get_maxwidth_bytes = function()
   end
   return res - 1
 end
-
--- Future 'mini.keymap'
-local n_combo = 0
-local cur_mode = 'n'
-local track_mode = function()
-  cur_mode = vim.fn.mode()
-  cur_mode = (cur_mode == 'V' or cur_mode == '\22') and 'v' or cur_mode
-end
-vim.api.nvim_create_autocmd('ModeChanged', { callback = track_mode })
-
-local hrtime = vim.loop.hrtime
-local get_key = vim.fn.has('nvim-0.11') == 1 and function(_, typed) return typed end or function(key) return key end
-
-_G.map_as_combo = function(mode, seq, action, opts)
-  if type(mode) == 'string' then mode = { mode } end
-  local mode_tbl = {}
-  for _, m in ipairs(mode) do
-    if m == 'x' then
-      mode_tbl.v, mode_tbl.V, mode_tbl['\22'] = true, true, true
-    elseif m == 'v' then
-      mode_tbl.s, mode_tbl.v, mode_tbl.V, mode_tbl['\22'] = true, true, true, true
-    else
-      mode_tbl[m] = true
-    end
-  end
-
-  opts = opts or {}
-  local delay = opts.delay or 100
-  local delay_ns = 1000000 * delay
-  local i, last_time, n_seq, ignore = 0, hrtime(), #seq, false
-
-  local act = vim.schedule_wrap(function()
-    -- Explicitly ignore keys from action. Otherwise they will be processed
-    -- because `nvim_input` mocks "as if typed" approach.
-    ignore = true
-    vim.api.nvim_input(action)
-    ignore = false
-  end)
-
-  local watcher = function(key, typed)
-    -- Use only keys "as if typed" and in proper mode
-    key = get_key(key, typed)
-    if key == '' or (i == 0 and not mode_tbl[cur_mode]) or ignore then return end
-
-    -- Advance tracking and reset if not in sequence
-    i = i + 1
-    if seq[i] ~= key then
-      -- Allow latest key to start new combo (like during typing 'jjk')
-      i = seq[1] == key and 1 or 0
-      last_time = i == 0 and last_time or hrtime()
-      return
-    end
-
-    -- Reset if time between key presses is too big
-    local cur_time = hrtime()
-    if (cur_time - last_time) > delay_ns and i > 1 then
-      i = 0
-      return
-    end
-    last_time = cur_time
-
-    -- Wait for more info if sequence is not exhausted, act otherwise
-    if i < n_seq then return end
-    i = 0
-    act()
-  end
-
-  n_combo = n_combo + 1
-  local ns_id = vim.api.nvim_create_namespace('MiniKeymap-combo_' .. n_combo)
-  return vim.on_key(watcher, ns_id)
-end
-
--- Notes:
--- - Should work when fast typing 'j'-'j'-'k'.
--- - For a "normal, real world" coding session it took extra ~2 microsecnds per
---   each key stroke. With a total of ~15000 keystrokes it resulted in extra
---   ~30ms of overhead. Seems reasonable for one such "better escape" mapping;
---   needs extra personal consideration for more such mappings.
-_G.map_as_combo({ 'i', 'c', 's', 't' }, { 'j', 'k' }, '<BS><BS><Esc>', {})
-
--- -- This has problems with `xnoremap j gj` and `xnoremap k gk`
--- -- On Neovim<0.11 the fix would be to use `{'g', 'j', 'g', 'k'}` sequence.
--- _G.map_as_combo('x', { 'j', 'k' }, '<Esc>', {})
 
 -- Step two ===================================================================
 later(function() require('mini.extra').setup() end)

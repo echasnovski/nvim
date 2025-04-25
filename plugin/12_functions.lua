@@ -44,33 +44,6 @@ end
 -- Create listed scratch buffer and focus on it
 Config.new_scratch_buffer = function() vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(true, true)) end
 
--- Make action for `<CR>` which respects completion and autopairs
---
--- Mapping should be done after everything else because `<CR>` can be
--- overridden by something else (notably 'mini-pairs.lua'). This should be an
--- expression mapping:
--- vim.api.nvim_set_keymap('i', '<CR>', 'v:lua._cr_action()', { expr = true })
---
--- Its current logic:
--- - If no popup menu is visible, use "no popup keys" getter. This is where
---   autopairs plugin should be used. Like with 'nvim-autopairs'
---   `get_nopopup_keys` is simply `npairs.autopairs_cr`.
--- - If popup menu is visible:
---     - If item is selected, execute "confirm popup" action and close
---       popup. This is where completion engine takes care of snippet expanding
---       and more.
---     - If item is not selected, close popup and execute '<CR>'. Reasoning
---       behind this is to explicitly select desired completion (currently this
---       is also done with one '<Tab>' keystroke).
-Config.cr_action = function()
-  if vim.fn.pumvisible() ~= 0 then
-    local item_selected = vim.fn.complete_info()['selected'] ~= -1
-    return item_selected and '\25' or '\25\r'
-  else
-    return require('mini.pairs').cr()
-  end
-end
-
 -- Insert section
 Config.insert_section = function(symbol, total_width)
   symbol = symbol or '='

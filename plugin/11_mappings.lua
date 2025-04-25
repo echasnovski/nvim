@@ -4,10 +4,6 @@
 -- Shorter version of the most frequent way of going outside of terminal window
 vim.keymap.set('t', '<C-h>', [[<C-\><C-N><C-w>h]])
 
--- Move inside completion list with <TAB>
-vim.keymap.set('i', '<Tab>', [[pumvisible() ? "\<C-n>" : "\<Tab>"]], { expr = true })
-vim.keymap.set('i', '<S-Tab>', [[pumvisible() ? "\<C-p>" : "\<S-Tab>"]], { expr = true })
-
 -- Paste before/after linewise
 local cmd = vim.fn.has('nvim-0.12') == 1 and 'iput' or 'put'
 vim.keymap.set({ 'n', 'x' }, '[p', '<Cmd>exe "' .. cmd .. '! " . v:register<CR>', { desc = 'Paste Above' })
