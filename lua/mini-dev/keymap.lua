@@ -4,7 +4,6 @@
 -- - map_as_combo():
 --
 -- - map_multi_*():
---     - Follow local todos.
 --
 -- - map_with_dotrepeat().
 --
@@ -16,17 +15,9 @@
 --
 -- Tests:
 -- - map_as_combo():
---     - Should work when fast typing 'j'-'j'-'k'.
---     - Should work with `xnoremap j gj` style of mappings. On Neovim>=0.11
---       for a regular `jk` left hand side. On Neovim<0.11 for a `gjgk`.
---     - Should recognise `'<<Tab>>'` as three keys (`<`, `\t`, `>`).
---     - With `jjk` and `jk` combos, both should act after typing `jjk`.
---     - Should work inside macros.
 --
 -- - Multi-step mappings:
 --     - Should work with `nil` / `{}` steps and just execute the key.
---     - Should be possible to make buffer-local mappings. Useful to adjust
---       steps based on filetype, etc.
 
 --- *mini.keymap* Extra key mappings
 --- *MiniKeymap*
@@ -43,7 +34,7 @@
 ---       See |MiniKeymap.map_multi_tab()| and |MiniKeymap.map_multi_shifttab()|.
 ---     - <CR> - accept or hide completion menu, respect "auto-pairs", and more.
 ---       See |MiniKeymap.map_multi_cr()|.
----     - <BS> - perform smart indent handling, respect "auto-pairs", and more.
+---     - <BS> - respect "auto-pairs", remove all whitespace, and more.
 ---       See |MiniKeymap.map_multi_bs()|.
 ---
 --- - Map keys as "combo": each key gets executed immediately plus execute extra
@@ -143,7 +134,6 @@
 ---   keymap.map_multi_cr({})
 ---   keymap.map_multi_bs({})
 --- <
-
 ---@tag MiniKeymap-examples
 
 ---@diagnostic disable:undefined-field
@@ -151,9 +141,8 @@
 ---@diagnostic disable:unused-local
 
 -- Module definition ==========================================================
--- TODO: Make local
-MiniKeymap = {}
-H = {}
+local MiniKeymap = {}
+local H = {}
 
 --- Module setup
 ---
@@ -189,6 +178,96 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniKeymap.config = {}
 --minidoc_afterlines_end
+
+--- TODO
+---
+--- Notes:
+--- - Steps should generally prefer to not take care of replacing termcodes,
+---   i.e. return `<Tab>` instead of `\t`. To undo already done replacement,
+---   use |keytrans()|.
+---
+--- - This has limitations of |map-expression| (like not allowed text or buffer
+---   changes, etc.). To execute a lua code, either use |vim.schedule()| or
+---   return the code as string wrapped in |<Cmd>|. For example:
+---   -- TODO
+---
+--- - Might require disabling smart presets in plugins (like
+---   'nvim-cmp', 'blink-cmp', 'nvim-autopairs').
+---
+--- - Can be buffer-local mappings for a finer control per filetype, etc.
+---@tag MiniKeymap-multistep
+
+--- Multistep <Tab>
+MiniKeymap.map_multi_tab = function(steps, opts)
+  steps = H.normalize_steps(steps, H.steps_tab)
+  H.map_multistep({ 'i', 's' }, '<Tab>', steps, opts)
+end
+
+--- Multistep <S-Tab>
+MiniKeymap.map_multi_shifttab = function(steps, opts)
+  steps = H.normalize_steps(steps, H.steps_shifttab)
+  H.map_multistep({ 'i', 's' }, '<S-Tab>', steps, opts)
+end
+
+--- Multistep <CR>
+---
+--- Built-in actions:
+---
+--- - 'minipairs_cr' - recommended to be used last, as it has too permissive
+---   condition.
+MiniKeymap.map_multi_cr = function(steps, opts)
+  steps = H.normalize_steps(steps, H.steps_cr)
+  H.map_multistep('i', '<CR>', steps, opts)
+end
+
+--- Multistep <BS>
+---
+--- Built-in actions:
+---
+--- - 'minipairs_bs' - recommended to be used last, as it has too permissive
+---   condition.
+MiniKeymap.map_multi_bs = function(steps, opts)
+  steps = H.normalize_steps(steps, H.steps_bs)
+  H.map_multistep('i', '<BS>', steps, opts)
+end
+
+--- TODO
+MiniKeymap.gen_step = {}
+
+--- Search pattern step
+---
+--- Example of 'jump_{after,before}_pair' built-in steps, but only for brackets: >lua
+---
+--- -- TODO
+---<
+MiniKeymap.gen_step.search_pattern = function(pattern, flags, opts)
+  if type(pattern) ~= 'string' then H.error('`pattern` should be string, not ' .. vim.inspect(type(pattern))) end
+  if type(flags) ~= 'string' then H.error('`flags` should be string, not ' .. vim.inspect(type(flags))) end
+  opts = vim.tbl_extend('force', { side = 'before' }, opts or {})
+  local side = opts.side
+  if not (side == 'before' or side == 'after') then H.error('`opts.side` should be one of "before" or "after"') end
+
+  -- NOTEs:
+  -- - Using `normal!` doesn't go past the end of line and triggers
+  --   mode-change-related events.
+  -- - Adjusting pattern with `\zs` prefix doesn't work for consecutive matches
+  --   (like `)))`), as it will match every other one (first, third, etc.).
+  -- - Using `\@<=` quantifier doesn't work for the last match in consecutive
+  --   matches at end of line. Like `)))` at end of line won't put cursor at
+  --   end of line. The `[)\]}]\@<=\_.` also doesn't seem to work.
+  local adjust_cursor = function()
+    local pos = vim.api.nvim_win_get_cursor(0)
+    vim.api.nvim_win_set_cursor(0, { pos[1], pos[2] + 1 })
+  end
+  if side == 'before' then adjust_cursor = function() end end
+
+  local act = function()
+    vim.fn.search(pattern, flags)
+    adjust_cursor()
+  end
+
+  return { condition = function() return true end, action = function() return act end }
+end
 
 --- Map as combo
 ---
@@ -282,92 +361,6 @@ MiniKeymap.map_as_combo = function(mode, lhs, action, opts)
 
   H.ensure_mode_tracking()
   return vim.on_key(watcher, ns_id)
-end
-
---- Multistep <Tab>
----
----                                                     *MiniKeymap-multistep*
----
---- TODO
----
---- Notes:
---- - Steps should generally prefer to not take care of replacing termcodes,
----   i.e. return `<Tab>` instead of `\t`. To undo already done replacement,
----   use |keytrans()|.
----
---- - This has limitations of |map-expression| (like not allowed text or buffer
----   changes, etc.). To execute a lua code, either use |vim.schedule()| or
----   return the code as string wrapped in |<Cmd>|. For example:
----   -- TODO
----
---- - Might require disabling smart presets in plugins (like
----   'nvim-cmp', 'blink-cmp', 'nvim-autopairs').
----
---- - Can be buffer-local mappings for a finer control per filetype, etc.
-MiniKeymap.map_multi_tab = function(steps, opts)
-  -- TODO: Built-in steps:
-  -- - 'jump_after_brackets' (like 'tabout.nvim'; search right for the first
-  --   unbalanced closing bracket `)]}>` and possibly move past all consecutive
-  --   ones)
-  -- - 'smart_indent_set' (if in line's indent which is different from indent
-  --   of previous non-blank line, make them the same)
-
-  steps = H.normalize_steps(steps, H.steps_tab)
-  H.map_multistep({ 'i', 's' }, '<Tab>', steps, opts)
-end
-
---- Multistep <S-Tab>
-MiniKeymap.map_multi_shifttab = function(steps, opts)
-  -- TODO: Built-in steps:
-  -- - 'jump_before_brackets' (like 'tabout.nvim'; search left for the first
-  --   unbalanced closing bracket `)]}>` and possibly move past all consecutive
-  --   ones)
-
-  steps = H.normalize_steps(steps, H.steps_shifttab)
-  H.map_multistep({ 'i', 's' }, '<S-Tab>', steps, opts)
-end
-
---- Multistep <CR>
-MiniKeymap.map_multi_cr = function(steps, opts)
-  -- TODO: Built-in steps:
-
-  steps = H.normalize_steps(steps, H.steps_cr)
-  H.map_multistep('i', '<CR>', steps, opts)
-end
-
---- Multistep <BS>
-MiniKeymap.map_multi_bs = function(steps, opts)
-  -- TODO: Built-in steps:
-  -- - 'smart_indent' (see #373 and
-  --   https://marketplace.visualstudio.com/items?itemName=jasonlhy.hungry-delete)
-
-  steps = H.normalize_steps(steps, H.steps_bs)
-  H.map_multistep('i', '<BS>', steps, opts)
-end
-
---- TODO
-MiniKeymap.gen_step = {}
-
---- Jump outside of pair step
-MiniKeymap.gen_step.jump_pair = function(side, opts)
-  if not (side == 'after' or side == 'before') then H.error('`side` should be one of "after" or "before"') end
-
-  opts = vim.tbl_extend('force', { pairs = { '()', '[]', '{}', '""', "''", '``' } }, opts or {})
-  if not H.islist(opts.pairs) then H.error('`opts.pairs` should be array of two-character strings') end
-
-  local pair_info = {}
-  for _, p in ipairs(opts.pairs) do
-    if not (type(p) == 'string' or vim.fn.strchars(p) ~= 2) then
-      H.error('`opts.pairs` should contain only two-character strings, not ' .. vim.inspect(p))
-    end
-    table.insert(pair_info, { left = vim.fn.strcharpart(p, 0, 1), right = vim.fn.strcharpart(p, 1, 1) })
-  end
-
-  local action = function()
-    -- Return callable which is wrapped to be executed after expression mapping
-    return function() pcall(vim.api.nvim_win_set_cursor, 0, H.find_pair_side(side, pair_info)) end
-  end
-  return { condition = function() return vim.fn.mode() == 'i' end, action = action }
 end
 
 -- Helper data ================================================================
@@ -470,13 +463,16 @@ H.map_multistep = function(mode, lhs, steps, opts)
     return lhs_keycode
   end
 
-  opts = vim.tbl_extend('force', { desc = 'Multi ' .. lhs }, opts or {}, { expr = true })
+  opts = vim.tbl_extend('force', { desc = 'Multi ' .. lhs }, opts or {}, { expr = true, replace_keycodes = true })
   vim.keymap.set(mode, lhs, rhs, opts)
 end
 
 H.wrap_in_cmd_lua = function(f)
-  MiniKeymap._f = f
-  return '<Cmd>lua MiniKeymap._f(); MiniKeymap._f = nil<CR>'
+  local needs_global_cleanup = _G.MiniKeymap == nil
+  _G.MiniKeymap = _G.MiniKeymap or {}
+  _G.MiniKeymap._f = f
+  local extra_cleanup = needs_global_cleanup and '; MiniKeymap = nil' or ''
+  return '<Cmd>lua MiniKeymap._f(); MiniKeymap._f = nil' .. extra_cleanup .. '<CR>'
 end
 
 H.make_cmd_lua_action = function(cmd_string)
@@ -497,7 +493,6 @@ H.is_selected_pmenu = function() return vim.fn.complete_info({ 'selected' }).sel
 H.steps_tab.pmenu_next      = { condition = H.is_visible_pmenu,  action = function() return '<C-n>' end }
 H.steps_shifttab.pmenu_prev = { condition = H.is_visible_pmenu,  action = function() return '<C-p>' end }
 H.steps_cr.pmenu_accept     = { condition = H.is_selected_pmenu, action = function() return '<C-y>' end }
-H.steps_cr.pmenu_cr         = { condition = H.is_visible_pmenu,  action = function() return '<C-y><CR>' end }
 
 H.is_visible_cmp =  function() return H.has_module('cmp') and require('cmp').visible() end
 H.is_selected_cmp = function() return H.has_module('cmp') and require('cmp').get_selected_entry() ~= nil end
@@ -537,17 +532,6 @@ H.steps_tab.luasnip_next      = { condition = H.make_luasnip_condition(1),  acti
 H.steps_tab.luasnip_expand    = { condition = H.is_luasnip_expandable,      action = H.make_cmd_lua_action('require("luasnip").expand()') }
 H.steps_shifttab.luasnip_prev = { condition = H.make_luasnip_condition(-1), action = H.make_luasnip_action(-1) }
 
-H.has_minipairs = function() return _G.MiniPairs ~= nil end
-
-H.steps_cr.minipairs_cr = { condition = H.has_minipairs, action = function() return vim.fn.keytrans(_G.MiniPairs.cr()) end }
-H.steps_bs.minipairs_bs = { condition = H.has_minipairs, action = function() return vim.fn.keytrans(_G.MiniPairs.bs()) end }
-
-H.has_nvimautopairs         = function() return H.has_module('nvim-autopairs') end
-H.make_nvimautopairs_action = function(method) return function() return vim.fn.keytrans(require('nvim-autopairs')[method]()) end end
-
-H.steps_cr.nvimautopairs_cr = { condition = H.has_nvimautopairs, action = H.make_nvimautopairs_action('autopairs_cr') }
-H.steps_bs.nvimautopairs_bs = { condition = H.has_nvimautopairs, action = H.make_nvimautopairs_action('autopairs_bs') }
-
 H.can_jump_tsnode = function()
   -- TODO: Remove `opts.error` after compatibility with Neovim=0.11 is dropped
   local has_parser, parser = pcall(vim.treesitter.get_parser, 0, nil, { error = false })
@@ -583,59 +567,43 @@ end
 H.steps_tab.jump_after_tsnode       = { condition = H.can_jump_tsnode, action = H.make_jump_tsnode('after') }
 H.steps_shifttab.jump_before_tsnode = { condition = H.can_jump_tsnode, action = H.make_jump_tsnode('before') }
 
--- TODO: Remove after compatibility with Neovim=0.9 is dropped
-H.islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
+H.steps_tab.jump_after_pair       = MiniKeymap.gen_step.search_pattern([=[[)\]}"'`]]=], 'cW', { side = 'after' })
+H.steps_shifttab.jump_before_pair = MiniKeymap.gen_step.search_pattern([=[[(\[{"'`]]=], 'bW', { side = 'before' })
 
-H.steps_tab.jump_after_pair       = MiniKeymap.gen_step.jump_pair('after')
-H.steps_shifttab.jump_before_pair = MiniKeymap.gen_step.jump_pair('before')
---stylua: ignore end
+H.is_in_indent = function()
+  local line, col = vim.api.nvim_get_current_line(), vim.fn.col('.')
+  return line:sub(1, col - 1):find('^%s*$') ~= nil
+end
 
-H.find_pair_side = function(side, pair_info)
-  local inc = side == 'after' and 1 or -1
-  local lnum, col, max_lnum = vim.fn.line('.'), vim.fn.charcol('.'), vim.api.nvim_buf_line_count(0)
+H.steps_tab.increase_indent      = { condition = H.is_in_indent, action = function() return '<C-t>' end }
+H.steps_shifttab.decrease_indent = { condition = H.is_in_indent, action = function() return '<C-d>' end }
 
-  -- Adjust starting column if looking to the left to do an actual jump if
-  -- there is matching left pair part under cursor
-  local col_offset = side == 'after' and 0 or -1
-  col = col + col_offset
-  if col <= 0 then
-    lnum = lnum - 1
-    col = vim.fn.strchars(vim.fn.getline(lnum))
-  end
+H.hungry_bs_condition = function()
+  local line, col = vim.api.nvim_get_current_line(), vim.fn.col('.')
+  return line:sub(1, col - 1):find('%s+$') ~= nil
+end
 
-  -- Reset pair balances
-  for _, p in ipairs(pair_info) do
-    p.balance = 0
-  end
-
-  -- Traverse char-by-char to right/left in order to find matching pair
-  -- character that tips the pair balance in correct direction. Right/left pair
-  -- character descreases/increases pair's balance. Stop when balance is
-  -- negative/positive when going right/left or right away when met a character
-  -- from "duplicating pair" (like '""').
-  -- Put cursor exactly on matched character if looking left (in Insert mode
-  -- cursor will be just before it) and put one cell to the right if looking to
-  -- the right (cursor will be just after found character).
-  while 1 <= lnum and lnum <= max_lnum do
-    local line = vim.fn.getline(lnum)
-    local max_col = vim.fn.strchars(line)
-
-    while 1 <= col and col <= max_col do
-      local char = vim.fn.strcharpart(line, col - 1, 1)
-
-      for _, p in ipairs(pair_info) do
-        if char == p.left and char == p.right then return { lnum, col + col_offset } end
-        p.balance = p.balance + (char == p.left and 1 or (char == p.right and -1 or 0))
-        if (inc * p.balance) < 0 then return { lnum, col + col_offset } end
-      end
-
-      col = col + inc
-    end
-
-    lnum = lnum + inc
-    col = side == 'after' and 1 or vim.fn.strchars(vim.fn.getline(lnum))
+H.hungry_bs_action = function()
+  return function()
+    local line, lnum, col = vim.api.nvim_get_current_line(), vim.fn.line('.'), vim.fn.col('.')
+    local from_col = line:sub(1, col - 1):match('()%s+$')
+    vim.api.nvim_buf_set_text(0, lnum - 1, from_col - 1, lnum - 1, col - 1, {})
   end
 end
+
+H.steps_bs.hungry_bs = { condition = H.hungry_bs_condition, action = H.hungry_bs_action }
+
+H.has_minipairs = function() return _G.MiniPairs ~= nil end
+
+H.steps_cr.minipairs_cr = { condition = H.has_minipairs, action = function() return vim.fn.keytrans(_G.MiniPairs.cr()) end }
+H.steps_bs.minipairs_bs = { condition = H.has_minipairs, action = function() return vim.fn.keytrans(_G.MiniPairs.bs()) end }
+
+H.has_nvimautopairs         = function() return H.has_module('nvim-autopairs') end
+H.make_nvimautopairs_action = function(method) return function() return vim.fn.keytrans(require('nvim-autopairs')[method]()) end end
+
+H.steps_cr.nvimautopairs_cr = { condition = H.has_nvimautopairs, action = H.make_nvimautopairs_action('autopairs_cr') }
+H.steps_bs.nvimautopairs_bs = { condition = H.has_nvimautopairs, action = H.make_nvimautopairs_action('autopairs_bs') }
+--stylua: ignore end
 
 -- Validators -----------------------------------------------------------------
 H.is_string = function(x) return type(x) == 'string' end
@@ -677,5 +645,8 @@ H.get_row_cols = function(row) return vim.fn.getline(row + 1):len() end
 
 H.get_tsnode = function() return vim.treesitter.get_node() end
 if vim.fn.has('nvim-0.9') == 0 then H.get_tsnode = function() return vim.treesitter.get_node_at_cursor() end end
+
+-- TODO: Remove after compatibility with Neovim=0.9 is dropped
+H.islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
 
 return MiniKeymap

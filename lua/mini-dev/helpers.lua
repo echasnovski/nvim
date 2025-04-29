@@ -69,7 +69,7 @@ Helpers.new_child_neovim = function()
   end
 
   child.setup = function()
-    child.restart({ '-u', 'lua/mini-dev/minimal_init.lua' })
+    child.restart({ '--noplugin', '-u', 'lua/mini-dev/minimal_init.lua' })
 
     -- Change initial buffer to be readonly. This not only increases execution
     -- speed, but more closely resembles manually opened Neovim.

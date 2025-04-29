@@ -17,6 +17,9 @@ if #vim.api.nvim_list_uis() == 0 then
 end
 
 -- - Make screenshot tests more robust across Neovim versions
+-- - Make screenshot tests more robust across Neovim versions
+vim.o.statusline = '%<%f %l,%c%V'
+
 if vim.fn.has('nvim-0.11') == 1 then
   vim.api.nvim_set_hl(0, 'ComplMatchIns', {})
   vim.api.nvim_set_hl(0, 'PmenuMatch', { link = 'Pmenu' })
