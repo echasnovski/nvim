@@ -332,10 +332,7 @@ later(function()
   require('mini.operators').setup()
 end)
 
-later(function()
-  require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } })
-  vim.keymap.set('i', '<CR>', 'v:lua.Config.cr_action()', { expr = true })
-end)
+later(function() require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } }) end)
 
 later(function()
   require('mini.pick').setup()
