@@ -1,24 +1,4 @@
--- TODO:
---
--- Code:
--- - map_combo():
---
--- - map_multistep():
---
--- - map_with_dotrepeat().
---
--- - yank_mapping():
---     - Implement while allowing changing description.
---       See |MiniClue.set_mapping_desc()|
---
--- Docs:
---
--- Tests:
--- - map_combo():
---
--- - Multi-step mappings:
-
---- *mini.keymap* Extra key mappings
+--- *mini.keymap* Special key mappings
 --- *MiniKeymap*
 ---
 --- MIT License Copyright (c) 2025 Evgeni Chasnovski
@@ -28,7 +8,7 @@
 --- Features:
 ---
 --- - Map keys to perform configurable multi-step actions: if condition for step
----   one is true - execute step one action, else check step two, etc. until
+---   one is true - execute step one action, else check step two, and so on until
 ---   falling back to executing original keys. See |MiniKeymap.map_multistep()|.
 ---   This is usually referred to as "smart" keys (like "smart tab").
 ---
@@ -39,20 +19,20 @@
 ---   - Execute <CR> and <BS> respecting |mini.pairs|.
 ---   - Jump before/after current tree-sitter node.
 ---   - Jump before opening and after closing characters (brackets and quotes).
----   - Increase/descrease indent when inside it.
+---   - Increase/decrease indent when cursor is inside of it.
 ---   - Delete all whitespace to the left ("hungry backspace").
 ---   - Navigate |vim.snippet|.
 ---   - Navigate and accept in 'hrsh7th/nvim-cmp' completion.
 ---   - Navigate and accept in 'Saghen/blink.cmp' completion.
----   - Navigate and exapnd 'L3MON4D3/LuaSnip' snippets.
+---   - Navigate and expand 'L3MON4D3/LuaSnip' snippets.
 ---   - Execute <CR> and <BS> respecting 'windwp/nvim-autopairs'.
 ---
---- - Map keys as "combo": each key gets executed immediately plus execute extra
----   action if all are typed within configurable delay between each other.
+--- - Map keys as "combo": each key acts immediately plus execute extra action if
+---   all are typed within configurable delay between each other.
 ---   See |MiniKeymap.map_combo()|. Examples of usage:
----     - Map insert-able keys (like "jk", "kj") in Insert and Command-line exit
----       into Normal mode.
----     - Fight against bad habbits of pressing the same navigation key by showing
+---     - Map insert-able keys (like "jk", "kj") in Insert and Command-line mode
+---       to exit into Normal mode.
+---     - Fight against bad habits of pressing the same navigation key by showing
 ---       a notification if there are too many of them pressed in a row.
 ---
 --- Sources with more details:
@@ -73,8 +53,11 @@
 --- # Comparisons ~
 ---
 --- - 'max397574/better-escape.nvim':
----     - Mostly similar to |MiniKeymap.map_combo()| with a slightly
----       different approach to creating mappings.
+---     - Mostly similar to |MiniKeymap.map_combo()| with a different approach
+---       to creating mappings.
+---     - Mostly targeted for Insert mode mappings as pressed keys get removed
+---       automatically after typed. This module allows more general cases while
+---       requiring explicit removal of keys (usually via explicit `<BS><BS>`).
 ---
 --- - 'abecodes/tabout.nvim':
 ---     - Similar general idea as in 'jump_{after,before}_tsnode' steps
@@ -82,9 +65,8 @@
 ---     - Works only with enabled tree-sitter parser. This module provides
 ---       fallback via 'jump_after_close' and 'jump_before_open' that work
 ---       without tree-sitter parser.
----     - 'tabout.nvim' has finer control over how moving outside of
----       tree-sitter node is done, while this module only implements "jump
----       outside of current node" behavior.
+---     - 'tabout.nvim' has finer control of how the tree-sitter node movement
+---       is done, while this module has "jump outside of current node" behavior.
 ---
 --- # Disabling ~
 ---
@@ -111,8 +93,8 @@
 ---
 ---   local map_multistep = require('mini.keymap').map_multistep
 ---
----   local tab_steps = {'minisnippets_next','minisnippets_expand','pmenu_next'}
----   map_multistep('i', '<Tab>',   tab_steps)
+---   local tab_steps = { 'minisnippets_next','minisnippets_expand','pmenu_next' }
+---   map_multistep('i', '<Tab>', tab_steps)
 ---
 ---   local shifttab_steps = { 'minisnippets_prev', 'pmenu_prev' }
 ---   map_multistep('i', '<S-Tab>', shifttab_steps)
@@ -122,15 +104,13 @@
 ---   local map_multistep = require('mini.keymap').map_multistep
 ---
 ---   local tab_steps = {
----     'minisnippets_next', 'minisnippets_expand',
----     'pmenu_next',
+---     'minisnippets_next', 'minisnippets_expand', 'pmenu_next',
 ---     'jump_after_tsnode', 'jump_after_close',
 ---   }
----   map_multistep('i', '<Tab>',   tab_steps)
+---   map_multistep('i', '<Tab>', tab_steps)
 ---
 ---   local shifttab_steps = {
----     'minisnippets_prev',
----     'pmenu_next',
+---     'minisnippets_prev',  'pmenu_next',
 ---     'jump_before_tsnode', 'jump_before_open',
 ---   }
 ---   map_multistep('i', '<S-Tab>', shifttab_steps)
@@ -143,6 +123,9 @@
 --- <
 --- # Combos ~
 ---
+--- See |MiniKeymap.map_combo()| for a general description of what is a combo and
+--- more caveats about its usage.
+---
 --- All combos require their left hand side keys to be typed relatively quickly.
 --- To adjust the delay between keys, add `{ delay = 500 }` (use custom value) as
 --- fourth argument. See |MiniKeymap.map_combo()|.
@@ -152,7 +135,7 @@
 --- Leave into |Normal-mode| without having to reach for <Esc> key: >lua
 ---
 ---   -- Support most common modes. This can also contain 't', but would
----   -- work only
+---   -- only mean to press `<Esc>` inside terminal.
 ---   local mode = { 'i', 'c', 'x', 's' }
 ---   require('mini.keymap').map_combo(mode, 'jk', '<BS><BS><Esc>')
 ---
@@ -187,12 +170,12 @@
 --- <
 --- ## Hide search highlighting ~
 ---
---- Use double <Esc><Esc> to execute |:nohlsearch|. Although this can also be
---- done with `nmap <Esc> <Cmd>nohl<CR>`, the combo approach also exists and can
---- be used to free <Esc> mapping in Normal mode for something else. >lua
+--- Use double <Esc><Esc> to execute |:nohlsearch|. Although this can also be done
+--- with `nmap <Esc> <Cmd>nohl<CR>`, the combo approach also exists and can be
+--- used to free <Esc> mapping in Normal mode for something else. >lua
 ---
 ---   local action = function() vim.cmd('nohlsearch') end
----   require('mini.keymap').map_combo({ 'n', 'i', 'x', 'c' }, '<Esc><Esc>', action)
+---   require('mini.keymap').map_combo({ 'n','i','x','c' }, '<Esc><Esc>', action)
 --- <
 ---@tag MiniKeymap-examples
 
@@ -241,31 +224,122 @@ MiniKeymap.config = {}
 
 --- Map multi-step action
 ---
---- Notes:
---- - Steps should generally prefer to not take care of replacing termcodes,
----   i.e. return `<Tab>` instead of `\t`. To undo already done replacement,
----   use |keytrans()|.
+--- Mapping of a multi-step action as an expression mapping (|:map-expression|).
+--- Executing a multi-step action is essentially:
+--- - Check condition for step one. If `true` - execute step one action and stop.
+--- - Check condition for step two...
+--- - If there is no more steps, fall back to returning mapped key.
 ---
---- - This has limitations of |map-expression| (like not allowed text or buffer
----   changes, etc.). To execute a lua code, either use |vim.schedule()| or
----   return the code as string wrapped in |<Cmd>|. For example:
----   -- TODO
----
---- - Might require disabling smart presets in plugins (like
----   'nvim-cmp', 'blink-cmp', 'nvim-autopairs').
----
---- - Can be buffer-local mappings for a finer control per filetype, etc.
----
+--- For better user experience there are many built-in steps mostly designed
+--- to create Insert mode "smart" mappings of <Tab>, <S-Tab>, <CR>, and <BS>.
 --- Available built-in steps:
---- - 'minipairs_cr' - if |mini.pairs| is set up, execute |MiniPairs.cr()|.
----   Recommended to be used last, as it has too permissive condition.
---- - 'minipairs_bs' - if |mini.pairs| is set up, execute |MiniPairs.bs()|.
----   Recommended to be used last, as it has too permissive condition.
---- -'vimsnippet_next' - if |vim.snippet.active()|, |vim.snippet.jump()| right.
----   For better coverage should also be mapped in |Select-mode| (`'s'`).
---- -'vimsnippet_prev' - if |vim.snippet.active()|, |vim.snippet.jump()| left.
----   For better coverage should also be mapped in |Select-mode| (`'s'`).
 ---
+--- │      Step name      │   Condition    │          Action          │ For key │
+--- ├─────────────────────┴────────────────┴──────────────────────────┴─────────┤
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ |ins-completion-menu| ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ pmenu_next          │ Pmenu visible  │ Select next (as <C-n>)   │ <Tab>   │
+--- │ pmenu_prev          │ Pmenu visible  │ Select prev (as <C-p>)   │ <S-Tab> │
+--- │ pmenu_accept        │ Item selected  │ Accept (as <C-y>)        │ <CR>    │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ |'mini.snippets'| ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ minisnippets_next   │ Session active │ Jump to next tabstop     │ <Tab>   │
+--- │ minisnippets_prev   │ Session active │ Jump to prev tabstop     │ <S-Tab> │
+--- │ minisnippets_expand │ Can expand     │ Expand snippet at cursor │ <Tab>   │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ |'mini.pairs'| ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ minipairs_cr        │ Module set up  │ <CR> respecting pairs    │ <CR>    │
+--- │ minipairs_bs        │ Module set up  │ <BS> respecting pairs    │ <BS>    │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ Jump around in Insert mode ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ jump_after_tsnode   │ Mode + parser  │ Jump after node end      │ <Tab>   │
+--- │ jump_before_tsnode  │ Mode + parser  │ Jump before node start   │ <S-Tab> │
+--- │ jump_after_close    │ Mode           │ Jump after  )]}"'`       │ <Tab>   │
+--- │ jump_before_open    │ Mode           │ Jump before ([{"'`       │ <S-Tab> │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ Work with whitespace ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ increase_indent     │ Is on indent   │ Increase indent          │ <Tab>   │
+--- │ decrease_indent     │ Is on indent   │ Decrease indent          │ <S-Tab> │
+--- │ hungry_bs           │ Space to left  │ Delete all space to left │ <BS>    │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ |vim.snippet| ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ vimsnippet_next     │ Session active │ Jump to next tabstop     │ <Tab>   │
+--- │ vimsnippet_prev     │ Session active │ Jump to prev tabstop     │ <S-Tab> │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ 'hrsh7th/nvim-cmp' ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ cmp_next            │ Menu visible   │ Select next item         │ <Tab>   │
+--- │ cmp_prev            │ Menu visible   │ Select prev item         │ <S-Tab> │
+--- │ cmp_accept          │ Item selected  │ Accept selected item     │ <CR>    │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ 'Saghen/blink.cmp' ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ blink_next          │ Menu visible   │ Select next item         │ <Tab>   │
+--- │ blink_prev          │ Menu visible   │ Select prev item         │ <S-Tab> │
+--- │ blink_accept        │ Item selected  │ Accept selected item     │ <CR>    │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ 'L3MON4D3/LuaSnip' ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ luasnip_next        │ Session active │ Jump to next tabstop     │ <Tab>   │
+--- │ luasnip_prev        │ Session active │ Jump to prev tabstop     │ <S-Tab> │
+--- │ luasnip_expand      │ Can expand     │ Expand snippet at cursor │ <Tab>   │
+--- ├┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ 'windwp/nvim-autopairs' ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+--- │ nvimautopairs_cr    │ Module present │ <CR> respecting pairs    │ <CR>    │
+--- │ nvimautopairs_bs    │ Module present │ <BS> respecting pairs    │ <BS>    │
+---
+--- Notes:
+--- - Executing action has limitations of |:map-expression| (like not allowed text
+---   or buffer changes, etc.). To execute complex lua code, use |vim.schedule()|
+---   inside action, return the code as string in |:map-cmd| format, or return
+---   a function to be later executed. See usage examples.
+---
+--- - For some mapped keys (like <Tab>, <CR>) require disabling smart presets
+---   in plugins (like 'nvim-cmp', 'blink-cmp', 'nvim-autopairs').
+---
+---@param mode string|table Same as for |vim.keymap.set()|.
+---@param lhs string Same as for |vim.keymap.set()|.
+---@param steps table Array of steps. Each step can be a string with the name
+---   of built-in step or a table with two callable methods (will be called
+---   without arguments):
+---   - <condition> - return `true` if the action should be executed.
+---   - <action> - action to be executed if <condition> returns `true`.
+---     For more flexibility, it can also return a value which can be:
+---       - String - will be returned as expression output. Can be something like
+---         `"<Tab>"` (treat as <Tab> key) or `"<Cmd>lua vim.notify('Hello')<CR>"`.
+---         Should not escape keycodes (i.e. return "<Tab>" and not "\t").
+---         To undo already done replacement, use |keytrans()|.
+---       - Function - will be executed as if `"<Cmd>lua f()<CR>"`, but does not
+---         need to create a global function for that.
+---       - `false` - do not stop going through steps.
+---@param opts table|nil Same as for |vim.keymap.set()|.
+---
+---@usage See |MiniKeymap-examples| for practical examples.
+---
+--- Some illustrative examples: >lua
+---
+---   _G.log = {}
+---   local steps = {}
+---   steps[1] = {
+---     condition = function() table.insert(_G.log, 'C1'); return _G.cond1 end,
+---     -- Compute and return keys. Will be emulated as pressed.
+---     action = function() table.insert(_G.log, 'A1'); return 'hello' end,
+---   }
+---
+---   steps[2] = {
+---     condition = function() table.insert(_G.log, 'C2'); return _G.cond2 end,
+---     -- Perform action immediately, return `false` to keep asking other steps
+---     action = function() table.insert(_G.log, 'A2'); return false end,
+---   }
+---
+---   steps[3] = {
+---     condition = function() table.insert(_G.log, 'C3'); return _G.cond3 end,
+---     -- Perform action later (to overcom expression mapping limitations)
+---     action = function()
+---       table.insert(_G.log, 'A3_1')
+---       return function() table.insert(_G.log, 'A3_2') end
+---     end,
+---   }
+---
+---   -- Make Insert mode <Tab> mapping
+---   require('mini.keymap').map_multistep('i', '<Tab>', steps)
+---
+---   -- Pressing <Tab> inserts fallback `\t`; logs C1+C2+C3
+---   _G.cond1, _G.cond2, _G.cond3 = false, false, false
+---
+---   -- Pressing <Tab> inserts `hello`; logs C1+A1
+---   _G.cond1, _G.cond2, _G.cond3 = true, false, false
+---
+---   -- Pressing <Tab> inserts nothing; logs C1+C2+A2+C3+A3_1+A3_2
+---   _G.cond1, _G.cond2, _G.cond3 = false, true, true
+--- <
 MiniKeymap.map_multistep = function(mode, lhs, steps, opts)
   H.check_type('lhs', lhs, 'string')
   local lhs_raw, n_steps = vim.api.nvim_replace_termcodes(lhs, true, true, true), #steps
@@ -273,7 +347,7 @@ MiniKeymap.map_multistep = function(mode, lhs, steps, opts)
   steps = H.normalize_steps(steps)
 
   local rhs = function()
-    if H.is_disabled() then return lhs_raw end
+    if H.is_disabled() then return lhs_keycode end
     for i = 1, n_steps do
       if steps[i].condition() then
         local out = steps[i].action()
@@ -293,26 +367,42 @@ MiniKeymap.map_multistep = function(mode, lhs, steps, opts)
   vim.keymap.set(mode, lhs, rhs, opts)
 end
 
---- TODO
+--- Generate step for multi-step mappings
+---
+--- This is a table with function elements. Call to actually get a step.
 MiniKeymap.gen_step = {}
 
 --- Search pattern step
 ---
+--- Use |search()| in Insert mode to jump to pattern match. Possibly adjust
+--- final side (before or after) of cursor.
+---
+---@param pattern string Same as for |search()|.
+---@param flags string|nil Same as for |search()|.
+---@param opts table|nil Options. Possible fields:
+---   - <side> `(string)` - one of `"before"` (default) or `"after"`.
+---
+---@return table Step which searches pattern only in Insert mode.
+---
+---@usage Built-in |MiniKeymap.map_multistep()| steps "jump_after_close" and
+---   "jump_before_open" use this.
+---
 --- Example of steps that jump before/after all consecutive brackets: >lua
 ---
+---   local keymap = require('mini.keymap')
 ---   local tab_step = keymap.gen_step.search_pattern(
----     [[[)\]}]\+]], 'ceW', { side = 'after' }
+---     [=[[)\]}]\+]=], 'ceW', { side = 'after' }
 ---   )
 ---   keymap.map_multistep('i', '<Tab>', { tab_step })
 ---
----   local stab_step = keymap.gen_step.search_pattern([[[(\[{]\+]], 'bW')
+---   local stab_step = keymap.gen_step.search_pattern([=[[(\[{]\+]=], 'bW')
 ---   keymap.map_multistep({ 'i' }, '<S-Tab>', { stab_step })
 ---<
----
----@return table Step which searches pattern only in Insert mode.
 MiniKeymap.gen_step.search_pattern = function(pattern, flags, opts)
   if type(pattern) ~= 'string' then H.error('`pattern` should be string, not ' .. vim.inspect(type(pattern))) end
+  flags = flags or ''
   if type(flags) ~= 'string' then H.error('`flags` should be string, not ' .. vim.inspect(type(flags))) end
+
   opts = vim.tbl_extend('force', { side = 'before' }, opts or {})
   local side = opts.side
   if not (side == 'before' or side == 'after') then H.error('`opts.side` should be one of "before" or "after"') end
@@ -341,13 +431,25 @@ end
 
 --- Map combo post action
 ---
---- TODO: Describe what a "combo" is and why it may be useful.
---- Mention that this is not a "real" mapping, but a tracking |vim.on_key()|.
---- See |MiniKeymap-examples|.
+--- Create a combo: sequence of keys where each acts immediately but plus execute
+--- extra action if all are typed within configurable delay between each other.
+---
+--- Example for Insert mode "better escape" `jk` combo with `<BS><BS><Esc>` action:
+--- - Press `j`. It is visible immediately without any side effects.
+--- - Quickly (no more than 200 ms after) press `k`. This triggers the action
+---   which is equivalent to executing <BS><BS> (delete already present `jk`)
+---   end press <Esc> to exit into Normal mode.
 ---
 --- Notes:
---- - RHS keys are executed with |nvim_input()|, i.e. they will respect custom
----   mappings.
+--- - IMPORTANT! Combo is not a regular mapping but a separate key tracking
+---   with |vim.on_key()|. This is important as combos will not be visible and
+---   can not be managed as regular mappings. Instead each combo is associated
+---   with a dedicated |namespace| (named for human readability). However, it
+---   is not really expected to manage them inside current session after they
+---   are created.
+---
+--- - String action is executed with |nvim_input()|, i.e. emulated keys will
+---   respect custom mappings.
 ---
 --- - Different combos are tracked and act independent of each other. For example,
 ---   if there are combos for `jjk` and `jk` keys, fast typing `jjk` will
@@ -357,13 +459,38 @@ end
 ---   watching for keys as they are typed and not as if coming from mappings.
 ---   For example, this matters when creating a `jk` combo for Visual mode while
 ---   also having `xnoremap j gj` style of remaps. On Neovim<0.11 the fix is to
----   use `{'g', 'j', 'g', 'k'}` as combo's left hand side, which is bothersome.
+---   use `gjgk` as combo's left hand side.
 ---
---- - Adds very small but non-zero overhead on each keystroke for every combo
----   mapping. Usually about 1-3 microseconds (i.e. 0.001-0.003 ms), which
----   should be fast enough for most setups. For a "normal, real world" coding
----   session with a total of ~20000 keystrokes it resulted in extra ~40ms of
----   overhead for a single cretaed combo. Create many such mappings with caution.
+--- - Each combo adds very small but non-zero overhead on each keystroke.
+---   Usually about 1-3 microseconds (i.e. 0.001-0.003 ms), which should be
+---   fast enough for most setups. For a "normal, real world" coding session
+---   with a total of ~20000 keystrokes it resulted in extra ~40ms of overhead
+---   for a single created combo. Create many such mappings with caution.
+---
+---@param mode string|table String or array of string mode id (like "n", "i", etc.).
+---   Array of several modes is more performant than several single mode calls.
+---@param lhs string|table String with tracked key sequence or an array of
+---   tracked keys (one element - one key).
+---@param action string|function Action to perform after key sequence is detected.
+---   If string, treated as keys and emulated with |nvim_input()|.
+---   If function, executed in |vim.schedule()|. Can return string keys which
+---   will be emulated.
+---@param opts table|nil Options. Possible fields:
+---   - <delay> `(number)` - delay in milliseconds within which keys should be
+---     pressed to detect a key sequence. Default: 200.
+---
+---@usage See |MiniKeymap-examples| for practical examples.
+---
+--- Some illustrative examples: >lua
+---
+---   local map_combo = require('mini.keymap').map_combo
+---
+---   -- In Insert mode pressing `x` followed by `x` within 1 second logs 'A'
+---   -- and emulates extra pressing of `yy`
+---   _G.log = {}
+---   local action = function() table.insert(_G.log, 'A'); return 'yy' end
+---   map_combo('i', 'xx', action, { delay = 1000 })
+--- <
 MiniKeymap.map_combo = function(mode, lhs, action, opts)
   if type(mode) == 'string' then mode = { mode } end
   if not H.is_array_of(mode, H.is_string) then H.error('`mode` should be string or array of strings') end
@@ -397,17 +524,16 @@ MiniKeymap.map_combo = function(mode, lhs, action, opts)
     unignore()
   end)
 
-  local act
   if type(action) == 'string' then
     local keys = action
-    act = function() input_keys(keys) end
-  else
-    act = vim.schedule_wrap(function()
-      -- Allow action to return keys to manually mimic
-      local keys = action()
-      if type(keys) == 'string' and keys ~= '' then input_keys(keys) end
-    end)
+    action = function() input_keys(keys) end
   end
+  local act = vim.schedule_wrap(function()
+    if H.is_disabled() then return end
+    -- Allow action to return keys to manually mimic
+    local keys = action()
+    if type(keys) == 'string' and keys ~= '' then input_keys(keys) end
+  end)
 
   local watcher = function(key, typed)
     -- Use only keys "as if typed" and in proper mode
@@ -437,8 +563,9 @@ MiniKeymap.map_combo = function(mode, lhs, action, opts)
     act()
   end
 
-  local new_combo_id = #H.ns_id_combo
-  local ns_id = vim.api.nvim_create_namespace('MiniKeymap-combo_' .. new_combo_id)
+  local combo_keys = table.concat(vim.tbl_map(vim.fn.keytrans, seq), '')
+  local ns_name = string.format('MiniKeymap-combo-%s-%s-%s', #H.ns_id_combo, table.concat(mode, ''), combo_keys)
+  local ns_id = vim.api.nvim_create_namespace(ns_name)
   table.insert(H.ns_id_combo, ns_id)
 
   H.ensure_mode_tracking()

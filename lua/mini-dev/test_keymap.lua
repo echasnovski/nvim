@@ -94,11 +94,11 @@ end
 local is_pumvisible = function() return child.fn.pumvisible() == 1 end
 
 -- Time constants
--- - Using 5 as small time value is needed for `map_combo` tests to pass with
---   high multipler for slow systems (like 15)
-local small_time = helpers.get_time_const(5)
+local small_time = helpers.get_time_const(10)
 local term_mode_wait = helpers.get_time_const(50)
+-- - Use custom combo delay for more robust tests on slower systems
 local default_combo_delay = 200
+local test_combo_delay = 3 * small_time
 
 -- Output test set ============================================================
 local T = new_set({
@@ -235,6 +235,26 @@ T['map_multistep()']['respects `opts`'] = function()
   eq(get_lines(), { 'From step 3' })
   eq(child.lua_get('_G.log'), { 'cond 3', 'action 3' })
 end
+
+T['map_multistep()']['respects `vim.{g,b}.minikeymap_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    mock_test_steps()
+    child.lua('require("mini-dev.keymap").map_multistep("i", "<Tab>", _G.steps)')
+    type_keys('i')
+
+    child[var_type].minikeymap_disable = true
+    type_keys('<Tab>')
+    eq(get_lines(), { '\t' })
+    validate_log_and_clean({})
+
+    child[var_type].minikeymap_disable = false
+    type_keys('<Tab>')
+    eq(get_lines(), { '\t\t' })
+    validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'cond 4', 'cond 5' })
+  end,
+})
 
 T['map_multistep()']['validates input'] = function()
   expect.error(function() map_multistep('a', '<Tab>', {}) end, 'mode')
@@ -1067,6 +1087,15 @@ T['gen_step']['search_pattern()']['respects `opts.side`'] = function()
   validate_jump(2, 8)
 end
 
+T['gen_step']['search_pattern()']['validates input'] = function()
+  local validate = function(args, ref_pattern)
+    expect.error(function() child.lua('require("mini-dev.keymap").gen_step.search_pattern(...)', args) end, ref_pattern)
+  end
+  validate({ 1, '' }, '`pattern`.*string')
+  validate({ 'a', 1 }, '`flags`.*string')
+  validate({ 'a', '', { side = 1 } }, '`opts.side`.*one of')
+end
+
 T['map_combo()'] = new_set()
 
 local map_combo = forward_lua('require("mini-dev.keymap").map_combo')
@@ -1085,7 +1114,7 @@ T['map_combo()']['works with string RHS'] = function()
   eq(child.fn.mode(), 'n')
 
   -- Can use full key name in LHS
-  map_combo('i', '<BS><CR>', 'hello')
+  map_combo('i', '<BS><CR>', 'hello', { delay = test_combo_delay })
   type_keys('i', 'ab', '<BS>')
   eq(get_lines(), { 'a' })
   sleep(small_time)
@@ -1096,34 +1125,35 @@ T['map_combo()']['works with string RHS'] = function()
   child.ensure_normal_mode()
 
   -- Can use more than two keys
-  map_combo('i', 'asdf', ' world')
+  map_combo('i', 'asdf', ' world', { delay = test_combo_delay })
   type_keys('i', 'a')
   eq(get_lines(), { 'a' })
 
-  sleep(default_combo_delay - small_time)
+  sleep(small_time)
   type_keys('s')
   eq(get_lines(), { 'as' })
 
-  sleep(default_combo_delay - small_time)
+  sleep(small_time)
   type_keys('d')
   eq(get_lines(), { 'asd' })
 
-  sleep(default_combo_delay - small_time)
+  sleep(small_time)
   type_keys('f')
   eq(get_lines(), { 'asdf world' })
 end
 
 T['map_combo()']['works with callable RHS'] = function()
+  child.lua('_G.delay = ' .. test_combo_delay)
   -- Output string should be mimicked as if supplied as right hand side
   child.lua([[
     local rhs = function() table.insert(_G.log, "rhs"); return 'yy' end
-    require("mini-dev.keymap").map_combo("i", "xx", rhs)
+    require("mini-dev.keymap").map_combo("i", "xx", rhs, { delay = _G.delay })
   ]])
 
   -- Should be executed while intermediate keys immediately processed as usual
   type_keys('i', 'x')
   eq(get_lines(), { 'x' })
-  sleep(default_combo_delay - small_time)
+  sleep(small_time)
   type_keys('x')
   eq(get_lines(), { 'xxyy' })
   eq(child.fn.mode(), 'i')
@@ -1131,42 +1161,42 @@ T['map_combo()']['works with callable RHS'] = function()
 end
 
 T['map_combo()']['allows RHS to change mode and operate in it'] = function()
-  map_combo('i', 'jk', '<Esc>viwUo')
+  map_combo('i', 'jk', '<Esc>viwUo', { delay = test_combo_delay })
   type_keys('i')
   type_keys(small_time, 'j', 'k')
   eq(get_lines(), { 'JK', '' })
 end
 
 T['map_combo()']['works with array LHS'] = function()
-  map_combo('i', { 'ы', '<Space>', '半' }, '<Tab>')
+  map_combo('i', { 'ы', '<Space>', '半' }, '<Tab>', { delay = test_combo_delay })
 
   type_keys('i', 'ы')
-  sleep(default_combo_delay - small_time)
+  sleep(small_time)
   type_keys(' ')
-  sleep(default_combo_delay - small_time)
+  sleep(small_time)
   type_keys('半')
   eq(get_lines(), { 'ы 半\t' })
   eq(child.fn.mode(), 'i')
 end
 
 T['map_combo()']['resets if typed above delay'] = function()
-  map_combo('i', 'jk', 'hello')
-  map_combo('i', 'asd', 'world')
+  map_combo('i', 'jk', 'hello', { delay = test_combo_delay })
+  map_combo('i', 'asd', 'world', { delay = test_combo_delay })
 
   type_keys('i', 'j')
-  sleep(default_combo_delay + small_time)
+  sleep(test_combo_delay + small_time)
   type_keys('k')
   eq(get_lines(), { 'jk' })
 
   -- Should stop on any step
   type_keys(small_time, 'a', 's')
-  sleep(default_combo_delay + small_time)
+  sleep(test_combo_delay + small_time)
   type_keys('d')
   eq(get_lines(), { 'jkasd' })
 end
 
 T['map_combo()']['works in different modes'] = function()
-  map_combo({ 'n', 'x', 'c', 't' }, 'jj', 'll')
+  map_combo({ 'n', 'x', 'c', 't' }, 'jj', 'll', { delay = test_combo_delay })
 
   set_lines({ 'aaa', 'bbb', 'ccc' })
   set_cursor(1, 0)
@@ -1204,12 +1234,13 @@ T['map_combo()']['works in different modes'] = function()
   child.cmd('startinsert')
 
   -- Need to wait after each keystroke to allow shell to process it
-  type_keys(5 * small_time, 'j', 'j')
+  type_keys(small_time, 'j', 'j')
+  sleep(5 * small_time)
   expect.match(get_lines()[1], 'jjll$')
 end
 
 T['map_combo()']['takes user mappings into account when executing RHS'] = function()
-  map_combo('n', 'jj', 'll')
+  map_combo('n', 'jj', 'll', { delay = test_combo_delay })
   child.cmd('nnoremap ll <Cmd>lua table.insert(_G.log, "custom ll")<CR>')
 
   type_keys(small_time, 'j', 'j')
@@ -1217,7 +1248,7 @@ T['map_combo()']['takes user mappings into account when executing RHS'] = functi
 end
 
 T['map_combo()']['not recursive during RHS keys execution'] = function()
-  map_combo('i', 'jk', 'jk')
+  map_combo('i', 'jk', 'jk', { delay = test_combo_delay })
   type_keys('i')
   type_keys(small_time, 'j', 'k')
   eq(get_lines(), { 'jkjk' })
@@ -1227,7 +1258,7 @@ T['map_combo()']['not recursive during RHS keys execution'] = function()
 end
 
 T['map_combo()']['detecting combo does not depend on preceding keys'] = function()
-  map_combo('i', 'jk', 'xy')
+  map_combo('i', 'jk', 'xy', { delay = test_combo_delay })
   type_keys('i')
   type_keys(small_time, 'j', 'j', 'k', 'j')
   eq(get_lines(), { 'jjkxyj' })
@@ -1235,12 +1266,12 @@ end
 
 T['map_combo()']['works when typing already mapped keys'] = function()
   -- On Neovim>=0.11 for a `jk` LHS. On Neovim<0.11 for a `gjgk` LHS.
-  child.cmd('xnoremap j gj')
+  child.cmd('xnoremap j gj', { delay = test_combo_delay })
 
   -- Neovim<0.11 doesn't have functionality to truly track "keys as typed",
   -- only after "mappings are applied" (see `:h vim.on_key()`)
   local lhs = child.fn.has('nvim-0.11') == 1 and 'jj' or 'gjgj'
-  map_combo('x', lhs, 'll')
+  map_combo('x', lhs, 'll', { delay = test_combo_delay })
   set_lines({ 'aaa', 'bbb', 'ccc' })
   type_keys('v')
   type_keys(small_time, 'j', 'j')
@@ -1249,19 +1280,33 @@ end
 
 T['map_combo()']['works with tricky LHS'] = function()
   -- Should recognise LHS as three keys (`<`, `\t`, `>`)
-  map_combo('i', '<<Tab>>', 'hello')
+  map_combo('i', '<<Tab>>', 'hello', { delay = test_combo_delay })
   type_keys('i')
   type_keys(small_time, '<', '\t', '>')
   eq(get_lines(), { '<\t>hello' })
 end
 
+T['map_combo()']['creates namespaces with informative names'] = function()
+  map_combo('i', 'jk', '<BS><BS><Esc>')
+  map_combo('i', 'jk', 'hello')
+  map_combo({ 'n', 'x' }, '<Space>\t', 'hello')
+  local namespaces = child.api.nvim_get_namespaces()
+  eq(namespaces['MiniKeymap-combo-0-i-jk'] ~= nil, true)
+  eq(namespaces['MiniKeymap-combo-1-i-jk'] ~= nil, true)
+  eq(namespaces['MiniKeymap-combo-2-nx-<Space><Tab>'] ~= nil, true)
+end
+
 T['map_combo()']['separate combos act independently'] = function()
+  child.lua('_G.delay = ' .. test_combo_delay)
   child.lua([[
+    local combo = function(lhs, rhs)
+      require("mini-dev.keymap").map_combo('i', lhs, rhs, { delay = _G.delay })
+    end
     _G.n1, _G.n2, _G.n3, _G.n4 = 0, 0, 0, 0
-    require("mini-dev.keymap").map_combo('i', 'jk',  function() _G.n1 = _G.n1 + 1 end)
-    require("mini-dev.keymap").map_combo('i', 'jjk', function() _G.n2 = _G.n2 + 1 end)
-    require("mini-dev.keymap").map_combo('i', 'kj',  function() _G.n3 = _G.n3 + 1 end)
-    require("mini-dev.keymap").map_combo('i', 'kjj', function() _G.n4 = _G.n4 + 1 end)
+    combo('jk',  function() _G.n1 = _G.n1 + 1 end)
+    combo('jjk', function() _G.n2 = _G.n2 + 1 end)
+    combo('kj',  function() _G.n3 = _G.n3 + 1 end)
+    combo('kjj', function() _G.n4 = _G.n4 + 1 end)
   ]])
 
   type_keys('i')
@@ -1270,10 +1315,14 @@ T['map_combo()']['separate combos act independently'] = function()
 end
 
 T['map_combo()']['allows several combos for the same mode-lhs pair'] = function()
+  child.lua('_G.delay = ' .. test_combo_delay)
   child.lua([[
+    local combo = function(lhs, rhs)
+      require("mini-dev.keymap").map_combo('i', lhs, rhs, { delay = _G.delay })
+    end
     _G.n1, _G.n2 = 0, 0
-    require("mini-dev.keymap").map_combo('i', 'jk', function() _G.n1 = _G.n1 + 1 end)
-    require("mini-dev.keymap").map_combo('i', 'jk', function() _G.n2 = _G.n2 + 1 end)
+    combo('jk', function() _G.n1 = _G.n1 + 1 end)
+    combo('jk', function() _G.n2 = _G.n2 + 1 end)
   ]])
 
   type_keys('i')
@@ -1282,7 +1331,7 @@ T['map_combo()']['allows several combos for the same mode-lhs pair'] = function(
 end
 
 T['map_combo()']['works inside macros'] = function()
-  map_combo('i', 'jk', '<BS><BS><Esc>')
+  map_combo('i', 'jk', '<BS><BS><Esc>', { delay = test_combo_delay })
 
   type_keys('q', 'q', 'i')
   type_keys(small_time, 'j', 'j', 'k')
@@ -1314,6 +1363,23 @@ T['map_combo()']['validates input'] = function()
   expect.error(function() map_combo('i', 'jk', 'xy', { delay = 0 }) end, '`opts%.delay`.*positive')
   expect.error(function() map_combo('i', 'jk', 'xy', { delay = -1 }) end, '`opts%.delay`.*positive')
 end
+
+T['map_combo()']['respects `vim.{g,b}.minikeymap_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    map_combo('i', 'jk', 'hello', { delay = test_combo_delay })
+    type_keys('i')
+
+    child[var_type].minikeymap_disable = true
+    type_keys(small_time, 'j', 'k')
+    eq(get_lines(), { 'jk' })
+
+    child[var_type].minikeymap_disable = false
+    type_keys(small_time, 'j', 'k')
+    eq(get_lines(), { 'jkjkhello' })
+  end,
+})
 
 -- Integration tests ==========================================================
 return T
