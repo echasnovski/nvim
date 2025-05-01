@@ -18,9 +18,6 @@ local sleep = function(ms) helpers.sleep(ms, child) end
 
 local test_dir = 'tests/dir-keymap'
 
--- Time constants
-local small_time = helpers.get_time_const(10)
-
 -- Common test wrappers
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
@@ -77,101 +74,31 @@ local validate_log_and_clean = function(ref)
   child.lua('_G.log = {}')
 end
 
-local validate_multi_works = function(key, method_name, ref_lines_state)
-  mock_test_steps()
-  child.lua('require("mini-dev.keymap").' .. method_name .. '(_G.steps)')
+local validate_edit = function(lines_before, cursor_before, keys, lines_after, cursor_after)
+  child.ensure_normal_mode()
+  set_lines(lines_before)
+  set_cursor(cursor_before[1], cursor_before[2])
 
-  -- Can pass through
-  type_keys(key)
-  validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'cond 4', 'cond 5' })
-  eq(get_lines(), ref_lines_state[1])
+  type_keys(keys)
 
-  -- Can handle an action returning nothing
-  child.lua('_G.step_1_cond = true')
-  type_keys(key)
-  validate_log_and_clean({ 'cond 1', 'action 1' })
-  eq(get_lines(), ref_lines_state[2])
-  child.lua('_G.step_1_cond = false')
+  eq(get_lines(), lines_after)
+  eq(get_cursor(), cursor_after)
 
-  -- Can emulate returned keys
-  child.lua('_G.step_2_cond = true')
-  type_keys(key)
-  validate_log_and_clean({ 'cond 1', 'cond 2', 'action 2' })
-  eq(get_lines(), ref_lines_state[3])
-  child.lua('_G.step_2_cond = false')
-
-  -- Can execute `<Cmd>...<CR>` string
-  child.lua('_G.step_3_cond = true')
-  type_keys(key)
-  validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'action 3' })
-  eq(get_lines(), ref_lines_state[4])
-  child.lua('_G.step_3_cond = false')
-
-  -- Respects action returning `false` to indicate processing further steps
-  child.lua('_G.step_4_cond = true')
-  set_cursor(1, 11)
-  type_keys(key)
-  validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'cond 4', 'action 4', 'cond 5' })
-  eq(get_lines(), ref_lines_state[5])
-  child.lua('_G.step_4_cond = false')
-
-  -- Can execute callable returned from action
-  child.lua('_G.step_5_cond = true')
-  type_keys(key)
-  validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'cond 4', 'cond 5', 'action 5' })
-  eq(get_lines(), ref_lines_state[6])
-  child.lua('_G.step_5_cond = false')
-  -- - Should not create side effects
-  eq(child.lua_get('type(_G.MiniKeymap)'), 'nil')
+  child.ensure_normal_mode()
 end
 
-local validate_multi_input_validation = function(wrapper, method_name)
-  child.lua('_G.method = ' .. vim.inspect(method_name))
-  expect.error(function() wrapper('a') end, '`steps`.*array')
-  expect.error(function() wrapper({ 'a' }) end, '`steps`.*valid steps.*not')
-  expect.error(function() wrapper({ {} }) end, '`steps`.*valid steps.*not')
-  expect.error(function() wrapper({ { condition = 'a' } }) end, '`steps`.*valid steps.*not')
-  expect.error(
-    function() child.lua('require("mini-dev.keymap")[_G.method]({ { condition = function() end, action = "a" } })') end,
-    '`steps`.*valid steps.*not'
-  )
-end
-
-local validate_multi_opts_usage = function(key, method_name)
-  child.lua('_G.map_multi = require("mini-dev.keymap").' .. method_name)
-  child.lua('_G.key = ' .. vim.inspect(key))
-
-  local validate_mapping = function(is_buffer_local, ref_desc)
-    local info = child.lua([[
-      local map_info = vim.fn.maparg(_G.key, 'i', false, true)
-      return { is_buffer_local = map_info.buffer == 1, desc = map_info.desc }
-    ]])
-    eq(info, { is_buffer_local = is_buffer_local, desc = ref_desc })
-  end
-
-  mock_test_steps()
-
-  child.lua('_G.map_multi({ _G.step_3 })')
-  validate_mapping(false, 'Multi ' .. key)
-
-  -- Should create a separate buffer-local mapping with custom description
-  child.lua('_G.map_multi({ _G.step_5 }, { buffer = 0, desc = "My multi", expr = false, replace_keycodes = false })')
-  validate_mapping(true, 'My multi')
-
-  -- Should be independent and actually use only buffer-local mapping
-  child.lua('_G.step_3_cond, _G.step_5_cond = true, true')
-  type_keys('i', key)
-  eq(get_lines(), { 'From step 5 with upvalue' })
-  eq(child.lua_get('_G.log'), { 'cond 5', 'action 5' })
-  child.lua('_G.log = {}')
-
-  child.cmd('iunmap <buffer> ' .. key)
-  type_keys(key)
-  eq(get_lines(), { 'From step 3' })
-  eq(child.lua_get('_G.log'), { 'cond 3', 'action 3' })
+local validate_edit1d = function(line_before, col_before, keys, line_after, col_after)
+  validate_edit({ line_before }, { 1, col_before }, keys, { line_after }, { 1, col_after })
 end
 
 local is_pumvisible = function() return child.fn.pumvisible() == 1 end
+
+-- Time constants
+-- - Using 5 as small time value is needed for `map_combo` tests to pass with
+--   high multipler for slow systems (like 15)
+local small_time = helpers.get_time_const(5)
+local term_mode_wait = helpers.get_time_const(50)
+local default_combo_delay = 200
 
 -- Output test set ============================================================
 local T = new_set({
@@ -207,36 +134,124 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error('a', 'config', 'table')
 end
 
-T['map_multi_tab()'] = new_set()
+T['map_multistep()'] = new_set()
 
-local map_multi_tab = forward_lua('require("mini-dev.keymap").map_multi_tab')
+local map_multistep = forward_lua('require("mini-dev.keymap").map_multistep')
 
-T['map_multi_tab()']['works'] = function()
+T['map_multistep()']['works'] = function()
+  mock_test_steps()
+  child.lua('require("mini-dev.keymap").map_multistep("i", "<Tab>", _G.steps)')
+
   type_keys('i')
-  local ref_lines_state = {
-    { '\t' }, -- Act as if unmapped
-    { '\t' }, -- Do nothing
-    { '\tdd' }, -- Emulate returned keys
-    { 'From step 3' }, -- Execute `<Cmd>...<CR>` string
-    { 'From step 3\t' }, -- Respect `false` action return as "pass through"
-    { 'From step 5 with upvalue' }, -- Execute callable returned from action
-  }
-  validate_multi_works('<Tab>', 'map_multi_tab', ref_lines_state)
+
+  -- Can pass through
+  type_keys('<Tab>')
+  validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'cond 4', 'cond 5' })
+  -- - Act as if unmapped
+  eq(get_lines(), { '\t' })
+
+  -- Can handle an action returning nothing
+  child.lua('_G.step_1_cond = true')
+  type_keys('<Tab>')
+  validate_log_and_clean({ 'cond 1', 'action 1' })
+  -- - Do nothing
+  eq(get_lines(), { '\t' })
+  child.lua('_G.step_1_cond = false')
+
+  -- Can emulate returned keys
+  child.lua('_G.step_2_cond = true')
+  type_keys('<Tab>')
+  validate_log_and_clean({ 'cond 1', 'cond 2', 'action 2' })
+  -- - Emulate pressing returned keys
+  eq(get_lines(), { '\tdd' })
+  child.lua('_G.step_2_cond = false')
+
+  -- Can execute `<Cmd>...<CR>` string
+  child.lua('_G.step_3_cond = true')
+  type_keys('<Tab>')
+  validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'action 3' })
+  -- - Execute `<Cmd>...<CR>` string
+  eq(get_lines(), { 'From step 3' })
+  child.lua('_G.step_3_cond = false')
+
+  -- Respects action returning `false` to indicate processing further steps
+  child.lua('_G.step_4_cond = true')
+  set_cursor(1, 11)
+  type_keys('<Tab>')
+  validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'cond 4', 'action 4', 'cond 5' })
+  -- - Respect `false` action return as "pass through"
+  eq(get_lines(), { 'From step 3\t' })
+  child.lua('_G.step_4_cond = false')
+
+  -- Can execute callable returned from action
+  child.lua('_G.step_5_cond = true')
+  type_keys('<Tab>')
+  validate_log_and_clean({ 'cond 1', 'cond 2', 'cond 3', 'cond 4', 'cond 5', 'action 5' })
+  -- - Execute callable returned from action
+  eq(get_lines(), { 'From step 5 with upvalue' })
+  child.lua('_G.step_5_cond = false')
+  -- - Should not create side effects
+  eq(child.lua_get('type(_G.MiniKeymap)'), 'nil')
 end
 
-T['map_multi_tab()']['works with empty steps'] = function()
-  map_multi_tab({})
+T['map_multistep()']['works with empty steps'] = function()
+  map_multistep('i', '<Tab>', {})
   type_keys('i', '<Tab>')
   eq(get_lines(), { '\t' })
 end
 
-T['map_multi_tab()']['respects `opts`'] = function() validate_multi_opts_usage('<Tab>', 'map_multi_tab') end
+T['map_multistep()']['respects `opts`'] = function()
+  local validate_mapping = function(is_buffer_local, ref_desc)
+    local info = child.lua([[
+      local map_info = vim.fn.maparg('<Tab>', 'i', false, true)
+      return { is_buffer_local = map_info.buffer == 1, desc = map_info.desc }
+    ]])
+    eq(info, { is_buffer_local = is_buffer_local, desc = ref_desc })
+  end
 
-T['map_multi_tab()']['built-in steps'] = new_set()
+  mock_test_steps()
 
-T['map_multi_tab()']['built-in steps']['pmenu_next'] = function()
+  child.lua('require("mini-dev.keymap").map_multistep("i", "<Tab>", { _G.step_3 })')
+  validate_mapping(false, 'Multi <Tab>')
+
+  -- Should create a separate buffer-local mapping with custom description
+  child.lua([[require('mini-dev.keymap').map_multistep(
+    'i',
+    '<Tab>',
+    { _G.step_5 },
+    { buffer = 0, desc = 'My multi', expr = false, replace_keycodes = false }
+  )]])
+  validate_mapping(true, 'My multi')
+
+  -- Should be independent and actually use only buffer-local mapping
+  child.lua('_G.step_3_cond, _G.step_5_cond = true, true')
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { 'From step 5 with upvalue' })
+  eq(child.lua_get('_G.log'), { 'cond 5', 'action 5' })
+  child.lua('_G.log = {}')
+
+  child.cmd('iunmap <buffer> <Tab>')
+  type_keys('<Tab>')
+  eq(get_lines(), { 'From step 3' })
+  eq(child.lua_get('_G.log'), { 'cond 3', 'action 3' })
+end
+
+T['map_multistep()']['validates input'] = function()
+  expect.error(function() map_multistep('a', '<Tab>', {}) end, 'mode')
+  expect.error(function() map_multistep('i', 1, {}) end, '`lhs`.*string')
+  expect.error(function() map_multistep('i', '<Tab>', { 'a' }) end, '`steps`.*valid steps.*not')
+  expect.error(function() map_multistep('i', '<Tab>', { {} }) end, '`steps`.*valid steps.*not')
+  expect.error(function() map_multistep('i', '<Tab>', { { condition = 'a' } }) end, '`steps`.*valid steps.*not')
+  local lua_cmd =
+    'require("mini-dev.keymap").map_multistep("i", "<Tab>", { { condition = function() end, action = "a" } })'
+  expect.error(function() child.lua(lua_cmd) end, '`steps`.*valid steps.*not')
+end
+
+T['map_multistep()']['built-in steps'] = new_set()
+
+T['map_multistep()']['built-in steps']['pmenu_next'] = function()
   child.o.completeopt = 'menuone,noselect'
-  map_multi_tab({ 'pmenu_next' })
+  map_multistep('i', '<Tab>', { 'pmenu_next' })
 
   type_keys('i', '<Tab>')
   eq(get_lines(), { '\t' })
@@ -255,8 +270,503 @@ T['map_multi_tab()']['built-in steps']['pmenu_next'] = function()
   eq(get_lines(), { '\taa ab \t' })
 end
 
-T['map_multi_tab()']['built-in steps']['cmp_next'] = function()
-  map_multi_tab({ 'cmp_next' })
+T['map_multistep()']['built-in steps']['pmenu_prev'] = function()
+  child.o.completeopt = 'menuone,noselect'
+  map_multistep('i', '<S-Tab>', { 'pmenu_prev' })
+
+  type_keys('i', '<S-Tab>')
+  eq(get_lines(), { '\t' })
+  type_keys('aa ab ', '<C-n>')
+  eq(is_pumvisible(), true)
+
+  -- Should act as pressing `<C-p>`
+  type_keys('<S-Tab>')
+  eq(is_pumvisible(), true)
+  eq(get_lines(), { '\taa ab ab' })
+
+  type_keys('<C-e>')
+  eq(is_pumvisible(), false)
+  eq(get_lines(), { '\taa ab ' })
+  type_keys('<S-Tab>')
+  eq(get_lines(), { '\taa ab \t' })
+end
+
+T['map_multistep()']['built-in steps']['pmenu_accept'] = function()
+  child.o.completeopt = 'menuone,noselect'
+  map_multistep('i', '<CR>', { 'pmenu_accept' })
+
+  type_keys('i', '<CR>')
+  eq(get_lines(), { '', '' })
+
+  -- Should accept selected (and only selected) item, i.e. act like `<C-y>`
+  type_keys('aa ab ', '<C-n>', '<C-n>')
+  eq(is_pumvisible(), true)
+  eq(get_lines(), { '', 'aa ab aa' })
+
+  type_keys('<CR>')
+  eq(is_pumvisible(), false)
+  eq(get_lines(), { '', 'aa ab aa' })
+end
+
+T['map_multistep()']['built-in steps']['minisnippets_next'] = function()
+  map_multistep('i', '<Tab>', { 'minisnippets_next' })
+
+  -- Should work if 'mini.snippets' is not set up
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+
+  child.lua('require("mini.snippets").setup()')
+
+  -- Should pass through if there is no active session
+  type_keys('<Tab>')
+  eq(get_lines(), { '\t\t' })
+
+  child.lua('MiniSnippets.default_insert({ prefix = "ab", body = "Snippet $1 ${2:placeholder} ab$0" })')
+  eq(get_lines(), { '\t\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 10 })
+
+  type_keys('<Tab>')
+  eq(get_lines(), { '\t\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 11 })
+  type_keys('<Tab>')
+  eq(get_lines(), { '\t\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 25 })
+end
+
+T['map_multistep()']['built-in steps']['minisnippets_prev'] = function()
+  -- child.lua([[require("mini.snippets").setup({
+  --   snippets = { { prefix = 'ab', body = 'Snippet $1 ab$0', desc = 'Test snippet' } },
+  -- })]])
+  map_multistep('i', '<S-Tab>', { 'minisnippets_prev' })
+
+  -- Should work if 'mini.snippets' is not set up
+  type_keys('i', '<S-Tab>')
+  eq(get_lines(), { '\t' })
+
+  child.lua('require("mini.snippets").setup()')
+
+  -- Should pass through if there is no active session
+  type_keys('<S-Tab>')
+  eq(get_lines(), { '\t\t' })
+
+  child.lua('MiniSnippets.default_insert({ prefix = "ab", body = "Snippet $1 ${2:placeholder} ab$0" })')
+  eq(get_lines(), { '\t\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 10 })
+
+  type_keys('<S-Tab>')
+  eq(get_lines(), { '\t\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 25 })
+  type_keys('<S-Tab>')
+  eq(get_lines(), { '\t\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 11 })
+end
+
+T['map_multistep()']['built-in steps']['minisnippets_expand'] = function()
+  map_multistep('i', '<Tab>', { 'minisnippets_next', 'minisnippets_expand' })
+
+  -- Should work if 'mini.snippets' is not set up
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+
+  child.lua(
+    'require("mini.snippets").setup({ snippets = { { prefix = "ab", body = "Snippet $1 ${2:placeholder} ab$0" } } })'
+  )
+
+  -- Should expand if no active session
+  type_keys('ab', '<Tab>')
+  eq(get_lines(), { '\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 9 })
+
+  -- Should jump if there is active session
+  type_keys('<Tab>')
+  eq(get_lines(), { '\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 10 })
+  type_keys('<Tab>')
+  eq(get_lines(), { '\tSnippet  placeholder ab' })
+  eq(get_cursor(), { 1, 24 })
+end
+
+T['map_multistep()']['built-in steps']['minipairs_cr'] = function()
+  map_multistep('i', '<CR>', { 'minipairs_cr' })
+
+  -- Should work if 'mini.pairs' is not set up
+  type_keys('i', '<CR>')
+  eq(get_lines(), { '', '' })
+
+  child.lua('require("mini.pairs").setup()')
+
+  -- Should respect pairs
+  type_keys('(')
+  eq(get_lines(), { '', '()' })
+  type_keys('<CR>')
+  eq(get_lines(), { '', '(', '', ')' })
+end
+
+T['map_multistep()']['built-in steps']['minipairs_bs'] = function()
+  map_multistep('i', '<BS>', { 'minipairs_bs' })
+
+  -- Should work if 'mini.pairs' is not set up
+  type_keys('i', '()', '<Left>', '<BS>')
+  eq(get_lines(), { ')' })
+
+  child.lua('require("mini.pairs").setup()')
+
+  -- Should respect pairs
+  set_lines({ 'a()' })
+  set_cursor(1, 2)
+  eq(get_lines(), { 'a()' })
+  type_keys('<BS>')
+  eq(get_lines(), { 'a' })
+end
+
+T['map_multistep()']['built-in steps']['jump_after_tsnode'] = function()
+  map_multistep('i', '<Tab>', { 'jump_after_tsnode' })
+
+  -- Should work if there is no tree-sitter parser
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+
+  if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('Tree-sitter testing is easier on Neovim>=0.9') end
+
+  child.cmd('edit ' .. test_dir .. '/tree-sitter-tests.lua')
+  set_cursor(3, 4)
+
+  local validate_jump = function(...)
+    type_keys('<Tab>')
+    eq(get_cursor(), { ... })
+    eq(child.fn.mode(), 'i')
+  end
+
+  -- Should jump just after the end of current node while keeping Insert mode
+  validate_jump(3, 6)
+
+  -- Should be possible to "chain" jumps and place cursor on end-of-line cell
+  validate_jump(5, 3)
+  validate_jump(6, 3)
+  validate_jump(8, 16)
+
+  -- Should be possible to call at end of buffer without movement
+  validate_jump(8, 16)
+end
+
+T['map_multistep()']['built-in steps']['jump_before_tsnode'] = function()
+  map_multistep('i', '<S-Tab>', { 'jump_before_tsnode' })
+
+  -- Should work if there is no tree-sitter parser
+  type_keys('i', '<S-Tab>')
+  eq(get_lines(), { '\t' })
+
+  if child.fn.has('nvim-0.9') == 0 then MiniTest.skip('Tree-sitter testing is easier on Neovim>=0.9') end
+
+  child.cmd('edit ' .. test_dir .. '/tree-sitter-tests.lua')
+  set_cursor(3, 5)
+
+  local validate_jump = function(...)
+    type_keys('<S-Tab>')
+    eq(get_cursor(), { ... })
+    eq(child.fn.mode(), 'i')
+  end
+
+  -- Should jump just at the start of current node (as in Insert mode cursor
+  -- will be just before the node) while keeping Insert mode
+  validate_jump(3, 4)
+
+  -- Should be possible to "chain" jumps (although cursor is in the same node)
+  validate_jump(2, 9)
+  validate_jump(2, 2)
+  validate_jump(1, 0)
+
+  -- Should be possible to call at start of buffer without movement
+  validate_jump(1, 0)
+end
+
+T['map_multistep()']['built-in steps']['jump_after_close'] = function()
+  map_multistep('i', '<Tab>', { 'jump_after_close' })
+
+  set_lines({ [=[([{"'` x `'"}])]=], '', ')', ']', '}', '"', "'", '`' })
+  set_cursor(1, 7)
+  type_keys('i')
+
+  local validate_jump = function(...)
+    type_keys('<Tab>')
+    eq(get_cursor(), { ... })
+    eq(child.fn.mode(), 'i')
+  end
+
+  -- Should put cursor on the right of closing character
+  validate_jump(1, 10)
+
+  -- Should be able to "chain" to work with consecutive characters
+  validate_jump(1, 11)
+  validate_jump(1, 12)
+  validate_jump(1, 13)
+  validate_jump(1, 14)
+  -- - Should be possible to put cursor after end of line
+  validate_jump(1, 15)
+
+  -- Should work across multiple lines and with not necessarily balanced pairs
+  validate_jump(3, 1)
+  validate_jump(4, 1)
+  validate_jump(5, 1)
+  validate_jump(6, 1)
+  validate_jump(7, 1)
+  validate_jump(8, 1)
+
+  -- Should do nothing if there is no search matches
+  validate_jump(8, 1)
+  eq(get_lines()[8], '`')
+end
+
+T['map_multistep()']['built-in steps']['jump_before_open'] = function()
+  map_multistep('i', '<S-Tab>', { 'jump_before_open' })
+
+  set_lines({ '`', "'", '"', '{', '[', '(', '', [=[([{"'` x `'"}])]=] })
+  set_cursor(8, 7)
+  type_keys('i')
+
+  local validate_jump = function(...)
+    type_keys('<S-Tab>')
+    eq(get_cursor(), { ... })
+    eq(child.fn.mode(), 'i')
+  end
+
+  -- Should put cursor on the left of closing character
+  validate_jump(8, 5)
+
+  -- Should be able to "chain" to work with consecutive characters
+  validate_jump(8, 4)
+  validate_jump(8, 3)
+  validate_jump(8, 2)
+  validate_jump(8, 1)
+  -- - Should be possible to put cursor at first column
+  validate_jump(8, 0)
+
+  -- Should work across multiple lines and with not necessarily balanced pairs
+  validate_jump(6, 0)
+  validate_jump(5, 0)
+  validate_jump(4, 0)
+  validate_jump(3, 0)
+  validate_jump(2, 0)
+  validate_jump(1, 0)
+
+  -- Should do nothing if there is no search matches
+  validate_jump(1, 0)
+  eq(get_lines()[1], '`')
+end
+
+T['map_multistep()']['built-in steps']['increase_indent'] = function()
+  map_multistep({ 'n', 'i', 'x' }, '<Tab>', { 'increase_indent' })
+
+  -- Should work as with built-in keys, i.e. respecting relevant options
+  child.bo.expandtab = true
+  child.bo.shiftwidth = 2
+  child.bo.tabstop = 4
+
+  --  Should only work when inside indent (even empty)
+  -- - Insert mode (cursor can be "just after indent", i.e. on next cell)
+  validate_edit1d('abc', 0, 'i<Tab>', '  abc', 2)
+  validate_edit1d('abc', 1, 'i<Tab>', 'a   bc', 4)
+  validate_edit1d('  abc', 0, 'i<Tab>', '    abc', 2)
+  validate_edit1d('  abc', 2, 'i<Tab>', '    abc', 4)
+  validate_edit1d('  abc', 3, 'i<Tab>', '  a bc', 4)
+
+  -- - Normal mode (cursor should be exactly on indent)
+  validate_edit1d('abc', 0, '<Tab>', 'abc', 0)
+  validate_edit1d('abc', 1, '<Tab>', 'abc', 1)
+  validate_edit1d('  abc', 0, '<Tab>', '    abc', 0)
+  validate_edit1d('  abc', 1, '<Tab>', '    abc', 1)
+  validate_edit1d('  abc', 2, '<Tab>', '  abc', 2)
+
+  -- - Visual mode (cursor should be exactly on indent)
+  local validate_vis_mode = function(key, before_line, before_col, after_line, after_col)
+    validate_edit1d(before_line, before_col, key .. '<Tab>', after_line, after_col)
+    eq(child.fn.mode(), 'n')
+  end
+
+  validate_vis_mode('v', 'abc', 0, 'abc', 0)
+  validate_vis_mode('v', 'abc', 1, 'abc', 1)
+  validate_vis_mode('v', '  abc', 0, '    abc', 0)
+  validate_vis_mode('v', '  abc', 1, '    abc', 1)
+  validate_vis_mode('v', '  abc', 2, '  abc', 2)
+
+  validate_vis_mode('V', 'abc', 0, 'abc', 0)
+  validate_vis_mode('V', 'abc', 1, 'abc', 1)
+  validate_vis_mode('V', '  abc', 0, '    abc', 0)
+  validate_vis_mode('V', '  abc', 1, '    abc', 1)
+  validate_vis_mode('V', '  abc', 2, '  abc', 2)
+
+  -- - Is not well defined for blockwise visual selection
+end
+
+T['map_multistep()']['built-in steps']['decrease_indent'] = function()
+  map_multistep({ 'n', 'i', 'x' }, '<S-Tab>', { 'decrease_indent' })
+
+  -- Should work as with built-in keys, i.e. respecting relevant options
+  child.bo.expandtab = true
+  child.bo.shiftwidth = 2
+  child.bo.tabstop = 4
+
+  --  Should only work when inside indent (even empty)
+  -- - Insert mode (cursor can be "just after indent", i.e. on next cell)
+  validate_edit1d('abc', 0, 'i<S-Tab>', 'abc', 0)
+  validate_edit1d('abc', 1, 'i<S-Tab>', 'a   bc', 4)
+  validate_edit1d('  abc', 0, 'i<S-Tab>', 'abc', 0)
+  validate_edit1d('  abc', 2, 'i<S-Tab>', 'abc', 0)
+  validate_edit1d('  abc', 3, 'i<S-Tab>', '  a bc', 4)
+
+  -- - Normal mode (cursor should be exactly on indent)
+  validate_edit1d('abc', 0, '<S-Tab>', 'abc', 0)
+  validate_edit1d('abc', 1, '<S-Tab>', 'abc', 1)
+  validate_edit1d('  abc', 0, '<S-Tab>', 'abc', 0)
+  validate_edit1d('  abc', 1, '<S-Tab>', 'abc', 1)
+  validate_edit1d('  abc', 2, '<S-Tab>', '  abc', 2)
+
+  -- - Visual mode (cursor should be exactly on indent)
+  local validate_vis_mode = function(key, before_line, before_col, after_line, after_col)
+    validate_edit1d(before_line, before_col, key .. '<S-Tab>', after_line, after_col)
+    eq(child.fn.mode(), 'n')
+  end
+
+  validate_vis_mode('v', 'abc', 0, 'abc', 0)
+  validate_vis_mode('v', 'abc', 1, 'abc', 1)
+  validate_vis_mode('v', '  abc', 0, 'abc', 0)
+  validate_vis_mode('v', '  abc', 1, 'abc', 1)
+  validate_vis_mode('v', '  abc', 2, '  abc', 2)
+
+  validate_vis_mode('V', 'abc', 0, 'abc', 0)
+  validate_vis_mode('V', 'abc', 1, 'abc', 1)
+  validate_vis_mode('V', '  abc', 0, 'abc', 0)
+  validate_vis_mode('V', '  abc', 1, 'abc', 1)
+  validate_vis_mode('V', '  abc', 2, '  abc', 2)
+
+  -- - Is not well defined for blockwise visual selection
+end
+
+T['map_multistep()']['built-in steps']['hungry_bs'] = function()
+  map_multistep({ 'n', 'i', 'x' }, '<BS>', { 'hungry_bs', 'minipairs_bs' })
+
+  -- Should delete all consecutive whitespace before cursor
+  validate_edit1d('', 0, 'i<BS>', '', 0)
+  validate_edit1d('   ', 1, 'i<BS>', '  ', 0)
+  validate_edit1d('   ', 2, 'a<BS>', '', 0)
+
+  validate_edit1d('\t\t\t', 2, 'a<BS>', '', 0)
+  validate_edit1d(' \t ', 2, 'a<BS>', '', 0)
+
+  validate_edit1d(' a  bc', 0, 'i<BS>', ' a  bc', 0)
+  validate_edit1d(' a  bc', 1, 'i<BS>', 'a  bc', 0)
+  validate_edit1d(' a  bc', 2, 'i<BS>', '   bc', 1)
+  validate_edit1d(' a  bc', 3, 'i<BS>', ' a bc', 2)
+  validate_edit1d(' a  bc', 4, 'i<BS>', ' abc', 2)
+  validate_edit1d(' a  bc', 5, 'i<BS>', ' a  c', 4)
+  validate_edit1d(' a  bc', 6, 'a<BS>', ' a  b', 5)
+
+  -- Should not span across line
+  validate_edit({ 'a  ', '  b' }, { 2, 2 }, 'i<BS>', { 'a  ', 'b' }, { 2, 0 })
+  validate_edit({ '  ', '  b' }, { 2, 2 }, 'i<BS>', { '  ', 'b' }, { 2, 0 })
+  validate_edit({ '', '  b' }, { 2, 2 }, 'i<BS>', { '', 'b' }, { 2, 0 })
+
+  -- Should work in all modes (but cursor should be exactly on whitespace)
+  -- - Normal (unmapped <BS> moves cursor to the left)
+  validate_edit1d(' a  bc', 0, '<BS>', 'a  bc', 0)
+  validate_edit1d(' a  bc', 1, '<BS>', ' a  bc', 0)
+  validate_edit1d(' a  bc', 2, '<BS>', ' a bc', 2)
+  validate_edit1d(' a  bc', 3, '<BS>', ' abc', 2)
+  validate_edit1d(' a  bc', 4, '<BS>', ' a  bc', 3)
+  validate_edit1d(' a  bc', 5, '<BS>', ' a  bc', 4)
+
+  local validate_vis_mode = function(key, before_line, before_col, after_line, after_col)
+    set_lines({ before_line })
+    set_cursor(1, before_col)
+    type_keys(key .. '<BS>')
+    eq(get_lines(), { after_line })
+    eq(get_cursor(), { 1, after_col })
+
+    local ref_mode = key == '<C-v>' and '\22' or key
+    eq(child.fn.mode(), ref_mode)
+    child.ensure_normal_mode()
+  end
+
+  validate_vis_mode('v', ' a  bc', 0, 'a  bc', 0)
+  validate_vis_mode('v', ' a  bc', 1, ' a  bc', 0)
+  validate_vis_mode('v', ' a  bc', 2, ' a bc', 2)
+  validate_vis_mode('v', ' a  bc', 3, ' abc', 2)
+  validate_vis_mode('v', ' a  bc', 4, ' a  bc', 3)
+  validate_vis_mode('v', ' a  bc', 5, ' a  bc', 4)
+
+  -- - Is not well defined for linewise and blockwise visual selection
+
+  -- Should work well with 'mini.pairs'
+  child.lua('require("mini.pairs").setup()')
+  validate_edit1d('(   )', 4, 'i<BS><BS>', '', 0)
+end
+
+T['map_multistep()']['built-in steps']['vimsnippet_next'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('`vim.snippet` is available only on Neovim>=0.10') end
+
+  -- Make sure to not test built-in <Tab> mappings from Neovim>=0.11
+  pcall(child.cmd, 'iunmap <Tab>')
+  pcall(child.cmd, 'sunmap <Tab>')
+
+  map_multistep({ 'i', 's' }, '<Tab>', { 'vimsnippet_next' })
+
+  -- Should pass through if there is no active session
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+  set_lines({})
+
+  -- Should jump to next tabstop
+  child.lua('vim.snippet.expand("Snippet $1 ${2:placeholder} ab$0")')
+  eq(get_lines(), { 'Snippet  placeholder ab' })
+  eq(get_cursor(), { 1, 8 })
+  eq(child.fn.mode(), 'i')
+
+  type_keys('<Tab>')
+  eq(get_lines(), { 'Snippet  placeholder ab' })
+  eq(get_cursor(), { 1, 9 })
+  eq(child.fn.mode(), 's')
+
+  type_keys('<Tab>')
+  eq(get_lines(), { 'Snippet  placeholder ab' })
+  eq(get_cursor(), { 1, 23 })
+  eq(child.fn.mode(), 'i')
+end
+
+T['map_multistep()']['built-in steps']['vimsnippet_prev'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('`vim.snippet` is available only on Neovim>=0.10') end
+
+  -- Make sure to not test built-in <Tab> mappings from Neovim>=0.11
+  pcall(child.cmd, 'iunmap <S-Tab>')
+  pcall(child.cmd, 'sunmap <S-Tab>')
+
+  map_multistep({ 'i', 's' }, '<S-Tab>', { 'vimsnippet_prev' })
+
+  -- Should pass through if there is no active session
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+  set_lines({})
+
+  -- Should jump to next tabstop
+  child.lua('vim.snippet.expand("Snippet $1 ${2:placeholder} $3ab$0")')
+  child.lua('vim.snippet.jump(1)')
+  child.lua('vim.snippet.jump(1)')
+  eq(get_lines(), { 'Snippet  placeholder ab' })
+  eq(get_cursor(), { 1, 21 })
+  eq(child.fn.mode(), 'i')
+
+  type_keys('<S-Tab>')
+  eq(get_lines(), { 'Snippet  placeholder ab' })
+  eq(get_cursor(), { 1, 9 })
+  eq(child.fn.mode(), 's')
+
+  type_keys('<S-Tab>')
+  eq(get_lines(), { 'Snippet  placeholder ab' })
+  eq(get_cursor(), { 1, 8 })
+  eq(child.fn.mode(), 'i')
+end
+
+T['map_multistep()']['built-in steps']['cmp_next'] = function()
+  map_multistep('i', '<Tab>', { 'cmp_next' })
 
   -- Should work if 'cmp' module is not present
   type_keys('i', '<Tab>')
@@ -277,97 +787,8 @@ T['map_multi_tab()']['built-in steps']['cmp_next'] = function()
   validate_log_and_clean({ 'cmp.visible', 'cmp.select_next_item' })
 end
 
-T['map_multi_tab()']['built-in steps']['blink_next'] = function()
-  map_multi_tab({ 'blink_next' })
-
-  -- Should work if 'blink.cmp' module is not present
-  type_keys('i', '<Tab>')
-  eq(get_lines(), { '\t' })
-  validate_log_and_clean({})
-
-  mock_plugin('blink.cmp')
-
-  -- Should pass through if there is no visible blink menu
-  type_keys('<Tab>')
-  eq(get_lines(), { '\t\t' })
-  validate_log_and_clean({ 'blink.is_menu_visible' })
-
-  child.lua('_G.blink_is_menu_visible_res = true')
-  type_keys('<Tab>')
-  -- - Should not modify text
-  eq(get_lines(), { '\t\t' })
-  validate_log_and_clean({ 'blink.is_menu_visible', 'blink.select_next' })
-end
-
-T['map_multi_tab()']['built-in steps']['minisnippets_next'] = function() MiniTest.skip() end
-
-T['map_multi_tab()']['built-in steps']['minisnippets_expand'] = function() MiniTest.skip() end
-
-T['map_multi_tab()']['built-in steps']['vimsnippet_next'] = function() MiniTest.skip() end
-
-T['map_multi_tab()']['built-in steps']['luasnip_next'] = function() MiniTest.skip() end
-
-T['map_multi_tab()']['built-in steps']['luasnip_expand'] = function() MiniTest.skip() end
-
-T['map_multi_tab()']['built-in steps']['jump_after_tsnode'] = function() MiniTest.skip() end
-
-T['map_multi_tab()']['built-in steps']['jump_after_pair'] = function() MiniTest.skip() end
-
-T['map_multi_tab()']['built-in steps']['increase_indent'] = function() MiniTest.skip() end
-
-T['map_multi_tab()']['validates input'] = function() validate_multi_input_validation(map_multi_tab, 'map_multi_tab') end
-
-T['map_multi_shifttab()'] = new_set()
-
-local map_multi_shifttab = forward_lua('require("mini-dev.keymap").map_multi_shifttab')
-
-T['map_multi_shifttab()']['works'] = function()
-  type_keys('i')
-  -- Pressing unmapped `<S-Tab>` in Insert mode behaves like pressing `<Tab>`
-  local ref_lines_state = {
-    { '\t' }, -- Act as if unmapped
-    { '\t' }, -- Do nothing
-    { '\tdd' }, -- Emulate returned keys
-    { 'From step 3' }, -- Execute `<Cmd>...<CR>` string
-    { 'From step 3\t' }, -- Respect `false` action return as "pass through"
-    { 'From step 5 with upvalue' }, -- Execute callable returned from action
-  }
-  validate_multi_works('<S-Tab>', 'map_multi_shifttab', ref_lines_state)
-end
-
-T['map_multi_shifttab()']['works with empty steps'] = function()
-  map_multi_shifttab({})
-  type_keys('i', '<S-Tab>')
-  eq(get_lines(), { '\t' })
-end
-
-T['map_multi_shifttab()']['respects `opts`'] = function() validate_multi_opts_usage('<S-Tab>', 'map_multi_shifttab') end
-
-T['map_multi_shifttab()']['built-in steps'] = new_set()
-
-T['map_multi_shifttab()']['built-in steps']['pmenu_prev'] = function()
-  child.o.completeopt = 'menuone,noselect'
-  map_multi_shifttab({ 'pmenu_prev' })
-
-  type_keys('i', '<S-Tab>')
-  eq(get_lines(), { '\t' })
-  type_keys('aa ab ', '<C-n>')
-  eq(is_pumvisible(), true)
-
-  -- Should act as pressing `<C-p>`
-  type_keys('<S-Tab>')
-  eq(is_pumvisible(), true)
-  eq(get_lines(), { '\taa ab ab' })
-
-  type_keys('<C-e>')
-  eq(is_pumvisible(), false)
-  eq(get_lines(), { '\taa ab ' })
-  type_keys('<S-Tab>')
-  eq(get_lines(), { '\taa ab \t' })
-end
-
-T['map_multi_shifttab()']['built-in steps']['cmp_prev'] = function()
-  map_multi_shifttab({ 'cmp_prev' })
+T['map_multistep()']['built-in steps']['cmp_prev'] = function()
+  map_multistep('i', '<S-Tab>', { 'cmp_prev' })
 
   -- Should work if 'cmp' module is not present
   type_keys('i', '<S-Tab>')
@@ -388,90 +809,8 @@ T['map_multi_shifttab()']['built-in steps']['cmp_prev'] = function()
   validate_log_and_clean({ 'cmp.visible', 'cmp.select_prev_item' })
 end
 
-T['map_multi_shifttab()']['built-in steps']['blink_prev'] = function()
-  map_multi_shifttab({ 'blink_prev' })
-
-  -- Should work if 'blink.cmp' module is not present
-  type_keys('i', '<S-Tab>')
-  eq(get_lines(), { '\t' })
-  validate_log_and_clean({})
-
-  mock_plugin('blink.cmp')
-
-  -- Should pass through if there is no visible blink.cmp menu
-  type_keys('<S-Tab>')
-  eq(get_lines(), { '\t\t' })
-  validate_log_and_clean({ 'blink.is_menu_visible' })
-
-  child.lua('_G.blink_is_menu_visible_res = true')
-  type_keys('<S-Tab>')
-  -- - Should not modify text
-  eq(get_lines(), { '\t\t' })
-  validate_log_and_clean({ 'blink.is_menu_visible', 'blink.select_prev' })
-end
-
-T['map_multi_shifttab()']['built-in steps']['minisnippets_prev'] = function() MiniTest.skip() end
-
-T['map_multi_shifttab()']['built-in steps']['vimsnippet_prev'] = function() MiniTest.skip() end
-
-T['map_multi_shifttab()']['built-in steps']['luasnip_prev'] = function() MiniTest.skip() end
-
-T['map_multi_shifttab()']['built-in steps']['jump_before_tsnode'] = function() MiniTest.skip() end
-
-T['map_multi_shifttab()']['built-in steps']['jump_before_pair'] = function() MiniTest.skip() end
-
-T['map_multi_shifttab()']['built-in steps']['decrease_indent'] = function() MiniTest.skip() end
-
-T['map_multi_shifttab()']['validates input'] = function()
-  validate_multi_input_validation(map_multi_shifttab, 'map_multi_shifttab')
-end
-
-T['map_multi_cr()'] = new_set()
-
-local map_multi_cr = forward_lua('require("mini-dev.keymap").map_multi_cr')
-
-T['map_multi_cr()']['works'] = function()
-  type_keys('i')
-  local ref_lines_state = {
-    { '', '' }, -- Act as if unmapped
-    { '', '' }, -- Do nothing
-    { '', 'dd' }, -- Emulate returned keys
-    { 'From step 3' }, -- Execute `<Cmd>...<CR>` string
-    { 'From step 3', '' }, -- Respect `false` action return as "pass through"
-    { 'From step 5 with upvalue' }, -- Execute callable returned from action
-  }
-  validate_multi_works('<CR>', 'map_multi_cr', ref_lines_state)
-end
-
-T['map_multi_cr()']['works with empty steps'] = function()
-  map_multi_cr({})
-  type_keys('i', '<CR>')
-  eq(get_lines(), { '', '' })
-end
-
-T['map_multi_cr()']['respects `opts`'] = function() validate_multi_opts_usage('<CR>', 'map_multi_cr') end
-
-T['map_multi_cr()']['built-in steps'] = new_set()
-
-T['map_multi_cr()']['built-in steps']['pmenu_accept'] = function()
-  child.o.completeopt = 'menuone,noselect'
-  map_multi_cr({ 'pmenu_accept' })
-
-  type_keys('i', '<CR>')
-  eq(get_lines(), { '', '' })
-
-  -- Should accept selected (and only selected) item, i.e. act like `<C-y>`
-  type_keys('aa ab ', '<C-n>', '<C-n>')
-  eq(is_pumvisible(), true)
-  eq(get_lines(), { '', 'aa ab aa' })
-
-  type_keys('<CR>')
-  eq(is_pumvisible(), false)
-  eq(get_lines(), { '', 'aa ab aa' })
-end
-
-T['map_multi_cr()']['built-in steps']['cmp_accept'] = function()
-  map_multi_cr({ 'cmp_accept' })
+T['map_multistep()']['built-in steps']['cmp_accept'] = function()
+  map_multistep('i', '<CR>', { 'cmp_accept' })
 
   -- Should work if 'cmp' module is not present
   type_keys('i', '<CR>')
@@ -492,8 +831,52 @@ T['map_multi_cr()']['built-in steps']['cmp_accept'] = function()
   validate_log_and_clean({ 'cmp.get_selected_entry', 'cmp.confirm' })
 end
 
-T['map_multi_cr()']['built-in steps']['blink_accept'] = function()
-  map_multi_cr({ 'blink_accept' })
+T['map_multistep()']['built-in steps']['blink_next'] = function()
+  map_multistep('i', '<Tab>', { 'blink_next' })
+
+  -- Should work if 'blink.cmp' module is not present
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+  validate_log_and_clean({})
+
+  mock_plugin('blink.cmp')
+
+  -- Should pass through if there is no visible blink menu
+  type_keys('<Tab>')
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'blink.is_menu_visible' })
+
+  child.lua('_G.blink_is_menu_visible_res = true')
+  type_keys('<Tab>')
+  -- - Should not modify text
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'blink.is_menu_visible', 'blink.select_next' })
+end
+
+T['map_multistep()']['built-in steps']['blink_prev'] = function()
+  map_multistep('i', '<S-Tab>', { 'blink_prev' })
+
+  -- Should work if 'blink.cmp' module is not present
+  type_keys('i', '<S-Tab>')
+  eq(get_lines(), { '\t' })
+  validate_log_and_clean({})
+
+  mock_plugin('blink.cmp')
+
+  -- Should pass through if there is no visible blink.cmp menu
+  type_keys('<S-Tab>')
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'blink.is_menu_visible' })
+
+  child.lua('_G.blink_is_menu_visible_res = true')
+  type_keys('<S-Tab>')
+  -- - Should not modify text
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'blink.is_menu_visible', 'blink.select_prev' })
+end
+
+T['map_multistep()']['built-in steps']['blink_accept'] = function()
+  map_multistep('i', '<CR>', { 'blink_accept' })
 
   -- Should work if 'blink.mp' module is not present
   type_keys('i', '<CR>')
@@ -514,87 +897,423 @@ T['map_multi_cr()']['built-in steps']['blink_accept'] = function()
   validate_log_and_clean({ 'blink.get_selected_item', 'blink.accept' })
 end
 
-T['map_multi_cr()']['built-in steps']['minipairs_cr'] = function() MiniTest.skip() end
+T['map_multistep()']['built-in steps']['luasnip_next'] = function()
+  map_multistep('i', '<Tab>', { 'luasnip_next' })
 
-T['map_multi_cr()']['built-in steps']['nvimautopairs_cr'] = function() MiniTest.skip() end
+  -- Should work if 'luasnip' module is not present
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+  validate_log_and_clean({})
 
-T['map_multi_cr()']['validates input'] = function() validate_multi_input_validation(map_multi_cr, 'map_multi_cr') end
+  mock_plugin('luasnip')
 
-T['map_multi_bs()'] = new_set()
+  -- Should pass through if there is no active session
+  type_keys('<Tab>')
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'luasnip.jumpable' })
 
-local map_multi_bs = forward_lua('require("mini-dev.keymap").map_multi_bs')
-
-T['map_multi_bs()']['works'] = function()
-  type_keys('i', 'ab')
-
-  local ref_lines_state = {
-    { 'a' }, -- Act as if unmapped
-    { 'a' }, -- Do nothing
-    { 'add' }, -- Emulate returned keys
-    { 'From step 3' }, -- Execute `<Cmd>...<CR>` string
-    { 'From step ' }, -- Respect `false` action return as "pass through"
-    { 'From step 5 with upvalue' }, -- Execute callable returned from action
-  }
-
-  validate_multi_works('<BS>', 'map_multi_bs', ref_lines_state)
+  child.lua('_G.luasnip_jumpable_res = true')
+  type_keys('<Tab>')
+  -- - Should not modify text
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'luasnip.jumpable', 'luasnip.jump 1' })
 end
 
-T['map_multi_bs()']['works with empty steps'] = function()
-  map_multi_bs({})
-  type_keys('i', 'a', 'b', '<BS>')
+T['map_multistep()']['built-in steps']['luasnip_prev'] = function()
+  map_multistep('i', '<S-Tab>', { 'luasnip_prev' })
+
+  -- Should work if 'luasnip' module is not present
+  type_keys('i', '<S-Tab>')
+  eq(get_lines(), { '\t' })
+  validate_log_and_clean({})
+
+  mock_plugin('luasnip')
+
+  -- Should pass through if there is no active session
+  type_keys('<S-Tab>')
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'luasnip.jumpable' })
+
+  child.lua('_G.luasnip_jumpable_res = true')
+  type_keys('<S-Tab>')
+  -- - Should not modify text
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'luasnip.jumpable', 'luasnip.jump -1' })
+end
+
+T['map_multistep()']['built-in steps']['luasnip_expand'] = function()
+  map_multistep('i', '<Tab>', { 'luasnip_next', 'luasnip_expand' })
+
+  -- Should work if 'luasnip' module is not present
+  type_keys('i', '<Tab>')
+  eq(get_lines(), { '\t' })
+  validate_log_and_clean({})
+
+  mock_plugin('luasnip')
+
+  -- Should pass through if there is no active session or expandable prefix
+  type_keys('<Tab>')
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'luasnip.jumpable', 'luasnip.expandable' })
+
+  child.lua('_G.luasnip_expandable_res = true')
+  type_keys('<Tab>')
+  -- - Should not modify text
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'luasnip.jumpable', 'luasnip.expandable', 'luasnip.expand' })
+
+  child.lua('_G.luasnip_jumpable_res = true')
+  type_keys('<Tab>')
+  -- - Should not modify text
+  eq(get_lines(), { '\t\t' })
+  validate_log_and_clean({ 'luasnip.jumpable', 'luasnip.jump 1' })
+end
+
+T['map_multistep()']['built-in steps']['nvimautopairs_cr'] = function()
+  map_multistep('i', '<CR>', { 'nvimautopairs_cr' })
+
+  -- Should work if 'nvim-autopairs' module is not present
+  type_keys('i', '<CR>')
+  eq(get_lines(), { '', '' })
+
+  mock_plugin('nvim-autopairs')
+
+  -- Should respect pairs
+  type_keys('()', '<Left>')
+  eq(get_lines(), { '', '()' })
+  type_keys('<CR>')
+  eq(get_lines(), { '', '(', '', ')' })
+end
+
+T['map_multistep()']['built-in steps']['nvimautopairs_bs'] = function()
+  map_multistep('i', '<BS>', { 'nvimautopairs_bs' })
+
+  -- Should work if 'nvim-autopairs' module is not present
+  type_keys('i', '()', '<Left>', '<BS>')
+  eq(get_lines(), { ')' })
+
+  mock_plugin('nvim-autopairs')
+
+  -- Should respect pairs
+  set_lines({ 'a()' })
+  set_cursor(1, 2)
+  eq(get_lines(), { 'a()' })
+  type_keys('<BS>')
   eq(get_lines(), { 'a' })
 end
 
-T['map_multi_bs()']['respects `opts`'] = function() validate_multi_opts_usage('<BS>', 'map_multi_bs') end
+T['gen_step'] = new_set()
 
-T['map_multi_bs()']['built-in steps'] = new_set()
+T['gen_step']['search_pattern()'] = new_set()
 
-T['map_multi_bs()']['built-in steps']['hungry_bs'] = function()
-  -- { 'hungry_bs', 'minipairs_bs' } should work for cases like `(  )`
-  MiniTest.skip()
+T['gen_step']['search_pattern()']['works'] = function()
+  child.lua([=[
+    local keymap = require('mini-dev.keymap')
+    local step = keymap.gen_step.search_pattern([[[(\[{]\+]], 'bW')
+    keymap.map_multistep({ 'i', 'n' }, '<S-Tab>', { step })
+  ]=])
+
+  set_lines({ '[_{(_[[[', '[_(' })
+  set_cursor(2, 1)
+  type_keys('i')
+
+  local validate_jump = function(...)
+    type_keys('<S-Tab>')
+    eq(get_cursor(), { ... })
+    eq(child.fn.mode(), 'i')
+  end
+
+  -- Should respect pattern and flags (search backward, no wrapping)
+  validate_jump(2, 0)
+  validate_jump(1, 5)
+  validate_jump(1, 2)
+  validate_jump(1, 0)
+
+  -- Should silently do nothing if can not jump
+  validate_jump(1, 0)
+
+  -- Can be used only in Insert mode
+  child.ensure_normal_mode()
+  set_cursor(2, 1)
+  type_keys('<S-Tab>')
+  eq(get_cursor(), { 2, 1 })
 end
 
-T['map_multi_bs()']['built-in steps']['minipairs_bs'] = function() MiniTest.skip() end
+T['gen_step']['search_pattern()']['respects `opts.side`'] = function()
+  child.lua([=[
+    local keymap = require('mini-dev.keymap')
+    local step = keymap.gen_step.search_pattern([[[)\]}]\+]], 'ceW', { side = 'after' })
+    keymap.map_multistep('i', '<Tab>', { step })
+  ]=])
 
-T['map_multi_bs()']['built-in steps']['nvimautopairs_bs'] = function() MiniTest.skip() end
+  set_lines({ ']_)', ']_})_]]]' })
+  set_cursor(1, 1)
+  type_keys('i')
 
-T['map_multi_bs()']['validates input'] = function() validate_multi_input_validation(map_multi_bs, 'map_multi_bs') end
+  local validate_jump = function(...)
+    type_keys('<Tab>')
+    eq(get_cursor(), { ... })
+    eq(child.fn.mode(), 'i')
+  end
 
-T['gen_step.search_pattern()'] = new_set()
+  -- Should respect pattern and flags (search forward, no wrapping) and put
+  -- cursor to the right
+  validate_jump(1, 3)
+  validate_jump(2, 1)
+  validate_jump(2, 4)
+  validate_jump(2, 8)
 
-T['gen_step.search_pattern()']['works'] = function() MiniTest.skip() end
-
-T['gen_step.search_pattern()']['respects `opts.side`'] = function() MiniTest.skip() end
-
-T['map_as_combo()'] = new_set()
-
-T['map_as_combo()']['works'] = function() MiniTest.skip() end
-
-T['map_as_combo()']['detecting combo does not depend on preceding keys'] = function()
-  -- Should work when fast typing 'j'-'j'-'k'
-  MiniTest.skip()
+  -- Should silently do nothing if can not jump
+  validate_jump(2, 8)
 end
 
-T['map_as_combo()']['works when typing already mapped keys'] = function()
+T['map_combo()'] = new_set()
+
+local map_combo = forward_lua('require("mini-dev.keymap").map_combo')
+
+T['map_combo()']['works with string RHS'] = function()
+  map_combo('i', 'jk', '<BS><BS><Esc>')
+
+  -- Should be emulated as if pressing keys
+  type_keys('i')
+  -- - Key should be processed immediately
+  type_keys('j')
+  eq(get_lines(), { 'j' })
+  sleep(default_combo_delay - small_time)
+  type_keys('k')
+  eq(get_lines(), { '' })
+  eq(child.fn.mode(), 'n')
+
+  -- Can use full key name in LHS
+  map_combo('i', '<BS><CR>', 'hello')
+  type_keys('i', 'ab', '<BS>')
+  eq(get_lines(), { 'a' })
+  sleep(small_time)
+  type_keys('<CR>')
+  eq(get_lines(), { 'a', 'hello' })
+
+  set_lines({ '' })
+  child.ensure_normal_mode()
+
+  -- Can use more than two keys
+  map_combo('i', 'asdf', ' world')
+  type_keys('i', 'a')
+  eq(get_lines(), { 'a' })
+
+  sleep(default_combo_delay - small_time)
+  type_keys('s')
+  eq(get_lines(), { 'as' })
+
+  sleep(default_combo_delay - small_time)
+  type_keys('d')
+  eq(get_lines(), { 'asd' })
+
+  sleep(default_combo_delay - small_time)
+  type_keys('f')
+  eq(get_lines(), { 'asdf world' })
+end
+
+T['map_combo()']['works with callable RHS'] = function()
+  -- Output string should be mimicked as if supplied as right hand side
+  child.lua([[
+    local rhs = function() table.insert(_G.log, "rhs"); return 'yy' end
+    require("mini-dev.keymap").map_combo("i", "xx", rhs)
+  ]])
+
+  -- Should be executed while intermediate keys immediately processed as usual
+  type_keys('i', 'x')
+  eq(get_lines(), { 'x' })
+  sleep(default_combo_delay - small_time)
+  type_keys('x')
+  eq(get_lines(), { 'xxyy' })
+  eq(child.fn.mode(), 'i')
+  validate_log_and_clean({ 'rhs' })
+end
+
+T['map_combo()']['allows RHS to change mode and operate in it'] = function()
+  map_combo('i', 'jk', '<Esc>viwUo')
+  type_keys('i')
+  type_keys(small_time, 'j', 'k')
+  eq(get_lines(), { 'JK', '' })
+end
+
+T['map_combo()']['works with array LHS'] = function()
+  map_combo('i', { 'ы', '<Space>', '半' }, '<Tab>')
+
+  type_keys('i', 'ы')
+  sleep(default_combo_delay - small_time)
+  type_keys(' ')
+  sleep(default_combo_delay - small_time)
+  type_keys('半')
+  eq(get_lines(), { 'ы 半\t' })
+  eq(child.fn.mode(), 'i')
+end
+
+T['map_combo()']['resets if typed above delay'] = function()
+  map_combo('i', 'jk', 'hello')
+  map_combo('i', 'asd', 'world')
+
+  type_keys('i', 'j')
+  sleep(default_combo_delay + small_time)
+  type_keys('k')
+  eq(get_lines(), { 'jk' })
+
+  -- Should stop on any step
+  type_keys(small_time, 'a', 's')
+  sleep(default_combo_delay + small_time)
+  type_keys('d')
+  eq(get_lines(), { 'jkasd' })
+end
+
+T['map_combo()']['works in different modes'] = function()
+  map_combo({ 'n', 'x', 'c', 't' }, 'jj', 'll')
+
+  set_lines({ 'aaa', 'bbb', 'ccc' })
+  set_cursor(1, 0)
+
+  -- Normal mode
+  type_keys(small_time, 'j', 'j')
+  eq(get_cursor(), { 3, 2 })
+
+  -- Visual mode
+  local validate_visual = function(mode_key_raw)
+    set_cursor(1, 0)
+    type_keys(small_time, mode_key_raw, 'j', 'j')
+    eq(get_cursor(), { 3, 2 })
+    eq(child.fn.mode(), mode_key_raw)
+    child.ensure_normal_mode()
+  end
+
+  validate_visual('v')
+  validate_visual('V')
+  validate_visual('\22')
+
+  -- Command-line mode
+  type_keys(small_time, ':', 'j', 'j')
+  eq(child.fn.getcmdline(), 'jjll')
+  child.ensure_normal_mode()
+
+  -- Terminal mode
+  helpers.skip_on_windows('Terminal emulator testing is not robust/easy on Windows')
+  helpers.skip_on_macos('Terminal emulator testing is not robust/easy on MacOS')
+
+  -- Setup
+  child.cmd('terminal! bash --noprofile --norc')
+  -- Wait for terminal to get active
+  sleep(term_mode_wait)
+  child.cmd('startinsert')
+
+  -- Need to wait after each keystroke to allow shell to process it
+  type_keys(5 * small_time, 'j', 'j')
+  expect.match(get_lines()[1], 'jjll$')
+end
+
+T['map_combo()']['takes user mappings into account when executing RHS'] = function()
+  map_combo('n', 'jj', 'll')
+  child.cmd('nnoremap ll <Cmd>lua table.insert(_G.log, "custom ll")<CR>')
+
+  type_keys(small_time, 'j', 'j')
+  validate_log_and_clean({ 'custom ll' })
+end
+
+T['map_combo()']['not recursive during RHS keys execution'] = function()
+  map_combo('i', 'jk', 'jk')
+  type_keys('i')
+  type_keys(small_time, 'j', 'k')
+  eq(get_lines(), { 'jkjk' })
+
+  type_keys(small_time, 'j', 'k')
+  eq(get_lines(), { 'jkjkjkjk' })
+end
+
+T['map_combo()']['detecting combo does not depend on preceding keys'] = function()
+  map_combo('i', 'jk', 'xy')
+  type_keys('i')
+  type_keys(small_time, 'j', 'j', 'k', 'j')
+  eq(get_lines(), { 'jjkxyj' })
+end
+
+T['map_combo()']['works when typing already mapped keys'] = function()
   -- On Neovim>=0.11 for a `jk` LHS. On Neovim<0.11 for a `gjgk` LHS.
   child.cmd('xnoremap j gj')
 
-  MiniTest.skip()
+  -- Neovim<0.11 doesn't have functionality to truly track "keys as typed",
+  -- only after "mappings are applied" (see `:h vim.on_key()`)
+  local lhs = child.fn.has('nvim-0.11') == 1 and 'jj' or 'gjgj'
+  map_combo('x', lhs, 'll')
+  set_lines({ 'aaa', 'bbb', 'ccc' })
+  type_keys('v')
+  type_keys(small_time, 'j', 'j')
+  eq(get_cursor(), { 3, 2 })
 end
 
-T['map_as_combo()']['works with tricky LHS'] = function()
-  -- - Should recognise `'<<Tab>>'` as three keys (`<`, `\t`, `>`)
-  MiniTest.skip()
+T['map_combo()']['works with tricky LHS'] = function()
+  -- Should recognise LHS as three keys (`<`, `\t`, `>`)
+  map_combo('i', '<<Tab>>', 'hello')
+  type_keys('i')
+  type_keys(small_time, '<', '\t', '>')
+  eq(get_lines(), { '<\t>hello' })
 end
 
-T['map_as_combo()']['separate combos act independently'] = function()
-  -- With `jjk` and `jk` combos, both should act after typing `jjk`
-  MiniTest.skip()
+T['map_combo()']['separate combos act independently'] = function()
+  child.lua([[
+    _G.n1, _G.n2, _G.n3, _G.n4 = 0, 0, 0, 0
+    require("mini-dev.keymap").map_combo('i', 'jk',  function() _G.n1 = _G.n1 + 1 end)
+    require("mini-dev.keymap").map_combo('i', 'jjk', function() _G.n2 = _G.n2 + 1 end)
+    require("mini-dev.keymap").map_combo('i', 'kj',  function() _G.n3 = _G.n3 + 1 end)
+    require("mini-dev.keymap").map_combo('i', 'kjj', function() _G.n4 = _G.n4 + 1 end)
+  ]])
+
+  type_keys('i')
+  type_keys(small_time, 'j', 'j', 'k', 'j', 'j')
+  eq(child.lua_get('{ _G.n1, _G.n2, _G.n3, _G.n4 }'), { 1, 1, 1, 1 })
 end
 
-T['map_as_combo()']['works inside macros'] = function() MiniTest.skip() end
+T['map_combo()']['allows several combos for the same mode-lhs pair'] = function()
+  child.lua([[
+    _G.n1, _G.n2 = 0, 0
+    require("mini-dev.keymap").map_combo('i', 'jk', function() _G.n1 = _G.n1 + 1 end)
+    require("mini-dev.keymap").map_combo('i', 'jk', function() _G.n2 = _G.n2 + 1 end)
+  ]])
 
-T['map_as_combo()']['respects `opts.delay`'] = function() MiniTest.skip() end
+  type_keys('i')
+  type_keys(small_time, 'j', 'k')
+  eq(child.lua_get('{ _G.n1, _G.n2 }'), { 1, 1 })
+end
+
+T['map_combo()']['works inside macros'] = function()
+  map_combo('i', 'jk', '<BS><BS><Esc>')
+
+  type_keys('q', 'q', 'i')
+  type_keys(small_time, 'j', 'j', 'k')
+  type_keys('yy', 'p')
+  type_keys('q')
+  eq(get_lines(), { 'j', 'j' })
+  eq(get_cursor(), { 2, 0 })
+  eq(child.fn.mode(), 'n')
+
+  type_keys('@', 'q')
+  eq(get_lines(), { 'j', 'jj', 'jj' })
+  eq(get_cursor(), { child.fn.has('nvim-0.11') == 1 and 3 or 2, 0 })
+  eq(child.fn.mode(), 'n')
+end
+
+T['map_combo()']['respects `opts.delay`'] = function()
+  map_combo('i', 'jk', 'xy', { delay = 1.5 * default_combo_delay + small_time })
+  type_keys('i', 'j')
+  sleep(1.5 * default_combo_delay)
+  type_keys('k')
+  eq(get_lines(), { 'jkxy' })
+end
+
+T['map_combo()']['validates input'] = function()
+  expect.error(function() map_combo(1, 'jk', '<Esc>') end, '`mode`.*string or array of strings')
+  expect.error(function() map_combo('i', 1, '<Esc>') end, '`lhs`.*string or array of strings')
+  expect.error(function() map_combo('i', 'jk', 1) end, '`action`.*string.*callable')
+  expect.error(function() map_combo('i', 'jk', 'xy', { delay = 'a' }) end, '`opts%.delay`.*number')
+  expect.error(function() map_combo('i', 'jk', 'xy', { delay = 0 }) end, '`opts%.delay`.*positive')
+  expect.error(function() map_combo('i', 'jk', 'xy', { delay = -1 }) end, '`opts%.delay`.*positive')
+end
 
 -- Integration tests ==========================================================
 return T
