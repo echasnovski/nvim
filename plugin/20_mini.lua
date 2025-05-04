@@ -95,18 +95,6 @@ end)
 
 now(function() require('mini.tabline').setup() end)
 
-now(function()
-  local mode = { 'i', 'c', 'x', 's' }
-  require('mini-dev.keymap').map_as_combo(mode, 'jk', '<BS><BS><Esc>')
-  require('mini-dev.keymap').map_as_combo(mode, 'kj', '<BS><BS><Esc>')
-
-  local keymap = require('mini-dev.keymap')
-  keymap.map_multi_tab({ 'pmenu_next' })
-  keymap.map_multi_shifttab({ 'pmenu_prev' })
-  keymap.map_multi_cr({ 'pmenu_accept_or_cr', 'minipairs_cr' })
-  keymap.map_multi_bs({ 'minipairs_bs' })
-end)
-
 -- Future part of 'mini.detect'
 -- TODO: Needs some condition to stop the comb.
 _G.detect_bigline = function(threshold)
@@ -296,6 +284,24 @@ later(function()
     spotter = jump2d.gen_pattern_spotter('[^%s%p]+'),
     view = { dim = true, n_steps_ahead = 2 },
   })
+end)
+
+later(function()
+  local map_multistep = require('mini.keymap').map_multistep
+  map_multistep('i', '<Tab>', { 'pmenu_next' })
+  map_multistep('i', '<S-Tab>', { 'pmenu_prev' })
+  map_multistep('i', '<CR>', { 'pmenu_accept', 'minipairs_cr' })
+  map_multistep('i', '<BS>', { 'minipairs_bs' })
+
+  local notify_many_keys = function(key)
+    local lhs = string.rep(key, 5)
+    local action = function() vim.notify('Too many ' .. key) end
+    require('mini.keymap').map_combo({ 'n', 'x' }, lhs, action)
+  end
+  notify_many_keys('h')
+  notify_many_keys('j')
+  notify_many_keys('k')
+  notify_many_keys('l')
 end)
 
 later(function()
