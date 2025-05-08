@@ -1,14 +1,21 @@
 -- TODO:
 -- - Implement '*' as default version.
--- - Implement showing available new versions if there are no updates.
+-- - Implement showing available new versions during interactive confirm if
+--   there are no updates.
 -- - Add "In runtime: true/false" in plugin header during interactive confirm.
 -- - Replace `buf_id` with more proper name (`bufnr` or `buf`).
+-- - Make events built-in and not `User`. Use source as pattern?
 
 -- PRNOTES:
+-- - The module name is `vim.pack` because it aligns well with `:packadd`.
+--   The question is what to use as filetype and buffer/file names? Currently
+--   it is 'nvimpack' which might be confusing. The 'vimpack' is closer, but it
+--   doesn't use 'nvim'.
+-- - Currently `vim.pack.add()` only installs into 'opt/' directory.
 -- - Intentionally more oriented towards future automated packspec support.
 -- - Custom events are better than hooks because they can be used by plugins to
 --   tweak install/update/add behavior of *other* plugins. Plus smaller spec.
--- - Left out of this PR but planned:
+-- - Left out from this PR but planned:
 --     - Packspec. It is rather big and needs discussions about the degree of
 --       support vs complexity.
 --     - Lockfile. Basically, store state/commit per source and prefer it
@@ -21,17 +28,88 @@
 --           state (`git tag --format=???` with post-processing) or that
 --           contain it in history (`git tag --list --contains HEAD`).
 --           Can have hover support to get change log.
---     - More robust and flexible startup with `now()` and `later()` (from
---       'mini.deps'). These are general enough that can live in `vim.func`.
+-- - Not planned as `vim.pack` functionality but discussable:
+--     - Manage plugins from 'start/' directory. As `vim.pack.add()` only
+--       installs in 'opt/' directory (as it is all that is needed), it seems
+--       unnecessary to also manage 'start/' from the same package path.
+--     - Lazy loading out of the box. This might be more appropriate to combine
+--       with `now()` and `later()` (from 'mini.deps'). These are general
+--       enough that can live in `vim.func` and useful outside of `vim.pack`.
 
 local api = vim.api
 local uv = vim.uv
 
-local M = {}
-local H = {}
+M = {}
+H = {}
 
 local log_path = vim.fn.stdpath('log') .. '/nvimpack.log'
-local git_version = { major = nil, minor = nil }
+local default_version = '*'
+
+-- TODO: Move to 'src/nvim/highlight_group.c'
+local hi = function(name, opts)
+  opts.default = true
+  api.nvim_set_hl(0, name, opts)
+end
+
+hi('PackChangeAdded', { link = 'Added' })
+hi('PackChangeRemoved', { link = 'Removed' })
+hi('PackHint', { link = 'DiagnosticHint' })
+hi('PackInfo', { link = 'DiagnosticInfo' })
+hi('PackMsgBreaking', { link = 'DiagnosticWarn' })
+hi('PackPlaceholder', { link = 'Comment' })
+hi('PackTitle', { link = 'Title' })
+hi('PackTitleError', { link = 'DiffDelete' })
+hi('PackTitleSame', { link = 'DiffText' })
+hi('PackTitleUpdate', { link = 'DiffAdd' })
+
+-- Git ------------------------------------------------------------------------
+--- @param cmd string[]
+--- @param cwd string
+local function cli_sync(cmd, cwd)
+  local out = vim.system(cmd, { cwd = cwd, text = true, clear_env = true }):wait()
+  if out.code ~= 0 then
+    error(out.stderr)
+  end
+  return (out.stdout:gsub('\n+$', ''))
+end
+
+local function git_ensure_exec()
+  if vim.fn.executable('git') == 0 then
+    error('No `git` executable')
+  end
+end
+
+--- @param cwd string
+local function git_get_branches(cwd)
+  local stdout, res = cli_sync(H.git_cmd('list_branches'), cwd), {}
+  for _, l in ipairs(vim.split(stdout, '\n')) do
+    table.insert(res, l:match('^origin/(.+)$'))
+  end
+  return res
+end
+
+--- @param cwd string
+local function git_get_tags(cwd)
+  local stdout = cli_sync(H.git_cmd('list_tags'), cwd)
+  return vim.split(stdout, '\n')
+end
+
+-- Plugin operations ----------------------------------------------------------
+local get_plug_dir = function()
+  return vim.fs.joinpath(vim.fn.stdpath('data'), 'site', 'pack', 'core', 'opt')
+end
+
+--- @param msg string|string[]
+--- @param level ('DEBUG'|'TRACE'|'INFO'|'WARN'|'ERROR')?
+local function notify(msg, level)
+  msg = type(msg) == 'table' and table.concat(msg, '\n') or msg
+  vim.notify('(vim.pack) ' .. msg, vim.log.levels[level or 'INFO'])
+  vim.cmd.redraw()
+end
+notify = vim.schedule_wrap(notify)
+
+-- PRNOTE: Naming of both `source` and `version` might be improved.
+-- Maybe `url`/`uri` and `follow`/`target`/`checkout`?
 
 --- @class vim.pack.Spec
 --- @field source string URI from which to install and pull updates.
@@ -39,11 +117,28 @@ local git_version = { major = nil, minor = nil }
 ---   Default: basename of `source`.
 --- @field version? string Version to use for install and updates. One of (from
 ---   least to most restrictive):
----   - "*" for greatest semver version. Default.
+---   - "*" for greatest available semantic version tag. Default.
 ---   - Branch name.
 ---   - Any version range "spec" (suitable for |vim.version.range()|).
 ---   - Tag name.
 ---   - "HEAD" to freeze current state from updates.
+
+--- @alias vim.pack.SpecResolved { source: string, name: string, version: string }
+
+--- @param spec string|vim.pack.Spec
+--- @return vim.pack.SpecResolved
+local function normalize_spec(spec)
+  spec = type(spec) == 'string' and { source = spec } or spec
+  vim.validate('spec', spec, 'table')
+  vim.validate('spec.source', spec.source, 'string')
+  -- PRNOTE: This assumes `source` as full URI. Should 'user/repo' be allowed
+  -- and inferred to come from GitHub?
+  local name = (spec.name or spec.source):match('[^/]+$')
+  vim.validate('spec.name', name, 'string')
+  local version = spec.version or default_version
+  vim.validate('spec.version', version, 'string')
+  return { source = spec.source, name = name, version = version }
+end
 
 -- PRNOTE: There is no `depends` field intentionally. Suggest manually putting
 -- dependencies before their dependees.
@@ -77,31 +172,195 @@ local git_version = { major = nil, minor = nil }
 -- targets should also be rare (after showing available versions during
 -- interactive update) or can be done as "List available targets" code action.
 
---- @param msg string|string[]
---- @param level ("DEBUG"|"TRACE"|"INFO"|"WARN"|"ERROR")?
-local function notify(msg, level)
-  msg = type(msg) == 'table' and table.concat(msg, '\n') or msg
-  vim.notify('(nvimpack) ' .. msg, vim.log.levels[level or 'INFO'])
-  vim.cmd.redraw()
-end
-notify = vim.schedule_wrap(notify)
+--- @class (private) vim.pack.Plug
+--- @field spec vim.pack.SpecResolved
+--- @field path string
 
--- TODO: Move to 'src/nvim/highlight_group.c'
-local hi = function(name, opts)
-  opts.default = true
-  api.nvim_set_hl(0, name, opts)
+--- @param spec string|vim.pack.Spec
+--- @return vim.pack.Plug
+local function new_plug(spec)
+  local spec_resolved = normalize_spec(spec)
+  local path = vim.fs.joinpath(get_plug_dir(), spec_resolved.name)
+  return { spec = spec_resolved, path = path }
 end
 
-hi('PackChangeAdded', { link = 'Added' })
-hi('PackChangeRemoved', { link = 'Removed' })
-hi('PackHint', { link = 'DiagnosticHint' })
-hi('PackInfo', { link = 'DiagnosticInfo' })
-hi('PackMsgBreaking', { link = 'DiagnosticWarn' })
-hi('PackPlaceholder', { link = 'Comment' })
-hi('PackTitle', { link = 'Title' })
-hi('PackTitleError', { link = 'DiffDelete' })
-hi('PackTitleSame', { link = 'DiffText' })
-hi('PackTitleUpdate', { link = 'DiffAdd' })
+--- @alias vim.pack.Job { cmd: string[], cwd: string, out: string, warn: string, err: string }
+
+--- @class vim.pack.PlugList Plugin list with aligned job and state arrays
+--- @field plugs vim.pack.Plug[]
+--- @field jobs vim.pack.Job[]
+--- @field states table[]
+local PlugList = {}
+PlugList.__index = PlugList
+
+--- @param plugs vim.pack.Plug[]
+--- @return vim.pack.PlugList
+function PlugList.new(plugs)
+  local jobs, states = {}, {}
+  for i, p in ipairs(plugs) do
+    jobs[i] = { cmd = {}, cwd = p.path, out = '', warn = '', err = '' }
+    states[i] = {}
+  end
+  return setmetatable({ plugs = plugs, jobs = jobs, states = states }, PlugList)
+end
+
+--- Run jobs from plugin list in parallel
+---
+--- For each plugin that hasn't errored yet:
+--- - Execute `prepare`.
+--- - Execute `job.cmd` asynchronously.
+--- - After done, process `code`/`stdout`/`stderr`, run `process`, and start
+---   next job.
+---
+--- @param prepare? fun(plug: vim.pack.Plug, job: vim.pack.Job, state: table): nil
+--- @param process? fun(plug: vim.pack.Plug, job: vim.pack.Job, state: table): nil
+function PlugList:run_jobs(prepare, process)
+  prepare, process = prepare or function(_, _, _) end, process or function(_, _, _) end
+
+  -- PRNOTE: Consider making it configurable
+  local n_threads = math.max(math.floor(0.8 * #(uv.cpu_info() or {})), 1)
+  local timeout = 30000
+
+  -- Use only plugs which didn't error before
+  local id_to_run = {}
+  for i = 1, #self.plugs do
+    if self.jobs[i].err == '' then
+      table.insert(id_to_run, i)
+    end
+  end
+  if #id_to_run == 0 then
+    return
+  end
+
+  -- Prepare for job execution
+  local n_total, n_started, n_finished = #id_to_run, 0, 0
+  local run_next
+  run_next = function()
+    if n_started >= n_total then
+      return
+    end
+    n_started = n_started + 1
+
+    local id = id_to_run[n_started]
+    local plug, job, state = self.plugs[id], self.jobs[id], self.states[id]
+
+    local on_exit = function(out)
+      -- Process command results. Treat exit code 0 with `stderr` as warning.
+      n_finished = n_finished + 1
+      job.out = out.stdout:gsub('\n+$', '')
+
+      if out.code == 0 then
+        job.warn = job.warn .. (job.warn == '' and '' or '\n\n') .. out.stderr
+      else
+        job.err = 'Error code ' .. out.code .. '\n' .. out.stderr:gsub('\n+$', '')
+      end
+
+      process(plug, job, state)
+
+      run_next()
+    end
+
+    prepare(plug, job, state)
+    local system_opts = { cwd = job.cwd, text = true, timeout = timeout, clear_env = true }
+    -- TODO: Maybe allow omitting execution if `cmd` is empty?
+    vim.system(job.cmd, system_opts, on_exit)
+  end
+
+  -- Run jobs async in parallel but wait for all to finish/timeout
+  for _ = 1, n_threads do
+    run_next()
+  end
+
+  local total_wait = timeout * math.ceil(n_total / n_threads)
+  vim.wait(total_wait, function()
+    return n_total <= n_finished
+  end, 1)
+
+  -- Clean up. Preserve errors and warnings for jobs to be properly reusable.
+  for _, i in ipairs(id_to_run) do
+    self.jobs[i].cmd, self.jobs[i].out = {}, ''
+  end
+end
+
+function PlugList:install()
+  -- Clone
+  local function prepare(plug, job, _)
+    vim.api.nvim_exec_autocmds('User', { pattern = 'PackInstallPre', data = vim.deepcopy(plug) })
+
+    -- Temporarily change job's cwd because target path doesn't exist yet
+    job.cwd = vim.fn.getcwd()
+    job.cmd = H.git_cmd('clone', plug.spec.source, plug.path)
+  end
+  local function process(plug, job, _)
+    job.cwd = plug.path
+  end
+  self:run_jobs(prepare, process)
+
+  -- Checkout
+  -- TODO: Trigger 'PackInstall' event
+  -- TODO: Trigger 'PackUpdatePre' and 'PackUpdate' events. The 'PackUpdate'
+  -- should be usable as a single "build" entry.
+end
+
+--- @type vim.pack.Plug[]
+local added_plugins = {}
+
+--- @param specs (string|vim.pack.Spec)[]
+function M.add2(specs, opts)
+  vim.validate('specs', specs, vim.islist, 'list')
+  opts = opts or {}
+  vim.validate('opts', opts, 'table')
+
+  local plugs = vim.tbl_map(new_plug, specs)
+
+  -- Install which needs to be installed
+  local plugs_to_install = vim.tbl_filter(function(p)
+    return uv.fs_stat(p.path) == nil
+  end, plugs)
+  if #plugs_to_install > 0 then
+    git_ensure_exec()
+    local plug_list = PlugList.new(plugs_to_install)
+    -- TODO: Add progress report
+    plug_list:install()
+  end
+
+  -- TODO: Be more careful and avoid duplicates
+  vim.list_extend(added_plugins, plugs)
+end
+
+--- @class vim.pack.PlugData
+--- @field spec vim.pack.Spec
+--- @field path string
+--- @field was_added boolean
+--- @field refs string[]
+
+--- Get data about plugins managed by vim.pack
+--- @return vim.pack.PlugData[]
+M.get = function()
+  local res, names_added = {}, {}
+  for _, plug in ipairs(added_plugins) do
+    names_added[plug.spec.name] = true
+    table.insert(res, { spec = vim.deepcopy(plug.spec), path = plug.path, was_added = true })
+  end
+
+  local plug_dir = get_plug_dir()
+  for n, t in vim.fs.dir(plug_dir, { depth = 1 }) do
+    if t == 'directory' and not names_added[n] then
+      local path = vim.fs.joinpath(plug_dir, n)
+      local spec = { name = n, version = default_version }
+      spec.source = cli_sync(H.git_cmd('get_origin'), path)
+      table.insert(res, { spec = spec, path = path, was_added = false })
+    end
+  end
+
+  for _, data in ipairs(res) do
+    local refs = git_get_tags(data.path)
+    vim.list_extend(refs, git_get_branches(data.path))
+    data.refs = refs
+  end
+
+  return res
+end
 
 --- Add plugin to current session
 ---
@@ -317,29 +576,24 @@ H.git_args = {
     return { 'version' }
   end,
   clone = function(source, path)
-    local res = {
+    return {
       'clone',
       '--quiet',
       '--filter=blob:none',
       '--recurse-submodules',
-      '--also-filter-submodules',
+      '--also-filter-submodules', -- requires Git>=2.36
       '--origin',
       'origin',
       source,
       path,
     }
-    -- Use `--also-filter-submodules` only with appropriate version
-    if not (git_version.major >= 2 and git_version.minor >= 36) then
-      table.remove(res, 5)
-    end
-    return res
   end,
   stash = function(timestamp)
     return {
       'stash',
       '--quiet',
       '--message',
-      '(nvimpack) ' .. timestamp .. ' Stash before checkout',
+      '(vim.pack) ' .. timestamp .. ' Stash before checkout',
     }
   end,
   checkout = function(target)
@@ -376,18 +630,18 @@ H.git_args = {
     -- `--decorate-refs` shows only tags near commits (not `origin/main`, etc.)
     return { 'log', pretty, '--topo-order', '--decorate-refs=refs/tags', from .. '...' .. to }
   end,
+  list_branches = function()
+    return { 'branch', '--remote', '--list', '--format=%(refname:short)', '--', 'origin/**' }
+  end,
+  list_tags = function()
+    return { 'tag', '--list' }
+  end,
 }
 
 H.ensure_git_exec = function()
-  if git_version.major ~= nil then
-    return
+  if vim.fn.executable('git') == 0 then
+    error('No `git` executable')
   end
-  local out = vim.system(H.git_cmd('version'), { text = true }):wait()
-  if out.stderr ~= '' then
-    error('Could not find executable `git` CLI tool')
-  end
-  local major, minor = string.match(out.stdout, '(%d+)%.(%d+)')
-  git_version = { major = tonumber(major), minor = tonumber(minor) }
 end
 
 -- Plugin specification -------------------------------------------------------
@@ -718,7 +972,7 @@ H.update_compute_report_single = function(p)
 
   local err = H.cli_stream_tostring(p.job.err)
   if err ~= '' then
-    return '## ' .. p.name .. '\n\n' .. err
+    return '## ' .. p.name .. '\n\n  ' .. err:gsub('\n', '\n  ')
   end
 
   local parts = { '## ' .. p.name .. '\n' }
