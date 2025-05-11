@@ -7,7 +7,7 @@ local hi_range = function(lnum, start_col, end_col, hl, pr)
   vim.api.nvim_buf_set_extmark(0, ns, lnum - 1, start_col, opts)
 end
 
-local h2_hl = nil
+local header_hl_group = nil
 
 local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
 for i, l in ipairs(lines) do
@@ -15,11 +15,11 @@ for i, l in ipairs(lines) do
   local cur_info = l:match('^Path: +') or l:match('^Source: +') or l:match('^State[^:]*: +')
   if cur_group ~= nil then
     -- Header 1
-    hi_range(i, 0, l:len(), 'PackTitle')
-    h2_hl = 'PackTitle' .. cur_group
+    header_hl_group = 'PackTitle' .. cur_group
+    hi_range(i, 0, l:len(), header_hl_group)
   elseif l:find('^## (.+)$') ~= nil then
     -- Header 2
-    hi_range(i, 0, l:len(), h2_hl)
+    hi_range(i, 0, l:len(), header_hl_group)
   elseif cur_info ~= nil then
     -- Plugin info
     local end_col = l:match('(). +%b()$') or l:len()

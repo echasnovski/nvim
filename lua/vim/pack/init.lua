@@ -7,21 +7,26 @@
 --   The question is what to use as filetype and buffer/file names? Currently
 --   it is 'nvimpack' which might be confusing. The 'vimpack' is closer, but it
 --   doesn't use 'nvim'.
--- - Currently `vim.pack.add()` only installs into 'opt/' directory.
 -- - Custom events are better than hooks because they can be used by plugins to
 --   tweak install/update/add behavior of *other* plugins. Plus smaller spec.
--- - Left out from this PR but planned:
+-- - Left out from this PR but planned after discussions and decisions:
 --     - User commands. Like `:Pack add` or `:PackAdd`. The latter is more
 --       natural when it comes to `!` and easier to implement completion.
---     - Packspec. It is rather big and needs discussions about the degree of
---       support vs complexity.
---     - Lockfile. Basically, store state/commit per source and prefer it
---       during initial install over resolving `version`.
+--     - Allowing "local plugins". As far as I can tell, they don't quite fit
+--       into the current design: they usually don't require automated
+--       installation or update. They require manual handling during `add`
+--       (explicit source of 'plugin/' and 'after/plugin/') and book keeping
+--       to ignore it during `update()`. Doable, but requires extra effort and
+--       code.
 --     - More interactive update features:
 --         - Code lenses/actions "update this plugin", "skip updating this
 --           plugin", maybe "delete" this plugin.
 --         - Hover on pending commit to get its diff.
 --           Hover on new tag to get its description and/or changelog.
+--     - Lockfile. Basically, store state/commit per source and prefer it
+--       during initial install over resolving `version`.
+--     - Packspec. It is rather big and needs discussions about the degree of
+--       support vs complexity.
 -- - Not planned as `vim.pack` functionality but discussable:
 --     - Manage plugins from 'start/' directory. As `vim.pack.add()` only
 --       installs in 'opt/' directory (as it is all that is needed), it seems
@@ -345,8 +350,10 @@ end
 ---
 --- @param prepare? fun(vim.pack.PlugExtra): nil
 --- @param process? fun(vim.pack.PlugExtra): nil
-function PlugList:run(prepare, process)
+--- @param report_progress? fun(kind: 'report'|'end', msg: string, percent: integer): nil
+function PlugList:run(prepare, process, report_progress)
   prepare, process = prepare or function(_) end, process or function(_) end
+  report_progress = report_progress or function(_, _, _) end
 
   -- PRNOTE: Consider making it configurable
   local n_threads = math.max(math.floor(0.8 * #(uv.cpu_info() or {})), 1)
@@ -362,6 +369,12 @@ function PlugList:run(prepare, process)
 
   -- Prepare for job execution
   local n_total, n_started, n_finished = #list_noerror, 0, 0
+  local register_finished = function()
+    n_finished = n_finished + 1
+    local percent = math.floor(100 * n_finished / n_total)
+    report_progress('report', n_finished .. '/' .. n_total, percent)
+  end
+
   local function run_next()
     if n_started >= n_total then
       return
@@ -371,7 +384,7 @@ function PlugList:run(prepare, process)
     local p = list_noerror[n_started]
 
     local on_exit = function(sys_res)
-      n_finished = n_finished + 1
+      register_finished()
 
       local stderr = sys_res.stderr:gsub('\n+$', '')
       -- If error, skip custom processing
@@ -389,7 +402,7 @@ function PlugList:run(prepare, process)
 
     prepare(p)
     if #p.job.cmd == 0 or p.job.err ~= '' then
-      n_finished = n_finished + 1
+      register_finished()
       return run_next()
     end
     local system_opts = { cwd = p.job.cwd, text = true, timeout = timeout, clear_env = true }
@@ -397,6 +410,8 @@ function PlugList:run(prepare, process)
   end
 
   -- Run jobs async in parallel but wait for all to finish/timeout
+  report_progress('begin')
+
   for _ = 1, n_threads do
     run_next()
   end
@@ -405,6 +420,8 @@ function PlugList:run(prepare, process)
   vim.wait(total_wait, function()
     return n_finished >= n_total
   end, 1)
+
+  report_progress('end', n_total .. '/' .. n_total)
 
   -- Clean up. Preserve errors to stop processing plugin after the first one.
   for _, p in ipairs(list_noerror) do
@@ -416,14 +433,16 @@ function PlugList:install()
   self:trigger_event('PackInstallPre')
 
   -- Clone
-  -- TODO: Add progress report
   --- @param p vim.pack.PlugJob
   local function prepare(p)
     -- Temporarily change job's cwd because target path doesn't exist yet
-    p.job.cwd = vim.fn.getcwd()
+    p.job.cwd = uv.cwd() --[[@as string]]
     p.job.cmd = git_cmd('clone', p.plug.spec.source, p.plug.path)
   end
-  self:run(prepare, nil)
+  -- PRNOTE: this might wait for `vim.ui.progress()`, but this can be done
+  -- with in-process LSP server which is useful for interactive confirm.
+  local report_progress = require('vim.pack.lsp').new_progress_report('Installing plugins')
+  self:run(prepare, nil, report_progress)
 
   -- Checkout to target version. Do not skip checkout even if HEAD and target
   -- have same commit hash to have installed repo in expected detached HEAD
@@ -487,10 +506,10 @@ end
 function PlugList:download_updates()
   --- @param p vim.pack.PlugJob
   local function prepare(p)
-    -- TODO: Add progress report
     p.job.cmd = git_cmd('fetch')
   end
-  self:run(prepare, nil)
+  local report_progress = require('vim.pack.lsp').new_progress_report('Downloading updates')
+  self:run(prepare, nil, report_progress)
 end
 
 function PlugList:resolve_version()
@@ -528,7 +547,7 @@ function PlugList:resolve_version()
     end
 
     if p.info.version_str == nil then
-      p.job.err = 'No tags matching version range ' .. vim.inspect
+      p.job.err = 'No tags matching version range. Consider increasing it or switch to branch.'
     end
   end
   self:run(prepare, nil)
@@ -589,7 +608,6 @@ function PlugList:trigger_event(event_name)
   --- @param p vim.pack.PlugJob
   local function prepare(p)
     vim.api.nvim_exec_autocmds('User', { pattern = event_name, data = vim.deepcopy(p.plug) })
-    p.job.cmd = {}
   end
   self:run(prepare, nil)
 end
@@ -799,6 +817,9 @@ local function show_confirm(lines, opts)
   -- Set buffer-local options last (so that user autocmmands could override)
   vim.bo[bufnr].modified, vim.bo[bufnr].modifiable = false, false
   vim.bo[bufnr].buftype, vim.bo[bufnr].filetype = 'acwrite', 'nvimpack'
+
+  -- Attach in-process LSP for more capabilities
+  vim.lsp.buf_attach_client(bufnr, require('vim.pack.lsp').client_id)
 end
 
 --- @param plug_list vim.pack.PlugList
@@ -889,20 +910,6 @@ function M.get()
   end
 
   return res
-end
-
-function M._parse_report(bufnr)
-  local grouping, cur_h1, cur_h2 = {}, '', ''
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  for i, l in ipairs(lines) do
-    local group_name = l:match('^# (.+)$')
-    local plug_name = l:match('^## (.+)$')
-    cur_h1 = group_name or cur_h1
-    cur_h2 = plug_name or (group_name and '' or cur_h2)
-    local h1_start, h2_start = group_name ~= nil, plug_name ~= nil
-    grouping[i] = { h1 = cur_h1, h1_start = h1_start, h2 = cur_h2, h2_start = h2_start }
-  end
-  return grouping
 end
 
 return M
