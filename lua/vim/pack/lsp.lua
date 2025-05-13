@@ -118,30 +118,16 @@ M.client_id = vim.lsp.start(
   { attach = false }
 )
 
--- Progress report
-local scratch_buf = -1
-local function ensure_attached_buf()
-  if vim.api.nvim_buf_is_valid(scratch_buf) then
-    return
-  end
-  scratch_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(scratch_buf, 'nvimpack://scratch-progress')
-  vim.lsp.buf_attach_client(scratch_buf, M.client_id)
-end
-
 local progress_token_count = 0
 function M.new_progress_report(title)
-  ensure_attached_buf()
   progress_token_count = progress_token_count + 1
 
   return vim.schedule_wrap(function(kind, msg, percent)
-    local value = { kind = kind }
+    local value = { kind = kind, message = msg, percentage = percent }
     if kind == 'begin' then
       value.title = title
-    elseif kind == 'report' then
-      value.message, value.percentage = msg, percent
-    else
-      value.message = msg
+    elseif kind == 'end' then
+      value.percentage = nil
     end
     dispatchers.notification('$/progress', { token = progress_token_count, value = value })
   end)

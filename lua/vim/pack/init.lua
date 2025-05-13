@@ -1,5 +1,4 @@
 -- TODO:
--- - Add in-process LSP server for progress report, `gO`, and future use
 -- - Make events built-in and not `User`. Use source as pattern?
 
 -- PRNOTES:
@@ -410,7 +409,7 @@ function PlugList:run(prepare, process, report_progress)
   end
 
   -- Run jobs async in parallel but wait for all to finish/timeout
-  report_progress('begin')
+  report_progress('begin', '0/' .. n_total)
 
   for _ = 1, n_threads do
     run_next()
@@ -439,8 +438,8 @@ function PlugList:install()
     p.job.cwd = uv.cwd() --[[@as string]]
     p.job.cmd = git_cmd('clone', p.plug.spec.source, p.plug.path)
   end
-  -- PRNOTE: this might wait for `vim.ui.progress()`, but this can be done
-  -- with in-process LSP server which is useful for interactive confirm.
+  -- PRNOTE: this might wait for `vim.ui.progress()`, but this can already be
+  -- done with in-process LSP server which is useful for interactive confirm.
   local report_progress = require('vim.pack.lsp').new_progress_report('Installing plugins')
   self:run(prepare, nil, report_progress)
 
@@ -452,7 +451,6 @@ function PlugList:install()
   -- NOTE: 'PackInstall' is triggered after 'PackUpdate' intentionally to have
   -- it indicate "plugin is installed in its correct initial version"
   self:trigger_event('PackInstall')
-  self:show_notifications('installation')
 end
 
 --- @param opts { skip_same_sha: boolean }
@@ -623,7 +621,7 @@ function PlugList:show_notifications(action_name)
     local err = p.job.err
     if err ~= '' then
       local msg = string.format('Error in `%s` during %s:\n%s', name, action_name, err)
-      error(msg)
+      notify(msg, 'ERROR')
     end
   end
 end
@@ -644,6 +642,7 @@ local function pack_add(plug, bang)
   n_added_plugins = n_added_plugins + 1
   added_plugins[plug.path] = { plug = plug, id = n_added_plugins }
 
+  -- PRNOTE: This might also trigger `PackAddPre`/`PackAdd` events, if needed
   vim.cmd.packadd({ plug.spec.name, bang = bang })
 
   -- Execute 'after/' scripts if not during startup (when they will be sourced
@@ -688,23 +687,35 @@ function M.add(specs, opts)
   vim.validate('opts', opts, 'table')
 
   local plugs = vim.tbl_map(new_plug, specs)
+  -- TODO(echasnovski): Normalize all plugins as a whole, mostly process
+  -- duplicates. This has little benefit now, but will be more sore after
+  -- packspec processing (as it might introduce conflicting dependencies).
 
   -- Install
   local plugs_to_install = vim.tbl_filter(function(p)
     return uv.fs_stat(p.path) == nil
   end, plugs)
+  local pluglist_to_install = PlugList.new(plugs_to_install)
   if #plugs_to_install > 0 then
     git_ensure_exec()
-    PlugList.new(plugs_to_install):install()
+    pluglist_to_install:install()
   end
 
-  -- Register and `:packadd`
-  -- PRNOTE: This entire step will be skipped if there was at least one error
-  -- during installation (like not wrong source URL or not available version).
-  -- Alternatively, it can add plugins that did not error first.
+  -- Register and `:packadd` those actually on disk
+  -- PRNOTE: This will not add plugins that did not install to disk. Plugin can
+  -- still be in not correct version after installation (like if target doesn't
+  -- exist), which will be shown as error now and error during update.
+  -- This decision is mostly due to the fact that this plugin would still load
+  -- after restart (as there is no check if the version is correct; for
+  -- performance).
   for _, p in ipairs(plugs) do
-    pack_add(p, opts.bang)
+    if uv.fs_stat(p.path) ~= nil then
+      pack_add(p, opts.bang)
+    end
   end
+
+  -- Delay showing warnings/errors to first have "good" plugins added
+  pluglist_to_install:show_notifications('installation')
 end
 
 --- @param p vim.pack.PlugJob
@@ -846,15 +857,28 @@ end
 ---
 --- TODO: Describe confirmation.
 ---
---- @param names string[] List of plugin names managed by `vim.pack`.
+--- @param names? string[] List of plugin names managed by `vim.pack`.
 --- @param opts { force: boolean, offline: boolean }
 function M.update(names, opts)
   vim.validate('names', names, vim.islist, true, 'list')
   opts = vim.tbl_extend('force', { force = false, offline = false }, opts or {})
 
+  local all_plugins = M.get()
+  if names == nil then
+    names = {}
+    -- NOTE: By default include only added plugins (and not all on disk). Using
+    -- not added plugins might lead to a confusion as default `version` and
+    -- user's desired one might mismatch.
+    for _, p_data in ipairs(all_plugins) do
+      if p_data.was_added then
+        table.insert(names, p_data.spec.name)
+      end
+    end
+  end
+
   local plugs_to_update = {}
-  for _, p_data in ipairs(M.get()) do
-    if names == nil or vim.tbl_contains(names, p_data.spec.name) then
+  for _, p_data in ipairs(all_plugins) do
+    if vim.tbl_contains(names, p_data.spec.name) then
       table.insert(plugs_to_update, { spec = p_data.spec, path = p_data.path })
     end
   end
