@@ -5,10 +5,13 @@ local now_if_args = vim.fn.argc(-1) > 0 and now or later
 now_if_args(function()
   add({
     source = 'nvim-treesitter/nvim-treesitter',
-    checkout = 'master',
+    checkout = 'main',
     hooks = { post_checkout = function() vim.cmd('TSUpdate') end },
   })
-  add('nvim-treesitter/nvim-treesitter-textobjects')
+  add({
+    source = 'nvim-treesitter/nvim-treesitter-textobjects',
+    checkout = 'main',
+  })
 
   --stylua: ignore
   local ensure_installed = {
@@ -16,14 +19,9 @@ now_if_args(function()
     'javascript', 'json',  'julia', 'php',  'python',
     'r',          'regex', 'rst',   'rust', 'toml', 'tsx', 'yaml',
   }
-
-  require('nvim-treesitter.configs').setup({
-    ensure_installed = ensure_installed,
-    highlight = { enable = true },
-    incremental_selection = { enable = false },
-    textobjects = { enable = false },
-    indent = { enable = false },
-  })
+  local isnt_installed = function(lang) return #vim.api.nvim_get_runtime_file('parser/' .. lang .. '.*', false) == 0 end
+  local to_install = vim.tbl_filter(isnt_installed, ensure_installed)
+  if #to_install > 0 then require('nvim-treesitter').install(to_install) end
 
   -- Disable injections in 'lua' language
   local ts_query = require('vim.treesitter.query')
