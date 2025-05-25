@@ -33,7 +33,7 @@ end)
 
 -- Install LSP/formatting/linter executables ==================================
 later(function()
-  add('williamboman/mason.nvim')
+  add('mason-org/mason.nvim')
   require('mason').setup()
 end)
 
