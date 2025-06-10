@@ -7,10 +7,9 @@ add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 -- Step one ===================================================================
 -- now(function() vim.cmd('colorscheme miniwinter') end)
-now(function() vim.cmd('colorscheme minispring') end)
--- now(function() vim.cmd('colorscheme minisummer') end)
+-- now(function() vim.cmd('colorscheme minispring') end)
+now(function() vim.cmd('colorscheme minisummer') end)
 -- now(function() vim.cmd('colorscheme miniautumn') end)
--- now(function() vim.cmd('colorscheme minicyan') end)
 
 now(function()
   require('mini.basics').setup({
@@ -216,10 +215,10 @@ end)
 later(function() require('mini.comment').setup() end)
 
 later(function()
+  -- Don't show 'Text' suggestions
+  local process_items_opts = { kind_priority = { Text = -1, Snippet = 99 } }
   local process_items = function(items, base)
-    -- Don't show 'Text' suggestions
-    items = vim.tbl_filter(function(x) return x.kind ~= 1 end, items)
-    return MiniCompletion.default_process_items(items, base)
+    return MiniCompletion.default_process_items(items, base, process_items_opts)
   end
   require('mini.completion').setup({
     lsp_completion = { source_func = 'omnifunc', auto_setup = false, process_items = process_items },
@@ -233,11 +232,7 @@ end)
 
 later(function() require('mini.cursorword').setup() end)
 
-later(function()
-  require('mini.diff').setup()
-  local rhs = function() return MiniDiff.operator('yank') .. 'gh' end
-  vim.keymap.set('n', 'ghy', rhs, { expr = true, remap = true, desc = "Copy hunk's reference lines" })
-end)
+later(function() require('mini.diff').setup() end)
 
 later(function() require('mini.doc').setup() end)
 
@@ -281,9 +276,11 @@ later(function() require('mini.jump').setup() end)
 later(function()
   local jump2d = require('mini.jump2d')
   jump2d.setup({
-    spotter = jump2d.gen_pattern_spotter('[^%s%p]+'),
+    spotter = jump2d.gen_spotter.pattern('[^%s%p]+'),
+    labels = 'asdfghjkl;',
     view = { dim = true, n_steps_ahead = 2 },
   })
+  vim.keymap.set({ 'n', 'x', 'o' }, 'sj', function() MiniJump2d.start(MiniJump2d.builtin_opts.single_character) end)
 end)
 
 later(function()
@@ -325,25 +322,14 @@ end)
 
 later(function() require('mini.move').setup({ options = { reindent_linewise = false } }) end)
 
-later(function()
-  local remap = function(mode, lhs_from, lhs_to)
-    local keymap = vim.fn.maparg(lhs_from, mode, false, true)
-    local rhs = keymap.callback or keymap.rhs
-    if rhs == nil then error('Could not remap from ' .. lhs_from .. ' to ' .. lhs_to) end
-    vim.keymap.set(mode, lhs_to, rhs, { desc = keymap.desc })
-  end
-  remap('n', 'gx', 'gX')
-  remap('x', 'gx', 'gX')
-
-  require('mini.operators').setup()
-end)
+later(function() require('mini.operators').setup() end)
 
 later(function() require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } }) end)
 
 later(function()
   require('mini.pick').setup()
   vim.ui.select = MiniPick.ui_select
-  vim.keymap.set('n', ',', [[<Cmd>Pick buf_lines scope='current' preserve_order=true<CR>]], { nowait = true })
+  vim.keymap.set('n', ',', '<Cmd>Pick buf_lines scope="current" preserve_order=true<CR>', { nowait = true })
 
   MiniPick.registry.projects = function()
     local cwd = vim.fn.expand('~/repos')
@@ -357,7 +343,11 @@ end)
 later(function()
   local snippets, config_path = require('mini.snippets'), vim.fn.stdpath('config')
 
-  local lang_patterns = { tex = { 'latex.json' }, plaintex = { 'latex.json' } }
+  local lang_patterns = {
+    tex = { 'latex.json' },
+    plaintex = { 'latex.json' },
+    markdown_inline = { 'markdown.json' },
+  }
   local load_if_minitest_buf = function(context)
     local buf_name = vim.api.nvim_buf_get_name(context.buf_id)
     local is_test_buf = vim.fn.fnamemodify(buf_name, ':t'):find('^test_.+%.lua$') ~= nil
