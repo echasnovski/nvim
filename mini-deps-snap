@@ -3,16 +3,16 @@ return {
   ["friendly-snippets"] = "572f5660cf05f8cd8834e096d7b4c921ba18e175",
   ["markdown-preview.nvim"] = "a923f5fc5ba36a3b17e289dc35dc17f66d0548ee",
   ["mason.nvim"] = "8024d64e1330b86044fed4c8494ef3dcd483a67c",
-  ["mini.nvim"] = "3f5d06a6f710966cb93baaadc4897eeb6d6210e5",
+  ["mini.nvim"] = "a03a9a4f79916579b2debaec629333e2ebdd82b5",
   neogen = "d7f9461727751fb07f82011051338a9aba07581d",
   neoterm = "eca22dc90a9db5e52d8baf91f31991ad540ffe36",
-  ["nvim-lspconfig"] = "7ad4a11cc5742774877c529fcfb2702f7caf75e4",
-  ["nvim-treesitter"] = "43b7f16c50cda8f0bd571594d63f9ba8a46f0e45",
+  ["nvim-lspconfig"] = "69a1624aff5dc30dddd0c59d99a947b63c80bf2a",
+  ["nvim-treesitter"] = "2a677dede2ea45d872ee32ea55e2f93bec0b0f4f",
   ["nvim-treesitter-textobjects"] = "fa32a45fdbab9c9c3bda9ecec9b12dddb221b927",
   rainbow_csv = "3dbbfd7d17536aebfb80f571255548495574c32b",
   ["vim-dispatch"] = "a2ff28abdb2d89725192db5b8562977d392a4d3f",
   ["vim-pandoc"] = "a9896b7f7c09b7804dd9e200e7b96c18ecb5fa0b",
   ["vim-pandoc-syntax"] = "ea3fc415784bdcbae7f0093b80070ca4ff9e44c8",
   ["vim-rmarkdown"] = "a1787cb55e45b8778eaed7b392648deb4706cd0b",
-  ["vim-test"] = "62a13a84671829ecd5db1438aaec4903c964ff2e"
+  ["vim-test"] = "fc80488d509e8cab635bb3b6c75f9946f562e21e"
 }
