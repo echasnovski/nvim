@@ -1,0 +1,3 @@
+{
+  "let": { "prefix": "l", "body": "let $1 = $0" }
+}

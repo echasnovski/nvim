@@ -13,15 +13,22 @@ now_if_args(function()
     checkout = 'main',
   })
 
+  -- Ensure installed
   --stylua: ignore
   local ensure_installed = {
-    'bash',       'c',     'cpp',   'css',  'html',
-    'javascript', 'json',  'julia', 'php',  'python',
-    'r',          'regex', 'rst',   'rust', 'toml', 'tsx', 'yaml',
+    'bash', 'c',          'cpp',  'css',   'diff', 'go',
+    'html', 'javascript', 'json', 'julia', 'nu',   'php', 'python',
+    'r',    'regex',      'rst',  'rust',  'toml', 'tsx', 'yaml',
   }
   local isnt_installed = function(lang) return #vim.api.nvim_get_runtime_file('parser/' .. lang .. '.*', false) == 0 end
   local to_install = vim.tbl_filter(isnt_installed, ensure_installed)
   if #to_install > 0 then require('nvim-treesitter').install(to_install) end
+
+  -- Ensure enabled
+  local filetypes = vim.iter(ensure_installed):map(vim.treesitter.language.get_filetypes):flatten():totable()
+  vim.list_extend(filetypes, { 'markdown', 'pandoc' })
+  local ts_start = function(ev) vim.treesitter.start(ev.buf) end
+  vim.api.nvim_create_autocmd('FileType', { pattern = filetypes, callback = ts_start })
 
   -- Disable injections in 'lua' language
   local ts_query = require('vim.treesitter.query')
@@ -75,6 +82,7 @@ later(function()
     'gopls',
     'intelephense',
     'lua_ls',
+    'nushell',
     'pyright',
     'r_language_server',
     'rust_analyzer',
@@ -111,7 +119,7 @@ later(function()
   pcall(vim.keymap.del, 'n', ',tt')
 
   -- Change default shell to zsh (if it is installed)
-  if vim.fn.executable('zsh') == 1 then vim.g.neoterm_shell = 'zsh' end
+  vim.g.neoterm_shell = vim.fn.executable('nu') == 1 and 'nu' or (vim.fn.executable('zsh') == 1 and 'zsh' or 'bash')
 end)
 
 -- Snippet collection =========================================================

@@ -11,6 +11,7 @@ vim.o.showtabline = 0
 vim.o.cmdheight = 0
 vim.o.ignorecase = true
 vim.o.smartcase = true
+vim.o.winborder = 'double'
 
 -- Pickers ====================================================================
 local in_path = '/tmp/nvim/in-file'

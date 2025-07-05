@@ -1,2 +1,2 @@
-; extends
+;; extends
 (block) @spell
