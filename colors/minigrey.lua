@@ -6,7 +6,7 @@
 -- - Diff's cyan is closer to cyan.
 local is_dark = vim.o.background == 'dark'
 local bg = is_dark and '#212223' or '#e1e2e3'
-local fg = is_dark and '#d3d4d5' or '#2d2e2f'
+local fg = is_dark and '#d5d4d3' or '#2f2e2d'
 
 -- Alternative with precisely manipulated colors to reduce their usage while
 -- retaining usability
