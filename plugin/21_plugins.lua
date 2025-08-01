@@ -77,6 +77,7 @@ later(function()
 
   -- All language servers are expected to be installed with 'mason.vnim'
   vim.lsp.enable({
+    'air',
     'clangd',
     'emmet_ls',
     'gopls',
@@ -84,7 +85,6 @@ later(function()
     'lua_ls',
     'nushell',
     'pyright',
-    'r_language_server',
     'rust_analyzer',
     'ts_ls',
   })

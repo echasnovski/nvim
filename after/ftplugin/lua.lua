@@ -1,5 +1,8 @@
 vim.api.nvim_buf_set_keymap(0, 'i', '<M-i>', ' = ', { noremap = true })
 
+-- Disable default 'expr' fold method on Neovim>=0.12
+vim.wo.foldmethod = 'indent'
+
 -- Use custom comment leaders to allow both nested variants (`--` and `----`)
 -- and "docgen" variant (`---`).
 vim.bo.comments = ':---,:--'

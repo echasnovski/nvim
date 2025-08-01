@@ -49,13 +49,14 @@ if vim.fn.has('nvim-0.10') == 0 then
 end
 
 if vim.fn.has('nvim-0.11') == 1 then
-  vim.o.completeopt = 'menuone,noselect,fuzzy' -- Use fuzzy matching for built-in completion
   vim.o.winborder = 'double'                   -- Use double-line as default border
 end
 
 if vim.fn.has('nvim-0.12') == 1 then
   vim.o.pummaxwidth = 100 -- Limit maximum width of popup menu
   vim.o.completefuzzycollect = 'keyword,files,whole_line' -- Use fuzzy matching when collecting candidates
+
+  require('vim._extui').enable({ enable = true })
 end
 
 -- Colors =====================================================================
@@ -87,7 +88,7 @@ vim.o.formatlistpat = [[^\s*[0-9\-\+\*]\+[\.\)]*\s\+]]
 
 vim.o.completeopt = 'menuone,noselect' -- Show popup even with one item and don't autoselect first
 if vim.fn.has('nvim-0.11') == 1 then
-  vim.o.completeopt = 'menuone,noselect,fuzzy' -- Use fuzzy matching for built-in completion
+  vim.o.completeopt = 'menuone,noselect,fuzzy,nosort' -- Use fuzzy matching for built-in completion
 end
 vim.o.complete     = '.,w,b,kspell' -- Use spell check and don't use tags for completion
 

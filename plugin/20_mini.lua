@@ -6,9 +6,9 @@ local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
 add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 -- Step one ===================================================================
--- now(function() vim.cmd('colorscheme miniwinter') end)
+now(function() vim.cmd('colorscheme miniwinter') end)
 -- now(function() vim.cmd('colorscheme minispring') end)
-now(function() vim.cmd('colorscheme minisummer') end)
+-- now(function() vim.cmd('colorscheme minisummer') end)
 -- now(function() vim.cmd('colorscheme miniautumn') end)
 
 now(function()
@@ -164,7 +164,7 @@ end)
 
 later(function() require('mini.align').setup() end)
 
-later(function() require('mini.animate').setup({ scroll = { enable = false } }) end)
+-- later(function() require('mini.animate').setup({ scroll = { enable = false } }) end)
 
 later(function() require('mini.bracketed').setup() end)
 
@@ -289,16 +289,6 @@ later(function()
   map_multistep('i', '<S-Tab>', { 'pmenu_prev' })
   map_multistep('i', '<CR>', { 'pmenu_accept', 'minipairs_cr' })
   map_multistep('i', '<BS>', { 'minipairs_bs' })
-
-  local notify_many_keys = function(key)
-    local lhs = string.rep(key, 5)
-    local action = function() vim.notify('Too many ' .. key) end
-    require('mini.keymap').map_combo({ 'n', 'x' }, lhs, action)
-  end
-  notify_many_keys('h')
-  notify_many_keys('j')
-  notify_many_keys('k')
-  notify_many_keys('l')
 end)
 
 later(function()
@@ -324,7 +314,7 @@ later(function() require('mini.move').setup({ options = { reindent_linewise = fa
 
 later(function() require('mini.operators').setup() end)
 
-later(function() require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = true } }) end)
+later(function() require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = false } }) end)
 
 later(function()
   require('mini.pick').setup()
@@ -343,9 +333,11 @@ end)
 later(function()
   local snippets, config_path = require('mini.snippets'), vim.fn.stdpath('config')
 
+  local latex_patterns = { 'latex/**/*.json', '**/latex.json' }
   local lang_patterns = {
-    tex = { 'latex.json' },
-    plaintex = { 'latex.json' },
+    tex = latex_patterns,
+    plaintex = latex_patterns,
+    -- Recognize special injected language of markdown tree-sitter parser
     markdown_inline = { 'markdown.json' },
   }
   local load_if_minitest_buf = function(context)
