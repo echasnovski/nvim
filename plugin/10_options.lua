@@ -57,6 +57,16 @@ if vim.fn.has('nvim-0.12') == 1 then
   vim.o.completefuzzycollect = 'keyword,files,whole_line' -- Use fuzzy matching when collecting candidates
 
   require('vim._extui').enable({ enable = true })
+
+  -- Command line autocompletion
+  vim.cmd([[autocmd CmdlineChanged [:/\?@] call wildtrigger()]])
+  vim.o.wildmode = 'noselect:lastused'
+  vim.o.wildoptions = 'pum,fuzzy'
+  vim.keymap.set('c', '<Up>', '<C-u><Up>')
+  vim.keymap.set('c', '<Down>', '<C-u><Down>')
+  -- TODO: Make this part of 'mini.keymap'
+  vim.keymap.set('c', '<Tab>', [[cmdcomplete_info().pum_visible ? "\<C-n>" : "\<Tab>"]], { expr = true })
+  vim.keymap.set('c', '<S-Tab>', [[cmdcomplete_info().pum_visible ? "\<C-p>" : "\<S-Tab>"]], { expr = true })
 end
 
 -- Colors =====================================================================

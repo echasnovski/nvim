@@ -1,4 +1,4 @@
-vim.lsp.config.lua_ls = {
+return {
   on_attach = function(client, buf_id)
     -- Reduce unnecessarily long list of completion triggers for better
     -- 'mini.completion' experience
