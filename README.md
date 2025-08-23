@@ -90,3 +90,7 @@ NOTEs:
 ## Tips and tricks
 
 - When testing with 'vim-test', use `-strategy=make` argument to `:Test*` commands in order to populate quickfix list. **Note** that this will not display testing process as it is running and won't open quickfix list by default.
+
+## Reddit
+
+This is a sort of "verification" for r/neovim. My main account u/echasnovski is currently suspended (due to what I firmly believe is a false positive automatic spam detection) without much hope of becoming fully active. The other account I'll use (until u/echasnovski is unsuspended at least) is u/e-c-h-a .
