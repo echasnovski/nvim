@@ -93,4 +93,4 @@ NOTEs:
 
 ## Reddit
 
-This is a sort of "verification" for r/neovim. My main account u/echasnovski is currently suspended (due to what I firmly believe is a false positive automatic spam detection) without much hope of becoming fully active. The other account I'll use (until u/echasnovski is unsuspended at least) is u/e-c-h-a .
+This is a sort of "verification" for r/neovim. My main account is u/echasnovski. It was previously suspended (due to what I firmly believe is a false positive automatic spam detection), but thanks to the community help it is now restored. There is also a backup u/e-c-h-a account, which was created out of desperation when all hope seemed lost. I don't plan to use it if the main account is fully working.
