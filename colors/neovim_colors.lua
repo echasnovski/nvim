@@ -30,7 +30,7 @@
 
 -- NOTE: All manipulation is done in Oklch color space.
 -- Get interactive view at https://bottosson.github.io/misc/colorpicker/
--- Install https://github.com/echasnovski/mini.colors to have this working
+-- Install https://github.com/nvim-mini/mini.colors to have this working
 local colors = require('mini.colors')
 
 -- Hyperparameters ============================================================

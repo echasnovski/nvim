@@ -4,7 +4,7 @@ NVIM_EXEC ?= nvim
 # Download 'mini.nvim' to use its 'mini.test' testing module
 deps/mini.nvim:
 	@mkdir -p deps
-	git clone --filter=blob:none https://github.com/echasnovski/mini.nvim $@
+	git clone --filter=blob:none https://github.com/nvim-mini/mini.nvim $@
 
 # test_keymap: deps/mini.nvim
 # 	for nvim_exec in $(NVIM_EXEC); do \
