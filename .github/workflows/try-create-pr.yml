@@ -1,0 +1,16 @@
+name: Open new issue
+on: push
+
+jobs:
+  open-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - run: |
+          gh issue --repo https://github.com/echasnovski/dotfiles \
+            create --title "Issue from CI" \
+            --body "This issue was created from another repo's CI."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
