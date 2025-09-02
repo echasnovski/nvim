@@ -1,16 +1,41 @@
-name: Open new issue
+name: Open new PR
 on: push
 
 jobs:
-  open-issue:
+  create-pr:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
     steps:
       - run: |
-          gh issue --repo https://github.com/echasnovski/dotfiles \
-            create --title "Issue from CI" \
-            --body "This issue was created from another repo's CI."
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Clone the remote repository and change working directory to the
+          # folder it was cloned to.
+          git clone \
+            --depth=1 \
+            --branch=master \
+            https://echasnovski:${{ secrets.PR_CREATE }}@github.com/echasnovski/dotfiles \
+            dotfiles
+
+          cd dotfiles
+
+          git config user.email "evgeni.chasnovski@gmail.com"
+          git config user.name "Evgeni Chasnovski"
+
+          git checkout -b ci-test
+
+          echo "Hello" > file
+          git add file
+          git commit -m "File"
+          git push origin ci-test
+
+          # Store the PAT in a file that can be accessed by the
+          # GitHub CLI.
+          echo "${{ secrets.PR_CREATE }}" > token.txt
+
+          # Authorize GitHub CLI for the current repository and
+          # create a pull-requests containing the updates.
+          gh auth login --with-token < token.txt
+
+          gh pr create \
+            --title "PR from CI" \
+            --body "This PR was created from another repo's CI." \
+            --head "ci-test" \
+            --base "master"
