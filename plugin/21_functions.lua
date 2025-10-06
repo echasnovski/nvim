@@ -87,15 +87,6 @@ Config.open_lazygit = function()
   vim.b.minipairs_disable = true
 end
 
--- Toggle quickfix window
-Config.toggle_quickfix = function()
-  local cur_tabnr = vim.fn.tabpagenr()
-  for _, wininfo in ipairs(vim.fn.getwininfo()) do
-    if wininfo.quickfix == 1 and wininfo.tabnr == cur_tabnr then return vim.cmd('cclose') end
-  end
-  vim.cmd('copen')
-end
-
 -- Custom 'statuscolumn' for Neovim>=0.9
 --
 -- Revisit this with a better API.

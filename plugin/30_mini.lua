@@ -40,7 +40,6 @@ now(function()
   local custom_sort = function(notif_arr) return MiniNotify.default_sort(vim.tbl_filter(predicate, notif_arr)) end
 
   require('mini.notify').setup({ content = { sort = custom_sort } })
-  vim.notify = MiniNotify.make_notify()
 end)
 
 now(function() require('mini.sessions').setup() end)
@@ -158,6 +157,7 @@ later(function()
     custom_textobjects = {
       B = MiniExtra.gen_ai_spec.buffer(),
       F = ai.gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
+      o = ai.gen_spec.treesitter({ a = '@block.outer', i = '@block.inner' }),
     },
   })
 end)

@@ -26,14 +26,16 @@ now_if_args(function()
 
   -- Ensure enabled
   local filetypes = vim.iter(ensure_installed):map(vim.treesitter.language.get_filetypes):flatten():totable()
-  vim.list_extend(filetypes, { 'markdown', 'pandoc' })
+  vim.list_extend(filetypes, { 'markdown', 'quarto' })
   local ts_start = function(ev) vim.treesitter.start(ev.buf) end
   vim.api.nvim_create_autocmd('FileType', { pattern = filetypes, callback = ts_start })
 
-  -- Disable injections in 'lua' language
-  local ts_query = require('vim.treesitter.query')
-  local ts_query_set = vim.fn.has('nvim-0.9') == 1 and ts_query.set or ts_query.set_query
-  ts_query_set('lua', 'injections', '')
+  vim.treesitter.language.register('markdown', 'quarto')
+
+  -- -- Disable injections in 'lua' language
+  -- local ts_query = require('vim.treesitter.query')
+  -- local ts_query_set = vim.fn.has('nvim-0.9') == 1 and ts_query.set or ts_query.set_query
+  -- ts_query_set('lua', 'injections', '')
 end)
 
 -- Install LSP/formatting/linter executables ==================================
@@ -53,18 +55,18 @@ later(function()
       json = { 'prettier' },
       lua = { 'stylua' },
       python = { 'black' },
-      r = { 'my_styler' },
+      r = { 'air' },
     },
 
-    formatters = {
-      my_styler = {
-        command = 'R',
-        -- A list of strings, or a function that returns a list of strings
-        -- Return a single string instead of a list to run the command in a shell
-        args = { '-s', '-e', 'styler::style_file(commandArgs(TRUE)[1])', '--args', '$FILENAME' },
-        stdin = false,
-      },
-    },
+    -- formatters = {
+    --   my_styler = {
+    --     command = 'R',
+    --     -- A list of strings, or a function that returns a list of strings
+    --     -- Return a single string instead of a list to run the command in a shell
+    --     args = { '-s', '-e', 'styler::style_file(commandArgs(TRUE)[1])', '--args', '$FILENAME' },
+    --     stdin = false,
+    --   },
+    -- },
   })
 end)
 
@@ -75,9 +77,12 @@ later(function()
 
   add('neovim/nvim-lspconfig')
 
-  -- All language servers are expected to be installed with 'mason.vnim'
+  -- Do not enable R language server in Quarto files
+  vim.lsp.config('r_language_server', { filetypes = { 'r', 'rmd' } })
+
+  -- All language servers are expected to be installed with 'mason.nvim'
   vim.lsp.enable({
-    'air',
+    -- 'air',
     'clangd',
     'emmet_ls',
     'gopls',
@@ -85,6 +90,7 @@ later(function()
     'lua_ls',
     'nushell',
     'pyright',
+    'r_language_server',
     'rust_analyzer',
     'ts_ls',
   })
@@ -165,26 +171,29 @@ later(function()
   vim.g.mkdp_auto_close = 0
 end)
 
--- Filetype: rmarkdown ========================================================
-later(function()
-  -- This option should be set before loading plugin to take effect. See
-  -- https://github.com/vim-pandoc/vim-pandoc/issues/342
-  vim.g['pandoc#filetypes#pandoc_markdown'] = 0
-
-  add({
-    source = 'vim-pandoc/vim-rmarkdown',
-    depends = { 'vim-pandoc/vim-pandoc', 'vim-pandoc/vim-pandoc-syntax' },
-  })
-
-  -- Show raw symbols
-  vim.g['pandoc#syntax#conceal#use'] = 0
-
-  -- Folding
-  vim.g['pandoc#folding#fold_yaml'] = 1
-  vim.g['pandoc#folding#fold_fenced_codeblocks'] = 1
-  vim.g['pandoc#folding#fastfolds'] = 1
-  vim.g['pandoc#folding#fdc'] = 0
-end)
+-- Filetype: Quarto/Rmarkdown =================================================
+-- later(function()
+--   -- This option should be set before loading plugin to take effect. See
+--   -- https://github.com/vim-pandoc/vim-pandoc/issues/342
+--   vim.g['pandoc#filetypes#pandoc_markdown'] = 0
+--
+--   add({
+--     source = 'vim-pandoc/vim-rmarkdown',
+--     depends = { 'vim-pandoc/vim-pandoc', 'vim-pandoc/vim-pandoc-syntax' },
+--   })
+--
+--   -- Show raw symbols
+--   vim.g['pandoc#syntax#conceal#use'] = 0
+--
+--   -- Folding
+--   vim.g['pandoc#folding#fold_yaml'] = 1
+--   vim.g['pandoc#folding#fold_fenced_codeblocks'] = 1
+--   vim.g['pandoc#folding#fastfolds'] = 1
+--   vim.g['pandoc#folding#fdc'] = 0
+-- end)
+vim.filetype.add({
+  extension = { qmd = 'quarto', Qmd = 'quarto' },
+})
 
 -- -- Popular color schemes for testing ==========================================
 -- later(function()
@@ -203,4 +212,5 @@ end)
 --   add('EdenEast/nightfox.nvim')
 --   add('scottmckendry/cyberdream.nvim')
 --   add('Shatur/neovim-ayu')
+--   add('NvChad/base46')
 -- end)

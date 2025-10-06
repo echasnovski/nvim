@@ -54,15 +54,24 @@ nmap_leader('bW', '<Cmd>lua MiniBufremove.wipeout(0, true)<CR>', 'Wipeout!')
 
 -- e is for 'explore' and 'edit'
 local edit_config_file = function(filename)
-  return '<Cmd>edit ' .. vim.fn.stdpath('config') .. '/plugin/' .. filename .. '<CR>'
+  return string.format('<Cmd>edit %s/plugin/%s<CR>', vim.fn.stdpath('config'), filename)
 end
-nmap_leader('ed', '<Cmd>lua MiniFiles.open()<CR>',                             'Directory')
-nmap_leader('ef', '<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>', 'File directory')
-nmap_leader('em', edit_config_file('20_mini.lua'),                             'Mini.nvim config')
-nmap_leader('eo', edit_config_file('10_options.lua'),                          'Options config')
-nmap_leader('ep', edit_config_file('21_plugins.lua'),                          'Plugins config')
-nmap_leader('es', '<Cmd>lua MiniSessions.select()<CR>',                        'Sessions')
-nmap_leader('eq', '<Cmd>lua Config.toggle_quickfix()<CR>',                     'Quickfix')
+local explore_at_file = '<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>'
+local explore_quickfix = function()
+  for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.fn.getwininfo(win_id).quickfix == 1 then return vim.cmd('cclose') end
+  end
+  vim.cmd('copen')
+end
+
+nmap_leader('ed', '<Cmd>lua MiniFiles.open()<CR>',      'Directory')
+nmap_leader('ef', explore_at_file,                      'File directory')
+nmap_leader('ek', edit_config_file('20_keymaps.lua'),   'Keymaps config')
+nmap_leader('em', edit_config_file('30_mini.lua'),      'MINI config')
+nmap_leader('eo', edit_config_file('10_options.lua'),   'Options config')
+nmap_leader('ep', edit_config_file('40_plugins.lua'),   'Plugins config')
+nmap_leader('es', '<Cmd>lua MiniSessions.select()<CR>', 'Sessions')
+nmap_leader('eq', explore_quickfix,                     'Quickfix')
 
 -- f is for 'fuzzy find'
 nmap_leader('f/', '<Cmd>Pick history scope="/"<CR>',                 '"/" history')
