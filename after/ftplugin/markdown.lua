@@ -1,6 +1,7 @@
 -- Using `vim.cmd` instead of `vim.wo` because it is yet more reliable
 vim.cmd('setlocal spell')
 vim.cmd('setlocal wrap')
+vim.cmd('setlocal foldmethod=expr foldexpr=v:lua.vim.treesitter.foldexpr()')
 
 -- Customize 'mini.nvim'
 local has_mini_ai, mini_ai = pcall(require, 'mini.ai')
@@ -13,24 +14,21 @@ if has_mini_ai then
   }
 end
 
-local has_mini_surround, mini_surround = pcall(require, 'mini.surround')
-if has_mini_surround then
-  vim.b.minisurround_config = {
-    custom_surroundings = {
-      -- Bold
-      B = { input = { '%*%*().-()%*%*' }, output = { left = '**', right = '**' } },
+vim.b.minisurround_config = {
+  custom_surroundings = {
+    -- Bold
+    B = { input = { '%*%*().-()%*%*' }, output = { left = '**', right = '**' } },
 
-      -- Link
-      L = {
-        input = { '%[().-()%]%(.-%)' },
-        output = function()
-          local link = mini_surround.user_input('Link: ')
-          return { left = '[', right = '](' .. link .. ')' }
-        end,
-      },
+    -- Link
+    L = {
+      input = { '%[().-()%]%(.-%)' },
+      output = function()
+        local link = require('mini.surround').user_input('Link: ')
+        return { left = '[', right = '](' .. link .. ')' }
+      end,
     },
-  }
-end
+  },
+}
 
 -- Disable "show table of contents" built-in mapping (on Neovim>=0.11) in favor
 -- of `gO` from 'mini.basics'
