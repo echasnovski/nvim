@@ -1,7 +1,7 @@
 local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
 local now_if_args = vim.fn.argc(-1) > 0 and now or later
 
--- Tree-sitter (advanced syntax parsing, highlighting, textobjects) ===========
+-- Tree-sitter ================================================================
 now_if_args(function()
   add({
     source = 'nvim-treesitter/nvim-treesitter',
@@ -15,20 +15,20 @@ now_if_args(function()
 
   -- Ensure installed
   --stylua: ignore
-  local ensure_installed = {
+  local ensure_languages = {
     'bash', 'c',          'cpp',  'css',   'diff', 'go',
     'html', 'javascript', 'json', 'julia', 'nu',   'php', 'python',
     'r',    'regex',      'rst',  'rust',  'toml', 'tsx', 'yaml',
   }
   local isnt_installed = function(lang) return #vim.api.nvim_get_runtime_file('parser/' .. lang .. '.*', false) == 0 end
-  local to_install = vim.tbl_filter(isnt_installed, ensure_installed)
+  local to_install = vim.tbl_filter(isnt_installed, ensure_languages)
   if #to_install > 0 then require('nvim-treesitter').install(to_install) end
 
   -- Ensure enabled
-  local filetypes = vim.iter(ensure_installed):map(vim.treesitter.language.get_filetypes):flatten():totable()
+  local filetypes = vim.iter(ensure_languages):map(vim.treesitter.language.get_filetypes):flatten():totable()
   vim.list_extend(filetypes, { 'markdown', 'quarto' })
   local ts_start = function(ev) vim.treesitter.start(ev.buf) end
-  vim.api.nvim_create_autocmd('FileType', { pattern = filetypes, callback = ts_start })
+  _G.Config.new_autocmd('FileType', filetypes, ts_start, 'Ensure enabled tree-sitter')
 
   vim.treesitter.language.register('markdown', 'quarto')
 

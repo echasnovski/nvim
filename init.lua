@@ -11,5 +11,12 @@ end
 -- Set up 'mini.deps' immediately to have its `now()` and `later()` helpers
 require('mini.deps').setup()
 
--- Define main config table to be able to use it in scripts
+-- Define main config table to be able to pass data between scripts
 _G.Config = {}
+
+-- Define custom autocommand group
+local gr = vim.api.nvim_create_augroup('custom-config', {})
+_G.Config.new_autocmd = function(event, pattern, callback, desc)
+  local opts = { group = gr, pattern = pattern, callback = callback, desc = desc }
+  vim.api.nvim_create_autocmd(event, opts)
+end

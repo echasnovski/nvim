@@ -159,6 +159,7 @@ later(function()
       F = ai.gen_spec.treesitter({ a = '@function.outer', i = '@function.inner' }),
       o = ai.gen_spec.treesitter({ a = '@block.outer', i = '@block.inner' }),
     },
+    search_method = 'cover',
   })
 end)
 
@@ -186,7 +187,7 @@ later(function()
     triggers = {
       { mode = 'n', keys = '<Leader>' }, -- Leader triggers
       { mode = 'x', keys = '<Leader>' },
-      { mode = 'n', keys = [[\]] },      -- mini.basics
+      { mode = 'n', keys = '\\' },       -- mini.basics
       { mode = 'n', keys = '[' },        -- mini.bracketed
       { mode = 'n', keys = ']' },
       { mode = 'x', keys = '[' },
@@ -226,7 +227,7 @@ later(function()
 
   -- Set up LSP part of completion
   local on_attach = function(args) vim.bo[args.buf].omnifunc = 'v:lua.MiniCompletion.completefunc_lsp' end
-  vim.api.nvim_create_autocmd('LspAttach', { callback = on_attach })
+  _G.Config.new_autocmd('LspAttach', '*', on_attach, 'Custom `on_attach`')
   if vim.fn.has('nvim-0.11') == 1 then vim.lsp.config('*', { capabilities = MiniCompletion.get_lsp_capabilities() }) end
 end)
 
@@ -239,17 +240,12 @@ later(function() require('mini.doc').setup() end)
 later(function()
   require('mini.files').setup({ windows = { preview = true } })
 
-  local minifiles_augroup = vim.api.nvim_create_augroup('ec-mini-files', {})
-  vim.api.nvim_create_autocmd('User', {
-    group = minifiles_augroup,
-    pattern = 'MiniFilesExplorerOpen',
-    callback = function()
-      MiniFiles.set_bookmark('c', vim.fn.stdpath('config'), { desc = 'Config' })
-      MiniFiles.set_bookmark('m', vim.fn.stdpath('data') .. '/site/pack/deps/start/mini.nvim', { desc = 'mini.nvim' })
-      MiniFiles.set_bookmark('p', vim.fn.stdpath('data') .. '/site/pack/deps/opt', { desc = 'Plugins' })
-      MiniFiles.set_bookmark('w', vim.fn.getcwd, { desc = 'Working directory' })
-    end,
-  })
+  _G.Config.new_autocmd('User', 'MiniFilesExplorerOpen', function()
+    MiniFiles.set_bookmark('c', vim.fn.stdpath('config'), { desc = 'Config' })
+    MiniFiles.set_bookmark('m', vim.fn.stdpath('data') .. '/site/pack/deps/start/mini.nvim', { desc = 'mini.nvim' })
+    MiniFiles.set_bookmark('p', vim.fn.stdpath('data') .. '/site/pack/deps/opt', { desc = 'Plugins' })
+    MiniFiles.set_bookmark('w', vim.fn.getcwd, { desc = 'Working directory' })
+  end, "Create 'mini.files' bookmarks")
 end)
 
 later(function() require('mini.git').setup() end)
@@ -284,11 +280,11 @@ later(function()
 end)
 
 later(function()
-  local map_multistep = require('mini.keymap').map_multistep
-  map_multistep('i', '<Tab>', { 'pmenu_next' })
-  map_multistep('i', '<S-Tab>', { 'pmenu_prev' })
-  map_multistep('i', '<CR>', { 'pmenu_accept', 'minipairs_cr' })
-  map_multistep('i', '<BS>', { 'minipairs_bs' })
+  require('mini.keymap').setup()
+  MiniKeymap.map_multistep('i', '<Tab>', { 'pmenu_next' })
+  MiniKeymap.map_multistep('i', '<S-Tab>', { 'pmenu_prev' })
+  MiniKeymap.map_multistep('i', '<CR>', { 'pmenu_accept', 'minipairs_cr' })
+  MiniKeymap.map_multistep('i', '<BS>', { 'minipairs_bs' })
 end)
 
 later(function()
@@ -298,8 +294,7 @@ later(function()
     symbols = { encode = map.gen_encode_symbols.dot('4x2') },
     integrations = { gen_integr.builtin_search(), gen_integr.diff(), gen_integr.diagnostic() },
   })
-  vim.keymap.set('n', [[\h]], ':let v:hlsearch = 1 - v:hlsearch<CR>', { desc = 'Toggle hlsearch', silent = true })
-  for _, key in ipairs({ 'n', 'N', '*' }) do
+  for _, key in ipairs({ 'n', 'N', '*', '#' }) do
     vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
   end
 end)
@@ -307,18 +302,23 @@ end)
 later(function()
   require('mini.misc').setup({ make_global = { 'put', 'put_text', 'stat_summary', 'bench_time' } })
   MiniMisc.setup_auto_root()
+  MiniMisc.setup_restore_cursor()
   MiniMisc.setup_termbg_sync()
 end)
 
 later(function() require('mini.move').setup({ options = { reindent_linewise = false } }) end)
 
-later(function() require('mini.operators').setup() end)
+later(function()
+  require('mini.operators').setup()
+
+  vim.keymap.set('n', '(', '<Cmd>normal gxiagxila<CR>', { desc = 'Move arg left' })
+  vim.keymap.set('n', ')', '<Cmd>normal gxiagxina<CR>', { desc = 'Move arg right' })
+end)
 
 later(function() require('mini.pairs').setup({ modes = { insert = true, command = true, terminal = false } }) end)
 
 later(function()
   require('mini.pick').setup()
-  vim.ui.select = MiniPick.ui_select
   vim.keymap.set('n', ',', '<Cmd>Pick buf_lines scope="current" preserve_order=true<CR>', { nowait = true })
 
   MiniPick.registry.projects = function()
@@ -358,11 +358,7 @@ end)
 
 later(function() require('mini.splitjoin').setup() end)
 
-later(function()
-  require('mini.surround').setup()
-  -- Disable `s` shortcut (use `cl` instead) for safer usage of 'mini.surround'
-  vim.keymap.set({ 'n', 'x' }, 's', '<Nop>')
-end)
+later(function() require('mini.surround').setup() end)
 
 later(function() require('mini.test').setup() end)
 

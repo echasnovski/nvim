@@ -15,31 +15,31 @@ if vim.fn.exists('syntax_on') ~= 1 then vim.cmd('syntax enable') end
 
 -- UI =========================================================================
 vim.o.breakindent    = true       -- Indent wrapped lines to match line start
-vim.o.breakindentopt = 'list:-1'  -- Add padding for lists when 'wrap' is on
+vim.o.breakindentopt = 'list:-1'  -- Add padding for lists (if 'wrap' is set)
 vim.o.colorcolumn    = '+1'       -- Draw column on the right of maximum width
 vim.o.cursorline     = true       -- Enable current line highlighting
 vim.o.linebreak      = true       -- Wrap lines at 'breakat' (if 'wrap' is set)
 vim.o.list           = true       -- Show helpful text indicators
 vim.o.number         = true       -- Show line numbers
 vim.o.pumheight      = 10         -- Make popup menu smaller
-vim.o.ruler          = false      -- Don't show cursor position
+vim.o.ruler          = false      -- Don't show cursor coordinates
 vim.o.shortmess      = 'CFOSWaco' -- Disable some built-in completion messages
 vim.o.showmode       = false      -- Don't show mode in command line
 vim.o.signcolumn     = 'yes'      -- Always show signcolumn (less flicker)
 vim.o.splitbelow     = true       -- Horizontal splits will be below
 vim.o.splitkeep      = 'screen'   -- Reduce scroll during window split
 vim.o.splitright     = true       -- Vertical splits will be to the right
-vim.o.wrap           = false      -- Display long lines as just one line
+vim.o.wrap           = false      -- Don't visually wrap lines (toggle with \w)
 
 vim.o.cursorlineopt  = 'screenline,number' -- Show cursor line per screen line
 
 -- Special UI symbols
-vim.o.fillchars = 'eob: ,fold:╌,msgsep:─'
+vim.o.fillchars = 'eob: ,fold:╌'
 vim.o.listchars = 'extends:…,nbsp:␣,precedes:…,tab:> '
 
--- Folds
-vim.o.foldlevel   = 1        -- Display all folds except top ones
-vim.o.foldmethod  = 'indent' -- Fold based on indent level by default
+-- Folds (default behavior; see `:h Folding`)
+vim.o.foldlevel   = 1        -- Fold everything except top level
+vim.o.foldmethod  = 'indent' -- Fold based on indent level
 vim.o.foldnestmax = 10       -- Limit number of fold levels
 
 -- Neovim version specific
@@ -48,23 +48,25 @@ if vim.fn.has('nvim-0.10') == 0 then
 end
 
 if vim.fn.has('nvim-0.10') == 1 then
-  vim.o.foldtext = '' -- Use underlying text with its highlighting
+  vim.o.foldtext = '' -- Show text under fold with its highlighting
 end
 
 if vim.fn.has('nvim-0.11') == 1 then
-  vim.o.winborder = 'bold' -- Use border in floating windows
+  vim.o.winborder = 'double' -- Use border in floating windows
 
   -- Disable "press-enter" for messages not from manually executing a command
   vim.o.messagesopt = 'wait:500,history:500'
   local make_set_messagesopt = function(value) return vim.schedule_wrap(function() vim.o.messagesopt = value end) end
-  vim.api.nvim_create_autocmd('CmdlineEnter', { callback = make_set_messagesopt('hit-enter,history:500') })
-  vim.api.nvim_create_autocmd('CmdlineLeave', { callback = make_set_messagesopt('wait:500,history:500') })
+  _G.Config.new_autocmd('CmdlineEnter', '*', make_set_messagesopt('hit-enter,history:500'))
+  _G.Config.new_autocmd('CmdlineLeave', '*', make_set_messagesopt('wait:500,history:500'))
 end
 
 if vim.fn.has('nvim-0.12') == 1 then
   vim.o.pummaxwidth = 100 -- Limit maximum width of popup menu
   vim.o.completefuzzycollect = 'keyword,files,whole_line' -- Use fuzzy matching when collecting candidates
   vim.o.completetimeout = 100
+
+  vim.o.pumborder = 'single'
 
   require('vim._extui').enable({ enable = true })
 
@@ -120,17 +122,10 @@ local langmap_keys = {
 vim.o.langmap = table.concat(langmap_keys, ',')
 
 -- Autocommands ===============================================================
-local augroup = vim.api.nvim_create_augroup('custom-config', { clear = false })
-
 -- Don't auto-wrap comments and don't insert comment leader after hitting 'o'.
 -- Do on `FileType` to always override these changes from filetype plugins.
-local ensure_fo = function()
-  vim.cmd('setlocal formatoptions-=c formatoptions-=o')
-end
-vim.api.nvim_create_autocmd(
-  'FileType',
-  { group = augroup, callback = ensure_fo, desc = "Proper 'formatoptions'" }
-)
+local ensure_fo = function() vim.cmd('setlocal formatoptions-=c formatoptions-=o') end
+_G.Config.new_autocmd('FileType', '*', ensure_fo, "Proper 'formatoptions'")
 
 -- Diagnostics ================================================================
 local diagnostic_opts = {
