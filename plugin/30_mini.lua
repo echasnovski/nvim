@@ -1,4 +1,5 @@
 local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
+local now_if_args = _G.Config.now_if_args
 
 -- Use 'HEAD' because I personally update it and don't want to follow `main`
 -- This means that 'start/mini.nvim' will usually be present twice in
@@ -29,6 +30,13 @@ now(function()
   })
   later(MiniIcons.mock_nvim_web_devicons)
   later(MiniIcons.tweak_lsp_kind)
+end)
+
+now_if_args(function()
+  require('mini.misc').setup({ make_global = { 'put', 'put_text', 'stat_summary', 'bench_time' } })
+  MiniMisc.setup_auto_root()
+  MiniMisc.setup_restore_cursor()
+  MiniMisc.setup_termbg_sync()
 end)
 
 now(function()
@@ -206,6 +214,8 @@ later(function()
       { mode = 'n', keys = '<C-w>' },    -- Window commands
       { mode = 'n', keys = 'z' },        -- `z` key
       { mode = 'x', keys = 'z' },
+      { mode = 'n', keys = 's' },        -- `s` key
+      { mode = 'x', keys = 's' },
     },
   })
 end)
@@ -297,13 +307,6 @@ later(function()
   for _, key in ipairs({ 'n', 'N', '*', '#' }) do
     vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
   end
-end)
-
-later(function()
-  require('mini.misc').setup({ make_global = { 'put', 'put_text', 'stat_summary', 'bench_time' } })
-  MiniMisc.setup_auto_root()
-  MiniMisc.setup_restore_cursor()
-  MiniMisc.setup_termbg_sync()
 end)
 
 later(function() require('mini.move').setup({ options = { reindent_linewise = false } }) end)

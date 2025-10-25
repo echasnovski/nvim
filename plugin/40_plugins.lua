@@ -1,5 +1,5 @@
-local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
-local now_if_args = vim.fn.argc(-1) > 0 and now or later
+local add, later = MiniDeps.add, MiniDeps.later
+local now_if_args = _G.Config.now_if_args
 
 -- Tree-sitter ================================================================
 now_if_args(function()
