@@ -134,9 +134,9 @@ nmap_leader('ls', '<Cmd>lua vim.lsp.buf.definition()<CR>',    'Source definition
 xmap_leader('lf', formatting_cmd,                             'Format selection')
 
 -- L is for 'Lua'
-nmap_leader('Lc', '<Cmd>lua Config.log_clear()<CR>',               'Clear log')
+nmap_leader('Lc', '<Cmd>lua MiniMisc.log_clear()<CR>',             'Clear log')
 nmap_leader('LL', '<Cmd>luafile %<CR><Cmd>echo "Sourced lua"<CR>', 'Source buffer')
-nmap_leader('Ls', '<Cmd>lua Config.log_print()<CR>',               'Show log')
+nmap_leader('Ls', '<Cmd>lua MiniMisc.log_show()<CR>',              'Show log')
 nmap_leader('Lx', '<Cmd>lua Config.execute_lua_line()<CR>',        'Execute `lua` line')
 
 -- m is for 'Map'

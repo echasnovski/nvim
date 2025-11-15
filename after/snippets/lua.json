@@ -17,6 +17,7 @@
   "while":             { "prefix": "while",  "body": "while $1 do\n\t$0\nend" },
 
   "benchmark":   { "prefix": "bench", "body": "_G.${1:durations} = {}\nlocal ${2:start_time} = vim.loop.hrtime()\ntable.insert(_G.$1, 0.000001 * (vim.loop.hrtime() - $2))" },
+  "log":         { "prefix": "la",    "body": "MiniMisc.log_add('$1', { $0 })" },
   "vim.api":     { "prefix": "api",   "body": "vim.api.nvim_" },
   "vim.tbl_map": { "prefix": "map",   "body": "vim.tbl_map($1, $2)" },
 
