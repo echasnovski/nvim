@@ -2,13 +2,13 @@
 --
 -- Code:
 --
--- - Decide on the `config` structure.
---
 -- - Carefully explore which modes need to be accounted for.
 --   Like, autocompletion in `/` and `?` on Neovim>=0.12.
 --   Maybe should be customizable.
 --
--- - Autocomplete.
+-- - Autocomplete:
+--   - It might be a good idea to just enable on Neovim>=0.12, as there are too
+--     many workarounds on earlier versions.
 --
 -- - Autocorrect.
 --
@@ -109,12 +109,18 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 MiniCmdline.config = {
   autocomplete = {
-    delay = 250,
+    enable = true,
+
+    delay = 200,
   },
 
-  autocorrect = true,
+  autocorrect = {
+    enable = true,
+  },
 
-  preview_range = true,
+  preview_range = {
+    enable = true,
+  },
 }
 --minidoc_afterlines_end
 
@@ -137,9 +143,14 @@ H.setup_config = function(config)
   config = vim.tbl_deep_extend('force', vim.deepcopy(H.default_config), config or {})
 
   H.check_type('autocomplete', config.autocomplete, 'table')
+  H.check_type('autocomplete.enable', config.autocomplete.enable, 'boolean')
   H.check_type('autocomplete.delay', config.autocomplete.delay, 'number')
-  H.check_type('autocorrect', config.autocorrect, 'boolean')
-  H.check_type('preview_range', config.preview_range, 'boolean')
+
+  H.check_type('autocorrect', config.autocorrect, 'table')
+  H.check_type('autocorrect.enable', config.autocorrect.enable, 'boolean')
+
+  H.check_type('preview_range', config.preview_range, 'table')
+  H.check_type('preview_range.enable', config.preview_range.enable, 'boolean')
 
   return config
 end
@@ -187,69 +198,117 @@ H.get_config = function() return vim.tbl_deep_extend('force', MiniCmdline.config
 -- Autocommands ---------------------------------------------------------------
 H.on_cmdline_enter = function()
   if H.is_disabled() then return end
-  H.cache = { config = H.get_config(), wildchar = vim.fn.nr2char(vim.o.wildchar) }
-  -- TODO
+
+  H.cache = {
+    config = H.get_config(),
+    wildchar = vim.fn.nr2char(vim.o.wildchar),
+    cmd_type = vim.fn.getcmdtype(),
+  }
+
+  if H.cache.config.autocomplete.enable then
+    -- Set custom 'wildchar' mapping to detect its usage
+    vim.keymap.set('c', H.cache.wildchar, H.trigger_wild)
+    vim.keymap.set('c', '<S-Tab>', function()
+      H.cache.wild_triggered = true
+      return '<S-Tab>'
+    end, { expr = true })
+
+    -- Set 'wildmode' more appropriate for an autocompletion
+    local wildmode_cur, wildmode_ref = vim.o.wildmode, 'noselect:lastused,full'
+    if wildmode_cur ~= wildmode_ref then
+      H.cache.opt_wildmode = wildmode_cur
+      vim.o.wildmode = wildmode_ref
+    end
+  end
 end
 
 H.on_cmdline_changed = function()
   if H.cache.config == nil then return end
   local config = H.cache.config
 
-  local line = vim.fn.getcmdline()
-  local col = vim.fn.getcmdpos()
-  local cmd_type = vim.fn.getcmdtype()
-  local ok, cmd_parsed = pcall(vim.api.nvim_parse_cmd, line, {})
+  H.cache.line = vim.fn.getcmdline()
+  H.cache.col = vim.fn.getcmdpos()
+  H.cache.cmd = H.parse_cmd(H.cache.line)
 
-  -- Autocomplete
+  -- MiniMisc.log_add('on_cmdline_changed', {
+  --   cache = H.cache,
+  --   line = line,
+  --   col = col,
+  --   cmd_parsed = cmd,
+  --   cmd_type = cmd_type,
+  --   complpat = vim.fn.getcmdcomplpat(),
+  --   compltype = vim.fn.getcmdcompltype(),
+  --   pumvisible = vim.fn.pumvisible(),
+  --   wildmenumode = vim.fn.wildmenumode(),
+  -- })
+
+  if config.autocomplete.enable then H.autocomplete() end
+  if config.autocorrect.enable then H.autocorrect() end
+  if config.preview_range.enable then H.preview_range() end
+
+  H.cache.wild_triggered = nil
+end
+
+H.on_cmdline_leave = function()
+  if H.cache.opt_wildmode ~= nil then vim.o.wildmode = H.cache.opt_wildmode end
+
+  H.cache = {}
+end
+
+-- Autocomplete ---------------------------------------------------------------
+H.autocomplete = function()
   H.timers.autocomplete:stop()
 
-  -- TODO: Should ignore `:s` and other problematic commands on Neovim<0.12
+  if H.block_autocomplete() then return end
 
-  -- local is_char_keyword = vim.fn.match(line:sub(1, col - 1), '[[:keyword:]]$') >= 0
-
-  -- local delay = vim.fn.wildmenumode() == 1 and 0 or config.autocomplete.delay
-  local delay = config.autocomplete.delay
-
-  if vim.fn.wildmenumode() == 0 then H.timers.autocomplete:start(delay, 0, H.trigger_complete) end
-
-  MiniMisc.log_add('on_cmdline_changed', {
-    cache = H.cache,
-    line = line,
-    col = col,
-    cmd_parsed = cmd_parsed,
-    cmd_type = cmd_type,
-    complpat = vim.fn.getcmdcomplpat(),
-    compltype = vim.fn.getcmdcompltype(),
+  MiniMisc.log_add('autocomplete', {
     pumvisible = vim.fn.pumvisible(),
     wildmenumode = vim.fn.wildmenumode(),
   })
 
-  -- Autocorrect
-  -- TODO
-
-  -- Preview range
-  -- TODO
+  -- if vim.fn.wildmenumode() == 1 then return H.trigger_complete() end
+  if vim.fn.pumvisible() == 1 then return H.trigger_complete() end
+  H.timers.autocomplete:start(H.cache.config.autocomplete.delay, 0, H.trigger_complete_scheduled)
 end
 
-H.trigger_complete = vim.schedule_wrap(function()
-  if vim.fn.wildmenumode() == 0 then vim.fn.wildtrigger() end
-end)
+H.blocklist_autocomplete = {
+  cmd_name = { global = true, helpgrep = true, substitute = true, vimgrep = true, vglobal = true },
+  cmd_type = { ['/'] = true, ['?'] = true },
+}
+
+H.block_autocomplete = function() return H.cache.wild_triggered or H.block_from_blocklist() end
+
+H.block_from_blocklist = function() return false end
 if vim.fn.has('nvim-0.12') == 0 then
-  H.trigger_complete = vim.schedule_wrap(function()
-    if vim.fn.wildmenumode() == 0 then vim.api.nvim_feedkeys(H.cache.wildchar, 'nt', false) end
-  end)
+  H.block_from_blocklist = function()
+    local blocklist = H.blocklist_autocomplete
+    return blocklist.cmd_type[H.cache.cmd_type] or blocklist.cmd_name[H.cache.cmd.name]
+  end
 end
 
-H.on_cmdline_leave = function()
+H.trigger_complete = function()
+  if vim.fn.mode() ~= 'c' then return end
+  H.trigger_wild()
+end
+
+H.trigger_complete_scheduled = vim.schedule_wrap(H.trigger_complete)
+
+H.trigger_wild = function() vim.fn.wildtrigger() end
+if vim.fn.has('nvim-0.12') == 0 then
+  H.trigger_wild = function()
+    H.cache.wild_triggered = true
+    vim.api.nvim_feedkeys(H.cache.wildchar, 'nt', false)
+  end
+end
+
+-- Autocorrect ----------------------------------------------------------------
+H.autocorrect = function()
   -- TODO
-  -- Cleanup
+end
 
-  H.cache = {}
-
-  MiniMisc.log_add('CmdlineLeave', { mode = vim.fn.mode(), pumvisible = vim.fn.pumvisible() })
-
-  -- TODO: Maybe not needed, but on Neovim>=0.12 there might be issues after `wildtrigger()`
-  if vim.fn.pumvisible() == 1 then vim.api.nvim_feedkeys('<C-y>', 'nt', true) end
+-- Preview range --------------------------------------------------------------
+H.preview_range = function()
+  -- TODO
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -262,6 +321,18 @@ end
 
 H.notify = function(msg, level_name, silent)
   if not silent then vim.notify('(mini.cmdline) ' .. msg, vim.log.levels[level_name]) end
+end
+
+H.parse_cmd = function(line)
+  local ok, parsed = pcall(vim.api.nvim_parse_cmd, line, {})
+  -- Try extra parsing to have a result for a line containg only range
+  local extra_parsing = false
+  if not ok then
+    ok, parsed = pcall(vim.api.nvim_parse_cmd, line .. 'sort', {})
+    extra_parsing = true
+  end
+  if not ok then return {} end
+  return { name = extra_parsing and '' or parsed.cmd, range = parsed.range }
 end
 
 return MiniCmdline
