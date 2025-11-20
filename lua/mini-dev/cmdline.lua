@@ -2,13 +2,7 @@
 --
 -- Code:
 --
--- - Carefully explore which modes need to be accounted for.
---   Like, autocompletion in `/` and `?` on Neovim>=0.12.
---   Maybe should be customizable.
---
 -- - Autocomplete:
---   - It might be a good idea to just enable on Neovim>=0.12, as there are too
---     many workarounds on earlier versions.
 --
 -- - Autocorrect.
 --
@@ -20,14 +14,32 @@
 --
 -- Tests:
 --
+-- - Make sure that every feature works in all command types (`getcmdtype()`).
+--
+-- - Arrow mappings should work.
+--
+-- - Weird `:h :range` should work in every feature. In particular:
+--     - `:/pattern/`
+--     - `'a,'b` (with punctuation and alphabetic marks). Special case is `''`.
+--       Requires those marks to actually be set.
+--     - Arithmetics on line ranges
+--
 -- - Autocomplete:
---     - Should autocomplete for first letters of blocklisted command names
---       (like `g`, `v`, `s`).
+--     - Should autocomplete for first letters of "bad" (for Neovim<0.12)
+--       command names (like `g`, `v`, `s`).
 --
 --     - Works for problematic completion types (like `file`/`file_in_path`;
 --       `:edit f` or `:grep f`) without infinite loop.
 --
 --     - Works with bang (like `:q!`) without extra wildchar.
+--
+--     - Does not trigger wildchar after the delay if not inside command line.
+--
+--     - Does not trigger wildchar in case of `delay=0` and Command-line mode
+--       triggered via mapping (like `:<C-u>...` in Visual mode).
+--
+-- - Autocorrect:
+--     - Does not autocorrect valid built-in and user commands.
 
 --- *mini.cmdline* Command line tweaks
 ---
@@ -36,11 +48,13 @@
 --- Features:
 ---
 --- - Autocomplete with customizable delay. Enhances |cmdline-completion| and
----   manual |'wildchar'| pressing experience. Neovim>=0.12 is suggested.
+---   manual |'wildchar'| pressing experience.
 ---
 --- - Autocorrect command names.
 ---
 --- - Preview command range.
+---
+--- - Map arrow keys to act independently of whether |'wildmenu'| is shown.
 ---
 --- What it doesn't do:
 ---
@@ -61,7 +75,8 @@
 --- # Suggested option values ~
 ---
 --- Some options are set automatically (if not set before |MiniCmdline.setup()|):
---- - |'wildode'| is set to "noselect:lastused,full" for less intrusive popup.
+--- - |'wildode'| is set to "noselect:lastused,full" for less intrusive popup
+---   if autocompletion is enabled.
 --- - |'wildoptions'| is set to "pum,fuzzy" to enable fuzzy matching.
 ---
 --- # Comparisons ~
@@ -114,23 +129,60 @@ end
 
 --- Defaults ~
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+---@text # General ~
+---
+--- - Each feature is configured via separate table.
+--- - Use `enable = false` to disable a feature.
+---
+---# Autocomplete ~
+---
+--- `config.autocomplete` is used to configure autocompletion: automatic show
+--- of |'wildmenu'|.
+---
+--- `autocomplete.delay` defines a (debounce style) delay after which |'wildchar'|
+--- is triggered to show wildmenu.
+--- Default: 0. Note: Neovim>=0.12 is recommended for positive values to reduce
+--- flicker (thanks to |wildtrigger()|).
+---
+--- `autocomplete.predicate` defines a condition of whether to trigger completion.
+--- Should return `true` to show completion and `false` otherwise.
+--- Default: |MiniCmdline.default_autocomplete_predicate()| (always show).
+--- Example of blocking completion based on completion type (as some may be slow): >lua
+---
+---   local block_compltype = { shellcmd = true }
+---   require('mini.cmdline').setup({
+---     autocomplete = {
+---       predicate = function()
+---         return not block_compltype[vim.fn.getcmdcompltype()]
+---       end,
+---     },
+---   })
+--- <
+---# Autocorrect ~
+---
+--- TODO
+---
+---# Preview range ~
+---
+--- TODO
 MiniCmdline.config = {
+  -- Autocompletion: show `:h 'wildmenu'` as you type
   autocomplete = {
     enable = true,
 
     -- Delay (in ms) after which to trigger completion
-    -- TODO: The Neovim<0.12 is usable only with 0, otherwise it is too much
-    -- flicker. Either try again to remedy this via code hacks, choose default
-    -- based on Neovim version, or just foce delay=0 on Neovim<0.12.
-    delay = 200,
+    -- Neovim>=0.12 is recommended for positive values
+    delay = 0,
 
     predicate = nil,
   },
 
+  -- Autocorrection: correct non-existing command name
   autocorrect = {
     enable = true,
   },
 
+  -- Range preview: show command's target range in floating windows
   preview_range = {
     enable = true,
   },
@@ -139,14 +191,8 @@ MiniCmdline.config = {
 
 --- Default autocompletion predicate
 ---
----@param data table Data about command line state. Fields:
---- - <line> `(string)` - current text. See |getcmdline()|.
---- - <line_prev> `(string)` - previous text.
---- - <pos> `(number)` - current cursor column. See |getcmdpos()|.
---- - <pos_prev> `(number)` - previous cursor column.
----
----@return boolean `True` if cursor is after a non-whitespace character.
-MiniCmdline.default_autocomplete_predicate = function(data) return data.line:sub(1, data.pos - 1):find('%S$') ~= nil end
+---@return boolean Always `true`.
+MiniCmdline.default_autocomplete_predicate = function() return true end
 
 -- Helper data ================================================================
 -- Module default config
@@ -184,10 +230,9 @@ H.apply_config = function(config)
   MiniCmdline.config = config
 
   -- Try setting suggested option values
-  -- NOTE: This makes it more like 'mini.completion' (with 'noselect'),
-  -- but might be not good if triggered manually.
+  -- NOTE: This makes it more like 'mini.completion' (with 'noselect')
   local was_set = vim.api.nvim_get_option_info2('wildmode', { scope = 'global' }).was_set
-  if not was_set then vim.o.wildmode = 'noselect:lastused,full' end
+  if not was_set and config.autocomplete.enable then vim.o.wildmode = 'noselect,full' end
 
   was_set = vim.api.nvim_get_option_info2('wildoptions', { scope = 'global' }).was_set
   if not was_set then vim.o.wildoptions = 'pum,fuzzy' end
@@ -211,9 +256,9 @@ H.create_autocommands = function()
   end
 
   -- Act on command line events
-  au('CmdlineEnter', '*', H.on_cmdline_enter, 'Act on Command line enter')
-  au('CmdlineChanged', '*', H.on_cmdline_changed, 'Act on Command line change')
-  au('CmdlineLeave', '*', H.on_cmdline_leave, 'Act on Command line leave')
+  au('CmdlineEnter', '*', vim.schedule_wrap(H.on_cmdline_enter), 'Act on Command line enter')
+  au('CmdlineChanged', '*', vim.schedule_wrap(H.on_cmdline_changed), 'Act on Command line change')
+  au('CmdlineLeave', '*', vim.schedule_wrap(H.on_cmdline_leave), 'Act on Command line leave')
 end
 
 H.is_disabled = function() return vim.g.minicmdline_disable == true or vim.b.minicmdline_disable == true end
@@ -222,7 +267,7 @@ H.get_config = function() return vim.tbl_deep_extend('force', MiniCmdline.config
 
 -- Autocommands ---------------------------------------------------------------
 H.on_cmdline_enter = function()
-  if H.is_disabled() then return end
+  if H.is_disabled() or vim.fn.mode() ~= 'c' then return end
 
   H.cache = {
     config = H.get_config(),
@@ -230,38 +275,24 @@ H.on_cmdline_enter = function()
     cmd_type = vim.fn.getcmdtype(),
     line = '',
     pos = 1,
-    -- Manually track state of a wildmenu as any typed text removes it.
-    -- One of: "none", "wait", "show".
-    wildmenu_state = 'none',
   }
   H.cache.autocomplete_predicate = H.cache.config.autocomplete.predicate or MiniCmdline.default_autocomplete_predicate
-
-  if H.cache.config.autocomplete.enable then
-    -- Set 'wildmode' more appropriate for an autocompletion
-    local wildmode_cur, wildmode_ref = vim.o.wildmode, 'noselect:lastused,full'
-    if wildmode_cur ~= wildmode_ref then
-      H.cache.opt_wildmode = wildmode_cur
-      vim.o.wildmode = wildmode_ref
-    end
-  end
 end
 
 H.on_cmdline_changed = function()
   if H.cache.config == nil then return end
   local config = H.cache.config
 
-  H.cache.line_prev, H.cache.pos_prev = H.cache.line, H.cache.pos
   H.cache.line, H.cache.pos = vim.fn.getcmdline(), vim.fn.getcmdpos()
-  H.cache.cmd = H.parse_cmd(H.cache.line)
 
   if config.autocomplete.enable then H.autocomplete() end
-  if config.autocorrect.enable then H.autocorrect() end
+  if config.autocorrect.enable then H.autocorrect(false) end
   if config.preview_range.enable then H.preview_range() end
 end
 
 H.on_cmdline_leave = function()
-  if H.cache.opt_wildmode ~= nil then vim.o.wildmode = H.cache.opt_wildmode end
-
+  if H.cache.config == nil then return end
+  if H.cache.config.autocorrect.enable then H.autocorrect(true) end
   H.cache = {}
 end
 
@@ -269,48 +300,23 @@ end
 H.autocomplete = function()
   H.timers.autocomplete:stop()
 
-  -- MiniMisc.log_add('autocomplete', { cache = H.cache })
-  MiniMisc.log_add('compltype', {
-    line = H.cache.line,
-    wildmenu_state = H.cache.wildmenu_state,
-    wildmenumode = vim.fn.wildmenumode(),
-    compltype = vim.fn.getcmdcompltype(),
-  })
-
-  -- React only for appropriate command line change events:
-  -- - Text change actually happened. Might not be the case for some not
-  --   immediate completion types (like `file` and `file_in_path`).
-  -- - Wildmenu is visible. It means text was changed while navigating through
-  --   completion candidates (<Tab>/<S-Tab>).
-  if vim.fn.wildmenumode() == 1 or H.cache.line == H.cache.line_prev then return end
+  -- Do not complete if predicate says so.
+  if not H.cache.autocomplete_predicate() then return end
 
   -- Do nothing in some problematic cases (when wildmenu does not work)
   -- TODO: Remove after compatibility with Neovim=0.11 is dropped
   if H.block_autocomplete() then return end
 
-  -- -- Stop showing wildmenu if predicate says so
-  -- local data = { line = H.cache.line, pos = H.cache.pos, line_prev = H.cache.line_prev, pos_prev = H.cache.pos_prev }
-  -- if not H.cache.autocomplete_predicate(data) then
-  --   H.cache.wildmenu_state = 'none'
-  --   return
-  -- end
-
-  -- Show wildmenu: immediately if already shown, after delay otherwise
-  -- if H.cache.wildmenu_state == 'show' then return H.trigger_complete() end
-
   local delay = H.cache.config.autocomplete.delay
   if delay == 0 then return H.trigger_complete() end
   H.timers.autocomplete:start(delay, 0, H.trigger_complete_scheduled)
-  -- TODO: tracking state manually is probably not worth it
-  H.cache.wildmenu_state = 'wait'
 end
 
 H.block_autocomplete = function() return false end
 if vim.fn.has('nvim-0.12') == 0 then
   H.block_autocomplete = function()
-    -- Block for problematic command types
-    local cmd_type = H.cache.cmd_type
-    if cmd_type == '/' or cmd_type == '?' then return true end
+    -- Block for non-interactive command type
+    if H.cache.cmd_type ~= ':' then return true end
 
     -- Block for cases when there is no completion candidates. This affects
     -- performance (completion candidates are computed twice), but it is
@@ -326,7 +332,7 @@ if vim.fn.has('nvim-0.12') == 0 then
 end
 
 H.trigger_complete = function()
-  if vim.fn.mode() ~= 'c' or vim.fn.wildmenumode() == 1 then return end
+  if vim.fn.mode() ~= 'c' then return end
   H.cache.wildmenu_state = 'show'
   H.trigger_wild()
 end
@@ -335,12 +341,39 @@ H.trigger_complete_scheduled = vim.schedule_wrap(H.trigger_complete)
 
 H.trigger_wild = function() vim.fn.wildtrigger() end
 if vim.fn.has('nvim-0.12') == 0 then
-  H.trigger_wild = function() vim.api.nvim_feedkeys(H.cache.wildchar, 'nt', false) end
+  H.trigger_wild = function()
+    -- Not triggerring when wildmenu is shown helps avoiding trigger after
+    -- manually pressing wildchar (as text is also changes).
+    if vim.fn.wildmenumode() == 1 then return end
+    vim.api.nvim_feedkeys(H.cache.wildchar, 'nt', false)
+  end
 end
 
 -- Autocorrect ----------------------------------------------------------------
-H.autocorrect = function()
+H.autocorrect = function(is_final)
+  -- Try correcting if just finished typing the command or on `CmdlineLeave`
+  local has_just_typed_command = H.cache.line:find('^%s*%S+%s+$') ~= nil and H.cache.pos == (H.cache.line:len() + 1)
+  if not (has_just_typed_command or is_final) then return end
+
+  -- Correct (only if typed command name is unknown) by finding valid command
+  -- name closest to the one typed
+  if H.parse_cmd(H.cache.line).name ~= nil or H.cache.line:find('^%s*$') ~= nil then return end
+
+  local range, word = H.cache.line:match('^%s*(%S+)'):match('^(%S-)(%w+)$')
+  if range:sub(-1, -1) == "'" and range:sub(-2, -2) ~= "'" then
+    range, word = range .. word:sub(1, 1), word:sub(2)
+  end
+
+  local all = vim.fn.getcompletion('', 'command')
+  local closest_ind = H.find_closest_string(vim.fn.tolower(word), vim.tbl_map(vim.fn.tolower, all))
+
+  local new_line = H.cache.line:gsub('^%s*%S+', range .. all[closest_ind])
+  vim.fn.setcmdline(new_line)
+end
+
+H.find_closest_string = function(word, candidates)
   -- TODO
+  return #candidates
 end
 
 -- Preview range --------------------------------------------------------------
