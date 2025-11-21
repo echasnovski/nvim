@@ -40,6 +40,8 @@
 --
 -- - Autocorrect:
 --     - Does not autocorrect valid built-in and user commands.
+--
+--     - Respects abbreviations (even for user commands), often hard-coded.
 
 --- *mini.cmdline* Command line tweaks
 ---
@@ -50,7 +52,7 @@
 --- - Autocomplete with customizable delay. Enhances |cmdline-completion| and
 ---   manual |'wildchar'| pressing experience.
 ---
---- - Autocorrect command names.
+--- - Autocorrect first word (usually command name).
 ---
 --- - Preview command range.
 ---
@@ -162,6 +164,9 @@ end
 ---
 --- TODO
 ---
+--- Notes:
+--- - It is not a fuzzy matching. Use fuzzy completion for that.
+---
 ---# Preview range ~
 ---
 --- TODO
@@ -180,6 +185,9 @@ MiniCmdline.config = {
   -- Autocorrection: correct non-existing command name
   autocorrect = {
     enable = true,
+
+    -- Custom dictionary to prefer over algorithmic choices
+    custom_dict = {},
   },
 
   -- Range preview: show command's target range in floating windows
@@ -219,6 +227,7 @@ H.setup_config = function(config)
 
   H.check_type('autocorrect', config.autocorrect, 'table')
   H.check_type('autocorrect.enable', config.autocorrect.enable, 'boolean')
+  H.check_type('autocorrect.custom_dict', config.autocorrect.custom_dict, 'table')
 
   H.check_type('preview_range', config.preview_range, 'table')
   H.check_type('preview_range.enable', config.preview_range.enable, 'boolean')
@@ -351,6 +360,8 @@ end
 
 -- Autocorrect ----------------------------------------------------------------
 H.autocorrect = function(is_final)
+  if H.cache.cmd_type ~= ':' then return true end
+
   -- Try correcting if just finished typing the command or on `CmdlineLeave`
   local has_just_typed_command = H.cache.line:find('^%s*%S+%s+$') ~= nil and H.cache.pos == (H.cache.line:len() + 1)
   if not (has_just_typed_command or is_final) then return end
@@ -364,16 +375,84 @@ H.autocorrect = function(is_final)
     range, word = range .. word:sub(1, 1), word:sub(2)
   end
 
-  local all = vim.fn.getcompletion('', 'command')
-  local closest_ind = H.find_closest_string(vim.fn.tolower(word), vim.tbl_map(vim.fn.tolower, all))
-
-  local new_line = H.cache.line:gsub('^%s*%S+', range .. all[closest_ind])
+  -- Try custom dictionary first
+  local new_cmd = H.cache.config.autocorrect.custom_dict[word] or H.get_nearest_command(word)
+  if type(new_cmd) ~= 'string' then return H.notify('Can not autocorrect for ' .. vim.inspect(word), 'WARN') end
+  local new_line = H.cache.line:gsub('^%s*%S+', range .. new_cmd)
   vim.fn.setcmdline(new_line)
 end
 
-H.find_closest_string = function(word, candidates)
-  -- TODO
-  return #candidates
+H.get_nearest_command = function(ref)
+  -- Get all valid commands including some specially picked ones which if
+  -- absent would conflict with others built-in commands
+  local all = vim.fn.getcompletion('', 'cmdline')
+  -- stylua: ignore
+  vim.list_extend(all, {
+    'q', 'w'
+  })
+
+  -- Check correction both respecting and ignoring case (if necessary)
+  -- Account for the fact that commands can be abbreviated (`:h |20.2|`).
+  -- So allow finding correction to the abbreviation (substring from the start)
+  -- of the candidate.
+  -- TODO: This is an interesting idea, but it is too permissive: `:L` is
+  -- considered a valid command, when it is not.
+  local res_ind, res_dist, res_abbr_len = H.get_nearest_string(ref, all)
+  if vim.fn.tolower(ref) ~= ref then
+    local ref_lower, all_lower = vim.fn.tolower(ref), vim.tbl_map(vim.fn.tolower, all)
+    local res_l_ind, res_l_dist, res_l_abbr_len = H.get_nearest_string(ref_lower, all_lower)
+    if res_l_dist < res_dist then
+      res_ind, res_abbr_len = res_l_ind, res_l_abbr_len
+    end
+  end
+  return all[res_ind]:sub(1, res_abbr_len)
+end
+
+H.get_nearest_string = function(word, candidates)
+  local res_dist, res_ind, res_abbr_len = math.huge, nil, nil
+  local word_split = vim.split(word, '')
+  for i, cand in ipairs(candidates) do
+    local d, abbr_len = H.string_dist_with_abbr(word_split, vim.split(cand, ''))
+    if d < res_dist then
+      res_ind, res_dist, res_abbr_len = i, d, abbr_len
+    end
+  end
+
+  return res_ind, res_dist, res_abbr_len
+end
+
+H.string_dist_with_abbr = function(ref, cand)
+  -- Source: https://en.wikipedia.org/wiki/Damerau-Levenshtein_distance
+  -- d[i][j] - distance between `ref[1:i]` and `cand[1:j]` abbreviations
+  local d = {}
+  for i = 0, #ref do
+    d[i] = { [0] = i }
+  end
+  for j = 0, #cand do
+    d[0][j] = j
+  end
+  for i = 1, #ref do
+    for j = 1, #cand do
+      local cost = ref[i] == cand[j] and 0 or 1
+      -- Account for deletion, insertion, substitution
+      d[i][j] = math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
+      -- Account for transposition
+      if i > 1 and j > 1 and ref[i] == cand[j - 1] and ref[i - 1] == cand[j] then
+        d[i][j] = math.min(d[i][j], d[i - 2][j - 2] + cost)
+      end
+    end
+  end
+
+  -- Find the candidate abbreviation with the smallest distance
+  local abbr_d = d[#ref]
+  local dist, abbr_len = math.huge, nil
+  for j = 1, #cand do
+    if abbr_d[j] < dist then
+      dist, abbr_len = abbr_d[j], j
+    end
+  end
+
+  return dist, abbr_len
 end
 
 -- Preview range --------------------------------------------------------------
