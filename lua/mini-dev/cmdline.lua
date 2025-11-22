@@ -2,7 +2,7 @@
 --
 -- Code:
 --
--- - Autocomplete:
+-- - Autocomplete.
 --
 -- - Autocorrect.
 --
@@ -42,6 +42,15 @@
 --     - Does not autocorrect valid built-in and user commands.
 --
 --     - Respects abbreviations (even for user commands), often hard-coded.
+--       Test cases:
+--         - `:tex` -> `:Tex`
+--         - `:vex` -> `:Vex`
+--
+--     - Setting new command line text as a result of autocorrection should not
+--       retrigger autocorrection. But should still trigger `CmdlineChanged`
+--       and other features.
+--
+--     - Can be repeated within same "command line session".
 
 --- *mini.cmdline* Command line tweaks
 ---
@@ -52,7 +61,8 @@
 --- - Autocomplete with customizable delay. Enhances |cmdline-completion| and
 ---   manual |'wildchar'| pressing experience.
 ---
---- - Autocorrect first word (usually command name).
+--- - Autocorrect command names.
+---   TODO: Think about generalizing this.
 ---
 --- - Preview command range.
 ---
@@ -186,8 +196,10 @@ MiniCmdline.config = {
   autocorrect = {
     enable = true,
 
-    -- Custom dictionary to prefer over algorithmic choices
-    custom_dict = {},
+    -- TODO: Consider the best way to customize correction (like use custom
+    -- dictionary for some cases).
+    -- Probably via `custom` function that takes data about what to correct and
+    -- outputs the correction.
   },
 
   -- Range preview: show command's target range in floating windows
@@ -227,7 +239,6 @@ H.setup_config = function(config)
 
   H.check_type('autocorrect', config.autocorrect, 'table')
   H.check_type('autocorrect.enable', config.autocorrect.enable, 'boolean')
-  H.check_type('autocorrect.custom_dict', config.autocorrect.custom_dict, 'table')
 
   H.check_type('preview_range', config.preview_range, 'table')
   H.check_type('preview_range.enable', config.preview_range.enable, 'boolean')
@@ -282,8 +293,8 @@ H.on_cmdline_enter = function()
     config = H.get_config(),
     wildchar = vim.fn.nr2char(vim.o.wildchar),
     cmd_type = vim.fn.getcmdtype(),
-    line = '',
-    pos = 1,
+    state = H.get_cmd_state(),
+    state_prev = {},
   }
   H.cache.autocomplete_predicate = H.cache.config.autocomplete.predicate or MiniCmdline.default_autocomplete_predicate
 end
@@ -292,7 +303,10 @@ H.on_cmdline_changed = function()
   if H.cache.config == nil then return end
   local config = H.cache.config
 
-  H.cache.line, H.cache.pos = vim.fn.getcmdline(), vim.fn.getcmdpos()
+  -- Act only on actual line change
+  local state = H.get_cmd_state()
+  if state.line == H.cache.state.line then return end
+  H.cache.state_prev, H.cache.state = H.cache.state, state
 
   if config.autocomplete.enable then H.autocomplete() end
   if config.autocorrect.enable then H.autocorrect(false) end
@@ -303,6 +317,15 @@ H.on_cmdline_leave = function()
   if H.cache.config == nil then return end
   if H.cache.config.autocorrect.enable then H.autocorrect(true) end
   H.cache = {}
+end
+
+H.get_cmd_state = function()
+  return {
+    complpat = vim.fn.getcmdcomplpat(),
+    compltype = vim.fn.getcmdcompltype(),
+    line = vim.fn.getcmdline(),
+    pos = vim.fn.getcmdpos(),
+  }
 end
 
 -- Autocomplete ---------------------------------------------------------------
@@ -336,7 +359,7 @@ if vim.fn.has('nvim-0.12') == 0 then
     -- The `vim.fn.getcmdcompltype() == ''` condition is too wide as it denies
     -- legitimate cases of when there are available completion candidates.
     -- Like in user commands created with `vim.api.nvim_create_user_command()`.
-    return #vim.fn.getcompletion(H.cache.line:sub(1, H.cache.pos - 1), 'cmdline') == 0
+    return #vim.fn.getcompletion(H.cache.state.line:sub(1, H.cache.state.pos - 1), 'cmdline') == 0
   end
 end
 
@@ -360,50 +383,61 @@ end
 
 -- Autocorrect ----------------------------------------------------------------
 H.autocorrect = function(is_final)
-  if H.cache.cmd_type ~= ':' then return true end
-
-  -- Try correcting if just finished typing the command or on `CmdlineLeave`
-  local has_just_typed_command = H.cache.line:find('^%s*%S+%s+$') ~= nil and H.cache.pos == (H.cache.line:len() + 1)
-  if not (has_just_typed_command or is_final) then return end
-
-  -- Correct (only if typed command name is unknown) by finding valid command
-  -- name closest to the one typed
-  if H.parse_cmd(H.cache.line).name ~= nil or H.cache.line:find('^%s*$') ~= nil then return end
-
-  local range, word = H.cache.line:match('^%s*(%S+)'):match('^(%S-)(%w+)$')
-  if range:sub(-1, -1) == "'" and range:sub(-2, -2) ~= "'" then
-    range, word = range .. word:sub(1, 1), word:sub(2)
+  if H.cache.just_autocorrected then
+    H.cache.just_autocorrected = nil
+    return
   end
 
-  -- Try custom dictionary first
-  local new_cmd = H.cache.config.autocorrect.custom_dict[word] or H.get_nearest_command(word)
+  -- Act only for actually typed words
+  if not (H.cache.cmd_type == ':' and H.cache.state.line:find('%S') ~= nil) then return true end
+
+  local state, state_prev = H.cache.state, H.cache.state_prev
+  local line, line_prev = state.line, state_prev.line
+
+  -- Autocorrect only for command names
+  -- TODO: Think about generalizing this
+  if state_prev.compltype ~= 'command' then return end
+
+  -- Try correcting if just finished typing WORD or on `CmdlineLeave`
+  local cmd_is_typed = line == (line_prev .. ' ') and line:sub(-2):find('%S') ~= nil and state.pos == (line:len() + 1)
+  if not (cmd_is_typed or is_final) then return end
+
+  -- Get all valid commands and command modifiers (like `:aboveleft`, etc.)
+  local all = vim.fn.getcompletion('', 'cmdline')
+  local word = state_prev.complpat
+  if vim.tbl_contains(all, word) then return end
+
+  -- Correct by finding valid command name abbreviation closest to typed one
+  local new_cmd = H.get_nearest_command(word, all)
   if type(new_cmd) ~= 'string' then return H.notify('Can not autocorrect for ' .. vim.inspect(word), 'WARN') end
-  local new_line = H.cache.line:gsub('^%s*%S+', range .. new_cmd)
-  vim.fn.setcmdline(new_line)
+  if word == new_cmd then return end
+
+  local from, to = state.pos - 1 - word:len(), state.pos - 2
+  local new_line = line:sub(1, from - 1) .. new_cmd .. line:sub(to + 1)
+  H.cache.just_autocorrected = true
+  vim.fn.setcmdline(new_line, new_line:len() + 1)
 end
 
-H.get_nearest_command = function(ref)
-  -- Get all valid commands including some specially picked ones which if
-  -- absent would conflict with others built-in commands
-  local all = vim.fn.getcompletion('', 'cmdline')
-  -- stylua: ignore
-  vim.list_extend(all, {
-    'q', 'w'
-  })
-
-  -- Check correction both respecting and ignoring case (if necessary)
+H.get_nearest_command = function(ref, all)
+  -- Check correction both respecting and ignoring case
   -- Account for the fact that commands can be abbreviated (`:h |20.2|`).
   -- So allow finding correction to the abbreviation (substring from the start)
   -- of the candidate.
-  -- TODO: This is an interesting idea, but it is too permissive: `:L` is
-  -- considered a valid command, when it is not.
+  -- TODO: Not all abbreviations of user commands are a valid command. It needs
+  -- to be unambiguous (i.e. uniquely identify the user command).
+  -- This is not the case for built-in commands, though: ANY abbreviation of
+  -- ANY built-in command is a valid (maybe different; `wincmd`->`w`==`write`)
+  -- valid command. Its just the internal optimization.
+  -- EXCEPT: `:def` abbreviation of `:defer` is not allowed (probably due to
+  -- Vim9script reasons).
+  -- Need to account for that. Probably when computing all commands, also
+  -- compute their minimal abbreviation length: 1 for built-in, something
+  -- computed for others.
   local res_ind, res_dist, res_abbr_len = H.get_nearest_string(ref, all)
-  if vim.fn.tolower(ref) ~= ref then
-    local ref_lower, all_lower = vim.fn.tolower(ref), vim.tbl_map(vim.fn.tolower, all)
-    local res_l_ind, res_l_dist, res_l_abbr_len = H.get_nearest_string(ref_lower, all_lower)
-    if res_l_dist < res_dist then
-      res_ind, res_abbr_len = res_l_ind, res_l_abbr_len
-    end
+  local res_l_ind, res_l_dist, res_l_abbr_len =
+    H.get_nearest_string(vim.fn.tolower(ref), vim.tbl_map(vim.fn.tolower, all))
+  if res_l_dist < res_dist then
+    res_ind, res_abbr_len = res_l_ind, res_l_abbr_len
   end
   return all[res_ind]:sub(1, res_abbr_len)
 end
