@@ -51,6 +51,9 @@
 --       and other features.
 --
 --     - Can be repeated within same "command line session".
+--
+--     - Should work with Command-line mode mappings that add text.
+--       Like `:cnoremap <M-m> www\ `.
 
 --- *mini.cmdline* Command line tweaks
 ---
@@ -177,6 +180,13 @@ end
 --- Notes:
 --- - It is not a fuzzy matching. Use fuzzy completion for that.
 ---
+--- `autocorrect.func` is a function that can be used to customize autocorrection.
+--- Takes a table with input data and should return a string with the correct word
+--- or `nil` for no autocorrection. Default: |MiniCmdline.default_autocorrect_func()|.
+--- Input data fields:
+--- - <word> `(string)` - word to be autocorrected. Never empty string.
+--- - <type> `(string)` - word type. Output of |getcmdcompltype()|.
+---
 ---# Preview range ~
 ---
 --- TODO
@@ -189,6 +199,7 @@ MiniCmdline.config = {
     -- Neovim>=0.12 is recommended for positive values
     delay = 0,
 
+    -- Custom rule of when to trigger completion
     predicate = nil,
   },
 
@@ -196,10 +207,8 @@ MiniCmdline.config = {
   autocorrect = {
     enable = true,
 
-    -- TODO: Consider the best way to customize correction (like use custom
-    -- dictionary for some cases).
-    -- Probably via `custom` function that takes data about what to correct and
-    -- outputs the correction.
+    -- Custom autocorrection rule
+    func = nil,
   },
 
   -- Range preview: show command's target range in floating windows
@@ -213,6 +222,28 @@ MiniCmdline.config = {
 ---
 ---@return boolean Always `true`.
 MiniCmdline.default_autocomplete_predicate = function() return true end
+
+--- Default autocorrection function
+---
+--- Currently works only for command names and |:command-modifiers|
+--- (i.e. `command` type).
+--- TODO: Think about possible generalizations this.
+---
+---@param data table Input autocorrection data. As described in |MiniCmdline.config|.
+---@param opts table|nil Options. Reserved for future use.
+---
+---@return string Autocorrected word.
+MiniCmdline.default_autocorrect_func = function(data, opts)
+  -- Act only for commands
+  if data.type ~= 'command' then return data.word end
+
+  -- Get all valid commands and command modifiers (like `:aboveleft`, etc.)
+  local all = vim.fn.getcompletion('', 'cmdline')
+  if vim.tbl_contains(all, data.word) then return data.word end
+
+  -- Correct by finding valid command name abbreviation closest to reference
+  return H.get_nearest_command(data.word, all)
+end
 
 -- Helper data ================================================================
 -- Module default config
@@ -239,6 +270,7 @@ H.setup_config = function(config)
 
   H.check_type('autocorrect', config.autocorrect, 'table')
   H.check_type('autocorrect.enable', config.autocorrect.enable, 'boolean')
+  H.check_type('autocorrect.func', config.autocorrect.func, 'func', true)
 
   H.check_type('preview_range', config.preview_range, 'table')
   H.check_type('preview_range.enable', config.preview_range.enable, 'boolean')
@@ -275,10 +307,15 @@ H.create_autocommands = function()
     vim.api.nvim_create_autocmd(event, { group = gr, pattern = pattern, callback = callback, desc = desc })
   end
 
-  -- Act on command line events
+  -- Act on command line events. Notes:
+  -- - Schedule for 'CmdlineEnter' to not act on mappings like `:...`
+  --   (like `:<C-u>...` popular for Visual mode).
+  -- - Schedule for 'CmdlineChanged' to work around autcompletion issues with
+  --   mocking wildchar.
+  -- - Do not schedule 'CmdlineLeave' to be able to set command line text.
   au('CmdlineEnter', '*', vim.schedule_wrap(H.on_cmdline_enter), 'Act on Command line enter')
   au('CmdlineChanged', '*', vim.schedule_wrap(H.on_cmdline_changed), 'Act on Command line change')
-  au('CmdlineLeave', '*', vim.schedule_wrap(H.on_cmdline_leave), 'Act on Command line leave')
+  au('CmdlineLeave', '*', H.on_cmdline_leave, 'Act on Command line leave')
 end
 
 H.is_disabled = function() return vim.g.minicmdline_disable == true or vim.b.minicmdline_disable == true end
@@ -287,6 +324,7 @@ H.get_config = function() return vim.tbl_deep_extend('force', MiniCmdline.config
 
 -- Autocommands ---------------------------------------------------------------
 H.on_cmdline_enter = function()
+  -- Check for Command-line mode to not act on `:...` mappings
   if H.is_disabled() or vim.fn.mode() ~= 'c' then return end
 
   H.cache = {
@@ -388,34 +426,50 @@ H.autocorrect = function(is_final)
     return
   end
 
-  -- Act only for actually typed words
-  if not (H.cache.cmd_type == ':' and H.cache.state.line:find('%S') ~= nil) then return true end
+  -- Act only for normal Ex commands after a word is just finished typing
+  if not (H.cache.cmd_type == ':' and H.cache.state.line:find('%S') ~= nil) then return end
 
   local state, state_prev = H.cache.state, H.cache.state_prev
   local line, line_prev = state.line, state_prev.line
+  local pos, pos_prev = state.pos, state_prev.pos
 
-  -- Autocorrect only for command names
-  -- TODO: Think about generalizing this
-  if state_prev.compltype ~= 'command' then return end
+  local is_text_added = line_prev:sub(1, pos_prev - 1) == line:sub(1, pos_prev - 1)
+    and line_prev:sub(pos_prev) == line:sub(pos)
+  local is_word_finished = line:sub(pos - 1, pos - 1) == ' '
 
-  -- Try correcting if just finished typing WORD or on `CmdlineLeave`
-  local cmd_is_typed = line == (line_prev .. ' ') and line:sub(-2):find('%S') ~= nil and state.pos == (line:len() + 1)
-  if not (cmd_is_typed or is_final) then return end
+  -- MiniMisc.log_add('autocorrect', {
+  --   is_char_added = is_char_added,
+  --   is_word_finished = is_word_finished,
+  --   state = state,
+  --   state_prev = state_prev,
+  --   is_final = is_final,
+  -- })
 
-  -- Get all valid commands and command modifiers (like `:aboveleft`, etc.)
-  local all = vim.fn.getcompletion('', 'cmdline')
-  local word = state_prev.complpat
-  if vim.tbl_contains(all, word) then return end
+  if not (is_text_added and (is_word_finished or is_final)) then return end
 
-  -- Correct by finding valid command name abbreviation closest to typed one
-  local new_cmd = H.get_nearest_command(word, all)
-  if type(new_cmd) ~= 'string' then return H.notify('Can not autocorrect for ' .. vim.inspect(word), 'WARN') end
-  if word == new_cmd then return end
+  -- Compute autocorrection
+  local word = is_final and state.complpat or state_prev.complpat
+  if word == '' then return end
 
-  local from, to = state.pos - 1 - word:len(), state.pos - 2
-  local new_line = line:sub(1, from - 1) .. new_cmd .. line:sub(to + 1)
+  local func = H.cache.config.autocorrect.func or MiniCmdline.default_autocorrect_func
+  local new_word = func({ word = word, type = state_prev.compltype }) or word
+
+  if word == new_word then return end
+  if type(new_word) ~= 'string' then return H.notify('Can not autocorrect for ' .. vim.inspect(word), 'WARN') end
+
+  local init_pos = is_final and pos or pos_prev
+  local new_line = line:sub(1, init_pos - word:len() - 1) .. new_word .. line:sub(init_pos)
   H.cache.just_autocorrected = true
   vim.fn.setcmdline(new_line, new_line:len() + 1)
+
+  -- MiniMisc.log_add('autocorrect 2', {
+  --   new_word = new_word,
+  --   word = word,
+  --   is_final = is_final,
+  --   new_line = new_line,
+  --   state = state,
+  --   line = vim.fn.getcmdline(),
+  -- })
 end
 
 H.get_nearest_command = function(ref, all)
