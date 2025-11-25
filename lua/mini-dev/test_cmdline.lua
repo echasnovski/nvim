@@ -75,9 +75,33 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ preview_range = { enable = 1 } }, 'preview_range.enable', 'boolean')
 end
 
+T['setup()']['sets recommended option values'] = function()
+  local check_wildmode = child.fn.has('nvim-0.11') == 1
+  load_module()
+  eq(child.o.wildoptions, 'pum,fuzzy')
+  if check_wildmode then eq(child.o.wildmode, 'noselect,full') end
+
+  -- Should not set if was previously set
+  child.o.wildoptions = 'pum'
+  if check_wildmode then child.o.wildmode = 'full' end
+  load_module()
+  eq(child.o.wildoptions, 'pum')
+  if check_wildmode then eq(child.o.wildmode, 'full') end
+
+  -- Should only set 'wildmode' if autocomplete is enabled
+  if check_wildmode then
+    child.restart({ '--noplugin', '-u', 'lua/mini-dev/minimal_init.lua' })
+    load_module({ autocomplete = { enable = false } })
+    eq(child.o.wildmode, 'full')
+  end
+end
+
 T['default_autocomplete_predicate()'] = new_set()
 
-T['default_autocomplete_predicate()']['works'] = function() MiniTest.skip() end
+T['default_autocomplete_predicate()']['works'] = function()
+  load_module()
+  eq(child.lua_get('MiniCmdline.default_autocomplete_predicate()'), true)
+end
 
 T['default_autocorrect_func()'] = new_set()
 
@@ -179,13 +203,34 @@ T['Autocorrect']['does not work in mappings'] = function()
   eq(err, 'E492: Not an editor command: ehco')
 end
 
-T['Autocomplete']['works only when typing new word'] = function()
-  type_keys(':', 'set tw', '<Left><Left>')
+T['Autocorrect']['can act after mappings appended text'] = function()
+  -- Should act if text increases latest word
+  child.cmd('cnoremap <C-x> www')
+  type_keys(':', 'XX', '<C-x>')
+  validate_cmdline('XXwww')
+  type_keys(' ')
+  validate_cmdline('below ')
+  type_keys('<Esc>')
+
+  -- Should act if text finishes the last word.
+  child.cmd('cnoremap <C-y> www<Space>')
+  type_keys(':', 'XX', '<C-y>')
+  -- Whole new text from the mapping is treated as "separator text" and is not
+  -- included into autocorrected word. It might be good to have the new text
+  -- also be part of the word to correct (`XXwww` here instead of `XX`), but it
+  -- seems too complex to implement (if reasonably possible even).
+  validate_cmdline('exwww ')
+  type_keys('<Esc>')
+end
+
+T['Autocomplete']['works only when appending new word'] = function()
+  type_keys(':', 'set ', '<Left>')
   type_keys('<BS>')
-  validate_cmdline('settw', 4)
-  type_keys('<BS>')
-  validate_cmdline('setw', 3)
-  MiniTest.skip()
+  validate_cmdline('se ', 3)
+  type_keys('T')
+  validate_cmdline('seT ', 4)
+  type_keys(' ')
+  validate_cmdline('seT  ', 5)
 end
 
 T['Autocorrect']['correctly computes word to autocorrect'] = function()
@@ -202,44 +247,10 @@ T['Autocorrect']['correctly computes word to autocorrect'] = function()
   validate("'a,''srot", ' ', "'a,''sort ")
 end
 
-T['Autocorrect']['works when correcting not at end of line'] = function()
-  MiniTest.skip('Currently does not work')
-
-  type_keys(':', 'set tw', '<Left><Left>')
-  type_keys('<BS><BS>', 'T')
-  validate_cmdline('set tw')
-end
-
-T['Autocorrect']['works just before final <CR>'] = function()
-  MiniTest.skip('Currently does not work')
-
-  local validate = function(bad_word, ref_word)
-    type_keys(':', bad_word, '<CR>')
-    eq(child.fn.histget('cmd', -1), ref_word)
-    eq(child.fn.mode(), 'n')
-  end
-
-  local buf_id = child.api.nvim_get_current_buf()
-  set_lines({ '1', '2' })
-  set_cursor(1, 0)
-
-  local buf_id_other = child.api.nvim_create_buf(true, false)
-  validate('bnxxt', 'bnext')
-  eq(child.api.nvim_get_current_buf(), buf_id_other)
-  type_keys('<Esc>')
-
-  -- Should work not at end of line
-  type_keys(':', 'bnext +2', '<Left><Left><Left>', '<BS>x')
-  validate_cmdline('bnexx +2', 6)
-  type_keys('<CR>')
-  eq(child.api.nvim_get_current_buf(), buf_id)
-  eq(get_cursor(), { 2, 0 })
-
-  -- Should work with `!`
-  child.cmd('vsplit')
-  local win_id = child.api.nvim_get_current_win()
-  validate({ 'Q', '!' }, 'q!')
-  eq(child.api.nvim_win_is_valid(win_id), false)
+T['Autocorrect']['uses correct state data before final <CR>'] = function()
+  child.cmd('cnoremap <C-m> www')
+  type_keys(':', 'cn', '<Up>', '<CR>')
+  MiniTest.skip()
 end
 
 T['Autocorrect']['does not correct valid words'] = function()
@@ -303,6 +314,24 @@ T['Autocorrect']['respects `config.autocorrect.func`'] = function()
 
   validate_no_change('srot')
   validate_no_change(nil)
+end
+
+T['Autocorrect']['should use correct state before final <CR>'] = function()
+  child.lua([[
+    _G.log = {}
+    MiniCmdline.config.autocorrect.func = function(data)
+      table.insert(_G.log, vim.deepcopy(data))
+      return data.word
+    end
+  ]])
+
+  type_keys(':', 'cnoremap <C-x> www', '<CR>')
+  type_keys(':', 'cn', '<Up>')
+  validate_cmdline('cnoremap \24 www')
+  child.lua('_G.log = {}')
+  type_keys('<CR>')
+  local ref_word = child.fn.has('nvim-0.11') == 1 and '\24 www' or 'www'
+  eq(child.lua_get('_G.log'), { { word = ref_word, type = 'mapping' } })
 end
 
 T['Range preview'] = new_set({

@@ -39,12 +39,6 @@
 --       triggered via mapping (like `:<C-u>...` in Visual mode).
 --
 -- - Autocorrect:
---     - Can be repeated within same "command line session". Both at the end
---       of the line and when going back to add/adjust a word (needs to be
---       followed with a space).
---
---     - Should work with Command-line mode mappings that add text.
---       Like `:cnoremap <M-m> www\ `.
 
 --- *mini.cmdline* Command line tweaks
 ---
@@ -53,9 +47,9 @@
 --- Features:
 ---
 --- - Autocomplete with customizable delay. Enhances |cmdline-completion| and
----   manual |'wildchar'| pressing experience.
+---   manual |'wildchar'| pressing experience. Requires Neovim>=0.11.
 ---
---- - Autocorrect command names.
+--- - Autocorrect words as-you-type. Only command names autocorrected by default.
 ---   TODO: Think about generalizing this.
 ---
 --- - Preview command range.
@@ -81,8 +75,8 @@
 --- # Suggested option values ~
 ---
 --- Some options are set automatically (if not set before |MiniCmdline.setup()|):
---- - |'wildode'| is set to "noselect:lastused,full" for less intrusive popup
----   if autocompletion is enabled. Requires Neovim>=0.11.
+--- - |'wildmode'| is set to "noselect,full" for less intrusive autocompletion popup.
+---   Requires Neovim>=0.11.
 --- - |'wildoptions'| is set to "pum,fuzzy" to enable fuzzy matching.
 ---
 --- # Comparisons ~
@@ -166,10 +160,14 @@ end
 --- <
 ---# Autocorrect ~
 ---
---- TODO
+--- `config.autocorrect` is used to configure autocorrection: automatic adjustment
+--- of bad words as you type them. This works only when appending text at the end
+--- of the command line. Editing already typed words does not trigger autocorrect
+--- (allows correcting the autocorrection).
 ---
 --- Notes:
---- - It is not a fuzzy matching. Use fuzzy completion for that.
+--- - This is not intended to be a fuzzy matching since it is too intrusive.
+---   Use fuzzy completion for that (set up by default).
 ---
 --- `autocorrect.func` is a function that can be used to customize autocorrection.
 --- Takes a table with input data and should return a string with the correct word
@@ -177,6 +175,10 @@ end
 --- Input data fields:
 --- - <word> `(string)` - word to be autocorrected. Never empty string.
 --- - <type> `(string)` - word type. Output of |getcmdcompltype()|.
+---
+--- Default autocorrection is done only for command names by choosing a valid
+--- command abbreviation with the lowest string distance. See more details
+--- in |MiniCmdline.default_autocorrect_func()|.
 ---
 ---# Preview range ~
 ---
@@ -429,54 +431,31 @@ H.autocorrect = function(is_final)
   -- Act only for normal Ex commands after a word is just finished typing
   if not (H.cache.cmd_type == ':' and H.cache.state.line:find('%S') ~= nil) then return end
 
-  -- TODO: Make it work with Command-line mappings that add text
-
   local state, state_prev = H.cache.state, H.cache.state_prev
   local line, line_prev = state.line, state_prev.line
   local pos, pos_prev = state.pos, state_prev.pos
 
-  -- TODO: Make autocorect work ONLY AT THE END OF THE LINE.
-  -- This makes it easier to implement, but more importantly it also allows
-  -- a natural way to adjust autocorrected text by going back and editing it.
-
-  local slice_prev_left, slice_prev_right = line_prev:sub(1, pos_prev - 1), line_prev:sub(pos_prev)
-  local slice_left, slice_new, slice_right = line:sub(1, pos_prev - 1), line:sub(pos_prev, pos - 1), line:sub(pos)
-  local is_text_added = slice_prev_left == slice_left and slice_prev_right == slice_right and pos > pos_prev
+  -- Act only at line end. It allows a natural way to adjust autocorrected text
+  -- by going back and editing it. This is also easier to implement.
+  local is_text_append = vim.startswith(line, line_prev) and pos == (line:len() + 1) and pos > pos_prev
   local is_word_finished = not vim.startswith(state.complpat, state_prev.complpat)
-    or state.compltype ~= state_prev.compltype
 
-  -- MiniMisc.log_add('autocorrect', {
-  --   is_text_added = is_text_added,
-  --   is_word_finished = is_word_finished,
-  --   state = state,
-  --   state_prev = state_prev,
-  --   is_final = is_final,
-  -- })
-
-  if not (is_text_added and (is_word_finished or is_final)) then return end
+  if not (is_text_append and (is_word_finished or is_final)) then return end
 
   -- Compute autocorrection
-  local word = is_final and state.complpat or state_prev.complpat
+  local state_to_use = is_final and state or state_prev
+  local word = state_to_use.complpat
   if word == '' then return end
 
   local func = H.cache.config.autocorrect.func or MiniCmdline.default_autocorrect_func
-  local new_word = func({ word = word, type = state_prev.compltype }) or word
+  local new_word = func({ word = word, type = state_to_use.compltype }) or word
 
   if word == new_word then return end
   if type(new_word) ~= 'string' then return H.notify('Can not autocorrect for ' .. vim.inspect(word), 'WARN') end
 
-  local init_pos = is_final and pos or pos_prev
+  local init_pos = state_to_use.pos
   local new_line = line:sub(1, init_pos - word:len() - 1) .. new_word .. line:sub(init_pos)
   vim.fn.setcmdline(new_line, new_line:len() + 1)
-
-  -- MiniMisc.log_add('autocorrect 2', {
-  --   new_word = new_word,
-  --   word = word,
-  --   is_final = is_final,
-  --   new_line = new_line,
-  --   state = state,
-  --   line = vim.fn.getcmdline(),
-  -- })
 end
 
 H.get_nearest_command = function(ref, all)
@@ -581,7 +560,9 @@ end
 
 H.getcmdcomplpat = function() return vim.fn.getcmdcomplpat() end
 if vim.fn.has('nvim-0.11') == 0 then
-  H.getcmdcomplpat = function() return vim.fn.getcmdline():sub(1, vim.fn.getcmdpos() - 1) end
+  -- Match alphanumeric characters to cursor's left, if present
+  -- This is not 100% how it works, but good enough
+  H.getcmdcomplpat = function() return vim.fn.getcmdline():sub(1, vim.fn.getcmdpos() - 1):match('%w+$') or '' end
 end
 
 return MiniCmdline
