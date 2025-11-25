@@ -39,18 +39,9 @@
 --       triggered via mapping (like `:<C-u>...` in Visual mode).
 --
 -- - Autocorrect:
---     - Does not autocorrect valid built-in and user commands.
---
---     - Respects abbreviations (even for user commands), often hard-coded.
---       Test cases:
---         - `:tex` -> `:Tex`
---         - `:vex` -> `:Vex`
---
---     - Setting new command line text as a result of autocorrection should not
---       retrigger autocorrection. But should still trigger `CmdlineChanged`
---       and other features.
---
---     - Can be repeated within same "command line session".
+--     - Can be repeated within same "command line session". Both at the end
+--       of the line and when going back to add/adjust a word (needs to be
+--       followed with a space).
 --
 --     - Should work with Command-line mode mappings that add text.
 --       Like `:cnoremap <M-m> www\ `.
@@ -91,7 +82,7 @@
 ---
 --- Some options are set automatically (if not set before |MiniCmdline.setup()|):
 --- - |'wildode'| is set to "noselect:lastused,full" for less intrusive popup
----   if autocompletion is enabled.
+---   if autocompletion is enabled. Requires Neovim>=0.11.
 --- - |'wildoptions'| is set to "pum,fuzzy" to enable fuzzy matching.
 ---
 --- # Comparisons ~
@@ -229,6 +220,11 @@ MiniCmdline.default_autocomplete_predicate = function() return true end
 --- (i.e. `command` type).
 --- TODO: Think about possible generalizations this.
 ---
+--- It chooses a valid command abbreviation with the lowest Damerau–Levenshtein
+--- distance (smallest number of deletion/insertion/substitution/transposition
+--- needed to transform one word into another; slightly prefers transposition).
+--- TODO: Maybe export string distance function? If not here, maybe in 'mini.misc'?
+---
 ---@param data table Input autocorrection data. As described in |MiniCmdline.config|.
 ---@param opts table|nil Options. Reserved for future use.
 ---
@@ -239,10 +235,16 @@ MiniCmdline.default_autocorrect_func = function(data, opts)
 
   -- Get all valid commands and command modifiers (like `:aboveleft`, etc.)
   local all = vim.fn.getcompletion('', 'cmdline')
-  if vim.tbl_contains(all, data.word) then return data.word end
 
-  -- Correct by finding valid command name abbreviation closest to reference
-  return H.get_nearest_command(data.word, all)
+  -- Correct all consecutive words (usually one). This makes it work for words
+  -- like "quit!".
+  local res = data.word:gsub('%w+', function(m)
+    if vim.tbl_contains(all, m) then return m end
+
+    -- Correct by finding valid command name abbreviation closest to reference
+    return H.get_nearest_command(m, all)
+  end)
+  return res
 end
 
 -- Helper data ================================================================
@@ -253,6 +255,9 @@ H.default_config = vim.deepcopy(MiniCmdline.config)
 H.timers = {
   autocomplete = vim.loop.new_timer(),
 }
+
+-- Autocomplete requires `noselect` flag of 'wildmode'. Present in Neovim>=0.11
+H.can_autocomplete = vim.fn.has('nvim-0.11') == 1
 
 -- Various cache to use during command line edit
 H.cache = {}
@@ -270,7 +275,7 @@ H.setup_config = function(config)
 
   H.check_type('autocorrect', config.autocorrect, 'table')
   H.check_type('autocorrect.enable', config.autocorrect.enable, 'boolean')
-  H.check_type('autocorrect.func', config.autocorrect.func, 'func', true)
+  H.check_type('autocorrect.func', config.autocorrect.func, 'function', true)
 
   H.check_type('preview_range', config.preview_range, 'table')
   H.check_type('preview_range.enable', config.preview_range.enable, 'boolean')
@@ -284,7 +289,7 @@ H.apply_config = function(config)
   -- Try setting suggested option values
   -- NOTE: This makes it more like 'mini.completion' (with 'noselect')
   local was_set = vim.api.nvim_get_option_info2('wildmode', { scope = 'global' }).was_set
-  if not was_set and config.autocomplete.enable then vim.o.wildmode = 'noselect,full' end
+  if not was_set and config.autocomplete.enable and H.can_autocomplete then vim.o.wildmode = 'noselect,full' end
 
   was_set = vim.api.nvim_get_option_info2('wildoptions', { scope = 'global' }).was_set
   if not was_set then vim.o.wildoptions = 'pum,fuzzy' end
@@ -346,7 +351,7 @@ H.on_cmdline_changed = function()
   if state.line == H.cache.state.line then return end
   H.cache.state_prev, H.cache.state = H.cache.state, state
 
-  if config.autocomplete.enable then H.autocomplete() end
+  if config.autocomplete.enable and H.can_autocomplete then H.autocomplete() end
   if config.autocorrect.enable then H.autocorrect(false) end
   if config.preview_range.enable then H.preview_range() end
 end
@@ -359,7 +364,7 @@ end
 
 H.get_cmd_state = function()
   return {
-    complpat = vim.fn.getcmdcomplpat(),
+    complpat = H.getcmdcomplpat(),
     compltype = vim.fn.getcmdcompltype(),
     line = vim.fn.getcmdline(),
     pos = vim.fn.getcmdpos(),
@@ -421,24 +426,27 @@ end
 
 -- Autocorrect ----------------------------------------------------------------
 H.autocorrect = function(is_final)
-  if H.cache.just_autocorrected then
-    H.cache.just_autocorrected = nil
-    return
-  end
-
   -- Act only for normal Ex commands after a word is just finished typing
   if not (H.cache.cmd_type == ':' and H.cache.state.line:find('%S') ~= nil) then return end
+
+  -- TODO: Make it work with Command-line mappings that add text
 
   local state, state_prev = H.cache.state, H.cache.state_prev
   local line, line_prev = state.line, state_prev.line
   local pos, pos_prev = state.pos, state_prev.pos
 
-  local is_text_added = line_prev:sub(1, pos_prev - 1) == line:sub(1, pos_prev - 1)
-    and line_prev:sub(pos_prev) == line:sub(pos)
-  local is_word_finished = line:sub(pos - 1, pos - 1) == ' '
+  -- TODO: Make autocorect work ONLY AT THE END OF THE LINE.
+  -- This makes it easier to implement, but more importantly it also allows
+  -- a natural way to adjust autocorrected text by going back and editing it.
+
+  local slice_prev_left, slice_prev_right = line_prev:sub(1, pos_prev - 1), line_prev:sub(pos_prev)
+  local slice_left, slice_new, slice_right = line:sub(1, pos_prev - 1), line:sub(pos_prev, pos - 1), line:sub(pos)
+  local is_text_added = slice_prev_left == slice_left and slice_prev_right == slice_right and pos > pos_prev
+  local is_word_finished = not vim.startswith(state.complpat, state_prev.complpat)
+    or state.compltype ~= state_prev.compltype
 
   -- MiniMisc.log_add('autocorrect', {
-  --   is_char_added = is_char_added,
+  --   is_text_added = is_text_added,
   --   is_word_finished = is_word_finished,
   --   state = state,
   --   state_prev = state_prev,
@@ -459,7 +467,6 @@ H.autocorrect = function(is_final)
 
   local init_pos = is_final and pos or pos_prev
   local new_line = line:sub(1, init_pos - word:len() - 1) .. new_word .. line:sub(init_pos)
-  H.cache.just_autocorrected = true
   vim.fn.setcmdline(new_line, new_line:len() + 1)
 
   -- MiniMisc.log_add('autocorrect 2', {
@@ -526,7 +533,7 @@ H.string_dist_with_abbr = function(ref, cand)
       d[i][j] = math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
       -- Account for transposition
       if i > 1 and j > 1 and ref[i] == cand[j - 1] and ref[i - 1] == cand[j] then
-        d[i][j] = math.min(d[i][j], d[i - 2][j - 2] + cost)
+        d[i][j] = math.min(d[i][j], d[i - 2][j - 2] + 0.99 * cost)
       end
     end
   end
@@ -570,6 +577,11 @@ H.parse_cmd = function(line)
   end
   if not ok then return {} end
   return { name = extra_parsing and '' or parsed.cmd, range = parsed.range, args = parsed.args }
+end
+
+H.getcmdcomplpat = function() return vim.fn.getcmdcomplpat() end
+if vim.fn.has('nvim-0.11') == 0 then
+  H.getcmdcomplpat = function() return vim.fn.getcmdline():sub(1, vim.fn.getcmdpos() - 1) end
 end
 
 return MiniCmdline
