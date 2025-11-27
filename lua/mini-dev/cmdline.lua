@@ -225,28 +225,26 @@ MiniCmdline.default_autocomplete_predicate = function() return true end
 --- It chooses a valid command abbreviation with the lowest Damerau–Levenshtein
 --- distance (smallest number of deletion/insertion/substitution/transposition
 --- needed to transform one word into another; slightly prefers transposition).
---- TODO: Maybe export string distance function? If not here, maybe in 'mini.misc'?
 ---
 ---@param data table Input autocorrection data. As described in |MiniCmdline.config|.
 ---@param opts table|nil Options. Reserved for future use.
 ---
 ---@return string Autocorrected word.
 MiniCmdline.default_autocorrect_func = function(data, opts)
-  -- Act only for commands
-  if data.type ~= 'command' then return data.word end
+  -- Get all valid words
+  local ok, all = pcall(vim.fn.getcompletion, '', data.type)
+  if not ok or vim.tbl_contains(all, data.word) or data.type ~= 'command' then return data.word end
 
-  -- Get all valid commands and command modifiers (like `:aboveleft`, etc.)
-  local all = vim.fn.getcompletion('', 'cmdline')
+  -- Make results stable in case several candidates have the same distance
+  table.sort(all)
 
-  -- Correct all consecutive words (usually one). This makes it work for words
-  -- like "quit!".
-  local res = data.word:gsub('%w+', function(m)
-    if vim.tbl_contains(all, m) then return m end
+  -- Handle commands separately: need dedicated abbreviation length
+  -- computation and to allow `!`
+  if data.type == 'command' then return H.get_nearest_command(data.word, all) end
 
-    -- Correct by finding valid command name abbreviation closest to reference
-    return H.get_nearest_command(m, all)
-  end)
-  return res
+  -- Fall back to computing nearest string without allowing abbreviations
+  local abbr_lens = vim.tbl_map(string.len, all)
+  return H.get_nearest_abbr(data.word, all, abbr_lens)
 end
 
 -- Helper data ================================================================
@@ -459,43 +457,73 @@ H.autocorrect = function(is_final)
 end
 
 H.get_nearest_command = function(ref, all)
-  -- Check correction both respecting and ignoring case
-  -- Account for the fact that commands can be abbreviated (`:h |20.2|`).
-  -- So allow finding correction to the abbreviation (substring from the start)
-  -- of the candidate.
-  -- TODO: Not all abbreviations of user commands are a valid command. It needs
-  -- to be unambiguous (i.e. uniquely identify the user command).
-  -- This is not the case for built-in commands, though: ANY abbreviation of
-  -- ANY built-in command is a valid (maybe different; `wincmd`->`w`==`write`)
-  -- valid command. Its just the internal optimization.
-  -- EXCEPT: `:def` abbreviation of `:defer` is not allowed (probably due to
-  -- Vim9script reasons).
-  -- Need to account for that. Probably when computing all commands, also
-  -- compute their minimal abbreviation length: 1 for built-in, something
-  -- computed for others.
-  local res_ind, res_dist, res_abbr_len = H.get_nearest_string(ref, all)
-  local res_l_ind, res_l_dist, res_l_abbr_len =
-    H.get_nearest_string(vim.fn.tolower(ref), vim.tbl_map(vim.fn.tolower, all))
-  if res_l_dist < res_dist then
-    res_ind, res_abbr_len = res_l_ind, res_l_abbr_len
-  end
-  return all[res_ind]:sub(1, res_abbr_len)
-end
+  -- Allow trailing special punctuation (specific to commands)
+  local word, suffix = ref:match('^(.+)([!|]?)$')
 
-H.get_nearest_string = function(word, candidates)
-  local res_dist, res_ind, res_abbr_len = math.huge, nil, nil
-  local word_split = vim.split(word, '')
-  for i, cand in ipairs(candidates) do
-    local d, abbr_len = H.string_dist_with_abbr(word_split, vim.split(cand, ''))
-    if d < res_dist then
-      res_ind, res_dist, res_abbr_len = i, d, abbr_len
+  -- Account for the fact that commands can be abbreviated (`:h |20.2|`):
+  local cmd_abbr_lens, usr_cmds, usr_max_len = {}, {}, 0
+  for _, cmd in ipairs(all) do
+    -- User command abbreviation needs to uniquely identify command name
+    if cmd:find('^[A-Z]') ~= nil then
+      usr_cmds[cmd] = true
+      usr_max_len = math.max(usr_max_len, cmd:len())
+    else
+      -- ANY abbreviation of ANY built-in command is a valid command (may be
+      -- different; `wincmd`->`w`==`write`). Its an internal optimization.
+      -- EXCEPT: `:def` abbreviation of `:defer` is not allowed.
+      cmd_abbr_lens[cmd] = cmd == 'defer' and 4 or 1
     end
   end
 
-  return res_ind, res_dist, res_abbr_len
+  -- Slice user commands with increasing abbreviation length to find which
+  -- ones can be uniquely identified by it
+  for cur_abbr_len = 1, usr_max_len do
+    local cur_abbrs = {}
+    for cmd, _ in pairs(usr_cmds) do
+      local abbr = cmd:sub(1, cur_abbr_len)
+      cur_abbrs[abbr] = cur_abbrs[abbr] or {}
+      table.insert(cur_abbrs[abbr], cmd)
+    end
+
+    for _, cmd_arr in pairs(cur_abbrs) do
+      if #cmd_arr == 1 then
+        local cmd = cmd_arr[1]
+        cmd_abbr_lens[cmd] = math.min(cur_abbr_len, cmd:len())
+        usr_cmds[cmd] = nil
+      end
+    end
+  end
+
+  local abbr_lens = vim.tbl_map(function(x) return cmd_abbr_lens[x] end, all)
+  return H.get_nearest_abbr(word, all, abbr_lens) .. suffix
 end
 
-H.string_dist_with_abbr = function(ref, cand)
+H.get_nearest_abbr = function(word, candidates, abbr_lens)
+  local tolower = vim.fn.tolower
+  local word_split = vim.split(word, '')
+  local word_split_l = vim.split(tolower(word), '')
+
+  local res, res_dist = nil, math.huge
+  for i, cand in ipairs(candidates) do
+    local min_abbr_len = abbr_lens[i]
+
+    -- Check both respecting and ignoring case, prefer closest
+    local d, abbr_len = H.string_abbr_dist(word_split, vim.split(cand, ''), min_abbr_len)
+    if d < res_dist then
+      res, res_dist = cand:sub(1, abbr_len), d
+    end
+
+    local cand_word_l = tolower(cand)
+    local d_l, abbr_len_l = H.string_abbr_dist(word_split_l, vim.split(cand_word_l, ''), min_abbr_len)
+    if d_l < res_dist then
+      res, res_dist = cand:sub(1, abbr_len_l), d_l
+    end
+  end
+
+  return res
+end
+
+H.string_abbr_dist = function(ref, cand, min_abbr_len)
   -- Source: https://en.wikipedia.org/wiki/Damerau-Levenshtein_distance
   -- d[i][j] - distance between `ref[1:i]` and `cand[1:j]` abbreviations
   local d = {}
@@ -510,7 +538,8 @@ H.string_dist_with_abbr = function(ref, cand)
       local cost = ref[i] == cand[j] and 0 or 1
       -- Account for deletion, insertion, substitution
       d[i][j] = math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
-      -- Account for transposition
+      -- Account for transposition. Slightly favor them over others, as it is
+      -- a common source for autocorrection
       if i > 1 and j > 1 and ref[i] == cand[j - 1] and ref[i - 1] == cand[j] then
         d[i][j] = math.min(d[i][j], d[i - 2][j - 2] + 0.99 * cost)
       end
@@ -520,7 +549,7 @@ H.string_dist_with_abbr = function(ref, cand)
   -- Find the candidate abbreviation with the smallest distance
   local abbr_d = d[#ref]
   local dist, abbr_len = math.huge, nil
-  for j = 1, #cand do
+  for j = min_abbr_len, #cand do
     if abbr_d[j] < dist then
       dist, abbr_len = abbr_d[j], j
     end

@@ -247,12 +247,6 @@ T['Autocorrect']['correctly computes word to autocorrect'] = function()
   validate("'a,''srot", ' ', "'a,''sort ")
 end
 
-T['Autocorrect']['uses correct state data before final <CR>'] = function()
-  child.cmd('cnoremap <C-m> www')
-  type_keys(':', 'cn', '<Up>', '<CR>')
-  MiniTest.skip()
-end
-
 T['Autocorrect']['does not correct valid words'] = function()
   child.cmd('au CmdlineChanged * lua _G.n = (_G.n or 0) + 1')
 
@@ -277,6 +271,21 @@ T['Autocorrect']['does not correct valid words'] = function()
   local win_id = child.api.nvim_get_current_win()
   type_keys(':', 'q', '!', '<CR>')
   eq(child.api.nvim_win_is_valid(win_id), false)
+end
+
+T['Autocorrect']['suggests only valid abbreviations'] = function()
+  -- Should uniquely identify user commands
+  child.cmd('command MyCommandA echo "Hello"')
+  child.cmd('command MyCommandB echo "World"')
+
+  type_keys(':', 'MyComman', ' ')
+  validate_cmdline('MyCommandA ')
+  type_keys('<Esc>')
+
+  -- `:def` is not a valid abbreviation
+  type_keys(':', 'def', ' ')
+  validate_cmdline('de ')
+  type_keys('<Esc>')
 end
 
 T['Autocorrect']['respects `config.autocorrect.func`'] = function()
@@ -316,7 +325,7 @@ T['Autocorrect']['respects `config.autocorrect.func`'] = function()
   validate_no_change(nil)
 end
 
-T['Autocorrect']['should use correct state before final <CR>'] = function()
+T['Autocorrect']['uses correct state before final <CR>'] = function()
   child.lua([[
     _G.log = {}
     MiniCmdline.config.autocorrect.func = function(data)
@@ -325,6 +334,7 @@ T['Autocorrect']['should use correct state before final <CR>'] = function()
     end
   ]])
 
+  -- Changing `type` just before `<CR>`
   type_keys(':', 'cnoremap <C-x> www', '<CR>')
   type_keys(':', 'cn', '<Up>')
   validate_cmdline('cnoremap \24 www')
@@ -332,6 +342,13 @@ T['Autocorrect']['should use correct state before final <CR>'] = function()
   type_keys('<CR>')
   local ref_word = child.fn.has('nvim-0.11') == 1 and '\24 www' or 'www'
   eq(child.lua_get('_G.log'), { { word = ref_word, type = 'mapping' } })
+
+  -- Should include `!` in the word (when using `vim.fn.getcmdcomplpat()`)
+  if child.fn.has('nvim-0.11') == 0 then return end
+  child.cmd('split')
+  child.lua('_G.log = {}')
+  type_keys(':', 'q!', '<CR>')
+  eq(child.lua_get('_G.log'), { { word = 'q!', type = '' } })
 end
 
 T['Range preview'] = new_set({
