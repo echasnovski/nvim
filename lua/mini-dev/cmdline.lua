@@ -47,9 +47,10 @@
 --- Features:
 ---
 --- - Autocomplete with customizable delay. Enhances |cmdline-completion| and
----   manual |'wildchar'| pressing experience. Requires Neovim>=0.11.
+---   manual |'wildchar'| pressing experience.
+---   Requires Neovim>=0.11, but Neovim>=0.12 is recommended.
 ---
---- - Autocorrect words as-you-type. Only command names autocorrected by default.
+--- - Autocorrect words as-you-type. Only words that have  command names autocorrected by default.
 ---   TODO: Think about generalizing this.
 ---
 --- - Preview command range.
@@ -59,6 +60,9 @@
 --- What it doesn't do:
 ---
 --- - Customization of command line UI. Use |vim._extui| (on Neovim>=0.12).
+---
+--- - Customization of autocompletion candidates. They are computed
+---   via |cmdline-completion|.
 ---
 --- # Setup ~
 ---
@@ -194,6 +198,9 @@ MiniCmdline.config = {
 
     -- Custom rule of when to trigger completion
     predicate = nil,
+
+    -- Whether to map arrow keys for more consistent wildmenu behavior
+    map_arrows = true,
   },
 
   -- Autocorrection: correct non-existing command name
@@ -231,6 +238,9 @@ MiniCmdline.default_autocomplete_predicate = function() return true end
 ---
 ---@return string Autocorrected word.
 MiniCmdline.default_autocorrect_func = function(data, opts)
+  -- TODO: Make it work only for "useful" types: when the words **needs to be**
+  -- one of the available candidates
+
   -- Get all valid words
   local ok, all = pcall(vim.fn.getcompletion, '', data.type)
   if not ok or vim.tbl_contains(all, data.word) or data.type ~= 'command' then return data.word end
@@ -272,6 +282,7 @@ H.setup_config = function(config)
   H.check_type('autocomplete.enable', config.autocomplete.enable, 'boolean')
   H.check_type('autocomplete.delay', config.autocomplete.delay, 'number')
   H.check_type('autocomplete.predicate', config.autocomplete.predicate, 'function', true)
+  H.check_type('autocomplete.map_arrows', config.autocomplete.map_arrows, 'boolean')
 
   H.check_type('autocorrect', config.autocorrect, 'table')
   H.check_type('autocorrect.enable', config.autocorrect.enable, 'boolean')
@@ -295,14 +306,16 @@ H.apply_config = function(config)
   if not was_set then vim.o.wildoptions = 'pum,fuzzy' end
 
   -- Set useful mappings
-  local map_arrow = function(dir, wildmenu_prefix, desc)
-    local rhs = function() return (vim.fn.wildmenumode() == 1 and wildmenu_prefix or '') .. dir end
-    vim.keymap.set('c', dir, rhs, { expr = true, desc = desc })
+  if config.autocomplete.map_arrows then
+    local map_arrow = function(dir, wildmenu_prefix, desc)
+      local rhs = function() return (vim.fn.wildmenumode() == 1 and wildmenu_prefix or '') .. dir end
+      vim.keymap.set('c', dir, rhs, { expr = true, desc = desc })
+    end
+    map_arrow('<Left>', '<Space><BS>', 'Move cursor left')
+    map_arrow('<Right>', '<Space><BS>', 'Move cursor right')
+    map_arrow('<Up>', '<C-e>', 'Go to earlier history')
+    map_arrow('<Down>', '<C-e>', 'Go to newer history')
   end
-  map_arrow('<Left>', '<Space><BS>', 'Move cursor left')
-  map_arrow('<Right>', '<Space><BS>', 'Move cursor right')
-  map_arrow('<Up>', '<C-e>', 'Go to earlier history')
-  map_arrow('<Down>', '<C-e>', 'Go to newer history')
 end
 
 H.create_autocommands = function()
@@ -334,7 +347,7 @@ H.on_cmdline_enter = function()
 
   H.cache = {
     config = H.get_config(),
-    wildchar = vim.fn.nr2char(vim.o.wildchar),
+    wildchar = H.get_wildchar(),
     cmd_type = vim.fn.getcmdtype(),
     state = H.get_cmd_state(),
     state_prev = {},
@@ -503,16 +516,17 @@ H.get_nearest_abbr = function(word, candidates, abbr_lens)
   local word_split = vim.split(word, '')
   local word_split_l = vim.split(tolower(word), '')
 
+  -- Prefer closest string respecting case first, then try ignorecase
   local res, res_dist = nil, math.huge
   for i, cand in ipairs(candidates) do
     local min_abbr_len = abbr_lens[i]
-
-    -- Check both respecting and ignoring case, prefer closest
     local d, abbr_len = H.string_abbr_dist(word_split, vim.split(cand, ''), min_abbr_len)
     if d < res_dist then
       res, res_dist = cand:sub(1, abbr_len), d
     end
-
+  end
+  for i, cand in ipairs(candidates) do
+    local min_abbr_len = abbr_lens[i]
     local cand_word_l = tolower(cand)
     local d_l, abbr_len_l = H.string_abbr_dist(word_split_l, vim.split(cand_word_l, ''), min_abbr_len)
     if d_l < res_dist then
@@ -592,6 +606,16 @@ if vim.fn.has('nvim-0.11') == 0 then
   -- Match alphanumeric characters to cursor's left, if present
   -- This is not 100% how it works, but good enough
   H.getcmdcomplpat = function() return vim.fn.getcmdline():sub(1, vim.fn.getcmdpos() - 1):match('%w+$') or '' end
+end
+
+H.get_wildchar = function()
+  local wc = vim.o.wildchar
+  if wc >= 0 then return vim.fn.nr2char(wc) end
+  -- Negative key means that 'wildchar' is mapped to some special non-printable
+  -- key (like <Down>). Those are represented with multiple bytes starting with
+  -- `k_special` (`\x80`). The following reverse engineers this logic.
+  wc = -wc
+  return '\x80' .. string.char(wc % 256) .. string.char(wc / 256)
 end
 
 return MiniCmdline

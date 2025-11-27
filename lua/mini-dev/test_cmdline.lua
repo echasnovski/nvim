@@ -54,6 +54,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('autocomplete.enable', true)
   expect_config('autocomplete.delay', 0)
   expect_config('autocomplete.predicate', vim.NIL)
+  expect_config('autocomplete.map_arrows', true)
   expect_config('autocorrect.enable', true)
   expect_config('autocorrect.func', vim.NIL)
   expect_config('preview_range.enable', true)
@@ -68,6 +69,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ autocomplete = 1 }, 'autocomplete', 'table')
   expect_config_error({ autocomplete = { enable = 1 } }, 'autocomplete.enable', 'boolean')
   expect_config_error({ autocomplete = { predicate = 1 } }, 'autocomplete.predicate', 'function')
+  expect_config_error({ autocomplete = { map_arrows = 1 } }, 'autocomplete.map_arrows', 'boolean')
   expect_config_error({ autocorrect = 1 }, 'autocorrect', 'table')
   expect_config_error({ autocorrect = { enable = 1 } }, 'autocorrect.enable', 'boolean')
   expect_config_error({ autocorrect = { func = 1 } }, 'autocorrect.func', 'function')
@@ -116,6 +118,22 @@ T['Autocomplete'] = new_set({
 
 T['Autocomplete']['works'] = function() MiniTest.skip() end
 
+T['Autocomplete']["works with different 'wildchar'"] = function()
+  MiniTest.skip()
+  child.cmd('set wildchar=<Down>')
+  type_keys(':', 'h')
+  child.expect_screenshot()
+end
+
+T['Autocomplete']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minicmdline_disable = true
+    MiniTest.skip()
+  end,
+})
+
 T['Autocorrect'] = new_set({
   hooks = {
     pre_case = function() load_module({ autocomplete = { enable = false }, preview_range = { enable = false } }) end,
@@ -136,6 +154,7 @@ T['Autocorrect']['works'] = function()
   end
 
   child.cmd('command MyCommand echo "Hello"')
+  child.cmd('command Git echo "World"')
 
   -- Should correct for common edit types
   validate('bbuffer', 'buffer') -- Deletion
@@ -152,12 +171,15 @@ T['Autocorrect']['works'] = function()
   validate('W', 'w')
   validate('Q', 'q')
 
-  -- Should prefer "ignore case" matches
+  -- Should respect "ignore case" matches
   validate('WrItE', 'write')
   validate('W', 'w')
   validate('NNO', 'nno')
 
   validate('myc', 'MyC')
+
+  -- Should prefer "respect case" abbreviation over "ignore case"
+  validate('%g', '%g')
 
   -- Should prefer transposition
   validate('ua', 'au')
@@ -351,6 +373,16 @@ T['Autocorrect']['uses correct state before final <CR>'] = function()
   eq(child.lua_get('_G.log'), { { word = 'q!', type = '' } })
 end
 
+T['Autocorrect']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minicmdline_disable = true
+    type_keys(':', 'seT', ' ')
+    validate_cmdline('seT ')
+  end,
+})
+
 T['Range preview'] = new_set({
   hooks = {
     pre_case = function() load_module({ autocomplete = { enable = false }, preview_range = { enable = false } }) end,
@@ -359,8 +391,19 @@ T['Range preview'] = new_set({
 
 T['Range preview']['works'] = function() MiniTest.skip() end
 
-T['Mappings'] = new_set()
+T['Range preview']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
+  parametrize = { { 'g' }, { 'b' } },
+}, {
+  test = function(var_type)
+    child[var_type].minicmdline_disable = true
+    MiniTest.skip()
+  end,
+})
 
-T['Mappings']['work'] = function() MiniTest.skip() end
+T['Arrow mappings'] = new_set()
+
+T['Arrow mappings']['work'] = function() MiniTest.skip() end
+
+T['Arrow mappings']['respect `config.autocomplete.map_arrows`'] = function() MiniTest.skip() end
 
 return T
