@@ -16,10 +16,18 @@ local type_keys = function(...) return child.type_keys(...) end
 local sleep = function(ms) helpers.sleep(ms, child) end
 --stylua: ignore end
 
+local test_dir = 'tests/dir-cmdline'
+
 -- Common test wrappers
 local forward_lua = function(fun_str)
   local lua_cmd = fun_str .. '(...)'
   return function(...) return child.lua_get(lua_cmd, { ... }) end
+end
+
+local validate_cmdline = function(line, pos)
+  eq(child.fn.mode(), 'c')
+  eq(child.fn.getcmdline(), line)
+  eq(child.fn.getcmdpos(), pos or line:len() + 1)
 end
 
 -- Time constants
@@ -105,9 +113,51 @@ T['default_autocomplete_predicate()']['works'] = function()
   eq(child.lua_get('MiniCmdline.default_autocomplete_predicate()'), true)
 end
 
-T['default_autocorrect_func()'] = new_set()
+T['default_autocorrect_func()'] = new_set({ hooks = { pre_case = load_module } })
 
-T['default_autocorrect_func()']['works'] = function() MiniTest.skip() end
+local default_autocorrect_func = forward_lua('MiniCmdline.default_autocorrect_func')
+
+T['default_autocorrect_func()']['works'] = function()
+  -- Most of the testing is done in 'Autocorrect' test case
+  local validate = function(data, ref) eq(default_autocorrect_func(data), ref) end
+
+  -- General
+  validate({ word = 'ste', type = 'command' }, 'set')
+  validate({ word = 'set', type = 'command' }, 'set')
+
+  -- Strict type
+  validate({ word = 'rndomhue', type = 'color' }, 'randomhue')
+
+  -- Not strict type
+  validate({ word = 'MniCmdline', type = 'augroup' }, 'MniCmdline')
+
+  -- Empty string
+  validate({ word = 'xxx', type = '' }, 'xxx')
+  validate({ word = '', type = 'command' }, '')
+  validate({ word = '', type = '' }, '')
+end
+
+T['default_autocorrect_func()']['respects `opts.strict_type`'] = function()
+  local validate = function(data, ref) eq(default_autocorrect_func(data, { strict_type = false }), ref) end
+  validate({ word = 'MniCmdline', type = 'augroup' }, 'MiniCmdline')
+  validate({ word = 'Nrmal', type = 'highlight' }, 'Normal')
+end
+
+T['default_autocorrect_func()']['respects `opts.get_candidates`'] = function()
+  local out = child.lua([[
+    _G.log = {}
+    local get_cand = function(...) table.insert(_G.log, { ... }); return { 'xxx' } end
+    return MiniCmdline.default_autocorrect_func({ word = 'ste', type = 'color' }, { get_candidates = get_cand })
+  ]])
+  eq(out, 'xxx')
+  eq(child.lua_get('_G.log'), { { { type = 'color', word = 'ste' } } })
+end
+
+T['default_autocorrect_func()']['validates arguments'] = function()
+  expect.error(function() default_autocorrect_func(1) end, '`data`.*table')
+  expect.error(function() default_autocorrect_func({ word = 1, type = 'command' }) end, '`data.word`.*string')
+  expect.error(function() default_autocorrect_func({ word = 'ste', type = 1 }) end, '`data.type`.*string')
+end
 
 -- Integration tests ==========================================================
 T['Autocomplete'] = new_set({
@@ -125,6 +175,30 @@ T['Autocomplete']["works with different 'wildchar'"] = function()
   child.expect_screenshot()
 end
 
+T['Autocomplete']['does not throw errors'] = function()
+  type_keys(':tag')
+  -- NOTE: Use `nvim_input` instead of `type_keys()` because the latter checks
+  -- `v:errmsg` to propagate the error. However, here on Neovim>=0.12 usage of
+  -- `vim.fn.wildtrigger()` *does* set `errmsg` but no error is actuall shown.
+  child.api.nvim_input(' ')
+  -- What actually should be tested is that there is no errors *shown*, but it
+  -- doesn't look easy, as behavior in child process and manual testing differ.
+  eq(child.cmd('messages'), '')
+  expect.no_match(child.v.errmsg, 'cmdline%.lua')
+end
+
+T['Autocomplete']['is not triggered when wildmenu is visible'] = function()
+  -- Regular test
+
+  -- In combination with autocorrection
+  MiniTest.skip('Currently does not work on Neovim<0.12')
+  child.lua('MiniCmdline.config.autocorrect.enable = true')
+  child.fn.chdir(test_dir)
+  child.cmd('argadd fileA fileB')
+  type_keys(':', 'argdel fla', ' ')
+  validate_cmdline('argdel fileA ')
+end
+
 T['Autocomplete']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
@@ -140,13 +214,7 @@ T['Autocorrect'] = new_set({
   },
 })
 
-local validate_cmdline = function(line, pos)
-  eq(child.fn.mode(), 'c')
-  eq(child.fn.getcmdline(), line)
-  eq(child.fn.getcmdpos(), pos or line:len() + 1)
-end
-
-T['Autocorrect']['works'] = function()
+T['Autocorrect']['works for commands'] = function()
   local validate = function(bad_word, ref_word)
     type_keys(':', bad_word, ' ')
     validate_cmdline(ref_word .. ' ')
@@ -200,6 +268,128 @@ T['Autocorrect']['works'] = function()
 
   -- Should work with command modifiers
   validate('abvelfet', 'aboveleft')
+
+  -- Should not correct `:=` command
+  -- validate('=123', '=123')
+  validate('=_G', '=_G')
+end
+
+T['Autocorrect']['works for not commands'] = function()
+  local validate_inprogress = function(input, ref)
+    type_keys(':', input, ' ')
+    validate_cmdline(ref .. ' ')
+    type_keys('<Esc>')
+  end
+  local validate_final = function(input, ref)
+    type_keys(':', input, '<CR>')
+    eq(child.fn.histget('cmd', -1), ref)
+  end
+
+  child.fn.chdir(test_dir)
+  child.cmd([[let &runtimepath.=','.getcwd()]])
+  child.cmd([[let &packpath.=','.getcwd()]])
+
+  -- arglist
+  child.cmd('argadd fileA fileB')
+  validate_inprogress('argdel fla', 'argdel fileA')
+  validate_final('argdel flb', 'argdel fileB')
+
+  -- buffer
+  child.cmd('edit fileA')
+  child.cmd('edit fileB')
+  -- - No in-progress check since `:buffer` expects single argument
+  validate_final('buffer flB', 'buffer fileB')
+
+  -- color
+  -- - No in-progress check since `:colorscheme` expects single argument
+  validate_final('colorscheme dfault', 'colorscheme default')
+
+  -- compiler
+  -- - No in-progress check since `:compiler` expects single argument
+  validate_final('compiler tstcompiler', 'compiler testcompiler')
+
+  -- diff_buffer
+  child.cmd('edit fileA')
+  child.cmd('diffsplit fileB')
+  -- - No in-progress check since `:diffput` expects single argument
+  validate_final('diffput flA', 'diffput fileA')
+
+  child.cmd('%bwipeout')
+  child.cmd('only')
+
+  -- event
+  validate_inprogress('au Cmdlinelve', 'au CmdlineLeave')
+  validate_final('au BfEnter', 'au BufEnter')
+  type_keys('<C-c>')
+
+  -- filetype
+  -- - No in-progress check since `:setfiletype` expects single argument
+  validate_final('setfiletype pthon', 'setfiletype python')
+
+  -- history
+  -- - No in-progress check since `:history` expects single argument
+  validate_final('history srch', 'history search')
+
+  -- keymap
+  -- Neovim<0.10 has no 'keymap' `:h :command-complete` value
+  if child.fn.has('nvim-0.10') == 1 then
+    validate_inprogress('set keymap=tstkeymap', 'set keymap=testkeymap')
+    validate_final('set keymap=tstkeymap', 'set keymap=testkeymap')
+  end
+
+  -- locale
+  -- - No in-progress check since `:language time` expects single argument
+  validate_final('language time PSX', 'language time POSIX')
+
+  -- mapclear
+  -- Neovim<0.11 has wrong `complpat` computation in this case
+  if child.fn.has('nvim-0.11') == 1 then
+    -- - No in-progress check since `:mapclear` expects single argument
+    validate_final({ 'mapclear ', '<', 'bfr', '>' }, 'mapclear <buffer>')
+  end
+
+  -- messages
+  -- - No in-progress check since `:messages` expects single argument
+  validate_final('messages clr', 'messages clear')
+
+  -- option
+  -- TODO
+  -- local validate_option = function(input, ref)
+  --   validate_inprogress(input, ref)
+  --   validate_final(input, ref)
+  -- end
+  -- validate_option('set expndtb', 'set expandtab')
+  -- validate_option('set noexpndtb', 'set noexpandtab')
+  -- validate_option('set ET', 'set et')
+  -- validate_option('set noET', 'set noet')
+  --
+  -- type_keys(':', 'set RTP+', '+')
+  -- validate_cmdline('set rtp+')
+  -- type_keys('<Esc>')
+  -- type_keys(':', 'set runtimepath+', '+')
+  -- validate_cmdline('set rtp+')
+  -- type_keys('<Esc>')
+
+  -- packadd
+  -- - No in-progress check since `:packadd` expects single argument
+  validate_final('packadd tstplugin', 'packadd testplugin')
+
+  -- sign
+  validate_inprogress('sign dfine', 'sign define')
+  validate_final('sign lst', 'sign list')
+
+  -- syntax
+  -- Neovim<0.10 does not set `compltype=syntax` in this case
+  if child.fn.has('nvim-0.10') == 1 then
+    validate_inprogress('set syntax=LUA', 'set syntax=lua')
+    validate_final('set syntax=LUA', 'set syntax=lua')
+  end
+
+  -- syntime
+  -- - No in-progress check since `:syntime` expects single argument
+  validate_final('syntime clr', 'syntime clear')
+
+  MiniTest.skip('Finish `option` type')
 end
 
 T['Autocorrect']['works multiple times'] = function()
@@ -218,11 +408,17 @@ T['Autocorrect']['works multiple times'] = function()
   validate_cmdline('aboveleft noautocmd sort ')
 end
 
-T['Autocorrect']['does not work in mappings'] = function()
+T['Autocorrect']['respects mappings'] = function()
+  -- Should not work if Command-line mode is both entered and exited
   child.cmd('nnoremap <C-x> :ehco<CR>')
   local ok, err = pcall(type_keys, '<C-x>')
   eq(ok, false)
   eq(err, 'E492: Not an editor command: ehco')
+
+  -- Should work if Command-line mode is only entered
+  child.cmd('nnoremap <C-y> :ehco')
+  type_keys('<C-y>', '<CR>')
+  eq(child.fn.histget('cmd', -1), 'echo')
 end
 
 T['Autocorrect']['can act after mappings appended text'] = function()
@@ -345,6 +541,45 @@ T['Autocorrect']['respects `config.autocorrect.func`'] = function()
 
   validate_no_change('srot')
   validate_no_change(nil)
+
+  -- Handles improper output
+  child.lua([[
+    _G.notify_log = {}
+    vim.notify = function(...) table.insert(_G.notify_log, { ... }) end
+    MiniCmdline.config.autocorrect.func = function() return 1 end
+  ]])
+  type_keys(':', 'srot', ' ')
+  validate_cmdline('srot ')
+  local warn_level = child.lua_get('vim.log.levels.WARN')
+  eq(child.lua_get('_G.notify_log'), { { '(mini.cmdline) Can not autocorrect for "srot"', warn_level } })
+end
+
+T['Autocorrect']['works just before final <CR>'] = function()
+  local validate = function(bad_word, ref_word)
+    type_keys(':', bad_word, '<CR>')
+    eq(child.fn.histget('cmd', -1), ref_word)
+    eq(child.fn.mode(), 'n')
+  end
+
+  local buf_id_other = child.api.nvim_create_buf(true, false)
+  validate('bnxxt', 'bnext')
+  eq(child.api.nvim_get_current_buf(), buf_id_other)
+  type_keys('<Esc>')
+
+  -- Should work with `!`
+  child.cmd('vsplit')
+  local win_id = child.api.nvim_get_current_win()
+  validate({ 'Q', '!' }, 'q!')
+  eq(child.api.nvim_win_is_valid(win_id), false)
+end
+
+T['Autocorrect']['is not applied when abandoning command line'] = function()
+  local validate = function(key)
+    type_keys(':', 'xxxx', key)
+    eq(child.fn.histget('cmd', -1), 'xxxx')
+  end
+  validate('<Esc>')
+  validate('<C-c>')
 end
 
 T['Autocorrect']['uses correct state before final <CR>'] = function()

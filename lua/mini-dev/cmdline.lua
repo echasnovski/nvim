@@ -50,8 +50,8 @@
 ---   manual |'wildchar'| pressing experience.
 ---   Requires Neovim>=0.11, but Neovim>=0.12 is recommended.
 ---
---- - Autocorrect words as-you-type. Only words that have  command names autocorrected by default.
----   TODO: Think about generalizing this.
+--- - Autocorrect words as-you-type. Only words that must come from a fixed set of
+---   candidates (like command names or help tags) are autocorrected by default.
 ---
 --- - Preview command range.
 ---
@@ -169,7 +169,21 @@ end
 --- of the command line. Editing already typed words does not trigger autocorrect
 --- (allows correcting the autocorrection).
 ---
+--- When to autocorrect is computed automatically based on |getcmdcomplpat()| after
+--- every key press: if it doesn't add its character to completion pattern, then
+--- the pattern before the key press is attempted to be corrected.
+--- There is also an autocorrection attempt for the last word just before
+--- executing the command.
+---
 --- Notes:
+--- - Default autocorrection is done only for words that must come from a fixed
+---   set of candidates (like command names or help tags) by choosing the one
+---   with the lowest string distance.
+---   See |MiniCmdline.default_autocorrect_func()| for details.
+---
+--- - If current command expects only a single argument (like |:help|), then
+---   autocorrection will happen only just before executing the command.
+---
 --- - This is not intended to be a fuzzy matching since it is too intrusive.
 ---   Use fuzzy completion for that (set up by default).
 ---
@@ -179,10 +193,6 @@ end
 --- Input data fields:
 --- - <word> `(string)` - word to be autocorrected. Never empty string.
 --- - <type> `(string)` - word type. Output of |getcmdcompltype()|.
----
---- Default autocorrection is done only for command names by choosing a valid
---- command abbreviation with the lowest string distance. See more details
---- in |MiniCmdline.default_autocorrect_func()|.
 ---
 ---# Preview range ~
 ---
@@ -225,25 +235,41 @@ MiniCmdline.default_autocomplete_predicate = function() return true end
 
 --- Default autocorrection function
 ---
---- Currently works only for command names and |:command-modifiers|
---- (i.e. `command` type).
---- TODO: Think about possible generalizations this.
----
---- It chooses a valid command abbreviation with the lowest Damerau–Levenshtein
---- distance (smallest number of deletion/insertion/substitution/transposition
---- needed to transform one word into another; slightly prefers transposition).
+--- - Return input word if `opts.strict_type` and input `type` is not proper.
+--- - Get candidates via `opts.get_candidates()`.
+---   Default: via |getcompletion()| with empty pattern and input `type`. except
+---   `'help'` type
+--- - Choose the candidate with the lowest Damerau–Levenshtein distance
+---   (smallest number of deletion/insertion/substitution/transposition needed
+---   to transform one word into another; slightly prefers transposition).
+---   Notes:
+---     - Type `'command'` also chooses from all valid candidate abbreviations.
+---     - Comparison is done both respecting and ignoring case.
 ---
 ---@param data table Input autocorrection data. As described in |MiniCmdline.config|.
----@param opts table|nil Options. Reserved for future use.
+---@param opts table|nil Options. Possible fields:
+---   - <strict_type> `(boolean)` - whether to restrict output only for types which
+---     must have words from a fixed set of candidates (like command or colorscheme
+---     names). Default: `true`.
+---   - <get_candidates> `(function)` - source of candidates. Will be called
+---     with `data` as argument and should return array of string candidates to
+---     choose from.
+---     Default: for most types -  |getcompletion()| with empty pattern and
+---     input `type`; for `help` type - all available help tags.
 ---
 ---@return string Autocorrected word.
 MiniCmdline.default_autocorrect_func = function(data, opts)
-  -- TODO: Make it work only for "useful" types: when the words **needs to be**
-  -- one of the available candidates
+  H.check_type('data', data, 'table')
+  H.check_type('data.word', data.word, 'string')
+  H.check_type('data.type', data.type, 'string')
+
+  opts = opts or {}
+  local strict_type = opts.strict_type == nil or opts.strict_type
+  if strict_type and not H.autocorrect_strict_types[data.type] then return data.word end
 
   -- Get all valid words
-  local ok, all = pcall(vim.fn.getcompletion, '', data.type)
-  if not ok or vim.tbl_contains(all, data.word) or data.type ~= 'command' then return data.word end
+  local all = vim.is_callable(opts.get_candidates) and opts.get_candidates(data) or H.get_autocorrect_candidates(data)
+  if vim.tbl_contains(all, data.word) or data.word == '' then return data.word end
 
   -- Make results stable in case several candidates have the same distance
   table.sort(all)
@@ -268,6 +294,59 @@ H.timers = {
 
 -- Autocomplete requires `noselect` flag of 'wildmode'. Present in Neovim>=0.11
 H.can_autocomplete = vim.fn.has('nvim-0.11') == 1
+
+-- Autocorrect types for which words *must* be from some fixed set
+-- Basically a subset of `:h :command-complete` which might lead to an error if
+-- word is not from a fixed set. Can be adjusted for more nuances.
+-- Reasons for not including a type:
+-- - The main reason is because type's usage can be done in context when
+--   creating a new object. Like `:edit new-file` for `file` type.
+-- - No `help` because there already is an autocorrection with a "sophisticated
+--   algorithm to decide which match is better than another one".
+--stylua: ignore
+H.autocorrect_strict_types = {
+  arglist       = true, -- file names in argument list
+  -- augroup       = true, -- autocmd groups
+  -- breakpoint    = true, -- |:breakadd| suboptions
+  buffer        = true, -- buffer names
+  color         = true, -- color schemes
+  command       = true, -- Ex command (and arguments)
+  compiler      = true, -- compilers
+  diff_buffer   = true, -- diff buffer names
+  -- dir           = true, -- directory names
+  -- dir_in_path   = true, -- directory names in |'cdpath'|
+  -- environment   = true, -- environment variable names
+  event         = true, -- autocommand events
+  -- expression    = true, -- Vim expression
+  -- file          = true, -- file and directory names
+  -- file_in_path  = true, -- file and directory names in |'path'|
+  filetype      = true, -- filetype names |'filetype'|
+  -- ['function']  = true, -- function name
+  -- help          = true, -- help subjects
+  -- highlight     = true, -- highlight groups
+  history       = true, -- |:history| suboptions
+  keymap        = true, -- keyboard mappings
+  locale        = true, -- locale names (as output of locale -a)
+  -- lua           = true, -- Lua expression |:lua|
+  mapclear      = true, -- buffer argument
+  -- mapping       = true, -- mapping name
+  -- menu          = true, -- menus
+  messages      = true, -- |:messages| suboptions
+  -- TODO: Make 'option' correction work
+  -- option        = true, -- options
+  packadd       = true, -- optional package |pack-add| names
+  -- runtime       = true, -- file and directory names in |'runtimepath'|
+  -- scriptnames   = true, -- sourced script names
+  -- shellcmd      = true, -- Shell command
+  -- shellcmdline  = true, -- First is a shell command and subsequent ones are filenames
+  sign          = true, -- |:sign| suboptions
+  syntax        = true, -- syntax file names |'syntax'|
+  syntime       = true, -- |:syntime| suboptions
+  -- tag           = true, -- tags
+  -- tag_listfiles = true, -- tags, file names are shown when CTRL-D is hit
+  -- user          = true, -- user names
+  -- var           = true, -- user variables
+}
 
 -- Various cache to use during command line edit
 H.cache = {}
@@ -350,7 +429,7 @@ H.on_cmdline_enter = function()
     wildchar = H.get_wildchar(),
     cmd_type = vim.fn.getcmdtype(),
     state = H.get_cmd_state(),
-    state_prev = {},
+    state_prev = H.get_cmd_state(true),
   }
   H.cache.autocomplete_predicate = H.cache.config.autocomplete.predicate or MiniCmdline.default_autocomplete_predicate
 end
@@ -371,17 +450,14 @@ end
 
 H.on_cmdline_leave = function()
   if H.cache.config == nil then return end
-  if H.cache.config.autocorrect.enable then H.autocorrect(true) end
+  if H.cache.config.autocorrect.enable and not vim.v.event.abort then H.autocorrect(true) end
   H.cache = {}
 end
 
-H.get_cmd_state = function()
-  return {
-    complpat = H.getcmdcomplpat(),
-    compltype = vim.fn.getcmdcompltype(),
-    line = vim.fn.getcmdline(),
-    pos = vim.fn.getcmdpos(),
-  }
+H.get_cmd_state = function(is_init)
+  local compltype = vim.fn.getcmdcompltype()
+  if is_init then return { complpat = '', compltype = compltype, line = '', pos = 0 } end
+  return { complpat = H.getcmdcomplpat(), compltype = compltype, line = vim.fn.getcmdline(), pos = vim.fn.getcmdpos() }
 end
 
 -- Autocomplete ---------------------------------------------------------------
@@ -415,13 +491,15 @@ if vim.fn.has('nvim-0.12') == 0 then
     -- The `vim.fn.getcmdcompltype() == ''` condition is too wide as it denies
     -- legitimate cases of when there are available completion candidates.
     -- Like in user commands created with `vim.api.nvim_create_user_command()`.
-    return #vim.fn.getcompletion(H.cache.state.line:sub(1, H.cache.state.pos - 1), 'cmdline') == 0
+    local line_before_pos = H.cache.state.line:sub(1, H.cache.state.pos - 1)
+    -- `getcompletion` may result in error, like after `:ltag `
+    local ok, candidates = pcall(vim.fn.getcompletion, line_before_pos, 'cmdline')
+    return not (ok and #candidates > 0)
   end
 end
 
 H.trigger_complete = function()
   if vim.fn.mode() ~= 'c' then return end
-  H.cache.wildmenu_state = 'show'
   H.trigger_wild()
 end
 
@@ -469,7 +547,44 @@ H.autocorrect = function(is_final)
   vim.fn.setcmdline(new_line, new_line:len() + 1)
 end
 
+H.get_autocorrect_candidates = function(data)
+  if data.type == 'help' then
+    local help_buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[help_buf].buftype = 'help'
+    -- - NOTE: no dedicated buffer name because it is immediately wiped out
+    local tags = vim.api.nvim_buf_call(help_buf, function() return vim.fn.taglist('.*') end)
+    vim.api.nvim_buf_delete(help_buf, { force = true })
+    return vim.tbl_map(function(x) return x.name end, tags)
+  end
+
+  -- TODO: This doesn't quite work with `set noxxx` as it is implemented as
+  -- a two-part completion.
+  --
+  -- if data.type == 'option' then
+  --   local all = vim.fn.getcompletion('', 'option')
+  --   local all_info = vim.api.nvim_get_all_options_info()
+  --   for i = 1, #all do
+  --     local name = all[i]
+  --     local info = all_info[name] or {}
+  --     local is_bool = info.type == 'boolean'
+  --     if is_bool then table.insert(all, 'no' .. name) end
+  --     if info.shortname ~= '' then
+  --       table.insert(all, info.shortname)
+  --       if is_bool then table.insert(all, 'no' .. info.shortname) end
+  --     end
+  --   end
+  --   MiniMisc.log_add('option candidates', { all = all })
+  --   return all
+  -- end
+
+  local ok, all = pcall(vim.fn.getcompletion, '', data.type)
+  return ok and all or { data.word }
+end
+
 H.get_nearest_command = function(ref, all)
+  -- Do not alter `:=` command, as it is not a command special Lua shorthand
+  if ref:sub(1, 1) == '=' then return ref end
+
   -- Allow trailing special punctuation (specific to commands)
   local word, suffix = ref:match('^(.+)([!|]?)$')
 
