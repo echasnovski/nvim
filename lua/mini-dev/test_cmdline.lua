@@ -274,7 +274,56 @@ T['Autocorrect']['works for commands'] = function()
   validate('=_G', '=_G')
 end
 
-T['Autocorrect']['works for not commands'] = function()
+T['Autocorrect']['works for options'] = function()
+  local validate_option = function(input, ref)
+    -- In progress
+    type_keys(':', input, ' ')
+    validate_cmdline(ref .. ' ')
+    type_keys('<Esc>')
+
+    -- Final
+    type_keys(':', input, '<CR>')
+    eq(child.fn.histget('cmd', -1), ref)
+  end
+
+  -- NOTE: Need to emulate `n-o-...` and `i-n-v-...` as separate keys as these
+  -- case detection relies on user interactively typing keys
+  validate_option('set expndtb', 'set expandtab')
+  validate_option({ 'set ', 'n', 'o', 'expndtb' }, 'set noexpandtab')
+  validate_option({ 'set ', 'i', 'n', 'v', 'expndtb' }, 'set invexpandtab')
+  validate_option('set ET', 'set et')
+  validate_option({ 'set ', 'n', 'o', 'ET' }, 'set noet')
+  validate_option({ 'set ', 'i', 'n', 'v', 'ET' }, 'set invet')
+
+  validate_option('setlocal expndtb', 'setlocal expandtab')
+
+  -- Should work multiple times
+  type_keys(':', 'set ET', ' ', 'inorecase', ' ', 'nowrp', ' ', 'invmgic', ' ')
+  validate_cmdline('set et ignorecase nowrap invmagic ')
+  type_keys('<Esc>')
+
+  -- Correction when option is followed by not space
+  local validate_option_char = function(char)
+    -- Similarly to `n-o-...` case, need to emulate key before tested character
+    type_keys(':', 'set lstchar', 's', char)
+    validate_cmdline('set listchars' .. char)
+    type_keys('<Esc>')
+
+    type_keys(':', 'set LC', 'S', char)
+    validate_cmdline('set lcs' .. char)
+    type_keys('<Esc>')
+  end
+
+  validate_option_char('=')
+  validate_option_char('?')
+  validate_option_char('!')
+  validate_option_char('&')
+  validate_option_char('^')
+  validate_option_char('+')
+  validate_option_char('-')
+end
+
+T['Autocorrect']['works for other types'] = function()
   local validate_inprogress = function(input, ref)
     type_keys(':', input, ' ')
     validate_cmdline(ref .. ' ')
@@ -339,7 +388,8 @@ T['Autocorrect']['works for not commands'] = function()
 
   -- locale
   -- - No in-progress check since `:language time` expects single argument
-  validate_final('language time PSX', 'language time POSIX')
+  -- No easy way to test locales on non-Linux
+  if child.fn.has('linux') == 1 then validate_final('language time PSX', 'language time POSIX') end
 
   -- mapclear
   -- Neovim<0.11 has wrong `complpat` computation in this case
@@ -351,24 +401,6 @@ T['Autocorrect']['works for not commands'] = function()
   -- messages
   -- - No in-progress check since `:messages` expects single argument
   validate_final('messages clr', 'messages clear')
-
-  -- option
-  -- TODO
-  -- local validate_option = function(input, ref)
-  --   validate_inprogress(input, ref)
-  --   validate_final(input, ref)
-  -- end
-  -- validate_option('set expndtb', 'set expandtab')
-  -- validate_option('set noexpndtb', 'set noexpandtab')
-  -- validate_option('set ET', 'set et')
-  -- validate_option('set noET', 'set noet')
-  --
-  -- type_keys(':', 'set RTP+', '+')
-  -- validate_cmdline('set rtp+')
-  -- type_keys('<Esc>')
-  -- type_keys(':', 'set runtimepath+', '+')
-  -- validate_cmdline('set rtp+')
-  -- type_keys('<Esc>')
 
   -- packadd
   -- - No in-progress check since `:packadd` expects single argument

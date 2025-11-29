@@ -332,8 +332,7 @@ H.autocorrect_strict_types = {
   -- mapping       = true, -- mapping name
   -- menu          = true, -- menus
   messages      = true, -- |:messages| suboptions
-  -- TODO: Make 'option' correction work
-  -- option        = true, -- options
+  option        = true, -- options
   packadd       = true, -- optional package |pack-add| names
   -- runtime       = true, -- file and directory names in |'runtimepath'|
   -- scriptnames   = true, -- sourced script names
@@ -441,6 +440,9 @@ H.on_cmdline_changed = function()
   -- Act only on actual line change
   local state = H.get_cmd_state()
   if state.line == H.cache.state.line then return end
+
+  -- Update state accounting for some edge cases
+  if H.cache.state_prev.compltype == 'option' then H.adjust_option_cmd_state(state) end
   H.cache.state_prev, H.cache.state = H.cache.state, state
 
   if config.autocomplete.enable and H.can_autocomplete then H.autocomplete() end
@@ -458,6 +460,20 @@ H.get_cmd_state = function(is_init)
   local compltype = vim.fn.getcmdcompltype()
   if is_init then return { complpat = '', compltype = compltype, line = '', pos = 0 } end
   return { complpat = H.getcmdcomplpat(), compltype = compltype, line = vim.fn.getcmdline(), pos = vim.fn.getcmdpos() }
+end
+
+H.adjust_option_cmd_state = function(state)
+  -- Cases like `set nowrap invmagic` are completed specially. After `no`/`inv`
+  -- there is a specialized completion only for boolean options. In practice it
+  -- results into `compltype=''` and `complpat=<text after no/inv>`.
+  -- This intefers with how autocorrection is detected, as it relies on whole
+  -- `nowrap` / `invmagic` to be a singular complat *with compltype=option*.
+  --
+  -- The solution is to detect cases "it was compltype=option but now it isn't"
+  -- and try to expand complpat to match the whole word on cursor's left.
+  if state.compltype == 'option' then return end
+  state.complpat = state.line:sub(1, state.pos - 1):match(' (%w+)$') or ''
+  state.compltype = state.complpat ~= nil and 'option' or state.compltype
 end
 
 -- Autocomplete ---------------------------------------------------------------
@@ -557,25 +573,22 @@ H.get_autocorrect_candidates = function(data)
     return vim.tbl_map(function(x) return x.name end, tags)
   end
 
-  -- TODO: This doesn't quite work with `set noxxx` as it is implemented as
-  -- a two-part completion.
-  --
-  -- if data.type == 'option' then
-  --   local all = vim.fn.getcompletion('', 'option')
-  --   local all_info = vim.api.nvim_get_all_options_info()
-  --   for i = 1, #all do
-  --     local name = all[i]
-  --     local info = all_info[name] or {}
-  --     local is_bool = info.type == 'boolean'
-  --     if is_bool then table.insert(all, 'no' .. name) end
-  --     if info.shortname ~= '' then
-  --       table.insert(all, info.shortname)
-  --       if is_bool then table.insert(all, 'no' .. info.shortname) end
-  --     end
-  --   end
-  --   MiniMisc.log_add('option candidates', { all = all })
-  --   return all
-  -- end
+  if data.type == 'option' then
+    local all = {}
+    for name, info in pairs(vim.api.nvim_get_all_options_info()) do
+      table.insert(all, name)
+
+      local is_bool = info.type == 'boolean'
+      table.insert(all, is_bool and ('no' .. name) or nil)
+      table.insert(all, is_bool and ('inv' .. name) or nil)
+
+      local has_shortname = info.shortname ~= ''
+      table.insert(all, has_shortname and info.shortname or nil)
+      table.insert(all, (has_shortname and is_bool) and ('no' .. info.shortname) or nil)
+      table.insert(all, (has_shortname and is_bool) and ('inv' .. info.shortname) or nil)
+    end
+    return all
+  end
 
   local ok, all = pcall(vim.fn.getcompletion, '', data.type)
   return ok and all or { data.word }
