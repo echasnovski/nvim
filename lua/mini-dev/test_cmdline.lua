@@ -50,6 +50,18 @@ T['setup()']['creates side effects'] = function()
 
   -- Global variable
   eq(child.lua_get('type(_G.MiniCmdline)'), 'table')
+
+  -- Autocommand group
+  eq(child.fn.exists('#MiniCmdline'), 1)
+
+  -- Highlight groups
+  child.cmd('hi clear')
+  load_module()
+  local has_highlight = function(group, value) expect.match(child.cmd_capture('hi ' .. group), value) end
+
+  has_highlight('MiniCmdlinePreviewBorder', 'links to FloatBorder')
+  has_highlight('MiniCmdlinePreviewNormal', 'links to NormalFloat')
+  has_highlight('MiniCmdlinePreviewTitle', 'links to FloatTitle')
 end
 
 T['setup()']['creates `config` field'] = function()
@@ -66,6 +78,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('autocorrect.enable', true)
   expect_config('autocorrect.func', vim.NIL)
   expect_config('preview_range.enable', true)
+  expect_config('preview_range.window', { config = {}, winblend = 25 })
 end
 
 T['setup()']['validates `config` argument'] = function()
@@ -83,6 +96,15 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ autocorrect = { func = 1 } }, 'autocorrect.func', 'function')
   expect_config_error({ preview_range = 1 }, 'preview_range', 'table')
   expect_config_error({ preview_range = { enable = 1 } }, 'preview_range.enable', 'boolean')
+  expect_config_error({ preview_range = { window = 1 } }, 'preview_range.window', 'table')
+  expect_config_error({ preview_range = { window = { config = 1 } } }, 'preview_range.window.config', 'table or callab')
+  expect_config_error({ preview_range = { window = { winblend = 'a' } } }, 'preview_range.window.winblend', 'number')
+end
+
+T['setup()']['ensures colors'] = function()
+  load_module()
+  child.cmd('colorscheme default')
+  expect.match(child.cmd_capture('hi MiniCmdlinePreviewBorder'), 'links to FloatBorder')
 end
 
 T['setup()']['sets recommended option values'] = function()
@@ -108,9 +130,36 @@ end
 
 T['default_autocomplete_predicate()'] = new_set()
 
+local default_autocomplete_predicate = forward_lua('MiniCmdline.default_autocomplete_predicate')
+
 T['default_autocomplete_predicate()']['works'] = function()
-  load_module()
-  eq(child.lua_get('MiniCmdline.default_autocomplete_predicate()'), true)
+  load_module({ autocorrect = { enable = false }, preview_range = { enable = false } })
+  local validate = function(key, ref)
+    type_keys(key)
+    eq(default_autocomplete_predicate(), ref)
+  end
+
+  type_keys(':')
+  eq(default_autocomplete_predicate(), false)
+  validate('1', false)
+  validate(',', false)
+  validate('2', false)
+  validate(' ', false)
+  validate('h', true)
+  validate(' ', true)
+  validate("'", true)
+  type_keys('<Esc>')
+
+  type_keys(':')
+  validate(' ', false)
+  validate('h', true)
+  validate(' ', true)
+  validate("'", true)
+  type_keys('<Esc>')
+
+  -- Should work outside of Command-line mode
+  type_keys('<Esc>')
+  eq(default_autocomplete_predicate(), false)
 end
 
 T['default_autocorrect_func()'] = new_set({ hooks = { pre_case = load_module } })
@@ -657,6 +706,33 @@ T['Range preview'] = new_set({
 })
 
 T['Range preview']['works'] = function() MiniTest.skip() end
+
+T['Range preview']['works after deleting text'] = function()
+  -- With <BS>
+
+  -- With <C-w>
+
+  -- With <C-u>
+
+  MiniTest.skip()
+end
+
+T['Range preview']['is not shown after visual selection'] = function()
+  -- Otherwise it hides visual selection, which itself is kind of range preview
+  MiniTest.skip()
+end
+
+T['Range preview']['can be hidden and opened within same session'] = function() MiniTest.skip() end
+
+T['Range preview']['works if range is present immediately'] = function()
+  child.cmd('nnoremap <C-x> :2,3')
+  MiniTest.skip()
+end
+
+T['Range preview']['works with out-of-bounds values'] = function()
+  -- Both `from` and `to`
+  MiniTest.skip()
+end
 
 T['Range preview']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
