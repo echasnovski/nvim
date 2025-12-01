@@ -159,8 +159,16 @@ end
 --- flicker (thanks to |wildtrigger()|).
 ---
 --- `autocomplete.predicate` defines a condition of whether to trigger completion
---- at the current the command line state. Should return `true` to show
---- completion and `false` otherwise.
+--- at the current command line state. Should return `true` to show completion
+--- and `false` otherwise.
+---
+--- TODO: It takes no arguments, which means that cases like `:10` and
+--- `:10s<BS>` can not be differntiated. This is a problem on Neovim>=0.12
+--- since the second case results in a stale wildmenu (which seems to be an).
+--- Either add a `data` argument with something like `line` and `line_prev`
+--- fields to help differentiate these cases, or rethink the whole `predicate`
+--- completely.
+---
 --- Default: |MiniCmdline.default_autocomplete_predicate()| (always show).
 --- Example of blocking completion based on completion type (as some may be slow): >lua
 ---
@@ -209,6 +217,10 @@ end
 ---# Preview range ~
 ---
 --- TODO
+---
+--- Notes:
+--- - Intentionally hides Visual seletion if Command-line mode is entered directly
+---   from it. Preview of `'<,'>` already visualizes the selection.
 MiniCmdline.config = {
   -- Autocompletion: show `:h 'wildmenu'` as you type
   autocomplete = {
@@ -242,8 +254,8 @@ MiniCmdline.config = {
       -- Floating window config
       config = {},
 
-      -- Value of 'winblend' option
-      winblend = 25,
+      -- Symbols used to indicate range
+      symbols = { single = '🭬', left = '┌', mid = '┊', right = '└' },
     },
   },
 }
@@ -396,7 +408,11 @@ H.setup_config = function(config)
   if not (type(preview_win_config) == 'table' or vim.is_callable(preview_win_config)) then
     H.error('`preview_range.window.config` should be table or callable, not ' .. type(preview_win_config))
   end
-  H.check_type('preview_range.window.winblend', config.preview_range.window.winblend, 'number')
+  H.check_type('preview_range.window.symbols', config.preview_range.window.symbols, 'table')
+  H.check_type('preview_range.window.symbols.single', config.preview_range.window.symbols.single, 'string')
+  H.check_type('preview_range.window.symbols.left', config.preview_range.window.symbols.left, 'string')
+  H.check_type('preview_range.window.symbols.mid', config.preview_range.window.symbols.mid, 'string')
+  H.check_type('preview_range.window.symbols.right', config.preview_range.window.symbols.right, 'string')
 
   return config
 end
@@ -442,11 +458,8 @@ H.create_autocommands = function()
   au('CmdlineChanged', '*', vim.schedule_wrap(H.on_cmdline_changed), 'Act on Command line change')
   au('CmdlineLeave', '*', H.on_cmdline_leave, 'Act on Command line leave')
 
-  -- TODO: Probably add autocommand to detect Visual->Command-line mode
-  -- transition to not show range preview in this case
-
-  -- TODO: Maybe here autoreact to change in command line height?
-  au('VimResized', '*', vim.schedule_wrap(function() H.preview_range(true) end), 'Adjust range preview')
+  au('VimResized', '*', function() H.preview_range(true) end, 'Adjust range preview')
+  au('CmdwinEnter', '*', function() H.preview_hide() end, 'Hide range preview')
 
   au('ColorScheme', '*', H.create_default_hl, 'Ensure colors')
 end
@@ -472,6 +485,7 @@ H.on_cmdline_enter = function()
   if H.is_disabled() or vim.fn.mode() ~= 'c' then return end
 
   H.cache = {
+    buf_id = vim.api.nvim_get_current_buf(),
     cmd_type = vim.fn.getcmdtype(),
     config = H.get_config(),
     preview = {},
@@ -480,7 +494,9 @@ H.on_cmdline_enter = function()
     wildchar = H.get_wildchar(),
   }
   H.cache.autocomplete_predicate = H.cache.config.autocomplete.predicate or MiniCmdline.default_autocomplete_predicate
+  H.cache.buf_is_cmdwin = vim.fn.getbufinfo(H.cache.buf_id)[1].command == 1
 
+  MiniCmdline._preview_range_statuscolumn = H.make_preview_range_statuscolumn()
   if H.cache.config.preview_range.enable then H.preview_range() end
 end
 
@@ -506,26 +522,21 @@ H.on_cmdline_leave = function()
   if H.cache.config.autocorrect.enable and not vim.v.event.abort then H.autocorrect(true) end
   H.preview_hide()
   H.cache = {}
+  MiniCmdline._preview_range_statuscolumn = nil
 end
 
 H.get_cmd_state = function(is_init)
   local compltype = vim.fn.getcmdcompltype()
-  if is_init then return { complpat = '', compltype = compltype, line = '', pos = 0, cmd = {} } end
-  -- TODO: Potentially optimize to not parse whole line on every keystroke.
-  -- It is only needed for range preview and range can not change after command
-  -- is entered. It is enough to only track relevant range and it can be not
-  -- updated if the text is added (not deleted) past the command.
-  local line = vim.fn.getcmdline()
-  local cmd = H.parse_cmd(line)
-  return { complpat = H.getcmdcomplpat(), compltype = compltype, line = line, pos = vim.fn.getcmdpos(), cmd = cmd }
+  if is_init then return { complpat = '', compltype = compltype, line = '', pos = 1, cmd = {} } end
+  return { complpat = H.getcmdcomplpat(), compltype = compltype, line = vim.fn.getcmdline(), pos = vim.fn.getcmdpos() }
 end
 
 H.adjust_option_cmd_state = function(state)
   -- Cases like `set nowrap invmagic` are completed specially. After `no`/`inv`
   -- there is a specialized completion only for boolean options. In practice it
   -- results into `compltype=''` and `complpat=<text after no/inv>`.
-  -- This intefers with how autocorrection is detected, as it relies on whole
-  -- `nowrap` / `invmagic` to be a singular complat *with compltype=option*.
+  -- This interferes with how autocorrection is detected, as it relies on whole
+  -- `nowrap` / `invmagic` to be a single complpat *with compltype=option*.
   --
   -- The solution is to detect cases "it was compltype=option but now it isn't"
   -- and try to expand complpat to match the whole word on cursor's left.
@@ -598,9 +609,10 @@ H.autocorrect = function(is_final)
   local line, line_prev = state.line, state_prev.line
   local pos, pos_prev = state.pos, state_prev.pos
 
-  -- Act only at line end. It allows a natural way to adjust autocorrected text
-  -- by going back and editing it. This is also easier to implement.
-  local is_text_append = vim.startswith(line, line_prev) and pos == (line:len() + 1) and pos > pos_prev
+  -- Act only when text is appended. It makes it natural to tweak autocorrected
+  -- text by going back and editing it. This is also easier to implement.
+  local is_at_end, was_at_end = (pos - 1) == line:len(), (pos_prev - 1) == line_prev:len()
+  local is_text_append = vim.startswith(line, line_prev) and is_at_end and was_at_end
   local is_word_finished = not vim.startswith(state.complpat, state_prev.complpat)
 
   if not (is_text_append and (is_word_finished or is_final)) then return end
@@ -653,7 +665,7 @@ H.get_autocorrect_candidates = function(data)
 end
 
 H.get_nearest_command = function(ref, all)
-  -- Do not alter `:=` command, as it is not a command special Lua shorthand
+  -- Do not alter `:=` command, as it is a special Lua shorthand command
   if ref:sub(1, 1) == '=' then return ref end
 
   -- Allow trailing special punctuation (specific to commands)
@@ -761,30 +773,46 @@ end
 -- Preview range --------------------------------------------------------------
 H.preview_range = function(force)
   -- Decide if preview needs to be shown or hidden
-  if H.cache.state == nil then return end
-  local range = H.cache.state.cmd.range
-  if range == nil then return H.preview_hide() end
+  if not (H.cache.state ~= nil and H.cache.cmd_type == ':' and vim.fn.mode() == 'c' and not H.cache.buf_is_cmdwin) then
+    return
+  end
 
+  local line = H.cache.state.line
+  if line:find('%S') == nil then H.preview_hide() end
+
+  -- NOTE: Do not hide preview on failed parsing to account for valid range
+  -- (since preview was shown earlier) but invalid rest. Like `:1,2aaaaa` or
+  -- `:1,/aaa` (not finished `/xxx/` range entry).
   local cur_range = H.cache.preview.range or {}
+  local range = H.parse_cmd(line).range or cur_range
+  if range[1] == nil and range[2] == nil then return H.preview_hide() end
+
+  -- NOTE: Force preview update if command line height has changed when typing
+  local cmdheight = math.ceil((vim.fn.strdisplaywidth(line) + 1) / vim.o.columns)
+  cmdheight = math.max(cmdheight, vim.o.cmdheight)
+  force = force or cmdheight ~= H.cache.preview.cmdheight
   if not force and range[1] == cur_range[1] and range[2] == cur_range[2] then return end
 
-  -- Normalize range
-  local n_lines = vim.api.nvim_buf_line_count(0)
-  local from = range[1] ~= nil and math.min(math.max(range[1], 1), n_lines) or nil
-  local to = range[2] ~= nil and math.min(math.max(range[2], 1), n_lines) or nil
-  if from == nil and to == nil then return H.preview_hide() end
-
-  local is_inverted = from ~= nil and to ~= nil and to < from
-  from, to = is_inverted and to or from, is_inverted and from or to
-
-  -- Show range
-  H.cache.preview.win_id = H.preview_show(from, to, is_inverted)
   H.cache.preview.range = range
+  H.cache.preview.cmdheight = cmdheight
+
+  -- Normalize and show range
+  local n_lines = vim.api.nvim_buf_line_count(0)
+  local left, right = range[1] or range[2], range[2] or range[1]
+  left = math.min(math.max(left, 1), n_lines)
+  right = math.min(math.max(right, 1), n_lines)
+
+  H.cache.preview.left = left
+  H.cache.preview.right = right
+  H.cache.preview.win_id = H.preview_show(left, right)
 end
 
-H.preview_show = function(from, to, is_inverted)
+H.preview_show = function(left, right)
+  local from = right < left and right or left
+  local to = right < left and left or right
+
   -- Ensure opened window
-  local config = H.preview_get_config(from, to, is_inverted)
+  local config = H.preview_get_config(from, to)
   local win_id = H.cache.preview.win_id
   win_id = H.is_valid_win(win_id) and win_id or vim.api.nvim_open_win(0, false, config)
   vim.api.nvim_win_set_config(win_id, config)
@@ -795,8 +823,9 @@ H.preview_show = function(from, to, is_inverted)
   vim.wo[win_id].foldlevel = 0
   vim.wo[win_id].foldmethod = 'manual'
   vim.wo[win_id].foldminlines = 1
+  vim.wo[win_id].foldtext = '""'
   vim.wo[win_id].number = true
-  vim.wo[win_id].winblend = H.cache.config.preview_range.window.winblend
+  vim.wo[win_id].statuscolumn = '%{%v:lua.MiniCmdline._preview_range_statuscolumn()%}'
   vim.wo[win_id].winhighlight = 'NormalFloat:MiniCmdlinePreviewNormal'
     .. ',FloatBorder:MiniCmdlinePreviewBorder'
     .. ',FloatTitle:MiniCmdlinePreviewTitle'
@@ -805,9 +834,9 @@ H.preview_show = function(from, to, is_inverted)
 
   -- Make fold between range lines
   vim.api.nvim_win_call(win_id, function()
-    pcall(vim.cmd, '%foldopen!')
+    vim.cmd('normal! zE')
     vim.cmd('normal! zt')
-    if from ~= nil and to ~= nil and to - from > 1 then vim.cmd(string.format('%s,%sfold', from + 1, to - 1)) end
+    if to - from > 2 then vim.cmd(string.format('%s,%sfold', from + 1, to - 1)) end
   end)
 
   -- NOTE: Need explicit redraw because otherwise window is not shown
@@ -815,30 +844,21 @@ H.preview_show = function(from, to, is_inverted)
   return win_id
 end
 
-H.preview_get_config = function(from, to, is_inverted)
-  -- TODO: Make it more robust to also adjust after command line height changes
-  -- during typing too much text. On Neovim>=0.11 using `relative='laststatus'`
-  -- migth be doable (especially if it reacts to change in command height when
-  -- typing).
-  local cmdheight = math.max(vim.o.cmdheight, 1)
-
-  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
-  local has_statusline = vim.o.laststatus > 0
-  local max_height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0)
-  local max_width = vim.o.columns
+H.preview_get_config = function(from, to)
+  local cmdheight = H.cache.preview.cmdheight
 
   local default_config = { relative = 'editor', style = 'minimal', zindex = 249 }
   default_config.anchor = 'SE'
-  default_config.row = vim.o.lines - cmdheight
+  default_config.row = math.max(vim.o.lines - cmdheight, 1)
   default_config.col = 1
   default_config.width = vim.o.columns
-  default_config.height = (from == nil or to == nil or from == to) and 1 or ((to - from) == 1 and 2 or 3)
+  default_config.height = from == to and 1 or ((to - from) == 1 and 2 or 3)
 
   default_config.border = (vim.fn.exists('+winborder') == 0 or vim.o.winborder == '') and 'single' or nil
-  default_config.title = ' Range' .. (is_inverted and ' (inverted)' or '') .. ' '
+  default_config.title = ' Range '
   default_config.focusable = false
 
-  local win_config = H.cache.config.preview_range.window.config
+  local win_config = H.cache.config.preview_range.win_config
   if vim.is_callable(win_config) then win_config = win_config() end
   local config = vim.tbl_deep_extend('force', default_config, win_config or {})
 
@@ -846,8 +866,8 @@ H.preview_get_config = function(from, to, is_inverted)
 
   -- Tweak config values to ensure they are proper, accounting for border
   local offset = config.border == 'none' and 0 or 2
-  config.height = math.min(config.height, max_height - offset)
-  config.width = math.min(config.width, max_width - offset)
+  config.height = math.max(math.min(config.height, vim.o.lines - cmdheight - offset), 1)
+  config.width = math.min(config.width, vim.o.columns - offset)
 
   return config
 end
@@ -856,6 +876,19 @@ H.preview_hide = function()
   local info = H.cache.preview or {}
   H.win_close_safely(info.win_id)
   H.cache.preview = {}
+end
+
+H.make_preview_range_statuscolumn = function()
+  local symbols = H.cache.config.preview_range.window.symbols
+  return function()
+    local left, right = H.cache.preview.left, H.cache.preview.right
+    local lnum = vim.v.lnum
+    if left == right and lnum == left then return symbols.single end
+    if lnum == left then return symbols.left .. lnum end
+    if lnum == right then return symbols.right .. lnum end
+    if (left < lnum and lnum < right) or (right < lnum and lnum < left) then return symbols.mid end
+    return lnum
+  end
 end
 
 -- Utilities ------------------------------------------------------------------

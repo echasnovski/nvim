@@ -78,7 +78,8 @@ T['setup()']['creates `config` field'] = function()
   expect_config('autocorrect.enable', true)
   expect_config('autocorrect.func', vim.NIL)
   expect_config('preview_range.enable', true)
-  expect_config('preview_range.window', { config = {}, winblend = 25 })
+  expect_config('preview_range.window.config', {})
+  expect_config('preview_range.window.symbols', { single = '🭬', left = '┌', mid = '┊', right = '└' })
 end
 
 T['setup()']['validates `config` argument'] = function()
@@ -98,7 +99,18 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ preview_range = { enable = 1 } }, 'preview_range.enable', 'boolean')
   expect_config_error({ preview_range = { window = 1 } }, 'preview_range.window', 'table')
   expect_config_error({ preview_range = { window = { config = 1 } } }, 'preview_range.window.config', 'table or callab')
-  expect_config_error({ preview_range = { window = { winblend = 'a' } } }, 'preview_range.window.winblend', 'number')
+  expect_config_error({ preview_range = { window = { symbols = 1 } } }, 'preview_range.window.symbols', 'table')
+  local expect_symbol = function(name)
+    expect_config_error(
+      { preview_range = { window = { symbols = { [name] = 1 } } } },
+      'preview_range.window.symbols.' .. name,
+      'string'
+    )
+  end
+  expect_symbol('single')
+  expect_symbol('left')
+  expect_symbol('mid')
+  expect_symbol('right')
 end
 
 T['setup()']['ensures colors'] = function()
@@ -234,6 +246,11 @@ T['Autocomplete']['does not throw errors'] = function()
   -- doesn't look easy, as behavior in child process and manual testing differ.
   eq(child.cmd('messages'), '')
   expect.no_match(child.v.errmsg, 'cmdline%.lua')
+end
+
+T['Autocomplete']['works when deleting text'] = function()
+  -- `:10s<BS>` (ideally) should hide preview
+  MiniTest.skip()
 end
 
 T['Autocomplete']['is not triggered when wildmenu is visible'] = function()
@@ -522,7 +539,7 @@ T['Autocorrect']['can act after mappings appended text'] = function()
   type_keys('<Esc>')
 end
 
-T['Autocomplete']['works only when appending new word'] = function()
+T['Autocomplete']['ignores editing previous text'] = function()
   type_keys(':', 'set ', '<Left>')
   type_keys('<BS>')
   validate_cmdline('se ', 3)
@@ -530,6 +547,12 @@ T['Autocomplete']['works only when appending new word'] = function()
   validate_cmdline('seT ', 4)
   type_keys(' ')
   validate_cmdline('seT  ', 5)
+  type_keys('<Esc>')
+
+  -- Appending after editing
+  MiniTest.skip('Make it work or declare out of scope. Problematic because complpat and pos_prev are not relevant')
+  type_keys(':', 'srot', '<Home>', '.', '<End>', ' ')
+  validate_cmdline('.sort ')
 end
 
 T['Autocorrect']['correctly computes word to autocorrect'] = function()
@@ -717,12 +740,63 @@ T['Range preview']['works after deleting text'] = function()
   MiniTest.skip()
 end
 
-T['Range preview']['is not shown after visual selection'] = function()
-  -- Otherwise it hides visual selection, which itself is kind of range preview
+T['Range preview']['works only in `:` command type'] = function() MiniTest.skip() end
+
+T['Range preview']['works with inverted range'] = function() MiniTest.skip() end
+
+T['Range preview']['hides visual selection'] = function()
+  -- The range preview is already a preview of Visual selection
+
+  -- Should be overridable via autocommand
   MiniTest.skip()
 end
 
+T['Range preview']['works with every kind of range'] = function()
+  -- `:h :range` and `:h range-offset`
+  MiniTest.skip()
+end
+
+T['Range preview']['is updated on command line height change'] = function()
+  child.set_size(10, 20)
+
+  -- Should handle not enough vertical space (like with too big command height)
+  MiniTest.skip()
+end
+
+T['Range preview']["works with different 'cmdheight'"] = function()
+  child.o.cmdheight = 0
+
+  child.o.cmdheight = 2
+  MiniTest.skip()
+end
+
+T['Range preview']['respects `config.preview_range.win_config`'] = function() MiniTest.skip() end
+
+T['Range preview']['correctly shows window without border'] = function()
+  -- Both for `winborder='none'` and through config
+  MiniTest.skip()
+end
+
+T['Range preview']['respects `config.preview_range.n_context`'] = function() MiniTest.skip() end
+
 T['Range preview']['can be hidden and opened within same session'] = function() MiniTest.skip() end
+
+T['Range preview']['correctly sets in-between fold'] = function()
+  -- There should be only a single fold if there are at least two lines folded
+  MiniTest.skip()
+end
+
+T['Range preview']['reacts to `VimResized`'] = function()
+  -- Both in width and height (with `n_context > 0`)
+  MiniTest.skip()
+end
+
+T['Range preview']['keeps preview even if command parsing failed'] = function()
+  -- Cases like `:1,2aaaaa`: the range is still there, but parsing fails
+
+  -- Cases like `:1,/aaa`: the `from` is still there, but parsing fails
+  MiniTest.skip()
+end
 
 T['Range preview']['works if range is present immediately'] = function()
   child.cmd('nnoremap <C-x> :2,3')
@@ -733,6 +807,14 @@ T['Range preview']['works with out-of-bounds values'] = function()
   -- Both `from` and `to`
   MiniTest.skip()
 end
+
+T['Range preview']['is not shown in command window'] = function()
+  -- NOTE: It would be good to also show it, but it would require much more
+  -- explicit work (`CmdlineChanged` is not triggered in cmdwin)
+  MiniTest.skip()
+end
+
+T['Range preview']['is not shown for command window buffer'] = function() MiniTest.skip() end
 
 T['Range preview']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
