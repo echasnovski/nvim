@@ -59,9 +59,11 @@ T['setup()']['creates side effects'] = function()
   load_module()
   local has_highlight = function(group, value) expect.match(child.cmd_capture('hi ' .. group), value) end
 
-  has_highlight('MiniCmdlinePreviewBorder', 'links to FloatBorder')
-  has_highlight('MiniCmdlinePreviewNormal', 'links to NormalFloat')
-  has_highlight('MiniCmdlinePreviewTitle', 'links to FloatTitle')
+  has_highlight('MiniCmdlinePeekBorder', 'links to FloatBorder')
+  has_highlight('MiniCmdlinePeekLineNr', 'links to LineNr')
+  has_highlight('MiniCmdlinePeekNormal', 'links to NormalFloat')
+  has_highlight('MiniCmdlinePeekSign', 'links to Sign')
+  has_highlight('MiniCmdlinePeekTitle', 'links to FloatTitle')
 end
 
 T['setup()']['creates `config` field'] = function()
@@ -77,9 +79,9 @@ T['setup()']['creates `config` field'] = function()
   expect_config('autocomplete.map_arrows', true)
   expect_config('autocorrect.enable', true)
   expect_config('autocorrect.func', vim.NIL)
-  expect_config('preview_range.enable', true)
-  expect_config('preview_range.window.config', {})
-  expect_config('preview_range.window.symbols', { single = '🭬', left = '┌', mid = '┊', right = '└' })
+  expect_config('autopeek.enable', true)
+  expect_config('autopeek.window.config', {})
+  expect_config('autopeek.window.statuscolumn', vim.NIL)
 end
 
 T['setup()']['validates `config` argument'] = function()
@@ -95,28 +97,17 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ autocorrect = 1 }, 'autocorrect', 'table')
   expect_config_error({ autocorrect = { enable = 1 } }, 'autocorrect.enable', 'boolean')
   expect_config_error({ autocorrect = { func = 1 } }, 'autocorrect.func', 'function')
-  expect_config_error({ preview_range = 1 }, 'preview_range', 'table')
-  expect_config_error({ preview_range = { enable = 1 } }, 'preview_range.enable', 'boolean')
-  expect_config_error({ preview_range = { window = 1 } }, 'preview_range.window', 'table')
-  expect_config_error({ preview_range = { window = { config = 1 } } }, 'preview_range.window.config', 'table or callab')
-  expect_config_error({ preview_range = { window = { symbols = 1 } } }, 'preview_range.window.symbols', 'table')
-  local expect_symbol = function(name)
-    expect_config_error(
-      { preview_range = { window = { symbols = { [name] = 1 } } } },
-      'preview_range.window.symbols.' .. name,
-      'string'
-    )
-  end
-  expect_symbol('single')
-  expect_symbol('left')
-  expect_symbol('mid')
-  expect_symbol('right')
+  expect_config_error({ autopeek = 1 }, 'autopeek', 'table')
+  expect_config_error({ autopeek = { enable = 1 } }, 'autopeek.enable', 'boolean')
+  expect_config_error({ autopeek = { window = 1 } }, 'autopeek.window', 'table')
+  expect_config_error({ autopeek = { window = { config = 1 } } }, 'autopeek.window.config', 'table or callab')
+  expect_config_error({ autopeek = { window = { statuscolumn = 1 } } }, 'autopeek.window.statuscolumn', 'callable')
 end
 
 T['setup()']['ensures colors'] = function()
   load_module()
   child.cmd('colorscheme default')
-  expect.match(child.cmd_capture('hi MiniCmdlinePreviewBorder'), 'links to FloatBorder')
+  expect.match(child.cmd_capture('hi MiniCmdlinePeekBorder'), 'links to FloatBorder')
 end
 
 T['setup()']['sets recommended option values'] = function()
@@ -145,7 +136,7 @@ T['default_autocomplete_predicate()'] = new_set()
 local default_autocomplete_predicate = forward_lua('MiniCmdline.default_autocomplete_predicate')
 
 T['default_autocomplete_predicate()']['works'] = function()
-  load_module({ autocorrect = { enable = false }, preview_range = { enable = false } })
+  load_module({ autocorrect = { enable = false }, autopeek = { enable = false } })
   local validate = function(key, ref)
     type_keys(key)
     eq(default_autocomplete_predicate(), ref)
@@ -223,7 +214,7 @@ end
 -- Integration tests ==========================================================
 T['Autocomplete'] = new_set({
   hooks = {
-    pre_case = function() load_module({ autocorrect = { enable = false }, preview_range = { enable = false } }) end,
+    pre_case = function() load_module({ autocorrect = { enable = false }, autopeek = { enable = false } }) end,
   },
 })
 
@@ -265,6 +256,16 @@ T['Autocomplete']['is not triggered when wildmenu is visible'] = function()
   validate_cmdline('argdel fileA ')
 end
 
+T['Autocomplete']['respects `config.autocomplete.predicate`'] = function()
+  -- Should trigger only if `true`
+
+  -- If `false` should force no pmenu shown. Relevant on Neovim>=0.12 since
+  -- it uses `vim.fn.wildtrigger()` which can be drawn outdated (by design).
+  -- Should also not re-trigger wildmenu, as predicate can be used to stop
+  -- potentially slow completion.
+  MiniTest.skip()
+end
+
 T['Autocomplete']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
@@ -276,7 +277,7 @@ T['Autocomplete']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
 
 T['Autocorrect'] = new_set({
   hooks = {
-    pre_case = function() load_module({ autocomplete = { enable = false }, preview_range = { enable = false } }) end,
+    pre_case = function() load_module({ autocomplete = { enable = false }, autopeek = { enable = false } }) end,
   },
 })
 
@@ -539,7 +540,7 @@ T['Autocorrect']['can act after mappings appended text'] = function()
   type_keys('<Esc>')
 end
 
-T['Autocomplete']['ignores editing previous text'] = function()
+T['Autocorrect']['ignores editing previous text'] = function()
   type_keys(':', 'set ', '<Left>')
   type_keys('<BS>')
   validate_cmdline('se ', 3)
@@ -551,8 +552,8 @@ T['Autocomplete']['ignores editing previous text'] = function()
 
   -- Appending after editing
   MiniTest.skip('Make it work or declare out of scope. Problematic because complpat and pos_prev are not relevant')
-  type_keys(':', 'srot', '<Home>', '.', '<End>', ' ')
-  validate_cmdline('.sort ')
+  type_keys(':', 'rot', '<Home>', 's', '<End>', ' ')
+  validate_cmdline('sort ')
 end
 
 T['Autocorrect']['correctly computes word to autocorrect'] = function()
@@ -722,15 +723,18 @@ T['Autocorrect']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
   end,
 })
 
-T['Range preview'] = new_set({
+T['Autopeek'] = new_set({
   hooks = {
-    pre_case = function() load_module({ autocomplete = { enable = false }, preview_range = { enable = false } }) end,
+    pre_case = function() load_module({ autocomplete = { enable = false }, autocorrect = { enable = false } }) end,
   },
 })
 
-T['Range preview']['works'] = function() MiniTest.skip() end
+T['Autopeek']['works'] = function()
+  -- Should show statuscolumn as narrow as possible?
+  MiniTest.skip()
+end
 
-T['Range preview']['works after deleting text'] = function()
+T['Autopeek']['works after deleting text'] = function()
   -- With <BS>
 
   -- With <C-w>
@@ -740,83 +744,92 @@ T['Range preview']['works after deleting text'] = function()
   MiniTest.skip()
 end
 
-T['Range preview']['works only in `:` command type'] = function() MiniTest.skip() end
+T['Autopeek']['works only in `:` command type'] = function() MiniTest.skip() end
 
-T['Range preview']['works with inverted range'] = function() MiniTest.skip() end
+T['Autopeek']['works with inverted range'] = function() MiniTest.skip() end
 
-T['Range preview']['hides visual selection'] = function()
+T['Autopeek']['hides visual selection'] = function()
   -- The range preview is already a preview of Visual selection
 
   -- Should be overridable via autocommand
   MiniTest.skip()
 end
 
-T['Range preview']['works with every kind of range'] = function()
+T['Autopeek']['is shown only for line range'] = function()
+  -- Like not `%bw`
+  MiniTest.skip()
+end
+
+T['Autopeek']['works with every kind of line range'] = function()
   -- `:h :range` and `:h range-offset`
   MiniTest.skip()
 end
 
-T['Range preview']['is updated on command line height change'] = function()
+T['Autopeek']['is updated on command line height change'] = function()
   child.set_size(10, 20)
 
   -- Should handle not enough vertical space (like with too big command height)
   MiniTest.skip()
 end
 
-T['Range preview']["works with different 'cmdheight'"] = function()
+T['Autopeek']["works with different 'cmdheight'"] = function()
   child.o.cmdheight = 0
 
   child.o.cmdheight = 2
   MiniTest.skip()
 end
 
-T['Range preview']['respects `config.preview_range.win_config`'] = function() MiniTest.skip() end
+T['Autopeek']['respects `config.autopeek.win_config`'] = function() MiniTest.skip() end
 
-T['Range preview']['correctly shows window without border'] = function()
+T['Autopeek']['correctly shows window without border'] = function()
   -- Both for `winborder='none'` and through config
   MiniTest.skip()
 end
 
-T['Range preview']['respects `config.preview_range.n_context`'] = function() MiniTest.skip() end
+T['Autopeek']['respects `config.autopeek.n_context`'] = function() MiniTest.skip() end
 
-T['Range preview']['can be hidden and opened within same session'] = function() MiniTest.skip() end
+T['Autopeek']['can be hidden and opened within same session'] = function() MiniTest.skip() end
 
-T['Range preview']['correctly sets in-between fold'] = function()
+T['Autopeek']['correctly sets in-between fold'] = function()
   -- There should be only a single fold if there are at least two lines folded
   MiniTest.skip()
 end
 
-T['Range preview']['reacts to `VimResized`'] = function()
+T['Autopeek']['reacts to `VimResized`'] = function()
   -- Both in width and height (with `n_context > 0`)
   MiniTest.skip()
 end
 
-T['Range preview']['keeps preview even if command parsing failed'] = function()
-  -- Cases like `:1,2aaaaa`: the range is still there, but parsing fails
+T['Autopeek']['updates when navigating through history'] = function() MiniTest.skip() end
 
-  -- Cases like `:1,/aaa`: the `from` is still there, but parsing fails
+T['Autopeek']['works when regular command line parsing fails'] = function()
+  -- Line with only range: `1`, `$`, `1,2`, `%`
+
+  -- Unfinished `/xxx/` range: `/xxx`, `1,/xxx`, `1;/xxx`
+
+  -- Unrecognized command: `1xxx`, `1,2xxx`, `%xxx`
   MiniTest.skip()
 end
 
-T['Range preview']['works if range is present immediately'] = function()
+T['Autopeek']['works if range is present immediately'] = function()
   child.cmd('nnoremap <C-x> :2,3')
   MiniTest.skip()
 end
 
-T['Range preview']['works with out-of-bounds values'] = function()
+T['Autopeek']['works with out-of-bounds values'] = function()
   -- Both `from` and `to`
   MiniTest.skip()
 end
 
-T['Range preview']['is not shown in command window'] = function()
+T['Autopeek']['is not shown in command window'] = function()
   -- NOTE: It would be good to also show it, but it would require much more
   -- explicit work (`CmdlineChanged` is not triggered in cmdwin)
   MiniTest.skip()
 end
 
-T['Range preview']['is not shown for command window buffer'] = function() MiniTest.skip() end
+T['Autopeek']['is not shown for command window buffer'] = function() MiniTest.skip() end
 
-T['Range preview']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
+T['Autopeek']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
