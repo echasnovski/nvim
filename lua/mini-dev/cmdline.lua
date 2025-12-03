@@ -266,6 +266,9 @@ MiniCmdline.config = {
   autopeek = {
     enable = true,
 
+    -- Number of lines above+below range lines to show
+    n_context = 0,
+
     -- Window options
     window = {
       -- Floating window config
@@ -364,13 +367,12 @@ MiniCmdline.default_autopeek_statuscolumn = function(data, opts)
   local signs = (opts or {}).signs or {}
 
   local n, l, r = vim.v.lnum, data.left, data.right
-  local prefix = '%#MiniCmdlinePeekSign#'
-  local suffix = '%#MiniCmdlinePeekLineNr#' .. n .. ' '
-  if n == l and n == r then return prefix .. (signs.same or '🭬') .. suffix end
-  if n == l then return prefix .. (signs.left or '┌') .. suffix end
-  if n == r then return prefix .. (signs.right or '└') .. suffix end
-  if (l < n and n < r) or (r < n and n < l) then return prefix .. (signs.mid or '┊') end
-  return prefix .. (signs.out or '')
+  local fmt = '%%#MiniCmdlinePeekSign#%s%%#MiniCmdlinePeekLineNr#%s '
+  if n == l and n == r then return string.format(fmt, signs.same or '🭬', n) end
+  if n == l then return string.format(fmt, signs.left or '┌', n) end
+  if n == r then return string.format(fmt, signs.right or '└', n) end
+  if (l < n and n < r) or (r < n and n < l) then return string.format(fmt, signs.mid or '┊', '') end
+  return string.format(fmt, signs.out or '', '')
 end
 
 -- Helper data ================================================================
@@ -458,6 +460,7 @@ H.setup_config = function(config)
 
   H.check_type('autopeek', config.autopeek, 'table')
   H.check_type('autopeek.enable', config.autopeek.enable, 'boolean')
+  H.check_type('autopeek.n_context', config.autopeek.n_context, 'number')
   H.check_type('autopeek.window', config.autopeek.window, 'table')
   local autopeek_win_config = config.autopeek.window.config
   if not (type(autopeek_win_config) == 'table' or vim.is_callable(autopeek_win_config)) then
@@ -522,9 +525,9 @@ H.create_default_hl = function()
   end
 
   hi('MiniCmdlinePeekBorder', { link = 'FloatBorder' })
-  hi('MiniCmdlinePeekLineNr', { link = 'LineNr' })
+  hi('MiniCmdlinePeekLineNr', { link = 'DiagnosticSignWarn' })
   hi('MiniCmdlinePeekNormal', { link = 'NormalFloat' })
-  hi('MiniCmdlinePeekSign', { link = 'SignColumn' })
+  hi('MiniCmdlinePeekSign', { link = 'DiagnosticSignHint' })
   hi('MiniCmdlinePeekTitle', { link = 'FloatTitle' })
 end
 
@@ -856,39 +859,49 @@ H.autopeek = function(force)
 
   -- Normalize and show range
   local n_lines = vim.api.nvim_buf_line_count(0)
-  local left, right = range[1] or range[2], range[2] or range[1]
-  left = math.min(math.max(left, 1), n_lines)
-  right = math.min(math.max(right, 1), n_lines)
+  local left = H.clamp(range[1] or range[2], 1, n_lines)
+  local right = H.clamp(range[2] or range[1], 1, n_lines)
+  local from = right < left and right or left
+  local to = right < left and left or right
 
   H.cache.peek.range = range
   H.cache.peek.cmdheight = cmdheight
   H.cache.peek.statuscolumn_data = { left = left, right = right }
-  H.cache.peek.win_id = H.peek_show(left, right)
+  H.cache.peek.win_id = H.peek_show(from, to)
 end
 
-H.peek_show = function(left, right)
-  local from = right < left and right or left
-  local to = right < left and left or right
+H.peek_show = function(from, to)
+  -- Compute height to show union of left and right contexts plus possible fold
+  local n_context = math.max(H.cache.config.autopeek.n_context, 0)
+  local n_lines = vim.api.nvim_buf_line_count(0)
+  local cont_from = H.peek_new_context(from, n_context, n_lines)
+  local cont_to = H.peek_new_context(to, n_context, n_lines)
+  local height = H.peek_get_height(cont_from, cont_to)
 
-  -- Ensure opened window
-  local config = H.peek_get_config(from, to)
+  -- Ensure opened window of enough height
+  local config = H.peek_get_config(height)
   local win_id = H.cache.peek.win_id
   win_id = H.is_valid_win(win_id) and win_id or vim.api.nvim_open_win(0, false, config)
   vim.api.nvim_win_set_config(win_id, config)
 
+  -- Ensure context fits the window (it may be not enough height to fit whole)
+  if config.height < height then H.peek_adjust_context(cont_from, cont_to, height, config.height) end
+
+  -- Finalize window view
   vim.api.nvim_win_call(win_id, function()
     -- Define window-local options
     vim.cmd("setlocal foldenable foldlevel=0 foldmethod=manual foldminlines=1 foldtext=''")
-    vim.cmd('setlocal nocursorline nonumber signcolumn=no foldcolumn=0')
+    vim.cmd('setlocal foldcolumn=0 nocursorline nonumber scrolloff=0 signcolumn=no')
     vim.wo.statuscolumn = '%{%v:lua.MiniCmdline._peek_statuscolumn()%}'
     vim.wo.winhighlight = 'NormalFloat:MiniCmdlinePeekNormal'
       .. ',FloatBorder:MiniCmdlinePeekBorder'
       .. ',FloatTitle:MiniCmdlinePeekTitle'
 
-    -- Display range lines: from+fold+to
-    vim.api.nvim_win_set_cursor(0, { from, 0 })
+    -- Display range lines with context, fold the excess
+    vim.api.nvim_win_set_cursor(0, { cont_from.before, 0 })
     vim.cmd('normal! zEzt')
-    if to - from > 2 then vim.cmd(string.format('%s,%sfold', from + 1, to - 1)) end
+    local from_after, to_before = cont_from.after, cont_to.before
+    if to_before - from_after > 1 then vim.cmd(string.format('%s,%sfold', from_after + 1, to_before - 1)) end
   end)
 
   -- NOTE: Need explicit redraw because otherwise window is not shown
@@ -896,7 +909,20 @@ H.peek_show = function(left, right)
   return win_id
 end
 
-H.peek_get_config = function(from, to)
+H.peek_new_context = function(at, n_context, n_lines)
+  return { before = H.clamp(at - n_context, 1, n_lines), at = at, after = H.clamp(at + n_context, 1, n_lines) }
+end
+
+H.peek_get_height = function(cont_from, cont_to)
+  -- L(a or b) = L(a) + L(b) - L(a and b). Also adjust for fold.
+  local n_from = cont_from.after - cont_from.before + 1
+  local n_to = cont_to.after - cont_to.before + 1
+  local n_both = math.max(cont_from.after - cont_to.before + 1, 0)
+  local n_fold = (cont_to.before - cont_from.after > 1) and 1 or 0
+  return (n_from + n_to - n_both) + n_fold
+end
+
+H.peek_get_config = function(height)
   local cmdheight = H.cache.peek.cmdheight
 
   local default_config = { relative = 'editor', style = 'minimal', zindex = 249 }
@@ -904,7 +930,7 @@ H.peek_get_config = function(from, to)
   default_config.row = math.max(vim.o.lines - cmdheight, 1)
   default_config.col = 1
   default_config.width = vim.o.columns
-  default_config.height = from == to and 1 or ((to - from) == 1 and 2 or 3)
+  default_config.height = height
 
   default_config.border = (vim.fn.exists('+winborder') == 0 or vim.o.winborder == '') and 'single' or nil
   default_config.title = ' Peek '
@@ -922,6 +948,31 @@ H.peek_get_config = function(from, to)
   config.width = math.min(config.width, vim.o.columns - offset)
 
   return config
+end
+
+H.peek_adjust_context = function(cont_from, cont_to, height, target_height)
+  local extra = height - target_height
+
+  -- First truncate outer context (keeping top and bottom equal)
+  -- NOTE: Reduce in a cycle and not via a formula since outer context can be
+  -- shorter if its range line is close to file border
+  while extra > 0 do
+    local n_from_out, n_to_out = cont_from.at - cont_from.before, cont_to.after - cont_to.at
+    if n_from_out <= 0 and n_to_out <= 0 then break end
+
+    local is_reduce_from = n_from_out > n_to_out
+    cont_from.before = cont_from.before + (is_reduce_from and 1 or 0)
+    cont_to.after = cont_to.after - (is_reduce_from and 0 or 1)
+    extra = extra - 1
+  end
+  if extra <= 0 then return end
+
+  -- Hide excess inner context under the fold
+  -- NOTE: Reduce height by 3 to make space for `from`, `to`, and fold
+  local inner_context_lines = math.max(target_height - 3, 0)
+  local half_height = math.floor(0.5 * inner_context_lines)
+  cont_from.after = cont_from.at + half_height
+  cont_to.before = cont_to.at - (inner_context_lines - half_height)
 end
 
 H.peek_hide = function()
@@ -946,6 +997,8 @@ end
 H.notify = function(msg, level_name, silent)
   if not silent then vim.notify('(mini.cmdline) ' .. msg, vim.log.levels[level_name]) end
 end
+
+H.clamp = function(x, from, to) return math.min(math.max(x, from), to) end
 
 H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nvim_win_is_valid(win_id) end
 
