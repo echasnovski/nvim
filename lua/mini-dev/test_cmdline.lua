@@ -60,9 +60,9 @@ T['setup()']['creates side effects'] = function()
   local has_highlight = function(group, value) expect.match(child.cmd_capture('hi ' .. group), value) end
 
   has_highlight('MiniCmdlinePeekBorder', 'links to FloatBorder')
-  has_highlight('MiniCmdlinePeekLineNr', 'links to LineNr')
+  has_highlight('MiniCmdlinePeekLineNr', 'links to DiagnosticSignWarn')
   has_highlight('MiniCmdlinePeekNormal', 'links to NormalFloat')
-  has_highlight('MiniCmdlinePeekSign', 'links to Sign')
+  has_highlight('MiniCmdlinePeekSign', 'links to DiagnosticSignHint')
   has_highlight('MiniCmdlinePeekTitle', 'links to FloatTitle')
 end
 
@@ -80,6 +80,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('autocorrect.enable', true)
   expect_config('autocorrect.func', vim.NIL)
   expect_config('autopeek.enable', true)
+  expect_config('autopeek.n_context', 0)
   expect_config('autopeek.window.config', {})
   expect_config('autopeek.window.statuscolumn', vim.NIL)
 end
@@ -100,6 +101,7 @@ T['setup()']['validates `config` argument'] = function()
   expect_config_error({ autopeek = 1 }, 'autopeek', 'table')
   expect_config_error({ autopeek = { enable = 1 } }, 'autopeek.enable', 'boolean')
   expect_config_error({ autopeek = { window = 1 } }, 'autopeek.window', 'table')
+  expect_config_error({ autopeek = { n_context = 'a' } }, 'autopeek.n_context', 'number')
   expect_config_error({ autopeek = { window = { config = 1 } } }, 'autopeek.window.config', 'table or callab')
   expect_config_error({ autopeek = { window = { statuscolumn = 1 } } }, 'autopeek.window.statuscolumn', 'callable')
 end
