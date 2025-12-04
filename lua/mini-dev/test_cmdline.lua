@@ -7,7 +7,6 @@ local new_set = MiniTest.new_set
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('cmdline', config) end
-local unload_module = function() child.mini_unload('cmdline') end
 local set_cursor = function(...) return child.set_cursor(...) end
 local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
@@ -28,6 +27,12 @@ local validate_cmdline = function(line, pos)
   eq(child.fn.mode(), 'c')
   eq(child.fn.getcmdline(), line)
   eq(child.fn.getcmdpos(), pos or line:len() + 1)
+end
+
+-- Data =======================================================================
+local lines_101 = {}
+for i = 1, 101 do
+  lines_101[i] = 'Line ' .. i
 end
 
 -- Time constants
@@ -63,6 +68,7 @@ T['setup()']['creates side effects'] = function()
   has_highlight('MiniCmdlinePeekLineNr', 'links to DiagnosticSignWarn')
   has_highlight('MiniCmdlinePeekNormal', 'links to NormalFloat')
   has_highlight('MiniCmdlinePeekSign', 'links to DiagnosticSignHint')
+  has_highlight('MiniCmdlinePeekSep', 'links to SignColumn')
   has_highlight('MiniCmdlinePeekTitle', 'links to FloatTitle')
 end
 
@@ -80,7 +86,7 @@ T['setup()']['creates `config` field'] = function()
   expect_config('autocorrect.enable', true)
   expect_config('autocorrect.func', vim.NIL)
   expect_config('autopeek.enable', true)
-  expect_config('autopeek.n_context', 0)
+  expect_config('autopeek.n_context', 1)
   expect_config('autopeek.window.config', {})
   expect_config('autopeek.window.statuscolumn', vim.NIL)
 end
@@ -211,6 +217,94 @@ T['default_autocorrect_func()']['validates arguments'] = function()
   expect.error(function() default_autocorrect_func(1) end, '`data`.*table')
   expect.error(function() default_autocorrect_func({ word = 1, type = 'command' }) end, '`data.word`.*string')
   expect.error(function() default_autocorrect_func({ word = 'ste', type = 1 }) end, '`data.type`.*string')
+end
+
+T['default_autopeek_statuscolumn()'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.set_size(7, 15)
+      set_lines(lines_101)
+
+      load_module()
+
+      child.o.showtabline, child.o.laststatus = 0, 0
+      child.o.ruler = false
+    end,
+  },
+})
+
+local setup_statuscolumn = function(data, opts)
+  child.lua('_G.data = ' .. vim.inspect(data))
+  child.lua('_G.opts = ' .. vim.inspect(opts))
+  child.lua([[
+    _G.test_statuscolumn = function()
+      _G.res = MiniCmdline.default_autopeek_statuscolumn(_G.data, _G.opts)
+      return _G.res
+    end
+    vim.wo.statuscolumn = '%{%v:lua.test_statuscolumn()%}'
+    vim.cmd('redraw')
+  ]])
+
+  -- Ensure more informative screenshots
+  child.cmd('hi MiniCmdlinePeekLineNr guibg=Red ctermbg=Red')
+  child.cmd('hi MiniCmdlinePeekSign guibg=Green ctermbg=Green')
+  child.cmd('hi MiniCmdlinePeekSep guibg=Yellow ctermbg=Yellow')
+end
+
+local validate_statuscolumn = function(data, opts)
+  setup_statuscolumn(data, opts)
+  local last_line = child.o.lines
+  child.expect_screenshot({ ignore_text = { last_line }, ignore_attr = { last_line } })
+end
+
+T['default_autopeek_statuscolumn()']['works'] = function()
+  -- Different type of ranges
+  validate_statuscolumn({ left = 2, right = 5 })
+  validate_statuscolumn({ left = 4, right = 5 })
+  validate_statuscolumn({ left = 4, right = 4 })
+  validate_statuscolumn({ left = 5, right = 4 })
+  validate_statuscolumn({ left = 5, right = 2 })
+
+  -- Actually uses expected highlight groups
+  local ref_pat = '^%%#MiniCmdlinePeekSign#.*%%#MiniCmdlinePeekLineNr#.*%%#MiniCmdlinePeekSep#│$'
+  expect.match(child.lua_get('_G.res'), ref_pat)
+
+  -- Line numbers should be aligned to the right, but their highlighting should
+  -- start right after the sign (matters if different background).
+  set_cursor(7, 0)
+  child.cmd('normal! zt')
+  validate_statuscolumn({ left = 8, right = 10 })
+end
+
+T['default_autopeek_statuscolumn()']['works with wrapped and virtual lines'] = function()
+  child.set_size(10, 15)
+  set_lines({ '', 'Very big line number one', 'Very big line number two', '' })
+  local ns_id = child.api.nvim_create_namespace('Test')
+  child.api.nvim_buf_set_extmark(0, ns_id, 1, 0, { virt_lines = { { { 'Virt' } } } })
+  child.api.nvim_buf_set_extmark(0, ns_id, 3, 0, { virt_lines = { { { 'Virt above' } } }, virt_lines_above = true })
+
+  validate_statuscolumn({ left = 2, right = 3 })
+end
+
+T['default_autopeek_statuscolumn()']['respects `opts`'] = function()
+  local opts = {
+    signs = { same = '=', left = '<', mid = '-', right = '>', out = '*', virt = '$', wrap = '!' },
+    sep = '#',
+  }
+  -- All usages of `%` should be escaped as `%%`
+  local opts_percent = {
+    signs = { same = '%%', left = '%%', mid = '%%', right = '%%', out = '%%', virt = '%%', wrap = '%%' },
+    sep = '%%',
+  }
+
+  validate_statuscolumn({ left = 2, right = 5 }, opts)
+  validate_statuscolumn({ left = 2, right = 5 }, opts_percent)
+
+  set_lines({ '', 'Very big line number one', 'Very big line number two', '' })
+  local ns_id = child.api.nvim_create_namespace('Test')
+  child.api.nvim_buf_set_extmark(0, ns_id, 1, 0, { virt_lines = { { { 'Virt' } } } })
+  validate_statuscolumn({ left = 2, right = 2 }, opts)
+  validate_statuscolumn({ left = 2, right = 2 }, opts_percent)
 end
 
 -- Integration tests ==========================================================
@@ -727,28 +821,111 @@ T['Autocorrect']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
 
 T['Autopeek'] = new_set({
   hooks = {
-    pre_case = function() load_module({ autocomplete = { enable = false }, autocorrect = { enable = false } }) end,
+    pre_case = function()
+      load_module({ autocomplete = { enable = false }, autocorrect = { enable = false } })
+
+      child.set_size(11, 20)
+      set_lines(lines_101)
+
+      child.o.tabline, child.o.statusline = 'My tabline', 'My statusline'
+      child.o.showtabline, child.o.laststatus = 2, 2
+
+      -- Ensure more informative screenshots
+      child.cmd('hi MiniCmdlinePeekLineNr guibg=Red ctermbg=Red')
+      child.cmd('hi MiniCmdlinePeekSign guibg=Green ctermbg=Green')
+      child.cmd('hi MiniCmdlinePeekSep guibg=Yellow ctermbg=Yellow')
+    end,
   },
 })
 
+local validate_peek_winheight = function(ref)
+  local buf_id = child.api.nvim_get_current_buf()
+  local peek_win_id
+  for _, win_id in ipairs(child.api.nvim_list_wins()) do
+    local is_float = child.api.nvim_win_get_config(win_id).relative ~= ''
+    if is_float and child.api.nvim_win_get_buf(win_id) == buf_id then peek_win_id = win_id end
+  end
+  local winheight = peek_win_id == nil and 0 or child.api.nvim_win_get_height(peek_win_id)
+  eq(winheight, ref)
+end
+
+local validate_no_peek = function() validate_peek_winheight(0) end
+
+local expect_screenshot_after_keys = function(keys)
+  type_keys(keys)
+  child.expect_screenshot()
+end
+
 T['Autopeek']['works'] = function()
-  -- Should show statuscolumn as narrow as possible?
+  type_keys(':')
+  expect_screenshot_after_keys('2')
+
+  -- Empty range end means cursor line
+  expect_screenshot_after_keys(',')
+
+  -- Explicit same line range should be the same as one number range
+  expect_screenshot_after_keys('2')
+
+  expect_screenshot_after_keys('0')
+
+  -- Should truncate to last available line
+  expect_screenshot_after_keys('0')
+
+  -- Should update after deleting text
+  expect_screenshot_after_keys('<BS>')
+  expect_screenshot_after_keys('<C-w>')
+  expect_screenshot_after_keys('<C-u>')
+end
+
+T['Autopeek']['correctly computes lines to show'] = function()
+  type_keys(':')
+
+  -- Apart, near edges
+  expect_screenshot_after_keys('<C-u>1,101')
+  expect_screenshot_after_keys('<C-u>2,101')
+  expect_screenshot_after_keys('<C-u>1,100')
+  expect_screenshot_after_keys('<C-u>2,100')
+
+  -- Apart, away from edges
+  expect_screenshot_after_keys('<C-u>3,99')
+
+  -- One line in between contexts (no fold should be visible)
+  expect_screenshot_after_keys('<C-u>3,7')
+
+  -- Touching contexts
+  expect_screenshot_after_keys('<C-u>3,6')
+
+  -- Intersecting contexts
+  expect_screenshot_after_keys('<C-u>3,5')
+
+  -- Touching range lines
+  expect_screenshot_after_keys('<C-u>3,4')
+end
+
+T['Autopeek']['works with inverted range'] = function()
+  type_keys(':')
+
+  expect_screenshot_after_keys('<C-u>101,1')
+  expect_screenshot_after_keys('<C-u>101,2')
+  expect_screenshot_after_keys('<C-u>100,1')
+  expect_screenshot_after_keys('<C-u>100,2')
+  expect_screenshot_after_keys('<C-u>99,3')
+  expect_screenshot_after_keys('<C-u>7,3')
+  expect_screenshot_after_keys('<C-u>6,3')
+  expect_screenshot_after_keys('<C-u>5,3')
+  expect_screenshot_after_keys('<C-u>4,3')
+end
+
+T['Autopeek']["ignores 'wrap'"] = function()
+  -- But respects global 'list' and 'listchars'
   MiniTest.skip()
 end
 
-T['Autopeek']['works after deleting text'] = function()
-  -- With <BS>
-
-  -- With <C-w>
-
-  -- With <C-u>
-
+T['Autopeek']['works with virtual lines'] = function()
+  -- In particular, range line should be included if `n_context > 0` even if
+  -- there are multi-line virtual lines below/above
   MiniTest.skip()
 end
-
-T['Autopeek']['works only in `:` command type'] = function() MiniTest.skip() end
-
-T['Autopeek']['works with inverted range'] = function() MiniTest.skip() end
 
 T['Autopeek']['hides visual selection'] = function()
   -- The range preview is already a preview of Visual selection
@@ -781,14 +958,143 @@ T['Autopeek']["works with different 'cmdheight'"] = function()
   MiniTest.skip()
 end
 
-T['Autopeek']['respects `config.autopeek.win_config`'] = function() MiniTest.skip() end
-
-T['Autopeek']['correctly shows window without border'] = function()
-  -- Both for `winborder='none'` and through config
-  MiniTest.skip()
+T['Autopeek']['works only in `:` command type'] = function()
+  local validate = function(keys)
+    eq(child.fn.mode(), 'n')
+    type_keys(keys)
+    validate_no_peek()
+    type_keys('<Esc>', '<Esc>')
+  end
+  validate({ '/', '2' })
+  validate({ '?', '2' })
+  validate({ 'i', '<C-r>=', '2' })
+  validate({ 'call input("")<CR>', '2' })
 end
 
-T['Autopeek']['respects `config.autopeek.n_context`'] = function() MiniTest.skip() end
+T['Autopeek']['respects `config.autopeek.win_config`'] = function() MiniTest.skip() end
+
+T['Autopeek']["respects 'winborder'"] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip("'winborder' option is present on Neovim>=0.11") end
+
+  local validate = function(winborder)
+    child.o.winborder = winborder
+    type_keys(':')
+    expect_screenshot_after_keys(':2,100')
+    type_keys('<Esc>')
+  end
+
+  validate('rounded')
+
+  -- Should prefer explicitly configured value over 'winborder'
+  child.lua('MiniCmdline.config.autopeek.window.config = { border = "double" }')
+  validate('rounded')
+
+  -- Should work with "string array" 'winborder'
+  if child.fn.has('nvim-0.12') == 0 then MiniTest.skip("String array 'winborder' is present on Neovim>=0.12") end
+  child.lua('MiniCmdline.config.autopeek.window.config.border = nil')
+  validate('+,-,+,|,+,-,+,|')
+end
+
+T['Autopeek']['correctly shows window without border'] = function()
+  child.lua('MiniCmdline.config.autopeek.window.config = { border = "none" }')
+
+  local validate = function(screen_lines, range)
+    child.set_size(screen_lines, 20)
+    type_keys(':')
+    expect_screenshot_after_keys(range)
+    type_keys('<Esc>')
+  end
+
+  validate(10, '1,101')
+  validate(10, '2,100')
+  validate(10, '2,5')
+  validate(10, '2,2')
+
+  -- No context
+  child.lua('MiniCmdline.config.autopeek.n_context = 0')
+  validate(10, '2,101')
+
+  -- Extreme available height
+  validate(4, '2,4')
+end
+
+T['Autopeek']['respects `config.autopeek.n_context`'] = function()
+  child.lua('MiniCmdline.config.autopeek.n_context = 0')
+
+  type_keys(':')
+  expect_screenshot_after_keys('<C-u>1,101')
+  expect_screenshot_after_keys('<C-u>2,101')
+  expect_screenshot_after_keys('<C-u>1,100')
+  expect_screenshot_after_keys('<C-u>2,100')
+  expect_screenshot_after_keys('<C-u>2,4')
+  expect_screenshot_after_keys('<C-u>2,3')
+  expect_screenshot_after_keys('<C-u>2,2')
+end
+
+T['Autopeek']['fits into available height'] = function()
+  child.lua('MiniCmdline.config.autopeek.n_context = 2')
+
+  local validate = function(screen_lines, range)
+    child.set_size(screen_lines, 20)
+    type_keys(':')
+    expect_screenshot_after_keys(range)
+    type_keys('<Esc>')
+  end
+
+  validate(14, '3,10')
+
+  -- Should first hide outer context equally from top and bottom
+  validate(13, '3,10')
+  validate(12, '3,10')
+  validate(11, '3,10')
+  validate(10, '3,10')
+
+  -- Should then hide excsess under the fold
+  validate(9, '3,10')
+  validate(8, '3,10')
+  validate(7, '3,10')
+  validate(6, '3,10')
+
+  -- Should work with extreme available height
+  validate(5, '3,10')
+  validate(4, '3,10')
+
+  -- Should work with different kinds of context overlap
+  -- - Touching
+  validate(13, '3,8')
+  validate(12, '3,8')
+  validate(11, '3,8')
+  validate(10, '3,8')
+  validate(9, '3,8')
+  validate(8, '3,8')
+  validate(7, '3,8')
+  validate(6, '3,8')
+  validate(5, '3,8')
+
+  -- - Inner intersecting
+  validate(11, '3,6')
+  validate(10, '3,6')
+  validate(9, '3,6')
+  validate(8, '3,6')
+  validate(7, '3,6')
+  validate(6, '3,6')
+  validate(5, '3,6')
+
+  -- - Outer intersecting
+  validate(9, '3,4')
+  validate(8, '3,4')
+  validate(7, '3,4')
+  validate(6, '3,4')
+  validate(5, '3,4')
+
+  -- Inverted range (only selective basic sanity checks)
+  validate(12, '10,3')
+  validate(9, '10,3')
+  validate(12, '8,3')
+  validate(8, '8,3')
+  validate(8, '4,3')
+  validate(5, '4,3')
+end
 
 T['Autopeek']['can be hidden and opened within same session'] = function() MiniTest.skip() end
 
@@ -827,6 +1133,22 @@ T['Autopeek']['is not shown in command window'] = function()
   -- NOTE: It would be good to also show it, but it would require much more
   -- explicit work (`CmdlineChanged` is not triggered in cmdwin)
   MiniTest.skip()
+end
+
+T['Autopeek']['works when using command-line expression register'] = function()
+  MiniTest.skip('After proper test coverage, make sure it works by adjusting tracking for "nested Command-line mode"')
+  type_keys(':', '2,', '<C-r>=', '10+10')
+  -- Should not react to "range like" content when entering register
+  validate_peek_winheight(3)
+
+  type_keys('<CR>')
+  child.expect_screenshot()
+
+  -- Should keep working as if the number was typed manually
+  type_keys('+')
+  child.expect_screenshot()
+  type_keys('<Esc>')
+  validate_no_peek()
 end
 
 T['Autopeek']['is not shown for command window buffer'] = function() MiniTest.skip() end

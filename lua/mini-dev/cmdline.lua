@@ -95,6 +95,7 @@
 --- - `MiniCmdlinePeekBorder` - border of autopeek window.
 --- - `MiniCmdlinePeekLineNr` - line numbers in autopeek window.
 --- - `MiniCmdlinePeekNormal` - basic foreground/background of autopeek window.
+--- - `MiniCmdlinePeekSep` - statuscolumn separator in autopeek window.
 --- - `MiniCmdlinePeekSign` - signs in autopeek window.
 --- - `MiniCmdlinePeekTitle` - title of autopeek window.
 ---
@@ -236,6 +237,9 @@ end
 ---   end
 --- <
 --- Notes:
+--- - Peek window directly shows current buffer, which means that all its
+---   extmarks, virtual text, virtual lines, etc. are also shown.
+--- - Non-zero context might work unreliably if there are virtual lines.
 --- - Intentionally hides Visual seletion if Command-line mode is entered directly
 ---   from it. Peeking `'<,'>` range already visualizes the selection.
 MiniCmdline.config = {
@@ -267,7 +271,7 @@ MiniCmdline.config = {
     enable = true,
 
     -- Number of lines above+below range lines to show
-    n_context = 0,
+    n_context = 1,
 
     -- Window options
     window = {
@@ -344,6 +348,12 @@ end
 ---   Highlighted with `MiniCmdlinePeekSign` group.
 --- - Show line numbers for left and right parts of the range.
 ---   Highlighted with `MiniCmdlinePeekLineNr` group.
+--- - Separate statuscolumn and buffer text with dedicated separator character.
+---   Highlighted with `MiniCmdlinePeekSep` group.
+---
+--- Notes:
+--- - Intended to only be used as a part of |'statuscolumn'| function, as it
+---   uses |v:lnum| and |v:virtnum| to compute the output.
 ---
 --- Example of adjusting a `mid` sign: >lua
 ---
@@ -362,12 +372,28 @@ end
 ---       - <left> `(string)`  - on `left` line.  Default: `'┌'`.
 ---       - <mid> `(string)`   - inside range.    Default: `'┊'`.
 ---       - <right> `(string)` - on `right` line. Default: `'└'`.
----       - <out> `(string)`   - outside of range. Default: `''`.
+---       - <out> `(string)` - outside of range. Default: `''`.
+---       - <virt> `(string)` - virtual line. Default: `'•'`.
+---       - <wrap> `(string)` - wrapped line. Default: `'↳'`.
+---   - <sep> `(string)` - string to put at the end to separate statuscolumn and
+---     buffer text. Default: `'│'`
+---
+---   Note: Any sign and separator should have very `%` escaped as `%%` (due to its
+---   special meaning in |'statuscolumn'|).
 MiniCmdline.default_autopeek_statuscolumn = function(data, opts)
-  local signs = (opts or {}).signs or {}
+  opts = opts or {}
+  local signs = opts.signs or {}
+  local sep_format = opts.sep == nil and '│' or opts.sep:gsub('%%', '%%%%')
+
+  if vim.v.virtnum ~= 0 then
+    local sign = (vim.v.virtnum < 0 and (signs.virt or '•') or (signs.wrap or '↳'))
+    -- Format as `sign %= sep-hl sep`
+    return sign .. '%=%#MiniCmdlinePeekSep#' .. sep_format:gsub('%%%%', '%%')
+  end
 
   local n, l, r = vim.v.lnum, data.left, data.right
-  local fmt = '%%#MiniCmdlinePeekSign#%s%%#MiniCmdlinePeekLineNr#%s '
+  -- Format as `sign-hl sign linenr-hl %= linenr sep-hl sep`
+  local fmt = '%%#MiniCmdlinePeekSign#%s%%#MiniCmdlinePeekLineNr#%%=%s%%#MiniCmdlinePeekSep#' .. sep_format
   if n == l and n == r then return string.format(fmt, signs.same or '🭬', n) end
   if n == l then return string.format(fmt, signs.left or '┌', n) end
   if n == r then return string.format(fmt, signs.right or '└', n) end
@@ -527,6 +553,7 @@ H.create_default_hl = function()
   hi('MiniCmdlinePeekBorder', { link = 'FloatBorder' })
   hi('MiniCmdlinePeekLineNr', { link = 'DiagnosticSignWarn' })
   hi('MiniCmdlinePeekNormal', { link = 'NormalFloat' })
+  hi('MiniCmdlinePeekSep', { link = 'SignColumn' })
   hi('MiniCmdlinePeekSign', { link = 'DiagnosticSignHint' })
   hi('MiniCmdlinePeekTitle', { link = 'FloatTitle' })
 end
@@ -538,7 +565,10 @@ H.get_config = function() return vim.tbl_deep_extend('force', MiniCmdline.config
 -- Autocommands ---------------------------------------------------------------
 H.on_cmdline_enter = function()
   -- Check for Command-line mode to not act on `:...` mappings
-  if H.is_disabled() or vim.fn.mode() ~= 'c' then return end
+  -- check for non-nil cached config to avoid acting on `c_CTRL-R_=`, since
+  -- it issues a CmdlineEnter-CmdlineChanged-CmdlineLeave for it without
+  -- explicit leave-enter for the initial normal Ex command mode.
+  if H.is_disabled() or vim.fn.mode() ~= 'c' or H.cache.config ~= nil then return end
 
   H.cache = {
     buf_id = vim.api.nvim_get_current_buf(),
@@ -547,6 +577,7 @@ H.on_cmdline_enter = function()
     peek = {},
     state = H.get_cmd_state(),
     state_prev = H.get_cmd_state(true),
+    -- TODO: Remove as not needed if all necessary tests pass
     wildchar = H.get_wildchar(),
   }
   H.cache.autocomplete_predicate = H.cache.config.autocomplete.predicate or MiniCmdline.default_autocomplete_predicate
@@ -652,7 +683,8 @@ if vim.fn.has('nvim-0.12') == 0 then
     -- Not triggerring when wildmenu is shown helps avoiding trigger after
     -- manually pressing wildchar (as text is also changes).
     if vim.fn.wildmenumode() == 1 then return end
-    vim.api.nvim_feedkeys(H.cache.wildchar, 'nt', false)
+    -- Type `<C-z>` which is "Trigger 'wildmode', but always available."
+    vim.api.nvim_feedkeys('\26', 'nt', false)
   end
 end
 
@@ -891,15 +923,19 @@ H.peek_show = function(from, to)
   vim.api.nvim_win_call(win_id, function()
     -- Define window-local options
     vim.cmd("setlocal foldenable foldlevel=0 foldmethod=manual foldminlines=1 foldtext=''")
-    vim.cmd('setlocal foldcolumn=0 nocursorline nonumber scrolloff=0 signcolumn=no')
+    vim.cmd('setlocal foldcolumn=0 nocursorline nonumber scrolloff=0 signcolumn=no nowrap')
+    vim.wo.list = vim.go.list
+    vim.wo.listchars = vim.go.listchars
     vim.wo.statuscolumn = '%{%v:lua.MiniCmdline._peek_statuscolumn()%}'
     vim.wo.winhighlight = 'NormalFloat:MiniCmdlinePeekNormal'
       .. ',FloatBorder:MiniCmdlinePeekBorder'
       .. ',FloatTitle:MiniCmdlinePeekTitle'
 
-    -- Display range lines with context, fold the excess
+    -- Display range lines with context, fold the excess, ensure at least one
+    -- range end is shown (might be not the case if there are virtual lines).
     vim.api.nvim_win_set_cursor(0, { cont_from.before, 0 })
     vim.cmd('normal! zEzt')
+    vim.api.nvim_win_set_cursor(0, { cont_from.at, 0 })
     local from_after, to_before = cont_from.after, cont_to.before
     if to_before - from_after > 1 then vim.cmd(string.format('%s,%sfold', from_after + 1, to_before - 1)) end
   end)
