@@ -7,6 +7,7 @@ local new_set = MiniTest.new_set
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('cmdline', config) end
+local unload_module = function(config) child.mini_unload('cmdline', config) end
 local set_cursor = function(...) return child.set_cursor(...) end
 local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
@@ -27,6 +28,11 @@ local validate_cmdline = function(line, pos)
   eq(child.fn.mode(), 'c')
   eq(child.fn.getcmdline(), line)
   eq(child.fn.getcmdpos(), pos or line:len() + 1)
+end
+
+local expect_screenshot_after_keys = function(keys)
+  type_keys(keys)
+  child.expect_screenshot()
 end
 
 -- Data =======================================================================
@@ -145,13 +151,20 @@ local default_autocomplete_predicate = forward_lua('MiniCmdline.default_autocomp
 
 T['default_autocomplete_predicate()']['works'] = function()
   load_module({ autocorrect = { enable = false }, autopeek = { enable = false } })
-  local validate = function(key, ref)
-    type_keys(key)
-    eq(default_autocomplete_predicate(), ref)
-  end
+
+  local line, pos, line_prev, pos_prev = '', 1, '', 1
+  eq(default_autocomplete_predicate({ line = line, pos = pos, line_prev = line_prev, pos_prev = pos_prev }), false)
 
   type_keys(':')
-  eq(default_autocomplete_predicate(), false)
+
+  local validate = function(key, ref)
+    type_keys(key)
+    line_prev, pos_prev = line, pos
+    line, pos = child.fn.getcmdline(), child.fn.getcmdpos()
+    eq(default_autocomplete_predicate({ line = line, pos = pos, line_prev = line_prev, pos_prev = pos_prev }), ref)
+  end
+
+  -- Should return `true` only if there is alphabetic character
   validate('1', false)
   validate(',', false)
   validate('2', false)
@@ -161,16 +174,13 @@ T['default_autocomplete_predicate()']['works'] = function()
   validate("'", true)
   type_keys('<Esc>')
 
+  line, pos, line_prev, pos_prev = '', 1, '', 1
   type_keys(':')
   validate(' ', false)
   validate('h', true)
   validate(' ', true)
   validate("'", true)
   type_keys('<Esc>')
-
-  -- Should work outside of Command-line mode
-  type_keys('<Esc>')
-  eq(default_autocomplete_predicate(), false)
 end
 
 T['default_autocorrect_func()'] = new_set({ hooks = { pre_case = load_module } })
@@ -310,20 +320,100 @@ end
 -- Integration tests ==========================================================
 T['Autocomplete'] = new_set({
   hooks = {
-    pre_case = function() load_module({ autocorrect = { enable = false }, autopeek = { enable = false } }) end,
+    pre_case = function()
+      if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Autocompletion is available only on Neovim>=0.11') end
+
+      load_module({ autocorrect = { enable = false }, autopeek = { enable = false } })
+      child.set_size(10, 20)
+      child.o.pumheight, child.o.pumwidth = 5, 16
+      child.o.showtabline, child.o.laststatus = 0, 0
+    end,
   },
 })
 
-T['Autocomplete']['works'] = function() MiniTest.skip() end
+local has_pum = function() return child.fn.wildmenumode() == 1 end
 
-T['Autocomplete']["works with different 'wildchar'"] = function()
-  MiniTest.skip()
-  child.cmd('set wildchar=<Down>')
-  type_keys(':', 'h')
+T['Autocomplete']['works'] = function()
+  type_keys(':')
+
+  -- Should be no completion at the start
   child.expect_screenshot()
+
+  -- Should trigger after the first character
+  expect_screenshot_after_keys('b')
+
+  -- Should respect `wildmenu=pum,fuzzy`, which is set by default
+  expect_screenshot_after_keys('f')
+
+  -- Should react to text deletion
+  expect_screenshot_after_keys('<BS>')
+  expect_screenshot_after_keys('<C-u>')
 end
 
-T['Autocomplete']['does not throw errors'] = function()
+T['Autocomplete']["works with different 'wildchar'"] = function()
+  child.cmd('set wildchar=<Down>')
+  type_keys(':', 'b')
+  eq(has_pum(), true)
+  validate_cmdline('b')
+end
+
+T['Autocomplete']['works with different completion types'] = function()
+  child.set_size(10, 30)
+  child.fn.chdir(test_dir)
+  child.o.wildoptions = 'pum'
+
+  type_keys(':', 'set ig')
+  child.expect_screenshot()
+  type_keys('<Esc>')
+
+  type_keys(':', 'edit ', 'f')
+  child.expect_screenshot()
+  type_keys('<Esc>')
+
+  type_keys(':', 'grep ', 'f')
+  child.expect_screenshot()
+  type_keys('<Esc>')
+end
+
+T['Autocomplete']['respects mappings'] = function()
+  -- Should not work if Command-line mode is both entered and exited
+  child.cmd('nnoremap <C-x> :sort<CR>')
+  type_keys('<C-x>')
+  eq(has_pum(), false)
+  eq(get_lines(), { '' })
+end
+
+T['Autocomplete']['works in edge cases'] = function()
+  -- After "!"
+  type_keys(':', 'q', '!')
+  validate_cmdline('q!')
+  eq(has_pum(), false)
+  type_keys('<Esc>')
+
+  -- With special commands
+  local validate_special_cmd = function(key)
+    set_lines({ 'Line 1', 'Line 2' })
+    type_keys(':', key)
+    child.api.nvim_input('/')
+    child.api.nvim_input('L')
+    -- Completion in thiese special cases is available only on Neovim>=0.12
+    if child.fn.has('nvim-0.12') == 1 then
+      child.expect_screenshot()
+    else
+      eq(has_pum(), false)
+    end
+    type_keys('<Esc>')
+  end
+
+  -- :substitute
+  validate_special_cmd('s')
+  -- :global
+  validate_special_cmd('g')
+  -- :vimgrep
+  validate_special_cmd('v')
+end
+
+T['Autocomplete']['does not throw completion related errors'] = function()
   type_keys(':tag')
   -- NOTE: Use `nvim_input` instead of `type_keys()` because the latter checks
   -- `v:errmsg` to propagate the error. However, here on Neovim>=0.12 usage of
@@ -335,31 +425,145 @@ T['Autocomplete']['does not throw errors'] = function()
   expect.no_match(child.v.errmsg, 'cmdline%.lua')
 end
 
-T['Autocomplete']['works when deleting text'] = function()
-  -- `:10s<BS>` (ideally) should hide preview
-  MiniTest.skip()
-end
-
 T['Autocomplete']['is not triggered when wildmenu is visible'] = function()
-  -- Regular test
+  type_keys(':', 'b')
+  eq(has_pum(), true)
+  expect_screenshot_after_keys('<Tab>')
+  type_keys('<Esc>')
 
   -- In combination with autocorrection
-  MiniTest.skip('Currently does not work on Neovim<0.12')
   child.lua('MiniCmdline.config.autocorrect.enable = true')
   child.fn.chdir(test_dir)
   child.cmd('argadd fileA fileB')
   type_keys(':', 'argdel fla', ' ')
   validate_cmdline('argdel fileA ')
+  eq(has_pum(), true)
+end
+
+T['Autocomplete']['works in different command types'] = function()
+  set_lines({ 'aa', 'aaa', 'aaaa' })
+
+  local validate = function(keys)
+    eq(child.fn.mode(), 'n')
+    type_keys(keys)
+    if child.fn.has('nvim-0.12') == 1 then
+      child.expect_screenshot()
+    else
+      eq(has_pum(), false)
+    end
+    type_keys('<Esc>', '<Esc>')
+  end
+
+  -- `/` and `?` can complete on Neovim>=0.12
+  validate({ '/', 'a' })
+  validate({ '?', 'a' })
+
+  -- Others command types - no completion
+  validate({ 'i', '<C-r>=', 'a' })
+  validate({ ':call input("")<CR>', 'a' })
+end
+
+T['Autocomplete']['works with default predicate'] = function()
+  type_keys(':', '1')
+  eq(has_pum(), false)
+
+  type_keys('s')
+  eq(has_pum(), true)
+
+  type_keys('<BS>')
+  eq(has_pum(), false)
+end
+
+T['Autocomplete']['respects `config.autocomplete.delay`'] = function()
+  local delay = 5 * small_time
+  child.lua('MiniCmdline.config.autocomplete.delay = ' .. delay)
+
+  type_keys(':', 'b')
+  eq(has_pum(), false)
+  sleep(delay - small_time)
+  eq(has_pum(), false)
+
+  -- Should implement debounce-style delay
+  type_keys('u')
+  sleep(delay - small_time)
+  eq(has_pum(), false)
+  sleep(2 * small_time)
+  eq(has_pum(), true)
+
+  -- Should work when pum is visible
+  type_keys('f')
+  sleep(delay - small_time)
+  -- NOTE: Although no pum is present, on Neovim>=0.12 it is still drawn since
+  -- that is how `wildtrigger()` works. This results in less flickering.
+  eq(has_pum(), false)
+  sleep(2 * small_time)
+  eq(has_pum(), true)
+
+  -- Should work when deleting text
+  type_keys('<BS>')
+  sleep(delay - small_time)
+  eq(has_pum(), false)
+  sleep(2 * small_time)
+  eq(has_pum(), true)
+end
+
+T['Autocomplete']['should be triggered only during Command-line mode'] = function()
+  local delay = 5 * small_time
+  child.lua('MiniCmdline.config.autocomplete.delay = ' .. delay)
+
+  set_lines({ 'Line 1', 'Line 2' })
+  set_cursor(1, 0)
+  child.cmd('set wildchar=<Down>')
+
+  type_keys(':', 'b')
+  sleep(small_time)
+  type_keys('<Esc>')
+  sleep(delay + small_time)
+
+  eq(get_lines(), { 'Line 1', 'Line 2' })
+  eq(get_cursor(), { 1, 0 })
 end
 
 T['Autocomplete']['respects `config.autocomplete.predicate`'] = function()
-  -- Should trigger only if `true`
+  child.lua([[
+    _G.res = true
+    _G.predicate_log = {}
+    MiniCmdline.config.autocomplete.predicate = function(...)
+      table.insert(_G.predicate_log, { ... })
+      return _G.res
+    end
+  ]])
 
-  -- If `false` should force no pmenu shown. Relevant on Neovim>=0.12 since
-  -- it uses `vim.fn.wildtrigger()` which can be drawn outdated (by design).
-  -- Should also not re-trigger wildmenu, as predicate can be used to stop
-  -- potentially slow completion.
-  MiniTest.skip()
+  local validate_log = function(ref)
+    eq(child.lua_get('_G.predicate_log'), ref)
+    child.lua('_G.predicate_log = {}')
+  end
+
+  local has_012 = child.fn.has('nvim-0.12') == 1
+
+  -- Should be called with proper data
+  type_keys(':')
+  eq(has_pum(), false)
+  validate_log({})
+
+  type_keys('1')
+  validate_log({ { { line = '1', pos = 2, line_prev = '', pos_prev = 1 } } })
+  eq(has_pum(), not has_012)
+
+  type_keys('s')
+  validate_log({ { { line = '1s', pos = 3, line_prev = '1', pos_prev = 2 } } })
+  eq(has_pum(), true)
+
+  type_keys('<C-u>')
+  validate_log({ { { line = '', pos = 1, line_prev = '1s', pos_prev = 3 } } })
+  eq(has_pum(), not has_012)
+  type_keys('<Esc>')
+
+  -- Should not show if `false`
+  child.lua('_G.res = false')
+  type_keys(':')
+  type_keys('s')
+  eq(has_pum(), false)
 end
 
 T['Autocomplete']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
@@ -367,7 +571,13 @@ T['Autocomplete']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
 }, {
   test = function(var_type)
     child[var_type].minicmdline_disable = true
-    MiniTest.skip()
+    type_keys(':', 'b')
+    eq(has_pum(), false)
+    type_keys('<Esc>')
+
+    child[var_type].minicmdline_disable = false
+    type_keys(':', 'b')
+    eq(has_pum(), true)
   end,
 })
 
@@ -583,8 +793,6 @@ T['Autocorrect']['works for other types'] = function()
   -- syntime
   -- - No in-progress check since `:syntime` expects single argument
   validate_final('syntime clr', 'syntime clear')
-
-  MiniTest.skip('Finish `option` type')
 end
 
 T['Autocorrect']['works multiple times'] = function()
@@ -601,6 +809,18 @@ T['Autocorrect']['works multiple times'] = function()
 
   type_keys('sort', ' ')
   validate_cmdline('aboveleft noautocmd sort ')
+end
+
+T['Autocorrect']['works only in `:` command type'] = function()
+  local validate = function(keys, ref)
+    eq(child.fn.mode(), 'n')
+    type_keys(keys)
+    validate_cmdline(ref)
+    type_keys('<Esc>', '<Esc>')
+  end
+  validate({ '/', 'srot', ' ' }, 'srot ')
+  validate({ '?', 'srot', ' ' }, 'srot ')
+  validate({ 'i', '<C-r>=', 'srot ' }, 'srot ')
 end
 
 T['Autocorrect']['respects mappings'] = function()
@@ -838,23 +1058,21 @@ T['Autopeek'] = new_set({
   },
 })
 
-local validate_peek_winheight = function(ref)
+local get_peek_win_id = function()
   local buf_id = child.api.nvim_get_current_buf()
-  local peek_win_id
   for _, win_id in ipairs(child.api.nvim_list_wins()) do
     local is_float = child.api.nvim_win_get_config(win_id).relative ~= ''
-    if is_float and child.api.nvim_win_get_buf(win_id) == buf_id then peek_win_id = win_id end
+    if is_float and child.api.nvim_win_get_buf(win_id) == buf_id then return win_id end
   end
-  local winheight = peek_win_id == nil and 0 or child.api.nvim_win_get_height(peek_win_id)
-  eq(winheight, ref)
 end
 
-local validate_no_peek = function() validate_peek_winheight(0) end
-
-local expect_screenshot_after_keys = function(keys)
-  type_keys(keys)
-  child.expect_screenshot()
+local get_peek_winheight = function()
+  local peek_win_id = get_peek_win_id()
+  return peek_win_id == nil and 0 or child.api.nvim_win_get_height(peek_win_id)
 end
+
+local validate_no_peek = function() eq(get_peek_winheight() == 0, true) end
+local validate_peek = function() eq(get_peek_winheight() > 0, true) end
 
 T['Autopeek']['works'] = function()
   type_keys(':')
@@ -875,6 +1093,22 @@ T['Autopeek']['works'] = function()
   expect_screenshot_after_keys('<BS>')
   expect_screenshot_after_keys('<C-w>')
   expect_screenshot_after_keys('<C-u>')
+
+  -- Should work with blank line
+  expect_screenshot_after_keys(' ')
+
+  -- Exiting Command-line mode should hide peek window
+  type_keys('<Esc>')
+  validate_no_peek()
+end
+
+T['Autopeek']['persists for the entirety of command typing'] = function()
+  type_keys(':')
+  expect_screenshot_after_keys('2')
+  expect_screenshot_after_keys('delete ')
+  expect_screenshot_after_keys('_ 3')
+  type_keys('<CR>')
+  eq(child.api.nvim_buf_get_lines(0, 0, 2, false), { 'Line 1', 'Line 5' })
 end
 
 T['Autopeek']['correctly computes lines to show'] = function()
@@ -916,46 +1150,236 @@ T['Autopeek']['works with inverted range'] = function()
   expect_screenshot_after_keys('<C-u>4,3')
 end
 
+T['Autopeek']['can be hidden and opened within same session'] = function()
+  type_keys(':')
+
+  validate_no_peek()
+  type_keys('2')
+  validate_peek()
+  type_keys(',')
+  validate_peek()
+  type_keys('<C-u>')
+  validate_no_peek()
+
+  type_keys('1')
+  validate_peek()
+  type_keys('<BS>')
+  validate_no_peek()
+end
+
+T['Autopeek']["works with 'inccommand'"] = function()
+  type_keys(':')
+  local validate = function(keys)
+    child.api.nvim_input(keys)
+    child.expect_screenshot()
+  end
+  validate('2s')
+  validate('/')
+  validate('Li')
+  validate('/')
+  validate('XX')
+
+  validate('/<CR>')
+  validate_no_peek()
+  eq(child.api.nvim_buf_get_lines(0, 0, 2, false), { 'Line 1', 'XXne 2' })
+end
+
+T['Autopeek']['respects mappings'] = function()
+  -- Should not work if Command-line mode is both entered and exited
+  child.cmd('nnoremap <C-x> :2,3sort<CR>')
+  type_keys('<C-x>')
+  validate_no_peek()
+
+  -- Should work if Command-line mode is only entered
+  child.cmd('nnoremap <C-y> :3,4')
+  expect_screenshot_after_keys('<C-y>')
+end
+
+T['Autopeek']['uses correct highlight groups'] = function()
+  type_keys(':', '2')
+  local win_id = get_peek_win_id()
+  local peek_winhl = child.api.nvim_get_option_value('winhighlight', { scope = 'local', win = win_id })
+  expect.match(peek_winhl, 'NormalFloat:MiniCmdlinePeekNormal')
+  expect.match(peek_winhl, 'FloatBorder:MiniCmdlinePeekBorder')
+  expect.match(peek_winhl, 'FloatTitle:MiniCmdlinePeekTitle')
+end
+
 T['Autopeek']["ignores 'wrap'"] = function()
-  -- But respects global 'list' and 'listchars'
-  MiniTest.skip()
+  set_lines({ 'Very big line number one', '', '', 'Very big line number two' })
+  child.o.wrap = true
+
+  type_keys(':')
+  expect_screenshot_after_keys('<C-u>2')
+  expect_screenshot_after_keys('<C-u>2,3')
+  expect_screenshot_after_keys('<C-u>1,4')
+  type_keys('<Esc>')
+
+  -- Should also respect global 'list' and 'listchars'
+  type_keys(':')
+  child.o.list = true
+  child.o.listchars = 'precedes:<,extends:>'
+  expect_screenshot_after_keys('<C-u>2,3')
 end
 
 T['Autopeek']['works with virtual lines'] = function()
-  -- In particular, range line should be included if `n_context > 0` even if
-  -- there are multi-line virtual lines below/above
-  MiniTest.skip()
+  local ns_id = child.api.nvim_create_namespace('Test')
+  child.api.nvim_buf_set_extmark(0, ns_id, 1, 0, { virt_lines = { { { 'Virt' } } } })
+  child.api.nvim_buf_set_extmark(0, ns_id, 3, 0, { virt_lines = { { { 'Virt above' } } }, virt_lines_above = true })
+
+  -- Currently context computation doesn't take virtual lines into account.
+  -- Ideally their extmarks should not be shown, but doing that is difficult.
+  -- It is much easier to show buffer as is and document issue with virtual
+  -- lines as a known limitation.
+  type_keys(':')
+  expect_screenshot_after_keys('<C-u>2')
+  expect_screenshot_after_keys('<C-u>4')
+  expect_screenshot_after_keys('<C-u>2,4')
+  type_keys('<Esc>')
+
+  -- Zero context should work better
+  child.lua('MiniCmdline.config.autopeek.n_context = 0')
+  type_keys(':')
+  expect_screenshot_after_keys('<C-u>2')
+  expect_screenshot_after_keys('<C-u>4')
+  expect_screenshot_after_keys('<C-u>2,4')
 end
 
 T['Autopeek']['hides visual selection'] = function()
+  child.set_size(15, 20)
+
   -- The range preview is already a preview of Visual selection
+  set_cursor(2, 1)
+  type_keys('v', '2j', ':')
+  child.expect_screenshot()
+  eq(get_cursor(), { 2, 1 })
+  type_keys('<Esc>')
 
-  -- Should be overridable via autocommand
-  MiniTest.skip()
-end
+  -- Should be overridable via autocommand before `require('mini.cmdline')`
+  unload_module()
+  child.lua([[
+    local disable = vim.schedule_wrap(function()
+      local is_from_visual = vim.startswith(vim.fn.getcmdline(), "'<,'>")
+      MiniCmdline.config.autopeek.enable = not is_from_visual
+    end)
+    local reenable = function() MiniCmdline.config.autopeek.enable = true end
 
-T['Autopeek']['is shown only for line range'] = function()
-  -- Like not `%bw`
-  MiniTest.skip()
+    vim.api.nvim_create_autocmd('CmdlineEnter', { callback = disable })
+    vim.api.nvim_create_autocmd('CmdlineLeave', { callback = reenable })
+  ]])
+  load_module()
+
+  type_keys('v', '2j', ':')
+  child.expect_screenshot({ redraw = false })
+  type_keys('<Esc>')
+
+  type_keys(':', '5')
+  validate_peek()
 end
 
 T['Autopeek']['works with every kind of line range'] = function()
-  -- `:h :range` and `:h range-offset`
-  MiniTest.skip()
+  set_cursor(3, 0)
+  type_keys('Vj', '<Esc>')
+
+  set_cursor(10, 1)
+  type_keys('ma')
+  set_cursor(12, 0)
+  type_keys('mb')
+
+  set_cursor(2, 0)
+  type_keys(':')
+
+  -- `:h :range`
+  expect_screenshot_after_keys('<C-u>.,$')
+  expect_screenshot_after_keys('<C-u>%')
+  expect_screenshot_after_keys('<C-u>*')
+  expect_screenshot_after_keys("<C-u>'<LT>,'>")
+  expect_screenshot_after_keys("<C-u>'a,'b")
+  expect_screenshot_after_keys("<C-u>'b,'a")
+  expect_screenshot_after_keys('<C-u>/Line 5/,/Line 4/')
+  expect_screenshot_after_keys('<C-u>/Line 5/;/Line 4/')
+  expect_screenshot_after_keys('<C-u>?Line 5?,?Line 6?')
+  expect_screenshot_after_keys('<C-u>?Line 5?;?Line 6?')
+
+  -- `:h range-offset`
+  expect_screenshot_after_keys('<C-u>++,-')
+  expect_screenshot_after_keys("<C-u>'<LT>+2,'a--")
+  expect_screenshot_after_keys('<C-u>/5/+100,/4/-100')
 end
 
-T['Autopeek']['is updated on command line height change'] = function()
-  child.set_size(10, 20)
+T['Autopeek']['is shown only for line range'] = function()
+  type_keys(':')
 
-  -- Should handle not enough vertical space (like with too big command height)
-  MiniTest.skip()
+  -- Should assume line range by default
+  type_keys('%')
+  validate_peek()
+
+  -- `:bwipeout` doesn't treat range as lines, see `:h :command-addr`
+  type_keys('bw')
+  validate_no_peek()
+
+  type_keys('<C-w>')
+  validate_peek()
+end
+
+T['Autopeek']['works when regular command line parsing fails'] = function()
+  type_keys('/', 'Line 10', '<CR>')
+  child.cmd('nohlsearch')
+
+  type_keys(':')
+
+  -- Line with only range
+  expect_screenshot_after_keys('<C-u>%')
+
+  -- Unfinished `/xxx/` range
+  expect_screenshot_after_keys('<C-u>/')
+  expect_screenshot_after_keys('Li')
+  expect_screenshot_after_keys('ne 4')
+  expect_screenshot_after_keys('/,')
+  expect_screenshot_after_keys('/Line 6')
+
+  -- Unrecognized command
+  expect_screenshot_after_keys('<C-u>1xxx')
+  expect_screenshot_after_keys('<C-u>1,2xxx')
+  expect_screenshot_after_keys('<C-u>%xxx')
+end
+
+T['Autopeek']['reacts to command line height change during typing'] = function()
+  child.set_size(10, 15)
+
+  local long_line = string.rep('a', 16)
+  type_keys(':', '2,5')
+
+  -- Should reposition on top of new command line height
+  expect_screenshot_after_keys(long_line)
+
+  -- Should adjust height if not enough space
+  expect_screenshot_after_keys(long_line)
+  expect_screenshot_after_keys(long_line)
+end
+
+T['Autopeek']['reacts to `VimResized`'] = function()
+  child.set_size(10, 20)
+  type_keys(':')
+  expect_screenshot_after_keys('2,5')
+
+  child.set_size(10, 25)
+  child.expect_screenshot()
+
+  child.set_size(15, 15)
+  child.expect_screenshot()
+
+  child.set_size(6, 20)
+  child.expect_screenshot()
 end
 
 T['Autopeek']["works with different 'cmdheight'"] = function()
   child.o.cmdheight = 0
+  expect_screenshot_after_keys(':2,5')
+  type_keys('<Esc>')
 
   child.o.cmdheight = 2
-  MiniTest.skip()
+  expect_screenshot_after_keys(':2,5')
+  type_keys('<Esc>')
 end
 
 T['Autopeek']['works only in `:` command type'] = function()
@@ -971,7 +1395,20 @@ T['Autopeek']['works only in `:` command type'] = function()
   validate({ 'call input("")<CR>', '2' })
 end
 
-T['Autopeek']['respects `config.autopeek.win_config`'] = function() MiniTest.skip() end
+T['Autopeek']['is shown below pmenu'] = function() expect_screenshot_after_keys({ ':', '1,2sor', '<Tab>' }) end
+
+T['Autopeek']['respects `config.autopeek.window.config`'] = function()
+  -- As table
+  child.lua([[MiniCmdline.config.autopeek.window.config = { border = 'none', width = 15 }]])
+  expect_screenshot_after_keys({ ':', '2' })
+  type_keys('<Esc>')
+
+  -- As callable
+  child.lua([[MiniCmdline.config.autopeek.window.config = function()
+    return { border = 'double', width = 0.25 * vim.o.columns, height = 5, title = 'Custom title to check truncation' }
+  end]])
+  expect_screenshot_after_keys({ ':', '2' })
+end
 
 T['Autopeek']["respects 'winborder'"] = function()
   if child.fn.has('nvim-0.11') == 0 then MiniTest.skip("'winborder' option is present on Neovim>=0.11") end
@@ -1096,50 +1533,58 @@ T['Autopeek']['fits into available height'] = function()
   validate(5, '4,3')
 end
 
-T['Autopeek']['can be hidden and opened within same session'] = function() MiniTest.skip() end
+T['Autopeek']['updates when navigating through history'] = function()
+  type_keys(':', '2,5sort', '<CR>')
+  type_keys(':', 'echo', '<CR>')
 
-T['Autopeek']['correctly sets in-between fold'] = function()
-  -- There should be only a single fold if there are at least two lines folded
-  MiniTest.skip()
+  type_keys(':')
+  expect_screenshot_after_keys('10')
+  expect_screenshot_after_keys('<C-u><Up>')
+  expect_screenshot_after_keys('<C-u><Up>')
+  expect_screenshot_after_keys('<C-u><Down>')
 end
 
-T['Autopeek']['reacts to `VimResized`'] = function()
-  -- Both in width and height (with `n_context > 0`)
-  MiniTest.skip()
-end
+T['Autopeek']['works with command window'] = function()
+  -- Command window seems to block child process, so use a workaround to test
+  -- if autopeek was shown
+  child.lua([[
+    _G.statuscolumn_was_used = false
+    MiniCmdline.config.autopeek.window.statuscolumn = function(...)
+      _G.statuscolumn_was_used = true
+      return MiniCmdline.default_autopeek_statuscolumn(...)
+    end
+  ]])
 
-T['Autopeek']['updates when navigating through history'] = function() MiniTest.skip() end
-
-T['Autopeek']['works when regular command line parsing fails'] = function()
-  -- Line with only range: `1`, `$`, `1,2`, `%`
-
-  -- Unfinished `/xxx/` range: `/xxx`, `1,/xxx`, `1;/xxx`
-
-  -- Unrecognized command: `1xxx`, `1,2xxx`, `%xxx`
-  MiniTest.skip()
-end
-
-T['Autopeek']['works if range is present immediately'] = function()
-  child.cmd('nnoremap <C-x> :2,3')
-  MiniTest.skip()
-end
-
-T['Autopeek']['works with out-of-bounds values'] = function()
-  -- Both `from` and `to`
-  MiniTest.skip()
-end
-
-T['Autopeek']['is not shown in command window'] = function()
+  -- Should not be shown if command is typed inside command window
   -- NOTE: It would be good to also show it, but it would require much more
   -- explicit work (`CmdlineChanged` is not triggered in cmdwin)
-  MiniTest.skip()
+  type_keys('q:', '2', ',5', '<CR>')
+  eq(child.lua_get('_G.statuscolumn_was_used'), false)
+
+  -- NOTE: Neovim<0.10 can not detect if buffer belongs to command window
+  if child.fn.has('nvim-0.10') == 0 then
+    MiniTest.skip('Neovim<0.10 does not have enough capabilities to work with command window')
+  end
+
+  -- Should not be shown for command window buffer.
+  type_keys('q:')
+  type_keys(':', '1', '<CR>')
+  type_keys('<CR>')
+  eq(child.lua_get('_G.statuscolumn_was_used'), false)
+
+  -- Should hide already visible peek when entering command window
+  type_keys(':', '2')
+  validate_peek()
+  child.lua('_G.statuscolumn_was_used = false')
+  type_keys('<C-f>')
+  type_keys(',5', '<CR>')
+  eq(child.lua_get('_G.statuscolumn_was_used'), false)
 end
 
 T['Autopeek']['works when using command-line expression register'] = function()
-  MiniTest.skip('After proper test coverage, make sure it works by adjusting tracking for "nested Command-line mode"')
   type_keys(':', '2,', '<C-r>=', '10+10')
   -- Should not react to "range like" content when entering register
-  validate_peek_winheight(3)
+  eq(get_peek_winheight(), 3)
 
   type_keys('<CR>')
   child.expect_screenshot()
@@ -1151,21 +1596,80 @@ T['Autopeek']['works when using command-line expression register'] = function()
   validate_no_peek()
 end
 
-T['Autopeek']['is not shown for command window buffer'] = function() MiniTest.skip() end
-
 T['Autopeek']['respects `vim.{g,b}.minicmdline_disable`'] = new_set({
   parametrize = { { 'g' }, { 'b' } },
 }, {
   test = function(var_type)
     child[var_type].minicmdline_disable = true
-    MiniTest.skip()
+    type_keys(':', '2')
+    validate_no_peek()
+    type_keys('<Esc>')
+
+    child[var_type].minicmdline_disable = false
+    type_keys(':', '2')
+    validate_peek()
   end,
 })
 
 T['Arrow mappings'] = new_set()
 
-T['Arrow mappings']['work'] = function() MiniTest.skip() end
+T['Arrow mappings']['work horizontally'] = function()
+  load_module({ autocomplete = { enable = false } })
 
-T['Arrow mappings']['respect `config.autocomplete.map_arrows`'] = function() MiniTest.skip() end
+  -- Left/Right - always move cursor regardless of pum
+  type_keys(':', 'so', '<Tab>')
+  eq(has_pum(), true)
+  type_keys('<Left>')
+  validate_cmdline('sort', 4)
+  eq(has_pum(), false)
+
+  type_keys('<Tab>')
+  eq(has_pum(), true)
+  type_keys('<Right>')
+  validate_cmdline('sortt', 6)
+  eq(has_pum(), false)
+end
+
+T['Arrow mappings']['work vertically'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Works only on Neovim>=0.10') end
+
+  load_module({ autocomplete = { enable = false } })
+
+  -- Disable fuzzy matching for easier testing
+  child.o.wildoptions = 'pum'
+
+  -- Up/Down - navigate history regardless of pum
+  type_keys(':', 'setglobal expandtab', '<CR>')
+  type_keys(':', 'setglobal ignorecase', '<CR>')
+
+  type_keys(':', 'set', '<Tab>')
+  eq(has_pum(), true)
+
+  type_keys('<Up>')
+  validate_cmdline('setglobal ignorecase')
+  eq(has_pum(), false)
+  type_keys('<Up>')
+  validate_cmdline('setglobal expandtab')
+  eq(has_pum(), false)
+
+  type_keys('<C-u>set', '<Tab>')
+  eq(has_pum(), true)
+
+  type_keys('<Down>')
+  validate_cmdline('setglobal ignorecase')
+  eq(has_pum(), false)
+  type_keys('<Down>')
+  validate_cmdline('set')
+  eq(has_pum(), false)
+end
+
+T['Arrow mappings']['respect `config.autocomplete.map_arrows`'] = function()
+  load_module({ autocomplete = { map_arrows = false } })
+  local validate = function(key) expect.match(child.cmd_capture('cnoremap ' .. key), 'No mapping found') end
+  validate('<Left>')
+  validate('<Right>')
+  validate('<Up>')
+  validate('<Down>')
+end
 
 return T

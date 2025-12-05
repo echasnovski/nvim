@@ -14,29 +14,7 @@
 --
 -- Tests:
 --
--- - Make sure that every feature works in all command types (`getcmdtype()`).
---
--- - Arrow mappings should work.
---
--- - Weird `:h :range` should work in every feature. In particular:
---     - `:/pattern/`
---     - `'a,'b` (with punctuation and alphabetic marks). Special case is `''`.
---       Requires those marks to actually be set.
---     - Arithmetics on line ranges
---
 -- - Autocomplete:
---     - Should autocomplete for first letters of "bad" (for Neovim<0.12)
---       command names (like `g`, `v`, `s`).
---
---     - Works for problematic completion types (like `file`/`file_in_path`;
---       `:edit f` or `:grep f`) without infinite loop.
---
---     - Works with bang (like `:q!`) without extra wildchar.
---
---     - Does not trigger wildchar after the delay if not inside command line.
---
---     - Does not trigger wildchar in case of `delay=0` and Command-line mode
---       triggered via mapping (like `:<C-u>...` in Visual mode).
 --
 -- - Autocorrect:
 
@@ -79,7 +57,7 @@
 ---
 --- Some options are set automatically (if not set before |MiniCmdline.setup()|):
 --- - |'wildmode'| is set to "noselect,full" for less intrusive autocompletion popup.
----   Requires Neovim>=0.11.
+---   Requires Neovim>=0.11 and enabled `config.autocomplete`.
 --- - |'wildoptions'| is set to "pum,fuzzy" to enable fuzzy matching.
 ---
 --- # Comparisons ~
@@ -160,17 +138,17 @@ end
 --- flicker (thanks to |wildtrigger()|).
 ---
 --- `autocomplete.predicate` defines a condition of whether to trigger completion
---- at the current command line state. Should return `true` to show completion
---- and `false` otherwise.
+--- at the current command line state. Takes a table with input data and should
+--- return `true` to show completion and `false` otherwise. Will be called before
+--- the possible delay at current command line state.
+--- Default: |MiniCmdline.default_autocomplete_predicate()|.
 ---
---- TODO: It takes no arguments, which means that cases like `:10` and
---- `:10s<BS>` can not be differntiated. This is a problem on Neovim>=0.12
---- since the second case results in a stale wildmenu (which seems to be an).
---- Either add a `data` argument with something like `line` and `line_prev`
---- fields to help differentiate these cases, or rethink the whole `predicate`
---- completely.
+--- Input data fields:
+--- - <line> `(string)` - current command line text. See |getcmdline()|.
+--- - <pos> `(number)` - current command line column. See |getcmdpos()|.
+--- - <line_prev> `(string)` - command line text before the latest change.
+--- - <pos_prev> `(number)` - command line column before the latest cursor move.
 ---
---- Default: |MiniCmdline.default_autocomplete_predicate()| (always show).
 --- Example of blocking completion based on completion type (as some may be slow): >lua
 ---
 ---   local block_compltype = { shellcmd = true }
@@ -211,6 +189,7 @@ end
 --- `autocorrect.func` is a function that can be used to customize autocorrection.
 --- Takes a table with input data and should return a string with the correct word
 --- or `nil` for no autocorrection. Default: |MiniCmdline.default_autocorrect_func()|.
+---
 --- Input data fields:
 --- - <word> `(string)` - word to be autocorrected. Never empty string.
 --- - <type> `(string)` - word type. Output of |getcmdcompltype()|.
@@ -242,6 +221,18 @@ end
 --- - Non-zero context might work unreliably if there are virtual lines.
 --- - Intentionally hides Visual seletion if Command-line mode is entered directly
 ---   from it. Peeking `'<,'>` range already visualizes the selection.
+---   To disable autopeek for this case, add the following code BEFORE
+---   executing `require('mini.cmdline').setup()`: >lua
+---
+---     local disable = vim.schedule_wrap(function()
+---       local is_from_visual = vim.startswith(vim.fn.getcmdline(), "'<,'>")
+---       MiniCmdline.config.autopeek.enable = not is_from_visual
+---     end)
+---     local reenable = function() MiniCmdline.config.autopeek.enable = true end
+---
+---     vim.api.nvim_create_autocmd('CmdlineEnter', { callback = disable })
+---     vim.api.nvim_create_autocmd('CmdlineLeave', { callback = reenable })
+--- <
 MiniCmdline.config = {
   -- Autocompletion: show `:h 'wildmenu'` as you type
   autocomplete = {
@@ -287,9 +278,12 @@ MiniCmdline.config = {
 
 --- Default autocompletion predicate
 ---
+---@param data table Input autocompletion data. As described in |MiniCmdline.config|.
+---@param opts table|nil Options. Reserved for future use.
+---
 ---@return boolean If command line does not (yet) contain a letter - `false`,
----   otherwise - `true`. This makes autopeek feature easier to use.
-MiniCmdline.default_autocomplete_predicate = function() return vim.fn.getcmdline():find('%a') ~= nil end
+---   otherwise - `true`. This makes autopeek easier to use for a numerical range.
+MiniCmdline.default_autocomplete_predicate = function(data, opts) return data.line:find('%a') ~= nil end
 
 --- Default autocorrection function
 ---
@@ -516,6 +510,8 @@ H.apply_config = function(config)
     end
     map_arrow('<Left>', '<Space><BS>', 'Move cursor left')
     map_arrow('<Right>', '<Space><BS>', 'Move cursor right')
+    -- NOTE: All tests seem to pass without these mappings. But it is mentioned
+    -- in `:h cmdline-autocompletion`, so probably worth adding
     map_arrow('<Up>', '<C-e>', 'Go to earlier history')
     map_arrow('<Down>', '<C-e>', 'Go to newer history')
   end
@@ -533,7 +529,8 @@ H.create_autocommands = function()
   --   (like `:<C-u>...` popular for Visual mode).
   -- - Schedule for 'CmdlineChanged' to work around autcompletion issues with
   --   mocking wildchar.
-  -- - Do not schedule 'CmdlineLeave' to be able to set command line text.
+  -- - Do not schedule 'CmdlineLeave' to be able to set command text before
+  --   executing it.
   au('CmdlineEnter', '*', vim.schedule_wrap(H.on_cmdline_enter), 'Act on command line enter')
   au('CmdlineChanged', '*', vim.schedule_wrap(H.on_cmdline_changed), 'Act on command line change')
   au('CmdlineLeave', '*', H.on_cmdline_leave, 'Act on command line leave')
@@ -565,10 +562,17 @@ H.get_config = function() return vim.tbl_deep_extend('force', MiniCmdline.config
 -- Autocommands ---------------------------------------------------------------
 H.on_cmdline_enter = function()
   -- Check for Command-line mode to not act on `:...` mappings
-  -- check for non-nil cached config to avoid acting on `c_CTRL-R_=`, since
-  -- it issues a CmdlineEnter-CmdlineChanged-CmdlineLeave for it without
-  -- explicit leave-enter for the initial normal Ex command mode.
-  if H.is_disabled() or vim.fn.mode() ~= 'c' or H.cache.config ~= nil then return end
+  if H.is_disabled() or vim.fn.mode() ~= 'c' then return end
+
+  -- Act only on "not nested" command line (for simplicity). It can nest after
+  -- `c_CTRL-R_=`, since there are CmdlineEnter-CmdlineChanged-CmdlineLeave for
+  -- it without explicit leave-enter for the initial normal Ex command mode.
+  -- There doesn't seem to be a way to have `n_nested > 1`, but use counter of
+  -- nested levels instead of a boolean `is_nested` just in case.
+  if H.cache.state ~= nil then
+    H.cache.n_nested = (H.cache.n_nested or 0) + 1
+    return
+  end
 
   H.cache = {
     buf_id = vim.api.nvim_get_current_buf(),
@@ -577,8 +581,6 @@ H.on_cmdline_enter = function()
     peek = {},
     state = H.get_cmd_state(),
     state_prev = H.get_cmd_state(true),
-    -- TODO: Remove as not needed if all necessary tests pass
-    wildchar = H.get_wildchar(),
   }
   H.cache.autocomplete_predicate = H.cache.config.autocomplete.predicate or MiniCmdline.default_autocomplete_predicate
   H.cache.buf_is_cmdwin = vim.fn.getbufinfo(H.cache.buf_id)[1].command == 1
@@ -588,8 +590,7 @@ H.on_cmdline_enter = function()
 end
 
 H.on_cmdline_changed = function()
-  if H.cache.config == nil then return end
-  local config = H.cache.config
+  if H.cache.state == nil or H.cache.n_nested ~= nil then return end
 
   -- Act only on actual line change
   local state = H.get_cmd_state()
@@ -599,13 +600,19 @@ H.on_cmdline_changed = function()
   if H.cache.state_prev.compltype == 'option' then H.adjust_option_cmd_state(state) end
   H.cache.state_prev, H.cache.state = H.cache.state, state
 
+  local config = H.cache.config
   if config.autocomplete.enable and H.can_autocomplete then H.autocomplete() end
   if config.autocorrect.enable then H.autocorrect(false) end
   if config.autopeek.enable then H.autopeek() end
 end
 
 H.on_cmdline_leave = function()
-  if H.cache.config == nil then return end
+  if H.cache.state == nil then return end
+  if H.cache.n_nested ~= nil then
+    H.cache.n_nested = H.cache.n_nested > 1 and (H.cache.n_nested - 1) or nil
+    return
+  end
+
   if H.cache.config.autocorrect.enable and not vim.v.event.abort then H.autocorrect(true) end
   H.peek_hide()
   H.cache = {}
@@ -636,8 +643,10 @@ end
 H.autocomplete = function()
   H.timers.autocomplete:stop()
 
-  -- Do not complete if predicate says so.
-  if not H.cache.autocomplete_predicate() then return H.hide_wild() end
+  -- Do not complete if predicate says so
+  local state, state_prev = H.cache.state, H.cache.state_prev
+  local data = { line = state.line, pos = state.pos, line_prev = state_prev.line, pos_prev = state_prev.pos }
+  if not H.cache.autocomplete_predicate(data) then return end
 
   -- Do nothing in some problematic cases (when wildmenu does not work)
   -- TODO: Remove after compatibility with Neovim=0.11 is dropped
@@ -694,7 +703,7 @@ H.hide_wild = function()
 
   -- This works, but it triggers wildmenu, which is not usable when the point
   -- is to hide pmenu if `autocomplete.predicate()` returned `false` ()
-  -- local keys = (vim.fn.wildmenumode() == 0 and H.cache.wildchar or '') .. '\5'
+  -- local keys = (vim.fn.wildmenumode() == 0 and '\26' or '') .. '\5'
   -- vim.api.nvim_feedkeys(keys, 'nt', false)
 end
 if vim.fn.has('nvim-0.12') == 0 then H.hide_wild = function() end end
@@ -727,9 +736,12 @@ H.autocorrect = function(is_final)
   if word == new_word then return end
   if type(new_word) ~= 'string' then return H.notify('Can not autocorrect for ' .. vim.inspect(word), 'WARN') end
 
+  -- Set corrected word
   local init_pos = state_to_use.pos
   local new_line = line:sub(1, init_pos - word:len() - 1) .. new_word .. line:sub(init_pos)
-  vim.fn.setcmdline(new_line, new_line:len() + 1)
+  -- - Use `noautocmd` to not conflict with `autocomplete` on `CmdlineChanged`
+  local cmd = string.format('call setcmdline(%s, %s)', vim.inspect(new_line), new_line:len() + 1)
+  vim.cmd('noautocmd ' .. cmd)
 end
 
 H.get_autocorrect_candidates = function(data)
@@ -872,9 +884,7 @@ end
 -- Autopeek -------------------------------------------------------------------
 H.autopeek = function(force)
   -- Decide if peek needs to be shown or hidden
-  if not (H.cache.state ~= nil and H.cache.cmd_type == ':' and vim.fn.mode() == 'c' and not H.cache.buf_is_cmdwin) then
-    return
-  end
+  if not (H.cache.cmd_type == ':' and not H.cache.buf_is_cmdwin) then return end
 
   local line = H.cache.state.line
   if line:find('%S') == nil then H.peek_hide() end
@@ -910,7 +920,17 @@ H.peek_show = function(from, to)
   local cont_to = H.peek_new_context(to, n_context, n_lines)
   local height = H.peek_get_height(cont_from, cont_to)
 
-  -- Ensure opened window of enough height
+  -- Ensure opened window of enough height.
+  -- NOTE: This uses current buffer directly, which means that all its extmarks
+  -- are shown. This is both good (for extra text highlighting) and bad
+  -- (virtual lines and text) thing. Ideally, extmark "owners" should take care
+  -- of where they should be shown. Usually setting something like "only show
+  -- inside this particular window" makes sense. Like in 'mini.diff' and
+  -- 'mini.indentscope'. This is currently not (robustly) possible. Sources:
+  -- - https://github.com/neovim/neovim/issues/19654
+  -- - https://github.com/neovim/neovim/pull/27361
+  -- - https://github.com/neovim/neovim/pull/28432
+  -- - https://github.com/neovim/neovim/pull/28728
   local config = H.peek_get_config(height)
   local win_id = H.cache.peek.win_id
   win_id = H.is_valid_win(win_id) and win_id or vim.api.nvim_open_win(0, false, config)
@@ -1073,16 +1093,6 @@ if vim.fn.has('nvim-0.11') == 0 then
   -- Match alphanumeric characters to cursor's left, if present
   -- This is not 100% how it works, but good enough
   H.getcmdcomplpat = function() return vim.fn.getcmdline():sub(1, vim.fn.getcmdpos() - 1):match('%w+$') or '' end
-end
-
-H.get_wildchar = function()
-  local wc = vim.o.wildchar
-  if wc >= 0 then return vim.fn.nr2char(wc) end
-  -- Negative key means that 'wildchar' is mapped to some special non-printable
-  -- key (like <Down>). Those are represented with multiple bytes starting with
-  -- `k_special` (`\x80`). The following reverse engineers this logic.
-  wc = -wc
-  return '\x80' .. string.char(wc % 256) .. string.char(wc / 256)
 end
 
 return MiniCmdline
