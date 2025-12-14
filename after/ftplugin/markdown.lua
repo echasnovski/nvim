@@ -23,7 +23,7 @@ vim.b.minisurround_config = {
     L = {
       input = { '%[().-()%]%(.-%)' },
       output = function()
-        local link = require('mini.surround').user_input('Link: ')
+        local link = require('mini.surround').user_input('Link')
         return { left = '[', right = '](' .. link .. ')' }
       end,
     },

@@ -15,7 +15,7 @@ now_if_args(function()
   local ensure_languages = {
     'bash', 'c',          'cpp',  'css',   'diff', 'go',
     'html', 'javascript', 'json', 'julia', 'nu',   'php', 'python',
-    'r',    'regex',      'rst',  'rust',  'toml', 'tsx', 'yaml',
+    'r',    'regex',      'rst',  'rust',  'toml', 'tsx', 'typescript', 'yaml',
   }
   local isnt_installed = function(lang) return #vim.api.nvim_get_runtime_file('parser/' .. lang .. '.*', false) == 0 end
   local to_install = vim.tbl_filter(isnt_installed, ensure_languages)
@@ -29,6 +29,9 @@ now_if_args(function()
 
   -- Miscellaneous adjustments
   vim.treesitter.language.register('markdown', 'quarto')
+  vim.filetype.add({
+    extension = { qmd = 'quarto', Qmd = 'quarto' },
+  })
 end)
 
 -- Install LSP/formatting/linter executables ==================================
@@ -50,16 +53,6 @@ later(function()
       python = { 'black' },
       r = { 'air' },
     },
-
-    -- formatters = {
-    --   my_styler = {
-    --     command = 'R',
-    --     -- A list of strings, or a function that returns a list of strings
-    --     -- Return a single string instead of a list to run the command in a shell
-    --     args = { '-s', '-e', 'styler::style_file(commandArgs(TRUE)[1])', '--args', '$FILENAME' },
-    --     stdin = false,
-    --   },
-    -- },
   })
 end)
 
@@ -161,30 +154,6 @@ later(function()
   -- Do not close the preview tab when switching to other buffers
   vim.g.mkdp_auto_close = 0
 end)
-
--- Filetype: Quarto/Rmarkdown =================================================
--- later(function()
---   -- This option should be set before loading plugin to take effect. See
---   -- https://github.com/vim-pandoc/vim-pandoc/issues/342
---   vim.g['pandoc#filetypes#pandoc_markdown'] = 0
---
---   add({
---     source = 'vim-pandoc/vim-rmarkdown',
---     depends = { 'vim-pandoc/vim-pandoc', 'vim-pandoc/vim-pandoc-syntax' },
---   })
---
---   -- Show raw symbols
---   vim.g['pandoc#syntax#conceal#use'] = 0
---
---   -- Folding
---   vim.g['pandoc#folding#fold_yaml'] = 1
---   vim.g['pandoc#folding#fold_fenced_codeblocks'] = 1
---   vim.g['pandoc#folding#fastfolds'] = 1
---   vim.g['pandoc#folding#fdc'] = 0
--- end)
-vim.filetype.add({
-  extension = { qmd = 'quarto', Qmd = 'quarto' },
-})
 
 -- -- Popular color schemes for testing ==========================================
 -- later(function()

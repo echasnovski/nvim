@@ -20,7 +20,7 @@ _G.Config.leader_group_clues = {
   { mode = 'n', keys = '<Leader>e', desc = '+Explore' },
   { mode = 'n', keys = '<Leader>f', desc = '+Find' },
   { mode = 'n', keys = '<Leader>g', desc = '+Git' },
-  { mode = 'n', keys = '<Leader>l', desc = '+LSP' },
+  { mode = 'n', keys = '<Leader>l', desc = '+Language' },
   { mode = 'n', keys = '<Leader>L', desc = '+Lua/Log' },
   { mode = 'n', keys = '<Leader>m', desc = '+Map' },
   { mode = 'n', keys = '<Leader>o', desc = '+Other' },
@@ -30,7 +30,7 @@ _G.Config.leader_group_clues = {
   { mode = 'n', keys = '<Leader>T', desc = '+Test' },
   { mode = 'n', keys = '<Leader>v', desc = '+Visits' },
 
-  { mode = 'x', keys = '<Leader>l', desc = '+LSP' },
+  { mode = 'x', keys = '<Leader>l', desc = '+Language' },
   { mode = 'x', keys = '<Leader>r', desc = '+R' },
 }
 
@@ -78,6 +78,7 @@ nmap_leader('eq', explore_quickfix,                         'Quickfix')
 
 -- f is for 'Fuzzy find'
 local pick_added_hunks_buf = '<Cmd>Pick git_hunks path="%" scope="staged"<CR>'
+local pick_workspace_symbols_live = '<Cmd>Pick lsp scope="workspace_symbol_live"<CR>'
 nmap_leader('f/', '<Cmd>Pick history scope="/"<CR>',            '"/" history')
 nmap_leader('f:', '<Cmd>Pick history scope=":"<CR>',            '":" history')
 nmap_leader('fa', '<Cmd>Pick git_hunks scope="staged"<CR>',     'Added hunks (all)')
@@ -99,7 +100,7 @@ nmap_leader('fM', '<Cmd>Pick git_hunks path="%"<CR>',           'Modified hunks 
 nmap_leader('fr', '<Cmd>Pick resume<CR>',                       'Resume')
 nmap_leader('fp', '<Cmd>Pick projects<CR>',                     'Projects')
 nmap_leader('fR', '<Cmd>Pick lsp scope="references"<CR>',       'References (LSP)')
-nmap_leader('fs', '<Cmd>Pick lsp scope="workspace_symbol"<CR>', 'Symbols workspace')
+nmap_leader('fs', pick_workspace_symbols_live,                  'Symbols workspace (live)')
 nmap_leader('fS', '<Cmd>Pick lsp scope="document_symbol"<CR>',  'Symbols document')
 nmap_leader('fv', '<Cmd>Pick visit_paths cwd=""<CR>',           'Visit paths (all)')
 nmap_leader('fV', '<Cmd>Pick visit_paths<CR>',                  'Visit paths (cwd)')
@@ -172,10 +173,22 @@ xmap_leader('rx', '"+y :T reprex::reprex()<CR>',                    'Reprex sele
 
 -- s is for 'Session'
 local session_new = 'MiniSessions.write(vim.fn.input("Session name: "))'
+local session_restart = function()
+  local this_session = vim.v.this_session
+  vim.cmd('mksession! Session.vim')
+  local after = {
+    'vim.cmd.source("Session.vim")',
+    'vim.fs.rm("Session.vim")',
+    'vim.v.this_session = ' .. vim.inspect(this_session),
+    'vim.notify("Restarted)'
+  }
+  vim.cmd.restart('lua ' .. table.concat(after, ';'))
+end
 
 nmap_leader('sd', '<Cmd>lua MiniSessions.select("delete")<CR>', 'Delete')
 nmap_leader('sn', '<Cmd>lua ' .. session_new .. '<CR>',         'New')
 nmap_leader('sr', '<Cmd>lua MiniSessions.select("read")<CR>',   'Read')
+nmap_leader('sR', session_restart,                              'Restart')
 nmap_leader('sw', '<Cmd>lua MiniSessions.write()<CR>',          'Write current')
 
 -- -- s is for 'Send' (Send text to neoterm buffer)

@@ -53,32 +53,15 @@ end
 
 if vim.fn.has('nvim-0.11') == 1 then
   vim.o.winborder = 'bold' -- Use border in floating windows
-
-  -- Disable "press-enter" for messages not from manually executing a command
-  vim.o.messagesopt = 'wait:500,history:500'
-  local make_set_messagesopt = function(value) return vim.schedule_wrap(function() vim.o.messagesopt = value end) end
-  _G.Config.new_autocmd('CmdlineEnter', '*', make_set_messagesopt('hit-enter,history:500'))
-  _G.Config.new_autocmd('CmdlineLeave', '*', make_set_messagesopt('wait:500,history:500'))
 end
 
 if vim.fn.has('nvim-0.12') == 1 then
   vim.o.pummaxwidth = 100 -- Limit maximum width of popup menu
-  vim.o.completefuzzycollect = 'keyword,files,whole_line' -- Use fuzzy matching when collecting candidates
   vim.o.completetimeout = 100
 
   vim.o.pumborder = 'bold' -- Use border in built-in completion menu
 
   require('vim._extui').enable({ enable = true })
-
-  -- -- Command line autocompletion
-  -- vim.cmd([[autocmd CmdlineChanged [:/\?@] call wildtrigger()]])
-  -- vim.o.wildmode = 'noselect:lastused'
-  -- vim.o.wildoptions = 'pum,fuzzy'
-  -- vim.keymap.set('c', '<Up>', '<C-u><Up>')
-  -- vim.keymap.set('c', '<Down>', '<C-u><Down>')
-  -- -- TODO: Make this part of 'mini.keymap'
-  -- vim.keymap.set('c', '<Tab>', [[cmdcomplete_info().pum_visible ? "\<C-n>" : "\<Tab>"]], { expr = true })
-  -- vim.keymap.set('c', '<S-Tab>', [[cmdcomplete_info().pum_visible ? "\<C-p>" : "\<S-Tab>"]], { expr = true })
 end
 
 -- Editing ====================================================================
