@@ -117,18 +117,6 @@ end)
 -- Snippet collection =========================================================
 later(function() add({ 'https://github.com/rafamadriz/friendly-snippets' }) end)
 
--- Documentation generator ====================================================
-later(function()
-  add({ 'https://github.com/danymat/neogen' })
-  require('neogen').setup({
-    snippet_engine = 'mini',
-    languages = {
-      lua = { template = { annotation_convention = 'emmylua' } },
-      python = { template = { annotation_convention = 'numpydoc' } },
-    },
-  })
-end)
-
 -- Test runner ================================================================
 later(function()
   add({

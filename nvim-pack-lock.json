@@ -20,10 +20,6 @@
       "rev": "6bd3a01aaf7d248aea1b78aacdd5d44bffa002c1",
       "src": "https://github.com/nvim-mini/mini.nvim"
     },
-    "neogen": {
-      "rev": "d7f9461727751fb07f82011051338a9aba07581d",
-      "src": "https://github.com/danymat/neogen"
-    },
     "neoterm": {
       "rev": "eca22dc90a9db5e52d8baf91f31991ad540ffe36",
       "src": "https://github.com/kassio/neoterm"
