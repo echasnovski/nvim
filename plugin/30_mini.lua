@@ -220,6 +220,8 @@ later(function()
   })
 end)
 
+later(function() require('mini.cmdline').setup() end)
+
 -- Don't really need it on daily basis
 -- later(function() require('mini.colors').setup() end)
 
