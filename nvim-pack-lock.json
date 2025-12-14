@@ -1,0 +1,58 @@
+{
+  "plugins": {
+    "conform.nvim": {
+      "rev": "16d35530db66ca64f81cb1a13a42afe5962edf34",
+      "src": "https://github.com/stevearc/conform.nvim"
+    },
+    "friendly-snippets": {
+      "rev": "572f5660cf05f8cd8834e096d7b4c921ba18e175",
+      "src": "https://github.com/rafamadriz/friendly-snippets"
+    },
+    "markdown-preview.nvim": {
+      "rev": "a923f5fc5ba36a3b17e289dc35dc17f66d0548ee",
+      "src": "https://github.com/iamcco/markdown-preview.nvim"
+    },
+    "mason.nvim": {
+      "rev": "57e5a8addb8c71fb063ee4acda466c7cf6ad2800",
+      "src": "https://github.com/mason-org/mason.nvim"
+    },
+    "mini.nvim": {
+      "rev": "6bd3a01aaf7d248aea1b78aacdd5d44bffa002c1",
+      "src": "https://github.com/nvim-mini/mini.nvim"
+    },
+    "neogen": {
+      "rev": "d7f9461727751fb07f82011051338a9aba07581d",
+      "src": "https://github.com/danymat/neogen"
+    },
+    "neoterm": {
+      "rev": "eca22dc90a9db5e52d8baf91f31991ad540ffe36",
+      "src": "https://github.com/kassio/neoterm"
+    },
+    "nvim-lspconfig": {
+      "rev": "0044d0987ef7e624d04141d0f90d0481fd3c3663",
+      "src": "https://github.com/neovim/nvim-lspconfig"
+    },
+    "nvim-treesitter": {
+      "rev": "74b119812e9f82bccc2f0eca156faff0354362ae",
+      "src": "https://github.com/nvim-treesitter/nvim-treesitter",
+      "version": "'main'"
+    },
+    "nvim-treesitter-textobjects": {
+      "rev": "0d7c800fadcfe2d33089f5726cb8907fc846eece",
+      "src": "https://github.com/nvim-treesitter/nvim-treesitter-textobjects",
+      "version": "'main'"
+    },
+    "rainbow_csv": {
+      "rev": "3dbbfd7d17536aebfb80f571255548495574c32b",
+      "src": "https://github.com/mechatroner/rainbow_csv"
+    },
+    "vim-dispatch": {
+      "rev": "a2ff28abdb2d89725192db5b8562977d392a4d3f",
+      "src": "https://github.com/tpope/vim-dispatch"
+    },
+    "vim-test": {
+      "rev": "1eeb12774a0f251571700ccf68da27789b2f0852",
+      "src": "https://github.com/vim-test/vim-test"
+    }
+  }
+}

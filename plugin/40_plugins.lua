@@ -1,16 +1,13 @@
-local add, later = MiniDeps.add, MiniDeps.later
-local now_if_args = _G.Config.now_if_args
+local add = vim.pack.add
+local now_if_args, later = _G.Config.now_if_args, MiniDeps.later
 
 -- Tree-sitter ================================================================
 now_if_args(function()
+  local ts_update = function() vim.cmd('TSUpdate') end
+  _G.Config.on_packchanged('nvim-treesitter', { 'update' }, ts_update, 'Update tree-sitter parsers')
   add({
-    source = 'nvim-treesitter/nvim-treesitter',
-    checkout = 'main',
-    hooks = { post_checkout = function() vim.cmd('TSUpdate') end },
-  })
-  add({
-    source = 'nvim-treesitter/nvim-treesitter-textobjects',
-    checkout = 'main',
+    { src = 'https://github.com/nvim-treesitter/nvim-treesitter', version = 'main' },
+    { src = 'https://github.com/nvim-treesitter/nvim-treesitter-textobjects', version = 'main' },
   })
 
   -- Ensure installed
@@ -30,23 +27,19 @@ now_if_args(function()
   local ts_start = function(ev) vim.treesitter.start(ev.buf) end
   _G.Config.new_autocmd('FileType', filetypes, ts_start, 'Ensure enabled tree-sitter')
 
+  -- Miscellaneous adjustments
   vim.treesitter.language.register('markdown', 'quarto')
-
-  -- -- Disable injections in 'lua' language
-  -- local ts_query = require('vim.treesitter.query')
-  -- local ts_query_set = vim.fn.has('nvim-0.9') == 1 and ts_query.set or ts_query.set_query
-  -- ts_query_set('lua', 'injections', '')
 end)
 
 -- Install LSP/formatting/linter executables ==================================
 later(function()
-  add('mason-org/mason.nvim')
+  add({ 'https://github.com/mason-org/mason.nvim' })
   require('mason').setup()
 end)
 
 -- Formatting =================================================================
 later(function()
-  add('stevearc/conform.nvim')
+  add({ 'https://github.com/stevearc/conform.nvim' })
 
   require('conform').setup({
     -- Map of filetype to formatters
@@ -75,7 +68,7 @@ later(function()
   -- Enable LSP only on Neovim>=0.11 as it introduced `vim.lsp.config`
   if vim.fn.has('nvim-0.11') == 0 then return end
 
-  add('neovim/nvim-lspconfig')
+  add({ 'https://github.com/neovim/nvim-lspconfig' })
 
   -- Do not enable R language server in Quarto files
   vim.lsp.config('r_language_server', { filetypes = { 'r', 'rmd' } })
@@ -98,7 +91,7 @@ end)
 
 -- Better built-in terminal ===================================================
 later(function()
-  add('kassio/neoterm')
+  add({ 'https://github.com/kassio/neoterm' })
 
   -- Enable bracketed paste
   vim.g.neoterm_bracketed_paste = 1
@@ -129,11 +122,11 @@ later(function()
 end)
 
 -- Snippet collection =========================================================
-later(function() add('rafamadriz/friendly-snippets') end)
+later(function() add({ 'https://github.com/rafamadriz/friendly-snippets' }) end)
 
 -- Documentation generator ====================================================
 later(function()
-  add('danymat/neogen')
+  add({ 'https://github.com/danymat/neogen' })
   require('neogen').setup({
     snippet_engine = 'mini',
     languages = {
@@ -145,7 +138,10 @@ end)
 
 -- Test runner ================================================================
 later(function()
-  add({ source = 'vim-test/vim-test', depends = { 'tpope/vim-dispatch' } })
+  add({
+    'https://github.com/tpope/vim-dispatch',
+    'https://github.com/vim-test/vim-test',
+  })
   vim.cmd([[let test#strategy = 'neoterm']])
   vim.cmd([[let test#python#runner = 'pytest']])
 end)
@@ -153,19 +149,14 @@ end)
 -- Filetype: csv ==============================================================
 later(function()
   vim.g.disable_rainbow_csv_autodetect = true
-  add('mechatroner/rainbow_csv')
+  add({ 'https://github.com/mechatroner/rainbow_csv' })
 end)
 
 -- Filetype: markdown =========================================================
 later(function()
   local build = function() vim.fn['mkdp#util#install']() end
-  add({
-    source = 'iamcco/markdown-preview.nvim',
-    hooks = {
-      post_install = function() later(build) end,
-      post_checkout = build,
-    },
-  })
+  _G.Config.on_packchanged('markdown-preview.nvim', { 'install', 'update' }, build, 'Build markdown-preview')
+  add({ 'https://github.com/iamcco/markdown-preview.nvim' })
 
   -- Do not close the preview tab when switching to other buffers
   vim.g.mkdp_auto_close = 0
@@ -197,20 +188,22 @@ vim.filetype.add({
 
 -- -- Popular color schemes for testing ==========================================
 -- later(function()
---   add('folke/tokyonight.nvim')
---   add({ source = 'catppuccin/nvim', name = 'catppuccin-nvim' })
---   add('rebelot/kanagawa.nvim')
---   add('sainnhe/everforest')
---   add({ source = 'rose-pine/neovim', name = 'rose-pine' })
---   add('bluz71/vim-moonfly-colors')
---   add('ellisonleao/gruvbox.nvim')
---   add('craftzdog/solarized-osaka.nvim')
---   add('navarasu/onedark.nvim')
---   add('projekt0n/github-nvim-theme')
---   add('marko-cerovac/material.nvim')
+--   add({
+--     'https://github.com/folke/tokyonight.nvim',
+--     { src = 'https://github.com/catppuccin/nvim', name = 'catppuccin-nvim' },
+--     'https://github.com/rebelot/kanagawa.nvim',
+--     'https://github.com/sainnhe/everforest',
+--     { src = 'https://github.com/rose-pine/neovim', name = 'rose-pine' },
+--     'https://github.com/bluz71/vim-moonfly-colors',
+--     'https://github.com/ellisonleao/gruvbox.nvim',
+--     'https://github.com/craftzdog/solarized-osaka.nvim',
+--     'https://github.com/navarasu/onedark.nvim',
+--     'https://github.com/projekt0n/github-nvim-theme',
+--     'https://github.com/marko-cerovac/material.nvim',
+--     'https://github.com/EdenEast/nightfox.nvim',
+--     'https://github.com/scottmckendry/cyberdream.nvim',
+--     'https://github.com/Shatur/neovim-ayu',
+--     'https://github.com/NvChad/base46',
+--   })
 --   require('material').setup({ plugins = { 'mini' } })
---   add('EdenEast/nightfox.nvim')
---   add('scottmckendry/cyberdream.nvim')
---   add('Shatur/neovim-ayu')
---   add('NvChad/base46')
 -- end)

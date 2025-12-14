@@ -1,10 +1,5 @@
-local add, now, later = MiniDeps.add, MiniDeps.now, MiniDeps.later
+local now, later = MiniDeps.now, MiniDeps.later
 local now_if_args = _G.Config.now_if_args
-
--- Use 'HEAD' because I personally update it and don't want to follow `main`
--- This means that 'start/mini.nvim' will usually be present twice in
--- 'runtimepath' as there is a '.../pack/*/start/*' entry there.
-add({ name = 'mini.nvim', checkout = 'HEAD' })
 
 -- Step one ===================================================================
 now(function() vim.cmd('colorscheme miniwinter') end)
@@ -254,8 +249,8 @@ later(function()
 
   _G.Config.new_autocmd('User', 'MiniFilesExplorerOpen', function()
     MiniFiles.set_bookmark('c', vim.fn.stdpath('config'), { desc = 'Config' })
-    MiniFiles.set_bookmark('m', vim.fn.stdpath('data') .. '/site/pack/deps/start/mini.nvim', { desc = 'mini.nvim' })
-    MiniFiles.set_bookmark('p', vim.fn.stdpath('data') .. '/site/pack/deps/opt', { desc = 'Plugins' })
+    MiniFiles.set_bookmark('m', vim.fn.stdpath('data') .. '/site/pack/core/opt/mini.nvim', { desc = 'mini.nvim' })
+    MiniFiles.set_bookmark('p', vim.fn.stdpath('data') .. '/site/pack/core/opt', { desc = 'Plugins' })
     MiniFiles.set_bookmark('w', vim.fn.getcwd, { desc = 'Working directory' })
   end, "Create 'mini.files' bookmarks")
 end)
