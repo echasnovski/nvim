@@ -6,7 +6,7 @@ now_if_args(function()
   local ts_update = function() vim.cmd('TSUpdate') end
   _G.Config.on_packchanged('nvim-treesitter', { 'update' }, ts_update, 'Update tree-sitter parsers')
   add({
-    { src = 'https://github.com/nvim-treesitter/nvim-treesitter', version = 'main' },
+    'https://github.com/nvim-treesitter/nvim-treesitter',
     { src = 'https://github.com/nvim-treesitter/nvim-treesitter-textobjects', version = 'main' },
   })
 
