@@ -127,12 +127,6 @@ later(function()
   vim.cmd([[let test#python#runner = 'pytest']])
 end)
 
--- Filetype: csv ==============================================================
-later(function()
-  vim.g.disable_rainbow_csv_autodetect = true
-  add({ 'https://github.com/mechatroner/rainbow_csv' })
-end)
-
 -- Filetype: markdown =========================================================
 later(function()
   local build = function() vim.fn['mkdp#util#install']() end
