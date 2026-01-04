@@ -1,7 +1,7 @@
 {
   "plugins": {
     "conform.nvim": {
-      "rev": "5420c4b5ea0aeb99c09cfbd4fd0b70d257b44f25",
+      "rev": "8314f4c9e205e7f30b62147069729f9a1227d8bf",
       "src": "https://github.com/stevearc/conform.nvim"
     },
     "friendly-snippets": {
@@ -17,7 +17,7 @@
       "src": "https://github.com/mason-org/mason.nvim"
     },
     "mini.nvim": {
-      "rev": "e7a8e5a0920df1435172d42fb32e474bbb30d021",
+      "rev": "5d8d141cb113e9d235c9215475b26b0d20612150",
       "src": "https://github.com/nvim-mini/mini.nvim"
     },
     "neoterm": {
@@ -25,15 +25,15 @@
       "src": "https://github.com/kassio/neoterm"
     },
     "nvim-lspconfig": {
-      "rev": "d696e36d5792daf828f8c8e8d4b9aa90c1a10c2a",
+      "rev": "ac04ec3c2af08e9821b4eb64ede86072b9b213bf",
       "src": "https://github.com/neovim/nvim-lspconfig"
     },
     "nvim-treesitter": {
-      "rev": "36fcb4a4238928f0b627e1ab84ade0acc1facc2c",
+      "rev": "300b906a9514d5e0ce02911d371445382fe35a31",
       "src": "https://github.com/nvim-treesitter/nvim-treesitter"
     },
     "nvim-treesitter-textobjects": {
-      "rev": "ecd03f5811eb5c66d2fa420b79121b866feecd82",
+      "rev": "28a3494c075ef0f353314f627546537e43c09592",
       "src": "https://github.com/nvim-treesitter/nvim-treesitter-textobjects",
       "version": "'main'"
     },
