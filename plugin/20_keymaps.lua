@@ -30,6 +30,7 @@ _G.Config.leader_group_clues = {
   { mode = 'n', keys = '<Leader>T', desc = '+Test' },
   { mode = 'n', keys = '<Leader>v', desc = '+Visits' },
 
+  { mode = 'x', keys = '<Leader>g', desc = '+Git' },
   { mode = 'x', keys = '<Leader>l', desc = '+Language' },
   { mode = 'x', keys = '<Leader>r', desc = '+R' },
 }
@@ -59,10 +60,10 @@ local edit_config_file = function(filename)
 end
 local explore_at_file = '<Cmd>lua MiniFiles.open(vim.api.nvim_buf_get_name(0))<CR>'
 local explore_quickfix = function()
-  for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.fn.getwininfo(win_id)[1].quickfix == 1 then return vim.cmd('cclose') end
-  end
-  vim.cmd('copen')
+  vim.cmd(vim.fn.getqflist({ winid = true }).winid ~= 0 and 'cclose' or 'copen')
+end
+local explore_locations = function()
+  vim.cmd(vim.fn.getloclist(0, { winid = true }).winid ~= 0 and 'lclose' or 'lopen')
 end
 
 nmap_leader('ed', '<Cmd>lua MiniFiles.open()<CR>',          'Directory')
@@ -75,6 +76,7 @@ nmap_leader('eo', edit_config_file('10_options.lua'),       'Options config')
 nmap_leader('ep', edit_config_file('40_plugins.lua'),       'Plugins config')
 nmap_leader('es', '<Cmd>lua MiniSessions.select()<CR>',     'Sessions')
 nmap_leader('eq', explore_quickfix,                         'Quickfix')
+nmap_leader('eQ', explore_locations,                        'Locations')
 
 -- f is for 'Fuzzy find'
 local pick_added_hunks_buf = '<Cmd>Pick git_hunks path="%" scope="staged"<CR>'
