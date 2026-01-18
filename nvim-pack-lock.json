@@ -1,7 +1,7 @@
 {
   "plugins": {
     "conform.nvim": {
-      "rev": "8314f4c9e205e7f30b62147069729f9a1227d8bf",
+      "rev": "5ac2bb57a9096f00ca50e1a3c46020d5930319b8",
       "src": "https://github.com/stevearc/conform.nvim"
     },
     "friendly-snippets": {
@@ -17,7 +17,7 @@
       "src": "https://github.com/mason-org/mason.nvim"
     },
     "mini.nvim": {
-      "rev": "8dccba88fc4dce006ca0ad668067c9e0d5ce7702",
+      "rev": "4f53281c51ad9384ef790178b9643740fa763979",
       "src": "https://github.com/nvim-mini/mini.nvim"
     },
     "neoterm": {
@@ -29,11 +29,11 @@
       "src": "https://github.com/neovim/nvim-lspconfig"
     },
     "nvim-treesitter": {
-      "rev": "5a7e5638e7d220575b1c22c8a2e099b52231886e",
+      "rev": "d19def46c112c26c17adeef88dd1253cc6d623a1",
       "src": "https://github.com/nvim-treesitter/nvim-treesitter"
     },
     "nvim-treesitter-textobjects": {
-      "rev": "d0d12338230c1ce4ce27373f5b8d50a8c691794b",
+      "rev": "baa6b4ec28c8be5e4a96f9b1b6ae9db85ec422f8",
       "src": "https://github.com/nvim-treesitter/nvim-treesitter-textobjects",
       "version": "'main'"
     },
@@ -42,7 +42,7 @@
       "src": "https://github.com/tpope/vim-dispatch"
     },
     "vim-test": {
-      "rev": "aa619692ff48a3cf3e6bdb893765039488d4e5f3",
+      "rev": "aaaff58ab897211b9c9bd9967c1340a6fd15d42d",
       "src": "https://github.com/vim-test/vim-test"
     }
   }
