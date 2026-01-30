@@ -125,16 +125,17 @@ nmap_leader('gs', '<Cmd>lua MiniGit.show_at_cursor()<CR>',  'Show at cursor')
 xmap_leader('gs', '<Cmd>lua MiniGit.show_at_cursor()<CR>',  'Show at selection')
 
 -- l is for 'Language'
-local formatting_cmd = '<Cmd>lua require("conform").format({ lsp_fallback = true })<CR>'
-nmap_leader('la', '<Cmd>lua vim.lsp.buf.code_action()<CR>',   'Actions')
-nmap_leader('ld', '<Cmd>lua vim.diagnostic.open_float()<CR>', 'Diagnostic popup')
-nmap_leader('lf', formatting_cmd,                             'Format')
-nmap_leader('li', '<Cmd>lua vim.lsp.buf.hover()<CR>',         'Hover')
-nmap_leader('lR', '<Cmd>lua vim.lsp.buf.references()<CR>',    'References')
-nmap_leader('lr', '<Cmd>lua vim.lsp.buf.rename()<CR>',        'Rename')
-nmap_leader('ls', '<Cmd>lua vim.lsp.buf.definition()<CR>',    'Source definition')
+nmap_leader('la', '<Cmd>lua vim.lsp.buf.code_action()<CR>',     'Actions')
+nmap_leader('ld', '<Cmd>lua vim.diagnostic.open_float()<CR>',   'Diagnostic popup')
+nmap_leader('lf', '<Cmd>lua require("conform").format()<CR>',   'Format')
+nmap_leader('li', '<Cmd>lua vim.lsp.buf.implementation()<CR>',  'Implementation')
+nmap_leader('lh', '<Cmd>lua vim.lsp.buf.hover()<CR>',           'Hover')
+nmap_leader('lr', '<Cmd>lua vim.lsp.buf.rename()<CR>',          'Rename')
+nmap_leader('lR', '<Cmd>lua vim.lsp.buf.references()<CR>',      'References')
+nmap_leader('ls', '<Cmd>lua vim.lsp.buf.definition()<CR>',      'Source definition')
+nmap_leader('lt', '<Cmd>lua vim.lsp.buf.type_definition()<CR>', 'Type definition')
 
-xmap_leader('lf', formatting_cmd,                             'Format selection')
+xmap_leader('lf', '<Cmd>lua require("conform").format()<CR>', 'Format selection')
 
 -- L is for 'Lua'
 nmap_leader('Lc', '<Cmd>lua MiniMisc.log_clear()<CR>',             'Clear log')

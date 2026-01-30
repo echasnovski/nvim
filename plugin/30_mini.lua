@@ -27,13 +27,6 @@ now(function()
   later(MiniIcons.tweak_lsp_kind)
 end)
 
-now_if_args(function()
-  require('mini.misc').setup({ make_global = { 'put', 'put_text', 'stat_summary', 'bench_time' } })
-  MiniMisc.setup_auto_root()
-  MiniMisc.setup_restore_cursor()
-  MiniMisc.setup_termbg_sync()
-end)
-
 now(function()
   local predicate = function(notif)
     if not (notif.data.source == 'lsp_progress' and notif.data.client_name == 'lua_ls') then return true end
@@ -151,6 +144,33 @@ _G.get_maxwidth_bytes = function()
   return res - 1
 end
 
+-- Step one or two ============================================================
+now_if_args(function()
+  require('mini.misc').setup({ make_global = { 'put', 'put_text', 'stat_summary', 'bench_time' } })
+  MiniMisc.setup_auto_root()
+  MiniMisc.setup_restore_cursor()
+  MiniMisc.setup_termbg_sync()
+end)
+
+now_if_args(function()
+  -- Don't show 'Text' suggestions
+  local process_items_opts = { kind_priority = { Text = -1, Snippet = 99 } }
+  local process_items = function(items, base)
+    return MiniCompletion.default_process_items(items, base, process_items_opts)
+  end
+  require('mini.completion').setup({
+    lsp_completion = { source_func = 'omnifunc', auto_setup = false, process_items = process_items },
+  })
+
+  -- Set up LSP part of completion
+  local on_attach = function(args) vim.bo[args.buf].omnifunc = 'v:lua.MiniCompletion.completefunc_lsp' end
+  _G.Config.new_autocmd('LspAttach', '*', on_attach, 'Custom `on_attach`')
+  if vim.fn.has('nvim-0.11') == 1 then vim.lsp.config('*', { capabilities = MiniCompletion.get_lsp_capabilities() }) end
+
+  -- vim.lsp.on_type_formatting.enable()
+  -- vim.o.autocomplete = true
+end)
+
 -- Step two ===================================================================
 later(function() require('mini.extra').setup() end)
 
@@ -212,22 +232,6 @@ later(function() require('mini.cmdline').setup() end)
 -- later(function() require('mini.colors').setup() end)
 
 later(function() require('mini.comment').setup() end)
-
-later(function()
-  -- Don't show 'Text' suggestions
-  local process_items_opts = { kind_priority = { Text = -1, Snippet = 99 } }
-  local process_items = function(items, base)
-    return MiniCompletion.default_process_items(items, base, process_items_opts)
-  end
-  require('mini.completion').setup({
-    lsp_completion = { source_func = 'omnifunc', auto_setup = false, process_items = process_items },
-  })
-
-  -- Set up LSP part of completion
-  local on_attach = function(args) vim.bo[args.buf].omnifunc = 'v:lua.MiniCompletion.completefunc_lsp' end
-  _G.Config.new_autocmd('LspAttach', '*', on_attach, 'Custom `on_attach`')
-  if vim.fn.has('nvim-0.11') == 1 then vim.lsp.config('*', { capabilities = MiniCompletion.get_lsp_capabilities() }) end
-end)
 
 later(function() require('mini.cursorword').setup() end)
 
