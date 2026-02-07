@@ -61,7 +61,7 @@ if vim.fn.has('nvim-0.12') == 1 then
 
   vim.o.pumborder = 'bold' -- Use border in built-in completion menu
 
-  require('vim._extui').enable({ enable = true })
+  require('vim._core.ui2').enable({ enable = true })
 end
 
 -- Editing ====================================================================

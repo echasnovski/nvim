@@ -194,6 +194,10 @@ nmap_leader('sr', '<Cmd>lua MiniSessions.select("read")<CR>',   'Read')
 nmap_leader('sR', session_restart,                              'Restart')
 nmap_leader('sw', '<Cmd>lua MiniSessions.write()<CR>',          'Write current')
 
+nmap_leader('ss', '<Cmd>TREPLSendLine<CR>j', 'Send to terminal')
+local send_selection_cmd = [[mode() ==# "v" ? ":TREPLSendSelection<CR>`>l" : ":TREPLSendSelection<CR>'>j"]]
+vim.keymap.set('x', '<Leader>ss', send_selection_cmd, { expr = true, desc = 'Send to terminal' })
+
 -- -- s is for 'Send' (Send text to neoterm buffer)
 -- nmap_leader('s', '<Cmd>TREPLSendLine<CR>j', 'Send to terminal')
 --
