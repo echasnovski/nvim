@@ -6,6 +6,8 @@
 -- - Docs:
 --
 -- - Test:
+--     - The input should probably still be going if `state_set()` results in
+--       an error due to incorrect input `state`.
 
 --- *mini.input* Get user input
 ---
@@ -65,7 +67,19 @@
 ---
 --- # Handler ~
 ---
+--- Handler is called on every new item added to stream. It should be safe to
+--- assume that `stream[#stream]` is the key handler needs to process.
+---
+--- Key stream follows Neovim's |key-notation|. To get exact translation of
+--- a special key combo, type `:echo keytrans(getcharstr())`, press <CR> followed
+--- by the combo in question. The printed value is the one used in stream (except
+--- `<` which is used as is). This also includes some common pitfalls:
+--- - <C-J>   is shown as <NL>.
+--- - <C-S-J> is shown as <S-NL>.
+--- - <C-M-J> is shown as <M-NL>.
+---
 --- ## Custom mappings ~
+---
 ---@tag MiniInput-examples
 
 ---@diagnostic disable:undefined-field
@@ -118,14 +132,31 @@ MiniInput.config = {
 --minidoc_afterlines_end
 
 --- Get input from the user
+---
+--- Notes:
+--- - All non-secret input results (even empty strings) are added to history.
+---   Get the whole history with |MiniInput.get_history()|.
+---
 ---@return string|nil User input if accepted or `nil` if canceled.
 MiniInput.get = function(state, opts)
   H.check_type('state', state, 'table')
+
+  local config = H.get_config()
   state = H.state_new(vim.deepcopy(state))
-  H.state_set(state, true)
+
+  H.state_set(state, true, config.handler)
+  local is_secret = H.state.secret
   H.state.status = 'progress'
 
   -- TODO: Apply view
+
+  -- TODO: Advance key-query-process
+
+  local res = H.state.result
+  H.state = nil
+  if res ~= nil and not is_secret then table.insert(H.history, res) end
+
+  return res
 end
 
 --- A |vim.ui.input()| implementation
@@ -141,7 +172,7 @@ end
 --- <
 MiniInput.ui_input = function(opts, on_confirm)
   opts = opts or {}
-  local state = { completion = opts.completion, input = { opts.default }, prompt = opts.prompt }
+  local state = { completion_type = opts.completion, input = { opts.default }, prompt = opts.prompt }
   on_confirm(MiniInput.get(state))
 end
 
@@ -153,17 +184,19 @@ end
 --- During user input, it is a table with the following fields:
 --- - <caret> `(number)` - current input position to modify output, i.e. new key will
 ---   be added at this (character, not byte) index.
---- - <completion> `(string|nil)` - same as in |input()|.
---- - <data> `(table)` - information to be reused during single input session.
---- - <input> `(table)` - string array with full history of keypresses from the user.
----   Each element is usually an output of |getcharstr()|, but can be any string
----   of any length (if set with |MiniInput.set_state()|).
----   Use `input[#input]` to get the latest key press.
---- - <output> `(string)` - current result of the user input.
---- - <prompt> `(string|nil)` - intention of the input.
+--- - <completion_type> `(string|nil)` - same as `completion` in |input()|.
+--- - <completion_items> `table|nil` - array of completion suggestions at caret.
+--- - <data> `(table)` - any information to be reused during single input session.
+--- - <prompt> `(string|nil)` - intention of the input, same as in |input()|.
+--- - <result> `(string)` - current result of the user input.
 --- - <secret> `(boolean)` - whether input session is for sensitive information
 ---   and should be hidden.
 --- - <status> `(string)` - one of `"start"`, `"progress"`, `"accept"`, `"cancel"`.
+--- - <stream> `(table)` - string array with full history of user keypresses.
+---   Each element is usually a |getcharstr()| output "translated" with |keytrans()|,
+---   i.e. special keys look like `'<CR>'`, `'<Space>'`, `'<C-U>'`, etc.
+---   However, it is allowed to be any string if set with |MiniInput.set_state()|.
+---   Use `stream[#stream]` to get the latest key press.
 ---
 ---@return table|nil Current state if input is active, `nil` otherwise.
 ---
@@ -184,13 +217,20 @@ MiniInput.get_state = function() return vim.deepcopy(H.state) end
 MiniInput.set_state = function(state)
   if H.state == nil then return end
 
-  H.state_set(state, false)
-  -- TODO: Apply view
+  local config = H.get_config()
+  H.state_set(state, false, config.handler)
+  -- TODO: Update view
 end
+
+--- Get input history
+---
+---@return table Array of all previous non-secret inputs (from earliest to latest).
+MiniInput.get_history = function() return vim.deepcopy(H.history) end
 
 --- Default key handler
 MiniInput.default_handler = function(state, opts)
-  -- TODO
+  -- TODO: Basically try to support all `:h c_CTRL-<KEY>`. In particular:
+  -- `:h c_CTRL-K`, `:h c_CTRL-R`, `:h c_CTRL-V`.
 end
 
 --- View generators
@@ -226,7 +266,10 @@ H.default_config = vim.deepcopy(MiniInput.config)
 -- Current state of user input
 H.state = nil
 
--- General purpose cache
+-- History of inputs
+H.history = {}
+
+-- Various cache
 H.cache = {}
 
 -- Namespaces
@@ -271,43 +314,52 @@ H.get_config = function() return vim.tbl_deep_extend('force', MiniInput.config, 
 H.state_new = function(state)
   state.caret = state.caret or 1
   state.data = state.data or {}
-  state.input = state.input or {}
-  state.output = state.output or ''
+  state.result = state.result or ''
   if state.secret == nil then state.secret = false end
   state.status = 'start'
+  state.stream = state.stream or {}
 end
 
-H.state_set = function(x, init)
-  H.check_type('state', x, 'table')
-  local new = vim.tbl_deep_extend('force', H.state, x)
-  if not init then
-    new.secret = H.state.secret
-    new.status = new.status == 'start' and 'progress' or new.status
-  end
-  H.state_validate(new)
+H.state_set = function(new, init, handler)
+  H.check_type('state', new, 'table')
+  local cur = H.state or H.state_new({})
+  new = vim.tbl_deep_extend('force', cur, new)
 
-  -- TODO: Validate that `new.input` is equal or appends to `H.state.input`
-  -- I.e. do not allow overriding history.
+  -- Do not allow to change `secret` to not show secret input
+  if not init then new.secret = cur.secret end
 
+  -- Force proper status
+  new.status = init and 'start' or (new.status == 'start' and 'progress' or new.status)
+
+  H.state_validate(new, cur)
+
+  -- Call key handler on every new stream input.
   -- TODO: If there is a new input, append it one by one with calling `handler`
   -- on each iteration.
+  -- TODO: Maybe forbid handler to modify some special fields (i.e. manually
+  -- transfer them unchanged to the new state in this iteractive process)?
+  -- Like <secret> (to not un-secret the input) and <stream> (to not have
+  -- infinite recursion like problems). All other fields are reasonable to
+  -- allow to set.
 
   H.state = new
 end
 
-H.state_validate = function(x)
+H.state_validate = function(x, cur)
   H.check_type('state.caret', x.caret, 'number')
-  H.check_type('state.completion', x.completion, 'string', true)
+  H.check_type('state.completion_type', x.completion_type, 'string', true)
+  H.check_type('state.completion_items', x.completion_items, 'table', true)
   H.check_type('state.data', x.data, 'table')
-  if not H.islist(x.input) then H.error('`state.input` should be array') end
-  for _, s in ipairs(x.input) do
-    if type(s) ~= 'string' then H.error('`state.input` should be array of strings') end
-  end
-  H.check_type('state.output', x.output, 'string')
-  H.check_type('state.prompt', x.output, 'string', true)
+  H.check_type('state.prompt', x.prompt, 'string', true)
+  H.check_type('state.result', x.result, 'string')
   H.check_type('state.secret', x.secret, 'boolean')
   if not (x.status == 'start' or x.status == 'progress' or x.status == 'accept' or x.status == 'cancel') then
     H.error('`state.status` should be one of "start", "progress", "accept", "cancel"')
+  end
+  if not H.islist(x.stream) then H.error('`state.stream` should be array') end
+  for i = 1, #x.stream do
+    if type(x.stream[i]) ~= 'string' then H.error('`state.stream` should be array of strings') end
+    if cur.stream[i] ~= nil and cur.stream[i] ~= x.stream[i] then H.error('`state.stream` overrides past stream') end
   end
 end
 
@@ -335,6 +387,13 @@ H.getcharstr = function(lmap)
   if not ok or char == '' or char == '\3' then return end
   -- Respect language mappings only if needed
   return vim.o.iminsert == 0 and char or (lmap[char] or char)
+end
+
+H.keytrans = function(x)
+  return x ~= nil and vim.fn.keytrans(x) or nil
+  -- if x == nil then return nil end
+  -- local res = vim.fn.keytrans(x):gsub('<NL>', '<C-J>'):gsub('<S%-NL>', '<C-S-J>'):gsub('<M%-NL>', '<C-M-J>')
+  -- return (res:gsub('<lt>', '<'))
 end
 
 H.clamp = function(x, from, to) return math.min(math.max(x, from), to) end
