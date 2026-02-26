@@ -7,6 +7,8 @@
 --     listener, but requires carful setup".
 --     Probably, even that is not feasible since can not temporarily disable
 --     external `vim.on_key` callbacks.
+--   - Take extra care of handlers not modify in place the "true" state.
+--     Probably, by adding dedicated `H.handle_{key,view,...}`.
 --
 -- - Docs:
 --
@@ -223,17 +225,34 @@ MiniInput.get = function(state, opts)
   if H.state ~= nil then return nil end
 
   local config = H.get_config(opts)
+  local handlers = config.handlers
   state = H.state_new(vim.deepcopy(state))
 
-  H.state_set(state, true, config.handlers.key)
-  local is_secret = H.state.secret
+  H.state_set(state, true, handlers.key)
+  state = vim.deepcopy(H.state)
+  local is_secret = state.secret
+
+  -- TODO: Probably extract in a separate helper
+  state = handlers.view(state) or state
   H.state.status = 'progress'
 
-  -- TODO: Apply view
+  local is_aborted, lmap = false, H.get_lmap()
+  for _ = 1, 1000000 do
+    if H.cache.is_force_stop_advance then break end
+    local char = H.getcharstr(config.delay.async, lmap)
+    if H.cache.is_force_stop_advance then break end
 
-  -- TODO: Advance key-query-process
+    table.insert(state.keys, char)
+    if char == nil then state.status = 'cancel' end
 
-  local res = H.state.input
+    H.state_set(state, false, handlers.key)
+    state = vim.deepcopy(H.state)
+    state = handlers.view(state) or state
+
+    if H.state.status == 'cancel' or H.state.status == 'accept' then break end
+  end
+
+  local res = H.state.status == 'accept' and H.state.input or nil
   H.state = nil
   if res ~= nil and not is_secret then table.insert(H.history, res) end
 
@@ -253,7 +272,7 @@ end
 --- <
 MiniInput.ui_input = function(opts, on_confirm)
   opts = opts or {}
-  local state = { completion_type = opts.completion, input = { opts.default }, prompt = opts.prompt }
+  local state = { completion_type = opts.completion, keys = { opts.default }, prompt = opts.prompt }
   on_confirm(MiniInput.get(state))
 end
 
@@ -325,13 +344,17 @@ MiniInput.default_key = function(state, opts)
 
   local method = H.key_methods[key]
   if method ~= nil then return method(state) end
-  table.insert(state.keys, key)
 
   -- TODO: Basically try to support all `:h c_CTRL-<KEY>`. In particular:
   -- `:h c_CTRL-K`, `:h c_CTRL-R`, `:h c_CTRL-V`.
   -- TODO: `<Down>` and `<Up>` should navigate through history that matches (by
   -- prefix) current input.
   -- TODO: `<Tab>` should compute and set completion candidates
+
+  -- Fall back to adding a character at caret
+  local caret, input = state.caret, state.input
+  state.input = vim.fn.strcharpart(input, 0, caret - 1) .. key .. vim.fn.strcharpart(input, caret - 1)
+  state.caret = caret + 1
 end
 local default_key_handler = MiniInput.default_key
 
@@ -347,22 +370,54 @@ MiniInput.gen_view = {}
 
 --- Floating window view
 MiniInput.gen_view.floating = function(opts)
-  return function()
+  return function(state)
     -- TODO
   end
 end
 
 --- Virtual line view
 MiniInput.gen_view.virtline = function(opts)
-  return function()
+  return function(state)
     -- TODO
   end
 end
 
 --- Virtual text view
 MiniInput.gen_view.virttext = function(opts)
-  return function()
+  return function(state)
     -- TODO
+  end
+end
+
+--- Progress view
+---
+---@opts table|nil Options. Possible fields:
+---   - <caret> `(string)` - string to use for caret.
+MiniInput.gen_view.progress = function(opts)
+  return function(state)
+    local id = state.data.progress_id
+    local input, prompt, status = state.input, state.prompt, state.status
+
+    -- TODO: Add caret symbol
+
+    -- Try falling back to native progress report
+    if _G.MiniNotify == nil then
+      if vim.fn.has('nvim-0.12') == 0 then H.error("`progress` view requires 'mini.notify' set up or Neovim>=0.12") end
+      local progress_status = status == 'accept' and 'success' or (status == 'cancel' and 'cancel' or 'running')
+      local pr_opts = { id = id, kind = 'progress', title = prompt, status = progress_status }
+      state.data.progress_id = vim.api.nvim_echo({ { input } }, false, pr_opts)
+      return
+    end
+
+    -- Use 'mini.notify' to show and update the same notification
+    local msg = prompt .. ' ' .. input
+    if id == nil then
+      state.data.progress_id = MiniNotify.add(msg, 'INFO', 'MiniInputNormal')
+    else
+      MiniNotify.update(state.data.progress_id, { msg = msg })
+    end
+
+    if status == 'cancel' or status == 'accept' then MiniNotify.remove(id) end
   end
 end
 
@@ -436,6 +491,7 @@ H.state_new = function(state)
   state.keys = state.keys or {}
   if state.secret == nil then state.secret = false end
   state.status = 'start'
+  return state
 end
 
 H.state_set = function(new, init, key_handler)
@@ -502,6 +558,12 @@ local keycode = vim.keycode or function(s) return vim.api.nvim_replace_termcodes
 H.key_methods['\r'] = function(state) state.status = 'accept' end
 H.key_methods['\3'] = function(state) state.status = 'cancel' end
 H.key_methods[keycode('<Esc>')] = function(state) state.status = 'cancel' end
+H.key_methods[keycode('<BS>')] = function(state)
+  local caret, input = state.caret, state.input
+  if caret <= 1 then return end
+  state.input = vim.fn.strcharpart(input, 0, caret - 2) .. vim.fn.strcharpart(input, caret - 1)
+  state.caret = caret - 1
+end
 
 H.key_methods[keycode('<Left>')] = function(state)
   state.caret = H.clamp(state.caret - 1, 1, vim.fn.strchars(state.input) + 1)
@@ -521,6 +583,8 @@ end
 H.notify = function(msg, level_name, silent)
   if not silent then vim.notify('(mini.input) ' .. msg, vim.log.levels[level_name]) end
 end
+
+H.redraw_scheduled = vim.schedule_wrap(function() vim.cmd('redraw') end)
 
 H.getcharstr = function(delay_async, lmap)
   -- Ensure that redraws still happen
