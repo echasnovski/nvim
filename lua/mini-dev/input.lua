@@ -9,6 +9,8 @@
 --     external `vim.on_key` callbacks.
 --   - Take extra care of handlers not modify in place the "true" state.
 --     Probably, by adding dedicated `H.handle_{key,view,...}`.
+--   - Decide on default view. I like `virtline`, but it has one downside: as
+--     it uses extmark, input will be shown in all splits showing buffer.
 --
 -- - Docs:
 --
@@ -60,14 +62,18 @@
 --- # Highlight groups ~
 ---
 --- - `MiniInputBorder` - border of a floating window.
+--- - `MiniInputCaret`  - possible caret symbol shown in a prompt area.
 --- - `MiniInputNormal` - basic foreground/background.
---- - `MiniInputPrefix` - possible prefix shown in a prompt area.
---- - `MiniInputPrompt` - prompt of a floating window.
+--- - `MiniInputPrefix` - possible prefix shown in a prompt area (like `:`).
+---    TODO: Maybe rename to "suffix", as it is "prompt suffix"? Or rename
+---    "prompt" to "title", since "prompt" in 'mini.pick' means "prefix + input + caret".
+--- - `MiniInputPrompt` - input prompt (intention of the input).
 --- - `MiniInputSecret` - secret input.
 ---@tag MiniInput
 
 --- - On every new key call `handlers.key`.
 --- - After processing all new keys (usually one), call handlers: `highlight`, `view`.
+--- - <C-c> is hard coded to cancel the input (due to how |getcharstr()| works).
 ---@tag MiniInput-key-query-process
 
 --- # General ~
@@ -249,7 +255,7 @@ MiniInput.get = function(state, opts)
     state = vim.deepcopy(H.state)
     state = handlers.view(state) or state
 
-    if H.state.status == 'cancel' or H.state.status == 'accept' then break end
+    if H.state_is_end(state) then break end
   end
 
   local res = H.state.status == 'accept' and H.state.input or nil
@@ -354,7 +360,7 @@ MiniInput.default_key = function(state, opts)
   -- Fall back to adding a character at caret
   local caret, input = state.caret, state.input
   state.input = vim.fn.strcharpart(input, 0, caret - 1) .. key .. vim.fn.strcharpart(input, caret - 1)
-  state.caret = caret + 1
+  state.caret = caret + vim.fn.strchars(key)
 end
 local default_key_handler = MiniInput.default_key
 
@@ -375,10 +381,105 @@ MiniInput.gen_view.floating = function(opts)
   end
 end
 
+--- Notification view
+MiniInput.gen_view.notify = function(opts)
+  opts = vim.tbl_extend('force', { symbol_caret = '▏', symbol_prefix = ':' }, opts or {})
+  local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
+
+  return function(state)
+    local caret, input, prompt = state.caret, state.input, state.prompt
+
+    prompt = (prompt or ''):gsub('%s+$', '')
+    if not vim.endswith(prompt, symbol_prefix) then prompt = prompt .. symbol_prefix end
+    local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
+    local msg = string.format('%s %s%s%s', prompt, input_left, symbol_caret, input_right)
+
+    -- Fall back to regular `vim.notify` if no extra capabilities of 'mini.notify'
+    if _G.MiniNotify == nil then
+      vim.notify(msg)
+      return
+    end
+
+    local id = state.data.progress_id
+    if id == nil then
+      state.data.progress_id = MiniNotify.add(msg, 'INFO', 'MiniInputNormal')
+    else
+      MiniNotify.update(state.data.progress_id, { msg = msg })
+    end
+
+    if H.state_is_end(state) then MiniNotify.remove(id) end
+  end
+end
+
+--- Progress view
+---
+---@opts table|nil Options. Possible fields:
+---   - <symbol_caret> `(string)` - string to use for caret.
+---   - <symbol_prefix> `(string)` - string to use for prompt prefix.
+MiniInput.gen_view.progress = function(opts)
+  if vim.fn.has('nvim-0.12') == 0 then
+    H.error("`progress` view requires Neovim>=0.12. Consider using `notify` view with 'mini.notify' set up.")
+  end
+
+  opts = vim.tbl_extend('force', { symbol_caret = '▏', symbol_prefix = ':' }, opts or {})
+  local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
+
+  return function(state)
+    local caret, input, prompt, status = state.caret, state.input, state.prompt, state.status
+
+    prompt = (prompt or ''):gsub('%s+$', '')
+    if not vim.endswith(prompt, symbol_prefix) then prompt = prompt .. symbol_prefix end
+    local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
+
+    local progress_status = status == 'accept' and 'success' or (status == 'cancel' and 'cancel' or 'running')
+
+    local chunks =
+      { { input_left, 'MiniInputNormal' }, { symbol_caret, 'MiniInputCaret' }, { input_right, 'MiniInputNormal' } }
+    chunks = H.normalize_chunks(chunks)
+
+    local title = prompt:sub(-1) == ':' and prompt:sub(1, -2) or prompt
+    local pr_opts = { id = state.data.progress_id, kind = 'progress', title = title, status = progress_status }
+    state.data.progress_id = vim.api.nvim_echo(chunks, false, pr_opts)
+
+    -- No "progress end" message as it is not needed and distracting with ui2
+    local redraw_cmd = (status == 'accept' or status == 'cancel') and 'mode' or 'redraw'
+    vim.cmd(redraw_cmd)
+  end
+end
+
+--- Statusline view
+MiniInput.gen_view.statusline = function(opts) return H.make_statusline_view('statusline', opts) end
+
 --- Virtual line view
 MiniInput.gen_view.virtline = function(opts)
+  opts = vim.tbl_extend('force', { symbol_caret = '▏', symbol_prefix = ':' }, opts or {})
+  local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
+
   return function(state)
-    -- TODO
+    local caret, input, prompt, status = state.caret, state.input, state.prompt, state.status
+
+    prompt = (prompt or ''):gsub('%s+$', '')
+    local prefix = vim.endswith(prompt, symbol_prefix) and '' or symbol_prefix
+    local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
+
+    --stylua: ignore
+    local chunks = H.normalize_chunks({
+      { prompt, 'MiniInputPrompt' }, { prefix, 'MiniInputPrefix' }, { ' ', 'MiniInputNormal' },
+      { input_left, 'MiniInputNormal' }, { symbol_caret, 'MiniInputCaret' }, { input_right, 'MiniInputNormal' },
+      { string.rep(' ', vim.o.columns), 'MiniInputNormal' },
+    })
+
+    local cur_line, top_line = vim.fn.line('.'), vim.fn.line('w0')
+    local extmark_opts = { id = state.data.extmark_id, virt_lines = { chunks }, virt_lines_above = true }
+    state.data.extmark_id = vim.api.nvim_buf_set_extmark(0, H.ns_id.view, cur_line - 1, 0, extmark_opts)
+
+    if H.state_is_end(state) then pcall(vim.api.nvim_buf_del_extmark, 0, H.ns_id.view, state.data.extmark_id) end
+
+    -- Ensure that the line above is visible
+    -- TODO: Still shows cursor on top of the virtual line if there is a scroll
+    if cur_line == top_line then vim.cmd('normal! \25') end
+
+    -- TODO: Make it still show full line if the window is scrolled horizontally
   end
 end
 
@@ -389,37 +490,8 @@ MiniInput.gen_view.virttext = function(opts)
   end
 end
 
---- Progress view
----
----@opts table|nil Options. Possible fields:
----   - <caret> `(string)` - string to use for caret.
-MiniInput.gen_view.progress = function(opts)
-  return function(state)
-    local id = state.data.progress_id
-    local input, prompt, status = state.input, state.prompt, state.status
-
-    -- TODO: Add caret symbol
-
-    -- Try falling back to native progress report
-    if _G.MiniNotify == nil then
-      if vim.fn.has('nvim-0.12') == 0 then H.error("`progress` view requires 'mini.notify' set up or Neovim>=0.12") end
-      local progress_status = status == 'accept' and 'success' or (status == 'cancel' and 'cancel' or 'running')
-      local pr_opts = { id = id, kind = 'progress', title = prompt, status = progress_status }
-      state.data.progress_id = vim.api.nvim_echo({ { input } }, false, pr_opts)
-      return
-    end
-
-    -- Use 'mini.notify' to show and update the same notification
-    local msg = prompt .. ' ' .. input
-    if id == nil then
-      state.data.progress_id = MiniNotify.add(msg, 'INFO', 'MiniInputNormal')
-    else
-      MiniNotify.update(state.data.progress_id, { msg = msg })
-    end
-
-    if status == 'cancel' or status == 'accept' then MiniNotify.remove(id) end
-  end
-end
+--- Winbar view
+MiniInput.gen_view.winbar = function(opts) return H.make_statusline_view('winbar', opts) end
 
 -- Helper data ================================================================
 -- Module default config
@@ -473,10 +545,11 @@ H.create_default_hl = function()
   end
 
   hi('MiniInputBorder', { link = 'FloatBorder' })
+  hi('MiniInputCaret', { link = 'MiniInputPrompt' })
   hi('MiniInputNormal', { link = 'NormalFloat' })
-  hi('MiniInputPrefix', { link = 'DiagnosticHint' })
-  hi('MiniInputPrompt', { link = 'FloatTitle' })
-  hi('MiniInputSecret', { link = 'DiagnosticWarn' })
+  hi('MiniInputPrefix', { link = 'DiagnosticFloatingHint' })
+  hi('MiniInputPrompt', { link = 'DiagnosticFloatingInfo' })
+  hi('MiniInputSecret', { link = 'DiagnosticFloatingWarn' })
 end
 
 H.get_config = function(config)
@@ -551,12 +624,13 @@ H.state_hide_secret = function(state, config)
   return state
 end
 
+H.state_is_end = function(state) return state.status == 'accept' or state.status == 'cancel' end
+
 -- Default key handler --------------------------------------------------------
 H.key_methods = {}
 
 local keycode = vim.keycode or function(s) return vim.api.nvim_replace_termcodes(s, true, true, true) end
 H.key_methods['\r'] = function(state) state.status = 'accept' end
-H.key_methods['\3'] = function(state) state.status = 'cancel' end
 H.key_methods[keycode('<Esc>')] = function(state) state.status = 'cancel' end
 H.key_methods[keycode('<BS>')] = function(state)
   local caret, input = state.caret, state.input
@@ -564,12 +638,72 @@ H.key_methods[keycode('<BS>')] = function(state)
   state.input = vim.fn.strcharpart(input, 0, caret - 2) .. vim.fn.strcharpart(input, caret - 1)
   state.caret = caret - 1
 end
-
+H.key_methods[keycode('<C-w>')] = function(state)
+  local caret, input = state.caret, state.input
+  if caret <= 1 then return end
+  local left = vim.fn.strcharpart(input, 0, caret - 1)
+  local left_to = vim.fn.match(left, '[[:keyword:]]\\+$')
+  if left_to < 0 then left_to = vim.fn.match(left, '[^[:keyword:]]\\+$') end
+  state.input = vim.fn.strcharpart(left, 0, left_to) .. vim.fn.strcharpart(input, caret - 1)
+  state.caret = H.clamp(left_to + 1, 1, vim.fn.strchars(state.input) + 1)
+end
+H.key_methods[keycode('<C-u>')] = function(state)
+  state.input = vim.fn.strcharpart(state.input, state.caret - 1)
+  state.caret = 1
+end
 H.key_methods[keycode('<Left>')] = function(state)
   state.caret = H.clamp(state.caret - 1, 1, vim.fn.strchars(state.input) + 1)
 end
 H.key_methods[keycode('<Right>')] = function(state)
   state.caret = H.clamp(state.caret + 1, 1, vim.fn.strchars(state.input) + 1)
+end
+
+-- Views ----------------------------------------------------------------------
+H.make_statusline_view = function(target, opts)
+  opts = vim.tbl_extend('force', { symbol_caret = '▏', symbol_prefix = ':' }, opts or {})
+  local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
+
+  return function(state)
+    local win_id, win_id_prev = vim.api.nvim_get_current_win(), state.data.win_id
+
+    if win_id_prev ~= win_id then
+      if H.is_valid_win(win_id_prev) then vim.wo[win_id_prev][target] = state.data[target] end
+      state.data.win_id, state.data[target] = win_id, vim.wo[win_id][target]
+      state.data.laststatus = vim.o.laststatus
+    end
+
+    local caret, input, prompt = state.caret, state.input, state.prompt
+    prompt = (prompt or ''):gsub('%s+$', '')
+    local prefix = vim.endswith(prompt, symbol_prefix) and '' or symbol_prefix
+    local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
+
+    --stylua: ignore
+    local chunks = {
+      { prompt, 'MiniInputPrompt' }, { prefix, 'MiniInputPrefix' }, { ' ', 'MiniInputNormal' },
+      { input_left, 'MiniInputNormal' }, { symbol_caret, 'MiniInputCaret' }, { input_right, 'MiniInputNormal' },
+    }
+    vim.wo[win_id][target] = table.concat(H.normalize_chunks(chunks, 'statusline')) .. '%#MiniInputNormal#'
+
+    -- Ensure that statusline is shown
+    if target == 'statusline' and vim.o.laststatus < 2 then vim.o.laststatus = 2 end
+
+    -- Cleanup
+    if H.state_is_end(state) then
+      vim.wo[win_id][target] = state.data[target]
+      vim.o.laststatus = state.data.laststatus
+    end
+  end
+end
+
+H.normalize_chunks = function(chunks, output)
+  local res = {}
+  for _, c in ipairs(chunks) do
+    if c == 'string' then c = { c } end
+    c[2] = c[2] or 'MiniInputNormal'
+    local part = output == 'statusline' and string.format('%%#%s#%s', c[2], c[1]) or c
+    if c[1] ~= '' then table.insert(res, part) end
+  end
+  return res
 end
 
 -- Utilities ------------------------------------------------------------------
