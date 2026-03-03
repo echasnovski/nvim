@@ -1,10 +1,10 @@
 local add = vim.pack.add
-local now_if_args, later = _G.Config.now_if_args, MiniDeps.later
+local now_if_args, later, on_filetype = Config.now_if_args, Config.later, Config.on_filetype
 
 -- Tree-sitter ================================================================
 now_if_args(function()
   local ts_update = function() vim.cmd('TSUpdate') end
-  _G.Config.on_packchanged('nvim-treesitter', { 'update' }, ts_update, 'Update tree-sitter parsers')
+  Config.on_packchanged('nvim-treesitter', { 'update' }, ts_update, ':TSUpdate')
   add({
     'https://github.com/nvim-treesitter/nvim-treesitter',
     { src = 'https://github.com/nvim-treesitter/nvim-treesitter-textobjects', version = 'main' },
@@ -25,7 +25,7 @@ now_if_args(function()
   local filetypes = vim.iter(ensure_languages):map(vim.treesitter.language.get_filetypes):flatten():totable()
   vim.list_extend(filetypes, { 'markdown', 'quarto' })
   local ts_start = function(ev) vim.treesitter.start(ev.buf) end
-  _G.Config.new_autocmd('FileType', filetypes, ts_start, 'Ensure enabled tree-sitter')
+  Config.new_autocmd('FileType', filetypes, ts_start, 'Ensure enabled tree-sitter')
 
   -- Miscellaneous adjustments
   vim.treesitter.language.register('markdown', 'quarto')
@@ -75,10 +75,10 @@ now_if_args(function()
     -- 'air',
     'clangd',
     'emmet_ls',
-    'emmylua_ls',
+    -- 'emmylua_ls',
     'gopls',
     'intelephense',
-    -- 'lua_ls',
+    'lua_ls',
     'nushell',
     'pyright',
     'r_language_server',
@@ -133,9 +133,12 @@ later(function()
 end)
 
 -- Filetype: markdown =========================================================
-later(function()
-  local build = function() vim.fn['mkdp#util#install']() end
-  _G.Config.on_packchanged('markdown-preview.nvim', { 'install', 'update' }, build, 'Build markdown-preview')
+on_filetype('markdown', function()
+  local build = function()
+    vim.cmd.packadd('markdown-preview.nvim')
+    vim.fn['mkdp#util#install']()
+  end
+  Config.on_packchanged('markdown-preview.nvim', { 'install', 'update' }, build, 'Build markdown-preview')
   add({ 'https://github.com/iamcco/markdown-preview.nvim' })
 
   -- Do not close the preview tab when switching to other buffers

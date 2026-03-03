@@ -15,7 +15,7 @@ vim.keymap.set('n', ']p', '<Cmd>exe "' .. cmd .. ' "  . v:register<CR>', { desc 
 
 -- Create global tables with information about clue groups in certain modes
 -- Structure of tables is taken to be compatible with 'mini.clue'.
-_G.Config.leader_group_clues = {
+Config.leader_group_clues = {
   { mode = 'n', keys = '<Leader>b', desc = '+Buffer' },
   { mode = 'n', keys = '<Leader>e', desc = '+Explore' },
   { mode = 'n', keys = '<Leader>f', desc = '+Find' },
@@ -74,7 +74,6 @@ nmap_leader('em', edit_config_file('30_mini.lua'),          'MINI config')
 nmap_leader('en', '<Cmd>lua MiniNotify.show_history()<CR>', 'Notifications')
 nmap_leader('eo', edit_config_file('10_options.lua'),       'Options config')
 nmap_leader('ep', edit_config_file('40_plugins.lua'),       'Plugins config')
-nmap_leader('es', '<Cmd>lua MiniSessions.select()<CR>',     'Sessions')
 nmap_leader('eq', explore_quickfix,                         'Quickfix')
 nmap_leader('eQ', explore_locations,                        'Locations')
 
@@ -177,6 +176,7 @@ xmap_leader('rx', '"+y :T reprex::reprex()<CR>',                    'Reprex sele
 -- s is for 'Session'
 local session_new = 'MiniSessions.write(vim.fn.input("Session name: "))'
 local session_restart = function()
+  -- TODO: Polish it to work well. And maybe open upstream issue.
   local this_session = vim.v.this_session
   vim.cmd('mksession! Session.vim')
   local after = {

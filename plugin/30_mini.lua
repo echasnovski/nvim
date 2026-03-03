@@ -1,5 +1,4 @@
-local now, later = MiniDeps.now, MiniDeps.later
-local now_if_args = _G.Config.now_if_args
+local now, now_if_args, later = Config.now, Config.now_if_args, Config.later
 
 -- Step one ===================================================================
 now(function() vim.cmd('colorscheme miniwinter') end)
@@ -164,7 +163,7 @@ now_if_args(function()
 
   -- Set up LSP part of completion
   local on_attach = function(args) vim.bo[args.buf].omnifunc = 'v:lua.MiniCompletion.completefunc_lsp' end
-  _G.Config.new_autocmd('LspAttach', '*', on_attach, 'Custom `on_attach`')
+  Config.new_autocmd('LspAttach', '*', on_attach, 'Custom `on_attach`')
   if vim.fn.has('nvim-0.11') == 1 then vim.lsp.config('*', { capabilities = MiniCompletion.get_lsp_capabilities() }) end
 
   -- vim.lsp.on_type_formatting.enable()
@@ -239,10 +238,10 @@ later(function() require('mini.diff').setup() end)
 
 later(function() require('mini.doc').setup() end)
 
-later(function()
+now_if_args(function()
   require('mini.files').setup({ windows = { preview = true } })
 
-  _G.Config.new_autocmd('User', 'MiniFilesExplorerOpen', function()
+  Config.new_autocmd('User', 'MiniFilesExplorerOpen', function()
     MiniFiles.set_bookmark('c', vim.fn.stdpath('config'), { desc = 'Config' })
     MiniFiles.set_bookmark('m', vim.fn.stdpath('data') .. '/site/pack/core/opt/mini.nvim', { desc = 'mini.nvim' })
     MiniFiles.set_bookmark('p', vim.fn.stdpath('data') .. '/site/pack/core/opt', { desc = 'Plugins' })
@@ -268,6 +267,11 @@ later(function()
 end)
 
 later(function() require('mini.indentscope').setup() end)
+
+later(function()
+  local input = require('mini-dev.input')
+  input.setup({ handlers = { view = input.gen_view.virtline() } })
+end)
 
 later(function() require('mini.jump').setup() end)
 

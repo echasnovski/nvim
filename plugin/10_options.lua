@@ -108,7 +108,7 @@ vim.o.langmap = table.concat(langmap_keys, ',')
 -- Don't auto-wrap comments and don't insert comment leader after hitting 'o'.
 -- Do on `FileType` to always override these changes from filetype plugins.
 local ensure_fo = function() vim.cmd('setlocal formatoptions-=c formatoptions-=o') end
-_G.Config.new_autocmd('FileType', '*', ensure_fo, "Proper 'formatoptions'")
+Config.new_autocmd('FileType', '*', ensure_fo, "Proper 'formatoptions'")
 
 -- Diagnostics ================================================================
 local diagnostic_opts = {
@@ -130,5 +130,5 @@ local diagnostic_opts = {
 }
 
 -- Use `later()` to avoid sourcing `vim.diagnostic` on startup
-MiniDeps.later(function() vim.diagnostic.config(diagnostic_opts) end)
+Config.later(function() vim.diagnostic.config(diagnostic_opts) end)
 --stylua: ignore end
