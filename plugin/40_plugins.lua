@@ -7,7 +7,7 @@ now_if_args(function()
   Config.on_packchanged('nvim-treesitter', { 'update' }, ts_update, ':TSUpdate')
   add({
     'https://github.com/nvim-treesitter/nvim-treesitter',
-    { src = 'https://github.com/nvim-treesitter/nvim-treesitter-textobjects', version = 'main' },
+    'https://github.com/nvim-treesitter/nvim-treesitter-textobjects',
   })
 
   -- Ensure installed
