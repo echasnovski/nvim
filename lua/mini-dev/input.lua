@@ -1,25 +1,14 @@
 -- TODO:
 --
 -- - Code:
---   - Decide if this needs events.
---   - Decide about the degree to which to take "secret input".
---     The most realistic would be "it is possible to detect any secret
---     listener, but requires carful setup".
---     Probably, even that is not feasible since can not temporarily disable
---     external `vim.on_key` callbacks.
---   - Take extra care of handlers not modify in place the "true" state.
---     Probably, by adding dedicated `H.handle_{key,view,...}`.
 --   - Decide on default view. I like `virtline`, but it has one downside: as
 --     it uses extmark, input will be shown in all splits showing buffer.
 --
 -- - Docs:
 --
 -- - Test:
---     - The input should probably still be going if `state_set()` results in
---       an error due to incorrect input `state`.
---     - Key handler should be never allowed to change `state.keys`: initial
---       state setting in `get()`, regular key query process, external
---       `MiniInput.set_state()`.
+--     - The input should still be going if there is an error in handler or
+--       returned state is not valid.
 
 --- *mini.input* Get user input
 ---
@@ -71,9 +60,16 @@
 --- - `MiniInputSecret` - secret input.
 ---@tag MiniInput
 
+--- TODO
+---
 --- - On every new key call `handlers.key`.
 --- - After processing all new keys (usually one), call handlers: `highlight`, `view`.
 --- - <C-c> is hard coded to cancel the input (due to how |getcharstr()| works).
+---
+--- # State ~
+--- *MiniInput-state*
+---
+--- TODO
 ---@tag MiniInput-key-query-process
 
 --- # General ~
@@ -137,27 +133,21 @@ end
 
 --- Defaults ~
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text # Delay ~
+---@text # Handlers ~
 ---
---- `config.delay` defines plugin delays (in ms). All should be strictly positive.
+--- `config.handlers` defines functions ... .
 ---
---- `delay.async` is a delay between forcing asynchronous behavior. This usually
---- means making screen redraws when waiting for user's next key press.
---- Smaller values give smoother user experience at the cost of more computations.
----
---- # Handlers ~
----
---- `config.handlers` defines functions
+--- TODO: Describe key query process. Handler order. When they are called:
+--- once in the start, on every user key press, once at the end.
 ---
 --- ## Key ~
 ---
---- Key handler is called on every new item added to `keys`. It should be safe to
---- assume that `keys[#keys]` is the key that needs to be processed.
+--- Key handler process user key presses.
 ---
 --- All registered keys follow the output of |getcharstr()|. Use |vim.keycode()|
 --- to translate |key-notation| into key codes, like `vim.keycode('<BS>')`.
 ---
---- Takes `state` and `config` as arguments. Should either return new state or
+--- Takes `key` and `state` as arguments. Should either return new state or
 --- modify input `state` in place.
 ---
 --- Notes:
@@ -180,19 +170,27 @@ end
 ---
 --- <
 ---
---- # Options ~
+--- # Hide ~
 ---
---- `config.options` contains some general purpose options.
+--- `config.hide` defines if and how to hide the input from the view.
+--- By default no hiding is done. If set to string:
+--- - The `view` handler is called with every input character replaced with `hide`.
+--- - The `complete` and `highlight` handlers are not called.
 ---
---- `options.secret_char` is a string used as a replacement for each input character
---- during secret input. Use empty string `''` to not show secret input.
+--- Use empty string (`''`) to show no input characters (`view` handler can still
+--- decide to show something indicating a hidden input).
+---
+--- Note: this does not guarantee a total security of the input, just that the
+--- typed characters won't be shown on screen.
+---
+--- # Scope ~
+---
+--- `config.scope` is a string that defines an input scope. It is meant as an extra
+--- information for handlers to tweak their behavior (like `view` position, etc.).
+--- Possible values are: `"cursor"`, `"buffer"`, `"window"`, `"tabpage"`, `"editor"`.
+---
+--- The value from |MiniInput.config| is used as the default for |MiniInput.get()|.
 MiniInput.config = {
-  -- Delays (in ms; should be at least 1)
-  delay = {
-    -- Delay between forcing asynchronous behavior
-    async = 10,
-  },
-
   -- Functions that define how input process is processed
   handlers = {
     -- Handle every key press
@@ -208,61 +206,74 @@ MiniInput.config = {
     view = nil,
   },
 
-  -- Options which control module behavior
-  options = {
-    -- Replacement character during secret input
-    secret_char = '*',
-  },
+  -- How to hide the input from the view. No hiding by default.
+  -- A string is used instead of every typed character.
+  hide = nil,
+
+  -- Default input scope
+  -- One of "cursor", "buffer", "window", "tabpage", "editor"
+  -- This allows customizing how input is shown depending on where it is
+  -- needed. Like 'mini.ai' and 'mini.surround' would use "position", but
+  -- `vim.ui.input` probably "editor".
+  scope = 'editor',
 }
 --minidoc_afterlines_end
 
 --- Get input from the user
 ---
 --- Notes:
---- - All non-secret input results (even empty strings) are added to history.
+--- - All non-hidden input results (even empty strings) are added to history.
 ---   Get the whole history with |MiniInput.get_history()|.
 ---
+---@param opts table|nil Options. Possible fields:
+---   - <handlers> `(table)` - same as in |MiniInput.config|.
+---   - <hide> `(string)` - same as in |MiniInput.config|.
+---   - <init_keys> `(table)` - array of string keys that are emulated before
+---     asking for user input. Any strings are allowed, but using values that can
+---     be an output of |getcharstr()| should be preferred. Default: `{}`.
+---   - <prompt> `(string)` - intention of the input, same as in |input()|.
+---     Default: `'Input'`.
+---   - <scope> `(string)` - same as in |MiniInput.config|.
+---
 ---@return string|nil User input if accepted or `nil` if canceled.
-MiniInput.get = function(state, opts)
-  H.check_type('state', state, 'table', true)
+---
+---@usage >lua
+---   local input = MiniInput.get({
+---     -- Intention of the input
+---     prompt = 'New word',
+---     -- The input is for something at cursor
+---     scope = 'cursor',
+---     -- Emulate pressing `a`, `<BS>`, and `b`
+---     init_keys = { 'a', vim.keycode('<BS>'), 'b' },
+---   })
+--- <
+MiniInput.get = function(opts)
   H.check_type('opts', opts, 'table', true)
 
   -- Only allow one input at a time
   if H.state ~= nil then return nil end
 
-  local config = H.get_config(opts)
-  local handlers = config.handlers
-  state = H.state_new(vim.deepcopy(state))
+  local init_state = H.state_new(H.get_config(opts))
+  H.state_set(init_state)
 
-  H.state_set(state, true, handlers.key)
-  state = vim.deepcopy(H.state)
-  local is_secret = state.secret
-
-  -- TODO: Probably extract in a separate helper
-  state = handlers.view(state) or state
+  H.handle_step(nil)
+  if H.state_is_end() then return H.state_finish() end
   H.state.status = 'progress'
 
-  local is_aborted, lmap = false, H.get_lmap()
-  for _ = 1, 1000000 do
-    if H.cache.is_force_stop_advance then break end
-    local char = H.getcharstr(config.delay.async, lmap)
-    if H.cache.is_force_stop_advance then break end
-
-    table.insert(state.keys, char)
-    if char == nil then state.status = 'cancel' end
-
-    H.state_set(state, false, handlers.key)
-    state = vim.deepcopy(H.state)
-    state = handlers.view(state) or state
-
-    if H.state_is_end(state) then break end
+  for _, k in ipairs(H.state.opts.init_keys) do
+    H.handle_step(k)
+    if H.state_is_end() then return H.state_finish() end
   end
 
-  local res = H.state.status == 'accept' and H.state.input or nil
-  H.state = nil
-  if res ~= nil and not is_secret then table.insert(H.history, res) end
+  local lmap = H.get_lmap()
+  for _ = 1, 1000000 do
+    local key = H.getcharstr(lmap)
+    if key == nil then H.state.status = 'cancel' end
+    H.handle_step(key)
+    if H.state_is_end() then break end
+  end
 
-  return res
+  return H.state_finish()
 end
 
 --- A |vim.ui.input()| implementation
@@ -278,8 +289,15 @@ end
 --- <
 MiniInput.ui_input = function(opts, on_confirm)
   opts = opts or {}
-  local state = { completion_type = opts.completion, keys = { opts.default }, prompt = opts.prompt }
-  on_confirm(MiniInput.get(state))
+  -- TODO: Convert all other `vim.ui.input()` allowed fields
+  local input_opts = { init_keys = {}, prompt = opts.prompt }
+  if type(opts.default) == 'string' then
+    for i = 1, vim.fn.strchars(opts.default) do
+      input_opts.init_keys[i] = vim.fn.strcharpart(opts.default, i - 1, 1)
+    end
+  end
+
+  on_confirm(MiniInput.get(input_opts))
 end
 
 --- Get current input state
@@ -290,49 +308,19 @@ end
 --- During user input, it is a table with the following fields:
 --- - <caret> `(number)` - current input position to modify output, i.e. new key will
 ---   be added at this (character, not byte) index.
---- - <completion_type> `(string|nil)` - same as `completion` in |input()|.
---- - <completion_items> `table|nil` - array of completion suggestions at caret.
 --- - <data> `(table)` - any information to be reused within same input session.
---- - <hl_ranges> `(table|nil)` - array of ranges to highlight, same as the output
----   of |input()-highlight|.
---- - <input> `(string)` - current result of the user input.
---- - <keys> `(table)` - string array with full history of user keypresses.
----   Each element is usually a |getcharstr()| output. However, it is allowed
----   to be any string if set with |MiniInput.set_state()|.
----   Use `keys[#keys]` to get the latest key press.
---- - <prompt> `(string|nil)` - intention of the input, same as in |input()|.
---- - <secret> `(boolean)` - whether input session is for sensitive information
----   and should be hidden.
+--- - <input> `(string)` - current result of the user input. If the input is hidden,
+---   every character is replaced with `opts.hide`.
+--- - <prompt> `(string)` - intention of the input, same as in |input()|.
+--- - <opts> `(table)` - input options, same as in |MiniInput.get()|.
 --- - <status> `(string)` - one of `"start"`, `"progress"`, `"accept"`, `"cancel"`.
 ---
----@return table|nil Current state if input is active, `nil` if it is secret or not active.
----
----@usage Together with |MiniInput.set_state()| can be used to perform educated
----   actions during user input. For example: >lua
----
----   -- TODO
---- <
+---@return table|nil Current state if input is active, `nil` otherwise.
 MiniInput.get_state = function()
-  if H.state == nil or H.state.secret then return nil end
-  return vim.deepcopy(H.state)
-end
-
---- Set current input state
----
---- Notes:
---- - No state is set if there is no active input or if the input is secret.
----
----@param state table Parts of the state to be updated. See |MiniInput.get_state()|
----   for available fields. Notes:
----   - Field <input> is allowed to only be equal or appeend to current state.
----   - Field <secret> is ignored to be not allow overriding it.
----   - Field <status> can not be `"start"`, as it is set once by |MiniInput.get()|.
-MiniInput.set_state = function(state)
-  if H.state == nil or H.state.secret then return nil end
-
-  local config = H.get_config()
-  H.state_set(state, false, config.handlers)
-  -- TODO: Update view
+  if H.state == nil then return nil end
+  local res = H.copy_tables(H.state)
+  if type(res.opts.hide) == 'string' then res.input = string.rep(res.opts.hide, vim.fn.strchars(res.input)) end
+  return res
 end
 
 --- Get input history
@@ -345,8 +333,8 @@ MiniInput.get_history = function() return vim.deepcopy(H.history) end
 --- Notes:
 --- - All special keys (which are not expected to be added to the input) should
 ---   come as a separate `state.keys` entry. I.e. `{ 'x', '\r' }` and not `{ 'x\r' }`.
-MiniInput.default_key = function(state, opts)
-  local key = state.keys[#state.keys]
+MiniInput.default_key = function(state, key)
+  if key == nil then return end
 
   local method = H.key_methods[key]
   if method ~= nil then return method(state) end
@@ -362,10 +350,18 @@ MiniInput.default_key = function(state, opts)
   state.input = vim.fn.strcharpart(input, 0, caret - 1) .. key .. vim.fn.strcharpart(input, caret - 1)
   state.caret = caret + vim.fn.strchars(key)
 end
-local default_key_handler = MiniInput.default_key
 
 MiniInput.default_complete = function(state)
-  if state.secret then return state end
+  if state.opts.hide then return state end
+  -- TODO
+end
+
+MiniInput.default_highlight = function(state)
+  if state.opts.hide then return state end
+  -- TODO
+end
+
+MiniInput.default_view = function(state)
   -- TODO
 end
 
@@ -387,7 +383,7 @@ MiniInput.gen_view.notify = function(opts)
   local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
 
   return function(state)
-    local caret, input, prompt = state.caret, state.input, state.prompt
+    local caret, input, prompt = state.caret, state.input, state.opts.prompt
 
     prompt = (prompt or ''):gsub('%s+$', '')
     if not vim.endswith(prompt, symbol_prefix) then prompt = prompt .. symbol_prefix end
@@ -425,7 +421,7 @@ MiniInput.gen_view.progress = function(opts)
   local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
 
   return function(state)
-    local caret, input, prompt, status = state.caret, state.input, state.prompt, state.status
+    local caret, input, prompt, status = state.caret, state.input, state.opts.prompt, state.status
 
     prompt = (prompt or ''):gsub('%s+$', '')
     if not vim.endswith(prompt, symbol_prefix) then prompt = prompt .. symbol_prefix end
@@ -456,7 +452,7 @@ MiniInput.gen_view.virtline = function(opts)
   local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
 
   return function(state)
-    local caret, input, prompt, status = state.caret, state.input, state.prompt, state.status
+    local caret, input, prompt, status = state.caret, state.input, state.opts.prompt, state.status
 
     prompt = (prompt or ''):gsub('%s+$', '')
     local prefix = vim.endswith(prompt, symbol_prefix) and '' or symbol_prefix
@@ -478,8 +474,6 @@ MiniInput.gen_view.virtline = function(opts)
     -- Ensure that the line above is visible
     -- TODO: Still shows cursor on top of the virtual line if there is a scroll
     if cur_line == top_line then vim.cmd('normal! \25') end
-
-    -- TODO: Make it still show full line if the window is scrolled horizontally
   end
 end
 
@@ -511,27 +505,20 @@ H.ns_id = {
   view = vim.api.nvim_create_namespace('MiniInputView'),
 }
 
--- Timers
-H.timers = {
-  getcharstr = vim.loop.new_timer(),
-}
-
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
 H.setup_config = function(config)
   H.check_type('config', config, 'table', true)
   config = vim.tbl_deep_extend('force', vim.deepcopy(H.default_config), config or {})
 
-  H.check_type('delay', config.delay, 'table')
-  H.check_type('delay.async', config.delay.async, 'number')
-
   H.check_type('handlers', config.handlers, 'table')
   H.check_type('handlers.key', config.handlers.key, 'function', true)
+  H.check_type('handlers.complete', config.handlers.complete, 'function', true)
   H.check_type('handlers.highlight', config.handlers.highlight, 'function', true)
   H.check_type('handlers.view', config.handlers.view, 'function', true)
 
-  H.check_type('options', config.options, 'table')
-  H.check_type('options.secret_char', config.options.secret_char, 'string')
+  H.check_type('hide', config.hide, 'string', true)
+  H.check_type('scope', config.scope, 'string')
 
   return config
 end
@@ -557,74 +544,86 @@ H.get_config = function(config)
 end
 
 -- State ----------------------------------------------------------------------
-H.state_new = function(state)
-  state.caret = state.caret or 1
-  state.data = state.data or {}
-  state.input = state.input or ''
-  state.keys = state.keys or {}
-  if state.secret == nil then state.secret = false end
-  state.status = 'start'
-  return state
+H.state_new = function(opts)
+  opts.handlers.key = opts.handlers.key or MiniInput.default_key
+  opts.handlers.complete = opts.handlers.complete or MiniInput.default_complete
+  opts.handlers.highlight = opts.handlers.highlight or MiniInput.default_highlight
+  opts.handlers.view = opts.handlers.view or MiniInput.default_view
+  -- Allow `opts.hide` to be `nil` to mean "don't hide"
+  opts.init_keys = opts.init_keys or {}
+  opts.prompt = opts.prompt or 'Input'
+
+  return { caret = 1, data = {}, input = '', opts = opts, status = 'start' }
 end
 
-H.state_set = function(new, init, key_handler)
-  H.check_type('state', new, 'table')
-  local dummy = H.state_new({})
-  local cur = vim.deepcopy(H.state) or dummy
-  new = vim.tbl_deep_extend('force', cur, new)
-
-  H.state_validate(new, cur)
-
-  -- Do not allow to change `secret` to not compromise secret input
-  if not init then new.secret = cur.secret end
-
-  -- Force proper status
-  new.status = init and 'start' or (new.status == 'start' and 'progress' or new.status)
-
-  -- Process new keys
-  key_handler = (key_handler == nil or new.secret) and default_key_handler or key_handler
-
-  local cur_keys, new_keys = cur.keys, new.keys
-  for i = #cur.keys + 1, #new_keys do
-    table.insert(cur_keys, new_keys[i])
-    new.keys = vim.deepcopy(cur_keys)
-
-    new = key_handler(new) or new
-    -- Ignore special fields
-    new.secret, new.keys = cur.secret, cur_keys
-    H.state_validate(new, dummy)
-    if new.status == 'accept' or new.status == 'cancel' then break end
-  end
-
-  H.state = new
+H.state_set = function(new)
+  local ok, msg = pcall(H.state_validate, new)
+  if not ok then return H.notify(msg, 'WARN') end
+  H.state = H.copy_tables(new)
 end
 
 H.state_validate = function(x, cur)
   H.check_type('state.caret', x.caret, 'number')
-  H.check_type('state.completion_type', x.completion_type, 'string', true)
-  H.check_type('state.completion_items', x.completion_items, 'table', true)
   H.check_type('state.data', x.data, 'table')
-  H.check_type('state.hl_ranges', x.hl_ranges, 'table', true)
   H.check_type('state.input', x.input, 'string')
-  if not H.islist(x.keys) then H.error('`state.keys` should be array') end
-  for i = 1, #x.keys do
-    if type(x.keys[i]) ~= 'string' then H.error('`state.keys` should be array of strings') end
-    if cur.keys[i] ~= nil and cur.keys[i] ~= x.keys[i] then H.error('`state.keys` overrides past keys') end
+
+  H.check_type('state.opts.handlers.key', x.opts.handlers.key, 'function')
+  H.check_type('state.opts.handlers.complete', x.opts.handlers.complete, 'function')
+  H.check_type('state.opts.handlers.highlight', x.opts.handlers.highlight, 'function')
+  H.check_type('state.opts.handlers.view', x.opts.handlers.view, 'function')
+
+  H.check_type('state.opts.hide', x.opts.hide, 'string', true)
+
+  if not H.islist(x.opts.init_keys) then H.error('`state.opts.init_keys` should be array') end
+  for i, k in ipairs(x.opts.init_keys) do
+    if type(k) ~= 'string' then H.error('`state.opts.init_keys` should be array of strings') end
   end
-  H.check_type('state.prompt', x.prompt, 'string', true)
-  H.check_type('state.secret', x.secret, 'boolean')
-  if not (x.status == 'start' or x.status == 'progress' or x.status == 'accept' or x.status == 'cancel') then
-    H.error('`state.status` should be one of "start", "progress", "accept", "cancel"')
-  end
+
+  H.check_type('state.opts.prompt', x.opts.prompt, 'string')
+
+  H.check_one_of(x.opts.scope, { 'cursor', 'buffer', 'window', 'tabpage', 'editor' }, 'state.opts.scope')
+
+  H.check_one_of(x.status, { 'start', 'progress', 'accept', 'cancel' }, 'state.status')
 end
 
-H.state_hide_secret = function(state, config)
-  if state == nil or not state.secret then return state end
-  state.input = string.rep(config.options.secret_char, vim.fn.strchars(state.input))
-  return state
+H.state_finish = function()
+  local is_hide = H.state.opts.hide
+  local res = H.state.status == 'accept' and H.state.input or nil
+  H.handle_step(nil)
+
+  H.state = nil
+  if res ~= nil and not is_hide then table.insert(H.history, res) end
+  return res
 end
 
-H.state_is_end = function(state) return state.status == 'accept' or state.status == 'cancel' end
+H.state_is_end = function() return H.state.status == 'accept' or H.state.status == 'cancel' end
+
+-- Handlers -------------------------------------------------------------------
+H.handle_step = function(key)
+  -- Stop handling keys past the end of the input
+  if key ~= nil and H.state_is_end() then return end
+
+  H.apply_handler('key', key)
+  H.apply_handler('highlight')
+  H.apply_handler('view')
+  H.schedule_redraw()
+end
+
+H.apply_handler = function(name, key)
+  local state = H.copy_tables(H.state)
+  local input
+  if name ~= 'key' and type(state.opts.hide) == 'string' then
+    input = state.input
+    state.input = string.rep(state.opts.hide, vim.fn.strchars(input))
+  end
+
+  local ok, res = pcall(state.opts.handlers[name], state, key)
+  if not ok then return H.notify('Error applying `' .. name .. '` handler: ' .. res) end
+
+  local new_state = res or state
+  new_state.input = input or new_state.input or state.input
+  H.state_set(new_state)
+end
 
 -- Default key handler --------------------------------------------------------
 H.key_methods = {}
@@ -672,7 +671,7 @@ H.make_statusline_view = function(target, opts)
       state.data.laststatus = vim.o.laststatus
     end
 
-    local caret, input, prompt = state.caret, state.input, state.prompt
+    local caret, input, prompt = state.caret, state.input, state.opts.prompt
     prompt = (prompt or ''):gsub('%s+$', '')
     local prefix = vim.endswith(prompt, symbol_prefix) and '' or symbol_prefix
     local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
@@ -714,19 +713,24 @@ H.check_type = function(name, val, ref, allow_nil)
   H.error(string.format('`%s` should be %s, not %s', name, ref, type(val)))
 end
 
+H.check_one_of = function(x, choices, name)
+  if vim.tbl_contains(choices, x) then return end
+  local choices_string = table.concat(vim.tbl_map(vim.inspect, choices), ', ')
+  local msg = string.format('`%s` should be one of %s', name, choices_string)
+  H.error(msg)
+end
+
 H.notify = function(msg, level_name, silent)
   if not silent then vim.notify('(mini.input) ' .. msg, vim.log.levels[level_name]) end
 end
 
-H.redraw_scheduled = vim.schedule_wrap(function() vim.cmd('redraw') end)
+H.schedule_redraw = vim.schedule_wrap(function() vim.cmd('redraw') end)
 
-H.getcharstr = function(delay_async, lmap)
+H.getcharstr = function(lmap)
   -- Ensure that redraws still happen
-  H.timers.getcharstr:start(0, delay_async, H.redraw_scheduled)
   H.cache.is_in_getcharstr = true
-  local ok, char = pcall(vim.fn.getcharstr)
+  local ok, char = pcall(vim.fn.getcharstr, -1, { cursor = 'hide' })
   H.cache.is_in_getcharstr = nil
-  H.timers.getcharstr:stop()
 
   -- Terminate if no input or on hard-coded <C-c>
   if not ok or char == '' or char == '\3' then return end
@@ -764,5 +768,8 @@ H.get_lmap = function()
   return lmap
 end
 if vim.fn.has('nvim-0.10') == 0 then H.get_lmap = function() return {} end end
+
+-- A copy of `vim.deepcopy()` that doesn't error on userdata and threads
+H.copy_tables = function(x) return type(x) == 'table' and vim.tbl_map(H.copy_tables, x) or x end
 
 return MiniInput
