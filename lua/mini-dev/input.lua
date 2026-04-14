@@ -9,6 +9,7 @@
 -- - Test:
 --     - The input should still be going if there is an error in handler or
 --       returned state is not valid.
+--     - <C-w> should work with multibyte charaters.
 
 --- *mini.input* Get user input
 ---
@@ -51,13 +52,11 @@
 --- # Highlight groups ~
 ---
 --- - `MiniInputBorder` - border of a floating window.
---- - `MiniInputCaret`  - possible caret symbol shown in a prompt area.
+--- - `MiniInputCaret`  - caret symbol shown in a prompt area.
+--- - `MiniInputHide`   - input is hidden.
+--- - `MiniInputHint`   - hints shown during history or completion navigation.
 --- - `MiniInputNormal` - basic foreground/background.
---- - `MiniInputPrefix` - possible prefix shown in a prompt area (like `:`).
----    TODO: Maybe rename to "suffix", as it is "prompt suffix"? Or rename
----    "prompt" to "title", since "prompt" in 'mini.pick' means "prefix + input + caret".
 --- - `MiniInputPrompt` - input prompt (intention of the input).
---- - `MiniInputSecret` - secret input.
 ---@tag MiniInput
 
 --- TODO
@@ -196,14 +195,18 @@ MiniInput.config = {
     -- Handle every key press
     key = nil,
 
-    -- Compute completion candidates
-    complete = nil,
-
     -- Compute highlighting of current input
     highlight = nil,
 
     -- Show current input state
     view = nil,
+
+    -- Compute completion candidates
+    complete = nil,
+
+    -- Compute history items
+    -- TODO
+    history = nil,
   },
 
   -- How to hide the input from the view. No hiding by default.
@@ -309,6 +312,14 @@ end
 --- - <caret> `(number)` - current input position to modify output, i.e. new key will
 ---   be added at this (character, not byte) index.
 --- - <data> `(table)` - any information to be reused within same input session.
+--- - <history> `(table|nil)` - information about active history navigation.
+---   Can be used by `view` handler to show that history navigation is in action.
+---   Its fields describe the state of navigation:
+---     - <ref> `(string)` - reference input used to match history.
+---     - <items> `(table)` - string array of entries (deduplicated, matching
+---       reference input, from earliest to latest). May be empty.
+---     - <id> `(number)` - current identfier of matched history. Can be zero to
+---       mean that the reference input is showing.
 --- - <input> `(string)` - current result of the user input. If the input is hidden,
 ---   every character is replaced with `opts.hide`.
 --- - <prompt> `(string)` - intention of the input, same as in |input()|.
@@ -328,43 +339,6 @@ end
 ---@return table Array of all previous non-secret inputs (from earliest to latest).
 MiniInput.get_history = function() return vim.deepcopy(H.history) end
 
---- Default key handler
----
---- Notes:
---- - All special keys (which are not expected to be added to the input) should
----   come as a separate `state.keys` entry. I.e. `{ 'x', '\r' }` and not `{ 'x\r' }`.
-MiniInput.default_key = function(state, key)
-  if key == nil then return end
-
-  local method = H.key_methods[key]
-  if method ~= nil then return method(state) end
-
-  -- TODO: Basically try to support all `:h c_CTRL-<KEY>`. In particular:
-  -- `:h c_CTRL-K`, `:h c_CTRL-R`, `:h c_CTRL-V`.
-  -- TODO: `<Down>` and `<Up>` should navigate through history that matches (by
-  -- prefix) current input.
-  -- TODO: `<Tab>` should compute and set completion candidates
-
-  -- Fall back to adding a character at caret
-  local caret, input = state.caret, state.input
-  state.input = vim.fn.strcharpart(input, 0, caret - 1) .. key .. vim.fn.strcharpart(input, caret - 1)
-  state.caret = caret + vim.fn.strchars(key)
-end
-
-MiniInput.default_complete = function(state)
-  if state.opts.hide then return state end
-  -- TODO
-end
-
-MiniInput.default_highlight = function(state)
-  if state.opts.hide then return state end
-  -- TODO
-end
-
-MiniInput.default_view = function(state)
-  -- TODO
-end
-
 --- View generators
 ---
 --- This is a table with function elements. Call to actually get a view function.
@@ -379,14 +353,13 @@ end
 
 --- Notification view
 MiniInput.gen_view.notify = function(opts)
-  opts = vim.tbl_extend('force', { symbol_caret = '▏', symbol_prefix = ':' }, opts or {})
-  local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
+  opts = vim.tbl_extend('force', { symbol_caret = '▏' }, opts or {})
+  local symbol_caret = opts.symbol_caret
 
   return function(state)
     local caret, input, prompt = state.caret, state.input, state.opts.prompt
 
     prompt = (prompt or ''):gsub('%s+$', '')
-    if not vim.endswith(prompt, symbol_prefix) then prompt = prompt .. symbol_prefix end
     local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
     local msg = string.format('%s %s%s%s', prompt, input_left, symbol_caret, input_right)
 
@@ -411,20 +384,18 @@ end
 ---
 ---@opts table|nil Options. Possible fields:
 ---   - <symbol_caret> `(string)` - string to use for caret.
----   - <symbol_prefix> `(string)` - string to use for prompt prefix.
 MiniInput.gen_view.progress = function(opts)
   if vim.fn.has('nvim-0.12') == 0 then
     H.error("`progress` view requires Neovim>=0.12. Consider using `notify` view with 'mini.notify' set up.")
   end
 
-  opts = vim.tbl_extend('force', { symbol_caret = '▏', symbol_prefix = ':' }, opts or {})
-  local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
+  opts = vim.tbl_extend('force', { symbol_caret = '▏' }, opts or {})
+  local symbol_caret = opts.symbol_caret
 
   return function(state)
     local caret, input, prompt, status = state.caret, state.input, state.opts.prompt, state.status
 
     prompt = (prompt or ''):gsub('%s+$', '')
-    if not vim.endswith(prompt, symbol_prefix) then prompt = prompt .. symbol_prefix end
     local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
 
     local progress_status = status == 'accept' and 'success' or (status == 'cancel' and 'cancel' or 'running')
@@ -448,22 +419,30 @@ MiniInput.gen_view.statusline = function(opts) return H.make_statusline_view('st
 
 --- Virtual line view
 MiniInput.gen_view.virtline = function(opts)
-  opts = vim.tbl_extend('force', { symbol_caret = '▏', symbol_prefix = ':' }, opts or {})
-  local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
+  opts = vim.tbl_extend('force', { symbol_caret = '▏' }, opts or {})
+  local symbol_caret = opts.symbol_caret
 
   return function(state)
     local caret, input, prompt, status = state.caret, state.input, state.opts.prompt, state.status
 
     prompt = (prompt or ''):gsub('%s+$', '')
-    local prefix = vim.endswith(prompt, symbol_prefix) and '' or symbol_prefix
     local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
 
+    -- TODO: Make it part of a general `state_to_chunks(state, width)` that:
+    -- - Makes sure that it focuses on cursor if the input is too wide.
+    --   Inclusing splicing possible `state.highlight` ranges.
+    -- - Adds history and completion hint to the right of the caret.
+    local prompt_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
     --stylua: ignore
     local chunks = H.normalize_chunks({
-      { prompt, 'MiniInputPrompt' }, { prefix, 'MiniInputPrefix' }, { ' ', 'MiniInputNormal' },
+      { prompt, prompt_hl }, { ' ', 'MiniInputNormal' },
       { input_left, 'MiniInputNormal' }, { symbol_caret, 'MiniInputCaret' }, { input_right, 'MiniInputNormal' },
       { string.rep(' ', vim.o.columns), 'MiniInputNormal' },
     })
+    if state.history ~= nil then
+      local hint = string.format(' (%d/%d)', state.history.id, #state.history.items)
+      table.insert(chunks, #chunks, { hint, 'MiniInputHint' })
+    end
 
     local cur_line, top_line = vim.fn.line('.'), vim.fn.line('w0')
     local extmark_opts = { id = state.data.extmark_id, virt_lines = { chunks }, virt_lines_above = true }
@@ -486,6 +465,56 @@ end
 
 --- Winbar view
 MiniInput.gen_view.winbar = function(opts) return H.make_statusline_view('winbar', opts) end
+
+--- Default key handler
+---
+--- Emulates most of |Command-line-mode| editing (|cmdline-editing|):
+--- - <CR> accepts and <Esc> cancels input.
+--- - <Left>, <Right>, <S-Left>, <S-Right>, <C-b>, <C-e> move cursor.
+--- - <BS> / <C-h> and <Del> delete character to the left and at caret.
+--- - <C-u>, <C-w> edit text as |c_CTRL-U| and |c_CTRL-W|.
+--- - <C-k> inserts a digraph based on the next two pressed keys, as |c_CTRL-K|.
+--- - <C-r> inserts a content of a register at caret, as |c_CTRL-R| including
+---   support for special <C-a>, <C-f>, <C-l>, <C-w> keys for a register.
+--- - <C-v>, <C-q> insert next key literally, as |c_CTRL-V|. |i_CTRL-V_digit| submode
+---   is recognized, but all digits must be typed in full.
+--- - <Up>, <Down> navigates to earlier/later history item (|MiniInput.get_state()|)
+--- - <Tab> activates completion. TODO
+--- - <C-x> toggles hide/unhide of the input.
+--- - If a key is not special, it is inserted at caret as is.
+MiniInput.default_key = function(state, key)
+  if key == nil then return end
+  local method = H.key_methods[key] or function(s) H.insert_at_caret(s, key) end
+  method(state)
+
+  -- Deinit history navigation
+  if not (key == H.keycode('<Up>') or key == H.keycode('<Down>')) then state.history = nil end
+end
+
+--- Default highlight handler
+MiniInput.default_highlight = function(state)
+  if state.opts.hide then return end
+  -- TODO:
+  -- - Should highlight input parts added during history or completion
+  --   navigation.
+end
+
+--- Default view handler
+MiniInput.default_view = function(state)
+  -- TODO
+end
+
+--- Default completion handler
+MiniInput.default_complete = function(state)
+  if state.opts.hide then return end
+  -- TODO
+end
+
+--- Default history handler
+MiniInput.default_history = function(state)
+  if state.opts.hide then return end
+  -- TODO
+end
 
 -- Helper data ================================================================
 -- Module default config
@@ -533,10 +562,10 @@ H.create_default_hl = function()
 
   hi('MiniInputBorder', { link = 'FloatBorder' })
   hi('MiniInputCaret', { link = 'MiniInputPrompt' })
+  hi('MiniInputHide', { link = 'DiagnosticFloatingWarn' })
+  hi('MiniInputHint', { link = 'DiagnosticFloatingHint' })
   hi('MiniInputNormal', { link = 'NormalFloat' })
-  hi('MiniInputPrefix', { link = 'DiagnosticFloatingHint' })
   hi('MiniInputPrompt', { link = 'DiagnosticFloatingInfo' })
-  hi('MiniInputSecret', { link = 'DiagnosticFloatingWarn' })
 end
 
 H.get_config = function(config)
@@ -610,8 +639,7 @@ H.handle_step = function(key)
 end
 
 H.apply_handler = function(name, key)
-  local state = H.copy_tables(H.state)
-  local input
+  local state, input = H.copy_tables(H.state), nil
   if name ~= 'key' and type(state.opts.hide) == 'string' then
     input = state.input
     state.input = string.rep(state.opts.hide, vim.fn.strchars(input))
@@ -628,39 +656,180 @@ end
 -- Default key handler --------------------------------------------------------
 H.key_methods = {}
 
-local keycode = vim.keycode or function(s) return vim.api.nvim_replace_termcodes(s, true, true, true) end
-H.key_methods['\r'] = function(state) state.status = 'accept' end
-H.key_methods[keycode('<Esc>')] = function(state) state.status = 'cancel' end
-H.key_methods[keycode('<BS>')] = function(state)
+H.keycode = vim.fn.has('nvim-0.10') == 1 and vim.keycode
+  or function(s) return vim.api.nvim_replace_termcodes(s, true, true, true) end
+local k = H.keycode
+
+-- General
+H.key_methods[k('<CR>')] = function(state) state.status = 'accept' end
+H.key_methods[k('<Esc>')] = function(state) state.status = 'cancel' end
+
+-- Caret movement
+H.key_methods[k('<Left>')] = function(state) state.caret = H.clamp(state.caret - 1, 1, vim.fn.strchars(state.input) + 1) end
+H.key_methods[k('<Right>')] = function(state)
+  state.caret = H.clamp(state.caret + 1, 1, vim.fn.strchars(state.input) + 1)
+end
+H.key_methods[k('<S-Left>')] = function(state)
+  local caret, input = state.caret, state.input
+  local to = H.match_keyword_chars(input, caret, 'left')
+  state.caret = H.clamp(to + 1, 1, vim.fn.strchars(state.input) + 1)
+end
+H.key_methods[k('<S-Right>')] = function(state)
+  local caret, input = state.caret, state.input
+  local to = H.match_keyword_chars(input, caret, 'right')
+  state.caret = H.clamp(to + 1, 1, vim.fn.strchars(state.input) + 1)
+end
+H.key_methods[k('<C-b>')] = function(state) state.caret = 1 end
+H.key_methods[k('<C-e>')] = function(state) state.caret = vim.fn.strchars(state.input) + 1 end
+
+-- Delete
+H.key_methods[k('<BS>')] = function(state)
   local caret, input = state.caret, state.input
   if caret <= 1 then return end
   state.input = vim.fn.strcharpart(input, 0, caret - 2) .. vim.fn.strcharpart(input, caret - 1)
   state.caret = caret - 1
 end
-H.key_methods[keycode('<C-w>')] = function(state)
+H.key_methods[k('<C-h>')] = H.key_methods[k('<BS>')]
+H.key_methods[k('<Del>')] = function(state)
   local caret, input = state.caret, state.input
-  if caret <= 1 then return end
-  local left = vim.fn.strcharpart(input, 0, caret - 1)
-  local left_to = vim.fn.match(left, '[[:keyword:]]\\+$')
-  if left_to < 0 then left_to = vim.fn.match(left, '[^[:keyword:]]\\+$') end
-  state.input = vim.fn.strcharpart(left, 0, left_to) .. vim.fn.strcharpart(input, caret - 1)
-  state.caret = H.clamp(left_to + 1, 1, vim.fn.strchars(state.input) + 1)
+  if caret > vim.fn.strchars(input) then return end
+  state.input = vim.fn.strcharpart(input, 0, caret - 1) .. vim.fn.strcharpart(input, caret)
 end
-H.key_methods[keycode('<C-u>')] = function(state)
+H.key_methods[k('<C-u>')] = function(state)
   state.input = vim.fn.strcharpart(state.input, state.caret - 1)
   state.caret = 1
 end
-H.key_methods[keycode('<Left>')] = function(state)
-  state.caret = H.clamp(state.caret - 1, 1, vim.fn.strchars(state.input) + 1)
+H.key_methods[k('<C-w>')] = function(state)
+  local caret, input = state.caret, state.input
+  local left_to = H.match_keyword_chars(input, caret, 'left')
+  state.input = vim.fn.strcharpart(input, 0, left_to) .. vim.fn.strcharpart(input, caret - 1)
+  state.caret = H.clamp(left_to + 1, 1, vim.fn.strchars(state.input) + 1)
 end
-H.key_methods[keycode('<Right>')] = function(state)
-  state.caret = H.clamp(state.caret + 1, 1, vim.fn.strchars(state.input) + 1)
+
+-- Special insert
+H.key_methods[k('<C-k>')] = function(state)
+  local ok, new = pcall(vim.fn.digraph_get, H.getcharstr_many(2))
+  if not ok then return end
+  H.insert_at_caret(state, new)
+end
+
+H.key_methods[k('<C-r>')] = function(state)
+  -- Get register content
+  local register = H.getcharstr()
+  if register == nil then return end
+  -- - Mimic some "insert object under cursor" behavior of Command-line mode
+  local reg_content
+  local expand_var = ({ ['\1'] = '<cWORD>', ['\6'] = '<cfile>', ['\23'] = '<cword>' })[register]
+  if expand_var then reg_content = vim.fn.expand(expand_var) end
+  if register == '\f' then reg_content = vim.fn.getline('.') end
+  if reg_content == nil then
+    local has_register, r = pcall(vim.fn.getreg, register)
+    reg_content = has_register and r or ''
+  end
+
+  H.insert_at_caret(state, reg_content)
+end
+
+H.key_methods[k('<C-q>')] = function(state)
+  local char = H.getcharstr()
+  if char == nil then return end
+
+  -- See `:h i_CTRL-V_digit`
+  if char:find('^[%doOxXuU]$') ~= nil then
+    local ok, new_text = pcall(vim.fn.nr2char, H.get_ctrl_v_digits(char))
+    if ok then H.insert_at_caret(state, new_text) end
+    return
+  end
+
+  local ok, new_text = pcall(vim.fn.keytrans, char)
+  if not ok or (ok and new_text:find('^<C%-.>$') ~= nil and char:len() == 1) then new_text = char end
+  H.insert_at_caret(state, new_text)
+end
+H.key_methods[k('<C-v>')] = H.key_methods[k('<C-q>')]
+
+-- History navigation
+H.key_methods[k('<Up>')] = function(state)
+  H.state_init_history(state)
+  if #state.history.items == 0 then return end
+  -- state.history.id = math.min(state.history.id + 1, #state.history.items)
+  -- state.history.id = math.fmod(#state.history.items + state.history.id - 1, #state.history.items + 1)
+  state.history.id = state.history.id > 0 and (state.history.id - 1) or #state.history.items
+  state.input = state.history.items[state.history.id] or state.history.ref
+  state.caret = vim.fn.strchars(state.input) + 1
+end
+H.key_methods[k('<Down>')] = function(state)
+  H.state_init_history(state)
+  if #state.history.items == 0 then return end
+  -- state.history.id = math.max(state.history.id - 1, 0)
+  state.history.id = state.history.id < #state.history.items and (state.history.id + 1) or 0
+  state.input = state.history.items[state.history.id] or state.history.ref
+  state.caret = vim.fn.strchars(state.input) + 1
+end
+
+-- Completion navigation
+H.key_methods[k('<Tab>')] = function(state)
+  -- TODO
+end
+H.key_methods[k('<S-Tab>')] = function(state)
+  -- TODO
+end
+
+-- Miscellaneous
+H.key_methods[k('<C-x>')] = function(state)
+  if type(state.opts.hide) == 'string' then
+    state.data.hide_orig = state.opts.hide
+    state.opts.hide = nil
+    return
+  end
+  state.opts.hide = state.data.hide_orig or '*'
+  state.data.hide_orig = nil
+end
+
+H.insert_at_caret = function(state, new_text)
+  local caret, input = state.caret, state.input
+  state.input = vim.fn.strcharpart(input, 0, caret - 1) .. new_text .. vim.fn.strcharpart(input, caret - 1)
+  state.caret = caret + vim.fn.strchars(new_text)
+end
+
+H.match_keyword_chars = function(input, caret, side)
+  local text = side == 'left' and vim.fn.strcharpart(input, 0, caret - 1) or vim.fn.strcharpart(input, caret - 1)
+  local pat_keyword = side == 'left' and '[[:keyword:]]\\+$' or '^[[:keyword:]]\\+\\zs'
+  local pat_non_keyword = side == 'left' and '[^[:keyword:]]\\+$' or '^[^[:keyword:]]\\+\\zs'
+
+  local res = math.max(vim.fn.match(text, pat_keyword), vim.fn.match(text, pat_non_keyword), 0)
+  return vim.fn.charidx(text, res) + (side == 'left' and 0 or (caret - 1))
+end
+
+H.state_init_history = function(state)
+  if state.history ~= nil then return end
+  local ref = state.input
+  local raw, matched, seen = H.history, {}, {}
+  for i = #raw, 1, -1 do
+    local val = raw[i]
+    if not seen[val] and vim.startswith(val, ref) and val ~= ref then table.insert(matched, val) end
+    seen[val] = true
+  end
+  local items, n = {}, #matched
+  for i = 1, #raw do
+    items[n - i + 1] = matched[i]
+  end
+  state.history = { ref = ref, items = items, id = 0 }
+end
+
+H.get_ctrl_v_digits = function(submode)
+  if submode:find('^%d$') then
+    local rest = H.getcharstr_many(2)
+    return tonumber(rest ~= nil and (submode .. rest) or nil)
+  end
+  if submode == 'o' or submode == 'O' then return tonumber(H.getcharstr_many(3), 8) end
+  local n_chars = submode == 'U' and 8 or (submode == 'u' and 4 or 2)
+  return tonumber(H.getcharstr_many(n_chars), 16)
 end
 
 -- Views ----------------------------------------------------------------------
 H.make_statusline_view = function(target, opts)
-  opts = vim.tbl_extend('force', { symbol_caret = '▏', symbol_prefix = ':' }, opts or {})
-  local symbol_caret, symbol_prefix = opts.symbol_caret, opts.symbol_prefix
+  opts = vim.tbl_extend('force', { symbol_caret = '▏' }, opts or {})
+  local symbol_caret = opts.symbol_caret
 
   return function(state)
     local win_id, win_id_prev = vim.api.nvim_get_current_win(), state.data.win_id
@@ -673,12 +842,13 @@ H.make_statusline_view = function(target, opts)
 
     local caret, input, prompt = state.caret, state.input, state.opts.prompt
     prompt = (prompt or ''):gsub('%s+$', '')
-    local prefix = vim.endswith(prompt, symbol_prefix) and '' or symbol_prefix
     local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
 
+    -- TODO: Make sure that it focuses on cursor if the input is too wide
+    local prompt_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
     --stylua: ignore
     local chunks = {
-      { prompt, 'MiniInputPrompt' }, { prefix, 'MiniInputPrefix' }, { ' ', 'MiniInputNormal' },
+      { prompt, prompt_hl }, { ' ', 'MiniInputNormal' },
       { input_left, 'MiniInputNormal' }, { symbol_caret, 'MiniInputCaret' }, { input_right, 'MiniInputNormal' },
     }
     vim.wo[win_id][target] = table.concat(H.normalize_chunks(chunks, 'statusline')) .. '%#MiniInputNormal#'
@@ -727,15 +897,21 @@ end
 H.schedule_redraw = vim.schedule_wrap(function() vim.cmd('redraw') end)
 
 H.getcharstr = function(lmap)
-  -- Ensure that redraws still happen
-  H.cache.is_in_getcharstr = true
   local ok, char = pcall(vim.fn.getcharstr, -1, { cursor = 'hide' })
-  H.cache.is_in_getcharstr = nil
 
   -- Terminate if no input or on hard-coded <C-c>
   if not ok or char == '' or char == '\3' then return end
   -- Respect language mappings only if needed
-  return vim.o.iminsert == 0 and char or (lmap[char] or char)
+  return vim.o.iminsert == 0 and char or ((lmap or {})[char] or char)
+end
+
+H.getcharstr_many = function(n)
+  local res = {}
+  for i = 1, n do
+    res[i] = H.getcharstr()
+    if res[i] == nil then return nil end
+  end
+  return table.concat(res)
 end
 
 H.clamp = function(x, from, to) return math.min(math.max(x, from), to) end
