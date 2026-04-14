@@ -51,6 +51,7 @@
 ---
 --- # Highlight groups ~
 ---
+--- - `MiniInputAdded`  - added text during history or completion navigation.
 --- - `MiniInputBorder` - border of a floating window.
 --- - `MiniInputCaret`  - caret symbol shown in a prompt area.
 --- - `MiniInputHide`   - input is hidden.
@@ -192,21 +193,20 @@ end
 MiniInput.config = {
   -- Functions that define how input process is processed
   handlers = {
+    -- Compute completion candidates
+    complete = nil,
+
     -- Handle every key press
     key = nil,
 
     -- Compute highlighting of current input
     highlight = nil,
 
+    -- Compute history items
+    history = nil,
+
     -- Show current input state
     view = nil,
-
-    -- Compute completion candidates
-    complete = nil,
-
-    -- Compute history items
-    -- TODO
-    history = nil,
   },
 
   -- How to hide the input from the view. No hiding by default.
@@ -225,8 +225,8 @@ MiniInput.config = {
 --- Get input from the user
 ---
 --- Notes:
---- - All non-hidden input results (even empty strings) are added to history.
----   Get the whole history with |MiniInput.get_history()|.
+--- - Data about all non-hidden accepted input results (even for empty input) are
+---   added to history. Get the whole history with |MiniInput.get_history()|.
 ---
 ---@param opts table|nil Options. Possible fields:
 ---   - <handlers> `(table)` - same as in |MiniInput.config|.
@@ -313,7 +313,8 @@ end
 ---   be added at this (character, not byte) index.
 --- - <data> `(table)` - any information to be reused within same input session.
 --- - <history> `(table|nil)` - information about active history navigation.
----   Can be used by `view` handler to show that history navigation is in action.
+---   If present, it means that history navigation is in action. Can be used by
+---   `view` handler to show that history navigation is in action.
 ---   Its fields describe the state of navigation:
 ---     - <ref> `(string)` - reference input used to match history.
 ---     - <items> `(table)` - string array of entries (deduplicated, matching
@@ -336,7 +337,11 @@ end
 
 --- Get input history
 ---
----@return table Array of all previous non-secret inputs (from earliest to latest).
+---@return table Array with data about all previous non-hidden inputs (from earliest
+---   to latest). Each element is a table with the following fields:
+---   - <input> `(string)` - input result.
+---   - <prompt> `(string)` - `opts.prompt` supplied in |MiniInput.get()|.
+---   - <scope> `(string)` - `opts.scope` supplied in |MiniInput.get()|.
 MiniInput.get_history = function() return vim.deepcopy(H.history) end
 
 --- View generators
@@ -486,9 +491,6 @@ MiniInput.default_key = function(state, key)
   if key == nil then return end
   local method = H.key_methods[key] or function(s) H.insert_at_caret(s, key) end
   method(state)
-
-  -- Deinit history navigation
-  if not (key == H.keycode('<Up>') or key == H.keycode('<Down>')) then state.history = nil end
 end
 
 --- Default highlight handler
@@ -496,7 +498,7 @@ MiniInput.default_highlight = function(state)
   if state.opts.hide then return end
   -- TODO:
   -- - Should highlight input parts added during history or completion
-  --   navigation.
+  --   navigation with 'MiniInputAdded'.
 end
 
 --- Default view handler
@@ -512,8 +514,20 @@ end
 
 --- Default history handler
 MiniInput.default_history = function(state)
-  if state.opts.hide then return end
-  -- TODO
+  local ref = state.input
+  local raw, matched, seen = MiniInput.get_history(), {}, {}
+  -- TODO: Filter first prefix+scope+prompt matches, then prefix+scope, then by
+  -- prefix
+  for i = #raw, 1, -1 do
+    local val = raw[i].input
+    if not seen[val] and vim.startswith(val, ref) and val ~= ref then table.insert(matched, val) end
+    seen[val] = true
+  end
+  local items, n = {}, #matched
+  for i = 1, #raw do
+    items[n - i + 1] = matched[i]
+  end
+  state.history = { items = items, ref = ref, id = 0 }
 end
 
 -- Helper data ================================================================
@@ -544,6 +558,7 @@ H.setup_config = function(config)
   H.check_type('handlers.key', config.handlers.key, 'function', true)
   H.check_type('handlers.complete', config.handlers.complete, 'function', true)
   H.check_type('handlers.highlight', config.handlers.highlight, 'function', true)
+  H.check_type('handlers.history', config.handlers.history, 'function', true)
   H.check_type('handlers.view', config.handlers.view, 'function', true)
 
   H.check_type('hide', config.hide, 'string', true)
@@ -560,6 +575,7 @@ H.create_default_hl = function()
     vim.api.nvim_set_hl(0, name, opts)
   end
 
+  hi('MiniInputAdded', { link = 'DiagnosticFloatingOk' })
   hi('MiniInputBorder', { link = 'FloatBorder' })
   hi('MiniInputCaret', { link = 'MiniInputPrompt' })
   hi('MiniInputHide', { link = 'DiagnosticFloatingWarn' })
@@ -577,6 +593,7 @@ H.state_new = function(opts)
   opts.handlers.key = opts.handlers.key or MiniInput.default_key
   opts.handlers.complete = opts.handlers.complete or MiniInput.default_complete
   opts.handlers.highlight = opts.handlers.highlight or MiniInput.default_highlight
+  opts.handlers.history = opts.handlers.history or MiniInput.default_history
   opts.handlers.view = opts.handlers.view or MiniInput.default_view
   -- Allow `opts.hide` to be `nil` to mean "don't hide"
   opts.init_keys = opts.init_keys or {}
@@ -596,32 +613,39 @@ H.state_validate = function(x, cur)
   H.check_type('state.data', x.data, 'table')
   H.check_type('state.input', x.input, 'string')
 
+  if x.history ~= nil then
+    H.check_type('state.history', x.history, 'table')
+    H.check_array_of('state.history.items', x.history.items, 'string')
+    H.check_type('state.history.ref', x.history.ref, 'string')
+    H.check_type('state.history.id', x.history.id, 'number')
+  end
+
   H.check_type('state.opts.handlers.key', x.opts.handlers.key, 'function')
   H.check_type('state.opts.handlers.complete', x.opts.handlers.complete, 'function')
   H.check_type('state.opts.handlers.highlight', x.opts.handlers.highlight, 'function')
+  H.check_type('state.opts.handlers.history', x.opts.handlers.history, 'function')
   H.check_type('state.opts.handlers.view', x.opts.handlers.view, 'function')
 
   H.check_type('state.opts.hide', x.opts.hide, 'string', true)
 
-  if not H.islist(x.opts.init_keys) then H.error('`state.opts.init_keys` should be array') end
-  for i, k in ipairs(x.opts.init_keys) do
-    if type(k) ~= 'string' then H.error('`state.opts.init_keys` should be array of strings') end
-  end
+  H.check_array_of('state.opts.init_keys', x.opts.init_keys, 'string')
 
   H.check_type('state.opts.prompt', x.opts.prompt, 'string')
 
-  H.check_one_of(x.opts.scope, { 'cursor', 'buffer', 'window', 'tabpage', 'editor' }, 'state.opts.scope')
+  H.check_one_of('state.opts.scope', x.opts.scope, { 'cursor', 'buffer', 'window', 'tabpage', 'editor' })
 
-  H.check_one_of(x.status, { 'start', 'progress', 'accept', 'cancel' }, 'state.status')
+  H.check_one_of('state.status', x.status, { 'start', 'progress', 'accept', 'cancel' })
 end
 
 H.state_finish = function()
-  local is_hide = H.state.opts.hide
+  local opts = vim.deepcopy(H.state.opts)
   local res = H.state.status == 'accept' and H.state.input or nil
   H.handle_step(nil)
-
   H.state = nil
-  if res ~= nil and not is_hide then table.insert(H.history, res) end
+
+  if res ~= nil and not opts.hide then
+    table.insert(H.history, { input = res, prompt = opts.prompt, scope = opts.scope })
+  end
   return res
 end
 
@@ -632,7 +656,17 @@ H.handle_step = function(key)
   -- Stop handling keys past the end of the input
   if key ~= nil and H.state_is_end() then return end
 
+  -- Track history and complete to check if they need to be teared down
+  -- (if their navigation is not active).
+  -- TODO: This doesn't quite work if there are zero matches: second press for
+  -- history navigation cancels it.
+  -- Or maybe it is okay and even good?
+  local history = vim.deepcopy(H.state.history)
+  local complete = vim.deepcopy(H.state.complete)
   H.apply_handler('key', key)
+  if vim.deep_equal(history, H.state.history) then H.state.history = nil end
+  if vim.deep_equal(complete, H.state.complete) then H.state.complete = nil end
+
   H.apply_handler('highlight')
   H.apply_handler('view')
   H.schedule_redraw()
@@ -640,6 +674,8 @@ end
 
 H.apply_handler = function(name, key)
   local state, input = H.copy_tables(H.state), nil
+  if (name == 'complete' or name == 'history') and state.opts.hide then return end
+
   if name ~= 'key' and type(state.opts.hide) == 'string' then
     input = state.input
     state.input = string.rep(state.opts.hide, vim.fn.strchars(input))
@@ -749,18 +785,19 @@ H.key_methods[k('<C-v>')] = H.key_methods[k('<C-q>')]
 
 -- History navigation
 H.key_methods[k('<Up>')] = function(state)
-  H.state_init_history(state)
-  if #state.history.items == 0 then return end
-  -- state.history.id = math.min(state.history.id + 1, #state.history.items)
-  -- state.history.id = math.fmod(#state.history.items + state.history.id - 1, #state.history.items + 1)
+  if state.history == nil then H.apply_handler('history') end
+  state.history = H.state.history
+  if state.history == nil or #state.history.items == 0 then return end
+
   state.history.id = state.history.id > 0 and (state.history.id - 1) or #state.history.items
   state.input = state.history.items[state.history.id] or state.history.ref
   state.caret = vim.fn.strchars(state.input) + 1
 end
 H.key_methods[k('<Down>')] = function(state)
-  H.state_init_history(state)
-  if #state.history.items == 0 then return end
-  -- state.history.id = math.max(state.history.id - 1, 0)
+  if state.history == nil then H.apply_handler('history') end
+  state.history = H.state.history
+  if state.history == nil or #state.history.items == 0 then return end
+
   state.history.id = state.history.id < #state.history.items and (state.history.id + 1) or 0
   state.input = state.history.items[state.history.id] or state.history.ref
   state.caret = vim.fn.strchars(state.input) + 1
@@ -798,22 +835,6 @@ H.match_keyword_chars = function(input, caret, side)
 
   local res = math.max(vim.fn.match(text, pat_keyword), vim.fn.match(text, pat_non_keyword), 0)
   return vim.fn.charidx(text, res) + (side == 'left' and 0 or (caret - 1))
-end
-
-H.state_init_history = function(state)
-  if state.history ~= nil then return end
-  local ref = state.input
-  local raw, matched, seen = H.history, {}, {}
-  for i = #raw, 1, -1 do
-    local val = raw[i]
-    if not seen[val] and vim.startswith(val, ref) and val ~= ref then table.insert(matched, val) end
-    seen[val] = true
-  end
-  local items, n = {}, #matched
-  for i = 1, #raw do
-    items[n - i + 1] = matched[i]
-  end
-  state.history = { ref = ref, items = items, id = 0 }
 end
 
 H.get_ctrl_v_digits = function(submode)
@@ -883,11 +904,18 @@ H.check_type = function(name, val, ref, allow_nil)
   H.error(string.format('`%s` should be %s, not %s', name, ref, type(val)))
 end
 
-H.check_one_of = function(x, choices, name)
+H.check_one_of = function(name, x, choices)
   if vim.tbl_contains(choices, x) then return end
   local choices_string = table.concat(vim.tbl_map(vim.inspect, choices), ', ')
   local msg = string.format('`%s` should be one of %s', name, choices_string)
   H.error(msg)
+end
+
+H.check_array_of = function(name, x, ref_type)
+  if not H.islist(x) then H.error('`' .. name .. '` should be array') end
+  for i, k in ipairs(x) do
+    if type(k) ~= ref_type then H.error('`' .. name .. '` items should be ' .. name) end
+  end
 end
 
 H.notify = function(msg, level_name, silent)
