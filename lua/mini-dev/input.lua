@@ -129,6 +129,9 @@ MiniInput.setup = function(config)
   -- Apply config
   H.apply_config(config)
 
+  -- Define behavior
+  H.create_autocommands()
+
   -- Create default highlighting
   H.create_default_hl()
 
@@ -218,6 +221,8 @@ MiniInput.config = {
   -- This allows customizing how input is shown depending on where it is
   -- needed. Like 'mini.ai' and 'mini.surround' would use "position", but
   -- `vim.ui.input` probably "editor".
+  -- TODO: Allow to be callable to have a way to adjust scope based on state
+  -- This makes it possible to have `vim.lsp.buf.rename` with `scope='cursor'`
   scope = 'editor',
 }
 --minidoc_afterlines_end
@@ -302,6 +307,7 @@ MiniInput.ui_input = function(opts, on_confirm)
     end
   end
 
+  -- TODO: Figure out a way to cleanly use `scope='cursor'` for `vim.lsp.buf.rename`
   on_confirm(MiniInput.get(input_opts))
 end
 
@@ -346,6 +352,16 @@ end
 ---   - <scope> `(string)` - `opts.scope` supplied in |MiniInput.get()|.
 MiniInput.get_history = function() return vim.deepcopy(H.history) end
 
+--- Refresh active input
+MiniInput.refresh = function()
+  if H.state == nil then return end
+  H.handle_step(nil)
+
+  if not H.state_is_end() then return end
+  if H.cache.is_in_getcharstr then return vim.api.nvim_feedkeys('\3', 't', true) end
+  H.state_finish()
+end
+
 --- View generators
 ---
 --- This is a table with function elements. Call to actually get a view function.
@@ -353,9 +369,102 @@ MiniInput.gen_view = {}
 
 --- Floating window view
 MiniInput.gen_view.floating = function(opts)
+  opts = vim.tbl_extend('force', { symbol_caret = '▏' }, opts or {})
+  local symbol_caret = opts.symbol_caret
+
   return function(state)
-    -- TODO
+    local config = MiniInput.default_floating_config(state)
+    local caret, input, prompt, status = state.caret, state.input, state.opts.prompt, state.status
+
+    -- TODO: Universally normalize
+    local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
+    local chunks = H.normalize_chunks({
+      { input_left, 'MiniInputNormal' },
+      { symbol_caret, 'MiniInputCaret' },
+      { H.get_complete_hint(state), 'MiniInputHint' },
+      { input_right, 'MiniInputNormal' },
+    })
+
+    if not H.state_is_end(state) then
+      H.ensure_floating_buf(state, chunks)
+      H.ensure_floating_win(state, config)
+      return
+    end
+
+    pcall(vim.api.nvim_win_close, state.data.floating_win_id, true)
+    pcall(vim.api.nvim_buf_delete, state.data.floating_buf_id, { force = true })
   end
+end
+
+--- Compute config for |MiniInput.gen_view.floating()|
+---
+--- Notes:
+--- - Always computes config with `relative="editor"` and `anchor="NW"`.
+--- - Computes width based on how |MiniInput.gen_view.floating()| shows input:
+---   with caret symbol from |MiniInput.config| and a hint for active completion.
+---
+---@param opts table|nil Options. Possible fields are allowed scope names
+---   (see |MiniInput.config|) and values are tables describing floating window
+---   behavior for that particular scope:
+---     - <vertical> `(string)` - one of `"top"`, `"center"`, `"bottom"`.
+---     - <horizontal> `(string)` - one of `"left"`, `"center"`, `"right"`.
+MiniInput.default_floating_config = function(state, opts)
+  local def = { vertical = 'bottom', horizontal = 'left' }
+  local default = { cursor = def, buffer = def, window = def, tabpage = def, editor = def }
+  opts = vim.tbl_deep_extend('force', default, opts or {})
+  local scope = state.opts.scope
+  local ver, hor = opts[scope].vertical, opts[scope].horizontal
+
+  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local has_statusline = vim.o.laststatus > 0
+  local max_height = vim.o.lines - vim.o.cmdheight - (has_tabline and 1 or 0) - (has_statusline and 1 or 0)
+  local max_width = vim.o.columns
+
+  -- Compute window config
+  local winborder = vim.fn.exists('+winborder') == 0 and '' or vim.o.winborder
+  local border = winborder == '' and 'single' or nil
+  if winborder == 'none' then border = { '', ' ', '', '', '', '', '', '' } end
+
+  local text_width = vim.fn.strchars(state.input) + 1 + vim.fn.strchars(H.get_complete_hint(state))
+  local title_text = ' ' .. vim.trim(state.opts.prompt) .. ' '
+  local title_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
+
+  local width = math.min(math.max(text_width, vim.fn.strchars(title_text)), max_width)
+  local width_offset = winborder == 'none' and 0 or 2
+
+  -- TODO: Adjust if/when there is multiline input
+  local height = 1
+  local height_offset = winborder == 'none' and 0 or 2
+
+  local config =
+    { relative = 'editor', anchor = 'NW', border = border, style = 'minimal', noautocmd = true, zindex = 251 }
+
+  -- Compute position and dimensions based on scope
+  local ref_rect = { row = has_tabline and 1 or 0, col = 0, width = max_width, height = max_height }
+  if scope == 'cursor' then
+    -- Adjust to not cover cursor if not 'center'
+    local row = vim.fn.screenrow() - 1 + (ver == 'top' and 1 or ver == 'bottom' and -1 or 0)
+    local col = vim.fn.screencol() - 1 + (hor == 'left' and 1 or hor == 'right' and -1 or 0)
+    ref_rect = { row = row, col = col, width = 1, height = 1 }
+  elseif scope == 'buffer' or scope == 'window' then
+    local win_pos = vim.fn.win_screenpos(0)
+    local win_width, win_height = vim.fn.winwidth(0), vim.fn.winheight(0)
+    ref_rect = { row = win_pos[1] - 1, col = win_pos[2] - 1, width = win_width, height = win_height }
+    width = H.clamp(width, 1, win_width - width_offset)
+  end
+
+  local ver_coef = ver == 'top' and 0 or (ver == 'center' and 0.5 or 1)
+  local hor_coef = hor == 'left' and 0 or (hor == 'center' and 0.5 or 1)
+
+  config.row = ref_rect.row + math.floor(ver_coef * (ref_rect.height - height - height_offset))
+  config.col = ref_rect.col + math.floor(hor_coef * (ref_rect.width - width - width_offset))
+  config.height = height
+  config.width = width
+
+  -- Adjust
+  config.title = { { H.fit_to_width(title_text, config.width), title_hl } }
+
+  return config
 end
 
 --- Notification view
@@ -437,21 +546,19 @@ MiniInput.gen_view.virtline = function(opts)
 
     -- TODO: Make it part of a general `state_to_chunks(state, width)` that:
     -- - Makes sure that it focuses on cursor if the input is too wide.
-    --   Inclusing splicing possible `state.highlight` ranges.
+    --   Including splicing possible `state.highlight` ranges.
+    -- - ???Transforms into multiline chunks at newline characters???
     -- - Adds completion hint to the right of the caret.
     local prompt_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
-    --stylua: ignore
-    local chunks_raw = {
-      { prompt, prompt_hl }, { ' ', 'MiniInputNormal' },
-      { input_left, 'MiniInputNormal' }, { symbol_caret, 'MiniInputCaret' }, { input_right, 'MiniInputNormal' },
+    local chunks = H.normalize_chunks({
+      { prompt, prompt_hl },
+      { ' ', 'MiniInputNormal' },
+      { input_left, 'MiniInputNormal' },
+      { symbol_caret, 'MiniInputCaret' },
+      { H.get_complete_hint(state), 'MiniInputHint' },
+      { input_right, 'MiniInputNormal' },
       { string.rep(' ', vim.o.columns), 'MiniInputNormal' },
-    }
-    if state.complete ~= nil then
-      local pad = input_right == '' and '' or ' '
-      local hint = string.format(' (%d/%d)%s', state.complete.id, #state.complete.items, pad)
-      table.insert(chunks_raw, #chunks_raw, { hint, 'MiniInputHint' })
-    end
-    local chunks = H.normalize_chunks(chunks_raw)
+    })
 
     local cur_line, top_line = vim.fn.line('.'), vim.fn.line('w0')
     local extmark_opts = { id = state.data.extmark_id, virt_lines = { chunks }, virt_lines_above = true }
@@ -495,6 +602,7 @@ MiniInput.gen_view.winbar = function(opts) return H.make_statusline_view('winbar
 ---       special <C-a>, <C-f>, <C-l>, <C-w> keys for a register.
 ---     - <C-v>, <C-q> - next key literally. As |c_CTRL-V| and |i_CTRL-V_digit|
 ---       (all digits must be typed in full).
+---     - <S-CR> - newline character.
 --- - Completion:
 ---     - <Tab>, <S-Tab> - initiate completion based on input method and navigate.
 ---     - <C-n>, <C-p>, <Up>, <Down> - initiate history completion and navigate.
@@ -514,12 +622,11 @@ MiniInput.default_highlight = function(state)
   -- TODO:
   -- - Should highlight input parts added during completion
   --   navigation with 'MiniInputAdded'.
+  --   Use `vim.fn.matchfuzzypos()` to compute how charaters match.
 end
 
 --- Default view handler
-MiniInput.default_view = function(state)
-  -- TODO
-end
+MiniInput.default_view = MiniInput.gen_view.floating()
 
 --- Default complete handler
 MiniInput.default_complete = function(state, method)
@@ -581,6 +688,17 @@ end
 
 H.apply_config = function(config) MiniInput.config = config end
 
+H.create_autocommands = function()
+  local gr = vim.api.nvim_create_augroup('MiniInput', {})
+
+  local au = function(event, pattern, callback, desc)
+    vim.api.nvim_create_autocmd(event, { group = gr, pattern = pattern, callback = callback, desc = desc })
+  end
+
+  au('VimResized', '*', MiniInput.refresh, 'Refresh on resize')
+  au('ColorScheme', '*', H.create_default_hl, 'Ensure colors')
+end
+
 H.create_default_hl = function()
   local hi = function(name, opts)
     opts.default = true
@@ -610,6 +728,7 @@ H.state_new = function(opts)
   -- Allow `opts.hide` to be `nil` to mean "don't hide"
   opts.init_keys = opts.init_keys or {}
   opts.prompt = opts.prompt or 'Input'
+  opts.scope = opts.scope or H.get_config().scope
 
   return { caret = 1, data = {}, input = '', opts = opts, status = 'start' }
 end
@@ -660,16 +779,17 @@ H.state_finish = function()
   return res
 end
 
-H.state_is_end = function() return H.state.status == 'accept' or H.state.status == 'cancel' end
+H.state_is_end = function(state)
+  state = state or H.state
+  return state.status == 'accept' or state.status == 'cancel'
+end
 
 -- Handlers -------------------------------------------------------------------
 H.handle_step = function(key)
   -- Stop handling keys past the end of the input
   if key ~= nil and H.state_is_end() then return end
 
-  -- Track complete to check for a teardown (if navigation is not active).
-  -- TODO: This doesn't quite work if there are zero matches: second press for
-  -- completion navigation cancels it.
+  -- Track complete to check for a teardown (if navigation is not active)
   local state = H.copy_tables(H.state)
   local complete = vim.deepcopy(H.state.complete)
   H.apply_handler('key', key)
@@ -802,6 +922,8 @@ H.key_methods[k('<C-q>')] = function(state)
   H.insert_at_caret(state, new_text)
 end
 H.key_methods[k('<C-v>')] = H.key_methods[k('<C-q>')]
+
+H.key_methods[k('<S-CR>')] = function(state) H.insert_at_caret(state, '\n') end
 
 -- History navigation
 H.key_methods[k('<Up>')] = function(state)
@@ -979,6 +1101,52 @@ H.normalize_chunks = function(chunks, output)
   return res
 end
 
+H.ensure_floating_buf = function(state, chunks)
+  local buf_id = state.data.floating_buf_id
+  if H.is_valid_buf(buf_id) then
+    vim.api.nvim_buf_clear_namespace(buf_id, H.ns_id.view, 0, -1)
+  else
+    buf_id = vim.api.nvim_create_buf(false, true)
+    H.set_buf_name(buf_id, 'content')
+    vim.bo[buf_id].filetype = 'miniinput'
+    state.data.floating_buf_id = buf_id
+  end
+
+  -- TODO: Handle multiline chunks, if/when they are used
+  local text_arr, extmark_data, cur_len = {}, {}, 0
+  for _, ch in ipairs(chunks) do
+    table.insert(text_arr, ch[1])
+    local new_len = cur_len + ch[1]:len()
+    table.insert(extmark_data, { cur_len, { end_row = 0, end_col = new_len, hl_group = ch[2] } })
+    cur_len = new_len
+  end
+
+  vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, { table.concat(text_arr) })
+  for _, ext in ipairs(extmark_data) do
+    pcall(vim.api.nvim_buf_set_extmark, buf_id, H.ns_id.view, 0, ext[1], ext[2])
+  end
+end
+
+H.ensure_floating_win = function(state, config)
+  local buf_id = state.data.floating_buf_id
+  local win_id = state.data.floating_win_id
+  if H.is_valid_win(win_id) then
+    vim.api.nvim_win_set_config(win_id, config)
+  else
+    win_id = vim.api.nvim_open_win(buf_id, false, config)
+    vim.wo[win_id].winhighlight = 'NormalFloat:MiniInputNormal,FloatBorder:MiniInputBorder'
+    vim.wo[win_id].wrap = false
+    state.data.floating_win_id = win_id
+  end
+
+  return win_id
+end
+
+H.get_complete_hint = function(state)
+  if state.complete == nil then return '' end
+  return string.format('(%d/%d)', state.complete.id, #state.complete.items)
+end
+
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg) error('(mini.input) ' .. msg, 0) end
 
@@ -1001,6 +1169,8 @@ H.check_array_of = function(name, x, ref_type)
   end
 end
 
+H.set_buf_name = function(buf_id, name) vim.api.nvim_buf_set_name(buf_id, 'miniinput://' .. buf_id .. '/' .. name) end
+
 H.notify = function(msg, level_name, silent)
   if not silent then vim.notify('(mini.input) ' .. msg, vim.log.levels[level_name]) end
 end
@@ -1008,7 +1178,9 @@ end
 H.schedule_redraw = vim.schedule_wrap(function() vim.cmd('redraw') end)
 
 H.getcharstr = function(lmap)
+  H.cache.is_in_getcharstr = true
   local ok, char = pcall(vim.fn.getcharstr, -1, { cursor = 'hide' })
+  H.cache.is_in_getcharstr = nil
 
   -- Terminate if no input or on hard-coded <C-c>
   if not ok or char == '' or char == '\3' then return end
@@ -1048,7 +1220,7 @@ H.islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
 H.get_lmap = function()
   local lmap = {}
   for _, map in ipairs(vim.fn.maplist()) do
-    -- NOTE: Account only for characters that resolve to proper query character
+    -- NOTE: Account only for characters that resolve to proper input character
     local is_query_lmap = map.mode == 'l' and H.is_valid_char(map.rhs)
     if is_query_lmap then lmap[map.lhs] = map.rhs end
   end
