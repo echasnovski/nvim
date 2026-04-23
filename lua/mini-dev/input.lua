@@ -10,8 +10,10 @@
 -- - Docs:
 --
 -- - Test:
---     - The input should still be going if there is an error in handler or
---       returned state is not valid.
+--     - The input should be properly cancelled (as if user pressed `<C-c>`) if
+--       there is an error (during handler application or from the outside
+--       "registered" by `getcharstr`) and re-throw the error instead of
+--       returning input.
 --     - <C-w> should work with multibyte charaters.
 --     - Already shown completion should be teared down if `opts.hide` is toggled.
 --     - `default_complete` respects 'ignorecase' and 'smartcase'.
@@ -76,6 +78,20 @@
 ---
 --- TODO
 ---@tag MiniInput-key-query-process
+
+--- To allow user customization and integration of external tools, certain |User|
+--- autocommand events are triggered under common circumstances:
+---
+--- - `MiniInputStart` - just after input has started.
+--- - `MiniInputStop` - just before input is stopped.
+---
+--- Useful to adjust state with |MiniInput.get_state()| and |MiniInput.set_state()|: >lua
+---
+---    -- TODO: adjust prompt and scope
+---
+---    -- TODO: Auto-fill input and `'accept'`
+--- <
+---@tag MiniInput-events
 
 --- # General ~
 ---
@@ -221,8 +237,6 @@ MiniInput.config = {
   -- This allows customizing how input is shown depending on where it is
   -- needed. Like 'mini.ai' and 'mini.surround' would use "position", but
   -- `vim.ui.input` probably "editor".
-  -- TODO: Allow to be callable to have a way to adjust scope based on state
-  -- This makes it possible to have `vim.lsp.buf.rename` with `scope='cursor'`
   scope = 'editor',
 }
 --minidoc_afterlines_end
@@ -263,8 +277,11 @@ MiniInput.get = function(opts)
   -- Only allow one input at a time
   if H.state ~= nil then return nil end
 
-  local init_state = H.state_new(H.get_config(opts))
+  local init_state = H.state_new({ opts = H.get_config(opts) })
   H.state_set(init_state)
+
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniInputStart' })
+  if H.state_is_end() then return H.state_finish() end
 
   H.handle_step(nil)
   if H.state_is_end() then return H.state_finish() end
@@ -307,7 +324,6 @@ MiniInput.ui_input = function(opts, on_confirm)
     end
   end
 
-  -- TODO: Figure out a way to cleanly use `scope='cursor'` for `vim.lsp.buf.rename`
   on_confirm(MiniInput.get(input_opts))
 end
 
@@ -343,6 +359,12 @@ MiniInput.get_state = function()
   return res
 end
 
+MiniInput.set_state = function(state)
+  if H.state == nil or state == nil then return end
+  H.check_type('state', state, 'table')
+  H.state_set(H.state_new(state))
+end
+
 --- Get input history
 ---
 ---@return table Array with data about all previous non-hidden inputs (from earliest
@@ -358,7 +380,6 @@ MiniInput.refresh = function()
   H.handle_step(nil)
 
   if not H.state_is_end() then return end
-  if H.cache.is_in_getcharstr then return vim.api.nvim_feedkeys('\3', 't', true) end
   H.state_finish()
 end
 
@@ -442,9 +463,13 @@ MiniInput.default_floating_config = function(state, opts)
   -- Compute position and dimensions based on scope
   local ref_rect = { row = has_tabline and 1 or 0, col = 0, width = max_width, height = max_height }
   if scope == 'cursor' then
+    -- Compute through window as it works when called from command line
+    local win_pos = vim.fn.win_screenpos(0)
+    local row, col = win_pos[1] + vim.fn.winline() - 2, win_pos[2] + vim.fn.wincol() - 2
+
     -- Adjust to not cover cursor if not 'center'
-    local row = vim.fn.screenrow() - 1 + (ver == 'top' and 1 or ver == 'bottom' and -1 or 0)
-    local col = vim.fn.screencol() - 1 + (hor == 'left' and 1 or hor == 'right' and -1 or 0)
+    row = row + (ver == 'top' and 1 or ver == 'bottom' and -1 or 0)
+    col = col + (hor == 'left' and 1 or hor == 'right' and -1 or 0)
     ref_rect = { row = row, col = col, width = 1, height = 1 }
   elseif scope == 'buffer' or scope == 'window' then
     local win_pos = vim.fn.win_screenpos(0)
@@ -661,7 +686,7 @@ H.state = nil
 H.history = {}
 
 -- Various cache
-H.cache = {}
+H.cache = { error = nil }
 
 -- Namespaces
 H.ns_id = {
@@ -719,7 +744,14 @@ H.get_config = function(config)
 end
 
 -- State ----------------------------------------------------------------------
-H.state_new = function(opts)
+H.state_new = function(state)
+  state.caret = state.caret or 1
+  state.data = state.data or {}
+  state.input = state.input or ''
+  state.status = state.status or 'start'
+
+  state.opts = state.opts or {}
+  local opts = state.opts
   opts.completion = opts.completion or ''
   opts.handlers.complete = opts.handlers.complete or MiniInput.default_complete
   opts.handlers.highlight = opts.handlers.highlight or MiniInput.default_highlight
@@ -730,12 +762,12 @@ H.state_new = function(opts)
   opts.prompt = opts.prompt or 'Input'
   opts.scope = opts.scope or H.get_config().scope
 
-  return { caret = 1, data = {}, input = '', opts = opts, status = 'start' }
+  return state
 end
 
 H.state_set = function(new)
   local ok, msg = pcall(H.state_validate, new)
-  if not ok then return H.notify(msg, 'WARN') end
+  if not ok then return H.cache_error(msg) end
   H.state = H.copy_tables(new)
 end
 
@@ -743,6 +775,11 @@ H.state_validate = function(x, cur)
   H.check_type('state.caret', x.caret, 'number')
   H.check_type('state.data', x.data, 'table')
   H.check_type('state.input', x.input, 'string')
+  H.check_one_of('state.status', x.status, { 'start', 'progress', 'accept', 'cancel' })
+
+  if not (1 <= x.caret and x.caret <= (vim.fn.strchars(x.input) + 1)) then
+    H.error('`state.caret` should be between 1 and input width plus 1')
+  end
 
   if x.complete ~= nil then
     H.check_type('state.complete', x.complete, 'table')
@@ -751,27 +788,34 @@ H.state_validate = function(x, cur)
     H.check_type('state.complete.id', x.complete.id, 'number')
   end
 
+  if x.highlight ~= nil then
+    -- TODO
+  end
+
   H.check_type('state.opts.handlers.complete', x.opts.handlers.complete, 'function')
   H.check_type('state.opts.handlers.highlight', x.opts.handlers.highlight, 'function')
   H.check_type('state.opts.handlers.key', x.opts.handlers.key, 'function')
   H.check_type('state.opts.handlers.view', x.opts.handlers.view, 'function')
-
   H.check_type('state.opts.hide', x.opts.hide, 'string', true)
-
   H.check_array_of('state.opts.init_keys', x.opts.init_keys, 'string')
-
   H.check_type('state.opts.prompt', x.opts.prompt, 'string')
-
   H.check_one_of('state.opts.scope', x.opts.scope, { 'cursor', 'buffer', 'window', 'tabpage', 'editor' })
-
-  H.check_one_of('state.status', x.status, { 'start', 'progress', 'accept', 'cancel' })
 end
 
 H.state_finish = function()
+  if H.cache.is_in_getcharstr then return vim.api.nvim_feedkeys('\3', 't', true) end
+
   local opts = vim.deepcopy(H.state.opts)
-  local res = H.state.status == 'accept' and H.state.input or nil
+  local err = H.cache.error
+  local res = (H.state.status == 'accept' and err == nil) and H.state.input or nil
   H.handle_step(nil)
+
+  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniInputStop' })
+
   H.state = nil
+  H.cache = {}
+
+  if err ~= nil then H.error(err) end
 
   if res ~= nil and not opts.hide then
     table.insert(H.history, { input = res, prompt = opts.prompt, scope = opts.scope })
@@ -811,7 +855,7 @@ H.apply_handler = function(name, arg)
   end
 
   local ok, res = pcall(state.opts.handlers[name], state, arg)
-  if not ok then return H.notify('Error applying `' .. name .. '` handler: ' .. res) end
+  if not ok then return H.cache_error('Error applying `' .. name .. '` handler: ' .. res) end
 
   local new_state = res or state
   new_state.input = input or new_state.input or state.input
@@ -985,6 +1029,7 @@ end
 
 H.init_state_complete = function(state, method)
   if state.complete == nil then H.apply_handler('complete', method) end
+  if H.state_is_end() then return end
   state.complete = H.state.complete
   return type(state.complete) == 'table' and #state.complete.items > 0
 end
@@ -1171,10 +1216,6 @@ end
 
 H.set_buf_name = function(buf_id, name) vim.api.nvim_buf_set_name(buf_id, 'miniinput://' .. buf_id .. '/' .. name) end
 
-H.notify = function(msg, level_name, silent)
-  if not silent then vim.notify('(mini.input) ' .. msg, vim.log.levels[level_name]) end
-end
-
 H.schedule_redraw = vim.schedule_wrap(function() vim.cmd('redraw') end)
 
 H.getcharstr = function(lmap)
@@ -1182,8 +1223,12 @@ H.getcharstr = function(lmap)
   local ok, char = pcall(vim.fn.getcharstr, -1, { cursor = 'hide' })
   H.cache.is_in_getcharstr = nil
 
+  -- Cache possible error if it doesn't come from pressing <C-c>
+  if not ok and char ~= 'Keyboard interrupt' then H.cache_error(char) end
+
   -- Terminate if no input or on hard-coded <C-c>
   if not ok or char == '' or char == '\3' then return end
+
   -- Respect language mappings only if needed
   return vim.o.iminsert == 0 and char or ((lmap or {})[char] or char)
 end
@@ -1195,6 +1240,12 @@ H.getcharstr_many = function(n)
     if res[i] == nil then return nil end
   end
   return table.concat(res)
+end
+
+H.cache_error = function(msg)
+  if H.state == nil or H.cache.error ~= nil then return end
+  H.cache.error = H.cache.error or msg
+  H.state.status = 'cancel'
 end
 
 H.clamp = function(x, from, to) return math.min(math.max(x, from), to) end
