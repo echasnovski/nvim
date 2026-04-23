@@ -1,11 +1,6 @@
 -- TODO:
 --
 -- - Code:
---   - Decide on default view. I like `virtline`, but it has one downside: as
---     it uses extmark, input will be shown in all splits showing buffer.
---   - Use global config for `caret` and `hide` symbols.
---   - Make `hide` boolean to mean "hide input or not". It will use separately
---     configured `hide` symbol.
 --
 -- - Docs:
 --
@@ -79,20 +74,6 @@
 --- TODO
 ---@tag MiniInput-key-query-process
 
---- To allow user customization and integration of external tools, certain |User|
---- autocommand events are triggered under common circumstances:
----
---- - `MiniInputStart` - just after input has started.
---- - `MiniInputStop` - just before input is stopped.
----
---- Useful to adjust state with |MiniInput.get_state()| and |MiniInput.set_state()|: >lua
----
----    -- TODO: adjust prompt and scope
----
----    -- TODO: Auto-fill input and `'accept'`
---- <
----@tag MiniInput-events
-
 --- # General ~
 ---
 --- ## Default value ~
@@ -105,12 +86,31 @@
 ---
 --- ## Key ~
 ---
---- Key handler is called on every new item added to `keys`. It should be safe to
---- assume that `keys[#keys]` is the key that needs to be processed.
+--- Perform custom actions based on arbitrary conditions: >lua
 ---
---- All registered keys follow the output of |getcharstr()|. Use |vim.keycode()|
---- to translate |key-notation| into key codes, like `vim.keycode('<BS>')`.
+---   local key_handler = function(state, key)
+---     -- Adjust prompt and scope
+---     state.opts.prompt = state.opts.prompt:gsub('[?:]%s*$', '')
+---     -- - This makes `vim.lsp.buf.rename()` use cursor scope
+---     if state.opts.prompt == 'New Name' then
+---       state.opts.scope = 'cursor'
+---     end
 ---
+---     -- Hide from view and history
+---     if state.opts.prompt:find('[Pp]assword') ~= nil then
+---       state.opts.hide = true
+---     end
+---
+---     -- IMPORTANT: Process as usual
+---     state = MiniInput.default_key(state, key) or state
+---
+---     -- Auto fill
+---     if state.input == 'AF' then
+---       state.input, state.status = 'Autofilled input', 'accept'
+---     end
+---   end
+---   require('mini.input').setup({ handlers = { key = key_handler } })
+--- <
 --- ## View ~
 ---
 --- No view: >lua
@@ -192,19 +192,6 @@ end
 ---
 --- Computes suggestions for the current state based on given method.
 ---
---- # Hide ~
----
---- `config.hide` defines if and how to hide the input from the view.
---- By default no hiding is done. If set to string:
---- - The `view` handler is called with every input character replaced with `hide`.
---- - The `complete` and `highlight` handlers are not called.
----
---- Use empty string (`''`) to show no input characters (`view` handler can still
---- decide to show something indicating a hidden input).
----
---- Note: this does not guarantee a total security of the input, just that the
---- typed characters won't be shown on screen.
----
 --- # Scope ~
 ---
 --- `config.scope` is a string that defines an input scope. It is meant as an extra
@@ -215,22 +202,18 @@ end
 MiniInput.config = {
   -- Functions that define how input process is processed
   handlers = {
-    -- Handle every key press
-    key = nil,
+    -- Compute completion candidates
+    complete = nil,
 
     -- Compute highlighting of current input
     highlight = nil,
 
+    -- Handle input start, every key press, and input end
+    key = nil,
+
     -- Show current input state
     view = nil,
-
-    -- Compute completion candidates
-    complete = nil,
   },
-
-  -- How to hide the input from the view. No hiding by default.
-  -- A string is used instead of every typed character.
-  hide = nil,
 
   -- Default input scope
   -- One of "cursor", "buffer", "window", "tabpage", "editor"
@@ -243,15 +226,24 @@ MiniInput.config = {
 
 --- Get input from the user
 ---
---- Notes:
---- - Data about all non-hidden accepted input results (even for empty input) are
----   added to the history. Get the whole history with |MiniInput.get_history()|.
+--- TODO: Some general words.
+---
+--- Data about all non-hidden accepted input results (even for empty input) are
+--- added to the history. Get the whole history with |MiniInput.get_history()|.
+---
+--- `opts.hide` defines if input should be treated as hidden. Note: this does
+--- not guarantee a total security of the input, only that the typed characters
+--- are expected to not be shown on screen and not added to the history. If set:
+--- - The `view` handler is expected to not directly show current input.
+---   Like replace every character with pre-defined string or not show completely.
+--- - The `complete` and `highlight` handlers are not called.
+--- - Accepted input will not be added to the history.
 ---
 ---@param opts table|nil Options. Possible fields:
 ---   - <completion> `(string)` - completion method. Default: `''` to use default
 ---     completion method of the `complete` handler.
 ---   - <handlers> `(table)` - same as in |MiniInput.config|.
----   - <hide> `(string)` - same as in |MiniInput.config|.
+---   - <hide> `(boolean)` - whether to hide input. Default: `false`.
 ---   - <init_keys> `(table)` - array of string keys that are emulated before
 ---     asking for user input. Any strings are allowed, but using values that can
 ---     be an output of |getcharstr()| should be preferred. Default: `{}`.
@@ -277,11 +269,8 @@ MiniInput.get = function(opts)
   -- Only allow one input at a time
   if H.state ~= nil then return nil end
 
-  local init_state = H.state_new({ opts = H.get_config(opts) })
+  local init_state = H.state_new(H.get_config(opts))
   H.state_set(init_state)
-
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniInputStart' })
-  if H.state_is_end() then return H.state_finish() end
 
   H.handle_step(nil)
   if H.state_is_end() then return H.state_finish() end
@@ -296,6 +285,7 @@ MiniInput.get = function(opts)
   for _ = 1, 1000000 do
     local key = H.getcharstr(lmap)
     if key == nil then H.state.status = 'cancel' end
+    if H.state_is_end() then break end
     H.handle_step(key)
     if H.state_is_end() then break end
   end
@@ -333,8 +323,8 @@ end
 --- Can be `nil` to indicate that there is no active user input.
 ---
 --- During user input, it is a table with the following fields:
---- - <caret> `(number)` - current input position to modify output, i.e. new key will
----   be added at this (character, not byte) index.
+--- - <caret> `(number|nil)` - current input position to modify output, i.e. new key
+---   will be added at this character index. It is `nil` for hidden input.
 --- - <data> `(table)` - any information to be reused within same input session.
 --- - <complete> `(table|nil)` - information about active completion navigation.
 ---   If present, it means that completion navigation is in action.
@@ -345,8 +335,7 @@ end
 ---       mean that the base is shown.
 ---     - <items> `(table)` - string array of completion candidates. May be empty.
 ---     - <method> `(string)` - completion method. Like `"default"`, `"history"`, etc.
---- - <input> `(string)` - current result of the user input. If the input is hidden,
----   every character is replaced with `opts.hide`.
+--- - <input> `(string|nil)` - current user input or `nil` for hidden input.
 --- - <prompt> `(string)` - intention of the input, same as in |input()|.
 --- - <opts> `(table)` - input options, same as in |MiniInput.get()|.
 --- - <status> `(string)` - one of `"start"`, `"progress"`, `"accept"`, `"cancel"`.
@@ -355,14 +344,10 @@ end
 MiniInput.get_state = function()
   if H.state == nil then return nil end
   local res = H.copy_tables(H.state)
-  if type(res.opts.hide) == 'string' then res.input = string.rep(res.opts.hide, vim.fn.strchars(res.input)) end
+  if res.opts.hide then
+    res.input, res.caret = nil, nil
+  end
   return res
-end
-
-MiniInput.set_state = function(state)
-  if H.state == nil or state == nil then return end
-  H.check_type('state', state, 'table')
-  H.state_set(H.state_new(state))
 end
 
 --- Get input history
@@ -372,15 +357,16 @@ end
 ---   - <input> `(string)` - input result.
 ---   - <prompt> `(string)` - `opts.prompt` supplied in |MiniInput.get()|.
 ---   - <scope> `(string)` - `opts.scope` supplied in |MiniInput.get()|.
+---   - <cwd> `(string)` - |current-directory| at the time of input's end.
 MiniInput.get_history = function() return vim.deepcopy(H.history) end
+
+-- TODO: MiniInput.set_history? Persistent history?
 
 --- Refresh active input
 MiniInput.refresh = function()
   if H.state == nil then return end
   H.handle_step(nil)
-
-  if not H.state_is_end() then return end
-  H.state_finish()
+  if H.state_is_end() then H.state_finish() end
 end
 
 --- View generators
@@ -394,6 +380,12 @@ MiniInput.gen_view.floating = function(opts)
   local symbol_caret = opts.symbol_caret
 
   return function(state)
+    if H.state_is_end(state) then
+      pcall(vim.api.nvim_win_close, state.data.floating_win_id, true)
+      pcall(vim.api.nvim_buf_delete, state.data.floating_buf_id, { force = true })
+      return
+    end
+
     local config = MiniInput.default_floating_config(state)
     local caret, input, prompt, status = state.caret, state.input, state.opts.prompt, state.status
 
@@ -411,9 +403,6 @@ MiniInput.gen_view.floating = function(opts)
       H.ensure_floating_win(state, config)
       return
     end
-
-    pcall(vim.api.nvim_win_close, state.data.floating_win_id, true)
-    pcall(vim.api.nvim_buf_delete, state.data.floating_buf_id, { force = true })
   end
 end
 
@@ -498,6 +487,12 @@ MiniInput.gen_view.notify = function(opts)
   local symbol_caret = opts.symbol_caret
 
   return function(state)
+    local id = state.data.progress_id
+    if H.state_is_end(state) then
+      if _G.MiniNotify then pcall(MiniNotify.remove, id) end
+      return
+    end
+
     local caret, input, prompt = state.caret, state.input, state.opts.prompt
 
     prompt = (prompt or ''):gsub('%s+$', '')
@@ -510,14 +505,11 @@ MiniInput.gen_view.notify = function(opts)
       return
     end
 
-    local id = state.data.progress_id
     if id == nil then
       state.data.progress_id = MiniNotify.add(msg, 'INFO', 'MiniInputNormal')
     else
       MiniNotify.update(state.data.progress_id, { msg = msg })
     end
-
-    if H.state_is_end(state) then MiniNotify.remove(id) end
   end
 end
 
@@ -550,7 +542,7 @@ MiniInput.gen_view.progress = function(opts)
     state.data.progress_id = vim.api.nvim_echo(chunks, false, pr_opts)
 
     -- No "progress end" message as it is not needed and distracting with ui2
-    local redraw_cmd = (status == 'accept' or status == 'cancel') and 'mode' or 'redraw'
+    local redraw_cmd = H.state_is_end(state) and 'mode' or 'redraw'
     vim.cmd(redraw_cmd)
   end
 end
@@ -564,6 +556,11 @@ MiniInput.gen_view.virtline = function(opts)
   local symbol_caret = opts.symbol_caret
 
   return function(state)
+    if H.state_is_end(state) then
+      pcall(vim.api.nvim_buf_del_extmark, 0, H.ns_id.view, state.data.extmark_id)
+      return
+    end
+
     local caret, input, prompt, status = state.caret, state.input, state.opts.prompt, state.status
 
     prompt = (prompt or ''):gsub('%s+$', '')
@@ -588,8 +585,6 @@ MiniInput.gen_view.virtline = function(opts)
     local cur_line, top_line = vim.fn.line('.'), vim.fn.line('w0')
     local extmark_opts = { id = state.data.extmark_id, virt_lines = { chunks }, virt_lines_above = true }
     state.data.extmark_id = vim.api.nvim_buf_set_extmark(0, H.ns_id.view, cur_line - 1, 0, extmark_opts)
-
-    if H.state_is_end(state) then pcall(vim.api.nvim_buf_del_extmark, 0, H.ns_id.view, state.data.extmark_id) end
 
     -- Ensure that the line above is visible
     -- TODO: Still shows cursor on top of the virtual line if there is a scroll
@@ -636,14 +631,14 @@ MiniInput.gen_view.winbar = function(opts) return H.make_statusline_view('winbar
 ---     - <C-x> - toggle hide/unhide of the input.
 --- - If a key is not special, it is inserted at caret as is.
 MiniInput.default_key = function(state, key)
-  if key == nil then return end
+  if key == nil or H.state_is_end(state) then return end
   local method = H.key_methods[key] or function(s) H.insert_at_caret(s, key) end
   method(state)
 end
 
 --- Default highlight handler
 MiniInput.default_highlight = function(state)
-  if state.opts.hide then return end
+  if H.state_is_end(state) then return end
   -- TODO:
   -- - Should highlight input parts added during completion
   --   navigation with 'MiniInputAdded'.
@@ -655,7 +650,7 @@ MiniInput.default_view = MiniInput.gen_view.floating()
 
 --- Default complete handler
 MiniInput.default_complete = function(state, method)
-  if state.opts.hide then return end
+  if H.state_is_end(state) then return end
   if method == 'history' then return H.complete_history(state) end
   method = method or ''
 
@@ -705,7 +700,6 @@ H.setup_config = function(config)
   H.check_type('handlers.key', config.handlers.key, 'function', true)
   H.check_type('handlers.view', config.handlers.view, 'function', true)
 
-  H.check_type('hide', config.hide, 'string', true)
   H.check_type('scope', config.scope, 'string')
 
   return config
@@ -744,25 +738,18 @@ H.get_config = function(config)
 end
 
 -- State ----------------------------------------------------------------------
-H.state_new = function(state)
-  state.caret = state.caret or 1
-  state.data = state.data or {}
-  state.input = state.input or ''
-  state.status = state.status or 'start'
-
-  state.opts = state.opts or {}
-  local opts = state.opts
+H.state_new = function(opts)
   opts.completion = opts.completion or ''
   opts.handlers.complete = opts.handlers.complete or MiniInput.default_complete
   opts.handlers.highlight = opts.handlers.highlight or MiniInput.default_highlight
   opts.handlers.key = opts.handlers.key or MiniInput.default_key
   opts.handlers.view = opts.handlers.view or MiniInput.default_view
-  -- Allow `opts.hide` to be `nil` to mean "don't hide"
+  if opts.hide == nil then opts.hide = false end
   opts.init_keys = opts.init_keys or {}
   opts.prompt = opts.prompt or 'Input'
   opts.scope = opts.scope or H.get_config().scope
 
-  return state
+  return { caret = 1, data = {}, input = '', opts = opts, status = 'start' }
 end
 
 H.state_set = function(new)
@@ -796,7 +783,7 @@ H.state_validate = function(x, cur)
   H.check_type('state.opts.handlers.highlight', x.opts.handlers.highlight, 'function')
   H.check_type('state.opts.handlers.key', x.opts.handlers.key, 'function')
   H.check_type('state.opts.handlers.view', x.opts.handlers.view, 'function')
-  H.check_type('state.opts.hide', x.opts.hide, 'string', true)
+  H.check_type('state.opts.hide', x.opts.hide, 'boolean')
   H.check_array_of('state.opts.init_keys', x.opts.init_keys, 'string')
   H.check_type('state.opts.prompt', x.opts.prompt, 'string')
   H.check_one_of('state.opts.scope', x.opts.scope, { 'cursor', 'buffer', 'window', 'tabpage', 'editor' })
@@ -805,20 +792,17 @@ end
 H.state_finish = function()
   if H.cache.is_in_getcharstr then return vim.api.nvim_feedkeys('\3', 't', true) end
 
-  local opts = vim.deepcopy(H.state.opts)
-  local err = H.cache.error
-  local res = (H.state.status == 'accept' and err == nil) and H.state.input or nil
   H.handle_step(nil)
 
-  vim.api.nvim_exec_autocmds('User', { pattern = 'MiniInputStop' })
-
-  H.state = nil
-  H.cache = {}
+  local res = H.state.status == 'accept' and H.state.input or nil
+  local err, opts = H.cache.error, vim.deepcopy(H.state.opts)
+  H.state, H.cache = nil, {}
 
   if err ~= nil then H.error(err) end
 
   if res ~= nil and not opts.hide then
-    table.insert(H.history, { input = res, prompt = opts.prompt, scope = opts.scope })
+    local hist = { input = res, prompt = opts.prompt, scope = opts.scope, cwd = vim.fn.getcwd() }
+    table.insert(H.history, hist)
   end
   return res
 end
@@ -830,9 +814,6 @@ end
 
 -- Handlers -------------------------------------------------------------------
 H.handle_step = function(key)
-  -- Stop handling keys past the end of the input
-  if key ~= nil and H.state_is_end() then return end
-
   -- Track complete to check for a teardown (if navigation is not active)
   local state = H.copy_tables(H.state)
   local complete = vim.deepcopy(H.state.complete)
@@ -847,18 +828,12 @@ end
 
 H.apply_handler = function(name, arg)
   local state, input = H.copy_tables(H.state), nil
-  if name == 'complete' and state.opts.hide then return end
-
-  if name ~= 'key' and type(state.opts.hide) == 'string' then
-    input = state.input
-    state.input = string.rep(state.opts.hide, vim.fn.strchars(input))
-  end
+  if state.opts.hide and (name == 'highlight' or name == 'complete') then return end
 
   local ok, res = pcall(state.opts.handlers[name], state, arg)
   if not ok then return H.cache_error('Error applying `' .. name .. '` handler: ' .. res) end
 
   local new_state = res or state
-  new_state.input = input or new_state.input or state.input
   if name == 'complete' and type(new_state.complete) == 'table' then
     new_state.complete.id = 0
     new_state.complete.method = arg
@@ -992,16 +967,9 @@ H.key_methods[k('<S-Tab>')] = function(state)
 end
 
 -- Miscellaneous
-H.key_methods[k('<C-x>')] = function(state)
-  if type(state.opts.hide) == 'string' then
-    state.data.hide_orig = state.opts.hide
-    state.opts.hide = nil
-    return
-  end
-  state.opts.hide = state.data.hide_orig or '*'
-  state.data.hide_orig = nil
-end
+H.key_methods[k('<C-x>')] = function(state) state.opts.hide = not state.opt.hide end
 
+-- Local helpers
 H.insert_at_caret = function(state, new_text)
   local caret, input = state.caret, state.input
   state.input = vim.fn.strcharpart(input, 0, caret - 1) .. new_text .. vim.fn.strcharpart(input, caret - 1)
@@ -1129,8 +1097,8 @@ H.make_statusline_view = function(target, opts)
 
     -- Cleanup
     if H.state_is_end(state) then
-      vim.wo[win_id][target] = state.data[target]
-      vim.o.laststatus = state.data.laststatus
+      vim.wo[win_id][target] = state.data[target] or vim.wo[win_id][target]
+      vim.o.laststatus = state.data.laststatus or vim.o.laststatus
     end
   end
 end
