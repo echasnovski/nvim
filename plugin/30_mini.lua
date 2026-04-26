@@ -269,8 +269,62 @@ end)
 later(function() require('mini.indentscope').setup() end)
 
 later(function()
-  local input = require('mini-dev.input')
-  input.setup({ handlers = { view = input.gen_view.virtline() } })
+  local key_handler = function(state, key)
+    -- Adjust prompt and scope
+    state.opts.prompt = state.opts.prompt:gsub('[?:]%s*$', '')
+    -- - This makes `vim.lsp.buf.rename()` use cursor scope
+    if state.opts.prompt == 'New Name' then state.opts.scope = 'cursor' end
+
+    -- Hide from view and history
+    if state.opts.prompt:find('[Pp]assword') ~= nil then state.opts.hide = true end
+
+    -- IMPORTANT: Process as usual
+    state = MiniInput.default_key(state, key) or state
+
+    -- Auto fill
+    if state.input == 'AF' then
+      state.input, state.status = 'Autofilled input', 'accept'
+    end
+
+    -- Show current scope for debuggin
+    if state.status == 'start' then
+      state.opts.prompt = string.format('[%s] %s', state.opts.scope, state.opts.prompt)
+    else
+      state.opts.prompt = state.opts.prompt:gsub('^%[%S+%]', '[' .. state.opts.scope .. ']')
+    end
+  end
+
+  -- local input = require('mini-dev.input')
+  -- local statusline_view = input.gen_view.uiline({ position = 'statusline' })
+  -- local tabline_view = input.gen_view.uiline({ position = 'tabline' })
+  -- local winbar_view = input.gen_view.uiline({ position = 'winbar' })
+  -- local view_handler_per_scope = {
+  --   cursor = statusline_view,
+  --   buffer = winbar_view,
+  --   window = winbar_view,
+  --   tabpage = tabline_view,
+  --   editor = tabline_view,
+  -- }
+  -- local view_handler = function(state) return view_handler_per_scope[state.opts.scope](state) end
+
+  require('mini-dev.input').setup({
+    handlers = {
+      key = key_handler,
+      -- view = view_handler,
+    },
+  })
+
+  local map_input = function(lhs, scope)
+    local input_opts = { prompt = 'Input with scope=' .. vim.inspect(scope), scope = scope }
+    local rhs = function() vim.fn.append('.', { MiniInput.get(input_opts) }) end
+    vim.keymap.set('n', lhs, rhs)
+  end
+  map_input('<Leader>ii', nil)
+  map_input('<Leader>ic', 'cursor')
+  map_input('<Leader>ib', 'buffer')
+  map_input('<Leader>iw', 'window')
+  map_input('<Leader>it', 'tabpage')
+  map_input('<Leader>ie', 'editor')
 end)
 
 later(function() require('mini.jump').setup() end)
