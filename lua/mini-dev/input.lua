@@ -12,6 +12,14 @@
 --     - <C-w> should work with multibyte charaters.
 --     - Already shown completion should be teared down if `opts.hide` is toggled.
 --     - `default_complete` respects 'ignorecase' and 'smartcase'.
+--     - `gen_view.uiline` works with custom view handler that sets different
+--       positions per scope.
+--     - `gen_view.virtual` with `position='line'` should always make virtual
+--       line(s) and current line visible. Matters at the top and the bottom of
+--       the window viewport. Should work:
+--       - With and without present winbar.
+--       - After scope has changed.
+--       - For both above and below.
 
 --- *mini.input* Get user input
 ---
@@ -416,7 +424,7 @@ MiniInput.gen_view = {}
 ---@usage >lua
 ---   -- TODO
 --- <
-MiniInput.gen_view.floating = function(opts)
+MiniInput.gen_view.floatwin = function(opts)
   local default_opts = { position = 'BL', symbol_caret = '▏', symbol_hide = '•' }
   default_opts.adjust_config = function(_, config) return config end
   opts = vim.tbl_extend('force', default_opts, opts or {})
@@ -522,45 +530,45 @@ end
 ---
 ---@param opts table|nil Options. Possible fields:
 ---   - <position> `(string)` - which UI line to use. One of `"statusline"`,
----     `"tabline"`, `"winbar"`. Default: `nil` to use `"tabline"` for "editor"
----     and "tabpage" scopes, `"winbar"` for everything else.
+---     `"tabline"`, `"winbar"`. Default: `"statusline"`.
 ---
 ---   __input_symbol_caret
 ---
 ---   __input_symbol_hide
 ---
 ---@usage >lua
----   -- TODO
+---   -- Choose view based on current input scope
+---   local input = require('mini-dev.input')
+---   local view_statusline = input.gen_view.uiline({ position = 'statusline' })
+---   local view_tabline = input.gen_view.uiline({ position = 'tabline' })
+---   local view_winbar = input.gen_view.uiline({ position = 'winbar' })
+---   local view_handler = function(state)
+---     local scope, view = state.opts.scope, view_statusline
+---     if scope == 'buffer' or scope == 'window' then view = view_winbar end
+---     if scope == 'editor' or scope == 'tabpage' then view = view_tabline end
+---     return view(state)
+---   end
+---
+---   input.setup({ handlers = { view = view_handler } })
 --- <
 MiniInput.gen_view.uiline = function(opts)
-  opts = vim.tbl_extend('force', { position = nil, symbol_caret = '▏', symbol_hide = '•' }, opts or {})
+  opts = vim.tbl_extend('force', { position = 'statusline', symbol_caret = '▏', symbol_hide = '•' }, opts or {})
 
-  if opts.position ~= nil then H.check_one_of('opts.position', opts.position, { 'statusline', 'tabline', 'winbar' }) end
+  H.check_one_of('opts.position', opts.position, { 'statusline', 'tabline', 'winbar' })
   H.check_type('opts.symbol_caret', opts.symbol_caret, 'string')
   H.check_type('opts.symbol_hide', opts.symbol_hide, 'string')
 
+  local position = opts.position
+
   return function(state)
-    if H.state_is_end(state) then
-      H.uiline_data_unset(state)
-      return
-    end
-
-    -- Ensure proper cache of options to restore later
-    local default_position = (state.opts.scope == 'editor' or state.opts.scope == 'tabpage') and 'tabline' or 'winbar'
-    local position, position_prev = opts.position or default_position, state.data.position
-    local win_id, win_id_prev = vim.api.nvim_get_current_win(), state.data.win_id
-
-    local needs_recache = position ~= position_prev or (win_id ~= win_id_prev and position ~= 'tabline')
-    if needs_recache then
-      H.uiline_data_unset(state)
-      H.uiline_data_set(state, position)
-    end
-    state.data.position = position
-    state.data.win_id = win_id
+    -- Handle option values
+    H.uiline_handle_option_values(state, position)
+    if H.state_is_end(state) then return end
 
     local caret, prompt, status = state.caret, state.opts.prompt, state.status
     local input = H.state_get_input(state, opts.symbol_hide)
 
+    -- Construct chunks to show
     -- TODO: Universally normalize
     local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
     local prompt_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
@@ -576,63 +584,101 @@ MiniInput.gen_view.uiline = function(opts)
 
     -- Set
     if position == 'statusline' then
-      vim.wo[win_id].statusline = uiline_value
+      vim.wo.statusline = uiline_value
       if vim.o.laststatus < 2 then vim.o.laststatus = 2 end
     end
     if position == 'tabline' then
       vim.o.tabline = uiline_value
       if vim.o.showtabline < 2 then vim.o.showtabline = 2 end
     end
-    if position == 'winbar' then vim.wo[win_id].winbar = uiline_value end
+    if position == 'winbar' then vim.wo.winbar = uiline_value end
   end
 end
 
---- Virtual line view
-MiniInput.gen_view.virtline = function(opts)
-  opts = vim.tbl_extend('force', { symbol_caret = '▏' }, opts or {})
-  local symbol_caret = opts.symbol_caret
+--- Virtual text view
+---
+---@param opts table|nil Options. Possible fields:
+---   - <position> `(string)` - where to display virtual text. One of `"above"`,
+---     `"below"`, `"inline"`. Default: `"above"`.
+---
+---   __input_symbol_caret
+---
+---   __input_symbol_hide
+---
+---@usage >lua
+---   local input = require('mini-dev.input')
+---   local view = input.gen_view.virtual({ position = 'inline' })
+---   input.setup({ handlers = { view = view } })
+--- <
+MiniInput.gen_view.virtual = function(opts)
+  opts = vim.tbl_extend('force', { position = 'above', symbol_caret = '▏', symbol_hide = '•' }, opts or {})
 
+  H.check_one_of('opts.position', opts.position, { 'above', 'below', 'inline' })
+  H.check_type('opts.symbol_caret', opts.symbol_caret, 'string')
+  H.check_type('opts.symbol_hide', opts.symbol_hide, 'string')
+
+  local position, ns_id = opts.position, H.ns_id.view
+  local is_virtline = position == 'above' or position == 'below'
   return function(state)
+    -- Cleanup
+    local buf_id, extmark_id = vim.api.nvim_get_current_buf(), state.data.extmark_id
     if H.state_is_end(state) then
-      pcall(vim.api.nvim_buf_del_extmark, 0, H.ns_id.view, state.data.extmark_id)
+      pcall(vim.api.nvim_buf_del_extmark, state.data.buf_id, ns_id, extmark_id)
       return
     end
 
-    local caret, input, prompt, status = state.caret, state.input, state.opts.prompt, state.status
+    local ok_extmark = pcall(vim.api.nvim_get_extmark_by_id, state.data.buf_id, ns_id, extmark_id, {})
+    if not (buf_id == state.data.buf_id and ok_extmark) then
+      pcall(vim.api.nvim_buf_del_extmark, state.data.buf_id, ns_id, extmark_id)
+    end
+    state.data.buf_id = buf_id
 
-    prompt = (prompt or ''):gsub('%s+$', '')
-    local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
+    local may_need_scroll = is_virtline and (state.status == 'start' or position ~= state.data.position)
+    state.data.position = position
+
+    -- Construct chunks to show
+    local caret, prompt, status = state.caret, state.opts.prompt, state.status
+    local input = H.state_get_input(state, opts.symbol_hide)
 
     -- TODO: Make it part of a general `state_to_chunks(state, width)` that:
     -- - Makes sure that it focuses on cursor if the input is too wide.
     --   Including splicing possible `state.highlight` ranges.
     -- - ???Transforms into multiline chunks at newline characters???
     -- - Adds completion hint to the right of the caret.
+    local input_left, input_right = vim.fn.strcharpart(input, 0, caret - 1), vim.fn.strcharpart(input, caret - 1)
     local prompt_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
-    local chunks = H.normalize_chunks({
+    local chunks_raw = {
       { prompt, prompt_hl },
       { ' ', 'MiniInputNormal' },
       { input_left, 'MiniInputNormal' },
-      { symbol_caret, 'MiniInputCaret' },
+      { opts.symbol_caret, 'MiniInputCaret' },
       { H.get_complete_hint(state), 'MiniInputHint' },
       { input_right, 'MiniInputNormal' },
-      { string.rep(' ', vim.o.columns), 'MiniInputNormal' },
-    })
+    }
+    if is_virtline then table.insert(chunks_raw, { string.rep(' ', vim.o.columns), 'MiniInputNormal' }) end
+    local chunks = H.normalize_chunks(chunks_raw)
 
-    local cur_line, top_line = vim.fn.line('.'), vim.fn.line('w0')
-    local extmark_opts = { id = state.data.extmark_id, virt_lines = { chunks }, virt_lines_above = true }
-    state.data.extmark_id = vim.api.nvim_buf_set_extmark(0, H.ns_id.view, cur_line - 1, 0, extmark_opts)
+    -- Set
+    local cur_pos = vim.api.nvim_win_get_cursor(0)
 
-    -- Ensure that the line above is visible
-    -- TODO: Still shows cursor on top of the virtual line if there is a scroll
-    if cur_line == top_line then vim.cmd('normal! \25') end
-  end
-end
+    local extmark_opts = { id = state.data.extmark_id }
+    if is_virtline then
+      extmark_opts.virt_lines = { chunks }
+      extmark_opts.virt_lines_above = position == 'above'
+    else
+      extmark_opts.virt_text = chunks
+      extmark_opts.virt_text_pos = 'inline'
+    end
+    state.data.extmark_id = vim.api.nvim_buf_set_extmark(0, ns_id, cur_pos[1] - 1, cur_pos[2], extmark_opts)
 
---- Virtual text view
-MiniInput.gen_view.virttext = function(opts)
-  return function(state)
-    -- TODO
+    -- Ensure that both current and virtual lines are visible
+    if may_need_scroll then
+      local win_line = vim.fn.winline()
+      if win_line == 1 and position == 'above' then vim.cmd('normal! \25') end
+      -- TODO: Doesn't quite work 'below' (some rendering issue).
+      -- Needs `>` to work with 'winbar'.
+      if win_line > vim.fn.winheight(0) then vim.cmd('normal! \5') end
+    end
   end
 end
 
@@ -1170,27 +1216,37 @@ H.default_floating_config = function(state, position)
   return config
 end
 
-H.uiline_data_set = function(state, position)
+H.uiline_handle_option_values = function(state, position)
   local win_id = vim.api.nvim_get_current_win()
-  if position == 'statusline' then
-    state.data.statusline = vim.wo[win_id].statusline
-    state.data.laststatus = vim.o.laststatus
-  end
-  if position == 'tabline' then
-    state.data.tabline = vim.o.tabline
-    state.data.showtabline = vim.o.showtabline
-  end
-  if position == 'winbar' then state.data.winbar = vim.wo[win_id].winbar end
+  -- Compare position to work with separate positions per scope
+  local needs_reset = not (win_id == state.data.win_id and position == state.data.position)
+  if not (H.state_is_end(state) or needs_reset) then return end
+
+  -- Unset all previously set option values
+  H.uiline_unset_option_value(state, 'laststatus')
+  H.uiline_unset_option_value(state, 'showtabline')
+  H.uiline_unset_option_value(state, 'statusline', win_id)
+  H.uiline_unset_option_value(state, 'tabline')
+  H.uiline_unset_option_value(state, 'winbar', win_id)
+
+  if not needs_reset then return end
+
+  -- Cache all necessary values
+  state.data.laststatus = vim.o.laststatus
+  state.data.showtabline = vim.o.showtabline
+  state.data.statusline = vim.wo.statusline
+  state.data.tabline = vim.o.tabline
+  state.data.winbar = vim.wo.winbar
+
+  state.data.position = position
+  state.data.win_id = win_id
 end
 
-H.uiline_data_unset = function(state)
-  local win_id = state.data.win_id
-  local set = vim.api.nvim_set_option_value
-  pcall(set, 'laststatus', state.data.laststatus, {})
-  pcall(set, 'showtabline', state.data.showtabline, {})
-  pcall(set, 'statusline', state.data.statusline, { scope = 'local', win = win_id })
-  pcall(set, 'tabline', state.data.tabline, {})
-  pcall(set, 'winbar', state.data.winbar, { scope = 'local', win = win_id })
+H.uiline_unset_option_value = function(state, option_name, win_id)
+  local option_opts = { scope = win_id ~= nil and 'local' or nil, win = win_id }
+  local cur_val = vim.api.nvim_get_option_value(option_name, option_opts)
+  if cur_val == state.data[option_name] then return end
+  pcall(vim.api.nvim_set_option_value, option_name, state.data[option_name], option_opts)
 end
 
 H.normalize_chunks = function(chunks)
@@ -1339,5 +1395,5 @@ if vim.fn.has('nvim-0.10') == 0 then H.get_lmap = function() return {} end end
 -- A copy of `vim.deepcopy()` that doesn't error on userdata and threads
 H.copy_tables = function(x) return type(x) == 'table' and vim.tbl_map(H.copy_tables, x) or x end
 
-MiniInput.default_view = MiniInput.gen_view.floating()
+MiniInput.default_view = MiniInput.gen_view.floatwin()
 return MiniInput
