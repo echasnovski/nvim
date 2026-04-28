@@ -1,0 +1,286 @@
+diff --git a/lua/mini/ai.lua b/lua/mini/ai.lua
+index 356583f4..a9a5463a 100644
+--- a/lua/mini/ai.lua
++++ b/lua/mini/ai.lua
+@@ -2014,13 +2014,16 @@ H.user_textobject_id = function(ai_type)
+ end
+ 
+ H.user_input = function(prompt, text)
++  prompt = '(mini.ai) ' .. prompt
++  if _G.MiniInput ~= nil then return MiniInput.get({ prompt = prompt, scope = 'cursor', init_keys = { text } }) end
++
+   -- Use `on_key` to distinguish cancel with `<Esc>` and immediate `<CR>`
+   local was_cancelled = false
+   vim.on_key(function(key) was_cancelled = was_cancelled or key == '\27' end, H.ns_id.input)
+ 
+   -- Ask for input. Use `pcall` to allow `<C-c>` to cancel user input
+   vim.cmd('echohl Question')
+-  local ok, res = pcall(vim.fn.input, { prompt = '(mini.ai) ' .. prompt .. ': ', default = text or '' })
++  local ok, res = pcall(vim.fn.input, { prompt = prompt .. ': ', default = text or '' })
+   vim.cmd('echohl None | echo "" | redraw')
+ 
+   vim.on_key(nil, H.ns_id.input)
+diff --git a/lua/mini/align.lua b/lua/mini/align.lua
+index 108ce606..fcd08530 100644
+--- a/lua/mini/align.lua
++++ b/lua/mini/align.lua
+@@ -1824,13 +1824,16 @@ H.user_modifier = function(with_preview, msg_chunks)
+ end
+ 
+ H.user_input = function(prompt, text)
++  prompt = '(mini.align) ' .. prompt
++  if _G.MiniInput ~= nil then return MiniInput.get({ prompt = prompt, scope = 'editor', init_keys = { text } }) end
++
+   -- Use `on_key` to distinguish cancel with `<Esc>` and immediate `<CR>`
+   local was_cancelled = false
+   vim.on_key(function(key) was_cancelled = was_cancelled or key == '\27' end, H.ns_id.input)
+ 
+   -- Ask for input. Use `pcall` to allow `<C-c>` to cancel user input
+   vim.cmd('echohl Question')
+-  local ok, res = pcall(vim.fn.input, { prompt = '(mini.align) ' .. prompt .. ': ', default = text or '' })
++  local ok, res = pcall(vim.fn.input, { prompt = prompt .. ': ', default = text or '' })
+   vim.cmd('echohl None | echo "" | redraw')
+ 
+   vim.on_key(nil, H.ns_id.input)
+diff --git a/lua/mini/jump2d.lua b/lua/mini/jump2d.lua
+index fee0393c..1e6b25e3 100644
+--- a/lua/mini/jump2d.lua
++++ b/lua/mini/jump2d.lua
+@@ -700,7 +700,7 @@ MiniJump2d.builtin_opts.single_character = user_input_opts(
+ --- Defines `spotter`, `allowed_lines.blank`, `allowed_lines.fold`, and
+ --- `hooks.before_start`.
+ MiniJump2d.builtin_opts.query = user_input_opts(
+-  function() return H.user_input('Reminder to enter a query to search') end
++  function() return H.user_input('Enter query to search') end
+ )
+ 
+ -- Helper data ================================================================
+@@ -1148,13 +1148,16 @@ H.getcharstr = function(msg)
+ end
+ 
+ H.user_input = function(prompt, text)
++  prompt = '(mini.jump2d) ' .. prompt
++  if _G.MiniInput ~= nil then return MiniInput.get({ prompt = prompt, scope = 'cursor', init_keys = { text } }) end
++
+   -- Use `on_key` to distinguish cancel with `<Esc>` and immediate `<CR>`
+   local was_cancelled = false
+   vim.on_key(function(key) was_cancelled = was_cancelled or key == '\27' end, H.ns_id.input)
+ 
+   -- Ask for input. Use `pcall` to allow `<C-c>` to cancel user input
+   vim.cmd('echohl Question')
+-  local ok, res = pcall(vim.fn.input, { prompt = '(mini.jump2d) ' .. prompt .. ': ', default = text or '' })
++  local ok, res = pcall(vim.fn.input, { prompt = prompt .. ': ', default = text or '' })
+   vim.cmd('echohl None | echo "" | redraw')
+ 
+   vim.on_key(nil, H.ns_id.input)
+diff --git a/lua/mini/pick.lua b/lua/mini/pick.lua
+index 356a2f4d..39793541 100644
+--- a/lua/mini/pick.lua
++++ b/lua/mini/pick.lua
+@@ -1351,7 +1351,7 @@ end
+ ---   - <tool> `(string)` - which tool to use. One of "rg", "git", "fallback".
+ ---     Default: whichever tool is present, trying in that same order.
+ ---   - <pattern> `(string)` - string pattern to search. If not given, asks user
+----     interactively with |input()|.
++---     interactively with |MiniInput.get()| (if enabled) or |input()|.
+ ---   - __pick_builtin_grep_globs
+ ---@param opts __pick_builtin_opts
+ MiniPick.builtin.grep = function(local_opts, opts)
+@@ -1421,6 +1421,7 @@ MiniPick.builtin.grep_live = function(local_opts, opts)
+   end
+ 
+   local add_glob = function()
++    -- NOTE: Not `user_input` since 'mini.input' can be too intrusive here
+     local ok, glob = pcall(vim.fn.input, 'Glob pattern: ')
+     if ok then table.insert(globs, glob) end
+     name_suffix = #globs == 0 and '' or (' | ' .. table.concat(globs, ', '))
+@@ -3771,13 +3772,16 @@ H.parse_uri = function(x)
+ end
+ 
+ H.user_input = function(prompt, text)
++  prompt = '(mini.pick) ' .. prompt
++  if _G.MiniInput ~= nil then return MiniInput.get({ prompt = prompt, scope = 'editor', init_keys = { text } }) end
++
+   -- Use `on_key` to distinguish cancel with `<Esc>` and immediate `<CR>`
+   local was_cancelled = false
+   vim.on_key(function(key) was_cancelled = was_cancelled or key == '\27' end, H.ns_id.input)
+ 
+   -- Ask for input. Use `pcall` to allow `<C-c>` to cancel user input
+   vim.cmd('echohl Question')
+-  local ok, res = pcall(vim.fn.input, { prompt = '(mini.pick) ' .. prompt .. ': ', default = text or '' })
++  local ok, res = pcall(vim.fn.input, { prompt = prompt .. ': ', default = text or '' })
+   vim.cmd('echohl None | echo "" | redraw')
+ 
+   vim.on_key(nil, H.ns_id.input)
+diff --git a/lua/mini/surround.lua b/lua/mini/surround.lua
+index 9fffa9c2..804901c8 100644
+--- a/lua/mini/surround.lua
++++ b/lua/mini/surround.lua
+@@ -533,8 +533,8 @@ end
+ ---   `output`). Other fields will be taken from builtin surroundings.
+ --- - Function returning surround info at <input> or <output> fields of
+ ---   specification is helpful when user input is needed (like asking for
+----   function name). Use |input()| or |MiniSurround.user_input()|. Return
+----   `nil` to stop any current surround operation.
++---   function name). Use |MiniSurround.user_input()| or |MiniInput.get()|.
++---   Return `nil` to stop any current surround operation.
+ --- - Keys should use character representation which can be |getcharstr()| output.
+ ---   For example, `'\r'` and not `'<CR>'`.
+ ---
+@@ -918,6 +918,9 @@ end
+ --- cancelling with `<Esc>` and `<C-c>`, and slightly modifies prompt. Use it
+ --- to ask for input inside function custom surrounding (see |MiniSurround.config|).
+ MiniSurround.user_input = function(prompt, text)
++  prompt = '(mini.surround) ' .. prompt
++  if _G.MiniInput ~= nil then return MiniInput.get({ prompt = prompt, scope = 'cursor', init_keys = { text } }) end
++
+   -- Major issue with both `vim.fn.input()` is that the only way to distinguish
+   -- cancelling with `<Esc>` and entering empty string with immediate `<CR>` is
+   -- through `cancelreturn` option (see `:h input()`). In that case the return
+@@ -940,7 +943,7 @@ MiniSurround.user_input = function(prompt, text)
+   -- simple way to stop execution of this current function until `ui.input()`'s
+   -- callback finished execution.
+   vim.cmd('echohl Question')
+-  local ok, res = pcall(vim.fn.input, { prompt = '(mini.surround) ' .. prompt .. ': ', default = text or '' })
++  local ok, res = pcall(vim.fn.input, { prompt = prompt .. ': ', default = text or '' })
+   vim.cmd('echohl None | echo "" | redraw')
+ 
+   vim.on_key(nil, H.ns_id.input)
+diff --git a/lua/mini/visits.lua b/lua/mini/visits.lua
+index 6dd97644..f4a1679b 100644
+--- a/lua/mini/visits.lua
++++ b/lua/mini/visits.lua
+@@ -543,25 +543,27 @@ end
+ MiniVisits.add_label = function(label, path, cwd)
+   path = H.validate_path(path)
+   cwd = H.validate_cwd(cwd)
++  if label ~= nil then H.validate_string(label, 'label') end
++
++  local on_label = function(l)
++    if l == nil then return end
++
++    -- Add label to all target path-cwd pairs
++    local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
++    for _, pair in ipairs(path_cwd_pairs) do
++      H.ensure_index_entry(pair.path, pair.cwd)
++      local path_tbl = H.index[pair.cwd][pair.path]
++      local labels = path_tbl.labels or {}
++      labels[l] = true
++      path_tbl.labels = labels
++    end
+ 
+-  if label == nil then
+-    -- Suggest all labels from cwd in completion
+-    label = H.get_label_from_user('Enter label to add', MiniVisits.list_labels('', cwd))
+-    if label == nil then return end
++    H.notify(string.format('Added %s label.', vim.inspect(l)))
+   end
+-  label = H.validate_string(label, 'label')
+ 
+-  -- Add label to all target path-cwd pairs
+-  local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
+-  for _, pair in ipairs(path_cwd_pairs) do
+-    H.ensure_index_entry(pair.path, pair.cwd)
+-    local path_tbl = H.index[pair.cwd][pair.path]
+-    local labels = path_tbl.labels or {}
+-    labels[label] = true
+-    path_tbl.labels = labels
+-  end
+-
+-  H.echo(string.format('Added %s label.', vim.inspect(label)))
++  if label ~= nil then return on_label(label) end
++  -- Suggest all labels from cwd in completion
++  H.on_label_from_user('Enter label to add', on_label, MiniVisits.list_labels('', cwd))
+ end
+ 
+ --- Remove path
+@@ -604,27 +606,29 @@ end
+ MiniVisits.remove_label = function(label, path, cwd)
+   path = H.validate_path(path)
+   cwd = H.validate_cwd(cwd)
+-
+-  if label == nil then
+-    -- Suggest only labels from target path-cwd pairs
+-    label = H.get_label_from_user('Enter label to remove', MiniVisits.list_labels(path, cwd))
+-    if label == nil then return end
+-  end
+-  label = H.validate_string(label, 'label')
+-
+-  -- Remove label from all target path-cwd pairs (ignoring not present ones and
+-  -- collapsing `labels` if removed last label)
+-  H.ensure_read_index()
+-  local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
+-  for _, pair in ipairs(path_cwd_pairs) do
+-    local path_tbl = (H.index[pair.cwd] or {})[pair.path]
+-    if type(path_tbl) == 'table' and type(path_tbl.labels) == 'table' then
+-      path_tbl.labels[label] = nil
+-      if vim.tbl_count(path_tbl.labels) == 0 then path_tbl.labels = nil end
++  if label ~= nil then H.validate_string(label, 'label') end
++
++  local on_label = function(l)
++    if l == nil then return end
++
++    -- Remove label from all target path-cwd pairs (ignoring not present ones and
++    -- collapsing `labels` if removed last label)
++    H.ensure_read_index()
++    local path_cwd_pairs = H.resolve_path_cwd(path, cwd)
++    for _, pair in ipairs(path_cwd_pairs) do
++      local path_tbl = (H.index[pair.cwd] or {})[pair.path]
++      if type(path_tbl) == 'table' and type(path_tbl.labels) == 'table' then
++        path_tbl.labels[l] = nil
++        if vim.tbl_count(path_tbl.labels) == 0 then path_tbl.labels = nil end
++      end
+     end
++
++    H.notify(string.format('Removed %s label.', vim.inspect(l)))
+   end
+ 
+-  H.echo(string.format('Removed %s label.', vim.inspect(label)))
++  if label ~= nil then return on_label(label) end
++  -- Suggest only labels from target path-cwd pairs
++  H.on_label_from_user('Enter label to remove', on_label, MiniVisits.list_labels(path, cwd))
+ end
+ 
+ --- List visit paths
+@@ -1413,16 +1417,16 @@ H.index_decay_cwd = function(cwd_tbl, threshold, target)
+   end
+ end
+ 
+-H.get_label_from_user = function(prompt, labels_complete)
++H.on_label_from_user = function(prompt, on_label, labels_complete)
+   MiniVisits._complete = function(arg_lead)
+     return vim.tbl_filter(function(x) return x:find(arg_lead, 1, true) ~= nil end, labels_complete)
+   end
+   local completion = 'customlist,v:lua.MiniVisits._complete'
+-  local input_opts = { prompt = prompt .. ': ', completion = completion, cancelreturn = false }
+-  local ok, res = pcall(vim.fn.input, input_opts)
+-  MiniVisits._complete = nil
+-  if not ok or res == false then return nil end
+-  return res
++
++  vim.ui.input({ prompt = '(mini.visits) ' .. prompt, completion = completion }, function(x)
++    MiniVisits._complete = nil
++    on_label(x)
++  end)
+ end
+ 
+ -- Validators -----------------------------------------------------------------
+@@ -1497,16 +1501,9 @@ H.check_type = function(name, val, ref, allow_nil)
+   H.error(string.format('`%s` should be %s, not %s', name, ref, type(val)))
+ end
+ 
+-H.echo = function(msg)
++H.notify = function(msg, level_name)
+   if H.get_config().silent then return end
+-
+-  -- Construct message chunks
+-  msg = type(msg) == 'string' and { { msg } } or msg
+-  table.insert(msg, 1, { '(mini.visits) ', 'WarningMsg' })
+-
+-  -- Echo. Force redraw to ensure that it is effective (`:h echo-redraw`)
+-  vim.cmd([[echo '' | redraw]])
+-  vim.api.nvim_echo(msg, false, {})
++  vim.notify('(mini.visits) ' .. msg, vim.log.levels[level_name])
+ end
+ 
+ H.is_valid_buf = function(buf_id) return type(buf_id) == 'number' and vim.api.nvim_buf_is_valid(buf_id) end
