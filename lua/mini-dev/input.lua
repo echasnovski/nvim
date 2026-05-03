@@ -38,11 +38,11 @@
 --- - Get user input with full customizability of how keypresses are handled and
 ---   how the current state is shown.
 ---
---- - Built-in configurable views as floating window, virtual line, virtual text.
+--- - Built-in configurable views as floating window, statusline/tabline/winbar,
+---   virtual line/text.
 ---
---- - Implementation is non-blocking but waits to return the input.
----
---- - Can work in any mode without requiring it to change.
+--- - Implementation is non-blocking but waits to return the input. This makes it
+---   work in any mode without requiring it to change.
 ---
 --- - |vim.ui.input()| implementation. To adjust, use |MiniInput.ui_input()| or
 ---   save-restore `vim.ui.input` manually after calling |MiniInput.setup()|.
@@ -286,7 +286,7 @@ end
 ---
 --- `config.scope` is a string that defines an input scope. It is meant as an extra
 --- information for handlers to tweak their behavior (like `view` style, etc.).
---- Possible values are: `"cursor"`, `"buffer"`, `"window"`, `"tabpage"`, `"editor"`.
+--- Possible values: `"cursor"`, `"line"`, `"buffer"`, `"window"`, `"tabpage"`, `"editor"`.
 ---
 --- The value from |MiniInput.config| is used as the default for |MiniInput.get()|.
 MiniInput.config = {
@@ -305,11 +305,7 @@ MiniInput.config = {
     view = nil,
   },
 
-  -- Default input scope
-  -- One of "cursor", "buffer", "window", "tabpage", "editor"
-  -- This allows customizing how input is shown depending on where it is
-  -- needed. Like 'mini.ai' and 'mini.surround' would use "cursor", but
-  -- `vim.ui.input` probably "editor".
+  -- Default input scope: cursor, line, buffer, window, tabpage, editor
   scope = 'editor',
 }
 --minidoc_afterlines_end
@@ -465,7 +461,7 @@ MiniInput.set_history = function(history)
     H.check_type(prefix .. 'cwd', h.cwd, 'string')
     H.check_type(prefix .. 'input', h.input, 'string')
     H.check_type(prefix .. 'prompt', h.prompt, 'string')
-    H.check_one_of(prefix .. 'scope', h.scope, { 'cursor', 'buffer', 'window', 'tabpage', 'editor' })
+    H.check_one_of(prefix .. 'scope', h.scope, { 'cursor', 'line', 'buffer', 'window', 'tabpage', 'editor' })
   end
 
   H.history = vim.deepcopy(history)
@@ -482,12 +478,18 @@ end
 ---
 --- This is a table with function elements. Call to actually get a view function.
 ---
+--- Notes:
+--- - Multiline input (i.e. containing newline character `\n`) is shown as
+---   a single line.
+---
 --- Each element accepts `to_chunks` option. It is a function that takes
 --- a `state` and `max_width` arguments and returns an array of `{ text, hl }`
 --- chunks that fit into `max_width` width.
 ---
 --- This is a way to adjust how input is shown. Like caret/hide symbols, etc.
---- See |MiniInput.state_to_chunks()|.
+--- By default uses |MiniInput.state_to_chunks()|, which also means:
+--- - All special characters (like literal `\t`, `\n`, etc.) will be translated
+---   via |keytrans()|.
 ---
 --- Example: >lua
 ---
@@ -545,8 +547,8 @@ MiniInput.gen_view = {}
 ---   local view_topmiddle = input.gen_view.floatwin({ style = 'TM' })
 ---   local view_bottomleft = input.gen_view.floatwin({ style = 'BL' })
 ---   local view_handler = function(state)
----     local view = view_topmiddle
----     if state.opts.scope == 'cursor' then view = view_bottomleft end
+---     local scope, view = state.opts.scope, view_topmiddle
+---     if scope == 'cursor' or scope == 'line' then view = view_bottomleft end
 ---     return view(state)
 ---   end
 ---
@@ -602,7 +604,7 @@ end
 ---   local view_winbar = input.gen_view.uiline({ style = 'winbar' })
 ---   local view_handler = function(state)
 ---     local scope, view = state.opts.scope, view_winbar
----     if scope == 'editor' or scope == 'tabpage' then view = view_tabline end
+---     if scope == 'tabpage' or scope == 'editor' then view = view_tabline end
 ---     return view(state)
 ---   end
 ---
@@ -671,7 +673,7 @@ MiniInput.gen_view.virtual = function(opts)
     local is_virtline = style == 'above' or style == 'below'
 
     -- Get chunks
-    local win_info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
+    local win_info = H.get_curwin_info()
     local max_width = win_info.width - win_info.textoff
     local chunks = H.get_chunks(opts, state, max_width)
     local chunks_width = H.get_chunks_width(chunks)
@@ -706,7 +708,7 @@ end
 --- Default key handler
 ---
 --- Emulates most of |Command-line-mode| editing (|cmdline-editing|):
---- - Accept: <CR>.
+--- - Accept: <CR>. To insert literal newline, type `<C-j>`.
 --- - Cancel: <Esc>.
 --- - Move caret:
 ---     - <Left>, <Right> - one character to left / right.
@@ -725,7 +727,6 @@ end
 ---       special <C-a>, <C-f>, <C-l>, <C-w> keys for a register.
 ---     - <C-v>, <C-q> - next key literally. As |c_CTRL-V| and |i_CTRL-V_digit|
 ---       (all digits must be typed in full).
----     - <S-CR> - newline character.
 --- - Completion:
 ---     - <Tab>, <S-Tab> - initiate completion based on input method and navigate.
 ---       Note: type `<C-v><Tab>` to insert literat `\t`.
@@ -1017,7 +1018,7 @@ H.state_validate = function(x, cur)
   H.check_type('state.opts.hide', x.opts.hide, 'boolean')
   H.check_array_of('state.opts.init_keys', x.opts.init_keys, 'string')
   H.check_type('state.opts.prompt', x.opts.prompt, 'string')
-  H.check_one_of('state.opts.scope', x.opts.scope, { 'cursor', 'buffer', 'window', 'tabpage', 'editor' })
+  H.check_one_of('state.opts.scope', x.opts.scope, { 'cursor', 'line', 'buffer', 'window', 'tabpage', 'editor' })
 end
 
 H.state_finish = function()
@@ -1194,8 +1195,6 @@ H.key_methods[kc('<C-q>')] = function(state)
 end
 H.key_methods[kc('<C-v>')] = H.key_methods[kc('<C-q>')]
 
-H.key_methods[kc('<S-CR>')] = function(state) H.insert_at_caret(state, '\n') end
-
 -- History navigation
 H.key_methods[kc('<Up>')] = function(state)
   if not H.init_state_complete(state, 'history') then return end
@@ -1220,7 +1219,8 @@ end
 
 -- Miscellaneous
 H.key_methods[kc('<C-o>')] = function(state)
-  local next = { cursor = 'buffer', buffer = 'window', window = 'tabpage', tabpage = 'editor', editor = 'cursor' }
+  local next =
+    { cursor = 'line', line = 'buffer', buffer = 'window', window = 'tabpage', tabpage = 'editor', editor = 'cursor' }
   state.opts.scope = next[state.opts.scope]
 end
 H.key_methods[kc('<C-s>')] = function(state) state.data.new_style = (state.data.next_styles or {})[state.data.style] end
@@ -1347,14 +1347,15 @@ H.default_floatwin_config = function(state, style, target_width)
   -- Compute window config
   local winborder = vim.fn.exists('+winborder') == 0 and '' or vim.o.winborder
   local border = winborder == '' and 'single' or nil
-  if winborder == 'none' then border = { '', ' ', '', '', '', '', '', '' } end
+  local has_footer = state.complete ~= nil
+  if winborder == 'none' then border = { '', ' ', '', '', '', has_footer and ' ' or '', '', '' } end
 
   local title_text = ' ' .. vim.trim(state.opts.prompt) .. ' '
   local width = H.clamp(target_width, vim.fn.strchars(title_text), max_width)
   local width_offset = winborder == 'none' and 0 or 2
 
   local height = 1
-  local height_offset = winborder == 'none' and 0 or 2
+  local height_offset = winborder == 'none' and 1 or 2
 
   local config =
     { relative = 'editor', anchor = 'NW', border = border, style = 'minimal', noautocmd = true, zindex = 251 }
@@ -1362,20 +1363,29 @@ H.default_floatwin_config = function(state, style, target_width)
   -- Compute position and dimensions based on scope
   local ref_rect = { row = has_tabline and 1 or 0, col = 0, width = max_width, height = max_height }
   local scope = state.opts.scope
-  if scope == 'cursor' then
-    -- Compute through window as it works when called from command line
-    local win_pos = vim.fn.win_screenpos(0)
-    local row, col = win_pos[1] + vim.fn.winline() - 2, win_pos[2] + vim.fn.wincol() - 2
+  if not (scope == 'editor' or scope == 'tabpage') then
+    -- NOTE: use window for "cursor" as it works when called from command line
+    local wininfo = H.get_curwin_info()
+    local winrow, wincol, winwidth, winheight = wininfo.winrow - 1, wininfo.wincol - 1, wininfo.width, wininfo.height
+    ref_rect = { row = winrow, col = wincol, width = winwidth, height = winheight }
 
-    -- Adjust to not cover cursor if not 'center'
-    row = row + (ver == 'T' and 1 or ver == 'B' and -1 or 0)
-    col = col + (hor == 'L' and 1 or hor == 'R' and -1 or 0)
-    ref_rect = { row = row, col = col, width = 1, height = 1 }
-  elseif scope == 'buffer' or scope == 'window' then
-    local win_pos = vim.fn.win_screenpos(0)
-    local win_width, win_height = vim.fn.winwidth(0), vim.fn.winheight(0)
-    ref_rect = { row = win_pos[1] - 1, col = win_pos[2] - 1, width = win_width, height = win_height }
-    width = H.clamp(width, 1, win_width - width_offset)
+    -- - Nudges to not cover cursor if not 'center'
+    local row_nudge = (ver == 'T' and 1 or ver == 'B' and -1 or 0)
+    local col_nudge = (hor == 'L' and 1 or hor == 'R' and -1 or 0)
+
+    if scope == 'cursor' then
+      local cur_row = winrow + vim.fn.winline() - 1 + row_nudge
+      local cur_col = wincol + vim.fn.wincol() - 1 + col_nudge
+      ref_rect = { row = cur_row, col = cur_col, width = 1, height = 1 }
+    end
+    if scope == 'line' then
+      local cur_row = winrow + vim.fn.winline() - 1 + row_nudge
+      local cur_col = wincol + wininfo.textoff
+      ref_rect = { row = cur_row, col = cur_col, width = winwidth - wininfo.textoff, height = 1 }
+    end
+
+    -- Ensure floating window does not go outside of reference rectangle
+    if scope ~= 'cursor' then width = H.clamp(width, 1, ref_rect.width - width_offset) end
   end
 
   local ver_coef = ver == 'T' and 0 or (ver == 'M' and 0.5 or 1)
@@ -1389,6 +1399,7 @@ H.default_floatwin_config = function(state, style, target_width)
   -- Set title and footer
   local title_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
   config.title = { { H.fit_to_width(title_text, config.width), title_hl } }
+  config.title_pos = 'left'
   if vim.fn.has('nvim-0.10') == 1 then
     local footer_text = ''
     if state.complete ~= nil then footer_text = string.format(' %d/%d ', state.complete.id, #state.complete.items) end
@@ -1674,9 +1685,7 @@ H.is_valid_win = function(win_id) return type(win_id) == 'number' and vim.api.nv
 
 H.is_valid_char = function(char) return vim.fn.strchars(char) == 1 and vim.fn.char2nr(char) > 31 end
 
-H.win_close_safely = function(win_id)
-  if H.is_valid_win(win_id) then vim.api.nvim_win_close(win_id, true) end
-end
+H.get_curwin_info = function() return vim.fn.getwininfo(vim.api.nvim_get_current_win())[1] end
 
 H.fit_to_width = function(text, width)
   local t_width = vim.fn.strchars(text)
