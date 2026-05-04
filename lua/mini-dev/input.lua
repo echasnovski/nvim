@@ -122,6 +122,25 @@
 ---
 ---   require('mini.input').setup({ handlers = { key = key_handler } })
 --- <
+--- ## Basic command line
+---
+--- An alternative |Command-line| with highlighting and completion: >lua
+---
+---   -- Construct reusable `MiniInput.get()` options
+---   local cmdline_opts = { prompt = 'Command', scope = 'editor' }
+---   -- - Highlight using bundled Vim tree-sitter parser
+---   local highlight_vim = MiniInput.gen_highlight.treesitter('vim')
+---   cmdline_opts.handlers = { highlight = highlight_vim }
+---   -- - Complete as if it is Command line input
+---   cmdline_opts.completion = 'cmdline'
+---
+---   -- Create a mapping for `:`
+---   local input_cmdline = function()
+---     local cmd = MiniInput.get(cmdline_opts)
+---     if cmd ~= nil then vim.cmd(cmd) end
+---   end
+---   vim.keymap.set('n', ':', input_cmdline)
+--- <
 --- # Handlers ~
 ---
 --- ## Key ~
@@ -474,6 +493,41 @@ MiniInput.refresh = function()
   if H.state_is_end() then H.state_finish() end
 end
 
+--- Highlight generators
+---
+--- This is a table with function elements. Call to actually get a view function.
+MiniInput.gen_highlight = {}
+
+--- Highlight with tree-sitter
+MiniInput.gen_highlight.treesitter = function(lang)
+  local append_ts_hl_range = function(arr, line, tstree, tree)
+    local query = tstree and vim.treesitter.query.get(tree:lang(), 'highlights')
+    if query == nil then return end
+    for capture, node in query:iter_captures(tstree:root(), line) do
+      -- Ignore private captures
+      if query.captures[capture]:sub(1, 1) ~= '_' then
+        local _, from, _, to = node:range()
+        local hl = string.format('@%s.%s', query.captures[capture], query.lang)
+        from, to = vim.fn.charidx(line, from) + 1, vim.fn.charidx(line, to)
+        if from <= to then table.insert(arr, { from = from, to = to, hl = hl }) end
+      end
+    end
+  end
+
+  return function(state)
+    local line = state.input
+    local ok, parser = pcall(vim.treesitter.get_string_parser, line, lang)
+    if not ok or parser == nil then return end
+
+    -- Traverse all trees and compute highlight ranges
+    parser:parse(true)
+    local highlight = {}
+    parser:for_each_tree(function(tstree, tree) append_ts_hl_range(highlight, line, tstree, tree) end)
+
+    state.highlight = highlight
+  end
+end
+
 --- View generators
 ---
 --- This is a table with function elements. Call to actually get a view function.
@@ -616,6 +670,7 @@ MiniInput.gen_view.uiline = function(opts)
   H.check_type('opts.to_chunks', opts.to_chunks, 'callable')
 
   local next_styles = { statusline = 'winbar', winbar = 'tabline', tabline = 'statusline' }
+  local escape_stl = function(x) return (x:gsub('%%', '%%%%')) end
 
   return function(state)
     local style, style_is_new = H.handle_view_style(state, opts.style, next_styles)
@@ -624,10 +679,11 @@ MiniInput.gen_view.uiline = function(opts)
 
     local max_width = style == 'tabline' and vim.o.columns or vim.fn.winwidth(0)
     local chunks = H.get_chunks(opts, state, max_width)
-    local uiline_value = table.concat(vim.tbl_map(function(c) return '%#' .. c[2] .. '#' .. c[1] end, chunks))
-    uiline_value = uiline_value .. '%#MiniInputNormal#'
+    local parts = vim.tbl_map(function(c) return '%#' .. escape_stl(c[2]) .. '#' .. escape_stl(c[1]) end, chunks)
+    local uiline_value = table.concat(parts) .. '%#MiniInputNormal#'
 
-    (style == 'tabline' and vim.o or vim.wo)[style] = uiline_value
+    local opt = style == 'tabline' and vim.o or vim.wo
+    opt[style] = uiline_value
     if style == 'statusline' and vim.o.laststatus < 2 then vim.o.laststatus = 2 end
     if style == 'tabline' and vim.o.showtabline < 2 then vim.o.showtabline = 2 end
   end
@@ -717,7 +773,9 @@ end
 ---     - <C-b>, <C-e> (if no completion) - to start / end of input.
 ---     - <Home>, <End> - to start / end of input.
 --- - Delete:
----     - <BS> / <C-h> - to caret's left.
+---     - <BS> / <C-h> - to caret's left. If `opts.autopair` is enabled, also delete
+---       a character to caret's right if it forms a respected character pair.
+---       See "Autopair" entry.
 ---     - <Del> - at caret.
 ---     - <C-u> - from start to caret. As |c_CTRL-U|.
 ---     - <C-w> - contiguous keyword or non-keyword to caret's left. As |c_CTRL-W|.
@@ -727,6 +785,14 @@ end
 ---       special <C-a>, <C-f>, <C-l>, <C-w> keys for a register.
 ---     - <C-v>, <C-q> - next key literally. As |c_CTRL-V| and |i_CTRL-V_digit|
 ---       (all digits must be typed in full).
+--- - Autopair (if `opts.autopair` is set) is similar to |mini.pairs|:
+---     - Opening characters `(`, `[`, `{` always insert a `()`, `[]`, `{}` pair and places
+---       caret inside of it.
+---     - Closing characters `)`, `]`, `}` move caret to the right if there is the same
+---       character to the right.
+---     - Closeopen character `'`, `"`, <`> perfom "close" action if possible and
+---       "open" action if not.
+---     - In all cases press <C-v> before special character to insert it verbatim.
 --- - Completion:
 ---     - <Tab>, <S-Tab> - initiate completion based on input method and navigate.
 ---       Note: type `<C-v><Tab>` to insert literat `\t`.
@@ -737,11 +803,19 @@ end
 ---     - <C-s> - change view style. Works only with |MiniInput.gen_view| view
 ---       handlers. Cycles through all available ones.
 ---     - <C-x> - toggle hide/unhide of the input.
---- - If a key is not special, it is inserted at caret as is.
-MiniInput.default_key = function(state, key)
+--- - If a key is not `nil` and not special, it is inserted at caret as is.
+---   Even if it is more than a single character.
+---
+---@param state table TODO
+---@param key string|nil A key to process.
+---@param opts table|nil Options. Possible fields:
+---   - <autopair> `(boolean)` - whether perform add autopair. Default: `false`.
+MiniInput.default_key = function(state, key, opts)
+  opts = opts or {}
   if key == nil or H.state_is_end(state) then return end
-  local method = H.key_methods[key] or function(s) H.insert_at_caret(s, key) end
-  method(state)
+  if opts.autopair and H.key_methods_autopair[key] ~= nil then return H.key_methods_autopair[key](state) end
+  local method = H.key_methods[key] or function(s, _) H.insert_at_caret(s, key) end
+  method(state, opts)
 end
 
 --- Default highlight handler
@@ -845,11 +919,11 @@ MiniInput.state_to_chunks = function(state, max_width, opts)
   local caret = (hide and vim.fn.strchars(symbol_hide) or 1) * (state.caret - 1) + 1
 
   -- Compute input chunks to left and right of caret
-  local hl_ranges = {}
+  local max_to = vim.fn.strchars(input)
+  local hl_ranges = { { from = 1, to = max_to, hl = 'MiniInputNormal' } }
   for _, range in ipairs(state.highlight or {}) do
-    hl_ranges = H.insert_hl_range(hl_ranges, range.from, range.to, range.hl)
+    hl_ranges = H.insert_hl_range(hl_ranges, max_to, range.from, range.to, range.hl)
   end
-  hl_ranges = H.fill_hl_gaps(hl_ranges, vim.fn.strchars(input), 'MiniInputNormal')
 
   local input_chunks = {}
   for i, r in ipairs(hl_ranges) do
@@ -1096,30 +1170,30 @@ H.keycode = vim.fn.has('nvim-0.10') == 1 and vim.keycode
 local kc = H.keycode
 
 -- General
-H.key_methods[kc('<CR>')] = function(state) state.status = 'accept' end
-H.key_methods[kc('<Esc>')] = function(state) state.status = 'cancel' end
+H.key_methods[kc('<CR>')] = function(state, _) state.status = 'accept' end
+H.key_methods[kc('<Esc>')] = function(state, _) state.status = 'cancel' end
 
 -- Caret movement
-H.key_methods[kc('<Left>')] = function(state)
+H.key_methods[kc('<Left>')] = function(state, _)
   state.caret = H.clamp(state.caret - 1, 1, vim.fn.strchars(state.input) + 1)
 end
-H.key_methods[kc('<Right>')] = function(state)
+H.key_methods[kc('<Right>')] = function(state, _)
   state.caret = H.clamp(state.caret + 1, 1, vim.fn.strchars(state.input) + 1)
 end
 H.key_methods[kc('<M-h>')] = H.key_methods[kc('<Left>')]
 H.key_methods[kc('<M-l>')] = H.key_methods[kc('<Right>')]
-H.key_methods[kc('<S-Left>')] = function(state)
+H.key_methods[kc('<S-Left>')] = function(state, _)
   local caret, input = state.caret, state.input
   local to = H.match_keyword_chars(input, caret, 'left')
   state.caret = H.clamp(to + 1, 1, vim.fn.strchars(state.input) + 1)
 end
-H.key_methods[kc('<S-Right>')] = function(state)
+H.key_methods[kc('<S-Right>')] = function(state, _)
   local caret, input = state.caret, state.input
   local to = H.match_keyword_chars(input, caret, 'right')
   state.caret = H.clamp(to + 1, 1, vim.fn.strchars(state.input) + 1)
 end
-H.key_methods[kc('<C-b>')] = function(state) state.caret = 1 end
-H.key_methods[kc('<C-e>')] = function(state)
+H.key_methods[kc('<C-b>')] = function(state, _) state.caret = 1 end
+H.key_methods[kc('<C-e>')] = function(state, _)
   if state.complete == nil then
     state.caret = vim.fn.strchars(state.input) + 1
     return
@@ -1128,26 +1202,27 @@ H.key_methods[kc('<C-e>')] = function(state)
   state.complete = nil
 end
 H.key_methods[kc('<Home>')] = H.key_methods[kc('<C-b>')]
-H.key_methods[kc('<End>')] = function(state) state.caret = vim.fn.strchars(state.input) + 1 end
+H.key_methods[kc('<End>')] = function(state, _) state.caret = vim.fn.strchars(state.input) + 1 end
 
 -- Delete
-H.key_methods[kc('<BS>')] = function(state)
+H.key_methods[kc('<BS>')] = function(state, opts)
   local caret, input = state.caret, state.input
   if caret <= 1 then return end
-  state.input = vim.fn.strcharpart(input, 0, caret - 2) .. vim.fn.strcharpart(input, caret - 1)
+  local right_offset = (opts.autopair and H.is_inside_pair(state)) and 1 or 0
+  state.input = vim.fn.strcharpart(input, 0, caret - 2) .. vim.fn.strcharpart(input, caret - 1 + right_offset)
   state.caret = caret - 1
 end
 H.key_methods[kc('<C-h>')] = H.key_methods[kc('<BS>')]
-H.key_methods[kc('<Del>')] = function(state)
+H.key_methods[kc('<Del>')] = function(state, _)
   local caret, input = state.caret, state.input
   if caret > vim.fn.strchars(input) then return end
   state.input = vim.fn.strcharpart(input, 0, caret - 1) .. vim.fn.strcharpart(input, caret)
 end
-H.key_methods[kc('<C-u>')] = function(state)
+H.key_methods[kc('<C-u>')] = function(state, _)
   state.input = vim.fn.strcharpart(state.input, state.caret - 1)
   state.caret = 1
 end
-H.key_methods[kc('<C-w>')] = function(state)
+H.key_methods[kc('<C-w>')] = function(state, _)
   local caret, input = state.caret, state.input
   local left_to = H.match_keyword_chars(input, caret, 'left')
   state.input = vim.fn.strcharpart(input, 0, left_to) .. vim.fn.strcharpart(input, caret - 1)
@@ -1155,13 +1230,13 @@ H.key_methods[kc('<C-w>')] = function(state)
 end
 
 -- Special insert
-H.key_methods[kc('<C-k>')] = function(state)
+H.key_methods[kc('<C-k>')] = function(state, _)
   local ok, new = pcall(vim.fn.digraph_get, H.getcharstr_many(2))
   if not ok then return end
   H.insert_at_caret(state, new)
 end
 
-H.key_methods[kc('<C-r>')] = function(state)
+H.key_methods[kc('<C-r>')] = function(state, _)
   -- Get register content
   local register = H.getcharstr()
   if register == nil then return end
@@ -1178,7 +1253,7 @@ H.key_methods[kc('<C-r>')] = function(state)
   H.insert_at_caret(state, reg_content)
 end
 
-H.key_methods[kc('<C-q>')] = function(state)
+H.key_methods[kc('<C-q>')] = function(state, _)
   local char = H.getcharstr()
   if char == nil then return end
 
@@ -1196,11 +1271,11 @@ end
 H.key_methods[kc('<C-v>')] = H.key_methods[kc('<C-q>')]
 
 -- History navigation
-H.key_methods[kc('<Up>')] = function(state)
+H.key_methods[kc('<Up>')] = function(state, _)
   if not H.init_state_complete(state, 'history') then return end
   H.advance_state_complete(state, -1)
 end
-H.key_methods[kc('<Down>')] = function(state)
+H.key_methods[kc('<Down>')] = function(state, _)
   if not H.init_state_complete(state, 'history') then return end
   H.advance_state_complete(state, 1)
 end
@@ -1208,23 +1283,35 @@ H.key_methods[kc('<C-n>')] = H.key_methods[kc('<Down>')]
 H.key_methods[kc('<C-p>')] = H.key_methods[kc('<Up>')]
 
 -- Completion navigation
-H.key_methods[kc('<Tab>')] = function(state)
+H.key_methods[kc('<Tab>')] = function(state, _)
   if not H.init_state_complete(state, state.opts.completion) then return end
   H.advance_state_complete(state, 1)
 end
-H.key_methods[kc('<S-Tab>')] = function(state)
+H.key_methods[kc('<S-Tab>')] = function(state, _)
   if not H.init_state_complete(state, state.opts.completion) then return end
   H.advance_state_complete(state, -1)
 end
 
 -- Miscellaneous
-H.key_methods[kc('<C-o>')] = function(state)
+H.key_methods[kc('<C-o>')] = function(state, _)
   local next =
     { cursor = 'line', line = 'buffer', buffer = 'window', window = 'tabpage', tabpage = 'editor', editor = 'cursor' }
   state.opts.scope = next[state.opts.scope]
 end
-H.key_methods[kc('<C-s>')] = function(state) state.data.new_style = (state.data.next_styles or {})[state.data.style] end
-H.key_methods[kc('<C-x>')] = function(state) state.opts.hide = not state.opts.hide end
+H.key_methods[kc('<C-s>')] = function(state, _) state.data.new_style = (state.data.next_styles or {})[state.data.style] end
+H.key_methods[kc('<C-x>')] = function(state, _) state.opts.hide = not state.opts.hide end
+
+-- Autopair keys
+H.key_methods_autopair = {}
+H.key_methods_autopair['('] = function(state) H.autopair_open(state, '()') end
+H.key_methods_autopair['['] = function(state) H.autopair_open(state, '[]') end
+H.key_methods_autopair['{'] = function(state) H.autopair_open(state, '{}') end
+H.key_methods_autopair[')'] = function(state) H.autopair_close(state, ')') end
+H.key_methods_autopair[']'] = function(state) H.autopair_close(state, ']') end
+H.key_methods_autopair['}'] = function(state) H.autopair_close(state, '}') end
+H.key_methods_autopair['"'] = function(state) H.autopair_closeopen(state, '""', '"') end
+H.key_methods_autopair["'"] = function(state) H.autopair_closeopen(state, "''", "'") end
+H.key_methods_autopair['`'] = function(state) H.autopair_closeopen(state, '``', '`') end
 
 -- Local helpers
 H.insert_at_caret = function(state, new_text)
@@ -1271,6 +1358,28 @@ H.advance_state_complete = function(state, increment)
   local old_len = vim.fn.strchars(old)
   state.input = vim.fn.strcharpart(input, 0, caret - old_len - 1) .. new .. vim.fn.strcharpart(input, caret - 1)
   state.caret = caret + (vim.fn.strchars(new) - old_len)
+end
+
+H.autopair_open = function(state, pair)
+  H.insert_at_caret(state, pair)
+  state.caret = state.caret - 1
+end
+
+H.autopair_close = function(state, close_char)
+  local is_before_close = vim.fn.strcharpart(state.input, state.caret - 1, 1) == close_char
+  if is_before_close then state.caret = state.caret + 1 end
+  if not is_before_close then H.insert_at_caret(state, close_char) end
+end
+
+H.autopair_closeopen = function(state, pair, close_char)
+  local is_before_close = vim.fn.strcharpart(state.input, state.caret - 1, 1) == close_char
+  if is_before_close then H.autopair_close(state, close_char) end
+  if not is_before_close then H.autopair_open(state, pair) end
+end
+
+H.is_inside_pair = function(state)
+  local neigh = vim.fn.strcharpart(state.input, state.caret - 2, 2)
+  return ({ ['()'] = true, ['[]'] = true, ['{}'] = true, ['""'] = true, ["''"] = true, ['``'] = true })[neigh] ~= nil
 end
 
 -- Default complete handler ---------------------------------------------------
@@ -1492,7 +1601,7 @@ H.get_chunks = function(opts, state, max_width)
   local name = string.format('opts.to_chunks(state, %s)', vim.inspect(max_width))
   H.check_array_of(name, res, 'table')
   for i, ch in ipairs(res) do
-    local prefix = string.format('%s[%d].', name, i)
+    local prefix = string.format('%s[%d]', name, i)
     H.check_type(prefix .. '[1]', ch[1], 'string')
     H.check_type(prefix .. '[2]', ch[2], 'string')
   end
@@ -1555,10 +1664,15 @@ end
 H.get_chunks_width = function(chunks) return vim.fn.strchars(H.get_chunks_text(chunks)) end
 
 -- Highlight ranges -----------------------------------------------------------
---- Add new highlight range on top of an array of ranges that don't intersect
---- and are orderd from left to right.
+--- Add new proper highlight range on top of an array of ranges that don't
+--- intersect and are orderd from left to right.
 ---@private
-H.insert_hl_range = function(arr, from, to, hl)
+H.insert_hl_range = function(arr, max_to, from, to, hl)
+  -- Insert only proper range that fits constraints
+  if from == nil or to == nil or to < 1 or from > max_to then return arr end
+  from, to = H.clamp(from, 1, max_to), H.clamp(to, 1, max_to)
+  if from > to then return arr end
+
   local res, was_inserted = {}, false
   for _, cur in ipairs(arr) do
     -- No overlap
@@ -1575,27 +1689,6 @@ H.insert_hl_range = function(arr, from, to, hl)
   end
   if not was_inserted then table.insert(res, { from = from, to = to, hl = hl }) end
   return res
-end
-
-H.fill_hl_gaps = function(arr, max_to, hl)
-  arr = arr or {}
-  arr[1] = arr[1] or { from = 1, to = max_to, hl = hl }
-
-  local res = {}
-  for i = 1, #arr do
-    local prev_to = i == 1 and 0 or arr[i - 1].to
-    H.append_hl_range(res, max_to, prev_to + 1, arr[i].from - 1, hl)
-    H.append_hl_range(res, max_to, arr[i].from, arr[i].to, arr[i].hl)
-  end
-  H.append_hl_range(res, max_to, arr[#arr].to + 1, max_to, hl)
-  return res
-end
-
-H.append_hl_range = function(arr, max_to, from, to, hl)
-  if from == nil or to == nil or to < 1 or from > max_to then return end
-  from, to = H.clamp(from, 1, max_to), H.clamp(to, 1, max_to)
-  if from > to then return end
-  table.insert(arr, { from = from, to = to, hl = hl })
 end
 
 H.make_ui_select_hl_fun = function(hl_fun)
