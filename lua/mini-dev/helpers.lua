@@ -165,7 +165,7 @@ Helpers.new_child_neovim = function()
     child.lua(([[package.loaded['%s'] = nil]]):format(module_name))
 
     -- Remove global table
-    child.lua(('_G[%s] = nil'):format(tbl_name))
+    child.lua(('_G["%s"] = nil'):format(tbl_name))
 
     -- Remove autocmd group
     if child.fn.exists('#' .. tbl_name) == 1 then child.api.nvim_del_augroup_by_name(tbl_name) end
@@ -201,6 +201,11 @@ Helpers.skip_on_macos = function(msg)
   if Helpers.is_macos() then MiniTest.skip(msg or 'Does not test properly on MacOS') end
 end
 
+Helpers.is_linux = function() return vim.fn.has('linux') == 1 end
+Helpers.skip_on_linux = function(msg)
+  if Helpers.is_linux() then MiniTest.skip(msg or 'Does not test properly on Linux') end
+end
+
 -- Standardized way of dealing with time
 Helpers.is_slow = function() return Helpers.is_ci() and (Helpers.is_windows() or Helpers.is_macos()) end
 Helpers.skip_if_slow = function(msg)
@@ -210,6 +215,7 @@ end
 Helpers.get_time_const = function(delay)
   local coef = 1
   if Helpers.is_ci() then
+    if Helpers.is_linux() then coef = 2 end
     if Helpers.is_windows() then coef = 5 end
     if Helpers.is_macos() then coef = 15 end
   end
@@ -228,7 +234,8 @@ end
 Helpers.get_n_retry = function(n)
   local coef = 1
   if Helpers.is_ci() then
-    if Helpers.is_windows() then coef = 2 end
+    if Helpers.is_linux() then coef = 2 end
+    if Helpers.is_windows() then coef = 3 end
     if Helpers.is_macos() then coef = 4 end
   end
   return coef * n

@@ -156,9 +156,9 @@
 ---   local key_handler = function(state, key)
 ---     -- Adjust prompt and scope
 ---     state.opts.prompt = state.opts.prompt:gsub('[?:]%s*$', '')
----     -- - This makes `vim.lsp.buf.rename()` use cursor scope
+---     -- - Override hard-coded "cursor" scope for `vim.lsp.buf.rename()`
 ---     if state.opts.prompt == 'New Name' then
----       state.opts.scope = 'cursor'
+---       state.opts.scope = 'editor'
 ---     end
 ---
 ---     -- Hide from view and history
@@ -225,6 +225,15 @@ local H = {}
 ---   require('mini.input').setup({}) -- replace {} with your config table
 --- <
 MiniInput.setup = function(config)
+  -- -- TODO: Remove after Neovim=0.9 support is dropped
+  -- if vim.fn.has('nvim-0.10') == 0 then
+  --   vim.notify(
+  --     '(mini.input) Neovim<0.10 is soft deprecated (module works but is not supported).'
+  --       .. " It will be deprecated after the next 'mini.nvim' release (module might not work)."
+  --       .. ' Please update your Neovim version.'
+  --   )
+  -- end
+
   -- Export module
   _G.MiniInput = MiniInput
 
@@ -240,11 +249,11 @@ MiniInput.setup = function(config)
   -- Create default highlighting
   H.create_default_hl()
 
-  -- Adjust terminal emulator's pasting with active input
-  H.adjust_vim_paste()
-
   -- Set custom implementation
   vim.ui.input = MiniInput.ui_input
+
+  -- Adjust terminal emulator's pasting with active input
+  H.adjust_vim_paste()
 end
 
 --- Defaults ~
@@ -355,14 +364,16 @@ MiniInput.config = {
 ---     Default: `{}`.
 ---   - <prompt> `(string)` - intention of the input, same as in |input()|.
 ---     Default: `'Input'`.
----   - <scope> `(string)` - same as in |MiniInput.config|.
+---   - <scope> `(string)` - same as in |MiniInput.config|. Default: the value from
+---     `MiniInput.config` except some hard coded exceptions:
+---       - |vim.lsp.buf.rename()| will use "cursor" if no `new_name` is supplied.
 ---
 ---@return string|nil User input if accepted or `nil` if canceled.
 ---
 ---@usage >lua
 ---   local input = MiniInput.get({
 ---     -- Intention of the input
----     prompt = 'New word',
+---     prompt = 'New value',
 ---     -- The input is for something at cursor
 ---     scope = 'cursor',
 ---     -- Emulate pressing `a`, `<BS>`, and `b`
@@ -371,6 +382,8 @@ MiniInput.config = {
 --- <
 MiniInput.get = function(opts)
   H.check_type('opts', opts, 'table', true)
+  opts = opts or {}
+  opts.scope = opts.scope or (_G.MiniInput or {})._temp_default_scope
 
   -- Only allow one input at a time
   if H.state ~= nil then return nil end
@@ -991,7 +1004,13 @@ H.setup_config = function(config)
   return config
 end
 
-H.apply_config = function(config) MiniInput.config = config end
+H.apply_config = function(config)
+  MiniInput.config = config
+
+  -- Ensure default scope for some core functions
+  -- NOTE: Use `vim.schedule` to not load `vim.lsp` during startup
+  vim.schedule(function() vim.lsp.buf.rename = H.mock_lsp_buf_rename(vim.lsp.buf.rename) end)
+end
 
 H.create_autocommands = function()
   local gr = vim.api.nvim_create_augroup('MiniInput', {})
@@ -1046,7 +1065,7 @@ H.state_new = function(opts)
   if opts.hide == nil then opts.hide = false end
   opts.init_keys = opts.init_keys or {}
   opts.prompt = opts.prompt or 'Input'
-  opts.scope = opts.scope or H.get_config().scope
+  -- opts.scope should already be precomputed
 
   return { caret = 1, data = {}, input = '', opts = opts, status = 'start' }
 end
@@ -1103,6 +1122,7 @@ H.state_finish = function()
   local res = H.state.status == 'accept' and H.state.input or nil
   local err, opts = H.cache.error, vim.deepcopy(H.state.opts)
   H.state, H.cache = nil, {}
+  (_G.MiniInput or {})._temp_default_scope = nil
 
   if err ~= nil then H.error(err) end
 
@@ -1116,6 +1136,13 @@ end
 H.state_is_end = function(state)
   state = state or H.state
   return state.status == 'accept' or state.status == 'cancel'
+end
+
+H.mock_lsp_buf_rename = function(f)
+  return function(new_name, opts)
+    if new_name == nil then (_G.MiniInput or {})._temp_default_scope = 'cursor' end
+    return f(new_name, opts)
+  end
 end
 
 -- Handlers -------------------------------------------------------------------
