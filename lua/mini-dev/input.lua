@@ -150,6 +150,8 @@
 ---   insert it at caret as is".
 --- - `key` can be any string. Like as part of `opts.init_keys` in |MiniInput.get()|
 ---   or pasting from a clipboard (|vim.paste()|).
+--- - Would be called for anything registered via |getcharstr()|. This includes
+---   key combos (<M-...>, <C-S-...>, etc.), mouse clicks and wheel scrolls.
 ---
 --- Perform custom actions based on arbitrary conditions: >lua
 ---
@@ -476,10 +478,10 @@ end
 ---
 ---@return table Array with data about all previous non-hidden inputs (from earliest
 ---   to latest). Each element is a table with the following fields:
+---   - <cwd> `(string)` - |current-directory| at the time of input's end.
 ---   - <input> `(string)` - input result.
 ---   - <prompt> `(string)` - `opts.prompt` supplied in |MiniInput.get()|.
 ---   - <scope> `(string)` - `opts.scope` supplied in |MiniInput.get()|.
----   - <cwd> `(string)` - |current-directory| at the time of input's end.
 MiniInput.get_history = function() return vim.deepcopy(H.history) end
 
 --- Set input history
@@ -489,11 +491,11 @@ MiniInput.get_history = function() return vim.deepcopy(H.history) end
 MiniInput.set_history = function(history)
   H.check_array_of('history', history, 'table')
   for i, h in ipairs(history) do
-    local prefix = string.format('history[%d].', i)
-    H.check_type(prefix .. 'cwd', h.cwd, 'string')
-    H.check_type(prefix .. 'input', h.input, 'string')
-    H.check_type(prefix .. 'prompt', h.prompt, 'string')
-    H.check_one_of(prefix .. 'scope', h.scope, { 'cursor', 'line', 'buffer', 'window', 'tabpage', 'editor' })
+    local item = string.format('history[%d]', i)
+    H.check_type(item .. '.cwd', h.cwd, 'string')
+    H.check_type(item .. '.input', h.input, 'string')
+    H.check_type(item .. '.prompt', h.prompt, 'string')
+    H.check_one_of(item .. '.scope', h.scope, { 'cursor', 'line', 'buffer', 'window', 'tabpage', 'editor' })
   end
 
   H.history = vim.deepcopy(history)
@@ -816,8 +818,8 @@ end
 ---     - <C-s> - change view style. Works only with |MiniInput.gen_view| view
 ---       handlers. Cycles through all available ones.
 ---     - <C-x> - toggle hide/unhide of the input.
---- - If a key is not `nil` and not special, it is inserted at caret as is.
----   Even if it is more than a single character.
+--- - Special keys (combo, mouse, but not whitespace) not listed above - ignored.
+---   Anything else (even more than a single character) - inserted at caret.
 ---
 ---@param state table TODO
 ---@param key string|nil A key to process.
@@ -827,8 +829,9 @@ MiniInput.default_key = function(state, key, opts)
   opts = opts or {}
   if key == nil or H.state_is_end(state) then return end
   if opts.autopair and H.key_methods_autopair[key] ~= nil then return H.key_methods_autopair[key](state) end
-  local method = H.key_methods[key] or function(s, _) H.insert_at_caret(s, key) end
-  method(state, opts)
+  if H.key_methods[key] ~= nil then return H.key_methods[key](state, opts) end
+  if H.is_special_char(key) then return end
+  H.insert_at_caret(state, key)
 end
 
 --- Default highlight handler
@@ -1007,6 +1010,9 @@ end
 H.apply_config = function(config)
   MiniInput.config = config
 
+  -- Ensure clear history
+  H.history = {}
+
   -- Ensure default scope for some core functions
   -- NOTE: Use `vim.schedule` to not load `vim.lsp` during startup
   vim.schedule(function() vim.lsp.buf.rename = H.mock_lsp_buf_rename(vim.lsp.buf.rename) end)
@@ -1019,7 +1025,7 @@ H.create_autocommands = function()
     vim.api.nvim_create_autocmd(event, { group = gr, pattern = pattern, callback = callback, desc = desc })
   end
 
-  au('VimResized', '*', MiniInput.refresh, 'Refresh on resize')
+  au('VimResized', '*', function() MiniInput.refresh() end, 'Refresh on resize')
   au('ColorScheme', '*', H.create_default_hl, 'Ensure colors')
 end
 
@@ -1096,11 +1102,11 @@ H.state_validate = function(x, cur)
   if x.highlight ~= nil then
     H.check_array_of('state.highlight', x.highlight, 'table')
     for i, h in ipairs(x.highlight) do
-      local prefix = string.format('state.highlight[%d].', i)
-      H.check_type(prefix .. 'from', h.from, 'number')
-      H.check_type(prefix .. 'to', h.to, 'number')
-      H.check_type(prefix .. 'hl', h.hl, 'string')
-      if h.from > h.to then H.error(string.format('%s.from is bigger than %s.to', prefix, prefix)) end
+      local item = string.format('state.highlight[%d]', i)
+      H.check_type(item .. '.from', h.from, 'number')
+      H.check_type(item .. '.to', h.to, 'number')
+      H.check_type(item .. '.hl', h.hl, 'string')
+      if h.from > h.to then H.error(string.format('%s.from is bigger than %s.to', item, item)) end
     end
   end
 
@@ -1576,6 +1582,7 @@ H.ensure_floatwin_win = function(state, config)
   local buf_id = state.data.floating_buf_id
   local win_id = state.data.floating_win_id
   if H.is_valid_win(win_id) then
+    config.noautocmd = nil
     vim.api.nvim_win_set_config(win_id, config)
   else
     win_id = vim.api.nvim_open_win(buf_id, false, config)
@@ -1628,9 +1635,9 @@ H.get_chunks = function(opts, state, max_width)
   local name = string.format('opts.to_chunks(state, %s)', vim.inspect(max_width))
   H.check_array_of(name, res, 'table')
   for i, ch in ipairs(res) do
-    local prefix = string.format('%s[%d]', name, i)
-    H.check_type(prefix .. '[1]', ch[1], 'string')
-    H.check_type(prefix .. '[2]', ch[2], 'string')
+    local item = string.format('%s[%d]', name, i)
+    H.check_type(item .. '[1]', ch[1], 'string')
+    H.check_type(item .. '[2]', ch[2], 'string')
   end
 
   return res
@@ -1759,15 +1766,17 @@ end
 H.check_array_of = function(name, x, ref_type)
   if not H.islist(x) then H.error('`' .. name .. '` should be array') end
   for i, k in ipairs(x) do
-    if type(k) ~= ref_type then H.error('`' .. name .. '` items should be ' .. ref_type) end
+    if type(k) ~= ref_type then H.error('Every `' .. name .. '` item should be ' .. ref_type) end
   end
 end
 
 H.set_buf_name = function(buf_id, name) vim.api.nvim_buf_set_name(buf_id, 'miniinput://' .. buf_id .. '/' .. name) end
 
+H.notify = function(msg, level_name) vim.notify('(mini.input) ' .. msg, vim.log.levels[level_name]) end
+
 H.getcharstr = function(lmap)
   H.cache.is_in_getcharstr = true
-  local ok, char = pcall(vim.fn.getcharstr, -1, { cursor = 'hide' })
+  local ok, char = H.safe_fn_getcharstr()
   H.cache.is_in_getcharstr = nil
 
   -- Cache possible error if it doesn't come from pressing <C-c>
@@ -1780,6 +1789,10 @@ H.getcharstr = function(lmap)
   return vim.o.iminsert == 0 and char or ((lmap or {})[char] or char)
 end
 
+-- TODO: Remove after compatibility with Neovim=0.10 is dropped
+H.safe_fn_getcharstr = function() return pcall(vim.fn.getcharstr, -1, { cursor = 'hide' }) end
+if vim.fn.has('nvim-0.11') == 0 then H.safe_fn_getcharstr = function() return pcall(vim.fn.getcharstr) end end
+
 H.getcharstr_many = function(n)
   local res = {}
   for i = 1, n do
@@ -1787,6 +1800,12 @@ H.getcharstr_many = function(n)
     if res[i] == nil then return nil end
   end
   return table.concat(res)
+end
+
+H.is_special_char = function(x)
+  -- Remove allowed character that are specially translated
+  x = x:gsub('[%s<]', '')
+  return vim.fn.keytrans(x) ~= x
 end
 
 H.cache_error = function(msg)
