@@ -68,6 +68,7 @@
 ---     - ...
 ---
 --- # Highlight groups ~
+--- *MiniInput-hl-groups*
 ---
 --- - `MiniInputAdded`   - added text during completion navigation.
 --- - `MiniInputBorder`  - border of a floating window.
@@ -194,9 +195,9 @@
 ---   local view_handler = function(state)
 ---     -- Choose appropriate view handler based on current scope
 ---     -- NOTE: Needs extra code to support interactive change of scope
----     local scope, view = state.opts.scope, view_virtline
+---     local scope, view = state.opts.scope, view_tabline
 ---     if scope == 'buffer' or scope == 'window' then view = view_winbar end
----     if scope == 'editor' or scope == 'tabpage' then view = view_tabline end
+---     if scope == 'cursor' or scope == 'line' then view = view_virtline end
 ---     return view(state)
 ---   end
 ---
@@ -315,8 +316,8 @@ end
 --- # Scope ~
 ---
 --- `config.scope` is a string that defines an input scope. It is meant as an extra
---- information for handlers to tweak their behavior (like `view` style, etc.).
---- Possible values: `"cursor"`, `"line"`, `"buffer"`, `"window"`, `"tabpage"`, `"editor"`.
+--- information for handlers to tweak their behavior (`view` style, etc.). Possible
+--- values: `"cursor"`, `"line"`, `"buffer"`, `"window"`, `"tabpage"`, `"editor"`, `"project"`.
 ---
 --- The value from |MiniInput.config| is used as the default for |MiniInput.get()|.
 MiniInput.config = {
@@ -335,7 +336,7 @@ MiniInput.config = {
     view = nil,
   },
 
-  -- Default input scope: cursor, line, buffer, window, tabpage, editor
+  -- Default input scope: cursor/line/buffer/window/tabpage/editor/project
   scope = 'editor',
 }
 --minidoc_afterlines_end
@@ -457,7 +458,7 @@ end
 ---   Fields of a single highlight range:
 ---     - <from> `(number)` - character index (one-indexed) of range start.
 ---     - <to> `(number)` - character index (one-indexed) of range end (inclusive).
----       Should not be smaller than <from>.
+---       Should not be smaller than <from>. Can be |math.huge|.
 ---     - <hl> `(string)` - higlight group to use for highlighting.
 --- - <input> `(string|nil)` - current user input or `nil` for hidden input.
 --- - <opts> `(table)` - input options, same as in |MiniInput.get()|.
@@ -495,7 +496,7 @@ MiniInput.set_history = function(history)
     H.check_type(item .. '.cwd', h.cwd, 'string')
     H.check_type(item .. '.input', h.input, 'string')
     H.check_type(item .. '.prompt', h.prompt, 'string')
-    H.check_one_of(item .. '.scope', h.scope, { 'cursor', 'line', 'buffer', 'window', 'tabpage', 'editor' })
+    H.check_one_of(item .. '.scope', h.scope, H.allowed_scopes)
   end
 
   H.history = vim.deepcopy(history)
@@ -626,8 +627,9 @@ MiniInput.gen_view = {}
 MiniInput.gen_view.floatwin = function(opts)
   local default_opts = { style = 'BL' }
   default_opts.adjust_config = function(_, config) return config end
+  local default_to_chunks_opts = { include_prompt = false, include_hint = false }
   default_opts.to_chunks = function(state, max_width)
-    return MiniInput.state_to_chunks(state, max_width, { show_prompt = false, show_complete_hint = false })
+    return MiniInput.state_to_chunks(state, max_width, default_to_chunks_opts)
   end
   opts = vim.tbl_extend('force', default_opts, opts or {})
   H.check_type('opts.adjust_config', opts.adjust_config, 'callable')
@@ -647,6 +649,8 @@ MiniInput.gen_view.floatwin = function(opts)
     local style, _ = H.handle_view_style(state, opts.style, next_styles)
 
     -- Try to fit all chunks first, but later still truncate to window width
+    local winborder = vim.fn.exists('+winborder') == 0 and '' or vim.o.winborder
+    default_to_chunks_opts = { include_prompt = winborder == 'none', include_hint = winborder == 'none' }
     local chunks = H.get_chunks(opts, state)
     local default_config = H.default_floatwin_config(state, style, H.get_chunks_width(chunks))
     local config = opts.adjust_config(state, default_config)
@@ -673,7 +677,9 @@ end
 ---   local view_winbar = input.gen_view.uiline({ style = 'winbar' })
 ---   local view_handler = function(state)
 ---     local scope, view = state.opts.scope, view_winbar
----     if scope == 'tabpage' or scope == 'editor' then view = view_tabline end
+---     if scope == 'tabpage' or scope == 'editor' or scope == 'project' then
+---       view = view_tabline
+---     end
 ---     return view(state)
 ---   end
 ---
@@ -916,16 +922,17 @@ end
 ---
 --- - Treat `state.highlight` elements in increasing priority, i.e. later ones
 ---   are placed "on top" of the previous ones if they overlap.
+--- - Uses pre-determined module's highlight groups.
 MiniInput.state_to_chunks = function(state, max_width, opts)
   H.state_validate(state)
   H.check_type('max_width', max_width, 'number', true)
-  local default_opts = { keytrans = true, show_prompt = true, show_complete_hint = true }
+  local default_opts = { keytrans = true, include_prompt = true, include_hint = true }
   default_opts.symbol_caret = '▏'
   default_opts.symbol_hide = '•'
   opts = vim.tbl_extend('force', default_opts, opts or {})
   H.check_type('opts.keytrans', opts.keytrans, 'boolean')
-  H.check_type('opts.show_prompt', opts.show_prompt, 'boolean')
-  H.check_type('opts.show_complete_hint', opts.show_complete_hint, 'boolean')
+  H.check_type('opts.include_prompt', opts.include_prompt, 'boolean')
+  H.check_type('opts.include_hint', opts.include_hint, 'boolean')
   H.check_type('opts.symbol_caret', opts.symbol_caret, 'string')
   H.check_type('opts.symbol_hide', opts.symbol_hide, 'string')
 
@@ -950,7 +957,7 @@ MiniInput.state_to_chunks = function(state, max_width, opts)
   -- Compute chunks in specific order:
   -- prompt - input_left - caret - complete_hint - input_right
   local chunks, keytrans = {}, opts.keytrans
-  if opts.show_prompt and state.opts.prompt ~= '' then
+  if opts.include_prompt and state.opts.prompt ~= '' then
     local prompt = vim.trim(state.opts.prompt)
     local prompt_hl = hide and 'MiniInputHide' or 'MiniInputPrompt'
     local new = { { prompt, prompt_hl }, { ' ', 'MiniInputNormal' } }
@@ -962,7 +969,7 @@ MiniInput.state_to_chunks = function(state, max_width, opts)
   if opts.symbol_caret ~= '' then H.append_chunks(chunks, { { opts.symbol_caret, 'MiniInputCaret' } }, keytrans) end
   local caret_offset = H.get_chunks_width(chunks)
 
-  if opts.show_complete_hint and state.complete ~= nil then
+  if opts.include_hint and state.complete ~= nil then
     local hint = string.format('(%d/%d)', state.complete.id, #state.complete.items)
     H.append_chunks(chunks, { { hint, 'MiniInputHint' } }, keytrans)
   end
@@ -981,6 +988,9 @@ H.state = nil
 
 -- History of inputs
 H.history = {}
+
+-- Supported scopes
+H.allowed_scopes = { 'cursor', 'line', 'buffer', 'window', 'tabpage', 'editor', 'project' }
 
 -- Various cache
 H.cache = { error = nil }
@@ -1082,7 +1092,7 @@ H.state_set = function(new)
   H.state = H.copy_tables(new)
 end
 
-H.state_validate = function(x, cur)
+H.state_validate = function(x)
   H.check_type('state.caret', x.caret, 'number')
   H.check_type('state.data', x.data, 'table')
   H.check_type('state.input', x.input, 'string')
@@ -1117,7 +1127,7 @@ H.state_validate = function(x, cur)
   H.check_type('state.opts.hide', x.opts.hide, 'boolean')
   H.check_array_of('state.opts.init_keys', x.opts.init_keys, 'string')
   H.check_type('state.opts.prompt', x.opts.prompt, 'string')
-  H.check_one_of('state.opts.scope', x.opts.scope, { 'cursor', 'line', 'buffer', 'window', 'tabpage', 'editor' })
+  H.check_one_of('state.opts.scope', x.opts.scope, H.allowed_scopes)
 end
 
 H.state_finish = function()
@@ -1327,9 +1337,11 @@ end
 
 -- Miscellaneous
 H.key_methods[kc('<C-o>')] = function(state, _)
-  local next =
-    { cursor = 'line', line = 'buffer', buffer = 'window', window = 'tabpage', tabpage = 'editor', editor = 'cursor' }
-  state.opts.scope = next[state.opts.scope]
+  local new_scope, n = state.opts.scope, #H.allowed_scopes
+  for i, s in ipairs(H.allowed_scopes) do
+    if s == state.opts.scope then new_scope = H.allowed_scopes[i % n + 1] end
+  end
+  state.opts.scope = new_scope
 end
 H.key_methods[kc('<C-s>')] = function(state, _) state.data.new_style = (state.data.next_styles or {})[state.data.style] end
 H.key_methods[kc('<C-x>')] = function(state, _) state.opts.hide = not state.opts.hide end
@@ -1489,15 +1501,13 @@ H.default_floatwin_config = function(state, style, target_width)
   -- Compute window config
   local winborder = vim.fn.exists('+winborder') == 0 and '' or vim.o.winborder
   local border = winborder == '' and 'single' or nil
-  local has_footer = state.complete ~= nil
-  if winborder == 'none' then border = { '', ' ', '', '', '', has_footer and ' ' or '', '', '' } end
+  local no_border = winborder == 'none'
 
   local title_text = ' ' .. vim.trim(state.opts.prompt) .. ' '
   local width = H.clamp(target_width, vim.fn.strchars(title_text), max_width)
-  local width_offset = winborder == 'none' and 0 or 2
-
   local height = 1
-  local height_offset = winborder == 'none' and 1 or 2
+  local width_offset = no_border and 0 or 2
+  local height_offset = no_border and 0 or 2
 
   local config =
     { relative = 'editor', anchor = 'NW', border = border, style = 'minimal', noautocmd = true, zindex = 251 }
@@ -1505,7 +1515,7 @@ H.default_floatwin_config = function(state, style, target_width)
   -- Compute position and dimensions based on scope
   local ref_rect = { row = has_tabline and 1 or 0, col = 0, width = max_width, height = max_height }
   local scope = state.opts.scope
-  if not (scope == 'editor' or scope == 'tabpage') then
+  if not (scope == 'editor' or scope == 'tabpage' or scope == 'project') then
     -- NOTE: use window for "cursor" as it works when called from command line
     local wininfo = H.get_curwin_info()
     local winrow, wincol, winwidth, winheight = wininfo.winrow - 1, wininfo.wincol - 1, wininfo.width, wininfo.height
@@ -1539,13 +1549,15 @@ H.default_floatwin_config = function(state, style, target_width)
   config.width = width
 
   -- Set title and footer
+  if no_border then return config end
+
   local title_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
   config.title = { { H.fit_to_width(title_text, config.width), title_hl } }
   config.title_pos = 'left'
   if vim.fn.has('nvim-0.10') == 1 then
     local footer_text = ''
     if state.complete ~= nil then footer_text = string.format(' %d/%d ', state.complete.id, #state.complete.items) end
-    config.footer = { { H.fit_to_width(footer_text, config.width), title_hl } }
+    config.footer = { { H.fit_to_width(footer_text, config.width), 'MiniInputHint' } }
     config.footer_pos = 'right'
   end
 

@@ -48,6 +48,30 @@ local mock_finished_input = function(input, prompt, scope)
   type_keys(input, '<CR>')
 end
 
+local mock_state = function(incomplete_state)
+  child.lua('_G.mock_state = ' .. vim.inspect(incomplete_state))
+  child.lua([[
+    _G.mock_state.input = _G.mock_state.input or ''
+    _G.mock_state.caret = _G.mock_state.caret or (vim.fn.strchars(_G.mock_state.input) + 1)
+    _G.mock_state.data = {}
+    _G.mock_state.status = _G.mock_state.status or 'progress'
+
+    local opts = _G.mock_state.opts or {}
+    local default_handlers = {
+      key = MiniInput.default_key,
+      highlight = MiniInput.default_highlight,
+      view = MiniInput.default_view,
+      complete = MiniInput.default_complete,
+    }
+    opts.handlers = vim.tbl_extend('force', default_handlers, opts.handlers or {})
+    if opts.hide == nil then opts.hide = false end
+    opts.init_keys = opts.init_keys or {}
+    opts.prompt = opts.prompt or 'Input'
+    opts.scope = opts.scope or MiniInput.config.scope
+    _G.mock_state.opts = opts
+  ]])
+end
+
 -- Common validators
 local validate_input = function(ref_input, ref_caret, ref_scope)
   local state = get_state()
@@ -338,7 +362,7 @@ T['get_state()']['works'] = function()
 
   type_keys('<C-x>', '<C-o>')
   state = get_state()
-  eq({ hide = state.opts.hide, scope = state.opts.scope }, { hide = true, scope = 'cursor' })
+  eq({ hide = state.opts.hide, scope = state.opts.scope }, { hide = true, scope = 'project' })
 end
 
 T['get_state()']['returns copy'] = function()
@@ -507,6 +531,194 @@ T['default_complete()']['works'] = function() MiniTest.skip() end
 
 T['state_to_chunks()'] = new_set()
 
-T['state_to_chunks()']['works'] = function() MiniTest.skip() end
+local state_to_chunks = function(state, max_width, opts)
+  mock_state(state)
+  child.lua('_G.max_width = ' .. vim.inspect(max_width))
+  child.lua('_G.opts = ' .. vim.inspect(opts))
+  return child.lua_get('MiniInput.state_to_chunks(_G.mock_state, _G.max_width, _G.opts)')
+end
+
+local with_prompt_chunks = function(chunks, prompt)
+  return vim.list_extend({ { prompt or 'Input', 'MiniInputPrompt' }, { ' ', 'MiniInputNormal' } }, chunks)
+end
+
+local caret_ch = { '▏', 'MiniInputCaret' }
+
+T['state_to_chunks()']['works'] = function()
+  local validate = function(input, caret, ref)
+    eq(state_to_chunks({ input = input, caret = caret }), with_prompt_chunks(ref))
+  end
+
+  validate('', 1, { caret_ch })
+  validate('a', 2, { { 'a', 'MiniInputNormal' }, caret_ch })
+  validate('a', 1, { caret_ch, { 'a', 'MiniInputNormal' } })
+  validate('ab', 3, { { 'ab', 'MiniInputNormal' }, caret_ch })
+  validate('ab', 2, { { 'a', 'MiniInputNormal' }, caret_ch, { 'b', 'MiniInputNormal' } })
+  validate('ab', 1, { caret_ch, { 'ab', 'MiniInputNormal' } })
+
+  -- Multibyte characters
+  validate('ф🬗', 3, { { 'ф🬗', 'MiniInputNormal' }, caret_ch })
+  validate('ф🬗', 2, { { 'ф', 'MiniInputNormal' }, caret_ch, { '🬗', 'MiniInputNormal' } })
+  validate('ф🬗', 1, { caret_ch, { 'ф🬗', 'MiniInputNormal' } })
+
+  -- Double-width characters
+  validate('「」', 3, { { '「」', 'MiniInputNormal' }, caret_ch })
+  validate('「」', 2, { { '「', 'MiniInputNormal' }, caret_ch, { '」', 'MiniInputNormal' } })
+  validate('「」', 1, { caret_ch, { '「」', 'MiniInputNormal' } })
+
+  -- Should not include empty prompt
+  eq(state_to_chunks({ input = '', caret = 1, opts = { prompt = '' } }), { caret_ch })
+end
+
+T['state_to_chunks()']['works with `state.highlight`'] = function()
+  local validate = function(ranges, caret, ref)
+    local highlight = vim.tbl_map(function(x) return { from = x[1], to = x[2], hl = x[3] } end, ranges)
+    eq(state_to_chunks({ input = 'abcdefghij', caret = caret, highlight = highlight }), with_prompt_chunks(ref))
+  end
+
+  local ref = { { 'a', 'AA' }, { 'bcdefghij', 'MiniInputNormal' }, caret_ch }
+  validate({ { 1, 1, 'AA' } }, nil, ref)
+
+  ref = { { 'a', 'AA' }, { 'bc', 'BB' }, { 'de', 'CC' }, { 'fghij', 'MiniInputNormal' }, caret_ch }
+  validate({ { 1, 1, 'AA' }, { 2, 3, 'BB' }, { 4, 5, 'CC' } }, nil, ref)
+  validate({ { 2, 3, 'BB' }, { 4, 5, 'CC' }, { 1, 1, 'AA' } }, nil, ref)
+  validate({ { 4, 5, 'CC' }, { 2, 3, 'BB' }, { 1, 1, 'AA' } }, nil, ref)
+
+  -- Should work with inside caret
+  validate({ { 1, 1, 'AA' } }, 1, { caret_ch, { 'a', 'AA' }, { 'bcdefghij', 'MiniInputNormal' } })
+  validate({ { 1, 2, 'AA' } }, 1, { caret_ch, { 'ab', 'AA' }, { 'cdefghij', 'MiniInputNormal' } })
+
+  ref = { { 'a', 'AA' }, caret_ch, { 'b', 'AA' }, { 'cdefghij', 'MiniInputNormal' } }
+  validate({ { 1, 2, 'AA' } }, 2, ref)
+  ref = { { 'ab', 'AA' }, caret_ch, { 'cdefghij', 'MiniInputNormal' } }
+  validate({ { 1, 2, 'AA' } }, 3, ref)
+
+  ref = { { 'ab', 'AA' }, caret_ch, { 'cd', 'BB' }, { 'efghij', 'MiniInputNormal' } }
+  validate({ { 1, 2, 'AA' }, { 3, 4, 'BB' } }, 3, ref)
+  ref = { { 'ab', 'AA' }, { 'c', 'BB' }, caret_ch, { 'd', 'BB' }, { 'efghij', 'MiniInputNormal' } }
+  validate({ { 1, 2, 'AA' }, { 3, 4, 'BB' } }, 4, ref)
+  ref = { { 'ab', 'AA' }, { 'cd', 'BB' }, caret_ch, { 'efghij', 'MiniInputNormal' } }
+  validate({ { 1, 2, 'AA' }, { 3, 4, 'BB' } }, 5, ref)
+
+  -- Gaps from not full coverage should be filled with 'MiniInputNormal'
+  --stylua: ignore
+  ref = {
+    { 'a', 'MiniInputNormal' }, { 'bc', 'AA' }, { 'de', 'MiniInputNormal' }, { 'f', 'BB' },
+    { 'ghij', 'MiniInputNormal' },
+    caret_ch,
+  }
+  validate({ { 2, 3, 'AA' }, { 6, 6, 'BB' } }, nil, ref)
+
+  -- Should allow `to = math.huge`
+  mock_state({ input = 'abc', caret = 4 })
+  -- NOTE: Set `math.huge` explicitly as `vim.inpsect()` translates it into `info`
+  child.lua('_G.mock_state.highlight = { { from = 2, to = math.huge, hl = "AA" } }')
+  ref = with_prompt_chunks({ { 'a', 'MiniInputNormal' }, { 'bc', 'AA' }, caret_ch })
+  eq(child.lua_get('MiniInput.state_to_chunks(_G.mock_state)'), ref)
+end
+
+T['state_to_chunks()']['handles highlight overlap'] = function()
+  -- All combinations of overlapping ranges should work
+  -- Later chunks should be applied "on top" on the normalized previous ones
+  local validate_overlap = function(ranges, ref_ranges)
+    local input = 'abcdefghij'
+    local ref_chunks, max_to = {}, 0
+    for i, r in ipairs(ref_ranges) do
+      ref_chunks[i] = { input:sub(r[1], r[2]), r[3] }
+      max_to = math.max(max_to, r[2])
+    end
+    local rest = string.sub(input, max_to + 1)
+    if rest ~= '' then table.insert(ref_chunks, { rest, 'MiniInputNormal' }) end
+    vim.list_extend(ref_chunks, { caret_ch })
+    ref_chunks = with_prompt_chunks(ref_chunks)
+
+    local highlight = vim.tbl_map(function(x) return { from = x[1], to = x[2], hl = x[3] } end, ranges)
+    eq(state_to_chunks({ input = input, caret = 11, highlight = highlight }), ref_chunks)
+  end
+
+  -- - Intersect
+  validate_overlap(
+    { { 1, 4, 'AA' }, { 3, 6, 'BB' }, { 5, 7, 'CC' } },
+    { { 1, 2, 'AA' }, { 3, 4, 'BB' }, { 5, 7, 'CC' } }
+  )
+  validate_overlap(
+    { { 1, 2, 'AA' }, { 2, 3, 'BB' }, { 3, 4, 'CC' } },
+    { { 1, 1, 'AA' }, { 2, 2, 'BB' }, { 3, 4, 'CC' } }
+  )
+
+  -- - Split
+  validate_overlap({ { 1, 4, 'AA' }, { 2, 3, 'BB' } }, { { 1, 1, 'AA' }, { 2, 3, 'BB' }, { 4, 4, 'AA' } })
+  validate_overlap({ { 1, 4, 'AA' }, { 1, 3, 'BB' } }, { { 1, 3, 'BB' }, { 4, 4, 'AA' } })
+  validate_overlap({ { 1, 4, 'AA' }, { 2, 4, 'BB' } }, { { 1, 1, 'AA' }, { 2, 4, 'BB' } })
+  validate_overlap({ { 1, 4, 'AA' }, { 1, 4, 'BB' } }, { { 1, 4, 'BB' } })
+
+  validate_overlap({ { 1, 3, 'AA' }, { 2, 2, 'BB' } }, { { 1, 1, 'AA' }, { 2, 2, 'BB' }, { 3, 3, 'AA' } })
+  validate_overlap({ { 1, 3, 'AA' }, { 1, 1, 'BB' } }, { { 1, 1, 'BB' }, { 2, 3, 'AA' } })
+  validate_overlap({ { 1, 3, 'AA' }, { 3, 3, 'BB' } }, { { 1, 2, 'AA' }, { 3, 3, 'BB' } })
+  validate_overlap({ { 1, 1, 'AA' }, { 1, 1, 'BB' } }, { { 1, 1, 'BB' } })
+
+  -- - Cover
+  validate_overlap({ { 2, 3, 'AA' }, { 1, 4, 'BB' } }, { { 1, 4, 'BB' } })
+
+  -- - Mix
+  validate_overlap(
+    { { 1, 2, 'AA' }, { 1, 3, 'BB' }, { 2, 4, 'CC' }, { 3, 5, 'DD' }, { 5, 5, 'EE' } },
+    { { 1, 1, 'BB' }, { 2, 2, 'CC' }, { 3, 4, 'DD' }, { 5, 5, 'EE' } }
+  )
+  validate_overlap(
+    { { 1, 6, 'AA' }, { 3, 8, 'BB' }, { 5, 9, 'CC' } },
+    { { 1, 2, 'AA' }, { 3, 4, 'BB' }, { 5, 9, 'CC' } }
+  )
+end
+
+T['state_to_chunks()']['works with `state.highlight` and multibyte input'] = function() MiniTest.skip() end
+
+T['state_to_chunks()']['normalizes highlight ranges'] = function()
+  local validate = function(ranges, ref)
+    local highlight = vim.tbl_map(function(x) return { from = x[1], to = x[2], hl = x[3] } end, ranges)
+    ref = with_prompt_chunks(ref)
+    table.insert(ref, caret_ch)
+    eq(state_to_chunks({ input = 'abcd', caret = 5, highlight = highlight }), ref)
+  end
+
+  -- Ranges completely outside should be ignored
+  validate({ { -2, 0, 'UU' }, { 1, 2, 'AA' }, { 5, 10, 'VV' } }, { { 'ab', 'AA' }, { 'cd', 'MiniInputNormal' } })
+
+  -- Ranges partially outside should be clamped to edges
+  validate({ { -2, 1, 'AA' }, { 4, 10, 'BB' } }, { { 'a', 'AA' }, { 'bc', 'MiniInputNormal' }, { 'd', 'BB' } })
+  validate({ { -2, 2, 'AA' }, { 3, 10, 'BB' } }, { { 'ab', 'AA' }, { 'cd', 'BB' } })
+end
+
+T['state_to_chunks()']['works with `state.complete`'] = function() MiniTest.skip() end
+
+T['state_to_chunks()']['works with `state.highlight` and `state.complete`'] = function() MiniTest.skip() end
+
+T['state_to_chunks()']['respects `max_width`'] = function() MiniTest.skip() end
+
+T['state_to_chunks()']['respects `opts.keytrans`'] = function() MiniTest.skip() end
+
+T['state_to_chunks()']['respects `opts.include_prompt`'] = function() MiniTest.skip() end
+
+T['state_to_chunks()']['respects `opts.include_hint`'] = function() MiniTest.skip() end
+
+T['state_to_chunks()']['respects `opts.symbol_caret`'] = function()
+  -- Regular
+
+  -- Empty
+
+  -- Double-width
+  MiniTest.skip()
+end
+
+T['state_to_chunks()']['respects `opts.symbol_hide`'] = function()
+  -- Regular
+
+  -- Empty
+
+  -- Double-width
+  MiniTest.skip()
+end
+
+T['state_to_chunks()']['validates input'] = function() MiniTest.skip() end
 
 return T
