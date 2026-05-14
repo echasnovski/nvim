@@ -26,8 +26,6 @@
 --     - Views should work with double-width charactrs (like Japanese).
 --     - Typing `<C-v><Tab>` should insert literal `\t`. Its display should
 --       work in any built-in view (properly compute width).
---     - `state_to_chunks()` should fit into maximum width when there are
---       translated characters.
 
 --- *mini.input* Get user input
 ---
@@ -312,6 +310,10 @@ end
 --- ## Complete ~
 ---
 --- Computes suggestions for the current state based on given method.
+---
+--- Notes:
+--- - It is the job of other handlers to use `state.complete` info to show,
+---   advance, and highlight completion candidate(s). As do default handlers.
 ---
 --- # Scope ~
 ---
@@ -923,6 +925,13 @@ end
 --- - Treat `state.highlight` elements in increasing priority, i.e. later ones
 ---   are placed "on top" of the previous ones if they overlap.
 --- - Uses pre-determined module's highlight groups.
+--- - TODO: truncates output chunsk to fit maximum width `max_width` while
+---   trying to center the caret.
+---
+---@param state table ...
+---@param max_width number|nil Maximum allowed total text width. Can be |math.huge|.
+---@param opts table|nil Options. Possible fields:
+---   - ...
 MiniInput.state_to_chunks = function(state, max_width, opts)
   H.state_validate(state)
   H.check_type('max_width', max_width, 'number', true)
@@ -1093,6 +1102,8 @@ H.state_set = function(new)
 end
 
 H.state_validate = function(x)
+  H.check_type('state', x, 'table')
+
   H.check_type('state.caret', x.caret, 'number')
   H.check_type('state.data', x.data, 'table')
   H.check_type('state.input', x.input, 'string')
@@ -1107,6 +1118,7 @@ H.state_validate = function(x)
     H.check_type('state.complete.base', x.complete.base, 'string')
     H.check_array_of('state.complete.items', x.complete.items, 'string')
     H.check_type('state.complete.id', x.complete.id, 'number')
+    H.check_type('state.complete.method', x.complete.method, 'string')
   end
 
   if x.highlight ~= nil then
@@ -1297,7 +1309,7 @@ H.key_methods[kc('<C-r>')] = function(state, _)
 end
 
 H.key_methods[kc('<C-q>')] = function(state, _)
-  local char = H.getcharstr()
+  local char = H.getcharstr({}, true)
   if char == nil then return end
 
   -- See `:h i_CTRL-V_digit`
@@ -1342,9 +1354,13 @@ H.key_methods[kc('<C-o>')] = function(state, _)
     if s == state.opts.scope then new_scope = H.allowed_scopes[i % n + 1] end
   end
   state.opts.scope = new_scope
+  H.notify('Changed scope to ' .. vim.inspect(new_scope))
 end
 H.key_methods[kc('<C-s>')] = function(state, _) state.data.new_style = (state.data.next_styles or {})[state.data.style] end
-H.key_methods[kc('<C-x>')] = function(state, _) state.opts.hide = not state.opts.hide end
+H.key_methods[kc('<C-x>')] = function(state, _)
+  state.opts.hide = not state.opts.hide
+  H.notify('Input is ' .. (state.opts.hide and '' or 'not ') .. 'hidden')
+end
 
 -- Autopair keys
 H.key_methods_autopair = {}
@@ -1484,9 +1500,10 @@ end
 -- Views ----------------------------------------------------------------------
 H.handle_view_style = function(state, init_style, next_styles)
   if state.status == 'start' then state.data.next_styles = next_styles end
-  local style_is_new = state.data.new_style ~= state.data.style
+  local style_is_new = state.data.new_style ~= nil and state.data.new_style ~= state.data.style
   state.data.style = state.data.new_style or state.data.style or init_style
   state.data.new_style = nil
+  if style_is_new then H.notify('Changed style to ' .. vim.inspect(state.data.style)) end
   return state.data.style, style_is_new
 end
 
@@ -1555,8 +1572,11 @@ H.default_floatwin_config = function(state, style, target_width)
   config.title = { { H.fit_to_width(title_text, config.width), title_hl } }
   config.title_pos = 'left'
   if vim.fn.has('nvim-0.10') == 1 then
-    local footer_text = ''
-    if state.complete ~= nil then footer_text = string.format(' %d/%d ', state.complete.id, #state.complete.items) end
+    local footer_text, complete = '', state.complete
+    if complete ~= nil then
+      local method_prefix = complete.method == '' and '' or (' ' .. complete.method)
+      footer_text = string.format('%s %d/%d ', method_prefix, complete.id, #complete.items)
+    end
     config.footer = { { H.fit_to_width(footer_text, config.width), 'MiniInputHint' } }
     config.footer_pos = 'right'
   end
@@ -1660,7 +1680,7 @@ H.append_chunks = function(arr, new, keytrans)
 
   -- Sanitaize chunks for view to display special keys in special way
   for _, ch in ipairs(new) do
-    for s, special in string.gmatch(ch[1], '(%C*)(%c?)') do
+    for s, special in string.gmatch(ch[1], '(%C*)(%c*)') do
       if s ~= '' then table.insert(arr, { s, ch[2] }) end
       if special ~= '' then table.insert(arr, { vim.fn.keytrans(special), 'MiniInputSpecial' }) end
     end
@@ -1786,7 +1806,7 @@ H.set_buf_name = function(buf_id, name) vim.api.nvim_buf_set_name(buf_id, 'minii
 
 H.notify = function(msg, level_name) vim.notify('(mini.input) ' .. msg, vim.log.levels[level_name]) end
 
-H.getcharstr = function(lmap)
+H.getcharstr = function(lmap, allow_ctrl_c)
   H.cache.is_in_getcharstr = true
   local ok, char = H.safe_fn_getcharstr()
   H.cache.is_in_getcharstr = nil
@@ -1795,7 +1815,9 @@ H.getcharstr = function(lmap)
   if not ok and char ~= 'Keyboard interrupt' then H.cache_error(char) end
 
   -- Terminate if no input or on hard-coded <C-c>
-  if not ok or char == '' or char == '\3' then return end
+  local is_ctrl_c = (not ok and char == 'Keyboard interrupt') or (ok and char == '\3')
+  if allow_ctrl_c and is_ctrl_c then return '\3' end
+  if not ok or char == '' then return end
 
   -- Respect language mappings only if needed
   return vim.o.iminsert == 0 and char or ((lmap or {})[char] or char)
