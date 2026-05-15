@@ -100,6 +100,40 @@ local validate_log = function(name, ref, preserve)
   if not preserve then child.lua(name .. ' = {}') end
 end
 
+local validate_default_handler = function(name, state, arg, ref_state_changes)
+  child.lua([[
+    _G.compute_changed_values = function(left, right)
+      if not (type(left) == 'table' and type(right) == 'table') then
+        if vim.deep_equal(left, right) then return nil end
+        -- Use `vim.NIL` to indicate that the value was set to `nil`
+        if right == nil then return vim.NIL end
+        return right
+      end
+
+      local changed = {}
+      for k, v in pairs(left) do
+        changed[k] = _G.compute_changed_values(v, right[k])
+        if type(changed[k]) == 'table' and vim.tbl_count(changed[k]) == 0 then changed[k] = nil end
+      end
+      for k, v in pairs(right) do
+        if left[k] == nil then changed[k] = v end
+      end
+      return changed
+    end
+  ]])
+
+  child.lua('_G.handler_name = ' .. vim.inspect(name))
+  mock_state(state)
+  child.lua('_G.arg = ' .. vim.inspect(arg))
+  child.lua('_G.handler = MiniInput.default_' .. name)
+  local state_changes = child.lua([[
+    local old_state = vim.deepcopy(_G.mock_state)
+    local new_state = _G.handler(_G.mock_state, _G.arg) or _G.mock_state
+    return _G.compute_changed_values(old_state, new_state)
+  ]])
+  eq(state_changes, ref_state_changes)
+end
+
 -- Output test set ============================================================
 local T = new_set({
   hooks = {
@@ -307,6 +341,8 @@ T['get()']['reacts to `VimResized`'] = function()
   validate_log('handlers_log', { { 'key', 0, 'progress' }, { 'highlight' }, { 'view' } })
 end
 
+T['get()']['works with non-copyable `data`'] = function() MiniTest.skip() end
+
 T['ui_input()'] = new_set()
 
 T['ui_input()']['works'] = function()
@@ -380,6 +416,8 @@ T['get_state()']['respect `opts.hide`'] = function()
   local state = get_state()
   eq({ input = state.input, caret = state.caret }, {})
 end
+
+T['get_state()']['works with non-copyable `data`'] = function() MiniTest.skip() end
 
 T['get_history()'] = new_set()
 
@@ -506,16 +544,161 @@ T['gen_view']['virtual']['works'] = function() MiniTest.skip() end
 
 T['default_key()'] = new_set()
 
-T['default_key()']['works'] = function() MiniTest.skip() end
+local validate_key = function(state, key, state_change)
+  -- Treat `key` as not escaped for easier to read test code
+  if key ~= nil then key = child.api.nvim_replace_termcodes(key, true, true, true) end
+  validate_default_handler('key', state, key, state_change)
+end
 
-T['default_key()']['ignores special characters'] = function()
+T['default_key()']['works'] = function()
+  -- Should insert at caret any non-special key
+  validate_key({ input = 'ab', caret = 3 }, 'c', { input = 'abc', caret = 4 })
+  validate_key({ input = 'ab', caret = 2 }, 'c', { input = 'acb', caret = 3 })
+  validate_key({ input = 'ab', caret = 1 }, 'c', { input = 'cab', caret = 2 })
+
+  -- Should do nothing if no key or state is ending
+  local validate_no_action = function(status, key) validate_key({ input = 'ab', caret = 3, status = status }, key, {}) end
+  validate_no_action('start', nil)
+  validate_no_action('progress', nil)
+  validate_no_action('accept', nil)
+  validate_no_action('cancel', nil)
+
+  validate_no_action('accept', 'c')
+  validate_no_action('cancel', 'c')
+end
+
+T['default_key()']['can accept and cancel'] = function()
+  local validate_status_change = function(key, ref_status)
+    validate_key({ status = 'start' }, key, { status = ref_status })
+    validate_key({ status = 'progress' }, key, { status = ref_status })
+    -- When the state is already ending, nothing should be done
+    validate_key({ status = 'accept' }, key, {})
+    validate_key({ status = 'cancel' }, key, {})
+  end
+
+  validate_status_change('<CR>', 'accept')
+  validate_status_change('<Esc>', 'cancel')
+  validate_status_change('<C-c>', 'cancel')
+end
+
+T['default_key()']['can move caret'] = function()
+  local validate_move = function(input, key, caret, ref_caret)
+    validate_key({ input = input, caret = caret }, key, { caret = ref_caret ~= caret and ref_caret or nil })
+  end
+
+  -- Left/right
+  validate_move('ab', '<Left>', 3, 2)
+  validate_move('ab', '<Left>', 2, 1)
+  validate_move('ab', '<Left>', 1, 1)
+  validate_move('ab', '<M-h>', 3, 2)
+  validate_move('ab', '<M-h>', 2, 1)
+  validate_move('ab', '<M-h>', 1, 1)
+
+  validate_move('ab', '<Right>', 3, 3)
+  validate_move('ab', '<Right>', 2, 3)
+  validate_move('ab', '<Right>', 1, 2)
+  validate_move('ab', '<M-l>', 3, 3)
+  validate_move('ab', '<M-l>', 2, 3)
+  validate_move('ab', '<M-l>', 1, 2)
+
+  -- Left/right by word. Should jump over all consecutive keyword and non
+  -- keyword characters. Here keyword characters are 'a' and 'b'.
+  child.o.iskeyword = '97-98'
+
+  validate_move('axabxxab', '<S-Left>', 1, 1)
+  validate_move('axabxxab', '<S-Left>', 2, 1)
+  validate_move('axabxxab', '<S-Left>', 3, 2)
+  validate_move('axabxxab', '<S-Left>', 7, 5)
+  validate_move('axabxxab', '<S-Left>', 4, 3)
+  validate_move('axabxxab', '<S-Left>', 5, 3)
+  validate_move('axabxxab', '<S-Left>', 6, 5)
+  validate_move('axabxxab', '<S-Left>', 8, 7)
+  validate_move('axabxxab', '<S-Left>', 9, 7)
+
+  validate_move('axabxxab', '<S-Right>', 1, 2)
+  validate_move('axabxxab', '<S-Right>', 2, 3)
+  validate_move('axabxxab', '<S-Right>', 3, 5)
+  validate_move('axabxxab', '<S-Right>', 4, 5)
+  validate_move('axabxxab', '<S-Right>', 5, 7)
+  validate_move('axabxxab', '<S-Right>', 6, 7)
+  if child.fn.has('nvim-0.10') == 1 then
+    validate_move('axabxxab', '<S-Right>', 7, 9)
+    validate_move('axabxxab', '<S-Right>', 8, 9)
+    validate_move('axabxxab', '<S-Right>', 9, 9)
+  end
+
+  -- - Can work with multibyte characters
+  child.cmd('set iskeyword&')
+  validate_move('фя  фtя  ', '<S-Left>', 2, 1)
+  validate_move('фя  фtя  ', '<S-Left>', 3, 1)
+  validate_move('фя  фtя  ', '<S-Left>', 5, 3)
+  validate_move('фя  фtя  ', '<S-Left>', 6, 5)
+  validate_move('фя  фtя  ', '<S-Left>', 7, 5)
+  validate_move('фя  фtя  ', '<S-Left>', 8, 5)
+  validate_move('фя  фtя  ', '<S-Left>', 10, 8)
+
+  validate_move('фя  фtя  ', '<S-Right>', 1, 3)
+  validate_move('фя  фtя  ', '<S-Right>', 2, 3)
+  validate_move('фя  фtя  ', '<S-Right>', 3, 5)
+  validate_move('фя  фtя  ', '<S-Right>', 4, 5)
+  validate_move('фя  фtя  ', '<S-Right>', 5, 8)
+  validate_move('фя  фtя  ', '<S-Right>', 6, 8)
+  validate_move('фя  фtя  ', '<S-Right>', 7, 8)
+
+  -- Home/End
+  validate_move('ab', '<Home>', 1, 1)
+  validate_move('ab', '<Home>', 2, 1)
+  validate_move('ab', '<Home>', 3, 1)
+  validate_move('ab', '<C-b>', 1, 1)
+  validate_move('ab', '<C-b>', 2, 1)
+  validate_move('ab', '<C-b>', 3, 1)
+
+  validate_move('ab', '<End>', 1, 3)
+  validate_move('ab', '<End>', 2, 3)
+  validate_move('ab', '<End>', 3, 3)
+  validate_move('ab', '<C-e>', 1, 3)
+  validate_move('ab', '<C-e>', 2, 3)
+  validate_move('ab', '<C-e>', 3, 3)
+end
+
+T['default_key()']['can delete'] = function() MiniTest.skip() end
+
+T['default_key()']['supports <C-k>'] = function() MiniTest.skip() end
+
+T['default_key()']['supports <C-r>'] = function() MiniTest.skip() end
+
+T['default_key()']['supports <C-v>/<C-q>'] = function() MiniTest.skip() end
+
+T['default_key()']['can complete with state method'] = function()
+  -- Regular
+
+  -- Should preserve changes to `state.data` made by complete handler
+  MiniTest.skip()
+end
+
+T['default_key()']['can complete history'] = function()
+  -- Regular
+
+  -- Should preserve changes to `state.data` made by complete handler
+  MiniTest.skip()
+end
+
+T['default_key()']['can change input scope'] = function() MiniTest.skip() end
+
+T['default_key()']['can change view style'] = function() MiniTest.skip() end
+
+T['default_key()']['can toggle hidden'] = function() MiniTest.skip() end
+
+T['default_key()']['works with special keys'] = function()
   -- Should ignore combos, mouse click, mouse scroll wheel
 
-  -- Should allow any whitespace (even <C-l>)
+  -- Should allow any whitespace, like <Space>, <C-j>, and <C-l>
 
   -- Should allow more than one character
   MiniTest.skip()
 end
+
+T['default_key()']['respects `opts.autopair`'] = function() MiniTest.skip() end
 
 T['default_highlight()'] = new_set()
 

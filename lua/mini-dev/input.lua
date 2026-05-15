@@ -788,7 +788,7 @@ end
 ---
 --- Emulates most of |Command-line-mode| editing (|cmdline-editing|):
 --- - Accept: <CR>. To insert literal newline, type `<C-j>`.
---- - Cancel: <Esc>.
+--- - Cancel: <Esc> or <C-c>.
 --- - Move caret:
 ---     - <Left>, <Right> - one character to left / right.
 ---     - <M-h>, <M-l> - one character to left / right.
@@ -830,7 +830,8 @@ end
 ---   Anything else (even more than a single character) - inserted at caret.
 ---
 ---@param state table TODO
----@param key string|nil A key to process.
+---@param key string|nil A key to process. Should be escaped (`"\r"`, not `"<CR>"`).
+---   See |vim.keycode()|.
 ---@param opts table|nil Options. Possible fields:
 ---   - <autopair> `(boolean)` - whether perform add autopair. Default: `false`.
 MiniInput.default_key = function(state, key, opts)
@@ -1097,7 +1098,7 @@ end
 
 H.state_set = function(new)
   local ok, msg = pcall(H.state_validate, new)
-  if not ok then return H.cache_error(msg) end
+  if not ok then return H.cache_error(H.state, msg) end
   H.state = H.copy_tables(new)
 end
 
@@ -1176,7 +1177,7 @@ end
 -- Handlers -------------------------------------------------------------------
 H.handle_step = function(key, skip_redraw)
   local state = H.copy_tables(H.state)
-  H.apply_handler('key', key)
+  H.state_set(H.apply_handler(H.copy_tables(H.state), 'key', key))
 
   -- Stop completion if there was something outside completion navigation
   local is_complete_stop = vim.deep_equal(state.complete, H.state.complete) and not vim.deep_equal(state, H.state)
@@ -1188,24 +1189,24 @@ H.handle_step = function(key, skip_redraw)
   if not vim.deep_equal(state, H.state) then H.state.highlight = nil end
   H.state.caret = caret
 
-  H.apply_handler('highlight')
-  H.apply_handler('view')
+  H.state_set(H.apply_handler(H.copy_tables(H.state), 'highlight'))
+  H.state_set(H.apply_handler(H.copy_tables(H.state), 'view'))
   if not skip_redraw then H.redraw() end
 end
 
-H.apply_handler = function(name, arg)
-  local state, input = H.copy_tables(H.state), nil
-  if state.opts.hide and (name == 'highlight' or name == 'complete') then return end
+-- TODO: Consider exporting since it can be useful for complete handler
+H.apply_handler = function(state, name, arg)
+  if state.opts.hide and (name == 'highlight' or name == 'complete') then return state end
 
   local ok, res = pcall(state.opts.handlers[name], state, arg)
-  if not ok then return H.cache_error('Error applying `' .. name .. '` handler: ' .. res) end
+  if not ok then return H.cache_error(state, 'Error applying `' .. name .. '` handler: ' .. res) end
 
   local new_state = res or state
   if name == 'complete' and type(new_state.complete) == 'table' then
     new_state.complete.id = 0
     new_state.complete.method = arg
   end
-  H.state_set(new_state)
+  return new_state
 end
 
 H.mock_key_input = function(keys)
@@ -1227,6 +1228,7 @@ local kc = H.keycode
 -- General
 H.key_methods[kc('<CR>')] = function(state, _) state.status = 'accept' end
 H.key_methods[kc('<Esc>')] = function(state, _) state.status = 'cancel' end
+H.key_methods[kc('<C-c>')] = H.key_methods[kc('<Esc>')]
 
 -- Caret movement
 H.key_methods[kc('<Left>')] = function(state, _)
@@ -1327,24 +1329,24 @@ H.key_methods[kc('<C-v>')] = H.key_methods[kc('<C-q>')]
 
 -- History navigation
 H.key_methods[kc('<Up>')] = function(state, _)
-  if not H.init_state_complete(state, 'history') then return end
-  H.advance_state_complete(state, -1)
+  if state.complete == nil then state = H.apply_handler(state, 'complete', 'history') end
+  return H.advance_state_complete(state, -1)
 end
 H.key_methods[kc('<Down>')] = function(state, _)
-  if not H.init_state_complete(state, 'history') then return end
-  H.advance_state_complete(state, 1)
+  if state.complete == nil then state = H.apply_handler(state, 'complete', 'history') end
+  return H.advance_state_complete(state, 1)
 end
 H.key_methods[kc('<C-n>')] = H.key_methods[kc('<Down>')]
 H.key_methods[kc('<C-p>')] = H.key_methods[kc('<Up>')]
 
 -- Completion navigation
 H.key_methods[kc('<Tab>')] = function(state, _)
-  if not H.init_state_complete(state, state.opts.completion) then return end
-  H.advance_state_complete(state, 1)
+  if state.complete == nil then state = H.apply_handler(state, 'complete', state.opts.completion) end
+  return H.advance_state_complete(state, 1)
 end
 H.key_methods[kc('<S-Tab>')] = function(state, _)
-  if not H.init_state_complete(state, state.opts.completion) then return end
-  H.advance_state_complete(state, -1)
+  if state.complete == nil then state = H.apply_handler(state, 'complete', state.opts.completion) end
+  return H.advance_state_complete(state, -1)
 end
 
 -- Miscellaneous
@@ -1400,14 +1402,10 @@ H.get_ctrl_v_digits = function(submode)
   return tonumber(H.getcharstr_many(n_chars), 16)
 end
 
-H.init_state_complete = function(state, method)
-  if state.complete == nil then H.apply_handler('complete', method) end
-  if H.state_is_end() then return end
-  state.complete = H.state.complete
-  return type(state.complete) == 'table' and #state.complete.items > 0
-end
-
 H.advance_state_complete = function(state, increment)
+  local no_complete = H.state_is_end(state) or not (type(state.complete) == 'table' and #state.complete.items > 0)
+  if no_complete then return state end
+
   local old_id, base = state.complete.id, state.complete.base
   local old = state.complete.items[old_id] or base
   local new_id = (old_id + increment) % (#state.complete.items + 1)
@@ -1419,6 +1417,8 @@ H.advance_state_complete = function(state, increment)
   local old_len = vim.fn.strchars(old)
   state.input = vim.fn.strcharpart(input, 0, caret - old_len - 1) .. new .. vim.fn.strcharpart(input, caret - 1)
   state.caret = caret + (vim.fn.strchars(new) - old_len)
+
+  return state
 end
 
 H.autopair_open = function(state, pair)
@@ -1812,7 +1812,7 @@ H.getcharstr = function(lmap, allow_ctrl_c)
   H.cache.is_in_getcharstr = nil
 
   -- Cache possible error if it doesn't come from pressing <C-c>
-  if not ok and char ~= 'Keyboard interrupt' then H.cache_error(char) end
+  if not ok and char ~= 'Keyboard interrupt' then H.cache_error(H.state, char) end
 
   -- Terminate if no input or on hard-coded <C-c>
   local is_ctrl_c = (not ok and char == 'Keyboard interrupt') or (ok and char == '\3')
@@ -1842,10 +1842,10 @@ H.is_special_char = function(x)
   return vim.fn.keytrans(x) ~= x
 end
 
-H.cache_error = function(msg)
-  if H.state == nil or H.cache.error ~= nil then return end
+H.cache_error = function(state, msg)
+  if H.state == nil then error(msg) end
   H.cache.error = H.cache.error or msg
-  H.state.status = 'cancel'
+  state.status = 'cancel'
 end
 
 H.redraw = function() vim.cmd('redraw!') end
