@@ -643,8 +643,7 @@ MiniInput.gen_view.floatwin = function(opts)
   H.check_type('opts.to_chunks', opts.to_chunks, 'callable')
 
   -- Change style in vertical-horizontal order
-  local next_styles =
-    { BL = 'ML', ML = 'TL', TL = 'BM', BM = 'MM', MM = 'TM', TM = 'BR', BR = 'MR', MR = 'TR', TR = 'BL' }
+  local all_styles = { 'BL', 'ML', 'TL', 'BM', 'MM', 'TM', 'BR', 'MR', 'TR' }
 
   return function(state)
     if H.state_is_end(state) then
@@ -652,7 +651,7 @@ MiniInput.gen_view.floatwin = function(opts)
       pcall(vim.api.nvim_buf_delete, state.data.floating_buf_id, { force = true })
       return
     end
-    local style, _ = H.handle_view_style(state, opts.style, next_styles)
+    local style, _ = H.handle_view_style(state, opts.style, all_styles)
 
     -- Try to fit all chunks first, but later still truncate to window width
     local winborder = vim.fn.exists('+winborder') == 0 and '' or vim.o.winborder
@@ -696,11 +695,11 @@ MiniInput.gen_view.uiline = function(opts)
   H.check_one_of('opts.style', opts.style, { 'statusline', 'tabline', 'winbar' })
   H.check_type('opts.to_chunks', opts.to_chunks, 'callable')
 
-  local next_styles = { statusline = 'winbar', winbar = 'tabline', tabline = 'statusline' }
+  local all_styles = { 'statusline', 'winbar', 'tabline' }
   local escape_stl = function(x) return (x:gsub('%%', '%%%%')) end
 
   return function(state)
-    local style, style_is_new = H.handle_view_style(state, opts.style, next_styles)
+    local style, style_is_new = H.handle_view_style(state, opts.style, all_styles)
     H.uiline_handle_option_values(state, style_is_new)
     if H.state_is_end(state) then return end
 
@@ -737,7 +736,7 @@ MiniInput.gen_view.virtual = function(opts)
   H.check_type('opts.to_chunks', opts.to_chunks, 'callable')
 
   local ns_id = H.ns_id.view
-  local next_styles = { above = 'below', below = 'inline', inline = 'above' }
+  local all_styles = { 'above', 'below', 'inline' }
 
   return function(state)
     -- Cleanup
@@ -752,7 +751,7 @@ MiniInput.gen_view.virtual = function(opts)
     end
     state.data.buf_id = buf_id
 
-    local style, style_is_new = H.handle_view_style(state, opts.style, next_styles)
+    local style, style_is_new = H.handle_view_style(state, opts.style, all_styles)
     local is_virtline = style == 'above' or style == 'below'
 
     -- Get chunks
@@ -821,10 +820,14 @@ end
 ---       "open" action if not.
 ---     - In all cases press <C-v> before special character to insert it verbatim.
 --- - Completion:
----     - <Tab>, <S-Tab> - initiate completion based on input method and navigate.
----       Note: type `<C-v><Tab>` to insert literat `\t`.
----     - <C-n>, <C-p>, <Up>, <Down> - initiate history completion and navigate.
----     - <C-e> - stop completion.
+---     - <Tab>, <S-Tab> - start with `state.opts.completion` method if not active
+---       and advance through active completion (i.e. replace currently displayed
+---       at caret item with the next one).
+---       Note: type `<C-v><Tab>` to insert literal `\t`.
+---     - <C-n>, <C-p>, <Up>, <Down> - start with `"history"` method if not active
+---       and advance through active completion.
+---     - <C-e> - cancel and return to initial input and caret. No special key is
+---       needed to accept currently shown item.
 --- - Miscellaneous:
 ---     - <C-o> - change scope of the input. Cycles through all available ones.
 ---     - <C-s> - change view style. Works only with |MiniInput.gen_view| view
@@ -1006,7 +1009,7 @@ MiniInput.apply_handler = function(state, name, ...)
 
   if state.opts.hide and (name == 'highlight' or name == 'complete') then return state end
   local ok_handler, res = pcall(state.opts.handlers[name], state, ...)
-  if not ok_handler then H.cache_error(state, '(mini.input) Error applying `' .. name .. '` handler: ' .. res) end
+  if not ok_handler then H.cache_error(state, 'Error applying `' .. name .. '` handler: ' .. res) end
 
   local new_state = (ok_handler and res ~= nil) and res or state
   if name == 'complete' and type(new_state.complete) == 'table' then
@@ -1180,7 +1183,7 @@ H.state_finish = function()
   H.state, H.cache = nil, {}
   (_G.MiniInput or {})._temp_default_scope = nil
 
-  if err ~= nil then H.error(err) end
+  if err ~= nil then error(err) end
 
   if res ~= nil and not opts.hide then
     local hist = { input = res, prompt = opts.prompt, scope = opts.scope, cwd = vim.fn.getcwd() }
@@ -1367,14 +1370,11 @@ end
 
 -- Miscellaneous
 H.key_methods[kc('<C-o>')] = function(state, _)
-  local new_scope, n = state.opts.scope, #H.allowed_scopes
-  for i, s in ipairs(H.allowed_scopes) do
-    if s == state.opts.scope then new_scope = H.allowed_scopes[i % n + 1] end
-  end
-  state.opts.scope = new_scope
-  H.notify('Changed scope to ' .. vim.inspect(new_scope))
+  state.opts.scope = H.advance_from_choices(H.allowed_scopes, state.opts.scope, 'scope')
 end
-H.key_methods[kc('<C-s>')] = function(state, _) state.data.new_style = (state.data.next_styles or {})[state.data.style] end
+H.key_methods[kc('<C-s>')] = function(state, _)
+  state.data.new_style = H.advance_from_choices(state.data.all_styles, state.data.style, 'style')
+end
 H.key_methods[kc('<C-x>')] = function(state, _)
   state.opts.hide = not state.opts.hide
   H.notify('Input is ' .. (state.opts.hide and '' or 'not ') .. 'hidden')
@@ -1436,6 +1436,15 @@ H.advance_state_complete = function(state, increment)
   state.caret = caret + (vim.fn.strchars(new) - old_len)
 
   return state
+end
+
+H.advance_from_choices = function(all, cur, name)
+  local new, n = nil, #all
+  for i, v in ipairs(all) do
+    if v == cur then new = all[i % n + 1] end
+  end
+  if not (new == nil or new == cur) then H.notify(string.format('Changed %s to %s', name, vim.inspect(new))) end
+  return new
 end
 
 H.autopair_open = function(state, pair)
@@ -1515,12 +1524,11 @@ H.complete_buf_words = function(base)
 end
 
 -- Views ----------------------------------------------------------------------
-H.handle_view_style = function(state, init_style, next_styles)
-  if state.status == 'start' then state.data.next_styles = next_styles end
+H.handle_view_style = function(state, init_style, all_styles)
+  if state.status == 'start' then state.data.all_styles = all_styles end
   local style_is_new = state.data.new_style ~= nil and state.data.new_style ~= state.data.style
   state.data.style = state.data.new_style or state.data.style or init_style
   state.data.new_style = nil
-  if style_is_new then H.notify('Changed style to ' .. vim.inspect(state.data.style)) end
   return state.data.style, style_is_new
 end
 
@@ -1781,12 +1789,15 @@ H.make_ui_select_hl_fun = function(hl_fun)
   return function(state)
     local input = state.input
     local hl_ranges = hl_fun(input)
-    H.check_array_of('opts.highlight(...)', hl_ranges, 'table')
+    if not H.islist(hl_ranges) then hl_ranges = {} end
 
-    -- Convert to 'mini.input' ranges: named fields, 1-based char indexes
+    -- Convert from Vim ranges `r` to 'mini.input' ranges:
+    -- - r[1] - zero-based byte index at first multibyte start
+    -- - r[2] - zero-based byte index one more than last multibyte end
+    -- - 'mini.input' ranges: named fields, 1-based char indexes
     local highlight = {}
     for i, r in ipairs(hl_ranges) do
-      if type(r[1]) == 'number' and type(r[2]) == 'number' and type(r[3]) == 'string' then
+      if type(r) == 'table' and type(r[1]) == 'number' and type(r[2]) == 'number' and type(r[3]) == 'string' then
         highlight[i] = { from = vim.fn.charidx(input, r[1]) + 1, to = vim.fn.charidx(input, r[2]), hl = r[3] }
       end
     end
@@ -1860,6 +1871,7 @@ H.is_special_char = function(x)
 end
 
 H.cache_error = function(state, msg)
+  if not vim.startswith(msg, '(mini.input) ') then msg = '(mini.input) ' .. msg end
   if H.state == nil then error(msg) end
   H.cache.error = H.cache.error or msg
   state.status = 'cancel'

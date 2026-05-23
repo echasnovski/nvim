@@ -56,15 +56,15 @@ local mock_state = function(incomplete_state)
   child.lua([[
     _G.mock_state.input = _G.mock_state.input or ''
     _G.mock_state.caret = _G.mock_state.caret or (vim.fn.strchars(_G.mock_state.input) + 1)
-    _G.mock_state.data = {}
+    _G.mock_state.data = _G.mock_state.data or {}
     _G.mock_state.status = _G.mock_state.status or 'progress'
 
     local opts = _G.mock_state.opts or {}
     local default_handlers = {
-      key = MiniInput.default_key,
-      highlight = MiniInput.default_highlight,
-      view = MiniInput.default_view,
-      complete = MiniInput.default_complete,
+      key = MiniInput.config.handlers.key or MiniInput.default_key,
+      highlight = MiniInput.config.handlers.highlight or MiniInput.default_highlight,
+      view = MiniInput.config.handlers.view or MiniInput.default_view,
+      complete = MiniInput.config.handlers.complete or MiniInput.default_complete,
     }
     opts.handlers = vim.tbl_extend('force', default_handlers, opts.handlers or {})
     if opts.hide == nil then opts.hide = false end
@@ -72,6 +72,13 @@ local mock_state = function(incomplete_state)
     opts.prompt = opts.prompt or 'Input'
     opts.scope = opts.scope or MiniInput.config.scope
     _G.mock_state.opts = opts
+  ]])
+end
+
+local mock_notify = function()
+  child.lua([[
+    _G.notify_log = {}
+    vim.notify = function(...) table.insert(_G.notify_log, { ... }) end
   ]])
 end
 
@@ -225,11 +232,9 @@ end
 
 T['setup()']['adjusts `vim.paste`'] = function()
   child.setup()
+  mock_notify()
 
   child.lua([[
-    _G.notify_log = {}
-    vim.notify = function(...) table.insert(_G.notify_log, { ... }) end
-
     _G.paste_log = {}
     vim.paste = function(lines, phase) table.insert(_G.paste_log, { lines, phase }) end
   ]])
@@ -373,7 +378,52 @@ T['ui_input()']['works'] = function()
   eq(state.opts.completion, 'cmdline')
 end
 
-T['ui_input()']['converts `opts.highlight` to highlight handler'] = function() MiniTest.skip() end
+T['ui_input()']['converts `opts.highlight` to highlight handler'] = function()
+  child.lua([[
+    -- Global highlight handler should be respected
+    _G.highlight_log = {}
+    MiniInput.config.handlers.highlight = function(state)
+      if state.status == 'progress' then
+        table.insert(_G.highlight_log, { state.input, vim.deepcopy(state.highlight) })
+      end
+      if state.input == '' then return end
+      state.highlight = vim.list_extend(state.highlight or {}, { { from = 1, to = 1, hl = 'Config' } })
+    end
+
+    _G.highlight = function(input)
+      if input == '' then return {} end
+      return {
+        -- Zero-based byte indexes should be converted to 1-based char ids
+        { 2, 6, 'HL' },
+        -- Non-ranges should be ignored
+        'plain string', { 'bad', 1, 'AA' }, { 1, 'ignore', 'AA' }, { 1, 2, false },
+      }
+    end
+
+    -- Error during computation
+    _G.error_highlight = function(input) error('Bad highlight function') end
+  ]])
+
+  child.lua_notify('MiniInput.ui_input({ default = "фячш", highlight = _G.highlight }, function() end)')
+  eq(get_state().highlight, { { from = 2, to = 3, hl = 'HL' }, { from = 1, to = 1, hl = 'Config' } })
+  validate_log('highlight_log', { { 'фячш', { { from = 2, to = 3, hl = 'HL' } } } })
+  type_keys('<C-c>')
+
+  -- Should handle errors (including properly finishing input process)
+  child.lua([[
+    _G.key_log = {}
+    MiniInput.config.handlers.key = function(state)
+      table.insert(_G.key_log, { state.input, state.status })
+    end
+  ]])
+
+  expect.error(
+    function() child.lua('MiniInput.ui_input({ highlight = _G.error_highlight }, function() end)') end,
+    '[^%)] %(mini%.input%) Error applying `highlight` handler.*[^%)] Bad highlight function'
+  )
+  -- - Should still properly finish input process
+  validate_log('key_log', { { '', 'start' }, { '', 'cancel' } })
+end
 
 T['get_state()'] = new_set()
 
@@ -425,7 +475,15 @@ T['get_state()']['respect `opts.hide`'] = function()
   eq({ input = state.input, caret = state.caret }, {})
 end
 
-T['get_state()']['works with non-copyable `data`'] = function() MiniTest.skip() end
+T['get_state()']['works with non-copyable `data`'] = function()
+  child.lua([[
+    MiniInput.config.handlers.key = function(state)
+      state.data.timer = state.data.timer or vim.loop.new_timer()
+    end
+  ]])
+  get()
+  expect.no_error(function() child.lua('MiniInput.get_state()') end)
+end
 
 T['get_history()'] = new_set()
 
@@ -542,13 +600,19 @@ T['gen_view']['floatwin'] = new_set()
 
 T['gen_view']['floatwin']['works'] = function() MiniTest.skip() end
 
+T['gen_view']['floatwin']['can interactively change style'] = function() MiniTest.skip() end
+
 T['gen_view']['uiline'] = new_set()
 
 T['gen_view']['uiline']['works'] = function() MiniTest.skip() end
 
+T['gen_view']['uiline']['can interactively change style'] = function() MiniTest.skip() end
+
 T['gen_view']['virtual'] = new_set()
 
 T['gen_view']['virtual']['works'] = function() MiniTest.skip() end
+
+T['gen_view']['virtual']['can interactively change style'] = function() MiniTest.skip() end
 
 T['default_key()'] = new_set()
 
@@ -866,46 +930,236 @@ T['default_key()']['supports pasting'] = new_set({ parametrize = { { '<C-q>' }, 
   end,
 })
 
-T['default_key()']['can complete with state method'] = function()
-  -- Regular
+T['default_key()']['can complete'] = new_set(
+  { parametrize = { { '<Tab>' }, { '<S-Tab>' }, { '<Up>' }, { '<Down>' }, { '<C-n>' }, { '<C-p>' } } },
+  {
+    test = function(key)
+      child.lua([[
+        MiniInput.config.handlers.complete = function(state, method)
+          -- Should preserve changes to `state.data` made by complete handler
+          state.data.n = (state.data.n or 0) + 1
+          local input, caret = state.input, state.caret
+          local base = vim.fn.strcharpart(input, caret-3, 2)
+          state.complete = { base = base, items = { 'uuu', 'vvv', 'www' } }
+        end
+      ]])
+      local is_next = key == '<Tab>' or key == '<C-n>' or key == '<Down>'
+      local complete_method = (key == '<Tab>' or key == '<S-Tab>') and 'test' or 'history'
 
-  -- Should preserve changes to `state.data` made by complete handler
-  MiniTest.skip()
+      local state = {}
+      local validate_step = function(ref_changes)
+        validate_key(state, key, ref_changes)
+        state = vim.tbl_deep_extend('force', state, ref_changes)
+      end
+
+      -- Should initiate complete if not currently active
+      state = { input = 'abcd', caret = 5, opts = { completion = 'test' } }
+      local ref_changes = {
+        input = is_next and 'abuuu' or 'abwww',
+        caret = 6,
+        complete = { base = 'cd', id = is_next and 1 or 3, items = { 'uuu', 'vvv', 'www' }, method = complete_method },
+        data = { n = 1 },
+      }
+      validate_step(ref_changes)
+
+      -- Should advance in appropriate direction if complete is active and show
+      -- new candidate at caret
+      validate_step({ complete = { id = 2 }, input = 'abvvv' })
+
+      validate_step({ complete = { id = is_next and 3 or 1 }, input = is_next and 'abwww' or 'abuuu' })
+
+      -- Should "wrap around the edge" and return to the initial state
+      validate_step({ complete = { id = 0 }, input = 'abcd', caret = 5 })
+
+      -- Should be able to continue from `id=0`
+      validate_step({ complete = { id = is_next and 1 or 3 }, input = is_next and 'abuuu' or 'abwww', caret = 6 })
+
+      -- Should be able to initiate with caret not at the end
+      state = { input = 'abcd', caret = 4, opts = { completion = 'test' } }
+      ref_changes = {
+        input = is_next and 'auuud' or 'awwwd',
+        caret = 5,
+        complete = { base = 'bc', id = is_next and 1 or 3, items = { 'uuu', 'vvv', 'www' }, method = complete_method },
+        data = { n = 1 },
+      }
+      validate_step(ref_changes)
+
+      -- Any active completion can be canceled with <C-e>
+      validate_key(state, '<C-e>', { input = 'abcd', caret = 4, complete = vim.NIL })
+
+      -- Any completion key should navigate through candidates no matter how
+      -- completion has started
+      state = {
+        input = 'abxxx',
+        caret = 6,
+        complete = { base = 'CD', id = 1, items = { 'xxx', 'yyy' }, method = 'other' },
+      }
+      local ref_changes_next = { input = 'abyyy', complete = { id = 2 } }
+      local ref_changes_prev = { input = 'abCD', caret = 5, complete = { id = 0 } }
+      validate_key(state, '<Tab>', ref_changes_next)
+      validate_key(state, '<C-n>', ref_changes_next)
+      validate_key(state, '<Down>', ref_changes_next)
+      validate_key(state, '<S-Tab>', ref_changes_prev)
+      validate_key(state, '<C-p>', ref_changes_prev)
+      validate_key(state, '<Up>', ref_changes_prev)
+
+      -- Works with multibyte characters
+      state = { input = 'фячш', caret = 4, opts = { completion = 'test' } }
+      ref_changes = {
+        input = is_next and 'фuuuш' or 'фwwwш',
+        caret = 5,
+        complete = { base = 'яч', id = is_next and 1 or 3, items = { 'uuu', 'vvv', 'www' }, method = complete_method },
+        data = { n = 1 },
+      }
+      validate_step(ref_changes)
+    end,
+  }
+)
+
+T['default_key()']['can change input scope'] = function()
+  mock_notify()
+  local validate = function(scope, ref_scope)
+    validate_key({ opts = { scope = scope } }, '<C-o>', { opts = { scope = ref_scope } })
+    validate_log('notify_log', { { '(mini.input) Changed scope to ' .. vim.inspect(ref_scope) } })
+  end
+
+  validate('editor', 'project')
+  validate('project', 'cursor')
+  validate('cursor', 'line')
+  validate('line', 'buffer')
+  validate('buffer', 'window')
+  validate('window', 'tabpage')
+  validate('tabpage', 'editor')
 end
 
-T['default_key()']['can complete history'] = function()
-  -- Regular
+T['default_key()']['can change view style'] = function()
+  mock_notify()
+  local validate = function(style, ref_style)
+    local state = { data = { all_styles = { 'one', 'two' }, style = style } }
+    validate_key(state, '<C-s>', { data = { new_style = ref_style } })
+    validate_log('notify_log', { { '(mini.input) Changed style to ' .. vim.inspect(ref_style) } })
+  end
 
-  -- Should preserve changes to `state.data` made by complete handler
-  MiniTest.skip()
+  validate('one', 'two')
+  validate('two', 'one')
 end
 
-T['default_key()']['can change input scope'] = function() MiniTest.skip() end
+T['default_key()']['can toggle hidden'] = function()
+  mock_notify()
+  local validate = function(hide)
+    validate_key({ opts = { hide = hide } }, '<C-x>', { opts = { hide = not hide } })
+    validate_log('notify_log', { { '(mini.input) Input is ' .. (hide and 'not ' or '') .. 'hidden' } })
+  end
 
-T['default_key()']['can change view style'] = function() MiniTest.skip() end
-
-T['default_key()']['can toggle hidden'] = function() MiniTest.skip() end
+  validate(false)
+  validate(true)
+end
 
 T['default_key()']['works with special keys'] = function()
   -- Should ignore combos, mouse click, mouse scroll wheel
+  validate_key({}, '<C-d>', {})
+  validate_key({}, '<C-S-d>', {})
+  validate_key({}, '<LeftMouse>', {})
+  validate_key({}, '<RightMouse>', {})
+  validate_key({}, '<ScrollWheelDown>', {})
+  validate_key({}, '<ScrollWheelUp>', {})
+  validate_key({}, '<ScrollWheelLeft>', {})
+  validate_key({}, '<ScrollWheelRight>', {})
 
-  -- Should allow any whitespace, like <Space>, <C-j>, and <C-l>
+  -- Should allow any not mapped whitespace, like <Space>, <C-j>, and <C-l>
+  validate_key({}, ' ', { input = ' ', caret = 2 })
+  validate_key({}, '<C-j>', { input = '\n', caret = 2 })
+  validate_key({}, '<C-l>', { input = '\f', caret = 2 })
+
+  validate_key({ input = 'a', caret = 1 }, ' ', { input = ' a', caret = 2 })
+  validate_key({ input = 'a', caret = 1 }, '<C-j>', { input = '\na', caret = 2 })
+  validate_key({ input = 'a', caret = 1 }, '<C-l>', { input = '\fa', caret = 2 })
 
   -- Should allow more than one character
-  MiniTest.skip()
+  validate_key({}, 'ab', { input = 'ab', caret = 3 })
+  validate_key({}, ' \n\f', { input = ' \n\f', caret = 4 })
+  validate_key({}, ' \t', { input = ' \t', caret = 3 })
 end
 
 T['default_key()']['respects `opts.autopair`'] = function()
+  local validate = function(state, key, ref_state_changes)
+    mock_state(state)
+    child.lua('_G.key = ' .. vim.inspect(child.api.nvim_replace_termcodes(key, true, true, true)))
+
+    local old_state = get_state('mock_state')
+    child.lua('_G.new_state = MiniInput.default_key(_G.mock_state, _G.key, { autopair = true }) or _G.mock_state')
+    local new_state = get_state('new_state')
+    eq(compute_changed_values(old_state, new_state), ref_state_changes)
+  end
+
   -- Open
+  local validate_open = function(key, pair)
+    validate({}, key, { input = pair, caret = 2 })
+    validate({ input = 'ab', caret = 2 }, key, { input = 'a' .. pair .. 'b', caret = 3 })
+
+    local left, right = pair:sub(1, 1), pair:sub(2, 2)
+    validate({ input = pair, caret = 2 }, key, { input = left .. left .. right .. right, caret = 3 })
+  end
+
+  validate_open('(', '()')
+  validate_open('[', '[]')
+  validate_open('{', '{}')
 
   -- Close
+  local validate_close = function(key, pair)
+    validate({}, key, { input = key, caret = 2 })
+    validate({ input = 'ab', caret = 2 }, key, { input = 'a' .. key .. 'b', caret = 3 })
+
+    validate({ input = key, caret = 1 }, key, { caret = 2 })
+    validate({ input = pair, caret = 2 }, key, { caret = 3 })
+  end
+
+  validate_close(')', '()')
+  validate_close(']', '[]')
+  validate_close('}', '{}')
 
   -- Closeopen
+  local validate_closeopen = function(key, pair)
+    validate({}, key, { input = pair, caret = 2 })
+    validate({ input = 'ab', caret = 2 }, key, { input = 'a' .. pair .. 'b', caret = 3 })
+
+    validate({ input = key, caret = 1 }, key, { caret = 2 })
+    validate({ input = pair, caret = 2 }, key, { caret = 3 })
+  end
+
+  validate_closeopen('"', '""')
+  validate_closeopen("'", "''")
+  validate_closeopen('`', '``')
 
   -- <BS>
+  local validate_bs = function(pair)
+    validate({ input = pair, caret = 2 }, '<BS>', { input = '', caret = 1 })
+    validate({ input = pair, caret = 3 }, '<BS>', { input = pair:sub(1, 1), caret = 2 })
+    validate({ input = 'a' .. pair, caret = 3 }, '<BS>', { input = 'a', caret = 2 })
+  end
+
+  validate_bs('()')
+  validate_bs('[]')
+  validate_bs('{}')
+  validate_bs('""')
+  validate_bs("''")
+  validate_bs('``')
 
   -- Should insert without autopair with <C-v> / <C-q>
-  MiniTest.skip()
+  validate_key_with_extra_keys('', 1, { '<C-v>', '(' }, { input = '(', caret = 2 })
+  validate_key_with_extra_keys('', 1, { '<C-v>', '[' }, { input = '[', caret = 2 })
+  validate_key_with_extra_keys('', 1, { '<C-v>', '{' }, { input = '{', caret = 2 })
+
+  validate_key_with_extra_keys(')', 1, { '<C-v>', ')' }, { input = '))', caret = 2 })
+  validate_key_with_extra_keys(']', 1, { '<C-v>', ']' }, { input = ']]', caret = 2 })
+  validate_key_with_extra_keys('}', 1, { '<C-v>', '}' }, { input = '}}', caret = 2 })
+
+  validate_key_with_extra_keys('', 1, { '<C-v>', '"' }, { input = '"', caret = 2 })
+  validate_key_with_extra_keys('', 1, { '<C-v>', "'" }, { input = "'", caret = 2 })
+  validate_key_with_extra_keys('', 1, { '<C-v>', '`' }, { input = '`', caret = 2 })
+  validate_key_with_extra_keys('"', 1, { '<C-v>', '"' }, { input = '""', caret = 2 })
+  validate_key_with_extra_keys("'", 1, { '<C-v>', "'" }, { input = "''", caret = 2 })
+  validate_key_with_extra_keys('`', 1, { '<C-v>', '`' }, { input = '``', caret = 2 })
 end
 
 T['default_highlight()'] = new_set()
@@ -915,6 +1169,8 @@ T['default_highlight()']['works'] = function() MiniTest.skip() end
 T['default_view()'] = new_set()
 
 T['default_view()']['works'] = function() MiniTest.skip() end
+
+T['default_view()']['can interactively change style'] = function() MiniTest.skip() end
 
 T['default_complete()'] = new_set()
 
