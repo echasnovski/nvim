@@ -30,9 +30,12 @@ end
 local get = forward_lua_notify('MiniInput.get')
 local get_history = forward_lua('MiniInput.get_history')
 
-local get_state = function()
+local get_state = function(state_var)
+  if state_var == nil then child.lua('_G.state = MiniInput.get_state()') end
+  if state_var ~= nil then child.lua('_G.state = vim.deepcopy(_G.' .. state_var .. ')') end
   return child.lua([[
-    local state = MiniInput.get_state()
+    local state = _G.state
+    _G.state = nil
     if state == nil then return nil end
     -- Adjust function handlers to be able to pass through RPC
     for k, v in pairs(state.opts.handlers) do
@@ -100,38 +103,36 @@ local validate_log = function(name, ref, preserve)
   if not preserve then child.lua(name .. ' = {}') end
 end
 
+local compute_changed_values
+compute_changed_values = function(left, right)
+  if not (type(left) == 'table' and type(right) == 'table') then
+    if vim.deep_equal(left, right) then return nil end
+    -- Use `vim.NIL` to indicate that the value was set to `nil`
+    if right == nil then return vim.NIL end
+    return right
+  end
+
+  local changed = {}
+  for k, v in pairs(left) do
+    changed[k] = compute_changed_values(v, right[k])
+    if type(changed[k]) == 'table' and vim.tbl_count(changed[k]) == 0 then changed[k] = nil end
+  end
+  for k, v in pairs(right) do
+    if left[k] == nil then changed[k] = v end
+  end
+  return changed
+end
+
 local validate_default_handler = function(name, state, arg, ref_state_changes)
-  child.lua([[
-    _G.compute_changed_values = function(left, right)
-      if not (type(left) == 'table' and type(right) == 'table') then
-        if vim.deep_equal(left, right) then return nil end
-        -- Use `vim.NIL` to indicate that the value was set to `nil`
-        if right == nil then return vim.NIL end
-        return right
-      end
-
-      local changed = {}
-      for k, v in pairs(left) do
-        changed[k] = _G.compute_changed_values(v, right[k])
-        if type(changed[k]) == 'table' and vim.tbl_count(changed[k]) == 0 then changed[k] = nil end
-      end
-      for k, v in pairs(right) do
-        if left[k] == nil then changed[k] = v end
-      end
-      return changed
-    end
-  ]])
-
   child.lua('_G.handler_name = ' .. vim.inspect(name))
   mock_state(state)
   child.lua('_G.arg = ' .. vim.inspect(arg))
   child.lua('_G.handler = MiniInput.default_' .. name)
-  local state_changes = child.lua([[
-    local old_state = vim.deepcopy(_G.mock_state)
-    local new_state = _G.handler(_G.mock_state, _G.arg) or _G.mock_state
-    return _G.compute_changed_values(old_state, new_state)
-  ]])
-  eq(state_changes, ref_state_changes)
+
+  local old_state = get_state('mock_state')
+  child.lua('_G.new_state = _G.handler(_G.mock_state, _G.arg) or _G.mock_state')
+  local new_state = get_state('new_state')
+  eq(compute_changed_values(old_state, new_state), ref_state_changes)
 end
 
 -- Output test set ============================================================
@@ -258,6 +259,8 @@ T['setup()']['adjusts `vim.paste`'] = function()
 end
 
 T['setup()']['hard-codes special default scopes'] = function()
+  if child.fn.has('nvim-0.12.3') == 1 then return end
+
   child.restart()
   child.lua([[
     _G.rename_log = {}
@@ -342,6 +345,11 @@ T['get()']['reacts to `VimResized`'] = function()
 end
 
 T['get()']['works with non-copyable `data`'] = function() MiniTest.skip() end
+
+T['get()']['handles errors in handlers'] = function()
+  -- Should still apply all step handlers, make finish step, and then report error
+  MiniTest.skip()
+end
 
 T['ui_input()'] = new_set()
 
@@ -544,10 +552,10 @@ T['gen_view']['virtual']['works'] = function() MiniTest.skip() end
 
 T['default_key()'] = new_set()
 
-local validate_key = function(state, key, state_change)
+local validate_key = function(state, key, ref_state_change)
   -- Treat `key` as not escaped for easier to read test code
   if key ~= nil then key = child.api.nvim_replace_termcodes(key, true, true, true) end
-  validate_default_handler('key', state, key, state_change)
+  validate_default_handler('key', state, key, ref_state_change)
 end
 
 T['default_key()']['works'] = function()
@@ -582,92 +590,281 @@ T['default_key()']['can accept and cancel'] = function()
 end
 
 T['default_key()']['can move caret'] = function()
-  local validate_move = function(input, key, caret, ref_caret)
+  local validate_move = function(input, caret, key, ref_caret)
     validate_key({ input = input, caret = caret }, key, { caret = ref_caret ~= caret and ref_caret or nil })
   end
 
   -- Left/right
-  validate_move('ab', '<Left>', 3, 2)
-  validate_move('ab', '<Left>', 2, 1)
-  validate_move('ab', '<Left>', 1, 1)
-  validate_move('ab', '<M-h>', 3, 2)
-  validate_move('ab', '<M-h>', 2, 1)
-  validate_move('ab', '<M-h>', 1, 1)
+  validate_move('ab', 3, '<Left>', 2)
+  validate_move('ab', 2, '<Left>', 1)
+  validate_move('ab', 1, '<Left>', 1)
+  validate_move('ab', 3, '<M-h>', 2)
+  validate_move('ab', 2, '<M-h>', 1)
+  validate_move('ab', 1, '<M-h>', 1)
 
-  validate_move('ab', '<Right>', 3, 3)
-  validate_move('ab', '<Right>', 2, 3)
-  validate_move('ab', '<Right>', 1, 2)
-  validate_move('ab', '<M-l>', 3, 3)
-  validate_move('ab', '<M-l>', 2, 3)
-  validate_move('ab', '<M-l>', 1, 2)
+  validate_move('ab', 3, '<Right>', 3)
+  validate_move('ab', 2, '<Right>', 3)
+  validate_move('ab', 1, '<Right>', 2)
+  validate_move('ab', 3, '<M-l>', 3)
+  validate_move('ab', 2, '<M-l>', 3)
+  validate_move('ab', 1, '<M-l>', 2)
 
   -- Left/right by word. Should jump over all consecutive keyword and non
   -- keyword characters. Here keyword characters are 'a' and 'b'.
   child.o.iskeyword = '97-98'
 
-  validate_move('axabxxab', '<S-Left>', 1, 1)
-  validate_move('axabxxab', '<S-Left>', 2, 1)
-  validate_move('axabxxab', '<S-Left>', 3, 2)
-  validate_move('axabxxab', '<S-Left>', 7, 5)
-  validate_move('axabxxab', '<S-Left>', 4, 3)
-  validate_move('axabxxab', '<S-Left>', 5, 3)
-  validate_move('axabxxab', '<S-Left>', 6, 5)
-  validate_move('axabxxab', '<S-Left>', 8, 7)
-  validate_move('axabxxab', '<S-Left>', 9, 7)
+  validate_move('axabxxab', 1, '<S-Left>', 1)
+  validate_move('axabxxab', 2, '<S-Left>', 1)
+  validate_move('axabxxab', 3, '<S-Left>', 2)
+  validate_move('axabxxab', 4, '<S-Left>', 3)
+  validate_move('axabxxab', 5, '<S-Left>', 3)
+  validate_move('axabxxab', 6, '<S-Left>', 5)
+  validate_move('axabxxab', 7, '<S-Left>', 5)
+  validate_move('axabxxab', 8, '<S-Left>', 7)
+  validate_move('axabxxab', 9, '<S-Left>', 7)
 
-  validate_move('axabxxab', '<S-Right>', 1, 2)
-  validate_move('axabxxab', '<S-Right>', 2, 3)
-  validate_move('axabxxab', '<S-Right>', 3, 5)
-  validate_move('axabxxab', '<S-Right>', 4, 5)
-  validate_move('axabxxab', '<S-Right>', 5, 7)
-  validate_move('axabxxab', '<S-Right>', 6, 7)
+  validate_move('axabxxab', 1, '<S-Right>', 2)
+  validate_move('axabxxab', 2, '<S-Right>', 3)
+  validate_move('axabxxab', 3, '<S-Right>', 5)
+  validate_move('axabxxab', 4, '<S-Right>', 5)
+  validate_move('axabxxab', 5, '<S-Right>', 7)
+  validate_move('axabxxab', 6, '<S-Right>', 7)
   if child.fn.has('nvim-0.10') == 1 then
-    validate_move('axabxxab', '<S-Right>', 7, 9)
-    validate_move('axabxxab', '<S-Right>', 8, 9)
-    validate_move('axabxxab', '<S-Right>', 9, 9)
+    validate_move('axabxxab', 7, '<S-Right>', 9)
+    validate_move('axabxxab', 8, '<S-Right>', 9)
+    validate_move('axabxxab', 9, '<S-Right>', 9)
   end
 
   -- - Can work with multibyte characters
   child.cmd('set iskeyword&')
-  validate_move('фя  фtя  ', '<S-Left>', 2, 1)
-  validate_move('фя  фtя  ', '<S-Left>', 3, 1)
-  validate_move('фя  фtя  ', '<S-Left>', 5, 3)
-  validate_move('фя  фtя  ', '<S-Left>', 6, 5)
-  validate_move('фя  фtя  ', '<S-Left>', 7, 5)
-  validate_move('фя  фtя  ', '<S-Left>', 8, 5)
-  validate_move('фя  фtя  ', '<S-Left>', 10, 8)
 
-  validate_move('фя  фtя  ', '<S-Right>', 1, 3)
-  validate_move('фя  фtя  ', '<S-Right>', 2, 3)
-  validate_move('фя  фtя  ', '<S-Right>', 3, 5)
-  validate_move('фя  фtя  ', '<S-Right>', 4, 5)
-  validate_move('фя  фtя  ', '<S-Right>', 5, 8)
-  validate_move('фя  фtя  ', '<S-Right>', 6, 8)
-  validate_move('фя  фtя  ', '<S-Right>', 7, 8)
+  validate_move('фя  фtя  ', 2, '<S-Left>', 1)
+  validate_move('фя  фtя  ', 3, '<S-Left>', 1)
+  validate_move('фя  фtя  ', 5, '<S-Left>', 3)
+  validate_move('фя  фtя  ', 6, '<S-Left>', 5)
+  validate_move('фя  фtя  ', 7, '<S-Left>', 5)
+  validate_move('фя  фtя  ', 8, '<S-Left>', 5)
+  validate_move('фя  фtя  ', 10, '<S-Left>', 8)
+
+  validate_move('фя  фtя  ', 1, '<S-Right>', 3)
+  validate_move('фя  фtя  ', 2, '<S-Right>', 3)
+  validate_move('фя  фtя  ', 3, '<S-Right>', 5)
+  validate_move('фя  фtя  ', 4, '<S-Right>', 5)
+  validate_move('фя  фtя  ', 5, '<S-Right>', 8)
+  validate_move('фя  фtя  ', 6, '<S-Right>', 8)
+  validate_move('фя  фtя  ', 7, '<S-Right>', 8)
 
   -- Home/End
-  validate_move('ab', '<Home>', 1, 1)
-  validate_move('ab', '<Home>', 2, 1)
-  validate_move('ab', '<Home>', 3, 1)
-  validate_move('ab', '<C-b>', 1, 1)
-  validate_move('ab', '<C-b>', 2, 1)
-  validate_move('ab', '<C-b>', 3, 1)
+  validate_move('ab', 1, '<Home>', 1)
+  validate_move('ab', 2, '<Home>', 1)
+  validate_move('ab', 3, '<Home>', 1)
+  validate_move('ab', 1, '<C-b>', 1)
+  validate_move('ab', 2, '<C-b>', 1)
+  validate_move('ab', 3, '<C-b>', 1)
 
-  validate_move('ab', '<End>', 1, 3)
-  validate_move('ab', '<End>', 2, 3)
-  validate_move('ab', '<End>', 3, 3)
-  validate_move('ab', '<C-e>', 1, 3)
-  validate_move('ab', '<C-e>', 2, 3)
-  validate_move('ab', '<C-e>', 3, 3)
+  validate_move('ab', 1, '<End>', 3)
+  validate_move('ab', 2, '<End>', 3)
+  validate_move('ab', 3, '<End>', 3)
+  validate_move('ab', 1, '<C-e>', 3)
+  validate_move('ab', 2, '<C-e>', 3)
+  validate_move('ab', 3, '<C-e>', 3)
 end
 
-T['default_key()']['can delete'] = function() MiniTest.skip() end
+T['default_key()']['can delete'] = function()
+  local validate_delete = function(input, caret, key, ref_input, ref_caret)
+    local ref_changes = {}
+    if ref_input ~= input then ref_changes.input = ref_input end
+    if ref_caret ~= caret then ref_changes.caret = ref_caret end
+    validate_key({ input = input, caret = caret }, key, ref_changes)
+  end
 
-T['default_key()']['supports <C-k>'] = function() MiniTest.skip() end
+  -- <BS> and <C-h>
+  validate_delete('ab', 1, '<BS>', 'ab', 1)
+  validate_delete('ab', 2, '<BS>', 'b', 1)
+  validate_delete('ab', 3, '<BS>', 'a', 2)
+  validate_delete('ab', 1, '<C-h>', 'ab', 1)
+  validate_delete('ab', 2, '<C-h>', 'b', 1)
+  validate_delete('ab', 3, '<C-h>', 'a', 2)
 
-T['default_key()']['supports <C-r>'] = function() MiniTest.skip() end
+  validate_delete('a', 2, '<BS>', '', 1)
+  validate_delete('a', 2, '<C-h>', '', 1)
 
-T['default_key()']['supports <C-v>/<C-q>'] = function() MiniTest.skip() end
+  -- - Can work with multibyte characters
+  validate_delete('ф', 2, '<BS>', '', 1)
+  validate_delete('фt', 3, '<BS>', 'ф', 2)
+  validate_delete('фtя', 4, '<BS>', 'фt', 3)
+
+  -- <Del>
+  validate_delete('ab', 1, '<Del>', 'b', 1)
+  validate_delete('ab', 2, '<Del>', 'a', 2)
+  validate_delete('ab', 3, '<Del>', 'ab', 3)
+
+  -- - Can work with multibyte characters
+  validate_delete('ф', 1, '<Del>', '', 1)
+  validate_delete('фt', 2, '<Del>', 'ф', 2)
+  validate_delete('фtя', 3, '<Del>', 'фt', 3)
+
+  -- <C-u>
+  validate_delete('ab', 1, '<C-u>', 'ab', 1)
+  validate_delete('ab', 2, '<C-u>', 'b', 1)
+  validate_delete('ab', 3, '<C-u>', '', 1)
+
+  -- - Can work with multibyte characters
+  validate_delete('фt', 2, '<C-u>', 't', 1)
+  validate_delete('фtя', 3, '<C-u>', 'я', 1)
+
+  -- <C-w>
+  child.o.iskeyword = '97-98'
+  validate_delete('axabxxab', 1, '<C-w>', 'axabxxab', 1)
+  validate_delete('axabxxab', 2, '<C-w>', 'xabxxab', 1)
+  validate_delete('axabxxab', 3, '<C-w>', 'aabxxab', 2)
+  validate_delete('axabxxab', 4, '<C-w>', 'axbxxab', 3)
+  validate_delete('axabxxab', 5, '<C-w>', 'axxxab', 3)
+  validate_delete('axabxxab', 6, '<C-w>', 'axabxab', 5)
+  validate_delete('axabxxab', 7, '<C-w>', 'axabab', 5)
+  validate_delete('axabxxab', 8, '<C-w>', 'axabxxb', 7)
+  validate_delete('axabxxab', 9, '<C-w>', 'axabxx', 7)
+
+  child.cmd('set iskeyword&')
+  validate_delete('фя  фtя  ', 2, '<C-w>', 'я  фtя  ', 1)
+  validate_delete('фя  фtя  ', 3, '<C-w>', '  фtя  ', 1)
+  validate_delete('фя  фtя  ', 5, '<C-w>', 'фяфtя  ', 3)
+  validate_delete('фя  фtя  ', 6, '<C-w>', 'фя  tя  ', 5)
+  validate_delete('фя  фtя  ', 7, '<C-w>', 'фя  я  ', 5)
+  validate_delete('фя  фtя  ', 8, '<C-w>', 'фя    ', 5)
+  validate_delete('фя  фtя  ', 10, '<C-w>', 'фя  фtя', 8)
+end
+
+local validate_key_with_extra_keys = function(input, caret, keys, ref_state_changes)
+  mock_state({ input = input, caret = caret })
+  local old_state = get_state('mock_state')
+
+  local first, extra = keys[1], vim.list_slice(keys, 2)
+  child.lua('_G.key = vim.api.nvim_replace_termcodes(' .. vim.inspect(first) .. ', true, true, true)')
+  child.lua_notify('_G.new_state = MiniInput.default_key(_G.mock_state, _G.key) or _G.mock_state')
+  type_keys(unpack(extra))
+  local new_state = get_state('new_state')
+  eq(compute_changed_values(old_state, new_state), ref_state_changes)
+
+  child.lua('_G.mock_state, _G.new_state = nil, nil')
+end
+
+T['default_key()']['supports <C-k>'] = function()
+  local validate = validate_key_with_extra_keys
+  local vv_digraph = child.fn.digraph_get('vv')
+
+  validate('', 1, { '<C-k>', 'v', 'v' }, { input = vv_digraph, caret = 2 })
+  validate('a', 1, { '<C-k>', 'v', 'v' }, { input = vv_digraph .. 'a', caret = 2 })
+  validate('a', 2, { '<C-k>', 'v', 'v' }, { input = 'a' .. vv_digraph, caret = 3 })
+
+  validate('', 1, { '<C-k>', 'x', 'x' }, { input = 'x', caret = 2 })
+
+  -- Should stop on cancelling key
+  validate('', 1, { '<C-k>', 'x', '<C-c>' }, {})
+  validate('', 1, { '<C-k>', '<C-c>' }, {})
+
+  validate('', 1, { '<C-k>', 'x', '<Esc>' }, {})
+  validate('', 1, { '<C-k>', '<Esc>' }, {})
+end
+
+T['default_key()']['supports <C-r>'] = function()
+  local validate = validate_key_with_extra_keys
+  child.fn.setreg('c', 'uuu')
+  child.fn.setreg('l', 'vvv', 'V')
+  child.fn.setreg('b', 'ww\nxx', 'b2')
+
+  -- Regular registers
+  validate('', 1, { '<C-r>', 'c' }, { input = 'uuu', caret = 4 })
+  validate('a', 1, { '<C-r>', 'c' }, { input = 'uuua', caret = 4 })
+  validate('a', 2, { '<C-r>', 'c' }, { input = 'auuu', caret = 5 })
+
+  validate('', 1, { '<C-r>', 'l' }, { input = 'vvv\n', caret = 5 })
+
+  validate('', 1, { '<C-r>', 'b' }, { input = 'ww\nxx', caret = 6 })
+
+  -- Empty register
+  validate('', 1, { '<C-r>', 'x' }, {})
+
+  -- Non-existent register
+  validate('', 1, { '<C-r>', '<Del>' }, {})
+
+  -- Special registers
+  child.o.iskeyword = child.o.iskeyword .. ',-'
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'aa bb!cc-dd ee', 'tests/screenshots' })
+  set_cursor(1, 7)
+
+  validate('', 1, { '<C-r>', '<C-w>' }, { input = 'cc-dd', caret = 6 })
+  validate('', 1, { '<C-r>', '<C-a>' }, { input = 'bb!cc-dd', caret = 9 })
+  validate('', 1, { '<C-r>', '<C-l>' }, { input = 'aa bb!cc-dd ee', caret = 15 })
+
+  set_cursor(2, 0)
+  validate('', 1, { '<C-r>', '<C-f>' }, { input = 'tests/screenshots', caret = 18 })
+
+  -- Should stop on cancelling or bad key
+  validate('', 1, { '<C-r>', '<Esc>' }, {})
+  validate('', 1, { '<C-r>', '<C-c>' }, {})
+end
+
+T['default_key()']['supports pasting'] = new_set({ parametrize = { { '<C-q>' }, { '<C-v>' } } }, {
+  test = function(key)
+    local validate = validate_key_with_extra_keys
+
+    -- Regular
+    validate('', 1, { key, 'b' }, { input = 'b', caret = 2 })
+    validate('a', 1, { key, 'b' }, { input = 'ba', caret = 2 })
+    validate('a', 2, { key, 'b' }, { input = 'ab', caret = 3 })
+
+    -- Special keys that are translated
+    validate('', 1, { key, ' ' }, { input = '<Space>', caret = 8 })
+    validate('', 1, { key, '<BS>' }, { input = '<BS>', caret = 5 })
+    validate('', 1, { key, '<Del>' }, { input = '<Del>', caret = 6 })
+    validate('', 1, { key, '<C-S-t>' }, { input = '<C-S-T>', caret = 8 })
+
+    -- With digits as in `:h i_ctrl-V_digit`
+    local validate_digit = function(keys_typed, ref_input)
+      validate('', 1, { key, unpack(keys_typed) }, { input = ref_input, caret = vim.fn.strchars(ref_input) + 1 })
+
+      -- Typing cancelling key early should stop without side effects
+      for i = 1, #keys_typed - 1 do
+        local sub_keys = vim.list_slice(keys_typed, 1, i)
+        validate('', 1, { key, unpack(sub_keys), '<Esc>' }, {})
+        validate('', 1, { key, unpack(sub_keys), '<C-c>' }, {})
+      end
+    end
+
+    local char_255 = child.fn.nr2char(255)
+    validate_digit({ '2', '5', '5' }, char_255)
+    validate_digit({ 'o', '3', '7', '7' }, char_255)
+    validate_digit({ 'O', '3', '7', '7' }, char_255)
+    validate_digit({ 'x', 'f', 'f' }, char_255)
+    validate_digit({ 'X', 'f', 'f' }, char_255)
+    validate_digit({ 'u', '0', '0', 'f', 'f' }, char_255)
+    validate_digit({ 'U', '0', '0', '0', '0', '0', '0', 'f', 'f' }, char_255)
+
+    -- Should insert some special keys without translation
+    local validate_no_keytrans = function(key_typed)
+      local ref_key_typed = child.api.nvim_replace_termcodes(key_typed, true, true, true)
+      validate('', 1, { key, key_typed }, { input = ref_key_typed, caret = 2 })
+    end
+
+    -- - Generic control keys
+    validate_no_keytrans('<C-a>')
+    validate_no_keytrans('<C-h>')
+
+    -- - Whitespace control keys
+    validate_no_keytrans('<Tab>')
+    validate_no_keytrans('<C-i>')
+    validate_no_keytrans('<C-l>')
+
+    -- - Accepting keys
+    validate_no_keytrans('<C-m>')
+    validate_no_keytrans('<CR>')
+
+    -- - Cancelling keys
+    validate_no_keytrans('<Esc>')
+    validate_no_keytrans('<C-c>')
+  end,
+})
 
 T['default_key()']['can complete with state method'] = function()
   -- Regular
@@ -698,7 +895,18 @@ T['default_key()']['works with special keys'] = function()
   MiniTest.skip()
 end
 
-T['default_key()']['respects `opts.autopair`'] = function() MiniTest.skip() end
+T['default_key()']['respects `opts.autopair`'] = function()
+  -- Open
+
+  -- Close
+
+  -- Closeopen
+
+  -- <BS>
+
+  -- Should insert without autopair with <C-v> / <C-q>
+  MiniTest.skip()
+end
 
 T['default_highlight()'] = new_set()
 
@@ -1248,10 +1456,7 @@ T['state_to_chunks()']['respects `opts.symbol_hide`'] = function()
 end
 
 T['state_to_chunks()']['validates input'] = function()
-  expect.error(function() child.lua('MiniInput.state_to_chunks(1)') end, '`state`.*table')
-
-  mock_state({})
-  expect.error(function() child.lua('MiniInput.state_to_chunks(_G.mock_state, "a")') end, '`max_width`.*number')
+  -- No `state` validattion for performance reasons
 
   local validate_opts = function(bad_opts, pattern)
     expect.error(function() state_to_chunks({}, nil, bad_opts) end, pattern)
@@ -1262,6 +1467,203 @@ T['state_to_chunks()']['validates input'] = function()
   validate_opts({ include_hint = 1 }, '`opts.include_hint`.*boolean')
   validate_opts({ symbol_caret = 1 }, '`opts.symbol_caret`.*string')
   validate_opts({ symbol_hide = 1 }, '`opts.symbol_hide`.*string')
+end
+
+T['apply_handler()'] = new_set()
+
+local mock_state_with_tracking_handlers = function(state)
+  mock_state(state)
+  child.lua([[
+    _G.handlers_log = {}
+    _G.mock_state.opts.handlers.complete = function(state, ...)
+      table.insert(_G.handlers_log, { 'complete', ... })
+      state.complete = { base = '', items = { 'u', 'v' } }
+    end
+    _G.mock_state.opts.handlers.highlight = function(state, ...)
+      table.insert(_G.handlers_log, { 'highlight', ... })
+      state.highlight = { { from = 1, to = 1, hl = 'AA' } }
+    end
+    _G.mock_state.opts.handlers.key = function(state, ...)
+      table.insert(_G.handlers_log, { 'key', ... })
+      state.data.n_key_handler = (state.data.n_key_handler or 0) + 1
+    end
+    _G.mock_state.opts.handlers.view = function(state, ...)
+      table.insert(_G.handlers_log, { 'view', ... })
+      state.data.n_view_handler = (state.data.n_view_handler or 0) + 1
+    end
+  ]])
+end
+
+local mock_state_with_returning_handlers = function(state)
+  mock_state(state)
+  child.lua([[
+    _G.handlers_log = {}
+    _G.mock_state.opts.handlers.complete = function(state, ...)
+      local res = vim.deepcopy(state)
+      res.complete = { base = '', items = { 'u', 'v' } }
+      return res
+    end
+    _G.mock_state.opts.handlers.highlight = function(state, ...)
+      local res = vim.deepcopy(state)
+      res.highlight = { { from = 1, to = 1, hl = 'AA' } }
+      return res
+    end
+    _G.mock_state.opts.handlers.key = function(state, ...)
+      local res = vim.deepcopy(state)
+      res.data.n_key_handler = (res.data.n_key_handler or 0) + 1
+      return res
+    end
+    _G.mock_state.opts.handlers.view = function(state, ...)
+      local res = vim.deepcopy(state)
+      res.data.n_view_handler = (res.data.n_view_handler or 0) + 1
+      return res
+    end
+  ]])
+end
+
+local apply_handler_to_mock_state = function(name, ...)
+  child.lua('_G.name = ' .. vim.inspect(name))
+  child.lua('_G.args = ' .. vim.inspect({ ... }))
+  child.lua('_G.new_state = MiniInput.apply_handler(vim.deepcopy(_G.mock_state), _G.name, unpack(_G.args))')
+end
+
+local validate_apply = function(ref_state_changes)
+  local old_state = get_state('mock_state')
+  local new_state = get_state('new_state')
+  eq(compute_changed_values(old_state, new_state), ref_state_changes)
+end
+
+T['apply_handler()']['works'] = function()
+  mock_state_with_tracking_handlers({})
+  apply_handler_to_mock_state('complete', 'history')
+  -- - Should automatically add `id` and `method` fields
+  local ref_complete = { base = '', items = { 'u', 'v' }, id = 0, method = 'history' }
+  validate_apply({ complete = ref_complete })
+  validate_log('handlers_log', { { 'complete', 'history' } })
+
+  mock_state_with_tracking_handlers({})
+  apply_handler_to_mock_state('highlight')
+  validate_apply({ highlight = { { from = 1, hl = 'AA', to = 1 } } })
+  validate_log('handlers_log', { { 'highlight' } })
+
+  mock_state_with_tracking_handlers({})
+  apply_handler_to_mock_state('key', 'a')
+  validate_apply({ data = { n_key_handler = 1 } })
+  validate_log('handlers_log', { { 'key', 'a' } })
+
+  mock_state_with_tracking_handlers({})
+  apply_handler_to_mock_state('view')
+  validate_apply({ data = { n_view_handler = 1 } })
+  validate_log('handlers_log', { { 'view' } })
+end
+
+T['apply_handler()']['works when handler returns new state'] = function()
+  mock_state_with_returning_handlers({})
+  apply_handler_to_mock_state('complete', 'history')
+  local ref_complete = { base = '', items = { 'u', 'v' }, id = 0, method = 'history' }
+  validate_apply({ complete = ref_complete })
+
+  mock_state_with_returning_handlers({})
+  apply_handler_to_mock_state('highlight')
+  validate_apply({ highlight = { { from = 1, hl = 'AA', to = 1 } } })
+
+  mock_state_with_returning_handlers({})
+  apply_handler_to_mock_state('key', 'a')
+  validate_apply({ data = { n_key_handler = 1 } })
+
+  mock_state_with_returning_handlers({})
+  apply_handler_to_mock_state('view')
+  validate_apply({ data = { n_view_handler = 1 } })
+end
+
+T['apply_handler()']['respects hidden input'] = function()
+  -- Should apply key and view handlers, but not complete and highlight
+  mock_state_with_tracking_handlers({ opts = { hide = true } })
+  apply_handler_to_mock_state('complete', 'history')
+  validate_apply({})
+  validate_log('handlers_log', {})
+
+  mock_state_with_tracking_handlers({ opts = { hide = true } })
+  apply_handler_to_mock_state('highlight')
+  validate_apply({})
+  validate_log('handlers_log', {})
+
+  mock_state_with_tracking_handlers({ opts = { hide = true } })
+  apply_handler_to_mock_state('key', 'a')
+  validate_apply({ data = { n_key_handler = 1 } })
+  validate_log('handlers_log', { { 'key', 'a' } })
+
+  mock_state_with_tracking_handlers({ opts = { hide = true } })
+  apply_handler_to_mock_state('view')
+  validate_apply({ data = { n_view_handler = 1 } })
+  validate_log('handlers_log', { { 'view' } })
+end
+
+T['apply_handler()']['handles bad handler application'] = function()
+  -- Should error during handler application
+  mock_state({})
+  child.lua('_G.mock_state.opts.handlers.key = function(...) error("Bad key handler") end')
+  expect.error(function() apply_handler_to_mock_state('key', 'a') end, '%(mini%.input%).*Bad key handler')
+
+  -- Should validate output to be a valid state
+  mock_state({})
+  child.lua('_G.mock_state.opts.handlers.view = function(state) state.caret = "a" end')
+  expect.error(function() apply_handler_to_mock_state('view') end, '[^)] %(mini%.input%) `state.caret`.*number')
+end
+
+T['apply_handler()']['works during input key query process'] = function()
+  mock_state_with_tracking_handlers({})
+  child.lua_notify([[
+    local handlers = _G.mock_state.opts.handlers
+
+    handlers.complete = function(state, method)
+      table.insert(_G.handlers_log, { 'complete', method })
+      if method == 'history' then state.complete = { base = '', items = { 'u', 'v' } } end
+      if method == 'error' then
+        state.complete = nil
+        error('Bad complete method')
+      end
+    end
+
+    handlers.key = function(state, key)
+      if key == ' ' or key == 'e' then
+        local method = key == ' ' and 'history' or 'error'
+        state = MiniInput.apply_handler(state, 'complete', method)
+      end
+      table.insert(_G.handlers_log, { 'key', key, state.status, state.complete })
+      return state
+    end
+
+    MiniInput.get({ handlers = handlers })
+  ]])
+  child.lua('_G.handlers_log = {}')
+
+  -- Should apply proper complete handler when requested inside key handler
+  type_keys(' ')
+  local ref_complete = { base = '', items = { 'u', 'v' }, id = 0, method = 'history' }
+  local ref_key_entry = { 'key', ' ', 'progress', ref_complete }
+  validate_log('handlers_log', { { 'complete', 'history' }, ref_key_entry, { 'highlight' }, { 'view' } })
+
+  -- Should finish current step execution and trigger input finishing step
+  child.lua('_G.apply_handler_log = {}')
+  type_keys('e')
+  --stylua: ignore
+  local ref_handlers_log = {
+    -- Finish current step
+    { 'complete', 'error' }, { 'key', 'e', 'cancel', nil }, { 'highlight' }, { 'view' },
+    -- Perform finishing step. `state.complete` is still the same as from
+    -- previous step since input state was not changed due to handler error.
+    { 'key', vim.NIL, 'cancel', ref_complete }, { 'highlight' }, { 'view' },
+
+  }
+  if child.fn.has('nvim-0.10') == 1 then validate_log('handlers_log', ref_handlers_log) end
+  validate_no_input()
+end
+
+T['apply_handler()']['validates arguments and output'] = function()
+  -- No input `state` validattion for performance reasons
+
+  expect.error(function() apply_handler_to_mock_state({}, 1) end, '`name`.*one of')
 end
 
 return T

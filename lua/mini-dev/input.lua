@@ -266,6 +266,8 @@ end
 --- TODO: Describe key query process. Handler order. When they are called:
 --- once in the start, on every user key press, once at the end.
 ---
+--- Use |MiniInput.apply_handler()|.
+---
 --- ## Key ~
 ---
 --- Key handler process user key presses.
@@ -394,7 +396,8 @@ MiniInput.get = function(opts)
   if H.state ~= nil then return nil end
 
   local init_state = H.state_new(H.get_config(opts))
-  H.state_set(init_state)
+  H.state_validate(init_state)
+  H.state = init_state
 
   H.handle_step(nil)
   if H.state_is_end() then return H.state_finish() end
@@ -427,8 +430,9 @@ end
 --- <
 MiniInput.ui_input = function(opts, on_confirm)
   opts = opts or {}
-  local input_opts = { completion = opts.completion, init_keys = { opts.default }, prompt = opts.prompt }
+  local input_opts = { completion = opts.completion, prompt = opts.prompt, scope = opts.scope }
   input_opts.handlers = { highlight = H.make_ui_select_hl_fun(opts.highlight) }
+  input_opts.init_keys = { opts.default }
 
   on_confirm(MiniInput.get(input_opts))
 end
@@ -934,7 +938,6 @@ end
 ---@param opts table|nil Options. Possible fields:
 ---   - ...
 MiniInput.state_to_chunks = function(state, max_width, opts)
-  H.state_validate(state)
   H.check_type('max_width', max_width, 'number', true)
   local default_opts = { keytrans = true, include_prompt = true, include_hint = true }
   default_opts.symbol_caret = '▏'
@@ -989,6 +992,34 @@ MiniInput.state_to_chunks = function(state, max_width, opts)
   return H.fit_chunks_to_width(chunks, max_width, caret_offset)
 end
 
+--- Apply state's handler
+---
+--- TODO:
+--- - Validates handler output to be a valid state.
+---
+---@param state table ...
+---@param name string Valid handler name.
+---@param ... any Extra handler parameter(s), like `key` for key handler and
+---   `method` for complete handler.
+MiniInput.apply_handler = function(state, name, ...)
+  H.check_one_of('name', name, { 'complete', 'highlight', 'key', 'view' })
+
+  if state.opts.hide and (name == 'highlight' or name == 'complete') then return state end
+  local ok_handler, res = pcall(state.opts.handlers[name], state, ...)
+  if not ok_handler then H.cache_error(state, '(mini.input) Error applying `' .. name .. '` handler: ' .. res) end
+
+  local new_state = (ok_handler and res ~= nil) and res or state
+  if name == 'complete' and type(new_state.complete) == 'table' then
+    new_state.complete.id = 0
+    new_state.complete.method = ({ ... })[1]
+  end
+
+  local ok_state, msg = pcall(H.state_validate, new_state)
+  if not ok_state then H.cache_error(new_state, msg) end
+
+  return (ok_handler and ok_state) and new_state or state
+end
+
 -- Helper data ================================================================
 -- Module default config
 H.default_config = vim.deepcopy(MiniInput.config)
@@ -1034,8 +1065,10 @@ H.apply_config = function(config)
   H.history = {}
 
   -- Ensure default scope for some core functions
-  -- NOTE: Use `vim.schedule` to not load `vim.lsp` during startup
-  vim.schedule(function() vim.lsp.buf.rename = H.mock_lsp_buf_rename(vim.lsp.buf.rename) end)
+  if vim.fn.has('nvim-0.12.3') == 0 then
+    -- NOTE: Use `vim.schedule` to not load `vim.lsp` during startup
+    vim.schedule(function() vim.lsp.buf.rename = H.mock_lsp_buf_rename(vim.lsp.buf.rename) end)
+  end
 end
 
 H.create_autocommands = function()
@@ -1094,12 +1127,6 @@ H.state_new = function(opts)
   -- opts.scope should already be precomputed
 
   return { caret = 1, data = {}, input = '', opts = opts, status = 'start' }
-end
-
-H.state_set = function(new)
-  local ok, msg = pcall(H.state_validate, new)
-  if not ok then return H.cache_error(H.state, msg) end
-  H.state = H.copy_tables(new)
 end
 
 H.state_validate = function(x)
@@ -1176,37 +1203,26 @@ end
 
 -- Handlers -------------------------------------------------------------------
 H.handle_step = function(key, skip_redraw)
-  local state = H.copy_tables(H.state)
-  H.state_set(H.apply_handler(H.copy_tables(H.state), 'key', key))
+  local state, ref_state = H.copy_tables(H.state), H.copy_tables(H.state)
+  state = MiniInput.apply_handler(state, 'key', key)
 
   -- Stop completion if there was something outside completion navigation
-  local is_complete_stop = vim.deep_equal(state.complete, H.state.complete) and not vim.deep_equal(state, H.state)
-  if is_complete_stop then H.state.complete = nil end
+  local is_complete_stop = vim.deep_equal(state.complete, ref_state.complete) and not vim.deep_equal(state, ref_state)
+  if is_complete_stop then state.complete = nil end
 
   -- Stop previous highlighting if something changed outside of caret
-  local caret = H.state.caret
-  H.state.caret, state.caret = nil, nil
-  if not vim.deep_equal(state, H.state) then H.state.highlight = nil end
-  H.state.caret = caret
+  local caret = state.caret
+  state.caret, ref_state.caret = nil, nil
+  if not vim.deep_equal(state, ref_state) then state.highlight = nil end
+  state.caret = caret
 
-  H.state_set(H.apply_handler(H.copy_tables(H.state), 'highlight'))
-  H.state_set(H.apply_handler(H.copy_tables(H.state), 'view'))
+  state = MiniInput.apply_handler(state, 'highlight')
+  state = MiniInput.apply_handler(state, 'view')
+
+  if H.cache.error == nil then H.state = state end
+  if H.cache.error ~= nil then H.state.status = 'cancel' end
+
   if not skip_redraw then H.redraw() end
-end
-
--- TODO: Consider exporting since it can be useful for complete handler
-H.apply_handler = function(state, name, arg)
-  if state.opts.hide and (name == 'highlight' or name == 'complete') then return state end
-
-  local ok, res = pcall(state.opts.handlers[name], state, arg)
-  if not ok then return H.cache_error(state, 'Error applying `' .. name .. '` handler: ' .. res) end
-
-  local new_state = res or state
-  if name == 'complete' and type(new_state.complete) == 'table' then
-    new_state.complete.id = 0
-    new_state.complete.method = arg
-  end
-  return new_state
 end
 
 H.mock_key_input = function(keys)
@@ -1288,7 +1304,7 @@ end
 
 -- Special insert
 H.key_methods[kc('<C-k>')] = function(state, _)
-  local ok, new = pcall(vim.fn.digraph_get, H.getcharstr_many(2))
+  local ok, new = pcall(vim.fn.digraph_get, H.getcharstr_many(2, { ['\27'] = true }))
   if not ok then return end
   H.insert_at_caret(state, new)
 end
@@ -1316,8 +1332,8 @@ H.key_methods[kc('<C-q>')] = function(state, _)
 
   -- See `:h i_CTRL-V_digit`
   if char:find('^[%doOxXuU]$') ~= nil then
-    local ok, new_text = pcall(vim.fn.nr2char, H.get_ctrl_v_digits(char))
-    if ok then H.insert_at_caret(state, new_text) end
+    local new_text = H.get_ctrl_v_digits(char)
+    if new_text ~= nil then H.insert_at_caret(state, new_text) end
     return
   end
 
@@ -1329,11 +1345,11 @@ H.key_methods[kc('<C-v>')] = H.key_methods[kc('<C-q>')]
 
 -- History navigation
 H.key_methods[kc('<Up>')] = function(state, _)
-  if state.complete == nil then state = H.apply_handler(state, 'complete', 'history') end
+  if state.complete == nil then state = MiniInput.apply_handler(state, 'complete', 'history') end
   return H.advance_state_complete(state, -1)
 end
 H.key_methods[kc('<Down>')] = function(state, _)
-  if state.complete == nil then state = H.apply_handler(state, 'complete', 'history') end
+  if state.complete == nil then state = MiniInput.apply_handler(state, 'complete', 'history') end
   return H.advance_state_complete(state, 1)
 end
 H.key_methods[kc('<C-n>')] = H.key_methods[kc('<Down>')]
@@ -1341,11 +1357,11 @@ H.key_methods[kc('<C-p>')] = H.key_methods[kc('<Up>')]
 
 -- Completion navigation
 H.key_methods[kc('<Tab>')] = function(state, _)
-  if state.complete == nil then state = H.apply_handler(state, 'complete', state.opts.completion) end
+  if state.complete == nil then state = MiniInput.apply_handler(state, 'complete', state.opts.completion) end
   return H.advance_state_complete(state, 1)
 end
 H.key_methods[kc('<S-Tab>')] = function(state, _)
-  if state.complete == nil then state = H.apply_handler(state, 'complete', state.opts.completion) end
+  if state.complete == nil then state = MiniInput.apply_handler(state, 'complete', state.opts.completion) end
   return H.advance_state_complete(state, -1)
 end
 
@@ -1393,13 +1409,14 @@ H.match_keyword_chars = function(input, caret, side)
 end
 
 H.get_ctrl_v_digits = function(submode)
-  if submode:find('^%d$') then
-    local rest = H.getcharstr_many(2)
-    return tonumber(rest ~= nil and (submode .. rest) or nil)
-  end
-  if submode == 'o' or submode == 'O' then return tonumber(H.getcharstr_many(3), 8) end
-  local n_chars = submode == 'U' and 8 or (submode == 'u' and 4 or 2)
-  return tonumber(H.getcharstr_many(n_chars), 16)
+  local n_extra = ({ o = 3, O = 3, u = 4, U = 8 })[submode] or 2
+  local digits = H.getcharstr_many(n_extra, { ['\27'] = true })
+  if digits == nil then return nil end
+  digits = (submode:find('%d') ~= nil and submode or '') .. digits
+
+  local base = ({ o = 8, O = 8, x = 16, X = 16, u = 16, U = 16 })[submode] or 10
+  local ok, res = pcall(vim.fn.nr2char, tonumber(digits, base))
+  return ok and res or nil
 end
 
 H.advance_state_complete = function(state, increment)
@@ -1827,11 +1844,11 @@ end
 H.safe_fn_getcharstr = function() return pcall(vim.fn.getcharstr, -1, { cursor = 'hide' }) end
 if vim.fn.has('nvim-0.11') == 0 then H.safe_fn_getcharstr = function() return pcall(vim.fn.getcharstr) end end
 
-H.getcharstr_many = function(n)
+H.getcharstr_many = function(n, early_stop)
   local res = {}
   for i = 1, n do
     res[i] = H.getcharstr()
-    if res[i] == nil then return nil end
+    if res[i] == nil or early_stop[res[i]] then return nil end
   end
   return table.concat(res)
 end
