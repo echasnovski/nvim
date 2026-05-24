@@ -592,7 +592,38 @@ T['gen_highlight'] = new_set()
 
 T['gen_highlight']['treesitter()'] = new_set()
 
-T['gen_highlight']['treesitter()']['works'] = function() MiniTest.skip() end
+T['gen_highlight']['treesitter()']['works'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Upstream has issues on Neovim<=0.9') end
+
+  local validate = function(lang, input, hl_ranges)
+    child.lua('_G.lang = ' .. vim.inspect(lang))
+    mock_state({ input = input })
+    child.lua('_G.mock_state.opts.handlers.highlight = MiniInput.gen_highlight.treesitter(_G.lang)')
+    child.lua('_G.new_state = MiniInput.apply_handler(vim.deepcopy(_G.mock_state), "highlight")')
+    local old_state = get_state('mock_state')
+    local new_state = get_state('new_state')
+
+    local highlight
+    if hl_ranges ~= nil then
+      highlight = vim.tbl_map(function(x) return { from = x[1], to = x[2], hl = x[3] } end, hl_ranges)
+    end
+    eq(compute_changed_values(old_state, new_state), { highlight = highlight })
+  end
+
+  local hl_ranges = { { 1, 3, '@keyword.vim' }, { 5, 14, '@variable.builtin.vim' }, { 15, 15, '@operator.vim' } }
+  validate('vim', 'set shiftwidth=2', hl_ranges)
+
+  -- Should work with injections
+  hl_ranges =
+    { { 1, 3, '@keyword.vim' }, { 5, 5, '@variable.lua' }, { 7, 7, '@operator.lua' }, { 9, 9, '@number.lua' } }
+  validate('vim', 'lua a = 1', hl_ranges)
+
+  -- Should work with multibyte characters
+  validate('vim', 'echo "фячш"', { { 1, 4, '@keyword.vim' }, { 6, 11, '@string.vim' } })
+
+  -- Should not error on unknown language
+  validate('unknown', 'hello', nil)
+end
 
 T['gen_view'] = new_set()
 
@@ -674,8 +705,8 @@ T['default_key()']['can move caret'] = function()
   validate_move('ab', 1, '<M-l>', 2)
 
   -- Left/right by word. Should jump over all consecutive keyword and non
-  -- keyword characters. Here keyword characters are 'a' and 'b'.
-  child.o.iskeyword = '97-98'
+  -- keyword characters.
+  child.o.iskeyword = 'a,b'
 
   validate_move('axabxxab', 1, '<S-Left>', 1)
   validate_move('axabxxab', 2, '<S-Left>', 1)
@@ -778,7 +809,7 @@ T['default_key()']['can delete'] = function()
   validate_delete('фtя', 3, '<C-u>', 'я', 1)
 
   -- <C-w>
-  child.o.iskeyword = '97-98'
+  child.o.iskeyword = 'a,b'
   validate_delete('axabxxab', 1, '<C-w>', 'axabxxab', 1)
   validate_delete('axabxxab', 2, '<C-w>', 'xabxxab', 1)
   validate_delete('axabxxab', 3, '<C-w>', 'aabxxab', 2)
@@ -1164,7 +1195,78 @@ end
 
 T['default_highlight()'] = new_set()
 
-T['default_highlight()']['works'] = function() MiniTest.skip() end
+local validate_highlight = function(state, hl_ranges)
+  local highlight
+  if hl_ranges ~= nil then
+    highlight = vim.tbl_map(function(x) return { from = x[1], to = x[2], hl = 'MiniInputAdded' } end, hl_ranges)
+  end
+  validate_default_handler('highlight', state, nil, { highlight = highlight })
+end
+
+T['default_highlight()']['works'] = function()
+  local validate = function(input, base, item, hl_ranges)
+    local state = { input = input, complete = { base = base, id = 1, items = { item }, method = 'test' } }
+    validate_highlight(state, hl_ranges)
+  end
+
+  -- Should highlight unmatched characters during completion
+  validate('abx', 'b', 'bx', { { 3, 3 } })
+  validate('axb', 'b', 'xb', { { 2, 2 } })
+
+  validate('abxc', 'bc', 'bxc', { { 3, 3 } })
+  validate('abxcx', 'bc', 'bxcx', { { 3, 3 }, { 5, 5 } })
+  validate('abxxc', 'bc', 'bxxc', { { 3, 4 } })
+
+  validate('axbxcx', 'bc', 'xbxcx', { { 2, 2 }, { 4, 4 }, { 6, 6 } })
+
+  -- Should work with empty base
+  validate('abx', '', 'x', { { 3, 3 } })
+  validate('x', '', 'x', { { 1, 1 } })
+
+  -- Should work when caret is not at the end
+  local state = { input = 'ax bb', caret = 3, complete = { base = 'a', id = 1, items = { 'ax' }, method = 'test' } }
+  validate_highlight(state, { { 2, 2 } })
+
+  state = { input = 'x bb', caret = 2, complete = { base = '', id = 1, items = { 'x' }, method = 'test' } }
+  validate_highlight(state, { { 1, 1 } })
+
+  -- Should work with multibyte characters
+  validate('фячш', 'ч', 'чш', { { 4, 4 } })
+  validate('фячш', 'ш', 'чш', { { 3, 3 } })
+
+  validate('фячш', 'я', 'ячш', { { 3, 4 } })
+  validate('фячш', 'ч', 'ячш', { { 2, 2 }, { 4, 4 } })
+  validate('фячш', 'ш', 'ячш', { { 2, 3 } })
+  validate('фячш', 'чш', 'ячш', { { 2, 2 } })
+  validate('фячш', 'яш', 'ячш', { { 3, 3 } })
+  validate('фячш', 'яч', 'ячш', { { 4, 4 } })
+end
+
+T['default_highlight()']['does nothing when expected'] = function()
+  -- No active completion
+  validate_highlight({}, nil)
+  validate_highlight({ input = 'ab' }, nil)
+
+  -- Base is shown during active completion, without or with items
+  local state = { input = 'a', complete = { base = 'a', id = 0, items = {}, method = 'test' } }
+  validate_highlight(state, nil)
+
+  state.items = { 'ab' }
+  validate_highlight(state, nil)
+
+  -- Input is ending
+  state.input, state.complete.id = 'ab', 1
+  state.status = 'accept'
+  validate_highlight(state, nil)
+  state.status = 'cancel'
+  validate_highlight(state, nil)
+end
+
+T['default_highlight()']['works with already present `state.highlight`'] = function()
+  local state = { input = 'abx', complete = { base = 'b', id = 1, items = { 'bx' }, method = 'test' } }
+  state.highlight = { { from = 1, to = 3, hl = 'AA' } }
+  validate_highlight(state, { [2] = { 3, 3 } })
+end
 
 T['default_view()'] = new_set()
 
@@ -1174,12 +1276,231 @@ T['default_view()']['can interactively change style'] = function() MiniTest.skip
 
 T['default_complete()'] = new_set()
 
-T['default_complete()']['works'] = function() MiniTest.skip() end
+local validate_complete = function(state, method, ref_state_change)
+  validate_default_handler('complete', state, method, ref_state_change)
+end
 
-T['default_complete()']['correctly computes base'] = function()
-  -- Method 'cmdline':
-  -- `:e /path/to/` should be usable
+T['default_complete()']['method=""'] = new_set()
+
+T['default_complete()']['method=""']['works'] = function()
+  set_lines({ 'ab axb abx xab', 'abb' })
+
+  -- Should compute order based on best fuzzy match
+  -- but do not include base itself as the item
+  local ref_changes = { complete = { base = 'ab', items = { 'abx', 'abb', 'xab', 'axb' } } }
+  validate_complete({ input = 'ab' }, '', ref_changes)
+  validate_complete({ input = 'prefix ab' }, '', ref_changes)
+  validate_complete({ input = 'abc', caret = 3 }, '', ref_changes)
+
+  -- Cursor position should not affect the result
+  set_cursor(1, 10)
+  validate_complete({ input = 'ab' }, '', ref_changes)
+  set_cursor(2, 0)
+  validate_complete({ input = 'ab' }, '', ref_changes)
+
+  -- Should set no items for empty base
+  local no_items = { complete = { base = '', items = {} } }
+  validate_complete({ input = '' }, '', no_items)
+  validate_complete({ input = 'prefix ' }, '', no_items)
+
+  -- Uses keyword at caret as the base and keywords as matches
+  child.o.iskeyword = 'a,b,x'
+  validate_complete({ input = 'cab' }, '', ref_changes)
+
+  child.o.iskeyword = 'a,b'
+  -- - No matches containing "x" since it is not a keyword
+  validate_complete({ input = 'cab' }, '', { complete = { base = 'ab', items = { 'abb' } } })
+  validate_complete({ input = 'ab' }, '', { complete = { base = 'ab', items = { 'abb' } } })
+
+  child.cmd('set iskeyword&')
+
+  -- Should work with multibyte characters
+  set_lines({ 'фячш', 'фяш' })
+  validate_complete({ input = 'фш' }, '', { complete = { base = 'фш', items = { 'фяш', 'фячш' } } })
+
+  -- Should work with characters special for search
+  child.o.iskeyword = 'a,b,*,/'
+  set_lines({ 'ab*/' })
+  validate_complete({ input = 'ab' }, '', { complete = { base = 'ab', items = { 'ab*/' } } })
+end
+
+T['default_complete()']['method=""']["respects 'ignorecase' and 'smartcase'"] = function()
+  set_lines({ 'ab bA' })
+
+  local validate_case = function(ignorecase, smartcase, input, ref_items)
+    child.o.ignorecase, child.o.smartcase = ignorecase, smartcase
+    validate_complete({ input = input }, '', { complete = { base = input, items = ref_items } })
+    child.o.ignorecase, child.o.smartcase = false, false
+  end
+
+  validate_case(false, false, 'a', { 'ab' })
+  validate_case(false, false, 'A', { 'bA' })
+
+  validate_case(false, true, 'a', { 'ab' })
+  validate_case(false, true, 'A', { 'bA' })
+
+  local ref_ignorecase = child.fn.has('nvim-0.12') == 1 and { 'ab', 'bA' } or { 'bA', 'ab' }
+  validate_case(true, false, 'a', ref_ignorecase)
+  validate_case(true, false, 'A', ref_ignorecase)
+
+  validate_case(true, true, 'a', ref_ignorecase)
+  validate_case(true, true, 'A', { 'bA' })
+end
+
+T['default_complete()']['method=""']['does not have side effects'] = function()
+  set_lines({ 'ab AB', 'abx axb xab' })
+  set_cursor(2, 5)
+  child.fn.setreg('/', 'prev')
+  child.cmd('let v:hlsearch=0')
+
+  validate_complete({ input = 'ab' }, '', { complete = { base = 'ab', items = { 'abx', 'xab', 'axb' } } })
+
+  eq(child.g._miniinput_matches, vim.NIL)
+  eq(get_cursor(), { 2, 5 })
+  eq(child.v.hlsearch, 0)
+  eq(child.fn.getreg('/'), 'prev')
+  eq(child.cmd_capture('messages'), '')
+end
+
+T['default_complete()']['works with method="history"'] = function()
+  local cwd = child.fn.getcwd()
+  set_history({
+    { cwd = cwd, prompt = 'A', input = 'ab', scope = 'editor' },
+    { cwd = cwd, prompt = 'A', input = 'ac', scope = 'editor' },
+    { cwd = cwd, prompt = 'A', input = 'abc', scope = 'editor' },
+
+    -- Only latest duplicating entry should be present
+    { cwd = cwd, prompt = 'A', input = 'ab', scope = 'editor' },
+
+    -- Entries should be ordered as in history, not alphabetically
+    { cwd = cwd, prompt = 'A', input = 'aa', scope = 'editor' },
+
+    -- By default should only suggest matches from precisely same history
+    { cwd = cwd .. '/tests', prompt = 'A', input = 'au', scope = 'editor' },
+    { cwd = cwd, prompt = 'XXX', input = 'av', scope = 'editor' },
+    { cwd = cwd, prompt = 'A', input = 'aw', scope = 'cursor' },
+  })
+
+  local validate = function(state, ref_complete_changes)
+    validate_complete(state, 'history', { complete = ref_complete_changes })
+  end
+
+  local state = { input = '', opts = { prompt = 'A', scope = 'editor' } }
+  validate(state, { base = '', items = { 'ac', 'abc', 'ab', 'aa' } })
+
+  state.input = 'a'
+  validate(state, { base = 'a', items = { 'ac', 'abc', 'ab', 'aa' } })
+
+  state.input = 'x'
+  validate(state, { base = 'x', items = {} })
+
+  -- Should not show entries that match exactly
+  state.input = 'ab'
+  validate(state, { base = 'ab', items = { 'abc' } })
+  state.input = 'abc'
+  validate(state, { base = 'abc', items = {} })
+
+  -- Only prefix matching, no fuzzy matching
+  state.input = 'b'
+  validate(state, { base = 'b', items = {} })
+
+  -- Should work with caret not at the end
+  state.input, state.caret = 'af', 2
+  validate(state, { base = 'a', items = { 'ac', 'abc', 'ab', 'aa' } })
+  state.caret = 1
+  validate(state, { base = '', items = { 'ac', 'abc', 'ab', 'aa' } })
+  state.caret = nil
+
+  -- Should do precise matching
+  state.input = 'a'
+
+  child.fn.chdir(cwd .. '/tests')
+  validate(state, { base = 'a', items = { 'au' } })
+  child.fn.chdir(cwd)
+
+  state.opts.prompt = 'XXX'
+  validate(state, { base = 'a', items = { 'av' } })
+  state.opts.prompt = 'A'
+
+  state.opts.scope = 'cursor'
+  validate(state, { base = 'a', items = { 'aw' } })
+  state.opts.scope = 'editor'
+end
+
+T['default_complete()']['respects `opts.precise_history`'] = function()
+  local cwd = child.fn.getcwd()
+  set_history({
+    { cwd = cwd, prompt = 'A', input = 'ab', scope = 'editor' },
+    { cwd = cwd .. '/tests', prompt = 'A', input = 'au', scope = 'editor' },
+    { cwd = cwd, prompt = 'XXX', input = 'av', scope = 'editor' },
+    { cwd = cwd, prompt = 'A', input = 'aw', scope = 'cursor' },
+  })
+
+  local state = { input = '', opts = { prompt = 'A', scope = 'editor' } }
+  local validate = function(precise_history, ref_items)
+    mock_state(state)
+    child.lua('_G.precise_history = ' .. vim.inspect(precise_history))
+
+    child.lua([[
+      local opts = { precise_history = _G.precise_history }
+      local state = vim.deepcopy(_G.mock_state)
+      _G.new_state = MiniInput.default_complete(state, 'history', opts) or state
+    ]])
+    local old_state = get_state('mock_state')
+    local new_state = get_state('new_state')
+    local ref_changes = { complete = { base = '', items = ref_items } }
+    eq(compute_changed_values(old_state, new_state), ref_changes)
+  end
+
+  validate(true, { 'ab' })
+  validate(false, { 'ab', 'au', 'av', 'aw' })
+
+  state.opts.prompt = 'XXX'
+  validate(true, { 'av' })
+  validate(false, { 'ab', 'au', 'av', 'aw' })
+
+  state.opts.scope = 'cursor'
+  validate(true, {})
+  validate(false, { 'ab', 'au', 'av', 'aw' })
+end
+
+T['default_complete()']['works with built-in methods'] = function()
+  child.lua('_G.n_modechanged = 0')
+  child.cmd('au ModeChanged *:* lua _G.n_modechanged = _G.n_modechanged + 1')
+
+  -- Should never change mode
+  eq(child.lua_get('_G.n_modechanged'), 0)
+
   MiniTest.skip()
+end
+
+T['default_complete()']['works with method="cmdline"'] = function()
+  -- Should correctly compute base. The `:e /path/to/` should be usable
+
+  child.lua('_G.n_modechanged = 0')
+  child.cmd('au ModeChanged *:* lua _G.n_modechanged = _G.n_modechanged + 1')
+
+  -- Should never change mode
+  eq(child.lua_get('_G.n_modechanged'), 0)
+
+  MiniTest.skip()
+end
+
+T['default_complete()']['respects `state.opts.completion`'] = function() MiniTest.skip() end
+
+T['default_complete()']['does nothing when expected'] = function()
+  set_history({ { cwd = child.fn.getcwd(), prompt = 'A', input = 'ab', scope = 'editor' } })
+
+  -- Input is ending
+  local state = { input = '', opts = { prompt = 'A', scope = 'editor' } }
+
+  state.status = 'accept'
+  validate_complete(state, 'history', {})
+  state.status = 'cancel'
+  validate_complete(state, 'history', {})
+
+  -- Not supported method
+  validate_complete(state, 'not-supported', {})
 end
 
 T['state_to_chunks()'] = new_set()

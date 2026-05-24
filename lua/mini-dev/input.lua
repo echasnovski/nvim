@@ -858,7 +858,8 @@ MiniInput.default_highlight = function(state)
   if state.complete == nil then return end
 
   local cur_item = state.complete.items[state.complete.id]
-  local pos = vim.fn.matchfuzzypos({ cur_item }, state.complete.base)[2][1]
+  local base = state.complete.base
+  local pos = base == '' and {} or vim.fn.matchfuzzypos({ cur_item }, base)[2][1]
   if pos == nil then return end
 
   -- Matches are increasing character zero-based indexes. Highlight ranges
@@ -888,7 +889,10 @@ MiniInput.default_view = function(state) end -- Generated later
 --- Default complete handler
 ---
 --- TODO: general words
---- TODO: completion methods (`"history"`, `""`, anything from |getcompletion()|).
+--- TODO: completion methods (`"history"`, `""`, anything from |getcompletion()|):
+--- - History completion orders items from earliest to latest. To initiate with
+---   the latest history match, press <Up> or <C-p> with |MiniInput.default_key()|.
+--- - History completion only uses prefix matching.
 ---
 ---@param state table Current state. See |MiniInput.get_statee()|.
 ---@param method string Completion method.
@@ -910,7 +914,7 @@ MiniInput.default_complete = function(state, method, opts)
 
   if H.state_is_end(state) then return end
   if method == 'history' then return H.complete_history(state, opts.precise_history) end
-  method = method or ''
+  method = method or state.opts.completion or ''
 
   local caret, input = state.caret, state.input
   local text = vim.fn.strcharpart(input, 0, caret - 1)
@@ -925,7 +929,7 @@ MiniInput.default_complete = function(state, method, opts)
   local pat = method == 'cmdline' and vim.fn.strcharpart(input, 0, caret - 1) or base
   local ok, items = pcall(vim.fn.getcompletion, pat, state.opts.completion)
   if not ok then return end
-  if ok then state.complete = { items = items, base = base } end
+  state.complete = { items = items, base = base }
 end
 
 --- Convert state into text-hl chunks
@@ -1520,7 +1524,8 @@ H.complete_buf_words = function(base)
     if not seen[m] then table.insert(uniq, m) end
     seen[m] = true
   end
-  return vim.fn.matchfuzzy(uniq, base)
+  local ref = (vim.o.ignorecase and not vim.o.smartcase) and vim.fn.tolower(base) or base
+  return vim.fn.matchfuzzy(uniq, ref)
 end
 
 -- Views ----------------------------------------------------------------------
