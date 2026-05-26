@@ -5,13 +5,6 @@
 -- - Docs:
 --
 -- - Test:
---     - The input should be properly cancelled (as if user pressed `<C-c>`) if
---       there is an error (during handler application or from the outside
---       "registered" by `getcharstr`) and re-throw the error instead of
---       returning input.
---     - <C-w> should work with multibyte charaters.
---     - Already shown completion should be teared down if `opts.hide` is toggled.
---     - `default_complete` respects 'ignorecase' and 'smartcase'.
 --     - `gen_view.uiline` works with custom view handler that sets different
 --       styles per scope.
 --     - `gen_view.virtual` with `style='above'|'below'` should always make virtual
@@ -85,8 +78,7 @@
 --- - <C-c> is hard coded to cancel the input (due to how |getcharstr()| works).
 --- - If state has changed but its <complete> field has not, it is assumed that
 ---   completion is not active anymore and <complete> field is removed.
---- - State's <highlight> field is removed if and only if <input> has changed
----   after processing a key.
+--- - State's <highlight> field is removed before every step.
 ---
 --- # State ~
 --- *MiniInput-state*
@@ -127,9 +119,13 @@
 ---
 ---   -- Construct reusable `MiniInput.get()` options
 ---   local cmdline_opts = { prompt = 'Command', scope = 'editor' }
----   -- - Highlight using bundled Vim tree-sitter parser
+---   -- - Highlight using bundled Vim tree-sitter parser and default handler
 ---   local highlight_vim = MiniInput.gen_highlight.treesitter('vim')
----   cmdline_opts.handlers = { highlight = highlight_vim }
+---   local highlight_cmdline = function(state)
+---     state = highlight_vim(state) or state
+---     return MiniInput.default_highlight(state) or state
+---   end
+---   cmdline_opts.handlers = { highlight = highlight_cmdline }
 ---   -- - Complete as if it is Command line input
 ---   cmdline_opts.completion = 'cmdline'
 ---
@@ -151,6 +147,8 @@
 ---   or pasting from a clipboard (|vim.paste()|).
 --- - Would be called for anything registered via |getcharstr()|. This includes
 ---   key combos (<M-...>, <C-S-...>, etc.), mouse clicks and wheel scrolls.
+--- - Can be called with `nil` key while `status='progress'`, like as a result
+---   of |MiniInput.refresh()| or |paste|.
 ---
 --- Perform custom actions based on arbitrary conditions: >lua
 ---
@@ -403,7 +401,11 @@ MiniInput.get = function(opts)
   if H.state_is_end() then return H.state_finish() end
   H.state.status = 'progress'
 
-  H.mock_key_input(H.state.opts.init_keys)
+  for _, k in ipairs(H.state.opts.init_keys) do
+    H.handle_step(k, true)
+    if H.state_is_end() then return H.state_finish() end
+  end
+  H.redraw()
 
   local lmap = H.get_lmap()
   for _ = 1, 1000000 do
@@ -546,7 +548,8 @@ MiniInput.gen_highlight.treesitter = function(lang)
     local highlight = {}
     parser:for_each_tree(function(tstree, tree) append_ts_hl_range(highlight, line, tstree, tree) end)
 
-    state.highlight = highlight
+    -- Respect maybe already present <highlight>
+    state.highlight = vim.list_extend(state.highlight or {}, highlight)
   end
 end
 
@@ -826,8 +829,9 @@ end
 ---       Note: type `<C-v><Tab>` to insert literal `\t`.
 ---     - <C-n>, <C-p>, <Up>, <Down> - start with `"history"` method if not active
 ---       and advance through active completion.
----     - <C-e> - cancel and return to initial input and caret. No special key is
----       needed to accept currently shown item.
+---     - <C-e> - cancel and return to initial input and caret.
+---     - <C-y> - accept current candidate. Note: it will also be accepted after
+---       any key that doesn't advance completion.
 --- - Miscellaneous:
 ---     - <C-o> - change scope of the input. Cycles through all available ones.
 ---     - <C-s> - change view style. Works only with |MiniInput.gen_view| view
@@ -877,8 +881,7 @@ MiniInput.default_highlight = function(state)
   end
 
   -- Respect maybe already present <highlight>
-  state.highlight = state.highlight or {}
-  vim.list_extend(state.highlight, ranges)
+  state.highlight = vim.list_extend(state.highlight or {}, ranges)
 end
 
 --- Default view handler
@@ -893,6 +896,14 @@ MiniInput.default_view = function(state) end -- Generated later
 --- - History completion orders items from earliest to latest. To initiate with
 ---   the latest history match, press <Up> or <C-p> with |MiniInput.default_key()|.
 --- - History completion only uses prefix matching.
+--- - Completion base is computed as follows:
+---     - Whole input for `method="history"`.
+---     - Keyword to caret's left for `""` and |getcompletion()| methods.
+---     - Inferred from |getcompletion()| output as the widest text to caret's left
+---       that matches all candidates: fuzzily if |'wildoptions'| contains `fuzzy`,
+---       as a prefix otherwise. If none - empty string is used. This approach has
+---       limitations, but is good enough as there is no |getcmdcomplpat()| variant
+---       to use outside of Command-line mode.
 ---
 ---@param state table Current state. See |MiniInput.get_statee()|.
 ---@param method string Completion method.
@@ -918,8 +929,7 @@ MiniInput.default_complete = function(state, method, opts)
 
   local caret, input = state.caret, state.input
   local text = vim.fn.strcharpart(input, 0, caret - 1)
-  local base_start = vim.fn.match(text, '[[:keyword:]]*$')
-  local base = vim.fn.strcharpart(text, base_start)
+  local base = vim.fn.strcharpart(text, vim.fn.match(text, '[[:keyword:]]*$'))
 
   if method == '' then
     state.complete = { items = H.complete_buf_words(base), base = base }
@@ -927,8 +937,9 @@ MiniInput.default_complete = function(state, method, opts)
   end
 
   local pat = method == 'cmdline' and vim.fn.strcharpart(input, 0, caret - 1) or base
-  local ok, items = pcall(vim.fn.getcompletion, pat, state.opts.completion)
+  local ok, items = pcall(vim.fn.getcompletion, pat, method)
   if not ok then return end
+  base = method == 'cmdline' and H.get_base_from_items(text, items) or base
   state.complete = { items = items, base = base }
 end
 
@@ -1113,7 +1124,8 @@ H.adjust_vim_paste = function()
       H.notify('There is no streaming paste support. Use `<C-r>+` or `<C-r>*`.', 'HINT')
       return paste_orig(lines, phase)
     end
-    H.mock_key_input({ table.concat(lines, '\n') })
+    H.insert_at_caret(H.state, table.concat(lines, '\n'))
+    H.handle_step(nil)
   end
 end
 
@@ -1124,6 +1136,7 @@ end
 -- State ----------------------------------------------------------------------
 H.state_new = function(opts)
   opts.completion = opts.completion or ''
+  H.check_type('state.opts.handlers', opts.handlers, 'table')
   opts.handlers.complete = opts.handlers.complete or MiniInput.default_complete
   opts.handlers.highlight = opts.handlers.highlight or MiniInput.default_highlight
   opts.handlers.key = opts.handlers.key or MiniInput.default_key
@@ -1167,6 +1180,7 @@ H.state_validate = function(x)
     end
   end
 
+  H.check_type('state.opts.completion', x.opts.completion, 'string')
   H.check_type('state.opts.handlers.complete', x.opts.handlers.complete, 'function')
   H.check_type('state.opts.handlers.highlight', x.opts.handlers.highlight, 'function')
   H.check_type('state.opts.handlers.key', x.opts.handlers.key, 'function')
@@ -1211,17 +1225,15 @@ end
 -- Handlers -------------------------------------------------------------------
 H.handle_step = function(key, skip_redraw)
   local state, ref_state = H.copy_tables(H.state), H.copy_tables(H.state)
+
+  -- Stop previous highlighting, as it is not up to date
+  state.highlight = nil
+
   state = MiniInput.apply_handler(state, 'key', key)
 
-  -- Stop completion if there was something outside completion navigation
+  -- Stop completion if something has changed outside of completion
   local is_complete_stop = vim.deep_equal(state.complete, ref_state.complete) and not vim.deep_equal(state, ref_state)
   if is_complete_stop then state.complete = nil end
-
-  -- Stop previous highlighting if something changed outside of caret
-  local caret = state.caret
-  state.caret, ref_state.caret = nil, nil
-  if not vim.deep_equal(state, ref_state) then state.highlight = nil end
-  state.caret = caret
 
   state = MiniInput.apply_handler(state, 'highlight')
   state = MiniInput.apply_handler(state, 'view')
@@ -1230,15 +1242,6 @@ H.handle_step = function(key, skip_redraw)
   if H.cache.error ~= nil then H.state.status = 'cancel' end
 
   if not skip_redraw then H.redraw() end
-end
-
-H.mock_key_input = function(keys)
-  if type(keys) ~= 'table' then return end
-  for _, k in ipairs(keys) do
-    H.handle_step(k, true)
-    if H.state_is_end() then return H.state_finish() end
-  end
-  H.redraw()
 end
 
 -- Default key handler --------------------------------------------------------
@@ -1361,6 +1364,7 @@ H.key_methods[kc('<Down>')] = function(state, _)
 end
 H.key_methods[kc('<C-n>')] = H.key_methods[kc('<Down>')]
 H.key_methods[kc('<C-p>')] = H.key_methods[kc('<Up>')]
+H.key_methods[kc('<C-y>')] = function(state, _) state.complete = nil end
 
 -- Completion navigation
 H.key_methods[kc('<Tab>')] = function(state, _)
@@ -1525,7 +1529,28 @@ H.complete_buf_words = function(base)
     seen[m] = true
   end
   local ref = (vim.o.ignorecase and not vim.o.smartcase) and vim.fn.tolower(base) or base
-  return vim.fn.matchfuzzy(uniq, ref)
+  return vim.fn.matchfuzzy(uniq, ref, { matchseq = 1 })
+end
+
+H.get_base_from_items = function(text, items)
+  if #items == 0 then return '' end
+
+  local is_match = function(base_cur)
+    for _, item in ipairs(items) do
+      if not vim.startswith(item, base_cur) then return false end
+    end
+    return true
+  end
+  if vim.o.wildoptions:find('fuzzy') ~= nil then
+    is_match = function(base_cur) return #vim.fn.matchfuzzy(items, base_cur, { matchseq = 1 }) == #items end
+  end
+
+  local res
+  for i = vim.fn.strchars(text), 1, -1 do
+    local base_cur = vim.fn.strcharpart(text, i - 1)
+    if is_match(base_cur) then res = base_cur end
+  end
+  return res or ''
 end
 
 -- Views ----------------------------------------------------------------------

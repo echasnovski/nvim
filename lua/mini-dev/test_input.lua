@@ -4,6 +4,8 @@ local child = helpers.new_child_neovim()
 local expect, eq = helpers.expect, helpers.expect.equality
 local new_set = MiniTest.new_set
 
+local slash = helpers.is_windows() and '\\' or '/'
+
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('input', config) end
@@ -66,6 +68,7 @@ local mock_state = function(incomplete_state)
       view = MiniInput.config.handlers.view or MiniInput.default_view,
       complete = MiniInput.config.handlers.complete or MiniInput.default_complete,
     }
+    opts.completion = opts.completion or ''
     opts.handlers = vim.tbl_extend('force', default_handlers, opts.handlers or {})
     if opts.hide == nil then opts.hide = false end
     opts.init_keys = opts.init_keys or {}
@@ -79,6 +82,41 @@ local mock_notify = function()
   child.lua([[
     _G.notify_log = {}
     vim.notify = function(...) table.insert(_G.notify_log, { ... }) end
+  ]])
+end
+
+local mock_tracking_default_handlers = function()
+  child.lua([[
+    local copy_tables
+    copy_tables = function(x) return type(x) == 'table' and vim.tbl_map(copy_tables, x) or x end
+
+    -- Sanitize state to be able to pass through RPC
+    local sanitize = function(state)
+      local res = copy_tables(state)
+      for k, v in pairs(state.opts.handlers) do
+        if vim.is_callable(v) then res.opts.handlers[k] = 'function' end
+      end
+      return res
+    end
+
+    -- Track all handlers
+    _G.handlers_log = {}
+    MiniInput.config.handlers.complete = function(state, ...)
+      table.insert(_G.handlers_log, { 'complete', sanitize(state), ... })
+      return MiniInput.default_complete(state, ...)
+    end
+    MiniInput.config.handlers.highlight = function(state, ...)
+      table.insert(_G.handlers_log, { 'highlight', sanitize(state), ... })
+      return MiniInput.default_highlight(state, ...)
+    end
+    MiniInput.config.handlers.key = function(state, ...)
+      table.insert(_G.handlers_log, { 'key', sanitize(state), ... })
+      return MiniInput.default_key(state, ...)
+    end
+    MiniInput.config.handlers.view = function(state, ...)
+      table.insert(_G.handlers_log, { 'view', sanitize(state), ... })
+      return MiniInput.default_view(state, ...)
+    end
   ]])
 end
 
@@ -241,25 +279,36 @@ T['setup()']['adjusts `vim.paste`'] = function()
 
   load_module()
   child.lua([[
-    _G.key_log = {}
+    _G.handlers_log = {}
     MiniInput.config.handlers.key = function(state, key)
-      table.insert(_G.key_log, key)
+      table.insert(_G.handlers_log, { 'key', key })
       return MiniInput.default_key(state, key)
     end
+    MiniInput.config.handlers.highlight = function(state)
+      table.insert(_G.handlers_log, { 'highlight' })
+      return MiniInput.default_highlight(state)
+    end
+    MiniInput.config.handlers.view = function(state)
+      table.insert(_G.handlers_log, { 'view' })
+      return MiniInput.default_view(state)
+    end
   ]])
+
   get()
 
-  -- Not streaming input should be inserted as is respecting custom key handler
+  -- Not streaming input should be inserted at caret and processed by handlers
+  type_keys('XY', '<Left>')
+  child.lua('_G.handlers_log = {}')
   child.api.nvim_paste('Clipboard', false, -1)
-  validate_input('Clipboard', 10)
+  validate_input('XClipboardY', 11)
   validate_log('paste_log', {})
-  validate_log('key_log', { 'Clipboard' })
+  validate_log('handlers_log', { { 'key' }, { 'highlight' }, { 'view' } })
 
   -- Streaming paste is not supported and should fall back to what was before
   child.api.nvim_paste('Not supported', false, 1)
-  validate_input('Clipboard', 10)
+  validate_input('XClipboardY', 11)
   validate_log('paste_log', { { { 'Not supported' }, 1 } })
-  validate_log('key_log', {})
+  validate_log('handlers_log', {})
   validate_log('notify_log', { { '(mini.input) There is no streaming paste support. Use `<C-r>+` or `<C-r>*`.' } })
 end
 
@@ -287,6 +336,11 @@ T['setup()']['hard-codes special default scopes'] = function()
   validate_no_input()
   validate_log('rename_log', { { 'direct', 'World' } })
 
+  -- Should not have permanent side effect
+  get()
+  eq(get_state().opts.scope, 'editor')
+  type_keys('<C-c>')
+
   -- - Should be possible to override via a key handler
   child.lua([[
     MiniInput.config.handlers.key = function(state, key)
@@ -303,32 +357,458 @@ end
 
 T['get()'] = new_set()
 
-T['get()']['works'] = function() MiniTest.skip() end
+T['get()']['works'] = function()
+  mock_tracking_default_handlers()
+
+  -- Should return user's input on accept
+  child.lua_notify('_G.input_res = MiniInput.get()')
+
+  local eq_state = function(ref_state, same_data)
+    local cur_state = get_state()
+    if not same_data then cur_state.data = ref_state.data end
+    eq(cur_state, ref_state)
+  end
+
+  -- Should start by calling all handlers with proper arguments
+  local state = child.lua_get('_G.handlers_log[1][2]')
+  eq(state, {
+    caret = 1,
+    data = {},
+    input = '',
+    -- Should correctly set default options
+    opts = {
+      completion = '',
+      handlers = { complete = 'function', highlight = 'function', key = 'function', view = 'function' },
+      hide = false,
+      init_keys = {},
+      prompt = 'Input',
+      scope = 'editor',
+    },
+    status = 'start',
+  })
+  local handlers_log = child.lua_get('_G.handlers_log')
+  -- - `key` argument of key handler is `nil` for `status="start"`
+  eq(handlers_log, { { 'key', state, nil }, { 'highlight', state }, { 'view', state } })
+  child.lua('_G.handlers_log = {}')
+
+  -- Should indicate that input is in progress
+  state.status = 'progress'
+  eq_state(state)
+  -- - Handlers might arbitrarily update `data`
+  state.data = get_state().data
+
+  -- Should call all handlers in order after each key press
+  type_keys('W')
+
+  handlers_log = child.lua_get('_G.handlers_log')
+  eq(#handlers_log, 3)
+  eq(handlers_log[1], { 'key', state, 'W' })
+  state.input, state.caret = 'W', 2
+  eq(handlers_log[2], { 'highlight', state })
+  eq(handlers_log[3], { 'view', state })
+  child.lua('_G.handlers_log = {}')
+
+  eq_state(state)
+
+  -- Should finish by calling all handlers one more time
+  type_keys('<CR>')
+
+  handlers_log = child.lua_get('_G.handlers_log')
+  eq(#handlers_log, 6)
+  -- - Processing of `<CR>`
+  eq(handlers_log[1], { 'key', state, '\r' })
+  state.status = 'accept'
+  eq(handlers_log[2], { 'highlight', state })
+  eq(handlers_log[3], { 'view', state })
+
+  -- - Finishing
+  eq(handlers_log[4], { 'key', state, nil })
+  eq(handlers_log[5], { 'highlight', state })
+  eq(handlers_log[6], { 'view', state })
+
+  eq(get_state(), vim.NIL)
+
+  -- Should return user's input on accept
+  eq(child.lua_get('_G.input_res'), 'W')
+
+  -- Should add to history
+  eq(get_history(), { { cwd = child.fn.getcwd(), input = 'W', prompt = 'Input', scope = 'editor' } })
+end
+
+T['get()']['cancelling returns `nil`'] = function()
+  child.lua_notify('_G.input_res = MiniInput.get()')
+  type_keys('Cancel', '<C-c>')
+  eq(get_state(), vim.NIL)
+  eq(child.lua_get('_G.input_res'), vim.NIL)
+end
+
+T['get()']['allows only one simultaneous input'] = function()
+  child.lua_notify('_G.input_1 = MiniInput.get({ prompt = "One" })')
+  eq(get_state().opts.prompt, 'One')
+
+  child.lua_notify('_G.input_2 = MiniInput.get({ prompt = "Two" })')
+  eq(get_state().opts.prompt, 'One')
+
+  type_keys('Uno', '<CR>')
+  eq(child.lua_get('_G.input_1'), 'Uno')
+  eq(child.lua_get('_G.input_2'), vim.NIL)
+  eq(get_state(), vim.NIL)
+end
+
+T['get()']['stops'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.lua([[
+        _G.handlers_log, _G.key_actions = {}, {}
+        MiniInput.config.handlers.key = function(state, key)
+          table.insert(_G.handlers_log, { 'key', state.status, key })
+          if _G.key_actions[key] then _G.key_actions[key](state, key) end
+        end
+      ]])
+    end,
+  },
+})
+
+T['get()']['stops']['when handler sets ending status'] = function()
+  child.lua('_G.key_actions.A = function(state) state.status = "accept" end')
+  child.lua('_G.key_actions.C = function(state) state.status = "cancel" end')
+  local validate_handler_end = function(key)
+    get()
+    type_keys(key)
+    eq(get_state(), vim.NIL)
+    local status = key == 'A' and 'accept' or 'cancel'
+    validate_log('handlers_log', { { 'key', 'start', nil }, { 'key', 'progress', key }, { 'key', status, nil } })
+  end
+  validate_handler_end('A')
+  validate_handler_end('C')
+end
+
+T['get()']['stops']['when there is an error during handler execution'] = function()
+  child.lua('_G.key_actions.E = function(state) error("Very specific error in handler") end')
+  local mock_handler_error = function()
+    child.lua([[
+      vim.defer_fn(function() vim.api.nvim_input('E') end, 50)
+      _G.errored_input = MiniInput.get()
+    ]])
+  end
+  expect.error(mock_handler_error, 'Very specific error in handler')
+  eq(get_state(), vim.NIL)
+  eq(child.lua_get('_G.errored_input'), vim.NIL)
+  -- - Should still properly finish with extra input step
+  validate_log('handlers_log', { { 'key', 'start', nil }, { 'key', 'progress', 'E' }, { 'key', 'cancel', nil } })
+end
+
+T['get()']['stops']['right after start'] = function()
+  child.lua([[
+    MiniInput.config.handlers.highlight = function(state)
+      table.insert(_G.handlers_log, { 'hl', state.status })
+      state.status = 'cancel'
+    end
+  ]])
+  get()
+  eq(get_state(), vim.NIL)
+  local ref_log = { { 'key', 'start', nil }, { 'hl', 'start' }, { 'key', 'cancel', nil }, { 'hl', 'cancel' } }
+  validate_log('handlers_log', ref_log)
+end
+
+T['get()']['stops']['during `init_keys`'] = function()
+  child.lua('_G.key_actions.I = function(state) state.input, state.status = "Init", "accept" end')
+  child.lua_notify('_G.input_res = MiniInput.get({ init_keys = { "I", "n" } })')
+  eq(child.lua_get('_G.input_res'), 'Init')
+  eq(get_state(), vim.NIL)
+  -- Should stop immediately before processing the rest of `init_keys`
+  validate_log('handlers_log', { { 'key', 'start', nil }, { 'key', 'progress', 'I' }, { 'key', 'accept', nil } })
+end
+
+T['get()']['stops']['when triggered during waiting for user input'] = function()
+  child.lua([[
+    _G.handlers_log = {}
+    MiniInput.config.handlers.key = function(state, key)
+      table.insert(_G.handlers_log, { 'key', state.status, key })
+      if key == nil and _G.outside_stop then state.status = _G.outside_stop end
+      if key ~= nil then state.input = state.input .. key end
+    end
+  ]])
+
+  child.lua_notify('_G.input_res = MiniInput.get()')
+  type_keys('A')
+  child.lua('_G.handlers_log = {}')
+  child.lua('_G.outside_stop = "accept"; MiniInput.refresh()')
+
+  eq(child.lua_get('_G.input_res'), 'A')
+  eq(get_state(), vim.NIL)
+  -- Should stop immediately before processing the rest of `init_keys`
+  validate_log('handlers_log', { { 'key', 'progress' }, { 'key', 'accept' } })
+end
+
+T['get()']['reports first encountered error in handler'] = function()
+  child.lua([[
+    local has_errored = false
+    MiniInput.config.handlers.key = function(state, key)
+      if has_errored then error('Second handler error') end
+      if key == 'E' then
+        has_errored = true
+        error('First handler error')
+      end
+    end
+  ]])
+
+  local mock_handler_error = function()
+    child.lua([[
+      vim.defer_fn(function() vim.api.nvim_input('E') end, 50)
+      _G.errored_input = MiniInput.get()
+    ]])
+  end
+  expect.error(mock_handler_error, 'First handler error')
+end
+
+T['get()']['resets `state.complete` when needed'] = function()
+  -- Mock custom to test that the behavior doesn't come from default handlers
+  child.lua([[
+    local advance_complete = function(state, increment)
+      if state.complete == nil then state = MiniInput.apply_handler(state, 'complete', 'test') end
+      state.complete.id = (state.complete.id + increment) % (#state.complete.items + 1)
+      return state
+    end
+
+    local keycode = function(x) return vim.api.nvim_replace_termcodes(x, true, true, true) end
+
+    MiniInput.config.handlers.key = function(state, key)
+      if key == keycode('<Up>') then state = advance_complete(state, -1) end
+      if key == keycode('<Down>') then state = advance_complete(state, 1) end
+      if key == keycode('<Tab>') then state.complete.items = { 'new' } end
+      if key == keycode('<C-x>') then state.opts.hide = not state.opts.hide end
+      if key == keycode('<Left>') then state.caret = math.max(state.caret - 1, 1) end
+      if key ~= nil and key:find('^%w$') ~= nil then
+        state.input = state.input .. key
+        state.caret = state.caret + 1
+      end
+      return state
+    end
+
+    MiniInput.config.handlers.complete = function(state, method)
+      state.complete = { base = '', items = { 'uu', 'vv' } }
+    end
+  ]])
+
+  local validate = function(input, caret, complete)
+    local state = get_state()
+    local out = { input = state.input, caret = state.caret, complete = state.complete }
+    local ref = { input = input, caret = caret, complete = complete }
+    eq(out, ref)
+  end
+
+  get()
+  local complete = { base = '', id = 2, items = { 'uu', 'vv' }, method = 'test' }
+
+  -- Should reset only after there is any change outside of completion
+  type_keys('<Up>')
+  validate('', 1, complete)
+
+  type_keys('<Down>')
+  complete.id = 0
+  validate('', 1, complete)
+
+  type_keys('<Tab>')
+  complete.items = { 'new' }
+  validate('', 1, complete)
+
+  -- - Changing input
+  type_keys('a')
+  validate('a', 2, nil)
+
+  -- - Move caret
+  type_keys('<Up>')
+  complete = { base = '', id = 2, items = { 'uu', 'vv' }, method = 'test' }
+  validate('a', 2, complete)
+
+  type_keys('<Left>')
+  validate('a', 1, nil)
+
+  -- - Change option (like `hide`; `get_state()` doesn't contain input+caret)
+  type_keys('<Up>')
+  complete = { base = '', id = 2, items = { 'uu', 'vv' }, method = 'test' }
+  validate('a', 1, complete)
+
+  type_keys('<C-x>')
+  validate(nil, nil, nil)
+end
+
+T['get()']['resets `state.highlight` before every step'] = function()
+  mock_tracking_default_handlers()
+  child.lua([[
+    _G.highlight_log = {}
+    MiniInput.config.handlers.highlight = function(state)
+      table.insert(_G.highlight_log, state.highlight == nil)
+      local w = vim.fn.strchars(state.input)
+      if w > 0 then state.highlight = { { from = w, to = w, hl = 'AA' } } end
+    end
+  ]])
+
+  get()
+  type_keys('a', 'b', '<Left>', '<C-o>')
+  eq(get_state().highlight, { { from = 2, to = 2, hl = 'AA' } })
+  validate_log('highlight_log', { true, true, true, true, true })
+end
+
+T['get()']['works with language mappings'] = function()
+  if child.fn.has('nvim-0.10') == 0 then
+    MiniTest.skip('Helper function that gets language mappings is available only on Neovim>=0.10')
+  end
+  child.o.keymap = 'ukrainian-jcuken'
+
+  eq(child.o.iminsert, 1)
+  get()
+  type_keys('g', 'h')
+  eq(get_state().input, 'пр')
+
+  -- Should allow changing 'iminsert' while picker is active
+  child.o.iminsert = 0
+  type_keys('g', 'h')
+  eq(get_state().input, 'прgh')
+
+  type_keys('<C-c>')
+
+  -- Should work with custom "good" language mappings
+  child.o.keymap = ''
+  child.o.iminsert = 1
+  child.cmd('lmap a 1')
+  child.cmd('lmap b <char-0x1f171>')
+  child.cmd('lmap cc C')
+
+  get()
+  type_keys('a', 'b', 'c', 'c')
+  eq(get_state().input, '1bcc')
+  type_keys('<C-u>')
+
+  -- Should cache language mappings per input session
+  child.cmd('lmap d 4')
+  type_keys('d')
+  eq(get_state().input, 'd')
+end
 
 T['get()']['adds to history'] = function()
   get()
   type_keys('Regular', '<CR>')
-  eq(#get_history(), 1)
+  local history = { { cwd = child.fn.getcwd(), input = 'Regular', prompt = 'Input', scope = 'editor' } }
+  eq(get_history(), history)
 
   -- Canceled input should not be added
   get()
   type_keys('x', '<C-c>')
-  eq(#get_history(), 1)
+  eq(get_history(), history)
 
   -- Hidden input should not be added
   get({ hide = true })
   type_keys('Hidden', '<CR>')
-  eq(#get_history(), 1)
+  eq(get_history(), history)
 
   -- - Even if hidden is set interactively
   get({ hide = false })
   type_keys('Another', '<C-x>', '<CR>')
-  eq(#get_history(), 1)
+  eq(get_history(), history)
 
   -- Empty should be accepted
   get()
   type_keys('x', '<C-u>', '<CR>')
-  eq(#get_history(), 2)
+  history[2] = vim.deepcopy(history[1])
+  history[2].input = ''
+  eq(get_history(), history)
+end
+
+T['get()']['works with handlers that return new state'] = function()
+  child.lua([[
+    MiniInput.config.handlers.complete = function(state, method)
+      local res = vim.deepcopy(state)
+      res.complete = { base = '', items = { 'uu' } }
+      return res
+    end
+    MiniInput.config.handlers.key = function(state, key)
+      local res = vim.deepcopy(state)
+      if key == '\t' then res = MiniInput.apply_handler(res, 'complete', 'test') end
+      if key ~= nil and key:find('^%w$') ~= nil then
+        res.input = res.input .. key
+        res.caret = res.caret + 1
+      end
+      return res
+    end
+    MiniInput.config.handlers.highlight = function(state)
+      local res = vim.deepcopy(state)
+      local w = vim.fn.strchars(state.input)
+      if w > 0 then res.highlight = { { from = w, to = w, hl = 'AA' } } end
+      return res
+    end
+    MiniInput.config.handlers.view = function(state)
+      local res = vim.deepcopy(state)
+      res.data.n_view = (res.data.n_view or 0) + 1
+      return res
+    end
+  ]])
+
+  local validate = function(input, caret, complete, highlight, n_view)
+    local state = get_state()
+    eq(state.input, input)
+    eq(state.caret, caret)
+    eq(state.complete, complete)
+    eq(state.highlight, highlight)
+    eq(state.data.n_view, n_view)
+  end
+
+  get()
+  validate('', 1, nil, nil, 1)
+
+  type_keys('a')
+  local highlight = { { from = 1, to = 1, hl = 'AA' } }
+  validate('a', 2, nil, highlight, 2)
+
+  type_keys('<Tab>')
+  local complete = { base = '', id = 0, items = { 'uu' }, method = 'test' }
+  validate('a', 2, complete, highlight, 3)
+end
+
+T['get()']['sets input options right away'] = function()
+  local ref_init_opts = { completion = 'cmdline', hide = true, init_keys = { 's' }, prompt = 'A', scope = 'cursor' }
+  child.lua('_G.opts = ' .. vim.inspect(ref_init_opts))
+
+  child.lua_notify([[
+    local dummy_handler = function() _G.dummy_handler_visit = true end
+    MiniInput.config.handlers = {
+      complete = dummy_handler,
+      key = dummy_handler,
+      highlight = dummy_handler,
+      view = dummy_handler,
+    }
+
+    local track_init_state = function(state) _G.init_state = _G.init_state or vim.deepcopy(state) end
+    _G.opts.handlers = {
+      complete = track_init_state,
+      key = track_init_state,
+      highlight = track_init_state,
+      view = track_init_state,
+    }
+
+    MiniInput.get(_G.opts)
+  ]])
+
+  local out_init_opts = child.lua([[
+    local opts = vim.deepcopy(_G.init_state.opts)
+    opts.handlers = nil
+    return opts
+  ]])
+  eq(out_init_opts, ref_init_opts)
+
+  eq(child.lua_get('_G.dummy_handler_visit'), vim.NIL)
+end
+
+T['get()']['redraws after all `opts.init_keys` are processed'] = function()
+  child.lua([[
+    local ns_id = vim.api.nvim_create_namespace('test')
+    _G.n_redraws = 0
+    vim.api.nvim_set_decoration_provider(ns_id, { on_start = function() _G.n_redraws = _G.n_redraws + 1 end})
+  ]])
+
+  get({ init_keys = { 'a', 'b', 'c', 'd', 'e', 'f', 'g' } })
+  eq(child.lua_get('_G.n_redraws'), 3)
 end
 
 T['get()']['reacts to `VimResized`'] = function()
@@ -349,11 +829,38 @@ T['get()']['reacts to `VimResized`'] = function()
   validate_log('handlers_log', { { 'key', 0, 'progress' }, { 'highlight' }, { 'view' } })
 end
 
-T['get()']['works with non-copyable `data`'] = function() MiniTest.skip() end
+T['get()']['works with non-copyable `data`'] = function()
+  child.lua([[
+    MiniInput.config.handlers.key = function(state, key)
+      state.data.timer = state.data.timer or vim.loop.new_timer()
+      if key == 'A' then state.status = 'accept' end
+    end
+  ]])
 
-T['get()']['handles errors in handlers'] = function()
-  -- Should still apply all step handlers, make finish step, and then report error
-  MiniTest.skip()
+  local get_and_accept = function()
+    child.lua([[
+      vim.defer_fn(function() vim.api.nvim_input('A') end, 50)
+      MiniInput.get()
+    ]])
+  end
+  expect.no_error(get_and_accept)
+end
+
+T['get()']['validates arguments'] = function()
+  local validate = function(bad_opts, err_pattern)
+    expect.error(function() child.lua('MiniInput.get(...)', { bad_opts }) end, err_pattern)
+  end
+  validate({ completion = 1 }, '`state%.opts%.completion`.*string')
+  validate({ handlers = 1 }, '`state%.opts%.handlers`.*table')
+  validate({ handlers = { complete = 1 } }, '`state%.opts%.handlers.complete`.*function')
+  validate({ handlers = { key = 1 } }, '`state%.opts%.handlers.key`.*function')
+  validate({ handlers = { highlight = 1 } }, '`state%.opts%.handlers.highlight`.*function')
+  validate({ handlers = { view = 1 } }, '`state%.opts%.handlers.view`.*function')
+  validate({ hide = 1 }, '`state%.opts%.hide`.*boolean')
+  validate({ init_keys = 1 }, '`state%.opts%.init_keys`.*array')
+  validate({ init_keys = { 1 } }, '`state%.opts%.init_keys`.*string')
+  validate({ prompt = 1 }, '`state%.opts%.prompt`.*string')
+  validate({ scope = 1 }, '`state%.opts%.scope`.*one of')
 end
 
 T['ui_input()'] = new_set()
@@ -373,6 +880,8 @@ T['ui_input()']['works'] = function()
     MiniInput.ui_input({ prompt = 'Hello?', default = 'World', completion = 'cmdline' }, _G.on_choice)
   ]])
   local state = get_state()
+  eq(state.input, 'World')
+  eq(state.caret, 6)
   eq(state.opts.prompt, 'Hello?')
   eq(state.opts.init_keys, { 'World' })
   eq(state.opts.completion, 'cmdline')
@@ -471,8 +980,16 @@ end
 
 T['get_state()']['respect `opts.hide`'] = function()
   get({ hide = true })
-  local state = get_state()
-  eq({ input = state.input, caret = state.caret }, {})
+  validate_input(nil, nil, 'editor')
+
+  type_keys('abc')
+  validate_input(nil, nil, 'editor')
+
+  -- After interactive toggling
+  type_keys('<C-x>')
+  validate_input('abc', 4, 'editor')
+  type_keys('<C-x>')
+  validate_input(nil, nil, 'editor')
 end
 
 T['get_state()']['works with non-copyable `data`'] = function()
@@ -623,6 +1140,29 @@ T['gen_highlight']['treesitter()']['works'] = function()
 
   -- Should not error on unknown language
   validate('unknown', 'hello', nil)
+end
+
+T['gen_highlight']['treesitter()']['appends to existing highlight'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Upstream has issues on Neovim<=0.9') end
+
+  mock_state({ input = 'set shiftwidth=2' })
+  child.lua([[
+    _G.mock_state.highlight = { { from = 1, to = 16, hl = 'AA' } }
+    _G.mock_state.opts.handlers.highlight = MiniInput.gen_highlight.treesitter("vim")
+    _G.new_state = MiniInput.apply_handler(vim.deepcopy(_G.mock_state), "highlight")
+  ]])
+  local old_state = get_state('mock_state')
+  local new_state = get_state('new_state')
+
+  local ref_changes = {
+    highlight = {
+      -- Should be appended to already present first range
+      [2] = { from = 1, to = 3, hl = '@keyword.vim' },
+      [3] = { from = 5, to = 14, hl = '@variable.builtin.vim' },
+      [4] = { from = 15, to = 15, hl = '@operator.vim' },
+    },
+  }
+  eq(compute_changed_values(old_state, new_state), ref_changes)
 end
 
 T['gen_view'] = new_set()
@@ -898,6 +1438,11 @@ T['default_key()']['supports <C-r>'] = function()
   -- Should stop on cancelling or bad key
   validate('', 1, { '<C-r>', '<Esc>' }, {})
   validate('', 1, { '<C-r>', '<C-c>' }, {})
+
+  -- Should not be affected by language mappings
+  child.o.iminsert = 1
+  child.cmd('lmap c 1')
+  validate('', 1, { '<C-r>', 'c' }, { input = 'uuu', caret = 4 })
 end
 
 T['default_key()']['supports pasting'] = new_set({ parametrize = { { '<C-q>' }, { '<C-v>' } } }, {
@@ -1017,6 +1562,9 @@ T['default_key()']['can complete'] = new_set(
 
       -- Any active completion can be canceled with <C-e>
       validate_key(state, '<C-e>', { input = 'abcd', caret = 4, complete = vim.NIL })
+
+      -- Any active completion can be accepted with <C-y>
+      validate_key(state, '<C-y>', { complete = vim.NIL })
 
       -- Any completion key should navigate through candidates no matter how
       -- completion has started
@@ -1322,6 +1870,15 @@ T['default_complete()']['method=""']['works'] = function()
   child.o.iskeyword = 'a,b,*,/'
   set_lines({ 'ab*/' })
   validate_complete({ input = 'ab' }, '', { complete = { base = 'ab', items = { 'ab*/' } } })
+  child.cmd('set iskeyword&')
+
+  -- Should work with very long base
+  if child.fn.has('nvim-0.12') == 1 then
+    local base = string.rep('abcdefghij', 30)
+    local lines = { base .. 'x', base .. 'y' }
+    set_lines(lines)
+    validate_complete({ input = base }, '', { complete = { base = base, items = lines } })
+  end
 end
 
 T['default_complete()']['method=""']["respects 'ignorecase' and 'smartcase'"] = function()
@@ -1352,6 +1909,7 @@ T['default_complete()']['method=""']['does not have side effects'] = function()
   set_cursor(2, 5)
   child.fn.setreg('/', 'prev')
   child.cmd('let v:hlsearch=0')
+  child.cmd('messages clear')
 
   validate_complete({ input = 'ab' }, '', { complete = { base = 'ab', items = { 'abx', 'xab', 'axb' } } })
 
@@ -1364,6 +1922,7 @@ end
 
 T['default_complete()']['works with method="history"'] = function()
   local cwd = child.fn.getcwd()
+  local cwd_alt = cwd .. slash .. 'tests'
   set_history({
     { cwd = cwd, prompt = 'A', input = 'ab', scope = 'editor' },
     { cwd = cwd, prompt = 'A', input = 'ac', scope = 'editor' },
@@ -1376,7 +1935,7 @@ T['default_complete()']['works with method="history"'] = function()
     { cwd = cwd, prompt = 'A', input = 'aa', scope = 'editor' },
 
     -- By default should only suggest matches from precisely same history
-    { cwd = cwd .. '/tests', prompt = 'A', input = 'au', scope = 'editor' },
+    { cwd = cwd_alt, prompt = 'A', input = 'au', scope = 'editor' },
     { cwd = cwd, prompt = 'XXX', input = 'av', scope = 'editor' },
     { cwd = cwd, prompt = 'A', input = 'aw', scope = 'cursor' },
   })
@@ -1414,7 +1973,7 @@ T['default_complete()']['works with method="history"'] = function()
   -- Should do precise matching
   state.input = 'a'
 
-  child.fn.chdir(cwd .. '/tests')
+  child.fn.chdir(cwd_alt)
   validate(state, { base = 'a', items = { 'au' } })
   child.fn.chdir(cwd)
 
@@ -1464,29 +2023,93 @@ T['default_complete()']['respects `opts.precise_history`'] = function()
   validate(false, { 'ab', 'au', 'av', 'aw' })
 end
 
+T['default_complete()']['works with method="cmdline"'] = function()
+  child.lua('_G.n_modechanged = 0')
+  child.cmd('au ModeChanged *:* lua _G.n_modechanged = _G.n_modechanged + 1')
+  child.o.wildoptions = 'pum'
+
+  local validate = function(input, caret, ref_base, ref_items)
+    ref_items = ref_items or child.fn.getcompletion(input, 'cmdline')
+    local ref_changes = { complete = { base = ref_base, items = ref_items } }
+    validate_complete({ input = input, caret = caret }, 'cmdline', ref_changes)
+  end
+
+  validate('se', nil, 'se', { 'set', 'setfiletype', 'setglobal', 'setlocal' })
+
+  child.cmd('command MyCommand echo "Hello"')
+  validate('MyC', nil, 'MyC', { 'MyCommand' })
+
+  validate('set hlse', nil, 'hlse', { 'hlsearch' })
+  validate('set ', nil, '', nil)
+
+  validate('lua stri', nil, 'stri', { 'string' })
+  validate('lua string.f', nil, 'f', { 'find', 'format' })
+
+  -- Should work with caret not at end
+  validate('MyCx', 4, 'MyC', { 'MyCommand' })
+  validate('lua string.f', 9, 'stri', { 'string' })
+
+  -- Should work with fuzzy matching
+  child.o.wildoptions = 'pum,fuzzy'
+  child.g.fuzzy_match_test_axbxc = 1
+  validate('let g:abc', nil, 'g:abc', { 'g:fuzzy_match_test_axbxc' })
+  child.o.wildoptions = 'pum'
+
+  -- Should correctly compute base in problmatic cases, with and without fuzzy
+  validate('set no', nil, '', nil)
+  validate('set inv', nil, '', nil)
+
+  child.g.test_input_var = 1
+  validate('let g', nil, '', {})
+  validate('let g:', nil, 'g:', nil)
+  validate('let g:test_inpu', nil, 'g:test_inpu', { 'g:test_input_var' })
+
+  child.fn.chdir('tests')
+  validate('edit dir-inp', nil, 'dir-inp', { 'dir-input' .. slash })
+  validate('edit dir-input' .. slash .. 'f', nil, 'dir-input' .. slash .. 'f', { 'dir-input' .. slash .. 'file' })
+
+  child.o.wildoptions = 'pum,fuzzy'
+  validate('set no', nil, '', nil)
+  validate('set inv', nil, '', nil)
+  validate('let g', nil, 'g', nil)
+
+  -- Should never change mode
+  eq(child.lua_get('_G.n_modechanged'), 0)
+end
+
 T['default_complete()']['works with built-in methods'] = function()
   child.lua('_G.n_modechanged = 0')
   child.cmd('au ModeChanged *:* lua _G.n_modechanged = _G.n_modechanged + 1')
 
+  -- Should forward to |getcompletion()| for computing items
+  local validate = function(input, caret, method, ref_base)
+    local ref_items = child.fn.getcompletion(ref_base, method)
+    validate_complete({ input = input, caret = caret }, method, { complete = { base = ref_base, items = ref_items } })
+  end
+
+  validate('', nil, 'color', '')
+
+  validate('miniw', nil, 'color', 'miniw')
+  validate('getcomple', nil, 'help', 'getcomple')
+  validate('hls', nil, 'option', 'hls')
+
+  validate('color miniw', nil, 'color', 'miniw')
+
+  -- Should work with caret not at end
+  validate('hel', 3, 'help', 'he')
+
+  -- Should use keyword as base
+  child.o.iskeyword = 'a,b'
+  validate('tab', nil, 'help', 'ab')
+
   -- Should never change mode
   eq(child.lua_get('_G.n_modechanged'), 0)
-
-  MiniTest.skip()
 end
 
-T['default_complete()']['works with method="cmdline"'] = function()
-  -- Should correctly compute base. The `:e /path/to/` should be usable
-
-  child.lua('_G.n_modechanged = 0')
-  child.cmd('au ModeChanged *:* lua _G.n_modechanged = _G.n_modechanged + 1')
-
-  -- Should never change mode
-  eq(child.lua_get('_G.n_modechanged'), 0)
-
-  MiniTest.skip()
+T['default_complete()']['respects `state.opts.completion`'] = function()
+  local ref_changes = { complete = { base = 'tab', items = child.fn.getcompletion('tab', 'help') } }
+  validate_complete({ input = 'tab', opts = { completion = 'help' } }, nil, ref_changes)
 end
-
-T['default_complete()']['respects `state.opts.completion`'] = function() MiniTest.skip() end
 
 T['default_complete()']['does nothing when expected'] = function()
   set_history({ { cwd = child.fn.getcwd(), prompt = 'A', input = 'ab', scope = 'editor' } })
