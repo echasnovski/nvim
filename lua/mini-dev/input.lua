@@ -627,12 +627,19 @@ MiniInput.gen_view = {}
 ---@usage >lua
 ---   local input = require('mini.input')
 ---
+---   -- Use border different from 'winborder'
+---   local adjust_config = function(_, config)
+---     config.border = 'double'
+---     return config
+---   end
+---
 ---   -- Choose initial style based on the scope
----   local view_topmiddle = input.gen_view.floatwin({ style = 'TM' })
----   local view_bottomleft = input.gen_view.floatwin({ style = 'BL' })
+---   local floatwin = input.gen_view.floatwin
+---   local view_tm = floatwin({ style = 'TM', adjust_config = adjust_config })
+---   local view_bl = floatwin({ style = 'BL', adjust_config = adjust_config })
 ---   local view_handler = function(state)
----     local scope, view = state.opts.scope, view_topmiddle
----     if scope == 'cursor' or scope == 'line' then view = view_bottomleft end
+---     local scope, view = state.opts.scope, view_tm
+---     if scope == 'cursor' or scope == 'line' then view = view_bl end
 ---     return view(state)
 ---   end
 ---
@@ -868,7 +875,7 @@ MiniInput.default_highlight = function(state)
 
   local cur_item = state.complete.items[state.complete.id]
   local base = state.complete.base
-  local pos = base == '' and {} or vim.fn.matchfuzzypos({ cur_item }, base)[2][1]
+  local pos = base == '' and {} or vim.fn.matchfuzzypos({ cur_item }, base, { matchseq = 1 })[2][1]
   if pos == nil then return end
 
   -- Matches are increasing character zero-based indexes. Highlight ranges
@@ -1579,7 +1586,7 @@ H.default_floatwin_config = function(state, style, target_width)
   -- Compute window config
   local winborder = vim.fn.exists('+winborder') == 0 and '' or vim.o.winborder
   local border = winborder == '' and 'single' or nil
-  local no_border = winborder == 'none'
+  local has_border = winborder ~= 'none'
 
   local title_text = ' ' .. vim.trim(state.opts.prompt:gsub('[\t\n%z]', ' ')) .. ' '
   local footer_text, complete = '', state.complete
@@ -1591,8 +1598,8 @@ H.default_floatwin_config = function(state, style, target_width)
 
   local width = H.clamp(target_width, math.max(title_width, footer_width), max_width)
   local height = 1
-  local width_offset = no_border and 0 or 2
-  local height_offset = no_border and 0 or 2
+  local width_offset = has_border and 2 or 0
+  local height_offset = has_border and 2 or 0
 
   local config =
     { relative = 'editor', anchor = 'NW', border = border, style = 'minimal', noautocmd = true, zindex = 251 }
@@ -1634,14 +1641,14 @@ H.default_floatwin_config = function(state, style, target_width)
   config.width = math.min(width, max_width - width_offset)
 
   -- Set title and footer
-  if no_border then return config end
-
-  local title_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
-  config.title = { { H.fit_to_displaywidth(title_text, config.width), title_hl } }
-  config.title_pos = 'left'
-  if vim.fn.has('nvim-0.10') == 1 then
-    config.footer = { { H.fit_to_displaywidth(footer_text, config.width), 'MiniInputHint' } }
-    config.footer_pos = 'right'
+  if has_border then
+    local title_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
+    config.title = { { H.fit_to_displaywidth(title_text, config.width), title_hl } }
+    config.title_pos = 'left'
+    if footer_text ~= '' and vim.fn.has('nvim-0.10') == 1 then
+      config.footer = { { H.fit_to_displaywidth(footer_text, config.width), 'MiniInputHint' } }
+      config.footer_pos = 'right'
+    end
   end
 
   return config
@@ -1681,9 +1688,9 @@ H.ensure_floatwin_win = function(state, config)
     vim.api.nvim_win_set_config(win_id, config)
   else
     win_id = vim.api.nvim_open_win(buf_id, false, config)
-    vim.wo[win_id].winhighlight = 'NormalFloat:MiniInputNormal,FloatBorder:MiniInputBorder'
     vim.wo[win_id].list = vim.go.list
     vim.wo[win_id].listchars = vim.go.listchars
+    vim.wo[win_id].winhighlight = 'NormalFloat:MiniInputNormal,FloatBorder:MiniInputBorder'
     vim.wo[win_id].wrap = false
     state.data.floatwin_win_id = win_id
   end
@@ -1951,7 +1958,7 @@ H.get_curwin_info = function() return vim.fn.getwininfo(vim.api.nvim_get_current
 H.fit_to_displaywidth = function(text, width)
   if vim.fn.strdisplaywidth(text) <= width then return text end
   for i = 1, vim.fn.strchars(text) do
-    local truncated = '…' .. vim.fn.strcharpart(text, i - 1)
+    local truncated = '…' .. vim.fn.strcharpart(text, i)
     if vim.fn.strdisplaywidth(truncated) <= width then return truncated end
   end
   return ''

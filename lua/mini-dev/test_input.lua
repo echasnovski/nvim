@@ -192,6 +192,10 @@ local T = new_set({
       child.o.laststatus = 0
       child.o.showtabline = 0
       child.o.ruler = false
+      child.o.statusline = 'My statusline'
+      child.o.tabline = 'My tabline'
+      child.o.winminwidth = 1
+      child.o.winwidth = 1
     end,
     post_once = child.stop,
     n_retry = helpers.get_n_retry(1),
@@ -1177,7 +1181,7 @@ T['gen_view']['floatwin()'] = new_set({
 })
 
 T['gen_view']['floatwin()']['works'] = function()
-  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_text = { 10 } }) end
+  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_cmdline = true }) end
   get({ prompt = 'Hello?' })
   expect_screenshot()
 
@@ -1207,8 +1211,193 @@ T['gen_view']['floatwin()']['works'] = function()
   eq(child.api.nvim_win_is_valid(win_id), false)
 end
 
+T['gen_view']['floatwin()']['uses scope and style for config'] =
+  new_set({ hooks = { pre_case = function() child.set_size(15, 30) end } })
+
+local validate_floatwin_scope_style = function(scope, style, prompt, screnshot_path)
+  child.lua('_G.style = ' .. vim.inspect(style))
+  child.lua('_G.scope = ' .. vim.inspect(scope))
+  child.lua('_G.prompt = ' .. vim.inspect(prompt))
+  child.lua_notify([[
+    local view = MiniInput.gen_view.floatwin({ style = _G.style })
+    MiniInput.get({ prompt = _G.prompt or _G.style, scope = scope, handlers = { view = view } })
+  ]])
+  child.expect_screenshot({ ignore_cmdline = true }, screnshot_path)
+  type_keys('<C-c>')
+end
+
+T['gen_view']['floatwin()']['uses scope and style for config']['scope=cursor'] = function()
+  -- Set up layout to test that window is located around the cursor position
+  -- and can cross window boundary
+  child.cmd('wincmd s | wincmd v | wincmd j | wincmd v | wincmd k')
+  set_lines({ 'aaaaaaaaaaa', '', '', '', '', 'fffffffffff', 'ggggggggggg' })
+  set_cursor(7, 10)
+
+  validate_floatwin_scope_style('cursor', 'BL')
+  validate_floatwin_scope_style('cursor', 'ML')
+  validate_floatwin_scope_style('cursor', 'TL')
+  validate_floatwin_scope_style('cursor', 'BM')
+  validate_floatwin_scope_style('cursor', 'MM')
+  validate_floatwin_scope_style('cursor', 'TM')
+  validate_floatwin_scope_style('cursor', 'BR')
+  validate_floatwin_scope_style('cursor', 'MR')
+  validate_floatwin_scope_style('cursor', 'TR')
+
+  -- Works with too wide prompt
+  validate_floatwin_scope_style('cursor', 'BL', 'A very-very-very-very wide prompt')
+
+  -- Works when at the edge of the instance
+  if child.fn.has('nvim-0.10') == 1 then
+    set_cursor(1, 0)
+    validate_floatwin_scope_style('cursor', 'BR')
+
+    child.cmd('wincmd j | wincmd l')
+    set_cursor(6, 10)
+    validate_floatwin_scope_style('cursor', 'TL')
+  end
+end
+
+T['gen_view']['floatwin()']['uses scope and style for config']['scope=line'] = function()
+  -- Set up layout to test that window is located around the cursor position
+  -- and can cross window boundary
+  child.cmd('wincmd s | wincmd v | wincmd j | wincmd v | wincmd k')
+  set_lines({ 'aaaaaaaaaaa', '', '', '', '', 'fffffffffff', 'ggggggggggg' })
+  set_cursor(7, 10)
+
+  validate_floatwin_scope_style('line', 'BL')
+  validate_floatwin_scope_style('line', 'ML')
+  validate_floatwin_scope_style('line', 'TL')
+  validate_floatwin_scope_style('line', 'BM')
+  validate_floatwin_scope_style('line', 'MM')
+  validate_floatwin_scope_style('line', 'TM')
+  validate_floatwin_scope_style('line', 'BR')
+  validate_floatwin_scope_style('line', 'MR')
+  validate_floatwin_scope_style('line', 'TR')
+
+  -- Works with too wide prompt
+  validate_floatwin_scope_style('line', 'BL', 'A very-very-very-very wide prompt')
+  validate_floatwin_scope_style('line', 'MM', 'A very-very-very-very wide prompt')
+  validate_floatwin_scope_style('line', 'TR', 'A very-very-very-very wide prompt')
+
+  -- Works when at the edge of the instance
+  if child.fn.has('nvim-0.10') == 1 then
+    set_cursor(1, 0)
+    validate_floatwin_scope_style('line', 'BL')
+
+    child.cmd('wincmd j | wincmd l')
+    set_cursor(6, 10)
+    validate_floatwin_scope_style('line', 'TR')
+  end
+end
+
+local validate_floatwin_common_layout = function(scope, ref_path_prefix)
+  child.cmd('wincmd s | wincmd s | wincmd j | wincmd v | wincmd v | wincmd l | wincmd 5> | wincmd 3+')
+
+  validate_floatwin_scope_style(scope, 'BL', nil, ref_path_prefix)
+  validate_floatwin_scope_style(scope, 'ML', nil, ref_path_prefix .. '-002')
+  validate_floatwin_scope_style(scope, 'TL', nil, ref_path_prefix .. '-003')
+  validate_floatwin_scope_style(scope, 'BM', nil, ref_path_prefix .. '-004')
+  validate_floatwin_scope_style(scope, 'MM', nil, ref_path_prefix .. '-005')
+  validate_floatwin_scope_style(scope, 'TM', nil, ref_path_prefix .. '-006')
+  validate_floatwin_scope_style(scope, 'BR', nil, ref_path_prefix .. '-007')
+  validate_floatwin_scope_style(scope, 'MR', nil, ref_path_prefix .. '-008')
+  validate_floatwin_scope_style(scope, 'TR', nil, ref_path_prefix .. '-009')
+
+  -- Works with too wide prompt
+  validate_floatwin_scope_style(scope, 'BL', 'A very-very-very-very wide prompt', ref_path_prefix .. '-010')
+  validate_floatwin_scope_style(scope, 'MM', 'A very-very-very-very wide prompt', ref_path_prefix .. '-011')
+  validate_floatwin_scope_style(scope, 'TR', 'A very-very-very-very wide prompt', ref_path_prefix .. '-012')
+
+  child.cmd('wincmd o')
+end
+
+T['gen_view']['floatwin()']['uses scope and style for config']['scope=buffer,window'] = function()
+  -- Buffer and window scopes should behave exactly the same
+  local ref_path_prefix = table.concat({
+    'tests',
+    'screenshots',
+    'lua-mini-dev-test_input.lua---gen_view---floatwin()---uses-scope-and-style-for-config---scope=buffer,window',
+  }, '/')
+  validate_floatwin_common_layout('buffer', ref_path_prefix)
+  validate_floatwin_common_layout('window', ref_path_prefix)
+
+  -- Works when at the edge of the instance
+  validate_floatwin_scope_style('buffer', 'TL', nil, ref_path_prefix .. '-013')
+  validate_floatwin_scope_style('buffer', 'BR', nil, ref_path_prefix .. '-014')
+  validate_floatwin_scope_style('window', 'TL', nil, ref_path_prefix .. '-013')
+  validate_floatwin_scope_style('window', 'BR', nil, ref_path_prefix .. '-014')
+end
+
+T['gen_view']['floatwin()']['uses scope and style for config']['scope=tabpage,editor,project'] = function()
+  -- Tabpage, editor, and project scopes should behave exactly the same
+  local ref_path_prefix = table.concat({
+    'tests',
+    'screenshots',
+    'lua-mini-dev-test_input.lua---gen_view---floatwin()---uses-scope-and-style-for-config---scope=tabpagae,editor,project',
+  }, '/')
+  validate_floatwin_common_layout('tabpage', ref_path_prefix)
+  validate_floatwin_common_layout('editor', ref_path_prefix)
+  validate_floatwin_common_layout('project', ref_path_prefix)
+end
+
+T['gen_view']['floatwin()']['uses correct highlight groups'] = function()
+  child.lua([[
+    MiniInput.config.handlers.complete = function(state, method)
+      state.complete = { base = '', items = { 'uu' } }
+    end
+  ]])
+  local get_win_data = function()
+    local win_id = get_state().data.floatwin_win_id
+    return win_id, child.api.nvim_win_get_config(win_id)
+  end
+  local validate_winhl = function(win_id, entry)
+    local winhl = child.api.nvim_get_option_value('winhighlight', { win = win_id })
+    expect.match(winhl, entry)
+  end
+
+  get({ prompt = 'A', completion = 'test' })
+  local win_id, config = get_win_data()
+  eq(config.title, { { ' A ', 'MiniInputPrompt' } })
+  eq(config.footer, nil)
+  validate_winhl(win_id, 'NormalFloat:MiniInputNormal')
+  validate_winhl(win_id, 'FloatBorder:MiniInputBorder')
+
+  type_keys('<Tab>')
+  win_id, config = get_win_data()
+  eq(config.title, { { ' A ', 'MiniInputPrompt' } })
+  if child.fn.has('nvim-0.10') == 1 then eq(config.footer, { { ' test 1/1 ', 'MiniInputHint' } }) end
+
+  type_keys('<C-x>')
+  eq(get_state().opts.hide, true)
+  win_id, config = get_win_data()
+  eq(config.title, { { ' A ', 'MiniInputHide' } })
+  validate_winhl(win_id, 'NormalFloat:MiniInputNormal')
+  validate_winhl(win_id, 'FloatBorder:MiniInputBorder')
+end
+
+T['gen_view']['floatwin()']['shows complete hint in footer'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Window footer is available only on Neovim>=0.10') end
+  child.lua([[
+    MiniInput.config.handlers.complete = function(state, method)
+      state.complete = { base = '', items = { 'uu' } }
+    end
+  ]])
+  local validate = function(opts_completion, key)
+    get({ prompt = 'A', completion = opts_completion })
+    type_keys(key)
+    child.expect_screenshot({ ignore_cmdline = true })
+    type_keys('<C-c>')
+  end
+
+  validate(nil, '<Tab>')
+  validate('', '<Tab>')
+  -- Should show method and try to adjust width to show both title and footer
+  validate('cmdline', '<Tab>')
+  validate(nil, '<Up>')
+end
+
 T['gen_view']['floatwin()']['works with multibyte characters'] = function()
-  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_text = { 10 } }) end
+  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_cmdline = true }) end
 
   get({ prompt = 'фt🬗' })
   expect_screenshot()
@@ -1244,7 +1433,7 @@ end
 
 T['gen_view']['floatwin()']['truncates border text'] = function()
   if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Window footer is available only on Neovim>=0.10') end
-  local expect_screenshot = function() child.expect_screenshot({ ignore_text = { 10 } }) end
+  local expect_screenshot = function() child.expect_screenshot({ ignore_cmdline = true }) end
 
   child.lua([[
     MiniInput.config.handlers.complete = function(state, method)
@@ -1264,139 +1453,186 @@ T['gen_view']['floatwin()']['truncates border text'] = function()
   validate('「」『』《》〈〉【】')
 end
 
-T['gen_view']['floatwin()']['allows "none" as border'] = function()
-  -- child.lua([[MiniPick.config.window.config = { border = 'none' }]])
-  -- start_with_items({ 'a' }, 'My name')
-  -- child.expect_screenshot()
-  MiniTest.skip()
-end
-
-T['gen_view']['floatwin()']['adjusts dimensions respecting border'] = function()
-  -- child.set_size(10, 20)
-  -- child.o.laststatus, child.o.showtabline, child.o.cmdheight = 0, 0, 0
-  -- child.lua([[MiniPick.config.window.config = { width = vim.o.columns, height = vim.o.lines }]])
-  --
-  -- start_with_items({ 'a' }, 'My name')
-  -- child.expect_screenshot()
-  --
-  -- local validate_border = function(border)
-  --   local border_str = vim.inspect(border)
-  --   local lua_cmd = string.format('MiniPick.set_picker_opts({ window = { config = { border = %s } } })', border_str)
-  --   child.lua(lua_cmd)
-  --   child.expect_screenshot()
-  -- end
-  --
-  -- -- All sides
-  -- validate_border({ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h' })
-  -- -- No left side
-  -- validate_border({ '', 'b', 'c', 'd', 'e', 'f', '', '' })
-  -- -- No right side
-  -- validate_border({ 'a', 'b', '', '', '', 'f', 'g', 'h' })
-  -- -- No left and right side
-  -- validate_border({ '', 'b', '', '', '', 'f', '', '' })
-  -- -- No top side
-  -- validate_border({ '', '', '', 'd', 'e', 'f', 'g', 'h' })
-  -- -- No bottom side
-  -- validate_border({ 'a', 'b', 'c', 'd', '', '', '', 'h' })
-  -- -- No top and bottom side
-  -- validate_border({ '', '', '', 'd', '', '', '', 'h' })
-  --
-  -- -- Different length of border array
-  -- validate_border({ 'a', 'b', 'c', 'd' })
-  -- validate_border({ 'a', 'b' })
-  -- validate_border({ 'a' })
-  -- -- No left and right side
-  -- validate_border({ '', 'b', '', '' })
-  -- -- No top and bottom side
-  -- validate_border({ '', '', '', 'd' })
-  --
-  -- -- Forced no sides
-  -- validate_border({ 'a', '' })
-  -- validate_border({ '' })
-  --
-  -- -- Special "no sides"
-  -- validate_border('none')
-  MiniTest.skip()
-end
-
 T['gen_view']['floatwin()']["respects 'winborder' option"] = function()
   if child.fn.has('nvim-0.11') == 0 then MiniTest.skip("'winborder' option is present on Neovim>=0.11") end
 
-  -- local validate = function(winborder)
-  --   child.o.winborder = winborder
-  --   start_with_items({ 'a', 'b', 'c' })
-  --   child.expect_screenshot()
-  --   stop()
-  -- end
-  --
-  -- validate('rounded')
-  --
-  -- -- Should prefer explicitly configured value over 'winborder'
-  -- child.lua('MiniPick.config.window.config = { border = "double" }')
-  -- validate('rounded')
-  --
-  -- -- Should show prompt and hint inline with `winborder=none`
-  -- child.lua('MiniPick.config.window.config = nil')
-  -- validate('none')
-  --
-  -- -- Should work with "string array" 'winborder'
-  -- if child.fn.has('nvim-0.12') == 0 then MiniTest.skip("String array 'winborder' is present on Neovim>=0.12") end
-  -- validate('+,-,+,|,+,-,+,|')
-  MiniTest.skip()
+  local validate = function(winborder)
+    child.o.winborder = winborder
+    get()
+    child.expect_screenshot({ ignore_cmdline = true })
+    type_keys('<C-c>')
+  end
+
+  validate('rounded')
+
+  -- Should work with "string array" 'winborder'
+  if child.fn.has('nvim-0.12') == 0 then MiniTest.skip("String array 'winborder' is present on Neovim>=0.12") end
+  validate('+,-,+,|,+,-,+,|')
+end
+
+T['gen_view']['floatwin()']['works with `winborder=none`'] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip("'winborder' option is present on Neovim>=0.11") end
+
+  child.set_size(5, 30)
+  child.o.winborder = 'none'
+
+  local cwd = child.fn.getcwd()
+  set_history({ { cwd = cwd, prompt = 'Hello?', input = 'World prev', scope = 'editor' } })
+
+  -- Should show prompt and completion hint inline
+  get({ prompt = 'Hello?' })
+  child.expect_screenshot()
+  type_keys('World new')
+  child.expect_screenshot()
+  type_keys('<Left><Left><Left><Up>')
+  child.expect_screenshot()
+  type_keys('<C-c>')
+
+  -- Should correctly compute width for maximum chunks width
+  child.lua([[
+    _G.to_chunks_log = {}
+    local to_chunks = function(state, max_width)
+      table.insert(_G.to_chunks_log, { state.input, max_width })
+      return MiniInput.state_to_chunks(state, max_width)
+    end
+    MiniInput.config.handlers.view = MiniInput.gen_view.floatwin({ to_chunks = to_chunks })
+  ]])
+  get({ prompt = 'Truncate?' })
+  type_keys('abcdefghijklmnopqrstu')
+  child.lua('_G.to_chunks_log = {}')
+
+  type_keys('v')
+  validate_log('to_chunks_log', { { 'abcdefghijklmnopqrstuv', nil }, { 'abcdefghijklmnopqrstuv', 30 } })
+  child.expect_screenshot()
 end
 
 T['gen_view']['floatwin()']["respects tabline, statusline, 'cmdheight'"] = function()
-  -- local validate = function(screenshot_opts)
-  --   start_with_items({ 'a' }, 'My name')
-  --   child.expect_screenshot(screenshot_opts)
-  --   type_keys('<C-c>')
-  -- end
-  --
-  -- child.set_size(10, 20)
-  -- child.o.tabline, child.o.statusline = 'My tabline', 'My statusline'
-  --
-  -- child.o.showtabline, child.o.laststatus = 2, 2
-  -- validate()
-  --
-  -- child.o.showtabline, child.o.laststatus = 2, 0
-  -- validate()
-  --
-  -- child.o.showtabline, child.o.laststatus = 0, 2
-  -- validate()
-  --
-  -- child.o.showtabline, child.o.laststatus = 0, 0
-  -- validate()
-  --
-  -- child.o.cmdheight = 2
-  -- local ignore_cmdline_hl = child.fn.has('nvim-0.11') == 1 and {} or { ignore_attr = { 9, 10 } }
-  -- validate(ignore_cmdline_hl)
-  --
-  -- child.o.cmdheight = 0
-  -- validate()
-  MiniTest.skip()
+  local validate = function(showtabline, laststatus)
+    child.o.showtabline, child.o.laststatus = showtabline, laststatus
+    validate_floatwin_scope_style('editor', 'BL')
+    validate_floatwin_scope_style('editor', 'TR')
+  end
+
+  validate(2, 2)
+  validate(2, 0)
+  validate(0, 2)
+  validate(0, 0)
+
+  child.o.cmdheight = 2
+  validate(0, 0)
+  child.o.cmdheight = 0
+  validate(0, 0)
 end
 
-T['gen_view']['floatwin()']['works with small available dimensions'] = function()
-  -- child.set_size(5, 40)
-  -- child.o.showtabline, child.o.laststatus = 0, 0
-  -- child.o.cmdheight = 4
-  --
-  -- start_with_items({ 'a' }, 'My name')
-  -- child.expect_screenshot({ ignore_attr = child.fn.has('nvim-0.11') == 0 })
-  MiniTest.skip()
+T['gen_view']['floatwin()']['respects `opts.adjust_config`'] = function()
+  -- Should prefer explicitly configured value over 'winborder'
+  if child.fn.has('nvim-0.11') == 1 then child.o.winborder = 'rounded' end
+
+  child.lua([[
+    _G.adjust_config_log = {}
+    local adjust_config = function(state, config)
+      table.insert(_G.adjust_config_log, { state.input, config.anchor })
+      config.border = 'double'
+      config.title = state.input
+      return config
+    end
+    MiniInput.config.handlers.view = MiniInput.gen_view.floatwin({ adjust_config = adjust_config })
+  ]])
+
+  get()
+  type_keys('a')
+  child.expect_screenshot({ ignore_cmdline = true })
+  validate_log('adjust_config_log', { { '', 'NW' }, { 'a', 'NW' } })
 end
 
-T['gen_view']['floatwin()']['respects `opts.adjust_config`'] = function() MiniTest.skip() end
+T['gen_view']['floatwin()']['respects `opts.to_chunks`'] = function()
+  child.set_size(5, 15)
 
-T['gen_view']['floatwin()']['respects `opts.style`'] = function() MiniTest.skip() end
+  child.lua([[
+    _G.to_chunks_log = {}
+    local to_chunks = function(state, max_width)
+      table.insert(_G.to_chunks_log, { state.input, max_width })
+      return _G.chunks
+    end
+    MiniInput.config.handlers.view = MiniInput.gen_view.floatwin({ to_chunks = to_chunks })
+  ]])
 
-T['gen_view']['floatwin()']['respects `opts.to_chunks`'] = function() MiniTest.skip() end
+  local validate = function(chunks)
+    child.lua('_G.chunks = ' .. vim.inspect(chunks))
+    get({ prompt = 'A' })
+    child.expect_screenshot()
+    type_keys('<C-c>')
+  end
 
-T['gen_view']['floatwin()']['can change style'] = function() MiniTest.skip() end
+  validate({ { 'abcdef', 'Test' } })
 
-T['gen_view']['floatwin()']['reacts to `state.opts` change'] = function() MiniTest.skip() end
+  -- Should not wrap text and respect global 'listchars'
+  child.o.wrap = true
+  child.go.list = true
+  child.go.listchars = 'extends:>'
+  validate({ { 'very-very wide chunk', 'Test' } })
 
-T['gen_view']['floatwin()']['validates input'] = function() MiniTest.skip() end
+  -- Should validate `to_chunks` output
+  child.lua('_G.chunks = 1')
+  expect.error(function() child.lua('MiniInput.get()') end, '`opts%.to_chunks%(state, nil%)`.*array')
+  child.lua('_G.chunks = { 1 }')
+  expect.error(function() child.lua('MiniInput.get()') end, 'Every `opts%.to_chunks%(state, nil%)` item.*table')
+  child.lua('_G.chunks = { { 1, "Test" } }')
+  expect.error(function() child.lua('MiniInput.get()') end, '`opts%.to_chunks%(state, nil%)%[1%]%[1%]`.*string')
+  child.lua('_G.chunks = { { "a", 1 } }')
+  expect.error(function() child.lua('MiniInput.get()') end, '`opts%.to_chunks%(state, nil%)%[1%]%[2%]`.*string')
+end
+
+T['gen_view']['floatwin()']['can change style'] = function()
+  get()
+  child.expect_screenshot({ ignore_cmdline = true })
+
+  -- Should change style in specific order
+  local validate = function()
+    type_keys('<C-s>')
+    child.expect_screenshot({ ignore_cmdline = true })
+  end
+  validate()
+  validate()
+  validate()
+  validate()
+  validate()
+  validate()
+  validate()
+  validate()
+  validate()
+end
+
+T['gen_view']['floatwin()']['reacts to `state.opts` change'] = function()
+  local expect_screenshot = function() child.expect_screenshot({ ignore_cmdline = true }) end
+
+  -- Scope
+  set_lines({ '', '', '', 'aaa' })
+  set_cursor(4, 2)
+  get({ scope = 'cursor' })
+  type_keys('abc')
+  expect_screenshot()
+
+  type_keys('<C-o>')
+  expect_screenshot()
+  type_keys('<C-o>')
+  expect_screenshot()
+
+  -- Hide
+  type_keys('<C-x>')
+  expect_screenshot()
+  type_keys('<C-x>')
+  expect_screenshot()
+end
+
+T['gen_view']['floatwin()']['validates input'] = function()
+  local validate = function(bad_opts, err_pattern)
+    expect.error(function() child.lua('MiniInput.gen_view.floatwin(...)', { bad_opts }) end, err_pattern)
+  end
+  validate({ adjust_config = 1 }, '`opts.adjust_config`.*callable')
+  validate({ style = 1 }, '`opts.style`.*one of')
+  validate({ to_chunks = 1 }, '`opts.to_chunks`.*callable')
+end
 
 T['gen_view']['uiline()'] = new_set()
 
@@ -2018,6 +2254,9 @@ T['default_highlight()']['works'] = function()
   validate('abx', '', 'x', { { 3, 3 } })
   validate('x', '', 'x', { { 1, 1 } })
 
+  -- Should work with base containing spaces
+  validate('ab  cd', 'ab  ', 'ab  cd', { { 5, 6 } })
+
   -- Should work when caret is not at the end
   local state = { input = 'ax bb', caret = 3, complete = { base = 'a', id = 1, items = { 'ax' }, method = 'test' } }
   validate_highlight(state, { { 2, 2 } })
@@ -2071,7 +2310,7 @@ T['default_view()'] = new_set()
 -- Most test coverage is done in `gen_vew.floatwin`
 
 T['default_view()']['works'] = function()
-  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_text = { 10 } }) end
+  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_cmdline = true }) end
 
   set_lines({ 'aaa', 'bbb', 'ccc' })
   set_cursor(3, 1)
