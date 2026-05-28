@@ -79,6 +79,7 @@
 --- - If state has changed but its <complete> field has not, it is assumed that
 ---   completion is not active anymore and <complete> field is removed.
 --- - State's <highlight> field is removed before every step.
+--- - First error is captured as `state.errmsg` while setting `state.status="cancel"`.
 ---
 --- # State ~
 --- *MiniInput-state*
@@ -204,7 +205,7 @@
 
 ---@alias __input_to_chunks - <to_chunks> `(function)` - a function that takes a `state` and `max_width`
 ---     arguments and returns an array of `{ text, hl }` chunks that fit into
----     `max_width` width. See |MiniInput.state_to_chunks()|.
+---     `max_width` display width. See |MiniInput.state_to_chunks()|.
 
 ---@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
@@ -459,6 +460,7 @@ end
 ---     - <method> `(string)` - completion method. Like `"default"`, `"history"`, etc.
 --- - <data> `(table)` - any information to be reused within same input session.
 ---   Note: present fields should not change to avoid surprising behavior.
+--- - <errmsg> `(errmsg)` - first error message caught during input process.
 --- - <highlight> `(table|nil)` - information about current input highlighting.
 ---   Should be an array of highlight ranges. They might be not ordered, overlap,
 ---   go outside of input width. It is up to the view handler to decide how to
@@ -563,7 +565,7 @@ end
 ---
 --- Each element accepts `to_chunks` option. It is a function that takes
 --- a `state` and `max_width` arguments and returns an array of `{ text, hl }`
---- chunks that fit into `max_width` width.
+--- chunks that fit into `max_width` display width (as in |strdisplaywidth()|).
 ---
 --- This is a way to adjust how input is shown. Like caret/hide symbols, etc.
 --- By default uses |MiniInput.state_to_chunks()|, which also means:
@@ -594,6 +596,9 @@ MiniInput.gen_view = {}
 --- Notes:
 --- - Always computes config with `relative="editor"` and `anchor="NW"`.
 --- - Computes width taking into account caret symbol and a completion hint.
+--- - Identifiers of floating window and its buffer are stored as `floatinw_win_id`
+---   in state <data> (see |MiniInput.get_state()|). Floating window is not focused
+---   and cursor position is not the same as caret position.
 ---
 ---@param opts table|nil Options. Possible fields:
 ---   - <adjust_config> `(function)` - function to adjust default config. Will be
@@ -650,8 +655,8 @@ MiniInput.gen_view.floatwin = function(opts)
 
   return function(state)
     if H.state_is_end(state) then
-      pcall(vim.api.nvim_win_close, state.data.floating_win_id, true)
-      pcall(vim.api.nvim_buf_delete, state.data.floating_buf_id, { force = true })
+      pcall(vim.api.nvim_win_close, state.data.floatwin_win_id, true)
+      pcall(vim.api.nvim_buf_delete, state.data.floatwin_buf_id, { force = true })
       return
     end
     local style, _ = H.handle_view_style(state, opts.style, all_styles)
@@ -660,7 +665,7 @@ MiniInput.gen_view.floatwin = function(opts)
     local winborder = vim.fn.exists('+winborder') == 0 and '' or vim.o.winborder
     default_to_chunks_opts = { include_prompt = winborder == 'none', include_hint = winborder == 'none' }
     local chunks = H.get_chunks(opts, state)
-    local default_config = H.default_floatwin_config(state, style, H.get_chunks_width(chunks))
+    local default_config = H.default_floatwin_config(state, style, H.get_chunks_displaywidth(chunks))
     local config = opts.adjust_config(state, default_config)
     chunks = H.get_chunks(opts, state, config.width)
 
@@ -761,7 +766,7 @@ MiniInput.gen_view.virtual = function(opts)
     local win_info = H.get_curwin_info()
     local max_width = win_info.width - win_info.textoff
     local chunks = H.get_chunks(opts, state, max_width)
-    local chunks_width = H.get_chunks_width(chunks)
+    local chunks_width = H.get_chunks_displaywidth(chunks)
     if is_virtline and chunks_width < max_width then
       table.insert(chunks, { string.rep(' ', max_width - chunks_width), 'MiniInputNormal' })
     end
@@ -859,7 +864,7 @@ MiniInput.default_highlight = function(state)
   if H.state_is_end(state) then return end
 
   -- Only show characters added during completion navigation
-  if state.complete == nil then return end
+  if state.complete == nil or state.complete.id == 0 then return end
 
   local cur_item = state.complete.items[state.complete.id]
   local base = state.complete.base
@@ -948,8 +953,8 @@ end
 --- - Treat `state.highlight` elements in increasing priority, i.e. later ones
 ---   are placed "on top" of the previous ones if they overlap.
 --- - Uses pre-determined module's highlight groups.
---- - TODO: truncates output chunsk to fit maximum width `max_width` while
----   trying to center the caret.
+--- - TODO: truncates output chunsk to fit maximum display width (as
+---   in |strdisplaywidth()|) `max_width` while trying to center the caret.
 ---
 ---@param state table ...
 ---@param max_width number|nil Maximum allowed total text width. Can be |math.huge|.
@@ -998,7 +1003,7 @@ MiniInput.state_to_chunks = function(state, max_width, opts)
   H.append_chunks(chunks, input_chunks_left, keytrans)
 
   if opts.symbol_caret ~= '' then H.append_chunks(chunks, { { opts.symbol_caret, 'MiniInputCaret' } }, keytrans) end
-  local caret_offset = H.get_chunks_width(chunks)
+  local caret_offset = H.get_chunks_displaywidth(chunks)
 
   if opts.include_hint and state.complete ~= nil then
     local hint = string.format('(%d/%d)', state.complete.id, #state.complete.items)
@@ -1007,13 +1012,16 @@ MiniInput.state_to_chunks = function(state, max_width, opts)
 
   H.append_chunks(chunks, input_chunks_right, keytrans)
 
-  return H.fit_chunks_to_width(chunks, max_width, caret_offset)
+  return H.fit_chunks_to_displaywidth(chunks, max_width, caret_offset)
 end
 
 --- Apply state's handler
 ---
 --- TODO:
---- - Validates handler output to be a valid state.
+--- - Error during handler appliction is stored as <errmsg> field of output state
+---   if there is an active input. It is propagated via |error()| otherwise.
+--- - Validates handler output to be a valid state. If not - return input state.
+---   Note: it still could be changed if handler modified it in place.
 ---
 ---@param state table ...
 ---@param name string Valid handler name.
@@ -1026,16 +1034,16 @@ MiniInput.apply_handler = function(state, name, ...)
   local ok_handler, res = pcall(state.opts.handlers[name], state, ...)
   if not ok_handler then H.cache_error(state, 'Error applying `' .. name .. '` handler: ' .. res) end
 
-  local new_state = (ok_handler and res ~= nil) and res or state
+  local new_state = (ok_handler and res or nil) or state
   if name == 'complete' and type(new_state.complete) == 'table' then
     new_state.complete.id = 0
     new_state.complete.method = ({ ... })[1]
   end
 
   local ok_state, msg = pcall(H.state_validate, new_state)
-  if not ok_state then H.cache_error(new_state, msg) end
+  if not ok_state then H.cache_error(state, msg) end
 
-  return (ok_handler and ok_state) and new_state or state
+  return ok_state and new_state or state
 end
 
 -- Helper data ================================================================
@@ -1052,7 +1060,7 @@ H.history = {}
 H.allowed_scopes = { 'cursor', 'line', 'buffer', 'window', 'tabpage', 'editor', 'project' }
 
 -- Various cache
-H.cache = { error = nil }
+H.cache = {}
 
 -- Namespaces
 H.ns_id = {
@@ -1197,11 +1205,11 @@ H.state_finish = function()
   H.handle_step(nil)
 
   local res = H.state.status == 'accept' and H.state.input or nil
-  local err, opts = H.cache.error, vim.deepcopy(H.state.opts)
+  local errmsg, opts = H.state.errmsg, vim.deepcopy(H.state.opts)
   H.state, H.cache = nil, {}
   (_G.MiniInput or {})._temp_default_scope = nil
 
-  if err ~= nil then error(err) end
+  if errmsg ~= nil then error(errmsg) end
 
   if res ~= nil and not opts.hide then
     local hist = { input = res, prompt = opts.prompt, scope = opts.scope, cwd = vim.fn.getcwd() }
@@ -1238,9 +1246,7 @@ H.handle_step = function(key, skip_redraw)
   state = MiniInput.apply_handler(state, 'highlight')
   state = MiniInput.apply_handler(state, 'view')
 
-  if H.cache.error == nil then H.state = state end
-  if H.cache.error ~= nil then H.state.status = 'cancel' end
-
+  H.state = state
   if not skip_redraw then H.redraw() end
 end
 
@@ -1575,8 +1581,15 @@ H.default_floatwin_config = function(state, style, target_width)
   local border = winborder == '' and 'single' or nil
   local no_border = winborder == 'none'
 
-  local title_text = ' ' .. vim.trim(state.opts.prompt) .. ' '
-  local width = H.clamp(target_width, vim.fn.strchars(title_text), max_width)
+  local title_text = ' ' .. vim.trim(state.opts.prompt:gsub('[\t\n%z]', ' ')) .. ' '
+  local footer_text, complete = '', state.complete
+  if complete ~= nil then
+    local method_prefix = complete.method == '' and '' or (' ' .. vim.trim(complete.method))
+    footer_text = string.format('%s %d/%d ', (method_prefix:gsub('[\t\n%z]', ' ')), complete.id, #complete.items)
+  end
+  local title_width, footer_width = vim.fn.strdisplaywidth(title_text), vim.fn.strdisplaywidth(footer_text)
+
+  local width = H.clamp(target_width, math.max(title_width, footer_width), max_width)
   local height = 1
   local width_offset = no_border and 0 or 2
   local height_offset = no_border and 0 or 2
@@ -1617,22 +1630,17 @@ H.default_floatwin_config = function(state, style, target_width)
 
   config.row = ref_rect.row + math.floor(ver_coef * (ref_rect.height - height - height_offset))
   config.col = ref_rect.col + math.floor(hor_coef * (ref_rect.width - width - width_offset))
-  config.height = height
-  config.width = width
+  config.height = math.min(height, max_height - height_offset)
+  config.width = math.min(width, max_width - width_offset)
 
   -- Set title and footer
   if no_border then return config end
 
   local title_hl = state.opts.hide and 'MiniInputHide' or 'MiniInputPrompt'
-  config.title = { { H.fit_to_width(title_text, config.width), title_hl } }
+  config.title = { { H.fit_to_displaywidth(title_text, config.width), title_hl } }
   config.title_pos = 'left'
   if vim.fn.has('nvim-0.10') == 1 then
-    local footer_text, complete = '', state.complete
-    if complete ~= nil then
-      local method_prefix = complete.method == '' and '' or (' ' .. complete.method)
-      footer_text = string.format('%s %d/%d ', method_prefix, complete.id, #complete.items)
-    end
-    config.footer = { { H.fit_to_width(footer_text, config.width), 'MiniInputHint' } }
+    config.footer = { { H.fit_to_displaywidth(footer_text, config.width), 'MiniInputHint' } }
     config.footer_pos = 'right'
   end
 
@@ -1640,14 +1648,14 @@ H.default_floatwin_config = function(state, style, target_width)
 end
 
 H.ensure_floatwin_buf = function(state, chunks)
-  local buf_id = state.data.floating_buf_id
+  local buf_id = state.data.floatwin_buf_id
   if H.is_valid_buf(buf_id) then
     vim.api.nvim_buf_clear_namespace(buf_id, H.ns_id.view, 0, -1)
   else
     buf_id = vim.api.nvim_create_buf(false, true)
     H.set_buf_name(buf_id, 'content')
     vim.bo[buf_id].filetype = 'miniinput'
-    state.data.floating_buf_id = buf_id
+    state.data.floatwin_buf_id = buf_id
   end
 
   local text_arr, extmark_data, cur_len = {}, {}, 0
@@ -1666,8 +1674,8 @@ H.ensure_floatwin_buf = function(state, chunks)
 end
 
 H.ensure_floatwin_win = function(state, config)
-  local buf_id = state.data.floating_buf_id
-  local win_id = state.data.floating_win_id
+  local buf_id = state.data.floatwin_buf_id
+  local win_id = state.data.floatwin_win_id
   if H.is_valid_win(win_id) then
     config.noautocmd = nil
     vim.api.nvim_win_set_config(win_id, config)
@@ -1677,7 +1685,7 @@ H.ensure_floatwin_win = function(state, config)
     vim.wo[win_id].list = vim.go.list
     vim.wo[win_id].listchars = vim.go.listchars
     vim.wo[win_id].wrap = false
-    state.data.floating_win_id = win_id
+    state.data.floatwin_win_id = win_id
   end
 
   return win_id
@@ -1764,17 +1772,38 @@ H.split_chunks_at = function(chunks, at)
   return left, right
 end
 
-H.fit_chunks_to_width = function(chunks, width, center_offset)
-  local chunks_width = H.get_chunks_width(chunks)
+H.fit_chunks_to_displaywidth = function(chunks, width, center_offset)
+  local chunks_text = H.get_chunks_text(chunks)
+  local chunks_width = vim.fn.strdisplaywidth(chunks_text)
   if width == nil or chunks_width < width then return chunks end
 
-  -- Show center while showing as much as possible to left and right
+  -- Show center with as much and as equally as possible to left and right
   local right = math.min(chunks_width, math.floor(center_offset + 0.5 * width))
   local left = math.max(1, right - width + 1)
   right = left + math.min(width, chunks_width) - 1
 
-  local res, _ = H.split_chunks_at(chunks, right)
-  _, res = H.split_chunks_at(res, left - 1)
+  -- Convert display cols into char cols (matters with double width characters)
+  local left_char, right_char, cur_w = nil, nil, 0
+  for i = 1, vim.fn.strchars(chunks_text) do
+    local w = vim.fn.strdisplaywidth(vim.fn.strcharpart(chunks_text, i - 1, 1))
+
+    -- `left_char` = first char id with end at `left` or more, but only if the
+    -- start is within `width` from center offset (otherwise - next char).
+    if left_char == nil and left <= (cur_w + w) then
+      local is_within_width_from_center = center_offset - cur_w <= width
+      left_char = i + (is_within_width_from_center and 0 or 1)
+      -- Update `left` display column to point at left character start
+      left = cur_w + (is_within_width_from_center and 0 or w) + 1
+    end
+
+    -- `right_char` = last char id with end at most `width` from updated `left`
+    if (cur_w + w - left + 1) <= width then right_char = i end
+
+    cur_w = cur_w + w
+  end
+
+  local res, _ = H.split_chunks_at(chunks, right_char)
+  _, res = H.split_chunks_at(res, left_char - 1)
   return res
 end
 
@@ -1782,7 +1811,7 @@ H.get_chunks_text = function(chunks)
   return table.concat(vim.tbl_map(function(ch) return ch[1] end, chunks))
 end
 
-H.get_chunks_width = function(chunks) return vim.fn.strchars(H.get_chunks_text(chunks)) end
+H.get_chunks_displaywidth = function(chunks) return vim.fn.strdisplaywidth(H.get_chunks_text(chunks)) end
 
 -- Highlight ranges -----------------------------------------------------------
 --- Add new proper highlight range on top of an array of ranges that don't
@@ -1903,7 +1932,7 @@ end
 H.cache_error = function(state, msg)
   if not vim.startswith(msg, '(mini.input) ') then msg = '(mini.input) ' .. msg end
   if H.state == nil then error(msg) end
-  H.cache.error = H.cache.error or msg
+  state.errmsg = state.errmsg or msg
   state.status = 'cancel'
 end
 
@@ -1919,9 +1948,13 @@ H.is_valid_char = function(char) return vim.fn.strchars(char) == 1 and vim.fn.ch
 
 H.get_curwin_info = function() return vim.fn.getwininfo(vim.api.nvim_get_current_win())[1] end
 
-H.fit_to_width = function(text, width)
-  local t_width = vim.fn.strchars(text)
-  return t_width <= width and text or ('…' .. vim.fn.strcharpart(text, t_width - width + 1, width - 1))
+H.fit_to_displaywidth = function(text, width)
+  if vim.fn.strdisplaywidth(text) <= width then return text end
+  for i = 1, vim.fn.strchars(text) do
+    local truncated = '…' .. vim.fn.strcharpart(text, i - 1)
+    if vim.fn.strdisplaywidth(truncated) <= width then return truncated end
+  end
+  return ''
 end
 
 -- TODO: Remove after compatibility with Neovim=0.9 is dropped

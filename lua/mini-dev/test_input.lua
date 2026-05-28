@@ -461,7 +461,8 @@ T['get()']['stops'] = new_set({
       child.lua([[
         _G.handlers_log, _G.key_actions = {}, {}
         MiniInput.config.handlers.key = function(state, key)
-          table.insert(_G.handlers_log, { 'key', state.status, key })
+          local status = state.errmsg == nil and state.status or { state.status, 'errmsg' }
+          table.insert(_G.handlers_log, { 'key', status, key })
           if _G.key_actions[key] then _G.key_actions[key](state, key) end
         end
       ]])
@@ -494,8 +495,9 @@ T['get()']['stops']['when there is an error during handler execution'] = functio
   expect.error(mock_handler_error, 'Very specific error in handler')
   eq(get_state(), vim.NIL)
   eq(child.lua_get('_G.errored_input'), vim.NIL)
-  -- - Should still properly finish with extra input step
-  validate_log('handlers_log', { { 'key', 'start', nil }, { 'key', 'progress', 'E' }, { 'key', 'cancel', nil } })
+  -- - Should still properly finish with extra input step with `state.errmsg`
+  local ref_log = { { 'key', 'start', nil }, { 'key', 'progress', 'E' }, { 'key', { 'cancel', 'errmsg' }, nil } }
+  validate_log('handlers_log', ref_log)
 end
 
 T['get()']['stops']['right after start'] = function()
@@ -544,7 +546,9 @@ end
 T['get()']['reports first encountered error in handler'] = function()
   child.lua([[
     local has_errored = false
+    _G.key_log = {}
     MiniInput.config.handlers.key = function(state, key)
+      table.insert(_G.key_log, { state.status, state.errmsg ~= nil and 'errmsg' or nil })
       if has_errored then error('Second handler error') end
       if key == 'E' then
         has_errored = true
@@ -560,6 +564,7 @@ T['get()']['reports first encountered error in handler'] = function()
     ]])
   end
   expect.error(mock_handler_error, 'First handler error')
+  validate_log('key_log', { { 'start' }, { 'progress' }, { 'cancel', 'errmsg' } })
 end
 
 T['get()']['resets `state.complete` when needed'] = function()
@@ -922,7 +927,7 @@ T['ui_input()']['converts `opts.highlight` to highlight handler'] = function()
   child.lua([[
     _G.key_log = {}
     MiniInput.config.handlers.key = function(state)
-      table.insert(_G.key_log, { state.input, state.status })
+      table.insert(_G.key_log, { state.input, state.status, state.errmsg ~= nil and 'errmsg' or nil })
     end
   ]])
 
@@ -931,7 +936,7 @@ T['ui_input()']['converts `opts.highlight` to highlight handler'] = function()
     '[^%)] %(mini%.input%) Error applying `highlight` handler.*[^%)] Bad highlight function'
   )
   -- - Should still properly finish input process
-  validate_log('key_log', { { '', 'start' }, { '', 'cancel' } })
+  validate_log('key_log', { { '', 'start' }, { '', 'cancel', 'errmsg' } })
 end
 
 T['get_state()'] = new_set()
@@ -1167,23 +1172,265 @@ end
 
 T['gen_view'] = new_set()
 
-T['gen_view']['floatwin'] = new_set()
+T['gen_view']['floatwin()'] = new_set({
+  hooks = { pre_case = { function() child.lua('MiniInput.config.handlers.view = MiniInput.gen_view.floatwin()') end } },
+})
 
-T['gen_view']['floatwin']['works'] = function() MiniTest.skip() end
+T['gen_view']['floatwin()']['works'] = function()
+  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_text = { 10 } }) end
+  get({ prompt = 'Hello?' })
+  expect_screenshot()
 
-T['gen_view']['floatwin']['can interactively change style'] = function() MiniTest.skip() end
+  -- Should store relevant data
+  local state = get_state()
+  local buf_id, win_id = state.data.floatwin_buf_id, state.data.floatwin_win_id
+  eq(child.api.nvim_buf_is_valid(buf_id), true)
+  eq(child.api.nvim_win_is_valid(win_id), true)
 
-T['gen_view']['uiline'] = new_set()
+  -- Should react to text and caret change
+  type_keys('a')
+  expect_screenshot()
+  type_keys('<Left>')
+  expect_screenshot()
 
-T['gen_view']['uiline']['works'] = function() MiniTest.skip() end
+  -- Should not have side effect after finishing input
+  type_keys('<CR>')
+  expect_screenshot()
+  eq(child.api.nvim_buf_is_valid(buf_id), false)
+  eq(child.api.nvim_win_is_valid(win_id), false)
 
-T['gen_view']['uiline']['can interactively change style'] = function() MiniTest.skip() end
+  get()
+  state = get_state()
+  buf_id, win_id = state.data.floatwin_buf_id, state.data.floatwin_win_id
+  type_keys('<C-c>')
+  eq(child.api.nvim_buf_is_valid(buf_id), false)
+  eq(child.api.nvim_win_is_valid(win_id), false)
+end
 
-T['gen_view']['virtual'] = new_set()
+T['gen_view']['floatwin()']['works with multibyte characters'] = function()
+  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_text = { 10 } }) end
 
-T['gen_view']['virtual']['works'] = function() MiniTest.skip() end
+  get({ prompt = 'фt🬗' })
+  expect_screenshot()
+  type_keys('фt🬗фt🬗')
+  expect_screenshot()
+  type_keys('<Left><Left><Left>')
+  expect_screenshot()
+  type_keys('<C-c>')
 
-T['gen_view']['virtual']['can interactively change style'] = function() MiniTest.skip() end
+  -- Double-width characters
+  get({ prompt = '「」' })
+  expect_screenshot()
+  type_keys('「」「」')
+  expect_screenshot()
+  type_keys('<Left><Left>')
+  expect_screenshot()
+  type_keys('<C-c>')
+end
+
+T['gen_view']['floatwin()']['sanitizes border text'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Window footer is available only on Neovim>=0.10') end
+
+  child.set_size(10, 40)
+  child.lua([[
+    MiniInput.config.handlers.complete = function(state, method)
+      state.complete = { base = '', items = { 'uu' } }
+    end
+  ]])
+  get({ prompt = 'Bad\000multi\nline\nprompt\ttext\n', completion = 'Bad\000compl\netion\ttext\n' })
+  type_keys('<Tab>')
+  child.expect_screenshot()
+end
+
+T['gen_view']['floatwin()']['truncates border text'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Window footer is available only on Neovim>=0.10') end
+  local expect_screenshot = function() child.expect_screenshot({ ignore_text = { 10 } }) end
+
+  child.lua([[
+    MiniInput.config.handlers.complete = function(state, method)
+      state.complete = { base = '', items = { 'uu' } }
+    end
+  ]])
+
+  local validate = function(ref_text)
+    get({ prompt = ref_text, completion = vim.fn.toupper(ref_text) })
+    type_keys('<Tab>')
+    expect_screenshot()
+    type_keys('<C-c>')
+  end
+
+  validate('abcdefghijklmnopqrstu')
+  validate('абвгґдеєжзиіїйклмноп')
+  validate('「」『』《》〈〉【】')
+end
+
+T['gen_view']['floatwin()']['allows "none" as border'] = function()
+  -- child.lua([[MiniPick.config.window.config = { border = 'none' }]])
+  -- start_with_items({ 'a' }, 'My name')
+  -- child.expect_screenshot()
+  MiniTest.skip()
+end
+
+T['gen_view']['floatwin()']['adjusts dimensions respecting border'] = function()
+  -- child.set_size(10, 20)
+  -- child.o.laststatus, child.o.showtabline, child.o.cmdheight = 0, 0, 0
+  -- child.lua([[MiniPick.config.window.config = { width = vim.o.columns, height = vim.o.lines }]])
+  --
+  -- start_with_items({ 'a' }, 'My name')
+  -- child.expect_screenshot()
+  --
+  -- local validate_border = function(border)
+  --   local border_str = vim.inspect(border)
+  --   local lua_cmd = string.format('MiniPick.set_picker_opts({ window = { config = { border = %s } } })', border_str)
+  --   child.lua(lua_cmd)
+  --   child.expect_screenshot()
+  -- end
+  --
+  -- -- All sides
+  -- validate_border({ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h' })
+  -- -- No left side
+  -- validate_border({ '', 'b', 'c', 'd', 'e', 'f', '', '' })
+  -- -- No right side
+  -- validate_border({ 'a', 'b', '', '', '', 'f', 'g', 'h' })
+  -- -- No left and right side
+  -- validate_border({ '', 'b', '', '', '', 'f', '', '' })
+  -- -- No top side
+  -- validate_border({ '', '', '', 'd', 'e', 'f', 'g', 'h' })
+  -- -- No bottom side
+  -- validate_border({ 'a', 'b', 'c', 'd', '', '', '', 'h' })
+  -- -- No top and bottom side
+  -- validate_border({ '', '', '', 'd', '', '', '', 'h' })
+  --
+  -- -- Different length of border array
+  -- validate_border({ 'a', 'b', 'c', 'd' })
+  -- validate_border({ 'a', 'b' })
+  -- validate_border({ 'a' })
+  -- -- No left and right side
+  -- validate_border({ '', 'b', '', '' })
+  -- -- No top and bottom side
+  -- validate_border({ '', '', '', 'd' })
+  --
+  -- -- Forced no sides
+  -- validate_border({ 'a', '' })
+  -- validate_border({ '' })
+  --
+  -- -- Special "no sides"
+  -- validate_border('none')
+  MiniTest.skip()
+end
+
+T['gen_view']['floatwin()']["respects 'winborder' option"] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip("'winborder' option is present on Neovim>=0.11") end
+
+  -- local validate = function(winborder)
+  --   child.o.winborder = winborder
+  --   start_with_items({ 'a', 'b', 'c' })
+  --   child.expect_screenshot()
+  --   stop()
+  -- end
+  --
+  -- validate('rounded')
+  --
+  -- -- Should prefer explicitly configured value over 'winborder'
+  -- child.lua('MiniPick.config.window.config = { border = "double" }')
+  -- validate('rounded')
+  --
+  -- -- Should show prompt and hint inline with `winborder=none`
+  -- child.lua('MiniPick.config.window.config = nil')
+  -- validate('none')
+  --
+  -- -- Should work with "string array" 'winborder'
+  -- if child.fn.has('nvim-0.12') == 0 then MiniTest.skip("String array 'winborder' is present on Neovim>=0.12") end
+  -- validate('+,-,+,|,+,-,+,|')
+  MiniTest.skip()
+end
+
+T['gen_view']['floatwin()']["respects tabline, statusline, 'cmdheight'"] = function()
+  -- local validate = function(screenshot_opts)
+  --   start_with_items({ 'a' }, 'My name')
+  --   child.expect_screenshot(screenshot_opts)
+  --   type_keys('<C-c>')
+  -- end
+  --
+  -- child.set_size(10, 20)
+  -- child.o.tabline, child.o.statusline = 'My tabline', 'My statusline'
+  --
+  -- child.o.showtabline, child.o.laststatus = 2, 2
+  -- validate()
+  --
+  -- child.o.showtabline, child.o.laststatus = 2, 0
+  -- validate()
+  --
+  -- child.o.showtabline, child.o.laststatus = 0, 2
+  -- validate()
+  --
+  -- child.o.showtabline, child.o.laststatus = 0, 0
+  -- validate()
+  --
+  -- child.o.cmdheight = 2
+  -- local ignore_cmdline_hl = child.fn.has('nvim-0.11') == 1 and {} or { ignore_attr = { 9, 10 } }
+  -- validate(ignore_cmdline_hl)
+  --
+  -- child.o.cmdheight = 0
+  -- validate()
+  MiniTest.skip()
+end
+
+T['gen_view']['floatwin()']['works with small available dimensions'] = function()
+  -- child.set_size(5, 40)
+  -- child.o.showtabline, child.o.laststatus = 0, 0
+  -- child.o.cmdheight = 4
+  --
+  -- start_with_items({ 'a' }, 'My name')
+  -- child.expect_screenshot({ ignore_attr = child.fn.has('nvim-0.11') == 0 })
+  MiniTest.skip()
+end
+
+T['gen_view']['floatwin()']['respects `opts.adjust_config`'] = function() MiniTest.skip() end
+
+T['gen_view']['floatwin()']['respects `opts.style`'] = function() MiniTest.skip() end
+
+T['gen_view']['floatwin()']['respects `opts.to_chunks`'] = function() MiniTest.skip() end
+
+T['gen_view']['floatwin()']['can change style'] = function() MiniTest.skip() end
+
+T['gen_view']['floatwin()']['reacts to `state.opts` change'] = function() MiniTest.skip() end
+
+T['gen_view']['floatwin()']['validates input'] = function() MiniTest.skip() end
+
+T['gen_view']['uiline()'] = new_set()
+
+T['gen_view']['uiline()']['works'] = function()
+  -- Should not have side effect after finishing input
+  MiniTest.skip()
+end
+
+T['gen_view']['uiline()']['can interactively change style'] = function() MiniTest.skip() end
+
+T['gen_view']['uiline()']['respects `opts.style`'] = function() MiniTest.skip() end
+
+T['gen_view']['uiline()']['respects `opts.to_chunks`'] = function() MiniTest.skip() end
+
+T['gen_view']['uiline()']['reacts to `state.opts` change'] = function() MiniTest.skip() end
+
+T['gen_view']['uiline()']['validates input'] = function() MiniTest.skip() end
+
+T['gen_view']['virtual()'] = new_set()
+
+T['gen_view']['virtual()']['works'] = function()
+  -- Should not have side effect after finishing input
+  MiniTest.skip()
+end
+
+T['gen_view']['virtual()']['can interactively change style'] = function() MiniTest.skip() end
+
+T['gen_view']['virtual()']['respects `opts.style`'] = function() MiniTest.skip() end
+
+T['gen_view']['virtual()']['respects `opts.to_chunks`'] = function() MiniTest.skip() end
+
+T['gen_view']['virtual()']['reacts to `state.opts` change'] = function() MiniTest.skip() end
+
+T['gen_view']['virtual()']['validates input'] = function() MiniTest.skip() end
 
 T['default_key()'] = new_set()
 
@@ -1796,7 +2043,10 @@ T['default_highlight()']['does nothing when expected'] = function()
   validate_highlight({ input = 'ab' }, nil)
 
   -- Base is shown during active completion, without or with items
-  local state = { input = 'a', complete = { base = 'a', id = 0, items = {}, method = 'test' } }
+  local state = { input = '', complete = { base = '', id = 0, items = {}, method = 'test' } }
+  validate_highlight(state, nil)
+
+  state.input, state.complete.base = 'a', 'a'
   validate_highlight(state, nil)
 
   state.items = { 'ab' }
@@ -1818,9 +2068,46 @@ end
 
 T['default_view()'] = new_set()
 
-T['default_view()']['works'] = function() MiniTest.skip() end
+-- Most test coverage is done in `gen_vew.floatwin`
 
-T['default_view()']['can interactively change style'] = function() MiniTest.skip() end
+T['default_view()']['works'] = function()
+  local expect_screenshot = function() child.expect_screenshot({ redraw = false, ignore_text = { 10 } }) end
+
+  set_lines({ 'aaa', 'bbb', 'ccc' })
+  set_cursor(3, 1)
+  get({ prompt = 'Hello?', scope = 'cursor' })
+  expect_screenshot()
+
+  local state = get_state()
+  local buf_id, win_id = state.data.floatwin_buf_id, state.data.floatwin_win_id
+  eq(child.api.nvim_buf_is_valid(buf_id), true)
+  eq(child.api.nvim_win_is_valid(win_id), true)
+
+  -- Typing anc caret move
+  type_keys('a')
+  expect_screenshot()
+  type_keys('<Left>')
+  expect_screenshot()
+  eq(child.api.nvim_buf_get_lines(buf_id, 0, -1, false), { '▏a' })
+
+  -- Interactive scope changing
+  type_keys('<C-o>')
+  expect_screenshot()
+  type_keys('<C-o>')
+  expect_screenshot()
+
+  -- Interactive style changing
+  type_keys('<C-s>')
+  expect_screenshot()
+  type_keys('<C-s>')
+  expect_screenshot()
+
+  -- Finishing
+  type_keys('<CR>')
+  expect_screenshot()
+  eq(child.api.nvim_buf_is_valid(buf_id), false)
+  eq(child.api.nvim_win_is_valid(win_id), false)
+end
 
 T['default_complete()'] = new_set()
 
@@ -2418,7 +2705,7 @@ end
 
 T['state_to_chunks()']['truncates with multibyte characters'] = function()
   local validate = function(caret, ref)
-    eq(state_to_chunks({ input = 'xф「🬗」', caret = caret, opts = { prompt = 'A' } }, 3), ref)
+    eq(state_to_chunks({ input = 'xф「🬗」', caret = caret, opts = { prompt = 'A' } }, 4), ref)
   end
 
   validate(6, { { '🬗」', 'MiniInputNormal' }, caret_ch })
@@ -2426,7 +2713,26 @@ T['state_to_chunks()']['truncates with multibyte characters'] = function()
   validate(4, { { '「', 'MiniInputNormal' }, caret_ch, { '🬗', 'MiniInputNormal' } })
   validate(3, { { 'ф', 'MiniInputNormal' }, caret_ch, { '「', 'MiniInputNormal' } })
   validate(2, { { 'x', 'MiniInputNormal' }, caret_ch, { 'ф', 'MiniInputNormal' } })
-  validate(1, { { ' ', 'MiniInputNormal' }, caret_ch, { 'x', 'MiniInputNormal' } })
+  validate(1, { { ' ', 'MiniInputNormal' }, caret_ch, { 'xф', 'MiniInputNormal' } })
+
+  -- Should truncate using display width
+  local validate_2 = function(caret, max_width, ref)
+    eq(state_to_chunks({ input = '「」', caret = caret, opts = { prompt = '' } }, max_width), ref)
+  end
+  validate_2(1, 2, { caret_ch })
+  validate_2(1, 3, { caret_ch, { '「', 'MiniInputNormal' } })
+  validate_2(1, 4, { caret_ch, { '「', 'MiniInputNormal' } })
+  validate_2(1, 5, { caret_ch, { '「」', 'MiniInputNormal' } })
+
+  validate_2(2, 2, { caret_ch })
+  validate_2(2, 3, { { '「', 'MiniInputNormal' }, caret_ch })
+  validate_2(2, 4, { { '「', 'MiniInputNormal' }, caret_ch })
+  validate_2(2, 5, { { '「', 'MiniInputNormal' }, caret_ch, { '」', 'MiniInputNormal' } })
+
+  validate_2(3, 2, { caret_ch })
+  validate_2(3, 3, { { '」', 'MiniInputNormal' }, caret_ch })
+  validate_2(3, 4, { { '」', 'MiniInputNormal' }, caret_ch })
+  validate_2(3, 5, { { '「」', 'MiniInputNormal' }, caret_ch })
 end
 
 T['state_to_chunks()']['truncates to with `state.highlight` and `state.complete`'] = function()
@@ -2803,11 +3109,13 @@ T['apply_handler()']['handles bad handler application'] = function()
   -- Should error during handler application
   mock_state({})
   child.lua('_G.mock_state.opts.handlers.key = function(...) error("Bad key handler") end')
+  -- - There is an explicit error because there is no active input
   expect.error(function() apply_handler_to_mock_state('key', 'a') end, '%(mini%.input%).*Bad key handler')
 
   -- Should validate output to be a valid state
   mock_state({})
   child.lua('_G.mock_state.opts.handlers.view = function(state) state.caret = "a" end')
+  -- - There is an explicit error because there is no active input
   expect.error(function() apply_handler_to_mock_state('view') end, '[^)] %(mini%.input%) `state.caret`.*number')
 end
 
@@ -2849,11 +3157,11 @@ T['apply_handler()']['works during input key query process'] = function()
   type_keys('e')
   --stylua: ignore
   local ref_handlers_log = {
-    -- Finish current step
+    -- Handle current step
     { 'complete', 'error' }, { 'key', 'e', 'cancel', nil }, { 'highlight' }, { 'view' },
-    -- Perform finishing step. `state.complete` is still the same as from
-    -- previous step since input state was not changed due to handler error.
-    { 'key', vim.NIL, 'cancel', ref_complete }, { 'highlight' }, { 'view' },
+    -- Perform finishing step. `state.complete` is `nil` as new state is still
+    -- set during input step processing even if handler application errored.
+    { 'key', vim.NIL, 'cancel', nil }, { 'highlight' }, { 'view' },
 
   }
   if child.fn.has('nvim-0.10') == 1 then validate_log('handlers_log', ref_handlers_log) end
