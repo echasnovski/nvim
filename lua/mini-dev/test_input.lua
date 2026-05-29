@@ -47,6 +47,10 @@ local get_state = function(state_var)
   ]])
 end
 
+local with_prompt_chunks = function(chunks, prompt)
+  return vim.list_extend({ { prompt or 'Input', 'MiniInputPrompt' }, { ' ', 'MiniInputNormal' } }, chunks)
+end
+
 -- Common mocks
 local mock_finished_input = function(input, prompt, scope)
   get({ prompt = prompt, scope = scope })
@@ -179,6 +183,9 @@ local validate_default_handler = function(name, state, arg, ref_state_changes)
   local new_state = get_state('new_state')
   eq(compute_changed_values(old_state, new_state), ref_state_changes)
 end
+
+-- Data =======================================================================
+local caret_ch = { '▏', 'MiniInputCaret' }
 
 -- Output test set ============================================================
 local T = new_set({
@@ -1557,30 +1564,35 @@ T['gen_view']['floatwin()']['respects `opts.to_chunks`'] = function()
     MiniInput.config.handlers.view = MiniInput.gen_view.floatwin({ to_chunks = to_chunks })
   ]])
 
-  local validate = function(chunks)
+  local validate = function(chunks, ref_log)
     child.lua('_G.chunks = ' .. vim.inspect(chunks))
     get({ prompt = 'A' })
     child.expect_screenshot()
+    type_keys('a')
     type_keys('<C-c>')
+
+    validate_log('to_chunks_log', ref_log)
   end
 
-  validate({ { 'abcdef', 'Test' } })
+  -- - Should compute chunks twice: first - for window width computation,
+  --   second - for final chunks computation with known window width.
+  validate({ { 'abcdef', 'Test' } }, { { '', nil }, { '', 6 }, { 'a', nil }, { 'a', 6 } })
 
   -- Should not wrap text and respect global 'listchars'
   child.o.wrap = true
   child.go.list = true
   child.go.listchars = 'extends:>'
-  validate({ { 'very-very wide chunk', 'Test' } })
+  validate({ { 'very-very wide chunk', 'Test' } }, { { '', nil }, { '', 13 }, { 'a', nil }, { 'a', 13 } })
 
   -- Should validate `to_chunks` output
-  child.lua('_G.chunks = 1')
-  expect.error(function() child.lua('MiniInput.get()') end, '`opts%.to_chunks%(state, nil%)`.*array')
-  child.lua('_G.chunks = { 1 }')
-  expect.error(function() child.lua('MiniInput.get()') end, 'Every `opts%.to_chunks%(state, nil%)` item.*table')
-  child.lua('_G.chunks = { { 1, "Test" } }')
-  expect.error(function() child.lua('MiniInput.get()') end, '`opts%.to_chunks%(state, nil%)%[1%]%[1%]`.*string')
-  child.lua('_G.chunks = { { "a", 1 } }')
-  expect.error(function() child.lua('MiniInput.get()') end, '`opts%.to_chunks%(state, nil%)%[1%]%[2%]`.*string')
+  local validate_error = function(chunks, err_pattern)
+    child.lua('_G.chunks = ' .. vim.inspect(chunks))
+    expect.error(function() child.lua('MiniInput.get()') end, err_pattern)
+  end
+  validate_error(1, '`opts%.to_chunks%(state, nil%)`.*array')
+  validate_error({ 1 }, 'Every `opts%.to_chunks%(state, nil%)` item.*table')
+  validate_error({ { 1, 'Test' } }, '`opts%.to_chunks%(state, nil%)%[1%]%[1%]`.*string')
+  validate_error({ { 'a', 1 } }, '`opts%.to_chunks%(state, nil%)%[1%]%[2%]`.*string')
 end
 
 T['gen_view']['floatwin()']['can change style'] = function()
@@ -1634,39 +1646,486 @@ T['gen_view']['floatwin()']['validates input'] = function()
   validate({ to_chunks = 1 }, '`opts.to_chunks`.*callable')
 end
 
-T['gen_view']['uiline()'] = new_set()
+T['gen_view']['uiline()'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.set_size(10, 35)
 
-T['gen_view']['uiline()']['works'] = function()
-  -- Should not have side effect after finishing input
-  MiniTest.skip()
+      child.lua([[
+        MiniInput.config.handlers.complete = function(state, method)
+          state.complete = { base = '', items = { 'uu', 'vv' } }
+        end
+
+        MiniInput.config.handlers.view = MiniInput.gen_view.uiline()
+      ]])
+
+      -- Set up two windows for testing window-local behavior
+      child.cmd('wincmd v')
+    end,
+  },
+})
+
+local validate_uiline = function(style)
+  child.lua('_G.style = ' .. vim.inspect(style))
+  child.lua('MiniInput.config.handlers.view = MiniInput.gen_view.uiline({ style = _G.style })')
+
+  -- Should handle characters that are special for UI lines
+  get({ prompt = 'AA%A' })
+  child.expect_screenshot()
+
+  -- Should show typed keys and completion
+  type_keys('ab%c', '<Tab>')
+  child.expect_screenshot()
+
+  -- Should correctly use correct highlight groups
+  local opts_info = style == 'tabline' and { scope = 'global' } or { scope = 'local', win = 0 }
+  local statusline_cur = child.api.nvim_get_option_value(style, opts_info)
+  local ref_statusline = table.concat({
+    '%#MiniInputPrompt#AA%%A',
+    '%#MiniInputNormal# ',
+    '%#MiniInputNormal#ab%%c',
+    '%#MiniInputAdded#uu',
+    '%#MiniInputCaret#▏',
+    '%#MiniInputHint#(1/2)',
+    '%#MiniInputNormal#',
+  })
+  eq(statusline_cur, ref_statusline)
+
+  -- Should cleanly stop without side effects
+  type_keys('<C-c>')
+  child.expect_screenshot()
+
+  child.lua('MiniInput.config.handlers.view = MiniInput.gen_view.uiline()')
 end
 
-T['gen_view']['uiline()']['can interactively change style'] = function() MiniTest.skip() end
+T['gen_view']['uiline()']['works with `style="statusline"`'] = function()
+  local validate = function(laststatus)
+    child.o.laststatus = laststatus
+    validate_uiline('statusline')
+    eq(child.o.laststatus, laststatus)
+  end
 
-T['gen_view']['uiline()']['respects `opts.style`'] = function() MiniTest.skip() end
+  validate(0)
+  validate(1)
+  validate(2)
+  validate(3)
 
-T['gen_view']['uiline()']['respects `opts.to_chunks`'] = function() MiniTest.skip() end
-
-T['gen_view']['uiline()']['reacts to `state.opts` change'] = function() MiniTest.skip() end
-
-T['gen_view']['uiline()']['validates input'] = function() MiniTest.skip() end
-
-T['gen_view']['virtual()'] = new_set()
-
-T['gen_view']['virtual()']['works'] = function()
-  -- Should not have side effect after finishing input
-  MiniTest.skip()
+  -- This should also be the default style
+  child.lua('MiniInput.config.handlers.view = MiniInput.gen_view.uiline()')
+  get({ prompt = 'AAA' })
+  eq(child.o.statusline, '%#MiniInputPrompt#AAA%#MiniInputNormal# %#MiniInputCaret#▏%#MiniInputNormal#')
+  if child.fn.has('nvim-0.10') == 1 then eq(child.o.tabline, 'My tabline') end
+  eq(child.o.winbar, '')
+  type_keys('<C-c>')
 end
 
-T['gen_view']['virtual()']['can interactively change style'] = function() MiniTest.skip() end
+T['gen_view']['uiline()']['works with `style="tabline"`'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip("'tabline' restoration has upstream issues on Neovim<0.10") end
 
-T['gen_view']['virtual()']['respects `opts.style`'] = function() MiniTest.skip() end
+  local validate = function(showtabline)
+    child.o.showtabline = showtabline
+    validate_uiline('tabline')
+    eq(child.o.showtabline, showtabline)
+  end
 
-T['gen_view']['virtual()']['respects `opts.to_chunks`'] = function() MiniTest.skip() end
+  validate(0)
+  validate(1)
+  validate(2)
+end
 
-T['gen_view']['virtual()']['reacts to `state.opts` change'] = function() MiniTest.skip() end
+T['gen_view']['uiline()']['works with `style="winbar"`'] = function()
+  child.o.winbar = ''
+  validate_uiline('winbar')
+  eq(child.o.winbar, '')
+end
 
-T['gen_view']['virtual()']['validates input'] = function() MiniTest.skip() end
+T['gen_view']['uiline()']['respects `opts.to_chunks`'] = function()
+  child.set_size(5, 35)
+
+  child.lua([[
+    _G.to_chunks_log = {}
+    _G.to_chunks = function(state, max_width)
+      table.insert(_G.to_chunks_log, { state.input, max_width })
+      return _G.chunks
+    end
+  ]])
+
+  local validate = function(style, chunks, ref_log)
+    child.lua('_G.style = ' .. vim.inspect(style))
+    child.lua('_G.chunks = ' .. vim.inspect(chunks))
+    child.lua([[
+      local opts = { style = _G.style, to_chunks = _G.to_chunks }
+      MiniInput.config.handlers.view = MiniInput.gen_view.uiline(opts)
+    ]])
+
+    get({ prompt = 'A' })
+    child.expect_screenshot()
+    type_keys('a')
+    type_keys('<C-c>')
+
+    validate_log('to_chunks_log', ref_log)
+  end
+
+  -- Should correctly compute maximum width for either window or editor
+  validate('statusline', { { 'abcdef', 'Test' } }, { { '', 17 }, { 'a', 17 } })
+  validate('statusline', { { 'very-very wide chunk', 'Test' } }, { { '', 17 }, { 'a', 17 } })
+  validate('tabline', { { 'abcdef', 'Test' } }, { { '', 35 }, { 'a', 35 } })
+  validate('tabline', { { 'very-very-very-very-very-very wide chunk', 'Test' } }, { { '', 35 }, { 'a', 35 } })
+  validate('winbar', { { 'abcdef', 'Test' } }, { { '', 17 }, { 'a', 17 } })
+  validate('winbar', { { 'very-very wide chunk', 'Test' } }, { { '', 17 }, { 'a', 17 } })
+
+  -- Should validate `to_chunks` output
+  local validate_error = function(chunks, err_pattern)
+    child.lua('_G.chunks = ' .. vim.inspect(chunks))
+    expect.error(function() child.lua('MiniInput.get()') end, err_pattern)
+  end
+  validate_error(1, '`opts%.to_chunks%(state, 17%)`.*array')
+  validate_error({ 1 }, 'Every `opts%.to_chunks%(state, 17%)` item.*table')
+  validate_error({ { 1, 'Test' } }, '`opts%.to_chunks%(state, 17%)%[1%]%[1%]`.*string')
+  validate_error({ { 'a', 1 } }, '`opts%.to_chunks%(state, 17%)%[1%]%[2%]`.*string')
+end
+
+T['gen_view']['uiline()']['can change style'] = function()
+  get()
+  child.expect_screenshot({ ignore_cmdline = true })
+
+  -- Should change style in specific order
+  local validate = function()
+    type_keys('<C-s>')
+    child.expect_screenshot({ ignore_cmdline = true })
+  end
+  validate()
+  validate()
+  validate()
+end
+
+T['gen_view']['uiline()']['reacts to `state.opts` change'] = function()
+  local expect_screenshot = function() child.expect_screenshot({ ignore_cmdline = true }) end
+
+  child.cmd('only')
+  child.set_size(10, 20)
+
+  get({ scope = 'cursor' })
+  type_keys('abc')
+  expect_screenshot()
+
+  -- No reaction to scope change
+  type_keys('<C-o>')
+  expect_screenshot()
+
+  -- Hide
+  child.lua('vim.notify = function() end')
+  type_keys('<C-x>')
+  expect_screenshot()
+  local ref =
+    '%#MiniInputHide#Input%#MiniInputNormal# %#MiniInputNormal#•••%#MiniInputCaret#▏%#MiniInputNormal#'
+  eq(child.o.statusline, ref)
+  type_keys('<C-x>')
+  expect_screenshot()
+end
+
+T['gen_view']['uiline()']['validates input'] = function()
+  local validate = function(bad_opts, err_pattern)
+    expect.error(function() child.lua('MiniInput.gen_view.uiline(...)', { bad_opts }) end, err_pattern)
+  end
+  validate({ style = 1 }, '`opts.style`.*one of')
+  validate({ to_chunks = 1 }, '`opts.to_chunks`.*callable')
+end
+
+T['gen_view']['virtual()'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.set_size(10, 35)
+
+      child.lua([[
+        MiniInput.config.handlers.complete = function(state, method)
+          state.complete = { base = '', items = { 'uu', 'vv' } }
+        end
+
+        MiniInput.config.handlers.view = MiniInput.gen_view.virtual()
+      ]])
+
+      -- Set up two windows and two buffers for testing window-local behavior
+      child.api.nvim_set_current_buf(child.api.nvim_create_buf(true, false))
+      child.cmd('wincmd v')
+      child.api.nvim_win_set_width(0, 25)
+      child.api.nvim_set_current_buf(child.api.nvim_create_buf(true, false))
+      set_lines({ 'aaa', 'bbb', 'ccc' })
+      set_cursor(2, 2)
+    end,
+  },
+})
+
+local validate_single_extmark = function(ref_position, ref_details)
+  local all_extmarks = child.api.nvim_buf_get_extmarks(0, -1, 0, -1, { details = true })
+  eq(#all_extmarks, 1)
+
+  eq(all_extmarks[1][2], ref_position[1] - 1)
+  eq(all_extmarks[1][3], ref_position[2])
+
+  local details = all_extmarks[1][4]
+  for k, v in pairs(ref_details) do
+    eq(details[k], v)
+  end
+end
+
+local validate_virtual = function(style, ref_details_1, ref_details_2)
+  child.lua('_G.style = ' .. vim.inspect(style))
+  child.lua('MiniInput.config.handlers.view = MiniInput.gen_view.virtual({ style = _G.style })')
+
+  local lines = get_lines()
+  local cursor = { 2, 2 }
+  set_cursor(unpack(cursor))
+
+  -- Should show input while preserving lines and cursor position
+  get({ prompt = 'AAA' })
+  child.expect_screenshot()
+  eq(get_lines(), lines)
+  eq(get_cursor(), cursor)
+  -- - Should correctly place and use correct extmark details
+  validate_single_extmark(cursor, ref_details_1)
+
+  -- Should show typed keys and completion
+  type_keys('abc', '<Tab>')
+  child.expect_screenshot()
+  eq(get_lines(), lines)
+  eq(get_cursor(), cursor)
+  validate_single_extmark(cursor, ref_details_2)
+
+  -- Should cleanly stop without side effects
+  type_keys('<C-c>')
+  child.expect_screenshot()
+  eq(child.api.nvim_buf_get_extmarks(0, -1, 0, -1, {}), {})
+
+  child.lua('MiniInput.config.handlers.view = nil')
+end
+
+local validate_virtual_lines = function(above)
+  local priority = child.fn.has('nvim-0.10') == 1 and 4096 or nil
+  local ref_details_1 = { priority = priority, virt_lines_above = above }
+  -- Should pad with whitespace suffix to occupy the whole line
+  local ref_chunks_1 = with_prompt_chunks({ caret_ch, { '                    ', 'MiniInputNormal' } }, 'AAA')
+  ref_details_1.virt_lines = { ref_chunks_1 }
+
+  local ref_details_2 = vim.deepcopy(ref_details_1)
+  local ref_chunks_2 = with_prompt_chunks({
+    { 'abc', 'MiniInputNormal' },
+    { 'uu', 'MiniInputAdded' },
+    caret_ch,
+    { '(1/2)', 'MiniInputHint' },
+    { '          ', 'MiniInputNormal' },
+  }, 'AAA')
+  ref_details_2.virt_lines = { ref_chunks_2 }
+  validate_virtual(above and 'above' or 'below', ref_details_1, ref_details_2)
+end
+
+T['gen_view']['virtual()']['works with `style="above"`'] = function()
+  validate_virtual_lines(true)
+
+  -- Should be the default style
+  child.lua('MiniInput.config.handlers.view = MiniInput.gen_view.virtual()')
+  set_cursor(2, 0)
+  get()
+  validate_single_extmark({ 2, 0 }, { virt_lines_above = true })
+  type_keys('<C-c>')
+end
+
+T['gen_view']['virtual()']['works with `style="below"`'] = function() validate_virtual_lines(false) end
+
+T['gen_view']['virtual()']['works when at the edge of the window'] = function()
+  child.cmd('only')
+  child.set_size(5, 20)
+  set_lines({ 'aaa', 'bbb', 'ccc', 'ddd', 'eee', 'ggg', 'hhh' })
+  local n_lines = child.api.nvim_buf_line_count(0)
+
+  local validate = function(style, pos)
+    child.lua('_G.style = ' .. vim.inspect(style))
+    child.lua('MiniInput.config.handlers.view = MiniInput.gen_view.virtual({ style = _G.style })')
+    set_cursor(unpack(pos))
+    child.cmd('normal! ' .. (style == 'above' and 'zt' or 'zb'))
+
+    get({ prompt = style })
+    child.expect_screenshot()
+    validate_single_extmark(pos, { virt_lines_above = style == 'above' })
+
+    type_keys('abc')
+    child.expect_screenshot()
+    validate_single_extmark(pos, { virt_lines_above = style == 'above' })
+
+    -- Should expectedly restore view
+    type_keys('<C-c>')
+    child.expect_screenshot()
+    eq(get_cursor(), pos)
+  end
+
+  validate('above', { 1, 0 })
+  validate('above', { 2, 0 })
+  validate('below', { n_lines, 0 })
+  validate('below', { n_lines - 1, 0 })
+end
+
+T['gen_view']['virtual()']['works with `style="inline"`'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Inline virtual text is supported on Neovim>=0.10') end
+
+  local ref_details_1 = { priority = 4096, virt_text_pos = 'inline' }
+  local ref_chunks_1 = with_prompt_chunks({ caret_ch }, 'AAA')
+  ref_details_1.virt_text = ref_chunks_1
+
+  local ref_details_2 = vim.deepcopy(ref_details_1)
+  local ref_chunks_2 = with_prompt_chunks(
+    { { 'abc', 'MiniInputNormal' }, { 'uu', 'MiniInputAdded' }, caret_ch, { '(1/2)', 'MiniInputHint' } },
+    'AAA'
+  )
+  ref_details_2.virt_text = ref_chunks_2
+  validate_virtual('inline', ref_details_1, ref_details_2)
+end
+
+T['gen_view']['virtual()']['works if all extmarks were cleared'] = function()
+  child.cmd('only')
+  child.set_size(10, 20)
+
+  local validate = function(style)
+    child.lua('_G.style = ' .. vim.inspect(style))
+    child.lua('MiniInput.config.handlers.view = MiniInput.gen_view.virtual({ style = _G.style })')
+
+    get({ prompt = 'AAA', init_keys = { 'abc' } })
+    validate_single_extmark({ 2, 2 }, {})
+
+    child.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+    type_keys('d')
+    validate_single_extmark({ 2, 2 }, {})
+    child.expect_screenshot()
+
+    type_keys('<C-c>')
+    eq(child.api.nvim_buf_get_extmarks(0, -1, 0, -1, {}), {})
+  end
+
+  validate('above')
+  validate('below')
+  if child.fn.has('nvim-0.10') == 1 then validate('inline') end
+end
+
+T['gen_view']['virtual()']['respects `opts.to_chunks`'] = function()
+  child.lua([[
+    _G.to_chunks_log = {}
+    _G.to_chunks = function(state, max_width)
+      table.insert(_G.to_chunks_log, { state.input, max_width })
+      return _G.chunks
+    end
+  ]])
+
+  local validate = function(style, chunks, ref_log)
+    child.lua('_G.style = ' .. vim.inspect(style))
+    child.lua('_G.chunks = ' .. vim.inspect(chunks))
+    child.lua([[
+      local opts = { style = _G.style, to_chunks = _G.to_chunks }
+      MiniInput.config.handlers.view = MiniInput.gen_view.virtual(opts)
+    ]])
+
+    get({ prompt = 'A' })
+    child.expect_screenshot()
+    type_keys('a')
+    type_keys('<C-c>')
+
+    validate_log('to_chunks_log', ref_log)
+
+    -- Should not modify in place the output of `to_chunks`
+    eq(child.lua_get('_G.chunks'), chunks)
+  end
+
+  set_lines({ 'aaa', 'bbb', 'ccc' })
+  set_cursor(2, 2)
+
+  child.wo.number = true
+  child.wo.signcolumn = 'yes'
+
+  -- Should correctly compute maximum width as window width minus gutter
+  local ref_log = { { '', 19 }, { 'a', 19 } }
+  local ref_chunks = { { 'abcdef', 'Test' } }
+  local wide_chunks = { { 'very-very-very-very wide chunk', 'Test' } }
+
+  validate('above', ref_chunks, ref_log)
+  -- - Should not wrap text virtual lines
+  validate('above', wide_chunks, ref_log)
+  validate('below', ref_chunks, ref_log)
+  validate('below', wide_chunks, ref_log)
+
+  if child.fn.has('nvim-0.10') == 1 then
+    validate('inline', ref_chunks, ref_log)
+    -- - Wrapping of virtual text depends on 'wrap'
+    child.o.wrap = true
+    validate('inline', wide_chunks, ref_log)
+    child.o.wrap = false
+    validate('inline', wide_chunks, ref_log)
+  end
+
+  -- Should validate `to_chunks` output
+  local validate_error = function(chunks, err_pattern)
+    child.lua('_G.chunks = ' .. vim.inspect(chunks))
+    expect.error(function() child.lua('MiniInput.get()') end, err_pattern)
+  end
+  validate_error(1, '`opts%.to_chunks%(state, 19%)`.*array')
+  validate_error({ 1 }, 'Every `opts%.to_chunks%(state, 19%)` item.*table')
+  validate_error({ { 1, 'Test' } }, '`opts%.to_chunks%(state, 19%)%[1%]%[1%]`.*string')
+  validate_error({ { 'a', 1 } }, '`opts%.to_chunks%(state, 19%)%[1%]%[2%]`.*string')
+end
+
+T['gen_view']['virtual()']['can change style'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Inline virtual text is supported on Neovim>=0.10') end
+
+  child.cmd('only')
+  child.set_size(10, 20)
+
+  get()
+  child.expect_screenshot({ ignore_cmdline = true })
+
+  -- Should change style in specific order
+  local validate = function()
+    type_keys('<C-s>')
+    child.expect_screenshot({ ignore_cmdline = true })
+  end
+  validate()
+  validate()
+  validate()
+end
+
+T['gen_view']['virtual()']['reacts to `state.opts` change'] = function()
+  local expect_screenshot = function() child.expect_screenshot({ ignore_cmdline = true }) end
+
+  child.cmd('only')
+  child.set_size(10, 20)
+
+  get({ scope = 'cursor' })
+  type_keys('abc')
+  expect_screenshot()
+
+  -- No reaction to scope change
+  type_keys('<C-o>')
+  expect_screenshot()
+
+  -- Hide
+  child.lua('vim.notify = function() end')
+  type_keys('<C-x>')
+  expect_screenshot()
+  local hidden_chunks = {
+    { 'Input', 'MiniInputHide' },
+    { ' ', 'MiniInputNormal' },
+    { '•••', 'MiniInputNormal' },
+    caret_ch,
+    { '          ', 'MiniInputNormal' },
+  }
+  validate_single_extmark({ 2, 2 }, { virt_lines = { hidden_chunks } })
+  type_keys('<C-x>')
+  expect_screenshot()
+end
+
+T['gen_view']['virtual()']['validates input'] = function()
+  local validate = function(bad_opts, err_pattern)
+    expect.error(function() child.lua('MiniInput.gen_view.virtual(...)', { bad_opts }) end, err_pattern)
+  end
+  validate({ style = 1 }, '`opts.style`.*one of')
+  validate({ to_chunks = 1 }, '`opts.to_chunks`.*callable')
+end
 
 T['default_key()'] = new_set()
 
@@ -2660,12 +3119,6 @@ local state_to_chunks = function(state, max_width, opts)
   child.lua('_G.opts = ' .. vim.inspect(opts))
   return child.lua_get('MiniInput.state_to_chunks(_G.mock_state, _G.max_width, _G.opts)')
 end
-
-local with_prompt_chunks = function(chunks, prompt)
-  return vim.list_extend({ { prompt or 'Input', 'MiniInputPrompt' }, { ' ', 'MiniInputNormal' } }, chunks)
-end
-
-local caret_ch = { '▏', 'MiniInputCaret' }
 
 T['state_to_chunks()']['works'] = function()
   local validate = function(input, caret, ref)

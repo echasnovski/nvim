@@ -775,11 +775,12 @@ MiniInput.gen_view.virtual = function(opts)
     local chunks = H.get_chunks(opts, state, max_width)
     local chunks_width = H.get_chunks_displaywidth(chunks)
     if is_virtline and chunks_width < max_width then
+      chunks = vim.deepcopy(chunks)
       table.insert(chunks, { string.rep(' ', max_width - chunks_width), 'MiniInputNormal' })
     end
 
     -- Set
-    local extmark_opts = { id = state.data.extmark_id }
+    local extmark_opts = { id = state.data.extmark_id, priority = 4096 }
     if is_virtline then
       extmark_opts.virt_lines = { chunks }
       extmark_opts.virt_lines_above = style == 'above'
