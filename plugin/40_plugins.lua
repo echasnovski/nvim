@@ -15,7 +15,7 @@ now_if_args(function()
   local ensure_languages = {
     'bash', 'c',          'cpp',  'css',   'diff', 'go',
     'html', 'javascript', 'json', 'julia', 'nu',   'php', 'python',
-    'r',    'regex',      'rst',  'rust',  'toml', 'tsx', 'typescript', 'yaml',
+    'r',    'regex',      'rst',  'rust',  'toml', 'tsx', 'typescript', 'vhs', 'yaml',
   }
   local isnt_installed = function(lang) return #vim.api.nvim_get_runtime_file('parser/' .. lang .. '.*', false) == 0 end
   local to_install = vim.tbl_filter(isnt_installed, ensure_languages)
@@ -23,7 +23,7 @@ now_if_args(function()
 
   -- Ensure enabled
   local filetypes = vim.iter(ensure_languages):map(vim.treesitter.language.get_filetypes):flatten():totable()
-  vim.list_extend(filetypes, { 'markdown', 'quarto' })
+  vim.list_extend(filetypes, { 'checkhealth', 'markdown', 'quarto' })
   local ts_start = function(ev) vim.treesitter.start(ev.buf) end
   Config.new_autocmd('FileType', filetypes, ts_start, 'Ensure enabled tree-sitter')
 
@@ -74,7 +74,7 @@ now_if_args(function()
   vim.lsp.enable({
     -- 'air',
     'clangd',
-    'emmet_ls',
+    -- 'emmet_ls',
     -- 'emmylua_ls',
     'gopls',
     'intelephense',
@@ -83,7 +83,8 @@ now_if_args(function()
     'pyright',
     'r_language_server',
     'rust_analyzer',
-    'ts_ls',
+    -- 'ts_ls',
+    -- 'vtsls',
   })
 end)
 

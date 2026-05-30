@@ -80,7 +80,13 @@ now(function()
 
       -- Deal with sign widths
 
-      return '%C%s%=' .. line_nr_hl .. lnum .. '%#LineNr#│'
+      -- TODO: Maybe this works in a weird way?
+      -- local sep = vim.v.relnum == 0 and '│' or '├'
+      -- local sep = vim.v.relnum == 0 and '𜰊' or '┊'
+      -- local sep = vim.v.relnum == 0 and '┝' or '┊'
+      -- local sep = '𜰊'
+      local sep = '│'
+      return '%C%s%=' .. line_nr_hl .. lnum .. '%#MiniStatuscolumnBorder#' .. sep
     end
     vim.o.statuscolumn = '%{%v:lua.statuscolumn()%}'
   end
@@ -272,8 +278,6 @@ later(function()
   local key_handler = function(state, key)
     -- Adjust prompt and scope
     state.opts.prompt = state.opts.prompt:gsub('[?:]%s*$', '')
-    -- - This makes `vim.lsp.buf.rename()` use cursor scope
-    if state.opts.prompt == 'New Name' then state.opts.scope = 'cursor' end
 
     -- Hide from view and history
     if state.opts.prompt:find('[Pp]assword') ~= nil then state.opts.hide = true end
@@ -286,7 +290,7 @@ later(function()
       state.input, state.status = 'Autofilled input', 'accept'
     end
 
-    -- Show current scope for debuggin
+    -- Show current scope for debugging
     if state.status == 'start' then
       state.opts.prompt = string.format('[%s] %s', state.opts.scope, state.opts.prompt)
     else
@@ -294,23 +298,42 @@ later(function()
     end
   end
 
+  -- local view_handler = function(state)
+  --   -- Process start and end of the input lifecycle
+  --   local is_start = state.status == 'start'
+  --   local is_end = state.status == 'accept' or state.status == 'cancel'
+  --   if is_start or is_end then vim.cmd('mode') end
+  --   if is_end then return end
+  --   local chunks = MiniInput.state_to_chunks(state, vim.v.echospace)
+  --   vim.api.nvim_echo(chunks, false, {})
+  -- end
+
   -- local input = require('mini-dev.input')
-  -- local statusline_view = input.gen_view.uiline({ position = 'statusline' })
-  -- local tabline_view = input.gen_view.uiline({ position = 'tabline' })
-  -- local winbar_view = input.gen_view.uiline({ position = 'winbar' })
-  -- local view_handler_per_scope = {
-  --   cursor = statusline_view,
-  --   buffer = winbar_view,
-  --   window = winbar_view,
-  --   tabpage = tabline_view,
-  --   editor = tabline_view,
-  -- }
-  -- local view_handler = function(state) return view_handler_per_scope[state.opts.scope](state) end
+  -- local view_tabline = input.gen_view.uiline({ style = 'tabline' })
+  -- local view_winbar = input.gen_view.uiline({ style = 'winbar' })
+  -- local view_handler = function(state)
+  --   local scope, view = state.opts.scope, view_winbar
+  --   if scope == 'editor' or scope == 'tabpage' then view = view_tabline end
+  --   return view(state)
+  -- end
+
+  -- local input = require('mini-dev.input')
+  -- local view_line = input.gen_view.virtual({ style = 'below' })
+  -- local view_text = input.gen_view.virtual({ style = 'inline' })
+  -- local view_handler = function(state)
+  --   local view = state.opts.scope == 'cursor' and view_text or view_line
+  --   return view(state)
+  -- end
 
   require('mini-dev.input').setup({
     handlers = {
       key = key_handler,
-      -- view = view_handler,
+
+      view = view_handler,
+      -- view = input.gen_view.echo(),
+      -- view = input.gen_view.floatwin(),
+      -- view = input.gen_view.uiline(),
+      -- view = input.gen_view.virtual(),
     },
   })
 
@@ -321,10 +344,34 @@ later(function()
   end
   map_input('<Leader>ii', nil)
   map_input('<Leader>ic', 'cursor')
+  map_input('<Leader>il', 'line')
   map_input('<Leader>ib', 'buffer')
   map_input('<Leader>iw', 'window')
   map_input('<Leader>it', 'tabpage')
   map_input('<Leader>ie', 'editor')
+  map_input('<Leader>ip', 'project')
+
+  -- -- Custom command line
+  -- -- Construct reusable `MiniInput.get()` options
+  -- local cmdline_opts = { prompt = 'Command', scope = 'editor' }
+  -- -- - Highlight using bundled Vim tree-sitter parser and default handler
+  -- local highlight_vim = MiniInput.gen_highlight.treesitter('vim')
+  -- local highlight_cmdline = function(state)
+  --   state = highlight_vim(state) or state
+  --   return MiniInput.default_highlight(state) or state
+  -- end
+  -- cmdline_opts.handlers = { highlight = highlight_cmdline }
+  -- -- - Complete as if it is Command line input
+  -- cmdline_opts.completion = 'cmdline'
+  -- -- Create a mapping for `:`
+  -- local input_cmdline = function()
+  --   local cmd = MiniInput.get(cmdline_opts)
+  --   if cmd ~= nil then vim.cmd(cmd) end
+  -- end
+  -- vim.keymap.set('n', ':', input_cmdline)
+  --
+  -- vim.o.cmdheight = 0
+  -- vim.keymap.set('n', '<Leader>:', ':', { desc = 'Native command line' })
 end)
 
 later(function() require('mini.jump').setup() end)

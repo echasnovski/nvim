@@ -160,7 +160,7 @@ S.browse = function(dir_path)
   S.files = vim.fn.readdir(dir_path)
   S.dir_path = dir_path
   local preview_item = function(x) return vim.fn.readfile(dir_path .. '/' .. x) end
-  local ui_opts = { prompt = 'Choose screenshot:', preview_item = preview_item }
+  local ui_opts = { prompt = 'Choose screenshot', preview_item = preview_item }
 
   vim.ui.select(S.files, ui_opts, function(_, idx)
     if idx == nil then return end
@@ -248,7 +248,7 @@ end
 S.delete_current = function()
   local path = S.dir_path .. '/' .. S.files[S.file_id]
   vim.fn.delete(path)
-  print('Deleted file ' .. vim.inspect(path))
+  vim.notify('Deleted file ' .. vim.inspect(path))
 end
 
 -- LuaLS "Go to source" =======================================================

@@ -90,7 +90,7 @@ nmap_leader('fC', '<Cmd>Pick git_commits path="%"<CR>',         'Commits (buf)')
 nmap_leader('fd', '<Cmd>Pick diagnostic scope="all"<CR>',       'Diagnostic workspace')
 nmap_leader('fD', '<Cmd>Pick diagnostic scope="current"<CR>',   'Diagnostic buffer')
 nmap_leader('ff', '<Cmd>Pick files<CR>',                        'Files')
-nmap_leader('fg', '<Cmd>Pick grep_live<CR>',                    'Grep live')
+nmap_leader('fg', '<Cmd>Pick grep_live method="plain"<CR>',     'Grep live')
 nmap_leader('fG', '<Cmd>Pick grep pattern="<cword>"<CR>',       'Grep current word')
 nmap_leader('fh', '<Cmd>Pick help<CR>',                         'Help tags')
 nmap_leader('fH', '<Cmd>Pick hl_groups<CR>',                    'Highlight groups')
@@ -174,24 +174,12 @@ nmap_leader('rt', '<Cmd>T devtools::test()<CR>',                    'Test')
 xmap_leader('rx', '"+y :T reprex::reprex()<CR>',                    'Reprex selection')
 
 -- s is for 'Session'
-local session_new = 'MiniSessions.write(vim.fn.input("Session name: "))'
-local session_restart = function()
-  -- TODO: Polish it to work well. And maybe open upstream issue.
-  local this_session = vim.v.this_session
-  vim.cmd('mksession! Session.vim')
-  local after = {
-    'vim.cmd.source("Session.vim")',
-    'vim.fs.rm("Session.vim")',
-    'vim.v.this_session = ' .. vim.inspect(this_session),
-    'vim.notify("Restarted)'
-  }
-  vim.cmd.restart('lua ' .. table.concat(after, ';'))
-end
+local session_new = 'vim.ui.input({ prompt = "Session name" }, MiniSessions.write)'
 
 nmap_leader('sd', '<Cmd>lua MiniSessions.select("delete")<CR>', 'Delete')
 nmap_leader('sn', '<Cmd>lua ' .. session_new .. '<CR>',         'New')
 nmap_leader('sr', '<Cmd>lua MiniSessions.select("read")<CR>',   'Read')
-nmap_leader('sR', session_restart,                              'Restart')
+nmap_leader('sR', '<Cmd>lua MiniSessions.restart()<CR>',        'Restart')
 nmap_leader('sw', '<Cmd>lua MiniSessions.write()<CR>',          'Write current')
 
 nmap_leader('ss', '<Cmd>TREPLSendLine<CR>j', 'Send to terminal')
