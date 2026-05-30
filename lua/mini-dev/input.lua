@@ -1,25 +1,3 @@
--- TODO:
---
--- - Code:
---
--- - Docs:
---
--- - Test:
---     - `gen_view.uiline` works with custom view handler that sets different
---       styles per scope.
---     - `gen_view.virtual` with `style='above'|'below'` should always make virtual
---       line(s) and current line visible. Matters at the top and the bottom of
---       the window viewport. Should work:
---       - With and without present winbar.
---       - After scope has changed.
---       - For both above and below.
---       - Do not do extra scroll both on edge and next to the edge.
---     - `gen_view.virtual` with `style='inline'` should not move extmark
---       with default complete from buffer words.
---     - Views should work with double-width charactrs (like Japanese).
---     - Typing `<C-v><Tab>` should insert literal `\t`. Its display should
---       work in any built-in view (properly compute width).
-
 --- *mini.input* Get user input
 ---
 --- MIT License Copyright (c) 2026 Evgeni Chasnovski
@@ -32,11 +10,17 @@
 --- - Built-in configurable views as floating window, statusline/tabline/winbar,
 ---   virtual line/text.
 ---
---- - Implementation is non-blocking but waits to return the input. This makes it
----   work in any mode without requiring it to change.
+--- - Implementation is non-blocking but waits to return the input. It also works
+---   in any mode without requiring mode change. See |MiniInput-key-query-process|.
 ---
 --- - |vim.ui.input()| implementation. To adjust, use |MiniInput.ui_input()| or
 ---   save-restore `vim.ui.input` manually after calling |MiniInput.setup()|.
+---
+--- Sources with more details:
+--- - |MiniPick.get()|
+--- - |MiniPick.default_key()|
+--- - |MiniPick-state|
+--- - |MiniPick-examples|
 ---
 --- # Setup ~
 ---
@@ -53,39 +37,72 @@
 --- # Comparisons ~
 ---
 --- - [folke/snacks.nvim#input](https://github.com/folke/snacks.nvim):
----     - Does not wait for user
+---     - Both provide |vim.ui.input()| implementation.
+---     - Has asynchronous implementation (i.e. does not wait for user to finish
+---       input), while this module has synchronous non-blocking implementation.
+---     - Uses floating window and forced Insert mode. This module allows more
+---       view customizations and can be used in any mode without interruptions.
 ---
 --- - |input()|:
----     - ...
+---     - Both are synchronous.
+---     - Both allow custom highlight and completion.
+---     - This module also allows supplying input scope and visibility,
+---       customizing keys and view.
 ---
 --- # Highlight groups ~
 --- *MiniInput-hl-groups*
 ---
 --- - `MiniInputAdded`   - added text during completion navigation.
---- - `MiniInputBorder`  - border of a floating window.
+--- - `MiniInputBorder`  - border of a |MiniInput.gen_view.floatwin()| handler.
 --- - `MiniInputCaret`   - caret symbol shown in a prompt area.
---- - `MiniInputHide`    - input is hidden.
+--- - `MiniInputHide`    - input is hidden, usually used instead of `MiniInputPrompt`.
 --- - `MiniInputHint`    - hints shown during completion navigation.
 --- - `MiniInputNormal`  - basic foreground/background.
 --- - `MiniInputPrompt`  - input prompt (intention of the input).
 --- - `MiniInputSpecial` - special keys (like literal `\t`, `\n`, etc.) in input.
 ---@tag MiniInput
 
---- TODO
+--- Information about the state of the input. It is used as handler argument and
+--- can be get via |MiniInput.get_state()|. A table with the following fields:
 ---
---- - On every new key call `handlers.key`.
---- - After processing all new keys (usually one), call handlers: `highlight`, `view`.
---- - <C-c> is hard coded to cancel the input (due to how |getcharstr()| works).
---- - If state has changed but its <complete> field has not, it is assumed that
----   completion is not active anymore and <complete> field is removed.
---- - State's <highlight> field is removed before every step.
---- - First error is captured as `state.errmsg` while setting `state.status="cancel"`.
+--- - <caret> `(number)` - character index at which to modify input.
 ---
---- # State ~
---- *MiniInput-state*
+--- - <complete> `(table|nil)` - information about active completion navigation.
+---   If present, it means that completion navigation is in action.
+---   Its fields describe the state of navigation:
+---     - <base> `(string)` - reference text to the left of caret at the start
+---       of completion it uses to compute candidates. Can be empty string.
+---     - <id> `(number)` - identfier of current completion item. Can be zero to
+---       mean that the base is shown. If not zero, it means that a `items[id]`
+---       candidate is now shown to the left of caret as the part of the input.
+---     - <items> `(table)` - string array of completion candidates. May be empty.
+---     - <method> `(string)` - completion method. Like `"default"`, `"history"`, etc.
+---       Can be `""` (empty string) to mean "default method of complete handler".
 ---
---- TODO
----@tag MiniInput-key-query-process
+--- - <data> `(table)` - any information to be reused within the same input session.
+---   Note: handlers should not change fields that they don't "own".
+---
+--- - <errmsg> `(errmsg)` - first error message caught during input process.
+---
+--- - <highlight> `(table|nil)` - information about current input highlighting.
+---   If absent, the whol input is highlighted using `MiniInputNormal` group.
+---   Should be an array of highlight ranges. They might be not ordered, overlap,
+---   go outside of input width. It is up to the view handler to decide how to
+---   interpret them. See |MiniInput.state_to_chunks()| for a helper.
+---   Fields of a single highlight range:
+---     - <from> `(number)` - character index (one-indexed) of range start.
+---     - <to> `(number)` - character index (one-indexed) of range end (inclusive).
+---       Should not be smaller than <from>. Can be |math.huge|.
+---     - <hl> `(string)` - higlight group to use for highlighting.
+---
+--- - <input> `(string)` - current user input or `nil` for hidden input.
+---
+--- - <opts> `(table)` - input options, same as in |MiniInput.get()|.
+---
+--- - <prompt> `(string)` - intention of the input, same as in |input()|.
+---
+--- - <status> `(string)` - one of `"start"`, `"progress"`, `"accept"`, `"cancel"`.
+---@tag MiniInput-state
 
 --- # General ~
 ---
@@ -225,14 +242,14 @@ local H = {}
 ---   require('mini.input').setup({}) -- replace {} with your config table
 --- <
 MiniInput.setup = function(config)
-  -- -- TODO: Remove after Neovim=0.9 support is dropped
-  -- if vim.fn.has('nvim-0.10') == 0 then
-  --   vim.notify(
-  --     '(mini.input) Neovim<0.10 is soft deprecated (module works but is not supported).'
-  --       .. " It will be deprecated after the next 'mini.nvim' release (module might not work)."
-  --       .. ' Please update your Neovim version.'
-  --   )
-  -- end
+  -- TODO: Remove after Neovim=0.9 support is dropped
+  if vim.fn.has('nvim-0.10') == 0 then
+    vim.notify(
+      '(mini.input) Neovim<0.10 is soft deprecated (module works but is not supported).'
+        .. " It will be deprecated after the next 'mini.nvim' release (module might not work)."
+        .. ' Please update your Neovim version.'
+    )
+  end
 
   -- Export module
   _G.MiniInput = MiniInput
@@ -259,15 +276,14 @@ end
 --- Defaults ~
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Handlers ~
+--- *MiniInput.config.handlers*
 ---
---- `config.handlers` defines functions ... .
----
---- TODO: Describe key query process. Handler order. When they are called:
---- once in the start, on every user key press, once at the end.
----
---- Use |MiniInput.apply_handler()|.
+--- `config.handlers` defines functions that are applied during |MiniInput-lifecycle|.
+--- Use |MiniInput.apply_handler()| to apply them for a given |MiniInput-state|.
 ---
 --- ## Key ~
+---
+--- TODO
 ---
 --- Key handler process user key presses.
 ---
@@ -346,24 +362,57 @@ MiniInput.config = {
 
 --- Get input from the user
 ---
---- TODO: Some general words.
+--- # Lifecycle ~
+--- *MiniInput-lifecycle*
 ---
---- Data about all non-hidden accepted input results (even for empty input) are
---- added to the history. Get the whole history with |MiniInput.get_history()|.
+--- This module implements custom lifecycle to interact with the user. It starts
+--- when calling |MiniInput.get()| and ends with it returning a value.
+--- Only one active input is allowed simultaneously.
 ---
---- `opts.hide` defines if input should be treated as hidden. Note: this does
---- not guarantee a total security of the input, only that the typed characters
---- are expected to not be shown on screen and not added to the history. If set:
---- - The `view` handler is expected to not directly show current input.
----   Like replace every character with pre-defined string or not show completely.
---- - The `complete` and `highlight` handlers are not called.
---- - Accepted input will not be added to the history.
+--- The basic cycle unit is a step that processes a `key` (string or `nil`). It is
+--- done by calling relevant handlers in order: key handler with `key` as a second
+--- argument, highlight handler, view handler. |MiniInput.apply_handler()| is used
+--- to apply each handler and the output of one is used as the input for the next.
+---
+--- During step some state fields are automatically removed:
+--- - <highlight> is removed before key handler to always have the most up to
+---   date highlighting.
+--- - <complete> is removed after key handler if it was not changed but something
+---   else in the state did change. This is meant as automatic stop of completion
+---   when it is not advancing.
+---
+--- If step sets an ending state <status> (i.e. `"accept"` or `"cancel"`), the input
+--- is finished by extra step (see below).
+---
+--- The order of operations is as follows:
+--- - Create initial |MiniInput-state| based on the input `opts`, |MiniInput.config|,
+---   and `vim.b.miniinput_config`. Set <status> is `"start"`.
+--- - Advance one step `key=nil`. This is meant as a "setup" step for handlers.
+--- - Set <status> to `"progress"`.
+--- - Process `opts.init_keys` one item per step with `key` set to the string item.
+--- - Wait for user to press a key (via |getcharstr()|). The key string (in escaped
+---   form and not as a |key-notation|; i.e. `"\r"` and not `"<CR>"`) is then used
+---   to advance a step. Note: <C-c> is hard coded to cancel the input.
+--- - Repeat previous step until the ending <status> (`"accept"` or `"cancel"`).
+--- - Finish the input:
+---     - Perform a "teardown"' step with `key=nil`.
+---     - If <errmsg> is set, throw an |error()|.
+---     - If input is accepted (even if it is empty) and nothidden, add to <input>
+---       to the history. Get the whole history with |MiniInput.get_history()|.
+---     - Return <input>.
 ---
 ---@param opts table|nil Options. Possible fields:
 ---   - <completion> `(string)` - completion method. Default: `''` to use default
 ---     completion method of the `complete` handler.
 ---   - <handlers> `(table)` - same as in |MiniInput.config|.
----   - <hide> `(boolean)` - whether to hide input. Default: `false`.
+---   - <hide> `(boolean)` - whether input should be hidden. Default: `false`.
+---     Note: this does not guarantee a total security of the input, only that
+---     the typed characters are expected to not be shown on screen and not
+---     added to the history. If set:
+---       - The `view` handler is expected to not directly show current input.
+---         Like replace characters with pre-defined string or fully not show.
+---       - The `complete` and `highlight` handlers are not called.
+---       - Accepted input will not be added to the history.
 ---   - <init_keys> `(table)` - array of string keys that are emulated before asking
 ---     for the user input. Using values that can be an output of |getcharstr()|
 ---     should be preferred, but a key handler should work with any string.
@@ -371,10 +420,11 @@ MiniInput.config = {
 ---   - <prompt> `(string)` - intention of the input, same as in |input()|.
 ---     Default: `'Input'`.
 ---   - <scope> `(string)` - same as in |MiniInput.config|. Default: the value from
----     `MiniInput.config` except some hard coded exceptions:
+---     `MiniInput.config` with some hard coded exceptions (on Neovim<=0.12.3):
 ---       - |vim.lsp.buf.rename()| will use "cursor" if no `new_name` is supplied.
 ---
----@return string|nil User input if accepted or `nil` if canceled.
+---@return string|nil User input (from the <input> state field) if accepted, even if
+---   empty. `nil` if canceled or there was an active input.
 ---
 ---@usage >lua
 ---   local input = MiniInput.get({
@@ -422,8 +472,8 @@ end
 
 --- A |vim.ui.input()| implementation
 ---
---- Notes:
---- - Doesn't respect `opts.highlight` in favor of user controlled `config.view`.
+--- Function which can be used to directly override |vim.ui.input()| to use this
+--- module functionality. Set automatically in |MiniInput.setup()|.
 ---
 ---@usage To preserve original `vim.ui.input()`: >lua
 ---
@@ -442,40 +492,10 @@ end
 
 --- Get current input state
 ---
---- It stores information about the current state of the user input.
---- Can be `nil` to indicate that there is no active user input.
----
---- During user input, it is a table with the following fields:
---- - <caret> `(number|nil)` - character index at which to modify input.
----   It is `nil` for hidden input.
---- - <complete> `(table|nil)` - information about active completion navigation.
----   If present, it means that completion navigation is in action.
----   Its fields describe the state of navigation:
----     - <base> `(string)` - reference text to the left of caret at the start
----       of completion it uses to compute candidates. Can be empty string.
----     - <id> `(number)` - identfier of current completion item. Can be zero to
----       mean that the base is shown. If not zero, it means that a `items[id]`
----       candidate is now shown to the left of caret as the part of the input.
----     - <items> `(table)` - string array of completion candidates. May be empty.
----     - <method> `(string)` - completion method. Like `"default"`, `"history"`, etc.
---- - <data> `(table)` - any information to be reused within same input session.
----   Note: present fields should not change to avoid surprising behavior.
---- - <errmsg> `(errmsg)` - first error message caught during input process.
---- - <highlight> `(table|nil)` - information about current input highlighting.
----   Should be an array of highlight ranges. They might be not ordered, overlap,
----   go outside of input width. It is up to the view handler to decide how to
----   interpret them. See |MiniInput.state_to_chunks()| for a helper.
----   Fields of a single highlight range:
----     - <from> `(number)` - character index (one-indexed) of range start.
----     - <to> `(number)` - character index (one-indexed) of range end (inclusive).
----       Should not be smaller than <from>. Can be |math.huge|.
----     - <hl> `(string)` - higlight group to use for highlighting.
---- - <input> `(string|nil)` - current user input or `nil` for hidden input.
---- - <opts> `(table)` - input options, same as in |MiniInput.get()|.
---- - <prompt> `(string)` - intention of the input, same as in |input()|.
---- - <status> `(string)` - one of `"start"`, `"progress"`, `"accept"`, `"cancel"`.
----
----@return table|nil Current state if input is active, `nil` otherwise.
+---@return table|nil Current |MiniInput-state| if input is active, `nil` otherwise.
+---   Notes:
+---   - For hidden input (`state.opts.hide=true`), both <caret> and <input> are `nil`
+---     to actually hide input.
 MiniInput.get_state = function()
   if H.state == nil then return nil end
   local res = H.copy_tables(H.state)
@@ -525,6 +545,10 @@ end
 MiniInput.gen_highlight = {}
 
 --- Highlight with tree-sitter
+---
+---@param lang string A language of tree-sitter parser to use.
+---
+---@return function A highlight handler. Seem |MiniInput.config.handlers|.
 MiniInput.gen_highlight.treesitter = function(lang)
   local append_ts_hl_range = function(arr, line, tstree, tree)
     local query = tstree and vim.treesitter.query.get(tree:lang(), 'highlights')
@@ -853,7 +877,7 @@ end
 --- - Special keys (combo, mouse, but not whitespace) not listed above - ignored.
 ---   Anything else (even more than a single character) - inserted at caret.
 ---
----@param state table TODO
+---@param state table Current |MiniInput-state|
 ---@param key string|nil A key to process. Should be escaped (`"\r"`, not `"<CR>"`).
 ---   See |vim.keycode()|.
 ---@param opts table|nil Options. Possible fields:
@@ -868,6 +892,11 @@ MiniInput.default_key = function(state, key, opts)
 end
 
 --- Default highlight handler
+---
+--- Highlights added characters (computed via |matchfuzzy()|) with `MiniInputAdded`
+--- group during active completion.
+---
+---@param state table Current |MiniInput-state|
 MiniInput.default_highlight = function(state)
   if H.state_is_end(state) then return end
 
@@ -900,6 +929,8 @@ end
 --- Default view handler
 ---
 --- Same as |MiniInput.gen_view.floatwin()| with default options.
+---
+---@param state table Current |MiniInput-state|
 MiniInput.default_view = function(state) end -- Generated later
 
 --- Default complete handler
@@ -918,7 +949,7 @@ MiniInput.default_view = function(state) end -- Generated later
 ---       limitations, but is good enough as there is no |getcmdcomplpat()| variant
 ---       to use outside of Command-line mode.
 ---
----@param state table Current state. See |MiniInput.get_statee()|.
+---@param state table Current |MiniInput-state|
 ---@param method string Completion method.
 ---@param opts table|nil Options. Possible fields:
 ---   - <precise_history> `(boolean)` - whether for `method='history'` try to match
@@ -964,10 +995,10 @@ end
 --- - TODO: truncates output chunsk to fit maximum display width (as
 ---   in |strdisplaywidth()|) `max_width` while trying to center the caret.
 ---
----@param state table ...
+---@param state table A |MiniInput-state|.
 ---@param max_width number|nil Maximum allowed total text width. Can be |math.huge|.
 ---@param opts table|nil Options. Possible fields:
----   - ...
+---   - TODO ...
 MiniInput.state_to_chunks = function(state, max_width, opts)
   H.check_type('max_width', max_width, 'number', true)
   local default_opts = { keytrans = true, include_prompt = true, include_hint = true }
@@ -1025,27 +1056,40 @@ end
 
 --- Apply state's handler
 ---
---- TODO:
+--- Given `state`, apply its handler (from `state.opts.handlers`) and return
+--- the result.
+---
+--- Notes:
+--- - Nothing is done for highlight and complete handlers for hidden input.
+--- - Applying complete handler ensures that <complete> state field has <id> set
+---   to 0 (as it assumes new completion) and <method> to the input argument
+---   (empty string if there was no argument).
 --- - Error during handler appliction is stored as <errmsg> field of output state
 ---   if there is an active input. It is propagated via |error()| otherwise.
---- - Validates handler output to be a valid state. If not - return input state.
----   Note: it still could be changed if handler modified it in place.
+--- - Handler output is validated to be a valid |MiniInput-state|. If not - return
+---   input `state`. Note: it still could be changed if handler modified in place.
 ---
----@param state table ...
+---@param state table A |MiniInput-state|.
 ---@param name string Valid handler name.
----@param ... any Extra handler parameter(s), like `key` for key handler and
----   `method` for complete handler.
-MiniInput.apply_handler = function(state, name, ...)
+---@param arg any Extra handler argument: like `key` for key handler and `method`
+---   for complete handler.
+---
+---@return table A |MiniInput-state| as a result of applied handler. If handler
+---   returned nothing, the input `state` is returned as it is assumed it was
+---   modified in place.
+MiniInput.apply_handler = function(state, name, arg)
   H.check_one_of('name', name, { 'complete', 'highlight', 'key', 'view' })
+  H.check_type('arg', arg, 'string', true)
+  if arg == nil and name == 'complete' then arg = '' end
 
   if state.opts.hide and (name == 'highlight' or name == 'complete') then return state end
-  local ok_handler, res = pcall(state.opts.handlers[name], state, ...)
+  local ok_handler, res = pcall(state.opts.handlers[name], state, arg)
   if not ok_handler then H.cache_error(state, 'Error applying `' .. name .. '` handler: ' .. res) end
 
   local new_state = (ok_handler and res or nil) or state
   if name == 'complete' and type(new_state.complete) == 'table' then
     new_state.complete.id = 0
-    new_state.complete.method = ({ ... })[1]
+    new_state.complete.method = arg
   end
 
   local ok_state, msg = pcall(H.state_validate, new_state)

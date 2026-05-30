@@ -879,6 +879,20 @@ T['get()']['validates arguments'] = function()
   validate({ scope = 1 }, '`state%.opts%.scope`.*one of')
 end
 
+T['get()']['respects `vim.b.miniinput_config`'] = function()
+  child.lua('MiniInput.config.scope = "editor"')
+  child.b.miniinput_config = { scope = 'cursor' }
+
+  get()
+  eq(get_state().opts.scope, 'cursor')
+  type_keys('<C-c>')
+
+  -- The values from the call should still have higher priority
+  get({ scope = 'window' })
+  eq(get_state().opts.scope, 'window')
+  type_keys('<C-c>')
+end
+
 T['ui_input()'] = new_set()
 
 T['ui_input()']['works'] = function()
@@ -893,7 +907,7 @@ T['ui_input()']['works'] = function()
   validate_log('choice_log', { { 'x' } })
 
   child.lua_notify([[
-    MiniInput.ui_input({ prompt = 'Hello?', default = 'World', completion = 'cmdline' }, _G.on_choice)
+    MiniInput.ui_input({ prompt = 'Hello?', default = 'World', completion = 'cmdline', scope = 'cursor' }, _G.on_choice)
   ]])
   local state = get_state()
   eq(state.input, 'World')
@@ -901,6 +915,7 @@ T['ui_input()']['works'] = function()
   eq(state.opts.prompt, 'Hello?')
   eq(state.opts.init_keys, { 'World' })
   eq(state.opts.completion, 'cmdline')
+  eq(state.opts.scope, 'cursor')
 end
 
 T['ui_input()']['converts `opts.highlight` to highlight handler'] = function()
@@ -1824,6 +1839,26 @@ T['gen_view']['uiline()']['reacts to `state.opts` change'] = function()
   expect_screenshot()
 end
 
+T['gen_view']['uiline()']['can choose initial style based on scope'] = function()
+  child.lua([[
+    local view_tabline = MiniInput.gen_view.uiline({ style = 'tabline' })
+    local view_winbar = MiniInput.gen_view.uiline({ style = 'winbar' })
+    MiniInput.config.handlers.view = function(state)
+      local scope, view = state.opts.scope, view_winbar
+      if scope == 'tabpage' or scope == 'editor' or scope == 'project' then view = view_tabline end
+      return view(state)
+    end
+  ]])
+
+  get({ scope = 'cursor' })
+  child.expect_screenshot({ ignore_cmdline = true })
+  type_keys('<C-c>')
+
+  get({ scope = 'tabpage' })
+  child.expect_screenshot({ ignore_cmdline = true })
+  type_keys('<C-c>')
+end
+
 T['gen_view']['uiline()']['validates input'] = function()
   local validate = function(bad_opts, err_pattern)
     expect.error(function() child.lua('MiniInput.gen_view.uiline(...)', { bad_opts }) end, err_pattern)
@@ -1962,6 +1997,11 @@ T['gen_view']['virtual()']['works when at the edge of the window'] = function()
   validate('above', { 2, 0 })
   validate('below', { n_lines, 0 })
   validate('below', { n_lines - 1, 0 })
+
+  -- With 'winbar' enabled
+  child.o.winbar = 'My winbar'
+  validate('above', { 1, 0 })
+  validate('below', { n_lines, 0 })
 end
 
 T['gen_view']['virtual()']['works with `style="inline"`'] = function()
@@ -1978,6 +2018,28 @@ T['gen_view']['virtual()']['works with `style="inline"`'] = function()
   )
   ref_details_2.virt_text = ref_chunks_2
   validate_virtual('inline', ref_details_1, ref_details_2)
+end
+
+T['gen_view']['virtual()']['is not affected by default complete with `style="inline"`'] = function()
+  child.lua([[
+    MiniInput.config.handlers.view = MiniInput.gen_view.virtual({ style = "inline" })
+    MiniInput.config.handlers.complete = MiniInput.default_complete
+  ]])
+  local lines = { 'aaa', 'bbb', 'ccc' }
+  local cursor = { 2, 2 }
+  set_lines(lines)
+  set_cursor(unpack(cursor))
+
+  get({ prompt = 'AAA' })
+  type_keys('a', '<Tab>')
+  child.expect_screenshot()
+  eq(get_lines(), lines)
+  eq(get_cursor(), cursor)
+  local ref_chunks = with_prompt_chunks(
+    { { 'a', 'MiniInputNormal' }, { 'aa', 'MiniInputAdded' }, caret_ch, { '(1/1)', 'MiniInputHint' } },
+    'AAA'
+  )
+  validate_single_extmark(cursor, { virt_text_pos = 'inline', virt_text = ref_chunks })
 end
 
 T['gen_view']['virtual()']['works if all extmarks were cleared'] = function()
@@ -3732,23 +3794,33 @@ local validate_apply = function(ref_state_changes)
 end
 
 T['apply_handler()']['works'] = function()
+  -- Complete
   mock_state_with_tracking_handlers({})
   apply_handler_to_mock_state('complete', 'history')
   -- - Should automatically add `id` and `method` fields
   local ref_complete = { base = '', items = { 'u', 'v' }, id = 0, method = 'history' }
   validate_apply({ complete = ref_complete })
-  validate_log('handlers_log', { { 'complete', 'history' } })
 
+  -- - Should infer `method=''` if argument is `nil`
+  mock_state_with_tracking_handlers({})
+  apply_handler_to_mock_state('complete', nil)
+  ref_complete.method = ''
+  validate_apply({ complete = ref_complete })
+  validate_log('handlers_log', { { 'complete', '' } })
+
+  -- Highlight
   mock_state_with_tracking_handlers({})
   apply_handler_to_mock_state('highlight')
   validate_apply({ highlight = { { from = 1, hl = 'AA', to = 1 } } })
   validate_log('handlers_log', { { 'highlight' } })
 
+  -- Key
   mock_state_with_tracking_handlers({})
   apply_handler_to_mock_state('key', 'a')
   validate_apply({ data = { n_key_handler = 1 } })
   validate_log('handlers_log', { { 'key', 'a' } })
 
+  -- View
   mock_state_with_tracking_handlers({})
   apply_handler_to_mock_state('view')
   validate_apply({ data = { n_view_handler = 1 } })
