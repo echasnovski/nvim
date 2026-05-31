@@ -554,6 +554,13 @@ T['get()']['stops']['when triggered during waiting for user input'] = function()
   validate_log('handlers_log', { { 'key', 'progress' }, { 'key', 'accept' } })
 end
 
+T['get()']['stops']['always after <C-c>'] = function()
+  child.cmd('nnoremap <C-c> <C-\\><C-n>')
+  get()
+  type_keys('<C-c>')
+  validate_no_input()
+end
+
 T['get()']['reports first encountered error in handler'] = function()
   child.lua([[
     local has_errored = false
@@ -1380,7 +1387,7 @@ T['gen_view']['floatwin()']['uses correct highlight groups'] = function()
   get({ prompt = 'A', completion = 'test' })
   local win_id, config = get_win_data()
   eq(config.title, { { ' A ', 'MiniInputPrompt' } })
-  eq(config.footer, nil)
+  eq(config.footer, child.fn.has('nvim-0.10') == 1 and { { '', 'MiniInputHint' } } or nil)
   validate_winhl(win_id, 'NormalFloat:MiniInputNormal')
   validate_winhl(win_id, 'FloatBorder:MiniInputBorder')
 
@@ -1416,6 +1423,32 @@ T['gen_view']['floatwin()']['shows complete hint in footer'] = function()
   -- Should show method and try to adjust width to show both title and footer
   validate('cmdline', '<Tab>')
   validate(nil, '<Up>')
+end
+
+T['gen_view']['floatwin()']['can hide border text'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Window footer is available only on Neovim>=0.10') end
+  local expect_screenshot = function() child.expect_screenshot({ ignore_cmdline = true }) end
+
+  child.lua([[
+    MiniInput.config.handlers.complete = function(state, method)
+      state.complete = { base = '', items = { 'uu' } }
+    end
+    MiniInput.config.handlers.key = function(state, key)
+      if key == 'h' then state.opts.prompt = '' end
+      if key == 'q' then state.opts.prompt = 'New' end
+      return MiniInput.default_key(state, key)
+    end
+  ]])
+
+  get({ prompt = 'AAA', completion = 'test' })
+  type_keys('<Tab>')
+  expect_screenshot()
+  type_keys('<Left>')
+  expect_screenshot()
+  type_keys('h')
+  expect_screenshot()
+  type_keys('q')
+  expect_screenshot()
 end
 
 T['gen_view']['floatwin()']['works with multibyte characters'] = function()
@@ -2021,6 +2054,8 @@ T['gen_view']['virtual()']['works with `style="inline"`'] = function()
 end
 
 T['gen_view']['virtual()']['is not affected by default complete with `style="inline"`'] = function()
+  if child.fn.has('nvim-0.10') == 0 then MiniTest.skip('Inline virtual text is supported on Neovim>=0.10') end
+
   child.lua([[
     MiniInput.config.handlers.view = MiniInput.gen_view.virtual({ style = "inline" })
     MiniInput.config.handlers.complete = MiniInput.default_complete
