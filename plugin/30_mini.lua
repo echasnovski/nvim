@@ -41,56 +41,13 @@ now(function() require('mini.sessions').setup() end)
 
 now(function() require('mini.starter').setup() end)
 
-now(function() require('mini.statusline').setup() end)
-
--- Future 'mini.statuscolumn'
 now(function()
-  if vim.fn.has('nvim-0.9') == 1 then
-    -- TODO: Add "scrollbar" section:
-    -- - Treat whole window height as representation of buffer height.
-    -- - Show a bar for window lines that span from top to bottom visible
-    --   buffer lines. At least a single line should be covered.
-    -- - Maybe point in a middle with where the cursor is (like in 'mini.map').
-    -- - Maybe combine it with │ rightmost delimiter (╏ is good for scrollbar).
-    local n_wraps = function(row)
-      -- TODO: Use it for better cursor animation with 'wrap' enabled?
-      -- NOTE: Include `start_vcol = 0` to not count virtual text above
-      return vim.api.nvim_win_text_height(0, { start_row = row, start_vcol = 0, end_row = row }).all - 1
-    end
-
-    vim.api.nvim_set_hl(0, 'MiniStatuscolumnBorder', { link = 'LineNr' })
-    vim.cmd('au ColorScheme * hi! link MiniStatuscolumnBorder LineNr')
-
-    _G.statuscolumn = function()
-      -- add_to_log({ 'statuscolumn', actual = vim.g.actual_curwin, cur = vim.api.nvim_get_current_win() })
-
-      -- TODO: address `signcolumn=auto` and `foldcolumn=auto`
-      if not vim.wo.number and vim.wo.signcolumn == 'no' and vim.wo.foldcolumn == '0' then return '' end
-
-      -- TODO: Take a look at why `CursorLineNr` is not combined with extmark
-      -- highligting from 'mini.diff'
-      -- local is_cur = vim.v.relnum == 0
-      -- local line_nr_hl = '%#' .. (is_cur and 'Cursor' or '') .. 'LineNr#'
-      local line_nr_hl = ''
-
-      local lnum = vim.v.virtnum == 0 and '%l'
-        -- or (vim.v.virtnum < 0 and '•' or (vim.v.virtnum == n_wraps(vim.v.lnum - 1) and '└' or '├'))
-        -- or (vim.v.virtnum < 0 and '•' or '↯')
-        or (vim.v.virtnum < 0 and '•' or '↳')
-
-      -- Deal with sign widths
-
-      -- TODO: Maybe this works in a weird way?
-      -- local sep = vim.v.relnum == 0 and '│' or '├'
-      -- local sep = vim.v.relnum == 0 and '𜰊' or '┊'
-      -- local sep = vim.v.relnum == 0 and '┝' or '┊'
-      -- local sep = '𜰊'
-      local sep = '│'
-      return '%C%s%=' .. line_nr_hl .. lnum .. '%#MiniStatuscolumnBorder#' .. sep
-    end
-    vim.o.statuscolumn = '%{%v:lua.statuscolumn()%}'
-  end
+  require('mini-dev.statuscolumn').setup()
+  -- vim.o.foldcolumn = '1'
+  vim.cmd('set fillchars+=foldsep:\\  fillchars+=foldopen:🯘 fillchars+=foldclose:🮥 fillchars+=foldinner:\\ ')
 end)
+
+now(function() require('mini.statusline').setup() end)
 
 now(function() require('mini.tabline').setup() end)
 
