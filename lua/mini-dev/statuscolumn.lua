@@ -35,8 +35,9 @@
 --- # Highlight groups ~
 --- *MiniStatuscolumn-hl-groups*
 ---
---- - `MiniStatuscolumnInactive` - highlighting of not current window.
---- - `MiniStatuscolumnSep` - separator between column and buffer text.
+--- - `MiniStatuscolumnCursorLineSep` - column and text separator at cursor line.
+--- - `MiniStatuscolumnInactive` - column highlighting of not current window.
+--- - `MiniStatuscolumnSep` - column and text separator.
 ---@tag MiniStatuscolumn
 
 ---@diagnostic disable:undefined-field
@@ -80,18 +81,74 @@ end
 --- - Enabling works best with appropriately "dimming" `MiniStatuscolumnInactive`
 ---   and statuscolumn for inactive window being the same as for active.
 MiniStatuscolumn.config = {
+  content = {
+    active = nil,
+    inactive = nil,
+  },
+
+  click = {
+    -- TODO: should it be in config or enough in `gen_content.precomputed` spec?
+  },
+
   -- Whether to autohighlight whole column in active windows
   hl_inactive = false,
-
-  -- TODO: Decide on config. Like:
-  -- - Whether to allow callable (active/inactive) content that will be called
-  --   with efficiently cached window data?
-  -- - Or just support "specs array"? Mixing the two feels problematic.
-  --   Unless via some combination of `default_content` that returns
-  --   `{ active = function()  end, inactive = function()  end }`. But that
-  --   should not result in a very deep nesting.
 }
 --minidoc_afterlines_end
+
+--- Content generators
+---
+--- This is a table with function elements. Call to actually get a content table.
+MiniStatuscolumn.gen_content = {}
+
+--- Default content generator
+---
+--- TODO: How spec array normalization works, defaults are the same as
+--- default |'statuscolumn'|.
+---
+--- Examples:
+---
+--- - Specification for default `content` in |MiniStatuscolumn.config|.
+---   Use as a template to adjust/remove added behavior: >lua
+---
+---   local statuscolumn = require('mini.statuscolumn')
+---   local spec = {
+---     -- Prefer more efficient order and visible separator
+---     { format = '=lfs', sep = '▏' },
+---     -- Use custom symbol for virtual lines
+---     { ltype = 'virt', lnum = '•' },
+---     -- Use custom symbol for wrapped lines
+---     { ltype = 'wrap', lnum = '↳' },
+---     -- Highlight only cursor line in inactive windows
+---     { win = 'inactive', pos = 'above', fold = '', lnum = '', sign = '' },
+---     { win = 'inactive', pos = 'below', fold = '', lnum = '', sign = '' },
+---   }
+---   statuscolumn.setup({ content = statuscolumn.gen_content.precomputed(spec) })
+--- <
+--- - Thicker default `sep`: `{ pos = 'cursor', sep = '▍' }`.
+---
+--- - Forced highlighting: `{ pos = 'cursor', lnum = '%#CursorLineNr#•' }`.
+---   Has problems that it overrides highlighting from extmarks.
+MiniStatuscolumn.gen_content.precomputed = function(spec)
+  H.validate_content_spec(spec)
+  -- TODO: Add mouse click support
+  local content_map = H.make_content_map(spec)
+
+  -- TODO: Remove after doing benchmarks
+  _G.n_statuscolumn = 0
+  local win_get_cursor = vim.api.nvim_win_get_cursor
+  local make = function(win)
+    return function(win_data)
+      _G.n_statuscolumn = _G.n_statuscolumn + 1
+      if win_data.is_empty then return '' end
+      local pos = vim.v.relnum == 0 and 'cursor' or (vim.v.lnum < win_get_cursor(0)[1] and 'above' or 'below')
+      local ltype = vim.v.virtnum == 0 and 'text' or (vim.v.virtnum < 0 and 'virt' or 'wrap')
+      local res = content_map[win][pos][ltype].content
+      return res
+    end
+  end
+
+  return { active = make('active'), inactive = make('inactive') }
+end
 
 -- Helper data ================================================================
 -- Module default config
@@ -108,6 +165,12 @@ H.setup_config = function(config)
   H.check_type('config', config, 'table', true)
   config = vim.tbl_deep_extend('force', vim.deepcopy(H.default_config), config or {})
 
+  H.check_type('config.content', config.content, 'table')
+  H.check_type('config.content.active', config.content.active, 'function', true)
+  H.check_type('config.content.inactive', config.content.inactive, 'function', true)
+
+  H.check_type('config.click', config.click, 'table')
+
   H.check_type('config.hl_inactive', config.hl_inactive, 'boolean')
 
   return config
@@ -116,7 +179,21 @@ end
 H.apply_config = function(config)
   MiniStatuscolumn.config = config
 
-  H.make_content(config)
+  -- Ensure proper content
+  local content = config.content
+  if content.active == nil and content.inactive == nil then
+    local default_spec = {
+      { format = '=lfs', sep = '▏' },
+      { ltype = 'virt', lnum = '•' },
+      { ltype = 'wrap', lnum = '↳' },
+      { win = 'inactive', pos = 'above', fold = '', lnum = '', sign = '' },
+      { win = 'inactive', pos = 'below', fold = '', lnum = '', sign = '' },
+    }
+    content = MiniStatuscolumn.gen_content.precomputed(default_spec)
+  end
+
+  -- Make and set statuscolumn
+  H.make_statuscolumn_functions(content.active or content.inactive, content.inactive or content.active)
   vim.o.statuscolumn =
     '%{%nvim_get_current_win()==#g:actual_curwin ? v:lua.MiniStatuscolumn.active() : v:lua.MiniStatuscolumn.inactive()%}'
 end
@@ -134,6 +211,7 @@ H.create_default_hl = function()
     vim.api.nvim_set_hl(0, name, opts)
   end
 
+  hi('MiniStatuscolumnCursorLineSep', { link = 'MiniStatuscolumnSep' })
   hi('MiniStatuscolumnInactive', { link = 'StatusLineNC' })
   hi('MiniStatuscolumnSep', { link = 'LineNr' })
 end
@@ -142,6 +220,7 @@ end
 H.make_hl_inactive = function()
   -- Set automatic inactive highlight
   local inactive_winhl = {
+    -- TODO: Decide maybe to not dim cursorline groups?
     'CursorLineFold:MiniStatuscolumnInactive',
     'CursorLineNr:MiniStatuscolumnInactive',
     'CursorLineSign:MiniStatuscolumnInactive',
@@ -150,6 +229,9 @@ H.make_hl_inactive = function()
     'LineNrAbove:MiniStatuscolumnInactive',
     'LineNrBelow:MiniStatuscolumnInactive',
     'SignColumn:MiniStatuscolumnInactive',
+
+    'MiniStatuscolumnCursorLineSep:MiniStatuscolumnInactive',
+    'MiniStatuscolumnSep:MiniStatuscolumnInactive',
   }
   local inactive_winhl_str = table.concat(inactive_winhl, ',')
   local inactive_winhl_map = {}
@@ -175,13 +257,9 @@ H.make_hl_inactive = function()
 end
 
 -- Content --------------------------------------------------------------------
-H.make_content = function(config)
-  -- TODO: Remove after doing benchmarks
-  _G.n_statuscolumn = 0
-
+H.make_statuscolumn_functions = function(active, inactive)
   -- Local helpers to not do extra `vim.api` table lookups
   local get_cur_win = vim.api.nvim_get_current_win
-  local win_get_cursor = vim.api.nvim_win_get_cursor
   local eval_stl = vim.api.nvim_eval_statusline
 
   -- Set up window data caching
@@ -190,8 +268,8 @@ H.make_content = function(config)
     vim.api.nvim_create_autocmd(event, { group = gr, pattern = pattern, callback = callback, desc = desc })
   end
 
-  local win_cache = {}
   -- TODO: Maybe a more granular update (for performance)?
+  local win_cache = {}
   local update_win_cache = function()
     win_cache = {}
     for _, win_id in ipairs(vim.api.nvim_list_wins()) do
@@ -207,8 +285,8 @@ H.make_content = function(config)
 
       -- Helpful indicators
       cache.is_empty = eval_stl('%l%C%s', { winid = win_id, use_statuscol_lnum = 1 }).str == ''
-      -- NOTE: This shows whether line number for the cursor position should be
-      -- `CursorLineNr` or `LineNr`
+      -- TODO: Maybe rename to `is_cursorline_hl` if https://github.com/vim/vim/issues/20480
+      -- is closed as expected behavior
       cache.is_cursorlinenr = cache.cursorline
         and (cache.cursorlineopt:find('number') ~= nil or cache.cursorlineopt:find('both') ~= nil)
 
@@ -219,66 +297,36 @@ H.make_content = function(config)
   local options = { 'cursorline', 'cursorlineopt', 'foldcolumn', 'number', 'relativenumber', 'signcolumn' }
   au('OptionSet', options, update_win_cache, 'Update window cache')
 
-  local get_from_cache = function(win_id)
+  -- Define exported functions for active and inactive windows
+  local get_curwin_cache = function()
+    local win_id = get_cur_win()
     if win_cache[win_id] then return win_cache[win_id] end
     update_win_cache()
     return win_cache[win_id]
   end
 
-  -- TODO: Decide how to allow users to customize this
-  local spec = {
-    { format = '=lfs', sep = '▏' },
-    { ltype = 'virt', lnum = '•' },
-    { ltype = 'wrap', lnum = '↳' },
-    -- TODO: Decide if somehow automatically adding this is worth it.
-    -- Maybe a thick or differently highlighted `sep` at cursor is enough?
-    -- { pos = 'cursor', ltype = 'virt', lnum = '%#CursorLineNr#•' },
-    -- { pos = 'cursor', ltype = 'wrap', lnum = '%#CursorLineNr#↳' },
-
-    -- TODO: Maybe add `MiniStatuscolumnCursorLineSep`?
-    { pos = 'cursor', sep = '%#CursorLineNr#▏' },
-    -- Or a thicker default `sep`?
-    -- { pos = 'cursor', sep = '▍' },
-
-    { win = 'inactive', pos = 'above', fold = '', lnum = '', sign = '' },
-    { win = 'inactive', pos = 'below', fold = '', lnum = '', sign = '' },
-  }
-  local content_map = H.make_content_map(spec)
-
-  local make = function(win)
-    return function()
-      _G.n_statuscolumn = _G.n_statuscolumn + 1
-      local cache = get_from_cache(get_cur_win())
-      if cache.is_empty then return '' end
-      local pos = vim.v.relnum == 0 and 'cursor' or (vim.v.lnum < win_get_cursor(0)[1] and 'above' or 'below')
-      local ltype = vim.v.virtnum == 0 and 'text' or (vim.v.virtnum < 0 and 'virt' or 'wrap')
-      local res = content_map[win][pos][ltype].content[cache.relativenumber][cache.cursorline][cache.is_cursorlinenr]
-      return res
-    end
-  end
-
-  MiniStatuscolumn.active = make('active')
-  MiniStatuscolumn.inactive = make('inactive')
+  MiniStatuscolumn.active = function() return active(get_curwin_cache()) end
+  MiniStatuscolumn.inactive = function() return inactive(get_curwin_cache()) end
 end
 
 H.validate_content_spec = function(x)
   H.check_array_of('spec', x, 'table')
-  for i, h in ipairs(x) do
+  for i, s in ipairs(x) do
     local item = string.format('spec[%d]', i)
-    if item.win ~= nil then H.check_one_of(item .. '.win', h.win, { 'active', 'inactive' }) end
-    if item.pos ~= nil then H.check_one_of(item .. '.pos', h.pos, { 'above', 'cursor', 'below' }) end
-    if item.ltype ~= nil then H.check_one_of(item .. '.ltype', h.ltype, { 'text', 'virt', 'wrap' }) end
+    if s.win ~= nil then H.check_one_of(item .. '.win', s.win, { 'active', 'inactive' }) end
+    if s.pos ~= nil then H.check_one_of(item .. '.pos', s.pos, { 'above', 'cursor', 'below' }) end
+    if s.ltype ~= nil then H.check_one_of(item .. '.ltype', s.ltype, { 'text', 'virt', 'wrap' }) end
 
-    H.check_type(item .. '.format', h.format, 'string', true)
-    if item.format ~= nil and item.format:find('[^=lfs]') ~= nil then
+    H.check_type(item .. '.format', s.format, 'string', true)
+    if s.format ~= nil and s.format:find('[^=lfs]') ~= nil then
       H.error('`' .. item .. '`.format should contain only `=fls` characters')
     end
-    H.check_type(item .. '.fold', h.fold, 'string', true)
-    H.check_type(item .. '.lnum', h.lnum, 'string', true)
-    H.check_type(item .. '.sign', h.sign, 'string', true)
-    H.check_type(item .. '.sep', h.sep, 'string', true)
+    H.check_type(item .. '.fold', s.fold, 'string', true)
+    H.check_type(item .. '.lnum', s.lnum, 'string', true)
+    H.check_type(item .. '.sign', s.sign, 'string', true)
+    H.check_type(item .. '.sep', s.sep, 'string', true)
 
-    local at_least_one_info = x.format or x.fold or x.lnum or x.sign or x.sep
+    local at_least_one_info = s.format or s.fold or s.lnum or s.sign or s.sep
     if not at_least_one_info then H.error('`' .. item .. '`should contain at least one info field') end
   end
 end
@@ -311,77 +359,20 @@ H.make_content_map = function(spec)
   end
 
   -- Compute content for each scope
+  local format_repl = { ['='] = '%=' }
   for _, win_map in pairs(map) do
     for _, pos_map in pairs(win_map) do
       for _, ltype_map in pairs(pos_map) do
-        ltype_map.content = H.construct_content_string(ltype_map)
+        local hl_sep = '%#MiniStatuscolumn' .. (ltype_map.pos == 'cursor' and 'CursorLine' or '') .. 'Sep#'
+        local sep = ltype_map.sep == '' and '' or (hl_sep .. ltype_map.sep)
+
+        format_repl.f, format_repl.l, format_repl.s = ltype_map.fold, ltype_map.lnum, ltype_map.sign
+        ltype_map.content = ltype_map.format:gsub('[=fls]', format_repl) .. sep
       end
     end
   end
 
   return map
-end
-
-H.construct_content_string = function(spec)
-  local single = function(rnu, cul, is_culnr)
-    local repl = { ['='] = '%=' }
-
-    -- TODO: Now `CursorLineFold` needs `is_culnr`, but that is not documented
-    local hl_fold = (spec.pos == 'cursor' and cul) and '%#CursorLineFold#' or '%#FoldColumn#'
-    -- if spec.fold:find('%%') ~= nil then hl_fold = '' end
-
-    local hl_lnum = '%#LineNr#'
-    if spec.pos == 'above' and rnu then hl_lnum = '%#LineNrAbove#' end
-    if spec.pos == 'below' and rnu then hl_lnum = '%#LineNrBelow#' end
-    if spec.pos == 'cursor' and is_culnr then hl_lnum = '%#CursorLineNr#' end
-    -- if spec.lnum:find('%%') ~= nil then hl_lnum = '' end
-
-    -- TODO: Now `CursorLineSign` needs `is_culnr`, but that is not documented
-    local hl_sign = (spec.pos == 'cursor' and cul) and '%#CursorLineSign#' or '%#SignColumn#'
-    -- if spec.sign:find('%%') ~= nil then hl_sign = '' end
-
-    -- !!!TODO!!! Explicitly added highlight groups override extra highlighting
-    -- from %l/%C/%s. Like from `{number,sign}_hl_group` in extmarks.
-    -- The explicit highlighting here is added only for a "clean" solution of
-    -- fixed character section (like `lnum='•'` for virtual lines) not having
-    -- the same highlighting as if it was `%l` for the "real" text line.
-    -- **However**, it only looks like a problem for `CusrorLine{Nr,Fold,Sign}`
-    -- cases. `LineNr`/`LineNrAbove`/`LineNrBelow` and extmark highlighting
-    -- seem to work okay (at least for the firxed `lnum` case).
-    --
-    -- Maybe it is a better idea to just drop this extra forcing and suggest
-    -- to manually use specs like
-    -- `{ pos = 'cursor', ltype = 'virt', lnum = '%#CursorLineNr#•' }`?
-    -- The downside is no cool highlighting of `•` and `↳` at cursor, but in
-    -- return this simplifies code a lot while thick-ish `sep` serves the same
-    -- purpose.
-
-    hl_fold, hl_lnum, hl_sign = '', '', ''
-    repl.f = spec.fold == '' and '' or (hl_fold .. spec.fold)
-    repl.l = spec.lnum == '' and '' or (hl_lnum .. spec.lnum)
-    repl.s = spec.sign == '' and '' or (hl_sign .. spec.sign)
-
-    local format = vim.split(spec.format, '')
-    for i = 1, #format do
-      format[i] = repl[format[i]] or format[i]
-    end
-
-    -- TODO: Add mouse click support
-    local sep = spec.sep == '' and '' or ('%#MiniStatuscolumnSep#' .. spec.sep)
-    return table.concat(format, '') .. sep
-  end
-
-  -- Nested key values are relativenumber-cursorline-is_cursorlinenr
-  return {
-    [false] = {
-      [false] = { [false] = single(false, false, false), [true] = single(false, false, true) },
-      [true] = { [false] = single(false, true, false), [true] = single(false, true, true) },
-    },
-    [true] = {
-      [false] = { [false] = single(true, false, false), [true] = single(true, false, true) },
-      [true] = { [false] = single(true, true, false), [true] = single(true, true, true) },
-    },
-  }
 end
 
 -- Utilities ------------------------------------------------------------------
@@ -407,5 +398,8 @@ H.check_array_of = function(name, x, ref_type)
 end
 
 H.notify = function(msg, level_name) vim.notify('(mini.statuscolumn) ' .. msg, vim.log.levels[level_name]) end
+
+-- TODO: Remove after compatibility with Neovim=0.9 is dropped
+H.islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
 
 return MiniStatuscolumn
