@@ -86,10 +86,6 @@ MiniStatuscolumn.config = {
     inactive = nil,
   },
 
-  click = {
-    -- TODO: should it be in config or enough in `gen_content.precomputed` spec?
-  },
-
   -- Whether to autohighlight whole column in active windows
   hl_inactive = false,
 }
@@ -122,16 +118,38 @@ MiniStatuscolumn.gen_content = {}
 ---     { win = 'inactive', pos = 'above', fold = '', lnum = '', sign = '' },
 ---     { win = 'inactive', pos = 'below', fold = '', lnum = '', sign = '' },
 ---   }
----   statuscolumn.setup({ content = statuscolumn.gen_content.precomputed(spec) })
+---   statuscolumn.setup({ content = statuscolumn.gen_content.main(spec) })
 --- <
---- - Thicker default `sep`: `{ pos = 'cursor', sep = '▍' }`.
+--- - Thicker separator at cursor: `{ pos = 'cursor', sep = '▍' }`.
 ---
+--- - Other ways of visualizing active window: >lua
+---
+---   -- Different separator characters
+---   {
+---     { win = 'active', sep = '▏'}
+---     { win = 'inactive', sep = ' '}
+---   }
+---
+---   -- Different separator highlighting
+---   {
+---     { win = 'active', sep = '▏'}
+---     { win = 'inactive', sep = '%#MiniStatuscolumnInactive#▏'}
+---   }
+--- <
 --- - Forced highlighting: `{ pos = 'cursor', lnum = '%#CursorLineNr#•' }`.
 ---   Has problems that it overrides highlighting from extmarks.
-MiniStatuscolumn.gen_content.precomputed = function(spec)
+---
+---@param spec table[] Specification array.
+---@param opts table|nil Options. Possible fields:
+---   - <click> `(function)` - action to perform on mouse click in statuscolumn.
+---     Will be called with ... TODO
+MiniStatuscolumn.gen_content.main = function(spec, opts)
   H.validate_content_spec(spec)
-  -- TODO: Add mouse click support
-  local content_map = H.make_content_map(spec)
+  opts = vim.tbl_extend('force', { click = MiniStatuscolumn.default_click }, opts or {})
+  H.check_type('opts.click', opts.click, 'function')
+
+  -- Create content
+  local content_map = H.make_content_map(spec, opts.click)
 
   -- TODO: Remove after doing benchmarks
   _G.n_statuscolumn = 0
@@ -148,6 +166,19 @@ MiniStatuscolumn.gen_content.precomputed = function(spec)
   end
 
   return { active = make('active'), inactive = make('inactive') }
+end
+
+MiniStatuscolumn.default_click = function(data)
+  local mousepos = data.mousepos
+  local ok = pcall(vim.api.nvim_set_current_win, mousepos.winid)
+  if not ok then return end
+  ok = pcall(vim.api.nvim_win_set_cursor, mousepos.winid, { mousepos.line, mousepos.column - 1 })
+  if not ok then return end
+
+  -- TODO: Maybe behind option?
+  vim.cmd('normal! zz')
+
+  -- TODO: Maybe act differently on folds (open/close), etc.
 end
 
 -- Helper data ================================================================
@@ -169,8 +200,6 @@ H.setup_config = function(config)
   H.check_type('config.content.active', config.content.active, 'function', true)
   H.check_type('config.content.inactive', config.content.inactive, 'function', true)
 
-  H.check_type('config.click', config.click, 'table')
-
   H.check_type('config.hl_inactive', config.hl_inactive, 'boolean')
 
   return config
@@ -189,7 +218,7 @@ H.apply_config = function(config)
       { win = 'inactive', pos = 'above', fold = '', lnum = '', sign = '' },
       { win = 'inactive', pos = 'below', fold = '', lnum = '', sign = '' },
     }
-    content = MiniStatuscolumn.gen_content.precomputed(default_spec)
+    content = MiniStatuscolumn.gen_content.main(default_spec)
   end
 
   -- Make and set statuscolumn
@@ -293,7 +322,7 @@ H.make_statuscolumn_functions = function(active, inactive)
       win_cache[win_id] = cache
     end
   end
-  au({ 'WinNew', 'WinClosed' }, '*', update_win_cache, 'Update window cache')
+  au({ 'BufWinEnter', 'WinNew', 'WinClosed' }, '*', update_win_cache, 'Update window cache')
   local options = { 'cursorline', 'cursorlineopt', 'foldcolumn', 'number', 'relativenumber', 'signcolumn' }
   au('OptionSet', options, update_win_cache, 'Update window cache')
 
@@ -331,7 +360,7 @@ H.validate_content_spec = function(x)
   end
 end
 
-H.make_content_map = function(spec)
+H.make_content_map = function(spec, click)
   -- Gather array spec into a map ensuring default values
   spec = vim.deepcopy(spec)
   table.insert(spec, 1, { format = '=fsl', fold = '%C', lnum = '%l', sign = '%s', sep = ' ' })
@@ -358,16 +387,40 @@ H.make_content_map = function(spec)
     end
   end
 
+  -- Prepare clicking data
+  local make_click = function(section)
+    return function(_, n_clicks, button, modifiers)
+      -- NOTE: It would be great to be able to pass `ltype` (text, virt, wrap),
+      -- but it is not currently possible. Neither via different functions nor
+      -- via the same function but different `minwid`.
+      -- See: https://github.com/neovim/neovim/issues/40210
+      local data = { n_clicks = n_clicks, button = button, modifiers = modifiers, section = section }
+      data.mousepos = vim.fn.getmousepos()
+      click(data)
+    end
+  end
+
+  local with_click = function(section, section_content)
+    if section_content == '' then return '' end
+    local click_name = '_click_' .. section
+    MiniStatuscolumn[click_name] = MiniStatuscolumn[click_name] or make_click(section)
+
+    return string.format('%%@v:lua.MiniStatuscolumn.%s@%s%%T', click_name, section_content)
+  end
+
   -- Compute content for each scope
   local format_repl = { ['='] = '%=' }
   for _, win_map in pairs(map) do
-    for _, pos_map in pairs(win_map) do
+    for pos, pos_map in pairs(win_map) do
       for _, ltype_map in pairs(pos_map) do
-        local hl_sep = '%#MiniStatuscolumn' .. (ltype_map.pos == 'cursor' and 'CursorLine' or '') .. 'Sep#'
-        local sep = ltype_map.sep == '' and '' or (hl_sep .. ltype_map.sep)
+        format_repl.f = with_click('fold', ltype_map.fold)
+        format_repl.l = with_click('lnum', ltype_map.lnum)
+        format_repl.s = with_click('sign', ltype_map.sign)
+        local content = ltype_map.format:gsub('[=fls]', format_repl)
 
-        format_repl.f, format_repl.l, format_repl.s = ltype_map.fold, ltype_map.lnum, ltype_map.sign
-        ltype_map.content = ltype_map.format:gsub('[=fls]', format_repl) .. sep
+        local sep_hl = '%#MiniStatuscolumn' .. (pos == 'cursor' and 'CursorLine' or '') .. 'Sep#'
+        local sep = ltype_map.sep == '' and '' or (sep_hl .. ltype_map.sep)
+        ltype_map.content = content .. with_click('sep', sep)
       end
     end
   end
