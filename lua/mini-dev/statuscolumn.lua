@@ -35,9 +35,10 @@
 --- # Highlight groups ~
 --- *MiniStatuscolumn-hl-groups*
 ---
---- - `MiniStatuscolumnCursorLineSep` - column and text separator at cursor line.
---- - `MiniStatuscolumnInactive` - column highlighting of not current window.
+--- - `MiniStatuscolumnDim` - dimmed column.
+--- - `MiniStatuscolumnDimCursor` - dimmed column at cursor line.
 --- - `MiniStatuscolumnSep` - column and text separator.
+--- - `MiniStatuscolumnSepCursor` - column and text separator at cursor line.
 ---@tag MiniStatuscolumn
 
 ---@diagnostic disable:undefined-field
@@ -76,9 +77,9 @@ end
 
 --- Defaults ~
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text # Highlight inactive windows ~
+---@text # Dim inactive windows ~
 --- Notes:
---- - Enabling works best with appropriately "dimming" `MiniStatuscolumnInactive`
+--- - Enabling works best with appropriately "dimming" `MiniStatuscolumnDim`
 ---   and statuscolumn for inactive window being the same as for active.
 MiniStatuscolumn.config = {
   content = {
@@ -86,8 +87,8 @@ MiniStatuscolumn.config = {
     inactive = nil,
   },
 
-  -- Whether to autohighlight whole column in active windows
-  hl_inactive = false,
+  -- Whether to dim column text in inactive windows
+  dim_inactive = true,
 }
 --minidoc_afterlines_end
 
@@ -101,6 +102,10 @@ MiniStatuscolumn.gen_content = {}
 --- TODO: How spec array normalization works, defaults are the same as
 --- default |'statuscolumn'|.
 ---
+--- Notes:
+--- - `MiniStatuscolumnSepCursor` is used under the same conditions as described
+---   in |hl-CursorLineNr|.
+---
 --- Examples:
 ---
 --- - Specification for default `content` in |MiniStatuscolumn.config|.
@@ -108,41 +113,44 @@ MiniStatuscolumn.gen_content = {}
 ---
 ---   local statuscolumn = require('mini.statuscolumn')
 ---   local spec = {
----     -- Prefer more efficient order and visible separator
+---     -- Prefer visible separator with a more efficient order to use
+---     -- usually present whitespace to the right of signs
 ---     { format = '=lfs', sep = '▏' },
 ---     -- Use custom symbol for virtual lines
 ---     { ltype = 'virt', lnum = '•' },
 ---     -- Use custom symbol for wrapped lines
 ---     { ltype = 'wrap', lnum = '↳' },
----     -- Highlight only cursor line in inactive windows
----     { win = 'inactive', pos = 'above', fold = '', lnum = '', sign = '' },
----     { win = 'inactive', pos = 'below', fold = '', lnum = '', sign = '' },
+---     -- Hide separator to better indicate inactive windows
+---     { win = 'inactive', sep = ' ' },
 ---   }
 ---   statuscolumn.setup({ content = statuscolumn.gen_content.main(spec) })
 --- <
 --- - Thicker separator at cursor: `{ pos = 'cursor', sep = '▍' }`.
 ---
---- - Other ways of visualizing active window: >lua
+--- - Other ways to indicate inactive windows:
 ---
----   -- Different separator characters
----   {
----     { win = 'active', sep = '▏'}
----     { win = 'inactive', sep = ' '}
----   }
+---   - Hide regular non-cursor line: set `MiniStatuscolumnDim` and
+---     `MiniStatuscolumnDimCursor` highlight groups to have the same
+---     foreground and background.
 ---
----   -- Different separator highlighting
----   {
----     { win = 'active', sep = '▏'}
----     { win = 'inactive', sep = '%#MiniStatuscolumnInactive#▏'}
----   }
---- <
+---   - Hide all non-cursor lines: `{ win='inactive', fold='', lnum='', sign='' }`
+---
 --- - Forced highlighting: `{ pos = 'cursor', lnum = '%#CursorLineNr#•' }`.
 ---   Has problems that it overrides highlighting from extmarks.
 ---
 ---@param spec table[] Specification array.
 ---@param opts table|nil Options. Possible fields:
 ---   - <click> `(function)` - action to perform on mouse click in statuscolumn.
----     Will be called with ... TODO
+---     Will be called with ... TODO:
+---     Notes:
+---    - It is only possible to split statuscolumn line into "clicking ranges"
+---      once per window, including their `minwid` first argument.
+---      This is why clicking data only contains data about section and not
+---      about line type (text, virt, wrap).
+---    - A common (somewhat limiting) pattern to identify what was clicked is
+---      to use |screenstring()| with <screenrow> and <screencol> fields of
+---      <mousepos>. For example, if wrapped and virtual lines are identified
+---      by known symbols, it helps identifying clicking on those cases.
 MiniStatuscolumn.gen_content.main = function(spec, opts)
   H.validate_content_spec(spec)
   opts = vim.tbl_extend('force', { click = MiniStatuscolumn.default_click }, opts or {})
@@ -159,15 +167,25 @@ MiniStatuscolumn.gen_content.main = function(spec, opts)
       _G.n_statuscolumn = _G.n_statuscolumn + 1
       if win_data.is_empty then return '' end
       local pos = vim.v.relnum == 0 and 'cursor' or (vim.v.lnum < win_get_cursor(0)[1] and 'above' or 'below')
+      -- TODO: There still `MiniStatuscolumnSepCursor` highlighting glitches
+      -- when cursor goes over virtual lines that are shown below the current
+      -- line (like deleted text in 'mini.diff' hunk).
+      -- One possible way to overcome this is to detect this situation here
+      -- (`pos=='cursor' and `vim.v.virtnum<0), set a flag that will be used in
+      -- `CursorMoved,CursorMovedI` autocommand with
+      -- `nvim__redraw({win=0,statuscolumn=true})`. Doing this on *every*
+      -- cursor move leads to some "early redraw" flickering (like with
+      -- 'mini.cursorword').
       local ltype = vim.v.virtnum == 0 and 'text' or (vim.v.virtnum < 0 and 'virt' or 'wrap')
-      local res = content_map[win][pos][ltype].content
-      return res
+      -- NOTE: Condition on `is_cursorlinenr` for a proper separator hl
+      return content_map[win][pos][ltype].content[win_data.is_cursorlinenr]
     end
   end
 
   return { active = make('active'), inactive = make('inactive') }
 end
 
+--- Default mouse click handler
 MiniStatuscolumn.default_click = function(data)
   local mousepos = data.mousepos
   local ok = pcall(vim.api.nvim_set_current_win, mousepos.winid)
@@ -175,8 +193,7 @@ MiniStatuscolumn.default_click = function(data)
   ok = pcall(vim.api.nvim_win_set_cursor, mousepos.winid, { mousepos.line, mousepos.column - 1 })
   if not ok then return end
 
-  -- TODO: Maybe behind option?
-  vim.cmd('normal! zz')
+  if data.n_clicks == 2 then vim.cmd('normal! zz') end
 
   -- TODO: Maybe act differently on folds (open/close), etc.
 end
@@ -200,7 +217,7 @@ H.setup_config = function(config)
   H.check_type('config.content.active', config.content.active, 'function', true)
   H.check_type('config.content.inactive', config.content.inactive, 'function', true)
 
-  H.check_type('config.hl_inactive', config.hl_inactive, 'boolean')
+  H.check_type('config.dim_inactive', config.dim_inactive, 'boolean')
 
   return config
 end
@@ -215,8 +232,7 @@ H.apply_config = function(config)
       { format = '=lfs', sep = '▏' },
       { ltype = 'virt', lnum = '•' },
       { ltype = 'wrap', lnum = '↳' },
-      { win = 'inactive', pos = 'above', fold = '', lnum = '', sign = '' },
-      { win = 'inactive', pos = 'below', fold = '', lnum = '', sign = '' },
+      { win = 'inactive', sep = ' ' },
     }
     content = MiniStatuscolumn.gen_content.main(default_spec)
   end
@@ -231,7 +247,7 @@ H.create_autocommands = function(config)
   local gr = vim.api.nvim_create_augroup('MiniStatuscolumn', {})
   vim.api.nvim_create_autocmd('ColorScheme', { group = gr, callback = H.create_default_hl, desc = 'Ensure colors' })
 
-  if config.hl_inactive then H.make_hl_inactive() end
+  if config.dim_inactive then H.make_dim_inactive() end
 end
 
 H.create_default_hl = function()
@@ -240,27 +256,45 @@ H.create_default_hl = function()
     vim.api.nvim_set_hl(0, name, opts)
   end
 
-  hi('MiniStatuscolumnCursorLineSep', { link = 'MiniStatuscolumnSep' })
-  hi('MiniStatuscolumnInactive', { link = 'StatusLineNC' })
+  -- Make sure that `MiniStatuscolumnDim` is dimming out of the box
+  local linenr = vim.api.nvim_get_hl(0, { name = 'LineNr', link = false })
+  local normal = vim.api.nvim_get_hl(0, { name = 'Normal', link = false })
+  local fg, bg = linenr.fg or normal.fg, linenr.bg or normal.bg
+  if type(fg) == 'number' and type(bg) == 'number' then
+    local fg_b, bg_b = math.fmod(fg, 256), math.fmod(bg, 256)
+    local fg_g, bg_g = math.fmod((fg - fg_b) / 256, 256), math.fmod((bg - bg_b) / 256, 256)
+    local fg_r, bg_r = math.floor(fg / 65536), math.floor(bg / 65536)
+
+    local bl = 0.382
+    local bl_b = string.format('%02x', math.floor((bl * fg_b + (1 - bl) * bg_b)))
+    local bl_g = string.format('%02x', math.floor((bl * fg_g + (1 - bl) * bg_g)))
+    local bl_r = string.format('%02x', math.floor((bl * fg_r + (1 - bl) * bg_r)))
+    hi('MiniStatuscolumnDim', { fg = '#' .. bl_r .. bl_g .. bl_b, bg = bg })
+  else
+    hi('MiniStatuscolumnDim', { link = 'LineNr' })
+  end
+
+  hi('MiniStatuscolumnDimCursor', { link = 'MiniStatuscolumnDim' })
   hi('MiniStatuscolumnSep', { link = 'LineNr' })
+  hi('MiniStatuscolumnSepCursor', { link = 'CursorLineNr' })
 end
 
 -- Autocommands ---------------------------------------------------------------
-H.make_hl_inactive = function()
+H.make_dim_inactive = function()
   -- Set automatic inactive highlight
   local inactive_winhl = {
     -- TODO: Decide maybe to not dim cursorline groups?
-    'CursorLineFold:MiniStatuscolumnInactive',
-    'CursorLineNr:MiniStatuscolumnInactive',
-    'CursorLineSign:MiniStatuscolumnInactive',
-    'FoldColumn:MiniStatuscolumnInactive',
-    'LineNr:MiniStatuscolumnInactive',
-    'LineNrAbove:MiniStatuscolumnInactive',
-    'LineNrBelow:MiniStatuscolumnInactive',
-    'SignColumn:MiniStatuscolumnInactive',
+    'CursorLineFold:MiniStatuscolumnDimCursor',
+    'CursorLineNr:MiniStatuscolumnDimCursor',
+    'CursorLineSign:MiniStatuscolumnDimCursor',
+    'FoldColumn:MiniStatuscolumnDim',
+    'LineNr:MiniStatuscolumnDim',
+    'LineNrAbove:MiniStatuscolumnDim',
+    'LineNrBelow:MiniStatuscolumnDim',
+    'SignColumn:MiniStatuscolumnDim',
 
-    'MiniStatuscolumnCursorLineSep:MiniStatuscolumnInactive',
-    'MiniStatuscolumnSep:MiniStatuscolumnInactive',
+    'MiniStatuscolumnSep:MiniStatuscolumnDim',
+    'MiniStatuscolumnSepCursor:MiniStatuscolumnDimCursor',
   }
   local inactive_winhl_str = table.concat(inactive_winhl, ',')
   local inactive_winhl_map = {}
@@ -416,11 +450,21 @@ H.make_content_map = function(spec, click)
         format_repl.f = with_click('fold', ltype_map.fold)
         format_repl.l = with_click('lnum', ltype_map.lnum)
         format_repl.s = with_click('sign', ltype_map.sign)
-        local content = ltype_map.format:gsub('[=fls]', format_repl)
+        local content_str = ltype_map.format:gsub('[=fls]', format_repl)
 
-        local sep_hl = '%#MiniStatuscolumn' .. (pos == 'cursor' and 'CursorLine' or '') .. 'Sep#'
-        local sep = ltype_map.sep == '' and '' or (sep_hl .. ltype_map.sep)
-        ltype_map.content = content .. with_click('sep', sep)
+        local content = {}
+        -- NOTE: show separator hl based on whether it is configured to show
+        -- "CursorLine" highlighting in the column (`:h hl-CursorLineNr`, but
+        -- it works for fold and sign: https://github.com/vim/vim/issues/20480)
+        -- It also helps with drawing issues, since statuscolumn is not redrawn
+        -- on cursor movement with 'nocursorline', which makes cursor separator
+        -- not update also.
+        for _, show_cur in ipairs({ false, true }) do
+          local sep_hl = (pos == 'cursor' and show_cur) and '%#MiniStatuscolumnSepCursor#' or '%#MiniStatuscolumnSep#'
+          local sep = ltype_map.sep == '' and '' or (sep_hl .. ltype_map.sep)
+          content[show_cur] = content_str .. with_click('sep', sep)
+        end
+        ltype_map.content = content
       end
     end
   end
