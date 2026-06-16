@@ -35,7 +35,7 @@
 --- # Highlight groups ~
 --- *MiniStatuscolumn-hl-groups*
 ---
---- - `MiniStatuscolumnDim` - dimmed column.
+--- - `MiniStatuscolumnDim` - dimmed column. By default is a dimmed |hl-LineNr|.
 --- - `MiniStatuscolumnDimCursor` - dimmed column at cursor line.
 --- - `MiniStatuscolumnSep` - column and text separator.
 --- - `MiniStatuscolumnSepCursor` - column and text separator at cursor line.
@@ -125,9 +125,13 @@ MiniStatuscolumn.gen_content = {}
 ---   }
 ---   statuscolumn.setup({ content = statuscolumn.gen_content.main(spec) })
 --- <
---- - Thicker separator at cursor: `{ pos = 'cursor', sep = '▍' }`.
+--- - Ways to configure separator:
 ---
---- - Other ways to indicate inactive windows:
+---   - Thicker separator at cursor: `{ pos = 'cursor', sep = '▍' }`.
+---
+---   - More cell-centered separator: `{ format='=fsl', sep='│' }`
+---
+--- - Ways to indicate inactive windows:
 ---
 ---   - Hide regular non-cursor line: set `MiniStatuscolumnDim` and
 ---     `MiniStatuscolumnDimCursor` highlight groups to have the same
@@ -135,7 +139,7 @@ MiniStatuscolumn.gen_content = {}
 ---
 ---   - Hide all non-cursor lines: `{ win='inactive', fold='', lnum='', sign='' }`
 ---
---- - Forced highlighting: `{ pos = 'cursor', lnum = '%#CursorLineNr#•' }`.
+--- - Force highlighting: `{ pos='cursor', ltype='virt', lnum='%#CursorLineNr#•' }`.
 ---   Has problems that it overrides highlighting from extmarks.
 ---
 ---@param spec table[] Specification array.
@@ -162,25 +166,35 @@ MiniStatuscolumn.gen_content.main = function(spec, opts)
   -- TODO: Remove after doing benchmarks
   _G.n_statuscolumn = 0
   local win_get_cursor = vim.api.nvim_win_get_cursor
+  local needs_redraw = {}
   local make = function(win)
     return function(win_data)
       _G.n_statuscolumn = _G.n_statuscolumn + 1
+
       if win_data.is_empty then return '' end
       local pos = vim.v.relnum == 0 and 'cursor' or (vim.v.lnum < win_get_cursor(0)[1] and 'above' or 'below')
-      -- TODO: There still `MiniStatuscolumnSepCursor` highlighting glitches
-      -- when cursor goes over virtual lines that are shown below the current
-      -- line (like deleted text in 'mini.diff' hunk).
-      -- One possible way to overcome this is to detect this situation here
-      -- (`pos=='cursor' and `vim.v.virtnum<0), set a flag that will be used in
-      -- `CursorMoved,CursorMovedI` autocommand with
-      -- `nvim__redraw({win=0,statuscolumn=true})`. Doing this on *every*
-      -- cursor move leads to some "early redraw" flickering (like with
-      -- 'mini.cursorword').
       local ltype = vim.v.virtnum == 0 and 'text' or (vim.v.virtnum < 0 and 'virt' or 'wrap')
-      -- NOTE: Condition on `is_cursorlinenr` for a proper separator hl
+      -- Force redraw with cursor on virtual line or manually added cursor sep
+      -- highlighting will "stay" there when cursor is moved. It is because
+      -- 'statuscolumn' content is not recomputed on cursor move.
+      needs_redraw[win_data.win_id] = needs_redraw[win_data.win_id]
+        or (win == 'active' and pos == 'cursor' and ltype == 'virt')
+      -- Condition on `is_cursorlinenr` for a proper separator hl
       return content_map[win][pos][ltype].content[win_data.is_cursorlinenr]
     end
   end
+
+  -- Fore redraw when needed. Do not do it on every cursor move as it results
+  -- into flickering (like with 'mini.cursorword' highlighting word twice)
+  local gr = vim.api.nvim_create_augroup('MiniStatuscolumnMain', {})
+  local get_current_win, nvim__redraw = vim.api.nvim_get_current_win, vim.api.nvim__redraw
+  local redraw_stc = function()
+    if not needs_redraw[get_current_win()] then return end
+    nvim__redraw({ win = get_current_win(), statuscolumn = true })
+    needs_redraw[get_current_win()] = false
+  end
+  local au_opts = { group = gr, callback = redraw_stc, desc = 'Ensure redraw' }
+  vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, au_opts)
 
   return { active = make('active'), inactive = make('inactive') }
 end
