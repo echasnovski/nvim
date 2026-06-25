@@ -139,6 +139,8 @@ MiniStatuscolumn.gen_content = {}
 ---
 ---   - Hide all non-cursor lines: `{ win='inactive', fold='', lnum='', sign='' }`
 ---
+---   - Hide separator: `{ win='inactive', sep='' }`
+---
 --- - Force highlighting: `{ pos='cursor', ltype='virt', lnum='%#CursorLineNr#•' }`.
 ---   Has problems that it overrides highlighting from extmarks.
 ---
@@ -297,7 +299,6 @@ end
 H.make_dim_inactive = function()
   -- Set automatic inactive highlight
   local inactive_winhl = {
-    -- TODO: Decide maybe to not dim cursorline groups?
     'CursorLineFold:MiniStatuscolumnDimCursor',
     'CursorLineNr:MiniStatuscolumnDimCursor',
     'CursorLineSign:MiniStatuscolumnDimCursor',
@@ -316,21 +317,29 @@ H.make_dim_inactive = function()
     inactive_winhl_map[hl_pair] = true
   end
 
-  local add = function()
-    local winhl = vim.wo.winhighlight
-    local new_winhl = winhl .. (winhl == '' and '' or ',') .. inactive_winhl_str
-    vim.wo.winhighlight = new_winhl
-  end
+  local not_inactive_winhl = function(hl_pair) return not inactive_winhl_map[hl_pair] end
 
-  local remove = function()
-    local winhl = vim.split(vim.wo.winhighlight, ',')
-    winhl = vim.tbl_filter(function(hl_pair) return not inactive_winhl_map[hl_pair] end, winhl)
-    vim.wo.winhighlight = table.concat(winhl, ',')
+  local ensure_dimmed = function()
+    local cur_win_id = vim.api.nvim_get_current_win()
+    -- NOTE: Working with all visible windows instead of precisely per event
+    -- is more robust due to window-local options and window events nature
+    for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      local winhl_split = vim.split(vim.wo[win_id].winhighlight, ',')
+      local new_winhl = table.concat(vim.tbl_filter(not_inactive_winhl, winhl_split), ',')
+      if win_id ~= cur_win_id then new_winhl = new_winhl .. ((new_winhl == '' and '' or ',') .. inactive_winhl_str) end
+      vim.wo[win_id].winhighlight = new_winhl
+    end
   end
 
   local gr = vim.api.nvim_create_augroup('MiniStatuscolumn', { clear = false })
-  vim.api.nvim_create_autocmd('WinLeave', { group = gr, callback = add, desc = 'Add inactive highlight' })
-  vim.api.nvim_create_autocmd('WinEnter', { group = gr, callback = remove, desc = 'Remove inactive highlight' })
+
+  -- NOTE: The `BufWinEnter` callback is executed with shown buffer is current
+  -- (even if it is not). This means that showing that buffer without visibly
+  -- changing windows can result in it highlighted as "active", when it is not.
+  -- So schedule in hope that this will not result in flickering.
+  vim.api.nvim_create_autocmd('WinEnter', { group = gr, callback = ensure_dimmed, desc = 'Ensure dimmed' })
+  local ensure_dimmed_scheduled = vim.schedule_wrap(ensure_dimmed)
+  vim.api.nvim_create_autocmd('BufWinEnter', { group = gr, callback = ensure_dimmed_scheduled, desc = 'Ensure dimmed' })
 end
 
 -- Content --------------------------------------------------------------------
@@ -370,7 +379,7 @@ H.make_statuscolumn_functions = function(active, inactive)
       win_cache[win_id] = cache
     end
   end
-  au({ 'BufWinEnter', 'WinNew', 'WinClosed' }, '*', update_win_cache, 'Update window cache')
+  au({ 'BufWinEnter', 'WinNew', 'TermOpen' }, '*', update_win_cache, 'Update window cache')
   local options = { 'cursorline', 'cursorlineopt', 'foldcolumn', 'number', 'relativenumber', 'signcolumn' }
   au('OptionSet', options, update_win_cache, 'Update window cache')
 
@@ -436,22 +445,20 @@ H.make_content_map = function(spec, click)
   end
 
   -- Prepare clicking data
-  local make_click = function(section)
+  local make_click = function(ltype, section)
     return function(_, n_clicks, button, modifiers)
-      -- NOTE: It would be great to be able to pass `ltype` (text, virt, wrap),
-      -- but it is not currently possible. Neither via different functions nor
-      -- via the same function but different `minwid`.
+      -- NOTE: `ltype` has proper values only on Neovim>=0.13
       -- See: https://github.com/neovim/neovim/issues/40210
-      local data = { n_clicks = n_clicks, button = button, modifiers = modifiers, section = section }
+      local data = { n_clicks = n_clicks, button = button, modifiers = modifiers, section = section, ltype = ltype }
       data.mousepos = vim.fn.getmousepos()
       click(data)
     end
   end
 
-  local with_click = function(section, section_content)
+  local with_click = function(ltype, section, section_content)
     if section_content == '' then return '' end
-    local click_name = '_click_' .. section
-    MiniStatuscolumn[click_name] = MiniStatuscolumn[click_name] or make_click(section)
+    local click_name = '_click_' .. ltype .. '_' .. section
+    MiniStatuscolumn[click_name] = MiniStatuscolumn[click_name] or make_click(ltype, section)
 
     return string.format('%%@v:lua.MiniStatuscolumn.%s@%s%%T', click_name, section_content)
   end
@@ -460,10 +467,10 @@ H.make_content_map = function(spec, click)
   local format_repl = { ['='] = '%=' }
   for _, win_map in pairs(map) do
     for pos, pos_map in pairs(win_map) do
-      for _, ltype_map in pairs(pos_map) do
-        format_repl.f = with_click('fold', ltype_map.fold)
-        format_repl.l = with_click('lnum', ltype_map.lnum)
-        format_repl.s = with_click('sign', ltype_map.sign)
+      for ltype, ltype_map in pairs(pos_map) do
+        format_repl.f = with_click(ltype, 'fold', ltype_map.fold)
+        format_repl.l = with_click(ltype, 'lnum', ltype_map.lnum)
+        format_repl.s = with_click(ltype, 'sign', ltype_map.sign)
         local content_str = ltype_map.format:gsub('[=fls]', format_repl)
 
         local content = {}
@@ -476,7 +483,7 @@ H.make_content_map = function(spec, click)
         for _, show_cur in ipairs({ false, true }) do
           local sep_hl = (pos == 'cursor' and show_cur) and '%#MiniStatuscolumnSepCursor#' or '%#MiniStatuscolumnSep#'
           local sep = ltype_map.sep == '' and '' or (sep_hl .. ltype_map.sep)
-          content[show_cur] = content_str .. with_click('sep', sep)
+          content[show_cur] = content_str .. with_click(ltype, 'sep', sep)
         end
         ltype_map.content = content
       end
