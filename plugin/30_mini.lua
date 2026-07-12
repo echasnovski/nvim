@@ -50,7 +50,8 @@ now(function()
   vim.api.nvim_set_hl(0, 'MiniStatuscolumnDimCursor', { link = 'CursorLineNr' })
 
   -- vim.o.foldcolumn = '1'
-  -- vim.cmd('set fillchars+=foldsep:\\  fillchars+=foldopen:🯘 fillchars+=foldclose:🮥 fillchars+=foldinner:\\ ')
+  vim.cmd('set fillchars+=foldsep:\\  fillchars+=foldopen:🯘 fillchars+=foldclose:🮥')
+  if vim.fn.has('nvim-0.12') == 1 then vim.cmd('set fillchars+=foldinner:\\ ') end
 end)
 
 now(function() require('mini.statusline').setup() end)

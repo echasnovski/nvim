@@ -13,9 +13,9 @@ now_if_args(function()
   -- Ensure installed
   --stylua: ignore
   local ensure_languages = {
-    'bash', 'c',          'cpp',  'css',   'diff', 'go',
-    'html', 'javascript', 'json', 'julia', 'nu',   'php', 'python',
-    'r',    'regex',      'rst',  'rust',  'toml', 'tsx', 'typescript', 'vhs', 'yaml',
+    'bash',       'c',    'cpp',   'css',  'diff', 'gitcommit',  'go',  'html',
+    'javascript', 'json', 'julia', 'nu',   'php',  'python',     'r',
+    'regex',      'rst',  'rust',  'toml', 'tsx',  'typescript', 'vhs', 'yaml',
   }
   local isnt_installed = function(lang) return #vim.api.nvim_get_runtime_file('parser/' .. lang .. '.*', false) == 0 end
   local to_install = vim.tbl_filter(isnt_installed, ensure_languages)

@@ -64,6 +64,16 @@ if vim.fn.has('nvim-0.12') == 1 then
   require('vim._core.ui2').enable({ enable = true })
 end
 
+if vim.fn.has('nvim-0.13') == 1 then
+  -- Try it out. Probably not a good idea since the "put" action has visible
+  -- side effects so the temporary highlight is more distracting than useful.
+  vim.cmd("autocmd TextPutPost * silent! lua vim.hl.hl_op()")
+
+  vim.o.shortmess = 'CFOSWacou' -- Add `u` flag to disable undo/redo messages
+
+  vim.o.updatetime = 200 -- Ensure fast `current_line` diagnostic renders
+end
+
 -- Editing ====================================================================
 vim.o.autoindent    = true       -- Use auto indent
 vim.o.expandtab     = true       -- Convert tabs to spaces
