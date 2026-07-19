@@ -17,7 +17,7 @@
       "src": "https://github.com/mason-org/mason.nvim"
     },
     "mini.nvim": {
-      "rev": "4171fba613b64ade9a28e198bd5b4fea5ba45e22",
+      "rev": "9459d7f41ae77d909579dab0aea2bdd3210fac9f",
       "src": "https://github.com/nvim-mini/mini.nvim"
     },
     "neoterm": {
@@ -25,15 +25,15 @@
       "src": "https://github.com/kassio/neoterm"
     },
     "nvim-lspconfig": {
-      "rev": "5955a100ae7155962330643924e21a798b9bdc91",
+      "rev": "e7ca2c95ba316a8b846d3f3546d407908c5c4ccb",
       "src": "https://github.com/neovim/nvim-lspconfig"
     },
     "nvim-treesitter": {
-      "rev": "4916d6592ede8c07973490d9322f187e07dfefac",
+      "rev": "24977147550d53589e53b874ec75e14e4fbc304e",
       "src": "https://github.com/nvim-treesitter/nvim-treesitter"
     },
     "nvim-treesitter-textobjects": {
-      "rev": "851e865342e5a4cb1ae23d31caf6e991e1c99f1e",
+      "rev": "43a2b80117af352f154bf1e4ce8e6763a51b1ad5",
       "src": "https://github.com/nvim-treesitter/nvim-treesitter-textobjects"
     },
     "vim-dispatch": {
