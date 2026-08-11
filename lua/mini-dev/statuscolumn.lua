@@ -77,7 +77,17 @@ end
 
 --- Defaults ~
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
----@text # Dim inactive windows ~
+---@text # Content ~
+---
+--- Notes:
+--- - Make sure that content functions are as fast as possible since they will
+---   be called VERY frequently: at least every redraw (after cursor move, typing
+---   character, etc) for every visible line in every visible window. A rough
+---   estimate: about 100 times per redraw and about 1 million times per hour
+---   of text editing.
+---
+--- # Dim inactive windows ~
+---
 --- Notes:
 --- - Enabling works best with appropriately "dimming" `MiniStatuscolumnDim`
 ---   and statuscolumn for inactive window being the same as for active.
@@ -158,45 +168,42 @@ MiniStatuscolumn.gen_content = {}
 ---      <mousepos>. For example, if wrapped and virtual lines are identified
 ---      by known symbols, it helps identifying clicking on those cases.
 MiniStatuscolumn.gen_content.main = function(spec, opts)
-  H.validate_content_spec(spec)
+  H.validate_main_content_spec(spec)
   opts = vim.tbl_extend('force', { click = MiniStatuscolumn.default_click }, opts or {})
   H.check_type('opts.click', opts.click, 'function')
 
-  -- Create content
-  local content_map = H.make_content_map(spec, opts.click)
-
-  -- TODO: Remove after doing benchmarks
-  _G.n_statuscolumn = 0
-  local win_get_cursor = vim.api.nvim_win_get_cursor
+  -- Force redraw when needed. Do not do it on every cursor move as it results
+  -- into flickering (like with 'mini.cursorword' highlighting word twice)
   local needs_redraw = {}
+  local get_current_win, _redraw = vim.api.nvim_get_current_win, vim.api.nvim__redraw
+  local redraw_stc = function()
+    if not needs_redraw[get_current_win()] then return end
+    _redraw({ win = get_current_win(), statuscolumn = true })
+    needs_redraw[get_current_win()] = false
+  end
+  local gr = vim.api.nvim_create_augroup('MiniStatuscolumnMain', {})
+  local au_opts = { group = gr, callback = redraw_stc, desc = 'Ensure redraw' }
+  vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, au_opts)
+
+  -- Pre-compute content map to later choose one of its string value in the
+  -- content function
+  local content_map = H.make_main_content_map(spec, opts.click)
+
+  local win_get_cursor = vim.api.nvim_win_get_cursor
   local make = function(win)
     return function(win_data)
-      _G.n_statuscolumn = _G.n_statuscolumn + 1
-
-      if win_data.is_empty then return '' end
+      if win_data.is_stc_empty then return '' end
       local pos = vim.v.relnum == 0 and 'cursor' or (vim.v.lnum < win_get_cursor(0)[1] and 'above' or 'below')
       local ltype = vim.v.virtnum == 0 and 'text' or (vim.v.virtnum < 0 and 'virt' or 'wrap')
-      -- Force redraw with cursor on virtual line or manually added cursor sep
-      -- highlighting will "stay" there when cursor is moved. It is because
-      -- 'statuscolumn' content is not recomputed on cursor move.
+      -- Force redraw with cursor next to the virtual line, otherwise manually
+      -- added cursor sep highlighting will "stay" there when cursor is moved.
+      -- It is because 'statuscolumn' content is not recomputed on cursor move.
       needs_redraw[win_data.win_id] = needs_redraw[win_data.win_id]
         or (win == 'active' and pos == 'cursor' and ltype == 'virt')
       -- Condition on `is_cursorlinenr` for a proper separator hl
       return content_map[win][pos][ltype].content[win_data.is_cursorlinenr]
     end
   end
-
-  -- Fore redraw when needed. Do not do it on every cursor move as it results
-  -- into flickering (like with 'mini.cursorword' highlighting word twice)
-  local gr = vim.api.nvim_create_augroup('MiniStatuscolumnMain', {})
-  local get_current_win, nvim__redraw = vim.api.nvim_get_current_win, vim.api.nvim__redraw
-  local redraw_stc = function()
-    if not needs_redraw[get_current_win()] then return end
-    nvim__redraw({ win = get_current_win(), statuscolumn = true })
-    needs_redraw[get_current_win()] = false
-  end
-  local au_opts = { group = gr, callback = redraw_stc, desc = 'Ensure redraw' }
-  vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, au_opts)
 
   return { active = make('active'), inactive = make('inactive') }
 end
@@ -210,18 +217,11 @@ MiniStatuscolumn.default_click = function(data)
   if not ok then return end
 
   if data.n_clicks == 2 then vim.cmd('normal! zz') end
-
-  -- TODO: Maybe act differently on folds (open/close), etc.
 end
 
 -- Helper data ================================================================
 -- Module default config
 H.default_config = vim.deepcopy(MiniStatuscolumn.config)
-
--- Namespaces
-H.ns_id = {
-  decor = vim.api.nvim_create_namespace('MiniStatuscolumnDecor'),
-}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -245,6 +245,7 @@ H.apply_config = function(config)
   local content = config.content
   if content.active == nil and content.inactive == nil then
     local default_spec = {
+      { fold = '%C', lnum = '%l', sign = '%s' },
       { format = '=lfs', sep = '▏' },
       { ltype = 'virt', lnum = '•' },
       { ltype = 'wrap', lnum = '↳' },
@@ -272,30 +273,13 @@ H.create_default_hl = function()
     vim.api.nvim_set_hl(0, name, opts)
   end
 
-  -- Make sure that `MiniStatuscolumnDim` is dimming out of the box
-  local linenr = vim.api.nvim_get_hl(0, { name = 'LineNr', link = false })
-  local normal = vim.api.nvim_get_hl(0, { name = 'Normal', link = false })
-  local fg, bg = linenr.fg or normal.fg, linenr.bg or normal.bg
-  if type(fg) == 'number' and type(bg) == 'number' then
-    local fg_b, bg_b = math.fmod(fg, 256), math.fmod(bg, 256)
-    local fg_g, bg_g = math.fmod((fg - fg_b) / 256, 256), math.fmod((bg - bg_b) / 256, 256)
-    local fg_r, bg_r = math.floor(fg / 65536), math.floor(bg / 65536)
-
-    local bl = 0.382
-    local bl_b = string.format('%02x', math.floor((bl * fg_b + (1 - bl) * bg_b)))
-    local bl_g = string.format('%02x', math.floor((bl * fg_g + (1 - bl) * bg_g)))
-    local bl_r = string.format('%02x', math.floor((bl * fg_r + (1 - bl) * bg_r)))
-    hi('MiniStatuscolumnDim', { fg = '#' .. bl_r .. bl_g .. bl_b, bg = bg })
-  else
-    hi('MiniStatuscolumnDim', { link = 'LineNr' })
-  end
-
+  H.ensure_dim_hl()
   hi('MiniStatuscolumnDimCursor', { link = 'MiniStatuscolumnDim' })
   hi('MiniStatuscolumnSep', { link = 'LineNr' })
   hi('MiniStatuscolumnSepCursor', { link = 'CursorLineNr' })
 end
 
--- Autocommands ---------------------------------------------------------------
+-- Dim ------------------------------------------------------------------------
 H.make_dim_inactive = function()
   -- Set automatic inactive highlight
   local inactive_winhl = {
@@ -321,25 +305,42 @@ H.make_dim_inactive = function()
 
   local ensure_dimmed = function()
     local cur_win_id = vim.api.nvim_get_current_win()
-    -- NOTE: Working with all visible windows instead of precisely per event
-    -- is more robust due to window-local options and window events nature
+    -- NOTE: Working with all visible windows instead of precisely per window
+    -- (inferred from the event data) is more robust due to window-local
+    -- options and window events nature
     for _, win_id in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
       local winhl_split = vim.split(vim.wo[win_id].winhighlight, ',')
       local new_winhl = table.concat(vim.tbl_filter(not_inactive_winhl, winhl_split), ',')
       if win_id ~= cur_win_id then new_winhl = new_winhl .. ((new_winhl == '' and '' or ',') .. inactive_winhl_str) end
-      vim.wo[win_id].winhighlight = new_winhl
+      vim.wo[win_id][0].winhighlight = new_winhl
     end
   end
 
   local gr = vim.api.nvim_create_augroup('MiniStatuscolumn', { clear = false })
 
-  -- NOTE: The `BufWinEnter` callback is executed with shown buffer is current
-  -- (even if it is not). This means that showing that buffer without visibly
-  -- changing windows can result in it highlighted as "active", when it is not.
-  -- So schedule in hope that this will not result in flickering.
+  -- NOTE: The `BufWinEnter` callback is called with entered buffer temporarily
+  -- made current. It means that showing that buffer without visibly changing
+  -- windows can result in it highlighted as "active", when it is not. Schedule
+  -- dimming for this event in hope that this will not result in flickering.
   vim.api.nvim_create_autocmd('WinEnter', { group = gr, callback = ensure_dimmed, desc = 'Ensure dimmed' })
   local ensure_dimmed_scheduled = vim.schedule_wrap(ensure_dimmed)
   vim.api.nvim_create_autocmd('BufWinEnter', { group = gr, callback = ensure_dimmed_scheduled, desc = 'Ensure dimmed' })
+end
+
+H.ensure_dim_hl = function()
+  local linenr = vim.api.nvim_get_hl(0, { name = 'LineNr', link = false })
+  local normal = vim.api.nvim_get_hl(0, { name = 'Normal', link = false })
+  local fg_num, bg_num = linenr.fg or normal.fg, linenr.bg or normal.bg
+  if type(fg_num) ~= 'number' or type(bg_num) ~= 'number' then
+    return vim.api.nvim_set_hl(0, 'MiniStatuscolumnDim', { link = 'LineNr' })
+  end
+
+  -- Make regular foreground a bit closer to the effective background
+  local fg, bg = string.format('%06x', fg_num), string.format('%06x', bg_num)
+  local mix = function(i, j) return 0.618 * tonumber(bg:sub(i, j), 16) + 0.382 * tonumber(fg:sub(i, j), 16) end
+  local fg_dim = string.format('#%02x%02x%02x', mix(1, 2), mix(3, 4), mix(5, 6))
+  -- NOTE: do not use `default=true` since it needs recomputation to be valid
+  vim.api.nvim_set_hl(0, 'MiniStatuscolumnDim', { fg = fg_dim, bg = '#' .. bg })
 end
 
 -- Content --------------------------------------------------------------------
@@ -354,7 +355,6 @@ H.make_statuscolumn_functions = function(active, inactive)
     vim.api.nvim_create_autocmd(event, { group = gr, pattern = pattern, callback = callback, desc = desc })
   end
 
-  -- TODO: Maybe a more granular update (for performance)?
   local win_cache = {}
   local update_win_cache = function()
     win_cache = {}
@@ -362,19 +362,17 @@ H.make_statuscolumn_functions = function(active, inactive)
       local cache = { buf_id = vim.api.nvim_win_get_buf(win_id), win_id = win_id }
 
       -- Relevant options
-      cache.cursorline = vim.wo[win_id].cursorline
-      cache.cursorlineopt = vim.wo[win_id].cursorlineopt
-      cache.foldcolumn = vim.wo[win_id].foldcolumn
-      cache.number = vim.wo[win_id].number
-      cache.relativenumber = vim.wo[win_id].relativenumber
-      cache.signcolumn = vim.wo[win_id].signcolumn
+      cache.opt_cursorline = vim.wo[win_id].cursorline
+      cache.opt_cursorlineopt = vim.wo[win_id].cursorlineopt
+      cache.opt_foldcolumn = vim.wo[win_id].foldcolumn
+      cache.opt_number = vim.wo[win_id].number
+      cache.opt_relativenumber = vim.wo[win_id].relativenumber
+      cache.opt_signcolumn = vim.wo[win_id].signcolumn
 
       -- Helpful indicators
-      cache.is_empty = eval_stl('%l%C%s', { winid = win_id, use_statuscol_lnum = 1 }).str == ''
-      -- TODO: Maybe rename to `is_cursorline_hl` if https://github.com/vim/vim/issues/20480
-      -- is closed as expected behavior
-      cache.is_cursorlinenr = cache.cursorline
-        and (cache.cursorlineopt:find('number') ~= nil or cache.cursorlineopt:find('both') ~= nil)
+      cache.is_stc_empty = eval_stl('%l%C%s', { winid = win_id, use_statuscol_lnum = 1 }).str == ''
+      cache.is_cursorlinenr = cache.opt_cursorline
+        and (cache.opt_cursorlineopt:find('number') ~= nil or cache.opt_cursorlineopt:find('both') ~= nil)
 
       win_cache[win_id] = cache
     end
@@ -395,7 +393,7 @@ H.make_statuscolumn_functions = function(active, inactive)
   MiniStatuscolumn.inactive = function() return inactive(get_curwin_cache()) end
 end
 
-H.validate_content_spec = function(x)
+H.validate_main_content_spec = function(x)
   H.check_array_of('spec', x, 'table')
   for i, s in ipairs(x) do
     local item = string.format('spec[%d]', i)
@@ -417,7 +415,7 @@ H.validate_content_spec = function(x)
   end
 end
 
-H.make_content_map = function(spec, click)
+H.make_main_content_map = function(spec, click)
   -- Gather array spec into a map ensuring default values
   spec = vim.deepcopy(spec)
   table.insert(spec, 1, { format = '=fsl', fold = '%C', lnum = '%l', sign = '%s', sep = ' ' })
@@ -447,10 +445,11 @@ H.make_content_map = function(spec, click)
   -- Prepare clicking data
   local make_click = function(ltype, section)
     return function(_, n_clicks, button, modifiers)
+      local data = { n_clicks = n_clicks, button = button, modifiers = modifiers }
+      data.mousepos = vim.fn.getmousepos()
       -- NOTE: `ltype` has proper values only on Neovim>=0.13
       -- See: https://github.com/neovim/neovim/issues/40210
-      local data = { n_clicks = n_clicks, button = button, modifiers = modifiers, section = section, ltype = ltype }
-      data.mousepos = vim.fn.getmousepos()
+      data.section, data.ltype = section, ltype
       click(data)
     end
   end
@@ -509,15 +508,10 @@ H.check_one_of = function(name, x, choices)
 end
 
 H.check_array_of = function(name, x, ref_type)
-  if not H.islist(x) then H.error('`' .. name .. '` should be array') end
+  if not vim.islist(x) then H.error('`' .. name .. '` should be array') end
   for i, k in ipairs(x) do
     if type(k) ~= ref_type then H.error('Every `' .. name .. '` item should be ' .. ref_type) end
   end
 end
-
-H.notify = function(msg, level_name) vim.notify('(mini.statuscolumn) ' .. msg, vim.log.levels[level_name]) end
-
--- TODO: Remove after compatibility with Neovim=0.9 is dropped
-H.islist = vim.fn.has('nvim-0.10') == 1 and vim.islist or vim.tbl_islist
 
 return MiniStatuscolumn

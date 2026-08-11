@@ -1,0 +1,23 @@
+--|---------|---------|---------|---------
+01|ict|uuu  │aat|uuu  │iat|uuu  │iat|uuu  
+02|ibt|vvv  │act|vvv  │iat|vvv  │iat|vvv  
+03|ibt|www  │abt|www  │ict|www  │iat|www  
+04|ibv|VIR  │abv|VIR  │icv|VIR  │iav|VIR  
+05|ibt|xxxxx│abt|xxxxx│ibt|xxxxx│ict|xxxxx
+06|ibw|xxxx │abw|xxxx │ibw|xxxx │icw|xxxx 
+07|~        │~        │~        │~        
+08|~        │~        │~        │~        
+09|~        │~        │~        │~        
+10|                                       
+
+--|---------|---------|---------|---------
+01|000011122345678889931111111223111111122
+02|1111000223:;<=>>>9931111000223111100022
+03|11112222234?679999930000222223111122222
+04|1111@@@2234?67AAA9930000@@@2231111@@@22
+05|11112222234B679999931111222223000022222
+06|11112222234B679999931111222223000022222
+07|CCCCCCCCC3DDDDDDDDD3CCCCCCCCC3CCCCCCCCC
+08|CCCCCCCCC3DDDDDDDDD3CCCCCCCCC3CCCCCCCCC
+09|CCCCCCCCC3DDDDDDDDD3CCCCCCCCC3CCCCCCCCC
+10|222222222222222222222222222222222222222
