@@ -184,6 +184,12 @@ local mock_dim_test_content = function()
   ]])
 end
 
+local n_different_attr = 0
+local set_unique_hl = function(hl_group)
+  n_different_attr = n_different_attr + 1
+  child.api.nvim_set_hl(0, hl_group, { fg = string.format('#%06x', n_different_attr) })
+end
+
 T['Dim'] = new_set({
   hooks = {
     pre_case = function()
@@ -200,25 +206,22 @@ T['Dim'] = new_set({
       child.api.nvim_buf_set_extmark(0, ns_id, 2, 0, { virt_lines = { { { 'VIR', 'String' } } } })
 
       -- Ensure visually distinctive highlight groups that are getting dimmed
-      local n = 0
-      local ensure_different_attr = function(hl_group)
-        n = n + 1
-        child.api.nvim_set_hl(0, hl_group, { fg = string.format('#%06x', n) })
-      end
+      child.cmd('hi clear')
+      n_different_attr = 0
 
-      ensure_different_attr('MiniStatuscolumnDim')
-      ensure_different_attr('MiniStatuscolumnDimCursor')
+      set_unique_hl('MiniStatuscolumnDim')
+      set_unique_hl('MiniStatuscolumnDimCursor')
 
-      ensure_different_attr('CursorLineFold')
-      ensure_different_attr('CursorLineNr')
-      ensure_different_attr('CursorLineSign')
-      ensure_different_attr('FoldColumn')
-      ensure_different_attr('LineNr')
-      ensure_different_attr('LineNrAbove')
-      ensure_different_attr('LineNrBelow')
-      ensure_different_attr('SignColumn')
-      ensure_different_attr('MiniStatuscolumnSep')
-      ensure_different_attr('MiniStatuscolumnSepCursor')
+      set_unique_hl('CursorLineFold')
+      set_unique_hl('CursorLineNr')
+      set_unique_hl('CursorLineSign')
+      set_unique_hl('FoldColumn')
+      set_unique_hl('LineNr')
+      set_unique_hl('LineNrAbove')
+      set_unique_hl('LineNrBelow')
+      set_unique_hl('SignColumn')
+      set_unique_hl('MiniStatuscolumnSep')
+      set_unique_hl('MiniStatuscolumnSepCursor')
     end,
   },
 })
@@ -259,9 +262,44 @@ T['Dim']['works when showing buffer in inactive window'] = function()
   child.cmd('vsplit')
 
   local buf_id_other = child.api.nvim_create_buf(false, true)
-  child.api.nvim_buf_set_lines(buf_id_other, 0, -1, false, { 'other', 'buf' })
+  child.api.nvim_buf_set_lines(buf_id_other, 0, -1, false, { 'other', 'buf', 'lines' })
   child.api.nvim_win_set_buf(0, buf_id_other)
   child.api.nvim_win_set_buf(win_id_other, buf_id_other)
+  child.expect_screenshot()
+end
+
+T['Dim']['keeps highlights from extmarks'] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Highlighting on Neovim<0.11 is correct but a bit different') end
+
+  child.lua('require("mini-dev.statuscolumn").setup({ content = MiniStatuscolumn.gen_content.main() })')
+  child.o.number = true
+  child.o.numberwidth = 1
+  child.o.cursorline = true
+  child.o.cursorlineopt = 'number'
+  child.o.signcolumn = 'yes'
+  child.o.laststatus = 2
+  child.o.statusline = '%{%nvim_get_current_win()==#g:actual_curwin ? "active" : "inactive"%}'
+
+  set_lines({ 'uuu', 'vvv', 'www', 'xxx' })
+  local ns_id = child.api.nvim_create_namespace('test')
+  local dim_hl, dim_cur_hl = 'MiniStatuscolumnDim', 'MiniStatuscolumnDimCursor'
+  child.api.nvim_buf_set_extmark(0, ns_id, 0, 0, { end_row = 1, end_col = 0, hl_group = dim_hl })
+  child.api.nvim_buf_set_extmark(0, ns_id, 1, 0, { end_row = 2, end_col = 0, hl_group = dim_cur_hl })
+
+  -- Highlighting that was set from extmarks should not be dimmed
+  set_unique_hl('AAA')
+  set_unique_hl('BBB')
+  set_unique_hl('CCC')
+  local sign_extmark_opts = { sign_text = 'S', sign_hl_group = 'AAA', cursorline_hl_group = 'BBB' }
+  child.api.nvim_buf_set_extmark(0, ns_id, 0, 0, sign_extmark_opts)
+  child.api.nvim_buf_set_extmark(0, ns_id, 1, 0, { number_hl_group = 'CCC' })
+
+  local win_id_other = child.api.nvim_get_current_win()
+  child.cmd('vsplit')
+  child.expect_screenshot()
+
+  child.api.nvim_win_set_cursor(win_id_other, { 4, 0 })
+  child.cmd('redraw!')
   child.expect_screenshot()
 end
 

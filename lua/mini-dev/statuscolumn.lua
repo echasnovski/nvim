@@ -154,7 +154,7 @@ MiniStatuscolumn.gen_content = {}
 --- - Force highlighting: `{ pos='cursor', ltype='virt', lnum='%#CursorLineNr#•' }`.
 ---   Has problems that it overrides highlighting from extmarks.
 ---
----@param spec table[] Specification array.
+---@param spec table[]|nil Specification array. Default: `{}`.
 ---@param opts table|nil Options. Possible fields:
 ---   - <click> `(function)` - action to perform on mouse click in statuscolumn.
 ---     Will be called with ... TODO:
@@ -168,6 +168,7 @@ MiniStatuscolumn.gen_content = {}
 ---      <mousepos>. For example, if wrapped and virtual lines are identified
 ---      by known symbols, it helps identifying clicking on those cases.
 MiniStatuscolumn.gen_content.main = function(spec, opts)
+  spec = spec or {}
   H.validate_main_content_spec(spec)
   opts = vim.tbl_extend('force', { click = MiniStatuscolumn.default_click }, opts or {})
   H.check_type('opts.click', opts.click, 'function')
