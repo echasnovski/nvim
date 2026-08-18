@@ -4,16 +4,11 @@ local child = helpers.new_child_neovim()
 local expect, eq = helpers.expect, helpers.expect.equality
 local new_set = MiniTest.new_set
 
-local slash = helpers.is_windows() and '\\' or '/'
-
 -- Helpers with child processes
 --stylua: ignore start
 local load_module = function(config) child.mini_load('statuscolumn', config) end
 local set_cursor = function(...) return child.set_cursor(...) end
-local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
-local get_lines = function(...) return child.get_lines(...) end
-local type_keys = function(...) return child.type_keys(...) end
 local sleep = function(ms) helpers.sleep(ms, child) end
 --stylua: ignore end
 
@@ -23,11 +18,8 @@ local forward_lua = function(fun_str)
   return function(...) return child.lua_get(lua_cmd, { ... }) end
 end
 
--- Common validators
-local validate_log = function(name, ref, preserve)
-  eq(child.lua_get(name), ref)
-  if not preserve then child.lua(name .. ' = {}') end
-end
+-- Time constants
+local term_mode_wait = helpers.get_time_const(50)
 
 -- Output test set ============================================================
 local T = new_set({
@@ -303,8 +295,189 @@ T['Dim']['keeps highlights from extmarks'] = function()
   child.expect_screenshot()
 end
 
-T['Content'] = new_set()
+T['Content'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.set_size(10, 20)
+      child.lua([[
+        local make_content = function(log_name, res)
+          return function(...)
+            local v = { lnum = vim.v.lnum, relnum = vim.v.relnum, virtnum = vim.v.virtnum }
+            table.insert(_G[log_name], { args = { ... }, v = v })
+            return res
+          end
+        end
+        _G.log_active, _G.log_inactive = {}, {}
+        require('mini-dev.statuscolumn').setup({
+          content = {
+            active = make_content('log_active', 'act'),
+            inactive = make_content('log_inactive', 'ina'),
+          },
+        })
+      ]])
+    end,
+  },
+})
 
-T['Content']['works'] = function() MiniTest.skip() end
+local get_content_args = function(win_type)
+  local log_tbl = '_G.log_' .. win_type
+  child.lua(log_tbl .. ' = {}')
+  child.cmd('redraw!')
+  return child.lua_get(log_tbl .. '[1].args[1]')
+end
+
+local setup_two_windows = function()
+  local win_id_inactive = child.api.nvim_get_current_win()
+  local buf_id_inactive = child.api.nvim_create_buf(true, false)
+  child.api.nvim_win_set_buf(win_id_inactive, buf_id_inactive)
+  set_lines({ 'one', 'twoooooooo' })
+  local ns_id = child.api.nvim_create_namespace('test')
+  child.api.nvim_buf_set_extmark(0, ns_id, 1, 0, { virt_lines = { { { 'VIR', 'String' } } } })
+
+  child.cmd('wincmd v | enew')
+  set_lines({ 'ONE', 'TWO', 'THREE' })
+  return {
+    active = { buf_id = child.api.nvim_get_current_buf(), win_id = child.api.nvim_get_current_win() },
+    inactive = { buf_id = buf_id_inactive, win_id = win_id_inactive },
+  }
+end
+
+T['Content']['works'] = function()
+  local layout = setup_two_windows()
+  child.lua('_G.log_active, _G.log_inactive = {}, {}')
+  child.cmd('redraw!')
+
+  local get_win_option = function(win_id, option_name)
+    return child.api.nvim_get_option_value(option_name, { scope = 'local', win = win_id })
+  end
+
+  -- Content function should be called once per drawn line
+  local win_active = layout.active.win_id
+  local ref_args_active = {
+    buf_id = layout.active.buf_id,
+    is_cursorlinenr = false,
+    is_stc_empty = true,
+    opt_cursorline = get_win_option(win_active, 'cursorline'),
+    opt_cursorlineopt = get_win_option(win_active, 'cursorlineopt'),
+    opt_foldcolumn = get_win_option(win_active, 'foldcolumn'),
+    opt_number = get_win_option(win_active, 'number'),
+    opt_relativenumber = get_win_option(win_active, 'relativenumber'),
+    opt_signcolumn = get_win_option(win_active, 'signcolumn'),
+    win_id = win_active,
+  }
+  local ref_log_active = {
+    { args = { ref_args_active }, v = { lnum = 1, relnum = 0, virtnum = 0 } },
+    { args = { ref_args_active }, v = { lnum = 2, relnum = 1, virtnum = 0 } },
+    { args = { ref_args_active }, v = { lnum = 3, relnum = 2, virtnum = 0 } },
+  }
+  eq(child.lua_get('_G.log_active'), ref_log_active)
+
+  local win_inactive = layout.inactive.win_id
+  local ref_args_inactive = vim.deepcopy(ref_args_active)
+  ref_args_inactive.buf_id = layout.inactive.buf_id
+  ref_args_inactive.win_id = win_inactive
+  local ref_log_inactive = {
+    { args = { ref_args_inactive }, v = { lnum = 1, relnum = 0, virtnum = 0 } },
+    { args = { ref_args_inactive }, v = { lnum = 2, relnum = 1, virtnum = 0 } },
+    { args = { ref_args_inactive }, v = { lnum = 2, relnum = 1, virtnum = 1 } },
+    { args = { ref_args_inactive }, v = { lnum = 2, relnum = 1, virtnum = -1 } },
+  }
+  eq(child.lua_get('_G.log_inactive'), ref_log_inactive)
+end
+
+T['Content']['reacts to option changes'] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with detecting empty statusline') end
+
+  local layout = setup_two_windows()
+  local validate_single = function(win_type, option_name, option_value, args_changes)
+    local before = get_content_args(win_type)
+    child.api.nvim_set_option_value(option_name, option_value, { scope = 'local', win = layout[win_type].win_id })
+    local after = get_content_args(win_type)
+
+    eq(after, vim.tbl_extend('force', before, args_changes))
+  end
+
+  local validate_win = function(win_type)
+    validate_single(win_type, 'cursorline', true, { is_cursorlinenr = true, opt_cursorline = true })
+    validate_single(win_type, 'cursorlineopt', 'line', { is_cursorlinenr = false, opt_cursorlineopt = 'line' })
+    validate_single(win_type, 'foldcolumn', '1', { is_stc_empty = false, opt_foldcolumn = '1' })
+    validate_single(win_type, 'foldcolumn', '0', { is_stc_empty = true, opt_foldcolumn = '0' })
+    validate_single(win_type, 'number', true, { is_stc_empty = false, opt_number = true })
+    validate_single(win_type, 'number', false, { is_stc_empty = true, opt_number = false })
+    validate_single(win_type, 'relativenumber', true, { is_stc_empty = false, opt_relativenumber = true })
+    validate_single(win_type, 'relativenumber', false, { is_stc_empty = true, opt_relativenumber = false })
+    validate_single(win_type, 'signcolumn', 'yes', { is_stc_empty = false, opt_signcolumn = 'yes' })
+    validate_single(win_type, 'signcolumn', 'no', { is_stc_empty = true, opt_signcolumn = 'no' })
+  end
+
+  validate_win('active')
+  validate_win('inactive')
+end
+
+T['Content']['reacts to buf/win changes'] = function()
+  local layout = setup_two_windows()
+  local ref
+
+  -- Window focus change
+  ref = get_content_args('active')
+  child.api.nvim_set_current_win(layout.inactive.win_id)
+  ref.buf_id, ref.win_id = layout.inactive.buf_id, layout.inactive.win_id
+  eq(get_content_args('active'), ref)
+
+  ref = get_content_args('inactive')
+  child.api.nvim_set_current_win(layout.active.win_id)
+  ref.buf_id, ref.win_id = layout.inactive.buf_id, layout.inactive.win_id
+  eq(get_content_args('inactive'), ref)
+
+  -- Showing new buffer in a window
+  ref = get_content_args('active')
+  ref.buf_id = child.api.nvim_create_buf(false, true)
+  child.api.nvim_win_set_buf(layout.active.win_id, ref.buf_id)
+  eq(get_content_args('active'), ref)
+
+  ref = get_content_args('inactive')
+  ref.buf_id = child.api.nvim_create_buf(false, true)
+  child.api.nvim_win_set_buf(layout.inactive.win_id, ref.buf_id)
+  eq(get_content_args('inactive'), ref)
+
+  -- New window
+  ref = get_content_args('active')
+  child.cmd('wincmd v')
+  ref.win_id = child.api.nvim_get_current_win()
+  eq(get_content_args('active'), ref)
+
+  child.lua('_G.win_id = ' .. layout.inactive.win_id)
+  local new_win_id = child.lua([[
+    return vim.api.nvim_win_call(_G.win_id, function()
+      vim.cmd('wincmd v')
+      return vim.api.nvim_get_current_win()
+    end)
+  ]])
+  local all_win_inactive = {}
+  for _, t in ipairs(child.lua_get('_G.log_inactive')) do
+    all_win_inactive[t.args[1].win_id] = true
+  end
+  -- NOTE: The window that was active in initial layout is now inactive
+  eq(all_win_inactive, { [layout.inactive.win_id] = true, [layout.active.win_id] = true, [new_win_id] = true })
+end
+
+T['Content']['reacts to starting a terminal'] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with detecting empty statusline') end
+  helpers.skip_on_windows('Terminal emulator testing is not robust/easy on Windows')
+  helpers.skip_on_macos('Terminal emulator testing is not robust/easy on MacOS')
+
+  -- Special options auto-set by `:terminal` should be shown in content args
+  child.o.number = true
+  child.o.signcolumn = 'yes'
+  local ref = get_content_args('active')
+
+  child.cmd('terminal! bash --noprofile --norc')
+  sleep(term_mode_wait)
+
+  ref.opt_number = false
+  ref.opt_signcolumn = 'no'
+  ref.is_stc_empty = true
+  eq(get_content_args('active'), ref)
+end
 
 return T

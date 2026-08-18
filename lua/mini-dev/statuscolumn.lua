@@ -378,7 +378,7 @@ H.make_statuscolumn_functions = function(active, inactive)
       win_cache[win_id] = cache
     end
   end
-  au({ 'BufWinEnter', 'WinNew', 'TermOpen' }, '*', update_win_cache, 'Update window cache')
+  au({ 'BufWinEnter', 'TermOpen' }, '*', update_win_cache, 'Update window cache')
   local options = { 'cursorline', 'cursorlineopt', 'foldcolumn', 'number', 'relativenumber', 'signcolumn' }
   au('OptionSet', options, update_win_cache, 'Update window cache')
 
