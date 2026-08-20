@@ -18,6 +18,10 @@ local forward_lua = function(fun_str)
   return function(...) return child.lua_get(lua_cmd, { ... }) end
 end
 
+local set_win_option = function(win_id, name, value)
+  child.api.nvim_set_option_value(name, value, { scope = 'local', win = win_id })
+end
+
 -- Time constants
 local term_mode_wait = helpers.get_time_const(50)
 
@@ -182,6 +186,25 @@ local set_unique_hl = function(hl_group)
   child.api.nvim_set_hl(0, hl_group, { fg = string.format('#%06x', n_different_attr) })
 end
 
+local set_statuscol_unique_hl = function()
+  child.cmd('hi clear')
+  n_different_attr = 0
+
+  set_unique_hl('MiniStatuscolumnDim')
+  set_unique_hl('MiniStatuscolumnDimCursor')
+
+  set_unique_hl('CursorLineFold')
+  set_unique_hl('CursorLineNr')
+  set_unique_hl('CursorLineSign')
+  set_unique_hl('FoldColumn')
+  set_unique_hl('LineNr')
+  set_unique_hl('LineNrAbove')
+  set_unique_hl('LineNrBelow')
+  set_unique_hl('SignColumn')
+  set_unique_hl('MiniStatuscolumnSep')
+  set_unique_hl('MiniStatuscolumnSepCursor')
+end
+
 T['Dim'] = new_set({
   hooks = {
     pre_case = function()
@@ -198,22 +221,7 @@ T['Dim'] = new_set({
       child.api.nvim_buf_set_extmark(0, ns_id, 2, 0, { virt_lines = { { { 'VIR', 'String' } } } })
 
       -- Ensure visually distinctive highlight groups that are getting dimmed
-      child.cmd('hi clear')
-      n_different_attr = 0
-
-      set_unique_hl('MiniStatuscolumnDim')
-      set_unique_hl('MiniStatuscolumnDimCursor')
-
-      set_unique_hl('CursorLineFold')
-      set_unique_hl('CursorLineNr')
-      set_unique_hl('CursorLineSign')
-      set_unique_hl('FoldColumn')
-      set_unique_hl('LineNr')
-      set_unique_hl('LineNrAbove')
-      set_unique_hl('LineNrBelow')
-      set_unique_hl('SignColumn')
-      set_unique_hl('MiniStatuscolumnSep')
-      set_unique_hl('MiniStatuscolumnSepCursor')
+      set_statuscol_unique_hl()
     end,
   },
 })
@@ -356,7 +364,9 @@ T['Content']['works'] = function()
   local ref_args_active = {
     buf_id = layout.active.buf_id,
     is_cursorlinenr = false,
-    is_stc_empty = true,
+    is_foldcolumn_fixed = true,
+    is_signcolumn_fixed = false,
+    is_statuscolumn_empty = true,
     opt_cursorline = get_win_option(win_active, 'cursorline'),
     opt_cursorlineopt = get_win_option(win_active, 'cursorlineopt'),
     opt_foldcolumn = get_win_option(win_active, 'foldcolumn'),
@@ -383,35 +393,6 @@ T['Content']['works'] = function()
     { args = { ref_args_inactive }, v = { lnum = 2, relnum = 1, virtnum = -1 } },
   }
   eq(child.lua_get('_G.log_inactive'), ref_log_inactive)
-end
-
-T['Content']['reacts to option changes'] = function()
-  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with detecting empty statusline') end
-
-  local layout = setup_two_windows()
-  local validate_single = function(win_type, option_name, option_value, args_changes)
-    local before = get_content_args(win_type)
-    child.api.nvim_set_option_value(option_name, option_value, { scope = 'local', win = layout[win_type].win_id })
-    local after = get_content_args(win_type)
-
-    eq(after, vim.tbl_extend('force', before, args_changes))
-  end
-
-  local validate_win = function(win_type)
-    validate_single(win_type, 'cursorline', true, { is_cursorlinenr = true, opt_cursorline = true })
-    validate_single(win_type, 'cursorlineopt', 'line', { is_cursorlinenr = false, opt_cursorlineopt = 'line' })
-    validate_single(win_type, 'foldcolumn', '1', { is_stc_empty = false, opt_foldcolumn = '1' })
-    validate_single(win_type, 'foldcolumn', '0', { is_stc_empty = true, opt_foldcolumn = '0' })
-    validate_single(win_type, 'number', true, { is_stc_empty = false, opt_number = true })
-    validate_single(win_type, 'number', false, { is_stc_empty = true, opt_number = false })
-    validate_single(win_type, 'relativenumber', true, { is_stc_empty = false, opt_relativenumber = true })
-    validate_single(win_type, 'relativenumber', false, { is_stc_empty = true, opt_relativenumber = false })
-    validate_single(win_type, 'signcolumn', 'yes', { is_stc_empty = false, opt_signcolumn = 'yes' })
-    validate_single(win_type, 'signcolumn', 'no', { is_stc_empty = true, opt_signcolumn = 'no' })
-  end
-
-  validate_win('active')
-  validate_win('inactive')
 end
 
 T['Content']['reacts to buf/win changes'] = function()
@@ -476,8 +457,153 @@ T['Content']['reacts to starting a terminal'] = function()
 
   ref.opt_number = false
   ref.opt_signcolumn = 'no'
-  ref.is_stc_empty = true
+  ref.is_statuscolumn_empty = true
   eq(get_content_args('active'), ref)
+end
+
+T['Content']['reacts to option changes'] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with detecting empty statusline') end
+
+  child.o.number = false
+  child.o.foldcolumn = '0'
+  child.o.signcolumn = 'auto'
+
+  local layout = setup_two_windows()
+  local validate_single = function(win_type, option_name, option_value, args_changes)
+    local before = get_content_args(win_type)
+    set_win_option(layout[win_type].win_id, option_name, option_value)
+    local after = get_content_args(win_type)
+
+    eq(after, vim.tbl_extend('force', before, args_changes))
+  end
+
+  --stylua: ignore
+  local validate_win = function(win_type)
+    validate_single(win_type, 'cursorline', true, { is_cursorlinenr = true, opt_cursorline = true })
+    validate_single(win_type, 'cursorlineopt', 'line', { is_cursorlinenr = false, opt_cursorlineopt = 'line' })
+    validate_single(win_type, 'foldcolumn', '1', { is_statuscolumn_empty = false, opt_foldcolumn = '1' })
+    validate_single(win_type, 'foldcolumn', 'auto', { is_statuscolumn_empty = true, is_foldcolumn_fixed = false, opt_foldcolumn = 'auto' })
+    validate_single(win_type, 'foldcolumn', 'auto:1', { opt_foldcolumn = 'auto:1' })
+    validate_single(win_type, 'foldcolumn', '0', { is_statuscolumn_empty = true, is_foldcolumn_fixed = true, opt_foldcolumn = '0' })
+    validate_single(win_type, 'number', true, { is_statuscolumn_empty = false, opt_number = true })
+    validate_single(win_type, 'number', false, { is_statuscolumn_empty = true, opt_number = false })
+    validate_single(win_type, 'relativenumber', true, { is_statuscolumn_empty = false, opt_relativenumber = true })
+    validate_single(win_type, 'relativenumber', false, { is_statuscolumn_empty = true, opt_relativenumber = false })
+    validate_single(win_type, 'signcolumn', 'auto:1', { opt_signcolumn = 'auto:1' })
+    validate_single(win_type, 'signcolumn', 'number', { opt_signcolumn = 'number' })
+    validate_single(win_type, 'signcolumn', 'yes', { is_statuscolumn_empty = false, is_signcolumn_fixed = true, opt_signcolumn = 'yes' })
+    validate_single(win_type, 'signcolumn', 'no', { is_statuscolumn_empty = true, opt_signcolumn = 'no' })
+    validate_single(win_type, 'signcolumn', 'auto', { is_signcolumn_fixed = false, opt_signcolumn = 'auto' })
+  end
+
+  validate_win('active')
+  validate_win('inactive')
+end
+
+T['Content']['tracks non-fixed signcolumn'] = function()
+  local layout = setup_two_windows()
+  local ns_id = child.api.nvim_create_namespace('test')
+
+  local validate_single = function(win_type, ref_empty)
+    eq(get_content_args(win_type).is_statuscolumn_empty, ref_empty)
+
+    -- Adding sign to any enabled sign column makes statuscolumn non-empty
+    child.api.nvim_buf_set_extmark(layout[win_type].buf_id, ns_id, 1, 0, { sign_text = 'S' })
+    local signcolumn = child.api.nvim_get_option_value('signcolumn', { scope = 'local', win = layout[win_type].win_id })
+    eq(get_content_args(win_type).is_statuscolumn_empty, signcolumn == 'no')
+
+    -- Removing all signs makes statuscolumn empty for non-fixed sign column
+    child.api.nvim_buf_clear_namespace(layout[win_type].buf_id, ns_id, 0, -1)
+    eq(get_content_args(win_type).is_statuscolumn_empty, ref_empty)
+  end
+
+  local validate = function(signcolumn, ref_fixed, ref_empty)
+    set_win_option(layout.active.win_id, 'signcolumn', signcolumn)
+    eq(get_content_args('active').is_signcolumn_fixed, ref_fixed)
+    validate_single('active', ref_empty)
+
+    set_win_option(layout.inactive.win_id, 'signcolumn', signcolumn)
+    eq(get_content_args('inactive').is_signcolumn_fixed, ref_fixed)
+    validate_single('inactive', ref_empty)
+  end
+
+  validate('auto', false, true)
+  validate('auto:1', false, true)
+  validate('yes', true, false)
+  validate('no', true, true)
+  validate('number', false, true)
+end
+
+T['Content']['tracks non-fixed foldcolumn'] = function()
+  local layout = setup_two_windows()
+
+  local validate_single = function(win_type, ref_empty)
+    eq(get_content_args(win_type).is_statuscolumn_empty, ref_empty)
+    child.lua('_G.win_id = ' .. layout[win_type].win_id)
+
+    -- Adding fold to any enabled fold column makes statuscolumn non-empty
+    child.lua('vim.api.nvim_win_call(_G.win_id, function() vim.cmd("1,2fold") end)')
+    local foldcolumn = child.api.nvim_get_option_value('foldcolumn', { scope = 'local', win = layout[win_type].win_id })
+    eq(get_content_args(win_type).is_statuscolumn_empty, foldcolumn == '0')
+
+    -- Removing all folds makes statuscolumn empty for non-fixed fold column
+    child.lua('vim.api.nvim_win_call(_G.win_id, function() vim.cmd("normal! zd") end)')
+    eq(get_content_args(win_type).is_statuscolumn_empty, ref_empty)
+  end
+
+  local validate = function(foldcolumn, ref_fixed, ref_empty)
+    set_win_option(layout.active.win_id, 'foldcolumn', foldcolumn)
+    eq(get_content_args('active').is_foldcolumn_fixed, ref_fixed)
+    validate_single('active', ref_empty)
+
+    set_win_option(layout.inactive.win_id, 'foldcolumn', foldcolumn)
+    eq(get_content_args('inactive').is_foldcolumn_fixed, ref_fixed)
+    validate_single('inactive', ref_empty)
+  end
+
+  validate('auto', false, true)
+  validate('auto:1', false, true)
+  validate('0', true, true)
+  validate('1', true, false)
+end
+
+T['Content']['draws correct width after its change'] = function()
+  child.lua([[
+    require('mini-dev.statuscolumn').setup({
+      content = {
+        active = function(win_data) return win_data.is_statuscolumn_empty and '' or 'act|' end,
+        inactive = function(win_data) return win_data.is_statuscolumn_empty and '' or 'ina|' end,
+      }
+    })
+  ]])
+
+  child.o.signcolumn, child.o.foldcolumn = 'auto', 'auto'
+  local layout = setup_two_windows()
+  child.lua('_G.win_inactive = ' .. layout.inactive.win_id)
+  local ns_id = child.api.nvim_create_namespace('sign')
+  local expect_screenshot = function() child.expect_screenshot({ redraw = false }) end
+
+  -- Sign column
+  child.api.nvim_buf_set_extmark(layout.active.buf_id, ns_id, 1, 0, { sign_text = 'S' })
+  expect_screenshot()
+  child.api.nvim_buf_set_extmark(layout.inactive.buf_id, ns_id, 1, 0, { sign_text = 'I' })
+  expect_screenshot()
+
+  child.api.nvim_buf_clear_namespace(layout.active.buf_id, ns_id, 0, -1)
+  expect_screenshot()
+  child.api.nvim_buf_clear_namespace(layout.inactive.buf_id, ns_id, 0, -1)
+  expect_screenshot()
+
+  -- Fold column
+  child.cmd('1,2fold')
+  expect_screenshot()
+  child.lua('vim.api.nvim_win_call(_G.win_inactive, function() vim.cmd("1,2fold") end)')
+  expect_screenshot()
+
+  child.cmd('normal! zd')
+  expect_screenshot()
+  child.lua('vim.api.nvim_win_call(_G.win_inactive, function() vim.cmd("normal! zd") end)')
+  expect_screenshot()
 end
 
 return T

@@ -193,7 +193,7 @@ MiniStatuscolumn.gen_content.main = function(spec, opts)
   local win_get_cursor = vim.api.nvim_win_get_cursor
   local make = function(win)
     return function(win_data)
-      if win_data.is_stc_empty then return '' end
+      if win_data.is_statuscolumn_empty then return '' end
       local pos = vim.v.relnum == 0 and 'cursor' or (vim.v.lnum < win_get_cursor(0)[1] and 'above' or 'below')
       local ltype = vim.v.virtnum == 0 and 'text' or (vim.v.virtnum < 0 and 'virt' or 'wrap')
       -- Force redraw with cursor next to the virtual line, otherwise manually
@@ -223,6 +223,11 @@ end
 -- Helper data ================================================================
 -- Module default config
 H.default_config = vim.deepcopy(MiniStatuscolumn.config)
+
+-- Namespaces
+H.ns_id = {
+  track = vim.api.nvim_create_namespace('MiniStatuscolumnTrack'),
+}
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -349,6 +354,9 @@ H.make_statuscolumn_functions = function(active, inactive)
   -- Local helpers to not do extra `vim.api` table lookups
   local get_cur_win = vim.api.nvim_get_current_win
   local eval_stl = vim.api.nvim_eval_statusline
+  local get_statuscolumn_string = function(win_id, lnum)
+    return eval_stl('%l%C%s', { winid = win_id, use_statuscol_lnum = 1 }).str
+  end
 
   -- Set up window data caching
   local gr = vim.api.nvim_create_augroup('MiniStatuscolumnWinCache', {})
@@ -371,27 +379,50 @@ H.make_statuscolumn_functions = function(active, inactive)
       cache.opt_signcolumn = vim.wo[win_id].signcolumn
 
       -- Helpful indicators
-      cache.is_stc_empty = eval_stl('%l%C%s', { winid = win_id, use_statuscol_lnum = 1 }).str == ''
+      cache.is_signcolumn_fixed = cache.opt_signcolumn:sub(2, 2) ~= 'u'
+      cache.is_foldcolumn_fixed = cache.opt_foldcolumn:sub(2, 2) ~= 'u'
+      cache.is_statuscolumn_empty = get_statuscolumn_string(win_id, 1) == ''
       cache.is_cursorlinenr = cache.opt_cursorline
         and (cache.opt_cursorlineopt:find('number') ~= nil or cache.opt_cursorlineopt:find('both') ~= nil)
 
       win_cache[win_id] = cache
     end
   end
-  au({ 'BufWinEnter', 'TermOpen' }, '*', update_win_cache, 'Update window cache')
-  local options = { 'cursorline', 'cursorlineopt', 'foldcolumn', 'number', 'relativenumber', 'signcolumn' }
-  au('OptionSet', options, update_win_cache, 'Update window cache')
 
-  -- Define exported functions for active and inactive windows
-  local get_curwin_cache = function()
-    local win_id = get_cur_win()
+  local get_win_cache = function(win_id)
     if win_cache[win_id] then return win_cache[win_id] end
     update_win_cache()
     return win_cache[win_id]
   end
 
-  MiniStatuscolumn.active = function() return active(get_curwin_cache()) end
-  MiniStatuscolumn.inactive = function() return inactive(get_curwin_cache()) end
+  -- - Not-very-frequent cache update
+  au({ 'BufWinEnter', 'TermOpen' }, '*', update_win_cache, 'Update window cache')
+  local options = { 'cursorline', 'cursorlineopt', 'foldcolumn', 'number', 'relativenumber', 'signcolumn' }
+  au('OptionSet', options, update_win_cache, 'Update window cache')
+
+  -- - Frequent cache update needed to react on non-fixed signcolumn/foldcolumn
+  --   changing their width. Like after adding a sing or fold.
+  --   Schedule as otherwise `nvim_eval_statusline()` returns outdated value.
+  local track_empty_statuscolumn = vim.schedule_wrap(function(win_id, toprow)
+    local cache = get_win_cache(win_id)
+    if cache.is_signcolumn_fixed and cache.is_foldcolumn_fixed then return end
+    if vim.wo[win_id].statuscolumn == '' then return end
+    local old, new = cache.is_statuscolumn_empty, get_statuscolumn_string(win_id, toprow) == ''
+    cache.is_statuscolumn_empty = new
+
+    -- Ensure that drawn statuscolumn uses up to date cache. Resetting the
+    -- 'statuscolumn' option also allows width to shrink (`:h 'statuscolumn'`).
+    if new ~= old then vim.wo[win_id].statuscolumn = vim.wo[win_id].statuscolumn end
+  end)
+  local on_win = function(_, win_id, _, toprow, _)
+    track_empty_statuscolumn(win_id, toprow)
+    return false
+  end
+  vim.api.nvim_set_decoration_provider(H.ns_id.track, { on_win = on_win })
+
+  -- Define exported functions for active and inactive windows
+  MiniStatuscolumn.active = function() return active(get_win_cache(get_cur_win())) end
+  MiniStatuscolumn.inactive = function() return inactive(get_win_cache(get_cur_win())) end
 end
 
 H.validate_main_content_spec = function(x)
