@@ -24,6 +24,8 @@
 ---   be a good idea to use minimal fold column characters in  |'fillchars'|.
 ---   Like `foldopen:🯘,foldclose:🮥,foldsep: ,foldinner: `.
 ---
+--- - Default content works best with enabled |'number'|.
+---
 --- # Comparisons ~
 ---
 --- - [luukvball/statuscol.nvim](https://github.com/luukvball/statuscol.nvim):
@@ -78,6 +80,19 @@ end
 --- Defaults ~
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 ---@text # Content ~
+---
+--- If one content function is missing, the other is used in its plce.
+--- If both content functions are missing, the default content is used: the output
+--- of |MiniStatuscolumn.gen_content.main()| with the following specification: >lua
+---
+---   { fold = '%C', lnum = '%l', sign = '%s' }, -- Default sections
+---   { format = '=lfs', sep = '▏' },  -- Line-fold-sign-separator
+---   { ltype = 'virt', lnum = '•' },  -- Dot in virtual lines
+---   { ltype = 'wrap', lnum = '↳' },  -- Arrow in wrapped lines
+---   { win = 'inactive', sep = ' ' }, -- No separator in inactive windows
+--- <
+--- Default content works best with enabled |'number'|, otherwise statuscolumn width
+--- might fluctuate if there are wrapped or virtual lines due to special symbols.
 ---
 --- Notes:
 --- - Make sure that content functions are as fast as possible since they will
@@ -354,6 +369,7 @@ H.make_statuscolumn_functions = function(active, inactive)
   -- Local helpers to not do extra `vim.api` table lookups
   local get_cur_win = vim.api.nvim_get_current_win
   local eval_stl = vim.api.nvim_eval_statusline
+  local win_is_valid = vim.api.nvim_win_is_valid
   local get_statuscolumn_string = function(win_id, lnum)
     return eval_stl('%l%C%s', { winid = win_id, use_statuscol_lnum = 1 }).str
   end
@@ -392,7 +408,7 @@ H.make_statuscolumn_functions = function(active, inactive)
   local get_win_cache = function(win_id)
     if win_cache[win_id] then return win_cache[win_id] end
     update_win_cache()
-    return win_cache[win_id]
+    return win_cache[win_id] or {}
   end
 
   -- - Not-very-frequent cache update
@@ -406,7 +422,7 @@ H.make_statuscolumn_functions = function(active, inactive)
   local track_empty_statuscolumn = vim.schedule_wrap(function(win_id, toprow)
     local cache = get_win_cache(win_id)
     if cache.is_signcolumn_fixed and cache.is_foldcolumn_fixed then return end
-    if vim.wo[win_id].statuscolumn == '' then return end
+    if not win_is_valid(win_id) or vim.wo[win_id].statuscolumn == '' then return end
     local old, new = cache.is_statuscolumn_empty, get_statuscolumn_string(win_id, toprow) == ''
     cache.is_statuscolumn_empty = new
 

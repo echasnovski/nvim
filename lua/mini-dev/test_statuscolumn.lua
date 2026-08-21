@@ -22,6 +22,20 @@ local set_win_option = function(win_id, name, value)
   child.api.nvim_set_option_value(name, value, { scope = 'local', win = win_id })
 end
 
+local set_all_win_option = function(name, value)
+  for _, win_id in ipairs(child.api.nvim_list_wins()) do
+    set_win_option(win_id, name, value)
+  end
+end
+
+local refresh_statuscolumn = function()
+  -- Setting 'statuscolumn' re-computes it and possibly shrinks width
+  for _, win_id in ipairs(child.api.nvim_list_wins()) do
+    local cur = child.api.nvim_get_option_value('statuscolumn', { scope = 'local', win = win_id })
+    set_win_option(win_id, 'statuscolumn', cur)
+  end
+end
+
 -- Time constants
 local term_mode_wait = helpers.get_time_const(50)
 
@@ -139,6 +153,25 @@ T['setup()']['correctly computes dimmed highlight attributes'] = function()
   expect.match(child.cmd_capture('hi MiniStatuscolumnDim'), 'cleared')
   child.cmd('doautocmd ColorScheme')
   expect.match(child.cmd_capture('hi MiniStatuscolumnDim'), 'guifg=#272727 guibg=#010101')
+end
+
+T['setup()']['correctly infers missing content functions'] = function()
+  child.lua('_G.wins = {}')
+  child.lua('_G.content_fun = function(win_data) _G.wins[tostring(win_data.win_id)] = true end')
+  local wins = { [tostring(child.api.nvim_get_current_win())] = true }
+  child.cmd('vsplit')
+  wins[tostring(child.api.nvim_get_current_win())] = true
+
+  -- One missing function should be inferred as the other
+  child.lua('require("mini-dev.statuscolumn").setup({ content = { active = content_fun } })')
+  child.lua('_G.wins = {}')
+  child.cmd('redraw!')
+  eq(child.lua_get('_G.wins'), wins)
+
+  child.lua('require("mini-dev.statuscolumn").setup({ content = { inactive = content_fun } })')
+  child.lua('_G.wins = {}')
+  child.cmd('redraw!')
+  eq(child.lua_get('_G.wins'), wins)
 end
 
 T['gen_content'] = new_set()
@@ -443,7 +476,7 @@ T['Content']['reacts to buf/win changes'] = function()
 end
 
 T['Content']['reacts to starting a terminal'] = function()
-  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with detecting empty statusline') end
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with detecting empty statuscolumn') end
   helpers.skip_on_windows('Terminal emulator testing is not robust/easy on Windows')
   helpers.skip_on_macos('Terminal emulator testing is not robust/easy on MacOS')
 
@@ -462,7 +495,7 @@ T['Content']['reacts to starting a terminal'] = function()
 end
 
 T['Content']['reacts to option changes'] = function()
-  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with detecting empty statusline') end
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with detecting empty statuscolumn') end
 
   child.o.number = false
   child.o.foldcolumn = '0'
@@ -604,6 +637,127 @@ T['Content']['draws correct width after its change'] = function()
   expect_screenshot()
   child.lua('vim.api.nvim_win_call(_G.win_inactive, function() vim.cmd("normal! zd") end)')
   expect_screenshot()
+
+  -- Same buffer in several windows
+  -- - Signs are per buffer, so statuscolumn should be shown in both windows
+  child.api.nvim_win_set_buf(layout.inactive.win_id, layout.active.buf_id)
+  child.api.nvim_buf_set_extmark(layout.active.buf_id, ns_id, 1, 0, { sign_text = 'S' })
+  expect_screenshot()
+
+  child.api.nvim_buf_clear_namespace(layout.active.buf_id, ns_id, 0, -1)
+  expect_screenshot()
+
+  -- - Folds are per window, so statuscolumn should be shown in one window
+  child.cmd('1,2fold')
+  expect_screenshot()
+end
+
+T['Content']['handles temporary windows when tracking window data'] = function()
+  child.lua([[
+    vim.cmd('vsplit')
+    vim.cmd('redraw!')
+    vim.cmd('close')
+  ]])
+  eq(child.cmd_capture('messages'), '')
+end
+
+T['Default content'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.set_size(10, 25)
+
+      -- Ensure visually distinctive highlight groups that are getting dimmed
+      set_statuscol_unique_hl()
+
+      child.o.number = false
+      child.o.foldcolumn = '0'
+      child.o.signcolumn = 'no'
+
+      child.o.foldmethod = 'manual'
+      child.lua('_G.foldtext = function() return "+--" end')
+      child.o.foldtext = 'v:lua.foldtext()'
+      child.o.laststatus = 2
+      child.o.statusline = '%{%nvim_get_current_win()==#g:actual_curwin ? "active" : "inactive"%}'
+      child.o.wrap = true
+
+      child.api.nvim_win_set_buf(0, child.api.nvim_create_buf(true, false))
+      set_lines({ 'one', 'fold1', 'fold2', 'twoooooooooooo' })
+
+      child.cmd('2,3fold')
+
+      local ns_id_sign = child.api.nvim_create_namespace('sign')
+      child.api.nvim_buf_set_extmark(0, ns_id_sign, 0, 0, { sign_text = 'S' })
+      local virt_lines = { { { 'VIR', 'String' } }, { { 'LINE', 'Function' } } }
+
+      local ns_id_virt_lines = child.api.nvim_create_namespace('virt_lines')
+      child.api.nvim_buf_set_extmark(0, ns_id_virt_lines, 3, 0, { virt_lines = virt_lines })
+
+      child.cmd('vsplit')
+    end,
+  },
+})
+
+local validate_with_win_options = function(number, foldcolumn, signcolumn)
+  set_all_win_option('number', number)
+  set_all_win_option('foldcolumn', foldcolumn)
+  set_all_win_option('signcolumn', signcolumn)
+  refresh_statuscolumn()
+
+  -- Neovim<0.11 has different with highlights for signs in custom statuscolumn
+  child.expect_screenshot({ ignore_attr = child.fn.has('nvim-0.11') == 0 })
+end
+
+T['Default content']['works'] = function()
+  validate_with_win_options(false, '0', 'no')
+
+  -- Special symbols for wrapped/virtual lines should be shown regardless of
+  -- whether 'number' is enabled.
+  validate_with_win_options(true, '0', 'no')
+  validate_with_win_options(false, '1', 'no')
+  validate_with_win_options(false, '0', 'yes')
+
+  validate_with_win_options(true, '1', 'no')
+  validate_with_win_options(true, '0', 'yes')
+  validate_with_win_options(false, '1', 'yes')
+
+  validate_with_win_options(true, '1', 'yes')
+end
+
+T['Default content']['works with non-fixed sign column'] = function()
+  if child.fn.has('nvim-0.11') == 0 then MiniTest.skip('Neovim<0.11 has problems with signcolumn=number') end
+
+  validate_with_win_options(true, '0', 'auto')
+  validate_with_win_options(true, '0', 'auto:1')
+  validate_with_win_options(true, '0', 'number')
+
+  local ns_id_sign = child.api.nvim_create_namespace('sign')
+  for _, buf_id in ipairs(child.api.nvim_list_bufs()) do
+    child.api.nvim_buf_clear_namespace(buf_id, ns_id_sign, 0, -1)
+  end
+
+  validate_with_win_options(true, '0', 'auto')
+  validate_with_win_options(true, '0', 'auto:1')
+  validate_with_win_options(true, '0', 'number')
+end
+
+T['Default content']['works with non-fixed fold column'] = function()
+  validate_with_win_options(true, 'auto', 'no')
+  validate_with_win_options(true, 'auto:1', 'no')
+
+  child.lua([[
+    for _, win_id in ipairs(vim.api.nvim_list_wins()) do
+      -- Delete a fold on line 3
+      vim.api.nvim_win_call(win_id, function() vim.cmd('normal! 3Gzd') end)
+    end
+  ]])
+
+  validate_with_win_options(true, 'auto', 'no')
+  validate_with_win_options(true, 'auto:1', 'no')
+end
+
+T['Default content']["respects 'numberwidth'"] = function()
+  set_all_win_option('numberwidth', 2)
+  validate_with_win_options(true, '0', 'no')
 end
 
 return T
