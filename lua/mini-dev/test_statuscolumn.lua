@@ -12,12 +12,17 @@ local set_lines = function(...) return child.set_lines(...) end
 local sleep = function(ms) helpers.sleep(ms, child) end
 --stylua: ignore end
 
--- Common test wrappers
-local forward_lua = function(fun_str)
-  local lua_cmd = fun_str .. '(...)'
-  return function(...) return child.lua_get(lua_cmd, { ... }) end
+-- Tweak `expect_screenshot()` to ignore attributes on Neovim<0.11 as it has
+-- different with highlights for signs in custom statuscolumn
+child.expect_screenshot_orig = child.expect_screenshot
+child.expect_screenshot = function(opts)
+  if child.fn.has('nvim-0.10') == 0 then return end
+  opts = opts or {}
+  if opts.ignore_attr == nil then opts.ignore_attr = child.fn.has('nvim-0.11') == 0 end
+  child.expect_screenshot_orig(opts)
 end
 
+-- Common test wrappers
 local set_win_option = function(win_id, name, value)
   child.api.nvim_set_option_value(name, value, { scope = 'local', win = win_id })
 end
@@ -34,6 +39,60 @@ local refresh_statuscolumn = function()
     local cur = child.api.nvim_get_option_value('statuscolumn', { scope = 'local', win = win_id })
     set_win_option(win_id, 'statuscolumn', cur)
   end
+end
+
+local n_different_attr = 0
+local set_unique_hl = function(hl_group)
+  n_different_attr = n_different_attr + 1
+  child.api.nvim_set_hl(0, hl_group, { fg = string.format('#%06x', n_different_attr) })
+end
+
+local set_statuscol_unique_hl = function()
+  child.cmd('hi clear')
+  n_different_attr = 0
+
+  set_unique_hl('MiniStatuscolumnDim')
+  set_unique_hl('MiniStatuscolumnDimCursor')
+  set_unique_hl('MiniStatuscolumnSep')
+  set_unique_hl('MiniStatuscolumnSepCursor')
+
+  set_unique_hl('CursorLineFold')
+  set_unique_hl('CursorLineNr')
+  set_unique_hl('CursorLineSign')
+  set_unique_hl('FoldColumn')
+  set_unique_hl('LineNr')
+  set_unique_hl('LineNrAbove')
+  set_unique_hl('LineNrBelow')
+  set_unique_hl('SignColumn')
+end
+
+local prepare_main_content_layout = function()
+  -- Ensure visually distinctive highlight groups that are getting dimmed
+  set_statuscol_unique_hl()
+
+  child.o.foldmethod = 'manual'
+  child.lua('_G.foldtext = function() return "+--" end')
+  child.o.foldtext = 'v:lua.foldtext()'
+  child.o.laststatus = 2
+  child.o.statusline = '%{%nvim_get_current_win()==#g:actual_curwin ? "active" : "inactive"%}'
+  child.o.wrap = true
+
+  child.api.nvim_win_set_buf(0, child.api.nvim_create_buf(true, false))
+  set_lines({ 'one', 'twoooooooooooo', 'cursor', 'fold1', 'fold2', 'six', 'sevennnnnnnnnn' })
+  set_cursor(3, 0)
+
+  child.cmd('4,5fold')
+
+  local ns_id_sign = child.api.nvim_create_namespace('sign')
+  child.api.nvim_buf_set_extmark(0, ns_id_sign, 0, 0, { sign_text = 'SA' })
+  child.api.nvim_buf_set_extmark(0, ns_id_sign, 5, 0, { sign_text = 'SB' })
+
+  local ns_id_virt_lines = child.api.nvim_create_namespace('virt_lines')
+  local virt_lines = { { { 'VIR', 'String' } }, { { 'LINE', 'Function' } } }
+  child.api.nvim_buf_set_extmark(0, ns_id_virt_lines, 1, 0, { virt_lines = virt_lines })
+  child.api.nvim_buf_set_extmark(0, ns_id_virt_lines, 6, 0, { virt_lines = virt_lines })
+
+  child.cmd('vsplit')
 end
 
 -- Time constants
@@ -176,9 +235,105 @@ end
 
 T['gen_content'] = new_set()
 
-T['gen_content']['main()'] = new_set()
+T['gen_content']['main()'] = new_set({
+  hooks = {
+    pre_case = function()
+      child.set_size(18, 25)
+      child.o.number = true
+      child.o.foldcolumn = '1'
+      child.o.signcolumn = 'yes'
+      prepare_main_content_layout()
+    end,
+  },
+})
 
-T['gen_content']['main()']['works'] = function() MiniTest.skip() end
+T['gen_content']['main()']['works'] = function()
+  child.lua('MiniStatuscolumn.setup({ content = MiniStatuscolumn.gen_content.main() })')
+  eq(child.lua_get('type(MiniStatuscolumn.config.content.active)'), 'function')
+  eq(child.lua_get('type(MiniStatuscolumn.config.content.inactive)'), 'function')
+  eq(child.o.statuscolumn == '', false)
+
+  local validate = function(spec)
+    child.lua('_G.spec = ' .. vim.inspect(spec))
+    child.lua('MiniStatuscolumn.setup({ content = MiniStatuscolumn.gen_content.main(_G.spec) })')
+    child.expect_screenshot()
+  end
+
+  -- By default should show the same content as the default statuscolumn
+  validate()
+  validate({})
+
+  -- Should be possible to customize sections
+  validate({ { sep = '/' } })
+
+  -- Should correctly normalize specification: filter by coordinate field(s)
+  -- (win, pos, ltype) and set info field(s) (format, fold, lnum, sign, sep)
+  validate({
+    { win = 'active', fold = 'x', lnum = 'l' },
+    { win = 'inactive', fold = 'f' },
+    { pos = 'above', lnum = 'a' },
+    { pos = 'below', lnum = 'b' },
+    { ltype = 'wrap', sign = '>' },
+    -- Should treat several "coordinates" as "AND" filters
+    { pos = 'below', ltype = 'virt', sign = '?' },
+    { win = 'active', pos = 'cursor', ltype = 'wrap', sign = '#' },
+    -- - Later entries should override previous ones (only newly supplied)
+    { win = 'active', fold = 'F' },
+  })
+
+  -- Should allow not all sections in `format`
+  validate({ { format = '=l' } })
+
+  -- Should allow empty sections
+  validate({ { win = 'inactive', fold = '', lnum = '', sign = '', sep = '' } })
+end
+
+T['gen_content']['main()']["respects 'cursorline'"] = function()
+  -- Dedicated separator highlighting at cursor line should be applied only
+  -- in cases described in `:h hl-CursorLineNr`. It should span across wrapped
+  -- parts and line's virtual text.
+  child.o.cursorline = true
+  set_cursor(7, 0)
+  child.lua('MiniStatuscolumn.setup({ content = MiniStatuscolumn.gen_content.main({ { sep = "|" } }) })')
+  child.expect_screenshot()
+
+  child.o.cursorlineopt = 'line'
+  child.expect_screenshot()
+end
+
+T['gen_content']['main()']['forces redraw when needed'] = function() MiniTest.skip() end
+
+T['gen_content']['main()']['respects `opts.click`'] = function() MiniTest.skip() end
+
+T['gen_content']['main()']['validates input'] = function()
+  local validate = function(spec, err_pattern)
+    expect.error(
+      function() child.lua('MiniStatuscolumn.gen_content.main(' .. vim.inspect(spec) .. ')') end,
+      err_pattern
+    )
+  end
+
+  validate('a', '`spec`.*array')
+  validate({ 'a' }, '`spec` item.*table')
+  validate({ { win = 'w' } }, '`spec%[1%]%.win`.*one of')
+  validate({ { pos = 'p' } }, '`spec%[1%]%.pos`.*one of')
+  validate({ { ltype = 'l' } }, '`spec%[1%]%.ltype`.*one of')
+
+  validate({ { win = 'active', format = 1 } }, '`spec%[1%]%.format`.*string')
+  validate({ { win = 'active', format = 'a' } }, '`spec%[1%]%.format`.*contain only')
+  validate({ { win = 'active', fold = 1 } }, '`spec%[1%]%.fold`.*string')
+  validate({ { win = 'active', lnum = 1 } }, '`spec%[1%]%.lnum`.*string')
+  validate({ { win = 'active', sign = 1 } }, '`spec%[1%]%.sign`.*string')
+  validate({ { win = 'active', sep = 1 } }, '`spec%[1%]%.sep`.*string')
+
+  validate({ { win = 'active' } }, '`spec%[1%]`.*at least one info')
+  validate({ { pos = 'cursor' } }, '`spec%[1%]`.*at least one info')
+  validate({ { ltype = 'text' } }, '`spec%[1%]`.*at least one info')
+  validate({ { win = 'active', pos = 'cursor', ltype = 'text' } }, '`spec%[1%]`.*at least one info')
+
+  validate({ { win = 'active', fold = 'f' }, { win = 'w' } }, '`spec%[2%]%.win`.*one of')
+  validate({ { win = 'active', fold = 'f' }, { win = 'inactive' } }, '`spec%[2%]`.*at least one info')
+end
 
 T['default_click()'] = new_set()
 
@@ -211,31 +366,6 @@ local mock_dim_test_content = function()
       },
     })
   ]])
-end
-
-local n_different_attr = 0
-local set_unique_hl = function(hl_group)
-  n_different_attr = n_different_attr + 1
-  child.api.nvim_set_hl(0, hl_group, { fg = string.format('#%06x', n_different_attr) })
-end
-
-local set_statuscol_unique_hl = function()
-  child.cmd('hi clear')
-  n_different_attr = 0
-
-  set_unique_hl('MiniStatuscolumnDim')
-  set_unique_hl('MiniStatuscolumnDimCursor')
-
-  set_unique_hl('CursorLineFold')
-  set_unique_hl('CursorLineNr')
-  set_unique_hl('CursorLineSign')
-  set_unique_hl('FoldColumn')
-  set_unique_hl('LineNr')
-  set_unique_hl('LineNrAbove')
-  set_unique_hl('LineNrBelow')
-  set_unique_hl('SignColumn')
-  set_unique_hl('MiniStatuscolumnSep')
-  set_unique_hl('MiniStatuscolumnSepCursor')
 end
 
 T['Dim'] = new_set({
@@ -664,35 +794,11 @@ end
 T['Default content'] = new_set({
   hooks = {
     pre_case = function()
-      child.set_size(10, 25)
-
-      -- Ensure visually distinctive highlight groups that are getting dimmed
-      set_statuscol_unique_hl()
-
+      child.set_size(18, 25)
       child.o.number = false
       child.o.foldcolumn = '0'
       child.o.signcolumn = 'no'
-
-      child.o.foldmethod = 'manual'
-      child.lua('_G.foldtext = function() return "+--" end')
-      child.o.foldtext = 'v:lua.foldtext()'
-      child.o.laststatus = 2
-      child.o.statusline = '%{%nvim_get_current_win()==#g:actual_curwin ? "active" : "inactive"%}'
-      child.o.wrap = true
-
-      child.api.nvim_win_set_buf(0, child.api.nvim_create_buf(true, false))
-      set_lines({ 'one', 'fold1', 'fold2', 'twoooooooooooo' })
-
-      child.cmd('2,3fold')
-
-      local ns_id_sign = child.api.nvim_create_namespace('sign')
-      child.api.nvim_buf_set_extmark(0, ns_id_sign, 0, 0, { sign_text = 'S' })
-      local virt_lines = { { { 'VIR', 'String' } }, { { 'LINE', 'Function' } } }
-
-      local ns_id_virt_lines = child.api.nvim_create_namespace('virt_lines')
-      child.api.nvim_buf_set_extmark(0, ns_id_virt_lines, 3, 0, { virt_lines = virt_lines })
-
-      child.cmd('vsplit')
+      prepare_main_content_layout()
     end,
   },
 })
@@ -703,8 +809,7 @@ local validate_with_win_options = function(number, foldcolumn, signcolumn)
   set_all_win_option('signcolumn', signcolumn)
   refresh_statuscolumn()
 
-  -- Neovim<0.11 has different with highlights for signs in custom statuscolumn
-  child.expect_screenshot({ ignore_attr = child.fn.has('nvim-0.11') == 0 })
+  child.expect_screenshot()
 end
 
 T['Default content']['works'] = function()
@@ -746,8 +851,8 @@ T['Default content']['works with non-fixed fold column'] = function()
 
   child.lua([[
     for _, win_id in ipairs(vim.api.nvim_list_wins()) do
-      -- Delete a fold on line 3
-      vim.api.nvim_win_call(win_id, function() vim.cmd('normal! 3Gzd') end)
+      -- Delete existing fold on line 4
+      vim.api.nvim_win_call(win_id, function() vim.cmd('normal! 4Gzd') end)
     end
   ]])
 

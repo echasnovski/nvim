@@ -127,6 +127,9 @@ MiniStatuscolumn.gen_content = {}
 --- TODO: How spec array normalization works, defaults are the same as
 --- default |'statuscolumn'|.
 ---
+--- - Each element should contain at least one info field.
+--- - It is allowed to not contain coordinate fields
+---
 --- Notes:
 --- - `MiniStatuscolumnSepCursor` is used under the same conditions as described
 ---   in |hl-CursorLineNr|.
@@ -451,7 +454,7 @@ H.validate_main_content_spec = function(x)
 
     H.check_type(item .. '.format', s.format, 'string', true)
     if s.format ~= nil and s.format:find('[^=lfs]') ~= nil then
-      H.error('`' .. item .. '`.format should contain only `=fls` characters')
+      H.error('`' .. item .. '.format` should contain only `=fls` characters')
     end
     H.check_type(item .. '.fold', s.fold, 'string', true)
     H.check_type(item .. '.lnum', s.lnum, 'string', true)
@@ -459,14 +462,14 @@ H.validate_main_content_spec = function(x)
     H.check_type(item .. '.sep', s.sep, 'string', true)
 
     local at_least_one_info = s.format or s.fold or s.lnum or s.sign or s.sep
-    if not at_least_one_info then H.error('`' .. item .. '`should contain at least one info field') end
+    if not at_least_one_info then H.error('`' .. item .. '` should contain at least one info field') end
   end
 end
 
 H.make_main_content_map = function(spec, click)
   -- Gather array spec into a map ensuring default values
   spec = vim.deepcopy(spec)
-  table.insert(spec, 1, { format = '=fsl', fold = '%C', lnum = '%l', sign = '%s', sep = ' ' })
+  table.insert(spec, 1, { format = 'fs=l', fold = '%C', lnum = '%l', sign = '%s', sep = ' ' })
 
   local map = {}
   for _, s in ipairs(spec) do
@@ -497,7 +500,7 @@ H.make_main_content_map = function(spec, click)
       data.mousepos = vim.fn.getmousepos()
       -- NOTE: `ltype` has proper values only on Neovim>=0.13
       -- See: https://github.com/neovim/neovim/issues/40210
-      data.section, data.ltype = section, ltype
+      data.ltype, data.section = ltype, section
       click(data)
     end
   end
@@ -520,18 +523,17 @@ H.make_main_content_map = function(spec, click)
         format_repl.s = with_click(ltype, 'sign', ltype_map.sign)
         local content_str = ltype_map.format:gsub('[=fls]', format_repl)
 
-        local content = {}
         -- NOTE: show separator hl based on whether it is configured to show
         -- "CursorLine" highlighting in the column (`:h hl-CursorLineNr`, but
         -- it works for fold and sign: https://github.com/vim/vim/issues/20480)
         -- It also helps with drawing issues, since statuscolumn is not redrawn
         -- on cursor movement with 'nocursorline', which makes cursor separator
         -- not update also.
-        for _, show_cur in ipairs({ false, true }) do
-          local sep_hl = (pos == 'cursor' and show_cur) and '%#MiniStatuscolumnSepCursor#' or '%#MiniStatuscolumnSep#'
-          local sep = ltype_map.sep == '' and '' or (sep_hl .. ltype_map.sep)
-          content[show_cur] = content_str .. with_click(ltype, 'sep', sep)
-        end
+        local sep, sep_hl = ltype_map.sep, '%#MiniStatuscolumnSep#'
+        local sep_hl_cur = pos == 'cursor' and '%#MiniStatuscolumnSepCursor#' or sep_hl
+        local content = {}
+        content[false] = content_str .. with_click(ltype, 'sep', sep == '' and '' or (sep_hl .. sep))
+        content[true] = content_str .. with_click(ltype, 'sep', sep == '' and '' or (sep_hl_cur .. sep))
         ltype_map.content = content
       end
     end
