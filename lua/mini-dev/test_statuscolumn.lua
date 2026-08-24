@@ -8,8 +8,10 @@ local new_set = MiniTest.new_set
 --stylua: ignore start
 local load_module = function(config) child.mini_load('statuscolumn', config) end
 local set_cursor = function(...) return child.set_cursor(...) end
+local get_cursor = function(...) return child.get_cursor(...) end
 local set_lines = function(...) return child.set_lines(...) end
 local sleep = function(ms) helpers.sleep(ms, child) end
+local forward_lua = function(fun_str) return helpers.forward_lua(child, fun_str) end
 --stylua: ignore end
 
 -- Tweak `expect_screenshot()` to ignore attributes on Neovim<0.11 as it has
@@ -301,9 +303,104 @@ T['gen_content']['main()']["respects 'cursorline'"] = function()
   child.expect_screenshot()
 end
 
-T['gen_content']['main()']['forces redraw when needed'] = function() MiniTest.skip() end
+T['gen_content']['main()']['highlights separator on cursor virtual lines'] = function()
+  child.set_size(12, 15)
+  child.cmd('%bwipeout! | mode')
+  child.lua('MiniStatuscolumn.setup({ content = MiniStatuscolumn.gen_content.main({ { sep = "|" } }) })')
 
-T['gen_content']['main()']['respects `opts.click`'] = function() MiniTest.skip() end
+  child.o.cursorline = true
+  child.o.number = true
+  set_lines({ 'one', 'twoooooooo', 'three', 'four', 'five' })
+  local ns_id = child.api.nvim_create_namespace('virt_lines')
+  child.api.nvim_buf_set_extmark(0, ns_id, 1, 0, { virt_lines = { { { 'AAA', 'String' } } } })
+  child.api.nvim_buf_set_extmark(0, ns_id, 2, 0, { virt_lines = { { { 'BBB', 'String' } } } })
+  child.api.nvim_buf_set_extmark(0, ns_id, 3, 0, { virt_lines = { { { 'CCC', 'String' } } }, virt_lines_above = true })
+
+  local validate_lnum = function(lnum)
+    set_cursor(lnum, 0)
+    child.expect_screenshot()
+  end
+  local validate = function()
+    validate_lnum(2)
+    validate_lnum(3)
+    validate_lnum(4)
+    validate_lnum(5)
+    validate_lnum(4)
+    validate_lnum(3)
+    validate_lnum(2)
+    validate_lnum(1)
+  end
+
+  -- Normal mode
+  validate()
+
+  -- Insert mode
+  child.cmd('startinsert')
+  validate()
+end
+
+T['gen_content']['main()']['respects `opts.click`'] = function()
+  -- Make line number section narrower to overcome some performance trade-offs
+  -- of 'statuscolumn' implementation when it comes to computing which areas
+  -- are clickable. This makes section follow the following placements:
+  -- fssllS (fold, sign, lnum, sep)
+  child.o.numberwidth = 2
+  child.lua([[
+    _G.log = {}
+    local click = function(...) table.insert(_G.log, { ... }) end
+    local spec = { { sep = "|" }, { ltype = 'virt', lnum = '!' }, { ltype = 'wrap', lnum = '?' } }
+    local content = MiniStatuscolumn.gen_content.main(spec, { click = click })
+    MiniStatuscolumn.setup({ content = content })
+  ]])
+
+  local ref_data = {}
+  local validate_single = function(button, action, modifier, row, col)
+    child.api.nvim_input_mouse(button, action, modifier, 0, row, col)
+    ref_data.mousepos = child.fn.getmousepos()
+    eq(child.lua_get('_G.log'), { { ref_data } })
+    child.lua('_G.log = {}')
+  end
+
+  local validate_line = function(lnum, ltype)
+    lnum = lnum - 1
+    -- NOTE: Neovim<0.13 had too much optimizations when it came to clickable
+    -- areas. See: https://github.com/neovim/neovim/issues/40210
+    if child.fn.has('nvim-0.13') == 0 then ltype = 'text' end
+    ref_data = { button = 'l', modifiers = '    ', n_clicks = 1, ltype = ltype, section = 'fold' }
+    validate_single('left', 'press', '', lnum, 0)
+
+    ref_data.section = 'sign'
+    validate_single('left', 'press', '', lnum, 1)
+    -- NOTE: There doesn't seem to be a way to mock pressing with modifiers
+    ref_data.button = 'r'
+    validate_single('right', 'press', '', lnum, 2)
+    ref_data.button = 'l'
+
+    ref_data.section = 'lnum'
+    validate_single('left', 'press', '', lnum, 3)
+
+    ref_data.section = 'sep'
+    validate_single('left', 'press', '', lnum, 4)
+  end
+
+  validate_line(1, 'text')
+  validate_line(2, 'text')
+  validate_line(3, 'wrap')
+  validate_line(4, 'virt')
+  validate_line(5, 'virt')
+
+  -- Double click
+  child.api.nvim_input_mouse('left', 'press', '', 0, 0, 0)
+  child.api.nvim_input_mouse('left', 'press', '', 0, 0, 0)
+  local mousepos = child.fn.getmousepos()
+  local ref_log = {
+    -- NOTE: It doesn't look right that both single and double clicks are
+    -- recorded, but that is how it works in manual testing with real mouse.
+    { { button = 'l', modifiers = '    ', mousepos = mousepos, n_clicks = 1, ltype = 'text', section = 'fold' } },
+    { { button = 'l', modifiers = '    ', mousepos = mousepos, n_clicks = 2, ltype = 'text', section = 'fold' } },
+  }
+  eq(child.lua_get('_G.log'), ref_log)
+end
 
 T['gen_content']['main()']['validates input'] = function()
   local validate = function(spec, err_pattern)
@@ -337,7 +434,47 @@ end
 
 T['default_click()'] = new_set()
 
-T['default_click()']['works'] = function() MiniTest.skip() end
+local default_click = forward_lua('MiniStatuscolumn.default_click')
+
+T['default_click()']['works'] = function()
+  child.set_size(10, 15)
+  set_lines({ 'a', 'bb', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k' })
+  set_cursor(1, 0)
+  local win_id_other = child.api.nvim_get_current_win()
+  child.cmd('vsplit')
+
+  -- Should focus the target window and place cursor at the clicked line
+  default_click({ mousepos = { winid = win_id_other, line = 2, column = 2 }, n_clicks = 1 })
+  eq(child.api.nvim_get_current_win(), win_id_other)
+  eq(get_cursor(), { 2, 1 })
+  eq(child.fn.line('w0'), 1)
+
+  -- Should center line on double click
+  default_click({ mousepos = { winid = win_id_other, line = 6, column = 1 }, n_clicks = 2 })
+  eq(get_cursor(), { 6, 0 })
+  eq(child.fn.line('w0'), 2)
+end
+
+T['default_click()']['fails silently'] = function()
+  local win_id = child.api.nvim_get_current_win()
+  expect.no_error(function() default_click({ mousepos = { winid = -1, line = 1, column = 0 }, n_clicks = 1 }) end)
+  expect.no_error(function() default_click({ mousepos = { winid = win_id, line = -1, column = 1 }, n_clicks = 1 }) end)
+  expect.no_error(function() default_click({ mousepos = { winid = win_id, line = 1, column = -1 }, n_clicks = 1 }) end)
+end
+
+T['default_click()']['validates input'] = function()
+  local validate = function(data, err_pattern)
+    expect.error(function() default_click(data) end, err_pattern)
+  end
+  local win_id = child.api.nvim_get_current_win()
+
+  validate(1, '`data`.*table')
+  validate({ mousepos = 1 }, '`data%.mousepos`.*table')
+  validate({ mousepos = { winid = 'a', line = 1, column = 1 }, n_clicks = 1 }, '`data%.mousepos%.winid`.*number')
+  validate({ mousepos = { winid = win_id, line = 'a', column = 1 }, n_clicks = 1 }, '`data%.mousepos%.line`.*number')
+  validate({ mousepos = { winid = win_id, line = 1, column = 'a' }, n_clicks = 1 }, '`data%.mousepos%.column`.*number')
+  validate({ mousepos = { winid = win_id, line = 1, column = 1 }, n_clicks = 'a' }, '`data%.n_clicks`.*number')
+end
 
 -- Integration tests ==========================================================
 local mock_dim_test_content = function()

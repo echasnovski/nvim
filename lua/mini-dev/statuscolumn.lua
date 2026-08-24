@@ -43,11 +43,9 @@
 --- - `MiniStatuscolumnSepCursor` - column and text separator at cursor line.
 ---@tag MiniStatuscolumn
 
----@diagnostic disable:undefined-field
 ---@diagnostic disable:discard-returns
 ---@diagnostic disable:unused-local
 
--- Module definition ==========================================================
 local MiniStatuscolumn = {}
 local H = {}
 
@@ -128,11 +126,19 @@ MiniStatuscolumn.gen_content = {}
 --- default |'statuscolumn'|.
 ---
 --- - Each element should contain at least one info field.
---- - It is allowed to not contain coordinate fields
+--- - It is allowed to not contain coordinate fields.
 ---
 --- Notes:
 --- - `MiniStatuscolumnSepCursor` is used under the same conditions as described
 ---   in |hl-CursorLineNr|.
+--- - Implementation of |'statuscolumn'| has some performance trade-offs when it
+---   comes to computing which areas are clickable. Suggested usage:
+---     - Use one `format` per window type, as section order is better to persist
+---       across lines of the same window.
+---     - Clicking on the cell that contains text should work. Clicking on
+---       an empty cell of known section might not always work.
+---     - On Neovim<0.13 the `ltype` is always the one that is used in the top
+---       window line.
 ---
 --- Examples:
 ---
@@ -191,35 +197,42 @@ MiniStatuscolumn.gen_content.main = function(spec, opts)
   opts = vim.tbl_extend('force', { click = MiniStatuscolumn.default_click }, opts or {})
   H.check_type('opts.click', opts.click, 'function')
 
-  -- Force redraw when needed. Do not do it on every cursor move as it results
+  -- Force redraw on cursor move (since 'statuscolumn' is not fully redrawn on
+  -- pure cursor moves). Do only when necessary as doing on every move results
   -- into flickering (like with 'mini.cursorword' highlighting word twice)
-  local needs_redraw = {}
-  local get_current_win, _redraw = vim.api.nvim_get_current_win, vim.api.nvim__redraw
-  local redraw_stc = function()
-    if not needs_redraw[get_current_win()] then return end
-    _redraw({ win = get_current_win(), statuscolumn = true })
-    needs_redraw[get_current_win()] = false
+  local _redraw, redraw_opts = vim.api.nvim__redraw, { win = 0, statuscolumn = true }
+  local win_get_cursor = vim.api.nvim_win_get_cursor
+  local buf_get_extmarks, extmarks_opts = vim.api.nvim_buf_get_extmarks, { limit = 1, type = 'virt_lines' }
+  local redraw_lnum = 0
+  -- - Force redraw with cursor next to the virtual line, otherwise manually
+  --   added cursor sep highlighting will not be shown when cursor moves from
+  --   above and will "stay" there when cursor moves above.
+  local redraw_stc_on_cursor_move = function()
+    local lnum = win_get_cursor(0)[1]
+    -- Don't redraw when highlight is up to date: on horizontal movement and if
+    -- not special cursor line specific highlight is needed
+    if redraw_lnum == lnum or not vim.o.cursorline then return end
+    -- Redraw after moving from the line with virtual lines to make sure that
+    -- outdated cursorline-specific highlights are removed
+    if redraw_lnum > 0 then _redraw(redraw_opts) end
+
+    redraw_lnum = #buf_get_extmarks(0, -1, { lnum - 1, 0 }, { lnum - 1, -1 }, extmarks_opts) > 0 and lnum or 0
+    -- Redraw immediately to make sure that cursorline-specific highlight
+    -- is applied to virtual lines
+    if redraw_lnum > 0 then _redraw(redraw_opts) end
   end
   local gr = vim.api.nvim_create_augroup('MiniStatuscolumnMain', {})
-  local au_opts = { group = gr, callback = redraw_stc, desc = 'Ensure redraw' }
+  local au_opts = { group = gr, callback = redraw_stc_on_cursor_move, desc = 'Ensure redraw' }
   vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, au_opts)
 
   -- Pre-compute content map to later choose one of its string value in the
   -- content function
   local content_map = H.make_main_content_map(spec, opts.click)
-
-  local win_get_cursor = vim.api.nvim_win_get_cursor
   local make = function(win)
     return function(win_data)
       if win_data.is_statuscolumn_empty then return '' end
       local pos = vim.v.relnum == 0 and 'cursor' or (vim.v.lnum < win_get_cursor(0)[1] and 'above' or 'below')
       local ltype = vim.v.virtnum == 0 and 'text' or (vim.v.virtnum < 0 and 'virt' or 'wrap')
-      -- Force redraw with cursor next to the virtual line, otherwise manually
-      -- added cursor sep highlighting will "stay" there when cursor is moved.
-      -- It is because 'statuscolumn' content is not recomputed on cursor move.
-      needs_redraw[win_data.win_id] = needs_redraw[win_data.win_id]
-        or (win == 'active' and pos == 'cursor' and ltype == 'virt')
-      -- Condition on `is_cursorlinenr` for a proper separator hl
       return content_map[win][pos][ltype].content[win_data.is_cursorlinenr]
     end
   end
@@ -229,6 +242,13 @@ end
 
 --- Default mouse click handler
 MiniStatuscolumn.default_click = function(data)
+  H.check_type('data', data, 'table')
+  H.check_type('data.mousepos', data.mousepos, 'table')
+  H.check_type('data.mousepos.winid', data.mousepos.winid, 'number')
+  H.check_type('data.mousepos.line', data.mousepos.line, 'number')
+  H.check_type('data.mousepos.column', data.mousepos.column, 'number')
+  H.check_type('data.n_clicks', data.n_clicks, 'number')
+
   local mousepos = data.mousepos
   local ok = pcall(vim.api.nvim_set_current_win, mousepos.winid)
   if not ok then return end
@@ -508,7 +528,7 @@ H.make_main_content_map = function(spec, click)
   local with_click = function(ltype, section, section_content)
     if section_content == '' then return '' end
     local click_name = '_click_' .. ltype .. '_' .. section
-    MiniStatuscolumn[click_name] = MiniStatuscolumn[click_name] or make_click(ltype, section)
+    MiniStatuscolumn[click_name] = make_click(ltype, section)
 
     return string.format('%%@v:lua.MiniStatuscolumn.%s@%s%%T', click_name, section_content)
   end
