@@ -41,18 +41,7 @@ now(function() require('mini.sessions').setup() end)
 
 now(function() require('mini.starter').setup() end)
 
-now(function()
-  require('mini-dev.statuscolumn').setup()
-
-  vim.api.nvim_set_hl(0, 'MiniStatuscolumnSepCursor', { link = 'CursorLineNr' })
-  vim.api.nvim_set_hl(0, 'MiniStatuscolumnDim', { fg = require('mini.hues').get_palette().bg_mid })
-  -- vim.api.nvim_set_hl(0, 'MiniStatuscolumnDim', { fg = require('mini.hues').get_palette().bg })
-  vim.api.nvim_set_hl(0, 'MiniStatuscolumnDimCursor', { link = 'CursorLineNr' })
-
-  -- vim.o.foldcolumn = '1'
-  vim.cmd('set fillchars+=foldsep:\\  fillchars+=foldopen:🯘 fillchars+=foldclose:🮥')
-  if vim.fn.has('nvim-0.12') == 1 then vim.cmd('set fillchars+=foldinner:\\ ') end
-end)
+now(function() require('mini.statuscolumn').setup() end)
 
 now(function() require('mini.statusline').setup() end)
 
