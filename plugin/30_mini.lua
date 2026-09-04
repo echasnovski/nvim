@@ -54,6 +54,8 @@ now(function()
   if vim.fn.has('nvim-0.12') == 1 then vim.cmd('set fillchars+=foldinner:\\ ') end
 end)
 
+now(function() require('mini.statuscolumn').setup() end)
+
 now(function() require('mini.statusline').setup() end)
 
 now(function() require('mini.tabline').setup() end)
