@@ -1,10 +1,7 @@
 local now, now_if_args, later = Config.now, Config.now_if_args, Config.later
 
 -- Step one ===================================================================
-now(function() vim.cmd('colorscheme miniwinter') end)
--- now(function() vim.cmd('colorscheme minispring') end)
--- now(function() vim.cmd('colorscheme minisummer') end)
--- now(function() vim.cmd('colorscheme miniautumn') end)
+now(function() vim.cmd('colorscheme minischeme') end)
 
 now(function()
   require('mini.basics').setup({
