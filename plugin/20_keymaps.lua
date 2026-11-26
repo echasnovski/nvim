@@ -8,6 +8,14 @@ local cmd = vim.fn.has('nvim-0.12') == 1 and 'iput' or 'put'
 vim.keymap.set('n', '[p', '<Cmd>exe "' .. cmd .. '! " . v:register<CR>', { desc = 'Paste Above' })
 vim.keymap.set('n', ']p', '<Cmd>exe "' .. cmd .. ' "  . v:register<CR>', { desc = 'Paste Below' })
 
+-- Make sure that as much of text is shown when navigating to line edges
+-- NOTE: use an indirect `<Cmd>normal! ...<CR>` to make it be treated like one
+-- action and not separate keys. Otherwise `<C-o>^` from Insert mode will move
+-- cursor to first column and insert `^`.
+-- NOTE: Doesn't work with multicursor `zq`
+vim.keymap.set({ 'n', 'x' }, '^', '<Cmd>normal! 0^<CR>')
+vim.keymap.set({ 'n', 'x' }, '$', '<Cmd>normal! 0$<CR>')
+
 -- Many general mappings are created by 'mini.basics'. See 'plugin/30_mini.lua'
 
 -- Leader mappings ============================================================
@@ -76,6 +84,7 @@ nmap_leader('eo', edit_config_file('10_options.lua'),       'Options config')
 nmap_leader('ep', edit_config_file('40_plugins.lua'),       'Plugins config')
 nmap_leader('eq', explore_quickfix,                         'Quickfix')
 nmap_leader('eQ', explore_locations,                        'Locations')
+nmap_leader('eu', '<Cmd>Undotree<CR>',                      'Undo tree')
 
 -- f is for 'Fuzzy find'
 local pick_added_hunks_buf = '<Cmd>Pick git_hunks path="%" scope="staged"<CR>'

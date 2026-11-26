@@ -7,7 +7,7 @@ now(function()
   require('mini.basics').setup({
     -- Manage options manually in a spirit of transparency
     options = { basic = false },
-    mappings = { windows = true, move_with_alt = true },
+    mappings = { windows = true, move_with_alt = true, search = true },
     autocommands = { relnum_in_visual_mode = true },
   })
 end)
@@ -253,9 +253,6 @@ later(function()
     symbols = { encode = map.gen_encode_symbols.dot('4x2') },
     integrations = { gen_integr.builtin_search(), gen_integr.diff(), gen_integr.diagnostic() },
   })
-  for _, key in ipairs({ 'n', 'N', '*', '#' }) do
-    vim.keymap.set('n', key, key .. 'zv<Cmd>lua MiniMap.refresh({}, { lines = false, scrollbar = false })<CR>')
-  end
 end)
 
 later(function() require('mini.move').setup({ options = { reindent_linewise = false } }) end)
